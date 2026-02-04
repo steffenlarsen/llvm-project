@@ -596,7 +596,7 @@ public:
   // Internal registration functions for events.
   //===--------------------------------------------------------------------===//
 
-  using EventTag = void *;
+  using EventTag = const void *;
   using CheckEventFunc = CheckerFn<void (const void *event)>;
 
   template <typename EVENT>
@@ -626,8 +626,10 @@ public:
   //===--------------------------------------------------------------------===//
 
 private:
-  template <typename T>
-  static void *getTag() { static int tag; return &tag; }
+  template <typename T> static const void *getTag() {
+    static const int tag = 0;
+    return &tag;
+  }
 
   llvm::DenseMap<CheckerTag, std::unique_ptr<CheckerBackend>> CheckerTags;
 

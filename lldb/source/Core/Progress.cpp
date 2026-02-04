@@ -23,7 +23,7 @@ using namespace lldb_private;
 std::atomic<uint64_t> Progress::g_id(0);
 
 // Instrument progress events with signposts when supported.
-static llvm::ManagedStatic<llvm::SignpostEmitter> g_progress_signposts;
+static LLVM_MANAGED_STATIC<llvm::SignpostEmitter> g_progress_signposts;
 
 Progress::Progress(std::string title, std::string details,
                    std::optional<uint64_t> total,

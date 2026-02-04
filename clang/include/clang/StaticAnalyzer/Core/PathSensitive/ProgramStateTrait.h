@@ -40,8 +40,8 @@ template <typename T, typename Enable = void> struct ProgramStatePartialTrait;
   namespace ento {                                                             \
   template <>                                                                  \
   struct ProgramStateTrait<Name> : public ProgramStatePartialTrait<Name##Ty> { \
-    static void *GDMIndex() {                                                  \
-      static int Index;                                                        \
+    static const void *GDMIndex() {                                            \
+      static const int Index = 0;                                              \
       return &Index;                                                           \
     }                                                                          \
   };                                                                           \
@@ -52,16 +52,18 @@ template <typename T, typename Enable = void> struct ProgramStatePartialTrait;
   /// manager. The type must provide a ::Factory sub-class. Commonly used for
   /// ImmutableMap, ImmutableSet, ImmutableList. The macro should not be used
   /// inside namespaces.
-  #define REGISTER_FACTORY_WITH_PROGRAMSTATE(Type) \
-    namespace clang { \
-    namespace ento { \
-      template <> \
-      struct ProgramStateTrait<Type> \
-        : public ProgramStatePartialTrait<Type> { \
-        static void *GDMIndex() { static int Index; return &Index; } \
-      }; \
-    } \
-    }
+#define REGISTER_FACTORY_WITH_PROGRAMSTATE(Type)                               \
+  namespace clang {                                                            \
+  namespace ento {                                                             \
+  template <>                                                                  \
+  struct ProgramStateTrait<Type> : public ProgramStatePartialTrait<Type> {     \
+    static const void *GDMIndex() {                                            \
+      static const int Index = 0;                                              \
+      return &Index;                                                           \
+    }                                                                          \
+  };                                                                           \
+  }                                                                            \
+  }
 
   /// Helper for registering a map trait.
   ///

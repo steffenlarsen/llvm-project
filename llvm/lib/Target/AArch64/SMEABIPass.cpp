@@ -49,7 +49,7 @@ private:
 } // end anonymous namespace
 
 char SMEABI::ID = 0;
-static const char *name = "SME ABI Pass";
+static const char * const name = "SME ABI Pass";
 INITIALIZE_PASS(SMEABI, DEBUG_TYPE, name, false, false)
 
 FunctionPass *llvm::createSMEABIPass() { return new SMEABI(); }

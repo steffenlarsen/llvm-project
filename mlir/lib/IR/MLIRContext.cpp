@@ -72,7 +72,7 @@ struct MLIRContextOptions {
 };
 } // namespace
 
-static llvm::ManagedStatic<MLIRContextOptions> clOptions;
+static LLVM_MANAGED_STATIC<MLIRContextOptions> clOptions;
 
 static bool isThreadingGloballyDisabled() {
 #if LLVM_ENABLE_THREADS != 0

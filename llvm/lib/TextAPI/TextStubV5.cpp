@@ -148,7 +148,7 @@ enum TBDKey : size_t {
   Paths,
 };
 
-std::array<StringRef, 64> Keys = {
+constexpr std::array<StringRef, 64> Keys = {
     "tapi_tbd_version",
     "main_library",
     "libraries",

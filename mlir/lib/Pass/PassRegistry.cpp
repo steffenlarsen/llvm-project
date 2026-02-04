@@ -24,14 +24,14 @@ using namespace mlir;
 using namespace detail;
 
 /// Static mapping of all of the registered passes.
-static llvm::ManagedStatic<llvm::StringMap<PassInfo>> passRegistry;
+static LLVM_MANAGED_STATIC<llvm::StringMap<PassInfo>> passRegistry;
 
 /// A mapping of the above pass registry entries to the corresponding TypeID
 /// of the pass that they generate.
-static llvm::ManagedStatic<llvm::StringMap<TypeID>> passRegistryTypeIDs;
+static LLVM_MANAGED_STATIC<llvm::StringMap<TypeID>> passRegistryTypeIDs;
 
 /// Static mapping of all of the registered pass pipelines.
-static llvm::ManagedStatic<llvm::StringMap<PassPipelineInfo>>
+static LLVM_MANAGED_STATIC<llvm::StringMap<PassPipelineInfo>>
     passPipelineRegistry;
 
 /// Utility to create a default registry function from a pass instance.

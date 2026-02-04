@@ -226,7 +226,7 @@ static cl::opt<WindowSchedulingFlag> WindowSchedulingOption(
                clEnumValN(WindowSchedulingFlag::WS_Force, "force",
                           "Use window algorithm instead of SMS algorithm.")));
 
-unsigned SwingSchedulerDAG::Circuits::MaxPaths = 5;
+const unsigned SwingSchedulerDAG::Circuits::MaxPaths = 5;
 char MachinePipeliner::ID = 0;
 #ifndef NDEBUG
 int MachinePipeliner::NumTries = 0;

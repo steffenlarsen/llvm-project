@@ -120,7 +120,7 @@ class LibraryIndex {
 
 public:
   LibraryCursor getCursor(PathType K, LibState S) const {
-    static std::vector<const LibraryInfo *> Empty;
+    static const std::vector<const LibraryInfo *> Empty;
     auto It = Lists.find(K);
     if (It == Lists.end())
       return LibraryCursor(Empty, S);

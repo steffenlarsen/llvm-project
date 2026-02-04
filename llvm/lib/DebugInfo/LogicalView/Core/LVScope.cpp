@@ -82,7 +82,7 @@ const char *LVScope::kind() const {
   return Kind;
 }
 
-LVScopeDispatch LVScope::Dispatch = {
+const LVScopeDispatch LVScope::Dispatch = {
     {LVScopeKind::IsAggregate, &LVScope::getIsAggregate},
     {LVScopeKind::IsArray, &LVScope::getIsArray},
     {LVScopeKind::IsBlock, &LVScope::getIsBlock},

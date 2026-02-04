@@ -368,7 +368,7 @@ public:
   /// Returns the name for all C++ using-directives.
   static DeclarationName getUsingDirectiveName() {
     // Single instance of DeclarationNameExtra for using-directive
-    static detail::DeclarationNameExtra UDirExtra(
+    static LLVM_THREAD_LOCAL_ST detail::DeclarationNameExtra UDirExtra(
         detail::DeclarationNameExtra::CXXUsingDirective);
     return DeclarationName(&UDirExtra);
   }

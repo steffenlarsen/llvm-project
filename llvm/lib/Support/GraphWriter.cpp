@@ -47,7 +47,7 @@ struct CreateViewBackground {
   }
 };
 } // namespace
-static ManagedStatic<cl::opt<bool>, CreateViewBackground> ViewBackground;
+static LLVM_MANAGED_STATIC<cl::opt<bool>, CreateViewBackground> ViewBackground;
 void llvm::initGraphWriterOptions() { *ViewBackground; }
 #else
 void llvm::initGraphWriterOptions() {}
@@ -90,7 +90,7 @@ std::string llvm::DOT::EscapeString(const std::string &Label) {
 /// from a reasonable number of colors.
 StringRef llvm::DOT::getColorString(unsigned ColorNumber) {
   static const int NumColors = 20;
-  static const char* Colors[NumColors] = {
+  static const char* const Colors[NumColors] = {
     "aaaaaa", "aa0000", "00aa00", "aa5500", "0055ff", "aa00aa", "00aaaa",
     "555555", "ff5555", "55ff55", "ffff55", "5555ff", "ff55ff", "55ffff",
     "ffaaaa", "aaffaa", "ffffaa", "aaaaff", "ffaaff", "aaffff"};

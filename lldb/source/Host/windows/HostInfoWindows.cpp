@@ -132,7 +132,7 @@ bool HostInfoWindows::GetEnvironmentVar(const std::string &var_name,
   return false;
 }
 
-static llvm::ManagedStatic<WindowsUserIDResolver> g_user_id_resolver;
+static LLVM_MANAGED_STATIC<WindowsUserIDResolver> g_user_id_resolver;
 
 UserIDResolver &HostInfoWindows::GetUserIDResolver() {
   return *g_user_id_resolver;

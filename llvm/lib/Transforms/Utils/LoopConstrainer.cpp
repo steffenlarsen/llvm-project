@@ -10,7 +10,7 @@
 
 using namespace llvm;
 
-static const char *ClonedLoopTag = "loop_constrainer.loop.clone";
+static const char *const ClonedLoopTag = "loop_constrainer.loop.clone";
 
 #define DEBUG_TYPE "loop-constrainer"
 

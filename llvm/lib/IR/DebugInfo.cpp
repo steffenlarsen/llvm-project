@@ -2319,7 +2319,7 @@ bool AssignmentTrackingPass::runOnFunction(Function &F) {
   return Changed;
 }
 
-static const char *AssignmentTrackingModuleFlag =
+static const char *const AssignmentTrackingModuleFlag =
     "debug-info-assignment-tracking";
 
 static void setAssignmentTrackingModuleFlag(Module &M) {

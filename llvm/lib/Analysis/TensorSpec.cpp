@@ -36,14 +36,13 @@ SUPPORTED_TENSOR_TYPES(TFUTILS_GETDATATYPE_IMPL)
 
 #undef TFUTILS_GETDATATYPE_IMPL
 
-static std::array<std::string, static_cast<size_t>(TensorType::Total)>
-    TensorTypeNames{"INVALID",
-#define TFUTILS_GETNAME_IMPL(T, _) #T,
-                    SUPPORTED_TENSOR_TYPES(TFUTILS_GETNAME_IMPL)
-#undef TFUTILS_GETNAME_IMPL
-    };
-
 StringRef toString(TensorType TT) {
+  static const std::array<std::string, static_cast<size_t>(TensorType::Total)>
+      TensorTypeNames{"INVALID",
+#define TFUTILS_GETNAME_IMPL(T, _) #T,
+                      SUPPORTED_TENSOR_TYPES(TFUTILS_GETNAME_IMPL)
+#undef TFUTILS_GETNAME_IMPL
+      };
   return TensorTypeNames[static_cast<size_t>(TT)];
 }
 

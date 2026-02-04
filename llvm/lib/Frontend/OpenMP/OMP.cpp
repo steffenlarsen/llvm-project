@@ -77,26 +77,6 @@ getFirstCompositeRange(iterator_range<ArrayRef<Directive>::iterator> Leafs) {
   return llvm::make_range(Begin, End);
 }
 
-static void
-collectPrivatizingConstructs(llvm::SmallSet<Directive, 16> &Constructs,
-                             unsigned Version) {
-  llvm::SmallSet<Clause, 16> Privatizing;
-  for (auto C :
-       llvm::enum_seq_inclusive<Clause>(Clause::First_, Clause::Last_)) {
-    if (isPrivatizingClause(C))
-      Privatizing.insert(C);
-  }
-
-  for (auto D : llvm::enum_seq_inclusive<Directive>(Directive::First_,
-                                                    Directive::Last_)) {
-    bool AllowsPrivatizing = llvm::any_of(Privatizing, [&](Clause C) {
-      return isAllowedClauseForDirective(D, C, Version);
-    });
-    if (AllowsPrivatizing)
-      Constructs.insert(D);
-  }
-}
-
 namespace llvm::omp {
 ArrayRef<Directive> getLeafConstructs(Directive D) {
   auto Idx = static_cast<std::size_t>(D);
@@ -212,14 +192,30 @@ bool isCombinedConstruct(Directive D) {
 }
 
 ArrayRef<unsigned> getOpenMPVersions() {
-  static unsigned Versions[]{31, 40, 45, 50, 51, 52, 60, 61};
+  static const unsigned Versions[]{31, 40, 45, 50, 51, 52, 60, 61};
   return Versions;
 }
 
 bool isPrivatizingConstruct(Directive D, unsigned Version) {
-  static llvm::SmallSet<Directive, 16> Privatizing;
-  [[maybe_unused]] static bool Init =
-      (collectPrivatizingConstructs(Privatizing, Version), true);
+  static const auto Privatizing = [Version]() {
+    llvm::SmallSet<Clause, 16> ClausePrivatizing;
+    for (auto C :
+         llvm::enum_seq_inclusive<Clause>(Clause::First_, Clause::Last_)) {
+      if (isPrivatizingClause(C))
+        ClausePrivatizing.insert(C);
+    }
+
+    llvm::SmallSet<Directive, 16> Result;
+    for (auto D : llvm::enum_seq_inclusive<Directive>(Directive::First_,
+                                                      Directive::Last_)) {
+      bool AllowsPrivatizing = llvm::any_of(ClausePrivatizing, [&](Clause C) {
+        return isAllowedClauseForDirective(D, C, Version);
+      });
+      if (AllowsPrivatizing)
+        Result.insert(D);
+    }
+    return Result;
+  }();
 
   // As of OpenMP 6.0, privatizing constructs (with the test being if they
   // allow a privatizing clause) are: dispatch, distribute, do, for, loop,

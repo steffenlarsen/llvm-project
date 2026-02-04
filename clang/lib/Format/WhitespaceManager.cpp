@@ -974,6 +974,14 @@ void WhitespaceManager::alignConsecutiveDeclarations() {
       Changes, /*StartAt=*/0, Style.AlignConsecutiveDeclarations);
 }
 
+static bool alignWrappedOperand(const WhitespaceManager::Change &C) {
+  FormatToken *Previous = C.Tok->getPreviousNonComment();
+  return C.NewlinesBefore && Previous && Previous->is(TT_ConditionalExpr) &&
+         (Previous->is(tok::colon) &&
+          (C.Tok->FakeLParens.empty() ||
+           C.Tok->FakeLParens.back() != prec::Conditional));
+}
+
 void WhitespaceManager::alignChainedConditionals() {
   if (Style.BreakBeforeTernaryOperators) {
     AlignTokens(
@@ -988,18 +996,11 @@ void WhitespaceManager::alignChainedConditionals() {
         },
         Changes, /*StartAt=*/0);
   } else {
-    static auto AlignWrappedOperand = [](Change const &C) {
-      FormatToken *Previous = C.Tok->getPreviousNonComment();
-      return C.NewlinesBefore && Previous && Previous->is(TT_ConditionalExpr) &&
-             (Previous->is(tok::colon) &&
-              (C.Tok->FakeLParens.empty() ||
-               C.Tok->FakeLParens.back() != prec::Conditional));
-    };
     // Ensure we keep alignment of wrapped operands with non-wrapped operands
     // Since we actually align the operators, the wrapped operands need the
     // extra offset to be properly aligned.
     for (Change &C : Changes)
-      if (AlignWrappedOperand(C))
+      if (alignWrappedOperand(C))
         C.StartOfTokenColumn -= 2;
     AlignTokens(
         Style,
@@ -1010,7 +1011,7 @@ void WhitespaceManager::alignChainedConditionals() {
           return (C.Tok->is(TT_ConditionalExpr) && C.Tok->is(tok::question) &&
                   &C != &Changes.back() && (&C + 1)->NewlinesBefore == 0 &&
                   !(&C + 1)->IsTrailingComment) ||
-                 AlignWrappedOperand(C);
+                 alignWrappedOperand(C);
         },
         Changes, /*StartAt=*/0);
   }

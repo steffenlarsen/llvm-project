@@ -496,7 +496,7 @@ PathDiagnosticPieceRef NoStateChangeFuncVisitor::VisitNode(
     // its out parameter is operator placement new; it's up to the follow-up
     // constructor (if any) to initialize the memory.
     if (!N->getStackFrame()->getCFG()->isLinear()) {
-      static int i = 0;
+      static const int i = 0;
       R.markInvalid(&i, nullptr);
     }
     return nullptr;
@@ -853,9 +853,9 @@ public:
                                                        V);
   }
 
-  void* getTag() const {
-    static int Tag = 0;
-    return static_cast<void *>(&Tag);
+  const void *getTag() const {
+    static const int Tag = 0;
+    return static_cast<const void *>(&Tag);
   }
 
   void Profile(llvm::FoldingSetNodeID &ID) const override {
@@ -920,9 +920,9 @@ public:
       : TrackingBugReporterVisitor(ParentTracker), CalleeSFC(Frame),
         EnableNullFPSuppression(Suppressed), Options(Options), TKind(TKind) {}
 
-  static void *getTag() {
-    static int Tag = 0;
-    return static_cast<void *>(&Tag);
+  static const void *getTag() {
+    static const int Tag = 0;
+    return static_cast<const void *>(&Tag);
   }
 
   void Profile(llvm::FoldingSetNodeID &ID) const override {
@@ -1166,7 +1166,7 @@ public:
 } // namespace
 
 void StoreSiteFinder::Profile(llvm::FoldingSetNodeID &ID) const {
-  static int tag = 0;
+  static const int tag = 0;
   ID.AddPointer(&tag);
   ID.AddPointer(R);
   ID.Add(V);
@@ -1765,7 +1765,7 @@ PathDiagnosticPieceRef StoreSiteFinder::VisitNode(const ExplodedNode *Succ,
 //===----------------------------------------------------------------------===//
 
 void TrackConstraintBRVisitor::Profile(llvm::FoldingSetNodeID &ID) const {
-  static int tag = 0;
+  static const int tag = 0;
   ID.AddPointer(&tag);
   ID.AddString(Message);
   ID.AddBoolean(Assumption);
@@ -3405,10 +3405,10 @@ UndefOrNullArgVisitor::VisitNode(const ExplodedNode *N, BugReporterContext &BRC,
 // Implementation of TagVisitor.
 //===----------------------------------------------------------------------===//
 
-int NoteTag::Kind = 0;
+const int NoteTag::Kind = 0;
 
 void TagVisitor::Profile(llvm::FoldingSetNodeID &ID) const {
-  static int Tag = 0;
+  static const int Tag = 0;
   ID.AddPointer(&Tag);
 }
 

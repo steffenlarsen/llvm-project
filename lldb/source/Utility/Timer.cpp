@@ -31,7 +31,7 @@ static std::atomic<Timer::Category *> g_categories;
 } // end of anonymous namespace
 
 /// Allows llvm::Timer to emit signposts when supported.
-static llvm::ManagedStatic<llvm::SignpostEmitter> Signposts;
+static LLVM_MANAGED_STATIC<llvm::SignpostEmitter> Signposts;
 
 std::atomic<bool> Timer::g_quiet(true);
 std::atomic<unsigned> Timer::g_display_depth(0);

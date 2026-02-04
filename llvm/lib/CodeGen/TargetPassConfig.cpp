@@ -678,8 +678,8 @@ std::string TargetPassConfig::getLimitedCodeGenPipelineReason() {
   std::string Res;
   static cl::opt<std::string> *PassNames[] = {&StartAfterOpt, &StartBeforeOpt,
                                               &StopAfterOpt, &StopBeforeOpt};
-  static const char *OptNames[] = {StartAfterOptName, StartBeforeOptName,
-                                   StopAfterOptName, StopBeforeOptName};
+  static const char *const OptNames[] = {StartAfterOptName, StartBeforeOptName,
+                                         StopAfterOptName, StopBeforeOptName};
   bool IsFirst = true;
   for (int Idx = 0; Idx < 4; ++Idx)
     if (!PassNames[Idx]->empty()) {

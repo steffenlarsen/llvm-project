@@ -75,7 +75,7 @@ struct DebugConfigCLOptions : public DebugConfig {
 
 } // namespace
 
-static ManagedStatic<DebugConfigCLOptions> clOptionsConfig;
+static LLVM_MANAGED_STATIC<DebugConfigCLOptions> clOptionsConfig;
 void DebugConfig::registerCLOptions() { *clOptionsConfig; }
 
 DebugConfig DebugConfig::createFromCLOptions() { return *clOptionsConfig; }

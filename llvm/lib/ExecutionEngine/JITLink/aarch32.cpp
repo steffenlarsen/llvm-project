@@ -306,7 +306,7 @@ private:
   std::array<std::unique_ptr<FixupInfoBase>, Items> Data;
 };
 
-ManagedStatic<FixupInfoTable> DynFixupInfos;
+LLVM_MANAGED_STATIC<FixupInfoTable> DynFixupInfos;
 
 } // namespace
 

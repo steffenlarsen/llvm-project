@@ -336,7 +336,7 @@ class SwingSchedulerDAG : public ScheduleDAGInstrs {
     // Node to Index from ScheduleDAGTopologicalSort
     std::vector<int> *Node2Idx;
     unsigned NumPaths = 0u;
-    static unsigned MaxPaths;
+    static const unsigned MaxPaths;
 
   public:
     Circuits(std::vector<SUnit> &SUs, ScheduleDAGTopologicalSort &Topo)

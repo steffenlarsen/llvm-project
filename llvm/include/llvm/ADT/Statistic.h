@@ -28,6 +28,7 @@
 
 #include "llvm/Config/llvm-config.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/Threading.h"
 #include <atomic>
 #include <memory>
 #include <vector>
@@ -166,16 +167,19 @@ using Statistic = NoopStatistic;
 // automatically passes the DEBUG_TYPE of the file into the statistic.
 #if LLVM_ENABLE_STATS
 #define STATISTIC(VARNAME, DESC)                                               \
-  static llvm::Statistic VARNAME = {DEBUG_TYPE, #VARNAME, DESC}
+  static LLVM_THREAD_LOCAL_ST llvm::Statistic VARNAME = {DEBUG_TYPE, #VARNAME, \
+                                                         DESC}
 #else
 #define STATISTIC(VARNAME, DESC)                                               \
-  static llvm::Statistic VARNAME [[maybe_unused]] = {DEBUG_TYPE, #VARNAME, DESC}
+  static LLVM_THREAD_LOCAL_ST llvm::Statistic VARNAME                          \
+      [[maybe_unused]] = {DEBUG_TYPE, #VARNAME, DESC}
 #endif
 
 // ALWAYS_ENABLED_STATISTIC - A macro to define a statistic like STATISTIC but
 // it is enabled even if LLVM_ENABLE_STATS is off.
 #define ALWAYS_ENABLED_STATISTIC(VARNAME, DESC)                                \
-  static llvm::TrackingStatistic VARNAME = {DEBUG_TYPE, #VARNAME, DESC}
+  static LLVM_THREAD_LOCAL_ST llvm::TrackingStatistic VARNAME = {              \
+      DEBUG_TYPE, #VARNAME, DESC};
 
 /// Enable the collection and printing of statistics.
 LLVM_ABI void EnableStatistics(bool DoPrintOnExit = true);

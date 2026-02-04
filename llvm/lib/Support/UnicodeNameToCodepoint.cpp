@@ -259,7 +259,7 @@ constexpr uint32_t TCount = 28;
 static std::size_t findSyllable(StringRef Name, bool Strict,
                                 char &PreviousInName, int &Pos, int Column) {
   assert(Column == 0 || Column == 1 || Column == 2);
-  static std::size_t CountPerColumn[] = {LCount, VCount, TCount};
+  static const std::size_t CountPerColumn[] = {LCount, VCount, TCount};
   int Len = -1;
   int Prev = PreviousInName;
   for (std::size_t I = 0; I < CountPerColumn[Column]; I++) {
@@ -476,7 +476,7 @@ nearestMatchesForCodepointName(StringRef Pattern, std::size_t MaxMatchesCount) {
       std::min(NormalizedName.size(), UnicodeNameToCodepointLargestNameSize) +
       1;
 
-  [[maybe_unused]] static std::size_t Rows =
+  [[maybe_unused]] static const std::size_t Rows =
       UnicodeNameToCodepointLargestNameSize + 1;
 
   std::vector<char> Distances(

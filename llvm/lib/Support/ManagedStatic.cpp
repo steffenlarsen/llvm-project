@@ -12,12 +12,11 @@
 
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Config/config.h"
-#include "llvm/Support/Threading.h"
 #include <cassert>
 #include <mutex>
 using namespace llvm;
 
-static const ManagedStaticBase *StaticList = nullptr;
+LLVM_THREAD_LOCAL_ST const ManagedStaticBase *StaticList = nullptr;
 
 static std::recursive_mutex *getManagedStaticMutex() {
   static std::recursive_mutex m;

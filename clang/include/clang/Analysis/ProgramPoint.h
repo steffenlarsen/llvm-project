@@ -37,7 +37,7 @@ class LocationContext;
 /// description and potentially other information.
 class ProgramPointTag {
 public:
-  ProgramPointTag(void *tagKind = nullptr) : TagKind(tagKind) {}
+  ProgramPointTag(const void *tagKind = nullptr) : TagKind(tagKind) {}
   virtual ~ProgramPointTag();
 
   /// The description of this program point which will be dumped for debugging

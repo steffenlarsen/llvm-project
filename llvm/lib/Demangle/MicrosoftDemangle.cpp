@@ -608,7 +608,7 @@ Demangler::translateIntrinsicFunctionCode(char CH,
   // Not all ? identifiers are intrinsics *functions*.  This function only maps
   // operator codes for the special functions, all others are handled elsewhere,
   // hence the IFK::None entries in the table.
-  static IFK Basic[36] = {
+  static const IFK Basic[36] = {
       IFK::None,             // ?0 # Foo::Foo()
       IFK::None,             // ?1 # Foo::~Foo()
       IFK::New,              // ?2 # operator new
@@ -646,7 +646,7 @@ Demangler::translateIntrinsicFunctionCode(char CH,
       IFK::PlusEqual,        // ?Y operator+=
       IFK::MinusEqual,       // ?Z operator-=
   };
-  static IFK Under[36] = {
+  static const IFK Under[36] = {
       IFK::DivEqual,           // ?_0 operator/=
       IFK::ModEqual,           // ?_1 operator%=
       IFK::RshEqual,           // ?_2 operator>>=
@@ -684,7 +684,7 @@ Demangler::translateIntrinsicFunctionCode(char CH,
       IFK::None,                    // ?_Y <unused>
       IFK::None,                    // ?_Z <unused>
   };
-  static IFK DoubleUnder[36] = {
+  static const IFK DoubleUnder[36] = {
       IFK::None,                       // ?__0 <unused>
       IFK::None,                       // ?__1 <unused>
       IFK::None,                       // ?__2 <unused>

@@ -42,7 +42,7 @@ static cl::opt<int> StackMapVersion(
     "stackmap-version", cl::init(3), cl::Hidden,
     cl::desc("Specify the stackmap encoding version (default = 3)"));
 
-const char *StackMaps::WSMP = "Stack Maps: ";
+const char *const StackMaps::WSMP = "Stack Maps: ";
 
 static uint64_t getConstMetaVal(const MachineInstr &MI, unsigned Idx) {
   assert(MI.getOperand(Idx).isImm() &&

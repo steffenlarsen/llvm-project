@@ -546,7 +546,7 @@ class StdLibraryFunctionsChecker
 
     /// This is used for conjure symbol for errno to differentiate from the
     /// original call expression (same expression is used for the errno symbol).
-    static int Tag;
+    static const int Tag;
   };
 
   /// Reset errno constraints to irrelevant.
@@ -897,7 +897,7 @@ private:
   const FailureErrnoConstraint ErrnoNEZeroIrrelevant{};
 };
 
-int StdLibraryFunctionsChecker::ErrnoConstraintBase::Tag = 0;
+const int StdLibraryFunctionsChecker::ErrnoConstraintBase::Tag = 0;
 
 const StdLibraryFunctionsChecker::ArgNo StdLibraryFunctionsChecker::Ret =
     std::numeric_limits<ArgNo>::max();

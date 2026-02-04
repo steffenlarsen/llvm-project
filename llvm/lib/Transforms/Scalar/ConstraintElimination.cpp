@@ -63,8 +63,10 @@ static cl::opt<bool> DumpReproducers(
     "constraint-elimination-dump-reproducers", cl::init(false), cl::Hidden,
     cl::desc("Dump IR to reproduce successful transformations."));
 
-static int64_t MaxConstraintValue = std::numeric_limits<int64_t>::max();
-static int64_t MinSignedConstraintValue = std::numeric_limits<int64_t>::min();
+static constexpr int64_t MaxConstraintValue =
+    std::numeric_limits<int64_t>::max();
+static constexpr int64_t MinSignedConstraintValue =
+    std::numeric_limits<int64_t>::min();
 
 static Instruction *getContextInstForUse(Use &U) {
   Instruction *UserI = cast<Instruction>(U.getUser());

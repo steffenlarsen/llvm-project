@@ -145,7 +145,7 @@ public:
     };
 
     /// String version of the types.
-    LLVM_ABI static const char *DepName[];
+    LLVM_ABI static const char *const DepName[];
 
     /// Index of the source of the dependence in the InstMap vector.
     unsigned Source;

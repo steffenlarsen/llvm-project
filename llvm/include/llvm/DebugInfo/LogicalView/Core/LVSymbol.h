@@ -40,7 +40,7 @@ class LLVM_ABI LVSymbol final : public LVElement {
   // Typed bitvector with kinds and properties for this symbol.
   LVProperties<LVSymbolKind> Kinds;
   LVProperties<Property> Properties;
-  static LVSymbolDispatch Dispatch;
+  static const LVSymbolDispatch Dispatch;
 
   // CodeView symbol Linkage name.
   size_t LinkageNameIndex = 0;
@@ -158,7 +158,7 @@ public:
   void resolveName() override;
   void resolveReferences() override;
 
-  static LVSymbolDispatch &getDispatch() { return Dispatch; }
+  static const LVSymbolDispatch &getDispatch() { return Dispatch; }
 
   static bool parametersMatch(const LVSymbols *References,
                               const LVSymbols *Targets);

@@ -21,7 +21,7 @@ using namespace llvm;
 #define DEBUG_TYPE "faultmaps"
 
 static const int FaultMapVersion = 1;
-const char *FaultMaps::WFMP = "Fault Maps: ";
+const char *const FaultMaps::WFMP = "Fault Maps: ";
 
 FaultMaps::FaultMaps(AsmPrinter &AP) : AP(AP) {}
 

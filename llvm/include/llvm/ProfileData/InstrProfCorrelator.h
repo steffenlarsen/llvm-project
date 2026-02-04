@@ -66,9 +66,9 @@ public:
     return Ctx->CountersSectionEnd - Ctx->CountersSectionStart;
   }
 
-  LLVM_ABI static const char *FunctionNameAttributeName;
-  LLVM_ABI static const char *CFGHashAttributeName;
-  LLVM_ABI static const char *NumCountersAttributeName;
+  LLVM_ABI static const char *const FunctionNameAttributeName;
+  LLVM_ABI static const char *const CFGHashAttributeName;
+  LLVM_ABI static const char *const NumCountersAttributeName;
 
   enum InstrProfCorrelatorKind { CK_32Bit, CK_64Bit };
   InstrProfCorrelatorKind getKind() const { return Kind; }

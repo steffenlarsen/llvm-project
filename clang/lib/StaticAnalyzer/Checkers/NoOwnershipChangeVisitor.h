@@ -68,7 +68,7 @@ public:
         Checker(*Checker) {}
 
   void Profile(llvm::FoldingSetNodeID &ID) const override {
-    static int Tag = 0;
+    static const int Tag = 0;
     ID.AddPointer(&Tag);
     ID.AddPointer(Sym);
   }

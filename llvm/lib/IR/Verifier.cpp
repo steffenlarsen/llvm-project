@@ -5549,8 +5549,8 @@ void Verifier::visitAccessGroupMetadata(const MDNode *MD) {
 }
 
 void Verifier::visitCapturesMetadata(Instruction &I, const MDNode *Captures) {
-  static const char *ValidArgs[] = {"address_is_null", "address",
-                                    "read_provenance", "provenance"};
+  static const char *const ValidArgs[] = {"address_is_null", "address",
+                                          "read_provenance", "provenance"};
 
   auto *SI = dyn_cast<StoreInst>(&I);
   Check(SI, "!captures metadata can only be applied to store instructions", &I);

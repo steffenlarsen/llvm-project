@@ -120,12 +120,12 @@ public:
 // these static initializers are important since the registration list is
 // constructed from their storage.
 static GCRegistry::Add<ErlangGC> A("erlang",
-                                   "erlang-compatible garbage collector");
+                                         "erlang-compatible garbage collector");
 static GCRegistry::Add<OcamlGC> B("ocaml", "ocaml 3.10-compatible GC");
 static GCRegistry::Add<ShadowStackGC>
     C("shadow-stack", "Very portable GC for uncooperative code generators");
-static GCRegistry::Add<StatepointGC> D("statepoint-example",
-                                       "an example strategy for statepoint");
+static GCRegistry::Add<StatepointGC>
+    D("statepoint-example", "an example strategy for statepoint");
 static GCRegistry::Add<CoreCLRGC> E("coreclr", "CoreCLR-compatible GC");
 
 // Provide hook to ensure the containing library is fully loaded.

@@ -66,7 +66,7 @@
 using namespace lldb;
 using namespace lldb_private;
 
-static llvm::ManagedStatic<SystemLifetimeManager> g_debugger_lifetime;
+static LLVM_MANAGED_STATIC<SystemLifetimeManager> g_debugger_lifetime;
 
 SBError SBInputReader::Initialize(
     lldb::SBDebugger &sb_debugger,

@@ -236,7 +236,7 @@ private:
   RewriterFunction rewriter;
 };
 
-static llvm::ManagedStatic<std::vector<RewriterInfo>> rewriterRegistry;
+static LLVM_MANAGED_STATIC<std::vector<RewriterInfo>> rewriterRegistry;
 
 /// Adds command line option for each registered rewriter.
 struct RewriterNameParser : public llvm::cl::parser<const RewriterInfo *> {

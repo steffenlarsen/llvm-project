@@ -113,7 +113,7 @@ static cl::opt<bool> KeepFPICache(
 
 const std::vector<TensorSpec> &MLInlineAdvisor::getInitialFeatureMap() {
   // clang-format off
-static std::vector<TensorSpec> FeatureMap{
+static const std::vector<TensorSpec> FeatureMap{
 #define POPULATE_NAMES(DTYPE, SHAPE, NAME, __) TensorSpec::createSpec<DTYPE>(#NAME, SHAPE),
 // InlineCost features - these must come first
   INLINE_COST_FEATURE_ITERATOR(POPULATE_NAMES)

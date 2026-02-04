@@ -36,11 +36,11 @@ namespace {
 
 // Name of the "errno" variable.
 // FIXME: Is there a system where it is not called "errno" but is a variable?
-const char *ErrnoVarName = "errno";
+const char *const ErrnoVarName = "errno";
 
 // Names of functions that return a location of the "errno" value.
 // FIXME: Are there other similar function names?
-CallDescriptionSet ErrnoLocationCalls{
+const CallDescriptionSet ErrnoLocationCalls{
     {CDM::CLibrary, {"__errno_location"}, 0, 0},
     {CDM::CLibrary, {"___errno"}, 0, 0},
     {CDM::CLibrary, {"__errno"}, 0, 0},

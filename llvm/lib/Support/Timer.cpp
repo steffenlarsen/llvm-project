@@ -548,7 +548,7 @@ public:
   }
 };
 
-static ManagedStatic<TimerGlobals> ManagedTimerGlobals;
+static LLVM_MANAGED_STATIC<TimerGlobals> ManagedTimerGlobals;
 
 static std::string &libSupportInfoOutputFilename() {
   return ManagedTimerGlobals->LibSupportInfoOutputFilename;

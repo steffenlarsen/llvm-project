@@ -15,7 +15,7 @@
 using namespace clang;
 using namespace ento;
 
-int ImplicitNullDerefEvent::Tag;
+const int ImplicitNullDerefEvent::Tag = 0;
 
 StringRef CheckerBase::getDebugTag() const { return getName(); }
 

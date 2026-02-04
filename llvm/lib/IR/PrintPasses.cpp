@@ -150,16 +150,16 @@ bool llvm::forcePrintModuleIR() { return PrintModuleScope; }
 bool llvm::forcePrintFuncIR() { return LoopPrintFuncScope; }
 
 bool llvm::isPassInPrintList(StringRef PassName) {
-  static std::unordered_set<std::string> Set(FilterPasses.begin(),
-                                             FilterPasses.end());
+  static const std::unordered_set<std::string> Set(FilterPasses.begin(),
+                                                   FilterPasses.end());
   return Set.empty() || Set.count(std::string(PassName));
 }
 
 bool llvm::isFilterPassesEmpty() { return FilterPasses.empty(); }
 
 bool llvm::isFunctionInPrintList(StringRef FunctionName) {
-  static std::unordered_set<std::string> PrintFuncNames(PrintFuncsList.begin(),
-                                                        PrintFuncsList.end());
+  static const std::unordered_set<std::string> PrintFuncNames(
+      PrintFuncsList.begin(), PrintFuncsList.end());
   return PrintFuncNames.empty() ||
          PrintFuncNames.count(std::string(FunctionName));
 }

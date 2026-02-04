@@ -281,11 +281,11 @@ unsigned int Mips16TargetLowering::getMips16HelperFunctionStubNumber
 #define T1 P "1", P "2", 0, 0, P "5", P "6", 0, 0, P "9", P "10"
 #define T P "0" , T1
 #define P P_
-static char const * vMips16Helper[MAX_STUB_NUMBER+1] =
+static char const * const vMips16Helper[MAX_STUB_NUMBER+1] =
   {nullptr, T1 };
 #undef P
 #define P P_ "sf_"
-static char const * sfMips16Helper[MAX_STUB_NUMBER+1] =
+static char const * const sfMips16Helper[MAX_STUB_NUMBER+1] =
   { T };
 #undef P
 #define P P_ "df_"
@@ -293,11 +293,11 @@ static char const * dfMips16Helper[MAX_STUB_NUMBER+1] =
   { T };
 #undef P
 #define P P_ "sc_"
-static char const * scMips16Helper[MAX_STUB_NUMBER+1] =
+static char const * const scMips16Helper[MAX_STUB_NUMBER+1] =
   { T };
 #undef P
 #define P P_ "dc_"
-static char const * dcMips16Helper[MAX_STUB_NUMBER+1] =
+static char const * const dcMips16Helper[MAX_STUB_NUMBER+1] =
   { T };
 #undef P
 #undef P_

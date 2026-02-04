@@ -142,7 +142,7 @@ public:
   }
 
   void Profile(llvm::FoldingSetNodeID &ID) const override {
-    static bool Tag;
+    static const bool Tag = false;
     ID.AddPointer(&Tag);
   }
 

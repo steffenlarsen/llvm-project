@@ -1165,7 +1165,7 @@ DIFile::DIFile(LLVMContext &C, StorageType Storage,
 
 // FIXME: Implement this string-enum correspondence with a .def file and macros,
 // so that the association is explicit rather than implied.
-static const char *ChecksumKindName[DIFile::CSK_Last] = {
+static const char *const ChecksumKindName[DIFile::CSK_Last] = {
     "CSK_MD5",
     "CSK_SHA1",
     "CSK_SHA256",

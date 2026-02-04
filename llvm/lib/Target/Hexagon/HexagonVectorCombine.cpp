@@ -564,7 +564,7 @@ private:
 
 [[maybe_unused]] raw_ostream &operator<<(raw_ostream &OS,
                                          const HvxIdioms::FxpOp &Op) {
-  static const char *SgnNames[] = {"Positive", "Signed", "Unsigned"};
+  static const char *const SgnNames[] = {"Positive", "Signed", "Unsigned"};
   OS << Instruction::getOpcodeName(Op.Opcode) << '.' << Op.Frac;
   if (Op.RoundAt.has_value()) {
     if (Op.Frac != 0 && *Op.RoundAt == Op.Frac - 1) {

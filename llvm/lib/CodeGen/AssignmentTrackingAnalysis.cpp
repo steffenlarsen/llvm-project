@@ -1034,7 +1034,7 @@ public:
       return std::tie(Status, ID) == std::tie(Other.Status, Other.ID);
     }
     void dump(raw_ostream &OS) {
-      static const char *LUT[] = {"Known", "NoneOrPhi"};
+      static const char *const LUT[] = {"Known", "NoneOrPhi"};
       OS << LUT[Status] << "(id=";
       if (ID)
         OS << ID;

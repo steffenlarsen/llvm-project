@@ -1112,7 +1112,7 @@ void ExprEngine::removeDead(ExplodedNode *Pred, ExplodedNodeSet &Out,
 }
 
 const ProgramPointTag *ExprEngine::cleanupNodeTag() {
-  static SimpleProgramPointTag cleanupTag(TagProviderName, "Clean Node");
+  static const SimpleProgramPointTag cleanupTag(TagProviderName, "Clean Node");
   return &cleanupTag;
 }
 
@@ -4125,8 +4125,8 @@ std::string ExprEngine::DumpGraph(ArrayRef<const ExplodedNode *> Nodes,
                           /*Filename=*/std::string(Filename));
 }
 
-void *ProgramStateTrait<ReplayWithoutInlining>::GDMIndex() {
-  static int index = 0;
+const void *ProgramStateTrait<ReplayWithoutInlining>::GDMIndex() {
+  static const int index = 0;
   return &index;
 }
 

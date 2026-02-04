@@ -107,7 +107,7 @@ class LLVM_ABI LVElement : public LVObject {
     IsAnonymous,
     LastEntry
   };
-  static LVElementDispatch Dispatch;
+  static const LVElementDispatch Dispatch;
 
   // Indexes in the String Pool.
   size_t NameIndex = 0;
@@ -374,7 +374,7 @@ public:
   // Report the current element as missing or added during comparison.
   virtual void report(LVComparePass Pass) {}
 
-  static LVElementDispatch &getDispatch() { return Dispatch; }
+  static const LVElementDispatch &getDispatch() { return Dispatch; }
 };
 
 } // end namespace logicalview

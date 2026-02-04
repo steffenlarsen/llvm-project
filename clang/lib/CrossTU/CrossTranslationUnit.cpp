@@ -139,7 +139,7 @@ public:
   }
 };
 
-static llvm::ManagedStatic<IndexErrorCategory> Category;
+static LLVM_MANAGED_STATIC<IndexErrorCategory> Category;
 } // end anonymous namespace
 
 char IndexError::ID;

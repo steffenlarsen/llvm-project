@@ -37,7 +37,10 @@ PostOrderCFGView::create(AnalysisDeclContext &ctx) {
   return std::make_unique<PostOrderCFGView>(cfg);
 }
 
-const void *PostOrderCFGView::getTag() { static int x; return &x; }
+const void *PostOrderCFGView::getTag() {
+  static const int x = 0;
+  return &x;
+}
 
 bool PostOrderCFGView::BlockOrderCompare::operator()(const CFGBlock *b1,
                                                      const CFGBlock *b2) const {

@@ -8357,7 +8357,7 @@ class BitcodeErrorCategoryType : public std::error_category {
 } // end anonymous namespace
 
 const std::error_category &llvm::BitcodeErrorCategory() {
-  static BitcodeErrorCategoryType ErrorCategory;
+  static const BitcodeErrorCategoryType ErrorCategory;
   return ErrorCategory;
 }
 

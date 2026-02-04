@@ -72,7 +72,8 @@ bool DebugFlag = false;
 /// 0 is a special level that acts as an opt-out for this specific debug type.
 /// If provided, the debug output is enabled only if the user specified a level
 /// at least as high as the provided level.
-static ManagedStatic<std::vector<std::pair<std::string, std::optional<int>>>>
+static LLVM_MANAGED_STATIC<
+    std::vector<std::pair<std::string, std::optional<int>>>>
     CurrentDebugType;
 
 /// Return true if the specified string is the debug type
@@ -144,8 +145,9 @@ struct CreateDebugBufferSize {
 
 // -debug - Command line option to enable the DEBUG statements in the passes.
 // This flag may only be enabled in debug builds.
-static ManagedStatic<cl::opt<bool, true>, CreateDebug> Debug;
-static ManagedStatic<cl::opt<unsigned>, CreateDebugBufferSize> DebugBufferSize;
+static LLVM_MANAGED_STATIC<cl::opt<bool, true>, CreateDebug> Debug;
+static LLVM_MANAGED_STATIC<cl::opt<unsigned>, CreateDebugBufferSize>
+    DebugBufferSize;
 
 namespace {
 
@@ -182,8 +184,8 @@ struct CreateDebugOnly {
 };
 } // namespace
 
-static ManagedStatic<cl::opt<DebugOnlyOpt, true, cl::parser<std::string>>,
-                     CreateDebugOnly>
+static LLVM_MANAGED_STATIC<cl::opt<DebugOnlyOpt, true, cl::parser<std::string>>,
+                           CreateDebugOnly>
     DebugOnly;
 
 void llvm::initDebugOptions() {

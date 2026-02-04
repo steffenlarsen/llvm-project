@@ -37,9 +37,9 @@ namespace llvm {
 namespace orc {
 namespace SimpleRemoteEPCDefaultBootstrapSymbolNames {
 
-const char *ExecutorSessionObjectName =
+const char *const ExecutorSessionObjectName =
     "__llvm_orc_SimpleRemoteEPC_dispatch_ctx";
-const char *DispatchFnName = "__llvm_orc_SimpleRemoteEPC_dispatch_fn";
+const char *const DispatchFnName = "__llvm_orc_SimpleRemoteEPC_dispatch_fn";
 
 } // end namespace SimpleRemoteEPCDefaultBootstrapSymbolNames
 

@@ -24,17 +24,17 @@
 
 namespace llvm {
 struct MDProfLabels {
-  LLVM_ABI static const char *BranchWeights;
-  LLVM_ABI static const char *ValueProfile;
-  LLVM_ABI static const char *FunctionEntryCount;
-  LLVM_ABI static const char *SyntheticFunctionEntryCount;
-  LLVM_ABI static const char *ExpectedBranchWeights;
-  LLVM_ABI static const char *UnknownBranchWeightsMarker;
+  LLVM_ABI static const char *const BranchWeights;
+  LLVM_ABI static const char *const ValueProfile;
+  LLVM_ABI static const char *const FunctionEntryCount;
+  LLVM_ABI static const char *const SyntheticFunctionEntryCount;
+  LLVM_ABI static const char *const ExpectedBranchWeights;
+  LLVM_ABI static const char *const UnknownBranchWeightsMarker;
 };
 
 /// Profile-based loop metadata that should be accessed only by using
 /// \c llvm::getLoopEstimatedTripCount and \c llvm::setLoopEstimatedTripCount.
-LLVM_ABI extern const char *LLVMLoopEstimatedTripCount;
+LLVM_ABI extern const char *const LLVMLoopEstimatedTripCount;
 
 /// Checks if an Instruction has MD_prof Metadata
 LLVM_ABI bool hasProfMD(const Instruction &I);

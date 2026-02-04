@@ -41,11 +41,11 @@ using namespace ast_matchers;
 
 namespace {
 
-const char *ProblematicWriteBind = "problematicwrite";
-const char *CapturedBind = "capturedbind";
-const char *ParamBind = "parambind";
-const char *IsMethodBind = "ismethodbind";
-const char *IsARPBind = "isautoreleasepoolbind";
+const char *const ProblematicWriteBind = "problematicwrite";
+const char *const CapturedBind = "capturedbind";
+const char *const ParamBind = "parambind";
+const char *const IsMethodBind = "ismethodbind";
+const char *const IsARPBind = "isautoreleasepoolbind";
 
 class ObjCAutoreleaseWriteChecker : public Checker<check::ASTCodeBody> {
 public:

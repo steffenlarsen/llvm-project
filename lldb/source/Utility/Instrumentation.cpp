@@ -21,7 +21,7 @@ using namespace lldb_private::instrumentation;
 static thread_local bool g_global_boundary = false;
 
 // Instrument SB API calls with signposts when supported.
-static llvm::ManagedStatic<llvm::SignpostEmitter> g_api_signposts;
+static LLVM_MANAGED_STATIC<llvm::SignpostEmitter> g_api_signposts;
 
 Instrumenter::Instrumenter(llvm::StringRef pretty_func,
                            std::string &&pretty_args)

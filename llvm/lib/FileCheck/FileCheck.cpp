@@ -1699,8 +1699,8 @@ static size_t SkipWord(StringRef Str, size_t Loc) {
   return Loc;
 }
 
-static const char *DefaultCheckPrefixes[] = {"CHECK"};
-static const char *DefaultCommentPrefixes[] = {"COM", "RUN"};
+static const char *const DefaultCheckPrefixes[] = {"CHECK"};
+static const char *const DefaultCommentPrefixes[] = {"COM", "RUN"};
 
 static void addDefaultPrefixes(FileCheckRequest &Req) {
   if (Req.CheckPrefixes.empty()) {

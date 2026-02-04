@@ -37,7 +37,7 @@ struct DebugCounterOptions {
 };
 } // namespace
 
-static llvm::ManagedStatic<DebugCounterOptions> clOptions;
+static LLVM_MANAGED_STATIC<DebugCounterOptions> clOptions;
 
 //===----------------------------------------------------------------------===//
 // DebugCounter

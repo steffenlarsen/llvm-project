@@ -73,7 +73,7 @@ struct CreateClangOffloadBundlerTimerGroup {
   }
 };
 } // namespace
-static llvm::ManagedStatic<llvm::TimerGroup,
+static LLVM_MANAGED_STATIC<llvm::TimerGroup,
                            CreateClangOffloadBundlerTimerGroup>
     ClangOffloadBundlerTimerGroup;
 

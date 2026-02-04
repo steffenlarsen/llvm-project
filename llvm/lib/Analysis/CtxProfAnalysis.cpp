@@ -51,7 +51,7 @@ static cl::opt<bool> ForceIsInSpecializedModule(
     cl::desc("Treat the given module as-if it were containing the "
              "post-thinlink module containing the root"));
 
-const char *AssignGUIDPass::GUIDMetadataName = "guid";
+const char *const AssignGUIDPass::GUIDMetadataName = "guid";
 
 class ProfileAnnotatorImpl final {
   friend class ProfileAnnotator;

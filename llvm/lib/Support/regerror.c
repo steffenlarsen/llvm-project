@@ -51,7 +51,7 @@
 
 static const char *regatoi(const llvm_regex_t *, char *, int);
 
-static struct rerr {
+static const struct rerr {
 	int code;
 	const char *name;
 	const char *explain;
@@ -83,7 +83,7 @@ static struct rerr {
 size_t
 llvm_regerror(int errcode, const llvm_regex_t *preg, char *errbuf, size_t errbuf_size)
 {
-	struct rerr *r;
+	const struct rerr *r;
 	size_t len;
 	int target = errcode &~ REG_ITOA;
 	const char *s;
@@ -122,7 +122,7 @@ llvm_regerror(int errcode, const llvm_regex_t *preg, char *errbuf, size_t errbuf
 static const char *
 regatoi(const llvm_regex_t *preg, char *localbuf, int localbufsize)
 {
-	struct rerr *r;
+	const struct rerr *r;
 
 	for (r = rerrs; r->code != 0; r++)
 		if (strcmp(r->name, preg->re_endp) == 0)

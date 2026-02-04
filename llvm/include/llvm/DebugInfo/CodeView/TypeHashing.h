@@ -183,8 +183,8 @@ static_assert(std::is_trivially_copyable<GloballyHashedType>::value,
 } // namespace codeview
 
 template <> struct DenseMapInfo<codeview::LocallyHashedType> {
-  LLVM_ABI static codeview::LocallyHashedType Empty;
-  LLVM_ABI static codeview::LocallyHashedType Tombstone;
+  LLVM_ABI static const codeview::LocallyHashedType Empty;
+  LLVM_ABI static const codeview::LocallyHashedType Tombstone;
 
   static codeview::LocallyHashedType getEmptyKey() { return Empty; }
 
@@ -203,8 +203,8 @@ template <> struct DenseMapInfo<codeview::LocallyHashedType> {
 };
 
 template <> struct DenseMapInfo<codeview::GloballyHashedType> {
-  LLVM_ABI static codeview::GloballyHashedType Empty;
-  LLVM_ABI static codeview::GloballyHashedType Tombstone;
+  LLVM_ABI static const codeview::GloballyHashedType Empty;
+  LLVM_ABI static const codeview::GloballyHashedType Tombstone;
 
   static codeview::GloballyHashedType getEmptyKey() { return Empty; }
 

@@ -204,7 +204,7 @@ public:
   /// Assign a GUID *if* one is not already assign, as a function metadata named
   /// `GUIDMetadataName`.
   LLVM_ABI PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM);
-  LLVM_ABI static const char *GUIDMetadataName;
+  LLVM_ABI static const char *const GUIDMetadataName;
   // This should become GlobalValue::getGUID
   LLVM_ABI static uint64_t getGUID(const Function &F);
 };

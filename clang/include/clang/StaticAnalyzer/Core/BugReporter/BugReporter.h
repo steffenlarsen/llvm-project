@@ -778,7 +778,7 @@ public:
   };
 
 protected:
-  DataTag(void *TagKind) : ProgramPointTag(TagKind) {}
+  DataTag(const void *TagKind) : ProgramPointTag(TagKind) {}
 };
 
 /// The tag upon which the TagVisitor reacts. Add these in order to display
@@ -789,7 +789,7 @@ public:
                                              PathSensitiveBugReport &)>;
 
 private:
-  static int Kind;
+  static const int Kind;
 
   const Callback Cb;
   const bool IsPrunable;

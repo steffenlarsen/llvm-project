@@ -32,7 +32,7 @@ struct TranslationOptions {
       llvm::cl::init(false)};
 };
 
-static llvm::ManagedStatic<TranslationOptions> clOptions;
+static LLVM_MANAGED_STATIC<TranslationOptions> clOptions;
 
 void mlir::registerTranslationCLOptions() { *clOptions; }
 

@@ -106,7 +106,7 @@ struct DebugCounterOwner : DebugCounter {
 // Use ManagedStatic instead of function-local static variable to ensure
 // the destructor (which accesses counters and streams) runs during
 // llvm_shutdown() rather than at some unspecified point.
-static ManagedStatic<DebugCounterOwner> Owner;
+static LLVM_MANAGED_STATIC<DebugCounterOwner> Owner;
 
 void llvm::initDebugCounterOptions() { (void)DebugCounter::instance(); }
 

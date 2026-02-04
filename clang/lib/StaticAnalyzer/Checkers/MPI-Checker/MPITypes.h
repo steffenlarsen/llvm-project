@@ -55,8 +55,8 @@ typedef llvm::ImmutableMap<const clang::ento::MemRegion *,
 template <>
 struct ProgramStateTrait<mpi::RequestMap>
     : public ProgramStatePartialTrait<mpi::RequestMapImpl> {
-  static void *GDMIndex() {
-    static int index = 0;
+  static const void *GDMIndex() {
+    static const int index = 0;
     return &index;
   }
 };

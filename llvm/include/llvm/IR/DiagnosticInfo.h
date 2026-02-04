@@ -891,7 +891,7 @@ public:
   /// \see DiagnosticInfoOptimizationBase::isEnabled.
   bool isEnabled() const override;
 
-  static const char *AlwaysPrint;
+  static const char *const AlwaysPrint;
 
   bool shouldAlwaysPrint() const { return getPassName() == AlwaysPrint; }
 

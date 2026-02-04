@@ -16,36 +16,36 @@
 namespace llvm {
 namespace orc {
 
-StringRef ELFEHFrameSectionName = ".eh_frame";
+const StringRef ELFEHFrameSectionName = ".eh_frame";
 
-StringRef ELFInitArrayFuncSectionName = ".init_array";
-StringRef ELFInitFuncSectionName = ".init";
-StringRef ELFFiniArrayFuncSectionName = ".fini_array";
-StringRef ELFFiniFuncSectionName = ".fini";
-StringRef ELFCtorArrayFuncSectionName = ".ctors";
-StringRef ELFDtorArrayFuncSectionName = ".dtors";
+const StringRef ELFInitArrayFuncSectionName = ".init_array";
+const StringRef ELFInitFuncSectionName = ".init";
+const StringRef ELFFiniArrayFuncSectionName = ".fini_array";
+const StringRef ELFFiniFuncSectionName = ".fini";
+const StringRef ELFCtorArrayFuncSectionName = ".ctors";
+const StringRef ELFDtorArrayFuncSectionName = ".dtors";
 
-StringRef ELFInitSectionNames[3]{
+const StringRef ELFInitSectionNames[3]{
     ELFInitArrayFuncSectionName,
     ELFInitFuncSectionName,
     ELFCtorArrayFuncSectionName,
 };
 
-StringRef ELFFiniSectionNames[3]{
+const StringRef ELFFiniSectionNames[3]{
     ELFFiniArrayFuncSectionName,
     ELFFiniFuncSectionName,
     ELFDtorArrayFuncSectionName,
 };
 
-StringRef ELFThreadBSSSectionName = ".tbss";
-StringRef ELFThreadDataSectionName = ".tdata";
+const StringRef ELFThreadBSSSectionName = ".tbss";
+const StringRef ELFThreadDataSectionName = ".tdata";
 
-bool isMachOInitializerSection(StringRef QualifiedName) {
+bool isMachOInitializerSection(const StringRef QualifiedName) {
   return llvm::is_contained(MachOInitSectionNames, QualifiedName);
 }
 
-bool isELFInitializerSection(StringRef SecName) {
-  for (StringRef InitSection : ELFInitSectionNames) {
+bool isELFInitializerSection(const StringRef SecName) {
+  for (const StringRef InitSection : ELFInitSectionNames) {
     StringRef Name = SecName;
     if (Name.consume_front(InitSection) && (Name.empty() || Name[0] == '.'))
       return true;
@@ -53,8 +53,8 @@ bool isELFInitializerSection(StringRef SecName) {
   return false;
 }
 
-bool isELFFinalizerSection(StringRef SecName) {
-  for (StringRef FiniSection : ELFFiniSectionNames) {
+bool isELFFinalizerSection(const StringRef SecName) {
+  for (const StringRef FiniSection : ELFFiniSectionNames) {
     StringRef Name = SecName;
     if (Name.consume_front(FiniSection) && (Name.empty() || Name[0] == '.'))
       return true;
@@ -62,7 +62,7 @@ bool isELFFinalizerSection(StringRef SecName) {
   return false;
 }
 
-bool isCOFFInitializerSection(StringRef SecName) {
+bool isCOFFInitializerSection(const StringRef SecName) {
   return SecName.starts_with(".CRT");
 }
 

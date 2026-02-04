@@ -63,8 +63,8 @@ public:
   public:
     InnerPointerBRVisitor(SymbolRef Sym) : PtrToBuf(Sym) {}
 
-    static void *getTag() {
-      static int Tag = 0;
+    static const void *getTag() {
+      static const int Tag = 0;
       return &Tag;
     }
 

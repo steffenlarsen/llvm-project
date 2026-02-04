@@ -430,7 +430,7 @@ private:
 class NilReceiverBRVisitor final : public BugReporterVisitor {
 public:
   void Profile(llvm::FoldingSetNodeID &ID) const override {
-    static int x = 0;
+    static const int x = 0;
     ID.AddPointer(&x);
   }
 
@@ -453,7 +453,7 @@ class ConditionBRVisitor final : public BugReporterVisitor {
 
 public:
   void Profile(llvm::FoldingSetNodeID &ID) const override {
-    static int x = 0;
+    static const int x = 0;
     ID.AddPointer(&x);
   }
 
@@ -527,9 +527,9 @@ public:
 class LikelyFalsePositiveSuppressionBRVisitor final
     : public BugReporterVisitor {
 public:
-  static void *getTag() {
-    static int Tag = 0;
-    return static_cast<void *>(&Tag);
+  static const void *getTag() {
+    static const int Tag = 0;
+    return static_cast<const void *>(&Tag);
   }
 
   void Profile(llvm::FoldingSetNodeID &ID) const override {
@@ -558,7 +558,7 @@ public:
   UndefOrNullArgVisitor(const MemRegion *InR) : R(InR) {}
 
   void Profile(llvm::FoldingSetNodeID &ID) const override {
-    static int Tag = 0;
+    static const int Tag = 0;
     ID.AddPointer(&Tag);
     ID.AddPointer(R);
   }
@@ -745,7 +745,7 @@ public:
         PP(MmrMgr.getContext().getPrintingPolicy()) {}
 
   void Profile(llvm::FoldingSetNodeID &ID) const override {
-    static int Tag = 0;
+    static const int Tag = 0;
     ID.AddPointer(&Tag);
     ID.AddPointer(RegionOfInterest);
   }

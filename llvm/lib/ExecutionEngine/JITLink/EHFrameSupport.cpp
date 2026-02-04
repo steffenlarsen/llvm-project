@@ -615,7 +615,7 @@ Expected<Symbol &> EHFrameEdgeFixer::getOrCreateSymbol(ParseContext &PC,
   return S;
 }
 
-char EHFrameNullTerminator::NullTerminatorBlockContent[4] = {0, 0, 0, 0};
+const char EHFrameNullTerminator::NullTerminatorBlockContent[4] = {0, 0, 0, 0};
 
 EHFrameNullTerminator::EHFrameNullTerminator(StringRef EHFrameSectionName)
     : EHFrameSectionName(EHFrameSectionName) {}

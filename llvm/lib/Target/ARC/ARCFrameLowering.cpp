@@ -29,13 +29,13 @@ static cl::opt<bool>
                           cl::desc("Use arc callee save/restore functions"),
                           cl::init(true));
 
-static const char *store_funclet_name[] = {
+static const char *const store_funclet_name[] = {
     "__st_r13_to_r15", "__st_r13_to_r16", "__st_r13_to_r17", "__st_r13_to_r18",
     "__st_r13_to_r19", "__st_r13_to_r20", "__st_r13_to_r21", "__st_r13_to_r22",
     "__st_r13_to_r23", "__st_r13_to_r24", "__st_r13_to_r25",
 };
 
-static const char *load_funclet_name[] = {
+static const char *const load_funclet_name[] = {
     "__ld_r13_to_r15", "__ld_r13_to_r16", "__ld_r13_to_r17", "__ld_r13_to_r18",
     "__ld_r13_to_r19", "__ld_r13_to_r20", "__ld_r13_to_r21", "__ld_r13_to_r22",
     "__ld_r13_to_r23", "__ld_r13_to_r24", "__ld_r13_to_r25",

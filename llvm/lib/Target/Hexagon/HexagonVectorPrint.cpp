@@ -71,14 +71,14 @@ static bool isVecReg(unsigned Reg) {
 
 static std::string getStringReg(unsigned R) {
   if (R >= Hexagon::V0 && R <= Hexagon::V31) {
-    static const char* S[] = { "20", "21", "22", "23", "24", "25", "26", "27",
-                        "28", "29", "2a", "2b", "2c", "2d", "2e", "2f",
-                        "30", "31", "32", "33", "34", "35", "36", "37",
-                        "38", "39", "3a", "3b", "3c", "3d", "3e", "3f"};
+    static const char *const S[] = {
+        "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "2a",
+        "2b", "2c", "2d", "2e", "2f", "30", "31", "32", "33", "34", "35",
+        "36", "37", "38", "39", "3a", "3b", "3c", "3d", "3e", "3f"};
     return S[R-Hexagon::V0];
   }
   if (R >= Hexagon::Q0 && R <= Hexagon::Q3) {
-    static const char* S[] = { "00", "01", "02", "03"};
+    static const char *const S[] = {"00", "01", "02", "03"};
     return S[R-Hexagon::Q0];
 
   }

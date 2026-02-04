@@ -45,11 +45,11 @@ bool PGOCtxProfLoweringPass::isCtxIRPGOInstrEnabled() {
 // the names of symbols we expect in compiler-rt. Using a namespace for
 // readability.
 namespace CompilerRtAPINames {
-static auto StartCtx = "__llvm_ctx_profile_start_context";
-static auto ReleaseCtx = "__llvm_ctx_profile_release_context";
-static auto GetCtx = "__llvm_ctx_profile_get_context";
-static auto ExpectedCalleeTLS = "__llvm_ctx_profile_expected_callee";
-static auto CallsiteTLS = "__llvm_ctx_profile_callsite";
+static const auto StartCtx = "__llvm_ctx_profile_start_context";
+static const auto ReleaseCtx = "__llvm_ctx_profile_release_context";
+static const auto GetCtx = "__llvm_ctx_profile_get_context";
+static const auto ExpectedCalleeTLS = "__llvm_ctx_profile_expected_callee";
+static const auto CallsiteTLS = "__llvm_ctx_profile_callsite";
 } // namespace CompilerRtAPINames
 
 namespace {

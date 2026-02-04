@@ -2060,7 +2060,7 @@ struct GraphTraits<ModuleSummaryIndex *> : public GraphTraits<ValueInfo> {
         std::make_unique<FunctionSummary>(I->calculateCallGraphRoot());
     GlobalValueSummaryInfo G(I->haveGVs());
     G.addSummary(std::move(Root));
-    static auto P =
+    static const auto P =
         GlobalValueSummaryMapTy::value_type(GlobalValue::GUID(0), std::move(G));
     return ValueInfo(I->haveGVs(), &P);
   }

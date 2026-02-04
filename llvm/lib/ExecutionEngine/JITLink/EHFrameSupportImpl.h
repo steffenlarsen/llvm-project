@@ -124,7 +124,7 @@ public:
   Error operator()(LinkGraph &G);
 
 private:
-  static char NullTerminatorBlockContent[];
+  static const char NullTerminatorBlockContent[];
   StringRef EHFrameSectionName;
 };
 

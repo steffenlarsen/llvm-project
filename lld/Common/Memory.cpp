@@ -13,7 +13,7 @@ using namespace llvm;
 using namespace lld;
 
 SpecificAllocBase *
-lld::SpecificAllocBase::getOrCreate(void *tag, size_t size, size_t align,
+lld::SpecificAllocBase::getOrCreate(const void *tag, size_t size, size_t align,
                                     SpecificAllocBase *(&creator)(void *)) {
   auto &instances = context().instances;
   auto &instance = instances[tag];

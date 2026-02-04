@@ -826,7 +826,7 @@ bool Parser::parseExpressionImpl(VariantValue *Value) {
   llvm_unreachable("Unknown token kind.");
 }
 
-static llvm::ManagedStatic<Parser::RegistrySema> DefaultRegistrySema;
+static LLVM_MANAGED_STATIC<Parser::RegistrySema> DefaultRegistrySema;
 
 Parser::Parser(CodeTokenizer *Tokenizer, Sema *S,
                const NamedValueMap *NamedValues, Diagnostics *Error)

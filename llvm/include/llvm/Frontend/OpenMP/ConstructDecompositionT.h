@@ -36,7 +36,7 @@
 #include <variant>
 
 static inline llvm::ArrayRef<llvm::omp::Directive> getWorksharing() {
-  static llvm::omp::Directive worksharing[] = {
+  static const llvm::omp::Directive worksharing[] = {
       llvm::omp::Directive::OMPD_do,     llvm::omp::Directive::OMPD_for,
       llvm::omp::Directive::OMPD_scope,  llvm::omp::Directive::OMPD_sections,
       llvm::omp::Directive::OMPD_single, llvm::omp::Directive::OMPD_workshare,
@@ -45,7 +45,7 @@ static inline llvm::ArrayRef<llvm::omp::Directive> getWorksharing() {
 }
 
 static inline llvm::ArrayRef<llvm::omp::Directive> getWorksharingLoop() {
-  static llvm::omp::Directive worksharingLoop[] = {
+  static const llvm::omp::Directive worksharingLoop[] = {
       llvm::omp::Directive::OMPD_do,
       llvm::omp::Directive::OMPD_for,
   };

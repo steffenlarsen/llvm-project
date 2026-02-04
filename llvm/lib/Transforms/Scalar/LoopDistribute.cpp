@@ -112,7 +112,7 @@ static cl::opt<bool> EnableLoopDistribute(
     cl::desc("Enable the new, experimental LoopDistribution Pass"),
     cl::init(false));
 
-static const char *DistributedMetaData = "llvm.loop.isdistributed";
+static const char *const DistributedMetaData = "llvm.loop.isdistributed";
 
 STATISTIC(NumLoopsDistributed, "Number of loops distributed");
 

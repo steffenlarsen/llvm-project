@@ -146,7 +146,7 @@ llvm::Expected<llvm::StringRef> HostInfoPosix::GetSDKRoot(SDKOptions options) {
   return "/";
 }
 
-static llvm::ManagedStatic<PosixUserIDResolver> g_user_id_resolver;
+static LLVM_MANAGED_STATIC<PosixUserIDResolver> g_user_id_resolver;
 
 UserIDResolver &HostInfoPosix::GetUserIDResolver() {
   return *g_user_id_resolver;

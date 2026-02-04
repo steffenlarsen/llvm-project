@@ -14,8 +14,11 @@
 #define LLVM_SUPPORT_MANAGEDSTATIC_H
 
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/Threading.h"
 #include <atomic>
 #include <cstddef>
+
+#define LLVM_MANAGED_STATIC LLVM_THREAD_LOCAL_ST llvm::ManagedStatic
 
 namespace llvm {
 

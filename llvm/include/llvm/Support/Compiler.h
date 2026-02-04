@@ -688,7 +688,6 @@ void AnnotateIgnoreWritesEnd(const char *file, int line);
 /// initialize to some constant value. In almost all circumstances this is most
 /// appropriate for use with a pointer, integer, or small aggregation of
 /// pointers and integers.
-#if LLVM_ENABLE_THREADS
 #if __has_feature(cxx_thread_local) || defined(_MSC_VER)
 #define LLVM_THREAD_LOCAL thread_local
 #else
@@ -696,11 +695,18 @@ void AnnotateIgnoreWritesEnd(const char *file, int line);
 // we only need the restricted functionality that provides.
 #define LLVM_THREAD_LOCAL __thread
 #endif
+
+// \macro LLVM_THREAD_LOCAL_ST
+// A thread-local storage specifier which can be used with global states. It is
+// similar to LLVM_THREAD_LOCAL but only applies thread-local storage to
+// variables if LLVM is built without multi-threading support. This ensures that
+// global state variables won't affect single-threaded invocations of LLVM
+// running in parallel in the same process.
+#if LLVM_ENABLE_THREADS
+#define LLVM_THREAD_LOCAL_ST
 #else // !LLVM_ENABLE_THREADS
-// If threading is disabled entirely, this compiles to nothing and you get
-// a normal global variable.
-#define LLVM_THREAD_LOCAL
-#endif
+#define LLVM_THREAD_LOCAL_ST LLVM_THREAD_LOCAL
+#endif // LLVM_ENABLE_THREADS
 
 /// \macro LLVM_ENABLE_EXCEPTIONS
 /// Whether LLVM is built with exception support.

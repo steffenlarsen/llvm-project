@@ -16,7 +16,7 @@
 namespace clang {
 namespace tooling {
 
-const char *AllTUsToolExecutor::ExecutorName = "AllTUsToolExecutor";
+const char *const AllTUsToolExecutor::ExecutorName = "AllTUsToolExecutor";
 
 namespace {
 llvm::Error make_string_error(const llvm::Twine &Message) {

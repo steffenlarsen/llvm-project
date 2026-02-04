@@ -39,7 +39,7 @@ public:
   }
 
 private:
-  static const char *WFMP;
+  static const char *const WFMP;
 
   struct FaultInfo {
     FaultKind Kind = FaultKindMax;

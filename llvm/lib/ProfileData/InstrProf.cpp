@@ -198,19 +198,19 @@ const std::error_category &llvm::instrprof_category() {
 
 namespace {
 
-const char *InstrProfSectNameCommon[] = {
+const char *const InstrProfSectNameCommon[] = {
 #define INSTR_PROF_SECT_ENTRY(Kind, SectNameCommon, SectNameCoff, Prefix)      \
   SectNameCommon,
 #include "llvm/ProfileData/InstrProfData.inc"
 };
 
-const char *InstrProfSectNameCoff[] = {
+const char *const InstrProfSectNameCoff[] = {
 #define INSTR_PROF_SECT_ENTRY(Kind, SectNameCommon, SectNameCoff, Prefix)      \
   SectNameCoff,
 #include "llvm/ProfileData/InstrProfData.inc"
 };
 
-const char *InstrProfSectNamePrefix[] = {
+const char *const InstrProfSectNamePrefix[] = {
 #define INSTR_PROF_SECT_ENTRY(Kind, SectNameCommon, SectNameCoff, Prefix)      \
   Prefix,
 #include "llvm/ProfileData/InstrProfData.inc"

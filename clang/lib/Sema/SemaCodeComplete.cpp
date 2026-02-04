@@ -10464,7 +10464,7 @@ void SemaCodeCompletion::CodeCompleteAvailabilityPlatformName() {
                         CodeCompleter->getCodeCompletionTUInfo(),
                         CodeCompletionContext::CCC_Other);
   Results.EnterNewScope();
-  static const char *Platforms[] = {"macOS", "iOS", "watchOS", "tvOS"};
+  static const char *const Platforms[] = {"macOS", "iOS", "watchOS", "tvOS"};
   for (const char *Platform : llvm::ArrayRef(Platforms)) {
     Results.AddResult(CodeCompletionResult(Platform));
     Results.AddResult(CodeCompletionResult(Results.getAllocator().CopyString(

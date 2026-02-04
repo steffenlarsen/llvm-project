@@ -89,7 +89,7 @@ using namespace llvm;
 
 #define DEBUG_TYPE "loop-versioning-licm"
 
-static const char *LICMVersioningMetaData = "llvm.loop.licm_versioning.disable";
+static const char *const LICMVersioningMetaData = "llvm.loop.licm_versioning.disable";
 
 /// Threshold minimum allowed percentage for possible
 /// invariant instructions in a loop.

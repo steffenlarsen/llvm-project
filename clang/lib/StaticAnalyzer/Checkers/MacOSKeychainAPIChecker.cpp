@@ -133,7 +133,7 @@ private:
     SecKeychainBugVisitor(SymbolRef S) : Sym(S) {}
 
     void Profile(llvm::FoldingSetNodeID &ID) const override {
-      static int X = 0;
+      static const int X = 0;
       ID.AddPointer(&X);
       ID.AddPointer(Sym);
     }

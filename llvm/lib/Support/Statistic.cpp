@@ -90,8 +90,8 @@ public:
 };
 } // end anonymous namespace
 
-static ManagedStatic<StatisticInfo> StatInfo;
-static ManagedStatic<sys::SmartMutex<true> > StatLock;
+static LLVM_MANAGED_STATIC<StatisticInfo> StatInfo;
+static LLVM_MANAGED_STATIC<sys::SmartMutex<true>> StatLock;
 
 /// RegisterStatistic - The first time a statistic is bumped, this method is
 /// called.

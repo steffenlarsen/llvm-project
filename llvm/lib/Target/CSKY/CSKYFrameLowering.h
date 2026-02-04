@@ -14,6 +14,7 @@
 #define LLVM_LIB_TARGET_CSKY_CSKYFRAMELOWERING_H
 
 #include "llvm/CodeGen/TargetFrameLowering.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 
 namespace llvm {
 class CSKYSubtarget;

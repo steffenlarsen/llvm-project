@@ -55,7 +55,7 @@ class LLVM_ABI LVType : public LVElement {
   // Typed bitvector with kinds and properties for this type.
   LVProperties<LVTypeKind> Kinds;
   LVProperties<Property> Properties;
-  static LVTypeDispatch Dispatch;
+  static const LVTypeDispatch Dispatch;
 
   // Size in bits of a symbol of this type.
   uint32_t BitSize = 0;
@@ -120,7 +120,7 @@ public:
   void resolveName() override;
   void resolveReferences() override;
 
-  static LVTypeDispatch &getDispatch() { return Dispatch; }
+  static const LVTypeDispatch &getDispatch() { return Dispatch; }
 
   static bool parametersMatch(const LVTypes *References,
                               const LVTypes *Targets);

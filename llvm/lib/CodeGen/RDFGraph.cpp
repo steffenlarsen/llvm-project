@@ -517,8 +517,7 @@ void CodeNode::removeMember(Node NA, const DataFlowGraph &G) {
 
 // Return the list of all members of the code node.
 NodeList CodeNode::members(const DataFlowGraph &G) const {
-  static auto True = [](Node) -> bool { return true; };
-  return members_if(True, G);
+  return members_if([](Node) -> bool { return true; }, G);
 }
 
 // Return the owner of the given instr node.
@@ -1502,7 +1501,7 @@ void DataFlowGraph::removeUnusedPhis() {
       PhiQ.insert(P.Id);
   }
 
-  static auto HasUsedDef = [](NodeList &Ms) -> bool {
+  static const auto HasUsedDef = [](NodeList &Ms) -> bool {
     for (Node M : Ms) {
       if (M.Addr->getKind() != NodeAttrs::Def)
         continue;

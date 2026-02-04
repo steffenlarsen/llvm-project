@@ -779,7 +779,8 @@ computeMemberData(raw_ostream &StringTable, raw_ostream &SymNames,
                   SymtabWritingMode NeedSymbols, SymMap *SymMap,
                   LLVMContext &Context, ArrayRef<NewArchiveMember> NewMembers,
                   std::optional<bool> IsEC, function_ref<void(Error)> Warn) {
-  static char PaddingData[8] = {'\n', '\n', '\n', '\n', '\n', '\n', '\n', '\n'};
+  static const char PaddingData[8] = {'\n', '\n', '\n', '\n',
+                                      '\n', '\n', '\n', '\n'};
   uint64_t MemHeadPadSize = 0;
   uint64_t Pos =
       isAIXBigArchive(Kind) ? sizeof(object::BigArchive::FixLenHdr) : 0;

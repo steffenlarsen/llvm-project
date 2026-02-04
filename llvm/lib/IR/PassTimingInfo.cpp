@@ -85,7 +85,7 @@ private:
   Timer *newPassTimer(StringRef PassID, StringRef PassDesc);
 };
 
-static ManagedStatic<sys::SmartMutex<true>> TimingInfoMutex;
+static LLVM_MANAGED_STATIC<sys::SmartMutex<true>> TimingInfoMutex;
 
 void PassTimingInfo::init() {
   if (TheTimeInfo || !TimePassesIsEnabled)
@@ -94,7 +94,7 @@ void PassTimingInfo::init() {
   // Constructed the first time this is called, iff -time-passes is enabled.
   // This guarantees that the object will be constructed after static globals,
   // thus it will be destroyed before them.
-  static ManagedStatic<PassTimingInfo> TTI;
+  static LLVM_MANAGED_STATIC<PassTimingInfo> TTI;
   if (!TTI->PassTG)
     TTI->PassTG = &NamedRegionTimer::getNamedTimerGroup(
         TimePassesHandler::PassGroupName, TimePassesHandler::PassGroupDesc);

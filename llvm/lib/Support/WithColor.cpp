@@ -30,7 +30,7 @@ struct CreateUseColor {
   }
 };
 } // namespace
-static ManagedStatic<cl::opt<cl::boolOrDefault>, CreateUseColor> UseColor;
+static LLVM_MANAGED_STATIC<cl::opt<cl::boolOrDefault>, CreateUseColor> UseColor;
 void llvm::initWithColorOptions() { *UseColor; }
 
 static bool DefaultAutoDetectFunction(const raw_ostream &OS) {

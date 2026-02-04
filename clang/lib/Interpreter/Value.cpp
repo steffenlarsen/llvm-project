@@ -44,8 +44,8 @@ public:
   const unsigned char *getPayload() const { return Storage; }
 
   static unsigned getPayloadOffset() {
-    static ValueStorage Dummy(nullptr, 0, 0);
-    return Dummy.getPayload() - reinterpret_cast<unsigned char *>(&Dummy);
+    static const ValueStorage Dummy(nullptr, 0, 0);
+    return Dummy.getPayload() - reinterpret_cast<const unsigned char *>(&Dummy);
   }
 
   static ValueStorage *getFromPayload(void *Payload) {

@@ -57,7 +57,7 @@ void SyntheticTypeNameBuilder::addArrayDimension(
   }
 }
 
-static dwarf::Attribute TypeAttr[] = {dwarf::DW_AT_type};
+static const dwarf::Attribute TypeAttr[] = {dwarf::DW_AT_type};
 Error SyntheticTypeNameBuilder::addSignature(UnitEntryPairTy InputUnitEntryPair,
                                              bool addTemplateParameters) {
   // Add entry type.

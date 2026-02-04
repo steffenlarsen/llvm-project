@@ -25,7 +25,7 @@ namespace tooling {
 /// database.
 class AllTUsToolExecutor : public ToolExecutor {
 public:
-  static const char *ExecutorName;
+  static const char *const ExecutorName;
 
   /// Init with \p CompilationDatabase.
   /// This uses \p ThreadCount threads to exececute the actions on all files in

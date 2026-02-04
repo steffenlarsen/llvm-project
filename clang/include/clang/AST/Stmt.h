@@ -1460,7 +1460,7 @@ protected:
 
 private:
   /// Whether statistic collection is enabled.
-  static bool StatisticsEnabled;
+  static LLVM_THREAD_LOCAL_ST bool StatisticsEnabled;
 
 protected:
   /// Construct an empty statement.

@@ -130,7 +130,7 @@ struct Globals {
 };
 
 Globals &getGlobals() {
-  static Globals G;
+  static LLVM_THREAD_LOCAL_ST Globals G;
   return G;
 }
 

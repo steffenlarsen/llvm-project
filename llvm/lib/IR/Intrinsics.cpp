@@ -1173,7 +1173,7 @@ struct InterleaveIntrinsic {
   Intrinsic::ID Interleave, Deinterleave;
 };
 
-static InterleaveIntrinsic InterleaveIntrinsics[] = {
+static const InterleaveIntrinsic InterleaveIntrinsics[] = {
     {Intrinsic::vector_interleave2, Intrinsic::vector_deinterleave2},
     {Intrinsic::vector_interleave3, Intrinsic::vector_deinterleave3},
     {Intrinsic::vector_interleave4, Intrinsic::vector_deinterleave4},

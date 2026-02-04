@@ -75,17 +75,17 @@ private:
   /// of a crash. This is not thread_local as the pass manager may produce any
   /// number of child threads. This uses a set to allow for multiple MLIR pass
   /// managers to be running at the same time.
-  static llvm::ManagedStatic<llvm::sys::SmartMutex<true>> reproducerMutex;
-  static llvm::ManagedStatic<
+  static LLVM_MANAGED_STATIC<llvm::sys::SmartMutex<true>> reproducerMutex;
+  static LLVM_MANAGED_STATIC<
       llvm::SmallSetVector<RecoveryReproducerContext *, 1>>
       reproducerSet;
 };
 } // namespace detail
 } // namespace mlir
 
-llvm::ManagedStatic<llvm::sys::SmartMutex<true>>
+LLVM_MANAGED_STATIC<llvm::sys::SmartMutex<true>>
     RecoveryReproducerContext::reproducerMutex;
-llvm::ManagedStatic<llvm::SmallSetVector<RecoveryReproducerContext *, 1>>
+LLVM_MANAGED_STATIC<llvm::SmallSetVector<RecoveryReproducerContext *, 1>>
     RecoveryReproducerContext::reproducerSet;
 
 RecoveryReproducerContext::RecoveryReproducerContext(

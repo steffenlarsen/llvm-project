@@ -42,7 +42,7 @@ using namespace llvm;
 
 // Use explicit storage to avoid accessing cl::opt in a signal handler.
 static bool DisableSymbolicationFlag = false;
-static ManagedStatic<std::string> CrashDiagnosticsDirectory;
+static LLVM_MANAGED_STATIC<std::string> CrashDiagnosticsDirectory;
 namespace {
 struct CreateDisableSymbolication {
   static void *call() {
@@ -62,9 +62,10 @@ struct CreateCrashDiagnosticsDir {
 };
 } // namespace
 void llvm::initSignalsOptions() {
-  static ManagedStatic<cl::opt<bool, true>, CreateDisableSymbolication>
+  static LLVM_MANAGED_STATIC<cl::opt<bool, true>, CreateDisableSymbolication>
       DisableSymbolication;
-  static ManagedStatic<cl::opt<std::string, true>, CreateCrashDiagnosticsDir>
+  static LLVM_MANAGED_STATIC<cl::opt<std::string, true>,
+                             CreateCrashDiagnosticsDir>
       CrashDiagnosticsDir;
   *DisableSymbolication;
   *CrashDiagnosticsDir;

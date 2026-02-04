@@ -33,7 +33,7 @@
 
 using namespace llvm;
 
-static const char *BTFKindStr[] = {
+static const char *const BTFKindStr[] = {
 #define HANDLE_BTF_KIND(ID, NAME) "BTF_KIND_" #NAME,
 #include "llvm/DebugInfo/BTF/BTF.def"
 };

@@ -17,7 +17,8 @@ static llvm::Error make_string_error(const llvm::Twine &Message) {
                                              llvm::inconvertibleErrorCode());
 }
 
-const char *StandaloneToolExecutor::ExecutorName = "StandaloneToolExecutor";
+const char *const StandaloneToolExecutor::ExecutorName =
+    "StandaloneToolExecutor";
 
 static ArgumentsAdjuster getDefaultArgumentsAdjusters() {
   return combineAdjusters(

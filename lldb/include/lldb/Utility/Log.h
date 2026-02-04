@@ -306,7 +306,7 @@ private:
   bool Dump(llvm::raw_ostream &stream);
 
   typedef llvm::StringMap<Log> ChannelMap;
-  static llvm::ManagedStatic<ChannelMap> g_channel_map;
+  static LLVM_MANAGED_STATIC<ChannelMap> g_channel_map;
 
   static void ForEachCategory(
       const Log::ChannelMap::value_type &entry,

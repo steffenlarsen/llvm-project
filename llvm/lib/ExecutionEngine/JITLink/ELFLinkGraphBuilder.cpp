@@ -14,7 +14,7 @@
 
 #define DEBUG_TYPE "jitlink"
 
-static const char *DWSecNames[] = {
+static const char *const DWSecNames[] = {
 #define HANDLE_DWARF_SECTION(ENUM_NAME, ELF_NAME, CMDLINE_NAME, OPTION)        \
   ELF_NAME,
 #include "llvm/BinaryFormat/Dwarf.def"

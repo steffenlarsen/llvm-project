@@ -196,8 +196,8 @@ Executor *Executor::getDefaultExecutor() {
   // llvm_shutdown() on Windows. This is important to avoid various race
   // conditions at process exit that can cause crashes or deadlocks.
 
-  static ManagedStatic<ThreadPoolExecutor, ThreadPoolExecutor::Creator,
-                       ThreadPoolExecutor::Deleter>
+  static LLVM_MANAGED_STATIC<ThreadPoolExecutor, ThreadPoolExecutor::Creator,
+                             ThreadPoolExecutor::Deleter>
       ManagedExec;
   static std::unique_ptr<ThreadPoolExecutor> Exec(&(*ManagedExec));
   return Exec.get();

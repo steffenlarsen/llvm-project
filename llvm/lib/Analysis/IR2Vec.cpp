@@ -396,7 +396,7 @@ CmpInst::Predicate Vocabulary::getPredicateFromLocalIndex(unsigned LocalIndex) {
 }
 
 StringRef Vocabulary::getVocabKeyForPredicate(CmpInst::Predicate Pred) {
-  static SmallString<16> PredNameBuffer;
+  static LLVM_THREAD_LOCAL_ST SmallString<16> PredNameBuffer;
   if (Pred < CmpInst::FIRST_ICMP_PREDICATE)
     PredNameBuffer = "FCMP_";
   else

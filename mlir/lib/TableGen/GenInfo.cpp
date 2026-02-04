@@ -14,7 +14,7 @@
 
 using namespace mlir;
 
-static llvm::ManagedStatic<std::vector<GenInfo>> generatorRegistry;
+static LLVM_MANAGED_STATIC<std::vector<GenInfo>> generatorRegistry;
 
 GenRegistration::GenRegistration(StringRef arg, StringRef description,
                                  const GenFunction &function) {

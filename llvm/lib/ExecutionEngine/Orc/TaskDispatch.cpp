@@ -17,7 +17,7 @@ char Task::ID = 0;
 char GenericNamedTask::ID = 0;
 char IdleTask::ID = 0;
 
-const char *GenericNamedTask::DefaultDescription = "Generic Task";
+const char *const GenericNamedTask::DefaultDescription = "Generic Task";
 
 void Task::anchor() {}
 void IdleTask::anchor() {}

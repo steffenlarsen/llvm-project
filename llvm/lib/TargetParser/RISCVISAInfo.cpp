@@ -44,8 +44,8 @@ struct RISCVProfile {
 
 } // end anonymous namespace
 
-static const char *RISCVGImplications[] = {"i", "m", "a", "f", "d"};
-static const char *RISCVGImplicationsZi[] = {"zicsr", "zifencei"};
+static const char *const RISCVGImplications[] = {"i", "m", "a", "f", "d"};
+static const char *const RISCVGImplicationsZi[] = {"zicsr", "zifencei"};
 
 #define GET_SUPPORTED_EXTENSIONS
 #include "llvm/TargetParser/RISCVTargetParserDef.inc"

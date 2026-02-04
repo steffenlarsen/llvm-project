@@ -21,7 +21,7 @@ using namespace llvm::logicalview;
 
 #define DEBUG_TYPE "Element"
 
-LVElementDispatch LVElement::Dispatch = {
+const LVElementDispatch LVElement::Dispatch = {
     {LVElementKind::Discarded, &LVElement::getIsDiscarded},
     {LVElementKind::Global, &LVElement::getIsGlobalReference},
     {LVElementKind::Optimized, &LVElement::getIsOptimized}};

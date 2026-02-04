@@ -142,7 +142,7 @@ Z3CrosscheckVisitor::VisitNode(const ExplodedNode *N, BugReporterContext &,
 }
 
 void Z3CrosscheckVisitor::Profile(llvm::FoldingSetNodeID &ID) const {
-  static int Tag = 0;
+  static const int Tag = 0;
   ID.AddPointer(&Tag);
 }
 

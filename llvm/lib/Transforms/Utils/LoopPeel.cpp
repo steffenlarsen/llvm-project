@@ -86,7 +86,7 @@ static cl::opt<bool> EnablePeelingForIV(
     "enable-peeling-for-iv", cl::init(false), cl::Hidden,
     cl::desc("Enable peeling to convert Phi nodes into IVs"));
 
-static const char *PeeledCountMetaData = "llvm.loop.peeled.count";
+static const char *const PeeledCountMetaData = "llvm.loop.peeled.count";
 
 extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 } // namespace llvm

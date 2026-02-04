@@ -31,6 +31,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/PrettyStackTrace.h"
+#include "llvm/Support/Threading.h"
 #include "llvm/Support/VersionTuple.h"
 #include <algorithm>
 #include <cassert>
@@ -317,7 +318,7 @@ private:
   unsigned TopLevelDeclInObjCContainer : 1;
 
   /// Whether statistic collection is enabled.
-  static bool StatisticsEnabled;
+  static LLVM_THREAD_LOCAL_ST bool StatisticsEnabled;
 
 protected:
   friend class ASTDeclMerger;

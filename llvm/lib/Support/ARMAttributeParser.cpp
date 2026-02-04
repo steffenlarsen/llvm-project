@@ -250,8 +250,9 @@ Error ARMAttributeParser::ABI_align_needed(AttrType tag) {
 }
 
 Error ARMAttributeParser::ABI_align_preserved(AttrType tag) {
-  static const char *strings[] = {"Not Required", "8-byte data alignment",
-                                  "8-byte data and code alignment", "Reserved"};
+  static const char *const strings[] = {"Not Required", "8-byte data alignment",
+                                        "8-byte data and code alignment",
+                                        "Reserved"};
 
   uint64_t value = de.getULEB128(cursor);
 

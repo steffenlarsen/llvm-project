@@ -66,7 +66,8 @@ bool isFunctionInPrintList(StringRef FunctionName);
 // \p SR contains the corresponding initial content.  \p FileName will have
 // the filenames filled in when creating files.  Return first error code (if
 // any) and stop.
-std::error_code prepareTempFiles(SmallVector<int> &FD, ArrayRef<StringRef> SR,
+std::error_code prepareTempFiles(SmallVector<int> &FD,
+                                 ArrayRef<StringRef> SR,
                                  SmallVector<std::string> &FileName);
 
 // Remove the temporary files in \p FileName.  Typically used in conjunction

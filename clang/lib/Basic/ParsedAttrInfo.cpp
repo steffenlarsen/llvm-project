@@ -22,7 +22,7 @@ LLVM_INSTANTIATE_REGISTRY(ParsedAttrInfoRegistry)
 
 const std::list<std::unique_ptr<ParsedAttrInfo>> &
 clang::getAttributePluginInstances() {
-  static llvm::ManagedStatic<std::list<std::unique_ptr<ParsedAttrInfo>>>
+  static LLVM_MANAGED_STATIC<std::list<std::unique_ptr<ParsedAttrInfo>>>
       PluginAttrInstances;
   if (PluginAttrInstances->empty())
     for (const auto &It : ParsedAttrInfoRegistry::entries())

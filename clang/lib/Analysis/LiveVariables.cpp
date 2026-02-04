@@ -639,5 +639,11 @@ void LiveVariablesImpl::dumpExprLiveness(const SourceManager &M) {
   }
 }
 
-const void *LiveVariables::getTag() { static int x; return &x; }
-const void *RelaxedLiveVariables::getTag() { static int x; return &x; }
+const void *LiveVariables::getTag() {
+  static const int x = 0;
+  return &x;
+}
+const void *RelaxedLiveVariables::getTag() {
+  static const int x = 0;
+  return &x;
+}

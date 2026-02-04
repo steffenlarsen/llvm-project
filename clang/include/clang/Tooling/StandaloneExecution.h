@@ -30,7 +30,7 @@ namespace tooling {
 ///   - `getClangStripDependencyFileAdjuster()`
 class StandaloneToolExecutor : public ToolExecutor {
 public:
-  static const char *ExecutorName;
+  static const char *const ExecutorName;
 
   /// Init with \p CompilationDatabase and the paths of all files to be
   /// proccessed.

@@ -490,7 +490,7 @@ void ChainT::mergeEdges(ChainT *Other) {
 }
 
 using NodeIter = std::vector<NodeT *>::const_iterator;
-static std::vector<NodeT *> EmptyList;
+static const std::vector<NodeT *> EmptyList;
 
 /// A wrapper around three concatenated vectors (chains) of nodes; it is used
 /// to avoid extra instantiation of the vectors.

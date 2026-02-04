@@ -4054,7 +4054,7 @@ struct RegisterFatalErrorHandler {
 };
 } // namespace
 
-static llvm::ManagedStatic<RegisterFatalErrorHandler>
+static LLVM_MANAGED_STATIC<RegisterFatalErrorHandler>
     RegisterFatalErrorHandlerOnce;
 
 static CIndexer *clang_createIndex_Impl(
@@ -10146,7 +10146,7 @@ Logger &cxindex::Logger::operator<<(const llvm::format_object_base &Fmt) {
   return *this;
 }
 
-static llvm::ManagedStatic<std::mutex> LoggingMutex;
+static LLVM_MANAGED_STATIC<std::mutex> LoggingMutex;
 
 cxindex::Logger::~Logger() {
   std::lock_guard<std::mutex> L(*LoggingMutex);

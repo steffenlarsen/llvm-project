@@ -80,9 +80,9 @@ template <typename Int> inline bool isValidAtomicOrdering(Int I) {
 
 /// String used by LLVM IR to represent atomic ordering.
 inline const char *toIRString(AtomicOrdering ao) {
-  static const char *names[8] = {"not_atomic", "unordered", "monotonic",
-                                 "consume",    "acquire",   "release",
-                                 "acq_rel",    "seq_cst"};
+  static const char *const names[8] = {"not_atomic", "unordered", "monotonic",
+                                       "consume",    "acquire",   "release",
+                                       "acq_rel",    "seq_cst"};
   return names[static_cast<size_t>(ao)];
 }
 

@@ -98,7 +98,7 @@ struct MlirTransformOptCLOptions {
 /// not strictly necessary in the tool source file that is not being used as a
 /// library (where the options would pollute the global list of options), it is
 /// good practice to follow this.
-static llvm::ManagedStatic<MlirTransformOptCLOptions> clOptions;
+static LLVM_MANAGED_STATIC<MlirTransformOptCLOptions> clOptions;
 
 /// Explicitly registers command-line options.
 static void registerCLOptions() { *clOptions; }

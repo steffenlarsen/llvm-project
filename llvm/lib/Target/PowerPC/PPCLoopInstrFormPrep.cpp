@@ -328,7 +328,8 @@ namespace {
 } // end anonymous namespace
 
 char PPCLoopInstrFormPrep::ID = 0;
-static const char *name = "Prepare loop for ppc preferred instruction forms";
+static const char *const name =
+    "Prepare loop for ppc preferred instruction forms";
 INITIALIZE_PASS_BEGIN(PPCLoopInstrFormPrep, DEBUG_TYPE, name, false, false)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)

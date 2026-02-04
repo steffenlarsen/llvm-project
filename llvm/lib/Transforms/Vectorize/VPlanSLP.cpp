@@ -40,7 +40,7 @@ using namespace llvm;
 #define DEBUG_TYPE "vplan-slp"
 
 // Number of levels to look ahead when re-ordering multi node operands.
-static unsigned LookaheadMaxDepth = 5;
+static const unsigned LookaheadMaxDepth = 5;
 
 void VPInterleavedAccessInfo::visitRegion(VPRegionBlock *Region,
                                           Old2NewTy &Old2New,

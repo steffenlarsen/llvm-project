@@ -1153,7 +1153,7 @@ bool llvm::isFinite(const Loop *L) {
   return L->getHeader()->getParent()->willReturn();
 }
 
-static const char *LLVMLoopMustProgress = "llvm.loop.mustprogress";
+static const char *const LLVMLoopMustProgress = "llvm.loop.mustprogress";
 
 bool llvm::hasMustProgress(const Loop *L) {
   return getBooleanLoopAttribute(L, LLVMLoopMustProgress);

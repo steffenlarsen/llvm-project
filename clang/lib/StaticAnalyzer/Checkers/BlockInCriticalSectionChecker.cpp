@@ -172,8 +172,8 @@ public:
   SuppressNonBlockingStreams(SymbolRef StreamSym, int NonBlockMacroVal)
       : StreamSym(StreamSym), NonBlockMacroVal(NonBlockMacroVal) {}
 
-  static void *getTag() {
-    static bool Tag;
+  static const void *getTag() {
+    static const bool Tag = false;
     return &Tag;
   }
 

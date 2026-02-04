@@ -255,13 +255,13 @@ static raw_ostream &operator<<(raw_ostream &OS,
 #endif
 
 template <> struct llvm::DenseMapInfo<ModelledPHI> {
-  static inline ModelledPHI &getEmptyKey() {
-    static ModelledPHI Dummy = ModelledPHI::createDummy(0);
+  static inline const ModelledPHI &getEmptyKey() {
+    static const ModelledPHI Dummy = ModelledPHI::createDummy(0);
     return Dummy;
   }
 
-  static inline ModelledPHI &getTombstoneKey() {
-    static ModelledPHI Dummy = ModelledPHI::createDummy(1);
+  static inline const ModelledPHI &getTombstoneKey() {
+    static const ModelledPHI Dummy = ModelledPHI::createDummy(1);
     return Dummy;
   }
 

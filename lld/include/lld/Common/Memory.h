@@ -28,7 +28,8 @@ namespace lld {
 // SpecificAlloc<> instances.
 struct SpecificAllocBase {
   virtual ~SpecificAllocBase() = default;
-  static SpecificAllocBase *getOrCreate(void *tag, size_t size, size_t align,
+  static SpecificAllocBase *getOrCreate(const void *tag, size_t size,
+                                        size_t align,
                                         SpecificAllocBase *(&creator)(void *));
 };
 
@@ -38,12 +39,12 @@ template <class T> struct SpecificAlloc : public SpecificAllocBase {
     return new (storage) SpecificAlloc<T>();
   }
   llvm::SpecificBumpPtrAllocator<T> alloc;
-  static int tag;
+  static const int tag;
 };
 
 // The address of this static member is only used as a key in
 // CommonLinkerContext::instances. Its value does not matter.
-template <class T> int SpecificAlloc<T>::tag = 0;
+template <class T> const int SpecificAlloc<T>::tag = 0;
 
 // Creates the arena on-demand on the first call; or returns it, if it was
 // already created.

@@ -14,6 +14,7 @@
 #define LLVM_LIB_CODEGEN_ASMPRINTER_PSEUDOPROBEPRINTER_H
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/StringRef.h"
 
 #ifndef NDEBUG
 #include "llvm/ADT/DenseSet.h"

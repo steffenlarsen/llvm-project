@@ -15,7 +15,7 @@
 
 #define DEBUG_TYPE "jitlink"
 
-static const char *CommonSectionName = "__common";
+static const char * const CommonSectionName = "__common";
 
 namespace llvm {
 namespace jitlink {

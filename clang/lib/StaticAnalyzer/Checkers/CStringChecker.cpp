@@ -99,7 +99,10 @@ public:
 
   StringRef getDebugTag() const override { return "MallocChecker"; }
 
-  static void *getTag() { static int tag; return &tag; }
+  static const void *getTag() {
+    static const int tag = 0;
+    return &tag;
+  }
 
   bool evalCall(const CallEvent &Call, CheckerContext &C) const;
   void checkPreStmt(const DeclStmt *DS, CheckerContext &C) const;

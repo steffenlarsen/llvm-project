@@ -268,7 +268,7 @@ public:
       : Sym(S), IsReleaseUnowned(IRU) {}
 
   void Profile(llvm::FoldingSetNodeID &ID) const override {
-    static int x = 0;
+    static const int x = 0;
     ID.AddPointer(&x);
     ID.AddPointer(Sym);
   }

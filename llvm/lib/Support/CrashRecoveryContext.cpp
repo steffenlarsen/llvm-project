@@ -21,7 +21,7 @@ using namespace llvm;
 namespace {
 
 struct CrashRecoveryContextImpl;
-static LLVM_THREAD_LOCAL const CrashRecoveryContextImpl *CurrentContext;
+static LLVM_THREAD_LOCAL_ST const CrashRecoveryContextImpl *CurrentContext;
 
 struct CrashRecoveryContextImpl {
   // When threads are disabled, this links up all active
@@ -88,7 +88,7 @@ std::mutex &getCrashRecoveryContextMutex() {
 
 static bool gCrashRecoveryEnabled = false;
 
-static LLVM_THREAD_LOCAL const CrashRecoveryContext *IsRecoveringFromCrash;
+static LLVM_THREAD_LOCAL_ST const CrashRecoveryContext *IsRecoveringFromCrash;
 
 } // namespace
 

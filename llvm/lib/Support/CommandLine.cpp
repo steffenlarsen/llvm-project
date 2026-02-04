@@ -117,9 +117,9 @@ void opt_unsigned_anchor() { opt<unsigned> anchor{""}; }
 
 const static size_t DefaultPad = 2;
 
-static StringRef ArgPrefix = "-";
-static StringRef ArgPrefixLong = "--";
-static StringRef ArgHelpPrefix = " - ";
+static const StringRef ArgPrefix = "-";
+static const StringRef ArgPrefixLong = "--";
+static const StringRef ArgHelpPrefix = " - ";
 
 static size_t argPlusPrefixesSize(StringRef ArgName, size_t Pad = DefaultPad) {
   size_t Len = ArgName.size();
@@ -423,7 +423,7 @@ private:
 
 } // namespace
 
-static ManagedStatic<CommandLineParser> GlobalParser;
+static LLVM_MANAGED_STATIC<CommandLineParser> GlobalParser;
 
 template <typename T, T TrueVal, T FalseVal>
 static bool parseBool(Option &O, StringRef ArgName, StringRef Arg, T &Value) {
@@ -492,10 +492,10 @@ void OptionCategory::registerCategory() {
 // initialization because it is referenced from cl::opt constructors, which run
 // dynamically in an arbitrary order.
 LLVM_REQUIRE_CONSTANT_INITIALIZATION
-static ManagedStatic<SubCommand> TopLevelSubCommand;
+static LLVM_MANAGED_STATIC<SubCommand> TopLevelSubCommand;
 
 // A special subcommand that can be used to put an option into all subcommands.
-static ManagedStatic<SubCommand> AllSubCommands;
+static LLVM_MANAGED_STATIC<SubCommand> AllSubCommands;
 
 SubCommand &SubCommand::getTopLevel() { return *TopLevelSubCommand; }
 
@@ -2094,9 +2094,9 @@ unsigned generic_parser_base::findOption(StringRef Name) {
   return e;
 }
 
-static StringRef EqValue = "=<value>";
-static StringRef EmptyOption = "<empty>";
-static StringRef OptionPrefix = "    =";
+static const StringRef EqValue = "=<value>";
+static const StringRef EmptyOption = "<empty>";
+static const StringRef OptionPrefix = "    =";
 static size_t getOptionPrefixesSize() {
   return OptionPrefix.size() + ArgHelpPrefix.size();
 }
@@ -2677,7 +2677,7 @@ struct CommandLineCommonOptions {
 
 // Lazy-initialized global instance of options controlling the command-line
 // parser and general handling.
-static ManagedStatic<CommandLineCommonOptions> CommonOptions;
+static LLVM_MANAGED_STATIC<CommandLineCommonOptions> CommonOptions;
 
 static void initCommonOptions() {
   *CommonOptions;

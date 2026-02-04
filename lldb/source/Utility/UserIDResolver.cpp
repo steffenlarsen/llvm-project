@@ -40,6 +40,6 @@ protected:
 };
 } // namespace
 
-static llvm::ManagedStatic<NoopResolver> g_noop_resolver;
+static LLVM_MANAGED_STATIC<NoopResolver> g_noop_resolver;
 
 UserIDResolver &UserIDResolver::GetNoopResolver() { return *g_noop_resolver; }

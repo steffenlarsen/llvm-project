@@ -109,7 +109,7 @@ static std::string percentDecode(StringRef Content) {
 
 /// Return the set containing the supported URI schemes.
 static StringSet<> &getSupportedSchemes() {
-  static StringSet<> Schemes({"file", "test"});
+  static LLVM_THREAD_LOCAL_ST StringSet<> Schemes({"file", "test"});
   return Schemes;
 }
 

@@ -51,7 +51,7 @@
 #include "llvm/Support/Compiler.h"
 
 /* character-class table */
-static struct cclass {
+static const struct cclass {
   const char *name;
   const char *chars;
   const char *multis;
@@ -945,7 +945,7 @@ static void p_b_term(struct parse *p, cset *cs) {
  */
 static void p_b_cclass(struct parse *p, cset *cs) {
   const char *sp = p->next;
-  struct cclass *cp;
+  const struct cclass *cp;
   size_t len;
   const char *u;
   char c;

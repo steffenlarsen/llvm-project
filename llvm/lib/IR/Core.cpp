@@ -93,7 +93,7 @@ void LLVMDisposeMessage(char *Message) {
 /*===-- Operations on contexts --------------------------------------------===*/
 
 static LLVMContext &getGlobalContext() {
-  static LLVMContext GlobalContext;
+  static LLVM_THREAD_LOCAL_ST LLVMContext GlobalContext;
   return GlobalContext;
 }
 

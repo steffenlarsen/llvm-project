@@ -45,7 +45,7 @@ public:
   void printCommands(llvm::raw_ostream &out);  
 };
 
-extern llvm::ManagedStatic<DiagTools> diagTools;
+extern LLVM_MANAGED_STATIC<DiagTools> diagTools;
 
 template <typename DIAGTOOL>
 class RegisterDiagTool {

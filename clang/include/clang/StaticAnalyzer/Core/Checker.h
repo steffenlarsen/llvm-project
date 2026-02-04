@@ -619,7 +619,7 @@ struct ImplicitNullDerefEvent {
   // that is marked with nonnull attribute.)
   bool IsDirectDereference;
 
-  static int Tag;
+  static const int Tag;
 };
 
 } // end ento namespace

@@ -107,7 +107,7 @@ public:
     if (!NestedPattern)
       return false;
 
-    static auto WalkUp = [](DeclContext *DC, DeclContext *TargetDC) {
+    static const auto WalkUp = [](DeclContext *DC, DeclContext *TargetDC) {
       if (DC->Equals(TargetDC))
         return true;
       while (DC->isRecord()) {

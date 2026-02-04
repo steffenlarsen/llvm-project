@@ -52,7 +52,7 @@ const char *LVSymbol::kind() const {
   return Kind;
 }
 
-LVSymbolDispatch LVSymbol::Dispatch = {
+const LVSymbolDispatch LVSymbol::Dispatch = {
     {LVSymbolKind::IsCallSiteParameter, &LVSymbol::getIsCallSiteParameter},
     {LVSymbolKind::IsConstant, &LVSymbol::getIsConstant},
     {LVSymbolKind::IsInheritance, &LVSymbol::getIsInheritance},

@@ -54,7 +54,7 @@ using namespace clang;
 //  Statistics
 //===----------------------------------------------------------------------===//
 
-#define DECL(DERIVED, BASE) static int n##DERIVED##s = 0;
+#define DECL(DERIVED, BASE) static LLVM_THREAD_LOCAL_ST int n##DERIVED##s = 0;
 #define ABSTRACT_DECL(DECL)
 #include "clang/AST/DeclNodes.inc"
 
@@ -216,7 +216,7 @@ const char *DeclContext::getDeclKindName() const {
   llvm_unreachable("Declaration context not in DeclNodes.inc!");
 }
 
-bool Decl::StatisticsEnabled = false;
+LLVM_THREAD_LOCAL_ST bool Decl::StatisticsEnabled = false;
 void Decl::EnableStatistics() {
   StatisticsEnabled = true;
 }

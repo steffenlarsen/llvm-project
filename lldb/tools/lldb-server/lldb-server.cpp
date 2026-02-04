@@ -21,7 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 
-static llvm::ManagedStatic<lldb_private::SystemLifetimeManager>
+static LLVM_MANAGED_STATIC<lldb_private::SystemLifetimeManager>
     g_debugger_lifetime;
 
 static void display_usage(const char *progname) {

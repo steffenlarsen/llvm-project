@@ -1906,7 +1906,7 @@ template <typename Matcher, Matcher (*Func)()> class MemoizedMatcher {
 
 public:
   static const Matcher &getInstance() {
-    static llvm::ManagedStatic<Wrapper> Instance;
+    static LLVM_MANAGED_STATIC<Wrapper> Instance;
     return Instance->M;
   }
 };

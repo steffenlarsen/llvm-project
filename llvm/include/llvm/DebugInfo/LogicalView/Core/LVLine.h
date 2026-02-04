@@ -41,7 +41,7 @@ using LVLineRequest = std::vector<LVLineGetFunction>;
 class LLVM_ABI LVLine : public LVElement {
   // Typed bitvector with kinds for this line.
   LVProperties<LVLineKind> Kinds;
-  static LVLineDispatch Dispatch;
+  static const LVLineDispatch Dispatch;
 
   // Find the current line in the given 'Targets'.
   LVLine *findIn(const LVLines *Targets) const;
@@ -85,7 +85,7 @@ public:
     return lineAsString(getLineNumber(), getDiscriminator(), ShowZero);
   }
 
-  static LVLineDispatch &getDispatch() { return Dispatch; }
+  static const LVLineDispatch &getDispatch() { return Dispatch; }
 
   // Iterate through the 'References' set and check that all its elements
   // are present in the 'Targets' set. For a missing element, mark its

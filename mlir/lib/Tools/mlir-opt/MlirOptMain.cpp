@@ -338,7 +338,7 @@ public:
 };
 } // namespace
 
-ManagedStatic<MlirOptMainConfigCLOptions> clOptionsConfig;
+LLVM_MANAGED_STATIC<MlirOptMainConfigCLOptions> clOptionsConfig;
 
 void MlirOptMainConfig::registerCLOptions(DialectRegistry &registry) {
   clOptionsConfig->setDialectPluginsCallback(registry);

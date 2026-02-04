@@ -123,19 +123,28 @@ using ContainerMapTy =
 template<>
 struct ProgramStateTrait<iterator::IteratorSymbolMap>
   : public ProgramStatePartialTrait<iterator::IteratorSymbolMapTy> {
-  static void *GDMIndex() { static int Index; return &Index; }
+  static const void *GDMIndex() {
+    static const int Index = 0;
+    return &Index;
+  }
 };
 
 template<>
 struct ProgramStateTrait<iterator::IteratorRegionMap>
   : public ProgramStatePartialTrait<iterator::IteratorRegionMapTy> {
-  static void *GDMIndex() { static int Index; return &Index; }
+  static const void *GDMIndex() {
+    static const int Index = 0;
+    return &Index;
+  }
 };
 
 template<>
 struct ProgramStateTrait<iterator::ContainerMap>
   : public ProgramStatePartialTrait<iterator::ContainerMapTy> {
-  static void *GDMIndex() { static int Index; return &Index; }
+  static const void *GDMIndex() {
+    static const int Index = 0;
+    return &Index;
+  }
 };
 
 namespace iterator {

@@ -39,7 +39,7 @@ public:
   llvm::BumpPtrAllocator bAlloc;
   llvm::StringSaver saver{bAlloc};
   llvm::UniqueStringSaver uniqueSaver{bAlloc};
-  llvm::DenseMap<void *, SpecificAllocBase *> instances;
+  llvm::DenseMap<const void *, SpecificAllocBase *> instances;
 
   ErrorHandler e;
 };

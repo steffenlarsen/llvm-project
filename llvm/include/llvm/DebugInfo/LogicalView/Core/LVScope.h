@@ -93,7 +93,7 @@ class LLVM_ABI LVScope : public LVElement {
   // Typed bitvector with kinds and properties for this scope.
   LVProperties<LVScopeKind> Kinds;
   LVProperties<Property> Properties;
-  static LVScopeDispatch Dispatch;
+  static const LVScopeDispatch Dispatch;
   // Empty containers used in `getChildren()` in case there is no Types,
   // Symbols, or Scopes.
   static const LVTypes EmptyTypes;
@@ -331,7 +331,7 @@ public:
   // Report the current scope as missing or added during comparison.
   void report(LVComparePass Pass) override;
 
-  static LVScopeDispatch &getDispatch() { return Dispatch; }
+  static const LVScopeDispatch &getDispatch() { return Dispatch; }
 
   void print(raw_ostream &OS, bool Full = true) const override;
   void printExtra(raw_ostream &OS, bool Full = true) const override;

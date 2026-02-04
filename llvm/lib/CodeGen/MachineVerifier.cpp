@@ -97,7 +97,7 @@ namespace {
 
 /// Used the by the ReportedErrors class to guarantee only one error is reported
 /// at one time.
-static ManagedStatic<sys::SmartMutex<true>> ReportedErrorsLock;
+static LLVM_MANAGED_STATIC<sys::SmartMutex<true>> ReportedErrorsLock;
 
 struct MachineVerifier {
   MachineVerifier(MachineFunctionAnalysisManager &MFAM, const char *b,

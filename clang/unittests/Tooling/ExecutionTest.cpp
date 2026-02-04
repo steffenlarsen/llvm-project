@@ -87,7 +87,7 @@ private:
 
 class TestToolExecutor : public ToolExecutor {
 public:
-  static const char *ExecutorName;
+  static const char *const ExecutorName;
 
   TestToolExecutor(CommonOptionsParser Options)
       : OptionsParser(std::move(Options)) {}
@@ -118,7 +118,7 @@ private:
   std::map<std::string, std::string> VFS;
 };
 
-const char *TestToolExecutor::ExecutorName = "test-executor";
+const char *const TestToolExecutor::ExecutorName = "test-executor";
 
 class TestToolExecutorPlugin : public ToolExecutorPlugin {
 public:

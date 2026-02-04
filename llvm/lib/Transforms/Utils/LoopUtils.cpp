@@ -52,8 +52,8 @@ using namespace llvm::PatternMatch;
 
 #define DEBUG_TYPE "loop-utils"
 
-static const char *LLVMLoopDisableNonforced = "llvm.loop.disable_nonforced";
-static const char *LLVMLoopDisableLICM = "llvm.licm.disable";
+static const char *const LLVMLoopDisableNonforced = "llvm.loop.disable_nonforced";
+static const char *const LLVMLoopDisableLICM = "llvm.licm.disable";
 namespace llvm {
 extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 } // namespace llvm

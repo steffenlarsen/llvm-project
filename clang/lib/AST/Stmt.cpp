@@ -57,14 +57,14 @@ using namespace clang;
 #define ABSTRACT_STMT(STMT)
 #include "clang/AST/StmtNodes.inc"
 
-static struct StmtClassNameTable {
+static LLVM_THREAD_LOCAL_ST struct StmtClassNameTable {
   const char *Name;
   unsigned Counter;
   unsigned Size;
 } StmtClassInfo[Stmt::lastStmtConstant+1];
 
 static StmtClassNameTable &getStmtInfoTableEntry(Stmt::StmtClass E) {
-  static bool Initialized = false;
+  static LLVM_THREAD_LOCAL_ST bool Initialized = false;
   if (Initialized)
     return StmtClassInfo[E];
 
@@ -135,7 +135,7 @@ void Stmt::addStmtClass(StmtClass s) {
   ++getStmtInfoTableEntry(s).Counter;
 }
 
-bool Stmt::StatisticsEnabled = false;
+LLVM_THREAD_LOCAL_ST bool Stmt::StatisticsEnabled = false;
 void Stmt::EnableStatistics() {
   StatisticsEnabled = true;
 }

@@ -37,22 +37,20 @@
 
 using namespace llvm;
 
-static StringRef GetImageSizeFunc =         "llvm.OpenCL.image.get.size";
-static StringRef GetImageFormatFunc =       "llvm.OpenCL.image.get.format";
-static StringRef GetImageResourceIDFunc =   "llvm.OpenCL.image.get.resource.id";
-static StringRef GetSamplerResourceIDFunc =
+static const StringRef GetImageSizeFunc = "llvm.OpenCL.image.get.size";
+static const StringRef GetImageFormatFunc = "llvm.OpenCL.image.get.format";
+static const StringRef GetImageResourceIDFunc =
+    "llvm.OpenCL.image.get.resource.id";
+static const StringRef GetSamplerResourceIDFunc =
     "llvm.OpenCL.sampler.get.resource.id";
 
-static StringRef ImageSizeArgMDType =   "__llvm_image_size";
-static StringRef ImageFormatArgMDType = "__llvm_image_format";
+static const StringRef ImageSizeArgMDType = "__llvm_image_size";
+static const StringRef ImageFormatArgMDType = "__llvm_image_format";
 
-static StringRef KernelsMDNodeName = "opencl.kernels";
-static StringRef KernelArgMDNodeNames[] = {
-  "kernel_arg_addr_space",
-  "kernel_arg_access_qual",
-  "kernel_arg_type",
-  "kernel_arg_base_type",
-  "kernel_arg_type_qual"};
+static const StringRef KernelsMDNodeName = "opencl.kernels";
+static const StringRef KernelArgMDNodeNames[] = {
+    "kernel_arg_addr_space", "kernel_arg_access_qual", "kernel_arg_type",
+    "kernel_arg_base_type", "kernel_arg_type_qual"};
 static const unsigned NumKernelArgMDNodes = 5;
 
 namespace {

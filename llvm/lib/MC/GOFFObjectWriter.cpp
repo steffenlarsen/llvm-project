@@ -175,7 +175,7 @@ void GOFFOstream::write_zeros(unsigned NumZeros) {
   }
 
   // Otherwise some field value is cleared.
-  static char Zeros[16] = {
+  static const char Zeros[16] = {
       0,
   };
   write(Zeros, NumZeros);

@@ -620,7 +620,7 @@ void ModuleSummaryIndex::exportToDot(
     // 3 - writeonly reference
     // Other value: (hotness - 4).
     TypeOrHotness += 4;
-    static const char *EdgeAttrs[] = {
+    static const char *const EdgeAttrs[] = {
         " [style=dotted]; // alias",
         " [style=dashed]; // ref",
         " [style=dashed,color=forestgreen]; // const-ref",

@@ -204,7 +204,7 @@ struct AsmPrinterOptions {
 };
 } // namespace
 
-static llvm::ManagedStatic<AsmPrinterOptions> clOptions;
+static LLVM_MANAGED_STATIC<AsmPrinterOptions> clOptions;
 
 /// Register a set of useful command-line options that can be used to configure
 /// various flags within the AsmPrinter.

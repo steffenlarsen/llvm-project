@@ -198,8 +198,8 @@ using FnCheck = std::function<void(const StreamChecker *, const FnDescription *,
 using ArgNoTy = unsigned int;
 static const ArgNoTy ArgNone = std::numeric_limits<ArgNoTy>::max();
 
-const char *FeofNote = "Assuming stream reaches end-of-file here";
-const char *FerrorNote = "Assuming this stream operation fails";
+const char *const FeofNote = "Assuming stream reaches end-of-file here";
+const char *const FerrorNote = "Assuming this stream operation fails";
 
 struct FnDescription {
   FnCheck PreFn;
@@ -1844,8 +1844,8 @@ class StreamClosedVisitor final : public BugReporterVisitor {
 public:
   explicit StreamClosedVisitor(SymbolRef StreamSym) : StreamSym(StreamSym) {}
 
-  static void *getTag() {
-    static int Tag = 0;
+  static const void *getTag() {
+    static const int Tag = 0;
     return &Tag;
   }
 
@@ -1923,7 +1923,7 @@ ProgramStateRef StreamChecker::ensureStreamOpened(SVal StreamVal,
 
 ProgramStateRef StreamChecker::ensureNoFilePositionIndeterminate(
     SVal StreamVal, CheckerContext &C, ProgramStateRef State) const {
-  static const char *BugMessage =
+  static const char *const BugMessage =
       "File position of the stream might be 'indeterminate' "
       "after a failed operation. "
       "Can cause undefined behavior.";

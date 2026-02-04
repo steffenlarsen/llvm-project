@@ -22,7 +22,7 @@ static cl::opt<bool>
                       cl::desc("Prints the pass pipeline and returns."));
 
 /// A magic string for the default pass pipeline.
-static const char *DefaultPipelineMagicStr = "*";
+static const char * const DefaultPipelineMagicStr = "*";
 
 static cl::opt<std::string> UserDefinedPassPipeline(
     "sbvec-passes", cl::init(DefaultPipelineMagicStr), cl::Hidden,

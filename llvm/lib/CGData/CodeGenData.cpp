@@ -104,19 +104,19 @@ char CGDataError::ID = 0;
 
 namespace {
 
-const char *CodeGenDataSectNameCommon[] = {
+const char * const CodeGenDataSectNameCommon[] = {
 #define CG_DATA_SECT_ENTRY(Kind, SectNameCommon, SectNameCoff, Prefix)         \
   SectNameCommon,
 #include "llvm/CGData/CodeGenData.inc"
 };
 
-const char *CodeGenDataSectNameCoff[] = {
+const char * const CodeGenDataSectNameCoff[] = {
 #define CG_DATA_SECT_ENTRY(Kind, SectNameCommon, SectNameCoff, Prefix)         \
   SectNameCoff,
 #include "llvm/CGData/CodeGenData.inc"
 };
 
-const char *CodeGenDataSectNamePrefix[] = {
+const char * const CodeGenDataSectNamePrefix[] = {
 #define CG_DATA_SECT_ENTRY(Kind, SectNameCommon, SectNameCoff, Prefix) Prefix,
 #include "llvm/CGData/CodeGenData.inc"
 };

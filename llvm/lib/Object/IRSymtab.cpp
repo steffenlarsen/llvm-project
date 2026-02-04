@@ -48,7 +48,7 @@ static cl::opt<bool> DisableBitcodeVersionUpgrade(
 namespace {
 
 const char *getExpectedProducerName() {
-  static char DefaultName[] = LLVM_VERSION_STRING
+  static const char DefaultName[] = LLVM_VERSION_STRING
 #ifdef LLVM_REVISION
       " " LLVM_REVISION
 #endif
@@ -60,7 +60,7 @@ const char *getExpectedProducerName() {
   return DefaultName;
 }
 
-const char *kExpectedProducerName = getExpectedProducerName();
+const char *const kExpectedProducerName = getExpectedProducerName();
 
 /// Stores the temporary state that is required to build an IR symbol table.
 struct Builder {

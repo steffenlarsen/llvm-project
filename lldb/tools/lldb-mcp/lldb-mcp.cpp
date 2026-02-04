@@ -187,7 +187,7 @@ llvm::Error connectAndForwardIO(lldb_private::MainLoop &loop, ServerInfo &info,
   return loop.Run().takeError();
 }
 
-llvm::ManagedStatic<lldb_private::SystemLifetimeManager> g_debugger_lifetime;
+LLVM_MANAGED_STATIC<lldb_private::SystemLifetimeManager> g_debugger_lifetime;
 
 } // namespace
 

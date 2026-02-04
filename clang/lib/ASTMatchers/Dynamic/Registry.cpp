@@ -620,7 +620,7 @@ RegistryMaps::RegistryMaps() {
 
 RegistryMaps::~RegistryMaps() = default;
 
-static llvm::ManagedStatic<RegistryMaps> RegistryData;
+static LLVM_MANAGED_STATIC<RegistryMaps> RegistryData;
 
 ASTNodeKind Registry::nodeMatcherType(MatcherCtor Ctor) {
   return Ctor->nodeMatcherType();

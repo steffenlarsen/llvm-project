@@ -436,7 +436,7 @@ static std::string getBranchCondString(Instruction *TI) {
   return result;
 }
 
-static const char *ValueProfKindDescr[] = {
+static const char *const ValueProfKindDescr[] = {
 #define VALUE_PROF_KIND(Enumerator, Value, Descr) Descr,
 #include "llvm/ProfileData/InstrProfData.inc"
 };

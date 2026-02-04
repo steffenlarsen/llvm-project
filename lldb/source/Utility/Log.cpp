@@ -41,7 +41,7 @@ char CallbackLogHandler::ID;
 char RotatingLogHandler::ID;
 char TeeLogHandler::ID;
 
-llvm::ManagedStatic<Log::ChannelMap> Log::g_channel_map;
+LLVM_MANAGED_STATIC<Log::ChannelMap> Log::g_channel_map;
 
 // The error log is used by LLDB_LOG_ERROR. If the given log channel passed to
 // LLDB_LOG_ERROR is not enabled, error messages are logged to the error log.

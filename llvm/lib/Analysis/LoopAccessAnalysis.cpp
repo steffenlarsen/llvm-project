@@ -2450,7 +2450,7 @@ MemoryDepChecker::getInstructionsForAccess(Value *Ptr, bool IsWrite) const {
   return Insts;
 }
 
-const char *MemoryDepChecker::Dependence::DepName[] = {
+const char *const MemoryDepChecker::Dependence::DepName[] = {
     "NoDep",
     "Unknown",
     "IndirectUnsafe",

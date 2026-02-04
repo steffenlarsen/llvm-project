@@ -84,7 +84,7 @@ const char *LVType::kind() const {
   return Kind;
 }
 
-LVTypeDispatch LVType::Dispatch = {
+const LVTypeDispatch LVType::Dispatch = {
     {LVTypeKind::IsBase, &LVType::getIsBase},
     {LVTypeKind::IsConst, &LVType::getIsConst},
     {LVTypeKind::IsEnumerator, &LVType::getIsEnumerator},

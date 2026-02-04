@@ -50,7 +50,7 @@ struct OptCreatorT {
 };
 } // namespace
 
-static ManagedStatic<cl::opt<FnT>, OptCreatorT> CallbackFunction;
+static LLVM_MANAGED_STATIC<cl::opt<FnT>, OptCreatorT> CallbackFunction;
 
 Opt::Opt(StringRef Name, FnT CB, StringRef Desc, bool ByDefault) {
   if (ByDefault)

@@ -363,7 +363,7 @@ class SDErrorCategoryType final : public std::error_category {
 
 } // namespace
 
-static llvm::ManagedStatic<SDErrorCategoryType> ErrorCategory;
+static LLVM_MANAGED_STATIC<SDErrorCategoryType> ErrorCategory;
 const std::error_category &clang::serialized_diags::SDErrorCategory() {
   return *ErrorCategory;
 }

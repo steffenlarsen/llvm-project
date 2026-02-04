@@ -112,14 +112,15 @@ static cl::opt<bool> ElideAllZeroBranchWeights("elide-all-zero-branch-weights",
                                                cl::init(true)
 #endif
 );
-const char *MDProfLabels::BranchWeights = "branch_weights";
-const char *MDProfLabels::ExpectedBranchWeights = "expected";
-const char *MDProfLabels::ValueProfile = "VP";
-const char *MDProfLabels::FunctionEntryCount = "function_entry_count";
-const char *MDProfLabels::SyntheticFunctionEntryCount =
+const char *const MDProfLabels::BranchWeights = "branch_weights";
+const char *const MDProfLabels::ExpectedBranchWeights = "expected";
+const char *const MDProfLabels::ValueProfile = "VP";
+const char *const MDProfLabels::FunctionEntryCount = "function_entry_count";
+const char *const MDProfLabels::SyntheticFunctionEntryCount =
     "synthetic_function_entry_count";
-const char *MDProfLabels::UnknownBranchWeightsMarker = "unknown";
-const char *llvm::LLVMLoopEstimatedTripCount = "llvm.loop.estimated_trip_count";
+const char *const MDProfLabels::UnknownBranchWeightsMarker = "unknown";
+const char *const llvm::LLVMLoopEstimatedTripCount =
+    "llvm.loop.estimated_trip_count";
 
 bool llvm::hasProfMD(const Instruction &I) {
   return I.hasMetadata(LLVMContext::MD_prof);

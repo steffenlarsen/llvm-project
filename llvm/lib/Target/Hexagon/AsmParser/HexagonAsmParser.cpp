@@ -942,8 +942,8 @@ bool HexagonAsmParser::parseOperand(OperandVector &Operands) {
         if (previousEqual(Operands, 0, "if")) {
           if (WarnMissingParenthesis)
             Warning(Begin, "Missing parenthesis around predicate register");
-          static char const *LParen = "(";
-          static char const *RParen = ")";
+          static char const *const LParen = "(";
+          static char const *const RParen = ")";
           Operands.push_back(
               HexagonOperand::CreateToken(getContext(), LParen, Begin));
           Operands.push_back(
@@ -960,8 +960,8 @@ bool HexagonAsmParser::parseOperand(OperandVector &Operands) {
             previousEqual(Operands, 1, "if")) {
           if (WarnMissingParenthesis)
             Warning(Begin, "Missing parenthesis around predicate register");
-          static char const *LParen = "(";
-          static char const *RParen = ")";
+          static char const *const LParen = "(";
+          static char const *const RParen = ")";
           Operands.insert(Operands.end() - 1, HexagonOperand::CreateToken(
                                                   getContext(), LParen, Begin));
           Operands.push_back(
@@ -1116,7 +1116,7 @@ bool HexagonAsmParser::parseExpression(MCExpr const *&Expr) {
   SmallVector<AsmToken, 4> Tokens;
   AsmLexer &Lexer = getLexer();
   bool Done = false;
-  static char const *Comma = ",";
+  static char const *const Comma = ",";
   do {
     Tokens.emplace_back(Lexer.getTok());
     Lex();

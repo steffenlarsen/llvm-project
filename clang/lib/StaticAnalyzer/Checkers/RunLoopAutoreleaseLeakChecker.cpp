@@ -40,11 +40,11 @@ using namespace ast_matchers;
 
 namespace {
 
-const char * RunLoopBind = "NSRunLoopM";
-const char * RunLoopRunBind = "RunLoopRunM";
-const char * OtherMsgBind = "OtherMessageSentM";
-const char * AutoreleasePoolBind = "AutoreleasePoolM";
-const char * OtherStmtAutoreleasePoolBind = "OtherAutoreleasePoolM";
+const char *const RunLoopBind = "NSRunLoopM";
+const char *const RunLoopRunBind = "RunLoopRunM";
+const char *const OtherMsgBind = "OtherMessageSentM";
+const char *const AutoreleasePoolBind = "AutoreleasePoolM";
+const char *const OtherStmtAutoreleasePoolBind = "OtherAutoreleasePoolM";
 
 class RunLoopAutoreleaseLeakChecker : public Checker<check::ASTCodeBody> {
 

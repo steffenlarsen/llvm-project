@@ -22,10 +22,10 @@ namespace {
 #if LLVM_ENABLE_THREADS != 0 && defined(HAVE_PTHREAD_H) && \
   !__has_feature(memory_sanitizer)
 namespace test1 {
-  llvm::ManagedStatic<int> ms;
-  void *helper(void*) {
-    *ms;
-    return nullptr;
+LLVM_MANAGED_STATIC<int> ms;
+void *helper(void *) {
+  *ms;
+  return nullptr;
   }
 
   // Valgrind's leak checker complains glibc's stack allocation.
@@ -58,7 +58,7 @@ TEST(Initialize, MultipleThreads) {
 #endif
 
 namespace NestedStatics {
-static ManagedStatic<int> Ms1;
+static LLVM_MANAGED_STATIC<int> Ms1;
 struct Nest {
   Nest() {
     ++(*Ms1);
@@ -69,7 +69,7 @@ struct Nest {
     ++(*Ms1);
   }
 };
-static ManagedStatic<Nest> Ms2;
+static LLVM_MANAGED_STATIC<Nest> Ms2;
 
 TEST(ManagedStaticTest, NestedStatics) {
   EXPECT_FALSE(Ms1.isConstructed());
@@ -92,7 +92,7 @@ struct CustomCreate {
 struct CustomDelete {
   static void call(void *P) { std::free(P); }
 };
-static ManagedStatic<int, CustomCreate, CustomDelete> Custom;
+static LLVM_MANAGED_STATIC<int, CustomCreate, CustomDelete> Custom;
 TEST(ManagedStaticTest, CustomCreatorDeletor) {
   EXPECT_EQ(42, *Custom);
 }

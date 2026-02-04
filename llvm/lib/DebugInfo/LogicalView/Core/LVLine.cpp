@@ -46,7 +46,7 @@ const char *LVLine::kind() const {
   return Kind;
 }
 
-LVLineDispatch LVLine::Dispatch = {
+const LVLineDispatch LVLine::Dispatch = {
     {LVLineKind::IsBasicBlock, &LVLine::getIsBasicBlock},
     {LVLineKind::IsDiscriminator, &LVLine::getIsDiscriminator},
     {LVLineKind::IsEndSequence, &LVLine::getIsEndSequence},

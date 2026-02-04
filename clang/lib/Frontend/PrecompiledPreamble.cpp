@@ -826,7 +826,7 @@ std::unique_ptr<PPCallbacks> PreambleCallbacks::createPPCallbacks() {
 }
 CommentHandler *PreambleCallbacks::getCommentHandler() { return nullptr; }
 
-static llvm::ManagedStatic<BuildPreambleErrorCategory> BuildPreambleErrCategory;
+static LLVM_MANAGED_STATIC<BuildPreambleErrorCategory> BuildPreambleErrCategory;
 
 std::error_code clang::make_error_code(BuildPreambleError Error) {
   return std::error_code(static_cast<int>(Error), *BuildPreambleErrCategory);

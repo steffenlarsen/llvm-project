@@ -589,7 +589,7 @@ protected:
 
 private:
   // The crash reporter that will report on a crash.
-  static PrintCrashIRInstrumentation *CrashReporter;
+  static LLVM_THREAD_LOCAL_ST PrintCrashIRInstrumentation *CrashReporter;
   // Crash handler registered when print-on-crash is specified.
   static void SignalHandler(void *);
 };

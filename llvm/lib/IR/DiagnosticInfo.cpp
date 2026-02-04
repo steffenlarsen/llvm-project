@@ -47,7 +47,7 @@ int llvm::getNextAvailablePluginDiagnosticKind() {
   return ++PluginKindID;
 }
 
-const char *OptimizationRemarkAnalysis::AlwaysPrint = "";
+const char *const OptimizationRemarkAnalysis::AlwaysPrint = "";
 
 void DiagnosticInfoGeneric::print(DiagnosticPrinter &DP) const {
   DP << getMsgStr();

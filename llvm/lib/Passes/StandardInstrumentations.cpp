@@ -2452,8 +2452,8 @@ StandardInstrumentations::StandardInstrumentations(
       Verify(DebugLogging), DroppedStatsIR(DroppedVarStats),
       VerifyEach(VerifyEach) {}
 
-PrintCrashIRInstrumentation *PrintCrashIRInstrumentation::CrashReporter =
-    nullptr;
+LLVM_THREAD_LOCAL_ST PrintCrashIRInstrumentation
+    *PrintCrashIRInstrumentation::CrashReporter = nullptr;
 
 void PrintCrashIRInstrumentation::reportCrashIR() {
   if (!PrintOnCrashPath.empty()) {

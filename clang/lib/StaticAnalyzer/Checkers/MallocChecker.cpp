@@ -954,7 +954,7 @@ public:
       : NoOwnershipChangeVisitor(Sym, Checker) {}
 
   void Profile(llvm::FoldingSetNodeID &ID) const override {
-    static int Tag = 0;
+    static const int Tag = 0;
     ID.AddPointer(&Tag);
     ID.AddPointer(Sym);
   }
@@ -994,8 +994,8 @@ public:
       : Sym(S), Mode(Normal), FailedReallocSymbol(nullptr),
         ReleaseFunctionLC(nullptr), IsLeak(isLeak) {}
 
-  static void *getTag() {
-    static int Tag = 0;
+  static const void *getTag() {
+    static const int Tag = 0;
     return &Tag;
   }
 

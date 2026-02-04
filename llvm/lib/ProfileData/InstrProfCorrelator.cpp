@@ -48,9 +48,11 @@ getInstrProfSection(const object::ObjectFile &Obj, InstrProfSectKind IPSK) {
       "could not find section (" + Twine(ExpectedSectionName) + ")");
 }
 
-const char *InstrProfCorrelator::FunctionNameAttributeName = "Function Name";
-const char *InstrProfCorrelator::CFGHashAttributeName = "CFG Hash";
-const char *InstrProfCorrelator::NumCountersAttributeName = "Num Counters";
+const char *const InstrProfCorrelator::FunctionNameAttributeName =
+    "Function Name";
+const char *const InstrProfCorrelator::CFGHashAttributeName = "CFG Hash";
+const char *const InstrProfCorrelator::NumCountersAttributeName =
+    "Num Counters";
 
 llvm::Expected<std::unique_ptr<InstrProfCorrelator::Context>>
 InstrProfCorrelator::Context::get(std::unique_ptr<MemoryBuffer> Buffer,

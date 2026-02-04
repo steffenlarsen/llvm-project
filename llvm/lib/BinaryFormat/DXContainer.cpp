@@ -111,7 +111,7 @@ dxbc::PartType dxbc::parsePartType(StringRef S) {
 }
 
 bool ShaderHash::isPopulated() {
-  static uint8_t Zeros[16] = {0};
+  static const uint8_t Zeros[16] = {0};
   return Flags > 0 || 0 != memcmp(&Digest, &Zeros, 16);
 }
 

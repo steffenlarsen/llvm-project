@@ -607,7 +607,7 @@ struct DefaultTimingManagerOptions {
 };
 } // namespace
 
-static llvm::ManagedStatic<DefaultTimingManagerOptions> options;
+static LLVM_MANAGED_STATIC<DefaultTimingManagerOptions> options;
 
 void mlir::registerDefaultTimingManagerCLOptions() {
   // Make sure that the options struct has been constructed.

@@ -64,7 +64,7 @@ CallInst *coro::LowererBase::makeSubFnCall(Value *Arg, int Index,
 // We can only efficiently check for non-overloaded intrinsics.
 // The following intrinsics are absent for that reason:
 // coro_align, coro_size, coro_suspend_async, coro_suspend_retcon
-static Intrinsic::ID NonOverloadedCoroIntrinsics[] = {
+static const Intrinsic::ID NonOverloadedCoroIntrinsics[] = {
     Intrinsic::coro_alloc,
     Intrinsic::coro_async_context_alloc,
     Intrinsic::coro_async_context_dealloc,

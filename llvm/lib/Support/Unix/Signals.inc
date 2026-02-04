@@ -135,7 +135,7 @@ public:
                     const std::string &Filename) {
     // Use a lock to avoid concurrent erase: the comparison would access
     // free'd memory.
-    static ManagedStatic<sys::SmartMutex<true>> Lock;
+    static LLVM_MANAGED_STATIC<sys::SmartMutex<true>> Lock;
     sys::SmartScopedLock<true> Writer(*Lock);
 
     for (FileToRemoveList *Current = Head.load(); Current;
@@ -296,7 +296,8 @@ static void RegisterHandlers() { // Not signal-safe.
   // The mutex prevents other threads from registering handlers while we're
   // doing it. We also have to protect the handlers and their count because
   // a signal handler could fire while we're registering handlers.
-  static ManagedStatic<sys::SmartMutex<true>> SignalHandlerRegistrationMutex;
+  static LLVM_MANAGED_STATIC<sys::SmartMutex<true>>
+      SignalHandlerRegistrationMutex;
   sys::SmartScopedLock<true> Guard(*SignalHandlerRegistrationMutex);
 
   // If the handlers are already registered, we're done.
@@ -473,7 +474,7 @@ void llvm::sys::DefaultOneShotPipeSignalHandler() {
 // The public API
 bool llvm::sys::RemoveFileOnSignal(StringRef Filename, std::string *ErrMsg) {
   // Ensure that cleanup will occur as soon as one file is added.
-  static ManagedStatic<FilesToRemoveCleanup> FilesToRemoveCleanup;
+  static LLVM_MANAGED_STATIC<FilesToRemoveCleanup> FilesToRemoveCleanup;
   *FilesToRemoveCleanup;
   FileToRemoveList::insert(FilesToRemove, Filename.str());
   RegisterHandlers();
