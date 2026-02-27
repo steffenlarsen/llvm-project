@@ -1742,7 +1742,7 @@ static std::pair<Triple, SubtargetFeatures> getFirstFileTripleAndFeatures() {
       LLVM_DEBUG({
         dbgs() << "Triple from -triple override: " << OverrideTriple << "\n";
       });
-      return std::make_pair(Triple(OverrideTriple), SubtargetFeatures());
+      return std::make_pair(Triple(*OverrideTriple), SubtargetFeatures());
     }
 
     for (auto InputFile : InputFiles) {

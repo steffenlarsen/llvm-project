@@ -36,7 +36,9 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/Memory.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Mutex.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/StringSaver.h"
@@ -114,6 +116,141 @@ void opt_int_anchor() { opt<int> anchor{""}; }
 void opt_unsigned_anchor() { opt<unsigned> anchor{""}; }
 
 //===----------------------------------------------------------------------===//
+// Option metadata and storage container implementation
+//
+
+/// Storage manager. Each instance allocates and manages storage for all
+/// initialized command line options.
+class OptionStorage {
+  const unsigned PageSize = sys::Process::getPageSizeEstimate();
+
+  llvm::SmallVector<std::pair<std::shared_ptr<OptionStorageInfoI>, size_t>, 32>
+      RegisteredOptions;
+  size_t TotalRegisteredSize = 0;
+
+  SmallVector<sys::MemoryBlock, 4> StoragePages;
+  SmallDenseMap<OptionStorageInfoI *, void *, 16> InitializedOpts;
+
+  llvm::sys::Mutex Mutex;
+
+public:
+  OptionStorage() = default;
+
+  ~OptionStorage() {
+    for (auto [Opt, Ptr] : InitializedOpts)
+      Opt->destructStorage(Ptr);
+    for (auto &Page : StoragePages)
+      sys::Memory::releaseMappedMemory(Page);
+  }
+
+  size_t addOption(std::shared_ptr<OptionStorageInfoI> &&Opt) {
+    llvm::sys::ScopedLock Lock(Mutex);
+
+    // Calculate aligned offset for this option. In the (unlikely) case that
+    // this option would straddle a page boundary, move it to the next page.
+    size_t Alignment = Opt->getStorageAlignment();
+    size_t StorageSize = Opt->getStorageSize();
+    assert(StorageSize <= PageSize && "Option storage larger than page size!");
+    size_t Offset = (TotalRegisteredSize + Alignment - 1) & ~(Alignment - 1);
+    if (LLVM_UNLIKELY(Offset / PageSize !=
+                      (Offset + StorageSize - 1) / PageSize))
+      Offset = ((Offset + PageSize - 1) / PageSize) * PageSize;
+
+    RegisteredOptions.emplace_back(std::move(Opt), Offset);
+
+    TotalRegisteredSize = Offset + StorageSize;
+    return Offset;
+  }
+
+  /// Get pointer to storage at the given offset, allocating if needed.
+  void *getStorageAt(size_t Offset, OptionStorageInfoI *Opt) {
+    assert(llvm::any_of(
+               RegisteredOptions,
+               [Opt](const auto &Pair) { return Pair.first.get() == Opt; }) &&
+           "Option not registered in storage!");
+
+    size_t PageIndex = Offset / PageSize;
+    size_t PageOffset = Offset % PageSize;
+
+    llvm::sys::ScopedLock Lock(Mutex);
+
+    // If the page doesn't exist, create it and all before it.
+    if (PageIndex >= StoragePages.size())
+      StoragePages.resize(PageIndex + 1);
+
+    // If the page is currently unallocated, allocate it now.
+    sys::MemoryBlock &BaseAlloc = StoragePages[PageIndex];
+    if (!BaseAlloc.base()) {
+      std::error_code EC;
+      BaseAlloc = sys::Memory::allocateMappedMemory(
+          PageSize, /*NearBlock=*/nullptr,
+          sys::Memory::MF_READ | sys::Memory::MF_WRITE, EC);
+      assert(!EC);
+    }
+
+    // Find the pointer offset of the new option.
+    void *Ptr = static_cast<char *>(BaseAlloc.base()) + PageOffset;
+
+    // Try to insert the option into the initialized set. If it already
+    // exists, return the existing pointer.
+    auto [It, Inserted] = InitializedOpts.insert({Opt, Ptr});
+    if (!Inserted)
+      return It->second;
+
+    // Otherwise, construct the value in-place.
+    Opt->constructStorage(Ptr);
+    return Ptr;
+  }
+
+  void copyFrom(const OptionStorage &Other, bool CopyStorageContents) {
+    llvm::sys::ScopedLock Lock(Mutex);
+
+    // Clear existing registered options and initialized options
+    RegisteredOptions.clear();
+    InitializedOpts.clear();
+    TotalRegisteredSize = 0;
+
+    // Copy the registered options structure from the other instance
+    for (const auto &[Opt, Offset] : Other.RegisteredOptions) {
+      RegisteredOptions.emplace_back(Opt, Offset);
+      TotalRegisteredSize =
+          std::max(TotalRegisteredSize, Offset + Opt->getStorageSize());
+    }
+
+    // Copy the contents of initialized options from the other instance if
+    // requested
+    if (CopyStorageContents) {
+      // For each initialized option in the source storage, copy its value
+      for (const auto &[Opt, SrcPtr] : Other.InitializedOpts) {
+        // Find the offset for this option in our registered options
+        auto It = llvm::find_if(RegisteredOptions, [Opt](const auto &Pair) {
+          return Pair.first.get() == Opt;
+        });
+        if (It == RegisteredOptions.end())
+          continue; // Option not registered in this storage
+
+        // Get or create storage at the same offset in this instance
+        void *DstPtr = getStorageAt(It->second, Opt);
+
+        // Copy the value using the option's copy mechanism
+        Opt->copyStorage(SrcPtr, DstPtr);
+      }
+    }
+  }
+
+  // Non-copyable and non-movable
+  OptionStorage(const OptionStorage &) = delete;
+  OptionStorage &operator=(const OptionStorage &) = delete;
+};
+
+// Metadata class for an option containing fields that may change after the
+// option is constructed, such as the number of occurrences.
+struct OptionMetadata {
+  uint16_t NumOccurrences = 0;
+  uint16_t Position = 0;
+};
+
+//===----------------------------------------------------------------------===//
 
 const static size_t DefaultPad = 2;
 
@@ -163,30 +300,164 @@ raw_ostream &operator<<(raw_ostream &OS, const PrintArg& Arg) {
   return OS;
 }
 
-class CommandLineParser {
+class CLIManager {
+  struct State {
+    // Globals for name and overview of program.  Program name is not a string
+    // to avoid static ctor/dtor issues.
+    std::string ProgramName;
+    StringRef ProgramOverview;
+
+    // This collects additional help to be printed.
+    std::vector<StringRef> MoreHelp;
+
+    // This collects Options added with the cl::DefaultOption flag. Since they
+    // can be overridden, they are not added to the appropriate SubCommands
+    // until ParseCommandLineOptions actually runs.
+    SmallVector<Option *, 4> DefaultOptions;
+
+    // This collects the different option categories that have been registered.
+    SmallPtrSet<OptionCategory *, 16> RegisteredOptionCategories;
+
+    // This collects the different subcommands that have been registered.
+    SmallPtrSet<SubCommand *, 4> RegisteredSubCommands;
+
+    // A special subcommand representing no subcommand.
+    SubCommand TopLevelSubCommand;
+
+    // A special subcommand that can be used to put an option into all
+    // subcommands.
+    SubCommand AllSubCommands;
+
+    SubCommand *ActiveSubCommand = nullptr;
+
+    // A boolean indicating whether this is the main CLI state or a stacked
+    // state.
+    const bool IsMainState;
+
+    OptionStorage Storage;
+
+    // Map from Option to its metadata
+    DenseMap<Option *, OptionMetadata> OptionMetadataMap;
+
+    // Mutex to protect State members from concurrent access
+    mutable llvm::sys::Mutex StateMutex;
+
+    State(bool isMain) : IsMainState(isMain), Storage() {}
+
+    // Copy state structure from another State (without copying storage values)
+    void copyFrom(const State &Other, bool CopyStorageContents) {
+      // Avoid deadlock by locking mutexes in consistent order
+      if (this == &Other)
+        return; // No need to copy from self
+
+      llvm::sys::Mutex *FirstMutex = &StateMutex;
+      llvm::sys::Mutex *SecondMutex = &Other.StateMutex;
+
+      // Lock in pointer order to prevent deadlock
+      if (FirstMutex > SecondMutex)
+        std::swap(FirstMutex, SecondMutex);
+
+      llvm::sys::ScopedLock Lock1(*FirstMutex);
+      llvm::sys::ScopedLock Lock2(*SecondMutex);
+
+      ProgramName = Other.ProgramName;
+      ProgramOverview = Other.ProgramOverview;
+      MoreHelp = Other.MoreHelp;
+      DefaultOptions = Other.DefaultOptions;
+      RegisteredOptionCategories = Other.RegisteredOptionCategories;
+      RegisteredSubCommands = Other.RegisteredSubCommands;
+
+      // Copy the contents of the top-level subcommand from Other to this
+      // state's TopLevelSubCommand so that registered options are visible
+      TopLevelSubCommand.copyContentsFrom(Other.TopLevelSubCommand);
+
+      // Similarly copy AllSubCommands contents
+      AllSubCommands.copyContentsFrom(Other.AllSubCommands);
+
+      Storage.copyFrom(Other.Storage, CopyStorageContents);
+
+      // Note: ActiveSubCommand is not copied as it's context-specific.
+    }
+
+    // Get or create metadata for an option
+    OptionMetadata &getOptionMetadata(Option *O) {
+      llvm::sys::ScopedLock Lock(StateMutex);
+      return OptionMetadataMap[O];
+    }
+
+    const OptionMetadata &getOptionMetadata(Option *O) const {
+      llvm::sys::ScopedLock Lock(StateMutex);
+      auto It = OptionMetadataMap.find(O);
+      if (It != OptionMetadataMap.end())
+        return It->second;
+      // Return default-constructed metadata if not found
+      static const OptionMetadata DefaultMetadata = {};
+      return DefaultMetadata;
+    }
+
+    /// Reset all options at least once, so that we can parse different options.
+    void ResetAllOptionOccurrences() const {
+      llvm::sys::ScopedLock Lock(StateMutex);
+      // Reset all option values to look like they have never been seen before.
+      // Options might be reset twice (they can be reference in both OptionsMap
+      // and one of the other members), but that does not harm.
+      for (auto *SC : RegisteredSubCommands) {
+        for (auto &O : SC->OptionsMap)
+          O.second->reset();
+        for (Option *O : SC->PositionalOpts)
+          O->reset();
+        for (Option *O : SC->SinkOpts)
+          O->reset();
+        if (SC->ConsumeAfterOpt)
+          SC->ConsumeAfterOpt->reset();
+      }
+    }
+  } SharedState{/*isMain*/ true};
+
+  static std::stack<std::shared_ptr<State>> &getThreadLocalStateStack() {
+    thread_local std::stack<std::shared_ptr<State>> ThreadLocalStateStack;
+    return ThreadLocalStateStack;
+  }
+
+  State *getCurrentStatePtr() {
+    auto &Stack = getThreadLocalStateStack();
+    if (!Stack.empty())
+      return Stack.top().get();
+    return &SharedState;
+  }
+  State &currentState() { return *getCurrentStatePtr(); }
+
+  Option *LookupOption(SubCommand &Sub, StringRef &Arg, StringRef &Value);
+  Option *LookupLongOption(SubCommand &Sub, StringRef &Arg, StringRef &Value,
+                           bool LongOptionsUseDoubleDash, bool HaveDoubleDash) {
+    Option *Opt = LookupOption(Sub, Arg, Value);
+    if (Opt && LongOptionsUseDoubleDash && !HaveDoubleDash && !isGrouping(Opt))
+      return nullptr;
+    return Opt;
+  }
+  SubCommand *LookupSubCommand(StringRef Name, std::string &NearestString);
+
+  CLIManager() { registerSubCommand(&currentState().TopLevelSubCommand); }
+
 public:
-  // Globals for name and overview of program.  Program name is not a string to
-  // avoid static ctor/dtor issues.
-  std::string ProgramName;
-  StringRef ProgramOverview;
+  StringRef getProgramName() { return currentState().ProgramName; }
+  StringRef getProgramOverview() { return currentState().ProgramOverview; }
+  ArrayRef<Option *> getDefaultOptions() {
+    return currentState().DefaultOptions;
+  }
+  const SmallPtrSetImpl<OptionCategory *> &getRegisteredOptionCategories() {
+    return currentState().RegisteredOptionCategories;
+  }
+  OptionStorage &getOptionStorage() { return currentState().Storage; }
+  SubCommand &getTopLevelSubCommand() {
+    return currentState().TopLevelSubCommand;
+  }
+  SubCommand &getAllSubCommands() { return currentState().AllSubCommands; }
+  std::vector<StringRef> &getMoreHelp() { return currentState().MoreHelp; }
 
-  // This collects additional help to be printed.
-  std::vector<StringRef> MoreHelp;
-
-  // This collects Options added with the cl::DefaultOption flag. Since they can
-  // be overridden, they are not added to the appropriate SubCommands until
-  // ParseCommandLineOptions actually runs.
-  SmallVector<Option*, 4> DefaultOptions;
-
-  // This collects the different option categories that have been registered.
-  SmallPtrSet<OptionCategory *, 16> RegisteredOptionCategories;
-
-  // This collects the different subcommands that have been registered.
-  SmallPtrSet<SubCommand *, 4> RegisteredSubCommands;
-
-  CommandLineParser() { registerSubCommand(&SubCommand::getTopLevel()); }
-
-  void ResetAllOptionOccurrences();
+  void ResetAllOptionOccurrences() {
+    currentState().ResetAllOptionOccurrences();
+  }
 
   bool ParseCommandLineOptions(int argc, const char *const *argv,
                                StringRef Overview, raw_ostream *Errs = nullptr,
@@ -195,18 +466,18 @@ public:
 
   void forEachSubCommand(Option &Opt, function_ref<void(SubCommand &)> Action) {
     if (Opt.Subs.empty()) {
-      Action(SubCommand::getTopLevel());
+      Action(getTopLevelSubCommand());
       return;
     }
-    if (Opt.Subs.size() == 1 && *Opt.Subs.begin() == &SubCommand::getAll()) {
-      for (auto *SC : RegisteredSubCommands)
+    if (Opt.Subs.size() == 1 && *Opt.Subs.begin() == &getAllSubCommands()) {
+      for (auto *SC : currentState().RegisteredSubCommands)
         Action(*SC);
-      Action(SubCommand::getAll());
+      Action(getAllSubCommands());
       return;
     }
     for (auto *SC : Opt.Subs) {
-      assert(SC != &SubCommand::getAll() &&
-             "SubCommand::getAll() should not be used with other subcommands");
+      assert(SC != &getAllSubCommands() &&
+             "Subcommands should not be used with other subcommands");
       Action(*SC);
     }
   }
@@ -215,8 +486,8 @@ public:
     if (Opt.hasArgStr())
       return;
     if (!SC->OptionsMap.insert(std::make_pair(Name, &Opt)).second) {
-      errs() << ProgramName << ": CommandLine Error: Option '" << Name
-             << "' registered more than once!\n";
+      errs() << currentState().ProgramName << ": CommandLine Error: Option '"
+             << Name << "' registered more than once!\n";
       report_fatal_error("inconsistency in registered CommandLine options");
     }
   }
@@ -235,8 +506,8 @@ public:
 
       // Add argument to the argument map!
       if (!SC->OptionsMap.insert(std::make_pair(O->ArgStr, O)).second) {
-        errs() << ProgramName << ": CommandLine Error: Option '" << O->ArgStr
-               << "' registered more than once!\n";
+        errs() << currentState().ProgramName << ": CommandLine Error: Option '"
+               << O->ArgStr << "' registered more than once!\n";
         HadErrors = true;
       }
     }
@@ -264,7 +535,7 @@ public:
 
   void addOption(Option *O, bool ProcessDefaultOption = false) {
     if (!ProcessDefaultOption && O->isDefaultOption()) {
-      DefaultOptions.push_back(O);
+      currentState().DefaultOptions.push_back(O);
       return;
     }
     forEachSubCommand(*O, [&](SubCommand &SC) { addOption(O, &SC); });
@@ -305,35 +576,33 @@ public:
 
   void removeOption(Option *O) {
     forEachSubCommand(*O, [&](SubCommand &SC) { removeOption(O, &SC); });
+    // Also remove the option's metadata from the current state
+    currentState().OptionMetadataMap.erase(O);
   }
 
-  bool hasOptions(const SubCommand &Sub) const {
-    return (!Sub.OptionsMap.empty() || !Sub.PositionalOpts.empty() ||
-            nullptr != Sub.ConsumeAfterOpt);
+  bool hasOptions() {
+    return llvm::any_of(currentState().RegisteredSubCommands,
+                        [](const SubCommand *S) { return S->hasOptions(); });
   }
 
-  bool hasOptions() const {
-    for (const auto *S : RegisteredSubCommands) {
-      if (hasOptions(*S))
-        return true;
-    }
-    return false;
+  bool hasNamedSubCommands() {
+    return llvm::any_of(
+        currentState().RegisteredSubCommands,
+        [](const SubCommand *S) { return !S->getName().empty(); });
   }
 
-  bool hasNamedSubCommands() const {
-    for (const auto *S : RegisteredSubCommands)
-      if (!S->getName().empty())
-        return true;
-    return false;
-  }
+  SubCommand *getActiveSubCommand() { return currentState().ActiveSubCommand; }
 
-  SubCommand *getActiveSubCommand() { return ActiveSubCommand; }
+  // Access option metadata through current state
+  OptionMetadata &getOptionMetadata(Option *O) {
+    return currentState().getOptionMetadata(O);
+  }
 
   void updateArgStr(Option *O, StringRef NewName, SubCommand *SC) {
     SubCommand &Sub = *SC;
     if (!Sub.OptionsMap.insert(std::make_pair(NewName, O)).second) {
-      errs() << ProgramName << ": CommandLine Error: Option '" << O->ArgStr
-             << "' registered more than once!\n";
+      errs() << currentState().ProgramName << ": CommandLine Error: Option '"
+             << O->ArgStr << "' registered more than once!\n";
       report_fatal_error("inconsistency in registered CommandLine options");
     }
     Sub.OptionsMap.erase(O->ArgStr);
@@ -347,29 +616,31 @@ public:
   void printOptionValues();
 
   void registerCategory(OptionCategory *cat) {
-    assert(count_if(RegisteredOptionCategories,
+    llvm::sys::ScopedLock Lock(currentState().StateMutex);
+    assert(count_if(currentState().RegisteredOptionCategories,
                     [cat](const OptionCategory *Category) {
-             return cat->getName() == Category->getName();
-           }) == 0 &&
+                      return cat->getName() == Category->getName();
+                    }) == 0 &&
            "Duplicate option categories");
 
-    RegisteredOptionCategories.insert(cat);
+    currentState().RegisteredOptionCategories.insert(cat);
   }
 
   void registerSubCommand(SubCommand *sub) {
-    assert(count_if(RegisteredSubCommands,
+    llvm::sys::ScopedLock Lock(currentState().StateMutex);
+    assert(count_if(currentState().RegisteredSubCommands,
                     [sub](const SubCommand *Sub) {
                       return (!sub->getName().empty()) &&
                              (Sub->getName() == sub->getName());
                     }) == 0 &&
            "Duplicate subcommands");
-    RegisteredSubCommands.insert(sub);
+    currentState().RegisteredSubCommands.insert(sub);
 
     // For all options that have been registered for all subcommands, add the
     // option to this subcommand now.
-    assert(sub != &SubCommand::getAll() &&
-           "SubCommand::getAll() should not be registered");
-    for (auto &E : SubCommand::getAll().OptionsMap) {
+    assert(sub != &getAllSubCommands() &&
+           "SubCommands should not be registered");
+    for (auto &E : getAllSubCommands().OptionsMap) {
       Option *O = E.second;
       if ((O->isPositional() || O->isSink() || O->isConsumeAfter()) ||
           O->hasArgStr())
@@ -380,50 +651,109 @@ public:
   }
 
   void unregisterSubCommand(SubCommand *sub) {
-    RegisteredSubCommands.erase(sub);
+    llvm::sys::ScopedLock Lock(currentState().StateMutex);
+    currentState().RegisteredSubCommands.erase(sub);
   }
 
   iterator_range<SmallPtrSet<SubCommand *, 4>::iterator>
   getRegisteredSubcommands() {
-    return make_range(RegisteredSubCommands.begin(),
-                      RegisteredSubCommands.end());
+    return make_range(currentState().RegisteredSubCommands.begin(),
+                      currentState().RegisteredSubCommands.end());
   }
 
   void reset() {
-    ActiveSubCommand = nullptr;
-    ProgramName.clear();
-    ProgramOverview = StringRef();
+    llvm::sys::ScopedLock Lock(currentState().StateMutex);
+    currentState().ActiveSubCommand = nullptr;
+    currentState().ProgramName.clear();
+    currentState().ProgramOverview = StringRef();
 
-    MoreHelp.clear();
-    RegisteredOptionCategories.clear();
+    currentState().MoreHelp.clear();
+    currentState().RegisteredOptionCategories.clear();
 
-    ResetAllOptionOccurrences();
-    RegisteredSubCommands.clear();
+    currentState().ResetAllOptionOccurrences();
+    currentState().RegisteredSubCommands.clear();
 
-    SubCommand::getTopLevel().reset();
-    SubCommand::getAll().reset();
-    registerSubCommand(&SubCommand::getTopLevel());
+    getTopLevelSubCommand().reset();
+    getAllSubCommands().reset();
+    registerSubCommand(&getTopLevelSubCommand());
 
-    DefaultOptions.clear();
+    currentState().DefaultOptions.clear();
   }
 
-private:
-  SubCommand *ActiveSubCommand = nullptr;
+  void pushCLIState(const cl::ThreadLocalStateConfig &Config = {}) {
+    State *SourceState = nullptr;
 
-  Option *LookupOption(SubCommand &Sub, StringRef &Arg, StringRef &Value);
-  Option *LookupLongOption(SubCommand &Sub, StringRef &Arg, StringRef &Value,
-                           bool LongOptionsUseDoubleDash, bool HaveDoubleDash) {
-    Option *Opt = LookupOption(Sub, Arg, Value);
-    if (Opt && LongOptionsUseDoubleDash && !HaveDoubleDash && !isGrouping(Opt))
+    // Determine which state to use as source for copying
+    switch (Config.Source) {
+    case cl::ThreadLocalStateConfig::SourceState::Fresh:
+      // Create a completely fresh state
+      break;
+    case cl::ThreadLocalStateConfig::SourceState::MainState:
+      SourceState = &SharedState;
+      break;
+    case cl::ThreadLocalStateConfig::SourceState::TopOfStack: {
+      auto &Stack = getThreadLocalStateStack();
+      if (!Stack.empty())
+        SourceState = Stack.top().get();
+      break;
+    }
+    case cl::ThreadLocalStateConfig::SourceState::CurrentState:
+      SourceState = &currentState();
+      break;
+    }
+
+    // Create new state on the stack
+    auto &NewState = getThreadLocalStateStack().emplace(
+        std::make_shared<State>(/*isMain*/ false));
+
+    // Copy structure if requested
+    if (SourceState) {
+      NewState->copyFrom(*SourceState, Config.CopyStorageValues);
+    } else {
+      // Only register the top-level subcommand if we're creating a fresh state
+      // When copying structure, RegisteredSubCommands already has the right
+      // subcommands
+      registerSubCommand(&getTopLevelSubCommand());
+    }
+  }
+
+  void pushCLIState(std::shared_ptr<void> &&StateToken) {
+    getThreadLocalStateStack().push(
+        std::static_pointer_cast<State>(std::move(StateToken)));
+  }
+
+  std::shared_ptr<void> getCLIStateToken() {
+    if (getThreadLocalStateStack().empty())
       return nullptr;
-    return Opt;
+    return getThreadLocalStateStack().top();
   }
-  SubCommand *LookupSubCommand(StringRef Name, std::string &NearestString);
+
+  void popCLIState() {
+    auto &Stack = getThreadLocalStateStack();
+    if (!Stack.empty())
+      Stack.pop();
+  }
+
+  friend struct object_creator<CLIManager>;
+  static CLIManager &getInstance() {
+    static ManagedStatic<CLIManager> Instance;
+    return *Instance;
+  }
 };
 
 } // namespace
 
-static ManagedStatic<CommandLineParser> GlobalParser;
+cl::OptionStorageHandle
+cl::registerOptionStorage(std::shared_ptr<OptionStorageInfoI> &&Opt) {
+  OptionStorageInfoI *Impl = Opt.get();
+  size_t Offset =
+      CLIManager::getInstance().getOptionStorage().addOption(std::move(Opt));
+  return {Offset, Impl};
+}
+
+void *cl::getOptionStorage(size_t Offset, OptionStorageInfoI *Opt) {
+  return CLIManager::getInstance().getOptionStorage().getStorageAt(Offset, Opt);
+}
 
 template <typename T, T TrueVal, T FalseVal>
 static bool parseBool(Option &O, StringRef ArgName, StringRef Arg, T &Value) {
@@ -442,23 +772,23 @@ static bool parseBool(Option &O, StringRef ArgName, StringRef Arg, T &Value) {
 }
 
 void cl::AddLiteralOption(Option &O, StringRef Name) {
-  GlobalParser->addLiteralOption(O, Name);
+  CLIManager::getInstance().addLiteralOption(O, Name);
 }
 
 extrahelp::extrahelp(StringRef Help) : morehelp(Help) {
-  GlobalParser->MoreHelp.push_back(Help);
+  CLIManager::getInstance().getMoreHelp().push_back(Help);
 }
 
 void Option::addArgument() {
-  GlobalParser->addOption(this);
+  CLIManager::getInstance().addOption(this);
   FullyInitialized = true;
 }
 
-void Option::removeArgument() { GlobalParser->removeOption(this); }
+void Option::removeArgument() { CLIManager::getInstance().removeOption(this); }
 
 void Option::setArgStr(StringRef S) {
   if (FullyInitialized)
-    GlobalParser->updateArgStr(this, S);
+    CLIManager::getInstance().updateArgStr(this, S);
   assert(!S.starts_with("-") && "Option can't start with '-");
   ArgStr = S;
   if (ArgStr.size() == 1)
@@ -476,37 +806,39 @@ void Option::addCategory(OptionCategory &C) {
     Categories.push_back(&C);
 }
 
+unsigned Option::getPosition() const {
+  return CLIManager::getInstance()
+      .getOptionMetadata(const_cast<Option *>(this))
+      .Position;
+}
+
+void Option::setPosition(unsigned pos) {
+  CLIManager::getInstance().getOptionMetadata(this).Position = pos;
+}
+
+int Option::getNumOccurrences() const {
+  return CLIManager::getInstance()
+      .getOptionMetadata(const_cast<Option *>(this))
+      .NumOccurrences;
+}
+
 void Option::reset() {
-  NumOccurrences = 0;
+  CLIManager::getInstance().getOptionMetadata(this).NumOccurrences = 0;
   setDefault();
   if (isDefaultOption())
     removeArgument();
 }
 
 void OptionCategory::registerCategory() {
-  GlobalParser->registerCategory(this);
+  CLIManager::getInstance().registerCategory(this);
 }
 
-// A special subcommand representing no subcommand. It is particularly important
-// that this ManagedStatic uses constant initailization and not dynamic
-// initialization because it is referenced from cl::opt constructors, which run
-// dynamically in an arbitrary order.
-LLVM_REQUIRE_CONSTANT_INITIALIZATION
-static ManagedStatic<SubCommand> TopLevelSubCommand;
-
-// A special subcommand that can be used to put an option into all subcommands.
-static ManagedStatic<SubCommand> AllSubCommands;
-
-SubCommand &SubCommand::getTopLevel() { return *TopLevelSubCommand; }
-
-SubCommand &SubCommand::getAll() { return *AllSubCommands; }
-
 void SubCommand::registerSubCommand() {
-  GlobalParser->registerSubCommand(this);
+  CLIManager::getInstance().registerSubCommand(this);
 }
 
 void SubCommand::unregisterSubCommand() {
-  GlobalParser->unregisterSubCommand(this);
+  CLIManager::getInstance().unregisterSubCommand(this);
 }
 
 void SubCommand::reset() {
@@ -517,8 +849,15 @@ void SubCommand::reset() {
   ConsumeAfterOpt = nullptr;
 }
 
+void SubCommand::copyContentsFrom(const SubCommand &Other) {
+  OptionsMap = Other.OptionsMap;
+  PositionalOpts = Other.PositionalOpts;
+  SinkOpts = Other.SinkOpts;
+  ConsumeAfterOpt = Other.ConsumeAfterOpt;
+}
+
 SubCommand::operator bool() const {
-  return (GlobalParser->getActiveSubCommand() == this);
+  return (CLIManager::getInstance().getActiveSubCommand() == this);
 }
 
 //===----------------------------------------------------------------------===//
@@ -528,8 +867,8 @@ SubCommand::operator bool() const {
 /// LookupOption - Lookup the option specified by the specified option on the
 /// command line.  If there is a value specified (after an equal sign) return
 /// that as well.  This assumes that leading dashes have already been stripped.
-Option *CommandLineParser::LookupOption(SubCommand &Sub, StringRef &Arg,
-                                        StringRef &Value) {
+Option *CLIManager::LookupOption(SubCommand &Sub, StringRef &Arg,
+                                 StringRef &Value) {
   // Reject all dashes.
   if (Arg.empty())
     return nullptr;
@@ -559,13 +898,13 @@ Option *CommandLineParser::LookupOption(SubCommand &Sub, StringRef &Arg,
   return I->second;
 }
 
-SubCommand *CommandLineParser::LookupSubCommand(StringRef Name,
-                                                std::string &NearestString) {
+SubCommand *CLIManager::LookupSubCommand(StringRef Name,
+                                         std::string &NearestString) {
   if (Name.empty())
     return &SubCommand::getTopLevel();
   // Find a subcommand with the edit distance == 1.
   SubCommand *NearestMatch = nullptr;
-  for (auto *S : RegisteredSubCommands) {
+  for (auto *S : currentState().RegisteredSubCommands) {
     assert(S != &SubCommand::getAll() &&
            "SubCommand::getAll() is not expected in RegisteredSubCommands");
     if (S->getName().empty())
@@ -1484,33 +1823,20 @@ bool cl::ParseCommandLineOptions(int argc, const char *const *argv,
   int NewArgc = static_cast<int>(NewArgv.size());
 
   // Parse all options.
-  return GlobalParser->ParseCommandLineOptions(
+  return CLIManager::getInstance().ParseCommandLineOptions(
       NewArgc, &NewArgv[0], Overview, Errs, VFS, LongOptionsUseDoubleDash);
 }
 
-/// Reset all options at least once, so that we can parse different options.
-void CommandLineParser::ResetAllOptionOccurrences() {
-  // Reset all option values to look like they have never been seen before.
-  // Options might be reset twice (they can be reference in both OptionsMap
-  // and one of the other members), but that does not harm.
-  for (auto *SC : RegisteredSubCommands) {
-    for (auto &O : SC->OptionsMap)
-      O.second->reset();
-    for (Option *O : SC->PositionalOpts)
-      O->reset();
-    for (Option *O : SC->SinkOpts)
-      O->reset();
-    if (SC->ConsumeAfterOpt)
-      SC->ConsumeAfterOpt->reset();
-  }
-}
-
-bool CommandLineParser::ParseCommandLineOptions(
-    int argc, const char *const *argv, StringRef Overview, raw_ostream *Errs,
-    vfs::FileSystem *VFS, bool LongOptionsUseDoubleDash) {
+bool CLIManager::ParseCommandLineOptions(int argc, const char *const *argv,
+                                         StringRef Overview, raw_ostream *Errs,
+                                         vfs::FileSystem *VFS,
+                                         bool LongOptionsUseDoubleDash) {
   assert(hasOptions() && "No options specified!");
 
-  ProgramOverview = Overview;
+  {
+    llvm::sys::ScopedLock Lock(currentState().StateMutex);
+    currentState().ProgramOverview = Overview;
+  }
   bool IgnoreErrors = Errs;
   if (!Errs)
     Errs = &errs();
@@ -1535,7 +1861,11 @@ bool CommandLineParser::ParseCommandLineOptions(
   argc = static_cast<int>(newArgv.size());
 
   // Copy the program name into ProgName, making sure not to overflow it.
-  ProgramName = std::string(sys::path::filename(StringRef(argv[0])));
+  {
+    llvm::sys::ScopedLock Lock(currentState().StateMutex);
+    currentState().ProgramName =
+        std::string(sys::path::filename(StringRef(argv[0])));
+  }
 
   // Check out the positional arguments to collect information about them.
   unsigned NumPositionalRequired = 0;
@@ -1556,7 +1886,10 @@ bool CommandLineParser::ParseCommandLineOptions(
     if (ChosenSubCommand != &SubCommand::getTopLevel())
       FirstArg = 2;
   }
-  GlobalParser->ActiveSubCommand = ChosenSubCommand;
+  {
+    llvm::sys::ScopedLock Lock(currentState().StateMutex);
+    currentState().ActiveSubCommand = ChosenSubCommand;
+  }
 
   assert(ChosenSubCommand);
   auto &ConsumeAfterOpt = ChosenSubCommand->ConsumeAfterOpt;
@@ -1564,7 +1897,7 @@ bool CommandLineParser::ParseCommandLineOptions(
   auto &SinkOpts = ChosenSubCommand->SinkOpts;
   auto &OptionsMap = ChosenSubCommand->OptionsMap;
 
-  for (auto *O: DefaultOptions) {
+  for (auto *O : currentState().DefaultOptions) {
     addOption(O, true);
   }
 
@@ -1600,8 +1933,8 @@ bool CommandLineParser::ParseCommandLineOptions(
                      "another positional argument will match an "
                      "unbounded number of values, and this option"
                      " does not require a value!");
-        *Errs << ProgramName << ": CommandLine Error: Option '" << Opt->ArgStr
-              << "' is all messed up!\n";
+        *Errs << getProgramName() << ": CommandLine Error: Option '"
+              << Opt->ArgStr << "' is all messed up!\n";
         *Errs << PositionalOpts.size();
         ErrorParsing = true;
       }
@@ -1711,14 +2044,14 @@ bool CommandLineParser::ParseCommandLineOptions(
 
       auto ReportUnknownArgument = [&](bool IsArg,
                                        StringRef NearestArgumentName) {
-        *Errs << ProgramName << ": Unknown "
+        *Errs << getProgramName() << ": Unknown "
               << (IsArg ? "command line argument" : "subcommand") << " '"
               << argv[i] << "'.  Try: '" << argv[0] << " --help'\n";
 
         if (NearestArgumentName.empty())
           return;
 
-        *Errs << ProgramName << ": Did you mean '";
+        *Errs << getProgramName() << ": Did you mean '";
         if (IsArg)
           *Errs << PrintArg(NearestArgumentName, 0);
         else
@@ -1752,16 +2085,16 @@ bool CommandLineParser::ParseCommandLineOptions(
 
   // Check and handle positional arguments now...
   if (NumPositionalRequired > PositionalVals.size()) {
-      *Errs << ProgramName
-             << ": Not enough positional command line arguments specified!\n"
-             << "Must specify at least " << NumPositionalRequired
-             << " positional argument" << (NumPositionalRequired > 1 ? "s" : "")
-             << ": See: " << argv[0] << " --help\n";
+    *Errs << getProgramName()
+          << ": Not enough positional command line arguments specified!\n"
+          << "Must specify at least " << NumPositionalRequired
+          << " positional argument" << (NumPositionalRequired > 1 ? "s" : "")
+          << ": See: " << argv[0] << " --help\n";
 
     ErrorParsing = true;
   } else if (!HasUnlimitedPositionals &&
              PositionalVals.size() > PositionalOpts.size()) {
-    *Errs << ProgramName << ": Too many positional arguments specified!\n"
+    *Errs << getProgramName() << ": Too many positional arguments specified!\n"
           << "Can specify at most " << PositionalOpts.size()
           << " positional arguments: See: " << argv[0] << " --help\n";
     ErrorParsing = true;
@@ -1853,7 +2186,7 @@ bool CommandLineParser::ParseCommandLineOptions(
 
   // Free all of the memory allocated to the map.  Command line options may only
   // be processed once!
-  MoreHelp.clear();
+  currentState().MoreHelp.clear();
 
   // If we had an error processing our arguments, don't let the program execute
   if (ErrorParsing) {
@@ -1874,7 +2207,8 @@ bool Option::error(const Twine &Message, StringRef ArgName, raw_ostream &Errs) {
   if (ArgName.empty())
     Errs << HelpStr; // Be nice for positional arguments
   else
-    Errs << GlobalParser->ProgramName << ": for the " << PrintArg(ArgName, 0);
+    Errs << CLIManager::getInstance().getProgramName() << ": for the "
+         << PrintArg(ArgName, 0);
 
   Errs << " option: " << Message << "\n";
   return true;
@@ -1883,7 +2217,9 @@ bool Option::error(const Twine &Message, StringRef ArgName, raw_ostream &Errs) {
 bool Option::addOccurrence(unsigned pos, StringRef ArgName, StringRef Value,
                            bool MultiArg) {
   if (!MultiArg)
-    NumOccurrences++; // Increment the number of times we have been seen
+    CLIManager::getInstance()
+        .getOptionMetadata(this)
+        .NumOccurrences++; // Increment the number of times we have been seen
 
   return handleOccurrence(pos, ArgName, Value);
 }
@@ -2326,7 +2662,7 @@ static void sortOpts(OptionsMapTy &OptMap,
 }
 
 static void
-sortSubCommands(const SmallPtrSetImpl<SubCommand *> &SubMap,
+sortSubCommands(iterator_range<SmallPtrSet<SubCommand *, 4>::iterator> SubMap,
                 SmallVectorImpl<std::pair<const char *, SubCommand *>> &Subs) {
   for (auto *S : SubMap) {
     if (S->getName().empty())
@@ -2377,7 +2713,7 @@ public:
   }
 
   void printHelp() {
-    SubCommand *Sub = GlobalParser->getActiveSubCommand();
+    SubCommand *Sub = CLIManager::getInstance().getActiveSubCommand();
     auto &OptionsMap = Sub->OptionsMap;
     auto &PositionalOpts = Sub->PositionalOpts;
     auto &ConsumeAfterOpt = Sub->ConsumeAfterOpt;
@@ -2386,13 +2722,14 @@ public:
     sortOpts(OptionsMap, Opts, ShowHidden);
 
     StrSubCommandPairVector Subs;
-    sortSubCommands(GlobalParser->RegisteredSubCommands, Subs);
+    sortSubCommands(CLIManager::getInstance().getRegisteredSubcommands(), Subs);
 
-    if (!GlobalParser->ProgramOverview.empty())
-      outs() << "OVERVIEW: " << GlobalParser->ProgramOverview << "\n";
+    if (!CLIManager::getInstance().getProgramOverview().empty())
+      outs() << "OVERVIEW: " << CLIManager::getInstance().getProgramOverview()
+             << "\n";
 
     if (Sub == &SubCommand::getTopLevel()) {
-      outs() << "USAGE: " << GlobalParser->ProgramName;
+      outs() << "USAGE: " << CLIManager::getInstance().getProgramName();
       if (!Subs.empty())
         outs() << " [subcommand]";
       outs() << " [options]";
@@ -2401,8 +2738,8 @@ public:
         outs() << "SUBCOMMAND '" << Sub->getName()
                << "': " << Sub->getDescription() << "\n\n";
       }
-      outs() << "USAGE: " << GlobalParser->ProgramName << " " << Sub->getName()
-             << " [options]";
+      outs() << "USAGE: " << CLIManager::getInstance().getProgramName() << " "
+             << Sub->getName() << " [options]";
     }
 
     for (auto *Opt : PositionalOpts) {
@@ -2425,7 +2762,7 @@ public:
       outs() << "SUBCOMMANDS:\n\n";
       printSubCommands(Subs, MaxSubLen);
       outs() << "\n";
-      outs() << "  Type \"" << GlobalParser->ProgramName
+      outs() << "  Type \"" << CLIManager::getInstance().getProgramName()
              << " <subcommand> --help\" to get more help on a specific "
                 "subcommand";
     }
@@ -2441,9 +2778,9 @@ public:
     printOptions(Opts, MaxArgLen);
 
     // Print any extra help the user has declared.
-    for (const auto &I : GlobalParser->MoreHelp)
+    for (const auto &I : CLIManager::getInstance().getMoreHelp())
       outs() << I;
-    GlobalParser->MoreHelp.clear();
+    CLIManager::getInstance().getMoreHelp().clear();
   }
 };
 
@@ -2470,8 +2807,9 @@ protected:
 
     // Collect registered option categories into vector in preparation for
     // sorting.
-    llvm::append_range(SortedCategories,
-                       GlobalParser->RegisteredOptionCategories);
+    llvm::append_range(
+        SortedCategories,
+        CLIManager::getInstance().getRegisteredOptionCategories());
 
     // Sort the different option categories alphabetically.
     assert(SortedCategories.size() > 0 && "No option categories registered!");
@@ -2719,7 +3057,7 @@ void HelpPrinterWrapper::operator=(bool Value) {
   // Decide which printer to invoke. If more than one option category is
   // registered then it is useful to show the categorized help instead of
   // uncategorized help.
-  if (GlobalParser->RegisteredOptionCategories.size() > 1) {
+  if (CLIManager::getInstance().getRegisteredOptionCategories().size() > 1) {
     // unhide --help-list option so user can have uncategorized output if they
     // want it.
     CommonOptions->HLOp.setHiddenFlag(NotHidden);
@@ -2730,15 +3068,23 @@ void HelpPrinterWrapper::operator=(bool Value) {
   }
 }
 
-// Print the value of each option.
-void cl::PrintOptionValues() { GlobalParser->printOptionValues(); }
+SubCommand &SubCommand::getTopLevel() {
+  return CLIManager::getInstance().getTopLevelSubCommand();
+}
+SubCommand &SubCommand::getAll() {
+  return CLIManager::getInstance().getAllSubCommands();
+}
 
-void CommandLineParser::printOptionValues() {
+// Print the value of each option.
+void cl::PrintOptionValues() { CLIManager::getInstance().printOptionValues(); }
+
+void CLIManager::printOptionValues() {
   if (!CommonOptions->PrintOptions && !CommonOptions->PrintAllOptions)
     return;
 
   SmallVector<std::pair<const char *, Option *>, 128> Opts;
-  sortOpts(ActiveSubCommand->OptionsMap, Opts, /*ShowHidden*/ true);
+  sortOpts(currentState().ActiveSubCommand->OptionsMap, Opts,
+           /*ShowHidden*/ true);
 
   // Compute the maximum argument length...
   size_t MaxArgLen = 0;
@@ -2822,15 +3168,15 @@ void cl::AddExtraVersionPrinter(VersionPrinterTy func) {
 
 OptionsMapTy &cl::getRegisteredOptions(SubCommand &Sub) {
   initCommonOptions();
-  auto &Subs = GlobalParser->RegisteredSubCommands;
+  auto Subs = CLIManager::getInstance().getRegisteredSubcommands();
   (void)Subs;
-  assert(Subs.contains(&Sub));
+  assert(llvm::find(Subs, &Sub) != Subs.end());
   return Sub.OptionsMap;
 }
 
 iterator_range<SmallPtrSet<SubCommand *, 4>::iterator>
 cl::getRegisteredSubcommands() {
-  return GlobalParser->getRegisteredSubcommands();
+  return CLIManager::getInstance().getRegisteredSubcommands();
 }
 
 void cl::HideUnrelatedOptions(cl::OptionCategory &Category, SubCommand &Sub) {
@@ -2861,10 +3207,21 @@ void cl::HideUnrelatedOptions(ArrayRef<const cl::OptionCategory *> Categories,
   }
 }
 
-void cl::ResetCommandLineParser() { GlobalParser->reset(); }
+void cl::ResetCommandLineParser() { CLIManager::getInstance().reset(); }
 void cl::ResetAllOptionOccurrences() {
-  GlobalParser->ResetAllOptionOccurrences();
+  CLIManager::getInstance().ResetAllOptionOccurrences();
 }
+
+LLVM_ABI void cl::PushCLIState(const ThreadLocalStateConfig &Config) {
+  CLIManager::getInstance().pushCLIState(Config);
+}
+LLVM_ABI void cl::PushCLIState(std::shared_ptr<void> &&Token) {
+  CLIManager::getInstance().pushCLIState(std::move(Token));
+}
+LLVM_ABI std::shared_ptr<void> cl::GetCurrentCLIStateToken() {
+  return CLIManager::getInstance().getCLIStateToken();
+}
+LLVM_ABI void cl::PopCLIState() { CLIManager::getInstance().popCLIState(); }
 
 void LLVMParseCommandLineOptions(int argc, const char *const *argv,
                                  const char *Overview) {
