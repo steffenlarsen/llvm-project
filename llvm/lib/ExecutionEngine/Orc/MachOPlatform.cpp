@@ -190,7 +190,7 @@ private:
   ExecutorAddr DeregisterObjectSymbolTable;
 };
 
-static StringRef ObjCRuntimeObjectSectionsData[] = {
+const StringRef ObjCRuntimeObjectSectionsData[] = {
     MachOObjCCatListSectionName,   MachOObjCCatList2SectionName,
     MachOObjCClassListSectionName, MachOObjCClassRefsSectionName,
     MachOObjCConstSectionName,     MachOObjCDataSectionName,
@@ -198,18 +198,17 @@ static StringRef ObjCRuntimeObjectSectionsData[] = {
     MachOObjCNLCatListSectionName, MachOObjCNLClassListSectionName,
     MachOObjCSelRefsSectionName};
 
-static StringRef ObjCRuntimeObjectSectionsText[] = {
+const StringRef ObjCRuntimeObjectSectionsText[] = {
     MachOObjCClassNameSectionName, MachOObjCMethNameSectionName,
     MachOObjCMethTypeSectionName,  MachOSwift5TypesSectionName,
     MachOSwift5TypeRefSectionName, MachOSwift5FieldMetadataSectionName,
     MachOSwift5EntrySectionName,   MachOSwift5ProtoSectionName,
     MachOSwift5ProtosSectionName};
 
-static StringRef ObjCRuntimeObjectSectionName =
+const StringRef ObjCRuntimeObjectSectionName =
     "__llvm_jitlink_ObjCRuntimeRegistrationObject";
 
-static StringRef ObjCImageInfoSymbolName =
-    "__llvm_jitlink_macho_objc_imageinfo";
+const StringRef ObjCImageInfoSymbolName = "__llvm_jitlink_macho_objc_imageinfo";
 
 struct ObjCImageInfoFlags {
   uint16_t SwiftABIVersion;

@@ -16,29 +16,29 @@
 namespace llvm {
 namespace orc {
 
-StringRef ELFEHFrameSectionName = ".eh_frame";
+const StringRef ELFEHFrameSectionName = ".eh_frame";
 
-StringRef ELFInitArrayFuncSectionName = ".init_array";
-StringRef ELFInitFuncSectionName = ".init";
-StringRef ELFFiniArrayFuncSectionName = ".fini_array";
-StringRef ELFFiniFuncSectionName = ".fini";
-StringRef ELFCtorArrayFuncSectionName = ".ctors";
-StringRef ELFDtorArrayFuncSectionName = ".dtors";
+const StringRef ELFInitArrayFuncSectionName = ".init_array";
+const StringRef ELFInitFuncSectionName = ".init";
+const StringRef ELFFiniArrayFuncSectionName = ".fini_array";
+const StringRef ELFFiniFuncSectionName = ".fini";
+const StringRef ELFCtorArrayFuncSectionName = ".ctors";
+const StringRef ELFDtorArrayFuncSectionName = ".dtors";
 
-StringRef ELFInitSectionNames[3]{
+const StringRef ELFInitSectionNames[3]{
     ELFInitArrayFuncSectionName,
     ELFInitFuncSectionName,
     ELFCtorArrayFuncSectionName,
 };
 
-StringRef ELFFiniSectionNames[3]{
+const StringRef ELFFiniSectionNames[3]{
     ELFFiniArrayFuncSectionName,
     ELFFiniFuncSectionName,
     ELFDtorArrayFuncSectionName,
 };
 
-StringRef ELFThreadBSSSectionName = ".tbss";
-StringRef ELFThreadDataSectionName = ".tdata";
+const StringRef ELFThreadBSSSectionName = ".tbss";
+const StringRef ELFThreadDataSectionName = ".tdata";
 
 bool isMachOInitializerSection(StringRef QualifiedName) {
   return llvm::is_contained(MachOInitSectionNames, QualifiedName);

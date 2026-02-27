@@ -21,20 +21,20 @@ namespace llvm {
 namespace orc {
 
 // ELF section names.
-LLVM_ABI extern StringRef ELFEHFrameSectionName;
+LLVM_ABI extern const StringRef ELFEHFrameSectionName;
 
-LLVM_ABI extern StringRef ELFInitArrayFuncSectionName;
-LLVM_ABI extern StringRef ELFInitFuncSectionName;
-LLVM_ABI extern StringRef ELFFiniArrayFuncSectionName;
-LLVM_ABI extern StringRef ELFFiniFuncSectionName;
-LLVM_ABI extern StringRef ELFCtorArrayFuncSectionName;
-LLVM_ABI extern StringRef ELFDtorArrayFuncSectionName;
+LLVM_ABI extern const StringRef ELFInitArrayFuncSectionName;
+LLVM_ABI extern const StringRef ELFInitFuncSectionName;
+LLVM_ABI extern const StringRef ELFFiniArrayFuncSectionName;
+LLVM_ABI extern const StringRef ELFFiniFuncSectionName;
+LLVM_ABI extern const StringRef ELFCtorArrayFuncSectionName;
+LLVM_ABI extern const StringRef ELFDtorArrayFuncSectionName;
 
-LLVM_ABI extern StringRef ELFInitSectionNames[3];
-LLVM_ABI extern StringRef ELFFiniSectionNames[3];
+LLVM_ABI extern const StringRef ELFInitSectionNames[3];
+LLVM_ABI extern const StringRef ELFFiniSectionNames[3];
 
-LLVM_ABI extern StringRef ELFThreadBSSSectionName;
-LLVM_ABI extern StringRef ELFThreadDataSectionName;
+LLVM_ABI extern const StringRef ELFThreadBSSSectionName;
+LLVM_ABI extern const StringRef ELFThreadDataSectionName;
 
 LLVM_ABI bool isELFInitializerSection(StringRef SecName);
 LLVM_ABI bool isELFFinalizerSection(StringRef SecName);

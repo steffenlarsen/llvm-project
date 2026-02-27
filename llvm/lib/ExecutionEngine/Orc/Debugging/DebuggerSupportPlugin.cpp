@@ -25,7 +25,7 @@ using namespace llvm;
 using namespace llvm::jitlink;
 using namespace llvm::orc;
 
-static const char *SynthDebugSectionName = "__jitlink_synth_debug_object";
+const char *const SynthDebugSectionName = "__jitlink_synth_debug_object";
 
 namespace {
 

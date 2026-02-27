@@ -23,47 +23,51 @@ namespace llvm {
 namespace orc {
 namespace rt {
 
-LLVM_ABI extern const char *SimpleExecutorDylibManagerInstanceName;
-LLVM_ABI extern const char *SimpleExecutorDylibManagerOpenWrapperName;
-LLVM_ABI extern const char *SimpleExecutorDylibManagerResolveWrapperName;
+LLVM_ABI extern const char *const SimpleExecutorDylibManagerInstanceName;
+LLVM_ABI extern const char *const SimpleExecutorDylibManagerOpenWrapperName;
+LLVM_ABI extern const char *const SimpleExecutorDylibManagerResolveWrapperName;
 
-LLVM_ABI extern const char *SimpleExecutorMemoryManagerInstanceName;
-LLVM_ABI extern const char *SimpleExecutorMemoryManagerReserveWrapperName;
-LLVM_ABI extern const char *SimpleExecutorMemoryManagerInitializeWrapperName;
-LLVM_ABI extern const char *SimpleExecutorMemoryManagerDeinitializeWrapperName;
-LLVM_ABI extern const char *SimpleExecutorMemoryManagerReleaseWrapperName;
-
-LLVM_ABI extern const char *ExecutorSharedMemoryMapperServiceInstanceName;
-LLVM_ABI extern const char *ExecutorSharedMemoryMapperServiceReserveWrapperName;
+LLVM_ABI extern const char *const SimpleExecutorMemoryManagerInstanceName;
+LLVM_ABI extern const char *const SimpleExecutorMemoryManagerReserveWrapperName;
 LLVM_ABI extern const char
-    *ExecutorSharedMemoryMapperServiceInitializeWrapperName;
+    *const SimpleExecutorMemoryManagerInitializeWrapperName;
 LLVM_ABI extern const char
-    *ExecutorSharedMemoryMapperServiceDeinitializeWrapperName;
-LLVM_ABI extern const char *ExecutorSharedMemoryMapperServiceReleaseWrapperName;
+    *const SimpleExecutorMemoryManagerDeinitializeWrapperName;
+LLVM_ABI extern const char *const SimpleExecutorMemoryManagerReleaseWrapperName;
 
-LLVM_ABI extern const char *MemoryWriteUInt8sWrapperName;
-LLVM_ABI extern const char *MemoryWriteUInt16sWrapperName;
-LLVM_ABI extern const char *MemoryWriteUInt32sWrapperName;
-LLVM_ABI extern const char *MemoryWriteUInt64sWrapperName;
-LLVM_ABI extern const char *MemoryWritePointersWrapperName;
-LLVM_ABI extern const char *MemoryWriteBuffersWrapperName;
+LLVM_ABI extern const char *const ExecutorSharedMemoryMapperServiceInstanceName;
+LLVM_ABI extern const char
+    *const ExecutorSharedMemoryMapperServiceReserveWrapperName;
+LLVM_ABI extern const char
+    *const ExecutorSharedMemoryMapperServiceInitializeWrapperName;
+LLVM_ABI extern const char
+    *const ExecutorSharedMemoryMapperServiceDeinitializeWrapperName;
+LLVM_ABI extern const char
+    *const ExecutorSharedMemoryMapperServiceReleaseWrapperName;
 
-LLVM_ABI extern const char *MemoryReadUInt8sWrapperName;
-LLVM_ABI extern const char *MemoryReadUInt16sWrapperName;
-LLVM_ABI extern const char *MemoryReadUInt32sWrapperName;
-LLVM_ABI extern const char *MemoryReadUInt64sWrapperName;
-LLVM_ABI extern const char *MemoryReadPointersWrapperName;
-LLVM_ABI extern const char *MemoryReadBuffersWrapperName;
-LLVM_ABI extern const char *MemoryReadStringsWrapperName;
+LLVM_ABI extern const char *const MemoryWriteUInt8sWrapperName;
+LLVM_ABI extern const char *const MemoryWriteUInt16sWrapperName;
+LLVM_ABI extern const char *const MemoryWriteUInt32sWrapperName;
+LLVM_ABI extern const char *const MemoryWriteUInt64sWrapperName;
+LLVM_ABI extern const char *const MemoryWritePointersWrapperName;
+LLVM_ABI extern const char *const MemoryWriteBuffersWrapperName;
 
-LLVM_ABI extern const char *RegisterEHFrameSectionAllocActionName;
-LLVM_ABI extern const char *DeregisterEHFrameSectionAllocActionName;
+LLVM_ABI extern const char *const MemoryReadUInt8sWrapperName;
+LLVM_ABI extern const char *const MemoryReadUInt16sWrapperName;
+LLVM_ABI extern const char *const MemoryReadUInt32sWrapperName;
+LLVM_ABI extern const char *const MemoryReadUInt64sWrapperName;
+LLVM_ABI extern const char *const MemoryReadPointersWrapperName;
+LLVM_ABI extern const char *const MemoryReadBuffersWrapperName;
+LLVM_ABI extern const char *const MemoryReadStringsWrapperName;
 
-LLVM_ABI extern const char *RegisterJITLoaderGDBAllocActionName;
+LLVM_ABI extern const char *const RegisterEHFrameSectionAllocActionName;
+LLVM_ABI extern const char *const DeregisterEHFrameSectionAllocActionName;
 
-LLVM_ABI extern const char *RunAsMainWrapperName;
-LLVM_ABI extern const char *RunAsVoidFunctionWrapperName;
-LLVM_ABI extern const char *RunAsIntFunctionWrapperName;
+LLVM_ABI extern const char *const RegisterJITLoaderGDBAllocActionName;
+
+LLVM_ABI extern const char *const RunAsMainWrapperName;
+LLVM_ABI extern const char *const RunAsVoidFunctionWrapperName;
+LLVM_ABI extern const char *const RunAsIntFunctionWrapperName;
 
 using SPSSimpleExecutorDylibManagerOpenSignature =
     shared::SPSExpected<shared::SPSExecutorAddr>(shared::SPSExecutorAddr,
@@ -118,8 +122,8 @@ using SPSRunAsIntFunctionSignature = int32_t(shared::SPSExecutorAddr, int32_t);
 } // end namespace rt
 
 namespace rt_alt {
-LLVM_ABI extern const char *UnwindInfoManagerRegisterActionName;
-LLVM_ABI extern const char *UnwindInfoManagerDeregisterActionName;
+LLVM_ABI extern const char *const UnwindInfoManagerRegisterActionName;
+LLVM_ABI extern const char *const UnwindInfoManagerDeregisterActionName;
 } // end namespace rt_alt
 } // end namespace orc
 } // end namespace llvm

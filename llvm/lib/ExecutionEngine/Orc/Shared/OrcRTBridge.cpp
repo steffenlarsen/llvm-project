@@ -12,82 +12,83 @@ namespace llvm {
 namespace orc {
 namespace rt {
 
-const char *SimpleExecutorDylibManagerInstanceName =
+const char *const SimpleExecutorDylibManagerInstanceName =
     "__llvm_orc_SimpleExecutorDylibManager_Instance";
-const char *SimpleExecutorDylibManagerOpenWrapperName =
+const char *const SimpleExecutorDylibManagerOpenWrapperName =
     "__llvm_orc_SimpleExecutorDylibManager_open_wrapper";
-const char *SimpleExecutorDylibManagerResolveWrapperName =
+const char *const SimpleExecutorDylibManagerResolveWrapperName =
     "__llvm_orc_SimpleExecutorDylibManager_resolve_wrapper";
 
-const char *SimpleExecutorMemoryManagerInstanceName =
+const char *const SimpleExecutorMemoryManagerInstanceName =
     "__llvm_orc_SimpleExecutorMemoryManager_Instance";
-const char *SimpleExecutorMemoryManagerReserveWrapperName =
+const char *const SimpleExecutorMemoryManagerReserveWrapperName =
     "__llvm_orc_SimpleExecutorMemoryManager_reserve_wrapper";
-const char *SimpleExecutorMemoryManagerInitializeWrapperName =
+const char *const SimpleExecutorMemoryManagerInitializeWrapperName =
     "__llvm_orc_SimpleExecutorMemoryManager_initialize_wrapper";
-const char *SimpleExecutorMemoryManagerDeinitializeWrapperName =
+const char *const SimpleExecutorMemoryManagerDeinitializeWrapperName =
     "__llvm_orc_SimpleExecutorMemoryManager_deinitialize_wrapper";
-const char *SimpleExecutorMemoryManagerReleaseWrapperName =
+const char *const SimpleExecutorMemoryManagerReleaseWrapperName =
     "__llvm_orc_SimpleExecutorMemoryManager_release_wrapper";
 
-const char *ExecutorSharedMemoryMapperServiceInstanceName =
+const char *const ExecutorSharedMemoryMapperServiceInstanceName =
     "__llvm_orc_ExecutorSharedMemoryMapperService_Instance";
-const char *ExecutorSharedMemoryMapperServiceReserveWrapperName =
+const char *const ExecutorSharedMemoryMapperServiceReserveWrapperName =
     "__llvm_orc_ExecutorSharedMemoryMapperService_Reserve";
-const char *ExecutorSharedMemoryMapperServiceInitializeWrapperName =
+const char *const ExecutorSharedMemoryMapperServiceInitializeWrapperName =
     "__llvm_orc_ExecutorSharedMemoryMapperService_Initialize";
-const char *ExecutorSharedMemoryMapperServiceDeinitializeWrapperName =
+const char *const ExecutorSharedMemoryMapperServiceDeinitializeWrapperName =
     "__llvm_orc_ExecutorSharedMemoryMapperService_Deinitialize";
-const char *ExecutorSharedMemoryMapperServiceReleaseWrapperName =
+const char *const ExecutorSharedMemoryMapperServiceReleaseWrapperName =
     "__llvm_orc_ExecutorSharedMemoryMapperService_Release";
 
-const char *MemoryWriteUInt8sWrapperName =
+const char *const MemoryWriteUInt8sWrapperName =
     "__llvm_orc_bootstrap_mem_write_uint8s_wrapper";
-const char *MemoryWriteUInt16sWrapperName =
+const char *const MemoryWriteUInt16sWrapperName =
     "__llvm_orc_bootstrap_mem_write_uint16s_wrapper";
-const char *MemoryWriteUInt32sWrapperName =
+const char *const MemoryWriteUInt32sWrapperName =
     "__llvm_orc_bootstrap_mem_write_uint32s_wrapper";
-const char *MemoryWriteUInt64sWrapperName =
+const char *const MemoryWriteUInt64sWrapperName =
     "__llvm_orc_bootstrap_mem_write_uint64s_wrapper";
-const char *MemoryWritePointersWrapperName =
+const char *const MemoryWritePointersWrapperName =
     "__llvm_orc_bootstrap_mem_write_pointers_wrapper";
-const char *MemoryWriteBuffersWrapperName =
+const char *const MemoryWriteBuffersWrapperName =
     "__llvm_orc_bootstrap_mem_write_buffers_wrapper";
 
-const char *MemoryReadUInt8sWrapperName =
+const char *const MemoryReadUInt8sWrapperName =
     "__llvm_orc_bootstrap_mem_read_uint8s_wrapper";
-const char *MemoryReadUInt16sWrapperName =
+const char *const MemoryReadUInt16sWrapperName =
     "__llvm_orc_bootstrap_mem_read_uint16s_wrapper";
-const char *MemoryReadUInt32sWrapperName =
+const char *const MemoryReadUInt32sWrapperName =
     "__llvm_orc_bootstrap_mem_read_uint32s_wrapper";
-const char *MemoryReadUInt64sWrapperName =
+const char *const MemoryReadUInt64sWrapperName =
     "__llvm_orc_bootstrap_mem_read_uint64s_wrapper";
-const char *MemoryReadPointersWrapperName =
+const char *const MemoryReadPointersWrapperName =
     "__llvm_orc_bootstrap_mem_read_pointers_wrapper";
-const char *MemoryReadBuffersWrapperName =
+const char *const MemoryReadBuffersWrapperName =
     "__llvm_orc_bootstrap_mem_read_buffers_wrapper";
-const char *MemoryReadStringsWrapperName =
+const char *const MemoryReadStringsWrapperName =
     "__llvm_orc_bootstrap_mem_read_strings_wrapper";
 
-const char *RegisterEHFrameSectionAllocActionName =
+const char *const RegisterEHFrameSectionAllocActionName =
     "llvm_orc_registerEHFrameAllocAction";
-const char *DeregisterEHFrameSectionAllocActionName =
+const char *const DeregisterEHFrameSectionAllocActionName =
     "llvm_orc_deregisterEHFrameAllocAction";
 
-const char *RegisterJITLoaderGDBAllocActionName =
+const char *const RegisterJITLoaderGDBAllocActionName =
     "llvm_orc_registerJITLoaderGDBAllocAction";
 
-const char *RunAsMainWrapperName = "__llvm_orc_bootstrap_run_as_main_wrapper";
-const char *RunAsVoidFunctionWrapperName =
+const char *const RunAsMainWrapperName =
+    "__llvm_orc_bootstrap_run_as_main_wrapper";
+const char *const RunAsVoidFunctionWrapperName =
     "__llvm_orc_bootstrap_run_as_void_function_wrapper";
-const char *RunAsIntFunctionWrapperName =
+const char *const RunAsIntFunctionWrapperName =
     "__llvm_orc_bootstrap_run_as_int_function_wrapper";
 
 } // end namespace rt
 namespace rt_alt {
-const char *UnwindInfoManagerRegisterActionName =
+const char *const UnwindInfoManagerRegisterActionName =
     "orc_rt_alt_UnwindInfoManager_register";
-const char *UnwindInfoManagerDeregisterActionName =
+const char *const UnwindInfoManagerDeregisterActionName =
     "orc_rt_alt_UnwindInfoManager_deregister";
 } // end namespace rt_alt
 } // end namespace orc

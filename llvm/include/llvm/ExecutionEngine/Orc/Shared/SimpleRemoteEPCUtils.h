@@ -32,8 +32,8 @@ namespace llvm {
 namespace orc {
 
 namespace SimpleRemoteEPCDefaultBootstrapSymbolNames {
-LLVM_ABI extern const char *ExecutorSessionObjectName;
-LLVM_ABI extern const char *DispatchFnName;
+LLVM_ABI extern const char *const ExecutorSessionObjectName;
+LLVM_ABI extern const char *const DispatchFnName;
 } // end namespace SimpleRemoteEPCDefaultBootstrapSymbolNames
 
 enum class SimpleRemoteEPCOpcode : uint8_t {

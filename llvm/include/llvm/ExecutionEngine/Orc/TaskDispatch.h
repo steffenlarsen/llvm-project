@@ -53,7 +53,7 @@ private:
 class GenericNamedTask : public RTTIExtends<GenericNamedTask, Task> {
 public:
   LLVM_ABI static char ID;
-  LLVM_ABI static const char *DefaultDescription;
+  LLVM_ABI static const char *const DefaultDescription;
 };
 
 /// Generic task implementation.

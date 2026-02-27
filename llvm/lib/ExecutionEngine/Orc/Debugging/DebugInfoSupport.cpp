@@ -21,7 +21,7 @@ using namespace llvm::orc;
 using namespace llvm::jitlink;
 
 namespace {
-static DenseSet<StringRef> DWARFSectionNames = {
+const DenseSet<StringRef> DWARFSectionNames = {
 #define HANDLE_DWARF_SECTION(ENUM_NAME, ELF_NAME, CMDLINE_NAME, OPTION)        \
   StringRef(ELF_NAME),
 #include "llvm/BinaryFormat/Dwarf.def"
