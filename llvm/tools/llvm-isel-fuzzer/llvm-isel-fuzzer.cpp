@@ -125,7 +125,7 @@ extern "C" LLVM_ATTRIBUTE_USED int LLVMFuzzerInitialize(int *argc,
   handleExecNameEncodedBEOpts(ExecName);
   parseFuzzerCLOpts(*argc, *argv);
 
-  if (TargetTriple.empty()) {
+  if (TargetTriple->empty()) {
     errs() << ExecName << ": -mtriple must be specified\n";
     exit(1);
   }
@@ -141,7 +141,7 @@ extern "C" LLVM_ATTRIBUTE_USED int LLVMFuzzerInitialize(int *argc,
   }
   ExitOnError ExitOnErr(std::string(ExecName) + ": error:");
   TM = ExitOnErr(codegen::createTargetMachineForTriple(
-      Triple::normalize(TargetTriple), OLvl));
+      Triple::normalize(*TargetTriple), OLvl));
   assert(TM && "Could not allocate target machine!");
 
   // Make sure we print the summary and the current unit when LLVM errors out.

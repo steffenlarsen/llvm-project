@@ -241,12 +241,12 @@ static cl::opt<bool> DisableLoopUnrolling(
 template <typename PassManagerT>
 bool tryParsePipelineText(PassBuilder &PB,
                           const cl::opt<std::string> &PipelineOpt) {
-  if (PipelineOpt.empty())
+  if (PipelineOpt->empty())
     return false;
 
   // Verify the pipeline is parseable:
   PassManagerT PM;
-  if (auto Err = PB.parsePassPipeline(PM, PipelineOpt)) {
+  if (auto Err = PB.parsePassPipeline(PM, *PipelineOpt)) {
     errs() << "Could not parse -" << PipelineOpt.ArgStr
            << " pipeline: " << toString(std::move(Err))
            << "... I'm going to ignore it.\n";
@@ -262,70 +262,70 @@ static void registerEPCallbacks(PassBuilder &PB) {
     PB.registerPeepholeEPCallback(
         [&PB](FunctionPassManager &PM, OptimizationLevel Level) {
           ExitOnError Err("Unable to parse PeepholeEP pipeline: ");
-          Err(PB.parsePassPipeline(PM, PeepholeEPPipeline));
+          Err(PB.parsePassPipeline(PM, *PeepholeEPPipeline));
         });
   if (tryParsePipelineText<LoopPassManager>(PB,
                                             LateLoopOptimizationsEPPipeline))
     PB.registerLateLoopOptimizationsEPCallback(
         [&PB](LoopPassManager &PM, OptimizationLevel Level) {
           ExitOnError Err("Unable to parse LateLoopOptimizationsEP pipeline: ");
-          Err(PB.parsePassPipeline(PM, LateLoopOptimizationsEPPipeline));
+          Err(PB.parsePassPipeline(PM, *LateLoopOptimizationsEPPipeline));
         });
   if (tryParsePipelineText<LoopPassManager>(PB, LoopOptimizerEndEPPipeline))
     PB.registerLoopOptimizerEndEPCallback(
         [&PB](LoopPassManager &PM, OptimizationLevel Level) {
           ExitOnError Err("Unable to parse LoopOptimizerEndEP pipeline: ");
-          Err(PB.parsePassPipeline(PM, LoopOptimizerEndEPPipeline));
+          Err(PB.parsePassPipeline(PM, *LoopOptimizerEndEPPipeline));
         });
   if (tryParsePipelineText<FunctionPassManager>(PB,
                                                 ScalarOptimizerLateEPPipeline))
     PB.registerScalarOptimizerLateEPCallback(
         [&PB](FunctionPassManager &PM, OptimizationLevel Level) {
           ExitOnError Err("Unable to parse ScalarOptimizerLateEP pipeline: ");
-          Err(PB.parsePassPipeline(PM, ScalarOptimizerLateEPPipeline));
+          Err(PB.parsePassPipeline(PM, *ScalarOptimizerLateEPPipeline));
         });
   if (tryParsePipelineText<CGSCCPassManager>(PB, CGSCCOptimizerLateEPPipeline))
     PB.registerCGSCCOptimizerLateEPCallback(
         [&PB](CGSCCPassManager &PM, OptimizationLevel Level) {
           ExitOnError Err("Unable to parse CGSCCOptimizerLateEP pipeline: ");
-          Err(PB.parsePassPipeline(PM, CGSCCOptimizerLateEPPipeline));
+          Err(PB.parsePassPipeline(PM, *CGSCCOptimizerLateEPPipeline));
         });
   if (tryParsePipelineText<FunctionPassManager>(PB, VectorizerStartEPPipeline))
     PB.registerVectorizerStartEPCallback(
         [&PB](FunctionPassManager &PM, OptimizationLevel Level) {
           ExitOnError Err("Unable to parse VectorizerStartEP pipeline: ");
-          Err(PB.parsePassPipeline(PM, VectorizerStartEPPipeline));
+          Err(PB.parsePassPipeline(PM, *VectorizerStartEPPipeline));
         });
   if (tryParsePipelineText<FunctionPassManager>(PB, VectorizerEndEPPipeline))
     PB.registerVectorizerEndEPCallback(
         [&PB](FunctionPassManager &PM, OptimizationLevel Level) {
           ExitOnError Err("Unable to parse VectorizerEndEP pipeline: ");
-          Err(PB.parsePassPipeline(PM, VectorizerEndEPPipeline));
+          Err(PB.parsePassPipeline(PM, *VectorizerEndEPPipeline));
         });
   if (tryParsePipelineText<ModulePassManager>(PB, PipelineStartEPPipeline))
     PB.registerPipelineStartEPCallback(
         [&PB](ModulePassManager &PM, OptimizationLevel) {
           ExitOnError Err("Unable to parse PipelineStartEP pipeline: ");
-          Err(PB.parsePassPipeline(PM, PipelineStartEPPipeline));
+          Err(PB.parsePassPipeline(PM, *PipelineStartEPPipeline));
         });
   if (tryParsePipelineText<ModulePassManager>(
           PB, PipelineEarlySimplificationEPPipeline))
     PB.registerPipelineEarlySimplificationEPCallback(
         [&PB](ModulePassManager &PM, OptimizationLevel, ThinOrFullLTOPhase) {
           ExitOnError Err("Unable to parse EarlySimplification pipeline: ");
-          Err(PB.parsePassPipeline(PM, PipelineEarlySimplificationEPPipeline));
+          Err(PB.parsePassPipeline(PM, *PipelineEarlySimplificationEPPipeline));
         });
   if (tryParsePipelineText<ModulePassManager>(PB, OptimizerEarlyEPPipeline))
     PB.registerOptimizerEarlyEPCallback(
         [&PB](ModulePassManager &PM, OptimizationLevel, ThinOrFullLTOPhase) {
           ExitOnError Err("Unable to parse OptimizerEarlyEP pipeline: ");
-          Err(PB.parsePassPipeline(PM, OptimizerEarlyEPPipeline));
+          Err(PB.parsePassPipeline(PM, *OptimizerEarlyEPPipeline));
         });
   if (tryParsePipelineText<ModulePassManager>(PB, OptimizerLastEPPipeline))
     PB.registerOptimizerLastEPCallback(
         [&PB](ModulePassManager &PM, OptimizationLevel, ThinOrFullLTOPhase) {
           ExitOnError Err("Unable to parse OptimizerLastEP pipeline: ");
-          Err(PB.parsePassPipeline(PM, OptimizerLastEPPipeline));
+          Err(PB.parsePassPipeline(PM, *OptimizerLastEPPipeline));
         });
   if (tryParsePipelineText<ModulePassManager>(
           PB, FullLinkTimeOptimizationEarlyEPPipeline))
@@ -334,7 +334,7 @@ static void registerEPCallbacks(PassBuilder &PB) {
           ExitOnError Err(
               "Unable to parse FullLinkTimeOptimizationEarlyEP pipeline: ");
           Err(PB.parsePassPipeline(PM,
-                                   FullLinkTimeOptimizationEarlyEPPipeline));
+                                   *FullLinkTimeOptimizationEarlyEPPipeline));
         });
   if (tryParsePipelineText<ModulePassManager>(
           PB, FullLinkTimeOptimizationLastEPPipeline))
@@ -342,7 +342,8 @@ static void registerEPCallbacks(PassBuilder &PB) {
         [&PB](ModulePassManager &PM, OptimizationLevel) {
           ExitOnError Err(
               "Unable to parse FullLinkTimeOptimizationLastEP pipeline: ");
-          Err(PB.parsePassPipeline(PM, FullLinkTimeOptimizationLastEPPipeline));
+          Err(PB.parsePassPipeline(PM,
+                                   *FullLinkTimeOptimizationLastEPPipeline));
         });
 }
 
@@ -378,7 +379,7 @@ bool llvm::runPassPipeline(
     break;
   case NoPGO:
     if (DebugInfoForProfiling || PseudoProbeForProfiling ||
-        !MemoryProfileFile.empty())
+        !MemoryProfileFile->empty())
       P = PGOOptions("", "", "", MemoryProfileFile, PGOOptions::NoAction,
                      PGOOptions::NoCSAction, PGOColdFuncAttr,
                      DebugInfoForProfiling, PseudoProbeForProfiling);
@@ -392,7 +393,7 @@ bool llvm::runPassPipeline(
       return false;
     }
     if (CSPGOKindFlag == CSInstrGen) {
-      if (CSProfileGenFile.empty()) {
+      if (CSProfileGenFile->empty()) {
         errs() << "CSInstrGen needs to specify CSProfileGenFile";
         return false;
       }
@@ -447,8 +448,7 @@ bool llvm::runPassPipeline(
   } else if (VerifyEachDebugInfoPreserve) {
     Debugify.setDebugInfoBeforePass(DebugInfoBeforePass);
     Debugify.setDebugifyMode(DebugifyMode::OriginalDebugInfo);
-    Debugify.setOrigDIVerifyBugsReportFilePath(
-      VerifyDIPreserveExport);
+    Debugify.setOrigDIVerifyBugsReportFilePath(*VerifyDIPreserveExport);
     Debugify.registerCallbacks(PIC, MAM);
   }
 
@@ -478,7 +478,7 @@ bool llvm::runPassPipeline(
   // Specially handle the alias analysis manager so that we can register
   // a custom pipeline of AA passes with it.
   AAManager AA;
-  if (auto Err = PB.parseAAPipeline(AA, AAPipeline)) {
+  if (auto Err = PB.parseAAPipeline(AA, *AAPipeline)) {
     errs() << Arg0 << ": " << toString(std::move(Err)) << "\n";
     return false;
   }
@@ -518,7 +518,7 @@ bool llvm::runPassPipeline(
   if (VerifyDIPreserve)
     MPM.addPass(NewPMCheckDebugifyPass(
         false, "", nullptr, DebugifyMode::OriginalDebugInfo,
-        &DebugInfoBeforePass, VerifyDIPreserveExport));
+        &DebugInfoBeforePass, *VerifyDIPreserveExport));
   if (EnableProfcheck)
     MPM.addPass(ProfileVerifierPass());
 
@@ -583,8 +583,8 @@ bool llvm::runPassPipeline(
   if (OptRemarkFile)
     OptRemarkFile->keep();
 
-  if (DebugifyEach && !DebugifyExport.empty())
-    exportDebugifyStats(DebugifyExport, Debugify.getDebugifyStatsMap());
+  if (DebugifyEach && !DebugifyExport->empty())
+    exportDebugifyStats(*DebugifyExport, Debugify.getDebugifyStatsMap());
 
   TimerGroup::printAll(*CreateInfoOutputFile());
   TimerGroup::clearAll();

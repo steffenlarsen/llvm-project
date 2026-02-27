@@ -130,14 +130,14 @@ public:
   getAdvisor(const MachineFunction &MF, const RAGreedy &RA,
              SlotIndexes &SI) override {
     if (!Runner) {
-      if (InteractiveChannelBaseName.empty())
+      if (InteractiveChannelBaseName->empty())
         Runner = std::make_unique<ReleaseModeModelRunner<CompiledModelType>>(
             MF.getFunction().getContext(), InputFeatures, DecisionName);
       else
         Runner = std::make_unique<InteractiveModelRunner>(
             MF.getFunction().getContext(), InputFeatures, DecisionSpec,
-            InteractiveChannelBaseName + ".out",
-            InteractiveChannelBaseName + ".in");
+            *InteractiveChannelBaseName + ".out",
+            *InteractiveChannelBaseName + ".in");
     }
     return std::make_unique<MLPriorityAdvisor>(MF, RA, &SI, Runner.get());
   }
@@ -310,7 +310,7 @@ private:
 RegAllocPriorityAdvisorAnalysisLegacy *
 llvm::createReleaseModePriorityAdvisorAnalysis() {
   return llvm::isEmbeddedModelEvaluatorValid<CompiledModelType>() ||
-                 !InteractiveChannelBaseName.empty()
+                 !InteractiveChannelBaseName->empty()
              ? new ReleaseModePriorityAdvisorAnalysisLegacy()
              : nullptr;
 }

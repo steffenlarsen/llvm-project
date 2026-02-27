@@ -129,7 +129,7 @@ static Error bundleImages() {
     }
   }
 
-  if (Error E = writeFile(OutputFile,
+  if (Error E = writeFile(*OutputFile,
                           StringRef(BinaryData.begin(), BinaryData.size())))
     return E;
   return Error::success();
@@ -137,9 +137,9 @@ static Error bundleImages() {
 
 static Error unbundleImages() {
   ErrorOr<std::unique_ptr<MemoryBuffer>> BufferOrErr =
-      MemoryBuffer::getFileOrSTDIN(InputFile);
+      MemoryBuffer::getFileOrSTDIN(*InputFile);
   if (std::error_code EC = BufferOrErr.getError())
-    return createFileError(InputFile, EC);
+    return createFileError(*InputFile, EC);
   std::unique_ptr<MemoryBuffer> Buffer = std::move(*BufferOrErr);
 
   // This data can be misaligned if extracted from an archive.
@@ -203,7 +203,7 @@ static Error unbundleImages() {
       uint64_t Idx = 0;
       for (const OffloadBinary *Binary : Extracted) {
         StringRef Filename =
-            Saver.save(sys::path::stem(InputFile) + "-" + Binary->getTriple() +
+            Saver.save(sys::path::stem(*InputFile) + "-" + Binary->getTriple() +
                        "-" + Binary->getArch() + "." + std::to_string(Idx++) +
                        "." + getImageKindName(Binary->getImageKind()));
         if (Error E = writeFile(Filename, Binary->getImage()))
@@ -229,7 +229,7 @@ int main(int argc, const char **argv) {
         << "'clang-offload-packager' is deprecated. Use 'llvm-offload-binary' "
            "instead.\n";
 
-  if (Help || (OutputFile.empty() && InputFile.empty())) {
+  if (Help || (OutputFile->empty() && InputFile->empty())) {
     cl::PrintHelpMessage();
     return EXIT_SUCCESS;
   }
@@ -240,16 +240,16 @@ int main(int argc, const char **argv) {
     return EXIT_FAILURE;
   };
 
-  if (!InputFile.empty() && !OutputFile.empty())
+  if (!InputFile->empty() && !OutputFile->empty())
     return reportError(
         createStringError(inconvertibleErrorCode(),
                           "Packaging to an output file and extracting from an "
                           "input file are mutually exclusive."));
 
-  if (!OutputFile.empty()) {
+  if (!OutputFile->empty()) {
     if (Error Err = bundleImages())
       return reportError(std::move(Err));
-  } else if (!InputFile.empty()) {
+  } else if (!InputFile->empty()) {
     if (Error Err = unbundleImages())
       return reportError(std::move(Err));
   }

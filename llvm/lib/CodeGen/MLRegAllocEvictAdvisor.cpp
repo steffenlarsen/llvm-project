@@ -369,14 +369,14 @@ public:
   getAdvisor(const MachineFunction &MF, const RAGreedy &RA,
              MachineBlockFrequencyInfo *MBFI, MachineLoopInfo *Loops) override {
     if (!Runner) {
-      if (InteractiveChannelBaseName.empty())
+      if (InteractiveChannelBaseName->empty())
         Runner = std::make_unique<ReleaseModeModelRunner<CompiledModelType>>(
             MF.getFunction().getContext(), InputFeatures, DecisionName);
       else
         Runner = std::make_unique<InteractiveModelRunner>(
             MF.getFunction().getContext(), InputFeatures, DecisionSpec,
-            InteractiveChannelBaseName + ".out",
-            InteractiveChannelBaseName + ".in");
+            *InteractiveChannelBaseName + ".out",
+            *InteractiveChannelBaseName + ".in");
     }
     assert(MBFI && Loops &&
            "Invalid provider state: must have analysis available");
@@ -1035,7 +1035,7 @@ llvm::createDevelopmentModeAdvisorProvider(LLVMContext &Ctx) {
 RegAllocEvictionAdvisorAnalysisLegacy *
 llvm::createReleaseModeAdvisorAnalysisLegacy() {
   return llvm::isEmbeddedModelEvaluatorValid<CompiledModelType>() ||
-                 !InteractiveChannelBaseName.empty()
+                 !InteractiveChannelBaseName->empty()
              ? new ReleaseModeEvictionAdvisorAnalysisLegacy()
              : nullptr;
 }

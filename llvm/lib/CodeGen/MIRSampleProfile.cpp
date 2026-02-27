@@ -378,8 +378,8 @@ bool MIRProfileLoaderPass::runOnMachineFunction(MachineFunction &MF) {
       &getAnalysis<MachineOptimizationRemarkEmitterPass>().getORE());
 
   if (ViewBFIBefore && ViewBlockLayoutWithBFI != GVDT_None &&
-      (ViewBlockFreqFuncName.empty() ||
-       MF.getFunction().getName() == ViewBlockFreqFuncName)) {
+      (ViewBlockFreqFuncName->empty() ||
+       MF.getFunction().getName() == *ViewBlockFreqFuncName)) {
     MBFI->view("MIR_Prof_loader_b." + MF.getName(), false);
   }
 
@@ -389,8 +389,8 @@ bool MIRProfileLoaderPass::runOnMachineFunction(MachineFunction &MF) {
                     *&getAnalysis<MachineLoopInfoWrapperPass>().getLI());
 
   if (ViewBFIAfter && ViewBlockLayoutWithBFI != GVDT_None &&
-      (ViewBlockFreqFuncName.empty() ||
-       MF.getFunction().getName() == ViewBlockFreqFuncName)) {
+      (ViewBlockFreqFuncName->empty() ||
+       MF.getFunction().getName() == *ViewBlockFreqFuncName)) {
     MBFI->view("MIR_prof_loader_a." + MF.getName(), false);
   }
 

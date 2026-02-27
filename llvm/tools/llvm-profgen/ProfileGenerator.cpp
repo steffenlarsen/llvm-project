@@ -174,12 +174,13 @@ void ProfileGeneratorBase::write(std::unique_ptr<SampleProfileWriter> Writer,
 }
 
 void ProfileGeneratorBase::write() {
-  auto WriterOrErr = SampleProfileWriter::create(OutputFilename, OutputFormat);
+  auto WriterOrErr =
+      SampleProfileWriter::create(*OutputFilename, *OutputFormat);
   if (std::error_code EC = WriterOrErr.getError())
-    exitWithError(EC, OutputFilename);
+    exitWithError(EC, *OutputFilename);
 
   if (UseMD5) {
-    if (OutputFormat != SPF_Ext_Binary)
+    if (*OutputFormat != SPF_Ext_Binary)
       WithColor::warning() << "-use-md5 is ignored. Specify "
                               "--format=extbinary to enable it\n";
     else

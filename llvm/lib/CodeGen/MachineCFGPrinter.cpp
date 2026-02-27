@@ -39,7 +39,7 @@ static cl::opt<bool>
 
 static void writeMCFGToDotFile(MachineFunction &MF) {
   std::string Filename =
-      (MCFGDotFilenamePrefix + "." + MF.getName() + ".dot").str();
+      (*MCFGDotFilenamePrefix + "." + MF.getName() + ".dot").str();
   errs() << "Writing '" << Filename << "'...";
 
   std::error_code EC;
@@ -83,7 +83,7 @@ INITIALIZE_PASS(MachineCFGPrinter, DEBUG_TYPE, "Machine CFG Printer Pass",
 MachineCFGPrinter::MachineCFGPrinter() : MachineFunctionPass(ID) {}
 
 bool MachineCFGPrinter::runOnMachineFunction(MachineFunction &MF) {
-  if (!MCFGFuncName.empty() && !MF.getName().contains(MCFGFuncName))
+  if (!MCFGFuncName->empty() && !MF.getName().contains(*MCFGFuncName))
     return false;
   errs() << "Writing Machine CFG for function ";
   errs().write_escaped(MF.getName()) << '\n';

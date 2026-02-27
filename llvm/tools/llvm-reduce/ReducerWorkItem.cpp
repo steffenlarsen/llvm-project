@@ -846,8 +846,8 @@ llvm::parseReducerWorkItem(StringRef ToolName, StringRef Filename,
       // DataLayout is already set in the module since we want to use this
       // callback to setup the TargetMachine rather than doing it later.
       std::string IRTargetTriple = DataLayoutTargetTriple.str();
-      if (!TargetTriple.empty())
-        IRTargetTriple = Triple::normalize(TargetTriple);
+      if (!TargetTriple->empty())
+        IRTargetTriple = Triple::normalize(*TargetTriple);
       TheTriple = Triple(IRTargetTriple);
       if (TheTriple.getTriple().empty())
         TheTriple.setTriple(sys::getDefaultTargetTriple());

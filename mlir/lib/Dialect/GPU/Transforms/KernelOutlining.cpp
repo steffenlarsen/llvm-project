@@ -338,8 +338,8 @@ public:
 
   LogicalResult initialize(MLIRContext *context) override {
     // Initialize the data layout specification from the data layout string.
-    if (!dataLayoutStr.empty()) {
-      Attribute resultAttr = mlir::parseAttribute(dataLayoutStr, context);
+    if (!dataLayoutStr->empty()) {
+      Attribute resultAttr = mlir::parseAttribute(*dataLayoutStr, context);
       if (!resultAttr)
         return failure();
 

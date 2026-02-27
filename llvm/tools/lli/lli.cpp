@@ -436,7 +436,7 @@ int main(int argc, char **argv, char * const *envp) {
 
   ExitOnErr(loadDylibs());
 
-  if (EntryFunc.empty()) {
+  if (EntryFunc->empty()) {
     WithColor::error(errs(), argv[0])
         << "--entry-function name cannot be empty\n";
     exit(1);
@@ -452,14 +452,14 @@ int main(int argc, char **argv, char * const *envp) {
 
   // Load the bitcode...
   SMDiagnostic Err;
-  std::unique_ptr<Module> Owner = parseIRFile(InputFile, Err, Context);
+  std::unique_ptr<Module> Owner = parseIRFile(*InputFile, Err, Context);
   Module *Mod = Owner.get();
   if (!Mod)
     reportError(Err, argv[0]);
 
   if (EnableCacheManager) {
     std::string CacheName("file:");
-    CacheName.append(InputFile);
+    CacheName.append(*InputFile);
     Mod->setModuleIdentifier(CacheName);
   }
 
@@ -486,8 +486,8 @@ int main(int argc, char **argv, char * const *envp) {
                         : EngineKind::JIT);
 
   // If we are supposed to override the target triple, do so now.
-  if (!TargetTriple.empty())
-    Mod->setTargetTriple(Triple(Triple::normalize(TargetTriple)));
+  if (!TargetTriple->empty())
+    Mod->setTargetTriple(Triple(Triple::normalize(*TargetTriple)));
 
   // Enable MCJIT if desired.
   RTDyldMemoryManager *RTDyldMM = nullptr;
@@ -510,7 +510,7 @@ int main(int argc, char **argv, char * const *envp) {
   builder.setOptLevel(getOptLevel());
 
   TargetOptions Options =
-      codegen::InitTargetOptionsFromCodeGenFlags(Triple(TargetTriple));
+      codegen::InitTargetOptionsFromCodeGenFlags(Triple(*TargetTriple));
   if (codegen::getFloatABIForCalls() != FloatABI::Default)
     Options.FloatABIType = codegen::getFloatABIForCalls();
 
@@ -605,13 +605,13 @@ int main(int argc, char **argv, char * const *envp) {
 
   // If the user specifically requested an argv[0] to pass into the program,
   // do it now.
-  if (!FakeArgv0.empty()) {
-    InputFile = static_cast<std::string>(FakeArgv0);
+  if (!FakeArgv0->empty()) {
+    InputFile = *FakeArgv0;
   } else {
     // Otherwise, if there is a .bc suffix on the executable strip it off, it
     // might confuse the program.
-    if (StringRef(InputFile).ends_with(".bc"))
-      InputFile.erase(InputFile.length() - 3);
+    if (StringRef(*InputFile).ends_with(".bc"))
+      InputFile->erase(InputFile->length() - 3);
   }
 
   // Add the module's name to the start of the vector of arguments to main().
@@ -622,10 +622,10 @@ int main(int argc, char **argv, char * const *envp) {
   // using the contents of Args to determine argc & argv, and the contents of
   // EnvVars to determine envp.
   //
-  Function *EntryFn = Mod->getFunction(EntryFunc);
+  Function *EntryFn = Mod->getFunction(*EntryFunc);
   if (!EntryFn) {
     WithColor::error(errs(), argv[0])
-        << '\'' << EntryFunc << "\' function not found in module.\n";
+        << '\'' << *EntryFunc << "\' function not found in module.\n";
     return -1;
   }
 
@@ -643,13 +643,13 @@ int main(int argc, char **argv, char * const *envp) {
     WithColor::note() << "defaulting to local execution\n";
     return -1;
 #else
-    if (ChildExecPath.empty()) {
+    if (ChildExecPath->empty()) {
       WithColor::error(errs(), argv[0])
           << "-remote-mcjit requires -mcjit-remote-process.\n";
       exit(1);
-    } else if (!sys::fs::can_execute(ChildExecPath)) {
+    } else if (!sys::fs::can_execute(*ChildExecPath)) {
       WithColor::error(errs(), argv[0])
-          << "unable to find usable child executable: '" << ChildExecPath
+          << "unable to find usable child executable: '" << *ChildExecPath
           << "'\n";
       return -1;
     }
@@ -919,7 +919,7 @@ static int runOrcJIT(const char *ProgName) {
 
   // Parse the main module.
   orc::ThreadSafeContext TSCtx(std::make_unique<LLVMContext>());
-  auto MainModule = ExitOnErr(loadModule(InputFile, TSCtx));
+  auto MainModule = ExitOnErr(loadModule(*InputFile, TSCtx));
 
   // Get TargetTriple and DataLayout from the main module if they're explicitly
   // set.
@@ -1000,8 +1000,8 @@ static int runOrcJIT(const char *ProgName) {
   // Set up LLJIT platform.
   LLJITPlatform P = Platform;
   if (P == LLJITPlatform::Auto)
-    P = OrcRuntime.empty() ? LLJITPlatform::GenericIR
-                           : LLJITPlatform::ExecutorNative;
+    P = OrcRuntime->empty() ? LLJITPlatform::GenericIR
+                            : LLJITPlatform::ExecutorNative;
 
   switch (P) {
   case LLJITPlatform::ExecutorNative: {
@@ -1168,9 +1168,9 @@ static int runOrcJIT(const char *ProgName) {
 
   // Resolve and run the main function.
   using MainFnTy = int(int, char *[]);
-  auto MainAddr = ExitOnErr(J->lookup(EntryFunc));
+  auto MainAddr = ExitOnErr(J->lookup(*EntryFunc));
   auto MainFn = MainAddr.toPtr<MainFnTy *>();
-  int Result = orc::runAsMain(MainFn, InputArgv, StringRef(InputFile));
+  int Result = orc::runAsMain(MainFn, InputArgv, StringRef(*InputFile));
 
   // Wait for -entry-point threads.
   for (auto &AltEntryThread : AltEntryThreads)
@@ -1225,9 +1225,9 @@ static Expected<std::unique_ptr<orc::ExecutorProcessControl>> launchRemote() {
     // Execute the child process.
     std::unique_ptr<char[]> ChildPath, ChildIn, ChildOut;
     {
-      ChildPath.reset(new char[ChildExecPath.size() + 1]);
-      llvm::copy(ChildExecPath, &ChildPath[0]);
-      ChildPath[ChildExecPath.size()] = '\0';
+      ChildPath.reset(new char[ChildExecPath->size() + 1]);
+      llvm::copy(*ChildExecPath, &ChildPath[0]);
+      ChildPath[ChildExecPath->size()] = '\0';
       std::string ChildInStr = utostr(PipeFD[0][0]);
       ChildIn.reset(new char[ChildInStr.size() + 1]);
       llvm::copy(ChildInStr, &ChildIn[0]);
@@ -1239,7 +1239,7 @@ static Expected<std::unique_ptr<orc::ExecutorProcessControl>> launchRemote() {
     }
 
     char * const args[] = { &ChildPath[0], &ChildIn[0], &ChildOut[0], nullptr };
-    int rc = execv(ChildExecPath.c_str(), args);
+    int rc = execv(ChildExecPath->c_str(), args);
     if (rc != 0)
       perror("Error executing child process: ");
     llvm_unreachable("Error executing child process");

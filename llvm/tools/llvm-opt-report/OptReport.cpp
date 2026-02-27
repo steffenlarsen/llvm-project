@@ -154,14 +154,14 @@ typedef std::map<std::string, std::map<int, std::map<std::string, std::map<int,
 
 static bool readLocationInfo(LocationInfoTy &LocationInfo) {
   ErrorOr<std::unique_ptr<MemoryBuffer>> Buf =
-      MemoryBuffer::getFile(InputFileName.c_str());
+      MemoryBuffer::getFile(InputFileName->c_str());
   if (std::error_code EC = Buf.getError()) {
     WithColor::error() << "Can't open file " << InputFileName << ": "
                        << EC.message() << "\n";
     return false;
   }
 
-  Expected<remarks::Format> Format = remarks::parseFormat(ParserFormat);
+  Expected<remarks::Format> Format = remarks::parseFormat(*ParserFormat);
   if (!Format) {
     handleAllErrors(Format.takeError(), [&](const ErrorInfoBase &PE) {
       PE.log(WithColor::error());
@@ -263,9 +263,9 @@ static bool readLocationInfo(LocationInfoTy &LocationInfo) {
 
 static bool writeReport(LocationInfoTy &LocationInfo) {
   std::error_code EC;
-  llvm::raw_fd_ostream OS(OutputFileName, EC, llvm::sys::fs::OF_TextWithCRLF);
+  llvm::raw_fd_ostream OS(*OutputFileName, EC, llvm::sys::fs::OF_TextWithCRLF);
   if (EC) {
-    WithColor::error() << "Can't open file " << OutputFileName << ": "
+    WithColor::error() << "Can't open file " << *OutputFileName << ": "
                        << EC.message() << "\n";
     return false;
   }
@@ -273,8 +273,8 @@ static bool writeReport(LocationInfoTy &LocationInfo) {
   bool FirstFile = true;
   for (auto &FI : LocationInfo) {
     SmallString<128> FileName(FI.first);
-    if (!InputRelDir.empty())
-      sys::path::make_absolute(InputRelDir, FileName);
+    if (!InputRelDir->empty())
+      sys::path::make_absolute(*InputRelDir, FileName);
 
     const auto &FileInfo = FI.second;
 

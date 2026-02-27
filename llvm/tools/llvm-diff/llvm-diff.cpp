@@ -73,8 +73,8 @@ int main(int argc, char **argv) {
   LLVMContext Context;
 
   // Load both modules.  Die if that fails.
-  std::unique_ptr<Module> LModule = readModule(Context, LeftFilename);
-  std::unique_ptr<Module> RModule = readModule(Context, RightFilename);
+  std::unique_ptr<Module> LModule = readModule(Context, *LeftFilename);
+  std::unique_ptr<Module> RModule = readModule(Context, *RightFilename);
   if (!LModule || !RModule) return 1;
 
   DiffConsumer Consumer;

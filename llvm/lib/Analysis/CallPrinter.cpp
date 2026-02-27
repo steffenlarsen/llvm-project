@@ -221,8 +221,8 @@ namespace {
 void doCallGraphDOTPrinting(
     Module &M, function_ref<BlockFrequencyInfo *(Function &)> LookupBFI) {
   std::string Filename;
-  if (!CallGraphDotFilenamePrefix.empty())
-    Filename = (CallGraphDotFilenamePrefix + ".callgraph.dot");
+  if (!CallGraphDotFilenamePrefix->empty())
+    Filename = (*CallGraphDotFilenamePrefix + ".callgraph.dot");
   else
     Filename = (std::string(M.getModuleIdentifier()) + ".callgraph.dot");
   errs() << "Writing '" << Filename << "'...";

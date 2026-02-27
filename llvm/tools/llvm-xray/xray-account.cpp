@@ -444,22 +444,22 @@ template <> struct llvm::format_provider<RecordTypes> {
 
 static CommandRegistration Unused(&Account, []() -> Error {
   InstrumentationMap Map;
-  if (!AccountInstrMap.empty()) {
-    auto InstrumentationMapOrError = loadInstrumentationMap(AccountInstrMap);
+  if (!AccountInstrMap->empty()) {
+    auto InstrumentationMapOrError = loadInstrumentationMap(*AccountInstrMap);
     if (!InstrumentationMapOrError)
       return joinErrors(make_error<StringError>(
                             Twine("Cannot open instrumentation map '") +
-                                AccountInstrMap + "'",
+                                *AccountInstrMap + "'",
                             std::make_error_code(std::errc::invalid_argument)),
                         InstrumentationMapOrError.takeError());
     Map = std::move(*InstrumentationMapOrError);
   }
 
   std::error_code EC;
-  raw_fd_ostream OS(AccountOutput, EC, sys::fs::OpenFlags::OF_TextWithCRLF);
+  raw_fd_ostream OS(*AccountOutput, EC, sys::fs::OpenFlags::OF_TextWithCRLF);
   if (EC)
     return make_error<StringError>(
-        Twine("Cannot open file '") + AccountOutput + "' for writing.", EC);
+        Twine("Cannot open file '") + *AccountOutput + "' for writing.", EC);
 
   const auto &FunctionAddresses = Map.getFunctionAddresses();
   symbolize::LLVMSymbolizer Symbolizer;
@@ -467,11 +467,11 @@ static CommandRegistration Unused(&Account, []() -> Error {
                                       FunctionAddresses);
   LatencyAccountant FCA(FuncIdHelper, AccountRecursiveCallsOnly,
                         AccountDeduceSiblingCalls);
-  auto TraceOrErr = loadTraceFile(AccountInput);
+  auto TraceOrErr = loadTraceFile(*AccountInput);
   if (!TraceOrErr)
     return joinErrors(
         make_error<StringError>(
-            Twine("Failed loading input file '") + AccountInput + "'",
+            Twine("Failed loading input file '") + *AccountInput + "'",
             std::make_error_code(std::errc::executable_format_error)),
         TraceOrErr.takeError());
 
@@ -499,7 +499,7 @@ static CommandRegistration Unused(&Account, []() -> Error {
     }
     if (!AccountKeepGoing)
       return make_error<StringError>(
-          Twine("Failed accounting function calls in file '") + AccountInput +
+          Twine("Failed accounting function calls in file '") + *AccountInput +
               "'.",
           std::make_error_code(std::errc::executable_format_error));
   }

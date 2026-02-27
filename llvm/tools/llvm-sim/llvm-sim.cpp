@@ -113,7 +113,7 @@ int main(int argc, const char *argv[]) {
   LLVMContext CurrContext;
   SMDiagnostic Err;
   std::unique_ptr<Module> ModuleToAnalyze =
-      parseIRFile(InputSourceFile, Err, CurrContext);
+      parseIRFile(*InputSourceFile, Err, CurrContext);
 
   if (!ModuleToAnalyze) {
     Err.print(argv[0], errs());
@@ -138,7 +138,7 @@ int main(int argc, const char *argv[]) {
       SimIdent.findSimilarity(*ModuleToAnalyze);
 
   std::error_code E =
-      exportToFile(OutputFilename, SimilaritySections, LLVMInstNum);
+      exportToFile(*OutputFilename, SimilaritySections, LLVMInstNum);
   if (E) {
     errs() << argv[0] << ": " << E.message() << '\n';
     return 2;

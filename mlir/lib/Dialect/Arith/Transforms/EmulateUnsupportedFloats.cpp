@@ -133,10 +133,10 @@ void EmulateUnsupportedFloatsPass::runOnOperation() {
   Type targetType;
 
   std::optional<FloatType> maybeTargetType =
-      arith::parseFloatType(ctx, targetTypeStr);
+      arith::parseFloatType(ctx, *targetTypeStr);
   if (!maybeTargetType) {
     emitError(UnknownLoc::get(ctx), "could not map target type '" +
-                                        targetTypeStr +
+                                        *targetTypeStr +
                                         "' to a known floating-point type");
     return signalPassFailure();
   }

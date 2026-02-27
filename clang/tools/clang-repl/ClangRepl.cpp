@@ -115,7 +115,7 @@ static llvm::Error sanitizeOopArguments(const char *ArgV0) {
   // -oop-executor or -oop-executor-connect mode.
   //
   // FIXME: Remove once we enable remote slab allocation.
-  if (SlabAllocateSizeString != "") {
+  if (*SlabAllocateSizeString != "") {
     if (OOPExecutor.getNumOccurrences() ||
         OOPExecutorConnect.getNumOccurrences())
       return llvm::make_error<llvm::StringError>(
@@ -129,7 +129,7 @@ static llvm::Error sanitizeOopArguments(const char *ArgV0) {
 
   // If -oop-executor was used but no value was specified then use a sensible
   // default.
-  if (!!OOPExecutor.getNumOccurrences() && OOPExecutor.empty()) {
+  if (!!OOPExecutor.getNumOccurrences() && OOPExecutor->empty()) {
     llvm::SmallString<256> OOPExecutorPath(llvm::sys::fs::getMainExecutable(
         ArgV0, reinterpret_cast<void *>(&sanitizeOopArguments)));
     llvm::sys::path::remove_filename(OOPExecutorPath);
@@ -295,14 +295,14 @@ int main(int argc, const char **argv) {
   CB.SetCompilerArgs(ClangArgv);
 
   auto IEB = std::make_unique<clang::IncrementalExecutorBuilder>();
-  IEB->IsOutOfProcess = !OOPExecutor.empty() || !OOPExecutorConnect.empty();
+  IEB->IsOutOfProcess = !OOPExecutor->empty() || !OOPExecutorConnect->empty();
   IEB->OOPExecutor = OOPExecutor;
-  if (!OrcRuntimePath.empty())
-    IEB->OrcRuntimePath = OrcRuntimePath;
+  if (!OrcRuntimePath->empty())
+    IEB->OrcRuntimePath = *OrcRuntimePath;
   else
     CB.SetDriverCompilationCallback(IEB->UpdateOrcRuntimePathCB);
 
-  auto SizeOrErr = getSlabAllocSize(SlabAllocateSizeString);
+  auto SizeOrErr = getSlabAllocSize(*SlabAllocateSizeString);
   if (!SizeOrErr) {
     llvm::logAllUnhandledErrors(SizeOrErr.takeError(), llvm::errs(), "error: ");
     return EXIT_FAILURE;
@@ -312,13 +312,13 @@ int main(int argc, const char **argv) {
 
   std::unique_ptr<clang::CompilerInstance> DeviceCI;
   if (CudaEnabled) {
-    if (!CudaPath.empty())
-      CB.SetCudaSDK(CudaPath);
+    if (!CudaPath->empty())
+      CB.SetCudaSDK(*CudaPath);
 
-    if (OffloadArch.empty()) {
+    if (OffloadArch->empty()) {
       OffloadArch = "sm_35";
     }
-    CB.SetOffloadArch(OffloadArch);
+    CB.SetOffloadArch(*OffloadArch);
 
     DeviceCI = ExitOnErr(CB.CreateCudaDevice());
   }
@@ -348,10 +348,10 @@ int main(int argc, const char **argv) {
     Interp = ExitOnErr(
         clang::Interpreter::createWithCUDA(std::move(CI), std::move(DeviceCI)));
 
-    if (CudaPath.empty()) {
+    if (CudaPath->empty()) {
       ExitOnErr(Interp->LoadDynamicLibrary("libcudart.so"));
     } else {
-      auto CudaRuntimeLibPath = CudaPath + "/lib/libcudart.so";
+      auto CudaRuntimeLibPath = *CudaPath + "/lib/libcudart.so";
       ExitOnErr(Interp->LoadDynamicLibrary(CudaRuntimeLibPath.c_str()));
     }
   } else {

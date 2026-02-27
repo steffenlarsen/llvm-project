@@ -697,7 +697,7 @@ class WorkloadImportsManager : public ModuleImportsManager {
       });
     };
     std::error_code EC;
-    auto BufferOrErr = MemoryBuffer::getFileOrSTDIN(WorkloadDefinitions);
+    auto BufferOrErr = MemoryBuffer::getFileOrSTDIN(*WorkloadDefinitions);
     if (std::error_code EC = BufferOrErr.getError()) {
       report_fatal_error("Failed to open context file");
       return;
@@ -754,7 +754,7 @@ class WorkloadImportsManager : public ModuleImportsManager {
 
   void loadFromCtxProf() {
     std::error_code EC;
-    auto BufferOrErr = MemoryBuffer::getFileOrSTDIN(UseCtxProfile);
+    auto BufferOrErr = MemoryBuffer::getFileOrSTDIN(*UseCtxProfile);
     if (std::error_code EC = BufferOrErr.getError()) {
       report_fatal_error("Failed to open contextual profile file");
       return;
@@ -816,12 +816,12 @@ public:
       const ModuleSummaryIndex &Index,
       DenseMap<StringRef, FunctionImporter::ExportSetTy> *ExportLists)
       : ModuleImportsManager(IsPrevailing, Index, ExportLists) {
-    if (UseCtxProfile.empty() == WorkloadDefinitions.empty()) {
+    if (UseCtxProfile->empty() == WorkloadDefinitions->empty()) {
       report_fatal_error(
           "Pass only one of: -thinlto-pgo-ctx-prof or -thinlto-workload-def");
       return;
     }
-    if (!UseCtxProfile.empty())
+    if (!UseCtxProfile->empty())
       loadFromCtxProf();
     else
       loadFromJson();
@@ -843,7 +843,7 @@ std::unique_ptr<ModuleImportsManager> ModuleImportsManager::create(
         IsPrevailing,
     const ModuleSummaryIndex &Index,
     DenseMap<StringRef, FunctionImporter::ExportSetTy> *ExportLists) {
-  if (WorkloadDefinitions.empty() && UseCtxProfile.empty()) {
+  if (WorkloadDefinitions->empty() && UseCtxProfile->empty()) {
     LLVM_DEBUG(dbgs() << "[Workload] Using the regular imports manager.\n");
     return std::unique_ptr<ModuleImportsManager>(
         new ModuleImportsManager(IsPrevailing, Index, ExportLists));
@@ -2075,13 +2075,13 @@ Expected<bool> FunctionImporter::importFunctions(
 static bool doImportingForModuleForTest(
     Module &M, function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
                    isPrevailing) {
-  if (SummaryFile.empty())
+  if (SummaryFile->empty())
     report_fatal_error("error: -function-import requires -summary-file\n");
   Expected<std::unique_ptr<ModuleSummaryIndex>> IndexPtrOrErr =
-      getModuleSummaryIndexForFile(SummaryFile);
+      getModuleSummaryIndexForFile(*SummaryFile);
   if (!IndexPtrOrErr) {
     logAllUnhandledErrors(IndexPtrOrErr.takeError(), errs(),
-                          "Error loading file '" + SummaryFile + "': ");
+                          "Error loading file '" + *SummaryFile + "': ");
     return false;
   }
   std::unique_ptr<ModuleSummaryIndex> Index = std::move(*IndexPtrOrErr);

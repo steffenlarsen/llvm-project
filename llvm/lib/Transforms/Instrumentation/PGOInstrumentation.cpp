@@ -746,7 +746,7 @@ void FuncPGOInstrumentation<Edge, BBInfo>::computeCFGHash() {
                     << ", High32 CRC = " << JCH.getCRC()
                     << ", Hash = " << FunctionHash << "\n";);
 
-  if (PGOTraceFuncHash != "-" && F.getName().contains(PGOTraceFuncHash))
+  if (*PGOTraceFuncHash != "-" && F.getName().contains(*PGOTraceFuncHash))
     dbgs() << "Funcname=" << F.getName() << ", Hash=" << FunctionHash
            << " in building " << F.getParent()->getSourceFileName() << "\n";
 }
@@ -2281,8 +2281,8 @@ static bool annotateAllFunctions(
     else if (FreqAttr == PGOUseFunc::FFA_Hot)
       HotFunctions.push_back(&F);
     if (PGOViewCounts != PGOVCT_None &&
-        (ViewBlockFreqFuncName.empty() ||
-         F.getName() == ViewBlockFreqFuncName)) {
+        (ViewBlockFreqFuncName->empty() ||
+         F.getName() == *ViewBlockFreqFuncName)) {
       LoopInfo LI{DominatorTree(F)};
       std::unique_ptr<BranchProbabilityInfo> NewBPI =
           std::make_unique<BranchProbabilityInfo>(F, LI);
@@ -2296,10 +2296,10 @@ static bool annotateAllFunctions(
       }
     }
     if (PGOViewRawCounts != PGOVCT_None &&
-        (ViewBlockFreqFuncName.empty() ||
-         F.getName() == ViewBlockFreqFuncName)) {
+        (ViewBlockFreqFuncName->empty() ||
+         F.getName() == *ViewBlockFreqFuncName)) {
       if (PGOViewRawCounts == PGOVCT_Graph)
-        if (ViewBlockFreqFuncName.empty())
+        if (ViewBlockFreqFuncName->empty())
           WriteGraph(&Func, Twine("PGORawCounts_") + Func.getFunc().getName());
         else
           ViewGraph(&Func, Twine("PGORawCounts_") + Func.getFunc().getName());
@@ -2361,10 +2361,10 @@ PGOInstrumentationUse::PGOInstrumentationUse(
     : ProfileFileName(std::move(Filename)),
       ProfileRemappingFileName(std::move(RemappingFilename)), IsCS(IsCS),
       FS(std::move(VFS)) {
-  if (!PGOTestProfileFile.empty())
-    ProfileFileName = PGOTestProfileFile;
-  if (!PGOTestProfileRemappingFile.empty())
-    ProfileRemappingFileName = PGOTestProfileRemappingFile;
+  if (!PGOTestProfileFile->empty())
+    ProfileFileName = *PGOTestProfileFile;
+  if (!PGOTestProfileRemappingFile->empty())
+    ProfileRemappingFileName = *PGOTestProfileRemappingFile;
   if (!FS)
     FS = vfs::getRealFileSystem();
 }

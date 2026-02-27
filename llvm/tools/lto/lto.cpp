@@ -567,18 +567,18 @@ thinlto_code_gen_t thinlto_create_codegen(void) {
     assert(CGOptLevelOrNone);
     CodeGen->setCodeGenOptLevel(*CGOptLevelOrNone);
   }
-  if (!ThinLTOCacheDir.empty()) {
-    auto Err = llvm::sys::fs::create_directories(ThinLTOCacheDir);
+  if (!ThinLTOCacheDir->empty()) {
+    auto Err = llvm::sys::fs::create_directories(*ThinLTOCacheDir);
     if (Err)
       report_fatal_error(Twine("Unable to create thinLTO cache directory: ") +
                          Err.message());
     bool result;
-    Err = llvm::sys::fs::is_directory(ThinLTOCacheDir, result);
+    Err = llvm::sys::fs::is_directory(*ThinLTOCacheDir, result);
     if (Err || !result)
       report_fatal_error(Twine("Unable to get status of thinLTO cache path or "
                                "path is not a directory: ") +
                          Err.message());
-    CodeGen->setCacheDir(ThinLTOCacheDir);
+    CodeGen->setCacheDir(*ThinLTOCacheDir);
 
     CodeGen->setCachePruningInterval(ThinLTOCachePruningInterval);
     CodeGen->setCacheEntryExpiration(ThinLTOCacheEntryExpiration);

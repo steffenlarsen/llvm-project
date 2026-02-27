@@ -186,7 +186,7 @@ Error useCollectRemark(StringRef Buffer, Counter &Counter, Filters &Filter) {
       Counter.collect(Remark);
   }
 
-  if (auto E = Counter.print(OutputFileName))
+  if (auto E = Counter.print(*OutputFileName))
     return E;
   auto E = MaybeRemark.takeError();
   if (!E.isA<EndOfFileError>())
@@ -197,7 +197,7 @@ Error useCollectRemark(StringRef Buffer, Counter &Counter, Filters &Filter) {
 
 static Error collectRemarks() {
   // Create a parser for the user-specified input format.
-  auto MaybeBuf = getInputMemoryBuffer(InputFileName);
+  auto MaybeBuf = getInputMemoryBuffer(*InputFileName);
   if (!MaybeBuf)
     return MaybeBuf.takeError();
   StringRef Buffer = (*MaybeBuf)->getBuffer();

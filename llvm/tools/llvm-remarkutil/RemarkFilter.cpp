@@ -40,7 +40,7 @@ static Error tryFilter() {
     return MaybeFilter.takeError();
   Filters &Filter = *MaybeFilter;
 
-  auto MaybeBuf = getInputMemoryBuffer(InputFileName);
+  auto MaybeBuf = getInputMemoryBuffer(*InputFileName);
   if (!MaybeBuf)
     return MaybeBuf.takeError();
   auto MaybeParser = createRemarkParser(InputFormat, (*MaybeBuf)->getBuffer());
@@ -49,9 +49,9 @@ static Error tryFilter() {
   auto &Parser = **MaybeParser;
 
   Format SerializerFormat =
-      getSerializerFormat(OutputFileName, OutputFormat, Parser.ParserFormat);
+      getSerializerFormat(*OutputFileName, OutputFormat, Parser.ParserFormat);
 
-  auto MaybeOF = getOutputFileForRemarks(OutputFileName, SerializerFormat);
+  auto MaybeOF = getOutputFileForRemarks(*OutputFileName, SerializerFormat);
   if (!MaybeOF)
     return MaybeOF.takeError();
   auto OF = std::move(*MaybeOF);

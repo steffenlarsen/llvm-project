@@ -108,7 +108,7 @@ static bool needsFP(Function &F) {
 
 
 bool MipsOs16::runOnModule(Module &M) {
-  bool usingMask = Mips32FunctionMask.length() > 0;
+  bool usingMask = Mips32FunctionMask->length() > 0;
   bool doneUsingMask = false; // this will make it stop repeating
 
   LLVM_DEBUG(dbgs() << "Run on Module MipsOs16 \n"
@@ -126,9 +126,9 @@ bool MipsOs16::runOnModule(Module &M) {
     LLVM_DEBUG(dbgs() << "Working on " << F.getName() << "\n");
     if (usingMask) {
       if (!doneUsingMask) {
-        if (functionIndex == Mips32FunctionMask.length())
+        if (functionIndex == Mips32FunctionMask->length())
           functionIndex = 0;
-        switch (Mips32FunctionMask[functionIndex]) {
+        switch ((*Mips32FunctionMask)[functionIndex]) {
         case '1':
           LLVM_DEBUG(dbgs() << "mask forced mips32: " << F.getName() << "\n");
           F.addFnAttr("nomips16");

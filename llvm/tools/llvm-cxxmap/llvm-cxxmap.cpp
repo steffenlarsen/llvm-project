@@ -146,24 +146,24 @@ int main(int argc, const char *argv[]) {
   cl::ParseCommandLineOptions(argc, argv, "LLVM C++ mangled name remapper\n");
 
   auto OldSymbolBufOrError =
-      MemoryBuffer::getFileOrSTDIN(OldSymbolFile, /*IsText=*/true);
+      MemoryBuffer::getFileOrSTDIN(*OldSymbolFile, /*IsText=*/true);
   if (!OldSymbolBufOrError)
-    exitWithErrorCode(OldSymbolBufOrError.getError(), OldSymbolFile);
+    exitWithErrorCode(OldSymbolBufOrError.getError(), *OldSymbolFile);
 
   auto NewSymbolBufOrError =
-      MemoryBuffer::getFileOrSTDIN(NewSymbolFile, /*IsText=*/true);
+      MemoryBuffer::getFileOrSTDIN(*NewSymbolFile, /*IsText=*/true);
   if (!NewSymbolBufOrError)
-    exitWithErrorCode(NewSymbolBufOrError.getError(), NewSymbolFile);
+    exitWithErrorCode(NewSymbolBufOrError.getError(), *NewSymbolFile);
 
   auto RemappingBufOrError =
-      MemoryBuffer::getFileOrSTDIN(RemappingFile, /*IsText=*/true);
+      MemoryBuffer::getFileOrSTDIN(*RemappingFile, /*IsText=*/true);
   if (!RemappingBufOrError)
-    exitWithErrorCode(RemappingBufOrError.getError(), RemappingFile);
+    exitWithErrorCode(RemappingBufOrError.getError(), *RemappingFile);
 
   std::error_code EC;
-  raw_fd_ostream OS(OutputFilename.data(), EC, sys::fs::OF_TextWithCRLF);
+  raw_fd_ostream OS(OutputFilename->data(), EC, sys::fs::OF_TextWithCRLF);
   if (EC)
-    exitWithErrorCode(EC, OutputFilename);
+    exitWithErrorCode(EC, *OutputFilename);
 
   remapSymbols(*OldSymbolBufOrError.get(), *NewSymbolBufOrError.get(),
                *RemappingBufOrError.get(), OS);

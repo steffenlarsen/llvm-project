@@ -1156,7 +1156,7 @@ void ThinLTOCodeGenerator::run() {
         Context.setDiscardValueNames(LTODiscardValueNames);
         Context.enableDebugTypeODRUniquing();
         auto DiagFileOrErr = lto::setupLLVMOptimizationRemarks(
-            Context, RemarksFilename, RemarksPasses, RemarksFormat,
+            Context, *RemarksFilename, *RemarksPasses, *RemarksFormat,
             RemarksWithHotness, RemarksHotnessThreshold, count);
         if (!DiagFileOrErr) {
           errs() << "Error: " << toString(DiagFileOrErr.takeError()) << "\n";

@@ -1067,7 +1067,7 @@ PassBuilder::buildModuleInlinerPipeline(OptimizationLevel Level,
   IP.EnableDeferral = false;
 
   MPM.addPass(ModuleInlinerPass(IP, UseInlineAdvisor, Phase));
-  if (!UseCtxProfile.empty() && Phase == ThinOrFullLTOPhase::ThinLTOPostLink) {
+  if (!UseCtxProfile->empty() && Phase == ThinOrFullLTOPhase::ThinLTOPostLink) {
     MPM.addPass(GlobalOptPass());
     MPM.addPass(GlobalDCEPass());
     MPM.addPass(PGOCtxProfFlatteningPass(/*IsPreThinlink=*/false));
@@ -1237,15 +1237,15 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
          "Enabling both instrumented PGO and contextual instrumentation is not "
          "supported.");
   const bool IsCtxProfUse =
-      !UseCtxProfile.empty() && Phase == ThinOrFullLTOPhase::ThinLTOPreLink;
+      !UseCtxProfile->empty() && Phase == ThinOrFullLTOPhase::ThinLTOPreLink;
 
   assert(
-      (InstrumentColdFuncOnlyPath.empty() || PGOInstrumentColdFunctionOnly) &&
+      (InstrumentColdFuncOnlyPath->empty() || PGOInstrumentColdFunctionOnly) &&
       "--instrument-cold-function-only-path is provided but "
       "--pgo-instrument-cold-function-only is not enabled");
   const bool IsColdFuncOnlyInstrGen = PGOInstrumentColdFunctionOnly &&
                                       IsPGOPreLink &&
-                                      !InstrumentColdFuncOnlyPath.empty();
+                                      !InstrumentColdFuncOnlyPath->empty();
 
   if (IsPGOInstrGen || IsPGOInstrUse || IsMemprofUse || IsCtxProfGen ||
       IsCtxProfUse || IsColdFuncOnlyInstrGen)
@@ -1836,7 +1836,7 @@ PassBuilder::buildThinLTOPreLinkDefaultPipeline(OptimizationLevel Level) {
   // In pre-link, for ctx prof use, we stop here with an instrumented IR. We let
   // thinlto use the contextual info to perform imports; then use the contextual
   // profile in the post-thinlink phase.
-  if (!UseCtxProfile.empty()) {
+  if (!UseCtxProfile->empty()) {
     addRequiredLTOPreLinkPasses(MPM);
     return MPM;
   }
@@ -1925,7 +1925,7 @@ ModulePassManager PassBuilder::buildThinLTODefaultPipeline(
     MPM.addPass(GlobalDCEPass());
     return MPM;
   }
-  if (!UseCtxProfile.empty()) {
+  if (!UseCtxProfile->empty()) {
     MPM.addPass(
         buildModuleInlinerPipeline(Level, ThinOrFullLTOPhase::ThinLTOPostLink));
   } else {
@@ -2480,5 +2480,5 @@ AAManager PassBuilder::buildDefaultAAPipeline() {
 
 bool PassBuilder::isInstrumentedPGOUse() const {
   return (PGOOpt && PGOOpt->Action == PGOOptions::IRUse) ||
-         !UseCtxProfile.empty();
+         !UseCtxProfile->empty();
 }

@@ -271,9 +271,9 @@ int main(int argc, char **argv) {
     PrintBlameContext.setValue(PrintBlameContextAll);
 
   std::unique_ptr<SpecialCaseList> SpecialCaseList;
-  if (IgnorelistFilename != "-") {
+  if (*IgnorelistFilename != "-") {
     std::string Error;
-    SpecialCaseList = SpecialCaseList::create({IgnorelistFilename},
+    SpecialCaseList = SpecialCaseList::create({*IgnorelistFilename},
                                               *vfs::getRealFileSystem(), Error);
     if (!SpecialCaseList) {
       errs() << "Failed to get ignorelist: " << Error << "\n";
@@ -281,7 +281,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  FileAnalysis Analysis = ExitOnErr(FileAnalysis::Create(InputFilename));
+  FileAnalysis Analysis = ExitOnErr(FileAnalysis::Create(*InputFilename));
   printIndirectCFInstructions(Analysis, SpecialCaseList.get());
 
   return EXIT_SUCCESS;

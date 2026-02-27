@@ -31,7 +31,7 @@ struct WrapFuncInClassPass
     Operation *rootOp = getOperation();
 
     RewritePatternSet patterns(&getContext());
-    populateWrapFuncInClass(patterns, funcName);
+    populateWrapFuncInClass(patterns, *funcName);
 
     walkAndApplyPatterns(rootOp, std::move(patterns));
   }

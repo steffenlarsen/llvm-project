@@ -1270,8 +1270,8 @@ void BranchProbabilityInfo::calculate(const Function &F, const LoopInfo &LoopI,
   EstimatedBlockWeight.clear();
   SccI.reset();
 
-  if (PrintBranchProb && (PrintBranchProbFuncName.empty() ||
-                          F.getName() == PrintBranchProbFuncName)) {
+  if (PrintBranchProb && (PrintBranchProbFuncName->empty() ||
+                          F.getName() == *PrintBranchProbFuncName)) {
     print(dbgs());
   }
 }

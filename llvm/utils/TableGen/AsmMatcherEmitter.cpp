@@ -1581,7 +1581,7 @@ void AsmMatcherInfo::buildInfo() {
     for (const CodeGenInstruction *CGI : Target.getInstructions()) {
       // If the tblgen -match-prefix option is specified (for tblgen hackers),
       // filter the set of instructions we consider.
-      if (!CGI->getName().starts_with(MatchPrefix))
+      if (!CGI->getName().starts_with(*MatchPrefix))
         continue;
 
       // Ignore "codegen only" instructions.
@@ -1614,7 +1614,7 @@ void AsmMatcherInfo::buildInfo() {
       // If the tblgen -match-prefix option is specified (for tblgen hackers),
       // filter the set of instruction aliases we consider, based on the target
       // instruction.
-      if (!Alias->ResultInst->getName().starts_with(MatchPrefix))
+      if (!Alias->ResultInst->getName().starts_with(*MatchPrefix))
         continue;
 
       StringRef V = Alias->TheDef->getValueAsString("AsmVariantName");
@@ -2939,7 +2939,7 @@ emitMnemonicAliasVariant(raw_ostream &OS, const AsmMatcherInfo &Info,
 static bool emitMnemonicAliases(raw_ostream &OS, const AsmMatcherInfo &Info,
                                 CodeGenTarget &Target) {
   // Ignore aliases when match-prefix is set.
-  if (!MatchPrefix.empty())
+  if (!MatchPrefix->empty())
     return false;
 
   ArrayRef<const Record *> Aliases =

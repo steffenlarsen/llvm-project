@@ -297,10 +297,10 @@ struct LLVMLinkDiagnosticHandler : public DiagnosticHandler {
 
 /// Import any functions requested via the -import option.
 static bool importFunctions(const char *argv0, Module &DestModule) {
-  if (SummaryIndex.empty())
+  if (SummaryIndex->empty())
     return true;
   std::unique_ptr<ModuleSummaryIndex> Index =
-      ExitOnErr(llvm::getModuleSummaryIndexForFile(SummaryIndex));
+      ExitOnErr(llvm::getModuleSummaryIndexForFile(*SummaryIndex));
 
   // Map of Module -> List of globals to import from the Module
   FunctionImporter::ImportIDTable ImportIDs;
@@ -412,9 +412,9 @@ static bool linkFiles(const char *argv0, LLVMContext &Context, Linker &L,
 
     // If a module summary index is supplied, load it so linkInModule can treat
     // local functions/variables as exported and promote if necessary.
-    if (!SummaryIndex.empty()) {
+    if (!SummaryIndex->empty()) {
       std::unique_ptr<ModuleSummaryIndex> Index =
-          ExitOnErr(llvm::getModuleSummaryIndexForFile(SummaryIndex));
+          ExitOnErr(llvm::getModuleSummaryIndexForFile(*SummaryIndex));
 
       // Conservatively mark all internal values as promoted, since this tool
       // does not do the ThinLink that would normally determine what values to
@@ -497,7 +497,7 @@ int main(int argc, char **argv) {
     errs() << "Here's the assembly:\n" << *Composite;
 
   std::error_code EC;
-  ToolOutputFile Out(OutputFilename, EC,
+  ToolOutputFile Out(*OutputFilename, EC,
                      OutputAssembly ? sys::fs::OF_TextWithCRLF
                                     : sys::fs::OF_None);
   if (EC) {

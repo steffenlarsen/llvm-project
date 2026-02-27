@@ -739,11 +739,11 @@ int main(int argc, char **argv) {
   // Figure out what stream we are supposed to write to...
   std::unique_ptr<ToolOutputFile> Out;
   // Default to standard output.
-  if (OutputFilename.empty())
+  if (OutputFilename->empty())
     OutputFilename = "-";
 
   std::error_code EC;
-  Out.reset(new ToolOutputFile(OutputFilename, EC, sys::fs::OF_None));
+  Out.reset(new ToolOutputFile(*OutputFilename, EC, sys::fs::OF_None));
   if (EC) {
     errs() << EC.message() << '\n';
     return 1;

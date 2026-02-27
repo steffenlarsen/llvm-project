@@ -228,11 +228,12 @@ void MachineBlockFrequencyInfo::calculate(
     MBFI.reset(new ImplType);
   MBFI->calculate(F, MBPI, MLI);
   if (ViewMachineBlockFreqPropagationDAG != GVDT_None &&
-      (ViewBlockFreqFuncName.empty() || F.getName() == ViewBlockFreqFuncName)) {
+      (ViewBlockFreqFuncName->empty() ||
+       F.getName() == *ViewBlockFreqFuncName)) {
     view("MachineBlockFrequencyDAGS." + F.getName());
   }
   if (PrintMachineBlockFreq &&
-      (PrintBFIFuncName.empty() || F.getName() == PrintBFIFuncName)) {
+      (PrintBFIFuncName->empty() || F.getName() == *PrintBFIFuncName)) {
     MBFI->print(dbgs());
   }
 }

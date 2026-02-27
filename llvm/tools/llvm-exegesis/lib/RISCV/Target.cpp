@@ -552,8 +552,8 @@ void RISCVSnippetGenerator<BaseT>::annotateWithVType(
     SS << "}";
 
     // Filter out some configurations, if needed.
-    if (!FilterConfig.empty()) {
-      if (!Regex(FilterConfig).match(ConfigStr))
+    if (!FilterConfig->empty()) {
+      if (!Regex(*FilterConfig).match(ConfigStr))
         continue;
     }
 

@@ -124,16 +124,17 @@ int main(int argc, char **argv) {
 
   std::error_code EC;
   std::unique_ptr<ToolOutputFile> Out(
-      new ToolOutputFile(OutputFilename, EC, sys::fs::OF_None));
+      new ToolOutputFile(*OutputFilename, EC, sys::fs::OF_None));
   if (EC) {
-    ErrHandler("failed to open '" + OutputFilename + "': " + EC.message());
+    ErrHandler("failed to open '" + *OutputFilename + "': " + EC.message());
     return 1;
   }
 
   ErrorOr<std::unique_ptr<MemoryBuffer>> Buf =
-      MemoryBuffer::getFileOrSTDIN(Input, /*IsText=*/true);
+      MemoryBuffer::getFileOrSTDIN(*Input, /*IsText=*/true);
   if (std::error_code EC = Buf.getError()) {
-    WithColor::error(errs(), ProgName) << Input << ": " << EC.message() << '\n';
+    WithColor::error(errs(), ProgName)
+        << *Input << ": " << EC.message() << '\n';
     return 1;
   }
 

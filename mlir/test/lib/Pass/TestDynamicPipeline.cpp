@@ -31,7 +31,7 @@ public:
   void getDependentDialects(DialectRegistry &registry) const override {
     OpPassManager pm(ModuleOp::getOperationName(),
                      OpPassManager::Nesting::Implicit);
-    (void)parsePassPipeline(pipeline, pm, llvm::errs());
+    (void)parsePassPipeline(*pipeline, pm, llvm::errs());
     pm.getDependentDialects(registry);
   }
 
@@ -41,9 +41,9 @@ public:
   void runOnOperation() override {
     Operation *currentOp = getOperation();
 
-    llvm::errs() << "Dynamic execute '" << pipeline << "' on "
+    llvm::errs() << "Dynamic execute '" << *pipeline << "' on "
                  << currentOp->getName() << "\n";
-    if (pipeline.empty()) {
+    if (pipeline->empty()) {
       llvm::errs() << "Empty pipeline\n";
       return;
     }
@@ -61,7 +61,7 @@ public:
     }
     OpPassManager pm(currentOp->getName().getIdentifier(),
                      OpPassManager::Nesting::Implicit);
-    (void)parsePassPipeline(pipeline, pm, llvm::errs());
+    (void)parsePassPipeline(*pipeline, pm, llvm::errs());
 
     // Check that running on the parent operation always immediately fails.
     if (runOnParent) {

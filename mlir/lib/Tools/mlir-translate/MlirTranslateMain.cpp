@@ -118,15 +118,15 @@ LogicalResult mlir::mlirTranslateMain(int argc, char **argv,
   std::string errorMessage;
   std::unique_ptr<llvm::MemoryBuffer> input;
   if (auto inputAlignment = translationsRequested[0]->getInputAlignment())
-    input = openInputFile(inputFilename, *inputAlignment, &errorMessage);
+    input = openInputFile(*inputFilename, *inputAlignment, &errorMessage);
   else
-    input = openInputFile(inputFilename, &errorMessage);
+    input = openInputFile(*inputFilename, &errorMessage);
   if (!input) {
     llvm::errs() << errorMessage << "\n";
     return failure();
   }
 
-  auto output = openOutputFile(outputFilename, &errorMessage);
+  auto output = openOutputFile(*outputFilename, &errorMessage);
   if (!output) {
     llvm::errs() << errorMessage << "\n";
     return failure();
@@ -201,8 +201,8 @@ LogicalResult mlir::mlirTranslateMain(int argc, char **argv,
   };
 
   if (failed(splitAndProcessBuffer(std::move(input), processBuffer,
-                                   output->os(), inputSplitMarker,
-                                   outputSplitMarker)))
+                                   output->os(), *inputSplitMarker,
+                                   *outputSplitMarker)))
     return failure();
 
   output->keep();

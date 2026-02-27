@@ -3603,7 +3603,7 @@ template <typename DerivedCCG, typename FuncTy, typename CallTy>
 void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::exportToDot(
     std::string Label) const {
   WriteGraph(this, "", false, Label,
-             DotFilePathPrefix + "ccg." + Label + ".dot");
+             *DotFilePathPrefix + "ccg." + Label + ".dot");
 }
 
 template <typename DerivedCCG, typename FuncTy, typename CallTy>
@@ -6389,24 +6389,24 @@ MemProfContextDisambiguation::MemProfContextDisambiguation(
     // The MemProfImportSummary should only be used for testing ThinLTO
     // distributed backend handling via opt, in which case we don't have a
     // summary from the pass pipeline.
-    assert(MemProfImportSummary.empty());
+    assert(MemProfImportSummary->empty());
     return;
   }
-  if (MemProfImportSummary.empty())
+  if (MemProfImportSummary->empty())
     return;
 
   auto ReadSummaryFile =
-      errorOrToExpected(MemoryBuffer::getFile(MemProfImportSummary));
+      errorOrToExpected(MemoryBuffer::getFile(*MemProfImportSummary));
   if (!ReadSummaryFile) {
     logAllUnhandledErrors(ReadSummaryFile.takeError(), errs(),
-                          "Error loading file '" + MemProfImportSummary +
+                          "Error loading file '" + *MemProfImportSummary +
                               "': ");
     return;
   }
   auto ImportSummaryForTestingOrErr = getModuleSummaryIndex(**ReadSummaryFile);
   if (!ImportSummaryForTestingOrErr) {
     logAllUnhandledErrors(ImportSummaryForTestingOrErr.takeError(), errs(),
-                          "Error parsing file '" + MemProfImportSummary +
+                          "Error parsing file '" + *MemProfImportSummary +
                               "': ");
     return;
   }

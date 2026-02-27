@@ -1281,13 +1281,13 @@ static mlir::GenRegistration
     genAttrDefs("gen-attrdef-defs", "Generate AttrDef definitions",
                 [](const RecordKeeper &records, raw_ostream &os) {
                   AttrDefGenerator generator(records, os);
-                  return generator.emitDefs(attrDialect);
+                  return generator.emitDefs(*attrDialect);
                 });
 static mlir::GenRegistration
     genAttrDecls("gen-attrdef-decls", "Generate AttrDef declarations",
                  [](const RecordKeeper &records, raw_ostream &os) {
                    AttrDefGenerator generator(records, os);
-                   return generator.emitDecls(attrDialect);
+                   return generator.emitDecls(*attrDialect);
                  });
 
 static mlir::GenRegistration
@@ -1319,13 +1319,13 @@ static mlir::GenRegistration
     genTypeDefs("gen-typedef-defs", "Generate TypeDef definitions",
                 [](const RecordKeeper &records, raw_ostream &os) {
                   TypeDefGenerator generator(records, os);
-                  return generator.emitDefs(typeDialect);
+                  return generator.emitDefs(*typeDialect);
                 });
 static mlir::GenRegistration
     genTypeDecls("gen-typedef-decls", "Generate TypeDef declarations",
                  [](const RecordKeeper &records, raw_ostream &os) {
                    TypeDefGenerator generator(records, os);
-                   return generator.emitDecls(typeDialect);
+                   return generator.emitDecls(*typeDialect);
                  });
 
 static mlir::GenRegistration

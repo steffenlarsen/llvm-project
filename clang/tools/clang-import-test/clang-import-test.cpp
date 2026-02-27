@@ -177,7 +177,7 @@ std::unique_ptr<CompilerInstance> BuildCompilerInstance() {
 
   {
     using namespace driver::types;
-    ID Id = lookupTypeForTypeSpecifier(Input.c_str());
+    ID Id = lookupTypeForTypeSpecifier(Input->c_str());
     assert(Id != TY_INVALID);
     if (isCXX(Id)) {
       Inv->getLangOpts().CPlusPlus = true;

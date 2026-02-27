@@ -50,7 +50,7 @@ namespace yaml2bitstream {
 static Error
 tryParseRemarksFromYAMLFile(std::vector<std::unique_ptr<Remark>> &ParsedRemarks,
                             StringTable &StrTab) {
-  auto MaybeBuf = getInputMemoryBuffer(InputFileName);
+  auto MaybeBuf = getInputMemoryBuffer(*InputFileName);
   if (!MaybeBuf)
     return MaybeBuf.takeError();
   auto MaybeParser = createRemarkParser(InputFormat, (*MaybeBuf)->getBuffer());
@@ -76,7 +76,7 @@ tryParseRemarksFromYAMLFile(std::vector<std::unique_ptr<Remark>> &ParsedRemarks,
 static Error tryReserializeYAML2Bitstream(
     const std::vector<std::unique_ptr<Remark>> &ParsedRemarks,
     StringTable &StrTab) {
-  auto MaybeOF = getOutputFileForRemarks(OutputFileName, OutputFormat);
+  auto MaybeOF = getOutputFileForRemarks(*OutputFileName, OutputFormat);
   if (!MaybeOF)
     return MaybeOF.takeError();
   auto OF = std::move(*MaybeOF);
@@ -106,7 +106,7 @@ namespace bitstream2yaml {
 /// \returns An Error if reserialization fails, or Error::success() on success.
 static Error tryBitstream2YAML() {
   // Create the serializer.
-  auto MaybeOF = getOutputFileForRemarks(OutputFileName, OutputFormat);
+  auto MaybeOF = getOutputFileForRemarks(*OutputFileName, OutputFormat);
   if (!MaybeOF)
     return MaybeOF.takeError();
   auto OF = std::move(*MaybeOF);
@@ -115,7 +115,7 @@ static Error tryBitstream2YAML() {
     return MaybeSerializer.takeError();
 
   // Create the parser.
-  auto MaybeBuf = getInputMemoryBuffer(InputFileName);
+  auto MaybeBuf = getInputMemoryBuffer(*InputFileName);
   if (!MaybeBuf)
     return MaybeBuf.takeError();
   auto Serializer = std::move(*MaybeSerializer);

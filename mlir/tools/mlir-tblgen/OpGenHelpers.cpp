@@ -50,17 +50,17 @@ mlir::tblgen::getRequestedOpDefinitions(const RecordKeeper &records) {
   if (!classDef)
     PrintFatalError("ERROR: Couldn't find the 'Op' class!\n");
 
-  Regex includeRegex(opIncFilter), excludeRegex(opExcFilter);
+  Regex includeRegex(*opIncFilter), excludeRegex(*opExcFilter);
   std::vector<const Record *> defs;
   for (const auto &def : records.getDefs()) {
     if (!def.second->isSubClassOf(classDef))
       continue;
     // Include if no include filter or include filter matches.
-    if (!opIncFilter.empty() &&
+    if (!opIncFilter->empty() &&
         !includeRegex.match(getOperationName(*def.second)))
       continue;
     // Unless there is an exclude filter and it matches.
-    if (!opExcFilter.empty() &&
+    if (!opExcFilter->empty() &&
         excludeRegex.match(getOperationName(*def.second)))
       continue;
     defs.push_back(def.second.get());

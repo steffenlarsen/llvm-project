@@ -32,10 +32,10 @@ int main(int argc, const char **argv) {
   };
 
   std::error_code EC;
-  auto Out = std::make_unique<llvm::ToolOutputFile>(OutputFileName, EC,
+  auto Out = std::make_unique<llvm::ToolOutputFile>(*OutputFileName, EC,
                                                     llvm::sys::fs::OF_None);
   if (EC) {
-    Error("failed to open '" + OutputFileName + "': " + EC.message());
+    Error("failed to open '" + *OutputFileName + "': " + EC.message());
     return EXIT_FAILURE;
   }
 

@@ -45,8 +45,8 @@ bool SeedCollection::runOnFunction(Function &F, const Analyses &A) {
           : A.getTTI()
                 .getRegisterBitWidth(TargetTransformInfo::RGK_FixedWidthVector)
                 .getFixedValue();
-  bool CollectStores = CollectSeeds.find(StoreSeedsDef) != std::string::npos;
-  bool CollectLoads = CollectSeeds.find(LoadSeedsDef) != std::string::npos;
+  bool CollectStores = CollectSeeds->find(StoreSeedsDef) != std::string::npos;
+  bool CollectLoads = CollectSeeds->find(LoadSeedsDef) != std::string::npos;
 
   // TODO: Start from innermost BBs first
   for (auto &BB : F) {

@@ -88,15 +88,15 @@ static int reportError(const char *ProgName, Twine Msg) {
 /// This functionality is really only for the benefit of the build system.
 /// It is similar to GCC's `-M*` family of options.
 static int createDependencyFile(const TGParser &Parser, const char *argv0) {
-  if (OutputFilename == "-")
+  if (*OutputFilename == "-")
     return reportError(argv0, "the option -d must be used together with -o\n");
 
   std::error_code EC;
-  ToolOutputFile DepOut(DependFilename, EC, sys::fs::OF_Text);
+  ToolOutputFile DepOut(*DependFilename, EC, sys::fs::OF_Text);
   if (EC)
-    return reportError(argv0, "error opening " + DependFilename + ":" +
+    return reportError(argv0, "error opening " + *DependFilename + ":" +
                                   EC.message() + "\n");
-  DepOut.os() << OutputFilename << ":";
+  DepOut.os() << *OutputFilename << ":";
   for (const auto &Dep : Parser.getDependencies()) {
     DepOut.os() << ' ' << Dep;
   }
@@ -138,12 +138,12 @@ int llvm::TableGenMain(const char *argv0, MultiFileTableGenMainFn MainFn) {
 
   Timer.startTimer("Parse, build records");
   ErrorOr<std::unique_ptr<MemoryBuffer>> FileOrErr =
-      MemoryBuffer::getFileOrSTDIN(InputFilename, /*IsText=*/true);
+      MemoryBuffer::getFileOrSTDIN(*InputFilename, /*IsText=*/true);
   if (std::error_code EC = FileOrErr.getError())
-    return reportError(argv0, "Could not open input file '" + InputFilename +
+    return reportError(argv0, "Could not open input file '" + *InputFilename +
                                   "': " + EC.message() + "\n");
 
-  Records.saveInputFilename(InputFilename);
+  Records.saveInputFilename(*InputFilename);
 
   // Tell SrcMgr about this buffer, which is what TGParser will pick up.
   SrcMgr.AddNewSourceBuffer(std::move(*FileOrErr), SMLoc());
@@ -170,7 +170,7 @@ int llvm::TableGenMain(const char *argv0, MultiFileTableGenMainFn MainFn) {
   unsigned status = 0;
   // ApplyCallback will return true if it did not apply any callback. In that
   // case, attempt to apply the MainFn.
-  StringRef FilenamePrefix(sys::path::stem(OutputFilename));
+  StringRef FilenamePrefix(sys::path::stem(*OutputFilename));
   if (TableGen::Emitter::ApplyCallback(Records, OutFiles, FilenamePrefix))
     status = MainFn ? MainFn(OutFiles, Records) : 1;
   Timer.stopBackendTimer();
@@ -181,16 +181,16 @@ int llvm::TableGenMain(const char *argv0, MultiFileTableGenMainFn MainFn) {
   // If it's missing, Ninja considers the output dirty. If this was below
   // the early exit below and someone deleted the .inc.d file but not the .inc
   // file, tablegen would never write the depfile.
-  if (!DependFilename.empty()) {
+  if (!DependFilename->empty()) {
     if (int Ret = createDependencyFile(Parser, argv0))
       return Ret;
   }
 
   Timer.startTimer("Write output");
-  if (int Ret = WriteOutput(argv0, OutputFilename, OutFiles.MainFile))
+  if (int Ret = WriteOutput(argv0, *OutputFilename, OutFiles.MainFile))
     return Ret;
   for (auto [Suffix, Content] : OutFiles.AdditionalFiles) {
-    SmallString<128> Filename(OutputFilename);
+    SmallString<128> Filename(*OutputFilename);
     // TODO: Format using the split-file convention when writing to stdout?
     if (Filename != "-") {
       sys::path::replace_extension(Filename, "");

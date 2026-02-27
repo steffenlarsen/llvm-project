@@ -1210,7 +1210,7 @@ int main(int argc, char **argv) {
   // Set up the input file.
   std::string errorMessage;
   std::unique_ptr<llvm::MemoryBuffer> file =
-      mlir::openInputFile(inputFilename, &errorMessage);
+      mlir::openInputFile(*inputFilename, &errorMessage);
   if (!file) {
     llvm::errs() << errorMessage << "\n";
     return 1;
@@ -1230,8 +1230,8 @@ int main(int argc, char **argv) {
 
   // Open output files.
   std::unique_ptr<llvm::ToolOutputFile> outputOdsDecl;
-  if (!outputOdsDeclFilename.empty()) {
-    outputOdsDecl = openOutputFile(outputOdsDeclFilename, &errorMessage);
+  if (!outputOdsDeclFilename->empty()) {
+    outputOdsDecl = openOutputFile(*outputOdsDeclFilename, &errorMessage);
     if (!outputOdsDecl) {
       llvm::errs() << errorMessage << "\n";
       return 1;
@@ -1239,8 +1239,8 @@ int main(int argc, char **argv) {
   }
 
   std::unique_ptr<llvm::ToolOutputFile> outputCppImpl;
-  if (!outputCppImplFilename.empty()) {
-    outputCppImpl = openOutputFile(outputCppImplFilename, &errorMessage);
+  if (!outputCppImplFilename->empty()) {
+    outputCppImpl = openOutputFile(*outputCppImplFilename, &errorMessage);
     if (!outputCppImpl) {
       llvm::errs() << errorMessage << "\n";
       return 1;

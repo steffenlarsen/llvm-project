@@ -1364,7 +1364,7 @@ void PerfScriptReader::parsePerfTraces() {
   AggregatedSamples.clear();
 
   if (SkipSymbolization)
-    writeUnsymbolizedProfile(OutputFilename);
+    writeUnsymbolizedProfile(*OutputFilename);
 }
 
 SmallVector<CleanupInstaller, 2> PerfScriptReader::TempFileCleanups;

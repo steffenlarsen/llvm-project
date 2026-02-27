@@ -4000,8 +4000,8 @@ void AADepGraph::dumpGraph() {
   static std::atomic<int> CallTimes;
   std::string Prefix;
 
-  if (!DepGraphDotFileNamePrefix.empty())
-    Prefix = DepGraphDotFileNamePrefix;
+  if (!DepGraphDotFileNamePrefix->empty())
+    Prefix = *DepGraphDotFileNamePrefix;
   else
     Prefix = "dep_graph";
   std::string Filename =

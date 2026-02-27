@@ -1107,7 +1107,7 @@ MCSection *TargetLoweringObjectFileELF::getSectionForMachineBasicBlock(
     // Function is in a regular .text section.
     StringRef FunctionName = MBB.getParent()->getName();
     if (MBB.getSectionID() == MBBSectionID::ColdSectionID) {
-      Name += BBSectionsColdTextPrefix;
+      Name += *BBSectionsColdTextPrefix;
       Name += FunctionName;
     } else if (MBB.getSectionID() == MBBSectionID::ExceptionSectionID) {
       Name += ".text.eh.";

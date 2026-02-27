@@ -367,12 +367,12 @@ void TraceConverter::exportAsChromeTraceEventFormat(const Trace &Records,
 static CommandRegistration Unused(&Convert, []() -> Error {
   // FIXME: Support conversion to BINARY when upgrading XRay trace versions.
   InstrumentationMap Map;
-  if (!ConvertInstrMap.empty()) {
-    auto InstrumentationMapOrError = loadInstrumentationMap(ConvertInstrMap);
+  if (!ConvertInstrMap->empty()) {
+    auto InstrumentationMapOrError = loadInstrumentationMap(*ConvertInstrMap);
     if (!InstrumentationMapOrError)
       return joinErrors(make_error<StringError>(
                             Twine("Cannot open instrumentation map '") +
-                                ConvertInstrMap + "'",
+                                *ConvertInstrMap + "'",
                             std::make_error_code(std::errc::invalid_argument)),
                         InstrumentationMapOrError.takeError());
     Map = std::move(*InstrumentationMapOrError);
@@ -387,19 +387,19 @@ static CommandRegistration Unused(&Convert, []() -> Error {
                                       FunctionAddresses);
   TraceConverter TC(FuncIdHelper, ConvertSymbolize);
   std::error_code EC;
-  raw_fd_ostream OS(ConvertOutput, EC,
+  raw_fd_ostream OS(*ConvertOutput, EC,
                     ConvertOutputFormat == ConvertFormats::BINARY
                         ? sys::fs::OpenFlags::OF_None
                         : sys::fs::OpenFlags::OF_TextWithCRLF);
   if (EC)
     return make_error<StringError>(
-        Twine("Cannot open file '") + ConvertOutput + "' for writing.", EC);
+        Twine("Cannot open file '") + *ConvertOutput + "' for writing.", EC);
 
-  auto TraceOrErr = loadTraceFile(ConvertInput, ConvertSortInput);
+  auto TraceOrErr = loadTraceFile(*ConvertInput, ConvertSortInput);
   if (!TraceOrErr)
     return joinErrors(
         make_error<StringError>(
-            Twine("Failed loading input file '") + ConvertInput + "'.",
+            Twine("Failed loading input file '") + *ConvertInput + "'.",
             std::make_error_code(std::errc::executable_format_error)),
         TraceOrErr.takeError());
 

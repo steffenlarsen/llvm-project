@@ -188,7 +188,7 @@ class InlineCalleeSummary : public SummaryStrategy {
 };
 
 static Error trySummary() {
-  auto MaybeBuf = getInputMemoryBuffer(InputFileName);
+  auto MaybeBuf = getInputMemoryBuffer(*InputFileName);
   if (!MaybeBuf)
     return MaybeBuf.takeError();
   auto MaybeParser = createRemarkParser(InputFormat, (*MaybeBuf)->getBuffer());
@@ -197,9 +197,9 @@ static Error trySummary() {
   auto &Parser = **MaybeParser;
 
   Format SerializerFormat =
-      getSerializerFormat(OutputFileName, OutputFormat, Parser.ParserFormat);
+      getSerializerFormat(*OutputFileName, OutputFormat, Parser.ParserFormat);
 
-  auto MaybeOF = getOutputFileForRemarks(OutputFileName, SerializerFormat);
+  auto MaybeOF = getOutputFileForRemarks(*OutputFileName, SerializerFormat);
   if (!MaybeOF)
     return MaybeOF.takeError();
   auto OF = std::move(*MaybeOF);

@@ -154,7 +154,7 @@ TEST(CreateToolExecutorTest, RegisterFlagsBeforeReset) {
   auto Executor = internal::createExecutorFromCommandLineArgsImpl(
       argc, &argv[0], TestCategory);
   ASSERT_TRUE((bool)Executor);
-  EXPECT_EQ(BeforeReset, "set");
+  EXPECT_EQ(*BeforeReset, "set");
   BeforeReset.removeArgument();
 }
 

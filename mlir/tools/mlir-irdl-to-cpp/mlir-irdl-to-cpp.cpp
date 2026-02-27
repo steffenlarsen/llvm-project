@@ -103,14 +103,14 @@ static LogicalResult translateIRDLToCpp(int argc, char **argv) {
 
   std::string errorMessage;
   std::unique_ptr<llvm::MemoryBuffer> input =
-      openInputFile(inputFilename, &errorMessage);
+      openInputFile(*inputFilename, &errorMessage);
   if (!input) {
     llvm::errs() << errorMessage << "\n";
     return failure();
   }
 
   std::unique_ptr<llvm::ToolOutputFile> output =
-      openOutputFile(outputFilename, &errorMessage);
+      openOutputFile(*outputFilename, &errorMessage);
 
   if (!output) {
     llvm::errs() << errorMessage << "\n";

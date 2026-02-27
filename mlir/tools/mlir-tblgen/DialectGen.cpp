@@ -91,7 +91,7 @@ tblgen::findDialectToGenerate(ArrayRef<Dialect> dialects) {
   }
 
   const auto *dialectIt = llvm::find_if(dialects, [](const Dialect &dialect) {
-    return dialect.getName() == selectedDialect;
+    return dialect.getName() == *selectedDialect;
   });
   if (dialectIt == dialects.end()) {
     llvm::errs() << "selected dialect with '-dialect' does not exist\n";

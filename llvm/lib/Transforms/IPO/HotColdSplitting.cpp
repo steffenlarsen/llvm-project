@@ -425,7 +425,7 @@ Function *HotColdSplitting::extractColdRegion(
     CI->setIsNoInline();
 
     if (EnableColdSection)
-      OutF->setSection(ColdSectionName);
+      OutF->setSection(*ColdSectionName);
     else {
       if (OrigF->hasSection())
         OutF->setSection(OrigF->getSection());

@@ -455,15 +455,15 @@ Error MIR2VecVocabProvider::readVocabulary(VocabMap &OpcodeVocab,
                                            VocabMap &CommonOperandVocab,
                                            VocabMap &PhyRegVocabMap,
                                            VocabMap &VirtRegVocabMap) {
-  if (VocabFile.empty())
+  if (VocabFile->empty())
     return createStringError(
         errc::invalid_argument,
         "MIR2Vec vocabulary file path not specified; set it "
         "using --mir2vec-vocab-path");
 
-  auto BufOrError = MemoryBuffer::getFileOrSTDIN(VocabFile, /*IsText=*/true);
+  auto BufOrError = MemoryBuffer::getFileOrSTDIN(*VocabFile, /*IsText=*/true);
   if (!BufOrError)
-    return createFileError(VocabFile, BufOrError.getError());
+    return createFileError(*VocabFile, BufOrError.getError());
 
   auto Content = BufOrError.get()->getBuffer();
 

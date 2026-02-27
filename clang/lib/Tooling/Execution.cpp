@@ -64,7 +64,7 @@ createExecutorFromCommandLineArgsImpl(int &argc, const char **argv,
   if (!OptionsParser)
     return OptionsParser.takeError();
   for (const auto &TEPlugin : ToolExecutorPluginRegistry::entries()) {
-    if (TEPlugin.getName() != ExecutorName) {
+    if (TEPlugin.getName() != *ExecutorName) {
       continue;
     }
     std::unique_ptr<ToolExecutorPlugin> Plugin(TEPlugin.instantiate());
@@ -79,7 +79,7 @@ createExecutorFromCommandLineArgsImpl(int &argc, const char **argv,
     return std::move(*Executor);
   }
   return llvm::make_error<llvm::StringError>(
-      llvm::Twine("Executor \"") + ExecutorName + "\" is not registered.",
+      llvm::Twine("Executor \"") + *ExecutorName + "\" is not registered.",
       llvm::inconvertibleErrorCode());
 }
 } // end namespace internal

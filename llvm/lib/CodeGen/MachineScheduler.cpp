@@ -827,7 +827,7 @@ void MachineSchedulerBase::scheduleRegions(ScheduleDAGInstrs &Scheduler,
     Scheduler.startBlock(&*MBB);
 
 #ifndef NDEBUG
-    if (SchedOnlyFunc.getNumOccurrences() && SchedOnlyFunc != MF->getName())
+    if (SchedOnlyFunc.getNumOccurrences() && *SchedOnlyFunc != MF->getName())
       continue;
     if (SchedOnlyBlock.getNumOccurrences()
         && (int)SchedOnlyBlock != MBB->getNumber())

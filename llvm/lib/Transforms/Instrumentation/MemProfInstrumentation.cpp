@@ -508,7 +508,7 @@ void createMemprofHistogramFlagVar(Module &M) {
 
 void createMemprofDefaultOptionsVar(Module &M) {
   Constant *OptionsConst = ConstantDataArray::getString(
-      M.getContext(), MemprofRuntimeDefaultOptions, /*AddNull=*/true);
+      M.getContext(), *MemprofRuntimeDefaultOptions, /*AddNull=*/true);
   GlobalVariable *OptionsVar =
       new GlobalVariable(M, OptionsConst->getType(), /*isConstant=*/true,
                          GlobalValue::WeakAnyLinkage, OptionsConst,
@@ -553,15 +553,15 @@ void MemProfiler::initializeCallbacks(Module &M) {
 
     SmallVector<Type *, 2> Args1{1, IntptrTy};
     MemProfMemoryAccessCallback[AccessIsWrite] = M.getOrInsertFunction(
-        ClMemoryAccessCallbackPrefix + HistPrefix + TypeStr,
+        *ClMemoryAccessCallbackPrefix + HistPrefix + TypeStr,
         FunctionType::get(IRB.getVoidTy(), Args1, false));
   }
   MemProfMemmove = M.getOrInsertFunction(
-      ClMemoryAccessCallbackPrefix + "memmove", PtrTy, PtrTy, PtrTy, IntptrTy);
-  MemProfMemcpy = M.getOrInsertFunction(ClMemoryAccessCallbackPrefix + "memcpy",
-                                        PtrTy, PtrTy, PtrTy, IntptrTy);
+      *ClMemoryAccessCallbackPrefix + "memmove", PtrTy, PtrTy, PtrTy, IntptrTy);
+  MemProfMemcpy = M.getOrInsertFunction(
+      *ClMemoryAccessCallbackPrefix + "memcpy", PtrTy, PtrTy, PtrTy, IntptrTy);
   MemProfMemset =
-      M.getOrInsertFunction(ClMemoryAccessCallbackPrefix + "memset", PtrTy,
+      M.getOrInsertFunction(*ClMemoryAccessCallbackPrefix + "memset", PtrTy,
                             PtrTy, IRB.getInt32Ty(), IntptrTy);
 }
 
@@ -596,7 +596,7 @@ bool MemProfiler::insertDynamicShadowAtFunctionEntry(Function &F) {
 bool MemProfiler::instrumentFunction(Function &F) {
   if (F.getLinkage() == GlobalValue::AvailableExternallyLinkage)
     return false;
-  if (ClDebugFunc == F.getName())
+  if (*ClDebugFunc == F.getName())
     return false;
   if (F.getName().starts_with("__memprof_"))
     return false;

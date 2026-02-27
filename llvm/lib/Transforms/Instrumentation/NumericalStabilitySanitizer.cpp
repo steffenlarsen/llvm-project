@@ -258,14 +258,14 @@ static const char *typeNameFromFTValueType(FTValueType VT) {
 class MappingConfig {
 public:
   explicit MappingConfig(LLVMContext &C) : Context(C) {
-    if (ClShadowMapping.size() != 3)
-      report_fatal_error("Invalid nsan mapping: " + Twine(ClShadowMapping));
+    if (ClShadowMapping->size() != 3)
+      report_fatal_error("Invalid nsan mapping: " + Twine(*ClShadowMapping));
     unsigned ShadowTypeSizeBits[kNumValueTypes];
     for (int VT = 0; VT < kNumValueTypes; ++VT) {
-      auto Config = ShadowTypeConfig::fromNsanTypeId(ClShadowMapping[VT]);
+      auto Config = ShadowTypeConfig::fromNsanTypeId((*ClShadowMapping)[VT]);
       if (!Config)
         report_fatal_error("Failed to get ShadowTypeConfig for " +
-                           Twine(ClShadowMapping[VT]));
+                           Twine((*ClShadowMapping)[VT]));
       const unsigned AppTypeSize =
           typeFromFTValueType(static_cast<FTValueType>(VT), Context)
               ->getScalarSizeInBits();
@@ -717,8 +717,8 @@ NumericalStabilitySanitizer::NumericalStabilitySanitizer(Module &M)
   NsanShadowArgsPtr =
       createThreadLocalGV("__nsan_shadow_args_ptr", M, NsanShadowArgsType);
 
-  if (!ClCheckFunctionsFilter.empty()) {
-    Regex R = Regex(ClCheckFunctionsFilter);
+  if (!ClCheckFunctionsFilter->empty()) {
+    Regex R = Regex(*ClCheckFunctionsFilter);
     std::string RegexError;
     assert(R.isValid(RegexError));
     CheckFunctionsFilter = std::move(R);

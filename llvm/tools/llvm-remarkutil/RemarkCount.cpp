@@ -49,13 +49,13 @@ namespace instructioncount {
 /// \returns Error::success() on success, and an Error otherwise.
 static Error tryInstructionCount() {
   // Create the output buffer.
-  auto MaybeOF = getOutputFileWithFlags(OutputFileName,
+  auto MaybeOF = getOutputFileWithFlags(*OutputFileName,
                                         /*Flags = */ sys::fs::OF_TextWithCRLF);
   if (!MaybeOF)
     return MaybeOF.takeError();
   auto OF = std::move(*MaybeOF);
   // Create a parser for the user-specified input format.
-  auto MaybeBuf = getInputMemoryBuffer(InputFileName);
+  auto MaybeBuf = getInputMemoryBuffer(*InputFileName);
   if (!MaybeBuf)
     return MaybeBuf.takeError();
   auto MaybeParser = createRemarkParser(InputFormat, (*MaybeBuf)->getBuffer());
@@ -100,13 +100,13 @@ static Error tryInstructionCount() {
 namespace annotationcount {
 static Error tryAnnotationCount() {
   // Create the output buffer.
-  auto MaybeOF = getOutputFileWithFlags(OutputFileName,
+  auto MaybeOF = getOutputFileWithFlags(*OutputFileName,
                                         /*Flags = */ sys::fs::OF_TextWithCRLF);
   if (!MaybeOF)
     return MaybeOF.takeError();
   auto OF = std::move(*MaybeOF);
   // Create a parser for the user-specified input format.
-  auto MaybeBuf = getInputMemoryBuffer(InputFileName);
+  auto MaybeBuf = getInputMemoryBuffer(*InputFileName);
   if (!MaybeBuf)
     return MaybeBuf.takeError();
   auto MaybeParser = createRemarkParser(InputFormat, (*MaybeBuf)->getBuffer());
@@ -127,7 +127,7 @@ static Error tryAnnotationCount() {
     if (shouldSkipRemark(UseDebugLoc, Remark))
       continue;
     auto *RemarkNameArg = find_if(Remark.Args, [](const Argument &Arg) {
-      return Arg.Key == "type" && Arg.Val == AnnotationTypeToCollect;
+      return Arg.Key == "type" && Arg.Val == *AnnotationTypeToCollect;
     });
     if (RemarkNameArg == Remark.Args.end())
       continue;

@@ -72,7 +72,7 @@ char &HexagonCopyHoistingID = HexagonCopyHoisting::ID;
 
 bool HexagonCopyHoisting::runOnMachineFunction(MachineFunction &Fn) {
 
-  if ((CPHoistFn != "") && (CPHoistFn != Fn.getFunction().getName()))
+  if ((*CPHoistFn != "") && (*CPHoistFn != Fn.getFunction().getName()))
     return false;
 
   MFN = &Fn;

@@ -35,14 +35,14 @@ static cl::opt<bool> DumpVerify("verify",
 
 static CommandRegistration Unused(&Dump, []() -> Error {
   // Open the file provided.
-  auto FDOrErr = sys::fs::openNativeFileForRead(DumpInput);
+  auto FDOrErr = sys::fs::openNativeFileForRead(*DumpInput);
   if (!FDOrErr)
     return FDOrErr.takeError();
 
   uint64_t FileSize;
-  if (auto EC = sys::fs::file_size(DumpInput, FileSize))
+  if (auto EC = sys::fs::file_size(*DumpInput, FileSize))
     return createStringError(EC, "Failed to get file size for '%s'.",
-                             DumpInput.c_str());
+                             DumpInput->c_str());
 
   std::error_code EC;
   sys::fs::mapped_file_region MappedFile(

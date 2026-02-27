@@ -37,7 +37,7 @@ void registerToCppTranslation() {
         return emitc::translateToCpp(
             op, output,
             /*declareVariablesAtTop=*/declareVariablesAtTop,
-            /*fileId=*/fileId);
+            /*fileId=*/*fileId);
       },
       [](DialectRegistry &registry) {
         // clang-format off

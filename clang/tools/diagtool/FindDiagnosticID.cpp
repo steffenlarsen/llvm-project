@@ -57,16 +57,16 @@ int FindDiagnosticID::run(unsigned int argc, char **argv,
 
   ArrayRef<DiagnosticRecord> AllDiagnostics = getBuiltinDiagnosticsByName();
   std::optional<DiagnosticRecord> Diag =
-      findDiagnostic(AllDiagnostics, DiagnosticName);
+      findDiagnostic(AllDiagnostics, *DiagnosticName);
   if (!Diag) {
     // Name to id failed, so try id to name.
-    auto Name = getNameFromID(DiagnosticName);
+    auto Name = getNameFromID(*DiagnosticName);
     if (!Name.empty()) {
       OS << Name << '\n';
       return 0;
     }
 
-    llvm::errs() << "error: invalid diagnostic '" << DiagnosticName << "'\n";
+    llvm::errs() << "error: invalid diagnostic '" << *DiagnosticName << "'\n";
     return 1;
   }
   OS << Diag->DiagID << "\n";

@@ -968,9 +968,9 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
   CurDAG->NewNodesMustHaveLegalTypes = false;
 
 #ifndef NDEBUG
-  MatchFilterBB = (FilterDAGBasicBlockName.empty() ||
-                   FilterDAGBasicBlockName ==
-                       FuncInfo->MBB->getBasicBlock()->getName());
+  MatchFilterBB =
+      (FilterDAGBasicBlockName->empty() ||
+       *FilterDAGBasicBlockName == FuncInfo->MBB->getBasicBlock()->getName());
 #endif
 #ifdef NDEBUG
   if (ViewDAGCombine1 || ViewLegalizeTypesDAGs || ViewDAGCombineLT ||

@@ -88,7 +88,7 @@ private:
 };
 
 void TestPointerLikeTypeInterfacePass::runOnOperation() {
-  if (testMode == "walk") {
+  if (*testMode == "walk") {
     walkAndPrint();
     return;
   }
@@ -96,8 +96,8 @@ void TestPointerLikeTypeInterfacePass::runOnOperation() {
   auto func = getOperation();
   OpBuilder builder(&getContext());
 
-  if (testMode == "alloc" || testMode == "free" || testMode == "load" ||
-      testMode == "store") {
+  if (*testMode == "alloc" || *testMode == "free" || *testMode == "load" ||
+      *testMode == "store") {
     // Collect all candidates first
     SmallVector<PointerCandidate> candidates;
     // For store mode, also look for a test value to use
@@ -113,7 +113,7 @@ void TestPointerLikeTypeInterfacePass::runOnOperation() {
         }
       }
       // Collect value marked with test.value for store tests
-      if (testMode == "store" && op->hasAttr("test.value")) {
+      if (*testMode == "store" && op->hasAttr("test.value")) {
         if (op->getNumResults() > 0)
           testValue = op->getResult(0);
       }
@@ -121,20 +121,20 @@ void TestPointerLikeTypeInterfacePass::runOnOperation() {
 
     // Now test all candidates
     for (const auto &candidate : candidates) {
-      if (testMode == "alloc")
+      if (*testMode == "alloc")
         testGenAllocate(candidate.op, candidate.result, candidate.pointerType,
                         builder);
-      else if (testMode == "free")
+      else if (*testMode == "free")
         testGenFree(candidate.op, candidate.result, candidate.pointerType,
                     builder);
-      else if (testMode == "load")
+      else if (*testMode == "load")
         testGenLoad(candidate.op, candidate.result, candidate.pointerType,
                     builder);
-      else if (testMode == "store")
+      else if (*testMode == "store")
         testGenStore(candidate.op, candidate.result, candidate.pointerType,
                      builder, testValue);
     }
-  } else if (testMode == "copy") {
+  } else if (*testMode == "copy") {
     // Collect all source and destination candidates
     SmallVector<PointerCandidate> sources, destinations;
 

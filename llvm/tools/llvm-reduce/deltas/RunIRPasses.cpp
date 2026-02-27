@@ -42,7 +42,7 @@ void llvm::runIRPassesDeltaPass(Oracle &O, ReducerWorkItem &WorkItem) {
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
   ModulePassManager MPM;
-  if (auto Err = PB.parsePassPipeline(MPM, PassPipeline))
+  if (auto Err = PB.parsePassPipeline(MPM, *PassPipeline))
     report_fatal_error(std::move(Err), false);
   MPM.run(Program, MAM);
 }

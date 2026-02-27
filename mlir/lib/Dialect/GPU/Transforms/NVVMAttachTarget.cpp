@@ -57,7 +57,7 @@ DictionaryAttr NVVMAttachTarget::getFlags(OpBuilder &builder) const {
     addFlag("collect-compiler-diagnostics");
 
   // Tokenize and set the optional command line options.
-  if (!cmdOptions.empty()) {
+  if (!cmdOptions->empty()) {
     auto options = gpu::TargetOptions::tokenizeCmdOptions(cmdOptions);
     if (!options.second.empty()) {
       llvm::SmallVector<mlir::Attribute> nvvmOptionAttrs;
@@ -81,15 +81,15 @@ void NVVMAttachTarget::runOnOperation() {
   ArrayRef<std::string> libs(linkLibs);
   SmallVector<StringRef> filesToLink(libs);
   auto target = builder.getAttr<NVVMTargetAttr>(
-      optLevel, triple, chip, features, getFlags(builder),
+      optLevel, *triple, *chip, *features, getFlags(builder),
       filesToLink.empty() ? nullptr : builder.getStrArrayAttr(filesToLink),
       verifyTarget);
-  llvm::Regex matcher(moduleMatcher);
+  llvm::Regex matcher(*moduleMatcher);
   for (Region &region : getOperation()->getRegions())
     for (Block &block : region.getBlocks())
       for (auto module : block.getOps<gpu::GPUModuleOp>()) {
         // Check if the name of the module matches.
-        if (!moduleMatcher.empty() && !matcher.match(module.getName()))
+        if (!moduleMatcher->empty() && !matcher.match(module.getName()))
           continue;
         // Create the target array.
         SmallVector<Attribute> targets;

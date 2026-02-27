@@ -672,12 +672,12 @@ static CommandRegistration Unused(&Stack, []() -> Error {
   // account to a single StackTrie, and just print the whole trie for now.
   StackTrie ST;
   InstrumentationMap Map;
-  if (!StacksInstrMap.empty()) {
-    auto InstrumentationMapOrError = loadInstrumentationMap(StacksInstrMap);
+  if (!StacksInstrMap->empty()) {
+    auto InstrumentationMapOrError = loadInstrumentationMap(*StacksInstrMap);
     if (!InstrumentationMapOrError)
       return joinErrors(
           make_error<StringError>(
-              Twine("Cannot open instrumentation map: ") + StacksInstrMap,
+              Twine("Cannot open instrumentation map: ") + *StacksInstrMap,
               std::make_error_code(std::errc::invalid_argument)),
           InstrumentationMapOrError.takeError());
     Map = std::move(*InstrumentationMapOrError);

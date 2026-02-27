@@ -50,8 +50,8 @@ int main(int argc, char **argv) {
 
   ExitOnError ExitOnErr("llvm-modextract: error: ");
 
-  std::unique_ptr<MemoryBuffer> MB =
-      ExitOnErr(errorOrToExpected(MemoryBuffer::getFileOrSTDIN(InputFilename)));
+  std::unique_ptr<MemoryBuffer> MB = ExitOnErr(
+      errorOrToExpected(MemoryBuffer::getFileOrSTDIN(*InputFilename)));
   std::vector<BitcodeModule> Ms = ExitOnErr(getBitcodeModuleList(*MB));
 
   LLVMContext Context;
@@ -64,7 +64,7 @@ int main(int argc, char **argv) {
 
   std::error_code EC;
   std::unique_ptr<ToolOutputFile> Out(
-      new ToolOutputFile(OutputFilename, EC, sys::fs::OF_None));
+      new ToolOutputFile(*OutputFilename, EC, sys::fs::OF_None));
   ExitOnErr(errorCodeToError(EC));
 
   if (BinaryExtract) {

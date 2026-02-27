@@ -853,7 +853,7 @@ struct SetLLVMModuleDataLayoutPass
   /// Run the dialect converter on the module.
   void runOnOperation() override {
     if (failed(LLVM::LLVMDialect::verifyDataLayoutString(
-            this->dataLayout, [this](const Twine &message) {
+            *this->dataLayout, [this](const Twine &message) {
               getOperation().emitError() << message.str();
             }))) {
       signalPassFailure();
@@ -861,7 +861,7 @@ struct SetLLVMModuleDataLayoutPass
     }
     ModuleOp m = getOperation();
     m->setAttr(LLVM::LLVMDialect::getDataLayoutAttrName(),
-               StringAttr::get(m.getContext(), this->dataLayout));
+               StringAttr::get(m.getContext(), *this->dataLayout));
   }
 };
 } // namespace

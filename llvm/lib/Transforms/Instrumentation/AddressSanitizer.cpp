@@ -1320,7 +1320,7 @@ PreservedAnalyses AddressSanitizerPass::run(Module &M,
       continue;
     if (F.getLinkage() == GlobalValue::AvailableExternallyLinkage)
       continue;
-    if (!ClDebugFunc.empty() && ClDebugFunc == F.getName())
+    if (!ClDebugFunc->empty() && *ClDebugFunc == F.getName())
       continue;
     if (F.getName().starts_with("__asan_"))
       continue;
@@ -2899,7 +2899,7 @@ void AddressSanitizer::initializeCallbacks(const TargetLibraryInfo *TLI) {
           FunctionType::get(IRB.getVoidTy(), Args2, false), AL2);
 
       AsanMemoryAccessCallbackSized[AccessIsWrite][Exp] = M.getOrInsertFunction(
-          ClMemoryAccessCallbackPrefix + ExpStr + TypeStr + "N" + EndingStr,
+          *ClMemoryAccessCallbackPrefix + ExpStr + TypeStr + "N" + EndingStr,
           FunctionType::get(IRB.getVoidTy(), Args2, false), AL2);
 
       for (size_t AccessSizeIndex = 0; AccessSizeIndex < kNumberOfAccessSizes;
@@ -2912,7 +2912,7 @@ void AddressSanitizer::initializeCallbacks(const TargetLibraryInfo *TLI) {
 
         AsanMemoryAccessCallback[AccessIsWrite][Exp][AccessSizeIndex] =
             M.getOrInsertFunction(
-                ClMemoryAccessCallbackPrefix + ExpStr + Suffix + EndingStr,
+                *ClMemoryAccessCallbackPrefix + ExpStr + Suffix + EndingStr,
                 FunctionType::get(IRB.getVoidTy(), Args1, false), AL1);
       }
     }
@@ -2921,7 +2921,7 @@ void AddressSanitizer::initializeCallbacks(const TargetLibraryInfo *TLI) {
   const std::string MemIntrinCallbackPrefix =
       (CompileKernel && !ClKasanMemIntrinCallbackPrefix)
           ? std::string("")
-          : ClMemoryAccessCallbackPrefix;
+          : *ClMemoryAccessCallbackPrefix;
   AsanMemmove = M.getOrInsertFunction(MemIntrinCallbackPrefix + "memmove",
                                       PtrTy, PtrTy, PtrTy, IntptrTy);
   AsanMemcpy = M.getOrInsertFunction(MemIntrinCallbackPrefix + "memcpy", PtrTy,

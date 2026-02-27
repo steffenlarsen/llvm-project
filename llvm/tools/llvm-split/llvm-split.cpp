@@ -241,26 +241,26 @@ int main(int argc, char **argv) {
   cl::HideUnrelatedOptions({&SplitCategory, &getColorCategory()});
   cl::ParseCommandLineOptions(argc, argv, "LLVM module splitter\n");
 
-  Triple TT(MTriple);
+  Triple TT(*MTriple);
 
   std::unique_ptr<TargetMachine> TM;
-  if (!MTriple.empty()) {
+  if (!MTriple->empty()) {
     InitializeAllTargets();
     InitializeAllTargetMCs();
 
     std::string Error;
     const Target *T = TargetRegistry::lookupTarget(TT, Error);
     if (!T) {
-      errs() << "unknown target '" << MTriple << "': " << Error << "\n";
+      errs() << "unknown target '" << *MTriple << "': " << Error << "\n";
       return 1;
     }
 
     TargetOptions Options;
     TM = std::unique_ptr<TargetMachine>(T->createTargetMachine(
-        TT, MCPU, /*FS*/ "", Options, std::nullopt, std::nullopt));
+        TT, *MCPU, /*FS*/ "", Options, std::nullopt, std::nullopt));
   }
 
-  std::unique_ptr<Module> M = parseIRFile(InputFilename, Err, Context);
+  std::unique_ptr<Module> M = parseIRFile(*InputFilename, Err, Context);
 
   if (!M) {
     Err.print(argv[0], errs());
@@ -270,8 +270,8 @@ int main(int argc, char **argv) {
   unsigned I = 0;
   const auto HandleModulePart = [&](std::unique_ptr<Module> MPart) {
     std::error_code EC;
-    std::unique_ptr<ToolOutputFile> Out(
-        new ToolOutputFile(OutputFilename + utostr(I++), EC, sys::fs::OF_None));
+    std::unique_ptr<ToolOutputFile> Out(new ToolOutputFile(
+        *OutputFilename + utostr(I++), EC, sys::fs::OF_None));
     if (EC) {
       errs() << EC.message() << '\n';
       exit(1);

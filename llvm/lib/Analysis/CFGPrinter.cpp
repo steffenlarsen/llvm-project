@@ -62,7 +62,7 @@ static void writeCFGToDotFile(Function &F, BlockFrequencyInfo *BFI,
                               BranchProbabilityInfo *BPI, uint64_t MaxFreq,
                               bool CFGOnly = false) {
   std::string Filename =
-      (CFGDotFilenamePrefix + "." + F.getName() + ".dot").str();
+      (*CFGDotFilenamePrefix + "." + F.getName() + ".dot").str();
   errs() << "Writing '" << Filename << "'...";
 
   std::error_code EC;
@@ -110,7 +110,7 @@ ModuleSlotTracker *DOTFuncInfo::getModuleSlotTracker() {
 }
 
 PreservedAnalyses CFGViewerPass::run(Function &F, FunctionAnalysisManager &AM) {
-  if (!CFGFuncName.empty() && !F.getName().contains(CFGFuncName))
+  if (!CFGFuncName->empty() && !F.getName().contains(*CFGFuncName))
     return PreservedAnalyses::all();
   auto *BFI = &AM.getResult<BlockFrequencyAnalysis>(F);
   auto *BPI = &AM.getResult<BranchProbabilityAnalysis>(F);
@@ -120,7 +120,7 @@ PreservedAnalyses CFGViewerPass::run(Function &F, FunctionAnalysisManager &AM) {
 
 PreservedAnalyses CFGOnlyViewerPass::run(Function &F,
                                          FunctionAnalysisManager &AM) {
-  if (!CFGFuncName.empty() && !F.getName().contains(CFGFuncName))
+  if (!CFGFuncName->empty() && !F.getName().contains(*CFGFuncName))
     return PreservedAnalyses::all();
   auto *BFI = &AM.getResult<BlockFrequencyAnalysis>(F);
   auto *BPI = &AM.getResult<BranchProbabilityAnalysis>(F);
@@ -130,7 +130,7 @@ PreservedAnalyses CFGOnlyViewerPass::run(Function &F,
 
 PreservedAnalyses CFGPrinterPass::run(Function &F,
                                       FunctionAnalysisManager &AM) {
-  if (!CFGFuncName.empty() && !F.getName().contains(CFGFuncName))
+  if (!CFGFuncName->empty() && !F.getName().contains(*CFGFuncName))
     return PreservedAnalyses::all();
   auto *BFI = &AM.getResult<BlockFrequencyAnalysis>(F);
   auto *BPI = &AM.getResult<BranchProbabilityAnalysis>(F);
@@ -140,7 +140,7 @@ PreservedAnalyses CFGPrinterPass::run(Function &F,
 
 PreservedAnalyses CFGOnlyPrinterPass::run(Function &F,
                                           FunctionAnalysisManager &AM) {
-  if (!CFGFuncName.empty() && !F.getName().contains(CFGFuncName))
+  if (!CFGFuncName->empty() && !F.getName().contains(*CFGFuncName))
     return PreservedAnalyses::all();
   auto *BFI = &AM.getResult<BlockFrequencyAnalysis>(F);
   auto *BPI = &AM.getResult<BranchProbabilityAnalysis>(F);
@@ -162,7 +162,7 @@ void Function::viewCFG(const char *OutputFileName) const {
 void Function::viewCFG(bool ViewCFGOnly, const BlockFrequencyInfo *BFI,
                        const BranchProbabilityInfo *BPI,
                        const char *OutputFileName) const {
-  if (!CFGFuncName.empty() && !getName().contains(CFGFuncName))
+  if (!CFGFuncName->empty() && !getName().contains(*CFGFuncName))
     return;
   DOTFuncInfo CFGInfo(this, BFI, BPI, BFI ? getMaxFreq(*this, BFI) : 0);
   ViewGraph(&CFGInfo, OutputFileName ? OutputFileName : "cfg" + getName(),

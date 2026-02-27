@@ -187,7 +187,7 @@ int main(int argc, char **argv) {
                         : UseColor == cl::BOU_TRUE;
   if (Input.getNumOccurrences()) {
     ErrorOr<std::unique_ptr<MemoryBuffer>> BufOrErr =
-        MemoryBuffer::getFileOrSTDIN(Input);
+        MemoryBuffer::getFileOrSTDIN(*Input);
     if (!BufOrErr)
       return 1;
     MemoryBuffer &Buf = *BufOrErr.get();

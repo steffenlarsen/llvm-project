@@ -172,7 +172,7 @@ int gcovMain(int argc, const char *argv[]) {
                         HashFilenames, SourcePrefix);
 
   for (const auto &SourceFile : SourceFiles)
-    reportCoverage(SourceFile, ObjectDir, InputGCNO, InputGCDA, DumpGCOV,
+    reportCoverage(SourceFile, *ObjectDir, *InputGCNO, *InputGCDA, DumpGCOV,
                    Options);
   return 0;
 }

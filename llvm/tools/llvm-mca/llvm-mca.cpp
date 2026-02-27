@@ -296,7 +296,7 @@ const Target *getTarget(Triple &TheTriple, const char *ProgName) {
   // Get the target specific parser.
   std::string Error;
   const Target *TheTarget =
-      TargetRegistry::lookupTarget(ArchName, TheTriple, Error);
+      TargetRegistry::lookupTarget(*ArchName, TheTriple, Error);
   if (!TheTarget) {
     errs() << ProgName << ": " << Error;
     return nullptr;
@@ -307,10 +307,10 @@ const Target *getTarget(Triple &TheTriple, const char *ProgName) {
 }
 
 ErrorOr<std::unique_ptr<ToolOutputFile>> getOutputStream() {
-  if (OutputFilename == "")
-    OutputFilename = "-";
+  if (*OutputFilename == "")
+    *OutputFilename = "-";
   std::error_code EC;
-  auto Out = std::make_unique<ToolOutputFile>(OutputFilename, EC,
+  auto Out = std::make_unique<ToolOutputFile>(*OutputFilename, EC,
                                               sys::fs::OF_TextWithCRLF);
   if (!EC)
     return std::move(Out);
@@ -380,9 +380,9 @@ int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv,
                               "llvm machine code performance analyzer.\n");
 
-  Triple TheTriple(TripleNameOpt.empty()
+  Triple TheTriple(TripleNameOpt->empty()
                        ? Triple::normalize(sys::getDefaultTargetTriple())
-                       : TripleNameOpt);
+                       : *TripleNameOpt);
 
   // Get the target from the triple. If a triple is not specified, then select
   // the default triple for the host. If the triple doesn't correspond to any
@@ -392,21 +392,21 @@ int main(int argc, char **argv) {
   if (!TheTarget)
     return 1;
 
-  const bool WantsCPUHelp = MCPU == "help";
+  const bool WantsCPUHelp = *MCPU == "help";
 
   std::unique_ptr<MemoryBuffer> InputBuffer;
   if (!WantsCPUHelp) {
     ErrorOr<std::unique_ptr<MemoryBuffer>> BufferOrErr =
-        MemoryBuffer::getFileOrSTDIN(InputFilename);
+        MemoryBuffer::getFileOrSTDIN(*InputFilename);
     if (!BufferOrErr) {
       std::error_code EC = BufferOrErr.getError();
-      WithColor::error() << InputFilename << ": " << EC.message() << '\n';
+      WithColor::error() << *InputFilename << ": " << EC.message() << '\n';
       return 1;
     }
     InputBuffer = std::move(*BufferOrErr);
   }
 
-  if (MCPU == "native")
+  if (*MCPU == "native")
     MCPU = std::string(llvm::sys::getHostCPUName());
 
   // Package up features to be passed to target/subtarget
@@ -419,7 +419,7 @@ int main(int argc, char **argv) {
   }
 
   std::unique_ptr<MCSubtargetInfo> STI(
-      TheTarget->createMCSubtargetInfo(TheTriple, MCPU, FeaturesStr));
+      TheTarget->createMCSubtargetInfo(TheTriple, *MCPU, FeaturesStr));
   if (!STI) {
     WithColor::error() << "unable to create subtarget info\n";
     return 1;
@@ -428,18 +428,18 @@ int main(int argc, char **argv) {
   if (WantsCPUHelp)
     return 0;
 
-  if (!STI->isCPUStringValid(MCPU))
+  if (!STI->isCPUStringValid(*MCPU))
     return 1;
 
   if (!STI->getSchedModel().hasInstrSchedModel()) {
     WithColor::error()
         << "unable to find instruction-level scheduling information for"
-        << " target triple '" << TheTriple.normalize() << "' and cpu '" << MCPU
+        << " target triple '" << TheTriple.normalize() << "' and cpu '" << *MCPU
         << "'.\n";
 
     if (STI->getSchedModel().InstrItineraries)
       WithColor::note()
-          << "cpu '" << MCPU << "' provides itineraries. However, "
+          << "cpu '" << *MCPU << "' provides itineraries. However, "
           << "instruction itineraries are currently unsupported.\n";
     return 1;
   }
@@ -779,8 +779,8 @@ int main(int argc, char **argv) {
     if (EnableBottleneckAnalysis) {
       if (!IsOutOfOrder) {
         WithColor::warning()
-            << "bottleneck analysis is not supported for in-order CPU '" << MCPU
-            << "'.\n";
+            << "bottleneck analysis is not supported for in-order CPU '"
+            << *MCPU << "'.\n";
       }
       Printer.addView(std::make_unique<mca::BottleneckAnalysis>(
           *STI, *IP, Insts, S.getNumIterations()));

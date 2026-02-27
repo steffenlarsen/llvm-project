@@ -286,7 +286,7 @@ static int run(int argc, char **argv) {
     timeTraceProfilerInitialize(TimeTraceGranularity, argv[0]);
   llvm::scope_exit TimeTraceScopeExit([]() {
     if (TimeTrace) {
-      check(timeTraceProfilerWrite(TimeTraceFile, OutputFilename),
+      check(timeTraceProfilerWrite(*TimeTraceFile, *OutputFilename),
             "timeTraceProfilerWrite failed");
       timeTraceProfilerCleanup();
     }
@@ -355,7 +355,7 @@ static int run(int argc, char **argv) {
         llvm::errs() << ("invalid -select-save-temps argument: " + S) << '\n';
         return 1;
       }
-    check(Conf.addSaveTemps(OutputFilename + ".", false, SaveTempsArgs),
+    check(Conf.addSaveTemps(*OutputFilename + ".", false, SaveTempsArgs),
           "Config::addSaveTemps failed");
   }
 
@@ -400,7 +400,7 @@ static int run(int argc, char **argv) {
   if (AllVtablesHaveTypeInfos.getNumOccurrences() > 0)
     Conf.AllVtablesHaveTypeInfos = AllVtablesHaveTypeInfos;
 
-  if (ThinLTODistributedIndexes && !DTLTODistributor.empty())
+  if (ThinLTODistributedIndexes && !DTLTODistributor->empty())
     llvm::errs() << "-thinlto-distributed-indexes cannot be specfied together "
                     "with -dtlto-distributor\n";
   auto DTLTODistributorArgsSV = llvm::to_vector<0>(llvm::map_range(
@@ -413,22 +413,22 @@ static int run(int argc, char **argv) {
 
   ThinBackend Backend;
   if (ThinLTODistributedIndexes)
-    Backend = createWriteIndexesThinBackend(llvm::hardware_concurrency(Threads),
-                                            /*OldPrefix=*/"",
-                                            /*NewPrefix=*/"",
-                                            /*NativeObjectPrefix=*/"",
-                                            ThinLTOEmitImports,
-                                            /*LinkedObjectsFile=*/nullptr,
-                                            /*OnWrite=*/{});
-  else if (!DTLTODistributor.empty()) {
+    Backend = createWriteIndexesThinBackend(
+        llvm::hardware_concurrency(*Threads),
+        /*OldPrefix=*/"",
+        /*NewPrefix=*/"",
+        /*NativeObjectPrefix=*/"", ThinLTOEmitImports,
+        /*LinkedObjectsFile=*/nullptr,
+        /*OnWrite=*/{});
+  else if (!DTLTODistributor->empty()) {
     Backend = createOutOfProcessThinBackend(
-        llvm::heavyweight_hardware_concurrency(Threads),
-        /*OnWrite=*/{}, ThinLTOEmitIndexes, ThinLTOEmitImports, OutputFilename,
-        DTLTODistributor, DTLTODistributorArgsSV, DTLTOCompiler,
+        llvm::heavyweight_hardware_concurrency(*Threads),
+        /*OnWrite=*/{}, ThinLTOEmitIndexes, ThinLTOEmitImports, *OutputFilename,
+        *DTLTODistributor, DTLTODistributorArgsSV, *DTLTOCompiler,
         DTLTOCompilerPrependArgsSV, DTLTOCompilerArgsSV, SaveTemps);
   } else
     Backend = createInProcessThinBackend(
-        llvm::heavyweight_hardware_concurrency(Threads),
+        llvm::heavyweight_hardware_concurrency(*Threads),
         /* OnWrite */ {}, ThinLTOEmitIndexes, ThinLTOEmitImports);
 
   // Track whether we hit an error; in particular, in the multi-threaded case,
@@ -499,7 +499,7 @@ static int run(int argc, char **argv) {
   auto AddStream =
       [&](size_t Task,
           const Twine &ModuleName) -> std::unique_ptr<CachedFileStream> {
-    std::string Path = OutputFilename + "." + utostr(Task);
+    std::string Path = *OutputFilename + "." + utostr(Task);
 
     std::error_code EC;
     auto S = std::make_unique<raw_fd_ostream>(Path, EC, sys::fs::OF_None);
@@ -515,8 +515,8 @@ static int run(int argc, char **argv) {
   };
 
   FileCache Cache;
-  if (!CacheDir.empty())
-    Cache = check(localCache("ThinLTO", "Thin", CacheDir, AddBuffer),
+  if (!CacheDir->empty())
+    Cache = check(localCache("ThinLTO", "Thin", *CacheDir, AddBuffer),
                   "failed to create cache");
 
   check(Lto.run(AddStream, Cache), "LTO::run failed");

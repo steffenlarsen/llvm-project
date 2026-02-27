@@ -105,7 +105,7 @@ SDNodeInfoEmitter::SDNodeInfoEmitter(const RecordKeeper &RK)
       continue;
     }
 
-    if (NS != TargetSDNodeNamespace)
+    if (NS != *TargetSDNodeNamespace)
       continue;
 
     NodesByName[EnumName].push_back(std::move(Node));
@@ -131,7 +131,7 @@ SDNodeInfoEmitter::SDNodeInfoEmitter(const RecordKeeper &RK)
 
 void SDNodeInfoEmitter::emitEnum(raw_ostream &OS) const {
   IfDefEmitter IfDef(OS, "GET_SDNODE_ENUM");
-  NamespaceEmitter NS(OS, "llvm::" + TargetSDNodeNamespace);
+  NamespaceEmitter NS(OS, "llvm::" + *TargetSDNodeNamespace);
 
   if (!NodesByName.empty()) {
     StringRef FirstName = NodesByName.begin()->first;
@@ -161,7 +161,7 @@ std::vector<unsigned> SDNodeInfoEmitter::emitNodeNames(raw_ostream &OS) const {
   for (StringRef EnumName : make_first_range(NodesByName)) {
     SmallString<64> DebugName;
     raw_svector_ostream SS(DebugName);
-    SS << TargetSDNodeNamespace << "::" << EnumName;
+    SS << *TargetSDNodeNamespace << "::" << EnumName;
     NameOffsets.push_back(NameTable.GetOrAddStringOffset(DebugName));
   }
 

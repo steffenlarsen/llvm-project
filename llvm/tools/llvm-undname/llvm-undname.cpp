@@ -99,11 +99,11 @@ int main(int argc, char **argv) {
   cl::HideUnrelatedOptions({&UndNameCategory, &getColorCategory()});
   cl::ParseCommandLineOptions(argc, argv, "llvm-undname\n");
 
-  if (!RawFile.empty()) {
+  if (!RawFile->empty()) {
     ErrorOr<std::unique_ptr<MemoryBuffer>> FileOrErr =
-        MemoryBuffer::getFileOrSTDIN(RawFile);
+        MemoryBuffer::getFileOrSTDIN(*RawFile);
     if (std::error_code EC = FileOrErr.getError()) {
-      WithColor::error() << "Could not open input file \'" << RawFile
+      WithColor::error() << "Could not open input file \'" << *RawFile
                          << "\': " << EC.message() << '\n';
       return 1;
     }

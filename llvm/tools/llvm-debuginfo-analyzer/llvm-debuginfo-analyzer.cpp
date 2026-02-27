@@ -104,8 +104,8 @@ int main(int argc, char **argv) {
   cl::PrintOptionValues();
 
   std::error_code EC;
-  ToolOutputFile OutputFile(OutputFilename, EC, sys::fs::OF_None);
-  error(EC, "Unable to open output file %s", OutputFilename.c_str());
+  ToolOutputFile OutputFile(*OutputFilename, EC, sys::fs::OF_None);
+  error(EC, "Unable to open output file %s", OutputFilename->c_str());
   // Don't remove output file if we exit with an error.
   OutputFile.keep();
 

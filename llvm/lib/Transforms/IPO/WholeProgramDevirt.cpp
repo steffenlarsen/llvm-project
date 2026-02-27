@@ -1037,11 +1037,11 @@ bool DevirtModule::runForTesting(Module &M, ModuleAnalysisManager &MAM,
 
   // Handle the command-line summary arguments. This code is for testing
   // purposes only, so we handle errors directly.
-  if (!ClReadSummary.empty()) {
-    ExitOnError ExitOnErr("-wholeprogramdevirt-read-summary: " + ClReadSummary +
-                          ": ");
+  if (!ClReadSummary->empty()) {
+    ExitOnError ExitOnErr(
+        "-wholeprogramdevirt-read-summary: " + *ClReadSummary + ": ");
     auto ReadSummaryFile =
-        ExitOnErr(errorOrToExpected(MemoryBuffer::getFile(ClReadSummary)));
+        ExitOnErr(errorOrToExpected(MemoryBuffer::getFile(*ClReadSummary)));
     if (Expected<std::unique_ptr<ModuleSummaryIndex>> SummaryOrErr =
             getModuleSummaryIndex(*ReadSummaryFile)) {
       Summary = std::move(*SummaryOrErr);
@@ -1064,16 +1064,16 @@ bool DevirtModule::runForTesting(Module &M, ModuleAnalysisManager &MAM,
                    DevirtSpeculatively)
           .run();
 
-  if (!ClWriteSummary.empty()) {
+  if (!ClWriteSummary->empty()) {
     ExitOnError ExitOnErr(
-        "-wholeprogramdevirt-write-summary: " + ClWriteSummary + ": ");
+        "-wholeprogramdevirt-write-summary: " + *ClWriteSummary + ": ");
     std::error_code EC;
-    if (StringRef(ClWriteSummary).ends_with(".bc")) {
-      raw_fd_ostream OS(ClWriteSummary, EC, sys::fs::OF_None);
+    if (StringRef(*ClWriteSummary).ends_with(".bc")) {
+      raw_fd_ostream OS(*ClWriteSummary, EC, sys::fs::OF_None);
       ExitOnErr(errorCodeToError(EC));
       writeIndexToFile(*Summary, OS);
     } else {
-      raw_fd_ostream OS(ClWriteSummary, EC, sys::fs::OF_TextWithCRLF);
+      raw_fd_ostream OS(*ClWriteSummary, EC, sys::fs::OF_TextWithCRLF);
       ExitOnErr(errorCodeToError(EC));
       yaml::Output Out(OS);
       Out << *Summary;

@@ -182,7 +182,7 @@ static bool createInitOrFiniGlobals(Module &M, GlobalVariable *GV,
     std::string PriorityStr = "." + std::to_string(Priority);
     // We append a semi-unique hash and the priority to the global name.
     std::string GlobalID =
-        !GlobalStr.empty() ? GlobalStr : getHash(M.getSourceFileName());
+        !GlobalStr->empty() ? *GlobalStr : getHash(M.getSourceFileName());
     std::string NameStr =
         ((IsCtor ? "__init_array_object_" : "__fini_array_object_") +
          F->getName() + "_" + GlobalID + "_" + std::to_string(Priority))

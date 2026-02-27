@@ -223,7 +223,7 @@ std::string llvm::doSystemDiff(StringRef Before, StringRef After,
   if (prepareTempFiles(FD, SR, FileName))
     return "Unable to create temporary file.";
 
-  static ErrorOr<std::string> DiffExe = sys::findProgramByName(DiffBinary);
+  static ErrorOr<std::string> DiffExe = sys::findProgramByName(*DiffBinary);
   if (!DiffExe)
     return "Unable to find diff executable.";
 
@@ -232,8 +232,8 @@ std::string llvm::doSystemDiff(StringRef Before, StringRef After,
   ("--new-line-format=" + NewLineFormat).toVector(NLF);
   ("--unchanged-line-format=" + UnchangedLineFormat).toVector(ULF);
 
-  StringRef Args[] = {DiffBinary, "-w", "-d",        OLF,
-                      NLF,        ULF,  FileName[0], FileName[1]};
+  StringRef Args[] = {*DiffBinary, "-w", "-d",        OLF,
+                      NLF,         ULF,  FileName[0], FileName[1]};
   std::optional<StringRef> Redirects[] = {std::nullopt, StringRef(FileName[2]),
                                           std::nullopt};
   int Result = sys::ExecuteAndWait(*DiffExe, Args, std::nullopt, Redirects);

@@ -708,9 +708,9 @@ void ArithToAMDGPUConversionPass::runOnOperation() {
   Operation *op = getOperation();
   MLIRContext *ctx = &getContext();
   RewritePatternSet patterns(op->getContext());
-  FailureOr<amdgpu::Chipset> maybeChipset = amdgpu::Chipset::parse(chipset);
+  FailureOr<amdgpu::Chipset> maybeChipset = amdgpu::Chipset::parse(*chipset);
   if (failed(maybeChipset)) {
-    emitError(UnknownLoc::get(ctx), "Invalid chipset name: " + chipset);
+    emitError(UnknownLoc::get(ctx), "Invalid chipset name: " + *chipset);
     return signalPassFailure();
   }
 

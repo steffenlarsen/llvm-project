@@ -263,14 +263,14 @@ static cl::opt<std::string>
 
 static const Target *GetTarget(const char *ProgName) {
   // Figure out the target triple.
-  if (TripleName.empty())
+  if (TripleName->empty())
     TripleName = sys::getDefaultTargetTriple();
-  Triple TheTriple(Triple::normalize(TripleName));
+  Triple TheTriple(Triple::normalize(*TripleName));
 
   // Get the target specific parser.
   std::string Error;
-  const Target *TheTarget = TargetRegistry::lookupTarget(ArchName, TheTriple,
-                                                         Error);
+  const Target *TheTarget =
+      TargetRegistry::lookupTarget(*ArchName, TheTriple, Error);
   if (!TheTarget) {
     WithColor::error(errs(), ProgName) << Error;
     return nullptr;
@@ -399,7 +399,7 @@ int main(int argc, char **argv) {
   llvm::scope_exit TimeTraceScopeExit([]() {
     if (!TimeTrace)
       return;
-    if (auto E = timeTraceProfilerWrite(TimeTraceFile, OutputFilename)) {
+    if (auto E = timeTraceProfilerWrite(*TimeTraceFile, *OutputFilename)) {
       logAllUnhandledErrors(std::move(E), errs());
       return;
     }
@@ -422,13 +422,13 @@ int main(int argc, char **argv) {
     return 1;
   // Now that GetTarget() has (potentially) replaced TripleName, it's safe to
   // construct the Triple object.
-  Triple TheTriple(TripleName);
+  Triple TheTriple(*TripleName);
 
   ErrorOr<std::unique_ptr<MemoryBuffer>> BufferPtr =
-      MemoryBuffer::getFileOrSTDIN(InputFilename, /*IsText=*/true);
+      MemoryBuffer::getFileOrSTDIN(*InputFilename, /*IsText=*/true);
   if (std::error_code EC = BufferPtr.getError()) {
     WithColor::error(errs(), ProgName)
-        << InputFilename << ": " << EC.message() << '\n';
+        << *InputFilename << ": " << EC.message() << '\n';
     return 1;
   }
   MemoryBuffer *Buffer = BufferPtr->get();
@@ -466,8 +466,8 @@ int main(int argc, char **argv) {
   std::string FeaturesStr;
 
   // Replace -mcpu=native with Host CPU and features.
-  if (MCPU == "native") {
-    MCPU = std::string(llvm::sys::getHostCPUName());
+  if (*MCPU == "native") {
+    *MCPU = std::string(llvm::sys::getHostCPUName());
 
     llvm::StringMap<bool> TargetFeatures = llvm::sys::getHostCPUFeatures();
     for (auto const &[FeatureName, IsSupported] : TargetFeatures)
@@ -480,7 +480,7 @@ int main(int argc, char **argv) {
   FeaturesStr = Features.getString();
 
   std::unique_ptr<MCSubtargetInfo> STI(
-      TheTarget->createMCSubtargetInfo(TheTriple, MCPU, FeaturesStr));
+      TheTarget->createMCSubtargetInfo(TheTriple, *MCPU, FeaturesStr));
   if (!STI) {
     WithColor::error(errs(), ProgName) << "unable to create subtarget info\n";
     return 1;
@@ -532,8 +532,8 @@ int main(int argc, char **argv) {
     Ctx.setDwarfDebugFlags(StringRef(DwarfDebugFlags));
   if (!DwarfDebugProducer.empty())
     Ctx.setDwarfDebugProducer(StringRef(DwarfDebugProducer));
-  if (!DebugCompilationDir.empty())
-    Ctx.setCompilationDir(DebugCompilationDir);
+  if (!DebugCompilationDir->empty())
+    Ctx.setCompilationDir(*DebugCompilationDir);
   else {
     // If no compilation dir is set, try to use the current directory.
     SmallString<128> CWD;
@@ -544,25 +544,25 @@ int main(int argc, char **argv) {
     const auto &KV = StringRef(Arg).split('=');
     Ctx.addDebugPrefixMapEntry(std::string(KV.first), std::string(KV.second));
   }
-  if (!MainFileName.empty())
-    Ctx.setMainFileName(MainFileName);
+  if (!MainFileName->empty())
+    Ctx.setMainFileName(*MainFileName);
   if (GenDwarfForAssembly)
-    Ctx.setGenDwarfRootFile(InputFilename, Buffer->getBuffer());
+    Ctx.setGenDwarfRootFile(*InputFilename, Buffer->getBuffer());
 
   sys::fs::OpenFlags Flags = (FileType == OFT_AssemblyFile)
                                  ? sys::fs::OF_TextWithCRLF
                                  : sys::fs::OF_None;
-  std::unique_ptr<ToolOutputFile> Out = GetOutputStream(OutputFilename, Flags);
+  std::unique_ptr<ToolOutputFile> Out = GetOutputStream(*OutputFilename, Flags);
   if (!Out)
     return 1;
 
   std::unique_ptr<ToolOutputFile> DwoOut;
-  if (!SplitDwarfFile.empty()) {
+  if (!SplitDwarfFile->empty()) {
     if (FileType != OFT_ObjectFile) {
       WithColor::error() << "dwo output only supported with object files\n";
       return 1;
     }
-    DwoOut = GetOutputStream(SplitDwarfFile, sys::fs::OF_None);
+    DwoOut = GetOutputStream(*SplitDwarfFile, sys::fs::OF_None);
     if (!DwoOut)
       return 1;
   }
@@ -586,7 +586,7 @@ int main(int argc, char **argv) {
     Str = std::move(FFS);
   } else if (FileType == OFT_AssemblyFile) {
     IP.reset(TheTarget->createMCInstPrinter(
-        Triple(TripleName), OutputAsmVariant, *MAI, *MCII, *MRI));
+        Triple(*TripleName), OutputAsmVariant, *MAI, *MCII, *MRI));
 
     if (!IP) {
       WithColor::error()
@@ -627,7 +627,7 @@ int main(int argc, char **argv) {
     Str.reset(TheTarget->createAsmStreamer(Ctx, std::move(FOut), std::move(IP),
                                            std::move(CE), std::move(MAB)));
 
-    Triple T(TripleName);
+    Triple T(*TripleName);
     if (T.isLFI()) {
       Str->initSections(NoExecStack, *STI);
       initializeLFIMCStreamer(*Str.get(), Ctx, T);

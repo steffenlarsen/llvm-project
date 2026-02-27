@@ -1879,7 +1879,7 @@ MachineBasicBlock *HexagonHardwareLoops::createPreheaderForLoop(
   DebugLoc DL;
 
 #ifndef NDEBUG
-  if ((!PHFn.empty()) && (PHFn != MF->getName()))
+  if ((!PHFn->empty()) && (*PHFn != MF->getName()))
     return nullptr;
 #endif
 

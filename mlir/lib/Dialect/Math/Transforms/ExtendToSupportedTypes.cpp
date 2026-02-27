@@ -125,10 +125,10 @@ void ExtendToSupportedTypesPass::runOnOperation() {
 
   // Parse target type
   std::optional<Type> maybeTargetType =
-      arith::parseFloatType(ctx, targetTypeStr);
+      arith::parseFloatType(ctx, *targetTypeStr);
   if (!maybeTargetType.has_value()) {
     emitError(UnknownLoc::get(ctx), "could not map target type '" +
-                                        targetTypeStr +
+                                        *targetTypeStr +
                                         "' to a known floating-point type");
     return signalPassFailure();
   }

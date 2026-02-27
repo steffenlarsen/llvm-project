@@ -107,5 +107,5 @@ static mlir::GenRegistration genDirectiveDecls(
     "gen-directive-decl",
     "Generate declarations for directives (OpenMP/OpenACC etc.)",
     [](const RecordKeeper &records, raw_ostream &os) {
-      return emitDecls(records, dialect, os);
+      return emitDecls(records, *dialect, os);
     });

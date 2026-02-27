@@ -187,7 +187,7 @@ static Value createTypeConstraint(OpBuilder &builder,
 
   if (predRec.isSubClassOf("TypeDef")) {
     auto dialect = predRec.getValueAsDef("dialect")->getValueAsString("name");
-    if (dialect == selectedDialect) {
+    if (dialect == *selectedDialect) {
       std::string combined = ("!" + predRec.getValueAsString("mnemonic")).str();
       SmallVector<FlatSymbolRefAttr> nested = {
           SymbolRefAttr::get(ctx, combined)};
@@ -326,7 +326,7 @@ static Value createAttrConstraint(OpBuilder &builder,
 
   if (predRec.isSubClassOf("AttrDef")) {
     auto dialect = predRec.getValueAsDef("dialect")->getValueAsString("name");
-    if (dialect == selectedDialect) {
+    if (dialect == *selectedDialect) {
       std::string combined = ("#" + predRec.getValueAsString("mnemonic")).str();
       SmallVector<FlatSymbolRefAttr> nested = {SymbolRefAttr::get(ctx, combined)
 
@@ -523,7 +523,7 @@ static irdl::AttributeOp createIRDLAttr(OpBuilder &builder,
 static irdl::DialectOp createIRDLDialect(OpBuilder &builder) {
   MLIRContext *ctx = builder.getContext();
   return irdl::DialectOp::create(builder, UnknownLoc::get(ctx),
-                                 StringAttr::get(ctx, selectedDialect));
+                                 StringAttr::get(ctx, *selectedDialect));
 }
 
 static bool emitDialectIRDLDefs(const RecordKeeper &records, raw_ostream &os) {
@@ -544,7 +544,7 @@ static bool emitDialectIRDLDefs(const RecordKeeper &records, raw_ostream &os) {
   for (const Record *type :
        records.getAllDerivedDefinitionsIfDefined("TypeDef")) {
     tblgen::TypeDef tblgenType(type);
-    if (tblgenType.getDialect().getName() != selectedDialect)
+    if (tblgenType.getDialect().getName() != *selectedDialect)
       continue;
     createIRDLType(builder, tblgenType);
   }
@@ -552,14 +552,14 @@ static bool emitDialectIRDLDefs(const RecordKeeper &records, raw_ostream &os) {
   for (const Record *attr :
        records.getAllDerivedDefinitionsIfDefined("AttrDef")) {
     tblgen::AttrDef tblgenAttr(attr);
-    if (tblgenAttr.getDialect().getName() != selectedDialect)
+    if (tblgenAttr.getDialect().getName() != *selectedDialect)
       continue;
     createIRDLAttr(builder, tblgenAttr);
   }
 
   for (const Record *def : records.getAllDerivedDefinitionsIfDefined("Op")) {
     tblgen::Operator tblgenOp(def);
-    if (tblgenOp.getDialectName() != selectedDialect)
+    if (tblgenOp.getDialectName() != *selectedDialect)
       continue;
 
     createIRDLOperation(builder, tblgenOp);

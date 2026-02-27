@@ -122,8 +122,8 @@ static std::pair<StringRef, bool> determineOutputType(bool IsMIR,
   bool OutputBitcode = ForceOutputBitcode || InputIsBitcode;
 
   if (ReplaceInput) { // In-place
-    OutputFilename = InputFilename.c_str();
-  } else if (OutputFilename.empty()) {
+    OutputFilename = InputFilename->c_str();
+  } else if (OutputFilename->empty()) {
     // Default to producing bitcode if the input was bitcode, if not explicitly
     // requested.
 
@@ -131,7 +131,7 @@ static std::pair<StringRef, bool> determineOutputType(bool IsMIR,
         IsMIR ? "reduced.mir" : (OutputBitcode ? "reduced.bc" : "reduced.ll");
   }
 
-  return {OutputFilename, OutputBitcode};
+  return {*OutputFilename, OutputBitcode};
 }
 
 int main(int Argc, char **Argv) {
@@ -163,13 +163,13 @@ int main(int Argc, char **Argv) {
     ReduceModeMIR = true;
   }
 
-  if (InputFilename.empty()) {
+  if (InputFilename->empty()) {
     WithColor::error(errs(), ToolName)
         << "reduction testcase positional argument must be specified\n";
     return 1;
   }
 
-  if (TestFilename.empty()) {
+  if (TestFilename->empty()) {
     WithColor::error(errs(), ToolName) << "--test option must be specified\n";
     return 1;
   }
@@ -180,8 +180,8 @@ int main(int Argc, char **Argv) {
   LLVMContext Context;
   std::unique_ptr<TargetMachine> TM;
 
-  auto [OriginalProgram, InputIsBitcode] =
-      parseReducerWorkItem(ToolName, InputFilename, Context, TM, ReduceModeMIR);
+  auto [OriginalProgram, InputIsBitcode] = parseReducerWorkItem(
+      ToolName, *InputFilename, Context, TM, ReduceModeMIR);
   if (!OriginalProgram) {
     return 1;
   }
@@ -192,7 +192,7 @@ int main(int Argc, char **Argv) {
       determineOutputType(ReduceModeMIR, InputIsBitcode);
 
   // Initialize test environment
-  TestRunner Tester(TestFilename, TestArguments, std::move(OriginalProgram),
+  TestRunner Tester(*TestFilename, TestArguments, std::move(OriginalProgram),
                     std::move(TM), ToolName, OutputFilename, InputIsBitcode,
                     OutputBitcode);
 

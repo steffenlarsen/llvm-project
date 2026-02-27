@@ -301,7 +301,7 @@ struct TimeTracerRAII {
   ~TimeTracerRAII() {
     if (!TimeTrace)
       return;
-    if (auto E = timeTraceProfilerWrite(TimeTraceFile, OutputFilename)) {
+    if (auto E = timeTraceProfilerWrite(*TimeTraceFile, *OutputFilename)) {
       handleAllErrors(std::move(E), [&](const StringError &SE) {
         errs() << SE.getMessage() << "\n";
       });
@@ -497,8 +497,8 @@ optMain(int argc, char **argv,
     Context.enableDebugTypeODRUniquing();
 
   Expected<LLVMRemarkFileHandle> RemarksFileOrErr =
-      setupLLVMOptimizationRemarks(Context, RemarksFilename, RemarksPasses,
-                                   RemarksFormat, RemarksWithHotness,
+      setupLLVMOptimizationRemarks(Context, *RemarksFilename, *RemarksPasses,
+                                   *RemarksFormat, RemarksWithHotness,
                                    RemarksHotnessThreshold);
   if (Error E = RemarksFileOrErr.takeError()) {
     errs() << toString(std::move(E)) << '\n';
@@ -514,7 +514,7 @@ optMain(int argc, char **argv,
   auto SetDataLayout = [&](StringRef IRTriple,
                            StringRef IRLayout) -> std::optional<std::string> {
     // Data layout specified on the command line has the highest priority.
-    if (!ClDataLayout.empty())
+    if (!ClDataLayout->empty())
       return ClDataLayout;
     // If an explicit data layout is already defined in the IR, don't infer.
     if (!IRLayout.empty())
@@ -523,8 +523,9 @@ optMain(int argc, char **argv,
     // If an explicit triple was specified (either in the IR or on the
     // command line), use that to infer the default data layout. However, the
     // command line target triple should override the IR file target triple.
-    std::string TripleStr =
-        TargetTriple.empty() ? IRTriple.str() : Triple::normalize(TargetTriple);
+    std::string TripleStr = TargetTriple->empty()
+                                ? IRTriple.str()
+                                : Triple::normalize(*TargetTriple);
     // If the triple string is still empty, we don't fall back to
     // sys::getDefaultTargetTriple() since we do not want to have differing
     // behaviour dependent on the configured default triple. Therefore, if the
@@ -546,10 +547,10 @@ optMain(int argc, char **argv,
   std::unique_ptr<Module> M;
   if (NoUpgradeDebugInfo)
     M = parseAssemblyFileWithIndexNoUpgradeDebugInfo(
-            InputFilename, Err, Context, nullptr, SetDataLayout)
+            *InputFilename, Err, Context, nullptr, SetDataLayout)
             .Mod;
   else
-    M = parseIRFile(InputFilename, Err, Context,
+    M = parseIRFile(*InputFilename, Err, Context,
                     ParserCallbacks(SetDataLayout));
 
   if (!M) {
@@ -570,8 +571,8 @@ optMain(int argc, char **argv,
   }
 
   // If we are supposed to override the target triple, do so now.
-  if (!TargetTriple.empty())
-    M->setTargetTriple(Triple(Triple::normalize(TargetTriple)));
+  if (!TargetTriple->empty())
+    M->setTargetTriple(Triple(Triple::normalize(*TargetTriple)));
 
   // Immediately run the verifier to catch any problems before starting up the
   // pass pipelines.  Otherwise we can crash on broken code during
@@ -599,26 +600,26 @@ optMain(int argc, char **argv,
   std::unique_ptr<ToolOutputFile> Out;
   std::unique_ptr<ToolOutputFile> ThinLinkOut;
   if (NoOutput) {
-    if (!OutputFilename.empty())
+    if (!OutputFilename->empty())
       errs() << "WARNING: The -o (output filename) option is ignored when\n"
                 "the --disable-output option is used.\n";
   } else {
     // Default to standard output.
-    if (OutputFilename.empty())
+    if (OutputFilename->empty())
       OutputFilename = "-";
 
     std::error_code EC;
     sys::fs::OpenFlags Flags =
         OutputAssembly ? sys::fs::OF_TextWithCRLF : sys::fs::OF_None;
-    Out.reset(new ToolOutputFile(OutputFilename, EC, Flags));
+    Out.reset(new ToolOutputFile(*OutputFilename, EC, Flags));
     if (EC) {
       errs() << EC.message() << '\n';
       return 1;
     }
 
-    if (!ThinLinkBitcodeFile.empty()) {
+    if (!ThinLinkBitcodeFile->empty()) {
       ThinLinkOut.reset(
-          new ToolOutputFile(ThinLinkBitcodeFile, EC, sys::fs::OF_None));
+          new ToolOutputFile(*ThinLinkBitcodeFile, EC, sys::fs::OF_None));
       if (EC) {
         errs() << EC.message() << '\n';
         return 1;
@@ -756,7 +757,7 @@ optMain(int argc, char **argv,
             EmitModuleHash, EnableDebugify, VerifyDebugInfoPreserve,
             EnableProfileVerification, UnifiedLTO))
       return 1;
-    return codegen::MaybeSaveStatistics(OutputFilename, "opt");
+    return codegen::MaybeSaveStatistics(*OutputFilename, "opt");
   }
 
   if (OptLevelO0 || OptLevelO1 || OptLevelO2 || OptLevelOs || OptLevelOz ||
@@ -788,8 +789,8 @@ optMain(int argc, char **argv,
   } else if (VerifyEachDebugInfoPreserve) {
     Passes.setDebugifyMode(DebugifyMode::OriginalDebugInfo);
     Passes.setDebugInfoBeforePass(DebugInfoBeforePass);
-    if (!VerifyDIPreserveExport.empty())
-      Passes.setOrigDIVerifyBugsReportFilePath(VerifyDIPreserveExport);
+    if (!VerifyDIPreserveExport->empty())
+      Passes.setOrigDIVerifyBugsReportFilePath(*VerifyDIPreserveExport);
   }
 
   bool AddOneTimeDebugifyPasses =
@@ -850,11 +851,11 @@ optMain(int argc, char **argv,
     if (EnableDebugify)
       Passes.add(createCheckDebugifyModulePass(false));
     else if (VerifyDebugInfoPreserve) {
-      if (!VerifyDIPreserveExport.empty())
-        Passes.setOrigDIVerifyBugsReportFilePath(VerifyDIPreserveExport);
+      if (!VerifyDIPreserveExport->empty())
+        Passes.setOrigDIVerifyBugsReportFilePath(*VerifyDIPreserveExport);
       Passes.add(createCheckDebugifyModulePass(
           false, "", nullptr, DebugifyMode::OriginalDebugInfo,
-          &(Passes.getDebugInfoPerPass()), VerifyDIPreserveExport));
+          &(Passes.getDebugInfoPerPass()), *VerifyDIPreserveExport));
     }
   }
 
@@ -924,8 +925,8 @@ optMain(int argc, char **argv,
       Out->os() << BOS->str();
   }
 
-  if (DebugifyEach && !DebugifyExport.empty())
-    exportDebugifyStats(DebugifyExport, Passes.getDebugifyStatsMap());
+  if (DebugifyEach && !DebugifyExport->empty())
+    exportDebugifyStats(*DebugifyExport, Passes.getDebugifyStatsMap());
 
   // Declare success.
   if (!NoOutput)
@@ -937,5 +938,5 @@ optMain(int argc, char **argv,
   if (ThinLinkOut)
     ThinLinkOut->keep();
 
-  return codegen::MaybeSaveStatistics(OutputFilename, "opt");
+  return codegen::MaybeSaveStatistics(*OutputFilename, "opt");
 }

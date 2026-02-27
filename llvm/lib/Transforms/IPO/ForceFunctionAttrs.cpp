@@ -98,8 +98,8 @@ static bool hasForceAttributes() {
 PreservedAnalyses ForceFunctionAttrsPass::run(Module &M,
                                               ModuleAnalysisManager &) {
   bool Changed = false;
-  if (!CSVFilePath.empty()) {
-    auto BufferOrError = MemoryBuffer::getFileOrSTDIN(CSVFilePath);
+  if (!CSVFilePath->empty()) {
+    auto BufferOrError = MemoryBuffer::getFileOrSTDIN(*CSVFilePath);
     if (!BufferOrError) {
       std::error_code EC = BufferOrError.getError();
       M.getContext().emitError("cannot open CSV file: " + EC.message());

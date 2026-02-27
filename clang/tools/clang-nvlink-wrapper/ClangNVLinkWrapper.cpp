@@ -361,11 +361,11 @@ Expected<std::unique_ptr<lto::LTO>> createLTO(const ArgList &Args) {
   Conf.Options = codegen::InitTargetOptionsFromCodeGenFlags(Triple);
 
   Conf.RemarksFilename =
-      Args.getLastArgValue(OPT_opt_remarks_filename, RemarksFilename);
+      Args.getLastArgValue(OPT_opt_remarks_filename, *RemarksFilename);
   Conf.RemarksPasses =
-      Args.getLastArgValue(OPT_opt_remarks_filter, RemarksPasses);
+      Args.getLastArgValue(OPT_opt_remarks_filter, *RemarksPasses);
   Conf.RemarksFormat =
-      Args.getLastArgValue(OPT_opt_remarks_format, RemarksFormat);
+      Args.getLastArgValue(OPT_opt_remarks_format, *RemarksFormat);
 
   Conf.RemarksWithHotness =
       Args.hasArg(OPT_opt_remarks_with_hotness) || RemarksWithHotness;

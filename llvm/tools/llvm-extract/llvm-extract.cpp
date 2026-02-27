@@ -138,7 +138,7 @@ int main(int argc, char **argv) {
 
   // Use lazy loading, since we only care about selected global values.
   SMDiagnostic Err;
-  std::unique_ptr<Module> M = getLazyIRFileModule(InputFilename, Err, Context);
+  std::unique_ptr<Module> M = getLazyIRFileModule(*InputFilename, Err, Context);
 
   if (!M) {
     Err.print(argv[0], errs());
@@ -404,7 +404,7 @@ int main(int argc, char **argv) {
   PM.addPass(StripDeadCGProfilePass());
 
   std::error_code EC;
-  ToolOutputFile Out(OutputFilename, EC, sys::fs::OF_None);
+  ToolOutputFile Out(*OutputFilename, EC, sys::fs::OF_None);
   if (EC) {
     errs() << EC.message() << '\n';
     return 1;

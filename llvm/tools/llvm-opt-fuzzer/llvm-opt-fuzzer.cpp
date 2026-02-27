@@ -146,7 +146,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
   PB.registerLoopAnalyses(LAM);
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
-  auto Err = PB.parsePassPipeline(MPM, PassPipeline);
+  auto Err = PB.parsePassPipeline(MPM, *PassPipeline);
   assert(!Err && "Should have been checked during fuzzer initialization");
   // Only fail with assert above, otherwise ignore the parsing error.
   consumeError(std::move(Err));
@@ -194,25 +194,25 @@ extern "C" LLVM_ATTRIBUTE_USED int LLVMFuzzerInitialize(int *argc,
 
   // Create TargetMachine
   //
-  if (TargetTripleStr.empty()) {
+  if (TargetTripleStr->empty()) {
     errs() << ExecName << ": -mtriple must be specified\n";
     exit(1);
   }
   ExitOnError ExitOnErr(std::string(ExecName) + ": error:");
   TM = ExitOnErr(codegen::createTargetMachineForTriple(
-      Triple::normalize(TargetTripleStr)));
+      Triple::normalize(*TargetTripleStr)));
 
   // Check that pass pipeline is specified and correct
   //
 
-  if (PassPipeline.empty()) {
+  if (PassPipeline->empty()) {
     errs() << ExecName << ": at least one pass should be specified\n";
     exit(1);
   }
 
   PassBuilder PB(TM.get());
   ModulePassManager MPM;
-  if (auto Err = PB.parsePassPipeline(MPM, PassPipeline)) {
+  if (auto Err = PB.parsePassPipeline(MPM, *PassPipeline)) {
     errs() << ExecName << ": " << toString(std::move(Err)) << "\n";
     exit(1);
   }

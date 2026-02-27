@@ -143,10 +143,10 @@ void MetaRename(Module &M,
   SmallVector<StringRef, 8> ExcludedGlobalsPrefixes;
   SmallVector<StringRef, 8> ExcludedStructsPrefixes;
   SmallVector<StringRef, 8> ExcludedFuncPrefixes;
-  parseExcludedPrefixes(RenameExcludeAliasPrefixes, ExcludedAliasesPrefixes);
-  parseExcludedPrefixes(RenameExcludeGlobalPrefixes, ExcludedGlobalsPrefixes);
-  parseExcludedPrefixes(RenameExcludeStructPrefixes, ExcludedStructsPrefixes);
-  parseExcludedPrefixes(RenameExcludeFunctionPrefixes, ExcludedFuncPrefixes);
+  parseExcludedPrefixes(*RenameExcludeAliasPrefixes, ExcludedAliasesPrefixes);
+  parseExcludedPrefixes(*RenameExcludeGlobalPrefixes, ExcludedGlobalsPrefixes);
+  parseExcludedPrefixes(*RenameExcludeStructPrefixes, ExcludedStructsPrefixes);
+  parseExcludedPrefixes(*RenameExcludeFunctionPrefixes, ExcludedFuncPrefixes);
 
   auto IsNameExcluded = [](StringRef &Name,
                            SmallVectorImpl<StringRef> &ExcludedPrefixes) {

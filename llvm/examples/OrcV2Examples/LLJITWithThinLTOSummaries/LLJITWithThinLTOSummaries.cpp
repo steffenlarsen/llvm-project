@@ -191,7 +191,7 @@ int main(int Argc, char *Argv[]) {
 
   // (1) Read the index file and parse the module summary index.
   std::unique_ptr<MemoryBuffer> SummaryBuffer =
-      ExitOnErr(errorOrToExpected(MemoryBuffer::getFile(IndexFile)));
+      ExitOnErr(errorOrToExpected(MemoryBuffer::getFile(*IndexFile)));
 
   std::unique_ptr<ModuleSummaryIndex> SummaryIndex =
       ExitOnErr(getModuleSummaryIndex(SummaryBuffer->getMemBufferRef()));

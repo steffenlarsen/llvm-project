@@ -46,9 +46,9 @@ struct XeVMAttachTarget
 DictionaryAttr XeVMAttachTarget::getFlags(OpBuilder &builder) const {
   SmallVector<NamedAttribute, 3> flags;
   // Tokenize and set the optional command line options.
-  if (!cmdOptions.empty()) {
+  if (!cmdOptions->empty()) {
     std::pair<llvm::BumpPtrAllocator, SmallVector<const char *>> options =
-        gpu::TargetOptions::tokenizeCmdOptions(cmdOptions);
+        gpu::TargetOptions::tokenizeCmdOptions(*cmdOptions);
     if (!options.second.empty()) {
       llvm::SmallVector<mlir::Attribute> xevmOptionAttrs;
       for (const char *opt : options.second) {
@@ -71,14 +71,14 @@ void XeVMAttachTarget::runOnOperation() {
   ArrayRef<std::string> libs(linkLibs);
   SmallVector<StringRef> filesToLink(libs);
   auto target = builder.getAttr<xevm::XeVMTargetAttr>(
-      optLevel, triple, chip, getFlags(builder),
+      optLevel, *triple, *chip, getFlags(builder),
       filesToLink.empty() ? nullptr : builder.getStrArrayAttr(filesToLink));
-  llvm::Regex matcher(moduleMatcher);
+  llvm::Regex matcher(*moduleMatcher);
   for (Region &region : getOperation()->getRegions())
     for (Block &block : region.getBlocks())
       for (auto module : block.getOps<gpu::GPUModuleOp>()) {
         // Check if the name of the module matches.
-        if (!moduleMatcher.empty() && !matcher.match(module.getName()))
+        if (!moduleMatcher->empty() && !matcher.match(module.getName()))
           continue;
         // Create the target array.
         SmallVector<Attribute> targets;

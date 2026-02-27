@@ -454,7 +454,7 @@ CtxProfAnalysis::CtxProfAnalysis(std::optional<StringRef> Profile)
         if (Profile)
           return *Profile;
         if (UseCtxProfile.getNumOccurrences())
-          return UseCtxProfile;
+          return *UseCtxProfile;
         return std::nullopt;
       }()) {}
 

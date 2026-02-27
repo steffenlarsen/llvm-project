@@ -755,7 +755,7 @@ int main(int argc, char **argv) {
     DumpInputAnnotationHelp(outs());
     return 0;
   }
-  if (CheckFilename.empty()) {
+  if (CheckFilename->empty()) {
     errs() << "<check-file> not specified\n";
     return 2;
   }
@@ -808,9 +808,9 @@ int main(int argc, char **argv) {
 
   // Read the expected strings from the check file.
   ErrorOr<std::unique_ptr<MemoryBuffer>> CheckFileOrErr =
-      MemoryBuffer::getFileOrSTDIN(CheckFilename, /*IsText=*/true);
+      MemoryBuffer::getFileOrSTDIN(*CheckFilename, /*IsText=*/true);
   if (std::error_code EC = CheckFileOrErr.getError()) {
-    errs() << "Could not open check file '" << CheckFilename
+    errs() << "Could not open check file '" << *CheckFilename
            << "': " << EC.message() << '\n';
     return 2;
   }
@@ -830,18 +830,18 @@ int main(int argc, char **argv) {
 
   // Open the file to check and add it to SourceMgr.
   ErrorOr<std::unique_ptr<MemoryBuffer>> InputFileOrErr =
-      MemoryBuffer::getFileOrSTDIN(InputFilename, /*IsText=*/true);
-  if (InputFilename == "-")
-    InputFilename = "<stdin>"; // Overwrite for improved diagnostic messages
+      MemoryBuffer::getFileOrSTDIN(*InputFilename, /*IsText=*/true);
+  if (*InputFilename == "-")
+    *InputFilename = "<stdin>"; // Overwrite for improved diagnostic messages
   if (std::error_code EC = InputFileOrErr.getError()) {
-    errs() << "Could not open input file '" << InputFilename
+    errs() << "Could not open input file '" << *InputFilename
            << "': " << EC.message() << '\n';
     return 2;
   }
   MemoryBuffer &InputFile = *InputFileOrErr.get();
 
   if (InputFile.getBufferSize() == 0 && !AllowEmptyInput) {
-    errs() << "FileCheck error: '" << InputFilename << "' is empty.\n";
+    errs() << "FileCheck error: '" << *InputFilename << "' is empty.\n";
     DumpCommandLine(argc, argv);
     return 2;
   }
@@ -861,8 +861,8 @@ int main(int argc, char **argv) {
   if (DumpInput == DumpInputAlways ||
       (ExitCode == 1 && DumpInput == DumpInputFail)) {
     errs() << "\n"
-           << "Input file: " << InputFilename << "\n"
-           << "Check file: " << CheckFilename << "\n"
+           << "Input file: " << *InputFilename << "\n"
+           << "Check file: " << *CheckFilename << "\n"
            << "\n"
            << "-dump-input=help explains the following input dump.\n"
            << "\n";

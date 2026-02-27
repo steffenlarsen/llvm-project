@@ -23,7 +23,7 @@ struct PrintIRPass : public impl::PrintIRPassBase<PrintIRPass> {
 
   void runOnOperation() override {
     llvm::dbgs() << "// -----// IR Dump";
-    if (!this->label.empty())
+    if (!this->label->empty())
       llvm::dbgs() << " " << this->label;
     llvm::dbgs() << " //----- //\n";
     getOperation()->dump();

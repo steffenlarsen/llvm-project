@@ -3666,8 +3666,8 @@ bool MachineBlockPlacement::run(MachineFunction &MF) {
 
   // View the function.
   if (ViewBlockLayoutWithBFI != GVDT_None &&
-      (ViewBlockFreqFuncName.empty() ||
-       F->getFunction().getName() == ViewBlockFreqFuncName)) {
+      (ViewBlockFreqFuncName->empty() ||
+       F->getFunction().getName() == *ViewBlockFreqFuncName)) {
     if (RenumberBlocksBeforeView)
       MF.RenumberBlocks();
     MBFI->view("MBP." + MF.getName(), false);

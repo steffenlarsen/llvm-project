@@ -211,7 +211,7 @@ private:
 } // namespace
 
 LogicalResult ReductionTreePass::initialize(MLIRContext *context) {
-  tester.setTestScript(testerName);
+  tester.setTestScript(*testerName);
   tester.setTestScriptArgs(testerArgs);
 
   RewritePatternSet patterns(context);

@@ -362,10 +362,10 @@ computeDiff(const StringMap<InstCountAndStackSize> &FuncNameToSizeInfoA,
 
 /// Attempt to get the output stream for writing the diff.
 static ErrorOr<std::unique_ptr<ToolOutputFile>> getOutputStream() {
-  if (OutputFilename == "")
-    OutputFilename = "-";
+  if (*OutputFilename == "")
+    *OutputFilename = "-";
   std::error_code EC;
-  auto Out = std::make_unique<ToolOutputFile>(OutputFilename, EC,
+  auto Out = std::make_unique<ToolOutputFile>(*OutputFilename, EC,
                                               sys::fs::OF_TextWithCRLF);
   if (!EC)
     return std::move(Out);
@@ -484,14 +484,14 @@ static Error trySizeSiff() {
   StringMap<InstCountAndStackSize> FuncNameToSizeInfoA;
   StringMap<InstCountAndStackSize> FuncNameToSizeInfoB;
   if (auto E =
-          tryReadFileAndProcessRemarks(InputFileNameA, FuncNameToSizeInfoA))
+          tryReadFileAndProcessRemarks(*InputFileNameA, FuncNameToSizeInfoA))
     return E;
   if (auto E =
-          tryReadFileAndProcessRemarks(InputFileNameB, FuncNameToSizeInfoB))
+          tryReadFileAndProcessRemarks(*InputFileNameB, FuncNameToSizeInfoB))
     return E;
   DiffsCategorizedByFilesPresent DiffsByFilesPresent;
   computeDiff(FuncNameToSizeInfoA, FuncNameToSizeInfoB, DiffsByFilesPresent);
-  if (auto E = tryOutputAllDiffs(InputFileNameA, InputFileNameB,
+  if (auto E = tryOutputAllDiffs(*InputFileNameA, *InputFileNameB,
                                  DiffsByFilesPresent))
     return E;
   return Error::success();

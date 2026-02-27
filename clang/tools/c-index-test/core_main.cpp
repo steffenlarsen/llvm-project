@@ -371,9 +371,9 @@ int indextest_core_main(int argc, const char **argv) {
   }
 
   if (options::Action == ActionType::PrintSourceSymbols) {
-    if (!options::ModuleFilePath.empty()) {
-      return printSourceSymbolsFromModule(options::ModuleFilePath,
-                                          options::ModuleFormat);
+    if (!options::ModuleFilePath->empty()) {
+      return printSourceSymbolsFromModule(*options::ModuleFilePath,
+                                          *options::ModuleFormat);
     }
     if (CompArgs.empty()) {
       errs() << "error: missing compiler args; pass '-- <compiler arguments>'\n";

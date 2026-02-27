@@ -107,10 +107,10 @@ int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv, "llvm-bcanalyzer file analyzer\n");
   ExitOnError ExitOnErr("llvm-bcanalyzer: ");
 
-  std::unique_ptr<MemoryBuffer> MB = ExitOnErr(openBitcodeFile(InputFilename));
+  std::unique_ptr<MemoryBuffer> MB = ExitOnErr(openBitcodeFile(*InputFilename));
   std::unique_ptr<MemoryBuffer> BlockInfoMB = nullptr;
-  if (!BlockInfoFilename.empty())
-    BlockInfoMB = ExitOnErr(openBitcodeFile(BlockInfoFilename));
+  if (!BlockInfoFilename->empty())
+    BlockInfoMB = ExitOnErr(openBitcodeFile(*BlockInfoFilename));
 
   BitcodeAnalyzer BA(MB->getBuffer(),
                      BlockInfoMB
@@ -125,7 +125,8 @@ int main(int argc, char **argv) {
 
   ExitOnErr(BA.analyze(
       Dump ? std::optional<BCDumpOptions>(O) : std::optional<BCDumpOptions>(),
-      CheckHash.empty() ? std::nullopt : std::optional<StringRef>(CheckHash)));
+      CheckHash->empty() ? std::nullopt
+                         : std::optional<StringRef>(*CheckHash)));
 
   if (Dump)
     outs() << "\n\n";

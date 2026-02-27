@@ -168,8 +168,8 @@ TEST_F(ProgramEnvTest, CreateProcessLongPath) {
 
 TEST_F(ProgramEnvTest, CreateProcessTrailingSlash) {
   if (getenv("LLVM_PROGRAM_TEST_CHILD")) {
-    if (ProgramTestStringArg1 == "has\\\\ trailing\\" &&
-        ProgramTestStringArg2 == "has\\\\ trailing\\") {
+    if (*ProgramTestStringArg1 == "has\\\\ trailing\\" &&
+        *ProgramTestStringArg2 == "has\\\\ trailing\\") {
       exit(0);  // Success!  The arguments were passed and parsed.
     }
     exit(1);

@@ -28,7 +28,7 @@ using namespace llvm;
   static cl::opt<std::string> *NAME##View;                                     \
   StringRef llvm::mc::get##NAME() {                                            \
     assert(NAME##View && "RegisterMCTargetOptionsFlags not created.");         \
-    return *NAME##View;                                                        \
+    return **NAME##View;                                                       \
   }
 
 #define MCOPT_EXP(TY, NAME)                                                    \

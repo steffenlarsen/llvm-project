@@ -46,7 +46,7 @@ public:
   void
   init(const std::vector<std::vector<BasicBlock *>> &GroupsOfBlocksToExtract) {
     GroupsOfBlocks = GroupsOfBlocksToExtract;
-    if (!BlockExtractorFile.empty())
+    if (!BlockExtractorFile->empty())
       loadFile();
   }
 
@@ -65,7 +65,7 @@ private:
 
 /// Gets all of the blocks specified in the input file.
 void BlockExtractor::loadFile() {
-  auto ErrOrBuf = MemoryBuffer::getFile(BlockExtractorFile);
+  auto ErrOrBuf = MemoryBuffer::getFile(*BlockExtractorFile);
   if (ErrOrBuf.getError())
     report_fatal_error("BlockExtractor couldn't load the file.");
   // Read the file.

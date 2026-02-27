@@ -125,10 +125,10 @@ void PassManagerOptions::addPrinterInstrumentation(PassManager &pm) {
     return;
 
   // Otherwise, add the IR printing instrumentation.
-  if (!printTreeDir.empty()) {
+  if (!printTreeDir->empty()) {
     pm.enableIRPrintingToFileTree(shouldPrintBeforePass, shouldPrintAfterPass,
                                   printModuleScope, printAfterChange,
-                                  printAfterFailure, printTreeDir);
+                                  printAfterFailure, *printTreeDir);
     return;
   }
 
@@ -156,7 +156,7 @@ LogicalResult mlir::applyPassManagerCLOptions(PassManager &pm) {
 
   // Generate a reproducer on crash/failure.
   if (options->reproducerFile.getNumOccurrences())
-    pm.enableCrashReproducerGeneration(options->reproducerFile,
+    pm.enableCrashReproducerGeneration(*options->reproducerFile,
                                        options->localReproducer);
 
   // Enable statistics dumping.

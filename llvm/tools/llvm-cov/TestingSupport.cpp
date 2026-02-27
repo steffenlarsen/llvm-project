@@ -33,7 +33,7 @@ int convertForTestingMain(int argc, const char *argv[]) {
 
   cl::ParseCommandLineOptions(argc, argv, "LLVM code coverage tool\n");
 
-  auto ObjErr = llvm::object::ObjectFile::createObjectFile(InputSourceFile);
+  auto ObjErr = llvm::object::ObjectFile::createObjectFile(*InputSourceFile);
   if (!ObjErr) {
     std::string Buf;
     raw_string_ostream OS(Buf);
@@ -126,7 +126,7 @@ int convertForTestingMain(int argc, const char *argv[]) {
     ProfileNamesData = ProfileNamesData.drop_front(1);
 
   int FD;
-  if (auto Err = sys::fs::openFileForWrite(OutputFilename, FD)) {
+  if (auto Err = sys::fs::openFileForWrite(*OutputFilename, FD)) {
     errs() << "error: " << Err.message() << "\n";
     return 1;
   }

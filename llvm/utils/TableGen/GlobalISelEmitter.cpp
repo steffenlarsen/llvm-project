@@ -2423,9 +2423,9 @@ bool hasBFloatType(const TreePatternNode &Node) {
 }
 
 void GlobalISelEmitter::run(raw_ostream &OS) {
-  if (!UseCoverageFile.empty()) {
+  if (!UseCoverageFile->empty()) {
     RuleCoverage = CodeGenCoverage();
-    auto RuleCoverageBufOrErr = MemoryBuffer::getFile(UseCoverageFile);
+    auto RuleCoverageBufOrErr = MemoryBuffer::getFile(*UseCoverageFile);
     if (!RuleCoverageBufOrErr) {
       PrintWarning(SMLoc(), "Missing rule coverage data");
       RuleCoverage = std::nullopt;

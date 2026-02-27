@@ -30747,7 +30747,7 @@ bool DAGCombiner::mayAlias(SDNode *Op0, SDNode *Op1) const {
                    : DAG.getSubtarget().useAA();
 #ifndef NDEBUG
   if (CombinerAAOnlyFunc.getNumOccurrences() &&
-      CombinerAAOnlyFunc != DAG.getMachineFunction().getName())
+      *CombinerAAOnlyFunc != DAG.getMachineFunction().getName())
     UseAA = false;
 #endif
 

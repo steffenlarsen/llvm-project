@@ -52,12 +52,12 @@ INPUT_OUTPUT_COMMAND_LINE_OPTIONS(InstructionMix)
 
 static Error tryInstructionMix() {
   auto MaybeOF =
-      getOutputFileWithFlags(OutputFileName, sys::fs::OF_TextWithCRLF);
+      getOutputFileWithFlags(*OutputFileName, sys::fs::OF_TextWithCRLF);
   if (!MaybeOF)
     return MaybeOF.takeError();
 
   auto OF = std::move(*MaybeOF);
-  auto MaybeBuf = getInputMemoryBuffer(InputFileName);
+  auto MaybeBuf = getInputMemoryBuffer(*InputFileName);
   if (!MaybeBuf)
     return MaybeBuf.takeError();
   auto MaybeParser = createRemarkParser(InputFormat, (*MaybeBuf)->getBuffer());

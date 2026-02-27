@@ -44,13 +44,13 @@ public:
 void OptReductionPass::runOnOperation() {
   LDBG() << "\nOptimization Reduction pass: ";
 
-  Tester test(testerName, testerArgs);
+  Tester test(*testerName, testerArgs);
 
   ModuleOp module = this->getOperation();
   ModuleOp moduleVariant = module.clone();
 
   OpPassManager passManager("builtin.module");
-  if (failed(parsePassPipeline(optPass, passManager))) {
+  if (failed(parsePassPipeline(*optPass, passManager))) {
     module.emitError() << "\nfailed to parse pass pipeline";
     return signalPassFailure();
   }

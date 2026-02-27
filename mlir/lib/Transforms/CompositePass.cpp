@@ -47,7 +47,7 @@ struct CompositeFixedPointPass final
                                                               errorHandler)))
       return failure();
 
-    if (failed(parsePassPipeline(pipelineStr, dynamicPM)))
+    if (failed(parsePassPipeline(*pipelineStr, dynamicPM)))
       return errorHandler("Failed to parse composite pass pipeline");
 
     return success();
@@ -91,7 +91,7 @@ struct CompositeFixedPointPass final
   }
 
 protected:
-  llvm::StringRef getName() const override { return name; }
+  llvm::StringRef getName() const override { return *name; }
 
 private:
   OpPassManager dynamicPM;

@@ -437,21 +437,21 @@ static bool format(StringRef FileName, bool ErrorOnIncompleteFormat = false) {
   std::vector<tooling::Range> Ranges;
   if (fillRanges(Code.get(), Ranges))
     return true;
-  StringRef AssumedFileName = IsSTDIN ? AssumeFileName : FileName;
+  StringRef AssumedFileName = IsSTDIN ? *AssumeFileName : FileName;
   if (AssumedFileName.empty()) {
     llvm::errs() << "error: empty filenames are not allowed\n";
     return true;
   }
 
   Expected<FormatStyle> FormatStyle =
-      getStyle(Style, AssumedFileName, FallbackStyle, Code->getBuffer(),
+      getStyle(*Style, AssumedFileName, *FallbackStyle, Code->getBuffer(),
                nullptr, WNoErrorList.isSet(WNoError::Unknown));
   if (!FormatStyle) {
     llvm::errs() << toString(FormatStyle.takeError()) << "\n";
     return true;
   }
 
-  StringRef QualifierAlignmentOrder = QualifierAlignment;
+  StringRef QualifierAlignmentOrder = *QualifierAlignment;
 
   FormatStyle->QualifierAlignment =
       StringSwitch<FormatStyle::QualifierAlignmentStyle>(
@@ -565,9 +565,9 @@ static int dumpConfig() {
     Code = std::move(CodeOrErr.get());
   }
   Expected<clang::format::FormatStyle> FormatStyle = clang::format::getStyle(
-      Style,
+      *Style,
       FileNames.empty() || FileNames[0] == "-" ? AssumeFileName : FileNames[0],
-      FallbackStyle, Code ? Code->getBuffer() : "");
+      *FallbackStyle, Code ? Code->getBuffer() : "");
   if (!FormatStyle) {
     llvm::errs() << toString(FormatStyle.takeError()) << "\n";
     return 1;
@@ -689,7 +689,7 @@ int main(int argc, const char **argv) {
   if (DumpConfig)
     return dumpConfig();
 
-  if (!Files.empty()) {
+  if (!Files->empty()) {
     std::ifstream ExternalFileOfFiles{std::string(Files)};
     std::string Line;
     unsigned LineNo = 1;
@@ -701,7 +701,7 @@ int main(int argc, const char **argv) {
   }
 
   if (FileNames.empty()) {
-    if (isIgnored(AssumeFileName))
+    if (isIgnored(*AssumeFileName))
       return 0;
     return clang::format::format("-", FailOnIncompleteFormat);
   }

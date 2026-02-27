@@ -137,8 +137,8 @@ void registerToSPIRVTranslation() {
       "serialize-spirv", "serialize SPIR-V dialect",
       [](spirv::ModuleOp moduleOp, raw_ostream &output) {
         return serializeModule(moduleOp, output,
-                               {true, false, !validationFilesPrefix.empty(),
-                                validationFilesPrefix});
+                               {true, false, !validationFilesPrefix->empty(),
+                                *validationFilesPrefix});
       },
       [](DialectRegistry &registry) {
         registry.insert<spirv::SPIRVDialect>();

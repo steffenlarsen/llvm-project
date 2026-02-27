@@ -1138,12 +1138,13 @@ ModuleSummaryIndex llvm::buildModuleSummaryIndex(
     }
   }
 
-  if (!ModuleSummaryDotFile.empty()) {
+  if (!ModuleSummaryDotFile->empty()) {
     std::error_code EC;
-    raw_fd_ostream OSDot(ModuleSummaryDotFile, EC, sys::fs::OpenFlags::OF_Text);
+    raw_fd_ostream OSDot(*ModuleSummaryDotFile, EC,
+                         sys::fs::OpenFlags::OF_Text);
     if (EC)
       report_fatal_error(Twine("Failed to open dot file ") +
-                         ModuleSummaryDotFile + ": " + EC.message() + "\n");
+                         *ModuleSummaryDotFile + ": " + EC.message() + "\n");
     Index.exportToDot(OSDot, {});
   }
 

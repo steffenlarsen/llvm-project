@@ -886,13 +886,13 @@ int main(int argc, char **argv) {
     return 1;
   }
   // -error-detail and -json-summary-file both imply -verify
-  if (ErrorDetails != Unspecified || !JsonErrSummaryFile.empty()) {
+  if (ErrorDetails != Unspecified || !JsonErrSummaryFile->empty()) {
     Verify = true;
   }
 
   std::error_code EC;
-  ToolOutputFile OutputFile(OutputFilename, EC, sys::fs::OF_TextWithCRLF);
-  error("unable to open output file " + OutputFilename, EC);
+  ToolOutputFile OutputFile(*OutputFilename, EC, sys::fs::OF_TextWithCRLF);
+  error("unable to open output file " + *OutputFilename, EC);
   // Don't remove output file if we exit with an error.
   OutputFile.keep();
 
@@ -902,10 +902,10 @@ int main(int argc, char **argv) {
   // in which case all sections are dumped, or B) a specific section is
   // requested.
 #define HANDLE_DWARF_SECTION(ENUM_NAME, ELF_NAME, CMDLINE_NAME, OPTION)        \
-  if (Dump##ENUM_NAME.IsRequested) {                                           \
+  if (Dump##ENUM_NAME->IsRequested) {                                          \
     DumpType |= DIDT_##ENUM_NAME;                                              \
-    if (Dump##ENUM_NAME.HasValue) {                                            \
-      DumpOffsets[DIDT_ID_##ENUM_NAME] = Dump##ENUM_NAME.Val;                  \
+    if (Dump##ENUM_NAME->HasValue) {                                           \
+      DumpOffsets[DIDT_ID_##ENUM_NAME] = Dump##ENUM_NAME->Val;                 \
       OffsetRequested = true;                                                  \
     }                                                                          \
   }

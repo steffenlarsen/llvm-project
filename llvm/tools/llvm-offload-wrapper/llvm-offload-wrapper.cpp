@@ -94,7 +94,7 @@ static Error wrapImages(ArrayRef<ArrayRef<char>> BuffersToWrap) {
   }
 
   int FD = -1;
-  if (std::error_code EC = sys::fs::openFileForWrite(OutputFile, FD))
+  if (std::error_code EC = sys::fs::openFileForWrite(*OutputFile, FD))
     return errorCodeToError(EC);
   llvm::raw_fd_ostream OS(FD, true);
   WriteBitcodeToFile(M, OS);

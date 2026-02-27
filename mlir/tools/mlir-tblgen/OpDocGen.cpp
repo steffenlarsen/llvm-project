@@ -236,7 +236,7 @@ static StringRef resolveAttrDescription(const Attribute &attr) {
 static void emitOpDoc(const Operator &op, raw_ostream &os) {
   std::string classNameStr = op.getQualCppClassName();
   StringRef className = classNameStr;
-  (void)className.consume_front(stripPrefix);
+  (void)className.consume_front(*stripPrefix);
   os << formatv("\n### `{0}` ({1})\n", op.getOperationName(), className);
 
   // Emit the summary, syntax, and description if present.

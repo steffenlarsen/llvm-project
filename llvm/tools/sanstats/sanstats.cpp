@@ -61,7 +61,7 @@ static const char *ReadModule(char SizeofPtr, const char *Begin,
   std::string Filename(FilenameBegin, Begin - FilenameBegin);
 
   if (!llvm::sys::fs::exists(Filename))
-    Filename = std::string(llvm::sys::path::parent_path(ClInputFile)) +
+    Filename = std::string(llvm::sys::path::parent_path(*ClInputFile)) +
                std::string(llvm::sys::path::filename(Filename));
 
   ++Begin;
@@ -131,23 +131,23 @@ int main(int argc, char **argv) {
                               "Sanitizer Statistics Processing Tool");
 
   ErrorOr<std::unique_ptr<MemoryBuffer>> MBOrErr = MemoryBuffer::getFile(
-      ClInputFile, /*IsText=*/false, /*RequiresNullTerminator=*/false);
+      *ClInputFile, /*IsText=*/false, /*RequiresNullTerminator=*/false);
   if (!MBOrErr) {
-    errs() << argv[0] << ": " << ClInputFile << ": "
+    errs() << argv[0] << ": " << *ClInputFile << ": "
            << MBOrErr.getError().message() << '\n';
     return 1;
   }
   std::unique_ptr<MemoryBuffer> MB = std::move(MBOrErr.get());
   const char *Begin = MB->getBufferStart(), *End = MB->getBufferEnd();
   if (Begin == End) {
-    errs() << argv[0] << ": " << ClInputFile << ": short read\n";
+    errs() << argv[0] << ": " << *ClInputFile << ": short read\n";
     return 1;
   }
   char SizeofPtr = *Begin++;
   while (Begin != End) {
     Begin = ReadModule(SizeofPtr, Begin, End);
     if (Begin == nullptr) {
-      errs() << argv[0] << ": " << ClInputFile << ": short read\n";
+      errs() << argv[0] << ": " << *ClInputFile << ": short read\n";
       return 1;
     }
     assert(Begin <= End);

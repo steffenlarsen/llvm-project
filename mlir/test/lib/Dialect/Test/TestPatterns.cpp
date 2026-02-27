@@ -576,11 +576,11 @@ public:
     DumpNotifications dumpNotifications;
     GreedyRewriteConfig config;
     config.setListener(&dumpNotifications);
-    if (strictMode == "AnyOp") {
+    if (*strictMode == "AnyOp") {
       config.setStrictness(GreedyRewriteStrictness::AnyOp);
-    } else if (strictMode == "ExistingAndNewOps") {
+    } else if (*strictMode == "ExistingAndNewOps") {
       config.setStrictness(GreedyRewriteStrictness::ExistingAndNewOps);
-    } else if (strictMode == "ExistingOps") {
+    } else if (*strictMode == "ExistingOps") {
       config.setStrictness(GreedyRewriteStrictness::ExistingOps);
     } else {
       llvm_unreachable("invalid strictness option");

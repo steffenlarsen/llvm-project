@@ -180,7 +180,7 @@ int main(int argc, char **argv) {
 
   if (InputFilenames.size() < 1) {
     InputFilenames.push_back("-");
-  } else if (InputFilenames.size() > 1 && !OutputFilename.empty()) {
+  } else if (InputFilenames.size() > 1 && !OutputFilename->empty()) {
     errs()
         << "error: output file name cannot be set for multiple input files\n";
     return 1;
@@ -205,7 +205,7 @@ int main(int argc, char **argv) {
 
     const size_t N = IF.Mods.size();
 
-    if (OutputFilename == "-" && N > 1)
+    if (*OutputFilename == "-" && N > 1)
       errs() << "only single module bitcode files can be written to stdout\n";
 
     for (size_t I = 0; I < N; ++I) {

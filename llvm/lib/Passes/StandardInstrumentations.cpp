@@ -540,7 +540,7 @@ void IRChangedPrinter::handleAfter(StringRef PassID, std::string &Name,
 IRChangedTester::~IRChangedTester() = default;
 
 void IRChangedTester::registerCallbacks(PassInstrumentationCallbacks &PIC) {
-  if (TestChanged != "")
+  if (*TestChanged != "")
     TextChangeReporter<std::string>::registerRequiredCallbacks(PIC);
 }
 
@@ -553,13 +553,13 @@ void IRChangedTester::handleIR(const std::string &S, StringRef PassID) {
     dbgs() << "Unable to create temporary file.";
     return;
   }
-  static ErrorOr<std::string> Exe = sys::findProgramByName(TestChanged);
+  static ErrorOr<std::string> Exe = sys::findProgramByName(*TestChanged);
   if (!Exe) {
     dbgs() << "Unable to find test-changed executable.";
     return;
   }
 
-  StringRef Args[] = {TestChanged, FileName[0], PassID};
+  StringRef Args[] = {*TestChanged, FileName[0], PassID};
   int Result = sys::ExecuteAndWait(*Exe, Args);
   if (Result < 0) {
     dbgs() << "Error executing test-changed executable.";
@@ -797,7 +797,7 @@ StringRef PrintIRInstrumentation::getFileSuffix(IRDumpFileSuffixType Type) {
 std::string PrintIRInstrumentation::fetchDumpFilename(
     StringRef PassName, StringRef IRFileDisplayName, unsigned PassNumber,
     IRDumpFileSuffixType SuffixType) {
-  assert(!IRDumpDirectory.empty() &&
+  assert(!IRDumpDirectory->empty() &&
          "The flag -ir-dump-directory must be passed to dump IR to files");
 
   SmallString<64> Filename;
@@ -808,7 +808,7 @@ std::string PrintIRInstrumentation::fetchDumpFilename(
   FilenameStream << getFileSuffix(SuffixType);
 
   SmallString<128> ResultPath;
-  sys::path::append(ResultPath, IRDumpDirectory, Filename);
+  sys::path::append(ResultPath, *IRDumpDirectory, Filename);
   return std::string(ResultPath);
 }
 
@@ -880,7 +880,7 @@ void PrintIRInstrumentation::printBeforePass(StringRef PassID, Any IR) {
     unwrapAndPrint(Stream, IR);
   };
 
-  if (!IRDumpDirectory.empty()) {
+  if (!IRDumpDirectory->empty()) {
     std::string DumpIRFilename =
         fetchDumpFilename(PassID, getIRFileDisplayName(IR), CurrentPassNumber,
                           IRDumpFileSuffixType::Before);
@@ -915,7 +915,7 @@ void PrintIRInstrumentation::printAfterPass(StringRef PassID, Any IR) {
     unwrapAndPrint(Stream, IR);
   };
 
-  if (!IRDumpDirectory.empty()) {
+  if (!IRDumpDirectory->empty()) {
     std::string DumpIRFilename =
         fetchDumpFilename(PassID, getIRFileDisplayName(IR), CurrentPassNumber,
                           IRDumpFileSuffixType::After);
@@ -953,7 +953,7 @@ void PrintIRInstrumentation::printAfterPassInvalidated(StringRef PassID) {
     printIR(Stream, M);
   };
 
-  if (!IRDumpDirectory.empty()) {
+  if (!IRDumpDirectory->empty()) {
     std::string DumpIRFilename =
         fetchDumpFilename(PassID, IRFileDisplayName, PassNumber,
                           IRDumpFileSuffixType::Invalidated);
@@ -1057,14 +1057,14 @@ bool OptPassGateInstrumentation::shouldRun(StringRef PassName, Any IR) {
 
   bool ShouldRun =
       Context.getOptPassGate().shouldRunPass(PassName, getIRName(IR));
-  if (!ShouldRun && !this->HasWrittenIR && !OptBisectPrintIRPath.empty()) {
+  if (!ShouldRun && !this->HasWrittenIR && !OptBisectPrintIRPath->empty()) {
     // FIXME: print IR if limit is higher than number of opt-bisect
     // invocations
     this->HasWrittenIR = true;
     const Module *M = unwrapModule(IR, /*Force=*/true);
     assert((M && &M->getContext() == &Context) && "Missing/Mismatching Module");
     std::error_code EC;
-    raw_fd_ostream OS(OptBisectPrintIRPath, EC);
+    raw_fd_ostream OS(*OptBisectPrintIRPath, EC);
     if (EC)
       report_fatal_error(errorCodeToError(EC));
     M->print(OS, nullptr);
@@ -1812,12 +1812,12 @@ public:
   void setCommon(const BlockDataT<DCData> &Other) {
     assert(!Data[1] && "Expected only one block datum");
     Data[1] = &Other;
-    Colour = CommonColour;
+    Colour = *CommonColour;
   }
   // Add an edge to \p E of colour {\p Value, \p Colour}.
   void addEdge(unsigned E, StringRef Value, StringRef Colour) {
     // This is a new edge or it is an edge being made common.
-    assert((EdgesMap.count(E) == 0 || Colour == CommonColour) &&
+    assert((EdgesMap.count(E) == 0 || Colour == *CommonColour) &&
            "Unexpected edge count and color.");
     EdgesMap[E] = {Value.str(), Colour};
   }
@@ -1903,7 +1903,7 @@ protected:
 };
 
 std::string DotCfgDiffNode::getBodyContent() const {
-  if (Colour == CommonColour) {
+  if (Colour == *CommonColour) {
     assert(Data[1] && "Expected Data[1] to be set.");
 
     StringRef SR[2];
@@ -1916,11 +1916,11 @@ std::string DotCfgDiffNode::getBodyContent() const {
     }
 
     SmallString<80> OldLineFormat = formatv(
-        "<FONT COLOR=\"{0}\">%l</FONT><BR align=\"left\"/>", BeforeColour);
+        "<FONT COLOR=\"{0}\">%l</FONT><BR align=\"left\"/>", *BeforeColour);
     SmallString<80> NewLineFormat = formatv(
-        "<FONT COLOR=\"{0}\">%l</FONT><BR align=\"left\"/>", AfterColour);
+        "<FONT COLOR=\"{0}\">%l</FONT><BR align=\"left\"/>", *AfterColour);
     SmallString<80> UnchangedLineFormat = formatv(
-        "<FONT COLOR=\"{0}\">%l</FONT><BR align=\"left\"/>", CommonColour);
+        "<FONT COLOR=\"{0}\">%l</FONT><BR align=\"left\"/>", *CommonColour);
     std::string Diff = Data[0]->getLabel().str();
     Diff += ":\n<BR align=\"left\"/>" +
             doSystemDiff(makeHTMLReady(SR[0]), makeHTMLReady(SR[1]),
@@ -1983,7 +1983,7 @@ DotCfgDiff::DotCfgDiff(StringRef Title, const FuncDataT<DCData> &Before,
   for (auto &B : Before.getData()) {
     StringRef Label = B.getKey();
     const BlockDataT<DCData> &BD = B.getValue();
-    createNode(Label, BD, BeforeColour);
+    createNode(Label, BD, *BeforeColour);
 
     // Create transitions with names made up of the from block label, the value
     // on which the transition is made and the to block label.
@@ -1992,7 +1992,7 @@ DotCfgDiff::DotCfgDiff(StringRef Title, const FuncDataT<DCData> &Before,
          Sink != E; ++Sink) {
       std::string Key = (Label + " " + Sink->getKey().str()).str() + " " +
                         BD.getData().getSuccessorLabel(Sink->getKey()).str();
-      EdgesMap.insert({Key, BeforeColour});
+      EdgesMap.insert({Key, *BeforeColour});
     }
   }
 
@@ -2003,7 +2003,7 @@ DotCfgDiff::DotCfgDiff(StringRef Title, const FuncDataT<DCData> &Before,
     auto It = NodePosition.find(Label);
     if (It == NodePosition.end())
       // This only exists in the after IR.  Create the node.
-      createNode(Label, BD, AfterColour);
+      createNode(Label, BD, *AfterColour);
     else
       Nodes[It->second].setCommon(BD);
     // Add in the edges between the nodes (as common or only in after).
@@ -2012,9 +2012,9 @@ DotCfgDiff::DotCfgDiff(StringRef Title, const FuncDataT<DCData> &Before,
          Sink != E; ++Sink) {
       std::string Key = (Label + " " + Sink->getKey().str()).str() + " " +
                         BD.getData().getSuccessorLabel(Sink->getKey()).str();
-      auto [It, Inserted] = EdgesMap.try_emplace(Key, AfterColour);
+      auto [It, Inserted] = EdgesMap.try_emplace(Key, *AfterColour);
       if (!Inserted)
-        It->second = CommonColour;
+        It->second = *CommonColour;
     }
   }
 
@@ -2042,7 +2042,7 @@ DotCfgDiff::DotCfgDiff(StringRef Title, const FuncDataT<DCData> &Before,
     else {
       StringRef V = It->getValue();
       std::string NV = colourize(V.str() + " " + Value.str(), Colour);
-      Colour = CommonColour;
+      Colour = *CommonColour;
       It->getValue() = NV;
     }
     SourceNode.addEdge(SinkNode, Value, Colour);
@@ -2264,13 +2264,13 @@ void DotCfgChangeReporter::handleFunctionCompare(
 
 std::string DotCfgChangeReporter::genHTML(StringRef Text, StringRef DotFile,
                                           StringRef PDFFileName) {
-  SmallString<20> PDFFile = formatv("{0}/{1}", DotCfgDir, PDFFileName);
+  SmallString<20> PDFFile = formatv("{0}/{1}", *DotCfgDir, PDFFileName);
   // Create the PDF file.
-  static ErrorOr<std::string> DotExe = sys::findProgramByName(DotBinary);
+  static ErrorOr<std::string> DotExe = sys::findProgramByName(*DotBinary);
   if (!DotExe)
     return "Unable to find dot executable.";
 
-  StringRef Args[] = {DotBinary, "-Tpdf", "-o", PDFFile, DotFile};
+  StringRef Args[] = {*DotBinary, "-Tpdf", "-o", PDFFile, DotFile};
   int Result = sys::ExecuteAndWait(*DotExe, Args, std::nullopt);
   if (Result < 0)
     return "Error executing system dot.";
@@ -2362,7 +2362,7 @@ void DotCfgChangeReporter::handleIgnored(StringRef PassID, std::string &Name) {
 
 bool DotCfgChangeReporter::initializeHTML() {
   std::error_code EC;
-  HTML = std::make_unique<raw_fd_ostream>(DotCfgDir + "/passes.html", EC);
+  HTML = std::make_unique<raw_fd_ostream>(*DotCfgDir + "/passes.html", EC);
   if (EC) {
     HTML = nullptr;
     return false;
@@ -2426,7 +2426,7 @@ void DotCfgChangeReporter::registerCallbacks(
   if (PrintChanged == ChangePrinter::DotCfgVerbose ||
        PrintChanged == ChangePrinter::DotCfgQuiet) {
     SmallString<128> OutputDir;
-    sys::fs::expand_tilde(DotCfgDir, OutputDir);
+    sys::fs::expand_tilde(*DotCfgDir, OutputDir);
     sys::fs::make_absolute(OutputDir);
     assert(!OutputDir.empty() && "expected output dir to be non-empty");
     DotCfgDir = OutputDir.c_str();
@@ -2456,9 +2456,9 @@ PrintCrashIRInstrumentation *PrintCrashIRInstrumentation::CrashReporter =
     nullptr;
 
 void PrintCrashIRInstrumentation::reportCrashIR() {
-  if (!PrintOnCrashPath.empty()) {
+  if (!PrintOnCrashPath->empty()) {
     std::error_code EC;
-    raw_fd_ostream Out(PrintOnCrashPath, EC);
+    raw_fd_ostream Out(*PrintOnCrashPath, EC);
     if (EC)
       report_fatal_error(errorCodeToError(EC));
     Out << SavedIR;
@@ -2473,7 +2473,7 @@ void PrintCrashIRInstrumentation::SignalHandler(void *) {
   if (!CrashReporter)
     return;
 
-  assert((PrintOnCrash || !PrintOnCrashPath.empty()) &&
+  assert((PrintOnCrash || !PrintOnCrashPath->empty()) &&
          "Did not expect to get here without option set.");
   CrashReporter->reportCrashIR();
 }
@@ -2482,14 +2482,14 @@ PrintCrashIRInstrumentation::~PrintCrashIRInstrumentation() {
   if (!CrashReporter)
     return;
 
-  assert((PrintOnCrash || !PrintOnCrashPath.empty()) &&
+  assert((PrintOnCrash || !PrintOnCrashPath->empty()) &&
          "Did not expect to get here without option set.");
   CrashReporter = nullptr;
 }
 
 void PrintCrashIRInstrumentation::registerCallbacks(
     PassInstrumentationCallbacks &PIC) {
-  if ((!PrintOnCrash && PrintOnCrashPath.empty()) || CrashReporter)
+  if ((!PrintOnCrash && PrintOnCrashPath->empty()) || CrashReporter)
     return;
 
   sys::AddSignalHandler(SignalHandler, nullptr);

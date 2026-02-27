@@ -48,16 +48,16 @@ namespace {
 // Save the bitstream profile from the JSON representation.
 Error convertFromYaml() {
   auto BufOrError =
-      MemoryBuffer::getFileOrSTDIN(InputFilename, /*IsText=*/true);
+      MemoryBuffer::getFileOrSTDIN(*InputFilename, /*IsText=*/true);
   if (!BufOrError)
-    return createFileError(InputFilename, BufOrError.getError());
+    return createFileError(*InputFilename, BufOrError.getError());
 
   std::error_code EC;
   // Using a fd_ostream instead of a fd_stream. The latter would be more
   // efficient as the bitstream writer supports incremental flush to it, but the
   // json scenario is for test, and file size scalability doesn't really concern
   // us.
-  raw_fd_ostream Out(OutputFilename, EC);
+  raw_fd_ostream Out(*OutputFilename, EC);
   if (EC)
     return createStringError(EC, "failed to open output");
 
@@ -65,12 +65,12 @@ Error convertFromYaml() {
 }
 
 Error convertToYaml() {
-  auto BufOrError = MemoryBuffer::getFileOrSTDIN(InputFilename);
+  auto BufOrError = MemoryBuffer::getFileOrSTDIN(*InputFilename);
   if (!BufOrError)
-    return createFileError(InputFilename, BufOrError.getError());
+    return createFileError(*InputFilename, BufOrError.getError());
 
   std::error_code EC;
-  raw_fd_ostream Out(OutputFilename, EC);
+  raw_fd_ostream Out(*OutputFilename, EC);
   if (EC)
     return createStringError(EC, "failed to open output");
   PGOCtxProfileReader Reader(BufOrError.get()->getBuffer());

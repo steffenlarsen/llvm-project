@@ -108,14 +108,14 @@ static void validateCommandLine() {
       }
     };
 
-    CheckFileExists(HasPerfData, PerfDataFilename);
-    CheckFileExists(HasPerfScript, PerfScriptFilename);
-    CheckFileExists(HasUnsymbolizedProfile, UnsymbolizedProfFilename);
-    CheckFileExists(HasSampleProfile, SampleProfFilename);
+    CheckFileExists(HasPerfData, *PerfDataFilename);
+    CheckFileExists(HasPerfScript, *PerfScriptFilename);
+    CheckFileExists(HasUnsymbolizedProfile, *UnsymbolizedProfFilename);
+    CheckFileExists(HasSampleProfile, *SampleProfFilename);
   }
 
-  if (!llvm::sys::fs::exists(BinaryPath)) {
-    std::string Msg = "Input binary(" + BinaryPath + ") doesn't exist.";
+  if (!llvm::sys::fs::exists(*BinaryPath)) {
+    std::string Msg = "Input binary(" + *BinaryPath + ") doesn't exist.";
     exitWithError(Msg);
   }
 
@@ -159,7 +159,7 @@ int main(int argc, const char *argv[]) {
 
   // Load symbols and disassemble the code of a given binary.
   std::unique_ptr<ProfiledBinary> Binary =
-      std::make_unique<ProfiledBinary>(BinaryPath, DebugBinPath);
+      std::make_unique<ProfiledBinary>(*BinaryPath, *DebugBinPath);
   if (ShowDisassemblyOnly)
     return EXIT_SUCCESS;
 
@@ -167,7 +167,7 @@ int main(int argc, const char *argv[]) {
     LLVMContext Context;
     auto FS = vfs::getRealFileSystem();
     auto ReaderOrErr =
-        SampleProfileReader::create(SampleProfFilename, Context, *FS);
+        SampleProfileReader::create(*SampleProfFilename, Context, *FS);
     std::unique_ptr<sampleprof::SampleProfileReader> Reader =
         std::move(ReaderOrErr.get());
     Reader->read();
@@ -186,7 +186,7 @@ int main(int argc, const char *argv[]) {
     // Parse perf events and samples
     Reader->parsePerfTraces();
 
-    if (!DataAccessProfileFilename.empty()) {
+    if (!DataAccessProfileFilename->empty()) {
       if (Reader->profileIsCS() || Binary->usePseudoProbes()) {
         exitWithError("Symbolizing vtables from data access profiles is not "
                       "yet supported for context-sensitive perf traces or "
@@ -195,8 +195,8 @@ int main(int argc, const char *argv[]) {
       // Parse the data access perf traces into <ip, data-addr> pairs, symbolize
       // the data-addr to data-symbol. If the data-addr is a vtable, increment
       // counters for the <ip, data-symbol> pair.
-      if (Error E = Reader->parseDataAccessPerfTraces(DataAccessProfileFilename,
-                                                      PIDFilter)) {
+      if (Error E = Reader->parseDataAccessPerfTraces(
+              *DataAccessProfileFilename, PIDFilter)) {
         handleAllErrors(std::move(E), [&](const StringError &SE) {
           exitWithError(SE.getMessage());
         });

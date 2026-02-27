@@ -304,9 +304,9 @@ T ExitOnFileError(const Twine &FileName, Expected<T> &&E) {
 // and returns the opcode indices or {} if snippets should be read from
 // `SnippetsFile`.
 static std::vector<unsigned> getOpcodesOrDie(const LLVMState &State) {
-  const size_t NumSetFlags = (OpcodeNames.empty() ? 0 : 1) +
+  const size_t NumSetFlags = (OpcodeNames->empty() ? 0 : 1) +
                              (OpcodeIndex == 0 ? 0 : 1) +
-                             (SnippetsFile.empty() ? 0 : 1);
+                             (SnippetsFile->empty() ? 0 : 1);
   const auto &ET = State.getExegesisTarget();
   const auto AvailableFeatures = State.getSubtargetInfo().getFeatureBits();
 
@@ -315,7 +315,7 @@ static std::vector<unsigned> getOpcodesOrDie(const LLVMState &State) {
     ExitWithError("please provide one and only one of 'opcode-index', "
                   "'opcode-name' or 'snippets-file'");
   }
-  if (!SnippetsFile.empty())
+  if (!SnippetsFile->empty())
     return {};
   if (OpcodeIndex > 0)
     return {static_cast<unsigned>(OpcodeIndex)};
@@ -392,10 +392,10 @@ static void runBenchmarkConfigurations(
     const BenchmarkRunner &Runner) {
   assert(!Configurations.empty() && "Don't have any configurations to run.");
   std::optional<raw_fd_ostream> FileOstr;
-  if (BenchmarkFile != "-") {
+  if (*BenchmarkFile != "-") {
     int ResultFD = 0;
     // Create output file or open existing file and truncate it, once.
-    ExitOnErr(errorCodeToError(openFileForWrite(BenchmarkFile, ResultFD,
+    ExitOnErr(errorCodeToError(openFileForWrite(*BenchmarkFile, ResultFD,
                                                 sys::fs::CD_CreateAlways,
                                                 sys::fs::OF_TextWithCRLF)));
     FileOstr.emplace(ResultFD, true /*shouldClose*/);
@@ -422,7 +422,7 @@ static void runBenchmarkConfigurations(
             Conf, IterationRepetitions, LoopBodySize, *Repetitor));
         std::optional<StringRef> DumpFile;
         if (DumpObjectToDisk.getNumOccurrences())
-          DumpFile = DumpObjectToDisk;
+          DumpFile = *DumpObjectToDisk;
         const std::optional<int> BenchmarkCPU =
             BenchmarkProcessCPU == -1
                 ? std::nullopt
@@ -460,7 +460,7 @@ static void runBenchmarkConfigurations(
     if (UseDummyPerfCounters)
       Result.Measurements.clear();
 
-    ExitOnFileError(BenchmarkFile, Result.writeYamlTo(State, Ostr));
+    ExitOnFileError(*BenchmarkFile, Result.writeYamlTo(State, Ostr));
   }
 }
 
@@ -487,7 +487,7 @@ void benchmarkMain() {
 #include "llvm/Config/TargetExegesis.def"
 
   const LLVMState State = ExitOnErr(
-      LLVMState::Create(TripleName, MCPU, MAttr, UseDummyPerfCounters));
+      LLVMState::Create(*TripleName, *MCPU, *MAttr, UseDummyPerfCounters));
 
   // Preliminary check to ensure features needed for requested
   // benchmark mode are present on target CPU and/or OS.
@@ -515,7 +515,7 @@ void benchmarkMain() {
           State.getTargetMachine().getTargetTriple());
 
   if (Opcodes.empty()) {
-    Configurations = ExitOnErr(readSnippets(State, SnippetsFile));
+    Configurations = ExitOnErr(readSnippets(State, *SnippetsFile));
     for (const auto &Configuration : Configurations) {
       if (ExecutionMode != BenchmarkRunner::ExecutionModeE::SubProcess &&
           (Configuration.Key.MemoryMappings.size() != 0 ||
@@ -573,7 +573,7 @@ void benchmarkMain() {
   }
 
   // Write to standard output if file is not set.
-  if (BenchmarkFile.empty())
+  if (BenchmarkFile->empty())
     BenchmarkFile = "-";
 
   if (!Configurations.empty())
@@ -623,11 +623,11 @@ static void filterPoints(MutableArrayRef<Benchmark> Points,
 
 static void analysisMain() {
   ExitOnErr.setBanner("llvm-exegesis: ");
-  if (BenchmarkFile.empty())
+  if (BenchmarkFile->empty())
     ExitWithError("--benchmarks-file must be set");
 
-  if (AnalysisClustersOutputFile.empty() &&
-      AnalysisInconsistenciesOutputFile.empty()) {
+  if (AnalysisClustersOutputFile->empty() &&
+      AnalysisInconsistenciesOutputFile->empty()) {
     ExitWithError(
         "for --mode=analysis: At least one of --analysis-clusters-output-file "
         "and --analysis-inconsistencies-output-file must be specified");
@@ -639,13 +639,12 @@ static void analysisMain() {
   LLVMInitialize##TargetName##Disassembler();
 #include "llvm/Config/TargetExegesis.def"
 
-  auto MemoryBuffer = ExitOnFileError(
-      BenchmarkFile,
-      errorOrToExpected(MemoryBuffer::getFile(BenchmarkFile, /*IsText=*/true)));
+  auto MemoryBuffer =
+      ExitOnFileError(*BenchmarkFile, errorOrToExpected(MemoryBuffer::getFile(
+                                          *BenchmarkFile, /*IsText=*/true)));
 
   const auto TriplesAndCpus = ExitOnFileError(
-      BenchmarkFile,
-      Benchmark::readTriplesAndCpusFromYamls(*MemoryBuffer));
+      *BenchmarkFile, Benchmark::readTriplesAndCpusFromYamls(*MemoryBuffer));
   if (TriplesAndCpus.empty()) {
     errs() << "no benchmarks to analyze\n";
     return;
@@ -669,7 +668,7 @@ static void analysisMain() {
   const LLVMState State = ExitOnErr(
       LLVMState::Create(TripleAndCpu.LLVMTriple, TripleAndCpu.CpuName));
   std::vector<Benchmark> Points = ExitOnFileError(
-      BenchmarkFile, Benchmark::readYamls(State, *MemoryBuffer));
+      *BenchmarkFile, Benchmark::readYamls(State, *MemoryBuffer));
 
   outs() << "Parsed " << Points.size() << " benchmark points\n";
   if (Points.empty()) {

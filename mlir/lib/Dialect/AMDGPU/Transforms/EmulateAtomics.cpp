@@ -210,9 +210,9 @@ void mlir::amdgpu::populateAmdgpuEmulateAtomicsPatterns(
 
 void AmdgpuEmulateAtomicsPass::runOnOperation() {
   Operation *op = getOperation();
-  FailureOr<Chipset> maybeChipset = Chipset::parse(chipset);
+  FailureOr<Chipset> maybeChipset = Chipset::parse(*chipset);
   if (failed(maybeChipset)) {
-    emitError(op->getLoc(), "Invalid chipset name: " + chipset);
+    emitError(op->getLoc(), "Invalid chipset name: " + *chipset);
     return signalPassFailure();
   }
 

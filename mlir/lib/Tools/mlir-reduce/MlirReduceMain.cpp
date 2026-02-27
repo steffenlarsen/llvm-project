@@ -89,12 +89,12 @@ LogicalResult mlir::mlirReduceMain(int argc, char **argv,
 
   std::string errorMessage;
 
-  auto output = openOutputFile(outputFilename, &errorMessage);
+  auto output = openOutputFile(*outputFilename, &errorMessage);
   if (!output)
     return failure();
 
   OwningOpRef<Operation *> opRef =
-      loadModule(context, inputFilename, !noImplicitModule);
+      loadModule(context, *inputFilename, !noImplicitModule);
   if (!opRef)
     return failure();
 

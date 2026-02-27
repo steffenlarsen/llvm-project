@@ -1357,13 +1357,13 @@ static std::unique_ptr<Module> cloneAll(const Module &M) {
 
 /// Writes \p SG as a DOTGraph to \ref ModuleDotCfgDir if requested.
 static void writeDOTGraph(const SplitGraph &SG) {
-  if (ModuleDotCfgOutput.empty())
+  if (ModuleDotCfgOutput->empty())
     return;
 
   std::error_code EC;
-  raw_fd_ostream OS(ModuleDotCfgOutput, EC);
+  raw_fd_ostream OS(*ModuleDotCfgOutput, EC);
   if (EC) {
-    errs() << "[" DEBUG_TYPE "]: cannot open '" << ModuleDotCfgOutput
+    errs() << "[" DEBUG_TYPE "]: cannot open '" << *ModuleDotCfgOutput
            << "' - DOTGraph will not be printed\n";
   }
   WriteGraph(OS, SG, /*ShortName=*/false,
@@ -1469,11 +1469,11 @@ static void splitAMDGPUModule(
   LLVM_DEBUG(Proposal->print(dbgs()););
 
   std::optional<raw_fd_ostream> SummariesOS;
-  if (!PartitionSummariesOutput.empty()) {
+  if (!PartitionSummariesOutput->empty()) {
     std::error_code EC;
-    SummariesOS.emplace(PartitionSummariesOutput, EC);
+    SummariesOS.emplace(*PartitionSummariesOutput, EC);
     if (EC)
-      errs() << "[" DEBUG_TYPE "]: cannot open '" << PartitionSummariesOutput
+      errs() << "[" DEBUG_TYPE "]: cannot open '" << *PartitionSummariesOutput
              << "' - Partition summaries will not be printed\n";
   }
 

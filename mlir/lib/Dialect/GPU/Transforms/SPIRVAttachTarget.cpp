@@ -45,16 +45,16 @@ struct SPIRVAttachTarget
 
 void SPIRVAttachTarget::runOnOperation() {
   OpBuilder builder(&getContext());
-  auto versionSymbol = symbolizeVersion(spirvVersion);
+  auto versionSymbol = symbolizeVersion(*spirvVersion);
   if (!versionSymbol)
     return signalPassFailure();
-  auto apiSymbol = symbolizeClientAPI(clientApi);
+  auto apiSymbol = symbolizeClientAPI(*clientApi);
   if (!apiSymbol)
     return signalPassFailure();
-  auto vendorSymbol = symbolizeVendor(deviceVendor);
+  auto vendorSymbol = symbolizeVendor(*deviceVendor);
   if (!vendorSymbol)
     return signalPassFailure();
-  auto deviceTypeSymbol = symbolizeDeviceType(deviceType);
+  auto deviceTypeSymbol = symbolizeDeviceType(*deviceType);
   if (!deviceTypeSymbol)
     return signalPassFailure();
   // Set the default device ID if none was given
@@ -80,10 +80,10 @@ void SPIRVAttachTarget::runOnOperation() {
   auto target = TargetEnvAttr::get(vce, getDefaultResourceLimits(&getContext()),
                                    apiSymbol.value(), vendorSymbol.value(),
                                    deviceTypeSymbol.value(), deviceId);
-  llvm::Regex matcher(moduleMatcher);
+  llvm::Regex matcher(*moduleMatcher);
   getOperation()->walk([&](gpu::GPUModuleOp gpuModule) {
     // Check if the name of the module matches.
-    if (!moduleMatcher.empty() && !matcher.match(gpuModule.getName()))
+    if (!moduleMatcher->empty() && !matcher.match(gpuModule.getName()))
       return;
     // Create the target array.
     SmallVector<Attribute> targets;

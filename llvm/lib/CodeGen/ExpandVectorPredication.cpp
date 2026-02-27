@@ -69,7 +69,7 @@ static VPTransform parseOverrideOption(const std::string &TextOpt) {
 
 // Whether any override options are set.
 static bool anyExpandVPOverridesSet() {
-  return !EVLTransformOverride.empty() || !MaskTransformOverride.empty();
+  return !EVLTransformOverride->empty() || !MaskTransformOverride->empty();
 }
 
 #define DEBUG_TYPE "expandvp"
@@ -664,8 +664,8 @@ CachingVPExpander::getVPLegalizationStrategy(const VPIntrinsic &VPI) const {
 
   // Overrides set - we are in testing, the following does not need to be
   // efficient.
-  VPStrat.EVLParamStrategy = parseOverrideOption(EVLTransformOverride);
-  VPStrat.OpStrategy = parseOverrideOption(MaskTransformOverride);
+  VPStrat.EVLParamStrategy = parseOverrideOption(*EVLTransformOverride);
+  VPStrat.OpStrategy = parseOverrideOption(*MaskTransformOverride);
   return VPStrat;
 }
 

@@ -78,10 +78,11 @@ static StringSet<> CHRModules;
 static StringSet<> CHRFunctions;
 
 static void parseCHRFilterFiles() {
-  if (!CHRModuleList.empty()) {
-    auto FileOrErr = MemoryBuffer::getFile(CHRModuleList);
+  if (!CHRModuleList->empty()) {
+    auto FileOrErr = MemoryBuffer::getFile(*CHRModuleList);
     if (!FileOrErr) {
-      errs() << "Error: Couldn't read the chr-module-list file " << CHRModuleList << "\n";
+      errs() << "Error: Couldn't read the chr-module-list file "
+             << *CHRModuleList << "\n";
       std::exit(1);
     }
     StringRef Buf = FileOrErr->get()->getBuffer();
@@ -93,10 +94,11 @@ static void parseCHRFilterFiles() {
         CHRModules.insert(Line);
     }
   }
-  if (!CHRFunctionList.empty()) {
-    auto FileOrErr = MemoryBuffer::getFile(CHRFunctionList);
+  if (!CHRFunctionList->empty()) {
+    auto FileOrErr = MemoryBuffer::getFile(*CHRFunctionList);
     if (!FileOrErr) {
-      errs() << "Error: Couldn't read the chr-function-list file " << CHRFunctionList << "\n";
+      errs() << "Error: Couldn't read the chr-function-list file "
+             << *CHRFunctionList << "\n";
       std::exit(1);
     }
     StringRef Buf = FileOrErr->get()->getBuffer();
@@ -415,7 +417,7 @@ static bool shouldApply(Function &F, ProfileSummaryInfo &PSI) {
   if (ForceCHR)
     return true;
 
-  if (!CHRModuleList.empty() || !CHRFunctionList.empty()) {
+  if (!CHRModuleList->empty() || !CHRFunctionList->empty()) {
     if (CHRModules.count(F.getParent()->getName()))
       return true;
     return CHRFunctions.count(F.getName());

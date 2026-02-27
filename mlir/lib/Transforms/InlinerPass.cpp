@@ -163,8 +163,8 @@ LogicalResult InlinerPass::initializeOptions(
   // optimization pipeline in opPipelineList to use the option string.
   // TODO: Use a generic pass manager for the pre-inline pipeline, and remove
   // this.
-  if (!defaultPipelineStr.empty()) {
-    std::string defaultPipelineCopy = defaultPipelineStr;
+  if (!defaultPipelineStr->empty()) {
+    std::string defaultPipelineCopy = *defaultPipelineStr;
     config.setDefaultPipeline([=](OpPassManager &pm) {
       (void)parsePassPipeline(defaultPipelineCopy, pm);
     });

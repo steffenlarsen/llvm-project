@@ -1245,7 +1245,7 @@ GCNTargetMachine::createMachineScheduler(MachineSchedContext *C) const {
       C->MF->getFunction().getFnAttribute("amdgpu-sched-strategy");
   StringRef SchedStrategy = SchedStrategyAttr.isValid()
                                 ? SchedStrategyAttr.getValueAsString()
-                                : AMDGPUSchedStrategy;
+                                : *AMDGPUSchedStrategy;
 
   if (SchedStrategy == "max-ilp")
     return createGCNMaxILPMachineScheduler(C);

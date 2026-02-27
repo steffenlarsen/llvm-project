@@ -125,9 +125,9 @@ llvm::Error CommonOptionsParser::init(
       SourcePathList.empty())
     return llvm::Error::success();
   if (!Compilations) {
-    if (!BuildPath.empty()) {
-      Compilations =
-          CompilationDatabase::autoDetectFromDirectory(BuildPath, ErrorMessage);
+    if (!BuildPath->empty()) {
+      Compilations = CompilationDatabase::autoDetectFromDirectory(*BuildPath,
+                                                                  ErrorMessage);
     } else {
       Compilations = CompilationDatabase::autoDetectFromSource(SourcePaths[0],
                                                                ErrorMessage);

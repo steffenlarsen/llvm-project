@@ -130,15 +130,15 @@ static Instruction *getFirstNonAllocaInTheEntryBlock(Function *F) {
 
 #ifndef NDEBUG
 static std::unique_ptr<raw_fd_ostream> getOrCreateLogFile() {
-  assert(!CoroElideInfoOutputFilename.empty() &&
+  assert(!CoroElideInfoOutputFilename->empty() &&
          "coro-elide-info-output-file shouldn't be empty");
   std::error_code EC;
-  auto Result = std::make_unique<raw_fd_ostream>(CoroElideInfoOutputFilename,
+  auto Result = std::make_unique<raw_fd_ostream>(*CoroElideInfoOutputFilename,
                                                  EC, sys::fs::OF_Append);
   if (!EC)
     return Result;
   llvm::errs() << "Error opening coro-elide-info-output-file '"
-               << CoroElideInfoOutputFilename << " for appending!\n";
+               << *CoroElideInfoOutputFilename << " for appending!\n";
   return std::make_unique<raw_fd_ostream>(2, false); // stderr.
 }
 #endif
@@ -414,9 +414,9 @@ bool CoroIdElider::attemptElide() {
     NumOfCoroElided++;
 
 #ifndef NDEBUG
-      if (!CoroElideInfoOutputFilename.empty())
-        *getOrCreateLogFile() << "Elide " << CalleeCoroutineName << " in "
-                              << FEI.ContainingFunction->getName() << "\n";
+    if (!CoroElideInfoOutputFilename->empty())
+      *getOrCreateLogFile() << "Elide " << CalleeCoroutineName << " in "
+                            << FEI.ContainingFunction->getName() << "\n";
 #endif
 
       ORE.emit([&]() {

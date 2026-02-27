@@ -294,9 +294,9 @@ static llvm::cl::opt<std::string> simpleRenameReplace{
 
 // Rewriter that does simple renames.
 static LogicalResult simpleRename(RewritePad &rewriteState, raw_ostream &os) {
-  StringRef opName = simpleRenameOpName;
-  StringRef match = simpleRenameMatch;
-  StringRef replace = simpleRenameReplace;
+  StringRef opName = *simpleRenameOpName;
+  StringRef match = *simpleRenameMatch;
+  StringRef replace = *simpleRenameReplace;
   llvm::Regex regex(match);
 
   rewriteState.getParsed()->walk([&](Operation *op) {
@@ -372,19 +372,19 @@ int main(int argc, char **argv) {
   }
 
   // Set up rewrite buffer.
-  auto rewriterOr = RewritePad::init(inputFilename, outputFilename);
+  auto rewriterOr = RewritePad::init(*inputFilename, *outputFilename);
   if (!rewriterOr)
     return mlir::asMainReturnCode(mlir::failure());
 
   // Set up the output file.
   std::string errorMessage;
-  auto output = openOutputFile(outputFilename, &errorMessage);
+  auto output = openOutputFile(*outputFilename, &errorMessage);
   if (!output) {
     llvm::errs() << errorMessage << "\n";
     return mlir::asMainReturnCode(mlir::failure());
   }
 
-  LogicalResult result = rewriter->invoke(*rewriterOr, output->os());
+  LogicalResult result = (*rewriter)->invoke(*rewriterOr, output->os());
   if (succeeded(result)) {
     rewriterOr->write(output->os());
     output->keep();

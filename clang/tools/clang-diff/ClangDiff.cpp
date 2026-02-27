@@ -90,7 +90,7 @@ getAST(const std::unique_ptr<CompilationDatabase> &CommonCompilations,
   std::unique_ptr<CompilationDatabase> Compilations;
   if (!CommonCompilations) {
     Compilations = CompilationDatabase::autoDetectFromSource(
-        BuildPath.empty() ? Filename : BuildPath, ErrorMessage);
+        BuildPath->empty() ? Filename : *BuildPath, ErrorMessage);
     if (!Compilations) {
       llvm::errs()
           << "Error while trying to load a compilation database, running "
@@ -455,11 +455,11 @@ int main(int argc, const char **argv) {
   addExtraArgs(CommonCompilations);
 
   if (ASTDump || ASTDumpJson) {
-    if (!DestinationPath.empty()) {
+    if (!DestinationPath->empty()) {
       llvm::errs() << "Error: Please specify exactly one filename.\n";
       return 1;
     }
-    std::unique_ptr<ASTUnit> AST = getAST(CommonCompilations, SourcePath);
+    std::unique_ptr<ASTUnit> AST = getAST(CommonCompilations, *SourcePath);
     if (!AST)
       return 1;
     diff::SyntaxTree Tree(AST->getASTContext());
@@ -468,30 +468,30 @@ int main(int argc, const char **argv) {
       return 0;
     }
     llvm::outs() << R"({"filename":")";
-    printJsonString(llvm::outs(), SourcePath);
+    printJsonString(llvm::outs(), *SourcePath);
     llvm::outs() << R"(","root":)";
     printNodeAsJson(llvm::outs(), Tree, Tree.getRootId());
     llvm::outs() << "}\n";
     return 0;
   }
 
-  if (DestinationPath.empty()) {
+  if (DestinationPath->empty()) {
     llvm::errs() << "Error: Exactly two paths are required.\n";
     return 1;
   }
 
-  std::unique_ptr<ASTUnit> Src = getAST(CommonCompilations, SourcePath);
-  std::unique_ptr<ASTUnit> Dst = getAST(CommonCompilations, DestinationPath);
+  std::unique_ptr<ASTUnit> Src = getAST(CommonCompilations, *SourcePath);
+  std::unique_ptr<ASTUnit> Dst = getAST(CommonCompilations, *DestinationPath);
   if (!Src || !Dst)
     return 1;
 
   diff::ComparisonOptions Options;
   if (MaxSize != -1)
     Options.MaxSize = MaxSize;
-  if (!StopAfter.empty()) {
-    if (StopAfter == "topdown")
+  if (!StopAfter->empty()) {
+    if (*StopAfter == "topdown")
       Options.StopAfterTopDown = true;
-    else if (StopAfter != "bottomup") {
+    else if (*StopAfter != "bottomup") {
       llvm::errs() << "Error: Invalid argument for -stop-after\n";
       return 1;
     }

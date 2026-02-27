@@ -921,7 +921,8 @@ static void yamlToPdb(StringRef Path) {
   Builder.getStringTableBuilder().setStrings(*Strings.strings());
 
   codeview::GUID IgnoredOutGuid;
-  ExitOnErr(Builder.commit(opts::yaml2pdb::YamlPdbOutputFile, &IgnoredOutGuid));
+  ExitOnErr(
+      Builder.commit(*opts::yaml2pdb::YamlPdbOutputFile, &IgnoredOutGuid));
 }
 
 static PDBFile &loadPDB(StringRef Path, std::unique_ptr<IPDBSession> &Session) {
@@ -1402,7 +1403,7 @@ static void mergePdbs() {
   });
   Builder.getInfoBuilder().addFeature(PdbRaw_FeatureSig::VC140);
 
-  SmallString<64> OutFile(opts::merge::PdbOutputFile);
+  SmallString<64> OutFile(*opts::merge::PdbOutputFile);
   if (OutFile.empty()) {
     OutFile = opts::merge::InputFilenames[0];
     llvm::sys::path::replace_extension(OutFile, "merged.pdb");
@@ -1435,7 +1436,7 @@ static void exportStream() {
   if (!opts::exportstream::ForceName) {
     // First try to parse it as an integer, if it fails fall back to treating it
     // as a named stream.
-    if (to_integer(opts::exportstream::Stream, Index)) {
+    if (to_integer(*opts::exportstream::Stream, Index)) {
       if (Index >= File.getNumStreams()) {
         errs() << "Error: " << Index << " is not a valid stream index.\n";
         exit(1);
@@ -1448,8 +1449,8 @@ static void exportStream() {
 
   if (!Success) {
     InfoStream &IS = cantFail(File.getPDBInfoStream());
-    Index = ExitOnErr(IS.getNamedStreamIndex(opts::exportstream::Stream));
-    outs() << "Dumping contents of stream '" << opts::exportstream::Stream
+    Index = ExitOnErr(IS.getNamedStreamIndex(*opts::exportstream::Stream));
+    outs() << "Dumping contents of stream '" << *opts::exportstream::Stream
            << "' (index " << Index << ") to file " << OutFileName << ".\n";
   }
 
@@ -1502,16 +1503,16 @@ int main(int Argc, const char **Argv) {
   cl::ParseCommandLineOptions(Argc, Argv, "LLVM PDB Dumper\n");
 
   if (opts::BytesSubcommand) {
-    if (!parseRange(opts::bytes::DumpBlockRangeOpt,
+    if (!parseRange(*opts::bytes::DumpBlockRangeOpt,
                     opts::bytes::DumpBlockRange)) {
-      errs() << "Argument '" << opts::bytes::DumpBlockRangeOpt
+      errs() << "Argument '" << *opts::bytes::DumpBlockRangeOpt
              << "' invalid format.\n";
       errs().flush();
       exit(1);
     }
-    if (!parseRange(opts::bytes::DumpByteRangeOpt,
+    if (!parseRange(*opts::bytes::DumpByteRangeOpt,
                     opts::bytes::DumpByteRange)) {
-      errs() << "Argument '" << opts::bytes::DumpByteRangeOpt
+      errs() << "Argument '" << *opts::bytes::DumpByteRangeOpt
              << "' invalid format.\n";
       errs().flush();
       exit(1);
@@ -1617,12 +1618,12 @@ int main(int Argc, const char **Argv) {
   if (opts::PdbToYamlSubcommand) {
     pdb2Yaml(opts::pdb2yaml::InputFilename.front());
   } else if (opts::YamlToPdbSubcommand) {
-    if (opts::yaml2pdb::YamlPdbOutputFile.empty()) {
+    if (opts::yaml2pdb::YamlPdbOutputFile->empty()) {
       SmallString<16> OutputFilename(opts::yaml2pdb::InputFilename.getValue());
       sys::path::replace_extension(OutputFilename, ".pdb");
       opts::yaml2pdb::YamlPdbOutputFile = std::string(OutputFilename);
     }
-    yamlToPdb(opts::yaml2pdb::InputFilename);
+    yamlToPdb(*opts::yaml2pdb::InputFilename);
   } else if (opts::DiaDumpSubcommand) {
     llvm::for_each(opts::diadump::InputFilenames, dumpDia);
   } else if (opts::PrettySubcommand) {

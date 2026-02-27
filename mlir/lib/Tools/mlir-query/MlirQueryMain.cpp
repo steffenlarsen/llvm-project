@@ -72,14 +72,14 @@ mlir::mlirQueryMain(int argc, char **argv, MLIRContext &context,
   // When reading from stdin and the input is a tty, it is often a user mistake
   // and the process "appears to be stuck". Print a message to let the user
   // know!
-  if (inputFilename == "-" &&
+  if (*inputFilename == "-" &&
       llvm::sys::Process::FileDescriptorIsDisplayed(fileno(stdin)))
     llvm::errs() << "(processing input from stdin now, hit ctrl-c/ctrl-d to "
                     "interrupt)\n";
 
   // Set up the input file.
   std::string errorMessage;
-  auto file = openInputFile(inputFilename, &errorMessage);
+  auto file = openInputFile(*inputFilename, &errorMessage);
   if (!file) {
     llvm::errs() << errorMessage << "\n";
     return mlir::failure();

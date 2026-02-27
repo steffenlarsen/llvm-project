@@ -239,8 +239,8 @@ bool LTOCodeGenerator::runAIXSystemAssembler(SmallString<128> &AssemblyFile) {
 
   // Set the system assembler path.
   SmallString<256> AssemblerPath("/usr/bin/as");
-  if (!llvm::AIXSystemAssemblerPath.empty()) {
-    if (llvm::sys::fs::real_path(llvm::AIXSystemAssemblerPath, AssemblerPath,
+  if (!llvm::AIXSystemAssemblerPath->empty()) {
+    if (llvm::sys::fs::real_path(*llvm::AIXSystemAssemblerPath, AssemblerPath,
                                  /* expand_tilde */ true)) {
       emitError(
           "Cannot find the assembler specified by lto-aix-system-assembler");
@@ -559,7 +559,7 @@ bool LTOCodeGenerator::optimize() {
   Context.setDiscardValueNames(LTODiscardValueNames);
 
   auto DiagFileOrErr = lto::setupLLVMOptimizationRemarks(
-      Context, RemarksFilename, RemarksPasses, RemarksFormat,
+      Context, *RemarksFilename, *RemarksPasses, *RemarksFormat,
       RemarksWithHotness, RemarksHotnessThreshold);
   if (!DiagFileOrErr) {
     errs() << "Error: " << toString(DiagFileOrErr.takeError()) << "\n";
@@ -568,7 +568,7 @@ bool LTOCodeGenerator::optimize() {
   DiagnosticOutputFile = std::move(*DiagFileOrErr);
 
   // Setup output file to emit statistics.
-  auto StatsFileOrErr = lto::setupStatsFile(LTOStatsFile);
+  auto StatsFileOrErr = lto::setupStatsFile(*LTOStatsFile);
   if (!StatsFileOrErr) {
     errs() << "Error: " << toString(StatsFileOrErr.takeError()) << "\n";
     report_fatal_error("Can't get an output file for the statistics");

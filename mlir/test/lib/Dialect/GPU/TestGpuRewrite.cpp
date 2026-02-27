@@ -91,7 +91,7 @@ struct TestGpuSubgroupReduceLoweringPass
                                                /*maxShuffleBitwidth=*/32,
                                                PatternBenefit(3));
     if (expandToShuffles) {
-      auto maybeChipset = amdgpu::Chipset::parse(target);
+      auto maybeChipset = amdgpu::Chipset::parse(*target);
       if (succeeded(maybeChipset)) {
         populateGpuLowerSubgroupReduceToDPPPatterns(
             patterns, /*subgroupSize=*/64, *maybeChipset, PatternBenefit(2));

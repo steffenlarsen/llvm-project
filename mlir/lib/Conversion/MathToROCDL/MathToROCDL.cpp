@@ -184,8 +184,8 @@ void ConvertMathToROCDLPass::runOnOperation() {
   LLVMTypeConverter converter(ctx, options);
 
   FailureOr<amdgpu::Chipset> maybeChipset;
-  if (!chipset.empty()) {
-    maybeChipset = amdgpu::Chipset::parse(chipset);
+  if (!chipset->empty()) {
+    maybeChipset = amdgpu::Chipset::parse(*chipset);
     if (failed(maybeChipset))
       return signalPassFailure();
   }

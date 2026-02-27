@@ -367,11 +367,11 @@ struct TestXeGPUPropagateLayouts
   void runOnOperation() override {
     OpBuilder builder(getOperation());
     LayoutKind kind;
-    if (layoutKind == "subgroup")
+    if (*layoutKind == "subgroup")
       kind = LayoutKind::Subgroup;
-    else if (layoutKind == "inst")
+    else if (*layoutKind == "inst")
       kind = LayoutKind::InstData;
-    else if (layoutKind == "lane")
+    else if (*layoutKind == "lane")
       kind = LayoutKind::Lane;
     else {
       signalPassFailure();

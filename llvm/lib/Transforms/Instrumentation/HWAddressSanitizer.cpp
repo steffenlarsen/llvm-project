@@ -770,13 +770,13 @@ void HWAddressSanitizer::initializeCallbacks(Module &M) {
     const std::string EndingStr = Recover ? "_noabort" : "";
 
     HwasanMemoryAccessCallbackSized[AccessIsWrite] = M.getOrInsertFunction(
-        ClMemoryAccessCallbackPrefix + TypeStr + "N" + MatchAllStr + EndingStr,
+        *ClMemoryAccessCallbackPrefix + TypeStr + "N" + MatchAllStr + EndingStr,
         HwasanMemoryAccessCallbackSizedFnTy);
 
     for (size_t AccessSizeIndex = 0; AccessSizeIndex < kNumberOfAccessSizes;
          AccessSizeIndex++) {
       HwasanMemoryAccessCallback[AccessIsWrite][AccessSizeIndex] =
-          M.getOrInsertFunction(ClMemoryAccessCallbackPrefix + TypeStr +
+          M.getOrInsertFunction(*ClMemoryAccessCallbackPrefix + TypeStr +
                                     itostr(1ULL << AccessSizeIndex) +
                                     MatchAllStr + EndingStr,
                                 HwasanMemoryAccessCallbackFnTy);
@@ -786,7 +786,7 @@ void HWAddressSanitizer::initializeCallbacks(Module &M) {
   const std::string MemIntrinCallbackPrefix =
       (CompileKernel && !ClKasanMemIntrinCallbackPrefix)
           ? std::string("")
-          : ClMemoryAccessCallbackPrefix;
+          : *ClMemoryAccessCallbackPrefix;
 
   HwasanMemmove = M.getOrInsertFunction(
       MemIntrinCallbackPrefix + "memmove" + MatchAllStr, HwasanMemTransferFnTy);

@@ -56,8 +56,8 @@ namespace {
 class PreserveAPIList {
 public:
   PreserveAPIList() {
-    if (!APIFile.empty())
-      LoadFile(APIFile);
+    if (!APIFile->empty())
+      LoadFile(*APIFile);
     for (StringRef Pattern : APIList)
       addGlob(Pattern);
   }

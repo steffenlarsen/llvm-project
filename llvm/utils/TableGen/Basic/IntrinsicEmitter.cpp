@@ -140,7 +140,7 @@ void IntrinsicEmitter::EmitEnumInfo(const CodeGenIntrinsicTable &Ints,
   using TargetSet = CodeGenIntrinsicTable::TargetSet;
   const TargetSet *Set = nullptr;
   for (const auto &Target : Ints.getTargets()) {
-    if (Target.Name == IntrinsicPrefix) {
+    if (Target.Name == *IntrinsicPrefix) {
       Set = &Target;
       break;
     }
@@ -150,7 +150,7 @@ void IntrinsicEmitter::EmitEnumInfo(const CodeGenIntrinsicTable &Ints,
     auto KnowTargets = Ints.getTargets().drop_front();
     PrintFatalError([KnowTargets](raw_ostream &OS) {
       OS << "tried to generate intrinsics for unknown target "
-         << IntrinsicPrefix << "\nKnown targets are: ";
+         << *IntrinsicPrefix << "\nKnown targets are: ";
       interleaveComma(KnowTargets, OS,
                       [&OS](const TargetSet &Target) { OS << Target.Name; });
       OS << '\n';
@@ -162,10 +162,10 @@ void IntrinsicEmitter::EmitEnumInfo(const CodeGenIntrinsicTable &Ints,
   std::optional<IncludeGuardEmitter> IncGuard;
   std::optional<NamespaceEmitter> NS;
 
-  if (IntrinsicPrefix.empty()) {
+  if (IntrinsicPrefix->empty()) {
     IfDef.emplace(OS, "GET_INTRINSIC_ENUM_VALUES");
   } else {
-    std::string UpperPrefix = StringRef(IntrinsicPrefix).upper();
+    std::string UpperPrefix = StringRef(*IntrinsicPrefix).upper();
     IncGuard.emplace(
         OS, formatv("LLVM_IR_INTRINSIC_{}_ENUMS_H", UpperPrefix).str());
     NS.emplace(OS, "llvm::Intrinsic");
@@ -193,14 +193,14 @@ void IntrinsicEmitter::EmitEnumInfo(const CodeGenIntrinsicTable &Ints,
   }
 
   // Emit num_intrinsics into the target neutral enum.
-  if (IntrinsicPrefix.empty())
+  if (IntrinsicPrefix->empty())
     OS << formatv("    num_intrinsics = {}\n", Ints.size() + 1);
   else
     OS << "}; // enum\n";
 }
 
 void IntrinsicEmitter::EmitArgKind(raw_ostream &OS) {
-  if (!IntrinsicPrefix.empty())
+  if (!IntrinsicPrefix->empty())
     return;
   IfDefEmitter IfDef(OS, "GET_INTRINSIC_ARGKIND");
   OS << "// llvm::Intrinsic::IITDescriptor::ArgKind.\n";

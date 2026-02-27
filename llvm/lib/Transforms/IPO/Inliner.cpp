@@ -177,13 +177,13 @@ InlinerPass::getAdvisor(const ModuleAnalysisManagerCGSCCProxy::Result &MAM,
         M, FAM, getInlineParams(),
         InlineContext{LTOPhase, InlinePass::CGSCCInliner});
 
-    if (!CGSCCInlineReplayFile.empty())
+    if (!CGSCCInlineReplayFile->empty())
       OwnedAdvisor = getReplayInlineAdvisor(
           M, FAM, M.getContext(), std::move(OwnedAdvisor),
-          ReplayInlinerSettings{CGSCCInlineReplayFile,
-                                CGSCCInlineReplayScope,
-                                CGSCCInlineReplayFallback,
-                                {CGSCCInlineReplayFormat}},
+          ReplayInlinerSettings{*CGSCCInlineReplayFile,
+                                *CGSCCInlineReplayScope,
+                                *CGSCCInlineReplayFallback,
+                                {*CGSCCInlineReplayFormat}},
           /*EmitRemarks=*/true,
           InlineContext{LTOPhase, InlinePass::ReplayCGSCCInliner});
 
@@ -606,10 +606,10 @@ PreservedAnalyses ModuleInlinerWrapperPass::run(Module &M,
                                                 ModuleAnalysisManager &MAM) {
   auto &IAA = MAM.getResult<InlineAdvisorAnalysis>(M);
   if (!IAA.tryCreate(Params, Mode,
-                     {CGSCCInlineReplayFile,
-                      CGSCCInlineReplayScope,
-                      CGSCCInlineReplayFallback,
-                      {CGSCCInlineReplayFormat}},
+                     {*CGSCCInlineReplayFile,
+                      *CGSCCInlineReplayScope,
+                      *CGSCCInlineReplayFallback,
+                      {*CGSCCInlineReplayFormat}},
                      IC)) {
     M.getContext().emitError(
         "Could not setup Inlining Advisor for the requested "

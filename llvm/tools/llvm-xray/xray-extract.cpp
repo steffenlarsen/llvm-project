@@ -71,19 +71,19 @@ static void exportAsYAML(const InstrumentationMap &Map, raw_ostream &OS,
 }
 
 static CommandRegistration Unused(&Extract, []() -> Error {
-  auto InstrumentationMapOrError = loadInstrumentationMap(ExtractInput);
+  auto InstrumentationMapOrError = loadInstrumentationMap(*ExtractInput);
   if (!InstrumentationMapOrError)
     return joinErrors(make_error<StringError>(
                           Twine("Cannot extract instrumentation map from '") +
-                              ExtractInput + "'.",
+                              *ExtractInput + "'.",
                           std::make_error_code(std::errc::invalid_argument)),
                       InstrumentationMapOrError.takeError());
 
   std::error_code EC;
-  raw_fd_ostream OS(ExtractOutput, EC, sys::fs::OpenFlags::OF_TextWithCRLF);
+  raw_fd_ostream OS(*ExtractOutput, EC, sys::fs::OpenFlags::OF_TextWithCRLF);
   if (EC)
     return make_error<StringError>(
-        Twine("Cannot open file '") + ExtractOutput + "' for writing.", EC);
+        Twine("Cannot open file '") + *ExtractOutput + "' for writing.", EC);
   const auto &FunctionAddresses =
       InstrumentationMapOrError->getFunctionAddresses();
   symbolize::LLVMSymbolizer::Options opts;

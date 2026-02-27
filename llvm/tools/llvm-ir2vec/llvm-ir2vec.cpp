@@ -154,24 +154,24 @@ static Error processModule(Module &M, raw_ostream &OS) {
     // Initialize vocabulary for embedding generation
     // Note: Requires --ir2vec-vocab-path option to be set
     // and this value will be populated in the var VocabFile
-    if (VocabFile.empty()) {
+    if (VocabFile->empty()) {
       return createStringError(
           errc::invalid_argument,
           "IR2Vec vocabulary file path not specified; "
           "You may need to set it using --ir2vec-vocab-path");
     }
 
-    if (Error Err = Tool.initializeVocabulary(VocabFile))
+    if (Error Err = Tool.initializeVocabulary(*VocabFile))
       return Err;
 
-    if (!FunctionName.empty()) {
+    if (!FunctionName->empty()) {
       // Process single function
-      if (const Function *F = M.getFunction(FunctionName))
+      if (const Function *F = M.getFunction(*FunctionName))
         Tool.writeEmbeddingsToStream(*F, OS, Level);
       else
         return createStringError(errc::invalid_argument,
                                  "Function '%s' not found",
-                                 FunctionName.c_str());
+                                 FunctionName->c_str());
     } else {
       // Process all functions
       Tool.writeEmbeddingsToStream(OS, Level);
@@ -283,12 +283,12 @@ static Error processModuleForEntities(MIRContext &Ctx, raw_ostream &OS) {
 static Error processModuleForEmbeddings(MIRContext &Ctx, raw_ostream &OS) {
   return processWithVocabulary(
       Ctx, OS, /*useLayoutVocab=*/false, [&](MIR2VecTool &Tool) -> Error {
-        if (!FunctionName.empty()) {
+        if (!FunctionName->empty()) {
           // Process single function
-          Function *F = Ctx.M->getFunction(FunctionName);
+          Function *F = Ctx.M->getFunction(*FunctionName);
           if (!F) {
             WithColor::error(errs(), ToolName)
-                << "Function '" << FunctionName << "' not found\n";
+                << "Function '" << *FunctionName << "' not found\n";
             return createStringError(errc::invalid_argument,
                                      "Function not found");
           }
@@ -296,7 +296,7 @@ static Error processModuleForEmbeddings(MIRContext &Ctx, raw_ostream &OS) {
           MachineFunction *MF = Ctx.MMI->getMachineFunction(*F);
           if (!MF) {
             WithColor::error(errs(), ToolName)
-                << "No MachineFunction for " << FunctionName << "\n";
+                << "No MachineFunction for " << *FunctionName << "\n";
             return createStringError(errc::invalid_argument,
                                      "No MachineFunction");
           }
@@ -355,7 +355,7 @@ int main(int argc, char **argv) {
       "information.\n");
 
   std::error_code EC;
-  raw_fd_ostream OS(OutputFilename, EC);
+  raw_fd_ostream OS(*OutputFilename, EC);
   if (EC) {
     WithColor::error(errs(), ToolName)
         << "opening output file: " << EC.message() << "\n";
@@ -372,7 +372,7 @@ int main(int argc, char **argv) {
     // Parse the input LLVM IR file or stdin
     SMDiagnostic Err;
     LLVMContext Context;
-    std::unique_ptr<Module> M = parseIRFile(InputFilename, Err, Context);
+    std::unique_ptr<Module> M = parseIRFile(*InputFilename, Err, Context);
     if (!M) {
       Err.print(ToolName, errs());
       return 1;
@@ -394,7 +394,7 @@ int main(int argc, char **argv) {
     InitializeAllAsmPrinters();
     static codegen::RegisterCodeGenFlags CGF;
 
-    if (Error Err = mir2vec::processModule(InputFilename, OS)) {
+    if (Error Err = mir2vec::processModule(*InputFilename, OS)) {
       handleAllErrors(std::move(Err), [&](const ErrorInfoBase &EIB) {
         WithColor::error(errs(), ToolName) << EIB.message() << "\n";
       });

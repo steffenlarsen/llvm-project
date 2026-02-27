@@ -64,11 +64,11 @@ static cl::opt<std::string> ClDataLayout("data-layout",
 
 static void WriteOutputFile(const Module *M, const ModuleSummaryIndex *Index) {
   // Infer the output filename if needed.
-  if (OutputFilename.empty()) {
-    if (InputFilename == "-") {
+  if (OutputFilename->empty()) {
+    if (*InputFilename == "-") {
       OutputFilename = "-";
     } else {
-      StringRef IFN = InputFilename;
+      StringRef IFN = *InputFilename;
       OutputFilename = (IFN.ends_with(".ll") ? IFN.drop_back(3) : IFN).str();
       OutputFilename += ".bc";
     }
@@ -76,7 +76,7 @@ static void WriteOutputFile(const Module *M, const ModuleSummaryIndex *Index) {
 
   std::error_code EC;
   std::unique_ptr<ToolOutputFile> Out(
-      new ToolOutputFile(OutputFilename, EC, sys::fs::OF_None));
+      new ToolOutputFile(*OutputFilename, EC, sys::fs::OF_None));
   if (EC) {
     errs() << EC.message() << '\n';
     exit(1);
@@ -116,16 +116,16 @@ int main(int argc, char **argv) {
   // Parse the file now...
   SMDiagnostic Err;
   auto SetDataLayout = [](StringRef, StringRef) -> std::optional<std::string> {
-    if (ClDataLayout.empty())
+    if (ClDataLayout->empty())
       return std::nullopt;
     return ClDataLayout;
   };
   ParsedModuleAndIndex ModuleAndIndex;
   if (DisableVerify) {
     ModuleAndIndex = parseAssemblyFileWithIndexNoUpgradeDebugInfo(
-        InputFilename, Err, Context, nullptr, SetDataLayout);
+        *InputFilename, Err, Context, nullptr, SetDataLayout);
   } else {
-    ModuleAndIndex = parseAssemblyFileWithIndex(InputFilename, Err, Context,
+    ModuleAndIndex = parseAssemblyFileWithIndex(*InputFilename, Err, Context,
                                                 nullptr, SetDataLayout);
   }
   std::unique_ptr<Module> M = std::move(ModuleAndIndex.Mod);

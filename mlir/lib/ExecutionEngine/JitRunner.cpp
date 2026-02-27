@@ -209,9 +209,9 @@ compileAndExecute(Options &options, Operation *module, StringRef entryPoint,
     return expectedFPtr.takeError();
 
   if (options.dumpObjectFile)
-    engine->dumpToObjectFile(options.objectFilename.empty()
-                                 ? options.inputFilename + ".o"
-                                 : options.objectFilename);
+    engine->dumpToObjectFile(options.objectFilename->empty()
+                                 ? *options.inputFilename + ".o"
+                                 : *options.objectFilename);
 
   void (*fptr)(void **) = *expectedFPtr;
   (*fptr)(args);
@@ -331,14 +331,14 @@ int mlir::JitRunnerMain(int argc, char **argv, const DialectRegistry &registry,
 
   MLIRContext context(registry);
 
-  auto m = parseMLIRInput(options.inputFilename, !options.noImplicitModule,
+  auto m = parseMLIRInput(*options.inputFilename, !options.noImplicitModule,
                           &context);
   if (!m) {
     llvm::errs() << "could not parse the input IR\n";
     return 1;
   }
 
-  JitRunnerOptions runnerOptions{options.mainFuncName, options.mainFuncType};
+  JitRunnerOptions runnerOptions{*options.mainFuncName, *options.mainFuncType};
   if (config.mlirTransformer)
     if (failed(config.mlirTransformer(m.get(), runnerOptions)))
       return EXIT_FAILURE;
@@ -357,8 +357,8 @@ int mlir::JitRunnerMain(int argc, char **argv, const DialectRegistry &registry,
     tmBuilderOrError->addFeatures(features.getFeatures());
   }
 
-  if (!options.mArch.empty()) {
-    tmBuilderOrError->getTargetTriple().setArchName(options.mArch);
+  if (!options.mArch->empty()) {
+    tmBuilderOrError->getTargetTriple().setArchName(*options.mArch);
   }
 
   // Build TargetMachine

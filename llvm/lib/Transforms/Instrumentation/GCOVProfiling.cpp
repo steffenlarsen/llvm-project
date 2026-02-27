@@ -80,11 +80,11 @@ GCOVOptions GCOVOptions::getDefault() {
   Options.NoRedZone = false;
   Options.Atomic = AtomicCounter;
 
-  if (DefaultGCOVVersion.size() != 4) {
+  if (DefaultGCOVVersion->size() != 4) {
     reportFatalUsageError(Twine("Invalid -default-gcov-version: ") +
-                          DefaultGCOVVersion);
+                          *DefaultGCOVVersion);
   }
-  memcpy(Options.Version, DefaultGCOVVersion.c_str(), 4);
+  memcpy(Options.Version, DefaultGCOVVersion->c_str(), 4);
   return Options;
 }
 

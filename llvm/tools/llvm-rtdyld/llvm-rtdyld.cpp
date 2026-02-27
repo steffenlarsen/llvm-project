@@ -590,9 +590,9 @@ static int executeInput() {
   }
 
   // Get the address of the entry point (_main by default).
-  void *MainAddress = Dyld.getSymbolLocalAddress(EntryPoint);
+  void *MainAddress = Dyld.getSymbolLocalAddress(*EntryPoint);
   if (!MainAddress)
-    ErrorAndExit("no definition for '" + EntryPoint + "'");
+    ErrorAndExit("no definition for '" + *EntryPoint + "'");
 
   // Invalidate the instruction cache for each loaded function.
   for (auto &FM : MemMgr.FunctionMemory) {
@@ -609,7 +609,8 @@ static int executeInput() {
   }
 
   // Dispatch to _main().
-  errs() << "loaded '" << EntryPoint << "' at: " << (void*)MainAddress << "\n";
+  errs() << "loaded '" << *EntryPoint << "' at: " << (void *)MainAddress
+         << "\n";
 
   int (*Main)(int, const char**) =
     (int(*)(int,const char**)) uintptr_t(MainAddress);
@@ -777,21 +778,21 @@ static void remapSectionsAndSymbols(const llvm::Triple &TargetTriple,
 static int linkAndVerify() {
 
   // Check for missing triple.
-  if (TripleName == "")
+  if (*TripleName == "")
     ErrorAndExit("-triple required when running in -verify mode.");
 
   // Look up the target and build the disassembler.
-  Triple TheTriple(Triple::normalize(TripleName));
+  Triple TheTriple(Triple::normalize(*TripleName));
   std::string ErrorStr;
   const Target *TheTarget =
     TargetRegistry::lookupTarget("", TheTriple, ErrorStr);
   if (!TheTarget)
-    ErrorAndExit("Error accessing target '" + TripleName + "': " + ErrorStr);
+    ErrorAndExit("Error accessing target '" + *TripleName + "': " + ErrorStr);
 
   TripleName = TheTriple.getTriple();
 
   std::unique_ptr<MCSubtargetInfo> STI(
-      TheTarget->createMCSubtargetInfo(TheTriple, MCPU, ""));
+      TheTarget->createMCSubtargetInfo(TheTriple, *MCPU, ""));
   if (!STI)
     ErrorAndExit("Unable to create subtarget info!");
 
@@ -984,7 +985,7 @@ static int linkAndVerify() {
           IsSymbolValid, GetSymbolInfo, GetSectionInfo, GetStubInfo, GetGOTInfo,
           Obj.isLittleEndian() ? llvm::endianness::little
                                : llvm::endianness::big,
-          TheTriple, MCPU, SubtargetFeatures(), dbgs());
+          TheTriple, *MCPU, SubtargetFeatures(), dbgs());
 
     auto FileName = sys::path::filename(InputFile);
     MemMgr.setSectionIDsMap(&FileToSecIDMap[FileName]);

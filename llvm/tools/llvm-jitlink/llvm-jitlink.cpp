@@ -726,8 +726,8 @@ static std::unique_ptr<JITLinkMemoryManager> createInProcessMemoryManager() {
   SlabSize = 1024 * 1024 * 1024;
 #endif
 
-  if (!SlabAllocateSizeString.empty())
-    SlabSize = ExitOnErr(getSlabAllocSize(SlabAllocateSizeString));
+  if (!SlabAllocateSizeString->empty())
+    SlabSize = ExitOnErr(getSlabAllocSize(*SlabAllocateSizeString));
 
   // If this is a -no-exec case and we're tweaking the slab address or size then
   // use the delta mapper.
@@ -784,8 +784,8 @@ createSharedMemoryManager(SimpleRemoteEPC &SREPC) {
   size_t SlabSize = 1024 * 1024 * 1024;
 #endif
 
-  if (!SlabAllocateSizeString.empty())
-    SlabSize = ExitOnErr(getSlabAllocSize(SlabAllocateSizeString));
+  if (!SlabAllocateSizeString->empty())
+    SlabSize = ExitOnErr(getSlabAllocSize(*SlabAllocateSizeString));
 
   return MapperJITLinkMemoryManager::CreateWithMapper<SharedMemoryMapper>(
       SlabSize, SREPC, SAs);
@@ -876,7 +876,7 @@ getTestObjectFileInterface(Session &S, MemoryBufferRef O) {
 static Error loadProcessSymbols(Session &S) {
   S.ProcessSymsJD = &S.ES.createBareJITDylib("Process");
   auto FilterMainEntryPoint =
-      [EPName = S.ES.intern(EntryPointName)](SymbolStringPtr Name) {
+      [EPName = S.ES.intern(*EntryPointName)](SymbolStringPtr Name) {
         return Name != EPName;
       };
   S.ProcessSymsJD->addGenerator(
@@ -1087,7 +1087,7 @@ createLazyLinkingSupport(Session &S) {
   case SpeculateKind::Simple:
     SimpleLazyReexportsSpeculator::RecordExecutionFunction RecordExecs;
 
-    if (!RecordLazyExecs.empty())
+    if (!RecordLazyExecs->empty())
       RecordExecs = [&S](const LazyReexportsManager::CallThroughInfo &CTI) {
         S.LazyFnExecOrder.push_back({CTI.JD->getName(), CTI.BodyName});
       };
@@ -1107,13 +1107,13 @@ createLazyLinkingSupport(Session &S) {
 }
 
 static Error writeLazyExecOrder(Session &S) {
-  if (RecordLazyExecs.empty())
+  if (RecordLazyExecs->empty())
     return Error::success();
 
   std::error_code EC;
-  raw_fd_ostream ExecOrderOut(RecordLazyExecs, EC);
+  raw_fd_ostream ExecOrderOut(*RecordLazyExecs, EC);
   if (EC)
-    return createFileError(RecordLazyExecs, EC);
+    return createFileError(*RecordLazyExecs, EC);
 
   for (auto &[JDName, FunctionName] : S.LazyFnExecOrder)
     ExecOrderOut << JDName << ", " << FunctionName << "\n";
@@ -1221,8 +1221,8 @@ Session::Session(std::unique_ptr<ExecutorProcessControl> EPC, Error &Err)
 
   auto &TT = ES.getTargetTriple();
 
-  if (!WriteSymbolTableTo.empty()) {
-    if (auto STDump = SymbolTableDumpPlugin::Create(WriteSymbolTableTo))
+  if (!WriteSymbolTableTo->empty()) {
+    if (auto STDump = SymbolTableDumpPlugin::Create(*WriteSymbolTableTo))
       ObjLayer.addPlugin(std::move(*STDump));
     else {
       Err = STDump.takeError();
@@ -1260,22 +1260,22 @@ Session::Session(std::unique_ptr<ExecutorProcessControl> EPC, Error &Err)
   }
 
   // Set up the platform.
-  if (!OrcRuntime.empty()) {
+  if (!OrcRuntime->empty()) {
     assert(ProcessSymsJD && "ProcessSymsJD should have been set");
     PlatformJD = &ES.createBareJITDylib("Platform");
     PlatformJD->addToLinkOrder(*ProcessSymsJD);
 
     if (TT.isOSBinFormatMachO()) {
       if (auto P =
-              MachOPlatform::Create(ObjLayer, *PlatformJD, OrcRuntime.c_str()))
+              MachOPlatform::Create(ObjLayer, *PlatformJD, OrcRuntime->c_str()))
         ES.setPlatform(std::move(*P));
       else {
         Err = P.takeError();
         return;
       }
     } else if (TT.isOSBinFormatELF()) {
-      if (auto P =
-              ELFNixPlatform::Create(ObjLayer, *PlatformJD, OrcRuntime.c_str()))
+      if (auto P = ELFNixPlatform::Create(ObjLayer, *PlatformJD,
+                                          OrcRuntime->c_str()))
         ES.setPlatform(std::move(*P));
       else {
         Err = P.takeError();
@@ -1291,7 +1291,7 @@ Session::Session(std::unique_ptr<ExecutorProcessControl> EPC, Error &Err)
       };
 
       if (auto P =
-              COFFPlatform::Create(ObjLayer, *PlatformJD, OrcRuntime.c_str(),
+              COFFPlatform::Create(ObjLayer, *PlatformJD, OrcRuntime->c_str(),
                                    std::move(LoadDynLibrary)))
         ES.setPlatform(std::move(*P));
       else {
@@ -1388,8 +1388,8 @@ Session::Session(std::unique_ptr<ExecutorProcessControl> EPC, Error &Err)
   for (auto &DefName : HarnessDefinitions)
     HarnessExternals.erase(DefName.getKey());
 
-  if (!ShowLinkGraphs.empty())
-    ShowGraphsRegex = Regex(ShowLinkGraphs);
+  if (!ShowLinkGraphs->empty())
+    ShowGraphsRegex = Regex(*ShowLinkGraphs);
 }
 
 void Session::dumpSessionInfo(raw_ostream &OS) {
@@ -1695,18 +1695,18 @@ Session::findSymbolInfo(const orc::SymbolStringPtr &SymbolName,
 static std::pair<Triple, SubtargetFeatures> getFirstFileTripleAndFeatures() {
 
   // If we're running in symbolicate mode then just use the process triple.
-  if (!SymbolicateWith.empty())
+  if (!SymbolicateWith->empty())
     return std::make_pair(Triple(sys::getProcessTriple()), SubtargetFeatures());
 
   // Otherwise we need to inspect the input files.
   static std::pair<Triple, SubtargetFeatures> FirstTTAndFeatures = []() {
     assert(!InputFiles.empty() && "InputFiles can not be empty");
 
-    if (!OverrideTriple.empty()) {
+    if (!OverrideTriple->empty()) {
       LLVM_DEBUG({
-        dbgs() << "Triple from -triple override: " << OverrideTriple << "\n";
+        dbgs() << "Triple from -triple override: " << *OverrideTriple << "\n";
       });
-      return std::make_pair(Triple(OverrideTriple), SubtargetFeatures());
+      return std::make_pair(Triple(*OverrideTriple), SubtargetFeatures());
     }
 
     for (auto InputFile : InputFiles) {
@@ -1762,14 +1762,14 @@ static Error sanitizeArguments(const Triple &TT, const char *ArgV0) {
     errs() << "Warning: --args passed to -noexec run will be ignored.\n";
 
   // Set the entry point name if not specified.
-  if (EntryPointName.empty())
+  if (EntryPointName->empty())
     EntryPointName = TT.getObjectFormat() == Triple::MachO ? "_main" : "main";
 
   // Disable debugger support by default in noexec tests.
   if (DebuggerSupport.getNumOccurrences() == 0 && NoExec)
     DebuggerSupport = false;
 
-  if (!OrcRuntime.empty() && NoProcessSymbols)
+  if (!OrcRuntime->empty() && NoProcessSymbols)
     return make_error<StringError>("-orc-runtime requires process symbols",
                                    inconvertibleErrorCode());
 
@@ -1777,7 +1777,7 @@ static Error sanitizeArguments(const Triple &TT, const char *ArgV0) {
   // -oop-executor or -oop-executor-connect mode.
   //
   // FIXME: Remove once we enable remote slab allocation.
-  if (SlabAllocateSizeString != "") {
+  if (*SlabAllocateSizeString != "") {
     if (OutOfProcessExecutor.getNumOccurrences() ||
         OutOfProcessExecutorConnect.getNumOccurrences())
       return make_error<StringError>(
@@ -1788,7 +1788,7 @@ static Error sanitizeArguments(const Triple &TT, const char *ArgV0) {
 
   // If -slab-address is passed, require -slab-allocate and -noexec
   if (SlabAddress != ~0ULL) {
-    if (SlabAllocateSizeString == "" || !NoExec)
+    if (*SlabAllocateSizeString == "" || !NoExec)
       return make_error<StringError>(
           "-slab-address requires -slab-allocate and -noexec",
           inconvertibleErrorCode());
@@ -1799,7 +1799,7 @@ static Error sanitizeArguments(const Triple &TT, const char *ArgV0) {
 
   if (SlabPageSize != 0) {
     // -slab-page-size requires slab alloc.
-    if (SlabAllocateSizeString == "")
+    if (*SlabAllocateSizeString == "")
       return make_error<StringError>("-slab-page-size requires -slab-allocate",
                                      inconvertibleErrorCode());
 
@@ -1874,7 +1874,7 @@ static Error sanitizeArguments(const Triple &TT, const char *ArgV0) {
   // If -oop-executor was used but no value was specified then use a sensible
   // default.
   if (!!OutOfProcessExecutor.getNumOccurrences() &&
-      OutOfProcessExecutor.empty()) {
+      OutOfProcessExecutor->empty()) {
     SmallString<256> OOPExecutorPath(sys::fs::getMainExecutable(
         ArgV0, reinterpret_cast<void *>(&sanitizeArguments)));
     sys::path::remove_filename(OOPExecutorPath);
@@ -1884,7 +1884,7 @@ static Error sanitizeArguments(const Triple &TT, const char *ArgV0) {
 
   // If lazy linking is requested then check compatibility with other options.
   if (lazyLinkingRequested()) {
-    if (OrcRuntime.empty())
+    if (OrcRuntime->empty())
       return make_error<StringError>("Lazy linking requries the ORC runtime",
                                      inconvertibleErrorCode());
 
@@ -1898,21 +1898,21 @@ static Error sanitizeArguments(const Triple &TT, const char *ArgV0) {
   }
 
   if (Speculate == SpeculateKind::None) {
-    if (!SpeculateOrder.empty()) {
+    if (!SpeculateOrder->empty()) {
       errs() << "Warning: -speculate-order ignored because speculation is "
                 "disabled\n";
       SpeculateOrder = "";
     }
 
-    if (!RecordLazyExecs.empty()) {
+    if (!RecordLazyExecs->empty()) {
       errs() << "Warning: -record-lazy-execs ignored because speculation is "
                 "disabled\n";
       RecordLazyExecs = "";
     }
   }
 
-  if (!SymbolicateWith.empty()) {
-    if (!WriteSymbolTableTo.empty())
+  if (!SymbolicateWith->empty()) {
+    if (!WriteSymbolTableTo->empty())
       errs() << WriteSymbolTableTo.ArgStr << " specified with "
              << SymbolicateWith.ArgStr << ", ignoring.";
     if (InputFiles.empty())
@@ -2570,13 +2570,13 @@ static Error addLibraries(Session &S,
 
 static Error addSpeculationOrder(Session &S) {
 
-  if (SpeculateOrder.empty())
+  if (SpeculateOrder->empty())
     return Error::success();
 
   assert(S.LazyLinking && "SpeculateOrder set, but lazy linking not enabled");
   assert(S.LazyLinking->Speculator && "SpeculatoOrder set, but no speculator");
 
-  auto SpecOrderBuffer = getFile(SpeculateOrder);
+  auto SpecOrderBuffer = getFile(*SpeculateOrder);
   if (!SpecOrderBuffer)
     return SpecOrderBuffer.takeError();
 
@@ -2589,7 +2589,7 @@ static Error addSpeculationOrder(Session &S) {
 
     auto MakeSpecOrderErr = [&](StringRef Reason) {
       return make_error<StringError>("Error in speculation order file \"" +
-                                         SpeculateOrder + "\" on line " +
+                                         *SpeculateOrder + "\" on line " +
                                          Twine(LineNumber) + ": " + Reason,
                                      inconvertibleErrorCode());
     };
@@ -2775,7 +2775,7 @@ static Error runChecks(Session &S, Triple TT, SubtargetFeatures Features) {
                                               : llvm::endianness::big,
       TT, StringRef(), Features, dbgs());
 
-  std::string CheckLineStart = "# " + CheckName + ":";
+  std::string CheckLineStart = "# " + *CheckName + ":";
   for (auto &CheckFile : CheckFiles) {
     auto CheckerFileBuf = ExitOnErr(getFile(CheckFile));
     if (!Checker.checkAllRulesInBuffer(CheckLineStart, &*CheckerFileBuf))
@@ -2797,7 +2797,7 @@ static Error addSelfRelocations(LinkGraph &G) {
 }
 
 static Expected<ExecutorSymbolDef> getMainEntryPoint(Session &S) {
-  return S.ES.lookup(S.JDSearchOrder, S.ES.intern(EntryPointName));
+  return S.ES.lookup(S.JDSearchOrder, S.ES.intern(*EntryPointName));
 }
 
 static Expected<ExecutorSymbolDef> getOrcRuntimeEntryPoint(Session &S) {
@@ -2817,13 +2817,13 @@ static Expected<ExecutorSymbolDef> getEntryPoint(Session &S) {
   else
     return EP.takeError();
   LLVM_DEBUG({
-    dbgs() << "Using entry point \"" << EntryPointName
+    dbgs() << "Using entry point \"" << *EntryPointName
            << "\": " << formatv("{0:x16}", EntryPoint.getAddress()) << "\n";
   });
 
   // If we're running with the ORC runtime then replace the entry-point
   // with the __orc_rt_run_program symbol.
-  if (!OrcRuntime.empty()) {
+  if (!OrcRuntime->empty()) {
     if (auto EP = getOrcRuntimeEntryPoint(S))
       EntryPoint = *EP;
     else
@@ -2838,7 +2838,7 @@ static Expected<ExecutorSymbolDef> getEntryPoint(Session &S) {
 }
 
 static Expected<int> runWithRuntime(Session &S, ExecutorAddr EntryPointAddr) {
-  StringRef DemangledEntryPoint = EntryPointName;
+  StringRef DemangledEntryPoint = *EntryPointName;
   if (S.ES.getTargetTriple().getObjectFormat() == Triple::MachO &&
       DemangledEntryPoint.front() == '_')
     DemangledEntryPoint = DemangledEntryPoint.drop_front();
@@ -2859,7 +2859,7 @@ static Expected<int> runWithoutRuntime(Session &S,
 }
 
 static Error symbolicateBacktraces() {
-  auto Symtab = DumpedSymbolTable::Create(SymbolicateWith);
+  auto Symtab = DumpedSymbolTable::Create(*SymbolicateWith);
   if (!Symtab)
     return Symtab.takeError();
 
@@ -2901,14 +2901,14 @@ int main(int argc, char *argv[]) {
   auto [TT, Features] = getFirstFileTripleAndFeatures();
   ExitOnErr(sanitizeArguments(TT, argv[0]));
 
-  if (!SymbolicateWith.empty()) {
+  if (!SymbolicateWith->empty()) {
     ExitOnErr(symbolicateBacktraces());
     return 0;
   }
 
   auto S = ExitOnErr(Session::Create(TT, Features));
 
-  enableStatistics(*S, !OrcRuntime.empty());
+  enableStatistics(*S, !OrcRuntime->empty());
 
   {
     TimeRegion TR(Timers ? &Timers->LoadObjectsTimer : nullptr);
@@ -2947,9 +2947,9 @@ int main(int argc, char *argv[]) {
 
   int Result = 0;
   if (!NoExec) {
-    LLVM_DEBUG(dbgs() << "Running \"" << EntryPointName << "\"...\n");
+    LLVM_DEBUG(dbgs() << "Running \"" << *EntryPointName << "\"...\n");
     TimeRegion TR(Timers ? &Timers->RunTimer : nullptr);
-    if (!OrcRuntime.empty())
+    if (!OrcRuntime->empty())
       Result = ExitOnErr(runWithRuntime(*S, EntryPoint->getAddress()));
     else
       Result = ExitOnErr(runWithoutRuntime(*S, EntryPoint->getAddress()));

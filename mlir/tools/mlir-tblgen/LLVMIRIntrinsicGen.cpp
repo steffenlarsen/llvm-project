@@ -208,12 +208,12 @@ static void printBracketedRange(const Range &range, llvm::raw_ostream &os) {
 static bool emitIntrinsic(const Record &record, llvm::raw_ostream &os) {
   LLVMIntrinsic intr(record);
 
-  Regex accessGroupMatcher(accessGroupRegexp);
+  Regex accessGroupMatcher(*accessGroupRegexp);
   bool requiresAccessGroup =
-      !accessGroupRegexp.empty() && accessGroupMatcher.match(record.getName());
+      !accessGroupRegexp->empty() && accessGroupMatcher.match(record.getName());
 
-  Regex aliasAnalysisMatcher(aliasAnalysisRegexp);
-  bool requiresAliasAnalysis = !aliasAnalysisRegexp.empty() &&
+  Regex aliasAnalysisMatcher(*aliasAnalysisRegexp);
+  bool requiresAliasAnalysis = !aliasAnalysisRegexp->empty() &&
                                aliasAnalysisMatcher.match(record.getName());
 
   // Prepare strings for traits, if any.
@@ -263,7 +263,7 @@ static bool emitIntrinsics(const RecordKeeper &records, llvm::raw_ostream &os) {
 
   auto defs = records.getAllDerivedDefinitions("Intrinsic");
   for (const Record *r : defs) {
-    if (!nameFilter.empty() && !r->getName().contains(nameFilter))
+    if (!nameFilter->empty() && !r->getName().contains(*nameFilter))
       continue;
     if (emitIntrinsic(*r, os))
       return true;

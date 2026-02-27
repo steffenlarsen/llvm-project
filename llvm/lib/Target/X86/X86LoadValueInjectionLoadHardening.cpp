@@ -296,11 +296,11 @@ bool X86LoadValueInjectionLoadHardeningImpl::run(
   }
 
   int FencesInserted;
-  if (!OptimizePluginPath.empty()) {
+  if (!OptimizePluginPath->empty()) {
     if (!OptimizeDL.isValid()) {
       std::string ErrorMsg;
       OptimizeDL = llvm::sys::DynamicLibrary::getPermanentLibrary(
-          OptimizePluginPath.c_str(), &ErrorMsg);
+          OptimizePluginPath->c_str(), &ErrorMsg);
       if (!ErrorMsg.empty())
         report_fatal_error(Twine("Failed to load opt plugin: \"") + ErrorMsg +
                            "\"");

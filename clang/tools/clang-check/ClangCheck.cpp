@@ -177,14 +177,14 @@ public:
     if (ASTList)
       return clang::CreateASTDeclNodeLister();
     if (ASTDump)
-      return clang::CreateASTDumper(nullptr /*Dump to stdout.*/, ASTDumpFilter,
+      return clang::CreateASTDumper(nullptr /*Dump to stdout.*/, *ASTDumpFilter,
                                     /*DumpDecls=*/true,
                                     /*Deserialize=*/false,
                                     /*DumpLookups=*/false,
                                     /*DumpDeclTypes=*/false,
                                     clang::ADOF_Default);
     if (ASTPrint)
-      return clang::CreateASTPrinter(nullptr, ASTDumpFilter);
+      return clang::CreateASTPrinter(nullptr, *ASTDumpFilter);
     return std::make_unique<clang::ASTConsumer>();
   }
 };
@@ -216,9 +216,9 @@ int main(int argc, const char **argv) {
     // As the original -o options have been removed by default via the
     // strip-output adjuster, we only need to add the analyzer -o options here
     // when it is provided by users.
-    if (!AnalyzerOutput.empty())
+    if (!AnalyzerOutput->empty())
       Tool.appendArgumentsAdjuster(
-          getInsertArgumentAdjuster(CommandLineArguments{"-o", AnalyzerOutput},
+          getInsertArgumentAdjuster(CommandLineArguments{"-o", *AnalyzerOutput},
                                     ArgumentInsertPosition::END));
 
     // Running the analyzer requires --analyze. Other modes can work with the

@@ -283,11 +283,11 @@ bool PostRAScheduler::run(MachineFunction &MF) {
   TargetSubtargetInfo::AntiDepBreakMode AntiDepMode =
       Subtarget.getAntiDepBreakMode();
   if (EnableAntiDepBreaking.getPosition() > 0) {
-    AntiDepMode = (EnableAntiDepBreaking == "all")
-      ? TargetSubtargetInfo::ANTIDEP_ALL
-      : ((EnableAntiDepBreaking == "critical")
-         ? TargetSubtargetInfo::ANTIDEP_CRITICAL
-         : TargetSubtargetInfo::ANTIDEP_NONE);
+    AntiDepMode = (*EnableAntiDepBreaking == "all")
+                      ? TargetSubtargetInfo::ANTIDEP_ALL
+                      : ((*EnableAntiDepBreaking == "critical")
+                             ? TargetSubtargetInfo::ANTIDEP_CRITICAL
+                             : TargetSubtargetInfo::ANTIDEP_NONE);
   }
   SmallVector<const TargetRegisterClass *, 4> CriticalPathRCs;
   Subtarget.getCriticalPathRCs(CriticalPathRCs);

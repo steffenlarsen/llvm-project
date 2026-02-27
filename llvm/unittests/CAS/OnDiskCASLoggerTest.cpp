@@ -193,10 +193,10 @@ static cl::opt<std::string> CASLogDir("cas-log-dir");
 extern const char *TestMainArgv0;
 
 TEST_F(OnDiskCASLoggerTest, MultiProcess) {
-  if (!CASLogDir.empty()) {
+  if (!CASLogDir->empty()) {
     // Child process.
     std::unique_ptr<OnDiskCASLogger> Logger;
-    ASSERT_THAT_ERROR(OnDiskCASLogger::open(CASLogDir, /*LogAllocations=*/true)
+    ASSERT_THAT_ERROR(OnDiskCASLogger::open(*CASLogDir, /*LogAllocations=*/true)
                           .moveInto(Logger),
                       Succeeded());
 

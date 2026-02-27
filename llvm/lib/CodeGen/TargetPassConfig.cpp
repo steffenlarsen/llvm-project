@@ -361,7 +361,7 @@ static IdentifyingPassPtr overridePass(AnalysisID StandardID,
 // Find the FSProfile file name. The internal option takes the precedence
 // before getting from TargetMachine.
 static std::string getFSProfileFile(const TargetMachine *TM) {
-  if (!FSProfileFile.empty())
+  if (!FSProfileFile->empty())
     return FSProfileFile.getValue();
   const std::optional<PGOOptions> &PGOOpt = TM->getPGOOption();
   if (PGOOpt == std::nullopt || PGOOpt->Action != PGOOptions::SampleUse)
@@ -372,7 +372,7 @@ static std::string getFSProfileFile(const TargetMachine *TM) {
 // Find the Profile remapping file name. The internal option takes the
 // precedence before getting from TargetMachine.
 static std::string getFSRemappingFile(const TargetMachine *TM) {
-  if (!FSRemappingFile.empty())
+  if (!FSRemappingFile->empty())
     return FSRemappingFile.getValue();
   const std::optional<PGOOptions> &PGOOpt = TM->getPGOOption();
   if (PGOOpt == std::nullopt || PGOOpt->Action != PGOOptions::SampleUse)
@@ -466,19 +466,19 @@ getPassNameAndInstanceNum(StringRef PassName) {
 void TargetPassConfig::setStartStopPasses() {
   StringRef StartBeforeName;
   std::tie(StartBeforeName, StartBeforeInstanceNum) =
-    getPassNameAndInstanceNum(StartBeforeOpt);
+      getPassNameAndInstanceNum(*StartBeforeOpt);
 
   StringRef StartAfterName;
   std::tie(StartAfterName, StartAfterInstanceNum) =
-    getPassNameAndInstanceNum(StartAfterOpt);
+      getPassNameAndInstanceNum(*StartAfterOpt);
 
   StringRef StopBeforeName;
-  std::tie(StopBeforeName, StopBeforeInstanceNum)
-    = getPassNameAndInstanceNum(StopBeforeOpt);
+  std::tie(StopBeforeName, StopBeforeInstanceNum) =
+      getPassNameAndInstanceNum(*StopBeforeOpt);
 
   StringRef StopAfterName;
-  std::tie(StopAfterName, StopAfterInstanceNum)
-    = getPassNameAndInstanceNum(StopAfterOpt);
+  std::tie(StopAfterName, StopAfterInstanceNum) =
+      getPassNameAndInstanceNum(*StopAfterOpt);
 
   StartBefore = getPassIDFromName(StartBeforeName);
   StartAfter = getPassIDFromName(StartAfterName);
@@ -568,13 +568,13 @@ void llvm::registerCodeGenCallback(PassInstrumentationCallbacks &PIC,
 Expected<TargetPassConfig::StartStopInfo>
 TargetPassConfig::getStartStopInfo(PassInstrumentationCallbacks &PIC) {
   auto [StartBefore, StartBeforeInstanceNum] =
-      getPassNameAndInstanceNum(StartBeforeOpt);
+      getPassNameAndInstanceNum(*StartBeforeOpt);
   auto [StartAfter, StartAfterInstanceNum] =
-      getPassNameAndInstanceNum(StartAfterOpt);
+      getPassNameAndInstanceNum(*StartAfterOpt);
   auto [StopBefore, StopBeforeInstanceNum] =
-      getPassNameAndInstanceNum(StopBeforeOpt);
+      getPassNameAndInstanceNum(*StopBeforeOpt);
   auto [StopAfter, StopAfterInstanceNum] =
-      getPassNameAndInstanceNum(StopAfterOpt);
+      getPassNameAndInstanceNum(*StopAfterOpt);
 
   if (!StartBefore.empty() && !StartAfter.empty())
     return make_error<StringError>(
@@ -664,11 +664,11 @@ TargetPassConfig::TargetPassConfig()
 }
 
 bool TargetPassConfig::willCompleteCodeGenPipeline() {
-  return StopBeforeOpt.empty() && StopAfterOpt.empty();
+  return StopBeforeOpt->empty() && StopAfterOpt->empty();
 }
 
 bool TargetPassConfig::hasLimitedCodeGenPipeline() {
-  return !StartBeforeOpt.empty() || !StartAfterOpt.empty() ||
+  return !StartBeforeOpt->empty() || !StartAfterOpt->empty() ||
          !willCompleteCodeGenPipeline();
 }
 
@@ -682,7 +682,7 @@ std::string TargetPassConfig::getLimitedCodeGenPipelineReason() {
                                    StopAfterOptName, StopBeforeOptName};
   bool IsFirst = true;
   for (int Idx = 0; Idx < 4; ++Idx)
-    if (!PassNames[Idx]->empty()) {
+    if (!(*PassNames[Idx])->empty()) {
       if (!IsFirst)
         Res += " and ";
       IsFirst = false;

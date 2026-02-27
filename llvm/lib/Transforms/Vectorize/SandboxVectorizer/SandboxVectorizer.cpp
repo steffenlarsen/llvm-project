@@ -46,7 +46,7 @@ cl::opt<std::string> AllowFiles(
 static constexpr char AllowFilesDelim = ',';
 
 SandboxVectorizerPass::SandboxVectorizerPass() : FPM("fpm") {
-  if (UserDefinedPassPipeline == DefaultPipelineMagicStr) {
+  if (*UserDefinedPassPipeline == DefaultPipelineMagicStr) {
     // TODO: Add passes to the default pipeline. It currently contains:
     //       - Seed collection, which creates seed regions and runs the pipeline
     //         - Bottom-up Vectorizer pass that starts from a seed
@@ -57,7 +57,7 @@ SandboxVectorizerPass::SandboxVectorizerPass() : FPM("fpm") {
   } else {
     // Create the user-defined pipeline.
     FPM.setPassPipeline(
-        UserDefinedPassPipeline,
+        *UserDefinedPassPipeline,
         sandboxir::SandboxVectorizerPassBuilder::createFunctionPass);
   }
 }
@@ -87,8 +87,8 @@ bool SandboxVectorizerPass::allowFile(const std::string &SrcFilePath) {
   size_t DelimPos = 0;
   do {
     size_t LastPos = DelimPos != 0 ? DelimPos + 1 : DelimPos;
-    DelimPos = AllowFiles.find(AllowFilesDelim, LastPos);
-    auto FileNameToMatch = AllowFiles.substr(LastPos, DelimPos - LastPos);
+    DelimPos = AllowFiles->find(AllowFilesDelim, LastPos);
+    auto FileNameToMatch = AllowFiles->substr(LastPos, DelimPos - LastPos);
     if (FileNameToMatch.empty())
       return false;
     // Note: This only runs when debugging so its OK not to reuse the regex.
@@ -110,7 +110,7 @@ bool SandboxVectorizerPass::runImpl(Function &LLVMF) {
   }
 
   // This is used for debugging.
-  if (LLVM_UNLIKELY(AllowFiles != ".*")) {
+  if (LLVM_UNLIKELY(*AllowFiles != ".*")) {
     const auto &SrcFilePath = LLVMF.getParent()->getSourceFileName();
     if (!allowFile(SrcFilePath))
       return false;

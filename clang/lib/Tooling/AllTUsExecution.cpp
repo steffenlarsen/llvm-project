@@ -99,7 +99,7 @@ llvm::Error AllTUsToolExecutor::execute(
   };
 
   std::vector<std::string> Files;
-  llvm::Regex RegexFilter(Filter);
+  llvm::Regex RegexFilter(*Filter);
   for (const auto& File : Compilations.getAllFiles()) {
     if (RegexFilter.match(File))
       Files.push_back(File);

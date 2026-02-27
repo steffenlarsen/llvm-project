@@ -2002,14 +2002,15 @@ bool SampleProfileLoader::doInitialization(Module &M,
     CoverageTracker.setProfAccForSymsInList(true);
   }
 
-  if (FAM && !ProfileInlineReplayFile.empty()) {
+  if (FAM && !ProfileInlineReplayFile->empty()) {
     ExternalInlineAdvisor = getReplayInlineAdvisor(
         M, *FAM, Ctx, /*OriginalAdvisor=*/nullptr,
-        ReplayInlinerSettings{ProfileInlineReplayFile,
-                              ProfileInlineReplayScope,
-                              ProfileInlineReplayFallback,
-                              {ProfileInlineReplayFormat}},
-        /*EmitRemarks=*/false, InlineContext{LTOPhase, InlinePass::ReplaySampleProfileInliner});
+        ReplayInlinerSettings{*ProfileInlineReplayFile,
+                              *ProfileInlineReplayScope,
+                              *ProfileInlineReplayFallback,
+                              {*ProfileInlineReplayFormat}},
+        /*EmitRemarks=*/false,
+        InlineContext{LTOPhase, InlinePass::ReplaySampleProfileInliner});
   }
 
   // Apply tweaks if context-sensitive or probe-based profile is available.

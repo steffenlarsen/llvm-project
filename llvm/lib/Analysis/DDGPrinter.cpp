@@ -38,7 +38,7 @@ PreservedAnalyses DDGDotPrinterPass::run(Loop &L, LoopAnalysisManager &AM,
 
 static void writeDDGToDotFile(DataDependenceGraph &G, bool DOnly) {
   std::string Filename =
-      Twine(DDGDotFilenamePrefix + "." + G.getName() + ".dot").str();
+      Twine(*DDGDotFilenamePrefix + "." + G.getName() + ".dot").str();
   errs() << "Writing '" << Filename << "'...";
 
   std::error_code EC;

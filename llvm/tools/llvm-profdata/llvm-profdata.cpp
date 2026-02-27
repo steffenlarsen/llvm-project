@@ -904,23 +904,23 @@ getFuncName(const SampleProfileMap::value_type &Val) {
 
 template <typename T>
 static void filterFunctions(T &ProfileMap) {
-  bool hasFilter = !FuncNameFilter.empty();
-  bool hasNegativeFilter = !FuncNameNegativeFilter.empty();
+  bool hasFilter = !FuncNameFilter->empty();
+  bool hasNegativeFilter = !FuncNameNegativeFilter->empty();
   if (!hasFilter && !hasNegativeFilter)
     return;
 
   // If filter starts with '?' it is MSVC mangled name, not a regex.
   llvm::Regex ProbablyMSVCMangledName("[?@$_0-9A-Za-z]+");
-  if (hasFilter && FuncNameFilter[0] == '?' &&
-      ProbablyMSVCMangledName.match(FuncNameFilter))
-    FuncNameFilter = llvm::Regex::escape(FuncNameFilter);
-  if (hasNegativeFilter && FuncNameNegativeFilter[0] == '?' &&
-      ProbablyMSVCMangledName.match(FuncNameNegativeFilter))
-    FuncNameNegativeFilter = llvm::Regex::escape(FuncNameNegativeFilter);
+  if (hasFilter && (*FuncNameFilter)[0] == '?' &&
+      ProbablyMSVCMangledName.match(*FuncNameFilter))
+    FuncNameFilter = llvm::Regex::escape(*FuncNameFilter);
+  if (hasNegativeFilter && (*FuncNameNegativeFilter)[0] == '?' &&
+      ProbablyMSVCMangledName.match(*FuncNameNegativeFilter))
+    *FuncNameNegativeFilter = llvm::Regex::escape(*FuncNameNegativeFilter);
 
   size_t Count = ProfileMap.size();
-  llvm::Regex Pattern(FuncNameFilter);
-  llvm::Regex NegativePattern(FuncNameNegativeFilter);
+  llvm::Regex Pattern(*FuncNameFilter);
+  llvm::Regex NegativePattern(*FuncNameNegativeFilter);
   std::string Error;
   if (hasFilter && !Pattern.isValid(Error))
     exitWithError(Error);
@@ -928,9 +928,9 @@ static void filterFunctions(T &ProfileMap) {
     exitWithError(Error);
 
   // Handle MD5 profile, so it is still able to match using the original name.
-  std::string MD5Name = std::to_string(llvm::MD5Hash(FuncNameFilter));
+  std::string MD5Name = std::to_string(llvm::MD5Hash(*FuncNameFilter));
   std::string NegativeMD5Name =
-      std::to_string(llvm::MD5Hash(FuncNameNegativeFilter));
+      std::to_string(llvm::MD5Hash(*FuncNameNegativeFilter));
 
   for (auto I = ProfileMap.begin(); I != ProfileMap.end();) {
     auto Tmp = I++;
@@ -983,22 +983,22 @@ static void mergeInstrProfile(const WeightedFileVector &Inputs,
 
   // TODO: Maybe we should support correlation with mixture of different
   // correlation modes(w/wo debug-info/object correlation).
-  if (DebugInfoFilename.empty()) {
-    if (!BinaryFilename.empty() && (DebugInfod || !DebugFileDirectory.empty()))
+  if (DebugInfoFilename->empty()) {
+    if (!BinaryFilename->empty() && (DebugInfod || !DebugFileDirectory.empty()))
       exitWithError("Expected only one of -binary-file, -debuginfod or "
                     "-debug-file-directory");
-  } else if (!BinaryFilename.empty() || DebugInfod ||
+  } else if (!BinaryFilename->empty() || DebugInfod ||
              !DebugFileDirectory.empty()) {
     exitWithError("Expected only one of -debug-info, -binary-file, -debuginfod "
                   "or -debug-file-directory");
   }
   std::string CorrelateFilename;
   ProfCorrelatorKind CorrelateKind = ProfCorrelatorKind::NONE;
-  if (!DebugInfoFilename.empty()) {
-    CorrelateFilename = DebugInfoFilename;
+  if (!DebugInfoFilename->empty()) {
+    CorrelateFilename = *DebugInfoFilename;
     CorrelateKind = ProfCorrelatorKind::DEBUG_INFO;
-  } else if (!BinaryFilename.empty()) {
-    CorrelateFilename = BinaryFilename;
+  } else if (!BinaryFilename->empty()) {
+    CorrelateFilename = *BinaryFilename;
     CorrelateKind = ProfCorrelatorKind::BINARY;
   }
 
@@ -1096,7 +1096,7 @@ static void mergeInstrProfile(const WeightedFileVector &Inputs,
 
   filterFunctions(Contexts[0]->Writer.getProfileData());
 
-  writeInstrProfile(OutputFilename, OutputFormat, Contexts[0]->Writer);
+  writeInstrProfile(*OutputFilename, OutputFormat, Contexts[0]->Writer);
 }
 
 /// The profile entry for a function in instrumentation profile.
@@ -1454,7 +1454,7 @@ static void supplementInstrProfile(const WeightedFileVector &Inputs,
                                    unsigned SupplMinSizeThreshold,
                                    float ZeroCounterThreshold,
                                    unsigned InstrProfColdThreshold) {
-  if (OutputFilename == "-")
+  if (*OutputFilename == "-")
     exitWithError("cannot write indexed profdata format to stdout");
   if (Inputs.size() != 1)
     exitWithError("expect one input to be an instr profile");
@@ -1485,7 +1485,7 @@ static void supplementInstrProfile(const WeightedFileVector &Inputs,
 
   adjustInstrProfile(WC, Reader, SupplMinSizeThreshold, ZeroCounterThreshold,
                      InstrProfColdThreshold);
-  writeInstrProfile(OutputFilename, OutputFormat, WC->Writer);
+  writeInstrProfile(*OutputFilename, OutputFormat, WC->Writer);
 }
 
 /// Make a copy of the given function samples with all symbol names remapped
@@ -1687,9 +1687,9 @@ static void mergeSampleProfile(const WeightedFileVector &Inputs,
   filterFunctions(ProfileMap);
 
   auto WriterOrErr =
-      SampleProfileWriter::create(OutputFilename, FormatMap[OutputFormat]);
+      SampleProfileWriter::create(*OutputFilename, FormatMap[OutputFormat]);
   if (std::error_code EC = WriterOrErr.getError())
-    exitWithErrorCode(EC, OutputFilename);
+    exitWithErrorCode(EC, *OutputFilename);
 
   auto Writer = std::move(WriterOrErr.get());
   // WriterList will have StringRef refering to string in Buffer.
@@ -1782,7 +1782,7 @@ static int merge_main(StringRef ProgName) {
 
   // Make sure that the file buffer stays alive for the duration of the
   // weighted input vector's lifetime.
-  auto Buffer = getInputFileBuf(InputFilenamesFile);
+  auto Buffer = getInputFileBuf(*InputFilenamesFile);
   parseInputFilenamesFile(Buffer.get(), WeightedInputs);
 
   if (WeightedInputs.empty())
@@ -1795,15 +1795,15 @@ static int merge_main(StringRef ProgName) {
   }
 
   std::unique_ptr<SymbolRemapper> Remapper;
-  if (!RemappingFile.empty())
-    Remapper = SymbolRemapper::create(RemappingFile);
+  if (!RemappingFile->empty())
+    Remapper = SymbolRemapper::create(*RemappingFile);
 
-  if (!SupplInstrWithSample.empty()) {
+  if (!SupplInstrWithSample->empty()) {
     if (ProfileKind != instr)
       exitWithError(
           "-supplement-instr-with-sample can only work with -instr. ");
 
-    supplementInstrProfile(WeightedInputs, SupplInstrWithSample, OutputSparse,
+    supplementInstrProfile(WeightedInputs, *SupplInstrWithSample, OutputSparse,
                            SupplMinSizeThreshold, ZeroCounterThreshold,
                            InstrProfColdThreshold);
     return 0;
@@ -1811,9 +1811,9 @@ static int merge_main(StringRef ProgName) {
 
   if (ProfileKind == instr)
     mergeInstrProfile(WeightedInputs, Remapper.get(), MaxDbgCorrelationWarnings,
-                      ProfiledBinary);
+                      *ProfiledBinary);
   else
-    mergeSampleProfile(WeightedInputs, Remapper.get(), ProfileSymbolListFile,
+    mergeSampleProfile(WeightedInputs, Remapper.get(), *ProfileSymbolListFile,
                        OutputSizeLimit);
   return 0;
 }
@@ -2774,9 +2774,9 @@ void overlapSampleProfile(const std::string &BaseFilename,
 
 static int overlap_main() {
   std::error_code EC;
-  raw_fd_ostream OS(OutputFilename.data(), EC, sys::fs::OF_TextWithCRLF);
+  raw_fd_ostream OS(OutputFilename->data(), EC, sys::fs::OF_TextWithCRLF);
   if (EC)
-    exitWithErrorCode(EC, OutputFilename);
+    exitWithErrorCode(EC, *OutputFilename);
 
   if (ProfileKind == instr)
     overlapInstrProfile(BaseFilename, TestFilename,
@@ -2854,13 +2854,13 @@ static int showInstrProfile(ShowFormat SFormat, raw_fd_ostream &OS) {
   if (SFormat == ShowFormat::Yaml)
     exitWithError("YAML output is not supported for instr profiles");
   auto FS = vfs::getRealFileSystem();
-  auto ReaderOrErr = InstrProfReader::create(Filename, *FS);
+  auto ReaderOrErr = InstrProfReader::create(*Filename, *FS);
   std::vector<uint32_t> Cutoffs = std::move(DetailedSummaryCutoffs);
   if (Cutoffs.empty() && (ShowDetailedSummary || ShowHotFuncList))
     Cutoffs = ProfileSummaryBuilder::DefaultCutoffs;
   InstrProfSummaryBuilder Builder(std::move(Cutoffs));
   if (Error E = ReaderOrErr.takeError())
-    exitWithError(std::move(E), Filename);
+    exitWithError(std::move(E), *Filename);
 
   auto Reader = std::move(ReaderOrErr.get());
   bool IsIRInstr = Reader->isIRLevelProfile();
@@ -2886,8 +2886,8 @@ static int showInstrProfile(ShowFormat SFormat, raw_fd_ostream &OS) {
       if (FuncIsCS != ShowCS)
         continue;
     }
-    bool Show = ShowAllFunctions ||
-                (!FuncNameFilter.empty() && Func.Name.contains(FuncNameFilter));
+    bool Show = ShowAllFunctions || (!FuncNameFilter->empty() &&
+                                     Func.Name.contains(*FuncNameFilter));
 
     bool doTextFormatDump = (Show && TextFormat);
 
@@ -3003,7 +3003,7 @@ static int showInstrProfile(ShowFormat SFormat, raw_fd_ostream &OS) {
     }
   }
   if (Reader->hasError())
-    exitWithError(Reader->getError(), Filename);
+    exitWithError(Reader->getError(), *Filename);
 
   if (TextFormat || ShowCovered)
     return 0;
@@ -3015,7 +3015,7 @@ static int showInstrProfile(ShowFormat SFormat, raw_fd_ostream &OS) {
     OS << "  instrument_loop_entries = " << Reader->instrLoopEntriesEnabled();
   }
   OS << "\n";
-  if (ShowAllFunctions || !FuncNameFilter.empty())
+  if (ShowAllFunctions || !FuncNameFilter->empty())
     OS << "Functions shown: " << ShownFunctions << "\n";
   PS->printSummary(OS);
   if (ShowValueCutoff > 0) {
@@ -3069,7 +3069,7 @@ static int showInstrProfile(ShowFormat SFormat, raw_fd_ostream &OS) {
 
   if (ShowBinaryIds)
     if (Error E = Reader->printBinaryIds(OS))
-      exitWithError(std::move(E), Filename);
+      exitWithError(std::move(E), *Filename);
 
   if (ShowProfileVersion)
     OS << "Profile version: " << Reader->getVersion() << "\n";
@@ -3239,10 +3239,10 @@ static int showSampleProfile(ShowFormat SFormat, raw_fd_ostream &OS) {
   using namespace sampleprof;
   LLVMContext Context;
   auto FS = vfs::getRealFileSystem();
-  auto ReaderOrErr = SampleProfileReader::create(Filename, Context, *FS,
+  auto ReaderOrErr = SampleProfileReader::create(*Filename, Context, *FS,
                                                  FSDiscriminatorPassOption);
   if (std::error_code EC = ReaderOrErr.getError())
-    exitWithErrorCode(EC, Filename);
+    exitWithErrorCode(EC, *Filename);
 
   auto Reader = std::move(ReaderOrErr.get());
   if (ShowSectionInfoOnly) {
@@ -3251,9 +3251,9 @@ static int showSampleProfile(ShowFormat SFormat, raw_fd_ostream &OS) {
   }
 
   if (std::error_code EC = Reader->read())
-    exitWithErrorCode(EC, Filename);
+    exitWithErrorCode(EC, *Filename);
 
-  if (ShowAllFunctions || FuncNameFilter.empty()) {
+  if (ShowAllFunctions || FuncNameFilter->empty()) {
     if (SFormat == ShowFormat::Json)
       Reader->dumpJson(OS);
     else
@@ -3265,7 +3265,7 @@ static int showSampleProfile(ShowFormat SFormat, raw_fd_ostream &OS) {
           "be printed");
 
     // TODO: parse context string to support filtering by contexts.
-    FunctionSamples *FS = Reader->getSamplesFor(StringRef(FuncNameFilter));
+    FunctionSamples *FS = Reader->getSamplesFor(StringRef(*FuncNameFilter));
     Reader->dumpFunctionProfile(FS ? *FS : FunctionSamples(), OS);
   }
 
@@ -3293,9 +3293,9 @@ static int showMemProfProfile(ShowFormat SFormat, raw_fd_ostream &OS) {
     exitWithError("JSON output is not supported for MemProf");
 
   // Show the raw profile in YAML.
-  if (memprof::RawMemProfReader::hasFormat(Filename)) {
+  if (memprof::RawMemProfReader::hasFormat(*Filename)) {
     auto ReaderOr = llvm::memprof::RawMemProfReader::create(
-        Filename, ProfiledBinary, /*KeepNames=*/true);
+        *Filename, *ProfiledBinary, /*KeepNames=*/true);
     if (Error E = ReaderOr.takeError()) {
       // Since the error can be related to the profile or the binary we do not
       // pass whence. Instead additional context is provided where necessary in
@@ -3312,9 +3312,9 @@ static int showMemProfProfile(ShowFormat SFormat, raw_fd_ostream &OS) {
 
   // Show the indexed MemProf profile in YAML.
   auto FS = vfs::getRealFileSystem();
-  auto ReaderOrErr = IndexedInstrProfReader::create(Filename, *FS);
+  auto ReaderOrErr = IndexedInstrProfReader::create(*Filename, *FS);
   if (Error E = ReaderOrErr.takeError())
-    exitWithError(std::move(E), Filename);
+    exitWithError(std::move(E), *Filename);
 
   auto Reader = std::move(ReaderOrErr.get());
   memprof::AllMemProfData Data = Reader->getAllMemProfData();
@@ -3374,12 +3374,12 @@ static int showDebugInfoCorrelation(const std::string &Filename,
 }
 
 static int show_main(StringRef ProgName) {
-  if (Filename.empty() && DebugInfoFilename.empty())
+  if (Filename->empty() && DebugInfoFilename->empty())
     exitWithError(
         "the positional argument '<profdata-file>' is required unless '--" +
         DebugInfoFilename.ArgStr + "' is provided");
 
-  if (Filename == OutputFilename) {
+  if (*Filename == *OutputFilename) {
     errs() << ProgName
            << " show: Input file name cannot be the same as the output file "
               "name!\n";
@@ -3389,15 +3389,15 @@ static int show_main(StringRef ProgName) {
     SFormat = ShowFormat::Json;
 
   std::error_code EC;
-  raw_fd_ostream OS(OutputFilename.data(), EC, sys::fs::OF_TextWithCRLF);
+  raw_fd_ostream OS(OutputFilename->data(), EC, sys::fs::OF_TextWithCRLF);
   if (EC)
-    exitWithErrorCode(EC, OutputFilename);
+    exitWithErrorCode(EC, *OutputFilename);
 
-  if (ShowAllFunctions && !FuncNameFilter.empty())
+  if (ShowAllFunctions && !FuncNameFilter->empty())
     WithColor::warning() << "-function argument ignored: showing all functions\n";
 
-  if (!DebugInfoFilename.empty())
-    return showDebugInfoCorrelation(DebugInfoFilename, SFormat, OS);
+  if (!DebugInfoFilename->empty())
+    return showDebugInfoCorrelation(*DebugInfoFilename, SFormat, OS);
 
   if (ShowProfileKind == instr)
     return showInstrProfile(SFormat, OS);
@@ -3408,13 +3408,13 @@ static int show_main(StringRef ProgName) {
 
 static int order_main() {
   std::error_code EC;
-  raw_fd_ostream OS(OutputFilename.data(), EC, sys::fs::OF_TextWithCRLF);
+  raw_fd_ostream OS(OutputFilename->data(), EC, sys::fs::OF_TextWithCRLF);
   if (EC)
-    exitWithErrorCode(EC, OutputFilename);
+    exitWithErrorCode(EC, *OutputFilename);
   auto FS = vfs::getRealFileSystem();
-  auto ReaderOrErr = InstrProfReader::create(Filename, *FS);
+  auto ReaderOrErr = InstrProfReader::create(*Filename, *FS);
   if (Error E = ReaderOrErr.takeError())
-    exitWithError(std::move(E), Filename);
+    exitWithError(std::move(E), *Filename);
 
   auto Reader = std::move(ReaderOrErr.get());
   for (auto &I : *Reader) {

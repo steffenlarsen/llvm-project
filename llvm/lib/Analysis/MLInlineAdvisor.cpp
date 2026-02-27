@@ -76,20 +76,20 @@ std::unique_ptr<InlineAdvisor>
 llvm::getReleaseModeAdvisor(Module &M, ModuleAnalysisManager &MAM,
                             std::function<bool(CallBase &)> GetDefaultAdvice) {
   if (!llvm::isEmbeddedModelEvaluatorValid<CompiledModelType>() &&
-      InteractiveChannelBaseName.empty())
+      InteractiveChannelBaseName->empty())
     return nullptr;
   auto RunnerFactory = [&](const std::vector<TensorSpec> &InputFeatures)
       -> std::unique_ptr<MLModelRunner> {
     std::unique_ptr<MLModelRunner> AOTRunner;
-    if (InteractiveChannelBaseName.empty())
+    if (InteractiveChannelBaseName->empty())
       AOTRunner = std::make_unique<ReleaseModeModelRunner<CompiledModelType>>(
           M.getContext(), InputFeatures, DecisionName,
-          EmbeddedModelRunnerOptions().setModelSelector(ModelSelector));
+          EmbeddedModelRunnerOptions().setModelSelector(*ModelSelector));
     else {
       AOTRunner = std::make_unique<InteractiveModelRunner>(
           M.getContext(), InputFeatures, InlineDecisionSpec,
-          InteractiveChannelBaseName + ".out",
-          InteractiveChannelBaseName + ".in");
+          *InteractiveChannelBaseName + ".out",
+          *InteractiveChannelBaseName + ".in");
     }
     return AOTRunner;
   };
@@ -508,7 +508,7 @@ std::unique_ptr<InlineAdvice> MLInlineAdvisor::getAdviceImpl(CallBase &CB) {
         static_cast<InlineCostFeatureIndex>(I))) = CostFeatures->at(I);
   }
   // This one would have been set up to be right at the end.
-  if (!InteractiveChannelBaseName.empty() && InteractiveIncludeDefault)
+  if (!InteractiveChannelBaseName->empty() && InteractiveIncludeDefault)
     *ModelRunner->getTensor<int64_t>(getFeatureMap().size() - 1) =
         GetDefaultAdvice(CB);
   return getAdviceFromModel(CB, ORE);

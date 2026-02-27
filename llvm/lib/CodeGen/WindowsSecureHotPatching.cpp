@@ -212,12 +212,12 @@ bool WindowsSecureHotPatching::doInitialization(Module &M) {
   // we also allow marking functions by passing -ms-hotpatch-functions-file or
   // -ms-hotpatch-functions-list directly to LLVM. This allows hot-patching to
   // work with languages that have not yet updated their front-ends.
-  if (!LLVMMSSecureHotPatchFunctionsFile.empty() ||
+  if (!LLVMMSSecureHotPatchFunctionsFile->empty() ||
       !LLVMMSSecureHotPatchFunctionsList.empty()) {
     std::vector<std::string> HotPatchFunctionsList;
 
-    if (!LLVMMSSecureHotPatchFunctionsFile.empty()) {
-      auto BufOrErr = MemoryBuffer::getFile(LLVMMSSecureHotPatchFunctionsFile);
+    if (!LLVMMSSecureHotPatchFunctionsFile->empty()) {
+      auto BufOrErr = MemoryBuffer::getFile(*LLVMMSSecureHotPatchFunctionsFile);
       if (BufOrErr) {
         const MemoryBuffer &FileBuffer = **BufOrErr;
         for (line_iterator I(FileBuffer.getMemBufferRef(), true), E; I != E;
@@ -227,7 +227,7 @@ bool WindowsSecureHotPatching::doInitialization(Module &M) {
         M.getContext().diagnose(DiagnosticInfoGeneric{
             Twine("failed to open hotpatch functions file "
                   "(--ms-hotpatch-functions-file): ") +
-            LLVMMSSecureHotPatchFunctionsFile + Twine(" : ") +
+            *LLVMMSSecureHotPatchFunctionsFile + Twine(" : ") +
             BufOrErr.getError().message()});
       }
     }

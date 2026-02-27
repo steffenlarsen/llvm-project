@@ -36,7 +36,9 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/Memory.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Mutex.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/StringSaver.h"
@@ -112,6 +114,168 @@ void opt_bool_anchor() { opt<bool> anchor{""}; }
 void opt_char_anchor() { opt<char> anchor{""}; }
 void opt_int_anchor() { opt<int> anchor{""}; }
 void opt_unsigned_anchor() { opt<unsigned> anchor{""}; }
+
+//===----------------------------------------------------------------------===//
+// Global registry and thread-local storage implementation
+//
+
+namespace llvm {
+namespace cl {
+
+namespace {
+// Registry data structure
+class OptionRegistry {
+private:
+  const unsigned PageSizeEstimate = sys::Process::getPageSizeEstimate();
+
+  llvm::SmallVector<std::pair<std::unique_ptr<OptionStorageBase>, size_t>, 32>
+      Options;
+  size_t TotalSize = 0;
+  llvm::sys::Mutex Mutex;
+
+  OptionRegistry() = default;
+
+  /// Thread-local storage manager. Each thread gets its own instance that
+  /// allocates and manages storage for all initialized command line options.
+  class ThreadLocalOptionStorage {
+    SmallVector<sys::MemoryBlock, 4> StoragePages;
+    SmallDenseMap<OptionStorageBase *, void *, 16> InitializedOpts;
+
+    const unsigned AllocationSize;
+
+  public:
+    ThreadLocalOptionStorage(unsigned AllocSize) : AllocationSize{AllocSize} {}
+
+    ~ThreadLocalOptionStorage() {
+      for (auto [Opt, Ptr] : InitializedOpts)
+        Opt->destructStorage(Ptr);
+      for (auto &Page : StoragePages)
+        sys::Memory::releaseMappedMemory(Page);
+    }
+
+    /// Get pointer to storage at the given offset, allocating if needed.
+    void *getStorageAt(size_t Offset, OptionStorageBase *Opt) {
+      size_t PageIndex = Offset / AllocationSize;
+      size_t PageOffset = Offset % AllocationSize;
+
+      // If the page doesn't exist, create it and all before it.
+      if (PageIndex >= StoragePages.size())
+        StoragePages.resize(PageIndex + 1);
+
+      // If the page is currently unallocated, allocate it now.
+      sys::MemoryBlock &BaseAlloc = StoragePages[PageIndex];
+      if (!BaseAlloc.base()) {
+        std::error_code EC;
+        BaseAlloc = sys::Memory::allocateMappedMemory(
+            AllocationSize, /*NearBlock=*/nullptr,
+            sys::Memory::MF_READ | sys::Memory::MF_WRITE, EC);
+        assert(!EC);
+      }
+
+      // Find the pointer offset of the new option.
+      void *Ptr = static_cast<char *>(BaseAlloc.base()) + PageOffset;
+
+      // Try to insert the option into the initialized set. If it already
+      // exists, return the existing pointer.
+      auto [It, Inserted] = InitializedOpts.insert({Opt, Ptr});
+      if (!Inserted)
+        return It->second;
+
+      // Otherwise, construct the value in-place.
+      Opt->constructStorage(Ptr);
+      return Ptr;
+    }
+
+    // Non-copyable and non-movable
+    ThreadLocalOptionStorage(const ThreadLocalOptionStorage &) = delete;
+    ThreadLocalOptionStorage &
+    operator=(const ThreadLocalOptionStorage &) = delete;
+  };
+
+public:
+  size_t addOption(std::unique_ptr<OptionStorageBase> &&Opt) {
+    llvm::sys::ScopedLock Lock(Mutex);
+
+    // Calculate aligned offset for this option. In the (unlikely) case that
+    // this option would straddle a page boundary, move it to the next page.
+    size_t Alignment = Opt->getStorageAlignment();
+    size_t StorageSize = Opt->getStorageSize();
+    assert(StorageSize <= PageSizeEstimate &&
+           "Option storage larger than page size!");
+    size_t Offset = (TotalSize + Alignment - 1) & ~(Alignment - 1);
+    if (LLVM_UNLIKELY(Offset / PageSizeEstimate !=
+                      (Offset + StorageSize - 1) / PageSizeEstimate))
+      Offset = ((Offset + PageSizeEstimate - 1) / PageSizeEstimate) *
+               PageSizeEstimate;
+
+    Options.emplace_back(std::move(Opt), Offset);
+
+    TotalSize = Offset + StorageSize;
+    return Offset;
+  }
+
+  size_t getTotalStorageSize() {
+    llvm::sys::ScopedLock Lock(Mutex);
+    return TotalSize;
+  }
+
+  void initializeStorage(void *Storage) {
+    llvm::sys::ScopedLock Lock(Mutex);
+
+    for (auto &[Opt, Offset] : Options) {
+      void *Ptr = static_cast<char *>(Storage) + Offset;
+      Opt->constructStorage(Ptr);
+    }
+  }
+
+  void cleanupStorage(void *Storage) {
+    llvm::sys::ScopedLock Lock(Mutex);
+
+    // Destruct in reverse order
+    for (auto it = Options.rbegin(); it != Options.rend(); ++it) {
+      auto &[Opt, Offset] = *it;
+      void *Ptr = static_cast<char *>(Storage) + Offset;
+      Opt->destructStorage(Ptr);
+    }
+  }
+
+  size_t getNumOptions() {
+    llvm::sys::ScopedLock Lock(Mutex);
+    return Options.size();
+  }
+
+  OptionStorageBase *getOption(size_t Index) {
+    llvm::sys::ScopedLock Lock(Mutex);
+    if (Index >= Options.size())
+      return nullptr;
+    return Options[Index].first.get();
+  }
+
+  // Global registry instance (never destroyed to avoid static destruction order
+  // issues)
+  static OptionRegistry &getInstance() {
+    static OptionRegistry *Registry = new OptionRegistry();
+    return *Registry;
+  }
+
+  static ThreadLocalOptionStorage &getTLOSInstance() {
+    static thread_local ThreadLocalOptionStorage TLS(
+        getInstance().PageSizeEstimate);
+    return TLS;
+  }
+};
+} // anonymous namespace
+
+size_t registerOption(std::unique_ptr<OptionStorageBase> &&Opt) {
+  return OptionRegistry::getInstance().addOption(std::move(Opt));
+}
+
+void *getOptionThreadLocalStorage(size_t Offset, OptionStorageBase *Opt) {
+  return OptionRegistry::getTLOSInstance().getStorageAt(Offset, Opt);
+}
+
+} // namespace cl
+} // namespace llvm
 
 //===----------------------------------------------------------------------===//
 

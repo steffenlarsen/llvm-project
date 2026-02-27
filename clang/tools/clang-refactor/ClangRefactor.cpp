@@ -290,7 +290,7 @@ public:
   /// \returns true on error, false otherwise.
   bool parseSelectionArgument() {
     if (Selection) {
-      ParsedSelection = SourceSelectionArgument::fromString(*Selection);
+      ParsedSelection = SourceSelectionArgument::fromString(**Selection);
       if (!ParsedSelection)
         return true;
     }

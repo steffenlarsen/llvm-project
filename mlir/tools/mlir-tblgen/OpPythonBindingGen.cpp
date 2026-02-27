@@ -1307,11 +1307,11 @@ static void emitOpBindings(const Operator &op, raw_ostream &os) {
 /// headers and utilities. Returns `false` on success to comply with Tablegen
 /// registration requirements.
 static bool emitAllOps(const RecordKeeper &records, raw_ostream &os) {
-  if (clDialectName.empty())
+  if (clDialectName->empty())
     llvm::PrintFatalError("dialect name not provided");
 
   os << fileHeader;
-  if (!clDialectExtensionName.empty())
+  if (!clDialectExtensionName->empty())
     os << formatv(dialectExtensionTemplate, clDialectName.getValue());
   else
     os << formatv(dialectClassTemplate, clDialectName.getValue());

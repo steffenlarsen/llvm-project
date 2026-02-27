@@ -822,17 +822,17 @@ int CodeCoverageTool::run(Command Cmd, int argc, const char **argv) {
     }
     this->CheckBinaryIDs = CheckBinaryIDs;
 
-    if (!PGOFilename.empty() == EmptyProfile) {
+    if (!PGOFilename->empty() == EmptyProfile) {
       error(
           "exactly one of -instr-profile and -empty-profile must be specified");
       return 1;
     }
-    if (!PGOFilename.empty()) {
+    if (!PGOFilename->empty()) {
       this->PGOFilename = std::make_optional(PGOFilename.getValue());
     }
 
-    if (!CovFilename.empty())
-      ObjectFilenames.emplace_back(CovFilename);
+    if (!CovFilename->empty())
+      ObjectFilenames.emplace_back(*CovFilename);
     for (const std::string &Filename : CovFilenames)
       ObjectFilenames.emplace_back(Filename);
     if (ObjectFilenames.empty() && !Debuginfod && DebugFileDirectory.empty()) {
@@ -1083,10 +1083,10 @@ int CodeCoverageTool::doShow(int argc, const char **argv,
 
   ViewOpts.HighCovWatermark = 100.0;
   ViewOpts.LowCovWatermark = 80.0;
-  if (!CovWatermark.empty()) {
-    auto WaterMarkPair = StringRef(CovWatermark).split(',');
+  if (!CovWatermark->empty()) {
+    auto WaterMarkPair = StringRef(*CovWatermark).split(',');
     if (WaterMarkPair.first.empty() || WaterMarkPair.second.empty()) {
-      error("invalid argument '" + CovWatermark +
+      error("invalid argument '" + *CovWatermark +
                 "', must be in format 'high,low'",
             "-coverage-watermark");
       return 1;
@@ -1114,7 +1114,7 @@ int CodeCoverageTool::doShow(int argc, const char **argv,
     if (ViewOpts.HighCovWatermark > 100 || ViewOpts.LowCovWatermark < 0 ||
         ViewOpts.HighCovWatermark <= ViewOpts.LowCovWatermark) {
       error(
-          "invalid number range '" + CovWatermark +
+          "invalid number range '" + *CovWatermark +
               "', must be both high and low should be between 0-100, and high "
               "> low",
           "-coverage-watermark");

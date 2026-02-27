@@ -184,7 +184,7 @@ int main(int argc, char **argv) {
   // Set up the input file.
   std::string errorMessage;
   std::unique_ptr<llvm::MemoryBuffer> inputFile =
-      openInputFile(inputFilename, &errorMessage);
+      openInputFile(*inputFilename, &errorMessage);
   if (!inputFile) {
     llvm::errs() << errorMessage << "\n";
     return 1;
@@ -194,7 +194,7 @@ int main(int argc, char **argv) {
   // get included during processing.
   std::set<std::string> includedFilesStorage;
   std::set<std::string> *includedFiles = nullptr;
-  if (!dependencyFilename.empty())
+  if (!dependencyFilename->empty())
     includedFiles = &includedFilesStorage;
 
   // The split-input-file mode is a very specific mode that slices the file
@@ -213,7 +213,7 @@ int main(int argc, char **argv) {
                          dumpODS, includedFiles);
   };
   if (failed(splitAndProcessBuffer(std::move(inputFile), processFn, outputStrOS,
-                                   inputSplitMarker, outputSplitMarker)))
+                                   *inputSplitMarker, *outputSplitMarker)))
     return 1;
 
   // Write the output.
@@ -223,7 +223,7 @@ int main(int argc, char **argv) {
     // prevents recompilation of all the files depending on it if there aren't
     // any.
     if (auto existingOrErr =
-            llvm::MemoryBuffer::getFile(outputFilename, /*IsText=*/true))
+            llvm::MemoryBuffer::getFile(*outputFilename, /*IsText=*/true))
       if (std::move(existingOrErr.get())->getBuffer() == outputStr)
         shouldWriteOutput = false;
   }
@@ -231,7 +231,7 @@ int main(int argc, char **argv) {
   // Populate the output file if necessary.
   if (shouldWriteOutput) {
     std::unique_ptr<llvm::ToolOutputFile> outputFile =
-        openOutputFile(outputFilename, &errorMessage);
+        openOutputFile(*outputFilename, &errorMessage);
     if (!outputFile) {
       llvm::errs() << errorMessage << "\n";
       return 1;
@@ -242,8 +242,8 @@ int main(int argc, char **argv) {
 
   // Always write the depfile, even if the main output hasn't changed. If it's
   // missing, Ninja considers the output dirty.
-  if (!dependencyFilename.empty()) {
-    if (failed(createDependencyFile(outputFilename, dependencyFilename,
+  if (!dependencyFilename->empty()) {
+    if (failed(createDependencyFile(*outputFilename, *dependencyFilename,
                                     includedFilesStorage)))
       return 1;
   }

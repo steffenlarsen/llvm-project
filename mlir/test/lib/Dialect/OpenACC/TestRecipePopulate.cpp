@@ -79,21 +79,21 @@ void TestRecipePopulatePass::runOnOperation() {
     std::string recipeName = recipeType.getValue() + "_" + varName;
     ValueRange bounds; // No bounds for memref tests
 
-    if (recipeType == "private") {
+    if (*recipeType == "private") {
       auto recipe = PrivateRecipeOp::createAndPopulate(
           builder, loc, recipeName, var.getType(), varName, bounds);
 
       if (!recipe) {
         op->emitError("Failed to create private recipe for ") << varName;
       }
-    } else if (recipeType == "firstprivate") {
+    } else if (*recipeType == "firstprivate") {
       auto recipe = FirstprivateRecipeOp::createAndPopulate(
           builder, loc, recipeName, var.getType(), varName, bounds);
 
       if (!recipe) {
         op->emitError("Failed to create firstprivate recipe for ") << varName;
       }
-    } else if (recipeType == "private_from_firstprivate") {
+    } else if (*recipeType == "private_from_firstprivate") {
       // First create a firstprivate recipe, then use it to drive creation of a
       // matching private recipe via the convenience overload. Give each recipe
       // a stable, predictable name so tests can check both.

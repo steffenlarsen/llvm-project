@@ -412,10 +412,10 @@ DataflowAnalysisContext::getAdornedCFG(const FunctionDecl *F) {
 }
 
 static std::unique_ptr<Logger> makeLoggerFromCommandLine() {
-  if (DataflowLog.empty())
+  if (DataflowLog->empty())
     return Logger::textual(llvm::errs());
 
-  llvm::StringRef Dir = DataflowLog;
+  llvm::StringRef Dir = *DataflowLog;
   if (auto EC = llvm::sys::fs::create_directories(Dir))
     llvm::errs() << "Failed to create log dir: " << EC.message() << "\n";
   // All analysis runs within a process will log to the same directory.

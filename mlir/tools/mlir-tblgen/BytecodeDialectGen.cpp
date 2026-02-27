@@ -438,15 +438,15 @@ static bool emitBCRW(const RecordKeeper &records, raw_ostream &os) {
   MapVector<StringRef, AttrOrType> dialectAttrOrType;
   for (const Record *it :
        records.getAllDerivedDefinitions("DialectAttributes")) {
-    if (!selectedBcDialect.empty() &&
-        it->getValueAsString("dialect") != selectedBcDialect)
+    if (!selectedBcDialect->empty() &&
+        it->getValueAsString("dialect") != *selectedBcDialect)
       continue;
     dialectAttrOrType[it->getValueAsString("dialect")].attr =
         it->getValueAsListOfDefs("elems");
   }
   for (const Record *it : records.getAllDerivedDefinitions("DialectTypes")) {
-    if (!selectedBcDialect.empty() &&
-        it->getValueAsString("dialect") != selectedBcDialect)
+    if (!selectedBcDialect->empty() &&
+        it->getValueAsString("dialect") != *selectedBcDialect)
       continue;
     dialectAttrOrType[it->getValueAsString("dialect")].type =
         it->getValueAsListOfDefs("elems");

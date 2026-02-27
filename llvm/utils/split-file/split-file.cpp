@@ -117,7 +117,7 @@ static int handle(MemoryBuffer &inputBuf, StringRef input) {
   SmallString<256> partPath;
   for (auto &keyValue : partToBegin) {
     partPath.clear();
-    sys::path::append(partPath, output, keyValue.first);
+    sys::path::append(partPath, *output, keyValue.first);
     std::error_code ec =
         sys::fs::create_directories(sys::path::parent_path(partPath));
     if (ec)
@@ -152,28 +152,28 @@ int main(int argc, const char **argv) {
       /*EnvVar=*/nullptr,
       /*LongOptionsUseDoubleDash=*/true);
 
-  if (input.empty())
+  if (input->empty())
     fatal("", "input filename is not specified");
-  if (output.empty())
+  if (output->empty())
     fatal("", "output directory is not specified");
   ErrorOr<std::unique_ptr<MemoryBuffer>> bufferOrErr =
-      MemoryBuffer::getFileOrSTDIN(input, /*IsText=*/true);
+      MemoryBuffer::getFileOrSTDIN(*input, /*IsText=*/true);
   if (std::error_code ec = bufferOrErr.getError())
-    fatal(input, ec.message());
+    fatal(*input, ec.message());
 
   // Delete output if it is a file or an empty directory, so that we can create
   // a directory.
   sys::fs::file_status status;
-  if (std::error_code ec = sys::fs::status(output, status))
+  if (std::error_code ec = sys::fs::status(*output, status))
     if (ec.value() != static_cast<int>(std::errc::no_such_file_or_directory))
-      fatal(output, ec.message());
+      fatal(*output, ec.message());
   if (status.type() != sys::fs::file_type::file_not_found &&
       status.type() != sys::fs::file_type::directory_file &&
       status.type() != sys::fs::file_type::regular_file)
-    fatal(output, "output cannot be a special file");
-  if (std::error_code ec = sys::fs::remove(output, /*IgnoreNonExisting=*/true))
+    fatal(*output, "output cannot be a special file");
+  if (std::error_code ec = sys::fs::remove(*output, /*IgnoreNonExisting=*/true))
     if (ec.value() != static_cast<int>(std::errc::directory_not_empty) &&
         ec.value() != static_cast<int>(std::errc::file_exists))
-      fatal(output, ec.message());
-  return handle(**bufferOrErr, input);
+      fatal(*output, ec.message());
+  return handle(**bufferOrErr, *input);
 }

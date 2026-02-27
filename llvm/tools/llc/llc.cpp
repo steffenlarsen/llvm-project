@@ -313,12 +313,12 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &,
 
 static std::unique_ptr<ToolOutputFile> GetOutputStream(Triple::OSType OS) {
   // If we don't yet have an output filename, make one.
-  if (OutputFilename.empty()) {
-    if (InputFilename == "-")
+  if (OutputFilename->empty()) {
+    if (*InputFilename == "-")
       OutputFilename = "-";
     else {
       // If InputFilename ends in .bc or .ll, remove it.
-      StringRef IFN = InputFilename;
+      StringRef IFN = *InputFilename;
       if (IFN.ends_with(".bc") || IFN.ends_with(".ll"))
         OutputFilename = std::string(IFN.drop_back(3));
       else if (IFN.ends_with(".mir"))
@@ -359,7 +359,7 @@ static std::unique_ptr<ToolOutputFile> GetOutputStream(Triple::OSType OS) {
   sys::fs::OpenFlags OpenFlags = sys::fs::OF_None;
   if (!Binary)
     OpenFlags |= sys::fs::OF_TextWithCRLF;
-  auto FDOut = std::make_unique<ToolOutputFile>(OutputFilename, EC, OpenFlags);
+  auto FDOut = std::make_unique<ToolOutputFile>(*OutputFilename, EC, OpenFlags);
   if (EC)
     reportError(EC.message());
   return FDOut;
@@ -412,7 +412,7 @@ int main(int argc, char **argv) {
 
   cl::ParseCommandLineOptions(argc, argv, "llvm system compiler\n");
 
-  if (!PassPipeline.empty() && !getRunPassNames().empty()) {
+  if (!PassPipeline->empty() && !getRunPassNames().empty()) {
     errs() << "The `llc -run-pass=...` syntax for the new pass manager is "
               "not supported, please use `llc -passes=<pipeline>` (or the `-p` "
               "alias for a more concise version).\n";
@@ -423,7 +423,7 @@ int main(int argc, char **argv) {
     timeTraceProfilerInitialize(TimeTraceGranularity, argv[0]);
   llvm::scope_exit TimeTraceScopeExit([]() {
     if (TimeTrace) {
-      if (auto E = timeTraceProfilerWrite(TimeTraceFile, OutputFilename)) {
+      if (auto E = timeTraceProfilerWrite(*TimeTraceFile, *OutputFilename)) {
         handleAllErrors(std::move(E), [&](const StringError &SE) {
           errs() << SE.getMessage() << "\n";
         });
@@ -440,17 +440,17 @@ int main(int argc, char **argv) {
   Context.setDiagnosticHandler(std::make_unique<LLCDiagnosticHandler>());
 
   Expected<LLVMRemarkFileHandle> RemarksFileOrErr =
-      setupLLVMOptimizationRemarks(Context, RemarksFilename, RemarksPasses,
-                                   RemarksFormat, RemarksWithHotness,
+      setupLLVMOptimizationRemarks(Context, *RemarksFilename, *RemarksPasses,
+                                   *RemarksFormat, RemarksWithHotness,
                                    RemarksHotnessThreshold);
   if (Error E = RemarksFileOrErr.takeError())
-    reportError(std::move(E), RemarksFilename);
+    reportError(std::move(E), *RemarksFilename);
   LLVMRemarkFileHandle RemarksFile = std::move(*RemarksFileOrErr);
 
   codegen::MaybeEnableStatistics();
   std::string OutputFilename;
 
-  if (InputLanguage != "" && InputLanguage != "ir" && InputLanguage != "mir")
+  if (*InputLanguage != "" && *InputLanguage != "ir" && *InputLanguage != "mir")
     reportError("input language must be '', 'IR' or 'MIR'");
 
   // Compile the module TimeCompilations times to give better compile time
@@ -523,7 +523,7 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
 
   // Parse 'none' or '$major.$minor'. Disallow -binutils-version=0 because we
   // use that to indicate the MC default.
-  if (!BinutilsVersion.empty() && BinutilsVersion != "none") {
+  if (!BinutilsVersion->empty() && *BinutilsVersion != "none") {
     StringRef V = BinutilsVersion.getValue();
     unsigned Num;
     if (V.consumeInteger(10, Num) || Num == 0 ||
@@ -541,7 +541,7 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
     if (Options.XCOFFReadOnlyPointers) {
       if (!TheTriple.isOSAIX())
         reportError("-mxcoff-roptr option is only supported on AIX",
-                    InputFilename);
+                    *InputFilename);
 
       // Since the storage mapping class is specified per csect,
       // without using data sections, it is less effective to use read-only
@@ -553,7 +553,7 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
       // surprise of not respecting the setting.
       if (!Options.DataSections)
         reportError("-mxcoff-roptr option must be used with -data-sections",
-                    InputFilename);
+                    *InputFilename);
     }
 
     if (TheTriple.isX86() &&
@@ -563,7 +563,7 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
              "flags instead.";
 
     Options.BinutilsVersion =
-        TargetMachine::parseBinutilsVersion(BinutilsVersion);
+        TargetMachine::parseBinutilsVersion(*BinutilsVersion);
     Options.MCOptions.ShowMCEncoding = ShowMCEncoding;
     Options.MCOptions.AsmVerbose = AsmVerbose;
     Options.MCOptions.PreserveAsmComments = PreserveComments;
@@ -598,8 +598,8 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
                              StringRef OldDLStr) -> std::optional<std::string> {
       // If we are supposed to override the target triple, do so now.
       std::string IRTargetTriple = DataLayoutTargetTriple.str();
-      if (!TargetTriple.empty())
-        IRTargetTriple = Triple::normalize(TargetTriple);
+      if (!TargetTriple->empty())
+        IRTargetTriple = Triple::normalize(*TargetTriple);
       TheTriple = Triple(IRTargetTriple);
       if (TheTriple.getTriple().empty())
         TheTriple.setTriple(sys::getDefaultTargetTriple());
@@ -622,22 +622,22 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
 
       return Target->createDataLayout().getStringRepresentation();
     };
-    if (InputLanguage == "mir" ||
-        (InputLanguage == "" && StringRef(InputFilename).ends_with(".mir"))) {
-      MIR = createMIRParserFromFile(InputFilename, Err, Context,
+    if (*InputLanguage == "mir" ||
+        (*InputLanguage == "" && StringRef(*InputFilename).ends_with(".mir"))) {
+      MIR = createMIRParserFromFile(*InputFilename, Err, Context,
                                     setMIRFunctionAttributes);
       if (MIR)
         M = MIR->parseIRModule(SetDataLayout);
     } else {
-      M = parseIRFile(InputFilename, Err, Context,
+      M = parseIRFile(*InputFilename, Err, Context,
                       ParserCallbacks(SetDataLayout));
     }
     if (!M) {
       Err.print(argv[0], WithColor::error(errs(), argv[0]));
       return 1;
     }
-    if (!TargetTriple.empty())
-      M->setTargetTriple(Triple(Triple::normalize(TargetTriple)));
+    if (!TargetTriple->empty())
+      M->setTargetTriple(Triple(Triple::normalize(*TargetTriple)));
 
     std::optional<CodeModel::Model> CM_IR = M->getCodeModel();
     if (!CM && CM_IR)
@@ -645,7 +645,7 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
     if (std::optional<uint64_t> LDT = codegen::getExplicitLargeDataThreshold())
       Target->setLargeDataThreshold(*LDT);
   } else {
-    TheTriple = Triple(Triple::normalize(TargetTriple));
+    TheTriple = Triple(Triple::normalize(*TargetTriple));
     if (TheTriple.getTriple().empty())
       TheTriple.setTriple(sys::getDefaultTargetTriple());
 
@@ -692,12 +692,12 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
   Target->Options.VerifyArgABICompliance = 0;
 
   std::unique_ptr<ToolOutputFile> DwoOut;
-  if (!SplitDwarfOutputFile.empty()) {
+  if (!SplitDwarfOutputFile->empty()) {
     std::error_code EC;
-    DwoOut = std::make_unique<ToolOutputFile>(SplitDwarfOutputFile, EC,
+    DwoOut = std::make_unique<ToolOutputFile>(*SplitDwarfOutputFile, EC,
                                               sys::fs::OF_None);
     if (EC)
-      reportError(EC.message(), SplitDwarfOutputFile);
+      reportError(EC.message(), *SplitDwarfOutputFile);
   }
 
   // Add an appropriate TargetLibraryInfo pass for the module's triple.
@@ -710,7 +710,7 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
   // Verify module immediately to catch problems before doInitialization() is
   // called on any passes.
   if (!NoVerify && verifyModule(*M, &errs()))
-    reportError("input module cannot be verified", InputFilename);
+    reportError("input module cannot be verified", *InputFilename);
 
   // Override function attributes based on CPUStr, FeaturesStr, and command line
   // flags.
@@ -738,11 +738,11 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
   else if (VerifyEach)
     VK = VerifierKind::EachPass;
 
-  if (EnableNewPassManager || !PassPipeline.empty()) {
+  if (EnableNewPassManager || !PassPipeline->empty()) {
     return compileModuleWithNewPM(argv[0], std::move(M), std::move(MIR),
                                   std::move(Target), std::move(Out),
                                   std::move(DwoOut), Context, TLII, VK,
-                                  PassPipeline, codegen::getFileType());
+                                  *PassPipeline, codegen::getFileType());
   }
 
   // Build up all of the passes that we want to do to the module.

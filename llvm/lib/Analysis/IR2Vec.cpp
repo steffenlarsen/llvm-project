@@ -645,7 +645,7 @@ IR2VecVocabAnalysis::run(Module &M, ModuleAnalysisManager &AM) {
     return Vocabulary(std::move(Vocab.value()));
 
   // Otherwise, try to read from the vocabulary file specified via CLI.
-  if (VocabFile.empty()) {
+  if (VocabFile->empty()) {
     // FIXME: Use default vocabulary
     Ctx->emitError("IR2Vec vocabulary file path not specified; You may need to "
                    "set it using --ir2vec-vocab-path");
@@ -654,7 +654,7 @@ IR2VecVocabAnalysis::run(Module &M, ModuleAnalysisManager &AM) {
 
   // Use the static factory method to load the vocabulary.
   auto VocabOrErr =
-      Vocabulary::fromFile(VocabFile, OpcWeight, TypeWeight, ArgWeight);
+      Vocabulary::fromFile(*VocabFile, OpcWeight, TypeWeight, ArgWeight);
   if (!VocabOrErr) {
     emitError(VocabOrErr.takeError(), *Ctx);
     return Vocabulary();

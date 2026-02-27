@@ -1642,15 +1642,15 @@ LogicalResult xegpu::resolveLayoutConflicts(Operation *target) {
 
 void XeGPUPropagateLayoutPass::runOnOperation() {
   xegpu::LayoutKind layoutKind;
-  if (this->layoutKind == "lane") {
+  if (*this->layoutKind == "lane") {
     layoutKind = xegpu::LayoutKind::Lane;
-  } else if (this->layoutKind == "inst") {
+  } else if (*this->layoutKind == "inst") {
     layoutKind = xegpu::LayoutKind::InstData;
-  } else if (this->layoutKind == "subgroup") {
+  } else if (*this->layoutKind == "subgroup") {
     layoutKind = xegpu::LayoutKind::Subgroup;
   } else {
     getOperation()->emitError("Unsupported layout kind option: " +
-                              this->layoutKind);
+                              *this->layoutKind);
     signalPassFailure();
     return;
   }

@@ -150,15 +150,15 @@ CodeGenData &CodeGenData::getInstance() {
 
     if (CodeGenDataGenerate || CodeGenDataThinLTOTwoRounds)
       Instance->EmitCGData = true;
-    else if (!CodeGenDataUsePath.empty()) {
+    else if (!CodeGenDataUsePath->empty()) {
       // Initialize the global CGData if the input file name is given.
       // We do not error-out when failing to parse the input file.
       // Instead, just emit an warning message and fall back as if no CGData
       // were available.
       auto FS = vfs::getRealFileSystem();
-      auto ReaderOrErr = CodeGenDataReader::create(CodeGenDataUsePath, *FS);
+      auto ReaderOrErr = CodeGenDataReader::create(*CodeGenDataUsePath, *FS);
       if (Error E = ReaderOrErr.takeError()) {
-        warn(std::move(E), CodeGenDataUsePath);
+        warn(std::move(E), *CodeGenDataUsePath);
         return;
       }
       // Publish each CGData based on the data type in the header.

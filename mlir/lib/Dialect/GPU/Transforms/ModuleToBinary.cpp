@@ -38,7 +38,7 @@ public:
 void GpuModuleToBinaryPass::runOnOperation() {
   RewritePatternSet patterns(&getContext());
   auto targetFormat =
-      llvm::StringSwitch<std::optional<CompilationTarget>>(compilationTarget)
+      llvm::StringSwitch<std::optional<CompilationTarget>>(*compilationTarget)
           .Cases({"offloading", "llvm"}, CompilationTarget::Offload)
           .Cases({"assembly", "isa"}, CompilationTarget::Assembly)
           .Cases({"binary", "bin"}, CompilationTarget::Binary)
@@ -46,7 +46,7 @@ void GpuModuleToBinaryPass::runOnOperation() {
           .Default(std::nullopt);
   if (!targetFormat) {
     getOperation()->emitError()
-        << "Invalid format specified: '" << compilationTarget
+        << "Invalid format specified: '" << *compilationTarget
         << "' (expected one of: offloading, llvm, assembly, isa, binary, bin, "
            "fatbinary, fatbin)";
     return signalPassFailure();
@@ -69,8 +69,8 @@ void GpuModuleToBinaryPass::runOnOperation() {
   SmallVector<Attribute> librariesToLink;
   for (const std::string &path : linkFiles)
     librariesToLink.push_back(StringAttr::get(&getContext(), path));
-  TargetOptions targetOptions(toolkitPath, librariesToLink, cmdOptions,
-                              elfSection, *targetFormat, lazyTableBuilder);
+  TargetOptions targetOptions(*toolkitPath, librariesToLink, *cmdOptions,
+                              *elfSection, *targetFormat, lazyTableBuilder);
   if (failed(transformGpuModulesToBinaries(
           getOperation(), OffloadingLLVMTranslationAttrInterface(nullptr),
           targetOptions)))

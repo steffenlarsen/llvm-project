@@ -128,7 +128,7 @@ int main(int argc, char **argv) {
 
   cl::ParseCommandLineOptions(argc, argv, "llvm ub-aware interpreter\n");
 
-  if (EntryFunc.empty()) {
+  if (EntryFunc->empty()) {
     WithColor::error() << "--entry-function name cannot be empty\n";
     return 1;
   }
@@ -137,7 +137,7 @@ int main(int argc, char **argv) {
 
   // Load the bitcode...
   SMDiagnostic Err;
-  std::unique_ptr<Module> Owner = parseIRFile(InputFile, Err, Context);
+  std::unique_ptr<Module> Owner = parseIRFile(*InputFile, Err, Context);
   Module *Mod = Owner.get();
   if (!Mod) {
     Err.print(argv[0], errs());
@@ -146,17 +146,17 @@ int main(int argc, char **argv) {
 
   // If the user specifically requested an argv[0] to pass into the program,
   // do it now.
-  if (!FakeArgv0.empty()) {
-    InputFile = static_cast<std::string>(FakeArgv0);
+  if (!FakeArgv0->empty()) {
+    InputFile = static_cast<std::string>(*FakeArgv0);
   } else {
     // Otherwise, if there is a .bc suffix on the executable strip it off, it
     // might confuse the program.
-    if (StringRef(InputFile).ends_with(".bc"))
-      InputFile.erase(InputFile.length() - 3);
+    if (StringRef(*InputFile).ends_with(".bc"))
+      InputFile->erase(InputFile->length() - 3);
   }
 
   // Add the module's name to the start of the vector of arguments to main().
-  InputArgv.insert(InputArgv.begin(), InputFile);
+  InputArgv.insert(InputArgv.begin(), *InputFile);
 
   // Initialize the execution context and set parameters.
   ubi::Context Ctx(*Mod);
@@ -174,9 +174,9 @@ int main(int argc, char **argv) {
   // Call the main function from M as if its signature were:
   //   int main (int argc, char **argv)
   // using the contents of Args to determine argc & argv
-  Function *EntryFn = Mod->getFunction(EntryFunc);
+  Function *EntryFn = Mod->getFunction(*EntryFunc);
   if (!EntryFn) {
-    WithColor::error() << '\'' << EntryFunc
+    WithColor::error() << '\'' << *EntryFunc
                        << "\' function not found in module.\n";
     return 1;
   }

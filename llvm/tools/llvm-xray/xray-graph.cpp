@@ -445,12 +445,12 @@ void GraphRenderer::exportGraphAsDOT(raw_ostream &OS, StatType ET, StatType EC,
 
 Expected<GraphRenderer> GraphRenderer::Factory::getGraphRenderer() {
   InstrumentationMap Map;
-  if (!GraphInstrMap.empty()) {
-    auto InstrumentationMapOrError = loadInstrumentationMap(GraphInstrMap);
+  if (!GraphInstrMap->empty()) {
+    auto InstrumentationMapOrError = loadInstrumentationMap(*GraphInstrMap);
     if (!InstrumentationMapOrError)
       return joinErrors(
           make_error<StringError>(
-              Twine("Cannot open instrumentation map '") + GraphInstrMap + "'",
+              Twine("Cannot open instrumentation map '") + *GraphInstrMap + "'",
               std::make_error_code(std::errc::invalid_argument)),
           InstrumentationMapOrError.takeError());
     Map = std::move(*InstrumentationMapOrError);
@@ -513,11 +513,11 @@ static CommandRegistration Unused(&GraphC, []() -> Error {
   F.DeduceSiblingCalls = GraphDeduceSiblingCalls;
   F.InstrMap = GraphInstrMap;
 
-  auto TraceOrErr = loadTraceFile(GraphInput, true);
+  auto TraceOrErr = loadTraceFile(*GraphInput, true);
 
   if (!TraceOrErr)
     return make_error<StringError>(
-        Twine("Failed loading input file '") + GraphInput + "'",
+        Twine("Failed loading input file '") + *GraphInput + "'",
         make_error_code(llvm::errc::invalid_argument));
 
   F.Trace = std::move(*TraceOrErr);
@@ -527,10 +527,10 @@ static CommandRegistration Unused(&GraphC, []() -> Error {
   auto &GR = *GROrError;
 
   std::error_code EC;
-  raw_fd_ostream OS(GraphOutput, EC, sys::fs::OpenFlags::OF_TextWithCRLF);
+  raw_fd_ostream OS(*GraphOutput, EC, sys::fs::OpenFlags::OF_TextWithCRLF);
   if (EC)
     return make_error<StringError>(
-        Twine("Cannot open file '") + GraphOutput + "' for writing.", EC);
+        Twine("Cannot open file '") + *GraphOutput + "' for writing.", EC);
 
   GR.exportGraphAsDOT(OS, GraphEdgeLabel, GraphEdgeColorType, GraphVertexLabel,
                       GraphVertexColorType);

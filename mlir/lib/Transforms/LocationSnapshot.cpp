@@ -136,7 +136,7 @@ struct LocationSnapshotPass
 
   void runOnOperation() override {
     Operation *op = getOperation();
-    if (failed(generateLocationsFromIR(fileName, op, getFlags(), tag)))
+    if (failed(generateLocationsFromIR(*fileName, op, getFlags(), *tag)))
       return signalPassFailure();
   }
 

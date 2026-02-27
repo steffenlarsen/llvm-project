@@ -553,10 +553,10 @@ static void createCombinedModuleSummaryIndex() {
   // point to the correct GUIDs.
   updateIndirectCalls(CombinedIndex);
   std::error_code EC;
-  assert(!OutputFilename.empty());
-  raw_fd_ostream OS(OutputFilename + ".thinlto.bc", EC,
+  assert(!OutputFilename->empty());
+  raw_fd_ostream OS(*OutputFilename + ".thinlto.bc", EC,
                     sys::fs::OpenFlags::OF_None);
-  error(EC, "error opening the file '" + OutputFilename + ".thinlto.bc'");
+  error(EC, "error opening the file '" + *OutputFilename + ".thinlto.bc'");
   writeIndexToFile(CombinedIndex, OS);
   OS.close();
 }
@@ -565,9 +565,9 @@ static void createCombinedModuleSummaryIndex() {
 /// \p NewPrefix strings, if it was specified.
 static void getThinLTOOldAndNewPrefix(std::string &OldPrefix,
                                       std::string &NewPrefix) {
-  assert(ThinLTOPrefixReplace.empty() ||
-         ThinLTOPrefixReplace.find(';') != StringRef::npos);
-  StringRef PrefixReplace = ThinLTOPrefixReplace;
+  assert(ThinLTOPrefixReplace->empty() ||
+         ThinLTOPrefixReplace->find(';') != StringRef::npos);
+  StringRef PrefixReplace = *ThinLTOPrefixReplace;
   std::pair<StringRef, StringRef> Split = PrefixReplace.split(";");
   OldPrefix = Split.first.str();
   NewPrefix = Split.second.str();
@@ -608,11 +608,11 @@ loadAllFilesForIndex(const ModuleSummaryIndex &Index) {
 }
 
 std::unique_ptr<ModuleSummaryIndex> loadCombinedIndex() {
-  if (ThinLTOIndex.empty())
+  if (ThinLTOIndex->empty())
     report_fatal_error("Missing -thinlto-index for ThinLTO promotion stage");
-  ExitOnError ExitOnErr("llvm-lto: error loading file '" + ThinLTOIndex +
+  ExitOnError ExitOnErr("llvm-lto: error loading file '" + *ThinLTOIndex +
                         "': ");
-  return ExitOnErr(getModuleSummaryIndexForFile(ThinLTOIndex));
+  return ExitOnErr(getModuleSummaryIndexForFile(*ThinLTOIndex));
 }
 
 static std::unique_ptr<lto::InputFile> loadInputFile(MemoryBufferRef Buffer) {
@@ -637,7 +637,7 @@ static std::unique_ptr<Module> loadModuleFromInput(lto::InputFile &File,
   if (ThinLTOModuleId.getNumOccurrences()) {
     if (InputFilenames.size() != 1)
       report_fatal_error("Can't override the module id for multiple files");
-    (*ModuleOrErr)->setModuleIdentifier(ThinLTOModuleId);
+    (*ModuleOrErr)->setModuleIdentifier(*ThinLTOModuleId);
   }
   return std::move(*ModuleOrErr);
 }
@@ -697,7 +697,7 @@ private:
   /// Load the input files, create the combined index, and write it out.
   void thinLink() {
     // Perform "ThinLink": just produce the index
-    if (OutputFilename.empty())
+    if (OutputFilename->empty())
       report_fatal_error(
           "OutputFilename is necessary to store the combined index.\n");
 
@@ -716,8 +716,8 @@ private:
     if (!CombinedIndex)
       report_fatal_error("ThinLink didn't create an index");
     std::error_code EC;
-    raw_fd_ostream OS(OutputFilename, EC, sys::fs::OpenFlags::OF_None);
-    error(EC, "error opening the file '" + OutputFilename + "'");
+    raw_fd_ostream OS(*OutputFilename, EC, sys::fs::OpenFlags::OF_None);
+    error(EC, "error opening the file '" + *OutputFilename + "'");
     writeIndexToFile(*CombinedIndex, OS);
   }
 
@@ -726,7 +726,7 @@ private:
   /// on the files mentioned on the command line (these must match the index
   /// content).
   void distributedIndexes() {
-    if (InputFilenames.size() != 1 && !OutputFilename.empty())
+    if (InputFilenames.size() != 1 && !OutputFilename->empty())
       report_fatal_error("Can't handle a single output filename and multiple "
                          "input files, do not provide an output filename and "
                          "the output files will be suffixed from the input "
@@ -749,7 +749,7 @@ private:
       ThinGenerator.gatherImportedSummariesForModule(
           *TheModule, *Index, ModuleToSummariesForIndex, DecSummaries, *Input);
 
-      std::string OutputName = OutputFilename;
+      std::string OutputName = *OutputFilename;
       if (OutputName.empty()) {
         OutputName = Filename + ".thinlto.bc";
       }
@@ -764,7 +764,7 @@ private:
   /// Load the combined index from disk, compute the imports, and emit
   /// the import file lists for each module to disk.
   void emitImports() {
-    if (InputFilenames.size() != 1 && !OutputFilename.empty())
+    if (InputFilenames.size() != 1 && !OutputFilename->empty())
       report_fatal_error("Can't handle a single output filename and multiple "
                          "input files, do not provide an output filename and "
                          "the output files will be suffixed from the input "
@@ -794,7 +794,7 @@ private:
   /// on the files mentioned on the command line (these must match the index
   /// content).
   void promote() {
-    if (InputFilenames.size() != 1 && !OutputFilename.empty())
+    if (InputFilenames.size() != 1 && !OutputFilename->empty())
       report_fatal_error("Can't handle a single output filename and multiple "
                          "input files, do not provide an output filename and "
                          "the output files will be suffixed from the input "
@@ -822,7 +822,7 @@ private:
   /// cross module importing on the files mentioned on the command line
   /// (these must match the index content).
   void import() {
-    if (InputFilenames.size() != 1 && !OutputFilename.empty())
+    if (InputFilenames.size() != 1 && !OutputFilename->empty())
       report_fatal_error("Can't handle a single output filename and multiple "
                          "input files, do not provide an output filename and "
                          "the output files will be suffixed from the input "
@@ -851,7 +851,7 @@ private:
   }
 
   void internalize() {
-    if (InputFilenames.size() != 1 && !OutputFilename.empty())
+    if (InputFilenames.size() != 1 && !OutputFilename->empty())
       report_fatal_error("Can't handle a single output filename and multiple "
                          "input files, do not provide an output filename and "
                          "the output files will be suffixed from the input "
@@ -884,12 +884,12 @@ private:
   }
 
   void optimize() {
-    if (InputFilenames.size() != 1 && !OutputFilename.empty())
+    if (InputFilenames.size() != 1 && !OutputFilename->empty())
       report_fatal_error("Can't handle a single output filename and multiple "
                          "input files, do not provide an output filename and "
                          "the output files will be suffixed from the input "
                          "ones.");
-    if (!ThinLTOIndex.empty())
+    if (!ThinLTOIndex->empty())
       errs() << "Warning: -thinlto-index ignored for optimize stage";
 
     for (auto &Filename : InputFilenames) {
@@ -909,12 +909,12 @@ private:
   }
 
   void codegen() {
-    if (InputFilenames.size() != 1 && !OutputFilename.empty())
+    if (InputFilenames.size() != 1 && !OutputFilename->empty())
       report_fatal_error("Can't handle a single output filename and multiple "
                          "input files, do not provide an output filename and "
                          "the output files will be suffixed from the input "
                          "ones.");
-    if (!ThinLTOIndex.empty())
+    if (!ThinLTOIndex->empty())
       errs() << "Warning: -thinlto-index ignored for codegen stage";
 
     std::vector<std::unique_ptr<MemoryBuffer>> InputBuffers;
@@ -946,12 +946,12 @@ private:
 
   /// Full ThinLTO process
   void runAll() {
-    if (!OutputFilename.empty())
+    if (!OutputFilename->empty())
       report_fatal_error("Do not provide an output filename for ThinLTO "
                          " processing, the output files will be suffixed from "
                          "the input ones.");
 
-    if (!ThinLTOIndex.empty())
+    if (!ThinLTOIndex->empty())
       errs() << "Warning: -thinlto-index ignored for full ThinLTO process";
 
     LLVMContext Ctx;
@@ -965,10 +965,10 @@ private:
       ThinGenerator.addModule(Filename, InputBuffers.back()->getBuffer());
     }
 
-    if (!ThinLTOSaveTempsPrefix.empty())
+    if (!ThinLTOSaveTempsPrefix->empty())
       ThinGenerator.setSaveTempsDir(ThinLTOSaveTempsPrefix);
 
-    if (!ThinLTOGeneratedObjectsDir.empty()) {
+    if (!ThinLTOGeneratedObjectsDir->empty()) {
       ThinGenerator.setGeneratedObjectsDirectory(ThinLTOGeneratedObjectsDir);
       ThinGenerator.run();
       return;
@@ -1130,12 +1130,12 @@ int main(int argc, char **argv) {
   if (auto FT = codegen::getExplicitFileType())
     CodeGen.setFileType(*FT);
 
-  if (!OutputFilename.empty()) {
+  if (!OutputFilename->empty()) {
     if (LTOSaveBeforeOpt)
-      CodeGen.setSaveIRBeforeOptPath(OutputFilename + ".0.preopt.bc");
+      CodeGen.setSaveIRBeforeOptPath(*OutputFilename + ".0.preopt.bc");
 
     if (SaveLinkedModuleFile) {
-      std::string ModuleFilename = OutputFilename;
+      std::string ModuleFilename = *OutputFilename;
       ModuleFilename += ".linked.bc";
 
       if (!CodeGen.writeMergedModules(ModuleFilename))
@@ -1148,7 +1148,7 @@ int main(int argc, char **argv) {
     }
 
     if (SaveModuleFile) {
-      std::string ModuleFilename = OutputFilename;
+      std::string ModuleFilename = *OutputFilename;
       ModuleFilename += ".merged.bc";
 
       if (!CodeGen.writeMergedModules(ModuleFilename))
