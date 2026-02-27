@@ -25,9 +25,14 @@
 #include "llvm/Testing/Support/SupportHelpers.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include <atomic>
+#include <chrono>
+#include <cmath>
 #include <fstream>
 #include <stdlib.h>
 #include <string>
+#include <thread>
+#include <vector>
 #if HAVE_UNISTD_H
 #include <unistd.h>
 #endif
@@ -450,7 +455,7 @@ TEST(CommandLineTest, AliasesWithArguments) {
     cl::alias Alias("alias", llvm::cl::aliasopt(Actual));
 
     cl::ParseCommandLineOptions(ARGC, Inputs[i]);
-    EXPECT_EQ("x", Actual);
+    EXPECT_EQ("x", *Actual);
     EXPECT_EQ(0, Input.getNumOccurrences());
 
     Alias.removeArgument();
@@ -462,7 +467,7 @@ void testAliasRequired(int argc, const char *const *argv) {
   cl::alias Alias("o", llvm::cl::aliasopt(Option));
 
   cl::ParseCommandLineOptions(argc, argv);
-  EXPECT_EQ("x", Option);
+  EXPECT_EQ("x", *Option);
   EXPECT_EQ(1, Option.getNumOccurrences());
 
   Alias.removeArgument();
@@ -863,20 +868,20 @@ TEST(CommandLineTest, DefaultOptions) {
   const char *args0[] = {"prog", "-b", "args0 bar string", "-f"};
   EXPECT_TRUE(cl::ParseCommandLineOptions(std::size(args0), args0,
                                           StringRef(), &llvm::nulls()));
-  EXPECT_EQ(Bar, "args0 bar string");
+  EXPECT_EQ(*Bar, "args0 bar string");
   EXPECT_TRUE(Foo);
   EXPECT_FALSE(SC1_B);
-  EXPECT_TRUE(SC2_Foo.empty());
+  EXPECT_TRUE(SC2_Foo->empty());
 
   cl::ResetAllOptionOccurrences();
 
   const char *args1[] = {"prog", "sc1", "-b", "-bar", "args1 bar string", "-f"};
   EXPECT_TRUE(cl::ParseCommandLineOptions(std::size(args1), args1,
                                           StringRef(), &llvm::nulls()));
-  EXPECT_EQ(Bar, "args1 bar string");
+  EXPECT_EQ(*Bar, "args1 bar string");
   EXPECT_TRUE(Foo);
   EXPECT_TRUE(SC1_B);
-  EXPECT_TRUE(SC2_Foo.empty());
+  EXPECT_TRUE(SC2_Foo->empty());
   for (auto *S : cl::getRegisteredSubcommands()) {
     if (*S) {
       EXPECT_EQ("sc1", S->getName());
@@ -889,10 +894,10 @@ TEST(CommandLineTest, DefaultOptions) {
                          "-f", "-foo", "foo string"};
   EXPECT_TRUE(cl::ParseCommandLineOptions(std::size(args2), args2,
                                           StringRef(), &llvm::nulls()));
-  EXPECT_EQ(Bar, "args2 bar string");
+  EXPECT_EQ(*Bar, "args2 bar string");
   EXPECT_TRUE(Foo);
   EXPECT_FALSE(SC1_B);
-  EXPECT_EQ(SC2_Foo, "foo string");
+  EXPECT_EQ(*SC2_Foo, "foo string");
   for (auto *S : cl::getRegisteredSubcommands()) {
     if (*S) {
       EXPECT_EQ("sc2", S->getName());
@@ -1226,7 +1231,7 @@ TEST(CommandLineTest, SetDefaultValue) {
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(7, args, StringRef(), &llvm::nulls()));
 
-  EXPECT_EQ(Opt1, "false");
+  EXPECT_EQ(*Opt1, "false");
   EXPECT_TRUE(Opt2);
   EXPECT_EQ(Opt3, 3);
 
@@ -1248,7 +1253,7 @@ TEST(CommandLineTest, SetDefaultValue) {
     O->setDefault();
   }
 
-  EXPECT_EQ(Opt1, "true");
+  EXPECT_EQ(*Opt1, "true");
   EXPECT_TRUE(Opt2);
   EXPECT_EQ(Opt3, 3);
   for (size_t I = 0, E = IntVals.size(); I < E; ++I) {
@@ -1753,15 +1758,15 @@ TEST(CommandLineTest, GroupingWithValue) {
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(3, args1, StringRef(), &llvm::nulls()));
   EXPECT_TRUE(OptF);
-  EXPECT_STREQ("val1", OptV.c_str());
-  OptV.clear();
+  EXPECT_STREQ("val1", OptV->c_str());
+  OptV->clear();
   cl::ResetAllOptionOccurrences();
 
   // Should not crash if it is accidentally used elsewhere in the group.
   const char *args2[] = {"prog", "-vf", "val2"};
   EXPECT_FALSE(
       cl::ParseCommandLineOptions(3, args2, StringRef(), &llvm::nulls()));
-  OptV.clear();
+  OptV->clear();
   cl::ResetAllOptionOccurrences();
 
   // Should allow the "opt=value" form at the end of the group
@@ -1769,8 +1774,8 @@ TEST(CommandLineTest, GroupingWithValue) {
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(2, args3, StringRef(), &llvm::nulls()));
   EXPECT_TRUE(OptF);
-  EXPECT_STREQ("val3", OptV.c_str());
-  OptV.clear();
+  EXPECT_STREQ("val3", OptV->c_str());
+  OptV->clear();
   cl::ResetAllOptionOccurrences();
 
   // Should allow assigning a value for a ValueOptional option
@@ -1779,8 +1784,8 @@ TEST(CommandLineTest, GroupingWithValue) {
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(2, args4, StringRef(), &llvm::nulls()));
   EXPECT_TRUE(OptF);
-  EXPECT_STREQ("val4", OptO.c_str());
-  OptO.clear();
+  EXPECT_STREQ("val4", OptO->c_str());
+  OptO->clear();
   cl::ResetAllOptionOccurrences();
 
   // Should assign an empty value if a ValueOptional option is used elsewhere
@@ -1791,7 +1796,7 @@ TEST(CommandLineTest, GroupingWithValue) {
   EXPECT_TRUE(OptF);
   EXPECT_EQ(1, OptO.getNumOccurrences());
   EXPECT_EQ(1, OptB.getNumOccurrences());
-  EXPECT_TRUE(OptO.empty());
+  EXPECT_TRUE(OptO->empty());
   cl::ResetAllOptionOccurrences();
 
   // Should not allow an assignment for a ValueDisallowed option.
@@ -1814,24 +1819,24 @@ TEST(CommandLineTest, GroupingAndPrefix) {
   const char *args1[] = {"prog", "-pval1"};
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(2, args1, StringRef(), &llvm::nulls()));
-  EXPECT_STREQ("val1", OptP.c_str());
-  OptP.clear();
+  EXPECT_STREQ("val1", OptP->c_str());
+  OptP->clear();
   cl::ResetAllOptionOccurrences();
 
   // Should be possible to pass a value in a separate argument.
   const char *args2[] = {"prog", "-p", "val2"};
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(3, args2, StringRef(), &llvm::nulls()));
-  EXPECT_STREQ("val2", OptP.c_str());
-  OptP.clear();
+  EXPECT_STREQ("val2", OptP->c_str());
+  OptP->clear();
   cl::ResetAllOptionOccurrences();
 
   // The "-opt=value" form should work, too.
   const char *args3[] = {"prog", "-p=val3"};
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(2, args3, StringRef(), &llvm::nulls()));
-  EXPECT_STREQ("val3", OptP.c_str());
-  OptP.clear();
+  EXPECT_STREQ("val3", OptP->c_str());
+  OptP->clear();
   cl::ResetAllOptionOccurrences();
 
   // All three previous cases should work the same way if an option with both
@@ -1840,24 +1845,24 @@ TEST(CommandLineTest, GroupingAndPrefix) {
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(2, args4, StringRef(), &llvm::nulls()));
   EXPECT_TRUE(OptF);
-  EXPECT_STREQ("val4", OptP.c_str());
-  OptP.clear();
+  EXPECT_STREQ("val4", OptP->c_str());
+  OptP->clear();
   cl::ResetAllOptionOccurrences();
 
   const char *args5[] = {"prog", "-fp", "val5"};
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(3, args5, StringRef(), &llvm::nulls()));
   EXPECT_TRUE(OptF);
-  EXPECT_STREQ("val5", OptP.c_str());
-  OptP.clear();
+  EXPECT_STREQ("val5", OptP->c_str());
+  OptP->clear();
   cl::ResetAllOptionOccurrences();
 
   const char *args6[] = {"prog", "-fp=val6"};
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(2, args6, StringRef(), &llvm::nulls()));
   EXPECT_TRUE(OptF);
-  EXPECT_STREQ("val6", OptP.c_str());
-  OptP.clear();
+  EXPECT_STREQ("val6", OptP->c_str());
+  OptP->clear();
   cl::ResetAllOptionOccurrences();
 
   // Should assign a value even if the part after a cl::Prefix option is equal
@@ -1866,17 +1871,17 @@ TEST(CommandLineTest, GroupingAndPrefix) {
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(2, args7, StringRef(), &llvm::nulls()));
   EXPECT_TRUE(OptF);
-  EXPECT_STREQ("b", OptP.c_str());
+  EXPECT_STREQ("b", OptP->c_str());
   EXPECT_FALSE(OptB);
-  OptP.clear();
+  OptP->clear();
   cl::ResetAllOptionOccurrences();
 
   // Should be possible to use a cl::AlwaysPrefix option without grouping.
   const char *args8[] = {"prog", "-aval8"};
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(2, args8, StringRef(), &llvm::nulls()));
-  EXPECT_STREQ("val8", OptA.c_str());
-  OptA.clear();
+  EXPECT_STREQ("val8", OptA->c_str());
+  OptA->clear();
   cl::ResetAllOptionOccurrences();
 
   // Should not be possible to pass a value in a separate argument.
@@ -1889,8 +1894,8 @@ TEST(CommandLineTest, GroupingAndPrefix) {
   const char *args10[] = {"prog", "-a=val10"};
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(2, args10, StringRef(), &llvm::nulls()));
-  EXPECT_STREQ("=val10", OptA.c_str());
-  OptA.clear();
+  EXPECT_STREQ("=val10", OptA->c_str());
+  OptA->clear();
   cl::ResetAllOptionOccurrences();
 
   // All three previous cases should work the same way if an option with both
@@ -1899,8 +1904,8 @@ TEST(CommandLineTest, GroupingAndPrefix) {
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(2, args11, StringRef(), &llvm::nulls()));
   EXPECT_TRUE(OptF);
-  EXPECT_STREQ("val11", OptA.c_str());
-  OptA.clear();
+  EXPECT_STREQ("val11", OptA->c_str());
+  OptA->clear();
   cl::ResetAllOptionOccurrences();
 
   const char *args12[] = {"prog", "-fa", "val12"};
@@ -1912,8 +1917,8 @@ TEST(CommandLineTest, GroupingAndPrefix) {
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(2, args13, StringRef(), &llvm::nulls()));
   EXPECT_TRUE(OptF);
-  EXPECT_STREQ("=val13", OptA.c_str());
-  OptA.clear();
+  EXPECT_STREQ("=val13", OptA->c_str());
+  OptA->clear();
   cl::ResetAllOptionOccurrences();
 
   // Should assign a value even if the part after a cl::AlwaysPrefix option
@@ -1922,9 +1927,9 @@ TEST(CommandLineTest, GroupingAndPrefix) {
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(2, args14, StringRef(), &llvm::nulls()));
   EXPECT_TRUE(OptF);
-  EXPECT_STREQ("b", OptA.c_str());
+  EXPECT_STREQ("b", OptA->c_str());
   EXPECT_FALSE(OptB);
-  OptA.clear();
+  OptA->clear();
   cl::ResetAllOptionOccurrences();
 }
 
@@ -1953,7 +1958,7 @@ TEST(CommandLineTest, LongOptions) {
       cl::ParseCommandLineOptions(4, args1, StringRef(), &OS));
   EXPECT_TRUE(OptA);
   EXPECT_FALSE(OptBLong);
-  EXPECT_STREQ("val1", OptAB.c_str());
+  EXPECT_STREQ("val1", OptAB->c_str());
   EXPECT_TRUE(Errs.empty()); Errs.clear();
   cl::ResetAllOptionOccurrences();
 
@@ -1961,7 +1966,7 @@ TEST(CommandLineTest, LongOptions) {
       cl::ParseCommandLineOptions(4, args2, StringRef(), &OS));
   EXPECT_TRUE(OptA);
   EXPECT_FALSE(OptBLong);
-  EXPECT_STREQ("val1", OptAB.c_str());
+  EXPECT_STREQ("val1", OptAB->c_str());
   EXPECT_TRUE(Errs.empty()); Errs.clear();
   cl::ResetAllOptionOccurrences();
 
@@ -1996,7 +2001,7 @@ TEST(CommandLineTest, LongOptions) {
                                           nullptr, true));
   EXPECT_TRUE(OptA);
   EXPECT_TRUE(OptBLong);
-  EXPECT_STREQ("val1", OptAB.c_str());
+  EXPECT_STREQ("val1", OptAB->c_str());
   EXPECT_TRUE(Errs.empty()); Errs.clear();
   cl::ResetAllOptionOccurrences();
 }
@@ -2152,7 +2157,7 @@ TEST(CommandLineTest, ConsumeAfterOnePositional) {
   std::string Errs;
   raw_string_ostream OS(Errs);
   EXPECT_TRUE(cl::ParseCommandLineOptions(4, Args, StringRef(), &OS));
-  EXPECT_EQ("input", Input);
+  EXPECT_EQ("input", *Input);
   EXPECT_EQ(ExtraArgs.size(), 2u);
   EXPECT_EQ(ExtraArgs[0], "arg1");
   EXPECT_EQ(ExtraArgs[1], "arg2");
@@ -2174,8 +2179,8 @@ TEST(CommandLineTest, ConsumeAfterTwoPositionals) {
   std::string Errs;
   raw_string_ostream OS(Errs);
   EXPECT_TRUE(cl::ParseCommandLineOptions(5, Args, StringRef(), &OS));
-  EXPECT_EQ("input1", Input1);
-  EXPECT_EQ("input2", Input2);
+  EXPECT_EQ("input1", *Input1);
+  EXPECT_EQ("input2", *Input2);
   EXPECT_EQ(ExtraArgs.size(), 2u);
   EXPECT_EQ(ExtraArgs[0], "arg1");
   EXPECT_EQ(ExtraArgs[1], "arg2");
@@ -2193,8 +2198,8 @@ TEST(CommandLineTest, ConsumeOptionalString) {
   std::string Errs;
   raw_string_ostream OS(Errs);
   ASSERT_TRUE(cl::ParseCommandLineOptions(2, Args, StringRef(), &OS));
-  ASSERT_TRUE(Input.has_value());
-  EXPECT_EQ("\"value\"", *Input);
+  ASSERT_TRUE(Input->has_value());
+  EXPECT_EQ("\"value\"", **Input);
   EXPECT_TRUE(Errs.empty());
 }
 
@@ -2222,17 +2227,17 @@ TEST(CommandLineTest, ResetAllOptionOccurrences) {
   EXPECT_TRUE(OS.str().empty());
 
   EXPECT_TRUE(Option);
-  EXPECT_EQ("STR", Str);
+  EXPECT_EQ("STR", *Str);
   EXPECT_EQ((1u << ValA) | (1u << ValC), Bits.getBits());
   EXPECT_EQ(1u, Sink.size());
   EXPECT_EQ("-unknown", Sink[0]);
-  EXPECT_EQ("input", Input);
+  EXPECT_EQ("input", *Input);
   EXPECT_EQ(1u, ExtraArgs.size());
   EXPECT_EQ("-arg", ExtraArgs[0]);
 
   cl::ResetAllOptionOccurrences();
   EXPECT_FALSE(Option);
-  EXPECT_EQ("", Str);
+  EXPECT_EQ("", *Str);
   EXPECT_EQ(0u, Bits.getBits());
   EXPECT_EQ(0u, Sink.size());
   EXPECT_EQ(0, Input.getNumOccurrences());
@@ -2256,19 +2261,19 @@ TEST(CommandLineTest, DefaultValue) {
   EXPECT_TRUE(OS.str().empty());
 
   EXPECT_TRUE(!BoolOption);
-  EXPECT_FALSE(BoolOption.Default.hasValue());
+  EXPECT_FALSE(BoolOption.getDefault().hasValue());
   EXPECT_EQ(0, BoolOption.getNumOccurrences());
 
-  EXPECT_EQ("", StrOption);
-  EXPECT_FALSE(StrOption.Default.hasValue());
+  EXPECT_EQ("", *StrOption);
+  EXPECT_FALSE(StrOption.getDefault().hasValue());
   EXPECT_EQ(0, StrOption.getNumOccurrences());
 
   EXPECT_TRUE(BoolInitOption);
-  EXPECT_TRUE(BoolInitOption.Default.hasValue());
+  EXPECT_TRUE(BoolInitOption.getDefault().hasValue());
   EXPECT_EQ(0, BoolInitOption.getNumOccurrences());
 
-  EXPECT_EQ("str-default-value", StrInitOption);
-  EXPECT_TRUE(StrInitOption.Default.hasValue());
+  EXPECT_EQ("str-default-value", *StrInitOption);
+  EXPECT_TRUE(StrInitOption.getDefault().hasValue());
   EXPECT_EQ(0, StrInitOption.getNumOccurrences());
 
   const char *Args2[] = {"prog", "-bool-option", "-str-option=str-value",
@@ -2279,19 +2284,19 @@ TEST(CommandLineTest, DefaultValue) {
   EXPECT_TRUE(OS.str().empty());
 
   EXPECT_TRUE(BoolOption);
-  EXPECT_FALSE(BoolOption.Default.hasValue());
+  EXPECT_FALSE(BoolOption.getDefault().hasValue());
   EXPECT_EQ(1, BoolOption.getNumOccurrences());
 
-  EXPECT_EQ("str-value", StrOption);
-  EXPECT_FALSE(StrOption.Default.hasValue());
+  EXPECT_EQ("str-value", *StrOption);
+  EXPECT_FALSE(StrOption.getDefault().hasValue());
   EXPECT_EQ(1, StrOption.getNumOccurrences());
 
   EXPECT_FALSE(BoolInitOption);
-  EXPECT_TRUE(BoolInitOption.Default.hasValue());
+  EXPECT_TRUE(BoolInitOption.getDefault().hasValue());
   EXPECT_EQ(1, BoolInitOption.getNumOccurrences());
 
-  EXPECT_EQ("str-init-value", StrInitOption);
-  EXPECT_TRUE(StrInitOption.Default.hasValue());
+  EXPECT_EQ("str-init-value", *StrInitOption);
+  EXPECT_TRUE(StrInitOption.getDefault().hasValue());
   EXPECT_EQ(1, StrInitOption.getNumOccurrences());
 }
 
@@ -2409,6 +2414,1503 @@ TEST(CommandLineTest, HelpWithEmptyCategory) {
       []() { cl::PrintHelpMessage(/*Hidden=*/true, /*Categorized=*/true); });
   EXPECT_EQ(std::string::npos, Output.find("First Category"))
       << "An empty category should not be printed";
+
+  cl::ResetCommandLineParser();
+}
+
+TEST(CommandLineTest, ThreadLocalOptIsolation) {
+  // Check that cl::opt values are isolated between threads.
+
+  // Test with integer options.
+  StackOption<int> TestInt("test-int", cl::desc("Test integer option"));
+
+  constexpr int NumThreads = 4;
+  std::vector<std::thread> Threads;
+  std::atomic<int> Failures{0};
+
+  for (int I = 0; I < NumThreads; ++I) {
+    Threads.emplace_back([I, &TestInt, &Failures]() {
+      // Each thread sets a unique value.
+      int ExpectedValue = 100 + I;
+      std::string ValueStr = std::to_string(ExpectedValue);
+      const char *args[] = {"prog", "--test-int", ValueStr.c_str()};
+
+      cl::ThreadLocalParserStateGuard StateGuard;
+
+      if (!cl::ParseCommandLineOptions(3, args, StringRef(), &llvm::nulls())) {
+        Failures++;
+        return;
+      }
+
+      // Verify this thread sees its own value.
+      if (TestInt != ExpectedValue) {
+        Failures++;
+        return;
+      }
+
+      // Sleep a bit to ensure other threads are also running.
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+      // Verify value didn't change.
+      if (TestInt != ExpectedValue) {
+        Failures++;
+        return;
+      }
+    });
+  }
+
+  for (auto &T : Threads)
+    T.join();
+
+  EXPECT_EQ(0, Failures.load()) << "Thread-local isolation failed for opt<int>";
+  cl::ResetCommandLineParser();
+}
+
+TEST(CommandLineTest, ThreadLocalOptStringIsolation) {
+  // Check that cl::opt with string values are isolated between threads.
+  StackOption<std::string> TestString("test-string",
+                                      cl::desc("Test string option"));
+
+  constexpr int NumThreads = 4;
+  std::vector<std::thread> Threads;
+  std::atomic<int> Failures{0};
+
+  for (int I = 0; I < NumThreads; ++I) {
+    Threads.emplace_back([I, &TestString, &Failures]() {
+      // Each thread sets a unique string value.
+      std::string ExpectedValue = "thread_" + std::to_string(I) + "_value";
+      const char *Args[] = {"prog", "--test-string", ExpectedValue.c_str()};
+
+      cl::ThreadLocalParserStateGuard StateGuard;
+
+      if (!cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls())) {
+        Failures++;
+        return;
+      }
+
+      // Verify this thread sees its own value.
+      if (std::string(TestString) != ExpectedValue) {
+        Failures++;
+        return;
+      }
+
+      // Sleep a bit to ensure other threads are also running.
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+      // Verify value didn't change.
+      if (std::string(TestString) != ExpectedValue) {
+        Failures++;
+        return;
+      }
+    });
+  }
+
+  for (auto &T : Threads)
+    T.join();
+
+  EXPECT_EQ(0, Failures.load())
+      << "Thread-local isolation failed for opt<std::string>";
+  cl::ResetCommandLineParser();
+}
+
+TEST(CommandLineTest, ThreadLocalListIsolation) {
+  // Check that cl::list values are isolated between threads.
+  StackOption<std::string, cl::list<std::string>> TestList(
+      "test-list", cl::desc("Test list option"));
+
+  constexpr int NumThreads = 4;
+  std::vector<std::thread> Threads;
+  std::atomic<int> Failures{0};
+
+  for (int I = 0; I < NumThreads; ++I) {
+    Threads.emplace_back([I, &TestList, &Failures]() {
+      // Each thread adds unique values to the list.
+      std::string Value1 = "thread_" + std::to_string(I) + "_val1";
+      std::string Value2 = "thread_" + std::to_string(I) + "_val2";
+      const char *Args[] = {"prog", "--test-list", Value1.c_str(),
+                            "--test-list", Value2.c_str()};
+
+      cl::ThreadLocalParserStateGuard StateGuard;
+
+      if (!cl::ParseCommandLineOptions(5, Args, StringRef(), &llvm::nulls())) {
+        Failures++;
+        return;
+      }
+
+      // Verify this thread sees its own list
+      if (TestList.size() != 2) {
+        Failures++;
+        return;
+      }
+
+      if (TestList[0] != Value1 || TestList[1] != Value2) {
+        Failures++;
+        return;
+      }
+
+      // Sleep a bit to ensure other threads are also running.
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+      // Verify list didn't change
+      if (TestList.size() != 2 || TestList[0] != Value1 ||
+          TestList[1] != Value2) {
+        Failures++;
+        return;
+      }
+    });
+  }
+
+  for (auto &T : Threads)
+    T.join();
+
+  EXPECT_EQ(0, Failures.load())
+      << "Thread-local isolation failed for list<std::string>";
+  cl::ResetCommandLineParser();
+}
+
+TEST(CommandLineTest, ConcurrentParsing) {
+  // Check concurrent parsing with different command lines.
+  StackOption<int> TestOpt1("opt1", cl::desc("Option 1"));
+  StackOption<std::string> TestOpt2("opt2", cl::desc("Option 2"));
+
+  constexpr int NumThreads = 8;
+  std::vector<std::thread> Threads;
+  std::atomic<int> Failures{0};
+
+  for (int I = 0; I < NumThreads; ++I) {
+    Threads.emplace_back([I, &TestOpt1, &TestOpt2, &Failures]() {
+      // Each thread parses different command line arguments.
+      int ExpectedInt = 1000 + I;
+      std::string ExpectedString = "string_for_thread_" + std::to_string(I);
+      std::string ExpectedIntStr = std::to_string(ExpectedInt);
+
+      const char *Args[] = {"prog", "--opt1", ExpectedIntStr.c_str(), "--opt2",
+                            ExpectedString.c_str()};
+
+      cl::ThreadLocalParserStateGuard StateGuard;
+
+      if (!cl::ParseCommandLineOptions(5, Args, StringRef(), &llvm::nulls())) {
+        Failures++;
+        return;
+      }
+
+      // Verify parsed values are correct for this thread.
+      if (TestOpt1 != ExpectedInt) {
+        Failures++;
+        return;
+      }
+
+      if (std::string(TestOpt2) != ExpectedString) {
+        Failures++;
+        return;
+      }
+
+      // Do some "work" to ensure threads overlap.
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+      // Verify values are still correct.
+      if (TestOpt1 != ExpectedInt || std::string(TestOpt2) != ExpectedString) {
+        Failures++;
+        return;
+      }
+    });
+  }
+
+  for (auto &T : Threads)
+    T.join();
+
+  EXPECT_EQ(0, Failures.load()) << "Concurrent parsing failed";
+  cl::ResetCommandLineParser();
+}
+
+TEST(CommandLineTest, NewThreadDefaultValues) {
+  // Check that new threads see default-constructed values, not values from
+  // other threads.
+  StackOption<int> TestOpt("test-default", cl::desc("Test default values"));
+
+  std::atomic<int> Failures{0};
+
+  // Parse in main thread with a specific value.
+  {
+    const char *Args[] = {"prog", "--test-default", "99"};
+    ASSERT_TRUE(
+        cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls()));
+    ASSERT_EQ(99, static_cast<int>(TestOpt))
+        << "Main thread should see parsed value";
+  }
+
+  // Create new thread and verify it sees the default-constructed value (0 for
+  // int), not the main thread's value (99).
+  std::thread T([&TestOpt, &Failures]() {
+    // Push new thread-local state to isolate from main thread.
+    cl::ThreadLocalParserStateGuard StateGuard;
+
+    // New thread should see default-constructed value (0), not main thread's
+    // value (99) Note: Thread-local storage is initialized with default
+    // constructor, not cl::init().
+    if (TestOpt != 0) {
+      Failures++;
+      return;
+    }
+
+    // Parse a different value in this thread.
+    const char *Args[] = {"prog", "--test-default", "123"};
+    if (!cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls())) {
+      Failures++;
+      return;
+    }
+
+    // Now should see the newly parsed value.
+    if (TestOpt != 123) {
+      Failures++;
+      return;
+    }
+  });
+
+  T.join();
+
+  EXPECT_EQ(0, Failures.load())
+      << "New thread should see default-constructed values";
+
+  // Main thread should still see its own value.
+  EXPECT_EQ(99, static_cast<int>(TestOpt))
+      << "Main thread value should be unchanged";
+
+  cl::ResetCommandLineParser();
+}
+
+TEST(CommandLineTest, HighThreadCountStress) {
+  // Stress test with many threads to verify scalability and stability.
+  StackOption<int> StressOpt("stress-opt", cl::desc("Stress test option"));
+
+  constexpr int NumThreads = 100;
+  std::vector<std::thread> Threads;
+  std::atomic<int> Failures{0};
+  std::atomic<int> CompletedThreads{0};
+
+  for (int I = 0; I < NumThreads; ++I) {
+    Threads.emplace_back([I, &StressOpt, &Failures, &CompletedThreads]() {
+      int ExpectedValue = 10000 + I;
+      std::string ExpectedValueStr = std::to_string(ExpectedValue);
+      const char *Args[] = {"prog", "--stress-opt", ExpectedValueStr.c_str()};
+
+      cl::ThreadLocalParserStateGuard StateGuard;
+
+      if (!cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls())) {
+        Failures++;
+        return;
+      }
+
+      // Verify the value multiple times with small delays.
+      for (int J = 0; J < 5; ++J) {
+        if (StressOpt != ExpectedValue) {
+          Failures++;
+          return;
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+      }
+
+      CompletedThreads++;
+    });
+  }
+
+  for (auto &T : Threads)
+    T.join();
+
+  EXPECT_EQ(0, Failures.load()) << "High thread count stress test failed";
+  EXPECT_EQ(NumThreads, CompletedThreads.load())
+      << "Not all threads completed successfully";
+  cl::ResetCommandLineParser();
+}
+
+TEST(CommandLineTest, ThreadLocalResetBehavior) {
+  // Verify that reset is thread-local and doesn't affect other threads.
+  StackOption<int> ResetOpt("reset-opt", cl::desc("Reset test option"));
+
+  // Parse a value in the main thread.
+  {
+    const char *Args[] = {"prog", "--reset-opt", "100"};
+    ASSERT_TRUE(
+        cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls()));
+    ASSERT_EQ(100, static_cast<int>(ResetOpt));
+  }
+
+  std::atomic<int> Failures{0};
+
+  // Child thread parses its own value.
+  std::thread T([&ResetOpt, &Failures]() {
+    // Push new thread-local state to isolate from main thread.
+    cl::ThreadLocalParserStateGuard StateGuard;
+
+    const char *Args[] = {"prog", "--reset-opt", "300"};
+    if (!cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls())) {
+      Failures++;
+      return;
+    }
+
+    if (ResetOpt != 300) {
+      Failures++;
+      return;
+    }
+
+    // Reset should only affect this thread's storage.
+    cl::ResetCommandLineParser();
+  });
+
+  T.join();
+  EXPECT_EQ(0, Failures.load()) << "Reset behavior test failed";
+
+  // Main thread value should be unchanged by child thread's reset.
+  EXPECT_EQ(100, static_cast<int>(ResetOpt))
+      << "Main thread value affected by child thread reset";
+
+  cl::ResetCommandLineParser();
+}
+
+TEST(CommandLineTest, MultipleOptionTypesSimultaneous) {
+  // Test concurrent usage of opt with different types simultaneously.
+  // Note: list options have additional shared state (Positions vector) that
+  // is not yet thread-safe, so we test opt types only for now.
+  StackOption<int> IntOpt("multi-int", cl::desc("Integer option"));
+  StackOption<std::string> StrOpt("multi-str", cl::desc("String option"));
+  StackOption<double> DoubleOpt("multi-double", cl::desc("Double option"));
+
+  constexpr int NumThreads = 10;
+  std::vector<std::thread> Threads;
+  std::atomic<int> Failures{0};
+
+  for (int I = 0; I < NumThreads; ++I) {
+    Threads.emplace_back([I, &IntOpt, &StrOpt, &DoubleOpt, &Failures]() {
+      // Push new thread-local state to isolate from main thread.
+      cl::ThreadLocalParserStateGuard StateGuard;
+
+      int ExpectedInt = 500 + I;
+      std::string ExpectedStr = "string_" + std::to_string(I);
+      double ExpectedDouble = 3.14 + I * 0.1;
+
+      std::string ExpectedIntStr = std::to_string(ExpectedInt);
+      std::string DoubleStr = std::to_string(ExpectedDouble);
+      const char *Args[] = {
+          "prog",           "--multi-int",       ExpectedIntStr.c_str(),
+          "--multi-str",    ExpectedStr.c_str(), "--multi-double",
+          DoubleStr.c_str()};
+
+      if (!cl::ParseCommandLineOptions(7, Args, StringRef(), &llvm::nulls())) {
+        Failures++;
+        return;
+      }
+
+      // Verify all option types.
+      if (IntOpt != ExpectedInt) {
+        Failures++;
+        return;
+      }
+
+      if (std::string(StrOpt) != ExpectedStr) {
+        Failures++;
+        return;
+      }
+
+      if (std::abs(static_cast<double>(DoubleOpt) - ExpectedDouble) > 0.001) {
+        Failures++;
+        return;
+      }
+
+      // Small delay to ensure concurrency.
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+      // Re-verify all values.
+      if (IntOpt != ExpectedInt || std::string(StrOpt) != ExpectedStr ||
+          std::abs(static_cast<double>(DoubleOpt) - ExpectedDouble) > 0.001) {
+        Failures++;
+      }
+    });
+  }
+
+  for (auto &T : Threads)
+    T.join();
+
+  EXPECT_EQ(0, Failures.load()) << "Multiple option types test failed";
+  cl::ResetCommandLineParser();
+}
+
+TEST(CommandLineTest, ThreadLocalEdgeCasesEmptyStrings) {
+  // Test edge cases with empty strings and special values.
+  // Note: Avoiding list options due to non-thread-safe Positions vector.
+  StackOption<std::string> EmptyOpt("empty-opt", cl::desc("Empty string test"));
+  StackOption<std::string> SpecialOpt("special-opt",
+                                      cl::desc("Special characters test"));
+
+  constexpr int NumThreads = 4;
+  std::vector<std::thread> Threads;
+  std::atomic<int> Failures{0};
+
+  for (int I = 0; I < NumThreads; ++I) {
+    Threads.emplace_back([I, &EmptyOpt, &SpecialOpt, &Failures]() {
+      cl::ThreadLocalParserStateGuard StateGuard;
+
+      if (I % 2 == 0) {
+        // Even threads: test empty string.
+        const char *Args[] = {"prog", "--empty-opt", "", "--special-opt",
+                              "normal"};
+
+        if (!cl::ParseCommandLineOptions(5, Args, StringRef(),
+                                         &llvm::nulls())) {
+          Failures++;
+          return;
+        }
+
+        if (std::string(EmptyOpt) != "" || std::string(SpecialOpt) != "normal")
+          Failures++;
+      } else {
+        // Odd threads: test strings with special characters.
+        std::string SpecialStr = "value_" + std::to_string(I) + "_!@#$%";
+        const char *Args[] = {"prog", "--empty-opt", "not-empty",
+                              "--special-opt", SpecialStr.c_str()};
+
+        if (!cl::ParseCommandLineOptions(5, Args, StringRef(),
+                                         &llvm::nulls())) {
+          Failures++;
+          return;
+        }
+
+        if (std::string(EmptyOpt) != "not-empty" ||
+            std::string(SpecialOpt) != SpecialStr)
+          Failures++;
+      }
+    });
+  }
+
+  for (auto &T : Threads)
+    T.join();
+
+  EXPECT_EQ(0, Failures.load()) << "Edge cases with empty strings failed";
+  cl::ResetCommandLineParser();
+}
+
+TEST(CommandLineTest, ThreadLocalLargeDataStress) {
+  // Test with large string data to verify memory management.
+  StackOption<std::string> LargeOpt("large-opt", cl::desc("Large data test"));
+
+  constexpr int NumThreads = 8;
+  std::vector<std::thread> Threads;
+  std::atomic<int> Failures{0};
+
+  for (int I = 0; I < NumThreads; ++I) {
+    Threads.emplace_back([I, &LargeOpt, &Failures]() {
+      // Build a large string (10KB).
+      std::string LargeStr;
+      LargeStr.reserve(10000);
+      for (int J = 0; J < 1000; ++J)
+        LargeStr += std::to_string(I) + "_data_" + std::to_string(J) + ";";
+
+      const char *Args[] = {"prog", "--large-opt", LargeStr.c_str()};
+
+      cl::ThreadLocalParserStateGuard StateGuard;
+
+      if (!cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls())) {
+        Failures++;
+        return;
+      }
+
+      // Verify the large string was stored correctly.
+      if (std::string(LargeOpt) != LargeStr) {
+        Failures++;
+        return;
+      }
+
+      // Small delay while holding the large data.
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+      // Re-verify.
+      if (std::string(LargeOpt) != LargeStr)
+        Failures++;
+    });
+  }
+
+  for (auto &T : Threads)
+    T.join();
+
+  EXPECT_EQ(0, Failures.load()) << "Large data stress test failed";
+  cl::ResetCommandLineParser();
+}
+
+TEST(CommandLineTest, ThreadLocalPerformanceBaseline) {
+  // Measure baseline performance of thread-local option access.
+  StackOption<int> PerfOpt("perf-opt", cl::desc("Performance test option"));
+
+  constexpr int NumThreads = 4;
+  constexpr int IterationsPerThread = 10000;
+  std::vector<std::thread> Threads;
+  std::atomic<int> Failures{0};
+
+  auto StartTime = std::chrono::high_resolution_clock::now();
+
+  for (int I = 0; I < NumThreads; ++I) {
+    Threads.emplace_back([I, &PerfOpt, &Failures]() {
+      int ExpectedValue = 5000 + I;
+      std::string ExpectedValueStr = std::to_string(ExpectedValue);
+      const char *Args[] = {"prog", "--perf-opt", ExpectedValueStr.c_str()};
+
+      cl::ThreadLocalParserStateGuard StateGuard;
+
+      if (!cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls())) {
+        Failures++;
+        return;
+      }
+
+      // Perform many reads to measure access overhead.
+      int Sum = 0;
+      for (int J = 0; J < IterationsPerThread; ++J)
+        Sum += static_cast<int>(PerfOpt);
+
+      // Verify correctness.
+      if (Sum != ExpectedValue * IterationsPerThread)
+        Failures++;
+    });
+  }
+
+  for (auto &T : Threads)
+    T.join();
+
+  auto EndTime = std::chrono::high_resolution_clock::now();
+  auto Duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+      EndTime - StartTime);
+
+  EXPECT_EQ(0, Failures.load()) << "Performance baseline test failed";
+
+  // Sanity check: should complete in reasonable time (< 1 second).
+  EXPECT_LT(Duration.count(), 1000)
+      << "Performance test took too long: " << Duration.count() << "ms";
+
+  cl::ResetCommandLineParser();
+}
+
+TEST(CommandLineTest, RapidThreadCreationDestruction) {
+  // Test rapid thread creation/destruction with thread-local storage.
+  StackOption<int> RapidOpt("rapid-opt", cl::desc("Rapid thread test"));
+
+  constexpr int NumIterations = 50;
+  std::atomic<int> Failures{0};
+
+  for (int I = 0; I < NumIterations; ++I) {
+    std::thread T([I, &RapidOpt, &Failures]() {
+      // Push new thread-local state to isolate from main thread.
+      cl::ThreadLocalParserStateGuard StateGuard;
+
+      int ExpectedValue = 2000 + I;
+      std::string ExpectedValueStr = std::to_string(ExpectedValue);
+      const char *Args[] = {"prog", "--rapid-opt", ExpectedValueStr.c_str()};
+
+      if (!cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls())) {
+        Failures++;
+        return;
+      }
+
+      if (RapidOpt != ExpectedValue)
+        Failures++;
+    });
+
+    T.join();
+  }
+
+  EXPECT_EQ(0, Failures.load()) << "Rapid thread creation test failed";
+  cl::ResetCommandLineParser();
+}
+
+TEST(CommandLineTest, ThreadLocalWithCategories) {
+  // Test thread-local storage works with option categories.
+  cl::OptionCategory TestCat(
+      "ThreadLocalWithCategories Test Options",
+      "Options for testing thread-local storage with categories");
+
+  StackOption<int> CatOpt1("cat-opt1", cl::desc("Category option 1"),
+                           cl::cat(TestCat));
+  StackOption<std::string> CatOpt2("cat-opt2", cl::desc("Category option 2"),
+                                   cl::cat(TestCat));
+
+  constexpr int NumThreads = 6;
+  std::vector<std::thread> Threads;
+  std::atomic<int> Failures{0};
+
+  for (int I = 0; I < NumThreads; ++I) {
+    Threads.emplace_back([I, &CatOpt1, &CatOpt2, &Failures]() {
+      int ExpectedInt = 100 + I;
+      std::string ExpectedStr = "cat_value_" + std::to_string(I);
+      std::string ExpectedIntStr = std::to_string(ExpectedInt);
+
+      const char *Args[] = {"prog", "--cat-opt1", ExpectedIntStr.c_str(),
+                            "--cat-opt2", ExpectedStr.c_str()};
+
+      cl::ThreadLocalParserStateGuard StateGuard;
+
+      if (!cl::ParseCommandLineOptions(5, Args, StringRef(), &llvm::nulls())) {
+        Failures++;
+        return;
+      }
+
+      if (CatOpt1 != ExpectedInt || std::string(CatOpt2) != ExpectedStr)
+        Failures++;
+    });
+  }
+
+  for (auto &T : Threads)
+    T.join();
+
+  EXPECT_EQ(0, Failures.load()) << "Category integration test failed";
+  cl::ResetCommandLineParser();
+}
+
+TEST(CommandLineTest, ThreadLocalWithInitialValues) {
+  // Test that cl::init() values don't affect thread-local behavior.
+  StackOption<int> InitOpt("init-opt", cl::desc("Option with initial value"),
+                           cl::init(42));
+
+  std::atomic<int> Failures{0};
+
+  // Main thread: parse a different value.
+  {
+    const char *Args[] = {"prog", "--init-opt", "100"};
+    ASSERT_TRUE(
+        cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls()));
+    ASSERT_EQ(100, static_cast<int>(InitOpt));
+  }
+
+  // New thread should see default-constructed value (0), not cl::init(42).
+  std::thread T1([&InitOpt, &Failures]() {
+    // Push new thread-local state to isolate from main thread.
+    cl::ThreadLocalParserStateGuard StateGuard;
+
+    if (InitOpt != 0) {
+      Failures++;
+      return;
+    }
+
+    const char *Args[] = {"prog", "--init-opt", "200"};
+    if (!cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls())) {
+      Failures++;
+      return;
+    }
+
+    if (InitOpt != 200)
+      Failures++;
+  });
+
+  T1.join();
+
+  EXPECT_EQ(0, Failures.load()) << "Initial value test failed";
+  EXPECT_EQ(100, static_cast<int>(InitOpt)) << "Main thread value changed";
+
+  cl::ResetCommandLineParser();
+}
+
+TEST(CommandLineTest, ThreadLocalBoolOptions) {
+  // Test bool options with thread-local storage.
+  StackOption<bool> BoolOpt1("bool-opt1", cl::desc("Boolean option 1"));
+  StackOption<bool> BoolOpt2("bool-opt2", cl::desc("Boolean option 2"));
+
+  constexpr int NumThreads = 4;
+  std::vector<std::thread> Threads;
+  std::atomic<int> Failures{0};
+
+  for (int I = 0; I < NumThreads; ++I) {
+    Threads.emplace_back([I, &BoolOpt1, &BoolOpt2, &Failures]() {
+      bool ExpectedBool1 = (I % 2 == 0);
+      bool ExpectedBool2 = (I % 2 != 0);
+
+      SmallVector<const char *, 8> Args;
+      Args.push_back("prog");
+
+      if (ExpectedBool1)
+        Args.push_back("--bool-opt1");
+
+      if (ExpectedBool2)
+        Args.push_back("--bool-opt2");
+
+      cl::ThreadLocalParserStateGuard StateGuard;
+
+      if (!cl::ParseCommandLineOptions(Args.size(), Args.data(), StringRef(),
+                                       &llvm::nulls())) {
+        Failures++;
+        return;
+      }
+
+      if (BoolOpt1 != ExpectedBool1 || BoolOpt2 != ExpectedBool2)
+        Failures++;
+    });
+  }
+
+  for (auto &T : Threads)
+    T.join();
+
+  EXPECT_EQ(0, Failures.load()) << "Boolean options test failed";
+  cl::ResetCommandLineParser();
+}
+
+TEST(CommandLineTest, ThreadLocalEnumOptions) {
+  // Test enum options with thread-local storage.
+  enum TestEnum { Value0, Value1, Value2, Value3 };
+
+  cl::OptionCategory EnumCat("Enum Test", "Enum testing");
+  StackOption<TestEnum> EnumOpt(
+      "enum-opt", cl::desc("Enum option"),
+      cl::values(clEnumValN(Value0, "zero", "Zero value"),
+                 clEnumValN(Value1, "one", "One value"),
+                 clEnumValN(Value2, "two", "Two value"),
+                 clEnumValN(Value3, "three", "Three value")),
+      cl::cat(EnumCat));
+
+  constexpr int NumThreads = 4;
+  std::vector<std::thread> Threads;
+  std::atomic<int> Failures{0};
+
+  for (int I = 0; I < NumThreads; ++I) {
+    Threads.emplace_back([I, &EnumOpt, &Failures]() {
+      const char *EnumStrings[] = {"zero", "one", "two", "three"};
+      TestEnum ExpectedValue = static_cast<TestEnum>(I % 4);
+
+      const char *Args[] = {"prog", "--enum-opt", EnumStrings[I % 4]};
+
+      cl::ThreadLocalParserStateGuard StateGuard;
+
+      if (!cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls())) {
+        Failures++;
+        return;
+      }
+
+      if (EnumOpt != ExpectedValue)
+        Failures++;
+    });
+  }
+
+  for (auto &T : Threads)
+    T.join();
+
+  EXPECT_EQ(0, Failures.load()) << "Enum options test failed";
+  cl::ResetCommandLineParser();
+}
+
+TEST(CommandLineTest, ThreadLocalMixedParsingAndAccess) {
+  // Test scenario where some threads parse while others just access values.
+  StackOption<int> MixedOpt("mixed-opt", cl::desc("Mixed access option"));
+
+  std::atomic<int> Failures{0};
+  std::atomic<bool> MainParsed{false};
+
+  // Main thread parses a value.
+  const char *MainArgs[] = {"prog", "--mixed-opt", "999"};
+  ASSERT_TRUE(
+      cl::ParseCommandLineOptions(3, MainArgs, StringRef(), &llvm::nulls()));
+  ASSERT_EQ(999, static_cast<int>(MixedOpt));
+  MainParsed = true;
+
+  constexpr int NumThreads = 8;
+  std::vector<std::thread> Threads;
+
+  for (int I = 0; I < NumThreads; ++I) {
+    Threads.emplace_back([I, &MixedOpt, &Failures, &MainParsed]() {
+      // Push new thread-local state to isolate from main thread.
+      cl::ThreadLocalParserStateGuard StateGuard;
+
+      // Wait for main thread to parse.
+      while (!MainParsed.load())
+        std::this_thread::yield();
+
+      if (I % 2 == 0) {
+        // Even threads: parse their own value.
+        int ExpectedValue = 1000 + I;
+        std::string ExpectedValueStr = std::to_string(ExpectedValue);
+        const char *Args[] = {"prog", "--mixed-opt", ExpectedValueStr.c_str()};
+
+        if (!cl::ParseCommandLineOptions(3, Args, StringRef(),
+                                         &llvm::nulls())) {
+          Failures++;
+          return;
+        }
+
+        if (MixedOpt != ExpectedValue)
+          Failures++;
+      } else {
+        // Odd threads: should see default value (0), not main's value.
+        if (MixedOpt != 0)
+          Failures++;
+      }
+    });
+  }
+
+  for (auto &T : Threads)
+    T.join();
+
+  EXPECT_EQ(0, Failures.load()) << "Mixed parsing and access test failed";
+  EXPECT_EQ(999, static_cast<int>(MixedOpt)) << "Main thread value changed";
+
+  cl::ResetCommandLineParser();
+}
+
+TEST(CommandLineTest, ThreadLocalMemoryFootprint) {
+  // Verify thread-local storage doesn't leak with repeated parsing.
+  StackOption<int> MemOpt1("mem-opt-1", cl::desc("Memory test 1"));
+  StackOption<int> MemOpt2("mem-opt-2", cl::desc("Memory test 2"));
+  StackOption<int> MemOpt3("mem-opt-3", cl::desc("Memory test 3"));
+  StackOption<std::string> MemOpt4("mem-opt-4", cl::desc("Memory test 4"));
+  StackOption<std::string> MemOpt5("mem-opt-5", cl::desc("Memory test 5"));
+
+  constexpr int NumThreads = 8;
+  constexpr int RepeatedParses = 100;
+  std::vector<std::thread> Threads;
+  std::atomic<int> Failures{0};
+
+  for (int I = 0; I < NumThreads; ++I) {
+    Threads.emplace_back([I, &MemOpt1, &MemOpt2, &MemOpt3, &MemOpt4, &MemOpt5,
+                          &Failures]() {
+      // Repeatedly parse to stress memory management.
+      for (int J = 0; J < RepeatedParses; ++J) {
+        int Val1 = I * 1000 + J;
+        int Val2 = I * 2000 + J;
+        int Val3 = I * 3000 + J;
+        std::string Val4 =
+            "str1_" + std::to_string(I) + "_" + std::to_string(J);
+        std::string Val5 =
+            "str2_" + std::to_string(I) + "_" + std::to_string(J);
+
+        // Keep strings alive for the duration of the parse.
+        std::string Val1Str = std::to_string(Val1);
+        std::string Val2Str = std::to_string(Val2);
+        std::string Val3Str = std::to_string(Val3);
+
+        const char *Args[] = {"prog",          "--mem-opt-1",   Val1Str.c_str(),
+                              "--mem-opt-2",   Val2Str.c_str(), "--mem-opt-3",
+                              Val3Str.c_str(), "--mem-opt-4",   Val4.c_str(),
+                              "--mem-opt-5",   Val5.c_str()};
+
+        cl::ThreadLocalParserStateGuard StateGuard;
+
+        if (!cl::ParseCommandLineOptions(11, Args, StringRef(),
+                                         &llvm::nulls())) {
+          Failures++;
+          return;
+        }
+
+        // Verify values.
+        if (MemOpt1 != Val1 || MemOpt2 != Val2 || MemOpt3 != Val3 ||
+            std::string(MemOpt4) != Val4 || std::string(MemOpt5) != Val5) {
+          Failures++;
+          return;
+        }
+      }
+    });
+  }
+
+  for (auto &T : Threads)
+    T.join();
+
+  EXPECT_EQ(0, Failures.load()) << "Memory footprint test failed";
+  cl::ResetCommandLineParser();
+}
+
+// Test that NumOccurrences is unique to each parser state
+TEST(CommandLineTest, NumOccurrencesPerState) {
+  StackOption<int> TestOpt("test-opt", cl::desc("Test option"));
+
+  // Parse in main state
+  const char *Args1[] = {"prog", "--test-opt", "10"};
+  EXPECT_TRUE(
+      cl::ParseCommandLineOptions(3, Args1, StringRef(), &llvm::nulls()));
+  EXPECT_EQ(1, TestOpt.getNumOccurrences());
+  EXPECT_EQ(10, TestOpt.getValue());
+
+  // Push thread-local state and parse again
+  {
+    cl::ThreadLocalParserStateGuard Guard1;
+    const char *Args2[] = {"prog", "--test-opt", "20"};
+    EXPECT_TRUE(
+        cl::ParseCommandLineOptions(3, Args2, StringRef(), &llvm::nulls()));
+    EXPECT_EQ(1, TestOpt.getNumOccurrences()); // Should be 1 in this state
+    EXPECT_EQ(20, TestOpt.getValue());
+
+    // Parse again in the same state
+    const char *Args3[] = {"prog", "--test-opt", "30"};
+    EXPECT_TRUE(
+        cl::ParseCommandLineOptions(3, Args3, StringRef(), &llvm::nulls()));
+    EXPECT_EQ(2, TestOpt.getNumOccurrences()); // Should be 2 now
+    EXPECT_EQ(30, TestOpt.getValue());
+  } // Pop state when Guard1 goes out of scope
+
+  // Back to main state
+  EXPECT_EQ(1, TestOpt.getNumOccurrences()); // Back to 1 in main state
+  EXPECT_EQ(10, TestOpt.getValue());
+
+  cl::ResetCommandLineParser();
+}
+
+// Test nested state stacks
+TEST(CommandLineTest, NestedStateStacks) {
+  StackOption<std::string> TestOpt("test-str", cl::desc("Test string option"));
+
+  // Parse in main state
+  const char *Args1[] = {"prog", "--test-str", "main"};
+  EXPECT_TRUE(
+      cl::ParseCommandLineOptions(3, Args1, StringRef(), &llvm::nulls()));
+  EXPECT_EQ("main", std::string(TestOpt));
+  EXPECT_EQ(1, TestOpt.getNumOccurrences());
+
+  // Push first nested state
+  {
+    cl::ThreadLocalParserStateGuard Guard1;
+    const char *Args2[] = {"prog", "--test-str", "level1"};
+    EXPECT_TRUE(
+        cl::ParseCommandLineOptions(3, Args2, StringRef(), &llvm::nulls()));
+    EXPECT_EQ("level1", std::string(TestOpt));
+    EXPECT_EQ(1, TestOpt.getNumOccurrences());
+
+    // Push second nested state
+    {
+      cl::ThreadLocalParserStateGuard Guard2;
+      const char *Args3[] = {"prog", "--test-str", "level2"};
+      EXPECT_TRUE(
+          cl::ParseCommandLineOptions(3, Args3, StringRef(), &llvm::nulls()));
+      EXPECT_EQ("level2", std::string(TestOpt));
+      EXPECT_EQ(1, TestOpt.getNumOccurrences());
+
+      // Parse again at level 2
+      const char *Args4[] = {"prog", "--test-str", "level2-again"};
+      EXPECT_TRUE(
+          cl::ParseCommandLineOptions(3, Args4, StringRef(), &llvm::nulls()));
+      EXPECT_EQ("level2-again", std::string(TestOpt));
+      EXPECT_EQ(2, TestOpt.getNumOccurrences());
+    } // Pop to level 1
+
+    EXPECT_EQ("level1", std::string(TestOpt));
+    EXPECT_EQ(1, TestOpt.getNumOccurrences());
+  } // Pop to main
+
+  EXPECT_EQ("main", std::string(TestOpt));
+  EXPECT_EQ(1, TestOpt.getNumOccurrences());
+
+  cl::ResetCommandLineParser();
+}
+
+// Test that Position is state-specific
+TEST(CommandLineTest, PositionPerState) {
+  StackOption<std::string> Positional1(cl::Positional,
+                                       cl::desc("First positional"));
+  StackOption<std::string> Positional2(cl::Positional,
+                                       cl::desc("Second positional"));
+
+  // Parse in main state
+  const char *Args1[] = {"prog", "value1", "value2"};
+  EXPECT_TRUE(
+      cl::ParseCommandLineOptions(3, Args1, StringRef(), &llvm::nulls()));
+  EXPECT_EQ("value1", std::string(Positional1));
+  EXPECT_EQ("value2", std::string(Positional2));
+  unsigned Pos1Main = Positional1.getPosition();
+  unsigned Pos2Main = Positional2.getPosition();
+
+  // Push thread-local state and parse
+  {
+    cl::ThreadLocalParserStateGuard Guard;
+    const char *Args2[] = {"prog", "new1", "new2"};
+    EXPECT_TRUE(
+        cl::ParseCommandLineOptions(3, Args2, StringRef(), &llvm::nulls()));
+    EXPECT_EQ("new1", std::string(Positional1));
+    EXPECT_EQ("new2", std::string(Positional2));
+    unsigned Pos1Thread = Positional1.getPosition();
+    unsigned Pos2Thread = Positional2.getPosition();
+
+    // Positions should be tracked independently (likely same values but from
+    // different state)
+    EXPECT_EQ(Pos1Main, Pos1Thread); // Same position index
+    EXPECT_EQ(Pos2Main, Pos2Thread);
+  } // Pop state
+
+  // Verify main state positions are preserved
+  EXPECT_EQ(Pos1Main, Positional1.getPosition());
+  EXPECT_EQ(Pos2Main, Positional2.getPosition());
+  EXPECT_EQ("value1", std::string(Positional1));
+  EXPECT_EQ("value2", std::string(Positional2));
+
+  cl::ResetCommandLineParser();
+}
+
+// Test state isolation with multiple threads and parsing
+TEST(CommandLineTest, StateIsolationMultipleParses) {
+  StackOption<int> TestOpt("count", cl::desc("Count option"));
+
+  std::vector<std::thread> Threads;
+  std::atomic<int> Failures{0};
+
+  for (int ThreadId = 0; ThreadId < 3; ++ThreadId) {
+    Threads.emplace_back([ThreadId, &TestOpt, &Failures]() {
+      cl::ThreadLocalParserStateGuard Guard;
+
+      // Each thread parses multiple times
+      for (int i = 0; i < 5; ++i) {
+        std::string ValueStr = std::to_string(ThreadId * 100 + i);
+        const char *Args[] = {"prog", "--count", ValueStr.c_str()};
+
+        if (!cl::ParseCommandLineOptions(3, Args, StringRef(),
+                                         &llvm::nulls())) {
+          Failures++;
+          return;
+        }
+
+        // Verify occurrence count matches parse count
+        if (TestOpt.getNumOccurrences() != i + 1) {
+          Failures++;
+          return;
+        }
+
+        // Verify value is correct
+        int ExpectedValue = ThreadId * 100 + i;
+        if (TestOpt != ExpectedValue) {
+          Failures++;
+          return;
+        }
+      }
+
+      // Final check: should have 5 occurrences
+      if (TestOpt.getNumOccurrences() != 5) {
+        Failures++;
+      }
+    });
+  }
+
+  for (auto &T : Threads)
+    T.join();
+
+  EXPECT_EQ(0, Failures.load())
+      << "State isolation with multiple parses failed";
+  cl::ResetCommandLineParser();
+}
+
+// Test copying state with CopyStorageValues flag
+TEST(CommandLineTest, StateCopyWithOccurrences) {
+  StackOption<int> TestOpt("value", cl::desc("Test value"));
+
+  // Set up main state with some occurrences
+  const char *Args1[] = {"prog", "--value", "10"};
+  EXPECT_TRUE(
+      cl::ParseCommandLineOptions(3, Args1, StringRef(), &llvm::nulls()));
+  const char *Args2[] = {"prog", "--value", "20"};
+  EXPECT_TRUE(
+      cl::ParseCommandLineOptions(3, Args2, StringRef(), &llvm::nulls()));
+  EXPECT_EQ(2, TestOpt.getNumOccurrences());
+  EXPECT_EQ(20, TestOpt.getValue());
+
+  // Create fresh state (default) - should have 0 occurrences
+  {
+    cl::ThreadLocalParserStateGuard Guard;
+    EXPECT_EQ(0, TestOpt.getNumOccurrences());
+
+    // Parse in this state
+    const char *Args3[] = {"prog", "--value", "30"};
+    EXPECT_TRUE(
+        cl::ParseCommandLineOptions(3, Args3, StringRef(), &llvm::nulls()));
+    EXPECT_EQ(1, TestOpt.getNumOccurrences());
+    EXPECT_EQ(30, TestOpt.getValue());
+  }
+
+  // Create state copying structure but not values - should have 0 occurrences
+  {
+    cl::ThreadLocalStateConfig Config;
+    Config.Source = cl::ThreadLocalStateConfig::SourceState::MainState;
+    Config.CopyStorageValues = false;
+    cl::ThreadLocalParserStateGuard Guard(Config);
+    EXPECT_EQ(0, TestOpt.getNumOccurrences());
+
+    // Parse in this state
+    const char *Args4[] = {"prog", "--value", "40"};
+    EXPECT_TRUE(
+        cl::ParseCommandLineOptions(3, Args4, StringRef(), &llvm::nulls()));
+    EXPECT_EQ(1, TestOpt.getNumOccurrences());
+    EXPECT_EQ(40, TestOpt.getValue());
+  }
+
+  // Create state copying structure AND values - metadata still fresh
+  {
+    cl::ThreadLocalStateConfig Config;
+    Config.Source = cl::ThreadLocalStateConfig::SourceState::MainState;
+    Config.CopyStorageValues = true;
+    cl::ThreadLocalParserStateGuard Guard(Config);
+    // Metadata (NumOccurrences) is not copied, only storage values
+    EXPECT_EQ(0, TestOpt.getNumOccurrences());
+
+    // The value may or may not be copied depending on implementation,
+    // but NumOccurrences should definitely be 0
+    const char *Args5[] = {"prog", "--value", "50"};
+    EXPECT_TRUE(
+        cl::ParseCommandLineOptions(3, Args5, StringRef(), &llvm::nulls()));
+    EXPECT_EQ(1, TestOpt.getNumOccurrences());
+    EXPECT_EQ(50, TestOpt.getValue());
+  }
+
+  // Verify main state unchanged
+  EXPECT_EQ(2, TestOpt.getNumOccurrences());
+  EXPECT_EQ(20, TestOpt.getValue());
+
+  cl::ResetCommandLineParser();
+}
+
+// Test reset behavior with state stack
+TEST(CommandLineTest, ResetWithStateStack) {
+  StackOption<std::string> TestOpt("reset-test", cl::desc("Reset test option"));
+
+  // Parse in main state
+  const char *Args1[] = {"prog", "--reset-test", "main"};
+  EXPECT_TRUE(
+      cl::ParseCommandLineOptions(3, Args1, StringRef(), &llvm::nulls()));
+  EXPECT_EQ(1, TestOpt.getNumOccurrences());
+
+  // Push state and parse
+  {
+    cl::ThreadLocalParserStateGuard Guard;
+    const char *Args2[] = {"prog", "--reset-test", "thread"};
+    EXPECT_TRUE(
+        cl::ParseCommandLineOptions(3, Args2, StringRef(), &llvm::nulls()));
+    EXPECT_EQ(1, TestOpt.getNumOccurrences());
+    EXPECT_EQ("thread", std::string(TestOpt));
+
+    // Reset option in this state
+    TestOpt.reset();
+    EXPECT_EQ(0, TestOpt.getNumOccurrences());
+
+    // Parse again
+    const char *Args3[] = {"prog", "--reset-test", "after-reset"};
+    EXPECT_TRUE(
+        cl::ParseCommandLineOptions(3, Args3, StringRef(), &llvm::nulls()));
+    EXPECT_EQ(1, TestOpt.getNumOccurrences());
+    EXPECT_EQ("after-reset", std::string(TestOpt));
+  } // Pop state
+
+  // Main state should be unchanged
+  EXPECT_EQ(1, TestOpt.getNumOccurrences());
+  EXPECT_EQ("main", std::string(TestOpt));
+
+  cl::ResetCommandLineParser();
+}
+
+// Test sharing a CLI state between sequential contexts
+TEST(CommandLineTest, ShareStateSequential) {
+  StackOption<int> TestOpt("share-test", cl::desc("Share test option"));
+
+  // Parse in main state
+  const char *Args1[] = {"prog", "--share-test", "10"};
+  EXPECT_TRUE(
+      cl::ParseCommandLineOptions(3, Args1, StringRef(), &llvm::nulls()));
+  EXPECT_EQ(1, TestOpt.getNumOccurrences());
+  EXPECT_EQ(10, TestOpt.getValue());
+
+  // Main state cannot be shared (should return nullptr)
+  EXPECT_EQ(nullptr, cl::GetCurrentCLIStateToken());
+
+  // Create a new state and parse
+  std::shared_ptr<void> StateToken;
+  {
+    cl::ThreadLocalParserStateGuard Guard;
+    const char *Args2[] = {"prog", "--share-test", "20"};
+    EXPECT_TRUE(
+        cl::ParseCommandLineOptions(3, Args2, StringRef(), &llvm::nulls()));
+    EXPECT_EQ(1, TestOpt.getNumOccurrences());
+    EXPECT_EQ(20, TestOpt.getValue());
+
+    // Get token for this state
+    StateToken = cl::GetCurrentCLIStateToken();
+    EXPECT_NE(nullptr, StateToken);
+  } // Pop state
+
+  // Back to main state
+  EXPECT_EQ(1, TestOpt.getNumOccurrences());
+  EXPECT_EQ(10, TestOpt.getValue());
+
+  // Push the shared state again
+  {
+    cl::PushCLIState(std::move(StateToken));
+    // Should see the same state as before
+    EXPECT_EQ(1, TestOpt.getNumOccurrences());
+    EXPECT_EQ(20, TestOpt.getValue());
+
+    // Parse again in the shared state
+    const char *Args3[] = {"prog", "--share-test", "30"};
+    EXPECT_TRUE(
+        cl::ParseCommandLineOptions(3, Args3, StringRef(), &llvm::nulls()));
+    EXPECT_EQ(2, TestOpt.getNumOccurrences());
+    EXPECT_EQ(30, TestOpt.getValue());
+
+    cl::PopCLIState();
+  }
+
+  // Back to main state again
+  EXPECT_EQ(1, TestOpt.getNumOccurrences());
+  EXPECT_EQ(10, TestOpt.getValue());
+
+  cl::ResetCommandLineParser();
+}
+
+// Test sharing state across threads
+TEST(CommandLineTest, ShareStateAcrossThreads) {
+  StackOption<std::string> TestOpt("thread-share",
+                                   cl::desc("Thread share option"));
+
+  std::shared_ptr<void> StateToken;
+  std::atomic<bool> Thread1Done{false};
+  std::atomic<bool> Thread2Done{false};
+
+  // Thread 1: Create state and share it
+  std::thread Thread1([&]() {
+    cl::ThreadLocalParserStateGuard Guard;
+
+    const char *Args[] = {"prog", "--thread-share", "thread1"};
+    EXPECT_TRUE(
+        cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls()));
+    EXPECT_EQ(1, TestOpt.getNumOccurrences());
+    EXPECT_EQ("thread1", std::string(TestOpt));
+
+    // Get token and share with thread 2
+    StateToken = cl::GetCurrentCLIStateToken();
+    EXPECT_NE(nullptr, StateToken);
+    Thread1Done = true;
+  });
+
+  Thread1.join();
+  EXPECT_TRUE(Thread1Done.load());
+
+  // Thread 2: Use the shared state
+  std::thread Thread2([&]() {
+    // Wait for thread 1 to finish
+    while (!Thread1Done.load())
+      std::this_thread::yield();
+
+    // Push the shared state
+    cl::PushCLIState(std::shared_ptr<void>(StateToken));
+
+    // Should see the state from thread 1
+    EXPECT_EQ(1, TestOpt.getNumOccurrences());
+    EXPECT_EQ("thread1", std::string(TestOpt));
+
+    // Parse again in shared state
+    const char *Args[] = {"prog", "--thread-share", "thread2"};
+    EXPECT_TRUE(
+        cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls()));
+    EXPECT_EQ(2, TestOpt.getNumOccurrences());
+    EXPECT_EQ("thread2", std::string(TestOpt));
+
+    cl::PopCLIState();
+    Thread2Done = true;
+  });
+
+  Thread2.join();
+  EXPECT_TRUE(Thread2Done.load());
+
+  cl::ResetCommandLineParser();
+}
+
+// Test that changes in shared state are visible across contexts
+TEST(CommandLineTest, SharedStateVisibility) {
+  StackOption<int> Opt1("opt1", cl::desc("Option 1"));
+  StackOption<int> Opt2("opt2", cl::desc("Option 2"));
+
+  std::shared_ptr<void> StateToken;
+
+  // Create initial state
+  {
+    cl::ThreadLocalParserStateGuard Guard;
+    const char *Args[] = {"prog", "--opt1", "100"};
+    EXPECT_TRUE(
+        cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls()));
+    EXPECT_EQ(100, Opt1.getValue());
+    EXPECT_EQ(0, Opt2.getValue());
+
+    StateToken = cl::GetCurrentCLIStateToken();
+  }
+
+  // Use shared state in different context
+  {
+    cl::PushCLIState(std::shared_ptr<void>(StateToken));
+
+    // Should see opt1 from before
+    EXPECT_EQ(100, Opt1.getValue());
+    EXPECT_EQ(1, Opt1.getNumOccurrences());
+
+    // Parse opt2
+    const char *Args[] = {"prog", "--opt2", "200"};
+    EXPECT_TRUE(
+        cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls()));
+    EXPECT_EQ(200, Opt2.getValue());
+    EXPECT_EQ(1, Opt2.getNumOccurrences());
+
+    cl::PopCLIState();
+  }
+
+  // Use the same shared state again
+  {
+    cl::PushCLIState(std::move(StateToken));
+
+    // Both options should be set now
+    EXPECT_EQ(100, Opt1.getValue());
+    EXPECT_EQ(1, Opt1.getNumOccurrences());
+    EXPECT_EQ(200, Opt2.getValue());
+    EXPECT_EQ(1, Opt2.getNumOccurrences());
+
+    cl::PopCLIState();
+  }
+
+  cl::ResetCommandLineParser();
+}
+
+// Test sharing nested states
+TEST(CommandLineTest, ShareNestedState) {
+  StackOption<std::string> TestOpt("nested-share",
+                                   cl::desc("Nested share option"));
+
+  std::shared_ptr<void> Level1Token;
+  std::shared_ptr<void> Level2Token;
+
+  // Create level 1 state
+  {
+    cl::ThreadLocalParserStateGuard Guard1;
+    const char *Args[] = {"prog", "--nested-share", "level1"};
+    EXPECT_TRUE(
+        cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls()));
+    EXPECT_EQ("level1", std::string(TestOpt));
+    Level1Token = cl::GetCurrentCLIStateToken();
+
+    // Create level 2 state (nested)
+    {
+      cl::ThreadLocalParserStateGuard Guard2;
+      const char *Args2[] = {"prog", "--nested-share", "level2"};
+      EXPECT_TRUE(
+          cl::ParseCommandLineOptions(3, Args2, StringRef(), &llvm::nulls()));
+      EXPECT_EQ("level2", std::string(TestOpt));
+      EXPECT_EQ(1, TestOpt.getNumOccurrences());
+      Level2Token = cl::GetCurrentCLIStateToken();
+    }
+
+    // Back to level 1
+    EXPECT_EQ("level1", std::string(TestOpt));
+  }
+
+  // Reuse level 2 state
+  {
+    cl::PushCLIState(std::move(Level2Token));
+    EXPECT_EQ("level2", std::string(TestOpt));
+    EXPECT_EQ(1, TestOpt.getNumOccurrences());
+
+    // Parse again
+    const char *Args[] = {"prog", "--nested-share", "level2-revisited"};
+    EXPECT_TRUE(
+        cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls()));
+    EXPECT_EQ("level2-revisited", std::string(TestOpt));
+    EXPECT_EQ(2, TestOpt.getNumOccurrences());
+
+    cl::PopCLIState();
+  }
+
+  // Reuse level 1 state
+  {
+    cl::PushCLIState(std::move(Level1Token));
+    EXPECT_EQ("level1", std::string(TestOpt));
+    EXPECT_EQ(1, TestOpt.getNumOccurrences());
+    cl::PopCLIState();
+  }
+
+  cl::ResetCommandLineParser();
+}
+
+// Test multiple threads sharing same state concurrently
+TEST(CommandLineTest, ConcurrentSharedState) {
+  StackOption<int> TestOpt("concurrent", cl::desc("Concurrent option"));
+
+  // Create shared state
+  std::shared_ptr<void> StateToken;
+  {
+    cl::ThreadLocalParserStateGuard Guard;
+    const char *Args[] = {"prog", "--concurrent", "0"};
+    EXPECT_TRUE(
+        cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls()));
+    StateToken = cl::GetCurrentCLIStateToken();
+  }
+
+  std::atomic<int> Failures{0};
+  std::vector<std::thread> Threads;
+
+  // Multiple threads access the same shared state
+  for (int i = 0; i < 5; ++i) {
+    Threads.emplace_back([&, i]() {
+      cl::PushCLIState(std::shared_ptr<void>(StateToken));
+
+      // Parse with thread-specific value
+      std::string ValueStr = std::to_string(i * 10);
+      const char *Args[] = {"prog", "--concurrent", ValueStr.c_str()};
+      if (!cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls())) {
+        Failures++;
+      }
+
+      // Verify we can read the value
+      if (TestOpt.getValue() != i * 10) {
+        Failures++;
+      }
+
+      cl::PopCLIState();
+    });
+  }
+
+  for (auto &T : Threads)
+    T.join();
+
+  EXPECT_EQ(0, Failures.load()) << "Concurrent shared state access failed";
+
+  cl::ResetCommandLineParser();
+}
+
+// Test that state tokens keep state alive
+TEST(CommandLineTest, StateTokenLifetime) {
+  StackOption<int> TestOpt("lifetime", cl::desc("Lifetime test option"));
+
+  std::shared_ptr<void> Token1;
+  std::shared_ptr<void> Token2;
+
+  // Create state 1 and get token
+  {
+    cl::ThreadLocalParserStateGuard Guard;
+    const char *Args[] = {"prog", "--lifetime", "100"};
+    EXPECT_TRUE(
+        cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls()));
+    Token1 = cl::GetCurrentCLIStateToken();
+  }
+
+  // Create state 2 and get token
+  {
+    cl::ThreadLocalParserStateGuard Guard;
+    const char *Args[] = {"prog", "--lifetime", "200"};
+    EXPECT_TRUE(
+        cl::ParseCommandLineOptions(3, Args, StringRef(), &llvm::nulls()));
+    Token2 = cl::GetCurrentCLIStateToken();
+  }
+
+  // Both tokens should be valid
+  EXPECT_NE(nullptr, Token1);
+  EXPECT_NE(nullptr, Token2);
+
+  // Use token 1
+  {
+    cl::PushCLIState(std::shared_ptr<void>(Token1));
+    EXPECT_EQ(100, TestOpt.getValue());
+    cl::PopCLIState();
+  }
+
+  // Use token 2
+  {
+    cl::PushCLIState(std::shared_ptr<void>(Token2));
+    EXPECT_EQ(200, TestOpt.getValue());
+    cl::PopCLIState();
+  }
+
+  // Use token 1 again
+  {
+    cl::PushCLIState(std::move(Token1));
+    EXPECT_EQ(100, TestOpt.getValue());
+    cl::PopCLIState();
+  }
 
   cl::ResetCommandLineParser();
 }

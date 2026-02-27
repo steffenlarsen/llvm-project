@@ -241,7 +241,7 @@ int main(int argc, char **argv) {
   cl::HideUnrelatedOptions({&SplitCategory, &getColorCategory()});
   cl::ParseCommandLineOptions(argc, argv, "LLVM module splitter\n");
 
-  Triple TT(MTriple);
+  Triple TT(*MTriple);
 
   std::unique_ptr<TargetMachine> TM;
   if (!MTriple.empty()) {

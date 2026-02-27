@@ -425,7 +425,7 @@ int main(int argc, char **argv) {
     return 1;
   // Now that GetTarget() has (potentially) replaced TripleName, it's safe to
   // construct the Triple object.
-  Triple TheTriple(TripleName);
+  Triple TheTriple(*TripleName);
 
   ErrorOr<std::unique_ptr<MemoryBuffer>> BufferPtr =
       MemoryBuffer::getFileOrSTDIN(InputFilename, /*IsText=*/true);
@@ -588,7 +588,7 @@ int main(int argc, char **argv) {
     Str = std::move(FFS);
   } else if (FileType == OFT_AssemblyFile) {
     unsigned AsmVariant = MAI->getOutputAssemblerDialect();
-    IP.reset(TheTarget->createMCInstPrinter(Triple(TripleName), AsmVariant,
+    IP.reset(TheTarget->createMCInstPrinter(Triple(*TripleName), AsmVariant,
                                             *MAI, *MCII, *MRI));
 
     if (!IP) {
@@ -630,7 +630,7 @@ int main(int argc, char **argv) {
     Str.reset(TheTarget->createAsmStreamer(Ctx, std::move(FOut), std::move(IP),
                                            std::move(CE), std::move(MAB)));
 
-    Triple T(TripleName);
+    Triple T(*TripleName);
     if (T.isLFI())
       initializeLFIMCStreamer(*Str.get(), Ctx, T);
   } else if (FileType == OFT_Null) {

@@ -42,7 +42,7 @@ static cl::opt<ExtensionSet, false, SPIRVExtensionsParser>
 // Provides access to the cl::opt<...> `Extensions` variable from outside of the
 // module.
 void SPIRVSubtarget::addExtensionsToClOpt(const ExtensionSet &AllowList) {
-  Extensions.insert(AllowList.begin(), AllowList.end());
+  Extensions->insert(AllowList.begin(), AllowList.end());
 }
 
 // Compare version numbers, but allow 0 to mean unspecified.
@@ -98,8 +98,8 @@ SPIRVSubtarget::SPIRVSubtarget(const Triple &TT, const std::string &CPU,
 
   // Set the default extensions based on the target triple.
   if (TargetTriple.getVendor() == Triple::Intel) {
-    Extensions.insert(SPIRV::Extension::SPV_INTEL_function_pointers);
-    Extensions.insert(
+    Extensions->insert(SPIRV::Extension::SPV_INTEL_function_pointers);
+    Extensions->insert(
         SPIRV::Extension::SPV_EXT_relaxed_printf_string_address_space);
   }
   if (TargetTriple.getVendor() == Triple::AMD)

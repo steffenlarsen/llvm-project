@@ -907,10 +907,10 @@ int main(int argc, char **argv) {
   // in which case all sections are dumped, or B) a specific section is
   // requested.
 #define HANDLE_DWARF_SECTION(ENUM_NAME, ELF_NAME, CMDLINE_NAME, OPTION)        \
-  if (Dump##ENUM_NAME.IsRequested) {                                           \
+  if (Dump##ENUM_NAME->IsRequested) {                                          \
     DumpType |= DIDT_##ENUM_NAME;                                              \
-    if (Dump##ENUM_NAME.HasValue) {                                            \
-      DumpOffsets[DIDT_ID_##ENUM_NAME] = Dump##ENUM_NAME.Val;                  \
+    if (Dump##ENUM_NAME->HasValue) {                                           \
+      DumpOffsets[DIDT_ID_##ENUM_NAME] = Dump##ENUM_NAME->Val;                 \
       OffsetRequested = true;                                                  \
     }                                                                          \
   }

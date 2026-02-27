@@ -510,7 +510,7 @@ int main(int argc, char **argv, char * const *envp) {
   builder.setOptLevel(getOptLevel());
 
   TargetOptions Options =
-      codegen::InitTargetOptionsFromCodeGenFlags(Triple(TargetTriple));
+      codegen::InitTargetOptionsFromCodeGenFlags(Triple(*TargetTriple));
   if (codegen::getFloatABIForCalls() != FloatABI::Default)
     Options.FloatABIType = codegen::getFloatABIForCalls();
 
@@ -1228,7 +1228,7 @@ static Expected<std::unique_ptr<orc::ExecutorProcessControl>> launchRemote() {
     std::unique_ptr<char[]> ChildPath, ChildIn, ChildOut;
     {
       ChildPath.reset(new char[ChildExecPath.size() + 1]);
-      llvm::copy(ChildExecPath, &ChildPath[0]);
+      llvm::copy(*ChildExecPath, &ChildPath[0]);
       ChildPath[ChildExecPath.size()] = '\0';
       std::string ChildInStr = utostr(PipeFD[0][0]);
       ChildIn.reset(new char[ChildInStr.size() + 1]);

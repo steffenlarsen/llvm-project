@@ -384,7 +384,7 @@ int main(int argc, char **argv) {
     return mlir::asMainReturnCode(mlir::failure());
   }
 
-  LogicalResult result = rewriter->invoke(*rewriterOr, output->os());
+  LogicalResult result = (*rewriter)->invoke(*rewriterOr, output->os());
   if (succeeded(result)) {
     rewriterOr->write(output->os());
     output->keep();
