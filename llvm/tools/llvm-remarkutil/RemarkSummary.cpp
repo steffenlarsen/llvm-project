@@ -81,7 +81,7 @@ public:
 /// Check if any summary strategy options are explicitly enabled.
 static bool isAnyStrategyRequested() {
   for (auto &[_, Opt] : cl::getRegisteredOptions(SummarySub)) {
-    if (!is_contained(Opt->Categories, &SummaryStrategyCat))
+    if (!is_contained(Opt->getCategoryList(), &SummaryStrategyCat))
       continue;
     if (!Opt->getNumOccurrences())
       continue;

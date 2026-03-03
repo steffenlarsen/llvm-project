@@ -108,31 +108,31 @@ TEST(CommandLineTest, ModifyExisitingOption) {
   cl::Option *Retrieved = Map["test-option"];
   ASSERT_EQ(&TestOption, Retrieved) << "Retrieved wrong option.";
 
-  ASSERT_NE(Retrieved->Categories.end(),
-            find_if(Retrieved->Categories,
+  ASSERT_NE(Retrieved->getCategoryList().end(),
+            find_if(Retrieved->getCategoryList(),
                     [&](const llvm::cl::OptionCategory *Cat) {
                       return Cat == &cl::getGeneralCategory();
                     }))
       << "Incorrect default option category.";
 
   Retrieved->addCategory(TestCategory);
-  ASSERT_NE(Retrieved->Categories.end(),
-            find_if(Retrieved->Categories,
+  ASSERT_NE(Retrieved->getCategoryList().end(),
+            find_if(Retrieved->getCategoryList(),
                     [&](const llvm::cl::OptionCategory *Cat) {
                       return Cat == &TestCategory;
                     }))
       << "Failed to modify option's option category.";
 
   Retrieved->setDescription(Description);
-  ASSERT_STREQ(Retrieved->HelpStr.data(), Description)
+  ASSERT_STREQ(Retrieved->getDescription().data(), Description)
       << "Changing option description failed.";
 
   Retrieved->setArgStr(ArgString);
-  ASSERT_STREQ(ArgString, Retrieved->ArgStr.data())
+  ASSERT_STREQ(ArgString, Retrieved->getArgStr().data())
       << "Failed to modify option's Argument string.";
 
   Retrieved->setValueStr(ValueString);
-  ASSERT_STREQ(Retrieved->ValueStr.data(), ValueString)
+  ASSERT_STREQ(Retrieved->getValueStr().data(), ValueString)
       << "Failed to modify option's Value string.";
 
   Retrieved->setHiddenFlag(cl::Hidden);
@@ -143,8 +143,8 @@ TEST(CommandLineTest, ModifyExisitingOption) {
 TEST(CommandLineTest, UseOptionCategory) {
   StackOption<int> TestOption2("test-option", cl::cat(TestCategory));
 
-  ASSERT_NE(TestOption2.Categories.end(),
-            find_if(TestOption2.Categories,
+  ASSERT_NE(TestOption2.getCategoryList().end(),
+            find_if(TestOption2.getCategoryList(),
                          [&](const llvm::cl::OptionCategory *Cat) {
                            return Cat == &TestCategory;
                          }))
@@ -157,16 +157,16 @@ TEST(CommandLineTest, UseMultipleCategories) {
                                cl::cat(cl::getGeneralCategory()));
 
   // Make sure cl::getGeneralCategory() wasn't added twice.
-  ASSERT_EQ(TestOption2.Categories.size(), 2U);
+  ASSERT_EQ(TestOption2.getCategoryList().size(), 2U);
 
-  ASSERT_NE(TestOption2.Categories.end(),
-            find_if(TestOption2.Categories,
+  ASSERT_NE(TestOption2.getCategoryList().end(),
+            find_if(TestOption2.getCategoryList(),
                          [&](const llvm::cl::OptionCategory *Cat) {
                            return Cat == &TestCategory;
                          }))
       << "Failed to assign Option Category.";
-  ASSERT_NE(TestOption2.Categories.end(),
-            find_if(TestOption2.Categories,
+  ASSERT_NE(TestOption2.getCategoryList().end(),
+            find_if(TestOption2.getCategoryList(),
                     [&](const llvm::cl::OptionCategory *Cat) {
                       return Cat == &cl::getGeneralCategory();
                     }))
@@ -175,20 +175,20 @@ TEST(CommandLineTest, UseMultipleCategories) {
   cl::OptionCategory AnotherCategory("Additional test Options", "Description");
   StackOption<int> TestOption("test-option", cl::cat(TestCategory),
                               cl::cat(AnotherCategory));
-  ASSERT_EQ(TestOption.Categories.end(),
-            find_if(TestOption.Categories,
+  ASSERT_EQ(TestOption.getCategoryList().end(),
+            find_if(TestOption.getCategoryList(),
                     [&](const llvm::cl::OptionCategory *Cat) {
                       return Cat == &cl::getGeneralCategory();
                     }))
       << "Failed to remove General Category.";
-  ASSERT_NE(TestOption.Categories.end(),
-            find_if(TestOption.Categories,
+  ASSERT_NE(TestOption.getCategoryList().end(),
+            find_if(TestOption.getCategoryList(),
                          [&](const llvm::cl::OptionCategory *Cat) {
                            return Cat == &TestCategory;
                          }))
       << "Failed to assign Option Category.";
-  ASSERT_NE(TestOption.Categories.end(),
-            find_if(TestOption.Categories,
+  ASSERT_NE(TestOption.getCategoryList().end(),
+            find_if(TestOption.getCategoryList(),
                          [&](const llvm::cl::OptionCategory *Cat) {
                            return Cat == &AnotherCategory;
                          }))
@@ -1177,7 +1177,7 @@ TEST(CommandLineTest, SetDefaultValue) {
 
   for (auto &OM : cl::getRegisteredOptions(cl::SubCommand::getTopLevel())) {
     cl::Option *O = OM.second;
-    if (O->ArgStr == "opt2") {
+    if (O->getArgStr() == "opt2") {
       continue;
     }
     O->setDefault();
@@ -2191,19 +2191,19 @@ TEST(CommandLineTest, DefaultValue) {
   EXPECT_TRUE(OS.str().empty());
 
   EXPECT_TRUE(!BoolOption);
-  EXPECT_FALSE(BoolOption.Default.hasValue());
+  EXPECT_FALSE(BoolOption.getDefault().hasValue());
   EXPECT_EQ(0, BoolOption.getNumOccurrences());
 
   EXPECT_EQ("", StrOption);
-  EXPECT_FALSE(StrOption.Default.hasValue());
+  EXPECT_FALSE(StrOption.getDefault().hasValue());
   EXPECT_EQ(0, StrOption.getNumOccurrences());
 
   EXPECT_TRUE(BoolInitOption);
-  EXPECT_TRUE(BoolInitOption.Default.hasValue());
+  EXPECT_TRUE(BoolInitOption.getDefault().hasValue());
   EXPECT_EQ(0, BoolInitOption.getNumOccurrences());
 
   EXPECT_EQ("str-default-value", StrInitOption);
-  EXPECT_TRUE(StrInitOption.Default.hasValue());
+  EXPECT_TRUE(StrInitOption.getDefault().hasValue());
   EXPECT_EQ(0, StrInitOption.getNumOccurrences());
 
   const char *Args2[] = {"prog", "-bool-option", "-str-option=str-value",
@@ -2214,19 +2214,19 @@ TEST(CommandLineTest, DefaultValue) {
   EXPECT_TRUE(OS.str().empty());
 
   EXPECT_TRUE(BoolOption);
-  EXPECT_FALSE(BoolOption.Default.hasValue());
+  EXPECT_FALSE(BoolOption.getDefault().hasValue());
   EXPECT_EQ(1, BoolOption.getNumOccurrences());
 
   EXPECT_EQ("str-value", StrOption);
-  EXPECT_FALSE(StrOption.Default.hasValue());
+  EXPECT_FALSE(StrOption.getDefault().hasValue());
   EXPECT_EQ(1, StrOption.getNumOccurrences());
 
   EXPECT_FALSE(BoolInitOption);
-  EXPECT_TRUE(BoolInitOption.Default.hasValue());
+  EXPECT_TRUE(BoolInitOption.getDefault().hasValue());
   EXPECT_EQ(1, BoolInitOption.getNumOccurrences());
 
   EXPECT_EQ("str-init-value", StrInitOption);
-  EXPECT_TRUE(StrInitOption.Default.hasValue());
+  EXPECT_TRUE(StrInitOption.getDefault().hasValue());
   EXPECT_EQ(1, StrInitOption.getNumOccurrences());
 }
 

@@ -96,8 +96,8 @@ static llvm::Error sanitizeOopArguments(const char *ArgV0) {
   if (!!OOPExecutor.getNumOccurrences() &&
       !!OOPExecutorConnect.getNumOccurrences())
     return llvm::make_error<llvm::StringError>(
-        "Only one of -" + OOPExecutor.ArgStr + " and -" +
-            OOPExecutorConnect.ArgStr + " can be specified",
+        "Only one of -" + OOPExecutor.getArgStr() + " and -" +
+            OOPExecutorConnect.getArgStr() + " can be specified",
         llvm::inconvertibleErrorCode());
 
   llvm::Triple SystemTriple(llvm::sys::getProcessTriple());

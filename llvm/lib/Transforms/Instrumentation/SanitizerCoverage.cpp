@@ -511,7 +511,7 @@ bool ModuleSanitizerCoverage::instrumentModule() {
 
   if (Options.GatedCallbacks) {
     if (!Options.TracePCGuard && !Options.TraceCmp) {
-      C->emitError(StringRef("'") + ClGatedCallbacks.ArgStr +
+      C->emitError(StringRef("'") + ClGatedCallbacks.getArgStr() +
                    "' is only supported with trace-pc-guard or trace-cmp");
       return true;
     }

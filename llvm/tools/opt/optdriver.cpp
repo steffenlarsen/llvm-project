@@ -475,7 +475,7 @@ optMain(int argc, char **argv,
   }
 
   if (!UseNPM && PluginList.size()) {
-    errs() << argv[0] << ": " << PassPlugins.ArgStr
+    errs() << argv[0] << ": " << PassPlugins.getArgStr()
            << " specified with legacy PM.\n";
     return 1;
   }

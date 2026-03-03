@@ -38,10 +38,10 @@ private:
     // options are global and would pollute the global namespace with our
     // counters.  Rather than go that route, we have just overridden the
     // printing, which only a few things call anyway.
-    outs() << "  -" << ArgStr;
+    outs() << "  -" << getArgStr();
     // All of the other options in CommandLine.cpp use ArgStr.size() + 6 for
     // width, so we do the same.
-    Option::printHelpStr(HelpStr, GlobalWidth, ArgStr.size() + 6);
+    Option::printHelpStr(getDescription(), GlobalWidth, getArgStr().size() + 6);
     const auto &CounterInstance = DebugCounter::instance();
     for (const auto &Entry : CounterInstance) {
       const auto &[Name, Desc] = CounterInstance.getCounterDesc(Entry.second);

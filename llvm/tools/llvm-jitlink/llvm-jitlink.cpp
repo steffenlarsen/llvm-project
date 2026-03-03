@@ -901,13 +901,13 @@ static Error loadDylibs(Session &S) {
 static Expected<std::unique_ptr<ExecutorProcessControl>> launchExecutor() {
 #ifndef LLVM_ON_UNIX
   // FIXME: Add support for Windows.
-  return make_error<StringError>("-" + OutOfProcessExecutor.ArgStr +
+  return make_error<StringError>("-" + OutOfProcessExecutor.getArgStr() +
                                      " not supported on non-unix platforms",
                                  inconvertibleErrorCode());
 #elif !LLVM_ENABLE_THREADS
   // Out of process mode using SimpleRemoteEPC depends on threads.
   return make_error<StringError>(
-      "-" + OutOfProcessExecutor.ArgStr +
+      "-" + OutOfProcessExecutor.getArgStr() +
           " requires threads, but LLVM was built with "
           "LLVM_ENABLE_THREADS=Off",
       inconvertibleErrorCode());
@@ -1022,13 +1022,13 @@ static Expected<int> connectTCPSocket(std::string Host, std::string PortStr) {
 static Expected<std::unique_ptr<ExecutorProcessControl>> connectToExecutor() {
 #ifndef LLVM_ON_UNIX
   // FIXME: Add TCP support for Windows.
-  return make_error<StringError>("-" + OutOfProcessExecutorConnect.ArgStr +
+  return make_error<StringError>("-" + OutOfProcessExecutorConnect.getArgStr() +
                                      " not supported on non-unix platforms",
                                  inconvertibleErrorCode());
 #elif !LLVM_ENABLE_THREADS
   // Out of process mode using SimpleRemoteEPC depends on threads.
   return make_error<StringError>(
-      "-" + OutOfProcessExecutorConnect.ArgStr +
+      "-" + OutOfProcessExecutorConnect.getArgStr() +
           " requires threads, but LLVM was built with "
           "LLVM_ENABLE_THREADS=Off",
       inconvertibleErrorCode());
@@ -1038,11 +1038,11 @@ static Expected<std::unique_ptr<ExecutorProcessControl>> connectToExecutor() {
   std::tie(Host, PortStr) = StringRef(OutOfProcessExecutorConnect).split(':');
   if (Host.empty())
     return createTCPSocketError("Host name for -" +
-                                OutOfProcessExecutorConnect.ArgStr +
+                                OutOfProcessExecutorConnect.getArgStr() +
                                 " can not be empty");
   if (PortStr.empty())
     return createTCPSocketError("Port number in -" +
-                                OutOfProcessExecutorConnect.ArgStr +
+                                OutOfProcessExecutorConnect.getArgStr() +
                                 " can not be empty");
   int Port = 0;
   if (PortStr.getAsInteger(10, Port))
@@ -1300,7 +1300,7 @@ Session::Session(std::unique_ptr<ExecutorProcessControl> EPC, Error &Err)
       }
     } else {
       Err = make_error<StringError>(
-          "-" + OrcRuntime.ArgStr + " specified, but format " +
+          "-" + OrcRuntime.getArgStr() + " specified, but format " +
               Triple::getObjectFormatTypeName(TT.getObjectFormat()) +
               " not supported",
           inconvertibleErrorCode());
@@ -1846,14 +1846,14 @@ static Error sanitizeArguments(const Triple &TT, const char *ArgV0) {
       !!OutOfProcessExecutorConnect.getNumOccurrences()) {
     if (NoExec)
       return make_error<StringError>("-noexec cannot be used with " +
-                                         OutOfProcessExecutor.ArgStr + " or " +
-                                         OutOfProcessExecutorConnect.ArgStr,
+                                         OutOfProcessExecutor.getArgStr() + " or " +
+                                         OutOfProcessExecutorConnect.getArgStr(),
                                      inconvertibleErrorCode());
 
     if (MaterializationThreads == 0)
       return make_error<StringError>("-threads=0 cannot be used with " +
-                                         OutOfProcessExecutor.ArgStr + " or " +
-                                         OutOfProcessExecutorConnect.ArgStr,
+                                         OutOfProcessExecutor.getArgStr() + " or " +
+                                         OutOfProcessExecutorConnect.getArgStr(),
                                      inconvertibleErrorCode());
   }
 
@@ -1867,8 +1867,8 @@ static Error sanitizeArguments(const Triple &TT, const char *ArgV0) {
   if (!!OutOfProcessExecutor.getNumOccurrences() &&
       !!OutOfProcessExecutorConnect.getNumOccurrences())
     return make_error<StringError>(
-        "Only one of -" + OutOfProcessExecutor.ArgStr + " and -" +
-            OutOfProcessExecutorConnect.ArgStr + " can be specified",
+        "Only one of -" + OutOfProcessExecutor.getArgStr() + " and -" +
+            OutOfProcessExecutorConnect.getArgStr() + " can be specified",
         inconvertibleErrorCode());
 
   // If -oop-executor was used but no value was specified then use a sensible
@@ -1913,8 +1913,8 @@ static Error sanitizeArguments(const Triple &TT, const char *ArgV0) {
 
   if (!SymbolicateWith.empty()) {
     if (!WriteSymbolTableTo.empty())
-      errs() << WriteSymbolTableTo.ArgStr << " specified with "
-             << SymbolicateWith.ArgStr << ", ignoring.";
+      errs() << WriteSymbolTableTo.getArgStr() << " specified with "
+             << SymbolicateWith.getArgStr() << ", ignoring.";
     if (InputFiles.empty())
       InputFiles.push_back("-");
   }

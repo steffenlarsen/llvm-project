@@ -247,7 +247,7 @@ bool tryParsePipelineText(PassBuilder &PB,
   // Verify the pipeline is parseable:
   PassManagerT PM;
   if (auto Err = PB.parsePassPipeline(PM, PipelineOpt)) {
-    errs() << "Could not parse -" << PipelineOpt.ArgStr
+    errs() << "Could not parse -" << PipelineOpt.getArgStr()
            << " pipeline: " << toString(std::move(Err))
            << "... I'm going to ignore it.\n";
     return false;

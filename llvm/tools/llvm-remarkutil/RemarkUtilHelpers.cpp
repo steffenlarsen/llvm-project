@@ -70,12 +70,12 @@ Format getSerializerFormat(StringRef OutputFileName, Format SelectedFormat,
 
 Expected<FilterMatcher>
 FilterMatcher::createRE(const llvm::cl::opt<std::string> &Arg) {
-  return createRE(Arg.ArgStr, Arg);
+  return createRE(Arg.getArgStr(), Arg);
 }
 
 Expected<FilterMatcher>
 FilterMatcher::createRE(StringRef Filter, const cl::list<std::string> &Arg) {
-  return createRE(Arg.ArgStr, Filter);
+  return createRE(Arg.getArgStr(), Filter);
 }
 
 Expected<FilterMatcher> FilterMatcher::createRE(StringRef Arg,
@@ -94,8 +94,8 @@ FilterMatcher::createExactOrRE(const llvm::cl::opt<std::string> &ExactArg,
                                const llvm::cl::opt<std::string> &REArg) {
   if (!ExactArg.empty() && !REArg.empty())
     return createStringError(make_error_code(std::errc::invalid_argument),
-                             "conflicting arguments: --" + ExactArg.ArgStr +
-                                 " and --" + REArg.ArgStr);
+                             "conflicting arguments: --" + ExactArg.getArgStr() +
+                                 " and --" + REArg.getArgStr());
 
   if (!ExactArg.empty())
     return createExact(ExactArg);

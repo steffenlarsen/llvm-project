@@ -279,13 +279,14 @@ class LLVM_ABI Option {
   uint16_t Position;             // Position of last occurrence of the option
   uint16_t AdditionalVals;       // Greater than 0 for multi-valued option.
 
-public:
   StringRef ArgStr;   // The argument string itself (ex: "help", "o")
   StringRef HelpStr;  // The descriptive text message for -help
   StringRef ValueStr; // String describing what the value of this option is
   SmallVector<OptionCategory *, 1>
       Categories;                    // The Categories this option belongs to
   SmallPtrSet<SubCommand *, 1> Subs; // The subcommands this option belongs to.
+
+public:
 
   inline enum NumOccurrencesFlag getNumOccurrencesFlag() const {
     return (enum NumOccurrencesFlag)Occurrences;
@@ -331,6 +332,12 @@ public:
   void setPosition(unsigned pos) { Position = pos; }
   void addCategory(OptionCategory &C);
   void addSubCommand(SubCommand &S) { Subs.insert(&S); }
+
+  StringRef getArgStr() const { return ArgStr; }
+  StringRef getDescription() const { return HelpStr; }
+  StringRef getValueStr() const { return ValueStr; }
+  ArrayRef<OptionCategory *> getCategoryList() const { return Categories; }
+  const SmallPtrSetImpl<SubCommand *> &getSubCommands() const { return Subs; }
 
 protected:
   explicit Option(enum NumOccurrencesFlag OccurrencesFlag,
@@ -1329,7 +1336,7 @@ template <> struct applicator<FormattingFlags> {
 
 template <> struct applicator<MiscFlags> {
   static void opt(MiscFlags MF, Option &O) {
-    assert((MF != Grouping || O.ArgStr.size() == 1) &&
+    assert((MF != Grouping || O.getArgStr().size() == 1) &&
            "cl::Grouping can only apply to single character Options.");
     O.setMiscFlag(MF);
   }
@@ -1420,10 +1427,10 @@ public:
 // to get at the value.
 //
 template <class DataType> class opt_storage<DataType, false, false> {
-public:
   DataType Value;
   OptionValue<DataType> Default;
 
+public:
   // Make sure we initialize the value with the default constructor for the
   // type.
   opt_storage() : Value(DataType()), Default() {}
@@ -1453,6 +1460,8 @@ class opt
     : public Option,
       public opt_storage<DataType, ExternalStorage, std::is_class_v<DataType>> {
   ParserClass Parser;
+
+  std::function<void(const typename ParserClass::parser_data_type &)> Callback;
 
   bool handleOccurrence(unsigned pos, StringRef ArgName,
                         StringRef Arg) override {
@@ -1541,8 +1550,6 @@ public:
       std::function<void(const typename ParserClass::parser_data_type &)> CB) {
     Callback = CB;
   }
-
-  std::function<void(const typename ParserClass::parser_data_type &)> Callback;
 };
 
 #if !(defined(LLVM_ENABLE_LLVM_EXPORT_ANNOTATIONS) && defined(_MSC_VER))
@@ -1697,6 +1704,7 @@ template <class DataType, class StorageClass = bool,
 class list : public Option, public list_storage<DataType, StorageClass> {
   std::vector<unsigned> Positions;
   ParserClass Parser;
+  std::function<void(const typename ParserClass::parser_data_type &)> Callback;
 
   enum ValueExpected getValueExpectedFlagDefault() const override {
     return Parser.getValueExpectedFlagDefault();
@@ -1788,8 +1796,6 @@ public:
       std::function<void(const typename ParserClass::parser_data_type &)> CB) {
     Callback = CB;
   }
-
-  std::function<void(const typename ParserClass::parser_data_type &)> Callback;
 };
 
 // Modifier to set the number of additional values.
@@ -1878,6 +1884,7 @@ template <class DataType, class Storage = bool,
 class bits : public Option, public bits_storage<DataType, Storage> {
   std::vector<unsigned> Positions;
   ParserClass Parser;
+  std::function<void(const typename ParserClass::parser_data_type &)> Callback;
 
   enum ValueExpected getValueExpectedFlagDefault() const override {
     return Parser.getValueExpectedFlagDefault();
@@ -1944,8 +1951,6 @@ public:
       std::function<void(const typename ParserClass::parser_data_type &)> CB) {
     Callback = CB;
   }
-
-  std::function<void(const typename ParserClass::parser_data_type &)> Callback;
 };
 
 //===----------------------------------------------------------------------===//

@@ -3377,7 +3377,7 @@ static int show_main(StringRef ProgName) {
   if (Filename.empty() && DebugInfoFilename.empty())
     exitWithError(
         "the positional argument '<profdata-file>' is required unless '--" +
-        DebugInfoFilename.ArgStr + "' is provided");
+        DebugInfoFilename.getArgStr() + "' is provided");
 
   if (Filename == OutputFilename) {
     errs() << ProgName
@@ -3424,7 +3424,7 @@ static int order_main() {
   ArrayRef Traces = Reader->getTemporalProfTraces();
   if (NumTestTraces && NumTestTraces >= Traces.size())
     exitWithError(
-        "--" + NumTestTraces.ArgStr +
+        "--" + NumTestTraces.getArgStr() +
         " must be smaller than the total number of traces: expected: < " +
         Twine(Traces.size()) + ", actual: " + Twine(NumTestTraces));
   ArrayRef TestTraces = Traces.take_back(NumTestTraces);

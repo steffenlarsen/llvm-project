@@ -194,17 +194,18 @@ public:
                                bool LongOptionsUseDoubleDash = false);
 
   void forEachSubCommand(Option &Opt, function_ref<void(SubCommand &)> Action) {
-    if (Opt.Subs.empty()) {
+    if (Opt.getSubCommands().empty()) {
       Action(SubCommand::getTopLevel());
       return;
     }
-    if (Opt.Subs.size() == 1 && *Opt.Subs.begin() == &SubCommand::getAll()) {
+    if (Opt.getSubCommands().size() == 1 &&
+        *Opt.getSubCommands().begin() == &SubCommand::getAll()) {
       for (auto *SC : RegisteredSubCommands)
         Action(*SC);
       Action(SubCommand::getAll());
       return;
     }
-    for (auto *SC : Opt.Subs) {
+    for (auto *SC : Opt.getSubCommands()) {
       assert(SC != &SubCommand::getAll() &&
              "SubCommand::getAll() should not be used with other subcommands");
       Action(*SC);
@@ -230,13 +231,13 @@ public:
     bool HadErrors = false;
     if (O->hasArgStr()) {
       // If it's a DefaultOption, check to make sure it isn't already there.
-      if (O->isDefaultOption() && SC->OptionsMap.contains(O->ArgStr))
+      if (O->isDefaultOption() && SC->OptionsMap.contains(O->getArgStr()))
         return;
 
       // Add argument to the argument map!
-      if (!SC->OptionsMap.insert(std::make_pair(O->ArgStr, O)).second) {
-        errs() << ProgramName << ": CommandLine Error: Option '" << O->ArgStr
-               << "' registered more than once!\n";
+      if (!SC->OptionsMap.insert(std::make_pair(O->getArgStr(), O)).second) {
+        errs() << ProgramName << ": CommandLine Error: Option '"
+               << O->getArgStr() << "' registered more than once!\n";
         HadErrors = true;
       }
     }
@@ -274,7 +275,7 @@ public:
     SmallVector<StringRef, 16> OptionNames;
     O->getExtraOptionNames(OptionNames);
     if (O->hasArgStr())
-      OptionNames.push_back(O->ArgStr);
+      OptionNames.push_back(O->getArgStr());
 
     SubCommand &Sub = *SC;
     auto End = Sub.OptionsMap.end();
@@ -332,11 +333,11 @@ public:
   void updateArgStr(Option *O, StringRef NewName, SubCommand *SC) {
     SubCommand &Sub = *SC;
     if (!Sub.OptionsMap.insert(std::make_pair(NewName, O)).second) {
-      errs() << ProgramName << ": CommandLine Error: Option '" << O->ArgStr
+      errs() << ProgramName << ": CommandLine Error: Option '" << O->getArgStr()
              << "' registered more than once!\n";
       report_fatal_error("inconsistency in registered CommandLine options");
     }
-    Sub.OptionsMap.erase(O->ArgStr);
+    Sub.OptionsMap.erase(O->getArgStr());
   }
 
   void updateArgStr(Option *O, StringRef NewName) {
@@ -611,7 +612,7 @@ static Option *LookupNearestOption(StringRef Arg,
     SmallVector<StringRef, 16> OptionNames;
     O->getExtraOptionNames(OptionNames);
     if (O->hasArgStr())
-      OptionNames.push_back(O->ArgStr);
+      OptionNames.push_back(O->getArgStr());
 
     bool PermitValue = O->getValueExpectedFlag() != cl::ValueDisallowed;
     StringRef Flag = PermitValue ? LHS : Arg;
@@ -724,7 +725,7 @@ static inline bool ProvideOption(Option *Handler, StringRef ArgName,
 
 bool llvm::cl::ProvidePositionalOption(Option *Handler, StringRef Arg, int i) {
   int Dummy = i;
-  return ProvideOption(Handler, Handler->ArgStr, Arg, 0, nullptr, Dummy);
+  return ProvideOption(Handler, Handler->getArgStr(), Arg, 0, nullptr, Dummy);
 }
 
 // getOptionPred - Check to see if there are any options that satisfy the
@@ -1598,7 +1599,7 @@ bool CommandLineParser::ParseCommandLineOptions(
                      "another positional argument will match an "
                      "unbounded number of values, and this option"
                      " does not require a value!");
-        *Errs << ProgramName << ": CommandLine Error: Option '" << Opt->ArgStr
+        *Errs << ProgramName << ": CommandLine Error: Option '" << Opt->getArgStr()
               << "' is all messed up!\n";
         *Errs << PositionalOpts.size();
         ErrorParsing = true;
@@ -1890,9 +1891,9 @@ bool Option::addOccurrence(unsigned pos, StringRef ArgName, StringRef Value,
 // has been specified yet.
 //
 static StringRef getValueStr(const Option &O, StringRef DefaultMsg) {
-  if (O.ValueStr.empty())
+  if (O.getValueStr().empty())
     return DefaultMsg;
-  return O.ValueStr;
+  return O.getValueStr();
 }
 
 //===----------------------------------------------------------------------===//
@@ -1944,7 +1945,7 @@ void alias::printOptionInfo(size_t GlobalWidth) const {
 
 // Return the width of the option tag for printing...
 size_t basic_parser_impl::getOptionWidth(const Option &O) const {
-  size_t Len = argPlusPrefixesSize(O.ArgStr);
+  size_t Len = argPlusPrefixesSize(O.getArgStr());
   auto ValName = getValueName();
   if (!ValName.empty()) {
     size_t FormattingLen = 3;
@@ -1961,7 +1962,7 @@ size_t basic_parser_impl::getOptionWidth(const Option &O) const {
 //
 void basic_parser_impl::printOptionInfo(const Option &O,
                                         size_t GlobalWidth) const {
-  outs() << PrintArg(O.ArgStr);
+  outs() << PrintArg(O.getArgStr());
 
   auto ValName = getValueName();
   if (!ValName.empty()) {
@@ -1970,18 +1971,18 @@ void basic_parser_impl::printOptionInfo(const Option &O,
     } else if (O.getValueExpectedFlag() == ValueOptional)
       outs() << "[=<" << getValueStr(O, ValName) << ">]";
     else {
-      outs() << (O.ArgStr.size() == 1 ? " <" : "=<") << getValueStr(O, ValName)
+      outs() << (O.getArgStr().size() == 1 ? " <" : "=<") << getValueStr(O, ValName)
              << '>';
     }
   }
 
-  Option::printHelpStr(O.HelpStr, GlobalWidth, getOptionWidth(O));
+  Option::printHelpStr(O.getDescription(), GlobalWidth, getOptionWidth(O));
 }
 
 void basic_parser_impl::printOptionName(const Option &O,
                                         size_t GlobalWidth) const {
-  outs() << PrintArg(O.ArgStr);
-  outs().indent(GlobalWidth - O.ArgStr.size());
+  outs() << PrintArg(O.getArgStr());
+  outs().indent(GlobalWidth - O.getArgStr().size());
 }
 
 // parser<bool> implementation
@@ -2111,7 +2112,7 @@ static bool shouldPrintOption(StringRef Name, StringRef Description,
 size_t generic_parser_base::getOptionWidth(const Option &O) const {
   if (O.hasArgStr()) {
     size_t Size =
-        argPlusPrefixesSize(O.ArgStr) + EqValue.size();
+        argPlusPrefixesSize(O.getArgStr()) + EqValue.size();
     for (unsigned i = 0, e = getNumOptions(); i != e; ++i) {
       StringRef Name = getOption(i);
       if (!shouldPrintOption(Name, getDescription(i), O))
@@ -2139,18 +2140,18 @@ void generic_parser_base::printOptionInfo(const Option &O,
     if (O.getValueExpectedFlag() == ValueOptional) {
       for (unsigned i = 0, e = getNumOptions(); i != e; ++i) {
         if (getOption(i).empty()) {
-          outs() << PrintArg(O.ArgStr);
-          Option::printHelpStr(O.HelpStr, GlobalWidth,
-                               argPlusPrefixesSize(O.ArgStr));
+          outs() << PrintArg(O.getArgStr());
+          Option::printHelpStr(O.getDescription(), GlobalWidth,
+                               argPlusPrefixesSize(O.getArgStr()));
           break;
         }
       }
     }
 
-    outs() << PrintArg(O.ArgStr) << EqValue;
-    Option::printHelpStr(O.HelpStr, GlobalWidth,
+    outs() << PrintArg(O.getArgStr()) << EqValue;
+    Option::printHelpStr(O.getDescription(), GlobalWidth,
                          EqValue.size() +
-                             argPlusPrefixesSize(O.ArgStr));
+                             argPlusPrefixesSize(O.getArgStr()));
     for (unsigned i = 0, e = getNumOptions(); i != e; ++i) {
       StringRef OptionName = getOption(i);
       StringRef Description = getDescription(i);
@@ -2169,8 +2170,8 @@ void generic_parser_base::printOptionInfo(const Option &O,
         outs() << '\n';
     }
   } else {
-    if (!O.HelpStr.empty())
-      outs() << "  " << O.HelpStr << '\n';
+    if (!O.getDescription().empty())
+      outs() << "  " << O.getDescription() << '\n';
     for (unsigned i = 0, e = getNumOptions(); i != e; ++i) {
       StringRef Option = getOption(i);
       outs() << "    " << PrintArg(Option);
@@ -2187,8 +2188,8 @@ static const size_t MaxOptWidth = 8; // arbitrary spacing for printOptionDiff
 void generic_parser_base::printGenericOptionDiff(
     const Option &O, const GenericOptionValue &Value,
     const GenericOptionValue &Default, size_t GlobalWidth) const {
-  outs() << "  " << PrintArg(O.ArgStr);
-  outs().indent(GlobalWidth - O.ArgStr.size());
+  outs() << "  " << PrintArg(O.getArgStr());
+  outs().indent(GlobalWidth - O.getArgStr().size());
 
   unsigned NumOpts = getNumOptions();
   for (unsigned i = 0; i != NumOpts; ++i) {
@@ -2405,13 +2406,13 @@ public:
 
     for (auto *Opt : PositionalOpts) {
       if (Opt->hasArgStr())
-        outs() << " --" << Opt->ArgStr;
-      outs() << " " << Opt->HelpStr;
+        outs() << " --" << Opt->getArgStr();
+      outs() << " " << Opt->getDescription();
     }
 
     // Print the consume after option info if it exists...
     if (ConsumeAfterOpt)
-      outs() << " " << ConsumeAfterOpt->HelpStr;
+      outs() << " " << ConsumeAfterOpt->getDescription();
 
     if (Sub == &SubCommand::getTopLevel() && !Subs.empty()) {
       // Compute the maximum subcommand length...
@@ -2481,7 +2482,7 @@ protected:
     // options within categories will also be alphabetically sorted.
     for (const auto &I : Opts) {
       Option *Opt = I.second;
-      for (OptionCategory *Cat : Opt->Categories) {
+      for (OptionCategory *Cat : Opt->getCategoryList()) {
         assert(llvm::is_contained(SortedCategories, Cat) &&
                "Option has an unregistered category");
         CategorizedOptions[Cat].push_back(Opt);
@@ -2835,7 +2836,7 @@ void cl::HideUnrelatedOptions(cl::OptionCategory &Category, SubCommand &Sub) {
   initCommonOptions();
   for (auto &I : Sub.OptionsMap) {
     bool Unrelated = true;
-    for (auto &Cat : I.second->Categories) {
+    for (auto &Cat : I.second->getCategoryList()) {
       if (Cat == &Category || Cat == &CommonOptions->GenericCategory)
         Unrelated = false;
     }
@@ -2849,7 +2850,7 @@ void cl::HideUnrelatedOptions(ArrayRef<const cl::OptionCategory *> Categories,
   initCommonOptions();
   for (auto &I : Sub.OptionsMap) {
     bool Unrelated = true;
-    for (auto &Cat : I.second->Categories) {
+    for (auto &Cat : I.second->getCategoryList()) {
       if (is_contained(Categories, Cat) ||
           Cat == &CommonOptions->GenericCategory)
         Unrelated = false;
