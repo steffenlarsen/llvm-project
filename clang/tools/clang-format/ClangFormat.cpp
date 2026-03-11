@@ -690,12 +690,14 @@ int main(int argc, const char **argv) {
 
   if (!Files.empty()) {
     std::ifstream ExternalFileOfFiles{std::string(Files)};
-    std::string Line;
     unsigned LineNo = 1;
-    while (std::getline(ExternalFileOfFiles, Line)) {
-      FileNames.push_back(Line);
-      LineNo++;
-    }
+    FileNames.mutate([&](std::vector<std::string> &FNS) {
+      std::string Line;
+      while (std::getline(ExternalFileOfFiles, Line)) {
+        FNS.push_back(Line);
+        LineNo++;
+      }
+    });
     errs() << "Clang-formatting " << LineNo << " files\n";
   }
 

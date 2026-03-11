@@ -728,6 +728,12 @@ public:
     return getThreadLocalStateStack().top();
   }
 
+  std::weak_ptr<void> getWeakCLIStateToken() {
+    if (getThreadLocalStateStack().empty())
+      return {};
+    return getThreadLocalStateStack().top();
+  }
+
   void popCLIState() {
     auto &Stack = getThreadLocalStateStack();
     if (!Stack.empty())
@@ -751,8 +757,31 @@ cl::registerOptionStorage(std::shared_ptr<OptionStorageInfoI> &&Opt) {
   return {Offset, Impl};
 }
 
-void *cl::getOptionStorage(size_t Offset, OptionStorageInfoI *Opt) {
-  return CLIManager::getInstance().getOptionStorage().getStorageAt(Offset, Opt);
+void *cl::getOptionStorage(const OptionStorageHandle &Storage) {
+  return CLIManager::getInstance().getOptionStorage().getStorageAt(
+      Storage.Offset, Storage.Impl);
+}
+
+bool cl::OptionValueCacheBase::isActive() const {
+  std::weak_ptr<void> CurrentToken =
+      CLIManager::getInstance().getWeakCLIStateToken();
+  return !OwnerStateToken.owner_before(CurrentToken) &&
+         !CurrentToken.owner_before(OwnerStateToken);
+}
+
+bool cl::OptionValueCacheBase::claimIfFree() {
+  // The state may already own it.
+  if (isActive())
+    return true;
+  // The token may appear as expired if the owner state is the main state, so we
+  // check if the owner is default constructed.
+  if (LLVM_UNLIKELY(OwnerStateToken.expired() &&
+                    (OwnerStateToken.owner_before(std::weak_ptr<void>()) ||
+                     std::weak_ptr<void>().owner_before(OwnerStateToken)))) {
+    OwnerStateToken = CLIManager::getInstance().getWeakCLIStateToken();
+    return true;
+  }
+  return false;
 }
 
 template <typename T, T TrueVal, T FalseVal>

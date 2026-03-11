@@ -892,8 +892,10 @@ int CodeCoverageTool::run(Command Cmd, int argc, const char **argv) {
               DemanglerPathOrErr.getError().message());
         return 1;
       }
-      DemanglerOpts[0] = *DemanglerPathOrErr;
-      ViewOpts.DemanglerOpts.swap(DemanglerOpts);
+      DemanglerOpts.mutate([&](std::vector<std::string> &Opts) {
+        Opts[0] = *DemanglerPathOrErr;
+        ViewOpts.DemanglerOpts.swap(Opts);
+      });
     }
 
     // Read in -name-allowlist files.

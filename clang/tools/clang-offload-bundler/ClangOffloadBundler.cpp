@@ -239,9 +239,10 @@ int main(int argc, const char **argv) {
   if (InputFileNamesDeprecatedOpt.size()) {
     warningOS() << "-inputs is deprecated, use -input instead\n";
     // temporary hack to support -inputs
-    std::vector<std::string> &s = InputFileNames;
-    s.insert(s.end(), InputFileNamesDeprecatedOpt.begin(),
-             InputFileNamesDeprecatedOpt.end());
+    InputFileNames.mutate([&InputFileNamesDeprecatedOpt](auto &s) {
+      s.insert(s.end(), InputFileNamesDeprecatedOpt.begin(),
+               InputFileNamesDeprecatedOpt.end());
+    });
   }
   BundlerConfig.InputFileNames = InputFileNames;
 
@@ -255,9 +256,10 @@ int main(int argc, const char **argv) {
   if (OutputFileNamesDeprecatedOpt.size()) {
     warningOS() << "-outputs is deprecated, use -output instead\n";
     // temporary hack to support -outputs
-    std::vector<std::string> &s = OutputFileNames;
-    s.insert(s.end(), OutputFileNamesDeprecatedOpt.begin(),
-             OutputFileNamesDeprecatedOpt.end());
+    OutputFileNames.mutate([&OutputFileNamesDeprecatedOpt](auto &s) {
+      s.insert(s.end(), OutputFileNamesDeprecatedOpt.begin(),
+               OutputFileNamesDeprecatedOpt.end());
+    });
   }
   BundlerConfig.OutputFileNames = OutputFileNames;
 

@@ -1680,7 +1680,7 @@ TEST(CommandLineTest, PrefixOptions) {
   EXPECT_EQ(IncludeDirs.size(), 1u);
   EXPECT_EQ(IncludeDirs.front().compare("/usr/include"), 0);
 
-  IncludeDirs.erase(IncludeDirs.begin());
+  IncludeDirs.mutate([](auto &vec) { vec.erase(vec.begin()); });
   cl::ResetAllOptionOccurrences();
 
   // Test non-prefixed variant works with cl::Prefix options when value is
@@ -1692,7 +1692,7 @@ TEST(CommandLineTest, PrefixOptions) {
   EXPECT_EQ(IncludeDirs.size(), 1u);
   EXPECT_EQ(IncludeDirs.front().compare("/usr/include"), 0);
 
-  IncludeDirs.erase(IncludeDirs.begin());
+  IncludeDirs.mutate([](auto &vec) { vec.erase(vec.begin()); });
   cl::ResetAllOptionOccurrences();
 
   // Test prefixed variant works with cl::Prefix options.
@@ -1718,7 +1718,7 @@ TEST(CommandLineTest, PrefixOptions) {
   EXPECT_EQ(MacroDefs.size(), 1u);
   EXPECT_EQ(MacroDefs.front().compare("=HAVE_FOO"), 0);
 
-  MacroDefs.erase(MacroDefs.begin());
+  MacroDefs.mutate([](auto &vec) { vec.erase(vec.begin()); });
   cl::ResetAllOptionOccurrences();
 
   // Test non-prefixed variant does not allow value to be passed in following
@@ -1759,14 +1759,14 @@ TEST(CommandLineTest, GroupingWithValue) {
       cl::ParseCommandLineOptions(3, args1, StringRef(), &llvm::nulls()));
   EXPECT_TRUE(OptF);
   EXPECT_STREQ("val1", OptV->c_str());
-  OptV->clear();
+  OptV.mutate([](auto &vec) { vec.clear(); });
   cl::ResetAllOptionOccurrences();
 
   // Should not crash if it is accidentally used elsewhere in the group.
   const char *args2[] = {"prog", "-vf", "val2"};
   EXPECT_FALSE(
       cl::ParseCommandLineOptions(3, args2, StringRef(), &llvm::nulls()));
-  OptV->clear();
+  OptV.mutate([](auto &vec) { vec.clear(); });
   cl::ResetAllOptionOccurrences();
 
   // Should allow the "opt=value" form at the end of the group
@@ -1775,7 +1775,7 @@ TEST(CommandLineTest, GroupingWithValue) {
       cl::ParseCommandLineOptions(2, args3, StringRef(), &llvm::nulls()));
   EXPECT_TRUE(OptF);
   EXPECT_STREQ("val3", OptV->c_str());
-  OptV->clear();
+  OptV.mutate([](auto &vec) { vec.clear(); });
   cl::ResetAllOptionOccurrences();
 
   // Should allow assigning a value for a ValueOptional option
@@ -1785,7 +1785,7 @@ TEST(CommandLineTest, GroupingWithValue) {
       cl::ParseCommandLineOptions(2, args4, StringRef(), &llvm::nulls()));
   EXPECT_TRUE(OptF);
   EXPECT_STREQ("val4", OptO->c_str());
-  OptO->clear();
+  OptO.mutate([](auto &vec) { vec.clear(); });
   cl::ResetAllOptionOccurrences();
 
   // Should assign an empty value if a ValueOptional option is used elsewhere
@@ -1820,7 +1820,7 @@ TEST(CommandLineTest, GroupingAndPrefix) {
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(2, args1, StringRef(), &llvm::nulls()));
   EXPECT_STREQ("val1", OptP->c_str());
-  OptP->clear();
+  OptP.mutate([](std::string &str) { str.clear(); });
   cl::ResetAllOptionOccurrences();
 
   // Should be possible to pass a value in a separate argument.
@@ -1828,7 +1828,7 @@ TEST(CommandLineTest, GroupingAndPrefix) {
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(3, args2, StringRef(), &llvm::nulls()));
   EXPECT_STREQ("val2", OptP->c_str());
-  OptP->clear();
+  OptP.mutate([](std::string &str) { str.clear(); });
   cl::ResetAllOptionOccurrences();
 
   // The "-opt=value" form should work, too.
@@ -1836,7 +1836,7 @@ TEST(CommandLineTest, GroupingAndPrefix) {
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(2, args3, StringRef(), &llvm::nulls()));
   EXPECT_STREQ("val3", OptP->c_str());
-  OptP->clear();
+  OptP.mutate([](std::string &str) { str.clear(); });
   cl::ResetAllOptionOccurrences();
 
   // All three previous cases should work the same way if an option with both
@@ -1846,7 +1846,7 @@ TEST(CommandLineTest, GroupingAndPrefix) {
       cl::ParseCommandLineOptions(2, args4, StringRef(), &llvm::nulls()));
   EXPECT_TRUE(OptF);
   EXPECT_STREQ("val4", OptP->c_str());
-  OptP->clear();
+  OptP.mutate([](std::string &str) { str.clear(); });
   cl::ResetAllOptionOccurrences();
 
   const char *args5[] = {"prog", "-fp", "val5"};
@@ -1854,7 +1854,7 @@ TEST(CommandLineTest, GroupingAndPrefix) {
       cl::ParseCommandLineOptions(3, args5, StringRef(), &llvm::nulls()));
   EXPECT_TRUE(OptF);
   EXPECT_STREQ("val5", OptP->c_str());
-  OptP->clear();
+  OptP.mutate([](std::string &str) { str.clear(); });
   cl::ResetAllOptionOccurrences();
 
   const char *args6[] = {"prog", "-fp=val6"};
@@ -1862,7 +1862,7 @@ TEST(CommandLineTest, GroupingAndPrefix) {
       cl::ParseCommandLineOptions(2, args6, StringRef(), &llvm::nulls()));
   EXPECT_TRUE(OptF);
   EXPECT_STREQ("val6", OptP->c_str());
-  OptP->clear();
+  OptP.mutate([](std::string &str) { str.clear(); });
   cl::ResetAllOptionOccurrences();
 
   // Should assign a value even if the part after a cl::Prefix option is equal
@@ -1873,7 +1873,7 @@ TEST(CommandLineTest, GroupingAndPrefix) {
   EXPECT_TRUE(OptF);
   EXPECT_STREQ("b", OptP->c_str());
   EXPECT_FALSE(OptB);
-  OptP->clear();
+  OptP.mutate([](std::string &str) { str.clear(); });
   cl::ResetAllOptionOccurrences();
 
   // Should be possible to use a cl::AlwaysPrefix option without grouping.
@@ -1881,7 +1881,7 @@ TEST(CommandLineTest, GroupingAndPrefix) {
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(2, args8, StringRef(), &llvm::nulls()));
   EXPECT_STREQ("val8", OptA->c_str());
-  OptA->clear();
+  OptA.mutate([](std::string &str) { str.clear(); });
   cl::ResetAllOptionOccurrences();
 
   // Should not be possible to pass a value in a separate argument.
@@ -1895,7 +1895,7 @@ TEST(CommandLineTest, GroupingAndPrefix) {
   EXPECT_TRUE(
       cl::ParseCommandLineOptions(2, args10, StringRef(), &llvm::nulls()));
   EXPECT_STREQ("=val10", OptA->c_str());
-  OptA->clear();
+  OptA.mutate([](std::string &str) { str.clear(); });
   cl::ResetAllOptionOccurrences();
 
   // All three previous cases should work the same way if an option with both
@@ -1905,7 +1905,7 @@ TEST(CommandLineTest, GroupingAndPrefix) {
       cl::ParseCommandLineOptions(2, args11, StringRef(), &llvm::nulls()));
   EXPECT_TRUE(OptF);
   EXPECT_STREQ("val11", OptA->c_str());
-  OptA->clear();
+  OptA.mutate([](std::string &str) { str.clear(); });
   cl::ResetAllOptionOccurrences();
 
   const char *args12[] = {"prog", "-fa", "val12"};
@@ -1918,7 +1918,7 @@ TEST(CommandLineTest, GroupingAndPrefix) {
       cl::ParseCommandLineOptions(2, args13, StringRef(), &llvm::nulls()));
   EXPECT_TRUE(OptF);
   EXPECT_STREQ("=val13", OptA->c_str());
-  OptA->clear();
+  OptA.mutate([](std::string &str) { str.clear(); });
   cl::ResetAllOptionOccurrences();
 
   // Should assign a value even if the part after a cl::AlwaysPrefix option
@@ -1929,7 +1929,7 @@ TEST(CommandLineTest, GroupingAndPrefix) {
   EXPECT_TRUE(OptF);
   EXPECT_STREQ("b", OptA->c_str());
   EXPECT_FALSE(OptB);
-  OptA->clear();
+  OptA.mutate([](std::string &str) { str.clear(); });
   cl::ResetAllOptionOccurrences();
 }
 

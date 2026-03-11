@@ -38,8 +38,9 @@ enum class OutputType {
 
 static LogicalResult
 processBuffer(raw_ostream &os, std::unique_ptr<llvm::MemoryBuffer> chunkBuffer,
-              OutputType outputType, std::vector<std::string> &includeDirs,
-              bool dumpODS, std::set<std::string> *includedFiles) {
+              OutputType outputType,
+              const std::vector<std::string> &includeDirs, bool dumpODS,
+              std::set<std::string> *includedFiles) {
   llvm::SourceMgr sourceMgr;
   sourceMgr.setIncludeDirs(includeDirs);
   sourceMgr.setVirtualFileSystem(llvm::vfs::getRealFileSystem());

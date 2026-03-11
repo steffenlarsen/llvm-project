@@ -315,33 +315,35 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &,
 static std::unique_ptr<ToolOutputFile> GetOutputStream(Triple::OSType OS) {
   // If we don't yet have an output filename, make one.
   if (OutputFilename.empty()) {
-    if (InputFilename == "-")
-      OutputFilename = "-";
-    else {
-      // If InputFilename ends in .bc or .ll, remove it.
-      StringRef IFN = InputFilename;
-      if (IFN.ends_with(".bc") || IFN.ends_with(".ll"))
-        OutputFilename = std::string(IFN.drop_back(3));
-      else if (IFN.ends_with(".mir"))
-        OutputFilename = std::string(IFN.drop_back(4));
-      else
-        OutputFilename = std::string(IFN);
-
-      switch (codegen::getFileType()) {
-      case CodeGenFileType::AssemblyFile:
-        OutputFilename += ".s";
-        break;
-      case CodeGenFileType::ObjectFile:
-        if (OS == Triple::Win32)
-          OutputFilename += ".obj";
+    StringRef IFN = InputFilename;
+    OutputFilename.mutate([IFN, OS](std::string &OFN) {
+      if (IFN == "-")
+        OFN = "-";
+      else {
+        // If InputFilename ends in .bc or .ll, remove it.
+        if (IFN.ends_with(".bc") || IFN.ends_with(".ll"))
+          OFN = std::string(IFN.drop_back(3));
+        else if (IFN.ends_with(".mir"))
+          OFN = std::string(IFN.drop_back(4));
         else
-          OutputFilename += ".o";
-        break;
-      case CodeGenFileType::Null:
-        OutputFilename = "-";
-        break;
+          OFN = std::string(IFN);
+
+        switch (codegen::getFileType()) {
+        case CodeGenFileType::AssemblyFile:
+          OFN += ".s";
+          break;
+        case CodeGenFileType::ObjectFile:
+          if (OS == Triple::Win32)
+            OFN += ".obj";
+          else
+            OFN += ".o";
+          break;
+        case CodeGenFileType::Null:
+          OFN = "-";
+          break;
+        }
       }
-    }
+    });
   }
 
   // Decide if we need "binary" output.

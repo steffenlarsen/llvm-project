@@ -269,8 +269,8 @@ static const Target *GetTarget(const char *ProgName) {
 
   // Get the target specific parser.
   std::string Error;
-  const Target *TheTarget = TargetRegistry::lookupTarget(ArchName, TheTriple,
-                                                         Error);
+  const Target *TheTarget =
+      TargetRegistry::lookupTarget(ArchName, TheTriple, Error);
   if (!TheTarget) {
     WithColor::error(errs(), ProgName) << Error;
     return nullptr;

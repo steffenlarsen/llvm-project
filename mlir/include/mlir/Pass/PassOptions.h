@@ -286,9 +286,6 @@ public:
     }
 
     /// Allow accessing the data held by this option.
-    MutableArrayRef<DataType> operator*() {
-      return static_cast<std::vector<DataType> &>(*this);
-    }
     ArrayRef<DataType> operator*() const {
       return static_cast<const std::vector<DataType> &>(*this);
     }
