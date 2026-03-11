@@ -216,11 +216,11 @@ struct OptionStorageHandle {
 LLVM_ABI OptionStorageHandle
 registerOptionStorage(std::shared_ptr<OptionStorageInfoI> &&Opt);
 
-/// Returns a pointer to the storage for the option with the given offset in the
+/// Returns a pointer to the storage for the option for the handle in the
 /// storage of the current thread's CLI state.  The returned pointer is
 /// properly aligned for the option's type and points to initialized storage
 /// containing the option's value.
-LLVM_ABI void *getOptionStorage(size_t Offset, OptionStorageInfoI *Opt);
+LLVM_ABI void *getOptionStorage(const OptionStorageHandle &Storage);
 
 //===----------------------------------------------------------------------===//
 //
@@ -726,6 +726,54 @@ struct LLVM_ABI OptionValue<std::string> final : OptionValueCopy<std::string> {
 
 private:
   void anchor() override;
+};
+
+//===----------------------------------------------------------------------===//
+//
+
+class OptionValueCacheBase {
+  std::weak_ptr<void> OwnerStateToken;
+
+protected:
+  LLVM_ABI bool claimIfFree();
+
+public:
+  LLVM_ABI bool isActive() const;
+};
+
+template <typename DataType>
+class OptionValueCache : public OptionValueCacheBase {
+  std::optional<DataType> Value;
+
+public:
+  OptionValueCache() = default;
+
+  void update(const DataType &V) {
+    if (!claimIfFree())
+      return;
+    assert(isActive() &&
+           "cache should have already been active or have been claimed!");
+    Value = V;
+  }
+
+  template <typename T> void update(const T &V) {
+    if (!claimIfFree())
+      return;
+    assert(isActive() &&
+           "cache should have already been active or have been claimed!");
+    if (!Value.has_value())
+      Value = DataType{};
+    *Value = V;
+  }
+
+  const DataType &get(const OptionStorageHandle &Storage) {
+    assert(isActive() && "get should not be called when cache is not active");
+    // The cache is not valid, so load the value from the CLI state.
+    if (!Value.has_value())
+      update(*static_cast<DataType *>(getOptionStorage(Storage)));
+    assert(Value.has_value() && "Value should be valid after update");
+    return *Value;
+  }
 };
 
 //===----------------------------------------------------------------------===//
@@ -1477,10 +1525,10 @@ public:
 template <class DataType> class opt_storage<DataType, false> {
   const OptionStorageHandle Storage;
   OptionValue<DataType> Default;
+  mutable OptionValueCache<DataType> Cache;
 
   DataType *getLocation() const {
-    return reinterpret_cast<DataType *>(
-        getOptionStorage(Storage.Offset, Storage.Impl));
+    return reinterpret_cast<DataType *>(getOptionStorage(Storage));
   }
 
 public:
@@ -1490,18 +1538,29 @@ public:
 
   template <class T> void setValue(const T &V, bool initial = false) {
     *getLocation() = V;
+    Cache.update(V);
     if (initial)
       Default = V;
   }
 
-  DataType &getValue() const { return *getLocation(); }
+  template <typename MutatorF, typename... Ts>
+  void mutate(MutatorF Mutator, Ts... Args) {
+    Mutator(*getLocation(), std::forward<Ts>(Args)...);
+    Cache.update(*getLocation());
+  }
+
+  const DataType &getValue() const {
+    if (Cache.isActive())
+      return Cache.get(Storage);
+    return *getLocation();
+  }
 
   const OptionValue<DataType> &getDefault() const { return Default; }
 
-  operator DataType &() const { return getValue(); }
+  operator const DataType &() const { return getValue(); }
 
-  DataType *operator->() const { return getLocation(); }
-  DataType &operator*() const { return getValue(); }
+  const DataType *operator->() const { return getLocation(); }
+  const DataType &operator*() const { return getValue(); }
 };
 
 // Specialization for std::string that preserves the pre-TLS calling convention.
@@ -1515,10 +1574,10 @@ public:
 template <> class opt_storage<std::string, false> {
   const OptionStorageHandle Storage;
   OptionValue<std::string> Default;
+  mutable OptionValueCache<std::string> Cache;
 
   std::string *getLocation() const {
-    return reinterpret_cast<std::string *>(
-        getOptionStorage(Storage.Offset, Storage.Impl));
+    return reinterpret_cast<std::string *>(getOptionStorage(Storage));
   }
 
 public:
@@ -1528,35 +1587,49 @@ public:
 
   template <class T> void setValue(const T &V, bool initial = false) {
     *getLocation() = V;
+    Cache.update(V);
     if (initial)
       Default = V;
   }
 
-  std::string &getValue() const { return *getLocation(); }
+  template <class T> void setValue(T &&V) {
+    *getLocation() = std::forward<T>(V);
+    Cache.update(*getLocation());
+  }
+
+  template <typename MutatorF, typename... Ts>
+  void mutate(MutatorF Mutator, Ts... Args) {
+    Mutator(*getLocation(), std::forward<Ts>(Args)...);
+    Cache.update(*getLocation());
+  }
+
+  const std::string &getValue() const {
+    if (Cache.isActive())
+      return Cache.get(Storage);
+    return *getLocation();
+  }
 
   const OptionValue<std::string> &getDefault() const { return Default; }
 
-  std::string *operator->() const { return getLocation(); }
-  std::string &operator*() const { return getValue(); }
+  const std::string *operator->() const { return getLocation(); }
+  const std::string &operator*() const { return getValue(); }
 
   operator StringRef() const { return getValue(); }
-  operator std::string &() const { return getValue(); }
+  operator const std::string &() const { return getValue(); }
   operator Twine() const { return Twine(getValue()); }
 
-  bool empty() const { return getLocation()->empty(); }
-  const char *c_str() const { return getLocation()->c_str(); }
-  const char *data() const { return getLocation()->data(); }
-  size_t size() const { return getLocation()->size(); }
-  size_t length() const { return getLocation()->length(); }
+  bool empty() const { return getValue().empty(); }
+  const char *c_str() const { return getValue().c_str(); }
+  const char *data() const { return getValue().data(); }
+  size_t size() const { return getValue().size(); }
+  size_t length() const { return getValue().length(); }
   size_t find(const char *S, size_t Pos = 0) const {
-    return getLocation()->find(S, Pos);
+    return getValue().find(S, Pos);
   }
-  size_t find(char C, size_t Pos = 0) const {
-    return getLocation()->find(C, Pos);
-  }
+  size_t find(char C, size_t Pos = 0) const { return getValue().find(C, Pos); }
   std::string substr(size_t Pos = 0,
                      size_t Count = std::string::npos) const {
-    return getLocation()->substr(Pos, Count);
+    return getValue().substr(Pos, Count);
   }
   bool starts_with(StringRef Prefix) const {
     return StringRef(getValue()).starts_with(Prefix);
@@ -1567,32 +1640,7 @@ public:
   bool contains(StringRef S) const {
     return StringRef(getValue()).contains(S);
   }
-  std::string &erase(size_t Pos = 0, size_t Count = std::string::npos) {
-    return getLocation()->erase(Pos, Count);
-  }
-  char &operator[](size_t Idx) { return (*getLocation())[Idx]; }
-  char operator[](size_t Idx) const { return (*getLocation())[Idx]; }
-
-  std::string &operator+=(StringRef RHS) { return *getLocation() += RHS; }
-  std::string &operator+=(const char *RHS) { return *getLocation() += RHS; }
-  std::string &operator+=(char C) { return *getLocation() += C; }
-
-  opt_storage &operator=(const std::string &V) {
-    *getLocation() = V;
-    return *this;
-  }
-  opt_storage &operator=(std::string &&V) {
-    *getLocation() = std::move(V);
-    return *this;
-  }
-  opt_storage &operator=(const char *V) {
-    *getLocation() = V;
-    return *this;
-  }
-  opt_storage &operator=(StringRef V) {
-    *getLocation() = V.str();
-    return *this;
-  }
+  char operator[](size_t Idx) const { return getValue()[Idx]; }
 
   friend raw_ostream &operator<<(raw_ostream &OS, const opt_storage &O) {
     return OS << StringRef(O.getValue());
@@ -1721,15 +1769,15 @@ public:
 
   ParserClass &getParser() { return Parser; }
 
-  template <class T> DataType &operator=(const T &Val) {
+  template <class T> const DataType &operator=(const T &Val) {
     this->setValue(Val);
     if (Callback)
       Callback(Val);
     return this->getValue();
   }
 
-  template <class T> DataType &operator=(T &&Val) {
-    this->getValue() = std::forward<T>(Val);
+  template <class T> const DataType &operator=(T &&Val) {
+    this->setValue(std::forward<T>(Val));
     if (Callback)
       Callback(this->getValue());
     return this->getValue();
@@ -1777,8 +1825,6 @@ template <class DataType, class StorageClass> class list_storage {
 public:
   list_storage() = default;
 
-  void clear() {}
-
   bool setLocation(Option &O, StorageClass &L) {
     if (Location)
       return O.error("cl::location(x) specified more than once!");
@@ -1816,10 +1862,10 @@ template <class DataType> class list_storage<DataType, bool> {
   const OptionStorageHandle Storage;
   std::vector<OptionValue<DataType>> Default;
   bool DefaultAssigned = false;
+  mutable OptionValueCache<std::vector<DataType>> Cache;
 
   std::vector<DataType> *getLocation() const {
-    return reinterpret_cast<std::vector<DataType> *>(
-        getOptionStorage(Storage.Offset, Storage.Impl));
+    return reinterpret_cast<std::vector<DataType> *>(getOptionStorage(Storage));
   }
 
 public:
@@ -1827,71 +1873,54 @@ public:
       : Storage(registerOptionStorage(
             std::make_shared<OptionStorageInfo<std::vector<DataType>>>())) {}
 
+  const std::vector<DataType> &getValue() const {
+    if (Cache.isActive())
+      return Cache.get(Storage);
+    return *getLocation();
+  }
+
   using iterator = typename std::vector<DataType>::iterator;
-
-  iterator begin() { return getLocation()->begin(); }
-  iterator end() { return getLocation()->end(); }
-
   using const_iterator = typename std::vector<DataType>::const_iterator;
 
-  const_iterator begin() const { return getLocation()->begin(); }
-  const_iterator end() const { return getLocation()->end(); }
+  const_iterator begin() const { return getValue().begin(); }
+  const_iterator end() const { return getValue().end(); }
 
   using size_type = typename std::vector<DataType>::size_type;
 
-  size_type size() const { return getLocation()->size(); }
+  size_type size() const { return getValue().size(); }
 
-  bool empty() const { return getLocation()->empty(); }
-
-  void push_back(const DataType &value) { getLocation()->push_back(value); }
-  void push_back(DataType &&value) { getLocation()->push_back(value); }
+  bool empty() const { return getValue().empty(); }
 
   using reference = typename std::vector<DataType>::reference;
   using const_reference = typename std::vector<DataType>::const_reference;
 
-  reference operator[](size_type pos) { return (*getLocation())[pos]; }
-  const_reference operator[](size_type pos) const {
-    return (*getLocation())[pos];
-  }
+  const_reference operator[](size_type pos) const { return getValue()[pos]; }
 
-  void clear() { getLocation()->clear(); }
+  const_reference front() const { return getValue().front(); }
 
-  iterator erase(const_iterator pos) { return getLocation()->erase(pos); }
-  iterator erase(const_iterator first, const_iterator last) {
-    return getLocation()->erase(first, last);
-  }
-
-  iterator erase(iterator pos) { return getLocation()->erase(pos); }
-  iterator erase(iterator first, iterator last) {
-    return getLocation()->erase(first, last);
-  }
-
-  iterator insert(const_iterator pos, const DataType &value) {
-    return getLocation()->insert(pos, value);
-  }
-  iterator insert(const_iterator pos, DataType &&value) {
-    return getLocation()->insert(pos, value);
-  }
-
-  iterator insert(iterator pos, const DataType &value) {
-    return getLocation()->insert(pos, value);
-  }
-  iterator insert(iterator pos, DataType &&value) {
-    return getLocation()->insert(pos, value);
-  }
-
-  reference front() { return getLocation()->front(); }
-  const_reference front() const { return getLocation()->front(); }
-
-  operator std::vector<DataType> &() { return *getLocation(); }
-  operator ArrayRef<DataType>() const { return *getLocation(); }
-  std::vector<DataType> *operator&() { return getLocation(); }
+  operator const std::vector<DataType> &() const { return getValue(); }
+  operator ArrayRef<DataType>() const { return getValue(); }
   const std::vector<DataType> *operator&() const { return getLocation(); }
 
+  void push_back(const DataType &value) {
+    mutate([&](std::vector<DataType> &V) { V.push_back(value); });
+  }
+  void push_back(DataType &&value) {
+    mutate([&](std::vector<DataType> &V,
+               DataType &&NV) { V.push_back(std::forward<DataType>(NV)); },
+           std::forward<DataType>(value));
+  }
+
   template <class T> void addValue(const T &V, bool initial = false) {
-    getLocation()->push_back(V);
+    push_back(V);
     if (initial)
       Default.push_back(OptionValue<DataType>(V));
+  }
+
+  template <typename MutatorF, typename... Ts>
+  void mutate(MutatorF Mutator, Ts... Args) {
+    Mutator(*getLocation(), std::forward<Ts>(Args)...);
+    Cache.update(*getLocation());
   }
 
   const std::vector<OptionValue<DataType>> &getDefault() const {
@@ -1911,6 +1940,8 @@ template <class DataType, class StorageClass = bool,
 class list : public Option, public list_storage<DataType, StorageClass> {
   std::vector<unsigned> Positions;
   ParserClass Parser;
+
+  static constexpr bool IsExternalStorage = !std::is_same_v<StorageClass, bool>;
 
   enum ValueExpected getValueExpectedFlagDefault() const override {
     return Parser.getValueExpectedFlagDefault();
@@ -1953,9 +1984,19 @@ class list : public Option, public list_storage<DataType, StorageClass> {
 
   void setDefault() override {
     Positions.clear();
-    list_storage<DataType, StorageClass>::clear();
-    for (auto &Val : list_storage<DataType, StorageClass>::getDefault())
-      list_storage<DataType, StorageClass>::addValue(Val.getValue());
+    const auto &Default = list_storage<DataType, StorageClass>::getDefault();
+    if constexpr (IsExternalStorage) {
+      // The external storage case currently doesn't support a common way of
+      // clearing storage, so we assume there isn't a need for it.
+      for (auto &Val : Default)
+        list_storage<DataType, StorageClass>::addValue(Val.getValue());
+    } else {
+      list_storage<DataType, StorageClass>::mutate([&Default](auto &V) {
+        V.clear();
+        for (auto &Val : Default)
+          V.push_back(Val.getValue());
+      });
+    }
   }
 
   void done() {
@@ -1977,7 +2018,8 @@ public:
 
   void clear() {
     Positions.clear();
-    list_storage<DataType, StorageClass>::clear();
+    if constexpr (!IsExternalStorage)
+      list_storage<DataType, StorageClass>::mutate([](auto &V) { V.clear(); });
   }
 
   // setInitialValues - Used by the cl::list_init modifier...
@@ -2066,10 +2108,10 @@ public:
 //
 template <class DataType> class bits_storage<DataType, bool> {
   const OptionStorageHandle Storage;
+  mutable OptionValueCache<unsigned> Cache;
 
   unsigned *getLocation() const {
-    return reinterpret_cast<unsigned *>(
-        getOptionStorage(Storage.Offset, Storage.Impl));
+    return reinterpret_cast<unsigned *>(getOptionStorage(Storage));
   }
 
   template <class T> static unsigned Bit(const T &V) {
@@ -2084,14 +2126,24 @@ public:
       : Storage(registerOptionStorage(
             std::make_shared<OptionStorageInfo<unsigned>>())) {}
 
-  template <class T> void addValue(const T &V) { *getLocation() |= Bit(V); }
+  template <class T> void addValue(const T &V) {
+    unsigned NewVal = (*getLocation() |= Bit(V));
+    Cache.update(NewVal);
+  }
 
-  unsigned getBits() { return *getLocation(); }
+  unsigned getBits() const {
+    if (Cache.isActive())
+      return Cache.get(Storage);
+    return *getLocation();
+  }
 
-  void clear() { *getLocation() = 0; }
+  void clear() {
+    *getLocation() = 0;
+    Cache.update(0);
+  }
 
-  template <class T> bool isSet(const T &V) {
-    return (*getLocation() & Bit(V)) != 0;
+  template <class T> bool isSet(const T &V) const {
+    return (getBits() & Bit(V)) != 0;
   }
 };
 

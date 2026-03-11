@@ -2896,7 +2896,7 @@ static Expected<int> runWithRuntime(Session &S, ExecutorAddr EntryPointAddr) {
   int64_t Result;
   if (auto Err = S.ES.callSPSWrapper<SPSRunProgramSig>(
           EntryPointAddr, Result, S.MainJD->getName(), DemangledEntryPoint,
-          static_cast<std::vector<std::string> &>(InputArgv)))
+          static_cast<const std::vector<std::string> &>(InputArgv)))
     return std::move(Err);
   return Result;
 }

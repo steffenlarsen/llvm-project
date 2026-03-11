@@ -468,7 +468,7 @@ void llvm::logicalview::cmdline::propagateOptions() {
   auto UpdatePattern = [&](auto &List, auto &Set, bool IgnoreCase,
                            bool UseRegex) {
     if (!List.empty())
-      for (std::string &Pattern : List)
+      for (const std::string &Pattern : List)
         Set.insert((IgnoreCase && !UseRegex) ? StringRef(Pattern).lower()
                                              : Pattern);
   };

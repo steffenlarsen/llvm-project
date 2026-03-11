@@ -413,7 +413,7 @@ int main(int argc, char **argv) {
   std::string FeaturesStr;
   if (MATTRS.size()) {
     SubtargetFeatures Features;
-    for (std::string &MAttr : MATTRS)
+    for (const std::string &MAttr : MATTRS)
       Features.AddFeature(MAttr);
     FeaturesStr = Features.getString();
   }
