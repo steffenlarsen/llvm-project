@@ -34,12 +34,10 @@ struct CompositeFixedPointPass final
     maxIter = maxIterations;
     populateFunc(dynamicPM);
 
-    pipelineStr.mutate([&](std::string &S) {
-      llvm::raw_string_ostream os(S);
-      llvm::interleave(
-          dynamicPM, [&](mlir::Pass &pass) { pass.printAsTextualPipeline(os); },
-          [&]() { os << ","; });
-    });
+    llvm::raw_string_ostream os(pipelineStr);
+    llvm::interleave(
+        dynamicPM, [&](mlir::Pass &pass) { pass.printAsTextualPipeline(os); },
+        [&]() { os << ","; });
   }
 
   LogicalResult initializeOptions(

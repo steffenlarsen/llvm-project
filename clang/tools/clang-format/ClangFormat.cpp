@@ -691,13 +691,12 @@ int main(int argc, const char **argv) {
   if (!Files.empty()) {
     std::ifstream ExternalFileOfFiles{std::string(Files)};
     unsigned LineNo = 1;
-    FileNames.mutate([&](std::vector<std::string> &FNS) {
-      std::string Line;
-      while (std::getline(ExternalFileOfFiles, Line)) {
-        FNS.push_back(Line);
-        LineNo++;
-      }
-    });
+    std::string Line;
+    std::vector<std::string> &FileNamesRef = FileNames;
+    while (std::getline(ExternalFileOfFiles, Line)) {
+      FileNamesRef.push_back(Line);
+      LineNo++;
+    }
     errs() << "Clang-formatting " << LineNo << " files\n";
   }
 

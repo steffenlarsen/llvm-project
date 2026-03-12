@@ -198,29 +198,75 @@ public:
 
   /// Destructs the option value at \p Ptr.
   virtual void destructStorage(void *Ptr) const = 0;
+};
 
-  /// Copies the option value from \p Src to \p Dst.
-  virtual void copyStorage(const void *Src, void *Dst) const = 0;
+// Simple implementation of OptionStorageInfoI for a specific data type.
+template <class DataType> class OptionStorageInfo : public OptionStorageInfoI {
+public:
+  size_t getStorageSize() const override { return sizeof(DataType); }
+
+  size_t getStorageAlignment() const override { return alignof(DataType); }
+
+  void constructStorage(void *Ptr) const override { new (Ptr) DataType(); }
+
+  void destructStorage(void *Ptr) const override {
+    static_cast<DataType *>(Ptr)->~DataType();
+  }
 };
 
 /// Handle for accessing option storage. Contains an offset and pointer to the
 /// storage implementation info.
 struct OptionStorageHandle {
   const size_t Offset;
-  OptionStorageInfoI *const Impl;
+  const size_t ID; // Used for debugging. Will be 0 if NDEBUG is defined.
 };
 
 /// Registers the given option storage and returns a handle that can be used to
 /// access it. The offset in the handle is guaranteed to be unique among all
 /// registered options in the same CLI state.
-LLVM_ABI OptionStorageHandle
-registerOptionStorage(std::shared_ptr<OptionStorageInfoI> &&Opt);
+LLVM_ABI OptionStorageHandle registerOptionStorage(size_t StorageSize,
+                                                   size_t Alignment);
 
 /// Returns a pointer to the storage for the option for the handle in the
 /// storage of the current thread's CLI state.  The returned pointer is
 /// properly aligned for the option's type and points to initialized storage
 /// containing the option's value.
-LLVM_ABI void *getOptionStorage(const OptionStorageHandle &Storage);
+LLVM_ABI void *getOptionStorage(
+    const OptionStorageHandle &Storage,
+    std::function<std::shared_ptr<OptionStorageInfoI>()> OptInfoCreator);
+
+LLVM_ABI bool isMainCLIStateActive();
+
+//===----------------------------------------------------------------------===//
+// Common base class for CLI state-based storage
+//
+
+/// Base class that manages CLI state-based storage for command line options.
+/// Stores values in MainStateValue for the main CLI state and uses
+/// CLI state-based storage for other states.
+template <class DataType> class CLIBasedStorage {
+  const OptionStorageHandle Storage;
+  DataType MainStateValue;
+
+protected:
+  CLIBasedStorage()
+      : Storage(registerOptionStorage(sizeof(DataType), alignof(DataType))),
+        MainStateValue() {}
+
+  DataType *getLocation() const {
+    return reinterpret_cast<DataType *>(getOptionStorage(Storage, []() {
+      return std::make_shared<OptionStorageInfo<DataType>>();
+    }));
+  }
+
+  DataType &getValue() {
+    return isMainCLIStateActive() ? MainStateValue : *getLocation();
+  }
+
+  const DataType &getValue() const {
+    return isMainCLIStateActive() ? MainStateValue : *getLocation();
+  }
+};
 
 //===----------------------------------------------------------------------===//
 //
@@ -726,54 +772,6 @@ struct LLVM_ABI OptionValue<std::string> final : OptionValueCopy<std::string> {
 
 private:
   void anchor() override;
-};
-
-//===----------------------------------------------------------------------===//
-//
-
-class OptionValueCacheBase {
-  std::weak_ptr<void> OwnerStateToken;
-
-protected:
-  LLVM_ABI bool claimIfFree();
-
-public:
-  LLVM_ABI bool isActive() const;
-};
-
-template <typename DataType>
-class OptionValueCache : public OptionValueCacheBase {
-  std::optional<DataType> Value;
-
-public:
-  OptionValueCache() = default;
-
-  void update(const DataType &V) {
-    if (!claimIfFree())
-      return;
-    assert(isActive() &&
-           "cache should have already been active or have been claimed!");
-    Value = V;
-  }
-
-  template <typename T> void update(const T &V) {
-    if (!claimIfFree())
-      return;
-    assert(isActive() &&
-           "cache should have already been active or have been claimed!");
-    if (!Value.has_value())
-      Value = DataType{};
-    *Value = V;
-  }
-
-  const DataType &get(const OptionStorageHandle &Storage) {
-    assert(isActive() && "get should not be called when cache is not active");
-    // The cache is not valid, so load the value from the CLI state.
-    if (!Value.has_value())
-      update(*static_cast<DataType *>(getOptionStorage(Storage)));
-    assert(Value.has_value() && "Value should be valid after update");
-    return *Value;
-  }
 };
 
 //===----------------------------------------------------------------------===//
@@ -1452,26 +1450,6 @@ template <class Opt, class Mod> void apply(Opt *O, const Mod &M) {
 }
 
 //===----------------------------------------------------------------------===//
-// Helper for registering option storage
-//
-template <class DataType> class OptionStorageInfo : public OptionStorageInfoI {
-public:
-  size_t getStorageSize() const override { return sizeof(DataType); }
-
-  size_t getStorageAlignment() const override { return alignof(DataType); }
-
-  void constructStorage(void *Ptr) const override { new (Ptr) DataType(); }
-
-  void destructStorage(void *Ptr) const override {
-    static_cast<DataType *>(Ptr)->~DataType();
-  }
-
-  void copyStorage(const void *Src, void *Dst) const override {
-    *static_cast<DataType *>(Dst) = *static_cast<const DataType *>(Src);
-  }
-};
-
-//===----------------------------------------------------------------------===//
 // Default storage class definition: external storage.  This implementation
 // assumes the user will specify a variable to store the data into with the
 // cl::location(x) modifier.
@@ -1522,44 +1500,28 @@ public:
 // this case, we use thread-local storage and overload operators to get at the
 // value.
 //
-template <class DataType> class opt_storage<DataType, false> {
-  const OptionStorageHandle Storage;
+template <class DataType>
+class opt_storage<DataType, false> : private CLIBasedStorage<DataType> {
   OptionValue<DataType> Default;
-  mutable OptionValueCache<DataType> Cache;
-
-  DataType *getLocation() const {
-    return reinterpret_cast<DataType *>(getOptionStorage(Storage));
-  }
 
 public:
-  opt_storage()
-      : Storage(registerOptionStorage(
-            std::make_shared<OptionStorageInfo<DataType>>())) {}
+  opt_storage() : CLIBasedStorage<DataType>() {}
+
+  using CLIBasedStorage<DataType>::getValue;
 
   template <class T> void setValue(const T &V, bool initial = false) {
-    *getLocation() = V;
-    Cache.update(V);
+    getValue() = V;
     if (initial)
       Default = V;
   }
 
-  template <typename MutatorF, typename... Ts>
-  void mutate(MutatorF Mutator, Ts... Args) {
-    Mutator(*getLocation(), std::forward<Ts>(Args)...);
-    Cache.update(*getLocation());
-  }
-
-  const DataType &getValue() const {
-    if (Cache.isActive())
-      return Cache.get(Storage);
-    return *getLocation();
-  }
-
   const OptionValue<DataType> &getDefault() const { return Default; }
 
-  operator const DataType &() const { return getValue(); }
+  operator DataType() const { return getValue(); }
 
-  const DataType *operator->() const { return getLocation(); }
+  DataType *operator->() { return &getValue(); }
+  const DataType *operator->() const { return &getValue(); }
+  DataType &operator*() { return getValue(); }
   const DataType &operator*() const { return getValue(); }
 };
 
@@ -1571,50 +1533,32 @@ public:
 // arises when both operator std::string&() and operator StringRef() exist (e.g.
 // raw_ostream has overloads for both). Since StringRef implicitly converts to
 // Twine and std::string_view, this single conversion handles most use cases.
-template <> class opt_storage<std::string, false> {
-  const OptionStorageHandle Storage;
+template <>
+class opt_storage<std::string, false> : private CLIBasedStorage<std::string> {
   OptionValue<std::string> Default;
-  mutable OptionValueCache<std::string> Cache;
-
-  std::string *getLocation() const {
-    return reinterpret_cast<std::string *>(getOptionStorage(Storage));
-  }
 
 public:
-  opt_storage()
-      : Storage(registerOptionStorage(
-            std::make_shared<OptionStorageInfo<std::string>>())) {}
+  opt_storage() : CLIBasedStorage<std::string>() {}
+
+  using CLIBasedStorage<std::string>::getValue;
 
   template <class T> void setValue(const T &V, bool initial = false) {
-    *getLocation() = V;
-    Cache.update(V);
+    getValue() = V;
     if (initial)
       Default = V;
   }
 
-  template <class T> void setValue(T &&V) {
-    *getLocation() = std::forward<T>(V);
-    Cache.update(*getLocation());
-  }
-
-  template <typename MutatorF, typename... Ts>
-  void mutate(MutatorF Mutator, Ts... Args) {
-    Mutator(*getLocation(), std::forward<Ts>(Args)...);
-    Cache.update(*getLocation());
-  }
-
-  const std::string &getValue() const {
-    if (Cache.isActive())
-      return Cache.get(Storage);
-    return *getLocation();
-  }
+  template <class T> void setValue(T &&V) { getValue() = std::forward<T>(V); }
 
   const OptionValue<std::string> &getDefault() const { return Default; }
 
-  const std::string *operator->() const { return getLocation(); }
+  std::string *operator->() { return &getValue(); }
+  const std::string *operator->() const { return &getValue(); }
+  std::string &operator*() { return getValue(); }
   const std::string &operator*() const { return getValue(); }
 
   operator StringRef() const { return getValue(); }
+  operator std::string &() { return getValue(); }
   operator const std::string &() const { return getValue(); }
   operator Twine() const { return Twine(getValue()); }
 
@@ -1627,8 +1571,7 @@ public:
     return getValue().find(S, Pos);
   }
   size_t find(char C, size_t Pos = 0) const { return getValue().find(C, Pos); }
-  std::string substr(size_t Pos = 0,
-                     size_t Count = std::string::npos) const {
+  std::string substr(size_t Pos = 0, size_t Count = std::string::npos) const {
     return getValue().substr(Pos, Count);
   }
   bool starts_with(StringRef Prefix) const {
@@ -1637,10 +1580,34 @@ public:
   bool ends_with(StringRef Suffix) const {
     return StringRef(getValue()).ends_with(Suffix);
   }
-  bool contains(StringRef S) const {
-    return StringRef(getValue()).contains(S);
+  bool contains(StringRef S) const { return StringRef(getValue()).contains(S); }
+  std::string &erase(size_t Pos = 0, size_t Count = std::string::npos) {
+    return getValue().erase(Pos, Count);
   }
+  void clear() { getValue().clear(); }
+  char &operator[](size_t Idx) { return getValue()[Idx]; }
   char operator[](size_t Idx) const { return getValue()[Idx]; }
+
+  std::string &operator+=(StringRef RHS) { return getValue() += RHS; }
+  std::string &operator+=(const char *RHS) { return getValue() += RHS; }
+  std::string &operator+=(char C) { return getValue() += C; }
+
+  opt_storage &operator=(const std::string &V) {
+    getValue() = V;
+    return *this;
+  }
+  opt_storage &operator=(std::string &&V) {
+    getValue() = std::move(V);
+    return *this;
+  }
+  opt_storage &operator=(const char *V) {
+    getValue() = V;
+    return *this;
+  }
+  opt_storage &operator=(StringRef V) {
+    getValue() = V.str();
+    return *this;
+  }
 
   friend raw_ostream &operator<<(raw_ostream &OS, const opt_storage &O) {
     return OS << StringRef(O.getValue());
@@ -1769,14 +1736,14 @@ public:
 
   ParserClass &getParser() { return Parser; }
 
-  template <class T> const DataType &operator=(const T &Val) {
+  template <class T> DataType &operator=(const T &Val) {
     this->setValue(Val);
     if (Callback)
       Callback(Val);
     return this->getValue();
   }
 
-  template <class T> const DataType &operator=(T &&Val) {
+  template <class T> DataType &operator=(T &&Val) {
     this->setValue(std::forward<T>(Val));
     if (Callback)
       Callback(this->getValue());
@@ -1825,6 +1792,8 @@ template <class DataType, class StorageClass> class list_storage {
 public:
   list_storage() = default;
 
+  void clear() {}
+
   bool setLocation(Option &O, StorageClass &L) {
     if (Location)
       return O.error("cl::location(x) specified more than once!");
@@ -1858,69 +1827,89 @@ public:
 //
 // FIXME: Reduce this API to a more narrow subset of std::vector
 //
-template <class DataType> class list_storage<DataType, bool> {
-  const OptionStorageHandle Storage;
+template <class DataType>
+class list_storage<DataType, bool>
+    : private CLIBasedStorage<std::vector<DataType>> {
   std::vector<OptionValue<DataType>> Default;
   bool DefaultAssigned = false;
-  mutable OptionValueCache<std::vector<DataType>> Cache;
-
-  std::vector<DataType> *getLocation() const {
-    return reinterpret_cast<std::vector<DataType> *>(getOptionStorage(Storage));
-  }
 
 public:
-  list_storage()
-      : Storage(registerOptionStorage(
-            std::make_shared<OptionStorageInfo<std::vector<DataType>>>())) {}
+  list_storage() : CLIBasedStorage<std::vector<DataType>>() {}
 
-  const std::vector<DataType> &getValue() const {
-    if (Cache.isActive())
-      return Cache.get(Storage);
-    return *getLocation();
+  std::vector<DataType> &getStorage() {
+    return CLIBasedStorage<std::vector<DataType>>::getValue();
+  }
+
+  const std::vector<DataType> &getStorage() const {
+    return CLIBasedStorage<std::vector<DataType>>::getValue();
   }
 
   using iterator = typename std::vector<DataType>::iterator;
+
+  iterator begin() { return getStorage().begin(); }
+  iterator end() { return getStorage().end(); }
+
   using const_iterator = typename std::vector<DataType>::const_iterator;
 
-  const_iterator begin() const { return getValue().begin(); }
-  const_iterator end() const { return getValue().end(); }
+  const_iterator begin() const { return getStorage().begin(); }
+  const_iterator end() const { return getStorage().end(); }
 
   using size_type = typename std::vector<DataType>::size_type;
 
-  size_type size() const { return getValue().size(); }
+  size_type size() const { return getStorage().size(); }
 
-  bool empty() const { return getValue().empty(); }
+  bool empty() const { return getStorage().empty(); }
+
+  void push_back(const DataType &value) { getStorage().push_back(value); }
+  void push_back(DataType &&value) {
+    getStorage().push_back(std::forward<DataType>(value));
+  }
 
   using reference = typename std::vector<DataType>::reference;
   using const_reference = typename std::vector<DataType>::const_reference;
 
-  const_reference operator[](size_type pos) const { return getValue()[pos]; }
+  reference operator[](size_type pos) { return getStorage()[pos]; }
+  const_reference operator[](size_type pos) const { return getStorage()[pos]; }
 
-  const_reference front() const { return getValue().front(); }
+  void clear() { getStorage().clear(); }
 
-  operator const std::vector<DataType> &() const { return getValue(); }
-  operator ArrayRef<DataType>() const { return getValue(); }
-  const std::vector<DataType> *operator&() const { return getLocation(); }
-
-  void push_back(const DataType &value) {
-    mutate([&](std::vector<DataType> &V) { V.push_back(value); });
+  iterator erase(const_iterator pos) { return getStorage().erase(pos); }
+  iterator erase(const_iterator first, const_iterator last) {
+    return getStorage().erase(first, last);
   }
-  void push_back(DataType &&value) {
-    mutate([&](std::vector<DataType> &V,
-               DataType &&NV) { V.push_back(std::forward<DataType>(NV)); },
-           std::forward<DataType>(value));
+
+  iterator erase(iterator pos) { return getStorage().erase(pos); }
+  iterator erase(iterator first, iterator last) {
+    return getStorage().erase(first, last);
   }
+
+  iterator insert(const_iterator pos, const DataType &value) {
+    return getStorage().insert(pos, value);
+  }
+  iterator insert(const_iterator pos, DataType &&value) {
+    return getStorage().insert(pos, value);
+  }
+
+  iterator insert(iterator pos, const DataType &value) {
+    return getStorage().insert(pos, value);
+  }
+  iterator insert(iterator pos, DataType &&value) {
+    return getStorage().insert(pos, value);
+  }
+
+  reference front() { return getStorage().front(); }
+  const_reference front() const { return getStorage().front(); }
+
+  operator std::vector<DataType> &() { return getStorage(); }
+  operator const std::vector<DataType> &() const { return getStorage(); }
+  operator ArrayRef<DataType>() const { return getStorage(); }
+  std::vector<DataType> *operator&() { return &getStorage(); }
+  const std::vector<DataType> *operator&() const { return &getStorage(); }
 
   template <class T> void addValue(const T &V, bool initial = false) {
     push_back(V);
     if (initial)
       Default.push_back(OptionValue<DataType>(V));
-  }
-
-  template <typename MutatorF, typename... Ts>
-  void mutate(MutatorF Mutator, Ts... Args) {
-    Mutator(*getLocation(), std::forward<Ts>(Args)...);
-    Cache.update(*getLocation());
   }
 
   const std::vector<OptionValue<DataType>> &getDefault() const {
@@ -1940,8 +1929,6 @@ template <class DataType, class StorageClass = bool,
 class list : public Option, public list_storage<DataType, StorageClass> {
   std::vector<unsigned> Positions;
   ParserClass Parser;
-
-  static constexpr bool IsExternalStorage = !std::is_same_v<StorageClass, bool>;
 
   enum ValueExpected getValueExpectedFlagDefault() const override {
     return Parser.getValueExpectedFlagDefault();
@@ -1984,19 +1971,9 @@ class list : public Option, public list_storage<DataType, StorageClass> {
 
   void setDefault() override {
     Positions.clear();
-    const auto &Default = list_storage<DataType, StorageClass>::getDefault();
-    if constexpr (IsExternalStorage) {
-      // The external storage case currently doesn't support a common way of
-      // clearing storage, so we assume there isn't a need for it.
-      for (auto &Val : Default)
-        list_storage<DataType, StorageClass>::addValue(Val.getValue());
-    } else {
-      list_storage<DataType, StorageClass>::mutate([&Default](auto &V) {
-        V.clear();
-        for (auto &Val : Default)
-          V.push_back(Val.getValue());
-      });
-    }
+    list_storage<DataType, StorageClass>::clear();
+    for (auto &Val : list_storage<DataType, StorageClass>::getDefault())
+      list_storage<DataType, StorageClass>::addValue(Val.getValue());
   }
 
   void done() {
@@ -2018,8 +1995,7 @@ public:
 
   void clear() {
     Positions.clear();
-    if constexpr (!IsExternalStorage)
-      list_storage<DataType, StorageClass>::mutate([](auto &V) { V.clear(); });
+    list_storage<DataType, StorageClass>::clear();
   }
 
   // setInitialValues - Used by the cl::list_init modifier...
@@ -2106,14 +2082,8 @@ public:
 // Define how to hold bits.  Since we can inherit from a class, we do so.
 // This makes us exactly compatible with the bits in all cases that it is used.
 //
-template <class DataType> class bits_storage<DataType, bool> {
-  const OptionStorageHandle Storage;
-  mutable OptionValueCache<unsigned> Cache;
-
-  unsigned *getLocation() const {
-    return reinterpret_cast<unsigned *>(getOptionStorage(Storage));
-  }
-
+template <class DataType>
+class bits_storage<DataType, bool> : private CLIBasedStorage<unsigned> {
   template <class T> static unsigned Bit(const T &V) {
     unsigned BitPos = static_cast<unsigned>(V);
     assert(BitPos < sizeof(unsigned) * CHAR_BIT &&
@@ -2121,26 +2091,16 @@ template <class DataType> class bits_storage<DataType, bool> {
     return 1 << BitPos;
   }
 
+  unsigned &getStorage() { return CLIBasedStorage<unsigned>::getValue(); }
+
 public:
-  bits_storage()
-      : Storage(registerOptionStorage(
-            std::make_shared<OptionStorageInfo<unsigned>>())) {}
+  bits_storage() : CLIBasedStorage<unsigned>() {}
 
-  template <class T> void addValue(const T &V) {
-    unsigned NewVal = (*getLocation() |= Bit(V));
-    Cache.update(NewVal);
-  }
+  template <class T> void addValue(const T &V) { getStorage() |= Bit(V); }
 
-  unsigned getBits() const {
-    if (Cache.isActive())
-      return Cache.get(Storage);
-    return *getLocation();
-  }
+  unsigned getBits() const { return CLIBasedStorage<unsigned>::getValue(); }
 
-  void clear() {
-    *getLocation() = 0;
-    Cache.update(0);
-  }
+  void clear() { getStorage() = 0; }
 
   template <class T> bool isSet(const T &V) const {
     return (getBits() & Bit(V)) != 0;
@@ -2621,8 +2581,6 @@ struct ThreadLocalStateConfig {
   };
 
   SourceState Source = SourceState::MainState;
-  bool CopyStorageValues =
-      false; ///< If true, copy option values from source storage
 };
 
 /// Push a new CLI state onto the thread-local stack.

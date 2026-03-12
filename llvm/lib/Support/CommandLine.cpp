@@ -124,51 +124,64 @@ void opt_unsigned_anchor() { opt<unsigned> anchor{""}; }
 class OptionStorage {
   const unsigned PageSize = sys::Process::getPageSizeEstimate();
 
-  llvm::SmallVector<std::pair<std::shared_ptr<OptionStorageInfoI>, size_t>, 32>
-      RegisteredOptions;
   size_t TotalRegisteredSize = 0;
 
   SmallVector<sys::MemoryBlock, 4> StoragePages;
-  SmallDenseMap<OptionStorageInfoI *, void *, 16> InitializedOpts;
+  SmallDenseMap<void *, std::shared_ptr<OptionStorageInfoI>, 16>
+      InitializedOpts;
 
   llvm::sys::Mutex Mutex;
+
+#ifndef NDEBUG
+  // In debug builds, track the options registered in this storage for assertion
+  // purposes.
+  llvm::SmallVector<std::pair<size_t, size_t>, 32> RegisteredOptions;
+#endif
 
 public:
   OptionStorage() = default;
 
   ~OptionStorage() {
-    for (auto [Opt, Ptr] : InitializedOpts)
+    for (auto [Ptr, Opt] : InitializedOpts)
       Opt->destructStorage(Ptr);
     for (auto &Page : StoragePages)
       sys::Memory::releaseMappedMemory(Page);
   }
 
-  size_t addOption(std::shared_ptr<OptionStorageInfoI> &&Opt) {
+  OptionStorageHandle addOption(size_t StorageSize, size_t Alignment) {
     llvm::sys::ScopedLock Lock(Mutex);
 
     // Calculate aligned offset for this option. In the (unlikely) case that
     // this option would straddle a page boundary, move it to the next page.
-    size_t Alignment = Opt->getStorageAlignment();
-    size_t StorageSize = Opt->getStorageSize();
     assert(StorageSize <= PageSize && "Option storage larger than page size!");
     size_t Offset = (TotalRegisteredSize + Alignment - 1) & ~(Alignment - 1);
     if (LLVM_UNLIKELY(Offset / PageSize !=
                       (Offset + StorageSize - 1) / PageSize))
       Offset = ((Offset + PageSize - 1) / PageSize) * PageSize;
 
-    RegisteredOptions.emplace_back(std::move(Opt), Offset);
+    size_t ID = 0;
+#ifndef NDEBUG
+    static std::atomic<size_t> NextID{1};
+    ID = NextID++;
+    RegisteredOptions.emplace_back(Offset, ID);
+#endif
 
     TotalRegisteredSize = Offset + StorageSize;
-    return Offset;
+    return OptionStorageHandle{Offset, ID};
   }
 
   /// Get pointer to storage at the given offset, allocating if needed.
-  void *getStorageAt(size_t Offset, OptionStorageInfoI *Opt) {
-    assert(llvm::any_of(
-               RegisteredOptions,
-               [Opt](const auto &Pair) { return Pair.first.get() == Opt; }) &&
+  void *getStorageAt(
+      const OptionStorageHandle &Handle,
+      std::function<std::shared_ptr<OptionStorageInfoI>()> OptInfoCreator) {
+    assert(llvm::any_of(RegisteredOptions,
+                        [Handle](const auto &Pair) {
+                          return Pair.first == Handle.Offset &&
+                                 Pair.second == Handle.ID;
+                        }) &&
            "Option not registered in storage!");
 
+    size_t Offset = Handle.Offset;
     size_t PageIndex = Offset / PageSize;
     size_t PageOffset = Offset % PageSize;
 
@@ -191,51 +204,31 @@ public:
     // Find the pointer offset of the new option.
     void *Ptr = static_cast<char *>(BaseAlloc.base()) + PageOffset;
 
-    // Try to insert the option into the initialized set. If it already
-    // exists, return the existing pointer.
-    auto [It, Inserted] = InitializedOpts.insert({Opt, Ptr});
-    if (!Inserted)
-      return It->second;
+    // If it already exists, return the existing pointer.
+    if (InitializedOpts.contains(Ptr))
+      return Ptr;
 
-    // Otherwise, construct the value in-place.
+    // Otherwise, construct the option in-place and add it to the map of
+    // initialized options.
+    std::shared_ptr<OptionStorageInfoI> Opt = OptInfoCreator();
+    InitializedOpts.insert({Ptr, Opt});
     Opt->constructStorage(Ptr);
     return Ptr;
   }
 
-  void copyFrom(const OptionStorage &Other, bool CopyStorageContents) {
+  void copyFrom(const OptionStorage &Other) {
     llvm::sys::ScopedLock Lock(Mutex);
 
     // Clear existing registered options and initialized options
-    RegisteredOptions.clear();
     InitializedOpts.clear();
-    TotalRegisteredSize = 0;
+    TotalRegisteredSize = Other.TotalRegisteredSize;
 
-    // Copy the registered options structure from the other instance
-    for (const auto &[Opt, Offset] : Other.RegisteredOptions) {
-      RegisteredOptions.emplace_back(Opt, Offset);
-      TotalRegisteredSize =
-          std::max(TotalRegisteredSize, Offset + Opt->getStorageSize());
-    }
-
-    // Copy the contents of initialized options from the other instance if
-    // requested
-    if (CopyStorageContents) {
-      // For each initialized option in the source storage, copy its value
-      for (const auto &[Opt, SrcPtr] : Other.InitializedOpts) {
-        // Find the offset for this option in our registered options
-        auto It = llvm::find_if(RegisteredOptions, [Opt](const auto &Pair) {
-          return Pair.first.get() == Opt;
-        });
-        if (It == RegisteredOptions.end())
-          continue; // Option not registered in this storage
-
-        // Get or create storage at the same offset in this instance
-        void *DstPtr = getStorageAt(It->second, Opt);
-
-        // Copy the value using the option's copy mechanism
-        Opt->copyStorage(SrcPtr, DstPtr);
-      }
-    }
+#ifndef NDEBUG
+    RegisteredOptions.clear();
+    RegisteredOptions.insert(RegisteredOptions.end(),
+                             Other.RegisteredOptions.begin(),
+                             Other.RegisteredOptions.end());
+#endif
   }
 
   // Non-copyable and non-movable
@@ -301,71 +294,60 @@ raw_ostream &operator<<(raw_ostream &OS, const PrintArg& Arg) {
 }
 
 class CLIManager {
-  struct State {
-    // Globals for name and overview of program.  Program name is not a string
-    // to avoid static ctor/dtor issues.
+  // Program-level information (name, overview, help text)
+  struct ProgramInfo {
     std::string ProgramName;
     StringRef ProgramOverview;
-
-    // This collects additional help to be printed.
     std::vector<StringRef> MoreHelp;
+  };
 
-    // This collects Options added with the cl::DefaultOption flag. Since they
-    // can be overridden, they are not added to the appropriate SubCommands
-    // until ParseCommandLineOptions actually runs.
+  // Registry of options, categories, and subcommands
+  struct OptionRegistry {
+    // Options added with cl::DefaultOption flag (processed at parse time)
     SmallVector<Option *, 4> DefaultOptions;
 
-    // This collects the different option categories that have been registered.
+    // Registered option categories
     SmallPtrSet<OptionCategory *, 16> RegisteredOptionCategories;
 
-    // This collects the different subcommands that have been registered.
+    // Registered subcommands
     SmallPtrSet<SubCommand *, 4> RegisteredSubCommands;
 
-    // A special subcommand representing no subcommand.
-    SubCommand TopLevelSubCommand;
+    // Map from Option to its metadata (occurrences, position)
+    DenseMap<Option *, OptionMetadata> OptionMetadataMap;
+  };
 
-    // A special subcommand that can be used to put an option into all
-    // subcommands.
+  struct State {
+    ProgramInfo Program;
+    OptionRegistry Registry;
+    OptionStorage Storage;
+
+    // Special subcommands
+    SubCommand TopLevelSubCommand;
     SubCommand AllSubCommands;
 
     SubCommand *ActiveSubCommand = nullptr;
 
-    // A boolean indicating whether this is the main CLI state or a stacked
-    // state.
-    const bool IsMainState;
-
-    OptionStorage Storage;
-
-    // Map from Option to its metadata
-    DenseMap<Option *, OptionMetadata> OptionMetadataMap;
-
     // Mutex to protect State members from concurrent access
     mutable llvm::sys::Mutex StateMutex;
 
-    State(bool isMain) : IsMainState(isMain), Storage() {}
+    State() : Storage() {}
 
     // Copy state structure from another State (without copying storage values)
-    void copyFrom(const State &Other, bool CopyStorageContents) {
-      // Avoid deadlock by locking mutexes in consistent order
+    void copyFrom(const State &Other) {
       if (this == &Other)
         return; // No need to copy from self
 
-      llvm::sys::Mutex *FirstMutex = &StateMutex;
-      llvm::sys::Mutex *SecondMutex = &Other.StateMutex;
+      // Use std::scoped_lock for deadlock-free locking of multiple mutexes
+      std::scoped_lock Lock(StateMutex, Other.StateMutex);
 
-      // Lock in pointer order to prevent deadlock
-      if (FirstMutex > SecondMutex)
-        std::swap(FirstMutex, SecondMutex);
-
-      llvm::sys::ScopedLock Lock1(*FirstMutex);
-      llvm::sys::ScopedLock Lock2(*SecondMutex);
-
-      ProgramName = Other.ProgramName;
-      ProgramOverview = Other.ProgramOverview;
-      MoreHelp = Other.MoreHelp;
-      DefaultOptions = Other.DefaultOptions;
-      RegisteredOptionCategories = Other.RegisteredOptionCategories;
-      RegisteredSubCommands = Other.RegisteredSubCommands;
+      Program.ProgramName = Other.Program.ProgramName;
+      Program.ProgramOverview = Other.Program.ProgramOverview;
+      Program.MoreHelp = Other.Program.MoreHelp;
+      Registry.DefaultOptions = Other.Registry.DefaultOptions;
+      Registry.RegisteredOptionCategories =
+          Other.Registry.RegisteredOptionCategories;
+      Registry.RegisteredSubCommands = Other.Registry.RegisteredSubCommands;
+      // Note: OptionMetadataMap is NOT copied - NumOccurrences must start at 0
 
       // Copy the contents of the top-level subcommand from Other to this
       // state's TopLevelSubCommand so that registered options are visible
@@ -374,7 +356,8 @@ class CLIManager {
       // Similarly copy AllSubCommands contents
       AllSubCommands.copyContentsFrom(Other.AllSubCommands);
 
-      Storage.copyFrom(Other.Storage, CopyStorageContents);
+      // Copy storage metadata (not values)
+      Storage.copyFrom(Other.Storage);
 
       // Note: ActiveSubCommand is not copied as it's context-specific.
     }
@@ -382,13 +365,13 @@ class CLIManager {
     // Get or create metadata for an option
     OptionMetadata &getOptionMetadata(Option *O) {
       llvm::sys::ScopedLock Lock(StateMutex);
-      return OptionMetadataMap[O];
+      return Registry.OptionMetadataMap[O];
     }
 
     const OptionMetadata &getOptionMetadata(Option *O) const {
       llvm::sys::ScopedLock Lock(StateMutex);
-      auto It = OptionMetadataMap.find(O);
-      if (It != OptionMetadataMap.end())
+      auto It = Registry.OptionMetadataMap.find(O);
+      if (It != Registry.OptionMetadataMap.end())
         return It->second;
       // Return default-constructed metadata if not found
       static const OptionMetadata DefaultMetadata = {};
@@ -401,7 +384,7 @@ class CLIManager {
       // Reset all option values to look like they have never been seen before.
       // Options might be reset twice (they can be reference in both OptionsMap
       // and one of the other members), but that does not harm.
-      for (auto *SC : RegisteredSubCommands) {
+      for (auto *SC : Registry.RegisteredSubCommands) {
         for (auto &O : SC->OptionsMap)
           O.second->reset();
         for (Option *O : SC->PositionalOpts)
@@ -412,7 +395,7 @@ class CLIManager {
           SC->ConsumeAfterOpt->reset();
       }
     }
-  } SharedState{/*isMain*/ true};
+  } MainState;
 
   static std::stack<std::shared_ptr<State>> &getThreadLocalStateStack() {
     thread_local std::stack<std::shared_ptr<State>> ThreadLocalStateStack;
@@ -423,7 +406,7 @@ class CLIManager {
     auto &Stack = getThreadLocalStateStack();
     if (!Stack.empty())
       return Stack.top().get();
-    return &SharedState;
+    return &MainState;
   }
   State &currentState() { return *getCurrentStatePtr(); }
 
@@ -440,20 +423,24 @@ class CLIManager {
   CLIManager() { registerSubCommand(&currentState().TopLevelSubCommand); }
 
 public:
-  StringRef getProgramName() { return currentState().ProgramName; }
-  StringRef getProgramOverview() { return currentState().ProgramOverview; }
+  StringRef getProgramName() { return currentState().Program.ProgramName; }
+  StringRef getProgramOverview() {
+    return currentState().Program.ProgramOverview;
+  }
   ArrayRef<Option *> getDefaultOptions() {
-    return currentState().DefaultOptions;
+    return currentState().Registry.DefaultOptions;
   }
   const SmallPtrSetImpl<OptionCategory *> &getRegisteredOptionCategories() {
-    return currentState().RegisteredOptionCategories;
+    return currentState().Registry.RegisteredOptionCategories;
   }
   OptionStorage &getOptionStorage() { return currentState().Storage; }
   SubCommand &getTopLevelSubCommand() {
     return currentState().TopLevelSubCommand;
   }
   SubCommand &getAllSubCommands() { return currentState().AllSubCommands; }
-  std::vector<StringRef> &getMoreHelp() { return currentState().MoreHelp; }
+  std::vector<StringRef> &getMoreHelp() {
+    return currentState().Program.MoreHelp;
+  }
 
   void ResetAllOptionOccurrences() {
     currentState().ResetAllOptionOccurrences();
@@ -470,7 +457,7 @@ public:
       return;
     }
     if (Opt.Subs.size() == 1 && *Opt.Subs.begin() == &getAllSubCommands()) {
-      for (auto *SC : currentState().RegisteredSubCommands)
+      for (auto *SC : currentState().Registry.RegisteredSubCommands)
         Action(*SC);
       Action(getAllSubCommands());
       return;
@@ -486,8 +473,9 @@ public:
     if (Opt.hasArgStr())
       return;
     if (!SC->OptionsMap.insert(std::make_pair(Name, &Opt)).second) {
-      errs() << currentState().ProgramName << ": CommandLine Error: Option '"
-             << Name << "' registered more than once!\n";
+      errs() << currentState().Program.ProgramName
+             << ": CommandLine Error: Option '" << Name
+             << "' registered more than once!\n";
       report_fatal_error("inconsistency in registered CommandLine options");
     }
   }
@@ -506,8 +494,9 @@ public:
 
       // Add argument to the argument map!
       if (!SC->OptionsMap.insert(std::make_pair(O->ArgStr, O)).second) {
-        errs() << currentState().ProgramName << ": CommandLine Error: Option '"
-               << O->ArgStr << "' registered more than once!\n";
+        errs() << currentState().Program.ProgramName
+               << ": CommandLine Error: Option '" << O->ArgStr
+               << "' registered more than once!\n";
         HadErrors = true;
       }
     }
@@ -535,7 +524,7 @@ public:
 
   void addOption(Option *O, bool ProcessDefaultOption = false) {
     if (!ProcessDefaultOption && O->isDefaultOption()) {
-      currentState().DefaultOptions.push_back(O);
+      currentState().Registry.DefaultOptions.push_back(O);
       return;
     }
     forEachSubCommand(*O, [&](SubCommand &SC) { addOption(O, &SC); });
@@ -577,17 +566,17 @@ public:
   void removeOption(Option *O) {
     forEachSubCommand(*O, [&](SubCommand &SC) { removeOption(O, &SC); });
     // Also remove the option's metadata from the current state
-    currentState().OptionMetadataMap.erase(O);
+    currentState().Registry.OptionMetadataMap.erase(O);
   }
 
   bool hasOptions() {
-    return llvm::any_of(currentState().RegisteredSubCommands,
+    return llvm::any_of(currentState().Registry.RegisteredSubCommands,
                         [](const SubCommand *S) { return S->hasOptions(); });
   }
 
   bool hasNamedSubCommands() {
     return llvm::any_of(
-        currentState().RegisteredSubCommands,
+        currentState().Registry.RegisteredSubCommands,
         [](const SubCommand *S) { return !S->getName().empty(); });
   }
 
@@ -601,8 +590,9 @@ public:
   void updateArgStr(Option *O, StringRef NewName, SubCommand *SC) {
     SubCommand &Sub = *SC;
     if (!Sub.OptionsMap.insert(std::make_pair(NewName, O)).second) {
-      errs() << currentState().ProgramName << ": CommandLine Error: Option '"
-             << O->ArgStr << "' registered more than once!\n";
+      errs() << currentState().Program.ProgramName
+             << ": CommandLine Error: Option '" << O->ArgStr
+             << "' registered more than once!\n";
       report_fatal_error("inconsistency in registered CommandLine options");
     }
     Sub.OptionsMap.erase(O->ArgStr);
@@ -617,24 +607,24 @@ public:
 
   void registerCategory(OptionCategory *cat) {
     llvm::sys::ScopedLock Lock(currentState().StateMutex);
-    assert(count_if(currentState().RegisteredOptionCategories,
+    assert(count_if(currentState().Registry.RegisteredOptionCategories,
                     [cat](const OptionCategory *Category) {
                       return cat->getName() == Category->getName();
                     }) == 0 &&
            "Duplicate option categories");
 
-    currentState().RegisteredOptionCategories.insert(cat);
+    currentState().Registry.RegisteredOptionCategories.insert(cat);
   }
 
   void registerSubCommand(SubCommand *sub) {
     llvm::sys::ScopedLock Lock(currentState().StateMutex);
-    assert(count_if(currentState().RegisteredSubCommands,
+    assert(count_if(currentState().Registry.RegisteredSubCommands,
                     [sub](const SubCommand *Sub) {
                       return (!sub->getName().empty()) &&
                              (Sub->getName() == sub->getName());
                     }) == 0 &&
            "Duplicate subcommands");
-    currentState().RegisteredSubCommands.insert(sub);
+    currentState().Registry.RegisteredSubCommands.insert(sub);
 
     // For all options that have been registered for all subcommands, add the
     // option to this subcommand now.
@@ -652,36 +642,36 @@ public:
 
   void unregisterSubCommand(SubCommand *sub) {
     llvm::sys::ScopedLock Lock(currentState().StateMutex);
-    currentState().RegisteredSubCommands.erase(sub);
+    currentState().Registry.RegisteredSubCommands.erase(sub);
   }
 
   iterator_range<SmallPtrSet<SubCommand *, 4>::iterator>
   getRegisteredSubcommands() {
-    return make_range(currentState().RegisteredSubCommands.begin(),
-                      currentState().RegisteredSubCommands.end());
+    return make_range(currentState().Registry.RegisteredSubCommands.begin(),
+                      currentState().Registry.RegisteredSubCommands.end());
   }
 
   void reset() {
     llvm::sys::ScopedLock Lock(currentState().StateMutex);
     currentState().ActiveSubCommand = nullptr;
-    currentState().ProgramName.clear();
-    currentState().ProgramOverview = StringRef();
+    currentState().Program.ProgramName.clear();
+    currentState().Program.ProgramOverview = StringRef();
 
-    currentState().MoreHelp.clear();
-    currentState().RegisteredOptionCategories.clear();
+    currentState().Program.MoreHelp.clear();
+    currentState().Registry.RegisteredOptionCategories.clear();
 
     currentState().ResetAllOptionOccurrences();
-    currentState().RegisteredSubCommands.clear();
+    currentState().Registry.RegisteredSubCommands.clear();
 
     getTopLevelSubCommand().reset();
     getAllSubCommands().reset();
     registerSubCommand(&getTopLevelSubCommand());
 
-    currentState().DefaultOptions.clear();
+    currentState().Registry.DefaultOptions.clear();
   }
 
   void pushCLIState(const cl::ThreadLocalStateConfig &Config = {}) {
-    State *SourceState = nullptr;
+    const State *SourceState = nullptr;
 
     // Determine which state to use as source for copying
     switch (Config.Source) {
@@ -689,7 +679,7 @@ public:
       // Create a completely fresh state
       break;
     case cl::ThreadLocalStateConfig::SourceState::MainState:
-      SourceState = &SharedState;
+      SourceState = &MainState;
       break;
     case cl::ThreadLocalStateConfig::SourceState::TopOfStack: {
       auto &Stack = getThreadLocalStateStack();
@@ -703,12 +693,12 @@ public:
     }
 
     // Create new state on the stack
-    auto &NewState = getThreadLocalStateStack().emplace(
-        std::make_shared<State>(/*isMain*/ false));
+    auto &NewState =
+        getThreadLocalStateStack().emplace(std::make_shared<State>());
 
     // Copy structure if requested
     if (SourceState) {
-      NewState->copyFrom(*SourceState, Config.CopyStorageValues);
+      NewState->copyFrom(*SourceState);
     } else {
       // Only register the top-level subcommand if we're creating a fresh state
       // When copying structure, RegisteredSubCommands already has the right
@@ -717,24 +707,20 @@ public:
     }
   }
 
-  void pushCLIState(std::shared_ptr<void> &&StateToken) {
+  void pushCLIState(std::shared_ptr<void> &&StateToken) const {
     getThreadLocalStateStack().push(
         std::static_pointer_cast<State>(std::move(StateToken)));
   }
 
-  std::shared_ptr<void> getCLIStateToken() {
-    if (getThreadLocalStateStack().empty())
+  static bool isMainStateActive() { return getThreadLocalStateStack().empty(); }
+
+  std::shared_ptr<void> getCLIStateToken() const {
+    if (isMainStateActive())
       return nullptr;
     return getThreadLocalStateStack().top();
   }
 
-  std::weak_ptr<void> getWeakCLIStateToken() {
-    if (getThreadLocalStateStack().empty())
-      return {};
-    return getThreadLocalStateStack().top();
-  }
-
-  void popCLIState() {
+  void popCLIState() const {
     auto &Stack = getThreadLocalStateStack();
     if (!Stack.empty())
       Stack.pop();
@@ -749,40 +735,22 @@ public:
 
 } // namespace
 
-cl::OptionStorageHandle
-cl::registerOptionStorage(std::shared_ptr<OptionStorageInfoI> &&Opt) {
-  OptionStorageInfoI *Impl = Opt.get();
-  size_t Offset =
-      CLIManager::getInstance().getOptionStorage().addOption(std::move(Opt));
-  return {Offset, Impl};
+cl::OptionStorageHandle cl::registerOptionStorage(size_t StorageSize,
+                                                  size_t Alignment) {
+  return CLIManager::getInstance().getOptionStorage().addOption(StorageSize,
+                                                                Alignment);
 }
 
-void *cl::getOptionStorage(const OptionStorageHandle &Storage) {
+void *cl::getOptionStorage(
+    const OptionStorageHandle &Storage,
+    std::function<std::shared_ptr<OptionStorageInfoI>()> OptInfoCreator) {
+  assert(!CLIManager::isMainStateActive() &&
+         "OptionStorage should only be accessed from non-main states!");
   return CLIManager::getInstance().getOptionStorage().getStorageAt(
-      Storage.Offset, Storage.Impl);
+      Storage, OptInfoCreator);
 }
 
-bool cl::OptionValueCacheBase::isActive() const {
-  std::weak_ptr<void> CurrentToken =
-      CLIManager::getInstance().getWeakCLIStateToken();
-  return !OwnerStateToken.owner_before(CurrentToken) &&
-         !CurrentToken.owner_before(OwnerStateToken);
-}
-
-bool cl::OptionValueCacheBase::claimIfFree() {
-  // The state may already own it.
-  if (isActive())
-    return true;
-  // The token may appear as expired if the owner state is the main state, so we
-  // check if the owner is default constructed.
-  if (LLVM_UNLIKELY(OwnerStateToken.expired() &&
-                    (OwnerStateToken.owner_before(std::weak_ptr<void>()) ||
-                     std::weak_ptr<void>().owner_before(OwnerStateToken)))) {
-    OwnerStateToken = CLIManager::getInstance().getWeakCLIStateToken();
-    return true;
-  }
-  return false;
-}
+bool cl::isMainCLIStateActive() { return CLIManager::isMainStateActive(); }
 
 template <typename T, T TrueVal, T FalseVal>
 static bool parseBool(Option &O, StringRef ArgName, StringRef Arg, T &Value) {
@@ -933,7 +901,7 @@ SubCommand *CLIManager::LookupSubCommand(StringRef Name,
     return &SubCommand::getTopLevel();
   // Find a subcommand with the edit distance == 1.
   SubCommand *NearestMatch = nullptr;
-  for (auto *S : currentState().RegisteredSubCommands) {
+  for (auto *S : currentState().Registry.RegisteredSubCommands) {
     assert(S != &SubCommand::getAll() &&
            "SubCommand::getAll() is not expected in RegisteredSubCommands");
     if (S->getName().empty())
@@ -1864,7 +1832,7 @@ bool CLIManager::ParseCommandLineOptions(int argc, const char *const *argv,
 
   {
     llvm::sys::ScopedLock Lock(currentState().StateMutex);
-    currentState().ProgramOverview = Overview;
+    currentState().Program.ProgramOverview = Overview;
   }
   bool IgnoreErrors = Errs;
   if (!Errs)
@@ -1892,7 +1860,7 @@ bool CLIManager::ParseCommandLineOptions(int argc, const char *const *argv,
   // Copy the program name into ProgName, making sure not to overflow it.
   {
     llvm::sys::ScopedLock Lock(currentState().StateMutex);
-    currentState().ProgramName =
+    currentState().Program.ProgramName =
         std::string(sys::path::filename(StringRef(argv[0])));
   }
 
@@ -1926,7 +1894,7 @@ bool CLIManager::ParseCommandLineOptions(int argc, const char *const *argv,
   auto &SinkOpts = ChosenSubCommand->SinkOpts;
   auto &OptionsMap = ChosenSubCommand->OptionsMap;
 
-  for (auto *O : currentState().DefaultOptions) {
+  for (auto *O : currentState().Registry.DefaultOptions) {
     addOption(O, true);
   }
 
@@ -2215,7 +2183,7 @@ bool CLIManager::ParseCommandLineOptions(int argc, const char *const *argv,
 
   // Free all of the memory allocated to the map.  Command line options may only
   // be processed once!
-  currentState().MoreHelp.clear();
+  currentState().Program.MoreHelp.clear();
 
   // If we had an error processing our arguments, don't let the program execute
   if (ErrorParsing) {
@@ -3241,16 +3209,16 @@ void cl::ResetAllOptionOccurrences() {
   CLIManager::getInstance().ResetAllOptionOccurrences();
 }
 
-LLVM_ABI void cl::PushCLIState(const ThreadLocalStateConfig &Config) {
+void cl::PushCLIState(const ThreadLocalStateConfig &Config) {
   CLIManager::getInstance().pushCLIState(Config);
 }
-LLVM_ABI void cl::PushCLIState(std::shared_ptr<void> &&Token) {
+void cl::PushCLIState(std::shared_ptr<void> &&Token) {
   CLIManager::getInstance().pushCLIState(std::move(Token));
 }
-LLVM_ABI std::shared_ptr<void> cl::GetCurrentCLIStateToken() {
+std::shared_ptr<void> cl::GetCurrentCLIStateToken() {
   return CLIManager::getInstance().getCLIStateToken();
 }
-LLVM_ABI void cl::PopCLIState() { CLIManager::getInstance().popCLIState(); }
+void cl::PopCLIState() { CLIManager::getInstance().popCLIState(); }
 
 void LLVMParseCommandLineOptions(int argc, const char *const *argv,
                                  const char *Overview) {
