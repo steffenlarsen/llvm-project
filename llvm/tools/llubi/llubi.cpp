@@ -185,13 +185,11 @@ int main(int argc, char **argv) {
     // Otherwise, if there is a .bc suffix on the executable strip it off, it
     // might confuse the program.
     if (StringRef(InputFile).ends_with(".bc"))
-      InputFile.mutate([](std::string &Str) { Str.erase(Str.length() - 3); });
+      InputFile.erase(InputFile.length() - 3);
   }
 
   // Add the module's name to the start of the vector of arguments to main().
-  InputArgv.mutate([](std::vector<std::string> &Args) {
-    Args.insert(Args.begin(), InputFile);
-  });
+  InputArgv.insert(InputArgv.begin(), InputFile);
 
   // Initialize the execution context and set parameters.
   ubi::Context Ctx(*Mod);
