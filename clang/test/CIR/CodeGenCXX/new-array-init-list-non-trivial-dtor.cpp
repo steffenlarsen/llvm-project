@@ -59,13 +59,13 @@ void cleanup_const_exact() { new Throws[3]{1, 2, 3}; }
 // LLVM-SAME: personality ptr @__gxx_personality_v0
 // LLVM:   %[[ALLOC:.*]] = call{{.*}}ptr @_Znam(i64 noundef 11)
 // LLVM:   store i64 3, ptr %[[ALLOC]]
-// LLVM:   %[[FIRST:.*]] = getelementptr i8, ptr %[[ALLOC]], i64 8
+// LLVM:   %[[FIRST:.*]] = getelementptr inbounds i8, ptr %[[ALLOC]], i64 8
 // LLVM:   invoke void @_ZN6ThrowsC1Ei(ptr {{[^,]*}} %[[FIRST]], i32 noundef 1)
 // LLVM-NEXT: to label %{{.*}} unwind label %[[LPAD:.*]]
-// LLVM:   %[[ELT1:.*]] = getelementptr %struct.Throws, ptr %[[FIRST]], i64 1
+// LLVM:   %[[ELT1:.*]] = getelementptr inbounds %struct.Throws, ptr %[[FIRST]], i64 1
 // LLVM:   invoke void @_ZN6ThrowsC1Ei(ptr {{[^,]*}} %[[ELT1]], i32 noundef 2)
 // LLVM-NEXT: to label %{{.*}} unwind label %[[LPAD]]
-// LLVM:   %[[ELT2:.*]] = getelementptr %struct.Throws, ptr %[[ELT1]], i64 1
+// LLVM:   %[[ELT2:.*]] = getelementptr inbounds %struct.Throws, ptr %[[ELT1]], i64 1
 // LLVM:   invoke void @_ZN6ThrowsC1Ei(ptr {{[^,]*}} %[[ELT2]], i32 noundef 3)
 // LLVM-NEXT: to label %{{.*}} unwind label %[[LPAD]]
 // LLVM: [[LPAD]]:
@@ -175,13 +175,13 @@ void cleanup_const_partial() { new Throws[5]{1, 2, 3}; }
 // LLVM-SAME: personality ptr @__gxx_personality_v0
 // LLVM:   %[[ALLOC:.*]] = call{{.*}}ptr @_Znam(i64 noundef 13)
 // LLVM:   store i64 5, ptr %[[ALLOC]]
-// LLVM:   %[[FIRST:.*]] = getelementptr i8, ptr %[[ALLOC]], i64 8
+// LLVM:   %[[FIRST:.*]] = getelementptr inbounds i8, ptr %[[ALLOC]], i64 8
 // LLVM:   invoke void @_ZN6ThrowsC1Ei(ptr {{[^,]*}} %[[FIRST]], i32 noundef 1)
 // LLVM-NEXT: to label %{{.*}} unwind label %[[LPAD:.*]]
-// LLVM:   %[[ELT1:.*]] = getelementptr %struct.Throws, ptr %[[FIRST]], i64 1
+// LLVM:   %[[ELT1:.*]] = getelementptr inbounds %struct.Throws, ptr %[[FIRST]], i64 1
 // LLVM:   invoke void @_ZN6ThrowsC1Ei(ptr {{[^,]*}} %[[ELT1]], i32 noundef 2)
 // LLVM-NEXT: to label %{{.*}} unwind label %[[LPAD]]
-// LLVM:   %[[ELT2:.*]] = getelementptr %struct.Throws, ptr %[[ELT1]], i64 1
+// LLVM:   %[[ELT2:.*]] = getelementptr inbounds %struct.Throws, ptr %[[ELT1]], i64 1
 // LLVM:   invoke void @_ZN6ThrowsC1Ei(ptr {{[^,]*}} %[[ELT2]], i32 noundef 3)
 // LLVM-NEXT: to label %{{.*}} unwind label %[[LPAD]]
 //

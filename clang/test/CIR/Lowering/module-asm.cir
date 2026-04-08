@@ -6,7 +6,7 @@
 
 // CHECK: llvm.module_asm =  [".globl bar", ".globl foo"]
 // LLVM: module asm
-// LLVM-NEXT: ".globl bar"
-// LLVM-NEXT: ".globl foo"
-module attributes {cir.module_asm = [".globl bar", ".globl foo"]} {
+// LLVM: ".globl bar"
+// LLVM: ".globl foo"
+module attributes {cir.module_asm = [".globl bar", ".globl foo"], cir.triple = "x86_64-unknown-linux-gnu"} {
 }

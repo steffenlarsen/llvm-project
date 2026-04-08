@@ -53,6 +53,53 @@ mlir::Block *replaceThrowWithTryThrow(cir::ThrowOp throwOp,
 void collectUnreachable(mlir::Operation *parent,
                         llvm::SmallVectorImpl<mlir::Operation *> &ops);
 
+//===----------------------------------------------------------------------===//
+// CIR Value Tracer — shared backward-walk utility for offload passes
+//===----------------------------------------------------------------------===//
+
+/// Result of tracing a CIR value backward to its origin.
+struct ValueTraceResult {
+  enum Kind {
+    Constant,     ///< Compile-time integer constant
+    Alloca,       ///< Local alloca (Value is the alloca result)
+    BlockArg,     ///< Function/region block argument
+    Dim3CtorArg,  ///< Argument of a dim3 constructor call
+    Unknown       ///< Could not determine origin
+  };
+
+  Kind kind = Unknown;
+  mlir::Value terminal;                  ///< The origin value
+  std::optional<int64_t> constantValue;  ///< Valid when kind == Constant
+  unsigned dim3FieldIndex = 0;           ///< x=0, y=1, z=2 for Dim3CtorArg
+};
+
+/// Trace a CIR value backward through casts, loads, alloca unique-store
+/// forwarding, and dim3 struct paths (get_member → copy → constructor).
+///
+/// This is the shared core of tryResolveIndexToConstant (TightenLaunchBounds),
+/// tryTracePointerToAllocation (PropagatePointerFacts), and the planned
+/// GridCoverage pass.  Each pass interprets the terminal differently:
+///   - TightenLaunchBounds: checks kind == Constant
+///   - PropagatePointerFacts: checks kind == Alloca, then hipMalloc
+///   - GridCoverage: checks the Dim3CtorArg for a division pattern
+ValueTraceResult traceValueOrigin(mlir::Value v, unsigned maxDepth = 16);
+
+/// Try to resolve a CIR value to a compile-time integer constant.
+/// Convenience wrapper around traceValueOrigin.
+std::optional<int64_t> tryResolveToConstant(mlir::Value v);
+
+/// Given a dim3 constructor argument value, check if it is of the form
+/// `(expr + C-1) / C` (ceiling division by C).  If so, return C and set
+/// `dividend` to the `expr` value.  Returns std::nullopt if the pattern
+/// doesn't match.
+std::optional<int64_t> matchCeilDiv(mlir::Value v, mlir::Value &dividend);
+
+/// Trace a launch argument backward to find which kernel argument index
+/// it corresponds to.  Returns std::nullopt if the value doesn't trace
+/// to a kernel launch argument.
+std::optional<unsigned> traceToKernelArgIndex(
+    mlir::Value launchArg, cir::OffloadKernelLaunchOp launch);
+
 } // namespace cir
 
 #endif // LLVM_CLANG_CIR_DIALECT_TRANSFORMS_CIRTRANSFORMUTILS_H

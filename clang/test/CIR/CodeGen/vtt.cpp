@@ -316,9 +316,9 @@ D::D() {}
 // LLVM-COMMON:   %[[B_VPTR_ADDR:.*]] = getelementptr inbounds ptr, ptr %[[VTT]], i32 1
 // LLVM-COMMON:   %[[B_VPTR:.*]] = load ptr, ptr %[[B_VPTR_ADDR]]
 // LLVM-COMMON:   %[[VPTR:.*]] = load ptr, ptr %[[THIS]]
-// LLVM-COMMON:   %[[BASE_OFFSET_ADDR:.*]] = getelementptr i8, ptr %[[VPTR]], i64 -24
+// LLVM-COMMON:   %[[BASE_OFFSET_ADDR:.*]] = getelementptr inbounds i8, ptr %[[VPTR]], i64 -24
 // LLVM-COMMON:   %[[BASE_OFFSET:.*]] = load i64, ptr %[[BASE_OFFSET_ADDR]]
-// LLVM-COMMON:   %[[BASE_PTR:.*]] = getelementptr i8, ptr %[[THIS]], i64 %[[BASE_OFFSET]]
+// LLVM-COMMON:   %[[BASE_PTR:.*]] = getelementptr inbounds i8, ptr %[[THIS]], i64 %[[BASE_OFFSET]]
 // LLVM-COMMON:   store ptr %[[B_VPTR]], ptr %[[BASE_PTR]]
 
 // OGCG-COMMON: define {{.*}} void @_ZN1BC2Ev(ptr {{.*}} %[[THIS_ARG:.*]], ptr {{.*}} %[[VTT_ARG:.*]])
@@ -382,9 +382,9 @@ D::D() {}
 // LLVM-COMMON:   %[[B_VPTR_ADDR:.*]] = getelementptr inbounds ptr, ptr %[[VTT]], i32 1
 // LLVM-COMMON:   %[[B_VPTR:.*]] = load ptr, ptr %[[B_VPTR_ADDR]]
 // LLVM-COMMON:   %[[VPTR:.*]] = load ptr, ptr %[[THIS]]
-// LLVM-COMMON:   %[[BASE_OFFSET_ADDR:.*]] = getelementptr i8, ptr %[[VPTR]], i64 -24
+// LLVM-COMMON:   %[[BASE_OFFSET_ADDR:.*]] = getelementptr inbounds i8, ptr %[[VPTR]], i64 -24
 // LLVM-COMMON:   %[[BASE_OFFSET:.*]] = load i64, ptr %[[BASE_OFFSET_ADDR]]
-// LLVM-COMMON:   %[[BASE_PTR:.*]] = getelementptr i8, ptr %[[THIS]], i64 %[[BASE_OFFSET]]
+// LLVM-COMMON:   %[[BASE_PTR:.*]] = getelementptr inbounds i8, ptr %[[THIS]], i64 %[[BASE_OFFSET]]
 // LLVM-COMMON:   store ptr %[[B_VPTR]], ptr %[[BASE_PTR]]
 
 // OGCG-COMMON: define {{.*}} void @_ZN1CC2Ev(ptr {{.*}} %[[THIS_ARG:.*]], ptr {{.*}} %[[VTT_ARG:.*]])
@@ -465,9 +465,9 @@ D::D() {}
 // LLVM-COMMON:   %[[D_VPTR_ADDR:.*]] = getelementptr inbounds ptr, ptr %[[VTT]], i32 5
 // LLVM-COMMON:   %[[D_VPTR:.*]] = load ptr, ptr %[[D_VPTR_ADDR]]
 // LLVM-COMMON:   %[[D_VPTR_ADDR2:.*]] = load ptr, ptr %[[THIS]]
-// LLVM-COMMON:   %[[BASE_OFFSET_ADDR:.*]] = getelementptr i8, ptr %[[D_VPTR_ADDR2]], i64 -24
+// LLVM-COMMON:   %[[BASE_OFFSET_ADDR:.*]] = getelementptr inbounds i8, ptr %[[D_VPTR_ADDR2]], i64 -24
 // LLVM-COMMON:   %[[BASE_OFFSET:.*]] = load i64, ptr %[[BASE_OFFSET_ADDR]]
-// LLVM-COMMON:   %[[BASE_PTR:.*]] = getelementptr i8, ptr %[[THIS]], i64 %[[BASE_OFFSET]]
+// LLVM-COMMON:   %[[BASE_PTR:.*]] = getelementptr inbounds i8, ptr %[[THIS]], i64 %[[BASE_OFFSET]]
 // LLVM-COMMON:   store ptr %[[D_VPTR]], ptr %[[BASE_PTR]]
 // LLVM-COMMON:   %[[C_VPTR_ADDR:.*]] = getelementptr inbounds ptr, ptr %[[VTT]], i32 6
 // LLVM-COMMON:   %[[C_VPTR:.*]] = load ptr, ptr %[[C_VPTR_ADDR]]

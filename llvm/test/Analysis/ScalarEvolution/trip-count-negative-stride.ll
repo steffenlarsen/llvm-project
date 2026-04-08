@@ -123,9 +123,10 @@ for.end:                                          ; preds = %for.body, %entry
 define void @ult_not_taken(i8 %step) {
 ; CHECK-LABEL: 'ult_not_taken'
 ; CHECK-NEXT:  Determining loop execution counts for: @ult_not_taken
-; CHECK-NEXT:  Loop %for.body: Unpredictable backedge-taken count.
-; CHECK-NEXT:  Loop %for.body: Unpredictable constant max backedge-taken count.
-; CHECK-NEXT:  Loop %for.body: Unpredictable symbolic max backedge-taken count.
+; CHECK-NEXT:  Loop %for.body: backedge-taken count is i8 0
+; CHECK-NEXT:  Loop %for.body: constant max backedge-taken count is i8 0
+; CHECK-NEXT:  Loop %for.body: symbolic max backedge-taken count is i8 0
+; CHECK-NEXT:  Loop %for.body: Trip multiple is 1
 ;
 entry:
   %assume = icmp ult i8 128, %step
@@ -149,10 +150,10 @@ for.end:                                          ; preds = %for.body, %entry
 define void @ult_ub1() {
 ; CHECK-LABEL: 'ult_ub1'
 ; CHECK-NEXT:  Determining loop execution counts for: @ult_ub1
-; CHECK-NEXT:  Loop %for.body: backedge-taken count is i32 2
-; CHECK-NEXT:  Loop %for.body: constant max backedge-taken count is i32 2
-; CHECK-NEXT:  Loop %for.body: symbolic max backedge-taken count is i32 2
-; CHECK-NEXT:  Loop %for.body: Trip multiple is 3
+; CHECK-NEXT:  Loop %for.body: backedge-taken count is i8 0
+; CHECK-NEXT:  Loop %for.body: constant max backedge-taken count is i8 0
+; CHECK-NEXT:  Loop %for.body: symbolic max backedge-taken count is i8 0
+; CHECK-NEXT:  Loop %for.body: Trip multiple is 1
 ;
 entry:
   br label %for.body

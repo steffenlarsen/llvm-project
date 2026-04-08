@@ -268,7 +268,7 @@ void test_movnti(int dest, int src) {
   // CIR: cir.store nontemporal {{.*}} %[[VAL]]
   
   // LLVM-LABEL: @test_movnti
-  // LLVM: store i32 %{{.*}}, ptr %{{.*}}, align 1, !nontemporal
+  // LLVM: store i32 %{{.*}}, ptr %{{.*}}, align 1,{{.*}}!nontemporal
   
   // OGCG-LABEL: @test_movnti
   // OGCG: store i32 %{{.*}}, ptr %{{.*}}, align 1, !nontemporal
@@ -283,7 +283,7 @@ void test_movntss(float *dest, v4f src) {
   // CIR: cir.store nontemporal align(1) %[[SCALAR]], {{.*}} : !cir.float, !cir.ptr<!cir.float>
 
   // LLVM-LABEL: @test_movntss
-  // LLVM: store float %{{.*}}, ptr %{{.*}}, align 1, !nontemporal
+  // LLVM: store float %{{.*}}, ptr %{{.*}}, align 1,{{.*}}!nontemporal
 
   // OGCG-LABEL: @test_movntss
   // OGCG: store float %{{.*}}, ptr %{{.*}}, align 1, !nontemporal 

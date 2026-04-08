@@ -1689,7 +1689,7 @@ int init_catch_param_with_ref_to_ptr_to_non_record() {
 // LLVM: [[BEGIN_CATCH]]:
 // LLVM:   %[[EXN_OBJ_PHI2:.*]] = phi ptr [ %[[EXN_OBJ_PHI1:.*]], %[[DISPATCH:.*]] ]
 // LLVM:   %[[EH_SELECTOR_PHI2:.*]] = phi i32 [ %[[EH_SELECTOR_PHI1:.*]], %[[DISPATCH:.*]] ]
-// LLVM:   %[[EXN_OBJ:.*]] = getelementptr i8, ptr %[[EXN_OBJ_PHI2]], i64 32
+// LLVM:   %[[EXN_OBJ:.*]] = getelementptr inbounds nuw i8, ptr %[[EXN_OBJ_PHI2]], i64 32
 // LLVM:   store ptr %[[EXN_OBJ]], ptr %[[P_ADDR]], align 8
 // LLVM:   %[[EXN_PTR:.*]] = call ptr @__cxa_begin_catch(ptr %[[EXN_OBJ_PHI2]])
 // LLVM:   br label %[[CATCH_BODY:.*]]

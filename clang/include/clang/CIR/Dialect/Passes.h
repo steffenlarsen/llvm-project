@@ -46,6 +46,18 @@ std::unique_ptr<Pass> createGotoSolverPass();
 std::unique_ptr<Pass> createIdiomRecognizerPass();
 std::unique_ptr<Pass> createLibOptPass();
 std::unique_ptr<Pass> createLibOptPass(clang::ASTContext *astCtx);
+std::unique_ptr<Pass> createIdiomRecognizerPass(clang::ASTContext *astCtx);
+std::unique_ptr<Pass> createMergeOffloadModules();
+
+// CIR offload optimization passes.
+std::unique_ptr<Pass> createOffloadTightenLaunchBoundsPass(bool enabled = true);
+std::unique_ptr<Pass> createOffloadPropagateBlockShapePass(bool enabled = true);
+std::unique_ptr<Pass> createOffloadPropagatePointerFactsPass(bool enabled = true);
+std::unique_ptr<Pass> createOffloadSpecializeScalarArgsPass(bool enabled = true);
+std::unique_ptr<Pass> createOffloadMultiversionDivisibilityPass(bool enabled = true);
+std::unique_ptr<Pass> createOffloadSpecializeSharedMemoryPass(bool enabled = true, unsigned maxVariants = 1);
+std::unique_ptr<Pass> createOffloadPropagateGridCoveragePass(bool enabled = true);
+std::unique_ptr<Pass> createOffloadDeadArgEliminationPass(bool enabled = true);
 
 void populateCIRPreLoweringPasses(mlir::OpPassManager &pm);
 

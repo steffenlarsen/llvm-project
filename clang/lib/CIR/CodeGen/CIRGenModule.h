@@ -83,6 +83,11 @@ private:
   /// A "module" matches a c/cpp source file: containing a list of functions.
   mlir::ModuleOp theModule;
 
+  /// Cached data layout for the module. Constructing CIRDataLayout is expensive
+  /// (it sorts the module's attribute dictionary), so we cache it here instead
+  /// of recreating it on every getDataLayout() call.
+  mutable std::optional<cir::CIRDataLayout> cachedDataLayout;
+
   clang::DiagnosticsEngine &diags;
 
   const clang::TargetInfo &target;
@@ -99,6 +104,10 @@ private:
 
   /// Holds the OpenMP runtime
   std::unique_ptr<CIRGenOpenMPRuntime> openMPRuntime;
+
+  /// Device sub-module (@offload_device_module) populated during offload
+  /// codegen. Null until the first device function or global is emitted.
+  cir::OffloadModuleOp offloadDeviceModule;
 
   /// Per-function codegen information. Updated everytime emitCIR is called
   /// for FunctionDecls's.
@@ -157,6 +166,9 @@ private:
       materializedGlobalTemporaryMap;
 
 public:
+  /// Get or create the @offload_device_module for device-side ops.
+  cir::OffloadModuleOp getOrCreateDeviceModule();
+
   mlir::ModuleOp getModule() const { return theModule; }
   CIRGenBuilderTy &getBuilder() { return builder; }
 
@@ -174,10 +186,10 @@ public:
   CIRGenCXXABI &getCXXABI() const { return *abi; }
   mlir::MLIRContext &getMLIRContext() { return *builder.getContext(); }
 
-  const cir::CIRDataLayout getDataLayout() const {
-    // FIXME(cir): instead of creating a CIRDataLayout every time, set it as an
-    // attribute for the CIRModule class.
-    return cir::CIRDataLayout(theModule);
+  const cir::CIRDataLayout &getDataLayout() const {
+    if (!cachedDataLayout)
+      cachedDataLayout.emplace(theModule);
+    return *cachedDataLayout;
   }
 
   /// -------
@@ -556,8 +568,15 @@ public:
   // This is a list of deferred decls which we have seen that *are* actually
   // referenced. These get code generated when the module is done.
   std::vector<clang::GlobalDecl> deferredDeclsToEmit;
+
+  // Track which decls are already in deferredDeclsToEmit or have been emitted,
+  // to avoid adding duplicates. Duplicates slow down emitDeferred() because
+  // each entry must be processed even if it has already been defined.
+  llvm::DenseSet<clang::GlobalDecl> deferredDeclsQueued;
+
   void addDeferredDeclToEmit(clang::GlobalDecl GD) {
-    deferredDeclsToEmit.emplace_back(GD);
+    if (deferredDeclsQueued.insert(GD).second)
+      deferredDeclsToEmit.emplace_back(GD);
   }
 
   void emitTopLevelDecl(clang::Decl *decl);

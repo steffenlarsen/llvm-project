@@ -13,7 +13,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/GPU/Transforms/Passes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenMP/Transforms/Passes.h"
 #include "mlir/Pass/PassManager.h"
@@ -32,7 +36,9 @@ int main(int argc, char **argv) {
   // TODO: register needed MLIR passes for CIR?
   mlir::DialectRegistry registry;
   cir::registerAllDialects(registry);
-  registry.insert<mlir::memref::MemRefDialect, mlir::LLVM::LLVMDialect>();
+  registry.insert<mlir::func::FuncDialect, mlir::memref::MemRefDialect,
+                  mlir::LLVM::LLVMDialect, mlir::gpu::GPUDialect,
+                  mlir::ROCDL::ROCDLDialect>();
 
   ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
     return mlir::createCIRCanonicalizePass();
@@ -77,6 +83,37 @@ int main(int argc, char **argv) {
 
   mlir::omp::registerOpenMPPasses();
   mlir::registerTransformsPasses();
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createMergeOffloadModules();
+  });
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createGpuSplitSingleSourcePass();
+  });
+  // CIR offload optimization passes.
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createOffloadTightenLaunchBoundsPass();
+  });
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createOffloadPropagateBlockShapePass();
+  });
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createOffloadPropagatePointerFactsPass();
+  });
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createOffloadSpecializeScalarArgsPass();
+  });
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createOffloadMultiversionDivisibilityPass();
+  });
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createOffloadSpecializeSharedMemoryPass();
+  });
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createOffloadPropagateGridCoveragePass();
+  });
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createOffloadDeadArgEliminationPass();
+  });
 
   return mlir::asMainReturnCode(MlirOptMain(
       argc, argv, "Clang IR analysis and optimization tool\n", registry));

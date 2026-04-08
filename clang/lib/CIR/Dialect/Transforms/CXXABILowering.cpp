@@ -11,6 +11,8 @@
 
 #include "mlir/Dialect/OpenACC/OpenACCOpsDialect.h.inc"
 #include "mlir/Dialect/OpenMP/OpenMPOpsDialect.h.inc"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Pass/Pass.h"
@@ -45,10 +47,15 @@ bool isCXXABIAttributeLegal(const mlir::TypeConverter &tc,
   if (!attr)
     return true;
 
-  // None of the OpenACC/OMP attributes contain a type of concern, so we can
-  // just treat them as legal.
-  if (isa<mlir::acc::OpenACCDialect, mlir::omp::OpenMPDialect>(
-          attr.getDialect()))
+  // None of the OpenACC/OMP/GPU attributes contain a type of concern, so we
+  // can just treat them as legal.
+  if (isa<mlir::acc::OpenACCDialect, mlir::omp::OpenMPDialect,
+          mlir::gpu::GPUDialect>(attr.getDialect()))
+    return true;
+
+  // Attributes from the LLVM dialect (e.g. cu.kernel_name set by the offload
+  // pipeline) are always legal.
+  if (isa<mlir::LLVM::LLVMDialect>(attr.getDialect()))
     return true;
 
   // These attributes either don't contain a type, or don't contain a type that
@@ -134,7 +141,13 @@ bool isCXXABIAttributeLegal(const mlir::TypeConverter &tc,
       // 'rewriteAttribute' to make sure we consider them here. Otherwise, we
       // wouldn't discover a problematic new attribute until it contains a
       // member/method.
-      .Default(false);
+      //
+      // Attributes from non-CIR dialects (GPU, OpenMP, etc.) that cannot
+      // contain CIR types are always legal. Only CIR-specific attributes
+      // default to illegal to catch newly added ones.
+      .Default([](mlir::Attribute attr) {
+        return !mlir::isa<cir::CIRDialect>(attr.getDialect());
+      });
 }
 
 mlir::Attribute rewriteAttribute(const mlir::TypeConverter &tc,
@@ -267,7 +280,8 @@ public:
     if (llvm::isa<cir::AllocaOp, cir::BaseDataMemberOp, cir::BaseMethodOp,
                   cir::CastOp, cir::CmpOp, cir::ConstantOp, cir::DeleteArrayOp,
                   cir::DerivedDataMemberOp, cir::DerivedMethodOp, cir::FuncOp,
-                  cir::GetMethodOp, cir::GetRuntimeMemberOp, cir::GlobalOp>(op))
+                  cir::GetMethodOp, cir::GetRuntimeMemberOp, cir::GlobalOp,
+                  cir::OffloadFuncOp, mlir::gpu::GPUFuncOp>(op))
       return mlir::failure();
 
     const mlir::TypeConverter *typeConverter = getTypeConverter();
@@ -393,6 +407,9 @@ static mlir::TypedAttr lowerInitialValue(const LowerModule *lowerModule,
                                          const mlir::TypeConverter &tc,
                                          mlir::Type ty,
                                          mlir::Attribute initVal) {
+  if (!initVal)
+    return {};
+
   if (mlir::isa<cir::DataMemberType>(ty)) {
     auto dataMemberVal = mlir::cast_if_present<cir::DataMemberAttr>(initVal);
     return lowerModule->getCXXABI().lowerDataMemberConstant(dataMemberVal,
@@ -581,6 +598,118 @@ mlir::LogicalResult CIRFuncOpABILowering::matchAndRewrite(
   return mlir::success();
 }
 
+// gpu::GPUFuncOp is function-like and needs its function_type attribute
+// updated alongside the region block arg types during ABI lowering.
+// This pattern handles gpu.func ops produced by the offload→GPU lowering pass.
+class GPUFuncOpABILowering
+    : public mlir::OpConversionPattern<mlir::gpu::GPUFuncOp> {
+public:
+  using mlir::OpConversionPattern<mlir::gpu::GPUFuncOp>::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::gpu::GPUFuncOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto funcType = op.getFunctionType();
+    mlir::TypeConverter::SignatureConversion signatureConversion(
+        funcType.getNumInputs());
+
+    for (const auto &[i, argType] : llvm::enumerate(funcType.getInputs())) {
+      mlir::Type lowered = getTypeConverter()->convertType(argType);
+      if (!lowered)
+        return mlir::failure();
+      signatureConversion.addInputs(i, lowered);
+    }
+
+    llvm::SmallVector<mlir::Type> loweredResults;
+    for (mlir::Type rt : funcType.getResults()) {
+      mlir::Type lowered = getTypeConverter()->convertType(rt);
+      if (!lowered)
+        return mlir::failure();
+      loweredResults.push_back(lowered);
+    }
+
+    auto loweredFuncType = mlir::FunctionType::get(
+        op.getContext(), signatureConversion.getConvertedTypes(), loweredResults);
+
+    auto newOp = rewriter.cloneWithoutRegions(op);
+
+    llvm::SmallVector<mlir::NamedAttribute> attrs;
+    for (const mlir::NamedAttribute &na : op->getAttrs()) {
+      if (na.getName() == op.getFunctionTypeAttrName())
+        continue;
+      attrs.push_back({na.getName(),
+                       rewriteAttribute(*getTypeConverter(), op->getContext(),
+                                        na.getValue())});
+    }
+    newOp->setAttrs(attrs);
+    newOp.setFunctionType(loweredFuncType);
+
+    rewriter.inlineRegionBefore(op.getBody(), newOp.getBody(), newOp.end());
+    if (mlir::failed(rewriter.convertRegionTypes(&newOp.getBody(),
+                                                 *getTypeConverter(),
+                                                 &signatureConversion)))
+      return mlir::failure();
+
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+
+// cir::OffloadFuncOp ABI lowering — same logic but uses cir::FuncType.
+class OffloadFuncOpABILowering
+    : public mlir::OpConversionPattern<cir::OffloadFuncOp> {
+public:
+  using mlir::OpConversionPattern<cir::OffloadFuncOp>::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(cir::OffloadFuncOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    cir::FuncType funcType = op.getFunctionType();
+    mlir::TypeConverter::SignatureConversion signatureConversion(
+        funcType.getNumInputs());
+
+    for (const auto &[i, argType] : llvm::enumerate(funcType.getInputs())) {
+      mlir::Type lowered = getTypeConverter()->convertType(argType);
+      if (!lowered)
+        return mlir::failure();
+      signatureConversion.addInputs(i, lowered);
+    }
+
+    mlir::Type loweredRetType = funcType.getReturnType();
+    if (loweredRetType) {
+      loweredRetType = getTypeConverter()->convertType(loweredRetType);
+      if (!loweredRetType)
+        return mlir::failure();
+    }
+
+    auto loweredFuncType = cir::FuncType::get(
+        signatureConversion.getConvertedTypes(), loweredRetType,
+        funcType.isVarArg());
+
+    auto newOp = rewriter.cloneWithoutRegions(op);
+
+    llvm::SmallVector<mlir::NamedAttribute> attrs;
+    for (const mlir::NamedAttribute &na : op->getAttrs()) {
+      if (na.getName() == op.getFunctionTypeAttrName())
+        continue;
+      attrs.push_back({na.getName(),
+                       rewriteAttribute(*getTypeConverter(), op->getContext(),
+                                        na.getValue())});
+    }
+    newOp->setAttrs(attrs);
+    newOp.setFunctionType(loweredFuncType);
+
+    rewriter.inlineRegionBefore(op.getBody(), newOp.getBody(), newOp.end());
+    if (mlir::failed(rewriter.convertRegionTypes(&newOp.getBody(),
+                                                 *getTypeConverter(),
+                                                 &signatureConversion)))
+      return mlir::failure();
+
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+
 mlir::LogicalResult CIRGlobalOpABILowering::matchAndRewrite(
     cir::GlobalOp op, OpAdaptor adaptor,
     mlir::ConversionPatternRewriter &rewriter) const {
@@ -595,7 +724,10 @@ mlir::LogicalResult CIRGlobalOpABILowering::matchAndRewrite(
       lowerModule, layout, *getTypeConverter(), ty, op.getInitialValueAttr());
 
   auto newOp = mlir::cast<cir::GlobalOp>(rewriter.clone(*op.getOperation()));
-  newOp.setInitialValueAttr(loweredInit);
+  if (loweredInit)
+    newOp.setInitialValueAttr(loweredInit);
+  else
+    newOp.removeInitialValueAttr();
   newOp.setSymType(loweredTy);
   rewriter.replaceOp(op, newOp);
   return mlir::success();
@@ -797,7 +929,7 @@ class CIRABITypeConverter : public mlir::TypeConverter {
   // In order to let us 'change the names' back after the fact, we collect them
   // along the way.  They should only be added/accessed via the thread-safe
   // functions below.
-  llvm::SmallVector<cir::RecordType> convertedRecordTypes;
+  llvm::SmallVector<mlir::Type> convertedRecordTypes;
   llvm::sys::SmartRWMutex<true> recordTypeMutex;
 
   // This provides a stack for the RecordTypes being processed on the current
@@ -963,8 +1095,8 @@ public:
   void restoreRecordTypeNames() {
     std::unique_lock<decltype(recordTypeMutex)> lock(recordTypeMutex);
 
-    for (auto rt : convertedRecordTypes)
-      rt.removeABIConversionNamePrefix();
+    for (auto t : convertedRecordTypes)
+      mlir::cast<cir::RecordType>(t).removeABIConversionNamePrefix();
   }
 };
 } // namespace
@@ -994,22 +1126,28 @@ populateCXXABIConversionTarget(mlir::ConversionTarget &target,
                            });
       });
 
+  auto dialectLegalityCheck = [&typeConverter](mlir::Operation *op) {
+    if (!typeConverter.isLegal(op))
+      return false;
+
+    bool attrs = llvm::all_of(
+        op->getAttrs(), [&typeConverter](const mlir::NamedAttribute &a) {
+          return isCXXABIAttributeLegal(typeConverter, a.getValue());
+        });
+
+    return attrs &&
+           std::all_of(op->getRegions().begin(), op->getRegions().end(),
+                       [&typeConverter](mlir::Region &region) {
+                         return typeConverter.isLegal(&region);
+                       });
+  };
+
   target.addDynamicallyLegalDialect<mlir::acc::OpenACCDialect>(
-      [&typeConverter](mlir::Operation *op) {
-        if (!typeConverter.isLegal(op))
-          return false;
-
-        bool attrs = llvm::all_of(
-            op->getAttrs(), [&typeConverter](const mlir::NamedAttribute &a) {
-              return isCXXABIAttributeLegal(typeConverter, a.getValue());
-            });
-
-        return attrs &&
-               std::all_of(op->getRegions().begin(), op->getRegions().end(),
-                           [&typeConverter](mlir::Region &region) {
-                             return typeConverter.isLegal(&region);
-                           });
-      });
+      dialectLegalityCheck);
+  target.addDynamicallyLegalDialect<mlir::gpu::GPUDialect>(
+      dialectLegalityCheck);
+  target.addDynamicallyLegalDialect<mlir::omp::OpenMPDialect>(
+      dialectLegalityCheck);
 
   // Some CIR ops needs special checking for legality
   target.addDynamicallyLegalOp<cir::FuncOp>([&typeConverter](cir::FuncOp op) {
@@ -1020,6 +1158,14 @@ populateCXXABIConversionTarget(mlir::ConversionTarget &target,
 
     return attrs && typeConverter.isLegal(op.getFunctionType());
   });
+  target.addDynamicallyLegalOp<cir::OffloadFuncOp>(
+      [&typeConverter](cir::OffloadFuncOp op) {
+        bool attrs = llvm::all_of(
+            op->getAttrs(), [&typeConverter](const mlir::NamedAttribute &a) {
+              return isCXXABIAttributeLegal(typeConverter, a.getValue());
+            });
+        return attrs && typeConverter.isLegal(op.getFunctionType());
+      });
   target.addDynamicallyLegalOp<cir::GlobalOp>(
       [&typeConverter](cir::GlobalOp op) {
         return typeConverter.isLegal(op.getSymType());
@@ -1053,6 +1199,8 @@ void CXXABILoweringPass::runOnOperation() {
   mlir::RewritePatternSet patterns(ctx);
   patterns.add<CIRGenericCXXABILoweringPattern>(patterns.getContext(),
                                                 typeConverter);
+  patterns.add<GPUFuncOpABILowering>(typeConverter, patterns.getContext());
+  patterns.add<OffloadFuncOpABILowering>(typeConverter, patterns.getContext());
   patterns.add<
 #define GET_ABI_LOWERING_PATTERNS_LIST
 #include "clang/CIR/Dialect/IR/CIRLowering.inc"

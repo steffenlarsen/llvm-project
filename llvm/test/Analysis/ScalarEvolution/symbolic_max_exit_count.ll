@@ -7,22 +7,22 @@ define i32 @test_simple_case(i32 %start, i32 %len) {
 ; CHECK-LABEL: 'test_simple_case'
 ; CHECK-NEXT:  Classifying expressions for: @test_simple_case
 ; CHECK-NEXT:    %iv = phi i32 [ %start, %entry ], [ %iv.next, %backedge ]
-; CHECK-NEXT:    --> {%start,+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {%start,+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %iv.minus.1 = add i32 %iv, -1
-; CHECK-NEXT:    --> {(-1 + %start),+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 + %start),+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %iv.next = add i32 %iv, -1
-; CHECK-NEXT:    --> {(-1 + %start),+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 + %start),+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %loop_cond = call i1 @cond()
 ; CHECK-NEXT:    --> %loop_cond U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:  Determining loop execution counts for: @test_simple_case
 ; CHECK-NEXT:  Loop %loop: <multiple exits> Unpredictable backedge-taken count.
 ; CHECK-NEXT:    exit count for loop: %start
-; CHECK-NEXT:    exit count for range_check_block: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:    exit count for range_check_block: i32 0
 ; CHECK-NEXT:    exit count for backedge: ***COULDNOTCOMPUTE***
-; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 -1
-; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is %start
+; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 0
+; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is i32 0
 ; CHECK-NEXT:    symbolic max exit count for loop: %start
-; CHECK-NEXT:    symbolic max exit count for range_check_block: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:    symbolic max exit count for range_check_block: i32 0
 ; CHECK-NEXT:    symbolic max exit count for backedge: ***COULDNOTCOMPUTE***
 ;
 entry:
@@ -57,30 +57,30 @@ define i32 @test_litter_conditions(i32 %start, i32 %len) {
 ; CHECK-LABEL: 'test_litter_conditions'
 ; CHECK-NEXT:  Classifying expressions for: @test_litter_conditions
 ; CHECK-NEXT:    %iv = phi i32 [ %start, %entry ], [ %iv.next, %backedge ]
-; CHECK-NEXT:    --> {%start,+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {%start,+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %fake_1 = call i1 @cond()
 ; CHECK-NEXT:    --> %fake_1 U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:    %and_1 = and i1 %zero_check, %fake_1
 ; CHECK-NEXT:    --> (%zero_check umin %fake_1) U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:    %iv.minus.1 = add i32 %iv, -1
-; CHECK-NEXT:    --> {(-1 + %start),+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 + %start),+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %fake_2 = call i1 @cond()
 ; CHECK-NEXT:    --> %fake_2 U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:    %and_2 = and i1 %range_check, %fake_2
 ; CHECK-NEXT:    --> (%range_check umin %fake_2) U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:    %iv.next = add i32 %iv, -1
-; CHECK-NEXT:    --> {(-1 + %start),+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 + %start),+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %loop_cond = call i1 @cond()
 ; CHECK-NEXT:    --> %loop_cond U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:  Determining loop execution counts for: @test_litter_conditions
 ; CHECK-NEXT:  Loop %loop: <multiple exits> Unpredictable backedge-taken count.
 ; CHECK-NEXT:    exit count for loop: ***COULDNOTCOMPUTE***
-; CHECK-NEXT:    exit count for range_check_block: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:    exit count for range_check_block: i32 0
 ; CHECK-NEXT:    exit count for backedge: ***COULDNOTCOMPUTE***
-; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 -1
-; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is %start
+; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 0
+; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is i32 0
 ; CHECK-NEXT:    symbolic max exit count for loop: %start
-; CHECK-NEXT:    symbolic max exit count for range_check_block: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:    symbolic max exit count for range_check_block: i32 0
 ; CHECK-NEXT:    symbolic max exit count for backedge: ***COULDNOTCOMPUTE***
 ;
 entry:
@@ -119,30 +119,30 @@ define i32 @test_litter_conditions_bad_context(i32 %start, i32 %len) {
 ; CHECK-LABEL: 'test_litter_conditions_bad_context'
 ; CHECK-NEXT:  Classifying expressions for: @test_litter_conditions_bad_context
 ; CHECK-NEXT:    %iv = phi i32 [ %start, %entry ], [ %iv.next, %backedge ]
-; CHECK-NEXT:    --> {%start,+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {%start,+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %fake_1 = call i1 @cond()
 ; CHECK-NEXT:    --> %fake_1 U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:    %and_1 = and i1 %zero_check, %fake_1
 ; CHECK-NEXT:    --> (%zero_check umin %fake_1) U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:    %iv.minus.1 = add i32 %iv, -1
-; CHECK-NEXT:    --> {(-1 + %start),+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 + %start),+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %fake_2 = call i1 @cond()
 ; CHECK-NEXT:    --> %fake_2 U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:    %and_2 = and i1 %range_check, %fake_2
 ; CHECK-NEXT:    --> (%range_check umin %fake_2) U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:    %iv.next = add i32 %iv, -1
-; CHECK-NEXT:    --> {(-1 + %start),+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 + %start),+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %loop_cond = call i1 @cond()
 ; CHECK-NEXT:    --> %loop_cond U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:  Determining loop execution counts for: @test_litter_conditions_bad_context
 ; CHECK-NEXT:  Loop %loop: <multiple exits> Unpredictable backedge-taken count.
 ; CHECK-NEXT:    exit count for loop: ***COULDNOTCOMPUTE***
-; CHECK-NEXT:    exit count for range_check_block: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:    exit count for range_check_block: i32 0
 ; CHECK-NEXT:    exit count for backedge: ***COULDNOTCOMPUTE***
-; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 -1
-; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is %start
+; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 0
+; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is i32 0
 ; CHECK-NEXT:    symbolic max exit count for loop: %start
-; CHECK-NEXT:    symbolic max exit count for range_check_block: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:    symbolic max exit count for range_check_block: i32 0
 ; CHECK-NEXT:    symbolic max exit count for backedge: ***COULDNOTCOMPUTE***
 ;
 entry:
@@ -181,22 +181,22 @@ define i32 @test_and_conditions(i32 %start, i32 %len) {
 ; CHECK-LABEL: 'test_and_conditions'
 ; CHECK-NEXT:  Classifying expressions for: @test_and_conditions
 ; CHECK-NEXT:    %iv = phi i32 [ %start, %entry ], [ %iv.next, %backedge ]
-; CHECK-NEXT:    --> {%start,+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {%start,+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %iv.minus.1 = add i32 %iv, -1
-; CHECK-NEXT:    --> {(-1 + %start),+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 + %start),+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %both_checks = and i1 %zero_check, %range_check
 ; CHECK-NEXT:    --> (%range_check umin %zero_check) U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:    %iv.next = add i32 %iv, -1
-; CHECK-NEXT:    --> {(-1 + %start),+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 + %start),+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %loop_cond = call i1 @cond()
 ; CHECK-NEXT:    --> %loop_cond U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:  Determining loop execution counts for: @test_and_conditions
 ; CHECK-NEXT:  Loop %loop: <multiple exits> Unpredictable backedge-taken count.
-; CHECK-NEXT:    exit count for loop: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:    exit count for loop: i32 0
 ; CHECK-NEXT:    exit count for backedge: ***COULDNOTCOMPUTE***
-; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 -1
-; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is %start
-; CHECK-NEXT:    symbolic max exit count for loop: %start
+; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 0
+; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is i32 0
+; CHECK-NEXT:    symbolic max exit count for loop: i32 0
 ; CHECK-NEXT:    symbolic max exit count for backedge: ***COULDNOTCOMPUTE***
 ;
 entry:
@@ -315,9 +315,9 @@ define i32 @test_two_phis(i32 %start_1, i32 %start_2, i32 %len) {
 ; CHECK-LABEL: 'test_two_phis'
 ; CHECK-NEXT:  Classifying expressions for: @test_two_phis
 ; CHECK-NEXT:    %iv_1 = phi i32 [ %start_1, %entry ], [ %iv_1.next, %backedge ]
-; CHECK-NEXT:    --> {%start_1,+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {%start_1,+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %iv_2 = phi i32 [ %start_2, %entry ], [ %iv_2.next, %backedge ]
-; CHECK-NEXT:    --> {%start_2,+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {%start_2,+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %scam_1 = call i1 @cond()
 ; CHECK-NEXT:    --> %scam_1 U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:    %c1 = and i1 %zero_check_1, %scam_1
@@ -327,24 +327,24 @@ define i32 @test_two_phis(i32 %start_1, i32 %start_2, i32 %len) {
 ; CHECK-NEXT:    %c2 = and i1 %zero_check_2, %scam_2
 ; CHECK-NEXT:    --> (%zero_check_2 umin %scam_2) U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:    %iv.minus.1 = add i32 %iv_1, -1
-; CHECK-NEXT:    --> {(-1 + %start_1),+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 + %start_1),+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %iv_1.next = add i32 %iv_1, -1
-; CHECK-NEXT:    --> {(-1 + %start_1),+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 + %start_1),+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %iv_2.next = add i32 %iv_2, -1
-; CHECK-NEXT:    --> {(-1 + %start_2),+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 + %start_2),+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %loop_cond = call i1 @cond()
 ; CHECK-NEXT:    --> %loop_cond U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:  Determining loop execution counts for: @test_two_phis
 ; CHECK-NEXT:  Loop %loop: <multiple exits> Unpredictable backedge-taken count.
 ; CHECK-NEXT:    exit count for loop: ***COULDNOTCOMPUTE***
 ; CHECK-NEXT:    exit count for zero_check_block: ***COULDNOTCOMPUTE***
-; CHECK-NEXT:    exit count for range_check_block: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:    exit count for range_check_block: i32 0
 ; CHECK-NEXT:    exit count for backedge: ***COULDNOTCOMPUTE***
-; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 -1
-; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is (%start_1 umin_seq %start_2)
+; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 0
+; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is i32 0
 ; CHECK-NEXT:    symbolic max exit count for loop: %start_1
 ; CHECK-NEXT:    symbolic max exit count for zero_check_block: %start_2
-; CHECK-NEXT:    symbolic max exit count for range_check_block: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:    symbolic max exit count for range_check_block: i32 0
 ; CHECK-NEXT:    symbolic max exit count for backedge: ***COULDNOTCOMPUTE***
 ;
 entry:
@@ -429,9 +429,9 @@ define i32 @test_two_phis_arithmetic_and(i32 %start_1, i32 %start_2, i32 %len) {
 ; CHECK-LABEL: 'test_two_phis_arithmetic_and'
 ; CHECK-NEXT:  Classifying expressions for: @test_two_phis_arithmetic_and
 ; CHECK-NEXT:    %iv_1 = phi i32 [ %start_1, %entry ], [ %iv_1.next, %backedge ]
-; CHECK-NEXT:    --> {%start_1,+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {%start_1,+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %iv_2 = phi i32 [ %start_2, %entry ], [ %iv_2.next, %backedge ]
-; CHECK-NEXT:    --> {%start_2,+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {%start_2,+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %scam_1 = call i1 @cond()
 ; CHECK-NEXT:    --> %scam_1 U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:    %c1 = and i1 %zero_check_1, %scam_1
@@ -443,22 +443,22 @@ define i32 @test_two_phis_arithmetic_and(i32 %start_1, i32 %start_2, i32 %len) {
 ; CHECK-NEXT:    %merged_cond = and i1 %c1, %c2
 ; CHECK-NEXT:    --> (%zero_check_1 umin %zero_check_2 umin %scam_1 umin %scam_2) U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:    %iv.minus.1 = add i32 %iv_1, -1
-; CHECK-NEXT:    --> {(-1 + %start_1),+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 + %start_1),+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %iv_1.next = add i32 %iv_1, -1
-; CHECK-NEXT:    --> {(-1 + %start_1),+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 + %start_1),+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %iv_2.next = add i32 %iv_2, -1
-; CHECK-NEXT:    --> {(-1 + %start_2),+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 + %start_2),+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %loop_cond = call i1 @cond()
 ; CHECK-NEXT:    --> %loop_cond U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:  Determining loop execution counts for: @test_two_phis_arithmetic_and
 ; CHECK-NEXT:  Loop %loop: <multiple exits> Unpredictable backedge-taken count.
 ; CHECK-NEXT:    exit count for loop: ***COULDNOTCOMPUTE***
-; CHECK-NEXT:    exit count for range_check_block: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:    exit count for range_check_block: i32 0
 ; CHECK-NEXT:    exit count for backedge: ***COULDNOTCOMPUTE***
-; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 -1
-; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is (%start_1 umin %start_2)
+; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 0
+; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is i32 0
 ; CHECK-NEXT:    symbolic max exit count for loop: (%start_1 umin %start_2)
-; CHECK-NEXT:    symbolic max exit count for range_check_block: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:    symbolic max exit count for range_check_block: i32 0
 ; CHECK-NEXT:    symbolic max exit count for backedge: ***COULDNOTCOMPUTE***
 ;
 entry:
@@ -502,9 +502,9 @@ define i32 @test_two_phis_logical_or(i32 %start_1, i32 %start_2, i32 %len) {
 ; CHECK-LABEL: 'test_two_phis_logical_or'
 ; CHECK-NEXT:  Classifying expressions for: @test_two_phis_logical_or
 ; CHECK-NEXT:    %iv_1 = phi i32 [ %start_1, %entry ], [ %iv_1.next, %backedge ]
-; CHECK-NEXT:    --> {%start_1,+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {%start_1,+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %iv_2 = phi i32 [ %start_2, %entry ], [ %iv_2.next, %backedge ]
-; CHECK-NEXT:    --> {%start_2,+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {%start_2,+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %scam_1 = call i1 @cond()
 ; CHECK-NEXT:    --> %scam_1 U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:    %c1 = and i1 %zero_check_1, %scam_1
@@ -516,22 +516,22 @@ define i32 @test_two_phis_logical_or(i32 %start_1, i32 %start_2, i32 %len) {
 ; CHECK-NEXT:    %merged_cond = select i1 %c1, i1 true, i1 %c2
 ; CHECK-NEXT:    --> (true + ((true + (%zero_check_1 umin %scam_1)) umin_seq (true + (%zero_check_2 umin %scam_2)))) U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:    %iv.minus.1 = add i32 %iv_1, -1
-; CHECK-NEXT:    --> {(-1 + %start_1),+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 + %start_1),+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %iv_1.next = add i32 %iv_1, -1
-; CHECK-NEXT:    --> {(-1 + %start_1),+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 + %start_1),+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %iv_2.next = add i32 %iv_2, -1
-; CHECK-NEXT:    --> {(-1 + %start_2),+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 + %start_2),+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %loop_cond = call i1 @cond()
 ; CHECK-NEXT:    --> %loop_cond U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:  Determining loop execution counts for: @test_two_phis_logical_or
 ; CHECK-NEXT:  Loop %loop: <multiple exits> Unpredictable backedge-taken count.
 ; CHECK-NEXT:    exit count for loop: ***COULDNOTCOMPUTE***
-; CHECK-NEXT:    exit count for range_check_block: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:    exit count for range_check_block: i32 0
 ; CHECK-NEXT:    exit count for backedge: ***COULDNOTCOMPUTE***
-; CHECK-NEXT:  Loop %loop: Unpredictable constant max backedge-taken count.
-; CHECK-NEXT:  Loop %loop: Unpredictable symbolic max backedge-taken count.
+; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 0
+; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is i32 0
 ; CHECK-NEXT:    symbolic max exit count for loop: ***COULDNOTCOMPUTE***
-; CHECK-NEXT:    symbolic max exit count for range_check_block: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:    symbolic max exit count for range_check_block: i32 0
 ; CHECK-NEXT:    symbolic max exit count for backedge: ***COULDNOTCOMPUTE***
 ;
 entry:
@@ -574,9 +574,9 @@ define i32 @test_two_phis_logical_and(i32 %start_1, i32 %start_2, i32 %len) {
 ; CHECK-LABEL: 'test_two_phis_logical_and'
 ; CHECK-NEXT:  Classifying expressions for: @test_two_phis_logical_and
 ; CHECK-NEXT:    %iv_1 = phi i32 [ %start_1, %entry ], [ %iv_1.next, %backedge ]
-; CHECK-NEXT:    --> {%start_1,+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {%start_1,+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %iv_2 = phi i32 [ %start_2, %entry ], [ %iv_2.next, %backedge ]
-; CHECK-NEXT:    --> {%start_2,+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {%start_2,+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %scam_1 = call i1 @cond()
 ; CHECK-NEXT:    --> %scam_1 U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:    %c1 = and i1 %zero_check_1, %scam_1
@@ -588,22 +588,22 @@ define i32 @test_two_phis_logical_and(i32 %start_1, i32 %start_2, i32 %len) {
 ; CHECK-NEXT:    %merged_cond = select i1 %c1, i1 %c2, i1 false
 ; CHECK-NEXT:    --> ((%zero_check_1 umin %scam_1) umin_seq (%zero_check_2 umin %scam_2)) U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:    %iv.minus.1 = add i32 %iv_1, -1
-; CHECK-NEXT:    --> {(-1 + %start_1),+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 + %start_1),+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %iv_1.next = add i32 %iv_1, -1
-; CHECK-NEXT:    --> {(-1 + %start_1),+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 + %start_1),+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %iv_2.next = add i32 %iv_2, -1
-; CHECK-NEXT:    --> {(-1 + %start_2),+,-1}<%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 + %start_2),+,-1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %loop_cond = call i1 @cond()
 ; CHECK-NEXT:    --> %loop_cond U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:  Determining loop execution counts for: @test_two_phis_logical_and
 ; CHECK-NEXT:  Loop %loop: <multiple exits> Unpredictable backedge-taken count.
 ; CHECK-NEXT:    exit count for loop: ***COULDNOTCOMPUTE***
-; CHECK-NEXT:    exit count for range_check_block: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:    exit count for range_check_block: i32 0
 ; CHECK-NEXT:    exit count for backedge: ***COULDNOTCOMPUTE***
-; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 -1
-; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is (%start_1 umin_seq %start_2)
+; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 0
+; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is i32 0
 ; CHECK-NEXT:    symbolic max exit count for loop: (%start_1 umin_seq %start_2)
-; CHECK-NEXT:    symbolic max exit count for range_check_block: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:    symbolic max exit count for range_check_block: i32 0
 ; CHECK-NEXT:    symbolic max exit count for backedge: ***COULDNOTCOMPUTE***
 ;
 entry:

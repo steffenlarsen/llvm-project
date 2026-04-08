@@ -10,17 +10,32 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "CIRTBAABuilder.h"
 #include "LowerToLLVM.h"
 
 #include <array>
 #include <optional>
 
+#include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
+#include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
+#include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
+#include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
+#include "mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
+#include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
 #include "mlir/Conversion/OpenMPToLLVM/ConvertOpenMPToLLVM.h"
+#include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
+#include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
+#include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/GPU/Transforms/Passes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/OpenMP/Transforms/Passes.h"
 #include "mlir/Dialect/Ptr/IR/MemorySpaceInterfaces.h"
@@ -32,19 +47,29 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LLVM.h"
+#include "mlir/Target/LLVM/ROCDL/Target.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/GPU/GPUToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/OpenMP/OpenMPToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Transforms/Passes.h"
 #include "clang/CIR/Dialect/IR/CIRAttrs.h"
 #include "clang/CIR/Dialect/IR/CIRDialect.h"
 #include "clang/CIR/Dialect/IR/CIRTypes.h"
 #include "clang/CIR/Dialect/Passes.h"
 #include "clang/CIR/Dialect/Transforms/CIRTransformUtils.h"
+#include "clang/CIR/LowerToLLVM.h"
 #include "clang/CIR/LoweringHelpers.h"
 #include "clang/CIR/MissingFeatures.h"
 #include "clang/CIR/Passes.h"
+#include "clang/Driver/OffloadBundler.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Path.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -74,6 +99,39 @@ mlir::Type elementTypeIfVector(mlir::Type type) {
           [](auto p) { return p.getElementType(); })
       .Default([](mlir::Type p) { return p; });
 }
+/// Convert a CIR LoopHintAttr to an LLVM LoopAnnotationAttr.
+static mlir::LLVM::LoopAnnotationAttr
+convertLoopHint(cir::LoopHintAttr hint, mlir::MLIRContext *ctx) {
+  if (!hint)
+    return {};
+
+  mlir::LLVM::LoopUnrollAttr unrollAttr;
+  if (auto mode = hint.getUnrollMode()) {
+    auto modeVal = mode.getValue();
+    if (modeVal == cir::LoopUnrollMode::Full)
+      unrollAttr = mlir::LLVM::LoopUnrollAttr::get(
+          ctx, {}, {}, {}, mlir::BoolAttr::get(ctx, true), {}, {}, {});
+    else if (modeVal == cir::LoopUnrollMode::Disable)
+      unrollAttr = mlir::LLVM::LoopUnrollAttr::get(
+          ctx, mlir::BoolAttr::get(ctx, true), {}, {}, {}, {}, {}, {});
+    else if (modeVal == cir::LoopUnrollMode::Enable)
+      unrollAttr = mlir::LLVM::LoopUnrollAttr::get(
+          ctx, mlir::BoolAttr::get(ctx, false), {}, {}, {}, {}, {}, {});
+  }
+  if (auto count = hint.getUnrollCount()) {
+    unrollAttr = mlir::LLVM::LoopUnrollAttr::get(
+        ctx, {},
+        mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32), *count),
+        {}, {}, {}, {}, {});
+  }
+  mlir::BoolAttr mustProgress =
+      hint.getMustProgress() ? mlir::BoolAttr::get(ctx, true)
+                             : mlir::BoolAttr();
+  return mlir::LLVM::LoopAnnotationAttr::get(
+      ctx, {}, {}, {}, unrollAttr, {}, {}, {}, {}, {}, {}, mustProgress,
+      {}, {}, {}, {});
+}
+
 } // namespace
 
 /// Given a type convertor and a data layout, convert the given type to a type
@@ -121,6 +179,7 @@ lowerCIRVisibilityToLLVMVisibility(cir::VisibilityKind visibilityKind) {
   case cir::VisibilityKind::Protected:
     return ::mlir::LLVM::Visibility::Protected;
   }
+  llvm_unreachable("Unexpected visibility kind");
 }
 
 /// Emits the value from memory as expected by its users. Should be called when
@@ -212,9 +271,9 @@ mlir::LogicalResult CIRToLLVMCopyOpLowering::matchAndRewrite(
     cir::CopyOp op, OpAdaptor adaptor,
     mlir::ConversionPatternRewriter &rewriter) const {
   mlir::DataLayout layout(op->getParentOfType<mlir::ModuleOp>());
+  unsigned size = op.getCopySizeInBytes(layout);
   const mlir::Value length = mlir::LLVM::ConstantOp::create(
-      rewriter, op.getLoc(), rewriter.getI64Type(),
-      op.getCopySizeInBytes(layout));
+      rewriter, op.getLoc(), rewriter.getI64Type(), size);
   assert(!cir::MissingFeatures::aggValueSlotVolatile());
 
   uint64_t dstTypeAlign = dataLayout.getTypeABIAlignment(convertTypeForMemory(
@@ -308,7 +367,8 @@ public:
                  const mlir::TypeConverter *converter,
                  LLVMBlockAddressInfo *blockInfoAddr = nullptr)
       : parentOp(parentOp), rewriter(rewriter), converter(converter),
-        blockInfoAddr(blockInfoAddr) {}
+        blockInfoAddr(blockInfoAddr),
+        dataLayout(parentOp->getParentOfType<mlir::ModuleOp>()) {}
 
 #define GET_CIR_ATTR_TO_VALUE_VISITOR_DECLS
 #include "clang/CIR/Dialect/IR/CIRLowering.inc"
@@ -321,6 +381,7 @@ private:
   // Only available when lowering global initializers that may contain block
   // address attributes. Used to resolve a BlockAddrInfoAttr to its block tag.
   LLVMBlockAddressInfo *blockInfoAddr;
+  mlir::DataLayout dataLayout;
 };
 
 /// Switches on the type of attribute and calls the appropriate conversion.
@@ -696,7 +757,11 @@ mlir::Value CIRAttrToValue::visitCirAttr(cir::GlobalViewAttr globalAttr) {
   unsigned sourceAddrSpace = 0;
   llvm::StringRef symName;
   mlir::Operation *sourceSymbol =
-      mlir::SymbolTable::lookupSymbolIn(moduleOp, globalAttr.getSymbol());
+      mlir::SymbolTable::lookupNearestSymbolFrom(parentOp,
+                                                 globalAttr.getSymbol());
+  if (!sourceSymbol)
+    sourceSymbol =
+        mlir::SymbolTable::lookupSymbolIn(moduleOp, globalAttr.getSymbol());
   if (auto llvmSymbol = dyn_cast<mlir::LLVM::GlobalOp>(sourceSymbol)) {
     sourceType = llvmSymbol.getType();
     symName = llvmSymbol.getSymName();
@@ -714,6 +779,9 @@ mlir::Value CIRAttrToValue::visitCirAttr(cir::GlobalViewAttr globalAttr) {
   } else if (auto fun = dyn_cast<cir::FuncOp>(sourceSymbol)) {
     sourceType = converter->convertType(fun.getFunctionType());
     symName = fun.getSymName();
+  } else if (auto gpuFun = dyn_cast<mlir::gpu::GPUFuncOp>(sourceSymbol)) {
+    sourceType = converter->convertType(gpuFun.getFunctionType());
+    symName = gpuFun.getName();
   } else if (auto alias = dyn_cast<mlir::LLVM::AliasOp>(sourceSymbol)) {
     sourceType = alias.getType();
     symName = alias.getSymName();
@@ -805,14 +873,16 @@ mlir::Value CIRAttrToValue::visitCirAttr(cir::TypeInfoAttr typeInfoAttr) {
 mlir::Value CIRAttrToValue::visitCirAttr(cir::UndefAttr undefAttr) {
   mlir::Location loc = parentOp->getLoc();
   return mlir::LLVM::UndefOp::create(
-      rewriter, loc, converter->convertType(undefAttr.getType()));
+      rewriter, loc,
+      convertTypeForMemory(*converter, dataLayout, undefAttr.getType()));
 }
 
 /// PoisonAttr visitor.
 mlir::Value CIRAttrToValue::visitCirAttr(cir::PoisonAttr poisonAttr) {
   mlir::Location loc = parentOp->getLoc();
   return mlir::LLVM::PoisonOp::create(
-      rewriter, loc, converter->convertType(poisonAttr.getType()));
+      rewriter, loc,
+      convertTypeForMemory(*converter, dataLayout, poisonAttr.getType()));
 }
 
 // VTableAttr visitor.
@@ -991,7 +1061,39 @@ getLLVMMemOrder(std::optional<cir::MemOrder> memorder) {
 }
 
 static llvm::StringRef getLLVMSyncScope(cir::SyncScopeKind syncScope) {
-  return syncScope == cir::SyncScopeKind::SingleThread ? "singlethread" : "";
+  switch (syncScope) {
+  case cir::SyncScopeKind::SingleThread:
+    return "singlethread";
+  case cir::SyncScopeKind::System:
+    return "";
+  case cir::SyncScopeKind::Device:
+    return "agent";
+  case cir::SyncScopeKind::Workgroup:
+    return "workgroup";
+  case cir::SyncScopeKind::Wavefront:
+    return "wavefront";
+  case cir::SyncScopeKind::Cluster:
+    return "cluster";
+  case cir::SyncScopeKind::HIPSingleThread:
+    return "singlethread-one-as";
+  case cir::SyncScopeKind::HIPSystem:
+    return "one-as";
+  case cir::SyncScopeKind::HIPAgent:
+    return "agent-one-as";
+  case cir::SyncScopeKind::HIPWorkgroup:
+    return "workgroup-one-as";
+  case cir::SyncScopeKind::HIPWavefront:
+    return "wavefront-one-as";
+  case cir::SyncScopeKind::HIPCluster:
+    return "cluster-one-as";
+  case cir::SyncScopeKind::OpenCLWorkGroup:
+    return "workgroup";
+  case cir::SyncScopeKind::OpenCLDevice:
+    return "agent";
+  case cir::SyncScopeKind::OpenCLAllSVMDevices:
+    return "";
+  }
+  llvm_unreachable("unknown sync scope");
 }
 
 static std::optional<llvm::StringRef>
@@ -1355,9 +1457,15 @@ mlir::LogicalResult CIRToLLVMBrCondOpLowering::matchAndRewrite(
 
   mlir::Value i1Condition = adaptor.getCond();
 
-  rewriter.replaceOpWithNewOp<mlir::LLVM::CondBrOp>(
+  auto newOp = rewriter.replaceOpWithNewOp<mlir::LLVM::CondBrOp>(
       brOp, i1Condition, brOp.getDestTrue(), adaptor.getDestOperandsTrue(),
       brOp.getDestFalse(), adaptor.getDestOperandsFalse());
+
+  // Convert CIR loop_hint to LLVM LoopAnnotationAttr.
+  if (auto hint = brOp->getAttrOfType<cir::LoopHintAttr>("loop_hint")) {
+    if (auto ann = convertLoopHint(hint, brOp->getContext()))
+      newOp.setLoopAnnotationAttr(ann);
+  }
 
   return mlir::success();
 }
@@ -1527,8 +1635,19 @@ mlir::LogicalResult CIRToLLVMCastOpLowering::matchAndRewrite(
     assert(!MissingFeatures::dataMemberType());
 
     mlir::Value llvmSrcVal = adaptor.getSrc();
-    rewriter.replaceOpWithNewOp<mlir::LLVM::BitcastOp>(castOp, llvmDstTy,
-                                                       llvmSrcVal);
+    // If both types are pointers with different address spaces, use
+    // addrspacecast instead of bitcast (bitcast can't cross AS boundaries).
+    auto srcPtrTy = mlir::dyn_cast<mlir::LLVM::LLVMPointerType>(
+        llvmSrcVal.getType());
+    auto dstPtrTy = mlir::dyn_cast<mlir::LLVM::LLVMPointerType>(llvmDstTy);
+    if (srcPtrTy && dstPtrTy &&
+        srcPtrTy.getAddressSpace() != dstPtrTy.getAddressSpace()) {
+      rewriter.replaceOpWithNewOp<mlir::LLVM::AddrSpaceCastOp>(
+          castOp, llvmDstTy, llvmSrcVal);
+    } else {
+      rewriter.replaceOpWithNewOp<mlir::LLVM::BitcastOp>(castOp, llvmDstTy,
+                                                         llvmSrcVal);
+    }
     return mlir::success();
   }
   case cir::CastKind::ptr_to_bool: {
@@ -1666,8 +1785,14 @@ mlir::LogicalResult CIRToLLVMPtrStrideOpLowering::matchAndRewrite(
       adaptor.getBase().getType(),
       dyn_cast<cir::IntType>(ptrStrideOp.getOperand(1).getType()));
 
+  auto flags = mlir::LLVM::GEPNoWrapFlags::inbounds;
+  if (auto strideTy =
+          dyn_cast<cir::IntType>(ptrStrideOp.getOperand(1).getType()))
+    if (strideTy.isUnsigned())
+      flags = flags | mlir::LLVM::GEPNoWrapFlags::nuw;
+
   rewriter.replaceOpWithNewOp<mlir::LLVM::GEPOp>(
-      ptrStrideOp, resultTy, elementTy, adaptor.getBase(), index);
+      ptrStrideOp, resultTy, elementTy, adaptor.getBase(), index, flags);
   return mlir::success();
 }
 
@@ -1697,9 +1822,14 @@ mlir::LogicalResult CIRToLLVMGetElementOpLowering::matchAndRewrite(
     // Since the base address is a pointer to an aggregate, the first
     // offset is always zero. The second offset tell us which member it
     // will access.
+    auto flags = mlir::LLVM::GEPNoWrapFlags::inbounds;
+    if (auto idxTy = dyn_cast<cir::IntType>(op.getOperand(1).getType()))
+      if (idxTy.isUnsigned())
+        flags = flags | mlir::LLVM::GEPNoWrapFlags::nuw;
+
     std::array<mlir::LLVM::GEPArg, 2> offset{0, index};
-    rewriter.replaceOpWithNewOp<mlir::LLVM::GEPOp>(op, llResultTy, llArrayTy,
-                                                   adaptor.getBase(), offset);
+    rewriter.replaceOpWithNewOp<mlir::LLVM::GEPOp>(
+        op, llResultTy, llArrayTy, adaptor.getBase(), offset, flags);
     return mlir::success();
   }
 
@@ -1714,7 +1844,7 @@ mlir::LogicalResult CIRToLLVMBaseClassAddrOpLowering::matchAndRewrite(
       getTypeConverter()->convertType(baseClassOp.getType());
   mlir::Value derivedAddr = adaptor.getDerivedAddr();
   llvm::SmallVector<mlir::LLVM::GEPArg, 1> offset = {
-      adaptor.getOffset().getZExtValue()};
+      static_cast<int32_t>(adaptor.getOffset().getZExtValue())};
   mlir::Type byteType = mlir::IntegerType::get(resultType.getContext(), 8,
                                                mlir::IntegerType::Signless);
   if (adaptor.getOffset().getZExtValue() == 0) {
@@ -1753,7 +1883,8 @@ mlir::LogicalResult CIRToLLVMDerivedClassAddrOpLowering::matchAndRewrite(
     rewriter.replaceOp(derivedClassOp, baseAddr);
     return mlir::success();
   }
-  llvm::SmallVector<mlir::LLVM::GEPArg, 1> offset = {offsetVal};
+  llvm::SmallVector<mlir::LLVM::GEPArg, 1> offset = {
+      static_cast<int32_t>(offsetVal)};
   mlir::Type byteType = mlir::IntegerType::get(resultType.getContext(), 8,
                                                mlir::IntegerType::Signless);
   if (derivedClassOp.getAssumeNotNull()) {
@@ -1884,9 +2015,30 @@ rewriteCallOrInvoke(mlir::Operation *op, mlir::ValueRange callOperands,
   if (calleeAttr) { // direct call
     mlir::Operation *callee =
         symbolTables.lookupNearestSymbolFrom(op, calleeAttr);
+    if (!callee) {
+      op->emitError("rewriteCallOrInvoke: callee '")
+          << calleeAttr.getValue() << "' not found in enclosing symbol tables";
+      return mlir::failure();
+    }
     if (auto fn = mlir::dyn_cast<mlir::FunctionOpInterface>(callee)) {
       llvmFnTy = converter->convertType<mlir::LLVM::LLVMFunctionType>(
           fn.getFunctionType());
+      if (!llvmFnTy) {
+        // Callee is a gpu.func or other non-CIR FunctionOpInterface whose
+        // type is mlir::FunctionType — the LLVMTypeConverter has no rule for
+        // it.  Reconstruct the LLVM function type from the already-converted
+        // call operands and results instead.
+        mlir::MLIRContext *ctx = op->getContext();
+        mlir::Type retTy = llvmResults.empty()
+                               ? mlir::LLVM::LLVMVoidType::get(ctx)
+                               : (llvmResults.size() == 1
+                                      ? llvmResults[0]
+                                      : mlir::LLVM::LLVMStructType::getLiteral(
+                                            ctx, llvmResults));
+        SmallVector<mlir::Type> argTys(callOperands.getTypes());
+        llvmFnTy = mlir::LLVM::LLVMFunctionType::get(retTy, argTys,
+                                                     /*isVarArg=*/false);
+      }
       assert(llvmFnTy && "Failed to convert function type");
     } else if (auto alias = mlir::cast<mlir::LLVM::AliasOp>(callee)) {
       // If the callee was an alias. In that case,
@@ -1927,6 +2079,36 @@ rewriteCallOrInvoke(mlir::Operation *op, mlir::ValueRange callOperands,
   }
 
   assert(!cir::MissingFeatures::opCallCallConv());
+
+  // Insert addrspacecast when a call argument's pointer address space doesn't
+  // match the callee's parameter type (e.g. alloca in AS 5 passed where flat
+  // ptr is expected on AMDGPU).
+  {
+    unsigned argOffset = calleeAttr ? 0 : 1;
+    unsigned numParams = llvmFnTy.getNumParams();
+    SmallVector<mlir::Value> fixedOperands(callOperands.begin(),
+                                           callOperands.end());
+    bool changed = false;
+    for (unsigned i = 0; i < numParams && (i + argOffset) < fixedOperands.size();
+         ++i) {
+      mlir::Value &arg = fixedOperands[i + argOffset];
+      mlir::Type paramTy = llvmFnTy.getParamType(i);
+      if (arg.getType() == paramTy)
+        continue;
+      auto argPtrTy = dyn_cast<mlir::LLVM::LLVMPointerType>(arg.getType());
+      auto paramPtrTy = dyn_cast<mlir::LLVM::LLVMPointerType>(paramTy);
+      if (argPtrTy && paramPtrTy &&
+          argPtrTy.getAddressSpace() != paramPtrTy.getAddressSpace()) {
+        arg = mlir::LLVM::AddrSpaceCastOp::create(rewriter, op->getLoc(),
+                                                   paramTy, arg);
+        changed = true;
+      }
+    }
+    if (changed) {
+      adjustedCallOperands = std::move(fixedOperands);
+      callOperands = adjustedCallOperands;
+    }
+  }
 
   if (landingPadBlock) {
     auto newOp = rewriter.replaceOpWithNewOp<mlir::LLVM::InvokeOp>(
@@ -2033,7 +2215,8 @@ mlir::LogicalResult CIRToLLVMLoadOpLowering::matchAndRewrite(
   mlir::Value result =
       emitFromMemory(rewriter, dataLayout, op, newLoad.getResult());
   rewriter.replaceOp(op, result);
-  assert(!cir::MissingFeatures::opLoadStoreTbaa());
+  // TBAA metadata is attached in a post-pass after conversion, since the
+  // auto-generated lowering patterns don't carry a CIRTBAABuilder pointer.
   return mlir::LogicalResult::success();
 }
 
@@ -2495,6 +2678,17 @@ mlir::LogicalResult CIRToLLVMGetGlobalOpLowering::matchAndRewrite(
   }
 
   mlir::Type type = getTypeConverter()->convertType(op.getType());
+
+  // If the referenced symbol is an LLVM global in a non-default address space
+  // (e.g. shared memory, address space 3 on AMDGCN), the AddressOfOp pointer
+  // must carry the same address space — otherwise its verifier fires.
+  if (auto llvmGlobal = mlir::dyn_cast_if_present<mlir::LLVM::GlobalOp>(
+          mlir::SymbolTable::lookupNearestSymbolFrom(op, op.getNameAttr()))) {
+    unsigned addrSpace = llvmGlobal.getAddrSpace();
+    if (addrSpace != 0)
+      type = mlir::LLVM::LLVMPointerType::get(op.getContext(), addrSpace);
+  }
+
   mlir::Operation *newop = mlir::LLVM::AddressOfOp::create(
       rewriter, op.getLoc(), type, op.getName());
 
@@ -2735,9 +2929,12 @@ CIRToLLVMGlobalOpLowering::getComdatAttr(cir::GlobalOp &op,
   mlir::OpBuilder::InsertionGuard guard(builder);
   StringRef comdatName("__llvm_comdat_globals");
   if (!comdatOp) {
-    builder.setInsertionPointToStart(modOp.getBody());
-    comdatOp =
-        mlir::LLVM::ComdatOp::create(builder, modOp.getLoc(), comdatName);
+    comdatOp = modOp.lookupSymbol<mlir::LLVM::ComdatOp>(comdatName);
+    if (!comdatOp) {
+      builder.setInsertionPointToStart(modOp.getBody());
+      comdatOp =
+          mlir::LLVM::ComdatOp::create(builder, modOp.getLoc(), comdatName);
+    }
   }
 
   if (auto comdatSelector = comdatOp.lookupSymbol<mlir::LLVM::ComdatSelectorOp>(
@@ -3494,6 +3691,24 @@ static void prepareTypeConverter(mlir::LLVMTypeConverter &converter,
   converter.addConversion([&](cir::VoidType type) -> mlir::Type {
     return mlir::LLVM::LLVMVoidType::get(type.getContext());
   });
+
+  // Target materialization: widen narrower integers to a wider integer target
+  // type via zero-extension.  This bridges gaps like i32 → i64 that arise when
+  // LowerHostRuntime emits unrealized_conversion_cast(cir_arg → i64) for kernel
+  // launch args that are 32-bit CIR integers (which the type converter maps to
+  // i32, leaving an i32 → i64 gap the framework cannot auto-synthesize).
+  converter.addTargetMaterialization(
+      [](mlir::OpBuilder &b, mlir::IntegerType resultTy,
+         mlir::ValueRange inputs, mlir::Location loc) -> mlir::Value {
+        if (inputs.size() != 1)
+          return {};
+        auto inputTy = mlir::dyn_cast<mlir::IntegerType>(inputs[0].getType());
+        if (!inputTy || inputTy.getWidth() == resultTy.getWidth())
+          return {};
+        if (inputTy.getWidth() < resultTy.getWidth())
+          return mlir::LLVM::ZExtOp::create(b, loc, resultTy, inputs[0]);
+        return mlir::LLVM::TruncOp::create(b, loc, resultTy, inputs[0]);
+      });
 }
 
 static void buildCtorDtorList(
@@ -3855,6 +4070,2565 @@ void ConvertCIRToLLVMPass::processCIRAttrs(mlir::ModuleOp module) {
                     asmAttr);
 }
 
+/// Fold `builtin.unrealized_conversion_cast` ops that survive CIR-to-LLVM
+/// type conversion.  When the source type converts to the same LLVM type as
+/// the destination type (e.g. !cir.u32i → i32 becomes i32 → i32), replace
+/// the cast with the already-converted input value.
+struct UnrealizedCastFoldingLowering
+    : public mlir::OpConversionPattern<mlir::UnrealizedConversionCastOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::UnrealizedConversionCastOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    // Only handle the single-input single-output case.
+    if (adaptor.getInputs().size() != 1 || op.getOutputs().size() != 1)
+      return mlir::failure();
+    mlir::Value converted = adaptor.getInputs()[0];
+    mlir::Type outTy = op.getOutputs()[0].getType();
+
+    // After CIR type conversion both sides have the same type
+    // (e.g. !cir.u32i → i32 becomes i32 → i32).  Fold to identity.
+    if (converted.getType() == outTy) {
+      rewriter.replaceOp(op, converted);
+      return mlir::success();
+    }
+    mlir::Type convertedOutTy = typeConverter->convertType(outTy);
+    if (convertedOutTy && converted.getType() == convertedOutTy) {
+      rewriter.replaceOp(op, converted);
+      return mlir::success();
+    }
+
+    // Case 2: index → !cir.u32i cast emitted by CIRGenExprScalar for GPU
+    // built-in variables (threadIdx, blockIdx, etc.).
+    // Sub-case A: the converted input is still `index` (because the defining
+    // op, e.g. gpu.block_id, is legal and was not remapped by the converter).
+    // Use arith.index_castui to produce i32; after ConvertGpuOpsToROCDLOps the
+    // defining op becomes an i32 ROCDL intrinsic, so the cast becomes identity
+    // and is removed by the post-ROCDL cleanup sweep.
+    // Sub-case B: the converted input is i64 (index was remapped to i64).
+    // Truncate i64 → i32.
+    if (op.getInputs().size() == 1 && op.getInputs()[0].getType().isIndex() &&
+        convertedOutTy && mlir::isa<mlir::IntegerType>(convertedOutTy)) {
+      if (converted.getType().isIndex()) {
+        // Sub-case A: input is still index — use arith.index_castui.
+        rewriter.replaceOpWithNewOp<mlir::arith::IndexCastUIOp>(
+            op, convertedOutTy, converted);
+      } else {
+        // Sub-case B: input was remapped to i64 — truncate.
+        rewriter.replaceOpWithNewOp<mlir::LLVM::TruncOp>(op, convertedOutTy,
+                                                         converted);
+      }
+      return mlir::success();
+    }
+
+    // Case 3: narrower-integer → wider-integer cast emitted by
+    // LowerHostRuntime when packing kernel launch args into a void** params
+    // array via unrealized_cast(cir_arg → i64).  The CIR type (e.g.
+    // !cir.int<s,32>) converts to a narrower integer (e.g. i32), but the
+    // target slot type is i64.  Zero-extend to bridge the gap.
+    if (auto outIntTy = mlir::dyn_cast<mlir::IntegerType>(outTy)) {
+      if (auto inIntTy =
+              mlir::dyn_cast<mlir::IntegerType>(converted.getType())) {
+        if (inIntTy.getWidth() < outIntTy.getWidth()) {
+          rewriter.replaceOpWithNewOp<mlir::LLVM::ZExtOp>(op, outIntTy,
+                                                          converted);
+          return mlir::success();
+        }
+        if (inIntTy.getWidth() > outIntTy.getWidth()) {
+          rewriter.replaceOpWithNewOp<mlir::LLVM::TruncOp>(op, outIntTy,
+                                                           converted);
+          return mlir::success();
+        }
+      }
+    }
+
+    // Case 4: integer → !cir.ptr cast emitted by hipMalloc lowering.
+    // gpu.alloc pointer extraction produces i64 (via index_castui); the result
+    // is stored back as a CIR pointer via unrealized_conversion_cast.
+    // Lower to llvm.inttoptr so the pointer is properly reconstructed.
+    if (convertedOutTy &&
+        mlir::isa<mlir::LLVM::LLVMPointerType>(convertedOutTy)) {
+      if (mlir::isa<mlir::IntegerType>(converted.getType())) {
+        rewriter.replaceOpWithNewOp<mlir::LLVM::IntToPtrOp>(op, convertedOutTy,
+                                                            converted);
+        return mlir::success();
+      }
+    }
+
+    // Case 5: integer → index cast emitted by the hipMalloc lowering path when
+    // !cir.u64i (→ i64 after conversion) is passed to gpu.alloc which expects
+    // index operands.  Use arith.index_castui to bridge the gap.
+    if (outTy.isIndex()) {
+      if (auto inIntTy =
+              mlir::dyn_cast<mlir::IntegerType>(converted.getType())) {
+        rewriter.replaceOpWithNewOp<mlir::arith::IndexCastUIOp>(op, outTy,
+                                                                converted);
+        return mlir::success();
+      }
+    }
+
+    return mlir::failure();
+  }
+};
+
+/// Convert kernel operand types in `gpu.launch_func` ops.  CIR-typed values
+/// may appear as kernel arguments; this pattern passes the type-converted
+/// (LLVM-typed) kernel operands through unchanged so the op becomes legal.
+struct GPULaunchFuncOperandLowering
+    : public mlir::OpConversionPattern<mlir::gpu::LaunchFuncOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::gpu::LaunchFuncOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    // Rebuild with the adaptor-provided (type-converted) operands.  The
+    // grid/block operands are index-typed and unchanged; kernel args may have
+    // been CIR-typed and are now LLVM-typed via the adaptor.
+    mlir::gpu::KernelDim3 gridSize{
+        adaptor.getGridSizeX(), adaptor.getGridSizeY(), adaptor.getGridSizeZ()};
+    mlir::gpu::KernelDim3 blockSize{adaptor.getBlockSizeX(),
+                                    adaptor.getBlockSizeY(),
+                                    adaptor.getBlockSizeZ()};
+
+    std::optional<mlir::gpu::KernelDim3> clusterSize;
+    if (adaptor.getClusterSizeX())
+      clusterSize = mlir::gpu::KernelDim3{adaptor.getClusterSizeX(),
+                                          adaptor.getClusterSizeY(),
+                                          adaptor.getClusterSizeZ()};
+
+    auto newOp = rewriter.replaceOpWithNewOp<mlir::gpu::LaunchFuncOp>(
+        op, op.getKernelAttr(), gridSize, blockSize,
+        adaptor.getDynamicSharedMemorySize(), adaptor.getKernelOperands(),
+        adaptor.getAsyncObject(), clusterSize);
+    (void)newOp;
+    return mlir::success();
+  }
+};
+
+/// Lower `func.return` ops to `llvm.return`.
+struct FuncReturnToLLVMReturnLowering
+    : public mlir::OpConversionPattern<mlir::func::ReturnOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::func::ReturnOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<mlir::LLVM::ReturnOp>(op,
+                                                      adaptor.getOperands());
+    return mlir::success();
+  }
+};
+
+/// Lower a `func.func` op to an `llvm.func` op, translating CIR argument/result
+/// types via the same LLVMTypeConverter used for `cir.func` ops.
+struct FuncFuncToLLVMFuncOpLowering
+    : public mlir::OpConversionPattern<mlir::func::FuncOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::func::FuncOp op, OpAdaptor /*adaptor*/,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::FunctionType fnType = op.getFunctionType();
+    mlir::TypeConverter::SignatureConversion sigConv(fnType.getNumInputs());
+    for (auto [idx, argTy] : llvm::enumerate(fnType.getInputs())) {
+      mlir::Type converted = typeConverter->convertType(argTy);
+      if (!converted)
+        return mlir::failure();
+      sigConv.addInputs(idx, converted);
+    }
+    SmallVector<mlir::Type> resultTypes;
+    if (mlir::failed(
+            typeConverter->convertTypes(fnType.getResults(), resultTypes)))
+      return mlir::failure();
+
+    mlir::Type llvmFnTy = mlir::LLVM::LLVMFunctionType::get(
+        resultTypes.empty() ? mlir::LLVM::LLVMVoidType::get(op.getContext())
+                            : resultTypes[0],
+        sigConv.getConvertedTypes());
+
+    // Use the first sub-location to satisfy LLVMFuncOp's location requirement.
+    mlir::Location loc = op.getLoc();
+    if (auto fused = mlir::dyn_cast<mlir::FusedLoc>(loc))
+      loc = fused.getLocations().front();
+
+    auto llvmFunc = mlir::LLVM::LLVMFuncOp::create(
+        rewriter, loc, op.getName(),
+        mlir::cast<mlir::LLVM::LLVMFunctionType>(llvmFnTy));
+
+    rewriter.inlineRegionBefore(op.getBody(), llvmFunc.getBody(),
+                                llvmFunc.end());
+
+    // For declarations (no body), there are no block arguments to remap.
+    // Calling applySignatureConversion on an empty body crashes (ilist
+    // sentinel).
+    if (!llvmFunc.getBody().empty()) {
+      // Remap only the entry block argument types (CIR → LLVM).  We do NOT call
+      // convertRegionTypes here because that inserts backward materializations
+      // (e.g. i32 → !s32i) for every use inside the body, including uses in
+      // legal ops (gpu.launch_func) that are left unconverted.  Those backward
+      // casts then carry CIR types through to the LLVM IR export and break it.
+      //
+      // applySignatureConversion replaces block args with the LLVM-typed
+      // versions and lets the conversion framework remap uses inside the body
+      // when those ops are themselves converted by their own patterns.  Legal
+      // ops (e.g. gpu.launch_func) receive operands that are already LLVM-typed
+      // because the CIR ops that computed them were converted immediately
+      // before.
+      rewriter.applySignatureConversion(&llvmFunc.getBody().front(), sigConv);
+    }
+
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+
+/// Convert kernel argument types of `gpu.launch_func` from CIR to LLVM.
+/// After the offload split pass, `gpu.launch_func` kernel args may carry CIR
+/// types (e.g. `!s32i`) because `offload.kernel_launch` args were not
+/// type-converted when the split produced the launch op. `ConvertCIRToLLVMPass`
+/// marks the entire GPU dialect as legal, so we add this explicit pattern to
+/// ensure kernel args are in LLVM types before translation.
+struct GpuLaunchFuncArgConversionLowering
+    : public mlir::OpConversionPattern<mlir::gpu::LaunchFuncOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::gpu::LaunchFuncOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    // If all operands are already legal, nothing to do.
+    bool needsConversion = false;
+    for (auto [orig, conv] :
+         llvm::zip(op.getKernelOperands(), adaptor.getKernelOperands())) {
+      if (orig.getType() != conv.getType()) {
+        needsConversion = true;
+        break;
+      }
+    }
+    if (!needsConversion)
+      return mlir::failure(); // Let the legal-op check pass through.
+
+    // Re-create the launch_func with converted operands.
+    mlir::gpu::KernelDim3 gridSize{
+        adaptor.getGridSizeX(), adaptor.getGridSizeY(), adaptor.getGridSizeZ()};
+    mlir::gpu::KernelDim3 blockSize{adaptor.getBlockSizeX(),
+                                    adaptor.getBlockSizeY(),
+                                    adaptor.getBlockSizeZ()};
+    rewriter.replaceOpWithNewOp<mlir::gpu::LaunchFuncOp>(
+        op, op.getKernel(), gridSize, blockSize,
+        adaptor.getDynamicSharedMemorySize(), adaptor.getKernelOperands(),
+        adaptor.getAsyncObject());
+    return mlir::success();
+  }
+};
+
+/// Convert all block argument types inside a `gpu.func` body from CIR types
+/// to LLVM types.  `populateFunctionOpInterfaceTypeConversionPattern` only
+/// converts the entry block (the function signature); inner blocks produced by
+/// `CIRFlattenCFGPass` (e.g. from `cir.ternary` → `cir.brcond` with block
+/// args) may still carry CIR types (e.g. `!cir.bool` → `i1`).  This pattern
+/// calls `convertRegionTypes` which walks every block in the function body and
+/// converts their argument types, satisfying
+/// `converter.isLegal(&fn.getBody())`.
+struct GPUFuncAllBlockArgsConversionPattern
+    : public mlir::OpConversionPattern<mlir::gpu::GPUFuncOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::gpu::GPUFuncOp funcOp, OpAdaptor /*adaptor*/,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    // Convert the function type (signature).
+    mlir::FunctionType fnType =
+        mlir::dyn_cast<mlir::FunctionType>(funcOp.getFunctionType());
+    if (!fnType)
+      return mlir::failure();
+
+    mlir::TypeConverter::SignatureConversion sigConv(fnType.getNumInputs());
+    if (mlir::failed(
+            typeConverter->convertSignatureArgs(fnType.getInputs(), sigConv)))
+      return mlir::failure();
+    llvm::SmallVector<mlir::Type> newResults;
+    if (mlir::failed(
+            typeConverter->convertTypes(fnType.getResults(), newResults)))
+      return mlir::failure();
+
+    auto newFnType = mlir::FunctionType::get(
+        rewriter.getContext(), sigConv.getConvertedTypes(), newResults);
+    rewriter.modifyOpInPlace(funcOp, [&] { funcOp.setType(newFnType); });
+
+    // Convert ALL block argument types in the entire function body (including
+    // inner blocks from flattened control flow).
+    if (!funcOp.getBody().empty()) {
+      if (mlir::failed(rewriter.convertRegionTypes(&funcOp.getBody(),
+                                                   *typeConverter, &sigConv)))
+        return mlir::failure();
+    }
+    return mlir::success();
+  }
+};
+
+// ============================================================================
+// ConvertCIROffloadToGPUPass
+// ============================================================================
+//
+// Converts cir.offload.* ops to their GPU dialect equivalents. Runs after
+// CIR-to-CIR optimization passes and FlattenCFG, but before the GPU
+// optimization pipeline (TightenLaunchBounds, PropagateBlockShape, etc.)
+// and before ConvertCIRInGpuModulePass.
+
+/// Map CIR offload dimension enum to GPU dimension enum.
+static mlir::gpu::Dimension toGPUDim(cir::OffloadDimension d) {
+  switch (d) {
+  case cir::OffloadDimension::X:
+    return mlir::gpu::Dimension::x;
+  case cir::OffloadDimension::Y:
+    return mlir::gpu::Dimension::y;
+  case cir::OffloadDimension::Z:
+    return mlir::gpu::Dimension::z;
+  }
+  llvm_unreachable("unknown CIR offload dimension");
+}
+
+/// Map CIR offload dimension enum to numeric index (0=x, 1=y, 2=z).
+static unsigned toDimIndex(cir::OffloadDimension d) {
+  switch (d) {
+  case cir::OffloadDimension::X:
+    return 0;
+  case cir::OffloadDimension::Y:
+    return 1;
+  case cir::OffloadDimension::Z:
+    return 2;
+  }
+  llvm_unreachable("unknown CIR offload dimension");
+}
+
+/// Get or create an LLVM intrinsic declaration inside a gpu.module.
+static mlir::LLVM::LLVMFuncOp
+getOrCreateIntrinsicDecl(mlir::OpBuilder &builder, mlir::gpu::GPUModuleOp gpuMod,
+                         mlir::Location loc, llvm::StringRef name,
+                         mlir::Type resultTy, ArrayRef<mlir::Type> argTys = {}) {
+  if (auto fn = gpuMod.lookupSymbol<mlir::LLVM::LLVMFuncOp>(name))
+    return fn;
+  mlir::OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToStart(gpuMod.getBody());
+  auto fnTy = mlir::LLVM::LLVMFunctionType::get(resultTy, argTys);
+  return mlir::LLVM::LLVMFuncOp::create(builder, loc, name, fnTy);
+}
+
+/// Emit an inline load of workgroup size (blockDim) for a given dimension,
+/// using dispatch_ptr (COV4) or implicitarg_ptr (COV5+) intrinsics.
+/// This produces scalar loads that preserve AMDGPU uniformity, unlike the
+/// __ockl_get_local_size() call that the GPU→ROCDL pass would otherwise emit.
+static mlir::Value emitWorkgroupSizeLoad(mlir::OpBuilder &builder,
+                                         mlir::Location loc,
+                                         mlir::gpu::GPUModuleOp gpuMod,
+                                         unsigned dimIndex, unsigned cov) {
+  auto *ctx = builder.getContext();
+  auto ptrTy = mlir::LLVM::LLVMPointerType::get(ctx, 4); // addrspace 4
+  auto i8Ty = mlir::IntegerType::get(ctx, 8);
+  auto i16Ty = mlir::IntegerType::get(ctx, 16);
+  auto i32Ty = mlir::IntegerType::get(ctx, 32);
+
+  llvm::StringRef intrinsicName;
+  unsigned offset;
+  if (cov >= 500) { // COV5+
+    intrinsicName = "llvm.amdgcn.implicitarg.ptr";
+    offset = 12 + dimIndex * 2; // group_size_x/y/z
+  } else {
+    intrinsicName = "llvm.amdgcn.dispatch.ptr";
+    offset = 4 + dimIndex * 2; // workgroup_size_x/y/z
+  }
+
+  auto fn = getOrCreateIntrinsicDecl(builder, gpuMod, loc, intrinsicName, ptrTy);
+  auto call = mlir::LLVM::CallOp::create(builder, loc, fn, mlir::ValueRange{});
+  mlir::Value ptr = call.getResult();
+
+  auto offsetVal = mlir::LLVM::ConstantOp::create(
+      builder, loc, i32Ty, builder.getI32IntegerAttr(offset));
+  auto gep = mlir::LLVM::GEPOp::create(builder, loc, ptrTy, i8Ty, ptr,
+                                        mlir::ValueRange{offsetVal});
+  auto load = mlir::LLVM::LoadOp::create(builder, loc, i16Ty, gep);
+  load.setInvariant(true);
+  auto result = mlir::LLVM::ZExtOp::create(builder, loc, i32Ty, load);
+  return result;
+}
+
+/// Emit an inline load of grid dimension (gridDim) for a given dimension.
+/// COV5+: loads block_count directly from implicitarg_ptr (no division).
+/// COV4: loads grid_size from dispatch_ptr and divides by workgroup_size.
+static mlir::Value emitGridDimLoad(mlir::OpBuilder &builder, mlir::Location loc,
+                                   mlir::gpu::GPUModuleOp gpuMod,
+                                   unsigned dimIndex, unsigned cov) {
+  auto *ctx = builder.getContext();
+  auto ptrTy = mlir::LLVM::LLVMPointerType::get(ctx, 4);
+  auto i8Ty = mlir::IntegerType::get(ctx, 8);
+  auto i32Ty = mlir::IntegerType::get(ctx, 32);
+
+  if (cov >= 500) {
+    // COV5+: hidden_block_count at offset dim*4 in implicitarg
+    auto fn = getOrCreateIntrinsicDecl(builder, gpuMod, loc,
+                                       "llvm.amdgcn.implicitarg.ptr", ptrTy);
+    auto call = mlir::LLVM::CallOp::create(builder, loc, fn, mlir::ValueRange{});
+    mlir::Value ptr = call.getResult();
+
+    unsigned offset = dimIndex * 4; // block_count_x/y/z
+    auto offsetVal = mlir::LLVM::ConstantOp::create(
+        builder, loc, i32Ty, builder.getI32IntegerAttr(offset));
+    auto gep = mlir::LLVM::GEPOp::create(builder, loc, ptrTy, i8Ty, ptr,
+                                          mlir::ValueRange{offsetVal});
+    auto load = mlir::LLVM::LoadOp::create(builder, loc, i32Ty, gep);
+    load.setInvariant(true);
+    return load;
+  }
+
+  // COV4: grid_size / workgroup_size
+  auto fn = getOrCreateIntrinsicDecl(builder, gpuMod, loc,
+                                     "llvm.amdgcn.dispatch.ptr", ptrTy);
+  auto call = mlir::LLVM::CallOp::create(builder, loc, fn, mlir::ValueRange{});
+  mlir::Value ptr = call.getResult();
+
+  // Load grid_size (i32) at offset 12 + dim*4
+  unsigned gridOffset = 12 + dimIndex * 4;
+  auto gridOffsetVal = mlir::LLVM::ConstantOp::create(
+      builder, loc, i32Ty, builder.getI32IntegerAttr(gridOffset));
+  auto gridGep = mlir::LLVM::GEPOp::create(builder, loc, ptrTy, i8Ty, ptr,
+                                            mlir::ValueRange{gridOffsetVal});
+  auto gridLoad = mlir::LLVM::LoadOp::create(builder, loc, i32Ty, gridGep);
+  gridLoad.setInvariant(true);
+
+  // Load workgroup_size and compute grid_size / workgroup_size
+  mlir::Value blockDim =
+      emitWorkgroupSizeLoad(builder, loc, gpuMod, dimIndex, cov);
+  return mlir::LLVM::UDivOp::create(builder, loc, i32Ty, gridLoad, blockDim);
+}
+
+/// Map CIR offload reduce kind to GPU all-reduce operation.
+static mlir::gpu::AllReduceOperation
+toGPUReduceOp(cir::OffloadReduceKind k) {
+  switch (k) {
+  case cir::OffloadReduceKind::Add:
+    return mlir::gpu::AllReduceOperation::ADD;
+  case cir::OffloadReduceKind::Mul:
+    return mlir::gpu::AllReduceOperation::MUL;
+  case cir::OffloadReduceKind::MinUI:
+    return mlir::gpu::AllReduceOperation::MINUI;
+  case cir::OffloadReduceKind::MinSI:
+    return mlir::gpu::AllReduceOperation::MINSI;
+  case cir::OffloadReduceKind::MaxUI:
+    return mlir::gpu::AllReduceOperation::MAXUI;
+  case cir::OffloadReduceKind::MaxSI:
+    return mlir::gpu::AllReduceOperation::MAXSI;
+  case cir::OffloadReduceKind::And:
+    return mlir::gpu::AllReduceOperation::AND;
+  case cir::OffloadReduceKind::Or:
+    return mlir::gpu::AllReduceOperation::OR;
+  case cir::OffloadReduceKind::Xor:
+    return mlir::gpu::AllReduceOperation::XOR;
+  }
+  llvm_unreachable("unknown CIR offload reduce kind");
+}
+
+/// Map CIR offload broadcast kind to GPU broadcast type.
+static mlir::gpu::BroadcastType
+toGPUBroadcastType(cir::OffloadBroadcastKind k) {
+  switch (k) {
+  case cir::OffloadBroadcastKind::FirstActiveLane:
+    return mlir::gpu::BroadcastType::first_active_lane;
+  case cir::OffloadBroadcastKind::SpecificLane:
+    return mlir::gpu::BroadcastType::specific_lane;
+  }
+  llvm_unreachable("unknown CIR offload broadcast kind");
+}
+
+struct ConvertCIROffloadToGPUPass
+    : public mlir::PassWrapper<ConvertCIROffloadToGPUPass,
+                               mlir::OperationPass<mlir::ModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertCIROffloadToGPUPass)
+
+  llvm::StringRef getArgument() const override {
+    return "cir-convert-offload-to-gpu";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Convert cir.offload.* ops to GPU dialect equivalents";
+  }
+
+  void runOnOperation() override {
+    mlir::ModuleOp module = getOperation();
+    mlir::MLIRContext *ctx = &getContext();
+    mlir::OpBuilder builder(ctx);
+
+    // Detect AMDGPU offload target for target-specific lowering decisions.
+    bool isAMDGPU = false;
+    if (auto archs = module->getAttrOfType<mlir::ArrayAttr>("offload.target")) {
+      for (auto arch : archs) {
+        if (auto str = mlir::dyn_cast<mlir::StringAttr>(arch)) {
+          if (str.getValue().starts_with("gfx")) {
+            isAMDGPU = true;
+            break;
+          }
+        }
+      }
+    }
+
+    // Step 1: Convert cir.offload.module → gpu.module, and
+    //         cir.offload.func → gpu.func inside them.
+    SmallVector<cir::OffloadModuleOp> offloadModules;
+    module.walk([&](cir::OffloadModuleOp m) { offloadModules.push_back(m); });
+
+    for (auto offloadMod : offloadModules) {
+      if (offloadMod.getBody().empty()) {
+        offloadMod.erase();
+        continue;
+      }
+      mlir::Location loc = offloadMod.getLoc();
+      llvm::StringRef modName = offloadMod.getSymName();
+
+      // Create gpu.module at the same position.
+      builder.setInsertionPoint(offloadMod);
+      auto gpuMod = mlir::gpu::GPUModuleOp::create(builder, loc, modName);
+
+      // Move all ops from cir.offload.module body into gpu.module body.
+      // First, convert cir.offload.func ops to gpu.func.
+      mlir::Block *offloadBody = &offloadMod.getBody().front();
+      mlir::Block *gpuBody = gpuMod.getBody();
+
+      // Collect offload funcs first, then convert, then move remaining ops.
+      SmallVector<cir::OffloadFuncOp> offloadFuncs;
+      offloadBody->walk(
+          [&](cir::OffloadFuncOp fn) { offloadFuncs.push_back(fn); });
+
+      for (auto offloadFn : offloadFuncs) {
+        mlir::Location fnLoc = offloadFn.getLoc();
+        cir::FuncType cirFTy = offloadFn.getFunctionType();
+
+        SmallVector<mlir::Type> inputTypes(cirFTy.getInputs());
+
+        mlir::FunctionType mlirFTy = mlir::FunctionType::get(
+            ctx, inputTypes, cirFTy.getReturnTypes());
+
+        builder.setInsertionPoint(offloadFn);
+        auto gpuFn = mlir::gpu::GPUFuncOp::create(
+            builder, fnLoc, offloadFn.getSymName(), mlirFTy);
+
+        // Set kernel attribute if present.
+        if (offloadFn.isKernel())
+          gpuFn.setKernelAttr(mlir::UnitAttr::get(ctx));
+
+        // Copy discardable attributes (rocdl.flat_work_group_size, etc.).
+        for (auto attr : offloadFn->getDiscardableAttrs())
+          gpuFn->setAttr(attr.getName(), attr.getValue());
+
+        // Copy arg_attrs if present.
+        if (auto argAttrs = offloadFn.getArgAttrs())
+          gpuFn.setArgAttrsAttr(*argAttrs);
+
+        // Move the body from cir.offload.func to gpu.func.
+        if (!offloadFn.getBody().empty()) {
+          // gpu.func is created with an empty entry block. Erase it, then
+          // splice the offload func's blocks.
+          gpuFn.getBody().getBlocks().clear();
+          gpuFn.getBody().getBlocks().splice(gpuFn.getBody().end(),
+                                             offloadFn.getBody().getBlocks());
+
+        }
+
+        // Convert cir.return terminators to gpu.return inside the new gpu.func.
+        for (mlir::Block &blk : gpuFn.getBody()) {
+          if (auto ret = dyn_cast<cir::ReturnOp>(blk.getTerminator())) {
+            mlir::OpBuilder::InsertionGuard rg(builder);
+            builder.setInsertionPoint(ret);
+            mlir::gpu::ReturnOp::create(builder, ret.getLoc(),
+                                        ret.getOperands());
+            ret.erase();
+          }
+        }
+
+        offloadFn.erase();
+      }
+
+      // Move remaining ops (cir.func declarations, cir.global, etc.) from
+      // offload module body to gpu.module body.
+      SmallVector<mlir::Operation *> remainingOps;
+      for (auto &op : llvm::make_early_inc_range(*offloadBody)) {
+        remainingOps.push_back(&op);
+      }
+      for (auto *op : remainingOps) {
+        op->moveBefore(gpuBody, gpuBody->end());
+      }
+
+      // Clone external function declarations from the outer module into the
+      // gpu.module if they're referenced by ops inside it.
+      llvm::DenseSet<mlir::StringRef> clonedDecls;
+      gpuMod.walk([&](mlir::Operation *op) {
+        for (auto attr : op->getAttrs()) {
+          if (auto symbolRef = mlir::dyn_cast<mlir::FlatSymbolRefAttr>(
+                  attr.getValue())) {
+            llvm::StringRef symName = symbolRef.getValue();
+            if (mlir::SymbolTable::lookupSymbolIn(gpuMod, symName))
+              continue;
+            if (!clonedDecls.insert(symName).second)
+              continue;
+            if (auto *parentSym =
+                    mlir::SymbolTable::lookupSymbolIn(module, symName)) {
+              mlir::OpBuilder declBuilder(ctx);
+              declBuilder.setInsertionPointToStart(gpuBody);
+              declBuilder.clone(*parentSym);
+            }
+          }
+        }
+      });
+
+      // Set gpu.container_module attribute on the parent ModuleOp.
+      module->setAttr("gpu.container_module", mlir::UnitAttr::get(ctx));
+
+      offloadMod.erase();
+    }
+
+    // Read the AMDGPU code object version from the module attribute.
+    // COV_None=0, COV_4=400, COV_5=500, COV_6=600.
+    unsigned codeObjectVersion = 0;
+    if (auto covAttr = module->getAttrOfType<mlir::IntegerAttr>(
+            cir::CIRDialect::getAMDGPUCodeObjectVersionAttrName()))
+      codeObjectVersion = covAttr.getInt();
+    // On the host cc1, the AMDGPU COV attribute isn't set (it's an x86 module).
+    // Default to COV_6 (=600) when compiling for an AMDGPU offload target,
+    // since COV_None is only used for device library compilation.
+    if (codeObjectVersion == 0 && isAMDGPU)
+      codeObjectVersion = 600; // COV_6
+
+    // Step 2: Convert remaining cir.offload.* ops inside gpu.func bodies.
+    module.walk([&](mlir::gpu::GPUFuncOp gpuFn) {
+      // Walk in reverse to handle nested ops correctly.
+      SmallVector<mlir::Operation *> opsToConvert;
+      gpuFn.walk([&](mlir::Operation *op) {
+        if (isa<cir::OffloadThreadIdOp, cir::OffloadBlockIdOp,
+                cir::OffloadBlockDimOp, cir::OffloadGridDimOp,
+                cir::OffloadBarrierOp, cir::OffloadSubgroupReduceOp,
+                cir::OffloadSubgroupBroadcastOp, cir::OffloadBallotOp,
+                cir::OffloadDynamicSharedMemoryOp>(op))
+          opsToConvert.push_back(op);
+      });
+
+      for (auto *op : opsToConvert) {
+        mlir::Location loc = op->getLoc();
+        builder.setInsertionPoint(op);
+
+        // --- Dimension ops ---
+        if (auto threadId = dyn_cast<cir::OffloadThreadIdOp>(op)) {
+          mlir::Value gpuOp = mlir::gpu::ThreadIdOp::create(
+              builder, loc, toGPUDim(threadId.getDimension()));
+          mlir::Value result = mlir::UnrealizedConversionCastOp::create(
+                                   builder, loc, threadId.getType(), gpuOp)
+                                   .getResult(0);
+          threadId.replaceAllUsesWith(result);
+          threadId.erase();
+          continue;
+        }
+        if (auto blockId = dyn_cast<cir::OffloadBlockIdOp>(op)) {
+          mlir::Value gpuOp = mlir::gpu::BlockIdOp::create(
+              builder, loc, toGPUDim(blockId.getDimension()));
+          mlir::Value result = mlir::UnrealizedConversionCastOp::create(
+                                   builder, loc, blockId.getType(), gpuOp)
+                                   .getResult(0);
+          blockId.replaceAllUsesWith(result);
+          blockId.erase();
+          continue;
+        }
+        if (auto blockDim = dyn_cast<cir::OffloadBlockDimOp>(op)) {
+          unsigned dimIdx = toDimIndex(blockDim.getDimension());
+          mlir::Value result;
+          if (codeObjectVersion != 0) {
+            // Known COV: emit inline dispatch_ptr/implicitarg_ptr load.
+            auto gpuMod = gpuFn->getParentOfType<mlir::gpu::GPUModuleOp>();
+            mlir::Value i32Val = emitWorkgroupSizeLoad(builder, loc, gpuMod,
+                                                       dimIdx, codeObjectVersion);
+            result = mlir::UnrealizedConversionCastOp::create(
+                         builder, loc, blockDim.getType(), i32Val)
+                         .getResult(0);
+          } else {
+            // COV_None: fall back to gpu.block_dim → ockl call.
+            mlir::Value gpuOp = mlir::gpu::BlockDimOp::create(
+                builder, loc, toGPUDim(blockDim.getDimension()));
+            result = mlir::UnrealizedConversionCastOp::create(
+                         builder, loc, blockDim.getType(), gpuOp)
+                         .getResult(0);
+          }
+          blockDim.replaceAllUsesWith(result);
+          blockDim.erase();
+          continue;
+        }
+        if (auto gridDim = dyn_cast<cir::OffloadGridDimOp>(op)) {
+          unsigned dimIdx = toDimIndex(gridDim.getDimension());
+          mlir::Value result;
+          if (codeObjectVersion != 0) {
+            auto gpuMod = gpuFn->getParentOfType<mlir::gpu::GPUModuleOp>();
+            mlir::Value i32Val = emitGridDimLoad(builder, loc, gpuMod,
+                                                  dimIdx, codeObjectVersion);
+            result = mlir::UnrealizedConversionCastOp::create(
+                         builder, loc, gridDim.getType(), i32Val)
+                         .getResult(0);
+          } else {
+            mlir::Value gpuOp = mlir::gpu::GridDimOp::create(
+                builder, loc, toGPUDim(gridDim.getDimension()));
+            result = mlir::UnrealizedConversionCastOp::create(
+                         builder, loc, gridDim.getType(), gpuOp)
+                         .getResult(0);
+          }
+          gridDim.replaceAllUsesWith(result);
+          gridDim.erase();
+          continue;
+        }
+
+        // --- Barrier ---
+        if (auto barrier = dyn_cast<cir::OffloadBarrierOp>(op)) {
+          mlir::gpu::BarrierOp::create(builder, loc);
+          barrier.erase();
+          continue;
+        }
+
+        // --- Subgroup reduce ---
+        if (auto reduce = dyn_cast<cir::OffloadSubgroupReduceOp>(op)) {
+          mlir::Type cirTy = reduce.getValue().getType();
+          unsigned width = mlir::cast<cir::IntType>(cirTy).getWidth();
+          mlir::Type mlirTy = mlir::IntegerType::get(ctx, width);
+          mlir::Value asMLIR =
+              mlir::UnrealizedConversionCastOp::create(builder, loc, mlirTy,
+                                                       reduce.getValue())
+                  .getResult(0);
+          mlir::Value gpuResult =
+              mlir::gpu::SubgroupReduceOp::create(
+                  builder, loc, asMLIR, toGPUReduceOp(reduce.getOp()),
+                  reduce.getUniform())
+                  .getResult();
+          mlir::Value asCIR = mlir::UnrealizedConversionCastOp::create(
+                                  builder, loc, cirTy, gpuResult)
+                                  .getResult(0);
+          reduce.replaceAllUsesWith(asCIR);
+          reduce.erase();
+          continue;
+        }
+
+        // --- Subgroup broadcast ---
+        if (auto bcast = dyn_cast<cir::OffloadSubgroupBroadcastOp>(op)) {
+          mlir::Type cirTy = bcast.getSrc().getType();
+          unsigned width = mlir::cast<cir::IntType>(cirTy).getWidth();
+          mlir::Type mlirTy = mlir::IntegerType::get(ctx, width);
+          mlir::Value asMLIR =
+              mlir::UnrealizedConversionCastOp::create(builder, loc, mlirTy,
+                                                       bcast.getSrc())
+                  .getResult(0);
+
+          // Convert lane index if present (CIR int → i32).
+          mlir::Value lane;
+          if (auto cirLane = bcast.getLane()) {
+            mlir::Type i32Ty = mlir::IntegerType::get(ctx, 32);
+            lane = mlir::UnrealizedConversionCastOp::create(builder, loc, i32Ty,
+                                                            cirLane)
+                       .getResult(0);
+          }
+
+          mlir::Value gpuResult =
+              mlir::gpu::SubgroupBroadcastOp::create(
+                  builder, loc, asMLIR, lane,
+                  toGPUBroadcastType(bcast.getBroadcastKind()))
+                  .getResult();
+          mlir::Value asCIR = mlir::UnrealizedConversionCastOp::create(
+                                  builder, loc, cirTy, gpuResult)
+                                  .getResult(0);
+          bcast.replaceAllUsesWith(asCIR);
+          bcast.erase();
+          continue;
+        }
+
+        // --- Ballot ---
+        if (auto ballot = dyn_cast<cir::OffloadBallotOp>(op)) {
+          // Bridge CIR bool → i1.
+          mlir::Type i1Ty = mlir::IntegerType::get(ctx, 1);
+          mlir::Value pred =
+              mlir::UnrealizedConversionCastOp::create(builder, loc, i1Ty,
+                                                       ballot.getPredicate())
+                  .getResult(0);
+          // GPU ballot result is a signless integer.
+          mlir::Type cirResTy = ballot.getResult().getType();
+          unsigned resWidth = mlir::cast<cir::IntType>(cirResTy).getWidth();
+          mlir::Type mlirResTy = mlir::IntegerType::get(ctx, resWidth);
+          mlir::Value gpuResult =
+              mlir::gpu::BallotOp::create(builder, loc, mlirResTy, pred)
+                  .getResult();
+          // Bridge back to CIR int.
+          mlir::Value asCIR = mlir::UnrealizedConversionCastOp::create(
+                                  builder, loc, cirResTy, gpuResult)
+                                  .getResult(0);
+          ballot.replaceAllUsesWith(asCIR);
+          ballot.erase();
+          continue;
+        }
+
+        // --- Dynamic shared memory ---
+        if (auto dsm = dyn_cast<cir::OffloadDynamicSharedMemoryOp>(op)) {
+          // Check if the enclosing gpu.func has a baked-in shmem size
+          // from OffloadSpecializeSharedMemory.
+          auto parentFunc = dsm->getParentOfType<mlir::gpu::GPUFuncOp>();
+          auto staticShmem = parentFunc
+              ? parentFunc->getAttrOfType<mlir::IntegerAttr>(
+                    "static_shared_memory_bytes")
+              : nullptr;
+
+          if (staticShmem) {
+            // Emit a statically-sized LDS global instead of the dynamic
+            // sentinel.  This gives the backend full visibility into the
+            // LDS footprint.
+            int64_t shmemBytes = staticShmem.getInt();
+            auto gpuMod = parentFunc->getParentOfType<mlir::gpu::GPUModuleOp>();
+            auto i8Ty = mlir::IntegerType::get(ctx, 8);
+            auto arrTy = mlir::LLVM::LLVMArrayType::get(i8Ty, shmemBytes);
+            unsigned addrSpace = 3; // workgroup
+
+            // Create the global in the gpu.module.
+            std::string globalName =
+                ("__static_shmem_" + parentFunc.getName()).str();
+            mlir::OpBuilder modBuilder(ctx);
+            modBuilder.setInsertionPointToStart(gpuMod.getBody());
+            auto globalOp = mlir::LLVM::GlobalOp::create(
+                modBuilder, loc, arrTy, /*isConstant=*/false,
+                mlir::LLVM::Linkage::Internal, globalName,
+                /*value=*/mlir::Attribute(), /*alignment=*/16,
+                addrSpace);
+
+            // Get AS3 pointer and cast to flat (AS0) for CIR compatibility.
+            auto ptr3Ty = mlir::LLVM::LLVMPointerType::get(ctx, addrSpace);
+            auto ptr0Ty = mlir::LLVM::LLVMPointerType::get(ctx, 0);
+            auto addrOf = mlir::LLVM::AddressOfOp::create(
+                builder, loc, ptr3Ty, globalOp.getSymNameAttr());
+            auto flatPtr = mlir::LLVM::AddrSpaceCastOp::create(
+                builder, loc, ptr0Ty, addrOf.getResult());
+
+            // Cast to CIR pointer type.
+            mlir::Value asCIR = mlir::UnrealizedConversionCastOp::create(
+                                    builder, loc, dsm.getType(),
+                                    flatPtr.getResult())
+                                    .getResult(0);
+            dsm.replaceAllUsesWith(asCIR);
+            dsm.erase();
+          } else {
+            // Default: zero-sized LDS global (dynamic sentinel).
+            // Emit directly as llvm.mlir.global in addrspace(3) to avoid
+            // the memref<workgroup> → LLVM address space conversion issue.
+            auto gpuMod = parentFunc
+                ? parentFunc->getParentOfType<mlir::gpu::GPUModuleOp>()
+                : nullptr;
+            if (gpuMod) {
+              auto i8Ty = mlir::IntegerType::get(ctx, 8);
+              auto arrTy = mlir::LLVM::LLVMArrayType::get(i8Ty, 0);
+              unsigned addrSpace = 3;
+
+              static unsigned shmemCounter = 0;
+              std::string globalName =
+                  "__dynamic_shmem_" + std::to_string(shmemCounter++);
+              mlir::OpBuilder modBuilder(ctx);
+              modBuilder.setInsertionPointToStart(gpuMod.getBody());
+              mlir::LLVM::GlobalOp::create(
+                  modBuilder, loc, arrTy, /*isConstant=*/false,
+                  mlir::LLVM::Linkage::Internal, globalName,
+                  /*value=*/mlir::Attribute(), /*alignment=*/16,
+                  addrSpace);
+
+              // Get AS3 pointer and cast to flat (AS0) for CIR compatibility.
+              auto ptr3Ty = mlir::LLVM::LLVMPointerType::get(ctx, addrSpace);
+              auto ptr0Ty = mlir::LLVM::LLVMPointerType::get(ctx, 0);
+              auto addrOf = mlir::LLVM::AddressOfOp::create(
+                  builder, loc, ptr3Ty, globalName);
+              auto flatPtr = mlir::LLVM::AddrSpaceCastOp::create(
+                  builder, loc, ptr0Ty, addrOf.getResult());
+
+              mlir::Value asCIR = mlir::UnrealizedConversionCastOp::create(
+                                      builder, loc, dsm.getType(),
+                                      flatPtr.getResult())
+                                      .getResult(0);
+              dsm.replaceAllUsesWith(asCIR);
+              dsm.erase();
+            }
+          }
+          continue;
+        }
+      }
+    });
+
+    // Step 3: Convert cir.offload.kernel_launch → gpu.launch_func in host code.
+    SmallVector<cir::OffloadKernelLaunchOp> launches;
+    module.walk(
+        [&](cir::OffloadKernelLaunchOp op) { launches.push_back(op); });
+
+    for (auto op : launches) {
+      mlir::Location loc = op.getLoc();
+      builder.setInsertionPoint(op);
+
+      mlir::Type indexTy = mlir::IndexType::get(ctx);
+      auto castToIndex = [&](mlir::Value v) -> mlir::Value {
+        mlir::Type i32Ty = mlir::IntegerType::get(ctx, 32);
+        mlir::Value asI32 =
+            mlir::UnrealizedConversionCastOp::create(builder, loc, i32Ty, v)
+                .getResult(0);
+        return mlir::arith::IndexCastUIOp::create(builder, loc, indexTy, asI32)
+            .getResult();
+      };
+
+      mlir::Value gridX = castToIndex(op.getGridSizeX());
+      mlir::Value gridY = castToIndex(op.getGridSizeY());
+      mlir::Value gridZ = castToIndex(op.getGridSizeZ());
+      mlir::Value blockX = castToIndex(op.getBlockSizeX());
+      mlir::Value blockY = castToIndex(op.getBlockSizeY());
+      mlir::Value blockZ = castToIndex(op.getBlockSizeZ());
+
+      // Convert optional dynamic shared memory size from CIR int to i32.
+      mlir::Value shmem;
+      if (auto cirShmem = op.getDynamicSharedMemorySize()) {
+        mlir::Type i32Ty = mlir::IntegerType::get(ctx, 32);
+        shmem = mlir::UnrealizedConversionCastOp::create(builder, loc, i32Ty,
+                                                         cirShmem)
+                    .getResult(0);
+      }
+
+      // Convert optional stream from CIR pointer to LLVM opaque pointer.
+      mlir::Value stream;
+      if (auto cirStream = op.getStream()) {
+        mlir::Type llvmPtrTy = mlir::LLVM::LLVMPointerType::get(ctx);
+        stream = mlir::UnrealizedConversionCastOp::create(
+                     builder, loc, llvmPtrTy, cirStream)
+                     .getResult(0);
+      }
+
+      mlir::gpu::KernelDim3 gridDims{gridX, gridY, gridZ};
+      mlir::gpu::KernelDim3 blockDims{blockX, blockY, blockZ};
+      mlir::gpu::LaunchFuncOp::create(builder, loc, op.getKernelAttr(),
+                                      gridDims, blockDims, shmem,
+                                      op.getKernelOperands(),
+                                      /*asyncObject=*/stream);
+      op.erase();
+    }
+  }
+};
+
+std::unique_ptr<mlir::Pass> createConvertCIROffloadToGPUPass() {
+  return std::make_unique<ConvertCIROffloadToGPUPass>();
+}
+
+/// Lower CIR ops inside `gpu.func` bodies that were produced by the offload
+/// split pass.  `ConvertCIRToLLVMPass` leaves the entire `gpu.module` legal
+/// (untouched) so that it can be compiled as a separate device module.  This
+/// pass runs on `gpu.GPUModuleOp` and applies the same CIR→LLVM patterns to
+/// the device-side `gpu.func` bodies, producing LLVM-dialect ops inside each
+/// `gpu.func` that are ready for `ConvertGpuOpsToROCDLOps`.
+///
+/// Conversion target inside the gpu.module:
+///   - `gpu.func`, `gpu.return`, LLVM dialect → legal (structural ops kept)
+///   - `cir.*`, `func.*`, `builtin` (unrealized casts) → illegal, must convert
+///   - Other GPU ops (threadIdx, blockIdx, etc.) → legal (ROCDL pass handles)
+struct ConvertCIRInGpuModulePass
+    : public mlir::PassWrapper<ConvertCIRInGpuModulePass,
+                               mlir::OperationPass<mlir::gpu::GPUModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertCIRInGpuModulePass)
+
+  llvm::StringRef getArgument() const override {
+    return "cir-convert-cir-in-gpu-module";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Lower CIR ops inside gpu.func bodies to LLVM dialect";
+  }
+
+  void runOnOperation() override {
+    mlir::gpu::GPUModuleOp gpuModule = getOperation();
+    mlir::DataLayout dl(gpuModule);
+    mlir::LLVMTypeConverter converter(&getContext());
+    prepareTypeConverter(converter, dl);
+
+    LLVMBlockAddressInfo blockInfoAddr;
+    mlir::SymbolTableCollection symbolTables;
+    mlir::RewritePatternSet patterns(&getContext());
+    patterns.add<CIRToLLVMBlockAddressOpLowering, CIRToLLVMGlobalOpLowering,
+                 CIRToLLVMLabelOpLowering>(converter, patterns.getContext(), dl,
+                                           blockInfoAddr);
+    patterns.add<CIRToLLVMCallOpLowering, CIRToLLVMTryCallOpLowering>(
+        converter, patterns.getContext(), dl, symbolTables);
+    patterns.add<
+#define GET_LLVM_LOWERING_PATTERNS_LIST
+#include "clang/CIR/Dialect/IR/CIRLowering.inc"
+#undef GET_LLVM_LOWERING_PATTERNS_LIST
+        >(converter, patterns.getContext(), dl);
+    // Fold unrealized casts from CIR integer types that appear when GPU dim
+    // expansion emits !u32i → i32 pairs (both map to i32 in LLVM).
+    patterns.add<UnrealizedCastFoldingLowering>(converter,
+                                                patterns.getContext());
+
+    mlir::ConversionTarget target(getContext());
+    // gpu.func is dynamically legal iff all argument/result types are legal
+    // (i.e. no CIR types remain in the signature or body).
+    target.addDynamicallyLegalOp<mlir::gpu::GPUFuncOp>(
+        [&](mlir::gpu::GPUFuncOp fn) {
+          return converter.isSignatureLegal(fn.getFunctionType()) &&
+                 converter.isLegal(&fn.getBody());
+        });
+    // gpu.return and all other GPU ops stay legal (ROCDL pass handles them).
+    target.addLegalDialect<mlir::gpu::GPUDialect>();
+    target.addLegalDialect<mlir::LLVM::LLVMDialect>();
+    target.addIllegalDialect<cir::CIRDialect, mlir::func::FuncDialect,
+                             mlir::BuiltinDialect>();
+    // arith ops (e.g. index_castui) from CIR-to-CIR passes are left alone;
+    // they will be cleaned up by the post-conversion dead-code sweep.
+    target.addLegalDialect<mlir::arith::ArithDialect>();
+
+    // Convert ALL block argument types in gpu.func bodies (entry block +
+    // all inner blocks from flattened control flow such as cir.ternary).
+    patterns.add<GPUFuncAllBlockArgsConversionPattern>(converter,
+                                                       &getContext());
+
+    // Erase declaration-only gpu.func ops (empty entry block, no body).
+    // These are device library intrinsics resolved at link time.
+    {
+      SmallVector<mlir::gpu::GPUFuncOp> declFuncs;
+      gpuModule.walk([&](mlir::gpu::GPUFuncOp fn) {
+        if (fn.getBody().empty())
+          return;
+        bool isEmpty = llvm::all_of(fn.getBody().getBlocks(),
+                                     [](mlir::Block &b) { return b.empty(); });
+        if (isEmpty)
+          declFuncs.push_back(fn);
+      });
+      for (auto fn : declFuncs)
+        fn.erase();
+    }
+
+
+    // ------------------------------------------------------------------ //
+    // Pre-pass 0: fix gpu.func return types.
+    // The merge step (Format B) may create gpu.func with void return type
+    // even when the function body returns a value.  Fix the function type
+    // to match the body's gpu.return operands.
+    gpuModule.walk([&](mlir::gpu::GPUFuncOp fn) {
+      if (fn.isDeclaration() || fn.getBody().empty())
+        return;
+      auto fnTy = fn.getFunctionType();
+      if (fnTy.getNumResults() > 0)
+        return; // already has return type
+      // Find any gpu.return with operands to infer the return type.
+      fn.walk([&](mlir::gpu::ReturnOp ret) {
+        if (ret.getNumOperands() > 0 && fnTy.getNumResults() == 0) {
+          SmallVector<mlir::Type> retTypes;
+          for (auto v : ret.getOperands())
+            retTypes.push_back(v.getType());
+          fn.setFunctionType(mlir::FunctionType::get(
+              fn.getContext(), fnTy.getInputs(), retTypes));
+        }
+      });
+    });
+
+    // ------------------------------------------------------------------ //
+    // Pre-pass 1: emit llvm.func declarations for external device-library
+    // functions (e.g. OCKL: __ockl_fprintf_*) that are called from device
+    // function bodies inside this gpu.module but whose declarations live in
+    // the parent module.
+    //
+    // gpu.module is IsolatedFromAbove and forms its own SymbolTable; calls
+    // to symbols not defined here fail the CIR verifier (and the LLVM
+    // dialect later).  We create opaque llvm.func declarations so that the
+    // call-lowering pattern (rewriteCallOrInvoke) finds an LLVM-typed callee
+    // and can emit the LLVM call correctly.  The actual implementations are
+    // supplied by the ROCm/CUDA device library bitcode at link time.
+    // ------------------------------------------------------------------ //
+    mlir::ModuleOp parentModule =
+        gpuModule->getParentOfType<mlir::ModuleOp>();
+    {
+      if (parentModule) {
+        mlir::OpBuilder declBuilder(&getContext());
+        declBuilder.setInsertionPointToStart(gpuModule.getBody());
+        llvm::DenseSet<mlir::StringRef> emitted;
+
+        gpuModule.walk([&](cir::CallOp callOp) {
+          auto calleeRef = callOp.getCalleeAttr();
+          if (!calleeRef)
+            return; // indirect call
+          mlir::StringRef callee = calleeRef.getValue();
+          // Only handle unresolved callees (not already in gpu.module).
+          if (mlir::SymbolTable::lookupSymbolIn(gpuModule, calleeRef))
+            return;
+          if (!emitted.insert(callee).second)
+            return;
+          // Look up in the parent module.
+          mlir::Operation *parentDecl =
+              mlir::SymbolTable::lookupSymbolIn(parentModule, calleeRef);
+          mlir::LLVM::LLVMFunctionType llvmFnTy;
+          mlir::Location declLoc = callOp.getLoc();
+
+          if (parentDecl) {
+            // Only import declarations (empty regions = no body).
+            bool isDecl = llvm::all_of(
+                parentDecl->getRegions(),
+                [](mlir::Region &r) { return r.empty(); });
+            if (!isDecl)
+              return;
+            auto fn = mlir::dyn_cast<mlir::FunctionOpInterface>(parentDecl);
+            if (!fn)
+              return;
+            llvmFnTy = converter.convertType<mlir::LLVM::LLVMFunctionType>(
+                fn.getFunctionType());
+            declLoc = parentDecl->getLoc();
+          } else {
+            // The callee is not in the parent module (e.g. external device
+            // library functions like __ockl_*).  Infer the LLVM function type
+            // from the cir.call op's operands and result types.
+            llvm::SmallVector<mlir::Type> argTypes;
+            for (mlir::Value arg : callOp->getOperands()) {
+              mlir::Type t = converter.convertType(arg.getType());
+              if (!t)
+                return;
+              argTypes.push_back(t);
+            }
+            mlir::Type retTy =
+                callOp->getNumResults() > 0
+                    ? converter.convertType(callOp->getResult(0).getType())
+                    : mlir::LLVM::LLVMVoidType::get(&getContext());
+            if (!retTy)
+              return;
+            llvmFnTy = mlir::LLVM::LLVMFunctionType::get(retTy, argTypes);
+          }
+
+          if (!llvmFnTy)
+            return;
+          mlir::LLVM::LLVMFuncOp::create(declBuilder, declLoc, callee,
+                                         llvmFnTy,
+                                         mlir::LLVM::Linkage::External);
+        });
+      }
+    }
+
+    // Pre-pass 2: import missing global variable declarations.
+    // llvm.mlir.addressof inside gpu.func bodies may reference globals
+    // defined in the parent (host) module.  gpu.module is IsolatedFromAbove
+    // so the global must exist inside it.
+    //
+    // For constant globals with simple initializers (constexpr statics),
+    // clone the initializer into gpu.module so the symbol is defined in
+    // the GPU code object.  Without this, constexpr static class members
+    // (e.g. ck::constant<N>::value) remain undefined and the HSA runtime
+    // fails with HSA_STATUS_ERROR_VARIABLE_UNDEFINED.
+    auto importCIRGlobalIntoGpuModule =
+        [&](cir::GlobalOp cirGlobal, mlir::OpBuilder &builder,
+            mlir::StringRef name) {
+          auto llvmTy = converter.convertType(cirGlobal.getSymType());
+          if (!llvmTy)
+            return;
+
+          unsigned addrSpace = 0;
+          if (auto targetAS =
+                  mlir::dyn_cast_if_present<cir::TargetAddressSpaceAttr>(
+                      cirGlobal.getAddrSpaceAttr()))
+            addrSpace = targetAS.getValue();
+
+          uint64_t alignment = cirGlobal.getAlignment().value_or(0);
+          bool isConst = cirGlobal.getConstant();
+          auto init = cirGlobal.getInitialValue();
+
+          mlir::Attribute llvmInit;
+          mlir::LLVM::Linkage linkage = mlir::LLVM::Linkage::External;
+
+          if (init) {
+            if (auto intAttr = mlir::dyn_cast<cir::IntAttr>(*init)) {
+              llvmInit = mlir::IntegerAttr::get(llvmTy, intAttr.getValue());
+              linkage = mlir::LLVM::Linkage::Internal;
+            } else if (auto fpAttr = mlir::dyn_cast<cir::FPAttr>(*init)) {
+              llvmInit = mlir::FloatAttr::get(llvmTy, fpAttr.getValue());
+              linkage = mlir::LLVM::Linkage::Internal;
+            } else if (auto boolAttr = mlir::dyn_cast<cir::BoolAttr>(*init)) {
+              llvmInit = mlir::IntegerAttr::get(llvmTy,
+                                                boolAttr.getValue() ? 1 : 0);
+              linkage = mlir::LLVM::Linkage::Internal;
+            } else if (mlir::isa<cir::ZeroAttr>(*init)) {
+              llvmInit = mlir::Attribute{};
+              linkage = mlir::LLVM::Linkage::Internal;
+            } else if (mlir::isa<cir::UndefAttr>(*init)) {
+              llvmInit = mlir::Attribute{};
+              linkage = mlir::LLVM::Linkage::Internal;
+            }
+          }
+
+          auto g = mlir::LLVM::GlobalOp::create(
+              builder, cirGlobal.getLoc(), llvmTy, isConst, linkage, name,
+              llvmInit, alignment, addrSpace);
+          (void)g;
+        };
+
+    if (parentModule) {
+      mlir::OpBuilder declBuilder(&getContext());
+      declBuilder.setInsertionPointToStart(gpuModule.getBody());
+      llvm::DenseSet<mlir::StringRef> emittedGlobals;
+
+      gpuModule.walk([&](mlir::LLVM::AddressOfOp addrOp) {
+        mlir::StringRef name = addrOp.getGlobalName();
+        if (mlir::SymbolTable::lookupSymbolIn(gpuModule, name))
+          return;
+        if (!emittedGlobals.insert(name).second)
+          return;
+        // Look up in parent module for type info.
+        auto parentGlobal =
+            parentModule.lookupSymbol<mlir::LLVM::GlobalOp>(name);
+        if (!parentGlobal) {
+          // Try CIR global — import with initializer if available.
+          auto cirGlobal = parentModule.lookupSymbol<cir::GlobalOp>(name);
+          if (cirGlobal)
+            importCIRGlobalIntoGpuModule(cirGlobal, declBuilder, name);
+          return;
+        }
+        // LLVM global from parent: clone with initializer if constant.
+        auto initAttr = parentGlobal.getValueAttr();
+        auto linkage = (parentGlobal.getConstant() && initAttr)
+                           ? mlir::LLVM::Linkage::Internal
+                           : mlir::LLVM::Linkage::External;
+        auto g = mlir::LLVM::GlobalOp::create(
+            declBuilder, parentGlobal.getLoc(), parentGlobal.getGlobalType(),
+            parentGlobal.getConstant(), linkage, name,
+            (linkage == mlir::LLVM::Linkage::Internal) ? initAttr
+                                                       : mlir::Attribute{},
+            parentGlobal.getAlignment().value_or(0),
+            parentGlobal.getAddrSpace());
+        (void)g;
+      });
+
+      // Also check cir.get_global ops (before conversion)
+      gpuModule.walk([&](cir::GetGlobalOp getGlobal) {
+        mlir::StringRef name = getGlobal.getName();
+        if (mlir::SymbolTable::lookupSymbolIn(gpuModule, name))
+          return;
+        if (!emittedGlobals.insert(name).second)
+          return;
+        auto cirGlobal = parentModule.lookupSymbol<cir::GlobalOp>(name);
+        if (!cirGlobal)
+          return;
+        importCIRGlobalIntoGpuModule(cirGlobal, declBuilder, name);
+      });
+    }
+
+    // Pre-pass 3: import symbols referenced via GlobalViewAttr.
+    // CIR ops (e.g. cir.const with #cir.global_view<@sym>) may reference
+    // functions or globals from the parent module.  During conversion,
+    // visitCirAttr(GlobalViewAttr) creates llvm.mlir.addressof which requires
+    // the symbol in the gpu.module's IsolatedFromAbove symbol table.
+    if (parentModule) {
+      mlir::OpBuilder declBuilder3(&getContext());
+      declBuilder3.setInsertionPointToStart(gpuModule.getBody());
+      llvm::DenseSet<mlir::StringRef> importedSyms;
+
+      std::function<void(mlir::Attribute,
+                         llvm::SmallVectorImpl<mlir::StringRef> &)>
+          collectGlobalViewSymbols =
+              [&](mlir::Attribute attr,
+                  llvm::SmallVectorImpl<mlir::StringRef> &syms) {
+                if (auto gv = mlir::dyn_cast<cir::GlobalViewAttr>(attr)) {
+                  syms.push_back(gv.getSymbol().getValue());
+                  return;
+                }
+                if (auto ca = mlir::dyn_cast<cir::ConstArrayAttr>(attr)) {
+                  if (auto arrAttr =
+                          mlir::dyn_cast<mlir::ArrayAttr>(ca.getElts()))
+                    for (auto elt : arrAttr)
+                      collectGlobalViewSymbols(elt, syms);
+                  return;
+                }
+                if (auto cr = mlir::dyn_cast<cir::ConstRecordAttr>(attr)) {
+                  for (auto member : cr.getMembers())
+                    collectGlobalViewSymbols(member, syms);
+                  return;
+                }
+                if (auto vt = mlir::dyn_cast<cir::VTableAttr>(attr)) {
+                  for (auto elt : vt.getData())
+                    collectGlobalViewSymbols(elt, syms);
+                  return;
+                }
+                if (auto ti = mlir::dyn_cast<cir::TypeInfoAttr>(attr)) {
+                  for (auto elt : ti.getData())
+                    collectGlobalViewSymbols(elt, syms);
+                  return;
+                }
+              };
+
+      gpuModule.walk([&](mlir::Operation *op) {
+        for (auto namedAttr : op->getAttrs()) {
+          llvm::SmallVector<mlir::StringRef> symbols;
+          collectGlobalViewSymbols(namedAttr.getValue(), symbols);
+          for (auto symName : symbols) {
+            if (mlir::SymbolTable::lookupSymbolIn(gpuModule, symName))
+              continue;
+            if (!importedSyms.insert(symName).second)
+              continue;
+            auto *parentSym =
+                mlir::SymbolTable::lookupSymbolIn(parentModule, symName);
+            if (!parentSym)
+              continue;
+            if (auto fn =
+                    mlir::dyn_cast<mlir::FunctionOpInterface>(parentSym)) {
+              auto llvmFnTy =
+                  converter.convertType<mlir::LLVM::LLVMFunctionType>(
+                      fn.getFunctionType());
+              if (llvmFnTy)
+                mlir::LLVM::LLVMFuncOp::create(
+                    declBuilder3, parentSym->getLoc(), symName, llvmFnTy,
+                    mlir::LLVM::Linkage::External);
+            } else if (auto cirGlobal =
+                           mlir::dyn_cast<cir::GlobalOp>(parentSym)) {
+              importCIRGlobalIntoGpuModule(cirGlobal, declBuilder3, symName);
+            }
+          }
+        }
+      });
+    }
+
+    // Pre-pass 4: convert remaining cir.return inside gpu.func body blocks to
+    // gpu.return. MergeOffloadModules only converts top-level cir.return;
+    // nested ones (inside cir.scope/cir.if) stay as cir.return during merge.
+    // FlattenCFG brings them to the top level, so convert them now before
+    // the main CIR→LLVM conversion (which would turn them into llvm.return).
+    gpuModule.walk([&](mlir::gpu::GPUFuncOp fn) {
+      for (mlir::Block &blk : fn.getBody()) {
+        if (auto ret = dyn_cast<cir::ReturnOp>(blk.getTerminator())) {
+          mlir::OpBuilder b(ret);
+          mlir::gpu::ReturnOp::create(b, ret.getLoc(), ret.getOperands());
+          ret.erase();
+        }
+      }
+    });
+
+    if (failed(applyPartialConversion(gpuModule, target, std::move(patterns))))
+      signalPassFailure();
+
+    // Attach TBAA metadata to all LoadOp/StoreOp in the gpu.module.
+    {
+      CIRTBAABuilder tbaa(&getContext());
+      tbaa.attachTBAAMetadata(gpuModule, dl);
+    }
+
+    // Post-conversion: replace LLVM intrinsic ops that the downstream ROCDL
+    // pass will mark illegal with direct __ocml_* library calls.  The ROCDL
+    // pass marks LLVM intrinsics illegal and adds MathToROCDL patterns for
+    // math::*Op, but MathToLLVM patterns (also registered) can race and convert
+    // math ops BACK to LLVM intrinsics.  Emitting the calls here avoids that.
+    // Note: LLVM::ExpOp and LLVM::LogOp are dynamically legal for f32 in the
+    // ROCDL pass (native ISA), so skip f32 for those two.
+    {
+      auto isF32 = [](mlir::Operation *op) {
+        return llvm::any_of(op->getOperandTypes(),
+                            llvm::IsaPred<mlir::Float32Type>);
+      };
+      // Map: (LLVM op name, skip-f32?) → (f32 ocml name, f64 ocml name)
+      struct OcmlEntry {
+        llvm::StringRef f32Func, f64Func;
+        bool skipF32;
+      };
+      auto getOrCreateOcmlFunc = [&](llvm::StringRef name, mlir::Type resTy,
+                                     ArrayRef<mlir::Type> argTys,
+                                     mlir::Location loc) -> mlir::LLVM::LLVMFuncOp {
+        if (auto fn = gpuModule.lookupSymbol<mlir::LLVM::LLVMFuncOp>(name))
+          return fn;
+        mlir::OpBuilder declB(&getContext());
+        declB.setInsertionPointToStart(gpuModule.getBody());
+        auto fnTy = mlir::LLVM::LLVMFunctionType::get(resTy, argTys);
+        return mlir::LLVM::LLVMFuncOp::create(declB, loc, name, fnTy);
+      };
+      auto replaceWithOcmlCall = [&](mlir::Operation *op, llvm::StringRef funcName) {
+        mlir::OpBuilder b(op);
+        mlir::Type ty = op->getResult(0).getType();
+        SmallVector<mlir::Type> argTys;
+        for (auto operand : op->getOperands())
+          argTys.push_back(operand.getType());
+        auto fn = getOrCreateOcmlFunc(funcName, ty, argTys, op->getLoc());
+        auto call = mlir::LLVM::CallOp::create(b, op->getLoc(),
+                                                fn, op->getOperands());
+        op->getResult(0).replaceAllUsesWith(call.getResult());
+      };
+      SmallVector<mlir::Operation *> toErase;
+      gpuModule.walk([&](mlir::Operation *op) {
+        llvm::StringRef func;
+        if (isa<mlir::LLVM::ExpOp>(op)) {
+          if (isF32(op)) return;
+          func = "__ocml_exp_f64";
+        } else if (isa<mlir::LLVM::Exp2Op>(op)) {
+          func = isF32(op) ? "__ocml_exp2_f32" : "__ocml_exp2_f64";
+        } else if (isa<mlir::LLVM::LogOp>(op)) {
+          if (isF32(op)) return;
+          func = "__ocml_log_f64";
+        } else if (isa<mlir::LLVM::Log2Op>(op)) {
+          func = isF32(op) ? "__ocml_log2_f32" : "__ocml_log2_f64";
+        } else if (isa<mlir::LLVM::Log10Op>(op)) {
+          func = isF32(op) ? "__ocml_log10_f32" : "__ocml_log10_f64";
+        } else if (isa<mlir::LLVM::FCeilOp>(op)) {
+          func = isF32(op) ? "__ocml_ceil_f32" : "__ocml_ceil_f64";
+        } else if (isa<mlir::LLVM::FFloorOp>(op)) {
+          func = isF32(op) ? "__ocml_floor_f32" : "__ocml_floor_f64";
+        } else if (isa<mlir::LLVM::CosOp>(op)) {
+          func = isF32(op) ? "__ocml_cos_f32" : "__ocml_cos_f64";
+        } else if (isa<mlir::LLVM::SinOp>(op)) {
+          func = isF32(op) ? "__ocml_sin_f32" : "__ocml_sin_f64";
+        } else if (isa<mlir::LLVM::PowOp>(op)) {
+          func = isF32(op) ? "__ocml_pow_f32" : "__ocml_pow_f64";
+        } else if (isa<mlir::LLVM::FRemOp>(op)) {
+          func = isF32(op) ? "__ocml_fmod_f32" : "__ocml_fmod_f64";
+        } else {
+          return;
+        }
+        replaceWithOcmlCall(op, func);
+        toErase.push_back(op);
+      });
+      for (auto *op : toErase)
+        op->erase();
+    }
+
+    // Set fast-math flags on FP ops based on module-level attributes stored
+    // by CIRGenAction.  When -ffast-math is active (cir.unsafe_fp_math), set
+    // the full "fast" flag (nnan, ninf, nsz, arcp, contract, afn, reassoc) to
+    // match OGCG's per-op FMF.  This is safe because FP classification
+    // functions (isinf, isnan, etc.) are resolved to llvm.is.fpclass
+    // intrinsics at CIR codegen time, and llvm.is.fpclass does not implement
+    // FastmathFlagsInterface — so the walk below won't touch them.
+    // When only FP contraction is active (cir.fp_contract_fast, the HIP/CUDA
+    // default), set only "contract".
+    {
+      auto parentModule = gpuModule->getParentOfType<mlir::ModuleOp>();
+      bool unsafeMath =
+          parentModule && parentModule->hasAttr("cir.unsafe_fp_math");
+      bool fpContract =
+          parentModule && parentModule->hasAttr("cir.fp_contract_fast");
+      if (unsafeMath || fpContract) {
+        auto flags = unsafeMath ? mlir::LLVM::FastmathFlags::fast
+                                : mlir::LLVM::FastmathFlags::contract;
+        auto fmfAttr =
+            mlir::LLVM::FastmathFlagsAttr::get(&getContext(), flags);
+        // Set FMF inside the gpu.module (kernels + device helpers that were
+        // moved into it).
+        gpuModule.walk([&](mlir::Operation *op) {
+          if (isa<mlir::LLVM::FastmathFlagsInterface>(op))
+            op->setAttr("fastmathFlags", fmfAttr);
+        });
+      }
+    }
+
+    // Fix gpu.return ops that ended up outside gpu.func during conversion.
+    {
+      SmallVector<mlir::gpu::ReturnOp> strayReturns;
+      gpuModule.walk([&](mlir::gpu::ReturnOp ret) {
+        if (!ret->getParentOfType<mlir::gpu::GPUFuncOp>())
+          strayReturns.push_back(ret);
+      });
+      for (auto ret : strayReturns) {
+        mlir::OpBuilder b(ret);
+        mlir::LLVM::ReturnOp::create(b, ret.getLoc(), ret.getOperands());
+        ret.erase();
+      }
+    }
+
+    // Post-pass: fold remaining unrealized_conversion_cast ops.
+    // index → i32 casts from gpu.thread_id/block_id remain when the
+    // UnrealizedCastFoldingLowering pattern doesn't run during conversion.
+    {
+      SmallVector<mlir::UnrealizedConversionCastOp> casts;
+      gpuModule.walk([&](mlir::UnrealizedConversionCastOp op) {
+        casts.push_back(op);
+      });
+      for (auto castOp : casts) {
+        if (castOp.getInputs().size() != 1 || castOp.getOutputs().size() != 1)
+          continue;
+        mlir::Value input = castOp.getInputs()[0];
+        mlir::Type outTy = castOp.getOutputs()[0].getType();
+        mlir::Type convertedOutTy = converter.convertType(outTy);
+        if (!convertedOutTy)
+          continue;
+        // index → i32: use arith.index_castui
+        if (input.getType().isIndex() &&
+            mlir::isa<mlir::IntegerType>(convertedOutTy)) {
+          mlir::OpBuilder b(castOp);
+          auto cast = mlir::arith::IndexCastUIOp::create(
+              b, castOp.getLoc(), convertedOutTy, input);
+          castOp.getOutputs()[0].replaceAllUsesWith(cast);
+          castOp.erase();
+        }
+        // identity (same type after conversion)
+        else if (input.getType() == convertedOutTy) {
+          castOp.getOutputs()[0].replaceAllUsesWith(input);
+          castOp.erase();
+        }
+      }
+    }
+
+    // Post-pass A: fix alloca address space for AMDGPU.
+    //
+    // CIRToLLVMAllocaOpLowering emits llvm.alloca with result type !llvm.ptr
+    // (flat, address space 0).  The AMDGPU instruction selector cannot lower a
+    // FrameIndex as a flat 64-bit pointer — it requires address space 5
+    // (private / scratch).  We fix this by:
+    //   (1) changing the alloca result type to !llvm.ptr<5>, and
+    //   (2) propagating the ptr<5> type through every direct user that carries
+    //       the pointer value: GEP results and block arguments (from branch
+    //       successors / phi-equivalent uses).
+    //
+    // We avoid addrspacecast on the load/store/GEP path — SROA cannot see
+    // through casts.  However, call arguments must match the callee signature,
+    // so we insert addrspacecast ptr<5> → ptr at call boundaries only.
+    {
+      constexpr unsigned kPrivateAS = 5;
+      mlir::MLIRContext *ctx = &getContext();
+      auto flatPtrTy = mlir::LLVM::LLVMPointerType::get(ctx);
+      auto privPtrTy = mlir::LLVM::LLVMPointerType::get(ctx, kPrivateAS);
+
+      // Propagate ptr<5> through a value: update its type and enqueue all ops
+      // that carry the pointer value forward as a typed result.
+      // load/store use the pointer as an address operand and accept ptr<5>.
+      // Call argument mismatches are fixed in a separate step below.
+      auto propagatePrivPtr = [&](mlir::Value v,
+                                  SmallVectorImpl<mlir::Value> &worklist) {
+        if (v.getType() != flatPtrTy)
+          return;
+        v.setType(privPtrTy);
+        for (mlir::OpOperand &use : v.getUses()) {
+          mlir::Operation *user = use.getOwner();
+          // GEP result inherits the base pointer's address space.
+          if (auto gep = mlir::dyn_cast<mlir::LLVM::GEPOp>(user)) {
+            if (gep.getBase() == v)
+              worklist.push_back(gep.getRes());
+          }
+        }
+      };
+
+      SmallVector<mlir::Value> worklist;
+      gpuModule.walk([&](mlir::LLVM::AllocaOp alloca) {
+        if (alloca.getRes().getType() == flatPtrTy)
+          worklist.push_back(alloca.getRes());
+      });
+      while (!worklist.empty()) {
+        mlir::Value v = worklist.pop_back_val();
+        propagatePrivPtr(v, worklist);
+      }
+
+      // For internal functions, update parameter types to ptr<5> when ALL
+      // callers pass ptr<5>.  This avoids addrspacecast at call boundaries
+      // so SROA and IAS can optimize without seeing through casts.
+      //
+      // Phase 1: collect call-site info per (callee, param_index).
+      using ParamKey = std::pair<mlir::StringAttr, unsigned>;
+      llvm::DenseMap<ParamKey, bool> allCallersPrivate;
+      llvm::DenseMap<mlir::StringAttr, mlir::LLVM::LLVMFuncOp> funcCache;
+
+      gpuModule.walk([&](mlir::LLVM::CallOp call) {
+        auto calleeRef = call.getCalleeAttr();
+        if (!calleeRef)
+          return;
+        auto calleeTy = call.getCalleeFunctionType();
+        if (!calleeTy)
+          return;
+        auto argOperands = call.getArgOperands();
+        unsigned numParams = calleeTy.getNumParams();
+        for (unsigned i = 0; i < numParams && i < argOperands.size(); ++i) {
+          auto argPtrTy = mlir::dyn_cast<mlir::LLVM::LLVMPointerType>(
+              argOperands[i].getType());
+          auto paramPtrTy = mlir::dyn_cast<mlir::LLVM::LLVMPointerType>(
+              calleeTy.getParamType(i));
+          if (!argPtrTy || !paramPtrTy || paramPtrTy != flatPtrTy)
+            continue;
+          ParamKey key{calleeRef.getAttr(), i};
+          bool isPriv = (argPtrTy == privPtrTy);
+          auto it = allCallersPrivate.find(key);
+          if (it == allCallersPrivate.end())
+            allCallersPrivate[key] = isPriv;
+          else if (!isPriv)
+            it->second = false;
+        }
+      });
+
+      // Phase 2: update callee parameter types where all callers agree,
+      // then propagate ptr<5> through callee bodies.  Repeat until stable.
+      bool changed = true;
+      while (changed) {
+        changed = false;
+        for (auto &[key, allPriv] : allCallersPrivate) {
+          if (!allPriv)
+            continue;
+          auto [calleeName, paramIdx] = key;
+          auto &fn = funcCache[calleeName];
+          if (!fn)
+            fn = mlir::dyn_cast_or_null<mlir::LLVM::LLVMFuncOp>(
+                mlir::SymbolTable::lookupSymbolIn(gpuModule, calleeName));
+          if (!fn || fn.isExternal())
+            continue;
+          auto fnTy = fn.getFunctionType();
+          if (fnTy.getParamType(paramIdx) == privPtrTy)
+            continue;
+
+          SmallVector<mlir::Type> newParamTypes(
+              fnTy.getParams().begin(), fnTy.getParams().end());
+          newParamTypes[paramIdx] = privPtrTy;
+          auto newFnTy = mlir::LLVM::LLVMFunctionType::get(
+              fnTy.getReturnType(), newParamTypes, fnTy.isVarArg());
+          fn.setFunctionTypeAttr(mlir::TypeAttr::get(newFnTy));
+
+          auto &body = fn.getBody();
+          if (!body.empty()) {
+            worklist.push_back(body.getArgument(paramIdx));
+            while (!worklist.empty()) {
+              mlir::Value v2 = worklist.pop_back_val();
+              propagatePrivPtr(v2, worklist);
+            }
+          }
+          changed = true;
+        }
+
+        if (!changed)
+          break;
+
+        // Re-scan calls: propagation may have changed more arg types.
+        allCallersPrivate.clear();
+        gpuModule.walk([&](mlir::LLVM::CallOp call) {
+          auto calleeRef = call.getCalleeAttr();
+          if (!calleeRef)
+            return;
+          auto calleeTy = call.getCalleeFunctionType();
+          if (!calleeTy)
+            return;
+          auto argOperands = call.getArgOperands();
+          unsigned numParams = calleeTy.getNumParams();
+          for (unsigned i = 0; i < numParams && i < argOperands.size(); ++i) {
+            auto argPtrTy = mlir::dyn_cast<mlir::LLVM::LLVMPointerType>(
+                argOperands[i].getType());
+            auto paramPtrTy = mlir::dyn_cast<mlir::LLVM::LLVMPointerType>(
+                calleeTy.getParamType(i));
+            if (!argPtrTy || !paramPtrTy || paramPtrTy != flatPtrTy)
+              continue;
+            ParamKey key{calleeRef.getAttr(), i};
+            bool isPriv = (argPtrTy == privPtrTy);
+            auto it = allCallersPrivate.find(key);
+            if (it == allCallersPrivate.end())
+              allCallersPrivate[key] = isPriv;
+            else if (!isPriv)
+              it->second = false;
+          }
+        });
+      }
+
+      // Phase 3: sync CallOp var_callee_type with the (possibly updated)
+      // callee definition, then insert addrspacecast for remaining mismatches.
+      gpuModule.walk([&](mlir::LLVM::CallOp call) {
+        auto calleeRef = call.getCalleeAttr();
+        if (!calleeRef)
+          return;
+
+        auto calleeName = calleeRef.getAttr();
+        auto calleeFn = funcCache.count(calleeName)
+            ? funcCache[calleeName]
+            : mlir::dyn_cast_or_null<mlir::LLVM::LLVMFuncOp>(
+                  mlir::SymbolTable::lookupSymbolIn(gpuModule, calleeName));
+        if (calleeFn && !calleeFn.isExternal()) {
+          auto actualFnTy = calleeFn.getFunctionType();
+          call.setVarCalleeType(actualFnTy);
+        }
+
+        auto calleeTy = call.getCalleeFunctionType();
+        auto argOperands = call.getArgOperands();
+        unsigned numParams = calleeTy.getNumParams();
+        for (unsigned i = 0; i < numParams && i < argOperands.size(); ++i) {
+          auto argPtrTy = mlir::dyn_cast<mlir::LLVM::LLVMPointerType>(
+              argOperands[i].getType());
+          auto paramPtrTy = mlir::dyn_cast<mlir::LLVM::LLVMPointerType>(
+              calleeTy.getParamType(i));
+          if (argPtrTy && paramPtrTy &&
+              argPtrTy.getAddressSpace() != paramPtrTy.getAddressSpace()) {
+            mlir::OpBuilder b(call);
+            auto cast = mlir::LLVM::AddrSpaceCastOp::create(
+                b, call.getLoc(), calleeTy.getParamType(i), argOperands[i]);
+            call.getArgOperandsMutable().slice(i, 1).assign(cast);
+          }
+        }
+      });
+    }
+
+    // Post-pass B: hoist llvm.alloca ops to the entry block of every function
+    // in the gpu.module.
+    //
+    // CIRGenDecl emits cir.alloca (→ llvm.alloca) at the point of declaration,
+    // which may be inside a loop body.  HoistAllocasPass operates on cir.func,
+    // but by the time ConvertCIRInGpuModulePass runs the kernel lives inside a
+    // gpu.func — HoistAllocasPass was a no-op for it.  On AMDGPU the backend
+    // computes the private segment (scratch) size by summing the sizes of all
+    // llvm.alloca ops in the *entry block only*; allocas in non-entry blocks
+    // are not counted, so private_segment_fixed_size comes out too small, and
+    // the generated code accesses the wrong scratch offsets.  Move every static
+    // llvm.alloca to the first instruction of the entry block.
+    {
+      auto hoistAllocasToEntry = [](mlir::Region &region) {
+        if (region.empty())
+          return;
+        mlir::Block &entry = region.front();
+        SmallVector<mlir::LLVM::AllocaOp> toHoist;
+        // Collect allocas outside the entry block.
+        region.walk([&](mlir::LLVM::AllocaOp alloca) {
+          if (alloca->getBlock() != &entry)
+            toHoist.push_back(alloca);
+        });
+        if (toHoist.empty())
+          return;
+        // The array-size operand of each alloca is a constant (mlir.constant
+        // 1). The constant may be in a non-entry block too — hoist it together
+        // with the alloca by moving the size operand first.
+        mlir::Operation *insertBefore = &entry.front();
+        for (mlir::LLVM::AllocaOp alloca : toHoist) {
+          // Move the size constant if it is in a non-entry block.
+          mlir::Operation *sizeDef = alloca.getArraySize().getDefiningOp();
+          if (sizeDef && sizeDef->getBlock() != &entry)
+            sizeDef->moveBefore(insertBefore);
+          alloca->moveBefore(insertBefore);
+        }
+      };
+
+      gpuModule.walk(
+          [&](mlir::gpu::GPUFuncOp fn) { hoistAllocasToEntry(fn.getBody()); });
+      gpuModule.walk([&](mlir::LLVM::LLVMFuncOp fn) {
+        hoistAllocasToEntry(fn.getBody());
+      });
+    }
+
+    // Post-pass C: remove identity llvm.addrspacecast ops (same src/dst AS).
+    // Non-identity addrspacecasts are left for the LLVM backend.
+    {
+      SmallVector<mlir::LLVM::AddrSpaceCastOp> identityCasts;
+      gpuModule.walk([&](mlir::LLVM::AddrSpaceCastOp op) {
+        if (op.getArg().getType() == op.getResult().getType())
+          identityCasts.push_back(op);
+      });
+      for (auto op : identityCasts) {
+        op.getResult().replaceAllUsesWith(op.getArg());
+        op.erase();
+      }
+    }
+
+    // Post-pass D: lower non-kernel gpu.func ops to llvm.func.
+    //
+    // After applyPartialConversion the ops inside non-kernel gpu.func bodies
+    // are in LLVM dialect, but the container is still gpu.func.  llvm.call ops
+    // generated from cir.call can only reference llvm.func (not gpu.func), so
+    // we now convert reachable non-kernel gpu.func ops to llvm.func by moving
+    // the body.  Unreachable non-kernel functions (never called from any kernel
+    // or reachable callee) are erased — they may contain host-style constructs
+    // (stack-allocated char arrays, etc.) that the AMDGPU backend cannot lower.
+    // Kernel gpu.func ops are left for GPUToROCDL which adds ROCDL attributes.
+    {
+      mlir::OpBuilder b(&getContext());
+
+      // Collect all non-kernel gpu.func ops.
+      SmallVector<mlir::gpu::GPUFuncOp> nonKernelFuncs;
+      gpuModule.walk([&](mlir::gpu::GPUFuncOp fn) {
+        if (!fn.isKernel())
+          nonKernelFuncs.push_back(fn);
+      });
+
+      // Transitively compute which non-kernel functions are reachable from
+      // kernels via llvm.call edges.  Start with all callees referenced inside
+      // kernel gpu.func bodies, then expand through non-kernel gpu.func bodies.
+      llvm::DenseSet<mlir::StringRef> reachable;
+      SmallVector<mlir::StringRef> worklist;
+
+      auto collectCallees = [&](mlir::Region &region) {
+        region.walk([&](mlir::LLVM::CallOp call) {
+          if (auto sym = call.getCalleeAttr())
+            worklist.push_back(sym.getValue());
+        });
+        region.walk([&](mlir::LLVM::AddressOfOp addrOf) {
+          worklist.push_back(addrOf.getGlobalName());
+        });
+      };
+
+      // Seed from kernel bodies.
+      gpuModule.walk([&](mlir::gpu::GPUFuncOp fn) {
+        if (fn.isKernel())
+          collectCallees(fn.getBody());
+      });
+
+      // BFS over the call graph within the gpu.module.
+      mlir::SymbolTable symTable(gpuModule);
+      while (!worklist.empty()) {
+        mlir::StringRef name = worklist.pop_back_val();
+        if (!reachable.insert(name).second)
+          continue;
+        // If this symbol is a non-kernel gpu.func, expand its callees.
+        auto *sym = symTable.lookup(name);
+        if (auto calledFn =
+                mlir::dyn_cast_if_present<mlir::gpu::GPUFuncOp>(sym))
+          if (!calledFn.isKernel())
+            collectCallees(calledFn.getBody());
+      }
+
+      // Convert non-kernel gpu.func → llvm.func.  Keep all functions
+      // (even those not directly reachable via the BFS above) because
+      // the BFS can't follow call chains through empty gpu.func
+      // declarations — yet the LLVM backend with -amdgpu-function-
+      // calls=false will inline everything transitively.  Erasing
+      // "unreachable" functions here breaks the inlining chain for
+      // deeply nested template instantiations (e.g., CK's MFMA path).
+      for (mlir::gpu::GPUFuncOp fn : nonKernelFuncs) {
+        mlir::FunctionType gpuFnTy = fn.getFunctionType();
+        auto llvmRetTy =
+            gpuFnTy.getNumResults() == 0
+                ? mlir::Type(mlir::LLVM::LLVMVoidType::get(&getContext()))
+                : converter.convertType(gpuFnTy.getResult(0));
+        SmallVector<mlir::Type> llvmArgTys;
+        for (mlir::Type t : gpuFnTy.getInputs())
+          llvmArgTys.push_back(
+              converter.convertType(t) ? converter.convertType(t) : t);
+        auto llvmFnTy =
+            mlir::LLVM::LLVMFunctionType::get(llvmRetTy, llvmArgTys);
+
+        b.setInsertionPoint(fn);
+        auto llvmFn = mlir::LLVM::LLVMFuncOp::create(
+            b, fn.getLoc(), fn.getName(), llvmFnTy,
+            mlir::LLVM::Linkage::Internal);
+        // Device functions are convergent (SIMT model) and don't
+        // throw.  Setting these attributes matches what standard
+        // Clang (OGCG) produces for __device__ functions and
+        // prevents the AMDGPUAttributor from mis-inferring memory
+        // effects on bare functions (which would cause the optimizer
+        // to eliminate MFMA stores as dead code).
+        llvmFn.setConvergent(true);
+        llvmFn->setAttr("no_unwind",
+                         mlir::UnitAttr::get(&getContext()));
+        llvmFn->setAttr("will_return",
+                         mlir::UnitAttr::get(&getContext()));
+        // Set memory(argmem: readwrite) — the function only accesses
+        // memory through its pointer arguments.  Without this, the
+        // Attributor may incorrectly infer memory(none) for functions
+        // in deep template call chains, causing the optimizer to
+        // eliminate MFMA stores as dead code.
+        using MRI = mlir::LLVM::ModRefInfo;
+        llvmFn.setMemoryEffectsAttr(
+            mlir::LLVM::MemoryEffectsAttr::get(
+                &getContext(),
+                /*other=*/MRI::NoModRef,
+                /*argMem=*/MRI::ModRef,
+                /*inaccessibleMem=*/MRI::NoModRef,
+                /*errnoMem=*/MRI::NoModRef,
+                /*targetMem0=*/MRI::NoModRef,
+                /*targetMem1=*/MRI::NoModRef));
+        // Copy discardable attributes from the gpu.func (target-cpu
+        // etc. from the device cc1).
+        for (auto na : fn->getDiscardableAttrs()) {
+          llvm::StringRef name = na.getName().strref();
+          if (name == "gpu.kernel" || name.starts_with("rocdl."))
+            continue;
+          llvmFn->setAttr(na.getName(), na.getValue());
+        }
+        // Move the body from gpu.func into the new llvm.func.
+        mlir::Region &srcRegion = fn.getBody();
+        mlir::Region &dstRegion = llvmFn.getBody();
+        dstRegion.takeBody(srcRegion);
+        // gpu.return → llvm.return in the moved body.
+        llvmFn.walk([](mlir::gpu::ReturnOp ret) {
+          mlir::OpBuilder rb(ret);
+          mlir::LLVM::ReturnOp::create(rb, ret.getLoc(), ret.getOperands());
+          ret.erase();
+        });
+        fn.erase();
+      }
+    }
+
+    // Post-pass E: encode grid_covers_args into llvm.passthrough so it
+    // survives through GPUToROCDL → llvm.func → LLVM IR as a function
+    // attribute.  The ROCDL serializer emits the actual llvm.assume using
+    // implicitarg_ptr loads that match the grid-stride loop's stride.
+    {
+      gpuModule.walk([&](mlir::gpu::GPUFuncOp fn) {
+        if (!fn.isKernel() || fn.getBody().empty())
+          return;
+        auto coveredAttr =
+            fn->getAttrOfType<mlir::DenseI32ArrayAttr>("grid_covers_args");
+        if (!coveredAttr)
+          return;
+
+        // Build comma-separated string of covered arg indices.
+        std::string val;
+        for (int32_t idx : coveredAttr.asArrayRef()) {
+          if (!val.empty()) val += ',';
+          val += std::to_string(idx);
+        }
+
+        // Build the passthrough entry: ["grid-covers-args", "0,1,2"]
+        mlir::MLIRContext *ctx = &getContext();
+        auto entry = mlir::ArrayAttr::get(ctx, {
+            mlir::StringAttr::get(ctx, "grid-covers-args"),
+            mlir::StringAttr::get(ctx, val)});
+
+        // Merge with existing llvm.passthrough if present.
+        llvm::SmallVector<mlir::Attribute> entries;
+        if (auto existing =
+                fn->getAttrOfType<mlir::ArrayAttr>("llvm.passthrough")) {
+          entries.append(existing.begin(), existing.end());
+        }
+        entries.push_back(entry);
+        fn->setAttr("llvm.passthrough",
+                     mlir::ArrayAttr::get(ctx, entries));
+
+        fn->removeAttr("grid_covers_args");
+      });
+    }
+
+  }
+};
+
+std::unique_ptr<mlir::Pass> createConvertCIRInGpuModulePass() {
+  return std::make_unique<ConvertCIRInGpuModulePass>();
+}
+
+//===----------------------------------------------------------------------===//
+// CIRGpuModuleToBinaryPass
+//
+// Wrapper around the standard GpuModuleToBinaryPass that gracefully erases
+// any `gpu.module` without target attributes (i.e. compiled without
+// --offload-arch) rather than failing with "the module has no target
+// attributes".  This lets the same pass pipeline work for both unit tests
+// (no chip → no binary) and real GPU compilation (chip set → HSACo binary).
+//===----------------------------------------------------------------------===//
+
+struct CIRGpuModuleToBinaryPass
+    : public mlir::PassWrapper<CIRGpuModuleToBinaryPass,
+                               mlir::OperationPass<mlir::ModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CIRGpuModuleToBinaryPass)
+
+  llvm::StringRef getArgument() const override {
+    return "cir-gpu-module-to-binary";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Convert gpu.module (with target attrs) to gpu.binary; erase "
+           "targetless modules";
+  }
+
+  void runOnOperation() override {
+    mlir::ModuleOp module = getOperation();
+
+    // Erase gpu.module ops with no target attributes (compiled without
+    // --offload-arch). Also erase any gpu.launch_func that references them
+    // because the verifier checks that the kernel container symbol exists.
+    SmallVector<mlir::gpu::GPUModuleOp> untargeted;
+    module.walk([&](mlir::gpu::GPUModuleOp gpuMod) {
+      if (!gpuMod.getTargetsAttr() || gpuMod.getTargetsAttr().empty())
+        untargeted.push_back(gpuMod);
+    });
+    if (!untargeted.empty()) {
+      // Build the set of untargeted module names so we can find the launches.
+      llvm::SmallDenseSet<mlir::StringAttr> untargetedNames;
+      for (mlir::gpu::GPUModuleOp m : untargeted)
+        untargetedNames.insert(m.getNameAttr());
+      SmallVector<mlir::Operation *> orphanLaunches;
+      module.walk([&](mlir::gpu::LaunchFuncOp l) {
+        if (untargetedNames.count(l.getKernelModuleName()))
+          orphanLaunches.push_back(l);
+      });
+      for (mlir::Operation *op : orphanLaunches)
+        op->erase();
+      for (mlir::gpu::GPUModuleOp gpuMod : untargeted)
+        gpuMod.erase();
+    }
+
+    // Two-pass mode: if per-arch modules (offload_device_module_<arch>) exist,
+    // the base @offload_device_module is an empty container that got a target
+    // stamp from the single-source matcher.  Erase it so it doesn't produce an
+    // empty binary that shadows the real per-arch binary.
+    {
+      constexpr StringRef kBase = "offload_device_module";
+      constexpr StringRef kPrefix = "offload_device_module_";
+      bool hasPerArch = false;
+      mlir::gpu::GPUModuleOp baseModule;
+      module.walk([&](mlir::gpu::GPUModuleOp m) {
+        if (m.getName() == kBase)
+          baseModule = m;
+        else if (m.getName().starts_with(kPrefix))
+          hasPerArch = true;
+      });
+      if (hasPerArch && baseModule)
+        baseModule.erase();
+    }
+
+    // If there are any gpu.module ops remaining, they have targets and should
+    // be compiled to binaries using the standard pass.
+    SmallVector<mlir::gpu::GPUModuleOp> targeted;
+    module.walk([&](mlir::gpu::GPUModuleOp m) { targeted.push_back(m); });
+    if (targeted.empty())
+      return;
+
+    // ConvertGpuOpsToROCDLOps replaces gpu.thread_id / gpu.block_id / etc.
+    // (which return index) with rocdl intrinsics (which return i32) and emits
+    // unrealized_conversion_cast(i32 → index) for any remaining index
+    // consumers.  CIRGenExprScalar already emitted unrealized_conversion_cast
+    // (index → !cir.u32i) which was lowered to llvm.trunc by
+    // ConvertCIRInGpuModulePass.  The result is a chain:
+    //   rocdl.workgroup.id.x : i32
+    //   → unrealized_cast(i32 → index)   [by ROCDL pass]
+    //   → llvm.trunc(index → i32)         [by ConvertCIRInGpuModulePass]
+    // Fold these pairs (trunc of a no-op cast) to the original i32 value,
+    // then remove dead casts.  This must run before translateModuleToLLVMIR,
+    // which cannot handle any non-LLVM ops.
+    for (mlir::gpu::GPUModuleOp gpuMod : targeted) {
+      // Step A: fold arith.index_castui(unrealized_cast(v:T → index) → T) → v.
+      // These arise from the chain:
+      //   gpu.block_id y : index
+      //   → arith.index_castui(index → i32)   [by
+      //   UnrealizedCastFoldingLowering]
+      // After ConvertGpuOpsToROCDLOps:
+      //   rocdl.workgroup.id.y : i32
+      //   → unrealized_cast(i32 → index)       [ROCDL bridge for remaining
+      //   index users] → arith.index_castui(index → i32)    [our cast, now
+      //   consumes the bridge]
+      // Fold the (i32 → index → i32) round-trip to just the i32 ROCDL result.
+      // Also fold the trivial identity arith.index_castui(v:T → T) → v.
+      gpuMod.walk([](mlir::arith::IndexCastUIOp cast) {
+        mlir::Value src = cast.getIn();
+        mlir::Type dstTy = cast.getOut().getType();
+        // Case 1: identity (src type == dst type).
+        if (src.getType() == dstTy) {
+          cast.getOut().replaceAllUsesWith(src);
+          cast.erase();
+          return;
+        }
+        // Case 2: index_castui(unrealized_cast(v:T → index) → T) → v.
+        auto bridge = src.getDefiningOp<mlir::UnrealizedConversionCastOp>();
+        if (!bridge || bridge.getInputs().size() != 1 ||
+            bridge.getOutputs().size() != 1)
+          return;
+        if (!bridge.getOutputs()[0].getType().isIndex())
+          return;
+        mlir::Value inner = bridge.getInputs()[0];
+        if (inner.getType() == dstTy) {
+          cast.getOut().replaceAllUsesWith(inner);
+          cast.erase();
+        }
+      });
+      // Step A2: fold paired unrealized casts (T → index → T) that form a
+      // round-trip identity.  These arise when ROCDL inserts (i64 → index)
+      // bridges and a consumer emitted (index → i64) + llvm.trunc back to i32:
+      //   llvm.sext(rocdl_i32 → i64)
+      //   → unrealized_cast(i64 → index)
+      //   → unrealized_cast(index → i64)
+      //   → llvm.trunc(i64 → i32)
+      // Fold the middle pair to identity, leaving sext+trunc which DCE removes.
+      gpuMod.walk([](mlir::UnrealizedConversionCastOp cast2) {
+        // Match: cast2 converts index → T.
+        if (cast2.getInputs().size() != 1 || cast2.getOutputs().size() != 1)
+          return;
+        if (!cast2.getInputs()[0].getType().isIndex())
+          return;
+        mlir::Value indexVal = cast2.getInputs()[0];
+        mlir::Type outTy = cast2.getOutputs()[0].getType();
+        // The index value must come from another unrealized_cast(T → index).
+        auto cast1 = indexVal.getDefiningOp<mlir::UnrealizedConversionCastOp>();
+        if (!cast1 || cast1.getInputs().size() != 1 ||
+            cast1.getOutputs().size() != 1)
+          return;
+        if (!cast1.getOutputs()[0].getType().isIndex())
+          return;
+        mlir::Value inner = cast1.getInputs()[0];
+        // Fold if inner type == cast2 output type (T → index → T = identity).
+        if (inner.getType() == outTy) {
+          cast2.getOutputs()[0].replaceAllUsesWith(inner);
+          cast2.erase();
+        }
+      });
+      // Step A3: fold unrealized_cast(!llvm.ptr<N> → !llvm.ptr) to
+      // llvm.addrspacecast.  These arise when shared memory globals (addr space
+      // 3) are accessed via cir.get_global which now emits !llvm.ptr<3>, but
+      // downstream llvm.getelementptr expects the generic !llvm.ptr.
+      {
+        mlir::OpBuilder b(&getContext());
+        SmallVector<mlir::UnrealizedConversionCastOp> ptrCasts;
+        gpuMod.walk([&](mlir::UnrealizedConversionCastOp cast) {
+          if (cast.getInputs().size() != 1 || cast.getOutputs().size() != 1)
+            return;
+          auto inPtrTy = mlir::dyn_cast<mlir::LLVM::LLVMPointerType>(
+              cast.getInputs()[0].getType());
+          auto outPtrTy = mlir::dyn_cast<mlir::LLVM::LLVMPointerType>(
+              cast.getOutputs()[0].getType());
+          if (inPtrTy && outPtrTy)
+            ptrCasts.push_back(cast);
+        });
+        for (auto cast : ptrCasts) {
+          b.setInsertionPoint(cast);
+          auto outTy = mlir::cast<mlir::LLVM::LLVMPointerType>(
+              cast.getOutputs()[0].getType());
+          auto addrcast = mlir::LLVM::AddrSpaceCastOp::create(
+              b, cast.getLoc(), outTy, cast.getInputs()[0]);
+          cast.getOutputs()[0].replaceAllUsesWith(addrcast.getRes());
+          cast.erase();
+        }
+      }
+      // Step B: remove now-dead unrealized casts.
+      bool changed = true;
+      while (changed) {
+        changed = false;
+        gpuMod.walk([&](mlir::UnrealizedConversionCastOp cast) {
+          if (cast.use_empty()) {
+            cast.erase();
+            changed = true;
+          }
+        });
+      }
+    }
+
+    // Set the offloading handler on each targeted gpu.module.
+    // SelectObjectAttr (null target → first object) implements
+    // OffloadingLLVMTranslationAttrInterface, which embeds the compiled binary
+    // blob and emits mgpuLaunchKernel calls during MLIR→LLVM IR translation.
+    // GpuROCDLAttachTarget only stamps targets; it does not set the handler,
+    // so we set it here before calling transformGpuModulesToBinaries.
+    for (mlir::gpu::GPUModuleOp gpuMod : targeted) {
+      if (!gpuMod.getOffloadingHandlerAttr())
+        gpuMod.setOffloadingHandlerAttr(mlir::gpu::SelectObjectAttr::get(
+            gpuMod.getContext(), /*target=*/mlir::Attribute{}));
+    }
+
+    // Fix llvm.bitcast ops that cross pointer address spaces.
+    // The ConvertGpuOpsToROCDLOps pass may insert llvm.bitcast materializations
+    // when gpu.func → llvm.func conversion encounters ptr<5> values from our
+    // alloca address space fixup.  LLVM IR does not allow bitcast between
+    // different address spaces — those must be addrspacecast.
+    module.walk([](mlir::gpu::GPUModuleOp gpuMod) {
+      SmallVector<mlir::LLVM::BitcastOp> toFix;
+      gpuMod.walk([&](mlir::LLVM::BitcastOp op) {
+        auto srcPtrTy = mlir::dyn_cast<mlir::LLVM::LLVMPointerType>(
+            op.getArg().getType());
+        auto dstPtrTy = mlir::dyn_cast<mlir::LLVM::LLVMPointerType>(
+            op.getResult().getType());
+        if (srcPtrTy && dstPtrTy &&
+            srcPtrTy.getAddressSpace() != dstPtrTy.getAddressSpace())
+          toFix.push_back(op);
+      });
+      for (auto op : toFix) {
+        mlir::OpBuilder b(op);
+        auto cast = mlir::LLVM::AddrSpaceCastOp::create(
+            b, op.getLoc(), op.getResult().getType(), op.getArg());
+        op.getResult().replaceAllUsesWith(cast.getRes());
+        op.erase();
+      }
+    });
+
+    // Fix GEP result types to match their base pointer's address space.
+    //
+    // Post-pass A (in ConvertCIRInGpuModulePass) correctly sets alloca result
+    // types to !llvm.ptr<5> and propagates through GEP results.  However,
+    // GPUFuncOpLowering (in ConvertGpuOpsToROCDLOps) calls convertRegionTypes
+    // which reverts GEP result types back to !llvm.ptr.  In MLIR the GEP
+    // result type is an independent attribute, so the IR looks type-correct.
+    // But in LLVM IR, GEP inherits the base pointer's address space, so
+    // `getelementptr i8, ptr addrspace(5) %base` produces `ptr addrspace(5)`,
+    // not `ptr`.  Fix the MLIR types to be consistent, then insert
+    // addrspacecast at call boundaries where a ptr<N> feeds a flat ptr param.
+    module.walk([](mlir::gpu::GPUModuleOp gpuMod) {
+      bool changed = true;
+      while (changed) {
+        changed = false;
+        gpuMod.walk([&](mlir::LLVM::GEPOp gep) {
+          auto basePtrTy = mlir::dyn_cast<mlir::LLVM::LLVMPointerType>(
+              gep.getBase().getType());
+          auto resPtrTy = mlir::dyn_cast<mlir::LLVM::LLVMPointerType>(
+              gep.getRes().getType());
+          if (basePtrTy && resPtrTy &&
+              basePtrTy.getAddressSpace() != resPtrTy.getAddressSpace()) {
+            gep.getRes().setType(mlir::LLVM::LLVMPointerType::get(
+                gpuMod.getContext(), basePtrTy.getAddressSpace()));
+            changed = true;
+          }
+        });
+      }
+      // getCalleeFunctionType() derives the type from operand types, so it
+      // reflects the (now-fixed) arg types — not the actual callee declaration.
+      // Look up the callee LLVMFuncOp to get the declared parameter types.
+      gpuMod.walk([&](mlir::LLVM::CallOp call) {
+        auto calleeAttr = call.getCalleeAttr();
+        if (!calleeAttr)
+          return;
+        auto calleeFn =
+            gpuMod.lookupSymbol<mlir::LLVM::LLVMFuncOp>(calleeAttr);
+        if (!calleeFn)
+          return;
+        auto calleeTy = calleeFn.getFunctionType();
+        unsigned numParams = calleeTy.getNumParams();
+        auto argOperands = call.getArgOperands();
+        for (unsigned i = 0; i < numParams && i < argOperands.size(); ++i) {
+          auto argPtrTy = mlir::dyn_cast<mlir::LLVM::LLVMPointerType>(
+              argOperands[i].getType());
+          auto paramPtrTy = mlir::dyn_cast<mlir::LLVM::LLVMPointerType>(
+              calleeTy.getParamType(i));
+          if (argPtrTy && paramPtrTy &&
+              argPtrTy.getAddressSpace() != paramPtrTy.getAddressSpace()) {
+            mlir::OpBuilder b(call);
+            auto cast = mlir::LLVM::AddrSpaceCastOp::create(
+                b, call.getLoc(), calleeTy.getParamType(i), argOperands[i]);
+            call.getArgOperandsMutable().slice(i, 1).assign(cast);
+          }
+        }
+      });
+    });
+
+    // Fix function declaration linkage: LLVM requires declarations to have
+    // external or external_weak linkage.  CIR functions may arrive with
+    // linkonce_odr, available_externally, etc.
+    module.walk([](mlir::gpu::GPUModuleOp gpuMod) {
+      gpuMod.walk([](mlir::LLVM::LLVMFuncOp fn) {
+        if (fn.isExternal() &&
+            fn.getLinkage() != mlir::LLVM::Linkage::External &&
+            fn.getLinkage() != mlir::LLVM::Linkage::ExternWeak) {
+          fn.setLinkage(mlir::LLVM::Linkage::External);
+        }
+      });
+    });
+
+    // Functions declared via __asm("llvm.<intrinsic>") arrive as regular
+    // LLVMFuncOp declarations with parameter attributes (noundef, etc.).
+    // When LLVM IR translation recognizes the name as an intrinsic, it adds
+    // immarg to the appropriate parameters.  The LLVM verifier rejects immarg
+    // combined with any attribute other than range.  Strip all arg/result attrs
+    // from intrinsic declarations AND call sites so the intrinsic's own
+    // attributes (like immarg) take effect without conflicts.
+    module.walk([](mlir::gpu::GPUModuleOp gpuMod) {
+      gpuMod.walk([](mlir::LLVM::LLVMFuncOp fn) {
+        if (!fn.isExternal() || !fn.getName().starts_with("llvm."))
+          return;
+        if (auto argAttrs = fn.getArgAttrsAttr())
+          fn.removeArgAttrsAttr();
+        if (auto resAttrs = fn.getResAttrsAttr())
+          fn.removeResAttrsAttr();
+      });
+      gpuMod.walk([](mlir::LLVM::CallOp call) {
+        auto callee = call.getCallee();
+        if (!callee || !callee->starts_with("llvm."))
+          return;
+        if (auto argAttrs = call.getArgAttrsAttr())
+          call.removeArgAttrsAttr();
+        if (auto resAttrs = call.getResAttrsAttr())
+          call.removeResAttrsAttr();
+
+        // Fold constant expressions in intrinsic call arguments.
+        // CIR emits constexpr values as alloca/store/load sequences
+        // (e.g. constexpr template params) that LLVM intrinsics need
+        // as immediates (immarg).  Trace through trunc/zext/load/alloca
+        // chains to recover the constant value.
+        auto peelCasts = [](mlir::Value v) -> mlir::Value {
+          bool changed = true;
+          while (changed) {
+            changed = false;
+            if (auto t = v.getDefiningOp<mlir::LLVM::TruncOp>()) {
+              v = t.getArg(); changed = true;
+            } else if (auto z = v.getDefiningOp<mlir::LLVM::ZExtOp>()) {
+              v = z.getArg(); changed = true;
+            } else if (auto s = v.getDefiningOp<mlir::LLVM::SExtOp>()) {
+              v = s.getArg(); changed = true;
+            }
+          }
+          return v;
+        };
+
+        // Peel through address-space casts, GEPs, etc. to find the
+        // underlying alloca.
+        auto peelAddr = [](mlir::Value addr) -> mlir::Value {
+          bool changed = true;
+          while (changed) {
+            changed = false;
+            if (auto gep = addr.getDefiningOp<mlir::LLVM::GEPOp>()) {
+              addr = gep.getBase(); changed = true;
+            } else if (auto asc =
+                addr.getDefiningOp<mlir::LLVM::AddrSpaceCastOp>()) {
+              addr = asc.getArg(); changed = true;
+            }
+          }
+          return addr;
+        };
+
+        // Recursively find stores to an alloca, including through
+        // addrspacecast/GEP users.
+        std::function<mlir::LLVM::ConstantOp(mlir::Value)> findStoreConst;
+        findStoreConst = [&](mlir::Value addr) -> mlir::LLVM::ConstantOp {
+          for (auto &use : addr.getUses()) {
+            mlir::Operation *user = use.getOwner();
+            if (auto store = mlir::dyn_cast<mlir::LLVM::StoreOp>(user)) {
+              if (store.getAddr() == addr) {
+                mlir::Value sv = peelCasts(store.getValue());
+                if (auto c = sv.getDefiningOp<mlir::LLVM::ConstantOp>())
+                  return c;
+              }
+            }
+            // Follow addrspacecast/GEP users to find stores through them.
+            if (mlir::isa<mlir::LLVM::AddrSpaceCastOp,
+                          mlir::LLVM::GEPOp>(user)) {
+              if (auto c = findStoreConst(user->getResult(0)))
+                return c;
+            }
+          }
+          return {};
+        };
+
+        auto findConst = [&](mlir::Value v) -> mlir::LLVM::ConstantOp {
+          v = peelCasts(v);
+          if (auto c = v.getDefiningOp<mlir::LLVM::ConstantOp>())
+            return c;
+          // Try load(addr) where addr traces to an alloca with a
+          // constant store.
+          if (auto load = v.getDefiningOp<mlir::LLVM::LoadOp>()) {
+            mlir::Value addr = peelAddr(load.getAddr());
+            if (auto alloca = addr.getDefiningOp<mlir::LLVM::AllocaOp>())
+              return findStoreConst(alloca.getRes());
+          }
+          return {};
+        };
+
+        for (unsigned i = 0; i < call.getArgOperands().size(); ++i) {
+          mlir::Value arg = call.getArgOperands()[i];
+          auto constOp = findConst(arg);
+
+          if (!constOp)
+            continue;
+
+          auto intAttr =
+              mlir::dyn_cast<mlir::IntegerAttr>(constOp.getValue());
+          if (!intAttr)
+            continue;
+
+          int64_t val = intAttr.getInt();
+          mlir::OpBuilder b(call);
+          auto newConst = mlir::LLVM::ConstantOp::create(
+              b, call.getLoc(), arg.getType(),
+              b.getIntegerAttr(arg.getType(), val));
+          call.getArgOperandsMutable().slice(i, 1).assign(newConst);
+        }
+      });
+    });
+
+    // Collect kernel names from each gpu.module before they are compiled
+    // to binaries (which erases the gpu.func ops).  We'll attach them to
+    // the resulting gpu.binary so SelectObjectAttr can register ALL kernels,
+    // not just those referenced by gpu.launch_func.
+    llvm::StringMap<SmallVector<std::string>> moduleKernelNames;
+    module.walk([&](mlir::gpu::GPUModuleOp gpuMod) {
+      SmallVector<std::string> names;
+      // gpu.func ops have already been converted to llvm.func by
+      // ConvertGpuOpsToROCDLOps. Look for llvm.func with gpu.kernel attr.
+      gpuMod.walk([&](mlir::LLVM::LLVMFuncOp fn) {
+        if (fn->hasAttr("gpu.kernel"))
+          names.push_back(fn.getName().str());
+      });
+      if (!names.empty())
+        moduleKernelNames[gpuMod.getName()] = std::move(names);
+    });
+
+    // Pass null handler here so the per-module handler is used.
+    if (mlir::failed(mlir::gpu::transformGpuModulesToBinaries(module)))
+      return signalPassFailure();
+
+    // Collect kernel→stub mapping from cir.func ops with cu.kernel_name.
+    llvm::StringMap<std::string> kernelToStub;
+    module.walk([&](mlir::Operation *op) {
+      if (auto attr = op->getAttrOfType<mlir::Attribute>("cu.kernel_name")) {
+        // CUDAKernelNameAttr stores the kernel name; the op's sym_name is
+        // the stub name.
+        if (auto symName = op->getAttrOfType<mlir::StringAttr>(
+                mlir::SymbolTable::getSymbolAttrName())) {
+          if (auto knAttr = mlir::dyn_cast<cir::CUDAKernelNameAttr>(attr))
+            kernelToStub[knAttr.getKernelName()] = symName.getValue().str();
+        }
+      }
+    });
+
+    // Attach collected kernel names and stub mapping to gpu.binary ops.
+    module.walk([&](mlir::gpu::BinaryOp binOp) {
+      auto it = moduleKernelNames.find(binOp.getName());
+      if (it != moduleKernelNames.end()) {
+        SmallVector<mlir::Attribute> attrs;
+        for (const std::string &name : it->second)
+          attrs.push_back(mlir::StringAttr::get(binOp.getContext(), name));
+        binOp->setAttr("gpu.kernels",
+                        mlir::ArrayAttr::get(binOp.getContext(), attrs));
+      }
+
+      // Attach kernel→stub mapping for all kernels that have stubs.
+      SmallVector<mlir::NamedAttribute> stubEntries;
+      for (const auto &[kernel, stub] : kernelToStub) {
+        stubEntries.push_back(mlir::NamedAttribute(
+            mlir::StringAttr::get(binOp.getContext(), kernel),
+            mlir::StringAttr::get(binOp.getContext(), stub)));
+      }
+      if (!stubEntries.empty())
+        binOp->setAttr("gpu.kernel_stubs",
+                        mlir::DictionaryAttr::get(binOp.getContext(),
+                                                   stubEntries));
+    });
+
+    // After binary compilation, bundle per-arch gpu.binary ops
+    // (@offload_device_module_<arch>) into a single fat binary
+    // (@offload_device_module) so that gpu.launch_func can find it.
+    //
+    // Collect all gpu.binary ops whose name starts with "offload_device_module_"
+    // (i.e. two-pass per-arch binaries).  If there are none, we're in
+    // single-source mode and nothing needs to be done.
+    bundlePerArchBinaries(module);
+  }
+
+  // Collect gpu.binary @offload_device_module_<arch> ops and bundle them into
+  // a single gpu.binary @offload_device_module so that gpu.launch_func can
+  // find it by the expected name.
+  //
+  // For single-arch (N=1): rename the binary op in place.
+  // For multi-arch (N>1): bundle using clang-offload-bundler to produce an
+  // HIP fat binary (clang-offload-bundle format) that hipModuleLoadData can
+  // dispatch from at runtime.
+  void bundlePerArchBinaries(mlir::ModuleOp module) {
+    constexpr StringRef kBase = "offload_device_module";
+    constexpr StringRef kPrefix = "offload_device_module_";
+
+    SmallVector<mlir::gpu::BinaryOp> archBinaries;
+    module.walk([&](mlir::gpu::BinaryOp bin) {
+      if (bin.getName().starts_with(kPrefix))
+        archBinaries.push_back(bin);
+    });
+
+    if (archBinaries.empty())
+      return; // Single-source mode — nothing to bundle.
+
+    mlir::MLIRContext *ctx = module.getContext();
+
+    // Wrap GPU binaries in the __CLANG_OFFLOAD_BUNDLE__ format that the HIP
+    // runtime expects.  We construct the header directly in memory rather than
+    // shelling out to clang-offload-bundler.
+    constexpr uint64_t kBundleAlign = 4096;
+
+    // Collect (target-triple, binary-bytes) pairs.  A dummy empty host entry
+    // comes first, matching OGCG's convention.
+    SmallVector<std::pair<std::string, StringRef>> entries;
+    entries.push_back({"host-x86_64-unknown-linux-gnu", StringRef()});
+    for (mlir::gpu::BinaryOp bin : archBinaries) {
+      StringRef arch = bin.getName().drop_front(kPrefix.size());
+      auto objects = bin.getObjects();
+      if (objects.empty()) {
+        module.emitError("CIRGpuModuleToBinaryPass: gpu.binary '")
+            << bin.getName() << "' has no objects";
+        return signalPassFailure();
+      }
+      auto objAttr = mlir::dyn_cast<mlir::gpu::ObjectAttr>(objects[0]);
+      if (!objAttr) {
+        module.emitError("CIRGpuModuleToBinaryPass: gpu.binary '")
+            << bin.getName() << "' object[0] is not a gpu.ObjectAttr";
+        return signalPassFailure();
+      }
+      entries.push_back(
+          {("hip-amdgcn-amd-amdhsa--" + arch).str(),
+           objAttr.getObject().getValue()});
+    }
+
+    // Build the __CLANG_OFFLOAD_BUNDLE__ blob in memory.
+    // Format: magic(24) | numEntries(8) | {offset(8) size(8) tagLen(8) tag}*
+    //         | padding | data…
+    constexpr StringRef kMagic = "__CLANG_OFFLOAD_BUNDLE__";
+    uint64_t headerSize = kMagic.size() + 8; // magic + numEntries
+    for (auto &[tag, _] : entries)
+      headerSize += 3 * 8 + tag.size();
+
+    // Compute offsets for each entry's data, aligned to kBundleAlign.
+    SmallVector<uint64_t> offsets;
+    uint64_t curOffset = headerSize;
+    for (auto &[_, data] : entries) {
+      curOffset = llvm::alignTo(curOffset, kBundleAlign);
+      offsets.push_back(curOffset);
+      curOffset += data.size();
+    }
+
+    auto writeU64 = [](llvm::raw_svector_ostream &os, uint64_t v) {
+      for (int i = 0; i < 8; ++i) {
+        os << static_cast<char>(v & 0xff);
+        v >>= 8;
+      }
+    };
+
+    SmallVector<char> bundleBuf;
+    llvm::raw_svector_ostream os(bundleBuf);
+    os << kMagic;
+    writeU64(os, entries.size());
+    for (size_t i = 0; i < entries.size(); ++i) {
+      writeU64(os, offsets[i]);
+      writeU64(os, entries[i].second.size());
+      writeU64(os, entries[i].first.size());
+      os << entries[i].first;
+    }
+    for (size_t i = 0; i < entries.size(); ++i) {
+      while (os.tell() < offsets[i])
+        os << '\0';
+      os << entries[i].second;
+    }
+    StringRef fatBytes(bundleBuf.data(), bundleBuf.size());
+
+    // For single-arch, update the existing binary in-place (preserving all
+    // attributes like gpu.kernel_stubs) rather than creating a new op.
+    if (archBinaries.size() == 1) {
+      auto origObj = mlir::dyn_cast<mlir::gpu::ObjectAttr>(
+          archBinaries[0].getObjects()[0]);
+      auto bundledObj = mlir::gpu::ObjectAttr::get(
+          origObj.getTarget(), origObj.getFormat(),
+          mlir::StringAttr::get(ctx, fatBytes),
+          origObj.getProperties(), origObj.getKernels());
+      archBinaries[0]->setAttr("objects",
+          mlir::ArrayAttr::get(ctx, {bundledObj}));
+      archBinaries[0]->setAttr(
+          mlir::SymbolTable::getSymbolAttrName(),
+          mlir::StringAttr::get(ctx, kBase));
+      return;
+    }
+
+    // Multi-arch: create a new bundled gpu.binary replacing the per-arch ones.
+    mlir::Attribute nominalTarget;
+    {
+      auto objects = archBinaries[0].getObjects();
+      if (!objects.empty())
+        if (auto obj = mlir::dyn_cast<mlir::gpu::ObjectAttr>(objects[0]))
+          nominalTarget = obj.getTarget();
+    }
+    if (!nominalTarget)
+      nominalTarget = mlir::StringAttr::get(ctx, "hip-amdgcn-amd-amdhsa");
+
+    SmallVector<mlir::NamedAttribute> extraAttrs;
+    for (mlir::gpu::BinaryOp bin : archBinaries) {
+      for (auto attr : bin->getAttrs()) {
+        StringRef name = attr.getName();
+        if (name == "sym_name" || name == "handler" || name == "objects")
+          continue;
+        extraAttrs.push_back(attr);
+      }
+    }
+
+    mlir::OpBuilder builder(ctx);
+    builder.setInsertionPointToEnd(module.getBody());
+    auto fatObjAttr = mlir::gpu::ObjectAttr::get(
+        nominalTarget, mlir::gpu::CompilationTarget::Fatbin,
+        mlir::StringAttr::get(ctx, fatBytes));
+    auto handler =
+        mlir::gpu::SelectObjectAttr::get(ctx, /*target=*/mlir::Attribute{});
+    auto fatBin = mlir::gpu::BinaryOp::create(
+        builder, module.getLoc(), kBase, handler,
+        builder.getArrayAttr({fatObjAttr}));
+    for (auto &attr : extraAttrs)
+      fatBin->setAttr(attr.getName(), attr.getValue());
+
+    for (mlir::gpu::BinaryOp bin : archBinaries)
+      bin.erase();
+  }
+};
+
+std::unique_ptr<mlir::Pass> createCIRGpuModuleToBinaryPass() {
+  return std::make_unique<CIRGpuModuleToBinaryPass>();
+}
+
+//===----------------------------------------------------------------------===//
+// ConvertGpuToROCDLIfTargetPass
+//
+// Wrapper around ConvertGpuOpsToROCDLOps that skips gpu.module ops with no
+// target attributes.  Without a target (no --offload-arch), these modules
+// will be erased by CIRGpuModuleToBinaryPass and should not be modified.
+//===----------------------------------------------------------------------===//
+
 void ConvertCIRToLLVMPass::runOnOperation() {
   llvm::TimeTraceScope scope("Convert CIR to LLVM Pass");
 
@@ -3884,6 +6658,26 @@ void ConvertCIRToLLVMPass::runOnOperation() {
 #undef GET_LLVM_LOWERING_PATTERNS_LIST
       >(converter, patterns.getContext(), dl);
 
+  // After the offload split pass, host functions are emitted as func.func ops
+  // (with cir.* bodies).  Lower them and their returns to
+  // llvm.func/llvm.return.
+  patterns.add<FuncFuncToLLVMFuncOpLowering, FuncReturnToLLVMReturnLowering>(
+      converter, patterns.getContext());
+  // Fold unrealized_conversion_cast ops that appear in host function bodies due
+  // to GPU launch dim expansion (e.g. !u32i → i32 where both map to i32 in
+  // LLVM). These are produced by the CIR-to-CIR pre-lowering passes and must be
+  // eliminated before LLVM IR export.
+  patterns.add<UnrealizedCastFoldingLowering>(converter, patterns.getContext());
+  // Convert kernel arg types of gpu.launch_func from CIR to LLVM.  After the
+  // offload split pass, kernel args may carry CIR types (e.g. !s32i).
+  patterns.add<GpuLaunchFuncArgConversionLowering>(converter,
+                                                   patterns.getContext());
+  // Convert arith ops (e.g. arith.index_castui) that appear in the GPU launch
+  // dim extraction chain and would otherwise be left untranslatable in the LLVM
+  // IR export step.  These are present in host-side functions after the offload
+  // split pass expands the grid/block dim values.
+  mlir::arith::populateArithToLLVMConversionPatterns(converter, patterns);
+
   processCIRAttrs(module);
 
   // Collect annotation info from cir.func / cir.global before conversion;
@@ -3896,6 +6690,23 @@ void ConvertCIRToLLVMPass::runOnOperation() {
   mlir::configureOpenMPToLLVMConversionLegality(target, converter);
   target.addLegalDialect<mlir::omp::OpenMPDialect>();
   mlir::populateOpenMPToLLVMConversionPatterns(converter, patterns);
+  // Mark the entire GPU dialect as legal so that the device sub-module
+  // (gpu.module with gpu.func / gpu.return) and host-side gpu.launch_func ops
+  // are left untouched.  Device compilation is a separate downstream milestone;
+  // gpu.launch_func lowering to runtime calls is done via
+  // registerGPUDialectTranslation.
+  target.addLegalDialect<mlir::gpu::GPUDialect>();
+  // gpu.launch_func is dynamically legal only when all kernel args are LLVM
+  // types.
+  target.addDynamicallyLegalOp<mlir::gpu::LaunchFuncOp>(
+      [&](mlir::gpu::LaunchFuncOp op) {
+        return llvm::all_of(op.getKernelOperands(), [&](mlir::Value v) {
+          return converter.isLegal(v.getType());
+        });
+      });
+  // arith ops that remain legal (no CIR types) don't need conversion.
+  target.addDynamicallyLegalDialect<mlir::arith::ArithDialect>(
+      [&](mlir::Operation *op) { return converter.isLegal(op); });
   target.addIllegalDialect<mlir::BuiltinDialect, cir::CIRDialect,
                            mlir::func::FuncDialect>();
 
@@ -3903,8 +6714,1130 @@ void ConvertCIRToLLVMPass::runOnOperation() {
   ops.push_back(module);
   cir::collectUnreachable(module, ops);
 
+  // Fix empty blocks left by FlattenCFG.
+  //
+  // FlattenCFG can leave empty merge blocks when flattening if/else constructs
+  // inside scope regions within for loop bodies (e.g. HIP kernel launches via
+  // __hipPushCallConfiguration).  The merge block has predecessors but no ops,
+  // and the next block is orphaned.  Redirect predecessors to the next block
+  // and erase the empty block.
+  module.walk([](cir::FuncOp fn) {
+    if (fn.isDeclaration())
+      return;
+    llvm::SmallVector<mlir::Block *> toErase;
+    for (auto it = fn.getBody().begin(), end = fn.getBody().end(); it != end;
+         ++it) {
+      mlir::Block &blk = *it;
+      if (!blk.empty() || blk.hasNoPredecessors())
+        continue;
+      auto next = std::next(it);
+      if (next == end)
+        continue;
+      blk.replaceAllUsesWith(&*next);
+      toErase.push_back(&blk);
+    }
+    for (mlir::Block *blk : toErase)
+      blk->erase();
+  });
+
+  // FlattenCFG can also leave dead ops after terminators (e.g. a cir.br after
+  // cir.return from scope cleanup flattening).  Erase them so the LLVM dialect
+  // blocks are well-formed.
+  module.walk([](cir::FuncOp fn) {
+    if (fn.isDeclaration())
+      return;
+    for (mlir::Block &blk : fn.getBody()) {
+      auto it = blk.begin(), end = blk.end();
+      while (it != end) {
+        if (it->hasTrait<mlir::OpTrait::IsTerminator>()) {
+          ++it;
+          while (it != end) {
+            auto &deadOp = *it;
+            ++it;
+            deadOp.dropAllUses();
+            deadOp.erase();
+          }
+          break;
+        }
+        ++it;
+      }
+    }
+  });
+
   if (failed(applyPartialConversion(ops, target, std::move(patterns))))
     signalPassFailure();
+
+  // Attach TBAA metadata to all LoadOp/StoreOp.
+  {
+    CIRTBAABuilder tbaa(&getContext());
+    tbaa.attachTBAAMetadata(module, dl);
+  }
+
+  // Post-conversion: fold any surviving unrealized_conversion_cast ops.
+  // The conversion framework produces these as type materializations that
+  // are not subject to the greedy pattern rewriter.  For very large TUs
+  // (e.g. CK gemm_universal templates) the in-conversion pattern may not
+  // cover every instance.  Walk and fold identity casts (both sides map to
+  // the same LLVM type) and index↔integer casts.
+  {
+    SmallVector<mlir::UnrealizedConversionCastOp> casts;
+    module.walk([&](mlir::UnrealizedConversionCastOp op) {
+      casts.push_back(op);
+    });
+    for (auto castOp : casts) {
+      if (castOp.getInputs().size() != 1 || castOp.getOutputs().size() != 1)
+        continue;
+      mlir::Value input = castOp.getInputs()[0];
+      mlir::Type outTy = castOp.getOutputs()[0].getType();
+      mlir::Type convertedOutTy = converter.convertType(outTy);
+      if (!convertedOutTy)
+        convertedOutTy = outTy;
+      // Identity: both sides are the same type after conversion.
+      if (input.getType() == convertedOutTy) {
+        castOp.getOutputs()[0].replaceAllUsesWith(input);
+        castOp.erase();
+        continue;
+      }
+      // index → integer
+      if (input.getType().isIndex() &&
+          mlir::isa<mlir::IntegerType>(convertedOutTy)) {
+        mlir::OpBuilder b(castOp);
+        auto cast = mlir::arith::IndexCastUIOp::create(
+            b, castOp.getLoc(), convertedOutTy, input);
+        castOp.getOutputs()[0].replaceAllUsesWith(cast);
+        castOp.erase();
+        continue;
+      }
+      // integer → index
+      if (convertedOutTy.isIndex() &&
+          mlir::isa<mlir::IntegerType>(input.getType())) {
+        mlir::OpBuilder b(castOp);
+        auto cast = mlir::arith::IndexCastUIOp::create(
+            b, castOp.getLoc(), convertedOutTy, input);
+        castOp.getOutputs()[0].replaceAllUsesWith(cast);
+        castOp.erase();
+        continue;
+      }
+      // narrower int → wider int (zero-extend)
+      if (auto outIntTy = mlir::dyn_cast<mlir::IntegerType>(convertedOutTy)) {
+        if (auto inIntTy =
+                mlir::dyn_cast<mlir::IntegerType>(input.getType())) {
+          if (inIntTy.getWidth() < outIntTy.getWidth()) {
+            mlir::OpBuilder b(castOp);
+            auto ext = mlir::LLVM::ZExtOp::create(b, castOp.getLoc(), outIntTy,
+                                                   input);
+            castOp.getOutputs()[0].replaceAllUsesWith(ext);
+            castOp.erase();
+            continue;
+          }
+          if (inIntTy.getWidth() > outIntTy.getWidth()) {
+            mlir::OpBuilder b(castOp);
+            auto trunc = mlir::LLVM::TruncOp::create(
+                b, castOp.getLoc(), outIntTy, input);
+            castOp.getOutputs()[0].replaceAllUsesWith(trunc);
+            castOp.erase();
+            continue;
+          }
+        }
+      }
+    }
+  }
+
+  // Functions declared via __asm("llvm.<intrinsic>") arrive as regular
+  // llvm.func declarations with parameter attributes (noundef, etc.).
+  // LLVM IR translation adds immarg from the intrinsic table, but the
+  // verifier rejects immarg combined with any other attribute.  Strip
+  // all arg/result attrs from intrinsic declarations and call sites.
+  module.walk([](mlir::LLVM::LLVMFuncOp fn) {
+    if (!fn.isExternal() || !fn.getName().starts_with("llvm."))
+      return;
+    if (auto argAttrs = fn.getArgAttrsAttr())
+      fn.removeArgAttrsAttr();
+    if (auto resAttrs = fn.getResAttrsAttr())
+      fn.removeResAttrsAttr();
+  });
+  module.walk([](mlir::LLVM::CallOp call) {
+    auto callee = call.getCallee();
+    if (!callee || !callee->starts_with("llvm."))
+      return;
+    if (auto argAttrs = call.getArgAttrsAttr())
+      call.removeArgAttrsAttr();
+    if (auto resAttrs = call.getResAttrsAttr())
+      call.removeResAttrsAttr();
+
+    // Fold constant expressions in intrinsic call arguments (immarg).
+    auto peelCastsH = [](mlir::Value v) -> mlir::Value {
+      bool c = true;
+      while (c) {
+        c = false;
+        if (auto t = v.getDefiningOp<mlir::LLVM::TruncOp>()) {
+          v = t.getArg(); c = true;
+        } else if (auto z = v.getDefiningOp<mlir::LLVM::ZExtOp>()) {
+          v = z.getArg(); c = true;
+        } else if (auto s = v.getDefiningOp<mlir::LLVM::SExtOp>()) {
+          v = s.getArg(); c = true;
+        }
+      }
+      return v;
+    };
+    auto findConstH = [&](mlir::Value v) -> mlir::LLVM::ConstantOp {
+      v = peelCastsH(v);
+      if (auto co = v.getDefiningOp<mlir::LLVM::ConstantOp>())
+        return co;
+      if (auto load = v.getDefiningOp<mlir::LLVM::LoadOp>()) {
+        mlir::Value addr = load.getAddr();
+        if (auto gep = addr.getDefiningOp<mlir::LLVM::GEPOp>())
+          addr = gep.getBase();
+        if (auto alloca = addr.getDefiningOp<mlir::LLVM::AllocaOp>()) {
+          for (auto &use : alloca.getRes().getUses()) {
+            if (auto store = mlir::dyn_cast<mlir::LLVM::StoreOp>(
+                    use.getOwner())) {
+              mlir::Value sv = peelCastsH(store.getValue());
+              if (auto co = sv.getDefiningOp<mlir::LLVM::ConstantOp>())
+                return co;
+            }
+          }
+        }
+      }
+      return {};
+    };
+    for (unsigned i = 0; i < call.getArgOperands().size(); ++i) {
+      mlir::Value arg = call.getArgOperands()[i];
+      auto constOp = findConstH(arg);
+      if (!constOp)
+        continue;
+      auto intAttr =
+          mlir::dyn_cast<mlir::IntegerAttr>(constOp.getValue());
+      if (!intAttr)
+        continue;
+      mlir::OpBuilder b(call);
+      auto newConst = mlir::LLVM::ConstantOp::create(
+          b, call.getLoc(), arg.getType(),
+          b.getIntegerAttr(arg.getType(), intAttr.getInt()));
+      call.getArgOperandsMutable().slice(i, 1).assign(newConst);
+    }
+  });
+
+  // Post-pass: x86-64 SysV struct ABI lowering.
+  //
+  // CIR represents struct arguments and returns as monolithic LLVM struct
+  // types.  The x86-64 SysV ABI requires structs larger than 16 bytes to be
+  // passed indirectly via pointer (byval for arguments, sret for returns).
+  // Without this, calls to/from pre-compiled code (libstdc++) corrupt the
+  // heap because caller and callee disagree on argument layout.
+  {
+    auto tripleAttr = module->getAttrOfType<mlir::StringAttr>(
+        mlir::LLVM::LLVMDialect::getTargetTripleAttrName());
+    if (tripleAttr) {
+      llvm::Triple triple(tripleAttr.getValue());
+      if (triple.getArch() == llvm::Triple::x86_64 &&
+          !triple.isOSWindows()) {
+        constexpr unsigned kMaxDirectBytes = 16;
+        mlir::MLIRContext *ctx = &getContext();
+        auto ptrTy = mlir::LLVM::LLVMPointerType::get(ctx);
+
+        // Phase 1: Transform function signatures.
+        module.walk([&](mlir::LLVM::LLVMFuncOp fn) {
+          // Skip functions with non-C calling conventions (e.g. AMDGPU
+          // kernel stubs that live in the host module).
+          if (fn.getCConv() != mlir::LLVM::CConv::C)
+            return;
+
+          auto fnTy = fn.getFunctionType();
+          bool changed = false;
+          SmallVector<mlir::Type> newParamTypes(fnTy.getParams());
+          SmallVector<unsigned> byvalIndices;
+          SmallVector<mlir::Type> byvalTypes;
+
+          // Check arguments for large structs.
+          for (unsigned i = 0; i < newParamTypes.size(); ++i) {
+            auto structTy =
+                mlir::dyn_cast<mlir::LLVM::LLVMStructType>(newParamTypes[i]);
+            if (!structTy)
+              continue;
+            unsigned sizeBytes =
+                llvm::divideCeil(dl.getTypeSizeInBits(structTy), 8);
+            if (sizeBytes > kMaxDirectBytes) {
+              byvalIndices.push_back(i);
+              byvalTypes.push_back(structTy);
+              newParamTypes[i] = ptrTy;
+              changed = true;
+            }
+          }
+
+          // Check return type for large structs.
+          mlir::Type retTy = fnTy.getReturnType();
+          auto retStructTy =
+              mlir::dyn_cast<mlir::LLVM::LLVMStructType>(retTy);
+          bool needsSret = false;
+          if (retStructTy) {
+            unsigned retSize =
+                llvm::divideCeil(dl.getTypeSizeInBits(retStructTy), 8);
+            if (retSize > kMaxDirectBytes)
+              needsSret = true;
+          }
+
+          if (!changed && !needsSret)
+            return;
+
+          // Apply sret: prepend a pointer parameter, change return to void.
+          unsigned sretShift = 0;
+          if (needsSret) {
+            // Shift existing arg attrs forward by 1 before changing the
+            // function type, so the attribute array stays consistent.
+            if (auto oldArgAttrs = fn.getArgAttrsAttr()) {
+              SmallVector<mlir::Attribute> shifted;
+              shifted.push_back(
+                  mlir::DictionaryAttr::get(ctx)); // empty for sret slot
+              shifted.append(oldArgAttrs.begin(), oldArgAttrs.end());
+              fn.setArgAttrsAttr(mlir::ArrayAttr::get(ctx, shifted));
+            }
+            newParamTypes.insert(newParamTypes.begin(), ptrTy);
+            retTy = mlir::LLVM::LLVMVoidType::get(ctx);
+            sretShift = 1;
+          }
+
+          auto newFnTy = mlir::LLVM::LLVMFunctionType::get(
+              retTy, newParamTypes, fnTy.isVarArg());
+          fn.setFunctionType(newFnTy);
+
+          // Large struct args are passed as plain pointers (indirect
+          // without byval).  The callee operates on the caller's data
+          // directly, which is correct for non-trivially-movable types
+          // like std::vector where the callee takes ownership via
+          // std::move.  No byval attribute is needed.
+          //
+
+          // Set sret attribute.
+          if (needsSret) {
+            fn.setArgAttr(0,
+                          mlir::LLVM::LLVMDialect::getStructRetAttrName(),
+                          mlir::TypeAttr::get(retStructTy));
+          }
+
+          // Fix up function body (definitions only).
+          if (!fn.isExternal()) {
+            mlir::Block &entry = fn.getBody().front();
+            mlir::OpBuilder builder(ctx);
+            builder.setInsertionPointToStart(&entry);
+
+            if (needsSret) {
+              auto sretArg = entry.insertArgument(
+                  0u, ptrTy, builder.getUnknownLoc());
+
+              // Find the __retval alloca by tracing backwards from
+              // the return value: return loads from __retval.
+              mlir::LLVM::AllocaOp retvalAlloca;
+              fn.walk([&](mlir::LLVM::ReturnOp ret) {
+                if (retvalAlloca || ret.getNumOperands() == 0)
+                  return;
+                if (ret.getOperand(0).getType() != retStructTy)
+                  return;
+                if (auto load = ret.getOperand(0)
+                        .getDefiningOp<mlir::LLVM::LoadOp>()) {
+                  if (auto alloca = load.getAddr()
+                          .getDefiningOp<mlir::LLVM::AllocaOp>()) {
+                    if (alloca.getElemType() == retStructTy)
+                      retvalAlloca = alloca;
+                  }
+                }
+              });
+              if (retvalAlloca) {
+                retvalAlloca.getRes().replaceAllUsesWith(sretArg);
+                retvalAlloca.erase();
+              }
+
+              // Rewrite all returns: just return void (the value is
+              // already in the sret pointer via direct construction).
+              SmallVector<mlir::LLVM::ReturnOp> rets;
+              fn.walk([&](mlir::LLVM::ReturnOp ret) {
+                if (ret.getNumOperands() > 0 &&
+                    ret.getOperand(0).getType() == retStructTy)
+                  rets.push_back(ret);
+              });
+              for (auto ret : rets) {
+                mlir::OpBuilder rb(ret);
+                // Drop the return value — it's already in sret.
+                mlir::LLVM::ReturnOp::create(rb, ret.getLoc(),
+                    mlir::ValueRange{});
+                ret.erase();
+              }
+
+              // Fix any blocks left without terminators (can happen
+              // when returns were inside regions that got partially
+              // flattened).
+              for (mlir::Block &blk : fn.getBody()) {
+                if (blk.empty() ||
+                    !blk.back().hasTrait<mlir::OpTrait::IsTerminator>()) {
+                  mlir::OpBuilder b(&blk, blk.end());
+                  mlir::LLVM::UnreachableOp::create(
+                      b, b.getUnknownLoc());
+                }
+              }
+            }
+
+            // Insert loads for byval arguments.
+            for (unsigned k = 0; k < byvalIndices.size(); ++k) {
+              unsigned idx = byvalIndices[k] + sretShift;
+              mlir::BlockArgument arg = entry.getArgument(idx);
+
+              // Before changing the type, find the alloca the arg is
+              // stored to:  store %arg(struct), ptr %alloca
+              mlir::LLVM::AllocaOp paramAlloca;
+              mlir::LLVM::StoreOp paramStore;
+              for (auto *user : arg.getUsers()) {
+                if (auto store =
+                        mlir::dyn_cast<mlir::LLVM::StoreOp>(user)) {
+                  if (store.getValue() == mlir::Value(arg)) {
+                    if (auto alloca =
+                            store.getAddr()
+                                .getDefiningOp<mlir::LLVM::AllocaOp>()) {
+                      if (alloca.getElemType() == byvalTypes[k]) {
+                        paramAlloca = alloca;
+                        paramStore = store;
+                        break;
+                      }
+                    }
+                  }
+                }
+              }
+
+              // Now change the arg type to pointer.
+              arg.setType(ptrTy);
+
+              if (paramAlloca) {
+                // Replace the alloca with the pointer arg in all users.
+                paramAlloca.getRes().replaceAllUsesWith(
+                    mlir::Value(arg));
+                paramStore.erase();
+                paramAlloca.erase();
+              } else {
+                // Fallback: insert a load.
+                unsigned align =
+                    dl.getTypeABIAlignment(byvalTypes[k]);
+                mlir::OpBuilder loadBuilder(ctx);
+                loadBuilder.setInsertionPointToStart(&entry);
+                auto load = mlir::LLVM::LoadOp::create(
+                    loadBuilder, fn.getLoc(), byvalTypes[k],
+                    mlir::Value(arg), align);
+                arg.replaceAllUsesExcept(load, load);
+              }
+            }
+          }
+        });
+
+        // Phase 1c: Fix device stubs for hipLaunchKernel argument passing.
+        //
+        // Device stubs pass kernel arguments via void *args[] where
+        // args[i] points to the argument data.  CIR passes large structs
+        // by pointer (indirect), so the stub has:
+        //   %ptr_alloca = alloca ptr
+        //   store ptr %arg, ptr %ptr_alloca
+        //   args[0] = %ptr_alloca
+        // hipLaunchKernel does memcpy(kernarg, args[0], size), which
+        // reads from %ptr_alloca — but that's an 8-byte alloca holding
+        // a pointer, not the 32+ byte struct data.
+        //
+        // Fix: replace the ptr-alloca with a struct-alloca and memcpy
+        // the data from the arg pointer.  Then args[0] → struct-alloca
+        // → struct data, which hipLaunchKernel copies correctly.
+        module.walk([&](mlir::LLVM::LLVMFuncOp fn) {
+          if (fn.isExternal() ||
+              !fn.getName().contains("__device_stub__"))
+            return;
+          mlir::Block &entry = fn.getBody().front();
+          for (unsigned i = 0; i < fn.getNumArguments(); ++i) {
+            mlir::BlockArgument arg = entry.getArgument(i);
+            if (!mlir::isa<mlir::LLVM::LLVMPointerType>(arg.getType()))
+              continue;
+            // Look for: store ptr %arg → alloca(ptr)
+            for (auto *user : llvm::make_early_inc_range(arg.getUsers())) {
+              auto store = mlir::dyn_cast<mlir::LLVM::StoreOp>(user);
+              if (!store || store.getValue() != mlir::Value(arg))
+                continue;
+              auto ptrAlloca = store.getAddr()
+                  .getDefiningOp<mlir::LLVM::AllocaOp>();
+              if (!ptrAlloca || !mlir::isa<mlir::LLVM::LLVMPointerType>(
+                      ptrAlloca.getElemType()))
+                continue;
+              // Check if there's a second store from this alloca into
+              // the args array (store ptr %alloca → args[]).
+              // This confirms the pattern: args[i] = &ptr_alloca.
+              bool usedInArgsArray = false;
+              for (auto *allocUser : ptrAlloca.getRes().getUsers()) {
+                if (allocUser == store.getOperation())
+                  continue;
+                if (mlir::isa<mlir::LLVM::StoreOp>(allocUser))
+                  usedInArgsArray = true;
+              }
+              if (!usedInArgsArray)
+                continue;
+              // Replace: alloca(ptr) → alloca(i8 x size) + memcpy
+              // We don't know the struct type, but we can allocate
+              // a byte array of the right size determined from the
+              // kernel's metadata.  For simplicity, use i8 and let
+              // byval on the arg handle the ABI copy.
+              //
+              // Actually, the simplest fix: replace the alloca with
+              // the arg itself.  args[i] = %arg → points to the
+              // caller's struct data.  This works because the caller
+              // stores the struct to the stack before calling the stub,
+              // and the stub runs synchronously.
+              ptrAlloca.getRes().replaceAllUsesWith(mlir::Value(arg));
+              store.erase();
+              ptrAlloca.erase();
+              break;
+            }
+          }
+        });
+
+        // Phase 2: Transform call/invoke sites.
+        // For each struct-valued argument that the callee now expects as a
+        // pointer (byval), store to an alloca and pass the pointer.
+        // For sret returns, prepend an alloca and load after the call.
+        //
+        // Walk all operations generically to handle both CallOp and
+        // InvokeOp.  Use getArgOperandsMutable() for in-place updates
+        // where possible; rebuild the op only for sret changes.
+        SmallVector<mlir::Operation *> callOpsToFix;
+        module.walk([&](mlir::Operation *op) {
+          if (mlir::isa<mlir::LLVM::CallOp, mlir::LLVM::InvokeOp>(op))
+            callOpsToFix.push_back(op);
+        });
+
+        for (mlir::Operation *op : callOpsToFix) {
+          std::optional<llvm::StringRef> calleeName;
+          mlir::OperandRange callArgs = op->getOperands();
+          unsigned numResults = op->getNumResults();
+
+          if (auto call = mlir::dyn_cast<mlir::LLVM::CallOp>(op)) {
+            calleeName = call.getCallee();
+            callArgs = call.getArgOperands();
+          } else if (auto invoke =
+                         mlir::dyn_cast<mlir::LLVM::InvokeOp>(op)) {
+            calleeName = invoke.getCallee();
+            callArgs = invoke.getCalleeOperands();
+          }
+
+          mlir::LLVM::LLVMFuncOp calleeFn;
+          if (calleeName)
+            calleeFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(
+                *calleeName);
+
+          // For indirect calls (no calleeFn), check if the result is a
+          // large struct.  Phase 1 sret-ifies ALL functions returning
+          // large structs, so indirect calls through vtables must also
+          // use sret to match the callee's actual convention.
+          bool indirectSret = false;
+          mlir::Type indirectSretTy;
+          if (!calleeFn && numResults > 0) {
+            if (auto structTy =
+                    mlir::dyn_cast<mlir::LLVM::LLVMStructType>(
+                        op->getResult(0).getType())) {
+              unsigned sizeBytes =
+                  llvm::divideCeil(dl.getTypeSizeInBits(structTy), 8);
+              if (sizeBytes > kMaxDirectBytes) {
+                indirectSret = true;
+                indirectSretTy = structTy;
+              }
+            }
+          }
+          // For indirect calls, also check if any arg is a large struct
+          // that needs to be passed as a pointer (matching Phase 1's
+          // conversion of function signatures).
+          bool indirectByval = false;
+          if (!calleeFn && !indirectSret) {
+            for (unsigned i = 0; i < callArgs.size(); ++i) {
+              if (auto structTy =
+                      mlir::dyn_cast<mlir::LLVM::LLVMStructType>(
+                          callArgs[i].getType())) {
+                unsigned sizeBytes =
+                    llvm::divideCeil(dl.getTypeSizeInBits(structTy), 8);
+                if (sizeBytes > kMaxDirectBytes) {
+                  indirectByval = true;
+                  break;
+                }
+              }
+            }
+          }
+          if (!calleeFn && !indirectSret && !indirectByval)
+            continue;
+
+          mlir::LLVM::LLVMFunctionType calleeTy;
+          unsigned numCallArgs = callArgs.size();
+          unsigned numParams;
+
+          if (calleeFn) {
+            calleeTy = calleeFn.getFunctionType();
+            numParams = calleeTy.getNumParams();
+          } else {
+            numParams = numCallArgs;
+          }
+
+          // Detect sret: direct call where callee has sret attr, or
+          // indirect call where result is a large struct.
+          bool hasSret = indirectSret;
+          if (!hasSret && calleeFn && numParams == numCallArgs + 1)
+            hasSret = calleeFn.getArgAttr(
+                0, mlir::LLVM::LLVMDialect::getStructRetAttrName()) !=
+                      nullptr;
+          unsigned argOffset = hasSret ? 1 : 0;
+
+          // Check if any arg needs byval lowering.
+          bool needsByval = indirectByval;
+          if (!needsByval) {
+            for (unsigned i = 0; i < numCallArgs; ++i) {
+              unsigned paramIdx = i + argOffset;
+              if (paramIdx >= numParams)
+                break;
+              if (calleeTy &&
+                  mlir::isa<mlir::LLVM::LLVMStructType>(
+                      callArgs[i].getType()) &&
+                  mlir::isa<mlir::LLVM::LLVMPointerType>(
+                      calleeTy.getParamType(paramIdx))) {
+                needsByval = true;
+                break;
+              }
+            }
+          }
+
+          if (!hasSret && !needsByval)
+            continue;
+
+          auto parentFn =
+              op->getParentOfType<mlir::LLVM::LLVMFuncOp>();
+          if (!parentFn)
+            continue;
+          mlir::Block &parentEntry = parentFn.getBody().front();
+
+          mlir::OpBuilder allocaBuilder(ctx);
+          allocaBuilder.setInsertionPointToStart(&parentEntry);
+          auto i64Ty = mlir::IntegerType::get(ctx, 64);
+          auto one = mlir::LLVM::ConstantOp::create(
+              allocaBuilder, op->getLoc(), i64Ty,
+              allocaBuilder.getI64IntegerAttr(1));
+
+          // Fix byval args in-place: store struct to alloca, replace
+          // operand with pointer.
+          for (unsigned i = 0; i < numCallArgs; ++i) {
+            unsigned paramIdx = i + argOffset;
+            if (paramIdx >= numParams)
+              break;
+
+            auto structTy = mlir::dyn_cast<mlir::LLVM::LLVMStructType>(
+                callArgs[i].getType());
+            if (!structTy)
+              continue;
+            // For direct calls: check callee expects ptr.
+            // For indirect calls: check struct is large (>threshold).
+            if (calleeTy) {
+              if (!mlir::isa<mlir::LLVM::LLVMPointerType>(
+                      calleeTy.getParamType(paramIdx)))
+                continue;
+            } else {
+              unsigned sizeBytes =
+                  llvm::divideCeil(dl.getTypeSizeInBits(structTy), 8);
+              if (sizeBytes <= kMaxDirectBytes)
+                continue;
+            }
+
+            unsigned align = dl.getTypeABIAlignment(structTy);
+
+            // If the struct value was loaded from an alloca, pass the
+            // source alloca directly instead of creating a new one.
+            // This avoids the bitwise copy that corrupts non-trivially-
+            // movable types (std::vector, std::string SSO).
+            mlir::Value argPtr;
+            if (auto load =
+                    callArgs[i].getDefiningOp<mlir::LLVM::LoadOp>()) {
+              argPtr = load.getAddr();
+            }
+            if (!argPtr) {
+              argPtr = mlir::LLVM::AllocaOp::create(
+                  allocaBuilder, op->getLoc(), ptrTy, structTy, one,
+                  align);
+              mlir::OpBuilder storeBuilder(op);
+              mlir::LLVM::StoreOp::create(storeBuilder, op->getLoc(),
+                                          callArgs[i], argPtr, align);
+            }
+
+            // Replace the operand in-place.
+            if (auto call = mlir::dyn_cast<mlir::LLVM::CallOp>(op))
+              call.getArgOperandsMutable().slice(i, 1).assign(argPtr);
+            else if (auto invoke =
+                         mlir::dyn_cast<mlir::LLVM::InvokeOp>(op))
+              invoke.getCalleeOperandsMutable().slice(i, 1).assign(
+                  argPtr);
+          }
+
+          // Handle sret: we need to prepend an alloca operand and change
+          // the result type.  This requires rebuilding the op.
+          if (hasSret && numResults > 0) {
+            mlir::Type sretTy = indirectSret
+                ? indirectSretTy
+                : mlir::cast<mlir::TypeAttr>(
+                      calleeFn.getArgAttr(
+                          0,
+                          mlir::LLVM::LLVMDialect::getStructRetAttrName()))
+                      .getValue();
+            unsigned sretAlign = dl.getTypeABIAlignment(sretTy);
+
+            // Try to find the destination alloca: if the call result is
+            // only used in a single store to an alloca, use that alloca
+            // as the sret pointer directly (avoids bitwise struct copy
+            // that breaks self-referential types like std::string SSO).
+            mlir::Value sretPtr;
+            // For both CallOp and InvokeOp: find a store use and
+            // use its destination as the sret pointer.  This avoids
+            // the bitwise copy that breaks self-referential types
+            // (std::string SSO).  Even if there are other uses, the
+            // sret alloca will hold the correct value and they can
+            // load from it.
+            mlir::LLVM::StoreOp destStore;
+            if (numResults > 0) {
+              mlir::Value result;
+              if (auto call = mlir::dyn_cast<mlir::LLVM::CallOp>(op))
+                result = call.getResult();
+              else if (auto invoke =
+                           mlir::dyn_cast<mlir::LLVM::InvokeOp>(op))
+                result = invoke.getResult();
+              if (result) {
+                for (auto *user : result.getUsers()) {
+                  if (auto store =
+                          mlir::dyn_cast<mlir::LLVM::StoreOp>(user)) {
+                    sretPtr = store.getAddr();
+                    destStore = store;
+                    break;
+                  }
+                }
+              }
+            }
+            if (!sretPtr) {
+              sretPtr = mlir::LLVM::AllocaOp::create(
+                  allocaBuilder, op->getLoc(), ptrTy, sretTy, one,
+                  sretAlign);
+            }
+
+            mlir::OpBuilder b(op);
+            SmallVector<mlir::Value> newOperands;
+            newOperands.push_back(sretPtr);
+
+            if (auto call = mlir::dyn_cast<mlir::LLVM::CallOp>(op)) {
+              newOperands.append(call.getArgOperands().begin(),
+                                call.getArgOperands().end());
+              mlir::LLVM::CallOp newCall;
+              if (calleeName) {
+                newCall = mlir::LLVM::CallOp::create(
+                    b, call.getLoc(), mlir::TypeRange{}, *calleeName,
+                    newOperands);
+              } else {
+                // Indirect call: first operand is the function pointer.
+                // Build new type: add sret ptr param, change return to
+                // void.
+                SmallVector<mlir::Value> indirectOps;
+                indirectOps.push_back(call.getOperands()[0]); // fn ptr
+                indirectOps.append(newOperands.begin(),
+                                   newOperands.end());
+                auto oldFnTy = call.getCalleeFunctionType();
+                SmallVector<mlir::Type> newParams;
+                newParams.push_back(ptrTy); // sret
+                newParams.append(oldFnTy.getParams().begin(),
+                                  oldFnTy.getParams().end());
+                auto newFnTy = mlir::LLVM::LLVMFunctionType::get(
+                    mlir::LLVM::LLVMVoidType::get(ctx), newParams,
+                    oldFnTy.isVarArg());
+                newCall = mlir::LLVM::CallOp::create(
+                    b, call.getLoc(), newFnTy,
+                    mlir::ValueRange(indirectOps));
+              }
+              if (auto me = call.getMemoryEffectsAttr())
+                newCall.setMemoryEffectsAttr(me);
+
+              // If we used a dest alloca as sret, erase the store
+              // (value is already in the right place).
+              if (destStore)
+                destStore.erase();
+              // Replace any remaining uses with a load from sretPtr.
+              if (!call.getResult().use_empty()) {
+                auto load = mlir::LLVM::LoadOp::create(
+                    b, call.getLoc(), sretTy, sretPtr, sretAlign);
+                call.getResult().replaceAllUsesWith(load);
+              }
+              call.erase();
+            } else if (auto invoke =
+                           mlir::dyn_cast<mlir::LLVM::InvokeOp>(op)) {
+              newOperands.append(invoke.getCalleeOperands().begin(),
+                                invoke.getCalleeOperands().end());
+              if (calleeName) {
+                auto calleeRef = mlir::FlatSymbolRefAttr::get(
+                    ctx, *calleeName);
+                auto newInvoke = mlir::LLVM::InvokeOp::create(
+                    b, invoke.getLoc(), mlir::TypeRange{}, calleeRef,
+                    newOperands, invoke.getNormalDest(),
+                    invoke.getNormalDestOperands(),
+                    invoke.getUnwindDest(),
+                    invoke.getUnwindDestOperands());
+                (void)newInvoke;
+              } else {
+                // Indirect invoke: first callee operand is fn ptr.
+                // Build new operands: fn_ptr, sret, orig_args.
+                SmallVector<mlir::Value> indirectOps;
+                indirectOps.push_back(
+                    invoke.getCalleeOperands()[0]); // fn ptr
+                indirectOps.append(newOperands.begin(),
+                                   newOperands.end());
+                auto oldFnTy = invoke.getCalleeFunctionType();
+                SmallVector<mlir::Type> newParams;
+                newParams.push_back(ptrTy); // sret
+                newParams.append(oldFnTy.getParams().begin(),
+                                  oldFnTy.getParams().end());
+                auto newFnTy = mlir::LLVM::LLVMFunctionType::get(
+                    mlir::LLVM::LLVMVoidType::get(ctx), newParams,
+                    oldFnTy.isVarArg());
+                // Use the full property-based create.
+                auto newInvoke = b.create<mlir::LLVM::InvokeOp>(
+                    invoke.getLoc(),
+                    /*result=*/mlir::Type{},
+                    /*var_callee_type=*/mlir::TypeAttr{},
+                    /*callee=*/mlir::FlatSymbolRefAttr{},
+                    /*callee_operands=*/indirectOps,
+                    /*arg_attrs=*/mlir::ArrayAttr{},
+                    /*res_attrs=*/mlir::ArrayAttr{},
+                    /*normalDestOperands=*/
+                        invoke.getNormalDestOperands(),
+                    /*unwindDestOperands=*/
+                        invoke.getUnwindDestOperands(),
+                    /*branch_weights=*/mlir::DenseI32ArrayAttr{},
+                    /*CConv=*/mlir::LLVM::CConvAttr::get(
+                        ctx, mlir::LLVM::CConv::C),
+                    /*op_bundle_operands=*/
+                        llvm::ArrayRef<mlir::ValueRange>{},
+                    /*op_bundle_tags=*/mlir::ArrayAttr{},
+                    /*normalDest=*/invoke.getNormalDest(),
+                    /*unwindDest=*/invoke.getUnwindDest());
+                (void)newInvoke;
+              }
+
+              // If we used a dest alloca as sret, erase the store.
+              if (destStore)
+                destStore.erase();
+              // Replace remaining uses with a load from sretPtr in
+              // the normal dest block.
+              if (!invoke.getResult().use_empty()) {
+                mlir::Block *normalDest = invoke.getNormalDest();
+                mlir::OpBuilder normalBuilder(ctx);
+                normalBuilder.setInsertionPointToStart(normalDest);
+                auto load = mlir::LLVM::LoadOp::create(
+                    normalBuilder, invoke.getLoc(), sretTy, sretPtr,
+                    sretAlign);
+                invoke.getResult().replaceAllUsesWith(load);
+              }
+              invoke.erase();
+            }
+          }
+        }
+
+        // Phase 3: Coerce small struct parameters in external function
+        // declarations.  CIR declares external functions with struct types
+        // as-is (e.g. %struct.dim3), but the x86-64 SysV ABI decomposes
+        // small structs into register-sized integers.  External libraries
+        // (like libamdhip64) use the decomposed form, so we must coerce
+        // both the declaration and call sites to match.
+        //
+        // Example: __hipPushCallConfiguration(dim3, dim3, i64, ptr) with
+        //   dim3 = {i32, i32, i32} (12 bytes) → coerced to (i64, i32)
+        //   becomes __hipPushCallConfiguration(i64, i32, i64, i32, i64, ptr)
+        {
+          auto i64Ty = mlir::IntegerType::get(ctx, 64);
+          auto i32Ty = mlir::IntegerType::get(ctx, 32);
+
+          // Compute the x86-64 SysV coercion type for a struct ≤ 16 bytes.
+          // Splits into 8-byte eightbytes, each becoming an integer.
+          auto computeCoercion = [&](mlir::LLVM::LLVMStructType structTy)
+              -> std::optional<SmallVector<mlir::Type>> {
+            unsigned sizeBytes =
+                llvm::divideCeil(dl.getTypeSizeInBits(structTy), 8);
+            if (sizeBytes == 0 || sizeBytes > kMaxDirectBytes)
+              return std::nullopt;
+            // Only coerce all-integer structs (no floats/vectors).
+            for (auto elemTy : structTy.getBody()) {
+              if (!mlir::isa<mlir::IntegerType>(elemTy) &&
+                  !mlir::isa<mlir::LLVM::LLVMPointerType>(elemTy))
+                return std::nullopt;
+            }
+            SmallVector<mlir::Type> coerced;
+            if (sizeBytes > 8) {
+              coerced.push_back(i64Ty);
+              unsigned rem = sizeBytes - 8;
+              coerced.push_back(
+                  mlir::IntegerType::get(ctx, rem * 8));
+            } else {
+              coerced.push_back(
+                  mlir::IntegerType::get(ctx, sizeBytes * 8));
+            }
+            return coerced;
+          };
+
+          // Only coerce external functions from the HIP/CUDA runtime that
+          // take struct parameters by value.  CIR-compiled definitions use
+          // the same struct convention, so coercing all extern declarations
+          // would break tests and internal calls.
+          SmallVector<mlir::LLVM::LLVMFuncOp> externalFns;
+          module.walk([&](mlir::LLVM::LLVMFuncOp fn) {
+            if (!fn.isExternal())
+              return;
+            llvm::StringRef name = fn.getName();
+            if (name.starts_with("__hipPushCallConfiguration") ||
+                name.starts_with("__hipPopCallConfiguration") ||
+                name.starts_with("__cudaPushCallConfiguration") ||
+                name.starts_with("__cudaPopCallConfiguration"))
+              externalFns.push_back(fn);
+          });
+
+          for (auto fn : externalFns) {
+            if (fn.getCConv() != mlir::LLVM::CConv::C)
+              continue;
+            auto fnTy = fn.getFunctionType();
+            bool changed = false;
+            SmallVector<mlir::Type> newParams;
+            // Map from original param index to coerced param indices.
+            SmallVector<std::pair<unsigned, unsigned>> coercionMap;
+
+            for (unsigned i = 0; i < fnTy.getNumParams(); ++i) {
+              auto structTy =
+                  mlir::dyn_cast<mlir::LLVM::LLVMStructType>(
+                      fnTy.getParams()[i]);
+              if (!structTy) {
+                coercionMap.push_back({newParams.size(), 0});
+                newParams.push_back(fnTy.getParams()[i]);
+                continue;
+              }
+              auto coerced = computeCoercion(structTy);
+              if (!coerced) {
+                coercionMap.push_back({newParams.size(), 0});
+                newParams.push_back(fnTy.getParams()[i]);
+                continue;
+              }
+              coercionMap.push_back(
+                  {newParams.size(), coerced->size()});
+              newParams.append(coerced->begin(), coerced->end());
+              changed = true;
+            }
+            if (!changed)
+              continue;
+
+            // Also coerce the return type if it's a small struct.
+            mlir::Type newRetTy = fnTy.getReturnType();
+            bool retCoerced = false;
+            SmallVector<mlir::Type> retCoercion;
+            if (auto retStructTy =
+                    mlir::dyn_cast<mlir::LLVM::LLVMStructType>(newRetTy)) {
+              if (auto c = computeCoercion(retStructTy)) {
+                retCoercion = *c;
+                if (retCoercion.size() == 1)
+                  newRetTy = retCoercion[0];
+                else
+                  newRetTy = mlir::LLVM::LLVMStructType::getLiteral(
+                      ctx, retCoercion);
+                retCoerced = true;
+              }
+            }
+
+            auto newFnTy = mlir::LLVM::LLVMFunctionType::get(
+                newRetTy, newParams, fnTy.isVarArg());
+            fn.setFunctionType(newFnTy);
+
+            // Update arg attrs to match the new parameter count.
+            if (auto oldArgAttrs = fn.getArgAttrsAttr()) {
+              SmallVector<mlir::Attribute> newAttrs;
+              for (unsigned i = 0; i < fnTy.getNumParams(); ++i) {
+                auto origAttr = (i < oldArgAttrs.size())
+                    ? oldArgAttrs[i]
+                    : mlir::DictionaryAttr::get(ctx);
+                if (coercionMap[i].second > 0) {
+                  for (unsigned k = 0; k < coercionMap[i].second; ++k)
+                    newAttrs.push_back(mlir::DictionaryAttr::get(ctx));
+                } else {
+                  newAttrs.push_back(origAttr);
+                }
+              }
+              fn.setArgAttrsAttr(mlir::ArrayAttr::get(ctx, newAttrs));
+            }
+
+            // Now fix all call sites.
+            auto fnName = fn.getName();
+            SmallVector<mlir::LLVM::CallOp> calls;
+            module.walk([&](mlir::LLVM::CallOp call) {
+              if (call.getCallee() == fnName)
+                calls.push_back(call);
+            });
+
+            // Also coerce invoke sites (exception-aware calls from the
+            // device stub path's <<<>>> lowering).
+            SmallVector<mlir::LLVM::InvokeOp> invokes;
+            module.walk([&](mlir::LLVM::InvokeOp inv) {
+              if (inv.getCallee() == fnName)
+                invokes.push_back(inv);
+            });
+
+            for (auto call : calls) {
+              mlir::OpBuilder b(call);
+              SmallVector<mlir::Value> newArgs;
+              auto args = call.getArgOperands();
+
+              auto parentFnOp =
+                  call->getParentOfType<mlir::LLVM::LLVMFuncOp>();
+              if (!parentFnOp)
+                continue;
+              mlir::Block &entry = parentFnOp.getBody().front();
+              mlir::OpBuilder allocB(ctx);
+              allocB.setInsertionPointToStart(&entry);
+              auto oneVal = mlir::LLVM::ConstantOp::create(
+                  allocB, call.getLoc(), i64Ty,
+                  allocB.getI64IntegerAttr(1));
+
+              for (unsigned i = 0; i < args.size(); ++i) {
+                if (i >= coercionMap.size() ||
+                    coercionMap[i].second == 0) {
+                  newArgs.push_back(args[i]);
+                  continue;
+                }
+                auto structTy =
+                    mlir::dyn_cast<mlir::LLVM::LLVMStructType>(
+                        args[i].getType());
+                if (!structTy) {
+                  newArgs.push_back(args[i]);
+                  continue;
+                }
+                unsigned coercedStart = coercionMap[i].first;
+                unsigned coercedCount = coercionMap[i].second;
+                unsigned align = dl.getTypeABIAlignment(structTy);
+                auto tmp = mlir::LLVM::AllocaOp::create(
+                    allocB, call.getLoc(), ptrTy, structTy, oneVal,
+                    align);
+                mlir::LLVM::StoreOp::create(
+                    b, call.getLoc(), args[i], tmp, align);
+                unsigned byteOffset = 0;
+                auto i8Ty = mlir::IntegerType::get(ctx, 8);
+                for (unsigned k = 0; k < coercedCount; ++k) {
+                  mlir::Value loadPtr = tmp;
+                  if (byteOffset > 0) {
+                    loadPtr = mlir::LLVM::GEPOp::create(
+                        b, call.getLoc(), ptrTy, i8Ty, tmp,
+                        llvm::ArrayRef<mlir::LLVM::GEPArg>{
+                            static_cast<int32_t>(byteOffset)});
+                  }
+                  auto val = mlir::LLVM::LoadOp::create(
+                      b, call.getLoc(),
+                      newParams[coercedStart + k], loadPtr,
+                      /*alignment=*/0);
+                  newArgs.push_back(val);
+                  byteOffset += llvm::divideCeil(
+                      dl.getTypeSizeInBits(
+                          newParams[coercedStart + k]), 8);
+                }
+              }
+
+              auto newCall = mlir::LLVM::CallOp::create(
+                  b, call.getLoc(), newFnTy.getReturnTypes(), fnName,
+                  newArgs);
+              if (call.getNumResults() > 0 && newCall.getNumResults() > 0) {
+                if (retCoerced) {
+                  unsigned retAlign = dl.getTypeABIAlignment(
+                      mlir::cast<mlir::LLVM::LLVMStructType>(
+                          fnTy.getReturnType()));
+                  auto retTmp = mlir::LLVM::AllocaOp::create(
+                      allocB, call.getLoc(), ptrTy,
+                      fnTy.getReturnType(), oneVal, retAlign);
+                  mlir::LLVM::StoreOp::create(
+                      b, call.getLoc(), newCall.getResult(), retTmp,
+                      retAlign);
+                  auto origRet = mlir::LLVM::LoadOp::create(
+                      b, call.getLoc(), fnTy.getReturnType(), retTmp,
+                      retAlign);
+                  call.getResult().replaceAllUsesWith(origRet);
+                } else {
+                  call.getResult().replaceAllUsesWith(
+                      newCall.getResult());
+                }
+              }
+              call.erase();
+            }
+
+            for (auto inv : invokes) {
+              mlir::OpBuilder b(inv);
+              SmallVector<mlir::Value> newArgs;
+              auto args = inv.getArgOperands();
+
+              auto parentFnOp =
+                  inv->getParentOfType<mlir::LLVM::LLVMFuncOp>();
+              if (!parentFnOp)
+                continue;
+              mlir::Block &entry = parentFnOp.getBody().front();
+              mlir::OpBuilder allocB(ctx);
+              allocB.setInsertionPointToStart(&entry);
+              auto oneVal = mlir::LLVM::ConstantOp::create(
+                  allocB, inv.getLoc(), i64Ty,
+                  allocB.getI64IntegerAttr(1));
+
+              for (unsigned i = 0; i < args.size(); ++i) {
+                if (i >= coercionMap.size() ||
+                    coercionMap[i].second == 0) {
+                  newArgs.push_back(args[i]);
+                  continue;
+                }
+                auto structTy =
+                    mlir::dyn_cast<mlir::LLVM::LLVMStructType>(
+                        args[i].getType());
+                if (!structTy) {
+                  newArgs.push_back(args[i]);
+                  continue;
+                }
+                unsigned coercedStart = coercionMap[i].first;
+                unsigned coercedCount = coercionMap[i].second;
+                unsigned align = dl.getTypeABIAlignment(structTy);
+                auto tmp = mlir::LLVM::AllocaOp::create(
+                    allocB, inv.getLoc(), ptrTy, structTy, oneVal,
+                    align);
+                mlir::LLVM::StoreOp::create(
+                    b, inv.getLoc(), args[i], tmp, align);
+                unsigned byteOffset = 0;
+                auto i8Ty = mlir::IntegerType::get(ctx, 8);
+                for (unsigned k = 0; k < coercedCount; ++k) {
+                  mlir::Value loadPtr = tmp;
+                  if (byteOffset > 0) {
+                    loadPtr = mlir::LLVM::GEPOp::create(
+                        b, inv.getLoc(), ptrTy, i8Ty, tmp,
+                        llvm::ArrayRef<mlir::LLVM::GEPArg>{
+                            static_cast<int32_t>(byteOffset)});
+                  }
+                  auto val = mlir::LLVM::LoadOp::create(
+                      b, inv.getLoc(),
+                      newParams[coercedStart + k], loadPtr,
+                      /*alignment=*/0);
+                  newArgs.push_back(val);
+                  byteOffset += llvm::divideCeil(
+                      dl.getTypeSizeInBits(
+                          newParams[coercedStart + k]), 8);
+                }
+              }
+
+              auto calleeAttr = mlir::FlatSymbolRefAttr::get(ctx, fnName);
+              auto newInv = mlir::LLVM::InvokeOp::create(
+                  b, inv.getLoc(), newFnTy.getReturnTypes(), calleeAttr,
+                  newArgs, inv.getNormalDest(),
+                  inv.getNormalDestOperands(), inv.getUnwindDest(),
+                  inv.getUnwindDestOperands());
+              if (inv.getNumResults() > 0 && newInv.getNumResults() > 0) {
+                inv.getResult().replaceAllUsesWith(newInv.getResult());
+              }
+              inv.erase();
+            }
+          }
+        }
+      }
+    }
+  }
 
   // Emit the llvm.global_ctors array.
   buildCtorDtorList(module, cir::CIRDialect::getGlobalCtorsAttrName(),
@@ -3929,8 +7862,15 @@ void ConvertCIRToLLVMPass::runOnOperation() {
 mlir::LogicalResult CIRToLLVMBrOpLowering::matchAndRewrite(
     cir::BrOp op, OpAdaptor adaptor,
     mlir::ConversionPatternRewriter &rewriter) const {
-  rewriter.replaceOpWithNewOp<mlir::LLVM::BrOp>(op, adaptor.getOperands(),
-                                                op.getDest());
+  auto newOp = rewriter.replaceOpWithNewOp<mlir::LLVM::BrOp>(
+      op, adaptor.getOperands(), op.getDest());
+
+  // Convert CIR loop_hint to LLVM LoopAnnotationAttr.
+  if (auto hint = op->getAttrOfType<cir::LoopHintAttr>("loop_hint")) {
+    if (auto ann = convertLoopHint(hint, op->getContext()))
+      newOp.setLoopAnnotationAttr(ann);
+  }
+
   return mlir::LogicalResult::success();
 }
 
@@ -4288,7 +8228,8 @@ mlir::LogicalResult CIRToLLVMVTableGetVirtualFnAddrOpLowering::matchAndRewrite(
   mlir::Type targetType = getTypeConverter()->convertType(op.getType());
   auto eltType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
   llvm::SmallVector<mlir::LLVM::GEPArg> offsets =
-      llvm::SmallVector<mlir::LLVM::GEPArg>{op.getIndex()};
+      llvm::SmallVector<mlir::LLVM::GEPArg>{
+          static_cast<int32_t>(op.getIndex())};
   rewriter.replaceOpWithNewOp<mlir::LLVM::GEPOp>(
       op, targetType, eltType, adaptor.getVptr(), offsets,
       mlir::LLVM::GEPNoWrapFlags::inbounds);
@@ -5134,22 +9075,192 @@ std::unique_ptr<mlir::Pass> createConvertCIRToLLVMPass() {
   return std::make_unique<ConvertCIRToLLVMPass>();
 }
 
-void populateCIRToLLVMPasses(mlir::OpPassManager &pm) {
+void populateCIRToLLVMPasses(mlir::OpPassManager &pm, bool enableOffloadSplit,
+                             llvm::ArrayRef<std::string> offloadArchs,
+                             bool isDeviceCompilation,
+                             unsigned deviceOptLevel,
+                             const cir::CIROffloadConfig &offloadConfig) {
   mlir::populateCIRPreLoweringPasses(pm);
   pm.addPass(mlir::omp::createMarkDeclareTargetPass());
+  if (enableOffloadSplit) {
+    // Split unified offload.func / offload.kernel_launch ops into a host
+    // func.func module + a device gpu.module.  This must run after all
+    // CIR-to-CIR passes (which expect cir.func parents) and before the
+    // CIR-to-LLVM pass (which cannot handle offload.* ops).
+    //
+    // Flatten structured CIR control flow (cir.ternary, cir.if, cir.for, …)
+    // before the split so that gpu.func bodies contain only branch-based CFG
+    // ops.  ConvertCIRInGpuModulePass uses applyPartialConversion, which does
+    // not recurse into region-bearing structured ops like cir.ternary.
+    pm.addPass(mlir::createCIRFlattenCFGPass());
+    // Single-source optimization passes: these operate on cir.offload.* ops
+    // and need cross-visibility between host launch sites and device bodies.
+    pm.addPass(mlir::createOffloadTightenLaunchBoundsPass(
+        offloadConfig.tightenLaunchBounds));
+    pm.addPass(
+        mlir::createOffloadPropagateBlockShapePass(
+            offloadConfig.propagateBlockShape));
+    pm.addPass(
+        mlir::createOffloadPropagatePointerFactsPass(
+            offloadConfig.propagatePointerFacts));
+    pm.addPass(
+        mlir::createOffloadSpecializeScalarArgsPass(
+            offloadConfig.specializeScalarArgs));
+    pm.addPass(
+        mlir::createOffloadMultiversionDivisibilityPass(
+            offloadConfig.multiversionDivisibility));
+    pm.addPass(
+        mlir::createOffloadSpecializeSharedMemoryPass(
+            offloadConfig.specializeSharedMemory));
+    pm.addPass(
+        mlir::createOffloadPropagateGridCoveragePass(
+            offloadConfig.propagateGridCoverage));
+    pm.addPass(
+        mlir::createOffloadDeadArgEliminationPass(
+            offloadConfig.deadArgElimination));
+    // Convert cir.offload.* ops to GPU dialect. Runs after optimization
+    // passes (which need single-source visibility) and before SplitSingleSource.
+    pm.addPass(createConvertCIROffloadToGPUPass());
+    mlir::GpuSplitSingleSourcePassOptions splitOpts;
+    splitOpts.gpuModuleName = "offload_device_module";
+    splitOpts.deadKernelAction = offloadConfig.deadKernelAction;
+    pm.addPass(mlir::createGpuSplitSingleSourcePass(splitOpts));
+    // Note: cir.global device globals (shared, device, constant, managed) are
+    // emitted by CIRGen directly into the gpu.module and converted to
+    // llvm.mlir.global by CIRToLLVMGlobalOpLowering inside
+    // ConvertCIRInGpuModulePass's applyPartialConversion.
+    // Attach #rocdl.target attributes to gpu.modules.
+    //
+    // Single-source mode: the GpuSplitSingleSource pass produced one gpu.module
+    // named @offload_device_module.  We attach ALL targets to that one module;
+    // transformGpuModulesToBinaries compiles each independently.  Use an exact
+    // anchored regex ("^offload_device_module$") so we don't accidentally stamp
+    // targets on the per-arch modules used in two-pass mode.
+    //
+    // Two-pass mode: MergeOffloadModules produced per-arch gpu.modules named
+    // @offload_device_module_<arch>.  Stamp exactly one target per module.
+    //
+    // We emit both kinds of pass and let the regex filter determine which
+    // gpu.module each pass touches.  A module that doesn't match is silently
+    // skipped by GpuROCDLAttachTarget.
+    //
+    // (CUDA would substitute createGpuNVVMAttachTargetPass here.)
+    for (const std::string &arch : offloadArchs) {
+      // Two-pass: stamp target on @offload_device_module_<arch> only.
+      {
+        mlir::GpuROCDLAttachTargetOptions rocdlOpts;
+        rocdlOpts.chip = arch;
+        rocdlOpts.triple = "amdgcn-amd-amdhsa";
+        rocdlOpts.abiVersion = "600";
+        rocdlOpts.optLevel = deviceOptLevel;
+        rocdlOpts.unsafeMathFlag = offloadConfig.unsafeMathOpt;
+        rocdlOpts.finiteOnlyFlag = offloadConfig.finiteOnly;
+        rocdlOpts.correctSqrtFlag = offloadConfig.correctSqrt;
+        rocdlOpts.moduleMatcher = "^offload_device_module_" + arch + "$";
+        pm.addPass(mlir::createGpuROCDLAttachTarget(rocdlOpts));
+      }
+      // Single-source: stamp target on @offload_device_module (exact match).
+      {
+        mlir::GpuROCDLAttachTargetOptions rocdlOpts;
+        rocdlOpts.chip = arch;
+        rocdlOpts.triple = "amdgcn-amd-amdhsa";
+        rocdlOpts.abiVersion = "600";
+        rocdlOpts.optLevel = deviceOptLevel;
+        rocdlOpts.unsafeMathFlag = offloadConfig.unsafeMathOpt;
+        rocdlOpts.finiteOnlyFlag = offloadConfig.finiteOnly;
+        rocdlOpts.correctSqrtFlag = offloadConfig.correctSqrt;
+        rocdlOpts.moduleMatcher = "^offload_device_module$";
+        pm.addPass(mlir::createGpuROCDLAttachTarget(rocdlOpts));
+      }
+    }
+    // Lower CIR ops inside gpu.func bodies to LLVM dialect so they are ready
+    // for the subsequent GPU→ROCDL and binary compilation passes (Step 3.1).
+    // This pass operates on gpu.GPUModuleOp, so nest it under the module.
+    pm.nest<mlir::gpu::GPUModuleOp>().addPass(
+        createConvertCIRInGpuModulePass());
+    if (!isDeviceCompilation) {
+      // Host cc1: compile the device-side gpu.module to a HSACo binary and
+      // embed it as a gpu.BinaryOp.  On a device cc1 (triple=amdgcn), the
+      // entire module IS the device code — skip binary compilation and let
+      // ConvertCIRToLLVMPass emit LLVM IR directly for the GPU.
+      pm.nest<mlir::gpu::GPUModuleOp>().addPass(
+          mlir::createConvertGpuOpsToROCDLOps());
+      // Fold constant operations so that constexpr arguments to
+      // __asm("llvm.*") intrinsics survive as immediates (required by the
+      // LLVM verifier for immarg parameters).
+      // Note: we deliberately skip mlir::createMem2Reg() here because
+      // MLIR's Mem2Reg mishandles llvm.memcpy through addrspacecast chains
+      // (the memcpy dst/src is a flat ptr from addrspacecast, while the slot
+      // ptr is the AS5 alloca — Mem2Reg sees through the cast to find the
+      // memcpy but then memcpyStoresTo/loadsFrom compare op.getDst() ==
+      // slot.ptr which fails, causing incorrect promotion).
+      // LLVM's SROA in the O3 pipeline handles this correctly.
+      pm.nest<mlir::gpu::GPUModuleOp>().addPass(mlir::createCanonicalizerPass());
+      // CIRGpuModuleToBinaryPass: compiles targeted gpu.module ops to binaries;
+      // silently erases gpu.module ops without a target (no --offload-arch).
+      pm.addPass(createCIRGpuModuleToBinaryPass());
+    }
+  }
   pm.addPass(createConvertCIRToLLVMPass());
 }
 
-std::unique_ptr<llvm::Module>
-lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
-                             StringRef mlirSaveTempsOutFile,
-                             llvm::vfs::FileSystem *fs) {
+std::unique_ptr<llvm::Module> lowerDirectlyFromCIRToLLVMIR(
+    mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
+    StringRef mlirSaveTempsOutFile, llvm::vfs::FileSystem *fs,
+    bool enableOffloadSplit, llvm::ArrayRef<std::string> offloadArchs,
+    bool isDeviceCompilation, unsigned deviceOptLevel,
+    const cir::CIROffloadConfig &offloadConfig) {
   llvm::TimeTraceScope scope("lower from CIR to LLVM directly");
 
   mlir::MLIRContext *mlirCtx = mlirModule.getContext();
 
+  // ConvertGpuOpsToROCDLOps iterates all loaded dialects and requires that
+  // any dialect that has promised ConvertToLLVMPatternInterface has the
+  // extension registered.  Register all common conversion interfaces so that
+  // any dialect loaded transitively by the CIR/offload pipeline is covered.
+  // GPU/ROCDL dialect translations must also be registered before the pass
+  // manager runs because transformGpuModulesToBinaries (inside
+  // CIRGpuModuleToBinaryPass) performs an internal MLIR→LLVM IR translation
+  // to compile the device code to a binary blob.
+  if (enableOffloadSplit) {
+    mlir::DialectRegistry registry;
+    // ROCDL TargetAttrInterface: required by GpuModuleToBinaryPass to serialize
+    // the gpu.module to a device binary via the AMDGPU backend.
+    mlir::ROCDL::registerROCDLTargetInterfaceExternalModels(registry);
+    mlir::arith::registerConvertArithToLLVMInterface(registry);
+    mlir::cf::registerConvertControlFlowToLLVMInterface(registry);
+    mlir::registerConvertFuncToLLVMInterface(registry);
+    mlir::index::registerConvertIndexToLLVMInterface(registry);
+    mlir::registerConvertMathToLLVMInterface(registry);
+    mlir::registerConvertMemRefToLLVMInterface(registry);
+    mlir::registerConvertOpenMPToLLVMInterface(registry);
+    mlir::ub::registerConvertUBToLLVMInterface(registry);
+    mlir::vector::registerConvertVectorToLLVMInterface(registry);
+    mlirCtx->appendDialectRegistry(registry);
+
+    // Register dialect translations needed by transformGpuModulesToBinaries
+    // (which runs the AMDGPU backend internally to produce the HSACo binary).
+    mlir::registerBuiltinDialectTranslation(*mlirCtx);
+    mlir::registerLLVMDialectTranslation(*mlirCtx);
+    mlir::registerGPUDialectTranslation(*mlirCtx);
+    mlir::registerROCDLDialectTranslation(*mlirCtx);
+    // Register SelectObjectAttr's OffloadingLLVMTranslationAttrInterface so
+    // that the gpu.BinaryOp offloading handler can be resolved during both
+    // transformGpuModulesToBinaries and the later translateModuleToLLVMIR.
+    {
+      mlir::DialectRegistry offloadRegistry;
+      mlir::gpu::registerOffloadingLLVMTranslationInterfaceExternalModels(
+          offloadRegistry);
+      mlirCtx->appendDialectRegistry(offloadRegistry);
+    }
+  }
+
   mlir::PassManager pm(mlirCtx);
-  populateCIRToLLVMPasses(pm);
+  if (enableOffloadSplit)
+    pm.enableVerifier(false);
+  populateCIRToLLVMPasses(pm, enableOffloadSplit, offloadArchs,
+                          isDeviceCompilation, deviceOptLevel,
+                          offloadConfig);
 
   (void)mlir::applyPassManagerCLOptions(pm);
 
@@ -5166,10 +9277,55 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
       mlirModule->print(out);
   }
 
+  // Erase dead arith/cast ops left from kernel launch dimension computation
+  // (e.g. index_castui and unrealized_conversion_cast that become dead after
+  // gpu.launch_func is translated to mgpuLaunchKernel calls).
+  if (enableOffloadSplit) {
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      SmallVector<mlir::Operation *> dead;
+      mlirModule.walk([&](mlir::Operation *op) {
+        if (op->use_empty() &&
+            (mlir::isa<mlir::UnrealizedConversionCastOp>(op) ||
+             mlir::isa<mlir::arith::IndexCastUIOp>(op)))
+          dead.push_back(op);
+      });
+      for (mlir::Operation *op : dead) {
+        op->erase();
+        changed = true;
+      }
+    }
+  }
+
   mlir::registerBuiltinDialectTranslation(*mlirCtx);
   mlir::registerLLVMDialectTranslation(*mlirCtx);
   mlir::registerOpenMPDialectTranslation(*mlirCtx);
   mlir::registerCIRDialectTranslation(*mlirCtx);
+  if (enableOffloadSplit) {
+    // GPU dialect translation: gpu.BinaryOp → embedded device binary global +
+    // module ctor/dtor; gpu.LaunchFuncOp → mgpuLaunchKernel call.
+    // The mgpu* runtime wrappers delegate to HIP APIs
+    // (RocmRuntimeWrappers.cpp).
+    mlir::registerGPUDialectTranslation(*mlirCtx);
+    mlir::registerROCDLDialectTranslation(*mlirCtx);
+  }
+
+  // Fix function declaration linkage: LLVM requires declarations (external
+  // globals) to have external or external_weak linkage.  CIR may produce
+  // llvm.func declarations with linkonce_odr, available_externally, etc. for
+  // template instantiations and inline functions whose bodies were discarded.
+  // Skip kernel stubs (cu.kernel_name attr): they are intentionally body-less
+  // declarations whose bodies are filled later by SelectObjectAttr; their
+  // original linkage (e.g. internal for static __global__) must be preserved.
+  mlirModule.walk([](mlir::LLVM::LLVMFuncOp fn) {
+    if (fn.isExternal() &&
+        fn.getLinkage() != mlir::LLVM::Linkage::External &&
+        fn.getLinkage() != mlir::LLVM::Linkage::ExternWeak &&
+        !fn->hasAttr("cu.kernel_name")) {
+      fn.setLinkage(mlir::LLVM::Linkage::External);
+    }
+  });
 
   llvm::TimeTraceScope translateScope("translateModuleToLLVMIR");
 

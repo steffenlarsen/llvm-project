@@ -1,0 +1,157 @@
+// Tests for CIR offload SpecializeSharedMemory pass.
+//
+// When all launch sites agree on the same dynamic shared memory size,
+// the pass sets static_shared_memory_bytes on the kernel.
+
+// RUN: cir-opt --split-input-file --cir-offload-specialize-shared-memory %s \
+// RUN:   | FileCheck %s
+
+!u32i = !cir.int<u, 32>
+!u64i = !cir.int<u, 64>
+
+//===----------------------------------------------------------------------===//
+// 1. Single launch with constant shmem → attribute set, shmem cleared.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: cir.offload.kernel_launch @dev::@k$max256
+// CHECK-NOT:   shmem(
+// CHECK:       cir.offload.func @k$max256
+// CHECK-SAME:  static_shared_memory_bytes = 4096 : i32
+
+module {
+  cir.func @host() {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %shmem = cir.const #cir.int<4096> : !u64i
+
+    cir.offload.kernel_launch @dev::@k$max256
+        grid(%c1, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        shmem(%shmem : !u64i)
+        args()
+    cir.return
+  }
+
+  cir.offload.module @dev {
+    cir.offload.func @k$max256() kernel
+        attributes {known_block_size = array<i32: 256, 1, 1>} {
+      %p = cir.offload.dynamic_shared_memory : !cir.ptr<!cir.float>
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!u64i = !cir.int<u, 64>
+
+//===----------------------------------------------------------------------===//
+// 2. Two launches with same shmem size → attribute set.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: cir.offload.func @k_two$max256
+// CHECK-SAME:  static_shared_memory_bytes = 2048 : i32
+
+module {
+  cir.func @host() {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %shmem = cir.const #cir.int<2048> : !u64i
+
+    cir.offload.kernel_launch @dev::@k_two$max256
+        grid(%c1, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        shmem(%shmem : !u64i)
+        args()
+    cir.offload.kernel_launch @dev::@k_two$max256
+        grid(%c1, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        shmem(%shmem : !u64i)
+        args()
+    cir.return
+  }
+
+  cir.offload.module @dev {
+    cir.offload.func @k_two$max256() kernel
+        attributes {known_block_size = array<i32: 256, 1, 1>} {
+      %p = cir.offload.dynamic_shared_memory : !cir.ptr<!cir.float>
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!u64i = !cir.int<u, 64>
+
+//===----------------------------------------------------------------------===//
+// 3. Two launches with DIFFERENT shmem sizes (default threshold=1) → no change.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: cir.offload.func @k_diff$max256
+// CHECK-NOT:   static_shared_memory_bytes
+
+module {
+  cir.func @host() {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %shmem1 = cir.const #cir.int<1024> : !u64i
+    %shmem2 = cir.const #cir.int<2048> : !u64i
+
+    cir.offload.kernel_launch @dev::@k_diff$max256
+        grid(%c1, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        shmem(%shmem1 : !u64i)
+        args()
+    cir.offload.kernel_launch @dev::@k_diff$max256
+        grid(%c1, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        shmem(%shmem2 : !u64i)
+        args()
+    cir.return
+  }
+
+  cir.offload.module @dev {
+    cir.offload.func @k_diff$max256() kernel
+        attributes {known_block_size = array<i32: 256, 1, 1>} {
+      %p = cir.offload.dynamic_shared_memory : !cir.ptr<!cir.float>
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!u64i = !cir.int<u, 64>
+
+//===----------------------------------------------------------------------===//
+// 4. No dynamic shared memory in kernel body → no change.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: cir.offload.func @k_noshmem$max256
+// CHECK-NOT:   static_shared_memory_bytes
+
+module {
+  cir.func @host() {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %shmem = cir.const #cir.int<4096> : !u64i
+
+    cir.offload.kernel_launch @dev::@k_noshmem$max256
+        grid(%c1, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        shmem(%shmem : !u64i)
+        args()
+    cir.return
+  }
+
+  cir.offload.module @dev {
+    cir.offload.func @k_noshmem$max256() kernel
+        attributes {known_block_size = array<i32: 256, 1, 1>} {
+      cir.return
+    }
+  }
+}

@@ -30,11 +30,11 @@ int use_in_if(Foo x) {
 }
 
 // CIR-LABEL: cir.func{{.*}} @_Z9use_in_if3Foo
-// CIR:         %[[B_IF:.+]] = cir.const #true
-// CIR:         cir.if %[[B_IF]]
+// CIR:         cir.scope {
+// CIR:           %[[ONE:.+]] = cir.const #cir.int<1> : !s32i
+// CIR:           cir.store %[[ONE]]
 
 // LLVM-LABEL: define {{.*}}i32 @_Z9use_in_if3Foo
-// LLVM:         br i1 true,
 
 // OGCG-LABEL: define {{.*}}i32 @_Z9use_in_if3Foo
 

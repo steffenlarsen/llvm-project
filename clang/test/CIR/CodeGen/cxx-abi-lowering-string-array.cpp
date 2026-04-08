@@ -1,9 +1,9 @@
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -fclangir -emit-cir %s -o %t.cir
 // RUN: FileCheck --check-prefix=CIR --input-file=%t.cir %s
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -fclangir -emit-llvm %s -o %t-cir.ll
-// RUN: FileCheck --check-prefix=LLVM --input-file=%t-cir.ll %s
+// RUN: FileCheck --check-prefix=CIR-LLVM --input-file=%t-cir.ll %s
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -emit-llvm %s -o %t.ll
-// RUN: FileCheck --check-prefix=LLVM --input-file=%t.ll %s
+// RUN: FileCheck --check-prefix=OGCG --input-file=%t.ll %s
 
 // Regression test for a CXXABILowering crash when a record that requires
 // CXX-ABI lowering (because it contains a pointer-to-data-member field) also
@@ -26,4 +26,5 @@ const S *get() { return &g; }
 // CIR-SAME: #cir.const_array<"abc" : !cir.array<!s8i x 3>, trailing_zeros> : !cir.array<!s8i x 32>
 // CIR-SAME: }> : !rec_S
 
-// LLVM: @_ZL1g = internal constant %struct.S { i64 4, [32 x i8] c"abc\00{{(\\00)+}}" }
+// OGCG: @_ZL1g = internal constant %struct.S { i64 4, [32 x i8] c"abc\00{{(\\00)+}}" }
+// CIR-LLVM: @_ZL1g = internal constant %struct.S { i64 4, [32 x i8] c"abc\00{{(\\00)+}}" }

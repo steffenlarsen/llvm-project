@@ -1,0 +1,103 @@
+// Tests for CIR offload MultiversionDivisibility pass.
+//
+// The pass creates a fast clone with a divisibility assumption for kernels
+// whose scalar args are used as loop bounds, and redirects launches.
+
+// RUN: cir-opt --split-input-file --cir-offload-multiversion-divisibility %s \
+// RUN:   | FileCheck %s
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 1. Scalar int arg used as loop bound (feeds cir.cmp) -> fast clone created.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      cir.offload.kernel_launch @offload_device_module::@k_loop$div4
+// CHECK:      cir.offload.func @k_loop(
+// CHECK:      cir.offload.func @k_loop$div4(
+// CHECK-SAME: kernel
+// CHECK-SAME: divisibility.arg0 = 4 : i64
+
+module {
+  cir.func @host(%n: !u32i, %nval: !s32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_loop
+        grid(%n, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%nval : !s32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_loop(%n: !s32i) kernel {
+      %zero = "cir.const"() <{value = #cir.int<0> : !s32i}> : () -> !s32i
+      %cond = cir.cmp gt %n, %zero : !s32i
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 2. No loop bound usage -> no multiversioning.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      cir.offload.func @k_noloop(
+// CHECK-NOT:  $div4
+
+module {
+  cir.func @host(%n: !u32i, %nval: !s32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_noloop
+        grid(%n, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%nval : !s32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_noloop(%n: !s32i) kernel {
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 3. Pointer args are skipped (only integer scalars are eligible).
+//===----------------------------------------------------------------------===//
+
+// CHECK:      cir.offload.func @k_ptronly(
+// CHECK-NOT:  $div4
+
+module {
+  cir.func @host(%n: !u32i, %ptr: !cir.ptr<!cir.float>) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_ptronly
+        grid(%n, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%ptr : !cir.ptr<!cir.float>)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_ptronly(%a: !cir.ptr<!cir.float>) kernel {
+      cir.return
+    }
+  }
+}

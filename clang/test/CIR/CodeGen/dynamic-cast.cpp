@@ -135,9 +135,9 @@ void *ptr_cast_to_complete(Base *ptr) {
 // LLVM:   br i1 %[[IS_NOT_NULL]], label %[[NOT_NULL:.*]], label %[[NULL:.*]]
 // LLVM: [[NOT_NULL]]:
 // LLVM:   %[[VPTR:.*]] = load ptr, ptr %[[PTR]]
-// LLVM:   %[[BASE_OFFSET_PTR:.*]] = getelementptr i64, ptr %7, i64 -2
+// LLVM:   %[[BASE_OFFSET_PTR:.*]] = getelementptr inbounds i64, ptr %7, i64 -2
 // LLVM:   %[[BASE_OFFSET:.*]] = load i64, ptr %[[BASE_OFFSET_PTR]]
-// LLVM:   %[[RESULT:.*]] = getelementptr i8, ptr %[[PTR]], i64 %[[BASE_OFFSET]]
+// LLVM:   %[[RESULT:.*]] = getelementptr inbounds i8, ptr %[[PTR]], i64 %[[BASE_OFFSET]]
 // LLVM:   br label %[[DONE:.*]]
 // LLVM: [[NULL]]:
 // LLVM:   br label %[[DONE]]

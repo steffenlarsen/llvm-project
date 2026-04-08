@@ -27,7 +27,7 @@ extern "C" vec3 ret_vec3() {
 
   // LLVM-LABEL: ret_vec3
   // OGCG-SAME: ptr{{.*}}sret(%union.vec3){{.*}}%[[RET_ALLOCA:.*]])
-  // LLVMCIR: %[[RET_ALLOCA:.*]] = alloca %union.vec3
+  // LLVMCIR-SAME: ptr sret(%union.vec3) %[[RET_ALLOCA:.*]])
   // LLVM: %[[GET_X:.*]] = getelementptr {{.*}}, ptr %[[RET_ALLOCA]], i32 0, i32 0
   // LLVM: store double 5{{.*}}, ptr %[[GET_X]]
   // LLVM: %[[GET_Y:.*]] = getelementptr {{.*}}, ptr %[[RET_ALLOCA]], i32 0, i32 1

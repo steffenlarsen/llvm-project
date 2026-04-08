@@ -1,0 +1,218 @@
+// Tests for CIR offload PropagatePointerFacts pass.
+//
+// The pass traces cir.offload.kernel_launch pointer operands back to host
+// allocation roots (hipMalloc) to infer alignment, noalias, and readonly
+// attributes on cloned kernel parameters.
+
+// RUN: cir-opt --split-input-file --cir-offload-propagate-pointer-facts %s \
+// RUN:   | FileCheck %s
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+!u64i = !cir.int<u, 64>
+
+//===----------------------------------------------------------------------===//
+// 1. Two distinct hipMalloc buffers -> both get align 256 + noalias.
+//    arg1 is only loaded -> readonly.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      cir.offload.kernel_launch @offload_device_module::@k$ptrfacts
+// CHECK:      cir.offload.func @k(
+// CHECK-NOT:  llvm.align
+// CHECK:      cir.offload.func @k$ptrfacts(
+// CHECK-SAME: llvm.align = 256 : i64
+// CHECK-SAME: llvm.noalias
+// CHECK-SAME: llvm.align = 256 : i64
+// CHECK-SAME: llvm.noalias
+// CHECK-SAME: llvm.readonly
+
+module {
+  "cir.func"() <{function_type = !cir.func<(!cir.ptr<!cir.ptr<!cir.void>>, !u64i) -> !s32i>, sym_name = "hipMalloc", sym_visibility = "private"}> ({
+  }) : () -> ()
+
+  cir.func @host(%n: !u32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+
+    %alloca_a = "cir.alloca"() <{alignment = 8 : i64, name = "d_a"}> : () -> !cir.ptr<!cir.ptr<!cir.float>>
+    %alloca_b = "cir.alloca"() <{alignment = 8 : i64, name = "d_b"}> : () -> !cir.ptr<!cir.ptr<!cir.float>>
+
+    %cast_a = "cir.cast"(%alloca_a) <{kind = 1 : i32}> : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.ptr<!cir.void>>
+    %cast_b = "cir.cast"(%alloca_b) <{kind = 1 : i32}> : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.ptr<!cir.void>>
+
+    %size = "cir.const"() <{value = #cir.int<1024> : !u64i}> : () -> !u64i
+    %err_a = "cir.call"(%cast_a, %size) <{callee = @hipMalloc}> : (!cir.ptr<!cir.ptr<!cir.void>>, !u64i) -> !s32i
+    %err_b = "cir.call"(%cast_b, %size) <{callee = @hipMalloc}> : (!cir.ptr<!cir.ptr<!cir.void>>, !u64i) -> !s32i
+
+    %d_a = "cir.load"(%alloca_a) : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.float>
+    %d_b = "cir.load"(%alloca_b) : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.float>
+
+    cir.offload.kernel_launch @offload_device_module::@k
+        grid(%n, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%d_a, %d_b : !cir.ptr<!cir.float>, !cir.ptr<!cir.float>)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k(%a: !cir.ptr<!cir.float>, %b: !cir.ptr<!cir.float>) kernel {
+      %v = "cir.load"(%b) : (!cir.ptr<!cir.float>) -> !cir.float
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+!u64i = !cir.int<u, 64>
+
+//===----------------------------------------------------------------------===//
+// 2. No pointer args -> no clone.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      cir.offload.func @k_noptrs(
+// CHECK-NOT:  $ptrfacts
+
+module {
+  cir.func @host(%n: !u32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %val = "cir.const"() <{value = #cir.int<42> : !s32i}> : () -> !s32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_noptrs
+        grid(%n, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%val : !s32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_noptrs(%x: !s32i) kernel {
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 3. Kernel with no launch sites -> no changes.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      cir.offload.func @k_nolaunches(
+// CHECK-NOT:  k_nolaunches$ptrfacts
+
+module {
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_nolaunches(%a: !cir.ptr<!cir.float>) kernel {
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+!u64i = !cir.int<u, 64>
+
+//===----------------------------------------------------------------------===//
+// 4. Pointer traced through GetMemberOp -> noalias.
+//    Simulates loading a device pointer from a struct member:
+//      %member_ptr = cir.get_member %struct[0]
+//      %val = cir.load %member_ptr
+//    The struct alloca has hipMalloc writing into the member.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      cir.offload.func @k_member$ptrfacts(
+// CHECK-SAME: llvm.noalias
+
+!rec_S = !cir.struct<"S" {!cir.ptr<!cir.float>, !cir.ptr<!cir.float>}>
+
+module {
+  "cir.func"() <{function_type = !cir.func<(!cir.ptr<!cir.ptr<!cir.void>>, !u64i) -> !s32i>, sym_name = "hipMalloc", sym_visibility = "private"}> ({
+  }) : () -> ()
+
+  cir.func @host_member(%n: !u32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+
+    // Alloca for a struct with two pointer members.
+    %alloca_s = "cir.alloca"() <{alignment = 8 : i64, name = "s"}> : () -> !cir.ptr<!rec_S>
+
+    // Get address of member 0 (first pointer field).
+    %member0 = "cir.get_member"(%alloca_s) <{index_attr = 0 : index, name = "a"}> : (!cir.ptr<!rec_S>) -> !cir.ptr<!cir.ptr<!cir.float>>
+
+    // Cast member address to void** for hipMalloc.
+    %cast_m0 = "cir.cast"(%member0) <{kind = 1 : i32}> : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.ptr<!cir.void>>
+    %size = "cir.const"() <{value = #cir.int<1024> : !u64i}> : () -> !u64i
+    %err = "cir.call"(%cast_m0, %size) <{callee = @hipMalloc}> : (!cir.ptr<!cir.ptr<!cir.void>>, !u64i) -> !s32i
+
+    // Load the device pointer from the struct member.
+    %d_a = "cir.load"(%member0) : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.float>
+
+    cir.offload.kernel_launch @offload_device_module::@k_member
+        grid(%n, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%d_a : !cir.ptr<!cir.float>)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_member(%a: !cir.ptr<!cir.float>) kernel {
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+!u64i = !cir.int<u, 64>
+
+//===----------------------------------------------------------------------===//
+// 5. Pointer traced through function argument (single caller) -> noalias.
+//    Simulates a helper function that receives the device pointer and launches.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      cir.offload.func @k_funcarg$ptrfacts(
+// CHECK-SAME: llvm.align = 256
+
+module {
+  "cir.func"() <{function_type = !cir.func<(!cir.ptr<!cir.ptr<!cir.void>>, !u64i) -> !s32i>, sym_name = "hipMalloc", sym_visibility = "private"}> ({
+  }) : () -> ()
+
+  // Helper function that receives the pointer and launches the kernel.
+  cir.func @launch_helper(%p: !cir.ptr<!cir.float>, %n: !u32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    cir.offload.kernel_launch @offload_device_module::@k_funcarg
+        grid(%n, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%p : !cir.ptr<!cir.float>)
+    cir.return
+  }
+
+  // Caller that does hipMalloc and calls the helper.
+  cir.func @host_funcarg(%n: !u32i) {
+    %alloca = "cir.alloca"() <{alignment = 8 : i64, name = "d_p"}> : () -> !cir.ptr<!cir.ptr<!cir.float>>
+    %cast = "cir.cast"(%alloca) <{kind = 1 : i32}> : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.ptr<!cir.void>>
+    %size = "cir.const"() <{value = #cir.int<1024> : !u64i}> : () -> !u64i
+    %err = "cir.call"(%cast, %size) <{callee = @hipMalloc}> : (!cir.ptr<!cir.ptr<!cir.void>>, !u64i) -> !s32i
+    %d_p = "cir.load"(%alloca) : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.float>
+    "cir.call"(%d_p, %n) <{callee = @launch_helper}> : (!cir.ptr<!cir.float>, !u32i) -> ()
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_funcarg(%a: !cir.ptr<!cir.float>) kernel {
+      cir.return
+    }
+  }
+}

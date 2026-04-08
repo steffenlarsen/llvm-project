@@ -828,10 +828,12 @@ SourceMgrDiagnosticVerifierHandler::SourceMgrDiagnosticVerifierHandler(
     llvm::SourceMgr &srcMgr, MLIRContext *ctx, raw_ostream &out, Level level)
     : SourceMgrDiagnosticHandler(srcMgr, ctx, out),
       impl(new SourceMgrDiagnosticVerifierHandlerImpl(level)) {
-  // Compute the expected diagnostics for each of the current files in the
-  // source manager.
-  for (unsigned i = 0, e = mgr.getNumBuffers(); i != e; ++i)
-    (void)impl->computeExpectedDiags(out, mgr, mgr.getMemoryBuffer(i + 1));
+  // Only scan for expected-* designators when verify mode is active.
+  // Skipping the scan avoids a crash on large non-null-terminated buffers.
+  if (level != Level::None) {
+    for (unsigned i = 0, e = mgr.getNumBuffers(); i != e; ++i)
+      (void)impl->computeExpectedDiags(out, mgr, mgr.getMemoryBuffer(i + 1));
+  }
 
   registerInContext(ctx);
 }

@@ -6,6 +6,7 @@ set(LLVM_LINK_COMPONENTS
 get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
 
 add_clang_library(clangCIRLoweringDirectToLLVM
+  CIRTBAABuilder.cpp
   LowerToLLVM.cpp
   LowerToLLVMIR.cpp
 
@@ -17,15 +18,31 @@ add_clang_library(clangCIRLoweringDirectToLLVM
 
   LINK_LIBS
   clangCIRLoweringCommon
+  clangDriver
   ${dialect_libs}
   MLIRCIR
   MLIRCIRTargetLowering
   MLIRCIRTransforms
   MLIRBuiltinToLLVMIRTranslation
+  MLIRGPUToLLVMIRTranslation
+  MLIRArithToLLVM
+  MLIRControlFlowToLLVM
+  MLIRFuncToLLVM
+  MLIRGPUToROCDLTransforms
+  MLIRGPUTransforms
+  MLIRIndexToLLVM
+  MLIRMathToLLVM
+  MLIRMemRefToLLVM
+  MLIROpenMPToLLVM
+  MLIRUBToLLVM
+  MLIRVectorToLLVM
+  MLIRReconcileUnrealizedCasts
   MLIRLLVMToLLVMIRTranslation
   MLIROpenMPToLLVM
   MLIROpenMPToLLVMIRTranslation
   MLIROpenMPTransforms
+  MLIRROCDLTarget
+  MLIRROCDLToLLVMIRTranslation
   MLIRIR
   )
 

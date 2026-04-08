@@ -500,6 +500,11 @@ mlir::Type CIRGenTypes::convertType(QualType type) {
       resultType = builder.getVoidPtrTy();
       break;
 
+    // AMDGPU opaque pointer types: pointer to void in target address space.
+#define AMDGPU_TYPE(Name, Id, SingletonId, Width, Align)                       \
+    case BuiltinType::Id:                                                      \
+      resultType = cir::IntType::get(&getMLIRContext(), Width, false);          \
+      break;
 #define AMDGPU_OPAQUE_PTR_TYPE(Name, Id, SingletonId, Width, Align, AS)        \
   case BuiltinType::Id: {                                                      \
     if (BuiltinType::Id == BuiltinType::AMDGPUTexture) {                       \
@@ -512,9 +517,6 @@ mlir::Type CIRGenTypes::convertType(QualType type) {
     break;                                                                     \
   }
 #define AMDGPU_NAMED_BARRIER_TYPE(Name, Id, SingletonId, Width, Align, Scope)  \
-  case BuiltinType::Id:                                                        \
-    llvm_unreachable("NYI");
-#define AMDGPU_TYPE(Name, Id, SingletonId, Width, Align)                       \
   case BuiltinType::Id:                                                        \
     llvm_unreachable("NYI");
 #include "clang/Basic/AMDGPUTypes.def"

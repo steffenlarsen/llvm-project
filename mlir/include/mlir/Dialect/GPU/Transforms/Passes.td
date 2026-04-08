@@ -309,4 +309,69 @@ def GpuXeVMAttachTarget : Pass<"xevm-attach-target", ""> {
               /*default=*/[{""}],
               "Command line options passed to downstream compiler">];
 }
+
+//===----------------------------------------------------------------------===//
+// GpuSplitSingleSourcePass
+//
+// Splits a unified single-source gpu.module (produced by CIRGen) into primary
+// and deferred gpu.modules based on launch-site visibility.
+//===----------------------------------------------------------------------===//
+
+def GpuSplitSingleSourcePass
+    : Pass<"gpu-split-single-source", "::mlir::ModuleOp"> {
+  let summary = "Split a single-source gpu.module into primary and deferred parts";
+  let description = [{
+    Classifies `gpu.func kernel` operations by launch-site visibility:
+
+    | Kernel                        | Output module                    |
+    |-------------------------------|----------------------------------|
+    | Has a `gpu.launch_func` site  | Primary gpu.module               |
+    | No observable launch site     | Deferred gpu.module (or dropped) |
+
+    Device helper `gpu.func` ops (non-kernel) are cloned into every gpu.module
+    that contains a kernel calling them, unless they transitively reference a
+    non-replicable device global (`offload.global_var` with
+    `mem_space = device/constant/managed`), in which case they are placed in
+    the primary module only.
+
+    The handling of kernels with no observable launch site is controlled by
+    `dead-kernel-action`:
+
+    - `"none"`: place all kernels in the primary gpu.module (no secondary module).
+    - `"split"` (default): place dead kernels in a secondary gpu.module
+      (`deferred-gpu-module-name`), which the HIP runtime only loads when one of
+      its kernels is first needed, avoiding unnecessary compile/load cost.
+    - `"discard"`: drop dead kernels entirely, along with any device helpers that
+      are only transitively reachable from discarded kernels.
+
+    The secondary gpu.module is omitted entirely when all kernels are referenced,
+    or when `dead-kernel-action` is `"none"` or `"discard"`.
+
+    Module names default to `"offload_device_module"` and
+    `"offload_device_module_deferred"` but can be overridden via the
+    `gpu-module-name` and `deferred-gpu-module-name` options.
+  }];
+
+  let options = [
+    Option<"gpuModuleName", "gpu-module-name", "std::string",
+           /*default=*/"\"offload_device_module\"",
+           "Name of the primary gpu.module (kernels with visible launch sites)">,
+    Option<"deferredGpuModuleName", "deferred-gpu-module-name", "std::string",
+           /*default=*/"\"offload_device_module_deferred\"",
+           "Name of the secondary gpu.module for kernels with no visible launch site">,
+    Option<"deadKernelAction", "dead-kernel-action", "std::string",
+           /*default=*/"\"split\"",
+           "How to handle kernels with no observable launch site. "
+           "\"none\": place all kernels in the primary gpu.module (no secondary module). "
+           "\"split\" (default): place dead kernels in a secondary gpu.module. "
+           "\"discard\": drop dead kernels and any device helpers only reachable "
+           "from discarded kernels.">
+  ];
+
+  let dependentDialects = [
+    "::mlir::func::FuncDialect",
+    "::mlir::gpu::GPUDialect"
+  ];
+}
+
 #endif // MLIR_DIALECT_GPU_PASSES

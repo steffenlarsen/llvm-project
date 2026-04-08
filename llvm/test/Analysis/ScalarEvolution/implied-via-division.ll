@@ -181,9 +181,9 @@ define void @implied3_samesign(i32 %n) {
 ; Prove that (n > -2) ===> (n / 2 s>= 0).
 ; CHECK-LABEL: 'implied3_samesign'
 ; CHECK-NEXT:  Determining loop execution counts for: @implied3_samesign
-; CHECK-NEXT:  Loop %header: backedge-taken count is (1 + %n.div.2)<nsw>
-; CHECK-NEXT:  Loop %header: constant max backedge-taken count is i32 1
-; CHECK-NEXT:  Loop %header: symbolic max backedge-taken count is (1 + %n.div.2)<nsw>
+; CHECK-NEXT:  Loop %header: backedge-taken count is i32 0
+; CHECK-NEXT:  Loop %header: constant max backedge-taken count is i32 0
+; CHECK-NEXT:  Loop %header: symbolic max backedge-taken count is i32 0
 ; CHECK-NEXT:  Loop %header: Trip multiple is 1
 ;
 entry:
@@ -256,9 +256,9 @@ define void @implied4_samesign(i32 %n) {
 ; Prove that (n >= -1) ===> (n / 2 s>= 0).
 ; CHECK-LABEL: 'implied4_samesign'
 ; CHECK-NEXT:  Determining loop execution counts for: @implied4_samesign
-; CHECK-NEXT:  Loop %header: backedge-taken count is (1 + %n.div.2)<nsw>
-; CHECK-NEXT:  Loop %header: constant max backedge-taken count is i32 1
-; CHECK-NEXT:  Loop %header: symbolic max backedge-taken count is (1 + %n.div.2)<nsw>
+; CHECK-NEXT:  Loop %header: backedge-taken count is i32 0
+; CHECK-NEXT:  Loop %header: constant max backedge-taken count is i32 0
+; CHECK-NEXT:  Loop %header: symbolic max backedge-taken count is i32 0
 ; CHECK-NEXT:  Loop %header: Trip multiple is 1
 ;
 entry:

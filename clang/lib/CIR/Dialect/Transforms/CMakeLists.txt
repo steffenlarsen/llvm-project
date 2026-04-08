@@ -5,6 +5,7 @@ add_clang_library(MLIRCIRTransforms
   CIRCanonicalize.cpp
   CIRSimplify.cpp
   CIRTransformUtils.cpp
+  MergeOffloadModules.cpp
   CXXABILowering.cpp
   EHABILowering.cpp
   TargetLowering.cpp
@@ -14,6 +15,14 @@ add_clang_library(MLIRCIRTransforms
   GotoSolver.cpp
   IdiomRecognizer.cpp
   LibOpt.cpp
+  OffloadPropagateBlockShape.cpp
+  OffloadTightenLaunchBounds.cpp
+  OffloadPropagatePointerFacts.cpp
+  OffloadSpecializeScalarArgs.cpp
+  OffloadMultiversionDivisibility.cpp
+  OffloadSpecializeSharedMemory.cpp
+  OffloadPropagateGridCoverage.cpp
+  OffloadDeadArgElimination.cpp
 
   DEPENDS
   MLIRCIRPassIncGen
@@ -33,6 +42,8 @@ add_clang_library(MLIRCIRTransforms
   MLIRCIR
   MLIRCIRInterfaces
   MLIRCIRTargetLowering
+  MLIRGPUDialect
+  MLIRParser
   MLIROpenACCDialect
   MLIROpenMPDialect
 )

@@ -156,9 +156,9 @@ Derived::Derived(const void *inVoid) { squawk(); }
 // LLVM:   %[[VTT_ADDR:.*]] = getelementptr inbounds ptr, ptr %[[VTT]], i32 1
 // LLVM:   %[[VPTR_BASE:.*]] = load ptr, ptr %[[VTT_ADDR]]
 // LLVM:   %[[VPTR:.*]] = load ptr, ptr %[[THIS]]
-// LLVM:   %[[BASE_OFFSET_ADDR:.*]] = getelementptr i8, ptr %[[VPTR]], i64 -32
+// LLVM:   %[[BASE_OFFSET_ADDR:.*]] = getelementptr inbounds i8, ptr %[[VPTR]], i64 -32
 // LLVM:   %[[BASE_OFFSET:.*]] = load i64, ptr %[[BASE_OFFSET_ADDR]]
-// LLVM:   %[[BASE_PTR:.*]] = getelementptr i8, ptr %[[THIS]], i64 %[[BASE_OFFSET]]
+// LLVM:   %[[BASE_PTR:.*]] = getelementptr inbounds i8, ptr %[[THIS]], i64 %[[BASE_OFFSET]]
 // LLVM:   store ptr %[[VPTR_BASE]], ptr %[[BASE_PTR]]
 // LLVM:   %[[VPTR:.*]] = load ptr, ptr %[[THIS]]
 // LLVM:   %[[SQUAWK_FN_ADDR:.*]] = getelementptr inbounds ptr, ptr %[[VPTR]], i32 0

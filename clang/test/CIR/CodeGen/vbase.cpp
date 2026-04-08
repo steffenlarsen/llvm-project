@@ -84,9 +84,9 @@ void ppp() { B b; }
 // LLVM:   %[[D:.+]] = alloca {{.*}}
 // LLVM:   call void @_ZN7DerivedC1Ev(ptr {{.*}} %[[D]])
 // LLVM:   %[[VPTR_ADDR:.+]] = load ptr, ptr %[[D]]
-// LLVM:   %[[NEG32_PTR:.+]] = getelementptr i8, ptr %[[VPTR_ADDR]], i64 -32
+// LLVM:   %[[NEG32_PTR:.+]] = getelementptr inbounds i8, ptr %[[VPTR_ADDR]], i64 -32
 // LLVM:   %[[OFF:.+]] = load i64, ptr %[[NEG32_PTR]]
-// LLVM:   %[[ADJ_THIS:.+]] = getelementptr i8, ptr %[[D]], i64 %[[OFF]]
+// LLVM:   %[[ADJ_THIS:.+]] = getelementptr inbounds i8, ptr %[[D]], i64 %[[OFF]]
 // LLVM:   call void @_ZN4Base1fEv(ptr {{.*}}%[[ADJ_THIS]])
 // LLVM:   ret void
 

@@ -133,7 +133,15 @@ void AMDGPUTTIImpl::getUnrollingPreferences(
 
   // Maximum alloca size than can fit registers. Reserve 16 registers.
   const unsigned MaxAlloca = (256 - 16) * 4;
-  unsigned ThresholdPrivate = UnrollThresholdPrivate;
+  // Cap the private-memory unroll threshold at MaxAlloca.  The boost exists
+  // to let SROA decompose small arrays into scalar registers after unrolling.
+  // The unrolled code must fit in the register file for this to work, so the
+  // threshold should be proportional to the register budget (MaxAlloca), not
+  // an independent constant.  Without this cap, known trip counts from
+  // constant propagation can cause the unroller to fully unroll large loops
+  // (e.g. 80 iterations), producing catastrophically large kernels.
+  unsigned ThresholdPrivate =
+      std::min(UnrollThresholdPrivate.getValue(), MaxAlloca);
   unsigned ThresholdLocal = UnrollThresholdLocal;
 
   // If this loop has the amdgpu.loop.unroll.threshold metadata we will use the

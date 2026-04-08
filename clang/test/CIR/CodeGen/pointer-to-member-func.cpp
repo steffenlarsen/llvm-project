@@ -196,9 +196,9 @@ void call(Foo *obj, void (Foo::*func)(int), int arg) {
 // LLVM:       %[[OBJ:.*]] = load ptr, ptr %{{.*}}
 // LLVM:       %[[MEMFN_PTR:.*]] = load { i64, i64 }, ptr %{{.*}}
 // LLVM:       %[[THIS_ADJ:.*]] = extractvalue { i64, i64 } %[[MEMFN_PTR]], 1
-// LLVM-X86:   %[[ADJUSTED_THIS:.*]] = getelementptr i8, ptr %[[OBJ]], i64 %[[THIS_ADJ]]
+// LLVM-X86:   %[[ADJUSTED_THIS:.*]] = getelementptr inbounds i8, ptr %[[OBJ]], i64 %[[THIS_ADJ]]
 // LLVM-ARM:   %[[THIS_ADJ_SHIFT:.*]] = ashr i64 %[[THIS_ADJ]], 1
-// LLVM-ARM:   %[[ADJUSTED_THIS:.*]] = getelementptr i8, ptr %[[OBJ]], i64 %[[THIS_ADJ_SHIFT]]
+// LLVM-ARM:   %[[ADJUSTED_THIS:.*]] = getelementptr inbounds i8, ptr %[[OBJ]], i64 %[[THIS_ADJ_SHIFT]]
 // LLVM:       %[[PTR_FIELD:.*]] = extractvalue { i64, i64 } %[[MEMFN_PTR]], 0
 // LLVM-ARM:   %[[VIRT_BIT:.*]] = and i64 %[[THIS_ADJ]], 1
 // LLVM-X86:   %[[VIRT_BIT:.*]] = and i64 %[[PTR_FIELD]], 1
@@ -207,8 +207,8 @@ void call(Foo *obj, void (Foo::*func)(int), int arg) {
 // LLVM:     [[HANDLE_VIRTUAL]]:
 // LLVM:       %[[VTABLE:.*]] = load ptr, ptr %[[ADJUSTED_THIS]]
 // LLVM-X86:   %[[OFFSET:.*]] = sub i64 %[[PTR_FIELD]], 1
-// LLVM-X86:   %[[VTABLE_SLOT:.*]] = getelementptr i8, ptr %[[VTABLE]], i64 %[[OFFSET]]
-// LLVM-ARM:   %[[VTABLE_SLOT:.*]] = getelementptr i8, ptr %[[VTABLE]], i64 %[[PTR_FIELD]]
+// LLVM-X86:   %[[VTABLE_SLOT:.*]] = getelementptr inbounds i8, ptr %[[VTABLE]], i64 %[[OFFSET]]
+// LLVM-ARM:   %[[VTABLE_SLOT:.*]] = getelementptr inbounds i8, ptr %[[VTABLE]], i64 %[[PTR_FIELD]]
 // LLVM:       %[[VIRTUAL_FN_PTR:.*]] = load ptr, ptr %[[VTABLE_SLOT]]
 // LLVM:       br label %[[CONTINUE:.*]]
 // LLVM:     [[HANDLE_NON_VIRTUAL]]:

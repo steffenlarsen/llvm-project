@@ -89,8 +89,23 @@ public:
   /// `amdhsa_code_object_version` module flag.
   void handleModulePreLink(llvm::Module &module) override;
 
+  /// Internalizes and dead-code-eliminates non-kernel symbols after bitcode
+  /// linking, mirroring the `-amdgpu-internalize-symbols` behavior of ROCm
+  /// device cc1. This removes `__assert_fail` and `__ockl_fprintf_*` dead
+  /// definitions that would otherwise prevent `AMDGPUAttributorPass` from
+  /// inferring `amdgpu-no-*` attributes on the kernel.
+  void handleModulePostLink(llvm::Module &module) override;
+
   /// Removes unnecessary metadata from the loaded bitcode files.
   LogicalResult handleBitcodeFile(llvm::Module &module) override;
+
+  /// Overrides the base optimizeModule to set an AMDGPU-friendly SLP
+  /// vectorization threshold before running the standard O3 pipeline.
+  /// On targets with packed FP32 ops (e.g. gfx90a), the LLVM 23 SLP cost
+  /// model is slightly off for <2 x float> phi+fmul+fadd trees: it computes
+  /// cost ≥ 0 for trees that are genuinely beneficial (cost -2 in LLVM 20).
+  /// A threshold of -5 recovers the vectorization without over-vectorizing.
+  LogicalResult optimizeModule(llvm::Module &module, int optLevel) override;
 
 protected:
   /// Adds `oclc` control variables to the LLVM Module if needed. It also sets

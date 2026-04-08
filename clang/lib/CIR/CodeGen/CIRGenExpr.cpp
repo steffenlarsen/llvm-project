@@ -1097,8 +1097,15 @@ LValue CIRGenFunction::emitDeclRefLValue(const DeclRefExpr *e) {
     assert(!cir::MissingFeatures::opAllocaEscapeByReference());
 
     // Check if this is a global variable
-    if (vd->hasLinkage() || vd->isStaticDataMember())
+    // For extern __shared__ variables in the offload CIR path, the local
+    // decl map may contain a cir.offload.dynamic_shared_memory result that
+    // should take precedence over the global symbol lookup.
+    if (vd->hasLinkage() || vd->isStaticDataMember()) {
+      auto localIt = localDeclMap.find(vd);
+      if (localIt != localDeclMap.end())
+        return makeAddrLValue(localIt->second, ty, AlignmentSource::Decl);
       return emitGlobalVarDeclLValue(*this, e, vd);
+    }
 
     Address addr = Address::invalid();
 
@@ -2481,6 +2488,141 @@ CIRGenCallee CIRGenFunction::emitCallee(const clang::Expr *e) {
   return callee;
 }
 
+/// Check if a FunctionDecl is a trivial inline wrapper whose body is a single
+/// `return __builtin_*(args...)` forwarding all parameters to a Clang builtin,
+/// or transitively through another such wrapper.
+///
+/// OGCG inlines always_inline functions at codegen time, resolving e.g.
+/// fabsf → __builtin_fabsf to llvm.fabs, or isinf → __isinff →
+/// __builtin_isinf to llvm.is.fpclass.  CIR emits these as regular function
+/// calls, which (a) breaks FP classification under -ffast-math (nofpclass on
+/// call args eliminates the check) and (b) defers optimization that OGCG does
+/// at codegen time.  Detecting the pattern here lets CIR emit the builtin
+/// directly, matching OGCG.
+///
+/// Returns the innermost builtin FunctionDecl if the pattern matches.
+static const FunctionDecl *
+getForwardedBuiltinDecl(const FunctionDecl *fd, bool skipFPClassification,
+                        unsigned depth = 0) {
+  if (!fd || !fd->hasBody() || depth > 3)
+    return nullptr;
+
+  if (!fd->hasAttr<AlwaysInlineAttr>() && !fd->isInlineSpecified() &&
+      !fd->isConstexpr())
+    return nullptr;
+
+  // Don't inline gnu_inline functions — they get special .inline handling.
+  if (fd->hasAttr<GNUInlineAttr>())
+    return nullptr;
+
+  const auto *body = dyn_cast<CompoundStmt>(fd->getBody());
+  if (!body || body->size() != 1)
+    return nullptr;
+
+  const auto *ret = dyn_cast<ReturnStmt>(body->body_front());
+  if (!ret || !ret->getRetValue())
+    return nullptr;
+
+  const auto *call = dyn_cast<CallExpr>(
+      ret->getRetValue()->IgnoreImplicit());
+  if (!call)
+    return nullptr;
+
+  // Verify the inner call forwards ALL of the wrapper's parameters.
+  if (call->getNumArgs() != fd->getNumParams())
+    return nullptr;
+  for (unsigned i = 0, n = fd->getNumParams(); i < n; ++i) {
+    const auto *arg = dyn_cast<DeclRefExpr>(
+        call->getArg(i)->IgnoreImplicit());
+    if (!arg || arg->getDecl() != fd->getParamDecl(i))
+      return nullptr;
+  }
+
+  const auto *callee = call->getDirectCallee();
+  if (!callee)
+    return nullptr;
+
+  unsigned builtinID = callee->getBuiltinID();
+  if (builtinID) {
+    // Only forward builtins that CIR's emitBuiltinExpr handles well.
+    // Platform-specific builtins (x86, ARM, etc.) may not be implemented
+    // and would produce errorNYI + undef.
+    switch (builtinID) {
+    // FP classification: inline to cir.is_fp_class only when
+    // -ffinite-math-only is NOT active.  With finite-math, the nofpclass
+    // attribute on call arguments correctly folds the check to false/true,
+    // matching OGCG.  Without finite-math, inlining is needed to prevent
+    // nofpclass from incorrectly eliminating a check the user relies on.
+    case Builtin::BI__builtin_isinf:
+    case Builtin::BI__builtin_isnan:
+    case Builtin::BI__builtin_isfinite:
+    case Builtin::BI__builtin_isnormal:
+    case Builtin::BI__builtin_issubnormal:
+    case Builtin::BI__builtin_iszero:
+    case Builtin::BI__builtin_issignaling:
+    case Builtin::BI__builtin_isinf_sign:
+    case Builtin::BI__builtin_signbit:
+    case Builtin::BI__builtin_signbitf:
+    case Builtin::BI__builtin_signbitl:
+    case Builtin::BI__builtin_isfpclass:
+      if (skipFPClassification)
+        return nullptr;
+      return callee;
+    // Math
+    case Builtin::BI__builtin_fabsf:
+    case Builtin::BI__builtin_fabs:
+    case Builtin::BI__builtin_fabsl:
+    case Builtin::BI__builtin_logf:
+    case Builtin::BI__builtin_log:
+    case Builtin::BI__builtin_logl:
+    case Builtin::BI__builtin_log2f:
+    case Builtin::BI__builtin_log2:
+    case Builtin::BI__builtin_log10f:
+    case Builtin::BI__builtin_log10:
+    case Builtin::BI__builtin_expf:
+    case Builtin::BI__builtin_exp:
+    case Builtin::BI__builtin_exp2f:
+    case Builtin::BI__builtin_exp2:
+    case Builtin::BI__builtin_exp10f:
+    case Builtin::BI__builtin_exp10:
+    case Builtin::BI__builtin_sqrtf:
+    case Builtin::BI__builtin_sqrt:
+    case Builtin::BI__builtin_sinf:
+    case Builtin::BI__builtin_sin:
+    case Builtin::BI__builtin_cosf:
+    case Builtin::BI__builtin_cos:
+    case Builtin::BI__builtin_ceilf:
+    case Builtin::BI__builtin_ceil:
+    case Builtin::BI__builtin_floorf:
+    case Builtin::BI__builtin_floor:
+    case Builtin::BI__builtin_truncf:
+    case Builtin::BI__builtin_trunc:
+    case Builtin::BI__builtin_rintf:
+    case Builtin::BI__builtin_rint:
+    case Builtin::BI__builtin_nearbyintf:
+    case Builtin::BI__builtin_nearbyint:
+    case Builtin::BI__builtin_roundf:
+    case Builtin::BI__builtin_round:
+    case Builtin::BI__builtin_fmaf:
+    case Builtin::BI__builtin_fma:
+    case Builtin::BI__builtin_fmaxf:
+    case Builtin::BI__builtin_fmax:
+    case Builtin::BI__builtin_fminf:
+    case Builtin::BI__builtin_fmin:
+    case Builtin::BI__builtin_copysignf:
+    case Builtin::BI__builtin_copysign:
+    case Builtin::BI__builtin_logbf:
+    case Builtin::BI__builtin_logb:
+      return callee;
+    default:
+      return nullptr;
+    }
+  }
+
+  // Not a builtin — check if it's another wrapper layer.
+  return getForwardedBuiltinDecl(callee, skipFPClassification, depth + 1);
+}
+
 RValue CIRGenFunction::emitCallExpr(const clang::CallExpr *e,
                                     ReturnValueSlot returnValue) {
   assert(!cir::MissingFeatures::objCBlocks());
@@ -2490,6 +2632,13 @@ RValue CIRGenFunction::emitCallExpr(const clang::CallExpr *e,
 
   if (const auto *cudaKernelCallExpr = dyn_cast<CUDAKernelCallExpr>(e))
     return emitCUDAKernelCallExpr(cudaKernelCallExpr, returnValue);
+
+  // Give the CUDA/HIP runtime a chance to intercept runtime library calls
+  // (e.g. hipDeviceSynchronize, hipStreamCreate) and emit offload dialect ops.
+  if (getLangOpts().CUDA) {
+    if (auto rv = cgm.getCUDARuntime().emitCUDARuntimeCall(*this, e))
+      return *rv;
+  }
 
   // A CXXOperatorCallExpr is created even for explicit-object methods or
   // static member operators (C++23 `static operator()` / `static
@@ -2508,6 +2657,19 @@ RValue CIRGenFunction::emitCallExpr(const clang::CallExpr *e,
   if (callee.isBuiltin())
     return emitBuiltinExpr(callee.getBuiltinDecl(), callee.getBuiltinID(), e,
                            returnValue);
+
+  // Inline trivial always_inline wrappers around builtins (e.g. HIP's
+  // fabsf → __builtin_fabsf, isinf → __isinff → __builtin_isinf).  OGCG
+  // resolves these at codegen time; CIR must do the same to (a) prevent
+  // nofpclass on call args from breaking FP classification under -ffast-math,
+  // and (b) emit intrinsics instead of function calls for math wrappers.
+  if (const auto *fd = dyn_cast_or_null<FunctionDecl>(e->getDirectCallee())) {
+    bool finiteMathOnly = getLangOpts().NoHonorInfs && getLangOpts().NoHonorNaNs;
+    if (const auto *builtinFD = getForwardedBuiltinDecl(fd, finiteMathOnly)) {
+      return emitBuiltinExpr(builtinFD, builtinFD->getBuiltinID(),
+                             e, returnValue);
+    }
+  }
 
   if (callee.isPseudoDestructor())
     return emitCXXPseudoDestructorExpr(callee.getPseudoDestructorExpr());

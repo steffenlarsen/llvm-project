@@ -261,7 +261,7 @@ struct D {
 // CIR:   cir.call @_ZN1CD1Ev(%[[C]])
 
 // LLVM: define {{.*}} void @_ZN1DD2Ev
-// LLVM:   %[[C:.*]] = getelementptr i8, ptr %{{.*}}, i64 4
+// LLVM:   %[[C:.*]] = getelementptr inbounds nuw i8, ptr %{{.*}}, i64 4
 // LLVM:   call void @_ZN1CD1Ev(ptr {{.*}} %[[C]])
 
 // This destructor is defined after the calling function in OGCG.

@@ -55,7 +55,7 @@ Small D0::m0() { return {}; }
 // CIR:   cir.call @_ZN2D02m0Ev
 // LLVM-LABEL: define {{.*}} @_ZN2D02m0Ev(
 // LLVM-LABEL: define {{.*}} @_ZThn8_N2D02m0Ev(
-// LLVM:   getelementptr i8, ptr {{.*}}, i64 -8
+// LLVM:   getelementptr inbounds i8, ptr {{.*}}, i64 -8
 // LLVM:   call {{.*}} @_ZN2D02m0Ev(
 // OGCG-LABEL: define {{.*}} @_ZN2D02m0Ev(
 // OGCG-LABEL: define {{.*}} @_ZThn8_N2D02m0Ev(
@@ -193,7 +193,7 @@ void testCallLarge1() {
 }
 
 // CIR-LABEL: cir.func {{.*}} @_Z14testCallLarge1v
-// CIR:   cir.call @_Z15testReturnLargev
+// CIR:   cir.call %{{.+}}(%{{.+}}) : (!cir.ptr<!cir.func<(!cir.ptr<!rec_Large>)>>, !cir.ptr<!rec_Large>) -> ()
 // CIR:   cir.call @_Z14testParamLarge5Large
 // LLVM-LABEL: define {{.*}} void @_Z14testCallLarge1v(
 // LLVM:   call {{.*}} @_Z15testReturnLargev(
@@ -209,7 +209,7 @@ void testIgnoredLarge() {
 }
 
 // CIR-LABEL: cir.func {{.*}} @_Z16testIgnoredLargev
-// CIR:   cir.call @_Z15testReturnLargev
+// CIR:   cir.call %{{.+}}(%{{.+}}) : (!cir.ptr<!cir.func<(!cir.ptr<!rec_Large>)>>, !cir.ptr<!rec_Large>) -> ()
 // CIR:   cir.call @_ZN5LargeD1Ev
 // LLVM-LABEL: define {{.*}} void @_Z16testIgnoredLargev(
 // LLVM:   call {{.*}} @_Z15testReturnLargev(

@@ -30,9 +30,9 @@ D* x;
 // LLVM-LABEL: @_Z1av(
 // LLVM:       [[OBJ:%.*]] = load ptr, ptr @x
 // LLVM-NEXT:  [[VTABLE:%.*]] = load ptr, ptr [[OBJ]]
-// LLVM-NEXT:  [[VBASE_OFFSET_PTR:%.*]] = getelementptr i8, ptr [[VTABLE]], i64 -32
+// LLVM-NEXT:  [[VBASE_OFFSET_PTR:%.*]] = getelementptr inbounds i8, ptr [[VTABLE]], i64 -32
 // LLVM-NEXT:  [[VBASE_OFFSET:%.*]] = load i64, ptr [[VBASE_OFFSET_PTR]]
-// LLVM-NEXT:  [[ADD_PTR:%.*]] = getelementptr i8, ptr [[OBJ]], i64 [[VBASE_OFFSET]]
+// LLVM-NEXT:  [[ADD_PTR:%.*]] = getelementptr inbounds i8, ptr [[OBJ]], i64 [[VBASE_OFFSET]]
 // LLVM:       ret ptr
 
 // OGCG-LABEL:  @_Z1av(
@@ -54,9 +54,9 @@ A* a() { return x; }
 // LLVM-LABEL: @_Z1bv(
 // LLVM:       [[OBJ:%.*]] = load ptr, ptr @x
 // LLVM-NEXT:  [[VTABLE:%.*]] = load ptr, ptr [[OBJ]]
-// LLVM-NEXT:  [[VBASE_OFFSET_PTR:%.*]] = getelementptr i8, ptr [[VTABLE]], i64 -40
+// LLVM-NEXT:  [[VBASE_OFFSET_PTR:%.*]] = getelementptr inbounds i8, ptr [[VTABLE]], i64 -40
 // LLVM-NEXT:  [[VBASE_OFFSET:%.*]] = load i64, ptr [[VBASE_OFFSET_PTR]]
-// LLVM-NEXT:  [[ADD_PTR:%.*]] = getelementptr i8, ptr [[OBJ]], i64 [[VBASE_OFFSET]]
+// LLVM-NEXT:  [[ADD_PTR:%.*]] = getelementptr inbounds i8, ptr [[OBJ]], i64 [[VBASE_OFFSET]]
 // LLVM:       ret ptr
 
 // OGCG-LABEL:  @_Z1bv(
@@ -79,10 +79,10 @@ B* b() { return x; }
 // LLVM-LABEL: @_Z1cv(
 // LLVM:       [[OBJ:%.*]] = load ptr, ptr @x
 // LLVM-NEXT:  [[VTABLE:%.*]] = load ptr, ptr [[OBJ]]
-// LLVM-NEXT:  [[VBASE_OFFSET_PTR:%.*]] = getelementptr i8, ptr [[VTABLE]], i64 -48
+// LLVM-NEXT:  [[VBASE_OFFSET_PTR:%.*]] = getelementptr inbounds i8, ptr [[VTABLE]], i64 -48
 // LLVM-NEXT:  [[VBASE_OFFSET:%.*]] = load i64, ptr [[VBASE_OFFSET_PTR]]
 // LLVM-NEXT:  [[OFFSET:%.*]] = add i64 [[VBASE_OFFSET]], 16
-// LLVM-NEXT:  [[ADD_PTR:%.*]] = getelementptr i8, ptr [[OBJ]], i64 [[OFFSET]]
+// LLVM-NEXT:  [[ADD_PTR:%.*]] = getelementptr inbounds i8, ptr [[OBJ]], i64 [[OFFSET]]
 // LLVM:       ret ptr
 
 // OGCG-LABEL:  @_Z1cv(
@@ -117,10 +117,10 @@ F* y;
 // LLVM-LABEL: @_Z1dv(
 // LLVM:       [[OBJ:%.*]] = load ptr, ptr @y
 // LLVM-NEXT:  [[VTABLE:%.*]] = load ptr, ptr [[OBJ]]
-// LLVM-NEXT:  [[VBASE_OFFSET_PTR:%.*]] = getelementptr i8, ptr [[VTABLE]], i64 -48
+// LLVM-NEXT:  [[VBASE_OFFSET_PTR:%.*]] = getelementptr inbounds i8, ptr [[VTABLE]], i64 -48
 // LLVM-NEXT:  [[VBASE_OFFSET:%.*]] = load i64, ptr [[VBASE_OFFSET_PTR]]
 // LLVM-NEXT:  [[OFFSET:%.*]] = add i64 [[VBASE_OFFSET]], 16
-// LLVM-NEXT:  [[ADD_PTR:%.*]] = getelementptr i8, ptr [[OBJ]], i64 [[OFFSET]]
+// LLVM-NEXT:  [[ADD_PTR:%.*]] = getelementptr inbounds i8, ptr [[OBJ]], i64 [[OFFSET]]
 // LLVM:       ret ptr
 
 // OGCG-LABEL:  @_Z1dv(

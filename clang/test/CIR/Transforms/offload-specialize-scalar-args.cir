@@ -1,0 +1,103 @@
+// Tests for CIR offload SpecializeScalarArgs pass.
+//
+// The pass resolves scalar (non-pointer) kernel operands at all launch sites.
+// When every site passes the same compile-time constant, a specialised clone
+// is created with that constant RAUW'd into the body.
+
+// RUN: cir-opt --split-input-file --cir-offload-specialize-scalar-args %s \
+// RUN:   | FileCheck %s
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 1. Two launches pass the same constant scalar -> one clone with RAUW'd arg;
+//    both launches redirected; original preserved.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      cir.offload.kernel_launch @offload_device_module::@k$scalarspec
+// CHECK:      cir.offload.kernel_launch @offload_device_module::@k$scalarspec
+// CHECK:      cir.offload.func @k(
+// CHECK-NOT:  cir.const
+// CHECK:      cir.offload.func @k$scalarspec(
+// CHECK:        cir.const #cir.int<784>
+
+module {
+  cir.func @host1(%n: !u32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %val = "cir.const"() <{value = #cir.int<784> : !s32i}> : () -> !s32i
+
+    cir.offload.kernel_launch @offload_device_module::@k
+        grid(%n, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%val : !s32i)
+    cir.return
+  }
+
+  cir.func @host2(%n: !u32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %val = "cir.const"() <{value = #cir.int<784> : !s32i}> : () -> !s32i
+
+    cir.offload.kernel_launch @offload_device_module::@k
+        grid(%n, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%val : !s32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k(%n: !s32i) kernel {
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 2. Sites disagree (different constants) -> no specialization.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      cir.offload.kernel_launch @offload_device_module::@k_disagree
+// CHECK-NOT:  $scalarspec
+// CHECK:      cir.offload.kernel_launch @offload_device_module::@k_disagree
+// CHECK-NOT:  $scalarspec
+// CHECK:      cir.offload.func @k_disagree(
+// CHECK-NOT:  $scalarspec
+
+module {
+  cir.func @host1(%n: !u32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %val = "cir.const"() <{value = #cir.int<784> : !s32i}> : () -> !s32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_disagree
+        grid(%n, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%val : !s32i)
+    cir.return
+  }
+
+  cir.func @host2(%n: !u32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %val = "cir.const"() <{value = #cir.int<1024> : !s32i}> : () -> !s32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_disagree
+        grid(%n, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%val : !s32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_disagree(%n: !s32i) kernel {
+      cir.return
+    }
+  }
+}

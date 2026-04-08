@@ -53,10 +53,10 @@ void embed_expr_on_scalar_with_non_constants() {
 // LLVM: %[[B_ELEM_0_PTR:.*]] = getelementptr i32, ptr %[[B_ADDR]], i32 0
 // LLVM: %[[TMP_A:.*]] = load i32, ptr %[[A_ADDR]], align 4
 // LLVM: store i32 %[[TMP_A]], ptr %[[B_ELEM_0_PTR]], align 4
-// LLVM: %[[B_ELEM_1_PTR:.*]] = getelementptr i32, ptr %[[B_ELEM_0_PTR]], i64 1
+// LLVM: %[[B_ELEM_1_PTR:.*]] = getelementptr inbounds i32, ptr %[[B_ELEM_0_PTR]], i64 1
 // LLVM: %[[TMP_A:.*]] = load i32, ptr %[[A_ADDR]], align 4
 // LLVM: store i32 %[[TMP_A]], ptr %[[B_ELEM_1_PTR]], align 4
-// LLVM: %[[B_ELEM_2_PTR:.*]] = getelementptr i32, ptr %[[B_ELEM_0_PTR]], i64 2
+// LLVM: %[[B_ELEM_2_PTR:.*]] = getelementptr inbounds i32, ptr %[[B_ELEM_0_PTR]], i64 2
 // LLVM: store i32 47, ptr %[[B_ELEM_2_PTR]], align 4
 
 // OGCG: %[[A_ADDR:.*]] = alloca i32, align 4

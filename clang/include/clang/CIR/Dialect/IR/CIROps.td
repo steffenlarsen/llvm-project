@@ -878,9 +878,7 @@ defvar CIR_ReturnableScopes = [
   "DoWhileOp", "WhileOp", "ForOp", "TryOp"
 ];
 
-def CIR_ReturnOp : CIR_Op<"return", [
-  ParentOneOf<CIR_ReturnableScopes>, Terminator
-]> {
+def CIR_ReturnOp : CIR_Op<"return", [Terminator]> {
   let summary = "Return from function";
   let description = [{
     The "return" operation represents a return operation within a function.
@@ -8772,5 +8770,6 @@ def CIR_LaunderOp : CIR_Op<"launder", [SameOperandsAndResultType]> {
 }
 
 include "clang/CIR/Dialect/IR/CIRStdOps.td"
+include "clang/CIR/Dialect/IR/CIROffloadOps.td"
 
 #endif // CLANG_CIR_DIALECT_IR_CIROPS_TD

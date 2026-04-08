@@ -33,7 +33,7 @@ S *allocArray(int n) {
 // LLVM-LABEL: @_Z10allocArrayi
 // LLVM:   %[[ALLOC:.*]] = call {{.*}} ptr @_Znam
 // LLVM:   store i64 %{{.*}}, ptr %[[ALLOC]], align 8
-// LLVM:   %[[DATA:.*]] = getelementptr i8, ptr %[[ALLOC]], i64 8
+// LLVM:   %[[DATA:.*]] = getelementptr inbounds i8, ptr %[[ALLOC]], i64 8
 
 // OGCG-LABEL: @_Z10allocArrayi
 // OGCG:   %[[ALLOC:.*]] = call {{.*}} ptr @_Znam

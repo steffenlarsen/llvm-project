@@ -114,9 +114,9 @@ void test_delete_array_throwing_dtor(ThrowingDtor *ptr) {
 //
 // Cookie read and is-empty check.
 // LLVM: [[NOTNULL]]:
-// LLVM:   %[[ALLOC_PTR:.*]] = getelementptr i8, ptr %[[PTR]], i64 -8
+// LLVM:   %[[ALLOC_PTR:.*]] = getelementptr inbounds i8, ptr %[[PTR]], i64 -8
 // LLVM:   %[[NUM_ELEM:.*]] = load i64, ptr %[[ALLOC_PTR]]
-// LLVM:   %[[ARR_END:.*]] = getelementptr %struct.ThrowingDtor, ptr %[[PTR]], i64 %[[NUM_ELEM]]
+// LLVM:   %[[ARR_END:.*]] = getelementptr inbounds nuw %struct.ThrowingDtor, ptr %[[PTR]], i64 %[[NUM_ELEM]]
 // LLVM:   %[[NOT_EMPTY:.*]] = icmp ne ptr %[[ARR_END]], %[[PTR]]
 // LLVM:   br i1 %[[NOT_EMPTY]], label %[[DESTROY:[^,]+]], label %[[CALL_DELETE_NORMAL:[^ ]+]]
 //
@@ -137,7 +137,7 @@ void test_delete_array_throwing_dtor(ThrowingDtor *ptr) {
 // back to __array_idx, invoke dtor(prev). On unwind, go to LPAD.
 // LLVM: [[BODY]]:
 // LLVM:   %[[BODY_LOAD:.*]] = load ptr, ptr %[[ARR_IDX]]
-// LLVM:   %[[BODY_PREV:.*]] = getelementptr %struct.ThrowingDtor, ptr %[[BODY_LOAD]], i64 -1
+// LLVM:   %[[BODY_PREV:.*]] = getelementptr inbounds %struct.ThrowingDtor, ptr %[[BODY_LOAD]], i64 -1
 // LLVM:   store ptr %[[BODY_PREV]], ptr %[[ARR_IDX]]
 // LLVM:   invoke void @_ZN12ThrowingDtorD1Ev(ptr %[[BODY_PREV]])
 // LLVM:           to label %{{.*}} unwind label %[[LPAD:[^ ]+]]
@@ -172,7 +172,7 @@ void test_delete_array_throwing_dtor(ThrowingDtor *ptr) {
 // dtor(prev). On a *second* throw, unwind to terminate.lpad.
 // LLVM: [[CL_BODY]]:
 // LLVM:   %[[CL_LOAD:.*]] = load ptr, ptr %[[ARR_IDX]]
-// LLVM:   %[[CL_PREV:.*]] = getelementptr %struct.ThrowingDtor, ptr %[[CL_LOAD]], i64 -1
+// LLVM:   %[[CL_PREV:.*]] = getelementptr inbounds %struct.ThrowingDtor, ptr %[[CL_LOAD]], i64 -1
 // LLVM:   store ptr %[[CL_PREV]], ptr %[[ARR_IDX]]
 // LLVM:   invoke void @_ZN12ThrowingDtorD1Ev(ptr %[[CL_PREV]])
 // LLVM:           to label %{{.*}} unwind label %[[TERMINATE_LPAD:[^ ]+]]

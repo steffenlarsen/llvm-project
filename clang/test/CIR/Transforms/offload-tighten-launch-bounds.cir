@@ -1,0 +1,74 @@
+// Tests for CIR offload TightenLaunchBounds pass.
+//
+// The pass clones kernels with tighter launch bounds when all block dimensions
+// at a call site are statically known and the total fits within a smaller
+// candidate bound from {warpSize, 256, 512}.
+//
+// Cloned kernels are named @original$maxN. The original is always preserved.
+
+// RUN: cir-opt --split-input-file --cir-offload-tighten-launch-bounds %s \
+// RUN:   | FileCheck %s
+
+!u32i = !cir.int<u, 32>
+
+//===----------------------------------------------------------------------===//
+// 1. Static block=256 with no target attribute -> clone @k$max256.
+//    Candidates without target: {256, 512}.
+//===----------------------------------------------------------------------===//
+
+// Launch redirected to clone.
+// CHECK:      cir.offload.kernel_launch @offload_device_module::@k$max256
+
+// Original kernel always preserved.
+// CHECK:      cir.offload.func @k() kernel
+// CHECK-NOT:  known_block_size
+
+// Clone with tighter bound.
+// CHECK:      cir.offload.func @k$max256() kernel
+// CHECK-SAME: known_block_size = array<i32: 256, 1, 1>
+// CHECK-SAME: rocdl.flat_work_group_size = "1,256"
+
+module {
+  cir.func @host(%n: !u32i) {
+    %c256 = cir.const #cir.int<256> : !u32i
+    %c1   = cir.const #cir.int<1> : !u32i
+    cir.offload.kernel_launch @offload_device_module::@k
+        grid(%n, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k() kernel {
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+
+//===----------------------------------------------------------------------===//
+// 2. Dynamic block size: no clone, launch unchanged, original preserved.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      cir.offload.kernel_launch @offload_device_module::@k
+// CHECK:      cir.offload.func @k() kernel
+// CHECK-NOT:  cir.offload.func @k$max
+
+module {
+  cir.func @host(%n: !u32i, %bx: !u32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    cir.offload.kernel_launch @offload_device_module::@k
+        grid(%n, %c1, %c1 : !u32i)
+        block(%bx, %c1, %c1 : !u32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k() kernel {
+      cir.return
+    }
+  }
+}
