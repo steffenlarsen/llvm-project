@@ -23,6 +23,7 @@ add_clang_library(clangCIR
   CIRGenCoroutine.cpp
   CIRGenCUDANV.cpp
   CIRGenCUDARuntime.cpp
+  CIRGenOffloadRuntime.cpp
   CIRGenCXX.cpp
   CIRGenCXXABI.cpp
   CIRGenDecl.cpp

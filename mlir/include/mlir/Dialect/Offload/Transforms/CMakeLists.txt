@@ -1,0 +1,6 @@
+set(LLVM_TARGET_DEFINITIONS Passes.td)
+mlir_tablegen(Passes.h.inc        -gen-pass-decls -name Offload)
+mlir_tablegen(Passes.capi.h.inc   -gen-pass-capi-header --prefix Offload)
+mlir_tablegen(Passes.capi.cpp.inc -gen-pass-capi-impl   --prefix Offload)
+add_mlir_dialect_tablegen_target(MLIROffloadPassIncGen)
+add_mlir_doc(Passes OffloadPasses ./ -gen-pass-doc)

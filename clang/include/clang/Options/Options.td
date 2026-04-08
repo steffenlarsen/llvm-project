@@ -3362,6 +3362,11 @@ def clangir_enable_idiom_recognizer : Flag<["-"], "clangir-enable-idiom-recogniz
   HelpText<"ClangIR: Enable Idiom Recognizer pass">,
   MarshallingInfoFlag<FrontendOpts<"ClangIREnableIdiomRecognizer">>;
 
+def clangir_offload : Flag<["-"], "clangir-offload">,
+  Visibility<[ClangOption, CC1Option]>,
+  HelpText<"ClangIR: Emit unified offload dialect ops for HIP/CUDA (no host/device split)">,
+  MarshallingInfoFlag<CodeGenOpts<"ClangIROffload">>;
+
 defm clangir : BoolFOption<"clangir",
   FrontendOpts<"UseClangIRPipeline">, DefaultFalse,
   PosFlag<SetTrue, [], [ClangOption, CC1Option], "Use the ClangIR pipeline to compile">,

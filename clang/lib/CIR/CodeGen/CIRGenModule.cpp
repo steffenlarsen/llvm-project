@@ -13,6 +13,7 @@
 #include "CIRGenModule.h"
 #include "CIRGenCUDARuntime.h"
 #include "CIRGenCXXABI.h"
+#include "CIRGenOffloadRuntime.h"
 #include "CIRGenConstantEmitter.h"
 #include "CIRGenFunction.h"
 
@@ -35,8 +36,10 @@
 
 #include "CIRGenFunctionInfo.h"
 #include "TargetInfo.h"
+#include "mlir/Dialect/Offload/IR/OffloadDialect.h"
 #include "mlir/Dialect/Ptr/IR/MemorySpaceInterfaces.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Operation.h"
@@ -167,7 +170,10 @@ CIRGenModule::CIRGenModule(mlir::MLIRContext &mlirContext,
 CIRGenModule::~CIRGenModule() = default;
 
 void CIRGenModule::createCUDARuntime() {
-  cudaRuntime.reset(createNVCUDARuntime(*this));
+  if (codeGenOpts.ClangIROffload)
+    cudaRuntime.reset(createOffloadRuntime(*this));
+  else
+    cudaRuntime.reset(createNVCUDARuntime(*this));
 }
 
 /// FIXME: this could likely be a common helper and not necessarily related
@@ -451,7 +457,11 @@ void CIRGenModule::emitGlobal(clang::GlobalDecl gd) {
   // If this is CUDA, be selective about which declarations we emit.
   // Non-constexpr non-lambda implicit host device functions are not emitted
   // unless they are used on device side.
-  if (langOpts.CUDA) {
+  //
+  // In the unified offload CIR path (-fclangir-offload), all functions are
+  // emitted once with an exec_space annotation; the CUDAIsDevice-based
+  // filtering is skipped because there is no device-side recompilation.
+  if (langOpts.CUDA && !codeGenOpts.ClangIROffload) {
     assert((isa<FunctionDecl>(global) || isa<VarDecl>(global)) &&
            "Expected Variable or Function");
     if (const auto *varDecl = dyn_cast<VarDecl>(global)) {
@@ -583,6 +593,71 @@ void CIRGenModule::emitGlobalFunctionDefinition(clang::GlobalDecl gd,
 
   if (funcDecl->getAttr<AnnotateAttr>())
     errorNYI(funcDecl->getSourceRange(), "deferredAnnotations");
+
+  // In the unified offload CIR path (-fclangir-offload), convert the
+  // cir::FuncOp to an offload::FuncOp annotated with the appropriate
+  // exec_space.  We do this *after* body generation so the existing
+  // CIRGenFunction machinery (which expects cir::FuncOp) remains unchanged.
+  // Skip the conversion for functions with constructor/destructor attributes
+  // since addGlobalCtor/addGlobalDtor set CIR-specific attributes on the
+  // cir::FuncOp that have no offload::FuncOp equivalent yet.
+  if (codeGenOpts.ClangIROffload && langOpts.CUDA &&
+      !funcDecl->hasAttr<ConstructorAttr>() &&
+      !funcDecl->hasAttr<DestructorAttr>()) {
+    // Determine exec_space from CUDA attributes.
+    mlir::offload::ExecSpace execSpace = mlir::offload::ExecSpace::host;
+    if (funcDecl->hasAttr<CUDAGlobalAttr>())
+      execSpace = mlir::offload::ExecSpace::global;
+    else if (funcDecl->hasAttr<CUDADeviceAttr>() &&
+             funcDecl->hasAttr<CUDAHostAttr>())
+      execSpace = mlir::offload::ExecSpace::host_device;
+    else if (funcDecl->hasAttr<CUDADeviceAttr>())
+      execSpace = mlir::offload::ExecSpace::device;
+
+    // Build mlir::FunctionType from the cir::FuncType.
+    mlir::MLIRContext *ctx = builder.getContext();
+    cir::FuncType cirFTy = funcOp.getFunctionType();
+    mlir::FunctionType mlirFTy =
+        mlir::FunctionType::get(ctx, cirFTy.getInputs(),
+                                cirFTy.getReturnTypes());
+
+    // For __global__ kernels compiled in host mode, the cir::FuncOp carries a
+    // __device_stub__ prefix in its name (KernelReferenceKind::Stub).  In the
+    // unified offload model we want the canonical kernel name without the stub
+    // prefix, so use the Kernel-kind mangled name when that is the case.
+    llvm::StringRef offloadName = funcOp.getSymName();
+    if (funcDecl->hasAttr<CUDAGlobalAttr>() &&
+        gd.getKernelReferenceKind() == KernelReferenceKind::Stub) {
+      GlobalDecl kernelGD(funcDecl, KernelReferenceKind::Kernel);
+      offloadName = getMangledName(kernelGD);
+    }
+
+    // Create offload::FuncOp immediately before the existing cir::FuncOp.
+    mlir::OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPoint(funcOp);
+    auto offloadFn = mlir::offload::FuncOp::create(
+        builder, funcOp.getLoc(), offloadName, mlirFTy, execSpace);
+
+    // Copy symbol visibility.
+    mlir::SymbolTable::setSymbolVisibility(
+        offloadFn, mlir::SymbolTable::getSymbolVisibility(funcOp));
+
+    // Move the body region from the cir::FuncOp into the offload::FuncOp.
+    offloadFn.getBody().takeBody(funcOp.getBody());
+
+    // Replace cir.return terminators with offload.return.  cir.return's verifier
+    // requires its parent to be a cir.func, so we must swap them before
+    // verification runs.
+    offloadFn.walk([&](cir::ReturnOp ret) {
+      mlir::OpBuilder::InsertionGuard rg(builder);
+      builder.setInsertionPoint(ret);
+      mlir::offload::ReturnOp::create(builder, ret.getLoc(), ret.getOperands());
+      ret.erase();
+    });
+
+    // Erase the now-empty cir::FuncOp placeholder.
+    funcOp.erase();
+  }
 }
 
 /// Track functions to be called before main() runs.
@@ -1300,6 +1375,10 @@ void CIRGenModule::emitGlobalVarDefinition(const clang::VarDecl *vd,
   // Emit the initializer function if necessary.
   if (needsGlobalCtor || needsGlobalDtor)
     emitCXXGlobalVarDeclInitFunc(vd, gv, needsGlobalCtor);
+
+  // TODO(offload): In the unified offload CIR path (-fclangir-offload), convert
+  // cir::GlobalOp to offload::GlobalVarOp for CUDA device-qualified variables.
+  // This requires updating all cir::GetGlobalOp references to use the new op.
 }
 
 void CIRGenModule::emitGlobalDefinition(clang::GlobalDecl gd,

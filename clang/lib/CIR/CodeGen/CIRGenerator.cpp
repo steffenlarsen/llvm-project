@@ -16,6 +16,8 @@
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Target/LLVMIR/Import.h"
+#include "mlir/Dialect/Offload/IR/OffloadDialect.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 
 #include "clang/AST/DeclGroup.h"
 #include "clang/CIR/CIRGenerator.h"
@@ -56,6 +58,12 @@ void CIRGenerator::Initialize(ASTContext &astContext) {
   mlirContext->loadDialect<cir::CIRDialect>();
   mlirContext->getOrLoadDialect<mlir::acc::OpenACCDialect>();
   mlirContext->getOrLoadDialect<mlir::omp::OpenMPDialect>();
+  // Load the offload dialect (and GPU dialect it depends on) when using the
+  // unified host+device offload CIR path.
+  if (codeGenOpts.ClangIROffload) {
+    mlirContext->getOrLoadDialect<mlir::gpu::GPUDialect>();
+    mlirContext->getOrLoadDialect<mlir::offload::OffloadDialect>();
+  }
 
   // Register extensions to integrate CIR types with OpenACC and OpenMP.
   mlir::DialectRegistry registry;
