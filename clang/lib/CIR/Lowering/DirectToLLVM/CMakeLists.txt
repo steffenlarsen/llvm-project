@@ -22,10 +22,22 @@ add_clang_library(clangCIRLoweringDirectToLLVM
   MLIRCIRTargetLowering
   MLIRBuiltinToLLVMIRTranslation
   MLIRGPUToLLVMIRTranslation
+  MLIRArithToLLVM
+  MLIRControlFlowToLLVM
+  MLIRFuncToLLVM
+  MLIRGPUToROCDLTransforms
+  MLIRGPUTransforms
+  MLIRIndexToLLVM
+  MLIRMathToLLVM
+  MLIRMemRefToLLVM
+  MLIROpenMPToLLVM
+  MLIRUBToLLVM
+  MLIRVectorToLLVM
   MLIRReconcileUnrealizedCasts
   MLIRLLVMToLLVMIRTranslation
   MLIROpenMPToLLVMIRTranslation
   MLIROpenMPTransforms
+  MLIRROCDLToLLVMIRTranslation
   MLIRIR
   )
 

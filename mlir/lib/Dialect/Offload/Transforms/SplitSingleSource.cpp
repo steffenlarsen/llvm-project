@@ -235,6 +235,11 @@ struct SplitSingleSourcePass
     builder.setInsertionPointToEnd(module.getBody());
     auto gpuModule = builder.create<gpu::GPUModuleOp>(
         module.getLoc(), gpuModuleName);
+    // Option C: stamp the target chip as an IR attribute so that downstream
+    // passes (e.g. CIRAttachROCDLTargetPass) can read it without requiring
+    // the chip to be threaded through the pipeline as a pass parameter.
+    if (!targetChip.empty())
+      gpuModule->setAttr("cir.gpu_chip", builder.getStringAttr(targetChip));
 
     // ------------------------------------------------------------------ //
     // Step 2: Lower each offload.func according to its exec_space.
