@@ -30,7 +30,8 @@ namespace direct {
 std::unique_ptr<llvm::Module>
 lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule,
                              llvm::LLVMContext &llvmCtx,
-                             llvm::StringRef mlirSaveTempsOutFile = {});
+                             llvm::StringRef mlirSaveTempsOutFile = {},
+                             bool enableOffloadSplit = false);
 } // namespace direct
 } // namespace cir
 

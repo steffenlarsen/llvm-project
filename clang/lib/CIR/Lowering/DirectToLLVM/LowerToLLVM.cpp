@@ -17,10 +17,14 @@
 #include <optional>
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/Offload/Transforms/Passes.h"
 #include "mlir/Dialect/OpenMP/Transforms/Passes.h"
 #include "mlir/Dialect/Ptr/IR/MemorySpaceInterfaces.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -31,6 +35,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/GPU/GPUToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/OpenMP/OpenMPToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
@@ -3391,6 +3396,144 @@ void ConvertCIRToLLVMPass::processCIRAttrs(mlir::ModuleOp module) {
                     asmAttr);
 }
 
+/// Fold `builtin.unrealized_conversion_cast` ops that are left behind by the
+/// CIR-to-CIR GPU launch lowering (they convert CIR integer types to MLIR
+/// standard integer types for use in `arith.index_castui`).  When the source
+/// type converts to the same LLVM type as the destination type, replace the
+/// cast with the already-converted input value.
+struct UnrealizedCastFoldingLowering
+    : public mlir::OpConversionPattern<mlir::UnrealizedConversionCastOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::UnrealizedConversionCastOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    // Only handle the single-input single-output case produced by the GPU
+    // launch dim-expansion lowering (!u32i → i32, where both map to i32 LLVM).
+    if (adaptor.getInputs().size() != 1 || op.getOutputs().size() != 1)
+      return mlir::failure();
+    mlir::Value converted = adaptor.getInputs()[0];
+    // After CIR type conversion, the converted value has the same type as the
+    // cast output (e.g. !u32i → i32 becomes i32 → i32).
+    if (converted.getType() != op.getOutputs()[0].getType()) {
+      // Try converting the output type as well; if it matches, fold.
+      mlir::Type convertedOutTy =
+          typeConverter->convertType(op.getOutputs()[0].getType());
+      if (!convertedOutTy || converted.getType() != convertedOutTy)
+        return mlir::failure();
+    }
+    rewriter.replaceOp(op, converted);
+    return mlir::success();
+  }
+};
+
+/// Convert kernel operand types in `gpu.launch_func` ops produced by the offload
+/// split pass.  The split pass creates launch_func ops referencing CIR-typed
+/// values as kernel arguments.  This pattern passes the type-converted
+/// (LLVM-typed) kernel operands through unchanged so the op becomes legal.
+struct GPULaunchFuncOperandLowering
+    : public mlir::OpConversionPattern<mlir::gpu::LaunchFuncOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::gpu::LaunchFuncOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    // Rebuild with the adaptor-provided (type-converted) operands.  The
+    // grid/block operands are index-typed and unchanged; kernel args may have
+    // been CIR-typed and are now LLVM-typed via the adaptor.
+    mlir::gpu::KernelDim3 gridSize{adaptor.getGridSizeX(),
+                                   adaptor.getGridSizeY(),
+                                   adaptor.getGridSizeZ()};
+    mlir::gpu::KernelDim3 blockSize{adaptor.getBlockSizeX(),
+                                    adaptor.getBlockSizeY(),
+                                    adaptor.getBlockSizeZ()};
+
+    std::optional<mlir::gpu::KernelDim3> clusterSize;
+    if (adaptor.getClusterSizeX())
+      clusterSize = mlir::gpu::KernelDim3{adaptor.getClusterSizeX(),
+                                          adaptor.getClusterSizeY(),
+                                          adaptor.getClusterSizeZ()};
+
+    rewriter.replaceOpWithNewOp<mlir::gpu::LaunchFuncOp>(
+        op, op.getKernelAttr(), gridSize, blockSize,
+        adaptor.getDynamicSharedMemorySize(), adaptor.getKernelOperands(),
+        op.getAsyncToken() ? op.getAsyncToken().getType() : mlir::Type{},
+        adaptor.getAsyncDependencies(), clusterSize);
+    return mlir::success();
+  }
+};
+
+/// Lower `func.return` ops inserted by the offload split pass into `llvm.return`.
+struct FuncReturnToLLVMReturnLowering
+    : public mlir::OpConversionPattern<mlir::func::ReturnOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::func::ReturnOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<mlir::LLVM::ReturnOp>(op,
+                                                      adaptor.getOperands());
+    return mlir::success();
+  }
+};
+
+/// Lower a `func.func` op (produced by the offload split pass from a host-side
+/// `offload.func`) to an `llvm.func` op, translating CIR argument/result types
+/// via the same LLVMTypeConverter used for `cir.func` ops.
+struct FuncFuncToLLVMFuncOpLowering
+    : public mlir::OpConversionPattern<mlir::func::FuncOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::func::FuncOp op, OpAdaptor /*adaptor*/,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::FunctionType fnType = op.getFunctionType();
+    mlir::TypeConverter::SignatureConversion sigConv(fnType.getNumInputs());
+    for (auto [idx, argTy] : llvm::enumerate(fnType.getInputs())) {
+      mlir::Type converted = typeConverter->convertType(argTy);
+      if (!converted)
+        return mlir::failure();
+      sigConv.addInputs(idx, converted);
+    }
+    SmallVector<mlir::Type> resultTypes;
+    if (mlir::failed(
+            typeConverter->convertTypes(fnType.getResults(), resultTypes)))
+      return mlir::failure();
+
+    mlir::Type llvmFnTy = mlir::LLVM::LLVMFunctionType::get(
+        resultTypes.empty() ? mlir::LLVM::LLVMVoidType::get(op.getContext())
+                            : resultTypes[0],
+        sigConv.getConvertedTypes());
+
+    // Use the first sub-location to satisfy LLVMFuncOp's location requirement.
+    mlir::Location loc = op.getLoc();
+    if (auto fused = mlir::dyn_cast<mlir::FusedLoc>(loc))
+      loc = fused.getLocations().front();
+
+    auto llvmFunc = mlir::LLVM::LLVMFuncOp::create(
+        rewriter, loc, op.getName(),
+        mlir::cast<mlir::LLVM::LLVMFunctionType>(llvmFnTy));
+
+    rewriter.inlineRegionBefore(op.getBody(), llvmFunc.getBody(),
+                                llvmFunc.end());
+    // Remap only the entry block argument types (CIR → LLVM).  We do NOT call
+    // convertRegionTypes here because that inserts backward materializations
+    // (e.g. i32 → !s32i) for every use inside the body, including uses in
+    // legal ops (gpu.launch_func) that are left unconverted.  Those backward
+    // casts then carry CIR types through to the LLVM IR export and break it.
+    //
+    // applySignatureConversion replaces block args with the LLVM-typed versions
+    // and lets the conversion framework remap uses inside the body when those
+    // ops are themselves converted by their own patterns.  Legal ops (e.g.
+    // gpu.launch_func) receive operands that are already LLVM-typed because the
+    // CIR ops that computed them were converted immediately before.
+    rewriter.applySignatureConversion(&llvmFunc.getBody().front(), sigConv);
+
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+
 void ConvertCIRToLLVMPass::runOnOperation() {
   llvm::TimeTraceScope scope("Convert CIR to LLVM Pass");
 
@@ -3414,11 +3557,28 @@ void ConvertCIRToLLVMPass::runOnOperation() {
 #undef GET_LLVM_LOWERING_PATTERNS_LIST
       >(converter, patterns.getContext(), dl);
 
+  // After the offload split pass, host functions are emitted as func.func ops
+  // (with cir.* bodies).  Lower them and their returns to llvm.func/llvm.return.
+  patterns.add<FuncFuncToLLVMFuncOpLowering, FuncReturnToLLVMReturnLowering>(
+      converter, patterns.getContext());
+  // Fold unrealized_conversion_cast ops that appear in host function bodies due
+  // to GPU launch dim expansion (e.g. !u32i → i32 where both map to i32 in LLVM).
+  // These are produced by the CIR-to-CIR pre-lowering passes and must be
+  // eliminated before LLVM IR export.
+  patterns.add<UnrealizedCastFoldingLowering>(converter, patterns.getContext());
+
   processCIRAttrs(module);
 
   mlir::ConversionTarget target(getContext());
   target.addLegalOp<mlir::ModuleOp>();
   target.addLegalDialect<mlir::LLVM::LLVMDialect>();
+  // Mark the entire GPU dialect as legal so that the device sub-module
+  // (gpu.module with gpu.func / gpu.return) and host-side gpu.launch_func ops
+  // are left untouched.  Device compilation is a separate downstream milestone;
+  // gpu.launch_func lowering to runtime calls is Milestone 4.
+  target.addLegalDialect<mlir::gpu::GPUDialect>();
+  // arith ops appear in the GPU launch dim conversion chain (arith.index_castui).
+  target.addLegalDialect<mlir::arith::ArithDialect>();
   target.addIllegalDialect<mlir::BuiltinDialect, cir::CIRDialect,
                            mlir::func::FuncDialect>();
 
@@ -4681,21 +4841,33 @@ std::unique_ptr<mlir::Pass> createConvertCIRToLLVMPass() {
   return std::make_unique<ConvertCIRToLLVMPass>();
 }
 
-void populateCIRToLLVMPasses(mlir::OpPassManager &pm) {
+void populateCIRToLLVMPasses(mlir::OpPassManager &pm,
+                              bool enableOffloadSplit) {
   mlir::populateCIRPreLoweringPasses(pm);
   pm.addPass(mlir::omp::createMarkDeclareTargetPass());
+  if (enableOffloadSplit) {
+    // Split unified offload.func / offload.kernel_launch ops into a host
+    // func.func module + a device gpu.module.  This must run after all
+    // CIR-to-CIR passes (which expect cir.func parents) and before the
+    // CIR-to-LLVM pass (which cannot handle offload.* ops).
+    pm.addPass(mlir::offload::createOffloadSplitSingleSourcePass());
+    // Lower host-side offload runtime ops (stream create/destroy/sync,
+    // device sync) to direct HIP/CUDA API calls.
+    pm.addPass(mlir::offload::createOffloadLowerHostRuntimePass());
+  }
   pm.addPass(createConvertCIRToLLVMPass());
 }
 
 std::unique_ptr<llvm::Module>
 lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
-                             StringRef mlirSaveTempsOutFile) {
+                             StringRef mlirSaveTempsOutFile,
+                             bool enableOffloadSplit) {
   llvm::TimeTraceScope scope("lower from CIR to LLVM directly");
 
   mlir::MLIRContext *mlirCtx = mlirModule.getContext();
 
   mlir::PassManager pm(mlirCtx);
-  populateCIRToLLVMPasses(pm);
+  populateCIRToLLVMPasses(pm, enableOffloadSplit);
 
   (void)mlir::applyPassManagerCLOptions(pm);
 
@@ -4710,6 +4882,42 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
     llvm::raw_fd_ostream out(mlirSaveTempsOutFile, ec);
     if (!ec)
       mlirModule->print(out);
+  }
+
+  // Milestone 2: device code compilation (gpu.func → ROCDL → fatbin) and
+  // runtime kernel launch wiring (gpu.launch_func → hipLaunchKernel) are
+  // deferred to later milestones.  Strip the device-side gpu.module and the
+  // host-side gpu.launch_func stubs from the module before LLVM translation
+  // so that translateModuleToLLVMIR only sees the host LLVM dialect ops.
+  // After erasing gpu.launch_func, some unrealized_conversion_cast ops that
+  // produced kernel arguments become dead; erase them too.
+  if (enableOffloadSplit) {
+    SmallVector<mlir::Operation *> toErase;
+    mlirModule.walk([&](mlir::gpu::LaunchFuncOp op) { toErase.push_back(op); });
+    mlirModule.walk([&](mlir::gpu::GPUModuleOp op) { toErase.push_back(op); });
+    for (mlir::Operation *op : toErase)
+      op->erase();
+    // Erase dead ops left over from kernel launch dim/arg computation.
+    // After gpu.launch_func is erased, the index_castui and
+    // unrealized_conversion_cast ops that computed grid/block dimensions and
+    // typed kernel args become dead.  Remove them so that LLVM translation
+    // does not encounter ops from dialects with no registered translation.
+    // Iterate to fixpoint (each erasure may expose new dead ops above it).
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      SmallVector<mlir::Operation *> dead;
+      mlirModule.walk([&](mlir::Operation *op) {
+        if (op->use_empty() &&
+            (mlir::isa<mlir::UnrealizedConversionCastOp>(op) ||
+             mlir::isa<mlir::arith::IndexCastUIOp>(op)))
+          dead.push_back(op);
+      });
+      for (mlir::Operation *op : dead) {
+        op->erase();
+        changed = true;
+      }
+    }
   }
 
   mlir::registerBuiltinDialectTranslation(*mlirCtx);

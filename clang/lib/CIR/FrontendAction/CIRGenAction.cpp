@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/CIR/FrontendAction/CIRGenAction.h"
+#include "mlir/Dialect/Offload/Transforms/Passes.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/OwningOpRef.h"
 #include "clang/Basic/DiagnosticFrontend.h"
@@ -48,9 +49,15 @@ getBackendActionFromOutputType(CIRGenAction::OutputType Action) {
 
 static std::unique_ptr<llvm::Module>
 lowerFromCIRToLLVMIR(mlir::ModuleOp MLIRModule, llvm::LLVMContext &LLVMCtx,
-                     llvm::StringRef mlirSaveTempsOutFile = {}) {
+                     llvm::StringRef mlirSaveTempsOutFile = {},
+                     bool enableOffloadSplit = false) {
+  // Ensure the offload transformation passes are registered in the global
+  // pass registry so populateCIRToLLVMPasses can look them up by name.
+  if (enableOffloadSplit)
+    mlir::offload::registerOffloadPasses();
   return direct::lowerDirectlyFromCIRToLLVMIR(MLIRModule, LLVMCtx,
-                                              mlirSaveTempsOutFile);
+                                              mlirSaveTempsOutFile,
+                                              enableOffloadSplit);
 }
 
 class CIRGenConsumer : public clang::ASTConsumer {
@@ -160,7 +167,8 @@ public:
 
       llvm::LLVMContext LLVMCtx;
       std::unique_ptr<llvm::Module> LLVMModule =
-          lowerFromCIRToLLVMIR(MlirModule, LLVMCtx, mlirSaveTempsOutFile);
+          lowerFromCIRToLLVMIR(MlirModule, LLVMCtx, mlirSaveTempsOutFile,
+                               CGO.ClangIROffload);
 
       BackendAction BEAction = getBackendActionFromOutputType(Action);
       emitBackendOutput(

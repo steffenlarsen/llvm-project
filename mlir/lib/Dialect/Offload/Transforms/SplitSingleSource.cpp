@@ -213,6 +213,23 @@ struct SplitSingleSourcePass
                     builder.getUnitAttr());
 
     // ------------------------------------------------------------------ //
+    // Step 0: Handle offload.global_var ops.
+    //
+    // offload.global_var represents a device-qualified variable (__device__,
+    // __constant__, __shared__, __managed__).  Full device lowering (emitting
+    // an llvm.mlir.global in the gpu.module with the correct address space)
+    // is deferred to a later milestone.  For now we erase them so that the
+    // CIR-to-LLVM pass does not see unknown ops.  The host-side shadow
+    // cir.global (emitted by CIRGenModule::emitGlobalVarDefinition before
+    // the offload.global_var conversion) is intentionally preserved so that
+    // host code that takes the address of a device symbol still compiles.
+    // ------------------------------------------------------------------ //
+    SmallVector<offload::GlobalVarOp> globalVars;
+    module.walk([&](offload::GlobalVarOp gv) { globalVars.push_back(gv); });
+    for (auto gv : globalVars)
+      gv.erase();
+
+    // ------------------------------------------------------------------ //
     // Step 1: Create the gpu.module to hold device functions.
     // ------------------------------------------------------------------ //
     builder.setInsertionPointToEnd(module.getBody());
