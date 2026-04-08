@@ -1376,9 +1376,54 @@ void CIRGenModule::emitGlobalVarDefinition(const clang::VarDecl *vd,
   if (needsGlobalCtor || needsGlobalDtor)
     emitCXXGlobalVarDeclInitFunc(vd, gv, needsGlobalCtor);
 
-  // TODO(offload): In the unified offload CIR path (-fclangir-offload), convert
+  // In the unified offload CIR path (-fclangir-offload), convert
   // cir::GlobalOp to offload::GlobalVarOp for CUDA device-qualified variables.
-  // This requires updating all cir::GetGlobalOp references to use the new op.
+  // Plain host variables remain as cir::GlobalOp and are handled by the normal
+  // CIR lowering pipeline.
+  if (codeGenOpts.ClangIROffload && langOpts.CUDA) {
+    // Determine memory space from CUDA qualifiers. Variables without any device
+    // qualifier remain in the generic (host) address space and are not
+    // converted.
+    mlir::offload::MemSpace memSpace;
+    bool isDeviceVar = true;
+    if (vd->hasAttr<CUDASharedAttr>())
+      memSpace = mlir::offload::MemSpace::shared;
+    else if (vd->hasAttr<CUDAConstantAttr>())
+      memSpace = mlir::offload::MemSpace::constant;
+    else if (vd->hasAttr<HIPManagedAttr>())
+      memSpace = mlir::offload::MemSpace::managed;
+    else if (vd->hasAttr<CUDADeviceAttr>())
+      memSpace = mlir::offload::MemSpace::device;
+    else
+      isDeviceVar = false;
+
+    if (isDeviceVar) {
+      // The variable is initialized from the host via cudaMemcpyToSymbol /
+      // hipMemcpyToSymbol when it has CUDAExternallyInitializedAttr.
+      bool externInit = gv->hasAttr(
+          cir::CUDAExternallyInitializedAttr::getMnemonic());
+
+      // Insert the offload::GlobalVarOp at the same position as the
+      // cir::GlobalOp, then erase the cir::GlobalOp.  We must update the
+      // builder insertion point to a valid location before erasing gv,
+      // because any InsertionGuard that saved the old point (which was
+      // inside/after gv) would dereference a deleted iterator on restore.
+      // Placing the builder at the end of the module block is safe and
+      // matches what createGlobalOp uses by default.
+      builder.setInsertionPoint(gv);
+      mlir::offload::GlobalVarOp offloadGV =
+          mlir::offload::GlobalVarOp::create(builder, gv.getLoc(),
+                                             gv.getSymName(), gv.getSymType(),
+                                             memSpace, externInit);
+      // If lastGlobalOp tracked this cir::GlobalOp, it would become a dangling
+      // pointer after the erase.  Reset it so createGlobalOp falls back to
+      // inserting at the start of the module block on the next call.
+      if (lastGlobalOp == gv)
+        lastGlobalOp = nullptr;
+      builder.setInsertionPointAfter(offloadGV);
+      gv.erase();
+    }
+  }
 }
 
 void CIRGenModule::emitGlobalDefinition(clang::GlobalDecl gd,
