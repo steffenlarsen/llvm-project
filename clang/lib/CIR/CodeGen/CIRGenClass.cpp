@@ -891,21 +891,36 @@ void CIRGenFunction::emitImplicitAssignmentOperatorBody(FunctionArgList &args) {
   const auto *assignOp = cast<CXXMethodDecl>(curGD.getDecl());
   assert(assignOp->isCopyAssignmentOperator() ||
          assignOp->isMoveAssignmentOperator());
+
+  cgm.setCXXSpecialMemberAttr(cast<cir::FuncOp>(curFn), assignOp);
+
+  // For union types (and other trivial memcpy-equivalent operators), the AST
+  // body contains only "return *this" with no field assignments.  Emit a
+  // memcpy from the source to the destination before processing the body.
+  if (assignOp->isMemcpyEquivalentSpecialMember(getContext())) {
+    Address thisAddr = loadCXXThisAddress();
+    const VarDecl *srcParam = args[1];
+    QualType srcTy = srcParam->getType().getNonReferenceType();
+    Address srcPtrAddr = getAddrOfLocalVar(srcParam);
+    mlir::Value srcPtr = builder.createLoad(getLoc(assignOp->getLocation()),
+                                            srcPtrAddr);
+    Address srcAddr = Address(srcPtr, convertTypeForMem(srcTy),
+                              getContext().getTypeAlignInChars(srcTy));
+    LValue srcLV = makeAddrLValue(srcAddr, srcTy);
+    CanQualType destTy =
+        getContext().getCanonicalTagType(assignOp->getParent());
+    LValue destLV = makeAddrLValue(thisAddr, destTy);
+    emitAggregateCopy(destLV, srcLV, srcTy, AggValueSlot::MayOverlap);
+  }
+
   const Stmt *rootS = assignOp->getBody();
   assert(isa<CompoundStmt>(rootS) &&
          "Body of an implicit assignment operator should be compound stmt.");
   const auto *rootCS = cast<CompoundStmt>(rootS);
 
-  cgm.setCXXSpecialMemberAttr(cast<cir::FuncOp>(curFn), assignOp);
-
   assert(!cir::MissingFeatures::incrementProfileCounter());
   assert(!cir::MissingFeatures::runCleanupsScope());
 
-  // Classic codegen uses a special class to attempt to replace member
-  // initializers with memcpy. We could possibly defer that to the
-  // lowering or optimization phases to keep the memory accesses more
-  // explicit. For now, we don't insert memcpy at all, though in some
-  // cases the AST contains a call to memcpy.
   assert(!cir::MissingFeatures::assignMemcpyizer());
   for (Stmt *s : rootCS->body())
     if (emitStmt(s, /*useCurrentScope=*/true).failed())

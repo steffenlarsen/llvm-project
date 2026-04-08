@@ -1,0 +1,286 @@
+// Tests for GpuPropagatePointerFactsPass.
+//
+// The pass traces gpu.launch_func pointer operands back to host allocation
+// roots (hipMalloc) to infer alignment, noalias, and readonly/writeonly
+// attributes on cloned kernel parameters.
+
+// RUN: cir-opt --split-input-file --gpu-propagate-pointer-facts %s \
+// RUN:   | FileCheck %s
+// RUN: cir-opt --split-input-file \
+// RUN:   --gpu-propagate-pointer-facts='enabled=false' %s \
+// RUN:   | FileCheck %s --check-prefix=DISABLED
+
+//===----------------------------------------------------------------------===//
+// 1. Two distinct hipMalloc buffers → both get align 256 + noalias.
+//    arg0 has no loads (only used as address) → not readonly.
+//    arg1 is only loaded → readonly.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k$ptrfacts
+// CHECK:      gpu.func @k(
+// CHECK-NOT:  llvm.align
+// CHECK:      gpu.func @k$ptrfacts(
+// CHECK-SAME: llvm.align = 256 : i64
+// CHECK-SAME: llvm.noalias
+// CHECK-SAME: llvm.align = 256 : i64
+// CHECK-SAME: llvm.noalias
+// CHECK-SAME: llvm.readonly
+
+// DISABLED:   gpu.launch_func @offload_device_module::@k
+// DISABLED-NOT: $ptrfacts
+// DISABLED:   gpu.func @k(
+// DISABLED-NOT: llvm.align
+
+module attributes {gpu.container_module} {
+  "cir.func"() <{function_type = !cir.func<(!cir.ptr<!cir.ptr<!cir.void>>, !cir.int<u, 64>) -> !cir.int<s, 32>>, sym_name = "hipMalloc", sym_visibility = "private"}> ({
+  }) : () -> ()
+
+  func.func @host(%n: index) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+
+    %alloca_a = "cir.alloca"() <{alignment = 8 : i64, name = "d_a"}> : () -> !cir.ptr<!cir.ptr<!cir.float>>
+    %alloca_b = "cir.alloca"() <{alignment = 8 : i64, name = "d_b"}> : () -> !cir.ptr<!cir.ptr<!cir.float>>
+
+    %cast_a = "cir.cast"(%alloca_a) <{kind = 1 : i32}> : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.ptr<!cir.void>>
+    %cast_b = "cir.cast"(%alloca_b) <{kind = 1 : i32}> : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.ptr<!cir.void>>
+
+    %size = "cir.const"() <{value = #cir.int<1024> : !cir.int<u, 64>}> : () -> !cir.int<u, 64>
+    %err_a = "cir.call"(%cast_a, %size) <{callee = @hipMalloc}> : (!cir.ptr<!cir.ptr<!cir.void>>, !cir.int<u, 64>) -> !cir.int<s, 32>
+    %err_b = "cir.call"(%cast_b, %size) <{callee = @hipMalloc}> : (!cir.ptr<!cir.ptr<!cir.void>>, !cir.int<u, 64>) -> !cir.int<s, 32>
+
+    %d_a = "cir.load"(%alloca_a) : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.float>
+    %d_b = "cir.load"(%alloca_b) : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.float>
+
+    gpu.launch_func @offload_device_module::@k
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+        args(%d_a : !cir.ptr<!cir.float>, %d_b : !cir.ptr<!cir.float>)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k(%a: !cir.ptr<!cir.float>, %b: !cir.ptr<!cir.float>) kernel {
+      %v = "cir.load"(%b) : (!cir.ptr<!cir.float>) -> !cir.float
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 2. Same buffer passed to two params → no noalias on either, but align ok.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k_same$ptrfacts
+// CHECK:      gpu.func @k_same$ptrfacts(
+// CHECK-SAME: llvm.align = 256 : i64
+// CHECK-NOT:  llvm.noalias
+// CHECK-SAME: !cir.ptr<!cir.float>
+// CHECK-SAME: llvm.align = 256 : i64
+// CHECK-NOT:  llvm.noalias
+
+module attributes {gpu.container_module} {
+  "cir.func"() <{function_type = !cir.func<(!cir.ptr<!cir.ptr<!cir.void>>, !cir.int<u, 64>) -> !cir.int<s, 32>>, sym_name = "hipMalloc", sym_visibility = "private"}> ({
+  }) : () -> ()
+
+  func.func @host(%n: index) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+
+    %alloca_a = "cir.alloca"() <{alignment = 8 : i64, name = "d_a"}> : () -> !cir.ptr<!cir.ptr<!cir.float>>
+    %cast_a = "cir.cast"(%alloca_a) <{kind = 1 : i32}> : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.ptr<!cir.void>>
+    %size = "cir.const"() <{value = #cir.int<1024> : !cir.int<u, 64>}> : () -> !cir.int<u, 64>
+    %err = "cir.call"(%cast_a, %size) <{callee = @hipMalloc}> : (!cir.ptr<!cir.ptr<!cir.void>>, !cir.int<u, 64>) -> !cir.int<s, 32>
+
+    %d_a1 = "cir.load"(%alloca_a) : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.float>
+    %d_a2 = "cir.load"(%alloca_a) : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.float>
+
+    gpu.launch_func @offload_device_module::@k_same
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+        args(%d_a1 : !cir.ptr<!cir.float>, %d_a2 : !cir.ptr<!cir.float>)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k_same(%a: !cir.ptr<!cir.float>, %b: !cir.ptr<!cir.float>) kernel {
+      %v = "cir.load"(%a) : (!cir.ptr<!cir.float>) -> !cir.float
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 3. Unknown root (func arg, not from hipMalloc) → no align/noalias.
+//    readonly from body analysis still triggers a clone.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.func @k_unknown$ptrfacts(
+// CHECK-SAME: llvm.readonly
+// CHECK-NOT:  llvm.align
+// CHECK-NOT:  llvm.noalias
+
+module attributes {gpu.container_module} {
+  func.func @host(%n: index, %ptr: !cir.ptr<!cir.float>) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+
+    gpu.launch_func @offload_device_module::@k_unknown
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+        args(%ptr : !cir.ptr<!cir.float>)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k_unknown(%a: !cir.ptr<!cir.float>) kernel {
+      %v = "cir.load"(%a) : (!cir.ptr<!cir.float>) -> !cir.float
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 4. Annotate existing $maxN clone in-place when all launches target clones.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k_tight$max256
+// CHECK:      gpu.func @k_tight() kernel
+// CHECK-NOT:  llvm.align
+// CHECK:      gpu.func @k_tight$max256(
+// CHECK-SAME: llvm.align = 256 : i64
+// CHECK-SAME: llvm.noalias
+// CHECK-SAME: llvm.align = 256 : i64
+// CHECK-SAME: llvm.noalias
+
+module attributes {gpu.container_module} {
+  "cir.func"() <{function_type = !cir.func<(!cir.ptr<!cir.ptr<!cir.void>>, !cir.int<u, 64>) -> !cir.int<s, 32>>, sym_name = "hipMalloc", sym_visibility = "private"}> ({
+  }) : () -> ()
+
+  func.func @host(%n: index) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+
+    %alloca_a = "cir.alloca"() <{alignment = 8 : i64, name = "d_a"}> : () -> !cir.ptr<!cir.ptr<!cir.float>>
+    %alloca_b = "cir.alloca"() <{alignment = 8 : i64, name = "d_b"}> : () -> !cir.ptr<!cir.ptr<!cir.float>>
+    %cast_a = "cir.cast"(%alloca_a) <{kind = 1 : i32}> : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.ptr<!cir.void>>
+    %cast_b = "cir.cast"(%alloca_b) <{kind = 1 : i32}> : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.ptr<!cir.void>>
+    %size = "cir.const"() <{value = #cir.int<1024> : !cir.int<u, 64>}> : () -> !cir.int<u, 64>
+    %err_a = "cir.call"(%cast_a, %size) <{callee = @hipMalloc}> : (!cir.ptr<!cir.ptr<!cir.void>>, !cir.int<u, 64>) -> !cir.int<s, 32>
+    %err_b = "cir.call"(%cast_b, %size) <{callee = @hipMalloc}> : (!cir.ptr<!cir.ptr<!cir.void>>, !cir.int<u, 64>) -> !cir.int<s, 32>
+
+    %d_a = "cir.load"(%alloca_a) : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.float>
+    %d_b = "cir.load"(%alloca_b) : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.float>
+
+    gpu.launch_func @offload_device_module::@k_tight$max256
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+        args(%d_a : !cir.ptr<!cir.float>, %d_b : !cir.ptr<!cir.float>)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k_tight() kernel {
+      gpu.return
+    }
+    gpu.func @k_tight$max256(%a: !cir.ptr<!cir.float>, %b: !cir.ptr<!cir.float>) kernel
+        attributes {known_block_size = array<i32: 256, 1, 1>} {
+      %v = "cir.load"(%a) : (!cir.ptr<!cir.float>) -> !cir.float
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 5. Non-pointer arguments are not annotated.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.func @k_mixed$ptrfacts(
+// CHECK-SAME: !cir.ptr<!cir.float> {llvm.align = 256 : i64, llvm.noalias
+// CHECK-SAME: ) kernel
+// CHECK-NOT:  llvm.align
+
+module attributes {gpu.container_module} {
+  "cir.func"() <{function_type = !cir.func<(!cir.ptr<!cir.ptr<!cir.void>>, !cir.int<u, 64>) -> !cir.int<s, 32>>, sym_name = "hipMalloc", sym_visibility = "private"}> ({
+  }) : () -> ()
+
+  func.func @host(%n: index) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+
+    %alloca_a = "cir.alloca"() <{alignment = 8 : i64, name = "d_a"}> : () -> !cir.ptr<!cir.ptr<!cir.float>>
+    %cast_a = "cir.cast"(%alloca_a) <{kind = 1 : i32}> : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.ptr<!cir.void>>
+    %size = "cir.const"() <{value = #cir.int<1024> : !cir.int<u, 64>}> : () -> !cir.int<u, 64>
+    %err = "cir.call"(%cast_a, %size) <{callee = @hipMalloc}> : (!cir.ptr<!cir.ptr<!cir.void>>, !cir.int<u, 64>) -> !cir.int<s, 32>
+
+    %d_a = "cir.load"(%alloca_a) : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.float>
+    %len = "cir.const"() <{value = #cir.int<42> : !cir.int<s, 32>}> : () -> !cir.int<s, 32>
+
+    gpu.launch_func @offload_device_module::@k_mixed
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+        args(%d_a : !cir.ptr<!cir.float>, %len : !cir.int<s, 32>)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k_mixed(%a: !cir.ptr<!cir.float>, %n: !cir.int<s, 32>) kernel {
+      %v = "cir.load"(%a) : (!cir.ptr<!cir.float>) -> !cir.float
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 6. No pointer args → no clone.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.func @k_noptrs(
+// CHECK-NOT:  $ptrfacts
+
+module attributes {gpu.container_module} {
+  func.func @host(%n: index) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+    %val = "cir.const"() <{value = #cir.int<42> : !cir.int<s, 32>}> : () -> !cir.int<s, 32>
+
+    gpu.launch_func @offload_device_module::@k_noptrs
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+        args(%val : !cir.int<s, 32>)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k_noptrs(%x: !cir.int<s, 32>) kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 7. Kernel with no launch sites → no changes.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.func @k_nolaunches(
+// CHECK-NOT:  $ptrfacts
+
+module attributes {gpu.container_module} {
+  gpu.module @offload_device_module {
+    gpu.func @k_nolaunches(%a: !cir.ptr<!cir.float>) kernel {
+      gpu.return
+    }
+  }
+}

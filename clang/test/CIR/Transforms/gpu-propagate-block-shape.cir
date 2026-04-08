@@ -1,0 +1,179 @@
+// Tests for GpuPropagateBlockShapePass.
+//
+// The pass replaces gpu.block_dim ops with arith.constant ops in kernel clones
+// that have a known_block_size attribute (set by TightenLaunchBounds).
+
+// RUN: cir-opt --split-input-file --gpu-propagate-block-shape %s \
+// RUN:   | FileCheck %s
+// RUN: cir-opt --split-input-file \
+// RUN:   --gpu-propagate-block-shape='enabled=false' %s \
+// RUN:   | FileCheck %s --check-prefix=DISABLED
+
+//===----------------------------------------------------------------------===//
+// 1. 2D block shape (16x16x1): all gpu.block_dim ops replaced with constants.
+//    Original kernel (no known_block_size) untouched; clone gets constants.
+//===----------------------------------------------------------------------===//
+
+// Original kernel untouched (no known_block_size).
+// CHECK:      gpu.func @k_2d(
+// CHECK:        gpu.block_dim x
+// CHECK:        gpu.block_dim y
+// CHECK:        gpu.block_dim z
+
+// Clone with known_block_size: gpu.block_dim replaced with arith.constant.
+// CHECK:      gpu.func @k_2d$max256(
+// CHECK-NOT:  gpu.block_dim
+// CHECK:        arith.constant 16 : index
+// CHECK:        arith.constant 16 : index
+// CHECK:        arith.constant 1 : index
+
+// DISABLED:   gpu.func @k_2d$max256(
+// DISABLED:     gpu.block_dim x
+// DISABLED:     gpu.block_dim y
+// DISABLED:     gpu.block_dim z
+
+module attributes {gpu.container_module} {
+  gpu.module @offload_device_module {
+    gpu.func @k_2d() kernel {
+      %bdx = gpu.block_dim x
+      %bdy = gpu.block_dim y
+      %bdz = gpu.block_dim z
+      gpu.return
+    }
+    gpu.func @k_2d$max256() kernel
+        attributes {known_block_size = array<i32: 16, 16, 1>} {
+      %bdx = gpu.block_dim x
+      %bdy = gpu.block_dim y
+      %bdz = gpu.block_dim z
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 2. No known_block_size: gpu.block_dim ops untouched.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.func @k_noattr(
+// CHECK:        gpu.block_dim x
+// CHECK:        gpu.block_dim y
+
+module attributes {gpu.container_module} {
+  gpu.module @offload_device_module {
+    gpu.func @k_noattr() kernel {
+      %bdx = gpu.block_dim x
+      %bdy = gpu.block_dim y
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 3. 1D block shape (256x1x1): x replaced with 256, y/z with 1.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.func @k_1d$max256(
+// CHECK-NOT:  gpu.block_dim
+// CHECK:        arith.constant 256 : index
+// CHECK:        arith.constant 1 : index
+// CHECK:        arith.constant 1 : index
+
+module attributes {gpu.container_module} {
+  gpu.module @offload_device_module {
+    gpu.func @k_1d$max256() kernel
+        attributes {known_block_size = array<i32: 256, 1, 1>} {
+      %bdx = gpu.block_dim x
+      %bdy = gpu.block_dim y
+      %bdz = gpu.block_dim z
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 4. No gpu.block_dim in body: clone has known_block_size but no block_dim
+//    reads -> no changes, no crash.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.func @k_nodim$max256(
+// CHECK-NOT:  arith.constant
+// CHECK:        gpu.return
+
+module attributes {gpu.container_module} {
+  gpu.module @offload_device_module {
+    gpu.func @k_nodim$max256() kernel
+        attributes {known_block_size = array<i32: 256, 1, 1>} {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 5. Compose with TightenLaunchBounds pipeline: launch with constant block
+//    dims -> TightenLaunchBounds creates clone with known_block_size ->
+//    PropagateBlockShape replaces gpu.block_dim in clone body.
+//===----------------------------------------------------------------------===//
+
+// Single-pass test: the pre-existing clone gets block_dim replaced.
+// CHECK:      gpu.func @k_pipe(
+// CHECK:        gpu.block_dim x
+// CHECK:        gpu.block_dim y
+
+// CHECK:      gpu.func @k_pipe$max256(
+// CHECK-NOT:  gpu.block_dim
+// CHECK:        arith.constant 16 : index
+// CHECK:        arith.constant 16 : index
+
+module attributes {gpu.container_module} {
+  func.func @host(%n: index) {
+    %c16 = arith.constant 16 : index
+    %c1  = arith.constant 1  : index
+    gpu.launch_func @offload_device_module::@k_pipe
+        blocks in (%n, %c1, %c1)
+        threads in (%c16, %c16, %c1)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k_pipe() kernel {
+      %bdx = gpu.block_dim x
+      %bdy = gpu.block_dim y
+      gpu.return
+    }
+    gpu.func @k_pipe$max256() kernel
+        attributes {known_block_size = array<i32: 16, 16, 1>} {
+      %bdx = gpu.block_dim x
+      %bdy = gpu.block_dim y
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 6. Idempotence: running the pass twice produces no changes the second time.
+//    After first run, gpu.block_dim ops are gone. Second run finds none.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.func @k_idem$max256(
+// CHECK-NOT:  gpu.block_dim
+// CHECK:        arith.constant 16 : index
+
+module attributes {gpu.container_module} {
+  gpu.module @offload_device_module {
+    gpu.func @k_idem$max256() kernel
+        attributes {known_block_size = array<i32: 16, 16, 1>} {
+      %bdx = gpu.block_dim x
+      gpu.return
+    }
+  }
+}

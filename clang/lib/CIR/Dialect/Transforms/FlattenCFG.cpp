@@ -524,8 +524,12 @@ public:
     // be in the first block of the condition region if a cleanup scope was
     // already flattened within it, introducing multiple blocks. The
     // ConditionOp is always the terminator of the last block.
+    if (!op.getCond().back().mightHaveTerminator())
+      return mlir::failure();
     auto conditionOp =
-        cast<cir::ConditionOp>(op.getCond().back().getTerminator());
+        dyn_cast<cir::ConditionOp>(op.getCond().back().getTerminator());
+    if (!conditionOp)
+      return mlir::failure();
     lowerConditionOp(conditionOp, body, exit, rewriter);
 
     // TODO(cir): Remove the walks below. It visits operations unnecessarily.
@@ -554,6 +558,8 @@ public:
 
     // Lower optional body region yield.
     for (mlir::Block &blk : op.getBody().getBlocks()) {
+      if (!blk.mightHaveTerminator())
+        continue;
       auto bodyYield = dyn_cast<cir::YieldOp>(blk.getTerminator());
       if (bodyYield)
         lowerTerminator(bodyYield, (step ? step : cond), rewriter);
@@ -562,10 +568,15 @@ public:
     // Lower mandatory step region yield. Like the condition region, the
     // YieldOp may be in the last block rather than the first if a cleanup
     // scope was already flattened within the step region.
-    if (step)
-      lowerTerminator(
-          cast<cir::YieldOp>(op.maybeGetStep()->back().getTerminator()), cond,
-          rewriter);
+    if (step) {
+      mlir::Region *stepRegion = op.maybeGetStep();
+      if (stepRegion && !stepRegion->empty() &&
+          stepRegion->back().mightHaveTerminator()) {
+        if (auto yieldOp =
+                dyn_cast<cir::YieldOp>(stepRegion->back().getTerminator()))
+          lowerTerminator(yieldOp, cond, rewriter);
+      }
+    }
 
     // Move region contents out of the loop op.
     rewriter.inlineRegionBefore(op.getCond(), exit);
@@ -1460,6 +1471,45 @@ public:
 
     if (hasNestedOpsToFlatten(cleanupOp.getBodyRegion()))
       return mlir::failure();
+
+    // Earlier flattening patterns (scope, if/else, loops) can leave behind
+    // malformed blocks: empty merge blocks with predecessors but no ops, and
+    // dead ops after terminators (e.g. cir.br after cir.return from scope
+    // cleanup flattening).  Fix these up before proceeding.
+    for (mlir::Region *region :
+         {&cleanupOp.getBodyRegion(), &cleanupOp.getCleanupRegion()}) {
+      // Strip dead ops after terminators.
+      for (mlir::Block &blk : *region) {
+        auto it = blk.begin(), end = blk.end();
+        while (it != end) {
+          if (it->hasTrait<mlir::OpTrait::IsTerminator>()) {
+            ++it;
+            while (it != end) {
+              auto &deadOp = *it;
+              ++it;
+              deadOp.dropAllUses();
+              deadOp.erase();
+            }
+            break;
+          }
+          ++it;
+        }
+      }
+      // Redirect predecessors of empty blocks to the next block, then erase.
+      llvm::SmallVector<mlir::Block *> toErase;
+      for (auto it = region->begin(), end = region->end(); it != end; ++it) {
+        mlir::Block &blk = *it;
+        if (!blk.empty() || blk.hasNoPredecessors())
+          continue;
+        auto next = std::next(it);
+        if (next == end)
+          continue;
+        blk.replaceAllUsesWith(&*next);
+        toErase.push_back(&blk);
+      }
+      for (mlir::Block *blk : toErase)
+        blk->erase();
+    }
 
     cir::CleanupKind cleanupKind = cleanupOp.getCleanupKind();
 

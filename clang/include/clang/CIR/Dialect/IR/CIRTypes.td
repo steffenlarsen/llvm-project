@@ -745,10 +745,7 @@ def CIR_StructType : CIR_Type<"Struct", "struct", [
     mlir::StringAttr getABIConvertedName() const;
 
     // This function should only be called after the CXXABILowering pass. It is
-    // intended to do a 'fixup' of the name so that we don't end up with messy
-    // looking CIR after CXXABI lowering. This should only be called if all uses
-    // of the pre-CXXABILowering version have been removed, otherwise we'll have
-    // a conflict in RecordStorage because two types will have the same hash.
+    // Remove the __post_abi_ prefix from the record type name.
     void removeABIConversionNamePrefix();
 
     bool isSized() const { return isComplete(); }

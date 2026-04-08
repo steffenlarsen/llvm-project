@@ -1,8 +1,8 @@
 // RUN: %clang_cc1 %s -triple x86_64-apple-darwin10 -fclangir -emit-cir -fcxx-exceptions -fexceptions -mmlir --mlir-print-ir-before=cir-cxxabi-lowering -o %t.cir 2> %t-before.cir
 // RUN: FileCheck %s --input-file=%t-before.cir --check-prefixes=CIR,CIR-BEFORE
 // RUN: FileCheck %s --input-file=%t.cir --check-prefixes=CIR,CIR-AFTER
-// RUN: %clang_cc1 %s -triple x86_64-apple-darwin10 -fclangir -emit-llvm -fcxx-exceptions -fexceptions -o - | FileCheck %s --check-prefixes=LLVM
-// RUN: %clang_cc1 %s -triple x86_64-apple-darwin10 -emit-llvm -fcxx-exceptions -fexceptions -o - | FileCheck %s --check-prefixes=LLVM
+// RUN: %clang_cc1 %s -triple x86_64-apple-darwin10 -fclangir -emit-llvm -fcxx-exceptions -fexceptions -o - | FileCheck %s --check-prefixes=CIR-LLVM
+// RUN: %clang_cc1 %s -triple x86_64-apple-darwin10 -emit-llvm -fcxx-exceptions -fexceptions -o - | FileCheck %s --check-prefixes=OGCG
 
 struct Other {
     int x;
@@ -40,7 +40,8 @@ struct Trivial {
 
 // This CAN be zero-initialized.
 WithMemPtr mpt;
-// CIR-DAG: cir.global external @mpt = #cir.zero : !rec_WithMemPtr {alignment = 8 : i64}
+// CIR-BEFORE-DAG: cir.global external @mpt = #cir.zero : !rec_WithMemPtr {alignment = 8 : i64}
+// CIR-AFTER-DAG: cir.global external @mpt = #cir.zero : !rec_WithMemPtr {alignment = 8 : i64}
 // LLVM-DAG: @mpt = global %struct.WithMemPtr zeroinitializer, align 8
 
 WithMemPtr mpt_init{1, 2.0, &Other::func};
@@ -67,10 +68,14 @@ extern "C" void local() {
   // CIR: %[[MPT_INIT:.*]] = cir.alloca "localMpt_init" align(8) init : !cir.ptr<!rec_WithMemPtr>
   // CIR: %[[T_INIT:.*]] = cir.alloca "localT_init" align(8) init : !cir.ptr<!rec_Trivial>
 
-  // LLVM: alloca %struct.WithMemPtr
-  // LLVM: alloca %struct.Trivial
-  // LLVM: %[[MPT_INIT:.*]] = alloca %struct.WithMemPtr
-  // LLVM: %[[T_INIT:.*]] = alloca %struct.Trivial
+  // OGCG: alloca %struct.WithMemPtr
+  // CIR-LLVM: alloca %struct.WithMemPtr
+  // OGCG: alloca %struct.Trivial
+  // CIR-LLVM: alloca %struct.Trivial
+  // OGCG: %[[MPT_INIT:.*]] = alloca %struct.WithMemPtr
+  // CIR-LLVM: %[[MPT_INIT:.*]] = alloca %struct.WithMemPtr
+  // OGCG: %[[T_INIT:.*]] = alloca %struct.Trivial
+  // CIR-LLVM: %[[T_INIT:.*]] = alloca %struct.Trivial
   WithMemPtr localMpt;
 
   Trivial localT;
@@ -81,7 +86,8 @@ extern "C" void local() {
   // CIR-AFTER: %[[MPT_INIT_VAL:.*]] = cir.get_global @__const.local.localMpt_init : !cir.ptr<!rec_WithMemPtr>
   // CIR-AFTER: cir.copy %[[MPT_INIT_VAL]] to %[[MPT_INIT]] : !cir.ptr<!rec_WithMemPtr>
 
-  // LLVM: call void @llvm.memcpy.p0.p0.i64(ptr {{.*}}%[[MPT_INIT]], ptr {{.*}}@__const.local.localMpt_init, i64 32, i1 false)
+  // OGCG: call void @llvm.memcpy.p0.p0.i64(ptr {{.*}}%[[MPT_INIT]], ptr {{.*}}@__const.local.localMpt_init, i64 32, i1 false)
+  // CIR-LLVM: call void @llvm.memcpy.p0.p0.i64(ptr {{.*}}%[[MPT_INIT]], ptr {{.*}}@__const.local.localMpt_init, i64 32, i1 false)
 
   Trivial localT_init{1,2.2, &Other::x};
   // CIR-BEFORE: %[[T_INIT_VAL:.*]] = cir.const #cir.const_record<{#cir.int<1> : !s32i, #cir.fp<2.200000e+00> : !cir.double, #cir.data_member<0> : !cir.data_member<!s32i in !rec_Other>}> : !rec_Trivial
@@ -90,5 +96,6 @@ extern "C" void local() {
   // CIR-AFTER: %[[T_INIT_VAL:.*]] = cir.get_global @__const.local.localT_init : !cir.ptr<!rec_Trivial>
   // CIR-AFTER: cir.copy %[[T_INIT_VAL]] to %[[T_INIT]] : !cir.ptr<!rec_Trivial>
 
-  // LLVM: call void @llvm.memcpy.p0.p0.i64(ptr {{.*}}%[[T_INIT]], ptr {{.*}}@__const.local.localT_init, i64 24, i1 false)
+  // OGCG: call void @llvm.memcpy.p0.p0.i64(ptr {{.*}}%[[T_INIT]], ptr {{.*}}@__const.local.localT_init, i64 24, i1 false)
+  // CIR-LLVM: call void @llvm.memcpy.p0.p0.i64(ptr {{.*}}%[[T_INIT]], ptr {{.*}}@__const.local.localT_init, i64 24, i1 false)
 }

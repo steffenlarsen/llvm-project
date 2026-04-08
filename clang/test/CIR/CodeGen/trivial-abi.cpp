@@ -193,7 +193,7 @@ void testCallLarge1() {
 }
 
 // CIR-LABEL: cir.func {{.*}} @_Z14testCallLarge1v
-// CIR:   cir.call @_Z15testReturnLargev
+// CIR:   cir.call %{{.+}}(%{{.+}}) : (!cir.ptr<!cir.func<(!cir.ptr<!rec_Large>)>>, !cir.ptr<!rec_Large>) -> ()
 // CIR:   cir.call @_Z14testParamLarge5Large
 // LLVM-LABEL: define {{.*}} void @_Z14testCallLarge1v(
 // LLVM:   call {{.*}} @_Z15testReturnLargev(
@@ -209,7 +209,7 @@ void testIgnoredLarge() {
 }
 
 // CIR-LABEL: cir.func {{.*}} @_Z16testIgnoredLargev
-// CIR:   cir.call @_Z15testReturnLargev
+// CIR:   cir.call %{{.+}}(%{{.+}}) : (!cir.ptr<!cir.func<(!cir.ptr<!rec_Large>)>>, !cir.ptr<!rec_Large>) -> ()
 // CIR:   cir.call @_ZN5LargeD1Ev
 // LLVM-LABEL: define {{.*}} void @_Z16testIgnoredLargev(
 // LLVM:   call {{.*}} @_Z15testReturnLargev(

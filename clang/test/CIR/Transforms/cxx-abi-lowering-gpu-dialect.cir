@@ -1,0 +1,39 @@
+// RUN: cir-opt %s -cir-cxxabi-lowering -o %t.cir
+// RUN: FileCheck --input-file=%t.cir %s
+
+// Verify that GPU dialect ops are properly handled during CXX ABI lowering.
+// Without GPU dialect registration in the conversion target and a dedicated
+// GPUFuncOp pattern, these ops would fail with unresolved type mismatches
+// when struct types or data-member types need conversion.
+
+!s32i = !cir.int<s, 32>
+!u8i = !cir.int<u, 8>
+!rec_Other = !cir.struct<"Other" padded {!u8i}>
+!dmp = !cir.data_member<!s32i in !rec_Other>
+
+module attributes {cir.triple = "x86_64-unknown-linux-gnu", gpu.container_module} {
+
+  // A CIR function using data-member types that need ABI lowering.
+  // The GPU ops in the same module must not block this conversion.
+  // CHECK: cir.func @uses_dmp(%arg0: !s64i)
+  cir.func @uses_dmp(%arg0: !dmp) {
+    cir.return
+  }
+
+  // GPU module with a kernel using a data-member parameter.
+  // The GPUFuncOp pattern must update both function_type and block args.
+  // CHECK:      gpu.module @device_module
+  // CHECK:        gpu.func @kernel_with_dmp(%{{.*}}: !s64i) kernel
+  // CHECK:          gpu.return
+  gpu.module @device_module {
+    gpu.func @kernel_with_dmp(%arg0: !dmp) kernel {
+      gpu.return
+    }
+
+    // A kernel with no ABI-dependent types passes through unchanged.
+    // CHECK:      gpu.func @simple_kernel(%{{.*}}: !s32i) kernel
+    gpu.func @simple_kernel(%arg0: !s32i) kernel {
+      gpu.return
+    }
+  }
+}

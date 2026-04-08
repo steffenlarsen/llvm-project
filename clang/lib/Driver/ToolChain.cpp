@@ -758,6 +758,12 @@ Tool *ToolChain::getOffloadPackager() const {
   return OffloadPackager.get();
 }
 
+Tool *ToolChain::getCIRMerge() const {
+  if (!CIRMergeTool)
+    CIRMergeTool.reset(new tools::CIRMerge(*this));
+  return CIRMergeTool.get();
+}
+
 Tool *ToolChain::getLinkerWrapper() const {
   if (!LinkerWrapper)
     LinkerWrapper.reset(new tools::LinkerWrapper(*this, getLink()));
@@ -804,6 +810,8 @@ Tool *ToolChain::getTool(Action::ActionClass AC) const {
 
   case Action::OffloadPackagerJobClass:
     return getOffloadPackager();
+  case Action::CIRMergeJobClass:
+    return getCIRMerge();
   case Action::LinkerWrapperJobClass:
     return getLinkerWrapper();
   }

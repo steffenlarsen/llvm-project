@@ -1,0 +1,16 @@
+// RUN: cir-translate -cir-to-llvmir --disable-cc-lowering -o %t.ll %s
+// RUN: FileCheck --input-file=%t.ll %s
+
+// Verify that #cir.undef and #cir.poison with !cir.bool type use
+// convertTypeForMemory (i8), not convertType (i1), so the initializer
+// matches the global's storage type.
+
+!bool = !cir.bool
+
+module {
+  cir.global external @g_undef = #cir.undef : !bool
+  // CHECK: @g_undef = global i8 undef
+
+  cir.global external @g_poison = #cir.poison : !bool
+  // CHECK: @g_poison = global i8 poison
+}

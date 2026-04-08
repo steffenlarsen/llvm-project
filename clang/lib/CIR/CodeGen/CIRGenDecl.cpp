@@ -13,6 +13,10 @@
 #include "CIRGenCleanup.h"
 #include "CIRGenConstantEmitter.h"
 #include "CIRGenFunction.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Location.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/Attrs.inc"
@@ -359,6 +363,16 @@ void CIRGenFunction::emitAutoVarDecl(const VarDecl &d) {
 }
 
 void CIRGenFunction::emitVarDecl(const VarDecl &d) {
+  // Offload CIR path: `extern __shared__ T arr[]` → offload.shared_mem_alloc.
+  // This must be handled before the hasExternalStorage() early-return below,
+  // because extern __shared__ variables have external linkage but need a local
+  // SSA pointer (the shared memory window) rather than a global symbol lookup.
+  if (cgm.getCodeGenOpts().ClangIROffload && getLangOpts().CUDA &&
+      d.hasExternalStorage() && d.hasAttr<CUDASharedAttr>()) {
+    emitOffloadSharedMemDecl(d);
+    return;
+  }
+
   // If the declaration has external storage, don't emit it now, allow it to be
   // emitted lazily on its first use.
   if (d.hasExternalStorage())
@@ -551,10 +565,13 @@ Address CIRGenModule::createUnnamedGlobalFrom(const VarDecl &d,
     else
       llvm_unreachable("local variable has no parent function or method");
 
-    assert(!cir::MissingFeatures::addressSpace());
+    mlir::ptr::MemorySpaceAttrInterface addrSpace;
+    if (d.hasGlobalStorage())
+      addrSpace = cir::toCIRAddressSpaceAttr(
+          getMLIRContext(), getGlobalVarAddressSpace(&d));
     cir::GlobalOp gv = builder.createVersionedGlobal(
         getModule(), getLoc(d.getLocation()), name, ty, isConstant,
-        cir::GlobalLinkageKind::PrivateLinkage);
+        cir::GlobalLinkageKind::PrivateLinkage, addrSpace);
     insertGlobalSymbol(gv);
     // TODO(cir): infer visibility from linkage in global op builder.
     gv.setVisibility(getMLIRVisibilityFromCIRLinkage(
@@ -569,9 +586,9 @@ Address CIRGenModule::createUnnamedGlobalFrom(const VarDecl &d,
   }
 
   // Create a GetGlobalOp to get a pointer to the global
-  assert(!cir::MissingFeatures::addressSpace());
   mlir::Type eltTy = mlir::cast<mlir::TypedAttr>(constAttr).getType();
-  auto ptrTy = builder.getPointerTo(cacheEntry.getSymType());
+  auto ptrTy =
+      builder.getPointerTo(cacheEntry.getSymType(), cacheEntry.getAddrSpaceAttr());
   mlir::Value globalPtr = cir::GetGlobalOp::create(
       builder, getLoc(d.getLocation()), ptrTy, cacheEntry.getSymName());
   return Address(globalPtr, eltTy, align);
@@ -651,6 +668,54 @@ void CIRGenFunction::emitStaticVarDecl(const VarDecl &d,
   // declaration.  This can happen when double-emitting function
   // bodies, e.g. with complete and base constructors.
   cir::GlobalOp globalOp = cgm.getOrCreateStaticVarDecl(d, linkage);
+
+  CharUnits alignment = getContext().getDeclAlign(&d);
+  mlir::Type elemTy = convertTypeForMem(d.getType());
+
+  // In the unified offload CIR path, static __shared__ local variables inside
+  // __global__ kernels are created as plain cir.global (via
+  // getOrCreateStaticVarDecl) because that code path pre-dates offload support.
+  // Re-emit as a cir.global with TargetAddressSpaceAttr(3) inside the
+  // gpu.module so that CIRToLLVMGlobalOpLowering produces llvm.mlir.global with
+  // addrspace=3.
+  if (cgm.getCodeGenOpts().ClangIROffload && getLangOpts().CUDA &&
+      d.hasAttr<CUDASharedAttr>()) {
+    mlir::Location sharedLoc = globalOp.getLoc();
+    mlir::StringAttr sharedName = globalOp.getSymNameAttr();
+    // Use the CIR type from the VarDecl (not the host-side LLVM type from the
+    // cir::GlobalOp, which was created with convertTypeForMem), so that the
+    // type matches cir.get_global pointer types used in device function bodies.
+    mlir::Type sharedCIRTy = cgm.convertType(d.getType());
+
+    // Create cir.global with addrspace=3 (HIP/CUDA LDS) inside gpu.module.
+    // CIRToLLVMGlobalOpLowering in ConvertCIRInGpuModulePass reads
+    // TargetAddressSpaceAttr and emits llvm.mlir.global with the right
+    // addrspace.
+    {
+      mlir::gpu::GPUModuleOp devMod = cgm.getOrCreateDeviceModule();
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToEnd(devMod.getBody());
+      auto addrSpaceAttr =
+          cir::TargetAddressSpaceAttr::get(builder.getContext(), /*shared=*/3);
+      auto devGlobal =
+          cir::GlobalOp::create(builder, sharedLoc, sharedName, sharedCIRTy);
+      devGlobal.setAddrSpaceAttr(addrSpaceAttr);
+      devGlobal.setLinkage(cir::GlobalLinkageKind::InternalLinkage);
+      mlir::SymbolTable::setSymbolVisibility(
+          devGlobal, mlir::SymbolTable::Visibility::Private);
+    }
+
+    // Create cir.get_global referencing the device global by name.
+    auto sharedAddrSpace =
+        cir::TargetAddressSpaceAttr::get(builder.getContext(), /*shared=*/3);
+    mlir::Value addr = cir::GetGlobalOp::create(
+        builder, sharedLoc,
+        builder.getPointerTo(sharedCIRTy, sharedAddrSpace),
+        sharedName);
+    setAddrOfLocalVar(&d, Address(addr, elemTy, alignment));
+    return;
+  }
+
   // TODO(cir): we should have a way to represent global ops as values without
   // having to emit a get global op. Sometimes these emissions are not used.
   mlir::Value addr =
@@ -658,11 +723,8 @@ void CIRGenFunction::emitStaticVarDecl(const VarDecl &d,
   auto getAddrOp = addr.getDefiningOp<cir::GetGlobalOp>();
   assert(getAddrOp && "expected cir::GetGlobalOp");
 
-  CharUnits alignment = getContext().getDeclAlign(&d);
-
   // Store into LocalDeclMap before generating initializer to handle
   // circular references.
-  mlir::Type elemTy = convertTypeForMem(d.getType());
   setAddrOfLocalVar(&d, Address(addr, elemTy, alignment));
 
   // We can't have a VLA here, but we can have a pointer to a VLA,
@@ -1316,4 +1378,45 @@ void CIRGenFunction::maybeEmitDeferredVarDeclInit(const VarDecl *vd) {
       if (auto *hd = b->getHoldingVar())
         emitVarDecl(*hd);
   }
+}
+
+void CIRGenFunction::emitOffloadSharedMemDecl(const VarDecl &d) {
+  // Emit gpu.dynamic_shared_memory to access the dynamic shared memory region
+  // allocated at kernel launch via the dynamic shmem argument.  Then use
+  // memref.view to reinterpret the raw i8 memref as the declared element type.
+  // The resulting pointer is registered in LocalDeclMap so that subsequent
+  // DeclRefExpr references resolve to it.
+  mlir::Location loc = getLoc(d.getLocation());
+  mlir::MLIRContext *ctx = getBuilder().getContext();
+
+  // For `extern __shared__ T arr[]`, the VarDecl type is an incomplete array
+  // `T[]`; extract the element type T.
+  QualType varTy = d.getType();
+  QualType elemQTy = varTy->isIncompleteArrayType()
+                         ? varTy->castAsArrayTypeUnsafe()->getElementType()
+                         : varTy;
+  mlir::Type elemTy = convertTypeForMem(elemQTy);
+
+  // gpu.dynamic_shared_memory returns memref<?xi8,
+  // #gpu.address_space<workgroup>>
+  auto wgAS = mlir::gpu::AddressSpaceAttr::get(
+      ctx, mlir::gpu::GPUDialect::getWorkgroupAddressSpace());
+  auto i8MemrefTy = mlir::MemRefType::get(
+      {mlir::ShapedType::kDynamic}, mlir::IntegerType::get(ctx, 8),
+      mlir::MemRefLayoutAttrInterface{}, wgAS);
+  mlir::Value base =
+      mlir::gpu::DynamicSharedMemoryOp::create(getBuilder(), loc, i8MemrefTy)
+          .getResult();
+
+  // CIR types are not valid MLIR memref element types, so we cannot use
+  // memref.view to produce a typed memref here.  Instead cast the raw i8
+  // memref directly to a CIR pointer-to-element via unrealized_conversion_cast.
+  // The cast is reconciled later by ConvertCIRInGpuModulePass.
+  mlir::Type ptrTy = getBuilder().getPointerTo(elemTy);
+  mlir::Value ptr =
+      mlir::UnrealizedConversionCastOp::create(getBuilder(), loc, ptrTy, base)
+          .getResult(0);
+
+  CharUnits align = getContext().getTypeAlignInChars(elemQTy);
+  setAddrOfLocalVar(&d, Address(ptr, elemTy, align));
 }

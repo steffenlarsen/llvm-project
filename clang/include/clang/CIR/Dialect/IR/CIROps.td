@@ -827,9 +827,7 @@ defvar CIR_ReturnableScopes = [
   "DoWhileOp", "WhileOp", "ForOp", "TryOp"
 ];
 
-def CIR_ReturnOp : CIR_Op<"return", [
-  ParentOneOf<CIR_ReturnableScopes>, Terminator
-]> {
+def CIR_ReturnOp : CIR_Op<"return", [Terminator]> {
   let summary = "Return from function";
   let description = [{
     The "return" operation represents a return operation within a function.

@@ -77,6 +77,16 @@ handleAMDGPUFlatWorkGroupSizeAttr(const FunctionDecl *fd, cir::FuncOp func,
     } else {
       assert(max == 0 && "Max must be zero");
     }
+  } else if (const auto *launchBounds =
+                 fd->getAttr<CUDALaunchBoundsAttr>()) {
+    unsigned maxThreads = launchBounds->getMaxThreads()
+                              ->EvaluateKnownConstInt(cgm.getASTContext())
+                              .getExtValue();
+    if (maxThreads > 0) {
+      std::string attrVal = "1," + llvm::utostr(maxThreads);
+      func->setAttr("cir.amdgpu-flat-work-group-size",
+                    builder.getStringAttr(attrVal));
+    }
   } else if (isOpenCLKernel || isHIPKernel) {
     // By default, restrict the maximum size to a value specified by
     // --gpu-max-threads-per-block=n or its default value for HIP.

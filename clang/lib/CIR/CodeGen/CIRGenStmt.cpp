@@ -91,12 +91,13 @@ CIRGenFunction::emitAttributedStmt(const AttributedStmt &s) {
     switch (attr->getKind()) {
     default:
       break;
+    case attr::Atomic:
+      break;
     case attr::NoMerge:
     case attr::NoInline:
     case attr::AlwaysInline:
     case attr::NoConvergent:
     case attr::MustTail:
-    case attr::Atomic:
     case attr::HLSLControlFlowHint:
       cgm.errorNYI(s.getSourceRange(),
                    "Unimplemented statement attribute: ", attr->getKind());

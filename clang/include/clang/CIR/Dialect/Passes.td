@@ -184,6 +184,26 @@ def LoweringPrepare : Pass<"cir-lowering-prepare"> {
   let dependentDialects = ["cir::CIRDialect"];
 }
 
+def MergeOffloadModules : Pass<"offload-merge-modules", "mlir::ModuleOp"> {
+  let summary = "Merge device CIR modules into the host offload module";
+  let description = [{
+    Reads one or more device CIR files produced by device cc1 invocations and
+    merges each into a gpu.module in the host module.  Each entry has the form
+    ``arch:path`` (e.g. ``gfx90a:/tmp/dev.cir``); a bare path with no colon
+    uses the legacy single-arch name ``offload_device_module``.  Multiple
+    entries produce separate ``gpu.module @offload_device_module_<arch>`` ops.
+  }];
+  let options = [
+    ListOption<"deviceCirFiles", "device-cir", "std::string",
+               "arch:path pairs for device CIR files (arch may be empty for "
+               "legacy single-module mode)">
+  ];
+  let dependentDialects = [
+    "::mlir::gpu::GPUDialect",
+    "::cir::CIRDialect"
+  ];
+}
+
 def IdiomRecognizer : Pass<"cir-idiom-recognizer", "mlir::ModuleOp"> {
   let summary = "Raise calls to C/C++ libraries to CIR operations";
   let description = [{

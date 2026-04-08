@@ -18,6 +18,7 @@
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
 
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
@@ -91,10 +92,33 @@ static Twine getModuleIdentifier(StringRef moduleName) {
   return moduleName + "_module";
 }
 
-namespace llvm {
-static LogicalResult embedBinaryImpl(StringRef moduleName,
-                                     gpu::ObjectAttr object, Module &module) {
+// Returns true if the object targets an ROCm/AMDGPU device (rocdl.target).
+// Detected by inspecting the target attribute type name to avoid a hard
+// dependency on the ROCDL dialect from this GPU translation library.
+static bool isROCmTarget(gpu::ObjectAttr object) {
+  if (!object)
+    return false;
+  Attribute target = object.getTarget();
+  if (!target)
+    return false;
+  return target.getAbstractAttribute().getName().contains("rocdl");
+}
 
+// Returns the kernel name string as stored in the gpu.binary / kernel symbol.
+// For the ROCm path this is just the raw kernel name from the launch_func op.
+static std::string getKernelNameStr(StringRef moduleName,
+                                    StringRef kernelName) {
+  return (moduleName + "_" + kernelName + "_name").str();
+}
+
+namespace llvm {
+
+// ---------------------------------------------------------------------------
+// Generic (non-ROCm) embedding: mgpuModuleLoad / mgpuModuleUnload path.
+// ---------------------------------------------------------------------------
+static LogicalResult embedBinaryGeneric(StringRef moduleName,
+                                        gpu::ObjectAttr object,
+                                        Module &module) {
   // Embed the object as a global string.
   // Add null for assembly output for JIT paths that expect null-terminated
   // strings.
@@ -180,6 +204,321 @@ static LogicalResult embedBinaryImpl(StringRef moduleName,
 
   return success();
 }
+
+// ---------------------------------------------------------------------------
+// ROCm / HIP-native embedding path.
+//
+// Generates the same binary registration pattern that clang emits for HIP:
+//   - __hipRegisterFatBinary  (called once at startup)
+//   - __hipRegisterFunction   (once per kernel at startup)
+// Uses __hipRegisterFatBinary + __hipRegisterFunction at startup, then
+// hipLaunchKernel at launch — matching what clang's HIP path produces.
+// No hipModuleLoadData/hipModuleGetFunction needed: the HIP runtime resolves
+// kernel pointers to hipFunction_t via its internal registry populated during
+// __hipRegisterFunction.
+// ---------------------------------------------------------------------------
+static LogicalResult embedBinaryROCm(StringRef moduleName,
+                                     gpu::ObjectAttr object,
+                                     Module &module,
+                                     mlir::Operation *binaryOp) {
+  StringRef serializedStr = object.getObject().getValue();
+
+  IRBuilder<> builder(module.getContext());
+  auto *i32Ty = builder.getInt32Ty();
+  auto *i64Ty = builder.getInt64Ty();
+  auto *ptrTy = builder.getPtrTy(0);
+  auto *voidTy = builder.getVoidTy();
+
+  // -------------------------------------------------------------------------
+  // 1. Embed the fat binary blob in section ".hip_fatbin", align 4096.
+  // -------------------------------------------------------------------------
+  Constant *blobCst =
+      ConstantDataArray::getString(module.getContext(), serializedStr,
+                                   /*AddNull=*/false);
+  auto *fatBinData = new GlobalVariable(module, blobCst->getType(), true,
+                                        GlobalValue::InternalLinkage, blobCst,
+                                        moduleName + "_binary");
+  fatBinData->setSection(".hip_fatbin");
+  fatBinData->setAlignment(MaybeAlign(4096));
+  fatBinData->setUnnamedAddr(GlobalValue::UnnamedAddr::None);
+
+  // -------------------------------------------------------------------------
+  // 2. Fatbin wrapper struct: { i32 magic, i32 version, ptr data, ptr null }
+  //    HIPFatMagic = 0x48495046 ("HIPF")
+  // -------------------------------------------------------------------------
+  StructType *wrapperTy = StructType::get(i32Ty, i32Ty, ptrTy, ptrTy);
+  Constant *wrapperInit = ConstantStruct::get(
+      wrapperTy,
+      {ConstantInt::get(i32Ty, 0x48495046u), // HIPFatMagic
+       ConstantInt::get(i32Ty, 1),            // version
+       fatBinData,
+       ConstantPointerNull::get(ptrTy)});
+  auto *fatbinWrapper =
+      new GlobalVariable(module, wrapperTy, /*isConstant=*/true,
+                         GlobalValue::InternalLinkage, wrapperInit,
+                         moduleName + "_fatbin_wrapper");
+  fatbinWrapper->setSection(".hipFatBinSegment");
+  fatbinWrapper->setAlignment(MaybeAlign(8));
+
+  // -------------------------------------------------------------------------
+  // 3. __hip_gpubin_handle global (null-initialized, set once in ctor).
+  // -------------------------------------------------------------------------
+  auto *gpuBinHandle =
+      new GlobalVariable(module, ptrTy, /*isConstant=*/false,
+                         GlobalValue::InternalLinkage,
+                         ConstantPointerNull::get(ptrTy),
+                         moduleName + "_gpubin_handle");
+
+  // -------------------------------------------------------------------------
+  // 4. Collect all kernel names referenced by gpu.launch_func ops that target
+  //    this binary (by matching getKernelModuleName() == moduleName).
+  //    Also collect from the optional "gpu.kernels" ArrayAttr on the binary
+  //    itself (set by CIR offload pipeline for kernels not launched in this TU).
+  // -------------------------------------------------------------------------
+  SmallVector<std::string> kernelNames;
+  if (binaryOp) {
+    auto parentModule = binaryOp->getParentOfType<mlir::ModuleOp>();
+    if (parentModule) {
+      parentModule->walk([&](mlir::gpu::LaunchFuncOp launchOp) {
+        if (launchOp.getKernelModuleName().getValue() == moduleName) {
+          std::string kName = launchOp.getKernelName().str();
+          if (!llvm::is_contained(kernelNames, kName))
+            kernelNames.push_back(kName);
+        }
+      });
+    }
+  }
+  if (auto kernelTable = object.getKernels()) {
+    for (auto km : kernelTable) {
+      std::string kName = km.getName().str();
+      if (!llvm::is_contained(kernelNames, kName))
+        kernelNames.push_back(kName);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 5. Per-kernel: emit kernel handle global + name string global.
+  //    The kernel handle is a unique ptr-sized address used as a key by the
+  //    HIP runtime's __hipRegisterFunction registry. Its value is irrelevant;
+  //    only its address identity matters (same as clang's stub function ptr).
+  //    hipLaunchKernel takes &kernelHandle as "const void* func".
+  // -------------------------------------------------------------------------
+  // "gpu.kernel_stubs" maps kernel name → stub function name (e.g.
+  // "_Z6kernelPi" → "_Z21__device_stub__kernelPi").  When present, use the
+  // stub function as the handle for __hipRegisterFunction so that
+  // function-pointer-based launches (hipLaunchKernel(&stub, ...)) work.
+  llvm::StringMap<std::string> kernelStubMap;
+  if (binaryOp) {
+    if (auto stubsAttr =
+            binaryOp->getAttrOfType<mlir::DictionaryAttr>("gpu.kernel_stubs")) {
+      for (auto entry : stubsAttr) {
+        if (auto val = mlir::dyn_cast<mlir::StringAttr>(entry.getValue()))
+          kernelStubMap[entry.getName()] = val.getValue().str();
+      }
+    }
+  }
+
+  SmallVector<Constant *> kernelHandles;
+  for (const std::string &kName : kernelNames) {
+    Constant *handle = nullptr;
+    auto stubIt = kernelStubMap.find(kName);
+    if (stubIt != kernelStubMap.end()) {
+      if (Function *stubFn = module.getFunction(stubIt->second))
+        handle = stubFn;
+    }
+    if (!handle) {
+      handle = new GlobalVariable(module, ptrTy, /*isConstant=*/false,
+                                  GlobalValue::InternalLinkage,
+                                  ConstantPointerNull::get(ptrTy),
+                                  moduleName + "_" + kName + "_handle");
+    }
+    kernelHandles.push_back(handle);
+
+    // Kernel name C-string (null-terminated), created as a raw global because
+    // this runs outside any basic block context.
+    Constant *nameInit = ConstantDataArray::getString(module.getContext(), kName);
+    new GlobalVariable(module, nameInit->getType(), /*isConstant=*/true,
+                       GlobalValue::InternalLinkage, nameInit,
+                       getKernelNameStr(moduleName, kName));
+  }
+
+  // -------------------------------------------------------------------------
+  // 6. Runtime function declarations.
+  // -------------------------------------------------------------------------
+  // __hipRegisterFatBinary: ptr(ptr wrapper) -> ptr (fat binary handle)
+  FunctionCallee registerFatBin = module.getOrInsertFunction(
+      "__hipRegisterFatBinary", FunctionType::get(ptrTy, {ptrTy}, false));
+
+  // __hipRegisterFunction: i32(ptr handle, ptr kernelPtr, ptr name, ptr name,
+  //                            i32 warpSize, ptr null×5)
+  FunctionCallee registerFn = module.getOrInsertFunction(
+      "__hipRegisterFunction",
+      FunctionType::get(i32Ty,
+                        {ptrTy, ptrTy, ptrTy, ptrTy, i32Ty, ptrTy, ptrTy,
+                         ptrTy, ptrTy, ptrTy},
+                        false));
+
+  // __hipUnregisterFatBinary: void(ptr)
+  FunctionCallee unregisterFatBin = module.getOrInsertFunction(
+      "__hipUnregisterFatBinary", FunctionType::get(voidTy, {ptrTy}, false));
+
+  // -------------------------------------------------------------------------
+  // 7. Constructor: register fat binary + per-kernel functions.
+  //    Guarded by a null-check on gpuBinHandle (idempotent, matches clang).
+  // -------------------------------------------------------------------------
+  auto *loadFn =
+      Function::Create(FunctionType::get(voidTy, /*IsVarArg=*/false),
+                       GlobalValue::InternalLinkage, moduleName + "_load",
+                       module);
+  loadFn->setSection(".text.startup");
+
+  auto *entryBB = BasicBlock::Create(module.getContext(), "entry", loadFn);
+  auto *registerBB =
+      BasicBlock::Create(module.getContext(), "register", loadFn);
+  auto *doneBB = BasicBlock::Create(module.getContext(), "done", loadFn);
+
+  builder.SetInsertPoint(entryBB);
+  Value *handleVal = builder.CreateLoad(ptrTy, gpuBinHandle);
+  Value *isNull =
+      builder.CreateICmpEQ(handleVal, ConstantPointerNull::get(ptrTy));
+  builder.CreateCondBr(isNull, registerBB, doneBB);
+
+  builder.SetInsertPoint(registerBB);
+  Value *regHandle = builder.CreateCall(registerFatBin, {fatbinWrapper});
+  builder.CreateStore(regHandle, gpuBinHandle);
+
+  Constant *negOne = ConstantInt::getAllOnesValue(i32Ty);
+  Constant *nullPtr = ConstantPointerNull::get(ptrTy);
+  for (auto [kName, kHandle] : llvm::zip(kernelNames, kernelHandles)) {
+    GlobalVariable *nameGV =
+        module.getGlobalVariable(getKernelNameStr(moduleName, kName), true);
+    builder.CreateCall(registerFn, {regHandle, kHandle, nameGV, nameGV, negOne,
+                                    nullPtr, nullPtr, nullPtr, nullPtr,
+                                    nullPtr});
+  }
+
+  builder.CreateBr(doneBB);
+
+  builder.SetInsertPoint(doneBB);
+  builder.CreateRetVoid();
+
+  appendToGlobalCtors(module, loadFn, /*Priority=*/123);
+
+  // -------------------------------------------------------------------------
+  // 8. Destructor: unregister fat binary.
+  // -------------------------------------------------------------------------
+  auto *unloadFn =
+      Function::Create(FunctionType::get(voidTy, /*IsVarArg=*/false),
+                       GlobalValue::InternalLinkage, moduleName + "_unload",
+                       module);
+  unloadFn->setSection(".text.startup");
+  auto *unloadBB = BasicBlock::Create(module.getContext(), "entry", unloadFn);
+  builder.SetInsertPoint(unloadBB);
+  Value *handle = builder.CreateLoad(ptrTy, gpuBinHandle);
+  builder.CreateCall(unregisterFatBin, {handle});
+  builder.CreateRetVoid();
+  appendToGlobalDtors(module, unloadFn, /*Priority=*/123);
+
+  // -------------------------------------------------------------------------
+  // 9. Populate stub function bodies.
+  //    For each kernel that has a stub function, generate:
+  //      __hipPopCallConfiguration(&grid, &block, &sharedMem, &stream)
+  //      hipLaunchKernel(&stub, grid, block, args, sharedMem, stream)
+  //    Using ABI-lowered dim3 (i64 + i32) to avoid CIR's struct-by-value
+  //    calling convention mismatch with the HIP runtime.
+  // -------------------------------------------------------------------------
+  SmallVector<Type *, 4> popConfigParams = {ptrTy, ptrTy, ptrTy, ptrTy};
+  FunctionCallee popConfigFn = module.getOrInsertFunction(
+      "__hipPopCallConfiguration",
+      FunctionType::get(i32Ty, popConfigParams, false));
+  // hipLaunchKernel with ABI-lowered dim3: (ptr, i64, i32, i64, i32, ptr, i64,
+  // ptr)
+  SmallVector<Type *, 8> launchParams = {ptrTy, i64Ty, i32Ty, i64Ty,
+                                         i32Ty, ptrTy, i64Ty, ptrTy};
+  FunctionCallee launchKernelFn = module.getOrInsertFunction(
+      "hipLaunchKernel",
+      FunctionType::get(i32Ty, launchParams, false));
+
+  SmallVector<Type *, 3> dim3Fields = {i32Ty, i32Ty, i32Ty};
+  auto *dim3Ty =
+      StructType::create(module.getContext(), dim3Fields, "struct.dim3.abi");
+
+  for (auto [kName, kHandle] : llvm::zip(kernelNames, kernelHandles)) {
+    auto stubIt = kernelStubMap.find(kName);
+    if (stubIt == kernelStubMap.end())
+      continue;
+    Function *stubFn = module.getFunction(stubIt->second);
+    if (!stubFn || !stubFn->empty())
+      continue;
+
+    // Build stub body.
+    auto *entBB =
+        BasicBlock::Create(module.getContext(), "entry", stubFn);
+    IRBuilder<> sb(entBB);
+
+    // Allocas for hipPopCallConfiguration outputs.
+    Value *gridAlloca = sb.CreateAlloca(dim3Ty);
+    Value *blockAlloca = sb.CreateAlloca(dim3Ty);
+    Value *sharedAlloca = sb.CreateAlloca(i64Ty);
+    Value *streamAlloca = sb.CreateAlloca(ptrTy);
+
+    sb.CreateCall(popConfigFn,
+                  {gridAlloca, blockAlloca, sharedAlloca, streamAlloca});
+
+    // Build void *args[] array from stub parameters.
+    // Each args[i] must point to the argument data.  For scalar/small
+    // struct args, we alloca+store and use &alloca.  For pointer args
+    // that represent indirect struct passing (CIR passes large structs
+    // by pointer), use the pointer directly since it already points to
+    // the struct data.
+    unsigned numArgs = stubFn->arg_size();
+    Value *argsAlloca = sb.CreateAlloca(ptrTy, sb.getInt32(numArgs));
+    for (unsigned i = 0; i < numArgs; ++i) {
+      Value *argVal = stubFn->getArg(i);
+      Value *slotGEP = sb.CreateConstInBoundsGEP1_32(ptrTy, argsAlloca, i);
+      if (argVal->getType()->isPointerTy()) {
+        // Pointer arg: store the pointer directly in args[].
+        // This handles both byval (pointer to callee's copy) and
+        // indirect/no-byval (pointer to caller's data) from CIR.
+        // In both cases, the pointer already points to the argument
+        // data, so args[i] = ptr gives hipLaunchKernel the right
+        // address to memcpy from.
+        sb.CreateStore(argVal, slotGEP);
+      } else {
+        Value *argSlot = sb.CreateAlloca(argVal->getType());
+        sb.CreateStore(argVal, argSlot);
+        sb.CreateStore(argSlot, slotGEP);
+      }
+    }
+
+    // Load grid/block dim3 fields and pack into ABI-lowered (i64, i32).
+    auto packDim3 = [&](Value *dim3Ptr) -> std::pair<Value *, Value *> {
+      Value *xPtr = sb.CreateStructGEP(dim3Ty, dim3Ptr, 0);
+      Value *yPtr = sb.CreateStructGEP(dim3Ty, dim3Ptr, 1);
+      Value *zPtr = sb.CreateStructGEP(dim3Ty, dim3Ptr, 2);
+      Value *x = sb.CreateLoad(i32Ty, xPtr);
+      Value *y = sb.CreateLoad(i32Ty, yPtr);
+      Value *z = sb.CreateLoad(i32Ty, zPtr);
+      Value *xExt = sb.CreateZExt(x, i64Ty);
+      Value *yExt = sb.CreateZExt(y, i64Ty);
+      Value *yShift = sb.CreateShl(yExt, ConstantInt::get(i64Ty, 32));
+      Value *xy = sb.CreateOr(yShift, xExt);
+      return {xy, z};
+    };
+
+    auto [gridXY, gridZ] = packDim3(gridAlloca);
+    auto [blockXY, blockZ] = packDim3(blockAlloca);
+    Value *sharedMem = sb.CreateLoad(i64Ty, sharedAlloca);
+    Value *stream = sb.CreateLoad(ptrTy, streamAlloca);
+
+    sb.CreateCall(launchKernelFn, {kHandle, gridXY, gridZ, blockXY, blockZ,
+                                   argsAlloca, sharedMem, stream});
+    sb.CreateRetVoid();
+  }
+
+  return success();
+}
+
 } // namespace llvm
 
 LogicalResult SelectObjectAttrImpl::embedBinary(
@@ -199,8 +538,12 @@ LogicalResult SelectObjectAttrImpl::embedBinary(
   if (!object)
     return failure();
 
-  return embedBinaryImpl(op.getName(), object,
-                         *moduleTranslation.getLLVMModule());
+  llvm::Module &module = *moduleTranslation.getLLVMModule();
+
+  if (isROCmTarget(object))
+    return llvm::embedBinaryROCm(op.getName(), object, module, operation);
+
+  return llvm::embedBinaryGeneric(op.getName(), object, module);
 }
 
 namespace llvm {
@@ -230,15 +573,19 @@ public:
   // Get the stream sync callee.
   FunctionCallee getStreamSyncFn();
 
-  // Ger or create the function name global string.
+  // Get or create the function name global string.
   Value *getOrCreateFunctionName(StringRef moduleName, StringRef kernelName);
 
   // Create the void* kernel array for passing the arguments.
   Value *createKernelArgArray(mlir::gpu::LaunchFuncOp op);
 
-  // Create the full kernel launch.
+  // Create the full kernel launch — generic (mgpu*) path.
   llvm::LogicalResult createKernelLaunch(mlir::gpu::LaunchFuncOp op,
                                          mlir::gpu::ObjectAttr object);
+
+  // Create the full kernel launch — HIP-native (hipModuleLaunchKernel) path.
+  llvm::LogicalResult createKernelLaunchROCm(mlir::gpu::LaunchFuncOp op,
+                                              mlir::gpu::ObjectAttr object);
 
 private:
   Module &module;
@@ -277,9 +624,13 @@ LogicalResult SelectObjectAttrImpl::launchKernel(
   if (!object)
     return failure();
 
-  return llvm::LaunchKernel(*moduleTranslation.getLLVMModule(), builder,
-                            moduleTranslation)
-      .createKernelLaunch(launchFuncOp, object);
+  llvm::LaunchKernel launcher(*moduleTranslation.getLLVMModule(), builder,
+                               moduleTranslation);
+
+  if (isROCmTarget(object))
+    return launcher.createKernelLaunchROCm(launchFuncOp, object);
+
+  return launcher.createKernelLaunch(launchFuncOp, object);
 }
 
 llvm::LaunchKernel::LaunchKernel(
@@ -384,8 +735,13 @@ llvm::LaunchKernel::createKernelArgArray(mlir::gpu::LaunchFuncOp op) {
     structTypes[i] = arg->getType();
 
   Type *structTy = StructType::create(module.getContext(), structTypes);
-  Value *argStruct = builder.CreateAlloca(structTy, 0u);
-  Value *argArray = builder.CreateAlloca(
+  // Place allocas in the entry block so they don't accumulate when the
+  // launch is inside a loop.
+  Function *func = builder.GetInsertBlock()->getParent();
+  IRBuilder<> entryBuilder(&func->getEntryBlock(),
+                           func->getEntryBlock().getFirstInsertionPt());
+  Value *argStruct = entryBuilder.CreateAlloca(structTy, 0u);
+  Value *argArray = entryBuilder.CreateAlloca(
       ptrTy, ConstantInt::get(intPtrTy, structTypes.size()));
 
   for (auto [i, arg] : enumerate(args)) {
@@ -445,19 +801,20 @@ llvm::LaunchKernel::createKernelLaunch(mlir::gpu::LaunchFuncOp op,
   Value *moduleFunction =
       builder.CreateCall(getModuleFunctionFn(), {moduleObj, functionName});
 
-  // Get the stream to use for execution. If there's no async object then create
-  // a stream to make a synchronous kernel launch.
+  // Get the stream to use for execution.
+  // If an async object is provided, use it directly.
+  // Otherwise, pass the null/default stream so the launch is asynchronous
+  // from the host's perspective — the kernel is queued and the host
+  // continues immediately. The caller is responsible for explicit
+  // synchronization (e.g. hipDeviceSynchronize / cudaDeviceSynchronize).
+  // Creating a temporary stream and immediately synchronizing it (the old
+  // behavior) makes every kernel launch a synchronous round-trip, which
+  // serializes independent launches and prevents GPU pipelining.
   Value *stream = nullptr;
-  // Sync & destroy the stream, for synchronous launches.
-  llvm::scope_exit destroyStream([&]() {
-    builder.CreateCall(getStreamSyncFn(), {stream});
-    builder.CreateCall(getStreamDestroyFn(), {stream});
-  });
   if (mlir::Value asyncObject = op.getAsyncObject()) {
     stream = llvmValue(asyncObject);
-    destroyStream.release();
   } else {
-    stream = builder.CreateCall(getStreamCreateFn(), {});
+    stream = llvm::ConstantPointerNull::get(ptrTy);
   }
 
   llvm::Constant *paramsCount =
@@ -498,6 +855,112 @@ llvm::LaunchKernel::createKernelLaunch(mlir::gpu::LaunchFuncOp op,
                                           bz, dynamicMemorySize, stream,
                                           argArray, nullPtr, paramsCount}));
   }
+
+  return success();
+}
+
+// Emits LLVM IR to launch a kernel using the HIP-native path:
+//   hipLaunchKernel(&kernelHandle, gridXY, gridZ, blockXY, blockZ,
+//                  args, smem, stream)
+//
+// The kernel handle is a global registered with __hipRegisterFunction at
+// startup. hipLaunchKernel resolves it to hipFunction_t via the runtime's
+// internal registry — no per-launch string lookup.
+//
+// hipLaunchKernel's dim3 args are lowered to {i64, i32} pairs on x86-64:
+//   dim3{x,y,z} → i64 (y<<32|x), i32 z
+// This matches what clang emits for HIP code.
+llvm::LogicalResult
+llvm::LaunchKernel::createKernelLaunchROCm(mlir::gpu::LaunchFuncOp op,
+                                            mlir::gpu::ObjectAttr object) {
+  auto llvmValue = [&](mlir::Value value) -> Value * {
+    Value *v = moduleTranslation.lookupValue(value);
+    assert(v && "Value has not been translated.");
+    return v;
+  };
+
+  StringRef moduleName = op.getKernelModuleName().getValue();
+  StringRef kernelName = op.getKernelName();
+
+  // The kernel handle registered with __hipRegisterFunction.
+  // This is either the stub function itself (CIR offload path) or a
+  // dedicated handle global (non-stub path).
+  Constant *kernelHandle = nullptr;
+  // First check if we registered via the stub function.
+  if (auto parentMod = op->getParentOfType<mlir::ModuleOp>()) {
+    parentMod->walk([&](mlir::Operation *binOp) {
+      if (auto stubsAttr = binOp->getAttrOfType<mlir::DictionaryAttr>(
+              "gpu.kernel_stubs")) {
+        if (auto val = stubsAttr.getNamed(kernelName)) {
+          if (auto strVal = mlir::dyn_cast<mlir::StringAttr>(val->getValue()))
+            kernelHandle = module.getFunction(strVal.getValue());
+        }
+      }
+    });
+  }
+  if (!kernelHandle) {
+    std::string handleName =
+        (moduleName + "_" + kernelName + "_handle").str();
+    kernelHandle = module.getGlobalVariable(handleName, true);
+  }
+  if (!kernelHandle)
+    return op.emitError() << "Couldn't find kernel handle for: "
+                          << kernelName
+                          << ". Ensure embedBinary ran for this binary.";
+
+  // Grid dimensions — truncate index to i32, pack {y,x} into i64.
+  mlir::gpu::KernelDim3 grid = op.getGridSizeOperandValues();
+  Value *gx = builder.CreateTrunc(llvmValue(grid.x), i32Ty);
+  Value *gy = builder.CreateTrunc(llvmValue(grid.y), i32Ty);
+  Value *gz = builder.CreateTrunc(llvmValue(grid.z), i32Ty);
+  // Pack gx (lo32) + gy (hi32) into i64 for the dim3 ABI.
+  Value *gxExt = builder.CreateZExt(gx, i64Ty);
+  Value *gyExt = builder.CreateZExt(gy, i64Ty);
+  Value *gyShift = builder.CreateShl(gyExt, ConstantInt::get(i64Ty, 32));
+  Value *gridXY = builder.CreateOr(gyShift, gxExt);
+
+  // Block dimensions.
+  mlir::gpu::KernelDim3 block = op.getBlockSizeOperandValues();
+  Value *bx = builder.CreateTrunc(llvmValue(block.x), i32Ty);
+  Value *by = builder.CreateTrunc(llvmValue(block.y), i32Ty);
+  Value *bz = builder.CreateTrunc(llvmValue(block.z), i32Ty);
+  Value *bxExt = builder.CreateZExt(bx, i64Ty);
+  Value *byExt = builder.CreateZExt(by, i64Ty);
+  Value *byShift = builder.CreateShl(byExt, ConstantInt::get(i64Ty, 32));
+  Value *blockXY = builder.CreateOr(byShift, bxExt);
+
+  // Shared memory size as i64.
+  Value *smemI64 = nullptr;
+  if (mlir::Value dynSz = op.getDynamicSharedMemorySize())
+    smemI64 = builder.CreateZExt(llvmValue(dynSz), i64Ty);
+  else
+    smemI64 = ConstantInt::get(i64Ty, 0);
+
+  // Stream: use provided async object or null stream.
+  Value *stream = nullptr;
+  if (mlir::Value asyncObject = op.getAsyncObject())
+    stream = llvmValue(asyncObject);
+  else
+    stream = ConstantPointerNull::get(ptrTy);
+
+  // Build kernel argument array.
+  Value *argArray = createKernelArgArray(op);
+
+  // hipLaunchKernel(const void* func,
+  //                i64 gridXY, i32 gridZ,
+  //                i64 blockXY, i32 blockZ,
+  //                void** args, i64 sharedMem, hipStream_t stream)
+  // The two dim3 parameters are ABI-lowered to {i64, i32} on x86-64.
+  FunctionCallee hipLaunch = module.getOrInsertFunction(
+      "hipLaunchKernel",
+      FunctionType::get(i32Ty,
+                        {ptrTy, i64Ty, i32Ty, i64Ty, i32Ty, ptrTy, i64Ty,
+                         ptrTy},
+                        false));
+
+  builder.CreateCall(hipLaunch,
+                     {kernelHandle, gridXY, gz, blockXY, bz, argArray,
+                      smemI64, stream});
 
   return success();
 }

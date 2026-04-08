@@ -13,6 +13,7 @@
 #include "CIRGenModule.h"
 
 #include "mlir/Dialect/DLTI/DLTI.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/OpenACC/OpenACC.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/IR/MLIRContext.h"
@@ -55,6 +56,8 @@ void CIRGenerator::Initialize(ASTContext &astContext) {
   mlirContext->loadDialect<mlir::DLTIDialect, cir::CIRDialect>();
   mlirContext->getOrLoadDialect<mlir::acc::OpenACCDialect>();
   mlirContext->getOrLoadDialect<mlir::omp::OpenMPDialect>();
+  if (codeGenOpts.ClangIROffload)
+    mlirContext->getOrLoadDialect<mlir::gpu::GPUDialect>();
 
   cgm = std::make_unique<clang::CIRGen::CIRGenModule>(
       *mlirContext.get(), astContext, codeGenOpts, diags);
@@ -82,8 +85,14 @@ bool CIRGenerator::HandleTopLevelDecl(DeclGroupRef group) {
 
 void CIRGenerator::HandleTranslationUnit(ASTContext &astContext) {
   // Release the Builder when there is no error.
-  if (!diags.hasErrorOccurred() && cgm)
+  if (!diags.hasErrorOccurred() && cgm) {
+    // Flush inline function bodies (e.g. __device__ inline functions such as
+    // __syncthreads) that were queued by HandleInlineFunctionDefinition.
+    // These must be emitted before release() so that cir.call ops that
+    // reference them pass the module verifier.
+    emitDeferredDecls();
     cgm->release();
+  }
 
   // If there are errors before or when releasing the cgm, reset the module to
   // stop here before invoking the backend.

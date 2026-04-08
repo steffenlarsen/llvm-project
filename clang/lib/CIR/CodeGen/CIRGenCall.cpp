@@ -1242,13 +1242,6 @@ RValue CIRGenFunction::emitCall(const CIRGenFunctionInfo &funcInfo,
         assert(!cir::MissingFeatures::dataLayoutTypeAllocSize());
       }
 
-      // assert(NumCIRArgs == STy.getMembers().size());
-      // In LLVMGen: Still only pass the struct without any gaps but mark it
-      // as such somehow.
-      //
-      // In CIRGen: Emit a load from the "whole" struct,
-      // which shall be broken later by some lowering step into multiple
-      // loads.
       assert(!cir::MissingFeatures::lowerAggregateLoadStore());
       cirCallArgs[argNo] = builder.createLoad(argLoc, src);
     }
@@ -1331,6 +1324,54 @@ RValue CIRGenFunction::emitCall(const CIRGenFunctionInfo &funcInfo,
   bool isInvoke = !cannotThrow && isCatchOrCleanupRequired();
 
   mlir::Location callLoc = loc;
+
+  // For large aggregate returns (>16 bytes), pass the destination as a
+  // hidden first argument so the callee constructs directly into the
+  // caller's memory.  This avoids bitwise struct copies that corrupt
+  // self-referential types (std::string SSO, std::vector heap pointers).
+  //
+  // Skip this for GPU targets (AMDGCN, NVPTX): the ROCDL/NVVM target
+  // backends apply their own sret transform at the LLVM IR level after
+  // translation.  Doing it here at the CIR level produces an indirect
+  // void call whose return value is disconnected from the sret alloca,
+  // causing the function to return undef instead of the computed result.
+  constexpr unsigned kMaxDirectAggBytes = 16;
+  Address aggSretDest = Address::invalid();
+  if (getEvaluationKind(retTy) == cir::TEK_Aggregate &&
+      getContext().getTypeSizeInChars(retTy).getQuantity() >
+          kMaxDirectAggBytes &&
+      !getTarget().getTriple().isAMDGCN() &&
+      !getTarget().getTriple().isNVPTX()) {
+    aggSretDest = returnValue.getValue();
+    if (!aggSretDest.isValid())
+      aggSretDest = createMemTemp(retTy, callLoc, getCounterAggTmpAsString());
+
+    cirCallArgs.insert(cirCallArgs.begin(), aggSretDest.getPointer());
+    argAttrs.insert(argAttrs.begin(), mlir::NamedAttrList());
+
+    SmallVector<mlir::Type> newInputs;
+    newInputs.push_back(aggSretDest.getPointer().getType());
+    newInputs.append(cirFuncTy.getInputs().begin(),
+                     cirFuncTy.getInputs().end());
+    auto newFnTy = cir::FuncType::get(
+        newInputs, cir::VoidType::get(builder.getContext()),
+        cirFuncTy.isVarArg());
+
+    if (directFuncOp) {
+      mlir::Value addr = cir::GetGlobalOp::create(
+          builder, loc, cir::PointerType::get(directFuncOp.getFunctionType()),
+          directFuncOp.getSymName());
+      indirectFuncTy = newFnTy;
+      indirectFuncVal =
+          builder.createBitcast(addr, cir::PointerType::get(newFnTy));
+      directFuncOp = nullptr;
+    } else if (indirectFuncVal) {
+      indirectFuncVal = builder.createBitcast(
+          indirectFuncVal, cir::PointerType::get(newFnTy));
+      indirectFuncTy = newFnTy;
+    }
+  }
+
   cir::CIRCallOpInterface theCall =
       emitCallLikeOp(*this, loc, indirectFuncTy, indirectFuncVal, directFuncOp,
                      cirCallArgs, isInvoke, attrs, argAttrs, retAttrs);
@@ -1341,11 +1382,16 @@ RValue CIRGenFunction::emitCall(const CIRGenFunctionInfo &funcInfo,
   assert(!cir::MissingFeatures::opCallMustTail());
   assert(!cir::MissingFeatures::opCallReturn());
 
+  // If we used CIR-level sret, the result is already in the destination.
+  if (aggSretDest.isValid())
+    return RValue::getAggregate(aggSretDest);
+
   mlir::Type retCIRTy = convertType(retTy);
   if (isa<cir::VoidType>(retCIRTy))
     return getUndefRValue(retTy);
   switch (getEvaluationKind(retTy)) {
   case cir::TEK_Aggregate: {
+    // Small aggregates (≤16 bytes) still use value returns.
     Address destPtr = returnValue.getValue();
 
     if (!destPtr.isValid())

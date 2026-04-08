@@ -1,0 +1,131 @@
+// Tests for GpuMultiversionDivisibilityPass.
+//
+// The pass creates a fast clone with a divisibility assumption for kernels
+// whose scalar args are used as loop bounds, and redirects launches.
+
+// RUN: cir-opt --split-input-file --gpu-multiversion-divisibility %s \
+// RUN:   | FileCheck %s
+// RUN: cir-opt --split-input-file \
+// RUN:   --gpu-multiversion-divisibility='enabled=false' %s \
+// RUN:   | FileCheck %s --check-prefix=DISABLED
+
+//===----------------------------------------------------------------------===//
+// 1. Scalar int arg used as loop bound (feeds cir.cmp) → fast clone created.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k_loop$div4
+// CHECK:      gpu.func @k_loop(
+// CHECK:      gpu.func @k_loop$div4(
+// CHECK-SAME: kernel
+// CHECK-SAME: divisibility.arg0 = 4 : i64
+
+// DISABLED:   gpu.launch_func @offload_device_module::@k_loop
+// DISABLED-NOT: $div4
+
+module attributes {gpu.container_module} {
+  func.func @host(%n: index, %nval: !cir.int<s, 32>) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+
+    gpu.launch_func @offload_device_module::@k_loop
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+        args(%nval : !cir.int<s, 32>)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k_loop(%n: !cir.int<s, 32>) kernel {
+      %zero = "cir.const"() <{value = #cir.int<0> : !cir.int<s, 32>}> : () -> !cir.int<s, 32>
+      %cond = cir.cmp gt %n, %zero : !cir.int<s, 32>
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 2. No loop bound usage → no multiversioning.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.func @k_noloop(
+// CHECK-NOT:  $div4
+
+module attributes {gpu.container_module} {
+  func.func @host(%n: index, %nval: !cir.int<s, 32>) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+
+    gpu.launch_func @offload_device_module::@k_noloop
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+        args(%nval : !cir.int<s, 32>)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k_noloop(%n: !cir.int<s, 32>) kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 3. Constant arg at all sites → skip (SpecializeScalarArgs handles this).
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.func @k_const(
+// CHECK-NOT:  $div4
+
+module attributes {gpu.container_module} {
+  func.func @host(%n: index) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+    %val = "cir.const"() <{value = #cir.int<1024> : !cir.int<s, 32>}> : () -> !cir.int<s, 32>
+
+    gpu.launch_func @offload_device_module::@k_const
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+        args(%val : !cir.int<s, 32>)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k_const(%n: !cir.int<s, 32>) kernel {
+      %zero = "cir.const"() <{value = #cir.int<0> : !cir.int<s, 32>}> : () -> !cir.int<s, 32>
+      %cond = cir.cmp gt %n, %zero : !cir.int<s, 32>
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 4. Pointer args are skipped (only integer scalars are eligible).
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.func @k_ptronly(
+// CHECK-NOT:  $div4
+
+module attributes {gpu.container_module} {
+  func.func @host(%n: index, %ptr: !cir.ptr<!cir.float>) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+
+    gpu.launch_func @offload_device_module::@k_ptronly
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+        args(%ptr : !cir.ptr<!cir.float>)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k_ptronly(%a: !cir.ptr<!cir.float>) kernel {
+      gpu.return
+    }
+  }
+}

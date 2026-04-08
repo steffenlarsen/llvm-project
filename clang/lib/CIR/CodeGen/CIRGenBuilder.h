@@ -108,7 +108,13 @@ public:
     return cir::TypeInfoAttr::get(anonRecord.getType(), fieldsAttr);
   }
 
-  std::string getUniqueAnonRecordName() { return getUniqueRecordName("anon"); }
+  std::string anonRecordPrefix = "anon";
+
+  void setDeviceAnonPrefix() { anonRecordPrefix = "device_anon"; }
+
+  std::string getUniqueAnonRecordName() {
+    return getUniqueRecordName(anonRecordPrefix);
+  }
 
   std::string getUniqueRecordName(const std::string &baseName) {
     auto it = recordNames.find(baseName);
@@ -241,6 +247,9 @@ public:
   //
   cir::MemCpyOp createMemCpy(mlir::Location loc, mlir::Value dst,
                              mlir::Value src, mlir::Value len) {
+    if (src.getType() != dst.getType())
+      dst = cir::CastOp::create(*this, loc, src.getType(),
+                                cir::CastKind::address_space, dst);
     return cir::MemCpyOp::create(*this, loc, dst, src, len);
   }
 
@@ -571,7 +580,10 @@ public:
     if (destType == addr.getElementType())
       return addr;
 
-    auto ptrTy = getPointerTo(destType);
+    auto ptrTy = cir::PointerType::get(
+        destType,
+        mlir::cast<cir::PointerType>(addr.getPointer().getType())
+            .getAddrSpace());
     return Address(createBitcast(loc, addr.getPointer(), ptrTy), destType,
                    addr.getAlignment());
   }

@@ -204,6 +204,14 @@ CODEGENOPT(StrictLifetimes , 1, 0, Benign) ///< Assume an object is dead
                                            ///< after its destructor returns.
 CODEGENOPT(OpenCLCorrectlyRoundedDivSqrt, 1, 0, Benign) ///< -cl-fp32-correctly-rounded-divide-sqrt
 CODEGENOPT(HIPCorrectlyRoundedDivSqrt, 1, 1, Benign) ///< -fno-hip-fp32-correctly-rounded-divide-sqrt
+CODEGENOPT(ClangIROffload, 1, 0, Benign) ///< -clangir-offload: two-pass (host+device cc1) offload dialect for HIP/CUDA
+CODEGENOPT(ClangIROffloadHostEmitCIR, 1, 0, Benign) ///< Host cc1 is emitting CIR only (for two-pass merge); kernel bodies are placeholders
+CODEGENOPT(ClangIRNoTightenLaunchBounds, 1, 0, Benign) ///< Disable GpuTightenLaunchBoundsPass in CIR offload pipeline
+CODEGENOPT(ClangIRNoPropagateBlockShape, 1, 0, Benign) ///< Disable GpuPropagateBlockShapePass in CIR offload pipeline
+CODEGENOPT(ClangIRNoPropagatePointerFacts, 1, 0, Benign) ///< Disable GpuPropagatePointerFactsPass in CIR offload pipeline
+CODEGENOPT(ClangIRNoSpecializeScalarArgs, 1, 0, Benign) ///< Disable GpuSpecializeScalarArgsPass in CIR offload pipeline
+CODEGENOPT(ClangIRNoMultiversionDivisibility, 1, 0, Benign) ///< Disable GpuMultiversionDivisibilityPass in CIR offload pipeline
+CODEGENOPT(ClangIRNoDeadKernelElim, 1, 0, Benign) ///< Disable dead kernel elimination in CIR offload pipeline
 CODEGENOPT(DisableBlockSignatureString, 1, 0, Benign) ///< Set when -fdisable-block-signature-string is enabled.
 CODEGENOPT(HIPSaveKernelArgName, 1, 0, Benign) ///< Set when -fhip-kernel-arg-name is enabled.
 CODEGENOPT(UniqueInternalLinkageNames, 1, 0, Benign) ///< Internal Linkage symbols get unique names.

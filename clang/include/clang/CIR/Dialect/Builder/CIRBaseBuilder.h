@@ -360,9 +360,9 @@ public:
 
   cir::GetGlobalOp createGetGlobal(mlir::Location loc, cir::GlobalOp global,
                                    bool threadLocal = false) {
-    assert(!cir::MissingFeatures::addressSpace());
-    return cir::GetGlobalOp::create(*this, loc,
-                                    getPointerTo(global.getSymType()),
+    auto ptrTy = cir::PointerType::get(getContext(), global.getSymType(),
+                                       global.getAddrSpaceAttr());
+    return cir::GetGlobalOp::create(*this, loc, ptrTy,
                                     global.getSymNameAttr(), threadLocal);
   }
 
@@ -375,6 +375,9 @@ public:
   cir::CopyOp createCopy(mlir::Value dst, mlir::Value src,
                          bool isVolatile = false,
                          bool skipTailPadding = false) {
+    if (src.getType() != dst.getType())
+      dst = cir::CastOp::create(*this, dst.getLoc(), src.getType(),
+                                cir::CastKind::address_space, dst);
     return cir::CopyOp::create(*this, dst.getLoc(), dst, src, isVolatile,
                                skipTailPadding);
   }
@@ -557,9 +560,11 @@ public:
 
   mlir::Value createPtrBitcast(mlir::Value src, mlir::Type newPointeeTy) {
     assert(mlir::isa<cir::PointerType>(src.getType()) && "expected ptr src");
-    cir::PointerType srcPtrTy = mlir::cast<cir::PointerType>(src.getType());
-    return createBitcast(src,
-                         getPointerTo(newPointeeTy, srcPtrTy.getAddrSpace()));
+    auto srcPtrTy = mlir::cast<cir::PointerType>(src.getType());
+    auto newPtrTy = srcPtrTy.getAddrSpace()
+                        ? getPointerTo(newPointeeTy, srcPtrTy.getAddrSpace())
+                        : getPointerTo(newPointeeTy);
+    return createBitcast(src, newPtrTy);
   }
 
   mlir::Value createPtrIsNull(mlir::Value ptr) {

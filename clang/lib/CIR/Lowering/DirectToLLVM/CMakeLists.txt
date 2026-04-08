@@ -17,15 +17,31 @@ add_clang_library(clangCIRLoweringDirectToLLVM
 
   LINK_LIBS
   clangCIRLoweringCommon
+  clangDriver
   ${dialect_libs}
   MLIRCIR
   MLIRCIRTargetLowering
   MLIRCIRTransforms
   MLIRBuiltinToLLVMIRTranslation
+  MLIRGPUToLLVMIRTranslation
+  MLIRArithToLLVM
+  MLIRControlFlowToLLVM
+  MLIRFuncToLLVM
+  MLIRGPUToROCDLTransforms
+  MLIRGPUTransforms
+  MLIRIndexToLLVM
+  MLIRMathToLLVM
+  MLIRMemRefToLLVM
+  MLIROpenMPToLLVM
+  MLIRUBToLLVM
+  MLIRVectorToLLVM
+  MLIRReconcileUnrealizedCasts
   MLIRLLVMToLLVMIRTranslation
   MLIROpenMPToLLVM
   MLIROpenMPToLLVMIRTranslation
   MLIROpenMPTransforms
+  MLIRROCDLTarget
+  MLIRROCDLToLLVMIRTranslation
   MLIRIR
   )
 

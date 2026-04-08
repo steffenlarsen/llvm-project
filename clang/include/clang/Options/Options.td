@@ -3403,6 +3403,51 @@ def clangir_enable_idiom_recognizer : Flag<["-"], "clangir-enable-idiom-recogniz
   HelpText<"ClangIR: Enable Idiom Recognizer pass">,
   MarshallingInfoFlag<FrontendOpts<"ClangIREnableIdiomRecognizer">>;
 
+def clangir_offload : Flag<["-"], "clangir-offload">,
+  Visibility<[ClangOption, CC1Option]>,
+  HelpText<"ClangIR: Use two-pass (host+device cc1) offload dialect for HIP/CUDA">,
+  MarshallingInfoFlag<CodeGenOpts<"ClangIROffload">>;
+
+def clangir_offload_host_emit_cir : Flag<["-"], "clangir-offload-host-emit-cir">,
+  Visibility<[CC1Option]>,
+  HelpText<"ClangIR: Host cc1 is emitting CIR for later two-pass merge; kernel bodies are placeholders">,
+  MarshallingInfoFlag<CodeGenOpts<"ClangIROffloadHostEmitCIR">>;
+
+def clangir_offload_arch : Joined<["-"], "clangir-offload-arch=">,
+  Visibility<[CC1Option]>,
+  HelpText<"ClangIR: GPU architecture for offload compilation (e.g. gfx942)">,
+  MarshallingInfoString<CodeGenOpts<"ClangIROffloadArch">>;
+
+def clangir_no_tighten_launch_bounds : Flag<["-"], "clangir-no-tighten-launch-bounds">,
+  Visibility<[CC1Option]>,
+  HelpText<"ClangIR: Disable GpuTightenLaunchBoundsPass in the offload pipeline">,
+  MarshallingInfoFlag<CodeGenOpts<"ClangIRNoTightenLaunchBounds">>;
+
+def clangir_no_propagate_block_shape : Flag<["-"], "clangir-no-propagate-block-shape">,
+  Visibility<[CC1Option]>,
+  HelpText<"ClangIR: Disable GpuPropagateBlockShapePass in the offload pipeline">,
+  MarshallingInfoFlag<CodeGenOpts<"ClangIRNoPropagateBlockShape">>;
+
+def clangir_no_propagate_pointer_facts : Flag<["-"], "clangir-no-propagate-pointer-facts">,
+  Visibility<[CC1Option]>,
+  HelpText<"ClangIR: Disable GpuPropagatePointerFactsPass in the offload pipeline">,
+  MarshallingInfoFlag<CodeGenOpts<"ClangIRNoPropagatePointerFacts">>;
+
+def clangir_no_specialize_scalar_args : Flag<["-"], "clangir-no-specialize-scalar-args">,
+  Visibility<[CC1Option]>,
+  HelpText<"ClangIR: Disable GpuSpecializeScalarArgsPass in the offload pipeline">,
+  MarshallingInfoFlag<CodeGenOpts<"ClangIRNoSpecializeScalarArgs">>;
+
+def clangir_no_multiversion_divisibility : Flag<["-"], "clangir-no-multiversion-divisibility">,
+  Visibility<[CC1Option]>,
+  HelpText<"ClangIR: Disable GpuMultiversionDivisibilityPass in the offload pipeline">,
+  MarshallingInfoFlag<CodeGenOpts<"ClangIRNoMultiversionDivisibility">>;
+
+def clangir_no_dead_kernel_elim : Flag<["-"], "clangir-no-dead-kernel-elim">,
+  Visibility<[CC1Option]>,
+  HelpText<"ClangIR: Disable dead kernel elimination in the offload pipeline">,
+  MarshallingInfoFlag<CodeGenOpts<"ClangIRNoDeadKernelElim">>;
+
 defm clangir : BoolFOption<"clangir",
   FrontendOpts<"UseClangIRPipeline">, DefaultFalse,
   PosFlag<SetTrue, [], [ClangOption, CC1Option], "Use the ClangIR pipeline to compile">,

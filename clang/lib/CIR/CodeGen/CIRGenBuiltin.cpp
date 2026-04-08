@@ -925,6 +925,9 @@ static mlir::Type correctIntegerSignedness(mlir::Type iitType, QualType astType,
   if (!intTy)
     return iitType;
 
+  if (astType->isBooleanType())
+    return cir::BoolType::get(context);
+
   if (astType->isUnsignedIntegerType())
     return cir::IntType::get(context, intTy.getWidth(), /*isSigned=*/false);
 

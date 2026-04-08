@@ -175,6 +175,7 @@ private:
   mutable std::unique_ptr<Tool> IfsMerge;
   mutable std::unique_ptr<Tool> OffloadBundler;
   mutable std::unique_ptr<Tool> OffloadPackager;
+  mutable std::unique_ptr<Tool> CIRMergeTool;
   mutable std::unique_ptr<Tool> LinkerWrapper;
 
   Tool *getClang() const;
@@ -186,6 +187,7 @@ private:
   Tool *getClangAs() const;
   Tool *getOffloadBundler() const;
   Tool *getOffloadPackager() const;
+  Tool *getCIRMerge() const;
   Tool *getLinkerWrapper() const;
 
   /// Track if diagnostics have been emitted for sanitizer arguments already to

@@ -19,7 +19,10 @@
 #include "clang/CIR/Dialect/IR/CIRTypes.h"
 #include "clang/CIR/MissingFeatures.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Ptr/IR/MemorySpaceInterfaces.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Value.h"
 
@@ -277,6 +280,62 @@ public:
                                convertType(e->getType()), e->getPackLength());
   }
   mlir::Value VisitPseudoObjectExpr(PseudoObjectExpr *e) {
+    // HIP/CUDA: property accesses on threadIdx/blockIdx/blockDim/gridDim use
+    // __declspec(property) in the ROCm headers, which produces PseudoObjectExpr
+    // nodes in the AST.  The result expression is a member CallExpr whose
+    // callee is a MemberExpr like "->__get_x" on a base of type
+    // __hip_builtin_threadIdx_t / __hip_builtin_blockIdx_t / etc.
+    // Emit gpu.* ops directly; CIR has no GPU-specific knowledge.
+    if (cgf.getLangOpts().HIP || cgf.getLangOpts().CUDA) {
+      if (const Expr *result = e->getResultExpr()) {
+        const Expr *inner = result->IgnoreParenImpCasts();
+        // ROCm headers use __declspec(property) which produces a plain CallExpr
+        // whose callee is ImplicitCastExpr(FunctionToPointerDecay, MemberExpr).
+        // The MemberExpr refers to a static getter like __get_x declared inside
+        // __hip_builtin_threadIdx_t / blockIdx_t / blockDim_t / gridDim_t.
+        if (const auto *call = dyn_cast<CallExpr>(inner)) {
+          if (const auto *memExpr = dyn_cast<MemberExpr>(
+                  call->getCallee()->IgnoreParenImpCasts())) {
+            StringRef methodName = memExpr->getMemberDecl()->getName();
+            std::optional<mlir::gpu::Dimension> dim;
+            if (methodName == "__get_x")
+              dim = mlir::gpu::Dimension::x;
+            else if (methodName == "__get_y")
+              dim = mlir::gpu::Dimension::y;
+            else if (methodName == "__get_z")
+              dim = mlir::gpu::Dimension::z;
+
+            if (dim) {
+              // Determine the kind from the parent record of the getter method.
+              mlir::Location loc = cgf.getLoc(e->getExprLoc());
+              mlir::Value idx;
+              if (const auto *method =
+                      dyn_cast<CXXMethodDecl>(memExpr->getMemberDecl())) {
+                StringRef typeName = method->getParent()->getName();
+                if (typeName == "__hip_builtin_threadIdx_t")
+                  idx = mlir::gpu::ThreadIdOp::create(builder, loc, *dim);
+                else if (typeName == "__hip_builtin_blockIdx_t")
+                  idx = mlir::gpu::BlockIdOp::create(builder, loc, *dim);
+                else if (typeName == "__hip_builtin_blockDim_t")
+                  idx = mlir::gpu::BlockDimOp::create(builder, loc, *dim);
+                else if (typeName == "__hip_builtin_gridDim_t")
+                  idx = mlir::gpu::GridDimOp::create(builder, loc, *dim);
+              }
+              if (idx) {
+                // gpu.* ops return index; the consumer expects !cir.u32i (C
+                // unsigned int).  Emit an unrealized_conversion_cast here;
+                // UnrealizedCastFoldingLowering handles it during CIR-to-LLVM
+                // conversion by emitting llvm.trunc (index is 64-bit on
+                // x86_64).
+                return mlir::UnrealizedConversionCastOp::create(
+                           builder, loc, cgf.builder.getUInt32Ty(), idx)
+                    .getResult(0);
+              }
+            }
+          }
+        }
+      }
+    }
     return cgf.emitPseudoObjectRValue(e).getValue();
   }
   mlir::Value VisitSYCLUniqueStableNameExpr(SYCLUniqueStableNameExpr *e) {
@@ -2131,8 +2190,26 @@ mlir::Value ScalarExprEmitter::emitSub(const BinOpInfo &ops) {
   //
   // See more in `EmitSub` in CGExprScalar.cpp.
   assert(!cir::MissingFeatures::llvmLoweringPtrDiffConsidersPointee());
+
+  // If the two pointers have different address spaces (e.g. one flat and one
+  // in a target address space), reconcile them by casting the non-flat operand
+  // to the flat address space so that PtrDiffOp's SameTypeOperands constraint
+  // is satisfied.  This mirrors the addrspacecast that classic Clang inserts.
+  mlir::Value lhs = ops.lhs;
+  mlir::Value rhs = ops.rhs;
+  auto lhsPtrTy = mlir::cast<cir::PointerType>(lhs.getType());
+  auto rhsPtrTy = mlir::cast<cir::PointerType>(rhs.getType());
+  if (lhsPtrTy != rhsPtrTy) {
+    // Cast both to the flat (no address space) version of the pointee type.
+    cir::PointerType flatTy = lhsPtrTy.getAddrSpace() ? rhsPtrTy : lhsPtrTy;
+    mlir::Location loc = cgf.getLoc(ops.loc);
+    if (lhsPtrTy != flatTy)
+      lhs = builder.createAddrSpaceCast(loc, lhs, flatTy);
+    if (rhsPtrTy != flatTy)
+      rhs = builder.createAddrSpaceCast(loc, rhs, flatTy);
+  }
   return cir::PtrDiffOp::create(builder, cgf.getLoc(ops.loc), cgf.ptrDiffTy,
-                                ops.lhs, ops.rhs);
+                                lhs, rhs);
 }
 
 mlir::Value ScalarExprEmitter::emitShl(const BinOpInfo &ops) {
@@ -2238,8 +2315,6 @@ mlir::Value ScalarExprEmitter::VisitCastExpr(CastExpr *ce) {
     mlir::Value src = Visit(const_cast<Expr *>(subExpr));
     mlir::Type dstTy = cgf.convertType(destTy);
 
-    assert(!cir::MissingFeatures::addressSpace());
-
     if (cgf.sanOpts.has(SanitizerKind::CFIUnrelatedCast))
       cgf.getCIRGenModule().errorNYI(subExpr->getSourceRange(),
                                      "sanitizer support");
@@ -2268,6 +2343,23 @@ mlir::Value ScalarExprEmitter::VisitCastExpr(CastExpr *ce) {
     //       the element types of the vectors are not the same, until we figure
     //       out a better way of doing these casts.
     assert(!cir::MissingFeatures::scalableVectors());
+
+    // When Sema selects CK_BitCast for a pointer-to-pointer cast that crosses
+    // address spaces (e.g., private alloca → flat void* on AMDGPU), we need
+    // to split into bitcast + address_space cast because address_space cast
+    // requires identical pointee types.
+    auto srcPtrTy = mlir::dyn_cast<cir::PointerType>(src.getType());
+    auto dstPtrTy = mlir::dyn_cast<cir::PointerType>(dstTy);
+    if (srcPtrTy && dstPtrTy &&
+        srcPtrTy.getAddrSpace() != dstPtrTy.getAddrSpace()) {
+      mlir::Location loc = cgf.getLoc(subExpr->getSourceRange());
+      // Step 1: bitcast pointee type within the source address space.
+      cir::PointerType midTy =
+          cir::PointerType::get(dstPtrTy.getPointee(), srcPtrTy.getAddrSpace());
+      mlir::Value mid = cgf.getBuilder().createBitcast(loc, src, midTy);
+      // Step 2: address_space cast to the destination address space.
+      return cgf.performAddrSpaceCast(mid, dstTy);
+    }
 
     return cgf.getBuilder().createBitcast(cgf.getLoc(subExpr->getSourceRange()),
                                           src, dstTy);
@@ -2528,6 +2620,53 @@ mlir::Value ScalarExprEmitter::VisitMemberExpr(MemberExpr *e) {
       return builder.getBool(value.getBoolValue(), loc);
     return builder.getConstInt(loc, value);
   }
+
+  // Intercept HIP/CUDA builtin dimension variables (threadIdx, blockIdx,
+  // blockDim, gridDim).  These have no backing storage; emit gpu.* ops
+  // directly.  CIR has no GPU-specific knowledge — the gpu dialect ops live
+  // inside offload.func bodies and flow through to gpu.func after the split.
+  if (cgf.getLangOpts().HIP || cgf.getLangOpts().CUDA) {
+    if (auto *base = dyn_cast<DeclRefExpr>(e->getBase()->IgnoreImpCasts())) {
+      if (auto *var = dyn_cast<VarDecl>(base->getDecl())) {
+        if (auto *field = dyn_cast<FieldDecl>(e->getMemberDecl())) {
+          StringRef varName = var->getName();
+          StringRef fieldName = field->getName();
+
+          std::optional<mlir::gpu::Dimension> dim;
+          if (fieldName == "x")
+            dim = mlir::gpu::Dimension::x;
+          else if (fieldName == "y")
+            dim = mlir::gpu::Dimension::y;
+          else if (fieldName == "z")
+            dim = mlir::gpu::Dimension::z;
+
+          if (dim) {
+            mlir::Location loc = cgf.getLoc(e->getExprLoc());
+            mlir::Value idx;
+            if (varName == "threadIdx")
+              idx = mlir::gpu::ThreadIdOp::create(builder, loc, *dim);
+            else if (varName == "blockIdx")
+              idx = mlir::gpu::BlockIdOp::create(builder, loc, *dim);
+            else if (varName == "blockDim")
+              idx = mlir::gpu::BlockDimOp::create(builder, loc, *dim);
+            else if (varName == "gridDim")
+              idx = mlir::gpu::GridDimOp::create(builder, loc, *dim);
+
+            if (idx) {
+              // gpu.* ops return index; the consumer expects !cir.u32i (C
+              // unsigned int).  Emit an unrealized_conversion_cast here;
+              // UnrealizedCastFoldingLowering handles it during CIR-to-LLVM
+              // conversion by emitting llvm.trunc (index is 64-bit on x86_64).
+              return mlir::UnrealizedConversionCastOp::create(
+                         builder, loc, cgf.builder.getUInt32Ty(), idx)
+                  .getResult(0);
+            }
+          }
+        }
+      }
+    }
+  }
+
   return emitLoadOfLValue(e);
 }
 
@@ -2552,6 +2691,12 @@ mlir::Value ScalarExprEmitter::VisitInitListExpr(InitListExpr *e) {
     for (Expr *init : e->inits()) {
       elements.push_back(Visit(init));
     }
+
+    // If a single init element has the same vector type as the result
+    // (e.g., initializing an ext_vector from another ext_vector of the same
+    // type), just return it directly — no VecCreateOp needed.
+    if (elements.size() == 1 && elements[0].getType() == vectorType)
+      return elements[0];
 
     // Zero-initialize any remaining values.
     if (numInitElements < vectorType.getSize()) {

@@ -378,6 +378,10 @@ public:
   /// Prefix to use for -save-temps output.
   std::string SaveTempsFilePrefix;
 
+  /// GPU architecture for CIR offload (e.g. "gfx942"), passed via
+  /// -clangir-offload-arch to avoid polluting aux-target preprocessor macros.
+  std::string ClangIROffloadArch;
+
   /// Name of file passed with -fcuda-include-gpubinary option to forward to
   /// CUDA runtime back-end for incorporating them into host-side object file.
   std::string CudaGpuBinaryFileName;

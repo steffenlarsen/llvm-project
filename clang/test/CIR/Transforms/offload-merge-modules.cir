@@ -1,0 +1,117 @@
+// Tests for MergeOffloadModulesPass (--offload-merge-modules).
+//
+// Test 1 (single-arch, legacy): bare --device-cir=<path> (no arch prefix)
+//   → produces gpu.module @offload_device_module (backward-compat mode).
+//
+// Test 2 (multi-arch): --device-cir=gfx90a:<path1> + --device-cir=gfx1100:<path2>
+//   → produces gpu.module @offload_device_module_gfx90a and
+//     gpu.module @offload_device_module_gfx1100.
+//
+// The device cc1 (amdgcn target) emits a plain ModuleOp with cir.func ops;
+// kernel functions carry "cir.amdgpu-flat-work-group-size" attribute.
+
+// RUN: split-file %s %t
+
+// ===================================================================
+// Test 1: single-arch (legacy bare-path mode)
+// ===================================================================
+
+// Step 1: produce the device CIR file.
+// RUN: cir-opt %t/device.mlir -o %t/device.cir
+
+// Step 2: merge device CIR into the host module and check the result.
+// RUN: cir-opt %t/host.mlir \
+// RUN:   '--offload-merge-modules=device-cir=%t/device.cir' \
+// RUN:   | FileCheck --check-prefix=SINGLE %s
+
+// ===================================================================
+// Test 2: multi-arch (two separate device CIR files, arch-prefixed)
+// ===================================================================
+
+// Step 1: produce device CIR for gfx90a and gfx1100.
+// RUN: cir-opt %t/device_gfx90a.mlir -o %t/device_gfx90a.cir
+// RUN: cir-opt %t/device_gfx1100.mlir -o %t/device_gfx1100.cir
+
+// Step 2: merge both into the host module and check the result.
+// RUN: cir-opt %t/host.mlir \
+// RUN:   '--offload-merge-modules=device-cir=gfx90a:%t/device_gfx90a.cir' \
+// RUN:   '--offload-merge-modules=device-cir=gfx1100:%t/device_gfx1100.cir' \
+// RUN:   | FileCheck --check-prefix=MULTI %s
+
+//--- device.mlir
+//===----------------------------------------------------------------------===//
+// Device module (produced by device cc1 amdgcn target): contains raw cir.func
+// ops at module level.  Kernels have "cir.amdgpu-flat-work-group-size".
+//===----------------------------------------------------------------------===//
+
+module {
+  cir.func private @vec_add() attributes {"cir.amdgpu-flat-work-group-size" = "1,1024"} {
+    cir.return
+  }
+  cir.func private @device_helper() {
+    cir.return
+  }
+}
+
+//--- device_gfx90a.mlir
+//===----------------------------------------------------------------------===//
+// Device module for gfx90a (arch-conditional code via __gfx90a__).
+//===----------------------------------------------------------------------===//
+
+module {
+  cir.func private @vec_add() attributes {"cir.amdgpu-flat-work-group-size" = "1,1024"} {
+    cir.return
+  }
+}
+
+//--- device_gfx1100.mlir
+//===----------------------------------------------------------------------===//
+// Device module for gfx1100 (arch-conditional code via __rdna3__).
+//===----------------------------------------------------------------------===//
+
+module {
+  cir.func private @vec_add() attributes {"cir.amdgpu-flat-work-group-size" = "1,256"} {
+    cir.return
+  }
+}
+
+//--- host.mlir
+//===----------------------------------------------------------------------===//
+// Host module: has an empty placeholder gpu.module and gpu.launch_func ops
+// targeting kernels by symbol name.  MergeOffloadModules fills the gpu.module.
+//===----------------------------------------------------------------------===//
+
+module attributes {gpu.container_module} {
+  func.func @host_launch(%n: index) {
+    func.return
+  }
+  gpu.module @offload_device_module {
+  }
+}
+
+// ===================================================================
+// Test 1 checks (SINGLE prefix): single-arch legacy mode.
+// - The host's @offload_device_module contains vec_add (kernel) and
+//   device_helper (non-kernel gpu.func).
+// - Exactly one @offload_device_module exists.
+// ===================================================================
+
+// SINGLE-LABEL: module attributes {gpu.container_module}
+// SINGLE:       func.func @host_launch(
+// SINGLE:       gpu.module @offload_device_module
+// SINGLE-DAG:     gpu.func @vec_add() kernel
+// SINGLE-DAG:     gpu.func @device_helper({{.*}})
+// SINGLE-NOT:   gpu.module @offload_device_module_deferred
+
+// ===================================================================
+// Test 2 checks (MULTI prefix): multi-arch mode.
+// - Two arch-specific gpu.modules exist.
+// - Each contains vec_add as a kernel.
+// - No plain @offload_device_module (arches are explicit).
+// ===================================================================
+
+// MULTI-LABEL: module attributes {gpu.container_module}
+// MULTI:       func.func @host_launch(
+// MULTI-DAG:   gpu.module @offload_device_module_gfx90a
+// MULTI-DAG:   gpu.module @offload_device_module_gfx1100
+// MULTI:         gpu.func @vec_add() kernel

@@ -9,8 +9,8 @@
 // This file declares an interface for converting CIR modules to LLVM IR.
 //
 //===----------------------------------------------------------------------===//
-#ifndef CLANG_CIR_LOWERTOLLVM_H
-#define CLANG_CIR_LOWERTOLLVM_H
+#ifndef CLANG_CIR_LOWERTOLLVM_INTERNAL_H
+#define CLANG_CIR_LOWERTOLLVM_INTERNAL_H
 
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -84,4 +84,4 @@ private:
 } // namespace direct
 } // namespace cir
 
-#endif // CLANG_CIR_LOWERTOLLVM_H
+#endif // CLANG_CIR_LOWERTOLLVM_INTERNAL_H

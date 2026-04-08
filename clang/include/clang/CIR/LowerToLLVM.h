@@ -12,8 +12,10 @@
 #ifndef CLANG_CIR_LOWERTOLLVM_H
 #define CLANG_CIR_LOWERTOLLVM_H
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include <memory>
+#include <string>
 
 namespace llvm {
 class LLVMContext;
@@ -29,12 +31,23 @@ class ModuleOp;
 
 namespace cir {
 
+struct CIROffloadConfig {
+  bool tightenLaunchBounds = true;
+  bool propagateBlockShape = true;
+  bool propagatePointerFacts = true;
+  bool specializeScalarArgs = true;
+  bool multiversionDivisibility = true;
+  std::string deadKernelAction = "split";
+};
+
 namespace direct {
-std::unique_ptr<llvm::Module>
-lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule,
-                             llvm::LLVMContext &llvmCtx,
-                             llvm::StringRef mlirSaveTempsOutFile = {},
-                             llvm::vfs::FileSystem *fs = nullptr);
+std::unique_ptr<llvm::Module> lowerDirectlyFromCIRToLLVMIR(
+    mlir::ModuleOp mlirModule, llvm::LLVMContext &llvmCtx,
+    llvm::StringRef mlirSaveTempsOutFile = {},
+    llvm::vfs::FileSystem *fs = nullptr, bool enableOffloadSplit = false,
+    llvm::ArrayRef<std::string> offloadArchs = {},
+    bool isDeviceCompilation = false, unsigned deviceOptLevel = 2,
+    const CIROffloadConfig &offloadConfig = {});
 } // namespace direct
 } // namespace cir
 

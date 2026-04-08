@@ -5,6 +5,7 @@ add_clang_library(MLIRCIRTransforms
   CIRCanonicalize.cpp
   CIRSimplify.cpp
   CIRTransformUtils.cpp
+  MergeOffloadModules.cpp
   CXXABILowering.cpp
   EHABILowering.cpp
   TargetLowering.cpp
@@ -31,6 +32,8 @@ add_clang_library(MLIRCIRTransforms
   MLIRCIR
   MLIRCIRInterfaces
   MLIRCIRTargetLowering
+  MLIRGPUDialect
+  MLIRParser
   MLIROpenACCDialect
   MLIROpenMPDialect
 )

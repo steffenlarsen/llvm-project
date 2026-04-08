@@ -1,0 +1,223 @@
+// Tests for GpuSplitSingleSourcePass.
+//
+// The pass splits a unified gpu.module @offload_device_module (produced by
+// CIRGen) into a primary gpu.module (kernels with observable launch sites and
+// their dependencies) and an optional deferred gpu.module (kernels with no
+// launch site in the IR).
+//
+// gpu.launch_func ops already exist in the host code and are not modified.
+
+// RUN: cir-opt --split-input-file --gpu-split-single-source %s \
+// RUN:   | FileCheck %s
+
+// dead-kernel-action=none: every kernel lands in the primary module.
+// RUN: cir-opt --split-input-file \
+// RUN:   '--gpu-split-single-source=dead-kernel-action=none' %s \
+// RUN:   | FileCheck --check-prefix=CHECK-NONE %s
+
+// dead-kernel-action=discard: unreferenced kernels are dropped.
+// RUN: cir-opt --split-input-file \
+// RUN:   '--gpu-split-single-source=dead-kernel-action=discard' %s \
+// RUN:   | FileCheck --check-prefix=CHECK-DISCARD %s
+
+//===----------------------------------------------------------------------===//
+// 1. Minimal: single __global__ kernel with a launch site.
+//    The input gpu.module is erased and a primary gpu.module of the same name
+//    is emitted containing the kernel.  No deferred module.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: module attributes {gpu.container_module}
+//
+// The launch_func is in the host function (before the gpu.module).
+// CHECK:      gpu.launch_func @offload_device_module::@vec_add
+//
+// Primary module present and named correctly.
+// CHECK:      gpu.module @offload_device_module
+//
+// The kernel is in the primary module.
+// CHECK:      gpu.func @vec_add({{.*}}) kernel
+// CHECK-NOT:  gpu.module @offload_device_module_deferred
+
+// CHECK-NONE: gpu.module @offload_device_module
+// CHECK-NONE: gpu.func @vec_add({{.*}}) kernel
+
+// CHECK-DISCARD: gpu.module @offload_device_module
+// CHECK-DISCARD: gpu.func @vec_add({{.*}}) kernel
+
+module attributes {gpu.container_module} {
+  func.func @host_launch(%n: index) {
+    %c1 = arith.constant 1 : index
+    gpu.launch_func @offload_device_module::@vec_add
+        blocks in (%n, %c1, %c1)
+        threads in (%c1, %c1, %c1)
+        args(%n : index)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @vec_add(%n: index) kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 2. Dead kernel: a kernel with no launch site is split into the deferred
+//    module (default "split" action) while the launched kernel stays primary.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: module attributes {gpu.container_module}
+//
+// Primary module has only the launched kernel.
+// CHECK:      gpu.module @offload_device_module
+// CHECK:        gpu.func @active_kernel({{.*}}) kernel
+// CHECK-NOT:    gpu.func @dead_kernel
+//
+// Deferred module has the unreferenced kernel.
+// CHECK:      gpu.module @offload_device_module_deferred
+// CHECK:        gpu.func @dead_kernel({{.*}}) kernel
+
+// CHECK-NONE: gpu.module @offload_device_module
+// CHECK-NONE: gpu.func @active_kernel({{.*}}) kernel
+// CHECK-NONE: gpu.func @dead_kernel({{.*}}) kernel
+// CHECK-NONE-NOT: gpu.module @offload_device_module_deferred
+
+// CHECK-DISCARD: gpu.module @offload_device_module
+// CHECK-DISCARD:   gpu.func @active_kernel({{.*}}) kernel
+// CHECK-DISCARD-NOT: gpu.func @dead_kernel
+
+module attributes {gpu.container_module} {
+  func.func @host_launch(%n: index) {
+    %c1 = arith.constant 1 : index
+    gpu.launch_func @offload_device_module::@active_kernel
+        blocks in (%n, %c1, %c1)
+        threads in (%c1, %c1, %c1)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @active_kernel() kernel {
+      gpu.return
+    }
+    gpu.func @dead_kernel() kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 3. Device helper replication: a __device__ helper is cloned into both
+//    primary and deferred modules when it is replicable (no device globals).
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: module attributes {gpu.container_module}
+//
+// Helper appears in the primary module.
+// CHECK:      gpu.module @offload_device_module
+// CHECK:        gpu.func @helper(
+// CHECK:        gpu.func @active_kernel({{.*}}) kernel
+//
+// Helper is also cloned into the deferred module.
+// CHECK:      gpu.module @offload_device_module_deferred
+// CHECK:        gpu.func @helper(
+// CHECK:        gpu.func @dead_kernel({{.*}}) kernel
+
+module attributes {gpu.container_module} {
+  func.func @host_launch(%n: index) {
+    %c1 = arith.constant 1 : index
+    gpu.launch_func @offload_device_module::@active_kernel
+        blocks in (%n, %c1, %c1)
+        threads in (%c1, %c1, %c1)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @helper(%x: f32) -> f32 {
+      gpu.return %x : f32
+    }
+    gpu.func @active_kernel() kernel {
+      gpu.return
+    }
+    gpu.func @dead_kernel() kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 4. No dead kernels: deferred module is not emitted when every kernel is
+//    launched at least once.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: module attributes {gpu.container_module}
+// CHECK:      gpu.module @offload_device_module
+// CHECK:        gpu.func @k1({{.*}}) kernel
+// CHECK:        gpu.func @k2({{.*}}) kernel
+// CHECK-NOT:  gpu.module @offload_device_module_deferred
+
+module attributes {gpu.container_module} {
+  func.func @host(%n: index) {
+    %c1 = arith.constant 1 : index
+    gpu.launch_func @offload_device_module::@k1
+        blocks in (%n, %c1, %c1) threads in (%c1, %c1, %c1)
+    gpu.launch_func @offload_device_module::@k2
+        blocks in (%n, %c1, %c1) threads in (%c1, %c1, %c1)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k1() kernel {
+      gpu.return
+    }
+    gpu.func @k2() kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 5. Global variable: an offload.global_var in the gpu.module is moved into
+//    the primary module alongside the kernel.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: module attributes {gpu.container_module}
+// CHECK:      gpu.module @offload_device_module
+// CHECK:        gpu.func @k() kernel
+
+module attributes {gpu.container_module} {
+  func.func @host(%n: index) {
+    %c1 = arith.constant 1 : index
+    gpu.launch_func @offload_device_module::@k
+        blocks in (%n, %c1, %c1) threads in (%c1, %c1, %c1)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k() kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 6. No gpu.module in input: pass is a no-op, module passes through unchanged.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: module attributes {gpu.container_module}
+// CHECK-NOT:   gpu.module
+
+module attributes {gpu.container_module} {
+  func.func @host() {
+    func.return
+  }
+}

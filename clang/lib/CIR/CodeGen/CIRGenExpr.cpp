@@ -2491,6 +2491,13 @@ RValue CIRGenFunction::emitCallExpr(const clang::CallExpr *e,
   if (const auto *cudaKernelCallExpr = dyn_cast<CUDAKernelCallExpr>(e))
     return emitCUDAKernelCallExpr(cudaKernelCallExpr, returnValue);
 
+  // Give the CUDA/HIP runtime a chance to intercept runtime library calls
+  // (e.g. hipDeviceSynchronize, hipStreamCreate) and emit offload dialect ops.
+  if (getLangOpts().CUDA) {
+    if (auto rv = cgm.getCUDARuntime().emitCUDARuntimeCall(*this, e))
+      return *rv;
+  }
+
   // A CXXOperatorCallExpr is created even for explicit-object methods or
   // static member operators (C++23 `static operator()` / `static
   // operator[]`), but those should be treated like ordinary static function

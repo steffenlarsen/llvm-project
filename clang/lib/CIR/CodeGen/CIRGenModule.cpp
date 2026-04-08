@@ -15,6 +15,7 @@
 #include "CIRGenCXXABI.h"
 #include "CIRGenConstantEmitter.h"
 #include "CIRGenFunction.h"
+#include "CIRGenOffloadRuntime.h"
 
 #include "mlir/Dialect/OpenMP/OpenMPOffloadUtils.h"
 #include "mlir/IR/SymbolTable.h"
@@ -41,9 +42,12 @@
 
 #include "CIRGenFunctionInfo.h"
 #include "TargetInfo.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Ptr/IR/MemorySpaceInterfaces.h"
 #include "mlir/IR/Attributes.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Operation.h"
@@ -153,8 +157,21 @@ CIRGenModule::CIRGenModule(mlir::MLIRContext &mlirContext,
     mlir::omp::setOffloadModuleInterfaceAttributes(theModule, ompOpts);
   }
 
-  if (langOpts.CUDA)
+  if (langOpts.CUDA) {
     createCUDARuntime();
+    // Use a different prefix for anonymous record types in device compilations
+    // so they don't collide with host anonymous types during CIR merge.
+    if (langOpts.CUDAIsDevice)
+      builder.setDeviceAnonPrefix();
+    // In two-pass offload host cc1 (-clangir-offload-host-emit-cir), device
+    // functions are skipped so getOrCreateDeviceModule() is never called
+    // during codegen, yet gpu.launch_func ops reference @offload_device_module.
+    // Create the gpu.module eagerly so the pre-pass verifier finds the symbol.
+    // MergeOffloadModules will merge device functions into it later.
+    if (codeGenOpts.ClangIROffload && codeGenOpts.ClangIROffloadHostEmitCIR &&
+        !langOpts.CUDAIsDevice)
+      getOrCreateDeviceModule();
+  }
   if (langOpts.OpenMP)
     createOpenMPRuntime();
 
@@ -187,7 +204,24 @@ CIRGenModule::CIRGenModule(mlir::MLIRContext &mlirContext,
 CIRGenModule::~CIRGenModule() = default;
 
 void CIRGenModule::createCUDARuntime() {
-  cudaRuntime.reset(createNVCUDARuntime(*this));
+  if (codeGenOpts.ClangIROffload)
+    cudaRuntime.reset(createOffloadRuntime(*this));
+  else
+    cudaRuntime.reset(createNVCUDARuntime(*this));
+}
+
+mlir::gpu::GPUModuleOp CIRGenModule::getOrCreateDeviceModule() {
+  if (gpuDeviceModule)
+    return gpuDeviceModule;
+  mlir::OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToEnd(theModule.getBody());
+  gpuDeviceModule = mlir::gpu::GPUModuleOp::create(builder, theModule.getLoc(),
+                                                   "offload_device_module");
+  // Mark the parent module as a GPU container so that gpu.launch_func ops
+  // emitted into the host region pass verifier checks.
+  theModule->setAttr(mlir::gpu::GPUDialect::getContainerModuleAttrName(),
+                     builder.getUnitAttr());
+  return gpuDeviceModule;
 }
 
 void CIRGenModule::createOpenMPRuntime() {
@@ -367,6 +401,22 @@ CIRGenModule::getAddrOfGlobal(GlobalDecl gd, ForDefinition_t isForDefinition) {
 }
 
 void CIRGenModule::emitGlobalDecl(const clang::GlobalDecl &d) {
+  // Check to see if we've already emitted this by looking up the current
+  // symbol in the module. This is necessary because:
+  //   1. Decls can end up in the deferred-decls queue multiple times.
+  //   2. Decls can be defined via aliasing (e.g. complete constructors aliased
+  //      to base constructors), which replaces the original FuncOp in the
+  //      module symbol table. We must re-lookup by name here to get the
+  //      current op, not a potentially-erased stale pointer.
+  {
+    StringRef mangledName = getMangledName(d);
+    if (mlir::Operation *currentOp = getGlobalValue(mangledName)) {
+      if (auto gvi = dyn_cast<cir::CIRGlobalValueInterface>(currentOp))
+        if (!gvi.isDeclaration())
+          return;
+    }
+  }
+
   // We call getAddrOfGlobal with isForDefinition set to ForDefinition in
   // order to get a Value with exactly the type we need, not something that
   // might have been created for another decl with the same mangled name but
@@ -412,33 +462,30 @@ void CIRGenModule::emitDeferred() {
 
   assert(!cir::MissingFeatures::openMP());
 
-  emitDeferredVTables();
-  // Emitting a vtable doesn't directly cause more vtables to
-  // become deferred, although it can cause functions to be
-  // emitted that then need those vtables.
-  assert(deferredVTables.empty());
-
   assert(!cir::MissingFeatures::cudaSupport());
 
-  // Stop if we're out of both deferred vtables and deferred declarations.
-  if (deferredDeclsToEmit.empty())
-    return;
+  // Use an iterative loop instead of recursion to avoid stack overflow when
+  // emitting deeply nested inline constructors (e.g. dim3 in HIP kernel stubs).
+  while (true) {
+    emitDeferredVTables();
+    // Emitting a vtable doesn't directly cause more vtables to
+    // become deferred, although it can cause functions to be
+    // emitted that then need those vtables.
+    assert(deferredVTables.empty());
 
-  // Grab the list of decls to emit. If emitGlobalDefinition schedules more
-  // work, it will not interfere with this.
-  std::vector<GlobalDecl> curDeclsToEmit;
-  curDeclsToEmit.swap(deferredDeclsToEmit);
+    // Stop if we're out of both deferred vtables and deferred declarations.
+    if (deferredDeclsToEmit.empty())
+      return;
 
-  for (const GlobalDecl &d : curDeclsToEmit) {
-    emitGlobalDecl(d);
+    // Grab the list of decls to emit. If emitGlobalDefinition schedules more
+    // work, it will not interfere with this.
+    std::vector<GlobalDecl> curDeclsToEmit;
+    curDeclsToEmit.swap(deferredDeclsToEmit);
 
-    // If we found out that we need to emit more decls, do that recursively.
-    // This has the advantage that the decls are emitted in a DFS and related
-    // ones are close together, which is convenient for testing.
-    if (!deferredVTables.empty() || !deferredDeclsToEmit.empty()) {
-      emitDeferred();
-      assert(deferredVTables.empty() && deferredDeclsToEmit.empty());
-    }
+    for (const GlobalDecl &d : curDeclsToEmit)
+      emitGlobalDecl(d);
+
+    // If emitting those decls produced more work, loop and process it.
   }
 }
 
@@ -506,10 +553,69 @@ void CIRGenModule::emitGlobal(clang::GlobalDecl gd) {
     return;
   }
 
+  // In the two-pass ClangIR offload pipeline, the host cc1 (emitting .cir for
+  // later merging) must skip device-only functions — their bodies come from the
+  // device cc1 via MergeOffloadModules.  Only skip in that first CIR-emit pass
+  // (ClangIROffloadHostEmitCIR=1); in single-pass -emit-llvm tests, emit them
+  // into offload.device_module so the split+lower pipeline can compile them.
+  if (langOpts.CUDA && codeGenOpts.ClangIROffload &&
+      codeGenOpts.ClangIROffloadHostEmitCIR && !langOpts.CUDAIsDevice) {
+    if (const auto *fd = dyn_cast<FunctionDecl>(global)) {
+      if (fd->hasAttr<CUDAGlobalAttr>() && fd->getDefinition()) {
+        // __global__ kernels need a host-side __device_stub__ symbol for
+        // function pointer references and __hipRegisterFunction.  The real
+        // kernel body comes from the device cc1 via MergeOffloadModules;
+        // here we emit a declaration so the symbol is defined.  The stub
+        // body (hipPopCallConfiguration + hipLaunchKernel) is generated
+        // later by SelectObjectAttr::embedBinaryROCm() using LLVM IR
+        // directly, which avoids CIR's struct-by-value ABI mismatch for
+        // dim3 when calling external HIP runtime functions.
+        GlobalDecl stubGD(fd, KernelReferenceKind::Stub);
+        StringRef stubName = getMangledName(stubGD);
+
+        GlobalDecl kernelGD(fd, KernelReferenceKind::Kernel);
+        StringRef kernelName = getMangledName(kernelGD);
+
+        cir::FuncOp stubFn = lookupFuncOp(stubName);
+        if (!stubFn) {
+          QualType qt = fd->getType();
+          cir::FuncType cirFTy =
+              mlir::cast<cir::FuncType>(convertType(qt));
+          stubFn = createCIRFunction(
+              getLoc(fd->getLocation()), stubName, cirFTy,
+              fd);
+          stubFn.setDsoLocal(true);
+          if (fd->isInlined() || fd->getTemplatedKind() !=
+              FunctionDecl::TK_NonTemplate)
+            stubFn.setLinkage(cir::GlobalLinkageKind::LinkOnceODRLinkage);
+          else if (fd->getStorageClass() == SC_Static)
+            stubFn.setLinkage(cir::GlobalLinkageKind::InternalLinkage);
+          else
+            stubFn.setLinkage(cir::GlobalLinkageKind::ExternalLinkage);
+        }
+
+        auto knAttr = cir::CUDAKernelNameAttr::get(
+            &getMLIRContext(),
+            mlir::StringAttr::get(&getMLIRContext(), kernelName));
+        stubFn->setAttr(knAttr.getMnemonic(), knAttr);
+
+        return;
+      }
+      bool isDeviceOnly =
+          fd->hasAttr<CUDADeviceAttr>() && !fd->hasAttr<CUDAHostAttr>();
+      if (isDeviceOnly)
+        return;
+    }
+  }
+
   // If this is CUDA, be selective about which declarations we emit.
   // Non-constexpr non-lambda implicit host device functions are not emitted
   // unless they are used on device side.
-  if (langOpts.CUDA) {
+  //
+  // In the two-pass offload CIR path (-clangir-offload), each cc1 invocation
+  // uses its own CUDAIsDevice-based filtering (handled above); the traditional
+  // single-pass CUDA filtering below is skipped.
+  if (langOpts.CUDA && !codeGenOpts.ClangIROffload) {
     assert((isa<FunctionDecl>(global) || isa<VarDecl>(global)) &&
            "Expected Variable or Function");
     if (const auto *varDecl = dyn_cast<VarDecl>(global)) {
@@ -602,8 +708,14 @@ void CIRGenModule::emitGlobal(clang::GlobalDecl gd) {
   assert(!cir::MissingFeatures::deferredCXXGlobalInit());
 
   llvm::StringRef mangledName = getMangledName(gd);
-  if (getGlobalValue(mangledName) != nullptr) {
-    // The value has already been used and should therefore be emitted.
+  if (mlir::Operation *existingOp = getGlobalValue(mangledName)) {
+    // The value has already been used and should therefore be emitted, but
+    // only if it hasn't been defined yet. If it already has a definition,
+    // adding it again would cause an infinite loop in emitDeferred.
+    if (auto gvi = dyn_cast<cir::CIRGlobalValueInterface>(existingOp)) {
+      if (!gvi.isDeclaration())
+        return;
+    }
     addDeferredDeclToEmit(gd);
   } else if (mustBeEmitted(global)) {
     // The value must be emitted, but cannot be emitted eagerly.
@@ -626,7 +738,6 @@ void CIRGenModule::emitGlobalFunctionDefinition(clang::GlobalDecl gd,
     funcOp = getAddrOfFunction(gd, funcType, /*ForVTable=*/false,
                                /*DontDefer=*/true, ForDefinition);
   }
-
   // Already emitted.
   if (!funcOp.isDeclaration())
     return;
@@ -665,6 +776,137 @@ void CIRGenModule::emitGlobalFunctionDefinition(clang::GlobalDecl gd,
 
   if (getLangOpts().OpenMP && funcDecl->hasAttr<OMPDeclareTargetDeclAttr>())
     getOpenMPRuntime().emitDeclareTargetFunction(funcDecl, funcOp);
+
+  // In the unified offload CIR path (-fclangir-offload), convert device
+  // functions (__global__ or __device__) to gpu::GPUFuncOp and place them
+  // inside the @offload_device_module gpu.module.  Host-only functions stay
+  // as cir::FuncOp in the outer module — no conversion needed.
+  //
+  // Skip for constructor/destructor attrs: addGlobalCtor/addGlobalDtor set
+  // CIR-specific attributes on cir::FuncOp that have no GPU equivalent.
+  if (codeGenOpts.ClangIROffload && langOpts.CUDA &&
+      !funcDecl->hasAttr<ConstructorAttr>() &&
+      !funcDecl->hasAttr<DestructorAttr>()) {
+    bool isKernel = funcDecl->hasAttr<CUDAGlobalAttr>();
+    bool isDeviceFunc = funcDecl->hasAttr<CUDADeviceAttr>() ||
+                        funcDecl->hasAttr<CUDAGlobalAttr>();
+    if (!isDeviceFunc)
+      return; // Host-only: leave as cir.func, no conversion.
+    // In two-pass mode, stubs are body-less declarations whose bodies are
+    // generated later by SelectObjectAttr — skip gpu.func conversion.
+    if (isKernel && gd.getKernelReferenceKind() == KernelReferenceKind::Stub &&
+        codeGenOpts.ClangIROffloadHostEmitCIR)
+      return;
+    bool isHostDeviceFunc = funcDecl->hasAttr<CUDADeviceAttr>() &&
+                            funcDecl->hasAttr<CUDAHostAttr>();
+    // TODO: implement proper host+device function cloning. For now, skip
+    // device-side emission of host+device functions to avoid crashes during
+    // cloneInto. These functions will still be available on the host side.
+    if (isHostDeviceFunc)
+      return;
+    if (funcOp.isDeclaration())
+      return;
+
+    // Build mlir::FunctionType from the cir::FuncType.
+    mlir::MLIRContext *ctx = builder.getContext();
+    cir::FuncType cirFTy = funcOp.getFunctionType();
+    mlir::FunctionType mlirFTy = mlir::FunctionType::get(
+        ctx, cirFTy.getInputs(), cirFTy.getReturnTypes());
+
+    // For __global__ kernels compiled in host mode, the cir::FuncOp carries a
+    // __device_stub__ prefix in its name (KernelReferenceKind::Stub).  Use
+    // the canonical kernel name (without stub prefix) for the gpu.func.
+    llvm::StringRef gpuFuncName = funcOp.getSymName();
+    if (isKernel && gd.getKernelReferenceKind() == KernelReferenceKind::Stub) {
+      GlobalDecl kernelGD(funcDecl, KernelReferenceKind::Kernel);
+      gpuFuncName = getMangledName(kernelGD);
+    }
+
+    // Create gpu::GPUFuncOp at the end of the gpu.module.
+    mlir::gpu::GPUModuleOp devMod = getOrCreateDeviceModule();
+    mlir::OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToEnd(devMod.getBody());
+    auto gpuFn = mlir::gpu::GPUFuncOp::create(builder, funcOp.getLoc(),
+                                              gpuFuncName, mlirFTy);
+
+    // Mark __global__ functions as kernels.  Use the ODS property setter
+    // (not the legacy discardable "gpu.kernel" attr) to avoid
+    // GPUFuncOpLowering adding a duplicate "gpu.kernel" entry in the
+    // lowered LLVMFuncOp's discardable attrs.
+    if (isKernel) {
+      gpuFn.setKernelAttr(mlir::UnitAttr::get(builder.getContext()));
+      if (auto wgs = funcOp->getAttrOfType<mlir::StringAttr>(
+              "cir.amdgpu-flat-work-group-size"))
+        gpuFn->setAttr("rocdl.flat_work_group_size", wgs);
+      else
+        gpuFn->setAttr("rocdl.flat_work_group_size",
+                       builder.getStringAttr("1,1024"));
+    }
+
+    // Copy discardable attributes from cir.func to gpu.func.
+    for (mlir::NamedAttribute na : funcOp->getDiscardableAttrs()) {
+      llvm::StringRef name = na.getName().strref();
+      if (name == "cir.amdgpu-flat-work-group-size" ||
+          name == "gpu.kernel" || name == "cir.extra_attrs")
+        continue;
+      gpuFn->setAttr(na.getName(), na.getValue());
+    }
+
+    // Copy symbol visibility.
+    mlir::SymbolTable::setSymbolVisibility(
+        gpuFn, mlir::SymbolTable::getSymbolVisibility(funcOp));
+
+    if (isHostDeviceFunc) {
+      // For __host__ __device__ functions, clone the body into gpu.func
+      // and keep the original cir.func for host-side use.
+      // GPUFuncOp::create may have added an empty entry block; remove it
+      // before cloning so we don't end up with duplicate blocks.
+      if (!gpuFn.getBody().empty())
+        gpuFn.getBody().front().erase();
+      mlir::IRMapping mapper;
+      funcOp.getBody().cloneInto(&gpuFn.getBody(), mapper);
+    } else {
+      // For __device__-only and __global__ functions, move the body.
+      gpuFn.getBody().takeBody(funcOp.getBody());
+    }
+    // Only convert top-level cir.return (direct gpu.func body block
+    // terminators). Nested cir.return inside cir.scope/cir.if/etc. must
+    // stay as cir.return — gpu.return requires its immediate parent to
+    // be gpu.func.
+    for (mlir::Block &blk : gpuFn.getBody()) {
+      if (auto ret = dyn_cast<cir::ReturnOp>(blk.getTerminator())) {
+        mlir::OpBuilder::InsertionGuard rg(builder);
+        builder.setInsertionPoint(ret);
+        mlir::gpu::ReturnOp::create(builder, ret.getLoc(), ret.getOperands());
+        ret.erase();
+      }
+    }
+
+    if (!isHostDeviceFunc) {
+      if (isKernel && codeGenOpts.ClangIROffloadHostEmitCIR) {
+        // Two-pass mode: keep cir.func as an empty stub —
+        // __hipRegisterFunction needs a defined __device_stub__ symbol at
+        // link time.  The body was moved to gpu.func above, so give the
+        // stub a trivial body (just return).
+        mlir::Block *entry = funcOp.addEntryBlock();
+        mlir::OpBuilder::InsertionGuard sg(builder);
+        builder.setInsertionPointToEnd(entry);
+        cir::ReturnOp::create(builder, funcOp.getLoc());
+        // The cir.func currently has the kernel name (e.g. _Z6kernelPi).
+        // Host code references the __device_stub__ variant, so rename it.
+        GlobalDecl stubGD(funcDecl, KernelReferenceKind::Stub);
+        StringRef stubName = getMangledName(stubGD);
+        if (stubName != funcOp.getSymName()) {
+          eraseGlobalSymbol(funcOp);
+          funcOp.setSymName(stubName);
+        }
+      } else {
+        // Single-cc1 or device-only: erase the now-consumed cir::FuncOp.
+        eraseGlobalSymbol(funcOp);
+        funcOp.erase();
+      }
+    }
+  }
 }
 
 /// Track functions to be called before main() runs.
@@ -1163,10 +1405,12 @@ CIRGenModule::getOrCreateCIRGlobal(StringRef mangledName, mlir::Type ty,
   // Lookup the entry, lazily creating it if necessary.
   cir::GlobalOp entry;
   if (mlir::Operation *v = getGlobalValue(mangledName)) {
-    if (!isa<cir::GlobalOp>(v))
-      errorNYI(d->getSourceRange(),
+    if (!isa<cir::GlobalOp>(v)) {
+      errorNYI(d ? d->getSourceRange() : SourceRange(),
                "getOrCreateCIRGlobal: global with non-GlobalOp type");
-    entry = cast<cir::GlobalOp>(v);
+    } else {
+      entry = cast<cir::GlobalOp>(v);
+    }
   }
 
   if (entry) {
@@ -1322,6 +1566,38 @@ mlir::Value CIRGenModule::getAddrOfGlobalVar(const VarDecl *d, mlir::Type ty,
   if (!ty)
     ty = getTypes().convertTypeForMem(astTy);
 
+  // In the unified offload CIR path, device-qualified variables are emitted as
+  // cir.global inside gpu.module (not the outer module).  If the symbol has
+  // already been emitted there, create a cir.get_global against it directly
+  // rather than creating a new outer-scope cir.global (which would cause a
+  // symbol redefinition error).
+  if (codeGenOpts.ClangIROffload && getLangOpts().CUDA && gpuDeviceModule) {
+    StringRef mn = getMangledName(d);
+    if (auto devGV = gpuDeviceModule.lookupSymbol<cir::GlobalOp>(mn)) {
+      mlir::Type elemTy = ty ? ty : getTypes().convertTypeForMem(d->getType());
+      mlir::Type ptrTy = builder.getPointerTo(elemTy, devGV.getAddrSpaceAttr());
+      bool tlsAccess = d->getTLSKind() != VarDecl::TLS_None;
+      // cir.get_global resolves symbols in the nearest enclosing module.
+      // The actual device global is inside gpu.module (IsolatedFromAbove),
+      // so it is invisible to the outer module verifier.  Create a private
+      // external stub at outer scope so the verifier can find the symbol.
+      if (!theModule.lookupSymbol<cir::GlobalOp>(mn)) {
+        mlir::OpBuilder::InsertionGuard g(builder);
+        builder.setInsertionPointToStart(theModule.getBody());
+        auto stub = cir::GlobalOp::create(builder, devGV.getLoc(), mn, elemTy,
+                                          /*isConstant=*/false,
+                                          devGV.getAddrSpaceAttr());
+        stub.setLinkage(cir::GlobalLinkageKind::ExternalLinkage);
+        mlir::SymbolTable::setSymbolVisibility(
+            stub, mlir::SymbolTable::Visibility::Private);
+      }
+      return cir::GetGlobalOp::create(builder, getLoc(d->getSourceRange()),
+                                      ptrTy, builder.getStringAttr(mn),
+                                      tlsAccess,
+                                      /*static_local=*/false);
+    }
+  }
+
   bool tlsAccess = d->getTLSKind() != VarDecl::TLS_None;
   cir::GlobalOp g = getOrCreateCIRGlobal(d, ty, isForDefinition);
   mlir::Type ptrTy = builder.getPointerTo(g.getSymType(), g.getAddrSpaceAttr());
@@ -1402,6 +1678,21 @@ void CIRGenModule::emitGlobalVarDefinition(const clang::VarDecl *vd,
     errorNYI(vd->getSourceRange(),
              "emitGlobalVarDefinition: emit OpenCL/OpenMP global variable");
     return;
+  }
+
+  // In the unified offload CIR path, device-qualified variables are emitted as
+  // cir.global inside gpu.module by the first call to emitGlobalVarDefinition.
+  // If a second call arrives for the same decl (tentative-then-definition),
+  // the cir.global already exists in gpu.module; skip to avoid redefinition.
+  if (codeGenOpts.ClangIROffload && getLangOpts().CUDA && gpuDeviceModule) {
+    bool isDeviceQualified =
+        vd->hasAttr<CUDASharedAttr>() || vd->hasAttr<CUDAConstantAttr>() ||
+        vd->hasAttr<CUDADeviceAttr>() || vd->hasAttr<HIPManagedAttr>();
+    if (isDeviceQualified) {
+      StringRef mn = getMangledName(vd);
+      if (gpuDeviceModule.lookupSymbol<cir::GlobalOp>(mn))
+        return;
+    }
   }
 
   // Whether the definition of the variable is available externally.
@@ -1596,6 +1887,180 @@ void CIRGenModule::emitGlobalVarDefinition(const clang::VarDecl *vd,
   // Emit the initializer function if necessary.
   if (needsGlobalCtor || needsGlobalDtor)
     emitCXXGlobalVarDeclInitFunc(vd, gv, needsGlobalCtor);
+
+  // In the unified offload CIR path (-fclangir-offload), set the target address
+  // space on cir::GlobalOp for CUDA device-qualified variables and insert them
+  // into the gpu.module.  Plain host variables remain in the outer module.
+  if (codeGenOpts.ClangIROffload && langOpts.CUDA) {
+    // Determine device address space from CUDA qualifiers.  Variables without
+    // any device qualifier remain as cir.global in the host module.
+    // Address space numbers follow HIP/CUDA conventions (NVPTX / AMDGPU):
+    //   shared   → 3  (LDS / .shared)
+    //   device   → 1  (global memory)
+    //   constant → 4  (constant memory)
+    //   managed  → 0  (generic / unified — accessible from host and device)
+    unsigned devAddrSpace = 0;
+    bool isDeviceVar = true;
+    bool isConstant = false;
+    if (vd->hasAttr<CUDASharedAttr>())
+      devAddrSpace = 3;
+    else if (vd->hasAttr<CUDAConstantAttr>()) {
+      devAddrSpace = 4;
+      isConstant = true;
+    } else if (vd->hasAttr<HIPManagedAttr>())
+      devAddrSpace = 0;
+    else if (vd->hasAttr<CUDADeviceAttr>())
+      devAddrSpace = 1;
+    else
+      isDeviceVar = false;
+
+    if (isDeviceVar) {
+      // Preserve the compile-time constant initializer for non-shared globals.
+      // Shared memory (addrspace 3) is uninitialized by definition.
+      mlir::Attribute initVal;
+      if (devAddrSpace != 3 && initExpr) {
+        // Attempt constant emission for scalar and array initializers.
+        // initExpr is non-null only when the variable has an explicit
+        // source-level initializer.
+        QualType varTy = initDecl->getType();
+        mlir::MLIRContext *mctx = builder.getContext();
+
+        if (varTy->isIntegralOrEnumerationType() ||
+            varTy->isRealFloatingType()) {
+          ConstantEmitter constEmitter(*this);
+          if (mlir::Attribute constAttr =
+                  constEmitter.tryEmitAbstractForInitializer(*initDecl)) {
+            // CIR emits cir::IntAttr / cir::FPAttr. Convert to standard MLIR
+            // attrs (mlir::IntegerAttr / mlir::FloatAttr) so that
+            // LowerHostRuntime (a pure MLIR pass) can handle them without a
+            // CIR dialect dependency.
+            if (auto cirInt = mlir::dyn_cast<cir::IntAttr>(constAttr)) {
+              unsigned width = cirInt.getBitWidth();
+              auto stdTy = mlir::IntegerType::get(mctx, width);
+              initVal = mlir::IntegerAttr::get(stdTy, cirInt.getValue());
+            } else if (auto cirFP = mlir::dyn_cast<cir::FPAttr>(constAttr)) {
+              llvm::APFloat fpVal = cirFP.getValue();
+              mlir::Type stdTy;
+              if (&fpVal.getSemantics() == &llvm::APFloat::IEEEhalf())
+                stdTy = mlir::Float16Type::get(mctx);
+              else if (&fpVal.getSemantics() == &llvm::APFloat::IEEEsingle())
+                stdTy = mlir::Float32Type::get(mctx);
+              else if (&fpVal.getSemantics() == &llvm::APFloat::IEEEdouble())
+                stdTy = mlir::Float64Type::get(mctx);
+              if (stdTy)
+                initVal = mlir::FloatAttr::get(stdTy, fpVal);
+            }
+          }
+        } else if (varTy->isConstantArrayType()) {
+          // Array initializer: cir::ConstArrayAttr → DenseElementsAttr.
+          ConstantEmitter constEmitter(*this);
+          if (mlir::Attribute constAttr =
+                  constEmitter.tryEmitAbstractForInitializer(*initDecl)) {
+            if (auto cirArr = mlir::dyn_cast<cir::ConstArrayAttr>(constAttr)) {
+              // Determine element type and total element count.
+              auto cirArrTy = mlir::cast<cir::ArrayType>(cirArr.getType());
+              int64_t numElems = static_cast<int64_t>(cirArrTy.getSize());
+              mlir::ArrayAttr elts =
+                  mlir::cast<mlir::ArrayAttr>(cirArr.getElts());
+
+              // Try to build DenseIntElementsAttr (integer elements).
+              if (numElems > 0 && mlir::isa<cir::IntAttr>(elts[0])) {
+                auto firstInt = mlir::cast<cir::IntAttr>(elts[0]);
+                unsigned width = firstInt.getBitWidth();
+                auto stdElemTy = mlir::IntegerType::get(mctx, width);
+                llvm::SmallVector<llvm::APInt> vals;
+                vals.reserve(numElems);
+                bool allInt = true;
+                for (mlir::Attribute elt : elts) {
+                  if (auto ci = mlir::dyn_cast<cir::IntAttr>(elt))
+                    vals.push_back(ci.getValue());
+                  else {
+                    allInt = false;
+                    break;
+                  }
+                }
+                // Also zero-fill trailing elements.
+                int64_t trailing = cirArr.getTrailingZerosNum();
+                for (int64_t t = 0; t < trailing; ++t)
+                  vals.push_back(llvm::APInt(width, 0));
+                if (allInt && (int64_t)vals.size() == numElems) {
+                  auto tensorTy =
+                      mlir::RankedTensorType::get({numElems}, stdElemTy);
+                  initVal = mlir::DenseIntElementsAttr::get(tensorTy, vals);
+                }
+              } else if (numElems > 0 && mlir::isa<cir::FPAttr>(elts[0])) {
+                // Float element array.
+                auto firstFP = mlir::cast<cir::FPAttr>(elts[0]);
+                llvm::APFloat first = firstFP.getValue();
+                mlir::Type stdElemTy;
+                if (&first.getSemantics() == &llvm::APFloat::IEEEhalf())
+                  stdElemTy = mlir::Float16Type::get(mctx);
+                else if (&first.getSemantics() == &llvm::APFloat::IEEEsingle())
+                  stdElemTy = mlir::Float32Type::get(mctx);
+                else if (&first.getSemantics() == &llvm::APFloat::IEEEdouble())
+                  stdElemTy = mlir::Float64Type::get(mctx);
+                if (stdElemTy) {
+                  llvm::SmallVector<llvm::APFloat> fvals;
+                  fvals.reserve(numElems);
+                  bool allFP = true;
+                  for (mlir::Attribute elt : elts) {
+                    if (auto cf = mlir::dyn_cast<cir::FPAttr>(elt))
+                      fvals.push_back(cf.getValue());
+                    else {
+                      allFP = false;
+                      break;
+                    }
+                  }
+                  int64_t trailing = cirArr.getTrailingZerosNum();
+                  llvm::APFloat zero =
+                      llvm::APFloat::getZero(first.getSemantics());
+                  for (int64_t t = 0; t < trailing; ++t)
+                    fvals.push_back(zero);
+                  if (allFP && (int64_t)fvals.size() == numElems) {
+                    auto tensorTy =
+                        mlir::RankedTensorType::get({numElems}, stdElemTy);
+                    initVal = mlir::DenseFPElementsAttr::get(tensorTy, fvals);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      // Use the CIR type derived from the VarDecl, not gv.getSymType().
+      // The cir::GlobalOp was created with convertTypeForMem (LLVM type).
+      // Device function bodies reference the symbol via cir.get_global using a
+      // CIR pointer type, so we must use the CIR type for the gpu.module
+      // global.
+      mlir::Type cirVarTy = convertType(vd->getType());
+      // Emit a cir.global with a TargetAddressSpaceAttr directly into the
+      // gpu.module.  CIRToLLVMGlobalOpLowering (inside
+      // ConvertCIRInGpuModulePass) reads TargetAddressSpaceAttr and produces
+      // the correct llvm.mlir.global with addrspace.  No separate offload
+      // dialect op is needed.
+      mlir::gpu::GPUModuleOp devMod = getOrCreateDeviceModule();
+      {
+        mlir::OpBuilder::InsertionGuard gvGuard(builder);
+        builder.setInsertionPointToEnd(devMod.getBody());
+        auto addrSpaceAttr =
+            cir::TargetAddressSpaceAttr::get(&getMLIRContext(), devAddrSpace);
+        auto devGlobal = cir::GlobalOp::create(builder, gv.getLoc(),
+                                               gv.getSymName(), cirVarTy);
+        devGlobal.setAddrSpaceAttr(addrSpaceAttr);
+        devGlobal.setLinkage(cir::GlobalLinkageKind::InternalLinkage);
+        devGlobal.setConstant(isConstant);
+        mlir::SymbolTable::setSymbolVisibility(
+            devGlobal, mlir::SymbolTable::Visibility::Private);
+      }
+      // If lastGlobalOp tracked this cir::GlobalOp, reset to avoid dangling
+      // ptr.
+      if (lastGlobalOp == gv)
+        lastGlobalOp = nullptr;
+      gv.erase();
+      // Reset to the canonical end-of-module position for subsequent calls.
+      builder.setInsertionPointToEnd(theModule.getBody());
+    }
+  }
 }
 
 void CIRGenModule::emitGlobalDefinition(clang::GlobalDecl gd,
@@ -1742,10 +2207,33 @@ static bool verifyPointerTypeArgs(cir::FuncOp oldF, cir::FuncOp newF,
     if (!call)
       continue;
 
-    for (auto [argOp, fnArgType] :
-         llvm::zip(call.getArgs(), newF.getFunctionType().getInputs())) {
-      if (argOp.getType() != fnArgType)
-        return false;
+    auto params = newF.getFunctionType().getInputs();
+    for (auto [idx, pair] :
+         llvm::enumerate(llvm::zip(call.getArgs(), params))) {
+      mlir::Value arg = std::get<0>(pair);
+      mlir::Type paramTy = std::get<1>(pair);
+      if (arg.getType() == paramTy)
+        continue;
+
+      // When the only difference is the pointer address space (e.g. a function
+      // declared first with a flat-pointer arg and later redefined with an
+      // address-space-qualified pointer), insert an address_space cast at the
+      // call site rather than emitting an NYI error.
+      auto srcPtrTy = mlir::dyn_cast<cir::PointerType>(arg.getType());
+      auto dstPtrTy = mlir::dyn_cast<cir::PointerType>(paramTy);
+      if (srcPtrTy && dstPtrTy &&
+          srcPtrTy.getPointee() == dstPtrTy.getPointee()) {
+        mlir::OpBuilder localBuilder(call.getContext());
+        mlir::OpBuilder::InsertionGuard guard(localBuilder);
+        localBuilder.setInsertionPoint(call);
+        mlir::Value cast =
+            cir::CastOp::create(localBuilder, call.getLoc(), dstPtrTy,
+                                cir::CastKind::address_space, arg);
+        call.getArgsMutable()[idx].assign(cast);
+        continue;
+      }
+
+      llvm_unreachable("replace call with mismatched types");
     }
   }
 
@@ -3323,6 +3811,8 @@ CIRGenModule::createCIRFunction(mlir::Location loc, StringRef name,
     CIRGenFunction *cgf = this->curCGF;
     if (cgf)
       builder.setInsertionPoint(cgf->curFn);
+    else if (!builder.getInsertionBlock())
+      builder.setInsertionPointToEnd(theModule.getBody());
 
     func = cir::FuncOp::create(builder, loc, name, funcType);
 
@@ -3346,9 +3836,6 @@ CIRGenModule::createCIRFunction(mlir::Location loc, StringRef name,
 
     // Mark C++ special member functions (Constructor, Destructor etc.)
     setCXXSpecialMemberAttr(func, funcDecl);
-
-    if (!cgf)
-      theModule.push_back(func);
 
     if (this->getLangOpts().OpenACC) {
       // We only have to handle this attribute, since OpenACCAnnotAttrs are
@@ -3444,7 +3931,8 @@ cir::FuncOp CIRGenModule::createRuntimeFunction(cir::FuncType ty,
                                                 bool isLocal,
                                                 bool assumeConvergent) {
   if (assumeConvergent)
-    errorNYI("createRuntimeFunction: assumeConvergent");
+    extraAttrs.set(cir::CIRDialect::getConvergentAttrName(),
+                   mlir::UnitAttr::get(&getMLIRContext()));
 
   cir::FuncOp entry = getOrCreateCIRFunction(name, ty, GlobalDecl(),
                                              /*forVtable=*/false, extraAttrs);

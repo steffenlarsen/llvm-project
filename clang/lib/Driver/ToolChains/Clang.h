@@ -172,6 +172,19 @@ public:
                     const char *LinkingOutput) const override;
 };
 
+/// CIR offload merge tool — combines host.cir + device.cir into a single
+/// unified offload module using the offload-merge-modules MLIR pass.
+class LLVM_LIBRARY_VISIBILITY CIRMerge final : public Tool {
+public:
+  CIRMerge(const ToolChain &TC) : Tool("CIR::Merge", "cir-merge", TC) {}
+
+  bool hasIntegratedCPP() const override { return false; }
+  void ConstructJob(Compilation &C, const JobAction &JA,
+                    const InputInfo &Output, const InputInfoList &Inputs,
+                    const llvm::opt::ArgList &TCArgs,
+                    const char *LinkingOutput) const override;
+};
+
 /// Linker wrapper tool.
 class LLVM_LIBRARY_VISIBILITY LinkerWrapper final : public Tool {
   const Tool *Linker;

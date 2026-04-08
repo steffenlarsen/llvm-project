@@ -77,9 +77,10 @@ public:
     BinaryAnalyzeJobClass,
     BinaryTranslatorJobClass,
     ObjcopyJobClass,
+    CIRMergeJobClass,
 
     JobClassFirst = PreprocessJobClass,
-    JobClassLast = ObjcopyJobClass
+    JobClassLast = CIRMergeJobClass
   };
 
   // The offloading kind determines if this action is binded to a particular
@@ -699,6 +700,19 @@ public:
 
   static bool classof(const Action *A) {
     return A->getKind() == ObjcopyJobClass;
+  }
+};
+
+class CIRMergeJobAction : public JobAction {
+  void anchor() override;
+
+public:
+  // Inputs[0] = host.cir (CompileJobAction → TY_CIR)
+  // Inputs[1] = device.cir (CompileJobAction → TY_CIR_DEVICE)
+  CIRMergeJobAction(ActionList &Inputs, types::ID Type);
+
+  static bool classof(const Action *A) {
+    return A->getKind() == CIRMergeJobClass;
   }
 };
 

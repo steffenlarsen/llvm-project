@@ -57,6 +57,10 @@ protected:
   CreateASTConsumer(clang::CompilerInstance &CI,
                     llvm::StringRef InFile) override;
 
+  // When the input is a pre-built CIR file (-x cir), bypass AST parsing and
+  // directly load the MLIR module, run the CIR pipeline, and emit the output.
+  void ExecuteAction() override;
+
 public:
   ~CIRGenAction() override;
 

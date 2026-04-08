@@ -1,0 +1,336 @@
+// Tests for GpuSpecializeScalarArgsPass.
+//
+// The pass resolves scalar (non-pointer) kernel operands at all launch sites.
+// When every site passes the same compile-time constant, a specialised clone
+// is created with that constant RAUW'd into the body.
+
+// RUN: cir-opt --split-input-file --gpu-specialize-scalar-args %s \
+// RUN:   | FileCheck %s
+// RUN: cir-opt --split-input-file \
+// RUN:   --gpu-specialize-scalar-args='enabled=false' %s \
+// RUN:   | FileCheck %s --check-prefix=DISABLED
+
+//===----------------------------------------------------------------------===//
+// 1. Two launches pass the same constant scalar → one clone with RAUW'd arg;
+//    both launches redirected; original preserved.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k$scalarspec
+// CHECK:      gpu.launch_func @offload_device_module::@k$scalarspec
+// CHECK:      gpu.func @k(
+// CHECK-NOT:  cir.const
+// CHECK:      gpu.func @k$scalarspec(
+// CHECK:        cir.const #cir.int<784>
+
+// DISABLED:   gpu.launch_func @offload_device_module::@k
+// DISABLED-NOT: $scalarspec
+// DISABLED:   gpu.launch_func @offload_device_module::@k
+// DISABLED-NOT: $scalarspec
+
+module attributes {gpu.container_module} {
+  func.func @host1(%n: index) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+    %val = "cir.const"() <{value = #cir.int<784> : !cir.int<s, 32>}> : () -> !cir.int<s, 32>
+
+    gpu.launch_func @offload_device_module::@k
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+        args(%val : !cir.int<s, 32>)
+    func.return
+  }
+
+  func.func @host2(%n: index) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+    %val = "cir.const"() <{value = #cir.int<784> : !cir.int<s, 32>}> : () -> !cir.int<s, 32>
+
+    gpu.launch_func @offload_device_module::@k
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+        args(%val : !cir.int<s, 32>)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k(%n: !cir.int<s, 32>) kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 2. Sites disagree (different constants) → no specialization by default.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k_disagree
+// CHECK-NOT:  $scalarspec
+// CHECK:      gpu.launch_func @offload_device_module::@k_disagree
+// CHECK-NOT:  $scalarspec
+// CHECK:      gpu.func @k_disagree(
+// CHECK-NOT:  $scalarspec
+
+module attributes {gpu.container_module} {
+  func.func @host1(%n: index) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+    %val = "cir.const"() <{value = #cir.int<784> : !cir.int<s, 32>}> : () -> !cir.int<s, 32>
+
+    gpu.launch_func @offload_device_module::@k_disagree
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+        args(%val : !cir.int<s, 32>)
+    func.return
+  }
+
+  func.func @host2(%n: index) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+    %val = "cir.const"() <{value = #cir.int<1024> : !cir.int<s, 32>}> : () -> !cir.int<s, 32>
+
+    gpu.launch_func @offload_device_module::@k_disagree
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+        args(%val : !cir.int<s, 32>)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k_disagree(%n: !cir.int<s, 32>) kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 3. Mixed pointer + scalar args: pointer not specialized, scalar specialized.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k_mixed$scalarspec
+// CHECK:      gpu.func @k_mixed(
+// CHECK:      gpu.func @k_mixed$scalarspec(
+// CHECK-SAME: !cir.ptr<!cir.float>
+// CHECK:        cir.const #cir.int<42>
+
+module attributes {gpu.container_module} {
+  "cir.func"() <{function_type = !cir.func<(!cir.ptr<!cir.ptr<!cir.void>>, !cir.int<u, 64>) -> !cir.int<s, 32>>, sym_name = "hipMalloc", sym_visibility = "private"}> ({
+  }) : () -> ()
+
+  func.func @host(%n: index) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+
+    %alloca_a = "cir.alloca"() <{alignment = 8 : i64, name = "d_a"}> : () -> !cir.ptr<!cir.ptr<!cir.float>>
+    %cast_a = "cir.cast"(%alloca_a) <{kind = 1 : i32}> : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.ptr<!cir.void>>
+    %size = "cir.const"() <{value = #cir.int<1024> : !cir.int<u, 64>}> : () -> !cir.int<u, 64>
+    %err = "cir.call"(%cast_a, %size) <{callee = @hipMalloc}> : (!cir.ptr<!cir.ptr<!cir.void>>, !cir.int<u, 64>) -> !cir.int<s, 32>
+    %d_a = "cir.load"(%alloca_a) : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.float>
+
+    %len = "cir.const"() <{value = #cir.int<42> : !cir.int<s, 32>}> : () -> !cir.int<s, 32>
+
+    gpu.launch_func @offload_device_module::@k_mixed
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+        args(%d_a : !cir.ptr<!cir.float>, %len : !cir.int<s, 32>)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k_mixed(%a: !cir.ptr<!cir.float>, %n: !cir.int<s, 32>) kernel {
+      %v = "cir.load"(%a) : (!cir.ptr<!cir.float>) -> !cir.float
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 4. Compose with existing $maxN clone: launches already targeting @k$max256
+//    → specialization applied to that clone in-place, no new clone.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k_tight$max256
+// CHECK:      gpu.func @k_tight() kernel
+// CHECK:      gpu.func @k_tight$max256(
+// CHECK:        cir.const #cir.int<784>
+
+module attributes {gpu.container_module} {
+  func.func @host(%n: index) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+    %val = "cir.const"() <{value = #cir.int<784> : !cir.int<s, 32>}> : () -> !cir.int<s, 32>
+
+    gpu.launch_func @offload_device_module::@k_tight$max256
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+        args(%val : !cir.int<s, 32>)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k_tight() kernel {
+      gpu.return
+    }
+    gpu.func @k_tight$max256(%n: !cir.int<s, 32>) kernel
+        attributes {known_block_size = array<i32: 256, 1, 1>} {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 5. No scalar args → no clone.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.func @k_noscalar(
+// CHECK-NOT:  $scalarspec
+
+module attributes {gpu.container_module} {
+  "cir.func"() <{function_type = !cir.func<(!cir.ptr<!cir.ptr<!cir.void>>, !cir.int<u, 64>) -> !cir.int<s, 32>>, sym_name = "hipMalloc", sym_visibility = "private"}> ({
+  }) : () -> ()
+
+  func.func @host(%n: index) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+
+    %alloca_a = "cir.alloca"() <{alignment = 8 : i64, name = "d_a"}> : () -> !cir.ptr<!cir.ptr<!cir.float>>
+    %cast_a = "cir.cast"(%alloca_a) <{kind = 1 : i32}> : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.ptr<!cir.void>>
+    %size = "cir.const"() <{value = #cir.int<1024> : !cir.int<u, 64>}> : () -> !cir.int<u, 64>
+    %err = "cir.call"(%cast_a, %size) <{callee = @hipMalloc}> : (!cir.ptr<!cir.ptr<!cir.void>>, !cir.int<u, 64>) -> !cir.int<s, 32>
+    %d_a = "cir.load"(%alloca_a) : (!cir.ptr<!cir.ptr<!cir.float>>) -> !cir.ptr<!cir.float>
+
+    gpu.launch_func @offload_device_module::@k_noscalar
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+        args(%d_a : !cir.ptr<!cir.float>)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k_noscalar(%a: !cir.ptr<!cir.float>) kernel {
+      %v = "cir.load"(%a) : (!cir.ptr<!cir.float>) -> !cir.float
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 6. Scalar arg resolved through cir.load → cir.alloca → unique cir.store.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k_loadstore$scalarspec
+// CHECK:      gpu.func @k_loadstore(
+// CHECK:      gpu.func @k_loadstore$scalarspec(
+// CHECK:        cir.const #cir.int<15000>
+
+module attributes {gpu.container_module} {
+  func.func @host(%n: index) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+
+    %alloca_n = "cir.alloca"() <{alignment = 4 : i64, name = "n2"}> : () -> !cir.ptr<!cir.int<s, 32>>
+    %const_n = "cir.const"() <{value = #cir.int<15000> : !cir.int<s, 32>}> : () -> !cir.int<s, 32>
+    "cir.store"(%const_n, %alloca_n) : (!cir.int<s, 32>, !cir.ptr<!cir.int<s, 32>>) -> ()
+    %loaded_n = "cir.load"(%alloca_n) : (!cir.ptr<!cir.int<s, 32>>) -> !cir.int<s, 32>
+
+    gpu.launch_func @offload_device_module::@k_loadstore
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+        args(%loaded_n : !cir.int<s, 32>)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k_loadstore(%n: !cir.int<s, 32>) kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 7. Interprocedural: constant flows through cir.call argument.
+//    main() passes cir.const 784 to wrapper(), which launches with that param.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k_interproc$scalarspec
+// CHECK:      gpu.func @k_interproc(
+// CHECK:      gpu.func @k_interproc$scalarspec(
+// CHECK:        cir.const #cir.int<784>
+
+module attributes {gpu.container_module} {
+  func.func private @wrapper(%n: !cir.int<s, 32>) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+    %idx = arith.constant 10 : index
+
+    gpu.launch_func @offload_device_module::@k_interproc
+        blocks in (%idx, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+        args(%n : !cir.int<s, 32>)
+    func.return
+  }
+
+  func.func @main() {
+    %val = "cir.const"() <{value = #cir.int<784> : !cir.int<s, 32>}> : () -> !cir.int<s, 32>
+    "cir.call"(%val) <{callee = @wrapper}> : (!cir.int<s, 32>) -> ()
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k_interproc(%n: !cir.int<s, 32>) kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 8. Interprocedural: callers disagree → no specialization.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.func @k_interproc_disagree(
+// CHECK-NOT:  $scalarspec
+
+module attributes {gpu.container_module} {
+  func.func private @wrapper2(%n: !cir.int<s, 32>) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+    %idx = arith.constant 10 : index
+
+    gpu.launch_func @offload_device_module::@k_interproc_disagree
+        blocks in (%idx, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+        args(%n : !cir.int<s, 32>)
+    func.return
+  }
+
+  func.func @caller1() {
+    %val = "cir.const"() <{value = #cir.int<784> : !cir.int<s, 32>}> : () -> !cir.int<s, 32>
+    "cir.call"(%val) <{callee = @wrapper2}> : (!cir.int<s, 32>) -> ()
+    func.return
+  }
+
+  func.func @caller2() {
+    %val = "cir.const"() <{value = #cir.int<1024> : !cir.int<s, 32>}> : () -> !cir.int<s, 32>
+    "cir.call"(%val) <{callee = @wrapper2}> : (!cir.int<s, 32>) -> ()
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k_interproc_disagree(%n: !cir.int<s, 32>) kernel {
+      gpu.return
+    }
+  }
+}

@@ -9,7 +9,7 @@
 // checks are at the top.
 // CIR-DAG: !rec_IncompleteS = !cir.struct<"IncompleteS" incomplete>
 // CIR-DAG: !rec_CompleteS = !cir.struct<"CompleteS" {!s32i, !s8i}>
-// CIR-DAG: !rec_OuterS = !cir.struct<"OuterS" {!rec_InnerS, !s32i}>  
+// CIR-DAG: !rec_OuterS = !cir.struct<"OuterS" {!rec_InnerS, !s32i}>
 // CIR-DAG: !rec_InnerS = !cir.struct<"InnerS" {!s32i, !s8i}>
 // CIR-DAG: !rec_PackedS = !cir.struct<"PackedS" packed {!s32i, !s8i}>
 // CIR-DAG: !rec_PackedAndPaddedS = !cir.struct<"PackedAndPaddedS" packed padded {!s32i, !s8i, !u8i}>

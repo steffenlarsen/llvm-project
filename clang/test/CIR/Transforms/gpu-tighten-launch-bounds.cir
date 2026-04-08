@@ -1,0 +1,400 @@
+// Tests for GpuTightenLaunchBoundsPass.
+//
+// The pass clones kernels with tighter launch bounds when all block dimensions
+// at a call site are statically known and the total fits within a smaller
+// candidate bound from {warpSize, 256, 512}.
+//
+// The warp size is inferred from the "offload.target" ArrayAttr of StringAttrs:
+//   - AMD gfxN, N < 1000  (CDNA/GFX9): wavefront = 64
+//   - AMD gfxN, N >= 1000 (RDNA/GFX10+): wavefront = 32
+//   - NVIDIA sm_*: warp = 32
+// When the attribute is absent, only {256, 512} are considered.
+//
+// Cloned kernels are named @original$maxN.  The original is always preserved.
+
+// RUN: cir-opt --split-input-file --gpu-tighten-launch-bounds %s \
+// RUN:   | FileCheck %s
+// RUN: cir-opt --split-input-file \
+// RUN:   --gpu-tighten-launch-bounds='waves-per-eu-enabled=false' %s \
+// RUN:   | FileCheck %s --check-prefix=NOWAVES
+// RUN: cir-opt --split-input-file \
+// RUN:   --gpu-tighten-launch-bounds='aggressive-register-min=true aggressive-min-fraction=0.5' %s \
+// RUN:   | FileCheck %s --check-prefix=AGGRESSIVE
+
+//===----------------------------------------------------------------------===//
+// 1. Static block=256 with no target attribute → clone @k$max256.
+//    Candidates without target: {256, 512}.
+//===----------------------------------------------------------------------===//
+
+// Launch redirected to clone (inside host func.func, before gpu.module).
+// CHECK:      gpu.launch_func @offload_device_module::@k$max256
+
+// Original kernel always preserved.
+// CHECK:      gpu.func @k() kernel
+// CHECK-NOT:  known_block_size
+
+// Clone with tighter bound.
+// CHECK:      gpu.func @k$max256() kernel
+// CHECK:      known_block_size = array<i32: 256, 1, 1>
+// CHECK:      rocdl.flat_work_group_size = "1,256"
+
+module attributes {gpu.container_module} {
+  func.func @host(%n: index) {
+    %c256 = arith.constant 256 : index
+    %c1   = arith.constant 1   : index
+    gpu.launch_func @offload_device_module::@k
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k() kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 2. Static block=256 with AMD gfx90a target → warp=64; only 256 improves.
+//    (64 < 256 so 64 is also a candidate, but 256 <= 256 so it is the bucket.)
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k$max256
+// CHECK:      gpu.func @k$max256(
+// CHECK:        known_block_size = array<i32: 256, 1, 1>
+// CHECK:        rocdl.flat_work_group_size = "1,256"
+// CHECK:        rocdl.waves_per_eu = 8 : i32
+
+// With waves-per-eu disabled: falls back to "1,N", no waves_per_eu.
+// NOWAVES:      gpu.func @k$max256(
+// NOWAVES:        rocdl.flat_work_group_size = "1,256"
+// NOWAVES-NOT:    rocdl.waves_per_eu
+
+// With aggressive mode: classifier defaults to memory-bound (empty kernel),
+// so min is unchanged (== K_ceiling == 8).
+// AGGRESSIVE:      gpu.func @k$max256(
+// AGGRESSIVE:        rocdl.waves_per_eu = 8 : i32
+
+module attributes {gpu.container_module, "offload.target" = ["gfx90a"]} {
+  func.func @host(%n: index) {
+    %c256 = arith.constant 256 : index
+    %c1   = arith.constant 1   : index
+    gpu.launch_func @offload_device_module::@k
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k() kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 3. Static block=64 (exactly one wavefront on gfx90a → bucket=64).
+//    Candidate 64 == block total 64, so we get @k$max64.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k$max64
+// CHECK:      gpu.func @k() kernel
+// CHECK:      gpu.func @k$max64(
+// CHECK:        known_block_size = array<i32: 64, 1, 1>
+// CHECK:        rocdl.flat_work_group_size = "1,64"
+// CHECK:        rocdl.waves_per_eu = 4 : i32
+
+module attributes {gpu.container_module, "offload.target" = ["gfx90a"]} {
+  func.func @host(%n: index) {
+    %c64 = arith.constant 64 : index
+    %c1  = arith.constant 1  : index
+    gpu.launch_func @offload_device_module::@k
+        blocks in (%n, %c1, %c1)
+        threads in (%c64, %c1, %c1)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k() kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 4. Multiple launch sites with different block sizes → multiple clones.
+//    block=256 → $max256, block=512 → $max512.
+//    Original preserved.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k$max256
+// CHECK:      gpu.launch_func @offload_device_module::@k$max512
+// CHECK:      gpu.func @k() kernel
+// CHECK:      gpu.func @k$max
+// CHECK:        known_block_size
+// CHECK:      gpu.func @k$max
+// CHECK:        known_block_size
+
+module attributes {gpu.container_module} {
+  func.func @host(%n: index) {
+    %c256 = arith.constant 256 : index
+    %c512 = arith.constant 512 : index
+    %c1   = arith.constant 1   : index
+    gpu.launch_func @offload_device_module::@k
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+    gpu.launch_func @offload_device_module::@k
+        blocks in (%n, %c1, %c1)
+        threads in (%c512, %c1, %c1)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k() kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 5. Dynamic block size: no clone, launch unchanged, original preserved.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k
+// CHECK:      gpu.func @k() kernel
+// CHECK-NOT:  gpu.func @k$max
+
+module attributes {gpu.container_module} {
+  func.func @host(%n: index, %bx: index) {
+    %c1 = arith.constant 1 : index
+    gpu.launch_func @offload_device_module::@k
+        blocks in (%n, %c1, %c1)
+        threads in (%bx, %c1, %c1)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k() kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 6. block total > 512: no improvement, original preserved, no clone.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k
+// CHECK:      gpu.func @k() kernel
+// CHECK-NOT:  gpu.func @k$max
+
+module attributes {gpu.container_module} {
+  func.func @host(%n: index) {
+    %c1024 = arith.constant 1024 : index
+    %c1    = arith.constant 1    : index
+    gpu.launch_func @offload_device_module::@k
+        blocks in (%n, %c1, %c1)
+        threads in (%c1024, %c1, %c1)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k() kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 7. Multi-dimensional blocks: blockX*blockY*blockZ folded to constant.
+//    8*8*4 = 256 → bucket=256 → clone @k$max256.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k$max256
+// CHECK:      gpu.func @k$max256(
+// CHECK:        known_block_size = array<i32: 8, 8, 4>
+
+module attributes {gpu.container_module} {
+  func.func @host(%n: index) {
+    %c8 = arith.constant 8 : index
+    %c4 = arith.constant 4 : index
+    gpu.launch_func @offload_device_module::@k
+        blocks in (%n, %c8, %c4)
+        threads in (%c8, %c8, %c4)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k() kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 8. Kernel already has a known_block_size tighter than the launch total:
+//    no clone emitted (no improvement over currentMax).
+//    known_block_size = [256, 1, 1] → currentMax = 256.
+//    Launch block = 256 → bucket = 256, 256 >= 256, skip.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k
+// CHECK:      gpu.func @k() kernel
+// CHECK-SAME: known_block_size = array<i32: 256, 1, 1>
+// CHECK-NOT:  gpu.func @k$max
+
+module attributes {gpu.container_module} {
+  func.func @host(%n: index) {
+    %c256 = arith.constant 256 : index
+    %c1   = arith.constant 1   : index
+    gpu.launch_func @offload_device_module::@k
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k() kernel attributes {known_block_size = array<i32: 256, 1, 1>} {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 9. LDS-limited ceiling: kernel with 32KB static shared memory on gfx90a.
+//    block=256 → wpb=4, blocks_per_CU_lds = 65536/32768 = 2,
+//    K_lds = floor(2*4/4) = 2, K_slots = 8 → K_ceiling = 2.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k_lds$max256
+// CHECK:      gpu.func @k_lds$max256()
+// CHECK:        known_block_size = array<i32: 256, 1, 1>
+// CHECK:        rocdl.flat_work_group_size = "1,256"
+// CHECK:        rocdl.waves_per_eu = 2 : i32
+
+module attributes {gpu.container_module, "offload.target" = ["gfx90a"]} {
+  func.func @host(%n: index) {
+    %c256 = arith.constant 256 : index
+    %c1   = arith.constant 1   : index
+    gpu.launch_func @offload_device_module::@k_lds
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    // 8192 x f32 = 8192 * 4 = 32768 bytes of static LDS.
+    gpu.func @k_lds() workgroup(%shmem: memref<8192xf32, 3>) kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 10. Slot-limited ceiling: no LDS, small block on gfx90a.
+//     block=64 → wpb=1, K_lds=8 (no LDS), K_slots = min(8, 16*1/4) = 4.
+//     K_ceiling = 4.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k_slots$max64
+// CHECK:      gpu.func @k_slots$max64(
+// CHECK:        known_block_size = array<i32: 64, 1, 1>
+// CHECK:        rocdl.flat_work_group_size = "1,64"
+// CHECK:        rocdl.waves_per_eu = 4 : i32
+
+module attributes {gpu.container_module, "offload.target" = ["gfx90a"]} {
+  func.func @host(%n: index) {
+    %c64 = arith.constant 64 : index
+    %c1  = arith.constant 1  : index
+    gpu.launch_func @offload_device_module::@k_slots
+        blocks in (%n, %c1, %c1)
+        threads in (%c64, %c1, %c1)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k_slots() kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 11. Unknown arch fallback: no offload.target → no rocdl.waves_per_eu,
+//     flat_work_group_size remains "1,N".
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k_noarch$max256
+// CHECK:      gpu.func @k_noarch$max256(
+// CHECK:        known_block_size = array<i32: 256, 1, 1>
+// CHECK:        rocdl.flat_work_group_size = "1,256"
+// CHECK-NOT:    rocdl.waves_per_eu
+
+module attributes {gpu.container_module} {
+  func.func @host(%n: index) {
+    %c256 = arith.constant 256 : index
+    %c1   = arith.constant 1   : index
+    gpu.launch_func @offload_device_module::@k_noarch
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k_noarch() kernel {
+      gpu.return
+    }
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// 12. waves_per_eu with gfx1030 (RDNA): block=256, waveSize=32.
+//     wpb = 8, K_lds = 16 (no LDS), K_slots = min(16, 16*8/4) = 16.
+//     K_ceiling = 16.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.launch_func @offload_device_module::@k_rdna$max256
+// CHECK:      gpu.func @k_rdna$max256(
+// CHECK:        known_block_size = array<i32: 256, 1, 1>
+// CHECK:        rocdl.flat_work_group_size = "1,256"
+// CHECK:        rocdl.waves_per_eu = 16 : i32
+
+module attributes {gpu.container_module, "offload.target" = ["gfx1030"]} {
+  func.func @host(%n: index) {
+    %c256 = arith.constant 256 : index
+    %c1   = arith.constant 1   : index
+    gpu.launch_func @offload_device_module::@k_rdna
+        blocks in (%n, %c1, %c1)
+        threads in (%c256, %c1, %c1)
+    func.return
+  }
+
+  gpu.module @offload_device_module {
+    gpu.func @k_rdna() kernel {
+      gpu.return
+    }
+  }
+}
