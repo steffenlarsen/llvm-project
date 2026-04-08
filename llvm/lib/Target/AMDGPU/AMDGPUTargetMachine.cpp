@@ -1095,7 +1095,7 @@ void AMDGPUTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
 
         // This should run after inlining to have any chance of doing
         // anything, and before other cleanup optimizations.
-        FPM.addPass(AMDGPULowerKernelAttributesPass());
+        FPM.addPass(AMDGPULowerKernelAttributesPass(*this));
 
         // Promote alloca to vector before SROA and loop unroll. If we
         // manage to eliminate allocas before unroll we may choose to unroll

@@ -1,0 +1,232 @@
+// Tests for CIR offload DeadArgElimination pass.
+//
+// The pass creates a $dae clone with unused arguments removed, redirects all
+// visible launch sites to the clone, and preserves the original kernel for
+// external callers.
+
+// RUN: cir-opt --split-input-file --cir-offload-dead-arg-elimination %s \
+// RUN:   | FileCheck %s
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 1. Basic: middle arg unused -> $dae clone without it, launches redirected,
+//    original preserved.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: cir.func @host1
+// CHECK:         cir.offload.kernel_launch @offload_device_module::@k1$dae
+// CHECK-SAME:      args(%{{.*}}, %{{.*}} : !s32i, !cir.ptr<!s32i>)
+
+// CHECK-LABEL: cir.offload.module @offload_device_module
+// CHECK:         cir.offload.func @k1(%{{.*}}: !s32i, %{{.*}}: !s32i, %{{.*}}: !cir.ptr<!s32i>) kernel
+// CHECK:         cir.offload.func @k1$dae(%[[A0:.*]]: !s32i, %[[A1:.*]]: !cir.ptr<!s32i>) kernel
+// CHECK:           cir.store %[[A0]], %[[A1]]
+
+module {
+  cir.func @host1(%n: !u32i, %ptr: !cir.ptr<!s32i>) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %val = cir.const #cir.int<42> : !s32i
+    %dead = cir.const #cir.int<0> : !s32i
+
+    cir.offload.kernel_launch @offload_device_module::@k1
+        grid(%n, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%val, %dead, %ptr : !s32i, !s32i, !cir.ptr<!s32i>)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k1(%arg0: !s32i, %arg1: !s32i, %arg2: !cir.ptr<!s32i>) kernel {
+      // %arg1 is unused
+      cir.store %arg0, %arg2 : !s32i, !cir.ptr<!s32i>
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 2. All args live -> no clone created.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: cir.func @host_all_live
+// CHECK:         cir.offload.kernel_launch @offload_device_module2::@k_live
+// CHECK-NOT:     $dae
+// CHECK-LABEL: cir.offload.module @offload_device_module2
+// CHECK:         cir.offload.func @k_live(%{{.*}}: !s32i, %{{.*}}: !cir.ptr<!s32i>) kernel
+// CHECK-NOT:     $dae
+
+module {
+  cir.func @host_all_live(%n: !u32i, %ptr: !cir.ptr<!s32i>) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %val = cir.const #cir.int<42> : !s32i
+
+    cir.offload.kernel_launch @offload_device_module2::@k_live
+        grid(%n, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%val, %ptr : !s32i, !cir.ptr<!s32i>)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module2 {
+    cir.offload.func @k_live(%arg0: !s32i, %arg1: !cir.ptr<!s32i>) kernel {
+      cir.store %arg0, %arg1 : !s32i, !cir.ptr<!s32i>
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 3. Multiple launch sites -> all redirected to $dae clone.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: cir.func @host_multi1
+// CHECK:         cir.offload.kernel_launch @offload_device_module3::@k_multi$dae
+// CHECK-SAME:      args(%{{.*}} : !cir.ptr<!s32i>)
+// CHECK-LABEL: cir.func @host_multi2
+// CHECK:         cir.offload.kernel_launch @offload_device_module3::@k_multi$dae
+// CHECK-SAME:      args(%{{.*}} : !cir.ptr<!s32i>)
+
+// CHECK-LABEL: cir.offload.module @offload_device_module3
+// CHECK:         cir.offload.func @k_multi(%{{.*}}: !s32i, %{{.*}}: !cir.ptr<!s32i>) kernel
+// CHECK:         cir.offload.func @k_multi$dae(%{{.*}}: !cir.ptr<!s32i>) kernel
+
+module {
+  cir.func @host_multi1(%n: !u32i, %ptr: !cir.ptr<!s32i>) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %dead = cir.const #cir.int<0> : !s32i
+
+    cir.offload.kernel_launch @offload_device_module3::@k_multi
+        grid(%n, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%dead, %ptr : !s32i, !cir.ptr<!s32i>)
+    cir.return
+  }
+
+  cir.func @host_multi2(%n: !u32i, %ptr: !cir.ptr<!s32i>) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %dead = cir.const #cir.int<99> : !s32i
+
+    cir.offload.kernel_launch @offload_device_module3::@k_multi
+        grid(%n, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%dead, %ptr : !s32i, !cir.ptr<!s32i>)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module3 {
+    cir.offload.func @k_multi(%arg0: !s32i, %arg1: !cir.ptr<!s32i>) kernel {
+      // %arg0 is unused
+      %v = cir.load %arg1 : !cir.ptr<!s32i>, !s32i
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 4. Post-specialization: arg RAUW'd to constant (use-empty) -> removed.
+//    Simulates SpecializeScalarArgs output.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: cir.func @host_postspec
+// CHECK:         cir.offload.kernel_launch @offload_device_module4::@k_spec$dae
+// CHECK-SAME:      args(%{{.*}} : !cir.ptr<!s32i>)
+
+// CHECK-LABEL: cir.offload.module @offload_device_module4
+// CHECK:         cir.offload.func @k_spec(%{{.*}}: !s32i, %{{.*}}: !cir.ptr<!s32i>) kernel
+// CHECK:         cir.offload.func @k_spec$dae(%[[P:.*]]: !cir.ptr<!s32i>) kernel
+// CHECK:           %[[C:.*]] = cir.const #cir.int<784>
+// CHECK:           cir.store %[[C]], %[[P]]
+
+module {
+  cir.func @host_postspec(%n: !u32i, %ptr: !cir.ptr<!s32i>) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %val = cir.const #cir.int<784> : !s32i
+
+    cir.offload.kernel_launch @offload_device_module4::@k_spec
+        grid(%n, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%val, %ptr : !s32i, !cir.ptr<!s32i>)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module4 {
+    // After SpecializeScalarArgs: %arg0 was RAUW'd with a constant.
+    // The arg itself is now use-empty.
+    cir.offload.func @k_spec(%arg0: !s32i, %arg1: !cir.ptr<!s32i>) kernel {
+      %c = cir.const #cir.int<784> : !s32i
+      cir.store %c, %arg1 : !s32i, !cir.ptr<!s32i>
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 5. Launch already on a clone ($scalarspec) -> dead-arg removal applied
+//    in-place to the clone; no double-clone.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: cir.func @host_on_clone
+// CHECK:         cir.offload.kernel_launch @offload_device_module5::@k_clone$scalarspec
+// CHECK-SAME:      args(%{{.*}} : !cir.ptr<!s32i>)
+
+// CHECK-LABEL: cir.offload.module @offload_device_module5
+// The original kernel retains full signature.
+// CHECK:         cir.offload.func @k_clone(%{{.*}}: !s32i, %{{.*}}: !cir.ptr<!s32i>) kernel
+// The clone has the dead arg removed in-place.
+// CHECK:         cir.offload.func @k_clone$scalarspec(%{{.*}}: !cir.ptr<!s32i>) kernel
+// CHECK-NOT:     $dae
+
+module {
+  cir.func @host_on_clone(%n: !u32i, %ptr: !cir.ptr<!s32i>) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %dead = cir.const #cir.int<0> : !s32i
+
+    // Launch already targets a $scalarspec clone.
+    cir.offload.kernel_launch @offload_device_module5::@k_clone$scalarspec
+        grid(%n, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%dead, %ptr : !s32i, !cir.ptr<!s32i>)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module5 {
+    cir.offload.func @k_clone(%arg0: !s32i, %arg1: !cir.ptr<!s32i>) kernel {
+      cir.store %arg0, %arg1 : !s32i, !cir.ptr<!s32i>
+      cir.return
+    }
+    // Clone created by SpecializeScalarArgs — %arg0 was RAUW'd, now use-empty.
+    cir.offload.func @k_clone$scalarspec(%arg0: !s32i, %arg1: !cir.ptr<!s32i>) kernel {
+      %c = cir.const #cir.int<784> : !s32i
+      cir.store %c, %arg1 : !s32i, !cir.ptr<!s32i>
+      cir.return
+    }
+  }
+}

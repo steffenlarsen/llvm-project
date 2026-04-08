@@ -152,7 +152,7 @@ B *offset_cast(A *a) {
 //      LLVM: [[LABEL_NOTNULL]]:
 // LLVM-NEXT:   %[[VTABLE:.*]] = load ptr, ptr %[[SRC]]
 // LLVM-NEXT:   %[[VTABLE_CHECK:.*]] = icmp eq ptr %[[VTABLE]], getelementptr inbounds nuw (i8, ptr @_ZTV1B, i64 48)
-// LLVM-NEXT:   %[[SRC_OFFSET:.*]] = getelementptr i8, ptr %[[SRC]], i64 -8
+// LLVM-NEXT:   %[[SRC_OFFSET:.*]] = getelementptr inbounds nuw i8, ptr %[[SRC]], i64 -8
 // LLVM-NEXT:   %[[EXACT_RESULT:.*]] = select i1 %[[VTABLE_CHECK]], ptr %[[SRC_OFFSET]], ptr null
 // LLVM-NEXT:   br label %[[LABEL_END]]
 //      LLVM: [[LABEL_END]]:

@@ -70,7 +70,7 @@ module attributes {
     cir.return
   }
 
-  // LLVM: define void @caller(%struct.Big %{{.+}})
+  // LLVM: define void @caller(ptr byval(%struct.Big) align 8 %{{.+}})
   // LLVM:   call void @takes_big(ptr noalias noundef byval(%struct.Big) align 8 %{{.+}})
 
   // A caller of an sret function carries the sret attribute on the call

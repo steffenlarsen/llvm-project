@@ -2017,7 +2017,8 @@ public:
   void emitDeleteCall(const FunctionDecl *deleteFD, mlir::Value ptr,
                       QualType deleteTy);
 
-  mlir::LogicalResult emitDoStmt(const clang::DoStmt &s);
+  mlir::LogicalResult emitDoStmt(const clang::DoStmt &s,
+                                 llvm::ArrayRef<const Attr *> attrs = {});
 
   mlir::Value emitCXXTypeidExpr(const CXXTypeidExpr *e);
   mlir::Value emitDynamicCast(Address thisAddr, const CXXDynamicCastExpr *dce);
@@ -2079,7 +2080,8 @@ public:
   mlir::LogicalResult emitSimpleStmt(const clang::Stmt *s,
                                      bool useCurrentScope);
 
-  mlir::LogicalResult emitForStmt(const clang::ForStmt &s);
+  mlir::LogicalResult emitForStmt(const clang::ForStmt &s,
+                                  llvm::ArrayRef<const Attr *> attrs = {});
 
   void emitForwardingCallToLambda(const CXXMethodDecl *lambdaCallOperator,
                                   CallArgList &callArgs);
@@ -2225,6 +2227,7 @@ public:
 
   /// Emit a device-side printf call for NVPTX targets.
   mlir::Value emitNVPTXDevicePrintfCallExpr(const CallExpr *expr);
+  mlir::Value emitAMDGPUDevicePrintfCallExpr(const CallExpr *expr);
 
   LValue emitOpaqueValueLValue(const OpaqueValueExpr *e);
 
@@ -2337,9 +2340,15 @@ public:
   /// inside a function, including static vars etc.
   void emitVarDecl(const clang::VarDecl &d);
 
+  /// Offload CIR path: emit offload.shared_mem_alloc for an
+  /// `extern __shared__ T arr[]` declaration and register its address in
+  /// LocalDeclMap so that subsequent DeclRefExprs resolve to the SSA pointer.
+  void emitOffloadSharedMemDecl(const clang::VarDecl &d);
+
   void emitVariablyModifiedType(QualType ty);
 
-  mlir::LogicalResult emitWhileStmt(const clang::WhileStmt &s);
+  mlir::LogicalResult emitWhileStmt(const clang::WhileStmt &s,
+                                    llvm::ArrayRef<const Attr *> attrs = {});
 
   std::optional<mlir::Value> emitRISCVBuiltinExpr(unsigned builtinID,
                                                   const CallExpr *expr);

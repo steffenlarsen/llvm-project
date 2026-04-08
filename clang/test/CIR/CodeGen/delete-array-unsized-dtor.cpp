@@ -69,9 +69,9 @@ void test(Dtor *ptr) {
 // LLVM:   %[[NOT_NULL:.*]] = icmp ne ptr %[[PTR]], null
 // LLVM:   br i1 %[[NOT_NULL]], label %[[DELETE_NOTNULL:.*]], label %[[DONE:.*]]
 // LLVM: [[DELETE_NOTNULL]]:
-// LLVM:   %[[ALLOC_PTR:.*]] = getelementptr i8, ptr %[[PTR]], i64 -8
+// LLVM:   %[[ALLOC_PTR:.*]] = getelementptr inbounds i8, ptr %[[PTR]], i64 -8
 // LLVM:   %[[NUM_ELEM:.*]] = load i64, ptr %[[ALLOC_PTR]], align 4
-// LLVM:   %[[ARR_END:.*]] = getelementptr %struct.Dtor, ptr %[[PTR]], i64 %[[NUM_ELEM]]
+// LLVM:   %[[ARR_END:.*]] = getelementptr inbounds nuw %struct.Dtor, ptr %[[PTR]], i64 %[[NUM_ELEM]]
 // LLVM:   %[[NOT_EMPTY:.*]] = icmp ne ptr %[[ARR_END]], %[[PTR]]
 // LLVM:   br i1 %[[NOT_EMPTY]], label %[[DESTROY:.*]], label %[[CALL_DELETE:.*]]
 // LLVM: [[DESTROY]]:
@@ -80,13 +80,13 @@ void test(Dtor *ptr) {
 // LLVM: [[LOOP_COND:.*]]:
 // LLVM:   %[[CUR:.*]] = load ptr, ptr %[[ARR_IDX]]
 // LLVM:   %[[CMP:.*]] = icmp ne ptr %[[CUR]], %[[PTR]]
-// LLVM:   br i1 %[[CMP]], label %[[DTOR_LOOP]], label %[[LOOP_END:.*]]
+// LLVM:   br i1 %[[CMP]], label %[[DTOR_LOOP]], label %[[LOOP_END:[^ ,]+]]{{.*}}
 // LLVM: [[DTOR_LOOP]]:
 // LLVM:   %[[ELEM:.*]] = load ptr, ptr %[[ARR_IDX]]
-// LLVM:   %[[PREV:.*]] = getelementptr %struct.Dtor, ptr %[[ELEM]], i64 -1
+// LLVM:   %[[PREV:.*]] = getelementptr inbounds %struct.Dtor, ptr %[[ELEM]], i64 -1
 // LLVM:   store ptr %[[PREV]], ptr %[[ARR_IDX]]
 // LLVM:   call void @_ZN4DtorD1Ev(ptr %[[PREV]])
-// LLVM:   br label %[[LOOP_COND]]
+// LLVM:   br label %[[LOOP_COND]]{{.*}}
 // LLVM: [[LOOP_END]]:
 // LLVM:   br label %[[CALL_DELETE]]
 // LLVM: [[CALL_DELETE]]:

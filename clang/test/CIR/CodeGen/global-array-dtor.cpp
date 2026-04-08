@@ -57,20 +57,20 @@ ArrayDtor arrDtor[16];
 
 // LLVM: define internal void @__cxx_global_array_dtor(ptr noundef %[[ARR_ARG:.*]]) {
 // LLVM:   %[[BEGIN:.*]] = getelementptr %struct.ArrayDtor, ptr %[[ARR_ARG]], i32 0
-// LLVM:   %[[END:.*]] = getelementptr %struct.ArrayDtor, ptr %[[BEGIN]], i64 16
+// LLVM:   %[[END:.*]] = getelementptr inbounds nuw %struct.ArrayDtor, ptr %[[BEGIN]], i64 16
 // LLVM:   %[[CUR_ADDR:.*]] = alloca ptr
 // LLVM:   store ptr %[[END]], ptr %[[CUR_ADDR]]
 // LLVM:   br label %[[LOOP_BODY:.*]]
 // LLVM: [[LOOP_COND:.*]]:
 // LLVM:   %[[CUR:.*]] = load ptr, ptr %[[CUR_ADDR]]
 // LLVM:   %[[CMP:.*]] = icmp ne ptr %[[CUR]], %[[BEGIN]]
-// LLVM:   br i1 %[[CMP]], label %[[LOOP_BODY]], label %[[LOOP_END:.*]]
+// LLVM:   br i1 %[[CMP]], label %[[LOOP_BODY]], label %[[LOOP_END:[^ ,]+]]{{.*}}
 // LLVM: [[LOOP_BODY]]:
 // LLVM:   %[[CUR:.*]] = load ptr, ptr %[[CUR_ADDR]]
-// LLVM:   %[[PREV:.*]] = getelementptr %struct.ArrayDtor, ptr %[[CUR]], i64 -1
+// LLVM:   %[[PREV:.*]] = getelementptr inbounds %struct.ArrayDtor, ptr %[[CUR]], i64 -1
 // LLVM:   store ptr %[[PREV]], ptr %[[CUR_ADDR]]
 // LLVM:   call void @_ZN9ArrayDtorD1Ev(ptr noundef nonnull align 1 dereferenceable(1) %[[PREV]])
-// LLVM:   br label %[[LOOP_COND]]
+// LLVM:   br label %[[LOOP_COND]]{{.*}}
 // LLVM: [[LOOP_END]]:
 // LLVM:   ret void
 // LLVM: }

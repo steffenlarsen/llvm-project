@@ -113,8 +113,14 @@ LogicalResult moduleSerializer(GPUModuleOp op,
       !handler && moduleHandler)
     handler = moduleHandler;
   builder.setInsertionPointAfter(op);
-  gpu::BinaryOp::create(builder, op.getLoc(), op.getName(), handler,
-                        builder.getArrayAttr(objects));
+  auto binary = gpu::BinaryOp::create(builder, op.getLoc(), op.getName(),
+                                      handler, builder.getArrayAttr(objects));
+  // The binary is the compiled form of the module, so carry the module's
+  // discardable attributes over.  Without this, any producer annotation used
+  // to classify the module is lost at exactly the point where downstream
+  // consumers need it and would otherwise have to re-derive it from the name.
+  for (NamedAttribute attr : op->getDiscardableAttrs())
+    binary->setAttr(attr.getName(), attr.getValue());
   op->erase();
   return success();
 }

@@ -238,8 +238,12 @@ void CIRGenFunction::declare(mlir::Value addrVal, const Decl *var, QualType ty,
 
   if (isParam)
     allocaOp.setInitAttr(mlir::UnitAttr::get(&getMLIRContext()));
-  if (ty->isReferenceType() || ty.isConstQualified())
+  if (ty->isReferenceType() || ty.isConstQualified()) {
+    // The alloca format requires "init" before "const", so set both.
+    if (!allocaOp.getInit())
+      allocaOp.setInitAttr(mlir::UnitAttr::get(&getMLIRContext()));
     allocaOp.setConstantAttr(mlir::UnitAttr::get(&getMLIRContext()));
+  }
 
   symbolTable.insert(var, addrVal);
 }
@@ -462,7 +466,7 @@ void CIRGenFunction::emitFunctionProlog(const FunctionArgList &args,
       paramVal = emitArgumentDemotion(*this, paramVar, paramVal);
 
     // Location of the store to the param storage tracked as beginning of
-    // the function body.
+    // the function body.  Store to the raw alloca (before addrspacecast).
     mlir::Location fnBodyBegin = getLoc(bodyBeginLoc);
     builder.CIRBaseBuilderTy::createStore(fnBodyBegin, paramVal, addrVal);
   }
@@ -750,7 +754,8 @@ cir::FuncOp CIRGenFunction::generateCode(clang::GlobalDecl gd, cir::FuncOp fn,
     } else if (isa<CXXConstructorDecl>(funcDecl)) {
       emitConstructorBody(args);
     } else if (getLangOpts().CUDA && !getLangOpts().CUDAIsDevice &&
-               funcDecl->hasAttr<CUDAGlobalAttr>()) {
+               funcDecl->hasAttr<CUDAGlobalAttr>() &&
+               !cgm.getCodeGenOpts().ClangIROffload) {
       cgm.getCUDARuntime().emitDeviceStub(*this, fn, args);
     } else if (isa<CXXMethodDecl>(funcDecl) &&
                cast<CXXMethodDecl>(funcDecl)->isLambdaStaticInvoker()) {

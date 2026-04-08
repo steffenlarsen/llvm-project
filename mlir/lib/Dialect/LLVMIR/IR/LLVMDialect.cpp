@@ -1129,8 +1129,12 @@ Operation::operand_range CallOp::getArgOperands() {
 }
 
 MutableOperandRange CallOp::getArgOperandsMutable() {
-  return MutableOperandRange(*this, getCallee().has_value() ? 0 : 1,
-                             getCalleeOperands().size());
+  // For an indirect call the callee pointer is the first callee operand and is
+  // not an argument, so it must be dropped from both ends of the range -- see
+  // the matching drop_front() in getArgOperands().
+  unsigned startIdx = getCallee().has_value() ? 0 : 1;
+  return MutableOperandRange(*this, startIdx,
+                             getCalleeOperands().size() - startIdx);
 }
 
 /// Verify that an inlinable callsite of a debug-info-bearing function in a
@@ -1623,8 +1627,10 @@ Operation::operand_range InvokeOp::getArgOperands() {
 }
 
 MutableOperandRange InvokeOp::getArgOperandsMutable() {
-  return MutableOperandRange(*this, getCallee().has_value() ? 0 : 1,
-                             getCalleeOperands().size());
+  // See the comment on CallOp::getArgOperandsMutable().
+  unsigned startIdx = getCallee().has_value() ? 0 : 1;
+  return MutableOperandRange(*this, startIdx,
+                             getCalleeOperands().size() - startIdx);
 }
 
 LogicalResult InvokeOp::verify() {

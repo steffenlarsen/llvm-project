@@ -37,9 +37,10 @@ exit:
 ; Check that loop is unrolled for local memory references
 
 ; CHECK-LABEL: @local_memory
-; CHECK: getelementptr i32, ptr addrspace(1) %out, i32 128
-; CHECK-NEXT: store
-; CHECK-NEXT: ret
+; CHECK: load i32, ptr addrspace(3)
+; CHECK: store
+; CHECK: load i32, ptr addrspace(3)
+; CHECK: store
 define amdgpu_kernel void @local_memory(ptr addrspace(1) %out, ptr addrspace(3) %lds) {
 entry:
   br label %loop.header

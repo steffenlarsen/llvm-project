@@ -25,7 +25,7 @@ void test_vla_ptr_add(int n, int i) {
 
 // LLVM-LABEL: @test_vla_ptr_add
 // LLVM:         %[[SCALED:.*]] = mul nsw i64 %{{.*}}, %{{.*}}
-// LLVM:         getelementptr i32, ptr %{{.*}}, i64 %[[SCALED]]
+// LLVM:         getelementptr inbounds nuw i32, ptr %{{.*}}, i64 %[[SCALED]]
 
 // OGCG-LABEL: @test_vla_ptr_add
 // OGCG:         %[[IDX:.*]] = mul nsw i64 %{{.*}}, %{{.*}}
@@ -45,7 +45,7 @@ void test_vla_ptr_inc(int n) {
 // CIR:         cir.ptr_stride %[[P]], %[[VLA_SIZE]] : (!cir.ptr<!s32i>, !u64i) -> !cir.ptr<!s32i>
 
 // LLVM-LABEL: @test_vla_ptr_inc
-// LLVM:         getelementptr i32, ptr %{{.*}}, i64 %{{.*}}
+// LLVM:         getelementptr inbounds nuw i32, ptr %{{.*}}, i64 %{{.*}}
 
 // OGCG-LABEL: @test_vla_ptr_inc
 // OGCG:         getelementptr inbounds nuw i32, ptr %{{.*}}, i64 %{{.*}}
@@ -67,7 +67,7 @@ void test_vla_ptr_dec(int n) {
 
 // LLVM-LABEL: @test_vla_ptr_dec
 // LLVM:         %[[NEG:.*]] = sub nsw i64 0, %{{.*}}
-// LLVM:         getelementptr i32, ptr %{{.*}}, i64 %[[NEG]]
+// LLVM:         getelementptr inbounds i32, ptr %{{.*}}, i64 %[[NEG]]
 
 // OGCG-LABEL: @test_vla_ptr_dec
 // OGCG:         %[[NEG:.*]] = sub nsw i64 0, %{{.*}}

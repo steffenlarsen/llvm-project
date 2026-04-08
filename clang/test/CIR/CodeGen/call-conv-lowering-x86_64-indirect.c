@@ -44,6 +44,7 @@ Big call_sret(Big (*fp)(void)) { return fp(); }
 
 // CIR: cir.func {{.*}}@call_sret(%arg0: !cir.ptr<!rec_Big> {{.*}}llvm.sret = !rec_Big{{.*}}, %arg1: !cir.ptr<!cir.func<() -> !rec_Big>> {{.*}})
 // CIR:   %[[SCAST:.*]] = cir.cast bitcast %{{.+}} : !cir.ptr<!cir.func<() -> !rec_Big>> -> !cir.ptr<!cir.func<(!cir.ptr<!rec_Big>)>>
-// CIR:   cir.call %[[SCAST]](%{{.+}}) : (!cir.ptr<!cir.func<(!cir.ptr<!rec_Big>)>>, !cir.ptr<!rec_Big> {llvm.align = 8 : i64, llvm.dead_on_unwind, llvm.sret = !rec_Big, llvm.writable}) -> ()
+// CIR:   cir.call %[[SCAST]](%{{.+}}) : (!cir.ptr<!cir.func<(!cir.ptr<!rec_Big>)>>, !cir.ptr<!rec_Big>) -> ()
 // LLVM: define dso_local void @call_sret(ptr dead_on_unwind noalias writable sret(%struct.Big) align 8 %{{.+}}, ptr noundef %{{.+}})
-// LLVM:   call void %{{.+}}(ptr dead_on_unwind writable sret(%struct.Big) align 8 %{{.+}})
+// LLVM-CIR:   call void %{{.+}}(ptr %{{.+}})
+// LLVM-OGCG:  call void %{{.+}}(ptr dead_on_unwind writable sret(%struct.Big) align 8 %{{.+}})

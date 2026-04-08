@@ -342,19 +342,19 @@ unsigned char test__mm_aesencwide256kl_u8(__m128i odata[8], const __m128i idata[
 
   // LLVM-LABEL: _mm_aesencwide256kl_u8
   // LLVM:   %[[IN_DATA0:.+]] = load <2 x i64>, ptr %[[IDATA_ADDR:.+]], align 16
-  // LLVM:   %[[IN_ADDR1:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 1
+  // LLVM:   %[[IN_ADDR1:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 1
   // LLVM:   %[[IN_DATA1:.+]] = load <2 x i64>, ptr %[[IN_ADDR1]], align 16
-  // LLVM:   %[[IN_ADDR2:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 2
+  // LLVM:   %[[IN_ADDR2:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 2
   // LLVM:   %[[IN_DATA2:.+]] = load <2 x i64>, ptr %[[IN_ADDR2]], align 16
-  // LLVM:   %[[IN_ADDR3:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 3
+  // LLVM:   %[[IN_ADDR3:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 3
   // LLVM:   %[[IN_DATA3:.+]] = load <2 x i64>, ptr %[[IN_ADDR3]], align 16
-  // LLVM:   %[[IN_ADDR4:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 4
+  // LLVM:   %[[IN_ADDR4:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 4
   // LLVM:   %[[IN_DATA4:.+]] = load <2 x i64>, ptr %[[IN_ADDR4]], align 16
-  // LLVM:   %[[IN_ADDR5:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 5
+  // LLVM:   %[[IN_ADDR5:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 5
   // LLVM:   %[[IN_DATA5:.+]] = load <2 x i64>, ptr %[[IN_ADDR5]], align 16
-  // LLVM:   %[[IN_ADDR6:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 6
+  // LLVM:   %[[IN_ADDR6:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 6
   // LLVM:   %[[IN_DATA6:.+]] = load <2 x i64>, ptr %[[IN_ADDR6]], align 16
-  // LLVM:   %[[IN_ADDR7:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 7
+  // LLVM:   %[[IN_ADDR7:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 7
   // LLVM:   %[[IN_DATA7:.+]] = load <2 x i64>, ptr %[[IN_ADDR7]], align 16
   // LLVM:   %[[RESULT:.+]] = call { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } @llvm.x86.aesencwide256kl(ptr %[[H_ADDR:.+]], <2 x i64>  %[[IN_DATA0]], <2 x i64>  %[[IN_DATA1]], <2 x i64>  %[[IN_DATA2]], <2 x i64>  %[[IN_DATA3]], <2 x i64>  %[[IN_DATA4]], <2 x i64>  %[[IN_DATA5]], <2 x i64>  %[[IN_DATA6]], <2 x i64>  %[[IN_DATA7]])
   // LLVM:   %[[FLAG:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 0
@@ -364,42 +364,42 @@ unsigned char test__mm_aesencwide256kl_u8(__m128i odata[8], const __m128i idata[
   // LLVM:   %[[OUT_DATA0:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 1
   // LLVM:   store <2 x i64> %[[OUT_DATA0]], ptr %[[ODATA_PTR:.+]], align 16
   // LLVM:   %[[OUT_DATA1:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 2
-  // LLVM:   %[[OUT_ADDR1:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 1
+  // LLVM:   %[[OUT_ADDR1:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 1
   // LLVM:   store <2 x i64> %[[OUT_DATA1]], ptr %[[OUT_ADDR1]], align 16
   // LLVM:   %[[OUT_DATA2:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 3
-  // LLVM:   %[[OUT_ADDR2:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 2
+  // LLVM:   %[[OUT_ADDR2:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 2
   // LLVM:   store <2 x i64> %[[OUT_DATA2]], ptr %[[OUT_ADDR2]], align 16
   // LLVM:   %[[OUT_DATA3:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 4
-  // LLVM:   %[[OUT_ADDR3:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 3
+  // LLVM:   %[[OUT_ADDR3:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 3
   // LLVM:   store <2 x i64> %[[OUT_DATA3]], ptr %[[OUT_ADDR3]], align 16
   // LLVM:   %[[OUT_DATA4:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 5
-  // LLVM:   %[[OUT_ADDR4:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 4
+  // LLVM:   %[[OUT_ADDR4:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 4
   // LLVM:   store <2 x i64> %[[OUT_DATA4]], ptr %[[OUT_ADDR4]], align 16
   // LLVM:   %[[OUT_DATA5:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 6
-  // LLVM:   %[[OUT_ADDR5:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 5
+  // LLVM:   %[[OUT_ADDR5:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 5
   // LLVM:   store <2 x i64> %[[OUT_DATA5]], ptr %[[OUT_ADDR5]], align 16
   // LLVM:   %[[OUT_DATA6:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 7
-  // LLVM:   %[[OUT_ADDR6:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 6
+  // LLVM:   %[[OUT_ADDR6:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 6
   // LLVM:   store <2 x i64> %[[OUT_DATA6]], ptr %[[OUT_ADDR6]], align 16
   // LLVM:   %[[OUT_DATA7:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 8
-  // LLVM:   %[[OUT_ADDR7:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 7
+  // LLVM:   %[[OUT_ADDR7:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 7
   // LLVM:   store <2 x i64> %[[OUT_DATA7]], ptr %[[OUT_ADDR7]], align 16
   // LLVM:   br label %[[EXIT:.+]]
   // LLVM: [[ERROR]]:
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[ODATA_PTR]], align 16
-  // LLVM:   %[[OUT_ADDR0_1:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 1
+  // LLVM:   %[[OUT_ADDR0_1:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 1
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_1]], align 16
-  // LLVM:   %[[OUT_ADDR0_2:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 2
+  // LLVM:   %[[OUT_ADDR0_2:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 2
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_2]], align 16
-  // LLVM:   %[[OUT_ADDR0_3:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 3
+  // LLVM:   %[[OUT_ADDR0_3:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 3
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_3]], align 16
-  // LLVM:   %[[OUT_ADDR0_4:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 4
+  // LLVM:   %[[OUT_ADDR0_4:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 4
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_4]], align 16
-  // LLVM:   %[[OUT_ADDR0_5:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 5
+  // LLVM:   %[[OUT_ADDR0_5:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 5
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_5]], align 16
-  // LLVM:   %[[OUT_ADDR0_6:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 6
+  // LLVM:   %[[OUT_ADDR0_6:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 6
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_6]], align 16
-  // LLVM:   %[[OUT_ADDR0_7:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 7
+  // LLVM:   %[[OUT_ADDR0_7:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 7
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_7]], align 16
   // LLVM:   br label %[[EXIT]]
   // LLVM: [[EXIT]]:
@@ -575,19 +575,19 @@ unsigned char test__mm_aesdecwide256kl_u8(__m128i odata[8], const __m128i idata[
 
   // LLVM-LABEL: _mm_aesdecwide256kl_u8
   // LLVM:   %[[IN_DATA0:.+]] = load <2 x i64>, ptr %[[IDATA_ADDR:.+]], align 16
-  // LLVM:   %[[IN_ADDR1:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 1
+  // LLVM:   %[[IN_ADDR1:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 1
   // LLVM:   %[[IN_DATA1:.+]] = load <2 x i64>, ptr %[[IN_ADDR1]], align 16
-  // LLVM:   %[[IN_ADDR2:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 2
+  // LLVM:   %[[IN_ADDR2:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 2
   // LLVM:   %[[IN_DATA2:.+]] = load <2 x i64>, ptr %[[IN_ADDR2]], align 16
-  // LLVM:   %[[IN_ADDR3:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 3
+  // LLVM:   %[[IN_ADDR3:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 3
   // LLVM:   %[[IN_DATA3:.+]] = load <2 x i64>, ptr %[[IN_ADDR3]], align 16
-  // LLVM:   %[[IN_ADDR4:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 4
+  // LLVM:   %[[IN_ADDR4:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 4
   // LLVM:   %[[IN_DATA4:.+]] = load <2 x i64>, ptr %[[IN_ADDR4]], align 16
-  // LLVM:   %[[IN_ADDR5:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 5
+  // LLVM:   %[[IN_ADDR5:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 5
   // LLVM:   %[[IN_DATA5:.+]] = load <2 x i64>, ptr %[[IN_ADDR5]], align 16
-  // LLVM:   %[[IN_ADDR6:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 6
+  // LLVM:   %[[IN_ADDR6:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 6
   // LLVM:   %[[IN_DATA6:.+]] = load <2 x i64>, ptr %[[IN_ADDR6]], align 16
-  // LLVM:   %[[IN_ADDR7:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 7
+  // LLVM:   %[[IN_ADDR7:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 7
   // LLVM:   %[[IN_DATA7:.+]] = load <2 x i64>, ptr %[[IN_ADDR7]], align 16
   // LLVM:   %[[RESULT:.+]] = call { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } @llvm.x86.aesdecwide256kl(ptr %[[H_ADDR:.+]], <2 x i64>  %[[IN_DATA0]], <2 x i64>  %[[IN_DATA1]], <2 x i64>  %[[IN_DATA2]], <2 x i64>  %[[IN_DATA3]], <2 x i64>  %[[IN_DATA4]], <2 x i64>  %[[IN_DATA5]], <2 x i64>  %[[IN_DATA6]], <2 x i64>  %[[IN_DATA7]])
   // LLVM:   %[[FLAG:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 0
@@ -597,42 +597,42 @@ unsigned char test__mm_aesdecwide256kl_u8(__m128i odata[8], const __m128i idata[
   // LLVM:   %[[OUT_DATA0:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 1
   // LLVM:   store <2 x i64> %[[OUT_DATA0]], ptr %[[ODATA_PTR:.+]], align 16
   // LLVM:   %[[OUT_DATA1:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 2
-  // LLVM:   %[[OUT_ADDR1:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 1
+  // LLVM:   %[[OUT_ADDR1:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 1
   // LLVM:   store <2 x i64> %[[OUT_DATA1]], ptr %[[OUT_ADDR1]], align 16
   // LLVM:   %[[OUT_DATA2:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 3
-  // LLVM:   %[[OUT_ADDR2:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 2
+  // LLVM:   %[[OUT_ADDR2:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 2
   // LLVM:   store <2 x i64> %[[OUT_DATA2]], ptr %[[OUT_ADDR2]], align 16
   // LLVM:   %[[OUT_DATA3:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 4
-  // LLVM:   %[[OUT_ADDR3:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 3
+  // LLVM:   %[[OUT_ADDR3:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 3
   // LLVM:   store <2 x i64> %[[OUT_DATA3]], ptr %[[OUT_ADDR3]], align 16
   // LLVM:   %[[OUT_DATA4:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 5
-  // LLVM:   %[[OUT_ADDR4:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 4
+  // LLVM:   %[[OUT_ADDR4:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 4
   // LLVM:   store <2 x i64> %[[OUT_DATA4]], ptr %[[OUT_ADDR4]], align 16
   // LLVM:   %[[OUT_DATA5:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 6
-  // LLVM:   %[[OUT_ADDR5:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 5
+  // LLVM:   %[[OUT_ADDR5:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 5
   // LLVM:   store <2 x i64> %[[OUT_DATA5]], ptr %[[OUT_ADDR5]], align 16
   // LLVM:   %[[OUT_DATA6:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 7
-  // LLVM:   %[[OUT_ADDR6:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 6
+  // LLVM:   %[[OUT_ADDR6:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 6
   // LLVM:   store <2 x i64> %[[OUT_DATA6]], ptr %[[OUT_ADDR6]], align 16
   // LLVM:   %[[OUT_DATA7:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 8
-  // LLVM:   %[[OUT_ADDR7:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 7
+  // LLVM:   %[[OUT_ADDR7:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 7
   // LLVM:   store <2 x i64> %[[OUT_DATA7]], ptr %[[OUT_ADDR7]], align 16
   // LLVM:   br label %[[EXIT:.+]]
   // LLVM: [[ERROR]]:
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[ODATA_PTR]], align 16
-  // LLVM:   %[[OUT_ADDR0_1:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 1
+  // LLVM:   %[[OUT_ADDR0_1:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 1
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_1]], align 16
-  // LLVM:   %[[OUT_ADDR0_2:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 2
+  // LLVM:   %[[OUT_ADDR0_2:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 2
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_2]], align 16
-  // LLVM:   %[[OUT_ADDR0_3:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 3
+  // LLVM:   %[[OUT_ADDR0_3:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 3
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_3]], align 16
-  // LLVM:   %[[OUT_ADDR0_4:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 4
+  // LLVM:   %[[OUT_ADDR0_4:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 4
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_4]], align 16
-  // LLVM:   %[[OUT_ADDR0_5:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 5
+  // LLVM:   %[[OUT_ADDR0_5:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 5
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_5]], align 16
-  // LLVM:   %[[OUT_ADDR0_6:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 6
+  // LLVM:   %[[OUT_ADDR0_6:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 6
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_6]], align 16
-  // LLVM:   %[[OUT_ADDR0_7:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 7
+  // LLVM:   %[[OUT_ADDR0_7:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 7
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_7]], align 16
   // LLVM:   br label %[[EXIT]]
   // LLVM: [[EXIT]]:
@@ -808,19 +808,19 @@ unsigned char test__mm_aesencwide128kl_u8(__m128i odata[8], const __m128i idata[
 
   // LLVM-LABEL: _mm_aesencwide128kl_u8
   // LLVM:   %[[IN_DATA0:.+]] = load <2 x i64>, ptr %[[IDATA_ADDR:.+]], align 16
-  // LLVM:   %[[IN_ADDR1:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 1
+  // LLVM:   %[[IN_ADDR1:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 1
   // LLVM:   %[[IN_DATA1:.+]] = load <2 x i64>, ptr %[[IN_ADDR1]], align 16
-  // LLVM:   %[[IN_ADDR2:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 2
+  // LLVM:   %[[IN_ADDR2:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 2
   // LLVM:   %[[IN_DATA2:.+]] = load <2 x i64>, ptr %[[IN_ADDR2]], align 16
-  // LLVM:   %[[IN_ADDR3:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 3
+  // LLVM:   %[[IN_ADDR3:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 3
   // LLVM:   %[[IN_DATA3:.+]] = load <2 x i64>, ptr %[[IN_ADDR3]], align 16
-  // LLVM:   %[[IN_ADDR4:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 4
+  // LLVM:   %[[IN_ADDR4:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 4
   // LLVM:   %[[IN_DATA4:.+]] = load <2 x i64>, ptr %[[IN_ADDR4]], align 16
-  // LLVM:   %[[IN_ADDR5:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 5
+  // LLVM:   %[[IN_ADDR5:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 5
   // LLVM:   %[[IN_DATA5:.+]] = load <2 x i64>, ptr %[[IN_ADDR5]], align 16
-  // LLVM:   %[[IN_ADDR6:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 6
+  // LLVM:   %[[IN_ADDR6:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 6
   // LLVM:   %[[IN_DATA6:.+]] = load <2 x i64>, ptr %[[IN_ADDR6]], align 16
-  // LLVM:   %[[IN_ADDR7:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 7
+  // LLVM:   %[[IN_ADDR7:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 7
   // LLVM:   %[[IN_DATA7:.+]] = load <2 x i64>, ptr %[[IN_ADDR7]], align 16
   // LLVM:   %[[RESULT:.+]] = call { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } @llvm.x86.aesencwide128kl(ptr %[[H_ADDR:.+]], <2 x i64>  %[[IN_DATA0]], <2 x i64>  %[[IN_DATA1]], <2 x i64>  %[[IN_DATA2]], <2 x i64>  %[[IN_DATA3]], <2 x i64>  %[[IN_DATA4]], <2 x i64>  %[[IN_DATA5]], <2 x i64>  %[[IN_DATA6]], <2 x i64>  %[[IN_DATA7]])
   // LLVM:   %[[FLAG:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 0
@@ -830,42 +830,42 @@ unsigned char test__mm_aesencwide128kl_u8(__m128i odata[8], const __m128i idata[
   // LLVM:   %[[OUT_DATA0:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 1
   // LLVM:   store <2 x i64> %[[OUT_DATA0]], ptr %[[ODATA_PTR:.+]], align 16
   // LLVM:   %[[OUT_DATA1:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 2
-  // LLVM:   %[[OUT_ADDR1:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 1
+  // LLVM:   %[[OUT_ADDR1:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 1
   // LLVM:   store <2 x i64> %[[OUT_DATA1]], ptr %[[OUT_ADDR1]], align 16
   // LLVM:   %[[OUT_DATA2:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 3
-  // LLVM:   %[[OUT_ADDR2:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 2
+  // LLVM:   %[[OUT_ADDR2:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 2
   // LLVM:   store <2 x i64> %[[OUT_DATA2]], ptr %[[OUT_ADDR2]], align 16
   // LLVM:   %[[OUT_DATA3:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 4
-  // LLVM:   %[[OUT_ADDR3:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 3
+  // LLVM:   %[[OUT_ADDR3:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 3
   // LLVM:   store <2 x i64> %[[OUT_DATA3]], ptr %[[OUT_ADDR3]], align 16
   // LLVM:   %[[OUT_DATA4:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 5
-  // LLVM:   %[[OUT_ADDR4:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 4
+  // LLVM:   %[[OUT_ADDR4:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 4
   // LLVM:   store <2 x i64> %[[OUT_DATA4]], ptr %[[OUT_ADDR4]], align 16
   // LLVM:   %[[OUT_DATA5:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 6
-  // LLVM:   %[[OUT_ADDR5:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 5
+  // LLVM:   %[[OUT_ADDR5:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 5
   // LLVM:   store <2 x i64> %[[OUT_DATA5]], ptr %[[OUT_ADDR5]], align 16
   // LLVM:   %[[OUT_DATA6:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 7
-  // LLVM:   %[[OUT_ADDR6:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 6
+  // LLVM:   %[[OUT_ADDR6:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 6
   // LLVM:   store <2 x i64> %[[OUT_DATA6]], ptr %[[OUT_ADDR6]], align 16
   // LLVM:   %[[OUT_DATA7:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 8
-  // LLVM:   %[[OUT_ADDR7:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 7
+  // LLVM:   %[[OUT_ADDR7:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 7
   // LLVM:   store <2 x i64> %[[OUT_DATA7]], ptr %[[OUT_ADDR7]], align 16
   // LLVM:   br label %[[EXIT:.+]]
   // LLVM: [[ERROR]]:
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[ODATA_PTR]], align 16
-  // LLVM:   %[[OUT_ADDR0_1:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 1
+  // LLVM:   %[[OUT_ADDR0_1:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 1
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_1]], align 16
-  // LLVM:   %[[OUT_ADDR0_2:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 2
+  // LLVM:   %[[OUT_ADDR0_2:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 2
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_2]], align 16
-  // LLVM:   %[[OUT_ADDR0_3:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 3
+  // LLVM:   %[[OUT_ADDR0_3:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 3
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_3]], align 16
-  // LLVM:   %[[OUT_ADDR0_4:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 4
+  // LLVM:   %[[OUT_ADDR0_4:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 4
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_4]], align 16
-  // LLVM:   %[[OUT_ADDR0_5:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 5
+  // LLVM:   %[[OUT_ADDR0_5:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 5
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_5]], align 16
-  // LLVM:   %[[OUT_ADDR0_6:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 6
+  // LLVM:   %[[OUT_ADDR0_6:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 6
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_6]], align 16
-  // LLVM:   %[[OUT_ADDR0_7:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 7
+  // LLVM:   %[[OUT_ADDR0_7:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 7
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_7]], align 16
   // LLVM:   br label %[[EXIT]]
   // LLVM: [[EXIT]]:
@@ -1041,19 +1041,19 @@ unsigned char test__mm_aesdecwide128kl_u8(__m128i odata[8], const __m128i idata[
 
   // LLVM-LABEL: _mm_aesdecwide128kl_u8
   // LLVM:   %[[IN_DATA0:.+]] = load <2 x i64>, ptr %[[IDATA_ADDR:.+]], align 16
-  // LLVM:   %[[IN_ADDR1:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 1
+  // LLVM:   %[[IN_ADDR1:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 1
   // LLVM:   %[[IN_DATA1:.+]] = load <2 x i64>, ptr %[[IN_ADDR1]], align 16
-  // LLVM:   %[[IN_ADDR2:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 2
+  // LLVM:   %[[IN_ADDR2:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 2
   // LLVM:   %[[IN_DATA2:.+]] = load <2 x i64>, ptr %[[IN_ADDR2]], align 16
-  // LLVM:   %[[IN_ADDR3:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 3
+  // LLVM:   %[[IN_ADDR3:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 3
   // LLVM:   %[[IN_DATA3:.+]] = load <2 x i64>, ptr %[[IN_ADDR3]], align 16
-  // LLVM:   %[[IN_ADDR4:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 4
+  // LLVM:   %[[IN_ADDR4:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 4
   // LLVM:   %[[IN_DATA4:.+]] = load <2 x i64>, ptr %[[IN_ADDR4]], align 16
-  // LLVM:   %[[IN_ADDR5:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 5
+  // LLVM:   %[[IN_ADDR5:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 5
   // LLVM:   %[[IN_DATA5:.+]] = load <2 x i64>, ptr %[[IN_ADDR5]], align 16
-  // LLVM:   %[[IN_ADDR6:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 6
+  // LLVM:   %[[IN_ADDR6:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 6
   // LLVM:   %[[IN_DATA6:.+]] = load <2 x i64>, ptr %[[IN_ADDR6]], align 16
-  // LLVM:   %[[IN_ADDR7:.+]] = getelementptr <2 x i64>, ptr %[[IDATA_ADDR]], i64 7
+  // LLVM:   %[[IN_ADDR7:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[IDATA_ADDR]], i64 7
   // LLVM:   %[[IN_DATA7:.+]] = load <2 x i64>, ptr %[[IN_ADDR7]], align 16
   // LLVM:   %[[RESULT:.+]] = call { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } @llvm.x86.aesdecwide128kl(ptr %[[H_ADDR:.+]], <2 x i64>  %[[IN_DATA0]], <2 x i64>  %[[IN_DATA1]], <2 x i64>  %[[IN_DATA2]], <2 x i64>  %[[IN_DATA3]], <2 x i64>  %[[IN_DATA4]], <2 x i64>  %[[IN_DATA5]], <2 x i64>  %[[IN_DATA6]], <2 x i64>  %[[IN_DATA7]])
   // LLVM:   %[[FLAG:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 0
@@ -1063,42 +1063,42 @@ unsigned char test__mm_aesdecwide128kl_u8(__m128i odata[8], const __m128i idata[
   // LLVM:   %[[OUT_DATA0:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 1
   // LLVM:   store <2 x i64> %[[OUT_DATA0]], ptr %[[ODATA_PTR:.+]], align 16
   // LLVM:   %[[OUT_DATA1:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 2
-  // LLVM:   %[[OUT_ADDR1:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 1
+  // LLVM:   %[[OUT_ADDR1:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 1
   // LLVM:   store <2 x i64> %[[OUT_DATA1]], ptr %[[OUT_ADDR1]], align 16
   // LLVM:   %[[OUT_DATA2:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 3
-  // LLVM:   %[[OUT_ADDR2:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 2
+  // LLVM:   %[[OUT_ADDR2:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 2
   // LLVM:   store <2 x i64> %[[OUT_DATA2]], ptr %[[OUT_ADDR2]], align 16
   // LLVM:   %[[OUT_DATA3:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 4
-  // LLVM:   %[[OUT_ADDR3:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 3
+  // LLVM:   %[[OUT_ADDR3:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 3
   // LLVM:   store <2 x i64> %[[OUT_DATA3]], ptr %[[OUT_ADDR3]], align 16
   // LLVM:   %[[OUT_DATA4:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 5
-  // LLVM:   %[[OUT_ADDR4:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 4
+  // LLVM:   %[[OUT_ADDR4:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 4
   // LLVM:   store <2 x i64> %[[OUT_DATA4]], ptr %[[OUT_ADDR4]], align 16
   // LLVM:   %[[OUT_DATA5:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 6
-  // LLVM:   %[[OUT_ADDR5:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 5
+  // LLVM:   %[[OUT_ADDR5:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 5
   // LLVM:   store <2 x i64> %[[OUT_DATA5]], ptr %[[OUT_ADDR5]], align 16
   // LLVM:   %[[OUT_DATA6:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 7
-  // LLVM:   %[[OUT_ADDR6:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 6
+  // LLVM:   %[[OUT_ADDR6:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 6
   // LLVM:   store <2 x i64> %[[OUT_DATA6]], ptr %[[OUT_ADDR6]], align 16
   // LLVM:   %[[OUT_DATA7:.+]] = extractvalue { i8, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[RESULT]], 8
-  // LLVM:   %[[OUT_ADDR7:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 7
+  // LLVM:   %[[OUT_ADDR7:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 7
   // LLVM:   store <2 x i64> %[[OUT_DATA7]], ptr %[[OUT_ADDR7]], align 16
   // LLVM:   br label %[[EXIT:.+]]
   // LLVM: [[ERROR]]:
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[ODATA_PTR]], align 16
-  // LLVM:   %[[OUT_ADDR0_1:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 1
+  // LLVM:   %[[OUT_ADDR0_1:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 1
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_1]], align 16
-  // LLVM:   %[[OUT_ADDR0_2:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 2
+  // LLVM:   %[[OUT_ADDR0_2:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 2
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_2]], align 16
-  // LLVM:   %[[OUT_ADDR0_3:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 3
+  // LLVM:   %[[OUT_ADDR0_3:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 3
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_3]], align 16
-  // LLVM:   %[[OUT_ADDR0_4:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 4
+  // LLVM:   %[[OUT_ADDR0_4:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 4
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_4]], align 16
-  // LLVM:   %[[OUT_ADDR0_5:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 5
+  // LLVM:   %[[OUT_ADDR0_5:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 5
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_5]], align 16
-  // LLVM:   %[[OUT_ADDR0_6:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 6
+  // LLVM:   %[[OUT_ADDR0_6:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 6
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_6]], align 16
-  // LLVM:   %[[OUT_ADDR0_7:.+]] = getelementptr <2 x i64>, ptr %[[ODATA_PTR]], i64 7
+  // LLVM:   %[[OUT_ADDR0_7:.+]] = getelementptr inbounds nuw <2 x i64>, ptr %[[ODATA_PTR]], i64 7
   // LLVM:   store <2 x i64> zeroinitializer, ptr %[[OUT_ADDR0_7]], align 16
   // LLVM:   br label %[[EXIT]]
   // LLVM: [[EXIT]]:
@@ -1210,11 +1210,11 @@ unsigned int test_encodekey128_u32(unsigned int htype, __m128i key, void *h) {
   // LLVM: store <2 x i64> %[[X0]], ptr %[[OUT_PTR:.*]], align 1
 
   // LLVM: %[[X1:.*]] = extractvalue { i32, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[CALL]], 2
-  // LLVM: %[[P1:.*]] = getelementptr <2 x i64>, ptr %[[OUT_PTR]], i64 1
+  // LLVM: %[[P1:.*]] = getelementptr inbounds <2 x i64>, ptr %[[OUT_PTR]], i64 1
   // LLVM: store <2 x i64> %[[X1]], ptr %[[P1]], align 1
 
   // LLVM: %[[X2:.*]] = extractvalue { i32, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[CALL]], 3
-  // LLVM: %[[P2:.*]] = getelementptr <2 x i64>, ptr %[[OUT_PTR]], i64 2
+  // LLVM: %[[P2:.*]] = getelementptr inbounds <2 x i64>, ptr %[[OUT_PTR]], i64 2
   // LLVM: store <2 x i64> %[[X2]], ptr %[[P2]], align 1
 
   // LLVM: %[[RET_EXT:.*]] = extractvalue { i32, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[CALL]], 0
@@ -1283,15 +1283,15 @@ unsigned int test_encodekey256_u32(unsigned int htype, __m128i key_lo,
   // LLVM: store <2 x i64> %[[X0]], ptr %[[OUT_PTR:.*]], align 1
 
   // LLVM: %[[X1:.*]] = extractvalue { i32, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[CALL]], 2
-  // LLVM: %[[P1:.*]] = getelementptr <2 x i64>, ptr %[[OUT_PTR]], i64 1
+  // LLVM: %[[P1:.*]] = getelementptr inbounds <2 x i64>, ptr %[[OUT_PTR]], i64 1
   // LLVM: store <2 x i64> %[[X1]], ptr %[[P1]], align 1
 
   // LLVM: %[[X2:.*]] = extractvalue { i32, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[CALL]], 3
-  // LLVM: %[[P2:.*]] = getelementptr <2 x i64>, ptr %[[OUT_PTR]], i64 2
+  // LLVM: %[[P2:.*]] = getelementptr inbounds <2 x i64>, ptr %[[OUT_PTR]], i64 2
   // LLVM: store <2 x i64> %[[X2]], ptr %[[P2]], align 1
 
   // LLVM: %[[X3:.*]] = extractvalue { i32, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[CALL]], 4
-  // LLVM: %[[P3:.*]] = getelementptr <2 x i64>, ptr %[[OUT_PTR]], i64 3
+  // LLVM: %[[P3:.*]] = getelementptr inbounds <2 x i64>, ptr %[[OUT_PTR]], i64 3
   // LLVM: store <2 x i64> %[[X3]], ptr %[[P3]], align 1
 
   // LLVM: %[[RET_EXT:.*]] = extractvalue { i32, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64>, <2 x i64> } %[[CALL]], 0

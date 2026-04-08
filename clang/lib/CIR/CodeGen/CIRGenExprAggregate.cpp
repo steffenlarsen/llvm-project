@@ -298,6 +298,9 @@ public:
              "Implicit cast types must be compatible");
       Visit(e->getSubExpr());
       break;
+    case CK_BitCast:
+      Visit(e->getSubExpr());
+      break;
     case CK_ToUnion: {
       if (dest.isIgnored()) {
         cgf.emitAnyExpr(e->getSubExpr(), AggValueSlot::ignored(),

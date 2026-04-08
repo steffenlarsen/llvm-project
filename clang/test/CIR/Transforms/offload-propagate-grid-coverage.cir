@@ -1,0 +1,114 @@
+// Tests for CIR offload PropagateGridCoverage pass.
+//
+// The pass inspects grid dimension operands at launch sites for kernels with
+// known_block_size, looking for the pattern gridSizeX = ceil(N / blockSizeX)
+// where N traces to a kernel argument.  When found, it sets the
+// grid_covers_args attribute on the kernel clone.
+
+// RUN: cir-opt --split-input-file --cir-offload-propagate-grid-coverage %s \
+// RUN:   | FileCheck %s
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 1. Simple ceil-div grid sizing: grid = (N + 255) / 256, block = 256.
+//    N is kernel arg[0] → grid_covers_args = [0].
+//===----------------------------------------------------------------------===//
+
+// CHECK:      cir.offload.func @k$max256(
+// CHECK-SAME: grid_covers_args = array<i32: 0>
+// CHECK-SAME: known_block_size = array<i32: 256, 1, 1>
+
+module {
+  cir.func @host(%N: !u32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c255 = cir.const #cir.int<255> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+
+    // gridSizeX = (N + 255) / 256  (ceiling division)
+    %sum = "cir.add"(%N, %c255) : (!u32i, !u32i) -> !u32i
+    %grid = "cir.div"(%sum, %c256) : (!u32i, !u32i) -> !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k$max256
+        grid(%grid, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%N : !u32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k$max256(%n: !u32i) kernel
+        attributes {known_block_size = array<i32: 256, 1, 1>} {
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 2. No known_block_size → pass should not annotate.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      cir.offload.func @k_no_block_size(
+// CHECK-NOT:  grid_covers_args
+
+module {
+  cir.func @host(%N: !u32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c255 = cir.const #cir.int<255> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %sum = "cir.add"(%N, %c255) : (!u32i, !u32i) -> !u32i
+    %grid = "cir.div"(%sum, %c256) : (!u32i, !u32i) -> !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_no_block_size
+        grid(%grid, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%N : !u32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_no_block_size(%n: !u32i) kernel {
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 3. Grid not derived from ceil-div → no annotation.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      cir.offload.func @k_static_grid$max256(
+// CHECK-NOT:  grid_covers_args
+
+module {
+  cir.func @host(%N: !u32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %c100 = cir.const #cir.int<100> : !u32i
+
+    // Grid is a fixed constant, not derived from N.
+    cir.offload.kernel_launch @offload_device_module::@k_static_grid$max256
+        grid(%c100, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%N : !u32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_static_grid$max256(%n: !u32i) kernel
+        attributes {known_block_size = array<i32: 256, 1, 1>} {
+      cir.return
+    }
+  }
+}

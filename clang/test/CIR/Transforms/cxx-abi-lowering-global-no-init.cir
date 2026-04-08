@@ -1,0 +1,24 @@
+// RUN: cir-opt %s -cir-cxxabi-lowering -o %t.cir
+// RUN: FileCheck --input-file=%t.cir %s
+
+// Verify that cir.global ops with struct types that have no initializer
+// (external declarations or uninitialized globals) are correctly handled
+// during CXX ABI lowering.  Previously, lowerInitialValue() would crash
+// on a null initVal when trying to cast it to TypedAttr.
+
+!s32i = !cir.int<s, 32>
+!u8i = !cir.int<u, 8>
+!rec_S = !cir.struct<"S" padded {!u8i}>
+!dmp = !cir.data_member<!s32i in !rec_S>
+
+module attributes {cir.triple = "x86_64-unknown-linux-gnu"} {
+
+  // Uninitialized global with a data-member type — no initializer attr.
+  // The ABI lowering should convert the type without crashing.
+  // CHECK: cir.global "private" external @uninit_dmp : !s64i
+  cir.global "private" external @uninit_dmp : !dmp
+
+  // Initialized global for comparison — should still work.
+  // CHECK: cir.global external @init_dmp = #cir.int<-1> : !s64i
+  cir.global external @init_dmp = #cir.data_member<null> : !dmp
+}

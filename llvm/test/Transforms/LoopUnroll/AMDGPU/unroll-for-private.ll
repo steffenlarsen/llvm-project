@@ -1,11 +1,11 @@
 ; RUN: opt -mtriple=amdgpu-unknown-amdhsa -passes=loop-unroll -S %s | FileCheck %s
 
-; Check that we full unroll loop to be able to eliminate alloca
+; Check that the loop accessing private memory is unrolled
 ; CHECK-LABEL: @non_invariant_ind
 ; CHECK:       for.body:
-; CHECK-NOT:   br
-; CHECK:       store i32 %tmp15, ptr addrspace(1) %arrayidx7, align 4
-; CHECK:       ret void
+; CHECK:       store i32 %{{.*}}, ptr addrspace(5) %arrayidx3, align 4
+; CHECK:       store i32 %{{.*}}, ptr addrspace(5) %arrayidx3.9, align 4
+; CHECK:       br i1 %exitcond.9, label %for.cond.cleanup, label %for.body
 
 define amdgpu_kernel void @non_invariant_ind(ptr addrspace(1) nocapture %a, i32 %x) {
 entry:

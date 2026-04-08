@@ -58,9 +58,9 @@ void init_vec_using_initalizer_list() {
 // LLVM:   %[[INIT_LIST_ADDR:.*]] = alloca [3 x i32], i64 1, align 4
 // LLVM:   %[[INIT_LIST_PTR:.*]] = getelementptr i32, ptr %[[INIT_LIST_ADDR]], i32 0
 // LLVM:   store i32 0, ptr %[[INIT_LIST_PTR]], align 4
-// LLVM:   %[[ELEM_1_PTR:.*]] = getelementptr i32, ptr %[[INIT_LIST_PTR]], i64 1
+// LLVM:   %[[ELEM_1_PTR:.*]] = getelementptr inbounds i32, ptr %[[INIT_LIST_PTR]], i64 1
 // LLVM:   store i32 1, ptr %[[ELEM_1_PTR]], align 4
-// LLVM:   %[[ELEM_2_PTR:.*]] = getelementptr i32, ptr %[[INIT_LIST_PTR]], i64 2
+// LLVM:   %[[ELEM_2_PTR:.*]] = getelementptr inbounds i32, ptr %[[INIT_LIST_PTR]], i64 2
 // LLVM:   store i32 2, ptr %[[ELEM_2_PTR]], align 4
 // LLVM:   %[[DATA_PTR:.*]] = getelementptr inbounds nuw %"class.std::initializer_list<int>", ptr %[[AGG_ADDR]], i32 0, i32 0
 // LLVM:   store ptr %[[INIT_LIST_ADDR]], ptr %[[DATA_PTR]], align 8

@@ -33,6 +33,27 @@ namespace func {
 class FuncOp;
 } // namespace func
 
+namespace gpu {
+/// Discardable unit attribute marking a `gpu.module` as holding offload device
+/// code.  Producers stamp it so that later passes can locate the device module
+/// by attribute instead of reconstructing its symbol name, which varies with
+/// the compilation mode.
+constexpr inline llvm::StringLiteral kOffloadDeviceModuleAttrName =
+    "gpu.offload_device_module";
+
+/// Discardable string attribute naming the offload target (e.g. "gfx90a") of a
+/// `gpu.module` carrying `kOffloadDeviceModuleAttrName`.
+constexpr inline llvm::StringLiteral kOffloadTargetAttrName =
+    "gpu.offload_target";
+
+/// Discardable unit attribute marking the secondary `gpu.module` that
+/// GpuSplitSingleSourcePass creates for kernels with no observable launch
+/// site.  Such a module is a self-contained device image and must be packaged
+/// and registered separately from the primary one.
+constexpr inline llvm::StringLiteral kOffloadDeferredModuleAttrName =
+    "gpu.offload_deferred";
+} // namespace gpu
+
 #define GEN_PASS_DECL
 #include "mlir/Dialect/GPU/Transforms/Passes.h.inc"
 

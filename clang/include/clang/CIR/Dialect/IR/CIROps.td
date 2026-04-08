@@ -939,9 +939,7 @@ defvar CIR_ReturnableScopes = [
   "DoWhileOp", "WhileOp", "ForOp", "TryOp"
 ];
 
-def CIR_ReturnOp : CIR_Op<"return", [
-  ParentOneOf<CIR_ReturnableScopes>, Terminator
-]> {
+def CIR_ReturnOp : CIR_Op<"return", [Terminator]> {
   let summary = "Return from function";
   let description = [{
     The "return" operation represents a return operation within a function.
@@ -2393,6 +2391,7 @@ def CIR_DoWhileOp : CIR_WhileOpBase<"do"> {
     ```
   }];
 
+  let hasVerifier = 1;
   let hasLLVMLowering = false;
 }
 
@@ -2748,6 +2747,8 @@ def CIR_AddOp
     %4 = cir.add %va, %vb : !cir.vector<4 x !s32i>
     ```
   }];
+
+  let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -2777,6 +2778,8 @@ def CIR_SubOp
     %3 = cir.sub %va, %vb : !cir.vector<4 x !s32i>
     ```
   }];
+
+  let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -2815,6 +2818,8 @@ def CIR_MulOp : CIR_BinaryOp<"mul", CIR_AnyIntOrVecOfIntType> {
     (`nuw` $no_unsigned_wrap^)?
     $lhs `,` $rhs `:` type($lhs) attr-dict
   }];
+
+  let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -9175,5 +9180,6 @@ def CIR_LaunderOp : CIR_Op<"launder", [SameOperandsAndResultType]> {
 }
 
 include "clang/CIR/Dialect/IR/CIRStdOps.td"
+include "clang/CIR/Dialect/IR/CIROffloadOps.td"
 
 #endif // CLANG_CIR_DIALECT_IR_CIROPS_TD

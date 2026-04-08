@@ -5335,6 +5335,19 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (Args.hasArg(options::OPT_fclangir))
     CmdArgs.push_back("-fclangir");
 
+  // In ClangIR offload mode (-fclangir), pass -clangir-offload to both
+  // host and device cc1 invocations.  CIRGen uses this flag to emit
+  // offload-dialect ops (cir.offload.dynamic_shared_memory, device
+  // address spaces, etc.) on both sides.  Host-only behaviors are
+  // additionally guarded by ClangIROffloadHostEmitCIR or !CUDAIsDevice.
+  if (Args.hasArg(options::OPT_fclangir) && (IsHIP || IsCuda)) {
+    CmdArgs.push_back("-clangir-offload");
+    // When the host cc1 emits CIR only (for later two-pass merge), __global__
+    // kernel bodies are omitted as placeholders to be filled by the merge step.
+    if (JA.getType() == types::TY_CIR)
+      CmdArgs.push_back("-clangir-offload-host-emit-cir");
+  }
+
   if (IsOpenMPDevice) {
     // We have to pass the triple of the host if compiling for an OpenMP device.
     const llvm::Triple &HostTriple =
@@ -5513,7 +5526,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     } else if (JA.getType() == types::TY_RewrittenLegacyObjC) {
       CmdArgs.push_back("-rewrite-objc");
       rewriteKind = RK_Fragile;
-    } else if (JA.getType() == types::TY_CIR) {
+    } else if (JA.getType() == types::TY_CIR ||
+               JA.getType() == types::TY_CIR_DEVICE) {
       CmdArgs.push_back("-emit-cir");
     } else if (JA.getType() == types::TY_Image && IsAMDSPIRVForHIPDevice) {
       CmdArgs.push_back("-emit-obj");
@@ -6370,6 +6384,23 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     }
     getTargetFeatures(D, *TC.getAuxTriple(), HostArgs, CmdArgs,
                       /*ForAS*/ false, /*IsAux*/ true);
+  }
+
+  // In the CIR single-source offload path the host cc1 (not a device cc1)
+  // needs the GPU arch so that the CIR lowering pipeline can attach the
+  // ROCDL target and compile the gpu.module.  Pass it via a CIR-specific
+  // flag instead of -aux-target-cpu, which would cause
+  // AMDGPUTargetInfo::getTargetDefines() to define GPU macros (__gfx942__
+  // etc.) during host compilation.
+  if (Args.hasArg(options::OPT_fclangir) && (IsHIP || IsCuda) &&
+      !IsCudaDevice && !IsHIPDevice &&
+      !Args.getLastArg(options::OPT_gpu_use_aux_triple_only)) {
+    if (const Arg *A =
+            C.getInputArgs().getLastArgNoClaim(options::OPT_offload_arch_EQ)) {
+      CmdArgs.push_back(
+          Args.MakeArgString("-clangir-offload-arch=" +
+                             llvm::Twine(A->getValue())));
+    }
   }
 
   TC.addClangTargetOptions(Args, CmdArgs, JA.getOffloadingArch(),
@@ -9747,6 +9778,56 @@ static bool requiresUBSanRT(unsigned ID) {
   default:
     return false;
   }
+}
+
+void CIRMerge::ConstructJob(Compilation &C, const JobAction &JA,
+                            const InputInfo &Output,
+                            const InputInfoList &Inputs,
+                            const llvm::opt::ArgList &Args,
+                            const char *LinkingOutput) const {
+  assert(Inputs.size() >= 2 && "CIRMerge expects at least two inputs");
+  assert(Output.isFilename() && "CIRMerge: invalid output");
+
+  // Inputs[0] = host.cir, Inputs[1..N] = per-arch device.cir files.
+  const InputInfo &HostCIR = Inputs[0];
+
+  ArgStringList CmdArgs;
+
+  // The host CIR is intentionally partial before the merge (gpu.launch_func
+  // references kernel symbols that only exist after MergeOffloadModules runs).
+  // Disable both the MLIR per-pass verifier and the post-parse verifier so
+  // the pre-merge gpu.launch_func references are not rejected.
+  // The MergeOffloadModules pass itself verifies kernel symbol resolution.
+  CmdArgs.push_back("--verify-each=false");
+  CmdArgs.push_back("--mlir-very-unsafe-disable-verifier-on-parsing");
+
+  // Emit one --offload-merge-modules=device-cir=<arch>:<path> per device CIR.
+  // The arch comes from the bound arch propagated by the driver action DAG.
+  // A bare path (no arch prefix) is used for legacy single-arch mode.
+  for (size_t i = 1; i < Inputs.size(); ++i) {
+    const InputInfo &DevCIR = Inputs[i];
+    SmallString<256> PassOpt("--offload-merge-modules=device-cir=");
+    // Recover the architecture from the underlying action's offloading arch.
+    BoundArch arch =
+        DevCIR.getAction() ? DevCIR.getAction()->getOffloadingArch()
+                           : BoundArch();
+    if (!arch.empty()) {
+      PassOpt += arch.ArchName;
+      PassOpt += ':';
+    }
+    PassOpt += DevCIR.getFilename();
+    CmdArgs.push_back(Args.MakeArgString(PassOpt));
+  }
+
+  CmdArgs.push_back("-o");
+  CmdArgs.push_back(Output.getFilename());
+
+  CmdArgs.push_back(HostCIR.getFilename());
+
+  C.addCommand(std::make_unique<Command>(
+      JA, *this, ResponseFileSupport::AtFileUTF8(),
+      Args.MakeArgString(getToolChain().GetProgramPath("cir-opt")), CmdArgs,
+      Inputs, Output));
 }
 
 void LinkerWrapper::ConstructJob(Compilation &C, const JobAction &JA,

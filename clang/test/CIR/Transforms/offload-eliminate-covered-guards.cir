@@ -1,0 +1,616 @@
+// Tests for CIR offload EliminateCoveredGuards pass.
+//
+// A kernel launched with `gridDim = ceil(n/d)` covers n elements in blocks of
+// d and carries tail guards -- `if (index >= n) return;` -- for the final,
+// partially populated block.  When `n % d == 0` that block is full, so the
+// pass proves the guards dead, clones the kernel with the comparisons folded
+// away, and dispatches to the clone behind a host-side test of `n % d == 0`.
+//
+// The proof is `max(index) = blockIdCoeff*(n/d - 1) + constant`.  With the
+// coefficient equal to d that is `n - d + constant`, so the guard is dead
+// exactly when `constant < d`; any other coefficient is not an integer
+// multiple of n and is left alone.
+//
+// The pass performs the fold rather than asserting the fact, because the fact
+// relates two runtime unknowns and LLVM's value analyses are per-value
+// interval domains.
+
+// RUN: cir-opt --split-input-file --cir-offload-eliminate-covered-guards %s \
+// RUN:   | FileCheck %s
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 1. grid = ceil(n/256), 256 threads, index = 256*blockIdx.x + threadIdx.x.
+//
+//    max(index) = 256*(n/256 - 1) + 255 = n - 1, so the guard cannot fire.
+//===----------------------------------------------------------------------===//
+
+// The host tests the condition the clone was folded under.
+// CHECK:       cir.func @host_basic
+// CHECK:         %[[REM:.*]] = cir.rem %arg0, %{{.*}} : !s32i
+// CHECK:         %[[EQ:.*]] = cir.cmp eq %[[REM]], %{{.*}} : !s32i
+// CHECK:         cir.if %[[EQ]] {
+// CHECK:           cir.offload.kernel_launch @offload_device_module::@k_basic$guards
+// CHECK:         } else {
+// CHECK:           cir.offload.kernel_launch @offload_device_module::@k_basic grid
+
+// The original keeps its guard and is marked so $div does not build a second
+// dispatch on the same condition.
+// CHECK:       cir.offload.func @k_basic(
+// CHECK-SAME:    covered_guards_handled
+// CHECK:         cir.cmp ge
+
+// The clone has the comparison replaced by a constant.
+// CHECK:       cir.offload.func @k_basic$guards(
+// CHECK-NOT:     cir.cmp ge
+// CHECK:         cir.const #false
+
+module {
+  cir.func @host_basic(%nval: !s32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256blk = cir.const #cir.int<256> : !u32i
+
+    %n32 = cir.cast integral %nval : !s32i -> !u32i
+    %c255 = cir.const #cir.int<255> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %sum = cir.add %n32, %c255 : !u32i
+    %blocks = cir.div %sum, %c256 : !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_basic
+        grid(%blocks, %c1, %c1 : !u32i)
+        block(%c256blk, %c1, %c1 : !u32i)
+        args(%nval : !s32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_basic(%n: !s32i) kernel {
+      %bid = cir.offload.block_id <x> : !u32i
+      %tid = cir.offload.thread_id <x> : !u32i
+      %c256 = cir.const #cir.int<256> : !u32i
+      %off = cir.mul %bid, %c256 : !u32i
+      %idx = cir.add %off, %tid : !u32i
+      %idxs = cir.cast integral %idx : !u32i -> !s32i
+      %dead = cir.cmp ge %idxs, %n : !s32i
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 2. The guard is inside a `cir.for`, and the induction variable contributes
+//    to the index: 64 threads each handling 4 elements, 256 per block.
+//
+//    The bound has to come from where the induction variable actually peaks
+//    (`init + floor((last-init)/step)*step`), not from the loop bound, since
+//    the two differ whenever the step does not divide the range.
+//===----------------------------------------------------------------------===//
+
+// CHECK:       cir.offload.func @k_loop$guards(
+// CHECK-NOT:     cir.cmp ge
+// CHECK:         cir.const #false
+
+module {
+  cir.func @host_loop(%nval: !s32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c64blk = cir.const #cir.int<64> : !u32i
+
+    %n32 = cir.cast integral %nval : !s32i -> !u32i
+    %c255 = cir.const #cir.int<255> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %sum = cir.add %n32, %c255 : !u32i
+    %blocks = cir.div %sum, %c256 : !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_loop
+        grid(%blocks, %c1, %c1 : !u32i)
+        block(%c64blk, %c1, %c1 : !u32i)
+        args(%nval : !s32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_loop(%n: !s32i) kernel {
+      %islot = cir.alloca "i" align(4) : !cir.ptr<!u32i>
+      %zero = cir.const #cir.int<0> : !u32i
+      cir.store %zero, %islot : !u32i, !cir.ptr<!u32i>
+      cir.for : cond {
+        %iv = cir.load %islot : !cir.ptr<!u32i>, !u32i
+        %c4 = cir.const #cir.int<4> : !u32i
+        %c = cir.cmp lt %iv, %c4 : !u32i
+        cir.condition(%c)
+      } body {
+        %bid = cir.offload.block_id <x> : !u32i
+        %tid = cir.offload.thread_id <x> : !u32i
+        %c256 = cir.const #cir.int<256> : !u32i
+        %c64 = cir.const #cir.int<64> : !u32i
+        %iv = cir.load %islot : !cir.ptr<!u32i>, !u32i
+        %base = cir.mul %bid, %c256 : !u32i
+        %lane = cir.mul %iv, %c64 : !u32i
+        %partial = cir.add %base, %lane : !u32i
+        %idx = cir.add %partial, %tid : !u32i
+        %idxs = cir.cast integral %idx : !u32i -> !s32i
+        %dead = cir.cmp ge %idxs, %n : !s32i
+        cir.yield
+      } step {
+        %iv = cir.load %islot : !cir.ptr<!u32i>, !u32i
+        %one = cir.const #cir.int<1> : !u32i
+        %next = cir.add %iv, %one : !u32i
+        cir.store %next, %islot : !u32i, !cir.ptr<!u32i>
+        cir.yield
+      }
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+!s64i = !cir.int<s, 64>
+
+//===----------------------------------------------------------------------===//
+// 3. The index arithmetic is done in 32 bits and only then widened to the
+//    64-bit extent, so `2048*blockIdx.x` can wrap before the comparison sees
+//    it and the proof would not hold for very large n.
+//
+//    Rather than argue about reachability, the host guard gains a term that
+//    keeps the clone out of the range where the narrow product could wrap.
+//===----------------------------------------------------------------------===//
+
+// CHECK:       cir.func @host_wide
+// CHECK:         %[[EQ:.*]] = cir.cmp eq
+// CHECK:         %[[LIM:.*]] = cir.const #cir.int<4294967295> : !s64i
+// CHECK:         %[[FITS:.*]] = cir.cmp le %arg0, %[[LIM]] : !s64i
+// CHECK:         %[[AND:.*]] = cir.ternary(%[[EQ]], true {
+// CHECK:           cir.yield %[[FITS]]
+// CHECK:         }, false {
+// CHECK:           cir.yield
+// CHECK:         })
+// CHECK:         cir.if %[[AND]] {
+// CHECK:           cir.offload.kernel_launch @offload_device_module::@k_wide$guards
+
+module {
+  cir.func @host_wide(%nval: !s64i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c64blk = cir.const #cir.int<64> : !u32i
+
+    %n32 = cir.cast integral %nval : !s64i -> !u32i
+    %c2047 = cir.const #cir.int<2047> : !u32i
+    %c2048 = cir.const #cir.int<2048> : !u32i
+    %sum = cir.add %n32, %c2047 : !u32i
+    %blocks = cir.div %sum, %c2048 : !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_wide
+        grid(%blocks, %c1, %c1 : !u32i)
+        block(%c64blk, %c1, %c1 : !u32i)
+        args(%nval : !s64i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_wide(%n: !s64i) kernel {
+      %bid = cir.offload.block_id <x> : !s32i
+      %c2048 = cir.const #cir.int<2048> : !s32i
+      %off = cir.mul %bid, %c2048 : !s32i
+      %off64 = cir.cast integral %off : !s32i -> !s64i
+      %dead = cir.cmp ge %off64, %n : !s64i
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 4. The index is scaled relative to the grid: blocks cover 2048 elements but
+//    the guard is written against a stride of 2176.
+//
+//    `2176*(n/2048 - 1)` is not expressible as `n` plus a constant, so the
+//    proof rule does not apply and the guard has to stay.  This is the shape
+//    of ggml's second dequantize guard, where the index counts bytes of a
+//    quantized block rather than elements.
+//===----------------------------------------------------------------------===//
+
+// CHECK:     cir.offload.func @k_scaled(
+// CHECK-NOT: @k_scaled$guards
+
+module {
+  cir.func @host_scaled(%nval: !s32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c64blk = cir.const #cir.int<64> : !u32i
+
+    %n32 = cir.cast integral %nval : !s32i -> !u32i
+    %c2047 = cir.const #cir.int<2047> : !u32i
+    %c2048 = cir.const #cir.int<2048> : !u32i
+    %sum = cir.add %n32, %c2047 : !u32i
+    %blocks = cir.div %sum, %c2048 : !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_scaled
+        grid(%blocks, %c1, %c1 : !u32i)
+        block(%c64blk, %c1, %c1 : !u32i)
+        args(%nval : !s32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_scaled(%n: !s32i) kernel {
+      %bid = cir.offload.block_id <x> : !u32i
+      %c2176 = cir.const #cir.int<2176> : !u32i
+      %off = cir.mul %bid, %c2176 : !u32i
+      %offs = cir.cast integral %off : !u32i -> !s32i
+      %live = cir.cmp ge %offs, %n : !s32i
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 5. Each block covers 64 elements but is launched with 256 threads, so the
+//    threads past the first 64 are exactly what the guard turns off.
+//
+//    max(index) = 64*(n/64 - 1) + 255 = n + 191, which exceeds n, so the
+//    guard is live even when n is divisible.
+//===----------------------------------------------------------------------===//
+
+// CHECK:     cir.offload.func @k_wideblock(
+// CHECK-NOT: @k_wideblock$guards
+
+module {
+  cir.func @host_wideblock(%nval: !s32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256blk = cir.const #cir.int<256> : !u32i
+
+    %n32 = cir.cast integral %nval : !s32i -> !u32i
+    %c63 = cir.const #cir.int<63> : !u32i
+    %c64 = cir.const #cir.int<64> : !u32i
+    %sum = cir.add %n32, %c63 : !u32i
+    %blocks = cir.div %sum, %c64 : !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_wideblock
+        grid(%blocks, %c1, %c1 : !u32i)
+        block(%c256blk, %c1, %c1 : !u32i)
+        args(%nval : !s32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_wideblock(%n: !s32i) kernel {
+      %bid = cir.offload.block_id <x> : !u32i
+      %tid = cir.offload.thread_id <x> : !u32i
+      %c64 = cir.const #cir.int<64> : !u32i
+      %off = cir.mul %bid, %c64 : !u32i
+      %idx = cir.add %off, %tid : !u32i
+      %idxs = cir.cast integral %idx : !u32i -> !s32i
+      %live = cir.cmp ge %idxs, %n : !s32i
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 6. The index is loaded from memory, so nothing bounds it.
+//
+//    Every construct the bound computation does not recognise has to bail:
+//    an over-estimate that is too small would license deleting a live guard.
+//===----------------------------------------------------------------------===//
+
+// CHECK:     cir.offload.func @k_opaque(
+// CHECK-NOT: @k_opaque$guards
+
+module {
+  cir.func @host_opaque(%nval: !s32i, %p: !cir.ptr<!s32i>) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256blk = cir.const #cir.int<256> : !u32i
+
+    %n32 = cir.cast integral %nval : !s32i -> !u32i
+    %c255 = cir.const #cir.int<255> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %sum = cir.add %n32, %c255 : !u32i
+    %blocks = cir.div %sum, %c256 : !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_opaque
+        grid(%blocks, %c1, %c1 : !u32i)
+        block(%c256blk, %c1, %c1 : !u32i)
+        args(%nval, %p : !s32i, !cir.ptr<!s32i>)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_opaque(%n: !s32i, %p: !cir.ptr<!s32i>) kernel {
+      %idx = cir.load %p : !cir.ptr<!s32i>, !s32i
+      %live = cir.cmp ge %idx, %n : !s32i
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 7. The grid extent is unrelated to any kernel argument, so there is no
+//    covering relation to prove anything from.
+//===----------------------------------------------------------------------===//
+
+// CHECK:     cir.offload.func @k_nogrid(
+// CHECK-NOT: @k_nogrid$guards
+
+module {
+  cir.func @host_nogrid(%blocks: !u32i, %nval: !s32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256blk = cir.const #cir.int<256> : !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_nogrid
+        grid(%blocks, %c1, %c1 : !u32i)
+        block(%c256blk, %c1, %c1 : !u32i)
+        args(%nval : !s32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_nogrid(%n: !s32i) kernel {
+      %bid = cir.offload.block_id <x> : !u32i
+      %tid = cir.offload.thread_id <x> : !u32i
+      %c256 = cir.const #cir.int<256> : !u32i
+      %off = cir.mul %bid, %c256 : !u32i
+      %idx = cir.add %off, %tid : !u32i
+      %idxs = cir.cast integral %idx : !u32i -> !s32i
+      %live = cir.cmp ge %idxs, %n : !s32i
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s64i = !cir.int<s, 64>
+
+//===----------------------------------------------------------------------===//
+// 8. The guard counts in different units from the grid: both sides carry a
+//    factor of 34/32, so the extent reaches CIR as `(n*34)/32`.
+//
+//    This is ggml's dequantize load loop, where the index is a byte offset
+//    into `block_q8_0` (34 bytes per 32 elements).  The rule generalises to
+//    `dScaled = num*d/den` = 34*2048/32 = 2176; the index coefficient matches
+//    it and the remainder 124 is below it, so the guard is dead.
+//
+//    Requiring `den` to divide `num*d` is also what makes the runtime extent
+//    exact: `(num*n)/den` truncates, but the host guard gives `n = m*d`.
+//===----------------------------------------------------------------------===//
+
+// CHECK:       cir.offload.func @k_scaledext$guards(
+// CHECK-NOT:     cir.cmp ge
+// CHECK:         cir.const #false
+
+module {
+  cir.func @host_scaledext(%nval: !s64i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c32blk = cir.const #cir.int<32> : !u32i
+
+    %n32 = cir.cast integral %nval : !s64i -> !u32i
+    %c2047 = cir.const #cir.int<2047> : !u32i
+    %c2048 = cir.const #cir.int<2048> : !u32i
+    %sum = cir.add %n32, %c2047 : !u32i
+    %blocks = cir.div %sum, %c2048 : !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_scaledext
+        grid(%blocks, %c1, %c1 : !u32i)
+        block(%c32blk, %c1, %c1 : !u32i)
+        args(%nval : !s64i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_scaledext(%n: !s64i) kernel {
+      // i0 = 2048*blockIdx.x, computed in 32 bits then widened, exactly as
+      // `const int64_t i0 = CUDA_Q8_0_NE_ALIGN*blockIdx.x` reaches CIR.
+      %bid = cir.offload.block_id <x> : !u32i
+      %c2048u = cir.const #cir.int<2048> : !u32i
+      %i0u = cir.mul %bid, %c2048u : !u32i
+      %i0 = cir.cast integral %i0u : !u32i -> !s64i
+
+      %tid = cir.offload.thread_id <x> : !u32i
+      %tid64 = cir.cast integral %tid : !u32i -> !s64i
+
+      %c34 = cir.const #cir.int<34> : !s64i
+      %c32 = cir.const #cir.int<32> : !s64i
+      %c4 = cir.const #cir.int<4> : !s64i
+
+      %scaled = cir.mul %i0, %c34 : !s64i
+      %bytes = cir.div %scaled, %c32 : !s64i
+      %lane = cir.mul %tid64, %c4 : !s64i
+      %idx = cir.add %bytes, %lane : !s64i
+
+      %nscaled = cir.mul %n, %c34 : !s64i
+      %extent = cir.div %nscaled, %c32 : !s64i
+
+      %dead = cir.cmp ge %idx, %extent : !s64i
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s64i = !cir.int<s, 64>
+
+//===----------------------------------------------------------------------===//
+// 9. The extent scale does not divide the block stride: 3*2048/7 is not an
+//    integer, so the block no longer covers a whole number of the units the
+//    guard counts in and the rational bound would not be exact.
+//===----------------------------------------------------------------------===//
+
+// CHECK:     cir.offload.func @k_badscale(
+// CHECK-NOT: @k_badscale$guards
+
+module {
+  cir.func @host_badscale(%nval: !s64i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c32blk = cir.const #cir.int<32> : !u32i
+
+    %n32 = cir.cast integral %nval : !s64i -> !u32i
+    %c2047 = cir.const #cir.int<2047> : !u32i
+    %c2048 = cir.const #cir.int<2048> : !u32i
+    %sum = cir.add %n32, %c2047 : !u32i
+    %blocks = cir.div %sum, %c2048 : !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_badscale
+        grid(%blocks, %c1, %c1 : !u32i)
+        block(%c32blk, %c1, %c1 : !u32i)
+        args(%nval : !s64i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_badscale(%n: !s64i) kernel {
+      %bid = cir.offload.block_id <x> : !u32i
+      %c2048u = cir.const #cir.int<2048> : !u32i
+      %i0u = cir.mul %bid, %c2048u : !u32i
+      %i0 = cir.cast integral %i0u : !u32i -> !s64i
+
+      %c3 = cir.const #cir.int<3> : !s64i
+      %c7 = cir.const #cir.int<7> : !s64i
+
+      %scaled = cir.mul %i0, %c3 : !s64i
+      %idx = cir.div %scaled, %c7 : !s64i
+
+      %nscaled = cir.mul %n, %c3 : !s64i
+      %extent = cir.div %nscaled, %c7 : !s64i
+
+      %live = cir.cmp ge %idx, %extent : !s64i
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s64i = !cir.int<s, 64>
+
+//===----------------------------------------------------------------------===//
+// 10. The stride is written as `blockDim.x`, not as a literal.
+//
+//     This is ggml's `quantize_q8_1`:
+//       i0 = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;  if (i0 >= ne0) ...
+//     The launch pins blockDim.x, and the pass has already required every
+//     launch site of the kernel to agree on it, so it is as good as a literal
+//     -- max(i0) = 256*(n/256 - 1) + 255 = n - 1.
+//===----------------------------------------------------------------------===//
+
+// CHECK:       cir.offload.func @k_bdimstride$guards(
+// CHECK-NOT:     cir.cmp ge
+// CHECK:         cir.const #false
+
+module {
+  cir.func @host_bdimstride(%nval: !s64i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256blk = cir.const #cir.int<256> : !u32i
+
+    %n32 = cir.cast integral %nval : !s64i -> !u32i
+    %c255 = cir.const #cir.int<255> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %sum = cir.add %n32, %c255 : !u32i
+    %blocks = cir.div %sum, %c256 : !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_bdimstride
+        grid(%blocks, %c1, %c1 : !u32i)
+        block(%c256blk, %c1, %c1 : !u32i)
+        args(%nval : !s64i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_bdimstride(%n: !s64i) kernel {
+      %bdim = cir.offload.block_dim <x> : !u32i
+      %bid = cir.offload.block_id <x> : !u32i
+      %tid = cir.offload.thread_id <x> : !u32i
+      %bdim64 = cir.cast integral %bdim : !u32i -> !s64i
+      %bid64 = cir.cast integral %bid : !u32i -> !s64i
+      %tid64 = cir.cast integral %tid : !u32i -> !s64i
+      %off = cir.mul %bdim64, %bid64 : !s64i
+      %idx = cir.add %off, %tid64 : !s64i
+      %dead = cir.cmp ge %idx, %n : !s64i
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s64i = !cir.int<s, 64>
+
+//===----------------------------------------------------------------------===//
+// 11. Two launch sites disagree on the block size, so `blockDim.x` is not a
+//     single value and cannot stand in for a constant.
+//
+//     Treating it as one would prove the guard dead using the wrong stride.
+//===----------------------------------------------------------------------===//
+
+// CHECK:     cir.offload.func @k_twoblocks(
+// CHECK-NOT: @k_twoblocks$guards
+
+module {
+  cir.func @host_twoblocks(%nval: !s64i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256blk = cir.const #cir.int<256> : !u32i
+    %c64blk = cir.const #cir.int<64> : !u32i
+
+    %n32 = cir.cast integral %nval : !s64i -> !u32i
+    %c255 = cir.const #cir.int<255> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %sum = cir.add %n32, %c255 : !u32i
+    %blocks = cir.div %sum, %c256 : !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_twoblocks
+        grid(%blocks, %c1, %c1 : !u32i)
+        block(%c256blk, %c1, %c1 : !u32i)
+        args(%nval : !s64i)
+    cir.offload.kernel_launch @offload_device_module::@k_twoblocks
+        grid(%blocks, %c1, %c1 : !u32i)
+        block(%c64blk, %c1, %c1 : !u32i)
+        args(%nval : !s64i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_twoblocks(%n: !s64i) kernel {
+      %bdim = cir.offload.block_dim <x> : !u32i
+      %bid = cir.offload.block_id <x> : !u32i
+      %tid = cir.offload.thread_id <x> : !u32i
+      %bdim64 = cir.cast integral %bdim : !u32i -> !s64i
+      %bid64 = cir.cast integral %bid : !u32i -> !s64i
+      %tid64 = cir.cast integral %tid : !u32i -> !s64i
+      %off = cir.mul %bdim64, %bid64 : !s64i
+      %idx = cir.add %off, %tid64 : !s64i
+      %live = cir.cmp ge %idx, %n : !s64i
+      cir.return
+    }
+  }
+}

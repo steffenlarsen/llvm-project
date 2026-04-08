@@ -17,10 +17,10 @@ define void @test(i32 %arg) {
 ; CHECK-NEXT:    [[LOAD_LE:%.*]] = load i32, ptr null, align 4
 ; CHECK-NEXT:    br label [[BB3:%.*]]
 ; CHECK:       bb3.loopexit:
-; CHECK-NEXT:    br label [[BB3]]
+; CHECK-NEXT:    unreachable
 ; CHECK:       bb3:
-; CHECK-NEXT:    [[PHI:%.*]] = phi i32 [ [[ADD:%.*]], [[BB3_LOOPEXIT:%.*]] ], [ 0, [[BB3_PREHEADER]] ]
-; CHECK-NEXT:    [[ADD]] = add i32 [[PHI]], 1
+; CHECK-NEXT:    [[PHI:%.*]] = phi i32 [ 0, [[BB3_PREHEADER]] ]
+; CHECK-NEXT:    [[ADD:%.*]] = add i32 [[PHI]], 1
 ; CHECK-NEXT:    [[ICMP:%.*]] = icmp ult i32 [[PHI]], [[LOAD_LE]]
 ; CHECK-NEXT:    br i1 [[ICMP]], label [[BB5:%.*]], label [[BB4:%.*]]
 ; CHECK:       bb4:
@@ -33,13 +33,13 @@ define void @test(i32 %arg) {
 ; CHECK:       bb6:
 ; CHECK-NEXT:    [[ADD7:%.*]] = add i32 [[PHI10:%.*]], 1
 ; CHECK-NEXT:    [[ICMP8:%.*]] = icmp ugt i32 [[PHI10]], 1
-; CHECK-NEXT:    br i1 [[ICMP8]], label [[BB3_LOOPEXIT]], label [[BB9]]
+; CHECK-NEXT:    br label [[BB3_LOOPEXIT:%.*]]
 ; CHECK:       bb9:
-; CHECK-NEXT:    [[PHI10]] = phi i32 [ [[ADD7]], [[BB6:%.*]] ], [ [[PHI]], [[BB9_PREHEADER]] ]
+; CHECK-NEXT:    [[PHI10]] = phi i32 [ [[PHI]], [[BB9_PREHEADER]] ]
 ; CHECK-NEXT:    [[ICMP11:%.*]] = icmp ult i32 [[PHI10]], [[ARG]]
 ; CHECK-NEXT:    [[CALL12:%.*]] = call i1 @llvm.experimental.widenable.condition()
-; CHECK-NEXT:    [[AND:%.*]] = and i1 [[ICMP11]], true
-; CHECK-NEXT:    br i1 [[AND]], label [[BB6]], label [[BB13:%.*]]
+; CHECK-NEXT:    [[AND:%.*]] = and i1 [[ICMP11]], [[CALL12]]
+; CHECK-NEXT:    br i1 [[AND]], label [[BB6:%.*]], label [[BB13:%.*]]
 ; CHECK:       bb13:
 ; CHECK-NEXT:    ret void
 ; CHECK:       bb14:

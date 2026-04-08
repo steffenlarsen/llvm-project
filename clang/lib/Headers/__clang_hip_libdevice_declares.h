@@ -214,6 +214,37 @@ __device__ __attribute__((pure)) _Float16 __ocml_pown_f16(_Float16, int);
 typedef _Float16 __2f16 __attribute__((ext_vector_type(2)));
 typedef short __2i16 __attribute__((ext_vector_type(2)));
 
+#ifdef __cplusplus
+typedef bool __ockl_bool;
+#else
+typedef _Bool __ockl_bool;
+#endif
+
+__device__ __attribute__((const)) float __ockl_fdot2(__2f16 a, __2f16 b,
+                                                     float c, __ockl_bool s);
+
+__device__ __attribute__((const)) __2f16 __ocml_ceil_2f16(__2f16);
+__device__ __attribute__((const)) __2f16 __ocml_fabs_2f16(__2f16);
+__device__ __2f16 __ocml_cos_2f16(__2f16);
+__device__ __attribute__((pure)) __2f16 __ocml_exp_2f16(__2f16);
+__device__ __attribute__((pure)) __2f16 __ocml_exp10_2f16(__2f16);
+__device__ __attribute__((pure)) __2f16 __ocml_exp2_2f16(__2f16);
+__device__ __attribute__((const)) __2f16 __ocml_floor_2f16(__2f16);
+__device__ __attribute__((const))
+__2f16 __ocml_fma_2f16(__2f16, __2f16, __2f16);
+__device__ __attribute__((const)) __2i16 __ocml_isinf_2f16(__2f16);
+__device__ __attribute__((const)) __2i16 __ocml_isnan_2f16(__2f16);
+__device__ __attribute__((pure)) __2f16 __ocml_log_2f16(__2f16);
+__device__ __attribute__((pure)) __2f16 __ocml_log10_2f16(__2f16);
+__device__ __attribute__((pure)) __2f16 __ocml_log2_2f16(__2f16);
+
+__device__ __attribute__((const)) __2f16 __ocml_rint_2f16(__2f16);
+__device__ __attribute__((const)) __2f16 __ocml_rsqrt_2f16(__2f16);
+__device__ __2f16 __ocml_sin_2f16(__2f16);
+__device__ __attribute__((const)) __2f16 __ocml_sqrt_2f16(__2f16);
+__device__ __attribute__((const)) __2f16 __ocml_trunc_2f16(__2f16);
+__device__ __attribute__((const)) __2f16 __ocml_pown_2f16(__2f16, __2i16);
+
 __device__ void __asan_poison_memory_region(const void *addr,
                                             __SIZE_TYPE__ size);
 __device__ void __asan_unpoison_memory_region(const void *addr,
@@ -230,6 +261,120 @@ __device__ void *__asan_region_is_poisoned(void *beg, __SIZE_TYPE__ size);
 #define ASAN_POISON_MEMORY_REGION(addr, size) ((void)(addr), (void)(size))
 #define ASAN_UNPOISON_MEMORY_REGION(addr, size) ((void)(addr), (void)(size))
 #endif
+
+// Temporary stop-gap: re-declare ocml/ockl functions removed from upstream
+// LLVM (commits 7b54691ba969, b16873b218bd) but still required by ROCm <= 7.0
+// headers. Remove once the target ROCm version no longer needs these.
+
+// float
+__device__ __attribute__((const)) float __ocml_ceil_f32(float);
+__device__ __attribute__((const)) float __ocml_copysign_f32(float, float);
+__device__ __attribute__((pure)) float __ocml_exp10_f32(float);
+__device__ __attribute__((pure)) float __ocml_native_exp10_f32(float);
+__device__ __attribute__((pure)) float __ocml_exp2_f32(float);
+__device__ __attribute__((pure)) float __ocml_exp_f32(float);
+__device__ __attribute__((pure)) float __ocml_native_exp_f32(float);
+__device__ __attribute__((const)) float __ocml_fabs_f32(float);
+__device__ __attribute__((const)) float __ocml_floor_f32(float);
+__device__ __attribute__((const)) float __ocml_fma_f32(float, float, float);
+__device__ __attribute__((const)) float __ocml_fmax_f32(float, float);
+__device__ __attribute__((const)) float __ocml_fmin_f32(float, float);
+__device__ float __ocml_frexp_f32(float, __PRIVATE_AS int *);
+__device__ __attribute__((const)) int __ocml_isfinite_f32(float);
+__device__ __attribute__((const)) int __ocml_isinf_f32(float);
+__device__ __attribute__((const)) int __ocml_isnan_f32(float);
+__device__ __attribute__((const)) float __ocml_ldexp_f32(float, int);
+__device__ __attribute__((pure)) float __ocml_log10_f32(float);
+__device__ __attribute__((pure)) float __ocml_native_log10_f32(float);
+__device__ __attribute__((pure)) float __ocml_log2_f32(float);
+__device__ __attribute__((pure)) float __ocml_native_log2_f32(float);
+__device__ __attribute__((const)) float __ocml_logb_f32(float);
+__device__ __attribute__((pure)) float __ocml_log_f32(float);
+__device__ __attribute__((pure)) float __ocml_native_log_f32(float);
+__device__ __attribute__((const)) float __ocml_nearbyint_f32(float);
+__device__ __attribute__((const)) float __ocml_rint_f32(float);
+__device__ __attribute__((const)) float __ocml_round_f32(float);
+__device__ __attribute__((const)) float __ocml_scalb_f32(float, float);
+__device__ __attribute__((const)) float __ocml_scalbn_f32(float, int);
+__device__ __attribute__((const)) int __ocml_signbit_f32(float);
+__device__ __attribute__((const)) float __ocml_trunc_f32(float);
+
+// double
+__device__ __attribute__((const)) double __ocml_ceil_f64(double);
+__device__ __attribute__((const)) double __ocml_copysign_f64(double, double);
+__device__ __attribute__((const)) double __ocml_fabs_f64(double);
+__device__ __attribute__((const)) double __ocml_floor_f64(double);
+__device__ __attribute__((const)) double __ocml_fma_f64(double, double, double);
+__device__ __attribute__((const)) double __ocml_fmax_f64(double, double);
+__device__ __attribute__((const)) double __ocml_fmin_f64(double, double);
+__device__ double __ocml_frexp_f64(double, __PRIVATE_AS int *);
+__device__ __attribute__((const)) int __ocml_isfinite_f64(double);
+__device__ __attribute__((const)) int __ocml_isinf_f64(double);
+__device__ __attribute__((const)) int __ocml_isnan_f64(double);
+__device__ __attribute__((const)) double __ocml_ldexp_f64(double, int);
+__device__ __attribute__((const)) double __ocml_logb_f64(double);
+__device__ __attribute__((const)) double __ocml_nearbyint_f64(double);
+__device__ __attribute__((const)) double __ocml_rint_f64(double);
+__device__ __attribute__((const)) double __ocml_round_f64(double);
+__device__ __attribute__((const)) double __ocml_scalb_f64(double, double);
+__device__ __attribute__((const)) double __ocml_scalbn_f64(double, int);
+__device__ __attribute__((const)) int __ocml_signbit_f64(double);
+__device__ __attribute__((const)) double __ocml_trunc_f64(double);
+
+// half
+__device__ __attribute__((const)) _Float16 __ocml_ceil_f16(_Float16);
+__device__ __attribute__((pure)) _Float16 __ocml_exp_f16(_Float16);
+__device__ __attribute__((pure)) _Float16 __ocml_exp10_f16(_Float16);
+__device__ __attribute__((pure)) _Float16 __ocml_exp2_f16(_Float16);
+__device__ __attribute__((const)) _Float16 __ocml_floor_f16(_Float16);
+__device__ __attribute__((const)) _Float16 __ocml_fma_f16(_Float16, _Float16,
+                                                          _Float16);
+__device__ __attribute__((const)) _Float16 __ocml_fmax_f16(_Float16, _Float16);
+__device__ __attribute__((const)) _Float16 __ocml_fmin_f16(_Float16, _Float16);
+__device__ __attribute__((const)) _Float16 __ocml_fabs_f16(_Float16);
+__device__ __attribute__((const)) int __ocml_isinf_f16(_Float16);
+__device__ __attribute__((const)) int __ocml_isnan_f16(_Float16);
+__device__ __attribute__((pure)) _Float16 __ocml_log_f16(_Float16);
+__device__ __attribute__((pure)) _Float16 __ocml_log10_f16(_Float16);
+__device__ __attribute__((pure)) _Float16 __ocml_log2_f16(_Float16);
+__device__ __attribute__((const)) _Float16 __ocml_rint_f16(_Float16);
+__device__ __attribute__((const)) _Float16 __ocml_sqrt_f16(_Float16);
+__device__ __attribute__((const)) _Float16 __ocml_trunc_f16(_Float16);
+
+// half2
+typedef _Float16 __2f16 __attribute__((ext_vector_type(2)));
+typedef short __2i16 __attribute__((ext_vector_type(2)));
+
+__device__ __attribute__((const)) __2f16 __ocml_ceil_2f16(__2f16);
+__device__ __attribute__((const)) __2f16 __ocml_fabs_2f16(__2f16);
+__device__ __2f16 __ocml_cos_2f16(__2f16);
+__device__ __attribute__((pure)) __2f16 __ocml_exp_2f16(__2f16);
+__device__ __attribute__((pure)) __2f16 __ocml_exp10_2f16(__2f16);
+__device__ __attribute__((pure)) __2f16 __ocml_exp2_2f16(__2f16);
+__device__ __attribute__((const)) __2f16 __ocml_floor_2f16(__2f16);
+__device__ __attribute__((const)) __2f16 __ocml_fma_2f16(__2f16, __2f16, __2f16);
+__device__ __attribute__((const)) __2i16 __ocml_isinf_2f16(__2f16);
+__device__ __attribute__((const)) __2i16 __ocml_isnan_2f16(__2f16);
+__device__ __attribute__((pure)) __2f16 __ocml_log_2f16(__2f16);
+__device__ __attribute__((pure)) __2f16 __ocml_log10_2f16(__2f16);
+__device__ __attribute__((pure)) __2f16 __ocml_log2_2f16(__2f16);
+__device__ __attribute__((const)) __2f16 __ocml_rint_2f16(__2f16);
+__device__ __attribute__((const)) __2f16 __ocml_rsqrt_2f16(__2f16);
+__device__ __2f16 __ocml_sin_2f16(__2f16);
+__device__ __attribute__((const)) __2f16 __ocml_sqrt_2f16(__2f16);
+__device__ __attribute__((const)) __2f16 __ocml_trunc_2f16(__2f16);
+__device__ __attribute__((const)) __2f16 __ocml_pown_2f16(__2f16, __2i16);
+
+// ockl
+#ifdef __cplusplus
+typedef bool __ockl_bool;
+#else
+typedef _Bool __ockl_bool;
+#endif
+
+__device__ __attribute__((const)) float __ockl_fdot2(__2f16 a, __2f16 b,
+                                                     float c, __ockl_bool s);
+// End temporary stop-gap declarations.
 
 #ifdef __cplusplus
 } // extern "C"

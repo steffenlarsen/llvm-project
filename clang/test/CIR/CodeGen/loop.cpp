@@ -248,7 +248,7 @@ void l4() {
 // LLVM:   store ptr %[[BEGIN_CAST]], ptr %[[BEGIN_ADDR]]
 // LLVM:   %[[RANGE:.*]] = load ptr, ptr %[[RANGE_ADDR]]
 // LLVM:   %[[RANGE_CAST:.*]] = getelementptr i32, ptr %[[RANGE]], i32 0
-// LLVM:   %[[END_PTR:.*]] = getelementptr i32, ptr %[[RANGE_CAST]], i64 10
+// LLVM:   %[[END_PTR:.*]] = getelementptr inbounds i32, ptr %[[RANGE_CAST]], i64 10
 // LLVM:   store ptr %[[END_PTR]], ptr %[[END_ADDR]]
 // LLVM:   br label %[[COND:.*]]
 // LLVM: [[COND]]:
@@ -263,7 +263,7 @@ void l4() {
 // LLVM:   br label %[[STEP:.*]]
 // LLVM: [[STEP]]:
 // LLVM:   %[[BEGIN:.*]] = load ptr, ptr %[[BEGIN_ADDR]]
-// LLVM:   %[[NEXT:.*]] = getelementptr i32, ptr %[[BEGIN]], i64 1
+// LLVM:   %[[NEXT:.*]] = getelementptr inbounds i32, ptr %[[BEGIN]], i64 1
 // LLVM:   store ptr %[[NEXT]], ptr %[[BEGIN_ADDR]]
 // LLVM:   br label %[[COND]]
 // LLVM: [[END]]:
@@ -360,7 +360,7 @@ void l5() {
 // LLVM:   store ptr %[[BEGIN_CAST]], ptr %[[BEGIN_ADDR]]
 // LLVM:   %[[RANGE:.*]] = load ptr, ptr %[[RANGE_ADDR]]
 // LLVM:   %[[RANGE_CAST:.*]] = getelementptr i32, ptr %[[RANGE]], i32 0
-// LLVM:   %[[END_PTR:.*]] = getelementptr i32, ptr %[[RANGE_CAST]], i64 4
+// LLVM:   %[[END_PTR:.*]] = getelementptr inbounds i32, ptr %[[RANGE_CAST]], i64 4
 // LLVM:   store ptr %[[END_PTR]], ptr %[[END_ADDR]]
 // LLVM:   br label %[[COND:.*]]
 // LLVM: [[COND]]:
@@ -375,7 +375,7 @@ void l5() {
 // LLVM:   br label %[[STEP:.*]]
 // LLVM: [[STEP]]:
 // LLVM:   %[[BEGIN:.*]] = load ptr, ptr %[[BEGIN_ADDR]]
-// LLVM:   %[[NEXT:.*]] = getelementptr i32, ptr %[[BEGIN]], i64 1
+// LLVM:   %[[NEXT:.*]] = getelementptr inbounds i32, ptr %[[BEGIN]], i64 1
 // LLVM:   store ptr %[[NEXT]], ptr %[[BEGIN_ADDR]]
 // LLVM:   br label %[[COND]]
 // LLVM: [[END]]:
@@ -436,9 +436,9 @@ void test_do_while_false() {
 // LLVM: [[LABEL1]]:
 // LLVM:   br label %[[LABEL3:.*]]
 // LLVM: [[LABEL2:.*]]:
-// LLVM:   br i1 false, label %[[LABEL3]], label %[[LABEL4:.*]]
+// LLVM:   br i1 false, label %[[LABEL3]], label %[[LABEL4:[^ ,]+]]{{.*}}
 // LLVM: [[LABEL3]]:
-// LLVM:   br label %[[LABEL2]]
+// LLVM:   br label %[[LABEL2]]{{.*}}
 // LLVM: [[LABEL4]]:
 // LLVM:   br label %[[LABEL5:.*]]
 // LLVM: [[LABEL5]]:

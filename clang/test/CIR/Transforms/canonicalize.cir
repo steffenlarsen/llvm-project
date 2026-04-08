@@ -314,4 +314,57 @@ module {
   // CHECK-NEXT:   cir.return %[[P]] : !s32i
   // CHECK-NEXT: }
 
+  // Integer binary ops fold when both operands are constant.
+
+  cir.func @fold_add_int() -> !s32i {
+    %0 = cir.const #cir.int<3> : !s32i
+    %1 = cir.const #cir.int<4> : !s32i
+    %2 = cir.add %0, %1 : !s32i
+    cir.return %2 : !s32i
+  }
+  // CHECK:      cir.func{{.*}} @fold_add_int
+  // CHECK-NEXT:   %[[CONST:.*]] = cir.const #cir.int<7> : !s32i
+  // CHECK-NEXT:   cir.return %[[CONST]] : !s32i
+
+  cir.func @fold_mul_int() -> !s32i {
+    %0 = cir.const #cir.int<6> : !s32i
+    %1 = cir.const #cir.int<7> : !s32i
+    %2 = cir.mul %0, %1 : !s32i
+    cir.return %2 : !s32i
+  }
+  // CHECK:      cir.func{{.*}} @fold_mul_int
+  // CHECK-NEXT:   %[[CONST:.*]] = cir.const #cir.int<42> : !s32i
+  // CHECK-NEXT:   cir.return %[[CONST]] : !s32i
+
+  cir.func @fold_sub_int() -> !s32i {
+    %0 = cir.const #cir.int<10> : !s32i
+    %1 = cir.const #cir.int<4> : !s32i
+    %2 = cir.sub %0, %1 : !s32i
+    cir.return %2 : !s32i
+  }
+  // CHECK:      cir.func{{.*}} @fold_sub_int
+  // CHECK-NEXT:   %[[CONST:.*]] = cir.const #cir.int<6> : !s32i
+  // CHECK-NEXT:   cir.return %[[CONST]] : !s32i
+
+  // Without a wrap flag the wrapped result is the defined one, so it folds.
+  cir.func @fold_add_wraps() -> !s32i {
+    %0 = cir.const #cir.int<2147483647> : !s32i
+    %1 = cir.const #cir.int<1> : !s32i
+    %2 = cir.add %0, %1 : !s32i
+    cir.return %2 : !s32i
+  }
+  // CHECK:      cir.func{{.*}} @fold_add_wraps
+  // CHECK-NEXT:   %[[CONST:.*]] = cir.const #cir.int<-2147483648> : !s32i
+  // CHECK-NEXT:   cir.return %[[CONST]] : !s32i
+
+  // With nsw the overflowing result is poison, so folding it to any value
+  // would be wrong; the op must survive.
+  cir.func @no_fold_add_nsw_overflow() -> !s32i {
+    %0 = cir.const #cir.int<2147483647> : !s32i
+    %1 = cir.const #cir.int<1> : !s32i
+    %2 = cir.add nsw %0, %1 : !s32i
+    cir.return %2 : !s32i
+  }
+  // CHECK:      cir.func{{.*}} @no_fold_add_nsw_overflow
+  // CHECK:        cir.add nsw
 }

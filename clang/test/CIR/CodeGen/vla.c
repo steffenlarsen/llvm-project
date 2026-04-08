@@ -355,7 +355,7 @@ int f5(unsigned long len) {
 // LLVM:   %[[STACK_PTR:.*]] = call ptr @llvm.stacksave.p0()
 // LLVM:   store ptr %[[STACK_PTR]], ptr %[[SAVED_STACK]]
 // LLVM:   %[[ARR:.*]] = alloca i32, i64 %[[LEN]]
-// LLVM:   %[[ARR_2:.*]] = getelementptr i32, ptr %[[ARR]], i64 2
+// LLVM:   %[[ARR_2:.*]] = getelementptr inbounds i32, ptr %[[ARR]], i64 2
 // LLVM:   %[[ARR_VAL:.*]] = load i32, ptr %[[ARR_2]]
 // LLVM:   store i32 %[[ARR_VAL]], ptr %[[RET_ADDR]]
 // LLVM:   %[[STACK_RESTORE_PTR:.*]] = load ptr, ptr %[[SAVED_STACK]]
@@ -414,11 +414,11 @@ void vla_subscript_expr() {
 // LLVM: %[[TMP_N:.*]] = load i64, ptr %[[N_ADDR]], align 8
 // LLVM: store ptr %[[A_ADDR]], ptr %[[COMPOUND_ADDR]], align 8
 // LLVM: %[[TMP_COMPOUND:.*]] = load ptr, ptr %[[COMPOUND_ADDR]], align 8
-// LLVM: %[[COMPOUND_PTR:.*]] = getelementptr ptr, ptr %[[TMP_COMPOUND]], i64 0
+// LLVM: %[[COMPOUND_PTR:.*]] = getelementptr inbounds ptr, ptr %[[TMP_COMPOUND]], i64 0
 // LLVM: %[[TMP_COMPOUND:.*]] = load ptr, ptr %[[COMPOUND_PTR]], align 8
 // LLVM: %[[VLA_IDX:.*]] = mul nsw i64 1, %[[TMP_N]]
-// LLVM: %[[VLA_A_PTR:.*]] = getelementptr i32, ptr %[[TMP_COMPOUND]], i64 %[[VLA_IDX]]
-// LLVM: %[[ELEM_5_PTR:.*]] = getelementptr i32, ptr %[[VLA_A_PTR]], i64 5
+// LLVM: %[[VLA_A_PTR:.*]] = getelementptr inbounds nuw i32, ptr %[[TMP_COMPOUND]], i64 %[[VLA_IDX]]
+// LLVM: %[[ELEM_5_PTR:.*]] = getelementptr inbounds i32, ptr %[[VLA_A_PTR]], i64 5
 // LLVM: store i32 0, ptr %[[ELEM_5_PTR]], align 4
 
 // OGCG: %[[A_ADDR:.*]] = alloca ptr, align 8
@@ -478,8 +478,8 @@ double vla_param_2d(int n, double m[n][n], int i, int j) {
 // LLVM:   %[[I_EXT:.*]] = sext i32 %[[I]] to i64
 // LLVM:   %[[M:.*]] = load ptr, ptr %[[M_ADDR]]
 // LLVM:   %[[ROW_OFF:.*]] = mul nsw i64 %[[I_EXT]], %[[VLA_SIZE]]
-// LLVM:   %[[ROW_PTR:.*]] = getelementptr double, ptr %[[M]], i64 %[[ROW_OFF]]
-// LLVM:   %[[ELEM_PTR:.*]] = getelementptr double, ptr %[[ROW_PTR]], i64 %[[J_EXT]]
+// LLVM:   %[[ROW_PTR:.*]] = getelementptr inbounds nuw double, ptr %[[M]], i64 %[[ROW_OFF]]
+// LLVM:   %[[ELEM_PTR:.*]] = getelementptr inbounds double, ptr %[[ROW_PTR]], i64 %[[J_EXT]]
 // LLVM:   %[[ELEM:.*]] = load double, ptr %[[ELEM_PTR]]
 
 // OGCG: define{{.*}} double @vla_param_2d(i32 {{.*}} %[[N_ARG:.*]], ptr {{.*}} %[[M_ARG:.*]], i32 {{.*}} %[[I_ARG:.*]], i32 {{.*}} %[[J_ARG:.*]])

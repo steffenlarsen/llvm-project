@@ -15,6 +15,7 @@
 
 #include "mlir/Pass/Pass.h"
 
+#include "clang/CIR/LowerToLLVM.h"
 #include <memory>
 
 namespace cir {
@@ -24,7 +25,13 @@ std::unique_ptr<mlir::Pass> createConvertCIRToLLVMPass();
 
 /// Adds passes that fully lower CIR to the LLVMIR dialect. When enableOpenMP
 /// is set (-fopenmp), the OpenMP lowering passes are also added.
-void populateCIRToLLVMPasses(mlir::OpPassManager &pm, bool enableOpenMP);
+void populateCIRToLLVMPasses(mlir::OpPassManager &pm,
+                             bool enableOpenMP,
+                             bool enableOffloadSplit = false,
+                             llvm::ArrayRef<std::string> offloadArchs = {},
+                             bool isDeviceCompilation = false,
+                             unsigned deviceOptLevel = 2,
+                             const CIROffloadConfig &offloadConfig = {});
 
 } // namespace direct
 } // end namespace cir

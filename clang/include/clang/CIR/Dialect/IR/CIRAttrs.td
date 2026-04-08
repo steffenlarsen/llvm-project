@@ -1952,6 +1952,36 @@ def CIR_AnnotationArrayAttr
     : CIR_TypedArrayAttrBase<CIR_AnnotationAttr,
                              "array of cir.annotation attributes">;
 
+//===----------------------------------------------------------------------===//
+// LoopHintAttr
+//===----------------------------------------------------------------------===//
+
+def CIR_LoopUnrollMode : CIR_I32EnumAttr<"LoopUnrollMode", "loop unroll mode", [
+  I32EnumAttrCase<"None", 0, "none">,
+  I32EnumAttrCase<"Enable", 1, "enable">,
+  I32EnumAttrCase<"Disable", 2, "disable">,
+  I32EnumAttrCase<"Full", 3, "full">
+]>;
+
+def CIR_LoopHintAttr : CIR_Attr<"LoopHint", "loop_hint"> {
+  let summary = "Loop optimization hints from pragmas";
+  let description = [{
+    Carries loop optimization hints from `#pragma unroll`, `#pragma nounroll`,
+    and `mustprogress` through the CIR pipeline.  FlattenCFG transfers these
+    from structured loop ops to back-edge branch ops.  CIR-to-LLVM lowering
+    maps them to `LoopAnnotationAttr` on `llvm.br` / `llvm.cond_br`.
+  }];
+
+  let parameters = (ins
+    OptionalParameter<"cir::LoopUnrollModeAttr">:$unroll_mode,
+    OptionalParameter<"std::optional<int64_t>">:$unroll_count,
+    DefaultValuedParameter<"bool", "false">:$must_progress
+  );
+
+  let canHaveIllegalCXXABIType = 0;
+  let assemblyFormat = "`<` struct(params) `>`";
+}
+
 include "clang/CIR/Dialect/IR/CIROpenCLAttrs.td"
 include "clang/CIR/Dialect/IR/CIRCUDAAttrs.td"
 

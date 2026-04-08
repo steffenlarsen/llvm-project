@@ -1,0 +1,116 @@
+// Tests for CIR offload PropagateBlockShape pass.
+//
+// The pass replaces cir.offload.block_dim ops with cir.const ops in kernel
+// clones that have a known_block_size attribute (set by TightenLaunchBounds).
+
+// RUN: cir-opt --split-input-file --cir-offload-propagate-block-shape %s \
+// RUN:   | FileCheck %s
+
+!u32i = !cir.int<u, 32>
+
+//===----------------------------------------------------------------------===//
+// 1. 2D block shape (16x16x1): all cir.offload.block_dim ops replaced with
+//    constants. Original kernel (no known_block_size) untouched; clone gets
+//    constants.
+//===----------------------------------------------------------------------===//
+
+// Original kernel untouched (no known_block_size).
+// CHECK:      cir.offload.func @k_2d(
+// CHECK:        cir.offload.block_dim <x>
+// CHECK:        cir.offload.block_dim <y>
+// CHECK:        cir.offload.block_dim <z>
+
+// Clone with known_block_size: cir.offload.block_dim replaced with cir.const.
+// CHECK:      cir.offload.func @k_2d$max256(
+// CHECK-NOT:  cir.offload.block_dim
+// CHECK:        cir.const #cir.int<16> : !u32i
+// CHECK:        cir.const #cir.int<16> : !u32i
+// CHECK:        cir.const #cir.int<1> : !u32i
+
+module {
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_2d() kernel {
+      %bdx = cir.offload.block_dim <x> : !u32i
+      %bdy = cir.offload.block_dim <y> : !u32i
+      %bdz = cir.offload.block_dim <z> : !u32i
+      cir.return
+    }
+    cir.offload.func @k_2d$max256() kernel
+        attributes {known_block_size = array<i32: 16, 16, 1>} {
+      %bdx = cir.offload.block_dim <x> : !u32i
+      %bdy = cir.offload.block_dim <y> : !u32i
+      %bdz = cir.offload.block_dim <z> : !u32i
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+
+//===----------------------------------------------------------------------===//
+// 2. No known_block_size: cir.offload.block_dim ops untouched.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      cir.offload.func @k_noattr(
+// CHECK:        cir.offload.block_dim <x>
+// CHECK:        cir.offload.block_dim <y>
+
+module {
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_noattr() kernel {
+      %bdx = cir.offload.block_dim <x> : !u32i
+      %bdy = cir.offload.block_dim <y> : !u32i
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+
+//===----------------------------------------------------------------------===//
+// 3. 1D block shape (256x1x1): x replaced with 256, y/z with 1.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      cir.offload.func @k_1d$max256(
+// CHECK-NOT:  cir.offload.block_dim
+// CHECK:        cir.const #cir.int<256> : !u32i
+// CHECK:        cir.const #cir.int<1> : !u32i
+// CHECK:        cir.const #cir.int<1> : !u32i
+
+module {
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_1d$max256() kernel
+        attributes {known_block_size = array<i32: 256, 1, 1>} {
+      %bdx = cir.offload.block_dim <x> : !u32i
+      %bdy = cir.offload.block_dim <y> : !u32i
+      %bdz = cir.offload.block_dim <z> : !u32i
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+
+//===----------------------------------------------------------------------===//
+// 4. No cir.offload.block_dim in body: clone has known_block_size but no
+//    block_dim reads -> no changes, no crash.
+//===----------------------------------------------------------------------===//
+
+// CHECK:      cir.offload.func @k_nodim$max256(
+// CHECK-NOT:  cir.const
+// CHECK:        cir.return
+
+module {
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_nodim$max256() kernel
+        attributes {known_block_size = array<i32: 256, 1, 1>} {
+      cir.return
+    }
+  }
+}

@@ -1,0 +1,309 @@
+// Tests for CIR offload MultiversionDivisibility pass.
+//
+// The pass looks for a kernel whose grid extent is a ceiling division of one
+// of its own scalar arguments -- `gridDim = ceil(n/d)`, the shape a host emits
+// when it covers n elements in blocks of d.  When `n % d == 0` the final block
+// is exactly full and the kernel's tail guards are dead, so the pass clones the
+// kernel with `cir.assume(n % d == 0)` and dispatches to the clone behind a
+// host-side test of the same condition.
+//
+// The divisor is taken from the grid expression rather than assumed: it is the
+// only factor the kernel's guards are written against.
+
+// RUN: cir-opt --split-input-file --cir-offload-multiversion-divisibility %s \
+// RUN:   | FileCheck %s
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 1. grid = ceil(n/256) over a kernel argument that reaches a cir.cmp.
+//    Clone is created, and the launch becomes a guarded dispatch.
+//===----------------------------------------------------------------------===//
+
+// The host tests the same condition it compiles the clone under.
+// CHECK-LABEL: cir.func @host
+// CHECK:         %[[REM:.*]] = cir.rem %{{.*}}, %{{.*}} : !s32i
+// CHECK:         %[[EQ:.*]] = cir.cmp eq %[[REM]], %{{.*}} : !s32i
+// CHECK:         cir.brcond %[[EQ]] ^[[FAST:.*]], ^[[SLOW:.*]]
+// CHECK:       ^[[FAST]]:
+// CHECK:         cir.offload.kernel_launch @offload_device_module::@k_loop$div256
+// CHECK:       ^[[SLOW]]:
+// CHECK:         cir.offload.kernel_launch @offload_device_module::@k_loop grid
+
+// The clone states the fact the guard establishes.
+// CHECK:       cir.offload.func @k_loop(
+// CHECK:       cir.offload.func @k_loop$div256(
+// CHECK-SAME:    kernel
+// CHECK-SAME:    divisibility.arg0 = 256 : i64
+// CHECK:         %[[CREM:.*]] = cir.rem %arg0, %{{.*}} : !s32i
+// CHECK:         %[[CEQ:.*]] = cir.cmp eq %[[CREM]], %{{.*}} : !s32i
+// CHECK:         cir.assume %[[CEQ]]
+
+module {
+  cir.func @host(%nval: !s32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256blk = cir.const #cir.int<256> : !u32i
+
+    // blocks = (n + 255) / 256
+    %n32 = cir.cast integral %nval : !s32i -> !u32i
+    %c255 = cir.const #cir.int<255> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %sum = cir.add %n32, %c255 : !u32i
+    %blocks = cir.div %sum, %c256 : !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_loop
+        grid(%blocks, %c1, %c1 : !u32i)
+        block(%c256blk, %c1, %c1 : !u32i)
+        args(%nval : !s32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_loop(%n: !s32i) kernel {
+      %zero = cir.const #cir.int<0> : !s32i
+      %cond = cir.cmp gt %n, %zero : !s32i
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 2. The comparison is on a reload of the argument, not the argument itself.
+//
+//    This is what CIRGen actually emits -- every kernel parameter is spilled to
+//    a slot and read back -- so a matcher that only follows casts sees nothing
+//    here.  Regression test: the pass must look through the spill.
+//===----------------------------------------------------------------------===//
+
+// CHECK: cir.offload.func @k_spilled$div128(
+
+module {
+  cir.func @host(%nval: !s32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c128blk = cir.const #cir.int<128> : !u32i
+
+    %n32 = cir.cast integral %nval : !s32i -> !u32i
+    %c127 = cir.const #cir.int<127> : !u32i
+    %c128 = cir.const #cir.int<128> : !u32i
+    %sum = cir.add %n32, %c127 : !u32i
+    %blocks = cir.div %sum, %c128 : !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_spilled
+        grid(%blocks, %c1, %c1 : !u32i)
+        block(%c128blk, %c1, %c1 : !u32i)
+        args(%nval : !s32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_spilled(%n: !s32i) kernel {
+      %slot = cir.alloca "n.addr" align(4) : !cir.ptr<!s32i>
+      cir.store %n, %slot : !s32i, !cir.ptr<!s32i>
+      %reload = cir.load %slot : !cir.ptr<!s32i>, !s32i
+      %zero = cir.const #cir.int<0> : !s32i
+      %cond = cir.cmp gt %reload, %zero : !s32i
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 3. The grid extent is computed into a local slot before the launch.
+//
+//    `const int blocks = (n + d - 1) / d;` reaches the launch as a reload, so
+//    the relation is only visible through the slot.  The hop is restricted to
+//    slots written exactly once and never escaping, which is the case here.
+//===----------------------------------------------------------------------===//
+
+// CHECK: cir.offload.func @k_gridslot$div64(
+
+module {
+  cir.func @host(%nval: !s32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c64blk = cir.const #cir.int<64> : !u32i
+
+    %n32 = cir.cast integral %nval : !s32i -> !u32i
+    %c63 = cir.const #cir.int<63> : !u32i
+    %c64 = cir.const #cir.int<64> : !u32i
+    %sum = cir.add %n32, %c63 : !u32i
+    %div = cir.div %sum, %c64 : !u32i
+
+    %slot = cir.alloca "blocks" align(4) : !cir.ptr<!u32i>
+    cir.store %div, %slot : !u32i, !cir.ptr<!u32i>
+    %blocks = cir.load %slot : !cir.ptr<!u32i>, !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_gridslot
+        grid(%blocks, %c1, %c1 : !u32i)
+        block(%c64blk, %c1, %c1 : !u32i)
+        args(%nval : !s32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_gridslot(%n: !s32i) kernel {
+      %zero = cir.const #cir.int<0> : !s32i
+      %cond = cir.cmp gt %n, %zero : !s32i
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 4. The ceiling division as it is actually written: `(n + BLOCK - 1) / BLOCK`.
+//
+//    That reaches CIR as an add of BLOCK followed by a subtract of 1, because
+//    nothing canonicalises host CIR before the offload passes.  Matching only a
+//    single pre-folded `add(BLOCK-1)` recognises the spelling almost nobody
+//    uses, so the net constant has to be accumulated across the chain.
+//===----------------------------------------------------------------------===//
+
+// CHECK: cir.offload.func @k_idiom$div512(
+
+module {
+  cir.func @host(%nval: !s32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c512blk = cir.const #cir.int<512> : !u32i
+
+    // (n + 512) - 1, then / 512
+    %n32 = cir.cast integral %nval : !s32i -> !u32i
+    %c512 = cir.const #cir.int<512> : !u32i
+    %cone = cir.const #cir.int<1> : !u32i
+    %sum = cir.add %n32, %c512 : !u32i
+    %adj = cir.sub %sum, %cone : !u32i
+    %blocks = cir.div %adj, %c512 : !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_idiom
+        grid(%blocks, %c1, %c1 : !u32i)
+        block(%c512blk, %c1, %c1 : !u32i)
+        args(%nval : !s32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_idiom(%n: !s32i) kernel {
+      %zero = cir.const #cir.int<0> : !s32i
+      %cond = cir.cmp gt %n, %zero : !s32i
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 5. The grid is unrelated to any kernel argument -> nothing to assume.
+//
+//    Without a `ceil(arg/d)` relation there is no divisibility the guards are
+//    written against, so cloning would state a fact about a value the kernel
+//    never bounds anything by.
+//===----------------------------------------------------------------------===//
+
+// CHECK:     cir.offload.func @k_nogrid(
+// CHECK-NOT: $div
+
+module {
+  cir.func @host(%n: !u32i, %nval: !s32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_nogrid
+        grid(%n, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%nval : !s32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_nogrid(%n: !s32i) kernel {
+      %zero = cir.const #cir.int<0> : !s32i
+      %cond = cir.cmp gt %n, %zero : !s32i
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+
+//===----------------------------------------------------------------------===//
+// 6. The argument never reaches a comparison -> the fact buys nothing.
+//===----------------------------------------------------------------------===//
+
+// CHECK:     cir.offload.func @k_noloop(
+// CHECK-NOT: $div
+
+module {
+  cir.func @host(%nval: !s32i) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256blk = cir.const #cir.int<256> : !u32i
+
+    %n32 = cir.cast integral %nval : !s32i -> !u32i
+    %c255 = cir.const #cir.int<255> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    %sum = cir.add %n32, %c255 : !u32i
+    %blocks = cir.div %sum, %c256 : !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_noloop
+        grid(%blocks, %c1, %c1 : !u32i)
+        block(%c256blk, %c1, %c1 : !u32i)
+        args(%nval : !s32i)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_noloop(%n: !s32i) kernel {
+      cir.return
+    }
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+
+//===----------------------------------------------------------------------===//
+// 7. Pointer args are skipped (only integer scalars are eligible).
+//===----------------------------------------------------------------------===//
+
+// CHECK:     cir.offload.func @k_ptronly(
+// CHECK-NOT: $div
+
+module {
+  cir.func @host(%n: !u32i, %ptr: !cir.ptr<!cir.float>) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+
+    cir.offload.kernel_launch @offload_device_module::@k_ptronly
+        grid(%n, %c1, %c1 : !u32i)
+        block(%c256, %c1, %c1 : !u32i)
+        args(%ptr : !cir.ptr<!cir.float>)
+    cir.return
+  }
+
+  cir.offload.module @offload_device_module {
+    cir.offload.func @k_ptronly(%a: !cir.ptr<!cir.float>) kernel {
+      cir.return
+    }
+  }
+}

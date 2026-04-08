@@ -13273,14 +13273,19 @@ bool ScalarEvolution::isImpliedCondOperandsViaRanges(
 }
 
 bool ScalarEvolution::canIVOverflowOnLT(const SCEV *RHS, const SCEV *Stride,
-                                        bool IsSigned) {
+                                        bool IsSigned, const Loop *L) {
   assert(isKnownPositive(Stride) && "Positive stride expected!");
 
   unsigned BitWidth = getTypeSizeInBits(RHS->getType());
   const SCEV *One = getOne(Stride->getType());
 
+  // Narrow RHS using loop guards (llvm.assume, dominating branches) when
+  // available.  This lets us prove no-overflow for loops where an assume
+  // constrains the trip count (e.g. grid-stride GPU loops).
+  const SCEV *GuardedRHS = L ? applyLoopGuards(RHS, L) : RHS;
+
   if (IsSigned) {
-    APInt MaxRHS = getSignedRangeMax(RHS);
+    APInt MaxRHS = getSignedRangeMax(GuardedRHS);
     APInt MaxValue = APInt::getSignedMaxValue(BitWidth);
     APInt MaxStrideMinusOne = getSignedRangeMax(getMinusSCEV(Stride, One));
 
@@ -13288,7 +13293,7 @@ bool ScalarEvolution::canIVOverflowOnLT(const SCEV *RHS, const SCEV *Stride,
     return (std::move(MaxValue) - MaxStrideMinusOne).slt(MaxRHS);
   }
 
-  APInt MaxRHS = getUnsignedRangeMax(RHS);
+  APInt MaxRHS = getUnsignedRangeMax(GuardedRHS);
   APInt MaxValue = APInt::getMaxValue(BitWidth);
   APInt MaxStrideMinusOne = getUnsignedRangeMax(getMinusSCEV(Stride, One));
 
@@ -13297,13 +13302,15 @@ bool ScalarEvolution::canIVOverflowOnLT(const SCEV *RHS, const SCEV *Stride,
 }
 
 bool ScalarEvolution::canIVOverflowOnGT(const SCEV *RHS, const SCEV *Stride,
-                                        bool IsSigned) {
+                                        bool IsSigned, const Loop *L) {
 
   unsigned BitWidth = getTypeSizeInBits(RHS->getType());
   const SCEV *One = getOne(Stride->getType());
 
+  const SCEV *GuardedRHS = L ? applyLoopGuards(RHS, L) : RHS;
+
   if (IsSigned) {
-    APInt MinRHS = getSignedRangeMin(RHS);
+    APInt MinRHS = getSignedRangeMin(GuardedRHS);
     APInt MinValue = APInt::getSignedMinValue(BitWidth);
     APInt MaxStrideMinusOne = getSignedRangeMax(getMinusSCEV(Stride, One));
 
@@ -13311,7 +13318,7 @@ bool ScalarEvolution::canIVOverflowOnGT(const SCEV *RHS, const SCEV *Stride,
     return (std::move(MinValue) + MaxStrideMinusOne).sgt(MinRHS);
   }
 
-  APInt MinRHS = getUnsignedRangeMin(RHS);
+  APInt MinRHS = getUnsignedRangeMin(GuardedRHS);
   APInt MinValue = APInt::getMinValue(BitWidth);
   APInt MaxStrideMinusOne = getUnsignedRangeMax(getMinusSCEV(Stride, One));
 
@@ -13464,7 +13471,66 @@ ScalarEvolution::howManyLessThans(const SCEV *LHS, const SCEV *RHS,
 
   const SCEV *Stride = IV->getStepRecurrence(*this);
 
-  bool PositiveStride = isKnownPositive(Stride);
+  // Use loop guards to narrow the stride range.  An llvm.assume or
+  // dominating branch may prove the stride is positive even when the
+  // raw range is full.
+  const SCEV *GuardedStride = applyLoopGuards(Stride, L);
+  const SCEV *Zero = getZero(Stride->getType());
+  bool PositiveStride = isKnownPositive(Stride) ||
+                         isKnownPositive(GuardedStride) ||
+                         isLoopEntryGuardedByCond(L, ICmpInst::ICMP_SGT,
+                                                  Stride, Zero);
+
+  // If loop guards prove Stride >= RHS (e.g. via llvm.assume) and the
+  // stride makes forward progress, then after one backedge iteration
+  // IV = Start + Stride >= Stride >= RHS, so the exit is taken.
+  // If we can additionally prove Start >= RHS (e.g. via an entry guard),
+  // the exit is immediate and MaxBECount = 0; otherwise MaxBECount = 1.
+  // For signed comparisons, stride must be positive.  For unsigned,
+  // stride just needs to be non-zero (any non-zero unsigned stride
+  // makes forward progress in the unsigned domain).
+  //
+  // Only apply this when loop guards actually contribute new information
+  // (i.e. Stride >= RHS is NOT already provable without guards).  When
+  // it is trivially true (e.g. stride=1, RHS=1), the normal trip count
+  // computation below handles it correctly and returns an exact count.
+  // isLoopEntryGuardedByCond() requires its operands to be available at loop
+  // entry.  RHS is not guaranteed to be: it can be computed inside the loop.
+  // Fall back to the guard-based predicate checks when it is not.
+  const bool RHSAvailable = isAvailableAtLoopEntry(RHS, L);
+
+  if ((IsSigned ? PositiveStride : isKnownNonZero(GuardedStride)) &&
+      !isKnownPredicate(ICmpInst::ICMP_UGE, Stride, RHS) &&
+      ((RHSAvailable &&
+        isLoopEntryGuardedByCond(L, ICmpInst::ICMP_UGE, Stride, RHS)) ||
+       isKnownPredicate(ICmpInst::ICMP_UGE, GuardedStride,
+                        applyLoopGuards(RHS, L)))) {
+    // Check if Start already satisfies the exit condition (Start >= RHS).
+    // If so, the backedge is never taken (MaxBECount = 0); otherwise it
+    // may be taken once (MaxBECount = 1).
+    const SCEV *Start = IV->getStart();
+    auto InvCond = ICmpInst::getInversePredicate(Cond);
+    // Try the matching signedness first: for SLT, check Start >=s RHS.
+    bool ExitOnFirstIter =
+        (RHSAvailable && isLoopEntryGuardedByCond(L, InvCond, Start, RHS)) ||
+        isKnownPredicate(InvCond, applyLoopGuards(Start, L),
+                         applyLoopGuards(RHS, L));
+    // For signed comparisons, Start >=u RHS also implies Start >=s RHS
+    // when both Start and RHS are known non-negative (possibly via guards).
+    if (!ExitOnFirstIter && IsSigned) {
+      const SCEV *GStart = applyLoopGuards(Start, L);
+      const SCEV *GRHS = applyLoopGuards(RHS, L);
+      if (isKnownNonNegative(GStart) && isKnownNonNegative(GRHS))
+        ExitOnFirstIter =
+            (RHSAvailable &&
+             isLoopEntryGuardedByCond(L, ICmpInst::ICMP_UGE, Start, RHS)) ||
+            isKnownPredicate(ICmpInst::ICMP_UGE, GStart, GRHS);
+    }
+    const SCEV *MaxBECount = ExitOnFirstIter ? getZero(Stride->getType())
+                                             : getOne(Stride->getType());
+    return ExitLimit(getCouldNotCompute(), MaxBECount, MaxBECount, false,
+                     ArrayRef<const SCEVPredicate *>());
+  }
 
   // Avoid negative or zero stride values.
   if (!PositiveStride) {
@@ -13538,7 +13604,7 @@ ScalarEvolution::howManyLessThans(const SCEV *LHS, const SCEV *RHS,
   } else if (!NoWrap) {
     // Avoid proven overflow cases: this will ensure that the backedge taken
     // count will not generate any unsigned overflow.
-    if (canIVOverflowOnLT(RHS, Stride, IsSigned))
+    if (canIVOverflowOnLT(RHS, Stride, IsSigned, L))
       return getCouldNotCompute();
   }
 
@@ -13852,7 +13918,7 @@ ScalarEvolution::ExitLimit ScalarEvolution::howManyGreaterThans(
   // exploit NoWrapFlags, allowing to optimize in presence of undefined
   // behaviors like the case of C language.
   if (!Stride->isOne() && !NoWrap)
-    if (canIVOverflowOnGT(RHS, Stride, IsSigned))
+    if (canIVOverflowOnGT(RHS, Stride, IsSigned, L))
       return getCouldNotCompute();
 
   const SCEV *Start = IV->getStart();

@@ -2495,13 +2495,17 @@ private:
 
   /// Verify if an linear IV with positive stride can overflow when in a
   /// less-than comparison, knowing the invariant term of the comparison,
-  /// the stride.
-  bool canIVOverflowOnLT(const SCEV *RHS, const SCEV *Stride, bool IsSigned);
+  /// the stride.  When \p L is non-null, loop guards (from llvm.assume,
+  /// dominating branches) are used to narrow the range of \p RHS.
+  bool canIVOverflowOnLT(const SCEV *RHS, const SCEV *Stride, bool IsSigned,
+                         const Loop *L = nullptr);
 
   /// Verify if an linear IV with negative stride can overflow when in a
   /// greater-than comparison, knowing the invariant term of the comparison,
-  /// the stride.
-  bool canIVOverflowOnGT(const SCEV *RHS, const SCEV *Stride, bool IsSigned);
+  /// the stride.  When \p L is non-null, loop guards are used to narrow
+  /// the range of \p RHS.
+  bool canIVOverflowOnGT(const SCEV *RHS, const SCEV *Stride, bool IsSigned,
+                         const Loop *L = nullptr);
 
   /// Get add expr already created or create a new one.
   const SCEV *getOrCreateAddExpr(ArrayRef<SCEVUse> Ops,

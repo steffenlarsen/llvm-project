@@ -75,11 +75,11 @@ void test1(void) {
   ++P;
   // DEFAULT-CIR:  %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
   // DEFAULT-CIR:  cir.ptr_stride {{.*}}, %[[ONE]]
-  // DEFAULT-LLVM: getelementptr i32, ptr %{{.*}}, i64 1
+  // DEFAULT-LLVM: getelementptr inbounds i32, ptr %{{.*}}, i64 1
   // DEFAULT-OGCG: getelementptr inbounds nuw i32, ptr
   // WRAPV-CIR:  %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
   // WRAPV-CIR:  cir.ptr_stride {{.*}}, %[[ONE]]
-  // WRAPV-LLVM: getelementptr i32, ptr %{{.*}}, i64 1
+  // WRAPV-LLVM: getelementptr inbounds i32, ptr %{{.*}}, i64 1
   // WRAPV-OGCG: getelementptr inbounds nuw i32, ptr
 
   // PR9350: char pre-increment never overflows.

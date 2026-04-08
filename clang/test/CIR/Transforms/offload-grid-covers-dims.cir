@@ -1,0 +1,286 @@
+// Tests the relation OffloadPropagateGridCoverage records between a launch
+// grid dimension and a kernel argument.
+//
+// The Y and Z dimensions matter for loops strided over the grid extent alone
+// (`for (j = blockIdx.y; j < n; j += gridDim.y)`).  Establishing
+// gridDim.y >= n bounds the trip count at 1 so the loop can fold away.  The
+// fact is recorded as dim/argument/divisor triples.
+//
+// A clamped extent, the usual spelling of the per-dimension launch limit, must
+// not produce the fact: on a launch where the clamp bit, the grid no longer
+// covers the argument and the loop really does iterate.  (The pass can instead
+// emit a guarded clone carrying the fact, but that is off by default.)
+
+// RUN: cir-opt --split-input-file --cir-offload-tighten-launch-bounds \
+// RUN:         --cir-offload-propagate-grid-coverage %s | FileCheck %s
+
+// gridDim.y is exactly ne01 (argument 2), so the relation holds with divisor 1.
+// The fact belongs on the clone the launch was redirected to, not the original.
+// CHECK: cir.offload.func @_Z1kPfii$max256
+// CHECK-SAME: grid_covers_dims = array<i32: 1, 2, 1>
+
+!s32i = !cir.int<s, 32>
+!s64i = !cir.int<s, 64>
+!u32i = !cir.int<u, 32>
+!u8i = !cir.int<u, 8>
+!void = !cir.void
+!rec_dim3 = !cir.struct<"dim3" {!u32i, !u32i, !u32i}>
+module @"/tmp/dka/gt.hip" attributes {cir.fp_contract_fast, cir.lang = #cir.lang<cxx>, cir.module_asm = [], cir.record_layouts = {dim3 = #cir.record_layout<arg_passing_kind = can_pass_in_regs, has_trivial_dtor = true, record_align = 4>}, cir.triple = "x86_64-unknown-linux-gnu", dlti.dl_spec = #dlti.dl_spec<!llvm.ptr<270> = dense<32> : vector<4xi64>, !llvm.ptr<271> = dense<32> : vector<4xi64>, !llvm.ptr<272> = dense<64> : vector<4xi64>, i64 = dense<64> : vector<2xi64>, i128 = dense<128> : vector<2xi64>, f80 = dense<128> : vector<2xi64>, !llvm.ptr = dense<64> : vector<4xi64>, i1 = dense<8> : vector<2xi64>, i8 = dense<8> : vector<2xi64>, i16 = dense<16> : vector<2xi64>, i32 = dense<32> : vector<2xi64>, f16 = dense<16> : vector<2xi64>, f64 = dense<64> : vector<2xi64>, f128 = dense<128> : vector<2xi64>, "dlti.endianness" = "little", "dlti.mangling_mode" = "e", "dlti.legal_int_widths" = array<i32: 8, 16, 32, 64>, "dlti.stack_alignment" = 128 : i64, !cir.ptr<!cir.void> = #cir.ptr_spec<size = 64, abi = 64, preferred = 64, index = 64>>} {
+  cir.global external @__hip_cuid_ = #cir.int<0> : !u8i
+  cir.global "private" appending @llvm.compiler.used = #cir.const_array<[#cir.global_view<@__hip_cuid_> : !cir.ptr<!void>]> : !cir.array<!cir.ptr<!void> x 1> {section = "llvm.metadata"}
+  cir.func no_inline private dso_local @_Z16__device_stub__kPfii(!cir.ptr<!cir.float> {llvm.noundef}, !s32i {llvm.noundef}, !s32i {llvm.noundef}) attributes {"cir.target-features" = "+cx8,+mmx,+sse,+sse2,+x87", cu.kernel_name = #cir.cu.kernel_name<"_Z1kPfii">, nothrow}
+  cir.offload.module @offload_device_module {
+    cir.offload.func @_Z1kPfii(%arg0: !cir.ptr<!cir.float>, %arg1: !s32i, %arg2: !s32i) kernel no_inline attributes {"cir.target-features" = "+cx8,+mmx,+sse,+sse2,+x87", cu.kernel_name = #cir.cu.kernel_name<"_Z1kPfii">, nothrow, rocdl.flat_work_group_size = "1,1024"} {
+      %0 = cir.alloca "p" align(8) init : !cir.ptr<!cir.ptr<!cir.float>>
+      %1 = cir.alloca "ne00" align(4) init : !cir.ptr<!s32i>
+      %2 = cir.alloca "ne01" align(4) init : !cir.ptr<!s32i>
+      cir.store %arg0, %0 : !cir.ptr<!cir.float>, !cir.ptr<!cir.ptr<!cir.float>>
+      cir.store %arg1, %1 : !s32i, !cir.ptr<!s32i>
+      cir.store %arg2, %2 : !s32i, !cir.ptr<!s32i>
+      %3 = cir.load align(4) %1 : !cir.ptr<!s32i>, !s32i
+      %4 = cir.load align(4) %2 : !cir.ptr<!s32i>, !s32i
+      %5 = cir.add nsw %3, %4 : !s32i
+      %6 = cir.cast int_to_float %5 : !s32i -> !cir.float
+      %7 = cir.const #cir.int<0> : !s64i
+      %8 = cir.load align(8) %0 : !cir.ptr<!cir.ptr<!cir.float>>, !cir.ptr<!cir.float>
+      %9 = cir.ptr_stride %8, %7 : (!cir.ptr<!cir.float>, !s64i) -> !cir.ptr<!cir.float>
+      cir.store align(4) %6, %9 : !cir.float, !cir.ptr<!cir.float>
+      cir.return
+    }
+  }
+  cir.func no_inline comdat linkonce_odr @_ZN4dim3C2Ejjj(%arg0: !cir.ptr<!rec_dim3> {llvm.align = 4 : i64, llvm.dereferenceable = 12 : i64, llvm.nonnull, llvm.noundef}, %arg1: !u32i {llvm.noundef}, %arg2: !u32i {llvm.noundef}, %arg3: !u32i {llvm.noundef}) func_info<#cir.cxx_ctor<!rec_dim3, custom>> attributes {"cir.target-features" = "+cx8,+mmx,+sse,+sse2,+x87", nothrow} {
+    %0 = cir.alloca "this" align(8) init : !cir.ptr<!cir.ptr<!rec_dim3>>
+    %1 = cir.alloca "x" align(4) init : !cir.ptr<!u32i>
+    %2 = cir.alloca "y" align(4) init : !cir.ptr<!u32i>
+    %3 = cir.alloca "z" align(4) init : !cir.ptr<!u32i>
+    cir.store %arg0, %0 : !cir.ptr<!rec_dim3>, !cir.ptr<!cir.ptr<!rec_dim3>>
+    cir.store %arg1, %1 : !u32i, !cir.ptr<!u32i>
+    cir.store %arg2, %2 : !u32i, !cir.ptr<!u32i>
+    cir.store %arg3, %3 : !u32i, !cir.ptr<!u32i>
+    %4 = cir.load %0 : !cir.ptr<!cir.ptr<!rec_dim3>>, !cir.ptr<!rec_dim3>
+    %5 = cir.get_member %4[0] {name = "x"} : !cir.ptr<!rec_dim3> -> !cir.ptr<!u32i>
+    %6 = cir.load align(4) %1 : !cir.ptr<!u32i>, !u32i
+    cir.store align(4) %6, %5 : !u32i, !cir.ptr<!u32i>
+    %7 = cir.get_member %4[1] {name = "y"} : !cir.ptr<!rec_dim3> -> !cir.ptr<!u32i>
+    %8 = cir.load align(4) %2 : !cir.ptr<!u32i>, !u32i
+    cir.store align(4) %8, %7 : !u32i, !cir.ptr<!u32i>
+    %9 = cir.get_member %4[2] {name = "z"} : !cir.ptr<!rec_dim3> -> !cir.ptr<!u32i>
+    %10 = cir.load align(4) %3 : !cir.ptr<!u32i>, !u32i
+    cir.store align(4) %10, %9 : !u32i, !cir.ptr<!u32i>
+    cir.return
+  }
+  cir.func no_inline comdat linkonce_odr @_ZN4dim3C1Ejjj(%arg0: !cir.ptr<!rec_dim3> {llvm.align = 4 : i64, llvm.dereferenceable = 12 : i64, llvm.nonnull, llvm.noundef}, %arg1: !u32i {llvm.noundef}, %arg2: !u32i {llvm.noundef}, %arg3: !u32i {llvm.noundef}) func_info<#cir.cxx_ctor<!rec_dim3, custom>> attributes {"cir.target-features" = "+cx8,+mmx,+sse,+sse2,+x87", nothrow} {
+    %0 = cir.alloca "this" align(8) init : !cir.ptr<!cir.ptr<!rec_dim3>>
+    %1 = cir.alloca "x" align(4) init : !cir.ptr<!u32i>
+    %2 = cir.alloca "y" align(4) init : !cir.ptr<!u32i>
+    %3 = cir.alloca "z" align(4) init : !cir.ptr<!u32i>
+    cir.store %arg0, %0 : !cir.ptr<!rec_dim3>, !cir.ptr<!cir.ptr<!rec_dim3>>
+    cir.store %arg1, %1 : !u32i, !cir.ptr<!u32i>
+    cir.store %arg2, %2 : !u32i, !cir.ptr<!u32i>
+    cir.store %arg3, %3 : !u32i, !cir.ptr<!u32i>
+    %4 = cir.load %0 : !cir.ptr<!cir.ptr<!rec_dim3>>, !cir.ptr<!rec_dim3>
+    %5 = cir.load align(4) %1 : !cir.ptr<!u32i>, !u32i
+    %6 = cir.load align(4) %2 : !cir.ptr<!u32i>, !u32i
+    %7 = cir.load align(4) %3 : !cir.ptr<!u32i>, !u32i
+    cir.call @_ZN4dim3C2Ejjj(%4, %5, %6, %7) : (!cir.ptr<!rec_dim3> {llvm.align = 4 : i64, llvm.dereferenceable = 12 : i64, llvm.nonnull, llvm.noundef}, !u32i {llvm.noundef}, !u32i {llvm.noundef}, !u32i {llvm.noundef}) -> ()
+    cir.return
+  }
+  cir.func no_inline dso_local @_Z3runPfii(%arg0: !cir.ptr<!cir.float> {llvm.noundef}, %arg1: !s32i {llvm.noundef}, %arg2: !s32i {llvm.noundef}) attributes {"cir.target-features" = "+cx8,+mmx,+sse,+sse2,+x87", nothrow} {
+    %0 = cir.alloca "p" align(8) init : !cir.ptr<!cir.ptr<!cir.float>>
+    %1 = cir.alloca "ne00" align(4) init : !cir.ptr<!s32i>
+    %2 = cir.alloca "ne01" align(4) init : !cir.ptr<!s32i>
+    %3 = cir.alloca "nb" align(4) init : !cir.ptr<!rec_dim3>
+    %4 = cir.alloca "dim3.tmp" align(4) : !cir.ptr<!rec_dim3>
+    %5 = cir.alloca "dim3.tmp" align(4) : !cir.ptr<!rec_dim3>
+    %6 = cir.alloca "dim3.tmp" align(4) : !cir.ptr<!rec_dim3>
+    %7 = cir.alloca "dim3.tmp" align(4) : !cir.ptr<!rec_dim3>
+    %8 = cir.alloca "dim3.tmp" align(4) : !cir.ptr<!rec_dim3>
+    %9 = cir.alloca "dim3.tmp" align(4) : !cir.ptr<!rec_dim3>
+    cir.store %arg0, %0 : !cir.ptr<!cir.float>, !cir.ptr<!cir.ptr<!cir.float>>
+    cir.store %arg1, %1 : !s32i, !cir.ptr<!s32i>
+    cir.store %arg2, %2 : !s32i, !cir.ptr<!s32i>
+    %10 = cir.load align(4) %1 : !cir.ptr<!s32i>, !s32i
+    %11 = cir.const #cir.int<255> : !s32i
+    %12 = cir.add nsw %10, %11 : !s32i
+    %13 = cir.const #cir.int<256> : !s32i
+    %14 = cir.div %12, %13 : !s32i
+    %15 = cir.cast integral %14 : !s32i -> !u32i
+    %16 = cir.load align(4) %2 : !cir.ptr<!s32i>, !s32i
+    %17 = cir.cast integral %16 : !s32i -> !u32i
+    %18 = cir.const #cir.int<1> : !u32i
+    cir.call @_ZN4dim3C1Ejjj(%3, %15, %17, %18) : (!cir.ptr<!rec_dim3> {llvm.align = 4 : i64, llvm.dereferenceable = 12 : i64, llvm.nonnull, llvm.noundef}, !u32i {llvm.noundef}, !u32i {llvm.noundef}, !u32i {llvm.noundef}) -> ()
+    %19 = cir.load align(8) %0 : !cir.ptr<!cir.ptr<!cir.float>>, !cir.ptr<!cir.float>
+    %20 = cir.load align(4) %1 : !cir.ptr<!s32i>, !s32i
+    %21 = cir.load align(4) %2 : !cir.ptr<!s32i>, !s32i
+    cir.copy %3 align(4) to %4 align(4) : !cir.ptr<!rec_dim3>
+    %22 = cir.get_member %4[0] {name = "x"} : !cir.ptr<!rec_dim3> -> !cir.ptr<!u32i>
+    %23 = cir.load align(4) %22 : !cir.ptr<!u32i>, !u32i
+    cir.copy %3 align(4) to %5 align(4) : !cir.ptr<!rec_dim3>
+    %24 = cir.get_member %5[1] {name = "y"} : !cir.ptr<!rec_dim3> -> !cir.ptr<!u32i>
+    %25 = cir.load align(4) %24 : !cir.ptr<!u32i>, !u32i
+    cir.copy %3 align(4) to %6 align(4) : !cir.ptr<!rec_dim3>
+    %26 = cir.get_member %6[2] {name = "z"} : !cir.ptr<!rec_dim3> -> !cir.ptr<!u32i>
+    %27 = cir.load align(4) %26 : !cir.ptr<!u32i>, !u32i
+    %28 = cir.const #cir.int<256> : !u32i
+    %29 = cir.const #cir.int<1> : !u32i
+    %30 = cir.const #cir.int<1> : !u32i
+    cir.call @_ZN4dim3C1Ejjj(%7, %28, %29, %30) : (!cir.ptr<!rec_dim3> {llvm.align = 4 : i64, llvm.dereferenceable = 12 : i64, llvm.nonnull, llvm.noundef}, !u32i {llvm.noundef}, !u32i {llvm.noundef}, !u32i {llvm.noundef}) -> ()
+    %31 = cir.get_member %7[0] {name = "x"} : !cir.ptr<!rec_dim3> -> !cir.ptr<!u32i>
+    %32 = cir.load align(4) %31 : !cir.ptr<!u32i>, !u32i
+    %33 = cir.const #cir.int<256> : !u32i
+    %34 = cir.const #cir.int<1> : !u32i
+    %35 = cir.const #cir.int<1> : !u32i
+    cir.call @_ZN4dim3C1Ejjj(%8, %33, %34, %35) : (!cir.ptr<!rec_dim3> {llvm.align = 4 : i64, llvm.dereferenceable = 12 : i64, llvm.nonnull, llvm.noundef}, !u32i {llvm.noundef}, !u32i {llvm.noundef}, !u32i {llvm.noundef}) -> ()
+    %36 = cir.get_member %8[1] {name = "y"} : !cir.ptr<!rec_dim3> -> !cir.ptr<!u32i>
+    %37 = cir.load align(4) %36 : !cir.ptr<!u32i>, !u32i
+    %38 = cir.const #cir.int<256> : !u32i
+    %39 = cir.const #cir.int<1> : !u32i
+    %40 = cir.const #cir.int<1> : !u32i
+    cir.call @_ZN4dim3C1Ejjj(%9, %38, %39, %40) : (!cir.ptr<!rec_dim3> {llvm.align = 4 : i64, llvm.dereferenceable = 12 : i64, llvm.nonnull, llvm.noundef}, !u32i {llvm.noundef}, !u32i {llvm.noundef}, !u32i {llvm.noundef}) -> ()
+    %41 = cir.get_member %9[2] {name = "z"} : !cir.ptr<!rec_dim3> -> !cir.ptr<!u32i>
+    %42 = cir.load align(4) %41 : !cir.ptr<!u32i>, !u32i
+    cir.offload.kernel_launch @offload_device_module::@_Z1kPfii grid(%23, %25, %27 : !u32i) block(%32, %37, %42 : !u32i) args(%19, %20, %21 : !cir.ptr<!cir.float>, !s32i, !s32i)
+    cir.return
+  }
+}
+
+// -----
+
+// Same kernel and launch, except gridDim.y is min(ne01, 65535).  Nothing may
+// be annotated.  Matched by kernel name rather than with a bare CHECK-NOT so
+// it cannot be satisfied by the module above.
+// CHECK-NOT: @_Z2kcPfii{{.*}}grid_covers_dims
+
+!s32i = !cir.int<s, 32>
+!s64i = !cir.int<s, 64>
+!u32i = !cir.int<u, 32>
+!u8i = !cir.int<u, 8>
+!void = !cir.void
+!rec_dim3 = !cir.struct<"dim3" {!u32i, !u32i, !u32i}>
+module @"/tmp/dka/gtc.hip" attributes {cir.fp_contract_fast, cir.lang = #cir.lang<cxx>, cir.module_asm = [], cir.record_layouts = {dim3 = #cir.record_layout<arg_passing_kind = can_pass_in_regs, has_trivial_dtor = true, record_align = 4>}, cir.triple = "x86_64-unknown-linux-gnu", dlti.dl_spec = #dlti.dl_spec<!llvm.ptr<270> = dense<32> : vector<4xi64>, !llvm.ptr<271> = dense<32> : vector<4xi64>, !llvm.ptr<272> = dense<64> : vector<4xi64>, i64 = dense<64> : vector<2xi64>, i128 = dense<128> : vector<2xi64>, f80 = dense<128> : vector<2xi64>, !llvm.ptr = dense<64> : vector<4xi64>, i1 = dense<8> : vector<2xi64>, i8 = dense<8> : vector<2xi64>, i16 = dense<16> : vector<2xi64>, i32 = dense<32> : vector<2xi64>, f16 = dense<16> : vector<2xi64>, f64 = dense<64> : vector<2xi64>, f128 = dense<128> : vector<2xi64>, "dlti.endianness" = "little", "dlti.mangling_mode" = "e", "dlti.legal_int_widths" = array<i32: 8, 16, 32, 64>, "dlti.stack_alignment" = 128 : i64, !cir.ptr<!cir.void> = #cir.ptr_spec<size = 64, abi = 64, preferred = 64, index = 64>>} {
+  cir.global external @__hip_cuid_ = #cir.int<0> : !u8i
+  cir.global "private" appending @llvm.compiler.used = #cir.const_array<[#cir.global_view<@__hip_cuid_> : !cir.ptr<!void>]> : !cir.array<!cir.ptr<!void> x 1> {section = "llvm.metadata"}
+  cir.func no_inline private dso_local @_Z17__device_stub__kcPfii(!cir.ptr<!cir.float> {llvm.noundef}, !s32i {llvm.noundef}, !s32i {llvm.noundef}) attributes {"cir.target-features" = "+cx8,+mmx,+sse,+sse2,+x87", cu.kernel_name = #cir.cu.kernel_name<"_Z2kcPfii">, nothrow}
+  cir.offload.module @offload_device_module {
+    cir.offload.func @_Z2kcPfii(%arg0: !cir.ptr<!cir.float>, %arg1: !s32i, %arg2: !s32i) kernel no_inline attributes {"cir.target-features" = "+cx8,+mmx,+sse,+sse2,+x87", cu.kernel_name = #cir.cu.kernel_name<"_Z2kcPfii">, nothrow, rocdl.flat_work_group_size = "1,1024"} {
+      %0 = cir.alloca "p" align(8) init : !cir.ptr<!cir.ptr<!cir.float>>
+      %1 = cir.alloca "ne00" align(4) init : !cir.ptr<!s32i>
+      %2 = cir.alloca "ne01" align(4) init : !cir.ptr<!s32i>
+      cir.store %arg0, %0 : !cir.ptr<!cir.float>, !cir.ptr<!cir.ptr<!cir.float>>
+      cir.store %arg1, %1 : !s32i, !cir.ptr<!s32i>
+      cir.store %arg2, %2 : !s32i, !cir.ptr<!s32i>
+      %3 = cir.load align(4) %1 : !cir.ptr<!s32i>, !s32i
+      %4 = cir.load align(4) %2 : !cir.ptr<!s32i>, !s32i
+      %5 = cir.add nsw %3, %4 : !s32i
+      %6 = cir.cast int_to_float %5 : !s32i -> !cir.float
+      %7 = cir.const #cir.int<0> : !s64i
+      %8 = cir.load align(8) %0 : !cir.ptr<!cir.ptr<!cir.float>>, !cir.ptr<!cir.float>
+      %9 = cir.ptr_stride %8, %7 : (!cir.ptr<!cir.float>, !s64i) -> !cir.ptr<!cir.float>
+      cir.store align(4) %6, %9 : !cir.float, !cir.ptr<!cir.float>
+      cir.return
+    }
+  }
+  cir.func no_inline comdat linkonce_odr @_ZN4dim3C2Ejjj(%arg0: !cir.ptr<!rec_dim3> {llvm.align = 4 : i64, llvm.dereferenceable = 12 : i64, llvm.nonnull, llvm.noundef}, %arg1: !u32i {llvm.noundef}, %arg2: !u32i {llvm.noundef}, %arg3: !u32i {llvm.noundef}) func_info<#cir.cxx_ctor<!rec_dim3, custom>> attributes {"cir.target-features" = "+cx8,+mmx,+sse,+sse2,+x87", nothrow} {
+    %0 = cir.alloca "this" align(8) init : !cir.ptr<!cir.ptr<!rec_dim3>>
+    %1 = cir.alloca "x" align(4) init : !cir.ptr<!u32i>
+    %2 = cir.alloca "y" align(4) init : !cir.ptr<!u32i>
+    %3 = cir.alloca "z" align(4) init : !cir.ptr<!u32i>
+    cir.store %arg0, %0 : !cir.ptr<!rec_dim3>, !cir.ptr<!cir.ptr<!rec_dim3>>
+    cir.store %arg1, %1 : !u32i, !cir.ptr<!u32i>
+    cir.store %arg2, %2 : !u32i, !cir.ptr<!u32i>
+    cir.store %arg3, %3 : !u32i, !cir.ptr<!u32i>
+    %4 = cir.load %0 : !cir.ptr<!cir.ptr<!rec_dim3>>, !cir.ptr<!rec_dim3>
+    %5 = cir.get_member %4[0] {name = "x"} : !cir.ptr<!rec_dim3> -> !cir.ptr<!u32i>
+    %6 = cir.load align(4) %1 : !cir.ptr<!u32i>, !u32i
+    cir.store align(4) %6, %5 : !u32i, !cir.ptr<!u32i>
+    %7 = cir.get_member %4[1] {name = "y"} : !cir.ptr<!rec_dim3> -> !cir.ptr<!u32i>
+    %8 = cir.load align(4) %2 : !cir.ptr<!u32i>, !u32i
+    cir.store align(4) %8, %7 : !u32i, !cir.ptr<!u32i>
+    %9 = cir.get_member %4[2] {name = "z"} : !cir.ptr<!rec_dim3> -> !cir.ptr<!u32i>
+    %10 = cir.load align(4) %3 : !cir.ptr<!u32i>, !u32i
+    cir.store align(4) %10, %9 : !u32i, !cir.ptr<!u32i>
+    cir.return
+  }
+  cir.func no_inline comdat linkonce_odr @_ZN4dim3C1Ejjj(%arg0: !cir.ptr<!rec_dim3> {llvm.align = 4 : i64, llvm.dereferenceable = 12 : i64, llvm.nonnull, llvm.noundef}, %arg1: !u32i {llvm.noundef}, %arg2: !u32i {llvm.noundef}, %arg3: !u32i {llvm.noundef}) func_info<#cir.cxx_ctor<!rec_dim3, custom>> attributes {"cir.target-features" = "+cx8,+mmx,+sse,+sse2,+x87", nothrow} {
+    %0 = cir.alloca "this" align(8) init : !cir.ptr<!cir.ptr<!rec_dim3>>
+    %1 = cir.alloca "x" align(4) init : !cir.ptr<!u32i>
+    %2 = cir.alloca "y" align(4) init : !cir.ptr<!u32i>
+    %3 = cir.alloca "z" align(4) init : !cir.ptr<!u32i>
+    cir.store %arg0, %0 : !cir.ptr<!rec_dim3>, !cir.ptr<!cir.ptr<!rec_dim3>>
+    cir.store %arg1, %1 : !u32i, !cir.ptr<!u32i>
+    cir.store %arg2, %2 : !u32i, !cir.ptr<!u32i>
+    cir.store %arg3, %3 : !u32i, !cir.ptr<!u32i>
+    %4 = cir.load %0 : !cir.ptr<!cir.ptr<!rec_dim3>>, !cir.ptr<!rec_dim3>
+    %5 = cir.load align(4) %1 : !cir.ptr<!u32i>, !u32i
+    %6 = cir.load align(4) %2 : !cir.ptr<!u32i>, !u32i
+    %7 = cir.load align(4) %3 : !cir.ptr<!u32i>, !u32i
+    cir.call @_ZN4dim3C2Ejjj(%4, %5, %6, %7) : (!cir.ptr<!rec_dim3> {llvm.align = 4 : i64, llvm.dereferenceable = 12 : i64, llvm.nonnull, llvm.noundef}, !u32i {llvm.noundef}, !u32i {llvm.noundef}, !u32i {llvm.noundef}) -> ()
+    cir.return
+  }
+  cir.func no_inline dso_local @_Z4runcPfii(%arg0: !cir.ptr<!cir.float> {llvm.noundef}, %arg1: !s32i {llvm.noundef}, %arg2: !s32i {llvm.noundef}) attributes {"cir.target-features" = "+cx8,+mmx,+sse,+sse2,+x87", nothrow} {
+    %0 = cir.alloca "p" align(8) init : !cir.ptr<!cir.ptr<!cir.float>>
+    %1 = cir.alloca "ne00" align(4) init : !cir.ptr<!s32i>
+    %2 = cir.alloca "ne01" align(4) init : !cir.ptr<!s32i>
+    %3 = cir.alloca "nb" align(4) init : !cir.ptr<!rec_dim3>
+    %4 = cir.alloca "dim3.tmp" align(4) : !cir.ptr<!rec_dim3>
+    %5 = cir.alloca "dim3.tmp" align(4) : !cir.ptr<!rec_dim3>
+    %6 = cir.alloca "dim3.tmp" align(4) : !cir.ptr<!rec_dim3>
+    %7 = cir.alloca "dim3.tmp" align(4) : !cir.ptr<!rec_dim3>
+    %8 = cir.alloca "dim3.tmp" align(4) : !cir.ptr<!rec_dim3>
+    %9 = cir.alloca "dim3.tmp" align(4) : !cir.ptr<!rec_dim3>
+    cir.store %arg0, %0 : !cir.ptr<!cir.float>, !cir.ptr<!cir.ptr<!cir.float>>
+    cir.store %arg1, %1 : !s32i, !cir.ptr<!s32i>
+    cir.store %arg2, %2 : !s32i, !cir.ptr<!s32i>
+    %10 = cir.load align(4) %1 : !cir.ptr<!s32i>, !s32i
+    %11 = cir.const #cir.int<255> : !s32i
+    %12 = cir.add nsw %10, %11 : !s32i
+    %13 = cir.const #cir.int<256> : !s32i
+    %14 = cir.div %12, %13 : !s32i
+    %15 = cir.cast integral %14 : !s32i -> !u32i
+    %16 = cir.load align(4) %2 : !cir.ptr<!s32i>, !s32i
+    %17 = cir.const #cir.int<65535> : !s32i
+    %18 = cir.cmp lt %16, %17 : !s32i
+    %19 = cir.ternary(%18, true {
+      %46 = cir.load align(4) %2 : !cir.ptr<!s32i>, !s32i
+      cir.yield %46 : !s32i
+    }, false {
+      %46 = cir.const #cir.int<65535> : !s32i
+      cir.yield %46 : !s32i
+    }) : (!cir.bool) -> !s32i
+    %20 = cir.cast integral %19 : !s32i -> !u32i
+    %21 = cir.const #cir.int<1> : !u32i
+    cir.call @_ZN4dim3C1Ejjj(%3, %15, %20, %21) : (!cir.ptr<!rec_dim3> {llvm.align = 4 : i64, llvm.dereferenceable = 12 : i64, llvm.nonnull, llvm.noundef}, !u32i {llvm.noundef}, !u32i {llvm.noundef}, !u32i {llvm.noundef}) -> ()
+    %22 = cir.load align(8) %0 : !cir.ptr<!cir.ptr<!cir.float>>, !cir.ptr<!cir.float>
+    %23 = cir.load align(4) %1 : !cir.ptr<!s32i>, !s32i
+    %24 = cir.load align(4) %2 : !cir.ptr<!s32i>, !s32i
+    cir.copy %3 align(4) to %4 align(4) : !cir.ptr<!rec_dim3>
+    %25 = cir.get_member %4[0] {name = "x"} : !cir.ptr<!rec_dim3> -> !cir.ptr<!u32i>
+    %26 = cir.load align(4) %25 : !cir.ptr<!u32i>, !u32i
+    cir.copy %3 align(4) to %5 align(4) : !cir.ptr<!rec_dim3>
+    %27 = cir.get_member %5[1] {name = "y"} : !cir.ptr<!rec_dim3> -> !cir.ptr<!u32i>
+    %28 = cir.load align(4) %27 : !cir.ptr<!u32i>, !u32i
+    cir.copy %3 align(4) to %6 align(4) : !cir.ptr<!rec_dim3>
+    %29 = cir.get_member %6[2] {name = "z"} : !cir.ptr<!rec_dim3> -> !cir.ptr<!u32i>
+    %30 = cir.load align(4) %29 : !cir.ptr<!u32i>, !u32i
+    %31 = cir.const #cir.int<256> : !u32i
+    %32 = cir.const #cir.int<1> : !u32i
+    %33 = cir.const #cir.int<1> : !u32i
+    cir.call @_ZN4dim3C1Ejjj(%7, %31, %32, %33) : (!cir.ptr<!rec_dim3> {llvm.align = 4 : i64, llvm.dereferenceable = 12 : i64, llvm.nonnull, llvm.noundef}, !u32i {llvm.noundef}, !u32i {llvm.noundef}, !u32i {llvm.noundef}) -> ()
+    %34 = cir.get_member %7[0] {name = "x"} : !cir.ptr<!rec_dim3> -> !cir.ptr<!u32i>
+    %35 = cir.load align(4) %34 : !cir.ptr<!u32i>, !u32i
+    %36 = cir.const #cir.int<256> : !u32i
+    %37 = cir.const #cir.int<1> : !u32i
+    %38 = cir.const #cir.int<1> : !u32i
+    cir.call @_ZN4dim3C1Ejjj(%8, %36, %37, %38) : (!cir.ptr<!rec_dim3> {llvm.align = 4 : i64, llvm.dereferenceable = 12 : i64, llvm.nonnull, llvm.noundef}, !u32i {llvm.noundef}, !u32i {llvm.noundef}, !u32i {llvm.noundef}) -> ()
+    %39 = cir.get_member %8[1] {name = "y"} : !cir.ptr<!rec_dim3> -> !cir.ptr<!u32i>
+    %40 = cir.load align(4) %39 : !cir.ptr<!u32i>, !u32i
+    %41 = cir.const #cir.int<256> : !u32i
+    %42 = cir.const #cir.int<1> : !u32i
+    %43 = cir.const #cir.int<1> : !u32i
+    cir.call @_ZN4dim3C1Ejjj(%9, %41, %42, %43) : (!cir.ptr<!rec_dim3> {llvm.align = 4 : i64, llvm.dereferenceable = 12 : i64, llvm.nonnull, llvm.noundef}, !u32i {llvm.noundef}, !u32i {llvm.noundef}, !u32i {llvm.noundef}) -> ()
+    %44 = cir.get_member %9[2] {name = "z"} : !cir.ptr<!rec_dim3> -> !cir.ptr<!u32i>
+    %45 = cir.load align(4) %44 : !cir.ptr<!u32i>, !u32i
+    cir.offload.kernel_launch @offload_device_module::@_Z2kcPfii grid(%26, %28, %30 : !u32i) block(%35, %40, %45 : !u32i) args(%22, %23, %24 : !cir.ptr<!cir.float>, !s32i, !s32i)
+    cir.return
+  }
+}

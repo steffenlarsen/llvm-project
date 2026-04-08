@@ -357,6 +357,15 @@ static RValue emitUnaryMaybeConstrainedFPBuiltin(CIRGenFunction &cgf,
 
   CIRGenFunction::CIRGenFPOptionsRAII FPOptsRAII(cgf, &e);
 
+  // If the argument is an integer (e.g., fabs(int_value) from <math.h>
+  // without C++ overload resolution), promote to the function's return
+  // type (which is always floating-point for these builtins).
+  mlir::Type resultTy = cgf.convertType(e.getType());
+  if (isa<cir::IntType>(arg.getType()) &&
+      cir::isAnyFloatingPointType(resultTy))
+    arg = cgf.getBuilder().createCast(
+        cir::CastKind::int_to_float, arg, resultTy);
+
   auto call = Operation::create(cgf.getBuilder(), arg.getLoc(), arg.getType(),
                                 arg, cgf.getBuilder().getConstrainedFPAttr());
   return RValue::get(call->getResult(0));
@@ -431,14 +440,16 @@ static mlir::Value emitBinaryMaybeConstrainedFPBuiltin(CIRGenFunction &cgf,
 static RValue errorBuiltinNYI(CIRGenFunction &cgf, const CallExpr *e,
                               unsigned builtinID) {
 
+  // NOTE: this is the target-independent NYI helper; do not name a specific
+  // target in the message.  Target-specific emitters have their own helpers.
   if (cgf.getContext().BuiltinInfo.isLibFunction(builtinID)) {
     cgf.cgm.errorNYI(
         e->getSourceRange(),
-        std::string("unimplemented X86 library function builtin call: ") +
+        std::string("unimplemented library function builtin call: ") +
             cgf.getContext().BuiltinInfo.getName(builtinID));
   } else {
     cgf.cgm.errorNYI(e->getSourceRange(),
-                     std::string("unimplemented X86 builtin call: ") +
+                     std::string("unimplemented builtin call: ") +
                          cgf.getContext().BuiltinInfo.getName(builtinID));
   }
 
@@ -968,6 +979,9 @@ static mlir::Type correctIntegerSignedness(mlir::Type iitType, QualType astType,
   auto intTy = dyn_cast<cir::IntType>(iitType);
   if (!intTy)
     return iitType;
+
+  if (astType->isBooleanType())
+    return cir::BoolType::get(context);
 
   if (astType->isUnsignedIntegerType())
     return cir::IntType::get(context, intTy.getWidth(), /*isSigned=*/false);
@@ -2601,7 +2615,7 @@ RValue CIRGenFunction::emitBuiltinExpr(const GlobalDecl &gd, unsigned builtinID,
       if ((getTarget().getTriple().isAMDGCN() ||
            getTarget().getTriple().isSPIRV()) &&
           getLangOpts().HIP)
-        return errorBuiltinNYI(*this, e, builtinID);
+        return RValue::get(emitAMDGPUDevicePrintfCallExpr(e));
     }
     break;
   case Builtin::BI__builtin_canonicalize:

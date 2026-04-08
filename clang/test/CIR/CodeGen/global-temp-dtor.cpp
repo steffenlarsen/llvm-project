@@ -182,7 +182,7 @@ thread_local const NonTrivialArr &thread_arr_ref = NonTrivialArr{};
 // LLVMCIR-LABEL: define internal void @__cxx_global_array_dtor(ptr {{.*}})
 // LLVMCIR:       [[LOOP_CONDITION_BLOCK:.*]]:
 // LLVMCIR:         %[[DONE:.*]] = icmp ne ptr
-// LLVMCIR:         br i1 %[[DONE]], label %[[LOOP_BODY_BLOCK:.*]], label %[[LOOP_EXIT_BLOCK:.*]]
+// LLVMCIR:         br i1 %[[DONE]], label %[[LOOP_BODY_BLOCK:.*]], label %[[LOOP_EXIT_BLOCK:[^ ,]+]]{{.*}}
 // LLVMCIR:       [[LOOP_BODY_BLOCK]]:
 // LLVMCIR:         call void @_ZN10NonTrivialD1Ev(ptr
 // LLVMCIR:         br label %[[LOOP_CONDITION_BLOCK]]
@@ -191,7 +191,7 @@ thread_local const NonTrivialArr &thread_arr_ref = NonTrivialArr{};
 // LLVMCIR-LABEL: define internal void @__cxx_global_var_init.2()
 // LLVMCIR:       [[LOOP_CONDITION_BLOCK:.*]]:
 // LLVMCIR:         %[[DONE:.*]] = icmp ne ptr
-// LLVMCIR:         br i1 %[[DONE]], label %[[LOOP_BODY_BLOCK:.*]], label %[[LOOP_EXIT_BLOCK:.*]]
+// LLVMCIR:         br i1 %[[DONE]], label %[[LOOP_BODY_BLOCK:.*]], label %[[LOOP_EXIT_BLOCK:[^ ,]+]]{{.*}}
 // LLVMCIR:       [[LOOP_BODY_BLOCK]]:
 // LLVMCIR:         call void @_ZN10NonTrivialC1Ev
 // LLVMCIR:         br label %[[LOOP_CONDITION_BLOCK]]
@@ -224,7 +224,7 @@ thread_local const NonTrivialArr &thread_arr_ref = NonTrivialArr{};
 // LLVMCIR-LABEL: define internal void @__cxx_global_array_dtor.1(ptr {{.*}})
 // LLVMCIR:       [[LOOP_CONDITION_BLOCK:.*]]:
 // LLVMCIR:         %[[DONE:.*]] = icmp ne ptr
-// LLVMCIR:         br i1 %[[DONE]], label %[[LOOP_BODY_BLOCK:.*]], label %[[LOOP_EXIT_BLOCK:.*]]
+// LLVMCIR:         br i1 %[[DONE]], label %[[LOOP_BODY_BLOCK:.*]], label %[[LOOP_EXIT_BLOCK:[^ ,]+]]{{.*}}
 // LLVMCIR:       [[LOOP_BODY_BLOCK]]:
 // LLVMCIR:         call void @_ZN10NonTrivialD1Ev(ptr
 // LLVMCIR:         br label %[[LOOP_CONDITION_BLOCK]]
@@ -234,7 +234,7 @@ thread_local const NonTrivialArr &thread_arr_ref = NonTrivialArr{};
 // LLVMCIR:         %[[THREAD_ARR_REF:.*]] = call ptr @_ZTW14thread_arr_ref()
 // LLVMCIR:       [[LOOP_CONDITION_BLOCK:.*]]:
 // LLVMCIR:         %[[DONE:.*]] = icmp ne ptr
-// LLVMCIR:         br i1 %[[DONE]], label %[[LOOP_BODY_BLOCK:.*]], label %[[LOOP_EXIT_BLOCK:.*]]
+// LLVMCIR:         br i1 %[[DONE]], label %[[LOOP_BODY_BLOCK:.*]], label %[[LOOP_EXIT_BLOCK:[^ ,]+]]{{.*}}
 // LLVMCIR:       [[LOOP_BODY_BLOCK]]:
 // LLVMCIR:         call void @_ZN10NonTrivialC1Ev
 // LLVMCIR:         br label %[[LOOP_CONDITION_BLOCK]]

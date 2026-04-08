@@ -50,9 +50,11 @@ int __attribute__((address_space(1)))* get_gvar() {
 // get these right.
 struct S { int a[4]; };
 // CIR-LABEL: cir.func {{.*}} @copy_to_as
-// CIR: cir.copy {{.*}} to {{.*}} : !cir.ptr<!rec_S>, !cir.ptr<!rec_S, target_address_space(1)>
+// CIR: cir.cast address_space %{{.*}} : !cir.ptr<!rec_S, target_address_space(1)> -> !cir.ptr<!rec_S>
+// CIR: cir.copy %{{.*}} align(4) to %{{.*}} align(4) : !cir.ptr<!rec_S>
 // LLVM-LABEL: define dso_local void @copy_to_as
-// LLVM: call void @llvm.memcpy.p1.p0.i64(ptr addrspace(1) align 4 %{{.*}}, ptr align 4 %{{.*}}, i64 16, i1 false)
+// LLVM: addrspacecast ptr addrspace(1) %{{.*}} to ptr
+// LLVM: call void @llvm.memcpy.p0.p0.i64(ptr align 4 %{{.*}}, ptr align 4 %{{.*}}, i64 16, i1 false)
 // OGCG-LABEL: define dso_local void @copy_to_as
 // OGCG: call void @llvm.memcpy.p1.p0.i64(ptr addrspace(1) align 4 %{{.*}}, ptr align 4 %{{.*}}, i64 16, i1 false)
 void copy_to_as(struct S __attribute__((address_space(1))) *p, struct S *q) {

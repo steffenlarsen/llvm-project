@@ -53,7 +53,10 @@ module {
 
 // Checking the correct selection of the second object using a target as a selector.
 module {
-  // CHECK: @kernel_module_binary = internal constant [6 x i8] c"AMDGPU", align 8
+  // ROCm objects are embedded as a HIP fat binary and registered through
+  // __hipRegisterFatBinary, matching what clang's HIP path produces.
+  // CHECK: @kernel_module_binary = internal constant [6 x i8] c"AMDGPU", section ".hip_fatbin", align 4096
+  // CHECK: @kernel_module_fatbin_wrapper = internal constant { i32, i32, ptr, ptr } { i32 1212764230, i32 1, ptr @kernel_module_binary, ptr null }, section ".hipFatBinSegment", align 8
   gpu.binary @kernel_module <#gpu.select_object<#rocdl.target>> [#gpu.object<#nvvm.target, "NVPTX">, #gpu.object<#rocdl.target, "AMDGPU">]
 }
 
@@ -68,7 +71,7 @@ module {
 // -----
 // Checking the translation of `gpu.launch_fun` with an async dependency.
 module attributes {gpu.container_module} {
-  gpu.binary @kernel_module  [#gpu.object<#rocdl.target, "BLOB">]
+  gpu.binary @kernel_module  [#gpu.object<#nvvm.target, "BLOB">]
   llvm.func @foo(%stream : !llvm.ptr) {
     %0 = llvm.mlir.constant(8 : index) : i64
     // CHECK-NOT: @mgpuStreamCreate

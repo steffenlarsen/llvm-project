@@ -26,7 +26,7 @@ void test_setjmp(void *env) {
   // LLVM-NEXT: [[FA:%[0-9]+]] = {{.*}}@llvm.frameaddress.p0(i32 0) 
   // LLVM-NEXT: store ptr [[FA]], ptr [[ENV]], align 8
   // LLVM-NEXT: [[SS:%[0-9]+]] = {{.*}}@llvm.stacksave.p0() 
-  // LLVM-NEXT: [[GEP:%[0-9]+]] = getelementptr i8, ptr [[ENV]], i64 16
+  // LLVM-NEXT: [[GEP:%[0-9]+]] = getelementptr inbounds nuw i8, ptr [[ENV]], i64 16
   // LLVM-NEXT: store ptr [[SS]], ptr [[GEP]], align 8
   // LLVM-NEXT: @llvm.eh.sjlj.setjmp(ptr{{.*}}[[ENV]])
   

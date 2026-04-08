@@ -18,6 +18,10 @@
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 
+#include "llvm/Bitcode/BitcodeReader.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Config/Targets.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Support/FileSystem.h"
@@ -211,6 +215,69 @@ TEST_F(MLIRTargetLLVMROCDL, SKIP_WITHOUT_AMDGPU(SerializeROCDLToBinary)) {
     // Check that the serializer was successful.
     ASSERT_TRUE(object != std::nullopt);
     ASSERT_FALSE(object->getObject().empty());
+  }
+}
+
+// The OCLC control variables are synthesized here rather than linked from
+// ROCm's oclc_*.bc, so the set has to match what those files define.
+// `oclc_wavefrontsize64_{on,off}.bc` defines `__oclc_wavefrontsize_log2`
+// alongside `__oclc_wavefrontsize64`, and OCKL functions reference it (device
+// printf reaches it via `__ockl_printf_append_*`).  Omitting it leaves an
+// undefined variable, and the HSA loader then rejects the entire code object
+// with HSA_STATUS_ERROR_VARIABLE_UNDEFINED -- every kernel in it fails to
+// launch with "no kernel image is available for execution on the device".
+TEST_F(MLIRTargetLLVMROCDL, SKIP_WITHOUT_AMDGPU(NoUndefinedControlVariables)) {
+  if (!hasROCMTools())
+    GTEST_SKIP() << "ROCm installation not found, skipping test.";
+
+  MLIRContext context(registry);
+
+  // `__ockl_wgred_add_i32` is one of the three OCKL functions that reference
+  // `__oclc_wavefrontsize_log2`.  The result is stored so the call cannot be
+  // dead-stripped before the reference is created.
+  const std::string ocklModuleStr = R"mlir(
+      gpu.module @rocdl_test {
+        llvm.func @__ockl_wgred_add_i32(i32) -> i32
+        llvm.func @rocdl_kernel(%arg0: !llvm.ptr) attributes {gpu.kernel, rocdl.kernel} {
+          %0 = llvm.mlir.constant(1 : i32) : i32
+          %1 = llvm.call @__ockl_wgred_add_i32(%0) : (i32) -> i32
+          llvm.store %1, %arg0 : i32, !llvm.ptr
+          llvm.return
+        }
+      })mlir";
+
+  OwningOpRef<ModuleOp> module =
+      parseSourceString<ModuleOp>(ocklModuleStr, &context);
+  ASSERT_TRUE(!!module);
+
+  ROCDL::ROCDLTargetAttr target = ROCDL::ROCDLTargetAttr::get(&context);
+  auto serializer = dyn_cast<gpu::TargetAttrInterface>(target);
+  ASSERT_TRUE(!!serializer);
+  gpu::TargetOptions options("", {}, "", "", gpu::CompilationTarget::Offload);
+  for (auto gpuModule : (*module).getBody()->getOps<gpu::GPUModuleOp>()) {
+    std::optional<mlir::gpu::SerializedObject> object =
+        serializer.serializeToObject(gpuModule, options);
+    ASSERT_TRUE(object != std::nullopt);
+    ASSERT_TRUE(!object->getObject().empty());
+
+    llvm::MemoryBufferRef buffer(
+        StringRef(object->getObject().data(), object->getObject().size()),
+        "module");
+    llvm::LLVMContext llvmContext;
+    llvm::Expected<std::unique_ptr<llvm::Module>> llvmModule =
+        llvm::parseBitcodeFile(buffer, llvmContext);
+    ASSERT_TRUE(!!llvmModule);
+
+    // Every global the module still references must be defined.  A leftover
+    // declaration -- `__oclc_wavefrontsize_log2` was one, because the control
+    // variables are synthesized here rather than linked from ROCm's
+    // oclc_*.bc -- makes the HSA loader reject the whole code object with
+    // HSA_STATUS_ERROR_VARIABLE_UNDEFINED, and every kernel in it then fails
+    // to launch with "no kernel image is available for execution on the
+    // device".
+    for (llvm::GlobalVariable &gv : (*llvmModule)->globals())
+      EXPECT_FALSE(gv.isDeclaration())
+          << "undefined global variable: " << gv.getName().str();
   }
 }
 

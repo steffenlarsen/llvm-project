@@ -1,0 +1,65 @@
+// Verify that cir.offload.* ops can be parsed and printed.
+//
+// RUN: cir-opt %s -o - | FileCheck %s
+
+!u32i = !cir.int<u, 32>
+!s32i = !cir.int<s, 32>
+!u64i = !cir.int<u, 64>
+
+module {
+  // CHECK: cir.offload.module @offload_device_module
+  cir.offload.module @offload_device_module {
+    // CHECK: cir.offload.func @device_helper(%arg0: !s32i) -> !s32i
+    cir.offload.func @device_helper(%arg0: !s32i) -> !s32i {
+      cir.return %arg0 : !s32i
+    }
+
+    // CHECK: cir.offload.func @my_kernel(%arg0: !cir.ptr<!s32i>) kernel
+    cir.offload.func @my_kernel(%arg0: !cir.ptr<!s32i>) kernel {
+      // CHECK: cir.offload.thread_id <x> : !u32i
+      %tid = cir.offload.thread_id <x> : !u32i
+      // CHECK: cir.offload.block_id <y> : !u32i
+      %bid = cir.offload.block_id <y> : !u32i
+      // CHECK: cir.offload.block_dim <z> : !u32i
+      %bdim = cir.offload.block_dim <z> : !u32i
+      // CHECK: cir.offload.grid_dim <x> : !u32i
+      %gdim = cir.offload.grid_dim <x> : !u32i
+
+      // CHECK: cir.offload.barrier
+      cir.offload.barrier
+
+      // CHECK: cir.offload.subgroup_reduce <add> %{{.*}} : !u32i
+      %r = cir.offload.subgroup_reduce <add> %tid : !u32i
+
+      // CHECK: cir.offload.ballot %{{.*}} : !u64i
+      %true = cir.const #cir.bool<true> : !cir.bool
+      %ballot = cir.offload.ballot %true : !u64i
+
+      // CHECK: cir.offload.dynamic_shared_memory : <!s32i>
+      %shmem = cir.offload.dynamic_shared_memory : !cir.ptr<!s32i>
+
+      cir.return
+    }
+  }
+
+  cir.func @main(%ptr : !cir.ptr<!s32i>) {
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c42 = cir.const #cir.int<42> : !s32i
+
+    // CHECK: cir.offload.kernel_launch @offload_device_module::@my_kernel
+    // CHECK-SAME: grid(
+    // CHECK-SAME: block(
+    cir.offload.kernel_launch @offload_device_module::@my_kernel
+      grid(%c1, %c1, %c1 : !u32i)
+      block(%c1, %c1, %c1 : !u32i)
+
+    // CHECK: cir.offload.kernel_launch @offload_device_module::@my_kernel
+    // CHECK-SAME: args(
+    cir.offload.kernel_launch @offload_device_module::@my_kernel
+      grid(%c1, %c1, %c1 : !u32i)
+      block(%c1, %c1, %c1 : !u32i)
+      args(%c42, %ptr : !s32i, !cir.ptr<!s32i>)
+
+    cir.return
+  }
+}

@@ -133,8 +133,15 @@ ModulePass *createAMDGPULowerKernelAttributesPass();
 void initializeAMDGPULowerKernelAttributesPass(PassRegistry &);
 extern char &AMDGPULowerKernelAttributesID;
 
-struct AMDGPULowerKernelAttributesPass
-    : OptionalPassInfoMixin<AMDGPULowerKernelAttributesPass> {
+class AMDGPULowerKernelAttributesPass
+    : public OptionalPassInfoMixin<AMDGPULowerKernelAttributesPass> {
+private:
+  // Needed to reach the subtarget, and through it the flat work group size,
+  // when narrowing the range on the workitem id intrinsics.
+  TargetMachine &TM;
+
+public:
+  AMDGPULowerKernelAttributesPass(TargetMachine &TM) : TM(TM){};
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 };
 

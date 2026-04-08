@@ -48,7 +48,7 @@ void test_field_initializer() {
 // LLVM:   %[[THIS:.*]] = load ptr, ptr %{{.*}}
 // LLVM:   %[[X_ADDR:.*]] = getelementptr inbounds nuw %class.Container, ptr %[[THIS]], i32 0, i32 0
 // LLVM:   store i32 0, ptr %[[X_ADDR]]
-// LLVM:   %[[CONTAINED_ADDR:.*]] = getelementptr i8, ptr %[[THIS]], i64 4
+// LLVM:   %[[CONTAINED_ADDR:.*]] = getelementptr inbounds nuw i8, ptr %[[THIS]], i64 4
 // LLVM:   call void @_ZN9ContainedC1Ei(ptr {{.*}} %[[CONTAINED_ADDR]], i32 {{.*}} 1)
 // LLVM:   invoke void @_Z8mayThrowv()
 // LLVM:           to label %[[INVOKE_CONT:.*]] unwind label %[[LPAD:.*]]

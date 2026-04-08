@@ -185,7 +185,7 @@ int test2(const Point &pt, int Point::*member) {
 // LLVM:   store i64 %[[MEMBER_ARG]], ptr %[[MEMBER_ADDR]]
 // LLVM:   %[[PT:.*]] = load ptr, ptr %[[PT_ADDR]]
 // LLVM:   %[[MEMBER:.*]] = load i64, ptr %[[MEMBER_ADDR]]
-// LLVM:   %[[RT_MEMBER:.*]] = getelementptr i8, ptr %[[PT]], i64 %[[MEMBER]]
+// LLVM:   %[[RT_MEMBER:.*]] = getelementptr inbounds i8, ptr %[[PT]], i64 %[[MEMBER]]
 // LLVM:   %[[VAL:.*]] = load i32, ptr %[[RT_MEMBER]]
 // LLVM:   store i32 %[[VAL]], ptr %[[RETVAL_ADDR]]
 // LLVM:   %[[RET:.*]] = load i32, ptr %[[RETVAL_ADDR]]
@@ -248,7 +248,7 @@ int test3(const Point *pt, int Point::*member) {
 // LLVM:   store i64 %[[MEMBER_ARG]], ptr %[[MEMBER_ADDR]]
 // LLVM:   %[[PT:.*]] = load ptr, ptr %[[PT_ADDR]]
 // LLVM:   %[[MEMBER:.*]] = load i64, ptr %[[MEMBER_ADDR]]
-// LLVM:   %[[RT_MEMBER:.*]] = getelementptr i8, ptr %[[PT]], i64 %[[MEMBER]]
+// LLVM:   %[[RT_MEMBER:.*]] = getelementptr inbounds i8, ptr %[[PT]], i64 %[[MEMBER]]
 // LLVM:   %[[VAL:.*]] = load i32, ptr %[[RT_MEMBER]]
 // LLVM:   store i32 %[[VAL]], ptr %[[RETVAL_ADDR]]
 // LLVM:   %[[RET:.*]] = load i32, ptr %[[RETVAL_ADDR]]
@@ -352,7 +352,7 @@ int test5(Incomplete *ic, int Incomplete::*member) {
 // LLVM:   store i64 %[[MEMBER_ARG]], ptr %[[MEMBER_ADDR]]
 // LLVM:   %[[IC:.*]] = load ptr, ptr %[[IC_ADDR]]
 // LLVM:   %[[MEMBER:.*]] = load i64, ptr %[[MEMBER_ADDR]]
-// LLVM:   %[[RT_MEMBER:.*]] = getelementptr i8, ptr %[[IC]], i64 %[[MEMBER]]
+// LLVM:   %[[RT_MEMBER:.*]] = getelementptr inbounds i8, ptr %[[IC]], i64 %[[MEMBER]]
 // LLVM:   %[[VAL:.*]] = load i32, ptr %[[RT_MEMBER]]
 // LLVM:   store i32 %[[VAL]], ptr %[[RETVAL_ADDR]]
 // LLVM:   %[[RET:.*]] = load i32, ptr %[[RETVAL_ADDR]]
@@ -436,7 +436,7 @@ void changeFieldPtr(hasField &hf) {
 // LLVM-LABEL: define linkonce_odr void @_Z14changeFieldPtrIXadL_ZN8hasField5fieldEEEEvRS0_
 // LLVM: %[[ARG:.*]] = alloca ptr
 // LLVM: %[[LOAD_ARG:.*]] = load ptr, ptr %[[ARG]]
-// LLVM: %[[GET_MEM:.*]] = getelementptr i8, ptr %[[LOAD_ARG]], i64 0
+// LLVM: %[[GET_MEM:.*]] = getelementptr inbounds i8, ptr %[[LOAD_ARG]], i64 0
 // LLVM: store i32 1, ptr %[[GET_MEM]]
 
 // OGCG has these ordered separately, so this has to live here :/

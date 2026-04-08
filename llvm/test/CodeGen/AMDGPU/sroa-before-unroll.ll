@@ -14,8 +14,9 @@
 ; LOOP: br i1 %{{[^,]+}}, label %exit, label %loop.header
 
 ; FULL-UNROLL: alloca
-; FULL-UNROLL-COUNT-256: store i32 {{[0-9]+}}, ptr addrspace(5)
-; FULL-UNROLL-NOT: br
+; FULL-UNROLL: loop.header:
+; FULL-UNROLL-COUNT-16: store i32 %{{[^,]+}}, ptr addrspace(5)
+; FULL-UNROLL: br i1 %{{[^,]+}}, label %exit, label %loop.header
 
 ; FUNC: store i32 %{{[^,]+}}, ptr addrspace(1) %out
 define amdgpu_kernel void @private_memory(ptr addrspace(1) %out, i32 %n) {

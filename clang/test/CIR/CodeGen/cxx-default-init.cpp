@@ -71,16 +71,16 @@ struct ZeroInit {
 // LLVM:   %[[ARR:.*]] = getelementptr inbounds nuw %struct.ZeroInit, ptr %[[THIS]], i32 0, i32 2
 // LLVM:   %[[ARR_BEGIN:.*]] = getelementptr i32, ptr %[[ARR]], i32 0
 // LLVM:   store ptr %[[ARR_BEGIN]], ptr %[[ITER]]
-// LLVM:   %[[ARR_END:.*]] = getelementptr i32, ptr %[[ARR_BEGIN]], i64 4
+// LLVM:   %[[ARR_END:.*]] = getelementptr inbounds i32, ptr %[[ARR_BEGIN]], i64 4
 // LLVM:   br label %[[LOOP_BODY:.*]]
 // LLVM: [[LOOP_COND:.*]]:
 // LLVM:   %[[CUR:.*]] = load ptr, ptr %[[ITER]]
 // LLVM:   %[[CMP:.*]] = icmp ne ptr %[[CUR]], %[[ARR_END]]
-// LLVM:   br i1 %[[CMP]], label %[[LOOP_BODY]], label %[[LOOP_END:.*]]
+// LLVM:   br i1 %[[CMP]], label %[[LOOP_BODY]], label %[[LOOP_END:[^ ,]+]]{{.*}}
 // LLVM: [[LOOP_BODY]]:
 // LLVM:   %[[CUR:.*]] = load ptr, ptr %[[ITER]]
 // LLVM:   store i32 0, ptr %[[CUR]]
-// LLVM:   %[[NEXT:.*]] = getelementptr i32, ptr %[[CUR]], i64 1
+// LLVM:   %[[NEXT:.*]] = getelementptr inbounds i32, ptr %[[CUR]], i64 1
 // LLVM:   store ptr %[[NEXT]], ptr %[[ITER]]
 // LLVM:   br label %[[LOOP_COND]]
 // LLVM: [[LOOP_END]]:
@@ -185,20 +185,20 @@ struct ValueInit {
 // LLVM:   %[[ARR:.*]] = getelementptr inbounds nuw %struct.ValueInit, ptr %[[THIS]], i32 0, i32 2
 // LLVM:   %[[ARR_BEGIN:.*]] = getelementptr i32, ptr %[[ARR]], i32 0
 // LLVM:   store i32 4, ptr %[[ARR_BEGIN]]
-// LLVM:   %[[ARR_1:.*]] = getelementptr i32, ptr %[[ARR_BEGIN]], i64 1
+// LLVM:   %[[ARR_1:.*]] = getelementptr inbounds i32, ptr %[[ARR_BEGIN]], i64 1
 // LLVM:   store i32 5, ptr %[[ARR_1]]
-// LLVM:   %[[ARR_2:.*]] = getelementptr i32, ptr %[[ARR_1]], i64 1
+// LLVM:   %[[ARR_2:.*]] = getelementptr inbounds i32, ptr %[[ARR_1]], i64 1
 // LLVM:   store ptr %[[ARR_2]], ptr %[[ITER]]
-// LLVM:   %[[ARR_END:.*]] = getelementptr i32, ptr %[[ARR_BEGIN]], i64 4
+// LLVM:   %[[ARR_END:.*]] = getelementptr inbounds i32, ptr %[[ARR_BEGIN]], i64 4
 // LLVM:   br label %[[LOOP_BODY:.*]]
 // LLVM: [[LOOP_COND:.*]]:
 // LLVM:   %[[CUR:.*]] = load ptr, ptr %[[ITER]]
 // LLVM:   %[[CMP:.*]] = icmp ne ptr %[[CUR]], %[[ARR_END]]
-// LLVM:   br i1 %[[CMP]], label %[[LOOP_BODY]], label %[[LOOP_END:.*]]
+// LLVM:   br i1 %[[CMP]], label %[[LOOP_BODY]], label %[[LOOP_END:[^ ,]+]]{{.*}}
 // LLVM: [[LOOP_BODY]]:
 // LLVM:   %[[CUR:.*]] = load ptr, ptr %[[ITER]]
 // LLVM:   store i32 0, ptr %[[CUR]]
-// LLVM:   %[[NEXT:.*]] = getelementptr i32, ptr %[[CUR]], i64 1
+// LLVM:   %[[NEXT:.*]] = getelementptr inbounds i32, ptr %[[CUR]], i64 1
 // LLVM:   store ptr %[[NEXT]], ptr %[[ITER]]
 // LLVM:   br label %[[LOOP_COND]]
 // LLVM: [[LOOP_END]]:

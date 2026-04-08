@@ -38,17 +38,13 @@ void fallsthrough() {
 
 
 // LLVM and OGCG check labels are identical other than the 1 difference called out (and ordering).
-// CIR-LABEL: cir.func private @_ZN4BaseC2Ei(!cir.ptr<!rec_Base>{{.*}}, !s32i{{.*}}) func_info<#cir.cxx_ctor<!rec_Base, custom>>
-// LLVM-LABEL: declare void @_ZN4BaseC2Ei(ptr {{.*}}, i32 {{.*}})
-//
-//
 // CIR-LABEL: cir.func no_inline comdat linkonce_odr @_ZN7DerivedCI24BaseEi(%{{.*}}: !cir.ptr<!rec_Derived>{{.*}}, %{{.*}}: !s32i{{.*}}) func_info<#cir.cxx_ctor<!rec_Derived, custom>>
 // CIR: %[[THIS_ALLOCA:.*]] = cir.alloca "this" {{.*}} init : !cir.ptr<!cir.ptr<!rec_Derived>>
 // CIR: %[[INT_ALLOCA:.*]] = cir.alloca "" {{.*}} init : !cir.ptr<!s32i>
 // CIR: %[[THIS_LOAD:.*]] = cir.load %[[THIS_ALLOCA]] : !cir.ptr<!cir.ptr<!rec_Derived>>, !cir.ptr<!rec_Derived>
 // CIR: %[[BASE_ADDR:.*]] = cir.base_class_addr %[[THIS_LOAD]] : !cir.ptr<!rec_Derived> nonnull [0] -> !cir.ptr<!rec_Base>
 // CIR: %[[INT:.*]] = cir.load align(4) %[[INT_ALLOCA]] : !cir.ptr<!s32i>, !s32i
-// CIR: cir.call @_ZN4BaseC2Ei(%[[BASE_ADDR]], %[[INT]]) : (!cir.ptr<!rec_Base>{{.*}}, !s32i{{.*}}) -> () 
+// CIR: cir.call @_ZN4BaseC2Ei(%[[BASE_ADDR]], %[[INT]]) : (!cir.ptr<!rec_Base>{{.*}}, !s32i{{.*}}) -> ()
 //
 // LLVM-LABEL: define linkonce_odr void @_ZN7DerivedCI24BaseEi(ptr {{.*}}, i32 {{.*}})
 // LLVM: %[[THIS_ALLOCA:.*]] = alloca ptr

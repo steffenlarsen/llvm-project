@@ -147,7 +147,7 @@ void test_sized_array_delete(SizedArrayDelete *ptr) {
 // LLVM:   %[[NOT_NULL:.*]] = icmp ne ptr %[[PTR]], null
 // LLVM:   br i1 %[[NOT_NULL]], label %[[DELETE_NOTNULL:.*]], label %[[DELETE_END:.*]]
 // LLVM: [[DELETE_NOTNULL]]:
-// LLVM:   %[[ALLOC_PTR:.*]] = getelementptr i8, ptr %[[PTR]], i64 -8
+// LLVM:   %[[ALLOC_PTR:.*]] = getelementptr inbounds i8, ptr %[[PTR]], i64 -8
 // LLVM:   %[[NUM_ELEM:.*]] = load i64, ptr %[[ALLOC_PTR]], align 4
 // LLVM:   %[[ARRAY_SIZE:.*]] = mul i64 4, %[[NUM_ELEM]]
 // LLVM:   %[[TOTAL_SIZE:.*]] = add i64 %[[ARRAY_SIZE]], 8
@@ -238,9 +238,9 @@ void test_delete_array_destructed(Destructed *ptr) {
 // LLVM:   %[[NOT_NULL:.*]] = icmp ne ptr %[[PTR]], null
 // LLVM:   br i1 %[[NOT_NULL]], label %[[DELETE_NOTNULL:.*]], label %[[DONE:.*]]
 // LLVM: [[DELETE_NOTNULL]]:
-// LLVM:   %[[ALLOC_PTR:.*]] = getelementptr i8, ptr %[[PTR]], i64 -8
+// LLVM:   %[[ALLOC_PTR:.*]] = getelementptr inbounds i8, ptr %[[PTR]], i64 -8
 // LLVM:   %[[NUM_ELEM:.*]] = load i64, ptr %[[ALLOC_PTR]], align 4
-// LLVM:   %[[ARR_END:.*]] = getelementptr %struct.Destructed, ptr %[[PTR]], i64 %[[NUM_ELEM]]
+// LLVM:   %[[ARR_END:.*]] = getelementptr inbounds nuw %struct.Destructed, ptr %[[PTR]], i64 %[[NUM_ELEM]]
 // LLVM:   %[[NOT_EMPTY:.*]] = icmp ne ptr %[[ARR_END]], %[[PTR]]
 // LLVM:   br i1 %[[NOT_EMPTY]], label %[[DESTROY_ELEMENTS:.*]], label %[[CALL_DELETE:.*]]
 // LLVM: [[DESTROY_ELEMENTS:.*]]:
@@ -249,13 +249,13 @@ void test_delete_array_destructed(Destructed *ptr) {
 // LLVM: [[LOOP_CONDITION:.*]]
 // LLVM:   %[[ARR_CUR:.*]] = load ptr, ptr %[[ARR_IDX]]
 // LLVM:   %[[CMP:.*]] = icmp ne ptr %[[ARR_CUR]], %[[PTR]]
-// LLVM:   br i1 %[[CMP]], label %[[DELETE_ELEMENT:.*]], label %[[LOOP_END:.*]]
+// LLVM:   br i1 %[[CMP]], label %[[DELETE_ELEMENT:.*]], label %[[LOOP_END:[^ ,]+]]{{.*}}
 // LLVM: [[DELETE_ELEMENT]]:
 // LLVM:   %[[ELEM:.*]] = load ptr, ptr %[[ARR_IDX]]
-// LLVM:   %[[PREV:.*]] = getelementptr %struct.Destructed, ptr %[[ELEM]], i64 -1
+// LLVM:   %[[PREV:.*]] = getelementptr inbounds %struct.Destructed, ptr %[[ELEM]], i64 -1
 // LLVM:   store ptr %[[PREV]], ptr %[[ARR_IDX]]
 // LLVM:   call void @_ZN10DestructedD1Ev(ptr %[[PREV]])
-// LLVM:   br label %[[LOOP_CONDITION]]
+// LLVM:   br label %[[LOOP_CONDITION]]{{.*}}
 // LLVM: [[LOOP_END]]:
 // LLVM:   br label %[[CALL_DELETE]]
 // LLVM: [[CALL_DELETE]]:

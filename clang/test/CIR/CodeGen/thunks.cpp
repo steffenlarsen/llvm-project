@@ -312,33 +312,33 @@ void C::f(int x, ...) {}
 
 // LLVM: define {{.*}} void @_ZThn8_N5Test11C1fEv(ptr{{.*}})
 // LLVM:   %[[L1_THIS:.*]] = load ptr, ptr
-// LLVM:   %[[L1_ADJ:.*]] = getelementptr i8, ptr %[[L1_THIS]], i64 -8
+// LLVM:   %[[L1_ADJ:.*]] = getelementptr inbounds i8, ptr %[[L1_THIS]], i64 -8
 // LLVM:   call void @_ZN5Test11C1fEv(ptr{{.*}} %[[L1_ADJ]])
 
 // LLVM: define {{.*}} i32 @_ZThn8_N5Test21C1gEv(ptr{{.*}})
 // LLVM:   %[[L2_THIS:.*]] = load ptr, ptr
-// LLVM:   %[[L2_ADJ:.*]] = getelementptr i8, ptr %[[L2_THIS]], i64 -8
+// LLVM:   %[[L2_ADJ:.*]] = getelementptr inbounds i8, ptr %[[L2_THIS]], i64 -8
 // LLVM:   %[[L2_RET:.*]] = call {{.*}} i32 @_ZN5Test21C1gEv(ptr{{.*}} %[[L2_ADJ]])
 
 // LLVM: define {{.*}} void @_ZThn8_N5Test31DD1Ev(ptr{{.*}})
 // LLVM:   %[[L3A_THIS:.*]] = load ptr, ptr
-// LLVM:   %[[L3A_ADJ:.*]] = getelementptr i8, ptr %[[L3A_THIS]], i64 -8
+// LLVM:   %[[L3A_ADJ:.*]] = getelementptr inbounds i8, ptr %[[L3A_THIS]], i64 -8
 // LLVM:   call void @_ZN5Test31DD1Ev(ptr{{.*}} %[[L3A_ADJ]])
 
 // LLVM: define {{.*}} void @_ZThn8_N5Test31DD0Ev(ptr{{.*}})
 // LLVM:   %[[L3B_THIS:.*]] = load ptr, ptr
-// LLVM:   %[[L3B_ADJ:.*]] = getelementptr i8, ptr %[[L3B_THIS]], i64 -8
+// LLVM:   %[[L3B_ADJ:.*]] = getelementptr inbounds i8, ptr %[[L3B_THIS]], i64 -8
 // LLVM:   call void @_ZN5Test31DD0Ev(ptr{{.*}} %[[L3B_ADJ]])
 
 // LLVM: define {{.*}} void @_ZThn8_N5Test41C1gEi(ptr{{.*}}, i32{{.*}})
 // LLVM:   %[[L4_THIS:.*]] = load ptr, ptr
-// LLVM:   %[[L4_ADJ:.*]] = getelementptr i8, ptr %[[L4_THIS]], i64 -8
+// LLVM:   %[[L4_ADJ:.*]] = getelementptr inbounds i8, ptr %[[L4_THIS]], i64 -8
 // LLVM:   %[[L4_ARG:.*]] = load i32, ptr
 // LLVM:   call void @_ZN5Test41C1gEi(ptr{{.*}} %[[L4_ADJ]], i32{{.*}} %[[L4_ARG]])
 
 // LLVM: define {{.*}} %"struct.Test5::NonTrivial" @_ZThn8_N5Test51C1hEv(ptr{{.*}})
 // LLVM:   %[[L5_THIS:.*]] = load ptr, ptr
-// LLVM:   %[[L5_ADJ:.*]] = getelementptr i8, ptr %[[L5_THIS]], i64 -8
+// LLVM:   %[[L5_ADJ:.*]] = getelementptr inbounds i8, ptr %[[L5_THIS]], i64 -8
 // LLVM:   %[[L5_RET:.*]] = call{{.*}} %"struct.Test5::NonTrivial" @_ZN5Test51C1hEv(ptr{{.*}} %[[L5_ADJ]])
 // LLVM:   store %"struct.Test5::NonTrivial" %[[L5_RET]], ptr
 // LLVM:   load %"struct.Test5::NonTrivial", ptr
@@ -349,7 +349,7 @@ void C::f(int x, ...) {}
 // LLVM:       phi ptr
 
 // LLVM-LABEL: define {{.*}} void @_ZThn8_N11VarargThunk1C1fEiz(ptr{{.*}}, i32{{.*}}, ...)
-// LLVM:   getelementptr i8, ptr {{.*}}, i64 -8
+// LLVM:   getelementptr inbounds i8, ptr {{.*}}, i64 -8
 // LLVM:   musttail call void (ptr, i32, ...) @_ZN11VarargThunk1C1fEiz(ptr{{.*}}, i32{{.*}}, ...)
 
 // --- OGCG checks ---
