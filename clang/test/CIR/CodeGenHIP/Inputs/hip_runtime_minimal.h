@@ -1,9 +1,10 @@
 /* Minimal HIP runtime declarations for CIR offload end-to-end testing.
  * Provides just enough to compile simple kernels with hipMalloc/hipMemcpy.
  * Avoids the full ROCm header stack which requires C++ stdlib and cuda_wrappers.
+ * Does NOT include <stddef.h> so it works without -internal-isystem.
  */
 #pragma once
-#include <stddef.h>
+typedef __SIZE_TYPE__ size_t;
 
 /* GPU function qualifiers */
 #define __constant__ __attribute__((constant))
@@ -53,3 +54,13 @@ extern "C" hipError_t hipMemcpy(void *dst, const void *src, size_t size,
 /* printf — host and device */
 extern "C" int printf(const char *fmt, ...);
 extern "C" __device__ int printf(const char *fmt, ...);
+
+/* GPU built-in dimension variables (threadIdx, blockIdx, blockDim, gridDim).
+ * These are intrinsics with no real backing storage; CIR codegen intercepts
+ * member accesses and emits gpu.thread_id / gpu.block_id / ... ops directly.
+ * The declarations below are needed so the parser accepts the names. */
+struct __dim3_builtin { unsigned int x, y, z; };
+extern const __device__ __dim3_builtin threadIdx;
+extern const __device__ __dim3_builtin blockIdx;
+extern const __device__ __dim3_builtin blockDim;
+extern const __device__ __dim3_builtin gridDim;

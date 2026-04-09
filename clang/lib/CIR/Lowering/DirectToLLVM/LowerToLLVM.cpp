@@ -202,6 +202,45 @@ mlir::LLVM::Linkage convertLinkage(cir::GlobalLinkageKind linkage) {
   llvm_unreachable("Unknown CIR linkage type");
 }
 
+mlir::LogicalResult CIRToLLVMGpuBuiltinVarOpLowering::matchAndRewrite(
+    cir::GpuBuiltinVarOp op, OpAdaptor /*adaptor*/,
+    mlir::ConversionPatternRewriter &rewriter) const {
+  mlir::Location loc = op.getLoc();
+  mlir::MLIRContext *ctx = rewriter.getContext();
+
+  // Map cir::GpuBuiltinDim → mlir::gpu::Dimension.
+  auto toDim = [](cir::GpuBuiltinDim d) -> mlir::gpu::Dimension {
+    switch (d) {
+    case cir::GpuBuiltinDim::x: return mlir::gpu::Dimension::x;
+    case cir::GpuBuiltinDim::y: return mlir::gpu::Dimension::y;
+    case cir::GpuBuiltinDim::z: return mlir::gpu::Dimension::z;
+    }
+    llvm_unreachable("unknown GpuBuiltinDim");
+  };
+
+  mlir::gpu::Dimension dim = toDim(op.getDim());
+  mlir::Value idx;
+  switch (op.getKind()) {
+  case cir::GpuBuiltinKind::threadIdx:
+    idx = mlir::gpu::ThreadIdOp::create(rewriter, loc, dim);
+    break;
+  case cir::GpuBuiltinKind::blockIdx:
+    idx = mlir::gpu::BlockIdOp::create(rewriter, loc, dim);
+    break;
+  case cir::GpuBuiltinKind::blockDim:
+    idx = mlir::gpu::BlockDimOp::create(rewriter, loc, dim);
+    break;
+  case cir::GpuBuiltinKind::gridDim:
+    idx = mlir::gpu::GridDimOp::create(rewriter, loc, dim);
+    break;
+  }
+
+  // gpu.* ops return index; cast to i32 (HIP dim3 field type).
+  mlir::Type i32Ty = mlir::IntegerType::get(ctx, 32);
+  rewriter.replaceOpWithNewOp<mlir::arith::IndexCastUIOp>(op, i32Ty, idx);
+  return mlir::success();
+}
+
 mlir::LogicalResult CIRToLLVMCopyOpLowering::matchAndRewrite(
     cir::CopyOp op, OpAdaptor adaptor,
     mlir::ConversionPatternRewriter &rewriter) const {

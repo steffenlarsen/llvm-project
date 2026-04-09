@@ -89,26 +89,33 @@ static gpu::GPUFuncOp lowerToGpuFunc(OpBuilder &builder,
                      builder.getDenseI32ArrayAttr({val, 1, 1}));
   }
 
-  // Clone the function body into the gpu.func.
+  // Clone the entire function body (all blocks) into the gpu.func.
   IRMapping mapping;
-  // Map offload.func block args to gpu.func block args.
   Block &offloadEntry = offloadFunc.getBody().front();
   Block &gpuEntry = gpuFunc.getBody().front();
+
+  // Map offload.func entry block args to gpu.func entry block args.
   for (auto [offloadArg, gpuArg] :
        llvm::zip(offloadEntry.getArguments(), gpuEntry.getArguments()))
     mapping.map(offloadArg, gpuArg);
 
-  builder.setInsertionPointToEnd(&gpuEntry);
-  for (Operation &op : offloadEntry.without_terminator())
-    builder.clone(op, mapping);
+  // Clone all blocks (including successors).
+  offloadFunc.getBody().cloneInto(&gpuFunc.getBody(), mapping);
 
-  // Replace offload.return with gpu.return.
-  Operation *terminator = offloadEntry.getTerminator();
-  auto offloadRet = cast<offload::ReturnOp>(terminator);
-  SmallVector<Value> retVals;
-  for (Value v : offloadRet.getOperands())
-    retVals.push_back(mapping.lookup(v));
-  builder.create<gpu::ReturnOp>(loc, retVals);
+  // Replace all offload.return ops with gpu.return.
+  gpuFunc.walk([](offload::ReturnOp op) {
+    OpBuilder b(op);
+    auto gpuRet = b.create<gpu::ReturnOp>(op.getLoc(), op.getOperands());
+    (void)gpuRet;
+    op.erase();
+  });
+
+  // cloneInto duplicated the entry block — splice its ops into the pre-existing
+  // gpu.func entry block and erase the duplicate.
+  Block *clonedEntry = mapping.lookup(&offloadEntry);
+  gpuEntry.getOperations().splice(gpuEntry.getOperations().end(),
+                                   clonedEntry->getOperations());
+  clonedEntry->erase();
 
   return gpuFunc;
 }
@@ -127,24 +134,31 @@ static func::FuncOp lowerToFuncFunc(OpBuilder &builder,
   auto funcFunc = builder.create<func::FuncOp>(
       loc, offloadFunc.getName(), fnType);
 
-  // Clone the body.
+  // Clone the entire function body (all blocks).
   IRMapping mapping;
   Block *funcEntry = funcFunc.addEntryBlock();
   Block &offloadEntry = offloadFunc.getBody().front();
+
+  // Map offload.func entry block args to func.func entry block args.
   for (auto [offloadArg, funcArg] :
        llvm::zip(offloadEntry.getArguments(), funcEntry->getArguments()))
     mapping.map(offloadArg, funcArg);
 
-  builder.setInsertionPointToEnd(funcEntry);
-  for (Operation &op : offloadEntry.without_terminator())
-    builder.clone(op, mapping);
+  // Clone all blocks (including successors).
+  offloadFunc.getBody().cloneInto(&funcFunc.getBody(), mapping);
 
-  // Replace offload.return with func.return.
-  auto offloadRet = cast<offload::ReturnOp>(offloadEntry.getTerminator());
-  SmallVector<Value> retVals;
-  for (Value v : offloadRet.getOperands())
-    retVals.push_back(mapping.lookup(v));
-  builder.create<func::ReturnOp>(loc, retVals);
+  // Replace all offload.return ops with func.return.
+  funcFunc.walk([](offload::ReturnOp op) {
+    OpBuilder b(op);
+    b.create<func::ReturnOp>(op.getLoc(), op.getOperands());
+    op.erase();
+  });
+
+  // Splice cloned entry block ops into the pre-existing entry block.
+  Block *clonedEntry = mapping.lookup(&offloadEntry);
+  funcEntry->getOperations().splice(funcEntry->getOperations().end(),
+                                    clonedEntry->getOperations());
+  clonedEntry->erase();
 
   return funcFunc;
 }

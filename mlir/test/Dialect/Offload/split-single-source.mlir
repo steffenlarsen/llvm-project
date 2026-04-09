@@ -206,3 +206,52 @@ module attributes {
     return
   }
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Multi-block kernel — all blocks must be cloned into gpu.func
+//===----------------------------------------------------------------------===//
+
+// CHECK:      gpu.func @conditionalKernel(%{{.*}}: i32, %{{.*}}: memref<i32>) kernel
+// Verify that the conditional branch structure is preserved (two successors).
+// CHECK:        cf.cond_br
+// CHECK:        gpu.return
+
+offload.func @conditionalKernel(%cond: i32, %out: memref<i32>)
+    exec_space = #offload.exec_space<global> {
+  %zero = arith.constant 0 : i32
+  %one  = arith.constant 1 : i32
+  %isZ  = arith.cmpi eq, %cond, %zero : i32
+  cf.cond_br %isZ, ^store_zero, ^store_one
+^store_zero:
+  memref.store %zero, %out[] : memref<i32>
+  cf.br ^done
+^store_one:
+  memref.store %one, %out[] : memref<i32>
+  cf.br ^done
+^done:
+  offload.return
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Multi-block host function — all blocks cloned into func.func
+//===----------------------------------------------------------------------===//
+
+// CHECK:      func.func @conditionalHost(%{{.*}}: i32) -> i32
+// CHECK:        cf.cond_br
+// CHECK:        return
+
+offload.func @conditionalHost(%cond: i32) -> i32
+    exec_space = #offload.exec_space<host> {
+  %zero = arith.constant 0 : i32
+  %one  = arith.constant 1 : i32
+  %isZ  = arith.cmpi eq, %cond, %zero : i32
+  cf.cond_br %isZ, ^ret_zero, ^ret_one
+^ret_zero:
+  offload.return %zero : i32
+^ret_one:
+  offload.return %one : i32
+}

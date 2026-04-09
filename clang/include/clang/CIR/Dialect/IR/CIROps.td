@@ -7753,4 +7753,53 @@ def CIR_MemChrOp : CIR_Op<"libc.memchr"> {
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// GpuBuiltinVarOp — HIP/CUDA thread/block/grid dimension intrinsics
+//===----------------------------------------------------------------------===//
+
+def CIR_GpuBuiltinKind : CIR_I32EnumAttr<"GpuBuiltinKind",
+    "GPU builtin variable kind", [
+  I32EnumAttrCase<"threadIdx", 0, "thread_idx">,
+  I32EnumAttrCase<"blockIdx",  1, "block_idx">,
+  I32EnumAttrCase<"blockDim",  2, "block_dim">,
+  I32EnumAttrCase<"gridDim",   3, "grid_dim">
+]>;
+
+def CIR_GpuBuiltinDim : CIR_I32EnumAttr<"GpuBuiltinDim",
+    "GPU builtin variable dimension", [
+  I32EnumAttrCase<"x", 0>,
+  I32EnumAttrCase<"y", 1>,
+  I32EnumAttrCase<"z", 2>
+]>;
+
+def CIR_GpuBuiltinVarOp : CIR_Op<"gpu_builtin_var", [Pure]> {
+  let summary = "HIP/CUDA GPU dimension built-in variable (threadIdx, etc.)";
+  let description = [{
+    Produces the value of a HIP/CUDA built-in dimension variable:
+    `threadIdx`, `blockIdx`, `blockDim`, or `gridDim`, for dimension `x`,
+    `y`, or `z`.
+
+    The result type is always `!cir.int<u, 32>` (unsigned int), matching the
+    HIP `dim3` field type.  During CIR-to-LLVM lowering inside a `gpu.module`
+    this op is converted to the corresponding `gpu.*` op followed by an
+    `arith.index_castui`.
+
+    Example:
+    ```mlir
+    %tx = cir.gpu_builtin_var thread_idx x : !u32i
+    %bx = cir.gpu_builtin_var block_idx  x : !u32i
+    ```
+  }];
+
+  let arguments = (ins
+    CIR_GpuBuiltinKind:$kind,
+    CIR_GpuBuiltinDim:$dim
+  );
+  let results = (outs CIR_UInt32:$result);
+
+  let assemblyFormat = [{
+    $kind $dim `:` type($result) attr-dict
+  }];
+}
+
 #endif // CLANG_CIR_DIALECT_IR_CIROPS_TD

@@ -2380,6 +2380,53 @@ mlir::Value ScalarExprEmitter::VisitMemberExpr(MemberExpr *e) {
     cgf.emitIgnoredExpr(e->getBase());
     return builder.getConstInt(cgf.getLoc(e->getExprLoc()), value);
   }
+
+  // Intercept HIP/CUDA builtin dimension variables (threadIdx, blockIdx,
+  // blockDim, gridDim).  These have no backing storage; emit cir.gpu_builtin_var
+  // which the ConvertCIRInGpuModulePass lowers to the appropriate gpu.* op
+  // (e.g. gpu.thread_id) followed by arith.index_castui.
+  if (cgf.getLangOpts().HIP || cgf.getLangOpts().CUDA) {
+    if (auto *base = dyn_cast<DeclRefExpr>(e->getBase()->IgnoreImpCasts())) {
+      if (auto *var = dyn_cast<VarDecl>(base->getDecl())) {
+        if (auto *field = dyn_cast<FieldDecl>(e->getMemberDecl())) {
+          StringRef varName = var->getName();
+          StringRef fieldName = field->getName();
+
+          cir::GpuBuiltinKind kind;
+          bool validVar = true;
+          if (varName == "threadIdx")
+            kind = cir::GpuBuiltinKind::threadIdx;
+          else if (varName == "blockIdx")
+            kind = cir::GpuBuiltinKind::blockIdx;
+          else if (varName == "blockDim")
+            kind = cir::GpuBuiltinKind::blockDim;
+          else if (varName == "gridDim")
+            kind = cir::GpuBuiltinKind::gridDim;
+          else
+            validVar = false;
+
+          cir::GpuBuiltinDim dim;
+          bool validField = true;
+          if (fieldName == "x")
+            dim = cir::GpuBuiltinDim::x;
+          else if (fieldName == "y")
+            dim = cir::GpuBuiltinDim::y;
+          else if (fieldName == "z")
+            dim = cir::GpuBuiltinDim::z;
+          else
+            validField = false;
+
+          if (validVar && validField) {
+            mlir::Location loc = cgf.getLoc(e->getExprLoc());
+            return cir::GpuBuiltinVarOp::create(builder, loc,
+                                                cgf.builder.getUInt32Ty(),
+                                                kind, dim);
+          }
+        }
+      }
+    }
+  }
+
   return emitLoadOfLValue(e);
 }
 
