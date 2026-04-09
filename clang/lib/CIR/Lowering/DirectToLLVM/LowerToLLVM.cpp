@@ -134,6 +134,7 @@ lowerCIRVisibilityToLLVMVisibility(cir::VisibilityKind visibilityKind) {
   case cir::VisibilityKind::Protected:
     return ::mlir::LLVM::Visibility::Protected;
   }
+  llvm_unreachable("Unexpected visibility kind");
 }
 
 /// Emits the value from memory as expected by its users. Should be called when
@@ -1529,7 +1530,7 @@ mlir::LogicalResult CIRToLLVMBaseClassAddrOpLowering::matchAndRewrite(
       getTypeConverter()->convertType(baseClassOp.getType());
   mlir::Value derivedAddr = adaptor.getDerivedAddr();
   llvm::SmallVector<mlir::LLVM::GEPArg, 1> offset = {
-      adaptor.getOffset().getZExtValue()};
+      static_cast<int32_t>(adaptor.getOffset().getZExtValue())};
   mlir::Type byteType = mlir::IntegerType::get(resultType.getContext(), 8,
                                                mlir::IntegerType::Signless);
   if (adaptor.getOffset().getZExtValue() == 0) {
@@ -1568,7 +1569,8 @@ mlir::LogicalResult CIRToLLVMDerivedClassAddrOpLowering::matchAndRewrite(
     rewriter.replaceOp(derivedClassOp, baseAddr);
     return mlir::success();
   }
-  llvm::SmallVector<mlir::LLVM::GEPArg, 1> offset = {offsetVal};
+  llvm::SmallVector<mlir::LLVM::GEPArg, 1> offset = {
+      static_cast<int32_t>(offsetVal)};
   mlir::Type byteType = mlir::IntegerType::get(resultType.getContext(), 8,
                                                mlir::IntegerType::Signless);
   if (derivedClassOp.getAssumeNotNull()) {
@@ -4032,7 +4034,8 @@ mlir::LogicalResult CIRToLLVMGetMemberOpLowering::matchAndRewrite(
   case cir::RecordType::Struct: {
     // Since the base address is a pointer to an aggregate, the first offset
     // is always zero. The second offset tell us which member it will access.
-    llvm::SmallVector<mlir::LLVM::GEPArg, 2> offset{0, op.getIndex()};
+    llvm::SmallVector<mlir::LLVM::GEPArg, 2> offset{
+        0, static_cast<int32_t>(op.getIndex())};
     const mlir::Type elementTy = getTypeConverter()->convertType(recordTy);
     rewriter.replaceOpWithNewOp<mlir::LLVM::GEPOp>(op, llResTy, elementTy,
                                                    adaptor.getAddr(), offset);
@@ -4045,6 +4048,7 @@ mlir::LogicalResult CIRToLLVMGetMemberOpLowering::matchAndRewrite(
                                                        adaptor.getAddr());
     return mlir::success();
   }
+  llvm_unreachable("Unexpected record kind");
 }
 
 mlir::LogicalResult CIRToLLVMExtractMemberOpLowering::matchAndRewrite(
@@ -4380,7 +4384,8 @@ mlir::LogicalResult CIRToLLVMVTableGetVirtualFnAddrOpLowering::matchAndRewrite(
   mlir::Type targetType = getTypeConverter()->convertType(op.getType());
   auto eltType = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
   llvm::SmallVector<mlir::LLVM::GEPArg> offsets =
-      llvm::SmallVector<mlir::LLVM::GEPArg>{op.getIndex()};
+      llvm::SmallVector<mlir::LLVM::GEPArg>{
+          static_cast<int32_t>(op.getIndex())};
   rewriter.replaceOpWithNewOp<mlir::LLVM::GEPOp>(
       op, targetType, eltType, adaptor.getVptr(), offsets,
       mlir::LLVM::GEPNoWrapFlags::inbounds);
@@ -5247,8 +5252,7 @@ std::unique_ptr<mlir::Pass> createConvertCIRToLLVMPass() {
 }
 
 void populateCIRToLLVMPasses(mlir::OpPassManager &pm, bool enableOffloadSplit,
-                              StringRef offloadArch,
-                              bool isDeviceCompilation = false) {
+                             StringRef offloadArch, bool isDeviceCompilation) {
   mlir::populateCIRPreLoweringPasses(pm);
   pm.addPass(mlir::omp::createMarkDeclareTargetPass());
   if (enableOffloadSplit) {

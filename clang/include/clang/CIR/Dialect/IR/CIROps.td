@@ -7753,6 +7753,4 @@ def CIR_MemChrOp : CIR_Op<"libc.memchr"> {
   }];
 }
 
-//===----------------------------------------------------------------------===//
-
 #endif // CLANG_CIR_DIALECT_IR_CIROPS_TD
