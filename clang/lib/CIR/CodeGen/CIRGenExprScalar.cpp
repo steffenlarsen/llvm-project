@@ -19,7 +19,10 @@
 #include "clang/CIR/Dialect/IR/CIRTypes.h"
 #include "clang/CIR/MissingFeatures.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Ptr/IR/MemorySpaceInterfaces.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Value.h"
 
@@ -277,7 +280,7 @@ public:
     // nodes in the AST.  The result expression is a member CallExpr whose
     // callee is a MemberExpr like "->__get_x" on a base of type
     // __hip_builtin_threadIdx_t / __hip_builtin_blockIdx_t / etc.
-    // Intercept these and emit cir.gpu_builtin_var directly.
+    // Emit gpu.* ops directly; CIR has no GPU-specific knowledge.
     if (cgf.getLangOpts().HIP || cgf.getLangOpts().CUDA) {
       if (const Expr *result = e->getResultExpr()) {
         const Expr *inner = result->IgnoreParenImpCasts();
@@ -289,35 +292,38 @@ public:
           if (const auto *memExpr =
                   dyn_cast<MemberExpr>(call->getCallee()->IgnoreParenImpCasts())) {
             StringRef methodName = memExpr->getMemberDecl()->getName();
-            using Kind = cir::GpuBuiltinKind;
-            using Dim = cir::GpuBuiltinDim;
-            std::optional<Dim> dim;
+            std::optional<mlir::gpu::Dimension> dim;
             if (methodName == "__get_x")
-              dim = Dim::x;
+              dim = mlir::gpu::Dimension::x;
             else if (methodName == "__get_y")
-              dim = Dim::y;
+              dim = mlir::gpu::Dimension::y;
             else if (methodName == "__get_z")
-              dim = Dim::z;
+              dim = mlir::gpu::Dimension::z;
 
             if (dim) {
               // Determine the kind from the parent record of the getter method.
-              std::optional<Kind> kind;
+              mlir::Location loc = cgf.getLoc(e->getExprLoc());
+              mlir::Value idx;
               if (const auto *method =
                       dyn_cast<CXXMethodDecl>(memExpr->getMemberDecl())) {
                 StringRef typeName = method->getParent()->getName();
                 if (typeName == "__hip_builtin_threadIdx_t")
-                  kind = Kind::threadIdx;
+                  idx = mlir::gpu::ThreadIdOp::create(builder, loc, *dim);
                 else if (typeName == "__hip_builtin_blockIdx_t")
-                  kind = Kind::blockIdx;
+                  idx = mlir::gpu::BlockIdOp::create(builder, loc, *dim);
                 else if (typeName == "__hip_builtin_blockDim_t")
-                  kind = Kind::blockDim;
+                  idx = mlir::gpu::BlockDimOp::create(builder, loc, *dim);
                 else if (typeName == "__hip_builtin_gridDim_t")
-                  kind = Kind::gridDim;
+                  idx = mlir::gpu::GridDimOp::create(builder, loc, *dim);
               }
-              if (kind) {
-                mlir::Location loc = cgf.getLoc(e->getExprLoc());
-                return cir::GpuBuiltinVarOp::create(
-                    builder, loc, cgf.builder.getUInt32Ty(), *kind, *dim);
+              if (idx) {
+                // gpu.* ops return index; bridge to !cir.u32i via an
+                // unrealized_conversion_cast so downstream CIR ops see the
+                // expected C unsigned-int type.  The cast folds cleanly during
+                // CIR-to-LLVM conversion (both sides become i32).
+                return mlir::UnrealizedConversionCastOp::create(
+                           builder, loc, cgf.builder.getUInt32Ty(), idx)
+                    .getResult(0);
               }
             }
           }
@@ -2434,9 +2440,9 @@ mlir::Value ScalarExprEmitter::VisitMemberExpr(MemberExpr *e) {
   }
 
   // Intercept HIP/CUDA builtin dimension variables (threadIdx, blockIdx,
-  // blockDim, gridDim).  These have no backing storage; emit cir.gpu_builtin_var
-  // which the ConvertCIRInGpuModulePass lowers to the appropriate gpu.* op
-  // (e.g. gpu.thread_id) followed by arith.index_castui.
+  // blockDim, gridDim).  These have no backing storage; emit gpu.* ops
+  // directly.  CIR has no GPU-specific knowledge — the gpu dialect ops live
+  // inside offload.func bodies and flow through to gpu.func after the split.
   if (cgf.getLangOpts().HIP || cgf.getLangOpts().CUDA) {
     if (auto *base = dyn_cast<DeclRefExpr>(e->getBase()->IgnoreImpCasts())) {
       if (auto *var = dyn_cast<VarDecl>(base->getDecl())) {
@@ -2444,35 +2450,35 @@ mlir::Value ScalarExprEmitter::VisitMemberExpr(MemberExpr *e) {
           StringRef varName = var->getName();
           StringRef fieldName = field->getName();
 
-          cir::GpuBuiltinKind kind;
-          bool validVar = true;
-          if (varName == "threadIdx")
-            kind = cir::GpuBuiltinKind::threadIdx;
-          else if (varName == "blockIdx")
-            kind = cir::GpuBuiltinKind::blockIdx;
-          else if (varName == "blockDim")
-            kind = cir::GpuBuiltinKind::blockDim;
-          else if (varName == "gridDim")
-            kind = cir::GpuBuiltinKind::gridDim;
-          else
-            validVar = false;
-
-          cir::GpuBuiltinDim dim;
-          bool validField = true;
+          std::optional<mlir::gpu::Dimension> dim;
           if (fieldName == "x")
-            dim = cir::GpuBuiltinDim::x;
+            dim = mlir::gpu::Dimension::x;
           else if (fieldName == "y")
-            dim = cir::GpuBuiltinDim::y;
+            dim = mlir::gpu::Dimension::y;
           else if (fieldName == "z")
-            dim = cir::GpuBuiltinDim::z;
-          else
-            validField = false;
+            dim = mlir::gpu::Dimension::z;
 
-          if (validVar && validField) {
+          if (dim) {
             mlir::Location loc = cgf.getLoc(e->getExprLoc());
-            return cir::GpuBuiltinVarOp::create(builder, loc,
-                                                cgf.builder.getUInt32Ty(),
-                                                kind, dim);
+            mlir::Value idx;
+            if (varName == "threadIdx")
+              idx = mlir::gpu::ThreadIdOp::create(builder, loc, *dim);
+            else if (varName == "blockIdx")
+              idx = mlir::gpu::BlockIdOp::create(builder, loc, *dim);
+            else if (varName == "blockDim")
+              idx = mlir::gpu::BlockDimOp::create(builder, loc, *dim);
+            else if (varName == "gridDim")
+              idx = mlir::gpu::GridDimOp::create(builder, loc, *dim);
+
+            if (idx) {
+              // gpu.* ops return index; bridge to !cir.u32i via an
+              // unrealized_conversion_cast so downstream CIR ops see the
+              // expected C unsigned-int type.  The cast folds cleanly during
+              // CIR-to-LLVM conversion (both sides become i32).
+              return mlir::UnrealizedConversionCastOp::create(
+                         builder, loc, cgf.builder.getUInt32Ty(), idx)
+                  .getResult(0);
+            }
           }
         }
       }

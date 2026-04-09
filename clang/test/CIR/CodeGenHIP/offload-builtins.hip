@@ -31,15 +31,27 @@ __global__ void index_kernel(int *out) {
 
 // CIR: offload.func @_Z12index_kernelPi
 // CIR-SAME: exec_space = #offload.exec_space<global>
-// CIR:   cir.gpu_builtin_var thread_idx x
-// CIR:   cir.gpu_builtin_var thread_idx y
-// CIR:   cir.gpu_builtin_var thread_idx z
-// CIR:   cir.gpu_builtin_var block_idx  x
-// CIR:   cir.gpu_builtin_var block_idx  y
-// CIR:   cir.gpu_builtin_var block_idx  z
-// CIR:   cir.gpu_builtin_var block_dim  x
-// CIR:   cir.gpu_builtin_var block_dim  y
-// CIR:   cir.gpu_builtin_var block_dim  z
-// CIR:   cir.gpu_builtin_var grid_dim   x
-// CIR:   cir.gpu_builtin_var grid_dim   y
-// CIR:   cir.gpu_builtin_var grid_dim   z
+// CIR:   gpu.thread_id x
+// CIR:   builtin.unrealized_conversion_cast {{.*}} : index to !u32i
+// CIR:   gpu.thread_id y
+// CIR:   builtin.unrealized_conversion_cast {{.*}} : index to !u32i
+// CIR:   gpu.thread_id z
+// CIR:   builtin.unrealized_conversion_cast {{.*}} : index to !u32i
+// CIR:   gpu.block_id x
+// CIR:   builtin.unrealized_conversion_cast {{.*}} : index to !u32i
+// CIR:   gpu.block_id y
+// CIR:   builtin.unrealized_conversion_cast {{.*}} : index to !u32i
+// CIR:   gpu.block_id z
+// CIR:   builtin.unrealized_conversion_cast {{.*}} : index to !u32i
+// CIR:   gpu.block_dim x
+// CIR:   builtin.unrealized_conversion_cast {{.*}} : index to !u32i
+// CIR:   gpu.block_dim y
+// CIR:   builtin.unrealized_conversion_cast {{.*}} : index to !u32i
+// CIR:   gpu.block_dim z
+// CIR:   builtin.unrealized_conversion_cast {{.*}} : index to !u32i
+// CIR:   gpu.grid_dim x
+// CIR:   builtin.unrealized_conversion_cast {{.*}} : index to !u32i
+// CIR:   gpu.grid_dim y
+// CIR:   builtin.unrealized_conversion_cast {{.*}} : index to !u32i
+// CIR:   gpu.grid_dim z
+// CIR:   builtin.unrealized_conversion_cast {{.*}} : index to !u32i

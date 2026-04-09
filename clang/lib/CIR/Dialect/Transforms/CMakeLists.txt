@@ -27,6 +27,7 @@ add_clang_library(MLIRCIRTransforms
   MLIRCIR
   MLIRCIRInterfaces
   MLIRCIRTargetLowering
+  MLIRGPUDialect
   MLIROffloadDialect
   MLIROpenACCDialect
   MLIROpenMPDialect
