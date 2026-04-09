@@ -3754,6 +3754,12 @@ class OffloadingActionBuilder final {
     getDeviceDependences(OffloadAction::DeviceDependences &DA,
                          phases::ID CurPhase, phases::ID FinalPhase,
                          PhasesTy &Phases) override {
+      // In the CIR single-source offload path (-fclangir), the host cc1
+      // handles both host and device compilation in one pass.  Skip all
+      // device-side action creation (device cc1, ISA compilation, fat binary).
+      if (Args.hasArg(options::OPT_fclangir))
+        return ABRT_Success;
+
       if (!IsActive)
         return ABRT_Inactive;
 
@@ -4992,6 +4998,14 @@ Driver::BuildOffloadingActions(Compilation &C, llvm::opt::DerivedArgList &Args,
       ToolChains.push_back(TI->second);
 
     if (ToolChains.empty())
+      continue;
+
+    // In the CIR single-source offload path (-fclangir), the host cc1
+    // handles both host and device compilation in one pass.  Skip creating
+    // separate device actions for HIP/CUDA; the OffloadActions list stays
+    // empty and BuildOffloadingActions returns HostAction unchanged.
+    if (Args.hasArg(options::OPT_fclangir) &&
+        (Kind == Action::OFK_HIP || Kind == Action::OFK_Cuda))
       continue;
 
     types::ID InputType = Input.first;

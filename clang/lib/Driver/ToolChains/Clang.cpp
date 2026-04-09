@@ -5115,6 +5115,13 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (Args.hasArg(options::OPT_fclangir))
     CmdArgs.push_back("-fclangir");
 
+  // In the CIR single-source offload path, the host cc1 compiles both host and
+  // device code in one pass.  Pass -clangir-offload automatically so the user
+  // only needs -fclangir on the driver command line.
+  if (Args.hasArg(options::OPT_fclangir) && (IsHIP || IsCuda) &&
+      !IsCudaDevice && !IsHIPDevice)
+    CmdArgs.push_back("-clangir-offload");
+
   if (IsOpenMPDevice) {
     // We have to pass the triple of the host if compiling for an OpenMP device.
     std::string NormalizedTriple =
@@ -6126,6 +6133,23 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     }
     getTargetFeatures(D, *TC.getAuxTriple(), HostArgs, CmdArgs,
                       /*ForAS*/ false, /*IsAux*/ true);
+  }
+
+  // In the CIR single-source offload path the host cc1 (not a device cc1)
+  // needs -aux-target-cpu set to the GPU arch so that the CIR lowering
+  // pipeline can attach the ROCDL target and compile the gpu.module.
+  // The GPU arch comes from --offload-arch (e.g. gfx906).
+  // Note: --offload-arch is claimed by getOffloadArchs() before ConstructJob
+  // runs; use the raw compilation arg list (C.getArgs()) which preserves all
+  // original driver args regardless of claim status.
+  if (Args.hasArg(options::OPT_fclangir) && (IsHIP || IsCuda) &&
+      !IsCudaDevice && !IsHIPDevice &&
+      !Args.getLastArg(options::OPT_gpu_use_aux_triple_only)) {
+    if (const Arg *A =
+            C.getInputArgs().getLastArgNoClaim(options::OPT_offload_arch_EQ)) {
+      CmdArgs.push_back("-aux-target-cpu");
+      CmdArgs.push_back(Args.MakeArgString(A->getValue()));
+    }
   }
 
   TC.addClangTargetOptions(Args, CmdArgs, JA.getOffloadingDeviceKind());
