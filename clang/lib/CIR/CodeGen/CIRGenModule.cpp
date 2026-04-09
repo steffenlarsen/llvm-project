@@ -344,6 +344,22 @@ CIRGenModule::getAddrOfGlobal(GlobalDecl gd, ForDefinition_t isForDefinition) {
 }
 
 void CIRGenModule::emitGlobalDecl(const clang::GlobalDecl &d) {
+  // Check to see if we've already emitted this by looking up the current
+  // symbol in the module. This is necessary because:
+  //   1. Decls can end up in the deferred-decls queue multiple times.
+  //   2. Decls can be defined via aliasing (e.g. complete constructors aliased
+  //      to base constructors), which replaces the original FuncOp in the
+  //      module symbol table. We must re-lookup by name here to get the
+  //      current op, not a potentially-erased stale pointer.
+  {
+    StringRef mangledName = getMangledName(d);
+    if (mlir::Operation *currentOp = getGlobalValue(mangledName)) {
+      if (auto gvi = dyn_cast<cir::CIRGlobalValueInterface>(currentOp))
+        if (!gvi.isDeclaration())
+          return;
+    }
+  }
+
   // We call getAddrOfGlobal with isForDefinition set to ForDefinition in
   // order to get a Value with exactly the type we need, not something that
   // might have been created for another decl with the same mangled name but
@@ -357,22 +373,6 @@ void CIRGenModule::emitGlobalDecl(const clang::GlobalDecl &d) {
     op = getGlobalValue(getMangledName(d));
 
   assert(op && "expected a valid global op");
-
-  // Check to see if we've already emitted this. This is necessary for a
-  // couple of reasons: first, decls can end up in deferred-decls queue
-  // multiple times, and second, decls can end up with definitions in unusual
-  // ways (e.g. by an extern inline function acquiring a strong function
-  // redefinition). Just ignore those cases.
-  // TODO: Not sure what to map this to for MLIR
-  mlir::Operation *globalValueOp = op;
-  if (auto gv = dyn_cast<cir::GetGlobalOp>(op))
-    globalValueOp =
-        mlir::SymbolTable::lookupSymbolIn(getModule(), gv.getNameAttr());
-
-  if (auto cirGlobalValue =
-          dyn_cast<cir::CIRGlobalValueInterface>(globalValueOp))
-    if (!cirGlobalValue.isDeclaration())
-      return;
 
   // If this is OpenMP, check if it is legal to emit this global normally.
   assert(!cir::MissingFeatures::openMP());
@@ -388,33 +388,30 @@ void CIRGenModule::emitDeferred() {
 
   assert(!cir::MissingFeatures::openMP());
 
-  emitDeferredVTables();
-  // Emitting a vtable doesn't directly cause more vtables to
-  // become deferred, although it can cause functions to be
-  // emitted that then need those vtables.
-  assert(deferredVTables.empty());
-
   assert(!cir::MissingFeatures::cudaSupport());
 
-  // Stop if we're out of both deferred vtables and deferred declarations.
-  if (deferredDeclsToEmit.empty())
-    return;
+  // Use an iterative loop instead of recursion to avoid stack overflow when
+  // emitting deeply nested inline constructors (e.g. dim3 in HIP kernel stubs).
+  while (true) {
+    emitDeferredVTables();
+    // Emitting a vtable doesn't directly cause more vtables to
+    // become deferred, although it can cause functions to be
+    // emitted that then need those vtables.
+    assert(deferredVTables.empty());
 
-  // Grab the list of decls to emit. If emitGlobalDefinition schedules more
-  // work, it will not interfere with this.
-  std::vector<GlobalDecl> curDeclsToEmit;
-  curDeclsToEmit.swap(deferredDeclsToEmit);
+    // Stop if we're out of both deferred vtables and deferred declarations.
+    if (deferredDeclsToEmit.empty())
+      return;
 
-  for (const GlobalDecl &d : curDeclsToEmit) {
-    emitGlobalDecl(d);
+    // Grab the list of decls to emit. If emitGlobalDefinition schedules more
+    // work, it will not interfere with this.
+    std::vector<GlobalDecl> curDeclsToEmit;
+    curDeclsToEmit.swap(deferredDeclsToEmit);
 
-    // If we found out that we need to emit more decls, do that recursively.
-    // This has the advantage that the decls are emitted in a DFS and related
-    // ones are close together, which is convenient for testing.
-    if (!deferredVTables.empty() || !deferredDeclsToEmit.empty()) {
-      emitDeferred();
-      assert(deferredVTables.empty() && deferredDeclsToEmit.empty());
-    }
+    for (const GlobalDecl &d : curDeclsToEmit)
+      emitGlobalDecl(d);
+
+    // If emitting those decls produced more work, loop and process it.
   }
 }
 
@@ -533,8 +530,14 @@ void CIRGenModule::emitGlobal(clang::GlobalDecl gd) {
   assert(!cir::MissingFeatures::deferredCXXGlobalInit());
 
   llvm::StringRef mangledName = getMangledName(gd);
-  if (getGlobalValue(mangledName) != nullptr) {
-    // The value has already been used and should therefore be emitted.
+  if (mlir::Operation *existingOp = getGlobalValue(mangledName)) {
+    // The value has already been used and should therefore be emitted, but
+    // only if it hasn't been defined yet. If it already has a definition,
+    // adding it again would cause an infinite loop in emitDeferred.
+    if (auto gvi = dyn_cast<cir::CIRGlobalValueInterface>(existingOp)) {
+      if (!gvi.isDeclaration())
+        return;
+    }
     addDeferredDeclToEmit(gd);
   } else if (mustBeEmitted(global)) {
     // The value must be emitted, but cannot be emitted eagerly.
@@ -557,7 +560,6 @@ void CIRGenModule::emitGlobalFunctionDefinition(clang::GlobalDecl gd,
     funcOp = getAddrOfFunction(gd, funcType, /*ForVTable=*/false,
                                /*DontDefer=*/true, ForDefinition);
   }
-
   // Already emitted.
   if (!funcOp.isDeclaration())
     return;
@@ -3076,6 +3078,8 @@ CIRGenModule::createCIRFunction(mlir::Location loc, StringRef name,
     CIRGenFunction *cgf = this->curCGF;
     if (cgf)
       builder.setInsertionPoint(cgf->curFn);
+    else if (!builder.getInsertionBlock())
+      builder.setInsertionPointToEnd(theModule.getBody());
 
     func = cir::FuncOp::create(builder, loc, name, funcType);
 
