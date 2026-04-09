@@ -31,7 +31,9 @@ std::unique_ptr<llvm::Module>
 lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule,
                              llvm::LLVMContext &llvmCtx,
                              llvm::StringRef mlirSaveTempsOutFile = {},
-                             bool enableOffloadSplit = false);
+                             bool enableOffloadSplit = false,
+                             llvm::StringRef offloadArch = {},
+                             bool isDeviceCompilation = false);
 } // namespace direct
 } // namespace cir
 

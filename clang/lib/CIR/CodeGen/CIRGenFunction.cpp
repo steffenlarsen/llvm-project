@@ -794,7 +794,12 @@ cir::FuncOp CIRGenFunction::generateCode(clang::GlobalDecl gd, cir::FuncOp fn,
     } else if (isa<CXXConstructorDecl>(funcDecl)) {
       emitConstructorBody(args);
     } else if (getLangOpts().CUDA && !getLangOpts().CUDAIsDevice &&
-               funcDecl->hasAttr<CUDAGlobalAttr>()) {
+               funcDecl->hasAttr<CUDAGlobalAttr>() &&
+               !cgm.getCodeGenOpts().ClangIROffload) {
+      // In the unified offload CIR path (-fclangir-offload), the real kernel
+      // body is emitted into offload.func (exec_space=global) so that it can
+      // be compiled to a device binary.  The host-side device stub is not
+      // needed; kernel launch is handled by offload.kernel_launch instead.
       cgm.getCUDARuntime().emitDeviceStub(*this, fn, args);
     } else if (isa<CXXMethodDecl>(funcDecl) &&
                cast<CXXMethodDecl>(funcDecl)->isLambdaStaticInvoker()) {

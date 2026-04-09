@@ -38,6 +38,7 @@
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/Offload/Transforms/Passes.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
+#include "mlir/Target/LLVM/ROCDL/Target.h"
 #include "mlir/Dialect/OpenMP/Transforms/Passes.h"
 #include "mlir/Dialect/Ptr/IR/MemorySpaceInterfaces.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -3547,6 +3548,47 @@ struct FuncFuncToLLVMFuncOpLowering
   }
 };
 
+/// Convert kernel argument types of `gpu.launch_func` from CIR to LLVM.
+/// After the offload split pass, `gpu.launch_func` kernel args may carry CIR
+/// types (e.g. `!s32i`) because `offload.kernel_launch` args were not
+/// type-converted when the split produced the launch op.  `ConvertCIRToLLVMPass`
+/// marks the entire GPU dialect as legal, so we add this explicit pattern to
+/// ensure kernel args are in LLVM types before translation.
+struct GpuLaunchFuncArgConversionLowering
+    : public mlir::OpConversionPattern<mlir::gpu::LaunchFuncOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::gpu::LaunchFuncOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    // If all operands are already legal, nothing to do.
+    bool needsConversion = false;
+    for (auto [orig, conv] :
+         llvm::zip(op.getKernelOperands(), adaptor.getKernelOperands())) {
+      if (orig.getType() != conv.getType()) {
+        needsConversion = true;
+        break;
+      }
+    }
+    if (!needsConversion)
+      return mlir::failure(); // Let the legal-op check pass through.
+
+    // Re-create the launch_func with converted operands.
+    mlir::gpu::KernelDim3 gridSize{adaptor.getGridSizeX(), adaptor.getGridSizeY(),
+                                    adaptor.getGridSizeZ()};
+    mlir::gpu::KernelDim3 blockSize{adaptor.getBlockSizeX(),
+                                     adaptor.getBlockSizeY(),
+                                     adaptor.getBlockSizeZ()};
+    mlir::Type asyncTokenType =
+        op.getAsyncToken() ? op.getAsyncToken().getType() : mlir::Type{};
+    rewriter.replaceOpWithNewOp<mlir::gpu::LaunchFuncOp>(
+        op, op.getKernel(), gridSize, blockSize,
+        adaptor.getDynamicSharedMemorySize(), adaptor.getKernelOperands(),
+        asyncTokenType, adaptor.getAsyncDependencies());
+    return mlir::success();
+  }
+};
+
 /// Lower CIR ops inside `gpu.func` bodies that were produced by the offload
 /// split pass.  `ConvertCIRToLLVMPass` leaves the entire `gpu.module` legal
 /// (untouched) so that it can be compiled as a separate device module.  This
@@ -3671,6 +3713,15 @@ struct CIRAttachROCDLTargetPass
 
     gpuModule.setTargetsAttr(builder.getArrayAttr({rocdlTarget}));
 
+    // Set the offloading handler on the gpu.module. The handler is picked up
+    // by transformGpuModulesToBinaries and stored on the resulting gpu.BinaryOp.
+    // SelectObjectAttr (null target → first object) implements
+    // OffloadingLLVMTranslationAttrInterface which embeds the binary blob and
+    // emits mgpuLaunchKernel calls during MLIR→LLVM IR translation.
+    gpuModule.setOffloadingHandlerAttr(
+        mlir::gpu::SelectObjectAttr::get(gpuModule.getContext(),
+                                        /*target=*/mlir::Attribute{}));
+
     // The cir.gpu_chip attribute has served its purpose; remove it so that
     // downstream passes/verifiers don't see an unknown attribute.
     gpuModule->removeAttr("cir.gpu_chip");
@@ -3707,37 +3758,42 @@ struct CIRGpuModuleToBinaryPass
   void runOnOperation() override {
     mlir::ModuleOp module = getOperation();
 
-    // Erase gpu.module ops with no target attributes (no --offload-arch given).
-    // Also erase all gpu.launch_func ops that reference those modules, since
-    // verifier checks the kernel container symbol exists.
-    // Milestone 4: even for modules with targets, gpu.launch_func → hipLaunchKernel
-    // wiring is not yet done; erase all launch_func stubs now.
-    SmallVector<mlir::gpu::GPUModuleOp> toErase;
+    // Erase gpu.module ops with no target attributes (compiled without
+    // --offload-arch). Also erase any gpu.launch_func that references them
+    // because the verifier checks that the kernel container symbol exists.
+    SmallVector<mlir::gpu::GPUModuleOp> untargeted;
     module.walk([&](mlir::gpu::GPUModuleOp gpuMod) {
       if (!gpuMod.getTargetsAttr() || gpuMod.getTargetsAttr().empty())
-        toErase.push_back(gpuMod);
+        untargeted.push_back(gpuMod);
     });
-    {
-      // Erase gpu.launch_func ops before erasing the gpu.module they reference.
-      SmallVector<mlir::Operation *> launches;
-      module.walk([&](mlir::gpu::LaunchFuncOp l) { launches.push_back(l); });
-      for (mlir::Operation *op : launches)
+    if (!untargeted.empty()) {
+      // Build the set of untargeted module names so we can find the launches.
+      llvm::SmallDenseSet<mlir::StringAttr> untargetedNames;
+      for (mlir::gpu::GPUModuleOp m : untargeted)
+        untargetedNames.insert(m.getNameAttr());
+      SmallVector<mlir::Operation *> orphanLaunches;
+      module.walk([&](mlir::gpu::LaunchFuncOp l) {
+        if (untargetedNames.count(l.getKernelModuleName()))
+          orphanLaunches.push_back(l);
+      });
+      for (mlir::Operation *op : orphanLaunches)
         op->erase();
+      for (mlir::gpu::GPUModuleOp gpuMod : untargeted)
+        gpuMod.erase();
     }
-    for (mlir::gpu::GPUModuleOp gpuMod : toErase)
-      gpuMod.erase();
 
     // If there are any gpu.module ops remaining, they have targets and should
     // be compiled to binaries using the standard pass.
-    bool hasTargeted = false;
-    module.walk([&](mlir::gpu::GPUModuleOp) { hasTargeted = true; });
-    if (!hasTargeted)
+    SmallVector<mlir::gpu::GPUModuleOp> targeted;
+    module.walk([&](mlir::gpu::GPUModuleOp m) { targeted.push_back(m); });
+    if (targeted.empty())
       return;
 
-    // Run the standard GpuModuleToBinaryPass via gpu::transformGpuModulesToBinaries
-    // which processes all remaining gpu.module ops in-place.
-    if (mlir::failed(
-            mlir::gpu::transformGpuModulesToBinaries(module)))
+    // The offloading handler (SelectObjectAttr) is already stored on each
+    // gpu.module by CIRAttachROCDLTargetPass; transformGpuModulesToBinaries
+    // picks it up from the module and forwards it to the gpu.BinaryOp.
+    // Pass null handler here so the per-module handler is used.
+    if (mlir::failed(mlir::gpu::transformGpuModulesToBinaries(module)))
       signalPassFailure();
   }
 };
@@ -3787,6 +3843,15 @@ void ConvertCIRToLLVMPass::runOnOperation() {
   // These are produced by the CIR-to-CIR pre-lowering passes and must be
   // eliminated before LLVM IR export.
   patterns.add<UnrealizedCastFoldingLowering>(converter, patterns.getContext());
+  // Convert kernel arg types of gpu.launch_func from CIR to LLVM.  After the
+  // offload split pass, kernel args may carry CIR types (e.g. !s32i).
+  patterns.add<GpuLaunchFuncArgConversionLowering>(converter,
+                                                    patterns.getContext());
+  // Convert arith ops (e.g. arith.index_castui) that appear in the GPU launch
+  // dim extraction chain and would otherwise be left untranslatable in the LLVM
+  // IR export step.  These are present in host-side functions after the offload
+  // split pass expands the grid/block dim values.
+  mlir::arith::populateArithToLLVMConversionPatterns(converter, patterns);
 
   processCIRAttrs(module);
 
@@ -3796,10 +3861,18 @@ void ConvertCIRToLLVMPass::runOnOperation() {
   // Mark the entire GPU dialect as legal so that the device sub-module
   // (gpu.module with gpu.func / gpu.return) and host-side gpu.launch_func ops
   // are left untouched.  Device compilation is a separate downstream milestone;
-  // gpu.launch_func lowering to runtime calls is Milestone 4.
+  // gpu.launch_func lowering to runtime calls is done via registerGPUDialectTranslation.
   target.addLegalDialect<mlir::gpu::GPUDialect>();
-  // arith ops appear in the GPU launch dim conversion chain (arith.index_castui).
-  target.addLegalDialect<mlir::arith::ArithDialect>();
+  // gpu.launch_func is dynamically legal only when all kernel args are LLVM types.
+  target.addDynamicallyLegalOp<mlir::gpu::LaunchFuncOp>(
+      [&](mlir::gpu::LaunchFuncOp op) {
+        return llvm::all_of(op.getKernelOperands(), [&](mlir::Value v) {
+          return converter.isLegal(v.getType());
+        });
+      });
+  // arith ops that remain legal (no CIR types) don't need conversion.
+  target.addDynamicallyLegalDialect<mlir::arith::ArithDialect>(
+      [&](mlir::Operation *op) { return converter.isLegal(op); });
   target.addIllegalDialect<mlir::BuiltinDialect, cir::CIRDialect,
                            mlir::func::FuncDialect>();
 
@@ -5062,8 +5135,9 @@ std::unique_ptr<mlir::Pass> createConvertCIRToLLVMPass() {
   return std::make_unique<ConvertCIRToLLVMPass>();
 }
 
-void populateCIRToLLVMPasses(mlir::OpPassManager &pm,
-                              bool enableOffloadSplit) {
+void populateCIRToLLVMPasses(mlir::OpPassManager &pm, bool enableOffloadSplit,
+                              StringRef offloadArch,
+                              bool isDeviceCompilation = false) {
   mlir::populateCIRPreLoweringPasses(pm);
   pm.addPass(mlir::omp::createMarkDeclareTargetPass());
   if (enableOffloadSplit) {
@@ -5071,7 +5145,14 @@ void populateCIRToLLVMPasses(mlir::OpPassManager &pm,
     // func.func module + a device gpu.module.  This must run after all
     // CIR-to-CIR passes (which expect cir.func parents) and before the
     // CIR-to-LLVM pass (which cannot handle offload.* ops).
-    pm.addPass(mlir::offload::createOffloadSplitSingleSourcePass());
+    //
+    // Pass the GPU target chip so SplitSingleSourcePass stamps cir.gpu_chip
+    // on the generated gpu.module, enabling the ROCDL device compilation
+    // sub-pipeline (CIRAttachROCDLTargetPass → ConvertGpuOpsToROCDLOps →
+    // CIRGpuModuleToBinaryPass) for modules with an explicit --offload-arch.
+    mlir::offload::OffloadSplitSingleSourcePassOptions splitOpts;
+    splitOpts.targetChip = offloadArch.str();
+    pm.addPass(mlir::offload::createOffloadSplitSingleSourcePass(splitOpts));
     // Lower host-side offload runtime ops (stream create/destroy/sync,
     // device sync) to direct HIP/CUDA API calls.
     pm.addPass(mlir::offload::createOffloadLowerHostRuntimePass());
@@ -5080,22 +5161,19 @@ void populateCIRToLLVMPasses(mlir::OpPassManager &pm,
     // This pass operates on gpu.GPUModuleOp, so nest it under the module.
     pm.nest<mlir::gpu::GPUModuleOp>().addPass(
         createConvertCIRInGpuModulePass());
-    // Step 3.2: Attach #rocdl.target to each gpu.module (reads cir.gpu_chip
-    // attribute stamped by SplitSingleSourcePass), then run the standard
-    // ROCDL conversion and binary compilation passes.
-    // Step 3.2 ROCDL device compilation pipeline.  Only run when at least one
-    // gpu.module will have a target (i.e. --offload-arch was passed).  The
-    // enableDeviceCompilation flag is set below based on module inspection.
-    // NOTE: populateCIRToLLVMPasses cannot inspect the MLIR module directly,
-    // so we always add the passes; they self-guard via CIRAttachROCDLTargetPass
-    // (which erases modules without cir.gpu_chip) and CIRGpuModuleToBinaryPass
-    // (which skips targetless modules rather than failing).
-    pm.nest<mlir::gpu::GPUModuleOp>().addPass(
-        createCIRAttachROCDLTargetPass());
-    pm.nest<mlir::gpu::GPUModuleOp>().addPass(
-        mlir::createConvertGpuOpsToROCDLOps());
-    // Use a wrapper that silently skips targetless modules (no --offload-arch).
-    pm.addPass(createCIRGpuModuleToBinaryPass());
+    if (!isDeviceCompilation) {
+      // Host cc1: compile the device-side gpu.module to a HSACo binary and
+      // embed it as a gpu.BinaryOp.  On a device cc1 (triple=amdgcn), the
+      // entire module IS the device code — skip binary compilation and let
+      // ConvertCIRToLLVMPass emit LLVM IR directly for the GPU.
+      pm.nest<mlir::gpu::GPUModuleOp>().addPass(
+          createCIRAttachROCDLTargetPass());
+      pm.nest<mlir::gpu::GPUModuleOp>().addPass(
+          mlir::createConvertGpuOpsToROCDLOps());
+      // CIRGpuModuleToBinaryPass: compiles targeted gpu.module ops to binaries;
+      // silently erases gpu.module ops without a target (no --offload-arch).
+      pm.addPass(createCIRGpuModuleToBinaryPass());
+    }
   }
   pm.addPass(createConvertCIRToLLVMPass());
 }
@@ -5103,7 +5181,8 @@ void populateCIRToLLVMPasses(mlir::OpPassManager &pm,
 std::unique_ptr<llvm::Module>
 lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
                              StringRef mlirSaveTempsOutFile,
-                             bool enableOffloadSplit) {
+                             bool enableOffloadSplit, StringRef offloadArch,
+                             bool isDeviceCompilation) {
   llvm::TimeTraceScope scope("lower from CIR to LLVM directly");
 
   mlir::MLIRContext *mlirCtx = mlirModule.getContext();
@@ -5112,8 +5191,15 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
   // any dialect that has promised ConvertToLLVMPatternInterface has the
   // extension registered.  Register all common conversion interfaces so that
   // any dialect loaded transitively by the CIR/offload pipeline is covered.
+  // GPU/ROCDL dialect translations must also be registered before the pass
+  // manager runs because transformGpuModulesToBinaries (inside
+  // CIRGpuModuleToBinaryPass) performs an internal MLIR→LLVM IR translation
+  // to compile the device code to a binary blob.
   if (enableOffloadSplit) {
     mlir::DialectRegistry registry;
+    // ROCDL TargetAttrInterface: required by GpuModuleToBinaryPass to serialize
+    // the gpu.module to a device binary via the AMDGPU backend.
+    mlir::ROCDL::registerROCDLTargetInterfaceExternalModels(registry);
     mlir::arith::registerConvertArithToLLVMInterface(registry);
     mlir::cf::registerConvertControlFlowToLLVMInterface(registry);
     mlir::registerConvertFuncToLLVMInterface(registry);
@@ -5124,10 +5210,26 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
     mlir::ub::registerConvertUBToLLVMInterface(registry);
     mlir::vector::registerConvertVectorToLLVMInterface(registry);
     mlirCtx->appendDialectRegistry(registry);
+
+    // Register dialect translations needed by transformGpuModulesToBinaries
+    // (which runs the AMDGPU backend internally to produce the HSACo binary).
+    mlir::registerBuiltinDialectTranslation(*mlirCtx);
+    mlir::registerLLVMDialectTranslation(*mlirCtx);
+    mlir::registerGPUDialectTranslation(*mlirCtx);
+    mlir::registerROCDLDialectTranslation(*mlirCtx);
+    // Register SelectObjectAttr's OffloadingLLVMTranslationAttrInterface so
+    // that the gpu.BinaryOp offloading handler can be resolved during both
+    // transformGpuModulesToBinaries and the later translateModuleToLLVMIR.
+    {
+      mlir::DialectRegistry offloadRegistry;
+      mlir::gpu::registerOffloadingLLVMTranslationInterfaceExternalModels(
+          offloadRegistry);
+      mlirCtx->appendDialectRegistry(offloadRegistry);
+    }
   }
 
   mlir::PassManager pm(mlirCtx);
-  populateCIRToLLVMPasses(pm, enableOffloadSplit);
+  populateCIRToLLVMPasses(pm, enableOffloadSplit, offloadArch, isDeviceCompilation);
 
   (void)mlir::applyPassManagerCLOptions(pm);
 
@@ -5144,25 +5246,10 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
       mlirModule->print(out);
   }
 
-  // After CIRGpuModuleToBinaryPass, gpu.launch_func ops and targetless
-  // gpu.module ops are already gone.  Erase any gpu.binary ops produced by
-  // the standard GpuModuleToBinaryPass (Milestone 4 stub: not yet wired to
-  // hipLaunchKernel) and clean up dead arith/cast ops left from kernel args.
+  // Erase dead arith/cast ops left from kernel launch dimension computation
+  // (e.g. index_castui and unrealized_conversion_cast that become dead after
+  // gpu.launch_func is translated to mgpuLaunchKernel calls).
   if (enableOffloadSplit) {
-    SmallVector<mlir::Operation *> toErase;
-    // Erase any remaining gpu.launch_func (e.g. modules with targets where
-    // the launches weren't caught by CIRGpuModuleToBinaryPass).
-    mlirModule.walk([&](mlir::gpu::LaunchFuncOp op) { toErase.push_back(op); });
-    // Erase gpu.binary ops (Milestone 4 will wire these to hipLaunchKernel).
-    mlirModule.walk([&](mlir::gpu::BinaryOp op) { toErase.push_back(op); });
-    for (mlir::Operation *op : toErase)
-      op->erase();
-    // Erase dead ops left over from kernel launch dim/arg computation.
-    // After gpu.launch_func is erased, the index_castui and
-    // unrealized_conversion_cast ops that computed grid/block dimensions and
-    // typed kernel args become dead.  Remove them so that LLVM translation
-    // does not encounter ops from dialects with no registered translation.
-    // Iterate to fixpoint (each erasure may expose new dead ops above it).
     bool changed = true;
     while (changed) {
       changed = false;
@@ -5184,8 +5271,13 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
   mlir::registerLLVMDialectTranslation(*mlirCtx);
   mlir::registerOpenMPDialectTranslation(*mlirCtx);
   mlir::registerCIRDialectTranslation(*mlirCtx);
-  if (enableOffloadSplit)
+  if (enableOffloadSplit) {
+    // GPU dialect translation: gpu.BinaryOp → embedded device binary global +
+    // module ctor/dtor; gpu.LaunchFuncOp → mgpuLaunchKernel call.
+    // The mgpu* runtime wrappers delegate to HIP APIs (RocmRuntimeWrappers.cpp).
+    mlir::registerGPUDialectTranslation(*mlirCtx);
     mlir::registerROCDLDialectTranslation(*mlirCtx);
+  }
 
   llvm::TimeTraceScope translateScope("translateModuleToLLVMIR");
 

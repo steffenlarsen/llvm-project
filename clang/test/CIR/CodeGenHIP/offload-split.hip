@@ -1,11 +1,12 @@
 // Tests that -fclangir-offload splits a unified host+device module and
 // produces clean host-side LLVM IR.  The split pass converts:
 //   offload.func (host/host_device) → llvm.func (via func.func)
-//   offload.func (device/global)    → gpu.func  (stripped before LLVM export)
-//   offload.kernel_launch           → gpu.launch_func (stripped before LLVM export)
+//   offload.func (device/global)    → gpu.func  (inside gpu.module)
+//   offload.kernel_launch           → gpu.launch_func
 //
-// Milestone 2: gpu.module / gpu.launch_func are erased before LLVM IR
-// translation; device compilation is deferred to a later milestone.
+// Without --offload-arch / -aux-target-cpu no ROCDL target is attached and the
+// gpu.module is dropped; device compilation and kernel launch wiring require
+// an explicit GPU target (see offload-launch.hip).
 //
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -fclangir -clangir-offload \
 // RUN:            -x hip -fhip-new-launch-api \
@@ -23,7 +24,7 @@ __device__ void device_fn(int *a) {}
 // A kernel — must NOT appear in host LLVM IR.
 __global__ void kernel_fn(int a) {}
 
-// main launches the kernel; the launch itself is stripped in Milestone 2.
+// main launches the kernel; the launch is dropped (no GPU target attached).
 int main() {
   kernel_fn<<<1, 1>>>(42);
   return 0;

@@ -219,7 +219,11 @@ LogicalResult FuncOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult ReturnOp::verify() {
-  auto func = cast<FuncOp>((*this)->getParentOp());
+  // offload.return may appear inside nested regions (cir.if, cir.scope, etc.)
+  // within an offload.func body, so walk up the parent chain.
+  auto func = (*this)->getParentOfType<FuncOp>();
+  if (!func)
+    return emitOpError("must be inside an 'offload.func'");
   ArrayRef<Type> resultTypes = func.getFunctionType().getResults();
 
   if (getOperands().size() != resultTypes.size())

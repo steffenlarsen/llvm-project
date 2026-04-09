@@ -143,7 +143,6 @@ def Offload_FuncOp : Offload_Op<"func", [
 //===----------------------------------------------------------------------===//
 
 def Offload_ReturnOp : Offload_Op<"return", [
-    HasParent<"FuncOp">,
     Pure,
     ReturnLike,
     Terminator
