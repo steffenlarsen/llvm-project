@@ -439,6 +439,17 @@ CIRGenModule::getOrCreateStaticVarDecl(const VarDecl &d,
   mlir::Type lty = getTypes().convertTypeForMem(ty);
   assert(!cir::MissingFeatures::addressSpace());
 
+  // In the CIR offload path, function-local __shared__ variables require
+  // emitting offload.global_var(mem_space=shared) instead of cir.global, so
+  // that LowerSharedGlobalsPass can move them into the gpu.module.  This
+  // refactor is deferred: for now, flag it as NYI so that compilation of
+  // kernels with local-scope __shared__ fails loudly rather than silently
+  // producing incorrect host-side globals.
+  if (codeGenOpts.ClangIROffload && langOpts.CUDA && d.hasAttr<CUDASharedAttr>())
+    errorNYI(d.getSourceRange(),
+             "getOrCreateStaticVarDecl: local-scope __shared__ in offload CIR "
+             "path (use file-scope __shared__ instead)");
+
   // OpenCL variables in local address space and CUDA shared
   // variables cannot have an initializer.
   mlir::Attribute init = nullptr;

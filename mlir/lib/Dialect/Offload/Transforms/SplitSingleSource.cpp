@@ -230,18 +230,25 @@ struct SplitSingleSourcePass
     // Step 0: Handle offload.global_var ops.
     //
     // offload.global_var represents a device-qualified variable (__device__,
-    // __constant__, __shared__, __managed__).  Full device lowering (emitting
-    // an llvm.mlir.global in the gpu.module with the correct address space)
-    // is deferred to a later milestone.  For now we erase them so that the
-    // CIR-to-LLVM pass does not see unknown ops.  The host-side shadow
+    // __constant__, __shared__, __managed__).
+    //
+    // __shared__ (mem_space = shared): Leave in place — the subsequent
+    // LowerOffloadSharedGlobalsPass emits an llvm.mlir.global with addr_space=3
+    // into the gpu.module and then erases the offload.global_var.
+    //
+    // All other mem_spaces: full device lowering is deferred; erase now so that
+    // the CIR-to-LLVM pass does not see unknown ops.  The host-side shadow
     // cir.global (emitted by CIRGenModule::emitGlobalVarDefinition before
     // the offload.global_var conversion) is intentionally preserved so that
     // host code that takes the address of a device symbol still compiles.
     // ------------------------------------------------------------------ //
     SmallVector<offload::GlobalVarOp> globalVars;
     module.walk([&](offload::GlobalVarOp gv) { globalVars.push_back(gv); });
-    for (auto gv : globalVars)
+    for (auto gv : globalVars) {
+      if (gv.getMemSpace() == MemSpace::shared)
+        continue; // handled by LowerOffloadSharedGlobalsPass
       gv.erase();
+    }
 
     // ------------------------------------------------------------------ //
     // Step 1: Create the gpu.module to hold device functions.
@@ -294,6 +301,12 @@ namespace offload {
 void registerOffloadPasses() {
   registerPass([]() -> std::unique_ptr<Pass> {
     return std::make_unique<SplitSingleSourcePass>();
+  });
+  registerPass([]() -> std::unique_ptr<Pass> {
+    return createOffloadLowerHostRuntimePass();
+  });
+  registerPass([]() -> std::unique_ptr<Pass> {
+    return createOffloadLowerSharedGlobalsPass();
   });
 }
 

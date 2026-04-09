@@ -97,4 +97,42 @@ def OffloadLowerHostRuntimePass
   ];
 }
 
+//===----------------------------------------------------------------------===//
+// LowerSharedGlobalsPass
+//
+// Lowers offload.global_var ops with mem_space = shared to llvm.mlir.global
+// ops with addr_space = 3 (LDS / workgroup memory) inside the gpu.module
+// produced by SplitSingleSourcePass.
+//
+// Run this pass *after* SplitSingleSourcePass so the gpu.module exists, and
+// *before* ConvertCIRInGpuModulePass which requires LLVM dialect in gpu.func
+// bodies.
+//===----------------------------------------------------------------------===//
+
+def OffloadLowerSharedGlobalsPass
+    : Pass<"offload-lower-shared-globals", "::mlir::ModuleOp"> {
+  let summary = "Lower offload.global_var(mem_space=shared) to llvm.mlir.global in gpu.module";
+  let description = [{
+    For each `offload.global_var` with `mem_space = #offload.mem_space<shared>`
+    in the module, emits an `llvm.mlir.global internal` with `addr_space = 3`
+    (AMDGPU LDS / NVPTX shared memory) into the `gpu.module` sibling, then
+    erases the `offload.global_var`.
+
+    The type is converted from CIR to LLVM using the standard `LLVMTypeConverter`.
+    Shared memory cannot have initializers in CUDA/HIP; the emitted global is
+    zero-initialized (default value).
+  }];
+
+  let options = [
+    Option<"gpuModuleName", "gpu-module-name", "std::string",
+           /*default=*/"\"offload_device_module\"",
+           "Name of the gpu.module to insert shared globals into">
+  ];
+
+  let dependentDialects = [
+    "::mlir::gpu::GPUDialect",
+    "::mlir::LLVM::LLVMDialect"
+  ];
+}
+
 #endif // OFFLOAD_TRANSFORMS_PASSES

@@ -5192,6 +5192,14 @@ void populateCIRToLLVMPasses(mlir::OpPassManager &pm, bool enableOffloadSplit,
     mlir::offload::OffloadSplitSingleSourcePassOptions splitOpts;
     splitOpts.targetChip = offloadArch.str();
     pm.addPass(mlir::offload::createOffloadSplitSingleSourcePass(splitOpts));
+    // Lower offload.global_var(mem_space=shared) → llvm.mlir.global with
+    // addr_space=3 (AMDGPU LDS / NVPTX shared memory) inside the gpu.module.
+    // Must run after SplitSingleSourcePass (gpu.module now exists) and before
+    // ConvertCIRInGpuModulePass (which requires LLVM dialect in gpu.func).
+    mlir::offload::OffloadLowerSharedGlobalsPassOptions sharedOpts;
+    sharedOpts.gpuModuleName = "offload_device_module";
+    pm.addPass(
+        mlir::offload::createOffloadLowerSharedGlobalsPass(sharedOpts));
     // Lower host-side offload runtime ops (stream create/destroy/sync,
     // device sync) to direct HIP/CUDA API calls.
     pm.addPass(mlir::offload::createOffloadLowerHostRuntimePass());

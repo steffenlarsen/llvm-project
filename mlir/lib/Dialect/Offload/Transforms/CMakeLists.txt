@@ -1,6 +1,7 @@
 add_mlir_dialect_library(MLIROffloadTransforms
   SplitSingleSource.cpp
   LowerHostRuntime.cpp
+  LowerSharedGlobals.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/Offload
@@ -13,6 +14,8 @@ add_mlir_dialect_library(MLIROffloadTransforms
   MLIRFuncDialect
   MLIRGPUDialect
   MLIRIR
+  MLIRLLVMCommonConversion
+  MLIRLLVMDialect
   MLIROffloadDialect
   MLIRPass
   MLIRSupport
