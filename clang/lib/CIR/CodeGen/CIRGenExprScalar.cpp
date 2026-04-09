@@ -272,6 +272,58 @@ public:
                                convertType(e->getType()), e->getPackLength());
   }
   mlir::Value VisitPseudoObjectExpr(PseudoObjectExpr *e) {
+    // HIP/CUDA: property accesses on threadIdx/blockIdx/blockDim/gridDim use
+    // __declspec(property) in the ROCm headers, which produces PseudoObjectExpr
+    // nodes in the AST.  The result expression is a member CallExpr whose
+    // callee is a MemberExpr like "->__get_x" on a base of type
+    // __hip_builtin_threadIdx_t / __hip_builtin_blockIdx_t / etc.
+    // Intercept these and emit cir.gpu_builtin_var directly.
+    if (cgf.getLangOpts().HIP || cgf.getLangOpts().CUDA) {
+      if (const Expr *result = e->getResultExpr()) {
+        const Expr *inner = result->IgnoreParenImpCasts();
+        // ROCm headers use __declspec(property) which produces a plain CallExpr
+        // whose callee is ImplicitCastExpr(FunctionToPointerDecay, MemberExpr).
+        // The MemberExpr refers to a static getter like __get_x declared inside
+        // __hip_builtin_threadIdx_t / blockIdx_t / blockDim_t / gridDim_t.
+        if (const auto *call = dyn_cast<CallExpr>(inner)) {
+          if (const auto *memExpr =
+                  dyn_cast<MemberExpr>(call->getCallee()->IgnoreParenImpCasts())) {
+            StringRef methodName = memExpr->getMemberDecl()->getName();
+            using Kind = cir::GpuBuiltinKind;
+            using Dim = cir::GpuBuiltinDim;
+            std::optional<Dim> dim;
+            if (methodName == "__get_x")
+              dim = Dim::x;
+            else if (methodName == "__get_y")
+              dim = Dim::y;
+            else if (methodName == "__get_z")
+              dim = Dim::z;
+
+            if (dim) {
+              // Determine the kind from the parent record of the getter method.
+              std::optional<Kind> kind;
+              if (const auto *method =
+                      dyn_cast<CXXMethodDecl>(memExpr->getMemberDecl())) {
+                StringRef typeName = method->getParent()->getName();
+                if (typeName == "__hip_builtin_threadIdx_t")
+                  kind = Kind::threadIdx;
+                else if (typeName == "__hip_builtin_blockIdx_t")
+                  kind = Kind::blockIdx;
+                else if (typeName == "__hip_builtin_blockDim_t")
+                  kind = Kind::blockDim;
+                else if (typeName == "__hip_builtin_gridDim_t")
+                  kind = Kind::gridDim;
+              }
+              if (kind) {
+                mlir::Location loc = cgf.getLoc(e->getExprLoc());
+                return cir::GpuBuiltinVarOp::create(
+                    builder, loc, cgf.builder.getUInt32Ty(), *kind, *dim);
+              }
+            }
+          }
+        }
+      }
+    }
     cgf.cgm.errorNYI(e->getSourceRange(), "ScalarExprEmitter: pseudo object");
     return {};
   }
