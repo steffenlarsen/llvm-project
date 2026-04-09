@@ -3628,6 +3628,50 @@ struct GpuLaunchFuncArgConversionLowering
   }
 };
 
+/// Convert all block argument types inside a `gpu.func` body from CIR types
+/// to LLVM types.  `populateFunctionOpInterfaceTypeConversionPattern` only
+/// converts the entry block (the function signature); inner blocks produced by
+/// `CIRFlattenCFGPass` (e.g. from `cir.ternary` → `cir.brcond` with block
+/// args) may still carry CIR types (e.g. `!cir.bool` → `i1`).  This pattern
+/// calls `convertRegionTypes` which walks every block in the function body and
+/// converts their argument types, satisfying `converter.isLegal(&fn.getBody())`.
+struct GPUFuncAllBlockArgsConversionPattern
+    : public mlir::OpConversionPattern<mlir::gpu::GPUFuncOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::gpu::GPUFuncOp funcOp, OpAdaptor /*adaptor*/,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    // Convert the function type (signature).
+    mlir::FunctionType fnType =
+        mlir::dyn_cast<mlir::FunctionType>(funcOp.getFunctionType());
+    if (!fnType)
+      return mlir::failure();
+
+    mlir::TypeConverter::SignatureConversion sigConv(fnType.getNumInputs());
+    if (mlir::failed(
+            typeConverter->convertSignatureArgs(fnType.getInputs(), sigConv)))
+      return mlir::failure();
+    llvm::SmallVector<mlir::Type> newResults;
+    if (mlir::failed(typeConverter->convertTypes(fnType.getResults(), newResults)))
+      return mlir::failure();
+
+    auto newFnType = mlir::FunctionType::get(rewriter.getContext(),
+                                             sigConv.getConvertedTypes(),
+                                             newResults);
+    rewriter.modifyOpInPlace(funcOp, [&] { funcOp.setType(newFnType); });
+
+    // Convert ALL block argument types in the entire function body (including
+    // inner blocks from flattened control flow).
+    if (!funcOp.getBody().empty()) {
+      if (mlir::failed(rewriter.convertRegionTypes(&funcOp.getBody(),
+                                                   *typeConverter, &sigConv)))
+        return mlir::failure();
+    }
+    return mlir::success();
+  }
+};
+
 /// Lower CIR ops inside `gpu.func` bodies that were produced by the offload
 /// split pass.  `ConvertCIRToLLVMPass` leaves the entire `gpu.module` legal
 /// (untouched) so that it can be compiled as a separate device module.  This
@@ -3686,12 +3730,10 @@ struct ConvertCIRInGpuModulePass
     // they will be cleaned up by the post-conversion dead-code sweep.
     target.addLegalDialect<mlir::arith::ArithDialect>();
 
-    // Add a signature-conversion pattern for gpu.func: rewrites CIR arg/result
-    // types in the function signature to LLVM types.  The body ops are already
-    // converted by the CIR patterns above; this just fixes the block-arg types
-    // so that the subsequent ConvertGpuOpsToROCDLOps pass sees a pure LLVM sig.
-    mlir::populateFunctionOpInterfaceTypeConversionPattern<mlir::gpu::GPUFuncOp>(
-        patterns, converter);
+    // Convert ALL block argument types in gpu.func bodies (entry block +
+    // all inner blocks from flattened control flow such as cir.ternary).
+    patterns.add<GPUFuncAllBlockArgsConversionPattern>(converter,
+                                                       &getContext());
 
     if (failed(applyPartialConversion(gpuModule, target, std::move(patterns))))
       signalPassFailure();
@@ -5189,6 +5231,11 @@ void populateCIRToLLVMPasses(mlir::OpPassManager &pm, bool enableOffloadSplit,
     // on the generated gpu.module, enabling the ROCDL device compilation
     // sub-pipeline (CIRAttachROCDLTargetPass → ConvertGpuOpsToROCDLOps →
     // CIRGpuModuleToBinaryPass) for modules with an explicit --offload-arch.
+    // Flatten structured CIR control flow (cir.ternary, cir.if, cir.for, …)
+    // before the split so that gpu.func bodies contain only branch-based CFG
+    // ops.  ConvertCIRInGpuModulePass uses applyPartialConversion, which does
+    // not recurse into region-bearing structured ops like cir.ternary.
+    pm.addPass(mlir::createCIRFlattenCFGPass());
     mlir::offload::OffloadSplitSingleSourcePassOptions splitOpts;
     splitOpts.targetChip = offloadArch.str();
     pm.addPass(mlir::offload::createOffloadSplitSingleSourcePass(splitOpts));
