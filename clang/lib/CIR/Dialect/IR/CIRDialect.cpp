@@ -1895,10 +1895,17 @@ cir::GetGlobalOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   // the referenced cir.global or cir.func op.
   mlir::Operation *op =
       symbolTable.lookupNearestSymbolFrom(*this, getNameAttr());
-  if (op == nullptr || !(isa<GlobalOp>(op) || isa<FuncOp>(op)))
+  if (op == nullptr)
     return emitOpError("'")
            << getName()
            << "' does not reference a valid cir.global or cir.func";
+
+  // In the unified offload CIR path, cir.get_global may reference an
+  // offload.global_var (a device-side variable) before the module is split
+  // into host and device parts.  Allow any symbol op as the target; the type
+  // check below only applies to cir.global / cir.func targets.
+  if (!isa<GlobalOp>(op) && !isa<FuncOp>(op))
+    return success();
 
   mlir::Type symTy;
   mlir::ptr::MemorySpaceAttrInterface symAddrSpaceAttr{};

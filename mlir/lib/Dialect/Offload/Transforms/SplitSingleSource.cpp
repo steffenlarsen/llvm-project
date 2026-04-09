@@ -245,8 +245,10 @@ struct SplitSingleSourcePass
     SmallVector<offload::GlobalVarOp> globalVars;
     module.walk([&](offload::GlobalVarOp gv) { globalVars.push_back(gv); });
     for (auto gv : globalVars) {
-      if (gv.getMemSpace() == MemSpace::shared)
-        continue; // handled by LowerOffloadSharedGlobalsPass
+      if (gv.getMemSpace() == MemSpace::shared ||
+          gv.getMemSpace() == MemSpace::device ||
+          gv.getMemSpace() == MemSpace::constant)
+        continue; // handled by LowerSharedGlobalsPass
       gv.erase();
     }
 

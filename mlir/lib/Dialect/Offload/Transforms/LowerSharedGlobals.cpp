@@ -1,4 +1,4 @@
-//===- LowerSharedGlobals.cpp - Lower offload shared globals to gpu.module -===//
+//===- LowerSharedGlobals.cpp - Lower offload device globals to gpu.module -===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,9 +6,16 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This pass lowers `offload.global_var` ops with `mem_space = shared` to
-// `llvm.mlir.global` ops with `addr_space = 3` (AMDGPU LDS / NVPTX shared
-// memory) inside the `gpu.module` produced by `SplitSingleSourcePass`.
+// This pass lowers `offload.global_var` ops with device-side mem_spaces to
+// `llvm.mlir.global` inside the `gpu.module` produced by `SplitSingleSourcePass`.
+//
+//   mem_space = shared   → addr_space = 3  (AMDGPU LDS / NVPTX .shared)
+//   mem_space = device   → addr_space = 1  (AMDGPU / NVPTX global memory)
+//   mem_space = constant → addr_space = 4  (AMDGPU / NVPTX constant memory)
+//
+// All three address space values are the same for both AMDGPU and NVPTX.
+// The globals are always zero-initialized in the device binary; the host sets
+// device/constant values via hipMemcpyToSymbol / cudaMemcpyToSymbol.
 //
 // Run this pass *after* SplitSingleSourcePass (so the gpu.module exists) and
 // *before* ConvertCIRInGpuModulePass (which requires LLVM dialect in gpu.func
@@ -43,6 +50,23 @@ using namespace mlir::offload;
 
 namespace {
 
+/// Maps an offload MemSpace to the LLVM address space integer and isConstant
+/// flag for the gpu.module global.  Returns nullopt for mem_spaces that are not
+/// lowered by this pass (e.g. managed, generic).
+struct DeviceGlobalInfo {
+  unsigned addrSpace;
+  bool isConstant;
+};
+
+static std::optional<DeviceGlobalInfo> getDeviceGlobalInfo(MemSpace ms) {
+  switch (ms) {
+  case MemSpace::shared:   return DeviceGlobalInfo{3, false};
+  case MemSpace::device:   return DeviceGlobalInfo{1, false};
+  case MemSpace::constant: return DeviceGlobalInfo{4, true};
+  default:                 return std::nullopt;
+  }
+}
+
 struct LowerSharedGlobalsPass
     : offload::impl::OffloadLowerSharedGlobalsPassBase<LowerSharedGlobalsPass> {
 
@@ -61,45 +85,49 @@ struct LowerSharedGlobalsPass
     if (!gpuModule)
       return; // No gpu.module found — nothing to do.
 
-    // Collect all offload.global_var ops with mem_space = shared.
-    SmallVector<offload::GlobalVarOp> sharedVars;
+    // Collect all offload.global_var ops that map to device-side globals.
+    SmallVector<offload::GlobalVarOp> deviceVars;
     module.walk([&](offload::GlobalVarOp gv) {
-      if (gv.getMemSpace() == MemSpace::shared)
-        sharedVars.push_back(gv);
+      if (getDeviceGlobalInfo(gv.getMemSpace()))
+        deviceVars.push_back(gv);
     });
-    if (sharedVars.empty())
+    if (deviceVars.empty())
       return;
 
     // Build a type converter to map CIR/standard types to LLVM types.
     // We use the standard LLVMTypeConverter which handles builtin types
-    // (i1, iN, f32, f64, memref, etc.) and LLVM-legal types natively.
+    // (i1, iN, f32, f64, arrays, etc.) and LLVM-legal types natively.
     LLVMTypeConverter converter(ctx);
 
     OpBuilder builder(ctx);
     builder.setInsertionPointToStart(gpuModule.getBody());
 
-    for (offload::GlobalVarOp gv : sharedVars) {
+    for (offload::GlobalVarOp gv : deviceVars) {
+      auto info = getDeviceGlobalInfo(gv.getMemSpace());
+      assert(info && "only device vars collected above");
+
       mlir::Type elemTy = gv.getType();
 
       // Convert the type using the LLVM type converter.
       mlir::Type llvmTy = converter.convertType(elemTy);
       if (!llvmTy) {
         gv.emitError("LowerSharedGlobals: cannot convert type ")
-            << elemTy << " to LLVM for shared variable @" << gv.getSymName();
+            << elemTy << " to LLVM for device variable @" << gv.getSymName();
         signalPassFailure();
         return;
       }
 
-      // Emit llvm.mlir.global internal @name {addr_space = 3} : llvmTy
-      // inside the gpu.module.  Shared memory cannot have initializers in
-      // CUDA/HIP — use the default zero-initialized (no value attribute).
+      // Emit llvm.mlir.global internal @name {addr_space = N} : llvmTy
+      // inside the gpu.module.  All device-side globals are zero-initialized
+      // at device binary load time; the host sets values via
+      // hipMemcpyToSymbol / cudaMemcpyToSymbol.
       mlir::LLVM::GlobalOp::create(
           builder, gv.getLoc(), llvmTy,
-          /*isConstant=*/false, mlir::LLVM::Linkage::Internal,
+          /*isConstant=*/info->isConstant, mlir::LLVM::Linkage::Internal,
           gv.getSymName(),
           /*value=*/mlir::Attribute{},
           /*alignment=*/0,
-          /*addrSpace=*/3);
+          /*addrSpace=*/info->addrSpace);
 
       // Erase the offload.global_var from the unified module.
       gv.erase();

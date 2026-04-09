@@ -987,10 +987,18 @@ CIRGenModule::getOrCreateCIRGlobal(StringRef mangledName, mlir::Type ty,
   // Lookup the entry, lazily creating it if necessary.
   cir::GlobalOp entry;
   if (mlir::Operation *v = getGlobalValue(mangledName)) {
-    if (!isa<cir::GlobalOp>(v))
-      errorNYI(d->getSourceRange(),
+    if (isa<mlir::offload::GlobalVarOp>(v)) {
+      // In the offload CIR path a device-qualified variable has already been
+      // converted from cir.global to offload.global_var by emitGlobalVarDefinition.
+      // Any subsequent lookup (e.g. from a kernel body reference) finds the
+      // offload.global_var; skip the normal GlobalOp path and fall through to
+      // create a host-side cir.global extern declaration if needed.
+    } else if (!isa<cir::GlobalOp>(v)) {
+      errorNYI(d ? d->getSourceRange() : SourceRange(),
                "getOrCreateCIRGlobal: global with non-GlobalOp type");
-    entry = cast<cir::GlobalOp>(v);
+    } else {
+      entry = cast<cir::GlobalOp>(v);
+    }
   }
 
   if (entry) {
@@ -1151,6 +1159,27 @@ mlir::Value CIRGenModule::getAddrOfGlobalVar(const VarDecl *d, mlir::Type ty,
   if (!ty)
     ty = getTypes().convertTypeForMem(astTy);
 
+  // In the unified offload CIR path, device-qualified variables are
+  // represented as offload.global_var in the module.  If the symbol has
+  // already been converted, emit the cir.get_global against the
+  // offload.global_var directly (same name), rather than creating a new
+  // cir.global and causing a symbol redefinition error.
+  if (codeGenOpts.ClangIROffload && getLangOpts().CUDA) {
+    StringRef mn = getMangledName(d);
+    if (mlir::Operation *existing = getGlobalValue(mn)) {
+      if (auto offloadGV = dyn_cast<mlir::offload::GlobalVarOp>(existing)) {
+        mlir::Type elemTy =
+            ty ? ty : getTypes().convertTypeForMem(d->getType());
+        mlir::Type ptrTy = builder.getPointerTo(elemTy);
+        bool tlsAccess = d->getTLSKind() != VarDecl::TLS_None;
+        return cir::GetGlobalOp::create(
+            builder, getLoc(d->getSourceRange()), ptrTy,
+            builder.getStringAttr(offloadGV.getSymName()), tlsAccess,
+            /*static_local=*/false);
+      }
+    }
+  }
+
   bool tlsAccess = d->getTLSKind() != VarDecl::TLS_None;
   cir::GlobalOp g = getOrCreateCIRGlobal(d, ty, isForDefinition);
   mlir::Type ptrTy = builder.getPointerTo(g.getSymType(), g.getAddrSpaceAttr());
@@ -1176,6 +1205,24 @@ void CIRGenModule::emitGlobalVarDefinition(const clang::VarDecl *vd,
     errorNYI(vd->getSourceRange(),
              "emitGlobalVarDefinition: emit OpenCL/OpenMP global variable");
     return;
+  }
+
+  // In the unified offload CIR path, device-qualified variables are converted
+  // to offload.global_var by the first call to emitGlobalVarDefinition.  If a
+  // second call arrives for the same decl (e.g. tentative-then-definition), the
+  // offload.global_var already exists; creating a new cir.global with the same
+  // mangled name would cause a symbol redefinition error.  Skip early.
+  if (codeGenOpts.ClangIROffload && getLangOpts().CUDA) {
+    bool isDeviceQualified = vd->hasAttr<CUDASharedAttr>() ||
+                             vd->hasAttr<CUDAConstantAttr>() ||
+                             vd->hasAttr<CUDADeviceAttr>() ||
+                             vd->hasAttr<HIPManagedAttr>();
+    if (isDeviceQualified) {
+      StringRef mn = getMangledName(vd);
+      if (mlir::Operation *existing = getGlobalValue(mn))
+        if (isa<mlir::offload::GlobalVarOp>(existing))
+          return;
+    }
   }
 
   // Whether the definition of the variable is available externally.
@@ -1422,6 +1469,10 @@ void CIRGenModule::emitGlobalVarDefinition(const clang::VarDecl *vd,
         lastGlobalOp = nullptr;
       builder.setInsertionPointAfter(offloadGV);
       gv.erase();
+      // After erasing gv the builder is left pointing mid-module (after the
+      // offload.global_var).  Reset to the canonical end-of-module position so
+      // that subsequent createCIRFunction calls find a valid insertion point.
+      builder.setInsertionPointToEnd(theModule.getBody());
     }
   }
 }
@@ -3046,9 +3097,6 @@ CIRGenModule::createCIRFunction(mlir::Location loc, StringRef name,
 
     // Mark C++ special member functions (Constructor, Destructor etc.)
     setCXXSpecialMemberAttr(func, funcDecl);
-
-    if (!cgf)
-      theModule.push_back(func);
 
     if (this->getLangOpts().OpenACC) {
       // We only have to handle this attribute, since OpenACCAnnotAttrs are

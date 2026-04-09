@@ -5,8 +5,11 @@
 
 // Tests for OffloadLowerSharedGlobalsPass.
 //
-// offload.global_var with mem_space = shared should be lowered to
-// llvm.mlir.global internal with addr_space = 3 inside the gpu.module.
+// offload.global_var with device-side mem_spaces should be lowered to
+// llvm.mlir.global inside the gpu.module with the correct addr_space:
+//   shared   → addr_space = 3
+//   device   → addr_space = 1
+//   constant → addr_space = 4 (isConstant = true)
 // The offload.global_var should be erased from the parent module.
 
 //===----------------------------------------------------------------------===//
@@ -48,15 +51,53 @@ module attributes {gpu.container_module} {
 // -----
 
 //===----------------------------------------------------------------------===//
-// Non-shared variables should NOT appear in gpu.module as llvm.mlir.global.
+// Device variable: i32 → addr_space = 1
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: gpu.module @offload_device_module
+// CHECK:         llvm.mlir.global internal @dev_var() {addr_space = 1 : i32} : i32
+// CHECK-NOT:   offload.global_var @dev_var
+
+module attributes {gpu.container_module} {
+  offload.global_var @dev_var : i32
+      mem_space = #offload.mem_space<device>
+
+  offload.func @kernel(%arg0 : index) exec_space = #offload.exec_space<global> {
+    offload.return
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Constant variable: [4 x f32] → addr_space = 4, isConstant = true
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: gpu.module @offload_device_module
+// CHECK:         llvm.mlir.global internal constant @lut() {addr_space = 4 : i32} : !llvm.array<4 x f32>
+// CHECK-NOT:   offload.global_var @lut
+
+module attributes {gpu.container_module} {
+  offload.global_var @lut : !llvm.array<4 x f32>
+      mem_space = #offload.mem_space<constant>
+
+  offload.func @kernel(%arg0 : index) exec_space = #offload.exec_space<global> {
+    offload.return
+  }
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Managed variables should be erased (not lowered by this pass).
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: gpu.module @offload_device_module
 // CHECK-NOT:   llvm.mlir.global
 
 module attributes {gpu.container_module} {
-  offload.global_var @dev_var : i32
-      mem_space = #offload.mem_space<device>
+  offload.global_var @managed_var : i32
+      mem_space = #offload.mem_space<managed>
 
   offload.func @kernel(%arg0 : index) exec_space = #offload.exec_space<global> {
     offload.return
