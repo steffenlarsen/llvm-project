@@ -1221,7 +1221,6 @@ void CIRGenFunction::emitOffloadSharedMemDecl(const VarDecl &d) {
   // DeclRefExpr → emitDeclRefLValue uses resolve to this pointer without
   // touching the global symbol table.
   mlir::Location loc = getLoc(d.getLocation());
-  mlir::MLIRContext *ctx = getBuilder().getContext();
   mlir::Value zero = mlir::arith::ConstantIndexOp::create(getBuilder(), loc, 0);
 
   // For `extern __shared__ T arr[]`, the VarDecl type is an incomplete array

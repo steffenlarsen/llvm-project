@@ -2,7 +2,7 @@
 // instead of plain cir.call ops.
 //
 // The CIR emitter intercepts recognized HIP runtime calls in
-// CIRGenOffloadRuntime::emitHIPRuntimeCall() and emits:
+// CIRGenOffloadRuntime::emitCUDARuntimeCall() and emits:
 //   hipDeviceSynchronize()   → offload.device_sync
 //   hipStreamCreate(&s)      → offload.stream_create + store
 //   hipStreamDestroy(s)      → offload.stream_destroy

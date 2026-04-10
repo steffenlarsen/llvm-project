@@ -197,7 +197,7 @@ static mlir::Value makeHipSuccess(CIRGenBuilderTy &builder, mlir::Location loc,
 }
 
 std::optional<RValue>
-CIRGenOffloadRuntime::emitHIPRuntimeCall(CIRGenFunction &cgf,
+CIRGenOffloadRuntime::emitCUDARuntimeCall(CIRGenFunction &cgf,
                                          const CallExpr *e) {
   // Only intercept plain function calls with a named callee.
   const FunctionDecl *fd =

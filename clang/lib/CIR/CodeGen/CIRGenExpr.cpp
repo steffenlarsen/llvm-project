@@ -2206,7 +2206,7 @@ RValue CIRGenFunction::emitCallExpr(const clang::CallExpr *e,
   // Give the CUDA/HIP runtime a chance to intercept runtime library calls
   // (e.g. hipDeviceSynchronize, hipStreamCreate) and emit offload dialect ops.
   if (getLangOpts().CUDA) {
-    if (auto rv = cgm.getCUDARuntime().emitHIPRuntimeCall(*this, e))
+    if (auto rv = cgm.getCUDARuntime().emitCUDARuntimeCall(*this, e))
       return *rv;
   }
 

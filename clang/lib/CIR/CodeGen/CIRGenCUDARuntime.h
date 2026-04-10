@@ -50,7 +50,7 @@ public:
   /// Intercept a HIP/CUDA runtime library call and emit offload dialect ops.
   /// Returns the RValue if the call was intercepted, or nullopt to fall through
   /// to normal CIR call emission.
-  virtual std::optional<RValue> emitHIPRuntimeCall(CIRGenFunction &cgf,
+  virtual std::optional<RValue> emitCUDARuntimeCall(CIRGenFunction &cgf,
                                                    const CallExpr *e) {
     return std::nullopt;
   }

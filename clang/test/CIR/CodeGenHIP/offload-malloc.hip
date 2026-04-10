@@ -2,7 +2,7 @@
 // ops instead of plain cir.call ops.
 //
 // The CIR emitter intercepts recognized HIP runtime calls in
-// CIRGenOffloadRuntime::emitHIPRuntimeCall() and emits:
+// CIRGenOffloadRuntime::emitCUDARuntimeCall() and emits:
 //   hipMalloc(&ptr, size)         → offload.malloc %size alloc_type=<device>
 //   hipHostMalloc(&ptr, size, fl) → offload.malloc %size alloc_type=<host>
 //   hipMallocManaged(&ptr,size,fl)→ offload.malloc %size alloc_type=<managed>

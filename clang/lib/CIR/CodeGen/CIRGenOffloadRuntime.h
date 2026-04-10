@@ -39,7 +39,7 @@ public:
                                 ReturnValueSlot retValue) override;
 
   /// Intercept HIP runtime calls and emit offload dialect ops instead.
-  std::optional<RValue> emitHIPRuntimeCall(CIRGenFunction &cgf,
+  std::optional<RValue> emitCUDARuntimeCall(CIRGenFunction &cgf,
                                            const CallExpr *e) override;
 
   /// In the offload model kernels are identified by their offload.func symbol
