@@ -83,9 +83,8 @@ static mlir::Value emitDim3Component(CIRGenFunction &cgf,
     }
     ++idx;
   }
-  if (!targetField) {
+  if (!targetField)
     return mlir::arith::ConstantIndexOp::create(builder, loc, 1);
-  }
 
   LValue fieldLV = cgf.emitLValueForField(base, targetField);
   mlir::Value fieldVal = cgf.emitLoadOfScalar(fieldLV, SourceLocation());
@@ -108,7 +107,7 @@ CIRGenOffloadRuntime::CIRGenOffloadRuntime(CIRGenModule &cgm)
     : CIRGenCUDARuntime(cgm) {}
 
 mlir::Operation *CIRGenOffloadRuntime::getKernelHandle(cir::FuncOp fn,
-                                                       GlobalDecl gd) {
+                                                       GlobalDecl) {
   // In the offload model the kernel IS the function — no separate handle.
   return fn.getOperation();
 }
