@@ -17,6 +17,7 @@
 #include "clang/AST/GlobalDecl.h"
 #include "clang/Basic/Cuda.h"
 
+#include "clang/CIR/Dialect/IR/CIRDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Offload/IR/OffloadDialect.h"
 #include "mlir/IR/Builders.h"
@@ -459,6 +460,33 @@ CIRGenOffloadRuntime::emitHIPRuntimeCall(CIRGenFunction &cgf,
 
     mlir::offload::MemcpyToSymbolOp::create(builder, loc, symName, src,
                                              countIdx);
+    mlir::Type retTy = cgf.convertType(e->getType());
+    return RValue::get(makeHipSuccess(builder, loc, retTy));
+  }
+
+  // hipMemset(void *dst, int value, size_t size)
+  //   → offload.memset %dst, %u8_pattern, %size_idx
+  //
+  // hipMemset fills each byte with the low byte of `value`, so the pattern is
+  // semantically 1 byte wide.  We truncate the CIR int to i8 (unsigned char)
+  // so the lowering pass can dispatch on bit-width → hipMemset (i8 → 1 byte).
+  if (name == "hipMemset") {
+    mlir::Value dst  = cgf.emitScalarExpr(e->getArg(0));
+    mlir::Value val  = cgf.emitScalarExpr(e->getArg(1));
+    mlir::Value size = cgf.emitScalarExpr(e->getArg(2));
+    mlir::Type indexTy = mlir::IndexType::get(ctx);
+    mlir::Value sizeIdx =
+        mlir::UnrealizedConversionCastOp::create(
+            builder, loc, TypeRange{indexTy}, ValueRange{size})
+            .getResult(0);
+    // Truncate to i8 so the lowering pass knows pattern_size = 1.
+    mlir::Type i8Ty = cir::IntType::get(ctx, 8, /*isSigned=*/false);
+    mlir::Value pattern =
+        mlir::UnrealizedConversionCastOp::create(
+            builder, loc, TypeRange{i8Ty}, ValueRange{val})
+            .getResult(0);
+    mlir::offload::MemsetOp::create(builder, loc, dst, pattern, sizeIdx,
+                                    mlir::Value{});
     mlir::Type retTy = cgf.convertType(e->getType());
     return RValue::get(makeHipSuccess(builder, loc, retTy));
   }

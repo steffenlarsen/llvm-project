@@ -432,4 +432,42 @@ def Offload_MemcpyOp : Offload_Op<"memcpy"> {
   }];
 }
 
+//--- offload.memset -------------------------------------------------------//
+
+def Offload_MemsetOp : Offload_Op<"memset"> {
+  let summary = "Fill memory with a repeating pattern (hipMemset / cudaMemset / olMemFill)";
+  let description = [{
+    Fills `$size` bytes at `$ptr` with copies of `$pattern`.  The width of
+    `$pattern`'s type encodes the fill stride:
+
+    | `type($pattern)` | HIP call          | liboffload PatternSize |
+    |------------------|-------------------|------------------------|
+    | `i8`             | `hipMemset`       | 1                      |
+    | `i16`            | `hipMemsetD16`    | 2                      |
+    | `i32`            | `hipMemsetD32`    | 4                      |
+
+    HIP/CUDA lowering passes `$pattern` directly as the scalar fill value.
+    A future liboffload lowering pass stack-allocates `$pattern` and passes
+    a pointer with `PatternSize = sizeof(type($pattern))` to `olMemFill`,
+    consuming the same op without modification.
+
+    `$size` is always in bytes.  For typed fills (D16/D32) the caller must
+    ensure `$size` is a multiple of the pattern width.
+
+    Example:
+    ```mlir
+    offload.memset %dst, %val, %n_bytes : !llvm.ptr, i8
+    ```
+  }];
+  let arguments = (ins AnyType:$ptr,
+                       AnyType:$pattern,
+                       Index:$size,
+                       Optional<OFFLOAD_StreamType>:$stream);
+  let assemblyFormat = [{
+    $ptr `,` $pattern `,` $size
+    (`,` `stream` `=` $stream^ `:` type($stream))?
+    attr-dict `:` type($ptr) `,` type($pattern)
+  }];
+}
+
 #endif // OFFLOAD_OPS

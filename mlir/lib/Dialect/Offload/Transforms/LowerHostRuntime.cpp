@@ -18,6 +18,7 @@
 //   offload.free           → @hipFree / @hipHostFree
 //   offload.memcpy         → @hipMemcpy (kind reconstructed from dst/src spaces)
 //   offload.memcpy_to_symbol → llvm.mlir.addressof + func.call @hipMemcpy
+//   offload.memset         → @hipMemset / @hipMemsetD16 / @hipMemsetD32
 //
 //===----------------------------------------------------------------------===//
 
@@ -318,6 +319,64 @@ struct LowerHostRuntimePass
           b.getFunctionType({llvmPtrTy, llvmPtrTy, i64Ty, i32Ty}, {i32Ty}));
       b.create<func::CallOp>(loc, decl,
                               ValueRange{symPtr, src, sizeAsI64, kindVal});
+      op.erase();
+    });
+
+    // offload.memset(ptr, pattern, size_bytes)
+    //   → @hipMemset(dst, i32, size)     when type(pattern) is i8  (byte fill)
+    //   → @hipMemsetD16(dst, i16, count) when type(pattern) is i16 (element fill)
+    //   → @hipMemsetD32(dst, i32, count) when type(pattern) is i32 (element fill)
+    //
+    // For a future liboffload target: stack-allocate $pattern, pass its address
+    // and sizeof(type($pattern)) to olMemFill — no changes needed to this op.
+    module.walk([&](offload::MemsetOp op) {
+      b.setInsertionPoint(op);
+      mlir::Location loc = op.getLoc();
+      Type llvmPtrTy = LLVM::LLVMPointerType::get(b.getContext());
+      Value dst = UnrealizedConversionCastOp::create(
+          b, loc, TypeRange{llvmPtrTy}, ValueRange{op.getPtr()}).getResult(0);
+      Value sizeAsI64 = UnrealizedConversionCastOp::create(
+          b, loc, TypeRange{i64Ty}, ValueRange{op.getSize()}).getResult(0);
+
+      // Determine pattern width from the IR type.
+      unsigned patWidth = 8;
+      if (auto intTy = dyn_cast<IntegerType>(op.getPattern().getType()))
+        patWidth = intTy.getWidth();
+
+      if (patWidth <= 8) {
+        // hipMemset(void*, int, size_t): byte pattern, size in bytes.
+        Value patI32 = UnrealizedConversionCastOp::create(
+            b, loc, TypeRange{i32Ty}, ValueRange{op.getPattern()}).getResult(0);
+        StringRef fn = pick("hipMemset", "cudaMemset", useHip);
+        auto decl = getOrInsertDecl(b, module, fn,
+            b.getFunctionType({llvmPtrTy, i32Ty, i64Ty}, {i32Ty}));
+        func::CallOp::create(b, loc, decl, ValueRange{dst, patI32, sizeAsI64});
+      } else if (patWidth == 16) {
+        // hipMemsetD16(hipDeviceptr_t, unsigned short, size_t): count in elements.
+        Value two = b.create<LLVM::ConstantOp>(
+            loc, i64Ty, b.getIntegerAttr(i64Ty, 2));
+        Value count = LLVM::SDivOp::create(b, loc, i64Ty, sizeAsI64, two,
+                                           /*isExact=*/mlir::UnitAttr{});
+        Type i16Ty = b.getIntegerType(16);
+        Value patI16 = UnrealizedConversionCastOp::create(
+            b, loc, TypeRange{i16Ty}, ValueRange{op.getPattern()}).getResult(0);
+        StringRef fn = pick("hipMemsetD16", "cuMemsetD16", useHip);
+        auto decl = getOrInsertDecl(b, module, fn,
+            b.getFunctionType({llvmPtrTy, i16Ty, i64Ty}, {i32Ty}));
+        func::CallOp::create(b, loc, decl, ValueRange{dst, patI16, count});
+      } else {
+        // hipMemsetD32(hipDeviceptr_t, unsigned int, size_t): count in elements.
+        Value four = b.create<LLVM::ConstantOp>(
+            loc, i64Ty, b.getIntegerAttr(i64Ty, 4));
+        Value count = LLVM::SDivOp::create(b, loc, i64Ty, sizeAsI64, four,
+                                           /*isExact=*/mlir::UnitAttr{});
+        Value patI32 = UnrealizedConversionCastOp::create(
+            b, loc, TypeRange{i32Ty}, ValueRange{op.getPattern()}).getResult(0);
+        StringRef fn = pick("hipMemsetD32", "cuMemsetD32", useHip);
+        auto decl = getOrInsertDecl(b, module, fn,
+            b.getFunctionType({llvmPtrTy, i32Ty, i64Ty}, {i32Ty}));
+        func::CallOp::create(b, loc, decl, ValueRange{dst, patI32, count});
+      }
       op.erase();
     });
   }
