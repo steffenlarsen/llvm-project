@@ -186,6 +186,65 @@ static mlir::Type getCIRFloatAsMLIR(mlir::Type cirTy, mlir::MLIRContext *ctx) {
   return {};
 }
 
+/// Return the LLVM type suffix for a given MLIR float type ("f16", "f32", "f64").
+static llvm::StringRef mlirFloatTypeSuffix(mlir::Type ty) {
+  if (mlir::isa<mlir::Float16Type>(ty))  return "f16";
+  if (mlir::isa<mlir::Float32Type>(ty))  return "f32";
+  if (mlir::isa<mlir::Float64Type>(ty))  return "f64";
+  llvm_unreachable("unexpected float type");
+}
+
+/// Emit `llvm.amdgcn.{baseName}.{typeSuffix}(arg)` for a single-arg float
+/// intrinsic, bridging CIR↔MLIR types around the call.
+static mlir::Value emitAMDGPUUnaryFPIntrinsic(CIRGenFunction &cgf,
+                                               const CallExpr *expr,
+                                               llvm::StringRef baseName) {
+  CIRGenBuilderTy &b = cgf.getBuilder();
+  mlir::Location loc = cgf.getLoc(expr->getExprLoc());
+  mlir::MLIRContext *ctx = b.getContext();
+  mlir::Value arg = cgf.emitScalarExpr(expr->getArg(0));
+  mlir::Type cirTy = arg.getType();
+  mlir::Type mlirTy = getCIRFloatAsMLIR(cirTy, ctx);
+  mlir::Value asMLIR =
+      mlir::UnrealizedConversionCastOp::create(
+          b, loc, mlir::TypeRange{mlirTy}, mlir::ValueRange{arg})
+          .getResult(0);
+  std::string intrName =
+      (baseName + "." + mlirFloatTypeSuffix(mlirTy)).str();
+  mlir::Value result = mlir::LLVM::CallIntrinsicOp::create(
+      b, loc, mlirTy,
+      mlir::StringAttr::get(ctx, intrName),
+      mlir::ValueRange{asMLIR}).getResult(0);
+  return mlir::UnrealizedConversionCastOp::create(
+             b, loc, mlir::TypeRange{cirTy}, mlir::ValueRange{result})
+      .getResult(0);
+}
+
+/// Emit a three-operand integer LLVM intrinsic (all i32 in/out) bridging
+/// CIR integer types around the call.
+static mlir::Value emitAMDGPUIntTernaryIntrinsic(CIRGenFunction &cgf,
+                                                   const CallExpr *expr,
+                                                   llvm::StringRef intrName) {
+  CIRGenBuilderTy &b = cgf.getBuilder();
+  mlir::Location loc = cgf.getLoc(expr->getExprLoc());
+  mlir::MLIRContext *ctx = b.getContext();
+  mlir::Type i32Ty = mlir::IntegerType::get(ctx, 32);
+  auto bridge = [&](unsigned idx) {
+    mlir::Value v = cgf.emitScalarExpr(expr->getArg(idx));
+    return mlir::UnrealizedConversionCastOp::create(
+               b, loc, mlir::TypeRange{i32Ty}, mlir::ValueRange{v})
+        .getResult(0);
+  };
+  mlir::Value result = mlir::LLVM::CallIntrinsicOp::create(
+      b, loc, i32Ty,
+      mlir::StringAttr::get(ctx, intrName),
+      mlir::ValueRange{bridge(0), bridge(1), bridge(2)}).getResult(0);
+  mlir::Type cirTy = cgf.convertType(expr->getType());
+  return mlir::UnrealizedConversionCastOp::create(
+             b, loc, mlir::TypeRange{cirTy}, mlir::ValueRange{result})
+      .getResult(0);
+}
+
 /// Emit a ROCDL unary floating-point op, bridging CIR↔MLIR float types.
 template <typename ROCDLOp>
 static mlir::Value emitROCDLUnaryFP(CIRGenFunction &cgf, const CallExpr *expr) {
@@ -296,13 +355,67 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
                      getContext().BuiltinInfo.getName(builtinId));
     return mlir::Value{};
   }
-  case AMDGPU::BI__builtin_amdgcn_permlane16:
-  case AMDGPU::BI__builtin_amdgcn_permlanex16:
   case AMDGPU::BI__builtin_amdgcn_permlane64: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
+    // llvm.amdgcn.permlane64(src: i32) → i32
+    CIRGenBuilderTy &b = getBuilder();
+    mlir::Location loc = getLoc(expr->getExprLoc());
+    mlir::MLIRContext *ctx = b.getContext();
+    mlir::Type i32Ty = mlir::IntegerType::get(ctx, 32);
+    mlir::Value src = emitScalarExpr(expr->getArg(0));
+    mlir::Value srcI32 =
+        mlir::UnrealizedConversionCastOp::create(
+            b, loc, mlir::TypeRange{i32Ty}, mlir::ValueRange{src})
+            .getResult(0);
+    mlir::Value result = mlir::LLVM::CallIntrinsicOp::create(
+        b, loc, i32Ty,
+        mlir::StringAttr::get(ctx, "llvm.amdgcn.permlane64"),
+        mlir::ValueRange{srcI32}).getResult(0);
+    mlir::Type cirTy = convertType(expr->getType());
+    return mlir::UnrealizedConversionCastOp::create(
+               b, loc, mlir::TypeRange{cirTy}, mlir::ValueRange{result})
+        .getResult(0);
+  }
+  case AMDGPU::BI__builtin_amdgcn_permlane16:
+  case AMDGPU::BI__builtin_amdgcn_permlanex16: {
+    // llvm.amdgcn.permlane16 / permlanex16
+    //   (old: i32, src0: i32, src1: i32, src2: i32, fi: i1, boundCtrl: i1) → i32
+    // The last two args are _Constant bool — evaluate at compile time.
+    CIRGenBuilderTy &b = getBuilder();
+    mlir::Location loc = getLoc(expr->getExprLoc());
+    mlir::MLIRContext *ctx = b.getContext();
+    mlir::Type i32Ty = mlir::IntegerType::get(ctx, 32);
+    mlir::Type i1Ty  = mlir::IntegerType::get(ctx, 1);
+    auto bridgeI32 = [&](unsigned idx) {
+      mlir::Value v = emitScalarExpr(expr->getArg(idx));
+      return mlir::UnrealizedConversionCastOp::create(
+                 b, loc, mlir::TypeRange{i32Ty}, mlir::ValueRange{v})
+          .getResult(0);
+    };
+    // fi and boundControl are _Constant bool; evaluate as integer constants.
+    Expr::EvalResult fiRes, bcRes;
+    expr->getArg(4)->EvaluateAsInt(fiRes, getContext());
+    expr->getArg(5)->EvaluateAsInt(bcRes, getContext());
+    llvm::APSInt fiVal = fiRes.Val.getInt();
+    llvm::APSInt bcVal = bcRes.Val.getInt();
+    // Use arith.constant (not llvm.mlir.constant) so CXXABILowering
+    // can handle the attribute without crashing.
+    mlir::Value fi = mlir::arith::ConstantIntOp::create(
+        b, loc, i1Ty, fiVal.getZExtValue());
+    mlir::Value bc = mlir::arith::ConstantIntOp::create(
+        b, loc, i1Ty, bcVal.getZExtValue());
+    llvm::StringRef intrName =
+        builtinId == AMDGPU::BI__builtin_amdgcn_permlane16
+            ? "llvm.amdgcn.permlane16"
+            : "llvm.amdgcn.permlanex16";
+    mlir::Value result = mlir::LLVM::CallIntrinsicOp::create(
+        b, loc, i32Ty,
+        mlir::StringAttr::get(ctx, intrName),
+        mlir::ValueRange{bridgeI32(0), bridgeI32(1), bridgeI32(2), bridgeI32(3),
+                         fi, bc}).getResult(0);
+    mlir::Type cirTy = convertType(expr->getType());
+    return mlir::UnrealizedConversionCastOp::create(
+               b, loc, mlir::TypeRange{cirTy}, mlir::ValueRange{result})
+        .getResult(0);
   }
   case AMDGPU::BI__builtin_amdgcn_readlane:
     return emitReadlane(*this, expr, /*firstLane=*/false);
@@ -311,17 +424,58 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
   case AMDGPU::BI__builtin_amdgcn_div_fixup:
   case AMDGPU::BI__builtin_amdgcn_div_fixupf:
   case AMDGPU::BI__builtin_amdgcn_div_fixuph: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
+    // llvm.amdgcn.div.fixup.f{N}(float, float, float) → float
+    CIRGenBuilderTy &b = getBuilder();
+    mlir::Location loc = getLoc(expr->getExprLoc());
+    mlir::MLIRContext *ctx = b.getContext();
+    mlir::Value arg0 = emitScalarExpr(expr->getArg(0));
+    mlir::Value arg1 = emitScalarExpr(expr->getArg(1));
+    mlir::Value arg2 = emitScalarExpr(expr->getArg(2));
+    mlir::Type cirFpTy = arg0.getType();
+    mlir::Type mlirFpTy = getCIRFloatAsMLIR(cirFpTy, ctx);
+    auto bridge = [&](mlir::Value v) {
+      return mlir::UnrealizedConversionCastOp::create(
+                 b, loc, mlir::TypeRange{mlirFpTy}, mlir::ValueRange{v})
+          .getResult(0);
+    };
+    std::string name =
+        "llvm.amdgcn.div.fixup." + mlirFloatTypeSuffix(mlirFpTy).str();
+    mlir::Value result = mlir::LLVM::CallIntrinsicOp::create(
+        b, loc, mlirFpTy,
+        mlir::StringAttr::get(ctx, name),
+        mlir::ValueRange{bridge(arg0), bridge(arg1), bridge(arg2)}).getResult(0);
+    return mlir::UnrealizedConversionCastOp::create(
+               b, loc, mlir::TypeRange{cirFpTy}, mlir::ValueRange{result})
+        .getResult(0);
   }
   case AMDGPU::BI__builtin_amdgcn_trig_preop:
   case AMDGPU::BI__builtin_amdgcn_trig_preopf: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
+    // llvm.amdgcn.trig.preop.f{N}(float, i32) → float
+    CIRGenBuilderTy &b = getBuilder();
+    mlir::Location loc = getLoc(expr->getExprLoc());
+    mlir::MLIRContext *ctx = b.getContext();
+    mlir::Value arg0 = emitScalarExpr(expr->getArg(0));
+    mlir::Value arg1 = emitScalarExpr(expr->getArg(1));
+    mlir::Type cirFpTy = arg0.getType();
+    mlir::Type mlirFpTy = getCIRFloatAsMLIR(cirFpTy, ctx);
+    mlir::Type i32Ty = mlir::IntegerType::get(ctx, 32);
+    mlir::Value fp =
+        mlir::UnrealizedConversionCastOp::create(
+            b, loc, mlir::TypeRange{mlirFpTy}, mlir::ValueRange{arg0})
+            .getResult(0);
+    mlir::Value seg =
+        mlir::UnrealizedConversionCastOp::create(
+            b, loc, mlir::TypeRange{i32Ty}, mlir::ValueRange{arg1})
+            .getResult(0);
+    std::string name =
+        "llvm.amdgcn.trig.preop." + mlirFloatTypeSuffix(mlirFpTy).str();
+    mlir::Value result = mlir::LLVM::CallIntrinsicOp::create(
+        b, loc, mlirFpTy,
+        mlir::StringAttr::get(ctx, name),
+        mlir::ValueRange{fp, seg}).getResult(0);
+    return mlir::UnrealizedConversionCastOp::create(
+               b, loc, mlir::TypeRange{cirFpTy}, mlir::ValueRange{result})
+        .getResult(0);
   }
   case AMDGPU::BI__builtin_amdgcn_rcp:
   case AMDGPU::BI__builtin_amdgcn_rcpf:
@@ -339,12 +493,8 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
   case AMDGPU::BI__builtin_amdgcn_rsq_bf16:
     return emitROCDLUnaryFP<mlir::ROCDL::ROCDLRsq>(*this, expr);
   case AMDGPU::BI__builtin_amdgcn_rsq_clamp:
-  case AMDGPU::BI__builtin_amdgcn_rsq_clampf: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
-  }
+  case AMDGPU::BI__builtin_amdgcn_rsq_clampf:
+    return emitAMDGPUUnaryFPIntrinsic(*this, expr, "llvm.amdgcn.rsq.clamp");
   case AMDGPU::BI__builtin_amdgcn_sinf:
   case AMDGPU::BI__builtin_amdgcn_sinh:
   case AMDGPU::BI__builtin_amdgcn_sin_bf16:
@@ -354,10 +504,19 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
   case AMDGPU::BI__builtin_amdgcn_cos_bf16:
     return emitROCDLUnaryFP<mlir::ROCDL::ROCDLCos>(*this, expr);
   case AMDGPU::BI__builtin_amdgcn_dispatch_ptr: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
+    // llvm.amdgcn.dispatch.ptr() → ptr addrspace(4)
+    CIRGenBuilderTy &b = getBuilder();
+    mlir::Location loc = getLoc(expr->getExprLoc());
+    mlir::MLIRContext *ctx = b.getContext();
+    mlir::Type ptrAS4 = mlir::LLVM::LLVMPointerType::get(ctx, 4);
+    mlir::Value ptr = mlir::LLVM::CallIntrinsicOp::create(
+        b, loc, ptrAS4,
+        mlir::StringAttr::get(ctx, "llvm.amdgcn.dispatch.ptr"),
+        mlir::ValueRange{}).getResult(0);
+    mlir::Type cirRetTy = convertType(expr->getType());
+    return mlir::UnrealizedConversionCastOp::create(
+               b, loc, mlir::TypeRange{cirRetTy}, mlir::ValueRange{ptr})
+        .getResult(0);
   }
   case AMDGPU::BI__builtin_amdgcn_logf:
   case AMDGPU::BI__builtin_amdgcn_log_bf16:
@@ -365,62 +524,79 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
   case AMDGPU::BI__builtin_amdgcn_exp2f:
   case AMDGPU::BI__builtin_amdgcn_exp2_bf16:
     return emitROCDLUnaryFP<mlir::ROCDL::ROCDLExp2>(*this, expr);
-  case AMDGPU::BI__builtin_amdgcn_log_clampf: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
-  }
+  case AMDGPU::BI__builtin_amdgcn_log_clampf:
+    return emitAMDGPUUnaryFPIntrinsic(*this, expr, "llvm.amdgcn.log.clamp");
   case AMDGPU::BI__builtin_amdgcn_ldexp:
   case AMDGPU::BI__builtin_amdgcn_ldexpf:
   case AMDGPU::BI__builtin_amdgcn_ldexph: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
+    // llvm.ldexp.f{N}.i32(float, int) → float
+    CIRGenBuilderTy &b = getBuilder();
+    mlir::Location loc = getLoc(expr->getExprLoc());
+    mlir::MLIRContext *ctx = b.getContext();
+    mlir::Value arg0 = emitScalarExpr(expr->getArg(0));
+    mlir::Value arg1 = emitScalarExpr(expr->getArg(1));
+    mlir::Type cirFpTy = arg0.getType();
+    mlir::Type mlirFpTy = getCIRFloatAsMLIR(cirFpTy, ctx);
+    mlir::Type i32Ty = mlir::IntegerType::get(ctx, 32);
+    mlir::Value fp =
+        mlir::UnrealizedConversionCastOp::create(
+            b, loc, mlir::TypeRange{mlirFpTy}, mlir::ValueRange{arg0})
+            .getResult(0);
+    mlir::Value exp =
+        mlir::UnrealizedConversionCastOp::create(
+            b, loc, mlir::TypeRange{i32Ty}, mlir::ValueRange{arg1})
+            .getResult(0);
+    std::string name =
+        "llvm.ldexp." + mlirFloatTypeSuffix(mlirFpTy).str() + ".i32";
+    mlir::Value result = mlir::LLVM::CallIntrinsicOp::create(
+        b, loc, mlirFpTy,
+        mlir::StringAttr::get(ctx, name),
+        mlir::ValueRange{fp, exp}).getResult(0);
+    return mlir::UnrealizedConversionCastOp::create(
+               b, loc, mlir::TypeRange{cirFpTy}, mlir::ValueRange{result})
+        .getResult(0);
   }
   case AMDGPU::BI__builtin_amdgcn_frexp_mant:
   case AMDGPU::BI__builtin_amdgcn_frexp_mantf:
-  case AMDGPU::BI__builtin_amdgcn_frexp_manth: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
-  }
+  case AMDGPU::BI__builtin_amdgcn_frexp_manth:
+    return emitAMDGPUUnaryFPIntrinsic(*this, expr, "llvm.amdgcn.frexp.mant");
   case AMDGPU::BI__builtin_amdgcn_frexp_exp:
   case AMDGPU::BI__builtin_amdgcn_frexp_expf:
   case AMDGPU::BI__builtin_amdgcn_frexp_exph: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
+    // llvm.amdgcn.frexp.exp.i32.f32, .i32.f64, .i16.f16
+    CIRGenBuilderTy &b = getBuilder();
+    mlir::Location loc = getLoc(expr->getExprLoc());
+    mlir::MLIRContext *ctx = b.getContext();
+    mlir::Value arg = emitScalarExpr(expr->getArg(0));
+    mlir::Type mlirFpTy = getCIRFloatAsMLIR(arg.getType(), ctx);
+    mlir::Value fp =
+        mlir::UnrealizedConversionCastOp::create(
+            b, loc, mlir::TypeRange{mlirFpTy}, mlir::ValueRange{arg})
+            .getResult(0);
+    bool isF16 = mlir::isa<mlir::Float16Type>(mlirFpTy);
+    mlir::Type retMLIR = mlir::IntegerType::get(ctx, isF16 ? 16 : 32);
+    std::string name = "llvm.amdgcn.frexp.exp." +
+                       std::string(isF16 ? "i16" : "i32") + "." +
+                       mlirFloatTypeSuffix(mlirFpTy).str();
+    mlir::Value result = mlir::LLVM::CallIntrinsicOp::create(
+        b, loc, retMLIR,
+        mlir::StringAttr::get(ctx, name),
+        mlir::ValueRange{fp}).getResult(0);
+    mlir::Type cirRetTy = convertType(expr->getType());
+    return mlir::UnrealizedConversionCastOp::create(
+               b, loc, mlir::TypeRange{cirRetTy}, mlir::ValueRange{result})
+        .getResult(0);
   }
   case AMDGPU::BI__builtin_amdgcn_fract:
   case AMDGPU::BI__builtin_amdgcn_fractf:
-  case AMDGPU::BI__builtin_amdgcn_fracth: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
-  }
-  case AMDGPU::BI__builtin_amdgcn_lerp: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
-  }
-  case AMDGPU::BI__builtin_amdgcn_ubfe: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
-  }
-  case AMDGPU::BI__builtin_amdgcn_sbfe: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
-  }
+  case AMDGPU::BI__builtin_amdgcn_fracth:
+    return emitAMDGPUUnaryFPIntrinsic(*this, expr, "llvm.amdgcn.fract");
+  case AMDGPU::BI__builtin_amdgcn_lerp:
+    return emitAMDGPUIntTernaryIntrinsic(*this, expr, "llvm.amdgcn.lerp");
+  case AMDGPU::BI__builtin_amdgcn_ubfe:
+    return emitAMDGPUIntTernaryIntrinsic(*this, expr, "llvm.amdgcn.ubfe.i32");
+  case AMDGPU::BI__builtin_amdgcn_sbfe:
+    return emitAMDGPUIntTernaryIntrinsic(*this, expr, "llvm.amdgcn.sbfe.i32");
   case AMDGPU::BI__builtin_amdgcn_ballot_w32:
     return emitBallot(*this, expr, 32);
   case AMDGPU::BI__builtin_amdgcn_ballot_w64:
@@ -456,17 +632,74 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
   case AMDGPU::BI__builtin_amdgcn_uicmpl:
   case AMDGPU::BI__builtin_amdgcn_sicmp:
   case AMDGPU::BI__builtin_amdgcn_sicmpl: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
+    // llvm.amdgcn.icmp.i32.i{N}(lhs, rhs, mode_i32) → i64
+    CIRGenBuilderTy &b = getBuilder();
+    mlir::Location loc = getLoc(expr->getExprLoc());
+    mlir::MLIRContext *ctx = b.getContext();
+    mlir::Value lhs = emitScalarExpr(expr->getArg(0));
+    mlir::Value rhs = emitScalarExpr(expr->getArg(1));
+    mlir::Value mode = emitScalarExpr(expr->getArg(2));
+    unsigned width = mlir::cast<cir::IntType>(lhs.getType()).getWidth();
+    mlir::Type mlirIntTy = mlir::IntegerType::get(ctx, width);
+    mlir::Type i32Ty = mlir::IntegerType::get(ctx, 32);
+    mlir::Type i64Ty = mlir::IntegerType::get(ctx, 64);
+    mlir::Value lhsM =
+        mlir::UnrealizedConversionCastOp::create(
+            b, loc, mlir::TypeRange{mlirIntTy}, mlir::ValueRange{lhs})
+            .getResult(0);
+    mlir::Value rhsM =
+        mlir::UnrealizedConversionCastOp::create(
+            b, loc, mlir::TypeRange{mlirIntTy}, mlir::ValueRange{rhs})
+            .getResult(0);
+    mlir::Value modeM =
+        mlir::UnrealizedConversionCastOp::create(
+            b, loc, mlir::TypeRange{i32Ty}, mlir::ValueRange{mode})
+            .getResult(0);
+    std::string name = "llvm.amdgcn.icmp.i32.i" + std::to_string(width);
+    mlir::Value result = mlir::LLVM::CallIntrinsicOp::create(
+        b, loc, i64Ty,
+        mlir::StringAttr::get(ctx, name),
+        mlir::ValueRange{lhsM, rhsM, modeM}).getResult(0);
+    mlir::Type cirRetTy = convertType(expr->getType());
+    return mlir::UnrealizedConversionCastOp::create(
+               b, loc, mlir::TypeRange{cirRetTy}, mlir::ValueRange{result})
+        .getResult(0);
   }
   case AMDGPU::BI__builtin_amdgcn_fcmp:
   case AMDGPU::BI__builtin_amdgcn_fcmpf: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
+    // llvm.amdgcn.fcmp.i32.f{N}(lhs, rhs, mode_i32) → i64
+    CIRGenBuilderTy &b = getBuilder();
+    mlir::Location loc = getLoc(expr->getExprLoc());
+    mlir::MLIRContext *ctx = b.getContext();
+    mlir::Value lhs = emitScalarExpr(expr->getArg(0));
+    mlir::Value rhs = emitScalarExpr(expr->getArg(1));
+    mlir::Value mode = emitScalarExpr(expr->getArg(2));
+    mlir::Type cirFpTy = lhs.getType();
+    mlir::Type mlirFpTy = getCIRFloatAsMLIR(cirFpTy, ctx);
+    mlir::Type i32Ty = mlir::IntegerType::get(ctx, 32);
+    mlir::Type i64Ty = mlir::IntegerType::get(ctx, 64);
+    mlir::Value lhsM =
+        mlir::UnrealizedConversionCastOp::create(
+            b, loc, mlir::TypeRange{mlirFpTy}, mlir::ValueRange{lhs})
+            .getResult(0);
+    mlir::Value rhsM =
+        mlir::UnrealizedConversionCastOp::create(
+            b, loc, mlir::TypeRange{mlirFpTy}, mlir::ValueRange{rhs})
+            .getResult(0);
+    mlir::Value modeM =
+        mlir::UnrealizedConversionCastOp::create(
+            b, loc, mlir::TypeRange{i32Ty}, mlir::ValueRange{mode})
+            .getResult(0);
+    std::string name =
+        "llvm.amdgcn.fcmp.i32." + mlirFloatTypeSuffix(mlirFpTy).str();
+    mlir::Value result = mlir::LLVM::CallIntrinsicOp::create(
+        b, loc, i64Ty,
+        mlir::StringAttr::get(ctx, name),
+        mlir::ValueRange{lhsM, rhsM, modeM}).getResult(0);
+    mlir::Type cirRetTy = convertType(expr->getType());
+    return mlir::UnrealizedConversionCastOp::create(
+               b, loc, mlir::TypeRange{cirRetTy}, mlir::ValueRange{result})
+        .getResult(0);
   }
   case AMDGPU::BI__builtin_amdgcn_class:
   case AMDGPU::BI__builtin_amdgcn_classf:
@@ -886,16 +1119,38 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
                      getContext().BuiltinInfo.getName(builtinId));
     return mlir::Value{};
   }
-  case AMDGPU::BI__builtin_amdgcn_alignbit: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
-  }
+  case AMDGPU::BI__builtin_amdgcn_alignbit:
+    return emitAMDGPUIntTernaryIntrinsic(*this, expr, "llvm.amdgcn.alignbit");
   case AMDGPU::BI__builtin_amdgcn_fence: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
+    // fence(unsigned order, const char *scope_str [, ...address_spaces])
+    // order is a _Constant __atomic_order value (0..5).
+    // scope_str is a string literal identifying the AMDGPU sync scope.
+    CIRGenBuilderTy &b = getBuilder();
+    mlir::Location loc = getLoc(expr->getExprLoc());
+    mlir::MLIRContext *ctx = b.getContext();
+    // Decode the constant ordering argument.
+    Expr::EvalResult orderRes;
+    expr->getArg(0)->EvaluateAsInt(orderRes, getContext());
+    llvm::APSInt orderVal = orderRes.Val.getInt();
+    mlir::LLVM::AtomicOrdering ao;
+    switch (orderVal.getZExtValue()) {
+    case 0: ao = mlir::LLVM::AtomicOrdering::unordered;      break;
+    case 1: // consume → acquire
+    case 2: ao = mlir::LLVM::AtomicOrdering::acquire;        break;
+    case 3: ao = mlir::LLVM::AtomicOrdering::release;        break;
+    case 4: ao = mlir::LLVM::AtomicOrdering::acq_rel;        break;
+    case 5: ao = mlir::LLVM::AtomicOrdering::seq_cst;        break;
+    default: ao = mlir::LLVM::AtomicOrdering::seq_cst;       break;
+    }
+    // Extract the scope string from the string literal argument.
+    llvm::StringRef scopeStr;
+    if (const auto *sl = llvm::dyn_cast<clang::StringLiteral>(
+            expr->getArg(1)->IgnoreParenCasts()))
+      scopeStr = sl->getString();
+    mlir::StringAttr syncScope =
+        scopeStr.empty() ? mlir::StringAttr{}
+                         : mlir::StringAttr::get(ctx, scopeStr);
+    mlir::LLVM::FenceOp::create(b, loc, ao, syncScope);
     return mlir::Value{};
   }
   // -----------------------------------------------------------------------

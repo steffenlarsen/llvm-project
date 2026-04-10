@@ -12,6 +12,7 @@
 #include "TargetLowering/LowerModule.h"
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Offload/IR/OffloadDialect.h"
 #include "mlir/Dialect/OpenACC/OpenACCOpsDialect.h.inc"
 #include "mlir/Dialect/OpenMP/OpenMPOpsDialect.h.inc"
@@ -48,13 +49,16 @@ bool isCXXABIAttributeLegal(const mlir::TypeConverter &tc,
   if (!attr)
     return true;
 
-  // None of the OpenACC/OMP/Offload/GPU attributes contain a type of concern,
-  // so we can just treat them as legal.  GPU dialect attributes (e.g.
+  // None of the OpenACC/OMP/Offload/GPU/LLVM attributes contain a type of
+  // concern, so we can just treat them as legal.  GPU dialect attributes (e.g.
   // #gpu.dim<x>) appear in offload.func bodies when gpu.thread_id /
   // gpu.block_id ops are emitted directly by CIRGenExprScalar.
+  // LLVM dialect attributes (e.g. #llvm.linkage) appear when LLVM intrinsics
+  // are emitted directly into offload.func bodies (e.g. AMDGPU builtins).
   if (isa<mlir::acc::OpenACCDialect, mlir::omp::OpenMPDialect,
           mlir::offload::OffloadDialect,
-          mlir::gpu::GPUDialect>(attr.getDialect()))
+          mlir::gpu::GPUDialect,
+          mlir::LLVM::LLVMDialect>(attr.getDialect()))
     return true;
 
   // These attributes either don't contain a type, or don't contain a type that
