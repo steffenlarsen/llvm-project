@@ -2203,6 +2203,13 @@ RValue CIRGenFunction::emitCallExpr(const clang::CallExpr *e,
   if (const auto *cudaKernelCallExpr = dyn_cast<CUDAKernelCallExpr>(e))
     return emitCUDAKernelCallExpr(cudaKernelCallExpr, returnValue);
 
+  // Give the CUDA/HIP runtime a chance to intercept runtime library calls
+  // (e.g. hipDeviceSynchronize, hipStreamCreate) and emit offload dialect ops.
+  if (getLangOpts().CUDA) {
+    if (auto rv = cgm.getCUDARuntime().emitHIPRuntimeCall(*this, e))
+      return *rv;
+  }
+
   if (const auto *operatorCall = dyn_cast<CXXOperatorCallExpr>(e)) {
     // If the callee decl is a CXXMethodDecl, we need to emit this as a C++
     // operator member call.

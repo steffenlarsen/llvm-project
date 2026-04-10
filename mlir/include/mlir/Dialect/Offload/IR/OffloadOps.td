@@ -334,4 +334,70 @@ def Offload_MemcpyToSymbolOp : Offload_Op<"memcpy_to_symbol"> {
   let hasVerifier = 1;
 }
 
+//--- offload.malloc -------------------------------------------------------//
+
+def Offload_MallocOp : Offload_Op<"malloc"> {
+  let summary = "Allocate device memory (hipMalloc / cudaMalloc)";
+  let description = [{
+    Allocates `$size` bytes of device memory and returns a pointer to it.
+    Corresponds to `hipMalloc` / `cudaMalloc`.
+
+    Example:
+    ```mlir
+    %ptr = offload.malloc %size : !llvm.ptr
+    ```
+  }];
+  let arguments = (ins Index:$size,
+                       Optional<OFFLOAD_StreamType>:$stream);
+  let results   = (outs AnyType:$ptr);
+  let assemblyFormat = [{
+    $size (`,` `stream` `=` $stream^ `:` type($stream))? attr-dict `:` type($ptr)
+  }];
+}
+
+//--- offload.free ---------------------------------------------------------//
+
+def Offload_FreeOp : Offload_Op<"free"> {
+  let summary = "Free device memory (hipFree / cudaFree)";
+  let description = [{
+    Releases device memory previously allocated with `offload.malloc`.
+    Corresponds to `hipFree` / `cudaFree`.
+
+    Example:
+    ```mlir
+    offload.free %ptr : !llvm.ptr
+    ```
+  }];
+  let arguments = (ins AnyType:$ptr,
+                       Optional<OFFLOAD_StreamType>:$stream);
+  let assemblyFormat = [{
+    $ptr `:` type($ptr) (`,` `stream` `=` $stream^ `:` type($stream))? attr-dict
+  }];
+}
+
+//--- offload.memcpy -------------------------------------------------------//
+
+def Offload_MemcpyOp : Offload_Op<"memcpy"> {
+  let summary = "Copy memory between host and device (hipMemcpy / cudaMemcpy)";
+  let description = [{
+    Copies `$size` bytes from `$src` to `$dst` in the direction given by
+    `$kind`.  Corresponds to `hipMemcpy` / `cudaMemcpy`.
+
+    Example:
+    ```mlir
+    offload.memcpy %dst, %src, %size, host_to_device : !llvm.ptr, !llvm.ptr
+    ```
+  }];
+  let arguments = (ins AnyType:$dst,
+                       AnyType:$src,
+                       Index:$size,
+                       OFFLOAD_MemcpyKindAttr:$kind,
+                       Optional<OFFLOAD_StreamType>:$stream);
+  let assemblyFormat = [{
+    $dst `,` $src `,` $size `,` $kind
+    (`,` `stream` `=` $stream^ `:` type($stream))?
+    attr-dict `:` type($dst) `,` type($src)
+  }];
+}
+
 #endif // OFFLOAD_OPS

@@ -36,6 +36,12 @@ extern "C" hipError_t __hipPopCallConfiguration(dim3 *gridDim, dim3 *blockDim,
                                                  size_t *sharedMem,
                                                  hipStream_t *stream);
 
+/* Synchronisation */
+extern "C" hipError_t hipDeviceSynchronize(void);
+extern "C" hipError_t hipStreamCreate(hipStream_t *pStream);
+extern "C" hipError_t hipStreamDestroy(hipStream_t stream);
+extern "C" hipError_t hipStreamSynchronize(hipStream_t stream);
+
 /* Memory management */
 extern "C" hipError_t hipMalloc(void **ptr, size_t size);
 extern "C" hipError_t hipFree(void *ptr);

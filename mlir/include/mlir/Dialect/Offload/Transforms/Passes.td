@@ -89,7 +89,8 @@ def OffloadLowerHostRuntimePass
   ];
 
   let dependentDialects = [
-    "::mlir::func::FuncDialect"
+    "::mlir::func::FuncDialect",
+    "::mlir::LLVM::LLVMDialect"
   ];
 }
 

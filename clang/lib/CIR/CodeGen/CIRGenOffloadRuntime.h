@@ -38,6 +38,10 @@ public:
                                 const CUDAKernelCallExpr *expr,
                                 ReturnValueSlot retValue) override;
 
+  /// Intercept HIP runtime calls and emit offload dialect ops instead.
+  std::optional<RValue> emitHIPRuntimeCall(CIRGenFunction &cgf,
+                                           const CallExpr *e) override;
+
   /// In the offload model kernels are identified by their offload.func symbol
   /// directly; no separate handle global is needed.
   mlir::Operation *getKernelHandle(cir::FuncOp fn, GlobalDecl gd) override;

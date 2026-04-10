@@ -21,6 +21,7 @@
 #include "mlir/Dialect/Offload/Transforms/Passes.h"
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Offload/IR/OffloadDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -126,20 +127,104 @@ struct LowerHostRuntimePass
       op.erase();
     });
 
-    // offload.stream_create: replace result with an i64 zero placeholder.
-    // A real lowering would alloca a stream handle pointer, call the runtime
-    // function, then load the pointer.  That pattern needs LLVM dialect ops
-    // (llvm.alloca, llvm.store, llvm.load) which are not linked here.
-    // Emit an unrealized_conversion_cast from nothing so downstream passes can
-    // supply a real implementation.
+    // offload.stream_create → @hip/cudaStreamCreate(i64*) -> i32
+    //
+    // HIP/CUDA StreamCreate writes the new handle through a pointer argument:
+    //   hipError_t hipStreamCreate(hipStream_t *pStream);
+    // We model this with LLVM dialect ops:
+    //   1. llvm.alloca 1 x i64  — stack slot for the handle
+    //   2. llvm.call @hipStreamCreate(%slot)
+    //   3. llvm.load %slot       — read back the written handle
+    //   4. unrealized_cast to !offload.stream
     module.walk([&](offload::StreamCreateOp op) {
       b.setInsertionPoint(op);
-      auto cast = b.create<UnrealizedConversionCastOp>(
-          op.getLoc(), TypeRange{handleTy}, ValueRange{});
+      mlir::Location loc = op.getLoc();
+      StringRef fn = pick("hipStreamCreate", "cudaStreamCreate", useHip);
+
+      // Pointer type for the slot: LLVM ptr (opaque).
+      Type llvmPtrTy = LLVM::LLVMPointerType::get(b.getContext());
+      // Alloca 1 element of i64 to hold the stream handle.
+      Value one = b.create<LLVM::ConstantOp>(
+          loc, i64Ty, b.getIntegerAttr(i64Ty, 1));
+      Value slot = b.create<LLVM::AllocaOp>(loc, llvmPtrTy, i64Ty, one,
+                                             /*alignment=*/8);
+      // Declare @hipStreamCreate(ptr) -> i32.
+      auto decl = getOrInsertDecl(b, module, fn,
+                                  b.getFunctionType({llvmPtrTy}, {i32Ty}));
+      b.create<func::CallOp>(loc, decl, ValueRange{slot});
+      // Load the written handle back.
+      Value handle = b.create<LLVM::LoadOp>(loc, i64Ty, slot);
+      // Cast i64 → !offload.stream.
       auto backcast = b.create<UnrealizedConversionCastOp>(
-          op.getLoc(), TypeRange{op.getType()},
-          ValueRange{cast.getResult(0)});
+          loc, TypeRange{op.getType()}, ValueRange{handle});
       op.getResult().replaceAllUsesWith(backcast.getResult(0));
+      op.erase();
+    });
+
+    // offload.malloc(size) → @hip/cudaMalloc(ptr* slot, size_t) -> i32
+    //
+    // hipMalloc writes the allocated ptr through a void** argument:
+    //   hipError_t hipMalloc(void **ptr, size_t size);
+    // We model this with LLVM alloca/call/load:
+    //   1. llvm.alloca 1 x i64  — slot for the returned pointer (as i64)
+    //   2. llvm.call @hipMalloc(%slot, %size)
+    //   3. llvm.load %slot        — the allocated device pointer (i64)
+    module.walk([&](offload::MallocOp op) {
+      b.setInsertionPoint(op);
+      mlir::Location loc = op.getLoc();
+      StringRef fn = pick("hipMalloc", "cudaMalloc", useHip);
+      Type llvmPtrTy = LLVM::LLVMPointerType::get(b.getContext());
+      Value sizeAsI64 = b.create<UnrealizedConversionCastOp>(
+          loc, TypeRange{i64Ty}, ValueRange{op.getSize()}).getResult(0);
+      Value one = b.create<LLVM::ConstantOp>(
+          loc, i64Ty, b.getIntegerAttr(i64Ty, 1));
+      Value slot = b.create<LLVM::AllocaOp>(loc, llvmPtrTy, i64Ty, one,
+                                             /*alignment=*/8);
+      auto decl = getOrInsertDecl(b, module, fn,
+                                  b.getFunctionType({llvmPtrTy, i64Ty}, {i32Ty}));
+      b.create<func::CallOp>(loc, decl, ValueRange{slot, sizeAsI64});
+      Value ptr = b.create<LLVM::LoadOp>(loc, i64Ty, slot);
+      Value cast = b.create<UnrealizedConversionCastOp>(
+          loc, TypeRange{op.getResult().getType()},
+          ValueRange{ptr}).getResult(0);
+      op.getResult().replaceAllUsesWith(cast);
+      op.erase();
+    });
+
+    // offload.free(ptr) → @hip/cudaFree(ptr) -> i32
+    module.walk([&](offload::FreeOp op) {
+      b.setInsertionPoint(op);
+      mlir::Location loc = op.getLoc();
+      StringRef fn = pick("hipFree", "cudaFree", useHip);
+      Type llvmPtrTy = LLVM::LLVMPointerType::get(b.getContext());
+      Value ptr = b.create<UnrealizedConversionCastOp>(
+          loc, TypeRange{llvmPtrTy}, ValueRange{op.getPtr()}).getResult(0);
+      auto decl = getOrInsertDecl(b, module, fn,
+                                  b.getFunctionType({llvmPtrTy}, {i32Ty}));
+      b.create<func::CallOp>(loc, decl, ValueRange{ptr});
+      op.erase();
+    });
+
+    // offload.memcpy(dst, src, size, kind) → @hip/cudaMemcpy(dst, src, size, kind_int) -> i32
+    module.walk([&](offload::MemcpyOp op) {
+      b.setInsertionPoint(op);
+      mlir::Location loc = op.getLoc();
+      StringRef fn = pick("hipMemcpy", "cudaMemcpy", useHip);
+      Type llvmPtrTy = LLVM::LLVMPointerType::get(b.getContext());
+      Value dst = b.create<UnrealizedConversionCastOp>(
+          loc, TypeRange{llvmPtrTy}, ValueRange{op.getDst()}).getResult(0);
+      Value src = b.create<UnrealizedConversionCastOp>(
+          loc, TypeRange{llvmPtrTy}, ValueRange{op.getSrc()}).getResult(0);
+      Value sizeAsI64 = b.create<UnrealizedConversionCastOp>(
+          loc, TypeRange{i64Ty}, ValueRange{op.getSize()}).getResult(0);
+      int32_t kindInt = static_cast<int32_t>(op.getKind());
+      Value kindVal = b.create<LLVM::ConstantOp>(
+          loc, i32Ty, b.getIntegerAttr(i32Ty, kindInt));
+      auto decl = getOrInsertDecl(
+          b, module, fn,
+          b.getFunctionType({llvmPtrTy, llvmPtrTy, i64Ty, i32Ty}, {i32Ty}));
+      b.create<func::CallOp>(loc, decl,
+                              ValueRange{dst, src, sizeAsI64, kindVal});
       op.erase();
     });
 

@@ -15,9 +15,13 @@
 #ifndef LLVM_CLANG_LIB_CIR_CIRGENCUDARUNTIME_H
 #define LLVM_CLANG_LIB_CIR_CIRGENCUDARUNTIME_H
 
+#include "CIRGenValue.h"
 #include "clang/CIR/Dialect/IR/CIRDialect.h"
 
+#include <optional>
+
 namespace clang {
+class CallExpr;
 class CUDAKernelCallExpr;
 }
 
@@ -26,7 +30,6 @@ namespace clang::CIRGen {
 class CIRGenFunction;
 class CIRGenModule;
 class FunctionArgList;
-class RValue;
 class ReturnValueSlot;
 
 class CIRGenCUDARuntime {
@@ -43,6 +46,14 @@ public:
   virtual RValue emitCUDAKernelCallExpr(CIRGenFunction &cgf,
                                         const CUDAKernelCallExpr *expr,
                                         ReturnValueSlot retValue);
+
+  /// Intercept a HIP/CUDA runtime library call and emit offload dialect ops.
+  /// Returns the RValue if the call was intercepted, or nullopt to fall through
+  /// to normal CIR call emission.
+  virtual std::optional<RValue> emitHIPRuntimeCall(CIRGenFunction &cgf,
+                                                   const CallExpr *e) {
+    return std::nullopt;
+  }
 
   virtual mlir::Operation *getKernelHandle(cir::FuncOp fn, GlobalDecl gd) = 0;
 

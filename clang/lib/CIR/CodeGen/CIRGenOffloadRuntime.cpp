@@ -23,6 +23,8 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 
+#include "clang/AST/Expr.h"
+
 using namespace clang;
 using namespace clang::CIRGen;
 using namespace mlir;
@@ -184,6 +186,156 @@ RValue CIRGenOffloadRuntime::emitCUDAKernelCallExpr(
       mlir::ValueRange(args));
 
   return RValue::get(nullptr);
+}
+
+/// Return a CIR integer zero value to use as hipSuccess (0).
+static mlir::Value makeHipSuccess(CIRGenBuilderTy &builder, mlir::Location loc,
+                                  mlir::Type resultTy) {
+  // HIP error code 0 = hipSuccess; result type is usually !cir.int<s,32>.
+  return builder.getConstantInt(loc, resultTy, 0);
+}
+
+std::optional<RValue>
+CIRGenOffloadRuntime::emitHIPRuntimeCall(CIRGenFunction &cgf,
+                                         const CallExpr *e) {
+  // Only intercept plain function calls with a named callee.
+  const FunctionDecl *fd =
+      dyn_cast_or_null<FunctionDecl>(e->getCalleeDecl());
+  if (!fd)
+    return std::nullopt;
+
+  llvm::StringRef name = fd->getName();
+
+  CIRGenBuilderTy &builder = cgm.getBuilder();
+  mlir::Location loc =
+      cgf.currSrcLoc ? cgf.currSrcLoc.value() : builder.getUnknownLoc();
+  mlir::MLIRContext *ctx = builder.getContext();
+
+  // hipDeviceSynchronize() → offload.device_sync
+  if (name == "hipDeviceSynchronize") {
+    mlir::offload::DeviceSyncOp::create(builder, loc);
+    // Return hipSuccess (0) as !cir.int<s,32>.
+    mlir::Type retTy = cgf.convertType(e->getType());
+    return RValue::get(makeHipSuccess(builder, loc, retTy));
+  }
+
+  // hipStreamCreate(hipStream_t *pStream) → offload.stream_create
+  if (name == "hipStreamCreate") {
+    mlir::offload::StreamType streamTy =
+        mlir::offload::StreamType::get(ctx);
+    mlir::Value stream =
+        mlir::offload::StreamCreateOp::create(builder, loc, streamTy)
+            .getResult();
+    // Emit a store of the stream handle into the output pointer argument.
+    // hipStream_t is an opaque pointer; bridge via unrealized_conversion_cast.
+    mlir::Value pStream = cgf.emitScalarExpr(e->getArg(0));
+    // Cast !offload.stream to the CIR pointer's pointee type (opaque ptr).
+    mlir::Type ptrTy = pStream.getType();
+    auto ptrCirTy = mlir::dyn_cast<cir::PointerType>(ptrTy);
+    if (ptrCirTy) {
+      mlir::Value cast =
+          mlir::UnrealizedConversionCastOp::create(
+              builder, loc, TypeRange{ptrCirTy.getPointee()},
+              ValueRange{stream})
+              .getResult(0);
+      // CIRBaseBuilderTy::createStore(loc, val, ptr_val) handles type mismatches
+      // by inserting a bitcast; use it to store into *pStream.
+      builder.CIRBaseBuilderTy::createStore(loc, cast, pStream);
+    }
+    mlir::Type retTy = cgf.convertType(e->getType());
+    return RValue::get(makeHipSuccess(builder, loc, retTy));
+  }
+
+  // hipStreamDestroy(hipStream_t stream) → offload.stream_destroy
+  if (name == "hipStreamDestroy") {
+    mlir::Value handle = cgf.emitScalarExpr(e->getArg(0));
+    mlir::offload::StreamType streamTy =
+        mlir::offload::StreamType::get(ctx);
+    mlir::Value stream =
+        mlir::UnrealizedConversionCastOp::create(
+            builder, loc, TypeRange{streamTy}, ValueRange{handle})
+            .getResult(0);
+    mlir::offload::StreamDestroyOp::create(builder, loc, stream);
+    mlir::Type retTy = cgf.convertType(e->getType());
+    return RValue::get(makeHipSuccess(builder, loc, retTy));
+  }
+
+  // hipStreamSynchronize(hipStream_t stream) → offload.stream_sync
+  if (name == "hipStreamSynchronize") {
+    mlir::Value handle = cgf.emitScalarExpr(e->getArg(0));
+    mlir::offload::StreamType streamTy =
+        mlir::offload::StreamType::get(ctx);
+    mlir::Value stream =
+        mlir::UnrealizedConversionCastOp::create(
+            builder, loc, TypeRange{streamTy}, ValueRange{handle})
+            .getResult(0);
+    mlir::offload::StreamSyncOp::create(builder, loc, stream);
+    mlir::Type retTy = cgf.convertType(e->getType());
+    return RValue::get(makeHipSuccess(builder, loc, retTy));
+  }
+
+  // hipMalloc(void **ptr, size_t size) → offload.malloc %size : !llvm.ptr
+  // then store the result into *ptr.
+  if (name == "hipMalloc") {
+    mlir::Value sizeVal = cgf.emitScalarExpr(e->getArg(1));
+    // Cast size from CIR integer to index.
+    mlir::Type indexTy = mlir::IndexType::get(ctx);
+    mlir::Value sizeIdx =
+        mlir::UnrealizedConversionCastOp::create(
+            builder, loc, TypeRange{indexTy}, ValueRange{sizeVal})
+            .getResult(0);
+    // The result type of offload.malloc is AnyType — use a CIR void pointer.
+    mlir::Type voidPtrTy = builder.getVoidPtrTy();
+    mlir::Value devPtr =
+        mlir::offload::MallocOp::create(builder, loc, voidPtrTy, sizeIdx,
+                                        mlir::Value{})
+            .getResult();
+    // Store the device pointer into the void** argument.
+    mlir::Value ptrArg = cgf.emitScalarExpr(e->getArg(0));
+    auto ptrCirTy = mlir::dyn_cast<cir::PointerType>(ptrArg.getType());
+    if (ptrCirTy) {
+      mlir::Value cast =
+          mlir::UnrealizedConversionCastOp::create(
+              builder, loc, TypeRange{ptrCirTy.getPointee()},
+              ValueRange{devPtr})
+              .getResult(0);
+      builder.CIRBaseBuilderTy::createStore(loc, cast, ptrArg);
+    }
+    mlir::Type retTy = cgf.convertType(e->getType());
+    return RValue::get(makeHipSuccess(builder, loc, retTy));
+  }
+
+  // hipFree(void *ptr) → offload.free %ptr
+  if (name == "hipFree") {
+    mlir::Value ptr = cgf.emitScalarExpr(e->getArg(0));
+    mlir::offload::FreeOp::create(builder, loc, ptr, mlir::Value{});
+    mlir::Type retTy = cgf.convertType(e->getType());
+    return RValue::get(makeHipSuccess(builder, loc, retTy));
+  }
+
+  // hipMemcpy(dst, src, size, kind) → offload.memcpy %dst, %src, %size, kind
+  if (name == "hipMemcpy") {
+    mlir::Value dst  = cgf.emitScalarExpr(e->getArg(0));
+    mlir::Value src  = cgf.emitScalarExpr(e->getArg(1));
+    mlir::Value size = cgf.emitScalarExpr(e->getArg(2));
+    mlir::Type indexTy = mlir::IndexType::get(ctx);
+    mlir::Value sizeIdx =
+        mlir::UnrealizedConversionCastOp::create(
+            builder, loc, TypeRange{indexTy}, ValueRange{size})
+            .getResult(0);
+    // Evaluate the kind argument as a compile-time constant integer.
+    mlir::offload::MemcpyKind kind = mlir::offload::MemcpyKind::Default;
+    Expr::EvalResult kindResult;
+    if (e->getArg(3)->EvaluateAsInt(kindResult, cgf.getContext()))
+      kind = static_cast<mlir::offload::MemcpyKind>(
+          kindResult.Val.getInt().getZExtValue());
+    mlir::offload::MemcpyOp::create(builder, loc, dst, src, sizeIdx, kind,
+                                    mlir::Value{});
+    mlir::Type retTy = cgf.convertType(e->getType());
+    return RValue::get(makeHipSuccess(builder, loc, retTy));
+  }
+
+  return std::nullopt;
 }
 
 CIRGenCUDARuntime *clang::CIRGen::createOffloadRuntime(CIRGenModule &cgm) {

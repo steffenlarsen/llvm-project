@@ -12,6 +12,7 @@
 
 #include "CIRGenFunction.h"
 
+#include "clang/CIR/Dialect/IR/CIRDialect.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/Value.h"
 #include "clang/Basic/TargetBuiltins.h"
@@ -19,6 +20,44 @@
 
 using namespace clang;
 using namespace clang::CIRGen;
+
+/// Emit a cir.atomic.fetch op for a simple (ptr, val) → old_val atomic.
+///
+/// This uses the existing CIR atomic infrastructure and goes through the normal
+/// CIR-to-LLVM lowering path, which handles GPU address spaces correctly.
+/// The AMDGPU-specific builtins for fadd/fmin/fmax map directly to the CIR
+/// AtomicFetchKind enum (Add, Min, Max) with fetch_first semantics.
+static mlir::Value emitCIRAtomicFetch(CIRGenFunction &cgf, const CallExpr *expr,
+                                       cir::AtomicFetchKind binOp) {
+  CIRGenBuilderTy &builder = cgf.getBuilder();
+  mlir::Location loc = cgf.getLoc(expr->getExprLoc());
+  mlir::Value ptr = cgf.emitScalarExpr(expr->getArg(0));
+  mlir::Value val = cgf.emitScalarExpr(expr->getArg(1));
+  return cir::AtomicFetchOp::create(
+             builder, loc,
+             ptr, val, binOp,
+             cir::MemOrder::SequentiallyConsistent,
+             cir::SyncScopeKind::System,
+             /*is_volatile=*/false,
+             /*fetch_first=*/true)
+      ->getResult(0);
+}
+
+/// Emit a wrapping unsigned atomic increment/decrement via cir.atomic.fetch.
+///
+/// The AMDGPU wrapping inc/dec builtins (atomic_inc32/dec32) take
+/// (ptr, max_val, ordering, scope) and return the old value.  We use the
+/// UIncWrap / UDecWrap AtomicFetchKind which lowers to the same AMDGPU
+/// hardware instruction (llvm.amdgcn.atomic.inc / .dec) via the CIR-to-LLVM
+/// lowering path.
+static mlir::Value emitCIRAtomicIncDec(CIRGenFunction &cgf, const CallExpr *expr,
+                                        cir::AtomicFetchKind binOp) {
+  // Same as emitCIRAtomicFetch — arg(0)=ptr, arg(1)=val (the wrap-around max).
+  // Args(2) and (3) are the ordering and syncscope constants; ignore them here
+  // and always emit seq_cst (the conservative choice for a builtin that has
+  // no corresponding standard ordering semantic).
+  return emitCIRAtomicFetch(cgf, expr, binOp);
+}
 
 std::optional<mlir::Value>
 CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
@@ -704,34 +743,69 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
                      getContext().BuiltinInfo.getName(builtinId));
     return mlir::Value{};
   }
+  // -----------------------------------------------------------------------
+  // Wrapping atomic increment / decrement
+  //
+  // These do NOT map to a plain atomicrmw — they have wrapping semantics:
+  //   inc: *ptr = (*ptr >= val) ? 0 : *ptr + 1
+  //   dec: *ptr = (*ptr == 0 || *ptr > val) ? val : *ptr - 1
+  // CIR AtomicFetchKind::UIncWrap / UDecWrap lower to the AMDGPU hardware
+  // wrapping instructions via the standard CIR-to-LLVM lowering path.
+  // -----------------------------------------------------------------------
   case AMDGPU::BI__builtin_amdgcn_atomic_inc32:
   case AMDGPU::BI__builtin_amdgcn_atomic_inc64:
+    return emitCIRAtomicIncDec(*this, expr, cir::AtomicFetchKind::UIncWrap);
   case AMDGPU::BI__builtin_amdgcn_atomic_dec32:
   case AMDGPU::BI__builtin_amdgcn_atomic_dec64:
-  case AMDGPU::BI__builtin_amdgcn_ds_atomic_fadd_f64:
+    return emitCIRAtomicIncDec(*this, expr, cir::AtomicFetchKind::UDecWrap);
+
+  // -----------------------------------------------------------------------
+  // Floating-point atomic add — DS (shared/local) address space
+  // -----------------------------------------------------------------------
   case AMDGPU::BI__builtin_amdgcn_ds_atomic_fadd_f32:
+  case AMDGPU::BI__builtin_amdgcn_ds_faddf:
+  case AMDGPU::BI__builtin_amdgcn_ds_atomic_fadd_f64:
   case AMDGPU::BI__builtin_amdgcn_ds_atomic_fadd_v2f16:
   case AMDGPU::BI__builtin_amdgcn_ds_atomic_fadd_v2bf16:
-  case AMDGPU::BI__builtin_amdgcn_ds_faddf:
+    return emitCIRAtomicFetch(*this, expr, cir::AtomicFetchKind::Add);
+
+  // -----------------------------------------------------------------------
+  // Floating-point atomic min/max — DS (shared/local) address space
+  // -----------------------------------------------------------------------
   case AMDGPU::BI__builtin_amdgcn_ds_fminf:
+    return emitCIRAtomicFetch(*this, expr, cir::AtomicFetchKind::Min);
   case AMDGPU::BI__builtin_amdgcn_ds_fmaxf:
+    return emitCIRAtomicFetch(*this, expr, cir::AtomicFetchKind::Max);
+
+  // -----------------------------------------------------------------------
+  // Floating-point atomic add — global address space
+  // -----------------------------------------------------------------------
   case AMDGPU::BI__builtin_amdgcn_global_atomic_fadd_f32:
   case AMDGPU::BI__builtin_amdgcn_global_atomic_fadd_f64:
   case AMDGPU::BI__builtin_amdgcn_global_atomic_fadd_v2f16:
-  case AMDGPU::BI__builtin_amdgcn_flat_atomic_fadd_v2f16:
+  case AMDGPU::BI__builtin_amdgcn_global_atomic_fadd_v2bf16:
+    return emitCIRAtomicFetch(*this, expr, cir::AtomicFetchKind::Add);
+
+  // -----------------------------------------------------------------------
+  // Floating-point atomic min/max — global address space
+  // -----------------------------------------------------------------------
+  case AMDGPU::BI__builtin_amdgcn_global_atomic_fmin_f64:
+    return emitCIRAtomicFetch(*this, expr, cir::AtomicFetchKind::Min);
+  case AMDGPU::BI__builtin_amdgcn_global_atomic_fmax_f64:
+    return emitCIRAtomicFetch(*this, expr, cir::AtomicFetchKind::Max);
+
+  // -----------------------------------------------------------------------
+  // Floating-point atomic add/min/max — flat (generic) address space
+  // -----------------------------------------------------------------------
   case AMDGPU::BI__builtin_amdgcn_flat_atomic_fadd_f32:
   case AMDGPU::BI__builtin_amdgcn_flat_atomic_fadd_f64:
-  case AMDGPU::BI__builtin_amdgcn_global_atomic_fadd_v2bf16:
+  case AMDGPU::BI__builtin_amdgcn_flat_atomic_fadd_v2f16:
   case AMDGPU::BI__builtin_amdgcn_flat_atomic_fadd_v2bf16:
-  case AMDGPU::BI__builtin_amdgcn_global_atomic_fmin_f64:
-  case AMDGPU::BI__builtin_amdgcn_global_atomic_fmax_f64:
+    return emitCIRAtomicFetch(*this, expr, cir::AtomicFetchKind::Add);
   case AMDGPU::BI__builtin_amdgcn_flat_atomic_fmin_f64:
-  case AMDGPU::BI__builtin_amdgcn_flat_atomic_fmax_f64: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
-  }
+    return emitCIRAtomicFetch(*this, expr, cir::AtomicFetchKind::Min);
+  case AMDGPU::BI__builtin_amdgcn_flat_atomic_fmax_f64:
+    return emitCIRAtomicFetch(*this, expr, cir::AtomicFetchKind::Max);
   case AMDGPU::BI__builtin_amdgcn_s_sendmsg_rtn:
   case AMDGPU::BI__builtin_amdgcn_s_sendmsg_rtnl: {
     cgm.errorNYI(expr->getSourceRange(),

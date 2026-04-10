@@ -180,4 +180,32 @@ def OFFLOAD_TargetAttr : Offload_Attr<"Target", "target"> {
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// MemcpyKindAttr  —  direction for offload.memcpy
+//===----------------------------------------------------------------------===//
+
+def OFFLOAD_MemcpyKind_HostToHost
+    : I32EnumAttrCase<"HostToHost", 0, "host_to_host">;
+def OFFLOAD_MemcpyKind_HostToDevice
+    : I32EnumAttrCase<"HostToDevice", 1, "host_to_device">;
+def OFFLOAD_MemcpyKind_DeviceToHost
+    : I32EnumAttrCase<"DeviceToHost", 2, "device_to_host">;
+def OFFLOAD_MemcpyKind_DeviceToDevice
+    : I32EnumAttrCase<"DeviceToDevice", 3, "device_to_device">;
+def OFFLOAD_MemcpyKind_Default
+    : I32EnumAttrCase<"Default", 4, "default">;
+
+def OFFLOAD_MemcpyKindEnum
+    : Offload_I32Enum<"MemcpyKind", "Direction of a hipMemcpy / cudaMemcpy transfer",
+                      [OFFLOAD_MemcpyKind_HostToHost,
+                       OFFLOAD_MemcpyKind_HostToDevice,
+                       OFFLOAD_MemcpyKind_DeviceToHost,
+                       OFFLOAD_MemcpyKind_DeviceToDevice,
+                       OFFLOAD_MemcpyKind_Default]>;
+
+def OFFLOAD_MemcpyKindAttr
+    : Offload_I32EnumAttr<"memcpy_kind", OFFLOAD_MemcpyKindEnum> {
+  let summary = "Direction of a memcpy transfer (host_to_device, device_to_host, etc.)";
+}
+
 #endif // OFFLOAD_BASE
