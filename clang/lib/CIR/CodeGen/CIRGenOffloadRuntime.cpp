@@ -274,23 +274,20 @@ CIRGenOffloadRuntime::emitHIPRuntimeCall(CIRGenFunction &cgf,
     return RValue::get(makeHipSuccess(builder, loc, retTy));
   }
 
-  // hipMalloc(void **ptr, size_t size) → offload.malloc %size : !llvm.ptr
-  // then store the result into *ptr.
+  // hipMalloc(void **ptr, size_t size) → offload.malloc %size alloc_type=device
   if (name == "hipMalloc") {
     mlir::Value sizeVal = cgf.emitScalarExpr(e->getArg(1));
-    // Cast size from CIR integer to index.
     mlir::Type indexTy = mlir::IndexType::get(ctx);
     mlir::Value sizeIdx =
         mlir::UnrealizedConversionCastOp::create(
             builder, loc, TypeRange{indexTy}, ValueRange{sizeVal})
             .getResult(0);
-    // The result type of offload.malloc is AnyType — use a CIR void pointer.
     mlir::Type voidPtrTy = builder.getVoidPtrTy();
     mlir::Value devPtr =
         mlir::offload::MallocOp::create(builder, loc, voidPtrTy, sizeIdx,
+                                        mlir::offload::AllocType::device,
                                         mlir::Value{})
             .getResult();
-    // Store the device pointer into the void** argument.
     mlir::Value ptrArg = cgf.emitScalarExpr(e->getArg(0));
     auto ptrCirTy = mlir::dyn_cast<cir::PointerType>(ptrArg.getType());
     if (ptrCirTy) {
@@ -305,15 +302,90 @@ CIRGenOffloadRuntime::emitHIPRuntimeCall(CIRGenFunction &cgf,
     return RValue::get(makeHipSuccess(builder, loc, retTy));
   }
 
-  // hipFree(void *ptr) → offload.free %ptr
-  if (name == "hipFree") {
-    mlir::Value ptr = cgf.emitScalarExpr(e->getArg(0));
-    mlir::offload::FreeOp::create(builder, loc, ptr, mlir::Value{});
+  // hipHostMalloc(void **ptr, size_t size, unsigned flags)
+  //   → offload.malloc %size alloc_type=host
+  if (name == "hipHostMalloc") {
+    mlir::Value sizeVal = cgf.emitScalarExpr(e->getArg(1));
+    mlir::Type indexTy = mlir::IndexType::get(ctx);
+    mlir::Value sizeIdx =
+        mlir::UnrealizedConversionCastOp::create(
+            builder, loc, TypeRange{indexTy}, ValueRange{sizeVal})
+            .getResult(0);
+    mlir::Type voidPtrTy = builder.getVoidPtrTy();
+    mlir::Value pinnedPtr =
+        mlir::offload::MallocOp::create(builder, loc, voidPtrTy, sizeIdx,
+                                        mlir::offload::AllocType::host,
+                                        mlir::Value{})
+            .getResult();
+    mlir::Value ptrArg = cgf.emitScalarExpr(e->getArg(0));
+    auto ptrCirTy = mlir::dyn_cast<cir::PointerType>(ptrArg.getType());
+    if (ptrCirTy) {
+      mlir::Value cast =
+          mlir::UnrealizedConversionCastOp::create(
+              builder, loc, TypeRange{ptrCirTy.getPointee()},
+              ValueRange{pinnedPtr})
+              .getResult(0);
+      builder.CIRBaseBuilderTy::createStore(loc, cast, ptrArg);
+    }
     mlir::Type retTy = cgf.convertType(e->getType());
     return RValue::get(makeHipSuccess(builder, loc, retTy));
   }
 
-  // hipMemcpy(dst, src, size, kind) → offload.memcpy %dst, %src, %size, kind
+  // hipMallocManaged(void **ptr, size_t size, unsigned flags)
+  //   → offload.malloc %size alloc_type=managed
+  if (name == "hipMallocManaged") {
+    mlir::Value sizeVal = cgf.emitScalarExpr(e->getArg(1));
+    mlir::Type indexTy = mlir::IndexType::get(ctx);
+    mlir::Value sizeIdx =
+        mlir::UnrealizedConversionCastOp::create(
+            builder, loc, TypeRange{indexTy}, ValueRange{sizeVal})
+            .getResult(0);
+    mlir::Type voidPtrTy = builder.getVoidPtrTy();
+    mlir::Value managedPtr =
+        mlir::offload::MallocOp::create(builder, loc, voidPtrTy, sizeIdx,
+                                        mlir::offload::AllocType::managed,
+                                        mlir::Value{})
+            .getResult();
+    mlir::Value ptrArg = cgf.emitScalarExpr(e->getArg(0));
+    auto ptrCirTy = mlir::dyn_cast<cir::PointerType>(ptrArg.getType());
+    if (ptrCirTy) {
+      mlir::Value cast =
+          mlir::UnrealizedConversionCastOp::create(
+              builder, loc, TypeRange{ptrCirTy.getPointee()},
+              ValueRange{managedPtr})
+              .getResult(0);
+      builder.CIRBaseBuilderTy::createStore(loc, cast, ptrArg);
+    }
+    mlir::Type retTy = cgf.convertType(e->getType());
+    return RValue::get(makeHipSuccess(builder, loc, retTy));
+  }
+
+  // hipFree(void *ptr) → offload.free %ptr alloc_type=device
+  if (name == "hipFree") {
+    mlir::Value ptr = cgf.emitScalarExpr(e->getArg(0));
+    mlir::offload::FreeOp::create(builder, loc, ptr,
+                                   mlir::offload::AllocType::device,
+                                   mlir::Value{});
+    mlir::Type retTy = cgf.convertType(e->getType());
+    return RValue::get(makeHipSuccess(builder, loc, retTy));
+  }
+
+  // hipHostFree(void *ptr) → offload.free %ptr alloc_type=host
+  if (name == "hipHostFree") {
+    mlir::Value ptr = cgf.emitScalarExpr(e->getArg(0));
+    mlir::offload::FreeOp::create(builder, loc, ptr,
+                                   mlir::offload::AllocType::host,
+                                   mlir::Value{});
+    mlir::Type retTy = cgf.convertType(e->getType());
+    return RValue::get(makeHipSuccess(builder, loc, retTy));
+  }
+
+  // hipMemcpy(dst, src, size, kind)
+  //   → offload.memcpy %dst, %src, %size dst_space=X src_space=Y
+  //
+  // Map hipMemcpyKind enum to (dst_space, src_space) AllocType pairs:
+  //   0=H2H: host←host   1=H2D: device←host
+  //   2=D2H: host←device 3=D2D: device←device  4=Default: managed (→Default)
   if (name == "hipMemcpy") {
     mlir::Value dst  = cgf.emitScalarExpr(e->getArg(0));
     mlir::Value src  = cgf.emitScalarExpr(e->getArg(1));
@@ -323,14 +395,34 @@ CIRGenOffloadRuntime::emitHIPRuntimeCall(CIRGenFunction &cgf,
         mlir::UnrealizedConversionCastOp::create(
             builder, loc, TypeRange{indexTy}, ValueRange{size})
             .getResult(0);
-    // Evaluate the kind argument as a compile-time constant integer.
-    mlir::offload::MemcpyKind kind = mlir::offload::MemcpyKind::Default;
+    // Default to managed (→ hipMemcpyDefault when lowered).
+    mlir::offload::AllocType dstSpace = mlir::offload::AllocType::managed;
+    mlir::offload::AllocType srcSpace = mlir::offload::AllocType::managed;
     Expr::EvalResult kindResult;
-    if (e->getArg(3)->EvaluateAsInt(kindResult, cgf.getContext()))
-      kind = static_cast<mlir::offload::MemcpyKind>(
-          kindResult.Val.getInt().getZExtValue());
-    mlir::offload::MemcpyOp::create(builder, loc, dst, src, sizeIdx, kind,
-                                    mlir::Value{});
+    if (e->getArg(3)->EvaluateAsInt(kindResult, cgf.getContext())) {
+      switch (kindResult.Val.getInt().getZExtValue()) {
+      case 0: // hipMemcpyHostToHost
+        dstSpace = mlir::offload::AllocType::host;
+        srcSpace = mlir::offload::AllocType::host;
+        break;
+      case 1: // hipMemcpyHostToDevice
+        dstSpace = mlir::offload::AllocType::device;
+        srcSpace = mlir::offload::AllocType::host;
+        break;
+      case 2: // hipMemcpyDeviceToHost
+        dstSpace = mlir::offload::AllocType::host;
+        srcSpace = mlir::offload::AllocType::device;
+        break;
+      case 3: // hipMemcpyDeviceToDevice
+        dstSpace = mlir::offload::AllocType::device;
+        srcSpace = mlir::offload::AllocType::device;
+        break;
+      default: // hipMemcpyDefault (4) or unknown
+        break;
+      }
+    }
+    mlir::offload::MemcpyOp::create(builder, loc, dst, src, sizeIdx,
+                                    dstSpace, srcSpace, mlir::Value{});
     mlir::Type retTy = cgf.convertType(e->getType());
     return RValue::get(makeHipSuccess(builder, loc, retTy));
   }

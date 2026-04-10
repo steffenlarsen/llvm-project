@@ -14,6 +14,9 @@
 //   offload.stream_destroy → func.call @hipStreamDestroy(%handle : i64)
 //   offload.stream_sync    → func.call @hipStreamSynchronize(%handle : i64)
 //   offload.device_sync    → func.call @hipDeviceSynchronize()
+//   offload.malloc         → @hipMalloc / @hipHostMalloc / @hipMallocManaged
+//   offload.free           → @hipFree / @hipHostFree
+//   offload.memcpy         → @hipMemcpy (kind reconstructed from dst/src spaces)
 //   offload.memcpy_to_symbol → llvm.mlir.addressof + func.call @hipMemcpy
 //
 //===----------------------------------------------------------------------===//
@@ -161,18 +164,16 @@ struct LowerHostRuntimePass
       op.erase();
     });
 
-    // offload.malloc(size) → @hip/cudaMalloc(ptr* slot, size_t) -> i32
+    // offload.malloc(size, alloc_type) → runtime malloc variant
     //
-    // hipMalloc writes the allocated ptr through a void** argument:
-    //   hipError_t hipMalloc(void **ptr, size_t size);
-    // We model this with LLVM alloca/call/load:
-    //   1. llvm.alloca 1 x i64  — slot for the returned pointer (as i64)
-    //   2. llvm.call @hipMalloc(%slot, %size)
-    //   3. llvm.load %slot        — the allocated device pointer (i64)
+    // hipMalloc / hipHostMalloc / hipMallocManaged each write the allocated
+    // pointer through a void** argument.  We model this with LLVM alloca/call/load:
+    //   1. llvm.alloca 1 x i64  — slot for the returned pointer
+    //   2. llvm.call @hip{Malloc|HostMalloc|MallocManaged}(%slot, %size[, flags])
+    //   3. llvm.load %slot        — the allocated pointer (i64)
     module.walk([&](offload::MallocOp op) {
       b.setInsertionPoint(op);
       mlir::Location loc = op.getLoc();
-      StringRef fn = pick("hipMalloc", "cudaMalloc", useHip);
       Type llvmPtrTy = LLVM::LLVMPointerType::get(b.getContext());
       Value sizeAsI64 = b.create<UnrealizedConversionCastOp>(
           loc, TypeRange{i64Ty}, ValueRange{op.getSize()}).getResult(0);
@@ -180,9 +181,35 @@ struct LowerHostRuntimePass
           loc, i64Ty, b.getIntegerAttr(i64Ty, 1));
       Value slot = b.create<LLVM::AllocaOp>(loc, llvmPtrTy, i64Ty, one,
                                              /*alignment=*/8);
-      auto decl = getOrInsertDecl(b, module, fn,
-                                  b.getFunctionType({llvmPtrTy, i64Ty}, {i32Ty}));
-      b.create<func::CallOp>(loc, decl, ValueRange{slot, sizeAsI64});
+
+      offload::AllocType allocTy = op.getAllocType();
+      if (!useHip || allocTy == offload::AllocType::device) {
+        // hipMalloc(void**, size_t) / cudaMalloc(void**, size_t)
+        StringRef fn = pick("hipMalloc", "cudaMalloc", useHip);
+        auto decl = getOrInsertDecl(b, module, fn,
+                                    b.getFunctionType({llvmPtrTy, i64Ty}, {i32Ty}));
+        b.create<func::CallOp>(loc, decl, ValueRange{slot, sizeAsI64});
+      } else if (allocTy == offload::AllocType::host) {
+        // hipHostMalloc(void**, size_t, unsigned flags)
+        Type u32Ty = b.getIntegerType(32, /*isSigned=*/false);
+        Value flags = b.create<LLVM::ConstantOp>(
+            loc, u32Ty, b.getIntegerAttr(u32Ty, 0));
+        auto decl = getOrInsertDecl(
+            b, module, "hipHostMalloc",
+            b.getFunctionType({llvmPtrTy, i64Ty, u32Ty}, {i32Ty}));
+        b.create<func::CallOp>(loc, decl, ValueRange{slot, sizeAsI64, flags});
+      } else {
+        // hipMallocManaged(void**, size_t, unsigned flags)
+        // hipMemAttachGlobal = 1
+        Type u32Ty = b.getIntegerType(32, /*isSigned=*/false);
+        Value flags = b.create<LLVM::ConstantOp>(
+            loc, u32Ty, b.getIntegerAttr(u32Ty, 1));
+        auto decl = getOrInsertDecl(
+            b, module, "hipMallocManaged",
+            b.getFunctionType({llvmPtrTy, i64Ty, u32Ty}, {i32Ty}));
+        b.create<func::CallOp>(loc, decl, ValueRange{slot, sizeAsI64, flags});
+      }
+
       Value ptr = b.create<LLVM::LoadOp>(loc, i64Ty, slot);
       Value cast = b.create<UnrealizedConversionCastOp>(
           loc, TypeRange{op.getResult().getType()},
@@ -191,21 +218,36 @@ struct LowerHostRuntimePass
       op.erase();
     });
 
-    // offload.free(ptr) → @hip/cudaFree(ptr) -> i32
+    // offload.free(ptr, alloc_type) → hipFree / hipHostFree
     module.walk([&](offload::FreeOp op) {
       b.setInsertionPoint(op);
       mlir::Location loc = op.getLoc();
-      StringRef fn = pick("hipFree", "cudaFree", useHip);
       Type llvmPtrTy = LLVM::LLVMPointerType::get(b.getContext());
       Value ptr = b.create<UnrealizedConversionCastOp>(
           loc, TypeRange{llvmPtrTy}, ValueRange{op.getPtr()}).getResult(0);
+
+      // host-pinned memory uses hipHostFree; device and managed use hipFree.
+      StringRef fn;
+      if (useHip && op.getAllocType() == offload::AllocType::host)
+        fn = "hipHostFree";
+      else
+        fn = pick("hipFree", "cudaFree", useHip);
+
       auto decl = getOrInsertDecl(b, module, fn,
                                   b.getFunctionType({llvmPtrTy}, {i32Ty}));
       b.create<func::CallOp>(loc, decl, ValueRange{ptr});
       op.erase();
     });
 
-    // offload.memcpy(dst, src, size, kind) → @hip/cudaMemcpy(dst, src, size, kind_int) -> i32
+    // offload.memcpy(dst, src, size, dst_space, src_space)
+    //   → @hip/cudaMemcpy(dst, src, size, kind_int) -> i32
+    //
+    // Reconstruct the hipMemcpyKind integer from (dst_space, src_space):
+    //   host←host   = 0  (HostToHost)
+    //   device←host = 1  (HostToDevice)
+    //   host←device = 2  (DeviceToHost)
+    //   device←dev  = 3  (DeviceToDevice)
+    //   managed/any = 4  (Default)
     module.walk([&](offload::MemcpyOp op) {
       b.setInsertionPoint(op);
       mlir::Location loc = op.getLoc();
@@ -217,7 +259,21 @@ struct LowerHostRuntimePass
           loc, TypeRange{llvmPtrTy}, ValueRange{op.getSrc()}).getResult(0);
       Value sizeAsI64 = b.create<UnrealizedConversionCastOp>(
           loc, TypeRange{i64Ty}, ValueRange{op.getSize()}).getResult(0);
-      int32_t kindInt = static_cast<int32_t>(op.getKind());
+
+      // Derive hipMemcpyKind from the per-pointer allocation spaces.
+      int32_t kindInt = 4; // Default
+      offload::AllocType dstSp = op.getDstSpace();
+      offload::AllocType srcSp = op.getSrcSpace();
+      if (dstSp != offload::AllocType::managed &&
+          srcSp != offload::AllocType::managed) {
+        bool dstDev = (dstSp == offload::AllocType::device);
+        bool srcDev = (srcSp == offload::AllocType::device);
+        if (!dstDev && !srcDev)      kindInt = 0; // HostToHost
+        else if (dstDev && !srcDev)  kindInt = 1; // HostToDevice
+        else if (!dstDev && srcDev)  kindInt = 2; // DeviceToHost
+        else                         kindInt = 3; // DeviceToDevice
+      }
+
       Value kindVal = b.create<LLVM::ConstantOp>(
           loc, i32Ty, b.getIntegerAttr(i32Ty, kindInt));
       auto decl = getOrInsertDecl(

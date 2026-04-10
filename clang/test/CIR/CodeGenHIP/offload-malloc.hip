@@ -3,9 +3,12 @@
 //
 // The CIR emitter intercepts recognized HIP runtime calls in
 // CIRGenOffloadRuntime::emitHIPRuntimeCall() and emits:
-//   hipMalloc(&ptr, size)    → offload.malloc %size : <ptr_type>
-//   hipFree(ptr)             → offload.free %ptr
-//   hipMemcpy(dst,src,n,k)  → offload.memcpy %dst, %src, %n, <kind>
+//   hipMalloc(&ptr, size)         → offload.malloc %size alloc_type=<device>
+//   hipHostMalloc(&ptr, size, fl) → offload.malloc %size alloc_type=<host>
+//   hipMallocManaged(&ptr,size,fl)→ offload.malloc %size alloc_type=<managed>
+//   hipFree(ptr)                  → offload.free %ptr alloc_type=<device>
+//   hipHostFree(ptr)              → offload.free %ptr alloc_type=<host>
+//   hipMemcpy(dst,src,n,kind)     → offload.memcpy %dst, %src, %n dst_space=X src_space=Y
 //
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -fclangir -clangir-offload \
 // RUN:            -aux-triple amdgcn-amd-amdhsa -aux-target-cpu gfx906 \
@@ -23,8 +26,28 @@ __host__ void alloc_free(void **ptr, size_t n) {
 }
 
 // CIR-LABEL: offload.func @_Z10alloc_freePPvm
-// CIR: offload.malloc
-// CIR: offload.free
+// CIR: offload.malloc {{.*}} alloc_type = <device>
+// CIR: offload.free {{.*}} alloc_type = <device>
+
+// --- Host-pinned malloc / free ----------------------------------------------
+
+__host__ void pinned_alloc_free(void **ptr, size_t n) {
+  hipHostMalloc(ptr, n, 0);
+  hipHostFree(*ptr);
+}
+
+// CIR-LABEL: offload.func @_Z17pinned_alloc_freePPvm
+// CIR: offload.malloc {{.*}} alloc_type = <host>
+// CIR: offload.free {{.*}} alloc_type = <host>
+
+// --- Managed / unified malloc -----------------------------------------------
+
+__host__ void managed_alloc(void **ptr, size_t n) {
+  hipMallocManaged(ptr, n, 1);
+}
+
+// CIR-LABEL: offload.func @_Z13managed_allocPPvm
+// CIR: offload.malloc {{.*}} alloc_type = <managed>
 
 // --- Device memcpy ----------------------------------------------------------
 
@@ -33,4 +56,18 @@ __host__ void copy_h2d(void *dst, const void *src, size_t n) {
 }
 
 // CIR-LABEL: offload.func @_Z8copy_h2dPvPKvm
-// CIR: offload.memcpy {{.*}} <host_to_device>
+// CIR: offload.memcpy {{.*}} dst_space = <device> src_space = <host>
+
+__host__ void copy_d2h(void *dst, const void *src, size_t n) {
+  hipMemcpy(dst, src, n, hipMemcpyDeviceToHost);
+}
+
+// CIR-LABEL: offload.func @_Z8copy_d2hPvPKvm
+// CIR: offload.memcpy {{.*}} dst_space = <host> src_space = <device>
+
+__host__ void copy_d2d(void *dst, const void *src, size_t n) {
+  hipMemcpy(dst, src, n, hipMemcpyDeviceToDevice);
+}
+
+// CIR-LABEL: offload.func @_Z8copy_d2dPvPKvm
+// CIR: offload.memcpy {{.*}} dst_space = <device> src_space = <device>

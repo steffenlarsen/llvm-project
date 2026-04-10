@@ -337,41 +337,58 @@ def Offload_MemcpyToSymbolOp : Offload_Op<"memcpy_to_symbol"> {
 //--- offload.malloc -------------------------------------------------------//
 
 def Offload_MallocOp : Offload_Op<"malloc"> {
-  let summary = "Allocate device memory (hipMalloc / cudaMalloc)";
+  let summary = "Allocate memory (hipMalloc / hipHostMalloc / hipMallocManaged)";
   let description = [{
-    Allocates `$size` bytes of device memory and returns a pointer to it.
-    Corresponds to `hipMalloc` / `cudaMalloc`.
+    Allocates `$size` bytes of memory of the given `$alloc_type` and returns a
+    pointer to it.
+
+    | `alloc_type` | HIP call           | liboffload           |
+    |--------------|--------------------|-----------------------|
+    | `device`     | `hipMalloc`        | `olMemAlloc DEVICE`   |
+    | `host`       | `hipHostMalloc`    | `olMemAlloc HOST`     |
+    | `managed`    | `hipMallocManaged` | `olMemAlloc MANAGED`  |
 
     Example:
     ```mlir
-    %ptr = offload.malloc %size : !llvm.ptr
+    %ptr = offload.malloc %size alloc_type = #offload.alloc_type<device> : !llvm.ptr
+    %pin = offload.malloc %size alloc_type = #offload.alloc_type<host>   : !llvm.ptr
     ```
   }];
   let arguments = (ins Index:$size,
+                       OFFLOAD_AllocTypeAttr:$alloc_type,
                        Optional<OFFLOAD_StreamType>:$stream);
   let results   = (outs AnyType:$ptr);
   let assemblyFormat = [{
-    $size (`,` `stream` `=` $stream^ `:` type($stream))? attr-dict `:` type($ptr)
+    $size `alloc_type` `=` $alloc_type
+    (`,` `stream` `=` $stream^ `:` type($stream))? attr-dict `:` type($ptr)
   }];
 }
 
 //--- offload.free ---------------------------------------------------------//
 
 def Offload_FreeOp : Offload_Op<"free"> {
-  let summary = "Free device memory (hipFree / cudaFree)";
+  let summary = "Free memory (hipFree / hipHostFree)";
   let description = [{
-    Releases device memory previously allocated with `offload.malloc`.
-    Corresponds to `hipFree` / `cudaFree`.
+    Releases memory previously allocated with `offload.malloc`.  The
+    `$alloc_type` must match the type used at allocation time.
+
+    | `alloc_type` | HIP call      | liboffload    |
+    |--------------|---------------|---------------|
+    | `device`     | `hipFree`     | `olMemFree`   |
+    | `host`       | `hipHostFree` | `olMemFree`   |
+    | `managed`    | `hipFree`     | `olMemFree`   |
 
     Example:
     ```mlir
-    offload.free %ptr : !llvm.ptr
+    offload.free %ptr alloc_type = #offload.alloc_type<device> : !llvm.ptr
     ```
   }];
   let arguments = (ins AnyType:$ptr,
+                       OFFLOAD_AllocTypeAttr:$alloc_type,
                        Optional<OFFLOAD_StreamType>:$stream);
   let assemblyFormat = [{
-    $ptr `:` type($ptr) (`,` `stream` `=` $stream^ `:` type($stream))? attr-dict
+    $ptr `alloc_type` `=` $alloc_type
+    (`,` `stream` `=` $stream^ `:` type($stream))? attr-dict `:` type($ptr)
   }];
 }
 
@@ -380,21 +397,36 @@ def Offload_FreeOp : Offload_Op<"free"> {
 def Offload_MemcpyOp : Offload_Op<"memcpy"> {
   let summary = "Copy memory between host and device (hipMemcpy / cudaMemcpy)";
   let description = [{
-    Copies `$size` bytes from `$src` to `$dst` in the direction given by
-    `$kind`.  Corresponds to `hipMemcpy` / `cudaMemcpy`.
+    Copies `$size` bytes from `$src` to `$dst`.  The `$dst_space` and
+    `$src_space` attributes identify the allocation kind of each pointer,
+    carrying the same information as `hipMemcpyKind` but in a form that
+    both HIP/CUDA and liboffload lowering can consume directly.
+
+    | `dst_space` | `src_space` | HIP kind            | liboffload             |
+    |-------------|-------------|---------------------|------------------------|
+    | `device`    | `host`      | `HostToDevice` (1)  | dstDev=GPU, srcDev=host|
+    | `host`      | `device`    | `DeviceToHost` (2)  | dstDev=host, srcDev=GPU|
+    | `device`    | `device`    | `DeviceToDevice` (3)| dstDev=GPU, srcDev=GPU |
+    | `host`      | `host`      | `HostToHost` (0)    | dstDev=host, srcDev=host|
+    | `managed`   | `*`         | `Default` (4)       | managed pointer path   |
 
     Example:
     ```mlir
-    offload.memcpy %dst, %src, %size, host_to_device : !llvm.ptr, !llvm.ptr
+    offload.memcpy %dst, %src, %size
+        dst_space = #offload.alloc_type<device>
+        src_space = #offload.alloc_type<host>
+        : !llvm.ptr, !llvm.ptr
     ```
   }];
   let arguments = (ins AnyType:$dst,
                        AnyType:$src,
                        Index:$size,
-                       OFFLOAD_MemcpyKindAttr:$kind,
+                       OFFLOAD_AllocTypeAttr:$dst_space,
+                       OFFLOAD_AllocTypeAttr:$src_space,
                        Optional<OFFLOAD_StreamType>:$stream);
   let assemblyFormat = [{
-    $dst `,` $src `,` $size `,` $kind
+    $dst `,` $src `,` $size
+    `dst_space` `=` $dst_space `src_space` `=` $src_space
     (`,` `stream` `=` $stream^ `:` type($stream))?
     attr-dict `:` type($dst) `,` type($src)
   }];

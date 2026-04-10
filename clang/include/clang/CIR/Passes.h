@@ -25,7 +25,7 @@ std::unique_ptr<mlir::Pass> createConvertCIRToLLVMPass();
 /// Adds passes that fully lower CIR to the LLVMIR dialect.
 void populateCIRToLLVMPasses(mlir::OpPassManager &pm,
                              bool enableOffloadSplit = false,
-                             llvm::StringRef offloadArch = {},
+                             llvm::ArrayRef<std::string> offloadArchs = {},
                              bool isDeviceCompilation = false);
 
 } // namespace direct

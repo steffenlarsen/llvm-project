@@ -47,7 +47,10 @@ extern "C" hipError_t hipStreamSynchronize(hipStream_t stream);
 
 /* Memory management */
 extern "C" hipError_t hipMalloc(void **ptr, size_t size);
+extern "C" hipError_t hipHostMalloc(void **ptr, size_t size, unsigned flags);
+extern "C" hipError_t hipMallocManaged(void **ptr, size_t size, unsigned flags);
 extern "C" hipError_t hipFree(void *ptr);
+extern "C" hipError_t hipHostFree(void *ptr);
 
 typedef enum hipMemcpyKind {
   hipMemcpyHostToHost     = 0,

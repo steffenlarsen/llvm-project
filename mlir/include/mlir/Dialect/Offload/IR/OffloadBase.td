@@ -181,31 +181,29 @@ def OFFLOAD_TargetAttr : Offload_Attr<"Target", "target"> {
 }
 
 //===----------------------------------------------------------------------===//
-// MemcpyKindAttr  —  direction for offload.memcpy
+// AllocTypeAttr  —  allocation kind for offload.malloc / offload.free /
+//                   offload.memcpy src/dst spaces
+//
+// Kept separate from MemSpaceAttr: MemSpace covers device-side address spaces
+// (shared, constant, local) that have no meaning for host-side allocation.
+// AllocType is the three-way split understood by both HIP (hipMalloc /
+// hipHostMalloc / hipMallocManaged) and liboffload (OL_ALLOC_TYPE_*).
 //===----------------------------------------------------------------------===//
 
-def OFFLOAD_MemcpyKind_HostToHost
-    : I32EnumAttrCase<"HostToHost", 0, "host_to_host">;
-def OFFLOAD_MemcpyKind_HostToDevice
-    : I32EnumAttrCase<"HostToDevice", 1, "host_to_device">;
-def OFFLOAD_MemcpyKind_DeviceToHost
-    : I32EnumAttrCase<"DeviceToHost", 2, "device_to_host">;
-def OFFLOAD_MemcpyKind_DeviceToDevice
-    : I32EnumAttrCase<"DeviceToDevice", 3, "device_to_device">;
-def OFFLOAD_MemcpyKind_Default
-    : I32EnumAttrCase<"Default", 4, "default">;
+def OFFLOAD_AllocType_Device  : I32EnumAttrCase<"device",  0, "device">;
+def OFFLOAD_AllocType_Host    : I32EnumAttrCase<"host",    1, "host">;
+def OFFLOAD_AllocType_Managed : I32EnumAttrCase<"managed", 2, "managed">;
 
-def OFFLOAD_MemcpyKindEnum
-    : Offload_I32Enum<"MemcpyKind", "Direction of a hipMemcpy / cudaMemcpy transfer",
-                      [OFFLOAD_MemcpyKind_HostToHost,
-                       OFFLOAD_MemcpyKind_HostToDevice,
-                       OFFLOAD_MemcpyKind_DeviceToHost,
-                       OFFLOAD_MemcpyKind_DeviceToDevice,
-                       OFFLOAD_MemcpyKind_Default]>;
+def OFFLOAD_AllocTypeEnum
+    : Offload_I32Enum<"AllocType",
+                      "Allocation kind for malloc/free and memcpy src/dst spaces",
+                      [OFFLOAD_AllocType_Device,
+                       OFFLOAD_AllocType_Host,
+                       OFFLOAD_AllocType_Managed]>;
 
-def OFFLOAD_MemcpyKindAttr
-    : Offload_I32EnumAttr<"memcpy_kind", OFFLOAD_MemcpyKindEnum> {
-  let summary = "Direction of a memcpy transfer (host_to_device, device_to_host, etc.)";
+def OFFLOAD_AllocTypeAttr
+    : Offload_I32EnumAttr<"alloc_type", OFFLOAD_AllocTypeEnum> {
+  let summary = "Allocation kind: device, host (pinned), or managed (unified)";
 }
 
 #endif // OFFLOAD_BASE
