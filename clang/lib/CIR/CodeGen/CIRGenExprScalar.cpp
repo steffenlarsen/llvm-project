@@ -317,10 +317,10 @@ public:
                   idx = mlir::gpu::GridDimOp::create(builder, loc, *dim);
               }
               if (idx) {
-                // gpu.* ops return index; bridge to !cir.u32i via an
-                // unrealized_conversion_cast so downstream CIR ops see the
-                // expected C unsigned-int type.  The cast folds cleanly during
-                // CIR-to-LLVM conversion (both sides become i32).
+                // gpu.* ops return index; the consumer expects !cir.u32i (C
+                // unsigned int).  Emit an unrealized_conversion_cast here;
+                // UnrealizedCastFoldingLowering handles it during CIR-to-LLVM
+                // conversion by emitting llvm.trunc (index is 64-bit on x86_64).
                 return mlir::UnrealizedConversionCastOp::create(
                            builder, loc, cgf.builder.getUInt32Ty(), idx)
                     .getResult(0);
@@ -2471,10 +2471,10 @@ mlir::Value ScalarExprEmitter::VisitMemberExpr(MemberExpr *e) {
               idx = mlir::gpu::GridDimOp::create(builder, loc, *dim);
 
             if (idx) {
-              // gpu.* ops return index; bridge to !cir.u32i via an
-              // unrealized_conversion_cast so downstream CIR ops see the
-              // expected C unsigned-int type.  The cast folds cleanly during
-              // CIR-to-LLVM conversion (both sides become i32).
+              // gpu.* ops return index; the consumer expects !cir.u32i (C
+              // unsigned int).  Emit an unrealized_conversion_cast here;
+              // UnrealizedCastFoldingLowering handles it during CIR-to-LLVM
+              // conversion by emitting llvm.trunc (index is 64-bit on x86_64).
               return mlir::UnrealizedConversionCastOp::create(
                          builder, loc, cgf.builder.getUInt32Ty(), idx)
                   .getResult(0);

@@ -12,6 +12,7 @@
 
 #include "CIRGenFunction.h"
 
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/Value.h"
 #include "clang/Basic/TargetBuiltins.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -23,6 +24,13 @@ std::optional<mlir::Value>
 CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
                                       const CallExpr *expr) {
   switch (builtinId) {
+  case AMDGPU::BI__builtin_amdgcn_s_barrier:
+    // Workgroup barrier: synchronises all threads in the block and makes all
+    // memory accesses visible.  Emit gpu.barrier which the GPU-to-ROCDL
+    // conversion lowers to rocdl.s_barrier (s_barrier instruction).
+    mlir::gpu::BarrierOp::create(builder, getLoc(expr->getExprLoc()));
+    return mlir::Value{};
+
   case AMDGPU::BI__builtin_amdgcn_wave_reduce_add_u32:
   case AMDGPU::BI__builtin_amdgcn_wave_reduce_sub_u32:
   case AMDGPU::BI__builtin_amdgcn_wave_reduce_min_i32:

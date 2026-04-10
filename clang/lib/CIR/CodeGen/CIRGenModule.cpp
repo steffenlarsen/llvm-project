@@ -3196,7 +3196,8 @@ cir::FuncOp CIRGenModule::createRuntimeFunction(cir::FuncType ty,
                                                 bool isLocal,
                                                 bool assumeConvergent) {
   if (assumeConvergent)
-    errorNYI("createRuntimeFunction: assumeConvergent");
+    extraAttrs.set(cir::CIRDialect::getConvergentAttrName(),
+                   mlir::UnitAttr::get(&getMLIRContext()));
 
   cir::FuncOp entry = getOrCreateCIRFunction(name, ty, GlobalDecl(),
                                              /*forVtable=*/false, extraAttrs);

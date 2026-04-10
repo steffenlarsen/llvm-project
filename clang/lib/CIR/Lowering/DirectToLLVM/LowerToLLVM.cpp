@@ -3413,11 +3413,10 @@ void ConvertCIRToLLVMPass::processCIRAttrs(mlir::ModuleOp module) {
                     asmAttr);
 }
 
-/// Fold `builtin.unrealized_conversion_cast` ops that are left behind by the
-/// CIR-to-CIR GPU launch lowering (they convert CIR integer types to MLIR
-/// standard integer types for use in `arith.index_castui`).  When the source
-/// type converts to the same LLVM type as the destination type, replace the
-/// cast with the already-converted input value.
+/// Fold `builtin.unrealized_conversion_cast` ops that survive CIR-to-LLVM
+/// type conversion.  When the source type converts to the same LLVM type as
+/// the destination type (e.g. !cir.u32i → i32 becomes i32 → i32), replace
+/// the cast with the already-converted input value.
 struct UnrealizedCastFoldingLowering
     : public mlir::OpConversionPattern<mlir::UnrealizedConversionCastOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -3431,7 +3430,7 @@ struct UnrealizedCastFoldingLowering
     mlir::Value converted = adaptor.getInputs()[0];
     mlir::Type outTy = op.getOutputs()[0].getType();
 
-    // Case 1: After CIR type conversion both sides have the same type
+    // After CIR type conversion both sides have the same type
     // (e.g. !cir.u32i → i32 becomes i32 → i32).  Fold to identity.
     if (converted.getType() == outTy) {
       rewriter.replaceOp(op, converted);
@@ -3443,15 +3442,12 @@ struct UnrealizedCastFoldingLowering
       return mlir::success();
     }
 
-    // Case 2: index → !cir.u32i cast emitted by CIRGenExprScalar when
-    // gpu.thread_id / gpu.block_id / etc. feed into CIR ops that expect a
-    // C unsigned-int type.  The LLVMTypeConverter maps index → i64, so after
-    // type conversion the adapted input has type i64 and the output type
-    // converts to i32.  Truncate i64 → i32 to produce the expected result.
+    // Case 2: index → !cir.u32i cast emitted by CIRGenExprScalar for GPU
+    // built-in variables (threadIdx, blockIdx, etc.).  On a 64-bit target the
+    // converted input is an i64 (index type); truncate it to the LLVM type that
+    // !cir.u32i maps to (i32).
     if (op.getInputs().size() == 1 && op.getInputs()[0].getType().isIndex() &&
         convertedOutTy && mlir::isa<mlir::IntegerType>(convertedOutTy)) {
-      // converted is the type-converter output for the index input (i.e. i64).
-      // Truncate to the target integer width (e.g. i32 for !cir.u32i).
       rewriter.replaceOpWithNewOp<mlir::LLVM::TruncOp>(op, convertedOutTy,
                                                         converted);
       return mlir::success();
@@ -3851,54 +3847,24 @@ struct CIRGpuModuleToBinaryPass
     if (targeted.empty())
       return;
 
-    // ConvertGpuOpsToROCDLOps leaves unrealized_conversion_cast pairs when
-    // replacing gpu.thread_id / gpu.block_id / gpu.block_dim / gpu.grid_dim:
-    // the ROCDL lowering emits e.g. (i64 → index) for any index-typed consumer
-    // that was left behind, and the CIR pass earlier emitted (index → i64) to
-    // bridge the original cast.  These round-trip pairs fold to identity.
-    // Remove them before translateModuleToLLVMIR (inside transformGpuModulesToBinaries)
-    // which cannot handle builtin.unrealized_conversion_cast.
-    for (auto &gpuMod : targeted) {
+    // ConvertGpuOpsToROCDLOps replaces gpu.thread_id / gpu.block_id / etc.
+    // (which return index) with rocdl intrinsics (which return i32) and emits
+    // unrealized_conversion_cast(i32 → index) for any remaining index
+    // consumers.  CIRGenExprScalar already emitted unrealized_conversion_cast
+    // (index → !cir.u32i) which was lowered to llvm.trunc by
+    // ConvertCIRInGpuModulePass, so the (i32 → index) casts are now dead.
+    // Remove them before calling translateModuleToLLVMIR, which cannot handle
+    // any non-LLVM ops.
+    for (mlir::gpu::GPUModuleOp gpuMod : targeted) {
       bool changed = true;
       while (changed) {
         changed = false;
-        SmallVector<mlir::UnrealizedConversionCastOp> casts;
-        gpuMod.walk([&](mlir::UnrealizedConversionCastOp op) {
-          casts.push_back(op);
-        });
-        for (auto cast : casts) {
-          if (!cast) continue; // may have been erased
-          // Remove dead casts.
+        gpuMod.walk([&](mlir::UnrealizedConversionCastOp cast) {
           if (cast.use_empty()) {
             cast.erase();
             changed = true;
-            continue;
           }
-          // Only handle single-input, single-output casts.
-          if (cast.getInputs().size() != 1 || cast.getOutputs().size() != 1)
-            continue;
-          mlir::Value input = cast.getInputs()[0];
-          mlir::Type inTy = input.getType();
-          mlir::Type outTy = cast.getOutputs()[0].getType();
-          // Identity cast: same type.
-          if (inTy == outTy) {
-            cast.getOutputs()[0].replaceAllUsesWith(input);
-            cast.erase();
-            changed = true;
-            continue;
-          }
-          // Round-trip: (T → S) where input is produced by (S → T). Fold to S.
-          if (auto defCast = input.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
-            if (defCast.getInputs().size() == 1 &&
-                defCast.getOutputs().size() == 1 &&
-                defCast.getInputs()[0].getType() == outTy) {
-              cast.getOutputs()[0].replaceAllUsesWith(defCast.getInputs()[0]);
-              cast.erase();
-              changed = true;
-              continue;
-            }
-          }
-        }
+        });
       }
     }
 
