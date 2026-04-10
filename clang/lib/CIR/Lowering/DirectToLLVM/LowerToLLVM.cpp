@@ -3721,74 +3721,6 @@ std::unique_ptr<mlir::Pass> createConvertCIRInGpuModulePass() {
   return std::make_unique<ConvertCIRInGpuModulePass>();
 }
 
-//===----------------------------------------------------------------------===//
-// CIRAttachROCDLTargetPass
-//
-// Step 3.2 (Option C): Reads the `cir.gpu_chip` string attribute stamped on
-// each `gpu.GPUModuleOp` by `SplitSingleSourcePass` and attaches a
-// `#rocdl.target<chip=...>` attribute so that `GpuModuleToBinaryPass` can
-// compile the device code to a GPU binary (HSACo / code object).
-//
-// If the gpu.module has no `cir.gpu_chip` attribute (e.g. during testing with
-// no explicit --offload-arch), the pass is a no-op for that module.
-//===----------------------------------------------------------------------===//
-
-struct CIRAttachROCDLTargetPass
-    : public mlir::PassWrapper<CIRAttachROCDLTargetPass,
-                               mlir::OperationPass<mlir::gpu::GPUModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CIRAttachROCDLTargetPass)
-
-  llvm::StringRef getArgument() const override {
-    return "cir-attach-rocdl-target";
-  }
-  llvm::StringRef getDescription() const override {
-    return "Attach #rocdl.target attribute to gpu.module from cir.gpu_chip";
-  }
-
-  void runOnOperation() override {
-    mlir::gpu::GPUModuleOp gpuModule = getOperation();
-
-    // Read chip from the IR attribute stamped by SplitSingleSourcePass.
-    auto chipAttr =
-        gpuModule->getAttrOfType<mlir::StringAttr>("cir.gpu_chip");
-    if (!chipAttr || chipAttr.getValue().empty())
-      return; // No chip specified — no target attached; GpuModuleToBinaryPass
-              // will be skipped dynamically in lowerDirectlyFromCIRToLLVMIR.
-
-    llvm::StringRef chip = chipAttr.getValue();
-
-    // Build #rocdl.target<chip=...> with default values for everything else.
-    mlir::OpBuilder builder(gpuModule);
-    auto rocdlTarget = mlir::ROCDL::ROCDLTargetAttr::get(
-        gpuModule.getContext(),
-        /*optLevel=*/2,
-        /*triple=*/"amdgcn-amd-amdhsa",
-        /*chip=*/chip,
-        /*features=*/"",
-        /*abiVersion=*/"600",
-        /*targetFlags=*/mlir::DictionaryAttr{},
-        /*linkFiles=*/mlir::ArrayAttr{});
-
-    gpuModule.setTargetsAttr(builder.getArrayAttr({rocdlTarget}));
-
-    // Set the offloading handler on the gpu.module. The handler is picked up
-    // by transformGpuModulesToBinaries and stored on the resulting gpu.BinaryOp.
-    // SelectObjectAttr (null target → first object) implements
-    // OffloadingLLVMTranslationAttrInterface which embeds the binary blob and
-    // emits mgpuLaunchKernel calls during MLIR→LLVM IR translation.
-    gpuModule.setOffloadingHandlerAttr(
-        mlir::gpu::SelectObjectAttr::get(gpuModule.getContext(),
-                                        /*target=*/mlir::Attribute{}));
-
-    // The cir.gpu_chip attribute has served its purpose; remove it so that
-    // downstream passes/verifiers don't see an unknown attribute.
-    gpuModule->removeAttr("cir.gpu_chip");
-  }
-};
-
-std::unique_ptr<mlir::Pass> createCIRAttachROCDLTargetPass() {
-  return std::make_unique<CIRAttachROCDLTargetPass>();
-}
 
 //===----------------------------------------------------------------------===//
 // CIRGpuModuleToBinaryPass
@@ -3868,9 +3800,20 @@ struct CIRGpuModuleToBinaryPass
       }
     }
 
-    // The offloading handler (SelectObjectAttr) is already stored on each
-    // gpu.module by CIRAttachROCDLTargetPass; transformGpuModulesToBinaries
-    // picks it up from the module and forwards it to the gpu.BinaryOp.
+    // Set the offloading handler on each targeted gpu.module.
+    // SelectObjectAttr (null target → first object) implements
+    // OffloadingLLVMTranslationAttrInterface, which embeds the compiled binary
+    // blob and emits mgpuLaunchKernel calls during MLIR→LLVM IR translation.
+    // GpuROCDLAttachTarget only stamps targets; it does not set the handler,
+    // so we set it here before calling transformGpuModulesToBinaries.
+    for (mlir::gpu::GPUModuleOp gpuMod : targeted) {
+      if (!gpuMod.getOffloadingHandlerAttr())
+        gpuMod.setOffloadingHandlerAttr(mlir::gpu::SelectObjectAttr::get(
+            gpuMod.getContext(), /*target=*/mlir::Attribute{}));
+    }
+
+    // transformGpuModulesToBinaries picks up the per-module handler set above
+    // and forwards it to the resulting gpu.BinaryOp.
     // Pass null handler here so the per-module handler is used.
     if (mlir::failed(mlir::gpu::transformGpuModulesToBinaries(module)))
       signalPassFailure();
@@ -5218,7 +5161,8 @@ std::unique_ptr<mlir::Pass> createConvertCIRToLLVMPass() {
 }
 
 void populateCIRToLLVMPasses(mlir::OpPassManager &pm, bool enableOffloadSplit,
-                             StringRef offloadArch, bool isDeviceCompilation) {
+                             llvm::ArrayRef<std::string> offloadArchs,
+                             bool isDeviceCompilation) {
   mlir::populateCIRPreLoweringPasses(pm);
   pm.addPass(mlir::omp::createMarkDeclareTargetPass());
   if (enableOffloadSplit) {
@@ -5227,17 +5171,13 @@ void populateCIRToLLVMPasses(mlir::OpPassManager &pm, bool enableOffloadSplit,
     // CIR-to-CIR passes (which expect cir.func parents) and before the
     // CIR-to-LLVM pass (which cannot handle offload.* ops).
     //
-    // Pass the GPU target chip so SplitSingleSourcePass stamps cir.gpu_chip
-    // on the generated gpu.module, enabling the ROCDL device compilation
-    // sub-pipeline (CIRAttachROCDLTargetPass → ConvertGpuOpsToROCDLOps →
-    // CIRGpuModuleToBinaryPass) for modules with an explicit --offload-arch.
     // Flatten structured CIR control flow (cir.ternary, cir.if, cir.for, …)
     // before the split so that gpu.func bodies contain only branch-based CFG
     // ops.  ConvertCIRInGpuModulePass uses applyPartialConversion, which does
     // not recurse into region-bearing structured ops like cir.ternary.
     pm.addPass(mlir::createCIRFlattenCFGPass());
     mlir::offload::OffloadSplitSingleSourcePassOptions splitOpts;
-    splitOpts.targetChip = offloadArch.str();
+    splitOpts.gpuModuleName = "offload_device_module";
     pm.addPass(mlir::offload::createOffloadSplitSingleSourcePass(splitOpts));
     // Lower offload.global_var(mem_space=shared) → llvm.mlir.global with
     // addr_space=3 (AMDGPU LDS / NVPTX shared memory) inside the gpu.module.
@@ -5250,6 +5190,20 @@ void populateCIRToLLVMPasses(mlir::OpPassManager &pm, bool enableOffloadSplit,
     // Lower host-side offload runtime ops (stream create/destroy/sync,
     // device sync) to direct HIP/CUDA API calls.
     pm.addPass(mlir::offload::createOffloadLowerHostRuntimePass());
+    // Attach one #rocdl.target per requested GPU arch.  The standard
+    // GpuROCDLAttachTarget pass is backend-agnostic from the split pass's
+    // perspective; running it once per arch builds an array of targets on the
+    // gpu.module which transformGpuModulesToBinaries compiles independently.
+    // (CUDA would substitute createGpuNVVMAttachTargetPass here.)
+    for (const std::string &arch : offloadArchs) {
+      mlir::GpuROCDLAttachTargetOptions rocdlOpts;
+      rocdlOpts.chip = arch;
+      rocdlOpts.triple = "amdgcn-amd-amdhsa";
+      rocdlOpts.abiVersion = "600";
+      rocdlOpts.optLevel = 2;
+      // moduleMatcher is left empty → matches all gpu.modules.
+      pm.addPass(mlir::createGpuROCDLAttachTarget(rocdlOpts));
+    }
     // Lower CIR ops inside gpu.func bodies to LLVM dialect so they are ready
     // for the subsequent GPU→ROCDL and binary compilation passes (Step 3.1).
     // This pass operates on gpu.GPUModuleOp, so nest it under the module.
@@ -5260,8 +5214,6 @@ void populateCIRToLLVMPasses(mlir::OpPassManager &pm, bool enableOffloadSplit,
       // embed it as a gpu.BinaryOp.  On a device cc1 (triple=amdgcn), the
       // entire module IS the device code — skip binary compilation and let
       // ConvertCIRToLLVMPass emit LLVM IR directly for the GPU.
-      pm.nest<mlir::gpu::GPUModuleOp>().addPass(
-          createCIRAttachROCDLTargetPass());
       pm.nest<mlir::gpu::GPUModuleOp>().addPass(
           mlir::createConvertGpuOpsToROCDLOps());
       // CIRGpuModuleToBinaryPass: compiles targeted gpu.module ops to binaries;
@@ -5275,7 +5227,8 @@ void populateCIRToLLVMPasses(mlir::OpPassManager &pm, bool enableOffloadSplit,
 std::unique_ptr<llvm::Module>
 lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
                              StringRef mlirSaveTempsOutFile,
-                             bool enableOffloadSplit, StringRef offloadArch,
+                             bool enableOffloadSplit,
+                             llvm::ArrayRef<std::string> offloadArchs,
                              bool isDeviceCompilation) {
   llvm::TimeTraceScope scope("lower from CIR to LLVM directly");
 
@@ -5323,7 +5276,7 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
   }
 
   mlir::PassManager pm(mlirCtx);
-  populateCIRToLLVMPasses(pm, enableOffloadSplit, offloadArch, isDeviceCompilation);
+  populateCIRToLLVMPasses(pm, enableOffloadSplit, offloadArchs, isDeviceCompilation);
 
   (void)mlir::applyPassManagerCLOptions(pm);
 

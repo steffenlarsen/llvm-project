@@ -48,11 +48,7 @@ def OffloadSplitSingleSourcePass
   let options = [
     Option<"gpuModuleName", "gpu-module-name", "std::string",
            /*default=*/"\"offload_device_module\"",
-           "Name of the generated gpu.module">,
-    Option<"targetChip", "target-chip", "std::string",
-           /*default=*/"\"\"",
-           "GPU target chip (e.g. gfx906) stamped as cir.gpu_chip attribute "
-           "on the generated gpu.module for downstream ROCDL compilation.">
+           "Name of the generated gpu.module">
   ];
 
   let dependentDialects = [

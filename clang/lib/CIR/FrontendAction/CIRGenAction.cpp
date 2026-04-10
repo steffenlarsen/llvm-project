@@ -51,7 +51,7 @@ static std::unique_ptr<llvm::Module>
 lowerFromCIRToLLVMIR(mlir::ModuleOp MLIRModule, llvm::LLVMContext &LLVMCtx,
                      llvm::StringRef mlirSaveTempsOutFile = {},
                      bool enableOffloadSplit = false,
-                     llvm::StringRef offloadArch = {},
+                     llvm::ArrayRef<std::string> offloadArchs = {},
                      bool isDeviceCompilation = false) {
   // Ensure the offload transformation passes are registered in the global
   // pass registry so populateCIRToLLVMPasses can look them up by name.
@@ -59,7 +59,7 @@ lowerFromCIRToLLVMIR(mlir::ModuleOp MLIRModule, llvm::LLVMContext &LLVMCtx,
     mlir::offload::registerOffloadPasses();
   return direct::lowerDirectlyFromCIRToLLVMIR(MLIRModule, LLVMCtx,
                                               mlirSaveTempsOutFile,
-                                              enableOffloadSplit, offloadArch,
+                                              enableOffloadSplit, offloadArchs,
                                               isDeviceCompilation);
 }
 
@@ -169,25 +169,27 @@ public:
       }
 
       llvm::LLVMContext LLVMCtx;
-      // For HIP/CUDA single-source offload, the GPU arch comes from the
-      // aux-target (device triple) in a standard two-cc1 driver flow, or from
-      // the primary target CPU when this is the device cc1 itself.
-      // Try primary target first (device cc1 path: triple=amdgcn, cpu=gfx906),
-      // then fall back to aux-target (host cc1 path: aux-triple=amdgcn).
-      llvm::StringRef offloadArch;
+      // For HIP/CUDA single-source offload, collect the GPU arch(s) to compile
+      // for.  The primary target CPU is used when this IS the device cc1
+      // (triple=amdgcn); the aux-target CPU is used on the host cc1
+      // (aux-triple=amdgcn, set via -aux-target-cpu).  Future: additional archs
+      // will be collected from -offload-arch flags passed to cc1 directly.
+      llvm::SmallVector<std::string> offloadArchs;
       if (CGO.ClangIROffload) {
         llvm::StringRef primaryCPU = C.getTargetInfo().getTargetOpts().CPU;
         if (!primaryCPU.empty() && !primaryCPU.starts_with("x86") &&
             !primaryCPU.starts_with("generic") && primaryCPU != "x86-64") {
-          offloadArch = primaryCPU; // device cc1: primary target is the GPU
+          offloadArchs.push_back(primaryCPU.str()); // device cc1
         } else if (const clang::TargetInfo *auxTarget = CI.getAuxTarget()) {
-          offloadArch = auxTarget->getTargetOpts().CPU; // host cc1: aux is GPU
+          llvm::StringRef auxCPU = auxTarget->getTargetOpts().CPU;
+          if (!auxCPU.empty())
+            offloadArchs.push_back(auxCPU.str()); // host cc1
         }
       }
       bool isDeviceCompilation = C.getLangOpts().CUDAIsDevice;
       std::unique_ptr<llvm::Module> LLVMModule =
           lowerFromCIRToLLVMIR(MlirModule, LLVMCtx, mlirSaveTempsOutFile,
-                               CGO.ClangIROffload, offloadArch,
+                               CGO.ClangIROffload, offloadArchs,
                                isDeviceCompilation);
 
       BackendAction BEAction = getBackendActionFromOutputType(Action);

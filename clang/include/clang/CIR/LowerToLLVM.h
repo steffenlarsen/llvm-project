@@ -12,8 +12,10 @@
 #ifndef CLANG_CIR_LOWERTOLLVM_H
 #define CLANG_CIR_LOWERTOLLVM_H
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include <memory>
+#include <string>
 
 namespace llvm {
 class LLVMContext;
@@ -32,7 +34,7 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule,
                              llvm::LLVMContext &llvmCtx,
                              llvm::StringRef mlirSaveTempsOutFile = {},
                              bool enableOffloadSplit = false,
-                             llvm::StringRef offloadArch = {},
+                             llvm::ArrayRef<std::string> offloadArchs = {},
                              bool isDeviceCompilation = false);
 } // namespace direct
 } // namespace cir
