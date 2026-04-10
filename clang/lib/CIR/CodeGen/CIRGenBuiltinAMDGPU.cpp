@@ -13,7 +13,9 @@
 #include "CIRGenFunction.h"
 
 #include "clang/CIR/Dialect/IR/CIRDialect.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Value.h"
 #include "clang/Basic/TargetBuiltins.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -59,6 +61,96 @@ static mlir::Value emitCIRAtomicIncDec(CIRGenFunction &cgf, const CallExpr *expr
   return emitCIRAtomicFetch(cgf, expr, binOp);
 }
 
+/// Emit a gpu.subgroup_reduce op for __builtin_amdgcn_wave_reduce_*.
+///
+/// CIR integer types (e.g. !cir.int<u,32>) are bridged to standard MLIR
+/// integers (i32/i64) via unrealized_conversion_cast, which the CIR-to-LLVM
+/// lowering eliminates.
+static mlir::Value emitSubgroupReduce(CIRGenFunction &cgf, const CallExpr *expr,
+                                       mlir::gpu::AllReduceOperation op) {
+  CIRGenBuilderTy &builder = cgf.getBuilder();
+  mlir::Location loc = cgf.getLoc(expr->getExprLoc());
+  mlir::MLIRContext *ctx = builder.getContext();
+  mlir::Value val = cgf.emitScalarExpr(expr->getArg(0));
+  mlir::Type cirTy = val.getType();
+  unsigned width = mlir::cast<cir::IntType>(cirTy).getWidth();
+  mlir::Type mlirIntTy = mlir::IntegerType::get(ctx, width);
+  mlir::Value asMLIR =
+      mlir::UnrealizedConversionCastOp::create(
+          builder, loc, mlir::TypeRange{mlirIntTy}, mlir::ValueRange{val})
+          .getResult(0);
+  mlir::Value result =
+      mlir::gpu::SubgroupReduceOp::create(builder, loc, asMLIR, op,
+                                          /*uniform=*/false)
+          .getResult();
+  return mlir::UnrealizedConversionCastOp::create(
+             builder, loc, mlir::TypeRange{cirTy}, mlir::ValueRange{result})
+      .getResult(0);
+}
+
+/// Emit a gpu.subgroup_broadcast for __builtin_amdgcn_readlane /
+/// __builtin_amdgcn_readfirstlane.
+///
+/// SubgroupBroadcastOp takes: (src: AnyType, lane: Optional<i32>,
+///   broadcast_type: GPU_BroadcastTypeAttr).
+/// For readlane, lane is arg(1) cast to i32; for readfirstlane, lane is absent.
+static mlir::Value emitReadlane(CIRGenFunction &cgf, const CallExpr *expr,
+                                 bool firstLane) {
+  CIRGenBuilderTy &builder = cgf.getBuilder();
+  mlir::Location loc = cgf.getLoc(expr->getExprLoc());
+  mlir::MLIRContext *ctx = builder.getContext();
+  mlir::Value src = cgf.emitScalarExpr(expr->getArg(0));
+  mlir::Type cirTy = src.getType();
+  unsigned width = mlir::cast<cir::IntType>(cirTy).getWidth();
+  mlir::Type mlirTy = mlir::IntegerType::get(ctx, width);
+  mlir::Value asSrc =
+      mlir::UnrealizedConversionCastOp::create(
+          builder, loc, mlir::TypeRange{mlirTy}, mlir::ValueRange{src})
+          .getResult(0);
+  mlir::Value laneVal;
+  if (!firstLane) {
+    mlir::Value lane = cgf.emitScalarExpr(expr->getArg(1));
+    // SubgroupBroadcastOp expects the lane as i32.
+    mlir::Type i32Ty = mlir::IntegerType::get(ctx, 32);
+    laneVal =
+        mlir::UnrealizedConversionCastOp::create(
+            builder, loc, mlir::TypeRange{i32Ty}, mlir::ValueRange{lane})
+            .getResult(0);
+  }
+  auto bcastTy = firstLane ? mlir::gpu::BroadcastType::first_active_lane
+                            : mlir::gpu::BroadcastType::specific_lane;
+  auto bcast = mlir::gpu::SubgroupBroadcastOp::create(builder, loc, mlirTy,
+                                                       asSrc, laneVal, bcastTy);
+  return mlir::UnrealizedConversionCastOp::create(
+             builder, loc, mlir::TypeRange{cirTy},
+             mlir::ValueRange{bcast.getResult()})
+      .getResult(0);
+}
+
+/// Emit a gpu.ballot for __builtin_amdgcn_ballot_w32 / _w64.
+/// `width` is 32 or 64 (the wavefront size encoded in the builtin name).
+static mlir::Value emitBallot(CIRGenFunction &cgf, const CallExpr *expr,
+                               unsigned width) {
+  CIRGenBuilderTy &builder = cgf.getBuilder();
+  mlir::Location loc = cgf.getLoc(expr->getExprLoc());
+  mlir::MLIRContext *ctx = builder.getContext();
+  mlir::Value pred = cgf.emitScalarExpr(expr->getArg(0));
+  // gpu.ballot requires an i1 predicate.
+  mlir::Type i1Ty = mlir::IntegerType::get(ctx, 1);
+  mlir::Value predI1 =
+      mlir::UnrealizedConversionCastOp::create(
+          builder, loc, mlir::TypeRange{i1Ty}, mlir::ValueRange{pred})
+          .getResult(0);
+  mlir::Type resultMLIRTy = mlir::IntegerType::get(ctx, width);
+  mlir::Value result =
+      mlir::gpu::BallotOp::create(builder, loc, resultMLIRTy, predI1)
+          .getResult();
+  mlir::Type cirResultTy = cgf.convertType(expr->getType());
+  return mlir::UnrealizedConversionCastOp::create(
+             builder, loc, mlir::TypeRange{cirResultTy}, mlir::ValueRange{result})
+      .getResult(0);
+}
+
 std::optional<mlir::Value>
 CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
                                       const CallExpr *expr) {
@@ -71,28 +163,62 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
     return mlir::Value{};
 
   case AMDGPU::BI__builtin_amdgcn_wave_reduce_add_u32:
-  case AMDGPU::BI__builtin_amdgcn_wave_reduce_sub_u32:
-  case AMDGPU::BI__builtin_amdgcn_wave_reduce_min_i32:
-  case AMDGPU::BI__builtin_amdgcn_wave_reduce_min_u32:
-  case AMDGPU::BI__builtin_amdgcn_wave_reduce_max_i32:
-  case AMDGPU::BI__builtin_amdgcn_wave_reduce_max_u32:
-  case AMDGPU::BI__builtin_amdgcn_wave_reduce_and_b32:
-  case AMDGPU::BI__builtin_amdgcn_wave_reduce_or_b32:
-  case AMDGPU::BI__builtin_amdgcn_wave_reduce_xor_b32:
   case AMDGPU::BI__builtin_amdgcn_wave_reduce_add_u64:
-  case AMDGPU::BI__builtin_amdgcn_wave_reduce_sub_u64:
-  case AMDGPU::BI__builtin_amdgcn_wave_reduce_min_i64:
-  case AMDGPU::BI__builtin_amdgcn_wave_reduce_min_u64:
-  case AMDGPU::BI__builtin_amdgcn_wave_reduce_max_i64:
-  case AMDGPU::BI__builtin_amdgcn_wave_reduce_max_u64:
-  case AMDGPU::BI__builtin_amdgcn_wave_reduce_and_b64:
-  case AMDGPU::BI__builtin_amdgcn_wave_reduce_or_b64:
-  case AMDGPU::BI__builtin_amdgcn_wave_reduce_xor_b64: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
+    return emitSubgroupReduce(*this, expr,
+                              mlir::gpu::AllReduceOperation::ADD);
+  case AMDGPU::BI__builtin_amdgcn_wave_reduce_sub_u32:
+  case AMDGPU::BI__builtin_amdgcn_wave_reduce_sub_u64: {
+    // gpu.subgroup_reduce has no subtraction; negate the value and reduce ADD.
+    CIRGenBuilderTy &b = getBuilder();
+    mlir::Location loc = getLoc(expr->getExprLoc());
+    mlir::MLIRContext *ctx = b.getContext();
+    mlir::Value val = emitScalarExpr(expr->getArg(0));
+    mlir::Type cirTy = val.getType();
+    unsigned width = mlir::cast<cir::IntType>(cirTy).getWidth();
+    mlir::Type mlirTy = mlir::IntegerType::get(ctx, width);
+    mlir::Value asMLIR =
+        mlir::UnrealizedConversionCastOp::create(
+            b, loc, mlir::TypeRange{mlirTy}, mlir::ValueRange{val})
+            .getResult(0);
+    mlir::Value zero =
+        mlir::arith::ConstantIntOp::create(b, loc, mlirTy, 0);
+    mlir::Value neg = mlir::arith::SubIOp::create(b, loc, zero, asMLIR);
+    mlir::Value result =
+        mlir::gpu::SubgroupReduceOp::create(
+            b, loc, neg, mlir::gpu::AllReduceOperation::ADD, /*uniform=*/false)
+            .getResult();
+    return mlir::UnrealizedConversionCastOp::create(
+               b, loc, mlir::TypeRange{cirTy}, mlir::ValueRange{result})
+        .getResult(0);
   }
+  case AMDGPU::BI__builtin_amdgcn_wave_reduce_min_i32:
+  case AMDGPU::BI__builtin_amdgcn_wave_reduce_min_i64:
+    return emitSubgroupReduce(*this, expr,
+                              mlir::gpu::AllReduceOperation::MINSI);
+  case AMDGPU::BI__builtin_amdgcn_wave_reduce_min_u32:
+  case AMDGPU::BI__builtin_amdgcn_wave_reduce_min_u64:
+    return emitSubgroupReduce(*this, expr,
+                              mlir::gpu::AllReduceOperation::MINUI);
+  case AMDGPU::BI__builtin_amdgcn_wave_reduce_max_i32:
+  case AMDGPU::BI__builtin_amdgcn_wave_reduce_max_i64:
+    return emitSubgroupReduce(*this, expr,
+                              mlir::gpu::AllReduceOperation::MAXSI);
+  case AMDGPU::BI__builtin_amdgcn_wave_reduce_max_u32:
+  case AMDGPU::BI__builtin_amdgcn_wave_reduce_max_u64:
+    return emitSubgroupReduce(*this, expr,
+                              mlir::gpu::AllReduceOperation::MAXUI);
+  case AMDGPU::BI__builtin_amdgcn_wave_reduce_and_b32:
+  case AMDGPU::BI__builtin_amdgcn_wave_reduce_and_b64:
+    return emitSubgroupReduce(*this, expr,
+                              mlir::gpu::AllReduceOperation::AND);
+  case AMDGPU::BI__builtin_amdgcn_wave_reduce_or_b32:
+  case AMDGPU::BI__builtin_amdgcn_wave_reduce_or_b64:
+    return emitSubgroupReduce(*this, expr,
+                              mlir::gpu::AllReduceOperation::OR);
+  case AMDGPU::BI__builtin_amdgcn_wave_reduce_xor_b32:
+  case AMDGPU::BI__builtin_amdgcn_wave_reduce_xor_b64:
+    return emitSubgroupReduce(*this, expr,
+                              mlir::gpu::AllReduceOperation::XOR);
   case AMDGPU::BI__builtin_amdgcn_div_scale:
   case AMDGPU::BI__builtin_amdgcn_div_scalef: {
     cgm.errorNYI(expr->getSourceRange(),
@@ -125,12 +251,9 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
     return mlir::Value{};
   }
   case AMDGPU::BI__builtin_amdgcn_readlane:
-  case AMDGPU::BI__builtin_amdgcn_readfirstlane: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
-  }
+    return emitReadlane(*this, expr, /*firstLane=*/false);
+  case AMDGPU::BI__builtin_amdgcn_readfirstlane:
+    return emitReadlane(*this, expr, /*firstLane=*/true);
   case AMDGPU::BI__builtin_amdgcn_div_fixup:
   case AMDGPU::BI__builtin_amdgcn_div_fixupf:
   case AMDGPU::BI__builtin_amdgcn_div_fixuph: {
@@ -273,12 +396,9 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
     return mlir::Value{};
   }
   case AMDGPU::BI__builtin_amdgcn_ballot_w32:
-  case AMDGPU::BI__builtin_amdgcn_ballot_w64: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
-  }
+    return emitBallot(*this, expr, 32);
+  case AMDGPU::BI__builtin_amdgcn_ballot_w64:
+    return emitBallot(*this, expr, 64);
   case AMDGPU::BI__builtin_amdgcn_inverse_ballot_w32:
   case AMDGPU::BI__builtin_amdgcn_inverse_ballot_w64: {
     cgm.errorNYI(expr->getSourceRange(),

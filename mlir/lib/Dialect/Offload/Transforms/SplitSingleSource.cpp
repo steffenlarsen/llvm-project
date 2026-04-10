@@ -24,6 +24,7 @@
 #include "mlir/Dialect/Offload/IR/OffloadDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/Pass.h"
@@ -116,6 +117,31 @@ static gpu::GPUFuncOp lowerToGpuFunc(OpBuilder &builder,
   gpuEntry.getOperations().splice(gpuEntry.getOperations().end(),
                                    clonedEntry->getOperations());
   clonedEntry->erase();
+
+  // Lower offload.shared_mem_alloc → gpu.dynamic_shared_memory.
+  //
+  // offload.shared_mem_alloc %size -> !T models `extern __shared__ T arr[]`.
+  // gpu.dynamic_shared_memory returns a memref<?xi8, workgroup> that covers
+  // the entire dynamic shared memory window.  We bridge the type difference
+  // with an unrealized_conversion_cast so the subsequent CIR-to-LLVM pass
+  // can lower the pointer correctly.
+  gpuFunc.walk([&](offload::SharedMemAllocOp op) {
+    OpBuilder b(op);
+    Location loc = op.getLoc();
+    auto workgroupAS =
+        gpu::AddressSpaceAttr::get(ctx, gpu::AddressSpace::Workgroup);
+    auto rawMemrefTy =
+        MemRefType::get({ShapedType::kDynamic}, b.getI8Type(),
+                        MemRefLayoutAttrInterface{}, workgroupAS);
+    Value rawMem =
+        gpu::DynamicSharedMemoryOp::create(b, loc, rawMemrefTy);
+    Value cast =
+        UnrealizedConversionCastOp::create(b, loc, op.getResult().getType(),
+                                           rawMem)
+            .getResult(0);
+    op.getResult().replaceAllUsesWith(cast);
+    op.erase();
+  });
 
   return gpuFunc;
 }

@@ -12,6 +12,8 @@
 
 #include "CIRGenConstantEmitter.h"
 #include "CIRGenFunction.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Offload/IR/OffloadDialect.h"
 #include "mlir/IR/Location.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/Attrs.inc"
@@ -356,6 +358,16 @@ void CIRGenFunction::emitAutoVarDecl(const VarDecl &d) {
 }
 
 void CIRGenFunction::emitVarDecl(const VarDecl &d) {
+  // Offload CIR path: `extern __shared__ T arr[]` → offload.shared_mem_alloc.
+  // This must be handled before the hasExternalStorage() early-return below,
+  // because extern __shared__ variables have external linkage but need a local
+  // SSA pointer (the shared memory window) rather than a global symbol lookup.
+  if (cgm.getCodeGenOpts().ClangIROffload && getLangOpts().CUDA &&
+      d.hasExternalStorage() && d.hasAttr<CUDASharedAttr>()) {
+    emitOffloadSharedMemDecl(d);
+    return;
+  }
+
   // If the declaration has external storage, don't emit it now, allow it to be
   // emitted lazily on its first use.
   if (d.hasExternalStorage())
@@ -438,17 +450,6 @@ CIRGenModule::getOrCreateStaticVarDecl(const VarDecl &d,
 
   mlir::Type lty = getTypes().convertTypeForMem(ty);
   assert(!cir::MissingFeatures::addressSpace());
-
-  // In the CIR offload path, function-local __shared__ variables require
-  // emitting offload.global_var(mem_space=shared) instead of cir.global, so
-  // that LowerSharedGlobalsPass can move them into the gpu.module.  This
-  // refactor is deferred: for now, flag it as NYI so that compilation of
-  // kernels with local-scope __shared__ fails loudly rather than silently
-  // producing incorrect host-side globals.
-  if (codeGenOpts.ClangIROffload && langOpts.CUDA && d.hasAttr<CUDASharedAttr>())
-    errorNYI(d.getSourceRange(),
-             "getOrCreateStaticVarDecl: local-scope __shared__ in offload CIR "
-             "path (use file-scope __shared__ instead)");
 
   // OpenCL variables in local address space and CUDA shared
   // variables cannot have an initializer.
@@ -1212,3 +1213,31 @@ void CIRGenFunction::maybeEmitDeferredVarDeclInit(const VarDecl *vd) {
         emitVarDecl(*hd);
   }
 }
+
+void CIRGenFunction::emitOffloadSharedMemDecl(const VarDecl &d) {
+  // Emit offload.shared_mem_alloc with size=0 (dynamic — the actual shared
+  // memory size is specified at kernel launch via the dynamic shmem argument).
+  // The resulting SSA pointer is registered in LocalDeclMap so that subsequent
+  // DeclRefExpr → emitDeclRefLValue uses resolve to this pointer without
+  // touching the global symbol table.
+  mlir::Location loc = getLoc(d.getLocation());
+  mlir::MLIRContext *ctx = getBuilder().getContext();
+  mlir::Value zero = mlir::arith::ConstantIndexOp::create(getBuilder(), loc, 0);
+
+  // For `extern __shared__ T arr[]`, the VarDecl type is an incomplete array
+  // `T[]`; extract the element type T to build a pointer-to-T result type.
+  QualType varTy = d.getType();
+  QualType elemQTy = varTy->isIncompleteArrayType()
+                         ? varTy->castAsArrayTypeUnsafe()->getElementType()
+                         : varTy;
+  mlir::Type elemTy = convertTypeForMem(elemQTy);
+  mlir::Type ptrTy = getBuilder().getPointerTo(elemTy);
+
+  mlir::Value ptr =
+      mlir::offload::SharedMemAllocOp::create(getBuilder(), loc, ptrTy, zero)
+          .getResult();
+
+  CharUnits align = getContext().getTypeAlignInChars(elemQTy);
+  setAddrOfLocalVar(&d, Address(ptr, elemTy, align));
+}
+

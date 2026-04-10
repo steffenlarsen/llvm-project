@@ -1981,6 +1981,11 @@ public:
   /// inside a function, including static vars etc.
   void emitVarDecl(const clang::VarDecl &d);
 
+  /// Offload CIR path: emit offload.shared_mem_alloc for an
+  /// `extern __shared__ T arr[]` declaration and register its address in
+  /// LocalDeclMap so that subsequent DeclRefExprs resolve to the SSA pointer.
+  void emitOffloadSharedMemDecl(const clang::VarDecl &d);
+
   void emitVariablyModifiedType(QualType ty);
 
   mlir::LogicalResult emitWhileStmt(const clang::WhileStmt &s);

@@ -36,6 +36,9 @@ extern "C" hipError_t __hipPopCallConfiguration(dim3 *gridDim, dim3 *blockDim,
                                                  size_t *sharedMem,
                                                  hipStream_t *stream);
 
+/* Device-side synchronisation intrinsics */
+__device__ void __syncthreads(void);
+
 /* Synchronisation */
 extern "C" hipError_t hipDeviceSynchronize(void);
 extern "C" hipError_t hipStreamCreate(hipStream_t *pStream);
