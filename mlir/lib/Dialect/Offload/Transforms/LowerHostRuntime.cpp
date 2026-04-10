@@ -14,7 +14,7 @@
 //   offload.stream_destroy → func.call @hipStreamDestroy(%handle : i64)
 //   offload.stream_sync    → func.call @hipStreamSynchronize(%handle : i64)
 //   offload.device_sync    → func.call @hipDeviceSynchronize()
-//   offload.memcpy_to_symbol is deleted (requires LLVM addressof; future work)
+//   offload.memcpy_to_symbol → llvm.mlir.addressof + func.call @hipMemcpy
 //
 //===----------------------------------------------------------------------===//
 
@@ -228,11 +228,40 @@ struct LowerHostRuntimePass
       op.erase();
     });
 
-    // offload.memcpy_to_symbol: requires LLVM addressof for the symbol pointer.
-    // Mark as a TODO — erase the op with a diagnostic note.
+    // offload.memcpy_to_symbol @sym src = %src count = %count
+    //   → @hip/cudaMemcpy(llvm.mlir.addressof @sym, src_ptr, count_i64,
+    //                     hipMemcpyHostToDevice)
+    //
+    // We obtain the device symbol address via LLVM::AddressOfOp, which emits
+    // an `llvm.mlir.addressof @sym : !llvm.ptr` referencing the llvm.mlir.global
+    // that LowerSharedGlobalsPass placed in the gpu.module.
     module.walk([&](offload::MemcpyToSymbolOp op) {
-      op.emitRemark("offload.memcpy_to_symbol lowering to LLVM addressof is "
-                    "not yet implemented; op erased");
+      b.setInsertionPoint(op);
+      mlir::Location loc = op.getLoc();
+      Type llvmPtrTy = LLVM::LLVMPointerType::get(b.getContext());
+
+      // Get the address of the device-side global symbol.
+      Value symPtr = LLVM::AddressOfOp::create(
+          b, loc, llvmPtrTy, op.getSymbol()).getResult();
+
+      // Cast src (AnyType → !llvm.ptr).
+      Value src = b.create<UnrealizedConversionCastOp>(
+          loc, TypeRange{llvmPtrTy}, ValueRange{op.getSrc()}).getResult(0);
+
+      // Cast count (Index → i64).
+      Value sizeAsI64 = b.create<UnrealizedConversionCastOp>(
+          loc, TypeRange{i64Ty}, ValueRange{op.getCount()}).getResult(0);
+
+      // hipMemcpyKind::hipMemcpyHostToDevice = 1.
+      Value kindVal = b.create<LLVM::ConstantOp>(
+          loc, i32Ty, b.getIntegerAttr(i32Ty, 1));
+
+      StringRef fn = pick("hipMemcpy", "cudaMemcpy", useHip);
+      auto decl = getOrInsertDecl(
+          b, module, fn,
+          b.getFunctionType({llvmPtrTy, llvmPtrTy, i64Ty, i32Ty}, {i32Ty}));
+      b.create<func::CallOp>(loc, decl,
+                              ValueRange{symPtr, src, sizeAsI64, kindVal});
       op.erase();
     });
   }

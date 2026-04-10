@@ -59,6 +59,9 @@ typedef enum hipMemcpyKind {
 
 extern "C" hipError_t hipMemcpy(void *dst, const void *src, size_t size,
                                  hipMemcpyKind kind);
+extern "C" hipError_t hipMemcpyToSymbol(const void *symbol, const void *src,
+                                         size_t count, size_t offset = 0,
+                                         hipMemcpyKind kind = hipMemcpyHostToDevice);
 
 /* printf — host and device */
 extern "C" int printf(const char *fmt, ...);

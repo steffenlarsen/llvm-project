@@ -335,6 +335,42 @@ CIRGenOffloadRuntime::emitHIPRuntimeCall(CIRGenFunction &cgf,
     return RValue::get(makeHipSuccess(builder, loc, retTy));
   }
 
+  // hipMemcpyToSymbol(symbol, src, count, offset, kind)
+  //   → offload.memcpy_to_symbol @sym src = %src count = %count_idx
+  //
+  // The symbol argument is a pointer to the device global; we extract the
+  // referenced decl name from the DeclRefExpr so we can emit a flat symbol ref.
+  // Only offset==0 is supported (the overwhelming common case).
+  if (name == "hipMemcpyToSymbol") {
+    const Expr *symArg = e->getArg(0)->IgnoreParenImpCasts();
+    // Peel off the implicit `&` that takes the address of the global.
+    if (const auto *unary = dyn_cast<UnaryOperator>(symArg))
+      if (unary->getOpcode() == UO_AddrOf)
+        symArg = unary->getSubExpr()->IgnoreParenImpCasts();
+    const auto *dre = dyn_cast<DeclRefExpr>(symArg);
+    if (!dre) {
+      cgm.getDiags().Report(e->getExprLoc(),
+          cgm.getDiags().getCustomDiagID(
+              DiagnosticsEngine::Error,
+              "hipMemcpyToSymbol: first argument must be a device global "
+              "reference"));
+      return std::nullopt;
+    }
+    llvm::StringRef symName = dre->getDecl()->getName();
+    mlir::Value src   = cgf.emitScalarExpr(e->getArg(1));
+    mlir::Value count = cgf.emitScalarExpr(e->getArg(2));
+    mlir::Type indexTy = mlir::IndexType::get(ctx);
+    mlir::Value countIdx =
+        mlir::UnrealizedConversionCastOp::create(
+            builder, loc, TypeRange{indexTy}, ValueRange{count})
+            .getResult(0);
+
+    mlir::offload::MemcpyToSymbolOp::create(builder, loc, symName, src,
+                                             countIdx);
+    mlir::Type retTy = cgf.convertType(e->getType());
+    return RValue::get(makeHipSuccess(builder, loc, retTy));
+  }
+
   return std::nullopt;
 }
 

@@ -63,6 +63,7 @@ static std::optional<DeviceGlobalInfo> getDeviceGlobalInfo(MemSpace ms) {
   case MemSpace::shared:   return DeviceGlobalInfo{3, false};
   case MemSpace::device:   return DeviceGlobalInfo{1, false};
   case MemSpace::constant: return DeviceGlobalInfo{4, true};
+  case MemSpace::managed:  return DeviceGlobalInfo{0, false};
   default:                 return std::nullopt;
   }
 }

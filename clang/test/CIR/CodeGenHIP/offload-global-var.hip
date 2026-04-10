@@ -17,11 +17,15 @@ __constant__ float const_lut[4] = {1.0f, 2.0f, 3.0f, 4.0f};
 // A second __device__ variable to confirm multiple vars work.
 __device__ int dev_flag;
 
+// __managed__ variable → mem_space = managed
+__managed__ int managed_var;
+
 // A plain host variable must NOT be converted to offload.global_var.
 int host_var = 42;
 
 // CIR-DAG: offload.global_var @dev_counter : !s32i mem_space = <device>
 // CIR-DAG: offload.global_var @const_lut : !cir.array<!cir.float x 4> mem_space = <constant>
 // CIR-DAG: offload.global_var @dev_flag : !s32i mem_space = <device>
+// CIR-DAG: offload.global_var @managed_var : !s32i mem_space = <managed>
 // CIR-DAG: cir.global external @host_var
 // CIR-NOT: offload.global_var @host_var

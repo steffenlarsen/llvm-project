@@ -10,6 +10,7 @@
 //   shared   → addr_space = 3
 //   device   → addr_space = 1
 //   constant → addr_space = 4 (isConstant = true)
+//   managed  → addr_space = 0 (generic/unified, accessible from host+device)
 // The offload.global_var should be erased from the parent module.
 
 //===----------------------------------------------------------------------===//
@@ -89,11 +90,12 @@ module attributes {gpu.container_module} {
 // -----
 
 //===----------------------------------------------------------------------===//
-// Managed variables should be erased (not lowered by this pass).
+// Managed variable: i32 → addr_space = 0 (generic/unified)
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: gpu.module @offload_device_module
-// CHECK-NOT:   llvm.mlir.global
+// CHECK:         llvm.mlir.global internal @managed_var() {addr_space = 0 : i32} : i32
+// CHECK-NOT:   offload.global_var @managed_var
 
 module attributes {gpu.container_module} {
   offload.global_var @managed_var : i32

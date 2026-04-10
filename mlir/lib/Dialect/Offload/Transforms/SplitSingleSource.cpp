@@ -273,7 +273,8 @@ struct SplitSingleSourcePass
     for (auto gv : globalVars) {
       if (gv.getMemSpace() == MemSpace::shared ||
           gv.getMemSpace() == MemSpace::device ||
-          gv.getMemSpace() == MemSpace::constant)
+          gv.getMemSpace() == MemSpace::constant ||
+          gv.getMemSpace() == MemSpace::managed)
         continue; // handled by LowerSharedGlobalsPass
       gv.erase();
     }
