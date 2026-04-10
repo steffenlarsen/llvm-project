@@ -39,11 +39,20 @@ extern "C" hipError_t __hipPopCallConfiguration(dim3 *gridDim, dim3 *blockDim,
 /* Device-side synchronisation intrinsics */
 __device__ void __syncthreads(void);
 
+/* Event type */
+typedef struct ihipEvent_t *hipEvent_t;
+
 /* Synchronisation */
 extern "C" hipError_t hipDeviceSynchronize(void);
 extern "C" hipError_t hipStreamCreate(hipStream_t *pStream);
 extern "C" hipError_t hipStreamDestroy(hipStream_t stream);
 extern "C" hipError_t hipStreamSynchronize(hipStream_t stream);
+
+/* Events */
+extern "C" hipError_t hipEventCreate(hipEvent_t *event);
+extern "C" hipError_t hipEventDestroy(hipEvent_t event);
+extern "C" hipError_t hipEventRecord(hipEvent_t event, hipStream_t stream = 0);
+extern "C" hipError_t hipEventSynchronize(hipEvent_t event);
 
 /* Memory management */
 extern "C" hipError_t hipMalloc(void **ptr, size_t size);

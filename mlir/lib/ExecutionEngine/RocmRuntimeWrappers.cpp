@@ -55,6 +55,12 @@ extern "C" hipFunction_t mgpuModuleGetFunction(hipModule_t module,
   return function;
 }
 
+extern "C" void mgpuModuleGetGlobal(void **devPtr, size_t *bytes,
+                                    hipModule_t module, const char *name) {
+  HIP_REPORT_IF_ERROR(
+      hipModuleGetGlobal((hipDeviceptr_t *)devPtr, bytes, module, name));
+}
+
 // The wrapper uses intptr_t instead of ROCM's unsigned int to match
 // the type of MLIR's index type. This avoids the need for casts in the
 // generated MLIR code.

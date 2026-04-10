@@ -237,13 +237,19 @@ def Offload_GlobalVarOp : Offload_Op<"global_var", [Symbol]> {
     OFFLOAD_MemSpaceAttr:$mem_space,
     // Set when the variable is initialised from the host via
     // cudaMemcpyToSymbol / hipMemcpyToSymbol.
-    UnitAttr:$extern_init
+    UnitAttr:$extern_init,
+    // Compile-time constant initializer (scalar IntegerAttr/FloatAttr or
+    // aggregate DenseElementsAttr).  HIP/CUDA Sema restricts device/constant
+    // globals to constant-expression initializers, so this is always a static
+    // attribute.  Absent for __shared__ variables.
+    OptionalAttr<AnyAttr>:$initial_value
   );
 
   let assemblyFormat = [{
     $sym_name `:` $type
     `mem_space` `=` $mem_space
     (`extern_init` $extern_init^)?
+    (`initial_value` `=` $initial_value^)?
     attr-dict
   }];
 }
@@ -309,6 +315,43 @@ def Offload_StreamSyncOp : Offload_Op<"stream_sync"> {
   let summary = "Block host until all work in a stream completes (cudaStreamSynchronize)";
   let arguments = (ins OFFLOAD_StreamType:$stream);
   let assemblyFormat = "$stream `:` type($stream) attr-dict";
+}
+
+//--- offload.event_create -------------------------------------------------//
+
+def Offload_EventCreateOp : Offload_Op<"event_create"> {
+  let summary = "Create a device event (hipEventCreate / cudaEventCreate)";
+  let results = (outs OFFLOAD_EventType:$event);
+  let assemblyFormat = "attr-dict `:` type($event)";
+}
+
+//--- offload.event_destroy ------------------------------------------------//
+
+def Offload_EventDestroyOp : Offload_Op<"event_destroy"> {
+  let summary = "Destroy a device event (hipEventDestroy / cudaEventDestroy)";
+  let arguments = (ins OFFLOAD_EventType:$event);
+  let assemblyFormat = "$event `:` type($event) attr-dict";
+}
+
+//--- offload.event_record -------------------------------------------------//
+
+def Offload_EventRecordOp : Offload_Op<"event_record"> {
+  let summary = "Record an event in a stream (hipEventRecord / cudaEventRecord)";
+  let arguments = (ins OFFLOAD_EventType:$event,
+                       Optional<OFFLOAD_StreamType>:$stream);
+  let assemblyFormat = [{
+    $event `:` type($event)
+    (`,` `stream` `=` $stream^ `:` type($stream))?
+    attr-dict
+  }];
+}
+
+//--- offload.event_wait ---------------------------------------------------//
+
+def Offload_EventWaitOp : Offload_Op<"event_wait"> {
+  let summary = "Wait for an event (hipEventSynchronize / cudaEventSynchronize)";
+  let arguments = (ins OFFLOAD_EventType:$event);
+  let assemblyFormat = "$event `:` type($event) attr-dict";
 }
 
 //--- offload.memcpy_to_symbol ---------------------------------------------//

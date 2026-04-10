@@ -1459,11 +1459,51 @@ void CIRGenModule::emitGlobalVarDefinition(const clang::VarDecl *vd,
       // inside/after gv) would dereference a deleted iterator on restore.
       // Placing the builder at the end of the module block is safe and
       // matches what createGlobalOp uses by default.
+      // Preserve the compile-time constant initializer for non-shared globals.
+      // LowerHostRuntime uses this to emit hipMemcpy at module load time.
+      // Device globals get #cir.poison on the host side (isCUDAShadowVar),
+      // so we emit the actual constant from the AST VarDecl here.
+      mlir::Attribute initVal;
+      if (memSpace != mlir::offload::MemSpace::shared && initExpr) {
+        // Only attempt constant emission for scalar (integer/float) types.
+        // Aggregate initializers (arrays, structs) require DenseElementsAttr
+        // support that is not yet in place.  initExpr is non-null only when
+        // the variable has an explicit source-level initializer.
+        QualType varTy = initDecl->getType();
+        if (varTy->isIntegralOrEnumerationType() ||
+            varTy->isRealFloatingType()) {
+          ConstantEmitter constEmitter(*this);
+          if (mlir::Attribute constAttr =
+                  constEmitter.tryEmitAbstractForInitializer(*initDecl)) {
+            // CIR emits cir::IntAttr / cir::FPAttr. Convert to standard MLIR
+            // attrs (mlir::IntegerAttr / mlir::FloatAttr) so that
+            // LowerHostRuntime (a pure MLIR pass) can handle them without a
+            // CIR dialect dependency.
+            mlir::MLIRContext *mctx = builder.getContext();
+            if (auto cirInt = mlir::dyn_cast<cir::IntAttr>(constAttr)) {
+              unsigned width = cirInt.getBitWidth();
+              auto stdTy = mlir::IntegerType::get(mctx, width);
+              initVal = mlir::IntegerAttr::get(stdTy, cirInt.getValue());
+            } else if (auto cirFP = mlir::dyn_cast<cir::FPAttr>(constAttr)) {
+              llvm::APFloat fpVal = cirFP.getValue();
+              mlir::Type stdTy;
+              if (&fpVal.getSemantics() == &llvm::APFloat::IEEEhalf())
+                stdTy = mlir::Float16Type::get(mctx);
+              else if (&fpVal.getSemantics() == &llvm::APFloat::IEEEsingle())
+                stdTy = mlir::Float32Type::get(mctx);
+              else if (&fpVal.getSemantics() == &llvm::APFloat::IEEEdouble())
+                stdTy = mlir::Float64Type::get(mctx);
+              if (stdTy)
+                initVal = mlir::FloatAttr::get(stdTy, fpVal);
+            }
+          }
+        }
+      }
       builder.setInsertionPoint(gv);
       mlir::offload::GlobalVarOp offloadGV =
           mlir::offload::GlobalVarOp::create(builder, gv.getLoc(),
                                              gv.getSymName(), gv.getSymType(),
-                                             memSpace, externInit);
+                                             memSpace, externInit, initVal);
       // If lastGlobalOp tracked this cir::GlobalOp, it would become a dangling
       // pointer after the erase.  Reset it so createGlobalOp falls back to
       // inserting at the start of the module block on the next call.

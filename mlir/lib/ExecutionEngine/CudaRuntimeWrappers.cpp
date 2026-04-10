@@ -179,6 +179,14 @@ mgpuModuleGetFunction(CUmodule module, const char *name) {
   return function;
 }
 
+extern "C" MLIR_CUDA_WRAPPERS_EXPORT void
+mgpuModuleGetGlobal(void **devPtr, size_t *bytes, CUmodule module,
+                    const char *name) {
+  CUdeviceptr dptr = 0;
+  CUDA_REPORT_IF_ERROR(cuModuleGetGlobal(&dptr, bytes, module, name));
+  *devPtr = reinterpret_cast<void *>(dptr);
+}
+
 // The wrapper uses intptr_t instead of CUDA's unsigned int to match
 // the type of MLIR's index type. This avoids the need for casts in the
 // generated MLIR code.

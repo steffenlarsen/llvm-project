@@ -33,8 +33,10 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Twine.h"
 
 namespace mlir {
 namespace offload {
@@ -70,6 +72,21 @@ static func::FuncOp getOrInsertDecl(OpBuilder &b, ModuleOp module,
   b.setInsertionPointToStart(module.getBody());
   auto decl = func::FuncOp::create(b, module.getLoc(), name, fnType);
   decl.setPrivate();
+  return decl;
+}
+
+/// Ensure an llvm.func declaration named `name` with type `fnType` exists in
+/// `module`. Returns the (potentially newly inserted) declaration.
+static LLVM::LLVMFuncOp getOrInsertLLVMDecl(OpBuilder &b, ModuleOp module,
+                                             StringRef name,
+                                             LLVM::LLVMFunctionType fnType) {
+  if (auto f = module.lookupSymbol<LLVM::LLVMFuncOp>(name))
+    return f;
+  OpBuilder::InsertionGuard guard(b);
+  b.setInsertionPointToStart(module.getBody());
+  auto decl =
+      LLVM::LLVMFuncOp::create(b, module.getLoc(), name, fnType);
+  decl.setLinkage(LLVM::Linkage::External);
   return decl;
 }
 
@@ -417,6 +434,461 @@ struct LowerHostRuntimePass
       }
       op.erase();
     });
+
+    // offload.event_destroy → @hip/cudaEventDestroy(i64) -> i32
+    module.walk([&](offload::EventDestroyOp op) {
+      b.setInsertionPoint(op);
+      StringRef fn = pick("hipEventDestroy", "cudaEventDestroy", useHip);
+      auto decl = getOrInsertDecl(b, module, fn,
+                                  b.getFunctionType({handleTy}, {i32Ty}));
+      auto cast = UnrealizedConversionCastOp::create(
+          b, op.getLoc(), TypeRange{handleTy}, ValueRange{op.getEvent()});
+      func::CallOp::create(b, op.getLoc(), decl, ValueRange{cast.getResult(0)});
+      op.erase();
+    });
+
+    // offload.event_wait → @hip/cudaEventSynchronize(i64) -> i32
+    module.walk([&](offload::EventWaitOp op) {
+      b.setInsertionPoint(op);
+      StringRef fn = pick("hipEventSynchronize", "cudaEventSynchronize", useHip);
+      auto decl = getOrInsertDecl(b, module, fn,
+                                  b.getFunctionType({handleTy}, {i32Ty}));
+      auto cast = UnrealizedConversionCastOp::create(
+          b, op.getLoc(), TypeRange{handleTy}, ValueRange{op.getEvent()});
+      func::CallOp::create(b, op.getLoc(), decl, ValueRange{cast.getResult(0)});
+      op.erase();
+    });
+
+    // offload.event_record → @hip/cudaEventRecord(i64 event, i64 stream) -> i32
+    module.walk([&](offload::EventRecordOp op) {
+      b.setInsertionPoint(op);
+      mlir::Location loc = op.getLoc();
+      StringRef fn = pick("hipEventRecord", "cudaEventRecord", useHip);
+      auto decl = getOrInsertDecl(
+          b, module, fn, b.getFunctionType({handleTy, handleTy}, {i32Ty}));
+      Value eventI64 =
+          UnrealizedConversionCastOp::create(b, loc, TypeRange{handleTy},
+                                             ValueRange{op.getEvent()})
+              .getResult(0);
+      Value streamI64;
+      if (op.getStream()) {
+        streamI64 =
+            UnrealizedConversionCastOp::create(b, loc, TypeRange{handleTy},
+                                               ValueRange{op.getStream()})
+                .getResult(0);
+      } else {
+        streamI64 =
+            LLVM::ConstantOp::create(b, loc, i64Ty, b.getIntegerAttr(i64Ty, 0))
+                .getResult();
+      }
+      func::CallOp::create(b, loc, decl, ValueRange{eventI64, streamI64});
+      op.erase();
+    });
+
+    // offload.event_create → @hip/cudaEventCreate(ptr) -> i32
+    module.walk([&](offload::EventCreateOp op) {
+      b.setInsertionPoint(op);
+      mlir::Location loc = op.getLoc();
+      StringRef fn = pick("hipEventCreate", "cudaEventCreate", useHip);
+      Type llvmPtrTy2 = LLVM::LLVMPointerType::get(ctx);
+      Value one64 =
+          LLVM::ConstantOp::create(b, loc, i64Ty, b.getIntegerAttr(i64Ty, 1))
+              .getResult();
+      Value slot = LLVM::AllocaOp::create(b, loc, llvmPtrTy2, i64Ty, one64,
+                                          /*alignment=*/8)
+                       .getResult();
+      auto decl = getOrInsertDecl(b, module, fn,
+                                  b.getFunctionType({llvmPtrTy2}, {i32Ty}));
+      func::CallOp::create(b, loc, decl, ValueRange{slot});
+      Value handle = LLVM::LoadOp::create(b, loc, i64Ty, slot).getResult();
+      auto backcast = UnrealizedConversionCastOp::create(
+          b, loc, TypeRange{op.getType()}, ValueRange{handle});
+      op.getResult().replaceAllUsesWith(backcast.getResult(0));
+      op.erase();
+    });
+
+    // offload.kernel_launch with stream → hipLaunchKernel
+    //
+    // Stream-aware launches were not converted by SplitSingleSource.
+    // hipLaunchKernel signature:
+    //   hipError_t hipLaunchKernel(const void* f, dim3 numBlocks, dim3 dimBlocks,
+    //                              void** args, size_t sharedMem, hipStream_t s)
+    // dim3 is { i32 x, i32 y, i32 z }.  We pass grid/block by pointer.
+    {
+      SmallVector<offload::KernelLaunchOp> streamLaunches;
+      module.walk([&](offload::KernelLaunchOp op) {
+        if (op.getStream())
+          streamLaunches.push_back(op);
+      });
+
+      Type llvmPtrTy = LLVM::LLVMPointerType::get(ctx);
+      Type dim3Ty = LLVM::LLVMStructType::getLiteral(
+          ctx, {b.getI32Type(), b.getI32Type(), b.getI32Type()});
+      StringRef launchFn = pick("hipLaunchKernel", "cudaLaunchKernel", useHip);
+
+      for (offload::KernelLaunchOp launch : streamLaunches) {
+        b.setInsertionPoint(launch);
+        Location loc = launch.getLoc();
+
+        Value one64 =
+            LLVM::ConstantOp::create(b, loc, i64Ty, b.getIntegerAttr(i64Ty, 1))
+                .getResult();
+
+        auto makeDim3 = [&](Value idxX, Value idxY, Value idxZ) -> Value {
+          Value slot =
+              LLVM::AllocaOp::create(b, loc, llvmPtrTy, dim3Ty, one64,
+                                     /*alignment=*/4)
+                  .getResult();
+          auto toI32 = [&](Value v) -> Value {
+            return UnrealizedConversionCastOp::create(
+                       b, loc, TypeRange{b.getI32Type()}, ValueRange{v})
+                .getResult(0);
+          };
+          auto storeField = [&](Value val, int32_t idx) {
+            Value gep = LLVM::GEPOp::create(
+                            b, loc, llvmPtrTy, dim3Ty, slot,
+                            ArrayRef<LLVM::GEPArg>{LLVM::GEPArg(0),
+                                                   LLVM::GEPArg(idx)},
+                            LLVM::GEPNoWrapFlags::inbounds)
+                            .getResult();
+            LLVM::StoreOp::create(b, loc, val, gep);
+          };
+          storeField(toI32(idxX), 0);
+          storeField(toI32(idxY), 1);
+          storeField(toI32(idxZ), 2);
+          return slot;
+        };
+
+        Value gridSlot = makeDim3(launch.getGridX(), launch.getGridY(),
+                                  launch.getGridZ());
+        Value blockSlot = makeDim3(launch.getBlockX(), launch.getBlockY(),
+                                   launch.getBlockZ());
+
+        // Pack kernel arguments into void*[N].
+        ValueRange kernArgs = launch.getArgs();
+        unsigned nArgs = kernArgs.size();
+        Value argsArraySlot;
+        if (nArgs == 0) {
+          argsArraySlot = LLVM::ZeroOp::create(b, loc, llvmPtrTy).getResult();
+        } else {
+          Value nArgs64 =
+              LLVM::ConstantOp::create(b, loc, i64Ty,
+                                       b.getIntegerAttr(i64Ty, nArgs))
+                  .getResult();
+          argsArraySlot =
+              LLVM::AllocaOp::create(b, loc, llvmPtrTy, llvmPtrTy, nArgs64,
+                                     /*alignment=*/8)
+                  .getResult();
+          for (unsigned i = 0; i < nArgs; ++i) {
+            Value argSlot =
+                LLVM::AllocaOp::create(b, loc, llvmPtrTy, i64Ty, one64,
+                                       /*alignment=*/8)
+                    .getResult();
+            Value argAsI64 =
+                UnrealizedConversionCastOp::create(b, loc, TypeRange{i64Ty},
+                                                   ValueRange{kernArgs[i]})
+                    .getResult(0);
+            LLVM::StoreOp::create(b, loc, argAsI64, argSlot);
+            Value gep = LLVM::GEPOp::create(
+                            b, loc, llvmPtrTy, llvmPtrTy, argsArraySlot,
+                            ArrayRef<LLVM::GEPArg>{
+                                LLVM::GEPArg(static_cast<int32_t>(i))},
+                            LLVM::GEPNoWrapFlags::inbounds)
+                            .getResult();
+            LLVM::StoreOp::create(b, loc, argSlot, gep);
+          }
+        }
+
+        Value sharedMem =
+            LLVM::ConstantOp::create(b, loc, i64Ty, b.getIntegerAttr(i64Ty, 0))
+                .getResult();
+        Value streamI64 =
+            UnrealizedConversionCastOp::create(
+                b, loc, TypeRange{i64Ty}, ValueRange{launch.getStream()})
+                .getResult(0);
+        // Obtain the kernel function pointer via LLVM address-of.
+        // The kernel stub must exist as an llvm.func in this module (placed
+        // there by the GPU compilation pipeline).
+        Value fnPtr =
+            LLVM::AddressOfOp::create(b, loc, llvmPtrTy, launch.getCallee())
+                .getResult();
+
+        auto decl = getOrInsertDecl(
+            b, module, launchFn,
+            b.getFunctionType(
+                {llvmPtrTy, llvmPtrTy, llvmPtrTy, llvmPtrTy, i64Ty, i64Ty},
+                {i32Ty}));
+        func::CallOp::create(b, loc, decl,
+                             ValueRange{fnPtr, gridSlot, blockSlot,
+                                        argsArraySlot, sharedMem, streamI64});
+        launch.erase();
+      }
+    }
+
+    // ------------------------------------------------------------------ //
+    // Device global initialization: emit __offload_init_globals()
+    //
+    // For each offload.global_var with a non-null initial_value, emit a
+    // hipMemcpy(HostToDevice) call that writes the constant to the device
+    // symbol at module load time.  The constant data is stored in an
+    // llvm.mlir.global (host-side read-only); its address is the src ptr.
+    //
+    // The device symbol address (dst ptr) is obtained via hipGetSymbolAddress,
+    // which requires a call at runtime.  For simplicity we embed this inside
+    // the generated __offload_init_globals() function.
+    //
+    // The generated function is registered as a module constructor via
+    // llvm.mlir.global_ctors so that it runs before any user code.
+    //
+    // After processing, all offload.global_var ops are erased (they are not
+    // representable in the LLVM dialect).
+    // ------------------------------------------------------------------ //
+    {
+      SmallVector<offload::GlobalVarOp> allGlobalVars;
+      module.walk(
+          [&](offload::GlobalVarOp gv) { allGlobalVars.push_back(gv); });
+
+      SmallVector<offload::GlobalVarOp> initGlobals;
+      for (auto gv : allGlobalVars)
+        if (gv.getInitialValue())
+          initGlobals.push_back(gv);
+
+      if (!initGlobals.empty()) {
+        Location modLoc = module.getLoc();
+        Type llvmPtrTy = LLVM::LLVMPointerType::get(ctx);
+        StringRef initFnName = "__offload_init_globals";
+
+        OpBuilder::InsertionGuard guard(b);
+        b.setInsertionPointToEnd(module.getBody());
+        auto voidTy = LLVM::LLVMVoidType::get(ctx);
+        auto initFnTy = LLVM::LLVMFunctionType::get(voidTy, {});
+        auto initFn = LLVM::LLVMFuncOp::create(b, modLoc, initFnName,
+                                                initFnTy);
+        initFn.setLinkage(LLVM::Linkage::Internal);
+        Block *entry = initFn.addEntryBlock(b);
+        b.setInsertionPointToStart(entry);
+
+        StringRef memcpyFn = pick("hipMemcpy", "cudaMemcpy", useHip);
+        Value kindH2D =
+            LLVM::ConstantOp::create(b, modLoc, i32Ty,
+                                     b.getIntegerAttr(i32Ty, 1))
+                .getResult();
+        auto memcpyDecl = getOrInsertLLVMDecl(
+            b, module, memcpyFn,
+            LLVM::LLVMFunctionType::get(i32Ty,
+                                        {llvmPtrTy, llvmPtrTy, i64Ty, i32Ty}));
+
+        // mgpuModuleGetGlobal(devPtr, bytes, module, name) looks up a device
+        // global by name in the loaded binary module object.
+        // void mgpuModuleGetGlobal(void** devPtr, size_t* bytes,
+        //                          hipModule_t module, const char* name)
+        auto getGlobalDecl = getOrInsertLLVMDecl(
+            b, module, "mgpuModuleGetGlobal",
+            LLVM::LLVMFunctionType::get(
+                LLVM::LLVMVoidType::get(ctx),
+                {llvmPtrTy, llvmPtrTy, llvmPtrTy, llvmPtrTy}));
+
+        // Load the device binary module handle stored by the binary-load ctor.
+        // The handle global is named "{gpuModuleName}_module" by SelectObjectAttr.
+        // gpuModuleName is always "offload_device_module" in this pipeline.
+        constexpr StringLiteral kGpuModuleName = "offload_device_module";
+        std::string moduleHandleGlobalName =
+            (kGpuModuleName + "_module").str();
+        Value modHandle = [&]() -> Value {
+          // Look up the global or create a forward reference (will be defined
+          // by SelectObjectAttr during LLVM translation of gpu.BinaryOp).
+          LLVM::GlobalOp handleGlobal =
+              module.lookupSymbol<LLVM::GlobalOp>(moduleHandleGlobalName);
+          if (!handleGlobal) {
+            OpBuilder::InsertionGuard hGuard(b);
+            b.setInsertionPointToStart(module.getBody());
+            handleGlobal = LLVM::GlobalOp::create(
+                b, modLoc, llvmPtrTy, /*isConstant=*/false,
+                LLVM::Linkage::External, moduleHandleGlobalName,
+                /*value=*/mlir::Attribute{});
+          }
+          return LLVM::LoadOp::create(
+                     b, modLoc, llvmPtrTy,
+                     LLVM::AddressOfOp::create(b, modLoc, llvmPtrTy,
+                                               moduleHandleGlobalName)
+                         .getResult())
+              .getResult();
+        }();
+
+        // Allocate slots for the device pointer and size outputs.
+        Value one64 =
+            LLVM::ConstantOp::create(b, modLoc, i64Ty,
+                                     b.getIntegerAttr(i64Ty, 1))
+                .getResult();
+        Value dstSlot =
+            LLVM::AllocaOp::create(b, modLoc, llvmPtrTy, llvmPtrTy, one64,
+                                   /*alignment=*/8)
+                .getResult();
+        Value bytesSlot =
+            LLVM::AllocaOp::create(b, modLoc, llvmPtrTy, i64Ty, one64,
+                                   /*alignment=*/8)
+                .getResult();
+
+        unsigned constIdx = 0;
+        for (offload::GlobalVarOp gv : initGlobals) {
+          mlir::Attribute initAttr = *gv.getInitialValue();
+          (void)gv.getType(); // used only for aggregate types (not yet supported)
+
+          std::string constName =
+              ("__offload_init_const." + gv.getSymName() + "." +
+               llvm::Twine(constIdx++))
+                  .str();
+
+          // Emit the host-side constant into an llvm.mlir.global.
+          mlir::Type constElemTy;
+          mlir::Attribute constInitAttr = initAttr;
+          if (auto intAttr = mlir::dyn_cast<mlir::IntegerAttr>(initAttr)) {
+            constElemTy = intAttr.getType();
+          } else if (auto fpAttr = mlir::dyn_cast<mlir::FloatAttr>(initAttr)) {
+            constElemTy = fpAttr.getType();
+          } else if (auto denseAttr =
+                         mlir::dyn_cast<mlir::DenseElementsAttr>(initAttr)) {
+            constElemTy = denseAttr.getType();
+            constInitAttr = denseAttr;
+          } else {
+            continue; // Unknown attribute type; skip.
+          }
+
+          // CIR integer/float types are not LLVM types; convert to LLVM.
+          // IntegerAttr from CIR uses !cir.int<s,N> or !cir.int<u,N>;
+          // we map to the underlying mlir::IntegerType for llvm.mlir.global.
+          mlir::Type llvmElemTy;
+          if (auto intTy = mlir::dyn_cast<mlir::IntegerType>(constElemTy)) {
+            llvmElemTy = intTy;
+          } else if (constElemTy.isF16()) {
+            llvmElemTy = b.getF16Type();
+          } else if (constElemTy.isF32()) {
+            llvmElemTy = b.getF32Type();
+          } else if (constElemTy.isF64()) {
+            llvmElemTy = b.getF64Type();
+          } else {
+            // For CIR-typed attributes (cir.int, cir.float), try to extract
+            // the raw APInt/APFloat and repackage as an LLVM-compatible attr.
+            // Fall back by skipping if we can't determine the LLVM type.
+            if (auto intAttr = mlir::dyn_cast<mlir::IntegerAttr>(initAttr)) {
+              // CIR integer attr: width is in the CIR type.
+              unsigned width = 0;
+              if (auto cirIntTy = llvm::dyn_cast_if_present<
+                      mlir::IntegerType>(constElemTy))
+                width = cirIntTy.getWidth();
+              if (width == 0)
+                continue;
+              llvmElemTy = b.getIntegerType(width);
+              constInitAttr = b.getIntegerAttr(llvmElemTy,
+                                               intAttr.getValue());
+            } else if (auto fpAttr =
+                           mlir::dyn_cast<mlir::FloatAttr>(initAttr)) {
+              APFloat val = fpAttr.getValue();
+              if (&val.getSemantics() == &APFloat::IEEEhalf())
+                llvmElemTy = b.getF16Type();
+              else if (&val.getSemantics() == &APFloat::IEEEsingle())
+                llvmElemTy = b.getF32Type();
+              else if (&val.getSemantics() == &APFloat::IEEEdouble())
+                llvmElemTy = b.getF64Type();
+              else
+                continue;
+              constInitAttr = b.getFloatAttr(llvmElemTy, val);
+            } else {
+              continue;
+            }
+          }
+
+          // Compute size in bytes.
+          int64_t sizeBytes = 0;
+          if (auto intTy = mlir::dyn_cast<mlir::IntegerType>(llvmElemTy))
+            sizeBytes = (intTy.getWidth() + 7) / 8;
+          else if (llvmElemTy.isF16())
+            sizeBytes = 2;
+          else if (llvmElemTy.isF32())
+            sizeBytes = 4;
+          else if (llvmElemTy.isF64())
+            sizeBytes = 8;
+          if (sizeBytes <= 0)
+            continue;
+
+          // Place the constant global before the init function.
+          OpBuilder::InsertionGuard gGuard(b);
+          b.setInsertionPoint(initFn);
+          auto constGlobal = LLVM::GlobalOp::create(
+              b, modLoc, llvmElemTy, /*isConstant=*/true,
+              LLVM::Linkage::Private, constName, constInitAttr);
+          constGlobal.setUnnamedAddr(LLVM::UnnamedAddr::Global);
+
+          b.setInsertionPointToEnd(entry);
+
+          // Create a null-terminated C string constant for the device symbol
+          // name so mgpuModuleGetGlobal can look it up by name in the binary.
+          std::string symNameStr = gv.getSymName().str();
+          std::string symNameGlobalName =
+              ("__offload_sym_name." + gv.getSymName()).str();
+          {
+            OpBuilder::InsertionGuard nGuard(b);
+            b.setInsertionPoint(initFn);
+            if (!module.lookupSymbol<LLVM::GlobalOp>(symNameGlobalName)) {
+              // Store as a [N x i8] array with explicit null terminator.
+              auto i8Ty = b.getIntegerType(8);
+              auto strTy =
+                  LLVM::LLVMArrayType::get(i8Ty, symNameStr.size() + 1);
+              // Build a DenseIntElementsAttr for the char data.
+              SmallVector<int8_t> chars(symNameStr.begin(), symNameStr.end());
+              chars.push_back(0);
+              auto strAttr = DenseIntElementsAttr::get(
+                  RankedTensorType::get(
+                      {static_cast<int64_t>(chars.size())}, i8Ty),
+                  ArrayRef<int8_t>(chars));
+              auto symNameGlobal = LLVM::GlobalOp::create(
+                  b, modLoc, strTy, /*isConstant=*/true,
+                  LLVM::Linkage::Private, symNameGlobalName, strAttr);
+              symNameGlobal.setUnnamedAddr(LLVM::UnnamedAddr::Global);
+            }
+          }
+          Value symNamePtr =
+              LLVM::AddressOfOp::create(b, modLoc, llvmPtrTy, symNameGlobalName)
+                  .getResult();
+
+          // Look up the device global address in the loaded binary module.
+          LLVM::CallOp::create(b, modLoc, getGlobalDecl,
+                               ValueRange{dstSlot, bytesSlot, modHandle,
+                                          symNamePtr});
+          Value dstPtr =
+              LLVM::LoadOp::create(b, modLoc, llvmPtrTy, dstSlot).getResult();
+
+          // Get the host constant address.
+          Value srcPtr =
+              LLVM::AddressOfOp::create(b, modLoc, llvmPtrTy, constName)
+                  .getResult();
+
+          Value sizeVal =
+              LLVM::ConstantOp::create(b, modLoc, i64Ty,
+                                       b.getIntegerAttr(i64Ty, sizeBytes))
+                  .getResult();
+
+          LLVM::CallOp::create(b, modLoc, memcpyDecl,
+                               ValueRange{dstPtr, srcPtr, sizeVal, kindH2D});
+        }
+
+        LLVM::ReturnOp::create(b, modLoc, ValueRange{});
+
+        // Register as a module constructor.
+        b.setInsertionPointToEnd(module.getBody());
+        Attribute ctorFn = FlatSymbolRefAttr::get(ctx, initFnName);
+        Attribute ctorDataAttr = LLVM::ZeroAttr::get(ctx);
+        LLVM::GlobalCtorsOp::create(
+            b, modLoc,
+            b.getArrayAttr(ArrayRef<Attribute>{ctorFn}),
+            b.getI32ArrayAttr(ArrayRef<int32_t>{200}),
+            b.getArrayAttr(ArrayRef<Attribute>{ctorDataAttr}));
+      }
+
+      // Erase all offload.global_var ops — they are not LLVM-translatable.
+      for (auto gv : allGlobalVars)
+        gv.erase();
+    }
   }
 };
 

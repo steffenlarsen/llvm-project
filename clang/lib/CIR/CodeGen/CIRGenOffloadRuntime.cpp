@@ -147,14 +147,16 @@ RValue CIRGenOffloadRuntime::emitCUDAKernelCallExpr(
   }
 
   // ------------------------------------------------------------------ //
-  // 3. Extract grid and block dimensions from the config call.
+  // 3. Extract grid, block dimensions and stream from the config call.
   //
-  // The config call is __cudaPushCallConfiguration(gridDim, blockDim, ...),
-  // where gridDim and blockDim are dim3 struct values.  We extract the x, y, z
-  // fields and cast them to index.
+  // The config call is __hipPushCallConfiguration(gridDim, blockDim,
+  // sharedMem, stream), where gridDim and blockDim are dim3 struct values.
+  // We extract the x, y, z fields and cast them to index.  The stream (arg 3)
+  // is passed through as !offload.stream when it is non-null.
   // ------------------------------------------------------------------ //
   const CallExpr *config = expr->getConfig();
   mlir::Value gridX, gridY, gridZ, blockX, blockY, blockZ;
+  mlir::Value streamVal; // empty = default stream (no stream operand)
 
   if (config && config->getNumArgs() >= 2) {
     const Expr *gridArg  = config->getArg(0);
@@ -166,6 +168,34 @@ RValue CIRGenOffloadRuntime::emitCUDAKernelCallExpr(
     blockX = emitDim3Component(cgf, loc, blockArg, 0);
     blockY = emitDim3Component(cgf, loc, blockArg, 1);
     blockZ = emitDim3Component(cgf, loc, blockArg, 2);
+
+    // Extract the stream argument (arg 3) if present and non-null.
+    // __hipPushCallConfiguration defaults stream to 0 (default stream).
+    // We emit a stream operand only when the stream is provably non-zero.
+    if (config->getNumArgs() >= 4) {
+      const Expr *streamArg = config->getArg(3);
+      // Skip emitting a stream operand for the default (null) stream.
+      // hipStream_t is a pointer type; check both null pointer constant
+      // expressions and integer-zero forms (0 cast to hipStream_t).
+      bool isNullStream =
+          streamArg->isNullPointerConstant(
+              cgf.getContext(), Expr::NPC_ValueDependentIsNull) !=
+          Expr::NPCK_NotNull;
+      if (!isNullStream) {
+        // Also check integer constant zero (e.g. (hipStream_t)0).
+        Expr::EvalResult evalRes;
+        if (streamArg->EvaluateAsInt(evalRes, cgf.getContext()))
+          isNullStream = evalRes.Val.getInt().isZero();
+      }
+      if (!isNullStream) {
+        mlir::Value raw = cgf.emitScalarExpr(streamArg);
+        auto streamTy = mlir::offload::StreamType::get(builder.getContext());
+        streamVal = mlir::UnrealizedConversionCastOp::create(
+                        builder, loc, mlir::TypeRange{streamTy},
+                        mlir::ValueRange{raw})
+                        .getResult(0);
+      }
+    }
   } else {
     // Fallback: 1-D launch with unit dimensions.
     auto one = [&]() {
@@ -182,7 +212,7 @@ RValue CIRGenOffloadRuntime::emitCUDAKernelCallExpr(
       kernelName,  // callee as StringRef (use the StringRef overload)
       gridX, gridY, gridZ,
       blockX, blockY, blockZ,
-      /*stream=*/mlir::Value{},
+      streamVal,
       mlir::ValueRange(args));
 
   return RValue::get(nullptr);
@@ -459,6 +489,81 @@ CIRGenOffloadRuntime::emitCUDARuntimeCall(CIRGenFunction &cgf,
 
     mlir::offload::MemcpyToSymbolOp::create(builder, loc, symName, src,
                                              countIdx);
+    mlir::Type retTy = cgf.convertType(e->getType());
+    return RValue::get(makeHipSuccess(builder, loc, retTy));
+  }
+
+  // hipEventCreate(hipEvent_t *event) → offload.event_create + store
+  if (name == "hipEventCreate") {
+    auto eventTy = mlir::offload::EventType::get(ctx);
+    mlir::Value event =
+        mlir::offload::EventCreateOp::create(builder, loc, eventTy).getResult();
+    mlir::Value pEvent = cgf.emitScalarExpr(e->getArg(0));
+    auto ptrCirTy = mlir::dyn_cast<cir::PointerType>(pEvent.getType());
+    if (ptrCirTy) {
+      mlir::Value cast =
+          mlir::UnrealizedConversionCastOp::create(
+              builder, loc, TypeRange{ptrCirTy.getPointee()},
+              ValueRange{event})
+              .getResult(0);
+      builder.CIRBaseBuilderTy::createStore(loc, cast, pEvent);
+    }
+    mlir::Type retTy = cgf.convertType(e->getType());
+    return RValue::get(makeHipSuccess(builder, loc, retTy));
+  }
+
+  // hipEventDestroy(hipEvent_t event) → offload.event_destroy
+  if (name == "hipEventDestroy") {
+    mlir::Value handle = cgf.emitScalarExpr(e->getArg(0));
+    auto eventTy = mlir::offload::EventType::get(ctx);
+    mlir::Value event =
+        mlir::UnrealizedConversionCastOp::create(
+            builder, loc, TypeRange{eventTy}, ValueRange{handle})
+            .getResult(0);
+    mlir::offload::EventDestroyOp::create(builder, loc, event);
+    mlir::Type retTy = cgf.convertType(e->getType());
+    return RValue::get(makeHipSuccess(builder, loc, retTy));
+  }
+
+  // hipEventRecord(hipEvent_t event, hipStream_t stream)
+  //   → offload.event_record %event (, stream = %stream)?
+  if (name == "hipEventRecord") {
+    mlir::Value handle = cgf.emitScalarExpr(e->getArg(0));
+    auto eventTy = mlir::offload::EventType::get(ctx);
+    mlir::Value event =
+        mlir::UnrealizedConversionCastOp::create(
+            builder, loc, TypeRange{eventTy}, ValueRange{handle})
+            .getResult(0);
+    // Stream argument (may be null/default stream).
+    mlir::Value streamVal;
+    if (e->getNumArgs() >= 2) {
+      const Expr *streamArg = e->getArg(1);
+      Expr::EvalResult evalRes;
+      bool isNullStream = false;
+      if (streamArg->EvaluateAsInt(evalRes, cgf.getContext()))
+        isNullStream = evalRes.Val.getInt().isZero();
+      if (!isNullStream) {
+        mlir::Value raw = cgf.emitScalarExpr(streamArg);
+        auto streamTy = mlir::offload::StreamType::get(ctx);
+        streamVal = mlir::UnrealizedConversionCastOp::create(
+                        builder, loc, TypeRange{streamTy}, ValueRange{raw})
+                        .getResult(0);
+      }
+    }
+    mlir::offload::EventRecordOp::create(builder, loc, event, streamVal);
+    mlir::Type retTy = cgf.convertType(e->getType());
+    return RValue::get(makeHipSuccess(builder, loc, retTy));
+  }
+
+  // hipEventSynchronize(hipEvent_t event) → offload.event_wait
+  if (name == "hipEventSynchronize") {
+    mlir::Value handle = cgf.emitScalarExpr(e->getArg(0));
+    auto eventTy = mlir::offload::EventType::get(ctx);
+    mlir::Value event =
+        mlir::UnrealizedConversionCastOp::create(
+            builder, loc, TypeRange{eventTy}, ValueRange{handle})
+            .getResult(0);
+    mlir::offload::EventWaitOp::create(builder, loc, event);
     mlir::Type retTy = cgf.convertType(e->getType());
     return RValue::get(makeHipSuccess(builder, loc, retTy));
   }
