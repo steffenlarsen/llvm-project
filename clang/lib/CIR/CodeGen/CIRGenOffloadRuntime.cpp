@@ -156,6 +156,7 @@ RValue CIRGenOffloadRuntime::emitCUDAKernelCallExpr(
   // ------------------------------------------------------------------ //
   const CallExpr *config = expr->getConfig();
   mlir::Value gridX, gridY, gridZ, blockX, blockY, blockZ;
+  mlir::Value shmemVal;  // empty = zero shmem
   mlir::Value streamVal; // empty = default stream (no stream operand)
 
   if (config && config->getNumArgs() >= 2) {
@@ -168,6 +169,24 @@ RValue CIRGenOffloadRuntime::emitCUDAKernelCallExpr(
     blockX = emitDim3Component(cgf, loc, blockArg, 0);
     blockY = emitDim3Component(cgf, loc, blockArg, 1);
     blockZ = emitDim3Component(cgf, loc, blockArg, 2);
+
+    // Extract the shared memory argument (arg 2) if non-zero.
+    // __hipPushCallConfiguration defaults sharedMem to 0.
+    if (config->getNumArgs() >= 3) {
+      const Expr *shmemArg = config->getArg(2);
+      Expr::EvalResult evalRes;
+      bool isZeroShmem = false;
+      if (shmemArg->EvaluateAsInt(evalRes, cgf.getContext()))
+        isZeroShmem = evalRes.Val.getInt().isZero();
+      if (!isZeroShmem) {
+        mlir::Value raw = cgf.emitScalarExpr(shmemArg);
+        mlir::Type indexTy = mlir::IndexType::get(builder.getContext());
+        shmemVal = mlir::UnrealizedConversionCastOp::create(
+                       builder, loc, mlir::TypeRange{indexTy},
+                       mlir::ValueRange{raw})
+                       .getResult(0);
+      }
+    }
 
     // Extract the stream argument (arg 3) if present and non-null.
     // __hipPushCallConfiguration defaults stream to 0 (default stream).
@@ -212,6 +231,7 @@ RValue CIRGenOffloadRuntime::emitCUDAKernelCallExpr(
       kernelName,  // callee as StringRef (use the StringRef overload)
       gridX, gridY, gridZ,
       blockX, blockY, blockZ,
+      shmemVal,
       streamVal,
       mlir::ValueRange(args));
 
@@ -231,7 +251,7 @@ CIRGenOffloadRuntime::emitCUDARuntimeCall(CIRGenFunction &cgf,
   // Only intercept plain function calls with a named callee.
   const FunctionDecl *fd =
       dyn_cast_or_null<FunctionDecl>(e->getCalleeDecl());
-  if (!fd)
+  if (!fd || !fd->getDeclName().isIdentifier())
     return std::nullopt;
 
   llvm::StringRef name = fd->getName();
@@ -457,6 +477,120 @@ CIRGenOffloadRuntime::emitCUDARuntimeCall(CIRGenFunction &cgf,
     return RValue::get(makeHipSuccess(builder, loc, retTy));
   }
 
+  // hipMemcpyAsync(dst, src, size, kind, stream)
+  //   → offload.memcpy %dst, %src, %size dst_space=X src_space=Y, stream=%stream
+  if (name == "hipMemcpyAsync") {
+    mlir::Value dst  = cgf.emitScalarExpr(e->getArg(0));
+    mlir::Value src  = cgf.emitScalarExpr(e->getArg(1));
+    mlir::Value size = cgf.emitScalarExpr(e->getArg(2));
+    mlir::Type indexTy = mlir::IndexType::get(ctx);
+    mlir::Value sizeIdx =
+        mlir::UnrealizedConversionCastOp::create(
+            builder, loc, TypeRange{indexTy}, ValueRange{size})
+            .getResult(0);
+    mlir::offload::AllocType dstSpace = mlir::offload::AllocType::managed;
+    mlir::offload::AllocType srcSpace = mlir::offload::AllocType::managed;
+    Expr::EvalResult kindResult;
+    if (e->getArg(3)->EvaluateAsInt(kindResult, cgf.getContext())) {
+      switch (kindResult.Val.getInt().getZExtValue()) {
+      case 0:
+        dstSpace = mlir::offload::AllocType::host;
+        srcSpace = mlir::offload::AllocType::host;
+        break;
+      case 1:
+        dstSpace = mlir::offload::AllocType::device;
+        srcSpace = mlir::offload::AllocType::host;
+        break;
+      case 2:
+        dstSpace = mlir::offload::AllocType::host;
+        srcSpace = mlir::offload::AllocType::device;
+        break;
+      case 3:
+        dstSpace = mlir::offload::AllocType::device;
+        srcSpace = mlir::offload::AllocType::device;
+        break;
+      default:
+        break;
+      }
+    }
+    // Extract the stream argument (arg 4).
+    mlir::Value streamVal;
+    if (e->getNumArgs() >= 5) {
+      const Expr *streamArg = e->getArg(4);
+      bool isNullStream =
+          streamArg->isNullPointerConstant(
+              cgf.getContext(), Expr::NPC_ValueDependentIsNull) !=
+          Expr::NPCK_NotNull;
+      if (!isNullStream) {
+        Expr::EvalResult evalRes;
+        if (streamArg->EvaluateAsInt(evalRes, cgf.getContext()))
+          isNullStream = evalRes.Val.getInt().isZero();
+      }
+      if (!isNullStream) {
+        mlir::Value raw = cgf.emitScalarExpr(streamArg);
+        auto streamTy = mlir::offload::StreamType::get(ctx);
+        streamVal = mlir::UnrealizedConversionCastOp::create(
+                        builder, loc, TypeRange{streamTy}, ValueRange{raw})
+                        .getResult(0);
+      }
+    }
+    mlir::offload::MemcpyOp::create(builder, loc, dst, src, sizeIdx,
+                                    dstSpace, srcSpace, streamVal);
+    mlir::Type retTy = cgf.convertType(e->getType());
+    return RValue::get(makeHipSuccess(builder, loc, retTy));
+  }
+
+  // hipMemsetD32Async(hipDeviceptr_t dst, unsigned int value,
+  //                   size_t count, hipStream_t stream)
+  //   → offload.memset %dst, %u32_pattern, %size_in_bytes, stream = %stream
+  //
+  // count is in 4-byte elements; convert to byte size for offload.memset.
+  if (name == "hipMemsetD32Async") {
+    mlir::Value dst   = cgf.emitScalarExpr(e->getArg(0));
+    mlir::Value val   = cgf.emitScalarExpr(e->getArg(1));
+    mlir::Value count = cgf.emitScalarExpr(e->getArg(2));
+    mlir::Type indexTy = mlir::IndexType::get(ctx);
+    // count is element count; byte size = count * 4
+    mlir::Value countIdx =
+        mlir::UnrealizedConversionCastOp::create(
+            builder, loc, TypeRange{indexTy}, ValueRange{count})
+            .getResult(0);
+    mlir::Value four = mlir::arith::ConstantIndexOp::create(builder, loc, 4);
+    mlir::Value sizeBytes =
+        mlir::arith::MulIOp::create(builder, loc, countIdx, four);
+    // Truncate value to i32 for pattern width detection.
+    mlir::Type i32Ty = mlir::IntegerType::get(ctx, 32);
+    mlir::Value pattern =
+        mlir::UnrealizedConversionCastOp::create(
+            builder, loc, TypeRange{i32Ty}, ValueRange{val})
+            .getResult(0);
+    // Extract the stream argument (arg 3).
+    mlir::Value streamVal;
+    if (e->getNumArgs() >= 4) {
+      const Expr *streamArg = e->getArg(3);
+      bool isNullStream =
+          streamArg->isNullPointerConstant(
+              cgf.getContext(), Expr::NPC_ValueDependentIsNull) !=
+          Expr::NPCK_NotNull;
+      if (!isNullStream) {
+        Expr::EvalResult evalRes;
+        if (streamArg->EvaluateAsInt(evalRes, cgf.getContext()))
+          isNullStream = evalRes.Val.getInt().isZero();
+      }
+      if (!isNullStream) {
+        mlir::Value raw = cgf.emitScalarExpr(streamArg);
+        auto streamTy = mlir::offload::StreamType::get(ctx);
+        streamVal = mlir::UnrealizedConversionCastOp::create(
+                        builder, loc, TypeRange{streamTy}, ValueRange{raw})
+                        .getResult(0);
+      }
+    }
+    mlir::offload::MemsetOp::create(builder, loc, dst, pattern, sizeBytes,
+                                    streamVal);
+    mlir::Type retTy = cgf.convertType(e->getType());
+    return RValue::get(makeHipSuccess(builder, loc, retTy));
+  }
+
   // hipMemcpyToSymbol(symbol, src, count, offset, kind)
   //   → offload.memcpy_to_symbol @sym src = %src count = %count_idx
   //
@@ -489,6 +623,41 @@ CIRGenOffloadRuntime::emitCUDARuntimeCall(CIRGenFunction &cgf,
 
     mlir::offload::MemcpyToSymbolOp::create(builder, loc, symName, src,
                                              countIdx);
+    mlir::Type retTy = cgf.convertType(e->getType());
+    return RValue::get(makeHipSuccess(builder, loc, retTy));
+  }
+
+  // hipMemcpyFromSymbol(dst, symbol, count, offset, kind)
+  //   → offload.memcpy_from_symbol @sym dst = %dst count = %count_idx
+  //
+  // Symmetric counterpart of hipMemcpyToSymbol (DeviceToHost direction).
+  // offset (arg3) and kind (arg4) default to 0 / DeviceToHost — ignored.
+  if (name == "hipMemcpyFromSymbol") {
+    const Expr *symArg = e->getArg(1)->IgnoreParenImpCasts();
+    // Peel off the implicit `&` that takes the address of the global.
+    if (const auto *unary = dyn_cast<UnaryOperator>(symArg))
+      if (unary->getOpcode() == UO_AddrOf)
+        symArg = unary->getSubExpr()->IgnoreParenImpCasts();
+    const auto *dre = dyn_cast<DeclRefExpr>(symArg);
+    if (!dre) {
+      cgm.getDiags().Report(e->getExprLoc(),
+          cgm.getDiags().getCustomDiagID(
+              DiagnosticsEngine::Error,
+              "hipMemcpyFromSymbol: second argument must be a device global "
+              "reference"));
+      return std::nullopt;
+    }
+    llvm::StringRef symName = dre->getDecl()->getName();
+    mlir::Value dst   = cgf.emitScalarExpr(e->getArg(0));
+    mlir::Value count = cgf.emitScalarExpr(e->getArg(2));
+    mlir::Type indexTy = mlir::IndexType::get(ctx);
+    mlir::Value countIdx =
+        mlir::UnrealizedConversionCastOp::create(
+            builder, loc, TypeRange{indexTy}, ValueRange{count})
+            .getResult(0);
+
+    mlir::offload::MemcpyFromSymbolOp::create(builder, loc, dst, symName,
+                                               countIdx);
     mlir::Type retTy = cgf.convertType(e->getType());
     return RValue::get(makeHipSuccess(builder, loc, retTy));
   }
@@ -564,6 +733,33 @@ CIRGenOffloadRuntime::emitCUDARuntimeCall(CIRGenFunction &cgf,
             builder, loc, TypeRange{eventTy}, ValueRange{handle})
             .getResult(0);
     mlir::offload::EventWaitOp::create(builder, loc, event);
+    mlir::Type retTy = cgf.convertType(e->getType());
+    return RValue::get(makeHipSuccess(builder, loc, retTy));
+  }
+
+  // hipStreamWaitEvent(hipStream_t stream, hipEvent_t event, unsigned flags)
+  //   → offload.stream_wait_event %stream, %event flags = <flags>
+  if (name == "hipStreamWaitEvent") {
+    mlir::Value streamHandle = cgf.emitScalarExpr(e->getArg(0));
+    mlir::Value eventHandle  = cgf.emitScalarExpr(e->getArg(1));
+    auto streamTy = mlir::offload::StreamType::get(ctx);
+    auto eventTy  = mlir::offload::EventType::get(ctx);
+    mlir::Value stream =
+        mlir::UnrealizedConversionCastOp::create(
+            builder, loc, TypeRange{streamTy}, ValueRange{streamHandle})
+            .getResult(0);
+    mlir::Value event =
+        mlir::UnrealizedConversionCastOp::create(
+            builder, loc, TypeRange{eventTy}, ValueRange{eventHandle})
+            .getResult(0);
+    // flags arg (arg 2) is always a compile-time constant (typically 0).
+    int32_t flagsVal = 0;
+    Expr::EvalResult evalRes;
+    if (e->getArg(2)->EvaluateAsInt(evalRes, cgf.getContext()))
+      flagsVal = static_cast<int32_t>(evalRes.Val.getInt().getZExtValue());
+    mlir::offload::StreamWaitEventOp::create(
+        builder, loc, stream, event,
+        builder.getI32IntegerAttr(flagsVal));
     mlir::Type retTy = cgf.convertType(e->getType());
     return RValue::get(makeHipSuccess(builder, loc, retTy));
   }

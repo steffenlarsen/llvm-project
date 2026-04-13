@@ -1465,11 +1465,12 @@ void CIRGenModule::emitGlobalVarDefinition(const clang::VarDecl *vd,
       // so we emit the actual constant from the AST VarDecl here.
       mlir::Attribute initVal;
       if (memSpace != mlir::offload::MemSpace::shared && initExpr) {
-        // Only attempt constant emission for scalar (integer/float) types.
-        // Aggregate initializers (arrays, structs) require DenseElementsAttr
-        // support that is not yet in place.  initExpr is non-null only when
-        // the variable has an explicit source-level initializer.
+        // Attempt constant emission for scalar and array initializers.
+        // initExpr is non-null only when the variable has an explicit
+        // source-level initializer.
         QualType varTy = initDecl->getType();
+        mlir::MLIRContext *mctx = builder.getContext();
+
         if (varTy->isIntegralOrEnumerationType() ||
             varTy->isRealFloatingType()) {
           ConstantEmitter constEmitter(*this);
@@ -1479,7 +1480,6 @@ void CIRGenModule::emitGlobalVarDefinition(const clang::VarDecl *vd,
             // attrs (mlir::IntegerAttr / mlir::FloatAttr) so that
             // LowerHostRuntime (a pure MLIR pass) can handle them without a
             // CIR dialect dependency.
-            mlir::MLIRContext *mctx = builder.getContext();
             if (auto cirInt = mlir::dyn_cast<cir::IntAttr>(constAttr)) {
               unsigned width = cirInt.getBitWidth();
               auto stdTy = mlir::IntegerType::get(mctx, width);
@@ -1495,6 +1495,80 @@ void CIRGenModule::emitGlobalVarDefinition(const clang::VarDecl *vd,
                 stdTy = mlir::Float64Type::get(mctx);
               if (stdTy)
                 initVal = mlir::FloatAttr::get(stdTy, fpVal);
+            }
+          }
+        } else if (varTy->isConstantArrayType()) {
+          // Array initializer: cir::ConstArrayAttr → DenseElementsAttr.
+          ConstantEmitter constEmitter(*this);
+          if (mlir::Attribute constAttr =
+                  constEmitter.tryEmitAbstractForInitializer(*initDecl)) {
+            if (auto cirArr =
+                    mlir::dyn_cast<cir::ConstArrayAttr>(constAttr)) {
+              // Determine element type and total element count.
+              auto cirArrTy =
+                  mlir::cast<cir::ArrayType>(cirArr.getType());
+              int64_t numElems = static_cast<int64_t>(cirArrTy.getSize());
+              mlir::ArrayAttr elts =
+                  mlir::cast<mlir::ArrayAttr>(cirArr.getElts());
+
+              // Try to build DenseIntElementsAttr (integer elements).
+              if (numElems > 0 &&
+                  mlir::isa<cir::IntAttr>(elts[0])) {
+                auto firstInt = mlir::cast<cir::IntAttr>(elts[0]);
+                unsigned width = firstInt.getBitWidth();
+                auto stdElemTy = mlir::IntegerType::get(mctx, width);
+                llvm::SmallVector<llvm::APInt> vals;
+                vals.reserve(numElems);
+                bool allInt = true;
+                for (mlir::Attribute elt : elts) {
+                  if (auto ci = mlir::dyn_cast<cir::IntAttr>(elt))
+                    vals.push_back(ci.getValue());
+                  else { allInt = false; break; }
+                }
+                // Also zero-fill trailing elements.
+                int64_t trailing = cirArr.getTrailingZerosNum();
+                for (int64_t t = 0; t < trailing; ++t)
+                  vals.push_back(llvm::APInt(width, 0));
+                if (allInt && (int64_t)vals.size() == numElems) {
+                  auto tensorTy =
+                      mlir::RankedTensorType::get({numElems}, stdElemTy);
+                  initVal = mlir::DenseIntElementsAttr::get(tensorTy, vals);
+                }
+              } else if (numElems > 0 &&
+                         mlir::isa<cir::FPAttr>(elts[0])) {
+                // Float element array.
+                auto firstFP = mlir::cast<cir::FPAttr>(elts[0]);
+                llvm::APFloat first = firstFP.getValue();
+                mlir::Type stdElemTy;
+                if (&first.getSemantics() == &llvm::APFloat::IEEEhalf())
+                  stdElemTy = mlir::Float16Type::get(mctx);
+                else if (&first.getSemantics() ==
+                         &llvm::APFloat::IEEEsingle())
+                  stdElemTy = mlir::Float32Type::get(mctx);
+                else if (&first.getSemantics() ==
+                         &llvm::APFloat::IEEEdouble())
+                  stdElemTy = mlir::Float64Type::get(mctx);
+                if (stdElemTy) {
+                  llvm::SmallVector<llvm::APFloat> fvals;
+                  fvals.reserve(numElems);
+                  bool allFP = true;
+                  for (mlir::Attribute elt : elts) {
+                    if (auto cf = mlir::dyn_cast<cir::FPAttr>(elt))
+                      fvals.push_back(cf.getValue());
+                    else { allFP = false; break; }
+                  }
+                  int64_t trailing = cirArr.getTrailingZerosNum();
+                  llvm::APFloat zero = llvm::APFloat::getZero(
+                      first.getSemantics());
+                  for (int64_t t = 0; t < trailing; ++t)
+                    fvals.push_back(zero);
+                  if (allFP && (int64_t)fvals.size() == numElems) {
+                    auto tensorTy =
+                        mlir::RankedTensorType::get({numElems}, stdElemTy);
+                    initVal = mlir::DenseFPElementsAttr::get(tensorTy, fvals);
+                  }
+                }
+              }
             }
           }
         }

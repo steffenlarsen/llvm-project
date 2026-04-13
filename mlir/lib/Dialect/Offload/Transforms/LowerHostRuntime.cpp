@@ -25,6 +25,7 @@
 
 #include "mlir/Dialect/Offload/Transforms/Passes.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Offload/IR/OffloadDialect.h"
@@ -52,9 +53,14 @@ using namespace mlir::offload;
 
 namespace {
 
-/// We lower !offload.stream / !offload.event to i64.
+/// We lower !offload.stream / !offload.event to !llvm.ptr.
+///
+/// hipStream_t = ihipStream_t* and hipEvent_t = ihipEvent_t* are pointer
+/// types in the HIP ABI.  Using !llvm.ptr makes the unrealized_conversion_cast
+/// chain reconcilable by ConvertCIRToLLVMPass:
+///   !cir.ptr<T> → !offload.stream → !cir.ptr<T>  becomes identity.
 static Type getHandleType(MLIRContext *ctx) {
-  return IntegerType::get(ctx, 64);
+  return LLVM::LLVMPointerType::get(ctx);
 }
 
 /// Return the name of the runtime function to call, selecting HIP or CUDA.
@@ -107,32 +113,33 @@ struct LowerHostRuntimePass
     const bool useHip = (runtime != "cuda");
     Type i32Ty = b.getI32Type();
     Type i64Ty = b.getI64Type();
-    Type handleTy = getHandleType(ctx); // i64
+    Type handleTy = getHandleType(ctx); // !llvm.ptr
 
-    // offload.stream_destroy → @hip/cudaStreamDestroy(i64) -> i32
+    // offload.stream_destroy → @hip/cudaStreamDestroy(ptr) -> i32
     module.walk([&](offload::StreamDestroyOp op) {
       b.setInsertionPoint(op);
       StringRef fn = pick("hipStreamDestroy", "cudaStreamDestroy", useHip);
-      auto decl = getOrInsertDecl(b, module, fn,
-                                  b.getFunctionType({handleTy}, {i32Ty}));
-      // Cast the !offload.stream value to i64 via unrealized_conversion_cast
-      // (a clean placeholder; a real lowering would use bitcast/inttoptr).
+      auto decl = getOrInsertLLVMDecl(
+          b, module, fn,
+          LLVM::LLVMFunctionType::get(i32Ty, {handleTy}));
+      // Cast !offload.stream → !llvm.ptr via unrealized_conversion_cast.
       auto cast = UnrealizedConversionCastOp::create(
           b, op.getLoc(), TypeRange{handleTy}, ValueRange{op.getStream()});
-      func::CallOp::create(b, op.getLoc(), decl, ValueRange{cast.getResult(0)});
+      LLVM::CallOp::create(b, op.getLoc(), decl, ValueRange{cast.getResult(0)});
       op.erase();
     });
 
-    // offload.stream_sync → @hip/cudaStreamSynchronize(i64) -> i32
+    // offload.stream_sync → @hip/cudaStreamSynchronize(ptr) -> i32
     module.walk([&](offload::StreamSyncOp op) {
       b.setInsertionPoint(op);
       StringRef fn =
           pick("hipStreamSynchronize", "cudaStreamSynchronize", useHip);
-      auto decl = getOrInsertDecl(b, module, fn,
-                                  b.getFunctionType({handleTy}, {i32Ty}));
+      auto decl = getOrInsertLLVMDecl(
+          b, module, fn,
+          LLVM::LLVMFunctionType::get(i32Ty, {handleTy}));
       auto cast = UnrealizedConversionCastOp::create(
           b, op.getLoc(), TypeRange{handleTy}, ValueRange{op.getStream()});
-      func::CallOp::create(b, op.getLoc(), decl, ValueRange{cast.getResult(0)});
+      LLVM::CallOp::create(b, op.getLoc(), decl, ValueRange{cast.getResult(0)});
       op.erase();
     });
 
@@ -147,36 +154,38 @@ struct LowerHostRuntimePass
       op.erase();
     });
 
-    // offload.stream_create → @hip/cudaStreamCreate(i64*) -> i32
+    // offload.stream_create → @hip/cudaStreamCreate(ptr*) -> i32
     //
     // HIP/CUDA StreamCreate writes the new handle through a pointer argument:
     //   hipError_t hipStreamCreate(hipStream_t *pStream);
+    // hipStream_t is a pointer type, so we use !llvm.ptr for the slot.
     // We model this with LLVM dialect ops:
-    //   1. llvm.alloca 1 x i64  — stack slot for the handle
-    //   2. llvm.call @hipStreamCreate(%slot)
-    //   3. llvm.load %slot       — read back the written handle
-    //   4. unrealized_cast to !offload.stream
+    //   1. llvm.alloca 1 x !llvm.ptr  — stack slot for the handle
+    //   2. func.call @hipStreamCreate(%slot)
+    //   3. llvm.load !llvm.ptr from %slot — read back the written handle
+    //   4. unrealized_cast !llvm.ptr → !offload.stream
     module.walk([&](offload::StreamCreateOp op) {
       b.setInsertionPoint(op);
       mlir::Location loc = op.getLoc();
       StringRef fn = pick("hipStreamCreate", "cudaStreamCreate", useHip);
 
-      // Pointer type for the slot: LLVM ptr (opaque).
+      // Pointer type for the slot and the loaded handle.
       Type llvmPtrTy = LLVM::LLVMPointerType::get(b.getContext());
-      // Alloca 1 element of i64 to hold the stream handle.
+      // Alloca 1 element of !llvm.ptr to hold the stream handle.
       Value one =
           LLVM::ConstantOp::create(b, loc, i64Ty, b.getIntegerAttr(i64Ty, 1))
               .getResult();
-      Value slot = LLVM::AllocaOp::create(b, loc, llvmPtrTy, i64Ty, one,
+      Value slot = LLVM::AllocaOp::create(b, loc, llvmPtrTy, llvmPtrTy, one,
                                           /*alignment=*/8)
                        .getResult();
-      // Declare @hipStreamCreate(ptr) -> i32.
-      auto decl = getOrInsertDecl(b, module, fn,
-                                  b.getFunctionType({llvmPtrTy}, {i32Ty}));
-      func::CallOp::create(b, loc, decl, ValueRange{slot});
-      // Load the written handle back.
-      Value handle = LLVM::LoadOp::create(b, loc, i64Ty, slot).getResult();
-      // Cast i64 → !offload.stream.
+      // Declare @hipStreamCreate(ptr) -> i32 as llvm.func (arg is !llvm.ptr).
+      auto decl = getOrInsertLLVMDecl(
+          b, module, fn,
+          LLVM::LLVMFunctionType::get(i32Ty, {llvmPtrTy}));
+      LLVM::CallOp::create(b, loc, decl, ValueRange{slot});
+      // Load the written handle back as !llvm.ptr.
+      Value handle = LLVM::LoadOp::create(b, loc, llvmPtrTy, slot).getResult();
+      // Cast !llvm.ptr → !offload.stream (identity in ConvertCIRToLLVMPass).
       auto backcast = UnrealizedConversionCastOp::create(
           b, loc, TypeRange{op.getType()}, ValueRange{handle});
       op.getResult().replaceAllUsesWith(backcast.getResult(0));
@@ -267,8 +276,9 @@ struct LowerHostRuntimePass
       op.erase();
     });
 
-    // offload.memcpy(dst, src, size, dst_space, src_space)
-    //   → @hip/cudaMemcpy(dst, src, size, kind_int) -> i32
+    // offload.memcpy(dst, src, size, dst_space, src_space[, stream])
+    //   → @hipMemcpy(dst, src, size, kind)        when no stream
+    //   → @hipMemcpyAsync(dst, src, size, kind, stream) when stream present
     //
     // Reconstruct the hipMemcpyKind integer from (dst_space, src_space):
     //   host←host   = 0  (HostToHost)
@@ -279,7 +289,6 @@ struct LowerHostRuntimePass
     module.walk([&](offload::MemcpyOp op) {
       b.setInsertionPoint(op);
       mlir::Location loc = op.getLoc();
-      StringRef fn = pick("hipMemcpy", "cudaMemcpy", useHip);
       Type llvmPtrTy = LLVM::LLVMPointerType::get(b.getContext());
       Value dst = UnrealizedConversionCastOp::create(
                       b, loc, TypeRange{llvmPtrTy}, ValueRange{op.getDst()})
@@ -312,12 +321,58 @@ struct LowerHostRuntimePass
       Value kindVal = LLVM::ConstantOp::create(b, loc, i32Ty,
                                                b.getIntegerAttr(i32Ty, kindInt))
                           .getResult();
-      auto decl = getOrInsertDecl(
-          b, module, fn,
-          b.getFunctionType({llvmPtrTy, llvmPtrTy, i64Ty, i32Ty}, {i32Ty}));
-      func::CallOp::create(b, loc, decl,
-                           ValueRange{dst, src, sizeAsI64, kindVal});
+
+      Value streamVal = op.getStream();
+      // Track the chain of unrealized casts producing the stream so we can
+      // erase them if they become dead after the memcpy op is erased.
+      //
+      // The stream operand chain is typically:
+      //   raw (!cir.ptr<...>) → [cast → !offload.stream] → [cast → i64]
+      //
+      // We want to pass the stream as an opaque !llvm.ptr to the HIP runtime
+      // (hipStream_t is a pointer, not an integer).  Using !llvm.ptr avoids
+      // the problematic !cir.ptr → !offload.stream → i64 chain that
+      // ConvertCIRToLLVMPass cannot reconcile automatically.
+      //
+      // Look through the !offload.stream unrealized cast to get the raw
+      // pointer value and cast it directly to !llvm.ptr.
+      Type llvmPtrTyLocal = LLVM::LLVMPointerType::get(b.getContext());
+      Operation *streamDefOp = streamVal ? streamVal.getDefiningOp() : nullptr;
+      if (streamVal) {
+        // Async path: hipMemcpyAsync(dst, src, size, kind, stream)
+        StringRef fn = pick("hipMemcpyAsync", "cudaMemcpyAsync", useHip);
+        // Obtain the raw value underlying the !offload.stream cast.
+        Value rawStream = streamVal;
+        if (auto cast = streamVal.getDefiningOp<UnrealizedConversionCastOp>())
+          if (cast.getInputs().size() == 1)
+            rawStream = cast.getInputs()[0];
+        // Cast to !llvm.ptr: hipStream_t is a pointer type in the HIP ABI.
+        Value streamPtr =
+            UnrealizedConversionCastOp::create(b, loc, TypeRange{llvmPtrTyLocal},
+                                               ValueRange{rawStream})
+                .getResult(0);
+        // Use LLVM dialect call — the signature contains !llvm.ptr which is not
+        // a valid func.func argument type.
+        auto decl = getOrInsertLLVMDecl(
+            b, module, fn,
+            LLVM::LLVMFunctionType::get(i32Ty,
+                {llvmPtrTyLocal, llvmPtrTyLocal, i64Ty, i32Ty, llvmPtrTyLocal}));
+        LLVM::CallOp::create(b, loc, decl,
+                             ValueRange{dst, src, sizeAsI64, kindVal, streamPtr});
+      } else {
+        // Synchronous path: hipMemcpy(dst, src, size, kind)
+        StringRef fn = pick("hipMemcpy", "cudaMemcpy", useHip);
+        auto decl = getOrInsertDecl(
+            b, module, fn,
+            b.getFunctionType({llvmPtrTy, llvmPtrTy, i64Ty, i32Ty}, {i32Ty}));
+        func::CallOp::create(b, loc, decl,
+                             ValueRange{dst, src, sizeAsI64, kindVal});
+      }
       op.erase();
+      // Erase the dead !offload.stream unrealized_conversion_cast if it became
+      // dead after the memcpy op was erased.
+      if (streamDefOp && streamDefOp->use_empty())
+        streamDefOp->erase();
     });
 
     // offload.memcpy_to_symbol @sym src = %src count = %count
@@ -361,11 +416,53 @@ struct LowerHostRuntimePass
       op.erase();
     });
 
-    // offload.memset(ptr, pattern, size_bytes)
-    //   → @hipMemset(dst, i32, size)     when type(pattern) is i8  (byte fill)
-    //   → @hipMemsetD16(dst, i16, count) when type(pattern) is i16 (element
-    //   fill) → @hipMemsetD32(dst, i32, count) when type(pattern) is i32
-    //   (element fill)
+    // offload.memcpy_from_symbol @sym dst = %dst count = %count
+    //   → @hip/cudaMemcpy(dst_ptr, llvm.mlir.addressof @sym, count_i64,
+    //                     hipMemcpyDeviceToHost)
+    //
+    // Symmetric counterpart of memcpy_to_symbol; direction reversed.
+    module.walk([&](offload::MemcpyFromSymbolOp op) {
+      b.setInsertionPoint(op);
+      mlir::Location loc = op.getLoc();
+      Type llvmPtrTy = LLVM::LLVMPointerType::get(b.getContext());
+
+      // Cast dst (AnyType → !llvm.ptr).
+      Value dst = UnrealizedConversionCastOp::create(
+                      b, loc, TypeRange{llvmPtrTy}, ValueRange{op.getDst()})
+                      .getResult(0);
+
+      // Get the address of the device-side global symbol.
+      Value symPtr =
+          LLVM::AddressOfOp::create(b, loc, llvmPtrTy, op.getSymbol())
+              .getResult();
+
+      // Cast count (Index → i64).
+      Value sizeAsI64 = UnrealizedConversionCastOp::create(
+                            b, loc, TypeRange{i64Ty}, ValueRange{op.getCount()})
+                            .getResult(0);
+
+      // hipMemcpyKind::hipMemcpyDeviceToHost = 2.
+      Value kindVal =
+          LLVM::ConstantOp::create(b, loc, i32Ty, b.getIntegerAttr(i32Ty, 2))
+              .getResult();
+
+      StringRef fn = pick("hipMemcpy", "cudaMemcpy", useHip);
+      auto decl = getOrInsertDecl(
+          b, module, fn,
+          b.getFunctionType({llvmPtrTy, llvmPtrTy, i64Ty, i32Ty}, {i32Ty}));
+      func::CallOp::create(b, loc, decl,
+                           ValueRange{dst, symPtr, sizeAsI64, kindVal});
+      op.erase();
+    });
+
+    // offload.memset(ptr, pattern, size_bytes[, stream])
+    //   → @hipMemset(dst, i32, size)          when i8 pattern, no stream
+    //   → @hipMemsetD16(dst, i16, count)      when i16 pattern, no stream
+    //   → @hipMemsetD32(dst, i32, count)      when i32 pattern, no stream
+    //   → @hipMemsetD32Async(dst, i32, count, stream)  when i32 pattern + stream
+    //
+    // Note: HIP has no hipMemsetAsync (byte) or hipMemsetD16Async; those fall
+    // back to the synchronous variants.  Only D32Async is widely available.
     //
     // For a future liboffload target: stack-allocate $pattern, pass its address
     // and sizeof(type($pattern)) to olMemFill — no changes needed to this op.
@@ -373,9 +470,10 @@ struct LowerHostRuntimePass
       b.setInsertionPoint(op);
       mlir::Location loc = op.getLoc();
       Type llvmPtrTy = LLVM::LLVMPointerType::get(b.getContext());
-      Value dst = UnrealizedConversionCastOp::create(
-                      b, loc, TypeRange{llvmPtrTy}, ValueRange{op.getPtr()})
-                      .getResult(0);
+      // Note: dst is intentionally NOT created here unconditionally.
+      // op.getPtr() may be !u64i (ptr_to_int result) for hipDeviceptr_t, which
+      // cannot be cast to !llvm.ptr via UnrealizedConversionCastOp.  Each
+      // branch below creates the correct dst representation.
       Value sizeAsI64 = UnrealizedConversionCastOp::create(
                             b, loc, TypeRange{i64Ty}, ValueRange{op.getSize()})
                             .getResult(0);
@@ -385,8 +483,30 @@ struct LowerHostRuntimePass
       if (auto intTy = dyn_cast<IntegerType>(op.getPattern().getType()))
         patWidth = intTy.getWidth();
 
+      Value stream = op.getStream();
+      Operation *streamDefOp = stream ? stream.getDefiningOp() : nullptr;
+      // hipStream_t is a pointer in the HIP ABI; use !llvm.ptr to avoid an
+      // unresolvable !cir.ptr → !offload.stream → i64 cast chain.
+      Type llvmPtrTyLocal = LLVM::LLVMPointerType::get(b.getContext());
+      Value streamPtr;
+      if (stream) {
+        // Look through the !offload.stream unrealized cast to the raw value.
+        Value rawStream = stream;
+        if (auto cast = stream.getDefiningOp<UnrealizedConversionCastOp>())
+          if (cast.getInputs().size() == 1)
+            rawStream = cast.getInputs()[0];
+        streamPtr =
+            UnrealizedConversionCastOp::create(b, loc, TypeRange{llvmPtrTyLocal},
+                                               ValueRange{rawStream})
+                .getResult(0);
+      }
+
       if (patWidth <= 8) {
         // hipMemset(void*, int, size_t): byte pattern, size in bytes.
+        // No async variant available — always synchronous.
+        Value dst = UnrealizedConversionCastOp::create(
+                        b, loc, TypeRange{llvmPtrTy}, ValueRange{op.getPtr()})
+                        .getResult(0);
         Value patI32 =
             UnrealizedConversionCastOp::create(b, loc, TypeRange{i32Ty},
                                                ValueRange{op.getPattern()})
@@ -397,8 +517,10 @@ struct LowerHostRuntimePass
             b.getFunctionType({llvmPtrTy, i32Ty, i64Ty}, {i32Ty}));
         func::CallOp::create(b, loc, decl, ValueRange{dst, patI32, sizeAsI64});
       } else if (patWidth == 16) {
-        // hipMemsetD16(hipDeviceptr_t, unsigned short, size_t): count in
-        // elements.
+        // hipMemsetD16: count in elements. No async variant — always sync.
+        Value dst = UnrealizedConversionCastOp::create(
+                        b, loc, TypeRange{llvmPtrTy}, ValueRange{op.getPtr()})
+                        .getResult(0);
         Value two =
             LLVM::ConstantOp::create(b, loc, i64Ty, b.getIntegerAttr(i64Ty, 2))
                 .getResult();
@@ -415,8 +537,7 @@ struct LowerHostRuntimePass
             b.getFunctionType({llvmPtrTy, i16Ty, i64Ty}, {i32Ty}));
         func::CallOp::create(b, loc, decl, ValueRange{dst, patI16, count});
       } else {
-        // hipMemsetD32(hipDeviceptr_t, unsigned int, size_t): count in
-        // elements.
+        // hipMemsetD32 / hipMemsetD32Async: count in elements.
         Value four =
             LLVM::ConstantOp::create(b, loc, i64Ty, b.getIntegerAttr(i64Ty, 4))
                 .getResult();
@@ -426,66 +547,120 @@ struct LowerHostRuntimePass
             UnrealizedConversionCastOp::create(b, loc, TypeRange{i32Ty},
                                                ValueRange{op.getPattern()})
                 .getResult(0);
-        StringRef fn = pick("hipMemsetD32", "cuMemsetD32", useHip);
-        auto decl = getOrInsertDecl(
-            b, module, fn,
-            b.getFunctionType({llvmPtrTy, i32Ty, i64Ty}, {i32Ty}));
-        func::CallOp::create(b, loc, decl, ValueRange{dst, patI32, count});
+        if (stream && useHip) {
+          // hipMemsetD32Async(hipDeviceptr_t, unsigned int, size_t, stream)
+          // Use LLVM dialect call — signature contains !llvm.ptr.
+          // op.getPtr() is !u64i (ptr_to_int result); convert via inttoptr.
+          Value dstI64 = UnrealizedConversionCastOp::create(
+                             b, loc, TypeRange{i64Ty}, ValueRange{op.getPtr()})
+                             .getResult(0);
+          Value dstPtr = LLVM::IntToPtrOp::create(b, loc, llvmPtrTyLocal, dstI64)
+                             .getResult();
+          auto decl = getOrInsertLLVMDecl(
+              b, module, "hipMemsetD32Async",
+              LLVM::LLVMFunctionType::get(
+                  i32Ty, {llvmPtrTyLocal, i32Ty, i64Ty, llvmPtrTyLocal}));
+          LLVM::CallOp::create(b, loc, decl,
+                               ValueRange{dstPtr, patI32, count, streamPtr});
+        } else {
+          Value dst = UnrealizedConversionCastOp::create(
+                          b, loc, TypeRange{llvmPtrTy}, ValueRange{op.getPtr()})
+                          .getResult(0);
+          StringRef fn = pick("hipMemsetD32", "cuMemsetD32", useHip);
+          auto decl = getOrInsertDecl(
+              b, module, fn,
+              b.getFunctionType({llvmPtrTy, i32Ty, i64Ty}, {i32Ty}));
+          func::CallOp::create(b, loc, decl, ValueRange{dst, patI32, count});
+        }
       }
       op.erase();
+      // Erase the dead !offload.stream unrealized_conversion_cast if it became
+      // dead after the memset op was erased.
+      if (streamDefOp && streamDefOp->use_empty())
+        streamDefOp->erase();
     });
 
-    // offload.event_destroy → @hip/cudaEventDestroy(i64) -> i32
+    // offload.event_destroy → @hip/cudaEventDestroy(ptr) -> i32
     module.walk([&](offload::EventDestroyOp op) {
       b.setInsertionPoint(op);
       StringRef fn = pick("hipEventDestroy", "cudaEventDestroy", useHip);
-      auto decl = getOrInsertDecl(b, module, fn,
-                                  b.getFunctionType({handleTy}, {i32Ty}));
+      auto decl = getOrInsertLLVMDecl(
+          b, module, fn,
+          LLVM::LLVMFunctionType::get(i32Ty, {handleTy}));
       auto cast = UnrealizedConversionCastOp::create(
           b, op.getLoc(), TypeRange{handleTy}, ValueRange{op.getEvent()});
-      func::CallOp::create(b, op.getLoc(), decl, ValueRange{cast.getResult(0)});
+      LLVM::CallOp::create(b, op.getLoc(), decl, ValueRange{cast.getResult(0)});
       op.erase();
     });
 
-    // offload.event_wait → @hip/cudaEventSynchronize(i64) -> i32
+    // offload.event_wait → @hip/cudaEventSynchronize(ptr) -> i32
     module.walk([&](offload::EventWaitOp op) {
       b.setInsertionPoint(op);
       StringRef fn = pick("hipEventSynchronize", "cudaEventSynchronize", useHip);
-      auto decl = getOrInsertDecl(b, module, fn,
-                                  b.getFunctionType({handleTy}, {i32Ty}));
+      auto decl = getOrInsertLLVMDecl(
+          b, module, fn,
+          LLVM::LLVMFunctionType::get(i32Ty, {handleTy}));
       auto cast = UnrealizedConversionCastOp::create(
           b, op.getLoc(), TypeRange{handleTy}, ValueRange{op.getEvent()});
-      func::CallOp::create(b, op.getLoc(), decl, ValueRange{cast.getResult(0)});
+      LLVM::CallOp::create(b, op.getLoc(), decl, ValueRange{cast.getResult(0)});
       op.erase();
     });
 
-    // offload.event_record → @hip/cudaEventRecord(i64 event, i64 stream) -> i32
+    // offload.event_record → @hip/cudaEventRecord(ptr event, ptr stream) -> i32
     module.walk([&](offload::EventRecordOp op) {
       b.setInsertionPoint(op);
       mlir::Location loc = op.getLoc();
       StringRef fn = pick("hipEventRecord", "cudaEventRecord", useHip);
-      auto decl = getOrInsertDecl(
-          b, module, fn, b.getFunctionType({handleTy, handleTy}, {i32Ty}));
-      Value eventI64 =
+      auto decl = getOrInsertLLVMDecl(
+          b, module, fn,
+          LLVM::LLVMFunctionType::get(i32Ty, {handleTy, handleTy}));
+      Value eventPtr =
           UnrealizedConversionCastOp::create(b, loc, TypeRange{handleTy},
                                              ValueRange{op.getEvent()})
               .getResult(0);
-      Value streamI64;
+      Value streamPtr;
       if (op.getStream()) {
-        streamI64 =
+        streamPtr =
             UnrealizedConversionCastOp::create(b, loc, TypeRange{handleTy},
                                                ValueRange{op.getStream()})
                 .getResult(0);
       } else {
-        streamI64 =
-            LLVM::ConstantOp::create(b, loc, i64Ty, b.getIntegerAttr(i64Ty, 0))
-                .getResult();
+        // Null pointer for the default stream.
+        streamPtr = LLVM::ZeroOp::create(b, loc, handleTy).getResult();
       }
-      func::CallOp::create(b, loc, decl, ValueRange{eventI64, streamI64});
+      LLVM::CallOp::create(b, loc, decl, ValueRange{eventPtr, streamPtr});
+      op.erase();
+    });
+
+    // offload.stream_wait_event → @hip/cudaStreamWaitEvent(ptr, ptr, i32) -> i32
+    module.walk([&](offload::StreamWaitEventOp op) {
+      b.setInsertionPoint(op);
+      mlir::Location loc = op.getLoc();
+      StringRef fn =
+          pick("hipStreamWaitEvent", "cudaStreamWaitEvent", useHip);
+      auto decl = getOrInsertLLVMDecl(
+          b, module, fn,
+          LLVM::LLVMFunctionType::get(i32Ty, {handleTy, handleTy, i32Ty}));
+      Value streamPtr =
+          UnrealizedConversionCastOp::create(
+              b, loc, TypeRange{handleTy}, ValueRange{op.getStream()})
+              .getResult(0);
+      Value eventPtr =
+          UnrealizedConversionCastOp::create(
+              b, loc, TypeRange{handleTy}, ValueRange{op.getEvent()})
+              .getResult(0);
+      Value flagsVal =
+          LLVM::ConstantOp::create(b, loc, i32Ty,
+                                   b.getIntegerAttr(i32Ty, op.getFlags()))
+              .getResult();
+      LLVM::CallOp::create(b, loc, decl,
+                           ValueRange{streamPtr, eventPtr, flagsVal});
       op.erase();
     });
 
     // offload.event_create → @hip/cudaEventCreate(ptr) -> i32
+    //
+    // hipEvent_t is a pointer type; use !llvm.ptr for the slot and handle.
     module.walk([&](offload::EventCreateOp op) {
       b.setInsertionPoint(op);
       mlir::Location loc = op.getLoc();
@@ -494,26 +669,39 @@ struct LowerHostRuntimePass
       Value one64 =
           LLVM::ConstantOp::create(b, loc, i64Ty, b.getIntegerAttr(i64Ty, 1))
               .getResult();
-      Value slot = LLVM::AllocaOp::create(b, loc, llvmPtrTy2, i64Ty, one64,
-                                          /*alignment=*/8)
+      Value slot = LLVM::AllocaOp::create(b, loc, llvmPtrTy2, llvmPtrTy2,
+                                          one64, /*alignment=*/8)
                        .getResult();
-      auto decl = getOrInsertDecl(b, module, fn,
-                                  b.getFunctionType({llvmPtrTy2}, {i32Ty}));
-      func::CallOp::create(b, loc, decl, ValueRange{slot});
-      Value handle = LLVM::LoadOp::create(b, loc, i64Ty, slot).getResult();
+      // Use llvm.func / llvm.call since the arg type is !llvm.ptr.
+      auto decl = getOrInsertLLVMDecl(
+          b, module, fn,
+          LLVM::LLVMFunctionType::get(i32Ty, {llvmPtrTy2}));
+      LLVM::CallOp::create(b, loc, decl, ValueRange{slot});
+      // Load handle as !llvm.ptr (hipEvent_t is a pointer).
+      Value handle = LLVM::LoadOp::create(b, loc, llvmPtrTy2, slot).getResult();
       auto backcast = UnrealizedConversionCastOp::create(
           b, loc, TypeRange{op.getType()}, ValueRange{handle});
       op.getResult().replaceAllUsesWith(backcast.getResult(0));
       op.erase();
     });
 
-    // offload.kernel_launch with stream → hipLaunchKernel
+    // offload.kernel_launch with stream → mgpuModuleGetFunction + mgpuLaunchKernel
     //
-    // Stream-aware launches were not converted by SplitSingleSource.
-    // hipLaunchKernel signature:
-    //   hipError_t hipLaunchKernel(const void* f, dim3 numBlocks, dim3 dimBlocks,
-    //                              void** args, size_t sharedMem, hipStream_t s)
-    // dim3 is { i32 x, i32 y, i32 z }.  We pass grid/block by pointer.
+    // Stream-aware launches remain in CIR functions (not lowered by
+    // SplitSingleSource). We cannot emit LLVM dialect ops directly inside CIR
+    // function bodies because ConvertCIRToLLVMPass expects pure CIR there.
+    //
+    // Strategy: for each stream-aware kernel launch, emit a module-level
+    // llvm.func @__offload_launch_{kernelName}_stream(stream_i64, gx, gy, gz,
+    //   bx, by, bz, shmem_i32, arg0_i64, ..., argN_i64) → void
+    // containing the mgpu API sequence, then replace the offload.kernel_launch
+    // with a func.call to that helper (func.call is handled by
+    // ConvertCIRToLLVMPass correctly).
+    //
+    // mgpuLaunchKernel signature (from SelectObjectAttr.cpp):
+    //   void mgpuLaunchKernel(ptr func, intptr gx, gy, gz, bx, by, bz,
+    //                         i32 shmem, ptr stream, ptr params, ptr extra,
+    //                         i64 nparams)
     {
       SmallVector<offload::KernelLaunchOp> streamLaunches;
       module.walk([&](offload::KernelLaunchOp op) {
@@ -521,107 +709,240 @@ struct LowerHostRuntimePass
           streamLaunches.push_back(op);
       });
 
-      Type llvmPtrTy = LLVM::LLVMPointerType::get(ctx);
-      Type dim3Ty = LLVM::LLVMStructType::getLiteral(
-          ctx, {b.getI32Type(), b.getI32Type(), b.getI32Type()});
-      StringRef launchFn = pick("hipLaunchKernel", "cudaLaunchKernel", useHip);
+      if (!streamLaunches.empty()) {
+        Type llvmPtrTy = LLVM::LLVMPointerType::get(ctx);
+        auto voidTy = LLVM::LLVMVoidType::get(ctx);
 
-      for (offload::KernelLaunchOp launch : streamLaunches) {
-        b.setInsertionPoint(launch);
-        Location loc = launch.getLoc();
+        // Declare mgpuModuleGetFunction(ptr, ptr) -> ptr
+        auto getModuleFuncDecl = getOrInsertLLVMDecl(
+            b, module, "mgpuModuleGetFunction",
+            LLVM::LLVMFunctionType::get(llvmPtrTy, {llvmPtrTy, llvmPtrTy}));
 
-        Value one64 =
-            LLVM::ConstantOp::create(b, loc, i64Ty, b.getIntegerAttr(i64Ty, 1))
-                .getResult();
+        // Declare mgpuLaunchKernel(ptr, i64, i64, i64, i64, i64, i64, i32,
+        //                          ptr, ptr, ptr, i64) -> void
+        auto launchDecl = getOrInsertLLVMDecl(
+            b, module, "mgpuLaunchKernel",
+            LLVM::LLVMFunctionType::get(
+                voidTy,
+                {llvmPtrTy, i64Ty, i64Ty, i64Ty, i64Ty, i64Ty, i64Ty, i32Ty,
+                 llvmPtrTy, llvmPtrTy, llvmPtrTy, i64Ty}));
 
-        auto makeDim3 = [&](Value idxX, Value idxY, Value idxZ) -> Value {
-          Value slot =
-              LLVM::AllocaOp::create(b, loc, llvmPtrTy, dim3Ty, one64,
-                                     /*alignment=*/4)
-                  .getResult();
-          auto toI32 = [&](Value v) -> Value {
-            return UnrealizedConversionCastOp::create(
-                       b, loc, TypeRange{b.getI32Type()}, ValueRange{v})
-                .getResult(0);
-          };
-          auto storeField = [&](Value val, int32_t idx) {
-            Value gep = LLVM::GEPOp::create(
-                            b, loc, llvmPtrTy, dim3Ty, slot,
-                            ArrayRef<LLVM::GEPArg>{LLVM::GEPArg(0),
-                                                   LLVM::GEPArg(idx)},
-                            LLVM::GEPNoWrapFlags::inbounds)
-                            .getResult();
-            LLVM::StoreOp::create(b, loc, val, gep);
-          };
-          storeField(toI32(idxX), 0);
-          storeField(toI32(idxY), 1);
-          storeField(toI32(idxZ), 2);
-          return slot;
-        };
+        constexpr StringLiteral kGpuModName = "offload_device_module";
+        std::string moduleHandleName = (kGpuModName + "_module").str();
 
-        Value gridSlot = makeDim3(launch.getGridX(), launch.getGridY(),
-                                  launch.getGridZ());
-        Value blockSlot = makeDim3(launch.getBlockX(), launch.getBlockY(),
-                                   launch.getBlockZ());
-
-        // Pack kernel arguments into void*[N].
-        ValueRange kernArgs = launch.getArgs();
-        unsigned nArgs = kernArgs.size();
-        Value argsArraySlot;
-        if (nArgs == 0) {
-          argsArraySlot = LLVM::ZeroOp::create(b, loc, llvmPtrTy).getResult();
-        } else {
-          Value nArgs64 =
-              LLVM::ConstantOp::create(b, loc, i64Ty,
-                                       b.getIntegerAttr(i64Ty, nArgs))
-                  .getResult();
-          argsArraySlot =
-              LLVM::AllocaOp::create(b, loc, llvmPtrTy, llvmPtrTy, nArgs64,
-                                     /*alignment=*/8)
-                  .getResult();
-          for (unsigned i = 0; i < nArgs; ++i) {
-            Value argSlot =
-                LLVM::AllocaOp::create(b, loc, llvmPtrTy, i64Ty, one64,
-                                       /*alignment=*/8)
-                    .getResult();
-            Value argAsI64 =
-                UnrealizedConversionCastOp::create(b, loc, TypeRange{i64Ty},
-                                                   ValueRange{kernArgs[i]})
-                    .getResult(0);
-            LLVM::StoreOp::create(b, loc, argAsI64, argSlot);
-            Value gep = LLVM::GEPOp::create(
-                            b, loc, llvmPtrTy, llvmPtrTy, argsArraySlot,
-                            ArrayRef<LLVM::GEPArg>{
-                                LLVM::GEPArg(static_cast<int32_t>(i))},
-                            LLVM::GEPNoWrapFlags::inbounds)
-                            .getResult();
-            LLVM::StoreOp::create(b, loc, argSlot, gep);
-          }
+        // Ensure the module handle global exists (defined by SelectObjectAttr).
+        if (!module.lookupSymbol<LLVM::GlobalOp>(moduleHandleName)) {
+          OpBuilder::InsertionGuard hGuard(b);
+          b.setInsertionPointToStart(module.getBody());
+          LLVM::GlobalOp::create(b, module.getLoc(), llvmPtrTy,
+                                 /*isConstant=*/false, LLVM::Linkage::External,
+                                 moduleHandleName, /*value=*/mlir::Attribute{});
         }
 
-        Value sharedMem =
-            LLVM::ConstantOp::create(b, loc, i64Ty, b.getIntegerAttr(i64Ty, 0))
-                .getResult();
-        Value streamI64 =
-            UnrealizedConversionCastOp::create(
-                b, loc, TypeRange{i64Ty}, ValueRange{launch.getStream()})
-                .getResult(0);
-        // Obtain the kernel function pointer via LLVM address-of.
-        // The kernel stub must exist as an llvm.func in this module (placed
-        // there by the GPU compilation pipeline).
-        Value fnPtr =
-            LLVM::AddressOfOp::create(b, loc, llvmPtrTy, launch.getCallee())
-                .getResult();
+        for (offload::KernelLaunchOp launch : streamLaunches) {
+          Location loc = launch.getLoc();
+          std::string kernelNameStr = launch.getCallee().str();
+          unsigned nArgs = launch.getArgs().size();
 
-        auto decl = getOrInsertDecl(
-            b, module, launchFn,
-            b.getFunctionType(
-                {llvmPtrTy, llvmPtrTy, llvmPtrTy, llvmPtrTy, i64Ty, i64Ty},
-                {i32Ty}));
-        func::CallOp::create(b, loc, decl,
-                             ValueRange{fnPtr, gridSlot, blockSlot,
-                                        argsArraySlot, sharedMem, streamI64});
-        launch.erase();
+          // Helper function name: unique per (kernel, nArgs) pair.
+          std::string helperName =
+              "__offload_launch_stream_" + kernelNameStr;
+
+          // Build the helper function type:
+          //   (stream: !llvm.ptr, gx: i64, gy: i64, gz: i64,
+          //    bx: i64, by: i64, bz: i64, shmem: i32,
+          //    arg0: i64, ..., argN: i64) -> void
+          // Stream is !llvm.ptr because hipStream_t is a pointer type.
+          SmallVector<Type> helperArgTypes;
+          helperArgTypes.push_back(llvmPtrTy); // stream (!llvm.ptr)
+          for (unsigned d = 0; d < 6; ++d)
+            helperArgTypes.push_back(i64Ty); // gx,gy,gz,bx,by,bz
+          helperArgTypes.push_back(i32Ty);   // shmem
+          for (unsigned a = 0; a < nArgs; ++a)
+            helperArgTypes.push_back(i64Ty); // kernel args
+
+          auto helperFnTy =
+              LLVM::LLVMFunctionType::get(voidTy, helperArgTypes);
+
+          // Emit the helper llvm.func at module scope if not yet present.
+          if (!module.lookupSymbol<LLVM::LLVMFuncOp>(helperName)) {
+            OpBuilder::InsertionGuard fnGuard(b);
+            b.setInsertionPointToEnd(module.getBody());
+            auto helperFn = LLVM::LLVMFuncOp::create(b, loc, helperName,
+                                                      helperFnTy);
+            helperFn.setLinkage(LLVM::Linkage::Internal);
+            Block *entry = helperFn.addEntryBlock(b);
+            b.setInsertionPointToStart(entry);
+
+            // Map block arguments.
+            unsigned argIdx = 0;
+            Value streamArg = helperFn.getArgument(argIdx++); // !llvm.ptr
+            Value gxArg = helperFn.getArgument(argIdx++);
+            Value gyArg = helperFn.getArgument(argIdx++);
+            Value gzArg = helperFn.getArgument(argIdx++);
+            Value bxArg = helperFn.getArgument(argIdx++);
+            Value byArg = helperFn.getArgument(argIdx++);
+            Value bzArg = helperFn.getArgument(argIdx++);
+            Value shmemArg = helperFn.getArgument(argIdx++); // i32
+
+            // 1. Load module handle.
+            Value modHandle =
+                LLVM::LoadOp::create(
+                    b, loc, llvmPtrTy,
+                    LLVM::AddressOfOp::create(b, loc, llvmPtrTy,
+                                              moduleHandleName)
+                        .getResult())
+                    .getResult();
+
+            // 2. Get or create the kernel name C string global.
+            std::string kernelNameGlobal =
+                (kGpuModName + "_" + kernelNameStr + "_name").str();
+            if (!module.lookupSymbol<LLVM::GlobalOp>(kernelNameGlobal)) {
+              OpBuilder::InsertionGuard nGuard(b);
+              b.setInsertionPointToStart(module.getBody());
+              auto i8Ty = b.getIntegerType(8);
+              auto strTy =
+                  LLVM::LLVMArrayType::get(i8Ty, kernelNameStr.size() + 1);
+              SmallVector<int8_t> chars(kernelNameStr.begin(),
+                                        kernelNameStr.end());
+              chars.push_back(0);
+              auto strAttr = DenseIntElementsAttr::get(
+                  RankedTensorType::get({static_cast<int64_t>(chars.size())},
+                                        i8Ty),
+                  ArrayRef<int8_t>(chars));
+              auto nameGlobal = LLVM::GlobalOp::create(
+                  b, module.getLoc(), strTy, /*isConstant=*/true,
+                  LLVM::Linkage::Private, kernelNameGlobal, strAttr);
+              nameGlobal.setUnnamedAddr(LLVM::UnnamedAddr::Global);
+            }
+            b.setInsertionPointToEnd(entry); // restore after potential guard
+            Value namePtr =
+                LLVM::AddressOfOp::create(b, loc, llvmPtrTy, kernelNameGlobal)
+                    .getResult();
+
+            // 3. Look up the kernel function handle.
+            Value funcHandle =
+                LLVM::CallOp::create(b, loc, getModuleFuncDecl,
+                                     ValueRange{modHandle, namePtr})
+                    .getResult();
+
+            // 4. Stream arg is already !llvm.ptr (hipStream_t is a pointer).
+            Value streamPtr = streamArg;
+
+            // 5. Pack kernel arguments into void*[N].
+            Value argsArraySlot;
+            if (nArgs == 0) {
+              argsArraySlot =
+                  LLVM::ZeroOp::create(b, loc, llvmPtrTy).getResult();
+            } else {
+              Value one64 =
+                  LLVM::ConstantOp::create(b, loc, i64Ty,
+                                           b.getIntegerAttr(i64Ty, 1))
+                      .getResult();
+              Value nArgs64 =
+                  LLVM::ConstantOp::create(b, loc, i64Ty,
+                                           b.getIntegerAttr(i64Ty, nArgs))
+                      .getResult();
+              argsArraySlot =
+                  LLVM::AllocaOp::create(b, loc, llvmPtrTy, llvmPtrTy, nArgs64,
+                                         /*alignment=*/8)
+                      .getResult();
+              for (unsigned i = 0; i < nArgs; ++i) {
+                Value argVal = helperFn.getArgument(argIdx + i); // already i64
+                Value argSlot =
+                    LLVM::AllocaOp::create(b, loc, llvmPtrTy, i64Ty, one64,
+                                           /*alignment=*/8)
+                        .getResult();
+                LLVM::StoreOp::create(b, loc, argVal, argSlot);
+                Value gep =
+                    LLVM::GEPOp::create(
+                        b, loc, llvmPtrTy, llvmPtrTy, argsArraySlot,
+                        ArrayRef<LLVM::GEPArg>{
+                            LLVM::GEPArg(static_cast<int32_t>(i))},
+                        LLVM::GEPNoWrapFlags::inbounds)
+                        .getResult();
+                LLVM::StoreOp::create(b, loc, argSlot, gep);
+              }
+            }
+
+            Value nullPtr =
+                LLVM::ZeroOp::create(b, loc, llvmPtrTy).getResult();
+            Value nArgsFinal =
+                LLVM::ConstantOp::create(b, loc, i64Ty,
+                                         b.getIntegerAttr(i64Ty, nArgs))
+                    .getResult();
+
+            // 6. Launch.
+            LLVM::CallOp::create(
+                b, loc, launchDecl,
+                ValueRange{funcHandle, gxArg, gyArg, gzArg, bxArg, byArg, bzArg,
+                           shmemArg, streamPtr, argsArraySlot, nullPtr,
+                           nArgsFinal});
+            LLVM::ReturnOp::create(b, loc, ValueRange{});
+          }
+
+          // Replace offload.kernel_launch with func.call to the helper.
+          // The helper signature: (stream: i64, gx..bz: i64x6, shmem: i32,
+          //                        args: i64*).
+          // Replace offload.kernel_launch with LLVM::CallOp to the helper.
+          // CIR→LLVM conversion accepts LLVM dialect ops inside cir.func bodies
+          // (the same approach used by stream_create, stream_sync, etc.).
+          b.setInsertionPoint(launch);
+
+          auto toI64 = [&](Value v) -> Value {
+            return UnrealizedConversionCastOp::create(b, loc, TypeRange{i64Ty},
+                                                      ValueRange{v})
+                .getResult(0);
+          };
+
+          // Look up the just-created llvm.func helper.
+          auto helperFn =
+              module.lookupSymbol<LLVM::LLVMFuncOp>(helperName);
+
+          SmallVector<Value> callArgs;
+          // stream: cast !offload.stream → !llvm.ptr (hipStream_t is a pointer)
+          Value streamVal = launch.getStream();
+          Operation *streamDefOp =
+              streamVal ? streamVal.getDefiningOp() : nullptr;
+          callArgs.push_back(
+              UnrealizedConversionCastOp::create(b, loc, TypeRange{llvmPtrTy},
+                                                 ValueRange{streamVal})
+                  .getResult(0));
+          // grid/block dims (Index → i64)
+          callArgs.push_back(toI64(launch.getGridX()));
+          callArgs.push_back(toI64(launch.getGridY()));
+          callArgs.push_back(toI64(launch.getGridZ()));
+          callArgs.push_back(toI64(launch.getBlockX()));
+          callArgs.push_back(toI64(launch.getBlockY()));
+          callArgs.push_back(toI64(launch.getBlockZ()));
+          // shmem (i32): cast from Index shmem operand, or zero constant.
+          Value shmemI32;
+          if (Value shmem = launch.getSharedMem()) {
+            Value shmemI64 = toI64(shmem);
+            shmemI32 =
+                LLVM::TruncOp::create(b, loc, i32Ty, shmemI64).getResult();
+          } else {
+            shmemI32 =
+                LLVM::ConstantOp::create(b, loc, i32Ty,
+                                         b.getIntegerAttr(i32Ty, 0))
+                    .getResult();
+          }
+          callArgs.push_back(shmemI32);
+          // kernel args (cast each to i64)
+          for (Value arg : launch.getArgs())
+            callArgs.push_back(toI64(arg));
+
+          LLVM::CallOp::create(b, loc, helperFn, callArgs);
+
+          launch.erase();
+
+          // Erase the dead !offload.stream unrealized_conversion_cast.
+          // Because we used streamToI64() above, which bypasses the
+          // !offload.stream hop, the cast producing the !offload.stream value
+          // should now have no uses left.
+          if (streamDefOp && streamDefOp->use_empty())
+            streamDefOp->erase();
+        }
       }
     }
 
@@ -754,9 +1075,91 @@ struct LowerHostRuntimePass
             continue; // Unknown attribute type; skip.
           }
 
-          // CIR integer/float types are not LLVM types; convert to LLVM.
-          // IntegerAttr from CIR uses !cir.int<s,N> or !cir.int<u,N>;
-          // we map to the underlying mlir::IntegerType for llvm.mlir.global.
+          // Handle aggregate (array) initializers: DenseElementsAttr with a
+          // RankedTensorType element type.  These are lowered to an LLVM array
+          // global and the full array is copied to the device with hipMemcpy.
+          if (auto tensorTy =
+                  mlir::dyn_cast<mlir::RankedTensorType>(constElemTy)) {
+            mlir::Type elemTy = tensorTy.getElementType();
+            int64_t numElems = tensorTy.getNumElements();
+
+            // Map MLIR element type to LLVM element type.
+            mlir::Type llvmElem;
+            int64_t elemBytes = 0;
+            if (auto intTy = mlir::dyn_cast<mlir::IntegerType>(elemTy)) {
+              llvmElem = intTy;
+              elemBytes = (intTy.getWidth() + 7) / 8;
+            } else if (elemTy.isF16()) {
+              llvmElem = b.getF16Type();
+              elemBytes = 2;
+            } else if (elemTy.isF32()) {
+              llvmElem = b.getF32Type();
+              elemBytes = 4;
+            } else if (elemTy.isF64()) {
+              llvmElem = b.getF64Type();
+              elemBytes = 8;
+            }
+            if (!llvmElem || elemBytes == 0 || numElems == 0)
+              continue;
+
+            int64_t totalBytes = numElems * elemBytes;
+            auto llvmArrTy = LLVM::LLVMArrayType::get(llvmElem, numElems);
+
+            OpBuilder::InsertionGuard gGuard(b);
+            b.setInsertionPoint(initFn);
+            auto constGlobal = LLVM::GlobalOp::create(
+                b, modLoc, llvmArrTy, /*isConstant=*/true,
+                LLVM::Linkage::Private, constName, constInitAttr);
+            constGlobal.setUnnamedAddr(LLVM::UnnamedAddr::Global);
+
+            b.setInsertionPointToEnd(entry);
+            // Emit symbol name string and call mgpuModuleGetGlobal + hipMemcpy.
+            std::string symNameStr = gv.getSymName().str();
+            std::string symNameGlobalName =
+                ("__offload_sym_name." + gv.getSymName()).str();
+            {
+              OpBuilder::InsertionGuard nGuard(b);
+              b.setInsertionPoint(initFn);
+              if (!module.lookupSymbol<LLVM::GlobalOp>(symNameGlobalName)) {
+                auto i8Ty = b.getIntegerType(8);
+                auto strTy =
+                    LLVM::LLVMArrayType::get(i8Ty, symNameStr.size() + 1);
+                SmallVector<int8_t> chars(symNameStr.begin(),
+                                         symNameStr.end());
+                chars.push_back(0);
+                auto strAttr = DenseIntElementsAttr::get(
+                    RankedTensorType::get(
+                        {static_cast<int64_t>(chars.size())}, i8Ty),
+                    ArrayRef<int8_t>(chars));
+                auto symNameGlobal = LLVM::GlobalOp::create(
+                    b, modLoc, strTy, /*isConstant=*/true,
+                    LLVM::Linkage::Private, symNameGlobalName, strAttr);
+                symNameGlobal.setUnnamedAddr(LLVM::UnnamedAddr::Global);
+              }
+            }
+            Value symNamePtr =
+                LLVM::AddressOfOp::create(b, modLoc, llvmPtrTy,
+                                          symNameGlobalName)
+                    .getResult();
+            LLVM::CallOp::create(b, modLoc, getGlobalDecl,
+                                 ValueRange{dstSlot, bytesSlot, modHandle,
+                                            symNamePtr});
+            Value dstPtr =
+                LLVM::LoadOp::create(b, modLoc, llvmPtrTy, dstSlot)
+                    .getResult();
+            Value srcPtr =
+                LLVM::AddressOfOp::create(b, modLoc, llvmPtrTy, constName)
+                    .getResult();
+            Value sizeVal =
+                LLVM::ConstantOp::create(b, modLoc, i64Ty,
+                                         b.getIntegerAttr(i64Ty, totalBytes))
+                    .getResult();
+            LLVM::CallOp::create(b, modLoc, memcpyDecl,
+                                 ValueRange{dstPtr, srcPtr, sizeVal, kindH2D});
+            continue; // Array case handled; skip the scalar path below.
+          }
+
+          // Scalar path: CIR integer/float types → standard LLVM type.
           mlir::Type llvmElemTy;
           if (auto intTy = mlir::dyn_cast<mlir::IntegerType>(constElemTy)) {
             llvmElemTy = intTy;

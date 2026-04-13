@@ -11,6 +11,7 @@
 #include "PassDetail.h"
 #include "TargetLowering/LowerModule.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Offload/IR/OffloadDialect.h"
@@ -49,22 +50,27 @@ bool isCXXABIAttributeLegal(const mlir::TypeConverter &tc,
   if (!attr)
     return true;
 
-  // None of the OpenACC/OMP/Offload/GPU/LLVM attributes contain a type of
-  // concern, so we can just treat them as legal.  GPU dialect attributes (e.g.
-  // #gpu.dim<x>) appear in offload.func bodies when gpu.thread_id /
+  // None of the OpenACC/OMP/Offload/GPU/LLVM/Arith attributes contain a type
+  // of concern, so we can just treat them as legal.  GPU dialect attributes
+  // (e.g. #gpu.dim<x>) appear in offload.func bodies when gpu.thread_id /
   // gpu.block_id ops are emitted directly by CIRGenExprScalar.
   // LLVM dialect attributes (e.g. #llvm.linkage) appear when LLVM intrinsics
   // are emitted directly into offload.func bodies (e.g. AMDGPU builtins).
+  // Arith dialect attributes (e.g. #arith.overflow<none>) appear on arith ops
+  // emitted into host function bodies by CIRGenOffloadRuntime (e.g. for
+  // hipMemsetD32Async byte-count computation via arith.muli).
   if (isa<mlir::acc::OpenACCDialect, mlir::omp::OpenMPDialect,
           mlir::offload::OffloadDialect,
+          mlir::arith::ArithDialect,
           mlir::gpu::GPUDialect,
           mlir::LLVM::LLVMDialect>(attr.getDialect()))
     return true;
 
   // These attributes either don't contain a type, or don't contain a type that
   // can have a data member/method.
-  if (isa<mlir::DenseArrayAttr, mlir::FloatAttr, mlir::UnitAttr,
-          mlir::StringAttr, mlir::IntegerAttr, mlir::SymbolRefAttr>(attr))
+  if (isa<mlir::DenseArrayAttr, mlir::DenseElementsAttr, mlir::FloatAttr,
+          mlir::UnitAttr, mlir::StringAttr, mlir::IntegerAttr,
+          mlir::SymbolRefAttr>(attr))
     return true;
 
   // Tablegen'ed always-legal attributes:

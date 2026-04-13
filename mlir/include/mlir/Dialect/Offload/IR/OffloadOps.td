@@ -189,6 +189,8 @@ def Offload_KernelLaunchOp : Offload_Op<"kernel_launch",
     Index:$gridX, Index:$gridY, Index:$gridZ,
     // Block dimensions (x, y, z)
     Index:$blockX, Index:$blockY, Index:$blockZ,
+    // Dynamic shared memory size in bytes (0 when not specified)
+    Optional<Index>:$shared_mem,
     // Optional async stream
     Optional<OFFLOAD_StreamType>:$stream,
     // Kernel arguments (types verified against callee signature)
@@ -197,8 +199,9 @@ def Offload_KernelLaunchOp : Offload_Op<"kernel_launch",
 
   let assemblyFormat = [{
     $callee
-    `grid`  `=` `(` $gridX `,` $gridY `,` $gridZ `)`
-    `block` `=` `(` $blockX `,` $blockY `,` $blockZ `)`
+    `grid`   `=` `(` $gridX `,` $gridY `,` $gridZ `)`
+    `block`  `=` `(` $blockX `,` $blockY `,` $blockZ `)`
+    (`shmem` `=` $shared_mem^)?
     (`stream` `=` $stream^ `:` type($stream))?
     (`args`   `=` `(` $args^ `:` type($args) `)`)?
     attr-dict
@@ -354,6 +357,31 @@ def Offload_EventWaitOp : Offload_Op<"event_wait"> {
   let assemblyFormat = "$event `:` type($event) attr-dict";
 }
 
+//--- offload.stream_wait_event --------------------------------------------//
+
+def Offload_StreamWaitEventOp : Offload_Op<"stream_wait_event"> {
+  let summary = "Make a stream wait for a GPU event (hipStreamWaitEvent / cuStreamWaitEvent)";
+  let description = [{
+    Makes `$stream` wait until `$event` completes before executing further work.
+    Corresponds to `hipStreamWaitEvent(stream, event, flags)`.
+
+    `$flags` must be 0 (the only value currently defined by HIP/CUDA).
+
+    Example:
+    ```mlir
+    offload.stream_wait_event %stream, %event flags = 0
+        : !offload.stream, !offload.event
+    ```
+  }];
+  let arguments = (ins OFFLOAD_StreamType:$stream,
+                       OFFLOAD_EventType:$event,
+                       I32Attr:$flags);
+  let assemblyFormat = [{
+    $stream `,` $event `flags` `=` $flags
+    `:` type($stream) `,` type($event) attr-dict
+  }];
+}
+
 //--- offload.memcpy_to_symbol ---------------------------------------------//
 
 def Offload_MemcpyToSymbolOp : Offload_Op<"memcpy_to_symbol"> {
@@ -375,6 +403,27 @@ def Offload_MemcpyToSymbolOp : Offload_Op<"memcpy_to_symbol"> {
   }];
 
   let hasVerifier = 1;
+}
+
+//--- offload.memcpy_from_symbol -------------------------------------------//
+
+def Offload_MemcpyFromSymbolOp : Offload_Op<"memcpy_from_symbol"> {
+  let summary = "Copy device symbol data to host (cudaMemcpyFromSymbol)";
+  let description = [{
+    Copies `$count` elements from the device global variable `$symbol` into the
+    host pointer `$dst`.  Corresponds to `cudaMemcpyFromSymbol` /
+    `hipMemcpyFromSymbol`.
+  }];
+
+  let arguments = (ins
+    AnyType:$dst,
+    FlatSymbolRefAttr:$symbol,
+    Index:$count
+  );
+
+  let assemblyFormat = [{
+    $dst `:` type($dst) `,` $symbol `count` `=` $count attr-dict
+  }];
 }
 
 //--- offload.malloc -------------------------------------------------------//

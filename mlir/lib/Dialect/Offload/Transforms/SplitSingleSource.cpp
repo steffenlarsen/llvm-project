@@ -211,9 +211,16 @@ static void lowerKernelLaunch(OpBuilder &builder,
   gpu::KernelDim3 blockSize{launch.getBlockX(), launch.getBlockY(),
                              launch.getBlockZ()};
 
-  // We do not lower dynamic shared memory in this pass (no shmem arg on
-  // offload.kernel_launch); pass a null Value.
-  Value dynamicSharedMem;
+  // Forward dynamic shared memory from the launch op (null = no shmem).
+  Value dynamicSharedMem = launch.getSharedMem();
+
+  // Collect the stream-producing op before erasing the launch; an
+  // unrealized_conversion_cast to !offload.stream is illegal in
+  // ConvertCIRToLLVMPass, so erase it if it becomes dead after the launch is
+  // gone.  (Streams on kernel launches are not yet forwarded to
+  // gpu.launch_func — the default-stream path handles synchronization.)
+  Value streamVal = launch.getStream();
+  Operation *streamDefOp = streamVal ? streamVal.getDefiningOp() : nullptr;
 
   builder.create<gpu::LaunchFuncOp>(
       loc, kernelRef, gridSize, blockSize,
@@ -224,6 +231,9 @@ static void lowerKernelLaunch(OpBuilder &builder,
       /*clusterSize=*/std::nullopt);
 
   launch.erase();
+
+  if (streamDefOp && streamDefOp->use_empty())
+    streamDefOp->erase();
 }
 
 //===----------------------------------------------------------------------===//
@@ -310,8 +320,11 @@ struct SplitSingleSourcePass
     SmallVector<offload::KernelLaunchOp> launches;
     module.walk(
         [&](offload::KernelLaunchOp l) { launches.push_back(l); });
-    for (auto l : launches)
+    for (auto l : launches) {
+      if (l.getStream())
+        continue; // stream-aware launches handled by LowerHostRuntimePass
       lowerKernelLaunch(builder, l, gpuModuleName);
+    }
 
     // (gpu.container_module was already set before step 3)
   }

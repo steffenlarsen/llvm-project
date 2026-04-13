@@ -30,11 +30,15 @@ __constant__ float const_var = 3.14f;
 // appear in the __offload_init_globals initializer list.
 __device__ int dev_zero;
 
+// An integer array with a constant initializer -- must appear in init list.
+__device__ int dev_arr[4] = {1, 2, 3, 4};
+
 // --- CIR checks ---
 
 // CIR-DAG: offload.global_var @dev_var : !s32i mem_space = <device>{{.*}}initial_value = 42 : i32
 // CIR-DAG: offload.global_var @const_var : !cir.float mem_space = <constant>{{.*}}initial_value = {{.*}} : f32
 // CIR-DAG: offload.global_var @dev_zero : !s32i mem_space = <device>
+// CIR-DAG: offload.global_var @dev_arr {{.*}} mem_space = <device>{{.*}}initial_value
 // CIR-NOT: offload.global_var @dev_zero{{.*}}initial_value
 
 // --- LLVM IR checks ---
@@ -61,7 +65,9 @@ __device__ int dev_zero;
 // LLVM:   call i32 @hipMemcpy(
 // LLVM:   call void @mgpuModuleGetGlobal(
 // LLVM:   call i32 @hipMemcpy(
-// Only two pairs -- dev_zero has no initializer.
+// Three pairs total: dev_var, const_var, dev_arr (dev_zero has no initializer).
+// LLVM:   call void @mgpuModuleGetGlobal(
+// LLVM:   call i32 @hipMemcpy(
 // LLVM-NOT: call void @mgpuModuleGetGlobal(
 // hipGetSymbolAddress must NOT appear -- replaced by mgpuModuleGetGlobal.
 // LLVM-NOT: call {{.*}} @hipGetSymbolAddress(

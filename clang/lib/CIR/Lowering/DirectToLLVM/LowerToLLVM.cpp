@@ -36,6 +36,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/GPU/Transforms/Passes.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Dialect/Offload/IR/OffloadDialect.h"
 #include "mlir/Dialect/Offload/Transforms/Passes.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "mlir/Target/LLVM/ROCDL/Target.h"
@@ -3227,6 +3228,41 @@ static void prepareTypeConverter(mlir::LLVMTypeConverter &converter,
   converter.addConversion([&](cir::VoidType type) -> mlir::Type {
     return mlir::LLVM::LLVMVoidType::get(type.getContext());
   });
+
+  // Offload runtime handle types: !offload.stream and !offload.event are
+  // opaque handles that appear in builtin.unrealized_conversion_cast ops
+  // emitted by CIRGenOffloadRuntime and LowerHostRuntime.
+  //
+  // hipStream_t = ihipStream_t* and hipEvent_t = ihipEvent_t* are pointer
+  // types in the HIP ABI, so the canonical LLVM representation is !llvm.ptr.
+  // Mapping to !llvm.ptr (rather than i64) makes the cast chain reconcilable:
+  //   !cir.ptr<T> → !offload.stream → !cir.ptr<T>
+  // becomes:
+  //   !llvm.ptr → !llvm.ptr → !llvm.ptr  (identity, no bridge needed)
+  // Mapping to i64 would leave a !llvm.ptr → i64 gap (ptrtoint) that the
+  // unrealized-cast reconciliation step cannot auto-synthesize.
+  converter.addConversion([](mlir::offload::StreamType type) -> mlir::Type {
+    return mlir::LLVM::LLVMPointerType::get(type.getContext());
+  });
+  converter.addConversion([](mlir::offload::EventType type) -> mlir::Type {
+    return mlir::LLVM::LLVMPointerType::get(type.getContext());
+  });
+
+  // Target materialization: widen narrower integers to a wider integer target
+  // type via zero-extension.  This bridges gaps like i32 → i64 that arise when
+  // LowerHostRuntime emits unrealized_conversion_cast(cir_arg → i64) for kernel
+  // launch args that are 32-bit CIR integers (which the type converter maps to
+  // i32, leaving an i32 → i64 gap the framework cannot auto-synthesize).
+  converter.addTargetMaterialization(
+      [](mlir::OpBuilder &b, mlir::IntegerType resultTy,
+         mlir::ValueRange inputs, mlir::Location loc) -> mlir::Value {
+        if (inputs.size() != 1)
+          return {};
+        auto inputTy = mlir::dyn_cast<mlir::IntegerType>(inputs[0].getType());
+        if (!inputTy || inputTy.getWidth() >= resultTy.getWidth())
+          return {};
+        return mlir::LLVM::ZExtOp::create(b, loc, resultTy, inputs[0]);
+      });
 }
 
 static void buildCtorDtorList(
@@ -3453,6 +3489,21 @@ struct UnrealizedCastFoldingLowering
       return mlir::success();
     }
 
+    // Case 3: narrower-integer → wider-integer cast emitted by
+    // LowerHostRuntime when packing kernel launch args into a void** params
+    // array via unrealized_cast(cir_arg → i64).  The CIR type (e.g.
+    // !cir.int<s,32>) converts to a narrower integer (e.g. i32), but the
+    // target slot type is i64.  Zero-extend to bridge the gap.
+    if (auto outIntTy = mlir::dyn_cast<mlir::IntegerType>(outTy)) {
+      if (auto inIntTy = mlir::dyn_cast<mlir::IntegerType>(converted.getType())) {
+        if (inIntTy.getWidth() < outIntTy.getWidth()) {
+          rewriter.replaceOpWithNewOp<mlir::LLVM::ZExtOp>(op, outIntTy,
+                                                           converted);
+          return mlir::success();
+        }
+      }
+    }
+
     return mlir::failure();
   }
 };
@@ -3546,18 +3597,23 @@ struct FuncFuncToLLVMFuncOpLowering
 
     rewriter.inlineRegionBefore(op.getBody(), llvmFunc.getBody(),
                                 llvmFunc.end());
-    // Remap only the entry block argument types (CIR → LLVM).  We do NOT call
-    // convertRegionTypes here because that inserts backward materializations
-    // (e.g. i32 → !s32i) for every use inside the body, including uses in
-    // legal ops (gpu.launch_func) that are left unconverted.  Those backward
-    // casts then carry CIR types through to the LLVM IR export and break it.
-    //
-    // applySignatureConversion replaces block args with the LLVM-typed versions
-    // and lets the conversion framework remap uses inside the body when those
-    // ops are themselves converted by their own patterns.  Legal ops (e.g.
-    // gpu.launch_func) receive operands that are already LLVM-typed because the
-    // CIR ops that computed them were converted immediately before.
-    rewriter.applySignatureConversion(&llvmFunc.getBody().front(), sigConv);
+
+    // For declarations (no body), there are no block arguments to remap.
+    // Calling applySignatureConversion on an empty body crashes (ilist sentinel).
+    if (!llvmFunc.getBody().empty()) {
+      // Remap only the entry block argument types (CIR → LLVM).  We do NOT call
+      // convertRegionTypes here because that inserts backward materializations
+      // (e.g. i32 → !s32i) for every use inside the body, including uses in
+      // legal ops (gpu.launch_func) that are left unconverted.  Those backward
+      // casts then carry CIR types through to the LLVM IR export and break it.
+      //
+      // applySignatureConversion replaces block args with the LLVM-typed versions
+      // and lets the conversion framework remap uses inside the body when those
+      // ops are themselves converted by their own patterns.  Legal ops (e.g.
+      // gpu.launch_func) receive operands that are already LLVM-typed because the
+      // CIR ops that computed them were converted immediately before.
+      rewriter.applySignatureConversion(&llvmFunc.getBody().front(), sigConv);
+    }
 
     rewriter.eraseOp(op);
     return mlir::success();

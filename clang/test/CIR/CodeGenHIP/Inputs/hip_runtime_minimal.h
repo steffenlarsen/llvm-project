@@ -53,6 +53,8 @@ extern "C" hipError_t hipEventCreate(hipEvent_t *event);
 extern "C" hipError_t hipEventDestroy(hipEvent_t event);
 extern "C" hipError_t hipEventRecord(hipEvent_t event, hipStream_t stream = 0);
 extern "C" hipError_t hipEventSynchronize(hipEvent_t event);
+extern "C" hipError_t hipStreamWaitEvent(hipStream_t stream, hipEvent_t event,
+                                         unsigned int flags);
 
 /* Memory management */
 extern "C" hipError_t hipMalloc(void **ptr, size_t size);
@@ -71,10 +73,19 @@ typedef enum hipMemcpyKind {
 
 extern "C" hipError_t hipMemcpy(void *dst, const void *src, size_t size,
                                  hipMemcpyKind kind);
+extern "C" hipError_t hipMemcpyAsync(void *dst, const void *src, size_t size,
+                                      hipMemcpyKind kind, hipStream_t stream);
 extern "C" hipError_t hipMemset(void *dst, int value, size_t size);
+
+typedef unsigned long long hipDeviceptr_t;
+extern "C" hipError_t hipMemsetD32Async(hipDeviceptr_t dst, unsigned int value,
+                                         size_t count, hipStream_t stream);
 extern "C" hipError_t hipMemcpyToSymbol(const void *symbol, const void *src,
                                          size_t count, size_t offset = 0,
                                          hipMemcpyKind kind = hipMemcpyHostToDevice);
+extern "C" hipError_t hipMemcpyFromSymbol(void *dst, const void *symbol,
+                                           size_t count, size_t offset = 0,
+                                           hipMemcpyKind kind = hipMemcpyDeviceToHost);
 
 /* printf — host and device */
 extern "C" int printf(const char *fmt, ...);

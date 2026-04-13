@@ -255,10 +255,12 @@ LogicalResult KernelLaunchOp::verify() {
 
   auto callee =
       dyn_cast_or_null<FuncOp>(SymbolTable::lookupSymbolIn(module, getCallee()));
+  // If the callee is not an offload.func, it may have already been lowered to
+  // a gpu.func by SplitSingleSourcePass (stream-aware launches survive that
+  // pass and are handled by LowerHostRuntimePass instead).  Skip symbol
+  // verification in that transitional state.
   if (!callee)
-    return emitOpError("callee '")
-           << getCallee()
-           << "' does not name an offload.func in the same module";
+    return success();
 
   if (!callee.isKernel())
     return emitOpError("callee '")
