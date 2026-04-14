@@ -30,6 +30,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/raw_ostream.h"
+#include <atomic>
 #include <cassert>
 #include <climits>
 #include <cstddef>
@@ -217,8 +218,8 @@ public:
 /// Handle for accessing option storage. Contains an offset and pointer to the
 /// storage implementation info.
 struct OptionStorageHandle {
-  const size_t Offset;
-  const size_t ID; // Used for debugging. Will be 0 if NDEBUG is defined.
+  size_t Offset;
+  size_t ID; // Used for debugging. Will be 0 if NDEBUG is defined.
 };
 
 /// Registers the given option storage and returns a handle that can be used to
@@ -237,6 +238,28 @@ LLVM_ABI void *getOptionStorage(
 
 LLVM_ABI bool isMainCLIStateActive();
 
+/// Returns true once finalizePendingOptions() has been called (i.e., after
+/// the first ParseCommandLineOptions() call or pushCLIState()). Options
+/// constructed after this point use the eager registration path.
+LLVM_ABI bool areGlobalOptionsFinalized();
+
+/// Singly-linked list node for deferred global option registration.
+/// Nodes are heap-allocated by enqueuePendingOption() and deleted by
+/// finalizePendingOptions() after the list is drained.
+struct PendingNode {
+  std::atomic<Option *> Opt;
+  PendingNode *Next = nullptr;
+  explicit PendingNode(Option *O) : Opt(O) {}
+  PendingNode(const PendingNode &) = delete;
+  PendingNode &operator=(const PendingNode &) = delete;
+};
+
+/// Heap-allocates a PendingNode for \p O, pushes it onto the pending list, and
+/// returns a pointer to the node. The caller (done()) stores the pointer so
+/// that nullPendingNode() can zero out Opt if the option is destroyed before
+/// finalizePendingOptions() runs.
+LLVM_ABI PendingNode *enqueuePendingOption(Option *O);
+
 //===----------------------------------------------------------------------===//
 // Common base class for CLI state-based storage
 //
@@ -244,16 +267,32 @@ LLVM_ABI bool isMainCLIStateActive();
 /// Base class that manages CLI state-based storage for command line options.
 /// Stores values in MainStateValue for the main CLI state and uses
 /// CLI state-based storage for other states.
+///
+/// Storage registration is deferred: during static initialization the handle
+/// is left as a sentinel (Offset == ~size_t(0)). The real offset is assigned
+/// by finalizeStorageRegistration() before the first non-main-state access.
 template <class DataType> class CLIBasedStorage {
-  const OptionStorageHandle Storage;
+  // Sentinel value indicates storage registration has not yet occurred.
+  static constexpr size_t UnregisteredOffset = ~size_t(0);
+
+  OptionStorageHandle Storage{UnregisteredOffset, 0};
   DataType MainStateValue;
 
 protected:
-  CLIBasedStorage()
-      : Storage(registerOptionStorage(sizeof(DataType), alignof(DataType))),
-        MainStateValue() {}
+  CLIBasedStorage() : MainStateValue() {}
+
+  void registerStorage() {
+    // No-op if storage has already been registered, e.g. by the eager path in
+    // done() when a non-main state is active at construction time, and then
+    // again during the registerPendingOptionStorages() sweep.
+    if (Storage.Offset != UnregisteredOffset)
+      return;
+    Storage = registerOptionStorage(sizeof(DataType), alignof(DataType));
+  }
 
   DataType *getLocation() const {
+    assert(Storage.Offset != UnregisteredOffset &&
+           "Option storage accessed before finalizeStorageRegistration()");
     return reinterpret_cast<DataType *>(getOptionStorage(Storage, []() {
       return std::make_shared<OptionStorageInfo<DataType>>();
     }));
@@ -471,6 +510,17 @@ public:
   virtual void printOptionValue(size_t GlobalWidth, bool Force) const = 0;
 
   virtual void setDefault() = 0;
+
+  /// Called by finalizePendingOptions() to register the CLI state storage slot
+  /// for this option. The default implementation is a no-op (covers options
+  /// with external storage).
+  virtual void finalizeStorageRegistration() {}
+
+  /// Atomically clears the embedded PendingNode's Option pointer so that
+  /// finalizePendingOptions() skips this option if it runs after the option is
+  /// destroyed. Called by when the argument is removed and the manager isn't
+  /// fully initialized.
+  virtual void nullPendingNode() {}
 
   // Prints the help string for an option.
   //
@@ -1508,6 +1558,7 @@ public:
   opt_storage() : CLIBasedStorage<DataType>() {}
 
   using CLIBasedStorage<DataType>::getValue;
+  using CLIBasedStorage<DataType>::registerStorage;
 
   template <class T> void setValue(const T &V, bool initial = false) {
     getValue() = V;
@@ -1541,6 +1592,7 @@ public:
   opt_storage() : CLIBasedStorage<std::string>() {}
 
   using CLIBasedStorage<std::string>::getValue;
+  using CLIBasedStorage<std::string>::registerStorage;
 
   template <class T> void setValue(const T &V, bool initial = false) {
     getValue() = V;
@@ -1674,6 +1726,10 @@ template <class DataType, bool ExternalStorage = false,
 class opt : public Option, public opt_storage<DataType, ExternalStorage> {
   ParserClass Parser;
 
+  // Non-owning pointer to the heap-allocated PendingNode created by
+  // enqueuePendingOption(). Null when using the eager path or before done().
+  PendingNode *PendingPtr = nullptr;
+
   bool handleOccurrence(unsigned pos, StringRef ArgName,
                         StringRef Arg) override {
     typename ParserClass::parser_data_type Val =
@@ -1721,8 +1777,28 @@ class opt : public Option, public opt_storage<DataType, ExternalStorage> {
     }
   }
 
+  void finalizeStorageRegistration() override {
+    if constexpr (!ExternalStorage)
+      this->registerStorage();
+  }
+
+  void nullPendingNode() override {
+    if (PendingPtr)
+      PendingPtr->Opt.store(nullptr, std::memory_order_relaxed);
+  }
+
   void done() {
-    addArgument();
+    if (areGlobalOptionsFinalized()) {
+      // Register storage immediately only if a non-main state is already
+      // active. Options constructed while the main state is active will get
+      // their storage registered lazily when the first non-main state is
+      // created.
+      if (!isMainCLIStateActive())
+        finalizeStorageRegistration();
+      addArgument();
+    } else {
+      PendingPtr = enqueuePendingOption(this);
+    }
     Parser.initialize();
   }
 
@@ -1836,6 +1912,8 @@ class list_storage<DataType, bool>
 public:
   list_storage() : CLIBasedStorage<std::vector<DataType>>() {}
 
+  using CLIBasedStorage<std::vector<DataType>>::registerStorage;
+
   std::vector<DataType> &getStorage() {
     return CLIBasedStorage<std::vector<DataType>>::getValue();
   }
@@ -1930,6 +2008,9 @@ class list : public Option, public list_storage<DataType, StorageClass> {
   std::vector<unsigned> Positions;
   ParserClass Parser;
 
+  // Non-owning pointer to the heap-allocated PendingNode (see opt<T>).
+  PendingNode *PendingPtr = nullptr;
+
   enum ValueExpected getValueExpectedFlagDefault() const override {
     return Parser.getValueExpectedFlagDefault();
   }
@@ -1976,8 +2057,24 @@ class list : public Option, public list_storage<DataType, StorageClass> {
       list_storage<DataType, StorageClass>::addValue(Val.getValue());
   }
 
+  void finalizeStorageRegistration() override {
+    if constexpr (std::is_same_v<StorageClass, bool>)
+      list_storage<DataType, StorageClass>::registerStorage();
+  }
+
+  void nullPendingNode() override {
+    if (PendingPtr)
+      PendingPtr->Opt.store(nullptr, std::memory_order_relaxed);
+  }
+
   void done() {
-    addArgument();
+    if (areGlobalOptionsFinalized()) {
+      if (!isMainCLIStateActive())
+        finalizeStorageRegistration();
+      addArgument();
+    } else {
+      PendingPtr = enqueuePendingOption(this);
+    }
     Parser.initialize();
   }
 
@@ -2096,6 +2193,8 @@ class bits_storage<DataType, bool> : private CLIBasedStorage<unsigned> {
 public:
   bits_storage() : CLIBasedStorage<unsigned>() {}
 
+  using CLIBasedStorage<unsigned>::registerStorage;
+
   template <class T> void addValue(const T &V) { getStorage() |= Bit(V); }
 
   unsigned getBits() const { return CLIBasedStorage<unsigned>::getValue(); }
@@ -2115,6 +2214,9 @@ template <class DataType, class Storage = bool,
 class bits : public Option, public bits_storage<DataType, Storage> {
   std::vector<unsigned> Positions;
   ParserClass Parser;
+
+  // Non-owning pointer to the heap-allocated PendingNode (see opt<T>).
+  PendingNode *PendingPtr = nullptr;
 
   enum ValueExpected getValueExpectedFlagDefault() const override {
     return Parser.getValueExpectedFlagDefault();
@@ -2153,8 +2255,24 @@ class bits : public Option, public bits_storage<DataType, Storage> {
 
   void setDefault() override { bits_storage<DataType, Storage>::clear(); }
 
+  void finalizeStorageRegistration() override {
+    if constexpr (std::is_same_v<Storage, bool>)
+      bits_storage<DataType, Storage>::registerStorage();
+  }
+
+  void nullPendingNode() override {
+    if (PendingPtr)
+      PendingPtr->Opt.store(nullptr, std::memory_order_relaxed);
+  }
+
   void done() {
-    addArgument();
+    if (areGlobalOptionsFinalized()) {
+      if (!isMainCLIStateActive())
+        finalizeStorageRegistration();
+      addArgument();
+    } else {
+      PendingPtr = enqueuePendingOption(this);
+    }
     Parser.initialize();
   }
 
@@ -2192,6 +2310,9 @@ public:
 class LLVM_ABI alias : public Option {
   Option *AliasFor;
 
+  // Non-owning pointer to the heap-allocated PendingNode (see opt<T>).
+  PendingNode *PendingPtr = nullptr;
+
   bool handleOccurrence(unsigned pos, StringRef /*ArgName*/,
                         StringRef Arg) override {
     return AliasFor->handleOccurrence(pos, AliasFor->ArgStr, Arg);
@@ -2216,6 +2337,11 @@ class LLVM_ABI alias : public Option {
     return AliasFor->getValueExpectedFlag();
   }
 
+  void nullPendingNode() override {
+    if (PendingPtr)
+      PendingPtr->Opt.store(nullptr, std::memory_order_relaxed);
+  }
+
   void done() {
     if (!hasArgStr())
       error("cl::alias must have argument name specified!");
@@ -2225,7 +2351,10 @@ class LLVM_ABI alias : public Option {
       error("cl::alias must not have cl::sub(), aliased option's cl::sub() will be used!");
     Subs = AliasFor->Subs;
     Categories = AliasFor->Categories;
-    addArgument();
+    if (areGlobalOptionsFinalized())
+      addArgument(); // no storage registration needed for alias
+    else
+      PendingPtr = enqueuePendingOption(this);
   }
 
 public:
