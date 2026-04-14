@@ -29,6 +29,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Config/config.h"
+#include "llvm/Support/Allocator.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/Debug.h"
@@ -338,7 +339,8 @@ class CLIManager {
         return; // No need to copy from self
 
       // Use std::scoped_lock for deadlock-free locking of multiple mutexes
-      std::scoped_lock Lock(StateMutex, Other.StateMutex);
+      std::scoped_lock<llvm::sys::Mutex, llvm::sys::Mutex> Lock(
+          StateMutex, Other.StateMutex);
 
       Program.ProgramName = Other.Program.ProgramName;
       Program.ProgramOverview = Other.Program.ProgramOverview;
@@ -450,6 +452,9 @@ public:
                                StringRef Overview, raw_ostream *Errs = nullptr,
                                vfs::FileSystem *VFS = nullptr,
                                bool LongOptionsUseDoubleDash = false);
+
+  void finalizePendingOptions();
+  void registerPendingOptionStorages();
 
   void forEachSubCommand(Option &Opt, function_ref<void(SubCommand &)> Action) {
     if (Opt.Subs.empty()) {
@@ -671,6 +676,17 @@ public:
   }
 
   void pushCLIState(const cl::ThreadLocalStateConfig &Config = {}) {
+    // Ensure all pending global options are registered before copying state.
+    // copyFrom() snapshots TotalRegisteredSize and the option map; both must
+    // be complete or the copy will miss options registered after it runs.
+    finalizePendingOptions();
+
+    // Assign storage offsets for all registered options. This is deferred from
+    // finalizePendingOptions() so that programs using only the main CLI state
+    // pay no storage registration overhead. Must run before copyFrom() so that
+    // TotalRegisteredSize is correct when the new state snapshots it.
+    registerPendingOptionStorages();
+
     const State *SourceState = nullptr;
 
     // Determine which state to use as source for copying
@@ -752,6 +768,104 @@ void *cl::getOptionStorage(
 
 bool cl::isMainCLIStateActive() { return CLIManager::isMainStateActive(); }
 
+//===----------------------------------------------------------------------===//
+// Two-phase global option registration
+//
+// Options defined at namespace scope self-enqueue here during static
+// initialization. finalizePendingOptions() drains the list once before the
+// first parse or state push.
+//
+
+
+/// Raw storage for the BumpPtrAllocator used to allocate PendingNode objects.
+static BumpPtrAllocator &getNodeAllocator() {
+  static BumpPtrAllocator NodeAllocator;
+  return NodeAllocator;
+}
+
+/// Lock-free stack head. Points to the most recently enqueued PendingNode.
+/// nullptr means the stack is empty (no pending options).
+static std::atomic<PendingNode *> PendingGlobalOptionsHead{nullptr};
+
+/// Running count of nodes pushed onto PendingGlobalOptionsHead.
+static std::atomic<size_t> PendingGlobalOptionsCount{0};
+
+/// Set to true once the stack has been drained.
+static std::atomic<bool> GlobalOptionsFinalized{false};
+
+bool cl::areGlobalOptionsFinalized() {
+  return GlobalOptionsFinalized.load(std::memory_order_acquire);
+}
+
+PendingNode *cl::enqueuePendingOption(Option *O) {
+  // Allocate a new node for this option.
+  PendingNode *N =
+      new (getNodeAllocator().Allocate<PendingNode>()) PendingNode(O);
+
+  // Push onto the lock-free stack.
+  PendingNode *Head = PendingGlobalOptionsHead.load(std::memory_order_relaxed);
+  do {
+    N->Next = Head;
+  } while (!PendingGlobalOptionsHead.compare_exchange_weak(
+      Head, N, std::memory_order_release, std::memory_order_relaxed));
+
+  PendingGlobalOptionsCount.fetch_add(1, std::memory_order_relaxed);
+  return N;
+}
+
+void CLIManager::finalizePendingOptions() {
+  // If already finalized, nothing to do.
+  if (GlobalOptionsFinalized.load(std::memory_order_acquire))
+    return;
+
+  // Mark as finalized before draining the list so that any option
+  // constructed during the drain (e.g., via a constructor side-effect) uses
+  // the eager path immediately.
+  GlobalOptionsFinalized.store(true, std::memory_order_release);
+
+  // Drain the lock-free stack. The stack is in reverse declaration order
+  // (LIFO), so we collect all nodes and then reverse before registering to
+  // preserve declaration order in the option map.
+  SmallVector<Option *, 128> Pending;
+  Pending.reserve(PendingGlobalOptionsCount.load(std::memory_order_relaxed));
+  PendingNode *N =
+      PendingGlobalOptionsHead.exchange(nullptr, std::memory_order_acquire);
+  while (N) {
+    // Opt is nullptr if the option was destroyed before finalization (e.g., a
+    // function-scope option that has gone out of scope). Skip it.
+    Option *O = N->Opt.load(std::memory_order_acquire);
+    if (O)
+      Pending.push_back(O);
+    N = N->Next;
+  }
+  // Release all PendingNode memory in one bulk operation.
+  if (!Pending.empty())
+    getNodeAllocator().Reset();
+  std::reverse(Pending.begin(), Pending.end());
+
+  // Insert all pending options into the parser's option map and mark them as
+  // fully initialized. Storage registration is deferred to the first time a
+  // non-main state is pushed, to avoid unnecessary registration for programs
+  // that only use the main state.
+  for (Option *O : Pending)
+    O->addArgument();
+}
+
+void CLIManager::registerPendingOptionStorages() {
+  // Sweep all live options in the current state and call finalize the
+  // registration of each.
+  for (SubCommand *SC : currentState().Registry.RegisteredSubCommands) {
+    for (auto &[_, O] : SC->OptionsMap)
+      O->finalizeStorageRegistration();
+    for (Option *O : SC->PositionalOpts)
+      O->finalizeStorageRegistration();
+    for (Option *O : SC->SinkOpts)
+      O->finalizeStorageRegistration();
+    if (SC->ConsumeAfterOpt)
+      SC->ConsumeAfterOpt->finalizeStorageRegistration();
+  }
+}
+
 template <typename T, T TrueVal, T FalseVal>
 static bool parseBool(Option &O, StringRef ArgName, StringRef Arg, T &Value) {
   if (Arg == "" || Arg == "true" || Arg == "TRUE" || Arg == "True" ||
@@ -781,7 +895,17 @@ void Option::addArgument() {
   FullyInitialized = true;
 }
 
-void Option::removeArgument() { CLIManager::getInstance().removeOption(this); }
+void Option::removeArgument() {
+  if (!FullyInitialized) {
+    // Option destroyed before pending options have been materialized (e.g., a
+    // function-scope option that has gone out of scope). Null out the embedded
+    // pending node so draining the loop skips it safely without accessing freed
+    // memory.
+    nullPendingNode();
+    return;
+  }
+  CLIManager::getInstance().removeOption(this);
+}
 
 void Option::setArgStr(StringRef S) {
   if (FullyInitialized)
@@ -1802,6 +1926,7 @@ bool cl::ParseCommandLineOptions(int argc, const char *const *argv,
                                  vfs::FileSystem *VFS, const char *EnvVar,
                                  bool LongOptionsUseDoubleDash) {
   initCommonOptions();
+  CLIManager::getInstance().finalizePendingOptions();
   SmallVector<const char *, 20> NewArgv;
   BumpPtrAllocator A;
   StringSaver Saver(A);
