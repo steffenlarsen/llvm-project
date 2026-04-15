@@ -5760,6 +5760,7 @@ void populateCIRToLLVMPasses(mlir::OpPassManager &pm, bool enableOffloadSplit,
     // ops.  ConvertCIRInGpuModulePass uses applyPartialConversion, which does
     // not recurse into region-bearing structured ops like cir.ternary.
     pm.addPass(mlir::createCIRFlattenCFGPass());
+    pm.addPass(mlir::offload::createOffloadTightenLaunchBoundsPass());
     mlir::offload::OffloadSplitSingleSourcePassOptions splitOpts;
     splitOpts.gpuModuleName = "offload_device_module";
     pm.addPass(mlir::offload::createOffloadSplitSingleSourcePass(splitOpts));

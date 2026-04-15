@@ -132,4 +132,44 @@ def OffloadLowerSharedGlobalsPass
   ];
 }
 
+//===----------------------------------------------------------------------===//
+// TightenLaunchBoundsPass
+//
+// Tightens kernel launch_bounds when the block size is statically known at
+// every call site.  For each offload.func with exec_space=global, inspects
+// all offload.kernel_launch ops that reference it and tries to fold the
+// product blockX * blockY * blockZ to a compile-time constant.  If the total
+// fits within a smaller candidate bound from {warpSize, 256, 512}, a
+// specialised clone of the kernel is created with that tighter bound and the
+// launch op is redirected to it.  The original kernel is always preserved.
+//
+// Run this pass *before* SplitSingleSourcePass.
+//===----------------------------------------------------------------------===//
+
+def OffloadTightenLaunchBoundsPass
+    : Pass<"offload-tighten-launch-bounds", "::mlir::ModuleOp"> {
+  let summary = "Tighten kernel launch_bounds when block size is statically known";
+  let description = [{
+    For each `offload.func` with `exec_space = global`, collects all
+    `offload.kernel_launch` call sites and attempts to fold the product
+    `blockX * blockY * blockZ` to a compile-time constant.
+
+    If the static block total fits within a smaller candidate bound from
+    {warpSize, 256, 512}, the kernel's `launch_bounds.maxThreadsPerBlock`
+    is tightened accordingly, allowing the backend to allocate more
+    registers per thread.
+
+    For each candidate bucket that has at least one qualifying launch site,
+    a specialised clone is created with a name of the form `@kernel$maxN`
+    (using `$` — valid in MLIR bare identifiers but not in standard C++
+    identifiers, ensuring no collision with user symbols) and a tighter
+    `launch_bounds` attribute. Those launch ops are redirected to the clone.
+    The original kernel is always preserved: it may be launched by name at
+    runtime via the HIP API (`hipModuleGetFunction`) in ways the IR cannot
+    observe, so removing it would be unsound.
+
+    Run this pass before `SplitSingleSource`.
+  }];
+}
+
 #endif // OFFLOAD_TRANSFORMS_PASSES

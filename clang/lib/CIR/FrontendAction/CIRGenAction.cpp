@@ -7,7 +7,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/CIR/FrontendAction/CIRGenAction.h"
+#include "mlir/Dialect/Offload/IR/OffloadDialect.h"
 #include "mlir/Dialect/Offload/Transforms/Passes.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/OwningOpRef.h"
 #include "clang/Basic/DiagnosticFrontend.h"
@@ -187,6 +189,20 @@ public:
           if (!auxCPU.empty())
             offloadArchs.push_back(auxCPU.str()); // host cc1
         }
+      }
+      // Attach offload.target so pre-split passes (e.g. TightenLaunchBounds)
+      // can infer the target warp size from the MLIR module.
+      if (CGO.ClangIROffload && !offloadArchs.empty()) {
+        mlir::Builder b(MlirModule.getContext());
+        llvm::SmallVector<mlir::Attribute> archAttrs;
+        for (const std::string &arch : offloadArchs)
+          archAttrs.push_back(b.getStringAttr(arch));
+        StringRef runtime = C.getLangOpts().HIP ? "hip" : "cuda";
+        MlirModule->setAttr(
+            "offload.target",
+            mlir::offload::TargetAttr::get(MlirModule.getContext(),
+                                           b.getStringAttr(runtime),
+                                           b.getArrayAttr(archAttrs)));
       }
       bool isDeviceCompilation = C.getLangOpts().CUDAIsDevice;
       std::unique_ptr<llvm::Module> LLVMModule =

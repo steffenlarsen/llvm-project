@@ -419,6 +419,9 @@ void registerOffloadPasses() {
   registerPass([]() -> std::unique_ptr<Pass> {
     return createOffloadLowerSharedGlobalsPass();
   });
+  registerPass([]() -> std::unique_ptr<Pass> {
+    return createOffloadTightenLaunchBoundsPass();
+  });
 }
 
 } // namespace offload
