@@ -4,6 +4,14 @@
 // RUN: mlir-opt --split-input-file \
 // RUN:   '--offload-split-single-source=gpu-module-name=my_device_mod' %s \
 // RUN:   | FileCheck --check-prefix=CHECK-NAMED %s
+// Verify dead-kernel-action=none: all kernels land in the primary module.
+// RUN: mlir-opt --split-input-file \
+// RUN:   '--offload-split-single-source=dead-kernel-action=none' %s \
+// RUN:   | FileCheck --check-prefix=CHECK-NONE %s
+// Verify dead-kernel-action=discard: unreferenced kernels are dropped.
+// RUN: mlir-opt --split-input-file \
+// RUN:   '--offload-split-single-source=dead-kernel-action=discard' %s \
+// RUN:   | FileCheck --check-prefix=CHECK-DISCARD %s
 
 // Tests for the OffloadSplitSingleSourcePass.
 //
@@ -143,17 +151,28 @@ offload.func @bodyKernel(%x: f32)
 // -----
 
 //===----------------------------------------------------------------------===//
-// Multiple kernels in one module — all end up in the same gpu.module
+// Multiple referenced kernels — all end up in the primary gpu.module
 //===----------------------------------------------------------------------===//
 
 // CHECK:      gpu.module @offload_device_module
 // CHECK-DAG:    gpu.func @kernelA
 // CHECK-DAG:    gpu.func @kernelB
+// CHECK-NOT:  gpu.module @offload_device_module_deferred
 
 offload.func @kernelA(%a: memref<f32>) exec_space = #offload.exec_space<global> {
   offload.return
 }
 offload.func @kernelB(%b: memref<i32>) exec_space = #offload.exec_space<global> {
+  offload.return
+}
+offload.func @launchBoth(%a: memref<f32>, %b: memref<i32>,
+                          %gx: index, %bsz: index)
+    exec_space = #offload.exec_space<host> {
+  %one = arith.constant 1 : index
+  offload.kernel_launch @kernelA
+      grid = (%gx, %one, %one) block = (%bsz, %one, %one) args = (%a : memref<f32>)
+  offload.kernel_launch @kernelB
+      grid = (%gx, %one, %one) block = (%bsz, %one, %one) args = (%b : memref<i32>)
   offload.return
 }
 
@@ -254,4 +273,214 @@ offload.func @conditionalHost(%cond: i32) -> i32
   offload.return %zero : i32
 ^ret_one:
   offload.return %one : i32
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Two-module split: unreferenced kernel goes to deferred module
+//===----------------------------------------------------------------------===//
+
+// The launched kernel goes to the primary module; the unreferenced one to the
+// deferred module.  The host func.func is emitted before the gpu.modules.
+//
+// CHECK:      func.func @launchSite
+// CHECK:        gpu.launch_func @offload_device_module::@launchedKernel
+// CHECK:      gpu.module @offload_device_module
+// CHECK:        gpu.func @launchedKernel{{.*}}kernel
+// CHECK-NOT:    gpu.func @unusedKernel
+// CHECK:      gpu.module @offload_device_module_deferred
+// CHECK:        gpu.func @unusedKernel{{.*}}kernel
+// CHECK-NOT:    gpu.func @launchedKernel
+
+offload.func @launchedKernel(%a: memref<f32>)
+    exec_space = #offload.exec_space<global> {
+  offload.return
+}
+
+offload.func @unusedKernel(%b: memref<i32>)
+    exec_space = #offload.exec_space<global> {
+  offload.return
+}
+
+offload.func @launchSite(%a: memref<f32>, %gx: index, %bsz: index)
+    exec_space = #offload.exec_space<host> {
+  %one = arith.constant 1 : index
+  offload.kernel_launch @launchedKernel
+      grid  = (%gx, %one, %one)
+      block = (%bsz, %one, %one)
+      args  = (%a : memref<f32>)
+  offload.return
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Replicable helper — cloned into both modules
+//===----------------------------------------------------------------------===//
+
+// A device helper with no global deps is replicable: it appears in the primary
+// module (used by @refKernel) and also in the deferred module (used by
+// @deferredKernel).
+//
+// CHECK:      gpu.module @offload_device_module
+// CHECK-DAG:    gpu.func @pureHelper
+// CHECK-DAG:    gpu.func @refKernel{{.*}}kernel
+// CHECK:      gpu.module @offload_device_module_deferred
+// CHECK-DAG:    gpu.func @pureHelper
+// CHECK-DAG:    gpu.func @deferredKernel{{.*}}kernel
+
+offload.func @pureHelper(%x: f32) -> f32
+    exec_space = #offload.exec_space<device> {
+  %two = arith.constant 2.0 : f32
+  %r = arith.mulf %x, %two : f32
+  offload.return %r : f32
+}
+
+offload.func @refKernel(%x: f32) exec_space = #offload.exec_space<global> {
+  offload.return
+}
+
+offload.func @deferredKernel(%x: f32) exec_space = #offload.exec_space<global> {
+  offload.return
+}
+
+offload.func @launchRef(%x: f32, %gx: index, %bsz: index)
+    exec_space = #offload.exec_space<host> {
+  %one = arith.constant 1 : index
+  offload.kernel_launch @refKernel
+      grid  = (%gx, %one, %one)
+      block = (%bsz, %one, %one)
+      args  = (%x : f32)
+  offload.return
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// All kernels referenced — no deferred module emitted
+//===----------------------------------------------------------------------===//
+
+// When every kernel has a launch site, the deferred module is omitted entirely.
+//
+// CHECK:      gpu.module @offload_device_module
+// CHECK-DAG:    gpu.func @kernelX{{.*}}kernel
+// CHECK-DAG:    gpu.func @kernelY{{.*}}kernel
+// CHECK-NOT:  gpu.module @offload_device_module_deferred
+
+offload.func @kernelX(%a: memref<f32>) exec_space = #offload.exec_space<global> {
+  offload.return
+}
+offload.func @kernelY(%b: memref<i32>) exec_space = #offload.exec_space<global> {
+  offload.return
+}
+offload.func @launchBothXY(%a: memref<f32>, %b: memref<i32>,
+                             %gx: index, %bsz: index)
+    exec_space = #offload.exec_space<host> {
+  %one = arith.constant 1 : index
+  offload.kernel_launch @kernelX
+      grid = (%gx, %one, %one) block = (%bsz, %one, %one) args = (%a : memref<f32>)
+  offload.kernel_launch @kernelY
+      grid = (%gx, %one, %one) block = (%bsz, %one, %one) args = (%b : memref<i32>)
+  offload.return
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Custom deferred-gpu-module-name: unreferenced kernel goes to named module
+//===----------------------------------------------------------------------===//
+
+// The CHECK-NAMED prefix run already uses --gpu-module-name=my_device_mod for
+// the whole file.  This section verifies the deferred module is named with the
+// default name when the option is not set, and that it contains the unreferenced
+// kernel.
+//
+// CHECK:      gpu.module @offload_device_module_deferred
+// CHECK:        gpu.func @deferKernelNamed{{.*}}kernel
+
+offload.func @refKernelNamed(%a: memref<f32>)
+    exec_space = #offload.exec_space<global> {
+  offload.return
+}
+offload.func @deferKernelNamed(%b: memref<i32>)
+    exec_space = #offload.exec_space<global> {
+  offload.return
+}
+offload.func @launchNamed(%a: memref<f32>, %gx: index, %bsz: index)
+    exec_space = #offload.exec_space<host> {
+  %one = arith.constant 1 : index
+  offload.kernel_launch @refKernelNamed
+      grid  = (%gx, %one, %one)
+      block = (%bsz, %one, %one)
+      args  = (%a : memref<f32>)
+  offload.return
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// dead-kernel-action=none: all kernels go to the primary module
+//===----------------------------------------------------------------------===//
+
+// With dead-kernel-action=none, unreferenced kernels are NOT separated into a
+// deferred module — they land in the primary module alongside launched kernels.
+//
+// CHECK-NONE:      gpu.module @offload_device_module
+// CHECK-NONE-DAG:    gpu.func @refKernelNone{{.*}}kernel
+// CHECK-NONE-DAG:    gpu.func @unrefKernelNone{{.*}}kernel
+// CHECK-NONE-NOT:  gpu.module @offload_device_module_deferred
+
+offload.func @refKernelNone(%a: memref<f32>)
+    exec_space = #offload.exec_space<global> {
+  offload.return
+}
+
+offload.func @unrefKernelNone(%b: memref<i32>)
+    exec_space = #offload.exec_space<global> {
+  offload.return
+}
+
+offload.func @launchNone(%a: memref<f32>, %gx: index, %bsz: index)
+    exec_space = #offload.exec_space<host> {
+  %one = arith.constant 1 : index
+  offload.kernel_launch @refKernelNone
+      grid  = (%gx, %one, %one)
+      block = (%bsz, %one, %one)
+      args  = (%a : memref<f32>)
+  offload.return
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// dead-kernel-action=discard: unreferenced kernels are dropped entirely
+//===----------------------------------------------------------------------===//
+
+// With dead-kernel-action=discard, kernels with no launch site are erased
+// rather than placed in a deferred module.
+//
+// CHECK-DISCARD:      gpu.module @offload_device_module
+// CHECK-DISCARD:        gpu.func @refKernelDiscard{{.*}}kernel
+// CHECK-DISCARD-NOT:    gpu.func @unrefKernelDiscard
+// CHECK-DISCARD-NOT:  gpu.module @offload_device_module_deferred
+
+offload.func @refKernelDiscard(%x: f32)
+    exec_space = #offload.exec_space<global> {
+  offload.return
+}
+
+offload.func @unrefKernelDiscard(%x: f32)
+    exec_space = #offload.exec_space<global> {
+  offload.return
+}
+
+offload.func @launchDiscard(%x: f32, %gx: index, %bsz: index)
+    exec_space = #offload.exec_space<host> {
+  %one = arith.constant 1 : index
+  offload.kernel_launch @refKernelDiscard
+      grid  = (%gx, %one, %one)
+      block = (%bsz, %one, %one)
+      args  = (%x : f32)
+  offload.return
 }

@@ -10,10 +10,23 @@
 //   - Host side: offload.func (host/host_device) → func.func
 //                offload.kernel_launch → gpu.launch_func
 //   - Device side: offload.func (global/device/host_device) → gpu.func
-//                  wrapped inside a gpu.module
+//                  wrapped inside one or two gpu.modules
+//
+// Kernels with at least one observable launch site go into the primary
+// gpu.module.  Kernels with no launch site go into a secondary ("deferred")
+// gpu.module, which the HIP runtime only loads when one of its kernels is
+// actually needed, avoiding unnecessary compile/load cost for unused kernels.
+//
+// Device helper functions (exec_space=device) and the device-side clone of
+// host_device functions are replicated into every gpu.module that needs them,
+// unless they transitively reference a non-replicable global (__device__,
+// __constant__, __managed__).  Such helpers are placed only in the primary
+// module; any unreferenced kernel calling them is also kept in the primary.
+//
+// The secondary module is omitted entirely when all kernels are referenced.
 //
 // After this pass, all offload.* ops have been eliminated.  The resulting
-// gpu.module can be compiled by any existing GPU backend (NVVM/ROCDL).
+// gpu.module(s) can be compiled by any existing GPU backend (NVVM/ROCDL).
 //
 //===----------------------------------------------------------------------===//
 
@@ -31,6 +44,8 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 
 namespace mlir {
@@ -48,19 +63,8 @@ using namespace mlir::offload;
 namespace {
 
 //===----------------------------------------------------------------------===//
-// Helpers
+// Lowering helpers
 //===----------------------------------------------------------------------===//
-
-/// Return true if this exec_space implies device-side code.
-static bool isDeviceExecSpace(ExecSpace es) {
-  return es == ExecSpace::device || es == ExecSpace::global ||
-         es == ExecSpace::host_device;
-}
-
-/// Return true if this exec_space implies host-side code.
-static bool isHostExecSpace(ExecSpace es) {
-  return es == ExecSpace::host || es == ExecSpace::host_device;
-}
 
 /// Lower a single offload.func to a gpu.func and insert it into gpuModule.
 /// Returns the created gpu.func, or nullptr on failure.
@@ -282,6 +286,166 @@ static void lowerKernelLaunch(OpBuilder &builder,
 }
 
 //===----------------------------------------------------------------------===//
+// Dependency analysis
+//===----------------------------------------------------------------------===//
+
+/// Return true if this global mem_space cannot be safely replicated across
+/// gpu.modules.  Replicating __device__, __constant__, or __managed__ globals
+/// would create distinct device-side allocations with the same symbolic name,
+/// breaking host-side symbol lookups (hipMemcpyToSymbol, etc.).
+static bool isNonReplicableMemSpace(MemSpace ms) {
+  return ms == MemSpace::device || ms == MemSpace::constant ||
+         ms == MemSpace::managed;
+}
+
+/// Build direct-dependency and reverse-dependency maps across all offload.func
+/// bodies in \p module.
+///
+///  deps[fn]     = symbols (offload.func / offload.global_var) that fn's body
+///                 directly references.
+///  revDeps[sym] = offload.func names that directly reference sym.
+static void
+buildDepMap(ModuleOp module,
+            DenseMap<StringAttr, SmallVector<StringAttr>> &deps,
+            DenseMap<StringAttr, SmallVector<StringAttr>> &revDeps) {
+  module.walk([&](offload::FuncOp fn) {
+    auto uses = SymbolTable::getSymbolUses(fn.getOperation(), module);
+    if (!uses)
+      return;
+    SmallVector<StringAttr> &fnDeps = deps[fn.getNameAttr()];
+    for (SymbolTable::SymbolUse use : *uses) {
+      StringAttr ref = use.getSymbolRef().getRootReference();
+      if (module.lookupSymbol<offload::FuncOp>(ref) ||
+          module.lookupSymbol<offload::GlobalVarOp>(ref)) {
+        fnDeps.push_back(ref);
+        revDeps[ref].push_back(fn.getNameAttr());
+      }
+    }
+  });
+}
+
+/// Starting from the seed set \p seeds, walk forward through \p deps and
+/// collect every symbol transitively reachable.  Seeds are included in
+/// \p reachable.
+static void
+computeReachableFrom(const DenseMap<StringAttr, SmallVector<StringAttr>> &deps,
+                     const DenseSet<StringAttr> &seeds,
+                     DenseSet<StringAttr> &reachable) {
+  SmallVector<StringAttr> worklist(seeds.begin(), seeds.end());
+  reachable.insert(seeds.begin(), seeds.end());
+  while (!worklist.empty()) {
+    StringAttr sym = worklist.pop_back_val();
+    auto it = deps.find(sym);
+    if (it == deps.end())
+      continue;
+    for (StringAttr dep : it->second) {
+      if (reachable.insert(dep).second)
+        worklist.push_back(dep);
+    }
+  }
+}
+
+/// Compute two sets:
+///
+///  \p primaryKernels  — kernels (exec_space=global) that must reside in the
+///                       primary gpu.module, either because they have an
+///                       observable launch site, or because they transitively
+///                       depend on a resource that cannot be replicated.
+///
+///  \p primaryOnlyHelpers — device helpers / host_device functions whose
+///                          device-side clone must reside only in the primary
+///                          module (they transitively reference a non-replicable
+///                          global).  Replicable helpers are NOT in this set
+///                          and will be cloned into both modules.
+static void computePrimarySet(ModuleOp module,
+                               DenseSet<StringAttr> &primaryKernels,
+                               DenseSet<StringAttr> &primaryOnlyHelpers) {
+  // ------------------------------------------------------------------ //
+  // Step A: Build direct-dependency and reverse-dependency maps.
+  // ------------------------------------------------------------------ //
+  DenseMap<StringAttr, SmallVector<StringAttr>> deps;
+  DenseMap<StringAttr, SmallVector<StringAttr>> revDeps;
+  buildDepMap(module, deps, revDeps);
+
+  // ------------------------------------------------------------------ //
+  // Step B: Mark non-replicable globals.
+  // ------------------------------------------------------------------ //
+  DenseSet<StringAttr> nonReplicableGlobals;
+  module.walk([&](offload::GlobalVarOp gv) {
+    if (isNonReplicableMemSpace(gv.getMemSpace()))
+      nonReplicableGlobals.insert(gv.getSymNameAttr());
+  });
+
+  // ------------------------------------------------------------------ //
+  // Step C: Classify device helpers and host_device functions.
+  //
+  // A helper is "primary-only" if it (transitively) references a
+  // non-replicable global.  Start with helpers that directly reference one,
+  // then propagate backwards through the call graph.
+  // ------------------------------------------------------------------ //
+  SmallVector<StringAttr> worklist;
+  module.walk([&](offload::FuncOp fn) {
+    ExecSpace es = fn.getExecSpace();
+    if (es != ExecSpace::device && es != ExecSpace::host_device)
+      return;
+    for (StringAttr dep : deps[fn.getNameAttr()])
+      if (nonReplicableGlobals.count(dep)) {
+        worklist.push_back(fn.getNameAttr());
+        break;
+      }
+  });
+
+  while (!worklist.empty()) {
+    StringAttr item = worklist.pop_back_val();
+    if (!primaryOnlyHelpers.insert(item).second)
+      continue; // already processed
+    // Propagate to other helpers that call this one.
+    for (StringAttr caller : revDeps[item]) {
+      offload::FuncOp callerFn =
+          module.lookupSymbol<offload::FuncOp>(caller);
+      if (!callerFn)
+        continue;
+      ExecSpace es = callerFn.getExecSpace();
+      if (es == ExecSpace::device || es == ExecSpace::host_device)
+        worklist.push_back(caller);
+    }
+  }
+
+  // ------------------------------------------------------------------ //
+  // Step D: Seed primary kernels with all launched kernels.
+  // ------------------------------------------------------------------ //
+  module.walk([&](offload::KernelLaunchOp l) {
+    primaryKernels.insert(l.getCalleeAttr().getAttr());
+  });
+
+  // ------------------------------------------------------------------ //
+  // Step E: Pull unreferenced kernels into primary if they depend on a
+  // resource that cannot be replicated.
+  //
+  // A kernel is pulled into primary if it directly references a non-replicable
+  // global or calls a primary-only helper.  Repeat until convergence.
+  // ------------------------------------------------------------------ //
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    module.walk([&](offload::FuncOp fn) {
+      if (fn.getExecSpace() != ExecSpace::global)
+        return;
+      if (primaryKernels.count(fn.getNameAttr()))
+        return;
+      for (StringAttr dep : deps[fn.getNameAttr()]) {
+        if (nonReplicableGlobals.count(dep) ||
+            primaryOnlyHelpers.count(dep)) {
+          primaryKernels.insert(fn.getNameAttr());
+          changed = true;
+          return;
+        }
+      }
+    });
+  }
+}
+
+//===----------------------------------------------------------------------===//
 // Pass
 //===----------------------------------------------------------------------===//
 
@@ -308,20 +472,52 @@ struct SplitSingleSourcePass
                     builder.getUnitAttr());
 
     // ------------------------------------------------------------------ //
-    // Step 0: Handle offload.global_var ops.
+    // Determine dead-kernel handling mode.
+    // ------------------------------------------------------------------ //
+    bool doNone    = (deadKernelAction == "none");
+    bool doDiscard = (deadKernelAction == "discard");
+    bool doSplit   = !doNone && !doDiscard; // "split" is the default
+
+    // ------------------------------------------------------------------ //
+    // Dependency analysis: compute which kernels and helpers go where.
+    // ------------------------------------------------------------------ //
+    DenseSet<StringAttr> primaryKernels;
+    DenseSet<StringAttr> primaryOnlyHelpers; // Split mode only
+    DenseSet<StringAttr> reachable;          // Discard mode only
+
+    if (doNone) {
+      // All kernels → primary. No analysis needed.
+      module.walk([&](offload::FuncOp fn) {
+        if (fn.getExecSpace() == ExecSpace::global)
+          primaryKernels.insert(fn.getNameAttr());
+      });
+    } else if (doDiscard) {
+      // Seed from launch ops, then forward-reachability to find live helpers.
+      DenseMap<StringAttr, SmallVector<StringAttr>> deps, revDeps;
+      buildDepMap(module, deps, revDeps);
+      module.walk([&](offload::KernelLaunchOp l) {
+        primaryKernels.insert(l.getCalleeAttr().getAttr());
+      });
+      computeReachableFrom(deps, primaryKernels, reachable);
+    } else {
+      // Split mode (default): full analysis placing dead kernels in deferred.
+      computePrimarySet(module, primaryKernels, primaryOnlyHelpers);
+    }
+
+    // ------------------------------------------------------------------ //
+    // Step 0: Collect offload.global_var ops.
     //
     // offload.global_var represents a device-qualified variable (__device__,
     // __constant__, __shared__, __managed__).
     //
-    // __shared__ (mem_space = shared): Leave in place — the subsequent
-    // LowerOffloadSharedGlobalsPass emits an llvm.mlir.global with addr_space=3
-    // into the gpu.module and then erases the offload.global_var.
+    // __shared__ (mem_space = shared): Left in the outer module for now —
+    // LowerSharedGlobalsPass places it into the appropriate gpu.module(s) and
+    // erases the offload.global_var.
     //
-    // All other mem_spaces: full device lowering is deferred; erase now so that
-    // the CIR-to-LLVM pass does not see unknown ops.  The host-side shadow
-    // cir.global (emitted by CIRGenModule::emitGlobalVarDefinition before
-    // the offload.global_var conversion) is intentionally preserved so that
-    // host code that takes the address of a device symbol still compiles.
+    // device/constant/managed: moved into the primary gpu.module in Step 1b.
+    //
+    // All other mem_spaces: erase; the host-side shadow cir.global (emitted
+    // by CIRGenModule::emitGlobalVarDefinition) is intentionally preserved.
     // ------------------------------------------------------------------ //
     SmallVector<offload::GlobalVarOp> globalVars;
     module.walk([&](offload::GlobalVarOp gv) { globalVars.push_back(gv); });
@@ -330,66 +526,136 @@ struct SplitSingleSourcePass
           gv.getMemSpace() == MemSpace::device ||
           gv.getMemSpace() == MemSpace::constant ||
           gv.getMemSpace() == MemSpace::managed)
-        continue; // handled by LowerSharedGlobalsPass
+        continue; // handled below (Step 1b) or by LowerSharedGlobalsPass
       gv.erase();
     }
 
     // ------------------------------------------------------------------ //
-    // Step 1: Create the gpu.module to hold device functions.
+    // Step 1: Create the gpu.module(s) to hold device functions.
+    //
+    // The primary module always exists.  The deferred module is created only
+    // in Split mode and erased at the end if it ends up with no kernels.
     // ------------------------------------------------------------------ //
     builder.setInsertionPointToEnd(module.getBody());
-    auto gpuModule = builder.create<gpu::GPUModuleOp>(
-        module.getLoc(), gpuModuleName);
+    auto gpuModulePrimary = gpu::GPUModuleOp::create(
+        builder, module.getLoc(), gpuModuleName);
+    gpu::GPUModuleOp gpuModuleDeferred;
+    if (doSplit)
+      gpuModuleDeferred = gpu::GPUModuleOp::create(
+          builder, module.getLoc(), deferredGpuModuleName);
 
     // ------------------------------------------------------------------ //
-    // Step 1b: Move device offload.global_var ops into the gpu.module.
+    // Step 1b: Move device offload.global_var ops into the gpu.module(s).
     //
     // gpu.module is IsolatedFromAbove (a nested SymbolTable).  Once device
     // function bodies are cloned into gpu.func ops inside the gpu.module,
-    // any cir.get_global inside those bodies uses lookupNearestSymbolFrom
-    // which stops at the gpu.module boundary.  The offload.global_var must
-    // therefore be visible inside the gpu.module before the clone happens.
+    // any cir.get_global / llvm.mlir.addressof inside those bodies uses
+    // lookupNearestSymbolFrom which stops at the gpu.module boundary.  The
+    // offload.global_var must therefore be visible inside the gpu.module
+    // before the clone happens.
     //
     // We move the offload.global_var as-is (keeping its CIR type) rather
     // than converting it here, because this pass has no access to CIR-dialect
-    // type converters.  ConvertOffloadDeviceGlobalsPass (in LowerToLLVM.cpp)
-    // runs after this pass and converts the offload.global_var ops inside the
-    // gpu.module to llvm.mlir.global using prepareTypeConverter.
+    // type converters.  ConvertCIRInGpuModulePass (in LowerToLLVM.cpp)
+    // runs after this pass and converts the offload.global_var ops inside
+    // each gpu.module to llvm.mlir.global using prepareTypeConverter.
+    //
+    // Placement rules:
+    //   - Non-replicable globals (device/constant/managed): primary only.
+    //     These globals represent single device-wide allocations; two copies
+    //     would create distinct allocations and break host-side symbol lookup.
+    //   - Shared globals (__shared__): replicated into every gpu.module
+    //     (primary always; deferred if it exists).  Each gpu.module's kernels
+    //     get their own per-block LDS allocation — replication is safe and
+    //     necessary for correct symbol resolution inside each module.
     // ------------------------------------------------------------------ //
     {
-      OpBuilder gpuBuilder(ctx);
-      gpuBuilder.setInsertionPointToStart(gpuModule.getBody());
-      SmallVector<offload::GlobalVarOp> deviceGlobals;
       for (auto gv : globalVars) {
         auto ms = gv.getMemSpace();
-        if (ms == MemSpace::shared || ms == MemSpace::device ||
-            ms == MemSpace::constant || ms == MemSpace::managed)
-          deviceGlobals.push_back(gv);
+        if (ms == MemSpace::device || ms == MemSpace::constant ||
+            ms == MemSpace::managed) {
+          // Non-replicable: move into primary only.
+          gv->moveBefore(gpuModulePrimary.getBody(),
+                         gpuModulePrimary.getBody()->begin());
+        } else if (ms == MemSpace::shared) {
+          // Replicable: clone into deferred (if it exists), move into primary.
+          if (doSplit && gpuModuleDeferred) {
+            OpBuilder::InsertionGuard guard(builder);
+            builder.setInsertionPointToStart(gpuModuleDeferred.getBody());
+            builder.clone(*gv.getOperation());
+          }
+          gv->moveBefore(gpuModulePrimary.getBody(),
+                         gpuModulePrimary.getBody()->begin());
+        }
       }
-      for (auto gv : deviceGlobals)
-        gv->moveBefore(gpuModule.getBody(), gpuModule.getBody()->begin());
     }
 
     // ------------------------------------------------------------------ //
-    // Step 2: Lower each offload.func according to its exec_space.
+    // Step 2: Lower each offload.func according to its exec_space and mode.
     // ------------------------------------------------------------------ //
     for (offload::FuncOp fn : offloadFuncs) {
       ExecSpace es = fn.getExecSpace();
 
-      // Device side.
-      if (isDeviceExecSpace(es))
-        lowerToGpuFunc(builder, fn, gpuModule);
+      if (es == ExecSpace::global) {
+        if (primaryKernels.count(fn.getNameAttr())) {
+          // Launched kernel (or "none" mode where all are primary).
+          lowerToGpuFunc(builder, fn, gpuModulePrimary);
+        } else if (doSplit) {
+          // Dead kernel in Split mode → deferred module.
+          lowerToGpuFunc(builder, fn, gpuModuleDeferred);
+        }
+        // Discard mode: dead kernel is simply dropped (no lowering).
 
-      // Host side.
-      if (isHostExecSpace(es))
+      } else if (es == ExecSpace::device) {
+        if (doDiscard && !reachable.count(fn.getNameAttr())) {
+          // Exclusive helper (not reachable from any primary kernel): drop it.
+          fn.erase();
+          continue;
+        }
+        // Helper always goes to primary.
+        lowerToGpuFunc(builder, fn, gpuModulePrimary);
+        // In Split mode, replicate replicable helpers to deferred.
+        if (doSplit && !primaryOnlyHelpers.count(fn.getNameAttr()))
+          lowerToGpuFunc(builder, fn, gpuModuleDeferred);
+
+      } else if (es == ExecSpace::host_device) {
+        // Device-side clone: drop in Discard mode if not reachable.
+        bool deviceReachable =
+            !doDiscard || reachable.count(fn.getNameAttr());
+        if (deviceReachable) {
+          lowerToGpuFunc(builder, fn, gpuModulePrimary);
+          if (doSplit && !primaryOnlyHelpers.count(fn.getNameAttr()))
+            lowerToGpuFunc(builder, fn, gpuModuleDeferred);
+        }
+        // Host-side clone is always kept.
         lowerToFuncFunc(builder, fn, module);
+
+      } else {
+        // Host-only function.
+        lowerToFuncFunc(builder, fn, module);
+      }
 
       // Remove the original offload.func.
       fn.erase();
     }
 
+    // Erase the deferred module if it contains no kernels.  Replicable helpers
+    // may have been cloned there even when all kernels were referenced; in that
+    // case the helpers serve no purpose in an otherwise-empty binary.
+    if (doSplit) {
+      bool deferredHasKernel = false;
+      gpuModuleDeferred.walk([&](gpu::GPUFuncOp f) {
+        if (f->hasAttr(gpu::GPUDialect::getKernelFuncAttrName()))
+          deferredHasKernel = true;
+      });
+      if (!deferredHasKernel)
+        gpuModuleDeferred.erase();
+    }
+
     // ------------------------------------------------------------------ //
     // Step 3: Lower offload.kernel_launch → gpu.launch_func.
+    //
+    // All launch sites reference kernels in the primary module.
     // ------------------------------------------------------------------ //
     SmallVector<offload::KernelLaunchOp> launches;
     module.walk(

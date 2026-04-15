@@ -41,14 +41,45 @@ def OffloadSplitSingleSourcePass
     `offload.kernel_launch` ops are replaced by `gpu.launch_func` ops that
     reference the newly-created gpu.module by name.
 
-    The gpu.module name defaults to `"offload_device_module"` but can be
-    overridden via the `gpu-module-name` option.
+    The handling of kernels with no observable launch site is controlled by
+    `dead-kernel-action`:
+
+    - `"none"`: place all kernels in the primary gpu.module (no secondary module).
+    - `"split"` (default): place dead kernels in a secondary gpu.module
+      (`deferred-gpu-module-name`), which the HIP runtime only loads when one of
+      its kernels is first needed, avoiding unnecessary compile/load cost.
+    - `"discard"`: drop dead kernels entirely, along with any device helpers that
+      are only transitively reachable from discarded kernels.
+
+    When `dead-kernel-action=split`, device helper functions (`exec_space = device`)
+    and the device-side clone of `host_device` functions are replicated into every
+    gpu.module that contains a kernel calling them, provided they do not
+    transitively reference non-replicable globals (`__device__`, `__constant__`,
+    `__managed__`).  Helpers that do reference such globals are placed only in the
+    primary module; any dead kernel calling them stays in the primary module too.
+
+    The secondary gpu.module is omitted entirely when all kernels are referenced,
+    or when `dead-kernel-action` is `"none"` or `"discard"`.
+
+    Module names default to `"offload_device_module"` and
+    `"offload_device_module_deferred"` but can be overridden via the
+    `gpu-module-name` and `deferred-gpu-module-name` options.
   }];
 
   let options = [
     Option<"gpuModuleName", "gpu-module-name", "std::string",
            /*default=*/"\"offload_device_module\"",
-           "Name of the generated gpu.module">
+           "Name of the primary gpu.module (kernels with visible launch sites)">,
+    Option<"deferredGpuModuleName", "deferred-gpu-module-name", "std::string",
+           /*default=*/"\"offload_device_module_deferred\"",
+           "Name of the secondary gpu.module for kernels with no visible launch site">,
+    Option<"deadKernelAction", "dead-kernel-action", "std::string",
+           /*default=*/"\"split\"",
+           "How to handle kernels with no observable launch site. "
+           "\"none\": place all kernels in the primary gpu.module (no secondary module). "
+           "\"split\" (default): place dead kernels in a secondary gpu.module. "
+           "\"discard\": drop dead kernels and any device helpers only reachable "
+           "from discarded kernels.">
   ];
 
   let dependentDialects = [
@@ -123,7 +154,11 @@ def OffloadLowerSharedGlobalsPass
   let options = [
     Option<"gpuModuleName", "gpu-module-name", "std::string",
            /*default=*/"\"offload_device_module\"",
-           "Name of the gpu.module to insert shared globals into">
+           "Name of the primary gpu.module to insert shared globals into">,
+    Option<"deferredGpuModuleName", "deferred-gpu-module-name", "std::string",
+           /*default=*/"\"offload_device_module_deferred\"",
+           "Name of the secondary (deferred) gpu.module; shared globals used "
+           "exclusively by deferred kernels are placed here">
   ];
 
   let dependentDialects = [

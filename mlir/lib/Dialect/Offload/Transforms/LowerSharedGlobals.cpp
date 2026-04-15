@@ -7,7 +7,8 @@
 //===----------------------------------------------------------------------===//
 //
 // This pass lowers `offload.global_var` ops with device-side mem_spaces to
-// `llvm.mlir.global` inside the `gpu.module` produced by `SplitSingleSourcePass`.
+// `llvm.mlir.global` inside the `gpu.module`(s) produced by
+// `SplitSingleSourcePass`.
 //
 //   mem_space = shared   → addr_space = 3  (AMDGPU LDS / NVPTX .shared)
 //   mem_space = device   → addr_space = 1  (AMDGPU / NVPTX global memory)
@@ -17,7 +18,15 @@
 // The globals are always zero-initialized in the device binary; the host sets
 // device/constant values via hipMemcpyToSymbol / cudaMemcpyToSymbol.
 //
-// Run this pass *after* SplitSingleSourcePass (so the gpu.module exists) and
+// Placement rules:
+//   - device / constant / managed globals: primary module only.  These globals
+//     cannot be safely replicated (two copies = two distinct allocations).
+//   - shared globals: placed in every gpu.module that contains a gpu.func
+//     referencing the global's symbol.  This supports the two-module split
+//     where __shared__ static arrays may appear in both the primary and the
+//     deferred module.
+//
+// Run this pass *after* SplitSingleSourcePass (so the gpu.module(s) exist) and
 // *before* ConvertCIRInGpuModulePass (which requires LLVM dialect in gpu.func
 // bodies).
 //
@@ -68,6 +77,39 @@ static std::optional<DeviceGlobalInfo> getDeviceGlobalInfo(MemSpace ms) {
   }
 }
 
+/// Return true if this global mem_space cannot be safely replicated across
+/// gpu.modules.  Only __shared__ (per-block, statically allocated) is safe.
+static bool isNonReplicableMemSpace(MemSpace ms) {
+  return ms == MemSpace::device || ms == MemSpace::constant ||
+         ms == MemSpace::managed;
+}
+
+/// Emit an llvm.mlir.global for \p gv into \p gpuModule.
+static void emitGlobalInModule(OpBuilder &builder,
+                                LLVMTypeConverter &converter,
+                                offload::GlobalVarOp gv,
+                                gpu::GPUModuleOp gpuModule,
+                                const DeviceGlobalInfo &info) {
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToStart(gpuModule.getBody());
+
+  mlir::Type elemTy = gv.getType();
+  mlir::Type llvmTy = converter.convertType(elemTy);
+  if (!llvmTy) {
+    gv.emitError("LowerSharedGlobals: cannot convert type ")
+        << elemTy << " to LLVM for device variable @" << gv.getSymName();
+    return;
+  }
+
+  mlir::LLVM::GlobalOp::create(
+      builder, gv.getLoc(), llvmTy,
+      /*isConstant=*/info.isConstant, mlir::LLVM::Linkage::Internal,
+      gv.getSymName(),
+      /*value=*/mlir::Attribute{},
+      /*alignment=*/0,
+      /*addrSpace=*/info.addrSpace);
+}
+
 struct LowerSharedGlobalsPass
     : offload::impl::OffloadLowerSharedGlobalsPassBase<LowerSharedGlobalsPass> {
 
@@ -77,65 +119,99 @@ struct LowerSharedGlobalsPass
     ModuleOp module = getOperation();
     MLIRContext *ctx = module.getContext();
 
-    // Find the gpu.module by name.
-    gpu::GPUModuleOp gpuModule;
+    // Find the primary gpu.module and optionally the deferred gpu.module.
+    gpu::GPUModuleOp gpuModulePrimary;
+    gpu::GPUModuleOp gpuModuleDeferred;
     module.walk([&](gpu::GPUModuleOp gm) {
       if (gm.getName() == gpuModuleName)
-        gpuModule = gm;
+        gpuModulePrimary = gm;
+      else if (gm.getName() == deferredGpuModuleName)
+        gpuModuleDeferred = gm;
     });
-    if (!gpuModule)
-      return; // No gpu.module found — nothing to do.
+    if (!gpuModulePrimary)
+      return; // No primary gpu.module — nothing to do.
 
     // Collect all offload.global_var ops that map to device-side globals.
-    // SplitSingleSourcePass (Step 1b) moves device globals *into* the
-    // gpu.module, so walk only the gpu.module body here.  Walking the outer
-    // module would miss them (they are no longer there) and a broader walk
-    // would skip them via the "already present" guard below, erroneously
-    // erasing the op without emitting its llvm.mlir.global replacement.
+    // SplitSingleSourcePass (Step 1b) moves ALL device globals (shared,
+    // device, constant, managed) into the gpu.module(s):
+    //   - Non-shared (device/constant/managed): primary module only.
+    //   - Shared: primary module always, deferred module if it exists.
+    // Collect globals from both gpu.modules; also fall back to collecting
+    // from the outer module for any shared globals that were left there
+    // (e.g. when running this pass standalone in tests without Step 1b).
     SmallVector<offload::GlobalVarOp> deviceVars;
-    gpuModule.walk([&](offload::GlobalVarOp gv) {
+    // Globals inside the primary gpu.module (all mem_spaces after Step 1b).
+    gpuModulePrimary.walk([&](offload::GlobalVarOp gv) {
       if (getDeviceGlobalInfo(gv.getMemSpace()))
         deviceVars.push_back(gv);
     });
+    // Shared globals that may still be in the deferred gpu.module.
+    if (gpuModuleDeferred) {
+      gpuModuleDeferred.walk([&](offload::GlobalVarOp gv) {
+        if (gv.getMemSpace() == MemSpace::shared &&
+            getDeviceGlobalInfo(gv.getMemSpace()))
+          deviceVars.push_back(gv);
+      });
+    }
+    // Fallback: shared globals still in the outer module (standalone/test use).
+    for (auto &op : *module.getBody()) {
+      if (auto gv = dyn_cast<offload::GlobalVarOp>(&op))
+        if (gv.getMemSpace() == MemSpace::shared &&
+            getDeviceGlobalInfo(gv.getMemSpace()))
+          deviceVars.push_back(gv);
+    }
     if (deviceVars.empty())
       return;
 
-    // Build a type converter to map CIR/standard types to LLVM types.
-    // We use the standard LLVMTypeConverter which handles builtin types
-    // (i1, iN, f32, f64, arrays, etc.) and LLVM-legal types natively.
     LLVMTypeConverter converter(ctx);
-
     OpBuilder builder(ctx);
-    builder.setInsertionPointToStart(gpuModule.getBody());
 
     for (offload::GlobalVarOp gv : deviceVars) {
       auto info = getDeviceGlobalInfo(gv.getMemSpace());
       assert(info && "only device vars collected above");
 
-      mlir::Type elemTy = gv.getType();
+      // Determine which gpu.module owns this global.
+      gpu::GPUModuleOp ownerModule;
+      if (gv->getParentOp() == gpuModulePrimary.getOperation())
+        ownerModule = gpuModulePrimary;
+      else if (gpuModuleDeferred &&
+               gv->getParentOp() == gpuModuleDeferred.getOperation())
+        ownerModule = gpuModuleDeferred;
 
-      // Convert the type using the LLVM type converter.
-      mlir::Type llvmTy = converter.convertType(elemTy);
-      if (!llvmTy) {
-        gv.emitError("LowerSharedGlobals: cannot convert type ")
-            << elemTy << " to LLVM for device variable @" << gv.getSymName();
-        signalPassFailure();
-        return;
+      if (isNonReplicableMemSpace(gv.getMemSpace())) {
+        // Non-replicable globals: emit into the module that owns them (primary).
+        gpu::GPUModuleOp target = ownerModule ? ownerModule : gpuModulePrimary;
+        emitGlobalInModule(builder, converter, gv, target, *info);
+      } else {
+        // Shared globals: emit into the owning module.
+        // If the global is still in the outer module (fallback/test path),
+        // use the symbol-use check to decide placement.
+        if (ownerModule) {
+          emitGlobalInModule(builder, converter, gv, ownerModule, *info);
+        } else {
+          // Fallback: outer-module shared global — check symbol uses.
+          bool placed = false;
+          auto primaryUses = SymbolTable::getSymbolUses(
+              gv.getSymNameAttr(), gpuModulePrimary.getOperation());
+          if (primaryUses && !primaryUses->empty()) {
+            emitGlobalInModule(builder, converter, gv, gpuModulePrimary, *info);
+            placed = true;
+          }
+          if (gpuModuleDeferred) {
+            auto deferredUses = SymbolTable::getSymbolUses(
+                gv.getSymNameAttr(), gpuModuleDeferred.getOperation());
+            if (deferredUses && !deferredUses->empty()) {
+              emitGlobalInModule(builder, converter, gv, gpuModuleDeferred,
+                                 *info);
+              placed = true;
+            }
+          }
+          if (!placed)
+            emitGlobalInModule(builder, converter, gv, gpuModulePrimary, *info);
+        }
       }
 
-      // Emit llvm.mlir.global internal @name {addr_space = N} : llvmTy
-      // inside the gpu.module.  All device-side globals are zero-initialized
-      // at device binary load time; the host sets values via
-      // hipMemcpyToSymbol / cudaMemcpyToSymbol.
-      mlir::LLVM::GlobalOp::create(
-          builder, gv.getLoc(), llvmTy,
-          /*isConstant=*/info->isConstant, mlir::LLVM::Linkage::Internal,
-          gv.getSymName(),
-          /*value=*/mlir::Attribute{},
-          /*alignment=*/0,
-          /*addrSpace=*/info->addrSpace);
-
-      // Erase the offload.global_var from the unified module.
+      // Erase the offload.global_var from wherever it lives.
       gv.erase();
     }
   }
