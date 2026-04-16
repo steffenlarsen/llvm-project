@@ -112,6 +112,13 @@ struct LowerSharedGlobalsPass
       auto info = getDeviceGlobalInfo(gv.getMemSpace());
       assert(info && "only device vars collected above");
 
+      // SplitSingleSourcePass may have already lowered this global into the
+      // gpu.module (Step 1b).  Skip it to avoid duplicate symbol errors.
+      if (SymbolTable::lookupSymbolIn(gpuModule, gv.getSymName())) {
+        gv.erase();
+        continue;
+      }
+
       mlir::Type elemTy = gv.getType();
 
       // Convert the type using the LLVM type converter.
