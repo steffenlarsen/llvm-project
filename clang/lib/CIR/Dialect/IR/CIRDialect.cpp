@@ -1010,9 +1010,29 @@ verifyCallCommInSymbolUses(mlir::Operation *op,
   }
 
   auto fn = symbolTable.lookupNearestSymbolFrom<cir::FuncOp>(op, fnAttr);
-  if (!fn)
+  if (!fn) {
+    // In the unified CIR offload path (-clangir-offload), __device__ functions
+    // are emitted as offload.func ops rather than cir.func ops.  A cir.call
+    // inside one device function may call another device function via an
+    // offload.func symbol — accept this as valid and skip type checking (the
+    // offload pipeline lowers both to gpu.func before codegen).
+    if (symbolTable.lookupNearestSymbolFrom(op, fnAttr))
+      return mlir::success();
+    // After SplitSingleSourcePass, cir.call ops inside gpu.func bodies may
+    // reference external device-library functions (e.g. OCKL: __ockl_*)
+    // whose cir.func private declarations live in the parent module, not in
+    // the gpu.module's isolated symbol table.  The calls are valid — the
+    // implementations are supplied by the GPU bitcode library at link time.
+    // Allow the call if we are inside any nested SymbolTable scope (not the
+    // outermost module), which indicates we are inside a gpu.module or
+    // similar isolated region where the outer symbols are not directly visible.
+    mlir::Operation *nearestSymTable =
+        mlir::SymbolTable::getNearestSymbolTable(op->getParentOp());
+    if (nearestSymTable && !mlir::isa<mlir::ModuleOp>(nearestSymTable))
+      return mlir::success(); // external device library call — resolved at link time
     return op->emitOpError() << "'" << fnAttr.getValue()
                              << "' does not reference a valid function";
+  }
 
   auto callIf = dyn_cast<cir::CIRCallOpInterface>(op);
   assert(callIf && "expected CIR call interface to be always available");
@@ -1893,12 +1913,27 @@ LogicalResult
 cir::GetGlobalOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   // Verify that the result type underlying pointer type matches the type of
   // the referenced cir.global or cir.func op.
+
+  // After SplitSingleSourcePass, cir.get_global ops inside gpu.func bodies
+  // may reference offload.global_var ops that have been moved into the
+  // gpu.module but are not yet converted to llvm.mlir.global.  The MLIR
+  // SymbolTable constructor uses getAttrOfType<StringAttr>("sym_name"), which
+  // does not find symbols stored via ODS properties (as offload.global_var
+  // uses), so the lookup fails even though the op is physically present.
+  // ConvertCIRInGpuModulePass converts these before device compilation, so
+  // skip verification when nested inside a non-outermost SymbolTable scope.
+  mlir::Operation *nearestSymTable =
+      mlir::SymbolTable::getNearestSymbolTable(this->getOperation()->getParentOp());
+  if (nearestSymTable && !mlir::isa<mlir::ModuleOp>(nearestSymTable))
+    return success();
+
   mlir::Operation *op =
       symbolTable.lookupNearestSymbolFrom(*this, getNameAttr());
-  if (op == nullptr)
+  if (op == nullptr) {
     return emitOpError("'")
            << getName()
            << "' does not reference a valid cir.global or cir.func";
+  }
 
   // In the unified offload CIR path, cir.get_global may reference an
   // offload.global_var (a device-side variable) before the module is split

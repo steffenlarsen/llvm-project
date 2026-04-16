@@ -1573,10 +1573,18 @@ void CIRGenModule::emitGlobalVarDefinition(const clang::VarDecl *vd,
           }
         }
       }
+      // Use the CIR type derived from the VarDecl, not gv.getSymType().
+      // For function-local __shared__ variables, the cir::GlobalOp was created
+      // in the __device_stub__ host context where convertTypeForMem produces an
+      // LLVM type (e.g. !llvm.array<N x f32>).  The device function body's
+      // cir.get_global uses a CIR pointer type (!cir.ptr<!cir.array<!cir.float x N>>)
+      // which the CIR verifier checks against the global's type.  Using the CIR
+      // type here keeps the offload.global_var consistent with device references.
+      mlir::Type cirVarTy = convertType(vd->getType());
       builder.setInsertionPoint(gv);
       mlir::offload::GlobalVarOp offloadGV =
           mlir::offload::GlobalVarOp::create(builder, gv.getLoc(),
-                                             gv.getSymName(), gv.getSymType(),
+                                             gv.getSymName(), cirVarTy,
                                              memSpace, externInit, initVal);
       // If lastGlobalOp tracked this cir::GlobalOp, it would become a dangling
       // pointer after the erase.  Reset it so createGlobalOp falls back to

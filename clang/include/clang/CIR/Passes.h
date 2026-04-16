@@ -26,7 +26,8 @@ std::unique_ptr<mlir::Pass> createConvertCIRToLLVMPass();
 void populateCIRToLLVMPasses(mlir::OpPassManager &pm,
                              bool enableOffloadSplit = false,
                              llvm::ArrayRef<std::string> offloadArchs = {},
-                             bool isDeviceCompilation = false);
+                             bool isDeviceCompilation = false,
+                             unsigned deviceOptLevel = 2);
 
 } // namespace direct
 } // end namespace cir

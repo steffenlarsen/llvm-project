@@ -35,7 +35,8 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule,
                              llvm::StringRef mlirSaveTempsOutFile = {},
                              bool enableOffloadSplit = false,
                              llvm::ArrayRef<std::string> offloadArchs = {},
-                             bool isDeviceCompilation = false);
+                             bool isDeviceCompilation = false,
+                             unsigned deviceOptLevel = 2);
 } // namespace direct
 } // namespace cir
 

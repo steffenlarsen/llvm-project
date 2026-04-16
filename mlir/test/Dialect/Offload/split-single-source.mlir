@@ -111,11 +111,11 @@ offload.func @hostUtil(%x: f32) -> f32
 // -----
 
 //===----------------------------------------------------------------------===//
-// launch_bounds → known_block_size on the gpu.func
+// launch_bounds → rocdl.flat_work_group_size on the gpu.func
 //===----------------------------------------------------------------------===//
 
 // CHECK:      gpu.func @boundsKernel
-// CHECK-SAME: known_block_size = array<i32: 256, 1, 1>
+// CHECK-SAME: rocdl.flat_work_group_size = "1,256"
 
 offload.func @boundsKernel(%x: f32)
     exec_space = #offload.exec_space<global>

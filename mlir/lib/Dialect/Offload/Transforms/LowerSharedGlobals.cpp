@@ -87,8 +87,13 @@ struct LowerSharedGlobalsPass
       return; // No gpu.module found — nothing to do.
 
     // Collect all offload.global_var ops that map to device-side globals.
+    // SplitSingleSourcePass (Step 1b) moves device globals *into* the
+    // gpu.module, so walk only the gpu.module body here.  Walking the outer
+    // module would miss them (they are no longer there) and a broader walk
+    // would skip them via the "already present" guard below, erroneously
+    // erasing the op without emitting its llvm.mlir.global replacement.
     SmallVector<offload::GlobalVarOp> deviceVars;
-    module.walk([&](offload::GlobalVarOp gv) {
+    gpuModule.walk([&](offload::GlobalVarOp gv) {
       if (getDeviceGlobalInfo(gv.getMemSpace()))
         deviceVars.push_back(gv);
     });

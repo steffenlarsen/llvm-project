@@ -27,6 +27,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Offload/IR/OffloadDialect.h"
 #include "mlir/IR/Builders.h"
@@ -966,8 +967,14 @@ struct LowerHostRuntimePass
     // ------------------------------------------------------------------ //
     {
       SmallVector<offload::GlobalVarOp> allGlobalVars;
-      module.walk(
-          [&](offload::GlobalVarOp gv) { allGlobalVars.push_back(gv); });
+      module.walk([&](offload::GlobalVarOp gv) {
+        // Skip globals that have been moved into a gpu.module by
+        // SplitSingleSourcePass (Step 1b).  Those will be converted to
+        // llvm.mlir.global by ConvertCIRInGpuModulePass.
+        if (gv->getParentOfType<mlir::gpu::GPUModuleOp>())
+          return;
+        allGlobalVars.push_back(gv);
+      });
 
       SmallVector<offload::GlobalVarOp> initGlobals;
       for (auto gv : allGlobalVars)

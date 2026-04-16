@@ -19,8 +19,10 @@
 
 #include "mlir/Dialect/Offload/Transforms/Passes.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Offload/IR/OffloadDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -83,11 +85,49 @@ static gpu::GPUFuncOp lowerToGpuFunc(OpBuilder &builder,
     gpuFunc->setAttr(gpu::GPUDialect::getKernelFuncAttrName(),
                      builder.getUnitAttr());
 
-  // Propagate launch_bounds as known_block_size if present.
+  // Propagate launch_bounds as rocdl.flat_work_group_size if present.
+  //
+  // __launch_bounds__(N) means "at most N threads per block" — it constrains
+  // the *flat* (total) thread count without implying a 1-D block shape.
+  // The gpu.known_block_size attribute WOULD encode the exact block shape
+  // (e.g. [256, 1, 1]), which causes the AMDGPU back end to fold
+  // workitem.id.y to 0 when the Y dimension is 1.  For a launch configuration
+  // like dim3(16, 16, 1) with launch_bounds(256) that would be wrong.
+  //
+  // Instead, set rocdl.flat_work_group_size = "1,N" directly on the gpu.func.
+  // GPUFuncOpLowering forwards unknown discardable attributes to the llvm.func,
+  // and the ROCDL LLVM-IR translator converts rocdl.flat_work_group_size to the
+  // "amdgpu-flat-work-group-size" function attribute — exactly what clang emits
+  // for __launch_bounds__(N) in standard HIP compilation.
   if (auto lb = offloadFunc.getLaunchBoundsAttr()) {
-    auto val = static_cast<int32_t>(lb.getMaxThreadsPerBlock());
-    gpuFunc->setAttr("known_block_size",
-                     builder.getDenseI32ArrayAttr({val, 1, 1}));
+    auto maxN = lb.getMaxThreadsPerBlock();
+    // "1,N" matches the range clang emits for __launch_bounds__(N):
+    //   amdgpu-flat-work-group-size="1,N"
+    std::string flatWGSVal = "1," + std::to_string(maxN);
+    gpuFunc->setAttr("rocdl.flat_work_group_size",
+                     builder.getStringAttr(flatWGSVal));
+    // Two-arg __launch_bounds__(maxThreads, minBlocks) additionally emits
+    // amdgpu-waves-per-eu=minBlocks which instructs the VGPR allocator to
+    // target at least minBlocks waves/SIMD, unlocking a larger VGPR budget
+    // and eliminating spilling on high-register-pressure kernels.
+    if (auto minBlocks = lb.getMinBlocksPerSM()) {
+      auto i32Ty = builder.getIntegerType(32);
+      gpuFunc->setAttr("rocdl.waves_per_eu",
+                       builder.getIntegerAttr(i32Ty, *minBlocks));
+    }
+  } else {
+    // No launch_bounds specified (neither by the user nor by
+    // TightenLaunchBoundsPass).  Mirror the HIP frontend's conservative
+    // default: clang's AMDGPUTargetCodeGenInfo::setFunctionDeclAttributes
+    // unconditionally emits amdgpu-flat-work-group-size="1,1024" for every
+    // HIP __global__ kernel that lacks an explicit bound, using the value of
+    // --gpu-max-threads-per-block (default 1024).  Without this, the CIR path
+    // leaves the attribute absent, and the AMDGPU backend is free to allocate
+    // registers without occupancy pressure — producing different (better for
+    // that kernel, but inconsistent) codegen compared to standard HIP.
+    if (offloadFunc.getExecSpace() == ExecSpace::global)
+      gpuFunc->setAttr("rocdl.flat_work_group_size",
+                       builder.getStringAttr("1,1024"));
   }
 
   // Clone the entire function body (all blocks) into the gpu.func.
@@ -212,7 +252,12 @@ static void lowerKernelLaunch(OpBuilder &builder,
                              launch.getBlockZ()};
 
   // Forward dynamic shared memory from the launch op (null = no shmem).
+  // offload.kernel_launch carries shared_mem as `index`; gpu.launch_func
+  // requires `i32`, so insert an index_cast when the value is present.
   Value dynamicSharedMem = launch.getSharedMem();
+  if (dynamicSharedMem)
+    dynamicSharedMem = builder.create<arith::IndexCastOp>(
+        loc, builder.getIntegerType(32), dynamicSharedMem);
 
   // Collect the stream-producing op before erasing the launch; an
   // unrealized_conversion_cast to !offload.stream is illegal in
@@ -295,6 +340,35 @@ struct SplitSingleSourcePass
     builder.setInsertionPointToEnd(module.getBody());
     auto gpuModule = builder.create<gpu::GPUModuleOp>(
         module.getLoc(), gpuModuleName);
+
+    // ------------------------------------------------------------------ //
+    // Step 1b: Move device offload.global_var ops into the gpu.module.
+    //
+    // gpu.module is IsolatedFromAbove (a nested SymbolTable).  Once device
+    // function bodies are cloned into gpu.func ops inside the gpu.module,
+    // any cir.get_global inside those bodies uses lookupNearestSymbolFrom
+    // which stops at the gpu.module boundary.  The offload.global_var must
+    // therefore be visible inside the gpu.module before the clone happens.
+    //
+    // We move the offload.global_var as-is (keeping its CIR type) rather
+    // than converting it here, because this pass has no access to CIR-dialect
+    // type converters.  ConvertOffloadDeviceGlobalsPass (in LowerToLLVM.cpp)
+    // runs after this pass and converts the offload.global_var ops inside the
+    // gpu.module to llvm.mlir.global using prepareTypeConverter.
+    // ------------------------------------------------------------------ //
+    {
+      OpBuilder gpuBuilder(ctx);
+      gpuBuilder.setInsertionPointToStart(gpuModule.getBody());
+      SmallVector<offload::GlobalVarOp> deviceGlobals;
+      for (auto gv : globalVars) {
+        auto ms = gv.getMemSpace();
+        if (ms == MemSpace::shared || ms == MemSpace::device ||
+            ms == MemSpace::constant || ms == MemSpace::managed)
+          deviceGlobals.push_back(gv);
+      }
+      for (auto gv : deviceGlobals)
+        gv->moveBefore(gpuModule.getBody(), gpuModule.getBody()->begin());
+    }
 
     // ------------------------------------------------------------------ //
     // Step 2: Lower each offload.func according to its exec_space.

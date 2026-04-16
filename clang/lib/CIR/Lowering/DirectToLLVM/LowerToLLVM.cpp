@@ -62,6 +62,7 @@
 #include "clang/CIR/LoweringHelpers.h"
 #include "clang/CIR/MissingFeatures.h"
 #include "clang/CIR/Passes.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Casting.h"
@@ -1711,6 +1712,22 @@ rewriteCallOrInvoke(mlir::Operation *op, mlir::ValueRange callOperands,
     if (auto fn = mlir::dyn_cast<mlir::FunctionOpInterface>(callee)) {
       llvmFnTy = converter->convertType<mlir::LLVM::LLVMFunctionType>(
           fn.getFunctionType());
+      if (!llvmFnTy) {
+        // Callee is a gpu.func or other non-CIR FunctionOpInterface whose
+        // type is mlir::FunctionType — the LLVMTypeConverter has no rule for
+        // it.  Reconstruct the LLVM function type from the already-converted
+        // call operands and results instead.
+        mlir::MLIRContext *ctx = op->getContext();
+        mlir::Type retTy = llvmResults.empty()
+                               ? mlir::LLVM::LLVMVoidType::get(ctx)
+                               : (llvmResults.size() == 1
+                                      ? llvmResults[0]
+                                      : mlir::LLVM::LLVMStructType::getLiteral(
+                                            ctx, llvmResults));
+        SmallVector<mlir::Type> argTys(callOperands.getTypes());
+        llvmFnTy = mlir::LLVM::LLVMFunctionType::get(retTy, argTys,
+                                                      /*isVarArg=*/false);
+      }
       assert(llvmFnTy && "Failed to convert function type");
     } else if (auto alias = mlir::cast<mlir::LLVM::AliasOp>(callee)) {
       // If the callee was an alias. In that case,
@@ -2309,6 +2326,18 @@ mlir::LogicalResult CIRToLLVMGetGlobalOpLowering::matchAndRewrite(
   }
 
   mlir::Type type = getTypeConverter()->convertType(op.getType());
+
+  // If the referenced symbol is an LLVM global in a non-default address space
+  // (e.g. shared memory, address space 3 on AMDGCN), the AddressOfOp pointer
+  // must carry the same address space — otherwise its verifier fires.
+  if (auto llvmGlobal = mlir::dyn_cast_if_present<mlir::LLVM::GlobalOp>(
+          mlir::SymbolTable::lookupNearestSymbolFrom(
+              op, op.getNameAttr()))) {
+    unsigned addrSpace = llvmGlobal.getAddrSpace();
+    if (addrSpace != 0)
+      type = mlir::LLVM::LLVMPointerType::get(op.getContext(), addrSpace);
+  }
+
   mlir::Operation *newop = mlir::LLVM::AddressOfOp::create(
       rewriter, op.getLoc(), type, op.getName());
 
@@ -3479,13 +3508,25 @@ struct UnrealizedCastFoldingLowering
     }
 
     // Case 2: index → !cir.u32i cast emitted by CIRGenExprScalar for GPU
-    // built-in variables (threadIdx, blockIdx, etc.).  On a 64-bit target the
-    // converted input is an i64 (index type); truncate it to the LLVM type that
-    // !cir.u32i maps to (i32).
+    // built-in variables (threadIdx, blockIdx, etc.).
+    // Sub-case A: the converted input is still `index` (because the defining
+    // op, e.g. gpu.block_id, is legal and was not remapped by the converter).
+    // Use arith.index_castui to produce i32; after ConvertGpuOpsToROCDLOps the
+    // defining op becomes an i32 ROCDL intrinsic, so the cast becomes identity
+    // and is removed by the post-ROCDL cleanup sweep.
+    // Sub-case B: the converted input is i64 (index was remapped to i64).
+    // Truncate i64 → i32.
     if (op.getInputs().size() == 1 && op.getInputs()[0].getType().isIndex() &&
         convertedOutTy && mlir::isa<mlir::IntegerType>(convertedOutTy)) {
-      rewriter.replaceOpWithNewOp<mlir::LLVM::TruncOp>(op, convertedOutTy,
-                                                        converted);
+      if (converted.getType().isIndex()) {
+        // Sub-case A: input is still index — use arith.index_castui.
+        rewriter.replaceOpWithNewOp<mlir::arith::IndexCastUIOp>(
+            op, convertedOutTy, converted);
+      } else {
+        // Sub-case B: input was remapped to i64 — truncate.
+        rewriter.replaceOpWithNewOp<mlir::LLVM::TruncOp>(op, convertedOutTy,
+                                                          converted);
+      }
       return mlir::success();
     }
 
@@ -3705,6 +3746,108 @@ struct GPUFuncAllBlockArgsConversionPattern
   }
 };
 
+/// Lower `offload.global_var` ops with device-side mem_spaces to
+/// `llvm.mlir.global` inside the `gpu.module` produced by
+/// `SplitSingleSourcePass`.
+///
+/// This pass replaces `OffloadLowerSharedGlobalsPass` from MLIROffloadTransforms.
+/// It lives here (in clangCIRLoweringDirectToLLVM) because it needs to convert
+/// CIR types (e.g. !cir.array<!cir.float x N>) to LLVM types using
+/// `prepareTypeConverter`, which has access to the full CIR type hierarchy.
+/// The standalone `OffloadLowerSharedGlobalsPass` uses a bare LLVMTypeConverter
+/// that does not know about CIR types.
+///
+/// mem_space mappings:
+///   shared   → addr_space = 3  (AMDGPU LDS / NVPTX .shared)
+///   device   → addr_space = 1  (AMDGPU / NVPTX global memory)
+///   constant → addr_space = 4  (AMDGPU / NVPTX constant memory)
+///   managed  → addr_space = 0  (generic / unified memory)
+struct ConvertOffloadDeviceGlobalsPass
+    : public mlir::PassWrapper<ConvertOffloadDeviceGlobalsPass,
+                               mlir::OperationPass<mlir::ModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertOffloadDeviceGlobalsPass)
+
+  std::string gpuModuleName;
+
+  explicit ConvertOffloadDeviceGlobalsPass(llvm::StringRef name)
+      : gpuModuleName(name.str()) {}
+
+  llvm::StringRef getArgument() const override {
+    return "cir-convert-offload-device-globals";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Lower offload.global_var device globals to llvm.mlir.global in gpu.module";
+  }
+
+  void runOnOperation() override {
+    mlir::ModuleOp module = getOperation();
+    mlir::MLIRContext *ctx = module.getContext();
+
+    // Find the gpu.module by name.
+    mlir::gpu::GPUModuleOp gpuModule;
+    module.walk([&](mlir::gpu::GPUModuleOp gm) {
+      if (gm.getName() == gpuModuleName)
+        gpuModule = gm;
+    });
+    if (!gpuModule)
+      return;
+
+    // Collect all offload.global_var ops to lower.
+    llvm::SmallVector<mlir::offload::GlobalVarOp> deviceVars;
+    module.walk([&](mlir::offload::GlobalVarOp gv) {
+      using mlir::offload::MemSpace;
+      switch (gv.getMemSpace()) {
+      case MemSpace::shared:
+      case MemSpace::device:
+      case MemSpace::constant:
+      case MemSpace::managed:
+        deviceVars.push_back(gv);
+        break;
+      default:
+        break;
+      }
+    });
+    if (deviceVars.empty())
+      return;
+
+    // Build a type converter with full CIR type support.
+    // Use the outer module for DataLayout; gpuModule may lack layout attributes.
+    mlir::DataLayout dl(module);
+    mlir::LLVMTypeConverter converter(ctx);
+    prepareTypeConverter(converter, dl);
+
+    mlir::OpBuilder builder(ctx);
+    builder.setInsertionPointToStart(gpuModule.getBody());
+
+    for (mlir::offload::GlobalVarOp gv : deviceVars) {
+      using mlir::offload::MemSpace;
+      unsigned addrSpace = 0;
+      bool isConstant = false;
+      switch (gv.getMemSpace()) {
+      case MemSpace::shared:   addrSpace = 3; isConstant = false; break;
+      case MemSpace::device:   addrSpace = 1; isConstant = false; break;
+      case MemSpace::constant: addrSpace = 4; isConstant = true;  break;
+      case MemSpace::managed:  addrSpace = 0; isConstant = false; break;
+      default: llvm_unreachable("only device vars collected above");
+      }
+
+      mlir::Type llvmTy = converter.convertType(gv.getType());
+      if (!llvmTy) {
+        gv.emitError("ConvertOffloadDeviceGlobals: cannot convert type ")
+            << gv.getType() << " for device global @" << gv.getSymName();
+        signalPassFailure();
+        return;
+      }
+
+      mlir::LLVM::GlobalOp::create(builder, gv.getLoc(), llvmTy,
+                                   isConstant, mlir::LLVM::Linkage::Internal,
+                                   gv.getSymName(), mlir::Attribute{},
+                                   /*alignment=*/0, addrSpace);
+      gv.erase();
+    }
+  }
+};
+
 /// Lower CIR ops inside `gpu.func` bodies that were produced by the offload
 /// split pass.  `ConvertCIRToLLVMPass` leaves the entire `gpu.module` legal
 /// (untouched) so that it can be compiled as a separate device module.  This
@@ -3768,8 +3911,298 @@ struct ConvertCIRInGpuModulePass
     patterns.add<GPUFuncAllBlockArgsConversionPattern>(converter,
                                                        &getContext());
 
+    // ------------------------------------------------------------------ //
+    // Pre-pass: emit llvm.func declarations for external device-library
+    // functions (e.g. OCKL: __ockl_fprintf_*) that are called from device
+    // function bodies inside this gpu.module but whose declarations live in
+    // the parent module.
+    //
+    // gpu.module is IsolatedFromAbove and forms its own SymbolTable; calls
+    // to symbols not defined here fail the CIR verifier (and the LLVM
+    // dialect later).  We create opaque llvm.func declarations so that the
+    // call-lowering pattern (rewriteCallOrInvoke) finds an LLVM-typed callee
+    // and can emit the LLVM call correctly.  The actual implementations are
+    // supplied by the ROCm/CUDA device library bitcode at link time.
+    // ------------------------------------------------------------------ //
+    {
+      mlir::ModuleOp parentModule =
+          gpuModule->getParentOfType<mlir::ModuleOp>();
+      if (parentModule) {
+        mlir::OpBuilder declBuilder(&getContext());
+        declBuilder.setInsertionPointToStart(gpuModule.getBody());
+        llvm::DenseSet<mlir::StringRef> emitted;
+
+        gpuModule.walk([&](mlir::Operation *op) {
+          auto calleeAttr =
+              op->getAttrOfType<mlir::FlatSymbolRefAttr>("callee");
+          if (!calleeAttr)
+            return;
+          mlir::StringRef callee = calleeAttr.getValue();
+          // Only handle unresolved callees (not already in gpu.module).
+          if (mlir::SymbolTable::lookupSymbolIn(gpuModule, calleeAttr))
+            return;
+          if (!emitted.insert(callee).second)
+            return;
+          // Look up in the parent module.
+          mlir::Operation *parentDecl =
+              mlir::SymbolTable::lookupSymbolIn(parentModule, calleeAttr);
+          if (!parentDecl)
+            return;
+          // Only import declarations (empty regions = no body).
+          bool isDecl = llvm::all_of(parentDecl->getRegions(),
+                                     [](mlir::Region &r) { return r.empty(); });
+          if (!isDecl)
+            return;
+          // Convert the function type using the CIR type converter.
+          auto fn = mlir::dyn_cast<mlir::FunctionOpInterface>(parentDecl);
+          if (!fn)
+            return;
+          auto llvmFnTy = converter.convertType<mlir::LLVM::LLVMFunctionType>(
+              fn.getFunctionType());
+          if (!llvmFnTy)
+            return; // unsupported type — skip
+          mlir::LLVM::LLVMFuncOp::create(declBuilder, parentDecl->getLoc(),
+                                          callee, llvmFnTy,
+                                          mlir::LLVM::Linkage::External);
+        });
+      }
+    }
+
+    // ------------------------------------------------------------------ //
+    // Pre-pass: convert offload.global_var device globals → llvm.mlir.global.
+    //
+    // SplitSingleSourcePass moves offload.global_var ops (shared, device,
+    // constant, managed) INTO the gpu.module so that cir.get_global ops in
+    // cloned gpu.func bodies can find their symbols (gpu.module is isolated
+    // from above, so they must be local).  We now convert them to
+    // llvm.mlir.global so that applyPartialConversion sees only LLVM types.
+    // ------------------------------------------------------------------ //
+    {
+      using mlir::offload::MemSpace;
+      mlir::OpBuilder preBuilder(&getContext());
+      preBuilder.setInsertionPointToStart(gpuModule.getBody());
+
+      llvm::SmallVector<mlir::offload::GlobalVarOp> deviceGlobals;
+      gpuModule.walk([&](mlir::offload::GlobalVarOp gv) {
+        deviceGlobals.push_back(gv);
+      });
+
+      for (mlir::offload::GlobalVarOp gv : deviceGlobals) {
+        unsigned addrSpace = 0;
+        bool isConstant = false;
+        switch (gv.getMemSpace()) {
+        case MemSpace::shared:   addrSpace = 3; isConstant = false; break;
+        case MemSpace::device:   addrSpace = 1; isConstant = false; break;
+        case MemSpace::constant: addrSpace = 4; isConstant = true;  break;
+        case MemSpace::managed:  addrSpace = 0; isConstant = false; break;
+        default:
+          gv.emitError("ConvertCIRInGpuModulePass: unexpected device global "
+                       "mem_space");
+          signalPassFailure();
+          return;
+        }
+
+        mlir::Type llvmTy = converter.convertType(gv.getType());
+        if (!llvmTy) {
+          gv.emitError("ConvertCIRInGpuModulePass: cannot convert type ")
+              << gv.getType() << " for device global @" << gv.getSymName();
+          signalPassFailure();
+          return;
+        }
+
+        preBuilder.setInsertionPoint(gv);
+        mlir::LLVM::GlobalOp::create(preBuilder, gv.getLoc(), llvmTy, isConstant,
+                                     mlir::LLVM::Linkage::Internal,
+                                     gv.getSymName(), mlir::Attribute{},
+                                     /*alignment=*/0, addrSpace);
+        gv.erase();
+      }
+    }
+
     if (failed(applyPartialConversion(gpuModule, target, std::move(patterns))))
       signalPassFailure();
+
+    // Post-pass A: fix alloca address space for AMDGPU.
+    //
+    // CIRToLLVMAllocaOpLowering emits llvm.alloca with result type !llvm.ptr
+    // (flat, address space 0).  The AMDGPU instruction selector cannot lower a
+    // FrameIndex as a flat 64-bit pointer — it requires address space 5
+    // (private / scratch).  We fix this by:
+    //   (1) changing the alloca result type to !llvm.ptr<5>, and
+    //   (2) propagating the ptr<5> type through every direct user that carries
+    //       the pointer value: GEP results and block arguments (from branch
+    //       successors / phi-equivalent uses).
+    //
+    // We do NOT insert addrspacecast — doing so would prevent SROA from
+    // promoting the alloca to SSA values, since SROA cannot see through a cast.
+    // llvm.load, llvm.store, and llvm.getelementptr all accept ptr<5> operands
+    // without any cast.
+    {
+      constexpr unsigned kPrivateAS = 5;
+      mlir::MLIRContext *ctx = &getContext();
+      auto flatPtrTy = mlir::LLVM::LLVMPointerType::get(ctx);
+      auto privPtrTy = mlir::LLVM::LLVMPointerType::get(ctx, kPrivateAS);
+
+      // Propagate ptr<5> through a value: update its type and enqueue all ops
+      // that carry the pointer value forward as a typed result.
+      // load/store/call use the pointer as an address operand — the pointer
+      // type is not propagated through those, so they need no update.
+      auto propagatePrivPtr = [&](mlir::Value v,
+                                  SmallVectorImpl<mlir::Value> &worklist) {
+        if (v.getType() != flatPtrTy)
+          return;
+        v.setType(privPtrTy);
+        for (mlir::OpOperand &use : v.getUses()) {
+          mlir::Operation *user = use.getOwner();
+          // GEP result inherits the base pointer's address space.
+          if (auto gep = mlir::dyn_cast<mlir::LLVM::GEPOp>(user)) {
+            if (gep.getBase() == v)
+              worklist.push_back(gep.getRes());
+          }
+        }
+      };
+
+      SmallVector<mlir::Value> worklist;
+      gpuModule.walk([&](mlir::LLVM::AllocaOp alloca) {
+        if (alloca.getRes().getType() == flatPtrTy)
+          worklist.push_back(alloca.getRes());
+      });
+      while (!worklist.empty()) {
+        mlir::Value v = worklist.pop_back_val();
+        propagatePrivPtr(v, worklist);
+      }
+    }
+
+    // Post-pass B: hoist llvm.alloca ops to the entry block of every function
+    // in the gpu.module.
+    //
+    // CIRGenDecl emits cir.alloca (→ llvm.alloca) at the point of declaration,
+    // which may be inside a loop body.  HoistAllocasPass operates on cir.func,
+    // but by the time ConvertCIRInGpuModulePass runs the kernel lives inside a
+    // gpu.func — HoistAllocasPass was a no-op for it.  On AMDGPU the backend
+    // computes the private segment (scratch) size by summing the sizes of all
+    // llvm.alloca ops in the *entry block only*; allocas in non-entry blocks are
+    // not counted, so private_segment_fixed_size comes out too small, and the
+    // generated code accesses the wrong scratch offsets.  Move every static
+    // llvm.alloca to the first instruction of the entry block.
+    {
+      auto hoistAllocasToEntry = [](mlir::Region &region) {
+        if (region.empty())
+          return;
+        mlir::Block &entry = region.front();
+        SmallVector<mlir::LLVM::AllocaOp> toHoist;
+        // Collect allocas outside the entry block.
+        region.walk([&](mlir::LLVM::AllocaOp alloca) {
+          if (alloca->getBlock() != &entry)
+            toHoist.push_back(alloca);
+        });
+        if (toHoist.empty())
+          return;
+        // The array-size operand of each alloca is a constant (mlir.constant 1).
+        // The constant may be in a non-entry block too — hoist it together with
+        // the alloca by moving the size operand first.
+        mlir::Operation *insertBefore = &entry.front();
+        for (mlir::LLVM::AllocaOp alloca : toHoist) {
+          // Move the size constant if it is in a non-entry block.
+          mlir::Operation *sizeDef = alloca.getArraySize().getDefiningOp();
+          if (sizeDef && sizeDef->getBlock() != &entry)
+            sizeDef->moveBefore(insertBefore);
+          alloca->moveBefore(insertBefore);
+        }
+      };
+
+      gpuModule.walk([&](mlir::gpu::GPUFuncOp fn) {
+        hoistAllocasToEntry(fn.getBody());
+      });
+      gpuModule.walk([&](mlir::LLVM::LLVMFuncOp fn) {
+        hoistAllocasToEntry(fn.getBody());
+      });
+    }
+
+    // Post-pass: lower non-kernel gpu.func ops to llvm.func.
+    //
+    // After applyPartialConversion the ops inside non-kernel gpu.func bodies
+    // are in LLVM dialect, but the container is still gpu.func.  llvm.call ops
+    // generated from cir.call can only reference llvm.func (not gpu.func), so
+    // we now convert reachable non-kernel gpu.func ops to llvm.func by moving
+    // the body.  Unreachable non-kernel functions (never called from any kernel
+    // or reachable callee) are erased — they may contain host-style constructs
+    // (stack-allocated char arrays, etc.) that the AMDGPU backend cannot lower.
+    // Kernel gpu.func ops are left for GPUToROCDL which adds ROCDL attributes.
+    {
+      mlir::OpBuilder b(&getContext());
+
+      // Collect all non-kernel gpu.func ops.
+      SmallVector<mlir::gpu::GPUFuncOp> nonKernelFuncs;
+      gpuModule.walk([&](mlir::gpu::GPUFuncOp fn) {
+        if (!fn.isKernel())
+          nonKernelFuncs.push_back(fn);
+      });
+
+      // Transitively compute which non-kernel functions are reachable from
+      // kernels via llvm.call edges.  Start with all callees referenced inside
+      // kernel gpu.func bodies, then expand through non-kernel gpu.func bodies.
+      llvm::DenseSet<mlir::StringRef> reachable;
+      SmallVector<mlir::StringRef> worklist;
+
+      auto collectCallees = [&](mlir::Region &region) {
+        region.walk([&](mlir::LLVM::CallOp call) {
+          if (auto sym = call.getCalleeAttr())
+            worklist.push_back(sym.getValue());
+        });
+      };
+
+      // Seed from kernel bodies.
+      gpuModule.walk([&](mlir::gpu::GPUFuncOp fn) {
+        if (fn.isKernel())
+          collectCallees(fn.getBody());
+      });
+
+      // BFS over the call graph within the gpu.module.
+      mlir::SymbolTable symTable(gpuModule);
+      while (!worklist.empty()) {
+        mlir::StringRef name = worklist.pop_back_val();
+        if (!reachable.insert(name).second)
+          continue;
+        // If this symbol is a non-kernel gpu.func, expand its callees.
+        auto *sym = symTable.lookup(name);
+        if (auto calledFn = mlir::dyn_cast_if_present<mlir::gpu::GPUFuncOp>(sym))
+          if (!calledFn.isKernel())
+            collectCallees(calledFn.getBody());
+      }
+
+      // Convert reachable non-kernel gpu.func → llvm.func; erase unreachable.
+      for (mlir::gpu::GPUFuncOp fn : nonKernelFuncs) {
+        if (!reachable.count(fn.getName())) {
+          fn.erase();
+          continue;
+        }
+        mlir::FunctionType gpuFnTy = fn.getFunctionType();
+        auto llvmRetTy = gpuFnTy.getNumResults() == 0
+            ? mlir::Type(mlir::LLVM::LLVMVoidType::get(&getContext()))
+            : converter.convertType(gpuFnTy.getResult(0));
+        SmallVector<mlir::Type> llvmArgTys;
+        for (mlir::Type t : gpuFnTy.getInputs())
+          llvmArgTys.push_back(converter.convertType(t) ? converter.convertType(t) : t);
+        auto llvmFnTy = mlir::LLVM::LLVMFunctionType::get(llvmRetTy, llvmArgTys);
+
+        b.setInsertionPoint(fn);
+        auto llvmFn = mlir::LLVM::LLVMFuncOp::create(
+            b, fn.getLoc(), fn.getName(), llvmFnTy,
+            mlir::LLVM::Linkage::External);
+        // Move the body from gpu.func into the new llvm.func.
+        mlir::Region &srcRegion = fn.getBody();
+        mlir::Region &dstRegion = llvmFn.getBody();
+        dstRegion.takeBody(srcRegion);
+        // gpu.return → llvm.return in the moved body.
+        llvmFn.walk([](mlir::gpu::ReturnOp ret) {
+          mlir::OpBuilder rb(ret);
+          mlir::LLVM::ReturnOp::create(rb, ret.getLoc(), ret.getOperands());
+          ret.erase();
+        });
+        fn.erase();
+      }
+    }
   }
 };
 
@@ -3840,10 +4273,104 @@ struct CIRGpuModuleToBinaryPass
     // unrealized_conversion_cast(i32 → index) for any remaining index
     // consumers.  CIRGenExprScalar already emitted unrealized_conversion_cast
     // (index → !cir.u32i) which was lowered to llvm.trunc by
-    // ConvertCIRInGpuModulePass, so the (i32 → index) casts are now dead.
-    // Remove them before calling translateModuleToLLVMIR, which cannot handle
-    // any non-LLVM ops.
+    // ConvertCIRInGpuModulePass.  The result is a chain:
+    //   rocdl.workgroup.id.x : i32
+    //   → unrealized_cast(i32 → index)   [by ROCDL pass]
+    //   → llvm.trunc(index → i32)         [by ConvertCIRInGpuModulePass]
+    // Fold these pairs (trunc of a no-op cast) to the original i32 value,
+    // then remove dead casts.  This must run before translateModuleToLLVMIR,
+    // which cannot handle any non-LLVM ops.
     for (mlir::gpu::GPUModuleOp gpuMod : targeted) {
+      // Step A: fold arith.index_castui(unrealized_cast(v:T → index) → T) → v.
+      // These arise from the chain:
+      //   gpu.block_id y : index
+      //   → arith.index_castui(index → i32)   [by UnrealizedCastFoldingLowering]
+      // After ConvertGpuOpsToROCDLOps:
+      //   rocdl.workgroup.id.y : i32
+      //   → unrealized_cast(i32 → index)       [ROCDL bridge for remaining index users]
+      //   → arith.index_castui(index → i32)    [our cast, now consumes the bridge]
+      // Fold the (i32 → index → i32) round-trip to just the i32 ROCDL result.
+      // Also fold the trivial identity arith.index_castui(v:T → T) → v.
+      gpuMod.walk([](mlir::arith::IndexCastUIOp cast) {
+        mlir::Value src = cast.getIn();
+        mlir::Type dstTy = cast.getOut().getType();
+        // Case 1: identity (src type == dst type).
+        if (src.getType() == dstTy) {
+          cast.getOut().replaceAllUsesWith(src);
+          cast.erase();
+          return;
+        }
+        // Case 2: index_castui(unrealized_cast(v:T → index) → T) → v.
+        auto bridge = src.getDefiningOp<mlir::UnrealizedConversionCastOp>();
+        if (!bridge || bridge.getInputs().size() != 1 ||
+            bridge.getOutputs().size() != 1)
+          return;
+        if (!bridge.getOutputs()[0].getType().isIndex())
+          return;
+        mlir::Value inner = bridge.getInputs()[0];
+        if (inner.getType() == dstTy) {
+          cast.getOut().replaceAllUsesWith(inner);
+          cast.erase();
+        }
+      });
+      // Step A2: fold paired unrealized casts (T → index → T) that form a
+      // round-trip identity.  These arise when ROCDL inserts (i64 → index)
+      // bridges and a consumer emitted (index → i64) + llvm.trunc back to i32:
+      //   llvm.sext(rocdl_i32 → i64)
+      //   → unrealized_cast(i64 → index)
+      //   → unrealized_cast(index → i64)
+      //   → llvm.trunc(i64 → i32)
+      // Fold the middle pair to identity, leaving sext+trunc which DCE removes.
+      gpuMod.walk([](mlir::UnrealizedConversionCastOp cast2) {
+        // Match: cast2 converts index → T.
+        if (cast2.getInputs().size() != 1 || cast2.getOutputs().size() != 1)
+          return;
+        if (!cast2.getInputs()[0].getType().isIndex())
+          return;
+        mlir::Value indexVal = cast2.getInputs()[0];
+        mlir::Type outTy = cast2.getOutputs()[0].getType();
+        // The index value must come from another unrealized_cast(T → index).
+        auto cast1 = indexVal.getDefiningOp<mlir::UnrealizedConversionCastOp>();
+        if (!cast1 || cast1.getInputs().size() != 1 ||
+            cast1.getOutputs().size() != 1)
+          return;
+        if (!cast1.getOutputs()[0].getType().isIndex())
+          return;
+        mlir::Value inner = cast1.getInputs()[0];
+        // Fold if inner type == cast2 output type (T → index → T = identity).
+        if (inner.getType() == outTy) {
+          cast2.getOutputs()[0].replaceAllUsesWith(inner);
+          cast2.erase();
+        }
+      });
+      // Step A3: fold unrealized_cast(!llvm.ptr<N> → !llvm.ptr) to
+      // llvm.addrspacecast.  These arise when shared memory globals (addr space 3)
+      // are accessed via cir.get_global which now emits !llvm.ptr<3>, but
+      // downstream llvm.getelementptr expects the generic !llvm.ptr.
+      {
+        mlir::OpBuilder b(&getContext());
+        SmallVector<mlir::UnrealizedConversionCastOp> ptrCasts;
+        gpuMod.walk([&](mlir::UnrealizedConversionCastOp cast) {
+          if (cast.getInputs().size() != 1 || cast.getOutputs().size() != 1)
+            return;
+          auto inPtrTy = mlir::dyn_cast<mlir::LLVM::LLVMPointerType>(
+              cast.getInputs()[0].getType());
+          auto outPtrTy = mlir::dyn_cast<mlir::LLVM::LLVMPointerType>(
+              cast.getOutputs()[0].getType());
+          if (inPtrTy && outPtrTy)
+            ptrCasts.push_back(cast);
+        });
+        for (auto cast : ptrCasts) {
+          b.setInsertionPoint(cast);
+          auto outTy = mlir::cast<mlir::LLVM::LLVMPointerType>(
+              cast.getOutputs()[0].getType());
+          auto addrcast = mlir::LLVM::AddrSpaceCastOp::create(
+              b, cast.getLoc(), outTy, cast.getInputs()[0]);
+          cast.getOutputs()[0].replaceAllUsesWith(addrcast.getRes());
+          cast.erase();
+        }
+      }
+      // Step B: remove now-dead unrealized casts.
       bool changed = true;
       while (changed) {
         changed = false;
@@ -5218,7 +5745,8 @@ std::unique_ptr<mlir::Pass> createConvertCIRToLLVMPass() {
 
 void populateCIRToLLVMPasses(mlir::OpPassManager &pm, bool enableOffloadSplit,
                              llvm::ArrayRef<std::string> offloadArchs,
-                             bool isDeviceCompilation) {
+                             bool isDeviceCompilation,
+                             unsigned deviceOptLevel) {
   mlir::populateCIRPreLoweringPasses(pm);
   pm.addPass(mlir::omp::createMarkDeclareTargetPass());
   if (enableOffloadSplit) {
@@ -5235,14 +5763,10 @@ void populateCIRToLLVMPasses(mlir::OpPassManager &pm, bool enableOffloadSplit,
     mlir::offload::OffloadSplitSingleSourcePassOptions splitOpts;
     splitOpts.gpuModuleName = "offload_device_module";
     pm.addPass(mlir::offload::createOffloadSplitSingleSourcePass(splitOpts));
-    // Lower offload.global_var(mem_space=shared) → llvm.mlir.global with
-    // addr_space=3 (AMDGPU LDS / NVPTX shared memory) inside the gpu.module.
-    // Must run after SplitSingleSourcePass (gpu.module now exists) and before
-    // ConvertCIRInGpuModulePass (which requires LLVM dialect in gpu.func).
-    mlir::offload::OffloadLowerSharedGlobalsPassOptions sharedOpts;
-    sharedOpts.gpuModuleName = "offload_device_module";
-    pm.addPass(
-        mlir::offload::createOffloadLowerSharedGlobalsPass(sharedOpts));
+    // Note: offload.global_var device globals (shared, device, constant,
+    // managed) that were moved into the gpu.module by SplitSingleSourcePass
+    // are converted to llvm.mlir.global inside ConvertCIRInGpuModulePass
+    // (as a pre-pass before applyPartialConversion).
     // Lower host-side offload runtime ops (stream create/destroy/sync,
     // device sync) to direct HIP/CUDA API calls.
     pm.addPass(mlir::offload::createOffloadLowerHostRuntimePass());
@@ -5256,7 +5780,7 @@ void populateCIRToLLVMPasses(mlir::OpPassManager &pm, bool enableOffloadSplit,
       rocdlOpts.chip = arch;
       rocdlOpts.triple = "amdgcn-amd-amdhsa";
       rocdlOpts.abiVersion = "600";
-      rocdlOpts.optLevel = 2;
+      rocdlOpts.optLevel = deviceOptLevel;
       // moduleMatcher is left empty → matches all gpu.modules.
       pm.addPass(mlir::createGpuROCDLAttachTarget(rocdlOpts));
     }
@@ -5285,7 +5809,8 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
                              StringRef mlirSaveTempsOutFile,
                              bool enableOffloadSplit,
                              llvm::ArrayRef<std::string> offloadArchs,
-                             bool isDeviceCompilation) {
+                             bool isDeviceCompilation,
+                             unsigned deviceOptLevel) {
   llvm::TimeTraceScope scope("lower from CIR to LLVM directly");
 
   mlir::MLIRContext *mlirCtx = mlirModule.getContext();
@@ -5332,7 +5857,8 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
   }
 
   mlir::PassManager pm(mlirCtx);
-  populateCIRToLLVMPasses(pm, enableOffloadSplit, offloadArchs, isDeviceCompilation);
+  populateCIRToLLVMPasses(pm, enableOffloadSplit, offloadArchs,
+                          isDeviceCompilation, deviceOptLevel);
 
   (void)mlir::applyPassManagerCLOptions(pm);
 

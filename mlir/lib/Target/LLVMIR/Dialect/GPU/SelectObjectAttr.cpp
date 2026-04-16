@@ -431,19 +431,20 @@ llvm::LaunchKernel::createKernelLaunch(mlir::gpu::LaunchFuncOp op,
   Value *moduleFunction =
       builder.CreateCall(getModuleFunctionFn(), {moduleObj, functionName});
 
-  // Get the stream to use for execution. If there's no async object then create
-  // a stream to make a synchronous kernel launch.
+  // Get the stream to use for execution.
+  // If an async object is provided, use it directly.
+  // Otherwise, pass the null/default stream so the launch is asynchronous
+  // from the host's perspective — the kernel is queued and the host
+  // continues immediately. The caller is responsible for explicit
+  // synchronization (e.g. hipDeviceSynchronize / cudaDeviceSynchronize).
+  // Creating a temporary stream and immediately synchronizing it (the old
+  // behavior) makes every kernel launch a synchronous round-trip, which
+  // serializes independent launches and prevents GPU pipelining.
   Value *stream = nullptr;
-  // Sync & destroy the stream, for synchronous launches.
-  llvm::scope_exit destroyStream([&]() {
-    builder.CreateCall(getStreamSyncFn(), {stream});
-    builder.CreateCall(getStreamDestroyFn(), {stream});
-  });
   if (mlir::Value asyncObject = op.getAsyncObject()) {
     stream = llvmValue(asyncObject);
-    destroyStream.release();
   } else {
-    stream = builder.CreateCall(getStreamCreateFn(), {});
+    stream = llvm::ConstantPointerNull::get(ptrTy);
   }
 
   llvm::Constant *paramsCount =

@@ -13,6 +13,7 @@
 #include "CIRGenConstantEmitter.h"
 #include "CIRGenFunction.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Offload/IR/OffloadDialect.h"
 #include "mlir/IR/Location.h"
 #include "clang/AST/Attr.h"
@@ -645,23 +646,62 @@ cir::GlobalOp CIRGenFunction::addInitializerToStaticVarDecl(
   return gv;
 }
 
+
 void CIRGenFunction::emitStaticVarDecl(const VarDecl &d,
                                        cir::GlobalLinkageKind linkage) {
   // Check to see if we already have a global variable for this
   // declaration.  This can happen when double-emitting function
   // bodies, e.g. with complete and base constructors.
   cir::GlobalOp globalOp = cgm.getOrCreateStaticVarDecl(d, linkage);
+
+  CharUnits alignment = getContext().getDeclAlign(&d);
+  mlir::Type elemTy = convertTypeForMem(d.getType());
+
+  // In the unified offload CIR path, static __shared__ local variables inside
+  // __global__ kernels are created as plain cir.global (via
+  // getOrCreateStaticVarDecl) because that code path pre-dates offload support.
+  // Convert the cir.global to an offload.global_var with mem_space=shared so
+  // that SplitSingleSourcePass can lower it into the gpu.module correctly.
+  if (cgm.getCodeGenOpts().ClangIROffload && getLangOpts().CUDA &&
+      d.hasAttr<CUDASharedAttr>()) {
+    // Capture the name/type/loc before erasing globalOp.
+    mlir::Location sharedLoc = globalOp.getLoc();
+    mlir::StringAttr sharedName = globalOp.getSymNameAttr();
+    // Use the CIR type from the VarDecl (not the host-side LLVM type from the
+    // cir::GlobalOp, which was created with convertTypeForMem).  The
+    // ConvertOffloadDeviceGlobalsPass in LowerToLLVM.cpp (which has access to
+    // prepareTypeConverter) will convert the CIR type to an LLVM type when it
+    // lowers the offload.global_var into the gpu.module.  Using the CIR type
+    // here keeps the offload.global_var consistent with the cir.get_global
+    // pointer type that the device function body uses.
+    mlir::Type sharedCIRTy = cgm.convertType(d.getType());
+
+    // Create offload.global_var at module scope (before globalOp), then erase.
+    {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPoint(globalOp);
+      mlir::offload::GlobalVarOp::create(
+          builder, sharedLoc, sharedName, sharedCIRTy,
+          mlir::offload::MemSpace::shared,
+          /*externInit=*/false, /*initValue=*/mlir::Attribute{});
+      globalOp.erase();
+    } // builder insertion point restored to function body here
+
+    // Create cir.get_global referencing the offload.global_var by name.
+    mlir::Value addr = cir::GetGlobalOp::create(
+        builder, sharedLoc, builder.getPointerTo(sharedCIRTy), sharedName);
+    setAddrOfLocalVar(&d, Address(addr, elemTy, alignment));
+    return;
+  }
+
   // TODO(cir): we should have a way to represent global ops as values without
   // having to emit a get global op. Sometimes these emissions are not used.
   mlir::Value addr = builder.createGetGlobal(globalOp);
   auto getAddrOp = addr.getDefiningOp<cir::GetGlobalOp>();
   assert(getAddrOp && "expected cir::GetGlobalOp");
 
-  CharUnits alignment = getContext().getDeclAlign(&d);
-
   // Store into LocalDeclMap before generating initializer to handle
   // circular references.
-  mlir::Type elemTy = convertTypeForMem(d.getType());
   setAddrOfLocalVar(&d, Address(addr, elemTy, alignment));
 
   // We can't have a VLA here, but we can have a pointer to a VLA,

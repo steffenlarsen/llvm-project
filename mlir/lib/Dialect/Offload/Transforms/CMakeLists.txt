@@ -11,10 +11,10 @@ add_mlir_dialect_library(MLIROffloadTransforms
   MLIROffloadOpsIncGen
 
   LINK_LIBS PUBLIC
+  MLIRArithDialect
   MLIRFuncDialect
   MLIRGPUDialect
   MLIRIR
-  MLIRLLVMCommonConversion
   MLIRLLVMDialect
   MLIROffloadDialect
   MLIRPass

@@ -52,7 +52,8 @@ lowerFromCIRToLLVMIR(mlir::ModuleOp MLIRModule, llvm::LLVMContext &LLVMCtx,
                      llvm::StringRef mlirSaveTempsOutFile = {},
                      bool enableOffloadSplit = false,
                      llvm::ArrayRef<std::string> offloadArchs = {},
-                     bool isDeviceCompilation = false) {
+                     bool isDeviceCompilation = false,
+                     unsigned deviceOptLevel = 2) {
   // Ensure the offload transformation passes are registered in the global
   // pass registry so populateCIRToLLVMPasses can look them up by name.
   if (enableOffloadSplit)
@@ -60,7 +61,8 @@ lowerFromCIRToLLVMIR(mlir::ModuleOp MLIRModule, llvm::LLVMContext &LLVMCtx,
   return direct::lowerDirectlyFromCIRToLLVMIR(MLIRModule, LLVMCtx,
                                               mlirSaveTempsOutFile,
                                               enableOffloadSplit, offloadArchs,
-                                              isDeviceCompilation);
+                                              isDeviceCompilation,
+                                              deviceOptLevel);
 }
 
 class CIRGenConsumer : public clang::ASTConsumer {
@@ -190,7 +192,7 @@ public:
       std::unique_ptr<llvm::Module> LLVMModule =
           lowerFromCIRToLLVMIR(MlirModule, LLVMCtx, mlirSaveTempsOutFile,
                                CGO.ClangIROffload, offloadArchs,
-                               isDeviceCompilation);
+                               isDeviceCompilation, CGO.OptimizationLevel);
 
       BackendAction BEAction = getBackendActionFromOutputType(Action);
       emitBackendOutput(

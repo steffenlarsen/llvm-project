@@ -253,12 +253,19 @@ LogicalResult KernelLaunchOp::verify() {
   if (!module)
     return emitOpError("cannot find a surrounding symbol table");
 
-  auto callee =
-      dyn_cast_or_null<FuncOp>(SymbolTable::lookupSymbolIn(module, getCallee()));
-  // If the callee is not an offload.func, it may have already been lowered to
-  // a gpu.func by SplitSingleSourcePass (stream-aware launches survive that
-  // pass and are handled by LowerHostRuntimePass instead).  Skip symbol
-  // verification in that transitional state.
+  // Look up the raw symbol first to distinguish "does not exist" from "exists
+  // but is not an offload.func any more" (the latter happens after
+  // SplitSingleSourcePass lowers kernels into gpu.func ops inside a gpu.module;
+  // stream-aware launches survive that pass and are handled later by
+  // LowerHostRuntimePass — we must not reject them here).
+  Operation *rawSym = SymbolTable::lookupSymbolIn(module, getCallee());
+  if (!rawSym)
+    return emitOpError("callee '")
+           << getCallee()
+           << "' does not name an offload.func in the same module";
+
+  auto callee = dyn_cast<FuncOp>(rawSym);
+  // Symbol exists but is not an offload.func — transitional state, allow.
   if (!callee)
     return success();
 
