@@ -36,16 +36,21 @@
 #define LLVM_ANALYSIS_IR2VEC_H
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/Analysis/IR2VecKind.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Type.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/JSON.h"
 #include <array>
 #include <map>
 #include <optional>
+
+namespace llvm::clv2 {
+class OptionsContext;
+}
 
 namespace llvm {
 
@@ -68,16 +73,16 @@ class IR2VecVocabAnalysis;
 /// that captures the flow information (SSA-based use-defs) without tracing
 /// through memory level use-defs in the embedding computation described in the
 /// paper.
-enum class IR2VecKind { Symbolic, FlowAware };
 
 namespace ir2vec {
 
 LLVM_ABI extern llvm::cl::OptionCategory IR2VecCategory;
-LLVM_ABI extern cl::opt<float> OpcWeight;
-LLVM_ABI extern cl::opt<float> TypeWeight;
-LLVM_ABI extern cl::opt<float> ArgWeight;
-LLVM_ABI extern cl::opt<IR2VecKind> IR2VecEmbeddingKind;
-LLVM_ABI extern cl::opt<std::string> VocabFile;
+
+LLVM_ABI float getOpcWeight(const clv2::OptionsContext &Ctx);
+LLVM_ABI float getTypeWeight(const clv2::OptionsContext &Ctx);
+LLVM_ABI float getArgWeight(const clv2::OptionsContext &Ctx);
+LLVM_ABI IR2VecKind getIR2VecEmbeddingKind(const clv2::OptionsContext &Ctx);
+LLVM_ABI std::string getVocabFile(const clv2::OptionsContext &Ctx);
 
 /// Embedding is a datatype that wraps std::vector<double>. It provides
 /// additional functionality for arithmetic and comparison operations.
@@ -558,8 +563,9 @@ protected:
 
   Embedder(const Function &F, const Vocabulary &Vocab)
       : F(F), Vocab(Vocab), Dimension(Vocab.getDimension()),
-        OpcWeight(ir2vec::OpcWeight), TypeWeight(ir2vec::TypeWeight),
-        ArgWeight(ir2vec::ArgWeight) {}
+        OpcWeight(ir2vec::getOpcWeight(F.getContext().getOptionsContext())),
+        TypeWeight(ir2vec::getTypeWeight(F.getContext().getOptionsContext())),
+        ArgWeight(ir2vec::getArgWeight(F.getContext().getOptionsContext())) {}
 
   /// Function to compute embeddings.
   LLVM_ABI Embedding computeEmbeddings() const;

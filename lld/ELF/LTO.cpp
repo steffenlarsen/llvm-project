@@ -54,10 +54,10 @@ static std::string getThinLTOOutputFile(Ctx &ctx, StringRef modulePath) {
 }
 
 static lto::Config createConfig(Ctx &ctx) {
-  lto::Config c;
+  lto::Config c(*ctx.llvmOptsCtx);
 
   // LLD supports the new relocations and address-significance tables.
-  c.Options = initTargetOptionsFromCodeGenFlags();
+  c.Options = initTargetOptionsFromCodeGenFlags(*ctx.llvmOptsCtx);
   c.Options.EmitAddrsig = true;
   for (StringRef C : ctx.arg.mllvmOpts)
     c.MllvmArgs.emplace_back(C.str());
@@ -98,7 +98,7 @@ static lto::Config createConfig(Ctx &ctx) {
   c.Options.UniqueBasicBlockSectionNames =
       ctx.arg.ltoUniqueBasicBlockSectionNames;
 
-  if (auto relocModel = getRelocModelFromCMModel())
+  if (auto relocModel = getRelocModelFromCMModel(*ctx.llvmOptsCtx))
     c.RelocModel = *relocModel;
   else if (ctx.arg.relocatable)
     c.RelocModel = std::nullopt;
@@ -107,12 +107,12 @@ static lto::Config createConfig(Ctx &ctx) {
   else
     c.RelocModel = Reloc::Static;
 
-  c.CodeModel = getCodeModelFromCMModel();
+  c.CodeModel = getCodeModelFromCMModel(*ctx.llvmOptsCtx);
   c.DisableVerify = ctx.arg.disableVerify;
   c.DiagHandler = diagnosticHandler;
   c.OptLevel = ctx.arg.ltoo;
-  c.CPU = getCPUStr();
-  c.MAttrs = getMAttrs();
+  c.CPU = getCPUStr(*ctx.llvmOptsCtx);
+  c.MAttrs = getMAttrs(*ctx.llvmOptsCtx);
   c.CGOptLevel = ctx.arg.ltoCgo;
 
   c.PTO.LoopVectorization = c.OptLevel > 1;
@@ -173,6 +173,7 @@ static lto::Config createConfig(Ctx &ctx) {
     checkError(ctx.e, c.addSaveTemps(ctx.arg.outputFile.str() + ".",
                                      /*UseInputModulePath*/ true,
                                      ctx.arg.saveTempsArgs));
+
   return c;
 }
 
@@ -321,7 +322,7 @@ static void thinLTOCreateEmptyIndexFiles(Ctx &ctx) {
 
     ModuleSummaryIndex m(/*HaveGVs*/ false);
     m.setSkipModuleByDistributedBackend();
-    writeIndexToFile(m, *os);
+    writeIndexToFile(m, *os, *ctx.llvmOptsCtx);
     if (ctx.arg.thinLTOEmitImportsFiles)
       openFile(path + ".imports");
   }

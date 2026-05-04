@@ -83,7 +83,8 @@ static void initializeUsedResources(InstrDesc &ID,
     }
 
     uint64_t Mask = ProcResourceMasks[PRE->ProcResourceIdx];
-    const int BufferSize = SM.getResourceBufferSize(PRE->ProcResourceIdx);
+    const int BufferSize =
+        SM.getResourceBufferSize(PRE->ProcResourceIdx, STI.getOptionsContext());
     if (BufferSize < 0) {
       AllInOrderResources = false;
     } else {
@@ -187,7 +188,7 @@ static void initializeUsedResources(InstrDesc &ID,
   // Identify extra buffers that are consumed through super resources.
   for (const std::pair<uint64_t, unsigned> &SR : SuperResources) {
     for (unsigned I = 1, E = NumProcResources; I < E; ++I) {
-      if (SM.getResourceBufferSize(I) == -1)
+      if (SM.getResourceBufferSize(I, STI.getOptionsContext()) == -1)
         continue;
 
       uint64_t Mask = ProcResourceMasks[I];

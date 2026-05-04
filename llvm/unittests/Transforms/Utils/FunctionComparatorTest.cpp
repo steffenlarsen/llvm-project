@@ -44,19 +44,15 @@ struct TestFunction {
 /// accessible from a derived class of FunctionComparator.
 class TestComparator : public FunctionComparator {
 public:
-  TestComparator(const Function *F1, const Function *F2,
-                 GlobalNumberState *GN)
-        : FunctionComparator(F1, F2, GN) {
-  }
+  TestComparator(const Function *F1, const Function *F2, GlobalNumberState *GN)
+      : FunctionComparator(F1, F2, GN) {}
 
   bool testFunctionAccess(const Function *F1, const Function *F2) {
     // Test if FnL and FnR are accessible.
     return F1 == FnL && F2 == FnR;
   }
 
-  int testCompare() {
-    return compare();
-  }
+  int testCompare() { return compare(); }
 
   int testCompareSignature() {
     beginCompare();
@@ -96,17 +92,14 @@ public:
 
   int testCmpPrimitives() {
     beginCompare();
-    return
-      cmpNumbers(2, 3) +
-      cmpAPInts(APInt(32, 2), APInt(32, 3)) +
-      cmpAPFloats(APFloat(2.0), APFloat(3.0)) +
-      cmpMem("2", "3");
+    return cmpNumbers(2, 3) + cmpAPInts(APInt(32, 2), APInt(32, 3)) +
+           cmpAPFloats(APFloat(2.0), APFloat(3.0)) + cmpMem("2", "3");
   }
 };
 
 /// A sanity check for the FunctionComparator API.
 TEST(FunctionComparatorTest, TestAPI) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("test", C);
   TestFunction F1(C, M, 27);
   TestFunction F2(C, M, 28);

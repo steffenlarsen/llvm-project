@@ -32,6 +32,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ErrorOr.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/RWMutex.h"
 #include <cassert>
 #include <cstdint>
@@ -47,6 +48,9 @@ class MCFixup;
 class MCRegisterInfo;
 class MCSymbol;
 class raw_ostream;
+namespace clv2 {
+class OptionsContext;
+}
 
 namespace bolt {
 class BinaryBasicBlock;
@@ -189,6 +193,7 @@ protected:
   const MCInstrInfo *Info;
   const MCRegisterInfo *RegInfo;
   const MCSubtargetInfo *STI;
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
 
   /// Map annotation name into an annotation index.
   StringMap<uint64_t> AnnotationNameIndexMap;
@@ -365,6 +370,15 @@ public:
     // Build alias map
     initAliases();
     initSizeMap();
+  }
+
+  /// Set the OptionsContext pointer so context-threaded option reads work.
+  void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
+
+  /// Get the OptionsContext pointer.
+  const clv2::OptionsContext &getOptionsContext() const {
+    assert(OptsCtx && "OptsCtx is set at construction and never cleared");
+    return *OptsCtx;
   }
 
   /// Create and return a target-specific MC symbolizer for the \p Function.

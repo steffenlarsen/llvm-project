@@ -21,6 +21,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/CodeGen/AsmPrinter.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/DIE.h"
 #include "llvm/CodeGen/LexicalScopes.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -46,11 +47,12 @@
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/MachineLocation.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MD5.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
@@ -66,73 +68,12 @@ using namespace llvm;
 
 STATISTIC(NumCSParams, "Number of dbg call site params created");
 
-static cl::opt<bool> UseDwarfRangesBaseAddressSpecifier(
-    "use-dwarf-ranges-base-address-specifier", cl::Hidden,
-    cl::desc("Use base address specifiers in debug_ranges"), cl::init(false));
-
-static cl::opt<bool> GenerateARangeSection("generate-arange-section",
-                                           cl::Hidden,
-                                           cl::desc("Generate dwarf aranges"),
-                                           cl::init(false));
-
-static cl::opt<bool>
-    GenerateDwarfTypeUnits("generate-type-units", cl::Hidden,
-                           cl::desc("Generate DWARF4 type units."),
-                           cl::init(false));
-
-static cl::opt<bool> SplitDwarfCrossCuReferences(
-    "split-dwarf-cross-cu-references", cl::Hidden,
-    cl::desc("Enable cross-cu references in DWO files"), cl::init(false));
-
 enum DefaultOnOff { Default, Enable, Disable };
 
-static cl::opt<DefaultOnOff> UnknownLocations(
-    "use-unknown-locations", cl::Hidden,
-    cl::desc("Make an absence of debug location information explicit."),
-    cl::values(clEnumVal(Default, "At top of block or after label"),
-               clEnumVal(Enable, "In all cases"), clEnumVal(Disable, "Never")),
-    cl::init(Default));
-
-static cl::opt<AccelTableKind> AccelTables(
-    "accel-tables", cl::Hidden, cl::desc("Output dwarf accelerator tables."),
-    cl::values(clEnumValN(AccelTableKind::Default, "Default",
-                          "Default for platform"),
-               clEnumValN(AccelTableKind::None, "Disable", "Disabled."),
-               clEnumValN(AccelTableKind::Apple, "Apple", "Apple"),
-               clEnumValN(AccelTableKind::Dwarf, "Dwarf", "DWARF")),
-    cl::init(AccelTableKind::Default));
-
-static cl::opt<DefaultOnOff>
-DwarfInlinedStrings("dwarf-inlined-strings", cl::Hidden,
-                 cl::desc("Use inlined strings rather than string section."),
-                 cl::values(clEnumVal(Default, "Default for platform"),
-                            clEnumVal(Enable, "Enabled"),
-                            clEnumVal(Disable, "Disabled")),
-                 cl::init(Default));
-
-static cl::opt<bool>
-    NoDwarfRangesSection("no-dwarf-ranges-section", cl::Hidden,
-                         cl::desc("Disable emission .debug_ranges section."),
-                         cl::init(false));
-
-static cl::opt<DefaultOnOff> DwarfSectionsAsReferences(
-    "dwarf-sections-as-references", cl::Hidden,
-    cl::desc("Use sections+offset as references rather than labels."),
-    cl::values(clEnumVal(Default, "Default for platform"),
-               clEnumVal(Enable, "Enabled"), clEnumVal(Disable, "Disabled")),
-    cl::init(Default));
-
-static cl::opt<bool>
-    UseGNUDebugMacro("use-gnu-debug-macro", cl::Hidden,
-                     cl::desc("Emit the GNU .debug_macro format with DWARF <5"),
-                     cl::init(false));
-
-static cl::opt<DefaultOnOff> DwarfOpConvert(
-    "dwarf-op-convert", cl::Hidden,
-    cl::desc("Enable use of the DWARFv5 DW_OP_convert operator"),
-    cl::values(clEnumVal(Default, "Default for platform"),
-               clEnumVal(Enable, "Enabled"), clEnumVal(Disable, "Disabled")),
-    cl::init(Default));
+static DefaultOnOff getUnknownLocations(const clv2::OptionsContext &Ctx) {
+  return static_cast<DefaultOnOff>(
+      clv2::getOptValOrDefault<&clv2::CGPASS_UseUnknownLocations>(Ctx));
+}
 
 enum LinkageNameOption {
   DefaultLinkageNames,
@@ -140,40 +81,81 @@ enum LinkageNameOption {
   AbstractLinkageNames
 };
 
-static cl::opt<LinkageNameOption>
-    DwarfLinkageNames("dwarf-linkage-names", cl::Hidden,
-                      cl::desc("Which DWARF linkage-name attributes to emit."),
-                      cl::values(clEnumValN(DefaultLinkageNames, "Default",
-                                            "Default for platform"),
-                                 clEnumValN(AllLinkageNames, "All", "All"),
-                                 clEnumValN(AbstractLinkageNames, "Abstract",
-                                            "Abstract subprograms")),
-                      cl::init(DefaultLinkageNames));
+// --- clv2 OptionInfo descriptors for DwarfDebug options ---
+static constexpr clv2::EnumVal<AccelTableKind> AccelTablesVals[] = {
+    {"Default", AccelTableKind::Default, "Platform default"},
+    {"Disable", AccelTableKind::None, "Disabled"},
+    {"Apple", AccelTableKind::Apple,
+     ".apple_names, .apple_namespaces, "
+     ".apple_types, .apple_objc"},
+    {"Dwarf", AccelTableKind::Dwarf, "DWARF v5 .debug_names"},
+};
+static constexpr auto OI_AccelTables = clv2::makeEnumOption<AccelTableKind>(
+    "accel-tables", "Output dwarf accelerator tables.", AccelTablesVals,
+    clv2::Init{AccelTableKind::Default}, clv2::Hidden);
 
-static cl::opt<DwarfDebug::MinimizeAddrInV5> MinimizeAddrInV5Option(
-    "minimize-addr-in-v5", cl::Hidden,
-    cl::desc("Always use DW_AT_ranges in DWARFv5 whenever it could allow more "
-             "address pool entry sharing to reduce relocations/object size"),
-    cl::values(clEnumValN(DwarfDebug::MinimizeAddrInV5::Default, "Default",
-                          "Default address minimization strategy"),
-               clEnumValN(DwarfDebug::MinimizeAddrInV5::Ranges, "Ranges",
-                          "Use rnglists for contiguous ranges if that allows "
-                          "using a pre-existing base address"),
-               clEnumValN(DwarfDebug::MinimizeAddrInV5::Expressions,
-                          "Expressions",
-                          "Use exprloc addrx+offset expressions for any "
-                          "address with a prior base address"),
-               clEnumValN(DwarfDebug::MinimizeAddrInV5::Form, "Form",
-                          "Use addrx+offset extension form for any address "
-                          "with a prior base address"),
-               clEnumValN(DwarfDebug::MinimizeAddrInV5::Disabled, "Disabled",
-                          "Stuff")),
-    cl::init(DwarfDebug::MinimizeAddrInV5::Default));
+static constexpr clv2::EnumVal<DefaultOnOff> DefaultOnOffVals[] = {
+    {"Default", Default, "platform default"},
+    {"Enable", Enable, "enabled"},
+    {"Disable", Disable, "disabled"},
+};
+static constexpr auto OI_DwarfInlinedStrings =
+    clv2::makeEnumOption<DefaultOnOff>(
+        "dwarf-inlined-strings",
+        "Use inlined strings rather than string section.", DefaultOnOffVals,
+        clv2::Init{Default}, clv2::Hidden);
 
-/// Set to false to ignore Key Instructions metadata.
-static cl::opt<bool> KeyInstructionsAreStmts(
-    "dwarf-use-key-instructions", cl::Hidden, cl::init(true),
-    cl::desc("Set to false to ignore Key Instructions metadata"));
+static constexpr clv2::EnumVal<LinkageNameOption> LinkageNameVals[] = {
+    {"Default", DefaultLinkageNames, "default linkage names"},
+    {"All", AllLinkageNames, "all linkage names"},
+    {"Abstract", AbstractLinkageNames, "abstract linkage names"},
+};
+static constexpr auto OI_DwarfLinkageNames =
+    clv2::makeEnumOption<LinkageNameOption>(
+        "dwarf-linkage-names", "Which DWARF linkage-name attributes to emit.",
+        LinkageNameVals, clv2::Init{DefaultLinkageNames}, clv2::Hidden);
+
+static constexpr auto OI_DwarfOpConvert = clv2::makeEnumOption<DefaultOnOff>(
+    "dwarf-op-convert", "Enable use of the DWARFv5 DW_OP_convert operator",
+    DefaultOnOffVals, clv2::Init{Default}, clv2::Hidden);
+
+static constexpr auto OI_DwarfSectionsAsReferences =
+    clv2::makeEnumOption<DefaultOnOff>(
+        "dwarf-sections-as-references",
+        "Use sections+offset as references rather than labels.",
+        DefaultOnOffVals, clv2::Init{Default}, clv2::Hidden);
+
+static constexpr clv2::EnumVal<DwarfDebug::MinimizeAddrInV5>
+    MinimizeAddrInV5Vals[] = {
+        {"Default", DwarfDebug::MinimizeAddrInV5::Default, "default"},
+        {"Ranges", DwarfDebug::MinimizeAddrInV5::Ranges, "use DW_AT_ranges"},
+        {"Expressions", DwarfDebug::MinimizeAddrInV5::Expressions,
+         "use DWARF expressions"},
+        {"Form", DwarfDebug::MinimizeAddrInV5::Form,
+         "use DW_FORM_addrx* forms"},
+        {"Disabled", DwarfDebug::MinimizeAddrInV5::Disabled, "disabled"},
+};
+static constexpr auto OI_MinimizeAddrInV5 =
+    clv2::makeEnumOption<DwarfDebug::MinimizeAddrInV5>(
+        "minimize-addr-in-v5",
+        "Always use DW_AT_ranges in DWARFv5 whenever it could allow more "
+        "address pool entry sharing to reduce relocations/object size",
+        MinimizeAddrInV5Vals, clv2::Init{DwarfDebug::MinimizeAddrInV5::Default},
+        clv2::Hidden);
+
+static constexpr clv2::OptionsRegistry<
+    &OI_AccelTables, &OI_DwarfInlinedStrings, &OI_DwarfLinkageNames,
+    &OI_DwarfOpConvert, &OI_DwarfSectionsAsReferences, &OI_MinimizeAddrInV5>
+    DwarfDebugOptsReg;
+
+static bool
+getUseDwarfRangesBaseAddressSpecifier(const clv2::OptionsContext &Ctx);
+static bool getGenerateArangeSection(const clv2::OptionsContext &Ctx);
+static bool getGenerateTypeUnits(const clv2::OptionsContext &Ctx);
+static bool getSplitDwarfCrossCuReferences(const clv2::OptionsContext &Ctx);
+static bool getNoDwarfRangesSection(const clv2::OptionsContext &Ctx);
+static bool getUseGnuDebugMacro(const clv2::OptionsContext &Ctx);
+static bool getDwarfUseKeyInstructions(const clv2::OptionsContext &Ctx);
 
 static constexpr unsigned ULEB128PadSize = 4;
 
@@ -311,10 +293,13 @@ void Loc::MMI::addFrameIndexExpr(const DIExpression *Expr, int FI) {
 static AccelTableKind computeAccelTableKind(unsigned DwarfVersion,
                                             bool GenerateTypeUnits,
                                             DebuggerKind Tuning,
-                                            const Triple &TT) {
+                                            const Triple &TT,
+                                            const clv2::OptionsContext &Ctx) {
   // Honor an explicit request.
-  if (AccelTables != AccelTableKind::Default)
-    return AccelTables;
+  auto AccelTablesVal = clv2::getOptValOr<&DwarfDebugOptsReg, &OI_AccelTables>(
+      Ctx, AccelTableKind::Default);
+  if (AccelTablesVal != AccelTableKind::Default)
+    return AccelTablesVal;
 
   // Generating DWARF5 acceleration table.
   // Currently Split dwarf and non ELF format is not supported.
@@ -352,13 +337,18 @@ DwarfDebug::DwarfDebug(AsmPrinter *A)
   else
     DebuggerTuning = DebuggerKind::GDB;
 
-  if (DwarfInlinedStrings == Default)
+  auto &Ctx = Asm->TM.getOptionsContext();
+
+  auto DwarfInlinedStringsVal =
+      clv2::getOptValOr<&DwarfDebugOptsReg, &OI_DwarfInlinedStrings>(Ctx,
+                                                                     Default);
+  if (DwarfInlinedStringsVal == Default)
     UseInlineStrings = tuneForDBX();
   else
-    UseInlineStrings = DwarfInlinedStrings == Enable;
+    UseInlineStrings = DwarfInlinedStringsVal == Enable;
 
   // Always emit .debug_aranges for SCE tuning.
-  UseARangesSection = GenerateARangeSection || tuneForSCE();
+  UseARangesSection = getGenerateArangeSection(Ctx) || tuneForSCE();
 
   HasAppleExtensionAttributes = tuneForLLDB();
 
@@ -366,10 +356,13 @@ DwarfDebug::DwarfDebug(AsmPrinter *A)
   HasSplitDwarf = !Asm->TM.Options.MCOptions.SplitDwarfFile.empty();
 
   // SCE defaults to linkage names only for abstract subprograms.
-  if (DwarfLinkageNames == DefaultLinkageNames)
+  auto DwarfLinkageNamesVal =
+      clv2::getOptValOr<&DwarfDebugOptsReg, &OI_DwarfLinkageNames>(
+          Ctx, DefaultLinkageNames);
+  if (DwarfLinkageNamesVal == DefaultLinkageNames)
     UseAllLinkageNames = !tuneForSCE();
   else
-    UseAllLinkageNames = DwarfLinkageNames == AllLinkageNames;
+    UseAllLinkageNames = DwarfLinkageNamesVal == AllLinkageNames;
 
   unsigned DwarfVersionNumber = Asm->TM.Options.MCOptions.DwarfVersion;
   unsigned DwarfVersion = DwarfVersionNumber ? DwarfVersionNumber
@@ -393,18 +386,22 @@ DwarfDebug::DwarfDebug(AsmPrinter *A)
   if (!Dwarf64 && TT.isArch64Bit() && TT.isOSBinFormatXCOFF())
     report_fatal_error("XCOFF requires DWARF64 for 64-bit mode!");
 
-  UseRangesSection = !NoDwarfRangesSection;
+  UseRangesSection = !getNoDwarfRangesSection(Ctx);
 
-  if (DwarfSectionsAsReferences != Default)
-    UseSectionsAsReferences = DwarfSectionsAsReferences == Enable;
+  auto DwarfSectionsAsReferencesVal =
+      clv2::getOptValOr<&DwarfDebugOptsReg, &OI_DwarfSectionsAsReferences>(
+          Ctx, Default);
+  if (DwarfSectionsAsReferencesVal != Default)
+    UseSectionsAsReferences = DwarfSectionsAsReferencesVal == Enable;
 
   // Don't generate type units for unsupported object file formats.
   GenerateTypeUnits = (A->TM.getTargetTriple().isOSBinFormatELF() ||
                        A->TM.getTargetTriple().isOSBinFormatWasm()) &&
-                      GenerateDwarfTypeUnits;
+                      getGenerateTypeUnits(Ctx);
 
-  TheAccelTableKind = computeAccelTableKind(
-      DwarfVersion, GenerateTypeUnits, DebuggerTuning, A->TM.getTargetTriple());
+  TheAccelTableKind =
+      computeAccelTableKind(DwarfVersion, GenerateTypeUnits, DebuggerTuning,
+                            A->TM.getTargetTriple(), Ctx);
 
   // Work around a GDB bug. GDB doesn't support the standard opcode;
   // SCE doesn't support GNU's; LLDB prefers the standard opcode, which
@@ -428,16 +425,19 @@ DwarfDebug::DwarfDebug(AsmPrinter *A)
   // It is unclear if the GCC .debug_macro extension is well-specified
   // for split DWARF. For now, do not allow LLVM to emit it.
   UseDebugMacroSection =
-      DwarfVersion >= 5 || (UseGNUDebugMacro && !useSplitDwarf());
-  if (DwarfOpConvert == Default)
+      DwarfVersion >= 5 || (getUseGnuDebugMacro(Ctx) && !useSplitDwarf());
+  auto DwarfOpConvertVal =
+      clv2::getOptValOr<&DwarfDebugOptsReg, &OI_DwarfOpConvert>(Ctx, Default);
+  if (DwarfOpConvertVal == Default)
     EnableOpConvert = !((tuneForGDB() && useSplitDwarf()) || (tuneForLLDB() && !TT.isOSBinFormatMachO()));
   else
-    EnableOpConvert = (DwarfOpConvert == Enable);
+    EnableOpConvert = (DwarfOpConvertVal == Enable);
 
   // Split DWARF would benefit object size significantly by trading reductions
   // in address pool usage for slightly increased range list encodings.
   if (DwarfVersion >= 5)
-    MinimizeAddr = MinimizeAddrInV5Option;
+    MinimizeAddr = clv2::getOptValOr<&DwarfDebugOptsReg, &OI_MinimizeAddrInV5>(
+        Ctx, DwarfDebug::MinimizeAddrInV5::Default);
 
   Asm->OutStreamer->getContext().setDwarfVersion(DwarfVersion);
   Asm->OutStreamer->getContext().setDwarfFormat(Dwarf64 ? dwarf::DWARF64
@@ -542,7 +542,9 @@ template <typename Func> static void forBothCUs(DwarfCompileUnit &CU, Func F) {
 }
 
 bool DwarfDebug::shareAcrossDWOCUs() const {
-  return SplitDwarfCrossCuReferences;
+  return getSplitDwarfCrossCuReferences(
+      Asm->MF ? Asm->MF->getFunction().getContext().getOptionsContext()
+              : Asm->TM.getOptionsContext());
 }
 
 DwarfCompileUnit &
@@ -2242,8 +2244,9 @@ void DwarfDebug::beginInstruction(const MachineInstr *MI) {
   // into Not-Key-Instructions functions should use Key Instructions is_stmt
   // handling.
   bool ScopeUsesKeyInstructions =
-      KeyInstructionsAreStmts && DL &&
-      DL->getScope()->getSubprogram()->getKeyInstructionsEnabled();
+      getDwarfUseKeyInstructions(
+          MF.getFunction().getContext().getOptionsContext()) &&
+      DL && DL->getScope()->getSubprogram()->getKeyInstructionsEnabled();
 
   bool IsKey = false;
   if (ScopeUsesKeyInstructions && DL && DL.getLine())
@@ -2291,17 +2294,19 @@ void DwarfDebug::beginInstruction(const MachineInstr *MI) {
     if (LastAsmLine == 0)
       return;
     // If user said Don't Do That, don't do that.
-    if (UnknownLocations == Disable)
+    if (getUnknownLocations(
+            MF.getFunction().getContext().getOptionsContext()) == Disable)
       return;
     // See if we have a reason to emit a line-0 record now.
     // Reasons to emit a line-0 record include:
-    // - User asked for it (UnknownLocations).
+    // - User asked for it (getUnknownLocations()).
     // - Instruction has a label, so it's referenced from somewhere else,
     //   possibly debug information; we want it to have a source location.
     // - Instruction is at the top of a block; we don't want to inherit the
     //   location from the physically previous (maybe unrelated) block.
-    if (UnknownLocations == Enable || PrevLabel ||
-        (PrevInstBB && PrevInstBB != MI->getParent()))
+    if (getUnknownLocations(
+            MF.getFunction().getContext().getOptionsContext()) == Enable ||
+        PrevLabel || (PrevInstBB && PrevInstBB != MI->getParent()))
       RecordLineZero();
     return;
   }
@@ -2850,7 +2855,8 @@ void DwarfDebug::beginFunctionImpl(const MachineFunction *MF) {
   // Run both `findForceIsStmtInstrs` and `computeKeyInstructions` because
   // Not-Key-Instructions functions may be inlined into Key Instructions
   // functions and vice versa.
-  if (KeyInstructionsAreStmts)
+  if (getDwarfUseKeyInstructions(
+          MF->getFunction().getContext().getOptionsContext()))
     computeKeyInstructions(MF);
   findForceIsStmtInstrs(MF);
 }
@@ -3818,13 +3824,15 @@ void DwarfDebug::emitDebugARanges() {
 /// Emit a single range list. We handle both DWARF v5 and earlier.
 static void emitRangeList(DwarfDebug &DD, AsmPrinter *Asm,
                           const RangeSpanList &List) {
-  emitRangeList(DD, Asm, List.Label, List.Ranges, *List.CU,
-                dwarf::DW_RLE_base_addressx, dwarf::DW_RLE_offset_pair,
-                dwarf::DW_RLE_startx_length, dwarf::DW_RLE_startx_endx,
-                dwarf::DW_RLE_end_of_list, llvm::dwarf::RangeListEncodingString,
-                List.CU->getCUNode()->getRangesBaseAddress() ||
-                    DD.getDwarfVersion() >= 5,
-                [](auto) {});
+  emitRangeList(
+      DD, Asm, List.Label, List.Ranges, *List.CU, dwarf::DW_RLE_base_addressx,
+      dwarf::DW_RLE_offset_pair, dwarf::DW_RLE_startx_length,
+      dwarf::DW_RLE_startx_endx, dwarf::DW_RLE_end_of_list,
+      llvm::dwarf::RangeListEncodingString,
+      List.CU->getCUNode()->getRangesBaseAddress() ||
+          getUseDwarfRangesBaseAddressSpecifier(Asm->TM.getOptionsContext()) ||
+          DD.getDwarfVersion() >= 5,
+      [](auto) {});
 }
 
 void DwarfDebug::emitDebugRangesImpl(const DwarfFile &Holder, MCSection *Section) {
@@ -4368,4 +4376,40 @@ void DwarfDebug::beginCodeAlignment(const MachineBasicBlock &MBB) {
     MCDwarfLineEntry::make(Asm->OutStreamer.get(),
                            Asm->OutStreamer->getCurrentSectionOnly());
   }
+}
+
+static bool
+getUseDwarfRangesBaseAddressSpecifier(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::CGPASS_UseDwarfRangesBaseAddressSpecifier>(Ctx);
+}
+
+static bool getGenerateArangeSection(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_GenerateArangeSection>(Ctx);
+}
+
+static bool getGenerateTypeUnits(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_GenerateTypeUnits>(Ctx);
+}
+
+static bool getSplitDwarfCrossCuReferences(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_SplitDwarfCrossCuReferences>(
+      Ctx);
+}
+
+static bool getNoDwarfRangesSection(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_NoDwarfRangesSection>(Ctx);
+}
+
+static bool getUseGnuDebugMacro(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_UseGnuDebugMacro>(Ctx);
+}
+
+static const int RegisterDwarfDebugOpts = [] {
+  clv2::registerDynamicRegistry<&DwarfDebugOptsReg>();
+  return 0;
+}();
+
+static bool getDwarfUseKeyInstructions(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DwarfUseKeyInstructions>(Ctx);
 }

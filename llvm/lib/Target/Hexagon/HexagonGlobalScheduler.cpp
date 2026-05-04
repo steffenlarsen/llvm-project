@@ -43,13 +43,15 @@
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSchedule.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCInstrItineraries.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
@@ -63,81 +65,145 @@ using namespace llvm;
 STATISTIC(HexagonNumPullUps, "Number of instructions pull-ups");
 STATISTIC(HexagonNumDualJumps, "Number of dual jumps formed");
 
-static cl::opt<bool> DisablePullUp("disable-pull-up", cl::Hidden,
-                                   cl::desc("Disable Hexagon pull-up pass"));
+static bool EnableLocalPullUp = true;
 
-static cl::opt<bool> EnableSpeculativePullUp(
-    "enable-speculative-pull-up", cl::Hidden,
-    cl::desc("Enable speculation during Hexagon pull-up pass"));
+static bool AllowSpeculateLoads = true;
 
-static cl::opt<bool> EnableLocalPullUp(
-    "enable-local-pull-up", cl::Hidden, cl::init(true),
-    cl::desc("Enable same BB pull during Hexagon pull-up pass"));
+static bool AllowCmpBranchLoads = true;
 
-static cl::opt<bool> AllowSpeculateLoads(
-    "speculate-loads-on-pull-up", cl::Hidden, cl::init(true),
-    cl::desc("Allow speculative loads during Hexagon pull-up pass"));
+static bool AllowUnlikelyPath = true;
 
-static cl::opt<bool> AllowCmpBranchLoads(
-    "cmp-branch-loads-pull-up", cl::Hidden, cl::init(true),
-    cl::desc("Allow compare-branch loads during Hexagon pull-up pass"));
+static bool PerformDualJumps = true;
 
-static cl::opt<bool> AllowUnlikelyPath("unlikely-path-pull-up", cl::Hidden,
-                                       cl::init(true),
-                                       cl::desc("Allow unlikely path pull up"));
+static bool AllowDependentPullUp = true;
 
-static cl::opt<bool>
-    PerformDualJumps("dual-jump-in-pull-up", cl::Hidden, cl::init(true),
-                     cl::desc("Perform dual jump formation during pull up"));
+static bool AllowBBPeelPullUp = true;
 
-static cl::opt<bool> AllowDependentPullUp(
-    "enable-dependent-pull-up", cl::Hidden, cl::init(true),
-    cl::desc("Perform dual jump formation during pull up"));
+static bool PreventCompoundSeparation = false;
 
-static cl::opt<bool>
-    AllowBBPeelPullUp("enable-bb-peel-pull-up", cl::Hidden, cl::init(true),
-                      cl::desc("Peel a reg copy out of a BBloop"));
+static bool PreventDuplexSeparation = true;
 
-static cl::opt<bool> PreventCompoundSeparation(
-    "prevent-compound-separation", cl::Hidden,
-    cl::desc("Do not destroy existing compounds during pull up"));
+static unsigned MainCandidateQueueSize = 8;
 
-static cl::opt<bool> PreventDuplexSeparation(
-    "prevent-duplex-separation", cl::Hidden, cl::init(true),
-    cl::desc("Do not destroy existing duplexes during pull up"));
+static unsigned SecondaryCandidateQueueSize = 2;
 
-static cl::opt<unsigned> MainCandidateQueueSize("pull-up-main-queue-size",
-                                                cl::Hidden, cl::init(8));
+static bool PostPullUpOpt = true;
 
-static cl::opt<unsigned> SecondaryCandidateQueueSize("pull-up-sec-queue-size",
-                                                     cl::Hidden, cl::init(2));
+static bool SpeculateNonPredInsn = true;
 
-static cl::opt<bool> PostPullUpOpt(
-    "post-pull-up-opt", cl::Hidden, cl::Optional, cl::init(true),
-    cl::desc("Enable opt. exposed by pull-up e.g., remove redundant jumps"));
+static bool DisableCheckBundles = true;
 
-static cl::opt<bool> SpeculateNonPredInsn(
-    "speculate-non-pred-insn", cl::Hidden, cl::Optional, cl::init(true),
-    cl::desc("Speculate non-predicable instructions in parent BB"));
+static bool getDisablePullUp(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DisablePullUp>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    DisableCheckBundles("disable-hexagon-check-bundles", cl::Hidden,
-                        cl::init(true),
-                        cl::desc("Disable Hexagon check bundles pass"));
+static bool getDisablePullUpWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::HexagonOptsReg, &clv2::HEX_DisablePullUp>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    WarnOnBundleSize("warn-on-bundle-size", cl::Hidden,
-                     cl::desc("Hexagon check bundles and warn on size"));
+static bool getEnableSpeculativePullUp(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_EnableSpeculativePullUp>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    ForceNoopHazards("force-noop-hazards", cl::Hidden, cl::init(false),
-                     cl::desc("Force noop hazards in scheduler"));
-static cl::opt<bool> OneFloatPerPacket(
-    "single-float-packet", cl::Hidden,
-    cl::desc("Allow only one single floating point instruction in a packet"));
-static cl::opt<bool> OneComplexPerPacket(
-    "single-complex-packet", cl::Hidden,
-    cl::desc("Allow only one complex instruction in a packet"));
+static bool getEnableLocalPullUp(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_EnableLocalPullUp>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getAllowSpeculateLoads(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_AllowSpeculateLoads>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getAllowCmpBranchLoads(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_AllowCmpBranchLoads>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getAllowUnlikelyPath(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_AllowUnlikelyPath>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getAllowDependentPullUp(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_AllowDependentPullUp>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getPreventCompoundSeparation(const Function &F) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg,
+                           &clv2::HEX_PreventCompoundSeparation>(
+      F.getContext().getOptionsContext(), PreventCompoundSeparation);
+}
+
+static bool getPreventCompoundSeparationWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::HexagonOptsReg,
+                               &clv2::HEX_PreventCompoundSeparation>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getPreventDuplexSeparation(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_PreventDuplexSeparation>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getMainCandidateQueueSize(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_MainCandidateQueueSize>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getSecondaryCandidateQueueSize(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_SecondaryCandidateQueueSize>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getPostPullUpOpt(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_PostPullUpOpt>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getSpeculateNonPredInsn(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_SpeculateNonPredInsn>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getOneFloatPerPacket(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_OneFloatPerPacket>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getOneComplexPerPacket(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_OneComplexPerPacket>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getPerformDualJumps(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_PerformDualJumps>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getAllowBBPeelPullUp(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_AllowBBPeelPullUp>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getDisableCheckBundles(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DisableCheckBundles>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getWarnOnBundleSize(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_WarnOnBundleSize>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getForceNoopHazards(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_ForceNoopHazards>(
+      F.getContext().getOptionsContext());
+}
 
 namespace llvm {
 FunctionPass *createHexagonGlobalScheduler();
@@ -610,7 +676,8 @@ static unsigned nonDbgBundleSize(MachineBasicBlock::iterator &TargetPacket) {
 /// The pass main entry point.
 bool HexagonGlobalScheduler::runOnMachineFunction(MachineFunction &Fn) {
   auto &HST = Fn.getSubtarget<HexagonSubtarget>();
-  if (DisablePullUp || !HST.usePackets() || skipFunction(Fn.getFunction()))
+  if (getDisablePullUp(Fn.getFunction()) || !HST.usePackets() ||
+      skipFunction(Fn.getFunction()))
     return false;
 
   const MachineRegisterInfo *MRI = &Fn.getRegInfo();
@@ -627,7 +694,7 @@ bool HexagonGlobalScheduler::runOnMachineFunction(MachineFunction &Fn) {
 
   // Preserve comounds if Opt Size.
   const Function &F = Fn.getFunction();
-  if (F.hasOptSize() && PreventCompoundSeparation.getNumOccurrences() == 0)
+  if (F.hasOptSize() && !getPreventCompoundSeparationWasSpecified(F))
     PreventCompoundSeparation = true;
 
   // Instantiate the Scheduler.
@@ -643,7 +710,8 @@ bool HexagonGlobalScheduler::runOnMachineFunction(MachineFunction &Fn) {
   GlobalSchedulerState.checkBundleCounts(Fn);
 
   // Pullup does not handle hazards yet.
-  if (!DisablePullUp.getPosition() && ForceNoopHazards)
+  if (!getDisablePullUpWasSpecified(Fn.getFunction()) &&
+      getForceNoopHazards(Fn.getFunction()))
     return true;
 
   LLVM_DEBUG(GlobalSchedulerState.countCompounds(Fn));
@@ -651,7 +719,7 @@ bool HexagonGlobalScheduler::runOnMachineFunction(MachineFunction &Fn) {
   GlobalSchedulerState.formPullUpRegions(Fn);
   GlobalSchedulerState.performPullUp();
   GlobalSchedulerState.performPullUpCFG(Fn);
-  if (PostPullUpOpt) {
+  if (getPostPullUpOpt(Fn.getFunction())) {
     GlobalSchedulerState.formPullUpRegions(Fn);
     GlobalSchedulerState.performExposedOptimizations(Fn);
   }
@@ -760,7 +828,7 @@ bool HexagonGlobalSchedulerImpl::IsNotDualJumpFirstCandidate(MachineInstr *MI) {
 /// These four functions clearly belong in HexagonInstrInfo.cpp.
 /// Is this MI could be first dual jump instruction?
 bool HexagonGlobalSchedulerImpl::IsDualJumpFirstCandidate(MachineInstr *MI) {
-  if (!PerformDualJumps)
+  if (!getPerformDualJumps(MF.getFunction()))
     return false;
   if (MI->isBranch() && QII->isPredicated(*MI) && !QII->isNewValueJump(*MI) &&
       !MI->isIndirectBranch() && !QII->isEndLoopN(MI->getOpcode()))
@@ -772,7 +840,7 @@ bool HexagonGlobalSchedulerImpl::IsDualJumpFirstCandidate(MachineInstr *MI) {
 /// This version covers the whole packet.
 bool HexagonGlobalSchedulerImpl::IsDualJumpFirstCandidate(
     MachineBasicBlock::iterator &TargetPacket) {
-  if (!PerformDualJumps)
+  if (!getPerformDualJumps(MF.getFunction()))
     return false;
   MachineInstr *MI = &*TargetPacket;
 
@@ -800,7 +868,7 @@ bool HexagonGlobalSchedulerImpl::IsDualJumpFirstCandidate(
 /// into it. Negative proof.
 bool HexagonGlobalSchedulerImpl::IsDualJumpFirstCandidate(
     MachineBasicBlock *MBB) {
-  if (!PerformDualJumps)
+  if (!getPerformDualJumps(MF.getFunction()))
     return false;
 
   for (MachineBasicBlock::instr_iterator MII = MBB->instr_begin(),
@@ -817,7 +885,7 @@ bool HexagonGlobalSchedulerImpl::IsDualJumpFirstCandidate(
 
 /// Is this MI could be second dual jump instruction?
 bool HexagonGlobalSchedulerImpl::IsDualJumpSecondCandidate(MachineInstr *MI) {
-  if (!PerformDualJumps)
+  if (!getPerformDualJumps(MF.getFunction()))
     return false;
   if ((MI->isBranch() && !QII->isNewValueJump(*MI) && !MI->isIndirectBranch() &&
        !QII->isEndLoopN(MI->getOpcode())) ||
@@ -1330,15 +1398,15 @@ bool HexagonGlobalSchedulerImpl::canAddMIToThisPacket(
     MachineInstr *Inst1 = *BI;
     MachineInstr *Inst2 = MI;
 
-    if (Inst1->getParent() && OneFloatPerPacket && QII->isFloat(*Inst1) &&
-        QII->isFloat(*Inst2))
+    if (Inst1->getParent() && getOneFloatPerPacket(MF.getFunction()) &&
+        QII->isFloat(*Inst1) && QII->isFloat(*Inst2))
       return false;
 
-    if (Inst1->getParent() && OneComplexPerPacket && QII->isComplex(*Inst1) &&
-        QII->isComplex(*Inst2))
+    if (Inst1->getParent() && getOneComplexPerPacket(MF.getFunction()) &&
+        QII->isComplex(*Inst1) && QII->isComplex(*Inst2))
       return false;
 
-    if (PreventCompoundSeparation)
+    if (getPreventCompoundSeparation(MF.getFunction()))
       if (QII->getCompoundCandidateGroup(**BI)) {
         if (!FirstCompound)
           FirstCompound = *BI;
@@ -1352,7 +1420,7 @@ bool HexagonGlobalSchedulerImpl::canAddMIToThisPacket(
           }
         }
       }
-    if (PreventDuplexSeparation)
+    if (getPreventDuplexSeparation(MF.getFunction()))
       if (QII->getDuplexCandidateGroup(**BI)) {
         if (!FirstDuplex)
           FirstDuplex = *BI;
@@ -1697,8 +1765,9 @@ static inline bool MIShouldNotBePulledUp(MachineInstr *MI) {
 // It is a branch, and we move it to last packet of the target location.
 bool HexagonGlobalSchedulerImpl::MIisDualJumpCandidate(
     MachineInstr *MI, MachineBasicBlock::iterator &WorkPoint) {
-  if (!PerformDualJumps || !IsDualJumpSecondCandidate(MI) ||
-      MIMustNotBePulledUp(MI) || ignoreInstruction(MI))
+  if (!getPerformDualJumps(MF.getFunction()) ||
+      !IsDualJumpSecondCandidate(MI) || MIMustNotBePulledUp(MI) ||
+      ignoreInstruction(MI))
     return false;
 
   MachineBasicBlock *FromThisBB = MI->getParent();
@@ -1832,7 +1901,7 @@ bool HexagonGlobalSchedulerImpl::canThisMIBeMoved(
     return false;
   // See if we can potentially break potential compound candidates,
   // and do not do it.
-  if (PreventCompoundSeparation && MI->isBundled()) {
+  if (getPreventCompoundSeparation(MF.getFunction()) && MI->isBundled()) {
     enum HexagonII::CompoundGroup MICG = QII->getCompoundCandidateGroup(*MI);
     if (MICG != HexagonII::HCG_None) {
       // Check internal dependencies in the bundle.
@@ -1855,7 +1924,7 @@ bool HexagonGlobalSchedulerImpl::canThisMIBeMoved(
     }
   }
   // Same thing for duplex candidates.
-  if (PreventDuplexSeparation && MI->isBundled()) {
+  if (getPreventDuplexSeparation(MF.getFunction()) && MI->isBundled()) {
     if (QII->getDuplexCandidateGroup(*MI) != HexagonII::HSIG_None) {
       // Check internal dependencies in the bundle.
       // First, find the bundle header.
@@ -1944,7 +2013,7 @@ bool HexagonGlobalSchedulerImpl::canThisMIBeMoved(
       if (MII->isDebugInstr())
         continue;
       if (MIsAreDependent(&*MII, MI)) {
-        if (!AllowDependentPullUp) {
+        if (!getAllowDependentPullUp(MF.getFunction())) {
           LLVM_DEBUG(dbgs() << "\t\tDependent.\n");
           return false;
         } else {
@@ -3343,7 +3412,7 @@ bool HexagonGlobalSchedulerImpl::canMIBeSpeculated(
     std::vector<MachineInstr *> &backtrack) {
   // For now disallow memory accesses from speculation.
   // Generally we can check if they potentially may trap/cause an exception.
-  if (!EnableSpeculativePullUp || !MI || MI->mayStore())
+  if (!getEnableSpeculativePullUp(MF.getFunction()) || !MI || MI->mayStore())
     return false;
 
   LLVM_DEBUG(dbgs() << "\t[canMIBeSpeculated] From BB(" << FromBB->getNumber()
@@ -3361,7 +3430,7 @@ bool HexagonGlobalSchedulerImpl::canMIBeSpeculated(
   // do not pull-in to a loop exit BB, but there are implications for
   // non-natural loops (not recognized by LLVM as loops) and multi-threaded
   // code.
-  if (AllowSpeculateLoads && MI->mayLoad()) {
+  if (getAllowSpeculateLoads(MF.getFunction()) && MI->mayLoad()) {
     // Invariant loads should always be safe.
     if (!MI->isDereferenceableInvariantLoad())
       return false;
@@ -3526,16 +3595,16 @@ bool HexagonGlobalSchedulerImpl::MoveMItoBundle(
   // We do not allow to move instructions in the same BB.
   if (HomeBB == OriginBB) {
     LLVM_DEBUG(dbgs() << "\t\tSame BB pull-up.\n");
-    if (!EnableLocalPullUp)
+    if (!getEnableLocalPullUp(MF.getFunction()))
       return false;
   }
 
-  if (OneFloatPerPacket && QII->isFloat(*TargetPacket) &&
+  if (getOneFloatPerPacket(MF.getFunction()) && QII->isFloat(*TargetPacket) &&
       QII->isFloat(*InstrToMove))
     return false;
 
-  if (OneComplexPerPacket && QII->isComplex(*TargetPacket) &&
-      QII->isComplex(*InstrToMove))
+  if (getOneComplexPerPacket(MF.getFunction()) &&
+      QII->isComplex(*TargetPacket) && QII->isComplex(*InstrToMove))
     return false;
 
   LLVM_DEBUG(dbgs() << "\t\tWay home:\n");
@@ -3786,7 +3855,7 @@ bool HexagonGlobalSchedulerImpl::MoveMItoBundle(
             LLVM_DEBUG(dbgs() << "\tNon predicable insn!\t";
                        InstrToMove->dump());
             // TODO: Speculate ins. when pulled from unlikely path.
-            if (!SpeculateNonPredInsn || !PathInRegion ||
+            if (!getSpeculateNonPredInsn(MF.getFunction()) || !PathInRegion ||
                 InstrToMove->mayLoad() || InstrToMove->mayStore() ||
                 InstrToMove->hasUnmodeledSideEffects() ||
                 !canMIBeSpeculated(&*InstrToMove, CurrentBB, PreviousBB,
@@ -4112,7 +4181,7 @@ MachineInstr *HexagonGlobalSchedulerImpl::findBundleAndBranch(
 // again in the last bundle of the loop.
 bool HexagonGlobalSchedulerImpl::pullUpPeelBBLoop(MachineBasicBlock *PredBB,
                                                   MachineBasicBlock *LoopBB) {
-  if (!AllowBBPeelPullUp)
+  if (!getAllowBBPeelPullUp(MF.getFunction()))
     return false;
   if (!LoopBB || !PredBB)
     return false;
@@ -4969,7 +5038,7 @@ bool HexagonGlobalSchedulerImpl::performPullUp() {
     LLVM_DEBUG(dbgs() << "\n\nRegion with(" << (*CurrentRegion)->size()
                       << ")BBs\n");
 
-    if (!EnableLocalPullUp && (*CurrentRegion)->size() < 2)
+    if (!getEnableLocalPullUp(MF.getFunction()) && (*CurrentRegion)->size() < 2)
       continue;
 
     // For all MBB in the region... except the last one.
@@ -4978,7 +5047,8 @@ bool HexagonGlobalSchedulerImpl::performPullUp() {
               LastBBInRegion = (*CurrentRegion)->getLastMBB();
          ToThisBB != LastBBInRegion; ++ToThisBB) {
       // If we do not want to allow same BB pull-up, take an early exit.
-      if (!EnableLocalPullUp && (std::next(ToThisBB) == LastBBInRegion))
+      if (!getEnableLocalPullUp(MF.getFunction()) &&
+          (std::next(ToThisBB) == LastBBInRegion))
         break;
       if (multipleBranchesFromToBB(*ToThisBB))
         break;
@@ -5013,7 +5083,7 @@ bool HexagonGlobalSchedulerImpl::performPullUp() {
           // We also do not process last block in the region,
           // so it is safe to always begin with the next BB in the region.
           // Start from "next" BB in the region.
-          if (EnableLocalPullUp) {
+          if (getEnableLocalPullUp(MF.getFunction())) {
             FromThisBB = ToThisBB;
             FromHere = WorkPoint;
             ++FromHere;
@@ -5065,8 +5135,9 @@ bool HexagonGlobalSchedulerImpl::performPullUp() {
             }
             // This is a step Home.
             backtrack.push_back(&*FromHere);
-            if (!findPullUpCandidates(WorkPoint, FromHere, backtrack,
-                                      MainCandidateQueueSize))
+            if (!findPullUpCandidates(
+                    WorkPoint, FromHere, backtrack,
+                    getMainCandidateQueueSize(MF.getFunction())))
               break;
             ++FromHere;
           }
@@ -5081,7 +5152,7 @@ bool HexagonGlobalSchedulerImpl::performPullUp() {
     }
     // AllowUnlikelyPath is on by default,
     // if we wish to disable it, we can do so here.
-    if (!AllowUnlikelyPath)
+    if (!getAllowUnlikelyPath(MF.getFunction()))
       continue;
 
     // We have parsed the likely path through the region.
@@ -5151,8 +5222,9 @@ bool HexagonGlobalSchedulerImpl::performPullUp() {
             }
             // This is a step Home.
             backtrack.push_back(&*FromHere);
-            if (!findPullUpCandidates(WorkPoint, FromHere, backtrack,
-                                      SecondaryCandidateQueueSize))
+            if (!findPullUpCandidates(
+                    WorkPoint, FromHere, backtrack,
+                    getSecondaryCandidateQueueSize(MF.getFunction())))
               break;
             ++FromHere;
           }
@@ -5203,7 +5275,7 @@ bool HexagonGlobalSchedulerImpl::incrementalAddToPacket(MachineInstr &MI) {
 }
 
 void HexagonGlobalSchedulerImpl::checkBundleCounts(MachineFunction &Fn) {
-  if (DisableCheckBundles)
+  if (getDisableCheckBundles(MF.getFunction()))
     return;
 
   unsigned BundleLimit = 4;
@@ -5231,7 +5303,7 @@ void HexagonGlobalSchedulerImpl::checkBundleCounts(MachineFunction &Fn) {
           }
         }
         if (InstrCount > BundleLimit) {
-          if (WarnOnBundleSize) {
+          if (getWarnOnBundleSize(MF.getFunction())) {
             LLVM_DEBUG(dbgs() << "Warning bundle size exceeded " << *MI);
           } else {
             assert(0 && "Bundle size exceeded");

@@ -17,10 +17,13 @@
 #include "llvm/Analysis/SimplifyQuery.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/GEPNoWrapFlags.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 
 namespace llvm {
+
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
 
 class BatchAAResults;
 class AssumptionCache;
@@ -34,6 +37,7 @@ class SCEV;
 class ScalarEvolution;
 class SCEVPredicate;
 template <typename T> class SmallVectorImpl;
+class Function;
 class TargetLibraryInfo;
 
 /// Returns true if V is always a dereferenceable pointer with alignment
@@ -126,7 +130,7 @@ LLVM_ABI bool mustSuppressSpeculation(const LoadInst &LI);
 
 /// The default number of maximum instructions to scan in the block, used by
 /// FindAvailableLoadedValue().
-LLVM_ABI extern cl::opt<unsigned> DefMaxInstsToScan;
+LLVM_ABI unsigned getDefMaxInstsToScan(const clv2::OptionsContext &Ctx);
 
 /// Scan backwards to see if we have the value of the given load available
 /// locally within a small number of instructions.
@@ -152,18 +156,20 @@ LLVM_ABI extern cl::opt<unsigned> DefMaxInstsToScan;
 /// location in memory, as opposed to the value operand of a store.
 ///
 /// \returns The found value, or nullptr if no value is found.
-LLVM_ABI Value *FindAvailableLoadedValue(
-    LoadInst *Load, BasicBlock *ScanBB, BasicBlock::iterator &ScanFrom,
-    unsigned MaxInstsToScan = DefMaxInstsToScan, BatchAAResults *AA = nullptr,
-    bool *IsLoadCSE = nullptr, unsigned *NumScanedInst = nullptr);
+LLVM_ABI Value *FindAvailableLoadedValue(LoadInst *Load, BasicBlock *ScanBB,
+                                         BasicBlock::iterator &ScanFrom,
+                                         unsigned MaxInstsToScan,
+                                         BatchAAResults *AA = nullptr,
+                                         bool *IsLoadCSE = nullptr,
+                                         unsigned *NumScanedInst = nullptr);
 
 /// This overload provides a more efficient implementation of
 /// FindAvailableLoadedValue() for the case where we are not interested in
 /// finding the closest clobbering instruction if no available load is found.
 /// This overload cannot be used to scan across multiple blocks.
-LLVM_ABI Value *
-FindAvailableLoadedValue(LoadInst *Load, BatchAAResults &AA, bool *IsLoadCSE,
-                         unsigned MaxInstsToScan = DefMaxInstsToScan);
+LLVM_ABI Value *FindAvailableLoadedValue(LoadInst *Load, BatchAAResults &AA,
+                                         bool *IsLoadCSE,
+                                         unsigned MaxInstsToScan);
 
 /// Scan backwards to see if we have the value of the given pointer available
 /// locally within a small number of instructions.

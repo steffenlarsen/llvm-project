@@ -43,7 +43,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/LTO/Config.h"
 #include "llvm/LTO/LTO.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ToolOutputFile.h"
@@ -63,9 +63,6 @@ class TargetLibraryInfo;
 class TargetMachine;
 class raw_ostream;
 class raw_pwrite_stream;
-
-/// Enable global value internalization in LTO.
-LLVM_ABI extern cl::opt<bool> EnableLTOInternalization;
 
 //===----------------------------------------------------------------------===//
 /// C++ class which implements the opaque lto_code_gen_t type.
@@ -241,18 +238,20 @@ private:
   const Target *MArch = nullptr;
   lto_diagnostic_handler_t DiagHandler = nullptr;
   void *DiagContext = nullptr;
-  bool ShouldInternalize = EnableLTOInternalization;
+  bool ShouldInternalize = true;
   bool ShouldEmbedUselists = false;
   bool ShouldRestoreGlobalsLinkage = false;
   LLVMRemarkFileHandle DiagnosticOutputFile;
   std::unique_ptr<ToolOutputFile> StatsFile = nullptr;
   std::string SaveIRBeforeOptPath;
 
-  lto::Config Config;
+  lto::Config Config{llvm::clv2::defaultOptionsContext()};
+  std::unique_ptr<clv2::OptionsContext> LLVMOptsCtx;
 };
 
 /// A convenience function that calls cl::ParseCommandLineOptions on the given
 /// set of options.
-LLVM_ABI void parseCommandLineOptions(std::vector<std::string> &Options);
+LLVM_ABI std::unique_ptr<clv2::OptionsContext>
+parseCommandLineOptions(std::vector<std::string> &Options);
 } // namespace llvm
 #endif

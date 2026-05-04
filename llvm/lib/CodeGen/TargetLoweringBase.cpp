@@ -19,6 +19,7 @@
 #include "llvm/Analysis/Loads.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/Analysis.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
@@ -46,10 +47,11 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Triple.h"
@@ -64,61 +66,31 @@
 
 using namespace llvm;
 
-static cl::opt<bool> JumpIsExpensiveOverride(
-    "jump-is-expensive", cl::init(false),
-    cl::desc("Do not create extra branches to split comparison logic."),
-    cl::Hidden);
+static bool getJumpIsExpensive(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_JumpIsExpensive>(Ctx);
+}
 
-static cl::opt<unsigned> MinimumJumpTableEntries
-  ("min-jump-table-entries", cl::init(4), cl::Hidden,
-   cl::desc("Set minimum number of entries to use a jump table."));
-
-static cl::opt<unsigned> MaximumJumpTableSize
-  ("max-jump-table-size", cl::init(UINT_MAX), cl::Hidden,
-   cl::desc("Set maximum size of jump tables."));
-
-/// Minimum jump table density for normal functions.
-static cl::opt<unsigned>
-    JumpTableDensity("jump-table-density", cl::init(10), cl::Hidden,
-                     cl::desc("Minimum density for building a jump table in "
-                              "a normal function"));
-
-/// Minimum jump table density for -Os or -Oz functions.
-static cl::opt<unsigned> OptsizeJumpTableDensity(
-    "optsize-jump-table-density", cl::init(40), cl::Hidden,
-    cl::desc("Minimum density for building a jump table in "
-             "an optsize function"));
-
-static cl::opt<unsigned> MinimumBitTestCmpsOverride(
-    "min-bit-test-cmps", cl::init(2), cl::Hidden,
-    cl::desc("Set minimum of largest number of comparisons "
-             "to use bit test for switch."));
-
-static cl::opt<unsigned> MaxStoresPerMemsetOverride(
-    "max-store-memset", cl::init(0), cl::Hidden,
-    cl::desc("Override target's MaxStoresPerMemset and "
-             "MaxStoresPerMemsetOptSize. "
-             "Set to 0 to use the target default."));
-
-static cl::opt<unsigned> MaxStoresPerMemcpyOverride(
-    "max-store-memcpy", cl::init(0), cl::Hidden,
-    cl::desc("Override target's MaxStoresPerMemcpy and "
-             "MaxStoresPerMemcpyOptSize. "
-             "Set to 0 to use the target default."));
-
-static cl::opt<unsigned> MaxStoresPerMemmoveOverride(
-    "max-store-memmove", cl::init(0), cl::Hidden,
-    cl::desc("Override target's MaxStoresPerMemmove and "
-             "MaxStoresPerMemmoveOptSize. "
-             "Set to 0 to use the target default."));
-
-// FIXME: This option is only to test if the strict fp operation processed
-// correctly by preventing mutating strict fp operation to normal fp operation
-// during development. When the backend supports strict float operation, this
-// option will be meaningless.
-static cl::opt<bool> DisableStrictNodeMutation("disable-strictnode-mutation",
-       cl::desc("Don't mutate strict-float node to a legalize node"),
-       cl::init(false), cl::Hidden);
+static unsigned getJumpTableDensity(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_JumpTableDensity>(Ctx);
+}
+static unsigned getOptsizeJumpTableDensity(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_OptsizeJumpTableDensity>(Ctx);
+}
+static unsigned getMinBitTestCmps(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_MinBitTestCmps>(Ctx);
+}
+static unsigned getMaxStoreMemset(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_MaxStoreMemset>(Ctx);
+}
+static unsigned getMaxStoreMemcpy(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_MaxStoreMemcpy>(Ctx);
+}
+static unsigned getMaxStoreMemmove(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_MaxStoreMemmove>(Ctx);
+}
+static bool getDisableStrictnodeMutation(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableStrictnodeMutation>(Ctx);
+}
 
 LLVM_ABI RTLIB::Libcall RTLIB::getSHL(EVT VT) {
   if (VT == MVT::i16)
@@ -733,7 +705,8 @@ TargetLoweringBase::TargetLoweringBase(const TargetMachine &tm,
   MaxStoresPerMemsetOptSize = MaxStoresPerMemcpyOptSize =
       MaxStoresPerMemmoveOptSize = MaxLoadsPerMemcmpOptSize = 4;
   HasExtractBitsInsn = false;
-  JumpIsExpensive = JumpIsExpensiveOverride;
+  auto &Ctx = TM.getOptionsContext();
+  JumpIsExpensive = getJumpIsExpensive(Ctx);
   PredictableSelectIsExpensive = false;
   EnableExtLdPromotion = false;
   StackPointerRegisterToSaveRestore = 0;
@@ -742,7 +715,7 @@ TargetLoweringBase::TargetLoweringBase(const TargetMachine &tm,
   BooleanVectorContents = UndefinedBooleanContent;
   SchedPreferenceInfo = Sched::ILP;
   GatherAllAliasesMaxDepth = 18;
-  IsStrictFPEnabled = DisableStrictNodeMutation;
+  IsStrictFPEnabled = getDisableStrictnodeMutation(Ctx);
   MaxBytesForAlignment = 0;
   MaxAtomicSizeInBitsSupported = 0;
 
@@ -755,7 +728,11 @@ TargetLoweringBase::TargetLoweringBase(const TargetMachine &tm,
   MinCmpXchgSizeInBits = 0;
   SupportsUnalignedAtomics = false;
 
-  MinimumBitTestCmps = MinimumBitTestCmpsOverride;
+  if (auto *O = clv2::getView<&clv2::CGPassSched1Reg>(Ctx)) {
+    MinimumJumpTableEntries = O->get<&clv2::CGPASS_MinJumpTableEntries>();
+    MaximumJumpTableSize = O->get<&clv2::CGPASS_MaxJumpTableSize>();
+  }
+  MinimumBitTestCmps = getMinBitTestCmps(Ctx);
 }
 
 // Define the virtual destructor out-of-line to act as a key method to anchor
@@ -1094,8 +1071,7 @@ unsigned TargetLoweringBase::getBitWidthForCttzElements(
 
 void TargetLoweringBase::setJumpIsExpensive(bool isExpensive) {
   // If the command-line option was specified, ignore this request.
-  if (!JumpIsExpensiveOverride.getNumOccurrences())
-    JumpIsExpensive = isExpensive;
+  JumpIsExpensive = isExpensive;
 }
 
 TargetLoweringBase::LegalizeKind
@@ -1922,22 +1898,25 @@ bool TargetLoweringBase::allowsMemoryAccess(LLVMContext &Context,
 }
 
 unsigned TargetLoweringBase::getMaxStoresPerMemset(bool OptSize) const {
-  if (MaxStoresPerMemsetOverride > 0)
-    return MaxStoresPerMemsetOverride;
+  auto &Ctx = TM.getOptionsContext();
+  if (getMaxStoreMemset(Ctx) > 0)
+    return getMaxStoreMemset(Ctx);
 
   return OptSize ? MaxStoresPerMemsetOptSize : MaxStoresPerMemset;
 }
 
 unsigned TargetLoweringBase::getMaxStoresPerMemcpy(bool OptSize) const {
-  if (MaxStoresPerMemcpyOverride > 0)
-    return MaxStoresPerMemcpyOverride;
+  auto &Ctx = TM.getOptionsContext();
+  if (getMaxStoreMemcpy(Ctx) > 0)
+    return getMaxStoreMemcpy(Ctx);
 
   return OptSize ? MaxStoresPerMemcpyOptSize : MaxStoresPerMemcpy;
 }
 
 unsigned TargetLoweringBase::getMaxStoresPerMemmove(bool OptSize) const {
-  if (MaxStoresPerMemmoveOverride > 0)
-    return MaxStoresPerMemmoveOverride;
+  auto &Ctx = TM.getOptionsContext();
+  if (getMaxStoreMemmove(Ctx) > 0)
+    return getMaxStoreMemmove(Ctx);
 
   return OptSize ? MaxStoresPerMemmoveOptSize : MaxStoresPerMemmove;
 }
@@ -2254,7 +2233,9 @@ void TargetLoweringBase::setMinimumJumpTableEntries(unsigned Val) {
 }
 
 unsigned TargetLoweringBase::getMinimumJumpTableDensity(bool OptForSize) const {
-  return OptForSize ? OptsizeJumpTableDensity : JumpTableDensity;
+  auto &Ctx = TM.getOptionsContext();
+  return OptForSize ? getOptsizeJumpTableDensity(Ctx)
+                    : getJumpTableDensity(Ctx);
 }
 
 unsigned TargetLoweringBase::getMaximumJumpTableSize() const {

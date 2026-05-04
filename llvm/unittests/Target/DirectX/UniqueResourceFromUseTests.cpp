@@ -19,6 +19,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/SourceMgr.h"
 
+#include "llvm/Support/OptionsContext.h"
 #include "gtest/gtest.h"
 
 using namespace llvm;
@@ -31,9 +32,9 @@ protected:
   ModuleAnalysisManager *MAM;
   LLVMContext *Context;
   virtual void SetUp() {
-    Context = new LLVMContext();
+    Context = new LLVMContext(llvm::clv2::defaultOptionsContext());
     MAM = new ModuleAnalysisManager();
-    PB = new PassBuilder();
+    PB = new PassBuilder(llvm::clv2::defaultOptionsContext());
     PB->registerModuleAnalyses(*MAM);
     MAM->registerPass([&] { return DXILResourceTypeAnalysis(); });
     MAM->registerPass([&] { return DXILResourceAnalysis(); });

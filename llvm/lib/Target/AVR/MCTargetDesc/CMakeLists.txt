@@ -1,5 +1,6 @@
 add_llvm_component_library(LLVMAVRDesc
   AVRAsmBackend.cpp
+  AVROptions.cpp
   AVRELFObjectWriter.cpp
   AVRELFStreamer.cpp
   AVRInstPrinter.cpp

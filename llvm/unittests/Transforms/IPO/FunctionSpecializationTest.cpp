@@ -39,7 +39,7 @@ static void removeSSACopy(Function &F) {
 
 class FunctionSpecializationTest : public testing::Test {
 protected:
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   FunctionAnalysisManager FAM;
   std::unique_ptr<Module> M;
   std::unique_ptr<SCCPSolver> Solver;

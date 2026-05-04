@@ -21,6 +21,7 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include <cctype>
 #include <memory>
 #include <utility>
@@ -763,8 +764,9 @@ private:
                                          "': " + ErrorStr,
                                      inconvertibleErrorCode());
 
-    std::unique_ptr<MCSubtargetInfo> STI(
-        TheTarget->createMCSubtargetInfo(TT, CPU, TF.getString()));
+    std::unique_ptr<MCSubtargetInfo> STI(TheTarget->createMCSubtargetInfo(
+        TT, CPU, TF.getString(),
+        /*Ctx=*/llvm::clv2::defaultOptionsContext()));
     if (!STI)
       return make_error<StringError>("Unable to create subtarget for " +
                                          TT.str(),

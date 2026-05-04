@@ -16,7 +16,6 @@
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/CodeGenTypes/MachineValueType.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/Signals.h"
@@ -30,31 +29,10 @@ using llvm::RecordKeeper;
 using llvm::Regex;
 using namespace mlir;
 
-static llvm::cl::OptionCategory intrinsicGenCat("Intrinsics Generator Options");
-
-static llvm::cl::opt<std::string>
-    nameFilter("llvmir-intrinsics-filter",
-               llvm::cl::desc("Only keep the intrinsics with the specified "
-                              "substring in their record name"),
-               llvm::cl::cat(intrinsicGenCat));
-
-static llvm::cl::opt<std::string>
-    opBaseClass("dialect-opclass-base",
-                llvm::cl::desc("The base class for the ops in the dialect we "
-                               "are planning to emit"),
-                llvm::cl::init("LLVM_IntrOp"), llvm::cl::cat(intrinsicGenCat));
-
-static llvm::cl::opt<std::string> accessGroupRegexp(
-    "llvmir-intrinsics-access-group-regexp",
-    llvm::cl::desc("Mark intrinsics that match the specified "
-                   "regexp as taking an access group metadata"),
-    llvm::cl::cat(intrinsicGenCat));
-
-static llvm::cl::opt<std::string> aliasAnalysisRegexp(
-    "llvmir-intrinsics-alias-analysis-regexp",
-    llvm::cl::desc("Mark intrinsics that match the specified "
-                   "regexp as taking alias.scopes, noalias, and tbaa metadata"),
-    llvm::cl::cat(intrinsicGenCat));
+std::string nameFilter;
+std::string opBaseClass = "LLVM_IntrOp";
+std::string accessGroupRegexp;
+std::string aliasAnalysisRegexp;
 
 // Used to represent the indices of overloadable operands/results.
 using IndicesTy = llvm::SmallBitVector;

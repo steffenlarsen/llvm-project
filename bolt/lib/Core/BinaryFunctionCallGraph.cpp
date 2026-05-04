@@ -13,7 +13,9 @@
 #include "bolt/Core/BinaryFunctionCallGraph.h"
 #include "bolt/Core/BinaryContext.h"
 #include "bolt/Core/BinaryFunction.h"
-#include "llvm/Support/CommandLine.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Timer.h"
 #include <stack>
 
@@ -23,13 +25,9 @@ using namespace llvm;
 
 namespace opts {
 
-extern cl::opt<bool> TimeOpts;
-extern cl::opt<unsigned> Verbosity;
-extern cl::OptionCategory BoltCategory;
+extern unsigned Verbosity;
 
-static cl::opt<std::string>
-    DumpCGDot("dump-cg", cl::desc("dump callgraph to the given file"),
-              cl::cat(BoltCategory));
+bool DumpCGDotSpecified = false;
 
 } // namespace opts
 
@@ -47,9 +45,12 @@ CallGraph::NodeId BinaryFunctionCallGraph::addNode(BinaryFunction *BF,
   return Id;
 }
 
-std::deque<BinaryFunction *> BinaryFunctionCallGraph::buildTraversalOrder() {
+std::deque<BinaryFunction *> BinaryFunctionCallGraph::buildTraversalOrder(
+    const clv2::OptionsContext &OptsCtx) {
+  auto *UtilOpts = bolt_utils_opts::getBoltUtilsOpts(OptsCtx);
+  bool TimeOpts = UtilOpts->get<&clv2::BOLT_TimeOpts>();
   NamedRegionTimer T1("buildcgorder", "Build cg traversal order",
-                      "CG breakdown", "CG breakdown", opts::TimeOpts);
+                      "CG breakdown", "CG breakdown", TimeOpts);
   std::deque<BinaryFunction *> TopologicalOrder;
   enum NodeStatus { NEW, VISITING, VISITED };
   std::vector<NodeStatus> NodeStatus(Funcs.size());
@@ -94,8 +95,11 @@ buildCallGraph(BinaryContext &BC, CgFilterFunction Filter, bool CgFromPerfData,
                bool IncludeSplitCalls, bool UseFunctionHotSize,
                bool UseSplitHotSize, bool UseEdgeCounts,
                bool IgnoreRecursiveCalls) {
+  auto *UtilOptsCG = bolt_utils_opts::getBoltUtilsOpts(BC.getOptionsContext());
+  bool TimeOptsCG =
+      UtilOptsCG ? UtilOptsCG->get<&clv2::BOLT_TimeOpts>() : false;
   NamedRegionTimer T1("buildcg", "Callgraph construction", "CG breakdown",
-                      "CG breakdown", opts::TimeOpts);
+                      "CG breakdown", TimeOptsCG);
   BinaryFunctionCallGraph Cg;
   static constexpr uint64_t COUNT_NO_PROFILE =
       BinaryBasicBlock::COUNT_NO_PROFILE;
@@ -149,7 +153,7 @@ buildCallGraph(BinaryContext &BC, CgFilterFunction Filter, bool CgFromPerfData,
       BinaryFunction *DstFunc =
           DestSymbol ? BC.getFunctionForSymbol(DestSymbol) : nullptr;
       if (!DstFunc) {
-        LLVM_DEBUG(if (opts::Verbosity > 1) dbgs()
+        LLVM_DEBUG(if (opts::getVerbosity(BC) > 1) dbgs()
                    << "BOLT-DEBUG: buildCallGraph: no function for symbol\n");
         return false;
       }
@@ -162,7 +166,7 @@ buildCallGraph(BinaryContext &BC, CgFilterFunction Filter, bool CgFromPerfData,
           return false;
       }
       if (Filter(*DstFunc)) {
-        LLVM_DEBUG(if (opts::Verbosity > 1) dbgs()
+        LLVM_DEBUG(if (opts::getVerbosity(BC) > 1) dbgs()
                    << "BOLT-DEBUG: buildCallGraph: filtered " << *DstFunc
                    << '\n');
         return false;
@@ -174,7 +178,7 @@ buildCallGraph(BinaryContext &BC, CgFilterFunction Filter, bool CgFromPerfData,
       if (!IsValidCount)
         ++NoProfileCallsites;
       Cg.incArcWeight(SrcId, DstId, AdjCount, Offset);
-      LLVM_DEBUG(if (opts::Verbosity > 1) {
+      LLVM_DEBUG(if (opts::getVerbosity(BC) > 1) {
         dbgs() << "BOLT-DEBUG: buildCallGraph: call " << *Function << " -> "
                << *DstFunc << " @ " << Offset << "\n";
       });
@@ -280,7 +284,7 @@ buildCallGraph(BinaryContext &BC, CgFilterFunction Filter, bool CgFromPerfData,
 #else
   bool PrintInfo = false;
 #endif
-  if (PrintInfo || opts::Verbosity > 0)
+  if (PrintInfo || opts::getVerbosity(BC) > 0)
     BC.outs() << format("BOLT-INFO: buildCallGraph: %u nodes, %u callsites "
                         "(%u recursive), density = %.6lf, %u callsites not "
                         "processed, %u callsites with invalid profile, "
@@ -289,10 +293,16 @@ buildCallGraph(BinaryContext &BC, CgFilterFunction Filter, bool CgFromPerfData,
                         Cg.density(), NotProcessed, NoProfileCallsites,
                         NumFallbacks);
 
-  if (opts::DumpCGDot.getNumOccurrences()) {
-    Cg.printDot(opts::DumpCGDot, [&](CallGraph::NodeId Id) {
-      return Cg.nodeIdToFunc(Id)->getPrintName();
-    });
+  {
+    auto *CoreOpts = bolt_core_opts::getBoltCoreOpts(BC.getOptionsContext());
+    bool DumpSpecified =
+        CoreOpts ? CoreOpts->specified<&clv2::BOLTCORE_DumpCGDot>() : false;
+    if (DumpSpecified) {
+      std::string DumpFile = CoreOpts->get<&clv2::BOLTCORE_DumpCGDot>();
+      Cg.printDot(DumpFile, [&](CallGraph::NodeId Id) {
+        return Cg.nodeIdToFunc(Id)->getPrintName();
+      });
+    }
   }
 
   return Cg;

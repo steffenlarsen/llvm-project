@@ -12,7 +12,6 @@
 #include "bolt/Core/FunctionLayout.h"
 #include "bolt/Passes/BinaryPasses.h"
 #include "llvm/ADT/Hashing.h"
-#include "llvm/Support/CommandLine.h"
 #include <atomic>
 
 namespace llvm {
@@ -70,11 +69,14 @@ private:
   mergeEHTrampolines(BinaryFunction &BF, BasicBlockOrderType &Layout,
                      const TrampolineSetType &Trampolines) const;
 
+  /// Whether aggressive splitting is active for the current pass invocation.
+  bool AggressiveSplitting = false;
+
   std::atomic<uint64_t> SplitBytesHot{0ull};
   std::atomic<uint64_t> SplitBytesCold{0ull};
 
 public:
-  explicit SplitFunctions(const cl::opt<bool> &PrintPass)
+  explicit SplitFunctions(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   bool shouldOptimize(const BinaryFunction &BF) const override;

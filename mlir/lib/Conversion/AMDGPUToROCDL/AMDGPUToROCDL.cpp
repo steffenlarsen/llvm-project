@@ -4526,9 +4526,9 @@ struct ConvertAMDGPUToROCDLPass
 
   void runOnOperation() override {
     MLIRContext *ctx = &getContext();
-    FailureOr<Chipset> maybeChipset = Chipset::parse(chipset);
+    FailureOr<Chipset> maybeChipset = Chipset::parse(*chipset);
     if (failed(maybeChipset)) {
-      emitError(UnknownLoc::get(ctx), "Invalid chipset name: " + chipset);
+      emitError(UnknownLoc::get(ctx), "Invalid chipset name: " + *chipset);
       return signalPassFailure();
     }
 

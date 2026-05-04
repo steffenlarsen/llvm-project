@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Optimizer/CodeGen/CodeGen.h"
 #include "flang/Optimizer/Dialect/Support/FIRContext.h"
 #include "flang/Optimizer/Dialect/Support/KindMapping.h"
@@ -23,96 +24,109 @@
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/MLIROptionsOptInfos.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
 #include "llvm/Passes/OptimizationLevel.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
+using namespace llvm::clv2;
 
-static cl::opt<std::string>
-    inputFilename(cl::Positional, cl::desc("<input file>"), cl::init("-"));
+//===----------------------------------------------------------------------===//
+// tco-local option declarations
+//===----------------------------------------------------------------------===//
 
-static cl::opt<std::string> outputFilename("o",
-                                           cl::desc("Specify output filename"),
-                                           cl::value_desc("filename"),
-                                           cl::init("-"));
+inline constexpr OptionInfo<std::string> TCO_InputFilename{
+    "", "<input file>", Positional{}, Init{"-"}};
 
-static cl::opt<bool> emitFir("emit-fir",
-                             cl::desc("Parse and pretty-print the input"),
-                             cl::init(false));
+inline constexpr OptionInfo<std::string> TCO_OutputFilename{
+    "o", "Specify output filename", value_desc("filename"), Init{"-"}};
 
-static cl::opt<unsigned>
-    OptLevel("O",
-             cl::desc("Optimization level. [-O0, -O1, -O2, or -O3] "
-                      "(default = '-O2')"),
-             cl::Prefix, cl::init(2));
+inline constexpr OptionInfo<bool> TCO_EmitFir{
+    "emit-fir", "Parse and pretty-print the input", Init{false}};
 
-static cl::opt<std::string> targetTriple("target",
-                                         cl::desc("specify a target triple"),
-                                         cl::init("native"));
+inline constexpr OptionInfo<unsigned> TCO_OptLevel{
+    "O", "Optimization level. [-O0, -O1, -O2, or -O3] (default = '-O2')",
+    PrefixFormat, Init{2u}};
 
-static cl::opt<std::string>
-    targetCPU("target-cpu", cl::desc("specify a target CPU"), cl::init(""));
+inline constexpr OptionInfo<std::string> TCO_TargetTriple{
+    "target", "specify a target triple", Init{"native"}};
 
-static cl::opt<std::string> tuneCPU("tune-cpu", cl::desc("specify a tune CPU"),
-                                    cl::init(""));
+inline constexpr OptionInfo<std::string> TCO_TargetCPU{
+    "target-cpu", "specify a target CPU", Init{""}};
 
-static cl::opt<std::string>
-    targetFeatures("target-features", cl::desc("specify the target features"),
-                   cl::init(""));
+inline constexpr OptionInfo<std::string> TCO_TuneCPU{
+    "tune-cpu", "specify a tune CPU", Init{""}};
 
-static cl::opt<bool> codeGenLLVM(
-    "code-gen-llvm",
-    cl::desc("Run only CodeGen passes and translate FIR to LLVM IR"),
-    cl::init(false));
+inline constexpr OptionInfo<std::string> TCO_TargetFeatures{
+    "target-features", "specify the target features", Init{""}};
 
-static cl::opt<bool> emitFinalMLIR(
-    "emit-final-mlir",
-    cl::desc("Only translate FIR to MLIR, do not lower to LLVM IR"),
-    cl::init(false));
+inline constexpr OptionInfo<bool> TCO_CodeGenLLVM{
+    "code-gen-llvm", "Run only CodeGen passes and translate FIR to LLVM IR",
+    Init{false}};
 
-static cl::opt<bool>
-    simplifyMLIR("simplify-mlir",
-                 cl::desc("Run CSE and canonicalization on MLIR output"),
-                 cl::init(false));
+inline constexpr OptionInfo<bool> TCO_EmitFinalMLIR{
+    "emit-final-mlir", "Only translate FIR to MLIR, do not lower to LLVM IR",
+    Init{false}};
+
+inline constexpr OptionInfo<bool> TCO_SimplifyMLIR{
+    "simplify-mlir", "Run CSE and canonicalization on MLIR output",
+    Init{false}};
 
 // Enabled by default to accurately reflect -O2
-static cl::opt<bool> enableAliasAnalysis("enable-aa",
-                                         cl::desc("Enable FIR alias analysis"),
-                                         cl::init(true));
+inline constexpr OptionInfo<bool> TCO_EnableAliasAnalysis{
+    "enable-aa", "Enable FIR alias analysis", Init{true}};
 
-static cl::opt<bool> testGeneratorMode(
-    "test-gen", cl::desc("-emit-final-mlir -simplify-mlir -enable-aa=false"),
-    cl::init(false));
+inline constexpr OptionInfo<bool> TCO_TestGeneratorMode{
+    "test-gen", "-emit-final-mlir -simplify-mlir -enable-aa=false",
+    Init{false}};
 
-static cl::opt<Fortran::common::FPMaxminBehavior> fpMaxminBehavior(
-    "ffp-maxmin-behavior",
-    cl::desc("Control max/min and [max|min][loc|val] behavior "
-             "[legacy|portable|extremum|extremenum] (for future pass use)"),
-    cl::values(clEnumValN(Fortran::common::FPMaxminBehavior::Legacy, "legacy",
-                          "cmp+select"),
-               clEnumValN(Fortran::common::FPMaxminBehavior::Portable,
-                          "portable",
-                          "cmp+select and arith.max/minnumf when nnan and nsz "
-                          "fast math flags are enabled"),
-               clEnumValN(Fortran::common::FPMaxminBehavior::Extremum,
-                          "extremum", "arith.max/minimum"),
-               clEnumValN(Fortran::common::FPMaxminBehavior::ExtremeNum,
-                          "extremenum", "arith.max/minnum")),
-    cl::init(Fortran::common::FPMaxminBehavior::Legacy));
+// FPMaxminBehavior enum option
+inline constexpr EnumVal<Fortran::common::FPMaxminBehavior>
+    FPMaxminBehaviorVals[] = {
+        {"legacy", Fortran::common::FPMaxminBehavior::Legacy, "cmp+select"},
+        {"portable", Fortran::common::FPMaxminBehavior::Portable,
+         "cmp+select and arith.max/minnumf when nnan and nsz fast math flags "
+         "are enabled"},
+        {"extremum", Fortran::common::FPMaxminBehavior::Extremum,
+         "arith.max/minimum"},
+        {"extremenum", Fortran::common::FPMaxminBehavior::ExtremeNum,
+         "arith.max/minnum"},
+};
 
-#include "flang/Optimizer/Passes/CommandLineOpts.h"
+inline constexpr auto TCO_FPMaxminBehavior =
+    makeEnumOption<Fortran::common::FPMaxminBehavior>(
+        "ffp-maxmin-behavior",
+        "Control max/min and [max|min][loc|val] behavior "
+        "[legacy|portable|extremum|extremenum] (for future pass use)",
+        FPMaxminBehaviorVals, Init{Fortran::common::FPMaxminBehavior::Legacy});
+
+//===----------------------------------------------------------------------===//
+// Tool registry
+//===----------------------------------------------------------------------===//
+
+inline constexpr OptionsRegistry<
+    &TCO_InputFilename, &TCO_OutputFilename, &TCO_EmitFir, &TCO_OptLevel,
+    &TCO_TargetTriple, &TCO_TargetCPU, &TCO_TuneCPU, &TCO_TargetFeatures,
+    &TCO_CodeGenLLVM, &TCO_EmitFinalMLIR, &TCO_SimplifyMLIR,
+    &TCO_EnableAliasAnalysis, &TCO_TestGeneratorMode, &TCO_FPMaxminBehavior>
+    TCOToolReg;
+
+using TCOToolOpts = decltype(TCOToolReg)::ParsedOptionsT;
+
 #include "flang/Optimizer/Passes/Pipelines.h"
 
 static void printModule(mlir::ModuleOp mod, raw_ostream &output) {
@@ -137,7 +151,25 @@ getOptimizationLevel(unsigned level) {
 
 // compile a .fir file
 static llvm::LogicalResult
-compileFIR(const mlir::PassPipelineCLParser &passPipeline) {
+compileFIR(const mlir::PassPipelineCLParser &passPipeline,
+           const OptionsContext &OptsCtx) {
+  const auto *TCOOpts = OptsCtx.getViewPtr<&TCOToolReg>();
+
+  const std::string &inputFilename = TCOOpts->get<&TCO_InputFilename>();
+  const std::string &outputFilename = TCOOpts->get<&TCO_OutputFilename>();
+  bool emitFir = TCOOpts->get<&TCO_EmitFir>();
+  unsigned optLevel = TCOOpts->get<&TCO_OptLevel>();
+  const std::string &targetTriple = TCOOpts->get<&TCO_TargetTriple>();
+  const std::string &targetCPU = TCOOpts->get<&TCO_TargetCPU>();
+  const std::string &tuneCPU = TCOOpts->get<&TCO_TuneCPU>();
+  const std::string &targetFeatures = TCOOpts->get<&TCO_TargetFeatures>();
+  bool codeGenLLVM = TCOOpts->get<&TCO_CodeGenLLVM>();
+  bool emitFinalMLIR = TCOOpts->get<&TCO_EmitFinalMLIR>();
+  bool simplifyMLIR = TCOOpts->get<&TCO_SimplifyMLIR>();
+  bool enableAliasAnalysis = TCOOpts->get<&TCO_EnableAliasAnalysis>();
+  bool testGeneratorMode = TCOOpts->get<&TCO_TestGeneratorMode>();
+  auto fpMaxminBehavior = TCOOpts->get<&TCO_FPMaxminBehavior>();
+
   // check that there is a file to load
   ErrorOr<std::unique_ptr<MemoryBuffer>> fileOrErr =
       MemoryBuffer::getFileOrSTDIN(inputFilename);
@@ -153,7 +185,7 @@ compileFIR(const mlir::PassPipelineCLParser &passPipeline) {
   mlir::DialectRegistry registry;
   fir::support::registerDialects(registry);
   fir::support::addFIRExtensions(registry);
-  mlir::MLIRContext context(registry);
+  mlir::MLIRContext context(OptsCtx, registry);
   fir::support::loadDialects(context);
   fir::support::registerLLVMTranslation(context);
   auto owningRef = mlir::parseSourceFile<mlir::ModuleOp>(sourceMgr, &context);
@@ -197,17 +229,17 @@ compileFIR(const mlir::PassPipelineCLParser &passPipeline) {
       return mlir::failure();
   } else {
     std::optional<llvm::OptimizationLevel> level =
-        getOptimizationLevel(OptLevel);
+        getOptimizationLevel(optLevel);
     if (!level) {
       errs() << "Error invalid optimization level\n";
       return mlir::failure();
     }
     MLIRToLLVMPassPipelineConfig config(*level);
-    config.fpMaxminBehavior = fpMaxminBehavior.getValue();
+    config.fpMaxminBehavior = fpMaxminBehavior;
     // TODO: config.StackArrays should be set here?
     config.EnableOpenMP = true;  // assume the input contains OpenMP
     config.AliasAnalysis = enableAliasAnalysis && !testGeneratorMode;
-    config.LoopVersioning = OptLevel > 2;
+    config.LoopVersioning = optLevel > 2;
     if (codeGenLLVM) {
       // Run only CodeGen passes.
       fir::createDefaultFIRCodeGenPassPipeline(pm, config);
@@ -242,17 +274,34 @@ compileFIR(const mlir::PassPipelineCLParser &passPipeline) {
 }
 
 int main(int argc, char **argv) {
-  // Disable the ExternalNameConversion pass by default until all the tests have
-  // been updated to pass with it enabled.
-  disableExternalNameConversion = true;
-
   [[maybe_unused]] InitLLVM y(argc, argv);
   fir::support::registerMLIRPassesForFortranTools();
   fir::registerOptCodeGenPasses();
   fir::registerOptTransformPasses();
   mlir::registerMLIRContextCLOptions();
-  mlir::registerPassManagerCLOptions();
   mlir::PassPipelineCLParser passPipe("", "Compiler passes to run");
-  cl::ParseCommandLineOptions(argc, argv, "Tilikum Crossing Optimizer\n");
-  return mlir::failed(compileFIR(passPipe));
+
+  // Build the OptionParser with tco-local, flang library, MLIR, and LLVM
+  // options.
+  clv2::OptionParser P;
+  P.add<&TCOToolReg>();
+  P.add<&FlangOptsReg>();
+  P.add<&clv2::MLIROptsReg>();
+  RegisterCoreLLVMOptions(P);
+  P.enableGlobalDynamicEntries();
+  mlir::registerPassManagerCLOptions(P);
+  passPipe.registerWith(P);
+
+  auto OptsCtx = P.parse(argc, argv, "Tilikum Crossing Optimizer\n");
+  if (!OptsCtx)
+    return 1;
+
+  // Disable the ExternalNameConversion pass by default until all the tests have
+  // been updated to pass with it enabled. Override via mutable view.
+  if (auto *FlangOpts = OptsCtx->getViewPtr<&FlangOptsReg>()) {
+    if (!FlangOpts->specified<&FLANG_DisableExternalNameInterop>())
+      FlangOpts->get<&FLANG_DisableExternalNameInterop>() = true;
+  }
+
+  return mlir::failed(compileFIR(passPipe, *OptsCtx));
 }

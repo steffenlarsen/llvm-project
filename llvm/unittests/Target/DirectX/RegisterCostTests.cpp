@@ -37,7 +37,7 @@ protected:
     DirectXTargetMachine TM(T, TT, CPU, FS, TargetOptions(), Reloc::Static,
                             CodeModel::Small, CodeGenOptLevel::Default, false);
 
-    LLVMContext Context;
+    LLVMContext Context{llvm::clv2::defaultOptionsContext()};
     Function *F =
         Function::Create(FunctionType::get(Type::getVoidTy(Context), false),
                          Function::ExternalLinkage, 0);

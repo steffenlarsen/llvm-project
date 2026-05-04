@@ -28,7 +28,9 @@
 #include "llvm/Support/AMDGPUAddrSpace.h"
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/TargetParser/AMDGPUTargetParser.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/TargetParser/TargetParser.h"
 
 using namespace llvm;
 using namespace llvm::AMDGPU;
@@ -36,9 +38,10 @@ using namespace llvm::AMDGPU;
 #define DEBUG_TYPE "si-memory-legalizer"
 #define PASS_NAME "SI Memory Legalizer"
 
-static cl::opt<bool> AmdgcnSkipCacheInvalidations(
-    "amdgcn-skip-cache-invalidations", cl::init(false), cl::Hidden,
-    cl::desc("Use this to skip inserting cache invalidating instructions."));
+static bool getAmdgcnSkipCacheInvalidations(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_SkipCacheInvalidations>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -349,7 +352,7 @@ protected:
   /// Cached value of whether tgsplit is enabled for this function.
   bool TgSplitEnabled;
 
-  SICacheControl(const GCNSubtarget &ST, bool TgSplit);
+  SICacheControl(const GCNSubtarget &ST, const Function &F);
 
   /// Sets CPol \p Bits to "true" if present in instruction \p MI.
   /// \returns Returns true if \p MI is modified, false otherwise.
@@ -365,7 +368,7 @@ public:
 
   /// Create a cache control for the subtarget \p ST.
   static std::unique_ptr<SICacheControl> create(const GCNSubtarget &ST,
-                                                bool TgSplit);
+                                                const Function &F);
 
   /// Update \p MI memory load instruction to bypass any caches up to
   /// the \p Scope memory scope for address spaces \p
@@ -473,8 +476,8 @@ public:
 /// GFX10.
 class SIGfx6CacheControl final : public SICacheControl {
 public:
-  SIGfx6CacheControl(const GCNSubtarget &ST, bool TgSplit)
-      : SICacheControl(ST, TgSplit) {}
+  SIGfx6CacheControl(const GCNSubtarget &ST, const Function &F)
+      : SICacheControl(ST, F) {}
 
   bool enableLoadCacheBypass(const MachineBasicBlock::iterator &MI,
                              SIAtomicScope Scope,
@@ -511,8 +514,8 @@ public:
 /// Generates code sequences for the memory model of GFX10/11.
 class SIGfx10CacheControl final : public SICacheControl {
 public:
-  SIGfx10CacheControl(const GCNSubtarget &ST, bool TgSplit)
-      : SICacheControl(ST, TgSplit) {}
+  SIGfx10CacheControl(const GCNSubtarget &ST, const Function &F)
+      : SICacheControl(ST, F) {}
 
   bool enableLoadCacheBypass(const MachineBasicBlock::iterator &MI,
                              SIAtomicScope Scope,
@@ -575,8 +578,8 @@ protected:
                       SIAtomicScope Scope, SIAtomicAddrSpace AddrSpace) const;
 
 public:
-  SIGfx12CacheControl(const GCNSubtarget &ST, bool TgSplit)
-      : SICacheControl(ST, TgSplit) {
+  SIGfx12CacheControl(const GCNSubtarget &ST, const Function &F)
+      : SICacheControl(ST, F) {
     // GFX120x and GFX125x memory models greatly overlap, and in some cases
     // the behavior is the same if assuming GFX120x in CU mode.
     assert(!ST.hasGFX1250Insts() || ST.hasGFX13Insts() || ST.isCuModeEnabled());
@@ -1008,11 +1011,12 @@ static bool isNonVolatileMemoryAccess(const MachineInstr &MI) {
   });
 }
 
-SICacheControl::SICacheControl(const GCNSubtarget &ST, bool TgSplit) : ST(ST) {
+SICacheControl::SICacheControl(const GCNSubtarget &ST, const Function &F)
+    : ST(ST) {
   TII = ST.getInstrInfo();
   IV = getIsaVersion(ST.getCPU());
-  InsertCacheInv = !AmdgcnSkipCacheInvalidations;
-  TgSplitEnabled = TgSplit;
+  InsertCacheInv = !getAmdgcnSkipCacheInvalidations(F);
+  TgSplitEnabled = ST.hasTgSplitSupport() && AMDGPU::isTgSplitEnabled(F);
 }
 
 bool SICacheControl::enableCPolBits(const MachineBasicBlock::iterator MI,
@@ -1036,13 +1040,13 @@ bool SICacheControl::canAffectGlobalAddrSpace(SIAtomicAddrSpace AS) const {
 
 /* static */
 std::unique_ptr<SICacheControl> SICacheControl::create(const GCNSubtarget &ST,
-                                                       bool TgSplit) {
+                                                       const Function &F) {
   GCNSubtarget::Generation Generation = ST.getGeneration();
   if (Generation < AMDGPUSubtarget::GFX10)
-    return std::make_unique<SIGfx6CacheControl>(ST, TgSplit);
+    return std::make_unique<SIGfx6CacheControl>(ST, F);
   if (Generation < AMDGPUSubtarget::GFX12)
-    return std::make_unique<SIGfx10CacheControl>(ST, TgSplit);
-  return std::make_unique<SIGfx12CacheControl>(ST, TgSplit);
+    return std::make_unique<SIGfx10CacheControl>(ST, F);
+  return std::make_unique<SIGfx12CacheControl>(ST, F);
 }
 
 bool SIGfx6CacheControl::enableLoadCacheBypass(
@@ -2586,10 +2590,8 @@ bool SIMemoryLegalizer::run(MachineFunction &MF) {
   bool Changed = false;
 
   const GCNSubtarget &ST = MF.getSubtarget<GCNSubtarget>();
-  const Function &F = MF.getFunction();
   SIMemOpAccess MOA(MMI.getObjFileInfo<AMDGPUMachineModuleInfo>(), ST);
-  bool TgSplit = ST.hasTgSplitSupport() && AMDGPU::isTgSplitEnabled(F);
-  CC = SICacheControl::create(ST, TgSplit);
+  CC = SICacheControl::create(ST, MF.getFunction());
 
   for (auto &MBB : MF) {
     for (auto MI = MBB.begin(); MI != MBB.end(); ++MI) {

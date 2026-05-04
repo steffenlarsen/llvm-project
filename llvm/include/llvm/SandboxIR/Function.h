@@ -62,6 +62,8 @@ public:
   /// Returns the alignment of the given function.
   MaybeAlign getAlign() const { return cast<llvm::Function>(Val)->getAlign(); }
 
+  llvm::Function &getLLVMFunction() const { return *cast<llvm::Function>(Val); }
+
   // TODO: Add missing: setAligment(Align)
 
   /// Sets the alignment attribute of the Function.

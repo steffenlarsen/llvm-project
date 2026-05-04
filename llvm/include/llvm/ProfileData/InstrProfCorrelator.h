@@ -19,6 +19,7 @@
 #include "llvm/Debuginfod/BuildIDFetcher.h"
 #include "llvm/Object/BuildID.h"
 #include "llvm/ProfileData/InstrProf.h"
+#include "llvm/ProfileData/ProfCorrelatorKind.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -36,9 +37,10 @@ class ObjectFile;
 /// to their functions.
 class InstrProfCorrelator {
 public:
-  /// Indicate if we should use the debug info or profile metadata sections to
-  /// correlate.
-  enum ProfCorrelatorKind { NONE, DEBUG_INFO, BINARY };
+  /// Alias; the enum lives in ProfCorrelatorKind.h so the generated clv2
+  /// options header can name it without including this file.  Scoped, so
+  /// ProfCorrelatorKind::X resolves through the alias.
+  using ProfCorrelatorKind = ::llvm::ProfCorrelatorKind;
 
   LLVM_ABI static llvm::Expected<std::unique_ptr<InstrProfCorrelator>>
   get(StringRef Filename, ProfCorrelatorKind FileKind,

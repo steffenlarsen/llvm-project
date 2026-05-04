@@ -52,8 +52,11 @@
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachinePassManager.h"
 #include "llvm/IR/Analysis.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 #include <atomic>
 #include <cassert>
 #include <cstdint>
@@ -65,7 +68,11 @@ using namespace llvm;
 
 #define DEBUG_TYPE COMP_EVEX_NAME
 
-extern cl::opt<bool> X86EnableAPXForRelocation;
+static bool getX86EnableAPXForRelocation(const Function &F) {
+  return clv2::getOptValOr<&clv2::X86OptsReg,
+                           &clv2::X86_EnableAPXForRelocation>(
+      F.getContext().getOptionsContext(), false);
+}
 
 namespace {
 // Including the generated EVEX compression tables.
@@ -500,7 +507,7 @@ static bool CompressEVEXImpl(MachineInstr &MI, MachineBasicBlock &MBB,
     // ADDrm/mr instructions with NDD + relocation had been transformed to the
     // instructions without NDD in X86SuppressAPXForRelocation pass. That is to
     // keep backward compatibility with linkers without APX support.
-    if (!X86EnableAPXForRelocation)
+    if (!getX86EnableAPXForRelocation(MI.getMF()->getFunction()))
       assert(!isAddMemInstrWithRelocation(MI) &&
              "Unexpected NDD instruction with relocation!");
   } else if (Opc == X86::ADD32ri_ND || Opc == X86::ADD64ri32_ND ||

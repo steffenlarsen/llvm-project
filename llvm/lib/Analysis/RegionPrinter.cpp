@@ -9,11 +9,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/RegionPrinter.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/DOTGraphTraitsPass.h"
 #include "llvm/Analysis/RegionInfo.h"
 #include "llvm/Analysis/RegionIterator.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/raw_ostream.h"
 #ifndef NDEBUG
 #include "llvm/IR/LegacyPassManager.h"
@@ -23,11 +24,7 @@ using namespace llvm;
 
 //===----------------------------------------------------------------------===//
 /// onlySimpleRegion - Show only the simple regions in the RegionViewer.
-static cl::opt<bool>
-onlySimpleRegions("only-simple-regions",
-                  cl::desc("Show only simple regions in the graphviz viewer"),
-                  cl::Hidden,
-                  cl::init(false));
+static bool onlySimpleRegions = false;
 
 std::string
 llvm::DOTGraphTraits<RegionNode *>::getNodeLabel(RegionNode *Node,

@@ -21,7 +21,7 @@ TEST_F(AMDGPUTestBase, ExecMayBeModifiedBeforeAnyUse) {
   GCNSubtarget ST(TM->getTargetTriple(), std::string(TM->getTargetCPU()),
                   std::string(TM->getTargetFeatureString()), *TM);
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module Mod("Module", Ctx);
   Mod.setDataLayout(TM->createDataLayout());
 

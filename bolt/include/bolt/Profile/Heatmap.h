@@ -10,12 +10,17 @@
 #define BOLT_PROFILE_HEATMAP_H
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/OptionsContext.h"
 #include <cstdint>
 #include <map>
 #include <vector>
 
 namespace llvm {
 class raw_ostream;
+
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
 
 namespace bolt {
 
@@ -45,12 +50,16 @@ class Heatmap {
   /// Map section names to their address range.
   const std::vector<SectionNameAndRange> TextSections;
 
+  /// Options context for context-aware option reads.
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
+
 public:
-  explicit Heatmap(uint64_t BucketSize = 4096, uint64_t MinAddress = 0,
+  explicit Heatmap(const clv2::OptionsContext &OptsCtx,
+                   uint64_t BucketSize = 4096, uint64_t MinAddress = 0,
                    uint64_t MaxAddress = std::numeric_limits<uint64_t>::max(),
                    std::vector<SectionNameAndRange> TextSections = {})
       : BucketSize(BucketSize), MinAddress(MinAddress), MaxAddress(MaxAddress),
-        TextSections(TextSections) {}
+        TextSections(TextSections), OptsCtx(&OptsCtx) {}
 
   uint64_t HotStart{0};
   uint64_t HotEnd{0};

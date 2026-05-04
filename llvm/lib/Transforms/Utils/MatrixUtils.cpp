@@ -19,12 +19,10 @@
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/IR/Type.h"
-#include "llvm/Support/CommandLine.h"
 
 using namespace llvm;
 
 namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 } // end namespace llvm
 
 BasicBlock *TileInfo::CreateLoop(BasicBlock *Preheader, BasicBlock *Exit,
@@ -50,7 +48,7 @@ BasicBlock *TileInfo::CreateLoop(BasicBlock *Preheader, BasicBlock *Exit,
   Value *Inc = B.CreateAdd(IV, Step, Name + ".step");
   Value *Cond = B.CreateICmpNE(Inc, Bound, Name + ".cond");
   auto *BR = B.CreateCondBr(Cond, Header, Exit);
-  if (!ProfcheckDisableMetadataFixes) {
+  if (!getProfcheckDisableMetadataFixes(Preheader->getContext())) {
     assert(Step->getZExtValue() != 0 &&
            "Expected a non-zero step size. This is chosen by the pass and "
            "should always be non-zero to imply a finite loop.");

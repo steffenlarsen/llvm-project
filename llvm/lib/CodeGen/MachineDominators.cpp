@@ -12,27 +12,27 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/MachineDominators.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/Passes.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/GenericDomTreeConstruction.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
-namespace llvm {
-// Always verify dominfo if expensive checking is enabled.
+static bool getVerifyMachineDomInfo(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::CGPassMachine1Reg>(Ctx))
+    return O->get<&clv2::CGPASS_VerifyMachineDomInfo>();
 #ifdef EXPENSIVE_CHECKS
-bool VerifyMachineDomInfo = true;
+  return true;
 #else
-bool VerifyMachineDomInfo = false;
+  return false;
 #endif
-} // namespace llvm
-
-static cl::opt<bool, true> VerifyMachineDomInfoX(
-    "verify-machine-dom-info", cl::location(VerifyMachineDomInfo), cl::Hidden,
-    cl::desc("Verify machine dominator info (time consuming)"));
+}
 
 namespace llvm {
 template class LLVM_EXPORT_TEMPLATE DomTreeNodeBase<MachineBasicBlock>;
@@ -112,9 +112,16 @@ bool MachineDominatorTreeWrapperPass::runOnMachineFunction(MachineFunction &F) {
 void MachineDominatorTreeWrapperPass::releaseMemory() { DT.reset(); }
 
 void MachineDominatorTreeWrapperPass::verifyAnalysis() const {
-  if (VerifyMachineDomInfo && DT)
-    if (!DT->verify(MachineDominatorTree::VerificationLevel::Basic))
-      report_fatal_error("MachineDominatorTree verification failed!");
+  if (DT && DT->root_size() > 0) {
+    const auto &Ctx = DT->getRoot()
+                          ->getParent()
+                          ->getFunction()
+                          .getContext()
+                          .getOptionsContext();
+    if (getVerifyMachineDomInfo(Ctx))
+      if (!DT->verify(MachineDominatorTree::VerificationLevel::Basic))
+        report_fatal_error("MachineDominatorTree verification failed!");
+  }
 }
 
 void MachineDominatorTreeWrapperPass::print(raw_ostream &OS,

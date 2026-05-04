@@ -198,7 +198,7 @@ void ArchiveFile::parse() {
           break;
         case file_magic::bitcode: {
           std::unique_ptr<lto::InputFile> obj =
-              check(lto::InputFile::create(mb));
+              check(lto::InputFile::create(mb, *ctx.llvmOptsCtx));
           machine = BitcodeFile::getMachineType(obj.get());
           break;
         }
@@ -1390,7 +1390,8 @@ BitcodeFile *BitcodeFile::create(COFFLinkerContext &ctx, MemoryBufferRef mb,
                                                sys::path::filename(path) +
                                                utostr(offsetInArchive)));
 
-  std::unique_ptr<lto::InputFile> obj = check(lto::InputFile::create(mbref));
+  std::unique_ptr<lto::InputFile> obj =
+      check(lto::InputFile::create(mbref, *ctx.llvmOptsCtx));
   obj->setArchivePathAndName(archiveName, mb.getBufferIdentifier());
   return make<BitcodeFile>(ctx.getSymtab(getMachineType(obj.get())), mb, obj,
                            lazy);

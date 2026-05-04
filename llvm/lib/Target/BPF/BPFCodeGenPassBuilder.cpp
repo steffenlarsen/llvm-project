@@ -26,7 +26,7 @@
 
 using namespace llvm;
 
-extern cl::opt<bool> DisableMIPeephole;
+extern bool DisableMIPeephole;
 
 namespace {
 

@@ -1,5 +1,6 @@
 add_llvm_component_library(LLVMX86Desc
   X86ATTInstPrinter.cpp
+  X86Options.cpp
   X86IntelInstPrinter.cpp
   X86InstComments.cpp
   X86InstPrinterCommon.cpp

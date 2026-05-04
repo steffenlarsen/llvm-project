@@ -13,6 +13,7 @@
 
 #include "DirectXSubtarget.h"
 #include "DirectXTargetLowering.h"
+#include "DirectXTargetMachine.h"
 
 using namespace llvm;
 
@@ -24,7 +25,9 @@ using namespace llvm;
 
 DirectXSubtarget::DirectXSubtarget(const Triple &TT, StringRef CPU,
                                    StringRef FS, const DirectXTargetMachine &TM)
-    : DirectXGenSubtargetInfo(TT, CPU, CPU, FS), InstrInfo(*this), FL(*this),
-      TL(TM, *this) {}
+    : DirectXGenSubtargetInfo(TT, CPU, CPU, FS, TM.getOptionsContext()),
+      InstrInfo(*this), FL(*this), TL(TM, *this) {
+  setOptionsContext(TM.getOptionsContext());
+}
 
 void DirectXSubtarget::anchor() {}

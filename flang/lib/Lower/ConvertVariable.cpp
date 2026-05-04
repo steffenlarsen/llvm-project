@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "flang/Lower/ConvertVariable.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Lower/AbstractConverter.h"
 #include "flang/Lower/Allocatable.h"
 #include "flang/Lower/BoxAnalyzer.h"
@@ -47,14 +48,9 @@
 #include "flang/Semantics/type.h"
 #include "mlir/Dialect/OpenACC/OpenACC.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include <optional>
-
-static llvm::cl::opt<bool>
-    allowAssumedRank("allow-assumed-rank",
-                     llvm::cl::desc("Enable assumed rank lowering"),
-                     llvm::cl::init(true));
 
 #define DEBUG_TYPE "flang-lower-variable"
 
@@ -2297,7 +2293,9 @@ void Fortran::lower::mapSymbolAttributes(
   }
 
   const bool isAssumedRank = Fortran::semantics::IsAssumedRank(sym);
-  if (isAssumedRank && !allowAssumedRank)
+  if (isAssumedRank &&
+      !llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_AllowAssumedRank>(
+          converter.getMLIRContext().getOptionsContext()))
     TODO(loc, "assumed-rank variable in procedure implemented in Fortran");
 
   Fortran::lower::BoxAnalyzer ba;

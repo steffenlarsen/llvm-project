@@ -13,11 +13,12 @@
 
 #include "Opts.inc"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Config/llvm-config.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/Binary.h"
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/Option.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/InitLLVM.h"
@@ -64,9 +65,6 @@ public:
 } // namespace
 
 static StringRef ToolName;
-
-static cl::list<std::string> InputFileNames(cl::Positional,
-                                            cl::desc("<input object files>"));
 
 static int MinLength = 4;
 static bool PrintFileName;
@@ -145,7 +143,8 @@ int main(int argc, char **argv) {
   }
   if (Args.hasArg(OPT_version)) {
     outs() << ToolName << '\n';
-    cl::PrintVersionMessage();
+    outs() << "  LLVM version " LLVM_VERSION_STRING "\n";
+    TargetRegistry::printRegisteredTargetsForVersion(outs());
     return 0;
   }
 

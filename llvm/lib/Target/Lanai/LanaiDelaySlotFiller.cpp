@@ -20,7 +20,8 @@
 #include "llvm/CodeGen/MachinePassManager.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/Analysis.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Lanai/LanaiOptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -28,10 +29,12 @@ using namespace llvm;
 
 STATISTIC(FilledSlots, "Number of delay slots filled");
 
-static cl::opt<bool>
-    NopDelaySlotFiller("lanai-nop-delay-filler", cl::init(false),
-                       cl::desc("Fill Lanai delay slots with NOPs."),
-                       cl::Hidden);
+static bool NopDelaySlotFiller = false;
+
+static bool getNopDelaySlotFiller(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::LANAI_NopDelaySlotFiller>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 struct FillerImpl {
@@ -127,7 +130,8 @@ bool FillerImpl::runOnMachineBasicBlock(MachineBasicBlock &MBB) {
         MBB.splice(std::next(I), &MBB, FI, I);
         FilledSlots += 2;
       } else {
-        if (!NopDelaySlotFiller && findDelayInstr(MBB, I, J)) {
+        if (!getNopDelaySlotFiller(MBB.getParent()->getFunction()) &&
+            findDelayInstr(MBB, I, J)) {
           MBB.splice(std::next(I), &MBB, J);
         } else {
           BuildMI(MBB, std::next(I), DebugLoc(), TII->get(Lanai::NOP));

@@ -78,7 +78,7 @@ public:
 
     OutputEmbeddingMode = Mode;
 
-    Ctx = std::make_unique<LLVMContext>();
+    Ctx = std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
     M = getLLVMIR(Filename, *Ctx);
     Tool = std::make_unique<IR2VecTool>(*M);
 

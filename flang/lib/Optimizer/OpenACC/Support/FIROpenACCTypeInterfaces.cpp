@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "flang/Optimizer/OpenACC/Support/FIROpenACCTypeInterfaces.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Optimizer/Builder/BoxValue.h"
 #include "flang/Optimizer/Builder/DirectivesCommon.h"
 #include "flang/Optimizer/Builder/FIRBuilder.h"
@@ -33,13 +34,7 @@
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "llvm/Support/CommandLine.h"
-
-static llvm::cl::opt<bool> useAccReductionCombineAll(
-    "openacc-use-reduction-combine-all",
-    llvm::cl::desc("Whether to generate acc.reduction_combine for all types "
-                   "and operators"),
-    llvm::cl::init(false));
+#include "llvm/Support/OptionsContext.h"
 
 namespace fir::acc {
 
@@ -1201,9 +1196,12 @@ static mlir::Value genScalarCombiner(fir::FirOpBuilder &builder,
   TODO(loc, "reduction operator");
 }
 
-static bool useAccReductionCombineOp(mlir::Type elementType,
-                                     mlir::acc::ReductionOperator op) {
-  if (useAccReductionCombineAll)
+static bool
+useAccReductionCombineOp(mlir::Type elementType,
+                         mlir::acc::ReductionOperator op,
+                         const llvm::clv2::OptionsContext &optsCtx) {
+  if (llvm::clv2::getOptValOrDefault<
+          &llvm::clv2::FLANG_OpenACCUseReductionCombineAll>(optsCtx))
     return true;
   // LOGICAL operators do not have mlir operators and requires FIR specific
   // logic to interpret the TRUE and FALSE values from the storage (implemented
@@ -1246,7 +1244,8 @@ bool OpenACCMappableModel<Ty>::generateCombiner(
       [&](mlir::Location l, fir::FirOpBuilder &b, hlfir::Entity destElementAddr,
           hlfir::Entity srcElementAddr, mlir::ArrayAttr accessGroups) -> void {
     assert(!accessGroups && "access groups not expected in acc reductions");
-    if (useAccReductionCombineOp(elementType, op)) {
+    if (useAccReductionCombineOp(elementType, op,
+                                 builder.getContext()->getOptionsContext())) {
       mlir::acc::ReductionCombineOp::create(builder, loc, destElementAddr,
                                             srcElementAddr, op);
       return;

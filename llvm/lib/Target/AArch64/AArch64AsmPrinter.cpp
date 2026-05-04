@@ -64,10 +64,11 @@
 #include "llvm/MC/MCValue.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Instrumentation/HWAddressSanitizer.h"
@@ -86,13 +87,12 @@ STATISTIC(NumZCZeroingInstrsFPR,
           "Number of zero-cycle FPR zeroing instructions expanded from "
           "canonical pseudo instructions");
 
-enum PtrauthCheckMode { Unchecked, Poison, Trap };
-static cl::opt<PtrauthCheckMode> PtrauthAuthChecks(
-    "aarch64-ptrauth-auth-checks", cl::Hidden,
-    cl::values(clEnumValN(Unchecked, "none", "don't test for failure"),
-               clEnumValN(Poison, "poison", "poison on failure"),
-               clEnumValN(Trap, "trap", "trap on failure")),
-    cl::desc("Check pointer authentication auth/resign failures"));
+using PtrauthCheckMode = clv2::A64PtrauthCheckMode;
+
+static PtrauthCheckMode getPtrauthAuthChecks(const Function &F) {
+  return clv2::getOptValOr<&clv2::AArch64OptsReg, &clv2::A64_PtrauthAuthChecks>(
+      F.getContext().getOptionsContext(), PtrauthCheckMode::Default);
+}
 
 namespace {
 
@@ -2369,8 +2369,9 @@ static PtrauthCheckMode getCheckMode(const MachineFunction *MF) {
   const AArch64Subtarget &STI = MF->getSubtarget<AArch64Subtarget>();
 
   // If an override is passed via command line argument, just use that value.
-  if (PtrauthAuthChecks.getNumOccurrences())
-    return PtrauthAuthChecks;
+  PtrauthCheckMode Checks = getPtrauthAuthChecks(MF->getFunction());
+  if (Checks != PtrauthCheckMode::Default)
+    return Checks;
 
   // Otherwise, on an FPAC CPU, you get traps whether you want them or not:
   // there's no point in emitting checks or traps.
@@ -2489,14 +2490,14 @@ void AArch64AsmPrinter::emitPtrauthAuthResign(
   }
 
   switch (CheckMode) {
-  case Unchecked:
+  case PtrauthCheckMode::Unchecked:
     EmitResignOnSuccess();
     break;
-  case Trap:
+  case PtrauthCheckMode::Trap:
     EmitCheck();
     EmitResignOnSuccess();
     break;
-  case Poison:
+  case PtrauthCheckMode::Poison:
     MCSymbol *OnFailure = createTempSymbol("resign_end_");
     EmitCheck(OnFailure);
     EmitResignOnSuccess();

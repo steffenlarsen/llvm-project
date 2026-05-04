@@ -45,6 +45,7 @@
 #include "llvm/Support/EndianStream.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/SMLoc.h"
 #include "llvm/Support/SourceMgr.h"
@@ -72,6 +73,7 @@ MCContext::MCContext(const Triple &TheTriple, const MCAsmInfo &mai,
       InlineAsmUsedLabelNames(Allocator),
       CurrentDwarfLoc(0, 0, 0, DWARF2_FLAG_IS_STMT, 0, 0),
       AutoReset(DoAutoReset) {
+  OptsCtx = &msti.getOptionsContext();
   const MCTargetOptions &TO = getTargetOptions();
   SaveTempLabels = TO.MCSaveTempLabels;
   if (SaveTempLabels)
@@ -120,6 +122,10 @@ MCContext::MCContext(const Triple &TheTriple, const MCAsmInfo &mai,
 
 const MCTargetOptions &MCContext::getTargetOptions() const {
   return MAI.getTargetOptions();
+}
+
+const clv2::OptionsContext &MCContext::getOptionsContext() const {
+  return OptsCtx ? *OptsCtx : clv2::defaultOptionsContext();
 }
 
 MCContext::~MCContext() {

@@ -32,14 +32,15 @@
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/OptTable.h"
 #include "llvm/Option/Option.h"
-#include "llvm/Remarks/HotnessThresholdParser.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileOutputBuffer.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/TargetSelect.h"
@@ -51,38 +52,36 @@ using namespace llvm::object;
 
 // Various tools (e.g., llc and opt) duplicate this series of declarations for
 // options related to passes and remarks.
-static cl::opt<bool> RemarksWithHotness(
+// nvlink-wrapper uses its own OptTable but registers clv2 options for -mllvm.
+
+inline constexpr clv2::OptionInfo<bool> NVRemarksWithHotnessOpt{
     "pass-remarks-with-hotness",
-    cl::desc("With PGO, include profile count in optimization remarks"),
-    cl::Hidden);
+    "With PGO, include profile count in optimization remarks", clv2::Hidden};
 
-static cl::opt<std::optional<uint64_t>, false, remarks::HotnessThresholdParser>
-    RemarksHotnessThreshold(
-        "pass-remarks-hotness-threshold",
-        cl::desc("Minimum profile count required for "
-                 "an optimization remark to be output. "
-                 "Use 'auto' to apply the threshold from profile summary."),
-        cl::value_desc("N or 'auto'"), cl::init(0), cl::Hidden);
+inline constexpr clv2::OptionInfo<std::string> NVRemarksOutputOpt{
+    "pass-remarks-output", "Output filename for pass remarks"};
 
-static cl::opt<std::string>
-    RemarksFilename("pass-remarks-output",
-                    cl::desc("Output filename for pass remarks"),
-                    cl::value_desc("filename"));
+inline constexpr clv2::OptionInfo<std::string> NVRemarksFilterOpt{
+    "pass-remarks-filter", "Only record optimization remarks from passes whose "
+                           "names match the given regular expression"};
 
-static cl::opt<std::string>
-    RemarksPasses("pass-remarks-filter",
-                  cl::desc("Only record optimization remarks from passes whose "
-                           "names match the given regular expression"),
-                  cl::value_desc("regex"));
-
-static cl::opt<std::string> RemarksFormat(
+inline constexpr clv2::OptionInfo<std::string> NVRemarksFormatOpt{
     "pass-remarks-format",
-    cl::desc("The format used for serializing remarks (default: YAML)"),
-    cl::value_desc("format"), cl::init("yaml"));
+    "The format used for serializing remarks (default: YAML)",
+    clv2::Init{"yaml"}};
 
-static cl::list<std::string>
-    PassPlugins("load-pass-plugin",
-                cl::desc("Load passes from plugin library"));
+inline constexpr clv2::ListOptionInfo<std::string> NVPassPluginsOpt{
+    "load-pass-plugin", "Load passes from plugin library"};
+
+inline constexpr clv2::OptionsRegistry<&NVRemarksWithHotnessOpt,
+                                       &NVRemarksOutputOpt, &NVRemarksFilterOpt,
+                                       &NVRemarksFormatOpt, &NVPassPluginsOpt>
+    NVLinkWrapperOptsReg;
+
+/// The parsed -mllvm options.  Never null: an empty context stands in until
+/// the options are parsed.
+static std::unique_ptr<clv2::OptionsContext> NVLinkOptsCtx =
+    std::make_unique<clv2::OptionsContext>();
 
 static void printVersion(raw_ostream &OS) {
   OS << clang::getClangToolFullVersion("clang-nvlink-wrapper") << '\n';
@@ -348,7 +347,7 @@ Expected<StringRef> runPTXAs(StringRef File, const ArgList &Args) {
 
 Expected<std::unique_ptr<lto::LTO>> createLTO(const ArgList &Args) {
   const llvm::Triple Triple("nvptx64-nvidia-cuda");
-  lto::Config Conf;
+  lto::Config Conf(llvm::clv2::defaultOptionsContext());
   lto::ThinBackend Backend;
   unsigned Jobs = 0;
   if (auto *Arg = Args.getLastArg(OPT_jobs))
@@ -360,20 +359,35 @@ Expected<std::unique_ptr<lto::LTO>> createLTO(const ArgList &Args) {
       lto::createInProcessThinBackend(heavyweight_hardware_concurrency(Jobs));
 
   Conf.CPU = Args.getLastArgValue(OPT_arch);
-  Conf.Options = codegen::InitTargetOptionsFromCodeGenFlags(Triple);
+  Conf.Options =
+      codegen::InitTargetOptionsFromCodeGenFlags(Triple, *NVLinkOptsCtx);
 
-  Conf.RemarksFilename =
-      Args.getLastArgValue(OPT_opt_remarks_filename, RemarksFilename);
-  Conf.RemarksPasses =
-      Args.getLastArgValue(OPT_opt_remarks_filter, RemarksPasses);
-  Conf.RemarksFormat =
-      Args.getLastArgValue(OPT_opt_remarks_format, RemarksFormat);
+  {
+    auto *NVOpts = NVLinkOptsCtx
+                       ? NVLinkOptsCtx->getViewPtr<&NVLinkWrapperOptsReg>()
+                       : nullptr;
+    std::string DefaultRemarksFile =
+        NVOpts ? NVOpts->get<&NVRemarksOutputOpt>() : std::string();
+    std::string DefaultRemarksPasses =
+        NVOpts ? NVOpts->get<&NVRemarksFilterOpt>() : std::string();
+    std::string DefaultRemarksFormat =
+        NVOpts ? NVOpts->get<&NVRemarksFormatOpt>() : std::string("yaml");
+    bool DefaultRemarksWithHotness =
+        NVOpts ? NVOpts->get<&NVRemarksWithHotnessOpt>() : false;
 
-  Conf.RemarksWithHotness =
-      Args.hasArg(OPT_opt_remarks_with_hotness) || RemarksWithHotness;
-  Conf.RemarksHotnessThreshold = RemarksHotnessThreshold;
+    Conf.RemarksFilename =
+        Args.getLastArgValue(OPT_opt_remarks_filename, DefaultRemarksFile);
+    Conf.RemarksPasses =
+        Args.getLastArgValue(OPT_opt_remarks_filter, DefaultRemarksPasses);
+    Conf.RemarksFormat =
+        Args.getLastArgValue(OPT_opt_remarks_format, DefaultRemarksFormat);
+    Conf.RemarksWithHotness =
+        Args.hasArg(OPT_opt_remarks_with_hotness) || DefaultRemarksWithHotness;
+    Conf.RemarksHotnessThreshold = 0;
+  }
 
-  Conf.MAttrs = llvm::codegen::getMAttrs();
+  Conf.MAttrs = llvm::codegen::getMAttrs(
+      NVLinkOptsCtx ? *NVLinkOptsCtx : llvm::clv2::defaultOptionsContext());
   std::optional<CodeGenOptLevel> CGOptLevelOrNone =
       CodeGenOpt::parseLevel(Args.getLastArgValue(OPT_O, "2")[0]);
   assert(CGOptLevelOrNone && "Invalid optimization level");
@@ -382,7 +396,13 @@ Expected<std::unique_ptr<lto::LTO>> createLTO(const ArgList &Args) {
   Conf.DefaultTriple = Triple.getTriple();
 
   Conf.OptPipeline = Args.getLastArgValue(OPT_lto_newpm_passes, "");
-  Conf.PassPluginFilenames = PassPlugins;
+  {
+    auto *NVOpts = NVLinkOptsCtx
+                       ? NVLinkOptsCtx->getViewPtr<&NVLinkWrapperOptsReg>()
+                       : nullptr;
+    Conf.PassPluginFilenames =
+        NVOpts ? NVOpts->get<&NVPassPluginsOpt>() : std::vector<std::string>{};
+  }
   Conf.DebugPassManager = Args.hasArg(OPT_lto_debug_pass_manager);
 
   Conf.DiagHandler = diagnosticHandler;
@@ -417,7 +437,7 @@ Expected<std::unique_ptr<lto::LTO>> createLTO(const ArgList &Args) {
 
 Expected<bool> getSymbolsFromBitcode(MemoryBufferRef Buffer,
                                      StringMap<Symbol> &SymTab, bool IsLazy) {
-  Expected<IRSymtabFile> IRSymtabOrErr = readIRSymtab(Buffer);
+  Expected<IRSymtabFile> IRSymtabOrErr = readIRSymtab(Buffer, *NVLinkOptsCtx);
   if (!IRSymtabOrErr)
     return IRSymtabOrErr.takeError();
   bool Extracted = !IsLazy;
@@ -609,7 +629,7 @@ Expected<SmallVector<StringRef>> getInput(const ArgList &Args) {
     lto::LTO &LTOBackend = **LTOBackendOrErr;
     for (auto &BitcodeFile : BitcodeFiles) {
       Expected<std::unique_ptr<lto::InputFile>> BitcodeFileOrErr =
-          lto::InputFile::create(*BitcodeFile);
+          lto::InputFile::create(*BitcodeFile, *NVLinkOptsCtx);
       if (!BitcodeFileOrErr)
         return BitcodeFileOrErr.takeError();
 
@@ -796,12 +816,21 @@ int main(int argc, char **argv) {
     printVersion(outs());
 
   // This forwards '-mllvm' arguments to LLVM if present.
-  SmallVector<const char *> NewArgv = {argv[0]};
+  SmallVector<StringRef> LLVMArgs;
   for (const opt::Arg *Arg : Args.filtered(OPT_mllvm))
-    NewArgv.push_back(Arg->getValue());
+    LLVMArgs.push_back(Arg->getValue());
   for (const opt::Arg *Arg : Args.filtered(OPT_plugin_opt))
-    NewArgv.push_back(Arg->getValue());
-  cl::ParseCommandLineOptions(NewArgv.size(), &NewArgv[0]);
+    LLVMArgs.push_back(Arg->getValue());
+  if (!LLVMArgs.empty()) {
+    clv2::OptionParser P;
+    RegisterAllLLVMOptions(P);
+    P.add<&NVLinkWrapperOptsReg>();
+    SmallVector<const char *> LLVMArgv;
+    LLVMArgv.push_back(argv[0]);
+    for (StringRef Arg : LLVMArgs)
+      LLVMArgv.push_back(Saver.save(Arg).data());
+    NVLinkOptsCtx = P.parse(LLVMArgv.size(), LLVMArgv.data());
+  }
 
   // Get the input files to pass to 'nvlink'.
   auto FilesOrErr = getInput(Args);

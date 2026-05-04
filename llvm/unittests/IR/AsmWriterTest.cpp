@@ -24,10 +24,11 @@ TEST(AsmWriterTest, DebugPrintDetachedInstruction) {
 
   // PR24852: Ensure that an instruction can be printed even when it
   // has metadata attached but no parent.
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   auto Ty = Type::getInt32Ty(Ctx);
   auto Poison = PoisonValue::get(Ty);
-  std::unique_ptr<BinaryOperator> Add(BinaryOperator::CreateAdd(Poison, Poison));
+  std::unique_ptr<BinaryOperator> Add(
+      BinaryOperator::CreateAdd(Poison, Poison));
   Add->setMetadata(
       "", MDNode::get(Ctx, {ConstantAsMetadata::get(ConstantInt::get(Ty, 1))}));
   std::string S;
@@ -37,7 +38,7 @@ TEST(AsmWriterTest, DebugPrintDetachedInstruction) {
 }
 
 TEST(AsmWriterTest, DebugPrintDetachedArgument) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   auto Ty = Type::getInt32Ty(Ctx);
   auto Arg = new Argument(Ty);
 
@@ -49,11 +50,12 @@ TEST(AsmWriterTest, DebugPrintDetachedArgument) {
 }
 
 TEST(AsmWriterTest, DumpDIExpression) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   uint64_t Ops[] = {
-    dwarf::DW_OP_constu, 4,
-    dwarf::DW_OP_minus,
-    dwarf::DW_OP_deref,
+      dwarf::DW_OP_constu,
+      4,
+      dwarf::DW_OP_minus,
+      dwarf::DW_OP_deref,
   };
   DIExpression *Expr = DIExpression::get(Ctx, Ops);
   std::string S;
@@ -63,7 +65,7 @@ TEST(AsmWriterTest, DumpDIExpression) {
 }
 
 TEST(AsmWriterTest, PrintAddrspaceWithNullOperand) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module M("test module", Ctx);
   SmallVector<Type *, 3> FArgTypes;
   FArgTypes.push_back(Type::getInt64Ty(Ctx));
@@ -82,7 +84,7 @@ TEST(AsmWriterTest, PrintAddrspaceWithNullOperand) {
 }
 
 TEST(AsmWriterTest, PrintNullOperandBundle) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Type *Int32Ty = Type::getInt32Ty(C);
   FunctionType *FnTy = FunctionType::get(Int32Ty, Int32Ty, /*isVarArg=*/false);
   Value *Callee = Constant::getNullValue(PointerType::getUnqual(C));
@@ -103,4 +105,4 @@ TEST(AsmWriterTest, PrintNullOperandBundle) {
   Invoke->print(OS);
   EXPECT_THAT(S, HasSubstr("<null operand bundle!>"));
 }
-}
+} // namespace

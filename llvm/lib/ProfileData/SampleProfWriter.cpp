@@ -21,6 +21,7 @@
 #include "llvm/ADT/Eytzinger.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ProfileData/ProfileCommon.h"
+#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
 #include "llvm/ProfileData/SampleProf.h"
 #include "llvm/Support/Compression.h"
 #include "llvm/Support/EndianStream.h"
@@ -28,6 +29,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/MD5.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <array>
 #include <cmath>
@@ -42,14 +44,22 @@
 using namespace llvm;
 using namespace sampleprof;
 
-// To begin with, make this option off by default.
-static cl::opt<bool> ExtBinaryWriteVTableTypeProf(
-    "extbinary-write-vtable-type-prof", cl::init(false), cl::Hidden,
-    cl::desc("Write vtable type profile in ext-binary sample profile writer"));
+static bool getExtBinaryWriteVTableTypeProf(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::PD_ExtBinaryWriteVTableTypeProf>(Ctx);
+}
 
-static cl::opt<uint64_t> RequestedVersion(
-    "sample-profile-format-version", cl::init(DefaultVersion), cl::Hidden,
-    cl::desc("Format version to write for extensible binary profiles"));
+static uint64_t getRequestedVersion(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::ProfileDataOptsReg,
+                           &clv2::PD_RequestedVersion>(Ctx, DefaultVersion);
+}
+
+static bool getWriteMD5ProfSymList(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::PD_WriteMD5ProfSymList>(Ctx);
+}
+
+static bool getWriteEytzingerNameTables(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::PD_WriteEytzingerNameTables>(Ctx);
+}
 
 namespace llvm {
 namespace support {
@@ -647,7 +657,7 @@ std::error_code SampleProfileWriterExtBinaryBase::writeOneSection(
     addSectionFlag(SecProfSummary, SecProfSummaryFlags::SecFlagIsPreInlined);
   if (Type == SecProfSummary && FunctionSamples::ProfileIsFS)
     addSectionFlag(SecProfSummary, SecProfSummaryFlags::SecFlagFSDiscriminator);
-  if (Type == SecProfSummary && ExtBinaryWriteVTableTypeProf)
+  if (Type == SecProfSummary && WriteVTableProf)
     addSectionFlag(SecProfSummary,
                    SecProfSummaryFlags::SecFlagHasVTableTypeProf);
   if (Type == SecProfileSymbolList && UseMD5ProfSymList)
@@ -705,7 +715,19 @@ std::error_code SampleProfileWriterExtBinaryBase::writeOneSection(
 SampleProfileWriterExtBinary::SampleProfileWriterExtBinary(
     std::unique_ptr<raw_ostream> &OS)
     : SampleProfileWriterExtBinaryBase(OS) {
-  WriteVTableProf = ExtBinaryWriteVTableTypeProf;
+  WriteVTableProf =
+      getExtBinaryWriteVTableTypeProf(llvm::clv2::defaultOptionsContext());
+  CachedWriteMD5ProfSymList =
+      getWriteMD5ProfSymList(llvm::clv2::defaultOptionsContext());
+  CachedWriteEytzingerNameTables =
+      getWriteEytzingerNameTables(llvm::clv2::defaultOptionsContext());
+}
+
+void SampleProfileWriterExtBinary::setOptionsContext(
+    const clv2::OptionsContext &Ctx) {
+  WriteVTableProf = getExtBinaryWriteVTableTypeProf(Ctx);
+  CachedWriteMD5ProfSymList = getWriteMD5ProfSymList(Ctx);
+  CachedWriteEytzingerNameTables = getWriteEytzingerNameTables(Ctx);
 }
 
 std::error_code SampleProfileWriterExtBinary::writeDefaultLayout(
@@ -1161,8 +1183,10 @@ SampleProfileWriter::create(std::unique_ptr<raw_ostream> &OS,
   Writer->Format = Format;
   if (Format != SPF_Ext_Binary)
     Writer->setFormatVersion(DefaultVersion);
-  else if (formatVersionIsSupported(RequestedVersion))
-    Writer->setFormatVersion(RequestedVersion);
+  else if (formatVersionIsSupported(
+               getRequestedVersion(llvm::clv2::defaultOptionsContext())))
+    Writer->setFormatVersion(
+        getRequestedVersion(llvm::clv2::defaultOptionsContext()));
   else
     return sampleprof_error::unsupported_version;
   return std::move(Writer);
@@ -1170,5 +1194,6 @@ SampleProfileWriter::create(std::unique_ptr<raw_ostream> &OS,
 
 void SampleProfileWriter::computeSummary(const SampleProfileMap &ProfileMap) {
   SampleProfileSummaryBuilder Builder(ProfileSummaryBuilder::DefaultCutoffs);
-  Summary = Builder.computeSummaryForProfiles(ProfileMap);
+  Summary = Builder.computeSummaryForProfiles(
+      ProfileMap, llvm::clv2::defaultOptionsContext());
 }

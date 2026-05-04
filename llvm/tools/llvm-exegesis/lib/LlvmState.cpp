@@ -14,6 +14,7 @@
 #include "llvm/MC/MCFixup.h"
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Host.h"
@@ -54,8 +55,9 @@ Expected<LLVMState> LLVMState::Create(std::string TripleName,
     CpuName = std::string(sys::getHostCPUName());
   }
 
-  std::unique_ptr<MCSubtargetInfo> STI(
-      TheTarget->createMCSubtargetInfo(TheTriple, CpuName, ""));
+  std::unique_ptr<MCSubtargetInfo> STI(TheTarget->createMCSubtargetInfo(
+      TheTriple, CpuName, "",
+      /*Ctx=*/llvm::clv2::defaultOptionsContext()));
   if (!STI) {
     return make_error<StringError>("unable to create subtarget info",
                                    inconvertibleErrorCode());

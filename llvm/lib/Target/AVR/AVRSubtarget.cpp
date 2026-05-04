@@ -28,8 +28,10 @@ namespace llvm {
 
 AVRSubtarget::AVRSubtarget(const Triple &TT, const std::string &CPU,
                            const std::string &FS, const AVRTargetMachine &TM)
-    : AVRGenSubtargetInfo(TT, CPU, /*TuneCPU*/ CPU, FS), InstrInfo(*this),
+    : AVRGenSubtargetInfo(TT, CPU, /*TuneCPU*/ CPU, FS, TM.getOptionsContext()),
+      InstrInfo(*this),
       TLInfo(TM, initializeSubtargetDependencies(CPU, FS, TM)) {
+  setOptionsContext(TM.getOptionsContext());
   // Parse features string.
   ParseSubtargetFeatures(CPU, /*TuneCPU*/ CPU, FS);
 }

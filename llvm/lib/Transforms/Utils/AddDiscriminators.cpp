@@ -64,10 +64,11 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/SampleProfileLoaderBaseUtil.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 #include <utility>
 
 using namespace llvm;
@@ -78,9 +79,11 @@ using namespace sampleprofutil;
 // Command line option to disable discriminator generation even in the
 // presence of debug information. This is only needed when debugging
 // debug info generation issues.
-static cl::opt<bool> NoDiscriminators(
-    "no-discriminators", cl::init(false),
-    cl::desc("Disable generation of discriminator information."));
+static bool getNoDiscriminators(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_NoDiscriminators>(
+      F.getContext().getOptionsContext(), false);
+}
 
 static bool shouldHaveDiscriminator(const Instruction *I) {
   return !isa<IntrinsicInst>(I) || isa<MemIntrinsic>(I);
@@ -141,11 +144,11 @@ static bool addDiscriminators(Function &F) {
   // If the function has debug information, but the user has disabled
   // discriminators, do nothing.
   // Simlarly, if the function has no debug info, do nothing.
-  if (NoDiscriminators || !F.getSubprogram())
+  if (getNoDiscriminators(F) || !F.getSubprogram())
     return false;
 
   // Create FSDiscriminatorVariable if flow sensitive discriminators are used.
-  if (EnableFSDiscriminator)
+  if (getEnableFSDiscriminator(F.getContext()))
     createFSDiscriminatorVariable(F.getParent());
 
   bool Changed = false;

@@ -24,10 +24,11 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ModRef.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/FunctionSpecialization.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 #include "llvm/Transforms/Scalar/SCCP.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SCCPSolver.h"
@@ -43,9 +44,10 @@ STATISTIC(NumDeadBlocks , "Number of basic blocks unreachable");
 STATISTIC(NumInstReplaced,
           "Number of instructions replaced with (simpler) instruction");
 
-static cl::opt<unsigned> FuncSpecMaxIters(
-    "funcspec-max-iters", cl::init(10), cl::Hidden, cl::desc(
-    "The maximum number of iterations function specialization is run"));
+static unsigned getFuncSpecMaxIters(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_FuncSpecMaxIters>(
+      M.getContext().getOptionsContext());
+}
 
 static void findReturnsToZap(Function &F,
                              SmallVector<ReturnInst *, 8> &ReturnsToZap,
@@ -160,7 +162,8 @@ static bool runIPSCCP(
 
   if (IsFuncSpecEnabled) {
     unsigned Iters = 0;
-    while (Iters++ < FuncSpecMaxIters && Specializer.run());
+    while (Iters++ < getFuncSpecMaxIters(M) && Specializer.run())
+      ;
   }
 
   // Iterate over all of the instructions in the module, replacing them with

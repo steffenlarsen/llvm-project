@@ -27,7 +27,7 @@ class FixRISCVCallsPass : public BinaryFunctionPass {
   void runOnFunction(BinaryFunction &Function);
 
 public:
-  explicit FixRISCVCallsPass(const cl::opt<bool> &PrintPass)
+  explicit FixRISCVCallsPass(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "fix-riscv-calls"; }

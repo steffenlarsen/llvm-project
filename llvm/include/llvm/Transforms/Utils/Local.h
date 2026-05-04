@@ -16,13 +16,16 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/IR/Dominators.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Transforms/Utils/SimplifyCFGOptions.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <cstdint>
 
 namespace llvm {
+
+namespace clv2 {
+class OptionsContext;
+}
 
 class DataLayout;
 class Value;
@@ -175,7 +178,7 @@ LLVM_ABI bool EliminateDuplicatePHINodes(BasicBlock *BB,
 /// It returns true if a modification was made, possibly deleting the basic
 /// block that was pointed to. LoopHeaders is an optional input parameter
 /// providing the set of loop headers that SimplifyCFG should not eliminate.
-LLVM_ABI extern cl::opt<bool> RequireAndPreserveDomTree;
+LLVM_ABI bool getRequireAndPreserveDomTree(const clv2::OptionsContext &Ctx);
 LLVM_ABI bool simplifyCFG(BasicBlock *BB, const TargetTransformInfo &TTI,
                           DomTreeUpdater *DTU = nullptr,
                           const SimplifyCFGOptions &Options = {},

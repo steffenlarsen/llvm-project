@@ -28,29 +28,17 @@ using namespace llvm;
 
 #define GET_REGINFO_TARGET_DESC
 #include "AMDGPUGenRegisterInfo.inc"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 
-static cl::opt<bool> EnableSpillSGPRToVGPR(
-  "amdgpu-spill-sgpr-to-vgpr",
-  cl::desc("Enable spilling SGPRs to VGPRs"),
-  cl::ReallyHidden,
-  cl::init(true));
-
-static cl::opt<bool> EnableSpillCFISavedRegs(
-    "amdgpu-spill-cfi-saved-regs",
-    cl::desc("Enable spilling the registers required for CFI emission"),
-    cl::ReallyHidden, cl::init(false), cl::ZeroOrMore);
-
-static cl::opt<unsigned> StressVGPRLimit(
-    "amdgpu-stress-vgpr", cl::Hidden, cl::init(0),
-    cl::desc("Limit VGPRs to N registers by reserving the rest"));
-
-static cl::opt<unsigned> StressAGPRLimit(
-    "amdgpu-stress-agpr", cl::Hidden, cl::init(0),
-    cl::desc("Limit AGPRs to N registers by reserving the rest"));
-
-static cl::opt<unsigned> StressSGPRLimit(
-    "amdgpu-stress-sgpr", cl::Hidden, cl::init(0),
-    cl::desc("Limit SGPRs to N registers by reserving the rest"));
+static bool getEnableSpillSGPRToVGPR(const amdgpu_opts::ParsedOpts *O,
+                                     const llvm::clv2::OptionsContext &Ctx) {
+  if (!O)
+    O = clv2::getView<&clv2::AMDGPUOptsReg>(Ctx);
+  if (O)
+    return O->get<&llvm::clv2::AMDGPU_EnableSpillSGPRToVGPR>();
+  return true;
+}
 
 std::array<std::vector<int16_t>, 32> SIRegisterInfo::RegSplitParts;
 std::array<std::array<uint16_t, 32>, 9> SIRegisterInfo::SubRegFromChannelTable;
@@ -347,7 +335,7 @@ SIRegisterInfo::SIRegisterInfo(const GCNSubtarget &ST)
                             ST.getAMDGPUDwarfFlavour(),
                             /*PC=*/0,
                             ST.getHwMode(MCSubtargetInfo::HwMode_RegInfo)),
-      ST(ST), SpillSGPRToVGPR(EnableSpillSGPRToVGPR), isWave32(ST.isWave32()) {
+      ST(ST), SpillSGPRToVGPR(true), isWave32(ST.isWave32()) {
 
   assert(getSubRegIndexLaneMask(AMDGPU::sub0).getAsInteger() == 3 &&
          getSubRegIndexLaneMask(AMDGPU::sub31).getAsInteger() == (3ULL << 62) &&
@@ -578,8 +566,13 @@ unsigned SIRegisterInfo::getSubRegFromChannel(unsigned Channel,
   return SubRegFromChannelTable[NumRegIndex - 1][Channel];
 }
 
+bool SIRegisterInfo::spillSGPRToVGPR() const {
+  return getEnableSpillSGPRToVGPR(nullptr, ST.getOptionsContext());
+}
+
 bool SIRegisterInfo::isCFISavedRegsSpillEnabled() const {
-  return EnableSpillCFISavedRegs;
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_EnableSpillCFISavedRegs>(
+      ST.getOptionsContext());
 }
 
 MCRegister
@@ -656,8 +649,13 @@ BitVector SIRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   // Reserve SGPRs.
   //
   unsigned MaxNumSGPRs = ST.getMaxNumSGPRs(MF);
-  if (StressSGPRLimit.getNumOccurrences() && StressSGPRLimit < MaxNumSGPRs)
-    MaxNumSGPRs = StressSGPRLimit;
+  const auto &Ctx = MF.getFunction().getContext().getOptionsContext();
+  if (unsigned StressSGPR =
+          clv2::getOptValOrDefault<&clv2::AMDGPU_StressSGPRLimit>(Ctx);
+      clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
+                            &clv2::AMDGPU_StressSGPRLimit>(Ctx) &&
+      StressSGPR < MaxNumSGPRs)
+    MaxNumSGPRs = StressSGPR;
   unsigned TotalNumSGPRs = AMDGPU::SGPR_32RegClass.getNumRegs();
   for (const TargetRegisterClass &RC : regclasses()) {
     if (RC.isBaseClass() && isSGPRClass(&RC)) {
@@ -716,10 +714,18 @@ BitVector SIRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   auto [MaxNumVGPRs, MaxNumAGPRs] = ST.getMaxNumVectorRegs(MF.getFunction());
 
   // Stress test: override VGPR/AGPR limits.
-  if (StressVGPRLimit.getNumOccurrences() && StressVGPRLimit < MaxNumVGPRs)
-    MaxNumVGPRs = StressVGPRLimit;
-  if (StressAGPRLimit.getNumOccurrences() && StressAGPRLimit < MaxNumAGPRs)
-    MaxNumAGPRs = StressAGPRLimit;
+  if (unsigned StressVGPR =
+          clv2::getOptValOrDefault<&clv2::AMDGPU_StressVGPRLimit>(Ctx);
+      clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
+                            &clv2::AMDGPU_StressVGPRLimit>(Ctx) &&
+      StressVGPR < MaxNumVGPRs)
+    MaxNumVGPRs = StressVGPR;
+  if (unsigned StressAGPR =
+          clv2::getOptValOrDefault<&clv2::AMDGPU_StressAGPRLimit>(Ctx);
+      clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
+                            &clv2::AMDGPU_StressAGPRLimit>(Ctx) &&
+      StressAGPR < MaxNumAGPRs)
+    MaxNumAGPRs = StressAGPR;
 
   for (const TargetRegisterClass &RC : regclasses()) {
     if (RC.isBaseClass() && isVGPRClass(&RC)) {

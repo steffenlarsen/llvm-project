@@ -6,26 +6,15 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// The GenNameParser class adds all passes linked in to the system that are
-// creatable to the tool.
+// Generator registration uses OptionParser::addDynamicEntry.
 //
 //===----------------------------------------------------------------------===//
 
 #ifndef MLIR_TABLEGEN_GENNAMEPARSER_H_
 #define MLIR_TABLEGEN_GENNAMEPARSER_H_
 
-#include "llvm/Support/CommandLine.h"
-
-namespace mlir {
-class GenInfo;
-
-/// Adds command line option for each registered generator.
-struct GenNameParser : public llvm::cl::parser<const GenInfo *> {
-  GenNameParser(llvm::cl::Option &opt);
-
-  void printOptionInfo(const llvm::cl::Option &o,
-                       size_t globalWidth) const override;
-};
-} // namespace mlir
+// This header is intentionally empty.  The GenNameParser class has been
+// removed.  Include "mlir/TableGen/GenInfo.h" directly if you need
+// GenInfo or getRegisteredGenerators().
 
 #endif // MLIR_TABLEGEN_GENNAMEPARSER_H_

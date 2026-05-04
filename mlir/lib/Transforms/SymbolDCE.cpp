@@ -91,7 +91,8 @@ LogicalResult SymbolDCE::computeLiveness(Operation *symbolTableOp,
                                          bool symbolTableIsHidden,
                                          DenseSet<Operation *> &liveSymbols) {
   LDBG() << "computeLiveness: "
-         << OpWithFlags(symbolTableOp, OpPrintingFlags().skipRegions());
+         << OpWithFlags(symbolTableOp,
+                        opPrintingFlags(symbolTableOp).skipRegions());
   // A worklist of live operations to propagate uses from.
   SmallVector<Operation *, 16> worklist;
 
@@ -120,7 +121,7 @@ LogicalResult SymbolDCE::computeLiveness(Operation *symbolTableOp,
   while (!worklist.empty()) {
     Operation *op = worklist.pop_back_val();
     LDBG() << "processing: "
-           << OpWithFlags(op, OpPrintingFlags().skipRegions());
+           << OpWithFlags(op, opPrintingFlags(op).skipRegions());
 
     // If this is a symbol table, recursively compute its liveness.
     if (op->hasTrait<OpTrait::SymbolTable>()) {
@@ -129,13 +130,13 @@ LogicalResult SymbolDCE::computeLiveness(Operation *symbolTableOp,
       SymbolOpInterface symbol = dyn_cast<SymbolOpInterface>(op);
       bool symIsHidden = symbolTableIsHidden || !symbol || symbol.isPrivate();
       LDBG() << "\tsymbol table: "
-             << OpWithFlags(op, OpPrintingFlags().skipRegions())
+             << OpWithFlags(op, opPrintingFlags(op).skipRegions())
              << " is hidden: " << symIsHidden;
       if (failed(computeLiveness(op, symbolTable, symIsHidden, liveSymbols)))
         return failure();
     } else {
       LDBG() << "\tnon-symbol table: "
-             << OpWithFlags(op, OpPrintingFlags().skipRegions());
+             << OpWithFlags(op, opPrintingFlags(op).skipRegions());
       // If the op is not a symbol table, then, unless op itself is dead which
       // would be handled by DCE, we need to check all the regions and blocks
       // within the op to find the uses (e.g., consider visibility within op as
@@ -165,7 +166,7 @@ LogicalResult SymbolDCE::computeLiveness(Operation *symbolTableOp,
     }
 
     SmallVector<Operation *, 4> resolvedSymbols;
-    LDBG() << "uses of " << OpWithFlags(op, OpPrintingFlags().skipRegions());
+    LDBG() << "uses of " << OpWithFlags(op, opPrintingFlags(op).skipRegions());
     for (const SymbolTable::SymbolUse &use : *uses) {
       LDBG() << "\tuse: " << use.getUser();
       // Lookup the symbols referenced by this use.

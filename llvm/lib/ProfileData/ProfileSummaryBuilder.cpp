@@ -13,59 +13,53 @@
 #include "llvm/IR/ProfileSummary.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/ProfileData/ProfileCommon.h"
+#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
 #include "llvm/ProfileData/SampleProf.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
-namespace llvm {
-cl::opt<bool> UseContextLessSummary(
-    "profile-summary-contextless", cl::Hidden,
-    cl::desc("Merge context profiles before calculating thresholds."));
+static bool UseContextLessSummary;
 
-// The following two parameters determine the threshold for a count to be
-// considered hot/cold. These two parameters are percentile values (multiplied
-// by 10000). If the counts are sorted in descending order, the minimum count to
-// reach ProfileSummaryCutoffHot gives the threshold to determine a hot count.
-// Similarly, the minimum count to reach ProfileSummaryCutoffCold gives the
-// threshold for determining cold count (everything <= this threshold is
-// considered cold).
-cl::opt<int> ProfileSummaryCutoffHot(
-    "profile-summary-cutoff-hot", cl::Hidden, cl::init(990000),
-    cl::desc("A count is hot if it exceeds the minimum count to"
-             " reach this percentile of total counts."));
+bool llvm::getUseContextLessSummary() { return UseContextLessSummary; }
 
-cl::opt<int> ProfileSummaryCutoffCold(
-    "profile-summary-cutoff-cold", cl::Hidden, cl::init(999999),
-    cl::desc("A count is cold if it is below the minimum count"
-             " to reach this percentile of total counts."));
+static int getProfileSummaryCutoffHot(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::PD_ProfileSummaryCutoffHot>(Ctx);
+}
 
-cl::opt<unsigned> ProfileSummaryHugeWorkingSetSizeThreshold(
-    "profile-summary-huge-working-set-size-threshold", cl::Hidden,
-    cl::init(15000),
-    cl::desc("The code working set size is considered huge if the number of"
-             " blocks required to reach the -profile-summary-cutoff-hot"
-             " percentile exceeds this count."));
+static int getProfileSummaryCutoffCold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::PD_ProfileSummaryCutoffCold>(Ctx);
+}
 
-cl::opt<unsigned> ProfileSummaryLargeWorkingSetSizeThreshold(
-    "profile-summary-large-working-set-size-threshold", cl::Hidden,
-    cl::init(12500),
-    cl::desc("The code working set size is considered large if the number of"
-             " blocks required to reach the -profile-summary-cutoff-hot"
-             " percentile exceeds this count."));
+static bool getUseContextLessSummaryOpt(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::PD_ProfileSummaryContextless>(Ctx);
+}
 
-// The next two options override the counts derived from summary computation and
-// are useful for debugging purposes.
-cl::opt<uint64_t> ProfileSummaryHotCount(
-    "profile-summary-hot-count", cl::ReallyHidden,
-    cl::desc("A fixed hot count that overrides the count derived from"
-             " profile-summary-cutoff-hot"));
+static bool
+getUseContextLessSummaryOptWasSpecified(const clv2::OptionsContext &Ctx) {
+  return clv2::wasOptSpecified<&clv2::ProfileDataOptsReg,
+                               &clv2::PD_ProfileSummaryContextless>(Ctx);
+}
 
-cl::opt<uint64_t> ProfileSummaryColdCount(
-    "profile-summary-cold-count", cl::ReallyHidden,
-    cl::desc("A fixed cold count that overrides the count derived from"
-             " profile-summary-cutoff-cold"));
-} // namespace llvm
+static uint64_t getProfileSummaryHotCountOpt(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::PD_ProfileSummaryHotCount>(Ctx);
+}
+
+static bool
+getProfileSummaryHotCountOptWasSpecified(const clv2::OptionsContext &Ctx) {
+  return clv2::wasOptSpecified<&clv2::ProfileDataOptsReg,
+                               &clv2::PD_ProfileSummaryHotCount>(Ctx);
+}
+
+static uint64_t getProfileSummaryColdCountOpt(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::PD_ProfileSummaryColdCount>(Ctx);
+}
+
+static bool
+getProfileSummaryColdCountOptWasSpecified(const clv2::OptionsContext &Ctx) {
+  return clv2::wasOptSpecified<&clv2::ProfileDataOptsReg,
+                               &clv2::PD_ProfileSummaryColdCount>(Ctx);
+}
 
 // A set of cutoff values. Each value, when divided by ProfileSummary::Scale
 // (which is 1000000) is a desired percentile of total counts.
@@ -172,22 +166,24 @@ void ProfileSummaryBuilder::computeDetailedSummary() {
 }
 
 uint64_t
-ProfileSummaryBuilder::getHotCountThreshold(const SummaryEntryVector &DS) {
-  auto &HotEntry =
-      ProfileSummaryBuilder::getEntryForPercentile(DS, ProfileSummaryCutoffHot);
+ProfileSummaryBuilder::getHotCountThreshold(const SummaryEntryVector &DS,
+                                            const clv2::OptionsContext &Ctx) {
+  auto &HotEntry = ProfileSummaryBuilder::getEntryForPercentile(
+      DS, getProfileSummaryCutoffHot(Ctx));
   uint64_t HotCountThreshold = HotEntry.MinCount;
-  if (ProfileSummaryHotCount.getNumOccurrences() > 0)
-    HotCountThreshold = ProfileSummaryHotCount;
+  if (getProfileSummaryHotCountOptWasSpecified(Ctx))
+    HotCountThreshold = getProfileSummaryHotCountOpt(Ctx);
   return HotCountThreshold;
 }
 
 uint64_t
-ProfileSummaryBuilder::getColdCountThreshold(const SummaryEntryVector &DS) {
+ProfileSummaryBuilder::getColdCountThreshold(const SummaryEntryVector &DS,
+                                             const clv2::OptionsContext &Ctx) {
   auto &ColdEntry = ProfileSummaryBuilder::getEntryForPercentile(
-      DS, ProfileSummaryCutoffCold);
+      DS, getProfileSummaryCutoffCold(Ctx));
   uint64_t ColdCountThreshold = ColdEntry.MinCount;
-  if (ProfileSummaryColdCount.getNumOccurrences() > 0)
-    ColdCountThreshold = ProfileSummaryColdCount;
+  if (getProfileSummaryColdCountOptWasSpecified(Ctx))
+    ColdCountThreshold = getProfileSummaryColdCountOpt(Ctx);
   return ColdCountThreshold;
 }
 
@@ -200,7 +196,7 @@ std::unique_ptr<ProfileSummary> SampleProfileSummaryBuilder::getSummary() {
 
 std::unique_ptr<ProfileSummary>
 SampleProfileSummaryBuilder::computeSummaryForProfiles(
-    const SampleProfileMap &Profiles) {
+    const SampleProfileMap &Profiles, const clv2::OptionsContext &Ctx) {
   assert(NumFunctions == 0 &&
          "This can only be called on an empty summary builder");
   sampleprof::SampleProfileMap ContextLessProfiles;
@@ -211,8 +207,9 @@ SampleProfileSummaryBuilder::computeSummaryForProfiles(
   // more function profiles each with lower counts, which in turn leads to lower
   // hot thresholds. To compensate for that, by default we merge context
   // profiles before computing profile summary.
-  if (UseContextLessSummary || (sampleprof::FunctionSamples::ProfileIsCS &&
-                                !UseContextLessSummary.getNumOccurrences())) {
+  if (getUseContextLessSummaryOpt(Ctx) ||
+      (sampleprof::FunctionSamples::ProfileIsCS &&
+       !getUseContextLessSummaryOptWasSpecified(Ctx))) {
     ProfileConverter::flattenProfile(Profiles, ContextLessProfiles, true);
     ProfilesToUse = &ContextLessProfiles;
   }

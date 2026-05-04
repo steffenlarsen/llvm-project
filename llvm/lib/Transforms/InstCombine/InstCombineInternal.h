@@ -18,6 +18,7 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/Loads.h"
 #include "llvm/Analysis/TargetFolder.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/IRBuilder.h"
@@ -83,6 +84,22 @@ public:
 
   ~InstCombinerImpl() override = default;
 
+  /// Cached per combiner rather than read per load: the value needs an
+  /// OptionsContext, which visitLoadInst would otherwise fetch for every load.
+  ///
+  /// Lazy, not computed in the constructor: plenty of functions contain no
+  /// loads at all, and they should not pay for a read they never use.
+  unsigned getDefMaxInstsToScanCached() {
+    if (!DefMaxInstsToScanCache)
+      DefMaxInstsToScanCache =
+          getDefMaxInstsToScan(F.getContext().getOptionsContext());
+    return *DefMaxInstsToScanCache;
+  }
+
+private:
+  std::optional<unsigned> DefMaxInstsToScanCache;
+
+public:
   /// Perform early cleanup and prepare the InstCombine worklist.
   bool prepareWorklist(Function &F);
 
@@ -879,12 +896,14 @@ class Negator final {
 
   const DominatorTree &DT;
 
+  Function &F;
+
   const bool IsTrulyNegation;
 
   SmallDenseMap<Value *, Value *> NegationsCache;
 
   Negator(LLVMContext &C, const DataLayout &DL, const DominatorTree &DT,
-          bool IsTrulyNegation);
+          Function &F, bool IsTrulyNegation);
 
 #if LLVM_ENABLE_STATS
   unsigned NumValuesVisitedInThisNegator = 0;

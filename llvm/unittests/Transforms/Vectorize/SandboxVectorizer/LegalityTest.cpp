@@ -25,7 +25,7 @@
 using namespace llvm;
 
 struct LegalityTest : public testing::Test {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   std::unique_ptr<DominatorTree> DT;
   std::unique_ptr<TargetLibraryInfoImpl> TLII;

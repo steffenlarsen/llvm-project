@@ -26,6 +26,9 @@ class Module;
 class LLVMContext;
 struct LogicalResult;
 
+namespace clv2 {
+class OptionParser;
+} // namespace clv2
 namespace orc {
 class MangleAndInterner;
 } // namespace orc
@@ -61,6 +64,10 @@ struct JitRunnerConfig {
   /// A callback to register symbols with ExecutionEngine at runtime.
   llvm::function_ref<llvm::orc::SymbolMap(llvm::orc::MangleAndInterner)>
       runtimesymbolMap = nullptr;
+
+  /// A callback to add tool-specific options to the parser.
+  llvm::function_ref<void(llvm::clv2::OptionParser &)> configureParser =
+      nullptr;
 };
 
 /// Entry point for all CPU runners. Expects the common argc/argv arguments for

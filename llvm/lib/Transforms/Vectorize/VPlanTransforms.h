@@ -18,9 +18,12 @@
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Regex.h"
+#include "llvm/Transforms/Vectorize/VectorizeOptions.h"
+#include <string>
+#include <vector>
 
 namespace llvm {
 
@@ -38,15 +41,6 @@ class VPBuilder;
 class VPRecipeBuilder;
 struct VFRange;
 
-LLVM_ABI_FOR_TEST extern cl::opt<bool> VerifyEachVPlan;
-
-#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
-LLVM_ABI_FOR_TEST extern cl::opt<bool> VPlanPrintBeforeAll;
-LLVM_ABI_FOR_TEST extern cl::opt<bool> VPlanPrintAfterAll;
-LLVM_ABI_FOR_TEST extern cl::list<std::string> VPlanPrintBeforePasses;
-LLVM_ABI_FOR_TEST extern cl::list<std::string> VPlanPrintAfterPasses;
-LLVM_ABI_FOR_TEST extern cl::opt<bool> VPlanPrintVectorRegionScope;
-#endif
 
 struct VPlanTransforms {
   /// Helper to run a VPlan pass \p Pass on \p VPlan, forwarding extra arguments
@@ -59,13 +53,35 @@ struct VPlanTransforms {
     static DenseMap<std::pair<Function *, StringRef /* Pass */>, unsigned>
         PassCounter;
     Function *Fn = Plan.getScalarHeader()->getIRBasicBlock()->getParent();
+
+    bool PrintBeforeAll = false;
+    bool PrintAfterAll = false;
+    bool PrintVecRegionScope = false;
+    bool PrintBeforePassesWasSpec = false;
+    bool PrintAfterPassesWasSpec = false;
+    std::vector<std::string> PrintBeforePasses;
+    std::vector<std::string> PrintAfterPasses;
+    if (Fn)
+      if (auto *O = clv2::getView<&clv2::VectorizeOptsReg>(
+              Fn->getContext().getOptionsContext())) {
+        PrintBeforeAll = O->get<&clv2::VEC_VPlanPrintBeforeAll>();
+        PrintAfterAll = O->get<&clv2::VEC_VPlanPrintAfterAll>();
+        PrintVecRegionScope = O->get<&clv2::VEC_VPlanPrintVectorRegionScope>();
+        PrintBeforePassesWasSpec =
+            O->specified<&clv2::VEC_VPlanPrintBeforePasses>();
+        PrintBeforePasses = O->get<&clv2::VEC_VPlanPrintBeforePasses>();
+        PrintAfterPassesWasSpec =
+            O->specified<&clv2::VEC_VPlanPrintAfterPasses>();
+        PrintAfterPasses = O->get<&clv2::VEC_VPlanPrintAfterPasses>();
+      }
+
     // Computing these is expensive, so only do it if any VPlan printing has
     // been requested.
     unsigned Instance;
     std::string NumberedPassName;
 
-    if (VPlanPrintBeforeAll || VPlanPrintAfterAll ||
-        !VPlanPrintBeforePasses.empty() || !VPlanPrintAfterPasses.empty()) {
+    if (PrintBeforeAll || PrintAfterAll || PrintBeforePassesWasSpec ||
+        PrintAfterPassesWasSpec) {
       Instance = ++PassCounter[{Fn, PassName}];
 
       NumberedPassName = Instance == 1
@@ -76,20 +92,21 @@ struct VPlanTransforms {
     auto PrintPlan = [&](StringRef BeforeOrAfterStr) {
       dbgs() << "VPlan for loop in '" << Fn->getName() << "' "
              << BeforeOrAfterStr << " " << NumberedPassName << '\n';
-      if (VPlanPrintVectorRegionScope && Plan.getVectorLoopRegion())
+      if (PrintVecRegionScope && Plan.getVectorLoopRegion())
         Plan.getVectorLoopRegion()->print(dbgs());
       else
         dbgs() << Plan << '\n';
     };
 
-    auto MatchesPassListOption = [&](const cl::list<std::string> &ListOpt) {
-      return (ListOpt.getNumOccurrences() > 0 &&
-              any_of(ListOpt, [&](StringRef Entry) {
-                return Regex(Entry).match(NumberedPassName);
-              }));
+    auto MatchesPassListOption = [&](bool WasSpecified,
+                                     ArrayRef<std::string> ListOpt) {
+      return WasSpecified && any_of(ListOpt, [&](StringRef Entry) {
+               return Regex(Entry).match(NumberedPassName);
+             });
     };
 
-    if (VPlanPrintBeforeAll || MatchesPassListOption(VPlanPrintBeforePasses))
+    if (PrintBeforeAll ||
+        MatchesPassListOption(PrintBeforePassesWasSpec, PrintBeforePasses))
       PrintPlan("before");
 #endif
 
@@ -97,12 +114,24 @@ struct VPlanTransforms {
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
       // Make sure to print before verification, so that output is more useful
       // in case of failures:
-      if (VPlanPrintAfterAll || MatchesPassListOption(VPlanPrintAfterPasses))
+      if (PrintAfterAll ||
+          MatchesPassListOption(PrintAfterPassesWasSpec, PrintAfterPasses))
         PrintPlan("after");
 #endif
-      if (VerifyEachVPlan && EnableVerify) {
-        if (!verifyVPlanIsValid(Plan))
-          report_fatal_error("Broken VPlan found, compilation aborted!");
+      {
+#ifdef EXPENSIVE_CHECKS
+        bool DoVerify = true;
+#else
+        bool DoVerify = false;
+#endif
+        if (auto *VPF2 = Plan.getScalarHeader()->getIRBasicBlock()->getParent())
+          if (auto *O = clv2::getView<&clv2::VectorizeOptsReg>(
+                  VPF2->getContext().getOptionsContext()))
+            DoVerify = O->get<&clv2::VEC_VerifyEachVPlan>();
+        if (DoVerify && EnableVerify) {
+          if (!verifyVPlanIsValid(Plan))
+            report_fatal_error("Broken VPlan found, compilation aborted!");
+        }
       }
     }};
 

@@ -498,6 +498,11 @@ if (FLANG_INCLUDE_TESTS)
 endif()
 
 add_subdirectory(include)
+
+# The generated clv2 options headers are public; make everything configured
+# below wait for tablegen.  See add_clv2_options_gen_target in TableGen.cmake.
+add_clv2_options_gen_target(flang_clv2_options_gen "${CMAKE_CURRENT_SOURCE_DIR}/include")
+list(APPEND LLVM_COMMON_DEPENDS flang_clv2_options_gen)
 add_subdirectory(lib)
 add_subdirectory(cmake/modules)
 

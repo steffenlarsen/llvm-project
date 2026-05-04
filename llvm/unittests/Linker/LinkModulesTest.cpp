@@ -62,7 +62,7 @@ protected:
 
   void TearDown() override { M.reset(); }
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   Function *F;
   ArrayType *AT;
@@ -137,8 +137,7 @@ static Module *getExternal(LLVMContext &Ctx, StringRef FuncName) {
   FunctionType *FTy = FunctionType::get(
       Type::getVoidTy(Ctx), PointerType::getUnqual(Ctx), false /*=isVarArgs*/);
 
-  Function *F =
-      Function::Create(FTy, Function::ExternalLinkage, FuncName, M);
+  Function *F = Function::Create(FTy, Function::ExternalLinkage, FuncName, M);
   F->setCallingConv(CallingConv::C);
 
   BasicBlock *BB = BasicBlock::Create(Ctx, "", F);
@@ -185,7 +184,7 @@ TEST_F(LinkModuleTest, EmptyModule2) {
 }
 
 TEST_F(LinkModuleTest, TypeMerge) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
 
   const char *M1Str = "%t = type {i32}\n"
@@ -222,7 +221,7 @@ static void diagnosticHandler(LLVMDiagnosticInfoRef DI, void *C) {
 
 TEST_F(LinkModuleTest, NewCAPIFailure) {
   // Symbol clash between two modules
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::string Err;
   LLVMContextSetDiagnosticHandler(wrap(&Ctx), diagnosticHandler, &Err);
 
@@ -235,7 +234,7 @@ TEST_F(LinkModuleTest, NewCAPIFailure) {
 }
 
 TEST_F(LinkModuleTest, MoveDistinctMDs) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
 
   const char *SrcStr = "define void @foo() !attach !0 {\n"
@@ -308,28 +307,30 @@ TEST_F(LinkModuleTest, MoveDistinctMDs) {
 }
 
 TEST_F(LinkModuleTest, RemangleIntrinsics) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
 
   // We load two modules inside the same context C. In both modules there is a
   // "struct.rtx_def" type. In the module loaded the second (Bar) this type will
   // be renamed to "struct.rtx_def.0". Check that the intrinsics which have this
   // type in the signature are properly remangled.
-  const char *FooStr =
-    "%struct.rtx_def = type { i16 }\n"
-    "define void @foo(%struct.rtx_def %a) {\n"
-    "  call %struct.rtx_def @llvm.ssa.copy.s_struct.rtx_defs(%struct.rtx_def %a)\n"
-    "  ret void\n"
-    "}\n"
-    "declare %struct.rtx_def @llvm.ssa.copy.s_struct.rtx_defs(%struct.rtx_def)\n";
+  const char *FooStr = "%struct.rtx_def = type { i16 }\n"
+                       "define void @foo(%struct.rtx_def %a) {\n"
+                       "  call %struct.rtx_def "
+                       "@llvm.ssa.copy.s_struct.rtx_defs(%struct.rtx_def %a)\n"
+                       "  ret void\n"
+                       "}\n"
+                       "declare %struct.rtx_def "
+                       "@llvm.ssa.copy.s_struct.rtx_defs(%struct.rtx_def)\n";
 
-  const char *BarStr =
-    "%struct.rtx_def = type { i16 }\n"
-    "define void @bar(%struct.rtx_def %a) {\n"
-    "  call %struct.rtx_def @llvm.ssa.copy.s_struct.rtx_defs(%struct.rtx_def %a)\n"
-    "  ret void\n"
-    "}\n"
-    "declare %struct.rtx_def @llvm.ssa.copy.s_struct.rtx_defs(%struct.rtx_def)\n";
+  const char *BarStr = "%struct.rtx_def = type { i16 }\n"
+                       "define void @bar(%struct.rtx_def %a) {\n"
+                       "  call %struct.rtx_def "
+                       "@llvm.ssa.copy.s_struct.rtx_defs(%struct.rtx_def %a)\n"
+                       "  ret void\n"
+                       "}\n"
+                       "declare %struct.rtx_def "
+                       "@llvm.ssa.copy.s_struct.rtx_defs(%struct.rtx_def)\n";
 
   std::unique_ptr<Module> Foo = parseAssemblyString(FooStr, Err, C);
   assert(Foo);

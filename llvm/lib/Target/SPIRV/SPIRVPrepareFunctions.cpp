@@ -35,6 +35,8 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsSPIRV.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LowerMemIntrinsics.h"
@@ -83,13 +85,17 @@ public:
   StringRef getPassName() const override { return "SPIRV prepare functions"; }
 };
 
-static cl::list<std::string> SPVAllowUnknownIntrinsics(
-    "spv-allow-unknown-intrinsics", cl::CommaSeparated,
-    cl::desc("Emit unknown intrinsics as calls to external functions. A "
-             "comma-separated input list of intrinsic prefixes must be "
-             "provided, and only intrinsics carrying a listed prefix get "
-             "emitted as described."),
-    cl::value_desc("intrinsic_prefix_0,intrinsic_prefix_1"), cl::ValueOptional);
+static SmallVector<std::string, 4> SPVAllowUnknownIntrinsics;
+
+static SmallVector<std::string, 4>
+getAllowUnknownIntrinsics(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::SPIRVOptsReg>(
+          F.getContext().getOptionsContext())) {
+    const auto &V = O->get<&clv2::SPIRV_AllowUnknownIntrinsics>();
+    return SmallVector<std::string, 4>(V.begin(), V.end());
+  }
+  return SPVAllowUnknownIntrinsics;
+}
 } // namespace
 
 char SPIRVPrepareFunctionsLegacy::ID = 0;
@@ -543,7 +549,7 @@ bool SPIRVPrepareFunctionsImpl::substituteIntrinsicCalls(Function *F) {
           break;
         }
         if (TM.getTargetTriple().getVendor() == Triple::AMD ||
-            any_of(SPVAllowUnknownIntrinsics, [II](auto &&Prefix) {
+            any_of(getAllowUnknownIntrinsics(*F), [II](auto &&Prefix) {
               if (Prefix.empty())
                 return false;
               return II->getCalledFunction()->getName().starts_with(Prefix);

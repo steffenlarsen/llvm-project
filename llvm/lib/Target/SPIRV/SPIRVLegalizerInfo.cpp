@@ -620,7 +620,7 @@ SPIRVLegalizerInfo::SPIRVLegalizerInfo(const SPIRVSubtarget &ST) {
   getActionDefinitionsBuilder(G_FENCE).alwaysLegal();
   getActionDefinitionsBuilder({G_TRAP, G_DEBUGTRAP, G_UBSANTRAP}).alwaysLegal();
 
-  verify(*ST.getInstrInfo());
+  verify(*ST.getInstrInfo(), ST.getOptionsContext());
 }
 
 static bool legalizeExtractVectorElt(LegalizerHelper &Helper,
@@ -802,7 +802,7 @@ bool SPIRVLegalizerInfo::legalizeCustom(
     Register Reg1 = Op1.getReg();
     CmpInst::Predicate Cond =
         static_cast<CmpInst::Predicate>(MI.getOperand(1).getPredicate());
-    if ((!ST->canDirectlyComparePointers() ||
+    if ((!ST->canDirectlyComparePointers(MI.getMF()->getFunction()) ||
          (Cond != CmpInst::ICMP_EQ && Cond != CmpInst::ICMP_NE)) &&
         MRI.getType(Reg0).isPointer() && MRI.getType(Reg1).isPointer()) {
       LLT ConvT = LLT::scalar(ST->getPointerSize());

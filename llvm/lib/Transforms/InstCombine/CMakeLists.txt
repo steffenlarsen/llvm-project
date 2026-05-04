@@ -1,5 +1,8 @@
 add_llvm_component_library(LLVMInstCombine
+  InstCombineOptionsGetters.cpp
+  InstCombineOptionsRegistration.cpp
   InstructionCombining.cpp
+  InstCombineOptions.cpp
   InstCombineAddSub.cpp
   InstCombineAtomicRMW.cpp
   InstCombineAndOrXor.cpp

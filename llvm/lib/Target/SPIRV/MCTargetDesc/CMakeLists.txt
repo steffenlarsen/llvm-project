@@ -1,5 +1,6 @@
 add_llvm_component_library(LLVMSPIRVDesc
   SPIRVBaseInfo.cpp
+  SPIRVOptions.cpp
   SPIRVMCAsmInfo.cpp
   SPIRVMCTargetDesc.cpp
   SPIRVTargetStreamer.cpp

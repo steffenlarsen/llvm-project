@@ -15,7 +15,7 @@
 #include "polly/CodeGen/BlockGenerators.h"
 #include "polly/CodeGen/IslExprBuilder.h"
 #include "polly/CodeGen/RuntimeDebugBuilder.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopInfo.h"
 #include "polly/Support/ISLTools.h"
 #include "polly/Support/ScopHelper.h"
@@ -24,6 +24,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/RegionInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "isl/ast.h"
@@ -32,27 +33,26 @@
 using namespace llvm;
 using namespace polly;
 
-static cl::opt<bool> Aligned("enable-polly-aligned",
-                             cl::desc("Assumed aligned memory accesses."),
-                             cl::Hidden, cl::cat(PollyCategory));
+static bool getPollyDebugPrinting(ScopStmt &Stmt) {
+  if (auto *Opts = polly_opts::getPollyOpts(
+          Stmt.getParent()->getFunction().getContext().getOptionsContext()))
+    return Opts->get<&llvm::clv2::POLLY_CodegenAddDebugPrinting>();
+  return false;
+}
 
-bool PollyDebugPrinting;
-static cl::opt<bool, true> DebugPrintingX(
-    "polly-codegen-add-debug-printing",
-    cl::desc("Add printf calls that show the values loaded/stored."),
-    cl::location(PollyDebugPrinting), cl::Hidden, cl::cat(PollyCategory));
+static bool getTraceStmts(ScopStmt &Stmt) {
+  if (auto *Opts = polly_opts::getPollyOpts(
+          Stmt.getParent()->getFunction().getContext().getOptionsContext()))
+    return Opts->get<&llvm::clv2::POLLY_CodegenTraceStmts>();
+  return false;
+}
 
-bool TraceStmts;
-static cl::opt<bool, true> TraceStmtsX(
-    "polly-codegen-trace-stmts",
-    cl::desc("Add printf calls that print the statement being executed"),
-    cl::location(TraceStmts), cl::Hidden, cl::cat(PollyCategory));
-
-static cl::opt<bool> TraceScalars(
-    "polly-codegen-trace-scalars",
-    cl::desc("Add printf calls that print the values of all scalar values "
-             "used in a statement. Requires -polly-codegen-trace-stmts."),
-    cl::Hidden, cl::cat(PollyCategory));
+static bool getTraceScalars(ScopStmt &Stmt) {
+  if (auto *Opts = polly_opts::getPollyOpts(
+          Stmt.getParent()->getFunction().getContext().getOptionsContext()))
+    return Opts->get<&llvm::clv2::POLLY_CodegenTraceScalars>();
+  return false;
+}
 
 BlockGenerator::BlockGenerator(
     PollyIRBuilder &B, LoopInfo &LI, ScalarEvolution &SE, DominatorTree &DT,
@@ -304,7 +304,7 @@ Value *BlockGenerator::generateArrayLoad(ScopStmt &Stmt, LoadInst *Load,
       Builder.CreateAlignedLoad(Load->getType(), NewPointer, Load->getAlign(),
                                 Load->getName() + "_p_scalar_");
 
-  if (PollyDebugPrinting)
+  if (getPollyDebugPrinting(Stmt))
     RuntimeDebugBuilder::createCPUPrinter(Builder, "Load from ", NewPointer,
                                           ": ", ScalarLoad, "\n");
 
@@ -324,7 +324,7 @@ void BlockGenerator::generateArrayStore(ScopStmt &Stmt, StoreInst *Store,
     Value *ValueOperand = getNewValue(Stmt, Store->getValueOperand(), BBMap,
                                       LTS, getLoopForStmt(Stmt));
 
-    if (PollyDebugPrinting)
+    if (getPollyDebugPrinting(Stmt))
       RuntimeDebugBuilder::createCPUPrinter(Builder, "Store to  ", NewPointer,
                                             ": ", ValueOperand, "\n");
 
@@ -653,7 +653,7 @@ static std::string getInstName(Value *Val) {
 
 void BlockGenerator::generateBeginStmtTrace(ScopStmt &Stmt, LoopToScevMapT &LTS,
                                             ValueMapT &BBMap) {
-  if (!TraceStmts)
+  if (!getTraceStmts(Stmt))
     return;
 
   Scop *S = Stmt.getParent();
@@ -688,7 +688,7 @@ void BlockGenerator::generateBeginStmtTrace(ScopStmt &Stmt, LoopToScevMapT &LTS,
     Values.push_back(ExprBuilder->create(IsInSet.copy()));
   }
 
-  if (TraceScalars) {
+  if (getTraceScalars(Stmt)) {
     Values.push_back(RuntimeDebugBuilder::getPrintableString(Builder, ")"));
     DenseSet<Instruction *> Encountered;
 

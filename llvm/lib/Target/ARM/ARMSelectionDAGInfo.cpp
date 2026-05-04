@@ -13,7 +13,9 @@
 #include "ARMSelectionDAGInfo.h"
 #include "ARMTargetTransformInfo.h"
 #include "llvm/CodeGen/SelectionDAG.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/Function.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 
 #define GET_SDNODE_DESC
 #include "ARMGenSDNodeInfo.inc"
@@ -22,18 +24,15 @@ using namespace llvm;
 
 #define DEBUG_TYPE "arm-selectiondag-info"
 
-static cl::opt<TPLoop::MemTransfer> EnableMemtransferTPLoop(
-    "arm-memtransfer-tploop", cl::Hidden,
-    cl::desc("Control conversion of memcpy to "
-             "Tail predicated loops (WLSTP)"),
-    cl::init(TPLoop::ForceDisabled),
-    cl::values(clEnumValN(TPLoop::ForceDisabled, "force-disabled",
-                          "Don't convert memcpy to TP loop."),
-               clEnumValN(TPLoop::ForceEnabled, "force-enabled",
-                          "Always convert memcpy to TP loop."),
-               clEnumValN(TPLoop::Allow, "allow",
-                          "Allow (may be subject to certain conditions) "
-                          "conversion of memcpy to TP loop.")));
+static TPLoop::MemTransfer EnableMemtransferTPLoop = TPLoop::ForceDisabled;
+
+static TPLoop::MemTransfer getEnableMemtransferTPLoop(const Function &F) {
+  if (auto *O =
+          clv2::getView<&clv2::ARMOptsReg>(F.getContext().getOptionsContext()))
+    return static_cast<TPLoop::MemTransfer>(
+        O->get<&clv2::ARM_EnableMemtransferTPLoop>());
+  return EnableMemtransferTPLoop;
+}
 
 ARMSelectionDAGInfo::ARMSelectionDAGInfo()
     : SelectionDAGGenTargetInfo(ARMGenSDNodeInfo) {}
@@ -230,9 +229,9 @@ static bool shouldGenerateInlineTPLoop(const ARMSubtarget &Subtarget,
                                        ConstantSDNode *ConstantSize,
                                        Align Alignment, bool IsMemcpy) {
   auto &F = DAG.getMachineFunction().getFunction();
-  if (!EnableMemtransferTPLoop)
+  if (!getEnableMemtransferTPLoop(F))
     return false;
-  if (EnableMemtransferTPLoop == TPLoop::ForceEnabled)
+  if (getEnableMemtransferTPLoop(F) == TPLoop::ForceEnabled)
     return true;
   // Do not generate inline TP loop if optimizations is disabled,
   // or if optimization for size (-Os or -Oz) is on.

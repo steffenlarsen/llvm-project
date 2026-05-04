@@ -1,3 +1,4 @@
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===-------- LoopDataPrefetch.cpp - Loop Data Prefetching Pass -----------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -24,8 +25,8 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
@@ -36,22 +37,46 @@ using namespace llvm;
 
 // By default, we limit this to creating 16 PHIs (which is a little over half
 // of the allocatable register set).
-static cl::opt<bool>
-PrefetchWrites("loop-prefetch-writes", cl::Hidden, cl::init(false),
-               cl::desc("Prefetch write addresses"));
+static bool getPrefetchWrites(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_LoopPrefetchWrites>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool isPrefetchWritesSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_LoopPrefetchWrites>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-    PrefetchDistance("prefetch-distance",
-                     cl::desc("Number of instructions to prefetch ahead"),
-                     cl::Hidden);
+static unsigned getGlobalPrefetchDistance(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_PrefetchDistance>(
+      F.getContext().getOptionsContext(), 0);
+}
+static bool isPrefetchDistanceSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_PrefetchDistance>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-    MinPrefetchStride("min-prefetch-stride",
-                      cl::desc("Min stride to add prefetches"), cl::Hidden);
+static unsigned getGlobalMinPrefetchStride(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_MinPrefetchStride>(
+      F.getContext().getOptionsContext(), 0);
+}
+static bool isMinPrefetchStrideSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_MinPrefetchStride>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> MaxPrefetchIterationsAhead(
-    "max-prefetch-iters-ahead",
-    cl::desc("Max number of iterations to prefetch ahead"), cl::Hidden);
+static unsigned getGlobalMaxPrefetchIterationsAhead(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_MaxPrefetchItersAhead>(
+      F.getContext().getOptionsContext(), 0);
+}
+static bool isMaxPrefetchIterationsAheadSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_MaxPrefetchItersAhead>(
+      F.getContext().getOptionsContext());
+}
 
 STATISTIC(NumPrefetches, "Number of prefetches inserted");
 
@@ -62,8 +87,8 @@ class LoopDataPrefetch {
 public:
   LoopDataPrefetch(AssumptionCache *AC, DominatorTree *DT, LoopInfo *LI,
                    ScalarEvolution *SE, const TargetTransformInfo *TTI,
-                   OptimizationRemarkEmitter *ORE)
-      : AC(AC), DT(DT), LI(LI), SE(SE), TTI(TTI), ORE(ORE) {}
+                   OptimizationRemarkEmitter *ORE, const Function *F = nullptr)
+      : AC(AC), DT(DT), LI(LI), SE(SE), TTI(TTI), ORE(ORE), F(F) {}
 
   bool run();
 
@@ -78,27 +103,35 @@ private:
                                 unsigned NumStridedMemAccesses,
                                 unsigned NumPrefetches,
                                 bool HasCall) {
-    if (MinPrefetchStride.getNumOccurrences() > 0)
-      return MinPrefetchStride;
+    if (F && isMinPrefetchStrideSpecified(*F))
+      return getGlobalMinPrefetchStride(*F);
     return TTI->getMinPrefetchStride(NumMemAccesses, NumStridedMemAccesses,
                                      NumPrefetches, HasCall);
   }
 
-  unsigned getPrefetchDistance() {
-    if (PrefetchDistance.getNumOccurrences() > 0)
-      return PrefetchDistance;
+  unsigned getPrefetchDistance(const clv2::OptionsContext &Ctx) {
+    if (F && isPrefetchDistanceSpecified(*F))
+      return getGlobalPrefetchDistance(*F);
+    // F may be null in early-exit checks; fall back to clv2::getView().
+    if (F)
+      return clv2::getOptValIfSpecified<&clv2::ScalarOptsReg,
+                                        &clv2::SC_PrefetchDistance>(
+          F->getContext().getOptionsContext(),
+          clv2::getOptValIfSpecified<&clv2::ScalarOptsReg,
+                                     &clv2::SC_PrefetchDistance>(
+              Ctx, TTI->getPrefetchDistance()));
     return TTI->getPrefetchDistance();
   }
 
   unsigned getMaxPrefetchIterationsAhead() {
-    if (MaxPrefetchIterationsAhead.getNumOccurrences() > 0)
-      return MaxPrefetchIterationsAhead;
+    if (F && isMaxPrefetchIterationsAheadSpecified(*F))
+      return getGlobalMaxPrefetchIterationsAhead(*F);
     return TTI->getMaxPrefetchIterationsAhead();
   }
 
   bool doPrefetchWrites() {
-    if (PrefetchWrites.getNumOccurrences() > 0)
-      return PrefetchWrites;
+    if (F && isPrefetchWritesSpecified(*F))
+      return getPrefetchWrites(*F);
     return TTI->enableWritePrefetching();
   }
 
@@ -108,6 +141,7 @@ private:
   ScalarEvolution *SE;
   const TargetTransformInfo *TTI;
   OptimizationRemarkEmitter *ORE;
+  const Function *F = nullptr;
 };
 
 /// Legacy class for inserting loop data prefetches.
@@ -178,7 +212,7 @@ PreservedAnalyses LoopDataPrefetchPass::run(Function &F,
       &AM.getResult<OptimizationRemarkEmitterAnalysis>(F);
   const TargetTransformInfo *TTI = &AM.getResult<TargetIRAnalysis>(F);
 
-  LoopDataPrefetch LDP(AC, DT, LI, SE, TTI, ORE);
+  LoopDataPrefetch LDP(AC, DT, LI, SE, TTI, ORE, &F);
   bool Changed = LDP.run();
 
   if (Changed) {
@@ -205,7 +239,7 @@ bool LoopDataPrefetchLegacyPass::runOnFunction(Function &F) {
   const TargetTransformInfo *TTI =
       &getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);
 
-  LoopDataPrefetch LDP(AC, DT, LI, SE, TTI, ORE);
+  LoopDataPrefetch LDP(AC, DT, LI, SE, TTI, ORE, &F);
   return LDP.run();
 }
 
@@ -213,7 +247,8 @@ bool LoopDataPrefetch::run() {
   // If PrefetchDistance is not set, don't run the pass.  This gives an
   // opportunity for targets to run this pass for selected subtargets only
   // (whose TTI sets PrefetchDistance and CacheLineSize).
-  if (getPrefetchDistance() == 0 || TTI->getCacheLineSize() == 0) {
+  if (getPrefetchDistance(F->getContext().getOptionsContext()) == 0 ||
+      TTI->getCacheLineSize(F->getContext().getOptionsContext()) == 0) {
     LLVM_DEBUG(dbgs() << "Please set both PrefetchDistance and CacheLineSize "
                          "for loop data prefetch.\n");
     return false;
@@ -271,6 +306,7 @@ struct Prefetch {
 };
 
 bool LoopDataPrefetch::runOnLoop(Loop *L) {
+  F = L->getHeader()->getParent();
   bool MadeChange = false;
 
   // Only prefetch in the inner-most loop
@@ -308,7 +344,8 @@ bool LoopDataPrefetch::runOnLoop(Loop *L) {
   if (!LoopSize)
     LoopSize = 1;
 
-  unsigned ItersAhead = getPrefetchDistance() / LoopSize;
+  unsigned ItersAhead =
+      getPrefetchDistance(F->getContext().getOptionsContext()) / LoopSize;
   if (!ItersAhead)
     ItersAhead = 1;
 
@@ -358,7 +395,8 @@ bool LoopDataPrefetch::runOnLoop(Loop *L) {
         if (const SCEVConstant *ConstPtrDiff =
             dyn_cast<SCEVConstant>(PtrDiff)) {
           int64_t PD = std::abs(ConstPtrDiff->getValue()->getSExtValue());
-          if (PD < (int64_t) TTI->getCacheLineSize()) {
+          if (PD < (int64_t)TTI->getCacheLineSize(
+                       F->getContext().getOptionsContext())) {
             Pref.addInstruction(MemI, DT, PD);
             DupPref = true;
             break;

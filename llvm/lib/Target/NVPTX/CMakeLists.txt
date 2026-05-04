@@ -53,6 +53,8 @@ set(NVPTXCodeGen_sources
   )
 
 add_llvm_target(NVPTXCodeGen
+  NVPTXOptionsGetters.cpp
+  NVPTXOptionsRegistration.cpp
   ${NVPTXCodeGen_sources}
 
   LINK_COMPONENTS

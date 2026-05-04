@@ -10,6 +10,10 @@
 /// This file defines the MIR2Vec framework for generating Machine IR
 /// embeddings.
 ///
+namespace llvm::clv2 {
+class OptionsContext;
+}
+
 /// Design Overview:
 /// ----------------------
 /// 1. MIR2VecVocabProvider - Core vocabulary loading logic (no PM dependency)
@@ -50,7 +54,7 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorOr.h"
 #include <map>
@@ -75,7 +79,6 @@ class MIREmbedder;
 class SymbolicMIREmbedder;
 
 LLVM_ABI extern llvm::cl::OptionCategory MIR2VecCategory;
-LLVM_ABI extern cl::opt<float> OpcWeight, CommonOperandWeight, RegOperandWeight;
 
 using Embedding = ir2vec::Embedding;
 using MachineInstEmbeddingsMap = DenseMap<const MachineInstr *, Embedding>;
@@ -307,11 +310,10 @@ protected:
   /// Weight for opcode embeddings
   const float OpcWeight, CommonOperandWeight, RegOperandWeight;
 
-  MIREmbedder(const MachineFunction &MF, const MIRVocabulary &Vocab)
-      : MF(MF), Vocab(Vocab), Dimension(Vocab.getDimension()),
-        OpcWeight(mir2vec::OpcWeight),
-        CommonOperandWeight(mir2vec::CommonOperandWeight),
-        RegOperandWeight(mir2vec::RegOperandWeight) {}
+  MIREmbedder(const MachineFunction &MF, const MIRVocabulary &Vocab, float OpcW,
+              float CommonOpW, float RegOpW)
+      : MF(MF), Vocab(Vocab), Dimension(Vocab.getDimension()), OpcWeight(OpcW),
+        CommonOperandWeight(CommonOpW), RegOperandWeight(RegOpW) {}
 
   /// Function to compute embeddings.
   LLVM_ABI Embedding computeEmbeddings() const;
@@ -385,7 +387,8 @@ public:
 
 private:
   Error readVocabulary(VocabMap &OpcVocab, VocabMap &CommonOperandVocab,
-                       VocabMap &PhyRegVocabMap, VocabMap &VirtRegVocabMap);
+                       VocabMap &PhyRegVocabMap, VocabMap &VirtRegVocabMap,
+                       const clv2::OptionsContext &Ctx);
   const MachineModuleInfo &MMI;
 };
 

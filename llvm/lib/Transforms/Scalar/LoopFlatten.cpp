@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LoopFlatten.cpp - Loop flattening pass------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -83,25 +85,26 @@ using namespace llvm::PatternMatch;
 
 STATISTIC(NumFlattened, "Number of loops flattened");
 
-static cl::opt<unsigned> RepeatedInstructionThreshold(
-    "loop-flatten-cost-threshold", cl::Hidden, cl::init(2),
-    cl::desc("Limit on the cost of instructions that can be repeated due to "
-             "loop flattening"));
+static unsigned getRepeatedInstructionThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_LoopFlattenCostThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    AssumeNoOverflow("loop-flatten-assume-no-overflow", cl::Hidden,
-                     cl::init(false),
-                     cl::desc("Assume that the product of the two iteration "
-                              "trip counts will never overflow"));
+static bool getAssumeNoOverflow(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_LoopFlattenAssumeNoOverflow>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<bool>
-    WidenIV("loop-flatten-widen-iv", cl::Hidden, cl::init(true),
-            cl::desc("Widen the loop induction variables, if possible, so "
-                     "overflow checks won't reject flattening"));
+static bool getWidenIV(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_LoopFlattenWidenIv>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    VersionLoops("loop-flatten-version-loops", cl::Hidden, cl::init(true),
-                 cl::desc("Version loops if flattened loop could overflow"));
+static bool getVersionLoops(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_LoopFlattenVersionLoops>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 // We require all uses of both induction variables to match this pattern:
@@ -599,7 +602,8 @@ checkOuterLoopInsts(FlattenInfo &FI,
                     << RepeatedInstrCost << "\n");
   // Bail out if flattening the loops would cause instructions in the outer
   // loop but not in the inner loop to be executed extra times.
-  if (RepeatedInstrCost > RepeatedInstructionThreshold) {
+  if (RepeatedInstrCost > getRepeatedInstructionThreshold(
+                              *FI.OuterLoop->getHeader()->getParent())) {
     LLVM_DEBUG(dbgs() << "checkOuterLoopInsts: not profitable, bailing.\n");
     return false;
   }
@@ -647,7 +651,7 @@ static OverflowResult checkOverflow(FlattenInfo &FI, DominatorTree *DT,
   const DataLayout &DL = F->getDataLayout();
 
   // For debugging/testing.
-  if (AssumeNoOverflow)
+  if (getAssumeNoOverflow(*F))
     return OverflowResult::NeverOverflows;
 
   // Check if the multiply could not overflow due to known ranges of the
@@ -838,7 +842,7 @@ static bool DoFlattenLoopPair(FlattenInfo &FI, DominatorTree *DT, LoopInfo *LI,
 static bool CanWidenIV(FlattenInfo &FI, DominatorTree *DT, LoopInfo *LI,
                        ScalarEvolution *SE, AssumptionCache *AC,
                        const TargetTransformInfo *TTI) {
-  if (!WidenIV) {
+  if (!getWidenIV(*FI.InnerLoop->getHeader()->getParent())) {
     LLVM_DEBUG(dbgs() << "Widening the IVs is disabled\n");
     return false;
   }
@@ -948,7 +952,7 @@ static bool FlattenLoopPair(FlattenInfo &FI, DominatorTree *DT, LoopInfo *LI,
   } else if (OR == OverflowResult::MayOverflow) {
     Module *M = FI.OuterLoop->getHeader()->getParent()->getParent();
     const DataLayout &DL = M->getDataLayout();
-    if (!VersionLoops) {
+    if (!getVersionLoops(*FI.OuterLoop->getHeader()->getParent())) {
       LLVM_DEBUG(dbgs() << "Multiply might overflow, not flattening\n");
       return false;
     } else if (!DL.isLegalInteger(
@@ -999,7 +1003,7 @@ PreservedAnalyses LoopFlattenPass::run(LoopNest &LN, LoopAnalysisManager &LAM,
   std::optional<MemorySSAUpdater> MSSAU;
   if (AR.MSSA) {
     MSSAU = MemorySSAUpdater(AR.MSSA);
-    if (VerifyMemorySSA)
+    if (getVerifyMemorySSA(LN.getParent()->getContext().getOptionsContext()))
       AR.MSSA->verifyMemorySSA();
   }
 
@@ -1022,7 +1026,8 @@ PreservedAnalyses LoopFlattenPass::run(LoopNest &LN, LoopAnalysisManager &LAM,
   if (!Changed)
     return PreservedAnalyses::all();
 
-  if (AR.MSSA && VerifyMemorySSA)
+  if (AR.MSSA &&
+      getVerifyMemorySSA(LN.getParent()->getContext().getOptionsContext()))
     AR.MSSA->verifyMemorySSA();
 
   auto PA = getLoopPassPreservedAnalyses();

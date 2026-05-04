@@ -165,6 +165,42 @@ function(tablegen project ofn)
 endfunction()
 
 # Creates a target for publicly exporting tablegen dependencies.
+# Roll every clv2 options tablegen target created under `dir` (recursively)
+# into one custom target `name`, so consumers can depend on a single thing.
+#
+# add_public_tablegen_target() cannot publish this dependency itself: it sets
+# LLVM_COMMON_DEPENDS with PARENT_SCOPE from inside a function, which lands in
+# the *calling* directory's scope and goes no further.  The clv2 options
+# headers are public headers under <project>/include/..., so a TU anywhere in
+# the project may include one; without an explicit edge the build only succeeds
+# if tablegen happens to be scheduled first.
+#
+# Callers should append the resulting target to LLVM_COMMON_DEPENDS in the
+# project's top-level scope, after add_subdirectory(include) and before the
+# directories that consume the headers.
+function(_collect_clv2_options_targets dir out)
+  set(_acc "")
+  get_property(_tgts DIRECTORY "${dir}" PROPERTY BUILDSYSTEM_TARGETS)
+  foreach(_t ${_tgts})
+    if(_t MATCHES "OptionsTableGen$")
+      list(APPEND _acc ${_t})
+    endif()
+  endforeach()
+  get_property(_subs DIRECTORY "${dir}" PROPERTY SUBDIRECTORIES)
+  foreach(_s ${_subs})
+    _collect_clv2_options_targets("${_s}" _sub)
+    list(APPEND _acc ${_sub})
+  endforeach()
+  set(${out} "${_acc}" PARENT_SCOPE)
+endfunction()
+
+function(add_clv2_options_gen_target name dir)
+  _collect_clv2_options_targets("${dir}" _targets)
+  add_custom_target(${name} DEPENDS ${_targets})
+  get_subproject_title(subproject_title)
+  set_target_properties(${name} PROPERTIES FOLDER "${subproject_title}/Tablegenning")
+endfunction()
+
 function(add_public_tablegen_target target)
   if(NOT TABLEGEN_OUTPUT)
     message(FATAL_ERROR "Requires tablegen() definitions as TABLEGEN_OUTPUT.")

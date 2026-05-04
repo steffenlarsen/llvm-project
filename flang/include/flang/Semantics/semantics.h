@@ -19,12 +19,16 @@
 #include "flang/Parser/message.h"
 #include "flang/Support/Fortran-features.h"
 #include "flang/Support/LangOptions.h"
+#include "llvm/Support/OptionsContext.h"
 #include <set>
 #include <string>
 #include <vector>
 
 namespace llvm {
 class raw_ostream;
+namespace clv2 {
+class OptionsContext;
+}
 }
 
 namespace Fortran::common {
@@ -104,6 +108,13 @@ public:
     return implicitUseModules_;
   }
   const std::string &moduleDirectory() const { return moduleDirectory_; }
+  void setOptionsContext(const llvm::clv2::OptionsContext &ctx) {
+    optionsContext_ = &ctx;
+  }
+  const llvm::clv2::OptionsContext &getOptionsContext() const {
+    return optionsContext_ ? *optionsContext_
+                           : llvm::clv2::defaultOptionsContext();
+  }
   const std::string &moduleFileSuffix() const { return moduleFileSuffix_; }
   bool underscoring() const { return underscoring_; }
   bool warningsAreErrors() const { return warningsAreErrors_; }
@@ -406,6 +417,7 @@ private:
   const common::IntrinsicTypeDefaultKinds &defaultKinds_;
   const common::LanguageFeatureControl &languageFeatures_;
   const common::LangOptions &langOpts_;
+  const llvm::clv2::OptionsContext *optionsContext_{nullptr};
   parser::AllCookedSources &allCookedSources_;
   std::string openAccDefaultNoneScalarsStrictDisableOption_;
   std::optional<parser::CharBlock> location_;

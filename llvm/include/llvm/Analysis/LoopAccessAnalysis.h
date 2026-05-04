@@ -24,8 +24,13 @@
 
 namespace llvm {
 
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
+
 class AAResults;
 class DataLayout;
+class Function;
 class Loop;
 class raw_ostream;
 class TargetTransformInfo;
@@ -37,22 +42,25 @@ struct VectorizerParams {
   LLVM_ABI static const unsigned MaxVectorWidth;
 
   /// VF as overridden by the user.
-  LLVM_ABI static ElementCount VectorizationFactor;
+  LLVM_ABI static ElementCount
+  getVectorizationFactor(const clv2::OptionsContext &Ctx);
   /// Interleave factor as overridden by the user.
-  LLVM_ABI static unsigned VectorizationInterleave;
+  LLVM_ABI static unsigned
+  getVectorizationInterleave(const clv2::OptionsContext &Ctx);
   /// True if force-vector-interleave was specified by the user.
-  LLVM_ABI static bool isInterleaveForced();
+  LLVM_ABI static bool isInterleaveForced(const clv2::OptionsContext &Ctx);
 
   /// \When performing memory disambiguation checks at runtime do not
   /// make more than this number of comparisons.
-  LLVM_ABI static unsigned RuntimeMemoryCheckThreshold;
+  LLVM_ABI static unsigned
+  getRuntimeMemoryCheckThreshold(const clv2::OptionsContext &Ctx);
 
   // When creating runtime checks for nested loops, where possible try to
   // write the checks in a form that allows them to be easily hoisted out of
   // the outermost loop. For example, we can do this by expanding the range of
   // addresses considered to include the entire nested loop so that they are
   // loop invariant.
-  LLVM_ABI static bool HoistRuntimeChecks;
+  LLVM_ABI static bool getHoistRuntimeChecks(const clv2::OptionsContext &Ctx);
 };
 
 /// Maps a pointer to its symbolic (non-constant) stride. Strides are loop
@@ -882,14 +890,6 @@ LLVM_ABI const SCEV *
 replaceSymbolicStrideSCEV(PredicatedScalarEvolution &PSE,
                           const SymbolicStrideMap &PtrToStride, Value *Ptr);
 
-/// If \p AR is an affine AddRec for \p Lp with a constant step, return the
-/// step in units of \p AccessTy's allocation size. Returns std::nullopt if the
-/// step is not constant, does not divide the access size, or \p AccessTy is a
-/// scalable vector. \p Ptr is only used for debug output and may be null.
-LLVM_ABI std::optional<int64_t>
-getStrideFromAddRec(const SCEVAddRecExpr *AR, const Loop *Lp, Type *AccessTy,
-                    Value *Ptr, PredicatedScalarEvolution &PSE);
-
 /// If the pointer has a constant stride return it in units of the access type
 /// size. If the pointer is loop-invariant, return 0. Otherwise return
 /// std::nullopt.
@@ -900,11 +900,11 @@ getStrideFromAddRec(const SCEVAddRecExpr *AR, const Loop *Lp, Type *AccessTy,
 /// If necessary this method will version the stride of the pointer according
 /// to \p PtrToStride and therefore add further predicates to \p PSE.
 ///
-/// If \p Predicates is non-null, add no-wrap SCEV predicates if needed.
-///
 /// Note that the analysis results are defined if-and-only-if the original
 /// memory access was defined.  If that access was dead, or UB, then the
 /// result of this function is undefined.
+///
+/// If \p Predicates is non-null, add no-wrap SCEV predicates if needed.
 LLVM_ABI std::optional<int64_t>
 getPtrStride(PredicatedScalarEvolution &PSE, Type *AccessTy, Value *Ptr,
              const Loop *Lp, const DominatorTree &DT,
@@ -1035,6 +1035,14 @@ inline Instruction *MemoryDepChecker::Dependence::getDestination(
     const MemoryDepChecker &DepChecker) const {
   return DepChecker.getMemoryInstructions()[Destination];
 }
+
+/// If \p AR is an affine AddRec for \p Lp with a constant step, return the
+/// step in units of \p AccessTy's allocation size. Returns std::nullopt if the
+/// step is not constant, does not divide the access size, or \p AccessTy is a
+/// scalable vector. \p Ptr is only used for debug output and may be null.
+LLVM_ABI std::optional<int64_t>
+getStrideFromAddRec(const SCEVAddRecExpr *AR, const Loop *Lp, Type *AccessTy,
+                    Value *Ptr, PredicatedScalarEvolution &PSE);
 
 } // End llvm namespace
 

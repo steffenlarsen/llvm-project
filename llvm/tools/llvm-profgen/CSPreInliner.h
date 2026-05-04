@@ -17,6 +17,9 @@
 #include "llvm/Transforms/IPO/SampleContextTracker.h"
 
 namespace llvm {
+
+struct ProfGenConfig;
+
 namespace sampleprof {
 
 // Inline candidate seen from profile
@@ -71,7 +74,7 @@ using ProfiledCandidateQueue =
 class CSPreInliner {
 public:
   CSPreInliner(SampleContextTracker &Tracker, ProfiledBinary &Binary,
-               ProfileSummary *Summary);
+               ProfileSummary *Summary, const ProfGenConfig &Config);
   void run();
 
 private:
@@ -85,6 +88,7 @@ private:
   SampleContextTracker &ContextTracker;
   ProfiledBinary &Binary;
   ProfileSummary *Summary;
+  const ProfGenConfig &Config;
 };
 
 } // end namespace sampleprof

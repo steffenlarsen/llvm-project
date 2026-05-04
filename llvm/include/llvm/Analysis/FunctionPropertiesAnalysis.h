@@ -51,7 +51,7 @@ public:
     return !(*this == FPI);
   }
 
-  LLVM_ABI void print(raw_ostream &OS) const;
+  LLVM_ABI void print(raw_ostream &OS, const Function *F = nullptr) const;
 
   /// Number of basic blocks
   int64_t BasicBlockCount = 0;

@@ -13,15 +13,18 @@
 
 #include "llvm/CodeGen/GlobalISel/LegalizerInfo.h"
 #include "llvm/ADT/SmallBitVector.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/CodeGenTypes/LowLevelType.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include <algorithm>
 
 using namespace llvm;
@@ -29,16 +32,11 @@ using namespace LegalizeActions;
 
 #define DEBUG_TYPE "legalizer-info"
 
-cl::opt<bool> llvm::DisableGISelLegalityCheck(
-    "disable-gisel-legality-check",
-    cl::desc("Don't verify that MIR is fully legal between GlobalISel passes"),
-    cl::Hidden);
-
-static cl::opt<bool> VerboseVerifyLegalizerInfo(
-    "verbose-gisel-verify-legalizer-info",
-    cl::desc("Print more information to dbgs about GlobalISel legalizer rules "
-             "being verified"),
-    cl::Hidden);
+static bool
+getVerboseGiselVerifyLegalizerInfo(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::CGPASS_VerboseGiselVerifyLegalizerInfo>(Ctx);
+}
 
 raw_ostream &llvm::operator<<(raw_ostream &OS, LegalizeAction Action) {
   switch (Action) {
@@ -211,10 +209,11 @@ LegalizeActionStep LegalizeRuleSet::apply(const LegalityQuery &Query) const {
   return {LegalizeAction::Unsupported, 0, LLT{}};
 }
 
-bool LegalizeRuleSet::verifyTypeIdxsCoverage(unsigned NumTypeIdxs) const {
+bool LegalizeRuleSet::verifyTypeIdxsCoverage(
+    unsigned NumTypeIdxs, const clv2::OptionsContext &Ctx) const {
 #ifndef NDEBUG
   if (Rules.empty()) {
-    if (VerboseVerifyLegalizerInfo) {
+    if (getVerboseGiselVerifyLegalizerInfo(Ctx)) {
       LLVM_DEBUG(dbgs() << ".. type index coverage check SKIPPED: "
                         << "no rules defined\n");
     }
@@ -222,7 +221,7 @@ bool LegalizeRuleSet::verifyTypeIdxsCoverage(unsigned NumTypeIdxs) const {
   }
   const int64_t FirstUncovered = TypeIdxsCovered.find_first_unset();
   if (FirstUncovered < 0) {
-    if (VerboseVerifyLegalizerInfo) {
+    if (getVerboseGiselVerifyLegalizerInfo(Ctx)) {
       LLVM_DEBUG(dbgs() << ".. type index coverage check SKIPPED:"
                            " user-defined predicate detected\n");
     }
@@ -230,7 +229,7 @@ bool LegalizeRuleSet::verifyTypeIdxsCoverage(unsigned NumTypeIdxs) const {
   }
   const bool AllCovered = (FirstUncovered >= NumTypeIdxs);
   if (NumTypeIdxs > 0) {
-    if (VerboseVerifyLegalizerInfo) {
+    if (getVerboseGiselVerifyLegalizerInfo(Ctx)) {
       LLVM_DEBUG(dbgs() << ".. the first uncovered type index: "
                         << FirstUncovered << ", "
                         << (AllCovered ? "OK" : "FAIL") << "\n");
@@ -242,10 +241,11 @@ bool LegalizeRuleSet::verifyTypeIdxsCoverage(unsigned NumTypeIdxs) const {
 #endif
 }
 
-bool LegalizeRuleSet::verifyImmIdxsCoverage(unsigned NumImmIdxs) const {
+bool LegalizeRuleSet::verifyImmIdxsCoverage(
+    unsigned NumImmIdxs, const clv2::OptionsContext &Ctx) const {
 #ifndef NDEBUG
   if (Rules.empty()) {
-    if (VerboseVerifyLegalizerInfo) {
+    if (getVerboseGiselVerifyLegalizerInfo(Ctx)) {
       LLVM_DEBUG(dbgs() << ".. imm index coverage check SKIPPED: "
                         << "no rules defined\n");
     }
@@ -253,14 +253,14 @@ bool LegalizeRuleSet::verifyImmIdxsCoverage(unsigned NumImmIdxs) const {
   }
   const int64_t FirstUncovered = ImmIdxsCovered.find_first_unset();
   if (FirstUncovered < 0) {
-    if (VerboseVerifyLegalizerInfo) {
+    if (getVerboseGiselVerifyLegalizerInfo(Ctx)) {
       LLVM_DEBUG(dbgs() << ".. imm index coverage check SKIPPED:"
                            " user-defined predicate detected\n");
     }
     return true;
   }
   const bool AllCovered = (FirstUncovered >= NumImmIdxs);
-  if (VerboseVerifyLegalizerInfo) {
+  if (getVerboseGiselVerifyLegalizerInfo(Ctx)) {
     LLVM_DEBUG(dbgs() << ".. the first uncovered imm index: " << FirstUncovered
                       << ", " << (AllCovered ? "OK" : "FAIL") << "\n");
   }
@@ -288,10 +288,12 @@ unsigned LegalizerInfo::getOpcodeIdxForOpcode(unsigned Opcode) const {
   return Opcode - FirstOp;
 }
 
-unsigned LegalizerInfo::getActionDefinitionsIdx(unsigned Opcode) const {
+unsigned
+LegalizerInfo::getActionDefinitionsIdx(unsigned Opcode,
+                                       const clv2::OptionsContext &Ctx) const {
   unsigned OpcodeIdx = getOpcodeIdxForOpcode(Opcode);
   if (unsigned Alias = RulesForOpcode[OpcodeIdx].getAlias()) {
-    if (VerboseVerifyLegalizerInfo) {
+    if (getVerboseGiselVerifyLegalizerInfo(Ctx)) {
       LLVM_DEBUG(dbgs() << ".. opcode " << Opcode << " is aliased to " << Alias
                         << "\n");
     }
@@ -304,12 +306,16 @@ unsigned LegalizerInfo::getActionDefinitionsIdx(unsigned Opcode) const {
 
 const LegalizeRuleSet &
 LegalizerInfo::getActionDefinitions(unsigned Opcode) const {
-  unsigned OpcodeIdx = getActionDefinitionsIdx(Opcode);
+  unsigned OpcodeIdx = getOpcodeIdxForOpcode(Opcode);
+  if (unsigned Alias = RulesForOpcode[OpcodeIdx].getAlias())
+    OpcodeIdx = getOpcodeIdxForOpcode(Alias);
   return RulesForOpcode[OpcodeIdx];
 }
 
 LegalizeRuleSet &LegalizerInfo::getActionDefinitionsBuilder(unsigned Opcode) {
-  unsigned OpcodeIdx = getActionDefinitionsIdx(Opcode);
+  unsigned OpcodeIdx = getOpcodeIdxForOpcode(Opcode);
+  if (unsigned Alias = RulesForOpcode[OpcodeIdx].getAlias())
+    OpcodeIdx = getOpcodeIdxForOpcode(Alias);
   auto &Result = RulesForOpcode[OpcodeIdx];
   assert(!Result.isAliasedByAnother() && "Modifying this opcode will modify aliases");
   return Result;
@@ -393,7 +399,8 @@ unsigned LegalizerInfo::getExtOpcodeForWideningConstant(LLT SmallTy) const {
 }
 
 /// \pre Type indices of every opcode form a dense set starting from 0.
-void LegalizerInfo::verify(const MCInstrInfo &MII) const {
+void LegalizerInfo::verify(const MCInstrInfo &MII,
+                           const clv2::OptionsContext &Ctx) const {
 #ifndef NDEBUG
   std::vector<unsigned> FailedOpcodes;
   for (unsigned Opcode = FirstOp; Opcode <= LastOp; ++Opcode) {
@@ -412,17 +419,18 @@ void LegalizerInfo::verify(const MCInstrInfo &MII) const {
                      ? std::max(OpInfo.getGenericImmIndex() + 1U, Acc)
                      : Acc;
         });
-    if (VerboseVerifyLegalizerInfo) {
+    if (getVerboseGiselVerifyLegalizerInfo(Ctx)) {
       LLVM_DEBUG(dbgs() << MII.getName(Opcode) << " (opcode " << Opcode
                         << "): " << NumTypeIdxs << " type ind"
                         << (NumTypeIdxs == 1 ? "ex" : "ices") << ", "
                         << NumImmIdxs << " imm ind"
                         << (NumImmIdxs == 1 ? "ex" : "ices") << "\n");
     }
-    const LegalizeRuleSet &RuleSet = getActionDefinitions(Opcode);
-    if (!RuleSet.verifyTypeIdxsCoverage(NumTypeIdxs))
+    unsigned OpcodeIdx = getActionDefinitionsIdx(Opcode, Ctx);
+    const LegalizeRuleSet &RuleSet = RulesForOpcode[OpcodeIdx];
+    if (!RuleSet.verifyTypeIdxsCoverage(NumTypeIdxs, Ctx))
       FailedOpcodes.push_back(Opcode);
-    else if (!RuleSet.verifyImmIdxsCoverage(NumImmIdxs))
+    else if (!RuleSet.verifyImmIdxsCoverage(NumImmIdxs, Ctx))
       FailedOpcodes.push_back(Opcode);
   }
   if (!FailedOpcodes.empty()) {

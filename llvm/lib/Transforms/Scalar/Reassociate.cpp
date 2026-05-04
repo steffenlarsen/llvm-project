@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- Reassociate.cpp - Reassociate binary expressions -------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -52,7 +54,6 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
@@ -71,11 +72,10 @@ STATISTIC(NumChanged, "Number of insts reassociated");
 STATISTIC(NumAnnihil, "Number of expr tree annihilated");
 STATISTIC(NumFactor , "Number of multiplies factored");
 
-static cl::opt<bool>
-    UseCSELocalOpt(DEBUG_TYPE "-use-cse-local",
-                   cl::desc("Only reorder expressions within a basic block "
-                            "when exposing CSE opportunities"),
-                   cl::init(true), cl::Hidden);
+static bool getUseCSELocalOpt(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_ReassociateUseCseLocal>(
+      F.getContext().getOptionsContext());
+}
 
 #ifndef NDEBUG
 /// Print out the expression identified in the Ops list.
@@ -2558,7 +2558,7 @@ void ReassociatePass::ReassociateExpression(BinaryOperator *I) {
     // reordering on the values that live in the first seen basic block.
     // The main idea is that we want to avoid forming expressions that would
     // become loop dependent.
-    if (UseCSELocalOpt) {
+    if (getUseCSELocalOpt(*I->getParent()->getParent())) {
       const BasicBlock *FirstSeenBB = nullptr;
       int StartIdx = Ops.size() - 1;
       // Skip the first value of the expression since we need at least two

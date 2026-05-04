@@ -215,12 +215,13 @@
 #include "llvm/IRPrinter/IRPrintingPasses.h"
 #include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatAdapters.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombine.h"
@@ -420,33 +421,6 @@
 
 using namespace llvm;
 
-cl::opt<std::optional<PrintPipelinePassesFormat>, false,
-        PrintPipelinePassesFormatParser>
-    llvm::PrintPipelinePasses(
-        "print-pipeline-passes", cl::ValueOptional,
-        cl::desc(
-            "Print string describing the pipeline (best-effort only).\n"
-            "  - =text\tPrint a '-passes' compatible string describing the "
-            "pipeline.\n"
-            "  - =tree\tPrint a tree-like structure describing the pipeline."));
-
-bool PrintPipelinePassesFormatParser::parse(
-    cl::Option &O, StringRef ArgName, StringRef Arg,
-    std::optional<PrintPipelinePassesFormat> &Val) {
-  std::optional<PrintPipelinePassesFormat> Format =
-      StringSwitch<std::optional<PrintPipelinePassesFormat>>(Arg)
-          .Case("text", PrintPipelinePassesFormat::Text)
-          .Case("", PrintPipelinePassesFormat::Text)
-          .Case("tree", PrintPipelinePassesFormat::Tree)
-          .Default(std::nullopt);
-
-  if (!Format)
-    return O.error(formatv(
-        "'{0}' value invalid for print-pipeline-passes argument!", Arg));
-
-  Val = Format;
-  return false;
-}
 
 void llvm::printFormattedPipelinePasses(raw_ostream &OS, StringRef Pipeline,
                                         PrintPipelinePassesFormat Format) {
@@ -585,11 +559,16 @@ static Expected<OptimizationLevel> parseOptLevelParam(StringRef S) {
       inconvertibleErrorCode());
 }
 
-PassBuilder::PassBuilder(TargetMachine *TM, PipelineTuningOptions PTO,
+PassBuilder::PassBuilder(const clv2::OptionsContext &OptsCtxIn,
+                         TargetMachine *TM, PipelineTuningOptions PTO,
                          std::optional<PGOOptions> PGOOpt,
                          PassInstrumentationCallbacks *PIC,
                          IntrusiveRefCntPtr<vfs::FileSystem> FS)
-    : TM(TM), PTO(PTO), PGOOpt(PGOOpt), PIC(PIC), FS(std::move(FS)) {
+    : TM(TM), OptsCtx(&OptsCtxIn != &clv2::defaultOptionsContext()
+                          ? &OptsCtxIn
+                          : (TM ? &TM->getOptionsContext()
+                                : &clv2::defaultOptionsContext())),
+      PTO(PTO), PGOOpt(PGOOpt), PIC(PIC), FS(std::move(FS)) {
   if (TM)
     TM->registerPassBuilderCallbacks(*this);
   if (PIC) {
@@ -967,6 +946,126 @@ Expected<bool> parsePostOrderFunctionAttrsPassOptions(StringRef Params) {
 
 Expected<bool> parseEarlyCSEPassOptions(StringRef Params) {
   return PassBuilder::parseSinglePassOption(Params, "memssa", "EarlyCSE");
+}
+
+Expected<AAEvaluatorOptions> parseAAEvaluatorOptions(StringRef Params) {
+  AAEvaluatorOptions Opts;
+  while (!Params.empty()) {
+    StringRef ParamName;
+    std::tie(ParamName, Params) = Params.split(';');
+    if (ParamName == "print-all")
+      Opts.PrintAll = true;
+    else if (ParamName == "print-no-aliases")
+      Opts.PrintNoAlias = true;
+    else if (ParamName == "print-may-aliases")
+      Opts.PrintMayAlias = true;
+    else if (ParamName == "print-partial-aliases")
+      Opts.PrintPartialAlias = true;
+    else if (ParamName == "print-must-aliases")
+      Opts.PrintMustAlias = true;
+    else if (ParamName == "print-no-modref")
+      Opts.PrintNoModRef = true;
+    else if (ParamName == "print-ref")
+      Opts.PrintRef = true;
+    else if (ParamName == "print-mod")
+      Opts.PrintMod = true;
+    else if (ParamName == "print-modref")
+      Opts.PrintModRef = true;
+    else if (ParamName == "evaluate-aa-metadata")
+      Opts.EvalAAMD = true;
+    else
+      return make_error<StringError>(
+          formatv("invalid aa-eval parameter '{}'", ParamName).str(),
+          inconvertibleErrorCode());
+  }
+  return Opts;
+}
+
+Expected<CostModelPrintOptions> parseCostModelPrintOptions(StringRef Params) {
+  using CostKind = CostModelPrintOptions::CostKind;
+  using IntrinsicCostStrategy = CostModelPrintOptions::IntrinsicCostStrategy;
+  CostModelPrintOptions Opts;
+  while (!Params.empty()) {
+    StringRef ParamName;
+    std::tie(ParamName, Params) = Params.split(';');
+
+    if (ParamName.consume_front("kind=")) {
+      if (ParamName == "throughput")
+        Opts.Kind = CostKind::RecipThroughput;
+      else if (ParamName == "latency")
+        Opts.Kind = CostKind::Latency;
+      else if (ParamName == "code-size")
+        Opts.Kind = CostKind::CodeSize;
+      else if (ParamName == "size-latency")
+        Opts.Kind = CostKind::SizeAndLatency;
+      else if (ParamName == "all")
+        Opts.Kind = CostKind::All;
+      else
+        return make_error<StringError>(
+            formatv("invalid cost-model kind '{}' (expected throughput, "
+                    "latency, code-size, size-latency, or all)",
+                    ParamName)
+                .str(),
+            inconvertibleErrorCode());
+    } else if (ParamName.consume_front("intrinsic-cost=")) {
+      if (ParamName == "instruction-cost")
+        Opts.IntrinsicStrategy = IntrinsicCostStrategy::InstructionCost;
+      else if (ParamName == "intrinsic-cost")
+        Opts.IntrinsicStrategy = IntrinsicCostStrategy::IntrinsicCost;
+      else if (ParamName == "type-based-intrinsic-cost")
+        Opts.IntrinsicStrategy = IntrinsicCostStrategy::TypeBasedIntrinsicCost;
+      else
+        return make_error<StringError>(
+            formatv("invalid cost-model intrinsic-cost strategy '{}' (expected "
+                    "instruction-cost, intrinsic-cost, or "
+                    "type-based-intrinsic-cost)",
+                    ParamName)
+                .str(),
+            inconvertibleErrorCode());
+    } else {
+      return make_error<StringError>(
+          formatv("invalid cost-model parameter '{}'", ParamName).str(),
+          inconvertibleErrorCode());
+    }
+  }
+  return Opts;
+}
+
+Expected<RegionInfoPrintOptions> parseRegionInfoPrintOptions(StringRef Params) {
+  RegionInfoPrintOptions Opts;
+  while (!Params.empty()) {
+    StringRef ParamName;
+    std::tie(ParamName, Params) = Params.split(';');
+    if (ParamName == "bb")
+      Opts.Style = Region::PrintBB;
+    else if (ParamName == "rn")
+      Opts.Style = Region::PrintRN;
+    else if (ParamName == "none")
+      Opts.Style = Region::PrintNone;
+    else
+      return make_error<StringError>(
+          formatv("invalid regions parameter '{}' (expected bb, rn, or none)",
+                  ParamName)
+              .str(),
+          inconvertibleErrorCode());
+  }
+  return Opts;
+}
+
+Expected<ScalarEvolutionPrintOptions>
+parseScalarEvolutionPrintOptions(StringRef Params) {
+  ScalarEvolutionPrintOptions Opts;
+  while (!Params.empty()) {
+    StringRef ParamName;
+    std::tie(ParamName, Params) = Params.split(';');
+    if (ParamName == "no-classify")
+      Opts.ClassifyExpressions = false;
+    else
+      return make_error<StringError>(
+          formatv("invalid scalar-evolution parameter '{}'", ParamName).str(),
+          inconvertibleErrorCode());
+  }
+  return Opts;
 }
 
 Expected<bool> parseEntryExitInstrumenterPassOptions(StringRef Params) {
@@ -1544,9 +1643,38 @@ parseStackLifetimeOptions(StringRef Params) {
   return Result;
 }
 
-Expected<bool> parseDependenceAnalysisPrinterOptions(StringRef Params) {
-  return PassBuilder::parseSinglePassOption(Params, "normalized-results",
-                                            "DependenceAnalysisPrinter");
+Expected<DependenceAnalysisPrintOptions>
+parseDependenceAnalysisPrinterOptions(StringRef Params) {
+  DependenceAnalysisPrintOptions Opts;
+  while (!Params.empty()) {
+    StringRef ParamName;
+    std::tie(ParamName, Params) = Params.split(';');
+    if (ParamName == "normalized-results")
+      Opts.NormalizeResults = true;
+    else if (ParamName == "default")
+      Opts.TestType = DependenceTestType::Default;
+    else if (ParamName == "all")
+      Opts.TestType = DependenceTestType::All;
+    else if (ParamName == "strong-siv")
+      Opts.TestType = DependenceTestType::StrongSIV;
+    else if (ParamName == "weak-crossing-siv")
+      Opts.TestType = DependenceTestType::WeakCrossingSIV;
+    else if (ParamName == "exact-siv")
+      Opts.TestType = DependenceTestType::ExactSIV;
+    else if (ParamName == "weak-zero-siv")
+      Opts.TestType = DependenceTestType::WeakZeroSIV;
+    else if (ParamName == "exact-rdiv")
+      Opts.TestType = DependenceTestType::ExactRDIV;
+    else if (ParamName == "gcd-miv")
+      Opts.TestType = DependenceTestType::GCDMIV;
+    else if (ParamName == "banerjee-miv")
+      Opts.TestType = DependenceTestType::BanerjeeMIV;
+    else
+      return make_error<StringError>(
+          formatv("invalid da parameter '{}'", ParamName).str(),
+          inconvertibleErrorCode());
+  }
+  return Opts;
 }
 
 Expected<bool> parseSeparateConstOffsetFromGEPPassOptions(StringRef Params) {
@@ -1873,6 +2001,8 @@ static bool callbacksAcceptPassName(StringRef Name, CallbacksT &Callbacks) {
   return false;
 }
 
+static bool isPrintPassWithParamsName(StringRef Name);
+
 template <typename CallbacksT>
 static bool isModulePassName(StringRef Name, CallbacksT &Callbacks) {
   StringRef NameNoBracket = Name.take_until([](char C) { return C == '<'; });
@@ -1928,6 +2058,19 @@ static bool isCGSCCPassName(StringRef Name, CallbacksT &Callbacks) {
   return callbacksAcceptPassName<CGSCCPassManager>(Name, Callbacks);
 }
 
+// The set of print<X> pass base names that support pipeline-string parameters.
+// These passes can't use FUNCTION_PASS_WITH_PARAMS because their base name
+// already contains angle brackets.
+static bool isPrintPassWithParamsName(StringRef Name) {
+  for (StringRef Base : {"cost-model", "scalar-evolution", "regions", "da"}) {
+    std::string Plain = ("print<" + Base + ">").str();
+    std::string Prefix = ("print<" + Base + "<").str();
+    if (Name == Plain || Name.starts_with(Prefix))
+      return true;
+  }
+  return false;
+}
+
 template <typename CallbacksT>
 static bool isFunctionPassName(StringRef Name, CallbacksT &Callbacks) {
   // Explicitly handle pass manager names.
@@ -1935,6 +2078,10 @@ static bool isFunctionPassName(StringRef Name, CallbacksT &Callbacks) {
   if (NameNoBracket == "function")
     return true;
   if (Name == "loop" || Name == "loop-mssa" || Name == "machine-function")
+    return true;
+  // print<X> passes whose base name contains angle brackets can't be handled
+  // by FUNCTION_PASS_WITH_PARAMS; check for all parametrized printer passes.
+  if (isPrintPassWithParamsName(Name))
     return true;
 
 #define FUNCTION_PASS(NAME, CREATE_PASS)                                       \
@@ -2227,6 +2374,19 @@ Error PassBuilder::parseModulePass(ModulePassManager &MPM,
   }
 #include "PassRegistry.def"
 
+  // Handle parametrized print<X> passes (e.g. print<scalar-evolution>) at
+  // module level by wrapping them in a module-to-function adaptor.  These
+  // passes can't appear in PassRegistry.def as FUNCTION_PASS_WITH_PARAMS
+  // because their base name already contains angle brackets, so they are
+  // handled specially here and in parseFunctionPass.
+  if (isPrintPassWithParamsName(Name)) {
+    FunctionPassManager FPM;
+    if (auto Err = parseFunctionPass(FPM, E))
+      return Err;
+    MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
+    return Error::success();
+  }
+
   for (auto &C : ModulePipelineParsingCallbacks)
     if (C(Name, MPM, InnerPipeline))
       return Error::success();
@@ -2408,6 +2568,65 @@ Error PassBuilder::parseFunctionPass(FunctionPassManager &FPM,
     // Normal passes can't have pipelines.
     return make_error<StringError>(
         formatv("invalid use of '{}' pass as function pipeline", Name).str(),
+        inconvertibleErrorCode());
+  }
+
+  // Handle parametrized print<X> passes whose base names contain angle brackets
+  // and therefore can't be expressed with FUNCTION_PASS_WITH_PARAMS.
+  // The pattern is: Name == "print<BASE>" or Name.starts_with("print<BASE<").
+  // In the parametrized form we strip "print<BASE<" prefix and ">>" suffix to
+  // obtain the params string, then dispatch to the per-pass parser.
+  if (isPrintPassWithParamsName(Name)) {
+    // Extract the base name: strip "print<" prefix and everything from the
+    // first '<' or '>' onwards.
+    StringRef Inner = Name.drop_front(sizeof("print<") - 1);
+    // Inner is now "BASE>" or "BASE<params>>"
+    StringRef Base =
+        Inner.take_until([](char C) { return C == '<' || C == '>'; });
+    std::string Plain = ("print<" + Base + ">").str();
+    std::string Prefix = ("print<" + Base + "<").str();
+
+    StringRef ParamStr;
+    if (Name != Plain) {
+      // Strip "print<BASE<" prefix and ">>" suffix.
+      StringRef AfterBase = Name.drop_front(Prefix.size());
+      if (!AfterBase.consume_back(">>"))
+        return make_error<StringError>(
+            formatv("invalid format for pass '{}'", Name).str(),
+            inconvertibleErrorCode());
+      ParamStr = AfterBase;
+    }
+
+    if (Base == "cost-model") {
+      auto Opts = parseCostModelPrintOptions(ParamStr);
+      if (!Opts)
+        return Opts.takeError();
+      FPM.addPass(CostModelPrinterPass(errs(), Opts.get()));
+      return Error::success();
+    }
+    if (Base == "scalar-evolution") {
+      auto Opts = parseScalarEvolutionPrintOptions(ParamStr);
+      if (!Opts)
+        return Opts.takeError();
+      FPM.addPass(ScalarEvolutionPrinterPass(errs(), Opts.get()));
+      return Error::success();
+    }
+    if (Base == "regions") {
+      auto Opts = parseRegionInfoPrintOptions(ParamStr);
+      if (!Opts)
+        return Opts.takeError();
+      FPM.addPass(RegionInfoPrinterPass(errs(), Opts.get()));
+      return Error::success();
+    }
+    if (Base == "da") {
+      auto Opts = parseDependenceAnalysisPrinterOptions(ParamStr);
+      if (!Opts)
+        return Opts.takeError();
+      FPM.addPass(DependenceAnalysisPrinterPass(errs(), Opts.get()));
+      return Error::success();
+    }
+    return make_error<StringError>(
+        formatv("unknown parametrized print pass '{}'", Name).str(),
         inconvertibleErrorCode());
   }
 

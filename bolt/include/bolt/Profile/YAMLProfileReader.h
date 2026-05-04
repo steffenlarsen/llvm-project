@@ -213,7 +213,7 @@ private:
   void buildNameMaps(BinaryContext &BC);
 
   /// Matches functions using exact name.
-  size_t matchWithExactName();
+  size_t matchWithExactName(BinaryContext &BC);
 
   /// Matches function using LTO comomon name.
   size_t matchWithLTOCommonName();

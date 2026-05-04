@@ -2,6 +2,7 @@
 if(LLVM_ENABLE_PIC)
 
   set(LLVM_LINK_COMPONENTS
+    AllOptions
     AllTargetsAsmParsers
     AllTargetsCodeGens
     AllTargetsDescs

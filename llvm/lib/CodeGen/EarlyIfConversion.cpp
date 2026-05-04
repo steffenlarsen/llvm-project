@@ -24,6 +24,7 @@
 #include "llvm/ADT/SparseSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBranchProbabilityInfo.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -41,43 +42,39 @@
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "early-ifcvt"
 
-// Absolute maximum number of instructions allowed per speculated block.
-// This bypasses all other heuristics, so it should be set fairly high.
-static cl::opt<unsigned>
-BlockInstrLimit("early-ifcvt-limit", cl::init(30), cl::Hidden,
-  cl::desc("Maximum number of instructions per speculated block."));
+static unsigned getEarlyIfcvtLimit(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_EarlyIfcvtLimit>(Ctx);
+}
 
-// Stress testing mode - disable heuristics.
-static cl::opt<bool> Stress("stress-early-ifcvt", cl::Hidden,
-  cl::desc("Turn all knobs to 11"));
+static bool getStressEarlyIfcvt(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_StressEarlyIfcvt>(Ctx);
+}
 
-// Enable analysis of data dependent branches (conditions derived from loads).
-static cl::opt<bool> EnableDataDependentBranchAnalysis(
-    "enable-early-ifcvt-data-dependent", cl::Hidden, cl::init(false),
-    cl::desc("Enable hard-to-predict branch analysis for if-conversion"));
+static bool getEnableEarlyIfcvtDataDependent(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableEarlyIfcvtDataDependent>(
+      Ctx);
+}
 
-// Limit the number steps we take when searching conditions that depend on
-// values recently loaded from memory.
-static cl::opt<unsigned>
-    MaxNumSteps("early-ifcvt-max-steps", cl::Hidden, cl::init(16),
-                cl::desc("Limit the number of steps taken when searching for a "
-                         "recently loaded value"));
+static unsigned getEarlyIfcvtMaxSteps(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_EarlyIfcvtMaxSteps>(Ctx);
+}
 
 // Limit the work done when looking for calls between a load and the condition
 // it feeds.
-static cl::opt<unsigned> MaxRegionInstrs(
-    "early-ifcvt-max-region-instrs", cl::Hidden, cl::init(64),
-    cl::desc("Limit the number of blocks and instructions examined when "
-             "searching for calls between a load and the condition it feeds"));
+static unsigned getMaxRegionInstrs(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_EarlyIfcvtMaxRegionInstrs>(Ctx);
+}
 
 STATISTIC(NumDiamondsSeen,  "Number of diamonds");
 STATISTIC(NumDiamondsConv,  "Number of diamonds converted");
@@ -247,9 +244,14 @@ bool SSAIfConv::canSpeculateInstrs(MachineBasicBlock *MBB) {
     if (MI.isDebugInstr())
       continue;
 
-    if (++InstrCount > BlockInstrLimit && !Stress) {
-      LLVM_DEBUG(dbgs() << printMBBReference(*MBB) << " has more than "
-                        << BlockInstrLimit << " instructions.\n");
+    const Function *F = &MBB->getParent()->getFunction();
+    if (++InstrCount >
+            getEarlyIfcvtLimit(F->getContext().getOptionsContext()) &&
+        !getStressEarlyIfcvt(F->getContext().getOptionsContext())) {
+      LLVM_DEBUG(
+          dbgs() << printMBBReference(*MBB) << " has more than "
+                 << getEarlyIfcvtLimit(F->getContext().getOptionsContext())
+                 << " instructions.\n");
       return false;
     }
 
@@ -342,9 +344,14 @@ bool SSAIfConv::canPredicateInstrs(MachineBasicBlock *MBB) {
     if (I->isDebugInstr())
       continue;
 
-    if (++InstrCount > BlockInstrLimit && !Stress) {
-      LLVM_DEBUG(dbgs() << printMBBReference(*MBB) << " has more than "
-                        << BlockInstrLimit << " instructions.\n");
+    const Function *F = &MBB->getParent()->getFunction();
+    if (++InstrCount >
+            getEarlyIfcvtLimit(F->getContext().getOptionsContext()) &&
+        !getStressEarlyIfcvt(F->getContext().getOptionsContext())) {
+      LLVM_DEBUG(
+          dbgs() << printMBBReference(*MBB) << " has more than "
+                 << getEarlyIfcvtLimit(F->getContext().getOptionsContext())
+                 << " instructions.\n");
       return false;
     }
 
@@ -957,6 +964,8 @@ bool EarlyIfConverter::hasCallOrLoopInRange(const MachineInstr *From,
   const MachineBasicBlock *FromBB = From->getParent();
   const MachineBasicBlock *ToBB = To->getParent();
 
+  const unsigned MaxRegionInstrs = getMaxRegionInstrs(
+      FromBB->getParent()->getFunction().getContext().getOptionsContext());
   unsigned NumScanned = 0;
   auto HitSearchLimit = [&](unsigned N) {
     NumScanned += N;
@@ -1074,7 +1083,10 @@ bool EarlyIfConverter::doOperandsComeFromMemory(
 
   Worklist.push_back(DefMI);
 
-  while (!Worklist.empty() && VisitedInstrs.size() < MaxNumSteps) {
+  const Function *F = &IfConv.Head->getParent()->getFunction();
+  while (!Worklist.empty() &&
+         VisitedInstrs.size() <
+             getEarlyIfcvtMaxSteps(F->getContext().getOptionsContext())) {
     const MachineInstr *MI = Worklist.pop_back_val();
     if (!VisitedInstrs.insert(MI).second)
       continue;
@@ -1178,8 +1190,9 @@ template <typename Remark> Remark &operator<<(Remark &R, Cycles C) {
 /// Return true if the conversion is a good idea.
 ///
 bool EarlyIfConverter::shouldConvertIf() {
+  const Function *F = &IfConv.Head->getParent()->getFunction();
   // Stress testing mode disables all cost considerations.
-  if (Stress)
+  if (getStressEarlyIfcvt(F->getContext().getOptionsContext()))
     return true;
 
   // Do not try to if-convert if the condition has a high chance of being
@@ -1227,7 +1240,7 @@ bool EarlyIfConverter::shouldConvertIf() {
   // When hard-to-predict analysis is enabled, use full MispredictPenalty for
   // hard-to-predict branches, half for others. Otherwise use half for all.
   bool DataDependent = false;
-  if (EnableDataDependentBranchAnalysis)
+  if (getEnableEarlyIfcvtDataDependent(F->getContext().getOptionsContext()))
     DataDependent = isConditionDataDependent();
 
   unsigned CritLimit = DataDependent ? STI->getMispredictionPenalty()
@@ -1445,7 +1458,8 @@ EarlyIfConverterPass::run(MachineFunction &MF,
   MachineLoopInfo &LI = MFAM.getResult<MachineLoopAnalysis>(MF);
   MachineTraceMetrics &MTM = MFAM.getResult<MachineTraceMetricsAnalysis>(MF);
   MachineBranchProbabilityInfo *MBPI = nullptr;
-  if (EnableDataDependentBranchAnalysis)
+  if (getEnableEarlyIfcvtDataDependent(
+          MF.getFunction().getContext().getOptionsContext()))
     MBPI = &MFAM.getResult<MachineBranchProbabilityAnalysis>(MF);
 
   EarlyIfConverter Impl(MDT, LI, MTM, MBPI);
@@ -1470,7 +1484,8 @@ bool EarlyIfConverterLegacy::runOnMachineFunction(MachineFunction &MF) {
   MachineTraceMetrics &MTM =
       getAnalysis<MachineTraceMetricsWrapperPass>().getMTM();
   MachineBranchProbabilityInfo *MBPI = nullptr;
-  if (EnableDataDependentBranchAnalysis)
+  if (getEnableEarlyIfcvtDataDependent(
+          MF.getFunction().getContext().getOptionsContext()))
     MBPI = &getAnalysis<MachineBranchProbabilityInfoWrapperPass>().getMBPI();
 
   return EarlyIfConverter(MDT, LI, MTM, MBPI).run(MF);

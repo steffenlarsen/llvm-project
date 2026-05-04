@@ -22,7 +22,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Passes/RetpolineInsertion.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "llvm/MC/MCInstPrinter.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -30,33 +32,6 @@
 
 using namespace llvm;
 using namespace bolt;
-namespace opts {
-
-extern cl::OptionCategory BoltCategory;
-
-static llvm::cl::opt<bool>
-    InsertRetpolines("insert-retpolines",
-                     cl::desc("run retpoline insertion pass"),
-                     cl::cat(BoltCategory));
-
-static llvm::cl::opt<bool> RetpolineLfence(
-    "retpoline-lfence",
-    cl::desc("determine if lfence instruction should exist in the retpoline"),
-    cl::init(true), cl::ZeroOrMore, cl::Hidden, cl::cat(BoltCategory));
-
-static cl::opt<RetpolineInsertion::AvailabilityOptions> R11Availability(
-    "r11-availability",
-    cl::desc("determine the availability of r11 before indirect branches"),
-    cl::init(RetpolineInsertion::AvailabilityOptions::NEVER),
-    cl::values(clEnumValN(RetpolineInsertion::AvailabilityOptions::NEVER,
-                          "never", "r11 not available"),
-               clEnumValN(RetpolineInsertion::AvailabilityOptions::ALWAYS,
-                          "always", "r11 available before calls and jumps"),
-               clEnumValN(RetpolineInsertion::AvailabilityOptions::ABI, "abi",
-                          "r11 available before calls but not before jumps")),
-    cl::ZeroOrMore, cl::cat(BoltCategory));
-
-} // namespace opts
 
 namespace llvm {
 namespace bolt {
@@ -77,7 +52,7 @@ namespace bolt {
 BinaryFunction *createNewRetpoline(BinaryContext &BC,
                                    const std::string &RetpolineTag,
                                    const IndirectBranchInfo &BrInfo,
-                                   bool R11Available) {
+                                   bool R11Available, bool RetpolineLfence) {
   auto &MIB = *BC.MIB;
   MCContext &Ctx = *BC.Ctx;
   LLVM_DEBUG(dbgs() << "BOLT-DEBUG: Creating a new retpoline function["
@@ -110,7 +85,7 @@ BinaryFunction *createNewRetpoline(BinaryContext &BC,
   MIB.createPause(Pause);
   BB1.addInstruction(Pause);
 
-  if (opts::RetpolineLfence) {
+  if (RetpolineLfence) {
     MCInst Lfence;
     MIB.createLfence(Lfence);
     BB1.addInstruction(Lfence);
@@ -221,8 +196,10 @@ BinaryFunction *RetpolineInsertion::getOrCreateRetpoline(
   if (CreatedRetpolines.count(RetpolineTag))
     return CreatedRetpolines[RetpolineTag];
 
-  return CreatedRetpolines[RetpolineTag] =
-             createNewRetpoline(BC, RetpolineTag, BrInfo, R11Available);
+  const bool RetpolineLfence = bolt_passes_opts::getRetpolineLfence(BC);
+
+  return CreatedRetpolines[RetpolineTag] = createNewRetpoline(
+             BC, RetpolineTag, BrInfo, R11Available, RetpolineLfence);
 }
 
 void createBranchReplacement(BinaryContext &BC,
@@ -269,13 +246,17 @@ IndirectBranchInfo::IndirectBranchInfo(MCInst &Inst, MCPlusBuilder &MIB) {
 }
 
 Error RetpolineInsertion::runOnFunctions(BinaryContext &BC) {
-  if (!opts::InsertRetpolines)
+  const bool InsertRetpolines = bolt_passes_opts::getInsertRetpolines(BC);
+  const bool RetpolineLfence = bolt_passes_opts::getRetpolineLfence(BC);
+  auto R11Availability =
+      static_cast<bolt::RetpolineInsertion::AvailabilityOptions>(
+          bolt_passes_opts::getR11Availability(BC));
+
+  if (!InsertRetpolines)
     return Error::success();
 
-  if (!BC.isX86()) {
-    BC.errs() << "BOLT-ERROR: " << getName() << " is specific to X86\n";
-    exit(1);
-  }
+  assert(BC.isX86() &&
+         "retpoline insertion not supported for target architecture");
 
   assert(BC.HasRelocations && "retpoline mode not supported in non-reloc");
 
@@ -299,9 +280,9 @@ Error RetpolineInsertion::runOnFunctions(BinaryContext &BC) {
         if (BrInfo.isMem()) {
           if (MIB.hasAnnotation(Inst, "PLTCall"))
             R11Available = true;
-          else if (opts::R11Availability == AvailabilityOptions::ALWAYS)
+          else if (R11Availability == AvailabilityOptions::ALWAYS)
             R11Available = true;
-          else if (opts::R11Availability == AvailabilityOptions::ABI)
+          else if (R11Availability == AvailabilityOptions::ABI)
             R11Available = BrInfo.isCall();
         }
 

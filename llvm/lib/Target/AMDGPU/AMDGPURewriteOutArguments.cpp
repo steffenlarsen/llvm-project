@@ -51,26 +51,24 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 
 #define DEBUG_TYPE "amdgpu-rewrite-out-arguments"
 
 using namespace llvm;
 
-static cl::opt<bool> AnyAddressSpace(
-  "amdgpu-any-address-space-out-arguments",
-  cl::desc("Replace pointer out arguments with "
-           "struct returns for non-private address space"),
-  cl::Hidden,
-  cl::init(false));
+static bool getAnyAddressSpace(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_AnyAddressSpace>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> MaxNumRetRegs(
-  "amdgpu-max-return-arg-num-regs",
-  cl::desc("Approximately limit number of return registers for replacing out arguments"),
-  cl::Hidden,
-  cl::init(16));
+static unsigned getMaxNumRetRegs(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_MaxNumRetRegs>(
+      F.getContext().getOptionsContext());
+}
 
 STATISTIC(NumOutArgumentsReplaced,
           "Number out arguments moved to struct return values");
@@ -152,12 +150,14 @@ Type *AMDGPURewriteOutArguments::getStoredType(Value &Arg) const {
 }
 
 Type *AMDGPURewriteOutArguments::getOutArgumentType(Argument &Arg) const {
-  const unsigned MaxOutArgSizeBytes = 4 * MaxNumRetRegs;
+  const Function &F = *Arg.getParent();
+  const unsigned MaxOutArgSizeBytes = 4 * getMaxNumRetRegs(F);
   PointerType *ArgTy = dyn_cast<PointerType>(Arg.getType());
 
   // TODO: It might be useful for any out arguments, not just privates.
-  if (!ArgTy || (ArgTy->getAddressSpace() != DL->getAllocaAddrSpace() &&
-                 !AnyAddressSpace) ||
+  if (!ArgTy ||
+      (ArgTy->getAddressSpace() != DL->getAllocaAddrSpace() &&
+       !getAnyAddressSpace(F)) ||
       Arg.hasByValAttr() || Arg.hasStructRetAttr()) {
     return nullptr;
   }
@@ -235,7 +235,7 @@ bool AMDGPURewriteOutArguments::runOnFunction(Function &F) {
   if (!RetTy->isVoidTy()) {
     ReturnNumRegs = DL->getTypeStoreSize(RetTy) / 4;
 
-    if (ReturnNumRegs >= MaxNumRetRegs)
+    if (ReturnNumRegs >= getMaxNumRetRegs(F))
       return false;
 
     ReturnTypes.push_back(RetTy);
@@ -297,7 +297,7 @@ bool AMDGPURewriteOutArguments::runOnFunction(Function &F) {
       // TODO: This is an approximation. When legalized this could be more. We
       // can ask TLI for exactly how many.
       unsigned ArgNumRegs = DL->getTypeStoreSize(ArgTy) / 4;
-      if (ArgNumRegs + ReturnNumRegs > MaxNumRetRegs)
+      if (ArgNumRegs + ReturnNumRegs > getMaxNumRetRegs(F))
         continue;
 
       // An argument is convertible only if all exit blocks are able to replace

@@ -10,6 +10,7 @@
 #define _AMDGPU_LIBFUNC_H_
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/OptionsContext.h"
 #include <memory>
 
 namespace llvm {
@@ -351,7 +352,7 @@ public:
 
   /// \return The mangled function name for mangled library functions
   /// and unmangled function name for unmangled library functions.
-  virtual std::string mangle() const = 0;
+  virtual std::string mangle(const clv2::OptionsContext &Ctx) const = 0;
 
   void setName(StringRef N) { Name = std::string(N); }
   void setPrefix(ENamePrefix pfx) { FKind = pfx; }
@@ -414,7 +415,9 @@ public:
 
   /// \return The mangled function name for mangled library functions
   /// and unmangled function name for unmangled library functions.
-  std::string mangle() const { return Impl->mangle(); }
+  std::string mangle(const clv2::OptionsContext &Ctx) const {
+    return Impl->mangle(Ctx);
+  }
 
   void setName(StringRef N) { Impl->setName(N); }
   void setPrefix(ENamePrefix PFX) { Impl->setPrefix(PFX); }
@@ -454,10 +457,10 @@ public:
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static bool classof(const AMDGPULibFuncImpl *F) { return F->isMangled(); }
 
-  std::string mangle() const override;
+  std::string mangle(const clv2::OptionsContext &Ctx) const override;
 
 private:
-  std::string mangleNameItanium() const;
+  std::string mangleNameItanium(const clv2::OptionsContext &Ctx) const;
 
   std::string mangleName(StringRef Name) const;
   bool parseUnmangledName(StringRef MangledName);
@@ -485,7 +488,9 @@ public:
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static bool classof(const AMDGPULibFuncImpl *F) { return !F->isMangled(); }
 
-  std::string mangle() const override { return Name; }
+  std::string mangle(const clv2::OptionsContext &) const override {
+    return Name;
+  }
 
   void setFunctionType(FunctionType *FT) { FuncTy = FT; }
 };

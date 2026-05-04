@@ -39,9 +39,12 @@ class SandboxVectorizerPass
   // within FPM may register/unregister callbacks, so they need access to
   // Context.
   sandboxir::FunctionPassManager FPM;
+  bool PipelineInitialized;
+  /// Lazily initialize the pass pipeline from the user-defined option.
+  void initPipeline(const Function &F);
   /// \Returns true if we should attempt to vectorize \p SrcFilePath based on
   /// `AllowFiles` option.
-  bool allowFile(const std::string &SrcFilePath);
+  bool allowFile(const std::string &SrcFilePath, const Function &LLVMF);
 
   bool runImpl(Function &F);
 

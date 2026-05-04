@@ -21,6 +21,7 @@
 #include "flang/Semantics/semantics.h"
 #include "flang/Support/StringOstream.h"
 #include "llvm/Plugins/PassPlugin.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 
@@ -60,6 +61,9 @@ class CompilerInstance {
   std::unique_ptr<Fortran::semantics::SemanticsContext> semaContext;
 
   std::unique_ptr<llvm::TargetMachine> targetMachine;
+
+  /// Parsed command-line options context (owned, non-global).
+  std::unique_ptr<llvm::clv2::OptionsContext> optionsContext;
 
   /// LLVM pass plugins.
   std::vector<std::unique_ptr<llvm::PassPlugin>> passPlugins;
@@ -115,6 +119,21 @@ public:
 
   ~CompilerInstance();
 
+  /// @name Options Context
+  /// {
+
+  void setOptionsContext(std::unique_ptr<llvm::clv2::OptionsContext> ctx) {
+    optionsContext = std::move(ctx);
+  }
+  /// Never null: an instance without an attached context reports the shared
+  /// default.  (Dereferencing the unique_ptr unguarded crashed every flang
+  /// invocation that never called setOptionsContext.)
+  const llvm::clv2::OptionsContext &getOptionsContext() const {
+    return optionsContext ? *optionsContext
+                          : llvm::clv2::defaultOptionsContext();
+  }
+
+  /// }
   /// @name Compiler Invocation
   /// {
 

@@ -24,6 +24,8 @@
 #include "llvm/IR/IntrinsicsAArch64.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
 #include "llvm/TargetParser/AArch64TargetParser.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
@@ -34,53 +36,6 @@ using namespace llvm;
 using namespace llvm::PatternMatch;
 
 #define DEBUG_TYPE "aarch64tti"
-
-static cl::opt<bool> EnableFalkorHWPFUnrollFix("enable-falkor-hwpf-unroll-fix",
-                                               cl::init(true), cl::Hidden);
-
-static cl::opt<bool> SVEPreferFixedOverScalableIfEqualCost(
-    "sve-prefer-fixed-over-scalable-if-equal", cl::Hidden);
-
-static cl::opt<unsigned> SVEGatherOverhead("sve-gather-overhead", cl::init(10),
-                                           cl::Hidden);
-
-static cl::opt<unsigned> SVEScatterOverhead("sve-scatter-overhead",
-                                            cl::init(10), cl::Hidden);
-
-static cl::opt<unsigned> SVETailFoldInsnThreshold("sve-tail-folding-insn-threshold",
-                                                  cl::init(15), cl::Hidden);
-
-static cl::opt<unsigned>
-    NeonNonConstStrideOverhead("neon-nonconst-stride-overhead", cl::init(10),
-                               cl::Hidden);
-
-static cl::opt<unsigned> CallPenaltyChangeSM(
-    "call-penalty-sm-change", cl::init(5), cl::Hidden,
-    cl::desc(
-        "Penalty of calling a function that requires a change to PSTATE.SM"));
-
-static cl::opt<unsigned> InlineCallPenaltyChangeSM(
-    "inline-call-penalty-sm-change", cl::init(10), cl::Hidden,
-    cl::desc("Penalty of inlining a call that requires a change to PSTATE.SM"));
-
-static cl::opt<bool> EnableOrLikeSelectOpt("enable-aarch64-or-like-select",
-                                           cl::init(true), cl::Hidden);
-
-static cl::opt<bool> EnableLSRCostOpt("enable-aarch64-lsr-cost-opt",
-                                      cl::init(true), cl::Hidden);
-
-// A complete guess as to a reasonable cost.
-static cl::opt<unsigned>
-    BaseHistCntCost("aarch64-base-histcnt-cost", cl::init(8), cl::Hidden,
-                    cl::desc("The cost of a histcnt instruction"));
-
-static cl::opt<unsigned> DMBLookaheadThreshold(
-    "dmb-lookahead-threshold", cl::init(10), cl::Hidden,
-    cl::desc("The number of instructions to search for a redundant dmb"));
-
-static cl::opt<int> Aarch64ForceUnrollThreshold(
-    "aarch64-force-unroll-threshold", cl::init(0), cl::Hidden,
-    cl::desc("Threshold for forced unrolling of small loops in AArch64"));
 
 namespace {
 class TailFoldingOption {
@@ -191,40 +146,102 @@ public:
 
 TailFoldingOption TailFoldingOptionLoc;
 
-static cl::opt<TailFoldingOption, true, cl::parser<std::string>> SVETailFolding(
-    "sve-tail-folding",
-    cl::desc(
-        "Control the use of vectorisation using tail-folding for SVE where the"
-        " option is specified in the form (Initial)[+(Flag1|Flag2|...)]:"
-        "\ndisabled      (Initial) No loop types will vectorize using "
-        "tail-folding"
-        "\ndefault       (Initial) Uses the default tail-folding settings for "
-        "the target CPU"
-        "\nall           (Initial) All legal loop types will vectorize using "
-        "tail-folding"
-        "\nsimple        (Initial) Use tail-folding for simple loops (not "
-        "reductions or recurrences)"
-        "\nreductions    Use tail-folding for loops containing reductions"
-        "\nnoreductions  Inverse of above"
-        "\nrecurrences   Use tail-folding for loops containing fixed order "
-        "recurrences"
-        "\nnorecurrences Inverse of above"
-        "\nreverse       Use tail-folding for loops requiring reversed "
-        "predicates"
-        "\nnoreverse     Inverse of above"),
-    cl::location(TailFoldingOptionLoc));
+static bool getEnableFalkorHWPFUnrollFix(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableFalkorHWPFUnrollFix>(Ctx);
+}
 
-// Experimental option that will only be fully functional when the
-// code-generator is changed to use SVE instead of NEON for all fixed-width
-// operations.
-static cl::opt<bool> EnableFixedwidthAutovecInStreamingMode(
-    "enable-fixedwidth-autovec-in-streaming-mode", cl::init(false), cl::Hidden);
+static bool
+getSVEPreferFixedOverScalableIfEqualCost(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::AArch64OptsReg,
+                           &clv2::A64_SVEPreferFixedOverScalableIfEqualCost>(
+      Ctx, false);
+}
 
-// Experimental option that will only be fully functional when the cost-model
-// and code-generator have been changed to avoid using scalable vector
-// instructions that are not legal in streaming SVE mode.
-static cl::opt<bool> EnableScalableAutovecInStreamingMode(
-    "enable-scalable-autovec-in-streaming-mode", cl::init(false), cl::Hidden);
+static bool getSVEPreferFixedOverScalableIfEqualCostWasSpecified(
+    const clv2::OptionsContext &Ctx) {
+  return clv2::wasOptSpecified<
+      &clv2::AArch64OptsReg, &clv2::A64_SVEPreferFixedOverScalableIfEqualCost>(
+      Ctx);
+}
+
+static unsigned getSVEGatherOverhead(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_SVEGatherOverhead>(Ctx);
+}
+
+static bool getSVEGatherOverheadWasSpecified(const clv2::OptionsContext &Ctx) {
+  return clv2::wasOptSpecified<&clv2::AArch64OptsReg,
+                               &clv2::A64_SVEGatherOverhead>(Ctx);
+}
+
+static unsigned getSVEScatterOverhead(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_SVEScatterOverhead>(Ctx);
+}
+
+static bool getSVEScatterOverheadWasSpecified(const clv2::OptionsContext &Ctx) {
+  return clv2::wasOptSpecified<&clv2::AArch64OptsReg,
+                               &clv2::A64_SVEScatterOverhead>(Ctx);
+}
+
+static unsigned getSVETailFoldInsnThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_SVETailFoldInsnThreshold>(Ctx);
+}
+
+static unsigned getNeonNonConstStrideOverhead(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_NeonNonConstStrideOverhead>(Ctx);
+}
+
+static unsigned getCallPenaltyChangeSM(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_CallPenaltyChangeSM>(Ctx);
+}
+
+static unsigned getInlineCallPenaltyChangeSM(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_InlineCallPenaltyChangeSM>(Ctx);
+}
+
+static bool getEnableOrLikeSelectOpt(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableOrLikeSelectOpt>(Ctx);
+}
+
+static bool getEnableLSRCostOpt(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableLSRCostOpt>(Ctx);
+}
+
+static unsigned getBaseHistCntCost(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_BaseHistCntCost>(Ctx);
+}
+
+static unsigned getDMBLookaheadThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_DMBLookaheadThreshold>(Ctx);
+}
+
+static int getAarch64ForceUnrollThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_ForceUnrollThreshold>(Ctx);
+}
+
+static bool
+getEnableFixedwidthAutovecInStreamingMode(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::A64_EnableFixedwidthAutovecInStreamingMode>(Ctx);
+}
+
+static bool
+getEnableScalableAutovecInStreamingMode(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::A64_EnableScalableAutovecInStreamingMode>(Ctx);
+}
+
+static const TailFoldingOption &
+getTailFoldingOptionLoc(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::AArch64OptsReg>(Ctx)) {
+    const auto &S = O->get<&clv2::A64_SVETailFolding>();
+    if (!S.empty()) {
+      static TailFoldingOption OverrideLoc;
+      OverrideLoc = S;
+      return OverrideLoc;
+    }
+  }
+  return TailFoldingOptionLoc;
+}
 
 static bool isSMEABIRoutineCall(const CallInst &CI,
                                 const AArch64TargetLowering &TLI) {
@@ -360,9 +377,11 @@ AArch64TTIImpl::getInlineCallPenalty(const Function *F, const CallBase &Call,
 
   if (SMECallAttrs(FAttrs, CallAttrs.callee()).requiresSMChange()) {
     if (F == Call.getCaller()) // (1)
-      return CallPenaltyChangeSM * DefaultCallPenalty;
+      return getCallPenaltyChangeSM(F->getContext().getOptionsContext()) *
+             DefaultCallPenalty;
     if (SMECallAttrs(FAttrs, CallAttrs.caller()).requiresSMChange()) // (2)
-      return InlineCallPenaltyChangeSM * DefaultCallPenalty;
+      return getInlineCallPenaltyChangeSM(F->getContext().getOptionsContext()) *
+             DefaultCallPenalty;
   }
 
   return DefaultCallPenalty;
@@ -595,12 +614,13 @@ static InstructionCost getHistogramCost(const AArch64Subtarget *ST,
     unsigned LegalEltSize = EltSize <= 32 ? 32 : 64;
 
     if (EC == 2 || (LegalEltSize == 32 && EC == 4))
-      return InstructionCost(BaseHistCntCost);
+      return InstructionCost(getBaseHistCntCost(ST->getOptionsContext()));
 
     unsigned NaturalVectorWidth = AArch64::SVEBitsPerBlock / LegalEltSize;
     TotalHistCnts = EC / NaturalVectorWidth;
 
-    return InstructionCost(BaseHistCntCost * TotalHistCnts);
+    return InstructionCost(getBaseHistCntCost(ST->getOptionsContext()) *
+                           TotalHistCnts);
   }
 
   return InstructionCost::getInvalid();
@@ -3316,7 +3336,8 @@ static std::optional<Instruction *> instCombineDMB(InstCombiner &IC,
                                                    IntrinsicInst &II) {
   // If this barrier is post-dominated by identical one we can remove it
   auto *NI = II.getNextNode();
-  unsigned LookaheadThreshold = DMBLookaheadThreshold;
+  unsigned LookaheadThreshold = getDMBLookaheadThreshold(
+      II.getFunction()->getContext().getOptionsContext());
   auto CanSkipOver = [](Instruction *I) {
     return !I->mayReadOrWriteMemory() && !I->mayHaveSideEffects();
   };
@@ -3629,8 +3650,9 @@ std::optional<Value *> AArch64TTIImpl::simplifyDemandedVectorEltsIntrinsic(
 }
 
 bool AArch64TTIImpl::enableScalableVectorization() const {
-  return ST->isSVEAvailable() || (ST->isSVEorStreamingSVEAvailable() &&
-                                  EnableScalableAutovecInStreamingMode);
+  return ST->isSVEAvailable() ||
+         (ST->isSVEorStreamingSVEAvailable() &&
+          getEnableScalableAutovecInStreamingMode(ST->getOptionsContext()));
 }
 
 TypeSize
@@ -3640,7 +3662,8 @@ AArch64TTIImpl::getRegisterBitWidth(TargetTransformInfo::RegisterKind K) const {
     return TypeSize::getFixed(64);
   case TargetTransformInfo::RGK_FixedWidthVector:
     if (ST->useSVEForFixedLengthVectors() &&
-        (ST->isSVEAvailable() || EnableFixedwidthAutovecInStreamingMode))
+        (ST->isSVEAvailable() ||
+         getEnableFixedwidthAutovecInStreamingMode(ST->getOptionsContext())))
       return TypeSize::getFixed(
           std::max(ST->getMinSVEVectorSizeInBits(), 128u));
     else if (ST->isNeonAvailable())
@@ -3648,8 +3671,9 @@ AArch64TTIImpl::getRegisterBitWidth(TargetTransformInfo::RegisterKind K) const {
     else
       return TypeSize::getFixed(0);
   case TargetTransformInfo::RGK_ScalableVector:
-    if (ST->isSVEAvailable() || (ST->isSVEorStreamingSVEAvailable() &&
-                                 EnableScalableAutovecInStreamingMode))
+    if (ST->isSVEAvailable() ||
+        (ST->isSVEorStreamingSVEAvailable() &&
+         getEnableScalableAutovecInStreamingMode(ST->getOptionsContext())))
       return TypeSize::getScalable(128);
     else
       return TypeSize::getScalable(0);
@@ -5239,7 +5263,8 @@ AArch64TTIImpl::getAddressComputationCost(Type *PtrTy, ScalarEvolution *SE,
   // likely result in more instructions compared to scalar code where the
   // computation can more often be merged into the index mode. The resulting
   // extra micro-ops can significantly decrease throughput.
-  unsigned NumVectorInstToHideOverhead = NeonNonConstStrideOverhead;
+  unsigned NumVectorInstToHideOverhead =
+      getNeonNonConstStrideOverhead(ST->getOptionsContext());
   int MaxMergeDistance = 64;
 
   if (PtrTy->isVectorTy() && SE &&
@@ -5518,13 +5543,13 @@ static unsigned getSVEGatherScatterOverhead(unsigned Opcode,
          "Should be called on only load or stores.");
   switch (Opcode) {
   case Instruction::Load:
-    if (SVEGatherOverhead.getNumOccurrences() > 0)
-      return SVEGatherOverhead;
+    if (getSVEGatherOverheadWasSpecified(ST->getOptionsContext()))
+      return getSVEGatherOverhead(ST->getOptionsContext());
     return ST->getGatherOverhead();
     break;
   case Instruction::Store:
-    if (SVEScatterOverhead.getNumOccurrences() > 0)
-      return SVEScatterOverhead;
+    if (getSVEScatterOverheadWasSpecified(ST->getOptionsContext()))
+      return getSVEScatterOverhead(ST->getOptionsContext());
     return ST->getScatterOverhead();
     break;
   default:
@@ -6185,7 +6210,8 @@ void AArch64TTIImpl::getUnrollingPreferences(
   if (ST->isAppleMLike())
     getAppleRuntimeUnrollPreferences(L, SE, UP, *this);
   else if (ST->getProcFamily() == AArch64Subtarget::Falkor &&
-           EnableFalkorHWPFUnrollFix)
+           getEnableFalkorHWPFUnrollFix(
+               L->getHeader()->getParent()->getContext().getOptionsContext()))
     getFalkorUnrollingPreferences(L, SE, UP);
 
   // If this is a small, multi-exit loop similar to something like std::find,
@@ -6218,7 +6244,8 @@ void AArch64TTIImpl::getUnrollingPreferences(
 
   // Force unrolling small loops can be very useful because of the branch
   // taken cost of the backedge.
-  if (Cost < Aarch64ForceUnrollThreshold)
+  if (Cost < getAarch64ForceUnrollThreshold(
+                 L->getHeader()->getParent()->getContext().getOptionsContext()))
     UP.Force = true;
 }
 
@@ -7253,8 +7280,9 @@ static bool containsDecreasingPointers(Loop *TheLoop,
 }
 
 bool AArch64TTIImpl::preferFixedOverScalableIfEqualCost() const {
-  if (SVEPreferFixedOverScalableIfEqualCost.getNumOccurrences())
-    return SVEPreferFixedOverScalableIfEqualCost;
+  if (getSVEPreferFixedOverScalableIfEqualCostWasSpecified(
+          ST->getOptionsContext()))
+    return getSVEPreferFixedOverScalableIfEqualCost(ST->getOptionsContext());
   return ST->useFixedOverScalableIfEqualCost();
 }
 
@@ -7288,8 +7316,12 @@ bool AArch64TTIImpl::preferTailFoldingOverEpilogue(TailFoldingInfo *TFI) const {
   if (Required == TailFoldingOpts::Disabled)
     Required |= TailFoldingOpts::Simple;
 
-  if (!TailFoldingOptionLoc.satisfies(ST->getSVETailFoldingDefaultOpts(),
-                                      Required))
+  if (!getTailFoldingOptionLoc(TFI->LVL->getLoop()
+                                   ->getHeader()
+                                   ->getParent()
+                                   ->getContext()
+                                   .getOptionsContext())
+           .satisfies(ST->getSVETailFoldingDefaultOpts(), Required))
     return false;
 
   // Don't tail-fold for tight loops where we would be better off interleaving
@@ -7300,7 +7332,11 @@ bool AArch64TTIImpl::preferTailFoldingOverEpilogue(TailFoldingInfo *TFI) const {
   }
 
   // We expect 4 of these to be a IV PHI, IV add, IV compare and branch.
-  return NumInsns >= SVETailFoldInsnThreshold;
+  return NumInsns >= getSVETailFoldInsnThreshold(TFI->LVL->getLoop()
+                                                     ->getHeader()
+                                                     ->getParent()
+                                                     ->getContext()
+                                                     .getOptionsContext());
 }
 
 InstructionCost
@@ -7329,7 +7365,8 @@ AArch64TTIImpl::getScalingFactorCost(Type *Ty, GlobalValue *BaseGV,
 
 bool AArch64TTIImpl::shouldTreatInstructionLikeSelect(
     const Instruction *I) const {
-  if (EnableOrLikeSelectOpt) {
+  if (getEnableOrLikeSelectOpt(
+          I->getFunction()->getContext().getOptionsContext())) {
     // For the binary operators (e.g. or) we need to be more careful than
     // selects, here we only transform them if they are already at a natural
     // break point in the code - the end of a block with an unconditional
@@ -7353,7 +7390,7 @@ bool AArch64TTIImpl::isLSRCostLess(
   // along with changing the priority of the base additions.
   // TODO: Maybe a more nuanced tradeoff between instruction count
   // and number of registers? To be investigated at a later date.
-  if (EnableLSRCostOpt)
+  if (getEnableLSRCostOpt(ST->getOptionsContext()))
     return std::tie(C1.NumRegs, C1.Insns, C1.NumBaseAdds, C1.AddRecCost,
                     C1.NumIVMuls, C1.ScaleCost, C1.ImmCost, C1.SetupCost) <
            std::tie(C2.NumRegs, C2.Insns, C2.NumBaseAdds, C2.AddRecCost,

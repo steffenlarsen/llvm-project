@@ -20,7 +20,9 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/Function.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Sparc/SparcOptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -28,11 +30,12 @@ using namespace llvm;
 
 STATISTIC(FilledSlots, "Number of delay slots filled");
 
-static cl::opt<bool> DisableDelaySlotFiller(
-  "disable-sparc-delay-filler",
-  cl::init(false),
-  cl::desc("Disable the Sparc delay slot filler."),
-  cl::Hidden);
+static bool DisableDelaySlotFiller = false;
+
+static bool getDisableDelaySlotFiller(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SPARC_DisableDelaySlotFiller>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
   struct Filler : public MachineFunctionPass {
@@ -110,9 +113,9 @@ bool Filler::runOnMachineBasicBlock(MachineBasicBlock &MBB) {
     ++I;
 
     // If MI is restore, try combining it with previous inst.
-    if (!DisableDelaySlotFiller &&
-        (MI->getOpcode() == SP::RESTORErr
-         || MI->getOpcode() == SP::RESTOREri)) {
+    if (!getDisableDelaySlotFiller(MBB.getParent()->getFunction()) &&
+        (MI->getOpcode() == SP::RESTORErr ||
+         MI->getOpcode() == SP::RESTOREri)) {
       Changed |= tryCombineRestoreWithPrevInst(MBB, MI);
       continue;
     }
@@ -133,7 +136,7 @@ bool Filler::runOnMachineBasicBlock(MachineBasicBlock &MBB) {
 
     MachineBasicBlock::iterator D = MBB.end();
 
-    if (!DisableDelaySlotFiller)
+    if (!getDisableDelaySlotFiller(MBB.getParent()->getFunction()))
       D = findDelayInstr(MBB, MI);
 
     ++FilledSlots;

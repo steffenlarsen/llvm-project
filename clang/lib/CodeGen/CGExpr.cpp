@@ -39,6 +39,7 @@
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/Module.h"
 #include "clang/Basic/SourceManager.h"
+#include "clang/CodeGen/ClangCodeGenOptionsOptInfos.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
@@ -49,9 +50,11 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/MatrixBuilder.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/xxhash.h"
 #include "llvm/Transforms/Utils/SanitizerStats.h"
@@ -62,15 +65,7 @@
 
 using namespace clang;
 using namespace CodeGen;
-
-namespace clang {
-// TODO: consider deprecating ClSanitizeGuardChecks; functionality is subsumed
-//       by -fsanitize-skip-hot-cutoff
-llvm::cl::opt<bool> ClSanitizeGuardChecks(
-    "ubsan-guard-checks", llvm::cl::Optional,
-    llvm::cl::desc("Guard UBSAN checks with `llvm.allow.ubsan.check()`."));
-
-} // namespace clang
+using namespace llvm::clv2;
 
 //===--------------------------------------------------------------------===//
 //                        Defines for metadata
@@ -4228,9 +4223,13 @@ void CodeGenFunction::EmitCheck(
   // specified cutoffs.
   // This expression looks expensive but will be simplified after
   // LowerAllowCheckPass.
+  bool ClSanitizeGuardChecksVal = false;
+  if (auto *O = llvm::clv2::getView<&llvm::clv2::ClangCodeGenOptsReg>(
+          CGM.getLLVMContext().getOptionsContext()))
+    ClSanitizeGuardChecksVal = O->get<&CLANGCG_UbsanGuardChecks>();
   for (auto &[Check, Ord] : Checked) {
     llvm::Value *GuardedCheck = Check;
-    if (ClSanitizeGuardChecks ||
+    if (ClSanitizeGuardChecksVal ||
         (CGM.getCodeGenOpts().SanitizeSkipHotCutoffs[Ord] > 0)) {
       llvm::Value *Allow = Builder.CreateCall(
           CGM.getIntrinsic(llvm::Intrinsic::allow_ubsan_check),

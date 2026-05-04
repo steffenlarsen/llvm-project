@@ -245,7 +245,7 @@ static Value *generateUnsignedDivisionCode(Value *Dividend, Value *Divisor,
   // Add 'unlikely' branch weights. We mark the case where either the divisor
   // or the dividend is equal to zero as unlikely.
   Value *Ret0        = Builder.CreateLogicalOr(Ret0_3, Ret0_4);
-  applyProfMetadataIfEnabled(Ret0, [&](Instruction *Inst) {
+  applyProfMetadataIfEnabled(F->getContext(), Ret0, [&](Instruction *Inst) {
     Inst->setMetadata(
         LLVMContext::MD_prof,
         MDBuilder(Inst->getContext()).createUnlikelyBranchWeights());
@@ -254,11 +254,11 @@ static Value *generateUnsignedDivisionCode(Value *Dividend, Value *Divisor,
 
   // Conservatively, we treat the case |divisor| > |dividend| as unknown
   Value *RetVal      = Builder.CreateSelect(Ret0, Zero, Dividend);
-  applyProfMetadataIfEnabled(RetVal, [&](Instruction *Inst) {
+  applyProfMetadataIfEnabled(F->getContext(), RetVal, [&](Instruction *Inst) {
     setExplicitlyUnknownBranchWeightsIfProfiled(*Inst, DEBUG_TYPE, F);
   });
   Value *EarlyRet    = Builder.CreateLogicalOr(Ret0, RetDividend);
-  applyProfMetadataIfEnabled(EarlyRet, [&](Instruction *Inst) {
+  applyProfMetadataIfEnabled(F->getContext(), EarlyRet, [&](Instruction *Inst) {
     setExplicitlyUnknownBranchWeightsIfProfiled(*Inst, DEBUG_TYPE, F);
   });
 
@@ -267,11 +267,12 @@ static Value *generateUnsignedDivisionCode(Value *Dividend, Value *Divisor,
   // being greater than the dividend. Thus, the branch to `End` is unlikely,
   // and we expect to more frequently enter `BB1`.
   Value *ConBrSpecialCases = Builder.CreateCondBr(EarlyRet, End, BB1);
-  applyProfMetadataIfEnabled(ConBrSpecialCases, [&](Instruction *Inst) {
-    Inst->setMetadata(
-        LLVMContext::MD_prof,
-        MDBuilder(Inst->getContext()).createUnlikelyBranchWeights());
-  });
+  applyProfMetadataIfEnabled(
+      F->getContext(), ConBrSpecialCases, [&](Instruction *Inst) {
+        Inst->setMetadata(
+            LLVMContext::MD_prof,
+            MDBuilder(Inst->getContext()).createUnlikelyBranchWeights());
+      });
 
   // ; bb1:                                             ; preds = %special-cases
   // ;   %sr_1     = add i32 %sr, 1
@@ -289,7 +290,7 @@ static Value *generateUnsignedDivisionCode(Value *Dividend, Value *Divisor,
   // >= 2. The case where SR_1 == 0 is thus considered unlikely.
   Value *SkipLoop = Builder.CreateICmpEQ(SR_1, Zero);
   Value *ConBrBB1 = Builder.CreateCondBr(SkipLoop, LoopExit, Preheader);
-  applyProfMetadataIfEnabled(ConBrBB1, [&](Instruction *Inst) {
+  applyProfMetadataIfEnabled(F->getContext(), ConBrBB1, [&](Instruction *Inst) {
     Inst->setMetadata(
         LLVMContext::MD_prof,
         MDBuilder(Inst->getContext()).createUnlikelyBranchWeights());
@@ -343,11 +344,12 @@ static Value *generateUnsignedDivisionCode(Value *Dividend, Value *Divisor,
   // The branch is unlikely to exit the loop early until it has processed all
   // significant bits.
   Value *ConBrDoWhile = Builder.CreateCondBr(Tmp12, LoopExit, DoWhile);
-  applyProfMetadataIfEnabled(ConBrDoWhile, [&](Instruction *Inst) {
-    Inst->setMetadata(
-        LLVMContext::MD_prof,
-        MDBuilder(Inst->getContext()).createUnlikelyBranchWeights());
-  });
+  applyProfMetadataIfEnabled(
+      F->getContext(), ConBrDoWhile, [&](Instruction *Inst) {
+        Inst->setMetadata(
+            LLVMContext::MD_prof,
+            MDBuilder(Inst->getContext()).createUnlikelyBranchWeights());
+      });
 
   // ; loop-exit:                                      ; preds = %do-while, %bb1
   // ;   %carry_2 = phi i32 [ 0, %bb1 ], [ %carry, %do-while ]

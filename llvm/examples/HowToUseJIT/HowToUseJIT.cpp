@@ -15,7 +15,7 @@
 //
 // Goal:
 //  The goal of this snippet is to create in the memory
-//  the LLVM module consisting of two functions as follow: 
+//  the LLVM module consisting of two functions as follow:
 //
 // int add1(int x) {
 //   return x+1;
@@ -66,8 +66,8 @@ int main() {
   InitializeNativeTarget();
   LLVMInitializeNativeAsmPrinter();
 
-  LLVMContext Context;
-  
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
+
   // Create some module to put our function into it.
   std::unique_ptr<Module> Owner = std::make_unique<Module>("test", Context);
   Module *M = Owner.get();
@@ -93,7 +93,7 @@ int main() {
   // Get pointers to the integer argument of the add1 function...
   assert(Add1F->arg_begin() != Add1F->arg_end()); // Make sure there's an arg
   Argument *ArgX = &*Add1F->arg_begin();          // Get the arg
-  ArgX->setName("AnArg");            // Give it a nice symbolic name for fun.
+  ArgX->setName("AnArg"); // Give it a nice symbolic name for fun.
 
   // Create the add instruction, inserting it into the end of BB.
   Value *Add = builder.CreateAdd(One, ArgX);
@@ -126,7 +126,7 @@ int main() {
   builder.CreateRet(Add1CallRes);
 
   // Now we create the JIT.
-  ExecutionEngine* EE = EngineBuilder(std::move(Owner)).create();
+  ExecutionEngine *EE = EngineBuilder(std::move(Owner)).create();
 
   outs() << "We just constructed this LLVM module:\n\n" << *M;
   outs() << "\n\nRunning foo: ";

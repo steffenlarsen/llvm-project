@@ -597,6 +597,14 @@ typedef void (*LLVMYieldCallback)(LLVMContextRef, void *);
 LLVM_C_ABI LLVMContextRef LLVMContextCreate(void);
 
 /**
+ * Create a new context with a parsed OptionsContext attached.
+ * The OptionsContext must outlive the returned LLVMContext.
+ * Pass NULL for default behavior (same as LLVMContextCreate).
+ */
+LLVM_C_ABI LLVMContextRef
+LLVMContextCreateWithOptions(LLVMOptionsContextRef Opts);
+
+/**
  * Obtain the global context instance.
  */
 LLVM_C_ABI

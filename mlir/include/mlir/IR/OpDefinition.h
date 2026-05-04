@@ -314,7 +314,7 @@ inline raw_ostream &operator<<(raw_ostream &os, OpFoldResult ofr) {
 }
 /// Allow printing to a stream.
 inline raw_ostream &operator<<(raw_ostream &os, OpState op) {
-  op.print(os, OpPrintingFlags().useLocalScope());
+  op.print(os, opPrintingFlags(op.getOperation()).useLocalScope());
   return os;
 }
 

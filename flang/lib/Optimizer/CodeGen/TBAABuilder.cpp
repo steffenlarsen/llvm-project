@@ -11,9 +11,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "flang/Optimizer/CodeGen/TBAABuilder.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Optimizer/Dialect/FIRType.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include <mlir/Dialect/LLVMIR/LLVMAttrs.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Dialect/LLVMIR/LLVMTypes.h>
@@ -23,34 +24,21 @@
 using namespace mlir;
 using namespace mlir::LLVM;
 
-static llvm::cl::opt<bool> disableTBAA(
-    "disable-tbaa",
-    llvm::cl::desc("disable attaching TBAA tags to memory accessing operations "
-                   "to override default Flang behavior"),
-    llvm::cl::init(false));
-
-// disabling this will play badly with the FIR TBAA pass, leading to worse
-// performance
-static llvm::cl::opt<bool> perFunctionTBAATrees(
-    "per-function-tbaa-trees",
-    llvm::cl::desc("Give each function an independent TBAA tree (default)"),
-    llvm::cl::init(true), llvm::cl::Hidden);
-
-// tagAttachmentLimit is a debugging option that allows limiting
-// the number of TBAA access tag attributes attached to operations.
-// It is set to kTagAttachmentUnlimited by default denoting "no limit".
 static constexpr unsigned kTagAttachmentUnlimited =
     std::numeric_limits<unsigned>::max();
-static llvm::cl::opt<unsigned>
-    tagAttachmentLimit("tbaa-attach-tag-max", llvm::cl::desc(""),
-                       llvm::cl::init(kTagAttachmentUnlimited));
 
 namespace fir {
 
 TBAABuilder::TBAABuilder(MLIRContext *context, bool applyTBAA,
                          bool forceUnifiedTree)
-    : enableTBAA(applyTBAA && !disableTBAA),
-      trees(/*separatePerFunction=*/perFunctionTBAATrees && !forceUnifiedTree) {
+    : enableTBAA(
+          applyTBAA &&
+          !llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_DisableTBAA>(
+              context->getOptionsContext())),
+      trees(/*separatePerFunction=*/llvm::clv2::getOptValOrDefault<
+                &llvm::clv2::FLANG_PerFunctionTBAATrees>(
+                context->getOptionsContext()) &&
+            !forceUnifiedTree) {
   // TODO: the TBAA tags created here are rooted in the root scope
   // of the enclosing function. This does not work best with MLIR inlining.
   // A better approach is to root them according to the scopes they belong to
@@ -137,8 +125,10 @@ void TBAABuilder::attachTBAATag(AliasAnalysisOpInterface op, Type baseFIRType,
     return;
 
   ++tagAttachmentCounter;
-  if (tagAttachmentLimit != kTagAttachmentUnlimited &&
-      tagAttachmentCounter > tagAttachmentLimit)
+  unsigned tagLimit =
+      llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_TBAAAttachTagMax>(
+          op->getContext()->getOptionsContext());
+  if (tagLimit != kTagAttachmentUnlimited && tagAttachmentCounter > tagLimit)
     return;
 
   LLVM_DEBUG(llvm::dbgs() << "Attaching TBAA tag #" << tagAttachmentCounter

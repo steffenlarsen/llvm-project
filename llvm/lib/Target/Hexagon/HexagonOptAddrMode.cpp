@@ -29,13 +29,15 @@
 #include "llvm/CodeGen/RDFLiveness.h"
 #include "llvm/CodeGen/RDFRegisters.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <cassert>
 #include <cstdint>
 
@@ -44,11 +46,15 @@
 using namespace llvm;
 using namespace rdf;
 
-static cl::opt<int> CodeGrowthLimit("hexagon-amode-growth-limit",
-  cl::Hidden, cl::init(0), cl::desc("Code growth limit for address mode "
-  "optimization"));
+static int getCodeGrowthLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_CodeGrowthLimit>(
+      F.getContext().getOptionsContext());
+}
 
-extern cl::opt<unsigned> RDFFuncBlockLimit;
+static unsigned getRDFFuncBlockLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_RDFFuncBlockLimit>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -1096,7 +1102,7 @@ bool HexagonOptAddrMode::processBlock(NodeAddr<BlockNode *> BA) {
     // only if there is no increase in size.
     if (!analyzeUses(DefR, UNodeList, InstrEvalResult, SizeInc))
       continue;
-    if (SizeInc > CodeGrowthLimit)
+    if (SizeInc > getCodeGrowthLimit(DFG->getMF().getFunction()))
       continue;
 
     bool KeepTfr = false;
@@ -1145,7 +1151,7 @@ bool HexagonOptAddrMode::runOnMachineFunction(MachineFunction &MF) {
 
   // Perform RDF optimizations only if number of basic blocks in the
   // function is less than the limit
-  if (MF.size() > RDFFuncBlockLimit) {
+  if (MF.size() > getRDFFuncBlockLimit(MF.getFunction())) {
     LLVM_DEBUG(dbgs() << "Skipping " << getPassName()
                       << ": too many basic blocks\n");
     return false;

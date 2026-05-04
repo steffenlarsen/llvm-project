@@ -6,11 +6,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h"
 #include "OrcTestCommon.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/ExecutionEngine/Orc/CompileUtils.h"
 #include "llvm/ExecutionEngine/Orc/IRCompileLayer.h"
-#include "llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h"
 #include "llvm/ExecutionEngine/SectionMemoryManager.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/LLVMContext.h"
@@ -72,7 +72,7 @@ static bool testSetProcessAllSections(std::unique_ptr<MemoryBuffer> Obj,
 }
 
 TEST(RTDyldObjectLinkingLayerTest, TestSetProcessAllSections) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   auto M = std::make_unique<Module>("", Context);
   M->setTargetTriple(Triple("x86_64-unknown-linux-gnu"));
 
@@ -130,7 +130,8 @@ TEST(RTDyldObjectLinkingLayerTest, TestOverrideObjectFlags) {
   // Create a module with two void() functions: foo and bar.
   ThreadSafeModule M;
   {
-    auto Ctx = std::make_unique<LLVMContext>();
+    auto Ctx =
+        std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
     ModuleBuilder MB(*Ctx, TM->getTargetTriple().str(), "dummy");
     MB.getModule()->setDataLayout(TM->createDataLayout());
 
@@ -205,7 +206,8 @@ TEST(RTDyldObjectLinkingLayerTest, TestAutoClaimResponsibilityForSymbols) {
   // Create a module with two void() functions: foo and bar.
   ThreadSafeModule M;
   {
-    auto Ctx = std::make_unique<LLVMContext>();
+    auto Ctx =
+        std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
     ModuleBuilder MB(*Ctx, TM->getTargetTriple().str(), "dummy");
     MB.getModule()->setDataLayout(TM->createDataLayout());
 
@@ -254,7 +256,8 @@ TEST(RTDyldObjectLinkingLayerTest, TestMemoryBufferNamePropagation) {
   // Create a module with two void() functions: foo and bar.
   ThreadSafeModule M;
   {
-    auto Ctx = std::make_unique<LLVMContext>();
+    auto Ctx =
+        std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
     ModuleBuilder MB(*Ctx, TM->getTargetTriple().str(), "dummy");
     MB.getModule()->setDataLayout(TM->createDataLayout());
 

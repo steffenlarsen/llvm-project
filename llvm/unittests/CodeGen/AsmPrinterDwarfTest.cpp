@@ -405,7 +405,7 @@ protected:
     legacy::PassManager PM;
     PM.add(new MachineModuleInfoWrapperPass(TM));
     PM.add(TestPrinter->releaseAP()); // Takes ownership of destroying AP
-    LLVMContext Context;
+    LLVMContext Context{llvm::clv2::defaultOptionsContext()};
     std::unique_ptr<Module> M(new Module("TestModule", Context));
     M->setDataLayout(TM->createDataLayout());
     PM.run(*M);

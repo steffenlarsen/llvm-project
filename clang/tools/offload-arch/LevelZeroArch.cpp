@@ -11,7 +11,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/Error.h"
 #include <cstdio>
@@ -79,7 +78,6 @@ ze_result_t zeDeviceGet(ze_driver_handle_t hDriver, uint32_t *pCount,
 ze_result_t zeDeviceGetProperties(void *hDevice, void *pProperties);
 
 using namespace llvm;
-extern cl::opt<bool> Verbose;
 
 #define DEFINE_WRAPPER(NAME)                                                   \
   using NAME##_ty = decltype(NAME);                                            \
@@ -95,7 +93,7 @@ DEFINE_WRAPPER(zeInitDrivers)
 DEFINE_WRAPPER(zeDeviceGet)
 DEFINE_WRAPPER(zeDeviceGetProperties)
 
-static bool loadLevelZero() {
+static bool loadLevelZero(bool Verbose) {
 #ifdef _WIN32
   constexpr const char *L0Library = "ze_loader.dll";
 #else
@@ -148,8 +146,8 @@ static bool loadLevelZero() {
     }                                                                          \
   } while (0)
 
-int printGPUsByLevelZero() {
-  if (!loadLevelZero())
+int printGPUsByLevelZero(bool Verbose) {
+  if (!loadLevelZero(Verbose))
     return 1;
 
   ze_init_driver_type_desc_t DriverType = {};

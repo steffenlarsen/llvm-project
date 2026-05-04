@@ -6,6 +6,7 @@
 #include "llvm/MCA/SourceMgr.h"
 #include "llvm/MCA/View.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/WithColor.h"
 #include <string>
 
@@ -31,7 +32,9 @@ void MCATestBase::SetUp() {
   TheTarget = getLLVMTarget();
   ASSERT_NE(TheTarget, nullptr);
 
-  STI.reset(TheTarget->createMCSubtargetInfo(TheTriple, CPUName, MAttr));
+  STI.reset(TheTarget->createMCSubtargetInfo(
+      TheTriple, CPUName, MAttr,
+      /*Ctx=*/llvm::clv2::defaultOptionsContext()));
   ASSERT_TRUE(STI);
   ASSERT_TRUE(STI->isCPUStringValid(CPUName));
 

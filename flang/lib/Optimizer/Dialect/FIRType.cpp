@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "flang/Optimizer/Dialect/FIRType.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Common/ISO_Fortran_binding_wrapper.h"
 #include "flang/Optimizer/Builder/Todo.h"
 #include "flang/Optimizer/Dialect/FIRDialect.h"
@@ -24,18 +25,14 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 
 #define GET_TYPEDEF_CLASSES
 #include "flang/Optimizer/Dialect/FIROpsTypes.cpp.inc"
 
 using namespace fir;
 
-static llvm::cl::opt<bool> enableFirTypeAliases(
-    "enable-fir-type-aliases",
-    llvm::cl::desc("Enable MLIR type aliases for FIR derived types"),
-    llvm::cl::init(false), llvm::cl::Hidden);
 
 namespace {
 
@@ -1154,7 +1151,8 @@ void fir::RecordType::print(mlir::AsmPrinter &printer) const {
 }
 
 mlir::OpAsmAliasResult fir::RecordType::getAlias(llvm::raw_ostream &os) const {
-  if (!enableFirTypeAliases)
+  if (!llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_EnableFirTypeAliases>(
+          getContext()->getOptionsContext()))
     return mlir::OpAsmAliasResult::NoAlias;
   // Derived type names may contain "." that are forbidden in MLIR type
   // alias. Replace them by a capital 'X' that cannot be found in user

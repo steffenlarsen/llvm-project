@@ -132,10 +132,10 @@ void EmulateUnsupportedFloatsPass::runOnOperation() {
   SmallVector<Type> sourceTypes;
   Type targetType;
 
-  FloatType parsedTargetType = arith::parseFloatType(ctx, targetTypeStr);
+  FloatType parsedTargetType = arith::parseFloatType(ctx, *targetTypeStr);
   if (!parsedTargetType) {
     emitError(UnknownLoc::get(ctx), "could not map target type '" +
-                                        targetTypeStr +
+                                        *targetTypeStr +
                                         "' to a known floating-point type");
     return signalPassFailure();
   }

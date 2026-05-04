@@ -33,14 +33,14 @@ std::unique_ptr<Module> parseIR(LLVMContext &Context, const char *IR) {
 }
 
 TEST(StructuralHashTest, Empty) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M1 = parseIR(Ctx, "");
   std::unique_ptr<Module> M2 = parseIR(Ctx, "");
   EXPECT_EQ(StructuralHash(*M1), StructuralHash(*M2));
 }
 
 TEST(StructuralHashTest, Basic) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M0 = parseIR(Ctx, "");
   std::unique_ptr<Module> M1 = parseIR(Ctx, "define void @f() { ret void }");
   std::unique_ptr<Module> M2 = parseIR(Ctx, "define void @f() { ret void }");
@@ -54,7 +54,7 @@ TEST(StructuralHashTest, Basic) {
 }
 
 TEST(StructuralHashTest, BasicFunction) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx, "define void @f() {\n"
                                            "  ret void\n"
                                            "}\n"
@@ -71,7 +71,7 @@ TEST(StructuralHashTest, BasicFunction) {
 }
 
 TEST(StructuralHashTest, Declaration) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M0 = parseIR(Ctx, "");
   std::unique_ptr<Module> M1 = parseIR(Ctx, "declare void @f()");
   std::unique_ptr<Module> M2 = parseIR(Ctx, "@g = external global i32");
@@ -80,21 +80,21 @@ TEST(StructuralHashTest, Declaration) {
 }
 
 TEST(StructuralHashTest, GlobalType) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M1 = parseIR(Ctx, "@g = global i32 1");
   std::unique_ptr<Module> M2 = parseIR(Ctx, "@g = global float 1.0");
   EXPECT_NE(StructuralHash(*M1), StructuralHash(*M2));
 }
 
 TEST(StructuralHashTest, Function) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M1 = parseIR(Ctx, "define void @f() { ret void }");
   std::unique_ptr<Module> M2 = parseIR(Ctx, "define void @f(i32) { ret void }");
   EXPECT_NE(StructuralHash(*M1), StructuralHash(*M2));
 }
 
 TEST(StructuralHashTest, FunctionRetType) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M1 = parseIR(Ctx, "define void @f() { ret void }");
   std::unique_ptr<Module> M2 = parseIR(Ctx, "define i32 @f() { ret i32 0 }");
   EXPECT_EQ(StructuralHash(*M1), StructuralHash(*M2));
@@ -102,7 +102,7 @@ TEST(StructuralHashTest, FunctionRetType) {
 }
 
 TEST(StructuralHashTest, InstructionOpCode) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M1 = parseIR(Ctx, "define void @f(ptr %p) {\n"
                                             "  %a = load i32, ptr %p\n"
                                             "  ret void\n"
@@ -116,7 +116,7 @@ TEST(StructuralHashTest, InstructionOpCode) {
 }
 
 TEST(StructuralHashTest, InstructionSubType) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M1 = parseIR(Ctx, "define void @f(ptr %p) {\n"
                                             "  %a = load i32, ptr %p\n"
                                             "  ret void\n"
@@ -130,7 +130,7 @@ TEST(StructuralHashTest, InstructionSubType) {
 }
 
 TEST(StructuralHashTest, InstructionType) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M1 = parseIR(Ctx, "define void @f(ptr %p) {\n"
                                             "  %1 = load i32, ptr %p\n"
                                             "  ret void\n"
@@ -144,7 +144,7 @@ TEST(StructuralHashTest, InstructionType) {
 }
 
 TEST(StructuralHashTest, IgnoredMetadata) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M1 = parseIR(Ctx, "@a = global i32 1\n");
   // clang-format off
   std::unique_ptr<Module> M2 = parseIR(
@@ -163,7 +163,7 @@ TEST(StructuralHashTest, IgnoredMetadata) {
 }
 
 TEST(StructuralHashTest, ComparisonInstructionPredicate) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M1 = parseIR(Ctx, "define i1 @f(i64 %a, i64 %b) {\n"
                                             "  %1 = icmp eq i64 %a, %b\n"
                                             "  ret i1 %1\n"
@@ -177,7 +177,7 @@ TEST(StructuralHashTest, ComparisonInstructionPredicate) {
 }
 
 TEST(StructuralHashTest, IntrinsicInstruction) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M1 =
       parseIR(Ctx, "define float @f(float %a) {\n"
                    "  %b = call float @llvm.sin.f32(float %a)\n"
@@ -195,7 +195,7 @@ TEST(StructuralHashTest, IntrinsicInstruction) {
 }
 
 TEST(StructuralHashTest, CallInstruction) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M1 = parseIR(Ctx, "define i64 @f(i64 %a) {\n"
                                             "  %b = call i64 @f1(i64 %a)\n"
                                             "  ret i64 %b\n"
@@ -211,7 +211,7 @@ TEST(StructuralHashTest, CallInstruction) {
 }
 
 TEST(StructuralHashTest, ConstantInteger) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M1 = parseIR(Ctx, "define i64 @f1() {\n"
                                             "  ret i64 1\n"
                                             "}\n");
@@ -223,7 +223,7 @@ TEST(StructuralHashTest, ConstantInteger) {
 }
 
 TEST(StructuralHashTest, BigConstantInteger) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M1 = parseIR(Ctx, "define i128 @f1() {\n"
                                             "  ret i128 18446744073709551616\n"
                                             "}\n");
@@ -235,7 +235,7 @@ TEST(StructuralHashTest, BigConstantInteger) {
 }
 
 TEST(StructuralHashTest, ArgumentNumber) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M1 = parseIR(Ctx, "define i64 @f1(i64 %a, i64 %b) {\n"
                                             "  ret i64 %a\n"
                                             "}\n");
@@ -247,7 +247,7 @@ TEST(StructuralHashTest, ArgumentNumber) {
 }
 
 TEST(StructuralHashTest, Differences) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M1 = parseIR(Ctx, "define i64 @f(i64 %a) {\n"
                                             "  %c = add i64 %a, 1\n"
                                             "  %b = call i64 @f1(i64 %c)\n"

@@ -748,9 +748,10 @@ typename Tr::RegionT::PrintStyle RegionInfoBase<Tr>::printStyle =
     RegionBase<Tr>::PrintNone;
 
 template <class Tr>
-void RegionInfoBase<Tr>::print(raw_ostream &OS) const {
+void RegionInfoBase<Tr>::print(raw_ostream &OS,
+                               typename Tr::RegionT::PrintStyle Style) const {
   OS << "Region tree:\n";
-  TopLevelRegion->print(OS, true, 0, printStyle);
+  TopLevelRegion->print(OS, true, 0, Style);
   OS << "End region tree\n";
 }
 

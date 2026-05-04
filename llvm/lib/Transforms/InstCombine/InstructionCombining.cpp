@@ -89,15 +89,16 @@
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugCounter.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/KnownFPClass.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/InstCombine/InstCombineOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <algorithm>
@@ -133,25 +134,22 @@ STATISTIC(NumReassoc  , "Number of reassociations");
 DEBUG_COUNTER(VisitCounter, "instcombine-visit",
               "Controls which instructions are visited");
 
-static cl::opt<bool> EnableCodeSinking("instcombine-code-sinking",
-                                       cl::desc("Enable code sinking"),
-                                       cl::init(true));
+static bool getEnableCodeSinking(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::IC_EnableCodeSinking>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> MaxSinkNumUsers(
-    "instcombine-max-sink-users", cl::init(32),
-    cl::desc("Maximum number of undroppable users for instruction sinking"));
+static unsigned getMaxSinkNumUsers(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::IC_MaxSinkNumUsers>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-MaxArraySize("instcombine-maxarray-size", cl::init(1024),
-             cl::desc("Maximum array size considered when doing a combine"));
-
-static cl::opt<unsigned> MaxAllocSiteRemovableUsers(
-    "instcombine-max-allocsite-removable-users", cl::Hidden, cl::init(2048),
-    cl::desc("Maximum number of users to visit in alloc-site "
-             "removability analysis"));
+static unsigned getMaxArraySize(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::IC_MaxArraySize>(
+      F.getContext().getOptionsContext());
+}
 
 namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 } // end namespace llvm
 
 // FIXME: Remove this flag when it is no longer necessary to convert
@@ -161,8 +159,10 @@ extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 // for their entire lifetime. However, passes like DSE and instcombine can
 // delete stores to the alloca, leading to misleading and inaccurate debug
 // information. This flag can be removed when those passes are fixed.
-static cl::opt<unsigned> ShouldLowerDbgDeclare("instcombine-lower-dbg-declare",
-                                               cl::Hidden, cl::init(true));
+static unsigned getShouldLowerDbgDeclare(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::IC_ShouldLowerDbgDeclare>(
+      F.getContext().getOptionsContext());
+}
 
 InstCombiner::IRBuilderInstCombineInserter::~IRBuilderInstCombineInserter() =
     default;
@@ -1132,7 +1132,7 @@ InstCombinerImpl::foldBinOpOfSelectAndCastOfSelectCondition(BinaryOperator &I) {
   else
     return nullptr;
 
-  SelectInst *SI = ProfcheckDisableMetadataFixes
+  SelectInst *SI = getProfcheckDisableMetadataFixes(I.getContext())
                        ? nullptr
                        : cast<SelectInst>(CastOp == LHS ? RHS : LHS);
 
@@ -1368,7 +1368,7 @@ Value *InstCombinerImpl::SimplifySelectsFeedingBinaryOp(BinaryOperator &I,
   if (!LHSIsSelect && !RHSIsSelect)
     return nullptr;
 
-  SelectInst *SI = ProfcheckDisableMetadataFixes
+  SelectInst *SI = getProfcheckDisableMetadataFixes(I.getContext())
                        ? nullptr
                        : cast<SelectInst>(LHSIsSelect ? LHS : RHS);
 
@@ -1926,9 +1926,9 @@ Instruction *InstCombinerImpl::foldBinOpSelectBinOp(BinaryOperator &Op) {
   if (!NewTV || !NewFV)
     return nullptr;
 
-  Value *NewSI =
-      Builder.CreateSelect(SI->getCondition(), NewTV, NewFV, "",
-                           ProfcheckDisableMetadataFixes ? nullptr : SI);
+  Value *NewSI = Builder.CreateSelect(
+      SI->getCondition(), NewTV, NewFV, "",
+      getProfcheckDisableMetadataFixes(Op.getContext()) ? nullptr : SI);
   return BinaryOperator::Create(Op.getOpcode(), NewSI, Input);
 }
 
@@ -2924,7 +2924,9 @@ Instruction *InstCombinerImpl::visitGEPOfGEP(GetElementPtrInst &GEP,
       Constant *NewFalse = ConstantInt::get(Select->getType(), NewFalseVal);
       Value *NewSelect = Builder.CreateSelect(
           Cond, NewTrue, NewFalse, /*Name=*/"",
-          /*MDFrom=*/(ProfcheckDisableMetadataFixes ? nullptr : Select));
+          /*MDFrom=*/
+          (getProfcheckDisableMetadataFixes(GEP.getContext()) ? nullptr
+                                                              : Select));
       GEPNoWrapFlags Flags =
           getMergedGEPNoWrapFlags(*Src, *cast<GEPOperator>(&GEP));
       return replaceInstUsesWith(GEP,
@@ -3079,7 +3081,9 @@ Value *InstCombiner::getFreelyInvertedImpl(Value *V, bool WillInvertAllUses,
               getInverseMinMaxIntrinsic(II->getIntrinsicID()), NotA, NotB);
         return Builder->CreateSelect(
             Cond, NotA, NotB, "",
-            ProfcheckDisableMetadataFixes ? nullptr : cast<Instruction>(V));
+            getProfcheckDisableMetadataFixes(V->getContext())
+                ? nullptr
+                : cast<Instruction>(V));
       }
       return NonNull;
     }
@@ -3743,7 +3747,10 @@ isAllocSiteRemovable(Instruction *AI, SmallVectorImpl<Instruction *> &Users,
     Instruction *PI = Worklist.pop_back_val();
     for (User *U : PI->users()) {
       Instruction *I = cast<Instruction>(U);
-      if (Users.size() >= MaxAllocSiteRemovableUsers)
+      if (Users.size() >=
+          clv2::getOptValOr<&clv2::InstCombineOptsReg,
+                            &clv2::IC_MaxAllocSiteRemovableUsers>(
+              AI->getFunction()->getContext().getOptionsContext(), 2048u))
         return std::nullopt;
       switch (I->getOpcode()) {
       default:
@@ -4361,7 +4368,7 @@ Instruction *InstCombinerImpl::visitCondBrInst(CondBrInst &BI) {
     Value *Or = Builder.CreateLogicalOr(NotX, Y);
 
     // Set weights for the new OR select instruction too.
-    if (!ProfcheckDisableMetadataFixes) {
+    if (!getProfcheckDisableMetadataFixes(BI.getContext())) {
       if (auto *OrInst = dyn_cast<Instruction>(Or)) {
         if (auto *CondInst = dyn_cast<Instruction>(Cond)) {
           SmallVector<uint32_t> Weights;
@@ -5775,6 +5782,12 @@ void InstCombinerImpl::tryToSinkInstructionDbgVariableRecords(
 }
 
 bool InstCombinerImpl::run() {
+  // Read once per run, not per instruction (and, for MaxSinkNumUsers, not per
+  // use): reaching them goes through Function::getContext() and a context
+  // lookup, which the optimizer cannot hoist out of the loops below.
+  const bool EnableCodeSinking = getEnableCodeSinking(F);
+  const unsigned MaxSinkNumUsers = getMaxSinkNumUsers(F);
+
   while (!Worklist.isEmpty()) {
     // Walk deferred instructions in reverse order, and push them to the
     // worklist, which means they'll end up popped from the worklist in-order.
@@ -5809,7 +5822,8 @@ bool InstCombinerImpl::run() {
     // prove that the successor is not executed more frequently than our block.
     // Return the UserBlock if successful.
     auto getOptionalSinkBlockForInst =
-        [this](Instruction *I) -> std::optional<BasicBlock *> {
+        [this, EnableCodeSinking,
+         MaxSinkNumUsers](Instruction *I) -> std::optional<BasicBlock *> {
       if (!EnableCodeSinking)
         return std::nullopt;
 
@@ -6189,7 +6203,7 @@ static bool combineInstructionsOverFunction(
   // Lower dbg.declare intrinsics otherwise their value may be clobbered
   // by instcombiner.
   bool MadeIRChange = false;
-  if (ShouldLowerDbgDeclare)
+  if (getShouldLowerDbgDeclare(F))
     MadeIRChange = LowerDbgDeclare(F);
 
   // Iterate while there is work to do.
@@ -6209,7 +6223,7 @@ static bool combineInstructionsOverFunction(
 
     InstCombinerImpl IC(Worklist, F, AA, AC, TLI, TTI, DT, ORE, BFI, BPI, PSI,
                         DL, RPOT);
-    IC.MaxArraySizeForCombine = MaxArraySize;
+    IC.MaxArraySizeForCombine = getMaxArraySize(F);
     bool MadeChangeInThisIteration = IC.prepareWorklist(F);
     MadeChangeInThisIteration |= IC.run();
     if (!MadeChangeInThisIteration)

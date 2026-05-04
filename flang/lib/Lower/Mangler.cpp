@@ -83,6 +83,7 @@ Fortran::lower::mangle::mangleName(std::string &name,
 
 // Mangle the name of \p symbol to make it globally unique.
 std::string Fortran::lower::mangle::mangleName(
+    const llvm::clv2::OptionsContext &optsCtx,
     const Fortran::semantics::Symbol &symbol, ScopeBlockIdMap &scopeBlockIdMap,
     bool keepExternalInScope, bool underscoring) {
   // Resolve module and host associations before mangling.
@@ -112,7 +113,7 @@ std::string Fortran::lower::mangle::mangleName(
   return Fortran::common::visit(
       Fortran::common::visitors{
           [&](const Fortran::semantics::MainProgramDetails &) {
-            return fir::NameUniquer::doProgramEntry().str();
+            return fir::NameUniquer::doProgramEntry(optsCtx);
           },
           [&](const Fortran::semantics::SubprogramDetails &subpDetails) {
             // Mangle external procedure without any scope prefix.
@@ -159,13 +160,13 @@ std::string Fortran::lower::mangle::mangleName(
                                                                 underscoring);
           },
           [&](const Fortran::semantics::ProcBindingDetails &procBinding) {
-            return mangleName(procBinding.symbol(), scopeBlockIdMap,
+            return mangleName(optsCtx, procBinding.symbol(), scopeBlockIdMap,
                               keepExternalInScope, underscoring);
           },
           [&](const Fortran::semantics::GenericDetails &generic)
               -> std::string {
             if (generic.specific())
-              return mangleName(*generic.specific(), scopeBlockIdMap,
+              return mangleName(optsCtx, *generic.specific(), scopeBlockIdMap,
                                 keepExternalInScope, underscoring);
             else
               llvm::report_fatal_error(
@@ -184,7 +185,8 @@ std::string Fortran::lower::mangle::mangleName(
 }
 
 std::string
-Fortran::lower::mangle::mangleName(const Fortran::semantics::Symbol &symbol,
+Fortran::lower::mangle::mangleName(const llvm::clv2::OptionsContext &optsCtx,
+                                   const Fortran::semantics::Symbol &symbol,
                                    bool keepExternalInScope,
                                    bool underscoring) {
   assert((symbol.owner().kind() !=
@@ -193,7 +195,8 @@ Fortran::lower::mangle::mangleName(const Fortran::semantics::Symbol &symbol,
           Fortran::semantics::IsBindCProcedure(symbol)) &&
          "block object mangling must specify a scopeBlockIdMap");
   ScopeBlockIdMap scopeBlockIdMap;
-  return mangleName(symbol, scopeBlockIdMap, keepExternalInScope, underscoring);
+  return mangleName(optsCtx, symbol, scopeBlockIdMap, keepExternalInScope,
+                    underscoring);
 }
 
 std::string Fortran::lower::mangle::mangleName(
@@ -307,7 +310,8 @@ std::string Fortran::lower::mangle::mangleArrayLiteral(
 }
 
 std::string Fortran::lower::mangle::globalNamelistDescriptorName(
+    const llvm::clv2::OptionsContext &optsCtx,
     const Fortran::semantics::Symbol &sym) {
-  std::string name = mangleName(sym);
+  std::string name = mangleName(optsCtx, sym);
   return IsAllocatableOrObjectPointer(&sym) ? name : name + ".desc"s;
 }

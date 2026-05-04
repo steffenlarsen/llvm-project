@@ -50,7 +50,7 @@
 #include "polly/DependenceInfo.h"
 #include "polly/ManualOptimizer.h"
 #include "polly/MatmulOptimizer.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScheduleTreeTransform.h"
 #include "polly/ScopInfo.h"
 #include "polly/Support/ISLOStream.h"
@@ -58,7 +58,7 @@
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "isl/options.h"
 
 using namespace llvm;
@@ -72,135 +72,6 @@ class Module;
 #include "polly/Support/PollyDebug.h"
 #define DEBUG_TYPE "polly-opt-isl"
 
-static cl::opt<std::string>
-    OptimizeDeps("polly-opt-optimize-only",
-                 cl::desc("Only a certain kind of dependences (all/raw)"),
-                 cl::Hidden, cl::init("all"), cl::cat(PollyCategory));
-
-static cl::opt<std::string>
-    SimplifyDeps("polly-opt-simplify-deps",
-                 cl::desc("Dependences should be simplified (yes/no)"),
-                 cl::Hidden, cl::init("yes"), cl::cat(PollyCategory));
-
-static cl::opt<int> MaxConstantTerm(
-    "polly-opt-max-constant-term",
-    cl::desc("The maximal constant term allowed (-1 is unlimited)"), cl::Hidden,
-    cl::init(20), cl::cat(PollyCategory));
-
-static cl::opt<int> MaxCoefficient(
-    "polly-opt-max-coefficient",
-    cl::desc("The maximal coefficient allowed (-1 is unlimited)"), cl::Hidden,
-    cl::init(20), cl::cat(PollyCategory));
-
-static cl::opt<std::string>
-    MaximizeBandDepth("polly-opt-maximize-bands",
-                      cl::desc("Maximize the band depth (yes/no)"), cl::Hidden,
-                      cl::init("yes"), cl::cat(PollyCategory));
-
-static cl::opt<int>
-    ScheduleComputeOut("polly-schedule-computeout",
-                       cl::desc("Bound the scheduler by maximal amount"
-                                "of computational steps. "),
-                       cl::Hidden, cl::init(300000), cl::ZeroOrMore,
-                       cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    GreedyFusion("polly-loopfusion-greedy",
-                 cl::desc("Aggressively try to fuse everything"), cl::Hidden,
-                 cl::cat(PollyCategory));
-
-static cl::opt<std::string> OuterCoincidence(
-    "polly-opt-outer-coincidence",
-    cl::desc("Try to construct schedules where the outer member of each band "
-             "satisfies the coincidence constraints (yes/no)"),
-    cl::Hidden, cl::init("no"), cl::cat(PollyCategory));
-
-static cl::opt<int> PrevectorWidth(
-    "polly-prevect-width",
-    cl::desc(
-        "The number of loop iterations to strip-mine for pre-vectorization"),
-    cl::Hidden, cl::init(4), cl::cat(PollyCategory));
-
-static cl::opt<bool> FirstLevelTiling("polly-tiling",
-                                      cl::desc("Enable loop tiling"),
-                                      cl::init(true), cl::cat(PollyCategory));
-
-static cl::opt<int> FirstLevelDefaultTileSize(
-    "polly-default-tile-size",
-    cl::desc("The default tile size (if not enough were provided by"
-             " --polly-tile-sizes)"),
-    cl::Hidden, cl::init(32), cl::cat(PollyCategory));
-
-static cl::list<int>
-    FirstLevelTileSizes("polly-tile-sizes",
-                        cl::desc("A tile size for each loop dimension, filled "
-                                 "with --polly-default-tile-size"),
-                        cl::Hidden, cl::CommaSeparated, cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    SecondLevelTiling("polly-2nd-level-tiling",
-                      cl::desc("Enable a 2nd level loop of loop tiling"),
-                      cl::cat(PollyCategory));
-
-static cl::opt<int> SecondLevelDefaultTileSize(
-    "polly-2nd-level-default-tile-size",
-    cl::desc("The default 2nd-level tile size (if not enough were provided by"
-             " --polly-2nd-level-tile-sizes)"),
-    cl::Hidden, cl::init(16), cl::cat(PollyCategory));
-
-static cl::list<int>
-    SecondLevelTileSizes("polly-2nd-level-tile-sizes",
-                         cl::desc("A tile size for each loop dimension, filled "
-                                  "with --polly-default-tile-size"),
-                         cl::Hidden, cl::CommaSeparated,
-                         cl::cat(PollyCategory));
-
-static cl::opt<bool> RegisterTiling("polly-register-tiling",
-                                    cl::desc("Enable register tiling"),
-                                    cl::cat(PollyCategory));
-
-static cl::opt<int> RegisterDefaultTileSize(
-    "polly-register-tiling-default-tile-size",
-    cl::desc("The default register tile size (if not enough were provided by"
-             " --polly-register-tile-sizes)"),
-    cl::Hidden, cl::init(2), cl::cat(PollyCategory));
-
-static cl::list<int>
-    RegisterTileSizes("polly-register-tile-sizes",
-                      cl::desc("A tile size for each loop dimension, filled "
-                               "with --polly-register-tile-size"),
-                      cl::Hidden, cl::CommaSeparated, cl::cat(PollyCategory));
-
-static cl::opt<bool> PragmaBasedOpts(
-    "polly-pragma-based-opts",
-    cl::desc("Apply user-directed transformation from metadata"),
-    cl::init(true), cl::cat(PollyCategory));
-
-static cl::opt<bool> EnableReschedule("polly-reschedule",
-                                      cl::desc("Optimize SCoPs using ISL"),
-                                      cl::init(true), cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    PMBasedOpts("polly-pattern-matching-based-opts",
-                cl::desc("Perform optimizations based on pattern matching"),
-                cl::init(true), cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    EnablePostopts("polly-postopts",
-                   cl::desc("Apply post-rescheduling optimizations such as "
-                            "tiling (requires -polly-reschedule)"),
-                   cl::init(true), cl::cat(PollyCategory));
-
-static cl::opt<bool> OptimizedScops(
-    "polly-optimized-scops",
-    cl::desc("Polly - Dump polyhedral description of Scops optimized with "
-             "the isl scheduling optimizer and the set of post-scheduling "
-             "transformations is applied on the schedule tree"),
-    cl::cat(PollyCategory));
-
-static cl::opt<bool> PollyPrintOptIsl("polly-print-opt-isl",
-                                      cl::desc("A polly pass"),
-                                      cl::cat(PollyCategory));
 
 STATISTIC(ScopsProcessed, "Number of scops processed");
 STATISTIC(ScopsRescheduled, "Number of scops rescheduled");
@@ -242,6 +113,21 @@ struct OptimizerAdditionalInfoTy {
   bool Prevect;
   bool &DepsChanged;
   IslMaxOperationsGuard &MaxOpGuard;
+
+  // Tiling/prevect option values (read from context at construction).
+  bool FirstLevelTiling;
+  int FirstLevelDefaultTileSize;
+  std::vector<int> FirstLevelTileSizes;
+  bool SecondLevelTiling;
+  int SecondLevelDefaultTileSize;
+  std::vector<int> SecondLevelTileSizes;
+  bool RegisterTiling;
+  int RegisterDefaultTileSize;
+  std::vector<int> RegisterTileSizes;
+  int PrevectorWidth;
+
+  // OptionsContext for passing to sub-optimizers (e.g., matmul optimizer).
+  const llvm::clv2::OptionsContext *OptCtx;
 };
 
 class ScheduleTreeOptimizer final {
@@ -375,12 +261,18 @@ private:
   /// Apply tiling optimizations on the bands in the schedule tree.
   ///
   /// @param Node The schedule node to (possibly) optimize.
-  static isl::schedule_node applyTileBandOpt(isl::schedule_node Node);
+  /// @param OAI  Optimizer info including tiling option values.
+  static isl::schedule_node
+  applyTileBandOpt(isl::schedule_node Node,
+                   const OptimizerAdditionalInfoTy *OAI);
 
   /// Apply prevectorization on the bands in the schedule tree.
   ///
   /// @param Node The schedule node to (possibly) prevectorize.
-  static isl::schedule_node applyPrevectBandOpt(isl::schedule_node Node);
+  /// @param OAI  Optimizer info including prevector width.
+  static isl::schedule_node
+  applyPrevectBandOpt(isl::schedule_node Node,
+                      const OptimizerAdditionalInfoTy *OAI);
 };
 
 isl::schedule_node
@@ -526,30 +418,31 @@ bool ScheduleTreeOptimizer::isPMOptimizableBandNode(isl::schedule_node Node) {
 }
 
 __isl_give isl::schedule_node
-ScheduleTreeOptimizer::applyTileBandOpt(isl::schedule_node Node) {
-  if (FirstLevelTiling) {
-    Node = tileNode(Node, "1st level tiling", FirstLevelTileSizes,
-                    FirstLevelDefaultTileSize);
+ScheduleTreeOptimizer::applyTileBandOpt(isl::schedule_node Node,
+                                        const OptimizerAdditionalInfoTy *OAI) {
+  if (OAI->FirstLevelTiling) {
+    Node = tileNode(Node, "1st level tiling", OAI->FirstLevelTileSizes,
+                    OAI->FirstLevelDefaultTileSize);
     FirstLevelTileOpts++;
   }
 
-  if (SecondLevelTiling) {
-    Node = tileNode(Node, "2nd level tiling", SecondLevelTileSizes,
-                    SecondLevelDefaultTileSize);
+  if (OAI->SecondLevelTiling) {
+    Node = tileNode(Node, "2nd level tiling", OAI->SecondLevelTileSizes,
+                    OAI->SecondLevelDefaultTileSize);
     SecondLevelTileOpts++;
   }
 
-  if (RegisterTiling) {
-    Node =
-        applyRegisterTiling(Node, RegisterTileSizes, RegisterDefaultTileSize);
+  if (OAI->RegisterTiling) {
+    Node = applyRegisterTiling(Node, OAI->RegisterTileSizes,
+                               OAI->RegisterDefaultTileSize);
     RegisterTileOpts++;
   }
 
   return Node;
 }
 
-isl::schedule_node
-ScheduleTreeOptimizer::applyPrevectBandOpt(isl::schedule_node Node) {
+isl::schedule_node ScheduleTreeOptimizer::applyPrevectBandOpt(
+    isl::schedule_node Node, const OptimizerAdditionalInfoTy *OAI) {
   auto Space = isl::manage(isl_schedule_node_band_get_space(Node.get()));
   if (Space.is_null())
     return {};
@@ -557,7 +450,7 @@ ScheduleTreeOptimizer::applyPrevectBandOpt(isl::schedule_node Node) {
 
   for (int i = Dims - 1; i >= 0; i--)
     if (Node.as<isl::schedule_node_band>().member_get_coincident(i)) {
-      Node = prevectSchedBand(Node, i, PrevectorWidth);
+      Node = prevectSchedBand(Node, i, OAI->PrevectorWidth);
       break;
     }
 
@@ -575,7 +468,7 @@ ScheduleTreeOptimizer::optimizeBand(__isl_take isl_schedule_node *NodeArg,
 
   if (OAI->PatternOpts && isPMOptimizableBandNode(Node)) {
     isl::schedule_node PatternOptimizedSchedule =
-        tryOptimizeMatMulPattern(Node, OAI->TTI, OAI->D);
+        tryOptimizeMatMulPattern(Node, OAI->TTI, OAI->D, *OAI->OptCtx);
     if (!PatternOptimizedSchedule.is_null()) {
       MatMulOpts++;
       OAI->DepsChanged = true;
@@ -587,14 +480,14 @@ ScheduleTreeOptimizer::optimizeBand(__isl_take isl_schedule_node *NodeArg,
     return Node.release();
 
   if (OAI->Postopts)
-    Node = applyTileBandOpt(Node);
+    Node = applyTileBandOpt(Node, OAI);
 
   if (OAI->Prevect) {
     IslQuotaScope MaxScope = OAI->MaxOpGuard.enter();
 
     // FIXME: Prevectorization requirements are different from those checked by
     // isTileableBandNode.
-    Node = applyPrevectBandOpt(Node);
+    Node = applyPrevectBandOpt(Node, OAI);
 
     if (OAI->MaxOpGuard.hasQuotaExceeded() || Node.is_null())
       return (isl::schedule_node()).release();
@@ -722,6 +615,61 @@ static void runIslScheduleOptimizerImpl(
   }
 
   ScopsProcessed++;
+
+  // Read all options from OptionsContext.
+  std::string OptimizeDeps = "all";
+  std::string SimplifyDeps = "yes";
+  int MaxConstantTerm = 20;
+  int MaxCoefficient = 20;
+  std::string MaximizeBandDepth = "yes";
+  int ScheduleComputeOut = 300000;
+  bool GreedyFusion = false;
+  std::string OuterCoincidence = "no";
+  int PrevectorWidth = 4;
+  bool FirstLevelTiling = true;
+  int FirstLevelDefaultTileSize = 32;
+  std::vector<int> FirstLevelTileSizes;
+  bool SecondLevelTiling = false;
+  int SecondLevelDefaultTileSize = 16;
+  std::vector<int> SecondLevelTileSizes;
+  bool RegisterTiling = false;
+  int RegisterDefaultTileSize = 2;
+  std::vector<int> RegisterTileSizes;
+  bool PragmaBasedOpts = true;
+  bool EnableReschedule = true;
+  bool PMBasedOpts = true;
+  bool EnablePostopts = true;
+  bool OptimizedScops = false;
+  auto VectorizerChoice = clv2::POLLY_VectorizerChoice::None;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext())) {
+    OptimizeDeps = Opts->get<&llvm::clv2::POLLY_OptOptimizeOnly>();
+    SimplifyDeps = Opts->get<&llvm::clv2::POLLY_OptSimplifyDeps>();
+    MaxConstantTerm = Opts->get<&llvm::clv2::POLLY_OptMaxConstantTerm>();
+    MaxCoefficient = Opts->get<&llvm::clv2::POLLY_OptMaxCoefficient>();
+    MaximizeBandDepth = Opts->get<&llvm::clv2::POLLY_OptMaximizeBands>();
+    ScheduleComputeOut = Opts->get<&llvm::clv2::POLLY_ScheduleComputeout>();
+    GreedyFusion = Opts->get<&llvm::clv2::POLLY_LoopfusionGreedy>();
+    OuterCoincidence = Opts->get<&llvm::clv2::POLLY_OptOuterCoincidence>();
+    PrevectorWidth = Opts->get<&llvm::clv2::POLLY_PrevectWidth>();
+    FirstLevelTiling = Opts->get<&llvm::clv2::POLLY_Tiling>();
+    FirstLevelDefaultTileSize = Opts->get<&llvm::clv2::POLLY_DefaultTileSize>();
+    FirstLevelTileSizes = Opts->get<&llvm::clv2::POLLY_TileSizes>();
+    SecondLevelTiling = Opts->get<&llvm::clv2::POLLY_2ndLevelTiling>();
+    SecondLevelDefaultTileSize =
+        Opts->get<&llvm::clv2::POLLY_2ndLevelDefaultTileSize>();
+    SecondLevelTileSizes = Opts->get<&llvm::clv2::POLLY_2ndLevelTileSizes>();
+    RegisterTiling = Opts->get<&llvm::clv2::POLLY_RegisterTiling>();
+    RegisterDefaultTileSize =
+        Opts->get<&llvm::clv2::POLLY_RegisterTilingDefaultTileSize>();
+    RegisterTileSizes = Opts->get<&llvm::clv2::POLLY_RegisterTileSizes>();
+    PragmaBasedOpts = Opts->get<&llvm::clv2::POLLY_PragmaBasedOpts>();
+    EnableReschedule = Opts->get<&llvm::clv2::POLLY_Reschedule>();
+    PMBasedOpts = Opts->get<&llvm::clv2::POLLY_PatternMatchingBasedOpts>();
+    EnablePostopts = Opts->get<&llvm::clv2::POLLY_Postopts>();
+    OptimizedScops = Opts->get<&llvm::clv2::POLLY_OptimizedScops>();
+    VectorizerChoice = Opts->get<&llvm::clv2::POLLY_Vectorizer>();
+  }
 
   // Schedule without optimizations.
   isl::schedule Schedule = S.getScheduleTree();
@@ -893,9 +841,20 @@ static void runIslScheduleOptimizerImpl(
       const_cast<Dependences *>(&D),
       /*PatternOpts=*/!HasUserTransformation && PMBasedOpts,
       /*Postopts=*/!HasUserTransformation && EnablePostopts,
-      /*Prevect=*/PollyVectorizerChoice != VECTORIZER_NONE,
+      /*Prevect=*/VectorizerChoice != clv2::POLLY_VectorizerChoice::None,
       DepsChanged,
-      MaxOpGuard};
+      MaxOpGuard,
+      FirstLevelTiling,
+      FirstLevelDefaultTileSize,
+      FirstLevelTileSizes,
+      SecondLevelTiling,
+      SecondLevelDefaultTileSize,
+      SecondLevelTileSizes,
+      RegisterTiling,
+      RegisterDefaultTileSize,
+      RegisterTileSizes,
+      PrevectorWidth,
+      &S.getFunction().getContext().getOptionsContext()};
   if (!Schedule.is_null() && (OAI.PatternOpts || OAI.Postopts || OAI.Prevect)) {
     Schedule = ScheduleTreeOptimizer::optimizeSchedule(Schedule, &OAI);
     Schedule = hoistExtensionNodes(Schedule);
@@ -979,6 +938,10 @@ void polly::runIslScheduleOptimizer(Scop &S, TargetTransformInfo *TTI,
   if (DepsChanged)
     Deps.abandonDependences();
 
+  bool PollyPrintOptIsl = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext()))
+    PollyPrintOptIsl = Opts->get<&llvm::clv2::POLLY_PrintOptIsl>();
   if (PollyPrintOptIsl) {
     outs()
         << "Printing analysis 'Polly - Optimize schedule of SCoP' for region: '"

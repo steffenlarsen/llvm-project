@@ -102,6 +102,7 @@
 #include "llvm/Analysis/TypeBasedAliasAnalysis.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
@@ -113,17 +114,13 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include <cassert>
 #include <cstdint>
 
 using namespace llvm;
-
-// A handy option for disabling TBAA functionality. The same effect can also be
-// achieved by stripping the !tbaa tags from IR, but this option is sometimes
-// more convenient.
-static cl::opt<bool> EnableTBAA("enable-tbaa", cl::init(true), cl::Hidden);
 
 namespace {
 
@@ -698,14 +695,19 @@ bool TypeBasedAAResult::Aliases(const MDNode *A, const MDNode *B) const {
   return matchAccessTags(A, B);
 }
 
-bool TypeBasedAAResult::shouldUseTBAA() const {
-  return EnableTBAA && !UsingTypeSanitizer;
-}
+TypeBasedAAResult::TypeBasedAAResult(bool UsingTypeSanitizer,
+                                     const clv2::OptionsContext &Ctx)
+    : UsingTypeSanitizer(UsingTypeSanitizer),
+      ShouldUseTBAA(clv2::getOptValOrDefault<&clv2::AN_EnableTBAA>(Ctx) &&
+                    !UsingTypeSanitizer) {}
+
+bool TypeBasedAAResult::shouldUseTBAA() const { return ShouldUseTBAA; }
 
 AnalysisKey TypeBasedAA::Key;
 
 TypeBasedAAResult TypeBasedAA::run(Function &F, FunctionAnalysisManager &AM) {
-  return TypeBasedAAResult(F.hasFnAttribute(Attribute::SanitizeType));
+  return TypeBasedAAResult(F.hasFnAttribute(Attribute::SanitizeType),
+                           F.getContext().getOptionsContext());
 }
 
 char TypeBasedAAWrapperPass::ID = 0;
@@ -719,7 +721,8 @@ ImmutablePass *llvm::createTypeBasedAAWrapperPass() {
 TypeBasedAAWrapperPass::TypeBasedAAWrapperPass() : ImmutablePass(ID) {}
 
 bool TypeBasedAAWrapperPass::doInitialization(Module &M) {
-  Result.reset(new TypeBasedAAResult(/*UsingTypeSanitizer=*/false));
+  Result.reset(new TypeBasedAAResult(/*UsingTypeSanitizer=*/false,
+                                     M.getContext().getOptionsContext()));
   return false;
 }
 

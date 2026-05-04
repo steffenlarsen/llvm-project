@@ -77,7 +77,7 @@ TEST(DXILResource, AnnotationsAndMetadata) {
   DataLayout DL("e-m:e-p:32:32-i1:32-i8:8-i16:16-i32:32-i64:64-f16:16-f32:32-"
                 "f64:64-n8:16:32:64-v96:32");
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module M("AnnotationsAndMetadata", Context);
   M.setDataLayout(DL);
 

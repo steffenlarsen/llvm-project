@@ -66,11 +66,12 @@
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/AssumeBundleBuilder.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <algorithm>
 #include <cassert>
@@ -87,30 +88,26 @@
 using namespace llvm;
 using namespace llvm::memprof;
 
-static cl::opt<bool>
-EnableNoAliasConversion("enable-noalias-to-md-conversion", cl::init(true),
-  cl::Hidden,
-  cl::desc("Convert noalias attributes to metadata during inlining."));
+static bool getEnableNoAliasConversion(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_EnableNoAliasConversion>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    UseNoAliasIntrinsic("use-noalias-intrinsic-during-inlining", cl::Hidden,
-                        cl::init(true),
-                        cl::desc("Use the llvm.experimental.noalias.scope.decl "
-                                 "intrinsic during inlining."));
+static bool getUseNoAliasIntrinsic(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_UseNoAliasIntrinsic>(
+      F.getContext().getOptionsContext());
+}
 
-// Disabled by default, because the added alignment assumptions may increase
-// compile-time and block optimizations. This option is not suitable for use
-// with frontends that emit comprehensive parameter alignment annotations.
-static cl::opt<bool>
-PreserveAlignmentAssumptions("preserve-alignment-assumptions-during-inlining",
-  cl::init(false), cl::Hidden,
-  cl::desc("Convert align attributes to assumptions during inlining."));
+static bool getPreserveAlignmentAssumptions(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_PreserveAlignmentAssumptions>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<unsigned> InlinerAttributeWindow(
-    "max-inst-checked-for-throw-during-inlining", cl::Hidden,
-    cl::desc("the maximum number of instructions analyzed for may throw during "
-             "attribute inference in inlined body"),
-    cl::init(4));
+static unsigned getInlinerAttributeWindow(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_InlinerAttributeWindow>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -1217,7 +1214,7 @@ void ScopedAliasMetadataDeepCloner::remap(Function::iterator FStart,
 static void AddAliasScopeMetadata(CallBase &CB, ValueToValueMapTy &VMap,
                                   const DataLayout &DL, AAResults *CalleeAAR,
                                   ClonedCodeInfo &InlinedFunctionInfo) {
-  if (!EnableNoAliasConversion)
+  if (!getEnableNoAliasConversion(*CB.getFunction()))
     return;
 
   const Function *CalledFunc = CB.getCalledFunction();
@@ -1265,7 +1262,7 @@ static void AddAliasScopeMetadata(CallBase &CB, ValueToValueMapTy &VMap,
     MDNode *NewScope = MDB.createAnonymousAliasScope(NewDomain, Name);
     NewScopes.insert(std::make_pair(A, NewScope));
 
-    if (UseNoAliasIntrinsic) {
+    if (getUseNoAliasIntrinsic(*CB.getFunction())) {
       // Introduce a llvm.experimental.noalias.scope.decl for the noalias
       // argument.
       MDNode *AScopeList = MDNode::get(CalledFunc->getContext(), NewScope);
@@ -1465,7 +1462,8 @@ static bool MayContainThrowingOrExitingCallAfterCB(CallBase *Begin,
   auto BeginIt = Begin->getIterator();
   assert(BeginIt != End->getIterator() && "Non-empty BB has empty iterator");
   return !llvm::isGuaranteedToTransferExecutionToSuccessor(
-      ++BeginIt, End->getIterator(), InlinerAttributeWindow + 1);
+      ++BeginIt, End->getIterator(),
+      getInlinerAttributeWindow(*Begin->getFunction()) + 1);
 }
 
 // Add attributes from CB params and Fn attributes that can always be propagated
@@ -1783,7 +1781,8 @@ static void AddReturnAttributes(CallBase &CB, ValueToValueMapTy &VMap,
 /// If the inlined function has non-byval align arguments, then
 /// add @llvm.assume-based alignment assumptions to preserve this information.
 static void AddAlignmentAssumptions(CallBase &CB, InlineFunctionInfo &IFI) {
-  if (!PreserveAlignmentAssumptions || !IFI.GetAssumptionCache)
+  if (!getPreserveAlignmentAssumptions(*CB.getFunction()) ||
+      !IFI.GetAssumptionCache)
     return;
 
   AssumptionCache *AC = &IFI.GetAssumptionCache(*CB.getCaller());

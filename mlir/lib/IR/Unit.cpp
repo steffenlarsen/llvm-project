@@ -44,6 +44,22 @@ static void printBlock(llvm::raw_ostream &os, Block *block,
     block->print(os);
 }
 
+MLIRContext *mlir::IRUnit::getContext() const {
+  if (auto *op = llvm::dyn_cast_if_present<Operation *>(*this))
+    return op->getContext();
+  if (auto *region = llvm::dyn_cast_if_present<Region *>(*this))
+    return region->getContext();
+  if (auto *block = llvm::dyn_cast_if_present<Block *>(*this)) {
+    // Null for an unlinked block; printRegion below renders that case as
+    // <Region:nullptr> rather than treating it as impossible.
+    Region *parent = block->getParent();
+    return parent ? parent->getContext() : nullptr;
+  }
+  if (auto value = llvm::dyn_cast_if_present<Value>(*this))
+    return value.getContext();
+  llvm_unreachable("unknown IRUnit");
+}
+
 void mlir::IRUnit::print(llvm::raw_ostream &os, OpPrintingFlags flags) const {
   if (auto *op = llvm::dyn_cast_if_present<Operation *>(*this))
     return printOp(os, op, flags);

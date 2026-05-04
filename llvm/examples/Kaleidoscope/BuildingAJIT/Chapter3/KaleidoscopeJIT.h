@@ -160,7 +160,7 @@ private:
       FPM->add(createInstructionCombiningPass());
       FPM->add(createReassociatePass());
       FPM->add(createGVNPass());
-      FPM->add(createCFGSimplificationPass());
+      FPM->add(createCFGSimplificationPass(M.getContext().getOptionsContext()));
       FPM->doInitialization();
 
       // Run the optimizations over all functions in the module being added to

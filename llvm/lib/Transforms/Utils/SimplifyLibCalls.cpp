@@ -31,102 +31,84 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/KnownFPClass.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/BuildLibCalls.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 
 #include <cmath>
 
 using namespace llvm;
 using namespace PatternMatch;
 
-static cl::opt<bool>
-    EnableUnsafeFPShrink("enable-double-float-shrink", cl::Hidden,
-                         cl::init(false),
-                         cl::desc("Enable unsafe double to float "
-                                  "shrinking for math lib calls"));
+static bool getEnableUnsafeFPShrink(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_EnableUnsafeFPShrink>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool isEnableUnsafeFPShrinkSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
+                               &clv2::TU_EnableUnsafeFPShrink>(
+      F.getContext().getOptionsContext());
+}
 
 // Enable conversion of operator new calls with a MemProf hot or cold hint
 // to an operator new call that takes a hot/cold hint. Off by default since
 // not all allocators currently support this extension.
-static cl::opt<bool>
-    OptimizeHotColdNew("optimize-hot-cold-new", cl::Hidden, cl::init(false),
-                       cl::desc("Enable hot/cold operator new library calls"));
-enum class OptimizeExistingHotColdNewKind {
-  None,
-  Cold,
-  Always,
-};
-static cl::opt<OptimizeExistingHotColdNewKind> OptimizeExistingHotColdNew(
-    "optimize-existing-hot-cold-new", cl::Hidden,
-    cl::desc(
-        "Enable optimization of existing hot/cold operator new library calls"),
-    cl::values(
-        clEnumValN(
-            OptimizeExistingHotColdNewKind::None, "none",
-            "Do not optimize existing hot/cold operator new library calls"),
-        clEnumValN(OptimizeExistingHotColdNewKind::Cold, "cold",
-                   "Only optimize existing hot/cold operator new library calls "
-                   "if determined to be cold"),
-        clEnumValN(
-            OptimizeExistingHotColdNewKind::Always, "always",
-            "Always optimize existing hot/cold operator new library calls"),
-        clEnumValN(
-            OptimizeExistingHotColdNewKind::Always, "",
-            "Always optimize existing hot/cold operator new library calls")),
-    cl::init(OptimizeExistingHotColdNewKind::None), cl::ValueOptional);
-static cl::opt<bool> OptimizeNoBuiltinHotColdNew(
-    "optimize-nobuiltin-hot-cold-new-new", cl::Hidden, cl::init(false),
-    cl::desc("Enable transformation of nobuiltin operator new library calls"));
-static cl::opt<bool> MinExistingHotColdNewHint(
-    "min-existing-hot-cold-new-hint", cl::Hidden, cl::init(false),
-    cl::desc("Take the minimum of compiler hint and existing hint when "
-             "optimizing existing hot/cold operator new library calls"));
 
-namespace {
+static bool getOptimizeHotColdNew(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_OptimizeHotColdNew>(
+      F.getContext().getOptionsContext(), false);
+}
 
-// Specialized parser to ensure the hint is an 8 bit value (we can't specify
-// uint8_t to opt<> as that is interpreted to mean that we are passing a char
-// option with a specific set of values.
-struct HotColdHintParser : public cl::parser<unsigned> {
-  HotColdHintParser(cl::Option &O) : cl::parser<unsigned>(O) {}
+using OptimizeExistingHotColdNewKind = clv2::OptimizeExistingHotColdNewKind;
 
-  bool parse(cl::Option &O, StringRef ArgName, StringRef Arg, unsigned &Value) {
-    if (Arg.getAsInteger(0, Value))
-      return O.error("'" + Arg + "' value invalid for uint argument!");
+static OptimizeExistingHotColdNewKind
+getOptimizeExistingHotColdNew(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_OptimizeExistingHotColdNew>(
+      F.getContext().getOptionsContext());
+}
 
-    if (Value > 255)
-      return O.error("'" + Arg + "' value must be in the range [0, 255]!");
+static bool getMinExistingHotColdNewHint(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_MinExistingHotColdNewHint>(
+      F.getContext().getOptionsContext());
+}
 
-    return false;
-  }
-};
-
-} // end anonymous namespace
+static bool getOptimizeNoBuiltinHotColdNew(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_OptimizeNoBuiltinHotColdNew>(
+      F.getContext().getOptionsContext(), false);
+}
 
 // Hot/cold operator new takes an 8 bit hotness hint, where 0 is the coldest
 // and 255 is the hottest. Default to 1 value away from the coldest and hottest
 // hints, so that the compiler hinted allocations are slightly less strong than
 // manually inserted hints at the two extremes.
-static cl::opt<unsigned, false, HotColdHintParser> ColdNewHintValue(
-    "cold-new-hint-value", cl::Hidden, cl::init(1),
-    cl::desc("Value to pass to hot/cold operator new for cold allocation"));
-static cl::opt<unsigned, false, HotColdHintParser>
-    NotColdNewHintValue("notcold-new-hint-value", cl::Hidden, cl::init(128),
-                        cl::desc("Value to pass to hot/cold operator new for "
-                                 "notcold (warm) allocation"));
-static cl::opt<unsigned, false, HotColdHintParser> HotNewHintValue(
-    "hot-new-hint-value", cl::Hidden, cl::init(254),
-    cl::desc("Value to pass to hot/cold operator new for hot allocation"));
-static cl::opt<unsigned, false, HotColdHintParser> AmbiguousNewHintValue(
-    "ambiguous-new-hint-value", cl::Hidden, cl::init(222),
-    cl::desc(
-        "Value to pass to hot/cold operator new for ambiguous allocation"));
+static unsigned getColdNewHintValue(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_ColdNewHintValue>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getNotColdNewHintValue(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_NotColdNewHintValue>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getHotNewHintValue(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_HotNewHintValue>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getAmbiguousNewHintValue(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_AmbiguousNewHintValue>(
+      F.getContext().getOptionsContext());
+}
 
 //===----------------------------------------------------------------------===//
 // Helper Functions
@@ -1763,7 +1745,7 @@ Value *LibCallSimplifier::optimizeRealloc(CallInst *CI, IRBuilderBase &B) {
 // variants.
 Value *LibCallSimplifier::maybeOptimizeNoBuiltinOperatorNew(CallInst *CI,
                                                             IRBuilderBase &B) {
-  if (!OptimizeHotColdNew)
+  if (!getOptimizeHotColdNew(*CI->getFunction()))
     return nullptr;
   Function *Callee = CI->getCalledFunction();
   if (!Callee)
@@ -1782,10 +1764,7 @@ Value *LibCallSimplifier::maybeOptimizeNoBuiltinOperatorNew(CallInst *CI,
   case LibFunc_ZnamSt11align_val_tRKSt9nothrow_t:
   case LibFunc_size_returning_new:
   case LibFunc_size_returning_new_aligned:
-    // By default normal operator new calls (not already passing a hot_cold_t
-    // parameter) are not mutated if the call is not marked builtin. Optionally
-    // enable that in cases where it is known to be safe.
-    if (!OptimizeNoBuiltinHotColdNew)
+    if (!getOptimizeNoBuiltinHotColdNew(*CI->getFunction()))
       return nullptr;
     break;
   case LibFunc_Znwm12__hot_cold_t:
@@ -1800,7 +1779,8 @@ Value *LibCallSimplifier::maybeOptimizeNoBuiltinOperatorNew(CallInst *CI,
   case LibFunc_size_returning_new_aligned_hot_cold:
     // If the nobuiltin call already passes a hot_cold_t parameter, allow update
     // of that parameter when enabled.
-    if (OptimizeExistingHotColdNew == OptimizeExistingHotColdNewKind::None)
+    if (getOptimizeExistingHotColdNew(*CI->getFunction()) ==
+        OptimizeExistingHotColdNewKind::None)
       return nullptr;
     break;
   default:
@@ -1815,34 +1795,36 @@ Value *LibCallSimplifier::maybeOptimizeNoBuiltinOperatorNew(CallInst *CI,
 // https://github.com/google/tcmalloc/blob/master/tcmalloc/new_extension.h
 Value *LibCallSimplifier::optimizeNew(CallInst *CI, IRBuilderBase &B,
                                       LibFunc &Func) {
-  if (!OptimizeHotColdNew)
+  if (!getOptimizeHotColdNew(*CI->getFunction()))
     return nullptr;
 
   uint8_t HotCold;
   bool IsCold = false;
   if (CI->getAttributes().getFnAttr("memprof").getValueAsString() == "cold") {
-    HotCold = ColdNewHintValue;
+    HotCold = getColdNewHintValue(*CI->getFunction());
     IsCold = true;
   } else if (CI->getAttributes().getFnAttr("memprof").getValueAsString() ==
              "notcold")
-    HotCold = NotColdNewHintValue;
+    HotCold = getNotColdNewHintValue(*CI->getFunction());
   else if (CI->getAttributes().getFnAttr("memprof").getValueAsString() == "hot")
-    HotCold = HotNewHintValue;
+    HotCold = getHotNewHintValue(*CI->getFunction());
   else if (CI->getAttributes().getFnAttr("memprof").getValueAsString() ==
            "ambiguous")
-    HotCold = AmbiguousNewHintValue;
+    HotCold = getAmbiguousNewHintValue(*CI->getFunction());
   else
     return nullptr;
 
   bool ShouldOptimizeExistingHotColdNew =
-      OptimizeExistingHotColdNew == OptimizeExistingHotColdNewKind::Always ||
-      (OptimizeExistingHotColdNew == OptimizeExistingHotColdNewKind::Cold &&
+      getOptimizeExistingHotColdNew(*CI->getFunction()) ==
+          OptimizeExistingHotColdNewKind::Always ||
+      (getOptimizeExistingHotColdNew(*CI->getFunction()) ==
+           OptimizeExistingHotColdNewKind::Cold &&
        IsCold);
 
   Value *HotColdVal = B.getInt8(HotCold);
   auto getHotColdHintForExisting = [&](uint8_t HotCold) -> Value * {
     // If not taking the minimum, simply use the compiler hint value.
-    if (!MinExistingHotColdNewHint)
+    if (!getMinExistingHotColdNewHint(*CI->getFunction()))
       return HotColdVal;
     Value *ExistingHint = CI->getArgOperand(CI->arg_size() - 1);
     if (ExistingHint->getType() != B.getInt8Ty())
@@ -4297,8 +4279,8 @@ Value *LibCallSimplifier::optimizeCall(CallInst *CI, IRBuilderBase &Builder) {
   // Command-line parameter overrides instruction attribute.
   // This can't be moved to optimizeFloatingPointLibCall() because it may be
   // used by the intrinsic optimizations.
-  if (EnableUnsafeFPShrink.getNumOccurrences() > 0)
-    UnsafeFPShrink = EnableUnsafeFPShrink;
+  if (isEnableUnsafeFPShrinkSpecified(*CI->getFunction()))
+    UnsafeFPShrink = getEnableUnsafeFPShrink(*CI->getFunction());
   else if (isa<FPMathOperator>(CI) && CI->isFast())
     UnsafeFPShrink = true;
 

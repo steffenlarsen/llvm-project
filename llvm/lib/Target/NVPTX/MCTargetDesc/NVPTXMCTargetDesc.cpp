@@ -48,8 +48,13 @@ static MCRegisterInfo *createNVPTXMCRegisterInfo(const Triple &TT) {
 }
 
 static MCSubtargetInfo *
-createNVPTXMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
-  return createNVPTXMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+createNVPTXMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                           const llvm::clv2::OptionsContext &Ctx) {
+  MCSubtargetInfo *STI =
+      createNVPTXMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+  if (STI)
+    STI->setOptionsContext(Ctx);
+  return STI;
 }
 
 static MCInstPrinter *createNVPTXMCInstPrinter(const Triple &T,

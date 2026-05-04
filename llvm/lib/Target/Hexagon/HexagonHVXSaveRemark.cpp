@@ -31,18 +31,19 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "hexagon-hvx-save"
 
-static cl::opt<unsigned> HVXSaveThreshold(
-    "hexagon-hvx-save-threshold", cl::Hidden, cl::init(128 * 8),
-    cl::desc("Minimum number of bytes of HVX caller-saved register data live "
-             "across a call to trigger a remark (default: 8 x 128-byte "
-             "vectors)"));
+static unsigned getHVXSaveThreshold(const MachineFunction &MF) {
+  return clv2::getOptValOrDefault<&clv2::HEX_HVXSaveThreshold>(
+      MF.getFunction().getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -179,7 +180,7 @@ struct HexagonHVXSaveRemark : public MachineFunctionPass {
                             << " has " << NumVecs << " HVX vector(s) live ("
                             << TotalBytes << " bytes)\n");
 
-          if (TotalBytes >= HVXSaveThreshold) {
+          if (TotalBytes >= getHVXSaveThreshold(MF)) {
             MORE.emit([&]() {
               MachineOptimizationRemarkAnalysis R(
                   DEBUG_TYPE, "HVXSaveAroundCall", MI.getDebugLoc(), &MBB);

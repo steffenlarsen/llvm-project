@@ -7,6 +7,7 @@ add_llvm_component_library(LLVMLoongArchDesc
   LoongArchMCAsmInfo.cpp
   LoongArchMCCodeEmitter.cpp
   LoongArchMCTargetDesc.cpp
+  LoongArchOptions.cpp
   LoongArchMatInt.cpp
   LoongArchTargetStreamer.cpp
 

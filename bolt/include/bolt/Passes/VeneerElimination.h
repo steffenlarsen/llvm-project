@@ -17,7 +17,7 @@ namespace bolt {
 class VeneerElimination : public BinaryFunctionPass {
 public:
   /// BinaryPass public interface
-  explicit VeneerElimination(const cl::opt<bool> &PrintPass)
+  explicit VeneerElimination(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "veneer-elimination"; }

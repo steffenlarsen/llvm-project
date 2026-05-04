@@ -22,19 +22,17 @@
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCStreamer.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/NVPTXAddrSpace.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
 
-// Command line option to control inlined_at enhancement to lineinfo support.
-// Valid only when debuginfo emissionkind is DebugDirectivesOnly or
-// LineTablesOnly.
-static cl::opt<bool> LineInfoWithInlinedAt(
-    "line-info-inlined-at",
-    cl::desc("Emit line with inlined_at enhancement for NVPTX"), cl::init(true),
-    cl::Hidden);
+static bool getLineInfoWithInlinedAt(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::NVPTX_LineInfoWithInlinedAt>(
+      F.getContext().getOptionsContext());
+}
 
 NVPTXDwarfDebug::NVPTXDwarfDebug(AsmPrinter *A) : DwarfDebug(A) {
   // PTX emits debug strings inline (no .debug_str section), does not support
@@ -55,7 +53,8 @@ MCSymbol *NVPTXDwarfDebug::getOrCreateFuncNameSymbol(StringRef LinkageName) {
 bool NVPTXDwarfDebug::isEnhancedLineinfo(const MachineFunction &MF) const {
   const DISubprogram *SP = MF.getFunction().getSubprogram();
   const NVPTXSubtarget &STI = MF.getSubtarget<NVPTXSubtarget>();
-  return LineInfoWithInlinedAt && (STI.hasFeature(NVPTX::PTX72)) && SP &&
+  return getLineInfoWithInlinedAt(MF.getFunction()) &&
+         (STI.hasFeature(NVPTX::PTX72)) && SP &&
          (SP->getUnit()->isDebugDirectivesOnly() ||
           SP->getUnit()->getEmissionKind() == DICompileUnit::LineTablesOnly);
 }

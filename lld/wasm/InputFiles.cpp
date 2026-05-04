@@ -872,7 +872,7 @@ BitcodeFile::BitcodeFile(MemoryBufferRef m, StringRef archiveName,
                                       " at " + utostr(offsetInArchive) + ")");
   MemoryBufferRef mbref(mb.getBuffer(), name);
 
-  obj = check(lto::InputFile::create(mbref));
+  obj = check(lto::InputFile::create(mbref, *commonContext().llvmOptsCtx));
 
   // If this isn't part of an archive, it's eagerly linked, so mark it live.
   if (archiveName.empty())

@@ -15,7 +15,6 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/Analysis/Utils/TFUtils.h"
 #include "llvm/Support/Base64.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"

@@ -20,7 +20,7 @@ using namespace llvm;
 
 namespace {
 
-static LLVMContext Ctx;
+static LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
 /// Perform tests against VFABI Rules. `invokeParser` creates a VFInfo object
 /// and a scalar FunctionType, which are used by tests to check that:
@@ -864,7 +864,7 @@ protected:
                    "attributes #0 = { "
                    "\"vector-function-abi-variant\"=\""
                    "_ZGVnN2v_g(custom_vg),_ZGVnN4v_g\" }";
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M;
   CallInst *CI;
@@ -897,7 +897,7 @@ static std::unique_ptr<Module> parseIR(LLVMContext &C, const char *IR) {
 }
 
 TEST(VFABIGetMappingsTest, IndirectCallInst) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 define void @call(void () * %f) {
 entry:

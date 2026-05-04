@@ -16,76 +16,27 @@
 // - estimate temporal locality by looking at CFG?
 
 #include "bolt/Passes/ReorderData.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/Support/CommandLineV2.h"
 #include <algorithm>
 
-#undef  DEBUG_TYPE
+#undef DEBUG_TYPE
 #define DEBUG_TYPE "reorder-data"
 
 using namespace llvm;
 using namespace bolt;
 
 namespace opts {
-extern cl::OptionCategory BoltCategory;
-extern cl::OptionCategory BoltOptCategory;
-extern cl::opt<JumpTableSupportLevel> JumpTables;
+extern JumpTableSupportLevel JumpTables;
 
-static cl::opt<bool>
-    PrintReorderedData("print-reordered-data",
-                       cl::desc("print section contents after reordering"),
-                       cl::Hidden, cl::cat(BoltCategory));
+enum ReorderAlgo : char { REORDER_COUNT = 0, REORDER_FUNCS = 1 };
 
-enum ReorderAlgo : char {
-  REORDER_COUNT         = 0,
-  REORDER_FUNCS         = 1
-};
+} // namespace opts
 
-static cl::opt<ReorderAlgo>
-ReorderAlgorithm("reorder-data-algo",
-  cl::desc("algorithm used to reorder data sections"),
-  cl::init(REORDER_COUNT),
-  cl::values(
-    clEnumValN(REORDER_COUNT,
-      "count",
-      "sort hot data by read counts"),
-    clEnumValN(REORDER_FUNCS,
-      "funcs",
-      "sort hot data by hot function usage and count")),
-  cl::ZeroOrMore,
-  cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned>
-    ReorderDataMaxSymbols("reorder-data-max-symbols",
-                          cl::desc("maximum number of symbols to reorder"),
-                          cl::init(std::numeric_limits<unsigned>::max()),
-                          cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned> ReorderDataMaxBytes(
-    "reorder-data-max-bytes", cl::desc("maximum number of bytes to reorder"),
-    cl::init(std::numeric_limits<unsigned>::max()), cl::cat(BoltOptCategory));
-
-static cl::list<std::string>
-ReorderSymbols("reorder-symbols",
-  cl::CommaSeparated,
-  cl::desc("list of symbol names that can be reordered"),
-  cl::value_desc("symbol1,symbol2,symbol3,..."),
-  cl::Hidden,
-  cl::cat(BoltCategory));
-
-static cl::list<std::string>
-SkipSymbols("reorder-skip-symbols",
-  cl::CommaSeparated,
-  cl::desc("list of symbol names that cannot be reordered"),
-  cl::value_desc("symbol1,symbol2,symbol3,..."),
-  cl::Hidden,
-  cl::cat(BoltCategory));
-
-static cl::opt<bool> ReorderInplace("reorder-data-inplace",
-                                    cl::desc("reorder data sections in place"),
-
-                                    cl::cat(BoltOptCategory));
-}
+using namespace bolt::bolt_passes_opts;
 
 namespace llvm {
 namespace bolt {
@@ -96,14 +47,16 @@ static constexpr uint16_t MinAlignment = 16;
 
 bool isSupported(const BinarySection &BS) { return BS.isData() && !BS.isTLS(); }
 
-bool filterSymbol(const BinaryData *BD) {
+bool filterSymbol(const BinaryData *BD,
+                  const std::vector<std::string> &ReorderSymbols,
+                  const std::vector<std::string> &SkipSymbols) {
   if (!BD->isAtomic() || BD->isJumpTable() || !BD->isMoveable())
     return false;
 
   bool IsValid = true;
 
-  if (!opts::ReorderSymbols.empty()) {
-    IsValid = llvm::any_of(opts::ReorderSymbols, [&](const std::string &Name) {
+  if (!ReorderSymbols.empty()) {
+    IsValid = llvm::any_of(ReorderSymbols, [&](const std::string &Name) {
       return BD->hasName(Name);
     });
   }
@@ -111,8 +64,8 @@ bool filterSymbol(const BinaryData *BD) {
   if (!IsValid)
     return false;
 
-  if (!opts::SkipSymbols.empty()) {
-    for (const std::string &Name : opts::SkipSymbols) {
+  if (!SkipSymbols.empty()) {
+    for (const std::string &Name : SkipSymbols) {
       if (BD->hasName(Name)) {
         IsValid = false;
         break;
@@ -267,21 +220,20 @@ ReorderData::sortedByFunc(BinaryContext &BC, const BinarySection &Section,
   DataOrder Order = baseOrder(BC, Section);
   unsigned SplitPoint = Order.size();
 
-  llvm::sort(
-      Order,
-      [&](const DataOrder::value_type &A, const DataOrder::value_type &B) {
-        // Total execution counts of functions referencing BD.
-        const uint64_t ACount = BDtoFuncCount[A.first];
-        const uint64_t BCount = BDtoFuncCount[B.first];
-        // Weight by number of loads/data size.
-        const double AWeight = double(A.second) / A.first->getSize();
-        const double BWeight = double(B.second) / B.first->getSize();
-        return (ACount > BCount ||
-                (ACount == BCount &&
-                 (AWeight > BWeight ||
-                  (AWeight == BWeight &&
-                   A.first->getAddress() < B.first->getAddress()))));
-      });
+  llvm::sort(Order, [&](const DataOrder::value_type &A,
+                        const DataOrder::value_type &B) {
+    // Total execution counts of functions referencing BD.
+    const uint64_t ACount = BDtoFuncCount[A.first];
+    const uint64_t BCount = BDtoFuncCount[B.first];
+    // Weight by number of loads/data size.
+    const double AWeight = double(A.second) / A.first->getSize();
+    const double BWeight = double(B.second) / B.first->getSize();
+    return (ACount > BCount ||
+            (ACount == BCount &&
+             (AWeight > BWeight ||
+              (AWeight == BWeight &&
+               A.first->getAddress() < B.first->getAddress()))));
+  });
 
   for (unsigned Idx = 0; Idx < Order.size(); ++Idx) {
     if (!BDtoFuncCount[Order[Idx].first]) {
@@ -328,6 +280,13 @@ void ReorderData::setSectionOrder(BinaryContext &BC,
                                   BinarySection &OutputSection,
                                   DataOrder::iterator Begin,
                                   DataOrder::iterator End) {
+  const unsigned ReorderDataMaxSymbols = getReorderDataMaxSymbols(BC);
+  const unsigned ReorderDataMaxBytes = getReorderDataMaxBytes(BC);
+  static const std::vector<std::string> EmptyVec;
+  const auto &ReorderSymbols = getReorderSymbols(BC);
+  const auto &SkipSymbols = getReorderSkipSymbols(BC);
+  const bool ReorderInplace = getReorderDataInplace(BC);
+
   std::vector<BinaryData *> NewOrder;
   unsigned NumReordered = 0;
   uint64_t Offset = 0;
@@ -345,11 +304,11 @@ void ReorderData::setSectionOrder(BinaryContext &BC,
     BinaryData *BD = Begin->first;
 
     // We can't move certain symbols.
-    if (!filterSymbol(BD))
+    if (!filterSymbol(BD, ReorderSymbols, SkipSymbols))
       continue;
 
     ++NumReordered;
-    if (NumReordered > opts::ReorderDataMaxSymbols) {
+    if (NumReordered > ReorderDataMaxSymbols) {
       if (!NewOrder.empty())
         LLVM_DEBUG(dbgs() << "BOLT-DEBUG: processing ending on symbol "
                           << *NewOrder.back() << "\n");
@@ -359,7 +318,7 @@ void ReorderData::setSectionOrder(BinaryContext &BC,
     uint16_t Alignment = std::max(BD->getAlignment(), MinAlignment);
     Offset = alignTo(Offset, Alignment);
 
-    if ((Offset + BD->getSize()) > opts::ReorderDataMaxBytes) {
+    if ((Offset + BD->getSize()) > ReorderDataMaxBytes) {
       if (!NewOrder.empty())
         LLVM_DEBUG(dbgs() << "BOLT-DEBUG: processing ending on symbol "
                           << *NewOrder.back() << "\n");
@@ -388,7 +347,7 @@ void ReorderData::setSectionOrder(BinaryContext &BC,
     NewOrder.push_back(BD);
   }
 
-  OutputSection.reorderContents(NewOrder, opts::ReorderInplace);
+  OutputSection.reorderContents(NewOrder, ReorderInplace);
 
   BC.outs() << "BOLT-INFO: reorder-data: " << Count << "/" << TotalCount
             << format(" (%.1f%%)", 100.0 * Count / TotalCount) << " events, "
@@ -431,13 +390,22 @@ bool ReorderData::markUnmoveableSymbols(BinaryContext &BC,
 }
 
 Error ReorderData::runOnFunctions(BinaryContext &BC) {
+  const bool PrintReorderedData = getPrintReorderedData(BC);
+  static const std::vector<std::string> EmptyVec;
+  const auto &ReorderData = getReorderData(BC);
+  const auto ReorderAlgorithm =
+      static_cast<opts::ReorderAlgo>(getReorderDataAlgo(BC));
+  const bool ReorderInplace = getReorderDataInplace(BC);
+
   static const char *DefaultSections[] = {".rodata", ".data", ".bss", nullptr};
 
-  if (!BC.HasRelocations || opts::ReorderData.empty())
+  if (!BC.HasRelocations || ReorderData.empty())
     return Error::success();
 
   // For now
-  if (opts::JumpTables > JTS_BASIC) {
+  auto JTLevel =
+      static_cast<JumpTableSupportLevel>(bolt_core_opts::getJumpTables(BC));
+  if (JTLevel > JTS_BASIC) {
     BC.outs() << "BOLT-WARNING: jump table support must be basic for "
               << "data reordering to work.\n";
     return Error::success();
@@ -447,7 +415,7 @@ Error ReorderData::runOnFunctions(BinaryContext &BC) {
 
   std::vector<BinarySection *> Sections;
 
-  for (const std::string &SectionName : opts::ReorderData) {
+  for (const std::string &SectionName : ReorderData) {
     if (SectionName == "default") {
       for (unsigned I = 0; DefaultSections[I]; ++I)
         if (ErrorOr<BinarySection &> Section =
@@ -477,7 +445,7 @@ Error ReorderData::runOnFunctions(BinaryContext &BC) {
     DataOrder Order;
     unsigned SplitPointIdx;
 
-    if (opts::ReorderAlgorithm == opts::ReorderAlgo::REORDER_COUNT) {
+    if (ReorderAlgorithm == opts::ReorderAlgo::REORDER_COUNT) {
       BC.outs() << "BOLT-INFO: reorder-sections: ordering data by count\n";
       std::tie(Order, SplitPointIdx) = sortedByCount(BC, *Section);
     } else {
@@ -487,11 +455,11 @@ Error ReorderData::runOnFunctions(BinaryContext &BC) {
     }
     auto SplitPoint = Order.begin() + SplitPointIdx;
 
-    if (opts::PrintReorderedData)
+    if (PrintReorderedData)
       printOrder(BC, *Section, Order.begin(), SplitPoint);
 
-    if (!opts::ReorderInplace || FoundUnmoveable) {
-      if (opts::ReorderInplace && FoundUnmoveable)
+    if (!ReorderInplace || FoundUnmoveable) {
+      if (ReorderInplace && FoundUnmoveable)
         BC.outs() << "BOLT-INFO: Found unmoveable symbols in "
                   << Section->getName() << " falling back to splitting "
                   << "instead of in-place reordering.\n";

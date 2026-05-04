@@ -33,7 +33,7 @@ namespace {
 // Verify that two conflicting live-in values result in no live-in range for a
 // block.
 TEST(DebugSSAUpdater, EmptyPHIRange) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M =
       parseIR(C,
@@ -99,7 +99,7 @@ exit:
 
 // Verify that we correctly set live-in variable values through loops.
 TEST(DebugSSAUpdater, LoopPHI) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M =
       parseIR(C,
@@ -158,7 +158,7 @@ exit:
 // Verify that when a variable has only undef debug values, it has no live
 // ranges.
 TEST(DebugSSAUpdater, AllUndefVar) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M =
       parseIR(C,

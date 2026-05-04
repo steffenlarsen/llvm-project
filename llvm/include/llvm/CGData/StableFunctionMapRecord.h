@@ -87,7 +87,9 @@ struct StableFunctionMapRecord {
   LLVM_ABI void deserializeYAML(yaml::Input &YIS);
 
   /// Finalize the stable function map by trimming content.
-  void finalize(bool SkipTrim = false) { FunctionMap->finalize(SkipTrim); }
+  void finalize(bool SkipTrim = false, const Module *M = nullptr) {
+    FunctionMap->finalize(SkipTrim, M);
+  }
 
   /// Merge the stable function map into this one.
   void merge(const StableFunctionMapRecord &Other) {

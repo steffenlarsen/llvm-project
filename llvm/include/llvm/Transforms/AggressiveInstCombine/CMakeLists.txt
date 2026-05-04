@@ -1,0 +1,4 @@
+
+set(LLVM_TARGET_DEFINITIONS AggressiveInstCombineOptions.td)
+tablegen(LLVM AggressiveInstCombineOptionsOptInfos.inc -gen-clv2-options)
+add_public_tablegen_target(AggressiveInstCombineOptionsTableGen)

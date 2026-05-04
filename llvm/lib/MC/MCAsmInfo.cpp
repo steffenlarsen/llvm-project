@@ -17,36 +17,27 @@
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
+#include "llvm/MC/MCOptionsOptInfos.h"
 #include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCTargetOptionsCommandFlags.h"
 #include "llvm/MC/MCValue.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
-namespace {
-enum DefaultOnOff { Default, Enable, Disable };
-}
-static cl::opt<DefaultOnOff> DwarfExtendedLoc(
-    "dwarf-extended-loc", cl::Hidden,
-    cl::desc("Disable emission of the extended flags in .loc directives."),
-    cl::values(clEnumVal(Default, "Default for platform"),
-               clEnumVal(Enable, "Enabled"), clEnumVal(Disable, "Disabled")),
-    cl::init(Default));
-
-namespace llvm {
-cl::opt<cl::boolOrDefault> UseLEB128Directives(
-    "use-leb128-directives", cl::Hidden,
-    cl::desc(
-        "Disable the usage of LEB128 directives, and generate .byte instead."),
-    cl::init(cl::boolOrDefault::BOU_UNSET));
-}
-
 MCAsmInfo::MCAsmInfo(const MCTargetOptions &Options) : TargetOptions(Options) {
-  if (DwarfExtendedLoc != Default)
-    SupportsExtendedDwarfLocDirective = DwarfExtendedLoc == Enable;
-  if (UseLEB128Directives != cl::boolOrDefault::BOU_UNSET)
-    HasLEB128Directives = UseLEB128Directives == cl::boolOrDefault::BOU_TRUE;
+  // The context is always present, so the former fallback to the mc:: legacy
+  // globals is unreachable and has been removed.
+  const auto &Ctx = Options.getOptsCtx();
+  auto Val = clv2::getOptValOrDefault<&clv2::MC_DwarfExtendedLoc>(Ctx);
+  if (Val != clv2::DefaultOnOff::Default)
+    SupportsExtendedDwarfLocDirective = (Val == clv2::DefaultOnOff::Enable);
+  if (clv2::wasOptSpecified<&clv2::MCOptsReg, &clv2::MC_UseLEB128Directives>(
+          Ctx))
+    HasLEB128Directives =
+        clv2::getOptValOr<&clv2::MCOptsReg, &clv2::MC_UseLEB128Directives>(
+            Ctx, false);
 }
 
 MCAsmInfo::~MCAsmInfo() = default;

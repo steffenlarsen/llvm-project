@@ -15,6 +15,7 @@
 #define LLVM_TRANSFORMS_SCALAR_H
 
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/SimplifyCFGOptions.h"
 #include <functional>
 
@@ -23,6 +24,9 @@ namespace llvm {
 class Function;
 class FunctionPass;
 class Pass;
+namespace clv2 {
+class OptionsContext;
+}
 
 //===----------------------------------------------------------------------===//
 //
@@ -94,6 +98,7 @@ LLVM_ABI FunctionPass *createReassociatePass();
 // simplify terminator instructions, convert switches to lookup tables, etc.
 //
 LLVM_ABI FunctionPass *createCFGSimplificationPass(
+    const clv2::OptionsContext &Ctx,
     SimplifyCFGOptions Options = SimplifyCFGOptions(),
     std::function<bool(const Function &)> Ftor = nullptr);
 

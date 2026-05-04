@@ -696,7 +696,7 @@ TEST(DataLayout, NonIntegralHelpers) {
       {2, true, true, false, 32},   {3, true, true, false, 64},
       {4, true, false, true, 64},
   };
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   for (const auto &Exp : ExpectedResults) {
     EXPECT_EQ(Exp.NonIntegral, DL.isNonIntegralAddressSpace(Exp.Addrspace));
     EXPECT_EQ(Exp.Unstable, DL.hasUnstableRepresentation(Exp.Addrspace));
@@ -725,7 +725,7 @@ TEST(DataLayoutTest, CopyAssignmentInvalidatesStructLayout) {
   DataLayout DL1 = cantFail(DataLayout::parse("p:32:32"));
   DataLayout DL2 = cantFail(DataLayout::parse("p:64:64"));
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   StructType *Ty = StructType::get(PointerType::getUnqual(Ctx));
 
   // Initialize struct layout caches.
@@ -775,7 +775,7 @@ TEST(DataLayoutTest, FunctionPtrAlign) {
 
 TEST(DataLayoutTest, ValueOrABITypeAlignment) {
   const DataLayout DL("Fi8");
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Type *const FourByteAlignType = Type::getInt32Ty(Context);
   EXPECT_EQ(Align(16),
             DL.getValueOrABITypeAlignment(MaybeAlign(16), FourByteAlignType));
@@ -790,7 +790,7 @@ TEST(DataLayoutTest, GlobalsAddressSpace) {
   EXPECT_EQ(DataLayout("G2").getDefaultGlobalsAddressSpace(), 2u);
   // Check that creating a GlobalVariable without an explicit address space
   // in a module with a default globals address space respects that default:
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M(new Module("MyModule", Context));
   // Default is globals in address space zero:
   auto *Int32 = Type::getInt32Ty(Context);
@@ -815,7 +815,7 @@ TEST(DataLayoutTest, GlobalsAddressSpace) {
 }
 
 TEST(DataLayoutTest, VectorAlign) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Type *const FloatTy = Type::getFloatTy(Context);
   Type *const V4F32 = FixedVectorType::get(FloatTy, 4);
   Type *const V8F32 = FixedVectorType::get(FloatTy, 8);

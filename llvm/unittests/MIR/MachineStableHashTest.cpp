@@ -25,7 +25,7 @@ public:
   MachineStableHashTest() = default;
 
 protected:
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   std::unique_ptr<MIRParser> MIR;
 

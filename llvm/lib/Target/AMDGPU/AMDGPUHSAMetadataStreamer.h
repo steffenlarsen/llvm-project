@@ -20,8 +20,14 @@
 #include "llvm/Support/AMDGPUMetadata.h"
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
+#include <cassert>
 
 namespace llvm {
+
+namespace clv2 {
+class OptionsContext;
+}
 
 class AMDGPUTargetMachine;
 class AMDGPUTargetStreamer;
@@ -44,6 +50,12 @@ class MetadataStreamer {
 public:
   virtual ~MetadataStreamer() = default;
 
+  void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
+  const clv2::OptionsContext &getOptionsContext() const {
+    assert(OptsCtx && "OptsCtx is set at construction and never cleared");
+    return *OptsCtx;
+  }
+
   virtual bool emitTo(AMDGPUTargetStreamer &TargetStreamer) = 0;
 
   virtual void begin(const Module &Mod, const TargetID &TargetID) = 0;
@@ -54,6 +66,8 @@ public:
                           const SIProgramInfo &ProgramInfo) = 0;
 
 protected:
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
+
   virtual void emitVersion() = 0;
   virtual void emitHiddenKernelArgs(const MachineFunction &MF, unsigned &Offset,
                                     msgpack::ArrayDocNode Args) = 0;

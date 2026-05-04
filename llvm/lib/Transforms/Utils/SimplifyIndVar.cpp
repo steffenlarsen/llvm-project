@@ -229,8 +229,13 @@ bool SimplifyIndvar::makeIVComparisonInvariant(ICmpInst *ICmp,
 
   // Do not generate something ridiculous.
   auto *PHTerm = Preheader->getTerminator();
-  if (Rewriter.isHighCostExpansion({InvariantLHS, InvariantRHS}, L,
-                                   2 * SCEVCheapExpansionBudget, TTI, PHTerm) ||
+  if (Rewriter.isHighCostExpansion(
+          {InvariantLHS, InvariantRHS}, L,
+          2 * getSCEVCheapExpansionBudget(L->getHeader()
+                                              ->getParent()
+                                              ->getContext()
+                                              .getOptionsContext()),
+          TTI, PHTerm) ||
       !Rewriter.isSafeToExpandAt(InvariantLHS, PHTerm) ||
       !Rewriter.isSafeToExpandAt(InvariantRHS, PHTerm))
     return false;
@@ -657,7 +662,11 @@ bool SimplifyIndvar::replaceIVUserWithLoopInvariant(Instruction *I) {
     return false;
 
   // Do not generate something ridiculous even if S is loop invariant.
-  if (Rewriter.isHighCostExpansion(S, L, SCEVCheapExpansionBudget, TTI, I))
+  if (Rewriter.isHighCostExpansion(
+          S, L,
+          getSCEVCheapExpansionBudget(
+              L->getHeader()->getParent()->getContext().getOptionsContext()),
+          TTI, I))
     return false;
 
   auto *IP = GetLoopInvariantInsertPosition(L, I);

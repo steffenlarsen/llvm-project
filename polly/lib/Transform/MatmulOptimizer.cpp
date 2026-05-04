@@ -8,7 +8,7 @@
 
 #include "polly/MatmulOptimizer.h"
 #include "polly/DependenceInfo.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScheduleTreeTransform.h"
 #include "polly/ScopInfo.h"
 #include "polly/Simplify.h"
@@ -25,7 +25,7 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/TypeSize.h"
 #include "llvm/Support/raw_ostream.h"
@@ -51,102 +51,27 @@ namespace llvm {
 class Value;
 }
 
-static cl::opt<int> LatencyVectorFma(
-    "polly-target-latency-vector-fma",
-    cl::desc("The minimal number of cycles between issuing two "
-             "dependent consecutive vector fused multiply-add "
-             "instructions."),
-    cl::Hidden, cl::init(8), cl::cat(PollyCategory));
-
-static cl::opt<int> ThroughputVectorFma(
-    "polly-target-throughput-vector-fma",
-    cl::desc("A throughput of the processor floating-point arithmetic units "
-             "expressed in the number of vector fused multiply-add "
-             "instructions per clock cycle."),
-    cl::Hidden, cl::init(1), cl::cat(PollyCategory));
-
-static cl::opt<int> FirstCacheLevelSize(
-    "polly-target-1st-cache-level-size",
-    cl::desc("The size of the first cache level specified in bytes."),
-    cl::Hidden, cl::init(-1), cl::cat(PollyCategory));
-
-static cl::opt<int> FirstCacheLevelDefaultSize(
-    "polly-target-1st-cache-level-default-size",
-    cl::desc("The default size of the first cache level specified in bytes"
-             " (if not enough were provided by the TargetTransformInfo)."),
-    cl::Hidden, cl::init(32768), cl::cat(PollyCategory));
-
-static cl::opt<int> SecondCacheLevelSize(
-    "polly-target-2nd-cache-level-size",
-    cl::desc("The size of the second level specified in bytes."), cl::Hidden,
-    cl::init(-1), cl::cat(PollyCategory));
-
-static cl::opt<int> SecondCacheLevelDefaultSize(
-    "polly-target-2nd-cache-level-default-size",
-    cl::desc("The default size of the second cache level specified in bytes"
-             " (if not enough were provided by the TargetTransformInfo)."),
-    cl::Hidden, cl::init(262144), cl::cat(PollyCategory));
-
-// This option, along with --polly-target-2nd-cache-level-associativity,
-// --polly-target-1st-cache-level-size, and --polly-target-2st-cache-level-size
-// represent the parameters of the target cache, which do not have typical
-// values that can be used by default. However, to apply the pattern matching
-// optimizations, we use the values of the parameters of Intel Core i7-3820
-// SandyBridge in case the parameters are not specified or not provided by the
-// TargetTransformInfo.
-static cl::opt<int> FirstCacheLevelAssociativity(
-    "polly-target-1st-cache-level-associativity",
-    cl::desc("The associativity of the first cache level."), cl::Hidden,
-    cl::init(-1), cl::cat(PollyCategory));
-
-static cl::opt<int> FirstCacheLevelDefaultAssociativity(
-    "polly-target-1st-cache-level-default-associativity",
-    cl::desc("The default associativity of the first cache level"
-             " (if not enough were provided by the TargetTransformInfo)."),
-    cl::Hidden, cl::init(8), cl::cat(PollyCategory));
-
-static cl::opt<int> SecondCacheLevelAssociativity(
-    "polly-target-2nd-cache-level-associativity",
-    cl::desc("The associativity of the second cache level."), cl::Hidden,
-    cl::init(-1), cl::cat(PollyCategory));
-
-static cl::opt<int> SecondCacheLevelDefaultAssociativity(
-    "polly-target-2nd-cache-level-default-associativity",
-    cl::desc("The default associativity of the second cache level"
-             " (if not enough were provided by the TargetTransformInfo)."),
-    cl::Hidden, cl::init(8), cl::cat(PollyCategory));
-
-static cl::opt<int> VectorRegisterBitwidth(
-    "polly-target-vector-register-bitwidth",
-    cl::desc("The size in bits of a vector register (if not set, this "
-             "information is taken from LLVM's target information."),
-    cl::Hidden, cl::init(-1), cl::cat(PollyCategory));
-
-static cl::opt<int> PollyPatternMatchingNcQuotient(
-    "polly-pattern-matching-nc-quotient",
-    cl::desc("Quotient that is obtained by dividing Nc, the parameter of the"
-             "macro-kernel, by Nr, the parameter of the micro-kernel"),
-    cl::Hidden, cl::init(256), cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    PMBasedTCOpts("polly-tc-opt",
-                  cl::desc("Perform optimizations of tensor contractions based "
-                           "on pattern matching"),
-                  cl::init(false), cl::ZeroOrMore, cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    PMBasedMMMOpts("polly-matmul-opt",
-                   cl::desc("Perform optimizations of matrix multiplications "
-                            "based on pattern matching"),
-                   cl::init(true), cl::ZeroOrMore, cl::cat(PollyCategory));
-
-static cl::opt<int> OptComputeOut(
-    "polly-tc-dependences-computeout",
-    cl::desc("Bound the dependence analysis by a maximal amount of "
-             "computational steps (0 means no bound)"),
-    cl::Hidden, cl::init(500000), cl::ZeroOrMore, cl::cat(PollyCategory));
-
 namespace {
+
+/// Resolved option values for the matmul optimizer, read from OptionsContext.
+struct MatmulOptsTy {
+  int LatencyVectorFma = 8;
+  int ThroughputVectorFma = 1;
+  int FirstCacheLevelSize = -1;
+  int FirstCacheLevelDefaultSize = 32768;
+  int SecondCacheLevelSize = -1;
+  int SecondCacheLevelDefaultSize = 262144;
+  int FirstCacheLevelAssociativity = -1;
+  int FirstCacheLevelDefaultAssociativity = 8;
+  int SecondCacheLevelAssociativity = -1;
+  int SecondCacheLevelDefaultAssociativity = 8;
+  int VectorRegisterBitwidth = -1;
+  int PollyPatternMatchingNcQuotient = 256;
+  bool PMBasedTCOpts = false;
+  bool PMBasedMMMOpts = true;
+  int OptComputeOut = 500000;
+};
+
 /// Parameters of the micro kernel.
 ///
 /// Parameters, which determine sizes of rank-1 (i.e., outer product) update
@@ -634,12 +559,13 @@ static uint64_t getMatMulTypeSize(const MatMulInfoTy &MMI) {
 /// @return The structure of type MicroKernelParamsTy.
 /// @see MicroKernelParamsTy
 static MicroKernelParamsTy getMicroKernelParams(const TargetTransformInfo *TTI,
-                                                const MatMulInfoTy &MMI) {
+                                                const MatMulInfoTy &MMI,
+                                                const MatmulOptsTy &Opts) {
   assert(TTI && "The target transform info should be provided.");
 
   // Nvec - Number of double-precision floating-point numbers that can be hold
   // by a vector register. Use 2 by default.
-  long RegisterBitwidth = VectorRegisterBitwidth;
+  long RegisterBitwidth = Opts.VectorRegisterBitwidth;
 
   if (RegisterBitwidth == -1)
     RegisterBitwidth =
@@ -650,46 +576,52 @@ static MicroKernelParamsTy getMicroKernelParams(const TargetTransformInfo *TTI,
   auto Nvec = RegisterBitwidth / ElementSize;
   if (Nvec == 0)
     Nvec = 2;
-  int Nr = ceil(sqrt((double)(Nvec * LatencyVectorFma * ThroughputVectorFma)) /
+  int Nr = ceil(sqrt((double)(Nvec * Opts.LatencyVectorFma *
+                              Opts.ThroughputVectorFma)) /
                 Nvec) *
            Nvec;
-  int Mr = ceil((double)(Nvec * LatencyVectorFma * ThroughputVectorFma / Nr));
+  int Mr = ceil(
+      (double)(Nvec * Opts.LatencyVectorFma * Opts.ThroughputVectorFma / Nr));
   return {Mr, Nr};
 }
 
 /// Determine parameters of the target cache.
 ///
-/// @param TTI Target Transform Info.
-static void getTargetCacheParameters(const llvm::TargetTransformInfo *TTI) {
+/// @param TTI  Target Transform Info.
+/// @param Opts Resolved option values (cache fields updated in-place).
+static void getTargetCacheParameters(const llvm::TargetTransformInfo *TTI,
+                                     MatmulOptsTy &Opts) {
   auto L1DCache = llvm::TargetTransformInfo::CacheLevel::L1D;
   auto L2DCache = llvm::TargetTransformInfo::CacheLevel::L2D;
-  if (FirstCacheLevelSize == -1) {
+  if (Opts.FirstCacheLevelSize == -1) {
     if (TTI->getCacheSize(L1DCache))
-      FirstCacheLevelSize = TTI->getCacheSize(L1DCache).value();
+      Opts.FirstCacheLevelSize = TTI->getCacheSize(L1DCache).value();
     else
-      FirstCacheLevelSize = static_cast<int>(FirstCacheLevelDefaultSize);
+      Opts.FirstCacheLevelSize =
+          static_cast<int>(Opts.FirstCacheLevelDefaultSize);
   }
-  if (SecondCacheLevelSize == -1) {
+  if (Opts.SecondCacheLevelSize == -1) {
     if (TTI->getCacheSize(L2DCache))
-      SecondCacheLevelSize = TTI->getCacheSize(L2DCache).value();
+      Opts.SecondCacheLevelSize = TTI->getCacheSize(L2DCache).value();
     else
-      SecondCacheLevelSize = static_cast<int>(SecondCacheLevelDefaultSize);
+      Opts.SecondCacheLevelSize =
+          static_cast<int>(Opts.SecondCacheLevelDefaultSize);
   }
-  if (FirstCacheLevelAssociativity == -1) {
+  if (Opts.FirstCacheLevelAssociativity == -1) {
     if (TTI->getCacheAssociativity(L1DCache))
-      FirstCacheLevelAssociativity =
+      Opts.FirstCacheLevelAssociativity =
           TTI->getCacheAssociativity(L1DCache).value();
     else
-      FirstCacheLevelAssociativity =
-          static_cast<int>(FirstCacheLevelDefaultAssociativity);
+      Opts.FirstCacheLevelAssociativity =
+          static_cast<int>(Opts.FirstCacheLevelDefaultAssociativity);
   }
-  if (SecondCacheLevelAssociativity == -1) {
+  if (Opts.SecondCacheLevelAssociativity == -1) {
     if (TTI->getCacheAssociativity(L2DCache))
-      SecondCacheLevelAssociativity =
+      Opts.SecondCacheLevelAssociativity =
           TTI->getCacheAssociativity(L2DCache).value();
     else
-      SecondCacheLevelAssociativity =
-          static_cast<int>(SecondCacheLevelDefaultAssociativity);
+      Opts.SecondCacheLevelAssociativity =
+          static_cast<int>(Opts.SecondCacheLevelDefaultAssociativity);
   }
 }
 
@@ -711,22 +643,23 @@ static void getTargetCacheParameters(const llvm::TargetTransformInfo *TTI) {
 static MacroKernelParamsTy
 getMacroKernelParams(const llvm::TargetTransformInfo *TTI,
                      const MicroKernelParamsTy &MicroKernelParams,
-                     const MatMulInfoTy &MMI) {
-  getTargetCacheParameters(TTI);
+                     const MatMulInfoTy &MMI, MatmulOptsTy &Opts) {
+  getTargetCacheParameters(TTI, Opts);
   // According to www.cs.utexas.edu/users/flame/pubs/TOMS-BLIS-Analytical.pdf,
   // it requires information about the first two levels of a cache to determine
   // all the parameters of a macro-kernel. It also checks that an associativity
   // degree of a cache level is greater than two. Otherwise, another algorithm
   // for determination of the parameters should be used.
   if (!(MicroKernelParams.Mr > 0 && MicroKernelParams.Nr > 0 &&
-        FirstCacheLevelSize > 0 && SecondCacheLevelSize > 0 &&
-        FirstCacheLevelAssociativity > 2 && SecondCacheLevelAssociativity > 2))
+        Opts.FirstCacheLevelSize > 0 && Opts.SecondCacheLevelSize > 0 &&
+        Opts.FirstCacheLevelAssociativity > 2 &&
+        Opts.SecondCacheLevelAssociativity > 2))
     return {1, 1, 1};
   // The quotient should be greater than zero.
-  if (PollyPatternMatchingNcQuotient <= 0)
+  if (Opts.PollyPatternMatchingNcQuotient <= 0)
     return {1, 1, 1};
   int Car = floor(
-      (FirstCacheLevelAssociativity - 1) /
+      (Opts.FirstCacheLevelAssociativity - 1) /
       (1 + static_cast<double>(MicroKernelParams.Nr) / MicroKernelParams.Mr));
 
   // Car can be computed to be zero since it is floor to int.
@@ -739,13 +672,14 @@ getMacroKernelParams(const llvm::TargetTransformInfo *TTI,
   auto ElementSize = getMatMulAlignTypeSize(MMI);
   assert(ElementSize > 0 && "The element size of the matrix multiplication "
                             "operands should be greater than zero.");
-  int Kc = (Car * FirstCacheLevelSize) /
-           (MicroKernelParams.Mr * FirstCacheLevelAssociativity * ElementSize);
-  double Cac =
-      static_cast<double>(Kc * ElementSize * SecondCacheLevelAssociativity) /
-      SecondCacheLevelSize;
-  int Mc = floor((SecondCacheLevelAssociativity - 2) / Cac);
-  int Nc = PollyPatternMatchingNcQuotient * MicroKernelParams.Nr;
+  int Kc =
+      (Car * Opts.FirstCacheLevelSize) /
+      (MicroKernelParams.Mr * Opts.FirstCacheLevelAssociativity * ElementSize);
+  double Cac = static_cast<double>(Kc * ElementSize *
+                                   Opts.SecondCacheLevelAssociativity) /
+               Opts.SecondCacheLevelSize;
+  int Mc = floor((Opts.SecondCacheLevelAssociativity - 2) / Cac);
+  int Nc = Opts.PollyPatternMatchingNcQuotient * MicroKernelParams.Nr;
 
   assert(Mc > 0 && Nc > 0 && Kc > 0 &&
          "Matrix block sizes should be  greater than zero");
@@ -1050,7 +984,8 @@ getBandNodeWithOriginDimOrder(isl::schedule_node Node) {
 
 static isl::schedule_node optimizeMatMulPattern(isl::schedule_node Node,
                                                 const TargetTransformInfo *TTI,
-                                                MatMulInfoTy &MMI) {
+                                                MatMulInfoTy &MMI,
+                                                MatmulOptsTy &Opts) {
   assert(TTI && "The target transform info should be provided.");
   int DimOutNum = isl_schedule_node_band_n_member(Node.get());
   assert(DimOutNum > 2 && "In case of the matrix multiplication the loop nest "
@@ -1063,8 +998,9 @@ static isl::schedule_node optimizeMatMulPattern(isl::schedule_node Node,
   Node = permuteBandNodeDimensions(Node, NewJ, DimOutNum - 2);
   NewK = NewK == DimOutNum - 2 ? NewJ : NewK;
   Node = permuteBandNodeDimensions(Node, NewK, DimOutNum - 1);
-  auto MicroKernelParams = getMicroKernelParams(TTI, MMI);
-  auto MacroKernelParams = getMacroKernelParams(TTI, MicroKernelParams, MMI);
+  auto MicroKernelParams = getMicroKernelParams(TTI, MMI, Opts);
+  auto MacroKernelParams =
+      getMacroKernelParams(TTI, MicroKernelParams, MMI, Opts);
   Node = createMacroKernel(Node, MacroKernelParams);
   Node = createMicroKernel(Node, MicroKernelParams);
   if (MacroKernelParams.Mc == 1 || MacroKernelParams.Nc == 1 ||
@@ -1597,8 +1533,9 @@ static bool areDepsOverCompleteDomain(isl::set Domain, isl::map DepsForStmt,
 /// @return True if dependencies correspond to the tensor contraction
 ///         and false, otherwise.
 static bool containsOnlyTcDeps(isl::map Schedule, const Dependences *D,
-                               SmallDenseSet<int> &IndexSet, isl::set Domain) {
-  IslMaxOperationsGuard MaxOpGuard(Schedule.ctx().get(), OptComputeOut);
+                               SmallDenseSet<int> &IndexSet, isl::set Domain,
+                               const MatmulOptsTy &Opts) {
+  IslMaxOperationsGuard MaxOpGuard(Schedule.ctx().get(), Opts.OptComputeOut);
 
   isl::union_map Dep =
       D->getDependences(Dependences::TYPE_RAW | Dependences::TYPE_RED);
@@ -1664,8 +1601,9 @@ static bool containsOnlyTcDeps(isl::map Schedule, const Dependences *D,
 /// @return True if dependencies and memory accesses correspond to the tensor
 ///              contraction and false, otherwise.
 static bool containsTCInfoTy(isl::map PartialSchedule, const Dependences *D,
-                             TCInfoTy &TCI, isl::set Domain) {
-  if (!containsOnlyTcDeps(PartialSchedule, D, TCI.P, Domain))
+                             TCInfoTy &TCI, isl::set Domain,
+                             const MatmulOptsTy &Opts) {
+  if (!containsOnlyTcDeps(PartialSchedule, D, TCI.P, Domain, Opts))
     return false;
 
   // TODO: handle cases of scalar multiplication if needed.
@@ -1738,7 +1676,7 @@ static bool containsTCInfoTy(isl::map PartialSchedule, const Dependences *D,
 /// @param D    The SCoP dependencies.
 /// @param TCI  Parameters of the tensor contraction operands.
 static bool isTCPattern(isl::schedule_node Node, const Dependences *D,
-                        TCInfoTy &TCI) {
+                        TCInfoTy &TCI, const MatmulOptsTy &Opts) {
   Node = Node.child(0);
   isl::union_map PartialSchedule = Node.get_prefix_schedule_union_map();
   isl::union_set Domain = Node.domain();
@@ -1811,7 +1749,7 @@ static bool isTCPattern(isl::schedule_node Node, const Dependences *D,
   }
 
   isl::map PartialScheduleMap = isl::map::from_union_map(PartialSchedule);
-  if (containsTCInfoTy(PartialScheduleMap, D, TCI, isl::set(Domain)))
+  if (containsTCInfoTy(PartialScheduleMap, D, TCI, isl::set(Domain), Opts))
     return true;
 
   return false;
@@ -1819,17 +1757,53 @@ static bool isTCPattern(isl::schedule_node Node, const Dependences *D,
 
 } // namespace
 
-isl::schedule_node
-polly::tryOptimizeMatMulPattern(isl::schedule_node Node,
-                                const llvm::TargetTransformInfo *TTI,
-                                const Dependences *D) {
+isl::schedule_node polly::tryOptimizeMatMulPattern(
+    isl::schedule_node Node, const llvm::TargetTransformInfo *TTI,
+    const Dependences *D, const llvm::clv2::OptionsContext &Ctx) {
+  auto *PollyOpts = polly_opts::getPollyOpts(Ctx);
+
+  // Build resolved option values from OptionsContext, falling back to defaults.
+  MatmulOptsTy Opts;
+  if (PollyOpts) {
+    Opts.LatencyVectorFma =
+        PollyOpts->get<&llvm::clv2::POLLY_TargetLatencyVectorFma>();
+    Opts.ThroughputVectorFma =
+        PollyOpts->get<&llvm::clv2::POLLY_TargetThroughputVectorFma>();
+    Opts.FirstCacheLevelSize =
+        PollyOpts->get<&llvm::clv2::POLLY_Target1stCacheLevelSize>();
+    Opts.FirstCacheLevelDefaultSize =
+        PollyOpts->get<&llvm::clv2::POLLY_Target1stCacheLevelDefaultSize>();
+    Opts.SecondCacheLevelSize =
+        PollyOpts->get<&llvm::clv2::POLLY_Target2ndCacheLevelSize>();
+    Opts.SecondCacheLevelDefaultSize =
+        PollyOpts->get<&llvm::clv2::POLLY_Target2ndCacheLevelDefaultSize>();
+    Opts.FirstCacheLevelAssociativity =
+        PollyOpts->get<&llvm::clv2::POLLY_Target1stCacheLevelAssociativity>();
+    Opts.FirstCacheLevelDefaultAssociativity =
+        PollyOpts
+            ->get<&llvm::clv2::POLLY_Target1stCacheLevelDefaultAssociativity>();
+    Opts.SecondCacheLevelAssociativity =
+        PollyOpts->get<&llvm::clv2::POLLY_Target2ndCacheLevelAssociativity>();
+    Opts.SecondCacheLevelDefaultAssociativity =
+        PollyOpts
+            ->get<&llvm::clv2::POLLY_Target2ndCacheLevelDefaultAssociativity>();
+    Opts.VectorRegisterBitwidth =
+        PollyOpts->get<&llvm::clv2::POLLY_TargetVectorRegisterBitwidth>();
+    Opts.PollyPatternMatchingNcQuotient =
+        PollyOpts->get<&llvm::clv2::POLLY_PatternMatchingNcQuotient>();
+    Opts.PMBasedTCOpts = PollyOpts->get<&llvm::clv2::POLLY_TcOpt>();
+    Opts.PMBasedMMMOpts = PollyOpts->get<&llvm::clv2::POLLY_MatmulOpt>();
+    Opts.OptComputeOut =
+        PollyOpts->get<&llvm::clv2::POLLY_TcDependencesComputeout>();
+  }
+
   TCInfoTy TCI;
-  if (PMBasedTCOpts && isTCPattern(Node, D, TCI))
+  if (Opts.PMBasedTCOpts && isTCPattern(Node, D, TCI, Opts))
     POLLY_DEBUG(dbgs() << "The tensor contraction pattern was detected\n");
   MatMulInfoTy MMI;
-  if (PMBasedMMMOpts && isMatrMultPattern(Node, D, MMI)) {
+  if (Opts.PMBasedMMMOpts && isMatrMultPattern(Node, D, MMI)) {
     POLLY_DEBUG(dbgs() << "The matrix multiplication pattern was detected\n");
-    return optimizeMatMulPattern(Node, TTI, MMI);
+    return optimizeMatMulPattern(Node, TTI, MMI, Opts);
   }
   return {};
 }

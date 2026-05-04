@@ -21,24 +21,25 @@
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/ProfDataUtils.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "loop-versioning"
 
-static cl::opt<bool>
-    AnnotateNoAlias("loop-version-annotate-no-alias", cl::init(true),
-                    cl::Hidden,
-                    cl::desc("Add no-alias annotation for instructions that "
-                             "are disambiguated by memchecks"));
+static bool getAnnotateNoAlias(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_AnnotateNoAlias>(
+      F.getContext().getOptionsContext());
+}
 
 LoopVersioning::LoopVersioning(const LoopAccessInfo &LAI,
                                ArrayRef<RuntimePointerCheck> Checks, Loop *L,
@@ -221,7 +222,7 @@ void LoopVersioning::prepareNoAliasMetadata() {
 }
 
 void LoopVersioning::annotateLoopWithNoAlias() {
-  if (!AnnotateNoAlias)
+  if (!getAnnotateNoAlias(*VersionedLoop->getHeader()->getParent()))
     return;
 
   // First prepare the maps.
@@ -235,7 +236,7 @@ void LoopVersioning::annotateLoopWithNoAlias() {
 
 std::pair<MDNode *, MDNode *>
 LoopVersioning::getNoAliasMetadataFor(const Instruction *OrigInst) const {
-  if (!AnnotateNoAlias)
+  if (!getAnnotateNoAlias(*VersionedLoop->getHeader()->getParent()))
     return {nullptr, nullptr};
 
   LLVMContext &Context = VersionedLoop->getHeader()->getContext();

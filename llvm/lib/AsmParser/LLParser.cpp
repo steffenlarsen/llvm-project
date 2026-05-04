@@ -45,10 +45,12 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/ValueSymbolTable.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/ModRef.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -59,11 +61,23 @@
 
 using namespace llvm;
 
-static cl::opt<bool> AllowIncompleteIR(
-    "allow-incomplete-ir", cl::init(false), cl::Hidden,
-    cl::desc(
-        "Allow incomplete IR on a best effort basis (references to unknown "
-        "metadata will be dropped)"));
+// Bare global — kept for tools (e.g. llvm-as) that use the setter rather
+// than registering AsmParserOptsReg.  LLParser reads prefer OptionsContext.
+static bool AllowIncompleteIRParsing = false;
+
+bool llvm::getAllowIncompleteIRParsing() { return AllowIncompleteIRParsing; }
+void llvm::setAllowIncompleteIRParsing(bool Value) {
+  AllowIncompleteIRParsing = Value;
+}
+
+#include "llvm/AsmParser/AsmParserOptionsOptInfos.h"
+
+/// Return whether incomplete IR parsing is enabled, preferring the
+/// OptionsContext value and falling back to the legacy global.
+static bool allowIncompleteIR(LLVMContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::ASM_AllowIncompleteIR>(
+      Ctx.getOptionsContext());
+}
 
 static std::string getTypeString(Type *T) {
   std::string Result;
@@ -414,7 +428,7 @@ bool LLParser::validateEndOfModule(bool UpgradeDebugInfo) {
                  "use of undefined comdat '$" +
                      ForwardRefComdats.begin()->first + "'");
 
-  if (AllowIncompleteIR && !ForwardRefMDNodes.empty())
+  if (allowIncompleteIR(Context) && !ForwardRefMDNodes.empty())
     dropUnknownMetadataReferences();
 
   if (!ForwardRefMDNodes.empty())
@@ -486,7 +500,7 @@ bool LLParser::validateEndOfModule(bool UpgradeDebugInfo) {
 
     // If incomplete IR is allowed, also add declarations for
     // non-intrinsics.
-    if (!AllowIncompleteIR)
+    if (!allowIncompleteIR(Context))
       continue;
 
     auto GetCommonFunctionType = [](Value *V) -> FunctionType * {
@@ -529,6 +543,14 @@ bool LLParser::validateEndOfModule(bool UpgradeDebugInfo) {
                  "use of undefined value '@" +
                      Twine(ForwardRefValIDs.begin()->first) + "'");
 
+  if (allowIncompleteIR(Context) && !ForwardRefMDNodes.empty())
+    dropUnknownMetadataReferences();
+
+  if (!ForwardRefMDNodes.empty())
+    return error(ForwardRefMDNodes.begin()->second.second,
+                 "use of undefined metadata '!" +
+                     Twine(ForwardRefMDNodes.begin()->first) + "'");
+
   // Resolve metadata cycles.
   for (auto &N : NumberedMetadata) {
     if (N.second && !N.second->isResolved())
@@ -541,7 +563,7 @@ bool LLParser::validateEndOfModule(bool UpgradeDebugInfo) {
   for (auto *Inst : InstsWithTBAATag) {
     MDNode *MD = Inst->getMetadata(LLVMContext::MD_tbaa);
     // With incomplete IR, the tbaa metadata may have been dropped.
-    if (!AllowIncompleteIR)
+    if (!allowIncompleteIR(Context))
       assert(MD && "UpgradeInstWithTBAATag should have a TBAA tag");
     if (MD) {
       auto *UpgradedMD = UpgradeTBAANode(*MD);

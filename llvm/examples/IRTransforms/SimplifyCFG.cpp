@@ -39,20 +39,35 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Plugins/PassPlugin.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 
 using namespace llvm;
 using namespace PatternMatch;
 
 enum TutorialVersion { V1, V2, V3 };
-static cl::opt<TutorialVersion>
-    Version("tut-simplifycfg-version", cl::desc("Select tutorial version"),
-            cl::Hidden, cl::ValueOptional, cl::init(V1),
-            cl::values(clEnumValN(V1, "v1", "version 1"),
-                       clEnumValN(V2, "v2", "version 2"),
-                       clEnumValN(V3, "v3", "version 3"),
-                       // Sentinel value for unspecified option.
-                       clEnumValN(V3, "", "")));
+
+static constexpr clv2::EnumVal<TutorialVersion> VersionVals[] = {
+    {"v1", V1, "version 1"},
+    {"v2", V2, "version 2"},
+    {"v3", V3, "version 3"},
+    {"", V3, ""}};
+static constexpr auto VersionOpt = clv2::makeEnumOption<TutorialVersion>(
+    "tut-simplifycfg-version", "Select tutorial version", VersionVals,
+    clv2::Init{V1}, clv2::Hidden, clv2::ValueOptional);
+
+static constexpr clv2::OptionsRegistry<&VersionOpt> SimplifyCFGReg;
+
+// Read from the LLVMContext owning the IR rather than a global, so concurrent
+// in-process jobs can select different tutorial versions.
+static TutorialVersion getVersion(const LLVMContext &Ctx) {
+  return clv2::getOptValOr<&SimplifyCFGReg, &VersionOpt>(
+      Ctx.getOptionsContext(), V1);
+}
+
+static const int RegisterOpts = [] {
+  clv2::registerDynamicRegistry<&SimplifyCFGReg>();
+  return 0;
+}();
 
 #define DEBUG_TYPE "tut-simplifycfg"
 
@@ -370,7 +385,7 @@ static bool doSimplify_v3(Function &F, DominatorTree &DT) {
 namespace {
 struct SimplifyCFGPass : public OptionalPassInfoMixin<SimplifyCFGPass> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
-    switch (Version) {
+    switch (getVersion(F.getContext())) {
     case V1:
       doSimplify_v1(F);
       break;

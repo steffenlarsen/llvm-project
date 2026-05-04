@@ -9,11 +9,17 @@
 #ifndef BOLT_PASSES_CALLGRAPHWALKER_H
 #define BOLT_PASSES_CALLGRAPHWALKER_H
 
+#include "llvm/Support/OptionsContext.h"
 #include <deque>
 #include <functional>
 #include <vector>
 
 namespace llvm {
+
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
+
 namespace bolt {
 class BinaryFunction;
 class BinaryFunctionCallGraph;
@@ -23,6 +29,9 @@ class BinaryFunctionCallGraph;
 /// re-visit functions until their observed property converges.
 class CallGraphWalker {
   BinaryFunctionCallGraph &CG;
+
+  /// Options context for context-aware option reads.
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
 
   /// DFS or reverse post-ordering of the call graph nodes to allow us to
   /// traverse the call graph bottom-up
@@ -37,7 +46,9 @@ class CallGraphWalker {
 
 public:
   /// Initialize core context references but don't do anything yet
-  CallGraphWalker(BinaryFunctionCallGraph &CG) : CG(CG) {}
+  CallGraphWalker(BinaryFunctionCallGraph &CG,
+                  const clv2::OptionsContext &OptsCtx)
+      : CG(CG), OptsCtx(&OptsCtx) {}
 
   /// Register a new callback function to be called for each function when
   /// traversing the call graph bottom-up. Function should return true iff

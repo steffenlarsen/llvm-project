@@ -30,9 +30,9 @@
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -41,16 +41,6 @@ using LLVMSymbolizer = llvm::symbolize::LLVMSymbolizer;
 
 namespace llvm {
 namespace cfi_verify {
-
-bool IgnoreDWARFFlag;
-
-static cl::opt<bool, true> IgnoreDWARFArg(
-    "ignore-dwarf",
-    cl::desc(
-        "Ignore all DWARF data. This relaxes the requirements for all "
-        "statically linked libraries to have been compiled with '-g', but "
-        "will result in false positives for 'CFI unprotected' instructions."),
-    cl::location(IgnoreDWARFFlag), cl::init(false));
 
 StringRef stringCFIProtectionStatus(CFIProtectionStatus Status) {
   switch (Status) {
@@ -70,7 +60,8 @@ StringRef stringCFIProtectionStatus(CFIProtectionStatus Status) {
   llvm_unreachable("Attempted to stringify an unknown enum value.");
 }
 
-Expected<FileAnalysis> FileAnalysis::Create(StringRef Filename) {
+Expected<FileAnalysis> FileAnalysis::Create(StringRef Filename,
+                                            bool IgnoreDWARF) {
   // Open the filename provided.
   Expected<object::OwningBinary<object::Binary>> BinaryOrErr =
       object::createBinary(Filename);
@@ -80,6 +71,7 @@ Expected<FileAnalysis> FileAnalysis::Create(StringRef Filename) {
   // Construct the object and allow it to take ownership of the binary.
   object::OwningBinary<object::Binary> Binary = std::move(BinaryOrErr.get());
   FileAnalysis Analysis(std::move(Binary));
+  Analysis.IgnoreDWARF = IgnoreDWARF;
 
   Analysis.Object = dyn_cast<object::ObjectFile>(Analysis.Binary.getBinary());
   if (!Analysis.Object)
@@ -403,7 +395,8 @@ Error FileAnalysis::initialiseDisassemblyMembers() {
     return make_error<UnsupportedDisassembly>("Failed to initialise AsmInfo.");
 
   SubtargetInfo.reset(ObjectTarget->createMCSubtargetInfo(
-      TheTriple, MCPU, Features.getString()));
+      TheTriple, MCPU, Features.getString(),
+      /*Ctx=*/llvm::clv2::defaultOptionsContext()));
   if (!SubtargetInfo)
     return make_error<UnsupportedDisassembly>(
         "Failed to initialise SubtargetInfo.");
@@ -432,7 +425,7 @@ Error FileAnalysis::initialiseDisassemblyMembers() {
 }
 
 Error FileAnalysis::parseCodeSections() {
-  if (!IgnoreDWARFFlag) {
+  if (!IgnoreDWARF) {
     std::unique_ptr<DWARFContext> DWARF = DWARFContext::create(*Object);
     if (!DWARF)
       return make_error<StringError>("Could not create DWARF information.",
@@ -523,7 +516,7 @@ void FileAnalysis::parseSectionContents(ArrayRef<uint8_t> SectionBytes,
       continue;
 
     // Check if this instruction exists in the range of the DWARF metadata.
-    if (!IgnoreDWARFFlag) {
+    if (!IgnoreDWARF) {
       auto LineInfo = Symbolizer->symbolizeCode(
           Object->getFileName(), {VMAddress, Address.SectionIndex});
       if (!LineInfo) {

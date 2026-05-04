@@ -12,11 +12,18 @@
 #include "ClangTidyDiagnosticConsumer.h"
 #include "ClangTidyOptions.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/Support/OptionsContext.h"
 #include <memory>
 #include <vector>
 
 namespace llvm {
 class raw_ostream;
+} // namespace llvm
+
+namespace llvm {
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
 } // namespace llvm
 
 namespace clang {
@@ -95,8 +102,9 @@ runClangTidy(ClangTidyContext &Context,
              const tooling::CompilationDatabase &Compilations,
              ArrayRef<std::string> InputFiles,
              llvm::IntrusiveRefCntPtr<llvm::vfs::OverlayFileSystem> BaseFS,
-             bool ApplyAnyFix, bool EnableCheckProfile = false,
-             StringRef StoreCheckProfile = {}, bool Quiet = false);
+             bool ApplyAnyFix, const llvm::clv2::OptionsContext &OptionsCtx,
+             bool EnableCheckProfile = false, StringRef StoreCheckProfile = {},
+             bool Quiet = false);
 
 /// Controls what kind of fixes clang-tidy is allowed to apply.
 enum FixBehaviour {

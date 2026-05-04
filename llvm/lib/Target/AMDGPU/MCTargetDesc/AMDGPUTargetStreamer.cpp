@@ -29,9 +29,10 @@
 #include "llvm/Support/AMDGPUMetadata.h"
 #include "llvm/Support/AMDGPUObjLinkingInfo.h"
 #include "llvm/Support/AMDHSAKernelDescriptor.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FormattedStream.h"
-#include "llvm/TargetParser/AMDGPUTargetParser.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/TargetParser/TargetParser.h"
 
 using namespace llvm;
 using namespace llvm::AMDGPU;
@@ -40,11 +41,9 @@ using namespace llvm::AMDGPU;
 // AMDGPUTargetStreamer
 //===----------------------------------------------------------------------===//
 
-static cl::opt<unsigned>
-    ForceGenericVersion("amdgpu-force-generic-version",
-                        cl::desc("Force a specific generic_v<N> flag to be "
-                                 "added. For testing purposes only."),
-                        cl::ReallyHidden, cl::init(0));
+static unsigned getForceGenericVersion(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_ForceGenericVersion>(Ctx);
+}
 
 void AMDGPUTargetStreamer::initializeTargetID(const MCSubtargetInfo &STI,
                                               bool ApplyFeatureString) {
@@ -970,7 +969,7 @@ unsigned AMDGPUTargetELFStreamer::getEFlagsV4() {
 unsigned AMDGPUTargetELFStreamer::getEFlagsV6() {
   unsigned Flags = getEFlagsV4();
 
-  unsigned Version = ForceGenericVersion;
+  unsigned Version = getForceGenericVersion(getContext().getOptionsContext());
   if (!Version) {
     switch (parseArchAMDGCN(STI.getCPU())) {
     case AMDGPU::GK_GFX9_GENERIC:

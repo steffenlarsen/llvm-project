@@ -17,18 +17,18 @@
 #include "MipsTargetMachine.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/Function.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "mips-lower"
 
-static cl::opt<bool> DontExpandCondPseudos16(
-  "mips16-dont-expand-cond-pseudo",
-  cl::init(false),
-  cl::desc("Don't expand conditional move related "
-           "pseudos for Mips 16"),
-  cl::Hidden);
+static bool getDontExpandCondPseudos16(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::MIPS_DontExpandCondPseudos16>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 struct Mips16IntrinsicHelperType{
@@ -450,7 +450,7 @@ getOpndList(SmallVectorImpl<SDValue> &Ops,
 MachineBasicBlock *
 Mips16TargetLowering::emitSel16(unsigned Opc, MachineInstr &MI,
                                 MachineBasicBlock *BB) const {
-  if (DontExpandCondPseudos16)
+  if (getDontExpandCondPseudos16(BB->getParent()->getFunction()))
     return BB;
   const TargetInstrInfo *TII = Subtarget.getInstrInfo();
   DebugLoc DL = MI.getDebugLoc();
@@ -513,7 +513,7 @@ Mips16TargetLowering::emitSel16(unsigned Opc, MachineInstr &MI,
 MachineBasicBlock *
 Mips16TargetLowering::emitSelT16(unsigned Opc1, unsigned Opc2, MachineInstr &MI,
                                  MachineBasicBlock *BB) const {
-  if (DontExpandCondPseudos16)
+  if (getDontExpandCondPseudos16(BB->getParent()->getFunction()))
     return BB;
   const TargetInstrInfo *TII = Subtarget.getInstrInfo();
   DebugLoc DL = MI.getDebugLoc();
@@ -579,7 +579,7 @@ MachineBasicBlock *
 Mips16TargetLowering::emitSeliT16(unsigned Opc1, unsigned Opc2,
                                   MachineInstr &MI,
                                   MachineBasicBlock *BB) const {
-  if (DontExpandCondPseudos16)
+  if (getDontExpandCondPseudos16(BB->getParent()->getFunction()))
     return BB;
   const TargetInstrInfo *TII = Subtarget.getInstrInfo();
   DebugLoc DL = MI.getDebugLoc();
@@ -645,7 +645,7 @@ MachineBasicBlock *
 Mips16TargetLowering::emitFEXT_T8I816_ins(unsigned BtOpc, unsigned CmpOpc,
                                           MachineInstr &MI,
                                           MachineBasicBlock *BB) const {
-  if (DontExpandCondPseudos16)
+  if (getDontExpandCondPseudos16(BB->getParent()->getFunction()))
     return BB;
   const TargetInstrInfo *TII = Subtarget.getInstrInfo();
   Register regX = MI.getOperand(0).getReg();
@@ -662,7 +662,7 @@ Mips16TargetLowering::emitFEXT_T8I816_ins(unsigned BtOpc, unsigned CmpOpc,
 MachineBasicBlock *Mips16TargetLowering::emitFEXT_T8I8I16_ins(
     unsigned BtOpc, unsigned CmpiOpc, unsigned CmpiXOpc, bool ImmSigned,
     MachineInstr &MI, MachineBasicBlock *BB) const {
-  if (DontExpandCondPseudos16)
+  if (getDontExpandCondPseudos16(BB->getParent()->getFunction()))
     return BB;
   const TargetInstrInfo *TII = Subtarget.getInstrInfo();
   Register regX = MI.getOperand(0).getReg();
@@ -695,7 +695,7 @@ static unsigned Mips16WhichOp8uOr16simm
 MachineBasicBlock *
 Mips16TargetLowering::emitFEXT_CCRX16_ins(unsigned SltOpc, MachineInstr &MI,
                                           MachineBasicBlock *BB) const {
-  if (DontExpandCondPseudos16)
+  if (getDontExpandCondPseudos16(BB->getParent()->getFunction()))
     return BB;
   const TargetInstrInfo *TII = Subtarget.getInstrInfo();
   Register CC = MI.getOperand(0).getReg();
@@ -714,7 +714,7 @@ MachineBasicBlock *
 Mips16TargetLowering::emitFEXT_CCRXI16_ins(unsigned SltiOpc, unsigned SltiXOpc,
                                            MachineInstr &MI,
                                            MachineBasicBlock *BB) const {
-  if (DontExpandCondPseudos16)
+  if (getDontExpandCondPseudos16(BB->getParent()->getFunction()))
     return BB;
   const TargetInstrInfo *TII = Subtarget.getInstrInfo();
   Register CC = MI.getOperand(0).getReg();

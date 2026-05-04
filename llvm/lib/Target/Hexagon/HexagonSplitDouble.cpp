@@ -26,12 +26,15 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -45,12 +48,23 @@
 
 using namespace llvm;
 
-static cl::opt<int> MaxHSDR("max-hsdr", cl::Hidden, cl::init(-1),
-    cl::desc("Maximum number of split partitions"));
-static cl::opt<bool> MemRefsFixed("hsdr-no-mem", cl::Hidden, cl::init(true),
-    cl::desc("Do not split loads or stores"));
-  static cl::opt<bool> SplitAll("hsdr-split-all", cl::Hidden, cl::init(false),
-      cl::desc("Split all partitions"));
+static int MaxHSDR = -1;
+static bool MemRefsFixed = true;
+
+static bool getSplitAll(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_SplitAll>(
+      F.getContext().getOptionsContext());
+}
+
+static int getMaxHSDR(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_MaxHSDR>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getMemRefsFixed(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_MemRefsFixed>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -92,7 +106,8 @@ namespace {
     void partitionRegisters(UUSetMap &P2Rs);
     int32_t profit(const MachineInstr *MI) const;
     int32_t profit(Register Reg) const;
-    bool isProfitable(const USet &Part, LoopRegMap &IRM) const;
+    bool isProfitable(const USet &Part, LoopRegMap &IRM,
+                      const Function &F) const;
 
     void collectIndRegsForLoop(const MachineLoop *L, USet &Rs);
     void collectIndRegs(LoopRegMap &IRM);
@@ -154,7 +169,7 @@ bool HexagonSplitDoubleRegs::isVolatileInstr(const MachineInstr *MI) const {
 
 bool HexagonSplitDoubleRegs::isFixedInstr(const MachineInstr *MI) const {
   if (MI->mayLoadOrStore())
-    if (MemRefsFixed || isVolatileInstr(MI))
+    if (getMemRefsFixed(MI->getMF()->getFunction()) || isVolatileInstr(MI))
       return true;
   if (MI->isDebugInstr())
     return false;
@@ -410,8 +425,8 @@ int32_t HexagonSplitDoubleRegs::profit(Register Reg) const {
   return 0;
 }
 
-bool HexagonSplitDoubleRegs::isProfitable(const USet &Part, LoopRegMap &IRM)
-      const {
+bool HexagonSplitDoubleRegs::isProfitable(const USet &Part, LoopRegMap &IRM,
+                                          const Function &F) const {
   unsigned FixedNum = 0, LoopPhiNum = 0;
   int32_t TotalP = 0;
 
@@ -460,7 +475,7 @@ bool HexagonSplitDoubleRegs::isProfitable(const USet &Part, LoopRegMap &IRM)
     TotalP -= 20*LoopPhiNum;
 
   LLVM_DEBUG(dbgs() << "Partition profit: " << TotalP << '\n');
-  if (SplitAll)
+  if (getSplitAll(F))
     return true;
   return TotalP > 0;
 }
@@ -1202,8 +1217,9 @@ bool HexagonSplitDoubleRegs::runOnMachineFunction(MachineFunction &MF) {
     }
   });
 
+  const Function &F = MF.getFunction();
   bool Changed = false;
-  int Limit = MaxHSDR;
+  int Limit = getMaxHSDR(F);
 
   for (UUSetMap::iterator I = P2Rs.begin(), E = P2Rs.end(); I != E; ++I) {
     if (I->first == 0)
@@ -1213,7 +1229,7 @@ bool HexagonSplitDoubleRegs::runOnMachineFunction(MachineFunction &MF) {
     USet &Part = I->second;
     LLVM_DEBUG(dbgs() << "Calculating profit for partition #" << I->first
                       << '\n');
-    if (!isProfitable(Part, IRM))
+    if (!isProfitable(Part, IRM, F))
       continue;
     Counter++;
     Changed |= splitPartition(Part);

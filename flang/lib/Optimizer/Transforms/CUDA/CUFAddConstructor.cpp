@@ -326,7 +326,7 @@ struct CUFAddConstructor
       llvm::StringRef allocatorRegistrationFunctionName =
           RTNAME_STRING(CUFRegisterAllocator);
       if (!allocatorRegistrationFunction.empty())
-        allocatorRegistrationFunctionName = allocatorRegistrationFunction;
+        allocatorRegistrationFunctionName = *allocatorRegistrationFunction;
       // Symbol reference to the allocator registration function.
       builder.setInsertionPointToEnd(mod.getBody());
       auto registerFuncOp = mlir::LLVM::LLVMFuncOp::create(

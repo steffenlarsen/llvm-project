@@ -162,10 +162,15 @@ static MCRegisterInfo *createMipsMCRegisterInfo(const Triple &TT) {
   return X;
 }
 
-static MCSubtargetInfo *createMipsMCSubtargetInfo(const Triple &TT,
-                                                  StringRef CPU, StringRef FS) {
+static MCSubtargetInfo *
+createMipsMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                          const llvm::clv2::OptionsContext &Ctx) {
   CPU = MIPS_MC::selectMipsCPU(TT, CPU);
-  return createMipsMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+  MCSubtargetInfo *STI =
+      createMipsMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+  if (STI)
+    STI->setOptionsContext(Ctx);
+  return STI;
 }
 
 static MCAsmInfo *createMipsMCAsmInfo(const MCRegisterInfo &MRI,

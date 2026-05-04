@@ -33,23 +33,23 @@ using namespace mlir::dataflow;
 void AbstractDenseForwardDataFlowAnalysis::initializeEquivalentLatticeAnchor(
     Operation *top) {
   LDBG() << "initializeEquivalentLatticeAnchor: "
-         << OpWithFlags(top, OpPrintingFlags().skipRegions());
+         << OpWithFlags(top, opPrintingFlags(top).skipRegions());
   top->walk([&](Operation *op) {
     if (isa<RegionBranchOpInterface, CallOpInterface>(op)) {
       LDBG() << "  Skipping "
-             << OpWithFlags(op, OpPrintingFlags().skipRegions())
+             << OpWithFlags(op, opPrintingFlags(op).skipRegions())
              << " (region branch or call)";
       return;
     }
     LDBG() << "  Building equivalent lattice anchor for "
-           << OpWithFlags(op, OpPrintingFlags().skipRegions());
+           << OpWithFlags(op, opPrintingFlags(op).skipRegions());
     buildOperationEquivalentLatticeAnchor(op);
   });
 }
 
 LogicalResult AbstractDenseForwardDataFlowAnalysis::initialize(Operation *top) {
   LDBG() << "initialize (forward): "
-         << OpWithFlags(top, OpPrintingFlags().skipRegions());
+         << OpWithFlags(top, opPrintingFlags(top).skipRegions());
   // Visit every operation and block.
   if (failed(processOperation(top))) {
     LDBG() << "  Failed to process top-level operation";
@@ -65,7 +65,7 @@ LogicalResult AbstractDenseForwardDataFlowAnalysis::initialize(Operation *top) {
       visitBlock(&block);
       for (Operation &op : block) {
         LDBG() << "      Initializing operation: "
-               << OpWithFlags(&op, OpPrintingFlags().skipRegions());
+               << OpWithFlags(&op, opPrintingFlags(&op).skipRegions());
         if (failed(initialize(&op))) {
           LDBG() << "      Failed to initialize operation";
           return failure();
@@ -81,7 +81,8 @@ LogicalResult AbstractDenseForwardDataFlowAnalysis::visit(ProgramPoint *point) {
   LDBG() << "visit (forward): " << *point;
   if (!point->isBlockStart()) {
     LDBG() << "  Processing operation: "
-           << OpWithFlags(point->getPrevOp(), OpPrintingFlags().skipRegions());
+           << OpWithFlags(point->getPrevOp(),
+                          opPrintingFlags(point->getPrevOp()).skipRegions());
     return processOperation(point->getPrevOp());
   }
   LDBG() << "  Visiting block: " << point->getBlock();
@@ -93,7 +94,8 @@ void AbstractDenseForwardDataFlowAnalysis::visitCallOperation(
     CallOpInterface call, const AbstractDenseLattice &before,
     AbstractDenseLattice *after) {
   LDBG() << "visitCallOperation (forward): "
-         << OpWithFlags(call.getOperation(), OpPrintingFlags().skipRegions());
+         << OpWithFlags(call.getOperation(),
+                        opPrintingFlags(call.getOperation()).skipRegions());
   LDBG() << "  before state: " << before;
   LDBG() << "  after state: " << *after;
 
@@ -123,7 +125,8 @@ void AbstractDenseForwardDataFlowAnalysis::visitCallOperation(
          << " known predecessors";
   for (Operation *predecessor : predecessors->getKnownPredecessors()) {
     LDBG() << "    Processing predecessor: "
-           << OpWithFlags(predecessor, OpPrintingFlags().skipRegions());
+           << OpWithFlags(predecessor,
+                          opPrintingFlags(predecessor).skipRegions());
     // Get the lattices at callee return:
     //
     //   func.func @callee() {
@@ -150,7 +153,7 @@ void AbstractDenseForwardDataFlowAnalysis::visitCallOperation(
 LogicalResult
 AbstractDenseForwardDataFlowAnalysis::processOperation(Operation *op) {
   LDBG() << "processOperation (forward): "
-         << OpWithFlags(op, OpPrintingFlags().skipRegions());
+         << OpWithFlags(op, opPrintingFlags(op).skipRegions());
   ProgramPoint *point = getProgramPointAfter(op);
   // If the containing block is not executable, bail out.
   if (op->getBlock() != nullptr &&
@@ -226,7 +229,8 @@ void AbstractDenseForwardDataFlowAnalysis::visitBlock(Block *block) {
              << " known callsites";
       for (Operation *callsite : callsites->getKnownPredecessors()) {
         LDBG() << "      Processing callsite: "
-               << OpWithFlags(callsite, OpPrintingFlags().skipRegions());
+               << OpWithFlags(callsite,
+                              opPrintingFlags(callsite).skipRegions());
         // Get the dense lattice before the callsite.
         const AbstractDenseLattice *before;
         before = getLatticeFor(point, getProgramPointBefore(callsite));
@@ -277,7 +281,8 @@ void AbstractDenseForwardDataFlowAnalysis::visitRegionBranchOperation(
     ProgramPoint *point, RegionBranchOpInterface branch,
     AbstractDenseLattice *after) {
   LDBG() << "visitRegionBranchOperation (forward): "
-         << OpWithFlags(branch.getOperation(), OpPrintingFlags().skipRegions());
+         << OpWithFlags(branch.getOperation(),
+                        opPrintingFlags(branch.getOperation()).skipRegions());
   LDBG() << "  point: " << *point;
   LDBG() << "  after state: " << *after;
 
@@ -290,7 +295,7 @@ void AbstractDenseForwardDataFlowAnalysis::visitRegionBranchOperation(
          << " known predecessors";
   for (Operation *op : predecessors->getKnownPredecessors()) {
     LDBG() << "    Processing predecessor: "
-           << OpWithFlags(op, OpPrintingFlags().skipRegions());
+           << OpWithFlags(op, opPrintingFlags(op).skipRegions());
     const AbstractDenseLattice *before;
     // If the predecessor is the parent, get the state before the parent.
     if (op == branch) {
@@ -359,16 +364,16 @@ void AbstractDenseForwardDataFlowAnalysis::visitRegionBranchOperation(
 void AbstractDenseBackwardDataFlowAnalysis::initializeEquivalentLatticeAnchor(
     Operation *top) {
   LDBG() << "initializeEquivalentLatticeAnchor (backward): "
-         << OpWithFlags(top, OpPrintingFlags().skipRegions());
+         << OpWithFlags(top, opPrintingFlags(top).skipRegions());
   top->walk([&](Operation *op) {
     if (isa<RegionBranchOpInterface, CallOpInterface>(op)) {
       LDBG() << "  Skipping "
-             << OpWithFlags(op, OpPrintingFlags().skipRegions())
+             << OpWithFlags(op, opPrintingFlags(op).skipRegions())
              << " (region branch or call)";
       return;
     }
     LDBG() << "  Building equivalent lattice anchor for "
-           << OpWithFlags(op, OpPrintingFlags().skipRegions());
+           << OpWithFlags(op, opPrintingFlags(op).skipRegions());
     buildOperationEquivalentLatticeAnchor(op);
   });
 }
@@ -376,7 +381,7 @@ void AbstractDenseBackwardDataFlowAnalysis::initializeEquivalentLatticeAnchor(
 LogicalResult
 AbstractDenseBackwardDataFlowAnalysis::initialize(Operation *top) {
   LDBG() << "initialize (backward): "
-         << OpWithFlags(top, OpPrintingFlags().skipRegions());
+         << OpWithFlags(top, opPrintingFlags(top).skipRegions());
   // Visit every operation and block.
   if (failed(processOperation(top))) {
     LDBG() << "  Failed to process top-level operation";
@@ -392,7 +397,7 @@ AbstractDenseBackwardDataFlowAnalysis::initialize(Operation *top) {
       visitBlock(&block);
       for (Operation &op : llvm::reverse(block)) {
         LDBG() << "      Initializing operation (backward): "
-               << OpWithFlags(&op, OpPrintingFlags().skipRegions());
+               << OpWithFlags(&op, opPrintingFlags(&op).skipRegions());
         if (failed(initialize(&op))) {
           LDBG() << "      Failed to initialize operation";
           return failure();
@@ -409,7 +414,8 @@ AbstractDenseBackwardDataFlowAnalysis::visit(ProgramPoint *point) {
   LDBG() << "visit (backward): " << *point;
   if (!point->isBlockEnd()) {
     LDBG() << "  Processing operation: "
-           << OpWithFlags(point->getNextOp(), OpPrintingFlags().skipRegions());
+           << OpWithFlags(point->getNextOp(),
+                          opPrintingFlags(point->getNextOp()).skipRegions());
     return processOperation(point->getNextOp());
   }
   LDBG() << "  Visiting block: " << point->getBlock();
@@ -421,7 +427,8 @@ void AbstractDenseBackwardDataFlowAnalysis::visitCallOperation(
     CallOpInterface call, const AbstractDenseLattice &after,
     AbstractDenseLattice *before) {
   LDBG() << "visitCallOperation (backward): "
-         << OpWithFlags(call.getOperation(), OpPrintingFlags().skipRegions());
+         << OpWithFlags(call.getOperation(),
+                        opPrintingFlags(call.getOperation()).skipRegions());
   LDBG() << "  after state: " << after;
   LDBG() << "  before state: " << *before;
 
@@ -437,7 +444,7 @@ void AbstractDenseBackwardDataFlowAnalysis::visitCallOperation(
   Operation *callee = call.resolveCallableInTable(&symbolTable);
   if (callee) {
     LDBG() << "  Resolved callee: "
-           << OpWithFlags(callee, OpPrintingFlags().skipRegions());
+           << OpWithFlags(callee, opPrintingFlags(callee).skipRegions());
   } else {
     LDBG() << "  Resolved callee: null";
   }
@@ -488,7 +495,7 @@ void AbstractDenseBackwardDataFlowAnalysis::visitCallOperation(
 LogicalResult
 AbstractDenseBackwardDataFlowAnalysis::processOperation(Operation *op) {
   LDBG() << "processOperation (backward): "
-         << OpWithFlags(op, OpPrintingFlags().skipRegions());
+         << OpWithFlags(op, opPrintingFlags(op).skipRegions());
   ProgramPoint *point = getProgramPointBefore(op);
   // If the containing block is not executable, bail out.
   if (op->getBlock() != nullptr &&
@@ -574,7 +581,8 @@ void AbstractDenseBackwardDataFlowAnalysis::visitBlock(Block *block) {
              << " known callsites";
       for (Operation *callsite : callsites->getKnownPredecessors()) {
         LDBG() << "      Processing callsite: "
-               << OpWithFlags(callsite, OpPrintingFlags().skipRegions());
+               << OpWithFlags(callsite,
+                              opPrintingFlags(callsite).skipRegions());
         const AbstractDenseLattice *after =
             getLatticeFor(point, getProgramPointAfter(callsite));
         LDBG() << "      Lattice after callsite: " << *after;
@@ -625,7 +633,8 @@ void AbstractDenseBackwardDataFlowAnalysis::visitRegionBranchOperation(
     ProgramPoint *point, RegionBranchOpInterface branch,
     RegionBranchPoint branchPoint, AbstractDenseLattice *before) {
   LDBG() << "visitRegionBranchOperation (backward): "
-         << OpWithFlags(branch.getOperation(), OpPrintingFlags().skipRegions());
+         << OpWithFlags(branch.getOperation(),
+                        opPrintingFlags(branch.getOperation()).skipRegions());
   LDBG() << "  branchPoint: " << (branchPoint.isParent() ? "parent" : "region");
   LDBG() << "  before state: " << *before;
 

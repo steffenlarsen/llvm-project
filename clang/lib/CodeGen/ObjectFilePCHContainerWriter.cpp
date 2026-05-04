@@ -175,7 +175,9 @@ public:
     assert(!Ctx && "initialized multiple times");
 
     Ctx = &Context;
-    VMContext.reset(new llvm::LLVMContext());
+    VMContext.reset(new llvm::LLVMContext(
+        CI.getLLVMOptionsContext() ? *CI.getLLVMOptionsContext()
+                                   : llvm::clv2::defaultOptionsContext()));
     M.reset(new llvm::Module(MainFileName, *VMContext));
     M->setDataLayout(Ctx->getTargetInfo().getDataLayoutString());
     Builder.reset(new CodeGen::CodeGenModule(

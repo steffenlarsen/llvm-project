@@ -2,6 +2,7 @@
 add_subdirectory(lib)
 
 set(LLVM_LINK_COMPONENTS
+  AllOptions
   CodeGenTypes
   MC
   MCParser

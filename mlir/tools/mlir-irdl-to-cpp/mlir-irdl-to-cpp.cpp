@@ -20,13 +20,15 @@
 #include "mlir/Target/IRDLToCpp/IRDLToCpp.h"
 #include "mlir/Tools/ParseUtilities.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
 
 using namespace mlir;
+using namespace llvm::clv2;
 
 static LogicalResult
 processBuffer(llvm::raw_ostream &os,
@@ -70,47 +72,54 @@ processBuffer(llvm::raw_ostream &os,
   return srcManagerHandler.verify();
 }
 
+inline constexpr OptionInfo<std::string> inputFilename{"", "<input file>",
+                                                       Positional{}, Init{"-"}};
+
+inline constexpr OptionInfo<std::string> outputFilename{
+    "o", "Output filename", value_desc("filename"), Init{"-"}};
+
+inline constexpr OptionInfo<bool> verifyDiagnosticsOpt{
+    "verify-diagnostics",
+    "Check that emitted diagnostics match "
+    "expected-* lines on the corresponding line",
+    Init{false}};
+
+inline constexpr OptionInfo<std::string> splitInputFileOpt{
+    "split-input-file",
+    "Split the input file into chunks using the given or "
+    "default marker and process each chunk independently",
+    ValueOptional, Init{""}};
+
+static constexpr OptionsRegistry<&inputFilename, &outputFilename,
+                                 &verifyDiagnosticsOpt, &splitInputFileOpt>
+    IrdlToCppReg;
+
 static LogicalResult translateIRDLToCpp(int argc, char **argv) {
-  static llvm::cl::opt<std::string> inputFilename(
-      llvm::cl::Positional, llvm::cl::desc("<input file>"),
-      llvm::cl::init("-"));
-
-  static llvm::cl::opt<std::string> outputFilename(
-      "o", llvm::cl::desc("Output filename"), llvm::cl::value_desc("filename"),
-      llvm::cl::init("-"));
-
-  static llvm::cl::opt<bool> verifyDiagnostics(
-      "verify-diagnostics",
-      llvm::cl::desc("Check that emitted diagnostics match "
-                     "expected-* lines on the corresponding line"),
-      llvm::cl::init(false));
-
-  static llvm::cl::opt<std::string> splitInputFile(
-      "split-input-file", llvm::cl::ValueOptional,
-      llvm::cl::callback([&](const std::string &str) {
-        // Implicit value: use default marker if flag was used without
-        // value.
-        if (str.empty())
-          splitInputFile.setValue(kDefaultSplitMarker);
-      }),
-      llvm::cl::desc("Split the input file into chunks using the given or "
-                     "default marker and process each chunk independently"),
-      llvm::cl::init(""));
-
   llvm::InitLLVM y(argc, argv);
 
-  llvm::cl::ParseCommandLineOptions(argc, argv, "mlir-irdl-to-cpp");
+  llvm::clv2::OptionParser P;
+  P.add<&IrdlToCppReg>();
+  llvm::RegisterCoreLLVMOptions(P);
+  auto OptsCtx = P.parse(argc, argv, "mlir-irdl-to-cpp");
+  auto *Opts = OptsCtx->getViewPtr<&IrdlToCppReg>();
+
+  // If split-input-file was passed without a value, use the default marker.
+  std::string splitInputFile = Opts->get<&splitInputFileOpt>();
+  if (Opts->specified<&splitInputFileOpt>() && splitInputFile.empty())
+    splitInputFile = std::string(kDefaultSplitMarker);
+
+  bool verifyDiagnostics = Opts->get<&verifyDiagnosticsOpt>();
 
   std::string errorMessage;
   std::unique_ptr<llvm::MemoryBuffer> input =
-      openInputFile(inputFilename, &errorMessage);
+      openInputFile(Opts->get<&inputFilename>(), &errorMessage);
   if (!input) {
     llvm::errs() << errorMessage << "\n";
     return failure();
   }
 
   std::unique_ptr<llvm::ToolOutputFile> output =
-      openOutputFile(outputFilename, &errorMessage);
+      openOutputFile(Opts->get<&outputFilename>(), &errorMessage);
 
   if (!output) {
     llvm::errs() << errorMessage << "\n";
@@ -123,11 +132,9 @@ static LogicalResult translateIRDLToCpp(int argc, char **argv) {
                          verifyDiagnostics, nullptr);
   };
 
-  auto &splitInputFileDelimiter = splitInputFile.getValue();
-  if (!splitInputFileDelimiter.empty())
+  if (!splitInputFile.empty())
     return splitAndProcessBuffer(std::move(input), chunkFn, output->os(),
-                                 splitInputFileDelimiter,
-                                 splitInputFileDelimiter);
+                                 splitInputFile, splitInputFile);
 
   if (failed(chunkFn(std::move(input), output->os())))
     return failure();

@@ -2236,7 +2236,8 @@ void SubtargetEmitter::emitHeader(raw_ostream &OS) {
   }
   OS << "struct " << ClassName << " : public TargetSubtargetInfo {\n"
      << "  explicit " << ClassName << "(const Triple &TT, StringRef CPU, "
-     << "StringRef TuneCPU, StringRef FS);\n"
+     << "StringRef TuneCPU, StringRef FS, "
+     << "const clv2::OptionsContext &OptsCtx);\n"
      << "public:\n"
      << "  unsigned resolveSchedClass(unsigned SchedClass, "
      << " const MachineInstr *DefMI,"
@@ -2315,7 +2316,8 @@ void SubtargetEmitter::emitCtor(raw_ostream &OS, MCDescInfo DescInfo) {
 
   std::string ClassName = Target + "GenSubtargetInfo";
   OS << ClassName << "::" << ClassName << "(const Triple &TT, StringRef CPU, "
-     << "StringRef TuneCPU, StringRef FS)\n";
+     << "StringRef TuneCPU, StringRef FS, "
+     << "const clv2::OptionsContext &OptsCtx)\n";
 
   OS << "  : TargetSubtargetInfo(TT, CPU, TuneCPU, FS, ";
   OS << "StringTable(" << Target << "SubTypeKVStorage.Strings), ";
@@ -2342,7 +2344,7 @@ void SubtargetEmitter::emitCtor(raw_ostream &OS, MCDescInfo DescInfo) {
   } else {
     OS << "nullptr, nullptr, nullptr";
   }
-  OS << ") {}\n\n";
+  OS << ", OptsCtx) {}\n\n";
 
   emitSchedModelHelpers(ClassName, OS);
   emitHwModeCheck(ClassName, OS, /*IsMC=*/false);

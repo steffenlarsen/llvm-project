@@ -165,8 +165,9 @@ static MCRegisterInfo *createPPCMCRegisterInfo(const Triple &TT) {
   return X;
 }
 
-static MCSubtargetInfo *createPPCMCSubtargetInfo(const Triple &TT,
-                                                 StringRef CPU, StringRef FS) {
+static MCSubtargetInfo *
+createPPCMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                         const llvm::clv2::OptionsContext &Ctx) {
   // Set some default feature to MC layer.
   std::string FullFS = std::string(FS);
 
@@ -177,7 +178,11 @@ static MCSubtargetInfo *createPPCMCSubtargetInfo(const Triple &TT,
       FullFS = "+aix";
   }
 
-  return createPPCMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FullFS);
+  MCSubtargetInfo *STI =
+      createPPCMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FullFS);
+  if (STI)
+    STI->setOptionsContext(Ctx);
+  return STI;
 }
 
 static MCAsmInfo *createPPCMCAsmInfo(const MCRegisterInfo &MRI,

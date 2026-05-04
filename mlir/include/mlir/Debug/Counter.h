@@ -11,7 +11,14 @@
 
 #include "mlir/IR/Action.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/Support/OptionsContext.h"
 #include <string>
+
+namespace llvm {
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
+} // namespace llvm
 
 namespace mlir {
 namespace tracing {
@@ -28,7 +35,7 @@ namespace tracing {
 /// executions.
 class DebugCounter {
 public:
-  DebugCounter();
+  DebugCounter(const llvm::clv2::OptionsContext &ctx);
   ~DebugCounter();
 
   /// Add a counter for the given action tag. `countToSkip` is the number
@@ -48,14 +55,18 @@ public:
   /// Register the command line options for debug counters.
   static void registerCLOptions();
   /// Returns true if any of the CL options are activated.
-  static bool isActivated();
+  static bool isActivated(const llvm::clv2::OptionsContext &optsCtx);
 
 private:
   // Returns true if the next action matching this tag should be executed.
   bool shouldExecute(StringRef tag);
 
   /// Apply the registered CL options to this debug counter instance.
-  void applyCLOptions();
+  void applyCLOptions(const llvm::clv2::OptionsContext &optsCtx);
+
+  /// The options context used by this debug counter.
+  const llvm::clv2::OptionsContext *optsCtx =
+      &llvm::clv2::defaultOptionsContext();
 
   /// This struct represents a specific counter being tracked.
   struct Counter {

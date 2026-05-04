@@ -11,7 +11,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "RemarkUtilHelpers.h"
-#include "RemarkUtilRegistry.h"
 
 #include "llvm/Support/Format.h"
 #include "llvm/Support/FormattedStream.h"
@@ -26,31 +25,11 @@ using namespace llvm::remarkutil;
 
 namespace instructionmix {
 
-static cl::SubCommand
-    InstructionMix("instruction-mix",
-                   "Instruction Mix (requires asm-printer remarks)");
+std::string FunctionFilter;
+std::string FunctionFilterRE;
+ReportStyleOptions ReportStyle;
 
-static cl::opt<std::string>
-    FunctionFilter("filter", cl::sub(InstructionMix), cl::ValueOptional,
-                   cl::desc("Optional function name to filter collection by"));
-
-static cl::opt<std::string>
-    FunctionFilterRE("rfilter", cl::sub(InstructionMix), cl::ValueOptional,
-                     cl::desc("Optional function name to filter collection by "
-                              "(accepts regular expressions)"));
-
-enum ReportStyleOptions { human_output, csv_output };
-static cl::opt<ReportStyleOptions> ReportStyle(
-    "report_style", cl::sub(InstructionMix),
-    cl::init(ReportStyleOptions::human_output),
-    cl::desc("Choose the report output format:"),
-    cl::values(clEnumValN(human_output, "human", "Human-readable format"),
-               clEnumValN(csv_output, "csv", "CSV format")));
-
-INPUT_FORMAT_COMMAND_LINE_OPTIONS(InstructionMix)
-INPUT_OUTPUT_COMMAND_LINE_OPTIONS(InstructionMix)
-
-static Error tryInstructionMix() {
+Error tryInstructionMix() {
   auto MaybeOF =
       getOutputFileWithFlags(OutputFileName, sys::fs::OF_TextWithCRLF);
   if (!MaybeOF)
@@ -65,11 +44,11 @@ static Error tryInstructionMix() {
     return MaybeParser.takeError();
 
   Expected<std::optional<FilterMatcher>> Filter =
-      FilterMatcher::createExactOrRE(FunctionFilter, FunctionFilterRE);
+      FilterMatcher::createExactOrRE(FunctionFilter, FunctionFilterRE, "filter",
+                                     "rfilter");
   if (!Filter)
     return Filter.takeError();
 
-  // Collect the histogram of instruction counts.
   llvm::DenseMap<StringRef, unsigned> Histogram;
   auto &Parser = **MaybeParser;
   auto MaybeRemark = Parser.next();
@@ -91,14 +70,12 @@ static Error tryInstructionMix() {
     }
   }
 
-  // Sort it.
   using MixEntry = std::pair<StringRef, unsigned>;
   llvm::SmallVector<MixEntry> Mix(Histogram.begin(), Histogram.end());
   std::sort(Mix.begin(), Mix.end(), [](const auto &LHS, const auto &RHS) {
     return LHS.second > RHS.second;
   });
 
-  // Print the results.
   switch (ReportStyle) {
   case human_output: {
     formatted_raw_ostream FOS(OF->os());
@@ -136,8 +113,5 @@ static Error tryInstructionMix() {
   OF->keep();
   return Error::success();
 }
-
-static CommandRegistration InstructionMixReg(&InstructionMix,
-                                             tryInstructionMix);
 
 } // namespace instructionmix

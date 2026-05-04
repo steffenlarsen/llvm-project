@@ -96,7 +96,7 @@ TEST_F(MLIRTargetLLVMNVVM, SKIP_WITHOUT_NVPTX(SerializeNVVMMToLLVM)) {
     llvm::MemoryBufferRef buffer(
         StringRef(object->getObject().data(), object->getObject().size()),
         "module");
-    llvm::LLVMContext llvmContext;
+    llvm::LLVMContext llvmContext{llvm::clv2::defaultOptionsContext()};
     llvm::Expected<std::unique_ptr<llvm::Module>> llvmModule =
         llvm::getLazyBitcodeModule(buffer, llvmContext);
     ASSERT_TRUE(!!llvmModule);
@@ -246,7 +246,7 @@ TEST_F(MLIRTargetLLVMNVVM, SKIP_WITHOUT_NVPTX(LinkedLLVMIRResource)) {
   )llvm";
     llvm::SMDiagnostic err;
     llvm::MemoryBufferRef buffer(linkedLib, "linkedLib");
-    llvm::LLVMContext llvmCtx;
+    llvm::LLVMContext llvmCtx{llvm::clv2::defaultOptionsContext()};
     std::unique_ptr<llvm::Module> module = llvm::parseIR(buffer, err, llvmCtx);
     ASSERT_TRUE(module) << " Can't parse IR: " << err.getMessage();
     {
@@ -288,7 +288,7 @@ TEST_F(MLIRTargetLLVMNVVM, SKIP_WITHOUT_NVPTX(LinkedLLVMIRResource)) {
     {
       llvm::SMDiagnostic err;
       llvm::MemoryBufferRef buffer(linkedLLVMIR, "linkedLLVMIR");
-      llvm::LLVMContext llvmCtx;
+      llvm::LLVMContext llvmCtx{llvm::clv2::defaultOptionsContext()};
       std::unique_ptr<llvm::Module> module =
           llvm::parseIR(buffer, err, llvmCtx);
       ASSERT_TRUE(module) << " Can't parse linkedLLVMIR: " << err.getMessage()

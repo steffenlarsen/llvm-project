@@ -463,7 +463,8 @@ LogicalResult ForOp::promoteIfSingleIteration(RewriterBase &rewriter) {
   std::optional<APInt> tripCount = getStaticTripCount();
   LDBG() << "promoteIfSingleIteration tripCount is " << tripCount
          << " for loop "
-         << OpWithFlags(getOperation(), OpPrintingFlags().skipRegions());
+         << OpWithFlags(getOperation(),
+                        opPrintingFlags(getOperation()).skipRegions());
   if (!tripCount.has_value() || tripCount->getZExtValue() > 1)
     return failure();
 

@@ -28,27 +28,47 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "spirv-module-analysis"
 
-static cl::opt<bool>
-    SPVDumpDeps("spv-dump-deps",
-                cl::desc("Dump MIR with SPIR-V dependencies info"),
-                cl::Optional, cl::init(false));
+// std::vector rather than SmallVector: it is the parse destination, and the
+// clv2 list parser writes into std::vector<T>.
+static std::vector<SPIRV::Capability::Capability> AvoidCapabilitiesVec;
+static unsigned AvoidCapabilitiesCount = 0;
 
-static cl::list<SPIRV::Capability::Capability>
-    AvoidCapabilities("avoid-spirv-capabilities",
-                      cl::desc("SPIR-V capabilities to avoid if there are "
-                               "other options enabling a feature"),
-                      cl::Hidden,
-                      cl::values(clEnumValN(SPIRV::Capability::Shader, "Shader",
-                                            "SPIR-V Shader capability")));
-// Use sets instead of cl::list to check "if contains" condition
+// This is an enum-valued list option, so the name->value mapping belongs in an
+// EnumVal table rather than a hand-written parse callback; clv2 then rejects
+// unknown names with its standard diagnostic.
+static constexpr clv2::EnumVal<SPIRV::Capability::Capability>
+    AvoidCapabilityVals[] = {
+        {"Shader", SPIRV::Capability::Shader, "Avoid the Shader capability"},
+};
+static constexpr auto OI_AvoidCapabilities =
+    clv2::makeEnumListOption<SPIRV::Capability::Capability>(
+        "avoid-spirv-capabilities",
+        "SPIR-V capabilities to avoid if there are "
+        "other options enabling a feature",
+        AvoidCapabilityVals, clv2::Hidden);
+
+static const int RegisterAvoidCaps = [] {
+  clv2::registerDynamicEntry(clv2::makeEntry<&OI_AvoidCapabilities>(
+      AvoidCapabilitiesVec, AvoidCapabilitiesCount));
+  return 0;
+}();
+
+static bool getDumpDeps(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::SPIRV_DumpDeps>(
+      M.getContext().getOptionsContext());
+}
+
 struct AvoidCapabilitiesSet {
   SmallSet<SPIRV::Capability::Capability, 4> S;
-  AvoidCapabilitiesSet() { S.insert_range(AvoidCapabilities); }
+  AvoidCapabilitiesSet() { S.insert_range(AvoidCapabilitiesVec); }
 };
 
 char llvm::SPIRVModuleAnalysis::ID = 0;

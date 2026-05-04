@@ -23,6 +23,25 @@
 
 namespace llvm::xray {
 
+enum class AccountOutputFormats { TEXT, CSV };
+
+enum class SortField {
+  FUNCID,
+  COUNT,
+  MIN,
+  MED,
+  PCT90,
+  PCT99,
+  MAX,
+  SUM,
+  FUNC,
+};
+
+enum class SortDirection {
+  ASCENDING,
+  DESCENDING,
+};
+
 class LatencyAccountant {
 public:
   typedef llvm::DenseMap<int32_t, llvm::SmallVector<uint64_t, 0>>

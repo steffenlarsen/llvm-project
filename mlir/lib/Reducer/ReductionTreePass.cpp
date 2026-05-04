@@ -253,8 +253,9 @@ private:
 } // namespace
 
 LogicalResult ReductionTreePass::initialize(MLIRContext *context) {
-  tester.setTestScript(testerName);
-  tester.setTestScriptArgs(testerArgs);
+  tester.setTestScript(*testerName);
+  SmallVector<std::string> testerArgsVec(testerArgs.begin(), testerArgs.end());
+  tester.setTestScriptArgs(testerArgsVec);
 
   RewritePatternSet patterns(context);
 

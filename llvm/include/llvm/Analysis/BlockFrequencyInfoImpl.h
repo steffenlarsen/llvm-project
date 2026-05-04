@@ -30,7 +30,6 @@
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/BlockFrequency.h"
 #include "llvm/Support/BranchProbability.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/DOTGraphTraits.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
@@ -51,14 +50,24 @@
 #include <utility>
 #include <vector>
 
+#include "llvm/Analysis/GVDAGType.h"
+#include "llvm/Support/OptionsContext.h"
+
 #define DEBUG_TYPE "block-freq"
 
 namespace llvm {
-extern LLVM_ABI llvm::cl::opt<bool> CheckBFIUnknownBlockQueries;
 
-extern LLVM_ABI llvm::cl::opt<bool> UseIterativeBFIInference;
-extern LLVM_ABI llvm::cl::opt<unsigned> IterativeBFIMaxIterationsPerBlock;
-extern LLVM_ABI llvm::cl::opt<double> IterativeBFIPrecision;
+namespace clv2 {
+class OptionsContext;
+}
+LLVM_ABI bool getCheckBFIUnknownBlockQueries(const clv2::OptionsContext &Ctx);
+
+LLVM_ABI unsigned
+getIterativeBFIMaxIterationsPerBlock(const clv2::OptionsContext &Ctx);
+LLVM_ABI double getIterativeBFIPrecision(const clv2::OptionsContext &Ctx);
+
+LLVM_ABI bool getUseIterativeBFIInference(const Function &F);
+LLVM_ABI void setUseIterativeBFIInference(bool V);
 
 class BranchProbabilityInfo;
 class CycleInfo;
@@ -174,8 +183,12 @@ inline raw_ostream &operator<<(raw_ostream &OS, BlockMass X) {
 ///
 /// Nevertheless, the majority of the overall algorithm documentation lives with
 /// BlockFrequencyInfoImpl.  See there for details.
-class LLVM_ABI BlockFrequencyInfoImplBase {
+class BlockFrequencyInfoImplBase {
+protected:
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
+
 public:
+  void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
   using Scaled64 = ScaledNumber<uint64_t>;
   using BlockMass = bfi_detail::BlockMass;
 
@@ -890,6 +903,8 @@ template <class BT> class BlockFrequencyInfoImpl : BlockFrequencyInfoImplBase {
 public:
   BlockFrequencyInfoImpl() = default;
 
+  using BlockFrequencyInfoImplBase::setOptionsContext;
+
   const FunctionT *getFunction() const { return F; }
 
   void calculate(const FunctionT &F, const BranchProbabilityInfoT &BPI,
@@ -977,8 +992,7 @@ void BlockFrequencyInfoImpl<BT>::calculate(const FunctionT &F,
   if (needIterativeInference())
     applyIterativeInference();
   finalizeMetrics();
-
-  if (CheckBFIUnknownBlockQueries) {
+  if (getCheckBFIUnknownBlockQueries(*this->OptsCtx)) {
     // To detect BFI queries for unknown blocks, add entries for unreachable
     // blocks, if any. This is to distinguish between known/existing unreachable
     // blocks and unknown blocks.
@@ -1276,7 +1290,7 @@ template <class BT> void BlockFrequencyInfoImpl<BT>::computeMassInFunction() {
 
 template <class BT>
 bool BlockFrequencyInfoImpl<BT>::needIterativeInference() const {
-  if (!UseIterativeBFIInference)
+  if (!getUseIterativeBFIInference(F->getFunction()))
     return false;
   if (!F->getFunction().hasProfileData())
     return false;
@@ -1342,13 +1356,14 @@ template <class BT>
 void BlockFrequencyInfoImpl<BT>::iterativeInference(
     const ProbMatrixType &ProbMatrix, const BitVector &Blocks,
     std::vector<Scaled64> &Freq) const {
-  assert(0.0 < IterativeBFIPrecision && IterativeBFIPrecision < 1.0 &&
+  const double BFIPrecision = getIterativeBFIPrecision(*this->OptsCtx);
+  assert(0.0 < BFIPrecision && BFIPrecision < 1.0 &&
          "incorrectly specified precision");
   // Convert double precision to Scaled64
   const auto Precision =
-      Scaled64::getInverse(static_cast<uint64_t>(1.0 / IterativeBFIPrecision));
+      Scaled64::getInverse(static_cast<uint64_t>(1.0 / BFIPrecision));
   const size_t MaxIterations =
-      IterativeBFIMaxIterationsPerBlock * Blocks.count();
+      getIterativeBFIMaxIterationsPerBlock(*this->OptsCtx) * Blocks.count();
 
 #ifndef NDEBUG
   LLVM_DEBUG(dbgs() << "  Initial discrepancy = "
@@ -1706,7 +1721,7 @@ void BlockFrequencyInfoImpl<BT>::verifyMatch(
 // Graph trait base class for block frequency information graph
 // viewer.
 
-enum GVDAGType { GVDT_None, GVDT_Fraction, GVDT_Integer, GVDT_Count };
+// GVDAGType enum — defined in GVDAGType.h, included at top of file.
 
 template <class BlockFrequencyInfoT, class BranchProbabilityInfoT>
 struct BFIDOTGraphTraitsBase : public DefaultDOTGraphTraits {

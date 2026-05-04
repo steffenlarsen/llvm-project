@@ -38,7 +38,6 @@
 #include "llvm/IR/PseudoProbe.h"
 #include "llvm/ProfileData/SampleProf.h"
 #include "llvm/ProfileData/SampleProfReader.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/GenericDomTree.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/SampleProfileInference.h"
@@ -162,8 +161,6 @@ public:
   }
 };
 
-extern LLVM_ABI cl::opt<bool> SampleProfileUseProfi;
-
 static inline bool skipProfileForFunction(const Function &F) {
   return F.isDeclaration() || !F.hasFnAttribute("use-sample-profile");
 }
@@ -190,6 +187,12 @@ public:
                               IntrusiveRefCntPtr<vfs::FileSystem> FS)
       : Filename(Name), RemappingFilename(RemapName), FS(std::move(FS)) {}
   void dump() { Reader->dump(); }
+
+  /// Some profile formats imply flow-based inference even when
+  /// --sample-profile-use-profi was not passed.  The deriving loader sets this
+  /// once per module; it used to be a process-wide global, which leaked the
+  /// decision from one module to the next.
+  void setUseProfiImpliedByProfile() { UseProfiImplied = true; }
 
   using NodeRef = typename GraphTraits<FT *>::NodeRef;
   using BT = std::remove_pointer_t<NodeRef>;
@@ -222,6 +225,12 @@ public:
       DenseMap<const BasicBlockT *, SmallVector<const BasicBlockT *, 8>>;
 
 protected:
+  /// True when the profile format implied flow-based inference.
+  bool UseProfiImplied = false;
+  bool useProfi(const clv2::OptionsContext &Ctx) const {
+    return UseProfiImplied || getSampleProfileUseProfi(Ctx);
+  }
+
   ~SampleProfileLoaderBaseImpl() = default;
   friend class SampleCoverageTracker;
 
@@ -431,7 +440,7 @@ SampleProfileLoaderBaseImpl<BT>::getInstWeightImpl(const InstructionT &Inst) {
   const DILocation *DIL = DLoc;
   uint32_t LineOffset = FunctionSamples::getOffset(DIL);
   uint32_t Discriminator;
-  if (EnableFSDiscriminator)
+  if (getEnableFSDiscriminator(DIL->getContext()))
     Discriminator = DIL->getDiscriminator();
   else
     Discriminator = DIL->getBaseDiscriminator();
@@ -933,7 +942,7 @@ template <typename BT>
 void SampleProfileLoaderBaseImpl<BT>::propagateWeights(FunctionT &F) {
   // Flow-based profile inference is only usable with BasicBlock instantiation
   // of SampleProfileLoaderBaseImpl.
-  if (SampleProfileUseProfi) {
+  if (useProfi(getFunction(F).getContext().getOptionsContext())) {
     // Prepare block sample counts for inference.
     BlockWeightMap SampleBlockWeights;
     for (const auto &BI : F) {
@@ -962,7 +971,9 @@ void SampleProfileLoaderBaseImpl<BT>::propagateWeights(FunctionT &F) {
     }
 
     // Propagate until we converge or we go past the iteration limit.
-    while (Changed && I++ < SampleProfileMaxPropagateIterations) {
+    while (Changed &&
+           I++ < getSampleProfileMaxPropagateIterations(
+                     getFunction(F).getContext().getOptionsContext())) {
       Changed = propagateThroughEdges(F, false);
     }
 
@@ -971,14 +982,18 @@ void SampleProfileLoaderBaseImpl<BT>::propagateWeights(FunctionT &F) {
     // weights to propagate edge weights.
     VisitedEdges.clear();
     Changed = true;
-    while (Changed && I++ < SampleProfileMaxPropagateIterations) {
+    while (Changed &&
+           I++ < getSampleProfileMaxPropagateIterations(
+                     getFunction(F).getContext().getOptionsContext())) {
       Changed = propagateThroughEdges(F, false);
     }
 
     // The 3rd propagation pass allows adjust annotated BB weights that are
     // obviously wrong.
     Changed = true;
-    while (Changed && I++ < SampleProfileMaxPropagateIterations) {
+    while (Changed &&
+           I++ < getSampleProfileMaxPropagateIterations(
+                     getFunction(F).getContext().getOptionsContext())) {
       Changed = propagateThroughEdges(F, true);
     }
   }
@@ -1070,7 +1085,7 @@ void SampleProfileLoaderBaseImpl<BT>::initWeightPropagation(
   // match the profiled binary before annotation.
   getFunction(F).setEntryCount(Samples->getHeadSamples() + 1, &InlinedGUIDs);
 
-  if (!SampleProfileUseProfi) {
+  if (!useProfi(getFunction(F).getContext().getOptionsContext())) {
     // Compute dominance and loop info needed for propagation.
     computeDominanceAndLoopInfo(F);
 
@@ -1095,7 +1110,7 @@ void SampleProfileLoaderBaseImpl<BT>::finalizeWeightPropagation(
   // which uses the entry count for mass propagation.
   // If profi produces a zero-value for the entry count, we fallback to
   // Samples->getHeadSamples() + 1 to avoid functions with zero count.
-  if (SampleProfileUseProfi) {
+  if (useProfi(getFunction(F).getContext().getOptionsContext())) {
     const BasicBlockT *EntryBB = getEntryBB(&F);
     if (BlockWeights[EntryBB] > 0) {
       getFunction(F).setEntryCount(BlockWeights[EntryBB], &InlinedGUIDs);
@@ -1107,11 +1122,12 @@ template <typename BT>
 void SampleProfileLoaderBaseImpl<BT>::emitCoverageRemarks(FunctionT &F) {
   // If coverage checking was requested, compute it now.
   const Function &Func = getFunction(F);
-  if (SampleProfileRecordCoverage) {
+  if (getSampleProfileRecordCoverage(Func.getContext().getOptionsContext())) {
     unsigned Used = CoverageTracker.countUsedRecords(Samples, PSI);
     unsigned Total = CoverageTracker.countBodyRecords(Samples, PSI);
     unsigned Coverage = CoverageTracker.computeCoverage(Used, Total);
-    if (Coverage < SampleProfileRecordCoverage) {
+    if (Coverage <
+        getSampleProfileRecordCoverage(Func.getContext().getOptionsContext())) {
       Func.getContext().diagnose(DiagnosticInfoSampleProfile(
           Func.getSubprogram()->getFilename(), getFunctionLoc(F),
           Twine(Used) + " of " + Twine(Total) + " available profile records (" +
@@ -1120,11 +1136,12 @@ void SampleProfileLoaderBaseImpl<BT>::emitCoverageRemarks(FunctionT &F) {
     }
   }
 
-  if (SampleProfileSampleCoverage) {
+  if (getSampleProfileSampleCoverage(Func.getContext().getOptionsContext())) {
     uint64_t Used = CoverageTracker.getTotalUsedSamples();
     uint64_t Total = CoverageTracker.countBodySamples(Samples, PSI);
     unsigned Coverage = CoverageTracker.computeCoverage(Used, Total);
-    if (Coverage < SampleProfileSampleCoverage) {
+    if (Coverage <
+        getSampleProfileSampleCoverage(Func.getContext().getOptionsContext())) {
       Func.getContext().diagnose(DiagnosticInfoSampleProfile(
           Func.getSubprogram()->getFilename(), getFunctionLoc(F),
           Twine(Used) + " of " + Twine(Total) + " available profile samples (" +
@@ -1151,7 +1168,7 @@ unsigned SampleProfileLoaderBaseImpl<BT>::getFunctionLoc(FunctionT &F) {
   if (DISubprogram *S = Func.getSubprogram())
     return S->getLine();
 
-  if (NoWarnSampleUnused)
+  if (getNoWarnSampleUnused(Func.getContext().getOptionsContext()))
     return 0;
 
   // If the start of \p F is missing, emit a diagnostic to inform the user

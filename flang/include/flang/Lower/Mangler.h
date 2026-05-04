@@ -16,6 +16,7 @@
 #include "flang/Evaluate/expression.h"
 #include "flang/Optimizer/Dialect/FIRType.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/OptionsContext.h"
 #include <string>
 
 namespace Fortran {
@@ -41,10 +42,12 @@ using ScopeBlockIdMap =
 /// the scope of the symbol. This is useful when setting the attributes of
 /// a symbol where all the Fortran context is needed. Otherwise, external
 /// symbols are mangled outside of any scope.
-std::string mangleName(const semantics::Symbol &, ScopeBlockIdMap &,
+std::string mangleName(const llvm::clv2::OptionsContext &,
+                       const semantics::Symbol &, ScopeBlockIdMap &,
                        bool keepExternalInScope = false,
                        bool underscoring = true);
-std::string mangleName(const semantics::Symbol &,
+std::string mangleName(const llvm::clv2::OptionsContext &,
+                       const semantics::Symbol &,
                        bool keepExternalInScope = false,
                        bool underscoring = true);
 
@@ -93,7 +96,8 @@ inline std::string mangleArrayLiteral(
 }
 
 /// Return the compiler-generated name of a static namelist variable descriptor.
-std::string globalNamelistDescriptorName(const Fortran::semantics::Symbol &sym);
+std::string globalNamelistDescriptorName(const llvm::clv2::OptionsContext &,
+                                         const Fortran::semantics::Symbol &sym);
 
 /// Return the field name for a derived type component inside a fir.record type.
 /// It is the component name if the component is not private. Otherwise it is

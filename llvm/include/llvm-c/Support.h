@@ -47,6 +47,26 @@ LLVM_C_ABI void LLVMParseCommandLineOptions(int argc, const char *const *argv,
                                             const char *Overview);
 
 /**
+ * Parse command-line options and return an owned OptionsContext.
+ * The caller must dispose with LLVMDisposeOptionsContext().
+ * The returned context can be attached to an LLVMContext via
+ * LLVMContextCreateWithOptions().
+ *
+ * Returns NULL if the arguments could not be parsed, or if a help or version
+ * option was given -- in both cases there is nothing to dispose. As with
+ * LLVMParseCommandLineOptions(), parse diagnostics are suppressed; help and
+ * version text is still written to stdout. This function does not terminate
+ * the process.
+ */
+LLVM_C_ABI LLVMOptionsContextRef LLVMParseCommandLineOptions2(
+    int argc, const char *const *argv, const char *Overview);
+
+/**
+ * Dispose an OptionsContext created by LLVMParseCommandLineOptions2().
+ */
+LLVM_C_ABI void LLVMDisposeOptionsContext(LLVMOptionsContextRef Ctx);
+
+/**
  * This function will search through all previously loaded dynamic
  * libraries for the symbol \p symbolName. If it is found, the address of
  * that symbol is returned. If not, null is returned.

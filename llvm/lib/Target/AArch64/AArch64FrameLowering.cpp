@@ -248,12 +248,13 @@
 #include "llvm/IR/Function.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCDwarf.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include <cassert>
@@ -266,42 +267,46 @@ using namespace llvm;
 
 #define DEBUG_TYPE "frame-info"
 
-static cl::opt<bool> EnableRedZone("aarch64-redzone",
-                                   cl::desc("enable use of redzone on AArch64"),
-                                   cl::init(false), cl::Hidden);
+static bool getEnableRedZone(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableRedZone>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> StackTaggingMergeSetTag(
-    "stack-tagging-merge-settag",
-    cl::desc("merge settag instruction in function epilog"), cl::init(true),
-    cl::Hidden);
+static bool getStackTaggingMergeSetTag(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::A64_StackTaggingMergeSetTag>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> OrderFrameObjects("aarch64-order-frame-objects",
-                                       cl::desc("sort stack allocations"),
-                                       cl::init(true), cl::Hidden);
+static bool getOrderFrameObjects(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::A64_OrderFrameObjects>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    SplitSVEObjects("aarch64-split-sve-objects",
-                    cl::desc("Split allocation of ZPR & PPR objects"),
-                    cl::init(true), cl::Hidden);
+static bool getSplitSVEObjects(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::A64_SplitSVEObjects>(
+      F.getContext().getOptionsContext());
+}
 
-cl::opt<bool> EnableHomogeneousPrologEpilog(
-    "homogeneous-prolog-epilog", cl::Hidden,
-    cl::desc("Emit homogeneous prologue and epilogue for the size "
-             "optimization (default = off)"));
+static bool getEnableHomogeneousPrologEpilog(const Function &F) {
+  return clv2::getOptValOr<&clv2::AArch64OptsReg,
+                           &clv2::A64_HomogeneousPrologEpilog>(
+      F.getContext().getOptionsContext(), false);
+}
 
-// Stack hazard size for analysis remarks. StackHazardSize takes precedence.
-static cl::opt<unsigned>
-    StackHazardRemarkSize("aarch64-stack-hazard-remark-size", cl::init(0),
-                          cl::Hidden);
-// Whether to insert padding into non-streaming functions (for testing).
-static cl::opt<bool>
-    StackHazardInNonStreaming("aarch64-stack-hazard-in-non-streaming",
-                              cl::init(false), cl::Hidden);
+static unsigned getStackHazardRemarkSize(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::A64_StackHazardRemarkSize>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> DisableMultiVectorSpillFill(
-    "aarch64-disable-multivector-spill-fill",
-    cl::desc("Disable use of LD/ST pairs for SME2 or SVE2p1"), cl::init(false),
-    cl::Hidden);
+static bool getStackHazardInNonStreaming(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::A64_StackHazardInNonStreaming>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getDisableMultiVectorSpillFill(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::A64_DisableMultiVectorSpillFill>(
+      F.getContext().getOptionsContext());
+}
 
 int64_t
 AArch64FrameLowering::getArgumentStackToRestore(MachineFunction &MF,
@@ -405,9 +410,9 @@ bool AArch64FrameLowering::homogeneousPrologEpilog(
     MachineFunction &MF, MachineBasicBlock *Exit) const {
   if (!MF.getFunction().hasMinSize())
     return false;
-  if (!EnableHomogeneousPrologEpilog)
+  if (!getEnableHomogeneousPrologEpilog(MF.getFunction()))
     return false;
-  if (EnableRedZone)
+  if (getEnableRedZone(MF.getFunction()))
     return false;
 
   // TODO: Window is supported yet.
@@ -536,7 +541,7 @@ AArch64FrameLowering::getFixedObjectSize(const MachineFunction &MF,
 }
 
 bool AArch64FrameLowering::canUseRedZone(const MachineFunction &MF) const {
-  if (!EnableRedZone)
+  if (!getEnableRedZone(MF.getFunction()))
     return false;
 
   // Don't use the red zone if the function explicitly asks us not to.
@@ -1667,7 +1672,7 @@ MCRegister findFreePredicateReg(BitVector &SavedRegs) {
 // The multivector LD/ST are available only for SME or SVE2p1 targets
 bool enableMultiVectorSpillFill(const AArch64Subtarget &Subtarget,
                                 MachineFunction &MF) {
-  if (DisableMultiVectorSpillFill)
+  if (getDisableMultiVectorSpillFill(MF.getFunction()))
     return false;
 
   SMEAttrs FuncAttrs = MF.getInfo<AArch64FunctionInfo>()->getSMEFnAttrs();
@@ -2382,7 +2387,8 @@ void AArch64FrameLowering::determineStackHazardSlot(
 
   // Stack hazards are only needed in streaming functions.
   SMEAttrs Attrs = AFI->getSMEFnAttrs();
-  if (!StackHazardInNonStreaming && Attrs.hasNonStreamingInterfaceAndBody())
+  if (!getStackHazardInNonStreaming(MF.getFunction()) &&
+      Attrs.hasNonStreamingInterfaceAndBody())
     return;
 
   MachineFrameInfo &MFI = MF.getFrameInfo();
@@ -2399,7 +2405,7 @@ void AArch64FrameLowering::determineStackHazardSlot(
   });
   bool HasFPRStackObjects = false;
   bool HasPPRStackObjects = false;
-  if (!HasFPRCSRs || SplitSVEObjects) {
+  if (!HasFPRCSRs || getSplitSVEObjects(MF.getFunction())) {
     enum SlotType : uint8_t {
       Unknown = 0,
       ZPRorFPR = 1 << 0,
@@ -2448,7 +2454,7 @@ void AArch64FrameLowering::determineStackHazardSlot(
   if (!AFI->hasStackHazardSlotIndex())
     return;
 
-  if (SplitSVEObjects) {
+  if (getSplitSVEObjects(MF.getFunction())) {
     CallingConv::ID CC = MF.getFunction().getCallingConv();
     if (AFI->isSVECC() || CC == CallingConv::AArch64_SVE_VectorCall) {
       AFI->setSplitSVEObjects(true);
@@ -3543,7 +3549,7 @@ void AArch64FrameLowering::processFunctionBeforeFrameIndicesReplaced(
     MachineFunction &MF, RegScavenger *RS = nullptr) const {
   for (auto &BB : MF)
     for (MachineBasicBlock::iterator II = BB.begin(); II != BB.end();) {
-      if (StackTaggingMergeSetTag)
+      if (getStackTaggingMergeSetTag(MF.getFunction()))
         II = tryMergeAdjacentSTG(II, this, RS);
     }
 
@@ -3675,7 +3681,7 @@ void AArch64FrameLowering::orderFrameObjects(
     const MachineFunction &MF, SmallVectorImpl<int> &ObjectsToAllocate) const {
   const AArch64FunctionInfo &AFI = *MF.getInfo<AArch64FunctionInfo>();
 
-  if ((!OrderFrameObjects && !AFI.hasSplitSVEObjects()) ||
+  if ((!getOrderFrameObjects(MF.getFunction()) && !AFI.hasSplitSVEObjects()) ||
       ObjectsToAllocate.empty())
     return;
 
@@ -4033,8 +4039,9 @@ void AArch64FrameLowering::emitRemarks(
     return;
 
   unsigned StackHazardSize = getStackHazardSize(MF);
-  const uint64_t HazardSize =
-      (StackHazardSize) ? StackHazardSize : StackHazardRemarkSize;
+  const uint64_t HazardSize = (StackHazardSize)
+                                  ? StackHazardSize
+                                  : getStackHazardRemarkSize(MF.getFunction());
 
   if (HazardSize == 0)
     return;

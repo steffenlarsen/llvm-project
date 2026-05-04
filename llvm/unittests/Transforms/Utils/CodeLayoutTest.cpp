@@ -1,4 +1,5 @@
 #include "llvm/Transforms/Utils/CodeLayout.h"
+#include "llvm/Support/OptionsContext.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include <vector>
@@ -15,7 +16,8 @@ TEST(CodeLayout, ThreeFunctions) {
     const std::vector<uint64_t> Sizes(std::size(Counts), 9);
     const EdgeCount Edges[] = {{0, 1, 40}, {0, 2, 100}, {1, 2, 40}};
     const std::vector<uint64_t> CallOffsets(std::size(Edges), 5);
-    auto Order = computeCacheDirectedLayout(Sizes, Counts, Edges, CallOffsets);
+    auto Order = computeCacheDirectedLayout(
+        Sizes, Counts, Edges, CallOffsets, llvm::clv2::defaultOptionsContext());
     EXPECT_THAT(Order, ElementsAreArray({0, 2, 1}));
   }
 
@@ -25,7 +27,8 @@ TEST(CodeLayout, ThreeFunctions) {
     const std::vector<uint64_t> Sizes(std::size(Counts), 9);
     const EdgeCount Edges[] = {{0, 1, 80}, {0, 2, 100}, {1, 2, 80}};
     const uint64_t CallOffsets[] = {9, 5, 9};
-    auto Order = computeCacheDirectedLayout(Sizes, Counts, Edges, CallOffsets);
+    auto Order = computeCacheDirectedLayout(
+        Sizes, Counts, Edges, CallOffsets, llvm::clv2::defaultOptionsContext());
     EXPECT_THAT(Order, ElementsAreArray({0, 1, 2}));
   }
 }
@@ -38,7 +41,8 @@ TEST(CodeLayout, HotChain) {
     const EdgeCount Edges[] = {{0, 1, 7},  {1, 2, 7},  {0, 3, 15},
                                {3, 4, 15}, {4, 4, 31}, {4, 2, 15}};
     const std::vector<uint64_t> CallOffsets(std::size(Edges), 5);
-    auto Order = computeCacheDirectedLayout(Sizes, Counts, Edges, CallOffsets);
+    auto Order = computeCacheDirectedLayout(
+        Sizes, Counts, Edges, CallOffsets, llvm::clv2::defaultOptionsContext());
     EXPECT_THAT(Order, ElementsAreArray({0, 3, 4, 2, 1}));
 
     // -cdsort-max-chain-size disables forming a larger chain and therefore may
@@ -59,13 +63,15 @@ TEST(CodeLayout, BreakLoop) {
   const EdgeCount Edges[] = {{0, 1, 177}, {1, 2, 196}, {2, 3, 124}, {3, 1, 124},
                              {1, 5, 177}, {2, 4, 79},  {4, 1, 70}};
   const std::vector<uint64_t> CallOffsets(std::size(Edges), 5);
-  auto Order = computeCacheDirectedLayout(Sizes, Counts, Edges, CallOffsets);
+  auto Order = computeCacheDirectedLayout(Sizes, Counts, Edges, CallOffsets,
+                                          llvm::clv2::defaultOptionsContext());
   EXPECT_THAT(Order, ElementsAreArray({4, 0, 1, 2, 3, 5}));
 
   // When node 0 is larger, it is beneficial to move node 4 closer to the
   // (1,2,3) loop.
   Sizes[0] = 18;
-  Order = computeCacheDirectedLayout(Sizes, Counts, Edges, CallOffsets);
+  Order = computeCacheDirectedLayout(Sizes, Counts, Edges, CallOffsets,
+                                     llvm::clv2::defaultOptionsContext());
   EXPECT_THAT(Order, ElementsAreArray({0, 4, 1, 2, 3, 5}));
 }
 } // namespace

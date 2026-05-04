@@ -40,6 +40,17 @@ class SampleProfileMatcher {
   // Hash mapping cache for matched anchor pairs in stale profile matching
   DenseMap<FunctionId, const Function *> MatchedAnchorCache;
 
+  // Whether stale-profile matching is on for this module.  Seeded from the
+  // option and forced on by the sample-profile loader for probe-based
+  // profiles; it used to be a process-wide global, which leaked the decision
+  // between modules.
+  bool SalvageStaleProfile = false;
+
+  // Whether to salvage unused profiles for this module.  Seeded from the
+  // option in runOnModule() and then cleared for very large modules to limit
+  // compile time, so it is per-matcher state rather than a plain option read.
+  bool SalvageUnusedProfile = false;
+
   // Match state for an anchor/callsite.
   enum class MatchState {
     Unknown = 0,
@@ -117,10 +128,12 @@ public:
       const PseudoProbeManager *ProbeManager, ThinOrFullLTOPhase LTOPhase,
       HashKeyMap<DenseMap, FunctionId, Function *> &SymMap,
       std::shared_ptr<ProfileSymbolList> PSL,
-      HashKeyMap<DenseMap, FunctionId, FunctionId> &FuncNameToProfNameMap)
+      HashKeyMap<DenseMap, FunctionId, FunctionId> &FuncNameToProfNameMap,
+      bool SalvageStaleProfile)
       : M(M), Reader(Reader), CG(CG), ProbeManager(ProbeManager),
         LTOPhase(LTOPhase), FuncNameToProfNameMap(&FuncNameToProfNameMap),
-        SymbolMap(&SymMap), PSL(PSL) {};
+        SymbolMap(&SymMap), PSL(PSL),
+        SalvageStaleProfile(SalvageStaleProfile) {};
   LLVM_ABI void runOnModule();
   void clearMatchingData() {
     // Do not clear FuncMappings, it stores IRLoc to ProfLoc remappings which

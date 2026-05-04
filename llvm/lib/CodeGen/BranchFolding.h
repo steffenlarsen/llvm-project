@@ -12,6 +12,10 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
+
+namespace llvm::clv2 {
+class OptionsContext;
+}
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/Support/Compiler.h"
 #include <vector>
@@ -34,6 +38,7 @@ class TargetRegisterInfo;
                           MBFIWrapper &FreqInfo,
                           const MachineBranchProbabilityInfo &ProbInfo,
                           ProfileSummaryInfo *PSI,
+                          const clv2::OptionsContext &Ctx,
                           // Min tail length to merge. Defaults to commandline
                           // flag. Ignored for optsize.
                           unsigned MinTailLength = 0);
@@ -126,7 +131,7 @@ class TargetRegisterInfo;
     bool AfterBlockPlacement = false;
     bool EnableTailMerge = false;
     bool EnableHoistCommonCode = false;
-    bool EnableBasicBlockReordering = false;
+    bool EnableBasicBlockReordering = true;
     bool UpdateLiveIns = false;
     unsigned MinCommonTailLength;
     const TargetInstrInfo *TII = nullptr;

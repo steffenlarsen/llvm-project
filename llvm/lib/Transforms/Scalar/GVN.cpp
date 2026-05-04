@@ -65,10 +65,12 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/AssumeBundleBuilder.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -107,48 +109,55 @@ STATISTIC(MaxBBSpeculationCutoffReachedTimes,
           "Number of times we we reached gvn-max-block-speculations cut-off "
           "preventing further exploration");
 
-static cl::opt<bool> GVNEnableScalarPRE("enable-scalar-pre", cl::init(true),
-                                        cl::Hidden);
-static cl::opt<bool> GVNEnableLoadPRE("enable-load-pre", cl::init(true));
-static cl::opt<bool> GVNEnableLoadInLoopPRE("enable-load-in-loop-pre",
-                                            cl::init(true));
-static cl::opt<bool>
-GVNEnableSplitBackedgeInLoadPRE("enable-split-backedge-in-load-pre",
-                                cl::init(false));
-static cl::opt<bool> GVNEnableMemDep("enable-gvn-memdep", cl::init(true));
-static cl::opt<bool> GVNEnableMemorySSA("enable-gvn-memoryssa",
-                                        cl::init(false));
-
-static cl::opt<unsigned> ScanUsersLimit(
-    "gvn-scan-users-limit", cl::Hidden, cl::init(100),
-    cl::desc("The number of memory accesses to scan in a block in reaching "
-             "memory values analysis (default = 100)"));
-
-static cl::opt<uint32_t> MaxNumDeps(
-    "gvn-max-num-deps", cl::Hidden, cl::init(100),
-    cl::desc("Max number of dependences to attempt Load PRE (default = 100)"));
-
-static cl::opt<uint32_t> MaxNumReachingBlocks(
-    "gvn-max-num-reaching-blocks", cl::Hidden, cl::init(200),
-    cl::desc("Max number of blocks scanned per load in the MemorySSA "
-             "reaching-value analysis (default = 200)"));
-
-// This is based on IsValueFullyAvailableInBlockNumSpeculationsMax stat.
-static cl::opt<uint32_t> MaxBBSpeculations(
-    "gvn-max-block-speculations", cl::Hidden, cl::init(600),
-    cl::desc("Max number of blocks we're willing to speculate on (and recurse "
-             "into) when deducing if a value is fully available or not in GVN "
-             "(default = 600)"));
-
-static cl::opt<uint32_t> MaxNumVisitedInsts(
-    "gvn-max-num-visited-insts", cl::Hidden, cl::init(100),
-    cl::desc("Max number of visited instructions when trying to find "
-             "dominating value of select dependency (default = 100)"));
-
-static cl::opt<uint32_t> MaxNumInsnsPerBlock(
-    "gvn-max-num-insns", cl::Hidden, cl::init(100),
-    cl::desc("Max number of instructions to scan in each basic block in GVN "
-             "(default = 100)"));
+static bool getGVNEnableScalarPRE(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_EnablePre>(
+      F.getContext().getOptionsContext());
+}
+static bool getGVNEnableLoadPRE(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_EnableLoadPre>(
+      F.getContext().getOptionsContext());
+}
+static bool getGVNEnableLoadInLoopPRE(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_EnableLoadInLoopPre>(
+      F.getContext().getOptionsContext());
+}
+static bool getGVNEnableSplitBackedgeInLoadPRE(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_EnableSplitBackedgeInLoadPre>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool getGVNEnableMemDep(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_EnableGvnMemdep>(
+      F.getContext().getOptionsContext());
+}
+static bool getGVNEnableMemorySSA(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_EnableGvnMemoryssa>(
+      F.getContext().getOptionsContext(), false);
+}
+static unsigned getScanUsersLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_GvnScanUsersLimit>(
+      F.getContext().getOptionsContext());
+}
+static uint32_t getMaxNumReachingBlocks(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_GvnMaxNumReachingBlocks>(
+      F.getContext().getOptionsContext());
+}
+static uint32_t getMaxNumDeps(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_GvnMaxNumDeps>(
+      F.getContext().getOptionsContext());
+}
+static uint32_t getMaxBBSpeculations(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_GvnMaxBlockSpeculations>(
+      F.getContext().getOptionsContext());
+}
+static uint32_t getMaxNumVisitedInsts(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_GvnMaxNumVisitedInsts>(
+      F.getContext().getOptionsContext());
+}
+static uint32_t getMaxNumInsnsPerBlock(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_GvnMaxNumInsns>(
+      F.getContext().getOptionsContext());
+}
 
 struct llvm::GVNPass::Expression {
   uint32_t Opcode;
@@ -865,28 +874,51 @@ void GVNPass::LeaderMap::erase(uint32_t N, Instruction *I,
 //===----------------------------------------------------------------------===//
 
 bool GVNPass::isScalarPREEnabled() const {
-  return Options.AllowScalarPRE.value_or(GVNEnableScalarPRE);
+  if (Options.AllowScalarPRE.has_value())
+    return *Options.AllowScalarPRE;
+  if (DT && DT->root_size() > 0)
+    return getGVNEnableScalarPRE(*DT->getRoot()->getParent());
+  return true;
 }
 
 bool GVNPass::isLoadPREEnabled() const {
-  return Options.AllowLoadPRE.value_or(GVNEnableLoadPRE);
+  if (Options.AllowLoadPRE.has_value())
+    return *Options.AllowLoadPRE;
+  if (DT && DT->root_size() > 0)
+    return getGVNEnableLoadPRE(*DT->getRoot()->getParent());
+  return true;
 }
 
 bool GVNPass::isLoadInLoopPREEnabled() const {
-  return Options.AllowLoadInLoopPRE.value_or(GVNEnableLoadInLoopPRE);
+  if (Options.AllowLoadInLoopPRE.has_value())
+    return *Options.AllowLoadInLoopPRE;
+  if (DT && DT->root_size() > 0)
+    return getGVNEnableLoadInLoopPRE(*DT->getRoot()->getParent());
+  return true;
 }
 
 bool GVNPass::isLoadPRESplitBackedgeEnabled() const {
-  return Options.AllowLoadPRESplitBackedge.value_or(
-      GVNEnableSplitBackedgeInLoadPRE);
+  if (Options.AllowLoadPRESplitBackedge.has_value())
+    return *Options.AllowLoadPRESplitBackedge;
+  if (DT && DT->root_size() > 0)
+    return getGVNEnableSplitBackedgeInLoadPRE(*DT->getRoot()->getParent());
+  return false;
 }
 
 bool GVNPass::isMemDepEnabled() const {
-  return Options.AllowMemDep.value_or(GVNEnableMemDep);
+  if (Options.AllowMemDep.has_value())
+    return *Options.AllowMemDep;
+  if (DT && DT->root_size() > 0)
+    return getGVNEnableMemDep(*DT->getRoot()->getParent());
+  return true;
 }
 
 bool GVNPass::isMemorySSAEnabled() const {
-  return Options.AllowMemorySSA.value_or(GVNEnableMemorySSA);
+  if (Options.AllowMemorySSA.has_value())
+    return *Options.AllowMemorySSA;
+  if (DT && DT->root_size() > 0)
+    return getGVNEnableMemorySSA(*DT->getRoot()->getParent());
+  return false;
 }
 
 PreservedAnalyses GVNPass::run(Function &F, FunctionAnalysisManager &AM) {
@@ -898,11 +930,13 @@ PreservedAnalyses GVNPass::run(Function &F, FunctionAnalysisManager &AM) {
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &TLI = AM.getResult<TargetLibraryAnalysis>(F);
   auto &AA = AM.getResult<AAManager>(F);
+  bool MemDepOn = Options.AllowMemDep.value_or(getGVNEnableMemDep(F));
+  bool MemSSAOn = Options.AllowMemorySSA.value_or(getGVNEnableMemorySSA(F));
   auto *MemDep =
-      isMemDepEnabled() ? &AM.getResult<MemoryDependenceAnalysis>(F) : nullptr;
+      MemDepOn ? &AM.getResult<MemoryDependenceAnalysis>(F) : nullptr;
   auto &LI = AM.getResult<LoopAnalysis>(F);
   auto *MSSA = AM.getCachedResult<MemorySSAAnalysis>(F);
-  if (isMemorySSAEnabled() && !MSSA) {
+  if (MemSSAOn && !MSSA) {
     assert(!MemDep &&
            "On-demand computation of MemSSA implies that MemDep is disabled!");
     MSSA = &AM.getResult<MemorySSAAnalysis>(F);
@@ -1007,7 +1041,8 @@ static bool isValueFullyAvailableInBlock(
 
     // No entry found for block.
     ++NumNewNewSpeculativelyAvailableBBs;
-    bool OutOfBudget = NumNewNewSpeculativelyAvailableBBs > MaxBBSpeculations;
+    bool OutOfBudget = NumNewNewSpeculativelyAvailableBBs >
+                       getMaxBBSpeculations(*CurrBB->getParent());
 
     // If we have exhausted our budget, mark this block as unavailable.
     // Also, if this block has no predecessors, the value isn't live-in here.
@@ -1314,7 +1349,7 @@ static Value *findDominatingValue(const MemoryLocation &Loc, Type *LoadTy,
     for (auto *Inst = BB == FromBB ? From : BB->getTerminator();
          Inst != nullptr; Inst = Inst->getPrevNode()) {
       // Stop the search if limit is reached.
-      if (++NumVisitedInsts > MaxNumVisitedInsts)
+      if (++NumVisitedInsts > getMaxNumVisitedInsts(*FromBB->getParent()))
         return nullptr;
       if (isModSet(BatchAA.getModRefInfo(Inst, Loc))) {
         // A simple store to the exact location can forward its value.
@@ -1585,7 +1620,7 @@ LoadInst *GVNPass::findLoadToHoistIntoPred(BasicBlock *Pred, BasicBlock *LoadBB,
   if (!SuccBB->getSinglePredecessor())
     return nullptr;
 
-  unsigned int NumInsts = MaxNumInsnsPerBlock;
+  unsigned int NumInsts = getMaxNumInsnsPerBlock(*SuccBB->getParent());
   for (Instruction &Inst : *SuccBB) {
     if (Inst.isDebugOrPseudoInst())
       continue;
@@ -2070,7 +2105,7 @@ bool GVNPass::processNonLocalLoad(LoadInst *Load) {
   // dependencies, this load isn't worth worrying about.  Optimizing
   // it will be too expensive.
   unsigned NumDeps = Deps.size();
-  if (NumDeps > MaxNumDeps)
+  if (NumDeps > getMaxNumDeps(*Load->getFunction()))
     return false;
 
   SmallVector<ReachingMemVal, 64> MemVals;
@@ -2359,7 +2394,7 @@ std::optional<GVNPass::ReachingMemVal> GVNPass::scanMemoryAccessesUsers(
   for (MemoryAccess *MA : ClobbersList) {
     unsigned Scanned = 0;
     for (User *U : MA->users()) {
-      if (++Scanned >= ScanUsersLimit)
+      if (++Scanned >= getScanUsersLimit(*BB->getParent()))
         return ReachingMemVal::getUnknown(BB, Loc.Ptr);
 
       auto *UseOrDef = dyn_cast<MemoryUseOrDef>(U);
@@ -2679,7 +2714,7 @@ bool GVNPass::findReachingValuesForLoad(LoadInst *L,
   auto Worklist = InitialWorklist;
   while (!Worklist.empty()) {
     // Match MemDep's cutoff for expensive non-local queries.
-    if (Blocks.size() > MaxNumReachingBlocks)
+    if (Blocks.size() > getMaxNumReachingBlocks(*L->getFunction()))
       return false;
     auto *BB = Worklist.pop_back_val();
     DependencyBlockInfo &Info = Blocks.find(BB)->second;
@@ -3537,8 +3572,10 @@ bool GVNPass::runImpl(Function &F, AssumptionCache &RunAC, DominatorTree &RunDT,
   // iteration.
   DeadBlocks.clear();
 
-  if (MSSA && VerifyMemorySSA)
+#ifdef EXPENSIVE_CHECKS
+  if (MSSA)
     MSSA->verifyMemorySSA();
+#endif
 
   return Changed;
 }
@@ -4011,9 +4048,8 @@ class llvm::GVNLegacyPass : public FunctionPass {
 public:
   static char ID; // Pass identification, replacement for typeid.
 
-  explicit GVNLegacyPass(bool MemDepAnalysis = GVNEnableMemDep,
-                         bool MemSSAAnalysis = GVNEnableMemorySSA,
-                         bool ScalarPRE = true)
+  explicit GVNLegacyPass(bool MemDepAnalysis = true,
+                         bool MemSSAAnalysis = false, bool ScalarPRE = true)
       : FunctionPass(ID), Impl(GVNOptions()
                                    .setMemDep(MemDepAnalysis)
                                    .setMemorySSA(MemSSAAnalysis)
@@ -4080,5 +4116,5 @@ INITIALIZE_PASS_END(GVNLegacyPass, "gvn", "Global Value Numbering", false, false
 // The public interface to this file...
 FunctionPass *llvm::createGVNPass() { return new GVNLegacyPass(); }
 FunctionPass *llvm::createGVNPass(bool ScalarPRE) {
-  return new GVNLegacyPass(GVNEnableMemDep, GVNEnableMemorySSA, ScalarPRE);
+  return new GVNLegacyPass(true, false, ScalarPRE);
 }

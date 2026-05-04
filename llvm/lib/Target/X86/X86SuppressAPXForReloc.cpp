@@ -26,17 +26,19 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "x86-suppress-apx-for-relocation"
 
-cl::opt<bool> X86EnableAPXForRelocation(
-    "x86-enable-apx-for-relocation",
-    cl::desc("Enable APX features (EGPR, NDD and NF) for instructions with "
-             "relocations on x86-64 ELF"),
-    cl::init(false));
+static bool getX86EnableAPXForRelocation(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_EnableAPXForRelocation>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 class X86SuppressAPXForRelocationLegacy : public MachineFunctionPass {
@@ -250,7 +252,7 @@ static bool handleNDDOrNFInstructions(MachineFunction &MF,
 }
 
 static bool suppressAPXForRelocation(MachineFunction &MF) {
-  if (X86EnableAPXForRelocation)
+  if (getX86EnableAPXForRelocation(MF.getFunction()))
     return false;
   const X86Subtarget &ST = MF.getSubtarget<X86Subtarget>();
   bool Changed = handleInstructionWithEGPR(MF, ST);

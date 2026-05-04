@@ -42,7 +42,7 @@ TEST(ScalableVectorMVTsTest, FloatMVTs) {
 }
 
 TEST(ScalableVectorMVTsTest, HelperFuncs) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   // Create with scalable flag
   EVT Vnx4i32 = EVT::getVectorVT(Ctx, MVT::i32, 4, /*Scalable=*/true);
@@ -88,13 +88,13 @@ TEST(ScalableVectorMVTsTest, HelperFuncs) {
 }
 
 TEST(ScalableVectorMVTsTest, IRToVTTranslation) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   Type *Int64Ty = Type::getInt64Ty(Ctx);
   VectorType *ScV8Int64Ty =
       VectorType::get(Int64Ty, ElementCount::getScalable(8));
 
-  // Check that we can map a scalable IR type to an MVT 
+  // Check that we can map a scalable IR type to an MVT
   MVT Mnxv8i64 = MVT::getVT(ScV8Int64Ty);
   ASSERT_TRUE(Mnxv8i64.isScalableVector());
   ASSERT_EQ(ScV8Int64Ty->getElementCount(), Mnxv8i64.getVectorElementCount());
@@ -110,7 +110,7 @@ TEST(ScalableVectorMVTsTest, IRToVTTranslation) {
 }
 
 TEST(ScalableVectorMVTsTest, VTToIRTranslation) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   EVT Enxv4f64 = EVT::getVectorVT(Ctx, MVT::f64, ElementCount::getScalable(4));
 
@@ -123,12 +123,12 @@ TEST(ScalableVectorMVTsTest, VTToIRTranslation) {
 }
 
 TEST(ScalableVectorMVTsTest, SizeQueries) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
-  EVT nxv4i32 = EVT::getVectorVT(Ctx, MVT::i32, 4, /*Scalable=*/ true);
-  EVT nxv2i32 = EVT::getVectorVT(Ctx, MVT::i32, 2, /*Scalable=*/ true);
-  EVT nxv2i64 = EVT::getVectorVT(Ctx, MVT::i64, 2, /*Scalable=*/ true);
-  EVT nxv2f64 = EVT::getVectorVT(Ctx, MVT::f64, 2, /*Scalable=*/ true);
+  EVT nxv4i32 = EVT::getVectorVT(Ctx, MVT::i32, 4, /*Scalable=*/true);
+  EVT nxv2i32 = EVT::getVectorVT(Ctx, MVT::i32, 2, /*Scalable=*/true);
+  EVT nxv2i64 = EVT::getVectorVT(Ctx, MVT::i64, 2, /*Scalable=*/true);
+  EVT nxv2f64 = EVT::getVectorVT(Ctx, MVT::f64, 2, /*Scalable=*/true);
 
   EVT v4i32 = EVT::getVectorVT(Ctx, MVT::i32, 4);
   EVT v2i32 = EVT::getVectorVT(Ctx, MVT::i32, 2);

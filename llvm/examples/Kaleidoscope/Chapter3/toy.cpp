@@ -383,7 +383,7 @@ static std::unique_ptr<FunctionAST> ParseTopLevelExpr() {
   if (auto E = ParseExpression()) {
     // Make an anonymous proto.
     auto Proto = std::make_unique<PrototypeAST>("__anon_expr",
-                                                 std::vector<std::string>());
+                                                std::vector<std::string>());
     return std::make_unique<FunctionAST>(std::move(Proto), std::move(E));
   }
   return nullptr;
@@ -523,7 +523,8 @@ Function *FunctionAST::codegen() {
 
 static void InitializeModule() {
   // Open a new context and module.
-  TheContext = std::make_unique<LLVMContext>();
+  TheContext =
+      std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
   TheModule = std::make_unique<Module>("my cool jit", *TheContext);
 
   // Create a new builder for the module.

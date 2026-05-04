@@ -28,6 +28,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/IROptionsOptInfos.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/IntrinsicInst.h"
@@ -45,10 +46,10 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/ValueSymbolTable.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ModRef.h"
+#include "llvm/Support/OptionsContext.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -61,9 +62,11 @@ using namespace llvm;
 // are not in the public header file...
 template class LLVM_EXPORT_TEMPLATE llvm::SymbolTableListTraits<BasicBlock>;
 
-static cl::opt<int> NonGlobalValueMaxNameSize(
-    "non-global-value-max-name-size", cl::Hidden, cl::init(1024),
-    cl::desc("Maximum size for the name of non-global values."));
+static int NonGlobalValueMaxNameSize = 1024;
+static int getNonGlobalValueMaxNameSize(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::IR_NonGlobalValueMaxNameSize>(
+      F.getContext().getOptionsContext());
+}
 
 void Function::renumberBlocks() {
   validateBlockNumbers();
@@ -489,7 +492,8 @@ Function::Function(FunctionType *Ty, LinkageTypes Linkage, unsigned AddrSpace,
 
   // We only need a symbol table for a function if the context keeps value names
   if (!getContext().shouldDiscardValueNames())
-    SymTab = std::make_unique<ValueSymbolTable>(NonGlobalValueMaxNameSize);
+    SymTab =
+        std::make_unique<ValueSymbolTable>(getNonGlobalValueMaxNameSize(*this));
 
   // If the function has arguments, mark them as lazily built.
   if (Ty->getNumParams())

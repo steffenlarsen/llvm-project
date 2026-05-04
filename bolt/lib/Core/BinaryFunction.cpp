@@ -12,10 +12,12 @@
 
 #include "bolt/Core/BinaryFunction.h"
 #include "bolt/Core/BinaryBasicBlock.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
 #include "bolt/Core/BranchLivenessInfo.h"
 #include "bolt/Core/DynoStats.h"
 #include "bolt/Core/HashUtilities.h"
 #include "bolt/Core/MCPlusBuilder.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "bolt/Utils/NameResolver.h"
 #include "bolt/Utils/NameShortener.h"
@@ -34,7 +36,8 @@
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Object/ObjectFile.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GenericDomTreeConstruction.h"
 #include "llvm/Support/GenericLoopInfoImpl.h"
@@ -60,87 +63,21 @@ namespace opts {
 extern cl::OptionCategory BoltCategory;
 extern cl::OptionCategory BoltOptCategory;
 
-extern cl::opt<bool> EnableBAT;
-extern cl::opt<bool> Instrument;
-extern cl::list<std::string> PrintOnly;
-extern cl::opt<std::string> PrintOnlyFile;
-extern cl::opt<bool> StrictMode;
-extern cl::opt<bool> UpdateDebugSections;
-extern cl::opt<unsigned> Verbosity;
-
-extern bool BinaryAnalysisMode;
 extern HeatmapModeKind HeatmapMode;
-extern bool processAllFunctions();
 
-static cl::opt<bool> CheckEncoding(
-    "check-encoding",
-    cl::desc("perform verification of LLVM instruction encoding/decoding. "
-             "Every instruction in the input is decoded and re-encoded. "
-             "If the resulting bytes do not match the input, a warning message "
-             "is printed."),
-    cl::Hidden, cl::cat(BoltCategory));
+bool DotToolTipCode = false;
 
-static cl::opt<bool> DotToolTipCode(
-    "dot-tooltip-code",
-    cl::desc("add basic block instructions as tool tips on nodes"), cl::Hidden,
-    cl::cat(BoltCategory));
+JumpTableSupportLevel JumpTables = JTS_BASIC;
 
-cl::opt<JumpTableSupportLevel>
-JumpTables("jump-tables",
-  cl::desc("jump tables support (default=basic)"),
-  cl::init(JTS_BASIC),
-  cl::values(
-      clEnumValN(JTS_NONE, "none",
-                 "do not optimize functions with jump tables"),
-      clEnumValN(JTS_BASIC, "basic",
-                 "optimize functions with jump tables"),
-      clEnumValN(JTS_MOVE, "move",
-                 "move jump tables to a separate section"),
-      clEnumValN(JTS_SPLIT, "split",
-                 "split jump tables section into hot and cold based on "
-                 "function execution frequency"),
-      clEnumValN(JTS_AGGRESSIVE, "aggressive",
-                 "aggressively split jump tables section based on usage "
-                 "of the tables")),
-  cl::ZeroOrMore,
-  cl::cat(BoltOptCategory));
+bool TrapOnAVX512 = false;
 
-static cl::opt<bool> NoScan(
-    "no-scan",
-    cl::desc(
-        "do not scan cold functions for external references (may result in "
-        "slower binary)"),
-    cl::Hidden, cl::cat(BoltOptCategory));
+} // namespace opts
 
-static cl::opt<bool> PrintOutputAddressRange(
-    "print-output-address-range",
-    cl::desc(
-        "print output address range for each basic block in the function when"
-        "BinaryFunction::print is called"),
-    cl::Hidden, cl::cat(BoltOptCategory));
+using bolt::bolt_core_opts::getBoltCoreOpts;
+using bolt::bolt_utils_opts::getBoltUtilsOpts;
 
-cl::opt<bool>
-PrintDynoStats("dyno-stats",
-  cl::desc("print execution info based on profile"),
-  cl::cat(BoltCategory));
-
-static cl::opt<bool>
-PrintDynoStatsOnly("print-dyno-stats-only",
-  cl::desc("while printing functions output dyno-stats and skip instructions"),
-  cl::init(false),
-  cl::Hidden,
-  cl::cat(BoltCategory));
-
-cl::opt<bool>
-    TimeBuild("time-build",
-              cl::desc("print time spent constructing binary functions"),
-              cl::Hidden, cl::cat(BoltCategory));
-
-static cl::opt<bool> TrapOnAVX512(
-    "trap-avx512",
-    cl::desc("in relocation mode trap upon entry to any function that uses "
-             "AVX-512 instructions"),
-    cl::init(false), cl::ZeroOrMore, cl::Hidden, cl::cat(BoltCategory));
+namespace llvm {
+namespace bolt {
 
 bool shouldPrint(const BinaryFunction &Function) {
   // PLT stubs are disassembled for BTI binaries, therefore they should be
@@ -151,23 +88,21 @@ bool shouldPrint(const BinaryFunction &Function) {
   if (Function.isIgnored())
     return false;
 
-  if (PrintOnly.empty())
+  const auto &DoPrintOnly =
+      llvm::bolt::bolt_utils_opts::getPrintOnly(Function.getBinaryContext());
+
+  if (DoPrintOnly.empty())
     return true;
 
-  for (std::string &Name : opts::PrintOnly) {
+  for (const std::string &Name : DoPrintOnly) {
     if (Function.hasNameRegex(Name)) {
       return true;
     }
   }
 
   std::optional<StringRef> Origin = Function.getOriginSectionName();
-  return Origin && llvm::is_contained(opts::PrintOnly, *Origin);
+  return Origin && llvm::is_contained(DoPrintOnly, *Origin);
 }
-
-} // namespace opts
-
-namespace llvm {
-namespace bolt {
 
 template <typename R> static bool emptyRange(const R &Range) {
   return Range.begin() == Range.end();
@@ -210,12 +145,24 @@ static std::string buildSectionName(StringRef Prefix, StringRef Name,
 static raw_ostream &operator<<(raw_ostream &OS,
                                const BinaryFunction::State State) {
   switch (State) {
-  case BinaryFunction::State::Empty:         OS << "empty"; break;
-  case BinaryFunction::State::Disassembled:  OS << "disassembled"; break;
-  case BinaryFunction::State::CFG:           OS << "CFG constructed"; break;
-  case BinaryFunction::State::CFG_Finalized: OS << "CFG finalized"; break;
-  case BinaryFunction::State::EmittedCFG:    OS << "emitted with CFG"; break;
-  case BinaryFunction::State::Emitted:       OS << "emitted"; break;
+  case BinaryFunction::State::Empty:
+    OS << "empty";
+    break;
+  case BinaryFunction::State::Disassembled:
+    OS << "disassembled";
+    break;
+  case BinaryFunction::State::CFG:
+    OS << "CFG constructed";
+    break;
+  case BinaryFunction::State::CFG_Finalized:
+    OS << "CFG finalized";
+    break;
+  case BinaryFunction::State::EmittedCFG:
+    OS << "emitted with CFG";
+    break;
+  case BinaryFunction::State::Emitted:
+    OS << "emitted";
+    break;
   }
 
   return OS;
@@ -417,7 +364,7 @@ void BinaryFunction::dump() const {
 }
 
 void BinaryFunction::print(raw_ostream &OS, std::string Annotation) {
-  if (!opts::shouldPrint(*this))
+  if (!shouldPrint(*this))
     return;
 
   StringRef SectionName =
@@ -488,7 +435,8 @@ void BinaryFunction::print(raw_ostream &OS, std::string Annotation) {
   if (ExternEntryCount)
     OS << "\n  Extern Entry Count: " << ExternEntryCount;
 
-  if (opts::PrintDynoStats && !getLayout().block_empty()) {
+  bool DoPrintDynoStats = llvm::bolt::bolt_core_opts::getDynoStats(BC);
+  if (DoPrintDynoStats && !getLayout().block_empty()) {
     OS << '\n';
     DynoStats dynoStats = getDynoStats(*this);
     OS << dynoStats;
@@ -496,7 +444,9 @@ void BinaryFunction::print(raw_ostream &OS, std::string Annotation) {
 
   OS << "\n}\n";
 
-  if (opts::PrintDynoStatsOnly || !BC.InstPrinter)
+  bool DoPrintDynoStatsOnly =
+      llvm::bolt::bolt_core_opts::getPrintDynoStatsOnly(BC);
+  if (DoPrintDynoStatsOnly || !BC.InstPrinter)
     return;
 
   // Offset of the instruction in function.
@@ -554,7 +504,9 @@ void BinaryFunction::print(raw_ostream &OS, std::string Annotation) {
       OS << BB->getName() << " (" << BB->size()
          << " instructions, align : " << BB->getAlignment() << ")\n";
 
-      if (opts::PrintOutputAddressRange)
+      bool DoPrintOutputAddrRange =
+          llvm::bolt::bolt_core_opts::getPrintOutputAddressRange(BC);
+      if (DoPrintOutputAddrRange)
         OS << formatv("  Output Address Range: [{0:x}, {1:x}) ({2} bytes)\n",
                       BB->getOutputAddressRange().first,
                       BB->getOutputAddressRange().second, BB->getOutputSize());
@@ -579,9 +531,12 @@ void BinaryFunction::print(raw_ostream &OS, std::string Annotation) {
       }
       if (hasCFI())
         OS << "  CFI State : " << BB->getCFIState() << '\n';
-      if (opts::EnableBAT) {
-        OS << "  Input offset: 0x" << Twine::utohexstr(BB->getInputOffset())
-           << "\n";
+      {
+        bool DoEnableBAT = llvm::bolt::bolt_utils_opts::getEnableBat(BC);
+        if (DoEnableBAT) {
+          OS << "  Input offset: 0x" << Twine::utohexstr(BB->getInputOffset())
+             << "\n";
+        }
       }
       if (!BB->pred_empty()) {
         OS << "  Predecessors: ";
@@ -958,7 +913,7 @@ BinaryFunction::processIndirectBranch(MCInst &Instruction, unsigned Size,
     // No section - possibly an absolute address. Since we don't allow
     // internal function addresses to escape the function scope - we
     // consider it a tail call.
-    if (opts::Verbosity >= 1) {
+    if (opts::getVerbosity(BC) >= 1) {
       BC.errs() << "BOLT-WARNING: no section for address 0x"
                 << Twine::utohexstr(ArrayStart) << " referenced from function "
                 << *this << '\n';
@@ -1134,7 +1089,7 @@ Error BinaryFunction::handlePCRelOperand(MCInst &Instruction, uint64_t Address,
     IsSimple = false;
     return createNonFatalBOLTError(Msg);
   }
-  if (TargetAddress == 0 && opts::Verbosity >= 1) {
+  if (TargetAddress == 0 && opts::getVerbosity(BC) >= 1) {
     BC.outs() << "BOLT-INFO: PC-relative operand is zero in function " << *this
               << '\n';
   }
@@ -1160,7 +1115,8 @@ MCSymbol *BinaryFunction::handleExternalReference(MCInst &Instruction,
 
   const uint64_t AbsoluteInstrAddr = getAddress() + Offset;
   BC.addInterproceduralReference(this, TargetAddress);
-  if (opts::Verbosity >= 2 && !IsCall && Size == 2 && !BC.HasRelocations) {
+  if (opts::getVerbosity(BC) >= 2 && !IsCall && Size == 2 &&
+      !BC.HasRelocations) {
     BC.errs() << "BOLT-WARNING: relaxed tail call detected at 0x"
               << Twine::utohexstr(AbsoluteInstrAddr) << " in function " << *this
               << ". Code size will be increased.\n";
@@ -1176,7 +1132,7 @@ MCSymbol *BinaryFunction::handleExternalReference(MCInst &Instruction,
     if (!MIB->convertJmpToTailCall(Instruction)) {
       assert(MIB->isConditionalBranch(Instruction) &&
              "unknown tail call instruction");
-      if (opts::Verbosity >= 2) {
+      if (opts::getVerbosity(BC) >= 2) {
         BC.errs() << "BOLT-WARNING: conditional tail call detected in "
                   << "function " << *this << " at 0x"
                   << Twine::utohexstr(AbsoluteInstrAddr) << ".\n";
@@ -1185,7 +1141,7 @@ MCSymbol *BinaryFunction::handleExternalReference(MCInst &Instruction,
     IsCall = true;
   }
 
-  if (opts::Verbosity >= 2 && TargetAddress == 0) {
+  if (opts::getVerbosity(BC) >= 2 && TargetAddress == 0) {
     // We actually see calls to address 0 in presence of weak
     // symbols originating from libraries. This code is never meant
     // to be executed.
@@ -1213,10 +1169,12 @@ void BinaryFunction::handleIndirectBranch(MCInst &Instruction, uint64_t Size,
   }
   case IndirectBranchType::POSSIBLE_JUMP_TABLE:
   case IndirectBranchType::POSSIBLE_PIC_JUMP_TABLE:
-  case IndirectBranchType::POSSIBLE_PIC_FIXED_BRANCH:
-    if (opts::JumpTables == JTS_NONE)
+  case IndirectBranchType::POSSIBLE_PIC_FIXED_BRANCH: {
+    auto JTLevel = static_cast<JumpTableSupportLevel>(
+        llvm::bolt::bolt_core_opts::getJumpTables(BC));
+    if (JTLevel == JTS_NONE)
       IsSimple = false;
-    break;
+  } break;
   case IndirectBranchType::POSSIBLE_FIXED_BRANCH: {
     if (containsAddress(IndirectTarget)) {
       const MCSymbol *TargetSymbol = getOrCreateLocalLabel(IndirectTarget);
@@ -1233,7 +1191,7 @@ void BinaryFunction::handleIndirectBranch(MCInst &Instruction, uint64_t Size,
   case IndirectBranchType::UNKNOWN:
     // Keep processing. We'll do more checks and fixes in
     // postProcessIndirectBranches().
-    if (opts::Verbosity > 2) {
+    if (opts::getVerbosity(BC) > 2) {
       outs() << "BOLT-WARNING: failed to match indirect branch, "
              << getPrintName() << " at 0x" << Twine::utohexstr(Offset)
              << " offset\n";
@@ -1313,8 +1271,10 @@ bool BinaryFunction::keepOffsetForInstruction(const MCInst &Inst,
 }
 
 Error BinaryFunction::disassemble() {
+  bool DoTimeBuild = llvm::bolt::bolt_core_opts::getTimeBuild(BC);
+  bool DoTrapOnAVX512 = llvm::bolt::bolt_core_opts::getTrapAvx512(BC);
   NamedRegionTimer T("disassemble", "Disassemble function", "buildfuncs",
-                     "Build Binary Functions", opts::TimeBuild);
+                     "Build Binary Functions", DoTimeBuild);
   ErrorOr<ArrayRef<uint8_t>> ErrorOrFunctionData = getData();
   assert(ErrorOrFunctionData && "function data is not available");
   ArrayRef<uint8_t> FunctionData = *ErrorOrFunctionData;
@@ -1355,7 +1315,7 @@ Error BinaryFunction::disassemble() {
           << Twine::utohexstr(AbsoluteInstrAddr) << ") in function " << *this
           << '\n';
       // Some AVX-512 instructions could not be disassembled at all.
-      if (BC.HasRelocations && opts::TrapOnAVX512 && BC.isX86()) {
+      if (BC.HasRelocations && DoTrapOnAVX512 && BC.isX86()) {
         setTrapOnEntry();
         BC.TrappedFunctions.push_back(this);
       } else {
@@ -1366,7 +1326,8 @@ Error BinaryFunction::disassemble() {
     }
 
     // Check integrity of LLVM assembler/disassembler.
-    if (opts::CheckEncoding && !BC.MIB->isBranch(Instruction) &&
+    bool DoCheckEncoding = llvm::bolt::bolt_core_opts::getCheckEncoding(BC);
+    if (DoCheckEncoding && !BC.MIB->isBranch(Instruction) &&
         !BC.MIB->isCall(Instruction) && !BC.MIB->isNoop(Instruction)) {
       if (!BC.validateInstructionEncoding(FunctionData.slice(Offset, Size))) {
         BC.errs() << "BOLT-WARNING: mismatching LLVM encoding detected in "
@@ -1394,7 +1355,7 @@ Error BinaryFunction::disassemble() {
 
     // Special handling for AVX-512 instructions.
     if (MIB->hasEVEXEncoding(Instruction)) {
-      if (BC.HasRelocations && opts::TrapOnAVX512) {
+      if (BC.HasRelocations && DoTrapOnAVX512) {
         setTrapOnEntry();
         BC.TrappedFunctions.push_back(this);
         break;
@@ -1497,7 +1458,7 @@ Error BinaryFunction::disassemble() {
       }
     }
 
-add_instruction:
+  add_instruction:
     if (!getDWARFUnits().empty()) {
       SmallVector<DebugLineTableRowRef, 1> Rows;
       for (const auto &[_, Unit] : getDWARFUnits()) {
@@ -1580,7 +1541,8 @@ bool BinaryFunction::scanExternalRefs() {
   if (isPseudo())
     return Success;
 
-  if (opts::NoScan) {
+  bool DoNoScan = llvm::bolt::bolt_core_opts::getNoScan(BC);
+  if (DoNoScan) {
     clearList(Relocations);
     clearList(ExternallyReferencedOffsets);
 
@@ -1623,7 +1585,7 @@ bool BinaryFunction::scanExternalRefs() {
     if (!BC.SymbolicDisAsm->getInstruction(Instruction, Size,
                                            FunctionData.slice(Offset),
                                            AbsoluteInstrAddr, nulls())) {
-      if (opts::Verbosity >= 1 && !isZeroPaddingAt(Offset)) {
+      if (opts::getVerbosity(BC) >= 1 && !isZeroPaddingAt(Offset)) {
         BC.errs()
             << "BOLT-WARNING: unable to disassemble instruction at offset 0x"
             << Twine::utohexstr(Offset) << " (address 0x"
@@ -1840,9 +1802,13 @@ bool BinaryFunction::scanExternalRefs() {
         // relocation value encoding.
         Rel->setOptional();
 
-        if (!opts::CompactCodeModel)
-          if (BinaryFunction *TargetBF = BC.getFunctionForSymbol(Rel->Symbol))
-            TargetBF->setNeedsPatch(true);
+        {
+          bool DoCompactCodeModel =
+              llvm::bolt::bolt_utils_opts::getCompactCodeModel(BC);
+          if (!DoCompactCodeModel)
+            if (BinaryFunction *TargetBF = BC.getFunctionForSymbol(Rel->Symbol))
+              TargetBF->setNeedsPatch(true);
+        }
       }
 
       Rel->Offset += getAddress() - getOriginSection()->getAddress() + Offset;
@@ -1884,7 +1850,7 @@ bool BinaryFunction::scanExternalRefs() {
   if (Success && BC.HasRelocations)
     HasExternalRefRelocations = true;
 
-  if (opts::Verbosity >= 1 && !Success)
+  if (opts::getVerbosity(BC) >= 1 && !Success)
     BC.outs() << "BOLT-INFO: failed to scan refs for  " << *this << '\n';
 
   return Success;
@@ -1933,7 +1899,8 @@ void BinaryFunction::postProcessEntryPoints() {
     // reference to the entry point and hence we cannot move this entry
     // point. Optimizing without moving could be difficult.
     // In aggregation, register any known entry points for CFG construction.
-    if (!BC.HasRelocations && !opts::AggregateOnly)
+    bool AggregateOnly = llvm::bolt::bolt_utils_opts::getAggregateOnly(BC);
+    if (!BC.HasRelocations && !AggregateOnly)
       setSimple(false);
 
     const uint32_t Offset = KV.first;
@@ -1965,11 +1932,16 @@ void BinaryFunction::postProcessEntryPoints() {
 }
 
 void BinaryFunction::postProcessJumpTables() {
+  bool StrictMode = llvm::bolt::bolt_utils_opts::getStrict(BC);
   // Create labels for all entries.
   for (auto &JTI : JumpTables) {
     JumpTable &JT = *JTI.second;
-    if (JT.Type == JumpTable::JTT_PIC && opts::JumpTables == JTS_BASIC) {
-      opts::JumpTables = JTS_MOVE;
+    auto JTLevel = static_cast<JumpTableSupportLevel>(
+        llvm::bolt::bolt_core_opts::getJumpTables(BC));
+    if (JT.Type == JumpTable::JTT_PIC && JTLevel == JTS_BASIC) {
+      if (auto *V = BC.getOptionsContext().getViewPtr<&clv2::BoltCoreOptsReg>())
+        V->get<&clv2::BOLTCORE_JumpTables>() =
+            clv2::BoltCoreJumpTableSupportLevel::JTS_MOVE;
       BC.outs() << "BOLT-INFO: forcing -jump-tables=move as PIC jump table was "
                    "detected in function "
                 << *this << '\n';
@@ -2034,7 +2006,7 @@ void BinaryFunction::postProcessJumpTables() {
       if (TargetOffset < getSize()) {
         TakenBranches.emplace_back(JTSiteOffset, TargetOffset);
 
-        if (opts::StrictMode)
+        if (StrictMode)
           registerReferencedOffset(TargetOffset);
       }
 
@@ -2049,7 +2021,7 @@ void BinaryFunction::postProcessJumpTables() {
 
   // Conservatively populate all possible destinations for unknown indirect
   // branches.
-  if (opts::StrictMode && hasInternalReference()) {
+  if (StrictMode && hasInternalReference()) {
     for (uint64_t Offset : UnknownIndirectBranchOffsets) {
       for (uint64_t PossibleDestination : ExternallyReferencedOffsets) {
         // Ignore __builtin_unreachable().
@@ -2067,7 +2039,8 @@ bool BinaryFunction::validateInternalRefDataRelocations() {
 
   // Rely on the user hint that all data refs are valid and only used as
   // destinations by indirect branch in the same function.
-  if (opts::StrictMode)
+  bool StrictMode = llvm::bolt::bolt_utils_opts::getStrict(BC);
+  if (StrictMode)
     return true;
 
   DenseSet<uint64_t> UnclaimedRelocations(InternalRefDataRelocations);
@@ -2086,7 +2059,7 @@ bool BinaryFunction::validateInternalRefDataRelocations() {
             << " unclaimed data relocation"
             << (UnclaimedRelocations.size() > 1 ? "s" : "")
             << " remain against function " << *this;
-  if (opts::Verbosity) {
+  if (opts::getVerbosity(BC)) {
     BC.errs() << ":\n";
     for (uint64_t RelocationAddress : UnclaimedRelocations) {
       const Relocation *Relocation = BC.getRelocationAt(RelocationAddress);
@@ -2106,6 +2079,7 @@ bool BinaryFunction::validateInternalRefDataRelocations() {
 
 bool BinaryFunction::postProcessIndirectBranches(
     MCPlusBuilder::AllocatorIdTy AllocId) {
+  bool StrictMode = llvm::bolt::bolt_utils_opts::getStrict(BC);
   auto addUnknownControlFlow = [&](BinaryBasicBlock &BB) {
     LLVM_DEBUG(dbgs() << "BOLT-DEBUG: adding unknown control flow in " << *this
                       << " for " << BB.getName() << "\n");
@@ -2136,7 +2110,7 @@ bool BinaryFunction::postProcessIndirectBranches(
 
       ++NumIndirectJumps;
 
-      if (opts::StrictMode && !hasInternalReference()) {
+      if (StrictMode && !hasInternalReference()) {
         BC.MIB->convertJmpToTailCall(Instr);
         break;
       }
@@ -2158,7 +2132,7 @@ bool BinaryFunction::postProcessIndirectBranches(
         if (Type != IndirectBranchType::UNKNOWN || MemLocInstr != nullptr)
           continue;
 
-        if (!opts::StrictMode)
+        if (!StrictMode)
           return false;
 
         if (BC.MIB->isTailCall(Instr)) {
@@ -2194,7 +2168,7 @@ bool BinaryFunction::postProcessIndirectBranches(
         continue;
       }
 
-      if (opts::Verbosity >= 2) {
+      if (opts::getVerbosity(BC) >= 2) {
         BC.outs() << "BOLT-INFO: rejected potential indirect tail call in "
                   << "function " << *this << " in basic block " << BB.getName()
                   << ".\n";
@@ -2202,7 +2176,7 @@ bool BinaryFunction::postProcessIndirectBranches(
                                         BB.getOffset(), this, true));
       }
 
-      if (!opts::StrictMode)
+      if (!StrictMode)
         return false;
 
       addUnknownControlFlow(BB);
@@ -2515,7 +2489,7 @@ Error BinaryFunction::buildCFG(MCPlusBuilder::AllocatorIdTy AllocatorId) {
 
   // Make any necessary adjustments for indirect branches.
   bool ValidCFG = postProcessIndirectBranches(AllocatorId);
-  if (!ValidCFG && opts::Verbosity) {
+  if (!ValidCFG && opts::getVerbosity(BC)) {
     BC.errs() << "BOLT-WARNING: failed to post-process indirect branches for "
               << *this << '\n';
   }
@@ -2567,7 +2541,8 @@ void BinaryFunction::postProcessCFG() {
   // in the pipeline, but the IO address map that is derived from these offsets
   // does add non-trivial overhead and can get expensive -- that's why we don't
   // add offsets to every single instruction.
-  if (!requiresPreciseAddressMap() && !opts::Instrument) {
+  bool DoInstrument = llvm::bolt::bolt_utils_opts::getInstrument(BC);
+  if (!requiresPreciseAddressMap() && !DoInstrument) {
     for (BinaryBasicBlock &BB : blocks())
       for (MCInst &Inst : BB)
         BC.MIB->clearOffset(Inst);
@@ -2741,7 +2716,7 @@ void BinaryFunction::annotateCFIState() {
     }
   }
 
-  if (opts::Verbosity >= 1 && !StateStack.empty()) {
+  if (opts::getVerbosity(BC) >= 1 && !StateStack.empty()) {
     BC.errs() << "BOLT-WARNING: non-empty CFI stack at the end of " << *this
               << '\n';
   }
@@ -3239,7 +3214,10 @@ bool BinaryFunction::finalizeCFIState() {
 }
 
 bool BinaryFunction::requiresPreciseAddressMap() const {
-  return opts::UpdateDebugSections || opts::EnableBAT || hasSDTMarker() ||
+  bool DoUpdateDebugSections =
+      llvm::bolt::bolt_utils_opts::getUpdateDebugSections(BC);
+  bool DoEnableBAT = llvm::bolt::bolt_utils_opts::getEnableBat(BC);
+  return DoUpdateDebugSections || DoEnableBAT || hasSDTMarker() ||
          hasPseudoProbe();
 }
 
@@ -3304,7 +3282,7 @@ void BinaryFunction::setTrapOnEntry() {
 void BinaryFunction::setIgnored() {
   IsIgnored = true;
 
-  if (opts::processAllFunctions()) {
+  if (processAllFunctions(BC.getOptionsContext())) {
     // We can accept ignored functions before they've been disassembled.
     // In that case, they would still get disassembled and emitted, but not
     // optimized.
@@ -3445,7 +3423,8 @@ void BinaryFunction::dumpGraph(raw_ostream &OS) const {
                  BB->getKnownExecutionCount(), BB->getOffset(), getIndex(BB),
                  LayoutIndex, BB->getCFIState());
 
-    if (opts::DotToolTipCode) {
+    bool DoDotToolTipCode = llvm::bolt::bolt_core_opts::getDotTooltipCode(BC);
+    if (DoDotToolTipCode) {
       std::string Str;
       raw_string_ostream CS(Str);
       Offset = BC.printInstructions(CS, BB->begin(), BB->end(), Offset, this,
@@ -3527,11 +3506,11 @@ void BinaryFunction::viewGraph() const {
 }
 
 void BinaryFunction::dumpGraphForPass(std::string Annotation) const {
-  if (!opts::shouldPrint(*this))
+  if (!shouldPrint(*this))
     return;
 
   std::string Filename = constructFilename(getPrintName(), Annotation, ".dot");
-  if (opts::Verbosity >= 1)
+  if (opts::getVerbosity(BC) >= 1)
     BC.outs() << "BOLT-INFO: dumping CFG to " << Filename << "\n";
   dumpGraphToFile(Filename);
 }
@@ -3540,7 +3519,7 @@ void BinaryFunction::dumpGraphToFile(std::string Filename) const {
   std::error_code EC;
   raw_fd_ostream of(Filename, EC, sys::fs::OF_None);
   if (EC) {
-    if (opts::Verbosity >= 1) {
+    if (opts::getVerbosity(BC) >= 1) {
       BC.errs() << "BOLT-WARNING: " << EC.message() << ", unable to open "
                 << Filename << " for output.\n";
     }
@@ -3671,7 +3650,7 @@ void BinaryFunction::fixBranches(const BranchLivenessInfo *BLI) {
       if (TSuccessor == FSuccessor) {
         // FIXME: at the moment, we cannot safely remove static key branches.
         if (MIB->isDynamicBranch(*CondBranch)) {
-          if (opts::Verbosity) {
+          if (opts::getVerbosity(BC)) {
             BC.outs()
                 << "BOLT-INFO: unable to remove redundant dynamic branch in "
                 << *this << '\n';
@@ -3689,7 +3668,7 @@ void BinaryFunction::fixBranches(const BranchLivenessInfo *BLI) {
       auto swapSuccessors = [&]() {
         bool PreserveFlags = BLI ? BLI->mustPreserveFlags(*CondBranch) : true;
         if (!MIB->isReversibleBranch(*CondBranch, PreserveFlags)) {
-          if (opts::Verbosity) {
+          if (opts::getVerbosity(BC)) {
             BC.outs() << "BOLT-INFO: unable to swap successors in " << *this
                       << '\n';
           }
@@ -3957,12 +3936,13 @@ BinaryFunction::BasicBlockListType BinaryFunction::dfs() const {
   //
   // NB: we rely on the original order of entries to match.
   SmallVector<BinaryBasicBlock *> EntryPoints;
-  llvm::copy_if(BasicBlocks, std::back_inserter(EntryPoints),
-          [&](const BinaryBasicBlock *const BB) { return isEntryPoint(*BB); });
+  llvm::copy_if(
+      BasicBlocks, std::back_inserter(EntryPoints),
+      [&](const BinaryBasicBlock *const BB) { return isEntryPoint(*BB); });
   // Sort entry points by their offset to make sure we got them in the right
   // order.
   llvm::stable_sort(EntryPoints, [](const BinaryBasicBlock *const A,
-                              const BinaryBasicBlock *const B) {
+                                    const BinaryBasicBlock *const B) {
     return A->getOffset() < B->getOffset();
   });
   for (BinaryBasicBlock *const BB : reverse(EntryPoints))
@@ -4158,7 +4138,9 @@ bool BinaryFunction::checkForAmbiguousJumpTables() {
 
 void BinaryFunction::disambiguateJumpTables(
     MCPlusBuilder::AllocatorIdTy AllocId) {
-  assert((opts::JumpTables != JTS_BASIC && isSimple()) || !BC.HasRelocations);
+  auto JTLevel = static_cast<JumpTableSupportLevel>(
+      llvm::bolt::bolt_core_opts::getJumpTables(BC));
+  assert((JTLevel != JTS_BASIC && isSimple()) || !BC.HasRelocations);
   SmallPtrSet<JumpTable *, 4> JumpTables;
   for (BinaryBasicBlock *&BB : BasicBlocks) {
     for (MCInst &Inst : *BB) {
@@ -4799,7 +4781,7 @@ MCInst *BinaryFunction::getInstructionContainingOffset(uint64_t Offset) {
 }
 
 void BinaryFunction::printLoopInfo(raw_ostream &OS) const {
-  if (!opts::shouldPrint(*this))
+  if (!shouldPrint(*this))
     return;
 
   OS << "Loop Info for Function \"" << *this << "\"";

@@ -153,7 +153,7 @@ static Error getRelocationValueString(const ELFObjectFile<ELFT> *Obj,
       Expected<StringRef> SymName = SI->getName();
       if (!SymName)
         return SymName.takeError();
-      Fmt << (Demangle ? demangle(*SymName) : *SymName);
+      Fmt << (Opts.Demangle ? demangle(*SymName) : *SymName);
     }
   } else {
     Fmt << "*ABS*";

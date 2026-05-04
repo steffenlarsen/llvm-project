@@ -29,6 +29,8 @@
 
 #include "SystemZHazardRecognizer.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/SystemZ/SystemZOptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -37,10 +39,12 @@ using namespace llvm;
 // This is the limit of processor resource usage at which the
 // scheduler should try to look for other instructions (not using the
 // critical resource).
-static cl::opt<int> ProcResCostLim("procres-cost-lim", cl::Hidden,
-                                   cl::desc("The OOO window for processor "
-                                            "resources during scheduling."),
-                                   cl::init(8));
+static int ProcResCostLim = 8;
+
+static int getProcResCostLim(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SZ_ProcResCostLim>(
+      F.getContext().getOptionsContext());
+}
 
 unsigned SystemZHazardRecognizer::
 getNumDecoderSlots(SUnit *SU) const {
@@ -129,7 +133,7 @@ bool SystemZHazardRecognizer::has4RegOps(const MachineInstr *MI) const {
   return Count >= 4;
 }
 
-void SystemZHazardRecognizer::nextGroup() {
+void SystemZHazardRecognizer::nextGroup(const Function &F) {
   if (CurrGroupSize == 0)
     return;
 
@@ -154,8 +158,7 @@ void SystemZHazardRecognizer::nextGroup() {
 
   // Clear CriticalResourceIdx if it is now below the threshold.
   if (CriticalResourceIdx != UINT_MAX &&
-      (ProcResourceCounters[CriticalResourceIdx] <=
-       ProcResCostLim))
+      (ProcResourceCounters[CriticalResourceIdx] <= getProcResCostLim(F)))
     CriticalResourceIdx = UINT_MAX;
 
   LLVM_DEBUG(dumpState(););
@@ -268,6 +271,7 @@ static inline bool isBranchRetTrap(MachineInstr *MI) {
 void SystemZHazardRecognizer::
 EmitInstruction(SUnit *SU) {
   const MCSchedClassDesc *SC = getSchedClass(SU);
+  const Function &F = SU->getInstr()->getMF()->getFunction();
   LLVM_DEBUG(dbgs() << "++ HazardRecognizer emitting "; dumpSU(SU, dbgs());
              dbgs() << "\n";);
   LLVM_DEBUG(dumpCurrGroup("Decode group before emission"););
@@ -275,7 +279,7 @@ EmitInstruction(SUnit *SU) {
   // If scheduling an SU that must begin a new decoder group, move on
   // to next group.
   if (!fitsIntoCurrentGroup(SU))
-    nextGroup();
+    nextGroup(F);
 
   LLVM_DEBUG(raw_string_ostream cgd(CurGroupDbg);
              if (CurGroupDbg.length()) cgd << ", "; dumpSU(SU, cgd););
@@ -301,11 +305,10 @@ EmitInstruction(SUnit *SU) {
       ProcResourceCounters[PI->ProcResourceIdx];
     CurrCounter += PI->ReleaseAtCycle;
     // Check if this is now the new critical resource.
-    if ((CurrCounter > ProcResCostLim) &&
+    if ((CurrCounter > getProcResCostLim(F)) &&
         (CriticalResourceIdx == UINT_MAX ||
          (PI->ProcResourceIdx != CriticalResourceIdx &&
-          CurrCounter >
-          ProcResourceCounters[CriticalResourceIdx]))) {
+          CurrCounter > ProcResourceCounters[CriticalResourceIdx]))) {
       LLVM_DEBUG(
           dbgs() << "++ New critical resource: "
                  << SchedModel->getProcResource(PI->ProcResourceIdx)->Name
@@ -332,7 +335,7 @@ EmitInstruction(SUnit *SU) {
   // Check if current group is now full/ended. If so, move on to next
   // group to be ready to evaluate more candidates.
   if (CurrGroupSize >= GroupLim || SC->EndGroup)
-    nextGroup();
+    nextGroup(F);
 }
 
 int SystemZHazardRecognizer::groupingCost(SUnit *SU) const {
@@ -406,6 +409,8 @@ resourcesCost(SUnit *SU) {
 
 void SystemZHazardRecognizer::emitInstruction(MachineInstr *MI,
                                               bool TakenBranch) {
+  const Function &F = MI->getMF()->getFunction();
+
   // Make a temporary SUnit.
   SUnit SU(MI, 0);
 
@@ -434,11 +439,11 @@ void SystemZHazardRecognizer::emitInstruction(MachineInstr *MI,
   if (!TakenBranch && isBranchRetTrap(MI)) {
     // NT Branch on second slot ends group.
     if (GroupSizeBeforeEmit == 1)
-      nextGroup();
+      nextGroup(F);
   }
 
   if (TakenBranch && CurrGroupSize > 0)
-    nextGroup();
+    nextGroup(F);
 
   assert ((!MI->isTerminator() || isBranchRetTrap(MI)) &&
           "Scheduler: unhandled terminator!");

@@ -77,6 +77,7 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/ADT/iterator_range.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/BasicAliasAnalysis.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
@@ -128,12 +129,13 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/InstructionCost.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/NativeFormatting.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/InjectTLIMappings.h"
@@ -144,6 +146,7 @@
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
 #include "llvm/Transforms/Vectorize/LoopVectorizationLegality.h"
+#include "llvm/Transforms/Vectorize/VectorizeOptions.h"
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -164,6 +167,7 @@ using namespace LoopVectorizationUtils;
 
 #ifndef NDEBUG
 const char VerboseDebug[] = DEBUG_TYPE "-verbose";
+
 #endif
 
 STATISTIC(LoopsVectorized, "Number of loops vectorized");
@@ -173,250 +177,271 @@ STATISTIC(LoopsEarlyExitVectorized, "Number of early exit loops vectorized");
 STATISTIC(LoopsPartialAliasVectorized,
           "Number of partial aliasing loops vectorized");
 
-static cl::opt<bool> EnableEpilogueVectorization(
-    "enable-epilogue-vectorization", cl::init(true), cl::Hidden,
-    cl::desc("Enable vectorization of epilogue loops."));
+static bool getEnableEpilogueVectorization(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_EnableEpilogueVectorization>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<ElementCount> EpilogueVectorizationForceVF(
-    "epilogue-vectorization-force-VF", cl::init(ElementCount::getFixed(1)),
-    cl::Hidden,
-    cl::desc("When epilogue vectorization is enabled, and a value greater than "
-             "1 is specified, forces the given VF for all applicable epilogue "
-             "loops. Note: This allows all scalable VFs >= vscale x 1."));
+static ElementCount getEpilogueVectorizationForceVF(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::VectorizeOptsReg,
+                                    &clv2::VEC_EpilogueVectorizationForceVF>(
+      F.getContext().getOptionsContext(), ElementCount::getFixed(1));
+}
 
-static cl::opt<unsigned> EpilogueVectorizationMinVF(
-    "epilogue-vectorization-minimum-VF", cl::Hidden,
-    cl::desc("Only loops with vectorization factor equal to or larger than "
-             "the specified value are considered for epilogue vectorization."));
+// Returns true if the epilogue VF has been set to a non-zero value other than
+// VF=1 (scalar).
+static bool hasForcedEpilogueVF(const Function &F) {
+  ElementCount VF = getEpilogueVectorizationForceVF(F);
+  return VF.isNonZero() && VF != ElementCount::getFixed(1);
+}
+
+static bool isEpilogueVectorizationMinVFSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::VectorizeOptsReg,
+                               &clv2::VEC_EpilogueVectorizationMinVF>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getEpilogueVectorizationMinVF(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::VectorizeOptsReg,
+                                    &clv2::VEC_EpilogueVectorizationMinVF>(
+      F.getContext().getOptionsContext(), 0);
+}
 
 /// Loops with a known constant trip count below this number are vectorized only
 /// if no scalar iteration overheads are incurred.
-static cl::opt<unsigned> TinyTripCountVectorThreshold(
-    "vectorizer-min-trip-count", cl::init(16), cl::Hidden,
-    cl::desc("Loops with a constant trip count that is smaller than this "
-             "value are vectorized only if no scalar iteration overheads "
-             "are incurred."));
+static unsigned getTinyTripCountVectorThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_TinyTripCountVectorThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> VectorizeMemoryCheckThreshold(
-    "vectorize-memory-check-threshold", cl::init(128), cl::Hidden,
-    cl::desc("The maximum allowed number of runtime memory checks"));
+static unsigned getVectorizeMemoryCheckThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_VectorizeMemoryCheckThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> ForcePartialAliasingVectorization(
-    "force-partial-aliasing-vectorization", cl::init(false), cl::Hidden,
-    cl::desc("Replace pointer diff checks with alias masks."));
+/// Option tail-folding-policy indicates that an epilogue is undesired, that
+/// tail folding is preferred, and this lists all options. I.e., the vectorizer
+/// will try to fold the tail-loop (epilogue) into the vector body and predicate
+/// the instructions accordingly. If tail-folding fails, there are different
+/// fallback strategies depending on these values:
+using TailFoldingPolicyTy = clv2::TailFoldingPolicyTy;
 
-/// Option tail-folding-policy controls the tail-folding strategy and lists all
-/// available options. The vectorizer will attempt to fold the tail-loop into
-/// the vector loop (main/epilogue loops) and predicate the instructions
-/// accordingly. If tail-folding fails, there are different fallback strategies
-/// depending on these values:
-enum class TailFoldingPolicyTy { None = 0, PreferFoldTail, MustFoldTail };
+static bool isTailFoldingPolicySpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::VectorizeOptsReg,
+                               &clv2::VEC_TailFoldingPolicy>(
+      F.getContext().getOptionsContext());
+}
+static TailFoldingPolicyTy getTailFoldingPolicy(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::VectorizeOptsReg,
+                                    &clv2::VEC_TailFoldingPolicy>(
+      F.getContext().getOptionsContext(), TailFoldingPolicyTy::None);
+}
 
-static cl::opt<TailFoldingPolicyTy> TailFoldingPolicy(
-    "tail-folding-policy", cl::init(TailFoldingPolicyTy::None), cl::Hidden,
-    cl::desc("Tail-folding preferences over creating an epilogue loop."),
-    cl::values(
-        clEnumValN(TailFoldingPolicyTy::None, "dont-fold-tail",
-                   "Don't tail-fold loops."),
-        clEnumValN(TailFoldingPolicyTy::PreferFoldTail, "prefer-fold-tail",
-                   "prefer tail-folding, otherwise create an epilogue when "
-                   "appropriate."),
-        clEnumValN(TailFoldingPolicyTy::MustFoldTail, "must-fold-tail",
-                   "always tail-fold, don't attempt vectorization if "
-                   "tail-folding fails.")));
+static bool isEpilogueTailFoldingPolicySpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::VectorizeOptsReg,
+                               &clv2::VEC_EpilogueTailFoldingPolicy>(
+      F.getContext().getOptionsContext());
+}
+static TailFoldingPolicyTy getEpilogueTailFoldingPolicy(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::VectorizeOptsReg,
+                                    &clv2::VEC_EpilogueTailFoldingPolicy>(
+      F.getContext().getOptionsContext(), TailFoldingPolicyTy::None);
+}
 
-static cl::opt<TailFoldingPolicyTy> EpilogueTailFoldingPolicy(
-    "epilogue-tail-folding-policy", cl::Hidden,
-    cl::desc(
-        "Epilogue-tail-folding preferences over creating an epilogue loop."),
-    cl::values(
-        clEnumValN(TailFoldingPolicyTy::None, "dont-fold-tail",
-                   "Don't tail-fold loops."),
-        clEnumValN(TailFoldingPolicyTy::PreferFoldTail, "prefer-fold-tail",
-                   "prefer tail-folding, otherwise create an epilogue when "
-                   "appropriate.")));
+static bool isForceTailFoldingStyleSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::VectorizeOptsReg,
+                               &clv2::VEC_ForceTailFoldingStyle>(
+      F.getContext().getOptionsContext());
+}
+static TailFoldingStyle getForceTailFoldingStyle(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::VectorizeOptsReg,
+                                    &clv2::VEC_ForceTailFoldingStyle>(
+      F.getContext().getOptionsContext(), TailFoldingStyle::None);
+}
 
-static cl::opt<TailFoldingStyle> ForceTailFoldingStyle(
-    "force-tail-folding-style", cl::desc("Force the tail folding style"),
-    cl::init(TailFoldingStyle::None),
-    cl::values(
-        clEnumValN(TailFoldingStyle::None, "none", "Disable tail folding"),
-        clEnumValN(
-            TailFoldingStyle::Data, "data",
-            "Create lane mask for data only, using active.lane.mask intrinsic"),
-        clEnumValN(TailFoldingStyle::DataWithoutLaneMask,
-                   "data-without-lane-mask",
-                   "Create lane mask with compare/stepvector"),
-        clEnumValN(TailFoldingStyle::DataAndControlFlow, "data-and-control",
-                   "Create lane mask using active.lane.mask intrinsic, and use "
-                   "it for both data and control flow"),
-        clEnumValN(TailFoldingStyle::DataWithEVL, "data-with-evl",
-                   "Use predicated EVL instructions for tail folding. If EVL "
-                   "is unsupported, fallback to data-without-lane-mask.")));
+static bool getEnableWideActiveLaneMask(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_EnableWideActiveLaneMask>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> EnableInterleavedMemAccesses(
-    "enable-interleaved-mem-accesses", cl::init(false), cl::Hidden,
-    cl::desc("Enable vectorization on interleaved memory accesses in a loop"));
+static bool isEnableInterleavedMemAccessesSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::VectorizeOptsReg,
+                               &clv2::VEC_EnableInterleavedMemAccesses>(
+      F.getContext().getOptionsContext());
+}
+static bool getEnableInterleavedMemAccesses(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_EnableInterleavedMemAccesses>(
+      F.getContext().getOptionsContext());
+}
 
 /// An interleave-group may need masking if it resides in a block that needs
 /// predication, or in order to mask away gaps.
-static cl::opt<bool> EnableMaskedInterleavedMemAccesses(
-    "enable-masked-interleaved-mem-accesses", cl::init(false), cl::Hidden,
-    cl::desc("Enable vectorization on masked interleaved memory accesses in a loop"));
+static bool isEnableMaskedInterleavedMemAccessesSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::VectorizeOptsReg,
+                               &clv2::VEC_EnableMaskedInterleavedMemAccesses>(
+      F.getContext().getOptionsContext());
+}
+static bool getEnableMaskedInterleavedMemAccesses(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::VEC_EnableMaskedInterleavedMemAccesses>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> ForceTargetNumScalarRegs(
-    "force-target-num-scalar-regs", cl::init(0), cl::Hidden,
-    cl::desc("A flag that overrides the target's number of scalar registers."));
+static bool isForceTargetNumScalarRegsSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::VectorizeOptsReg,
+                               &clv2::VEC_ForceTargetNumScalarRegs>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getForceTargetNumScalarRegs(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_ForceTargetNumScalarRegs>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> ForceTargetNumVectorRegs(
-    "force-target-num-vector-regs", cl::init(0), cl::Hidden,
-    cl::desc("A flag that overrides the target's number of vector registers."));
+static bool isForceTargetNumVectorRegsSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::VectorizeOptsReg,
+                               &clv2::VEC_ForceTargetNumVectorRegs>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getForceTargetNumVectorRegs(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_ForceTargetNumVectorRegs>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> ForceTargetMaxScalarInterleaveFactor(
-    "force-target-max-scalar-interleave", cl::init(0), cl::Hidden,
-    cl::desc("A flag that overrides the target's max interleave factor for "
-             "scalar loops."));
+static bool isForceTargetMaxScalarInterleaveFactorSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::VectorizeOptsReg,
+                               &clv2::VEC_ForceTargetMaxScalarInterleaveFactor>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getForceTargetMaxScalarInterleaveFactor(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::VEC_ForceTargetMaxScalarInterleaveFactor>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> ForceTargetMaxVectorInterleaveFactor(
-    "force-target-max-vector-interleave", cl::init(0), cl::Hidden,
-    cl::desc("A flag that overrides the target's max interleave factor for "
-             "vectorized loops."));
+static bool isForceTargetMaxVectorInterleaveFactorSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::VectorizeOptsReg,
+                               &clv2::VEC_ForceTargetMaxVectorInterleaveFactor>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getForceTargetMaxVectorInterleaveFactor(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::VEC_ForceTargetMaxVectorInterleaveFactor>(
+      F.getContext().getOptionsContext());
+}
 
-cl::opt<unsigned> llvm::ForceTargetInstructionCost(
-    "force-target-instruction-cost", cl::init(0), cl::Hidden,
-    cl::desc("A flag that overrides the target's expected cost for "
-             "an instruction to a single constant value. Mostly "
-             "useful for getting consistent testing."));
+static unsigned getForceTargetInstructionCost(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_ForceTargetInstructionCost>(
+      F.getContext().getOptionsContext());
+}
+static bool isForceTargetInstructionCostSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::VectorizeOptsReg,
+                               &clv2::VEC_ForceTargetInstructionCost>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> SmallLoopCost(
-    "small-loop-cost", cl::init(20), cl::Hidden,
-    cl::desc(
-        "The cost of a loop that is considered 'small' by the interleaver."));
+static unsigned getSmallLoopCost(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_SmallLoopCost>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> LoopVectorizeWithBlockFrequency(
-    "loop-vectorize-with-block-frequency", cl::init(true), cl::Hidden,
-    cl::desc("Enable the use of the block frequency analysis to access PGO "
-             "heuristics minimizing code growth in cold regions and being more "
-             "aggressive in hot regions."));
+static bool getLoopVectorizeWithBlockFrequency(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_LoopVectorizeWithBlockFrequency>(
+      F.getContext().getOptionsContext());
+}
 
 // Runtime interleave loops for load/store throughput.
-static cl::opt<bool> EnableLoadStoreRuntimeInterleave(
-    "enable-loadstore-runtime-interleave", cl::init(true), cl::Hidden,
-    cl::desc(
-        "Enable runtime interleaving until load/store ports are saturated"));
+static bool getEnableLoadStoreRuntimeInterleave(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_EnableLoadStoreRuntimeInterleave>(
+      F.getContext().getOptionsContext());
+}
 
 /// The number of stores in a loop that are allowed to need predication.
-cl::opt<unsigned> NumberOfStoresToPredicate(
-    "vectorize-num-stores-pred", cl::init(1), cl::Hidden,
-    cl::desc("Max number of stores to be predicated behind an if."));
+static unsigned getNumberOfStoresToPredicate(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_NumberOfStoresToPredicate>(
+      F.getContext().getOptionsContext());
+}
 
-// TODO: Move size-based thresholds out of legality checking, make cost based
-// decisions instead of hard thresholds.
-static cl::opt<unsigned> VectorizeSCEVCheckThreshold(
-    "vectorize-scev-check-threshold", cl::init(16), cl::Hidden,
-    cl::desc("The maximum number of SCEV checks allowed."));
+static bool getEnableIndVarRegisterHeur(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_EnableIndVarRegisterHeur>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> PragmaVectorizeSCEVCheckThreshold(
-    "pragma-vectorize-scev-check-threshold", cl::init(128), cl::Hidden,
-    cl::desc("The maximum number of SCEV checks allowed with a "
-             "vectorize(enable) pragma"));
+static unsigned getMaxNestedScalarReductionIC(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_MaxNestedScalarReductionIC>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> EnableIndVarRegisterHeur(
-    "enable-ind-var-reg-heur", cl::init(true), cl::Hidden,
-    cl::desc("Count the induction variable only once when interleaving"));
+static bool isForceOrderedReductionsSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::VectorizeOptsReg,
+                               &clv2::VEC_ForceOrderedReductions>(
+      F.getContext().getOptionsContext());
+}
+static bool getForceOrderedReductions(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_ForceOrderedReductions>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> MaxNestedScalarReductionIC(
-    "max-nested-scalar-reduction-interleave", cl::init(2), cl::Hidden,
-    cl::desc("The maximum interleave count to use when interleaving a scalar "
-             "reduction in a nested loop."));
+static bool getPreferPredicatedReductionSelect(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_PreferPredicatedReductionSelect>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> ForceOrderedReductions(
-    "force-ordered-reductions", cl::init(false), cl::Hidden,
-    cl::desc("Enable the vectorisation of loops with in-order (strict) "
-             "FP reductions"));
+static bool getEnableVPlanNativePath(const Function &F) {
+  return clv2::getOptValOr<&clv2::VectorizeOptsReg,
+                           &clv2::VEC_EnableVPlanNativePath>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<bool> PreferPredicatedReductionSelect(
-    "prefer-predicated-reduction-select", cl::init(false), cl::Hidden,
-    cl::desc(
-        "Prefer predicating a reduction operation over an after loop select."));
+// Removed: VerifyEachVPlan global — now read via clv2 OptionsContext.
 
-cl::opt<bool> llvm::EnableVPlanNativePath(
-    "enable-vplan-native-path", cl::Hidden,
-    cl::desc("Enable VPlan-native vectorization path with "
-             "support for outer loop vectorization."));
-
-cl::opt<bool>
-    llvm::VerifyEachVPlan("vplan-verify-each",
-#ifdef EXPENSIVE_CHECKS
-                          cl::init(true),
-#else
-                          cl::init(false),
-#endif
-                          cl::Hidden,
-                          cl::desc("Verify VPlans after VPlan transforms."));
-
-#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
-cl::opt<bool> llvm::VPlanPrintBeforeAll(
-    "vplan-print-before-all", cl::init(false), cl::Hidden,
-    cl::desc("Print VPlans before all VPlan transformations."));
-
-cl::opt<bool> llvm::VPlanPrintAfterAll(
-    "vplan-print-after-all", cl::init(false), cl::Hidden,
-    cl::desc("Print VPlans after all VPlan transformations."));
-
-cl::list<std::string> llvm::VPlanPrintBeforePasses(
-    "vplan-print-before", cl::Hidden,
-    cl::desc("Print VPlans before specified VPlan transformations (regexp)."));
-
-cl::list<std::string> llvm::VPlanPrintAfterPasses(
-    "vplan-print-after", cl::Hidden,
-    cl::desc("Print VPlans after specified VPlan transformations (regexp)."));
-
-cl::opt<bool> llvm::VPlanPrintVectorRegionScope(
-    "vplan-print-vector-region-scope", cl::init(false), cl::Hidden,
-    cl::desc("Limit VPlan printing to vector loop region in "
-             "`-vplan-print-after*` if the plan has one."));
-#endif
+// VPlan print/verify globals removed — now read via
+// clv2::getView<&clv2::VectorizeOptsReg>().
 
 // This flag enables the stress testing of the VPlan H-CFG construction in the
 // VPlan-native vectorization path. It must be used in conjuction with
 // -enable-vplan-native-path. -vplan-verify-hcfg can also be used to enable the
 // verification of the H-CFGs built.
-cl::opt<bool> VPlanBuildOuterloopStressTest(
-    "vplan-build-outerloop-stress-test", cl::init(false), cl::Hidden,
-    cl::desc(
-        "Build VPlan for every supported loop nest in the function and bail "
-        "out right after the build (stress test the VPlan H-CFG construction "
-        "in the VPlan-native vectorization path)."));
+static bool getVPlanBuildStressTest(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_VPlanBuildStressTest>(
+      F.getContext().getOptionsContext());
+}
 
-cl::opt<bool> llvm::EnableLoopInterleaving(
-    "interleave-loops", cl::init(true), cl::Hidden,
-    cl::desc("Enable loop interleaving in Loop vectorization passes"));
-cl::opt<bool> llvm::EnableLoopVectorization(
-    "vectorize-loops", cl::init(true), cl::Hidden,
-    cl::desc("Run the Loop vectorization passes"));
+bool llvm::getEnableLoopInterleaving(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::VEC_EnableLoopInterleaving>(Ctx);
+}
+bool llvm::getEnableLoopVectorization(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::VEC_EnableLoopVectorization>(Ctx);
+}
 
-static cl::opt<cl::boolOrDefault>
-    ForceMaskedDivRem("force-widen-divrem-via-masked-intrinsic", cl::Hidden,
-                      cl::desc("Override cost based masked intrinsic widening "
-                               "for div/rem instructions"));
+static cl::boolOrDefault getForceMaskedDivRem(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::VectorizeOptsReg,
+                                    &clv2::VEC_ForceMaskedDivRem>(
+      F.getContext().getOptionsContext(), cl::boolOrDefault::BOU_UNSET);
+}
 
-static cl::opt<bool> EnableEarlyExitVectorization(
-    "enable-early-exit-vectorization", cl::init(true), cl::Hidden,
-    cl::desc(
-        "Enable vectorization of early exit loops with uncountable exits."));
+static bool getEnableEarlyExitVectorization(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_EnableEarlyExitVectorization>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> EnableEarlyExitVectorizationWithSideEffects(
-    "enable-early-exit-vectorization-with-side-effects", cl::init(false),
-    cl::Hidden,
-    cl::desc("Enable vectorization of early exit loops with uncountable exits "
-             "and side effects"));
+static bool getEnableEarlyExitVectorizationWithSideEffects(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::VEC_EnableEarlyExitVectorizationWithSideEffects>(
+      F.getContext().getOptionsContext());
+}
 
-// Returns true if the epilogue VF has been set to a non-zero value other than
-// VF=1 (scalar).
-static bool hasForcedEpilogueVF() {
-  return EpilogueVectorizationForceVF.isNonZero() &&
-         EpilogueVectorizationForceVF != ElementCount::getFixed(1);
+static unsigned getVectorizeSCEVCheckThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_VectorizeSCEVCheckThreshold>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getPragmaVectorizeSCEVCheckThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_PragmaVectorizeSCEVCheckThreshold>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getForcePartialAliasingVectorization(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_ForcePartialAliasingVectorization>(
+      F.getContext().getOptionsContext());
 }
 
 // Likelyhood of bypassing the vectorized loop because there are zero trips left
@@ -488,7 +513,8 @@ static std::optional<ElementCount> getSmallBestKnownTC(
   // not a usable trip count for the profitability decisions below (and would
   // e.g. divide by zero when scaling runtime check cost), so treat it as
   // unknown.
-  if (LoopVectorizeWithBlockFrequency && !ComputeUpperBoundOnly)
+  if (getLoopVectorizeWithBlockFrequency(*L->getHeader()->getParent()) &&
+      !ComputeUpperBoundOnly)
     if (unsigned EstimatedTC = getLoopEstimatedTripCount(L).value_or(0))
       return ElementCount::getFixed(EstimatedTC);
 
@@ -992,7 +1018,7 @@ public:
   /// option so it is not simply a cost comparison.
   bool isDivRemScalarWithPredication(InstructionCost ScalarCost,
                                      InstructionCost MaskedCost) const {
-    switch (ForceMaskedDivRem) {
+    switch (getForceMaskedDivRem(*TheFunction)) {
     case cl::boolOrDefault::BOU_UNSET:
       return ScalarCost < MaskedCost;
     case cl::boolOrDefault::BOU_TRUE:
@@ -1081,7 +1107,8 @@ public:
     // If we might exit from anywhere but the latch and early exit vectorization
     // is disabled, we must run the exiting iteration in scalar form.
     if (TheLoop->getExitingBlock() != TheLoop->getLoopLatch() &&
-        !(EnableEarlyExitVectorization && Legal->hasUncountableEarlyExit())) {
+        !(getEnableEarlyExitVectorization(*TheFunction) &&
+          Legal->hasUncountableEarlyExit())) {
       LLVM_DEBUG(dbgs() << "LV: Loop requires scalar epilogue: not exiting "
                            "from latch block\n");
       return true;
@@ -1125,15 +1152,16 @@ public:
 
     // Default to TTI preference, but allow command line override.
     ChosenTailFoldingStyle = TTI.getPreferredTailFoldingStyle();
-    if (ForceTailFoldingStyle.getNumOccurrences())
-      ChosenTailFoldingStyle = ForceTailFoldingStyle.getValue();
+    if (isForceTailFoldingStyleSpecified(*TheFunction))
+      ChosenTailFoldingStyle = getForceTailFoldingStyle(*TheFunction);
 
     if (ChosenTailFoldingStyle != TailFoldingStyle::DataWithEVL)
       return;
     // Override EVL styles if needed.
     // FIXME: Investigate opportunity for fixed vector factor.
     bool EVLIsLegal = UserIC <= 1 && IsScalableVF &&
-                      TTI.hasActiveVectorLength() && !EnableVPlanNativePath;
+                      TTI.hasActiveVectorLength() &&
+                      !getEnableVPlanNativePath(*TheFunction);
     if (EVLIsLegal)
       return;
     // If for some reason EVL mode is unsupported, fallback to an epilogue
@@ -1168,7 +1196,7 @@ public:
 
     // Note: FixedOrderRecurrences are not supported yet as we cannot handle
     // the required `splice.right` with the alias-mask.
-    if (!ForcePartialAliasingVectorization ||
+    if (!getForcePartialAliasingVectorization(*TheFunction) ||
         !Legal->getFixedOrderRecurrences().empty())
       return;
 
@@ -1216,6 +1244,15 @@ public:
     return PartialAliasMaskingStatus == AliasMaskingStatus::Enabled;
   }
 
+  /// Returns true if the use of wide lane masks is requested and the loop is
+  /// using tail-folding with a lane mask for control flow.
+  bool useWideActiveLaneMask() const {
+    if (!getEnableWideActiveLaneMask(*TheFunction))
+      return false;
+
+    return getTailFoldingStyle() == TailFoldingStyle::DataAndControlFlow;
+  }
+
   /// Returns true if the instructions in this block requires predication
   /// for any reason, e.g. because tail folding now requires a predicate
   /// or because the block in the original loop was predicated.
@@ -1248,7 +1285,7 @@ public:
     if (RecurrenceDescriptor::isFindLastRecurrenceKind(RecurrenceKind))
       return true;
 
-    return PreferPredicatedReductionSelect ||
+    return getPreferPredicatedReductionSelect(*TheFunction) ||
            TTI.preferPredicatedReductionSelect();
   }
 
@@ -1587,7 +1624,8 @@ public:
     // TODO: Skip cutoff if the loop is guaranteed to execute, e.g. due to
     // profile info.
     CostTooHigh =
-        LAI.getNumRuntimePointerChecks() > VectorizeMemoryCheckThreshold;
+        LAI.getNumRuntimePointerChecks() >
+        getVectorizeMemoryCheckThreshold(*L->getHeader()->getParent());
     if (CostTooHigh) {
       // Mark runtime checks as never succeeding when they exceed the threshold.
       MemRuntimeCheckCond = ConstantInt::getTrue(L->getHeader()->getContext());
@@ -1639,7 +1677,9 @@ public:
       } else {
         MemRuntimeCheckCond = addRuntimeChecks(
             MemCheckBlock->getTerminator(), L, RtPtrChecking.getChecks(),
-            MemCheckExp, VectorizerParams::HoistRuntimeChecks);
+            MemCheckExp,
+            VectorizerParams::getHoistRuntimeChecks(
+                L->getHeader()->getParent()->getContext().getOptionsContext()));
       }
       assert(MemRuntimeCheckCond &&
              "no RT checks generated although RtPtrChecking "
@@ -1882,8 +1922,9 @@ static void collectSupportedLoops(Loop &L, LoopInfo *LI,
   // now, only collect outer loops that have explicit vectorization hints. If we
   // are stress testing the VPlan H-CFG construction, we collect the outermost
   // loop of every loop nest.
-  if (L.isInnermost() || VPlanBuildOuterloopStressTest ||
-      (EnableVPlanNativePath && isExplicitVecOuterLoop(&L, ORE))) {
+  if (L.isInnermost() || getVPlanBuildStressTest(*L.getHeader()->getParent()) ||
+      (getEnableVPlanNativePath(*L.getHeader()->getParent()) &&
+       isExplicitVecOuterLoop(&L, ORE))) {
     LoopBlocksRPO RPOT(&L);
     RPOT.perform(LI);
     if (!containsIrreducibleCFG<const BasicBlock *>(RPOT, *LI)) {
@@ -1955,10 +1996,10 @@ static bool isIndvarOverflowCheckKnownFalse(
 // Return whether we allow using masked interleave-groups (for dealing with
 // strided loads/stores that reside in predicated blocks, or for dealing
 // with gaps).
-static bool useMaskedInterleavedAccesses(const TargetTransformInfo &TTI) {
-  // If an override option has been passed in for interleaved accesses, use it.
-  if (EnableMaskedInterleavedMemAccesses.getNumOccurrences() > 0)
-    return EnableMaskedInterleavedMemAccesses;
+static bool useMaskedInterleavedAccesses(const TargetTransformInfo &TTI,
+                                         const Function &F) {
+  if (isEnableMaskedInterleavedMemAccessesSpecified(F))
+    return getEnableMaskedInterleavedMemAccesses(F);
 
   return TTI.enableMaskedInterleavedAccessVectorization();
 }
@@ -2617,7 +2658,7 @@ bool LoopVectorizationCostModel::interleavedAccessCanBeWidened(
   // If masked interleaving is required, we expect that the user/target had
   // enabled it, because otherwise it either wouldn't have been created or
   // it should have been invalidated by the CostModel.
-  assert(useMaskedInterleavedAccesses(TTI) &&
+  assert(useMaskedInterleavedAccesses(TTI, *TheFunction) &&
          "Masked interleave-groups for predicated accesses are not enabled.");
 
   if (Group->isReverse())
@@ -2991,7 +3032,7 @@ LoopVectorizationCostModel::computeMaxVF(ElementCount UserVF, unsigned UserIC) {
 
   // Invalidate interleave groups that require an epilogue if we can't mask
   // the interleave-group.
-  if (!useMaskedInterleavedAccesses(TTI)) {
+  if (!useMaskedInterleavedAccesses(TTI, *TheFunction)) {
     // Note: There is no need to invalidate any cost modeling decisions here, as
     // none were taken so far (see assertion above).
     InterleaveInfo.invalidateGroupsRequiringScalarEpilogue();
@@ -3366,8 +3407,8 @@ bool VFSelectionContext::isEpilogueVectorizationProfitable(
   if (!TTI.preferEpilogueVectorization(VF * IC))
     return false;
 
-  unsigned MinVFThreshold = EpilogueVectorizationMinVF.getNumOccurrences() > 0
-                                ? EpilogueVectorizationMinVF
+  unsigned MinVFThreshold = isEpilogueVectorizationMinVFSpecified(F)
+                                ? getEpilogueVectorizationMinVF(F)
                                 : TTI.getEpilogueVectorizationMinVF();
   return estimateElementCount(VF * IC, getVScaleForTuning()) >= MinVFThreshold;
 }
@@ -3375,7 +3416,8 @@ bool VFSelectionContext::isEpilogueVectorizationProfitable(
 std::unique_ptr<VPlan> LoopVectorizationPlanner::selectBestEpiloguePlan(
     VPlan &MainPlan, ElementCount MainLoopVF, unsigned IC,
     bool ScalarEpilogueAllowed) {
-  if (!EnableEpilogueVectorization) {
+  const Function &LoopF = *OrigLoop->getHeader()->getParent();
+  if (!getEnableEpilogueVectorization(LoopF)) {
     LLVM_DEBUG(dbgs() << "LEV: Epilogue vectorization is disabled.\n");
     return nullptr;
   }
@@ -3401,9 +3443,10 @@ std::unique_ptr<VPlan> LoopVectorizationPlanner::selectBestEpiloguePlan(
     return nullptr;
   }
 
-  if (hasForcedEpilogueVF()) {
-    if (estimateElementCount(EpilogueVectorizationForceVF,
-                             Config.getVScaleForTuning()) >=
+  ElementCount EpilogueForceVF = getEpilogueVectorizationForceVF(LoopF);
+  if (EpilogueForceVF.isNonZero() &&
+      EpilogueForceVF != ElementCount::getFixed(1)) {
+    if (estimateElementCount(EpilogueForceVF, Config.getVScaleForTuning()) >=
         IC * estimateElementCount(MainLoopVF, Config.getVScaleForTuning())) {
       // Note that the main loop leaves IC * MainLoopVF iterations iff a scalar
       // epilogue is required, but then the epilogue loop also requires a scalar
@@ -3414,10 +3457,10 @@ std::unique_ptr<VPlan> LoopVectorizationPlanner::selectBestEpiloguePlan(
     }
 
     LLVM_DEBUG(dbgs() << "LEV: Epilogue vectorization factor is forced.\n");
-    if (hasPlanWithVF(EpilogueVectorizationForceVF)) {
-      std::unique_ptr<VPlan> Clone(
-          getPlanFor(EpilogueVectorizationForceVF).duplicate());
-      Clone->setVF(EpilogueVectorizationForceVF);
+    ElementCount ForcedEC = EpilogueForceVF;
+    if (hasPlanWithVF(ForcedEC)) {
+      std::unique_ptr<VPlan> Clone(getPlanFor(ForcedEC).duplicate());
+      Clone->setVF(ForcedEC);
       return Clone;
     }
 
@@ -3645,11 +3688,11 @@ LoopVectorizationPlanner::selectInterleaveCount(VPlan &Plan, ElementCount VF,
                       << TTI.getRegisterClassName(Pair.first)
                       << " register class\n");
     if (VF.isScalar()) {
-      if (ForceTargetNumScalarRegs.getNumOccurrences() > 0)
-        TargetNumRegisters = ForceTargetNumScalarRegs;
+      if (isForceTargetNumScalarRegsSpecified(*CM->TheFunction))
+        TargetNumRegisters = getForceTargetNumScalarRegs(*CM->TheFunction);
     } else {
-      if (ForceTargetNumVectorRegs.getNumOccurrences() > 0)
-        TargetNumRegisters = ForceTargetNumVectorRegs;
+      if (isForceTargetNumVectorRegsSpecified(*CM->TheFunction))
+        TargetNumRegisters = getForceTargetNumVectorRegs(*CM->TheFunction);
     }
     unsigned MaxLocalUsers = Pair.second;
     unsigned LoopInvariantRegs = 0;
@@ -3659,7 +3702,7 @@ LoopVectorizationPlanner::selectInterleaveCount(VPlan &Plan, ElementCount VF,
     unsigned TmpIC = llvm::bit_floor((TargetNumRegisters - LoopInvariantRegs) /
                                      MaxLocalUsers);
     // Don't count the induction variable as interleaved.
-    if (EnableIndVarRegisterHeur) {
+    if (getEnableIndVarRegisterHeur(*CM->TheFunction)) {
       TmpIC = llvm::bit_floor((TargetNumRegisters - LoopInvariantRegs - 1) /
                               std::max(1U, (MaxLocalUsers - 1)));
     }
@@ -3682,11 +3725,13 @@ LoopVectorizationPlanner::selectInterleaveCount(VPlan &Plan, ElementCount VF,
 
   // Check if the user has overridden the max.
   if (VF.isScalar()) {
-    if (ForceTargetMaxScalarInterleaveFactor.getNumOccurrences() > 0)
-      MaxInterleaveCount = ForceTargetMaxScalarInterleaveFactor;
+    if (isForceTargetMaxScalarInterleaveFactorSpecified(*CM->TheFunction))
+      MaxInterleaveCount =
+          getForceTargetMaxScalarInterleaveFactor(*CM->TheFunction);
   } else {
-    if (ForceTargetMaxVectorInterleaveFactor.getNumOccurrences() > 0)
-      MaxInterleaveCount = ForceTargetMaxVectorInterleaveFactor;
+    if (isForceTargetMaxVectorInterleaveFactorSpecified(*CM->TheFunction))
+      MaxInterleaveCount =
+          getForceTargetMaxVectorInterleaveFactor(*CM->TheFunction);
   }
 
   // Try to get the exact trip count, or an estimate based on profiling data or
@@ -3787,12 +3832,14 @@ LoopVectorizationPlanner::selectInterleaveCount(VPlan &Plan, ElementCount VF,
   const bool AggressivelyInterleave =
       TTI.enableAggressiveInterleaving(HasReductions);
   if (!ScalarInterleavingRequiresRuntimePointerCheck &&
-      !ScalarInterleavingRequiresPredication && LoopCost < SmallLoopCost) {
+      !ScalarInterleavingRequiresPredication &&
+      LoopCost < getSmallLoopCost(*CM->TheFunction)) {
     // We assume that the cost overhead is 1 and we use the cost model
     // to estimate the cost of the loop and interleave until the cost of the
     // loop overhead is about 5% of the cost of the loop.
-    unsigned SmallIC = std::min(IC, (unsigned)llvm::bit_floor<uint64_t>(
-                                        SmallLoopCost / LoopCost.getValue()));
+    unsigned SmallIC = std::min(
+        IC, (unsigned)llvm::bit_floor<uint64_t>(
+                getSmallLoopCost(*CM->TheFunction) / LoopCost.getValue()));
 
     // Interleave until store/load ports (estimated by max interleave count) are
     // saturated.
@@ -3870,13 +3917,13 @@ LoopVectorizationPlanner::selectInterleaveCount(VPlan &Plan, ElementCount VF,
         return 1;
       }
 
-      unsigned F = MaxNestedScalarReductionIC;
-      SmallIC = std::min(SmallIC, F);
-      StoresIC = std::min(StoresIC, F);
-      LoadsIC = std::min(LoadsIC, F);
+      unsigned MaxReductionIC = getMaxNestedScalarReductionIC(*CM->TheFunction);
+      SmallIC = std::min(SmallIC, MaxReductionIC);
+      StoresIC = std::min(StoresIC, MaxReductionIC);
+      LoadsIC = std::min(LoadsIC, MaxReductionIC);
     }
 
-    if (EnableLoadStoreRuntimeInterleave &&
+    if (getEnableLoadStoreRuntimeInterleave(*CM->TheFunction) &&
         std::max(StoresIC, LoadsIC) > SmallIC) {
       LLVM_DEBUG(
           dbgs() << "LV: Interleaving to saturate store or load ports.\n");
@@ -3921,7 +3968,7 @@ bool LoopVectorizationCostModel::useEmulatedMaskMemRefHack(
          "Expecting a scalar emulated instruction");
   return isa<LoadInst>(I) ||
          (isa<StoreInst>(I) &&
-          NumPredStores > NumberOfStoresToPredicate);
+          NumPredStores > getNumberOfStoresToPredicate(*TheFunction));
 }
 
 void LoopVectorizationCostModel::collectInstsToScalarize(ElementCount VF) {
@@ -4110,8 +4157,8 @@ InstructionCost LoopVectorizationCostModel::expectedCost(ElementCount VF) {
       InstructionCost C = getInstructionCost(&I, VF);
 
       // Check if we should override the cost.
-      if (C.isValid() && ForceTargetInstructionCost.getNumOccurrences() > 0)
-        C = InstructionCost(ForceTargetInstructionCost);
+      if (C.isValid() && isForceTargetInstructionCostSpecified(*TheFunction))
+        C = InstructionCost(getForceTargetInstructionCost(*TheFunction));
 
       BlockCost += C;
       LLVM_DEBUG(dbgs() << "LV: Found an estimated cost of " << C << " for VF "
@@ -5440,7 +5487,7 @@ void LoopVectorizationPlanner::plan(ElementCount UserVF, unsigned UserIC) {
 
   // Invalidate interleave groups if all blocks of loop will be predicated.
   if (CM->blockNeedsPredicationForAnyReason(OrigLoop->getHeader()) &&
-      !useMaskedInterleavedAccesses(TTI)) {
+      !useMaskedInterleavedAccesses(TTI, *OrigLoop->getHeader()->getParent())) {
     LLVM_DEBUG(
         dbgs()
         << "LV: Invalidate all interleaved groups due to fold-tail by masking "
@@ -5469,7 +5516,8 @@ void LoopVectorizationPlanner::plan(ElementCount UserVF, unsigned UserIC) {
       // profitable to scalarize.
       CM->collectNonVectorizedAndSetWideningDecisions(UserVF);
       buildVPlans(*VPlan1, UserVF, UserVF);
-      ElementCount EpilogueUserVF = EpilogueVectorizationForceVF;
+      ElementCount EpilogueUserVF =
+          getEpilogueVectorizationForceVF(*OrigLoop->getHeader()->getParent());
       if (EpilogueUserVF.isVector() &&
           ElementCount::isKnownLT(EpilogueUserVF, UserVF)) {
         CM->collectNonVectorizedAndSetWideningDecisions(EpilogueUserVF);
@@ -5527,8 +5575,10 @@ VPCostContext::VPCostContext(const TargetLibraryInfo &TLI, const VPlan &Plan,
 InstructionCost VPCostContext::getLegacyCost(Instruction *UI,
                                              ElementCount VF) const {
   InstructionCost Cost = CM.getInstructionCost(UI, VF);
-  if (Cost.isValid() && ForceTargetInstructionCost.getNumOccurrences())
-    return InstructionCost(ForceTargetInstructionCost);
+  if (Cost.isValid() &&
+      isForceTargetInstructionCostSpecified(*L->getHeader()->getParent()))
+    return InstructionCost(
+        getForceTargetInstructionCost(*L->getHeader()->getParent()));
   return Cost;
 }
 
@@ -5652,7 +5702,7 @@ LoopVectorizationPlanner::precomputeCosts(VPlan &Plan, ElementCount VF,
 
   // Don't apply special costs when instruction cost is forced to make sure the
   // forced cost is used for each recipe.
-  if (ForceTargetInstructionCost.getNumOccurrences())
+  if (isForceTargetInstructionCostSpecified(*CM->TheFunction))
     return Cost;
 
   // Pre-compute costs for instructions that are forced-scalar or profitable to
@@ -5714,7 +5764,8 @@ InstructionCost LoopVectorizationPlanner::cost(VPlan &Plan, ElementCount VF,
 
   // Add the cost of spills due to excess register usage
   if (RU && Config.shouldConsiderRegPressureForVF(VF))
-    Cost += RU->spillCost(TTI, Config.CostKind, ForceTargetNumVectorRegs);
+    Cost += RU->spillCost(CM->TTI, Config.CostKind,
+                          getForceTargetNumVectorRegs(*CM->TheFunction));
 
 #ifndef NDEBUG
   unsigned EstimatedWidth =
@@ -5757,10 +5808,12 @@ LoopVectorizationPlanner::computeBestVF() {
     return {VectorizationFactor(FirstPlan.getSingleVF(), 0, 0), &FirstPlan};
   }
 
-  if (hasPlanWithVF(UserVF) && hasForcedEpilogueVF() && VPlans.size() == 2) {
+  if (hasPlanWithVF(UserVF) && hasForcedEpilogueVF(*CM->TheFunction) &&
+      VPlans.size() == 2) {
     assert(VPlans[0]->getSingleVF() == UserVF &&
            "expected second plan to be for the forced UserVF");
-    assert(VPlans[1]->getSingleVF() == EpilogueVectorizationForceVF &&
+    assert(VPlans[1]->getSingleVF() ==
+               getEpilogueVectorizationForceVF(*CM->TheFunction) &&
            "expected first plan to be for the forced epilogue VF");
     return {VectorizationFactor(UserVF, 0, 0), VPlans[0].get()};
   }
@@ -6523,9 +6576,10 @@ VPlanPtr LoopVectorizationPlanner::tryToBuildVPlan1() {
       !ForceVectorization &&
       (CM->EpilogueLoweringStatus == CM_EpilogueNotAllowedOptSize ||
        CM->EpilogueLoweringStatus == CM_EpilogueNotAllowedLowTripLoop);
+  const Function &LVF = *OrigLoop->getHeader()->getParent();
   unsigned SCEVCheckThreshold = ForceVectorization
-                                    ? PragmaVectorizeSCEVCheckThreshold
-                                    : VectorizeSCEVCheckThreshold;
+                                    ? getPragmaVectorizeSCEVCheckThreshold(LVF)
+                                    : getVectorizeSCEVCheckThreshold(LVF);
   if (!RUN_VPLAN_PASS(VPlanTransforms::finalizeSCEVPredicates, *VPlan0, PSE,
                       OptForSize, SCEVCheckThreshold, ORE, OrigLoop))
     return nullptr;
@@ -6817,12 +6871,9 @@ VPlanPtr LoopVectorizationPlanner::tryToBuildVPlan(VPlanPtr Plan,
   RUN_VPLAN_PASS(VPlanTransforms::createInterleaveGroups, *Plan,
                  InterleaveGroups, CM->isEpilogueAllowed());
 
-  // Convert memory recipes to strided access recipes if the strided access is
-  // legal and profitable.
   RUN_VPLAN_PASS(VPlanTransforms::convertToStridedAccesses, *Plan, PSE,
                  *OrigLoop, CostCtx, Range);
 
-  // Ensure scalar VF plans only contain VF=1, as required by hasScalarVFOnly.
   if (Range.Start.isScalar())
     Range.End = Range.Start * 2;
 
@@ -7064,7 +7115,8 @@ void LoopVectorizationPlanner::attachRuntimeChecks(
   if (MemCheckBlock && MemCheckBlock->hasNPredecessors(0)) {
     // VPlan-native path does not do any analysis for runtime checks
     // currently.
-    assert((!EnableVPlanNativePath || !Plan.isOuterLoop()) &&
+    assert((!getEnableVPlanNativePath(*OrigLoop->getHeader()->getParent()) ||
+            OrigLoop->isInnermost()) &&
            "Runtime checks are not supported for outer loops yet");
 
     if (Config.OptForSize) {
@@ -7105,9 +7157,7 @@ void LoopVectorizationPlanner::addMinimumIterationCheck(
 // for minimum code-size, 2) tail-folding compiler options, 3) loop
 // hints forcing tail-folding, and 4) a TTI hook that analyses whether the loop
 // is suitable for tail-folding.
-// This function determines epilogue lowering for the main vector loop while
-// epilogue lowering for the tail-folded epilogue path will be handled
-// separately in getEpilogueTailLowering.
+// This function determines epilogue lowering for the main vector loop.
 static EpilogueLowering
 getEpilogueLowering(Function *F, Loop *L, LoopVectorizeHints &Hints,
                     bool OptForSize, TargetTransformInfo *TTI,
@@ -7120,8 +7170,8 @@ getEpilogueLowering(Function *F, Loop *L, LoopVectorizeHints &Hints,
     return CM_EpilogueNotAllowedOptSize;
 
   // 2) If set, obey the directives
-  if (TailFoldingPolicy.getNumOccurrences()) {
-    switch (TailFoldingPolicy) {
+  if (isTailFoldingPolicySpecified(*F)) {
+    switch (getTailFoldingPolicy(*F)) {
     case TailFoldingPolicyTy::None:
       return CM_EpilogueAllowed;
     case TailFoldingPolicyTy::PreferFoldTail:
@@ -7156,12 +7206,13 @@ getEpilogueTailLowering(const LoopVectorizationCostModel &MainCM, const Loop *L,
                         OptimizationRemarkEmitter *ORE,
                         LoopVectorizationLegality &LVL,
                         LoopVectorizeHints &Hints) {
+  const Function *F = L->getHeader()->getParent();
   // Epilogue TF is only enabled when explicitly requested via command line.
-  if (!EpilogueTailFoldingPolicy.getNumOccurrences() ||
-      EpilogueTailFoldingPolicy != TailFoldingPolicyTy::PreferFoldTail)
+  if (!isEpilogueTailFoldingPolicySpecified(*F) ||
+      getEpilogueTailFoldingPolicy(*F) != TailFoldingPolicyTy::PreferFoldTail)
     return CM_EpilogueAllowed;
 
-  if (!EnableEpilogueVectorization) {
+  if (!getEnableEpilogueVectorization(*F)) {
     reportVectorizationInfo(
         "Options conflict, epilogue vectorization is disallowed while "
         "epilogue tail-folding allowed!",
@@ -7169,14 +7220,15 @@ getEpilogueTailLowering(const LoopVectorizationCostModel &MainCM, const Loop *L,
     return CM_EpilogueAllowed;
   }
 
-  if (!Hints.getWidth() || !hasForcedEpilogueVF()) {
+  if (!Hints.getWidth() || !hasForcedEpilogueVF(*F)) {
     reportVectorizationInfo("For now, epilogue tail-folding can't be "
                             "applied without forced main/epilogue loop VF",
                             "UnsupportedEpilogueTailFoldingPolicy", ORE, L);
     return CM_EpilogueAllowed;
   }
 
-  if (ElementCount::isKnownLE(Hints.getWidth(), EpilogueVectorizationForceVF)) {
+  if (ElementCount::isKnownLE(Hints.getWidth(),
+                              getEpilogueVectorizationForceVF(*F))) {
     reportVectorizationInfo("For now, epilogue tail-folding can't be applied "
                             "when VF of the main loop <= VF of the epilogue",
                             "UnsupportedEpilogueTailFoldingPolicy", ORE, L);
@@ -7310,7 +7362,7 @@ static bool isOutsideLoopWorkProfitable(GeneratedRTChecks &Checks,
   // would lead to a divide by 0. Fall back to hard threshold.
   if (VF.Width.isScalar()) {
     // TODO: Should we rename VectorizeMemoryCheckThreshold?
-    if (RtC > VectorizeMemoryCheckThreshold) {
+    if (RtC > getVectorizeMemoryCheckThreshold(*L->getHeader()->getParent())) {
       LLVM_DEBUG(
           dbgs()
           << "LV: Interleaving only is not profitable due to runtime checks\n");
@@ -7405,10 +7457,8 @@ static bool isOutsideLoopWorkProfitable(GeneratedRTChecks &Checks,
 }
 
 LoopVectorizePass::LoopVectorizePass(LoopVectorizeOptions Opts)
-    : InterleaveOnlyWhenForced(Opts.InterleaveOnlyWhenForced ||
-                               !EnableLoopInterleaving),
-      VectorizeOnlyWhenForced(Opts.VectorizeOnlyWhenForced ||
-                              !EnableLoopVectorization) {}
+    : InterleaveOnlyWhenForced(Opts.InterleaveOnlyWhenForced),
+      VectorizeOnlyWhenForced(Opts.VectorizeOnlyWhenForced) {}
 
 /// Prepare \p MainPlan for vectorizing the main vector loop during epilogue
 /// vectorization.
@@ -7854,7 +7904,8 @@ static void connectEpilogueVectorLoop(VPlan &EpiPlan, Loop *L,
 }
 
 bool LoopVectorizePass::processLoop(Loop *L) {
-  assert((EnableVPlanNativePath || L->isInnermost()) &&
+  assert((getEnableVPlanNativePath(*L->getHeader()->getParent()) ||
+          L->isInnermost()) &&
          "VPlan-native path is not enabled. Only process inner loops.");
 
   LLVM_DEBUG(dbgs() << "\nLV: Checking a loop in '"
@@ -7904,7 +7955,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   LoopVectorizationLegality LVL(L, PSE, DT, TTI, TLI, F, *LAIs, LI, ORE,
                                 &Requirements, &Hints, DB, AC,
                                 /*AllowRuntimeSCEVChecks=*/!OptForSize, AA);
-  if (!LVL.canVectorize(EnableVPlanNativePath)) {
+  if (!LVL.canVectorize(getEnableVPlanNativePath(*F))) {
     LLVM_DEBUG(dbgs() << "LV: Not vectorizing: Cannot prove legality.\n");
     Hints.emitRemarkWithHints();
     return false;
@@ -7919,14 +7970,14 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   }
 
   if (LVL.hasUncountableEarlyExit()) {
-    if (!EnableEarlyExitVectorization) {
+    if (!getEnableEarlyExitVectorization(*F)) {
       reportVectorizationFailure("Auto-vectorization of loops with uncountable "
                                  "early exit is not enabled",
                                  "UncountableEarlyExitLoopsDisabled", ORE, L);
       return false;
     }
     if (LVL.hasUncountableExitWithSideEffects() &&
-        !EnableEarlyExitVectorizationWithSideEffects) {
+        !getEnableEarlyExitVectorizationWithSideEffects(*F)) {
       reportVectorizationFailure("Auto-vectorization of loops with uncountable "
                                  "early exit and side effects is not enabled",
                                  "UncountableEarlyExitSideEffectLoopsDisabled",
@@ -7940,12 +7991,12 @@ bool LoopVectorizePass::processLoop(Loop *L) {
       IsInnerLoop && TTI->enableInterleavedAccessVectorization();
 
   // If an override option has been passed in for interleaved accesses, use it.
-  if (EnableInterleavedMemAccesses.getNumOccurrences() > 0)
-    UseInterleaved = IsInnerLoop && EnableInterleavedMemAccesses;
+  if (isEnableInterleavedMemAccessesSpecified(*F))
+    UseInterleaved = IsInnerLoop && getEnableInterleavedMemAccesses(*F);
 
   // Analyze interleaved memory accesses.
   if (UseInterleaved)
-    IAI.analyzeInterleaving(useMaskedInterleavedAccesses(*TTI));
+    IAI.analyzeInterleaving(useMaskedInterleavedAccesses(*TTI, *F));
 
   if (LVL.hasUncountableEarlyExit()) {
     BasicBlock *LoopLatch = L->getLoopLatch();
@@ -7967,7 +8018,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   // count by optimizing for size, to minimize overheads.
   auto ExpectedTC = getSmallBestKnownTC(PSE, L);
   if (ExpectedTC && ExpectedTC->isFixed() &&
-      ExpectedTC->getFixedValue() < TinyTripCountVectorThreshold) {
+      ExpectedTC->getFixedValue() < getTinyTripCountVectorThreshold(*F)) {
     LLVM_DEBUG(dbgs() << "LV: Found a loop with a very small trip count. "
                       << "This loop is worth vectorizing only if no scalar "
                       << "iteration overheads are incurred.");
@@ -8012,8 +8063,8 @@ bool LoopVectorizePass::processLoop(Loop *L) {
 
   bool AllowOrderedReductions;
   // If the flag is set, use that instead and override the TTI behaviour.
-  if (ForceOrderedReductions.getNumOccurrences() > 0)
-    AllowOrderedReductions = ForceOrderedReductions;
+  if (isForceOrderedReductionsSpecified(*F))
+    AllowOrderedReductions = getForceOrderedReductions(*F);
   else
     AllowOrderedReductions = TTI->enableOrderedReductions();
   if (!LVL.canVectorizeFPMath(AllowOrderedReductions)) {
@@ -8070,7 +8121,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
 
   // For VPlan build stress testing of outer loops, bail after plan
   // construction.
-  if (!IsInnerLoop && VPlanBuildOuterloopStressTest)
+  if (!IsInnerLoop && getVPlanBuildStressTest(*F))
     return false;
 
   if (IsInnerLoop && ORE->allowExtraAnalysis(LV_NAME))
@@ -8421,7 +8472,7 @@ LoopVectorizeResult LoopVectorizePass::runImpl(Function &F) {
         FAM->clearAnalysis<CycleAnalysis>(F);
 
 #ifndef NDEBUG
-      if (VerifySCEV)
+      if (getVerifySCEV(F.getContext().getOptionsContext()))
         SE->verify();
 #endif
     }
@@ -8438,6 +8489,13 @@ LoopVectorizeResult LoopVectorizePass::runImpl(Function &F) {
 
 PreservedAnalyses LoopVectorizePass::run(Function &F,
                                          FunctionAnalysisManager &AM) {
+  // Re-check CLI options now that we have a Function context, since the
+  // constructor may not have had access to the OptionsContext.
+  if (!getEnableLoopInterleaving(F.getContext().getOptionsContext()))
+    InterleaveOnlyWhenForced = true;
+  if (!getEnableLoopVectorization(F.getContext().getOptionsContext()))
+    VectorizeOnlyWhenForced = true;
+
   LI = &AM.getResult<LoopAnalysis>(F);
   // There are no loops in the function. Return before computing other
   // expensive analyses.

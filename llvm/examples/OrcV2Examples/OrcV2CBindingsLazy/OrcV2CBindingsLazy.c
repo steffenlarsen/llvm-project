@@ -64,12 +64,12 @@ const char MainMod[] =
     "  declare i32 @foo()                                             \n"
     "  declare i32 @bar()                                             \n";
 
-LLVMErrorRef parseExampleModule(const char *Source, size_t Len,
-                                const char *Name,
+LLVMErrorRef parseExampleModule(LLVMOptionsContextRef Opts, const char *Source,
+                                size_t Len, const char *Name,
                                 LLVMOrcThreadSafeModuleRef *TSM) {
 
-  // Create an LLVMContext for the Module.
-  LLVMContextRef Ctx = LLVMContextCreate();
+  // Create an LLVMContext for the Module with options.
+  LLVMContextRef Ctx = LLVMContextCreateWithOptions(Opts);
 
   // Parse the LLVM module.
   LLVMModuleRef M;
@@ -106,7 +106,8 @@ int main(int argc, const char *argv[]) {
   int MainResult = 0;
 
   // Parse command line arguments and initialize LLVM Core.
-  LLVMParseCommandLineOptions(argc, argv, "");
+  // Only pass argv[0] — the program uses argc directly, not via cl::opt.
+  LLVMOptionsContextRef Opts = LLVMParseCommandLineOptions2(1, argv, "");
 
   // Initialize native target codegen and asm printer.
   LLVMInitializeNativeTarget();
@@ -130,7 +131,7 @@ int main(int argc, const char *argv[]) {
     LLVMErrorRef Err;
 
     LLVMOrcThreadSafeModuleRef FooTSM;
-    if ((Err = parseExampleModule(FooMod, sizeof(FooMod) - 1, "foo-mod",
+    if ((Err = parseExampleModule(Opts, FooMod, sizeof(FooMod) - 1, "foo-mod",
                                   &FooTSM))) {
       MainResult = handleError(Err);
       goto jit_cleanup;
@@ -145,7 +146,7 @@ int main(int argc, const char *argv[]) {
     }
 
     LLVMOrcThreadSafeModuleRef BarTSM;
-    if ((Err = parseExampleModule(BarMod, sizeof(BarMod) - 1, "bar-mod",
+    if ((Err = parseExampleModule(Opts, BarMod, sizeof(BarMod) - 1, "bar-mod",
                                   &BarTSM))) {
       MainResult = handleError(Err);
       goto jit_cleanup;
@@ -158,8 +159,8 @@ int main(int argc, const char *argv[]) {
     }
 
     LLVMOrcThreadSafeModuleRef MainTSM;
-    if ((Err = parseExampleModule(MainMod, sizeof(MainMod) - 1, "main-mod",
-                                  &MainTSM))) {
+    if ((Err = parseExampleModule(Opts, MainMod, sizeof(MainMod) - 1,
+                                  "main-mod", &MainTSM))) {
       MainResult = handleError(Err);
       goto jit_cleanup;
     }
@@ -240,6 +241,9 @@ jit_cleanup:
   }
 
 llvm_shutdown:
+  // Dispose of the options context.
+  LLVMDisposeOptionsContext(Opts);
+
   // Shut down LLVM.
   LLVMShutdown();
 

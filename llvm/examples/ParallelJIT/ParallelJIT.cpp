@@ -42,12 +42,12 @@
 #include <cstdint>
 #include <iostream>
 #include <memory>
-#include <vector>
 #include <pthread.h>
+#include <vector>
 
 using namespace llvm;
 
-static Function* createAdd1(Module *M) {
+static Function *createAdd1(Module *M) {
   LLVMContext &Context = M->getContext();
   // Create the add1 function entry and insert this entry into module M.  The
   // function will have a return type of "int" and take an argument of "int".
@@ -66,7 +66,7 @@ static Function* createAdd1(Module *M) {
   // Get pointers to the integer argument of the add1 function...
   assert(Add1F->arg_begin() != Add1F->arg_end()); // Make sure there's an arg
   Argument *ArgX = &*Add1F->arg_begin();          // Get the arg
-  ArgX->setName("AnArg");            // Give it a nice symbolic name for fun.
+  ArgX->setName("AnArg"); // Give it a nice symbolic name for fun.
 
   // Create the add instruction, inserting it into the end of BB.
   Instruction *Add = BinaryOperator::CreateAdd(One, ArgX, "addresult", BB);
@@ -96,7 +96,7 @@ static Function *CreateFibFunction(Module *M) {
 
   // Get pointer to the integer argument of the add1 function...
   Argument *ArgX = &*FibF->arg_begin(); // Get the arg.
-  ArgX->setName("AnArg");            // Give it a nice symbolic name for fun.
+  ArgX->setName("AnArg");               // Give it a nice symbolic name for fun.
 
   // Create the true_block.
   BasicBlock *RetBB = BasicBlock::Create(Context, "return", FibF);
@@ -120,7 +120,7 @@ static Function *CreateFibFunction(Module *M) {
 
   // fib(x-1)+fib(x-2)
   Value *Sum =
-    BinaryOperator::CreateAdd(CallFibX1, CallFibX2, "addresult", RecurseBB);
+      BinaryOperator::CreateAdd(CallFibX1, CallFibX2, "addresult", RecurseBB);
 
   // Create the return instruction and add it to the basic block
   ReturnInst::Create(Context, Sum, RecurseBB);
@@ -129,95 +129,84 @@ static Function *CreateFibFunction(Module *M) {
 }
 
 struct threadParams {
-  ExecutionEngine* EE;
-  Function* F;
+  ExecutionEngine *EE;
+  Function *F;
   int value;
 };
 
 // We block the subthreads just before they begin to execute:
 // we want all of them to call into the JIT at the same time,
 // to verify that the locking is working correctly.
-class WaitForThreads
-{
+class WaitForThreads {
 public:
-  WaitForThreads()
-  {
+  WaitForThreads() {
     n = 0;
     waitFor = 0;
 
-    int result = pthread_cond_init( &condition, nullptr );
+    int result = pthread_cond_init(&condition, nullptr);
     (void)result;
-    assert( result == 0 );
+    assert(result == 0);
 
-    result = pthread_mutex_init( &mutex, nullptr );
-    assert( result == 0 );
+    result = pthread_mutex_init(&mutex, nullptr);
+    assert(result == 0);
   }
 
-  ~WaitForThreads()
-  {
-    int result = pthread_cond_destroy( &condition );
+  ~WaitForThreads() {
+    int result = pthread_cond_destroy(&condition);
     (void)result;
-    assert( result == 0 );
+    assert(result == 0);
 
-    result = pthread_mutex_destroy( &mutex );
-    assert( result == 0 );
+    result = pthread_mutex_destroy(&mutex);
+    assert(result == 0);
   }
 
   // All threads will stop here until another thread calls releaseThreads
-  void block()
-  {
-    int result = pthread_mutex_lock( &mutex );
+  void block() {
+    int result = pthread_mutex_lock(&mutex);
     (void)result;
-    assert( result == 0 );
-    n ++;
+    assert(result == 0);
+    n++;
     //~ std::cout << "block() n " << n << " waitFor " << waitFor << std::endl;
 
-    assert( waitFor == 0 || n <= waitFor );
-    if ( waitFor > 0 && n == waitFor )
-    {
+    assert(waitFor == 0 || n <= waitFor);
+    if (waitFor > 0 && n == waitFor) {
       // There are enough threads blocked that we can release all of them
       std::cout << "Unblocking threads from block()" << std::endl;
       unblockThreads();
-    }
-    else
-    {
+    } else {
       // We just need to wait until someone unblocks us
-      result = pthread_cond_wait( &condition, &mutex );
-      assert( result == 0 );
+      result = pthread_cond_wait(&condition, &mutex);
+      assert(result == 0);
     }
 
     // unlock the mutex before returning
-    result = pthread_mutex_unlock( &mutex );
-    assert( result == 0 );
+    result = pthread_mutex_unlock(&mutex);
+    assert(result == 0);
   }
 
   // If there are num or more threads blocked, it will signal them all
   // Otherwise, this thread blocks until there are enough OTHER threads
   // blocked
-  void releaseThreads( size_t num )
-  {
-    int result = pthread_mutex_lock( &mutex );
+  void releaseThreads(size_t num) {
+    int result = pthread_mutex_lock(&mutex);
     (void)result;
-    assert( result == 0 );
+    assert(result == 0);
 
-    if ( n >= num ) {
+    if (n >= num) {
       std::cout << "Unblocking threads from releaseThreads()" << std::endl;
       unblockThreads();
-    }
-    else
-    {
+    } else {
       waitFor = num;
-      pthread_cond_wait( &condition, &mutex );
+      pthread_cond_wait(&condition, &mutex);
     }
 
     // unlock the mutex before returning
-    result = pthread_mutex_unlock( &mutex );
-    assert( result == 0 );
+    result = pthread_mutex_unlock(&mutex);
+    assert(result == 0);
   }
 
 private:
-  void unblockThreads()
-  {
+  void unblockThreads() {
     // Reset the counters to zero: this way, if any new threads
     // enter while threads are exiting, they will block instead
     // of triggering a new release of threads
@@ -228,7 +217,7 @@ private:
     // triggering a new release of threads
     waitFor = 0;
 
-    int result = pthread_cond_broadcast( &condition );
+    int result = pthread_cond_broadcast(&condition);
     (void)result;
     assert(result == 0);
   }
@@ -241,9 +230,8 @@ private:
 
 static WaitForThreads synchronize;
 
-void* callFunc( void* param )
-{
-  struct threadParams* p = (struct threadParams*) param;
+void *callFunc(void *param) {
+  struct threadParams *p = (struct threadParams *)param;
 
   // Call the `foo' function with no arguments:
   std::vector<GenericValue> Args(1);
@@ -252,74 +240,74 @@ void* callFunc( void* param )
   synchronize.block(); // wait until other threads are at this point
   GenericValue gv = p->EE->runFunction(p->F, Args);
 
-  return (void*)(intptr_t)gv.IntVal.getZExtValue();
+  return (void *)(intptr_t)gv.IntVal.getZExtValue();
 }
 
 int main() {
   InitializeNativeTarget();
   LLVMInitializeNativeAsmPrinter();
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   // Create some module to put our function into it.
   std::unique_ptr<Module> Owner = std::make_unique<Module>("test", Context);
   Module *M = Owner.get();
 
-  Function* add1F = createAdd1( M );
-  Function* fibF = CreateFibFunction( M );
+  Function *add1F = createAdd1(M);
+  Function *fibF = CreateFibFunction(M);
 
   // Now we create the JIT.
-  ExecutionEngine* EE = EngineBuilder(std::move(Owner)).create();
+  ExecutionEngine *EE = EngineBuilder(std::move(Owner)).create();
 
   //~ std::cout << "We just constructed this LLVM module:\n\n" << *M;
   //~ std::cout << "\n\nRunning foo: " << std::flush;
 
   // Create one thread for add1 and two threads for fib
-  struct threadParams add1 = { EE, add1F, 1000 };
-  struct threadParams fib1 = { EE, fibF, 39 };
-  struct threadParams fib2 = { EE, fibF, 42 };
+  struct threadParams add1 = {EE, add1F, 1000};
+  struct threadParams fib1 = {EE, fibF, 39};
+  struct threadParams fib2 = {EE, fibF, 42};
 
   pthread_t add1Thread;
-  int result = pthread_create( &add1Thread, nullptr, callFunc, &add1 );
-  if ( result != 0 ) {
-          std::cerr << "Could not create thread" << std::endl;
-          return 1;
+  int result = pthread_create(&add1Thread, nullptr, callFunc, &add1);
+  if (result != 0) {
+    std::cerr << "Could not create thread" << std::endl;
+    return 1;
   }
 
   pthread_t fibThread1;
-  result = pthread_create( &fibThread1, nullptr, callFunc, &fib1 );
-  if ( result != 0 ) {
-          std::cerr << "Could not create thread" << std::endl;
-          return 1;
+  result = pthread_create(&fibThread1, nullptr, callFunc, &fib1);
+  if (result != 0) {
+    std::cerr << "Could not create thread" << std::endl;
+    return 1;
   }
 
   pthread_t fibThread2;
-  result = pthread_create( &fibThread2, nullptr, callFunc, &fib2 );
-  if ( result != 0 ) {
-          std::cerr << "Could not create thread" << std::endl;
-          return 1;
+  result = pthread_create(&fibThread2, nullptr, callFunc, &fib2);
+  if (result != 0) {
+    std::cerr << "Could not create thread" << std::endl;
+    return 1;
   }
 
   synchronize.releaseThreads(3); // wait until other threads are at this point
 
-  void* returnValue;
-  result = pthread_join( add1Thread, &returnValue );
-  if ( result != 0 ) {
-          std::cerr << "Could not join thread" << std::endl;
-          return 1;
+  void *returnValue;
+  result = pthread_join(add1Thread, &returnValue);
+  if (result != 0) {
+    std::cerr << "Could not join thread" << std::endl;
+    return 1;
   }
   std::cout << "Add1 returned " << intptr_t(returnValue) << std::endl;
 
-  result = pthread_join( fibThread1, &returnValue );
-  if ( result != 0 ) {
-          std::cerr << "Could not join thread" << std::endl;
-          return 1;
+  result = pthread_join(fibThread1, &returnValue);
+  if (result != 0) {
+    std::cerr << "Could not join thread" << std::endl;
+    return 1;
   }
   std::cout << "Fib1 returned " << intptr_t(returnValue) << std::endl;
 
-  result = pthread_join( fibThread2, &returnValue );
-  if ( result != 0 ) {
-          std::cerr << "Could not join thread" << std::endl;
-          return 1;
+  result = pthread_join(fibThread2, &returnValue);
+  if (result != 0) {
+    std::cerr << "Could not join thread" << std::endl;
+    return 1;
   }
   std::cout << "Fib2 returned " << intptr_t(returnValue) << std::endl;
 

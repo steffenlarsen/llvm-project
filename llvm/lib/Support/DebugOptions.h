@@ -14,6 +14,8 @@
 #ifndef LLVM_SUPPORT_DEBUGOPTIONS_H
 #define LLVM_SUPPORT_DEBUGOPTIONS_H
 
+#include "llvm/ADT/StringRef.h"
+
 namespace llvm {
 
 // These are invoked internally before parsing command line options.
@@ -27,6 +29,17 @@ void initTimerOptions();
 void initWithColorOptions();
 void initDebugOptions();
 void initRandomSeedOptions();
+
+// Setters for values that used to live in namespace-scope `support::` globals.
+// The storage belongs to the ManagedStatic singleton that consumes it (e.g.
+// TimerGlobals), which is where it lived before the clv2 migration -- keeping a
+// separate global for the option value would add process-wide state on top of a
+// singleton that already exists.  Called from applySupportOptions(), and only
+// for options actually present on the command line, so an unused facility is
+// still never constructed.
+void setInfoOutputFilename(StringRef F);
+void setTrackSpace(bool V);
+void setSortTimers(bool V);
 
 } // namespace llvm
 

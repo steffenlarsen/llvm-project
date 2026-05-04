@@ -15,6 +15,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/iterator_range.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/LazyCallGraph.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/InstIterator.h"
@@ -23,10 +24,11 @@
 #include "llvm/IR/PassManagerImpl.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <optional>
@@ -40,10 +42,17 @@ STATISTIC(LargestCGSCC, "Number of functions in the largest SCC");
 // Explicit template instantiations and specialization definitions for core
 // template typedefs.
 namespace llvm {
-static cl::opt<bool> AbortOnMaxDevirtIterationsReached(
-    "abort-on-max-devirt-iterations-reached",
-    cl::desc("Abort when the max iterations for devirtualization CGSCC repeat "
-             "pass is reached"));
+bool AbortOnMaxDevirtIterationsReached = false;
+} // namespace llvm
+
+static bool getAbortOnMaxDevirtIterationsReached(const Function &F) {
+  return clv2::getOptValIfSpecified<
+      &clv2::AnalysisOptsReg, &clv2::AN_AbortOnMaxDevirtIterationsReached>(
+      F.getContext().getOptionsContext(),
+      llvm::AbortOnMaxDevirtIterationsReached);
+}
+
+namespace llvm {
 
 AnalysisKey ShouldNotRunFunctionPassesAnalysis::Key;
 
@@ -488,7 +497,7 @@ PreservedAnalyses DevirtSCCRepeatedPass::run(LazyCallGraph::SCC &InitialC,
 
     // Otherwise, if we've already hit our max, we're done.
     if (Iteration >= MaxIterations) {
-      if (AbortOnMaxDevirtIterationsReached)
+      if (getAbortOnMaxDevirtIterationsReached(C->begin()->getFunction()))
         report_fatal_error("Max devirtualization iterations reached");
       LLVM_DEBUG(
           dbgs() << "Found another devirtualization after hitting the max "

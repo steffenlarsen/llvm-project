@@ -81,7 +81,7 @@ public:
   void ParseSubtargetFeatures(StringRef CPU, StringRef TuneCPU, StringRef FS);
   unsigned getPointerSize() const { return PointerSize; }
   unsigned getBound() const { return GR->getBound(); }
-  bool canDirectlyComparePointers() const;
+  bool canDirectlyComparePointers(const Function &F) const;
   void setEnv(SPIRVEnvType E);
   SPIRVEnvType getEnv() const { return Env; }
   bool isKernel() const { return getEnv() == Kernel; }
@@ -141,11 +141,6 @@ public:
   }
 
   static constexpr unsigned MaxLegalAddressSpace = 6;
-
-  // Adds known SPIR-V extensions to the global list of allowed extensions that
-  // SPIRVSubtarget module owns as
-  // cl::opt<ExtensionSet, ...> global variable.
-  static void addExtensionsToClOpt(const ExtensionSet &AllowList);
 };
 } // namespace llvm
 

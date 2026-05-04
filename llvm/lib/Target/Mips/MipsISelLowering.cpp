@@ -60,10 +60,11 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include <algorithm>
@@ -83,12 +84,20 @@ using namespace llvm;
 
 STATISTIC(NumTailCalls, "Number of tail calls");
 
-extern cl::opt<bool> EmitJalrReloc;
-extern cl::opt<bool> NoZeroDivCheck;
+static bool getEmitJalrReloc(const Function &F) {
+  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_EmitJalrReloc>(
+      F.getContext().getOptionsContext(), true);
+}
 
-static cl::opt<bool> UseMipsTailCalls("mips-tail-calls", cl::Hidden,
-                                      cl::desc("MIPS: permit tail calls."),
-                                      cl::init(false));
+static bool getNoZeroDivCheck(const Function &F) {
+  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_NoZeroDivCheck>(
+      F.getContext().getOptionsContext(), false);
+}
+
+static bool getUseMipsTailCalls(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::MIPS_UseTailCalls>(
+      F.getContext().getOptionsContext());
+}
 
 static const MCPhysReg Mips64DPRegs[8] = {
   Mips::D12_64, Mips::D13_64, Mips::D14_64, Mips::D15_64,
@@ -1284,7 +1293,7 @@ static MachineBasicBlock *insertDivByZeroTrap(MachineInstr &MI,
                                               MachineBasicBlock &MBB,
                                               const TargetInstrInfo &TII,
                                               bool Is64Bit, bool IsMicroMips) {
-  if (NoZeroDivCheck)
+  if (getNoZeroDivCheck(MBB.getParent()->getFunction()))
     return &MBB;
 
   // Insert instruction "teq $divisor_reg, $zero, 7".
@@ -2322,7 +2331,8 @@ lowerConstantPool(SDValue Op, SelectionDAG &DAG) const
             getTargetMachine().getObjFileLowering());
 
     if (TLOF->IsConstantInSmallSection(DAG.getDataLayout(), N->getConstVal(),
-                                       getTargetMachine()))
+                                       getTargetMachine(),
+                                       &DAG.getMachineFunction().getFunction()))
       // %gp_rel relocation
       return getAddrGPRel(N, SDLoc(N), Ty, DAG, ABI.IsN64());
 
@@ -3246,9 +3256,8 @@ void MipsTargetLowering::AdjustInstrPostInstrSelection(MachineInstr &MI,
     case Mips::TAILCALL64R6REG:
     case Mips::TAILCALLREG_MM:
     case Mips::TAILCALLREG_MMR6: {
-      if (!EmitJalrReloc ||
-          Subtarget.inMips16Mode() ||
-          !isPositionIndependent() ||
+      if (!getEmitJalrReloc(MI.getMF()->getFunction()) ||
+          Subtarget.inMips16Mode() || !isPositionIndependent() ||
           Node->getNumOperands() < 1 ||
           Node->getOperand(0).getNumOperands() < 2) {
         return;
@@ -3380,7 +3389,7 @@ MipsTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   }
 
   if (IsTailCall) {
-    if (!UseMipsTailCalls) {
+    if (!getUseMipsTailCalls(MF.getFunction())) {
       IsTailCall = false;
       if (IsMustTail)
         report_fatal_error("failed to perform tail call elimination on a call "

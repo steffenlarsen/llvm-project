@@ -26,7 +26,7 @@ namespace {
 #include "MFCommon.inc"
 
 TEST(CCStateTest, NegativeOffsets) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module Mod("Module", Ctx);
   auto MF = createMachineFunction(Ctx, Mod);
 

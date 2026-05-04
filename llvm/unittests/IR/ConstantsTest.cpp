@@ -25,7 +25,7 @@ namespace {
 
 // Check that use count checks treat ConstantData like they have no uses.
 TEST(ConstantsTest, UseCounts) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Type *Int32Ty = Type::getInt32Ty(Context);
   Constant *Zero = ConstantInt::get(Int32Ty, 0);
 
@@ -62,7 +62,7 @@ TEST(ConstantsTest, UseCounts) {
 }
 
 TEST(ConstantsTest, Integer_i1) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   IntegerType *Int1 = IntegerType::get(Context, 1);
   Constant *One = ConstantInt::get(Int1, 1);
   Constant *Zero = ConstantInt::get(Int1, 0);
@@ -134,7 +134,7 @@ TEST(ConstantsTest, Integer_i1) {
 }
 
 TEST(ConstantsTest, IntSigns) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   IntegerType *Int8Ty = Type::getInt8Ty(Context);
   EXPECT_EQ(100, ConstantInt::get(Int8Ty, 100, false)->getSExtValue());
   EXPECT_EQ(100, ConstantInt::get(Int8Ty, 100, true)->getSExtValue());
@@ -150,7 +150,7 @@ TEST(ConstantsTest, IntSigns) {
 }
 
 TEST(ConstantsTest, PointerCast) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Type *PtrTy = PointerType::get(C, 0);
   Type *Int64Ty = Type::getInt64Ty(C);
   VectorType *PtrVecTy = FixedVectorType::get(PtrTy, 4);
@@ -218,7 +218,7 @@ TEST(ConstantsTest, PointerCast) {
   }
 
 TEST(ConstantsTest, AsInstructionsTest) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M(new Module("MyModule", Context));
 
   Type *Int64Ty = Type::getInt64Ty(Context);
@@ -275,7 +275,7 @@ TEST(ConstantsTest, AsInstructionsTest) {
   EXPECT_EQ(Poison16, ConstantExpr::getExtractElement(P6, Undef64));
 
   EXPECT_EQ(Elt, ConstantExpr::getExtractElement(
-                 ConstantExpr::getInsertElement(P6, Elt, One), One));
+                     ConstantExpr::getInsertElement(P6, Elt, One), One));
   EXPECT_EQ(PoisonV16, ConstantExpr::getInsertElement(P6, Elt, Two));
   EXPECT_EQ(PoisonV16, ConstantExpr::getInsertElement(P6, Elt, Big));
   EXPECT_EQ(PoisonV16, ConstantExpr::getInsertElement(P6, Elt, Undef64));
@@ -284,7 +284,7 @@ TEST(ConstantsTest, AsInstructionsTest) {
 #ifdef GTEST_HAS_DEATH_TEST
 #ifndef NDEBUG
 TEST(ConstantsTest, ReplaceWithConstantTest) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M(new Module("MyModule", Context));
 
   Type *Int32Ty = Type::getInt32Ty(Context);
@@ -304,7 +304,7 @@ TEST(ConstantsTest, ReplaceWithConstantTest) {
 #undef CHECK
 
 TEST(ConstantsTest, ConstantArrayReplaceWithConstant) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M(new Module("MyModule", Context));
 
   Type *IntTy = Type::getInt8Ty(Context);
@@ -329,7 +329,7 @@ TEST(ConstantsTest, ConstantArrayReplaceWithConstant) {
 }
 
 TEST(ConstantsTest, ConstantExprReplaceWithConstant) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M(new Module("MyModule", Context));
 
   Type *IntTy = Type::getInt8Ty(Context);
@@ -352,7 +352,7 @@ TEST(ConstantsTest, ConstantExprReplaceWithConstant) {
 }
 
 TEST(ConstantsTest, GEPReplaceWithConstant) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M(new Module("MyModule", Context));
 
   Type *IntTy = Type::getInt32Ty(Context);
@@ -377,7 +377,7 @@ TEST(ConstantsTest, GEPReplaceWithConstant) {
 }
 
 TEST(ConstantsTest, AliasCAPI) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
   std::unique_ptr<Module> M =
       parseAssemblyString("@g = global i32 42", Error, Context);
@@ -398,7 +398,7 @@ static std::string getNameOfType(Type *T) {
 }
 
 TEST(ConstantsTest, BuildConstantDataArrays) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   for (Type *T : {Type::getInt8Ty(Context), Type::getInt16Ty(Context),
                   Type::getInt32Ty(Context), Type::getInt64Ty(Context)}) {
@@ -426,7 +426,7 @@ TEST(ConstantsTest, BuildConstantDataArrays) {
 }
 
 TEST(ConstantsTest, BuildConstantDataVectors) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   for (Type *T : {Type::getInt8Ty(Context), Type::getInt16Ty(Context),
                   Type::getInt32Ty(Context), Type::getInt64Ty(Context)}) {
@@ -452,7 +452,7 @@ TEST(ConstantsTest, BuildConstantDataVectors) {
 }
 
 TEST(ConstantsTest, BitcastToGEP) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M(new Module("MyModule", Context));
 
   auto *i32 = Type::getInt32Ty(Context);
@@ -497,7 +497,7 @@ bool foldFuncPtrAndConstToNull(LLVMContext &Context, Module *TheModule,
 }
 
 TEST(ConstantsTest, FoldFunctionPtrAlignUnknownAnd2) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module TheModule("TestModule", Context);
   // When the DataLayout doesn't specify a function pointer alignment we
   // assume in this case that it is 4 byte aligned. This is a bug but we can't
@@ -508,13 +508,13 @@ TEST(ConstantsTest, FoldFunctionPtrAlignUnknownAnd2) {
 }
 
 TEST(ConstantsTest, DontFoldFunctionPtrAlignUnknownAnd4) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module TheModule("TestModule", Context);
   ASSERT_FALSE(foldFuncPtrAndConstToNull(Context, &TheModule, 4));
 }
 
 TEST(ConstantsTest, FoldFunctionPtrAlign4) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module TheModule("TestModule", Context);
   const char *AlignmentStrings[] = {"Fi32", "Fn32"};
 
@@ -527,7 +527,7 @@ TEST(ConstantsTest, FoldFunctionPtrAlign4) {
 }
 
 TEST(ConstantsTest, DontFoldFunctionPtrAlign1) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module TheModule("TestModule", Context);
   const char *AlignmentStrings[] = {"Fi8", "Fn8"};
 
@@ -538,28 +538,28 @@ TEST(ConstantsTest, DontFoldFunctionPtrAlign1) {
 }
 
 TEST(ConstantsTest, FoldFunctionAlign4PtrAlignMultiple) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module TheModule("TestModule", Context);
   TheModule.setDataLayout("Fn8");
   ASSERT_TRUE(foldFuncPtrAndConstToNull(Context, &TheModule, 2, Align(4)));
 }
 
 TEST(ConstantsTest, DontFoldFunctionAlign4PtrAlignIndependent) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module TheModule("TestModule", Context);
   TheModule.setDataLayout("Fi8");
   ASSERT_FALSE(foldFuncPtrAndConstToNull(Context, &TheModule, 2, Align(4)));
 }
 
 TEST(ConstantsTest, DontFoldFunctionPtrIfNoModule) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   // Even though the function is explicitly 4 byte aligned, in the absence of a
   // DataLayout we can't assume that the function pointer is aligned.
   ASSERT_FALSE(foldFuncPtrAndConstToNull(Context, nullptr, 2, Align(4)));
 }
 
 TEST(ConstantsTest, FoldGlobalVariablePtr) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   IntegerType *IntType(Type::getInt32Ty(Context));
 
@@ -585,7 +585,7 @@ TEST(ConstantsTest, FoldGlobalVariablePtr) {
 // great
 
 TEST(ConstantsTest, containsUndefElemTest) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   Type *Int32Ty = Type::getInt32Ty(Context);
   Constant *CU = UndefValue::get(Int32Ty);
@@ -623,7 +623,7 @@ TEST(ConstantsTest, containsUndefElemTest) {
 // crash on vectors of pointers (could be handled?).
 
 TEST(ConstantsTest, isElementWiseEqual) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   Type *Int32Ty = Type::getInt32Ty(Context);
   Constant *CU = UndefValue::get(Int32Ty);
@@ -702,7 +702,7 @@ TEST(ConstantsTest, isElementWiseEqual) {
 // elements.
 
 TEST(ConstantsTest, CheckElementWiseUndefPoison) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   Type *Int32Ty = Type::getInt32Ty(Context);
   StructType *STy = StructType::get(Int32Ty, Int32Ty);
@@ -745,7 +745,7 @@ TEST(ConstantsTest, CheckElementWiseUndefPoison) {
 }
 
 TEST(ConstantsTest, GetSplatValueRoundTrip) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   Type *FloatTy = Type::getFloatTy(Context);
   Type *Int32Ty = Type::getInt32Ty(Context);
@@ -774,7 +774,7 @@ TEST(ConstantsTest, GetSplatValueRoundTrip) {
 }
 
 TEST(ConstantsTest, ConstantPointerNullVectorSplat) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   PointerType *PtrTy = PointerType::getUnqual(Context);
   Constant *ScalarNull = ConstantPointerNull::get(PtrTy);
@@ -802,7 +802,7 @@ TEST(ConstantsTest, ConstantPointerNullVectorSplat) {
 }
 
 TEST(ConstantsTest, ComdatUserTracking) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module M("MyModule", Context);
 
   Comdat *C = M.getOrInsertComdat("comdat");
@@ -839,7 +839,7 @@ TEST(ConstantsTest, BlockAddressCAPITest) {
     }
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
   std::unique_ptr<Module> M =
       parseAssemblyString(BlockAddressIR, Error, Context);
@@ -899,7 +899,7 @@ TEST(ConstantsTest, Float128Test) {
 }
 
 TEST(ConstantsTest, ToConstantRangeConstantByteVector) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   // Use 7-bit ByteType so the vector is not folded into ConstantDataVector
   // (ConstantDataSequential only supports 8/16/32/64-bit element types).
   ByteType *B7Ty = Type::getByteNTy(Context, 7);

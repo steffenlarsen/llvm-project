@@ -13,10 +13,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/Canonicalization.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/FunctionAttrs.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
@@ -33,16 +34,13 @@
 using namespace llvm;
 using namespace polly;
 
-static cl::opt<bool>
-    PollyInliner("polly-run-inliner",
-                 cl::desc("Run an early inliner pass before Polly"), cl::Hidden,
-                 cl::cat(PollyCategory));
-
 /// Adapted from llvm::PassBuilder::buildInlinerPipeline
 static ModuleInlinerWrapperPass
 buildInlinePasses(llvm::OptimizationLevel Level) {
-  InlineParams IP = getInlineParams(200);
-  ModuleInlinerWrapperPass MIWP(IP);
+  InlineParams IP =
+      getInlineParams(200, /*Ctx=*/llvm::clv2::defaultOptionsContext());
+  ModuleInlinerWrapperPass MIWP(
+      /*OptsCtx=*/llvm::clv2::defaultOptionsContext(), IP);
 
   // Require the GlobalsAA analysis for the module so we can query it within
   // the CGSCC pipeline.
@@ -70,8 +68,13 @@ buildInlinePasses(llvm::OptimizationLevel Level) {
 
 FunctionPassManager
 polly::buildCanonicalicationPassesForNPM(llvm::ModulePassManager &MPM,
-                                         llvm::OptimizationLevel Level) {
+                                         llvm::OptimizationLevel Level,
+                                         const clv2::OptionsContext &Ctx) {
   FunctionPassManager FPM;
+
+  // Read PollyInliner from context.
+  auto *Opts = polly_opts::getPollyOpts(Ctx);
+  bool PollyInliner = Opts ? Opts->get<&llvm::clv2::POLLY_RunInliner>() : false;
 
   bool UseMemSSA = true;
   FPM.addPass(PromotePass());

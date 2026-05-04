@@ -497,14 +497,14 @@ OpBuilder::tryFold(Operation *op, SmallVectorImpl<Value> &results,
   // Try to fold the operation.
   SmallVector<OpFoldResult, 4> foldResults;
   LDBG() << "Trying to fold: "
-         << OpWithFlags(op, OpPrintingFlags().skipRegions());
+         << OpWithFlags(op, opPrintingFlags(op).skipRegions());
   if (failed(op->fold(foldResults)))
     return cleanupFailure();
 
   int count = 0;
   do {
     LDBG() << "Folded in place #" << count
-           << " times: " << OpWithFlags(op, OpPrintingFlags().skipRegions());
+           << " times: " << OpWithFlags(op, opPrintingFlags(op).skipRegions());
     count++;
   } while (foldResults.empty() && succeeded(op->fold(foldResults)));
 

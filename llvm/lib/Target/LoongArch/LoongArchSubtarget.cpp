@@ -22,15 +22,17 @@ using namespace llvm;
 #define GET_SUBTARGETINFO_TARGET_DESC
 #define GET_SUBTARGETINFO_CTOR
 #include "LoongArchGenSubtargetInfo.inc"
-
-static cl::opt<bool> UseAA("loongarch-use-aa", cl::init(true),
-                           cl::desc("Enable the use of AA during codegen."));
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
 
 void LoongArchSubtarget::anchor() {}
 
 // Enable use of alias analysis during code generation (during MI scheduling,
 // DAGCombine, etc.).
-bool LoongArchSubtarget::useAA() const { return UseAA; }
+bool LoongArchSubtarget::useAA() const {
+  return clv2::getOptValOr<&clv2::LoongArchOptsReg, &clv2::LA_UseAA>(
+      getTargetLowering()->getTargetMachine().getOptionsContext(), true);
+}
 
 LoongArchSubtarget &LoongArchSubtarget::initializeSubtargetDependencies(
     const Triple &TT, StringRef CPU, StringRef TuneCPU, StringRef FS,
@@ -93,10 +95,11 @@ LoongArchSubtarget::LoongArchSubtarget(const Triple &TT, StringRef CPU,
                                        StringRef TuneCPU, StringRef FS,
                                        StringRef ABIName,
                                        const TargetMachine &TM)
-    : LoongArchGenSubtargetInfo(TT, CPU, TuneCPU, FS),
+    : LoongArchGenSubtargetInfo(TT, CPU, TuneCPU, FS, TM.getOptionsContext()),
       FrameLowering(
           initializeSubtargetDependencies(TT, CPU, TuneCPU, FS, ABIName)),
       InstrInfo(*this), TLInfo(TM, *this) {
+  setOptionsContext(TM.getOptionsContext());
   TSInfo = std::make_unique<LoongArchSelectionDAGInfo>();
 }
 

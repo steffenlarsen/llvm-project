@@ -876,7 +876,7 @@ void CallConvLoweringPass::runOnOperation() {
       fc = classifyX86_64Function(f, dl, *x86TypeMapper,
                                   x86TargetFor(avxLevelFor(f)), moduleOp);
     else
-      fc = classifyFunction(f, dl, target, classificationAttr);
+      fc = classifyFunction(f, dl, target, classificationAttr.getValue());
     if (!fc) {
       anyFailed = true;
       return;

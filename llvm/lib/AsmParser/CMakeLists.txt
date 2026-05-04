@@ -1,5 +1,7 @@
 # AsmParser
 add_llvm_component_library(LLVMAsmParser
+  AsmParserOptionsGetters.cpp
+  AsmParserOptionsRegistration.cpp
   AsmParserContext.cpp
   LLLexer.cpp
   LLParser.cpp

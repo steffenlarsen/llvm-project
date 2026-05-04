@@ -32,6 +32,8 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
 #include "llvm/Target/TargetOptions.h"
 
 using namespace llvm;
@@ -41,8 +43,12 @@ using namespace llvm;
 
 // The LdStLimit limits number of instructions how far we search for load/store
 // pairs.
-static cl::opt<unsigned> LdStLimit("riscv-load-store-scan-limit", cl::init(128),
-                                   cl::Hidden);
+static unsigned LdStLimit = 128;
+
+static unsigned getLdStLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::RV_LdStLimit>(
+      F.getContext().getOptionsContext());
+}
 STATISTIC(NumLD2LW, "Number of LD instructions split back to LW");
 STATISTIC(NumSD2SW, "Number of SD instructions split back to SW");
 
@@ -591,7 +597,8 @@ RISCVLoadStoreOpt::findMatchingInsn(MachineBasicBlock::iterator I,
   // Remember any instructions that read/write memory between FirstMI and MI.
   SmallVector<MachineInstr *, 4> MemInsns;
 
-  for (unsigned Count = 0; MBBI != E && Count < LdStLimit;
+  for (unsigned Count = 0;
+       MBBI != E && Count < getLdStLimit(FirstMI.getMF()->getFunction());
        MBBI = next_nodbg(MBBI, E)) {
     MachineInstr &MI = *MBBI;
 

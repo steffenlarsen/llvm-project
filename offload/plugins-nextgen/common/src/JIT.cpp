@@ -147,7 +147,7 @@ JITEngine::JITEngine(Triple::ArchType TA) : TT(Triple::getArchTypeName(TA)) {
 
 void JITEngine::opt(TargetMachine *TM, TargetLibraryInfoImpl *TLII, Module &M,
                     unsigned OptLevel) {
-  PipelineTuningOptions PTO;
+  PipelineTuningOptions PTO(nullptr);
   std::optional<PGOOptions> PGOOpt;
 
   LoopAnalysisManager LAM;
@@ -156,7 +156,7 @@ void JITEngine::opt(TargetMachine *TM, TargetLibraryInfoImpl *TLII, Module &M,
   ModuleAnalysisManager MAM;
   ModulePassManager MPM;
 
-  PassBuilder PB(TM, PTO, PGOOpt, nullptr);
+  PassBuilder PB(llvm::clv2::defaultOptionsContext(), TM, PTO, PGOOpt);
 
   FAM.registerPass([&] { return TargetLibraryAnalysis(*TLII); });
 
@@ -282,7 +282,7 @@ JITEngine::compile(StringRef Image, const std::string &ComputeUnitKind,
                    PostProcessingFn PostProcessing) {
   std::lock_guard<std::mutex> Lock(ComputeUnitMapMutex);
 
-  LLVMContext Ctz;
+  LLVMContext Ctz{nullptr};
   auto ObjMBOrErr = getOrCreateObjFile(Image, Ctz, ComputeUnitKind);
   if (!ObjMBOrErr)
     return ObjMBOrErr.takeError();

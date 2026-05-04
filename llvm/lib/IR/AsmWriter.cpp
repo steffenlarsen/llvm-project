@@ -47,6 +47,7 @@
 #include "llvm/IR/GlobalObject.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/IROptionsOptInfos.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstrTypes.h"
@@ -72,6 +73,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormattedStream.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
@@ -88,27 +90,31 @@
 
 using namespace llvm;
 
-// See https://llvm.org/docs/DebuggingLLVM.html for why these flags are useful.
+static bool getPrintInstAddrs(const Module &M) {
+  return clv2::getOptValOr<&clv2::IROptsReg, &clv2::IR_PrintInstAddrs>(
+      M.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<bool>
-    PrintInstAddrs("print-inst-addrs", cl::Hidden,
-                   cl::desc("Print addresses of instructions when dumping"));
+static bool isPreserveAssemblyUseListOrderSpecified(const Module &M) {
+  auto &Ctx = M.getContext().getOptionsContext();
+  return clv2::wasOptSpecified<&clv2::IROptsReg,
+                               &clv2::IR_PreserveAssemblyUseListOrder>(Ctx);
+}
+static bool getPreserveAssemblyUseListOrder(const Module &M) {
+  return clv2::getOptValOr<&clv2::IROptsReg,
+                           &clv2::IR_PreserveAssemblyUseListOrder>(
+      M.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<bool> PrintInstDebugLocs(
-    "print-inst-debug-locs", cl::Hidden,
-    cl::desc("Pretty print debug locations of instructions when dumping"));
+static bool getPrintInstDebugLocs(const Module &M) {
+  return clv2::getOptValOr<&clv2::IROptsReg, &clv2::IR_PrintInstDebugLocs>(
+      M.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<bool> PrintProfData(
-    "print-prof-data", cl::Hidden,
-    cl::desc("Pretty print perf data (branch weights, etc) when dumping"));
-
-static cl::opt<bool> PreserveAssemblyUseListOrder(
-    "preserve-ll-uselistorder", cl::Hidden, cl::init(false),
-    cl::desc("Preserve use-list order when writing LLVM assembly."));
-
-static cl::opt<bool> PrintAddrspaceName("print-addrspace-name", cl::Hidden,
-                                        cl::init(false),
-                                        cl::desc("Print address space names"));
+static bool getPrintProfData(const Module &M) {
+  return clv2::getOptValOr<&clv2::IROptsReg, &clv2::IR_PrintProfData>(
+      M.getContext().getOptionsContext(), false);
+}
 
 // Make virtual table appear in this compilation unit.
 AssemblyAnnotationWriter::~AssemblyAnnotationWriter() = default;
@@ -641,6 +647,11 @@ static void printAddressSpace(const Module *M, unsigned AS, raw_ostream &OS,
   if (AS == 0 && !ForcePrint)
     return;
   OS << Prefix << "addrspace(";
+  bool PrintAddrspaceName = false;
+  if (M)
+    if (auto *O = clv2::getView<&clv2::IROptsReg>(
+            M->getContext().getOptionsContext()))
+      PrintAddrspaceName = O->get<&clv2::IR_PrintAddrspaceName>();
   StringRef ASName =
       PrintAddrspaceName && M ? M->getDataLayout().getAddressSpaceName(AS) : "";
   if (!ASName.empty())
@@ -2996,8 +3007,8 @@ AssemblyWriter::AssemblyWriter(formatted_raw_ostream &o, SlotTracker &Mac,
     : Out(o), TheModule(M), Machine(Mac), TypePrinter(M), AnnotationWriter(AAW),
       IsForDebug(IsForDebug),
       ShouldPreserveUseListOrder(
-          PreserveAssemblyUseListOrder.getNumOccurrences()
-              ? PreserveAssemblyUseListOrder
+          (M && isPreserveAssemblyUseListOrderSpecified(*M))
+              ? getPreserveAssemblyUseListOrder(*M)
               : ShouldPreserveUseListOrder) {
   if (!TheModule)
     return;
@@ -3009,8 +3020,7 @@ AssemblyWriter::AssemblyWriter(formatted_raw_ostream &o, SlotTracker &Mac,
 AssemblyWriter::AssemblyWriter(formatted_raw_ostream &o, SlotTracker &Mac,
                                const ModuleSummaryIndex *Index, bool IsForDebug)
     : Out(o), TheIndex(Index), Machine(Mac), TypePrinter(/*Module=*/nullptr),
-      IsForDebug(IsForDebug),
-      ShouldPreserveUseListOrder(PreserveAssemblyUseListOrder) {}
+      IsForDebug(IsForDebug), ShouldPreserveUseListOrder(false) {}
 
 void AssemblyWriter::writeOperand(const Value *Operand, bool PrintType) {
   if (!Operand) {
@@ -4276,7 +4286,7 @@ void AssemblyWriter::printFunction(const Function *F) {
     writeOperand(F->getPersonalityFn(), /*PrintType=*/true);
   }
 
-  if (PrintProfData) {
+  if (TheModule && getPrintProfData(*TheModule)) {
     if (auto *MDProf = F->getMetadata(LLVMContext::MD_prof)) {
       Out << " ";
       MDProf->print(Out, TheModule, /*IsForDebug=*/true);
@@ -4404,7 +4414,7 @@ void AssemblyWriter::printInfoComment(const Value &V, bool isMaterializable) {
   if (AnnotationWriter && !isMaterializable)
     AnnotationWriter->printInfoComment(V, Out);
 
-  if (PrintInstDebugLocs) {
+  if (TheModule && getPrintInstDebugLocs(*TheModule)) {
     if (auto *I = dyn_cast<Instruction>(&V)) {
       if (I->getDebugLoc()) {
         Out << " ; ";
@@ -4412,7 +4422,7 @@ void AssemblyWriter::printInfoComment(const Value &V, bool isMaterializable) {
       }
     }
   }
-  if (PrintProfData) {
+  if (TheModule && getPrintProfData(*TheModule)) {
     if (auto *I = dyn_cast<Instruction>(&V)) {
       if (auto *MD = I->getMetadata(LLVMContext::MD_prof)) {
         Out << " ; ";
@@ -4421,7 +4431,7 @@ void AssemblyWriter::printInfoComment(const Value &V, bool isMaterializable) {
     }
   }
 
-  if (PrintInstAddrs)
+  if (TheModule && getPrintInstAddrs(*TheModule))
     Out << " ; " << &V;
 }
 

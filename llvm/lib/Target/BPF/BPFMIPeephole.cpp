@@ -35,15 +35,22 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/Analysis.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/BPF/BPFOptionsOptInfos.h"
 #include <set>
 
 using namespace llvm;
 
 #define DEBUG_TYPE "bpf-mi-zext-elim"
 
-static cl::opt<int> GotolAbsLowBound("gotol-abs-low-bound", cl::Hidden,
-  cl::init(INT16_MAX >> 1), cl::desc("Specify gotol lower bound"));
+static int GotolAbsLowBound = INT16_MAX >> 1;
+
+static int getGotolAbsLowBound(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::BPF_GotolAbsLowBound>(
+      F.getContext().getOptionsContext());
+}
 
 STATISTIC(ZExtElemNum, "Number of zero extension shifts eliminated");
 
@@ -415,7 +422,8 @@ bool BPFMIPreEmitPeepholeImpl::in16BitRange(int Num) {
   // Well, the cut-off is not precisely at 16bit range since
   // new codes are added during the transformation. So let us
   // a little bit conservative.
-  return Num >= -GotolAbsLowBound && Num <= GotolAbsLowBound;
+  const Function &F = MF->getFunction();
+  return Num >= -getGotolAbsLowBound(F) && Num <= getGotolAbsLowBound(F);
 }
 
 // Before cpu=v4, only 16bit branch target offset (-0x8000 to 0x7fff)

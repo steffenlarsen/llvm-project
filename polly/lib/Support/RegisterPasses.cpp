@@ -29,8 +29,8 @@
 #include "polly/ForwardOpTree.h"
 #include "polly/JSONExporter.h"
 #include "polly/MaximalStaticExpansion.h"
-#include "polly/Options.h"
 #include "polly/Pass/PollyFunctionPass.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/PruneUnprofitable.h"
 #include "polly/ScheduleOptimizer.h"
 #include "polly/ScopDetection.h"
@@ -40,6 +40,7 @@
 #include "polly/Simplify.h"
 #include "polly/Support/DumpFunctionPass.h"
 #include "polly/Support/DumpModulePass.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Analysis/CFGPrinter.h"
 #include "llvm/Config/llvm-config.h" // for LLVM_VERSION_STRING
 #include "llvm/IR/LegacyPassManager.h"
@@ -47,15 +48,14 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Plugins/PassPlugin.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Transforms/IPO.h"
 
 using namespace llvm;
-using namespace polly;
-
-namespace cl = llvm::cl;
 using namespace polly;
 
 using llvm::FunctionPassManager;
@@ -67,172 +67,34 @@ cl::OptionCategory PollyCategory("Polly Options",
                                  "Configure the polly loop optimizer");
 
 namespace polly {
-static cl::opt<bool>
-    PollyEnabled("polly",
-                 cl::desc("Enable the polly optimizer (with -O1, -O2 or -O3)"),
-                 cl::cat(PollyCategory));
-
-static cl::opt<bool> PollyDetectOnly(
-    "polly-only-scop-detection",
-    cl::desc("Only run scop detection, but no other optimizations"),
-    cl::cat(PollyCategory));
 
 enum PassPositionChoice { POSITION_EARLY, POSITION_BEFORE_VECTORIZER };
-
 enum OptimizerChoice { OPTIMIZER_NONE, OPTIMIZER_ISL };
-
-static cl::opt<PassPositionChoice> PassPosition(
-    "polly-position", cl::desc("Where to run polly in the pass pipeline"),
-    cl::values(clEnumValN(POSITION_EARLY, "early", "Before everything"),
-               clEnumValN(POSITION_BEFORE_VECTORIZER, "before-vectorizer",
-                          "Right before the vectorizer")),
-    cl::Hidden, cl::init(POSITION_BEFORE_VECTORIZER), cl::cat(PollyCategory));
-
-static cl::opt<OptimizerChoice>
-    Optimizer("polly-optimizer", cl::desc("Select the scheduling optimizer"),
-              cl::values(clEnumValN(OPTIMIZER_NONE, "none", "No optimizer"),
-                         clEnumValN(OPTIMIZER_ISL, "isl",
-                                    "The isl scheduling optimizer")),
-              cl::Hidden, cl::init(OPTIMIZER_ISL), cl::cat(PollyCategory));
-
 enum CodeGenChoice { CODEGEN_FULL, CODEGEN_AST, CODEGEN_NONE };
-static cl::opt<CodeGenChoice> CodeGeneration(
-    "polly-code-generation", cl::desc("How much code-generation to perform"),
-    cl::values(clEnumValN(CODEGEN_FULL, "full", "AST and IR generation"),
-               clEnumValN(CODEGEN_AST, "ast", "Only AST generation"),
-               clEnumValN(CODEGEN_NONE, "none", "No code generation")),
-    cl::Hidden, cl::init(CODEGEN_FULL), cl::cat(PollyCategory));
 
-VectorizerChoice PollyVectorizerChoice;
+static bool shouldEnablePollyForOptimization(const clv2::OptionsContext &Ctx) {
+  auto *Opts = polly_opts::getPollyOpts(Ctx);
+  return Opts ? Opts->get<&llvm::clv2::POLLY_Enabled>() : false;
+}
 
-static cl::opt<VectorizerChoice, true> Vectorizer(
-    "polly-vectorizer", cl::desc("Select the vectorization strategy"),
-    cl::values(
-        clEnumValN(VECTORIZER_NONE, "none", "No Vectorization"),
-        clEnumValN(
-            VECTORIZER_STRIPMINE, "stripmine",
-            "Strip-mine outer loops for the loop-vectorizer to trigger")),
-    cl::location(PollyVectorizerChoice), cl::init(VECTORIZER_NONE),
-    cl::cat(PollyCategory));
+static bool shouldEnablePollyForDiagnostic(const clv2::OptionsContext &Ctx) {
+  auto *Opts = polly_opts::getPollyOpts(Ctx);
+  if (!Opts)
+    return false;
 
-static cl::opt<bool> ImportJScop(
-    "polly-import",
-    cl::desc("Import the polyhedral description of the detected Scops"),
-    cl::Hidden, cl::cat(PollyCategory));
+  bool OnlyPrinter = Opts->get<&llvm::clv2::POLLY_DotOnly>();
+  bool Printer = Opts->get<&llvm::clv2::POLLY_Dot>();
+  bool OnlyViewer = Opts->get<&llvm::clv2::POLLY_ShowOnly>();
+  bool Viewer = Opts->get<&llvm::clv2::POLLY_Show>();
+  bool Export = Opts->get<&llvm::clv2::POLLY_Export>();
 
-static cl::opt<bool> FullyIndexedStaticExpansion(
-    "polly-enable-mse",
-    cl::desc("Fully expand the memory accesses of the detected Scops"),
-    cl::Hidden, cl::cat(PollyCategory));
-
-static cl::opt<bool> ExportJScop(
-    "polly-export",
-    cl::desc("Export the polyhedral description of the detected Scops"),
-    cl::Hidden, cl::cat(PollyCategory));
-
-static cl::opt<bool> DeadCodeElim("polly-run-dce",
-                                  cl::desc("Run the dead code elimination"),
-                                  cl::Hidden, cl::cat(PollyCategory));
-
-static cl::opt<bool> PollyViewer(
-    "polly-show",
-    cl::desc("Highlight the code regions that will be optimized in a "
-             "(CFG BBs and LLVM-IR instructions)"),
-    cl::cat(PollyCategory));
-
-static cl::opt<bool> PollyOnlyViewer(
-    "polly-show-only",
-    cl::desc("Highlight the code regions that will be optimized in "
-             "a (CFG only BBs)"),
-    cl::init(false), cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    PollyPrinter("polly-dot", cl::desc("Enable the Polly DOT printer in -O3"),
-                 cl::Hidden, cl::value_desc("Run the Polly DOT printer at -O3"),
-                 cl::init(false), cl::cat(PollyCategory));
-
-static cl::opt<bool> PollyOnlyPrinter(
-    "polly-dot-only",
-    cl::desc("Enable the Polly DOT printer in -O3 (no BB content)"), cl::Hidden,
-    cl::value_desc("Run the Polly DOT printer at -O3 (no BB content"),
-    cl::init(false), cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    CFGPrinter("polly-view-cfg",
-               cl::desc("Show the Polly CFG right after code generation"),
-               cl::Hidden, cl::init(false), cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    EnableForwardOpTree("polly-enable-optree",
-                        cl::desc("Enable operand tree forwarding"), cl::Hidden,
-                        cl::init(true), cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    DumpBefore("polly-dump-before",
-               cl::desc("Dump module before Polly transformations into a file "
-                        "suffixed with \"-before\""),
-               cl::init(false), cl::cat(PollyCategory));
-
-static cl::list<std::string> DumpBeforeFile(
-    "polly-dump-before-file",
-    cl::desc("Dump module before Polly transformations to the given file"),
-    cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    DumpAfter("polly-dump-after",
-              cl::desc("Dump module after Polly transformations into a file "
-                       "suffixed with \"-after\""),
-              cl::init(false), cl::cat(PollyCategory));
-
-static cl::list<std::string> DumpAfterFile(
-    "polly-dump-after-file",
-    cl::desc("Dump module after Polly transformations to the given file"),
-    cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    EnableDeLICM("polly-enable-delicm",
-                 cl::desc("Eliminate scalar loop carried dependences"),
-                 cl::Hidden, cl::init(true), cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    EnableSimplify("polly-enable-simplify",
-                   cl::desc("Simplify SCoP after optimizations"),
-                   cl::init(true), cl::cat(PollyCategory));
-
-static cl::opt<bool> EnablePruneUnprofitable(
-    "polly-enable-prune-unprofitable",
-    cl::desc("Bail out on unprofitable SCoPs before rescheduling"), cl::Hidden,
-    cl::init(true), cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    PollyPrintDetect("polly-print-detect",
-                     cl::desc("Polly - Print static control parts (SCoPs)"),
-                     cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    PollyPrintScops("polly-print-scops",
-                    cl::desc("Print polyhedral description of all regions"),
-                    cl::cat(PollyCategory));
-
-static cl::opt<bool> PollyPrintDeps("polly-print-deps",
-                                    cl::desc("Polly - Print dependences"),
-                                    cl::cat(PollyCategory));
-
-static bool shouldEnablePollyForOptimization() { return PollyEnabled; }
-
-static bool shouldEnablePollyForDiagnostic() {
-  // FIXME: PollyTrackFailures is user-controlled, should not be set
-  // programmatically.
-  if (PollyOnlyPrinter || PollyPrinter || PollyOnlyViewer || PollyViewer)
-    PollyTrackFailures = true;
-
-  return PollyOnlyPrinter || PollyPrinter || PollyOnlyViewer || PollyViewer ||
-         ExportJScop;
+  return OnlyPrinter || Printer || OnlyViewer || Viewer || Export;
 }
 
 /// Parser of parameters for LoopVectorize pass.
-static llvm::Expected<PollyPassOptions> parsePollyOptions(StringRef Params,
-                                                          bool IsCustom) {
+static llvm::Expected<PollyPassOptions>
+parsePollyOptions(StringRef Params, bool IsCustom,
+                  const clv2::OptionsContext &Ctx) {
   PassPhase PrevPhase = PassPhase::None;
 
   bool EnableDefaultOpts = !IsCustom;
@@ -241,13 +103,46 @@ static llvm::Expected<PollyPassOptions> parsePollyOptions(StringRef Params,
       PassEnabled[static_cast<size_t>(PassPhase::PassPhaseLast) + 1];
   PassPhase StopAfter = PassPhase::None;
 
+  // Read options from context.
+  auto *Opts = polly_opts::getPollyOpts(Ctx);
+
+  bool PrintDetect = Opts ? Opts->get<&llvm::clv2::POLLY_PrintDetect>() : false;
+  bool PrintScops = Opts ? Opts->get<&llvm::clv2::POLLY_PrintScops>() : false;
+  bool PrintDeps = Opts ? Opts->get<&llvm::clv2::POLLY_PrintDeps>() : false;
+  bool PollyViewer = Opts ? Opts->get<&llvm::clv2::POLLY_Show>() : false;
+  bool PollyOnlyViewer =
+      Opts ? Opts->get<&llvm::clv2::POLLY_ShowOnly>() : false;
+  bool PollyPrinter = Opts ? Opts->get<&llvm::clv2::POLLY_Dot>() : false;
+  bool PollyOnlyPrinter =
+      Opts ? Opts->get<&llvm::clv2::POLLY_DotOnly>() : false;
+  bool EnableSimplify =
+      Opts ? Opts->get<&llvm::clv2::POLLY_EnableSimplify>() : true;
+  bool EnableForwardOpTree =
+      Opts ? Opts->get<&llvm::clv2::POLLY_EnableOptree>() : true;
+  bool EnableDeLICM =
+      Opts ? Opts->get<&llvm::clv2::POLLY_EnableDelicm>() : true;
+  bool ImportJScop = Opts ? Opts->get<&llvm::clv2::POLLY_Import>() : false;
+  bool DeadCodeElim = Opts ? Opts->get<&llvm::clv2::POLLY_RunDce>() : false;
+  bool FullyIndexedStaticExpansion =
+      Opts ? Opts->get<&llvm::clv2::POLLY_EnableMse>() : false;
+  bool EnablePruneUnprofitable =
+      Opts ? Opts->get<&llvm::clv2::POLLY_EnablePruneUnprofitable>() : true;
+  auto OptimizerVal = Opts ? static_cast<OptimizerChoice>(
+                                 Opts->get<&llvm::clv2::POLLY_Optimizer>())
+                           : OPTIMIZER_ISL;
+  bool ExportJScop = Opts ? Opts->get<&llvm::clv2::POLLY_Export>() : false;
+  auto CodeGenerationVal =
+      Opts ? static_cast<CodeGenChoice>(
+                 Opts->get<&llvm::clv2::POLLY_CodeGeneration>())
+           : CODEGEN_FULL;
+
   // Passes enabled using command-line flags (can be overridden using
   // 'polly<no-pass>')
-  if (PollyPrintDetect)
+  if (PrintDetect)
     PassEnabled[static_cast<size_t>(PassPhase::PrintDetect)] = true;
-  if (PollyPrintScops)
+  if (PrintScops)
     PassEnabled[static_cast<size_t>(PassPhase::PrintScopInfo)] = true;
-  if (PollyPrintDeps)
+  if (PrintDeps)
     PassEnabled[static_cast<size_t>(PassPhase::PrintDependences)] = true;
 
   if (PollyViewer)
@@ -274,7 +169,7 @@ static llvm::Expected<PollyPassOptions> parsePollyOptions(StringRef Params,
     PassEnabled[static_cast<size_t>(PassPhase::MaximumStaticExtension)] = true;
   if (!EnablePruneUnprofitable)
     PassEnabled[static_cast<size_t>(PassPhase::PruneUnprofitable)] = false;
-  switch (Optimizer) {
+  switch (OptimizerVal) {
   case OPTIMIZER_NONE:
     // explicitly switched off
     PassEnabled[static_cast<size_t>(PassPhase::Optimization)] = false;
@@ -285,7 +180,7 @@ static llvm::Expected<PollyPassOptions> parsePollyOptions(StringRef Params,
   }
   if (ExportJScop)
     PassEnabled[static_cast<size_t>(PassPhase::ExportJScop)] = true;
-  switch (CodeGeneration) {
+  switch (CodeGenerationVal) {
   case CODEGEN_AST:
     PassEnabled[static_cast<size_t>(PassPhase::AstGen)] = true;
     PassEnabled[static_cast<size_t>(PassPhase::CodeGen)] = false;
@@ -362,10 +257,15 @@ static llvm::Expected<PollyPassOptions> parsePollyOptions(StringRef Params,
     PrevPhase = Phase;
   }
 
-  PollyPassOptions Opts;
-  Opts.ViewAll = ViewAll;
-  Opts.ViewFilter = ViewFilter;
-  Opts.PrintDepsAnalysisLevel = OptAnalysisLevel;
+  PollyPassOptions PPOpts;
+  // Read ViewAll/ViewFilter/PrintDepsAnalysisLevel from context.
+  PPOpts.ViewAll = Opts ? Opts->get<&llvm::clv2::POLLY_ViewAll>() : false;
+  PPOpts.ViewFilter =
+      Opts ? Opts->get<&llvm::clv2::POLLY_ViewOnly>() : std::string();
+  PPOpts.PrintDepsAnalysisLevel =
+      Opts ? static_cast<Dependences::AnalysisLevel>(
+                 Opts->get<&llvm::clv2::POLLY_DependencesAnalysisLevel>())
+           : Dependences::AL_Statement;
 
   // Implicitly enable dependent phases first. May be overriden explicitly
   // on/off later.
@@ -376,23 +276,23 @@ static llvm::Expected<PollyPassOptions> parsePollyOptions(StringRef Params,
       continue;
 
     if (static_cast<size_t>(PassPhase::Detection) < static_cast<size_t>(P))
-      Opts.setPhaseEnabled(PassPhase::Detection);
+      PPOpts.setPhaseEnabled(PassPhase::Detection);
 
     if (static_cast<size_t>(PassPhase::ScopInfo) < static_cast<size_t>(P))
-      Opts.setPhaseEnabled(PassPhase::ScopInfo);
+      PPOpts.setPhaseEnabled(PassPhase::ScopInfo);
 
     if (dependsOnDependenceInfo(P))
-      Opts.setPhaseEnabled(PassPhase::Dependences);
+      PPOpts.setPhaseEnabled(PassPhase::Dependences);
 
     if (static_cast<size_t>(PassPhase::AstGen) < static_cast<size_t>(P))
-      Opts.setPhaseEnabled(PassPhase::AstGen);
+      PPOpts.setPhaseEnabled(PassPhase::AstGen);
   }
 
   if (EnableEnd2End)
-    Opts.enableEnd2End();
+    PPOpts.enableEnd2End();
 
   if (EnableDefaultOpts)
-    Opts.enableDefaultOpts();
+    PPOpts.enableDefaultOpts();
 
   for (PassPhase P : llvm::enum_seq_inclusive(PassPhase::PassPhaseFirst,
                                               PassPhase::PassPhaseLast)) {
@@ -400,26 +300,26 @@ static llvm::Expected<PollyPassOptions> parsePollyOptions(StringRef Params,
 
     // Apply only if set explicitly.
     if (Enabled.has_value())
-      Opts.setPhaseEnabled(P, *Enabled);
+      PPOpts.setPhaseEnabled(P, *Enabled);
   }
 
   if (StopAfter != PassPhase::None)
-    Opts.disableAfter(StopAfter);
+    PPOpts.disableAfter(StopAfter);
 
-  if (Error CheckResult = Opts.checkConsistency())
+  if (Error CheckResult = PPOpts.checkConsistency())
     return CheckResult;
 
-  return Opts;
+  return PPOpts;
 }
 
 static llvm::Expected<PollyPassOptions>
-parsePollyDefaultOptions(StringRef Params) {
-  return parsePollyOptions(Params, false);
+parsePollyDefaultOptions(StringRef Params, const clv2::OptionsContext &Ctx) {
+  return parsePollyOptions(Params, false, Ctx);
 }
 
 static llvm::Expected<PollyPassOptions>
-parsePollyCustomOptions(StringRef Params) {
-  return parsePollyOptions(Params, true);
+parsePollyCustomOptions(StringRef Params, const clv2::OptionsContext &Ctx) {
+  return parsePollyOptions(Params, true, Ctx);
 }
 
 /// Register Polly passes such that they form a polyhedral optimizer.
@@ -457,37 +357,50 @@ parsePollyCustomOptions(StringRef Params) {
 /// @param EnableForOpt Whether to add Polly IR transformations. If False, only
 ///                     the analysis passes are added, skipping Polly itself.
 ///                     The IR may still be modified.
+/// @param Ctx          The options context for reading clv2 options.
 static void buildCommonPollyPipeline(FunctionPassManager &PM,
                                      OptimizationLevel Level,
                                      IntrusiveRefCntPtr<vfs::FileSystem> FS,
-                                     bool EnableForOpt) {
-  PassBuilder PB(
-      /*TM=*/nullptr,
-      /*PipelineTuningOptions=*/{},
-      /*PGOOpt=*/{},
-      /*PIC=*/nullptr, std::move(FS));
+                                     bool EnableForOpt,
+                                     const clv2::OptionsContext &Ctx) {
+  PassBuilder PB(Ctx,
+                 /*TM=*/nullptr,
+                 /*PipelineTuningOptions=*/PipelineTuningOptions(Ctx),
+                 /*PGOOpt=*/{},
+                 /*PIC=*/nullptr, std::move(FS));
 
   ExitOnError Err("Inconsistent Polly configuration: ");
-  PollyPassOptions &&Opts =
-      Err(parsePollyOptions(StringRef(), /*IsCustom=*/false));
-  PM.addPass(PollyFunctionPass(Opts));
+  PollyPassOptions &&PPOpts =
+      Err(parsePollyOptions(StringRef(), /*IsCustom=*/false, Ctx));
+  PM.addPass(PollyFunctionPass(PPOpts));
 
   PM.addPass(PB.buildFunctionSimplificationPipeline(
       Level, llvm::ThinOrFullLTOPhase::None)); // Cleanup
 
-  if (CFGPrinter)
+  auto *Opts = polly_opts::getPollyOpts(Ctx);
+  bool ViewCfg = Opts ? Opts->get<&llvm::clv2::POLLY_ViewCfg>() : false;
+  if (ViewCfg)
     PM.addPass(llvm::CFGPrinterPass());
 }
 
 static void buildEarlyPollyPipeline(llvm::ModulePassManager &MPM,
                                     llvm::OptimizationLevel Level,
-                                    IntrusiveRefCntPtr<vfs::FileSystem> FS) {
+                                    IntrusiveRefCntPtr<vfs::FileSystem> FS,
+                                    const clv2::OptionsContext &Ctx) {
   bool EnableForOpt =
-      shouldEnablePollyForOptimization() && Level != OptimizationLevel::O0;
-  if (!shouldEnablePollyForDiagnostic() && !EnableForOpt)
+      shouldEnablePollyForOptimization(Ctx) && Level != OptimizationLevel::O0;
+  if (!shouldEnablePollyForDiagnostic(Ctx) && !EnableForOpt)
     return;
 
-  FunctionPassManager FPM = buildCanonicalicationPassesForNPM(MPM, Level);
+  FunctionPassManager FPM = buildCanonicalicationPassesForNPM(MPM, Level, Ctx);
+
+  auto *Opts = polly_opts::getPollyOpts(Ctx);
+  bool DumpBefore = Opts ? Opts->get<&llvm::clv2::POLLY_DumpBefore>() : false;
+  auto DumpBeforeFile = Opts ? Opts->get<&llvm::clv2::POLLY_DumpBeforeFile>()
+                             : std::vector<std::string>();
+  bool DumpAfter = Opts ? Opts->get<&llvm::clv2::POLLY_DumpAfter>() : false;
+  auto DumpAfterFile = Opts ? Opts->get<&llvm::clv2::POLLY_DumpAfterFile>()
+                            : std::vector<std::string>();
 
   if (DumpBefore || !DumpBeforeFile.empty()) {
     MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
@@ -500,7 +413,7 @@ static void buildEarlyPollyPipeline(llvm::ModulePassManager &MPM,
     FPM = FunctionPassManager();
   }
 
-  buildCommonPollyPipeline(FPM, Level, std::move(FS), EnableForOpt);
+  buildCommonPollyPipeline(FPM, Level, std::move(FS), EnableForOpt, Ctx);
   MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
 
   if (DumpAfter)
@@ -511,11 +424,20 @@ static void buildEarlyPollyPipeline(llvm::ModulePassManager &MPM,
 
 static void buildLatePollyPipeline(FunctionPassManager &PM,
                                    llvm::OptimizationLevel Level,
-                                   IntrusiveRefCntPtr<vfs::FileSystem> FS) {
+                                   IntrusiveRefCntPtr<vfs::FileSystem> FS,
+                                   const clv2::OptionsContext &Ctx) {
   bool EnableForOpt =
-      shouldEnablePollyForOptimization() && Level != OptimizationLevel::O0;
-  if (!shouldEnablePollyForDiagnostic() && !EnableForOpt)
+      shouldEnablePollyForOptimization(Ctx) && Level != OptimizationLevel::O0;
+  if (!shouldEnablePollyForDiagnostic(Ctx) && !EnableForOpt)
     return;
+
+  auto *Opts = polly_opts::getPollyOpts(Ctx);
+  bool DumpBefore = Opts ? Opts->get<&llvm::clv2::POLLY_DumpBefore>() : false;
+  auto DumpBeforeFile = Opts ? Opts->get<&llvm::clv2::POLLY_DumpBeforeFile>()
+                             : std::vector<std::string>();
+  bool DumpAfter = Opts ? Opts->get<&llvm::clv2::POLLY_DumpAfter>() : false;
+  auto DumpAfterFile = Opts ? Opts->get<&llvm::clv2::POLLY_DumpAfterFile>()
+                            : std::vector<std::string>();
 
   if (DumpBefore)
     PM.addPass(DumpFunctionPass("-before"));
@@ -525,7 +447,7 @@ static void buildLatePollyPipeline(FunctionPassManager &PM,
         "not supported with NPM",
         false);
 
-  buildCommonPollyPipeline(PM, Level, std::move(FS), EnableForOpt);
+  buildCommonPollyPipeline(PM, Level, std::move(FS), EnableForOpt, Ctx);
 
   if (DumpAfter)
     PM.addPass(DumpFunctionPass("-after"));
@@ -536,7 +458,8 @@ static void buildLatePollyPipeline(FunctionPassManager &PM,
         false);
 }
 
-static llvm::Expected<std::monostate> parseNoOptions(StringRef Params) {
+static llvm::Expected<std::monostate>
+parseNoOptions(StringRef Params, const clv2::OptionsContext &) {
   if (!Params.empty())
     return make_error<StringError>(
         formatv("'{0}' passed to pass that does not take any options", Params)
@@ -550,10 +473,12 @@ static llvm::Expected<bool>
 parseCGPipeline(StringRef Name, llvm::CGSCCPassManager &CGPM,
                 PassInstrumentationCallbacks *PIC,
                 ArrayRef<PassBuilder::PipelineElement> Pipeline,
-                IntrusiveRefCntPtr<vfs::FileSystem> FS) {
+                IntrusiveRefCntPtr<vfs::FileSystem> FS,
+                const clv2::OptionsContext &Ctx) {
 #define CGSCC_PASS(NAME, CREATE_PASS, PARSER)                                  \
   if (PassBuilder::checkParametrizedPassName(Name, NAME)) {                    \
-    auto Params = PassBuilder::parsePassParameters(PARSER, Name, NAME);        \
+    auto Params = PassBuilder::parsePassParameters(                            \
+        [&Ctx](StringRef P) { return PARSER(P, Ctx); }, Name, NAME);           \
     if (!Params)                                                               \
       return Params.takeError();                                               \
     CGPM.addPass(CREATE_PASS);                                                 \
@@ -567,11 +492,13 @@ parseCGPipeline(StringRef Name, llvm::CGSCCPassManager &CGPM,
 static llvm::Expected<bool>
 parseFunctionPipeline(StringRef Name, FunctionPassManager &FPM,
                       PassInstrumentationCallbacks *PIC,
-                      ArrayRef<PassBuilder::PipelineElement> Pipeline) {
+                      ArrayRef<PassBuilder::PipelineElement> Pipeline,
+                      const clv2::OptionsContext &Ctx) {
 
 #define FUNCTION_PASS(NAME, CREATE_PASS, PARSER)                               \
   if (PassBuilder::checkParametrizedPassName(Name, NAME)) {                    \
-    auto ExpectedOpts = PassBuilder::parsePassParameters(PARSER, Name, NAME);  \
+    auto ExpectedOpts = PassBuilder::parsePassParameters(                      \
+        [&Ctx](StringRef P) { return PARSER(P, Ctx); }, Name, NAME);           \
     if (!ExpectedOpts)                                                         \
       return ExpectedOpts.takeError();                                         \
     auto &&Opts = *ExpectedOpts;                                               \
@@ -587,10 +514,12 @@ parseFunctionPipeline(StringRef Name, FunctionPassManager &FPM,
 static llvm::Expected<bool>
 parseModulePipeline(StringRef Name, llvm::ModulePassManager &MPM,
                     PassInstrumentationCallbacks *PIC,
-                    ArrayRef<PassBuilder::PipelineElement> Pipeline) {
+                    ArrayRef<PassBuilder::PipelineElement> Pipeline,
+                    const clv2::OptionsContext &Ctx) {
 #define MODULE_PASS(NAME, CREATE_PASS, PARSER)                                 \
   if (PassBuilder::checkParametrizedPassName(Name, NAME)) {                    \
-    auto ExpectedOpts = PassBuilder::parsePassParameters(PARSER, Name, NAME);  \
+    auto ExpectedOpts = PassBuilder::parsePassParameters(                      \
+        [&Ctx](StringRef P) { return PARSER(P, Ctx); }, Name, NAME);           \
     if (!ExpectedOpts)                                                         \
       return ExpectedOpts.takeError();                                         \
     auto &&Opts = *ExpectedOpts;                                               \
@@ -633,57 +562,64 @@ parseModulePipeline(StringRef Name, llvm::ModulePassManager &MPM,
 void registerPollyPasses(PassBuilder &PB) {
   PassInstrumentationCallbacks *PIC = PB.getPassInstrumentationCallbacks();
   IntrusiveRefCntPtr<vfs::FileSystem> FS = PB.getVirtualFileSystemPtr();
+  auto &Ctx = PB.getOptionsContext();
 
 #define MODULE_PASS(NAME, CREATE_PASS, PARSER)                                 \
   {                                                                            \
-    std::remove_reference_t<decltype(*PARSER(StringRef()))> Opts;              \
+    std::remove_reference_t<decltype(*PARSER(StringRef(), Ctx))> Opts;         \
     (void)Opts;                                                                \
     PIC->addClassToPassName(decltype(CREATE_PASS)::name(), NAME);              \
   }
 #define CGSCC_PASS(NAME, CREATE_PASS, PARSER)                                  \
   {                                                                            \
-    std::remove_reference_t<decltype(*PARSER(StringRef()))> Opts;              \
+    std::remove_reference_t<decltype(*PARSER(StringRef(), Ctx))> Opts;         \
     (void)Opts;                                                                \
     PIC->addClassToPassName(decltype(CREATE_PASS)::name(), NAME);              \
   }
 #define FUNCTION_PASS(NAME, CREATE_PASS, PARSER)                               \
   {                                                                            \
-    std::remove_reference_t<decltype(*PARSER(StringRef()))> Opts;              \
+    std::remove_reference_t<decltype(*PARSER(StringRef(), Ctx))> Opts;         \
     (void)Opts;                                                                \
     PIC->addClassToPassName(decltype(CREATE_PASS)::name(), NAME);              \
   }
 #include "PollyPasses.def"
 
   PB.registerPipelineParsingCallback(
-      [PIC](StringRef Name, FunctionPassManager &FPM,
-            ArrayRef<PassBuilder::PipelineElement> Pipeline) -> bool {
-        ExitOnError Err("Unable to parse Polly module pass: ");
-        return Err(parseFunctionPipeline(Name, FPM, PIC, Pipeline));
+      [PIC, &Ctx](StringRef Name, FunctionPassManager &FPM,
+                  ArrayRef<PassBuilder::PipelineElement> Pipeline) -> bool {
+        ExitOnError Err("Unable to parse Polly function pass: ");
+        return Err(parseFunctionPipeline(Name, FPM, PIC, Pipeline, Ctx));
       });
   PB.registerPipelineParsingCallback(
-      [PIC, FS](StringRef Name, CGSCCPassManager &CGPM,
-                ArrayRef<PassBuilder::PipelineElement> Pipeline) -> bool {
+      [PIC, FS, &Ctx](StringRef Name, CGSCCPassManager &CGPM,
+                      ArrayRef<PassBuilder::PipelineElement> Pipeline) -> bool {
         ExitOnError Err("Unable to parse Polly call graph pass: ");
-        return Err(parseCGPipeline(Name, CGPM, PIC, Pipeline, FS));
+        return Err(parseCGPipeline(Name, CGPM, PIC, Pipeline, FS, Ctx));
       });
   PB.registerPipelineParsingCallback(
-      [PIC](StringRef Name, ModulePassManager &MPM,
-            ArrayRef<PassBuilder::PipelineElement> Pipeline) -> bool {
+      [PIC, &Ctx](StringRef Name, ModulePassManager &MPM,
+                  ArrayRef<PassBuilder::PipelineElement> Pipeline) -> bool {
         ExitOnError Err("Unable to parse Polly module pass: ");
-        return Err(parseModulePipeline(Name, MPM, PIC, Pipeline));
+        return Err(parseModulePipeline(Name, MPM, PIC, Pipeline, Ctx));
       });
+
+  // Read PassPosition from context.
+  auto *Opts = polly_opts::getPollyOpts(Ctx);
+  auto PassPosition = Opts ? static_cast<PassPositionChoice>(
+                                 Opts->get<&llvm::clv2::POLLY_Position>())
+                           : POSITION_BEFORE_VECTORIZER;
 
   switch (PassPosition) {
   case POSITION_EARLY:
     PB.registerPipelineStartEPCallback(
-        [FS](ModulePassManager &MPM, OptimizationLevel Level) {
-          buildEarlyPollyPipeline(MPM, Level, FS);
+        [FS, &Ctx](ModulePassManager &MPM, OptimizationLevel Level) {
+          buildEarlyPollyPipeline(MPM, Level, FS, Ctx);
         });
     break;
   case POSITION_BEFORE_VECTORIZER:
     PB.registerVectorizerStartEPCallback(
-        [FS](FunctionPassManager &FPM, OptimizationLevel Level) {
-          buildLatePollyPipeline(FPM, Level, FS);
+        [FS, &Ctx](FunctionPassManager &FPM, OptimizationLevel Level) {
+          buildLatePollyPipeline(FPM, Level, FS, Ctx);
         });
     break;
   }

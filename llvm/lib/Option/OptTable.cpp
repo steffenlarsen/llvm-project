@@ -13,7 +13,7 @@
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/OptSpecifier.h"
 #include "llvm/Option/Option.h"
-#include "llvm/Support/CommandLine.h" // for expandResponseFiles
+#include "llvm/Support/CommandLineCompat.h" // for expandResponseFiles
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/OptionStrCmp.h"

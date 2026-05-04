@@ -38,9 +38,11 @@ XtensaSubtarget::initializeSubtargetDependencies(StringRef CPU, StringRef FS) {
 
 XtensaSubtarget::XtensaSubtarget(const Triple &TT, StringRef CPU, StringRef FS,
                                  const TargetMachine &TM)
-    : XtensaGenSubtargetInfo(TT, CPU, /*TuneCPU=*/CPU, FS), TargetTriple(TT),
-      InstrInfo(initializeSubtargetDependencies(CPU, FS)), TLInfo(TM, *this),
-      FrameLowering(*this) {
+    : XtensaGenSubtargetInfo(TT, CPU, /*TuneCPU=*/CPU, FS,
+                             TM.getOptionsContext()),
+      TargetTriple(TT), InstrInfo(initializeSubtargetDependencies(CPU, FS)),
+      TLInfo(TM, *this), FrameLowering(*this) {
+  setOptionsContext(TM.getOptionsContext());
   TSInfo = std::make_unique<SelectionDAGTargetInfo>();
 }
 

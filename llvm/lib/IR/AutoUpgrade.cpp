@@ -28,6 +28,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/IROptionsOptInfos.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/IntrinsicInst.h"
@@ -48,10 +49,10 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/AMDGPUAddrSpace.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/NVPTXAddrSpace.h"
 #include "llvm/Support/NVVMAttributes.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/TargetParser/Triple.h"
@@ -61,9 +62,10 @@
 
 using namespace llvm;
 
-static cl::opt<bool>
-    DisableAutoUpgradeDebugInfo("disable-auto-upgrade-debug-info",
-                                cl::desc("Disable autoupgrade of debug info"));
+static bool getDisableAutoUpgradeDebugInfo(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IR_DisableAutoUpgradeDebugInfo>(
+      M.getContext().getOptionsContext());
+}
 
 static void rename(GlobalValue *GV) { GV->setName(GV->getName() + ".old"); }
 
@@ -6498,7 +6500,7 @@ static std::optional<StringRef> getModuleFlagNameSafely(const MDNode &Flag) {
 /// Check the debug info version number, if it is out-dated, drop the debug
 /// info. Return true if module is modified.
 bool llvm::UpgradeDebugInfo(Module &M) {
-  if (DisableAutoUpgradeDebugInfo)
+  if (getDisableAutoUpgradeDebugInfo(M))
     return false;
 
   llvm::TimeTraceScope timeScope("Upgrade debug info");

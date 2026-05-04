@@ -14,8 +14,10 @@
 #include "llvm/CodeGen/MIRSampleProfile.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/BlockFrequencyInfoImpl.h"
-#include "llvm/CodeGen/MIRFSDiscriminatorOptions.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineCycleAnalysis.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -27,8 +29,10 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/PseudoProbe.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/SampleProfileLoaderBaseImpl.h"
@@ -41,26 +45,27 @@ using namespace llvm::sampleprofutil;
 
 #define DEBUG_TYPE "fs-profile-loader"
 
-static cl::opt<bool> ShowFSBranchProb(
-    "show-fs-branchprob", cl::Hidden, cl::init(false),
-    cl::desc("Print setting flow sensitive branch probabilities"));
-static cl::opt<unsigned> FSProfileDebugProbDiffThreshold(
-    "fs-profile-debug-prob-diff-threshold", cl::init(10),
-    cl::desc(
-        "Only show debug message if the branch probability is greater than "
-        "this value (in percentage)."));
+static bool getShowFsBranchprob(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ShowFsBranchprob>(Ctx);
+}
 
-static cl::opt<unsigned> FSProfileDebugBWThreshold(
-    "fs-profile-debug-bw-threshold", cl::init(10000),
-    cl::desc("Only show debug message if the source branch weight is greater "
-             " than this value."));
+static unsigned
+getFsProfileDebugProbDiffThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::CGPASS_FsProfileDebugProbDiffThreshold>(Ctx);
+}
 
-static cl::opt<bool> ViewBFIBefore("fs-viewbfi-before", cl::Hidden,
-                                   cl::init(false),
-                                   cl::desc("View BFI before MIR loader"));
-static cl::opt<bool> ViewBFIAfter("fs-viewbfi-after", cl::Hidden,
-                                  cl::init(false),
-                                  cl::desc("View BFI after MIR loader"));
+static unsigned getFsProfileDebugBwThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_FsProfileDebugBwThreshold>(Ctx);
+}
+
+static bool getFsViewbfiBefore(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_FsViewbfiBefore>(Ctx);
+}
+
+static bool getFsViewbfiAfter(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_FsViewbfiAfter>(Ctx);
+}
 
 char MIRProfileLoaderPass::ID = 0;
 
@@ -84,16 +89,18 @@ llvm::createMIRProfileLoaderPass(std::string File, std::string RemappingFile,
   return new MIRProfileLoaderPass(File, RemappingFile, P, std::move(FS));
 }
 
+// ViewBlockLayoutWithBFI not yet in OptInfos.
+static GVDAGType ViewBlockLayoutWithBFI = GVDT_None;
+
+namespace an_opts = llvm::an_opts;
+
+static std::string getViewBlockFreqFuncName(const clv2::OptionsContext &Ctx) {
+  return std::string(
+      clv2::getOptValOr<&clv2::AnalysisOptsReg,
+                        &clv2::AN_ViewBlockFreqFuncName>(Ctx, std::string{}));
+}
+
 namespace llvm {
-
-// Internal option used to control BFI display only after MBP pass.
-// Defined in CodeGen/MachineBlockFrequencyInfo.cpp:
-// -view-block-layout-with-bfi={none | fraction | integer | count}
-extern cl::opt<GVDAGType> ViewBlockLayoutWithBFI;
-
-// Command line option to specify the name of the function for CFG dump
-// Defined in Analysis/BlockFrequencyInfo.cpp:  -view-bfi-func-name=
-extern cl::opt<std::string> ViewBlockFreqFuncName;
 
 std::optional<PseudoProbe> extractProbe(const MachineInstr &MI) {
   if (MI.isPseudoProbe()) {
@@ -190,7 +197,10 @@ protected:
   ErrorOr<uint64_t> getInstWeight(const MachineInstr &MI) override {
     if (FunctionSamples::ProfileIsProbeBased)
       return getProbeWeight(MI);
-    if (ImprovedFSDiscriminator && MI.isMetaInstruction())
+    if (clv2::getOptValOr<&clv2::CGOptsReg, &clv2::CG_ImprovedFsDiscriminator>(
+            MI.getMF()->getFunction().getContext().getOptionsContext(),
+            false) &&
+        MI.isMetaInstruction())
       return std::error_code();
     return getInstWeightImpl(MI);
   }
@@ -253,7 +263,8 @@ void MIRProfileLoader::setBranchProbs(MachineFunction &F) {
         continue;
       BB->setSuccProbability(SI, NewProb);
 #ifndef NDEBUG
-      if (!ShowFSBranchProb)
+      if (!getShowFsBranchprob(
+              F.getFunction().getContext().getOptionsContext()))
         continue;
       bool Show = false;
       BranchProbability Diff;
@@ -261,8 +272,13 @@ void MIRProfileLoader::setBranchProbs(MachineFunction &F) {
         Diff = OldProb - NewProb;
       else
         Diff = NewProb - OldProb;
-      Show = (Diff >= BranchProbability(FSProfileDebugProbDiffThreshold, 100));
-      Show &= (BBWeightOrig >= FSProfileDebugBWThreshold);
+      Show = (Diff >= BranchProbability(
+                          getFsProfileDebugProbDiffThreshold(
+                              F.getFunction().getContext().getOptionsContext()),
+                          100));
+      Show &= (BBWeightOrig >=
+               getFsProfileDebugBwThreshold(
+                   F.getFunction().getContext().getOptionsContext()));
 
       auto DIL = BB->findBranchDebugLoc();
       auto SuccDIL = Succ->findBranchDebugLoc();
@@ -374,9 +390,12 @@ bool MIRProfileLoaderPass::runOnMachineFunction(MachineFunction &MF) {
       MDT, MPDT, &getAnalysis<MachineLoopInfoWrapperPass>().getLI(), MBFI,
       &getAnalysis<MachineOptimizationRemarkEmitterPass>().getORE());
 
-  if (ViewBFIBefore && ViewBlockLayoutWithBFI != GVDT_None &&
-      (ViewBlockFreqFuncName.empty() ||
-       MF.getFunction().getName() == ViewBlockFreqFuncName)) {
+  const clv2::OptionsContext &OptsCtx =
+      MF.getFunction().getContext().getOptionsContext();
+  if (getFsViewbfiBefore(MF.getFunction().getContext().getOptionsContext()) &&
+      ViewBlockLayoutWithBFI != GVDT_None &&
+      (getViewBlockFreqFuncName(OptsCtx).empty() ||
+       MF.getFunction().getName() == getViewBlockFreqFuncName(OptsCtx))) {
     MBFI->view("MIR_Prof_loader_b." + MF.getName(), false);
   }
 
@@ -387,9 +406,10 @@ bool MIRProfileLoaderPass::runOnMachineFunction(MachineFunction &MF) {
     MBFI->calculate(MF, *MBFI->getMBPI(), MCI);
   }
 
-  if (ViewBFIAfter && ViewBlockLayoutWithBFI != GVDT_None &&
-      (ViewBlockFreqFuncName.empty() ||
-       MF.getFunction().getName() == ViewBlockFreqFuncName)) {
+  if (getFsViewbfiAfter(MF.getFunction().getContext().getOptionsContext()) &&
+      ViewBlockLayoutWithBFI != GVDT_None &&
+      (getViewBlockFreqFuncName(OptsCtx).empty() ||
+       MF.getFunction().getName() == getViewBlockFreqFuncName(OptsCtx))) {
     MBFI->view("MIR_prof_loader_a." + MF.getName(), false);
   }
 

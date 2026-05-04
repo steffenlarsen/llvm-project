@@ -113,13 +113,13 @@ void FunctionAttrPass::runOnOperation() {
         getLlvmFuncPropertyAttrName(
             context, mlir::LLVM::LLVMFuncOp::getInstrumentFunctionEntryAttrName(
                          llvmFuncOpName)),
-        mlir::StringAttr::get(context, instrumentFunctionEntry));
+        mlir::StringAttr::get(context, *instrumentFunctionEntry));
   if (!instrumentFunctionExit.empty())
     func->setAttr(
         getLlvmFuncPropertyAttrName(
             context, mlir::LLVM::LLVMFuncOp::getInstrumentFunctionExitAttrName(
                          llvmFuncOpName)),
-        mlir::StringAttr::get(context, instrumentFunctionExit));
+        mlir::StringAttr::get(context, *instrumentFunctionExit));
   if (noSignedZerosFPMath)
     func->setAttr(
         getLlvmFuncPropertyAttrName(
@@ -131,13 +131,13 @@ void FunctionAttrPass::runOnOperation() {
         getLlvmFuncPropertyAttrName(
             context, mlir::LLVM::LLVMFuncOp::getReciprocalEstimatesAttrName(
                          llvmFuncOpName)),
-        mlir::StringAttr::get(context, reciprocals));
+        mlir::StringAttr::get(context, *reciprocals));
   if (!preferVectorWidth.empty())
     func->setAttr(
         getLlvmFuncPropertyAttrName(
             context, mlir::LLVM::LLVMFuncOp::getPreferVectorWidthAttrName(
                          llvmFuncOpName)),
-        mlir::StringAttr::get(context, preferVectorWidth));
+        mlir::StringAttr::get(context, *preferVectorWidth));
   if (UseSampleProfile)
     func->setAttr(
         getLlvmFuncPropertyAttrName(

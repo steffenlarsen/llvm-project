@@ -9,7 +9,9 @@
 #include "DiagTool.h"
 #include "DiagnosticNames.h"
 #include "clang/Basic/AllDiagnostics.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include <optional>
 
 DEF_DIAGTOOL("find-diagnostic-id", "Print the id of the given diagnostic",
@@ -17,6 +19,11 @@ DEF_DIAGTOOL("find-diagnostic-id", "Print the id of the given diagnostic",
 
 using namespace clang;
 using namespace diagtool;
+
+inline constexpr llvm::clv2::OptionInfo<std::string> FDDiagNameOpt{
+    "", "<diagnostic-name>", llvm::clv2::Positional{}, llvm::clv2::Required};
+
+inline constexpr llvm::clv2::OptionsRegistry<&FDDiagNameOpt> FindDiagIDReg;
 
 static StringRef getNameFromID(StringRef Name) {
   int DiagID;
@@ -42,18 +49,20 @@ int FindDiagnosticID::run(unsigned int argc, char **argv,
   static llvm::cl::OptionCategory FindDiagnosticIDOptions(
       "diagtool find-diagnostic-id options");
 
-  static llvm::cl::opt<std::string> DiagnosticName(
-      llvm::cl::Positional, llvm::cl::desc("<diagnostic-name>"),
-      llvm::cl::Required, llvm::cl::cat(FindDiagnosticIDOptions));
-
   std::vector<const char *> Args;
   Args.push_back("diagtool find-diagnostic-id");
   for (const char *A : llvm::ArrayRef(argv, argc))
     Args.push_back(A);
 
-  llvm::cl::HideUnrelatedOptions(FindDiagnosticIDOptions);
-  llvm::cl::ParseCommandLineOptions((int)Args.size(), Args.data(),
-                                    "Diagnostic ID mapping utility");
+  llvm::clv2::OptionParser P;
+  P.add<&FindDiagIDReg>();
+  llvm::RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&FindDiagnosticIDOptions});
+  auto OptsCtx =
+      P.parse((int)Args.size(), Args.data(), "Diagnostic ID mapping utility\n");
+  auto *Opts = OptsCtx->getViewPtr<&FindDiagIDReg>();
+
+  std::string DiagnosticName = Opts->get<&FDDiagNameOpt>();
 
   ArrayRef<DiagnosticRecord> AllDiagnostics = getBuiltinDiagnosticsByName();
   std::optional<DiagnosticRecord> Diag =

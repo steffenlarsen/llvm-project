@@ -26,7 +26,7 @@ using namespace llvm;
 namespace {
 
 TEST(BasicBlockTest, PhiRange) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   // Create the main block.
   std::unique_ptr<BasicBlock> BB(BasicBlock::Create(Context));
@@ -106,7 +106,7 @@ TEST(BasicBlockTest, ComesBefore) {
                                   %add = add i32 %x, 42
                                   ret i32 %add
                                 })";
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   auto M = parseAssemblyString(ModuleString, Err, Ctx);
   ASSERT_TRUE(M.get());
@@ -151,7 +151,7 @@ protected:
     Ret = Builder.CreateRetVoid();
   }
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   Function *Nop = nullptr;
   BasicBlock *BB = nullptr;
@@ -235,7 +235,7 @@ static std::unique_ptr<Module> parseIR(LLVMContext &C, const char *IR) {
 }
 
 TEST(BasicBlockTest, SpliceFromBB) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx, R"(
     define void @f(i32 %a) {
      from:
@@ -277,7 +277,7 @@ TEST(BasicBlockTest, SpliceFromBB) {
 }
 
 TEST(BasicBlockTest, SpliceOneInstr) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx, R"(
     define void @f(i32 %a) {
      from:
@@ -322,7 +322,7 @@ TEST(BasicBlockTest, SpliceOneInstr) {
 }
 
 TEST(BasicBlockTest, SpliceOneInstrWhenFromIsSameAsTo) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx, R"(
     define void @f(i32 %a) {
      bb:
@@ -352,7 +352,7 @@ TEST(BasicBlockTest, SpliceOneInstrWhenFromIsSameAsTo) {
 }
 
 TEST(BasicBlockTest, SpliceLastInstr) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx, R"(
     define void @f(i32 %a) {
      from:
@@ -397,7 +397,7 @@ TEST(BasicBlockTest, SpliceLastInstr) {
 }
 
 TEST(BasicBlockTest, SpliceInstrRange) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx, R"(
     define void @f(i32 %a) {
      from:
@@ -441,7 +441,7 @@ TEST(BasicBlockTest, SpliceInstrRange) {
 
 #ifdef EXPENSIVE_CHECKS
 TEST(BasicBlockTest, SpliceEndBeforeBegin) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx, R"(
     define void @f(i32 %a) {
      from:
@@ -471,10 +471,10 @@ TEST(BasicBlockTest, SpliceEndBeforeBegin) {
                             FromI1->getIterator()),
                "FromBeginIt not before FromEndIt!");
 }
-#endif //EXPENSIVE_CHECKS
+#endif // EXPENSIVE_CHECKS
 
 TEST(BasicBlockTest, EraseRange) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx, R"(
     define void @f(i32 %a) {
      bb0:
@@ -511,7 +511,7 @@ TEST(BasicBlockTest, EraseRange) {
 TEST(BasicBlockTest, DiscardValueNames) {
   const char *ModuleString = "declare void @f(i32 %dangling)";
   SMDiagnostic Err;
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   { // Scope of M.
     auto M = parseAssemblyString(ModuleString, Err, Ctx);
     ASSERT_TRUE(M.get());
@@ -526,7 +526,7 @@ TEST(BasicBlockTest, DiscardValueNames) {
 
 TEST(BasicBlockTest, DiscardValueNames2) {
   SMDiagnostic Err;
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module M("Mod", Ctx);
   auto FTy = FunctionType::get(Type::getVoidTy(M.getContext()),
                                {Type::getInt32Ty(Ctx)}, /*isVarArg=*/false);

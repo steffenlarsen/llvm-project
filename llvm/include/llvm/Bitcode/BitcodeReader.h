@@ -22,6 +22,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/MemoryBufferRef.h"
+#include "llvm/Support/OptionsContext.h"
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -29,6 +30,9 @@
 #include <system_error>
 #include <vector>
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+}
 
 class LLVMContext;
 class Module;
@@ -174,8 +178,8 @@ struct ParserCallbacks {
     /// into CombinedIndex.
     LLVM_ABI Error
     readSummary(ModuleSummaryIndex &CombinedIndex, StringRef ModulePath,
-                std::function<bool(StringRef)> IsPrevailing = nullptr,
-                std::function<void(ValueInfo)> OnValueInfo = nullptr);
+                const clv2::OptionsContext &Ctx,
+                std::function<bool(StringRef)> IsPrevailing = nullptr);
   };
 
   struct BitcodeFileContents {
@@ -244,7 +248,8 @@ struct ParserCallbacks {
 
   /// Parse the specified bitcode buffer and merge the index into CombinedIndex.
   LLVM_ABI Error readModuleSummaryIndex(MemoryBufferRef Buffer,
-                                        ModuleSummaryIndex &CombinedIndex);
+                                        ModuleSummaryIndex &CombinedIndex,
+                                        const clv2::OptionsContext &Ctx);
 
   /// Parse the module summary index out of an IR file and return the module
   /// summary index object if found, or an empty summary if not. If Path refers

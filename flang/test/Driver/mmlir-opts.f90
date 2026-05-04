@@ -3,7 +3,7 @@
 
 ! RUN: %flang_fc1  -mmlir --help | FileCheck %s --check-prefix=MLIR
 
-! MLIR: flang (MLIR option parsing) [options]
+! MLIR: flang (option parsing) [options]
 ! Registered via registerPassManagerCLOptions
 ! MLIR: --mlir-pass-pipeline-local-reproducer
 ! Registered via registerAsmPrinterCLOptions

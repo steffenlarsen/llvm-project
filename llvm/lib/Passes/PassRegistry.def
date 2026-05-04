@@ -96,11 +96,13 @@ MODULE_PASS("hipstdpar-select-accelerator-code",
 MODULE_PASS("hotcoldsplit", HotColdSplittingPass())
 MODULE_PASS("inferattrs", InferFunctionAttrsPass())
 MODULE_PASS("inliner-ml-advisor-release",
-            ModuleInlinerWrapperPass(getInlineParams(), true, {},
-                                     InliningAdvisorMode::Release, 0))
-MODULE_PASS("inliner-wrapper", ModuleInlinerWrapperPass())
+            ModuleInlinerWrapperPass(*OptsCtx, getInlineParams(*OptsCtx), true,
+                                     {}, InliningAdvisorMode::Release))
+MODULE_PASS("inliner-wrapper", ModuleInlinerWrapperPass(
+            *OptsCtx, getInlineParams(*OptsCtx)))
 MODULE_PASS("inliner-wrapper-no-mandatory-first",
-            ModuleInlinerWrapperPass(getInlineParams(), false))
+            ModuleInlinerWrapperPass(*OptsCtx, getInlineParams(*OptsCtx),
+                                     false))
 MODULE_PASS("insert-gcov-profiling", GCOVProfilerPass())
 MODULE_PASS("instrprof", InstrProfilingLoweringPass())
 MODULE_PASS("ctx-instr-lower", PGOCtxProfLoweringPass())
@@ -405,7 +407,6 @@ FUNCTION_ALIAS_ANALYSIS("tbaa", TypeBasedAA())
 #ifndef FUNCTION_PASS
 #define FUNCTION_PASS(NAME, CREATE_PASS)
 #endif
-FUNCTION_PASS("aa-eval", AAEvaluator())
 FUNCTION_PASS("adce", ADCEPass())
 FUNCTION_PASS("add-discriminators", AddDiscriminatorsPass())
 FUNCTION_PASS("aggressive-instcombine", AggressiveInstCombinePass())
@@ -511,9 +512,7 @@ FUNCTION_PASS("print<predicate-info>", PredicateInfoPrinterPass(errs()))
 FUNCTION_PASS("print<assumptions>", AssumptionPrinterPass(errs()))
 FUNCTION_PASS("print<block-freq>", BlockFrequencyPrinterPass(errs()))
 FUNCTION_PASS("print<branch-prob>", BranchProbabilityPrinterPass(errs()))
-FUNCTION_PASS("print<cost-model>", CostModelPrinterPass(errs()))
 FUNCTION_PASS("print<cycles>", CycleInfoPrinterPass(errs()))
-FUNCTION_PASS("print<da>", DependenceAnalysisPrinterPass(errs()))
 FUNCTION_PASS("print<debug-ata>", DebugAssignmentTrackingPrinterPass(errs()))
 FUNCTION_PASS("print<delinearization>", DelinearizationPrinterPass(errs()))
 FUNCTION_PASS("print<demanded-bits>", DemandedBitsPrinterPass(errs()))
@@ -527,8 +526,6 @@ FUNCTION_PASS("print<loop-cache-cost>", LoopCachePrinterPass(errs()))
 FUNCTION_PASS("print<memoryssa-walker>", MemorySSAWalkerPrinterPass(errs()))
 FUNCTION_PASS("print<phi-values>", PhiValuesPrinterPass(errs()))
 FUNCTION_PASS("print<postdomtree>", PostDominatorTreePrinterPass(errs()))
-FUNCTION_PASS("print<regions>", RegionInfoPrinterPass(errs()))
-FUNCTION_PASS("print<scalar-evolution>", ScalarEvolutionPrinterPass(errs()))
 FUNCTION_PASS("print<scev-division>", SCEVDivisionPrinterPass(errs()))
 FUNCTION_PASS("print<stack-safety-local>", StackSafetyPrinterPass(errs()))
 FUNCTION_PASS("print<uniformity>", UniformityInfoPrinterPass(errs()))
@@ -580,6 +577,13 @@ FUNCTION_PASS("wasm-eh-prepare", WasmEHPreparePass())
 #ifndef FUNCTION_PASS_WITH_PARAMS
 #define FUNCTION_PASS_WITH_PARAMS(NAME, CLASS, CREATE_PASS, PARSER, PARAMS)
 #endif
+FUNCTION_PASS_WITH_PARAMS(
+    "aa-eval", "AAEvaluator",
+    [](AAEvaluatorOptions Opts) { return AAEvaluator(Opts); },
+    parseAAEvaluatorOptions,
+    "print-all;print-no-aliases;print-may-aliases;print-partial-aliases;"
+    "print-must-aliases;print-no-modref;print-ref;print-mod;print-modref;"
+    "evaluate-aa-metadata")
 FUNCTION_PASS_WITH_PARAMS(
     "early-cse", "EarlyCSEPass",
     [](bool UseMemorySSA) { return EarlyCSEPass(UseMemorySSA); },
@@ -672,12 +676,6 @@ FUNCTION_PASS_WITH_PARAMS(
                                                 "LoopAccessInfoPrinterPass");
     },
     "allow-partial")
-FUNCTION_PASS_WITH_PARAMS(
-    "print<da>", "DependenceAnalysisPrinterPass",
-    [](bool NormalizeResults) {
-      return DependenceAnalysisPrinterPass(errs(), NormalizeResults);
-    },
-    parseDependenceAnalysisPrinterOptions, "normalized-results")
 FUNCTION_PASS_WITH_PARAMS(
     "print<memoryssa>", "MemorySSAPrinterPass",
     [](bool NoEnsureOptimizedUses) {

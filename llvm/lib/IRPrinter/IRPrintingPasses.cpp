@@ -32,14 +32,18 @@ PrintModulePass::PrintModulePass(raw_ostream &OS, const std::string &Banner,
       EmitSummaryIndex(EmitSummaryIndex) {}
 
 PreservedAnalyses PrintModulePass::run(Module &M, ModuleAnalysisManager &AM) {
-  if (llvm::isFunctionInPrintList("*")) {
+  // Remove intrinsic declarations when printing in the new format.
+  // TODO: consider removing this now that debug intrinsics are gone.
+  M.removeDebugIntrinsicDeclarations();
+
+  if (llvm::isFunctionInPrintList(M.getContext(), "*")) {
     if (!Banner.empty())
       OS << Banner << "\n";
     M.print(OS, nullptr, ShouldPreserveUseListOrder);
   } else {
     bool BannerPrinted = false;
     for (const auto &F : M.functions()) {
-      if (llvm::isFunctionInPrintList(F.getName())) {
+      if (llvm::isFunctionInPrintList(F.getContext(), F.getName())) {
         if (!BannerPrinted && !Banner.empty()) {
           OS << Banner << "\n";
           BannerPrinted = true;
@@ -67,8 +71,8 @@ PrintFunctionPass::PrintFunctionPass(raw_ostream &OS, const std::string &Banner)
 
 PreservedAnalyses PrintFunctionPass::run(Function &F,
                                          FunctionAnalysisManager &) {
-  if (isFunctionInPrintList(F.getName())) {
-    if (forcePrintModuleIR())
+  if (isFunctionInPrintList(F.getContext(), F.getName())) {
+    if (forcePrintModuleIR(F.getContext()))
       OS << Banner << " (function: " << F.getName() << ")\n" << *F.getParent();
     else
       OS << Banner << '\n' << static_cast<Value &>(F);

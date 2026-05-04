@@ -26,6 +26,7 @@
 #include "llvm/IR/Use.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/SSAUpdaterImpl.h"
@@ -35,6 +36,30 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "ssaupdater"
+
+unsigned llvm::SSAUpdaterPhiSearchLimit = 80;
+
+namespace {
+static constexpr clv2::OptionInfo<unsigned> OI_SSAUpdaterPhiSearchLimit{
+    "ssaupdater-phi-search-limit",
+    "Limit number of phi-nodes to be searched when "
+    "looking for an existing duplicate.",
+    clv2::Init{80u}, clv2::Hidden};
+
+static constexpr clv2::OptionsRegistry<&OI_SSAUpdaterPhiSearchLimit>
+    SSAUpdaterPhiSearchLimitReg;
+
+static void applySSAUpdaterPhiSearchLimit(
+    const decltype(SSAUpdaterPhiSearchLimitReg)::ParsedOptionsT &Opts) {
+  llvm::SSAUpdaterPhiSearchLimit = Opts.get<&OI_SSAUpdaterPhiSearchLimit>();
+}
+
+[[maybe_unused]] static const int RegSSAUpdaterPhiSearchLimit = [] {
+  clv2::registerDynamicRegistry<&SSAUpdaterPhiSearchLimitReg>(
+      applySSAUpdaterPhiSearchLimit);
+  return 0;
+}();
+} // namespace
 
 using AvailableValsTy = DenseMap<BasicBlock *, Value *>;
 
@@ -235,12 +260,6 @@ void SSAUpdater::RewriteUseAfterInsertions(Use &U) {
 }
 
 namespace llvm {
-
-cl::opt<unsigned> SSAUpdaterPhiSearchLimit(
-    "ssaupdater-phi-search-limit",
-    cl::desc("Limit number of phi-nodes to be searched when "
-             "looking for an existing duplicate."),
-    cl::init(80), cl::Hidden);
 
 template<>
 class SSAUpdaterTraits<SSAUpdater> {
@@ -447,7 +466,6 @@ void LoadAndStorePromoter::run(const SmallVectorImpl<Instruction *> &Insts) {
         // use the stored value.
         if (StoredValue) {
           replaceLoadWithValue(L, StoredValue);
-          // Avoid assertions in unreachable code.
           if (StoredValue == L)
             StoredValue = PoisonValue::get(L->getType());
           L->replaceAllUsesWith(StoredValue);
@@ -508,7 +526,7 @@ void LoadAndStorePromoter::run(const SmallVectorImpl<Instruction *> &Insts) {
       // Propagate down to the ultimate replacee.  The intermediately loads
       // could theoretically already have been deleted, so we don't want to
       // dereference the Value*'s.
-      auto RLI = ReplacedLoads.find(NewVal);
+      DenseMap<Value *, Value *>::iterator RLI = ReplacedLoads.find(NewVal);
       while (RLI != ReplacedLoads.end()) {
         NewVal = RLI->second;
         RLI = ReplacedLoads.find(NewVal);

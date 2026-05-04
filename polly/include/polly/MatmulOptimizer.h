@@ -13,6 +13,9 @@
 
 namespace llvm {
 class TargetTransformInfo;
+namespace clv2 {
+class OptionsContext;
+}
 }
 
 namespace polly {
@@ -65,10 +68,9 @@ class Dependences;
 ///
 /// @returns    The transformed schedule or nullptr if the optimization
 ///             cannot be applied.
-isl::schedule_node
-tryOptimizeMatMulPattern(isl::schedule_node Node,
-                         const llvm::TargetTransformInfo *TTI,
-                         const Dependences *D);
+isl::schedule_node tryOptimizeMatMulPattern(
+    isl::schedule_node Node, const llvm::TargetTransformInfo *TTI,
+    const Dependences *D, const llvm::clv2::OptionsContext &Ctx);
 
 } // namespace polly
 #endif // POLLY_MATMULOPTIMIZER_H

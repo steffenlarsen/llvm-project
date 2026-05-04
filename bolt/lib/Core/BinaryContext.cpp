@@ -13,6 +13,12 @@
 #include "bolt/Core/BinaryContext.h"
 #include "bolt/Core/BinaryEmitter.h"
 #include "bolt/Core/BinaryFunction.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
+#include "bolt/Profile/BoltProfileOptionsOptInfos.h"
+#include "bolt/Rewrite/BoltRewriteOptionsOptInfos.h"
+#include "bolt/RuntimeLibs/BoltRuntimeLibsOptionsOptInfos.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "bolt/Utils/Utils.h"
 #include "llvm/ADT/STLExtras.h"
@@ -34,10 +40,11 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Object/ObjectFile.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBufferRef.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include <algorithm>
@@ -47,62 +54,19 @@
 
 using namespace llvm;
 
-#undef  DEBUG_TYPE
+#undef DEBUG_TYPE
 #define DEBUG_TYPE "bolt"
 
 namespace opts {
 
-extern cl::opt<bool> LargeCodeModel;
-extern cl::opt<bool> UpdateDebugSections;
+bool PrintMemData = false;
 
-static cl::opt<bool>
-    NoHugePages("no-huge-pages",
-                cl::desc("use regular size pages for code alignment"),
-                cl::Hidden, cl::cat(BoltCategory));
+std::string CompDirOverride;
 
-static cl::opt<bool>
-PrintDebugInfo("print-debug-info",
-  cl::desc("print debug info when printing functions"),
-  cl::Hidden,
-  cl::ZeroOrMore,
-  cl::cat(BoltCategory));
-
-cl::opt<bool> PrintRelocations(
-    "print-relocations",
-    cl::desc("print relocations when printing functions/objects"), cl::Hidden,
-    cl::cat(BoltCategory));
-
-static cl::opt<bool>
-PrintMemData("print-mem-data",
-  cl::desc("print memory data annotations when printing functions"),
-  cl::Hidden,
-  cl::ZeroOrMore,
-  cl::cat(BoltCategory));
-
-cl::opt<std::string> CompDirOverride(
-    "comp-dir-override",
-    cl::desc("overrides DW_AT_comp_dir, and provides an alternative base "
-             "location, which is used with DW_AT_dwo_name to construct a path "
-             "to *.dwo files."),
-    cl::Hidden, cl::init(""), cl::cat(BoltCategory));
-
-static cl::opt<bool> CloneConstantIsland("clone-constant-island",
-                                         cl::desc("clone constant islands"),
-                                         cl::Hidden, cl::init(true),
-                                         cl::ZeroOrMore, cl::cat(BoltCategory));
-
-static cl::opt<bool>
-    FailOnInvalidPadding("fail-on-invalid-padding", cl::Hidden, cl::init(false),
-                         cl::desc("treat invalid code padding as error"),
-                         cl::ZeroOrMore, cl::cat(BoltCategory));
-
-static cl::opt<bool> DropDWOPageCache(
-    "drop-dwo-page-cache",
-    cl::desc("Treat .dwo files as streaming input: reclaim their page-cache "
-             "pages as soon as BOLT is done reading each one. Keeps the "
-             "file-backed footprint of large split-DWARF inputs bounded."),
-    cl::Hidden, cl::init(false), cl::cat(BoltCategory));
 } // namespace opts
+
+using bolt::bolt_core_opts::getBoltCoreOpts;
+using bolt::bolt_utils_opts::getBoltUtilsOpts;
 
 namespace llvm {
 namespace bolt {
@@ -147,31 +111,39 @@ void BinaryContext::logBOLTErrorsAndQuitOnFatal(Error E) {
   });
 }
 
-BinaryContext::BinaryContext(std::unique_ptr<MCContext> Ctx,
-                             std::unique_ptr<DWARFContext> DwCtx,
-                             std::unique_ptr<Triple> TheTriple,
-                             std::shared_ptr<orc::SymbolStringPool> SSP,
-                             const Target *TheTarget, std::string TripleName,
-                             std::unique_ptr<MCCodeEmitter> MCE,
-                             std::unique_ptr<MCObjectFileInfo> MOFI,
-                             std::unique_ptr<const MCAsmInfo> AsmInfo,
-                             std::unique_ptr<const MCInstrInfo> MII,
-                             std::unique_ptr<const MCSubtargetInfo> STI,
-                             std::unique_ptr<MCInstPrinter> InstPrinter,
-                             std::unique_ptr<const MCInstrAnalysis> MIA,
-                             std::unique_ptr<MCPlusBuilder> MIB,
-                             std::unique_ptr<const MCRegisterInfo> MRI,
-                             std::unique_ptr<MCDisassembler> DisAsm,
-                             JournalingStreams Logger)
-    : Ctx(std::move(Ctx)), DwCtx(std::move(DwCtx)),
-      TheTriple(std::move(TheTriple)), SSP(std::move(SSP)),
-      TheTarget(TheTarget), TripleName(TripleName), MCE(std::move(MCE)),
-      MOFI(std::move(MOFI)), AsmInfo(std::move(AsmInfo)), MII(std::move(MII)),
-      STI(std::move(STI)), InstPrinter(std::move(InstPrinter)),
-      MIA(std::move(MIA)), MIB(std::move(MIB)), MRI(std::move(MRI)),
-      DisAsm(std::move(DisAsm)), Logger(Logger), InitialDynoStats(isAArch64()) {
+static void populateDefaultBoltOptionsContext(clv2::OptionsContext &Ctx);
+
+BinaryContext::BinaryContext(
+    clv2::OptionsContext *OptsCtxIn, std::unique_ptr<MCContext> Ctx,
+    std::unique_ptr<DWARFContext> DwCtx, std::unique_ptr<Triple> TheTriple,
+    std::shared_ptr<orc::SymbolStringPool> SSP, const Target *TheTarget,
+    std::string TripleName, std::unique_ptr<MCCodeEmitter> MCE,
+    std::unique_ptr<MCObjectFileInfo> MOFI,
+    std::unique_ptr<const MCAsmInfo> AsmInfo,
+    std::unique_ptr<const MCInstrInfo> MII,
+    std::unique_ptr<const MCSubtargetInfo> STI,
+    std::unique_ptr<MCInstPrinter> InstPrinter,
+    std::unique_ptr<const MCInstrAnalysis> MIA,
+    std::unique_ptr<MCPlusBuilder> MIB,
+    std::unique_ptr<const MCRegisterInfo> MRI,
+    std::unique_ptr<MCDisassembler> DisAsm, JournalingStreams Logger)
+    : OptsCtx(OptsCtxIn ? OptsCtxIn : &DefaultOptsCtx), Ctx(std::move(Ctx)),
+      DwCtx(std::move(DwCtx)), TheTriple(std::move(TheTriple)),
+      SSP(std::move(SSP)), TheTarget(TheTarget), TripleName(TripleName),
+      MCE(std::move(MCE)), MOFI(std::move(MOFI)), AsmInfo(std::move(AsmInfo)),
+      MII(std::move(MII)), STI(std::move(STI)),
+      InstPrinter(std::move(InstPrinter)), MIA(std::move(MIA)),
+      MIB(std::move(MIB)), MRI(std::move(MRI)), DisAsm(std::move(DisAsm)),
+      Logger(Logger), InitialDynoStats(isAArch64(), getOptionsContext()) {
+  // Must run before the first option read below: with no tool-supplied
+  // context we fall back to DefaultOptsCtx, which is empty until populated.
+  if (!OptsCtxIn)
+    populateDefaultBoltOptionsContext(DefaultOptsCtx);
+
   RegularPageSize = isAArch64() ? RegularPageSizeAArch64 : RegularPageSizeX86;
-  PageAlign = opts::NoHugePages ? RegularPageSize : HugePageSize;
+  auto *Opts = getBoltCoreOpts(getOptionsContext());
+  bool NoHugePages = Opts ? Opts->get<&clv2::BOLTCORE_NoHugePages>() : false;
+  PageAlign = NoHugePages ? RegularPageSize : HugePageSize;
 }
 
 BinaryContext::~BinaryContext() {
@@ -184,12 +156,26 @@ BinaryContext::~BinaryContext() {
   clearBinaryData();
 }
 
+/// Populate a default OptionsContext with all BOLT registries using
+/// default-constructed views. Used when no tool context is provided.
+static void populateDefaultBoltOptionsContext(clv2::OptionsContext &Ctx) {
+  Ctx.addView<&clv2::BoltCoreOptsReg>(bolt_core_opts::ParsedOpts{});
+  Ctx.addView<&clv2::BoltPassesOptsReg>(bolt_passes_opts::ParsedOpts{});
+  Ctx.addView<&clv2::BoltUtilsOptsReg>(bolt_utils_opts::ParsedOpts{});
+  bolt_profile_opts::ParsedOpts ProfileDefaults{};
+  ProfileDefaults.get<&clv2::BOLTPROF_MaxSamples>() = uint64_t(-1);
+  Ctx.addView<&clv2::BoltProfileOptsReg>(ProfileDefaults);
+  Ctx.addView<&clv2::BoltRewriteOptsReg>(bolt_rewrite_opts::ParsedOpts{});
+  Ctx.addView<&clv2::BoltRuntimeLibsOptsReg>(bolt_rtlibs_opts::ParsedOpts{});
+}
+
 /// Create BinaryContext for a given architecture \p ArchName and
 /// triple \p TripleName.
 Expected<std::unique_ptr<BinaryContext>> BinaryContext::createBinaryContext(
     Triple TheTriple, std::shared_ptr<orc::SymbolStringPool> SSP,
     StringRef InputFileName, SubtargetFeatures *Features, bool IsPIC,
-    std::unique_ptr<DWARFContext> DwCtx, JournalingStreams Logger) {
+    std::unique_ptr<DWARFContext> DwCtx, JournalingStreams Logger,
+    clv2::OptionsContext *OptsCtx) {
   StringRef ArchName = "";
   std::string FeaturesStr = "";
   switch (TheTriple.getArch()) {
@@ -240,11 +226,15 @@ Expected<std::unique_ptr<BinaryContext>> BinaryContext::createBinaryContext(
         make_error_code(std::errc::not_supported),
         Twine("BOLT-ERROR: no register info for target ", TripleName));
 
-  // Set up disassembler. The MCAsmInfo holds a reference to MCTargetOptions, so
-  // make it static to outlive the AsmInfo.
-  static const MCTargetOptions MCOptions;
+  // Set up disassembler.  MCAsmInfo holds a reference to MCTargetOptions, so
+  // these are owned by the BinaryContext below rather than being a shared
+  // static -- a static both defeats parallel in-process runs and leaves
+  // MCAsmInfo's ctor reading options through an empty context.
+  auto MCOptions = std::make_unique<MCTargetOptions>();
+  if (OptsCtx)
+    MCOptions->OptsCtx = OptsCtx;
   std::unique_ptr<MCAsmInfo> AsmInfo(
-      TheTarget->createMCAsmInfo(*MRI, TheTriple, MCOptions));
+      TheTarget->createMCAsmInfo(*MRI, TheTriple, *MCOptions));
   if (!AsmInfo)
     return createStringError(
         make_error_code(std::errc::not_supported),
@@ -255,8 +245,8 @@ Expected<std::unique_ptr<BinaryContext>> BinaryContext::createBinaryContext(
   // override the default AsmInfo behavior to emit names the way we want.
   AsmInfo->setAllowAtInName(true);
 
-  std::unique_ptr<const MCSubtargetInfo> STI(
-      TheTarget->createMCSubtargetInfo(TheTriple, "", FeaturesStr));
+  std::unique_ptr<const MCSubtargetInfo> STI(TheTarget->createMCSubtargetInfo(
+      TheTriple, "", FeaturesStr, llvm::clv2::defaultOptionsContext()));
   if (!STI)
     return createStringError(
         make_error_code(std::errc::not_supported),
@@ -304,22 +294,29 @@ Expected<std::unique_ptr<BinaryContext>> BinaryContext::createBinaryContext(
       TheTarget->createMCCodeEmitter(*MII, *Ctx));
 
   auto BC = std::make_unique<BinaryContext>(
-      std::move(Ctx), std::move(DwCtx), std::make_unique<Triple>(TheTriple),
-      std::move(SSP), TheTarget, std::string(TripleName), std::move(MCE),
-      std::move(MOFI), std::move(AsmInfo), std::move(MII), std::move(STI),
+      OptsCtx, std::move(Ctx), std::move(DwCtx),
+      std::make_unique<Triple>(TheTriple), std::move(SSP), TheTarget,
+      std::string(TripleName), std::move(MCE), std::move(MOFI),
+      std::move(AsmInfo), std::move(MII), std::move(STI),
       std::move(InstructionPrinter), std::move(MIA), nullptr, std::move(MRI),
       std::move(DisAsm), Logger);
 
   // Use large code model encoding for AArch64 (always). For X86, this is
   // updated after detecting .ltext if unset.
   // Otherwise allow the user to force it via `--large-code-model` flag.
-  if (TheTriple.getArch() == llvm::Triple::aarch64)
+  if (TheTriple.getArch() == llvm::Triple::aarch64) {
     BC->UseLargeCodeModel = true;
-  else if (opts::LargeCodeModel.getNumOccurrences())
-    BC->UseLargeCodeModel = opts::LargeCodeModel;
+  } else {
+    // OptsCtx is the caller-supplied context and is legitimately null here;
+    // read through the one the constructor actually installed.
+    auto *UtilOpts = bolt_utils_opts::getBoltUtilsOpts(BC->getOptionsContext());
+    if (UtilOpts && UtilOpts->specified<&clv2::BOLT_LargeCodeModel>())
+      BC->UseLargeCodeModel = UtilOpts->get<&clv2::BOLT_LargeCodeModel>();
+  }
 
+  BC->MCOptions = std::move(MCOptions);
   BC->MAB = std::unique_ptr<MCAsmBackend>(
-      BC->TheTarget->createMCAsmBackend(*BC->STI, *BC->MRI, MCTargetOptions()));
+      BC->TheTarget->createMCAsmBackend(*BC->STI, *BC->MRI, *BC->MCOptions));
 
   BC->setFilename(InputFileName);
 
@@ -335,15 +332,23 @@ Expected<std::unique_ptr<BinaryContext>> BinaryContext::createBinaryContext(
         make_error_code(std::errc::not_supported),
         Twine("BOLT-ERROR: no disassembler info for target ", TripleName));
 
+  // The context was supplied to the constructor, so it is already in place --
+  // and, unlike before, was in place for the option reads the ctor performs.
+  // Propagate it to MIB, which is installed after construction.
+  if (BC->MIB)
+    BC->MIB->setOptionsContext(*BC->OptsCtx);
+
   return std::move(BC);
 }
 
 bool BinaryContext::forceSymbolRelocations(StringRef SymbolName) const {
-  if (opts::HotText &&
-      (SymbolName == "__hot_start" || SymbolName == "__hot_end"))
+  auto *UtilOpts = getBoltUtilsOpts(getOptionsContext());
+  bool HotText = UtilOpts->get<&clv2::BOLT_HotText>();
+  if (HotText && (SymbolName == "__hot_start" || SymbolName == "__hot_end"))
     return true;
 
-  if (opts::HotData &&
+  bool HotData = UtilOpts->get<&clv2::BOLT_HotData>();
+  if (HotData &&
       (SymbolName == "__hot_data_start" || SymbolName == "__hot_data_end"))
     return true;
 
@@ -490,8 +495,9 @@ BinaryContext::handleAddressRef(uint64_t Address, BinaryFunction &BF,
       // of dynamic relocs, as we currently do not support cloning them.
       // Notice: we might fail to link because of this, if the original constant
       // island we are referring would be emitted too far away.
-      if (IslandIter->second->hasDynamicRelocationAtIsland() ||
-          !opts::CloneConstantIsland) {
+      auto *CoreOpts = getBoltCoreOpts(getOptionsContext());
+      bool CloneCI = CoreOpts->get<&clv2::BOLTCORE_CloneConstantIsland>();
+      if (IslandIter->second->hasDynamicRelocationAtIsland() || !CloneCI) {
         MCSymbol *IslandSym =
             IslandIter->second->getOrCreateIslandAccess(Address);
         if (IslandSym)
@@ -519,7 +525,7 @@ BinaryContext::handleAddressRef(uint64_t Address, BinaryFunction &BF,
       if (Address != BF.getAddress()) {
         // The address could potentially escape. Mark it as another entry
         // point into the function.
-        if (opts::Verbosity >= 1) {
+        if (opts::getVerbosity(*this) >= 1) {
           this->outs() << "BOLT-INFO: potentially escaped address 0x"
                        << Twine::utohexstr(Address) << " in function " << BF
                        << '\n';
@@ -601,7 +607,7 @@ MemoryContentsType BinaryContext::analyzeMemoryAt(uint64_t Address,
     // No section - possibly an absolute address. Since we don't allow
     // internal function addresses to escape the function scope - we
     // consider it a tail call.
-    if (opts::Verbosity > 1) {
+    if (opts::getVerbosity(*this) > 1) {
       this->errs() << "BOLT-WARNING: no section for address 0x"
                    << Twine::utohexstr(Address) << " referenced from function "
                    << BF << '\n';
@@ -775,6 +781,8 @@ bool BinaryContext::analyzeJumpTable(const uint64_t Address,
 }
 
 void BinaryContext::populateJumpTables() {
+  auto *UtilOpts = getBoltUtilsOpts(getOptionsContext());
+  bool StrictMode = UtilOpts->get<&clv2::BOLT_StrictMode>();
   LLVM_DEBUG(dbgs() << "DataPCRelocations: " << DataPCRelocations.size()
                     << '\n');
   for (auto JTI = JumpTables.begin(), JTE = JumpTables.end(); JTI != JTE;
@@ -831,7 +839,7 @@ void BinaryContext::populateJumpTables() {
 
     // In strict mode, erase PC-relative relocation record. Later we check that
     // all such records are erased and thus have been accounted for.
-    if (opts::StrictMode && JT->Type == JumpTable::JTT_PIC) {
+    if (StrictMode && JT->Type == JumpTable::JTT_PIC) {
       for (uint64_t Address = JT->getAddress();
            Address < JT->getAddress() + JT->getSize();
            Address += JT->EntrySize) {
@@ -845,10 +853,10 @@ void BinaryContext::populateJumpTables() {
         addFragmentsToSkip(Frag);
   }
 
-  if (opts::StrictMode && DataPCRelocations.size()) {
+  if (StrictMode && DataPCRelocations.size()) {
     this->errs() << "BOLT-ERROR: " << DataPCRelocations.size()
                  << " unclaimed PC-relative relocation(s) left in data";
-    if (opts::Verbosity) {
+    if (opts::getVerbosity(*this)) {
       this->errs() << ":\n";
       for (uint64_t RelocOffset : DataPCRelocations)
         this->errs() << "  @0x" << Twine::utohexstr(RelocOffset) << '\n';
@@ -877,7 +885,7 @@ void BinaryContext::skipMarkedFragments() {
     BinaryFunction *BF = FragmentQueue[I];
     assert(FragmentsToSkip.count(BF) &&
            "internal error in traversing function fragments");
-    if (opts::Verbosity >= 1)
+    if (opts::getVerbosity(*this) >= 1)
       this->errs() << "BOLT-WARNING: Ignoring " << BF->getPrintName() << '\n';
     BF->setSimple(false);
     BF->setHasIndirectTargetToSplitFragment(true);
@@ -940,7 +948,7 @@ BinaryContext::getOrCreateJumpTable(BinaryFunction &Function, uint64_t Address,
     assert(llvm::all_of(JT->Parents, isSibling) &&
            "cannot reuse jump table of a different function");
     (void)isSibling;
-    if (opts::Verbosity > 2) {
+    if (opts::getVerbosity(*this) > 2) {
       this->outs() << "BOLT-INFO: multiple fragments access the same jump table"
                    << ": " << *JT->Parents[0] << "; " << Function << '\n';
       JT->print(this->outs());
@@ -974,7 +982,7 @@ BinaryContext::getOrCreateJumpTable(BinaryFunction &Function, uint64_t Address,
                                 JumpTable::LabelMapType{{0, JTLabel}},
                                 *getSectionForAddress(Address));
   JT->Parents.push_back(&Function);
-  if (opts::Verbosity > 2)
+  if (opts::getVerbosity(*this) > 2)
     JT->print(this->outs());
   JumpTables.emplace(Address, JT);
 
@@ -1185,7 +1193,9 @@ void BinaryContext::adjustCodePadding() {
       }
     }
   }
-  if (NumInvalid && opts::FailOnInvalidPadding) {
+  auto *CoreOpts = getBoltCoreOpts(getOptionsContext());
+  bool FailOnInvalid = CoreOpts->get<&clv2::BOLTCORE_FailOnInvalidPadding>();
+  if (NumInvalid && FailOnInvalid) {
     this->errs() << "BOLT-ERROR: found " << NumInvalid
                  << " instance(s) of invalid code padding\n";
     exit(1);
@@ -1331,7 +1341,7 @@ void BinaryContext::generateSymbolHashes() {
       // Ignore collisions for symbols that appear to be padding
       // (i.e. all zeros or a "hole")
       if (!isPadding(BD)) {
-        if (opts::Verbosity) {
+        if (opts::getVerbosity(*this)) {
           this->errs() << "BOLT-WARNING: collision detected when hashing " << BD
                        << " with new name (" << NewName << "), skipping.\n";
         }
@@ -1347,7 +1357,7 @@ void BinaryContext::generateSymbolHashes() {
   if (NumCollisions) {
     this->errs() << "BOLT-WARNING: " << NumCollisions
                  << " collisions detected while hashing binary objects";
-    if (!opts::Verbosity)
+    if (!opts::getVerbosity(*this))
       this->errs() << ". Use -v=1 to see the list.";
     this->errs() << '\n';
   }
@@ -1365,7 +1375,7 @@ bool BinaryContext::registerFragment(BinaryFunction &TargetFunction,
     TargetFunction.setSimple(false);
     Function.setSimple(false);
   }
-  if (opts::Verbosity >= 1) {
+  if (opts::getVerbosity(*this) >= 1) {
     this->outs() << "BOLT-INFO: marking " << TargetFunction
                  << " as a fragment of " << Function << '\n';
   }
@@ -1512,7 +1522,7 @@ void BinaryContext::processInterproceduralReferences() {
     if (isAArch64() && handleAArch64Veneer(Address))
       continue;
 
-    if (opts::processAllFunctions()) {
+    if (processAllFunctions(this->getOptionsContext())) {
       this->errs() << "BOLT-ERROR: cannot process binaries with unmarked "
                    << "object in code at address 0x"
                    << Twine::utohexstr(Address) << " belonging to section "
@@ -1540,7 +1550,7 @@ void BinaryContext::processInterproceduralReferences() {
 }
 
 void BinaryContext::postProcessSymbolTable() {
-  if (!opts::ReorderData.empty()) {
+  if (!bolt_passes_opts::getReorderData(*this).empty()) {
     fixBinaryDataHoles();
     bool Valid = true;
     for (auto &Entry : BinaryDataMap) {
@@ -1762,8 +1772,9 @@ static StringRef getDWOFilePath(const DWARFUnit *DWOCU) {
 }
 
 /// Reclaim the page-cache pages of the still-mapped .dwo backing \p DWOCU.
-static void pageOutDWOMapping(const DWARFUnit *DWOCU) {
-  if (!opts::DropDWOPageCache || !DWOCU)
+static void pageOutDWOMapping(const clv2::OptionsContext &Ctx,
+                              const DWARFUnit *DWOCU) {
+  if (!bolt_core_opts::getDropDwoPageCache(Ctx) || !DWOCU)
     return;
   const object::ObjectFile *File = DWOCU->getContext().getDWARFObj().getFile();
   if (!File)
@@ -1779,7 +1790,8 @@ static void pageOutDWOMapping(const DWARFUnit *DWOCU) {
 /// \p FellBackToRelative is non-null, it is set to true when the compilation
 /// directory was missing and the relative path was used instead. If
 /// \p DWONameOut is non-null, it receives the raw DW_AT_dwo_name.
-static SmallString<128> getDWOAbsolutePath(DWARFUnit &SkeletonCU,
+static SmallString<128> getDWOAbsolutePath(const clv2::OptionsContext &Ctx,
+                                           DWARFUnit &SkeletonCU,
                                            bool *FellBackToRelative = nullptr,
                                            std::string *DWONameOut = nullptr) {
   std::string DWOName =
@@ -1789,8 +1801,9 @@ static SmallString<128> getDWOAbsolutePath(DWARFUnit &SkeletonCU,
   SmallString<128> AbsolutePath(DWOName);
 
   std::string DWOCompDir;
-  if (!opts::CompDirOverride.empty()) {
-    DWOCompDir = opts::CompDirOverride;
+  const std::string CompDirOverride = bolt_core_opts::getCompDirOverride(Ctx);
+  if (!CompDirOverride.empty()) {
+    DWOCompDir = CompDirOverride;
   } else {
     DWOCompDir = SkeletonCU.getCompilationDir();
     if (!sys::fs::exists(DWOCompDir) && sys::fs::exists(DWOName)) {
@@ -1818,7 +1831,7 @@ std::optional<DWARFUnit *> BinaryContext::getDWOCU(uint64_t DWOId) {
   // hot path.
   SmallString<128> AbsolutePath;
   if (!SkeletonCU.getDWO())
-    AbsolutePath = getDWOAbsolutePath(SkeletonCU);
+    AbsolutePath = getDWOAbsolutePath(getOptionsContext(), SkeletonCU);
 
   DWARFUnit *DWOCU =
       SkeletonCU
@@ -1843,7 +1856,7 @@ void BinaryContext::releaseDWOCU(uint64_t DWOId) {
   const std::string Path = getDWOFilePath(DWOCU).str();
   Iter->second->clearDWO();
   // Only effective now that the last mapping of the file is gone.
-  if (opts::DropDWOPageCache)
+  if (bolt_core_opts::getDropDwoPageCache(getOptionsContext()))
     dropFileFromPageCache(Path);
 }
 
@@ -1853,7 +1866,7 @@ void BinaryContext::releaseAllDWOContexts() {
   // collectDebugScopeBoundaries, which opens CUs directly via
   // getNonSkeletonUnitDIE).
   std::vector<std::string> Paths;
-  if (opts::DropDWOPageCache) {
+  if (bolt_core_opts::getDropDwoPageCache(getOptionsContext())) {
     Paths.reserve(UsesDWP ? 1 : DWOIdToSkeletonCU.size());
     for (auto &KV : DWOIdToSkeletonCU) {
       DWARFUnit *DWOCU = KV.second->getDWO();
@@ -1898,8 +1911,8 @@ void BinaryContext::preprocessDWODebugInfo() {
       continue;
     std::string DWOName;
     bool FellBackToRelative = false;
-    SmallString<128> AbsolutePath =
-        getDWOAbsolutePath(*DwarfUnit, &FellBackToRelative, &DWOName);
+    SmallString<128> AbsolutePath = getDWOAbsolutePath(
+        getOptionsContext(), *DwarfUnit, &FellBackToRelative, &DWOName);
     if (FellBackToRelative)
       this->outs()
           << "BOLT-WARNING: Debug Fission: Debug Compilation Directory of "
@@ -1933,7 +1946,7 @@ void BinaryContext::preprocessDWODebugInfo() {
     // In this loop we're touching a large number of pages, in streaming fashion
     // -- so keep OS file cache usage under control.
     if (!UsesDWP)
-      pageOutDWOMapping(DWOCU);
+      pageOutDWOMapping(getOptionsContext(), DWOCU);
   }
   if (!DWOIdToSkeletonCU.empty())
     this->outs() << "BOLT-INFO: processing split DWARF\n";
@@ -2013,7 +2026,7 @@ void BinaryContext::preprocessDebugInfo() {
     }
   }
 
-  if (opts::Verbosity >= 1) {
+  if (opts::getVerbosity(*this) >= 1) {
     this->outs() << "BOLT-INFO: " << ProcessedCUs.size() << " out of "
                  << DwCtx->getNumCompileUnits() << " CUs will be updated\n";
   }
@@ -2175,7 +2188,7 @@ bool BinaryContext::shouldEmit(const BinaryFunction &Function) const {
   if (HasRelocations && Function.isFolded())
     return false;
 
-  if (opts::processAllFunctions())
+  if (processAllFunctions(this->getOptionsContext()))
     return true;
 
   if (Function.isIgnored())
@@ -2417,12 +2430,16 @@ void BinaryContext::printInstruction(raw_ostream &OS, const MCInst &Instruction,
   if (MCSymbol *Label = MIB->getInstLabel(Instruction))
     OS << " # Label: " << *Label;
 
-  MIB->printAnnotations(Instruction, OS, PrintMemData || opts::PrintMemData);
+  auto *CoreOpts = getBoltCoreOpts(getOptionsContext());
+  bool OptPrintMemData = CoreOpts->get<&clv2::BOLTCORE_PrintMemData>();
+  MIB->printAnnotations(Instruction, OS, PrintMemData || OptPrintMemData);
 
-  if (opts::PrintDebugInfo)
+  bool OptPrintDebugInfo = CoreOpts->get<&clv2::BOLTCORE_PrintDebugInfo>();
+  if (OptPrintDebugInfo)
     printDebugInfo(OS, Instruction, Function, DwCtx.get());
 
-  if ((opts::PrintRelocations || PrintRelocations) && Function) {
+  bool OptPrintRelocations = CoreOpts->get<&clv2::BOLTCORE_PrintRelocations>();
+  if ((OptPrintRelocations || PrintRelocations) && Function) {
     const uint64_t Size = computeCodeSize(&Instruction, &Instruction + 1);
     Function->printRelocations(OS, Offset, Size);
   }
@@ -2834,8 +2851,7 @@ BinaryContext::calculateEmittedSize(BinaryFunction &BF, bool FixBranches) {
   // Create local MC context to isolate the effect of ephemeral code emission.
   IndependentCodeEmitter MCEInstance = createIndependentMCCodeEmitter();
   MCContext *LocalCtx = MCEInstance.LocalCtx.get();
-  MCAsmBackend *MAB =
-      TheTarget->createMCAsmBackend(*STI, *MRI, MCTargetOptions());
+  MCAsmBackend *MAB = TheTarget->createMCAsmBackend(*STI, *MRI, *MCOptions);
 
   SmallString<256> Code;
   raw_svector_ostream VecOS(Code);
@@ -2938,7 +2954,7 @@ bool BinaryContext::validateInstructionEncoding(
   MCE->encodeInstruction(Inst, Code, Fixups, *STI);
   auto OutputSequence = ArrayRef<uint8_t>((uint8_t *)Code.data(), Code.size());
   if (InputSequence != OutputSequence) {
-    if (opts::Verbosity > 1) {
+    if (opts::getVerbosity(*this) > 1) {
       this->errs() << "BOLT-WARNING: mismatched encoding detected\n"
                    << "      input: " << InputSequence << '\n'
                    << "     output: " << OutputSequence << '\n';
@@ -2952,8 +2968,11 @@ bool BinaryContext::validateInstructionEncoding(
 uint64_t BinaryContext::getHotThreshold() const {
   static uint64_t Threshold = 0;
   if (Threshold == 0) {
+    auto *UtilOpts = getBoltUtilsOpts(getOptionsContext());
+    unsigned ExecutionCountThreshold =
+        UtilOpts->get<&clv2::BOLT_ExecutionCountThreshold>();
     Threshold = std::max(
-        (uint64_t)opts::ExecutionCountThreshold,
+        (uint64_t)ExecutionCountThreshold,
         NumProfiledFuncs ? SumExecutionCount / (2 * NumProfiledFuncs) : 1);
   }
   return Threshold;

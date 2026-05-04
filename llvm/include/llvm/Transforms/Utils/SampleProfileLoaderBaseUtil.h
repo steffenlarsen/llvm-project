@@ -17,18 +17,27 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ProfileData/SampleProf.h"
-#include "llvm/Support/CommandLine.h"
 
 namespace llvm {
 using namespace sampleprof;
 
+namespace clv2 {
+class OptionsContext;
+}
+
+class Function;
 class ProfileSummaryInfo;
 class Module;
 
-extern LLVM_ABI cl::opt<unsigned> SampleProfileMaxPropagateIterations;
-extern LLVM_ABI cl::opt<unsigned> SampleProfileRecordCoverage;
-extern LLVM_ABI cl::opt<unsigned> SampleProfileSampleCoverage;
-extern LLVM_ABI cl::opt<bool> NoWarnSampleUnused;
+LLVM_ABI bool getNoWarnSampleUnused(const clv2::OptionsContext &Ctx);
+
+LLVM_ABI bool getSampleProfileUseProfi(const clv2::OptionsContext &Ctx);
+LLVM_ABI unsigned
+getSampleProfileMaxPropagateIterations(const clv2::OptionsContext &Ctx);
+LLVM_ABI unsigned
+getSampleProfileRecordCoverage(const clv2::OptionsContext &Ctx);
+LLVM_ABI unsigned
+getSampleProfileSampleCoverage(const clv2::OptionsContext &Ctx);
 
 namespace sampleprofutil {
 

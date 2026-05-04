@@ -25,6 +25,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PPCallbacksTracker.h"
+#include "clang-tools-extra/ClangToolsExtraOptionsOptInfos.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/Basic/SourceManager.h"
@@ -39,7 +40,8 @@
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/OptTable.h"
 #include "llvm/Option/Option.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/GlobPattern.h"
 #include "llvm/Support/InitLLVM.h"
@@ -56,18 +58,39 @@ namespace pp_trace {
 
 static cl::OptionCategory Cat("pp-trace options");
 
-static cl::opt<std::string> Callbacks(
-    "callbacks", cl::init("*"),
-    cl::desc("Comma-separated list of globs describing the list of callbacks "
-             "to output. Globs are processed in order of appearance. Globs "
-             "with the '-' prefix remove callbacks from the set. e.g. "
-             "'*,-Macro*'."),
-    cl::cat(Cat));
+struct PPTraceOptions {
+  std::string Callbacks = "*";
+  std::string OutputFileName = "-";
+};
 
-static cl::opt<std::string> OutputFileName(
-    "output", cl::init("-"),
-    cl::desc("Output trace to the given file name or '-' for stdout."),
-    cl::cat(Cat));
+inline constexpr clv2::OptionsRegistry<&clv2::CTE_PPT_Callbacks,
+                                       &clv2::CTE_PPT_Output>
+    PPTraceOptsReg;
+
+static void
+applyPPTraceOpts(const decltype(PPTraceOptsReg)::ParsedOptionsT &Parsed,
+                 PPTraceOptions &Opts) {
+  Opts.Callbacks = Parsed.get<&clv2::CTE_PPT_Callbacks>();
+  Opts.OutputFileName = Parsed.get<&clv2::CTE_PPT_Output>();
+}
+
+static void configureParser(clv2::OptionParser &P, PPTraceOptions &Opts) {
+  using ParsedT = decltype(PPTraceOptsReg)::ParsedOptionsT;
+  auto *Storage = new ParsedT();
+  decltype(PPTraceOptsReg)::applyDefaultsTo(*Storage);
+  std::vector<clv2::detail::OptionEntry> Entries;
+  std::vector<clv2::detail::AliasEntry> Aliases;
+  std::vector<clv2::detail::SubCommandSpec> SubSpecs;
+  decltype(PPTraceOptsReg)::staticBuildInto(*Storage, Entries, Aliases,
+                                            SubSpecs);
+  for (auto &E : Entries) {
+    if (!E.Cat)
+      E.Cat = &Cat;
+    P.addDynamicEntry(std::move(E));
+  }
+  clv2::registerDynamicPostParseCallback(
+      [Storage, &Opts]() { applyPPTraceOpts(*Storage, Opts); });
+}
 
 [[noreturn]] static void error(Twine Message) {
   WithColor::error() << Message << '\n';
@@ -128,15 +151,19 @@ private:
 int main(int argc, const char **argv) {
   using namespace clang::pp_trace;
   InitLLVM X(argc, argv);
+  PPTraceOptions Opts;
   auto OptionsParser = clang::tooling::CommonOptionsParser::create(
-      argc, argv, Cat, llvm::cl::ZeroOrMore);
+      argc, argv, Cat,
+      [&Opts](clv2::OptionParser &P) { configureParser(P, Opts); },
+      llvm::cl::ZeroOrMore);
   if (!OptionsParser)
     error(toString(OptionsParser.takeError()));
   // Parse the IgnoreCallbacks list into strings.
   SmallVector<StringRef, 32> Patterns;
   FilterType Filters;
-  StringRef(Callbacks).split(Patterns, ",",
-                             /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+  StringRef(Opts.Callbacks)
+      .split(Patterns, ",",
+             /*MaxSplit=*/-1, /*KeepEmpty=*/false);
   for (StringRef Pattern : Patterns) {
     Pattern = Pattern.trim();
     bool Enabled = !Pattern.consume_front("-");
@@ -152,7 +179,8 @@ int main(int argc, const char **argv) {
                                  OptionsParser->getSourcePathList());
 
   std::error_code EC;
-  llvm::ToolOutputFile Out(OutputFileName, EC, llvm::sys::fs::OF_TextWithCRLF);
+  llvm::ToolOutputFile Out(Opts.OutputFileName, EC,
+                           llvm::sys::fs::OF_TextWithCRLF);
   if (EC)
     error(EC.message());
   PPTraceFrontendActionFactory Factory(Filters, Out.os());

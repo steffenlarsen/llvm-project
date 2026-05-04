@@ -31,11 +31,12 @@
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Type.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include <cstdlib>
@@ -50,30 +51,6 @@ using namespace llvm;
 STATISTIC(InflateGPRC, "Number of gprc inputs for getLargestLegalClass");
 STATISTIC(InflateGP8RC, "Number of g8rc inputs for getLargestLegalClass");
 
-static cl::opt<bool>
-EnableBasePointer("ppc-use-base-pointer", cl::Hidden, cl::init(true),
-         cl::desc("Enable use of a base pointer for complex stack frames"));
-
-static cl::opt<bool>
-AlwaysBasePointer("ppc-always-use-base-pointer", cl::Hidden, cl::init(false),
-         cl::desc("Force the use of a base pointer in every function"));
-
-static cl::opt<bool>
-EnableGPRToVecSpills("ppc-enable-gpr-to-vsr-spills", cl::Hidden, cl::init(false),
-         cl::desc("Enable spills from gpr to vsr rather than stack"));
-
-static cl::opt<bool>
-StackPtrConst("ppc-stack-ptr-caller-preserved",
-                cl::desc("Consider R1 caller preserved so stack saves of "
-                         "caller preserved registers can be LICM candidates"),
-                cl::init(true), cl::Hidden);
-
-static cl::opt<unsigned>
-MaxCRBitSpillDist("ppc-max-crbit-spill-dist",
-                  cl::desc("Maximum search distance for definition of CR bit "
-                           "spill on ppc"),
-                  cl::Hidden, cl::init(100));
-
 // Copies/moves of physical accumulators are expensive operations
 // that should be avoided whenever possible. MMA instructions are
 // meant to be used in performance-sensitive computational kernels.
@@ -81,15 +58,34 @@ MaxCRBitSpillDist("ppc-max-crbit-spill-dist",
 // user a tool to detect this expensive operation and either rework
 // their code or report a compiler bug if that turns out to be the
 // cause.
-#ifndef NDEBUG
-static cl::opt<bool>
-ReportAccMoves("ppc-report-acc-moves",
-               cl::desc("Emit information about accumulator register spills "
-                        "and copies"),
-               cl::Hidden, cl::init(false));
-#endif
+static bool getEnableBasePointer(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_EnableBasePointer>(
+      F.getContext().getOptionsContext());
+}
+static bool getAlwaysBasePointer(const Function &F) {
+  return clv2::getOptValOr<&clv2::PowerPCOptsReg, &clv2::PPC_AlwaysBasePointer>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool getEnableGPRToVecSpills(const Function &F) {
+  return clv2::getOptValOr<&clv2::PowerPCOptsReg,
+                           &clv2::PPC_EnableGPRToVecSpills>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool getStackPtrConst(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_StackPtrConst>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getMaxCRBitSpillDist(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_MaxCRBitSpillDist>(
+      F.getContext().getOptionsContext());
+}
 
-extern cl::opt<bool> DisableAutoPairedVecSt;
+static bool getDisableAutoPairedVecSt(bool IsFutureCPU,
+                                      const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::PowerPCOptsReg,
+                                    &clv2::PPC_DisableAutoPairedVecSt>(
+      Ctx, !IsFutureCPU);
+}
 
 static unsigned offsetMinAlignForOpcode(unsigned OpC);
 
@@ -542,7 +538,8 @@ bool PPCRegisterInfo::isCallerPreservedPhysReg(MCRegister PhysReg,
     // uses the TOC). In functions where it isn't reserved (i.e. leaf functions
     // with no TOC access), we can't claim that it is preserved.
     return (getReservedRegs(MF).test(PhysReg));
-  if (StackPtrConst && PhysReg == Subtarget.getStackPointerRegister() &&
+  if (getStackPtrConst(MF.getFunction()) &&
+      PhysReg == Subtarget.getStackPointerRegister() &&
       !MFI.hasVarSizedObjects() && !MFI.hasOpaqueSPAdjustment())
     // The value of the stack pointer does not change within a function after
     // the prologue and before the epilogue if there are no dynamic allocations
@@ -689,12 +686,13 @@ PPCRegisterInfo::getLargestLegalSuperClass(const TargetRegisterClass *RC,
     // FIXME: Currently limited to spilling GP8RC. A follow on patch will add
     // support to spill GPRC.
     if (TM.isELFv2ABI() || Subtarget.isAIXABI()) {
-      if (Subtarget.hasP9Vector() && EnableGPRToVecSpills &&
+      if (Subtarget.hasP9Vector() &&
+          getEnableGPRToVecSpills(MF.getFunction()) &&
           RC == &PPC::G8RCRegClass) {
         InflateGP8RC++;
         return &PPC::SPILLTOVSRRCRegClass;
       }
-      if (RC == &PPC::GPRCRegClass && EnableGPRToVecSpills)
+      if (RC == &PPC::GPRCRegClass && getEnableGPRToVecSpills(MF.getFunction()))
         InflateGPRC++;
     }
 
@@ -1074,7 +1072,7 @@ void PPCRegisterInfo::lowerCRBitSpilling(MachineBasicBlock::iterator II,
     if (Ins->readsRegister(SrcReg, TRI))
       SeenUse = true;
     // Unable to find CR bit definition within maximum search distance.
-    if (CRBitSpillDistance == MaxCRBitSpillDist) {
+    if (CRBitSpillDistance == getMaxCRBitSpillDist(MI.getMF()->getFunction())) {
       Ins = MI;
       break;
     }
@@ -1220,7 +1218,7 @@ void PPCRegisterInfo::emitAccCopyInfo(MachineBasicBlock &MBB,
 #ifdef NDEBUG
   return;
 #else
-  if (ReportAccMoves) {
+  if (false) {
     std::string Dest = PPC::ACCRCRegClass.contains(DestReg) ? "acc" : "uacc";
     std::string Src = PPC::ACCRCRegClass.contains(SrcReg) ? "acc" : "uacc";
     dbgs() << "Emitting copy from " << Src << " to " << Dest << ":\n";
@@ -1234,7 +1232,7 @@ static void emitAccSpillRestoreInfo(MachineBasicBlock &MBB, bool IsPrimed,
 #ifdef NDEBUG
   return;
 #else
-  if (ReportAccMoves) {
+  if (false) {
     dbgs() << "Emitting " << (IsPrimed ? "acc" : "uacc") << " register "
            << (IsRestore ? "restore" : "spill") << ":\n";
     MBB.dump();
@@ -1271,8 +1269,6 @@ void PPCRegisterInfo::spillRegPair(MachineBasicBlock &MBB,
 /// the command line.
 void PPCRegisterInfo::lowerOctWordSpilling(MachineBasicBlock::iterator II,
                                            unsigned FrameIndex) const {
-  assert(DisableAutoPairedVecSt &&
-         "Expecting to do this only if paired vector stores are disabled.");
   MachineInstr &MI = *II; // STXVP <SrcReg>, <offset>
   MachineBasicBlock &MBB = *MI.getParent();
   MachineFunction &MF = *MBB.getParent();
@@ -1294,7 +1290,7 @@ static void emitWAccSpillRestoreInfo(MachineBasicBlock &MBB, bool IsRestore) {
 #ifdef NDEBUG
   return;
 #else
-  if (ReportAccMoves) {
+  if (false) {
     dbgs() << "Emitting wacc register " << (IsRestore ? "restore" : "spill")
            << ":\n";
     MBB.dump();
@@ -1329,7 +1325,8 @@ void PPCRegisterInfo::lowerACCSpilling(MachineBasicBlock::iterator II,
   // adjust the offset of the store that is within the 64-byte stack slot.
   if (IsPrimed)
     BuildMI(MBB, II, DL, TII.get(PPC::XXMFACC), SrcReg).addReg(SrcReg);
-  if (DisableAutoPairedVecSt) {
+  if (getDisableAutoPairedVecSt(Subtarget.isISAFuture(),
+                                Subtarget.getOptionsContext())) {
     spillRegPair(MBB, II, DL, TII, FrameIndex, IsLittleEndian, IsKilled,
                  TargetRegisterInfo::getSubReg(SrcReg, PPC::sub_pair0),
                  IsLittleEndian ? 48 : 0);
@@ -1749,7 +1746,8 @@ PPCRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     lowerACCRestore(II, FrameIndex);
     return true;
   case PPC::STXVP: {
-    if (DisableAutoPairedVecSt) {
+    if (getDisableAutoPairedVecSt(Subtarget.isISAFuture(),
+                                  Subtarget.getOptionsContext())) {
       lowerOctWordSpilling(II, FrameIndex);
       return true;
     }
@@ -1946,9 +1944,9 @@ Register PPCRegisterInfo::getBaseRegister(const MachineFunction &MF) const {
 }
 
 bool PPCRegisterInfo::hasBasePointer(const MachineFunction &MF) const {
-  if (!EnableBasePointer)
+  if (!getEnableBasePointer(MF.getFunction()))
     return false;
-  if (AlwaysBasePointer)
+  if (getAlwaysBasePointer(MF.getFunction()))
     return true;
 
   // If we need to realign the stack, then the stack pointer can no longer

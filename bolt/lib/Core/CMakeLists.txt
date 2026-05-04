@@ -12,9 +12,11 @@ set(LLVM_LINK_COMPONENTS
   )
 
 add_llvm_library(LLVMBOLTCore
+  BoltCoreOptionsGetters.cpp
   AddressMap.cpp
   BinaryBasicBlock.cpp
   BinaryContext.cpp
+  BoltCoreOptions.cpp
   BinaryData.cpp
   BinaryEmitter.cpp
   BinaryFunction.cpp

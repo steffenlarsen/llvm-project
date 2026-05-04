@@ -225,14 +225,16 @@ ArrayRef<MCRegister> FunctionFiller::getRegistersSetUp() const {
 }
 
 static std::unique_ptr<Module>
-createModule(const std::unique_ptr<LLVMContext> &Context, const DataLayout &DL) {
+createModule(const std::unique_ptr<LLVMContext> &Context,
+             const DataLayout &DL) {
   auto Mod = std::make_unique<Module>(ModuleID, *Context);
   Mod->setDataLayout(DL);
   return Mod;
 }
 
 BitVector getFunctionReservedRegs(const TargetMachine &TM) {
-  std::unique_ptr<LLVMContext> Context = std::make_unique<LLVMContext>();
+  std::unique_ptr<LLVMContext> Context =
+      std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
   std::unique_ptr<Module> Module = createModule(Context, TM.createDataLayout());
   auto MMIWP = std::make_unique<MachineModuleInfoWrapperPass>(&TM);
   MachineFunction &MF = createVoidVoidPtrMachineFunction(
@@ -246,7 +248,8 @@ Error assembleToStream(const ExegesisTarget &ET,
                        ArrayRef<MCRegister> LiveIns, const FillFunction &Fill,
                        raw_pwrite_stream &AsmStream, const BenchmarkKey &Key,
                        bool GenerateMemoryInstructions) {
-  auto Context = std::make_unique<LLVMContext>();
+  auto Context =
+      std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
   std::unique_ptr<Module> Module =
       createModule(Context, TM->createDataLayout());
   auto MMIWP = std::make_unique<MachineModuleInfoWrapperPass>(TM.get());
@@ -362,7 +365,8 @@ Expected<ExecutableFunction> ExecutableFunction::create(
     std::unique_ptr<TargetMachine> TM,
     object::OwningBinary<object::ObjectFile> &&ObjectFileHolder) {
   assert(ObjectFileHolder.getBinary() && "cannot create object file");
-  std::unique_ptr<LLVMContext> Ctx = std::make_unique<LLVMContext>();
+  std::unique_ptr<LLVMContext> Ctx =
+      std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
 
   auto SymbolSizes = object::computeSymbolSizes(*ObjectFileHolder.getBinary());
   // Get the size of the function that we want to call into (with the name of

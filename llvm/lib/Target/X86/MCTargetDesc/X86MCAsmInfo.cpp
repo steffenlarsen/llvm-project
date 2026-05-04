@@ -14,7 +14,8 @@
 #include "llvm/ADT/Enum.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCStreamer.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 #include "llvm/TargetParser/Triple.h"
 using namespace llvm;
 
@@ -24,16 +25,21 @@ enum AsmWriterFlavorTy {
   ATT = 0, Intel = 1
 };
 
-static cl::opt<AsmWriterFlavorTy> X86AsmSyntax(
-    "x86-asm-syntax", cl::init(ATT), cl::Hidden,
-    cl::desc("Select the assembly style for input"),
-    cl::values(clEnumValN(ATT, "att", "Emit AT&T-style assembly"),
-               clEnumValN(Intel, "intel", "Emit Intel-style assembly")));
+static AsmWriterFlavorTy X86AsmSyntax = ATT;
 
-static cl::opt<bool>
-MarkedJTDataRegions("mark-data-regions", cl::init(true),
-  cl::desc("Mark code section jump table data regions."),
-  cl::Hidden);
+void llvm::setX86AsmSyntax(unsigned Dialect) {
+  X86AsmSyntax = static_cast<AsmWriterFlavorTy>(Dialect);
+}
+
+static AsmWriterFlavorTy getX86AsmSyntax(const clv2::OptionsContext &Ctx) {
+  return static_cast<AsmWriterFlavorTy>(static_cast<int>(
+      clv2::getOptValOr<&clv2::X86OptsReg, &clv2::X86_AsmSyntax>(
+          Ctx, static_cast<int>(X86AsmSyntax))));
+}
+
+static bool getMarkedJTDataRegions(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::X86_MarkDataRegions>(Ctx);
+}
 
 constexpr EnumStringDef<MCAsmInfo::AtSpecifierKind> AtSpecifierDefs[] = {
     {{"ABS8"}, X86::S_ABS8},
@@ -76,7 +82,7 @@ X86MCAsmInfoDarwin::X86MCAsmInfoDarwin(const Triple &T,
   if (is64Bit)
     CodePointerSize = CalleeSaveStackSlotSize = 8;
 
-  AssemblerDialect = X86AsmSyntax;
+  AssemblerDialect = getX86AsmSyntax(Options.getOptsCtx());
 
   if (!is64Bit)
     Data64bitsDirective = nullptr;       // we can't emit a 64-bit unit
@@ -89,7 +95,7 @@ X86MCAsmInfoDarwin::X86MCAsmInfoDarwin(const Triple &T,
   CommentString = "##";
 
   SupportsDebugInformation = true;
-  UseDataRegionDirectives = MarkedJTDataRegions;
+  UseDataRegionDirectives = getMarkedJTDataRegions(Options.getOptsCtx());
 
   // Exceptions handling
   ExceptionsType = ExceptionHandling::DwarfCFI;
@@ -128,7 +134,7 @@ X86ELFMCAsmInfo::X86ELFMCAsmInfo(const Triple &T,
   // OTOH, stack slot size is always 8 for x86-64, even with the x32 ABI.
   CalleeSaveStackSlotSize = is64Bit ? 8 : 4;
 
-  AssemblerDialect = X86AsmSyntax;
+  AssemblerDialect = getX86AsmSyntax(Options.getOptsCtx());
 
   // Debug Information
   SupportsDebugInformation = true;
@@ -167,7 +173,7 @@ X86MCAsmInfoMicrosoft::X86MCAsmInfoMicrosoft(const Triple &Triple,
 
   ExceptionsType = ExceptionHandling::WinEH;
 
-  AssemblerDialect = X86AsmSyntax;
+  AssemblerDialect = getX86AsmSyntax(Options.getOptsCtx());
 
   AllowAtInName = true;
 
@@ -204,7 +210,7 @@ X86MCAsmInfoGNUCOFF::X86MCAsmInfoGNUCOFF(const Triple &Triple,
     ExceptionsType = ExceptionHandling::DwarfCFI;
   }
 
-  AssemblerDialect = X86AsmSyntax;
+  AssemblerDialect = getX86AsmSyntax(Options.getOptsCtx());
 
   AllowAtInName = true;
 

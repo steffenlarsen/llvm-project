@@ -21,6 +21,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/CodeGen/AntiDepBreaker.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/LatencyPriorityQueue.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -34,11 +35,13 @@
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/Config/llvm-config.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 using namespace llvm;
@@ -52,25 +55,24 @@ STATISTIC(NumFixedAnti, "Number of fixed anti-dependencies");
 // Post-RA scheduling is enabled with
 // TargetSubtargetInfo.enablePostRAScheduler(). This flag can be used to
 // override the target.
-static cl::opt<bool>
-EnablePostRAScheduler("post-RA-scheduler",
-                       cl::desc("Enable scheduling after register allocation"),
-                       cl::init(false), cl::Hidden);
-static cl::opt<std::string>
-EnableAntiDepBreaking("break-anti-dependencies",
-                      cl::desc("Break post-RA scheduling anti-dependencies: "
-                               "\"critical\", \"all\", or \"none\""),
-                      cl::init("none"), cl::Hidden);
-
 // If DebugDiv > 0 then only schedule MBB with (ID % DebugDiv) == DebugMod
-static cl::opt<int>
-DebugDiv("postra-sched-debugdiv",
-                      cl::desc("Debug control MBBs that are scheduled"),
-                      cl::init(0), cl::Hidden);
-static cl::opt<int>
-DebugMod("postra-sched-debugmod",
-                      cl::desc("Debug control MBBs that are scheduled"),
-                      cl::init(0), cl::Hidden);
+
+static bool getPostRaScheduler(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_PostRaScheduler>(Ctx);
+}
+
+static std::string getBreakAntiDependencies(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::CGPassSched1Reg,
+                           &clv2::CGPASS_BreakAntiDependencies>(Ctx, "none");
+}
+
+static int getPostraSchedDebugdiv(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_PostraSchedDebugdiv>(Ctx);
+}
+
+static int getPostraSchedDebugmod(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_PostraSchedDebugmod>(Ctx);
+}
 
 AntiDepBreaker::~AntiDepBreaker() = default;
 
@@ -268,10 +270,12 @@ LLVM_DUMP_METHOD void SchedulePostRATDList::dumpSchedule() const {
 #endif
 
 static bool enablePostRAScheduler(const TargetSubtargetInfo &ST,
-                                  CodeGenOptLevel OptLevel) {
+                                  CodeGenOptLevel OptLevel,
+                                  const clv2::OptionsContext &Ctx) {
   // Check for explicit enable/disable of post-ra scheduling.
-  if (EnablePostRAScheduler.getPosition() > 0)
-    return EnablePostRAScheduler;
+  if (clv2::wasOptSpecified<&clv2::CGPassSched1Reg,
+                            &clv2::CGPASS_PostRaScheduler>(Ctx))
+    return getPostRaScheduler(Ctx);
 
   return ST.enablePostRAScheduler() &&
          OptLevel >= ST.getOptLevelToEnablePostRAScheduler();
@@ -280,17 +284,23 @@ static bool enablePostRAScheduler(const TargetSubtargetInfo &ST,
 bool PostRAScheduler::run(MachineFunction &MF) {
   const auto &Subtarget = MF.getSubtarget();
   // Check that post-RA scheduling is enabled for this target.
-  if (!enablePostRAScheduler(Subtarget, TM->getOptLevel()))
+  const Function &F = MF.getFunction();
+  if (!enablePostRAScheduler(Subtarget, TM->getOptLevel(),
+                             F.getContext().getOptionsContext()))
     return false;
 
   TargetSubtargetInfo::AntiDepBreakMode AntiDepMode =
       Subtarget.getAntiDepBreakMode();
-  if (EnableAntiDepBreaking.getPosition() > 0) {
-    AntiDepMode = (EnableAntiDepBreaking == "all")
-      ? TargetSubtargetInfo::ANTIDEP_ALL
-      : ((EnableAntiDepBreaking == "critical")
-         ? TargetSubtargetInfo::ANTIDEP_CRITICAL
-         : TargetSubtargetInfo::ANTIDEP_NONE);
+  if (clv2::wasOptSpecified<&clv2::CGPassSched1Reg,
+                            &clv2::CGPASS_BreakAntiDependencies>(
+          F.getContext().getOptionsContext())) {
+    AntiDepMode =
+        (getBreakAntiDependencies(F.getContext().getOptionsContext()) == "all")
+            ? TargetSubtargetInfo::ANTIDEP_ALL
+            : ((getBreakAntiDependencies(F.getContext().getOptionsContext()) ==
+                "critical")
+                   ? TargetSubtargetInfo::ANTIDEP_CRITICAL
+                   : TargetSubtargetInfo::ANTIDEP_NONE);
   }
   SmallVector<const TargetRegisterClass *, 4> CriticalPathRCs;
   Subtarget.getCriticalPathRCs(CriticalPathRCs);
@@ -304,9 +314,11 @@ bool PostRAScheduler::run(MachineFunction &MF) {
   for (auto &MBB : MF) {
 #ifndef NDEBUG
     // If DebugDiv > 0 then only schedule MBB with (ID % DebugDiv) == DebugMod
-    if (DebugDiv > 0) {
+    if (getPostraSchedDebugdiv(F.getContext().getOptionsContext()) > 0) {
       static int bbcnt = 0;
-      if (bbcnt++ % DebugDiv != DebugMod)
+      if (bbcnt++ %
+              getPostraSchedDebugdiv(F.getContext().getOptionsContext()) !=
+          getPostraSchedDebugmod(F.getContext().getOptionsContext()))
         continue;
       dbgs() << "*** DEBUG scheduling " << MF.getName() << ":"
              << printMBBReference(MBB) << " ***\n";

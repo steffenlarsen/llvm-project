@@ -21,7 +21,7 @@ namespace {
 // function (e.g. that can be optimized out/...); it just tells us how many
 // bytes exist at the pointer handed back by the function.
 TEST(AllocSize, AllocationBuiltinsTest) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module M("", Context);
   IntegerType *ArgTy = Type::getInt32Ty(Context);
 
@@ -43,4 +43,4 @@ TEST(AllocSize, AllocationBuiltinsTest) {
   // functions.
   EXPECT_FALSE(isAllocationFn(Caller.get(), TLI));
 }
-}
+} // namespace

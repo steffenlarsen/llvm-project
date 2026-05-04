@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LoopIdiomRecognize.cpp - Loop idiom recognition --------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -27,7 +29,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Scalar/LoopIdiomRecognize.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
@@ -62,6 +63,7 @@
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IRBuilder.h"
@@ -80,10 +82,10 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/InstructionCost.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Scalar/LoopIdiomRecognize.h"
 #include "llvm/Transforms/Utils/BuildLibCalls.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
@@ -110,83 +112,62 @@ STATISTIC(NumShiftUntilZero,
 
 namespace llvm {
 bool DisableLIRP::All;
-static cl::opt<bool, true>
-    DisableLIRPAll("disable-" DEBUG_TYPE "-all",
-                   cl::desc("Options to disable Loop Idiom Recognize Pass."),
-                   cl::location(DisableLIRP::All), cl::init(false),
-                   cl::ReallyHidden);
-
 bool DisableLIRP::Memset;
-static cl::opt<bool, true>
-    DisableLIRPMemset("disable-" DEBUG_TYPE "-memset",
-                      cl::desc("Proceed with loop idiom recognize pass, but do "
-                               "not convert loop(s) to memset."),
-                      cl::location(DisableLIRP::Memset), cl::init(false),
-                      cl::ReallyHidden);
-
 bool DisableLIRP::Memcpy;
-static cl::opt<bool, true>
-    DisableLIRPMemcpy("disable-" DEBUG_TYPE "-memcpy",
-                      cl::desc("Proceed with loop idiom recognize pass, but do "
-                               "not convert loop(s) to memcpy."),
-                      cl::location(DisableLIRP::Memcpy), cl::init(false),
-                      cl::ReallyHidden);
-
 bool DisableLIRP::Strlen;
-static cl::opt<bool, true>
-    DisableLIRPStrlen("disable-loop-idiom-strlen",
-                      cl::desc("Proceed with loop idiom recognize pass, but do "
-                               "not convert loop(s) to strlen."),
-                      cl::location(DisableLIRP::Strlen), cl::init(false),
-                      cl::ReallyHidden);
-
 bool DisableLIRP::Wcslen;
-static cl::opt<bool, true>
-    EnableLIRPWcslen("disable-loop-idiom-wcslen",
-                     cl::desc("Proceed with loop idiom recognize pass, "
-                              "enable conversion of loop(s) to wcslen."),
-                     cl::location(DisableLIRP::Wcslen), cl::init(false),
-                     cl::ReallyHidden);
-
 bool DisableLIRP::HashRecognize;
-static cl::opt<bool, true>
-    DisableLIRPHashRecognize("disable-" DEBUG_TYPE "-hashrecognize",
-                             cl::desc("Proceed with loop idiom recognize pass, "
-                                      "but do not do hash-recognize analysis."),
-                             cl::location(DisableLIRP::HashRecognize),
-                             cl::init(false), cl::ReallyHidden);
 
-static cl::opt<bool> UseLIRCodeSizeHeurs(
-    "use-lir-code-size-heurs",
-    cl::desc("Use loop idiom recognition code size heuristics when compiling "
-             "with -Os/-Oz"),
-    cl::init(true), cl::Hidden);
+static bool getDisableLIRPAll(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_DisableLoopIdiomAll>(
+      F.getContext().getOptionsContext(), DisableLIRP::All);
+}
 
-static cl::opt<bool> ForceMemsetPatternIntrinsic(
-    "loop-idiom-force-memset-pattern-intrinsic",
-    cl::desc("Use memset.pattern intrinsic whenever possible"), cl::init(false),
-    cl::Hidden);
+static bool getDisableLIRPMemset(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_DisableLoopIdiomMemset>(
+      F.getContext().getOptionsContext(), DisableLIRP::Memset);
+}
 
-enum class CRCStrategyKind {
-  Disable,
-  Auto,
-  Table,
-  Clmul,
-};
-static cl::opt<CRCStrategyKind> CRCStrategy(
-    DEBUG_TYPE "-crc-strategy",
-    cl::desc("Preferred strategy for optimizing CRC loops"),
-    cl::init(CRCStrategyKind::Auto), cl::Hidden,
-    cl::values(clEnumValN(CRCStrategyKind::Disable, "disable",
-                          "Do not optimize CRC loops"),
-               clEnumValN(CRCStrategyKind::Auto, "auto",
-                          "Use costing to determine strategy"),
-               clEnumValN(CRCStrategyKind::Table, "table",
-                          "Use a Sarwate table when possible"),
-               clEnumValN(CRCStrategyKind::Clmul, "clmul",
-                          "Use carry-less multiplication when possible")));
+static bool getDisableLIRPMemcpy(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_DisableLoopIdiomMemcpy>(
+      F.getContext().getOptionsContext(), DisableLIRP::Memcpy);
+}
 
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
+static clv2::CRCStrategyKind getCRCStrategy(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_CRCStrategy>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getDisableLIRPStrlen(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_DisableLoopIdiomStrlen>(
+      F.getContext().getOptionsContext(), DisableLIRP::Strlen);
+}
+
+static bool getDisableLIRPWcslen(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_DisableLoopIdiomWcslen>(
+      F.getContext().getOptionsContext(), DisableLIRP::Wcslen);
+}
+
+static bool getDisableLIRPHashRecognize(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_DisableLoopIdiomHashrecognize>(
+      F.getContext().getOptionsContext(), DisableLIRP::HashRecognize);
+}
+
+static bool getUseLIRCodeSizeHeurs(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_UseLirCodeSizeHeurs>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getForceMemsetPatternIntrinsic(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_LoopIdiomForceMemsetPatternIntrinsic>(
+      F.getContext().getOptionsContext(), false);
+}
 
 } // namespace llvm
 
@@ -316,7 +297,7 @@ private:
 PreservedAnalyses LoopIdiomRecognizePass::run(Loop &L, LoopAnalysisManager &AM,
                                               LoopStandardAnalysisResults &AR,
                                               LPMUpdater &) {
-  if (DisableLIRP::All)
+  if (getDisableLIRPAll(*L.getHeader()->getParent()))
     return PreservedAnalyses::all();
 
   const auto *DL = &L.getHeader()->getDataLayout();
@@ -363,7 +344,8 @@ bool LoopIdiomRecognize::runOnLoop(Loop *L) {
 
   // Determine if code size heuristics need to be applied.
   ApplyCodeSizeHeuristics =
-      L->getHeader()->getParent()->hasOptSize() && UseLIRCodeSizeHeurs;
+      L->getHeader()->getParent()->hasOptSize() &&
+      getUseLIRCodeSizeHeurs(*L->getHeader()->getParent());
 
   HasMemset = TLI->has(LibFunc_memset);
   // TODO: Unconditionally enable use of the memset pattern intrinsic (or at
@@ -374,8 +356,10 @@ bool LoopIdiomRecognize::runOnLoop(Loop *L) {
   HasMemsetPattern = TLI->has(LibFunc_memset_pattern16);
   HasMemcpy = TLI->has(LibFunc_memcpy);
 
-  if (HasMemset || HasMemsetPattern || ForceMemsetPatternIntrinsic ||
-      HasMemcpy || !DisableLIRP::HashRecognize)
+  if (HasMemset || HasMemsetPattern ||
+      getForceMemsetPatternIntrinsic(*CurLoop->getHeader()->getParent()) ||
+      HasMemcpy ||
+      !getDisableLIRPHashRecognize(*CurLoop->getHeader()->getParent()))
     if (SE->hasLoopInvariantBackedgeTakenCount(L))
       return runOnCountableLoop();
 
@@ -420,7 +404,9 @@ bool LoopIdiomRecognize::runOnCountableLoop() {
   }
 
   // Attempt to optimize a CRC loop if one is detected by HashRecognize.
-  if (!DisableLIRP::HashRecognize && CRCStrategy != CRCStrategyKind::Disable)
+  const Function &LoopF = *CurLoop->getHeader()->getParent();
+  if (!getDisableLIRPHashRecognize(LoopF) &&
+      getCRCStrategy(LoopF) != clv2::CRCStrategyKind::Disable)
     if (auto Res = HashRecognize(*CurLoop, *SE).getResult())
       MadeChange |= optimizeCRCLoop(*Res);
 
@@ -536,7 +522,7 @@ LoopIdiomRecognize::isLegalStore(StoreInst *SI) {
   // If we're allowed to form a memset, and the stored value would be
   // acceptable for memset, use it.
   if (!MustPreserveExternalState && !UnorderedAtomic && HasMemset &&
-      SplatValue && !DisableLIRP::Memset &&
+      SplatValue && !getDisableLIRPMemset(*CurLoop->getHeader()->getParent()) &&
       // Verify that the stored value is loop invariant.  If not, we can't
       // promote the memset.
       CurLoop->isLoopInvariant(SplatValue)) {
@@ -544,8 +530,9 @@ LoopIdiomRecognize::isLegalStore(StoreInst *SI) {
     return LegalStoreKind::Memset;
   }
   if (!MustPreserveExternalState && !UnorderedAtomic &&
-      (HasMemsetPattern || ForceMemsetPatternIntrinsic) &&
-      !DisableLIRP::Memset &&
+      (HasMemsetPattern ||
+       getForceMemsetPatternIntrinsic(*CurLoop->getHeader()->getParent())) &&
+      !getDisableLIRPMemset(*CurLoop->getHeader()->getParent()) &&
       // Don't create memset_pattern16s with address spaces.
       StorePtr->getType()->getPointerAddressSpace() == 0 &&
       getMemSetPatternValue(StoredVal, DL)) {
@@ -554,7 +541,7 @@ LoopIdiomRecognize::isLegalStore(StoreInst *SI) {
   }
 
   // Otherwise, see if the store can be turned into a memcpy.
-  if (HasMemcpy && !DisableLIRP::Memcpy) {
+  if (HasMemcpy && !getDisableLIRPMemcpy(*CurLoop->getHeader()->getParent())) {
     // Check to see if the stride matches the size of the store.  If so, then we
     // know that every byte is touched in the loop.
     unsigned StoreSize = DL->getTypeStoreSize(SI->getValueOperand()->getType());
@@ -841,7 +828,8 @@ bool LoopIdiomRecognize::processLoopMemCpy(MemCpyInst *MCI,
     return false;
 
   // If we're not allowed to hack on memcpy, we fail.
-  if ((!HasMemcpy && !MCI->isForceInlined()) || DisableLIRP::Memcpy)
+  if ((!HasMemcpy && !MCI->isForceInlined()) ||
+      getDisableLIRPMemcpy(*CurLoop->getHeader()->getParent()))
     return false;
 
   Value *Dest = MCI->getDest();
@@ -904,7 +892,7 @@ bool LoopIdiomRecognize::processLoopMemSet(MemSetInst *MSI,
     return false;
 
   // If we're not allowed to hack on memset, we fail.
-  if (!HasMemset || DisableLIRP::Memset)
+  if (!HasMemset || getDisableLIRPMemset(*CurLoop->getHeader()->getParent()))
     return false;
 
   Value *Pointer = MSI->getDest();
@@ -1159,7 +1147,9 @@ bool LoopIdiomRecognize::processLoopStridedStore(
   Value *MemsetArg;
   std::optional<int64_t> BytesWritten;
 
-  if (PatternValue && (HasMemsetPattern || ForceMemsetPatternIntrinsic)) {
+  if (PatternValue &&
+      (HasMemsetPattern ||
+       getForceMemsetPatternIntrinsic(*CurLoop->getHeader()->getParent()))) {
     const SCEV *TripCountS =
         SE->getTripCountFromExitCount(BECount, IntIdxTy, CurLoop);
     if (!Expander.isSafeToExpand(TripCountS))
@@ -1213,7 +1203,8 @@ bool LoopIdiomRecognize::processLoopStridedStore(
     NewCall = Builder.CreateMemSet(BasePtr, SplatValue, MemsetArg,
                                    MaybeAlign(StoreAlignment),
                                    /*isVolatile=*/false, AATags);
-  } else if (ForceMemsetPatternIntrinsic ||
+  } else if (getForceMemsetPatternIntrinsic(
+                 *CurLoop->getHeader()->getParent()) ||
              isLibFuncEmittable(M, TLI, LibFunc_memset_pattern16)) {
     assert(isa<SCEVConstant>(StoreSizeSCEV) && "Expected constant store size");
 
@@ -1266,7 +1257,9 @@ bool LoopIdiomRecognize::processLoopStridedStore(
       MSSAU->removeMemoryAccess(I, true);
     deleteDeadInstruction(I);
   }
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU &&
+      getVerifyMemorySSA(
+          CurLoop->getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
   ++NumMemSet;
   ExpCleaner.markResultUsed();
@@ -1569,7 +1562,9 @@ bool LoopIdiomRecognize::processLoopStoreOfLoopLoad(
   if (MSSAU)
     MSSAU->removeMemoryAccess(TheStore, true);
   deleteDeadInstruction(TheStore);
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU &&
+      getVerifyMemorySSA(
+          CurLoop->getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
   if (UseMemMove)
     ++NumMemMove;
@@ -1676,11 +1671,11 @@ bool LoopIdiomRecognize::optimizeCRCLoop(const PolynomialInfo &Info) {
     });
   };
 
-  switch (CRCStrategy) {
+  switch (getCRCStrategy(*CurLoop->getHeader()->getParent())) {
   default:
     ReportMissed("disabled by user");
     return false;
-  case CRCStrategyKind::Table:
+  case clv2::CRCStrategyKind::Table:
     // The table strategy is not possible in its current form without a byte-
     // multiple trip count.
     if (Info.TripCount % 8 == 0) {
@@ -1690,11 +1685,11 @@ bool LoopIdiomRecognize::optimizeCRCLoop(const PolynomialInfo &Info) {
     }
     ReportMissed("table strategy forced, but not possible");
     return false;
-  case CRCStrategyKind::Clmul:
+  case clv2::CRCStrategyKind::Clmul:
     optimizeCRCLoopUsingClmul(Info);
     ReportOptimized("clmul", "forced by user");
     return true;
-  case CRCStrategyKind::Auto:
+  case clv2::CRCStrategyKind::Auto:
     // When using the auto strategy, bail if we are optimizing for size since
     // there's usually not a clear size benefit.
     // TODO: The clmul optimization is around the same size in many cases, so it
@@ -1997,7 +1992,10 @@ void LoopIdiomRecognize::optimizeCRCLoopUsingTableLookup(
     for (PHINode *PN : Cleanup)
       RecursivelyDeleteDeadPHINode(PN);
     SE->forgetLoop(CurLoop);
-    if (MSSAU && VerifyMemorySSA)
+    if (MSSAU && getVerifyMemorySSA(CurLoop->getHeader()
+                                        ->getParent()
+                                        ->getContext()
+                                        .getOptionsContext()))
       MSSAU->getMemorySSA()->verifyMemorySSA();
   }
 }
@@ -2220,7 +2218,7 @@ public:
 /// \endcode
 ///
 bool LoopIdiomRecognize::recognizeAndInsertStrLen() {
-  if (DisableLIRP::All)
+  if (getDisableLIRPAll(*CurLoop->getHeader()->getParent()))
     return false;
 
   StrlenVerifier Verifier(CurLoop, SE, TLI);
@@ -2236,12 +2234,12 @@ bool LoopIdiomRecognize::recognizeAndInsertStrLen() {
          "Should be verified to be valid by StrlenVerifier");
 
   if (Verifier.OpWidth == 8) {
-    if (DisableLIRP::Strlen)
+    if (getDisableLIRPStrlen(*CurLoop->getHeader()->getParent()))
       return false;
     if (!isLibFuncEmittable(Preheader->getModule(), TLI, LibFunc_strlen))
       return false;
   } else {
-    if (DisableLIRP::Wcslen)
+    if (getDisableLIRPWcslen(*CurLoop->getHeader()->getParent()))
       return false;
     if (!isLibFuncEmittable(Preheader->getModule(), TLI, LibFunc_wcslen))
       return false;
@@ -3501,7 +3499,7 @@ bool LoopIdiomRecognize::recognizeShiftUntilBitTest() {
                                        CurLoop->getName() + ".ivcheck");
   SmallVector<uint32_t> BranchWeights;
   const bool HasBranchWeights =
-      !ProfcheckDisableMetadataFixes &&
+      !getProfcheckDisableMetadataFixes(LoopHeaderBB->getContext()) &&
       extractBranchWeights(*LoopHeaderBB->getTerminator(), BranchWeights);
 
   auto *BI = Builder.CreateCondBr(IVCheck, SuccessorBB, LoopHeaderBB);
@@ -3849,7 +3847,7 @@ bool LoopIdiomRecognize::recognizeShiftUntilZero() {
   Builder.SetInsertPoint(LoopHeaderBB->getTerminator());
   SmallVector<uint32_t> BranchWeights;
   const bool HasBranchWeights =
-      !ProfcheckDisableMetadataFixes &&
+      !getProfcheckDisableMetadataFixes(LoopHeaderBB->getContext()) &&
       extractBranchWeights(*LoopHeaderBB->getTerminator(), BranchWeights);
 
   auto *BI = Builder.CreateCondBr(CIVCheck, SuccessorBB, LoopHeaderBB);

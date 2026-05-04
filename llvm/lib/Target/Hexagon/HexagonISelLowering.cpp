@@ -49,11 +49,13 @@
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include <algorithm>
 #include <cassert>
@@ -64,32 +66,6 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "hexagon-lowering"
-
-static cl::opt<bool> EmitJumpTables("hexagon-emit-jump-tables",
-  cl::init(true), cl::Hidden,
-  cl::desc("Control jump table emission on Hexagon target"));
-
-static cl::opt<bool>
-    EnableHexSDNodeSched("enable-hexagon-sdnode-sched", cl::Hidden,
-                         cl::desc("Enable Hexagon SDNode scheduling"));
-
-static cl::opt<int> MinimumJumpTables("minimum-jump-tables", cl::Hidden,
-                                      cl::init(5),
-                                      cl::desc("Set minimum jump tables"));
-
-static cl::opt<bool>
-    ConstantLoadsToImm("constant-loads-to-imm", cl::Hidden, cl::init(true),
-                       cl::desc("Convert constant loads to immediate values."));
-
-static cl::opt<bool> AlignLoads("hexagon-align-loads",
-  cl::Hidden, cl::init(false),
-  cl::desc("Rewrite unaligned loads as a pair of aligned loads"));
-
-static cl::opt<bool>
-    DisableArgsMinAlignment("hexagon-disable-args-min-alignment", cl::Hidden,
-                            cl::init(false),
-                            cl::desc("Disable minimum alignment of 1 for "
-                                     "arguments passed by value on stack"));
 
 // Implement calling convention for Hexagon.
 
@@ -469,7 +445,9 @@ HexagonTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 
   if (Subtarget.useHVXOps())
     CCInfo.AnalyzeCallOperands(Outs, CC_Hexagon_HVX);
-  else if (DisableArgsMinAlignment)
+  else if (clv2::getOptValOr<&clv2::HexagonOptsReg,
+                             &clv2::HEX_DisableArgsMinAlignment>(
+               MF.getFunction().getContext().getOptionsContext(), false))
     CCInfo.AnalyzeCallOperands(Outs, CC_Hexagon_Legacy);
   else
     CCInfo.AnalyzeCallOperands(Outs, CC_Hexagon);
@@ -859,7 +837,9 @@ SDValue HexagonTargetLowering::LowerFormalArguments(
 
   if (Subtarget.useHVXOps())
     CCInfo.AnalyzeFormalArguments(Ins, CC_Hexagon_HVX);
-  else if (DisableArgsMinAlignment)
+  else if (clv2::getOptValOr<&clv2::HexagonOptsReg,
+                             &clv2::HEX_DisableArgsMinAlignment>(
+               MF.getFunction().getContext().getOptionsContext(), false))
     CCInfo.AnalyzeFormalArguments(Ins, CC_Hexagon_Legacy);
   else
     CCInfo.AnalyzeFormalArguments(Ins, CC_Hexagon);
@@ -1517,7 +1497,8 @@ HexagonTargetLowering::HexagonTargetLowering(const TargetMachine &TM,
   setMaxAtomicSizeInBitsSupported(64);
   setMinCmpXchgSizeInBits(32);
 
-  if (EnableHexSDNodeSched)
+  if (clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EnableHexSDNodeSched>(
+          Subtarget.getOptionsContext(), false))
     setSchedulingPreference(Sched::VLIW);
   else
     setSchedulingPreference(Sched::Source);
@@ -1608,8 +1589,11 @@ HexagonTargetLowering::HexagonTargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::STACKRESTORE, MVT::Other, Expand);
   setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i32, Custom);
 
-  if (EmitJumpTables)
-    setMinimumJumpTableEntries(MinimumJumpTables);
+  if (clv2::getOptValOrDefault<&clv2::HEX_EmitJumpTables>(
+          Subtarget.getOptionsContext()))
+    setMinimumJumpTableEntries(
+        clv2::getOptValOrDefault<&clv2::HEX_MinimumJumpTables>(
+            Subtarget.getOptionsContext()));
   else
     setMinimumJumpTableEntries(std::numeric_limits<unsigned>::max());
   setOperationAction(ISD::BR_JT, MVT::Other, Expand);
@@ -3213,7 +3197,12 @@ HexagonTargetLowering::LowerUnalignedLoad(SDValue Op, SelectionDAG &DAG)
   if (!LN->isUnindexed())
     DoDefault = true;
 
-  if (!AlignLoads) {
+  if (!clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_AlignLoads>(
+          DAG.getMachineFunction()
+              .getFunction()
+              .getContext()
+              .getOptionsContext(),
+          false)) {
     if (allowsMemoryAccessForAlignment(Ctx, DL, LN->getMemoryVT(),
                                        *LN->getMemOperand()))
       return Op;
@@ -3721,7 +3710,8 @@ bool HexagonTargetLowering::isFPImmLegal(const APFloat &Imm, EVT VT,
 /// to just the constant itself.
 bool HexagonTargetLowering::shouldConvertConstantLoadToIntImm(const APInt &Imm,
                                                               Type *Ty) const {
-  if (!ConstantLoadsToImm)
+  if (!clv2::getOptValOrDefault<&clv2::HEX_ConstantLoadsToImm>(
+          Subtarget.getOptionsContext()))
     return false;
 
   assert(Ty->isIntegerTy());

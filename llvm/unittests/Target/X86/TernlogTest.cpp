@@ -17,6 +17,7 @@
 
 #include "gtest/gtest.h"
 
+#include "llvm/Support/OptionsContext.h"
 #include <random>
 
 namespace llvm {
@@ -167,10 +168,10 @@ struct TernTester {
 };
 
 TEST(TernlogTest, TestConstantFolding) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   FunctionAnalysisManager FAM;
   FunctionPassManager FPM;
-  PassBuilder PB;
+  PassBuilder PB(llvm::clv2::defaultOptionsContext());
   LoopAnalysisManager LAM;
   CGSCCAnalysisManager CGAM;
   ModuleAnalysisManager MAM;

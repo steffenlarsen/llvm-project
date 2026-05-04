@@ -64,12 +64,12 @@ void ProgramPoint::print(raw_ostream &os) const {
   }
   if (!isBlockStart()) {
     os << "<after operation>:"
-       << OpWithFlags(getPrevOp(), OpPrintingFlags().skipRegions());
+       << OpWithFlags(getPrevOp(), opPrintingFlags(getPrevOp()).skipRegions());
     return;
   }
   if (!isBlockEnd()) {
     os << "<before operation>:"
-       << OpWithFlags(getNextOp(), OpPrintingFlags().skipRegions());
+       << OpWithFlags(getNextOp(), opPrintingFlags(getNextOp()).skipRegions());
     return;
   }
   os << "<beginning of empty block>";
@@ -87,7 +87,7 @@ void LatticeAnchor::print(raw_ostream &os) const {
   if (auto *latticeAnchor = llvm::dyn_cast<GenericLatticeAnchor *>(*this))
     return latticeAnchor->print(os);
   if (auto value = llvm::dyn_cast<Value>(*this)) {
-    return value.print(os, OpPrintingFlags().skipRegions());
+    return value.print(os, OpPrintingFlags(value.getContext()).skipRegions());
   }
 
   return llvm::cast<ProgramPoint *>(*this)->print(os);

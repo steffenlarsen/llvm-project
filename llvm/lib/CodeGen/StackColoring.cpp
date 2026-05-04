@@ -28,6 +28,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
@@ -45,6 +46,7 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Use.h"
@@ -52,9 +54,10 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -66,31 +69,19 @@ using namespace llvm;
 
 #define DEBUG_TYPE "stack-coloring"
 
-static cl::opt<bool>
-DisableColoring("no-stack-coloring",
-        cl::init(false), cl::Hidden,
-        cl::desc("Disable stack coloring"));
+static bool getNoStackColoring(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_NoStackColoring>(Ctx);
+}
 
-/// The user may write code that uses allocas outside of the declared lifetime
-/// zone. This can happen when the user returns a reference to a local
-/// data-structure. We can detect these cases and decide not to optimize the
-/// code. If this flag is enabled, we try to save the user. This option
-/// is treated as overriding LifetimeStartOnFirstUse below.
-static cl::opt<bool>
-ProtectFromEscapedAllocas("protect-from-escaped-allocas",
-                          cl::init(false), cl::Hidden,
-                          cl::desc("Do not optimize lifetime zones that "
-                                   "are broken"));
+static bool getProtectFromEscapedAllocas(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ProtectFromEscapedAllocas>(Ctx);
+}
 
-/// Enable enhanced dataflow scheme for lifetime analysis (treat first
-/// use of stack slot as start of slot lifetime, as opposed to looking
-/// for LIFETIME_START marker). See "Implementation notes" below for
-/// more info.
-static cl::opt<bool>
-LifetimeStartOnFirstUse("stackcoloring-lifetime-start-on-first-use",
-        cl::init(true), cl::Hidden,
-        cl::desc("Treat stack lifetimes as starting on first use, not on START marker."));
-
+static bool
+getStackcoloringLifetimeStartOnFirstUse(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::CGPASS_StackcoloringLifetimeStartOnFirstUse>(Ctx);
+}
 
 STATISTIC(NumMarkerSeen,  "Number of lifetime markers found.");
 STATISTIC(StackSpaceSaved, "Number of bytes saved due to merging slots.");
@@ -466,7 +457,10 @@ private:
   /// Returns TRUE if we're using the first-use-begins-lifetime method for
   /// this slot (if FALSE, then the start marker is treated as start of lifetime).
   bool applyFirstUse(int Slot) {
-    if (!LifetimeStartOnFirstUse || ProtectFromEscapedAllocas)
+    if (!getStackcoloringLifetimeStartOnFirstUse(
+            MF->getFunction().getContext().getOptionsContext()) ||
+        getProtectFromEscapedAllocas(
+            MF->getFunction().getContext().getOptionsContext()))
       return false;
     if (ConservativeSlots.test(Slot))
       return false;
@@ -601,7 +595,10 @@ bool StackColoring::isLifetimeStartOrEnd(const MachineInstr &MI,
       isStart = true;
       return true;
     }
-  } else if (LifetimeStartOnFirstUse && !ProtectFromEscapedAllocas) {
+  } else if (getStackcoloringLifetimeStartOnFirstUse(
+                 MF->getFunction().getContext().getOptionsContext()) &&
+             !getProtectFromEscapedAllocas(
+                 MF->getFunction().getContext().getOptionsContext())) {
     if (!MI.isDebugInstr()) {
       bool found = false;
       for (const MachineOperand &MO : MI.operands()) {
@@ -1036,7 +1033,9 @@ void StackColoring::remapInstructions(DenseMap<int, int> &SlotRemap) {
         bool TouchesMemory = I.mayLoadOrStore();
         // If we *don't* protect the user from escaped allocas, don't bother
         // validating the instructions.
-        if (!I.isDebugInstr() && TouchesMemory && ProtectFromEscapedAllocas) {
+        if (!I.isDebugInstr() && TouchesMemory &&
+            getProtectFromEscapedAllocas(
+                MF->getFunction().getContext().getOptionsContext())) {
           SlotIndex Index = Indexes->getInstructionIndex(I);
           const LiveInterval *Interval = &*Intervals[FromSlot];
           assert(Interval->find(Index) != Interval->end() &&
@@ -1245,7 +1244,8 @@ bool StackColoring::run(MachineFunction &Func, bool OnlyRemoveMarkers) {
   // Don't continue because there are not enough lifetime markers, or the
   // stack is too small, or we are told not to optimize the slots, or
   // opt-bisect-limit is skipping this pass.
-  if (NumMarkers < 2 || TotalSize < 16 || DisableColoring ||
+  if (NumMarkers < 2 || TotalSize < 16 ||
+      getNoStackColoring(MF->getFunction().getContext().getOptionsContext()) ||
       OnlyRemoveMarkers) {
     LLVM_DEBUG(dbgs() << "Will not try to merge slots.\n");
     return removeAllMarkers();
@@ -1269,7 +1269,8 @@ bool StackColoring::run(MachineFunction &Func, bool OnlyRemoveMarkers) {
 
   // Search for allocas which are used outside of the declared lifetime
   // markers.
-  if (ProtectFromEscapedAllocas)
+  if (getProtectFromEscapedAllocas(
+          MF->getFunction().getContext().getOptionsContext()))
     removeInvalidSlotRanges();
 
   // Maps old slots to new slots.

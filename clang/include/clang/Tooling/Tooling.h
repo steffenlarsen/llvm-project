@@ -43,11 +43,20 @@
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Option/Option.h"
+#include "llvm/Support/CommandLineTokenizer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/VirtualFileSystem.h"
+#include <cassert>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
+
+namespace llvm {
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
+} // namespace llvm
 
 namespace clang {
 
@@ -88,6 +97,22 @@ public:
                 FileManager *Files,
                 std::shared_ptr<PCHContainerOperations> PCHContainerOps,
                 DiagnosticConsumer *DiagConsumer) = 0;
+
+  /// Set the parsed command-line options for the compilations this action
+  /// drives.  \p Ctx must outlive the action.  FrontendActionFactory forwards
+  /// it to each CompilerInstance, and from there to the ASTContext, so library
+  /// code can read per-job option values instead of process-wide globals.
+  void setOptionsContext(const llvm::clv2::OptionsContext &Ctx) {
+    OptionsCtx = &Ctx;
+  }
+  const llvm::clv2::OptionsContext &getOptionsContext() const {
+    assert(OptionsCtx && "OptionsCtx defaults to the shared context");
+    return *OptionsCtx;
+  }
+
+private:
+  const llvm::clv2::OptionsContext *OptionsCtx =
+      &llvm::clv2::defaultOptionsContext();
 };
 
 /// Interface to generate clang::FrontendActions.
@@ -402,6 +427,16 @@ private:
   DiagnosticConsumer *DiagConsumer = nullptr;
 
   bool PrintErrorMessage = true;
+  const llvm::clv2::OptionsContext *OptionsCtx =
+      &llvm::clv2::defaultOptionsContext();
+
+public:
+  /// Share parsed command-line options with every compilation this tool runs.
+  /// \p Ctx must outlive the tool.  Typically
+  /// CommonOptionsParser::getOptionsContext().
+  void setOptionsContext(const llvm::clv2::OptionsContext &Ctx) {
+    OptionsCtx = &Ctx;
+  }
 };
 
 template <typename T>

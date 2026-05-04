@@ -13,18 +13,29 @@
 #include "MCTargetDesc/NVPTXBaseInfo.h"
 #include "NVPTX.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/Argument.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "NVPTX-aa"
 
-static cl::opt<unsigned> TraverseAddressSpacesLimit(
-    "nvptx-traverse-address-aliasing-limit", cl::Hidden,
-    cl::desc("Depth limit for finding address space through traversal"),
-    cl::init(6));
+static unsigned getTraverseAddressSpacesLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::NVPTX_TraverseAddressSpacesLimit>(
+      F.getContext().getOptionsContext());
+}
+
+/// Extract the parent Function from a Value (Instruction or Argument).
+static const Function *getFunctionFromValue(const Value *V) {
+  if (const auto *I = dyn_cast<Instruction>(V))
+    return I->getFunction();
+  if (const auto *A = dyn_cast<Argument>(V))
+    return A->getParent();
+  return nullptr;
+}
 
 AnalysisKey NVPTXAA::Key;
 
@@ -97,9 +108,12 @@ static AliasResult::Kind getAliasResult(unsigned AS1, unsigned AS2) {
 
 AliasResult NVPTXAAResult::alias(const MemoryLocation &Loc1,
                                  const MemoryLocation &Loc2, AAQueryInfo &AAQI,
-                                 const Instruction *) {
-  unsigned AS1 = getAddressSpace(Loc1.Ptr, TraverseAddressSpacesLimit);
-  unsigned AS2 = getAddressSpace(Loc2.Ptr, TraverseAddressSpacesLimit);
+                                 const Instruction *CtxI) {
+  const Function *F =
+      CtxI ? CtxI->getFunction() : getFunctionFromValue(Loc1.Ptr);
+  unsigned Limit = F ? getTraverseAddressSpacesLimit(*F) : 6;
+  unsigned AS1 = getAddressSpace(Loc1.Ptr, Limit);
+  unsigned AS2 = getAddressSpace(Loc2.Ptr, Limit);
 
   return getAliasResult(AS1, AS2);
 }
@@ -115,7 +129,9 @@ static bool isConstOrParam(unsigned AS) {
 ModRefInfo NVPTXAAResult::getModRefInfoMask(const MemoryLocation &Loc,
                                             AAQueryInfo &AAQI,
                                             bool IgnoreLocals) {
-  if (isConstOrParam(getAddressSpace(Loc.Ptr, TraverseAddressSpacesLimit)))
+  const Function *F = getFunctionFromValue(Loc.Ptr);
+  unsigned Limit = F ? getTraverseAddressSpacesLimit(*F) : 6;
+  if (isConstOrParam(getAddressSpace(Loc.Ptr, Limit)))
     return ModRefInfo::NoModRef;
 
   return ModRefInfo::ModRef;

@@ -25,15 +25,18 @@
 #include "llvm/CodeGen/DFAPacketizer.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBundle.h"
 #include "llvm/CodeGen/ScheduleDAG.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/MCInstrDesc.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -44,8 +47,9 @@ using namespace llvm;
 
 #define DEBUG_TYPE "packets"
 
-static cl::opt<unsigned> InstrLimit("dfa-instr-limit", cl::Hidden,
-  cl::init(0), cl::desc("If present, stops packetizing after N instructions"));
+static unsigned getDfaInstrLimit(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DfaInstrLimit>(Ctx);
+}
 
 static unsigned InstrCount = 0;
 
@@ -169,12 +173,16 @@ void VLIWPacketizerList::PacketizeMIs(MachineBasicBlock *MBB,
   for (SUnit &SU : VLIWScheduler->SUnits)
     MIToSUnit[SU.getInstr()] = &SU;
 
-  bool LimitPresent = InstrLimit.getPosition();
+  const Function *F = &MF.getFunction();
+  bool LimitPresent =
+      false || clv2::wasOptSpecified<&clv2::CGPassSched1Reg,
+                                     &clv2::CGPASS_DfaInstrLimit>(
+                   F->getContext().getOptionsContext());
 
   // The main packetizer loop.
   for (; BeginItr != EndItr; ++BeginItr) {
     if (LimitPresent) {
-      if (InstrCount >= InstrLimit) {
+      if (InstrCount >= getDfaInstrLimit(F->getContext().getOptionsContext())) {
         EndItr = BeginItr;
         break;
       }

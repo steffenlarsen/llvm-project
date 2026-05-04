@@ -200,11 +200,12 @@
 #include "llvm/IR/ReplaceConstant.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/OptimizedStructLayout.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
@@ -217,26 +218,19 @@
 using namespace llvm;
 using namespace AMDGPU;
 
+using LoweringKind = clv2::LDSLoweringKind;
+
+static bool getSuperAlignLDSGlobals(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_SuperAlignLDSGlobals>(
+      M.getContext().getOptionsContext());
+}
+
+static LoweringKind getLoweringKindLoc(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_LowerModuleLDSStrategy>(
+      M.getContext().getOptionsContext());
+}
+
 namespace {
-
-cl::opt<bool> SuperAlignLDSGlobals(
-    "amdgpu-super-align-lds-globals",
-    cl::desc("Increase alignment of LDS if it is not on align boundary"),
-    cl::init(true), cl::Hidden);
-
-enum class LoweringKind { module, table, kernel, hybrid };
-cl::opt<LoweringKind> LoweringKindLoc(
-    "amdgpu-lower-module-lds-strategy",
-    cl::desc("Specify lowering strategy for function LDS access:"), cl::Hidden,
-    cl::init(LoweringKind::hybrid),
-    cl::values(
-        clEnumValN(LoweringKind::table, "table", "Lower via table lookup"),
-        clEnumValN(LoweringKind::module, "module", "Lower via module struct"),
-        clEnumValN(
-            LoweringKind::kernel, "kernel",
-            "Lower variables reachable from one kernel, otherwise abort"),
-        clEnumValN(LoweringKind::hybrid, "hybrid",
-                   "Lower via mixture of above strategies")));
 
 template <typename T> std::vector<T> sortByName(std::vector<T> &&V) {
   llvm::sort(V, [](const auto *L, const auto *R) {
@@ -589,7 +583,7 @@ public:
       DenseSet<GlobalVariable *> &DynamicVariables) {
 
     GlobalVariable *HybridModuleRoot =
-        LoweringKindLoc != LoweringKind::hybrid
+        getLoweringKindLoc(M) != LoweringKind::hybrid
             ? nullptr
             : chooseBestVariableForModuleStrategy(
                   M.getDataLayout(), LDSToKernelsThatNeedToAccessItIndirectly);
@@ -613,7 +607,7 @@ public:
         continue;
       }
 
-      switch (LoweringKindLoc) {
+      switch (getLoweringKindLoc(M)) {
       case LoweringKind::module:
         ModuleScopeVariables.insert(GV);
         break;
@@ -1072,7 +1066,7 @@ public:
   }
 
   bool runOnModule(Module &M) {
-    if (AMDGPUTargetMachine::EnableObjectLinking)
+    if (AMDGPUTargetMachine::getEnableObjectLinking(TM.getOptionsContext()))
       return runOnModuleLinkTime(M);
     return runOnModuleNormal(M);
   }
@@ -1280,7 +1274,7 @@ private:
   static bool superAlignLDSGlobals(Module &M) {
     const DataLayout &DL = M.getDataLayout();
     bool Changed = false;
-    if (!SuperAlignLDSGlobals) {
+    if (!getSuperAlignLDSGlobals(M)) {
       return Changed;
     }
 

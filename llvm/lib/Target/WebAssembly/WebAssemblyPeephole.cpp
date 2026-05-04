@@ -24,15 +24,20 @@
 #include "llvm/CodeGen/MachinePassManager.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/IR/Analysis.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/WebAssembly/WebAssemblyOptionsOptInfos.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "wasm-peephole"
 
-static cl::opt<bool> DisableWebAssemblyFallthroughReturnOpt(
-    "disable-wasm-fallthrough-return-opt", cl::Hidden,
-    cl::desc("WebAssembly: Disable fallthrough-return optimizations."),
-    cl::init(false));
+static bool DisableWebAssemblyFallthroughReturnOpt = false;
+
+static bool getDisableFallthroughReturnOpt(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::WASM_DisableFallthroughReturnOpt>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 class WebAssemblyPeepholeLegacy final : public MachineFunctionPass {
@@ -83,7 +88,7 @@ static bool maybeRewriteToFallthrough(MachineInstr &MI, MachineBasicBlock &MBB,
                                       WebAssemblyFunctionInfo &MFI,
                                       MachineRegisterInfo &MRI,
                                       const WebAssemblyInstrInfo &TII) {
-  if (DisableWebAssemblyFallthroughReturnOpt)
+  if (getDisableFallthroughReturnOpt(MF.getFunction()))
     return false;
   if (&MBB != &MF.back())
     return false;

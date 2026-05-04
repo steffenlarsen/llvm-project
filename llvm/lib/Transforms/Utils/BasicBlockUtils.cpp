@@ -39,10 +39,11 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 #include <cassert>
 #include <cstdint>
 #include <string>
@@ -53,11 +54,11 @@ using namespace llvm;
 
 #define DEBUG_TYPE "basicblock-utils"
 
-static cl::opt<unsigned> MaxDeoptOrUnreachableSuccessorCheckDepth(
-    "max-deopt-or-unreachable-succ-check-depth", cl::init(8), cl::Hidden,
-    cl::desc("Set the maximum path length when checking whether a basic block "
-             "is followed by a block that either has a terminating "
-             "deoptimizing call or is terminated with an unreachable"));
+static unsigned getMaxDeoptOrUnreachableSuccessorCheckDepth(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::TU_MaxDeoptOrUnreachableSuccessorCheckDepth>(
+      F.getContext().getOptionsContext());
+}
 
 /// Zap all the instructions in the block and replace them with an unreachable
 /// instruction and notify the basic block's successors that one of their
@@ -654,7 +655,9 @@ bool llvm::IsBlockFollowedByDeoptOrUnreachable(const BasicBlock *BB) {
   // Remember visited blocks to avoid infinite loop
   SmallPtrSet<const BasicBlock *, 8> VisitedBlocks;
   unsigned Depth = 0;
-  while (BB && Depth++ < MaxDeoptOrUnreachableSuccessorCheckDepth &&
+  while (BB &&
+         Depth++ <
+             getMaxDeoptOrUnreachableSuccessorCheckDepth(*BB->getParent()) &&
          VisitedBlocks.insert(BB).second) {
     if (isa<UnreachableInst>(BB->getTerminator()) ||
         BB->getTerminatingDeoptimizeCall())
@@ -924,7 +927,7 @@ BasicBlock *llvm::ehAwareSplitEdge(BasicBlock *BB, BasicBlock *Succ,
 
     if (MSSAU) {
       MSSAU->applyUpdates(Updates, *DT);
-      if (VerifyMemorySSA)
+      if (getVerifyMemorySSA(BB->getParent()->getContext().getOptionsContext()))
         MSSAU->getMemorySSA()->verifyMemorySSA();
     }
   }

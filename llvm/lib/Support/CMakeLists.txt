@@ -173,7 +173,9 @@ add_llvm_component_library(LLVMSupport
   Chrono.cpp
   COM.cpp
   CodeGenCoverage.cpp
+  CommandLineTokenizer.cpp
   CommandLine.cpp
+  CommandLineV2.cpp
   Compression.cpp
   CRC.cpp
   ConvertUTF.cpp
@@ -266,6 +268,7 @@ add_llvm_component_library(LLVMSupport
   StringRef.cpp
   SuffixTreeNode.cpp
   SuffixTree.cpp
+  SupportOptions.cpp
   SystemUtils.cpp
   TarWriter.cpp
   TextEncoding.cpp

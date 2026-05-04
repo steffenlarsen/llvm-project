@@ -29,6 +29,7 @@
 #include "llvm/ADT/iterator.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/IR/ConstantRange.h"
+#include "llvm/IR/ForceSummaryHotnessType.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Allocator.h"
@@ -52,6 +53,10 @@
 #include <vector>
 
 namespace llvm {
+
+namespace clv2 {
+class OptionsContext;
+}
 
 template <class GraphType> struct GraphTraits;
 
@@ -828,11 +833,9 @@ public:
   using EdgeTy = std::pair<ValueInfo, CalleeInfo>;
 
   /// Types for -force-summary-edges-cold debugging option.
-  enum ForceSummaryHotnessType : unsigned {
-    FSHT_None,
-    FSHT_AllNonCritical,
-    FSHT_All
-  };
+  /// Alias only; the enum lives in ForceSummaryHotnessType.h at namespace
+  /// scope so the options header can name it without including this file.
+  using ForceSummaryHotnessType = ::llvm::ForceSummaryHotnessType;
 
   /// An "identifier" for a virtual function. This contains the type identifier
   /// represented as a GUID and the offset from the address point to the virtual
@@ -2097,16 +2100,19 @@ public:
 
   /// Do the access attribute and DSOLocal propagation in combined index.
   LLVM_ABI void
-  propagateAttributes(const DenseSet<GlobalValue::GUID> &PreservedSymbols);
+  propagateAttributes(const DenseSet<GlobalValue::GUID> &PreservedSymbols,
+                      const clv2::OptionsContext &Ctx);
 
   /// Checks if we can import global variable from another module.
   LLVM_ABI bool canImportGlobalVar(const GlobalValueSummary *S,
-                                   bool AnalyzeRefs) const;
+                                   bool AnalyzeRefs,
+                                   const clv2::OptionsContext &Ctx) const;
 
   /// Same as above but checks whether the global var is importable as a
   /// declaration.
   LLVM_ABI bool canImportGlobalVar(const GlobalValueSummary *S,
-                                   bool AnalyzeRefs, bool &CanImportDecl) const;
+                                   bool AnalyzeRefs, bool &CanImportDecl,
+                                   const clv2::OptionsContext &Ctx) const;
 };
 
 /// GraphTraits definition to build SCC for the index

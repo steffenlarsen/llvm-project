@@ -68,12 +68,17 @@ static MCRegisterInfo *createCSKYMCRegisterInfo(const Triple &TT) {
   return Info;
 }
 
-static MCSubtargetInfo *createCSKYMCSubtargetInfo(const Triple &TT,
-                                                  StringRef CPU, StringRef FS) {
+static MCSubtargetInfo *
+createCSKYMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                          const llvm::clv2::OptionsContext &Ctx) {
   std::string CPUName = std::string(CPU);
   if (CPUName.empty())
     CPUName = "generic";
-  return createCSKYMCSubtargetInfoImpl(TT, CPUName, /*TuneCPU=*/CPUName, FS);
+  MCSubtargetInfo *STI =
+      createCSKYMCSubtargetInfoImpl(TT, CPUName, /*TuneCPU=*/CPUName, FS);
+  if (STI)
+    STI->setOptionsContext(Ctx);
+  return STI;
 }
 
 static MCTargetStreamer *

@@ -72,22 +72,29 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/Passes.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <map>
 
 #define DEBUG_TYPE "hexagon-qfp-optimizer"
 
 using namespace llvm;
 
-cl::opt<bool>
-    DisableQFOptimizer("disable-qfp-opt", cl::init(false),
-                       cl::desc("Disable optimization of Qfloat operations."));
-cl::opt<bool> DisableQFOptForMul(
-    "disable-qfp-opt-mul", cl::init(true),
-    cl::desc("Disable optimization of Qfloat operations for multiply."));
+bool DisableQFOptForMul = true;
+
+static bool getDisableQFOptimizer(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DisableQFPOptimizer>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getDisableQFOptForMul(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DisableQFOptForMul>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 const std::map<unsigned short, unsigned short> QFPInstMap{
@@ -364,7 +371,8 @@ bool HexagonQFPOptimizer::runOnMachineFunction(MachineFunction &MF) {
 
   bool Changed = false;
 
-  if (DisableQFOptimizer)
+  const Function &F = MF.getFunction();
+  if (getDisableQFOptimizer(F))
     return Changed;
 
   HST = &MF.getSubtarget<HexagonSubtarget>();
@@ -385,7 +393,7 @@ bool HexagonQFPOptimizer::runOnMachineFunction(MachineFunction &MF) {
       ++MII; // As MI might be removed.
       if (QFPInstMap.count(MI->getOpcode())) {
         auto OpC = MI->getOpcode();
-        if (DisableQFOptForMul && HII->isQFPMul(MI))
+        if (getDisableQFOptForMul(F) && HII->isQFPMul(MI))
           continue;
         if (OpC != Hexagon::V6_vconv_sf_qf32 &&
             OpC != Hexagon::V6_vconv_hf_qf16) {

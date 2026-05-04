@@ -24,28 +24,36 @@
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 
 using namespace llvm;
-static cl::opt<int64_t>
-    DefaultFunctionEntryCount("profcheck-default-function-entry-count",
-                              cl::init(1000));
-static cl::opt<bool>
-    AnnotateSelect("profcheck-annotate-select", cl::init(true),
-                   cl::desc("Also inject (if missing) and verify MD_prof for "
-                            "`select` instructions"));
-static cl::opt<bool>
-    WeightsForTest("profcheck-weights-for-test", cl::init(false),
-                   cl::desc("Generate weights with small values for tests."));
 
-static cl::opt<uint32_t> SelectTrueWeight(
-    "profcheck-default-select-true-weight", cl::init(2U),
-    cl::desc("When annotating `select` instructions, this value will be used "
-             "for the first ('true') case."));
-static cl::opt<uint32_t> SelectFalseWeight(
-    "profcheck-default-select-false-weight", cl::init(3U),
-    cl::desc("When annotating `select` instructions, this value will be used "
-             "for the second ('false') case."));
+static int64_t getDefaultFunctionEntryCount(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_DefaultFunctionEntryCount>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getAnnotateSelect(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_AnnotateSelect>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getWeightsForTest(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_WeightsForTest>(
+      F.getContext().getOptionsContext(), false);
+}
+
+static unsigned getSelectTrueWeight(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_SelectTrueWeight>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getSelectFalseWeight(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_SelectFalseWeight>(
+      F.getContext().getOptionsContext());
+}
 namespace {
 class ProfileInjector {
   Function &F;
@@ -116,7 +124,7 @@ bool ProfileInjector::inject() {
   // verifier wants to achieve - make dropping / corrupting MD_prof
   // unit-testable)
   if (!F.getEntryCount())
-    F.setEntryCount(DefaultFunctionEntryCount);
+    F.setEntryCount(getDefaultFunctionEntryCount(F));
   // If there is an entry count that's 0, then don't bother injecting. We won't
   // verify these either.
   if (*F.getEntryCount() == 0)
@@ -127,14 +135,14 @@ bool ProfileInjector::inject() {
   // and numerically that may make for a poor unit test.
   uint32_t WeightsForTestOffset = 0;
   for (auto &BB : F) {
-    if (AnnotateSelect) {
+    if (getAnnotateSelect(F)) {
       for (auto &I : BB) {
         if (auto *SI = dyn_cast<SelectInst>(&I)) {
           if (SI->getCondition()->getType()->isVectorTy())
             continue;
           if (I.getMetadata(LLVMContext::MD_prof))
             continue;
-          setBranchWeights(I, {SelectTrueWeight, SelectFalseWeight},
+          setBranchWeights(I, {getSelectTrueWeight(F), getSelectFalseWeight(F)},
                            /*IsExpected=*/false);
         }
       }
@@ -146,7 +154,7 @@ bool ProfileInjector::inject() {
 
     SmallVector<uint32_t> Weights;
     Weights.reserve(Term->getNumSuccessors());
-    if (WeightsForTest) {
+    if (getWeightsForTest(F)) {
       static const std::array Primes{3,  5,  7,  11, 13, 17, 19, 23, 29, 31,
                                      37, 41, 43, 47, 53, 59, 61, 67, 71};
       for (uint32_t I = 0, E = Term->getNumSuccessors(); I < E; ++I)
@@ -251,7 +259,7 @@ PreservedAnalyses ProfileVerifierPass::run(Function &F,
     return PreservedAnalyses::all();
   }
   for (const auto &BB : F) {
-    if (AnnotateSelect) {
+    if (getAnnotateSelect(F)) {
       for (const auto &I : BB)
         if (auto *SI = dyn_cast<SelectInst>(&I)) {
           if (SI->getCondition()->getType()->isVectorTy())

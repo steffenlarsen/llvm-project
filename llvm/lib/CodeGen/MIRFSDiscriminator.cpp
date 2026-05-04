@@ -15,6 +15,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/Analysis/BlockFrequencyInfoImpl.h"
+#include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/MIRFSDiscriminatorOptions.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/DebugInfoMetadata.h"
@@ -22,7 +23,6 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PseudoProbe.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/SampleProfileLoaderBaseUtil.h"
@@ -33,12 +33,9 @@ using namespace sampleprofutil;
 
 #define DEBUG_TYPE "mirfs-discriminators"
 
-// TODO(xur): Remove this option and related code once we make true as the
-// default.
-cl::opt<bool> llvm::ImprovedFSDiscriminator(
-    "improved-fs-discriminator", cl::Hidden, cl::init(false),
-    cl::desc("New FS discriminators encoding (incompatible with the original "
-             "encoding)"));
+static bool getImprovedFSDiscriminator(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CG_ImprovedFsDiscriminator>(Ctx);
+}
 char MIRAddFSDiscriminators::ID = 0;
 
 INITIALIZE_PASS(MIRAddFSDiscriminators, DEBUG_TYPE,
@@ -91,8 +88,11 @@ static uint64_t getCallStackHash(const DILocation *DIL) {
 // discriminator keeps the existing discriminator value but sets new bits
 // b/w LowBit and HighBit.
 bool MIRAddFSDiscriminators::runOnMachineFunction(MachineFunction &MF) {
-  if (!EnableFSDiscriminator)
+  if (!getEnableFSDiscriminator(MF.getFunction().getContext()))
     return false;
+
+  auto &OptCtx = MF.getFunction().getContext().getOptionsContext();
+  bool ImprovedFSDiscriminator = getImprovedFSDiscriminator(OptCtx);
 
   bool HasPseudoProbe = MF.getFunction().getParent()->getNamedMetadata(
       PseudoProbeDescMetadataName);

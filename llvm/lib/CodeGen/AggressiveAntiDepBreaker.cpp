@@ -17,6 +17,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/iterator_range.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -28,10 +29,12 @@
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGenTypes/MachineValueType.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCRegisterInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 
@@ -39,16 +42,19 @@ using namespace llvm;
 
 #define DEBUG_TYPE "post-RA-sched"
 
-// If DebugDiv > 0 then only break antidep with (ID % DebugDiv) == DebugMod
-static cl::opt<int>
-DebugDiv("agg-antidep-debugdiv",
-         cl::desc("Debug control for aggressive anti-dep breaker"),
-         cl::init(0), cl::Hidden);
+// If DebugDiv > 0 then only break antidep with (ID % DebugDiv) == DebugMod.
+// Both accessors are read only from the #ifndef NDEBUG block in
+// findSuitableFreeRegister, so guard them the same way: being static, they
+// would otherwise trip -Wunused-function in a release build.
+#ifndef NDEBUG
+static int getAggAntidepDebugdiv(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_AggAntidepDebugdiv>(Ctx);
+}
 
-static cl::opt<int>
-DebugMod("agg-antidep-debugmod",
-         cl::desc("Debug control for aggressive anti-dep breaker"),
-         cl::init(0), cl::Hidden);
+static int getAggAntidepDebugmod(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_AggAntidepDebugmod>(Ctx);
+}
+#endif
 
 AggressiveAntiDepState::AggressiveAntiDepState(const unsigned TargetRegs,
                                                MachineBasicBlock *BB)
@@ -588,9 +594,10 @@ bool AggressiveAntiDepBreaker::FindSuitableFreeRegisters(
 
 #ifndef NDEBUG
   // If DebugDiv > 0 then only rename (renamecnt % DebugDiv) == DebugMod
-  if (DebugDiv > 0) {
+  const auto &Ctx = MF.getFunction().getContext().getOptionsContext();
+  if (getAggAntidepDebugdiv(Ctx) > 0) {
     static int renamecnt = 0;
-    if (renamecnt++ % DebugDiv != DebugMod)
+    if (renamecnt++ % getAggAntidepDebugdiv(Ctx) != getAggAntidepDebugmod(Ctx))
       return false;
 
     dbgs() << "*** Performing rename " << printReg(SuperReg, TRI)

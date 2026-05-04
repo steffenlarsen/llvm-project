@@ -45,7 +45,7 @@ TEST_F(AMDGPUTestBase, NewValueIsConservativelyDivergent) {
     ret void
   }
   )";
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(ModuleString, Err, Context);
   ASSERT_TRUE(M) << Err.getMessage();

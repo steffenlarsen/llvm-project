@@ -19,18 +19,18 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/DebugCounter.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 
 using namespace llvm;
 
-namespace llvm {
-cl::opt<bool> EnableKnowledgeRetention(
-    "enable-knowledge-retention", cl::init(false), cl::Hidden,
-    cl::desc(
-        "enable preservation of attributes throughout code transformation"));
-} // namespace llvm
+bool llvm::getEnableKnowledgeRetention(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::TransformUtilsOptsReg,
+                           &clv2::TU_EnableKnowledgeRetention>(Ctx, false);
+}
 
 #define DEBUG_TYPE "assume-builder"
 
@@ -281,7 +281,8 @@ struct AssumeBuilderState {
 } // namespace
 
 AssumeInst *llvm::buildAssumeFromInst(Instruction *I) {
-  if (!EnableKnowledgeRetention)
+  if (!getEnableKnowledgeRetention(
+          I->getFunction()->getContext().getOptionsContext()))
     return nullptr;
   AssumeBuilderState Builder(I->getModule());
   Builder.addInstruction(I);
@@ -290,7 +291,9 @@ AssumeInst *llvm::buildAssumeFromInst(Instruction *I) {
 
 bool llvm::salvageKnowledge(Instruction *I, AssumptionCache *AC,
                             DominatorTree *DT) {
-  if (!EnableKnowledgeRetention || I->isTerminator())
+  if (!getEnableKnowledgeRetention(
+          I->getFunction()->getContext().getOptionsContext()) ||
+      I->isTerminator())
     return false;
   bool Changed = false;
   AssumeBuilderState Builder(I->getModule(), I, AC, DT);
@@ -537,7 +540,7 @@ bool simplifyAssumes(Function &F, AssumptionCache *AC, DominatorTree *DT) {
 
 PreservedAnalyses AssumeSimplifyPass::run(Function &F,
                                           FunctionAnalysisManager &AM) {
-  if (!EnableKnowledgeRetention)
+  if (!getEnableKnowledgeRetention(F.getContext().getOptionsContext()))
     return PreservedAnalyses::all();
   if (!simplifyAssumes(F, &AM.getResult<AssumptionAnalysis>(F),
                        AM.getCachedResult<DominatorTreeAnalysis>(F)))

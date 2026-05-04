@@ -10,6 +10,7 @@
 // into the calling function.
 //===----------------------------------------------------------------------===//
 
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Optimizer/Builder/Character.h"
 #include "flang/Optimizer/Builder/Complex.h"
 #include "flang/Optimizer/Builder/FIRBuilder.h"
@@ -22,6 +23,7 @@
 #include "mlir/IR/Location.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/Support/OptionsContext.h"
 
 namespace hlfir {
 #define GEN_PASS_DEF_SIMPLIFYHLFIRINTRINSICS
@@ -29,11 +31,6 @@ namespace hlfir {
 } // namespace hlfir
 
 #define DEBUG_TYPE "simplify-hlfir-intrinsics"
-
-static llvm::cl::opt<bool> forceMatmulAsElemental(
-    "flang-inline-matmul-as-elemental",
-    llvm::cl::desc("Expand hlfir.matmul as elemental operation"),
-    llvm::cl::init(false));
 
 namespace {
 
@@ -2646,7 +2643,10 @@ public:
     std::tie(resultShape, innerProductExtent) =
         genResultShape(loc, builder, lhs, rhs);
 
-    if (forceMatmulAsElemental || isMatmulTranspose) {
+    auto &optsCtx = matmul->getContext()->getOptionsContext();
+    if (llvm::clv2::getOptValOrDefault<
+            &llvm::clv2::FLANG_InlineMatmulAsElemental>(optsCtx) ||
+        isMatmulTranspose) {
       // Generate hlfir.elemental that produces the result of
       // MATMUL/MATMUL(TRANSPOSE).
       // Note that this implementation is very suboptimal for MATMUL,
@@ -3329,7 +3329,10 @@ public:
     // on both sides of the assignment.
     // This is actually the CSE problem, but we can work it around
     // for the time being.
-    if (forceMatmulAsElemental || this->allowNewSideEffects)
+    auto &optsCtx = getContext().getOptionsContext();
+    if (llvm::clv2::getOptValOrDefault<
+            &llvm::clv2::FLANG_InlineMatmulAsElemental>(optsCtx) ||
+        this->allowNewSideEffects)
       patterns.insert<MatmulConversion<hlfir::MatmulOp>>(context);
 
     patterns.insert<DotProductConversion>(context);

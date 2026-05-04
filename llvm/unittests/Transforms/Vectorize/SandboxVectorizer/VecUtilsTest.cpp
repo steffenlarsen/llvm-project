@@ -29,7 +29,7 @@
 using namespace llvm;
 
 struct VecUtilsTest : public testing::Test {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   std::unique_ptr<AssumptionCache> AC;
   std::unique_ptr<TargetLibraryInfoImpl> TLII;

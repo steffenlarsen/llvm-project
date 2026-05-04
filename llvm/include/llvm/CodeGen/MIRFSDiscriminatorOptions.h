@@ -13,10 +13,8 @@
 #ifndef LLVM_CODEGEN_MIRFSDISCRIMINATOR_OPTIONS_H
 #define LLVM_CODEGEN_MIRFSDISCRIMINATOR_OPTIONS_H
 
-#include "llvm/Support/CommandLine.h"
-
-namespace llvm {
-extern LLVM_ABI cl::opt<bool> ImprovedFSDiscriminator;
-} // namespace llvm
+// This header is kept for compatibility but the ImprovedFSDiscriminator
+// option is now accessed via clv2::getOptValOr<&clv2::CGOptsReg,
+// &clv2::CG_ImprovedFsDiscriminator>().
 
 #endif // LLVM_CODEGEN_MIRFSDISCRIMINATOR_OPTIONS_H

@@ -12,7 +12,7 @@
 #include "ThreadWriter.h"
 #include "Utility.h"
 #include "llvm/BinaryFormat/MachO.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include <stdio.h>
 #include <string>
 #include <sys/stat.h>
@@ -39,26 +39,37 @@ std::vector<std::string> get_fields_from_delimited_string(std::string str,
   return result;
 }
 
-llvm::cl::opt<std::string> InputFilename("i", llvm::cl::Required,
-                                         llvm::cl::desc("input yaml filename"),
-                                         llvm::cl::value_desc("input"));
-llvm::cl::opt<std::string>
-    OutputFilename("o", llvm::cl::Required,
-                   llvm::cl::desc("output core filenames"),
-                   llvm::cl::value_desc("output"));
-llvm::cl::list<std::string>
-    UUIDs("u", llvm::cl::desc("uuid of binary loaded at slide 0"),
-          llvm::cl::value_desc("uuid"));
-llvm::cl::list<std::string>
-    UUIDAndVAs("L", llvm::cl::desc("UUID,virtual-address-loaded-at"),
-               llvm::cl::value_desc("--uuid-and-load-addr"));
-llvm::cl::opt<int>
-    AddressableBitsOverride("A",
-                            llvm::cl::desc("number of bits used in addressing"),
-                            llvm::cl::value_desc("--address-bits"));
+using namespace llvm;
+
+inline constexpr clv2::OptionInfo<std::string> InputFilenameOpt{
+    "i", "input yaml filename", clv2::Required, clv2::value_desc("input")};
+inline constexpr clv2::OptionInfo<std::string> OutputFilenameOpt{
+    "o", "output core filenames", clv2::Required, clv2::value_desc("output")};
+inline constexpr clv2::ListOptionInfo<std::string> UUIDsOpt{
+    "u", "uuid of binary loaded at slide 0", clv2::value_desc("uuid")};
+inline constexpr clv2::ListOptionInfo<std::string> UUIDAndVAsOpt{
+    "L", "UUID,virtual-address-loaded-at",
+    clv2::value_desc("--uuid-and-load-addr")};
+inline constexpr clv2::OptionInfo<int> AddressableBitsOverrideOpt{
+    "A", "number of bits used in addressing",
+    clv2::value_desc("--address-bits")};
+
+static constexpr clv2::OptionsRegistry<&InputFilenameOpt, &OutputFilenameOpt,
+                                       &UUIDsOpt, &UUIDAndVAsOpt,
+                                       &AddressableBitsOverrideOpt>
+    Yaml2MachoReg;
 
 int main(int argc, char **argv) {
-  llvm::cl::ParseCommandLineOptions(argc, argv);
+  clv2::OptionParser P;
+  P.add<&Yaml2MachoReg>();
+  auto OptsCtx = P.parse(argc, argv);
+  auto *Opts = OptsCtx->getViewPtr<&Yaml2MachoReg>();
+
+  const auto &InputFilename = Opts->get<&InputFilenameOpt>();
+  const auto &OutputFilename = Opts->get<&OutputFilenameOpt>();
+  const auto &UUIDs = Opts->get<&UUIDsOpt>();
+  const auto &UUIDAndVAs = Opts->get<&UUIDAndVAsOpt>();
+  int AddressableBitsOverride = Opts->get<&AddressableBitsOverrideOpt>();
 
   if (InputFilename.empty() || OutputFilename.empty()) {
     fprintf(stderr, "Missing input or outpur file.\n");

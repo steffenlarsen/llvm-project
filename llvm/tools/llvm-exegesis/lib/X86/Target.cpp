@@ -64,15 +64,8 @@ namespace exegesis {
 //     throttling.
 //  -  A prime number is preferred to avoid always skipping certain blocks.
 //
-static cl::opt<unsigned> LbrSamplingPeriod(
-    "x86-lbr-sample-period",
-    cl::desc("The sample period (nbranches/sample), used for LBR sampling"),
-    cl::cat(BenchmarkOptions), cl::init(0));
-
-static cl::opt<bool>
-    DisableUpperSSERegisters("x86-disable-upper-sse-registers",
-                             cl::desc("Disable XMM8-XMM15 register usage"),
-                             cl::cat(BenchmarkOptions), cl::init(false));
+unsigned LbrSamplingPeriod = 0;
+bool DisableUpperSSERegisters = false;
 
 // FIXME: Validates that repetition-mode is loop if LBR is requested.
 

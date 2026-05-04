@@ -26,11 +26,16 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Triple.h"
 
+#include "llvm/Support/OptionsContext.h"
 #include <string>
 
 namespace llvm {
 class StringRef;
 class TargetMachine;
+
+namespace clv2 {
+class OptionsContext;
+}
 
 /// ThinLTOCodeGeneratorImpl - Namespace used for ThinLTOCodeGenerator
 /// implementation details. It should be considered private to the
@@ -241,6 +246,9 @@ public:
     MllvmArgs.assign(Args.begin(), Args.end());
   }
 
+  /// Set the OptionsContext for clv2 option resolution.
+  void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
+
   /// Disable CodeGen, only run the stages till codegen and stop. The output
   /// will be bitcode.
   void disableCodeGen(bool Disable) { DisableCodeGen = Disable; }
@@ -364,6 +372,9 @@ private:
 
   /// -mllvm arguments included in the cache key.
   std::vector<std::string> MllvmArgs;
+
+  /// OptionsContext for clv2 option resolution.
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
 };
 }
 #endif

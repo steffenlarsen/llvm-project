@@ -21,8 +21,9 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -39,17 +40,30 @@ STATISTIC(NumFrameOffFoldInPreEmit,
 STATISTIC(NumCmpsInPreEmit,
           "Number of compares eliminated in pre-emit peephole");
 
-static cl::opt<bool>
-EnablePCRelLinkerOpt("ppc-pcrel-linker-opt", cl::Hidden, cl::init(true),
-                     cl::desc("enable PC Relative linker optimization"));
+static bool EnablePCRelLinkerOpt = true;
 
-static cl::opt<bool>
-RunPreEmitPeephole("ppc-late-peephole", cl::Hidden, cl::init(true),
-                   cl::desc("Run pre-emit peephole optimizations."));
+static bool RunPreEmitPeephole = true;
 
-static cl::opt<uint64_t>
-DSCRValue("ppc-set-dscr", cl::Hidden,
-          cl::desc("Set the Data Stream Control Register."));
+static bool DSCRValueWasSpecified = false;
+
+static bool getEnablePCRelLinkerOpt(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_EnablePCRelLinkerOpt>(
+      F.getContext().getOptionsContext());
+}
+static bool getRunPreEmitPeephole(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_RunPreEmitPeephole>(
+      F.getContext().getOptionsContext());
+}
+static uint64_t getDSCRValue(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_DSCRValue>(
+      F.getContext().getOptionsContext());
+}
+static bool getDSCRValueWasSpecified(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::PowerPCOptsReg>(
+          F.getContext().getOptionsContext()))
+    return O->specified<&clv2::PPC_DSCRValue>();
+  return DSCRValueWasSpecified;
+}
 
 namespace {
 
@@ -241,7 +255,7 @@ static bool hasPCRelativeForm(MachineInstr &Use) {
     bool addLinkerOpt(MachineBasicBlock &MBB, const TargetRegisterInfo *TRI) {
       MachineFunction *MF = MBB.getParent();
       // If the linker opt is disabled then just return.
-      if (!EnablePCRelLinkerOpt)
+      if (!getEnablePCRelLinkerOpt(MF->getFunction()))
         return false;
 
       // Add this linker opt only if we are using PC Relative memops.
@@ -411,9 +425,10 @@ static bool hasPCRelativeForm(MachineInstr &Use) {
     bool runOnMachineFunction(MachineFunction &MF) override {
       // If the user wants to set the DSCR using command-line options,
       // load in the specified value at the start of main.
-      if (DSCRValue.getNumOccurrences() > 0 && MF.getName() == "main" &&
-          MF.getFunction().hasExternalLinkage()) {
-        DSCRValue = (uint32_t)(DSCRValue & 0x01FFFFFF); // 25-bit DSCR mask
+      if (getDSCRValueWasSpecified(MF.getFunction()) &&
+          MF.getName() == "main" && MF.getFunction().hasExternalLinkage()) {
+        uint64_t LocalDSCRValue = (uint32_t)(getDSCRValue(MF.getFunction()) &
+                                             0x01FFFFFF); // 25-bit DSCR mask
         RegScavenger RS;
         MachineBasicBlock &MBB = MF.front();
         // Find an unused GPR according to register liveness
@@ -424,16 +439,16 @@ static bool hasPCRelativeForm(MachineInstr &Use) {
               MF.getSubtarget<PPCSubtarget>().getInstrInfo();
           DebugLoc dl;
           MachineBasicBlock::iterator IP = MBB.begin(); // Insert Point
-          // Copy the 32-bit DSCRValue integer into the GPR InDSCR using LIS and
-          // ORI, then move to DSCR. If the requested DSCR value is contained
-          // in a 16-bit signed number, we can emit a single `LI`, but the
-          // impact of saving one instruction in one function does not warrant
-          // any additional complexity in the logic here.
+          // Copy the 32-bit LocalDSCRValue integer into the GPR InDSCR using
+          // LIS and ORI, then move to DSCR. If the requested DSCR value is
+          // contained in a 16-bit signed number, we can emit a single `LI`,
+          // but the impact of saving one instruction in one function does not
+          // warrant any additional complexity in the logic here.
           BuildMI(MBB, IP, dl, TII->get(PPC::LIS), InDSCR)
-              .addImm(DSCRValue >> 16);
+              .addImm(LocalDSCRValue >> 16);
           BuildMI(MBB, IP, dl, TII->get(PPC::ORI), InDSCR)
               .addReg(InDSCR)
-              .addImm(DSCRValue & 0xFFFF);
+              .addImm(LocalDSCRValue & 0xFFFF);
           BuildMI(MBB, IP, dl, TII->get(PPC::MTUDSCR))
               .addReg(InDSCR, RegState::Kill);
         } else
@@ -441,7 +456,8 @@ static bool hasPCRelativeForm(MachineInstr &Use) {
                     "requested";
       }
 
-      if (skipFunction(MF.getFunction()) || !RunPreEmitPeephole) {
+      if (skipFunction(MF.getFunction()) ||
+          !getRunPreEmitPeephole(MF.getFunction())) {
         // Remove UNENCODED_NOP even when this pass is disabled.
         // This needs to be done unconditionally so we don't emit zeros
         // in the instruction stream.

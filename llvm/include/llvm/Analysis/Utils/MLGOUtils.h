@@ -21,25 +21,11 @@
 #include "llvm/Analysis/ReleaseModeModelRunner.h"
 #include "llvm/Analysis/TensorSpec.h"
 #include "llvm/IR/LLVMContext.h"
-#include "llvm/Support/CommandLine.h"
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace llvm {
-
-/// Helper to check if a release-mode ML advisor has a valid model to execute.
-/// Overload for cl::opt<EnumType>.
-template <class CompiledModelType, class EnumType, bool ExternalStorage,
-          class ParserClass>
-bool isReleaseModelValid(
-    StringRef InteractiveChannelBaseName,
-    const cl::opt<EnumType, ExternalStorage, ParserClass> &SelectedModel,
-    EnumType DefaultModelVal = EnumType::Default) {
-  return isEmbeddedModelEvaluatorValid<CompiledModelType>() ||
-         !InteractiveChannelBaseName.empty() ||
-         SelectedModel != DefaultModelVal;
-}
 
 /// Helper to check if a release-mode ML advisor has a valid model to execute.
 /// Overload for plain EnumType.

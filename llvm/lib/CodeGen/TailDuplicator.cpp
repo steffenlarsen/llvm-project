@@ -19,6 +19,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBranchProbabilityInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -33,9 +34,10 @@
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cassert>
@@ -55,37 +57,29 @@ STATISTIC(NumTailDupRemoved,
 STATISTIC(NumDeadBlocks, "Number of dead blocks removed");
 STATISTIC(NumAddedPHIs, "Number of phis added");
 
-// Heuristic for tail duplication.
-static cl::opt<unsigned> TailDuplicateSize(
-    "tail-dup-size",
-    cl::desc("Maximum instructions to consider tail duplicating"), cl::init(2),
-    cl::Hidden);
+static unsigned getTailDupSize(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_TailDupSize>(Ctx);
+}
 
-static cl::opt<unsigned> TailDupIndirectBranchSize(
-    "tail-dup-indirect-size",
-    cl::desc("Maximum instructions to consider tail duplicating blocks that "
-             "end with indirect branches."), cl::init(20),
-    cl::Hidden);
+static unsigned getTailDupIndirectSize(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_TailDupIndirectSize>(Ctx);
+}
 
-static cl::opt<unsigned>
-    TailDupPredSize("tail-dup-pred-size",
-                    cl::desc("Maximum predecessors (maximum successors at the "
-                             "same time) to consider tail duplicating blocks."),
-                    cl::init(16), cl::Hidden);
+static unsigned getTailDupPredSize(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_TailDupPredSize>(Ctx);
+}
 
-static cl::opt<unsigned>
-    TailDupSuccSize("tail-dup-succ-size",
-                    cl::desc("Maximum successors (maximum predecessors at the "
-                             "same time) to consider tail duplicating blocks."),
-                    cl::init(16), cl::Hidden);
+static unsigned getTailDupSuccSize(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_TailDupSuccSize>(Ctx);
+}
 
-static cl::opt<bool>
-    TailDupVerify("tail-dup-verify",
-                  cl::desc("Verify sanity of PHI instructions during taildup"),
-                  cl::init(false), cl::Hidden);
+static bool getTailDupVerify(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_TailDupVerify>(Ctx);
+}
 
-static cl::opt<unsigned> TailDupLimit("tail-dup-limit", cl::init(~0U),
-                                      cl::Hidden);
+static unsigned getTailDupLimit(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_TailDupLimit>(Ctx);
+}
 
 void TailDuplicator::initMF(MachineFunction &MFin, bool PreRegAlloc,
                             const MachineBranchProbabilityInfo *MBPIin,
@@ -277,14 +271,16 @@ bool TailDuplicator::tailDuplicateAndUpdate(
 bool TailDuplicator::tailDuplicateBlocks() {
   bool MadeChange = false;
 
-  if (PreRegAlloc && TailDupVerify) {
+  if (PreRegAlloc &&
+      getTailDupVerify(MF->getFunction().getContext().getOptionsContext())) {
     LLVM_DEBUG(dbgs() << "\n*** Before tail-duplicating\n");
     VerifyPHIs(*MF, true);
   }
 
   for (MachineBasicBlock &MBB :
        llvm::make_early_inc_range(llvm::drop_begin(*MF))) {
-    if (NumTails == TailDupLimit)
+    if (NumTails ==
+        getTailDupLimit(MF->getFunction().getContext().getOptionsContext()))
       break;
 
     bool IsSimple = isSimpleBB(&MBB);
@@ -295,7 +291,8 @@ bool TailDuplicator::tailDuplicateBlocks() {
     MadeChange |= tailDuplicateAndUpdate(IsSimple, &MBB, nullptr);
   }
 
-  if (PreRegAlloc && TailDupVerify)
+  if (PreRegAlloc &&
+      getTailDupVerify(MF->getFunction().getContext().getOptionsContext()))
     VerifyPHIs(*MF, false);
 
   return MadeChange;
@@ -579,7 +576,8 @@ bool TailDuplicator::shouldTailDuplicate(bool IsSimple,
   // compensate for the duplication.
   unsigned MaxDuplicateCount;
   if (TailDupSize == 0)
-    MaxDuplicateCount = TailDuplicateSize;
+    MaxDuplicateCount =
+        getTailDupSize(MF->getFunction().getContext().getOptionsContext());
   else
     MaxDuplicateCount = TailDupSize;
   if (llvm::shouldOptimizeForSize(&TailBB, PSI, MBFI))
@@ -609,7 +607,8 @@ bool TailDuplicator::shouldTailDuplicate(bool IsSimple,
   }
 
   if (HasIndirectbr && PreRegAlloc)
-    MaxDuplicateCount = TailDupIndirectBranchSize;
+    MaxDuplicateCount = getTailDupIndirectSize(
+        MF->getFunction().getContext().getOptionsContext());
 
   // Allow higher limits when the block has computed-gotos and running after
   // register allocation. NB. This basically unfactors computed gotos that were
@@ -673,8 +672,13 @@ bool TailDuplicator::shouldTailDuplicate(bool IsSimple,
   // Duplicating a BB which has both multiple predecessors and successors will
   // may cause huge amount of PHI nodes. If we want to remove this limitation,
   // we have to address https://github.com/llvm/llvm-project/issues/78578.
-  if (PreRegAlloc && TailBB.pred_size() > TailDupPredSize &&
-      TailBB.succ_size() > TailDupSuccSize) {
+  if (PreRegAlloc &&
+      TailBB.pred_size() >
+          getTailDupPredSize(
+              MF->getFunction().getContext().getOptionsContext()) &&
+      TailBB.succ_size() >
+          getTailDupSuccSize(
+              MF->getFunction().getContext().getOptionsContext())) {
     // If TailBB or any of its successors contains a phi, we may have to add a
     // large number of additional phis with additional incoming values.
     if (NumPhis != 0 || any_of(TailBB.successors(), [](MachineBasicBlock *MBB) {

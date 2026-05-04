@@ -29,7 +29,9 @@
 #include "llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h"
 #include "llvm/ExecutionEngine/Orc/OrcABISupport.h"
 #include "llvm/ExecutionEngine/Orc/SelfExecutorProcessControl.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -119,8 +121,10 @@ static void reportErrorAndExit() {
   exit(1);
 }
 
-static cl::list<std::string> InputArgv(cl::Positional,
-                                       cl::desc("<program arguments>..."));
+static constexpr clv2::ListOptionInfo<std::string> InputArgvOpt{
+    "", "<program arguments>...", clv2::Positional{}, clv2::ZeroOrMore};
+
+static constexpr clv2::OptionsRegistry<&InputArgvOpt> EPCReg;
 
 int main(int argc, char *argv[]) {
   // Initialize LLVM.
@@ -129,7 +133,10 @@ int main(int argc, char *argv[]) {
   InitializeNativeTarget();
   InitializeNativeTargetAsmPrinter();
 
-  cl::ParseCommandLineOptions(argc, argv, "LLJITWithLazyReexports");
+  clv2::OptionParser P;
+  P.add<&EPCReg>();
+  RegisterAllLLVMOptions(P);
+  P.parse(argc, argv, "LLJITWithLazyReexports");
   ExitOnErr.setBanner(std::string(argv[0]) + ": ");
 
   // (1) Create LLJIT instance.

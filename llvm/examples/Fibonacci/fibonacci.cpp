@@ -23,7 +23,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/APInt.h"
-#include "llvm/IR/Verifier.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/ExecutionEngine/GenericValue.h"
 #include "llvm/ExecutionEngine/MCJIT.h"
@@ -37,6 +36,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
@@ -65,12 +65,12 @@ static Function *CreateFibFunction(Module *M, LLVMContext &Context) {
 
   // Get pointer to the integer argument of the add1 function...
   Argument *ArgX = &*FibF->arg_begin(); // Get the arg.
-  ArgX->setName("AnArg");            // Give it a nice symbolic name for fun.
+  ArgX->setName("AnArg");               // Give it a nice symbolic name for fun.
 
   // Create the true_block.
   BasicBlock *RetBB = BasicBlock::Create(Context, "return", FibF);
   // Create an exit block.
-  BasicBlock* RecurseBB = BasicBlock::Create(Context, "recurse", FibF);
+  BasicBlock *RecurseBB = BasicBlock::Create(Context, "recurse", FibF);
 
   // Create the "if (arg <= 2) goto exitbb"
   Value *CondInst = new ICmpInst(BB, ICmpInst::ICMP_SLE, ArgX, Two, "cond");
@@ -90,8 +90,8 @@ static Function *CreateFibFunction(Module *M, LLVMContext &Context) {
   CallFibX2->setTailCall();
 
   // fib(x-1)+fib(x-2)
-  Value *Sum = BinaryOperator::CreateAdd(CallFibX1, CallFibX2,
-                                         "addresult", RecurseBB);
+  Value *Sum =
+      BinaryOperator::CreateAdd(CallFibX1, CallFibX2, "addresult", RecurseBB);
 
   // Create the return instruction and add it to the basic block
   ReturnInst::Create(Context, Sum, RecurseBB);
@@ -104,7 +104,7 @@ int main(int argc, char **argv) {
 
   InitializeNativeTarget();
   InitializeNativeTargetAsmPrinter();
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   // Create some module to put our function into it.
   std::unique_ptr<Module> Owner(new Module("test", Context));
@@ -116,9 +116,7 @@ int main(int argc, char **argv) {
   // Now we going to create JIT
   std::string errStr;
   ExecutionEngine *EE =
-    EngineBuilder(std::move(Owner))
-    .setErrorStr(&errStr)
-    .create();
+      EngineBuilder(std::move(Owner)).setErrorStr(&errStr).create();
 
   if (!EE) {
     errs() << argv[0] << ": Failed to construct ExecutionEngine: " << errStr

@@ -25,14 +25,19 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
 #include <memory>
 #include <vector>
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+}
 
 class APInt;
 class BitVector;
 class MachineFunction;
+class TargetMachine;
 class ScheduleDAGMutation;
 class CallLowering;
 class GlobalValue;
@@ -79,7 +84,8 @@ protected: // Can only create subclasses...
                       const MCSchedModel *PSM, const MCWriteProcResEntry *WPR,
                       const MCWriteLatencyEntry *WL,
                       const MCReadAdvanceEntry *RA, const InstrStage *IS,
-                      const unsigned *OC, const unsigned *FP);
+                      const unsigned *OC, const unsigned *FP,
+                      const clv2::OptionsContext &OptsCtx);
 
 public:
   // AntiDepBreakMode - Type of anti-dependence breaking that should
@@ -398,10 +404,36 @@ public:
   /// Target features where all mismatches prevent inlining.
   virtual const FeatureBitset &getInlineMustMatchFeatures() const = 0;
 
+  inline void setTargetMachine(const TargetMachine *TM);
+  void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx_ = &Ctx; }
+  inline const clv2::OptionsContext &getOptionsContext() const;
+
 private:
+  const TargetMachine *TM_ = nullptr;
+  /// Null means "not attached yet"; getOptionsContext() then falls through
+  /// to the TargetMachine.  Do NOT pre-set this to defaultOptionsContext(),
+  /// or that fallback becomes unreachable and every subtarget silently reads
+  /// an empty context.
+  const clv2::OptionsContext *OptsCtx_ = nullptr;
   /// Lazy, incrementally-populated cache for isIntrinsicSupported().
   mutable DenseMap<unsigned, bool> IntrinsicSupportCache;
 };
 } // end namespace llvm
+
+#include "llvm/Target/TargetMachine.h"
+
+inline void
+llvm::TargetSubtargetInfo::setTargetMachine(const TargetMachine *TM) {
+  TM_ = TM;
+  if (TM && !OptsCtx_)
+    OptsCtx_ = &TM->getOptionsContext();
+}
+
+inline const llvm::clv2::OptionsContext &
+llvm::TargetSubtargetInfo::getOptionsContext() const {
+  if (OptsCtx_)
+    return *OptsCtx_;
+  return TM_ ? TM_->getOptionsContext() : clv2::defaultOptionsContext();
+}
 
 #endif // LLVM_CODEGEN_TARGETSUBTARGETINFO_H

@@ -37,12 +37,13 @@
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Lanai/LanaiOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cassert>
 #include <cmath>
@@ -62,11 +63,12 @@ using namespace llvm;
 // instructions (including the prologue and epilogue but excluding instructions
 // at call site). Until we can inline mulsi3, generating at most 14 instructions
 // will be faster than invoking mulsi3.
-static cl::opt<int> LanaiLowerConstantMulThreshold(
-    "lanai-constant-mul-threshold", cl::Hidden,
-    cl::desc("Maximum number of instruction to generate when lowering constant "
-             "multiplication instead of calling library function [default=14]"),
-    cl::init(14));
+static int LanaiLowerConstantMulThreshold = 14;
+
+static int getLanaiLowerConstantMulThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::LANAI_LowerConstantMulThreshold>(
+      F.getContext().getOptionsContext());
+}
 
 LanaiTargetLowering::LanaiTargetLowering(const TargetMachine &TM,
                                          const LanaiSubtarget &STI)
@@ -914,7 +916,8 @@ SDValue LanaiTargetLowering::LowerMUL(SDValue Op, SelectionDAG &DAG) const {
   if (std::abs(MulAmt) % 2 == 1)
     --InstrRequired;
   // Return if the form generated would exceed the instruction threshold.
-  if (InstrRequired > LanaiLowerConstantMulThreshold)
+  if (InstrRequired >
+      getLanaiLowerConstantMulThreshold(DAG.getMachineFunction().getFunction()))
     return SDValue();
 
   SDValue Res;
@@ -1083,7 +1086,9 @@ SDValue LanaiTargetLowering::LowerConstantPool(SDValue Op,
   // If the code model is small or constant will be placed in the small section,
   // then assume address will fit in 21-bits.
   if (getTargetMachine().getCodeModel() == CodeModel::Small ||
-      TLOF->isConstantInSmallSection(DAG.getDataLayout(), C)) {
+      TLOF->isConstantInSmallSection(
+          DAG.getDataLayout(), C,
+          DAG.getMachineFunction().getFunction().getParent())) {
     SDValue Small = DAG.getTargetConstantPool(
         C, MVT::i32, N->getAlign(), N->getOffset(), LanaiII::MO_NO_FLAG);
     return DAG.getNode(ISD::OR, DL, MVT::i32,

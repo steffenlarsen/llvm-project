@@ -18,10 +18,6 @@
 
 #include "llvm/Support/Compiler.h"
 
-#ifndef DONT_GET_PLUGIN_LOADER_OPTION
-#include "llvm/Support/CommandLine.h"
-#endif
-
 #include <string>
 
 namespace llvm {
@@ -31,12 +27,14 @@ namespace llvm {
     LLVM_ABI static std::string &getPlugin(unsigned num);
   };
 
-#ifndef DONT_GET_PLUGIN_LOADER_OPTION
-  // This causes operator= above to be invoked for every -load option.
-  static cl::opt<PluginLoader, false, cl::parser<std::string>>
-      LoadOpt("load", cl::value_desc("pluginfilename"),
-              cl::desc("Load the specified plugin"));
-#endif
+  /// Register the -load runtime option. Call this explicitly from tool entry
+  /// points before parsing instead of relying on a global constructor.
+  LLVM_ABI void registerPluginLoaderOption();
+
+  /// Whether registerPluginLoaderOption() has been called, i.e. whether -load
+  /// is an option of this program. The parser uses this to decide whether to
+  /// dlopen -load arguments before it snapshots dynamic registrations.
+  LLVM_ABI bool pluginLoaderOptionRegistered();
 }
 
 #endif

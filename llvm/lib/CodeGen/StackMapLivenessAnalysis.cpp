@@ -13,24 +13,27 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/Statistic.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "stackmaps"
 
-static cl::opt<bool> EnablePatchPointLiveness(
-    "enable-patchpoint-liveness", cl::Hidden, cl::init(true),
-    cl::desc("Enable PatchPoint Liveness Analysis Pass"));
+static bool getEnablePatchpointLiveness(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_EnablePatchpointLiveness>(Ctx);
+}
 
 STATISTIC(NumStackMapFuncVisited, "Number of functions visited");
 STATISTIC(NumStackMapFuncSkipped, "Number of functions skipped");
@@ -100,7 +103,8 @@ void StackMapLiveness::getAnalysisUsage(AnalysisUsage &AU) const {
 
 /// Calculate the liveness information for the given machine function.
 bool StackMapLiveness::runOnMachineFunction(MachineFunction &MF) {
-  if (!EnablePatchPointLiveness)
+  if (!getEnablePatchpointLiveness(
+          MF.getFunction().getContext().getOptionsContext()))
     return false;
 
   TRI = MF.getSubtarget().getRegisterInfo();

@@ -218,14 +218,16 @@ protected:
   // returns the sum of its two parameters
   static LLVMOrcThreadSafeModuleRef createTestModule(StringRef Source,
                                                      StringRef Name) {
-    auto Ctx = std::make_unique<LLVMContext>();
+    auto Ctx =
+        std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
     auto M = cantFail(parseTestModule(*Ctx, Source, Name));
     return wrap(new ThreadSafeModule(std::move(M), std::move(Ctx)));
   }
 
   static LLVMMemoryBufferRef createTestObject(StringRef Source,
                                               StringRef Name) {
-    auto Ctx = std::make_unique<LLVMContext>();
+    auto Ctx =
+        std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
     auto M = cantFail(parseTestModule(*Ctx, Source, Name));
 
     auto JTMB = cantFail(JITTargetMachineBuilder::detectHost());

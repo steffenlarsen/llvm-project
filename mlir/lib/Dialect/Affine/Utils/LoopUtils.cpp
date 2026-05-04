@@ -2327,9 +2327,10 @@ mlir::affine::affineDataCopyGenerate(Block::iterator begin, Block::iterator end,
 
   LDBG() << "Generating copies at depth " << copyDepth;
   LDBG() << "from begin: "
-         << OpWithFlags(&*begin, OpPrintingFlags().skipRegions());
+         << OpWithFlags(&*begin, opPrintingFlags(&*begin).skipRegions());
   LDBG() << "to inclusive end: "
-         << OpWithFlags(&*std::prev(end), OpPrintingFlags().skipRegions());
+         << OpWithFlags(&*std::prev(end),
+                        opPrintingFlags(&*std::prev(end)).skipRegions());
 
   // List of memory regions to copy for. We need a map vector to have a
   // guaranteed iteration order to write test cases. CHECK-DAG doesn't help here

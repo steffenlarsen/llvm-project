@@ -68,13 +68,14 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <algorithm>
 #include <cassert>
@@ -92,28 +93,29 @@ using namespace llvm::PatternMatch;
 STATISTIC(NumRemoved, "Number of unreachable basic blocks removed");
 STATISTIC(NumPHICSEs, "Number of PHI's that got CSE'd");
 
-static cl::opt<bool> PHICSEDebugHash(
-    "phicse-debug-hash",
+static bool getPHICSEDebugHash(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::TransformUtilsOptsReg>(
+          F.getContext().getOptionsContext()))
+    if (O->specified<&clv2::TU_PHICSEDebugHash>())
+      return O->get<&clv2::TU_PHICSEDebugHash>();
 #ifdef EXPENSIVE_CHECKS
-    cl::init(true),
+  return true;
 #else
-    cl::init(false),
+  return false;
 #endif
-    cl::Hidden,
-    cl::desc("Perform extra assertion checking to verify that PHINodes's hash "
-             "function is well-behaved w.r.t. its isEqual predicate"));
+}
 
-static cl::opt<unsigned> PHICSENumPHISmallSize(
-    "phicse-num-phi-smallsize", cl::init(32), cl::Hidden,
-    cl::desc(
-        "When the basic block contains not more than this number of PHI nodes, "
-        "perform a (faster!) exhaustive search instead of set-driven one."));
+static unsigned getPHICSENumPHISmallSize(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_PHICSENumPHISmallSize>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> MaxPhiEntriesIncreaseAfterRemovingEmptyBlock(
-    "max-phi-entries-increase-after-removing-empty-block", cl::init(1000),
-    cl::Hidden,
-    cl::desc("Stop removing an empty block if removing it will introduce more "
-             "than this number of phi entries in its successor"));
+static unsigned
+getMaxPhiEntriesIncreaseAfterRemovingEmptyBlock(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::TU_MaxPhiEntriesIncreaseAfterRemovingEmptyBlock>(
+      F.getContext().getOptionsContext());
+}
 
 // Max recursion depth for collectBitParts used when detecting bswap and
 // bitreverse idioms.
@@ -1065,7 +1067,7 @@ static bool introduceTooManyPhiEntries(BasicBlock *BB, BasicBlock *Succ) {
   // MaxPhiEntriesIncreaseAfterRemovingEmptyBlock, it will be considered as
   // introducing too many new phi entries.
   return (NumPreds - 1) * NumChangedPhi >
-         MaxPhiEntriesIncreaseAfterRemovingEmptyBlock;
+         getMaxPhiEntriesIncreaseAfterRemovingEmptyBlock(*BB->getParent());
 }
 
 /// Replace a value flowing from a block to a phi with
@@ -1441,7 +1443,7 @@ EliminateDuplicatePHINodesSetBasedImpl(BasicBlock *BB,
       // will force all hashing to collide, so we'll exhaustively search
       // the table for a match, and the assertion in isEqual will fire if
       // there's a bug causing equal keys to hash differently.
-      if (PHICSEDebugHash)
+      if (getPHICSEDebugHash(*PN->getFunction()))
         return 0;
 #endif
       return getHashValueImpl(PN);
@@ -1462,7 +1464,7 @@ EliminateDuplicatePHINodesSetBasedImpl(BasicBlock *BB,
 
   // Set of unique PHINodes.
   DenseSet<PHINode *, PHIDenseMapInfo> PHISet;
-  PHISet.reserve(4 * PHICSENumPHISmallSize);
+  PHISet.reserve(4 * getPHICSENumPHISmallSize(*BB->getParent()));
 
   // Examine each PHI.
   bool Changed = false;
@@ -1491,9 +1493,9 @@ bool llvm::EliminateDuplicatePHINodes(BasicBlock *BB,
                                       SmallPtrSetImpl<PHINode *> &ToRemove) {
   if (
 #ifndef NDEBUG
-      !PHICSEDebugHash &&
+      !getPHICSEDebugHash(*BB->getParent()) &&
 #endif
-      hasNItemsOrLess(BB->phis(), PHICSENumPHISmallSize))
+      hasNItemsOrLess(BB->phis(), getPHICSENumPHISmallSize(*BB->getParent())))
     return EliminateDuplicatePHINodesNaiveImpl(BB, ToRemove);
   return EliminateDuplicatePHINodesSetBasedImpl(BB, ToRemove);
 }

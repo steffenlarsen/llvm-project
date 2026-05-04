@@ -24,8 +24,11 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Printable.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 #include <bitset>
 
 using namespace llvm;
@@ -35,9 +38,10 @@ using namespace llvm;
 STATISTIC(NumClosuresConverted, "Number of closures converted by the pass");
 STATISTIC(NumClosuresBuilt, "Number of closures built by the pass");
 
-static cl::opt<bool> DisableX86DomainReassignment(
-    "disable-x86-domain-reassignment", cl::Hidden,
-    cl::desc("X86: Disable Virtual Register Reassignment."), cl::init(false));
+static bool getDisableX86DomainReassignment(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_DisableDomainReassignment>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 enum RegDomain { NoDomain = -1, GPRDomain, MaskDomain, OtherDomain, NumDomains };
@@ -759,7 +763,7 @@ void X86DomainReassignmentImpl::initConverters() {
 }
 
 bool X86DomainReassignmentImpl::runOnMachineFunction(MachineFunction &MF) {
-  if (DisableX86DomainReassignment)
+  if (getDisableX86DomainReassignment(MF.getFunction()))
     return false;
 
   LLVM_DEBUG(

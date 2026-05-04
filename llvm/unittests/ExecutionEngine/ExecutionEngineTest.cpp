@@ -33,18 +33,18 @@ protected:
   }
 
   void SetUp() override {
-    ASSERT_TRUE(Engine.get() != nullptr) << "EngineBuilder returned error: '"
-      << Error << "'";
+    ASSERT_TRUE(Engine.get() != nullptr)
+        << "EngineBuilder returned error: '" << Error << "'";
   }
 
   GlobalVariable *NewExtGlobal(Type *T, const Twine &Name) {
-    return new GlobalVariable(*M, T, false,  // Not constant.
+    return new GlobalVariable(*M, T, false, // Not constant.
                               GlobalValue::ExternalLinkage, nullptr, Name);
   }
 
   std::string Error;
-  LLVMContext Context;
-  Module *M;  // Owned by ExecutionEngine.
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
+  Module *M; // Owned by ExecutionEngine.
   std::unique_ptr<ExecutionEngine> Engine;
 };
 
@@ -64,13 +64,13 @@ TEST_F(ExecutionEngineTest, ForwardGlobalMapping) {
 
   GlobalVariable *G2 = NewExtGlobal(Type::getInt32Ty(Context), "Global1");
   EXPECT_EQ(nullptr, Engine->getPointerToGlobalIfAvailable(G2))
-    << "The NULL return shouldn't depend on having called"
-    << " updateGlobalMapping(..., NULL)";
+      << "The NULL return shouldn't depend on having called"
+      << " updateGlobalMapping(..., NULL)";
   // Check that update...() can be called before add...().
   Engine->updateGlobalMapping(G2, &Mem1);
   EXPECT_EQ(&Mem1, Engine->getPointerToGlobalIfAvailable(G2));
   EXPECT_EQ(&Mem2, Engine->getPointerToGlobalIfAvailable(G1))
-    << "A second mapping shouldn't affect the first.";
+      << "A second mapping shouldn't affect the first.";
 }
 
 TEST_F(ExecutionEngineTest, ReverseGlobalMapping) {
@@ -90,13 +90,13 @@ TEST_F(ExecutionEngineTest, ReverseGlobalMapping) {
   EXPECT_EQ(G1, Engine->getGlobalValueAtAddress(&Mem2));
   Engine->updateGlobalMapping(G1, nullptr);
   EXPECT_EQ(G2, Engine->getGlobalValueAtAddress(&Mem1))
-    << "Removing one mapping doesn't affect a different one.";
+      << "Removing one mapping doesn't affect a different one.";
   EXPECT_EQ(nullptr, Engine->getGlobalValueAtAddress(&Mem2));
   Engine->updateGlobalMapping(G2, &Mem2);
   EXPECT_EQ(nullptr, Engine->getGlobalValueAtAddress(&Mem1));
   EXPECT_EQ(G2, Engine->getGlobalValueAtAddress(&Mem2))
-    << "Once a mapping is removed, we can point another GV at the"
-    << " now-free address.";
+      << "Once a mapping is removed, we can point another GV at the"
+      << " now-free address.";
 }
 
 TEST_F(ExecutionEngineTest, ClearModuleMappings) {
@@ -148,4 +148,4 @@ TEST_F(ExecutionEngineTest, LookupWithMangledAndDemangledSymbol) {
 #endif
 }
 
-}
+} // namespace

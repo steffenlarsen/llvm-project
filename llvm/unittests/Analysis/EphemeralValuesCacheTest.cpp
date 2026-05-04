@@ -20,7 +20,7 @@ using namespace llvm;
 namespace {
 
 struct EphemeralValuesCacheTest : public testing::Test {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
 
   void parseIR(const char *Assembly) {

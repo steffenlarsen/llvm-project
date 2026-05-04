@@ -17,11 +17,16 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cinttypes>
 #include <cstdint>
 
 using namespace llvm;
+
+const clv2::OptionsContext &MCInstPrinter::getOptionsContext() const {
+  return OptsCtx ? *OptsCtx : clv2::defaultOptionsContext();
+}
 
 void llvm::dumpBytes(ArrayRef<uint8_t> Bytes, raw_ostream &OS) {
   static const char HexRep[] = "0123456789abcdef";

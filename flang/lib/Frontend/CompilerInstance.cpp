@@ -163,7 +163,7 @@ bool CompilerInstance::executeAction(FrontendAction &act) {
   if (!setUpTargetMachine())
     return false;
   // Set options controlling lowering to FIR.
-  invoc.setLoweringOptions();
+  invoc.setLoweringOptions(getOptionsContext());
 
   if (invoc.getEnableTimers()) {
     llvm::TimePassesIsEnabled = true;
@@ -380,6 +380,10 @@ bool CompilerInstance::setUpTargetMachine() {
   std::optional<llvm::CodeModel::Model> cm = getCodeModel(CGOpts.CodeModel);
 
   llvm::TargetOptions tOpts = llvm::TargetOptions();
+  // TargetMachine and MCAsmInfo both read options through these; a
+  // default-constructed TargetOptions would silently use an empty context.
+  tOpts.OptsCtx = &getOptionsContext();
+  tOpts.MCOptions.OptsCtx = &getOptionsContext();
   tOpts.EnableAIXExtendedAltivecABI = targetOpts.EnableAIXExtendedAltivecABI;
   tOpts.EnableMachineFunctionSplitter = targetOpts.SplitMachineFunctions;
   tOpts.VecLib = convertDriverVectorLibraryToVectorLibrary(CGOpts.getVecLib());

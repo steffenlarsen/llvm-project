@@ -26,6 +26,10 @@
 #include <optional>
 
 namespace llvm {
+
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
 class BlockFrequencyInfo;
 class MachineFunction;
 
@@ -43,7 +47,7 @@ class ProfileSummaryInfo {
 private:
   const Module *M;
   std::unique_ptr<ProfileSummary> Summary;
-  void computeThresholds();
+  void computeThresholds(const clv2::OptionsContext &Ctx);
   // Count thresholds to answer isHotCount and isColdCount queries.
   std::optional<uint64_t> HotCountThreshold, ColdCountThreshold;
   // True if the working set size of the code is considered huge,

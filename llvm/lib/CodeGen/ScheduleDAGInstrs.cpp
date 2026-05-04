@@ -20,6 +20,7 @@
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -46,11 +47,12 @@
 #include "llvm/MC/LaneBitmask.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -62,38 +64,36 @@ using namespace llvm;
 
 #define DEBUG_TYPE "machine-scheduler"
 
-static cl::opt<bool>
-    EnableAASchedMI("enable-aa-sched-mi", cl::Hidden,
-                    cl::desc("Enable use of AA during MI DAG construction"));
-
-static cl::opt<bool> UseTBAA("use-tbaa-in-sched-mi", cl::Hidden,
-    cl::init(true), cl::desc("Enable use of TBAA during MI DAG construction"));
-
-static cl::opt<bool>
-    EnableSchedModel("schedmodel", cl::Hidden, cl::init(true),
-                     cl::desc("Use TargetSchedModel for latency lookup"));
-
-static cl::opt<bool>
-    EnableSchedItins("scheditins", cl::Hidden, cl::init(true),
-                     cl::desc("Use InstrItineraryData for latency lookup"));
-
 // Note: the two options below might be used in tuning compile time vs
 // output quality. Setting HugeRegion so large that it will never be
 // reached means best-effort, but may be slow.
 
 // When Stores and Loads maps (or NonAliasStores and NonAliasLoads)
 // together hold this many SUs, a reduction of maps will be done.
-static cl::opt<unsigned>
-    HugeRegion("dag-maps-huge-region", cl::Hidden, cl::init(500),
-               cl::desc("The limit to use while constructing the DAG "
-                        "prior to scheduling, at which point a trade-off "
-                        "is made to avoid excessive compile time."));
 
-#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
-static cl::opt<bool> SchedPrintCycles(
-    "sched-print-cycles", cl::Hidden, cl::init(false),
-    cl::desc("Report top/bottom cycles when dumping SUnit instances"));
-#endif
+static bool getEnableAaSchedMi(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableAaSchedMi>(Ctx);
+}
+
+static bool getUseTbaaInSchedMi(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_UseTbaaInSchedMi>(Ctx);
+}
+
+static bool getSchedmodel(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_Schedmodel>(Ctx);
+}
+
+static bool getScheditins(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_Scheditins>(Ctx);
+}
+
+static unsigned getDagMapsHugeRegion(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DagMapsHugeRegion>(Ctx);
+}
+
+static bool getSchedPrintCycles(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_SchedPrintCycles>(Ctx);
+}
 
 static void dumpSUList(const ScheduleDAGInstrs::SUList &L) {
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -112,12 +112,15 @@ ScheduleDAGInstrs::ScheduleDAGInstrs(MachineFunction &mf,
                                      bool RemoveKillFlags)
     : ScheduleDAG(mf), MLI(mli), MFI(mf.getFrameInfo()),
       RemoveKillFlags(RemoveKillFlags),
-      UnknownValue(UndefValue::get(
-                             Type::getVoidTy(mf.getFunction().getContext()))), Topo(SUnits, &ExitSU) {
+      UnknownValue(
+          UndefValue::get(Type::getVoidTy(mf.getFunction().getContext()))),
+      Topo(SUnits, &ExitSU) {
   DbgValues.clear();
 
   const TargetSubtargetInfo &ST = mf.getSubtarget();
-  SchedModel.init(&ST, EnableSchedModel, EnableSchedItins);
+  SchedModel.init(
+      &ST, getSchedmodel(mf.getFunction().getContext().getOptionsContext()),
+      getScheditins(mf.getFunction().getContext().getOptionsContext()));
 }
 
 /// If this machine instr has memory reference information and it can be
@@ -174,9 +177,7 @@ static bool getUnderlyingObjectsForInstr(const MachineInstr *MI,
   return true;
 }
 
-void ScheduleDAGInstrs::startBlock(MachineBasicBlock *bb) {
-  BB = bb;
-}
+void ScheduleDAGInstrs::startBlock(MachineBasicBlock *bb) { BB = bb; }
 
 void ScheduleDAGInstrs::finishBlock() {
   // Subclasses should no longer refer to the old block.
@@ -383,8 +384,8 @@ void ScheduleDAGInstrs::addPhysRegDeps(SUnit *SU, unsigned OperIdx) {
   }
 }
 
-LaneBitmask ScheduleDAGInstrs::getLaneMaskForMO(const MachineOperand &MO) const
-{
+LaneBitmask
+ScheduleDAGInstrs::getLaneMaskForMO(const MachineOperand &MO) const {
   Register Reg = MO.getReg();
   // No point in tracking lanemasks if we don't have interesting subregisters.
   const TargetRegisterClass &RC = *MRI.getRegClass(Reg);
@@ -449,7 +450,9 @@ void ScheduleDAGInstrs::addVRegDefDeps(SUnit *SU, unsigned OperIdx) {
     // Add data dependence to all uses we found so far.
     const TargetSubtargetInfo &ST = MF.getSubtarget();
     for (VReg2SUnitOperIdxMultiMap::iterator I = CurrentVRegUses.find(Reg),
-         E = CurrentVRegUses.end(); I != E; /*empty*/) {
+                                             E = CurrentVRegUses.end();
+         I != E;
+         /*empty*/) {
       LaneBitmask LaneMask = I->LaneMask;
       // Ignore uses of other lanes.
       if ((LaneMask & KillLaneMask).none()) {
@@ -490,8 +493,8 @@ void ScheduleDAGInstrs::addVRegDefDeps(SUnit *SU, unsigned OperIdx) {
   // are not eliminated sometime during scheduling. The output dependence edge
   // is also useful if output latency exceeds def-use latency.
   LaneBitmask LaneMask = DefLaneMask;
-  for (VReg2SUnit &V2SU : make_range(CurrentVRegDefs.find(Reg),
-                                     CurrentVRegDefs.end())) {
+  for (VReg2SUnit &V2SU :
+       make_range(CurrentVRegDefs.find(Reg), CurrentVRegDefs.end())) {
     // Ignore defs for other lanes.
     if ((V2SU.LaneMask & LaneMask).none())
       continue;
@@ -506,7 +509,7 @@ void ScheduleDAGInstrs::addVRegDefDeps(SUnit *SU, unsigned OperIdx) {
       continue;
     SDep Dep(SU, SDep::Output, Reg);
     Dep.setLatency(
-      SchedModel.computeOutputLatency(MI, OperIdx, DefSU->getInstr()));
+        SchedModel.computeOutputLatency(MI, OperIdx, DefSU->getInstr()));
     DefSU->addPred(Dep);
 
     // Update current definition. This can get tricky if the def was about a
@@ -538,13 +541,13 @@ void ScheduleDAGInstrs::addVRegUseDeps(SUnit *SU, unsigned OperIdx) {
   Register Reg = MO.getReg();
 
   // Remember the use. Data dependencies will be added when we find the def.
-  LaneBitmask LaneMask = TrackLaneMasks ? getLaneMaskForMO(MO)
-                                        : LaneBitmask::getAll();
+  LaneBitmask LaneMask =
+      TrackLaneMasks ? getLaneMaskForMO(MO) : LaneBitmask::getAll();
   CurrentVRegUses.insert(VReg2SUnitOperIdx(Reg, LaneMask, OperIdx, SU));
 
   // Add antidependences to the following defs of the vreg.
-  for (VReg2SUnit &V2SU : make_range(CurrentVRegDefs.find(Reg),
-                                     CurrentVRegDefs.end())) {
+  for (VReg2SUnit &V2SU :
+       make_range(CurrentVRegDefs.find(Reg), CurrentVRegDefs.end())) {
     // Ignore defs for unrelated lanes.
     LaneBitmask PrevDefLaneMask = V2SU.LaneMask;
     if ((PrevDefLaneMask & LaneMask).none())
@@ -556,10 +559,12 @@ void ScheduleDAGInstrs::addVRegUseDeps(SUnit *SU, unsigned OperIdx) {
   }
 }
 
-
-void ScheduleDAGInstrs::addChainDependency (SUnit *SUa, SUnit *SUb,
-                                            unsigned Latency) {
-  if (SUa->getInstr()->mayAlias(getAAForDep(), *SUb->getInstr(), UseTBAA)) {
+void ScheduleDAGInstrs::addChainDependency(SUnit *SUa, SUnit *SUb,
+                                           unsigned Latency) {
+  if (SUa->getInstr()->mayAlias(
+          getAAForDep(), *SUb->getInstr(),
+          getUseTbaaInSchedMi(
+              MF.getFunction().getContext().getOptionsContext()))) {
     SDep Dep(SUa, SDep::MayAliasMem);
     Dep.setLatency(Latency);
     SUb->addPred(Dep);
@@ -638,7 +643,8 @@ public:
   /// To keep NumNodes up to date, insert() is used instead of
   /// this operator w/ push_back().
   ValueType &operator[](const SUList &Key) {
-    llvm_unreachable("Don't use. Use insert() instead."); };
+    llvm_unreachable("Don't use. Use insert() instead.");
+  };
 
   /// Adds SU to the SUList of V. If Map grows huge, reduce its size by calling
   /// reduce().
@@ -673,9 +679,7 @@ public:
       NumNodes += I.second.size();
   }
 
-  unsigned inline getTrueMemOrderLatency() const {
-    return TrueMemOrderLatency;
-  }
+  unsigned inline getTrueMemOrderLatency() const { return TrueMemOrderLatency; }
 
   void dump();
 };
@@ -683,8 +687,7 @@ public:
 void ScheduleDAGInstrs::addChainDependencies(SUnit *SU,
                                              Value2SUsMap &Val2SUsMap) {
   for (auto &I : Val2SUsMap)
-    addChainDependencies(SU, I.second,
-                         Val2SUsMap.getTrueMemOrderLatency());
+    addChainDependencies(SU, I.second, Val2SUsMap.getTrueMemOrderLatency());
 }
 
 void ScheduleDAGInstrs::addChainDependencies(SUnit *SU,
@@ -692,8 +695,7 @@ void ScheduleDAGInstrs::addChainDependencies(SUnit *SU,
                                              ValueType V) {
   Value2SUsMap::iterator Itr = Val2SUsMap.find(V);
   if (Itr != Val2SUsMap.end())
-    addChainDependencies(SU, Itr->second,
-                         Val2SUsMap.getTrueMemOrderLatency());
+    addChainDependencies(SU, Itr->second, Val2SUsMap.getTrueMemOrderLatency());
 }
 
 void ScheduleDAGInstrs::addBarrierChain(Value2SUsMap &map) {
@@ -713,8 +715,13 @@ void ScheduleDAGInstrs::buildSchedGraph(AAResults *AA,
                                         LiveIntervals *LIS,
                                         bool TrackLaneMasks) {
   const TargetSubtargetInfo &ST = MF.getSubtarget();
-  bool UseAA = EnableAASchedMI.getNumOccurrences() > 0 ? EnableAASchedMI
-                                                       : ST.useAA();
+  const clv2::OptionsContext &Ctx =
+      MF.getFunction().getContext().getOptionsContext();
+  bool UseAA = clv2::wasOptSpecified<&clv2::CGPassSched1Reg,
+                                     &clv2::CGPASS_EnableAaSchedMi>(Ctx)
+                   ? getEnableAaSchedMi(
+                         MF.getFunction().getContext().getOptionsContext())
+                   : ST.useAA();
   if (UseAA && AA)
     AAForDep.emplace(*AA);
 
@@ -816,9 +823,8 @@ void ScheduleDAGInstrs::buildSchedGraph(AAResults *AA,
       RPTracker->recede(RegOpers);
     }
 
-    assert(
-        (CanHandleTerminators || (!MI.isTerminator() && !MI.isPosition())) &&
-        "Cannot schedule terminators or labels!");
+    assert((CanHandleTerminators || (!MI.isTerminator() && !MI.isPosition())) &&
+           "Cannot schedule terminators or labels!");
 
     // Add register-based dependencies (data, anti, and output).
     // For some instructions (calls, returns, inline-asm, etc.) there can
@@ -899,7 +905,9 @@ void ScheduleDAGInstrs::buildSchedGraph(AAResults *AA,
       if (BarrierChain)
         BarrierChain->addPredBarrier(SU);
 
-      if (FPExceptions.size() + 1 >= HugeRegion) {
+      if (FPExceptions.size() + 1 >=
+          getDagMapsHugeRegion(
+              MF.getFunction().getContext().getOptionsContext())) {
         LLVM_DEBUG(
             dbgs()
             << "Creating barrier chain and clearing FPExceptions map.\n");
@@ -922,7 +930,9 @@ void ScheduleDAGInstrs::buildSchedGraph(AAResults *AA,
       BarrierChain->addPredBarrier(SU);
 
     // Reduce maps if they grow huge.
-    if (MemOpsProcessed >= HugeRegion) {
+    if (MemOpsProcessed >=
+        getDagMapsHugeRegion(
+            MF.getFunction().getContext().getOptionsContext())) {
       LLVM_DEBUG(dbgs() << "Creating barrier chain and clearing maps.\n");
 
       BarrierChain = SU;
@@ -940,8 +950,8 @@ void ScheduleDAGInstrs::buildSchedGraph(AAResults *AA,
     // empty, or filled with the Values of memory locations which this
     // SU depends on.
     UnderlyingObjectsVector Objs;
-    bool ObjsFound = getUnderlyingObjectsForInstr(&MI, MFI, Objs,
-                                                  MF.getDataLayout());
+    bool ObjsFound =
+        getUnderlyingObjectsForInstr(&MI, MFI, Objs, MF.getDataLayout());
 
     if (MI.mayStore()) {
       if (!ObjsFound) {
@@ -1014,7 +1024,7 @@ void ScheduleDAGInstrs::buildSchedGraph(AAResults *AA,
   Topo.MarkDirty();
 }
 
-raw_ostream &llvm::operator<<(raw_ostream &OS, const PseudoSourceValue* PSV) {
+raw_ostream &llvm::operator<<(raw_ostream &OS, const PseudoSourceValue *PSV) {
   PSV->printCustom(OS);
   return OS;
 }
@@ -1110,7 +1120,7 @@ void ScheduleDAGInstrs::fixupKills(MachineBasicBlock &MBB) {
 void ScheduleDAGInstrs::dumpNode(const SUnit &SU) const {
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
   dumpNodeName(SU);
-  if (SchedPrintCycles)
+  if (getSchedPrintCycles(MF.getFunction().getContext().getOptionsContext()))
     dbgs() << " [TopReadyCycle = " << SU.TopReadyCycle
            << ", BottomReadyCycle = " << SU.BotReadyCycle << "]";
   dbgs() << ": ";
@@ -1177,16 +1187,16 @@ class SchedDFSImpl {
   /// Join DAG nodes into equivalence classes by their subtree.
   IntEqClasses SubtreeClasses;
   /// List PredSU, SuccSU pairs that represent data edges between subtrees.
-  std::vector<std::pair<const SUnit *, const SUnit*>> ConnectionPairs;
+  std::vector<std::pair<const SUnit *, const SUnit *>> ConnectionPairs;
 
   struct RootData {
     unsigned NodeID;
-    unsigned ParentNodeID;  ///< Parent node (member of the parent subtree).
+    unsigned ParentNodeID;      ///< Parent node (member of the parent subtree).
     unsigned SubInstrCount = 0; ///< Instr count in this tree only, not
                                 /// children.
 
-    RootData(unsigned id): NodeID(id),
-                           ParentNodeID(SchedDFSResult::InvalidSubtreeID) {}
+    RootData(unsigned id)
+        : NodeID(id), ParentNodeID(SchedDFSResult::InvalidSubtreeID) {}
 
     unsigned getSparseSetIndex() const { return NodeID; }
   };
@@ -1194,7 +1204,7 @@ class SchedDFSImpl {
   SparseSet<RootData> RootSet;
 
 public:
-  SchedDFSImpl(SchedDFSResult &r): R(r), SubtreeClasses(R.DFSNodeData.size()) {
+  SchedDFSImpl(SchedDFSResult &r) : R(r), SubtreeClasses(R.DFSNodeData.size()) {
     RootSet.setUniverse(R.DFSNodeData.size());
   }
 
@@ -1203,15 +1213,15 @@ public:
   /// During visitPostorderNode the Node's SubtreeID is assigned to the Node
   /// ID. Later, SubtreeID is updated but remains valid.
   bool isVisited(const SUnit *SU) const {
-    return R.DFSNodeData[SU->NodeNum].SubtreeID
-      != SchedDFSResult::InvalidSubtreeID;
+    return R.DFSNodeData[SU->NodeNum].SubtreeID !=
+           SchedDFSResult::InvalidSubtreeID;
   }
 
   /// Initializes this node's instruction count. We don't need to flag the node
   /// visited until visitPostorder because the DAG cannot have cycles.
   void visitPreorder(const SUnit *SU) {
     R.DFSNodeData[SU->NodeNum].InstrCount =
-      SU->getInstr()->isTransient() ? 0 : 1;
+        SU->getInstr()->isTransient() ? 0 : 1;
   }
 
   /// Called once for each node after all predecessors are visited. Revisit this
@@ -1243,8 +1253,7 @@ public:
         // current node is the parent.
         if (RootSet[PredNum].ParentNodeID == SchedDFSResult::InvalidSubtreeID)
           RootSet[PredNum].ParentNodeID = SU->NodeNum;
-      }
-      else if (RootSet.count(PredNum)) {
+      } else if (RootSet.count(PredNum)) {
         // The predecessor is not a root, but is still in the root set. This
         // must be the new parent that it was just joined to. Note that
         // RootSet[PredNum].ParentNodeID may either be invalid or may still be
@@ -1260,8 +1269,8 @@ public:
   /// the predecessor. Increment the parent node's instruction count and
   /// preemptively join this subtree to its parent's if it is small enough.
   void visitPostorderEdge(const SDep &PredDep, const SUnit *Succ) {
-    R.DFSNodeData[Succ->NodeNum].InstrCount
-      += R.DFSNodeData[PredDep.getSUnit()->NodeNum].InstrCount;
+    R.DFSNodeData[Succ->NodeNum].InstrCount +=
+        R.DFSNodeData[PredDep.getSUnit()->NodeNum].InstrCount;
     joinPredSubtree(PredDep, Succ);
   }
 
@@ -1275,8 +1284,8 @@ public:
   void finalize() {
     SubtreeClasses.compress();
     R.DFSTreeData.resize(SubtreeClasses.getNumClasses());
-    assert(SubtreeClasses.getNumClasses() == RootSet.size()
-           && "number of roots should match trees");
+    assert(SubtreeClasses.getNumClasses() == RootSet.size() &&
+           "number of roots should match trees");
     for (const RootData &Root : RootSet) {
       unsigned TreeID = SubtreeClasses[Root.NodeID];
       if (Root.ParentNodeID != SchedDFSResult::InvalidSubtreeID)
@@ -1342,7 +1351,7 @@ protected:
 
     do {
       SmallVectorImpl<SchedDFSResult::Connection> &Connections =
-        R.SubtreeConnections[FromTree];
+          R.SubtreeConnections[FromTree];
       for (SchedDFSResult::Connection &C : Connections) {
         if (C.TreeID == ToTree) {
           C.Level = std::max(C.Level, Depth);
@@ -1366,9 +1375,7 @@ class SchedDAGReverseDFS {
 public:
   bool isComplete() const { return DFSStack.empty(); }
 
-  void follow(const SUnit *SU) {
-    DFSStack.emplace_back(SU, SU->Preds.begin());
-  }
+  void follow(const SUnit *SU) { DFSStack.emplace_back(SU, SU->Preds.begin()); }
   void advance() { ++DFSStack.back().second; }
 
   const SDep *backtrack() {
@@ -1416,8 +1423,8 @@ void SchedDFSResult::compute(ArrayRef<SUnit> SUnits) {
         const SDep &PredDep = *DFS.getPred();
         DFS.advance();
         // Ignore non-data edges.
-        if (PredDep.getKind() != SDep::Data
-            || PredDep.getSUnit()->isBoundaryNode()) {
+        if (PredDep.getKind() != SDep::Data ||
+            PredDep.getSUnit()->isBoundaryNode()) {
           continue;
         }
         // An already visited edge is a cross edge, assuming an acyclic DAG.
@@ -1447,7 +1454,7 @@ void SchedDFSResult::compute(ArrayRef<SUnit> SUnits) {
 void SchedDFSResult::scheduleTree(unsigned SubtreeID) {
   for (const Connection &C : SubtreeConnections[SubtreeID]) {
     SubtreeConnectLevels[C.TreeID] =
-      std::max(SubtreeConnectLevels[C.TreeID], C.Level);
+        std::max(SubtreeConnectLevels[C.TreeID], C.Level);
     LLVM_DEBUG(dbgs() << "  Tree: " << C.TreeID << " @"
                       << SubtreeConnectLevels[C.TreeID] << '\n');
   }
@@ -1462,9 +1469,7 @@ LLVM_DUMP_METHOD void ILPValue::print(raw_ostream &OS) const {
     OS << format("%g", ((double)InstrCount / Length));
 }
 
-LLVM_DUMP_METHOD void ILPValue::dump() const {
-  dbgs() << *this << '\n';
-}
+LLVM_DUMP_METHOD void ILPValue::dump() const { dbgs() << *this << '\n'; }
 
 [[maybe_unused]]
 raw_ostream &llvm::operator<<(raw_ostream &OS, const ILPValue &Val) {

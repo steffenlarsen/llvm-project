@@ -16,7 +16,9 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/CodeGen/CommandFlags.h"
+#include "llvm/CodeGen/CommandFlagsOptInfos.h"
 #include "llvm/CodeGen/LinkAllCodegenComponents.h"
+#include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/ExecutionEngine/GenericValue.h"
 #include "llvm/ExecutionEngine/Interpreter.h"
@@ -48,9 +50,10 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/MC/MCTargetOptionsCommandFlags.h"
 #include "llvm/Object/Archive.h"
 #include "llvm/Object/ObjectFile.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DynamicLibrary.h"
@@ -59,9 +62,11 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Memory.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/ToolOutputFile.h"
@@ -79,176 +84,20 @@
 
 #ifdef __CYGWIN__
 #include <cygwin/version.h>
-#if defined(CYGWIN_VERSION_DLL_MAJOR) && CYGWIN_VERSION_DLL_MAJOR<1007
+#if defined(CYGWIN_VERSION_DLL_MAJOR) && CYGWIN_VERSION_DLL_MAJOR < 1007
 #define DO_NOTHING_ATEXIT 1
 #endif
 #endif
 
 using namespace llvm;
-
-static codegen::RegisterCodeGenFlags CGF;
+using namespace llvm::clv2;
 
 #define DEBUG_TYPE "lli"
 
 namespace {
 enum class JITKind { MCJIT, Orc, OrcLazy };
 enum class JITLinkerKind { Default, RuntimeDyld, JITLink };
-} // namespace
-
-static cl::opt<std::string> InputFile(cl::desc("<input bitcode>"),
-                                      cl::Positional, cl::init("-"));
-
-static cl::list<std::string> InputArgv(cl::ConsumeAfter,
-                                       cl::desc("<program arguments>..."));
-
-static cl::opt<bool>
-    ForceInterpreter("force-interpreter",
-                     cl::desc("Force interpretation: disable JIT"),
-                     cl::init(false));
-
-static cl::opt<JITKind>
-    UseJITKind("jit-kind", cl::desc("Choose underlying JIT kind."),
-               cl::init(JITKind::Orc),
-               cl::values(clEnumValN(JITKind::MCJIT, "mcjit", "MCJIT"),
-                          clEnumValN(JITKind::Orc, "orc", "Orc JIT"),
-                          clEnumValN(JITKind::OrcLazy, "orc-lazy",
-                                     "Orc-based lazy JIT.")));
-
-static cl::opt<JITLinkerKind> JITLinker(
-    "jit-linker", cl::desc("Choose the dynamic linker/loader."),
-    cl::init(JITLinkerKind::Default),
-    cl::values(clEnumValN(JITLinkerKind::Default, "default",
-                          "Default for platform and JIT-kind"),
-               clEnumValN(JITLinkerKind::RuntimeDyld, "rtdyld", "RuntimeDyld"),
-               clEnumValN(JITLinkerKind::JITLink, "jitlink",
-                          "Orc-specific linker")));
-static cl::opt<std::string>
-    OrcRuntime("orc-runtime", cl::desc("Use ORC runtime from given path"),
-               cl::init(""));
-
-static cl::opt<unsigned>
-    LazyJITCompileThreads("compile-threads",
-                          cl::desc("Choose the number of compile threads "
-                                   "(jit-kind=orc-lazy only)"),
-                          cl::init(0));
-
-static cl::list<std::string>
-    ThreadEntryPoints("thread-entry",
-                      cl::desc("calls the given entry-point on a new thread "
-                               "(jit-kind=orc-lazy only)"));
-
-static cl::opt<bool> PerModuleLazy(
-    "per-module-lazy",
-    cl::desc("Performs lazy compilation on whole module boundaries "
-             "rather than individual functions"),
-    cl::init(false));
-
-static cl::list<std::string>
-    JITDylibs("jd",
-              cl::desc("Specifies the JITDylib to be used for any subsequent "
-                       "-extra-module arguments."));
-
-static cl::list<std::string>
-    Dylibs("dlopen", cl::desc("Dynamic libraries to load before linking"));
-
-// The MCJIT supports building for a target address space separate from
-// the JIT compilation process. Use a forked process and a copying
-// memory manager with IPC to execute using this functionality.
-static cl::opt<bool>
-    RemoteMCJIT("remote-mcjit",
-                cl::desc("Execute MCJIT'ed code in a separate process."),
-                cl::init(false));
-
-// Manually specify the child process for remote execution. This overrides
-// the simulated remote execution that allocates address space for child
-// execution. The child process will be executed and will communicate with
-// lli via stdin/stdout pipes.
-static cl::opt<std::string> ChildExecPath(
-    "mcjit-remote-process",
-    cl::desc("Specify the filename of the process to launch "
-             "for remote MCJIT execution.  If none is specified,"
-             "\n\tremote execution will be simulated in-process."),
-    cl::value_desc("filename"), cl::init(""));
-
-// Determine optimization level.
-static cl::opt<char>
-    OptLevel("O",
-             cl::desc("Optimization level. [-O0, -O1, -O2, or -O3] "
-                      "(default = '-O2')"),
-             cl::Prefix, cl::init('2'));
-
-static cl::opt<std::string>
-    TargetTriple("mtriple", cl::desc("Override target triple for module"));
-
-static cl::opt<std::string>
-    EntryFunc("entry-function",
-              cl::desc("Specify the entry function (default = 'main') "
-                       "of the executable"),
-              cl::value_desc("function"), cl::init("main"));
-
-static cl::list<std::string>
-    ExtraModules("extra-module", cl::desc("Extra modules to be loaded"),
-                 cl::value_desc("input bitcode"));
-
-static cl::list<std::string>
-    ExtraObjects("extra-object", cl::desc("Extra object files to be loaded"),
-                 cl::value_desc("input object"));
-
-static cl::list<std::string>
-    ExtraArchives("extra-archive", cl::desc("Extra archive files to be loaded"),
-                  cl::value_desc("input archive"));
-
-static cl::opt<bool>
-    EnableCacheManager("enable-cache-manager",
-                       cl::desc("Use cache manager to save/load modules"),
-                       cl::init(false));
-
-static cl::opt<std::string>
-    ObjectCacheDir("object-cache-dir",
-                   cl::desc("Directory to store cached object files "
-                            "(must be user writable)"),
-                   cl::init(""));
-
-static cl::opt<std::string>
-    FakeArgv0("fake-argv0",
-              cl::desc("Override the 'argv[0]' value passed into the executing"
-                       " program"),
-              cl::value_desc("executable"));
-
-static cl::opt<bool>
-    DisableCoreFiles("disable-core-files", cl::Hidden,
-                     cl::desc("Disable emission of core files if possible"));
-
-static cl::opt<bool> NoLazyCompilation("disable-lazy-compilation",
-                                       cl::desc("Disable JIT lazy compilation"),
-                                       cl::init(false));
-
-static cl::opt<bool> GenerateSoftFloatCalls(
-    "soft-float", cl::desc("Generate software floating point library calls"),
-    cl::init(false));
-
-static cl::opt<bool> NoProcessSymbols(
-    "no-process-syms",
-    cl::desc("Do not resolve lli process symbols in JIT'd code"),
-    cl::init(false));
-
 enum class LLJITPlatform { Inactive, Auto, ExecutorNative, GenericIR };
-
-static cl::opt<LLJITPlatform> Platform(
-    "lljit-platform", cl::desc("Platform to use with LLJIT"),
-    cl::init(LLJITPlatform::Auto),
-    cl::values(clEnumValN(LLJITPlatform::Auto, "Auto",
-                          "Like 'ExecutorNative' if ORC runtime "
-                          "provided, otherwise like 'GenericIR'"),
-               clEnumValN(LLJITPlatform::ExecutorNative, "ExecutorNative",
-                          "Use the native platform for the executor."
-                          "Requires -orc-runtime"),
-               clEnumValN(LLJITPlatform::GenericIR, "GenericIR",
-                          "Use LLJITGenericIRPlatform"),
-               clEnumValN(LLJITPlatform::Inactive, "Inactive",
-                          "Disable platform support explicitly")),
-    cl::Hidden);
-
 enum class DumpKind {
   NoDump,
   DumpFuncsToStdOut,
@@ -257,25 +106,190 @@ enum class DumpKind {
   DumpDebugDescriptor,
   DumpDebugObjects,
 };
+} // namespace
 
-static cl::opt<DumpKind> OrcDumpKind(
-    "orc-lazy-debug", cl::desc("Debug dumping for the orc-lazy JIT."),
-    cl::init(DumpKind::NoDump),
-    cl::values(clEnumValN(DumpKind::NoDump, "no-dump", "Don't dump anything."),
-               clEnumValN(DumpKind::DumpFuncsToStdOut, "funcs-to-stdout",
-                          "Dump function names to stdout."),
-               clEnumValN(DumpKind::DumpModsToStdOut, "mods-to-stdout",
-                          "Dump modules to stdout."),
-               clEnumValN(DumpKind::DumpModsToDisk, "mods-to-disk",
-                          "Dump modules to the current "
-                          "working directory. (WARNING: "
-                          "will overwrite existing files)."),
-               clEnumValN(DumpKind::DumpDebugDescriptor, "jit-debug-descriptor",
-                          "Dump __jit_debug_descriptor contents to stdout"),
-               clEnumValN(DumpKind::DumpDebugObjects, "jit-debug-objects",
-                          "Dump __jit_debug_descriptor in-memory debug "
-                          "objects as tool output")),
-    cl::Hidden);
+//===----------------------------------------------------------------------===//
+// lli option declarations (clv2)
+//===----------------------------------------------------------------------===//
+
+inline constexpr OptionInfo<std::string> LLI_InputFile{"", "<input bitcode>",
+                                                       Positional{}, Init{"-"}};
+
+inline constexpr ListOptionInfo<std::string> LLI_InputArgv{
+    "", "<program arguments>...", Positional{}, ConsumeAfter};
+
+inline constexpr OptionInfo<bool> LLI_ForceInterpreter{
+    "force-interpreter", "Force interpretation: disable JIT", Init{false}};
+
+inline constexpr EnumVal<JITKind> LLI_JITKindVals[] = {
+    {"mcjit", JITKind::MCJIT, "MCJIT"},
+    {"orc", JITKind::Orc, "Orc JIT"},
+    {"orc-lazy", JITKind::OrcLazy, "Orc-based lazy JIT."},
+};
+inline constexpr auto LLI_UseJITKind =
+    makeEnumOption<JITKind>("jit-kind", "Choose underlying JIT kind.",
+                            LLI_JITKindVals, Init{JITKind::Orc});
+
+inline constexpr EnumVal<JITLinkerKind> LLI_JITLinkerVals[] = {
+    {"default", JITLinkerKind::Default, "Default for platform and JIT-kind"},
+    {"rtdyld", JITLinkerKind::RuntimeDyld, "RuntimeDyld"},
+    {"jitlink", JITLinkerKind::JITLink, "Orc-specific linker"},
+};
+inline constexpr auto LLI_JITLinker = makeEnumOption<JITLinkerKind>(
+    "jit-linker", "Choose the dynamic linker/loader.", LLI_JITLinkerVals,
+    Init{JITLinkerKind::Default});
+
+inline constexpr OptionInfo<std::string> LLI_OrcRuntime{
+    "orc-runtime", "Use ORC runtime from given path", Init{""}};
+
+inline constexpr OptionInfo<unsigned> LLI_LazyJITCompileThreads{
+    "compile-threads",
+    "Choose the number of compile threads (jit-kind=orc-lazy only)", Init{0u}};
+
+inline constexpr ListOptionInfo<std::string> LLI_ThreadEntryPoints{
+    "thread-entry",
+    "calls the given entry-point on a new thread (jit-kind=orc-lazy only)"};
+
+inline constexpr OptionInfo<bool> LLI_PerModuleLazy{
+    "per-module-lazy",
+    "Performs lazy compilation on whole module boundaries "
+    "rather than individual functions",
+    Init{false}};
+
+inline constexpr ListOptionInfo<std::string> LLI_JITDylibs{
+    "jd", "Specifies the JITDylib to be used for any subsequent "
+          "-extra-module arguments."};
+
+inline constexpr ListOptionInfo<std::string> LLI_Dylibs{
+    "dlopen", "Dynamic libraries to load before linking"};
+
+inline constexpr OptionInfo<bool> LLI_RemoteMCJIT{
+    "remote-mcjit", "Execute MCJIT'ed code in a separate process.",
+    Init{false}};
+
+inline constexpr OptionInfo<std::string> LLI_ChildExecPath{
+    "mcjit-remote-process",
+    "Specify the filename of the process to launch "
+    "for remote MCJIT execution.  If none is specified,"
+    "\n\tremote execution will be simulated in-process.",
+    value_desc("filename"), Init{""}};
+
+inline constexpr OptionInfo<std::string> LLI_OptLevel{
+    "O", "Optimization level. [-O0, -O1, -O2, or -O3] (default = '-O2')",
+    PrefixFormat, Init{"2"}, value_desc("char")};
+
+inline constexpr OptionInfo<std::string> LLI_TargetTriple{
+    "mtriple", "Override target triple for module"};
+
+inline constexpr OptionInfo<std::string> LLI_EntryFunc{
+    "entry-function",
+    "Specify the entry function (default = 'main') of the executable",
+    value_desc("function"), Init{"main"}};
+
+inline constexpr ListOptionInfo<std::string> LLI_ExtraModules{
+    "extra-module", "Extra modules to be loaded", value_desc("input bitcode")};
+
+inline constexpr ListOptionInfo<std::string> LLI_ExtraObjects{
+    "extra-object", "Extra object files to be loaded",
+    value_desc("input object")};
+
+inline constexpr ListOptionInfo<std::string> LLI_ExtraArchives{
+    "extra-archive", "Extra archive files to be loaded",
+    value_desc("input archive")};
+
+inline constexpr OptionInfo<bool> LLI_EnableCacheManager{
+    "enable-cache-manager", "Use cache manager to save/load modules",
+    Init{false}};
+
+inline constexpr OptionInfo<std::string> LLI_ObjectCacheDir{
+    "object-cache-dir",
+    "Directory to store cached object files (must be user writable)", Init{""}};
+
+inline constexpr OptionInfo<std::string> LLI_FakeArgv0{
+    "fake-argv0",
+    "Override the 'argv[0]' value passed into the executing program",
+    value_desc("executable")};
+
+inline constexpr OptionInfo<bool> LLI_DisableCoreFiles{
+    "disable-core-files", "Disable emission of core files if possible", Hidden};
+
+inline constexpr OptionInfo<bool> LLI_NoLazyCompilation{
+    "disable-lazy-compilation", "Disable JIT lazy compilation", Init{false}};
+
+inline constexpr OptionInfo<bool> LLI_GenerateSoftFloatCalls{
+    "soft-float", "Generate software floating point library calls",
+    Init{false}};
+
+inline constexpr OptionInfo<bool> LLI_NoProcessSymbols{
+    "no-process-syms", "Do not resolve lli process symbols in JIT'd code"};
+
+inline constexpr EnumVal<LLJITPlatform> LLI_PlatformVals[] = {
+    {"Auto", LLJITPlatform::Auto,
+     "Like 'ExecutorNative' if ORC runtime provided, "
+     "otherwise like 'GenericIR'"},
+    {"ExecutorNative", LLJITPlatform::ExecutorNative,
+     "Use the native platform for the executor. Requires -orc-runtime"},
+    {"GenericIR", LLJITPlatform::GenericIR, "Use LLJITGenericIRPlatform"},
+    {"Inactive", LLJITPlatform::Inactive,
+     "Disable platform support explicitly"},
+};
+inline constexpr auto LLI_Platform = makeEnumOption<LLJITPlatform>(
+    "lljit-platform", "Platform to use with LLJIT", LLI_PlatformVals, Hidden,
+    Init{LLJITPlatform::Auto});
+
+inline constexpr EnumVal<DumpKind> LLI_OrcDumpKindVals[] = {
+    {"no-dump", DumpKind::NoDump, "Don't dump anything."},
+    {"funcs-to-stdout", DumpKind::DumpFuncsToStdOut,
+     "Dump function names to stdout."},
+    {"mods-to-stdout", DumpKind::DumpModsToStdOut, "Dump modules to stdout."},
+    {"mods-to-disk", DumpKind::DumpModsToDisk,
+     "Dump modules to the current working directory. (WARNING: will overwrite "
+     "existing files)."},
+    {"jit-debug-descriptor", DumpKind::DumpDebugDescriptor,
+     "Dump __jit_debug_descriptor contents to stdout"},
+    {"jit-debug-objects", DumpKind::DumpDebugObjects,
+     "Dump __jit_debug_descriptor in-memory debug objects as tool output"},
+};
+inline constexpr auto LLI_OrcDumpKind = makeEnumOption<DumpKind>(
+    "orc-lazy-debug", "Debug dumping for the orc-lazy JIT.",
+    LLI_OrcDumpKindVals, Hidden, Init{DumpKind::NoDump});
+
+//===----------------------------------------------------------------------===//
+// Registry
+//===----------------------------------------------------------------------===//
+
+inline constexpr OptionsRegistry<
+    &LLI_InputFile, &LLI_InputArgv, &LLI_ForceInterpreter, &LLI_UseJITKind,
+    &LLI_JITLinker, &LLI_OrcRuntime, &LLI_LazyJITCompileThreads,
+    &LLI_ThreadEntryPoints, &LLI_PerModuleLazy, &LLI_JITDylibs, &LLI_Dylibs,
+    &LLI_RemoteMCJIT, &LLI_ChildExecPath, &LLI_OptLevel, &LLI_TargetTriple,
+    &LLI_EntryFunc, &LLI_ExtraModules, &LLI_ExtraObjects, &LLI_ExtraArchives,
+    &LLI_EnableCacheManager, &LLI_ObjectCacheDir, &LLI_FakeArgv0,
+    &LLI_DisableCoreFiles, &LLI_NoLazyCompilation, &LLI_GenerateSoftFloatCalls,
+    &LLI_NoProcessSymbols, &LLI_Platform, &LLI_OrcDumpKind,
+    // CodeGen flags (forwarded to CGParsedValues bridge)
+    &CG_MArch, &CG_MCPU, &CG_MTune, &CG_MAttrs, &CG_RelocModel, &CG_ThreadModel,
+    &CG_CodeModel, &CG_LargeDataThreshold, &CG_ExceptionModel, &CG_FileType,
+    &CG_FramePointer, &CG_EnableNoTrappingFPMath,
+    &CG_EnableAIXExtendedAltivecABI, &CG_DenormalFPMath, &CG_DenormalFP32Math,
+    &CG_EnableHonorSignDependentRoundingFPMath, &CG_FloatABIForCalls,
+    &CG_FuseFPOps, &CG_SwiftAsyncFramePointer, &CG_DontPlaceZerosInBSS,
+    &CG_EnableGuaranteedTailCallOpt, &CG_DisableTailCalls,
+    &CG_StackSymbolOrdering, &CG_StackRealign, &CG_TrapFuncName, &CG_UseCtors,
+    &CG_DisableIntegratedAS, &CG_DataSections, &CG_FunctionSections,
+    &CG_IgnoreXCOFFVisibility, &CG_XCOFFTracebackTable, &CG_EnableBBAddrMap,
+    &CG_BBSections, &CG_TLSSize, &CG_EmulatedTLS, &CG_EnableTLSDESC,
+    &CG_UniqueSectionNames, &CG_UniqueBasicBlockSectionNames,
+    &CG_SeparateNamedSections, &CG_EABIVersion, &CG_DebuggerTuning,
+    &CG_VectorLibrary, &CG_EnableStackSizeSection, &CG_EnableAddrsig,
+    &CG_EnableCallGraphSection, &CG_EmitCallSiteInfo,
+    &CG_EnableMachineFunctionSplitter, &CG_EnableStaticDataPartitioning,
+    &CG_EnableDebugEntryValues, &CG_ForceDwarfFrameSection,
+    &CG_XRayFunctionIndex, &CG_DebugStrictDwarf, &CG_AlignLoops,
+    &CG_JMCInstrument, &CG_XCOFFReadOnlyPointers, &CG_SaveStats>
+    LLIToolReg;
+
+using LLIOpts = decltype(LLIToolReg)::ParsedOptionsT;
 
 static ExitOnError ExitOnErr;
 
@@ -297,7 +311,7 @@ namespace {
 //
 class LLIObjectCache : public ObjectCache {
 public:
-  LLIObjectCache(const std::string& CacheDir) : CacheDir(CacheDir) {
+  LLIObjectCache(const std::string &CacheDir) : CacheDir(CacheDir) {
     // Add trailing '/' to cache dir if necessary.
     if (!this->CacheDir.empty() &&
         this->CacheDir[this->CacheDir.size() - 1] != '/')
@@ -321,7 +335,7 @@ public:
     outfile.close();
   }
 
-  std::unique_ptr<MemoryBuffer> getObject(const Module* M) override {
+  std::unique_ptr<MemoryBuffer> getObject(const Module *M) override {
     const std::string &ModuleID = M->getModuleIdentifier();
     std::string CacheName;
     if (!getCacheFilename(ModuleID, CacheName))
@@ -373,7 +387,8 @@ static void addCygMingExtraModule(ExecutionEngine &EE, LLVMContext &Context,
   IRBuilder<> Builder(Context);
 
   // Create a new module.
-  std::unique_ptr<Module> M = std::make_unique<Module>("CygMingHelper", Context);
+  std::unique_ptr<Module> M =
+      std::make_unique<Module>("CygMingHelper", Context);
   M->setTargetTriple(TargetTriple);
 
   // Create an empty function named "__main".
@@ -395,9 +410,11 @@ static void addCygMingExtraModule(ExecutionEngine &EE, LLVMContext &Context,
   EE.addModule(std::move(M));
 }
 
-static CodeGenOptLevel getOptLevel() {
-  if (auto Level = CodeGenOpt::parseLevel(OptLevel))
-    return *Level;
+static CodeGenOptLevel getOptLevel(const LLIOpts &Opts) {
+  std::string OStr = Opts.get<&LLI_OptLevel>();
+  char Level = OStr.empty() ? '2' : OStr[0];
+  if (auto L = CodeGenOpt::parseLevel(Level))
+    return *L;
   WithColor::error(errs(), "lli") << "invalid optimization level.\n";
   exit(1);
 }
@@ -407,15 +424,18 @@ static CodeGenOptLevel getOptLevel() {
   exit(1);
 }
 
-static Error loadDylibs();
-static int runOrcJIT(const char *ProgName);
-static void disallowOrcOptions();
-static Expected<std::unique_ptr<orc::ExecutorProcessControl>> launchRemote();
+static CodeGenOptLevel getOptLevel(const LLIOpts &Opts);
+static Error loadDylibs(const LLIOpts &Opts);
+static int runOrcJIT(const char *ProgName, const LLIOpts &Opts,
+                     const clv2::OptionsContext &OptsCtx);
+static void disallowOrcOptions(const LLIOpts &Opts);
+static Expected<std::unique_ptr<orc::ExecutorProcessControl>>
+launchRemote(const LLIOpts &Opts);
 
 //===----------------------------------------------------------------------===//
 // main Driver function
 //
-int main(int argc, char **argv, char * const *envp) {
+int main(int argc, char **argv, char *const *envp) {
   InitLLVM X(argc, argv);
 
   if (argc > 1)
@@ -427,36 +447,197 @@ int main(int argc, char **argv, char * const *envp) {
   InitializeNativeTargetAsmPrinter();
   InitializeNativeTargetAsmParser();
 
-  cl::ParseCommandLineOptions(argc, argv,
-                              "llvm interpreter & dynamic compiler\n");
+  clv2::OptionParser P;
+  P.add<&LLIToolReg>();
+  RegisterCommonLLVMOptionsHidden(P);
+  // lli showOptions (147 options)
+  P.showOptions({
+      "O",
+      "abort-on-max-devirt-iterations-reached",
+      "addrsig",
+      "align-loops",
+      "allow-ginsert-as-artifact",
+      "arc-contract-use-objc-claim-rv",
+      "asm-show-inst",
+      "basic-block-address-map",
+      "basic-block-section-match-infer",
+      "basic-block-sections",
+      "call-graph-section",
+      "cfg-hide-cold-paths",
+      "cfg-hide-deoptimize-paths",
+      "cfg-hide-unreachable-paths",
+      "code-model",
+      "compile-threads",
+      "crel",
+      "ctx-profile-force-is-specialized",
+      "data-sections",
+      "debug-entry-values",
+      "debugger-tune",
+      "debugify-atoms",
+      "debugify-func-limit",
+      "debugify-level",
+      "debugify-quiet",
+      "denormal-fp-math",
+      "denormal-fp-math-f32",
+      "disable-auto-upgrade-debug-info",
+      "disable-i2p-p2i-opt",
+      "disable-lazy-compilation",
+      "disable-tail-calls",
+      "dlopen",
+      "dot-cfg-mssa",
+      "dwarf64",
+      "dwarf-version",
+      "elide-all-zero-branch-weights",
+      "emit-bb-hash",
+      "emit-call-site-info",
+      "emit-compact-unwind-non-canonical",
+      "emit-dwarf-unwind",
+      "emulated-tls",
+      "enable-cache-manager",
+      "enable-cse-in-irtranslator",
+      "enable-cse-in-legalizer",
+      "enable-jmc-instrument",
+      "enable-name-compression",
+      "enable-no-signed-zeros-fp-math",
+      "enable-no-trapping-fp-math",
+      "enable-split-loopiv-heuristic",
+      "enable-tlsdesc",
+      "enable-vtable-profile-use",
+      "enable-vtable-value-profiling",
+      "entry-function",
+      "exception-model",
+      "experimental-debug-variable-locations",
+      "extra-archive",
+      "extra-module",
+      "extra-object",
+      "fake-argv0",
+      "fatal-warnings",
+      "fdpic",
+      "filetype",
+      "float-abi",
+      "force-dwarf-frame-section",
+      "force-interpreter",
+      "fp-contract",
+      "frame-pointer",
+      "fs-profile-debug-bw-threshold",
+      "fs-profile-debug-prob-diff-threshold",
+      "function-sections",
+      "generate-merged-base-profiles",
+      "gsframe",
+      "ignore-xcoff-visibility",
+      "implicit-mapsyms",
+      "incremental-linker-compatible",
+      "ir2vec-arg-weight",
+      "ir2vec-kind",
+      "ir2vec-opc-weight",
+      "ir2vec-type-weight",
+      "ir2vec-vocab-path",
+      "jd",
+      "jit-kind",
+      "jit-linker",
+      "large-data-threshold",
+      "march",
+      "mattr",
+      "mcjit-remote-process",
+      "mcpu",
+      "mc-relax-all",
+      "meabi",
+      "mir2vec-common-operand-weight",
+      "mir2vec-kind",
+      "mir2vec-opc-weight",
+      "mir2vec-print-all-vocab-entries",
+      "mir2vec-reg-operand-weight",
+      "mir2vec-vocab-path",
+      "mir-strip-debugify-only",
+      "ms-secure-hotpatch-functions-file",
+      "ms-secure-hotpatch-functions-list",
+      "mtriple",
+      "mxcoff-roptr",
+      "no-deprecated-warn",
+      "no-integrated-as",
+      "no-process-syms",
+      "no-type-check",
+      "no-warn",
+      "nozero-initialized-in-bss",
+      "object-cache-dir",
+      "object-size-offset-visitor-max-visit-instructions",
+      "orc-runtime",
+      "partition-static-data-sections",
+      "per-module-lazy",
+      "propeller-infer-threshold",
+      "relocation-model",
+      "reloc-section-sym",
+      "remote-mcjit",
+      "sample-profile-check-record-coverage",
+      "sample-profile-check-sample-coverage",
+      "sample-profile-max-propagate-iterations",
+      "save-temp-labels",
+      "separate-named-sections",
+      "soft-float",
+      "split-machine-functions",
+      "stackrealign",
+      "stack-size-section",
+      "stack-symbol-ordering",
+      "strict-dwarf",
+      "swift-async-fp",
+      "tailcallopt",
+      "target-abi",
+      "thread-entry",
+      "thread-model",
+      "tls-size",
+      "unique-basic-block-section-names",
+      "unique-section-names",
+      "use-ctors",
+      "vec-extabi",
+      "verify-legalizer-debug-locs",
+      "x86-align-branch",
+      "x86-align-branch-boundary",
+      "x86-branches-within-32B-boundaries",
+      "x86-enable-apx-for-relocation",
+      "x86-pad-max-prefix-size",
+      "x86-relax-relocations",
+      "x86-sse2avx",
+      "xcoff-traceback-table",
+      "xray-function-index",
+  });
+
+  auto OptsCtx = P.parse(argc, argv, "llvm interpreter & dynamic compiler\n");
+  auto *Opts = OptsCtx->getViewPtr<&LLIToolReg>();
+
+  setTPCValues(CGPassBuilderOption{});
 
   // If the user doesn't want core files, disable them.
-  if (DisableCoreFiles)
+  if (Opts->get<&LLI_DisableCoreFiles>())
     sys::Process::PreventCoreFiles();
 
-  ExitOnErr(loadDylibs());
+  ExitOnErr(loadDylibs(*Opts));
 
+  std::string EntryFunc = Opts->get<&LLI_EntryFunc>();
   if (EntryFunc.empty()) {
     WithColor::error(errs(), argv[0])
         << "--entry-function name cannot be empty\n";
     exit(1);
   }
 
+  JITKind UseJITKind = Opts->get<&LLI_UseJITKind>();
+  bool ForceInterpreter = Opts->get<&LLI_ForceInterpreter>();
   if (UseJITKind == JITKind::MCJIT || ForceInterpreter)
-    disallowOrcOptions();
+    disallowOrcOptions(*Opts);
   else
-    return runOrcJIT(argv[0]);
+    return runOrcJIT(argv[0], *Opts, *OptsCtx);
 
   // Old lli implementation based on ExecutionEngine and MCJIT.
-  LLVMContext Context;
+  LLVMContext Context(*OptsCtx);
 
   // Load the bitcode...
   SMDiagnostic Err;
+  std::string InputFile = Opts->get<&LLI_InputFile>();
   std::unique_ptr<Module> Owner = parseIRFile(InputFile, Err, Context);
   Module *Mod = Owner.get();
   if (!Mod)
     reportError(Err, argv[0]);
 
+  bool EnableCacheManager = Opts->get<&LLI_EnableCacheManager>();
   if (EnableCacheManager) {
     std::string CacheName("file:");
     CacheName.append(InputFile);
@@ -464,6 +645,7 @@ int main(int argc, char **argv, char * const *envp) {
   }
 
   // If not jitting lazily, load the whole bitcode file eagerly too.
+  bool NoLazyCompilation = Opts->get<&LLI_NoLazyCompilation>();
   if (NoLazyCompilation) {
     // Use *argv instead of argv[0] to work around a wrong GCC warning.
     ExitOnError ExitOnErr(std::string(*argv) +
@@ -471,23 +653,32 @@ int main(int argc, char **argv, char * const *envp) {
     ExitOnErr(Mod->materializeAll());
   }
 
+  std::string TargetTriple = Opts->get<&LLI_TargetTriple>();
   std::string ErrorMsg;
   EngineBuilder builder(std::move(Owner));
-  builder.setMArch(codegen::getMArch());
-  builder.setMCPU(codegen::getCPUStr());
-  builder.setMAttrs(codegen::getFeatureList());
-  if (auto RM = codegen::getExplicitRelocModel())
+  builder.setMArch(codegen::getMArch(*OptsCtx));
+  builder.setMCPU(codegen::getCPUStr(*OptsCtx));
+  builder.setMAttrs(codegen::getFeatureList(*OptsCtx));
+  if (auto RM = codegen::getExplicitRelocModel(*OptsCtx))
     builder.setRelocationModel(*RM);
-  if (auto CM = codegen::getExplicitCodeModel())
+  if (auto CM = codegen::getExplicitCodeModel(*OptsCtx))
     builder.setCodeModel(*CM);
   builder.setErrorStr(&ErrorMsg);
-  builder.setEngineKind(ForceInterpreter
-                        ? EngineKind::Interpreter
-                        : EngineKind::JIT);
+  builder.setEngineKind(ForceInterpreter ? EngineKind::Interpreter
+                                         : EngineKind::JIT);
 
   // If we are supposed to override the target triple, do so now.
   if (!TargetTriple.empty())
     Mod->setTargetTriple(Triple(Triple::normalize(TargetTriple)));
+
+  bool RemoteMCJIT = Opts->get<&LLI_RemoteMCJIT>();
+  std::string ChildExecPath = Opts->get<&LLI_ChildExecPath>();
+  std::string ObjectCacheDir = Opts->get<&LLI_ObjectCacheDir>();
+  std::vector<std::string> ExtraModules = Opts->get<&LLI_ExtraModules>();
+  std::vector<std::string> ExtraObjects = Opts->get<&LLI_ExtraObjects>();
+  std::vector<std::string> ExtraArchives = Opts->get<&LLI_ExtraArchives>();
+  std::string FakeArgv0 = Opts->get<&LLI_FakeArgv0>();
+  std::vector<std::string> InputArgvVec = Opts->get<&LLI_InputArgv>();
 
   // Enable MCJIT if desired.
   RTDyldMemoryManager *RTDyldMM = nullptr;
@@ -500,19 +691,19 @@ int main(int argc, char **argv, char * const *envp) {
     // Deliberately construct a temp std::unique_ptr to pass in. Do not null out
     // RTDyldMM: We still use it below, even though we don't own it.
     builder.setMCJITMemoryManager(
-      std::unique_ptr<RTDyldMemoryManager>(RTDyldMM));
+        std::unique_ptr<RTDyldMemoryManager>(RTDyldMM));
   } else if (RemoteMCJIT) {
     WithColor::error(errs(), argv[0])
         << "remote process execution does not work with the interpreter.\n";
     exit(1);
   }
 
-  builder.setOptLevel(getOptLevel());
+  builder.setOptLevel(getOptLevel(*Opts));
 
-  TargetOptions Options =
-      codegen::InitTargetOptionsFromCodeGenFlags(Triple(TargetTriple));
+  TargetOptions Options = codegen::InitTargetOptionsFromCodeGenFlags(
+      Triple(TargetTriple), *OptsCtx);
 
-  if (FloatABI::ABIType ABI = codegen::getFloatABIForCalls();
+  if (FloatABI::ABIType ABI = codegen::getFloatABIForCalls(*OptsCtx);
       ABI != FloatABI::Default && !Mod->getModuleFlag("float-abi")) {
     Mod->addModuleFlag(Module::Error, "float-abi",
                        MDString::get(Context, FloatABI::getABITypeName(ABI)));
@@ -598,12 +789,11 @@ int main(int argc, char **argv, char * const *envp) {
   // The following functions have no effect if their respective profiling
   // support wasn't enabled in the build configuration.
   EE->RegisterJITEventListener(
-                JITEventListener::createOProfileJITEventListener());
-  EE->RegisterJITEventListener(
-                JITEventListener::createIntelJITEventListener());
+      JITEventListener::createOProfileJITEventListener());
+  EE->RegisterJITEventListener(JITEventListener::createIntelJITEventListener());
   if (!RemoteMCJIT)
     EE->RegisterJITEventListener(
-                JITEventListener::createPerfJITEventListener());
+        JITEventListener::createPerfJITEventListener());
 
   if (!NoLazyCompilation && RemoteMCJIT) {
     WithColor::warning(errs(), argv[0])
@@ -624,7 +814,7 @@ int main(int argc, char **argv, char * const *envp) {
   }
 
   // Add the module's name to the start of the vector of arguments to main().
-  InputArgv.insert(InputArgv.begin(), InputFile);
+  InputArgvVec.insert(InputArgvVec.begin(), InputFile);
 
   // Call the main function from M as if its signature were:
   //   int main (int argc, char **argv, const char **envp)
@@ -683,10 +873,11 @@ int main(int argc, char **argv, char * const *envp) {
     (void)EE->getPointerToFunction(EntryFn);
     // Clear instruction cache before code will be executed.
     if (RTDyldMM)
-      static_cast<SectionMemoryManager*>(RTDyldMM)->invalidateInstructionCache();
+      static_cast<SectionMemoryManager *>(RTDyldMM)
+          ->invalidateInstructionCache();
 
     // Run main.
-    Result = EE->runFunctionAsMain(EntryFn, InputArgv, envp);
+    Result = EE->runFunctionAsMain(EntryFn, InputArgvVec, envp);
 
     // Run static destructors.
     EE->runStaticConstructorsDestructors(true);
@@ -710,7 +901,7 @@ int main(int argc, char **argv, char * const *envp) {
     abort();
   } else {
     // else == "if (RemoteMCJIT)"
-    orc::ExecutionSession ES(ExitOnErr(launchRemote()));
+    orc::ExecutionSession ES(ExitOnErr(launchRemote(*Opts)));
 
     // Remote target MCJIT doesn't (yet) support static constructors. No reason
     // it couldn't. This is a limitation of the LLI implementation, not the
@@ -722,8 +913,8 @@ int main(int argc, char **argv, char * const *envp) {
             ES.getExecutorProcessControl()));
 
     // Forward MCJIT's memory manager calls to the remote memory manager.
-    static_cast<ForwardingMemoryManager*>(RTDyldMM)->setMemMgr(
-      std::move(RemoteMM));
+    static_cast<ForwardingMemoryManager *>(RTDyldMM)->setMemMgr(
+        std::move(RemoteMM));
 
     // Forward MCJIT's symbol resolution calls to the remote.
     static_cast<ForwardingMemoryManager *>(RTDyldMM)->setResolver(
@@ -783,7 +974,8 @@ static ToolOutputFile &claimToolOutput() {
   return *ToolOutput;
 }
 
-static std::function<void(Module &)> createIRDebugDumper() {
+static std::function<void(Module &)> createIRDebugDumper(const LLIOpts &Opts) {
+  DumpKind OrcDumpKind = Opts.get<&LLI_OrcDumpKind>();
   switch (OrcDumpKind) {
   case DumpKind::NoDump:
   case DumpKind::DumpDebugDescriptor:
@@ -829,7 +1021,9 @@ static std::function<void(Module &)> createIRDebugDumper() {
   llvm_unreachable("Unknown DumpKind");
 }
 
-static std::function<void(MemoryBuffer &)> createObjDebugDumper() {
+static std::function<void(MemoryBuffer &)>
+createObjDebugDumper(const LLIOpts &Opts) {
+  DumpKind OrcDumpKind = Opts.get<&LLI_OrcDumpKind>();
   switch (OrcDumpKind) {
   case DumpKind::NoDump:
   case DumpKind::DumpFuncsToStdOut:
@@ -866,8 +1060,8 @@ static std::function<void(MemoryBuffer &)> createObjDebugDumper() {
   llvm_unreachable("Unknown DumpKind");
 }
 
-static Error loadDylibs() {
-  for (const auto &Dylib : Dylibs) {
+static Error loadDylibs(const LLIOpts &Opts) {
+  for (const auto &Dylib : Opts.get<&LLI_Dylibs>()) {
     std::string ErrMsg;
     if (sys::DynamicLibrary::LoadLibraryPermanently(Dylib.c_str(), &ErrMsg))
       return make_error<StringError>(ErrMsg, inconvertibleErrorCode());
@@ -879,7 +1073,7 @@ static Error loadDylibs() {
 static void exitOnLazyCallThroughFailure() { exit(1); }
 
 static Expected<orc::ThreadSafeModule>
-loadModule(StringRef Path, orc::ThreadSafeContext TSCtx) {
+loadModule(StringRef Path, orc::ThreadSafeContext TSCtx, const LLIOpts &Opts) {
   SMDiagnostic Err;
   auto M = TSCtx.withContextDo(
       [&](LLVMContext *Ctx) { return parseIRFile(Path, Err, *Ctx); });
@@ -892,7 +1086,7 @@ loadModule(StringRef Path, orc::ThreadSafeContext TSCtx) {
     return make_error<StringError>(std::move(ErrMsg), inconvertibleErrorCode());
   }
 
-  if (EnableCacheManager)
+  if (Opts.get<&LLI_EnableCacheManager>())
     M->setModuleIdentifier("file:" + M->getModuleIdentifier());
 
   return orc::ThreadSafeModule(std::move(M), std::move(TSCtx));
@@ -923,23 +1117,41 @@ static Error tryEnableDebugSupport(orc::LLJIT &J) {
   return Error::success();
 }
 
-static int runOrcJIT(const char *ProgName) {
+static int runOrcJIT(const char *ProgName, const LLIOpts &Opts,
+                     const clv2::OptionsContext &OptsCtx) {
+  std::string InputFile = Opts.get<&LLI_InputFile>();
+  std::string EntryFunc = Opts.get<&LLI_EntryFunc>();
+  JITKind UseJITKind = Opts.get<&LLI_UseJITKind>();
+  JITLinkerKind JITLinker = Opts.get<&LLI_JITLinker>();
+  std::string OrcRuntime = Opts.get<&LLI_OrcRuntime>();
+  unsigned LazyJITCompileThreads = Opts.get<&LLI_LazyJITCompileThreads>();
+  bool PerModuleLazy = Opts.get<&LLI_PerModuleLazy>();
+  bool NoProcessSymbols = Opts.get<&LLI_NoProcessSymbols>();
+  bool EnableCacheManager = Opts.get<&LLI_EnableCacheManager>();
+  std::string ObjectCacheDir = Opts.get<&LLI_ObjectCacheDir>();
+  std::vector<std::string> ThreadEntryPoints =
+      Opts.get<&LLI_ThreadEntryPoints>();
+  std::vector<std::string> ExtraObjects = Opts.get<&LLI_ExtraObjects>();
+  std::vector<std::string> InputArgvVec = Opts.get<&LLI_InputArgv>();
+  LLJITPlatform Platform = Opts.get<&LLI_Platform>();
+
   // Start setting up the JIT environment.
 
   // Parse the main module.
-  orc::ThreadSafeContext TSCtx(std::make_unique<LLVMContext>());
-  auto MainModule = ExitOnErr(loadModule(InputFile, TSCtx));
+  orc::ThreadSafeContext TSCtx(
+      std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext()));
+  auto MainModule = ExitOnErr(loadModule(InputFile, TSCtx, Opts));
 
   // Get TargetTriple and DataLayout from the main module if they're explicitly
   // set.
   std::optional<Triple> TT;
   std::optional<DataLayout> DL;
   MainModule.withModuleDo([&](Module &M) {
-      if (!M.getTargetTriple().empty())
-        TT = M.getTargetTriple();
-      if (!M.getDataLayout().isDefault())
-        DL = M.getDataLayout();
-    });
+    if (!M.getTargetTriple().empty())
+      TT = M.getTargetTriple();
+    if (!M.getDataLayout().isDefault())
+      DL = M.getDataLayout();
+  });
 
   orc::LLLazyJITBuilder Builder;
 
@@ -951,15 +1163,15 @@ static int runOrcJIT(const char *ProgName) {
   if (DL)
     Builder.setDataLayout(DL);
 
-  if (!codegen::getMArch().empty())
+  if (!codegen::getMArch(OptsCtx).empty())
     Builder.getJITTargetMachineBuilder()->getTargetTriple().setArchName(
-        codegen::getMArch());
+        codegen::getMArch(OptsCtx));
 
   Builder.getJITTargetMachineBuilder()
-      ->setCPU(codegen::getCPUStr())
-      .addFeatures(codegen::getFeatureList())
-      .setRelocationModel(codegen::getExplicitRelocModel())
-      .setCodeModel(codegen::getExplicitCodeModel());
+      ->setCPU(codegen::getCPUStr(OptsCtx))
+      .addFeatures(codegen::getFeatureList(OptsCtx))
+      .setRelocationModel(codegen::getExplicitRelocModel(OptsCtx))
+      .setCodeModel(codegen::getExplicitCodeModel(OptsCtx));
 
   // Link process symbols unless NoProcessSymbols is set.
   Builder.setLinkProcessSymbolsByDefault(!NoProcessSymbols);
@@ -988,19 +1200,19 @@ static int runOrcJIT(const char *ProgName) {
     CacheManager = std::make_unique<LLIObjectCache>(ObjectCacheDir);
 
     Builder.setCompileFunctionCreator(
-      [&](orc::JITTargetMachineBuilder JTMB)
+        [&](orc::JITTargetMachineBuilder JTMB)
             -> Expected<std::unique_ptr<orc::IRCompileLayer::IRCompiler>> {
-        if (LazyJITCompileThreads > 0)
-          return std::make_unique<orc::ConcurrentIRCompiler>(std::move(JTMB),
-                                                        CacheManager.get());
+          if (LazyJITCompileThreads > 0)
+            return std::make_unique<orc::ConcurrentIRCompiler>(
+                std::move(JTMB), CacheManager.get());
 
-        auto TM = JTMB.createTargetMachine();
-        if (!TM)
-          return TM.takeError();
+          auto TM = JTMB.createTargetMachine();
+          if (!TM)
+            return TM.takeError();
 
-        return std::make_unique<orc::TMOwningSimpleCompiler>(std::move(*TM),
-                                                        CacheManager.get());
-      });
+          return std::make_unique<orc::TMOwningSimpleCompiler>(
+              std::move(*TM), CacheManager.get());
+        });
   }
 
   // Enable debugging of JIT'd code (only works on JITLink for ELF and MachO).
@@ -1054,7 +1266,8 @@ static int runOrcJIT(const char *ProgName) {
   auto J = ExitOnErr(Builder.create());
 
   auto *ObjLayer = &J->getObjLinkingLayer();
-  if (auto *RTDyldObjLayer = dyn_cast<orc::RTDyldObjectLinkingLayer>(ObjLayer)) {
+  if (auto *RTDyldObjLayer =
+          dyn_cast<orc::RTDyldObjectLinkingLayer>(ObjLayer)) {
     RTDyldObjLayer->registerJITEventListener(
         *JITEventListener::createGDBRegistrationListener());
 #if LLVM_USE_OPROFILE
@@ -1074,7 +1287,7 @@ static int runOrcJIT(const char *ProgName) {
   if (PerModuleLazy)
     J->setPartitionFunction(orc::IRPartitionLayer::compileWholeModule);
 
-  auto IRDump = createIRDebugDumper();
+  auto IRDump = createIRDebugDumper(Opts);
   J->getIRTransformLayer().setTransform(
       [&](orc::ThreadSafeModule TSM,
           const orc::MaterializationResponsibility &R) {
@@ -1088,7 +1301,7 @@ static int runOrcJIT(const char *ProgName) {
         return TSM;
       });
 
-  auto ObjDump = createObjDebugDumper();
+  auto ObjDump = createObjDebugDumper(Opts);
   J->getObjTransformLayer().setTransform(
       [&](std::unique_ptr<MemoryBuffer> Obj)
           -> Expected<std::unique_ptr<MemoryBuffer>> {
@@ -1122,40 +1335,45 @@ static int runOrcJIT(const char *ProgName) {
 
   // Create JITDylibs and add any extra modules.
   {
-    // Create JITDylibs, keep a map from argument index to dylib. We will use
-    // -extra-module argument indexes to determine what dylib to use for each
-    // -extra-module.
+    // Create JITDylibs, keep a map from argv index to dylib. We use
+    // elementPositions<> to track where each -jd/-extra-module/-extra-archive
+    // appeared on the command line so that modules are associated with the
+    // last -jd that preceded them.
+    std::vector<std::string> JITDylibsVec = Opts.get<&LLI_JITDylibs>();
+    const auto &JDPositions = Opts.elementPositions<&LLI_JITDylibs>();
+    std::vector<std::string> ExtraModulesVec = Opts.get<&LLI_ExtraModules>();
+    const auto &EMPositions = Opts.elementPositions<&LLI_ExtraModules>();
+    const auto &EAPositions = Opts.elementPositions<&LLI_ExtraArchives>();
+
     std::map<unsigned, orc::JITDylib *> IdxToDylib;
     IdxToDylib[0] = &J->getMainJITDylib();
-    for (auto JDItr = JITDylibs.begin(), JDEnd = JITDylibs.end();
-         JDItr != JDEnd; ++JDItr) {
-      orc::JITDylib *JD = J->getJITDylibByName(*JDItr);
+    for (std::size_t JDI = 0; JDI < JITDylibsVec.size(); ++JDI) {
+      const std::string &JDName = JITDylibsVec[JDI];
+      orc::JITDylib *JD = J->getJITDylibByName(JDName);
       if (!JD) {
-        JD = &ExitOnErr(J->createJITDylib(*JDItr));
+        JD = &ExitOnErr(J->createJITDylib(JDName));
         J->getMainJITDylib().addToLinkOrder(*JD);
         JD->addToLinkOrder(J->getMainJITDylib());
       }
-      IdxToDylib[JITDylibs.getPosition(JDItr - JITDylibs.begin())] = JD;
+      IdxToDylib[JDPositions[JDI]] = JD;
     }
 
-    for (auto EMItr = ExtraModules.begin(), EMEnd = ExtraModules.end();
-         EMItr != EMEnd; ++EMItr) {
-      auto M = ExitOnErr(loadModule(*EMItr, TSCtx));
-
-      auto EMIdx = ExtraModules.getPosition(EMItr - ExtraModules.begin());
+    for (std::size_t EMI = 0; EMI < ExtraModulesVec.size(); ++EMI) {
+      auto M = ExitOnErr(loadModule(ExtraModulesVec[EMI], TSCtx, Opts));
+      auto EMIdx = EMPositions[EMI];
       assert(EMIdx != 0 && "ExtraModule should have index > 0");
-      auto JDItr = std::prev(IdxToDylib.lower_bound(EMIdx));
+      auto JDItr = std::prev(IdxToDylib.upper_bound(EMIdx));
       auto &JD = *JDItr->second;
       ExitOnErr(AddModule(JD, std::move(M)));
     }
 
-    for (auto EAItr = ExtraArchives.begin(), EAEnd = ExtraArchives.end();
-         EAItr != EAEnd; ++EAItr) {
-      auto EAIdx = ExtraArchives.getPosition(EAItr - ExtraArchives.begin());
+    std::vector<std::string> ExtraArchivesVec = Opts.get<&LLI_ExtraArchives>();
+    for (std::size_t EAI = 0; EAI < ExtraArchivesVec.size(); ++EAI) {
+      auto EAIdx = EAPositions[EAI];
       assert(EAIdx != 0 && "ExtraArchive should have index > 0");
-      auto JDItr = std::prev(IdxToDylib.lower_bound(EAIdx));
+      auto JDItr = std::prev(IdxToDylib.upper_bound(EAIdx));
       auto &JD = *JDItr->second;
-      ExitOnErr(J->linkStaticLibraryInto(JD, EAItr->c_str()));
+      ExitOnErr(J->linkStaticLibraryInto(JD, ExtraArchivesVec[EAI].c_str()));
     }
   }
 
@@ -1181,7 +1399,7 @@ static int runOrcJIT(const char *ProgName) {
   using MainFnTy = int(int, char *[]);
   auto MainAddr = ExitOnErr(J->lookup(EntryFunc));
   auto MainFn = MainAddr.toPtr<MainFnTy *>();
-  int Result = orc::runAsMain(MainFn, InputArgv, StringRef(InputFile));
+  int Result = orc::runAsMain(MainFn, InputArgvVec, StringRef(InputFile));
 
   // Wait for -entry-point threads.
   for (auto &AltEntryThread : AltEntryThreads)
@@ -1193,26 +1411,27 @@ static int runOrcJIT(const char *ProgName) {
   return Result;
 }
 
-static void disallowOrcOptions() {
+static void disallowOrcOptions(const LLIOpts &Opts) {
   // Make sure nobody used an orc-lazy specific option accidentally.
 
-  if (LazyJITCompileThreads != 0) {
+  if (Opts.get<&LLI_LazyJITCompileThreads>() != 0) {
     errs() << "-compile-threads requires -jit-kind=orc-lazy\n";
     exit(1);
   }
 
-  if (!ThreadEntryPoints.empty()) {
+  if (!Opts.get<&LLI_ThreadEntryPoints>().empty()) {
     errs() << "-thread-entry requires -jit-kind=orc-lazy\n";
     exit(1);
   }
 
-  if (PerModuleLazy) {
+  if (Opts.get<&LLI_PerModuleLazy>()) {
     errs() << "-per-module-lazy requires -jit-kind=orc-lazy\n";
     exit(1);
   }
 }
 
-static Expected<std::unique_ptr<orc::ExecutorProcessControl>> launchRemote() {
+static Expected<std::unique_ptr<orc::ExecutorProcessControl>>
+launchRemote(const LLIOpts &Opts) {
 #ifndef LLVM_ON_UNIX
   llvm_unreachable("launchRemote not supported on non-Unix platforms");
 #else
@@ -1232,13 +1451,13 @@ static Expected<std::unique_ptr<orc::ExecutorProcessControl>> launchRemote() {
     close(PipeFD[0][1]);
     close(PipeFD[1][0]);
 
-
     // Execute the child process.
+    std::string CEP = Opts.get<&LLI_ChildExecPath>();
     std::unique_ptr<char[]> ChildPath, ChildIn, ChildOut;
     {
-      ChildPath.reset(new char[ChildExecPath.size() + 1]);
-      llvm::copy(ChildExecPath, &ChildPath[0]);
-      ChildPath[ChildExecPath.size()] = '\0';
+      ChildPath.reset(new char[CEP.size() + 1]);
+      llvm::copy(CEP, &ChildPath[0]);
+      ChildPath[CEP.size()] = '\0';
       std::string ChildInStr = utostr(PipeFD[0][0]);
       ChildIn.reset(new char[ChildInStr.size() + 1]);
       llvm::copy(ChildInStr, &ChildIn[0]);
@@ -1249,8 +1468,8 @@ static Expected<std::unique_ptr<orc::ExecutorProcessControl>> launchRemote() {
       ChildOut[ChildOutStr.size()] = '\0';
     }
 
-    char * const args[] = { &ChildPath[0], &ChildIn[0], &ChildOut[0], nullptr };
-    int rc = execv(ChildExecPath.c_str(), args);
+    char *const args[] = {&ChildPath[0], &ChildIn[0], &ChildOut[0], nullptr};
+    int rc = execv(CEP.c_str(), args);
     if (rc != 0)
       perror("Error executing child process: ");
     llvm_unreachable("Error executing child process");

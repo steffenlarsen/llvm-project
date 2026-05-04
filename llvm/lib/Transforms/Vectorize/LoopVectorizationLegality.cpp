@@ -27,10 +27,13 @@
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/VectorUtils.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
+#include "llvm/Transforms/Vectorize/VectorizeOptions.h"
 
 using namespace llvm;
 using namespace PatternMatch;
@@ -39,45 +42,44 @@ using namespace LoopVectorizationUtils;
 #define LV_NAME "loop-vectorize"
 #define DEBUG_TYPE LV_NAME
 
-static cl::opt<bool>
-    EnableIfConversion("enable-if-conversion", cl::init(true), cl::Hidden,
-                       cl::desc("Enable if-conversion during vectorization."));
+static bool getEnableIfConversion(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_EnableIfConversion>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-AllowStridedPointerIVs("lv-strided-pointer-ivs", cl::init(false), cl::Hidden,
-                       cl::desc("Enable recognition of non-constant strided "
-                                "pointer induction variables."));
+static bool getAllowStridedPointerIVs(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_AllowStridedPointerIVs>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    HintsAllowReordering("hints-allow-reordering", cl::init(true), cl::Hidden,
-                         cl::desc("Allow enabling loop hints to reorder "
-                                  "FP operations during vectorization."));
+static bool getHintsAllowReordering(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_HintsAllowReordering>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<LoopVectorizeHints::ScalableForceKind>
-    ForceScalableVectorization(
-        "scalable-vectorization", cl::init(LoopVectorizeHints::SK_Unspecified),
-        cl::Hidden,
-        cl::desc("Control whether the compiler can use scalable vectors to "
-                 "vectorize a loop"),
-        cl::values(
-            clEnumValN(LoopVectorizeHints::SK_FixedWidthOnly, "off",
-                       "Scalable vectorization is disabled."),
-            clEnumValN(
-                LoopVectorizeHints::SK_PreferScalable, "preferred",
-                "Scalable vectorization is available and favored when the "
-                "cost is inconclusive."),
-            clEnumValN(
-                LoopVectorizeHints::SK_PreferScalable, "on",
-                "Scalable vectorization is available and favored when the "
-                "cost is inconclusive."),
-            clEnumValN(
-                LoopVectorizeHints::SK_AlwaysScalable, "always",
-                "Scalable vectorization is available and always favored when "
-                "feasible")));
+// TODO: Move size-based thresholds out of legality checking, make cost based
+// decisions instead of hard thresholds.
+static unsigned getVectorizeSCEVCheckThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_VectorizeSCEVCheckThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> EnableHistogramVectorization(
-    "enable-histogram-loop-vectorization", cl::init(false), cl::Hidden,
-    cl::desc("Enables autovectorization of some loops containing histograms"));
+static unsigned getPragmaVectorizeSCEVCheckThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_PragmaVectorizeSCEVCheckThreshold>(
+      F.getContext().getOptionsContext());
+}
+
+static LoopVectorizeHints::ScalableForceKind
+getForceScalableVectorization(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::VectorizeOptsReg,
+                                    &clv2::VEC_ForceScalableVectorization>(
+      F.getContext().getOptionsContext(), SK_Unspecified);
+}
+
+static bool getEnableHistogramVectorization(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_EnableHistogramVectorization>(
+      F.getContext().getOptionsContext());
+}
 
 /// Maximum vectorization interleave count.
 static const unsigned MaxInterleaveFactor = 16;
@@ -101,16 +103,21 @@ LoopVectorizeHints::LoopVectorizeHints(const Loop *L,
                                        OptimizationRemarkEmitter &ORE,
                                        const TargetTransformInfo *TTI)
     : Width("vectorize.width",
-            VectorizerParams::VectorizationFactor.getKnownMinValue(), HK_WIDTH),
+            VectorizerParams::getVectorizationFactor(
+                L->getHeader()->getParent()->getContext().getOptionsContext())
+                .getKnownMinValue(),
+            HK_WIDTH),
       Interleave("interleave.count", InterleaveOnlyWhenForced, HK_INTERLEAVE),
       Force(FK_Undefined), IsVectorized("isvectorized", 0, HK_ISVECTORIZED),
       Predicate(FK_Undefined), Scalable(SK_Unspecified), TheLoop(L), ORE(ORE) {
   // Populate values with existing loop metadata.
   getHintsFromMetadata();
 
+  const auto &FOptsCtx =
+      L->getHeader()->getParent()->getContext().getOptionsContext();
   // force-vector-interleave overrides DisableInterleaving.
-  if (VectorizerParams::isInterleaveForced())
-    Interleave.Value = VectorizerParams::VectorizationInterleave;
+  if (VectorizerParams::isInterleaveForced(FOptsCtx))
+    Interleave.Value = VectorizerParams::getVectorizationInterleave(FOptsCtx);
 
   // If the metadata doesn't explicitly specify whether to enable scalable
   // vectorization, then decide based on the following criteria (increasing
@@ -132,12 +139,12 @@ LoopVectorizeHints::LoopVectorizeHints(const Loop *L,
 
   // If the flag is set to force any use of scalable vectors, override the loop
   // hints.
-  if (ForceScalableVectorization.getValue() !=
-      LoopVectorizeHints::SK_Unspecified)
-    Scalable = ForceScalableVectorization.getValue();
+  if (getForceScalableVectorization(*L->getHeader()->getParent()) !=
+      SK_Unspecified)
+    Scalable = getForceScalableVectorization(*L->getHeader()->getParent());
 
   // If force-vector-width is scalable, force scalable vectorization.
-  if (VectorizerParams::VectorizationFactor.isScalable())
+  if (VectorizerParams::getVectorizationFactor(FOptsCtx).isScalable())
     Scalable = SK_AlwaysScalable;
 
   // Scalable vectorization is disabled if no preference is specified.
@@ -244,7 +251,8 @@ bool LoopVectorizeHints::allowReordering() const {
   // Allow the vectorizer to change the order of operations if enabling
   // loop hints are provided
   ElementCount EC = getWidth();
-  return HintsAllowReordering &&
+  const Function &F = *TheLoop->getHeader()->getParent();
+  return getHintsAllowReordering(F) &&
          (getForce() == LoopVectorizeHints::FK_Enabled ||
           EC.getKnownMinValue() > 1);
 }
@@ -889,9 +897,10 @@ bool LoopVectorizationLegality::canVectorizeInstr(Instruction &I) {
     // historical vectorizer behavior after a generalization of the
     // IVDescriptor code.  The intent is to remove this check, but we
     // have to fix issues around code quality for such loops first.
+    const Function &F = *TheLoop->getHeader()->getParent();
     auto IsDisallowedStridedPointerInduction =
-        [](const InductionDescriptor &ID) {
-          if (AllowStridedPointerIVs)
+        [&F](const InductionDescriptor &ID) {
+          if (getAllowStridedPointerIVs(F))
             return false;
           return ID.getKind() == InductionDescriptor::IK_PtrInduction &&
                  ID.getConstIntStepValue() == nullptr;
@@ -1149,7 +1158,8 @@ static bool findHistogram(LoadInst *LI, StoreInst *HSt, Loop *TheLoop,
 bool LoopVectorizationLegality::canVectorizeIndirectUnsafeDependences() {
   // For now, we only support an IndirectUnsafe dependency that calculates
   // a histogram
-  if (!EnableHistogramVectorization)
+  const Function &F = *TheLoop->getHeader()->getParent();
+  if (!getEnableHistogramVectorization(F))
     return false;
 
   // Find a single IndirectUnsafe dependency.
@@ -1447,7 +1457,8 @@ bool LoopVectorizationLegality::blockCanBePredicated(
 }
 
 bool LoopVectorizationLegality::canVectorizeWithIfConvert() {
-  if (!EnableIfConversion) {
+  const Function &F = *TheLoop->getHeader()->getParent();
+  if (!getEnableIfConversion(F)) {
     reportVectorizationFailure("If-conversion is disabled",
                                "IfConversionDisabled", ORE, TheLoop);
     return false;
@@ -1991,6 +2002,24 @@ bool LoopVectorizationLegality::canVectorize(bool UseVPlanNativePath) {
                               ? " (with a runtime bound check)"
                               : "")
                       << "!\n");
+  }
+
+  const Function &F = *TheLoop->getHeader()->getParent();
+  unsigned SCEVThreshold = getVectorizeSCEVCheckThreshold(F);
+  if (Hints->getForce() == LoopVectorizeHints::FK_Enabled)
+    SCEVThreshold = getPragmaVectorizeSCEVCheckThreshold(F);
+
+  if (PSE.getPredicate().getComplexity() > SCEVThreshold) {
+    LLVM_DEBUG(dbgs() << "LV: Vectorization not profitable "
+                         "due to SCEVThreshold");
+    reportVectorizationFailure(
+        "Too many SCEV checks needed",
+        "Too many SCEV assumptions need to be made and checked at runtime",
+        "TooManySCEVRunTimeChecks", ORE, TheLoop);
+    if (DoExtraAnalysis)
+      Result = false;
+    else
+      return false;
   }
 
   // Okay! We've done all the tests. If any have failed, return false. Otherwise

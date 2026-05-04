@@ -28,11 +28,13 @@
 #include "Query.h"
 #include "QueryParser.h"
 #include "QuerySession.h"
+#include "clang-tools-extra/ClangToolsExtraOptionsOptInfos.h"
 #include "clang/Frontend/ASTUnit.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/LineEditor/LineEditor.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Signals.h"
@@ -47,30 +49,52 @@ using namespace clang::query;
 using namespace clang::tooling;
 using namespace llvm;
 
-static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
 static cl::OptionCategory ClangQueryCategory("clang-query options");
 
-static cl::opt<bool>
-    UseColor("use-color",
-             cl::desc(
-                 R"(Use colors in detailed AST output. If not set, colors
-will be used if the terminal connected to
-standard output supports colors.)"),
-             cl::init(false), cl::cat(ClangQueryCategory));
+struct ClangQueryOptions {
+  bool UseColor = false;
+  bool UseColorSet = false;
+  std::vector<std::string> Commands;
+  std::vector<std::string> CommandFiles;
+  std::string PreloadFile;
+};
 
-static cl::list<std::string> Commands("c", cl::desc("Specify command to run"),
-                                      cl::value_desc("command"),
-                                      cl::cat(ClangQueryCategory));
+inline constexpr clv2::OptionsRegistry<
+    &clv2::CTE_CQ_UseColor, &clv2::CTE_CQ_Command, &clv2::CTE_CQ_CommandFile,
+    &clv2::CTE_CQ_Preload>
+    ClangQueryOptsReg;
 
-static cl::list<std::string> CommandFiles("f",
-                                          cl::desc("Read commands from file"),
-                                          cl::value_desc("file"),
-                                          cl::cat(ClangQueryCategory));
+static void
+applyClangQueryOpts(const decltype(ClangQueryOptsReg)::ParsedOptionsT &Opts,
+                    ClangQueryOptions &ToolOpts) {
+  bool ParsedUseColor = Opts.get<&clv2::CTE_CQ_UseColor>();
+  ToolOpts.UseColor = ParsedUseColor;
+  if (ParsedUseColor)
+    ToolOpts.UseColorSet = true;
+  ToolOpts.Commands = Opts.get<&clv2::CTE_CQ_Command>();
+  ToolOpts.CommandFiles = Opts.get<&clv2::CTE_CQ_CommandFile>();
+  ToolOpts.PreloadFile = Opts.get<&clv2::CTE_CQ_Preload>();
+}
 
-static cl::opt<std::string> PreloadFile(
-    "preload",
-    cl::desc("Preload commands from file and start interactive mode"),
-    cl::value_desc("file"), cl::cat(ClangQueryCategory));
+static void configureParser(clv2::OptionParser &P,
+                            ClangQueryOptions &ToolOpts) {
+  using ParsedT = decltype(ClangQueryOptsReg)::ParsedOptionsT;
+  auto *Storage = new ParsedT();
+  decltype(ClangQueryOptsReg)::applyDefaultsTo(*Storage);
+  std::vector<clv2::detail::OptionEntry> Entries;
+  std::vector<clv2::detail::AliasEntry> Aliases;
+  std::vector<clv2::detail::SubCommandSpec> SubSpecs;
+  decltype(ClangQueryOptsReg)::staticBuildInto(*Storage, Entries, Aliases,
+                                               SubSpecs);
+  for (auto &E : Entries) {
+    if (!E.Cat)
+      E.Cat = &ClangQueryCategory;
+    P.addDynamicEntry(std::move(E));
+  }
+  clv2::registerDynamicPostParseCallback(
+      [Storage, &ToolOpts]() { applyClangQueryOpts(*Storage, ToolOpts); });
+  P.setExtraHelp(clang::tooling::CommonOptionsParser::HelpMessage);
+}
 
 bool runCommandsInFile(const char *ExeName, std::string const &FileName,
                        QuerySession &QS) {
@@ -81,21 +105,25 @@ bool runCommandsInFile(const char *ExeName, std::string const &FileName,
 int main(int argc, const char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
 
+  ClangQueryOptions ToolOpts;
   llvm::Expected<CommonOptionsParser> OptionsParser =
-      CommonOptionsParser::create(argc, argv, ClangQueryCategory,
-                                  llvm::cl::OneOrMore);
+      CommonOptionsParser::create(
+          argc, argv, ClangQueryCategory,
+          [&ToolOpts](clv2::OptionParser &P) { configureParser(P, ToolOpts); },
+          llvm::cl::OneOrMore);
 
   if (!OptionsParser) {
     llvm::WithColor::error() << llvm::toString(OptionsParser.takeError());
     return 1;
   }
 
-  if (!Commands.empty() && !CommandFiles.empty()) {
+  if (!ToolOpts.Commands.empty() && !ToolOpts.CommandFiles.empty()) {
     llvm::errs() << argv[0] << ": cannot specify both -c and -f\n";
     return 1;
   }
 
-  if ((!Commands.empty() || !CommandFiles.empty()) && !PreloadFile.empty()) {
+  if ((!ToolOpts.Commands.empty() || !ToolOpts.CommandFiles.empty()) &&
+      !ToolOpts.PreloadFile.empty()) {
     llvm::errs() << argv[0]
                  << ": cannot specify both -c or -f with --preload\n";
     return 1;
@@ -104,15 +132,17 @@ int main(int argc, const char **argv) {
   ClangTool Tool(OptionsParser->getCompilations(),
                  OptionsParser->getSourcePathList());
 
-  if (UseColor.getNumOccurrences() > 0) {
-    ArgumentsAdjuster colorAdjustor = [](const CommandLineArguments &Args, StringRef /*unused*/) {
-      CommandLineArguments AdjustedArgs = Args;
-      if (UseColor)
-        AdjustedArgs.push_back("-fdiagnostics-color");
-      else
-        AdjustedArgs.push_back("-fno-diagnostics-color");
-      return AdjustedArgs;
-    };
+  if (ToolOpts.UseColorSet) {
+    ArgumentsAdjuster colorAdjustor =
+        [UseColor = ToolOpts.UseColor](const CommandLineArguments &Args,
+                                       StringRef /*unused*/) {
+          CommandLineArguments AdjustedArgs = Args;
+          if (UseColor)
+            AdjustedArgs.push_back("-fdiagnostics-color");
+          else
+            AdjustedArgs.push_back("-fno-diagnostics-color");
+          return AdjustedArgs;
+        };
     Tool.appendArgumentsAdjuster(colorAdjustor);
   }
 
@@ -135,20 +165,20 @@ int main(int argc, const char **argv) {
 
   QuerySession QS(ASTs);
 
-  if (!Commands.empty()) {
-    for (auto &Command : Commands) {
+  if (!ToolOpts.Commands.empty()) {
+    for (auto &Command : ToolOpts.Commands) {
       QueryRef Q = QueryParser::parse(Command, QS);
       if (!Q->run(llvm::outs(), QS))
         return 1;
     }
-  } else if (!CommandFiles.empty()) {
-    for (auto &CommandFile : CommandFiles) {
+  } else if (!ToolOpts.CommandFiles.empty()) {
+    for (auto &CommandFile : ToolOpts.CommandFiles) {
       if (runCommandsInFile(argv[0], CommandFile, QS))
         return 1;
     }
   } else {
-    if (!PreloadFile.empty()) {
-      if (runCommandsInFile(argv[0], PreloadFile, QS))
+    if (!ToolOpts.PreloadFile.empty()) {
+      if (runCommandsInFile(argv[0], ToolOpts.PreloadFile, QS))
         return 1;
     }
     LineEditor LE("clang-query");

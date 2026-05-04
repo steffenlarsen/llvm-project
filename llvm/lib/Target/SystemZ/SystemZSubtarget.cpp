@@ -18,11 +18,17 @@ using namespace llvm;
 #define GET_SUBTARGETINFO_TARGET_DESC
 #define GET_SUBTARGETINFO_CTOR
 #include "SystemZGenSubtargetInfo.inc"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/SystemZ/SystemZOptionsOptInfos.h"
 
-static cl::opt<bool> UseSubRegLiveness(
-    "systemz-subreg-liveness",
-    cl::desc("Enable subregister liveness tracking for SystemZ (experimental)"),
-    cl::Hidden);
+static bool getUseSubRegLiveness(const sz_opts::ParsedOpts *O,
+                                 const clv2::OptionsContext &Ctx) {
+  if (!O)
+    O = clv2::getView<&clv2::SystemZOptsReg>(Ctx);
+  if (O)
+    return O->get<&clv2::SZ_UseSubRegLiveness>();
+  return false;
+}
 
 // Pin the vtable to this file.
 void SystemZSubtarget::anchor() {}
@@ -68,13 +74,16 @@ SystemZSubtarget::SystemZSubtarget(const Triple &TT, const std::string &CPU,
                                    const std::string &TuneCPU,
                                    const std::string &FS,
                                    const TargetMachine &TM)
-    : SystemZGenSubtargetInfo(TT, CPU, TuneCPU, FS), TargetTriple(TT),
-      SpecialRegisters(initializeSpecialRegisters()),
-      InstrInfo(initializeSubtargetDependencies(CPU, TuneCPU, FS)),
-      TLInfo(TM, *this), FrameLowering(SystemZFrameLowering::create(*this)) {}
+    : SystemZGenSubtargetInfo(TT, CPU, TuneCPU, FS, TM.getOptionsContext()),
+      TargetTriple(TT), SpecialRegisters(initializeSpecialRegisters()),
+      InstrInfo((setTargetMachine(&TM),
+                 initializeSubtargetDependencies(CPU, TuneCPU, FS))),
+      TLInfo(TM, *this), FrameLowering(SystemZFrameLowering::create(*this)) {
+  setOptionsContext(TM.getOptionsContext());
+}
 
 bool SystemZSubtarget::enableSubRegLiveness() const {
-  return UseSubRegLiveness;
+  return getUseSubRegLiveness(nullptr, getOptionsContext());
 }
 
 bool SystemZSubtarget::isAddressedViaADA(const GlobalValue *GV) const {

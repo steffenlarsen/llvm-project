@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/ProfileSummaryInfo.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/BranchProbabilityInfo.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -18,30 +19,26 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Compiler.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/DataTypes.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 #include "gtest/gtest.h"
 
 namespace llvm {
 
-LLVM_ABI extern cl::opt<bool> ScalePartialSampleProfileWorkingSetSize;
-
 namespace {
 
 class ProfileSummaryInfoTest : public testing::Test {
 protected:
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<BranchProbabilityInfo> BPI;
   std::unique_ptr<DominatorTree> DT;
   std::unique_ptr<CycleInfo> CI;
 
-  ProfileSummaryInfo buildPSI(Module *M) {
-    return ProfileSummaryInfo(*M);
-  }
+  ProfileSummaryInfo buildPSI(Module *M) { return ProfileSummaryInfo(*M); }
   BlockFrequencyInfo buildBFI(Function &F) {
     DT.reset(new DominatorTree(F));
     CI.reset(new CycleInfo());
@@ -392,7 +389,14 @@ TEST_F(ProfileSummaryInfoTest, SampleProfNoFuncEntryCount) {
 }
 
 TEST_F(ProfileSummaryInfoTest, PartialSampleProfWorkingSetSize) {
-  ScalePartialSampleProfileWorkingSetSize.setValue(true);
+  // Set ScalePartialSampleProfileWorkingSetSize = true via OptionsContext.
+  // Note: the Init default is already true, so this is a no-op in practice,
+  // but we set it explicitly for clarity.
+  auto Opts = clv2::AnalysisOptsReg.makeDefaults();
+  Opts.get<&clv2::AN_ScalePartialSampleProfileWorkingSetSize>() = true;
+  clv2::OptionsContext OptsCtx;
+  OptsCtx.addView<&clv2::AnalysisOptsReg>(Opts);
+  C.setOptionsContext(OptsCtx);
 
   // With PartialProfileRatio unset (zero.)
   auto M1 = makeLLVMModule("SampleProfile", /*NumCounts*/ 3,

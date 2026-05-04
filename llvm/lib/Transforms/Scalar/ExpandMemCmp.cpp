@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===--- ExpandMemCmp.cpp - Expand memcmp() to load/stores ----------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -11,7 +13,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Scalar/ExpandMemCmp.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
@@ -21,10 +22,12 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/ProfDataUtils.h"
+#include "llvm/Transforms/Scalar/ExpandMemCmp.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
@@ -41,18 +44,36 @@ STATISTIC(NumMemCmpGreaterThanMax,
           "Number of memcmp calls with size greater than max size");
 STATISTIC(NumMemCmpInlined, "Number of inlined memcmp calls");
 
-static cl::opt<unsigned> MemCmpNumLoadsPerBlock(
-    "memcmp-num-loads-per-block", cl::Hidden, cl::init(1),
-    cl::desc("The number of loads per basic block for inline expansion of "
-             "memcmp."));
+static bool isMemCmpEqZeroNumLoadsPerBlockSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_MemcmpNumLoadsPerBlock>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getMemCmpEqZeroNumLoadsPerBlock(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_MemcmpNumLoadsPerBlock>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> MaxLoadsPerMemcmp(
-    "max-loads-per-memcmp", cl::Hidden,
-    cl::desc("Set maximum number of loads used in expanded memcmp"));
+static bool isMaxLoadsPerMemcmpSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_MaxLoadsPerMemcmp>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getMaxLoadsPerMemcmp(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_MaxLoadsPerMemcmp>(
+      F.getContext().getOptionsContext(), 0);
+}
 
-static cl::opt<unsigned> MaxLoadsPerMemcmpOptSize(
-    "max-loads-per-memcmp-opt-size", cl::Hidden,
-    cl::desc("Set maximum number of loads used in expanded memcmp for -Os/Oz"));
+static bool isMaxLoadsPerMemcmpOptSizeSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_MaxLoadsPerMemcmpOptSize>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getMaxLoadsPerMemcmpOptSize(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_MaxLoadsPerMemcmpOptSize>(
+      F.getContext().getOptionsContext(), 0);
+}
 
 namespace {
 
@@ -1003,15 +1024,18 @@ static bool expandMemCmp(CallInst *CI, const TargetTransformInfo *TTI,
                                             IsUsedForZeroCmp);
   if (!Options) return false;
 
-  if (MemCmpNumLoadsPerBlock.getNumOccurrences())
-    Options.NumLoadsPerBlock = MemCmpNumLoadsPerBlock;
+  const Function &F = *CI->getFunction();
+  if (isMemCmpEqZeroNumLoadsPerBlockSpecified(F))
+    Options.NumLoadsPerBlock = getMemCmpEqZeroNumLoadsPerBlock(F);
 
-  if (OptForSize &&
-      MaxLoadsPerMemcmpOptSize.getNumOccurrences())
-    Options.MaxNumLoads = MaxLoadsPerMemcmpOptSize;
+  if (isMemCmpEqZeroNumLoadsPerBlockSpecified(F))
+    Options.NumLoadsPerBlock = getMemCmpEqZeroNumLoadsPerBlock(F);
 
-  if (!OptForSize && MaxLoadsPerMemcmp.getNumOccurrences())
-    Options.MaxNumLoads = MaxLoadsPerMemcmp;
+  if (OptForSize && isMaxLoadsPerMemcmpOptSizeSpecified(F))
+    Options.MaxNumLoads = getMaxLoadsPerMemcmpOptSize(F);
+
+  if (!OptForSize && isMaxLoadsPerMemcmpSpecified(F))
+    Options.MaxNumLoads = getMaxLoadsPerMemcmp(F);
 
   // Keep only the load sizes the target can access at the base alignment:
   // either the access is naturally aligned, or the target allows a misaligned

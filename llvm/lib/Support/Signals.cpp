@@ -17,7 +17,7 @@
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Config/llvm-config.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
@@ -29,6 +29,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/StringSaver.h"
+#include "llvm/Support/SupportOptions.h"
 #include "llvm/Support/raw_ostream.h"
 #include <array>
 #include <cmath>
@@ -40,34 +41,10 @@
 
 using namespace llvm;
 
-// Use explicit storage to avoid accessing cl::opt in a signal handler.
-static bool DisableSymbolicationFlag = false;
-static ManagedStatic<std::string> CrashDiagnosticsDirectory;
-namespace {
-struct CreateDisableSymbolication {
-  static void *call() {
-    return new cl::opt<bool, true>(
-        "disable-symbolication",
-        cl::desc("Disable symbolizing crash backtraces."),
-        cl::location(DisableSymbolicationFlag), cl::Hidden);
-  }
-};
-struct CreateCrashDiagnosticsDir {
-  static void *call() {
-    return new cl::opt<std::string, true>(
-        "crash-diagnostics-dir", cl::value_desc("directory"),
-        cl::desc("Directory for crash diagnostic files."),
-        cl::location(*CrashDiagnosticsDirectory), cl::Hidden);
-  }
-};
-} // namespace
+// Written by applySupportOptions() — read directly by signal handlers.
+bool DisableSymbolicationFlag = false;
+
 void llvm::initSignalsOptions() {
-  static ManagedStatic<cl::opt<bool, true>, CreateDisableSymbolication>
-      DisableSymbolication;
-  static ManagedStatic<cl::opt<std::string, true>, CreateCrashDiagnosticsDir>
-      CrashDiagnosticsDir;
-  *DisableSymbolication;
-  *CrashDiagnosticsDir;
 }
 
 constexpr char DisableSymbolizationEnv[] = "LLVM_DISABLE_SYMBOLIZATION";

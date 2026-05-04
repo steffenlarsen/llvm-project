@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===--------- LoopSimplifyCFG.cpp - Loop CFG Simplification Pass ---------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -25,7 +27,6 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/ProfDataUtils.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -35,8 +36,10 @@ using namespace llvm;
 
 #define DEBUG_TYPE "loop-simplifycfg"
 
-static cl::opt<bool> EnableTermFolding("enable-loop-simplifycfg-term-folding",
-                                       cl::init(true));
+static bool getEnableTermFolding(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_EnableLoopSimplifyCfgTermFolding>(
+      F.getContext().getOptionsContext());
+}
 
 STATISTIC(NumTerminatorsFolded,
           "Number of terminators folded to unconditional branches");
@@ -446,7 +449,8 @@ private:
       // Clear all updates now. Facilitates deletes that follow.
       MSSAU->applyUpdates(DTUpdates, DT, /*UpdateDT=*/true);
       DTUpdates.clear();
-      if (VerifyMemorySSA)
+      if (getVerifyMemorySSA(
+              L.getHeader()->getParent()->getContext().getOptionsContext()))
         MSSAU->getMemorySSA()->verifyMemorySSA();
     }
   }
@@ -641,7 +645,9 @@ public:
       DTUpdates.clear();
     }
 
-    if (MSSAU && VerifyMemorySSA)
+    if (MSSAU &&
+        getVerifyMemorySSA(
+            L.getHeader()->getParent()->getContext().getOptionsContext()))
       MSSAU->getMemorySSA()->verifyMemorySSA();
 
 #ifndef NDEBUG
@@ -672,7 +678,7 @@ static bool constantFoldTerminators(Loop &L, DominatorTree &DT, LoopInfo &LI,
                                     ScalarEvolution &SE,
                                     MemorySSAUpdater *MSSAU,
                                     bool &IsLoopDeleted) {
-  if (!EnableTermFolding)
+  if (!getEnableTermFolding(*L.getHeader()->getParent()))
     return false;
 
   // To keep things simple, only process loops with single latch. We
@@ -709,7 +715,9 @@ static bool mergeBlocksIntoPredecessors(Loop &L, DominatorTree &DT,
     // Merge Succ into Pred and delete it.
     MergeBlockIntoPredecessor(Succ, &DTU, &LI, MSSAU);
 
-    if (MSSAU && VerifyMemorySSA)
+    if (MSSAU &&
+        getVerifyMemorySSA(
+            L.getHeader()->getParent()->getContext().getOptionsContext()))
       MSSAU->getMemorySSA()->verifyMemorySSA();
 
     Changed = true;

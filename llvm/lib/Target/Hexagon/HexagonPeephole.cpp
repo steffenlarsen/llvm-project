@@ -44,29 +44,40 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "hexagon-peephole"
 
-static cl::opt<bool>
-    DisableHexagonPeephole("disable-hexagon-peephole", cl::Hidden,
-                           cl::desc("Disable Peephole Optimization"));
+static bool DisableOptSZExt = true;
 
-static cl::opt<bool> DisablePNotP("disable-hexagon-pnotp", cl::Hidden,
-                                  cl::desc("Disable Optimization of PNotP"));
+static bool DisableOptExtTo64 = true;
 
-static cl::opt<bool>
-    DisableOptSZExt("disable-hexagon-optszext", cl::Hidden, cl::init(true),
-                    cl::desc("Disable Optimization of Sign/Zero Extends"));
+static bool getDisableHexagonPeephole(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DisableHexagonPeephole>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    DisableOptExtTo64("disable-hexagon-opt-ext-to-64", cl::Hidden,
-                      cl::init(true),
-                      cl::desc("Disable Optimization of extensions to i64."));
+static bool getDisablePNotP(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DisablePNotP>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getDisableOptSZExt(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DisableOptSZExt>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getDisableOptExtTo64(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DisableOptExtTo64>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
   struct HexagonPeephole : public MachineFunctionPass {
@@ -99,6 +110,7 @@ bool HexagonPeephole::runOnMachineFunction(MachineFunction &MF) {
   if (skipFunction(MF.getFunction()))
     return false;
 
+  const Function &F = MF.getFunction();
   QII = static_cast<const HexagonInstrInfo *>(MF.getSubtarget().getInstrInfo());
   QRI = MF.getSubtarget<HexagonSubtarget>().getRegisterInfo();
   MRI = &MF.getRegInfo();
@@ -106,7 +118,8 @@ bool HexagonPeephole::runOnMachineFunction(MachineFunction &MF) {
   DenseMap<unsigned, unsigned> PeepholeMap;
   DenseMap<unsigned, std::pair<unsigned, unsigned> > PeepholeDoubleRegsMap;
 
-  if (DisableHexagonPeephole) return false;
+  if (getDisableHexagonPeephole(F))
+    return false;
 
   // Loop over all of the basic blocks.
   for (MachineBasicBlock &MBB : MF) {
@@ -117,7 +130,7 @@ bool HexagonPeephole::runOnMachineFunction(MachineFunction &MF) {
     for (MachineInstr &MI : llvm::make_early_inc_range(MBB)) {
       // Look for sign extends:
       // %170 = SXTW %166
-      if (!DisableOptSZExt && MI.getOpcode() == Hexagon::A2_sxtw) {
+      if (!getDisableOptSZExt(F) && MI.getOpcode() == Hexagon::A2_sxtw) {
         assert(MI.getNumOperands() == 2);
         MachineOperand &Dst = MI.getOperand(0);
         MachineOperand &Src = MI.getOperand(1);
@@ -134,7 +147,7 @@ bool HexagonPeephole::runOnMachineFunction(MachineFunction &MF) {
 
       // Look for  %170 = COMBINE_ir_V4 (0, %169)
       // %170:DoublRegs, %169:IntRegs
-      if (!DisableOptExtTo64 && MI.getOpcode() == Hexagon::A4_combineir) {
+      if (!getDisableOptExtTo64(F) && MI.getOpcode() == Hexagon::A4_combineir) {
         assert(MI.getNumOperands() == 3);
         MachineOperand &Dst = MI.getOperand(0);
         MachineOperand &Src1 = MI.getOperand(1);
@@ -165,7 +178,7 @@ bool HexagonPeephole::runOnMachineFunction(MachineFunction &MF) {
       }
 
       // Look for P=NOT(P).
-      if (!DisablePNotP && MI.getOpcode() == Hexagon::C2_not) {
+      if (!getDisablePNotP(F) && MI.getOpcode() == Hexagon::C2_not) {
         assert(MI.getNumOperands() == 2);
         MachineOperand &Dst = MI.getOperand(0);
         MachineOperand &Src = MI.getOperand(1);
@@ -182,7 +195,7 @@ bool HexagonPeephole::runOnMachineFunction(MachineFunction &MF) {
 
       // Look for copy:
       // %176 = COPY %170:isub_lo
-      if (!DisableOptSZExt && MI.isCopy()) {
+      if (!getDisableOptSZExt(F) && MI.isCopy()) {
         assert(MI.getNumOperands() == 2);
         MachineOperand &Dst = MI.getOperand(0);
         MachineOperand &Src = MI.getOperand(1);
@@ -215,7 +228,7 @@ bool HexagonPeephole::runOnMachineFunction(MachineFunction &MF) {
       }
 
       // Look for Predicated instructions.
-      if (!DisablePNotP) {
+      if (!getDisablePNotP(F)) {
         bool Done = false;
         if (QII->isPredicated(MI)) {
           MachineOperand &Op0 = MI.getOperand(0);
@@ -270,7 +283,7 @@ bool HexagonPeephole::runOnMachineFunction(MachineFunction &MF) {
           } // if (NewOp)
         } // if (!Done)
 
-      } // if (!DisablePNotP)
+      } // if (!getDisablePNotP())
 
     } // Instruction
   } // Basic Block

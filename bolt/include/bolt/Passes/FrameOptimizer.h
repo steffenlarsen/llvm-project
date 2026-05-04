@@ -102,7 +102,7 @@ class FrameOptimizerPass : public BinaryFunctionPass {
                               BinaryContext &BC);
 
 public:
-  explicit FrameOptimizerPass(const cl::opt<bool> &PrintPass)
+  explicit FrameOptimizerPass(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "frame-optimizer"; }

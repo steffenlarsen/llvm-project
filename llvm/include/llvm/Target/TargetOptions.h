@@ -20,9 +20,15 @@
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Compiler.h"
 
+#include "llvm/Support/OptionsContext.h"
 #include <memory>
 
 namespace llvm {
+
+namespace clv2 {
+class OptionsContext;
+}
+
 struct fltSemantics;
 class MachineFunction;
 class MemoryBuffer;
@@ -395,6 +401,14 @@ public:
 
   /// Machine level options.
   MCTargetOptions MCOptions;
+
+  /// Options context for clv2 option lookups during TargetMachine construction.
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
+
+  /// Returns OptsCtx if set, or a static default OptionsContext with
+  /// compile-time defaults for all options. Prevents null-pointer assertions
+  /// in tools that create TargetMachines without parsing clv2 options.
+  LLVM_ABI const clv2::OptionsContext &getOptsCtx() const;
 
   /// Stores the filename/path of the final .o/.obj file, to be written in the
   /// debug information. This is used for emitting the CodeView S_OBJNAME

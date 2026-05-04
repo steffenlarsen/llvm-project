@@ -41,16 +41,21 @@
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/OptTable.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Allocator.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/Support/IOSandbox.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/StringSaver.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
@@ -432,7 +437,8 @@ getOutputStream(StringRef Path, DiagnosticsEngine &Diags, bool Binary) {
 
 static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
                                  DiagnosticsEngine &Diags,
-                                 IntrusiveRefCntPtr<vfs::FileSystem> VFS) {
+                                 IntrusiveRefCntPtr<vfs::FileSystem> VFS,
+                                 const clv2::OptionsContext &OptsCtx) {
   // Get the target specific parser.
   std::string Error;
   const Target *TheTarget = TargetRegistry::lookupTarget(Opts.Triple, Error);
@@ -501,13 +507,14 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
   std::string FS = llvm::join(Opts.Features, ",");
 
   std::unique_ptr<MCSubtargetInfo> STI(
-      TheTarget->createMCSubtargetInfo(Opts.Triple, Opts.CPU, FS));
+      TheTarget->createMCSubtargetInfo(Opts.Triple, Opts.CPU, FS, OptsCtx));
   if (!STI) {
     return Diags.Report(diag::err_fe_unable_to_create_subtarget)
            << Opts.CPU << FS.empty() << FS;
   }
 
   MCContext Ctx(Triple(Opts.Triple), *MAI, *MRI, *STI, &SrcMgr);
+  Ctx.setOptionsContext(OptsCtx);
 
   bool PIC = false;
   if (Opts.RelocationModel == "static") {
@@ -652,8 +659,9 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
 
 static bool ExecuteAssembler(AssemblerInvocation &Opts,
                              DiagnosticsEngine &Diags,
-                             IntrusiveRefCntPtr<vfs::FileSystem> VFS) {
-  bool Failed = ExecuteAssemblerImpl(Opts, Diags, VFS);
+                             IntrusiveRefCntPtr<vfs::FileSystem> VFS,
+                             const clv2::OptionsContext &OptsCtx) {
+  bool Failed = ExecuteAssemblerImpl(Opts, Diags, VFS, OptsCtx);
 
   // Delete output file if there were errors.
   if (Failed) {
@@ -722,21 +730,24 @@ int cc1as_main(ArrayRef<const char *> Argv, const char *Argv0, void *MainAddr) {
   }
 
   // Honor -mllvm.
-  //
-  // FIXME: Remove this, one day.
+  std::unique_ptr<clv2::OptionsContext> MllvmCtx;
   if (!Asm.LLVMArgs.empty()) {
-    unsigned NumArgs = Asm.LLVMArgs.size();
-    auto Args = std::make_unique<const char*[]>(NumArgs + 2);
-    Args[0] = "clang (LLVM option parsing)";
-    for (unsigned i = 0; i != NumArgs; ++i)
-      Args[i + 1] = Asm.LLVMArgs[i].c_str();
-    Args[NumArgs + 1] = nullptr;
-    llvm::cl::ParseCommandLineOptions(NumArgs + 1, Args.get(), /*Overview=*/"",
-                                      /*Errs=*/nullptr, /*VFS=*/VFS.get());
+    clv2::OptionParser P;
+    RegisterAllLLVMOptions(P);
+    BumpPtrAllocator Alloc;
+    StringSaver Saver(Alloc);
+    SmallVector<const char *> Argv;
+    Argv.push_back(Saver.save("clang (LLVM option parsing)").data());
+    for (const auto &A : Asm.LLVMArgs)
+      Argv.push_back(Saver.save(A).data());
+    MllvmCtx = P.parse(Argv.size(), Argv.data());
   }
 
   // Execute the invocation, unless there were parsing errors.
-  bool Failed = Diags.hasErrorOccurred() || ExecuteAssembler(Asm, Diags, VFS);
+  bool Failed =
+      Diags.hasErrorOccurred() ||
+      ExecuteAssembler(Asm, Diags, VFS,
+                       MllvmCtx ? *MllvmCtx : clv2::defaultOptionsContext());
 
   // If any timers were active but haven't been destroyed yet, print their
   // results now.

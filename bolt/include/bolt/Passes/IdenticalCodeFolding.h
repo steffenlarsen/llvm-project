@@ -30,7 +30,7 @@ public:
     Safe, /// Safe ICF.
     All,  /// Aggressive ICF.
   };
-  explicit IdenticalCodeFolding(const cl::opt<bool> &PrintPass)
+  explicit IdenticalCodeFolding(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "identical-code-folding"; }
@@ -68,27 +68,6 @@ private:
   /// Process functions that have been disassembled and mark functions that are
   /// used in non-control flow instructions as unsafe to fold.
   void analyzeFunctions(BinaryContext &BC);
-};
-
-class DeprecatedICFNumericOptionParser
-    : public cl::parser<IdenticalCodeFolding::ICFLevel> {
-public:
-  explicit DeprecatedICFNumericOptionParser(cl::Option &O)
-      : cl::parser<IdenticalCodeFolding::ICFLevel>(O) {}
-
-  bool parse(cl::Option &O, StringRef ArgName, StringRef Arg,
-             IdenticalCodeFolding::ICFLevel &Value) {
-    if (Arg == "0" || Arg == "1") {
-      Value = (Arg == "0") ? IdenticalCodeFolding::ICFLevel::None
-                           : IdenticalCodeFolding::ICFLevel::All;
-      errs() << formatv("BOLT-WARNING: specifying numeric value \"{0}\" "
-                        "for option -{1} is deprecated\n",
-                        Arg, ArgName);
-      return false;
-    }
-    return cl::parser<IdenticalCodeFolding::ICFLevel>::parse(O, ArgName, Arg,
-                                                             Value);
-  }
 };
 
 } // namespace bolt

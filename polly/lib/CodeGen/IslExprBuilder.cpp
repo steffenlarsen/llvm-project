@@ -10,9 +10,11 @@
 
 #include "polly/CodeGen/IslExprBuilder.h"
 #include "polly/CodeGen/RuntimeDebugBuilder.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopInfo.h"
 #include "polly/Support/GICHelper.h"
+#include "llvm/ADT/StringSwitch.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 using namespace llvm;
@@ -25,16 +27,13 @@ enum OverflowTrackingChoice {
   OT_ALWAYS   ///< Always track potential overflows.
 };
 
-static cl::opt<OverflowTrackingChoice> OTMode(
-    "polly-overflow-tracking",
-    cl::desc("Define where potential integer overflows in generated "
-             "expressions should be tracked."),
-    cl::values(clEnumValN(OT_NEVER, "never", "Never track the overflow bit."),
-               clEnumValN(OT_REQUEST, "request",
-                          "Track the overflow bit if requested."),
-               clEnumValN(OT_ALWAYS, "always",
-                          "Always track the overflow bit.")),
-    cl::Hidden, cl::init(OT_REQUEST), cl::cat(PollyCategory));
+static OverflowTrackingChoice getOTMode(Scop &S) {
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext()))
+    return static_cast<OverflowTrackingChoice>(
+        static_cast<int>(Opts->get<&llvm::clv2::POLLY_OverflowTracking>()));
+  return OT_REQUEST;
+}
 
 IslExprBuilder::IslExprBuilder(Scop &S, PollyIRBuilder &Builder,
                                IDToValueTy &IDToValue, ValueMapT &GlobalMap,
@@ -44,7 +43,7 @@ IslExprBuilder::IslExprBuilder(Scop &S, PollyIRBuilder &Builder,
     : S(S), Builder(Builder), IDToValue(IDToValue), GlobalMap(GlobalMap),
       DL(DL), SE(SE), StartBlock(StartBlock), GenDT(&DT), GenLI(&LI),
       GenSE(&SE) {
-  OverflowState = (OTMode == OT_ALWAYS) ? Builder.getFalse() : nullptr;
+  OverflowState = (getOTMode(S) == OT_ALWAYS) ? Builder.getFalse() : nullptr;
 }
 
 void IslExprBuilder::switchGeneratedFunc(llvm::Function *GenFn,
@@ -62,7 +61,7 @@ void IslExprBuilder::switchGeneratedFunc(llvm::Function *GenFn,
 void IslExprBuilder::setTrackOverflow(bool Enable) {
   // If potential overflows are tracked always or never we ignore requests
   // to change the behavior.
-  if (OTMode != OT_REQUEST)
+  if (getOTMode(S) != OT_REQUEST)
     return;
 
   if (Enable) {
@@ -78,7 +77,7 @@ Value *IslExprBuilder::getOverflowState() const {
   // If the overflow tracking was requested but it is disabled we avoid the
   // additional nullptr checks at the call sides but instead provide a
   // meaningful result.
-  if (OTMode == OT_NEVER)
+  if (getOTMode(S) == OT_NEVER)
     return Builder.getFalse();
   return OverflowState;
 }
@@ -153,7 +152,7 @@ Value *IslExprBuilder::createBinOp(BinaryOperator::BinaryOps Opc, Value *LHS,
   // If all overflows are tracked we do not combine the results as this could
   // cause dominance problems. Instead we will always keep the last overflow
   // flag as current state.
-  if (OTMode == OT_ALWAYS)
+  if (getOTMode(S) == OT_ALWAYS)
     OverflowState = OverflowFlag;
   else
     OverflowState =
@@ -263,7 +262,11 @@ IslExprBuilder::createAccessAddress(__isl_take isl_ast_expr *Expr) {
 
   const ScopArrayInfo *SAI = nullptr;
 
-  if (PollyDebugPrinting)
+  bool DebugPrinting = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext()))
+    DebugPrinting = Opts->get<&llvm::clv2::POLLY_CodegenAddDebugPrinting>();
+  if (DebugPrinting)
     RuntimeDebugBuilder::createCPUPrinter(Builder, isl_id_get_name(BaseId));
 
   if (IDToSAI)
@@ -286,7 +289,7 @@ IslExprBuilder::createAccessAddress(__isl_take isl_ast_expr *Expr) {
 
   if (isl_ast_expr_get_op_n_arg(Expr) == 1) {
     isl_ast_expr_free(Expr);
-    if (PollyDebugPrinting)
+    if (DebugPrinting)
       RuntimeDebugBuilder::createCPUPrinter(Builder, "\n");
     return {Base, SAI->getElementType()};
   }
@@ -297,7 +300,7 @@ IslExprBuilder::createAccessAddress(__isl_take isl_ast_expr *Expr) {
     assert(NextIndex->getType()->isIntegerTy() &&
            "Access index should be an integer");
 
-    if (PollyDebugPrinting)
+    if (DebugPrinting)
       RuntimeDebugBuilder::createCPUPrinter(Builder, "[", NextIndex, "]");
 
     if (!IndexOp) {
@@ -341,7 +344,7 @@ IslExprBuilder::createAccessAddress(__isl_take isl_ast_expr *Expr) {
   Access = Builder.CreateGEP(SAI->getElementType(), Base, IndexOp,
                              "polly.access." + BaseName);
 
-  if (PollyDebugPrinting)
+  if (DebugPrinting)
     RuntimeDebugBuilder::createCPUPrinter(Builder, "\n");
   isl_ast_expr_free(Expr);
   return {Access, SAI->getElementType()};

@@ -1,5 +1,8 @@
 add_llvm_component_library(LLVMAggressiveInstCombine
+  AggressiveInstCombineOptionsGetters.cpp
+  AggressiveInstCombineOptionsRegistration.cpp
   AggressiveInstCombine.cpp
+  AggressiveInstCombineOptions.cpp
   TruncInstCombine.cpp
 
   ADDITIONAL_HEADER_DIRS

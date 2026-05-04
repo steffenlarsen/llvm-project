@@ -22,15 +22,12 @@
 #include "bolt/Passes/PointerAuthCFIAnalyzer.h"
 #include "bolt/Core/BinaryFunction.h"
 #include "bolt/Core/ParallelUtilities.h"
+#include "bolt/Utils/CommandLineOpts.h"
 #include <cstdlib>
 #include <optional>
 #include <stack>
 
 using namespace llvm;
-
-namespace opts {
-extern llvm::cl::opt<unsigned> Verbosity;
-} // namespace opts
 
 namespace llvm {
 namespace bolt {
@@ -47,7 +44,7 @@ bool PointerAuthCFIAnalyzer::runOnFunction(BinaryFunction &BF) {
         // Not all functions have .cfi_negate_ra_state in them. But if one does,
         // we expect psign/pauth instructions to have the hasNegateRAState
         // annotation.
-        if (opts::Verbosity >= 1)
+        if (opts::getVerbosity(BC) >= 1)
           BC.outs() << "BOLT-INFO: inconsistent RAStates in function "
                     << BF.getPrintName()
                     << ": ptr sign/auth inst without .cfi_negate_ra_state\n";
@@ -70,7 +67,7 @@ bool PointerAuthCFIAnalyzer::runOnFunction(BinaryFunction &BF) {
       if (BC.MIB->isPSignOnLR(Inst)) {
         if (RAState) {
           // RA signing instructions should only follow unsigned RA state.
-          if (opts::Verbosity >= 1)
+          if (opts::getVerbosity(BC) >= 1)
             BC.outs() << "BOLT-INFO: inconsistent RAStates in function "
                       << BF.getPrintName()
                       << ": ptr signing inst encountered in Signed RA state\n";
@@ -81,7 +78,7 @@ bool PointerAuthCFIAnalyzer::runOnFunction(BinaryFunction &BF) {
       } else if (BC.MIB->isPAuthOnLR(Inst)) {
         if (!RAState) {
           // RA authenticating instructions should only follow signed RA state.
-          if (opts::Verbosity >= 1)
+          if (opts::getVerbosity(BC) >= 1)
             BC.outs() << "BOLT-INFO: inconsistent RAStates in function "
                       << BF.getPrintName()
                       << ": ptr authenticating inst encountered in Unsigned RA "

@@ -18,62 +18,20 @@
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/IR/DiagnosticInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Vectorize/LoopVectorizationLegality.h"
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
+#include "llvm/Transforms/Vectorize/VectorizeOptions.h"
 
 using namespace llvm;
 using namespace LoopVectorizationUtils;
 
 #define DEBUG_TYPE "loop-vectorize"
+#define LV_NAME "loop-vectorize"
 
-extern cl::opt<bool> VPlanBuildOuterloopStressTest;
-
-static cl::opt<bool> MaximizeBandwidth(
-    "vectorizer-maximize-bandwidth", cl::init(false), cl::Hidden,
-    cl::desc("Maximize bandwidth when selecting vectorization factor which "
-             "will be determined by the smallest type in loop."));
-
-static cl::opt<bool> UseWiderVFIfCallVariantsPresent(
-    "vectorizer-maximize-bandwidth-for-vector-calls", cl::init(true),
-    cl::Hidden,
-    cl::desc("Try wider VFs if they enable the use of vector variants"));
-
-static cl::opt<bool> ConsiderRegPressure(
-    "vectorizer-consider-reg-pressure", cl::init(false), cl::Hidden,
-    cl::desc("Discard VFs if their register pressure is too high."));
-
-static cl::opt<bool> ForceTargetSupportsScalableVectors(
-    "force-target-supports-scalable-vectors", cl::init(false), cl::Hidden,
-    cl::desc(
-        "Pretend that scalable vectors are supported, even if the target does "
-        "not support them. This flag should only be used for testing."));
-
-cl::opt<bool> llvm::PreferInLoopReductions(
-    "prefer-inloop-reductions", cl::init(false), cl::Hidden,
-    cl::desc("Prefer in-loop vector reductions, "
-             "overriding the targets preference."));
-
-/// Note: This currently only applies to `llvm.masked.load` and
-/// `llvm.masked.store`. TODO: Extend this to cover other operations as needed.
-static cl::opt<bool> ForceTargetSupportsMaskedMemoryOps(
-    "force-target-supports-masked-memory-ops", cl::init(false), cl::Hidden,
-    cl::desc("Assume the target supports masked memory operations (used for "
-             "testing)."));
-
-static cl::opt<bool> ForceTargetSupportsGatherScatterOps(
-    "force-target-supports-gather-scatter-ops", cl::init(false), cl::Hidden,
-    cl::desc("Assume the target supports gather/scatter operations (used for "
-             "testing)."));
-
-static cl::opt<float> ScalableEpilogueVFCostScaleFactor(
-    "scalable-epilogue-vf-cost-scale-factor", cl::init(2.0), cl::Hidden,
-    cl::desc("Scale the cost of scalable epilogue VFs by this factor."));
-
-/// Write a \p DebugMsg about vectorization to the debug output stream. If \p I
-/// is passed, the message relates to that particular instruction.
 #ifndef NDEBUG
 static void debugVectorizationMessage(const StringRef Prefix,
                                       const StringRef DebugMsg,
@@ -87,51 +45,54 @@ static void debugVectorizationMessage(const StringRef Prefix,
 }
 #endif
 
-/// Create an analysis remark that explains why vectorization failed
-/// \p RemarkName is the identifier for the remark.  If \p I is passed it is an
-/// instruction that prevents vectorization.  Otherwise \p TheLoop is used for
-/// the location of the remark. If \p DL is passed, use it as debug location for
-/// the remark. \return the remark object that can be streamed to.
-static OptimizationRemarkAnalysis createLVAnalysis(StringRef RemarkName,
-                                                   const Loop *TheLoop,
-                                                   Instruction *I,
-                                                   DebugLoc DL = {}) {
+static OptimizationRemarkAnalysis
+createLVAnalysis(const char *PassName, StringRef RemarkName,
+                 const Loop *TheLoop, Instruction *I, DebugLoc DL = {}) {
   BasicBlock *CodeRegion = I ? I->getParent() : TheLoop->getHeader();
-  // If debug location is attached to the instruction, use it. Otherwise if DL
-  // was not provided, use the loop's.
   if (I && I->getDebugLoc())
     DL = I->getDebugLoc();
   else if (!DL)
     DL = TheLoop->getStartLoc();
-
-  return OptimizationRemarkAnalysis(DEBUG_TYPE, RemarkName, DL, CodeRegion);
+  return OptimizationRemarkAnalysis(PassName, RemarkName, DL, CodeRegion);
 }
 
-void LoopVectorizationUtils::reportVectorizationFailure(
-    const StringRef DebugMsg, const StringRef OREMsg, const StringRef ORETag,
-    OptimizationRemarkEmitter *ORE, const Loop *TheLoop, Instruction *I) {
+void llvm::reportVectorizationFailure(const StringRef DebugMsg,
+                                      const StringRef OREMsg,
+                                      const StringRef ORETag,
+                                      OptimizationRemarkEmitter *ORE,
+                                      Loop *TheLoop, Instruction *I) {
   LLVM_DEBUG(debugVectorizationMessage("Not vectorizing: ", DebugMsg, I));
-  ORE->emit(createLVAnalysis(ORETag, TheLoop, I)
+  ORE->emit(createLVAnalysis(LV_NAME, ORETag, TheLoop, I)
             << "loop not vectorized: " << OREMsg);
 }
 
-void LoopVectorizationUtils::reportVectorizationInfo(
-    const StringRef Msg, const StringRef ORETag, OptimizationRemarkEmitter *ORE,
-    const Loop *TheLoop, Instruction *I, DebugLoc DL) {
-  LLVM_DEBUG(debugVectorizationMessage("", Msg, I));
-  ORE->emit(createLVAnalysis(ORETag, TheLoop, I, DL) << Msg);
+namespace llvm {
+namespace LoopVectorizationUtils {
+
+void reportVectorizationFailure(const StringRef DebugMsg,
+                                const StringRef OREMsg, const StringRef ORETag,
+                                OptimizationRemarkEmitter *ORE,
+                                const Loop *TheLoop, Instruction *I) {
+  LLVM_DEBUG(debugVectorizationMessage("Not vectorizing: ", DebugMsg, I));
+  ORE->emit(createLVAnalysis(LV_NAME, ORETag, TheLoop, I)
+            << "loop not vectorized: " << OREMsg);
 }
 
-void LoopVectorizationUtils::reportVectorization(OptimizationRemarkEmitter *ORE,
-                                                 Loop *TheLoop,
-                                                 ElementCount VFWidth,
-                                                 unsigned IC) {
+void reportVectorizationInfo(const StringRef Msg, const StringRef ORETag,
+                             OptimizationRemarkEmitter *ORE,
+                             const Loop *TheLoop, Instruction *I, DebugLoc DL) {
+  LLVM_DEBUG(debugVectorizationMessage("", Msg, I));
+  ORE->emit(createLVAnalysis(LV_NAME, ORETag, TheLoop, I, DL) << Msg);
+}
+
+void reportVectorization(OptimizationRemarkEmitter *ORE, Loop *TheLoop,
+                         ElementCount VFWidth, unsigned IC) {
   LLVM_DEBUG(debugVectorizationMessage(
       "Vectorizing: ", TheLoop->isInnermost() ? "innermost loop" : "outer loop",
       nullptr));
   StringRef LoopType = TheLoop->isInnermost() ? "" : "outer ";
   ORE->emit([&]() {
-    return OptimizationRemark(DEBUG_TYPE, "Vectorized", TheLoop->getStartLoc(),
+    return OptimizationRemark(LV_NAME, "Vectorized", TheLoop->getStartLoc(),
                               TheLoop->getHeader())
            << "vectorized " << LoopType << "loop (vectorization width: "
            << ore::NV("VectorizationFactor", VFWidth)
@@ -139,10 +100,73 @@ void LoopVectorizationUtils::reportVectorization(OptimizationRemarkEmitter *ORE,
   });
 }
 
+} // namespace LoopVectorizationUtils
+} // namespace llvm
+
+static bool isMaximizeBandwidthSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::VectorizeOptsReg,
+                               &clv2::VEC_MaximizeBandwidth>(
+      F.getContext().getOptionsContext());
+}
+static float getScalableEpilogueVFCostScaleFactor(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_ScalableEpilogueVFCostScaleFactor>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getMaximizeBandwidth(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_MaximizeBandwidth>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getUseWiderVFIfCallVariantsPresent(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_UseWiderVFIfCallVariantsPresent>(
+      F.getContext().getOptionsContext());
+}
+
+static bool isConsiderRegPressureSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::VectorizeOptsReg,
+                               &clv2::VEC_ConsiderRegPressure>(
+      F.getContext().getOptionsContext());
+}
+static bool getConsiderRegPressure(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_ConsiderRegPressure>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getForceTargetSupportsScalableVectors(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::VEC_ForceTargetSupportsScalableVectors>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getPreferInLoopReductions(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_PreferInLoopReductions>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getVPlanBuildStressTest(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_VPlanBuildStressTest>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getForceTargetSupportsGatherScatterOps(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::VEC_ForceTargetSupportsGatherScatterOps>(
+      F.getContext().getOptionsContext());
+}
+
+/// Note: This currently only applies to `llvm.masked.load` and
+/// `llvm.masked.store`. TODO: Extend this to cover other operations as needed.
+static bool getForceTargetSupportsMaskedMemoryOps(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::VEC_ForceTargetSupportsMaskedMemoryOps>(
+      F.getContext().getOptionsContext());
+}
+
 bool VFSelectionContext::isLegalMaskedLoadOrStore(bool IsLoad, Type *ScalarTy,
                                                   Align Alignment,
                                                   unsigned AddressSpace) const {
-  return ForceTargetSupportsMaskedMemoryOps ||
+  return getForceTargetSupportsMaskedMemoryOps(F) ||
          (IsLoad ? TTI.isLegalMaskedLoad(ScalarTy, Alignment, AddressSpace)
                  : TTI.isLegalMaskedStore(ScalarTy, Alignment, AddressSpace));
 }
@@ -157,29 +181,33 @@ bool VFSelectionContext::isLegalGatherOrScatter(Value *V,
   Align Align = getLoadStoreAlignment(V);
   if (VF.isVector())
     Ty = VectorType::get(Ty, VF);
-  return ForceTargetSupportsGatherScatterOps ||
+  return getForceTargetSupportsGatherScatterOps(F) ||
          (LI && TTI.isLegalMaskedGather(Ty, Align)) ||
          (SI && TTI.isLegalMaskedScatter(Ty, Align));
 }
 
 bool VFSelectionContext::supportsScalableVectors() const {
-  return TTI.supportsScalableVectors() || ForceTargetSupportsScalableVectors ||
-         VectorizerParams::VectorizationFactor.isScalable();
+  return TTI.supportsScalableVectors() ||
+         getForceTargetSupportsScalableVectors(F) ||
+         VectorizerParams::getVectorizationFactor(
+             F.getContext().getOptionsContext())
+             .isScalable();
 }
 
 bool VFSelectionContext::useMaxBandwidth(bool IsScalable) const {
   TargetTransformInfo::RegisterKind RegKind =
       IsScalable ? TargetTransformInfo::RGK_ScalableVector
                  : TargetTransformInfo::RGK_FixedWidthVector;
-  return MaximizeBandwidth || (MaximizeBandwidth.getNumOccurrences() == 0 &&
-                               (TTI.shouldMaximizeVectorBandwidth(RegKind) ||
-                                (UseWiderVFIfCallVariantsPresent &&
-                                 Legal->hasVectorCallVariants())));
+  return getMaximizeBandwidth(F) ||
+         (!isMaximizeBandwidthSpecified(F) &&
+          (TTI.shouldMaximizeVectorBandwidth(RegKind) ||
+           (getUseWiderVFIfCallVariantsPresent(F) &&
+            Legal->hasVectorCallVariants())));
 }
 
 bool VFSelectionContext::shouldConsiderRegPressureForVF(ElementCount VF) const {
-  if (ConsiderRegPressure.getNumOccurrences())
-    return ConsiderRegPressure;
+  if (isConsiderRegPressureSpecified(F))
+    return getConsiderRegPressure(F);
 
   // TODO: We should eventually consider register pressure for all targets. The
   // TTI hook is temporary whilst target-specific issues are being fixed.
@@ -568,7 +596,7 @@ void VFSelectionContext::collectElementTypesForWidening(
           continue;
         const RecurrenceDescriptor &RdxDesc =
             Legal->getRecurrenceDescriptor(PN);
-        if (PreferInLoopReductions || useOrderedReductions(RdxDesc) ||
+        if (getPreferInLoopReductions(F) || useOrderedReductions(RdxDesc) ||
             TTI.preferInLoopReduction(RdxDesc.getRecurrenceKind(),
                                       RdxDesc.getRecurrenceType()))
           continue;
@@ -677,7 +705,7 @@ void VFSelectionContext::collectInLoopReductions() {
 
     // If the target would prefer this reduction to happen "in-loop", then we
     // want to record it as such.
-    if (!PreferInLoopReductions && !useOrderedReductions(RdxDesc) &&
+    if (!getPreferInLoopReductions(F) && !useOrderedReductions(RdxDesc) &&
         !TTI.preferInLoopReduction(Kind, Phi->getType()))
       continue;
 
@@ -727,7 +755,8 @@ bool LoopVectorizationPlanner::isMoreProfitable(const VectorizationFactor &A,
     if (B.Width.isFixed())
       std::swap(FixedCost, ScalableCost);
 
-    ScalableCost *= ScalableEpilogueVFCostScaleFactor;
+    ScalableCost *= getScalableEpilogueVFCostScaleFactor(
+        *OrigLoop->getHeader()->getParent());
 
     if (FixedCost <= ScalableCost)
       return A.Width.isFixed();
@@ -822,7 +851,7 @@ VFSelectionContext::computeVPlanOuterloopVF(ElementCount UserVF) {
         "the scalable user-specified vectorization width for outer-loop "
         "vectorization cannot be used because the target does not support "
         "scalable vectors.",
-        "ScalableVFUnfeasible", ORE, TheLoop);
+        "ScalableVFUnfeasible", ORE, const_cast<Loop *>(TheLoop));
     return FixedScalableVFPair::getNone();
   }
 
@@ -843,7 +872,7 @@ VFSelectionContext::computeVPlanOuterloopVF(ElementCount UserVF) {
     LLVM_DEBUG(dbgs() << "LV: VPlan computed VF " << VF << ".\n");
 
     // Make sure we have a VF > 1 for stress testing.
-    if (VPlanBuildOuterloopStressTest && VF.isScalar()) {
+    if (getVPlanBuildStressTest(F) && VF.isScalar()) {
       LLVM_DEBUG(dbgs() << "LV: VPlan stress testing: "
                         << "overriding computed VF.\n");
       VF = ElementCount::getFixed(4);

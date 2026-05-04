@@ -21,6 +21,7 @@
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Type.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 using namespace LegalizeActions;
@@ -42,7 +43,7 @@ ARMLegalizerInfo::ARMLegalizerInfo(const ARMSubtarget &ST) : ST(ST) {
 
   if (ST.isThumb1Only()) {
     // Thumb1 is not supported yet.
-    verify(*ST.getInstrInfo());
+    verify(*ST.getInstrInfo(), llvm::clv2::defaultOptionsContext());
     return;
   }
 
@@ -228,7 +229,7 @@ ARMLegalizerInfo::ARMLegalizerInfo(const ARMSubtarget &ST) : ST(ST) {
         .clampScalar(0, s32, s32);
   }
 
-  verify(*ST.getInstrInfo());
+  verify(*ST.getInstrInfo(), llvm::clv2::defaultOptionsContext());
 }
 
 void ARMLegalizerInfo::setFCmpLibcallsAEABI() {

@@ -22,7 +22,8 @@
 #include "clang/Tooling/ArgumentsAdjusters.h"
 #include "clang/Tooling/Execution.h"
 #include "clang/Tooling/Tooling.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Signals.h"
 #include <utility>
 
@@ -30,23 +31,53 @@ namespace clang {
 namespace clangd {
 namespace {
 
-static llvm::cl::opt<IndexFileFormat>
-    Format("format", llvm::cl::desc("Format of the index to be written"),
-           llvm::cl::values(clEnumValN(IndexFileFormat::YAML, "yaml",
-                                       "human-readable YAML format"),
-                            clEnumValN(IndexFileFormat::RIFF, "binary",
-                                       "binary RIFF format")),
-           llvm::cl::init(IndexFileFormat::RIFF));
+static IndexFileFormat Format = IndexFileFormat::RIFF;
+static std::vector<std::string> QueryDriverGlobs;
 
-static llvm::cl::list<std::string> QueryDriverGlobs{
-    "query-driver",
-    llvm::cl::desc(
-        "Comma separated list of globs for white-listing gcc-compatible "
-        "drivers that are safe to execute. Drivers matching any of these globs "
-        "will be used to extract system includes. e.g. "
-        "/usr/bin/**/clang-*,/path/to/repo/**/g++-*"),
-    llvm::cl::CommaSeparated,
+namespace clv2 = llvm::clv2;
+
+inline constexpr clv2::EnumVal<IndexFileFormat> FormatVals[] = {
+    {"yaml", IndexFileFormat::YAML, "human-readable YAML format"},
+    {"binary", IndexFileFormat::RIFF, "binary RIFF format"},
 };
+inline constexpr auto FormatOpt = clv2::makeEnumOption<IndexFileFormat>(
+    "format", "Format of the index to be written", FormatVals,
+    clv2::Init{IndexFileFormat::RIFF});
+
+inline constexpr clv2::ListOptionInfo<std::string> QueryDriverGlobsOpt{
+    "query-driver",
+    "Comma separated list of globs for white-listing gcc-compatible "
+    "drivers that are safe to execute. Drivers matching any of these globs "
+    "will be used to extract system includes. e.g. "
+    "/usr/bin/**/clang-*,/path/to/repo/**/g++-*",
+    clv2::CommaSeparated};
+
+inline constexpr clv2::OptionsRegistry<&FormatOpt, &QueryDriverGlobsOpt>
+    IndexerReg;
+
+static void applyIndexerOpts(const decltype(IndexerReg)::ParsedOptionsT &O) {
+  Format = O.get<&FormatOpt>();
+  QueryDriverGlobs = O.get<&QueryDriverGlobsOpt>();
+}
+
+// createExecutorFromCommandLineArgs owns the parse, so the tool's own options
+// are contributed through its ConfigureParser hook.
+static void configureParser(clv2::OptionParser &P) {
+  using ParsedT = decltype(IndexerReg)::ParsedOptionsT;
+  auto *Storage = new ParsedT();
+  decltype(IndexerReg)::applyDefaultsTo(*Storage);
+  std::vector<clv2::detail::OptionEntry> Entries;
+  std::vector<clv2::detail::AliasEntry> Aliases;
+  std::vector<clv2::detail::SubCommandSpec> SubSpecs;
+  decltype(IndexerReg)::staticBuildInto(*Storage, Entries, Aliases, SubSpecs);
+  for (auto &E : Entries) {
+    if (!E.Cat)
+      E.Cat = &llvm::cl::getGeneralCategory();
+    P.addDynamicEntry(std::move(E));
+  }
+  clv2::registerDynamicPostParseCallback(
+      [Storage]() { applyIndexerOpts(*Storage); });
+}
 
 class IndexActionFactory : public tooling::FrontendActionFactory {
 public:
@@ -145,7 +176,8 @@ int main(int argc, const char **argv) {
   )";
 
   auto Executor = clang::tooling::createExecutorFromCommandLineArgs(
-      argc, argv, llvm::cl::getGeneralCategory(), Overview);
+      argc, argv, llvm::cl::getGeneralCategory(),
+      clang::clangd::configureParser, Overview);
 
   if (!Executor) {
     llvm::errs() << llvm::toString(Executor.takeError()) << "\n";

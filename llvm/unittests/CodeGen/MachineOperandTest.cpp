@@ -56,7 +56,7 @@ TEST(MachineOperandTest, ChangeToTargetIndexTest) {
 }
 
 TEST(MachineOperandTest, PrintRegisterMask) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module Mod("Module", Ctx);
   auto MF = createMachineFunction(Ctx, Mod);
 
@@ -98,7 +98,7 @@ TEST(MachineOperandTest, PrintSubReg) {
 }
 
 TEST(MachineOperandTest, PrintCImm) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   APInt Int(128, UINT64_MAX);
   ++Int;
   ConstantInt *CImm = ConstantInt::get(Context, Int);
@@ -253,7 +253,7 @@ TEST(MachineOperandTest, PrintExternalSymbol) {
 }
 
 TEST(MachineOperandTest, PrintGlobalAddress) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module M("MachineOperandGVTest", Ctx);
   M.getOrInsertGlobal("foo", Type::getInt32Ty(Ctx));
 
@@ -323,7 +323,7 @@ TEST(MachineOperandTest, PrintRegisterLiveOut) {
 }
 
 TEST(MachineOperandTest, PrintMetadata) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module M("MachineOperandMDNodeTest", Ctx);
   NamedMDNode *MD = M.getOrInsertNamedMetadata("namedmd");
   ModuleSlotTracker MST(&M);
@@ -446,7 +446,7 @@ TEST(MachineOperandTest, HashValue) {
 }
 
 TEST(MachineOperandTest, RegisterLiveOutHashValue) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module Mod("Module", Ctx);
   auto MF = createMachineFunction(Ctx, Mod);
   MachineBasicBlock *MBB = MF->CreateMachineBasicBlock();

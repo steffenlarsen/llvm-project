@@ -48,8 +48,8 @@ struct WrapFuncInClassPass
     });
 
     RewritePatternSet patterns(&getContext());
-    populateWrapFuncInClass(patterns, funcName, classNameFormat,
-                            globalsUsedByFuncs);
+    populateWrapFuncInClass(patterns, funcName.getValue(),
+                            classNameFormat.getValue(), globalsUsedByFuncs);
 
     walkAndApplyPatterns(moduleOp, std::move(patterns));
 

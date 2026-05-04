@@ -21,9 +21,12 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
 #include "llvm/Transforms/Scalar.h"
 #include <optional>
 
@@ -46,28 +49,6 @@ LLVMInitializeLoongArchTarget() {
   initializeLoongArchExpandAtomicPseudoPass(*PR);
   initializeLoongArchLateBranchOptPass(*PR);
 }
-
-static cl::opt<bool> EnableLoongArchDeadRegisterElimination(
-    "loongarch-enable-dead-defs", cl::Hidden,
-    cl::desc("Enable the pass that removes dead"
-             " definitons and replaces stores to"
-             " them with stores to r0"),
-    cl::init(true));
-
-static cl::opt<bool>
-    EnableLoopDataPrefetch("loongarch-enable-loop-data-prefetch", cl::Hidden,
-                           cl::desc("Enable the loop data prefetch pass"),
-                           cl::init(false));
-
-static cl::opt<bool>
-    EnableMergeBaseOffset("loongarch-enable-merge-offset",
-                          cl::desc("Enable the merge base offset pass"),
-                          cl::init(true), cl::Hidden);
-
-static cl::opt<bool>
-    EnableSinkFold("loongarch-enable-sink-fold",
-                   cl::desc("Enable sinking and folding of instruction copies"),
-                   cl::init(true), cl::Hidden);
 
 static Reloc::Model getEffectiveRelocModel(std::optional<Reloc::Model> RM) {
   return RM.value_or(Reloc::Static);
@@ -141,7 +122,8 @@ class LoongArchPassConfig : public TargetPassConfig {
 public:
   LoongArchPassConfig(LoongArchTargetMachine &TM, PassManagerBase &PM)
       : TargetPassConfig(TM, PM) {
-    setEnableSinkAndFold(EnableSinkFold);
+    setEnableSinkAndFold(clv2::getOptValOrDefault<&clv2::LA_EnableSinkFold>(
+        TM.getOptionsContext()));
   }
 
   LoongArchTargetMachine &getLoongArchTargetMachine() const {
@@ -171,7 +153,10 @@ void LoongArchPassConfig::addIRPasses() {
   //
   // Run this before LSR to remove the multiplies involved in computing the
   // pointer values N iterations ahead.
-  if (TM->getOptLevel() != CodeGenOptLevel::None && EnableLoopDataPrefetch)
+  if (TM->getOptLevel() != CodeGenOptLevel::None &&
+      clv2::getOptValOr<&clv2::LoongArchOptsReg,
+                        &clv2::LA_EnableLoopDataPrefetch>(
+          TM->getOptionsContext(), false))
     addPass(createLoopDataPrefetchPass());
   addPass(createAtomicExpandLegacyPass());
 
@@ -215,20 +200,24 @@ void LoongArchPassConfig::addMachineSSAOptimization() {
 
 void LoongArchPassConfig::addPreRegAlloc() {
   addPass(createLoongArchPreRAExpandPseudoPass());
-  if (TM->getOptLevel() != CodeGenOptLevel::None && EnableMergeBaseOffset)
+  if (TM->getOptLevel() != CodeGenOptLevel::None &&
+      clv2::getOptValOr<&clv2::LoongArchOptsReg, &clv2::LA_EnableMergeOffset>(
+          TM->getOptionsContext(), true))
     addPass(createLoongArchMergeBaseOffsetOptPass());
 }
 
 bool LoongArchPassConfig::addRegAssignAndRewriteFast() {
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
-      EnableLoongArchDeadRegisterElimination)
+      clv2::getOptValOr<&clv2::LoongArchOptsReg, &clv2::LA_EnableDeadDefs>(
+          TM->getOptionsContext(), true))
     addPass(createLoongArchDeadRegisterDefinitionsPass());
   return TargetPassConfig::addRegAssignAndRewriteFast();
 }
 
 bool LoongArchPassConfig::addRegAssignAndRewriteOptimized() {
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
-      EnableLoongArchDeadRegisterElimination)
+      clv2::getOptValOr<&clv2::LoongArchOptsReg, &clv2::LA_EnableDeadDefs>(
+          TM->getOptionsContext(), true))
     addPass(createLoongArchDeadRegisterDefinitionsPass());
   return TargetPassConfig::addRegAssignAndRewriteOptimized();
 }

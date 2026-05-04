@@ -15,7 +15,8 @@
 #include "llvm/CodeGen/TargetSchedule.h"
 #include "llvm/IR/IntrinsicsPowerPC.h"
 #include "llvm/IR/ProfDataUtils.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <optional>
@@ -24,35 +25,42 @@ using namespace llvm;
 
 #define DEBUG_TYPE "ppctti"
 
-static cl::opt<bool> PPCEVL("ppc-evl",
-                            cl::desc("Allow EVL type vp.load/vp.store"),
-                            cl::init(false), cl::Hidden);
+static bool VecMaskCost = true;
 
-static cl::opt<bool> Pwr9EVL("ppc-pwr9-evl",
-                             cl::desc("Allow vp.load and vp.store for pwr9"),
-                             cl::init(false), cl::Hidden);
-
-static cl::opt<bool> VecMaskCost("ppc-vec-mask-cost",
-cl::desc("add masking cost for i1 vectors"), cl::init(true), cl::Hidden);
-
-static cl::opt<bool> DisablePPCConstHoist("disable-ppc-constant-hoisting",
-cl::desc("disable constant hoisting on PPC"), cl::init(false), cl::Hidden);
-
-static cl::opt<bool>
-EnablePPCColdCC("ppc-enable-coldcc", cl::Hidden, cl::init(false),
-                cl::desc("Enable using coldcc calling conv for cold "
-                         "internal functions"));
-
-static cl::opt<bool>
-LsrNoInsnsCost("ppc-lsr-no-insns-cost", cl::Hidden, cl::init(false),
-               cl::desc("Do not add instruction count to lsr cost model"));
+static bool LsrNoInsnsCost = false;
 
 // The latency of mtctr is only justified if there are more than 4
 // comparisons that will be removed as a result.
-static cl::opt<unsigned>
-SmallCTRLoopThreshold("min-ctr-loop-threshold", cl::init(4), cl::Hidden,
-                      cl::desc("Loops with a constant trip count smaller than "
-                               "this value will not use the count register."));
+static unsigned SmallCTRLoopThreshold = 4;
+
+static bool getPPCEVL(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_EVL>(
+      F.getContext().getOptionsContext());
+}
+static bool getPwr9EVL(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_Pwr9EVL>(
+      F.getContext().getOptionsContext());
+}
+static bool getVecMaskCost(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_VecMaskCost>(
+      F.getContext().getOptionsContext());
+}
+static bool getDisablePPCConstHoist(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_DisableConstHoist>(
+      F.getContext().getOptionsContext());
+}
+static bool getEnablePPCColdCC(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_EnableColdCC>(
+      F.getContext().getOptionsContext());
+}
+static bool getLsrNoInsnsCost(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_LsrNoInsnsCost>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getSmallCTRLoopThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_SmallCTRLoopThreshold>(
+      F.getContext().getOptionsContext());
+}
 
 //===----------------------------------------------------------------------===//
 //
@@ -170,7 +178,7 @@ PPCTTIImpl::instCombineIntrinsic(InstCombiner &IC, IntrinsicInst &II) const {
 
 InstructionCost PPCTTIImpl::getIntImmCost(const APInt &Imm, Type *Ty,
                                           TTI::TargetCostKind CostKind) const {
-  if (DisablePPCConstHoist)
+  if (getDisablePPCConstHoist(*CurFn))
     return BaseT::getIntImmCost(Imm, Ty, CostKind);
 
   assert(Ty->isIntegerTy());
@@ -202,7 +210,7 @@ InstructionCost
 PPCTTIImpl::getIntImmCostIntrin(Intrinsic::ID IID, unsigned Idx,
                                 const APInt &Imm, Type *Ty,
                                 TTI::TargetCostKind CostKind) const {
-  if (DisablePPCConstHoist)
+  if (getDisablePPCConstHoist(*CurFn))
     return BaseT::getIntImmCostIntrin(IID, Idx, Imm, Ty, CostKind);
 
   assert(Ty->isIntegerTy());
@@ -238,7 +246,7 @@ InstructionCost PPCTTIImpl::getIntImmCostInst(unsigned Opcode, unsigned Idx,
                                               const APInt &Imm, Type *Ty,
                                               TTI::TargetCostKind CostKind,
                                               Instruction *Inst) const {
-  if (DisablePPCConstHoist)
+  if (getDisablePPCConstHoist(*CurFn))
     return BaseT::getIntImmCostInst(Opcode, Idx, Imm, Ty, CostKind, Inst);
 
   assert(Ty->isIntegerTy());
@@ -354,7 +362,7 @@ bool PPCTTIImpl::isHardwareLoopProfitable(Loop *L, ScalarEvolution &SE,
 
   // Do not convert small short loops to CTR loop.
   unsigned ConstTripCount = SE.getSmallConstantTripCount(L);
-  if (ConstTripCount && ConstTripCount < SmallCTRLoopThreshold) {
+  if (ConstTripCount && ConstTripCount < getSmallCTRLoopThreshold(*CurFn)) {
     SmallPtrSet<const Value *, 32> EphValues;
     CodeMetrics::collectEphemeralValues(L, &AC, EphValues);
     InstructionCost NumInsts;
@@ -434,7 +442,7 @@ void PPCTTIImpl::getPeelingPreferences(Loop *L, ScalarEvolution &SE,
 // all call sites when the callers of the functions are not calling any other
 // non coldcc functions.
 bool PPCTTIImpl::useColdCCForColdCall(Function &F) const {
-  return EnablePPCColdCC;
+  return getEnablePPCColdCC(F);
 }
 
 bool PPCTTIImpl::enableAggressiveInterleaving(bool LoopHasReductions) const {
@@ -714,7 +722,8 @@ InstructionCost PPCTTIImpl::getVectorInstrCost(
   if (Val->getScalarType()->isIntegerTy()) {
     unsigned EltSize = Val->getScalarSizeInBits();
     // Computing on 1 bit values requires extra mask or compare operations.
-    unsigned MaskCostForOneBitSize = (VecMaskCost && EltSize == 1) ? 1 : 0;
+    unsigned MaskCostForOneBitSize =
+        (getVecMaskCost(*CurFn) && EltSize == 1) ? 1 : 0;
     // Computing on non const index requires extra mask or compare operations.
     unsigned MaskCostForIdx = (Index != -1U) ? 0 : 1;
     if (ST->hasP9Altivec()) {
@@ -972,7 +981,7 @@ bool PPCTTIImpl::isLSRCostLess(const TargetTransformInfo::LSRCost &C1,
                                const TargetTransformInfo::LSRCost &C2) const {
   // PowerPC default behaviour here is "instruction number 1st priority".
   // If LsrNoInsnsCost is set, call default implementation.
-  if (!LsrNoInsnsCost)
+  if (!getLsrNoInsnsCost(*CurFn))
     return std::tie(C1.Insns, C1.NumRegs, C1.AddRecCost, C1.NumIVMuls,
                     C1.NumBaseAdds, C1.ScaleCost, C1.ImmCost, C1.SetupCost) <
            std::tie(C2.Insns, C2.NumRegs, C2.AddRecCost, C2.NumIVMuls,
@@ -1056,7 +1065,7 @@ PPCTTIImpl::getVPLegalizationStrategy(const VPIntrinsic &PI) const {
   unsigned Directive = ST->getCPUDirective();
   VPLegalization DefaultLegalization = BaseT::getVPLegalizationStrategy(PI);
   if (Directive != PPC::DIR_PWR10 && Directive != PPC::DIR_PWR_FUTURE &&
-      (!Pwr9EVL || Directive != PPC::DIR_PWR9))
+      (!getPwr9EVL(*CurFn) || Directive != PPC::DIR_PWR9))
     return DefaultLegalization;
 
   if (!ST->isPPC64())
@@ -1087,11 +1096,11 @@ PPCTTIImpl::getVPLegalizationStrategy(const VPIntrinsic &PI) const {
 }
 
 bool PPCTTIImpl::hasActiveVectorLength() const {
-  if (!PPCEVL || !ST->isPPC64())
+  if (!getPPCEVL(*CurFn) || !ST->isPPC64())
     return false;
   unsigned CPU = ST->getCPUDirective();
   return CPU == PPC::DIR_PWR10 || CPU == PPC::DIR_PWR_FUTURE ||
-         (Pwr9EVL && CPU == PPC::DIR_PWR9);
+         (getPwr9EVL(*CurFn) && CPU == PPC::DIR_PWR9);
 }
 
 bool PPCTTIImpl::isLegalMaskedLoad(Type *DataType, Align Alignment,

@@ -29,7 +29,7 @@ using namespace llvm;
 namespace {
 
 TEST(AsmParserTest, NullTerminatedInput) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   StringRef Source = "; Empty module \n";
   SMDiagnostic Error;
   auto Mod = parseAssemblyString(Source, Error, Ctx);
@@ -42,7 +42,7 @@ TEST(AsmParserTest, NullTerminatedInput) {
 #ifndef NDEBUG
 
 TEST(AsmParserTest, NonNullTerminatedInput) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   StringRef Source = "; Empty module \n\1\2";
   SMDiagnostic Error;
   std::unique_ptr<Module> Mod;
@@ -55,7 +55,7 @@ TEST(AsmParserTest, NonNullTerminatedInput) {
 #endif
 
 TEST(AsmParserTest, SlotMappingTest) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   StringRef Source = "@0 = global i32 0\n !0 = !{}\n !42 = !{i32 42}";
   SMDiagnostic Error;
   SlotMapping Mapping;
@@ -74,7 +74,7 @@ TEST(AsmParserTest, SlotMappingTest) {
 }
 
 TEST(AsmParserTest, TypeAndConstantValueParsing) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
   StringRef Source = "define void @test() {\n  entry:\n  ret void\n}";
   auto Mod = parseAssemblyString(Source, Error, Ctx);
@@ -224,22 +224,21 @@ TEST(AsmParserTest, TypeAndConstantValueParsing) {
 }
 
 TEST(AsmParserTest, TypeAndConstantValueWithSlotMappingParsing) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
-  StringRef Source =
-      "%st = type { i32, i32 }\n"
-      "@v = common global [50 x %st] zeroinitializer, align 16\n"
-      "%0 = type { i32, i32, i32, i32 }\n"
-      "@g = common global [50 x %0] zeroinitializer, align 16\n"
-      "define void @marker4(i64 %d) {\n"
-      "entry:\n"
-      "  %conv = trunc i64 %d to i32\n"
-      "  store i32 %conv, ptr getelementptr inbounds "
-      "    ([50 x %st], ptr @v, i64 0, i64 1, i32 0), align 16\n"
-      "  store i32 %conv, ptr getelementptr inbounds "
-      "    ([50 x %0], ptr @g, i64 0, i64 1, i32 0), align 16\n"
-      "  ret void\n"
-      "}";
+  StringRef Source = "%st = type { i32, i32 }\n"
+                     "@v = common global [50 x %st] zeroinitializer, align 16\n"
+                     "%0 = type { i32, i32, i32, i32 }\n"
+                     "@g = common global [50 x %0] zeroinitializer, align 16\n"
+                     "define void @marker4(i64 %d) {\n"
+                     "entry:\n"
+                     "  %conv = trunc i64 %d to i32\n"
+                     "  store i32 %conv, ptr getelementptr inbounds "
+                     "    ([50 x %st], ptr @v, i64 0, i64 1, i32 0), align 16\n"
+                     "  store i32 %conv, ptr getelementptr inbounds "
+                     "    ([50 x %0], ptr @g, i64 0, i64 1, i32 0), align 16\n"
+                     "  ret void\n"
+                     "}";
   SlotMapping Mapping;
   auto Mod = parseAssemblyString(Source, Error, Ctx, &Mapping);
   ASSERT_TRUE(Mod != nullptr);
@@ -260,22 +259,21 @@ TEST(AsmParserTest, TypeAndConstantValueWithSlotMappingParsing) {
 }
 
 TEST(AsmParserTest, TypeWithSlotMappingParsing) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
-  StringRef Source =
-      "%st = type { i32, i32 }\n"
-      "@v = common global [50 x %st] zeroinitializer, align 16\n"
-      "%0 = type { i32, i32, i32, i32 }\n"
-      "@g = common global [50 x %0] zeroinitializer, align 16\n"
-      "define void @marker4(i64 %d) {\n"
-      "entry:\n"
-      "  %conv = trunc i64 %d to i32\n"
-      "  store i32 %conv, ptr getelementptr inbounds "
-      "    ([50 x %st], ptr @v, i64 0, i64 0, i32 0), align 16\n"
-      "  store i32 %conv, ptr getelementptr inbounds "
-      "    ([50 x %0], ptr @g, i64 0, i64 0, i32 0), align 16\n"
-      "  ret void\n"
-      "}";
+  StringRef Source = "%st = type { i32, i32 }\n"
+                     "@v = common global [50 x %st] zeroinitializer, align 16\n"
+                     "%0 = type { i32, i32, i32, i32 }\n"
+                     "@g = common global [50 x %0] zeroinitializer, align 16\n"
+                     "define void @marker4(i64 %d) {\n"
+                     "entry:\n"
+                     "  %conv = trunc i64 %d to i32\n"
+                     "  store i32 %conv, ptr getelementptr inbounds "
+                     "    ([50 x %st], ptr @v, i64 0, i64 0, i32 0), align 16\n"
+                     "  store i32 %conv, ptr getelementptr inbounds "
+                     "    ([50 x %0], ptr @g, i64 0, i64 0, i32 0), align 16\n"
+                     "  ret void\n"
+                     "}";
   SlotMapping Mapping;
   auto Mod = parseAssemblyString(Source, Error, Ctx, &Mapping);
   ASSERT_TRUE(Mod != nullptr);
@@ -364,22 +362,21 @@ TEST(AsmParserTest, TypeWithSlotMappingParsing) {
 }
 
 TEST(AsmParserTest, TypeAtBeginningWithSlotMappingParsing) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
-  StringRef Source =
-      "%st = type { i32, i32 }\n"
-      "@v = common global [50 x %st] zeroinitializer, align 16\n"
-      "%0 = type { i32, i32, i32, i32 }\n"
-      "@g = common global [50 x %0] zeroinitializer, align 16\n"
-      "define void @marker4(i64 %d) {\n"
-      "entry:\n"
-      "  %conv = trunc i64 %d to i32\n"
-      "  store i32 %conv, ptr getelementptr inbounds "
-      "    ([50 x %st], ptr @v, i64 0, i64 0, i32 0), align 16\n"
-      "  store i32 %conv, ptr getelementptr inbounds "
-      "    ([50 x %0], ptr @g, i64 0, i64 0, i32 0), align 16\n"
-      "  ret void\n"
-      "}";
+  StringRef Source = "%st = type { i32, i32 }\n"
+                     "@v = common global [50 x %st] zeroinitializer, align 16\n"
+                     "%0 = type { i32, i32, i32, i32 }\n"
+                     "@g = common global [50 x %0] zeroinitializer, align 16\n"
+                     "define void @marker4(i64 %d) {\n"
+                     "entry:\n"
+                     "  %conv = trunc i64 %d to i32\n"
+                     "  store i32 %conv, ptr getelementptr inbounds "
+                     "    ([50 x %st], ptr @v, i64 0, i64 0, i32 0), align 16\n"
+                     "  store i32 %conv, ptr getelementptr inbounds "
+                     "    ([50 x %0], ptr @g, i64 0, i64 0, i32 0), align 16\n"
+                     "  ret void\n"
+                     "}";
   SlotMapping Mapping;
   auto Mod = parseAssemblyString(Source, Error, Ctx, &Mapping);
   ASSERT_TRUE(Mod != nullptr);
@@ -483,7 +480,7 @@ TEST(AsmParserTest, TypeAtBeginningWithSlotMappingParsing) {
 }
 
 TEST(AsmParserTest, InvalidDataLayoutStringCallback) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
   // Note the invalid i8:7 part
   // Overalign i32 as marker so we can check that indeed this DL was used,
@@ -518,7 +515,7 @@ TEST(AsmParserTest, InvalidDataLayoutStringCallback) {
 }
 
 TEST(AsmParserTest, DIExpressionBodyAtBeginningWithSlotMappingParsing) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
   StringRef Source = "";
   SlotMapping Mapping;
@@ -579,7 +576,7 @@ TEST(AsmParserTest, ParserObjectLocations) {
                      "    %a = add i32 1, %arg\n"
                      "    ret i32 %a\n"
                      "}\n";
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
   SlotMapping Mapping;
   AsmParserContext ParserContext;

@@ -14,6 +14,7 @@
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/LiveDebugVariables.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/LiveIntervalUnion.h"
@@ -34,11 +35,13 @@
 #include "llvm/CodeGen/SlotIndexes.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <cstdint>
@@ -49,12 +52,13 @@ using namespace llvm;
 
 #define DEBUG_TYPE "stack-slot-coloring"
 
-static cl::opt<bool>
-DisableSharing("no-stack-slot-sharing",
-             cl::init(false), cl::Hidden,
-             cl::desc("Suppress slot sharing during stack coloring"));
+static bool getNoStackSlotSharing(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_NoStackSlotSharing>(Ctx);
+}
 
-static cl::opt<int> DCELimit("ssc-dce-limit", cl::init(-1), cl::Hidden);
+static int getSscDceLimit(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_SscDceLimit>(Ctx);
+}
 
 STATISTIC(NumEliminated, "Number of stack slots eliminated due to coloring");
 STATISTIC(NumDead,       "Number of trivially dead stack accesses eliminated");
@@ -67,6 +71,7 @@ class StackSlotColoring {
   LiveStacks *LS = nullptr;
   const MachineBlockFrequencyInfo *MBFI = nullptr;
   SlotIndexes *Indexes = nullptr;
+  const Function *F = nullptr;
 
   // SSIntervals - Spill slot intervals.
   std::vector<LiveInterval *> SSIntervals;
@@ -144,7 +149,7 @@ public:
   StackSlotColoring(MachineFunction &MF, LiveStacks *LS,
                     MachineBlockFrequencyInfo *MBFI, SlotIndexes *Indexes)
       : MFI(&MF.getFrameInfo()), TII(MF.getSubtarget().getInstrInfo()), LS(LS),
-        MBFI(MBFI), Indexes(Indexes) {}
+        MBFI(MBFI), Indexes(Indexes), F(&MF.getFunction()) {}
   bool run(MachineFunction &MF);
 
 private:
@@ -312,7 +317,7 @@ int StackSlotColoring::ColorSlot(LiveInterval *li) {
   int FI = li->reg().stackSlotIndex();
   uint8_t StackID = MFI->getStackID(FI);
 
-  if (!DisableSharing) {
+  if (!getNoStackSlotSharing(F->getContext().getOptionsContext())) {
 
     // Check if it's possible to reuse any of the used colors.
     Color = UsedColors[StackID].find_first();
@@ -466,7 +471,13 @@ bool StackSlotColoring::RemoveDeadStores(MachineBasicBlock* MBB) {
 
   for (MachineBasicBlock::iterator I = MBB->begin(), E = MBB->end();
        I != E; ++I) {
-    if (DCELimit != -1 && (int)NumDead >= DCELimit)
+    if (getSscDceLimit(
+            MBB->getParent()->getFunction().getContext().getOptionsContext()) !=
+            -1 &&
+        (int)NumDead >= getSscDceLimit(MBB->getParent()
+                                           ->getFunction()
+                                           .getContext()
+                                           .getOptionsContext()))
       break;
     int FirstSS, SecondSS;
     if (TII->isStackSlotCopy(*I, FirstSS, SecondSS) && FirstSS == SecondSS &&

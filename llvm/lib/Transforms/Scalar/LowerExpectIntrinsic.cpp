@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LowerExpectIntrinsic.cpp - Lower expect intrinsic ------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -21,7 +23,6 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/ProfDataUtils.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Utils/MisExpect.h"
 
 #include <cmath>
@@ -45,19 +46,24 @@ STATISTIC(ExpectIntrinsicsHandled,
 // They should not be exposed to the outside of the pass, front-end codegen
 // should emit @llvm.expect intrinsics instead of using these weights directly.
 // Transforms should use TargetTransformInfo's getPredictableBranchThreshold().
-static cl::opt<uint32_t> LikelyBranchWeight(
-    "likely-branch-weight", cl::Hidden, cl::init(2000),
-    cl::desc("Weight of the branch likely to be taken (default = 2000)"));
-static cl::opt<uint32_t> UnlikelyBranchWeight(
-    "unlikely-branch-weight", cl::Hidden, cl::init(1),
-    cl::desc("Weight of the branch unlikely to be taken (default = 1)"));
+static uint32_t getLikelyBranchWeight(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_LikelyBranchWeight>(
+      F.getContext().getOptionsContext());
+}
 
-static std::tuple<uint32_t, uint32_t>
-getBranchWeight(Intrinsic::ID IntrinsicID, CallInst *CI, int BranchCount) {
+static uint32_t getUnlikelyBranchWeight(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_UnlikelyBranchWeight>(
+      F.getContext().getOptionsContext());
+}
+
+static std::tuple<uint32_t, uint32_t> getBranchWeight(Intrinsic::ID IntrinsicID,
+                                                      CallInst *CI,
+                                                      int BranchCount,
+                                                      const Function &F) {
   if (IntrinsicID == Intrinsic::expect) {
     // __builtin_expect
-    return std::make_tuple(LikelyBranchWeight.getValue(),
-                           UnlikelyBranchWeight.getValue());
+    return std::make_tuple(getLikelyBranchWeight(F),
+                           getUnlikelyBranchWeight(F));
   } else {
     // __builtin_expect_with_probability
     assert(CI->getNumOperands() >= 3 &&
@@ -92,7 +98,7 @@ static bool handleSwitchExpect(SwitchInst &SI) {
   unsigned n = SI.getNumCases(); // +1 for default case.
   uint32_t LikelyBranchWeightVal, UnlikelyBranchWeightVal;
   std::tie(LikelyBranchWeightVal, UnlikelyBranchWeightVal) =
-      getBranchWeight(Fn->getIntrinsicID(), CI, n + 1);
+      getBranchWeight(Fn->getIntrinsicID(), CI, n + 1, *SI.getFunction());
 
   SmallVector<uint32_t, 16> Weights(n + 1, UnlikelyBranchWeightVal);
 
@@ -250,8 +256,9 @@ static void handlePhiDef(CallInst *Expect) {
       return false;
     };
     uint32_t LikelyBranchWeightVal, UnlikelyBranchWeightVal;
-    std::tie(LikelyBranchWeightVal, UnlikelyBranchWeightVal) = getBranchWeight(
-        Expect->getCalledFunction()->getIntrinsicID(), Expect, 2);
+    std::tie(LikelyBranchWeightVal, UnlikelyBranchWeightVal) =
+        getBranchWeight(Expect->getCalledFunction()->getIntrinsicID(), Expect,
+                        2, *Expect->getFunction());
     if (!ExpectedValueIsLikely)
       std::swap(LikelyBranchWeightVal, UnlikelyBranchWeightVal);
 
@@ -324,7 +331,7 @@ template <class BrSelInst> static bool handleBrSelExpect(BrSelInst &BSI) {
 
   uint32_t LikelyBranchWeightVal, UnlikelyBranchWeightVal;
   std::tie(LikelyBranchWeightVal, UnlikelyBranchWeightVal) =
-      getBranchWeight(Fn->getIntrinsicID(), CI, 2);
+      getBranchWeight(Fn->getIntrinsicID(), CI, 2, *CI->getFunction());
 
   SmallVector<uint32_t, 4> ExpectedWeights;
   if ((ExpectedValue->getZExtValue() == ValueComparedTo) ==

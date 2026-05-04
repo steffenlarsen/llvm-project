@@ -8,6 +8,7 @@ llvm_add_library(MLIRPdllLspServerLib
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Tools/mlir-pdll-lsp-server
 
   LINK_COMPONENTS
+  AllOptions
   SupportLSP
 
   LINK_LIBS PUBLIC

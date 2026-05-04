@@ -12,6 +12,10 @@
 
 #include "Basic/TableGen.h"
 
+void registerExtraTblgenOptions(llvm::clv2::OptionParser &) {
+  // llvm-min-tblgen has no extra backend options to register.
+}
+
 /// Command line parameters are shared between llvm-tblgen and llvm-min-tblgen.
 /// The indirection to tblgen_main exists to ensure that the static variables
 /// for the llvm::cl:: mechanism are linked into both executables.

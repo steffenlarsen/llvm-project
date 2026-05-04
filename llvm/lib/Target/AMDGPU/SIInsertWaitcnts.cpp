@@ -40,7 +40,11 @@
 #include "llvm/CodeGen/MachinePostDominators.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Support/DebugCounter.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 #include "llvm/TargetParser/AMDGPUTargetParser.h"
+#include "llvm/TargetParser/TargetParser.h"
 
 using namespace llvm;
 
@@ -48,21 +52,26 @@ using HWEvents = AMDGPU::HWEvents;
 
 #define DEBUG_TYPE "si-insert-waitcnts"
 
-static cl::opt<bool>
-    ForceEmitZeroFlag("amdgpu-waitcnt-forcezero",
-                      cl::desc("Force all waitcnt instrs to be emitted as "
-                               "s_waitcnt vmcnt(0) expcnt(0) lgkmcnt(0)"),
-                      cl::init(false), cl::Hidden);
+static bool getForceEmitZeroFlag(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_ForceEmitZeroFlag>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> ForceEmitZeroLoadFlag(
-    "amdgpu-waitcnt-load-forcezero",
-    cl::desc("Force all waitcnt load counters to wait until 0"),
-    cl::init(false), cl::Hidden);
+static bool getForceEmitZeroLoadFlag(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_ForceEmitZeroLoadFlag>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> ExpertSchedulingModeFlag(
-    "amdgpu-expert-scheduling-mode",
-    cl::desc("Enable expert scheduling mode 2 for all functions (GFX12+ only)"),
-    cl::init(false), cl::Hidden);
+static bool getExpertSchedulingModeFlag(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_ExpertSchedulingModeFlag>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getExpertSchedulingModeFlagWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
+                               &clv2::AMDGPU_ExpertSchedulingModeFlag>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -2577,7 +2586,7 @@ bool SIInsertWaitcnts::generateWaitcntInstBefore(
 
   // When forcing emit, we need to skip terminators because that would break the
   // terminators of the MBB if we emit a waitcnt between terminators.
-  if (ForceEmitZeroFlag && !MI.isTerminator())
+  if (getForceEmitZeroFlag(MF.getFunction()) && !MI.isTerminator())
     Wait = WCG->getAllZeroWaitcnt(/*IncludeVSCnt=*/false);
 
   // If we force waitcnt then update Wait accordingly.
@@ -2596,7 +2605,8 @@ bool SIInsertWaitcnts::generateWaitcntInstBefore(
   if (FlushFlags.FlushDsCnt && ScoreBrackets.hasPendingEvent(AMDGPU::DS_CNT))
     Wait.set(AMDGPU::DS_CNT, 0);
 
-  if (ForceEmitZeroLoadFlag && Wait.get(AMDGPU::LOAD_CNT) != ~0u)
+  if (getForceEmitZeroLoadFlag(MF.getFunction()) &&
+      Wait.get(AMDGPU::LOAD_CNT) != ~0u)
     Wait.set(AMDGPU::LOAD_CNT, 0);
 
   return generateWaitcnt(Wait, MI.getIterator(), *MI.getParent(), ScoreBrackets,
@@ -3455,8 +3465,8 @@ bool SIInsertWaitcnts::run() {
 
   if (ST.hasExtendedWaitCounts()) {
     IsExpertMode = ST.hasExpertSchedulingMode() &&
-                   (ExpertSchedulingModeFlag.getNumOccurrences()
-                        ? ExpertSchedulingModeFlag
+                   (getExpertSchedulingModeFlagWasSpecified(MF.getFunction())
+                        ? getExpertSchedulingModeFlag(MF.getFunction())
                         : MF.getFunction()
                               .getFnAttribute("amdgpu-expert-scheduling-mode")
                               .getValueAsBool());

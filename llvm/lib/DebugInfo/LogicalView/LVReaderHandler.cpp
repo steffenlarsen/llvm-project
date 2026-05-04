@@ -204,7 +204,7 @@ Error LVReaderHandler::handleBuffer(LVReaders &Readers, StringRef Filename,
     return handleFile(Readers, PdbPath.get(), Filename);
   }
 
-  LLVMContext Context;
+  LLVMContext Context(llvm::clv2::defaultOptionsContext());
   Expected<std::unique_ptr<Binary>> BinOrErr = createBinary(Buffer, &Context);
   if (errorToErrorCode(BinOrErr.takeError())) {
     // Assume it is LLVM IR.

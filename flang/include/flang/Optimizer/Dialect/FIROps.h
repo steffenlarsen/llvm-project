@@ -41,7 +41,7 @@ mlir::ParseResult parseSelector(mlir::OpAsmParser &parser,
                                 mlir::OperationState &result,
                                 mlir::OpAsmParser::UnresolvedOperand &selector,
                                 mlir::Type &type);
-bool useStrictVolatileVerification();
+bool useStrictVolatileVerification(mlir::Operation *op = nullptr);
 
 static constexpr llvm::StringRef getNormalizedLowerBoundAttrName() {
   return "normalized.lb";

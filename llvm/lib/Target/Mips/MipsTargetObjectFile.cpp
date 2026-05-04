@@ -13,33 +13,33 @@
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/Module.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCSectionELF.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 using namespace llvm;
 
-static cl::opt<unsigned>
-SSThreshold("mips-ssection-threshold", cl::Hidden,
-            cl::desc("Small data and bss section threshold size (default=8)"),
-            cl::init(8));
+static unsigned getSSThreshold(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::MIPS_SSThreshold>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-LocalSData("mlocal-sdata", cl::Hidden,
-           cl::desc("MIPS: Use gp_rel for object-local data."),
-           cl::init(true));
+static bool getLocalSData(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::MIPS_LocalSData>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-ExternSData("mextern-sdata", cl::Hidden,
-            cl::desc("MIPS: Use gp_rel for data that is not defined by the "
-                     "current object."),
-            cl::init(true));
+static bool getExternSData(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::MIPS_ExternSData>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-EmbeddedData("membedded-data", cl::Hidden,
-             cl::desc("MIPS: Try to allocate variables in the following"
-                      " sections if possible: .rodata, .sdata, .data ."),
-             cl::init(false));
+static bool getEmbeddedData(const Module &M) {
+  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_EmbeddedData>(
+      M.getContext().getOptionsContext(), false);
+}
 
 void MipsTargetObjectFile::Initialize(MCContext &Ctx, const TargetMachine &TM){
   TargetLoweringObjectFileELF::Initialize(Ctx, TM);
@@ -57,10 +57,8 @@ void MipsTargetObjectFile::Initialize(MCContext &Ctx, const TargetMachine &TM){
 // A address must be loaded from a small section if its size is less than the
 // small section size threshold. Data in this section must be addressed using
 // gp_rel operator.
-static bool IsInSmallSection(uint64_t Size) {
-  // gcc has traditionally not treated zero-sized objects as small data, so this
-  // is effectively part of the ABI.
-  return Size > 0 && Size <= SSThreshold;
+static bool IsInSmallSection(uint64_t Size, const Module &M) {
+  return Size > 0 && Size <= getSSThreshold(M);
 }
 
 /// Return true if this global address should be placed into small data/bss
@@ -120,17 +118,20 @@ IsGlobalInSmallSectionImpl(const GlobalObject *GO,
     return false;
   }
 
+  const Module &M = *GO->getParent();
+
   // Enforce -mlocal-sdata.
-  if (!LocalSData && GVA->hasLocalLinkage())
+  if (!getLocalSData(M) && GVA->hasLocalLinkage())
     return false;
 
   // Enforce -mextern-sdata.
-  if (!ExternSData && ((GVA->hasExternalLinkage() && GVA->isDeclaration()) ||
-                       GVA->hasCommonLinkage()))
+  if (!getExternSData(M) &&
+      ((GVA->hasExternalLinkage() && GVA->isDeclaration()) ||
+       GVA->hasCommonLinkage()))
     return false;
 
   // Enforce -membedded-data.
-  if (EmbeddedData && GVA->isConstant())
+  if (getEmbeddedData(M) && GVA->isConstant())
     return false;
 
   Type *Ty = GVA->getValueType();
@@ -141,8 +142,7 @@ IsGlobalInSmallSectionImpl(const GlobalObject *GO,
   if (!Ty->isSized())
     return false;
 
-  return IsInSmallSection(
-      GVA->getDataLayout().getTypeAllocSize(Ty));
+  return IsInSmallSection(GVA->getDataLayout().getTypeAllocSize(Ty), M);
 }
 
 MCSection *MipsTargetObjectFile::SelectSectionForGlobal(
@@ -163,19 +163,37 @@ MCSection *MipsTargetObjectFile::SelectSectionForGlobal(
 }
 
 /// Return true if this constant should be placed into small data section.
-bool MipsTargetObjectFile::IsConstantInSmallSection(
-    const DataLayout &DL, const Constant *CN, const TargetMachine &TM) const {
-  return (static_cast<const MipsTargetMachine &>(TM)
-              .getSubtargetImpl()
-              ->useSmallSection() &&
-          LocalSData && IsInSmallSection(DL.getTypeAllocSize(CN->getType())));
+bool MipsTargetObjectFile::IsConstantInSmallSection(const DataLayout &DL,
+                                                    const Constant *CN,
+                                                    const TargetMachine &TM,
+                                                    const Function *F) const {
+  if (!static_cast<const MipsTargetMachine &>(TM)
+           .getSubtargetImpl()
+           ->useSmallSection())
+    return false;
+
+  if (F) {
+    const Module &M = *F->getParent();
+    return getLocalSData(M) &&
+           IsInSmallSection(DL.getTypeAllocSize(CN->getType()), M);
+  }
+
+  // No Function context available; fall back to global override.
+  if (auto *O = clv2::getView<&clv2::MipsOptsReg>(
+          CN->getContext().getOptionsContext()))
+    return O->get<&clv2::MIPS_LocalSData>() &&
+           DL.getTypeAllocSize(CN->getType()) > 0 &&
+           DL.getTypeAllocSize(CN->getType()) <=
+               O->get<&clv2::MIPS_SSThreshold>();
+  return DL.getTypeAllocSize(CN->getType()) > 0 &&
+         DL.getTypeAllocSize(CN->getType()) <= 8;
 }
 
 /// Return true if this constant should be placed into small data section.
 MCSection *MipsTargetObjectFile::getSectionForConstant(
     const DataLayout &DL, SectionKind Kind, const Constant *C, Align &Alignment,
     const Function *F) const {
-  if (IsConstantInSmallSection(DL, C, *TM))
+  if (IsConstantInSmallSection(DL, C, *TM, F))
     return SmallDataSection;
 
   // Otherwise, we work the same as ELF.

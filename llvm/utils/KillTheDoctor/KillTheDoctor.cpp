@@ -35,8 +35,9 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Signals.h"
@@ -59,53 +60,49 @@ using namespace llvm;
 
 #undef max
 
+inline constexpr clv2::OptionInfo<std::string> ProgramToRunOpt{
+    "", "<program to run>", clv2::Positional{}};
+inline constexpr clv2::ListOptionInfo<std::string> ArgvOpt{
+    "", "<program arguments>...", clv2::ConsumeAfter};
+inline constexpr clv2::OptionInfo<bool> TraceExecutionOpt{
+    "x", "Print detailed output about what is being run to stderr."};
+inline constexpr clv2::OptionInfo<unsigned> TimeoutOpt{
+    "t", "Set maximum runtime in seconds. Defaults to infinite.",
+    clv2::Init{0u}};
+inline constexpr clv2::OptionInfo<bool> NoUser32Opt{
+    "no-user32", "Terminate process if it loads user32.dll."};
+
+static constexpr clv2::OptionsRegistry<
+    &ProgramToRunOpt, &ArgvOpt, &TraceExecutionOpt, &TimeoutOpt, &NoUser32Opt>
+    KTDReg;
+
 namespace {
-  cl::opt<std::string> ProgramToRun(cl::Positional,
-    cl::desc("<program to run>"));
-  cl::list<std::string>  Argv(cl::ConsumeAfter,
-    cl::desc("<program arguments>..."));
-  cl::opt<bool> TraceExecution("x",
-    cl::desc("Print detailed output about what is being run to stderr."));
-  cl::opt<unsigned> Timeout("t", cl::init(0),
-    cl::desc("Set maximum runtime in seconds. Defaults to infinite."));
-  cl::opt<bool> NoUser32("no-user32",
-    cl::desc("Terminate process if it loads user32.dll."));
+StringRef ToolName;
 
-  StringRef ToolName;
+template <typename HandleType> class ScopedHandle {
+  typedef typename HandleType::handle_type handle_type;
 
-  template <typename HandleType>
-  class ScopedHandle {
-    typedef typename HandleType::handle_type handle_type;
+  handle_type Handle;
 
-    handle_type Handle;
+public:
+  ScopedHandle() : Handle(HandleType::GetInvalidHandle()) {}
 
-  public:
-    ScopedHandle()
-      : Handle(HandleType::GetInvalidHandle()) {}
+  explicit ScopedHandle(handle_type handle) : Handle(handle) {}
 
-    explicit ScopedHandle(handle_type handle)
-      : Handle(handle) {}
+  ~ScopedHandle() { HandleType::Destruct(Handle); }
 
-    ~ScopedHandle() {
+  ScopedHandle &operator=(handle_type handle) {
+    // Cleanup current handle.
+    if (!HandleType::isValid(Handle))
       HandleType::Destruct(Handle);
-    }
+    Handle = handle;
+    return *this;
+  }
 
-    ScopedHandle& operator=(handle_type handle) {
-      // Cleanup current handle.
-      if (!HandleType::isValid(Handle))
-        HandleType::Destruct(Handle);
-      Handle = handle;
-      return *this;
-    }
+  operator bool() const { return HandleType::isValid(Handle); }
 
-    operator bool() const {
-      return HandleType::isValid(Handle);
-    }
-
-    operator handle_type() {
-      return Handle;
-    }
-  };
+  operator handle_type() { return Handle; }
+};
 
   // This implements the most common handle in the Windows API.
   struct CommonHandle {
@@ -167,7 +164,7 @@ namespace {
   typedef ScopedHandle<ThreadHandle>            ThreadScopedHandle;
   typedef ScopedHandle<TokenHandle>             TokenScopedHandle;
   typedef ScopedHandle<FileHandle>              FileScopedHandle;
-}
+  } // namespace
 
 static std::error_code windows_error(DWORD E) { return mapWindowsError(E); }
 
@@ -294,9 +291,17 @@ int main(int argc, char **argv) {
 
   ToolName = argv[0];
 
-  cl::ParseCommandLineOptions(argc, argv, "Dr. Watson Assassin.\n");
-  if (ProgramToRun.size() == 0) {
-    cl::PrintHelpMessage();
+  clv2::OptionParser P;
+  P.add<&KTDReg>();
+  auto OptsCtx = P.parse(argc, argv, "Dr. Watson Assassin.\n");
+  auto *Opts = OptsCtx->getViewPtr<&KTDReg>();
+  std::string ProgramToRun = Opts->get<&ProgramToRunOpt>();
+  std::vector<std::string> Argv = Opts->get<&ArgvOpt>();
+  bool TraceExecution = Opts->get<&TraceExecutionOpt>();
+  unsigned Timeout = Opts->get<&TimeoutOpt>();
+  bool NoUser32 = Opts->get<&NoUser32Opt>();
+  if (ProgramToRun.empty()) {
+    llvm::errs() << "error: no program specified\n";
     return -1;
   }
 

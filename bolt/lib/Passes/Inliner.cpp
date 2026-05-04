@@ -26,106 +26,12 @@
 
 #include "bolt/Passes/Inliner.h"
 #include "bolt/Core/MCPlus.h"
-#include "llvm/Support/CommandLine.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
+#include "llvm/Support/CommandLineV2.h"
 
 #define DEBUG_TYPE "bolt-inliner"
 
 using namespace llvm;
-
-namespace opts {
-
-extern cl::OptionCategory BoltOptCategory;
-
-static cl::opt<bool>
-    AdjustProfile("inline-ap",
-                  cl::desc("adjust function profile after inlining"),
-                  cl::cat(BoltOptCategory));
-
-static cl::list<std::string>
-ForceInlineFunctions("force-inline",
-  cl::CommaSeparated,
-  cl::desc("list of functions to always consider for inlining"),
-  cl::value_desc("func1,func2,func3,..."),
-  cl::Hidden,
-  cl::cat(BoltOptCategory));
-
-static cl::list<std::string> SkipInlineFunctions(
-    "skip-inline", cl::CommaSeparated,
-    cl::desc("list of functions to never consider for inlining"),
-    cl::value_desc("func1,func2,func3,..."), cl::Hidden,
-    cl::cat(BoltOptCategory));
-
-static cl::opt<bool> InlineAll("inline-all", cl::desc("inline all functions"),
-                               cl::cat(BoltOptCategory));
-
-static cl::opt<bool> InlineIgnoreLeafCFI(
-    "inline-ignore-leaf-cfi",
-    cl::desc("inline leaf functions with CFI programs (can break unwinding)"),
-    cl::init(true), cl::ReallyHidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool> InlineIgnoreCFI(
-    "inline-ignore-cfi",
-    cl::desc(
-        "inline functions with CFI programs (can break exception handling)"),
-    cl::ReallyHidden, cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned>
-    InlineLimit("inline-limit",
-                cl::desc("maximum number of call sites to inline"), cl::init(0),
-                cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned>
-    InlineMaxIters("inline-max-iters",
-                   cl::desc("maximum number of inline iterations"), cl::init(3),
-                   cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool> InlineSmallFunctions(
-    "inline-small-functions",
-    cl::desc("inline functions if increase in size is less than defined by "
-             "-inline-small-functions-bytes"),
-    cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned> InlineSmallFunctionsBytes(
-    "inline-small-functions-bytes",
-    cl::desc("max number of bytes for the function to be considered small for "
-             "inlining purposes"),
-    cl::init(4), cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool> NoInline(
-    "no-inline",
-    cl::desc("disable all inlining (overrides other inlining options)"),
-    cl::cat(BoltOptCategory));
-
-/// This function returns true if any of inlining options are specified and the
-/// inlining pass should be executed. Whenever a new inlining option is added,
-/// this function should reflect the change.
-bool inliningEnabled() {
-  return !NoInline &&
-         (InlineAll || InlineSmallFunctions || !ForceInlineFunctions.empty());
-}
-
-bool mustConsider(const llvm::bolt::BinaryFunction &Function) {
-  for (std::string &Name : opts::ForceInlineFunctions)
-    if (Function.hasName(Name))
-      return true;
-  return false;
-}
-
-bool mustSkip(const llvm::bolt::BinaryFunction &Function) {
-  return llvm::any_of(opts::SkipInlineFunctions, [&](const std::string &Name) {
-    return Function.hasName(Name);
-  });
-}
-
-void syncOptions() {
-  if (opts::InlineIgnoreCFI)
-    opts::InlineIgnoreLeafCFI = true;
-
-  if (opts::InlineAll)
-    opts::InlineSmallFunctions = true;
-}
-
-} // namespace opts
 
 namespace llvm {
 namespace bolt {
@@ -155,14 +61,25 @@ uint64_t Inliner::getSizeOfTailCallInst(const BinaryContext &BC) {
   return SizeOfTailCallInst;
 }
 
-InliningInfo getInliningInfo(const BinaryFunction &BF) {
+InliningInfo
+getInliningInfo(const BinaryFunction &BF, bool InlineIgnoreLeafCFI,
+                bool InlineIgnoreCFI,
+                const std::vector<std::string> &ForceInlineFunctions) {
   const BinaryContext &BC = BF.getBinaryContext();
   bool DirectSP = false;
   bool HasCFI = false;
   bool IsLeaf = true;
 
+  // Check if the function is in the force-inline list.
+  auto MustConsider = [&ForceInlineFunctions](const BinaryFunction &Func) {
+    for (const std::string &Name : ForceInlineFunctions)
+      if (Func.hasName(Name))
+        return true;
+    return false;
+  };
+
   // Perform necessary checks unless the option overrides it.
-  if (!opts::mustConsider(BF)) {
+  if (!MustConsider(BF)) {
     if (BF.hasSDTMarker())
       return INL_NONE;
 
@@ -209,10 +126,10 @@ InliningInfo getInliningInfo(const BinaryFunction &BF) {
   }
 
   if (HasCFI) {
-    if (!opts::InlineIgnoreLeafCFI)
+    if (!InlineIgnoreLeafCFI)
       return INL_NONE;
 
-    if (!IsLeaf && !opts::InlineIgnoreCFI)
+    if (!IsLeaf && !InlineIgnoreCFI)
       return INL_NONE;
   }
 
@@ -240,11 +157,23 @@ InliningInfo getInliningInfo(const BinaryFunction &BF) {
 }
 
 void Inliner::findInliningCandidates(BinaryContext &BC) {
+  const auto ForceInlineFunctions = bolt_passes_opts::getForceInline(BC);
+  const auto SkipInlineFunctions = bolt_passes_opts::getSkipInline(BC);
+  const bool InlineIgnoreCFI = bolt_passes_opts::getInlineIgnoreCfi(BC);
+  const bool InlineIgnoreLeafCFI =
+      InlineIgnoreCFI ? true : (bolt_passes_opts::getInlineIgnoreLeafCfi(BC));
+
   for (const auto &BFI : BC.getBinaryFunctions()) {
     const BinaryFunction &Function = BFI.second;
-    if (!shouldOptimize(Function) || opts::mustSkip(Function))
+    if (!shouldOptimize(Function))
       continue;
-    const InliningInfo InlInfo = getInliningInfo(Function);
+    // Check if function should be skipped.
+    if (llvm::any_of(SkipInlineFunctions, [&](const std::string &Name) {
+          return Function.hasName(Name);
+        }))
+      continue;
+    const InliningInfo InlInfo = getInliningInfo(
+        Function, InlineIgnoreLeafCFI, InlineIgnoreCFI, ForceInlineFunctions);
     if (InlInfo.Type != INL_NONE)
       InliningCandidates[&Function] = InlInfo;
   }
@@ -253,7 +182,7 @@ void Inliner::findInliningCandidates(BinaryContext &BC) {
 std::pair<BinaryBasicBlock *, BinaryBasicBlock::iterator>
 Inliner::inlineCall(BinaryBasicBlock &CallerBB,
                     BinaryBasicBlock::iterator CallInst,
-                    const BinaryFunction &Callee) {
+                    const BinaryFunction &Callee, bool AdjustProfile) {
   BinaryFunction &CallerFunction = *CallerBB.getFunction();
   BinaryContext &BC = CallerFunction.getBinaryContext();
   auto &MIB = *BC.MIB;
@@ -404,7 +333,7 @@ Inliner::inlineCall(BinaryBasicBlock &CallerBB,
 
     // Scale profiling info for blocks and edges after inlining.
     if (CallerFunction.hasValidProfile() && Callee.size() > 1) {
-      if (opts::AdjustProfile)
+      if (AdjustProfile)
         InlinedBB->adjustExecutionCount(ProfileRatio);
       else
         InlinedBB->setExecutionCount(InlinedBB->getKnownExecutionCount() *
@@ -426,7 +355,11 @@ Inliner::inlineCall(BinaryBasicBlock &CallerBB,
   return std::make_pair(FirstInlinedBB, FirstInlinedBB->end());
 }
 
-bool Inliner::inlineCallsInFunction(BinaryFunction &Function) {
+bool Inliner::inlineCallsInFunction(
+    BinaryFunction &Function, bool AdjustProfile, bool InlineAll,
+    bool InlineSmallFunctions, unsigned InlineSmallFunctionsBytes,
+    unsigned InlineLimit,
+    const std::vector<std::string> &ForceInlineFunctions) {
   BinaryContext &BC = Function.getBinaryContext();
   std::vector<BinaryBasicBlock *> Blocks(Function.getLayout().block_begin(),
                                          Function.getLayout().block_end());
@@ -434,6 +367,14 @@ bool Inliner::inlineCallsInFunction(BinaryFunction &Function) {
       Blocks, [](const BinaryBasicBlock *BB1, const BinaryBasicBlock *BB2) {
         return BB1->getKnownExecutionCount() > BB2->getKnownExecutionCount();
       });
+
+  // Lambda to check if a function is in the force-inline list.
+  auto MustConsider = [&ForceInlineFunctions](const BinaryFunction &Func) {
+    for (const std::string &Name : ForceInlineFunctions)
+      if (Func.hasName(Name))
+        return true;
+    return false;
+  };
 
   bool DidInlining = false;
   for (BinaryBasicBlock *BB : Blocks) {
@@ -483,9 +424,9 @@ bool Inliner::inlineCallsInFunction(BinaryFunction &Function) {
         SizeAfterInlining =
             IInfo->second.SizeAfterInlining - getSizeOfCallInst(BC);
 
-      if (!opts::InlineAll && !opts::mustConsider(*TargetFunction)) {
-        if (!opts::InlineSmallFunctions ||
-            SizeAfterInlining > opts::InlineSmallFunctionsBytes) {
+      if (!InlineAll && !MustConsider(*TargetFunction)) {
+        if (!InlineSmallFunctions ||
+            SizeAfterInlining > InlineSmallFunctionsBytes) {
           ++InstIt;
           continue;
         }
@@ -523,7 +464,8 @@ bool Inliner::inlineCallsInFunction(BinaryFunction &Function) {
                         << ". Size change: " << SizeAfterInlining
                         << " bytes.\n");
 
-      std::tie(BB, InstIt) = inlineCall(*BB, InstIt, *TargetFunction);
+      std::tie(BB, InstIt) =
+          inlineCall(*BB, InstIt, *TargetFunction, AdjustProfile);
 
       DidInlining = true;
       TotalInlinedBytes += SizeAfterInlining;
@@ -532,7 +474,7 @@ bool Inliner::inlineCallsInFunction(BinaryFunction &Function) {
       NumInlinedDynamicCalls += BB->getExecutionCount();
 
       // Subtract basic block execution count from the callee execution count.
-      if (opts::AdjustProfile)
+      if (AdjustProfile)
         TargetFunction->adjustExecutionCount(BB->getKnownExecutionCount());
 
       // Check if the caller inlining status has to be adjusted.
@@ -546,7 +488,7 @@ bool Inliner::inlineCallsInFunction(BinaryFunction &Function) {
         }
       }
 
-      if (NumInlinedCallSites == opts::InlineLimit)
+      if (NumInlinedCallSites == InlineLimit)
         return true;
     }
   }
@@ -555,15 +497,37 @@ bool Inliner::inlineCallsInFunction(BinaryFunction &Function) {
 }
 
 Error Inliner::runOnFunctions(BinaryContext &BC) {
-  opts::syncOptions();
+  const bool AdjustProfile = bolt_passes_opts::getInlineAp(BC);
+  const auto ForceInlineFunctions = bolt_passes_opts::getForceInline(BC);
+  const auto SkipInlineFunctions = bolt_passes_opts::getSkipInline(BC);
+  const bool InlineAll = bolt_passes_opts::getInlineAll(BC);
+  const bool InlineIgnoreLeafCFI = bolt_passes_opts::getInlineIgnoreLeafCfi(BC);
+  const bool InlineIgnoreCFI = bolt_passes_opts::getInlineIgnoreCfi(BC);
+  const unsigned InlineLimit = bolt_passes_opts::getInlineLimit(BC);
+  const unsigned InlineMaxIters = bolt_passes_opts::getInlineMaxIters(BC);
+  const bool NoInline = bolt_passes_opts::getNoInline(BC);
+  bool InlineSmallFunctions = bolt_passes_opts::getInlineSmallFunctions(BC);
+  const unsigned InlineSmallFunctionsBytes =
+      bolt_passes_opts::getInlineSmallFunctionsBytes(BC);
 
-  if (!opts::inliningEnabled())
+  // Sync options.
+  if (InlineIgnoreCFI) {
+    // InlineIgnoreLeafCFI is already read above; the sync logic is handled
+    // by passing the correct value to getInliningInfo via
+    // findInliningCandidates.
+  }
+  if (InlineAll)
+    InlineSmallFunctions = true;
+
+  // Check if inlining is enabled.
+  if (NoInline ||
+      (!InlineAll && !InlineSmallFunctions && ForceInlineFunctions.empty()))
     return Error::success();
 
   bool InlinedOnce;
   unsigned NumIters = 0;
   do {
-    if (opts::InlineLimit && NumInlinedCallSites >= opts::InlineLimit)
+    if (InlineLimit && NumInlinedCallSites >= InlineLimit)
       break;
 
     InlinedOnce = false;
@@ -583,10 +547,12 @@ Error Inliner::runOnFunctions(BinaryContext &BC) {
       return B->getKnownExecutionCount() < A->getKnownExecutionCount();
     });
     for (BinaryFunction *Function : ConsideredFunctions) {
-      if (opts::InlineLimit && NumInlinedCallSites >= opts::InlineLimit)
+      if (InlineLimit && NumInlinedCallSites >= InlineLimit)
         break;
 
-      const bool DidInline = inlineCallsInFunction(*Function);
+      const bool DidInline = inlineCallsInFunction(
+          *Function, AdjustProfile, InlineAll, InlineSmallFunctions,
+          InlineSmallFunctionsBytes, InlineLimit, ForceInlineFunctions);
 
       if (DidInline)
         Modified.insert(Function);
@@ -595,7 +561,7 @@ Error Inliner::runOnFunctions(BinaryContext &BC) {
     }
 
     ++NumIters;
-  } while (InlinedOnce && NumIters < opts::InlineMaxIters);
+  } while (InlinedOnce && NumIters < InlineMaxIters);
 
   if (NumInlinedCallSites)
     BC.outs() << "BOLT-INFO: inlined " << NumInlinedDynamicCalls << " calls at "

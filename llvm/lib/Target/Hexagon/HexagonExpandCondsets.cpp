@@ -110,10 +110,11 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/LaneBitmask.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <cassert>
 #include <iterator>
 #include <map>
@@ -124,10 +125,30 @@
 
 using namespace llvm;
 
-static cl::opt<unsigned> OptTfrLimit("expand-condsets-tfr-limit",
-  cl::init(~0U), cl::Hidden, cl::desc("Max number of mux expansions"));
-static cl::opt<unsigned> OptCoaLimit("expand-condsets-coa-limit",
-  cl::init(~0U), cl::Hidden, cl::desc("Max number of segment coalescings"));
+static unsigned OptTfrLimit = ~0U;
+static unsigned OptCoaLimit = ~0U;
+
+static unsigned getOptTfrLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_ExpandCondsetsTfrLimit>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getOptTfrLimitWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::HexagonOptsReg,
+                               &clv2::HEX_ExpandCondsetsTfrLimit>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getOptCoaLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_ExpandCondsetsCoaLimit>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getOptCoaLimitWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::HexagonOptsReg,
+                               &clv2::HEX_ExpandCondsetsCoaLimit>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -135,12 +156,7 @@ namespace {
   public:
     static char ID;
 
-    HexagonExpandCondsets() : MachineFunctionPass(ID) {
-      if (OptCoaLimit.getPosition())
-        CoaLimitActive = true, CoaLimit = OptCoaLimit;
-      if (OptTfrLimit.getPosition())
-        TfrLimitActive = true, TfrLimit = OptTfrLimit;
-    }
+    HexagonExpandCondsets() : MachineFunctionPass(ID) {}
 
     StringRef getPassName() const override { return "Hexagon Expand Condsets"; }
 
@@ -1268,6 +1284,12 @@ bool HexagonExpandCondsets::runOnMachineFunction(MachineFunction &MF) {
   MDT = &getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
   LIS = &getAnalysis<LiveIntervalsWrapperPass>().getLIS();
   MRI = &MF.getRegInfo();
+
+  const Function &F = MF.getFunction();
+  if (getOptCoaLimitWasSpecified(F))
+    CoaLimitActive = true, CoaLimit = getOptCoaLimit(F);
+  if (getOptTfrLimitWasSpecified(F))
+    TfrLimitActive = true, TfrLimit = getOptTfrLimit(F);
 
   LLVM_DEBUG(LIS->print(dbgs() << "Before expand-condsets\n"));
 

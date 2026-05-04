@@ -1,5 +1,6 @@
 add_llvm_component_library(LLVMCSKYDesc
   CSKYAsmBackend.cpp
+  CSKYOptions.cpp
   CSKYELFObjectWriter.cpp
   CSKYELFStreamer.cpp
   CSKYInstPrinter.cpp

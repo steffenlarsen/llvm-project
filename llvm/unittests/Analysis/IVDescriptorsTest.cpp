@@ -49,11 +49,10 @@ static std::unique_ptr<Module> parseIR(LLVMContext &C, const char *IR) {
 // expected behavior, i.e. no FMF algebra.
 TEST(IVDescriptorsTest, LoopWithSingleLatch) {
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
-  std::unique_ptr<Module> M = parseIR(
-    Context,
-    R"(define void @foo(ptr %A, i32 %ub) {
+  std::unique_ptr<Module> M = parseIR(Context,
+                                      R"(define void @foo(ptr %A, i32 %ub) {
 entry:
   br label %for.body
 for.body:
@@ -68,8 +67,7 @@ for.exit:
   br label %for.end
 for.end:
   ret void
-})"
-    );
+})");
 
   runWithLoopInfoAndSE(
       *M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
@@ -103,7 +101,7 @@ for.end:
 // So just check that it doesn't assert.
 TEST(IVDescriptorsTest, LoopWithPtrToInt) {
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M = parseIR(Context, R"(
       target datalayout = "e-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64"
@@ -168,7 +166,7 @@ TEST(IVDescriptorsTest, LoopWithPtrToInt) {
 // that describes FMin reduction idiom.
 TEST(IVDescriptorsTest, FMinRednIdentity) {
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M = parseIR(Context,
                                       R"(define float @foo(ptr %A, i64 %ub) {
@@ -216,7 +214,7 @@ for.end:
 // that describes FMax reduction idiom.
 TEST(IVDescriptorsTest, FMaxRednIdentity) {
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M = parseIR(Context,
                                       R"(define float @foo(ptr %A, i64 %ub) {
@@ -262,7 +260,7 @@ for.end:
 
 TEST(IVDescriptorsTest, UnsupportedFindLastPhi) {
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   // This is a constructed example for the test, but it's based on a loop like:
   //  int result = default_val;
@@ -342,7 +340,7 @@ TEST(IVDescriptorsTest, UnsupportedFindLastPhi) {
 // This tests that a min/max recurrence with a vector-typed phi is recognized.
 TEST(IVDescriptorsTest, VectorSMaxRednIdentity) {
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M =
       parseIR(Context,
@@ -389,7 +387,7 @@ for.end:
 // Make sure isReductionPHI doesn't crash when SE is not passed to it.
 TEST(IVDescriptorsTest, InvariantStoreNoSCEV) {
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M = parseIR(Context, R"(
     define void @smax_with_invariant_store_user(ptr noalias %src, ptr %dst, i64 %n) {

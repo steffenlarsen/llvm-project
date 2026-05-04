@@ -13,6 +13,14 @@
 #ifndef MLIR_TOOLS_MLIR_TBLGEN_MLIRTBLGENMAIN_H
 #define MLIR_TOOLS_MLIR_TBLGEN_MLIRTBLGENMAIN_H
 
+#include <functional>
+
+namespace llvm {
+namespace clv2 {
+class OptionParser;
+}
+} // namespace llvm
+
 namespace mlir {
 /// Main Program for tools like 'mlir-tblgen' with custom backends. To add
 /// a new backend, simply create a new 'mlir::GenRegistration' global variable.
@@ -20,7 +28,11 @@ namespace mlir {
 ///
 /// The 'argc' and 'argv' arguments are simply forwarded from a main function.
 /// The return value is the exit code from llvm::TableGenMain.
-int MlirTblgenMain(int argc, char **argv);
+/// If \p ConfigureParser is provided, it is called with the OptionParser
+/// before parsing to allow callers to add tool-specific registries.
+int MlirTblgenMain(
+    int argc, char **argv,
+    std::function<void(llvm::clv2::OptionParser &)> ConfigureParser = {});
 } // namespace mlir
 
 #endif // MLIR_TOOLS_MLIR_TBLGEN_MLIRTBLGENMAIN_H

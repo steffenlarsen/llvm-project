@@ -15,6 +15,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Target/LLVMIR/Dialect/All.h"
 #include "mlir/Target/LLVMIR/Import.h"
+#include "mlir/Target/MLIRTranslateOptionsOptInfos.h"
 #include "mlir/Tools/mlir-translate/Translation.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
@@ -25,45 +26,12 @@ using namespace mlir;
 
 namespace mlir {
 void registerFromLLVMIRTranslation() {
-  static llvm::cl::opt<bool> emitExpensiveWarnings(
-      "emit-expensive-warnings",
-      llvm::cl::desc("Emit expensive warnings during LLVM IR import "
-                     "(discouraged: testing only!)"),
-      llvm::cl::init(false));
-  static llvm::cl::opt<bool> convertDebugRecToIntrinsics(
-      "convert-debug-rec-to-intrinsics",
-      llvm::cl::desc("Change the input LLVM module to use old debug intrinsics "
-                     "instead of records "
-                     "via convertFromNewDbgValues, this happens "
-                     "before importing the debug information"
-                     "(discouraged: to be removed soon!)"),
-      llvm::cl::init(false));
-  static llvm::cl::opt<bool> dropDICompositeTypeElements(
-      "drop-di-composite-type-elements",
-      llvm::cl::desc(
-          "Avoid translating the elements of DICompositeTypes during "
-          "the LLVM IR import (discouraged: testing only!)"),
-      llvm::cl::init(false));
-
-  static llvm::cl::opt<bool> preferUnregisteredIntrinsics(
-      "prefer-unregistered-intrinsics",
-      llvm::cl::desc(
-          "Prefer translating all intrinsics into llvm.call_intrinsic instead "
-          "of using dialect supported intrinsics"),
-      llvm::cl::init(false));
-
-  static llvm::cl::opt<bool> importStructsAsLiterals(
-      "import-structs-as-literals",
-      llvm::cl::desc("Controls if structs should be imported as literal "
-                     "structs, i.e., nameless structs."),
-      llvm::cl::init(false));
-
   TranslateToMLIRRegistration registration(
       "import-llvm", "Translate LLVMIR to MLIR",
       [](llvm::SourceMgr &sourceMgr,
          MLIRContext *context) -> OwningOpRef<Operation *> {
         llvm::SMDiagnostic err;
-        llvm::LLVMContext llvmContext;
+        llvm::LLVMContext llvmContext(llvm::clv2::defaultOptionsContext());
         std::unique_ptr<llvm::Module> llvmModule =
             llvm::parseIR(*sourceMgr.getMemoryBuffer(sourceMgr.getMainFileID()),
                           err, llvmContext);
@@ -79,13 +47,19 @@ void registerFromLLVMIRTranslation() {
 
         // Now that the translation supports importing debug records directly,
         // make it the default, but allow the user to override to old behavior.
-        if (convertDebugRecToIntrinsics)
+        using namespace llvm::clv2;
+        auto *O = mlir_translate_opts::getMLIRTranslateOptsReg(
+            context->getOptionsContext());
+        if (O && O->get<&MLIRT_ConvertDebugRecToIntrinsics>())
           llvmModule->convertFromNewDbgValues();
 
         return translateLLVMIRToModule(
-            std::move(llvmModule), context, emitExpensiveWarnings,
-            dropDICompositeTypeElements, /*loadAllDialects=*/true,
-            preferUnregisteredIntrinsics, importStructsAsLiterals);
+            std::move(llvmModule), context,
+            O ? O->get<&MLIRT_EmitExpensiveWarnings>() : false,
+            O ? O->get<&MLIRT_DropDICompositeTypeElements>() : false,
+            /*loadAllDialects=*/true,
+            O ? O->get<&MLIRT_PreferUnregisteredIntrinsics>() : false,
+            O ? O->get<&MLIRT_ImportStructsAsLiterals>() : false);
       },
       [](DialectRegistry &registry) {
         // Register the DLTI dialect used to express the data layout

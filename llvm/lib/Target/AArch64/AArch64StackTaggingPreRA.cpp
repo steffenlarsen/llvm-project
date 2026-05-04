@@ -22,9 +22,10 @@
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -32,22 +33,19 @@ using namespace llvm;
 
 enum UncheckedLdStMode { UncheckedNever, UncheckedSafe, UncheckedAlways };
 
-static cl::opt<UncheckedLdStMode> ClUncheckedLdSt(
-    "stack-tagging-unchecked-ld-st", cl::Hidden, cl::init(UncheckedSafe),
-    cl::desc(
-        "Unconditionally apply unchecked-ld-st optimization (even for large "
-        "stack frames, or in the presence of variable sized allocas)."),
-    cl::values(
-        clEnumValN(UncheckedNever, "never", "never apply unchecked-ld-st"),
-        clEnumValN(
-            UncheckedSafe, "safe",
-            "apply unchecked-ld-st when the target is definitely within range"),
-        clEnumValN(UncheckedAlways, "always", "always apply unchecked-ld-st")));
+using A64UncheckedMode = clv2::A64UncheckedLdStMode;
 
-static cl::opt<bool>
-    ClFirstSlot("stack-tagging-first-slot-opt", cl::Hidden, cl::init(true),
-                cl::desc("Apply first slot optimization for stack tagging "
-                         "(eliminate ADDG Rt, Rn, 0, 0)."));
+static UncheckedLdStMode getClUncheckedLdSt(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::AArch64OptsReg>(
+          F.getContext().getOptionsContext()))
+    return static_cast<UncheckedLdStMode>(O->get<&clv2::A64_UncheckedLdSt>());
+  return UncheckedSafe;
+}
+
+static bool getClFirstSlot(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::A64_StackTaggingFirstSlotOpt>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -169,9 +167,9 @@ static bool isUncheckedLoadOrStoreOpcode(unsigned Opcode) {
 }
 
 bool AArch64StackTaggingPreRAImpl::mayUseUncheckedLoadStore() {
-  if (ClUncheckedLdSt == UncheckedNever)
+  if (getClUncheckedLdSt(MF->getFunction()) == UncheckedNever)
     return false;
-  else if (ClUncheckedLdSt == UncheckedAlways)
+  else if (getClUncheckedLdSt(MF->getFunction()) == UncheckedAlways)
     return true;
 
   // This estimate can be improved if we had harder guarantees about stack frame
@@ -270,7 +268,7 @@ std::optional<int> AArch64StackTaggingPreRAImpl::findFirstSlotCandidate() {
   // - Any other instruction may benefit from being pinned to offset 0.
   LLVM_DEBUG(
       dbgs() << "AArch64StackTaggingPreRAImpl::findFirstSlotCandidate\n");
-  if (!ClFirstSlot)
+  if (!getClFirstSlot(MF->getFunction()))
     return std::nullopt;
 
   DenseMap<SlotWithTag, int> RetagScore;

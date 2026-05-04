@@ -26,6 +26,11 @@
 #include <vector>
 
 namespace llvm {
+
+namespace clv2 {
+class OptionsContext;
+}
+
 class Module;
 
 template <typename T> class ArrayRef;
@@ -244,8 +249,9 @@ struct VTableSlotSummary {
   StringRef TypeID;
   uint64_t ByteOffset;
 };
-LLVM_ABI bool
-hasWholeProgramVisibility(bool WholeProgramVisibilityEnabledInLTO);
+LLVM_ABI bool hasWholeProgramVisibility(bool WholeProgramVisibilityEnabledInLTO,
+                                        const Module *M,
+                                        const clv2::OptionsContext &Ctx);
 LLVM_ABI void
 updatePublicTypeTestCalls(Module &M, bool WholeProgramVisibilityEnabledInLTO);
 LLVM_ABI void updateVCallVisibilityInModule(
@@ -256,7 +262,8 @@ LLVM_ABI void updateVCallVisibilityInModule(
 LLVM_ABI void updateVCallVisibilityInIndex(
     ModuleSummaryIndex &Index, bool WholeProgramVisibilityEnabledInLTO,
     const DenseSet<GlobalValue::GUID> &DynamicExportSymbols,
-    const DenseSet<GlobalValue::GUID> &VisibleToRegularObjSymbols);
+    const DenseSet<GlobalValue::GUID> &VisibleToRegularObjSymbols,
+    const clv2::OptionsContext &Ctx);
 
 LLVM_ABI void getVisibleToRegularObjVtableGUIDs(
     ModuleSummaryIndex &Index,
@@ -273,7 +280,8 @@ LLVM_ABI void getVisibleToRegularObjVtableGUIDs(
 LLVM_ABI void runWholeProgramDevirtOnIndex(
     ModuleSummaryIndex &Summary, std::set<GlobalValue::GUID> &ExportedGUIDs,
     std::map<ValueInfo, std::vector<VTableSlotSummary>> &LocalWPDTargetsMap,
-    DenseSet<StringRef> *ExternallyVisibleSymbolNamesPtr = nullptr);
+    DenseSet<StringRef> *ExternallyVisibleSymbolNamesPtr,
+    const clv2::OptionsContext &Ctx);
 
 /// Call after cross-module importing to update the recorded single impl
 /// devirt target names for any locals that were exported.

@@ -11,9 +11,9 @@
 
 #include "llvm/IR/PassManager.h"
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
+#include "llvm/Transforms/Vectorize/LoopIdiomVectorizeStyle.h"
 
 namespace llvm {
-enum class LoopIdiomVectorizeStyle { Masked, Predicated };
 
 class LoopIdiomVectorizePass
     : public OptionalPassInfoMixin<LoopIdiomVectorizePass> {

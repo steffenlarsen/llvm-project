@@ -25,6 +25,7 @@
 
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/TargetParser/Host.h"
 
 #include "clang/Basic/Diagnostic.h"
@@ -33,10 +34,58 @@
 #include "clang/Basic/TargetInfo.h"
 #include "clang/CIR/CIRDataLayoutSpec.h"
 #include "clang/CIR/Dialect/IR/CIRDialect.h"
+#include "clang/CIR/Dialect/OpenMP/RegisterOpenMPExtensions.h"
 #include "clang/CIR/Dialect/Passes.h"
-#include "clang/CIR/InitAllDialects.h"
 #include "clang/CIR/LowerToLLVM.h"
 #include "clang/CIR/MissingFeatures.h"
+
+// cir-translate's main() delegates to mlir::mlirTranslateMain() which owns
+// the parse, so we must register options at runtime rather than using
+// OptionParser::parse() directly.
+
+inline constexpr llvm::clv2::OptionInfo<std::string> CTTargetOpt{
+    "target", "Specify a default target triple when "
+              "it's not available in the module"};
+
+inline constexpr llvm::clv2::OptionInfo<bool> CTDisableCCLoweringOpt{
+    "disable-cc-lowering", "Disable calling convention lowering pass"};
+
+inline constexpr llvm::clv2::OptionsRegistry<&CTTargetOpt,
+                                             &CTDisableCCLoweringOpt>
+    CirTranslateReg;
+
+struct CirTranslateOptions {
+  std::string TargetTriple;
+  bool TargetTripleSet = false;
+  bool DisableCCLowering = false;
+};
+
+static void
+applyCirTranslateOpts(const decltype(CirTranslateReg)::ParsedOptionsT &Parsed,
+                      CirTranslateOptions &Opts) {
+  Opts.TargetTriple = Parsed.get<&CTTargetOpt>();
+  Opts.TargetTripleSet = Parsed.specified<&CTTargetOpt>();
+  Opts.DisableCCLowering = Parsed.get<&CTDisableCCLoweringOpt>();
+}
+
+// cir-translate's main() delegates the parse to mlir::mlirTranslateMain(), so
+// the parsed values must be written into a main()-owned struct via a
+// post-parse callback rather than read back directly after P.parse().
+static void configureParser(llvm::clv2::OptionParser &P,
+                            CirTranslateOptions &Opts) {
+  using ParsedT = decltype(CirTranslateReg)::ParsedOptionsT;
+  auto *Storage = new ParsedT();
+  decltype(CirTranslateReg)::applyDefaultsTo(*Storage);
+  std::vector<llvm::clv2::detail::OptionEntry> Entries;
+  std::vector<llvm::clv2::detail::AliasEntry> Aliases;
+  std::vector<llvm::clv2::detail::SubCommandSpec> SubSpecs;
+  decltype(CirTranslateReg)::staticBuildInto(*Storage, Entries, Aliases,
+                                             SubSpecs);
+  for (auto &E : Entries)
+    P.addDynamicEntry(std::move(E));
+  llvm::clv2::registerDynamicPostParseCallback(
+      [Storage, &Opts]() { applyCirTranslateOpts(*Storage, Opts); });
+}
 
 namespace cir {
 namespace direct {
@@ -62,14 +111,10 @@ namespace {
 /// | F      | F      | T           | Set default     | Derive from triple    |
 /// | F      | F      | F           | Set default     | Derive from triple    |
 /// +--------+--------+-------------+-----------------+-----------------------+
-llvm::cl::opt<std::string>
-    targetTripleOption("target",
-                       llvm::cl::desc("Specify a default target triple when "
-                                      "it's not available in the module"),
-                       llvm::cl::init(""));
 
-std::string prepareCIRModuleTriple(mlir::ModuleOp mod) {
-  std::string triple = targetTripleOption;
+std::string prepareCIRModuleTriple(mlir::ModuleOp mod,
+                                   const CirTranslateOptions &Opts) {
+  std::string triple = Opts.TargetTriple;
 
   // Treat "" as the default target machine.
   if (triple.empty()) {
@@ -118,11 +163,13 @@ llvm::LogicalResult prepareCIRModuleDataLayout(mlir::ModuleOp mod,
 }
 
 /// Prepare requirements like cir.triple and data layout.
-llvm::LogicalResult prepareCIRModuleForTranslation(mlir::ModuleOp mod) {
+llvm::LogicalResult
+prepareCIRModuleForTranslation(mlir::ModuleOp mod,
+                               const CirTranslateOptions &Opts) {
   auto modTriple = mod->getAttrOfType<mlir::StringAttr>(
       cir::CIRDialect::getTripleAttrName());
   auto modDataLayout = mod->getAttr(mlir::DLTIDialect::kDataLayoutAttrName);
-  bool hasTargetOption = targetTripleOption.getNumOccurrences() > 0;
+  bool hasTargetOption = Opts.TargetTripleSet;
 
   // Skip the situation where nothing should be done.
   if (!hasTargetOption && modTriple && modDataLayout)
@@ -135,7 +182,7 @@ llvm::LogicalResult prepareCIRModuleForTranslation(mlir::ModuleOp mod) {
     triple = modTriple.getValue();
   } else {
     // Otherwise, overwrite or set default.
-    triple = prepareCIRModuleTriple(mod);
+    triple = prepareCIRModuleTriple(mod, Opts);
   }
 
   // If the data layout is not set, derive it from the triple.
@@ -144,39 +191,36 @@ llvm::LogicalResult prepareCIRModuleForTranslation(mlir::ModuleOp mod) {
 } // namespace
 } // namespace cir
 
-void registerToLLVMTranslation() {
-  static llvm::cl::opt<bool> disableCCLowering(
-      "disable-cc-lowering",
-      llvm::cl::desc("Disable calling convention lowering pass"),
-      llvm::cl::init(false));
-
+void registerToLLVMTranslation(const CirTranslateOptions &Opts) {
   mlir::TranslateFromMLIRRegistration registration(
       "cir-to-llvmir", "Translate CIR to LLVMIR",
-      [](mlir::Operation *op, mlir::raw_ostream &output) {
+      [&Opts](mlir::Operation *op, mlir::raw_ostream &output) {
         auto cirModule = llvm::dyn_cast<mlir::ModuleOp>(op);
 
-        if (mlir::failed(cir::prepareCIRModuleForTranslation(cirModule)))
+        if (mlir::failed(cir::prepareCIRModuleForTranslation(cirModule, Opts)))
           return mlir::failure();
 
-        llvm::LLVMContext llvmContext;
-        const bool enableOpenMP = mlir::omp::isOpenMPModule(cirModule);
+        llvm::LLVMContext llvmContext(llvm::clv2::defaultOptionsContext());
         std::unique_ptr<llvm::Module> llvmModule =
             cir::direct::lowerDirectlyFromCIRToLLVMIR(cirModule, llvmContext,
-                                                      enableOpenMP);
+                                                      /*enableOpenMP=*/false);
         if (!llvmModule)
           return mlir::failure();
         llvmModule->print(output, nullptr);
         return mlir::success();
       },
       [](mlir::DialectRegistry &registry) {
-        cir::registerAllDialects(registry);
-        registry.insert<mlir::func::FuncDialect>();
+        registry.insert<mlir::DLTIDialect, mlir::func::FuncDialect>();
         mlir::registerAllToLLVMIRTranslations(registry);
         cir::direct::registerCIRDialectTranslation(registry);
+        cir::omp::registerOpenMPExtensions(registry);
       });
 }
 
 int main(int argc, char **argv) {
-  registerToLLVMTranslation();
-  return failed(mlir::mlirTranslateMain(argc, argv, "CIR Translation Tool"));
+  CirTranslateOptions Opts;
+  registerToLLVMTranslation(Opts);
+  return failed(mlir::mlirTranslateMain(
+      argc, argv, "CIR Translation Tool",
+      [&Opts](llvm::clv2::OptionParser &P) { configureParser(P, Opts); }));
 }

@@ -16,8 +16,12 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/AMDGPUAddrSpace.h"
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Support/OptionsContext.h"
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+}
 
 class AMDGPUTargetMachine;
 class LazyCallGraph;
@@ -65,7 +69,7 @@ FunctionPass *createSIFormMemoryClausesLegacyPass();
 FunctionPass *createSIPostRABundlerPass();
 FunctionPass *createAMDGPUImageIntrinsicOptimizerPass(const TargetMachine *);
 ModulePass *createAMDGPURemoveIncompatibleFunctionsPass(const TargetMachine *);
-FunctionPass *createAMDGPUCodeGenPreparePass();
+FunctionPass *createAMDGPUCodeGenPreparePass(bool ExpandDiv = false);
 FunctionPass *createAMDGPULateCodeGenPrepareLegacyPass();
 FunctionPass *createAMDGPUReserveWWMRegsPass();
 FunctionPass *createAMDGPURewriteOutArgumentsPass();
@@ -563,6 +567,8 @@ extern char &GCNCreateVOPDID;
 
 void initializeAMDGPUUnifyDivergentExitNodesLegacyPass(PassRegistry &);
 extern char &AMDGPUUnifyDivergentExitNodesID;
+FunctionPass *
+createAMDGPUUnifyDivergentExitNodesPass(const clv2::OptionsContext &Ctx);
 
 ImmutablePass *createAMDGPUAAWrapperPass();
 void initializeAMDGPUAAWrapperPassPass(PassRegistry&);

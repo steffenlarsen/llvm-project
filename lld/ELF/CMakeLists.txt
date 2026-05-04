@@ -62,6 +62,7 @@ add_lld_library(lldELF
   Writer.cpp
 
   LINK_COMPONENTS
+  AllOptions
   ${LLVM_TARGETS_TO_BUILD}
   BinaryFormat
   BitWriter

@@ -19,20 +19,23 @@
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCValue.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
 using namespace llvm;
 using namespace dwarf;
 
-static cl::opt<bool> EmitAArch64DebugTLSLocation(
-    "aarch64-emit-debug-tls-location",
-    cl::desc("Emit the TLS DWARF location with DTPREL relocation for AArch64"),
-    cl::Hidden);
+static bool getEmitAArch64DebugTLSLocation(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::AArch64OptsReg,
+                           &clv2::A64_EmitDebugTLSLocation>(Ctx, false);
+}
 
 void AArch64_ELFTargetObjectFile::Initialize(MCContext &Ctx,
                                              const TargetMachine &TM) {
   TargetLoweringObjectFileELF::Initialize(Ctx, TM);
   PLTPCRelativeSpecifier = AArch64::S_PLT;
   SupportIndirectSymViaGOTPCRel = true;
-  SupportDebugThreadLocalLocation = EmitAArch64DebugTLSLocation;
+  SupportDebugThreadLocalLocation =
+      getEmitAArch64DebugTLSLocation(TM.getOptionsContext());
 
   // Make sure the implicitly created empty .text section has the
   // SHF_AARCH64_PURECODE flag set if the "+execute-only" target feature is

@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LoopRotation.cpp - Loop Rotation Pass ------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -10,7 +12,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Scalar/LoopRotation.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/LazyBlockFrequencyInfo.h"
@@ -20,8 +21,9 @@
 #include "llvm/Analysis/MemorySSAUpdater.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/LoopRotation.h"
 #include "llvm/Transforms/Utils/LoopRotationUtils.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include <optional>
@@ -29,23 +31,27 @@ using namespace llvm;
 
 #define DEBUG_TYPE "loop-rotate"
 
-static cl::opt<unsigned> DefaultRotationThreshold(
-    "rotation-max-header-size", cl::init(16), cl::Hidden,
-    cl::desc("The default maximum header size for automatic loop rotation"));
+static unsigned getDefaultRotationThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_RotationMaxHeaderSize>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> PrepareForLTOOption(
-    "rotation-prepare-for-lto", cl::init(false), cl::Hidden,
-    cl::desc("Run loop-rotation in the prepare-for-lto stage. This option "
-             "should be used for testing only."));
+static bool getPrepareForLTOOption(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_RotationPrepareForLto>(
+      F.getContext().getOptionsContext(), false);
+}
 
 // Experimentally allow loop header duplication. This should allow for better
 // optimization at Oz, since loop-idiom recognition can then recognize things
 // like memcpy. If this ends up being useful for many targets, we should drop
 // this flag and make a code generation option that can be controlled
 // independent of the opt level and exposed through the frontend.
-static cl::opt<bool> EnableLoopHeaderDuplicationAtMinSize(
-    "enable-loop-header-duplication-at-minsize", cl::init(false), cl::Hidden,
-    cl::desc("Enable loop header duplication even for minsize"));
+static bool getEnableLoopHeaderDuplicationAtMinSize(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_EnableLoopHeaderDuplicationAtMinSize>(
+      F.getContext().getOptionsContext(), false);
+}
 
 LoopRotatePass::LoopRotatePass(bool EnableHeaderDuplication, bool PrepareForLTO,
                                bool CheckExitCount)
@@ -79,9 +85,10 @@ PreservedAnalyses LoopRotatePass::run(Loop &L, LoopAnalysisManager &AM,
   // disabled.
   int Threshold = EnableHeaderDuplication &&
                           (!L.getHeader()->getParent()->hasMinSize() ||
-                           EnableLoopHeaderDuplicationAtMinSize ||
+                           getEnableLoopHeaderDuplicationAtMinSize(
+                               *L.getHeader()->getParent()) ||
                            hasVectorizeTransformation(&L) == TM_ForcedByUser)
-                      ? DefaultRotationThreshold
+                      ? getDefaultRotationThreshold(*L.getHeader()->getParent())
                       : 0;
   const DataLayout &DL = L.getHeader()->getDataLayout();
   const SimplifyQuery SQ = getBestSimplifyQuery(AR, DL);
@@ -89,15 +96,18 @@ PreservedAnalyses LoopRotatePass::run(Loop &L, LoopAnalysisManager &AM,
   std::optional<MemorySSAUpdater> MSSAU;
   if (AR.MSSA)
     MSSAU = MemorySSAUpdater(AR.MSSA);
-  bool Changed =
-      LoopRotation(&L, &AR.LI, &AR.TTI, &AR.AC, &AR.DT, &AR.SE,
-                   MSSAU ? &*MSSAU : nullptr, SQ, false, Threshold, false,
-                   PrepareForLTO || PrepareForLTOOption, CheckExitCount);
+  bool Changed = LoopRotation(
+      &L, &AR.LI, &AR.TTI, &AR.AC, &AR.DT, &AR.SE, MSSAU ? &*MSSAU : nullptr,
+      SQ, false, Threshold, false,
+      PrepareForLTO || getPrepareForLTOOption(*L.getHeader()->getParent()),
+      CheckExitCount);
 
   if (!Changed)
     return PreservedAnalyses::all();
 
-  if (AR.MSSA && VerifyMemorySSA)
+  if (AR.MSSA &&
+      getVerifyMemorySSA(
+          L.getHeader()->getParent()->getContext().getOptionsContext()))
     AR.MSSA->verifyMemorySSA();
 
   auto PA = getLoopPassPreservedAnalyses();

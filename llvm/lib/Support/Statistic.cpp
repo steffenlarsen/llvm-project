@@ -25,12 +25,13 @@
 #include "DebugOptions.h"
 
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/Mutex.h"
+#include "llvm/Support/SupportOptions.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/YAMLTraits.h"
 #include "llvm/Support/raw_ostream.h"
@@ -38,23 +39,14 @@
 #include <cstring>
 using namespace llvm;
 
-/// -stats - Command line option to cause transformations to emit stats about
-/// what they did.
-///
-static bool EnableStats;
-static bool StatsAsJSON;
 static bool Enabled;
 static bool PrintOnExit;
 
+static bool enableStats() { return support::StatsEnabled; }
+
+static bool statsAsJSON() { return support::StatsAsJsonEnabled; }
+
 void llvm::initStatisticOptions() {
-  static cl::opt<bool, true> registerEnableStats{
-      "stats",
-      cl::desc(
-          "Enable statistics output from program (available with Asserts)"),
-      cl::location(EnableStats), cl::Hidden};
-  static cl::opt<bool, true> registerStatsAsJson{
-      "stats-json", cl::desc("Display statistics as json data"),
-      cl::location(StatsAsJSON), cl::Hidden};
 }
 
 namespace {
@@ -111,7 +103,7 @@ void TrackingStatistic::RegisterStatistic() {
     // Check Initialized again after acquiring the lock.
     if (Initialized.load(std::memory_order_relaxed))
       return;
-    if (EnableStats || Enabled)
+    if (enableStats() || Enabled)
       SI.addStatistic(this);
 
     // Remember we have been registered.
@@ -127,7 +119,7 @@ StatisticInfo::StatisticInfo() {
 
 // Print information when destroyed, iff command line option is specified.
 StatisticInfo::~StatisticInfo() {
-  if (EnableStats || PrintOnExit)
+  if (enableStats() || PrintOnExit)
     llvm::PrintStatistics();
 }
 
@@ -136,7 +128,7 @@ void llvm::EnableStatistics(bool DoPrintOnExit) {
   PrintOnExit = DoPrintOnExit;
 }
 
-bool llvm::AreStatisticsEnabled() { return Enabled || EnableStats; }
+bool llvm::AreStatisticsEnabled() { return Enabled || enableStats(); }
 
 void StatisticInfo::sort() {
   llvm::stable_sort(
@@ -236,7 +228,7 @@ void llvm::PrintStatistics() {
 
   // Get the stream to write to.
   std::unique_ptr<raw_ostream> OutStream = CreateInfoOutputFile();
-  if (StatsAsJSON)
+  if (statsAsJSON())
     PrintStatisticsJSON(*OutStream);
   else
     PrintStatistics(*OutStream);
@@ -245,7 +237,7 @@ void llvm::PrintStatistics() {
   // Check if the -stats option is set instead of checking
   // !Stats.Stats.empty().  In release builds, Statistics operators
   // do nothing, so stats are never Registered.
-  if (EnableStats) {
+  if (enableStats()) {
     // Get the stream to write to.
     std::unique_ptr<raw_ostream> OutStream = CreateInfoOutputFile();
     (*OutStream) << "Statistics are disabled.  "

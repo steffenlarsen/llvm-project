@@ -18,29 +18,28 @@
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/IR/DebugProgramInstruction.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/IROptionsOptInfos.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
 
+#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include <numeric>
 #include <optional>
 
 using namespace llvm;
+using namespace llvm::clv2;
 
-namespace llvm {
-// Use FS-AFDO discriminator.
-cl::opt<bool> EnableFSDiscriminator(
-    "enable-fs-discriminator", cl::Hidden,
-    cl::desc("Enable adding flow sensitive discriminators"));
+bool llvm::getEnableFSDiscriminator(const clv2::OptionsContext &Ctx) {
+  return getOptValIfSpecified<&IROptsReg, &IR_EnableFSDiscriminator>(Ctx,
+                                                                     false);
+}
 
-// When true, preserves line and column number by picking one of the merged
-// location info in a deterministic manner to assist sample based PGO.
-LLVM_ABI cl::opt<bool> PickMergedSourceLocations(
-    "pick-merged-source-locations", cl::init(false), cl::Hidden,
-    cl::desc("Preserve line and column number when merging locations."));
-} // namespace llvm
+bool llvm::getEnableFSDiscriminator(const LLVMContext &Ctx) {
+  return getEnableFSDiscriminator(Ctx.getOptionsContext());
+}
 
 uint32_t DIType::getAlignInBits() const {
   return (getTag() == dwarf::DW_TAG_LLVM_ptrauth_type ? 0 : SubclassData32);
@@ -229,7 +228,14 @@ DILocation *DILocation::getMergedLocation(DILocation *LocA, DILocation *LocB) {
   // rather than computing a merged location using line 0, which is typically
   // not useful for PGO. If one of them is null, then try to return one which is
   // valid.
-  if (PickMergedSourceLocations) {
+  bool PickMerged = false;
+  {
+    const DILocation *Loc = LocA ? LocA : LocB;
+    if (auto *O = clv2::getView<&clv2::IROptsReg>(
+            Loc->getContext().getOptionsContext()))
+      PickMerged = O->get<&clv2::IR_PickMergedSourceLocations>();
+  }
+  if (PickMerged) {
     if (!LocA || !LocB)
       return LocA ? LocA : LocB;
 

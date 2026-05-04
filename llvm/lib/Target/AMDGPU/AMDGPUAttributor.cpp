@@ -16,6 +16,8 @@
 #include "Utils/AMDGPUBaseInfo.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/IR/IntrinsicsR600.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/Attributor.h"
 #include <cstdint>
@@ -24,11 +26,11 @@
 
 using namespace llvm;
 
-static cl::opt<unsigned> IndirectCallSpecializationThreshold(
-    "amdgpu-indirect-call-specialization-threshold",
-    cl::desc(
-        "A threshold controls whether an indirect call will be specialized"),
-    cl::init(3));
+static unsigned getIndirectCallSpecializationThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::AMDGPU_IndirectCallSpecializationThreshold>(
+      F.getContext().getOptionsContext());
+}
 
 #define AMDGPU_ATTRIBUTE(Name, Str) Name##_POS,
 
@@ -1612,7 +1614,8 @@ static bool runImpl(SetVector<Function *> &Functions, bool IsModulePass,
       [](Attributor &A, const AbstractAttribute &AA, CallBase &CB,
          Function &Callee, unsigned NumAssumedCallees) {
         return !AMDGPU::isEntryFunctionCC(Callee.getCallingConv()) &&
-               (NumAssumedCallees <= IndirectCallSpecializationThreshold);
+               (NumAssumedCallees <=
+                getIndirectCallSpecializationThreshold(Callee));
       };
   AC.IPOAmendableCB = [](const Function &F) {
     return F.getCallingConv() == CallingConv::AMDGPU_KERNEL;

@@ -12,10 +12,16 @@
 
 #include "mlir/TableGen/GenInfo.h"
 #include "mlir/Tools/mlir-tblgen/MlirTblgenMain.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/TableGen/Record.h"
 
 using namespace llvm;
 using namespace mlir;
+
+// Forward declaration from OpDefinitionsGen.cpp.
+namespace irdl_opts {
+void registerOptions(llvm::clv2::OptionParser &P);
+} // namespace irdl_opts
 
 // Generator that prints records.
 static GenRegistration
@@ -25,4 +31,7 @@ static GenRegistration
                    return false;
                  });
 
-int main(int argc, char **argv) { return MlirTblgenMain(argc, argv); }
+int main(int argc, char **argv) {
+  return MlirTblgenMain(
+      argc, argv, [](clv2::OptionParser &P) { irdl_opts::registerOptions(P); });
+}

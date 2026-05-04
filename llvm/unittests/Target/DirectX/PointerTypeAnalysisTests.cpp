@@ -38,7 +38,7 @@ TEST(PointerTypeAnalysis, DigressToi8) {
     }
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
   auto M = parseAssemblyString(Assembly, Error, Context);
   ASSERT_TRUE(M) << "Bad assembly?";
@@ -61,7 +61,7 @@ TEST(PointerTypeAnalysis, DiscoverStore) {
     }
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
   auto M = parseAssemblyString(Assembly, Error, Context);
   ASSERT_TRUE(M) << "Bad assembly?";
@@ -84,7 +84,7 @@ TEST(PointerTypeAnalysis, DiscoverLoad) {
     }
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
   auto M = parseAssemblyString(Assembly, Error, Context);
   ASSERT_TRUE(M) << "Bad assembly?";
@@ -107,7 +107,7 @@ TEST(PointerTypeAnalysis, DiscoverGEP) {
     }
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
   auto M = parseAssemblyString(Assembly, Error, Context);
   ASSERT_TRUE(M) << "Bad assembly?";
@@ -133,7 +133,7 @@ TEST(PointerTypeAnalysis, DiscoverConstantExprGEP) {
     }
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
   auto M = parseAssemblyString(Assembly, Error, Context);
   ASSERT_TRUE(M) << "Bad assembly?";
@@ -160,7 +160,7 @@ TEST(PointerTypeAnalysis, TraceIndirect) {
     }
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
   auto M = parseAssemblyString(Assembly, Error, Context);
   ASSERT_TRUE(M) << "Bad assembly?";
@@ -189,7 +189,7 @@ TEST(PointerTypeAnalysis, WithNoOpCasts) {
     }
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
   auto M = parseAssemblyString(Assembly, Error, Context);
   ASSERT_TRUE(M) << "Bad assembly?";

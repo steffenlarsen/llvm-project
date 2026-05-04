@@ -247,6 +247,7 @@ public:
   /// Basic property access.
   ///
   BinaryContext &getBinaryContext() { return BC; }
+  const BinaryContext &getBinaryContext() const { return BC; }
   bool isELF() const;
   bool isMachO() const;
   StringRef getName() const { return Name; }

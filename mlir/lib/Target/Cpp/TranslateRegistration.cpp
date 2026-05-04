@@ -9,35 +9,28 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/EmitC/IR/EmitC.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/MLIRContext.h"
 #include "mlir/Target/Cpp/CppEmitter.h"
+#include "mlir/Target/MLIRTranslateOptionsOptInfos.h"
 #include "mlir/Tools/mlir-translate/Translation.h"
-#include "llvm/Support/CommandLine.h"
 
 using namespace mlir;
 
 namespace mlir {
 
-//===----------------------------------------------------------------------===//
-// Cpp registration
-//===----------------------------------------------------------------------===//
-
 void registerToCppTranslation() {
-  static llvm::cl::opt<bool> declareVariablesAtTop(
-      "declare-variables-at-top",
-      llvm::cl::desc("Declare variables at top when emitting C/C++"),
-      llvm::cl::init(false));
-
-  static llvm::cl::opt<std::string> fileId(
-      "file-id", llvm::cl::desc("Emit emitc.file ops with matching id"),
-      llvm::cl::init(""));
-
   TranslateFromMLIRRegistration reg(
       "mlir-to-cpp", "translate from mlir to cpp",
       [](Operation *op, raw_ostream &output) {
-        return emitc::translateToCpp(
-            op, output,
-            /*declareVariablesAtTop=*/declareVariablesAtTop,
-            /*fileId=*/fileId);
+        bool declareVarsAtTop = false;
+        std::string fid;
+        if (auto *O = mlir_translate_opts::getMLIRTranslateOptsReg(
+                op->getContext()->getOptionsContext())) {
+          using namespace llvm::clv2;
+          declareVarsAtTop = O->get<&MLIRT_DeclareVariablesAtTop>();
+          fid = O->get<&MLIRT_FileId>();
+        }
+        return emitc::translateToCpp(op, output, declareVarsAtTop, fid);
       },
       [](DialectRegistry &registry) {
         // clang-format off

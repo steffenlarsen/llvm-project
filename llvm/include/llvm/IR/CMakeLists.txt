@@ -27,3 +27,12 @@ tablegen(LLVM IntrinsicsX86.h -gen-intrinsic-enums -intrinsic-prefix=x86)
 tablegen(LLVM IntrinsicsXCore.h -gen-intrinsic-enums -intrinsic-prefix=xcore)
 tablegen(LLVM IntrinsicsVE.h -gen-intrinsic-enums -intrinsic-prefix=ve)
 add_public_tablegen_target(intrinsics_gen)
+
+# Reset TABLEGEN_OUTPUT first: it accumulates across every tablegen() call in
+# this directory, so without this the clv2 target would also depend on the
+# unrelated .inc files generated above -- and in MLIR's case on mlir-tblgen,
+# which creates a dependency cycle.
+set(TABLEGEN_OUTPUT "")
+set(LLVM_TARGET_DEFINITIONS IROptions.td)
+tablegen(LLVM IROptionsOptInfos.inc -gen-clv2-options)
+add_public_tablegen_target(IROptionsTableGen)

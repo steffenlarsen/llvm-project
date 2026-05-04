@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Signals.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -32,7 +32,9 @@ int main(int argc, char **argv) {
   // Initialize both gmock and gtest.
   testing::InitGoogleMock(&argc, argv);
 
-  llvm::cl::ParseCommandLineOptions(argc, argv);
+  llvm::clv2::OptionParser P;
+  P.enableGlobalDynamicEntries();
+  P.parse(argc, argv);
 
   // Make it easy for a test to re-execute itself by saving argv[0].
   TestMainArgv0 = argv[0];

@@ -16,7 +16,9 @@
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCSymbol.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "loongarch-asm-printer"
@@ -25,16 +27,18 @@ using namespace llvm;
 #define PRINT_ALIAS_INSTR
 #include "LoongArchGenAsmWriter.inc"
 
-static cl::opt<bool>
-    NoAliases("loongarch-no-aliases",
-              cl::desc("Disable the emission of assembler pseudo instructions"),
-              cl::init(false), cl::Hidden);
+static bool NumericReg = false;
 
-static cl::opt<bool>
-    NumericReg("loongarch-numeric-reg",
-               cl::desc("Print numeric register names rather than the ABI "
-                        "names (such as $r0 instead of $zero)"),
-               cl::init(false), cl::Hidden);
+static bool getNoAliases(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::LoongArchOptsReg, &clv2::LA_NoAliases>(Ctx,
+                                                                         false);
+}
+
+static bool getNumericReg(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::LoongArchOptsReg>(Ctx))
+    return O->get<&clv2::LA_NumericReg>() || NumericReg;
+  return NumericReg;
+}
 
 // The command-line flag above is used by llvm-mc and llc. It can be used by
 // `llvm-objdump`, but we override the value here to handle options passed to
@@ -59,13 +63,17 @@ void LoongArchInstPrinter::printInst(const MCInst *MI, uint64_t Address,
                                      StringRef Annot,
                                      const MCSubtargetInfo &STI,
                                      raw_ostream &O) {
-  if (!PrintAliases || NoAliases || !printAliasInstr(MI, Address, STI, O))
+  if (!PrintAliases || getNoAliases(getOptionsContext()) ||
+      !printAliasInstr(MI, Address, STI, O))
     printInstruction(MI, Address, STI, O);
   printAnnotation(O, Annot);
 }
 
 void LoongArchInstPrinter::printRegName(raw_ostream &O, MCRegister Reg) {
-  O << '$' << getRegisterName(Reg);
+  O << '$'
+    << getRegisterName(Reg, getNumericReg(getOptionsContext())
+                                ? LoongArch::NoRegAltName
+                                : LoongArch::RegAliasName);
 }
 
 void LoongArchInstPrinter::printOperand(const MCInst *MI, unsigned OpNo,
@@ -97,6 +105,5 @@ void LoongArchInstPrinter::printAtomicMemOp(const MCInst *MI, unsigned OpNo,
 
 const char *LoongArchInstPrinter::getRegisterName(MCRegister Reg) {
   // Default print reg alias name
-  return getRegisterName(Reg, NumericReg ? LoongArch::NoRegAltName
-                                         : LoongArch::RegAliasName);
+  return getRegisterName(Reg, LoongArch::RegAliasName);
 }

@@ -71,16 +71,18 @@
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "si-fix-sgpr-copies"
 
-static cl::opt<bool> EnableM0Merge(
-  "amdgpu-enable-merge-m0",
-  cl::desc("Merge and hoist M0 initializations"),
-  cl::init(true));
+static bool getEnableM0Merge(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_EnableM0Merge>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -811,7 +813,8 @@ bool SIFixSGPRCopies::run(MachineFunction &MF) {
   while (!Relegalize.empty())
     TII->legalizeOperands(*Relegalize.pop_back_val(), MDT);
 
-  if (MF.getTarget().getOptLevel() > CodeGenOptLevel::None && EnableM0Merge)
+  if (MF.getTarget().getOptLevel() > CodeGenOptLevel::None &&
+      getEnableM0Merge(MF.getFunction()))
     hoistAndMergeSGPRInits(AMDGPU::M0, *MRI, TRI, *MDT, TII);
 
   SiblingPenalty.clear();

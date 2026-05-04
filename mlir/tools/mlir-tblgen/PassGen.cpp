@@ -14,7 +14,6 @@
 #include "mlir/TableGen/GenInfo.h"
 #include "mlir/TableGen/Pass.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Record.h"
@@ -24,10 +23,7 @@ using namespace mlir::tblgen;
 using llvm::formatv;
 using llvm::RecordKeeper;
 
-static llvm::cl::OptionCategory passGenCat("Options for -gen-pass-decls");
-static llvm::cl::opt<std::string>
-    groupName("name", llvm::cl::desc("The name of this group of passes"),
-              llvm::cl::cat(passGenCat));
+std::string groupNamePassGen;
 
 /// Extract the list of passes from the TableGen records.
 static std::vector<Pass> getPasses(const RecordKeeper &records) {
@@ -170,7 +166,7 @@ static void emitRegistrations(llvm::ArrayRef<Pass> passes, raw_ostream &os) {
   }
 
   os << "#ifdef GEN_PASS_REGISTRATION\n";
-  os << formatv(passGroupRegistrationCode, groupName);
+  os << formatv(passGroupRegistrationCode, groupNamePassGen);
 
   for (const Pass &pass : passes)
     os << "  register" << pass.getDef()->getName() << "();\n";
@@ -286,11 +282,12 @@ static void emitPassOptionDecls(const Pass &pass, raw_ostream &os) {
     os.indent(2) << "::mlir::Pass::"
                  << (opt.isListOption() ? "ListOption" : "Option");
 
-    os << formatv(R"(<{0}> {1}{{*this, "{2}", ::llvm::cl::desc(R"PO({3})PO"))",
-                  opt.getType(), opt.getCppVariableName(), opt.getArgument(),
-                  opt.getDescription().trim());
+    os << formatv(
+        R"(<{0}> {1}{{*this, "{2}", ::mlir::detail::pass_options::Desc(R"PO({3})PO"))",
+        opt.getType(), opt.getCppVariableName(), opt.getArgument(),
+        opt.getDescription().trim());
     if (std::optional<StringRef> defaultVal = opt.getDefaultValue())
-      os << ", ::llvm::cl::init(" << defaultVal << ")";
+      os << ", ::mlir::detail::pass_options::Init(" << defaultVal << ")";
     if (std::optional<StringRef> additionalFlags = opt.getAdditionalFlags())
       os << ", " << *additionalFlags;
     os << "};\n";

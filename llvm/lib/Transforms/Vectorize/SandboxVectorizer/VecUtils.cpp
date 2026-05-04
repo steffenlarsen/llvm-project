@@ -10,17 +10,19 @@
 
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/IR/Function.h"
 #include "llvm/SandboxIR/Instruction.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/InstrMaps.h"
+#include "llvm/Transforms/Vectorize/VectorizeOptionsOptInfos.h"
 
 namespace llvm::sandboxir {
 
-static cl::opt<unsigned> MaxUsersToConsider(
-    "sbvec-max-users-to-consider", cl::init(16), cl::Hidden,
-    cl::desc("Limit the number of a seed's users that getNextUserBundles() "
-             "will examine as candidates for a matching bundle, to cap "
-             "compilation time."));
+static unsigned getMaxUsersToConsider(const llvm::Function &F) {
+  return llvm::clv2::getOptValOrDefault<
+      &llvm::clv2::VEC_SBVecMaxUsersToConsider>(
+      F.getContext().getOptionsContext());
+}
 
 static SmallVector<unsigned, 2> getOperandIndicesInUser(User *U, Value *Op) {
   SmallVector<unsigned, 2> OpIdxVec;
@@ -72,6 +74,10 @@ VecUtils::getNextUserBundles(ArrayRef<Value *> Bndl, const InstrMaps &IMaps,
     return Bundles;
 
   Value *V0 = Bndl[0];
+  unsigned MaxUsersToConsider = 16;
+  if (auto *I0 = dyn_cast<Instruction>(V0))
+    MaxUsersToConsider =
+        getMaxUsersToConsider(I0->getParent()->getParent()->getLLVMFunction());
   DenseSet<User *> SeenUsers;
   // For each user U0 of lane 0, try to form a bundle of matching users across
   // all lanes. Cap the number of users considered to bound compilation time,

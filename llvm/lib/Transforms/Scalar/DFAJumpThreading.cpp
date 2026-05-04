@@ -1,3 +1,4 @@
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- DFAJumpThreading.cpp - Threads a switch statement inside a loop ----===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -57,7 +58,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Scalar/DFAJumpThreading.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -72,9 +72,12 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/IROptionsOptInfos.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/DFAJumpThreading.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/SSAUpdaterBulk.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
@@ -93,50 +96,46 @@ STATISTIC(NumCloned, "Number of blocks cloned");
 STATISTIC(NumPaths, "Number of individual paths threaded");
 
 namespace llvm {
-static cl::opt<bool>
-    ClViewCfgBefore("dfa-jump-view-cfg-before",
-                    cl::desc("View the CFG before DFA Jump Threading"),
-                    cl::Hidden, cl::init(false));
+static bool getClViewCfgBefore(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_DfaJumpViewCfgBefore>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<bool> EarlyExitHeuristic(
-    "dfa-early-exit-heuristic",
-    cl::desc("Exit early if an unpredictable value come from the same loop"),
-    cl::Hidden, cl::init(true));
+static bool getEarlyExitHeuristic(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_DfaEarlyExitHeuristic>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> MaxPathLength(
-    "dfa-max-path-length",
-    cl::desc("Max number of blocks searched to find a threading path"),
-    cl::Hidden, cl::init(20));
+static unsigned getMaxPathLength(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_DfaMaxPathLength>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> MaxNumVisitiedPaths(
-    "dfa-max-num-visited-paths",
-    cl::desc(
-        "Max number of blocks visited while enumerating paths around a switch"),
-    cl::Hidden, cl::init(2500));
+static unsigned getMaxNumVisitiedPaths(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_DfaMaxNumVisitedPaths>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-    MaxNumPaths("dfa-max-num-paths",
-                cl::desc("Max number of paths enumerated around a switch"),
-                cl::Hidden, cl::init(200));
+static unsigned getMaxNumPaths(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_DfaMaxNumPaths>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-    CostThreshold("dfa-cost-threshold",
-                  cl::desc("Maximum cost accepted for the transformation"),
-                  cl::Hidden, cl::init(50));
+static unsigned getCostThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_DfaCostThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<double> MaxClonedRate(
-    "dfa-max-cloned-rate",
-    cl::desc(
-        "Maximum cloned instructions rate accepted for the transformation"),
-    cl::Hidden, cl::init(7.5));
+static double getMaxClonedRate(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_DfaMaxClonedRate>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-    MaxOuterUseBlocks("dfa-max-out-use-blocks",
-                      cl::desc("Maximum unduplicated blocks with outer uses "
-                               "accepted for the transformation"),
-                      cl::Hidden, cl::init(40));
-
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
+static unsigned getMaxOuterUseBlocks(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_DfaMaxOutUseBlocks>(
+      F.getContext().getOptionsContext());
+}
 
 } // namespace llvm
 
@@ -277,7 +276,7 @@ void DFAJumpThreading::unfold(DomTreeUpdater *DTU, LoopInfo *LI,
     auto *BI =
         CondBrInst::Create(SI->getCondition(), EndBlock, NewBlock, StartBlock);
     BI->setDebugLoc(SelectBranchLoc);
-    if (!ProfcheckDisableMetadataFixes)
+    if (!getProfcheckDisableMetadataFixes(SI->getContext()))
       BI->setMetadata(LLVMContext::MD_prof,
                       SI->getMetadata(LLVMContext::MD_prof));
     DTU->applyUpdates({{DominatorTree::Insert, StartBlock, NewBlock}});
@@ -320,7 +319,7 @@ void DFAJumpThreading::unfold(DomTreeUpdater *DTU, LoopInfo *LI,
     DebugLoc SelectLoc = SI->getDebugLoc();
     NewFToEnd->setDebugLoc(SelectLoc);
     BI->setDebugLoc(SelectLoc);
-    if (!ProfcheckDisableMetadataFixes)
+    if (!getProfcheckDisableMetadataFixes(SI->getContext()))
       BI->setMetadata(LLVMContext::MD_prof,
                       SI->getMetadata(LLVMContext::MD_prof));
     DTU->applyUpdates({{DominatorTree::Insert, NewBlockT, NewBlockF},
@@ -529,7 +528,7 @@ private:
         // likely that it will also be on the enumerated paths, causing us to
         // exit after we have enumerated all the paths. This heuristic save
         // compile time because a search for all the paths can become expensive.
-        if (EarlyExitHeuristic &&
+        if (getEarlyExitHeuristic(*SI->getFunction()) &&
             L->contains(LI->getLoopFor(CurrentIncomingBB))) {
           LLVM_DEBUG(dbgs()
                      << "\tExiting early due to unpredictability heuristic.\n");
@@ -706,18 +705,20 @@ private:
     PathsType Res;
 
     // Stop exploring paths after visiting MaxPathLength blocks
-    if (PathDepth > MaxPathLength) {
+    if (PathDepth > getMaxPathLength(*Switch->getFunction())) {
       ORE->emit([&]() {
         return OptimizationRemarkAnalysis(DEBUG_TYPE, "MaxPathLengthReached",
                                           Switch)
                << "Exploration stopped after visiting MaxPathLength="
-               << ore::NV("MaxPathLength", MaxPathLength) << " blocks.";
+               << ore::NV("MaxPathLength",
+                          getMaxPathLength(*Switch->getFunction()))
+               << " blocks.";
       });
       return Res;
     }
 
     Visited.insert(BB);
-    if (++NumVisited > MaxNumVisitiedPaths)
+    if (++NumVisited > getMaxNumVisitiedPaths(*Switch->getFunction()))
       return Res;
 
     // Stop if we have reached the BB out of loop, since its successors have no
@@ -832,15 +833,17 @@ private:
     auto *SwitchPhiDefBB = SwitchPhi->getParent();
     VisitedBlocks VB;
     // Get paths from the determinator BBs to SwitchPhiDefBB
-    std::vector<ThreadingPath> PathsToPhiDef =
-        getPathsFromStateDefMap(StateDef, SwitchPhi, VB, MaxNumPaths);
+    std::vector<ThreadingPath> PathsToPhiDef = getPathsFromStateDefMap(
+        StateDef, SwitchPhi, VB, getMaxNumPaths(*Switch->getFunction()));
     if (SwitchPhiDefBB == SwitchBlock || PathsToPhiDef.empty()) {
       TPaths = std::move(PathsToPhiDef);
       return;
     }
 
-    assert(MaxNumPaths >= PathsToPhiDef.size() && !PathsToPhiDef.empty());
-    auto PathsLimit = MaxNumPaths / PathsToPhiDef.size();
+    assert(getMaxNumPaths(*Switch->getFunction()) >= PathsToPhiDef.size() &&
+           !PathsToPhiDef.empty());
+    auto PathsLimit =
+        getMaxNumPaths(*Switch->getFunction()) / PathsToPhiDef.size();
     // Find and append paths from SwitchPhiDefBB to SwitchBlock.
     PathsType PathsToSwitchBB =
         paths(SwitchPhiDefBB, SwitchBlock, VB, /* PathDepth = */ 1, PathsLimit);
@@ -1020,7 +1023,8 @@ private:
           NumOuterUseBlock++;
     }
 
-    if (double(NumClonedInst) / double(NumOrigInst) > MaxClonedRate) {
+    if (double(NumClonedInst) / double(NumOrigInst) >
+        getMaxClonedRate(*Switch->getFunction())) {
       LLVM_DEBUG(dbgs() << "DFA Jump Threading: Not jump threading, too much "
                            "instructions wll be cloned\n");
       ORE->emit([&]() {
@@ -1034,7 +1038,7 @@ private:
     // insertions of phi nodes for duplicated definitions. TODO: Drop this
     // threshold if we come up with another way to reduce the number of inserted
     // phi nodes.
-    if (NumOuterUseBlock > MaxOuterUseBlocks) {
+    if (NumOuterUseBlock > getMaxOuterUseBlocks(*Switch->getFunction())) {
       LLVM_DEBUG(dbgs() << "DFA Jump Threading: Not jump threading, too much "
                            "blocks with outer uses\n");
       ORE->emit([&]() {
@@ -1072,14 +1076,15 @@ private:
                       << SwitchPaths->getSwitchBlock()->getName()
                       << " is: " << DuplicationCost << "\n\n");
 
-    if (DuplicationCost > CostThreshold) {
+    if (DuplicationCost > getCostThreshold(*Switch->getFunction())) {
       LLVM_DEBUG(dbgs() << "Not jump threading, duplication cost exceeds the "
                         << "cost threshold.\n");
       ORE->emit([&]() {
         return OptimizationRemarkMissed(DEBUG_TYPE, "NotProfitable", Switch)
                << "Duplication cost exceeds the cost threshold (cost="
-               << ore::NV("Cost", DuplicationCost)
-               << ", threshold=" << ore::NV("Threshold", CostThreshold) << ").";
+               << ore::NV("Cost", DuplicationCost) << ", threshold="
+               << ore::NV("Threshold", getCostThreshold(*Switch->getFunction()))
+               << ").";
       });
       return false;
     }
@@ -1487,7 +1492,7 @@ bool DFAJumpThreading::run(Function &F) {
     return false;
   }
 
-  if (ClViewCfgBefore)
+  if (getClViewCfgBefore(F))
     F.viewCFG();
 
   SmallVector<AllSwitchPaths, 2> ThreadableLoops;
@@ -1554,9 +1559,15 @@ bool DFAJumpThreading::run(Function &F) {
   verifyFunction(F, &dbgs());
 #endif
 
-  if (MadeChanges && VerifyDomInfo)
-    assert(DTU->getDomTree().verify(DominatorTree::VerificationLevel::Full) &&
-           "Failed to maintain validity of domtree!");
+  {
+    bool DoVerifyDom = false;
+    if (auto *O =
+            clv2::getView<&clv2::IROptsReg>(F.getContext().getOptionsContext()))
+      DoVerifyDom = O->get<&clv2::IR_VerifyDomInfo>();
+    if (MadeChanges && DoVerifyDom)
+      assert(DTU->getDomTree().verify(DominatorTree::VerificationLevel::Full) &&
+             "Failed to maintain validity of domtree!");
+  }
 
   return MadeChanges;
 }

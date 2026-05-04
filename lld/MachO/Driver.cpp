@@ -41,12 +41,15 @@
 #include "llvm/LTO/LTO.h"
 #include "llvm/Object/Archive.h"
 #include "llvm/Option/ArgList.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Parallel.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TarWriter.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/Threading.h"
@@ -1129,16 +1132,6 @@ getOldNewOptionsExtra(opt::InputArgList &args, unsigned id) {
   auto [oldDir, second] = getOldNewOptions(args, id);
   auto [newDir, extraDir] = second.split(';');
   return {oldDir, newDir, extraDir};
-}
-
-static void parseClangOption(StringRef opt, const Twine &msg) {
-  std::string err;
-  raw_string_ostream os(err);
-
-  const char *argv[] = {"lld", opt.data()};
-  if (cl::ParseCommandLineOptions(2, argv, "", &os))
-    return;
-  error(msg + ": " + StringRef(err).trim());
 }
 
 static uint32_t parseDylibVersion(const ArgList &args, unsigned id) {
@@ -2425,16 +2418,32 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
         reexportHandler(arg, extensions);
     }
 
-    cl::ResetAllOptionOccurrences();
-
-    // Parse LTO options.
-    if (const Arg *arg = args.getLastArg(OPT_mcpu))
-      parseClangOption(saver().save("-mcpu=" + StringRef(arg->getValue())),
-                       arg->getSpelling());
-
-    for (const Arg *arg : args.filtered(OPT_mllvm)) {
-      parseClangOption(arg->getValue(), arg->getSpelling());
-      config->mllvmOpts.emplace_back(arg->getValue());
+    // Parse LTO and -mllvm options.
+    {
+      SmallVector<StringRef> LLVMOpts;
+      if (const Arg *arg = args.getLastArg(OPT_mcpu))
+        LLVMOpts.push_back(saver().save("-mcpu=" + StringRef(arg->getValue())));
+      for (const Arg *arg : args.filtered(OPT_mllvm)) {
+        LLVMOpts.push_back(arg->getValue());
+        config->mllvmOpts.emplace_back(arg->getValue());
+      }
+      // Build the context unconditionally: library code writes settings into
+      // the module's OptionsContext, and those writes are dropped when the
+      // registry view is absent.
+      {
+        clv2::OptionParser P;
+        RegisterAllLLVMOptions(P);
+        std::vector<const char *> Argv;
+        Argv.push_back("ld64.lld");
+        for (auto &A : LLVMOpts)
+          Argv.push_back(A.data());
+        std::string err;
+        raw_string_ostream os(err);
+        if (auto Parsed = P.parse(Argv.size(), Argv.data(), {}, &os))
+          commonContext().llvmOptsCtx = std::move(Parsed);
+        else
+          error(StringRef(err).trim());
+      }
     }
 
     config->passPlugins = args::getStrings(args, OPT_load_pass_plugins);

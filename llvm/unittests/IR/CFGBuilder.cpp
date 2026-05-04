@@ -21,7 +21,8 @@
 using namespace llvm;
 
 CFGHolder::CFGHolder(StringRef ModuleName, StringRef FunctionName)
-    : Context(std::make_unique<LLVMContext>()),
+    : Context(
+          std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext())),
       M(std::make_unique<Module>(ModuleName, *Context)) {
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(*Context), {}, false);
   F = Function::Create(FTy, Function::ExternalLinkage, FunctionName, M.get());
@@ -216,7 +217,9 @@ TEST(CFGBuilder, Deletions) {
       {"entry", "a"}, {"a", "b"}, {"a", "c"}, {"c", "d"}, {"d", "b"}};
   const auto Delete = CFGBuilder::ActionKind::Delete;
   std::vector<CFGBuilder::Update> Updates = {
-      {Delete, {"c", "d"}}, {Delete, {"a", "c"}}, {Delete, {"entry", "a"}},
+      {Delete, {"c", "d"}},
+      {Delete, {"a", "c"}},
+      {Delete, {"entry", "a"}},
   };
   const size_t NumUpdates = Updates.size();
 

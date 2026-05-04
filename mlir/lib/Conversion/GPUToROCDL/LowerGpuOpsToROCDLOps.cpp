@@ -749,9 +749,9 @@ struct LowerGpuOpsToROCDLOpsPass final
                     UnitAttr::get(ctx));
     }
 
-    FailureOr<amdgpu::Chipset> maybeChipset = amdgpu::Chipset::parse(chipset);
+    FailureOr<amdgpu::Chipset> maybeChipset = amdgpu::Chipset::parse(*chipset);
     if (failed(maybeChipset)) {
-      emitError(UnknownLoc::get(ctx), "Invalid chipset name: " + chipset);
+      emitError(UnknownLoc::get(ctx), "Invalid chipset name: " + *chipset);
       return signalPassFailure();
     }
 

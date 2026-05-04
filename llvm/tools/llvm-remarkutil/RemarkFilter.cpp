@@ -11,7 +11,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "RemarkUtilHelpers.h"
-#include "RemarkUtilRegistry.h"
 
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Regex.h"
@@ -25,33 +24,10 @@ using namespace llvm::remarkutil;
 // namespace collision with headers that might get included e.g.
 // curses.h.
 
-static cl::SubCommand
-    FilterSub("filter",
-              "Filter remarks based on specified criteria. "
-              "Can be used to merge multiple remark files.\n"
-              "Multiple input files are processed in argument order and their "
-              "outputs are combined into a single output file.");
-
-INPUT_FORMAT_COMMAND_LINE_OPTIONS(FilterSub)
-OUTPUT_FORMAT_COMMAND_LINE_OPTIONS(FilterSub)
-OUTPUT_COMMAND_LINE_OPTIONS(FilterSub)
-REMARK_FILTER_COMMAND_LINE_OPTIONS(FilterSub)
-
-static cl::list<std::string> InputFileNames(
-    cl::Positional, cl::OneOrMore, cl::list_init<std::string>({"-"}),
-    cl::desc("<input file> [<input file> ...]"), cl::sub(FilterSub));
-
-static cl::opt<bool>
-    ExcludeOpt("exclude",
-               cl::desc("Keep all remarks except those matching the filter"),
-               cl::init(false), cl::sub(FilterSub));
-static cl::opt<bool> SortOpt("sort", cl::desc("Sort remarks (expensive!)"),
-                             cl::init(false), cl::sub(FilterSub));
-static cl::opt<bool> DedupeOpt("dedupe",
-                               cl::desc("Deduplicate remarks (expensive!)"),
-                               cl::init(false), cl::sub(FilterSub));
-
-REMARK_FILTER_SETUP_FUNC()
+std::vector<std::string> FilterInputFileNames;
+bool ExcludeOptVal;
+bool SortOptVal;
+bool DedupeOptVal;
 
 namespace {
 
@@ -114,15 +90,9 @@ private:
     }
   };
 
-  // Buffer all remarks if required (for sorting/deduplication).
-  // For now, use std::map (like the RemarkLinker) for easy sorting. We
-  // should be capitalizing on the fact that the strings are interned.
   std::map<std::unique_ptr<Remark>, size_t, RemarkPtrCompare> Remarks;
   StringTable StrTab;
 
-  /// Set up the RemarkSerializer lazily, so automatic output format detection
-  /// can default to the automatically detected input format from the first file
-  /// we process.
   Error setupSerializer(Format DefaultFormat) {
     if (Serializer)
       return Error::success();
@@ -162,20 +132,18 @@ private:
 
 } // namespace
 
-static Error tryFilter() {
+Error tryFilter() {
   auto MaybeFilter = getRemarkFilters();
   if (!MaybeFilter)
     return MaybeFilter.takeError();
   FilterTool Tool(std::move(*MaybeFilter));
-  Tool.Sort = SortOpt;
-  Tool.Dedupe = DedupeOpt;
-  Tool.Exclude = ExcludeOpt;
+  Tool.Sort = SortOptVal;
+  Tool.Dedupe = DedupeOptVal;
+  Tool.Exclude = ExcludeOptVal;
 
-  for (auto &InputFileName : InputFileNames) {
-    if (Error E = Tool.processInputFile(InputFileName))
+  for (auto &InputFile : FilterInputFileNames) {
+    if (Error E = Tool.processInputFile(InputFile))
       return E;
   }
   return Error::success();
 }
-
-static CommandRegistration FilterReg(&FilterSub, tryFilter);

@@ -13,6 +13,7 @@
 
 #include "llvm/CodeGen/VLIWMachineScheduler.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/DFAPacketizer.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -27,8 +28,10 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSchedule.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/Function.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -40,26 +43,30 @@ using namespace llvm;
 
 #define DEBUG_TYPE "machine-scheduler"
 
-static cl::opt<bool> IgnoreBBRegPressure("ignore-bb-reg-pressure", cl::Hidden,
-                                         cl::init(false));
-
-static cl::opt<bool> UseNewerCandidate("use-newer-candidate", cl::Hidden,
-                                       cl::init(true));
-
-static cl::opt<unsigned> SchedDebugVerboseLevel("misched-verbose-level",
-                                                cl::Hidden, cl::init(1));
-
 // Check if the scheduler should penalize instructions that are available to
 // early due to a zero-latency dependence.
-static cl::opt<bool> CheckEarlyAvail("check-early-avail", cl::Hidden,
-                                     cl::init(true));
 
 // This value is used to determine if a register class is a high pressure set.
-// We compute the maximum number of registers needed and divided by the total
-// available. Then, we compare the result to this value.
-static cl::opt<float> RPThreshold("vliw-misched-reg-pressure", cl::Hidden,
-                                  cl::init(0.75f),
-                                  cl::desc("High register pressure threhold."));
+
+static bool getIgnoreBbRegPressure(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_IgnoreBbRegPressure>(Ctx);
+}
+
+static bool getUseNewerCandidate(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_UseNewerCandidate>(Ctx);
+}
+
+static unsigned getMischedVerboseLevel(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_MischedVerboseLevel>(Ctx);
+}
+
+static bool getCheckEarlyAvail(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_CheckEarlyAvail>(Ctx);
+}
+
+static float getVliwMischedRegPressure(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_VliwMischedRegPressure>(Ctx);
+}
 
 VLIWResourceModel::VLIWResourceModel(const TargetSubtargetInfo &STI,
                                      const TargetSchedModel *SM)
@@ -231,7 +238,7 @@ void VLIWMachineScheduler::schedule() {
     dbgs() << "Max Depth " << maxD << "\n";
   });
   LLVM_DEBUG(dump());
-  if (ViewMISchedDAGs)
+  if (getViewMISchedDAGs())
     viewGraph();
 
   initQueues(TopRoots, BotRoots);
@@ -294,7 +301,10 @@ void ConvergingVLIWScheduler::initialize(ScheduleDAGMI *dag) {
   for (unsigned i = 0, e = MaxPressure.size(); i < e; ++i) {
     unsigned Limit = DAG->getRegClassInfo()->getRegPressureSetLimit(i);
     HighPressureSets[i] =
-        ((float)MaxPressure[i] > ((float)Limit * RPThreshold));
+        ((float)MaxPressure[i] >
+         ((float)Limit *
+          getVliwMischedRegPressure(
+              DAG->MF.getFunction().getContext().getOptionsContext())));
   }
 }
 
@@ -678,7 +688,8 @@ int ConvergingVLIWScheduler::SchedulingCost(ReadyQueue &Q, SUnit *SU,
   });
 
   // Factor in reg pressure as a heuristic.
-  if (!IgnoreBBRegPressure) {
+  if (!getIgnoreBbRegPressure(
+          DAG->MF.getFunction().getContext().getOptionsContext())) {
     // Decrease priority by the amount that register pressure exceeds the limit.
     ResCount -= (Delta.Excess.getUnitInc() * PriorityOne);
     // Decrease priority if register pressure exceeds the limit.
@@ -727,7 +738,8 @@ int ConvergingVLIWScheduler::SchedulingCost(ReadyQueue &Q, SUnit *SU,
   // when the dependent instruction is scheduled in a new packet, so the
   // scheduler updates the current cycle and pending instructions become
   // available.
-  if (CheckEarlyAvail) {
+  if (getCheckEarlyAvail(
+          DAG->MF.getFunction().getContext().getOptionsContext())) {
     if (Q.getID() == TopQID) {
       for (const auto &PI : SU->Preds) {
         if (PI.getLatency() > 0 &&
@@ -766,8 +778,9 @@ ConvergingVLIWScheduler::pickNodeFromQueue(VLIWSchedBoundary &Zone,
                                            const RegPressureTracker &RPTracker,
                                            SchedCandidate &Candidate) {
   ReadyQueue &Q = Zone.Available;
-  LLVM_DEBUG(if (SchedDebugVerboseLevel > 1)
-                 readyQueueVerboseDump(RPTracker, Candidate, Q);
+  LLVM_DEBUG(if (getMischedVerboseLevel(
+                     DAG->MF.getFunction().getContext().getOptionsContext()) >
+                 1) readyQueueVerboseDump(RPTracker, Candidate, Q);
              else Q.dump(););
 
   // getMaxPressureDelta temporarily modifies the tracker.
@@ -856,7 +869,9 @@ ConvergingVLIWScheduler::pickNodeFromQueue(VLIWSchedBoundary &Zone,
     // Tie breaker.
     // To avoid scheduling indeterminism, we need a tie breaker
     // for the case when cost is identical for two nodes.
-    if (UseNewerCandidate && CurrentCost == Candidate.SCost) {
+    if (getUseNewerCandidate(
+            DAG->MF.getFunction().getContext().getOptionsContext()) &&
+        CurrentCost == Candidate.SCost) {
       if ((Q.getID() == TopQID && (*I)->NodeNum < Candidate.SU->NodeNum) ||
           (Q.getID() == BotQID && (*I)->NodeNum > Candidate.SU->NodeNum)) {
         LLVM_DEBUG(traceCandidate("TCAND", Q, *I, CurrentCost));

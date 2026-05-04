@@ -18,18 +18,21 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/InstructionPrecedenceTracking.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/PatternMatch.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
 #ifndef NDEBUG
-static cl::opt<bool> ExpensiveAsserts(
-    "ipt-expensive-asserts",
-    cl::desc("Perform expensive assert validation on every query to Instruction"
-             " Precedence Tracking"),
-    cl::init(false), cl::Hidden);
+static bool ExpensiveAsserts = false;
+
+static bool getExpensiveAsserts(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_ExpensiveAsserts>(
+      F.getContext().getOptionsContext());
+}
 #endif
 
 const Instruction *InstructionPrecedenceTracking::getFirstSpecialInstruction(
@@ -37,7 +40,7 @@ const Instruction *InstructionPrecedenceTracking::getFirstSpecialInstruction(
 #ifndef NDEBUG
   // If there is a bug connected to invalid cache, turn on ExpensiveAsserts to
   // catch this situation as early as possible.
-  if (ExpensiveAsserts)
+  if (getExpensiveAsserts(*BB->getParent()))
     validateAll();
   else
     validate(BB);

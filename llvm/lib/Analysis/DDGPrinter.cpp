@@ -13,18 +13,27 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/DDGPrinter.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/GraphWriter.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
-static cl::opt<bool> DotOnly("dot-ddg-only", cl::Hidden,
-                             cl::desc("simple ddg dot graph"));
-static cl::opt<std::string> DDGDotFilenamePrefix(
-    "dot-ddg-filename-prefix", cl::init("ddg"), cl::Hidden,
-    cl::desc("The prefix used for the DDG dot file names."));
+namespace llvm {} // namespace llvm
 
-static void writeDDGToDotFile(DataDependenceGraph &G, bool DOnly = false);
+static bool getDotOnly(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_DotOnly>(
+      F.getContext().getOptionsContext());
+}
+static std::string getDDGDotFilenamePrefix(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_DDGDotFilenamePrefix>(
+      F.getContext().getOptionsContext());
+}
+
+static void writeDDGToDotFile(DataDependenceGraph &G, const Function &F,
+                              bool DOnly = false);
 
 //===--------------------------------------------------------------------===//
 // Implementation of DDG DOT Printer for a loop
@@ -32,13 +41,15 @@ static void writeDDGToDotFile(DataDependenceGraph &G, bool DOnly = false);
 PreservedAnalyses DDGDotPrinterPass::run(Loop &L, LoopAnalysisManager &AM,
                                          LoopStandardAnalysisResults &AR,
                                          LPMUpdater &U) {
-  writeDDGToDotFile(*AM.getResult<DDGAnalysis>(L, AR), DotOnly);
+  const Function &F = *L.getHeader()->getParent();
+  writeDDGToDotFile(*AM.getResult<DDGAnalysis>(L, AR), F, getDotOnly(F));
   return PreservedAnalyses::all();
 }
 
-static void writeDDGToDotFile(DataDependenceGraph &G, bool DOnly) {
+static void writeDDGToDotFile(DataDependenceGraph &G, const Function &F,
+                              bool DOnly) {
   std::string Filename =
-      Twine(DDGDotFilenamePrefix + "." + G.getName() + ".dot").str();
+      Twine(getDDGDotFilenamePrefix(F) + "." + G.getName() + ".dot").str();
   errs() << "Writing '" << Filename << "'...";
 
   std::error_code EC;

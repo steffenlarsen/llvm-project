@@ -1,5 +1,6 @@
 add_llvm_component_library(LLVMHexagonDesc
   HexagonAsmBackend.cpp
+  HexagonOptions.cpp
   HexagonELFObjectWriter.cpp
   HexagonInstPrinter.cpp
   HexagonMCAsmInfo.cpp

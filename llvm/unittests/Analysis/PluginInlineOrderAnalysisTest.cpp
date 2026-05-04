@@ -4,12 +4,13 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Plugins/PassPlugin.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Testing/Support/Error.h"
 #include "gtest/gtest.h"
 
 #include "llvm/Analysis/InlineOrder.h"
+#include "llvm/Support/OptionsContext.h"
 
 namespace llvm {
 
@@ -29,11 +30,11 @@ std::string libPath(const std::string Name = "InlineOrderPlugin") {
 }
 
 struct CompilerInstance {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   ModulePassManager MPM;
   InlineParams IP;
 
-  PassBuilder PB;
+  PassBuilder PB{llvm::clv2::defaultOptionsContext()};
   LoopAnalysisManager LAM;
   FunctionAnalysisManager FAM;
   CGSCCAnalysisManager CGAM;
@@ -51,7 +52,8 @@ struct CompilerInstance {
   }
 
   CompilerInstance() {
-    IP = getInlineParamsFromOptLevel(3);
+    IP = getInlineParamsFromOptLevel(
+        3, /*Ctx=*/llvm::clv2::defaultOptionsContext());
     PB.registerModuleAnalyses(MAM);
     PB.registerCGSCCAnalyses(CGAM);
     PB.registerFunctionAnalyses(FAM);

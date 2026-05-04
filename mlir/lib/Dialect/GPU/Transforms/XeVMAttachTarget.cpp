@@ -71,9 +71,9 @@ void XeVMAttachTarget::runOnOperation() {
   ArrayRef<std::string> libs(linkLibs);
   SmallVector<StringRef> filesToLink(libs);
   auto target = builder.getAttr<xevm::XeVMTargetAttr>(
-      optLevel, triple, chip, getFlags(builder),
+      optLevel, *triple, *chip, getFlags(builder),
       filesToLink.empty() ? nullptr : builder.getStrArrayAttr(filesToLink));
-  llvm::Regex matcher(moduleMatcher);
+  llvm::Regex matcher(*moduleMatcher);
   for (Region &region : getOperation()->getRegions())
     for (Block &block : region.getBlocks())
       for (auto module : block.getOps<gpu::GPUModuleOp>()) {

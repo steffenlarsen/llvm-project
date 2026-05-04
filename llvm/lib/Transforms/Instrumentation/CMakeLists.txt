@@ -1,6 +1,9 @@
 add_llvm_component_library(LLVMInstrumentation
+  InstrumentationOptionsRegistration.cpp
+  InstrumentationOptionsGetters.cpp
   AddressSanitizer.cpp
   AllocToken.cpp
+  InstrumentationOptions.cpp
   BoundsChecking.cpp
   CGProfile.cpp
   ControlHeightReduction.cpp

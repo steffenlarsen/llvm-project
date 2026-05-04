@@ -23,6 +23,7 @@
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
@@ -34,10 +35,11 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils.h"
 #include <cassert>
@@ -52,10 +54,12 @@ using namespace llvm;
 STATISTIC(HexagonNumVectorLoopCarriedReuse,
           "Number of values that were reused from a previous iteration.");
 
-static cl::opt<int> HexagonVLCRIterationLim(
-    "hexagon-vlcr-iteration-lim", cl::Hidden,
-    cl::desc("Maximum distance of loop carried dependences that are handled"),
-    cl::init(2));
+static int HexagonVLCRIterationLim = 2;
+
+static int getHexagonVLCRIterationLim(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_VLCRIterationLim>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -387,7 +391,8 @@ bool HexagonVectorLoopCarriedReuse::canReplace(Instruction *I) {
 void HexagonVectorLoopCarriedReuse::findValueToReuse() {
   for (auto *D : Dependences) {
     LLVM_DEBUG(dbgs() << "Processing dependence " << *(D->front()) << "\n");
-    if (D->iterations() > HexagonVLCRIterationLim) {
+    if (D->iterations() >
+        getHexagonVLCRIterationLim(*CurLoop->getHeader()->getParent())) {
       LLVM_DEBUG(
           dbgs()
           << ".. Skipping because number of iterations > than the limit\n");

@@ -19,7 +19,9 @@
 #include "lldb/Target/ProcessTrace.h"
 #include "lldb/Utility/Timer.h"
 #include "lldb/Version/Version.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TargetSelect.h"
 
 #if LLDB_ENABLE_PYTHON
@@ -74,7 +76,9 @@ llvm::Error SystemInitializerFull::Initialize() {
   // different thread later on which won't work (as the function isn't
   // thread-safe).
   const char *arg0 = "lldb";
-  llvm::cl::ParseCommandLineOptions(1, &arg0);
+  llvm::clv2::OptionParser P;
+  llvm::RegisterAllLLVMOptions(P);
+  P.parse(1, &arg0);
 
 #define LLDB_PLUGIN(p) LLDB_PLUGIN_INITIALIZE(p);
 #include "Plugins/Plugins.def"

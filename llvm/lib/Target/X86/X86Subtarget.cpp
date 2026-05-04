@@ -29,10 +29,11 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 #include "llvm/TargetParser/Triple.h"
 
 #if defined(_MSC_VER)
@@ -46,13 +47,6 @@ using namespace llvm;
 #define GET_SUBTARGETINFO_TARGET_DESC
 #define GET_SUBTARGETINFO_CTOR
 #include "X86GenSubtargetInfo.inc"
-
-// Temporary option to control early if-conversion for x86 while adding machine
-// models.
-static cl::opt<bool>
-X86EarlyIfConv("x86-early-ifcvt", cl::Hidden,
-               cl::desc("Enable early if-conversion on X86"));
-
 
 /// Classify a blockaddress reference for the current subtarget according to how
 /// we should reference it in a non-pcrel context.
@@ -319,13 +313,14 @@ X86Subtarget::X86Subtarget(const Triple &TT, StringRef CPU, StringRef TuneCPU,
                            MaybeAlign StackAlignOverride,
                            unsigned PreferVectorWidthOverride,
                            unsigned RequiredVectorWidth)
-    : X86GenSubtargetInfo(TT, CPU, TuneCPU, FS),
+    : X86GenSubtargetInfo(TT, CPU, TuneCPU, FS, TM.getOptionsContext()),
       PICStyle(PICStyles::Style::None), TM(TM), TargetTriple(TT),
       StackAlignOverride(StackAlignOverride),
       PreferVectorWidthOverride(PreferVectorWidthOverride),
       RequiredVectorWidth(RequiredVectorWidth),
       InstrInfo(initializeSubtargetDependencies(CPU, TuneCPU, FS)),
       TLInfo(TM, *this), FrameLowering(*this, getStackAlignment()) {
+  setOptionsContext(TM.getOptionsContext());
   // Determine the PICStyle based on the target selected.
   if (!isPositionIndependent() || TM.getCodeModel() == CodeModel::Large)
     // With the large code model, None forces all memory accesses to be indirect
@@ -368,12 +363,14 @@ const RegisterBankInfo *X86Subtarget::getRegBankInfo() const {
 }
 
 bool X86Subtarget::enableEarlyIfConversion() const {
-  return canUseCMOV() && X86EarlyIfConv;
+  return canUseCMOV() &&
+         clv2::getOptValOr<&clv2::X86OptsReg, &clv2::X86_EarlyIfConv>(
+             TM.getOptionsContext(), false);
 }
 
 void X86Subtarget::getPostRAMutations(
     std::vector<std::unique_ptr<ScheduleDAGMutation>> &Mutations) const {
-  Mutations.push_back(createX86MacroFusionDAGMutation());
+  Mutations.push_back(createX86MacroFusionDAGMutation(TM.getOptionsContext()));
 }
 
 bool X86Subtarget::isPositionIndependent() const {

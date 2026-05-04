@@ -18,15 +18,17 @@
 #include "RISCV.h"
 #include "RISCVSubtarget.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "riscv-insert-read-write-csr"
 #define RISCV_INSERT_READ_WRITE_CSR_NAME "RISC-V Insert Read/Write CSR Pass"
 
-static cl::opt<bool>
-    DisableFRMInsertOpt("riscv-disable-frm-insert-opt", cl::init(false),
-                        cl::Hidden,
-                        cl::desc("Disable optimized frm insertion."));
+static bool getDisableFRMInsertOpt(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::RV_DisableFRMInsertOpt>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -183,7 +185,7 @@ bool RISCVInsertReadWriteCSR::runOnMachineFunction(MachineFunction &MF) {
   bool Changed = false;
 
   for (MachineBasicBlock &MBB : MF) {
-    if (DisableFRMInsertOpt)
+    if (getDisableFRMInsertOpt(MF.getFunction()))
       Changed |= emitWriteRoundingMode(MBB);
     else
       Changed |= emitWriteRoundingModeOpt(MBB);

@@ -60,19 +60,21 @@
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/KnownFPClass.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TypeSize.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/InstCombine/InstCombineOptionsOptInfos.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include "llvm/Transforms/Utils/AssumeBundleBuilder.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SimplifyLibCalls.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -88,11 +90,10 @@ using namespace PatternMatch;
 
 STATISTIC(NumSimplified, "Number of library calls simplified");
 
-static cl::opt<unsigned> GuardWideningWindow(
-    "instcombine-guard-widening-window",
-    cl::init(3),
-    cl::desc("How wide an instruction window to bypass looking for "
-             "another guard"));
+static unsigned getGuardWideningWindow(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::IC_GuardWideningWindow>(
+      F.getContext().getOptionsContext());
+}
 
 /// Return the specified type promoted as it would be to pass though a va_arg
 /// area.
@@ -4076,7 +4077,7 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
     // fixed window of instructions to handle common cases with conditions
     // computed between guards.
     Instruction *NextInst = II->getNextNode();
-    for (unsigned i = 0; i < GuardWideningWindow; i++) {
+    for (unsigned i = 0; i < getGuardWideningWindow(F); i++) {
       // Note: Using context-free form to avoid compile time blow up
       if (!isSafeToSpeculativelyExecute(NextInst))
         break;

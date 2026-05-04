@@ -19,14 +19,20 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
-#include "llvm/Support/MathExtras.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 
 using namespace llvm;
 
-static cl::opt<unsigned> MaxLoopRange(
-    "hexagon-loop-range", cl::Hidden, cl::init(200),
-    cl::desc("Restrict range of loopN instructions (testing only)"));
+static unsigned MaxLoopRange = 200;
+
+static unsigned getMaxLoopRange(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_MaxLoopRange>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
   struct HexagonFixupHwLoops : public MachineFunctionPass {
@@ -139,7 +145,7 @@ bool HexagonFixupHwLoops::fixupLoopInstrs(MachineFunction &MF) {
         MachineBasicBlock *TargetBB = MII->getOperand(0).getMBB();
         unsigned Diff = AbsoluteDifference(InstOffset,
                                            BlockToInstOffset[TargetBB]);
-        if (Diff > MaxLoopRange) {
+        if (Diff > getMaxLoopRange(MF.getFunction())) {
           useExtLoopInstr(MF, MII);
           MII = MBB.erase(MII);
           Changed = true;

@@ -19,6 +19,7 @@ tablegen(LLVM M68kGenDisassemblerTables.inc -gen-disassembler)
 add_public_tablegen_target(M68kCommonTableGen)
 
 add_llvm_target(M68kCodeGen
+  M68kOptionsGetters.cpp
   GISel/M68kCallLowering.cpp
   GISel/M68kInstructionSelector.cpp
   GISel/M68kLegalizerInfo.cpp

@@ -18,17 +18,21 @@
 
 #include "llvm/Analysis/AssumeBundleQueries.h"
 #include "llvm/IR/PassManager.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 
 namespace llvm {
+
+namespace clv2 {
+class OptionsContext;
+}
+
 class AssumeInst;
 class Function;
 class Instruction;
 class AssumptionCache;
 class DominatorTree;
 
-LLVM_ABI extern cl::opt<bool> EnableKnowledgeRetention;
+LLVM_ABI bool getEnableKnowledgeRetention(const clv2::OptionsContext &Ctx);
 
 /// Build a call to llvm.assume to preserve informations that can be derived
 /// from the given instruction.

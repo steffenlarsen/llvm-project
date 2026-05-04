@@ -76,7 +76,7 @@ MATCHER_P(HasType, T, "") { return arg->getType() == T; }
 TEST(OperationsTest, SourcePreds) {
   using namespace llvm::fuzzerop;
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   Constant *i1 = ConstantInt::getFalse(Ctx);
   Constant *i8 = ConstantInt::get(Type::getInt8Ty(Ctx), 3);
@@ -249,7 +249,7 @@ TEST(OperationsTest, SourcePreds) {
 }
 
 TEST(OperationsTest, SplitBlock) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   Module M("M", Ctx);
   Function *F = Function::Create(FunctionType::get(Type::getVoidTy(Ctx), {},
@@ -288,7 +288,7 @@ TEST(OperationsTest, SplitEHBlock) {
   // Check that we will not try to branch back to the landingpad block using
   // regular branch instruction
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   const char *SourceCode =
       "declare ptr @f()"
       "declare i32 @personality_function()"
@@ -314,7 +314,7 @@ TEST(OperationsTest, SplitEHBlock) {
 }
 
 TEST(OperationsTest, SplitBlockWithPhis) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   Type *Int8Ty = Type::getInt8Ty(Ctx);
 
@@ -351,7 +351,7 @@ TEST(OperationsTest, SplitBlockWithPhis) {
 }
 
 TEST(OperationsTest, GEP) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   Type *Int8PtrTy = PointerType::getUnqual(Ctx);
   Type *Int32Ty = Type::getInt32Ty(Ctx);
@@ -376,7 +376,7 @@ TEST(OperationsTest, GEP) {
 TEST(OperationsTest, GEPPointerOperand) {
   // Check that we only pick sized pointers for the GEP instructions
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   const char *SourceCode = "declare void @f()\n"
                            "define void @test(target(\"foo\") %o) {\n"
                            "  %a = alloca i64, i32 10\n"
@@ -398,7 +398,7 @@ TEST(OperationsTest, GEPPointerOperand) {
 }
 
 TEST(OperationsTest, ExtractAndInsertValue) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   Type *Int8PtrTy = PointerType::getUnqual(Ctx);
   Type *Int32Ty = Type::getInt32Ty(Ctx);

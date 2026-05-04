@@ -9,7 +9,6 @@
 #ifndef CLANG_UNITTESTS_CODEGEN_TESTCOMPILER_H
 #define CLANG_UNITTESTS_CODEGEN_TESTCOMPILER_H
 
-
 #include "clang/AST/ASTConsumer.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/TargetOptions.h"
@@ -26,7 +25,7 @@
 namespace llvm {
 
 struct TestCompiler {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   clang::CompilerInstance compiler;
   std::unique_ptr<clang::CodeGenerator> CG;
   llvm::Module *M = nullptr;
@@ -80,8 +79,8 @@ struct TestCompiler {
 
   const BasicBlock *compile() {
     clang::ParseAST(compiler.getSema(), false, false);
-    M =
-      static_cast<clang::CodeGenerator&>(compiler.getASTConsumer()).GetModule();
+    M = static_cast<clang::CodeGenerator &>(compiler.getASTConsumer())
+            .GetModule();
 
     // Do not expect more than one function definition.
     auto FuncPtr = M->begin();

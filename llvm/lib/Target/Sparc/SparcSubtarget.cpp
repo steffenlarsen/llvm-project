@@ -55,10 +55,13 @@ SparcSubtarget &SparcSubtarget::initializeSubtargetDependencies(
 
 SparcSubtarget::SparcSubtarget(const StringRef &CPU, const StringRef &TuneCPU,
                                const StringRef &FS, const TargetMachine &TM)
-    : SparcGenSubtargetInfo(TM.getTargetTriple(), CPU, TuneCPU, FS),
+    : SparcGenSubtargetInfo(TM.getTargetTriple(), CPU, TuneCPU, FS,
+                            TM.getOptionsContext()),
       ReserveRegister(TM.getMCRegisterInfo().getNumRegs()),
-      InstrInfo(initializeSubtargetDependencies(CPU, TuneCPU, FS)),
+      InstrInfo((setTargetMachine(&TM),
+                 initializeSubtargetDependencies(CPU, TuneCPU, FS))),
       TLInfo(TM, *this), FrameLowering(*this) {
+  setOptionsContext(TM.getOptionsContext());
   TSInfo = std::make_unique<SparcSelectionDAGInfo>();
 }
 

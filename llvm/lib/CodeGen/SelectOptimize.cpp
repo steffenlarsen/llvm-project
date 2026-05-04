@@ -20,6 +20,7 @@
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
@@ -34,6 +35,8 @@
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/ScaledNumber.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
@@ -60,45 +63,42 @@ STATISTIC(NumSelectConvertedLoop,
           "Number of select groups converted due to loop-level analysis");
 STATISTIC(NumSelectsConverted, "Number of selects converted");
 
-namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
+static unsigned getColdOperandThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ColdOperandThreshold>(Ctx);
 }
 
-static cl::opt<unsigned> ColdOperandThreshold(
-    "cold-operand-threshold",
-    cl::desc("Maximum frequency of path for an operand to be considered cold."),
-    cl::init(20), cl::Hidden);
+static unsigned
+getColdOperandMaxCostMultiplier(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ColdOperandMaxCostMultiplier>(
+      Ctx);
+}
 
-static cl::opt<unsigned> ColdOperandMaxCostMultiplier(
-    "cold-operand-max-cost-multiplier",
-    cl::desc("Maximum cost multiplier of TCC_expensive for the dependence "
-             "slice of a cold operand to be considered inexpensive."),
-    cl::init(1), cl::Hidden);
+static unsigned
+getSelectOptiLoopGradientGainThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::CGPASS_SelectOptiLoopGradientGainThreshold>(Ctx);
+}
 
-static cl::opt<unsigned>
-    GainGradientThreshold("select-opti-loop-gradient-gain-threshold",
-                          cl::desc("Gradient gain threshold (%)."),
-                          cl::init(25), cl::Hidden);
+static unsigned
+getSelectOptiLoopCycleGainThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::CGPASS_SelectOptiLoopCycleGainThreshold>(Ctx);
+}
 
-static cl::opt<unsigned>
-    GainCycleThreshold("select-opti-loop-cycle-gain-threshold",
-                       cl::desc("Minimum gain per loop (in cycles) threshold."),
-                       cl::init(4), cl::Hidden);
+static unsigned
+getSelectOptiLoopRelativeGainThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::CGPASS_SelectOptiLoopRelativeGainThreshold>(Ctx);
+}
 
-static cl::opt<unsigned> GainRelativeThreshold(
-    "select-opti-loop-relative-gain-threshold",
-    cl::desc(
-        "Minimum relative gain per loop threshold (1/X). Defaults to 12.5%"),
-    cl::init(8), cl::Hidden);
+static unsigned getMispredictDefaultRate(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_MispredictDefaultRate>(Ctx);
+}
 
-static cl::opt<unsigned> MispredictDefaultRate(
-    "mispredict-default-rate", cl::Hidden, cl::init(25),
-    cl::desc("Default mispredict rate (initialized to 25%)."));
-
-static cl::opt<bool>
-    DisableLoopLevelHeuristics("disable-loop-level-heuristics", cl::Hidden,
-                               cl::init(false),
-                               cl::desc("Disable loop-level heuristics."));
+static bool getDisableLoopLevelHeuristics(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableLoopLevelHeuristics>(
+      Ctx);
+}
 
 namespace {
 
@@ -766,7 +766,9 @@ void SelectOptimizeImpl::convertProfitableSIGroups(SelectGroups &ProfSIGroups) {
       ++NumSelectsConverted;
     }
     Instruction *CondBr = IB.CreateCondBr(CondFr, TT, FT, SI.getI());
-    if (!ProfcheckDisableMetadataFixes && SelectWithProfile) {
+    if (!getProfcheckDisableMetadataFixes(
+            SI.getI()->getFunction()->getContext()) &&
+        SelectWithProfile) {
       CondBr->copyMetadata(*SelectWithProfile, {llvm::LLVMContext::MD_prof});
       if (SelectWithProfileIsInverted)
         CondBr->swapProfMetadata();
@@ -1105,7 +1107,13 @@ bool SelectOptimizeImpl::hasExpensiveColdOperand(const SelectGroup &ASI) {
     uint64_t MinWeight = std::min(TrueWeight, FalseWeight);
     TotalWeight = TrueWeight + FalseWeight;
     // Is there a path with frequency <ColdOperandThreshold% (default:20%) ?
-    ColdOperand = TotalWeight * ColdOperandThreshold > 100 * MinWeight;
+    ColdOperand =
+        TotalWeight * getColdOperandThreshold(ASI.Selects.front()
+                                                  .getI()
+                                                  ->getFunction()
+                                                  ->getContext()
+                                                  .getOptionsContext()) >
+        100 * MinWeight;
   } else if (PSI->hasProfileSummary()) {
     OptimizationRemarkMissed ORmiss(DEBUG_TYPE, "SelectOpti",
                                     ASI.Selects.front().getI());
@@ -1143,7 +1151,9 @@ bool SelectOptimizeImpl::hasExpensiveColdOperand(const SelectGroup &ASI) {
       InstructionCost AdjSliceCost =
           divideNearest(SliceCost * HotWeight, TotalWeight);
       if (AdjSliceCost >=
-          ColdOperandMaxCostMultiplier * TargetTransformInfo::TCC_Expensive)
+          getColdOperandMaxCostMultiplier(
+              SI.getI()->getFunction()->getContext().getOptionsContext()) *
+              TargetTransformInfo::TCC_Expensive)
         return true;
     }
   }
@@ -1226,7 +1236,9 @@ bool SelectOptimizeImpl::isSelectHighlyPredictable(const SelectLike SI) {
     uint64_t Sum = TrueWeight + FalseWeight;
     if (Sum != 0) {
       auto Probability = BranchProbability::getBranchProbability(Max, Sum);
-      if (Probability > TTI->getPredictableBranchThreshold())
+      if (Probability >
+          TTI->getPredictableBranchThreshold(
+              SI.getI()->getFunction()->getContext().getOptionsContext()))
         return true;
     }
   }
@@ -1238,7 +1250,8 @@ bool SelectOptimizeImpl::checkLoopHeuristics(const Loop *L,
   // Loop-level checks to determine if a non-predicated version (with branches)
   // of the loop is more profitable than its predicated version.
 
-  if (DisableLoopLevelHeuristics)
+  if (getDisableLoopLevelHeuristics(
+          L->getHeader()->getParent()->getContext().getOptionsContext()))
     return true;
 
   OptimizationRemarkMissed ORmissL(DEBUG_TYPE, "SelectOpti",
@@ -1258,8 +1271,12 @@ bool SelectOptimizeImpl::checkLoopHeuristics(const Loop *L,
   // Profitably converting to branches need to reduce the loop's critical path
   // by at least some threshold (absolute gain of GainCycleThreshold cycles and
   // relative gain of 12.5%).
-  if (Gain[1] < Scaled64::get(GainCycleThreshold) ||
-      Gain[1] * Scaled64::get(GainRelativeThreshold) < LoopCost[1].PredCost) {
+  const Function *LFunc = L->getHeader()->getParent();
+  if (Gain[1] < Scaled64::get(getSelectOptiLoopCycleGainThreshold(
+                    LFunc->getContext().getOptionsContext())) ||
+      Gain[1] * Scaled64::get(getSelectOptiLoopRelativeGainThreshold(
+                    LFunc->getContext().getOptionsContext())) <
+          LoopCost[1].PredCost) {
     Scaled64 RelativeGain = Scaled64::get(100) * Gain[1] / LoopCost[1].PredCost;
     ORmissL << "No select conversion in the loop due to small reduction of "
                "loop's critical path. Gain="
@@ -1277,7 +1294,8 @@ bool SelectOptimizeImpl::checkLoopHeuristics(const Loop *L,
   if (Gain[1] > Gain[0]) {
     Scaled64 GradientGain = Scaled64::get(100) * (Gain[1] - Gain[0]) /
                             (LoopCost[1].PredCost - LoopCost[0].PredCost);
-    if (GradientGain < Scaled64::get(GainGradientThreshold)) {
+    if (GradientGain < Scaled64::get(getSelectOptiLoopGradientGainThreshold(
+                           LFunc->getContext().getOptionsContext()))) {
       ORmissL << "No select conversion in the loop due to small gradient gain. "
                  "GradientGain="
               << GradientGain.toString() << "%. ";
@@ -1418,7 +1436,8 @@ SelectOptimizeImpl::getMispredictionCost(const SelectLike SI,
 
   // Account for the default misprediction rate when using a branch
   // (conservatively set to 25% by default).
-  uint64_t MispredictRate = MispredictDefaultRate;
+  uint64_t MispredictRate = getMispredictDefaultRate(
+      SI.getI()->getFunction()->getContext().getOptionsContext());
   // If the select condition is obviously predictable, then the misprediction
   // rate is zero.
   if (isSelectHighlyPredictable(SI))

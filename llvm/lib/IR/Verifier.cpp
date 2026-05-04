@@ -89,6 +89,7 @@
 #include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/IROptionsOptInfos.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/InstrTypes.h"
@@ -120,11 +121,11 @@
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/ModRef.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/RISCVTargetParser.h"
@@ -142,10 +143,7 @@
 
 using namespace llvm;
 
-static cl::opt<bool> VerifyNoAliasScopeDomination(
-    "verify-noalias-scope-decl-dom", cl::Hidden, cl::init(false),
-    cl::desc("Ensure that llvm.experimental.noalias.scope.decl for identical "
-             "scopes are not dominating"));
+static bool VerifyNoAliasScopeDomEnabled = false;
 
 namespace {
 
@@ -7665,7 +7663,12 @@ void Verifier::verifyNoAliasScopeDecl() {
 
   // Only check the domination rule when requested. Once all passes have been
   // adapted this option can go away.
-  if (!VerifyNoAliasScopeDomination)
+  bool VerifyNoAliasScopeDom = VerifyNoAliasScopeDomEnabled;
+  if (auto *O =
+          clv2::getView<&clv2::IROptsReg>(M.getContext().getOptionsContext()))
+    if (O->specified<&clv2::IR_VerifyNoAliasScopeDomination>())
+      VerifyNoAliasScopeDom = O->get<&clv2::IR_VerifyNoAliasScopeDomination>();
+  if (!VerifyNoAliasScopeDom)
     return;
 
   // Now sort the intrinsics based on the scope MDNode so that declarations of

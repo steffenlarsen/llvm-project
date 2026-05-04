@@ -19,18 +19,21 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/WinEHFuncInfo.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/EHPersonalities.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -42,21 +45,17 @@ using namespace llvm;
 
 #define DEBUG_TYPE "win-eh-prepare"
 
-static cl::opt<bool> DisableDemotion(
-    "disable-demotion", cl::Hidden,
-    cl::desc(
-        "Clone multicolor basic blocks but do not demote cross scopes"),
-    cl::init(false));
+static bool getDisableDemotion(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableDemotion>(Ctx);
+}
 
-static cl::opt<bool> DisableCleanups(
-    "disable-cleanups", cl::Hidden,
-    cl::desc("Do not remove implausible terminators or other similar cleanups"),
-    cl::init(false));
+static bool getDisableCleanups(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableCleanups>(Ctx);
+}
 
-// TODO: Remove this option when we fully migrate to new pass manager
-static cl::opt<bool> DemoteCatchSwitchPHIOnlyOpt(
-    "demote-catchswitch-only", cl::Hidden,
-    cl::desc("Demote catchswitch BBs only (for wasm EH)"), cl::init(false));
+static bool getDemoteCatchswitchOnly(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DemoteCatchswitchOnly>(Ctx);
+}
 
 namespace {
 
@@ -1227,7 +1226,8 @@ void WinEHPrepareImpl::verifyPreparedFunclets(Function &F) {
       report_fatal_error("Uncolored BB!");
     if (NumColors > 1)
       report_fatal_error("Multicolor BB!");
-    assert((DisableDemotion || !(BB.isEHPad() && isa<PHINode>(BB.begin()))) &&
+    assert((getDisableDemotion(F.getContext().getOptionsContext()) ||
+            !(BB.isEHPad() && isa<PHINode>(BB.begin()))) &&
            "EH Pad still has a PHI!");
   }
 }
@@ -1244,11 +1244,12 @@ bool WinEHPrepareImpl::prepareExplicitEH(Function &F) {
 
   Changed |= cloneCommonBlocks(F);
 
-  if (!DisableDemotion)
-    Changed |= demotePHIsOnFunclets(F, DemoteCatchSwitchPHIOnly ||
-                                           DemoteCatchSwitchPHIOnlyOpt);
+  if (!getDisableDemotion(F.getContext().getOptionsContext()))
+    Changed |= demotePHIsOnFunclets(
+        F, DemoteCatchSwitchPHIOnly ||
+               getDemoteCatchswitchOnly(F.getContext().getOptionsContext()));
 
-  if (!DisableCleanups) {
+  if (!getDisableCleanups(F.getContext().getOptionsContext())) {
     assert(!verifyFunction(F, &dbgs()));
     Changed |= removeImplausibleInstructions(F);
 

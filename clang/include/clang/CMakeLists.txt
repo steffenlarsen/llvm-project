@@ -1,5 +1,6 @@
 add_subdirectory(AST)
 add_subdirectory(Basic)
+add_subdirectory(CodeGen)
 if(CLANG_ENABLE_CIR)
   add_subdirectory(CIR)
 endif()

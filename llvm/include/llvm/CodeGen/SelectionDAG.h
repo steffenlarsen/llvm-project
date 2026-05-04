@@ -436,7 +436,7 @@ public:
   static constexpr unsigned MaxRecursionDepth = 6;
 
   // Returns the maximum steps for SDNode->hasPredecessor() like searches.
-  LLVM_ABI static unsigned getHasPredecessorMaxSteps();
+  LLVM_ABI unsigned getHasPredecessorMaxSteps() const;
 
   LLVM_ABI explicit SelectionDAG(const TargetMachine &TM, CodeGenOptLevel);
   SelectionDAG(const SelectionDAG &) = delete;

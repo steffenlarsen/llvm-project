@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Core/MCPlusBuilder.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
 #include "bolt/Core/MCPlus.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "llvm/MC/MCContext.h"
@@ -19,7 +20,6 @@
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include <cstdint>
 
@@ -30,15 +30,10 @@ using namespace bolt;
 using namespace MCPlus;
 
 namespace opts {
-cl::opt<bool>
-    TerminalHLT("terminal-x86-hlt",
-                cl::desc("Assume that execution stops at x86 HLT instruction"),
-                cl::init(true), cl::Hidden, cl::cat(BoltCategory));
 
-cl::opt<bool>
-    TerminalTrap("terminal-trap",
-                 cl::desc("Assume that execution stops at trap instruction"),
-                 cl::init(true), cl::Hidden, cl::cat(BoltCategory));
+bool TerminalHLTSpecified = false;
+
+bool TerminalTrapSpecified = false;
 }
 
 bool MCPlusBuilder::equals(const MCInst &A, const MCInst &B,
@@ -137,11 +132,16 @@ bool MCPlusBuilder::equals(const MCSpecifierExpr &A, const MCSpecifierExpr &B,
 }
 
 bool MCPlusBuilder::isTerminator(const MCInst &Inst) const {
-  if (isX86HLT(Inst))
-    return opts::TerminalHLT;
+  auto *CoreOpts = bolt_core_opts::getBoltCoreOpts(*OptsCtx);
+  if (isX86HLT(Inst)) {
+    bool DoTerminalHLT = CoreOpts->get<&clv2::BOLTCORE_TerminalHLT>();
+    return DoTerminalHLT;
+  }
 
-  if (Info->get(Inst.getOpcode()).isTrap())
-    return opts::TerminalTrap;
+  if (Info->get(Inst.getOpcode()).isTrap()) {
+    bool DoTerminalTrap = CoreOpts->get<&clv2::BOLTCORE_TerminalTrap>();
+    return DoTerminalTrap;
+  }
 
   return Analysis->isTerminator(Inst);
 }

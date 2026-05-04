@@ -15,28 +15,33 @@
 #include "toy/Parser.h"
 
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
 #include <string>
 #include <system_error>
 
 using namespace toy;
-namespace cl = llvm::cl;
+using namespace llvm;
 
-static cl::opt<std::string> inputFilename(cl::Positional,
-                                          cl::desc("<input toy file>"),
-                                          cl::init("-"),
-                                          cl::value_desc("filename"));
 namespace {
 enum Action { None, DumpAST };
 } // namespace
 
-static cl::opt<enum Action>
-    emitAction("emit", cl::desc("Select the kind of output desired"),
-               cl::values(clEnumValN(DumpAST, "ast", "output the AST dump")));
+static constexpr clv2::OptionInfo<std::string> inputFilenameOpt{
+    "", "<input toy file>", clv2::Positional{}, clv2::Init{"-"}};
+
+static constexpr clv2::EnumVal<Action> emitActionVals[] = {
+    {"ast", DumpAST, "output the AST dump"},
+};
+static constexpr auto emitActionOpt = clv2::makeEnumOption<Action>(
+    "emit", "Select the kind of output desired", emitActionVals);
+
+static constexpr clv2::OptionsRegistry<&inputFilenameOpt, &emitActionOpt>
+    ToyReg;
 
 /// Returns a Toy AST resulting from parsing the file or a nullptr on error.
 static std::unique_ptr<toy::ModuleAST>
@@ -54,7 +59,14 @@ parseInputFile(llvm::StringRef filename) {
 }
 
 int main(int argc, char **argv) {
-  cl::ParseCommandLineOptions(argc, argv, "toy compiler\n");
+  llvm::clv2::OptionParser P;
+  P.add<&ToyReg>();
+  RegisterAllLLVMOptions(P);
+  auto OptsCtx = P.parse(argc, argv, "toy compiler\n");
+  auto *Opts = OptsCtx->getViewPtr<&ToyReg>();
+
+  auto inputFilename = std::string(Opts->get<&inputFilenameOpt>());
+  Action emitAction = Opts->get<&emitActionOpt>();
 
   auto moduleAST = parseInputFile(inputFilename);
   if (!moduleAST)

@@ -53,13 +53,16 @@
 #include "llvm/Object/Archive.h"
 #include "llvm/Object/IRObjectFile.h"
 #include "llvm/Remarks/HotnessThresholdParser.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compression.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/GlobPattern.h"
 #include "llvm/Support/LEB128.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Parallel.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/TarWriter.h"
 #include "llvm/Support/TargetSelect.h"
@@ -1346,16 +1349,6 @@ static bool getIsRela(Ctx &ctx, opt::InputArgList &args) {
   return rela;
 }
 
-static void parseClangOption(Ctx &ctx, StringRef opt, const Twine &msg) {
-  std::string err;
-  raw_string_ostream os(err);
-
-  const char *argv[] = {ctx.arg.progName.data(), opt.data()};
-  if (cl::ParseCommandLineOptions(2, argv, "", &os))
-    return;
-  ErrAlways(ctx) << msg << ": " << StringRef(err).trim();
-}
-
 // Process a remap pattern 'from-glob=to-file'.
 static bool remapInputs(Ctx &ctx, StringRef line, const Twine &location) {
   SmallVector<StringRef, 0> fields;
@@ -1833,16 +1826,22 @@ static void readConfigs(Ctx &ctx, opt::InputArgList &args) {
       ErrAlways(ctx) << errPrefix << pat.takeError() << ": " << kv.first;
   }
 
-  cl::ResetAllOptionOccurrences();
+  // Collect all LLVM options from -plugin-opt and -mllvm, then parse once.
+  SmallVector<StringRef> LLVMOpts;
+  // Map from option string to original user spelling for error messages.
+  StringMap<StringRef> optSpellings;
 
-  // Parse LTO options.
-  if (auto *arg = args.getLastArg(OPT_plugin_opt_mcpu_eq))
-    parseClangOption(ctx, ctx.saver.save("-mcpu=" + StringRef(arg->getValue())),
-                     arg->getSpelling());
+  if (auto *arg = args.getLastArg(OPT_plugin_opt_mcpu_eq)) {
+    StringRef saved = ctx.saver.save("-mcpu=" + StringRef(arg->getValue()));
+    LLVMOpts.push_back(saved);
+    optSpellings[saved] = arg->getSpelling();
+  }
 
-  for (opt::Arg *arg : args.filtered(OPT_plugin_opt_eq_minus))
-    parseClangOption(ctx, std::string("-") + arg->getValue(),
-                     arg->getSpelling());
+  for (opt::Arg *arg : args.filtered(OPT_plugin_opt_eq_minus)) {
+    StringRef saved = ctx.saver.save(std::string("-") + arg->getValue());
+    LLVMOpts.push_back(saved);
+    optSpellings[saved] = arg->getSpelling();
+  }
 
   // GCC collect2 passes -plugin-opt=path/to/lto-wrapper with an absolute or
   // relative path. Just ignore. If not ended with "lto-wrapper" (or
@@ -1857,10 +1856,51 @@ static void readConfigs(Ctx &ctx, opt::InputArgList &args) {
 
   ctx.arg.passPlugins = args::getStrings(args, OPT_load_pass_plugins);
 
-  // Parse -mllvm options.
   for (const auto *arg : args.filtered(OPT_mllvm)) {
-    parseClangOption(ctx, arg->getValue(), arg->getSpelling());
+    LLVMOpts.push_back(arg->getValue());
     ctx.arg.mllvmOpts.emplace_back(arg->getValue());
+    optSpellings[arg->getValue()] = arg->getSpelling();
+  }
+
+  // Build the context unconditionally: library code writes settings into
+  // the module's OptionsContext, and those writes are dropped when the
+  // registry view is absent.
+  {
+    std::string err;
+    raw_string_ostream os(err);
+    clv2::OptionParser P;
+    RegisterAllLLVMOptions(P);
+    std::vector<const char *> Argv;
+    Argv.push_back(ctx.arg.progName.data());
+    for (auto &A : LLVMOpts)
+      Argv.push_back(A.data());
+    auto Parsed = P.parse(Argv.size(), Argv.data(), {}, &os);
+    if (Parsed)
+      ctx.llvmOptsCtx = std::move(Parsed);
+    else {
+      // Errors from the parser include lines like:
+      //   "ld.lld: Unknown command line argument '-abc'..."
+      // Map them back to the original spelling for structured error reporting.
+      StringRef errStr(err);
+      SmallVector<StringRef> lines;
+      errStr.split(lines, '\n', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+      for (StringRef line : lines) {
+        // Try to extract the option name to find the original spelling.
+        StringRef spelling;
+        for (StringRef opt : LLVMOpts) {
+          if (line.contains("'" + opt.str() + "'")) {
+            auto it = optSpellings.find(opt);
+            if (it != optSpellings.end())
+              spelling = it->second;
+            break;
+          }
+        }
+        if (!spelling.empty())
+          ErrAlways(ctx) << spelling << ": " << line;
+        else
+          ErrAlways(ctx) << line;
+      }
+    }
   }
 
   ctx.arg.ltoKind = LtoKind::Default;
@@ -1957,7 +1997,7 @@ static void readConfigs(Ctx &ctx, opt::InputArgList &args) {
         getPackDynRelocs(ctx, args);
   }
 
-  if (auto *arg = args.getLastArg(OPT_symbol_ordering_file)){
+  if (auto *arg = args.getLastArg(OPT_symbol_ordering_file)) {
     if (args.hasArg(OPT_call_graph_ordering_file))
       ErrAlways(ctx) << "--symbol-ordering-file and --call-graph-order-file "
                         "may not be used together";
@@ -3522,10 +3562,12 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
   if (!ctx.arg.relocatable)
     ctx.inputSections.push_back(createCommentSection(ctx));
 
-  // Split SHF_MERGE and .eh_frame sections into pieces in preparation for garbage collection.
+  // Split SHF_MERGE and .eh_frame sections into pieces in preparation for
+  // garbage collection.
   splitSections<ELFT>(ctx);
 
-  // Garbage collection and removal of shared symbols from unused shared objects.
+  // Garbage collection and removal of shared symbols from unused shared
+  // objects.
   markLive<ELFT>(ctx);
 
   if (canHaveMemtagGlobals(ctx)) {
@@ -3577,7 +3619,8 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
   }
 
   // Two input sections with different output sections should not be folded.
-  // ICF runs after processSectionCommands() so that we know the output sections.
+  // ICF runs after processSectionCommands() so that we know the output
+  // sections.
   if (ctx.arg.icf != ICFLevel::None) {
     findKeepUniqueSections<ELFT>(ctx, args);
     doIcf<ELFT>(ctx);

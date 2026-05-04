@@ -8,6 +8,7 @@ target_include_directories(llvm-omp-kernel-replay PRIVATE
   ${LIBOMPTARGET_INCLUDE_DIR}
 )
 target_link_libraries(llvm-omp-kernel-replay PRIVATE
+  LLVMAllOptions
   LLVMSupport
   omp
   omptarget

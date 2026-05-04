@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "flang/Lower/PFTBuilder.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Lower/LoweringOptions.h"
 #include "flang/Lower/Support/Utils.h"
 #include "flang/Parser/dump-parse-tree.h"
@@ -16,29 +17,16 @@
 #include "flang/Semantics/tools.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/IntervalMap.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include <algorithm>
 #include <limits>
 
 #define DEBUG_TYPE "flang-pft"
 
-static llvm::cl::opt<bool> clDisableStructuredFir(
-    "no-structured-fir", llvm::cl::desc("disable generation of structured FIR"),
-    llvm::cl::init(false), llvm::cl::Hidden);
-
-llvm::cl::opt<bool> wrapUnstructuredConstructsInExecuteRegion(
-    "wrap-unstructured-constructs-in-execute-region", llvm::cl::init(false),
-    llvm::cl::desc("try to wrap unstructured constructs' CFGs in "
-                   "self-contained MLIR regions"));
-
 using namespace Fortran;
 
 namespace {
-static llvm::cl::opt<bool> lowerDoWhileToSCFWhile(
-    "lower-do-while-to-scf-while", llvm::cl::init(false),
-    llvm::cl::desc("lower structured DO WHILE loops to scf.while"),
-    llvm::cl::Hidden);
 /// Helpers to unveil parser node inside Fortran::parser::Statement<>,
 /// Fortran::parser::UnlabeledStatement, and Fortran::common::Indirection<>
 template <typename A>
@@ -86,10 +74,12 @@ void dumpScope(const semantics::Scope *scope, int depth = -1);
 class PFTBuilder {
 public:
   PFTBuilder(const semantics::SemanticsContext &semanticsContext,
-             const lower::LoweringOptions &loweringOptions)
+             const lower::LoweringOptions &loweringOptions,
+             const llvm::clv2::OptionsContext &optsCtx)
       : pgm{std::make_unique<lower::pft::Program>(
             semanticsContext.GetCommonBlocks())},
-        semanticsContext{semanticsContext}, loweringOptions{loweringOptions} {
+        semanticsContext{semanticsContext}, loweringOptions{loweringOptions},
+        optsCtx{&optsCtx} {
     lower::pft::PftNode pftRoot{*pgm.get()};
     pftParentStack.push_back(pftRoot);
   }
@@ -1135,7 +1125,8 @@ private:
                            &loopControl->u)) {
               // Leave DO WHILE structured when -lower-do-while-to-scf-while is
               // enabled; branch analysis will mark unstructured cases.
-              if (!lowerDoWhileToSCFWhile)
+              if (!llvm::clv2::getOptValOrDefault<
+                      &llvm::clv2::FLANG_LowerDoWhileToScfWhile>(*optsCtx))
                 eval.isUnstructured = true; // while loop
             }
           },
@@ -1143,7 +1134,7 @@ private:
             lower::pft::Evaluation &doEval = evaluationList.front();
             eval.controlSuccessor = &doEval;
             doConstructStack.pop_back();
-            if (parentConstruct->lowerAsStructured())
+            if (parentConstruct->lowerAsStructured(*optsCtx))
               return;
             // The loop is unstructured, which wasn't known for all cases when
             // visiting the NonLabelDoStmt.
@@ -1181,7 +1172,7 @@ private:
             lastConstructStmtEvaluation = nullptr;
           },
           [&](const parser::EndIfStmt &) {
-            if (parentConstruct->lowerAsUnstructured())
+            if (parentConstruct->lowerAsUnstructured(*optsCtx))
               parentConstruct->constructExit->isNewBlock = true;
             if (lastConstructStmtEvaluation) {
               lastConstructStmtEvaluation->controlSuccessor =
@@ -1259,12 +1250,12 @@ private:
       // wrap pass will fold this construct into a self-contained
       // scf.execute_region, in which case the parent sees only a single op.
       if (parentConstruct && eval.isUnstructured &&
-          !lower::pft::isWrappableConstruct(eval, semanticsContext))
+          !lower::pft::isWrappableConstruct(eval, semanticsContext, *optsCtx))
         parentConstruct->isUnstructured = true;
 
       // The successor of a branch starts a new block.
       if (eval.controlSuccessor && eval.isActionStmt() &&
-          eval.lowerAsUnstructured())
+          eval.lowerAsUnstructured(*optsCtx))
         markSuccessorAsNewBlock(eval);
     }
   }
@@ -1308,6 +1299,7 @@ private:
   std::vector<lower::pft::PftNode> pftParentStack;
   const semantics::SemanticsContext &semanticsContext;
   const lower::LoweringOptions &loweringOptions;
+  const llvm::clv2::OptionsContext *optsCtx;
 
   llvm::SmallVector<bool> containsStmtStack{};
   lower::pft::ContainedUnitList *containedUnitList{};
@@ -1641,16 +1633,22 @@ static const semantics::Symbol *getSymbol(A &beginStmt) {
   return symbol;
 }
 
-bool Fortran::lower::pft::Evaluation::lowerAsStructured() const {
-  return !lowerAsUnstructured();
+bool Fortran::lower::pft::Evaluation::lowerAsStructured(
+    const llvm::clv2::OptionsContext &optsCtx) const {
+  return !lowerAsUnstructured(optsCtx);
 }
 
-bool Fortran::lower::pft::Evaluation::lowerAsUnstructured() const {
-  return isUnstructured || clDisableStructuredFir;
+bool Fortran::lower::pft::Evaluation::lowerAsUnstructured(
+    const llvm::clv2::OptionsContext &optsCtx) const {
+  return isUnstructured ||
+         llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_NoStructuredFir>(
+             optsCtx);
 }
 
-bool Fortran::lower::pft::Evaluation::forceAsUnstructured() const {
-  return clDisableStructuredFir;
+bool Fortran::lower::pft::Evaluation::forceAsUnstructured(
+    const llvm::clv2::OptionsContext &optsCtx) const {
+  return llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_NoStructuredFir>(
+      optsCtx);
 }
 
 lower::pft::FunctionLikeUnit *
@@ -2105,8 +2103,9 @@ bool Fortran::lower::pft::Variable::isRuntimeTypeInfoData() const {
 std::unique_ptr<lower::pft::Program>
 Fortran::lower::createPFT(const parser::Program &root,
                           const semantics::SemanticsContext &semanticsContext,
-                          const LoweringOptions &loweringOptions) {
-  PFTBuilder walker(semanticsContext, loweringOptions);
+                          const LoweringOptions &loweringOptions,
+                          const llvm::clv2::OptionsContext &optsCtx) {
+  PFTBuilder walker(semanticsContext, loweringOptions, optsCtx);
   Walk(root, walker);
   return walker.result();
 }
@@ -2639,8 +2638,10 @@ static bool isOmpLoopBody(const Fortran::lower::pft::Evaluation &eval,
 
 bool Fortran::lower::pft::isWrappableConstruct(
     const Fortran::lower::pft::Evaluation &eval,
-    const Fortran::semantics::SemanticsContext &semaCtx) {
-  if (!wrapUnstructuredConstructsInExecuteRegion)
+    const Fortran::semantics::SemanticsContext &semaCtx,
+    const llvm::clv2::OptionsContext &optsCtx) {
+  if (!llvm::clv2::getOptValOrDefault<
+          &llvm::clv2::FLANG_WrapUnstructuredInExecRegion>(optsCtx))
     return false;
 
   if (!eval.isUnstructured)

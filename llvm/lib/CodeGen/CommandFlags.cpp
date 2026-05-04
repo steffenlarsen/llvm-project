@@ -17,13 +17,14 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/CodeGen/CommandFlagsOptInfos.h"
+#include "llvm/CodeGen/GlobalISel/LegalizerInfo.h"
+#include "llvm/CodeGen/MIR2Vec.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCTargetOptionsCommandFlags.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
@@ -37,31 +38,48 @@
 #include <memory>
 #include <optional>
 #include <system_error>
+#include <type_traits>
 
 using namespace llvm;
 
-#define CGOPT(TY, NAME)                                                        \
-  static cl::opt<TY> *NAME##View;                                              \
-  TY codegen::get##NAME() {                                                    \
-    assert(NAME##View && "Flag not registered.");                              \
-    return *NAME##View;                                                        \
+// Each getter reads the session's parsed options.  There is no process-wide
+// snapshot, so two parses in one process see their own values and a second
+// parse cannot inherit the first's.
+// The value these getters produce when the option was not given: the
+// descriptor's Init default, which is why these read through getOptValOr:
+// it returns the parsed slot.
+// getOptValIfSpecified would ignore the slot and hand back TY{}, silently
+// flipping every option whose default is not the zero value (there are ~28,
+// including -x86-relax-relocations and -unique-section-names).
+
+// The value these getters must produce when the registry is absent from the
+// context: the descriptor's Init default if it has one, else the zero value.
+// This is what the old primed snapshot produced, and it matters --
+// CG_BBSections defaults to "none", and TY{} ("") instead routes
+// getBBSectionsMode() into the function-list branch and tries to open a file
+// named "".
+
+#define CGOPT_NAMED(TY, NAME, OPT)                                             \
+  TY codegen::get##NAME(const clv2::OptionsContext &Ctx) {                     \
+    return clv2::getOptValOr<&clv2::OPT>(                                      \
+        Ctx, clv2::descriptorDefault<&clv2::OPT, TY>());                       \
   }
+
+#define CGOPT(TY, NAME) CGOPT_NAMED(TY, NAME, CG_##NAME)
 
 #define CGLIST(TY, NAME)                                                       \
-  static cl::list<TY> *NAME##View;                                             \
-  std::vector<TY> codegen::get##NAME() {                                       \
-    assert(NAME##View && "Flag not registered.");                              \
-    return *NAME##View;                                                        \
+  std::vector<TY> codegen::get##NAME(const clv2::OptionsContext &Ctx) {        \
+    return clv2::getOptValOr<&clv2::CG_##NAME>(                                \
+        Ctx, clv2::descriptorDefault<&clv2::CG_##NAME, std::vector<TY>>());    \
   }
 
-// Temporary macro for incremental transition to std::optional.
 #define CGOPT_EXP(TY, NAME)                                                    \
   CGOPT(TY, NAME)                                                              \
-  std::optional<TY> codegen::getExplicit##NAME() {                             \
-    if (NAME##View->getNumOccurrences()) {                                     \
-      TY res = *NAME##View;                                                    \
-      return res;                                                              \
-    }                                                                          \
+  std::optional<TY> codegen::getExplicit##NAME(                                \
+      const clv2::OptionsContext &Ctx) {                                       \
+    if (clv2::wasOptSpecified<&clv2::CG_##NAME>(Ctx))                          \
+      return clv2::getOptValOr<&clv2::CG_##NAME>(                              \
+          Ctx, clv2::descriptorDefault<&clv2::CG_##NAME, TY>());               \
     return std::nullopt;                                                       \
   }
 
@@ -75,7 +93,7 @@ CGOPT_EXP(CodeModel::Model, CodeModel)
 CGOPT_EXP(uint64_t, LargeDataThreshold)
 CGOPT(ExceptionHandling, ExceptionModel)
 CGOPT_EXP(CodeGenFileType, FileType)
-CGOPT(FramePointerKind, FramePointerUsage)
+CGOPT_NAMED(FramePointerKind, FramePointerUsage, CG_FramePointer)
 CGOPT(bool, EnableNoTrappingFPMath)
 CGOPT(bool, EnableAIXExtendedAltivecABI)
 CGOPT(DenormalMode::DenormalModeKind, DenormalFPMath)
@@ -105,8 +123,12 @@ CGOPT(bool, UniqueSectionNames)
 CGOPT(bool, UniqueBasicBlockSectionNames)
 CGOPT(bool, SeparateNamedSections)
 CGOPT(EABI, EABIVersion)
-CGOPT(DebuggerKind, DebuggerTuningOpt)
-CGOPT(VectorLibrary, VectorLibrary)
+CGOPT_NAMED(DebuggerKind, DebuggerTuningOpt, CG_DebuggerTuning)
+// VectorLibrary getter is manually defined to avoid field/type name collision.
+VectorLibrary codegen::getVectorLibrary(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::CG_VectorLibrary>(
+      Ctx, clv2::descriptorDefault<&clv2::CG_VectorLibrary, VectorLibrary>());
+}
 CGOPT(bool, EnableStackSizeSection)
 CGOPT(bool, EnableAddrsig)
 CGOPT(bool, EnableCallGraphSection)
@@ -122,453 +144,34 @@ CGOPT(bool, JMCInstrument)
 CGOPT(bool, XCOFFReadOnlyPointers)
 CGOPT(codegen::SaveStatsMode, SaveStats)
 
-#define CGBINDOPT(NAME)                                                        \
-  do {                                                                         \
-    NAME##View = std::addressof(NAME);                                         \
-  } while (0)
+std::optional<std::string>
+codegen::getBBSectionsColdTextPrefixOverride(const clv2::OptionsContext &Ctx) {
+  if (!clv2::wasOptSpecified<&clv2::CG_BbsectionsColdTextPrefix>(Ctx))
+    return std::nullopt;
+  return clv2::getOptValOr<&clv2::CG_BbsectionsColdTextPrefix>(Ctx,
+                                                               std::string{});
+}
 
+// Retained as a no-op: tools instantiate it to declare that they want the
+// codegen options registered.  There is no longer a snapshot for it to prime.
 codegen::RegisterCodeGenFlags::RegisterCodeGenFlags() {
-  static cl::opt<std::string> MArch(
-      "march", cl::desc("Architecture to generate code for (see --version)"));
-  CGBINDOPT(MArch);
-
-  static cl::opt<std::string> MCPU(
-      "mcpu", cl::desc("Target a specific cpu type (-mcpu=help for details)"),
-      cl::value_desc("cpu-name"), cl::init(""));
-  CGBINDOPT(MCPU);
-
-  static cl::list<std::string> MAttrs(
-      "mattr", cl::CommaSeparated,
-      cl::desc("Target specific attributes (-mattr=help for details)"),
-      cl::value_desc("a1,+a2,-a3,..."));
-  CGBINDOPT(MAttrs);
-
-  static cl::opt<Reloc::Model> RelocModel(
-      "relocation-model", cl::desc("Choose relocation model"),
-      cl::values(
-          clEnumValN(Reloc::Static, "static", "Non-relocatable code"),
-          clEnumValN(Reloc::PIC_, "pic",
-                     "Fully relocatable, position independent code"),
-          clEnumValN(Reloc::DynamicNoPIC, "dynamic-no-pic",
-                     "Relocatable external references, non-relocatable code"),
-          clEnumValN(
-              Reloc::ROPI, "ropi",
-              "Code and read-only data relocatable, accessed PC-relative"),
-          clEnumValN(
-              Reloc::RWPI, "rwpi",
-              "Read-write data relocatable, accessed relative to static base"),
-          clEnumValN(Reloc::ROPI_RWPI, "ropi-rwpi",
-                     "Combination of ropi and rwpi")));
-  CGBINDOPT(RelocModel);
-
-  static cl::opt<ThreadModel::Model> ThreadModel(
-      "thread-model", cl::desc("Choose threading model"),
-      cl::init(ThreadModel::POSIX),
-      cl::values(
-          clEnumValN(ThreadModel::POSIX, "posix", "POSIX thread model"),
-          clEnumValN(ThreadModel::Single, "single", "Single thread model")));
-  CGBINDOPT(ThreadModel);
-
-  static cl::opt<CodeModel::Model> CodeModel(
-      "code-model", cl::desc("Choose code model"),
-      cl::values(clEnumValN(CodeModel::Tiny, "tiny", "Tiny code model"),
-                 clEnumValN(CodeModel::Small, "small", "Small code model"),
-                 clEnumValN(CodeModel::Kernel, "kernel", "Kernel code model"),
-                 clEnumValN(CodeModel::Medium, "medium", "Medium code model"),
-                 clEnumValN(CodeModel::Large, "large", "Large code model")));
-  CGBINDOPT(CodeModel);
-
-  static cl::opt<uint64_t> LargeDataThreshold(
-      "large-data-threshold",
-      cl::desc("Choose large data threshold for x86_64 medium code model"),
-      cl::init(0));
-  CGBINDOPT(LargeDataThreshold);
-
-  static cl::opt<ExceptionHandling> ExceptionModel(
-      "exception-model", cl::desc("exception model"),
-      cl::init(ExceptionHandling::None),
-      cl::values(
-          clEnumValN(ExceptionHandling::None, "default",
-                     "default exception handling model"),
-          clEnumValN(ExceptionHandling::DwarfCFI, "dwarf",
-                     "DWARF-like CFI based exception handling"),
-          clEnumValN(ExceptionHandling::SjLj, "sjlj",
-                     "SjLj exception handling"),
-          clEnumValN(ExceptionHandling::ARM, "arm", "ARM EHABI exceptions"),
-          clEnumValN(ExceptionHandling::WinEH, "wineh",
-                     "Windows exception model"),
-          clEnumValN(ExceptionHandling::Wasm, "wasm",
-                     "WebAssembly exception handling")));
-  CGBINDOPT(ExceptionModel);
-
-  static cl::opt<CodeGenFileType> FileType(
-      "filetype", cl::init(CodeGenFileType::AssemblyFile),
-      cl::desc(
-          "Choose a file type (not all types are supported by all targets):"),
-      cl::values(clEnumValN(CodeGenFileType::AssemblyFile, "asm",
-                            "Emit an assembly ('.s') file"),
-                 clEnumValN(CodeGenFileType::ObjectFile, "obj",
-                            "Emit a native object ('.o') file"),
-                 clEnumValN(CodeGenFileType::Null, "null",
-                            "Emit nothing, for performance testing")));
-  CGBINDOPT(FileType);
-
-  static cl::opt<FramePointerKind> FramePointerUsage(
-      "frame-pointer",
-      cl::desc("Specify frame pointer elimination optimization"),
-      cl::init(FramePointerKind::None),
-      cl::values(
-          clEnumValN(FramePointerKind::All, "all",
-                     "Disable frame pointer elimination"),
-          clEnumValN(FramePointerKind::NonLeaf, "non-leaf",
-                     "Disable frame pointer elimination for non-leaf frame but "
-                     "reserve the register in leaf functions"),
-          clEnumValN(FramePointerKind::NonLeafNoReserve, "non-leaf-no-reserve",
-                     "Disable frame pointer elimination for non-leaf frame"),
-          clEnumValN(FramePointerKind::Reserved, "reserved",
-                     "Enable frame pointer elimination, but reserve the frame "
-                     "pointer register"),
-          clEnumValN(FramePointerKind::None, "none",
-                     "Enable frame pointer elimination")));
-  CGBINDOPT(FramePointerUsage);
-
-  static cl::opt<bool> EnableNoTrappingFPMath(
-      "enable-no-trapping-fp-math",
-      cl::desc("Enable setting the FP exceptions build "
-               "attribute not to use exceptions"),
-      cl::init(false));
-  CGBINDOPT(EnableNoTrappingFPMath);
-
-  static const auto DenormFlagEnumOptions = cl::values(
-      clEnumValN(DenormalMode::IEEE, "ieee", "IEEE 754 denormal numbers"),
-      clEnumValN(DenormalMode::PreserveSign, "preserve-sign",
-                 "the sign of a  flushed-to-zero number is preserved "
-                 "in the sign of 0"),
-      clEnumValN(DenormalMode::PositiveZero, "positive-zero",
-                 "denormals are flushed to positive zero"),
-      clEnumValN(DenormalMode::Dynamic, "dynamic",
-                 "denormals have unknown treatment"));
-
-  // FIXME: Doesn't have way to specify separate input and output modes.
-  static cl::opt<DenormalMode::DenormalModeKind> DenormalFPMath(
-    "denormal-fp-math",
-    cl::desc("Select which denormal numbers the code is permitted to require"),
-    cl::init(DenormalMode::IEEE),
-    DenormFlagEnumOptions);
-  CGBINDOPT(DenormalFPMath);
-
-  static cl::opt<DenormalMode::DenormalModeKind> DenormalFP32Math(
-    "denormal-fp-math-f32",
-    cl::desc("Select which denormal numbers the code is permitted to require for float"),
-    cl::init(DenormalMode::Invalid),
-    DenormFlagEnumOptions);
-  CGBINDOPT(DenormalFP32Math);
-
-  static cl::opt<bool> EnableHonorSignDependentRoundingFPMath(
-      "enable-sign-dependent-rounding-fp-math", cl::Hidden,
-      cl::desc("Force codegen to assume rounding mode can change dynamically"),
-      cl::init(false));
-  CGBINDOPT(EnableHonorSignDependentRoundingFPMath);
-
-  static cl::opt<FloatABI::ABIType> FloatABIForCalls(
-      "float-abi", cl::desc("Choose float ABI type"),
-      cl::init(FloatABI::Default),
-      cl::values(clEnumValN(FloatABI::Default, "default",
-                            "Target default float ABI type"),
-                 clEnumValN(FloatABI::Soft, "soft",
-                            "Soft float ABI (implied by -soft-float)"),
-                 clEnumValN(FloatABI::Hard, "hard",
-                            "Hard float ABI (uses FP registers)")));
-  CGBINDOPT(FloatABIForCalls);
-
-  static cl::opt<FPOpFusion::FPOpFusionMode> FuseFPOps(
-      "fp-contract", cl::desc("Enable aggressive formation of fused FP ops"),
-      cl::init(FPOpFusion::Standard),
-      cl::values(
-          clEnumValN(FPOpFusion::Fast, "fast",
-                     "Fuse FP ops whenever profitable"),
-          clEnumValN(FPOpFusion::Standard, "on", "Only fuse 'blessed' FP ops."),
-          clEnumValN(FPOpFusion::Strict, "off",
-                     "Only fuse FP ops when the result won't be affected.")));
-  CGBINDOPT(FuseFPOps);
-
-  static cl::opt<SwiftAsyncFramePointerMode> SwiftAsyncFramePointer(
-      "swift-async-fp",
-      cl::desc("Determine when the Swift async frame pointer should be set"),
-      cl::init(SwiftAsyncFramePointerMode::Always),
-      cl::values(clEnumValN(SwiftAsyncFramePointerMode::DeploymentBased, "auto",
-                            "Determine based on deployment target"),
-                 clEnumValN(SwiftAsyncFramePointerMode::Always, "always",
-                            "Always set the bit"),
-                 clEnumValN(SwiftAsyncFramePointerMode::Never, "never",
-                            "Never set the bit")));
-  CGBINDOPT(SwiftAsyncFramePointer);
-
-  static cl::opt<bool> DontPlaceZerosInBSS(
-      "nozero-initialized-in-bss",
-      cl::desc("Don't place zero-initialized symbols into bss section"),
-      cl::init(false));
-  CGBINDOPT(DontPlaceZerosInBSS);
-
-  static cl::opt<bool> EnableAIXExtendedAltivecABI(
-      "vec-extabi", cl::desc("Enable the AIX Extended Altivec ABI."),
-      cl::init(false));
-  CGBINDOPT(EnableAIXExtendedAltivecABI);
-
-  static cl::opt<bool> EnableGuaranteedTailCallOpt(
-      "tailcallopt",
-      cl::desc(
-          "Turn fastcc calls into tail calls by (potentially) changing ABI."),
-      cl::init(false));
-  CGBINDOPT(EnableGuaranteedTailCallOpt);
-
-  static cl::opt<bool> DisableTailCalls(
-      "disable-tail-calls", cl::desc("Never emit tail calls"), cl::init(false));
-  CGBINDOPT(DisableTailCalls);
-
-  static cl::opt<bool> StackSymbolOrdering(
-      "stack-symbol-ordering", cl::desc("Order local stack symbols."),
-      cl::init(true));
-  CGBINDOPT(StackSymbolOrdering);
-
-  static cl::opt<bool> StackRealign(
-      "stackrealign",
-      cl::desc("Force align the stack to the minimum alignment"),
-      cl::init(false));
-  CGBINDOPT(StackRealign);
-
-  static cl::opt<std::string> TrapFuncName(
-      "trap-func", cl::Hidden,
-      cl::desc("Emit a call to trap function rather than a trap instruction"),
-      cl::init(""));
-  CGBINDOPT(TrapFuncName);
-
-  static cl::opt<bool> UseCtors("use-ctors",
-                                cl::desc("Use .ctors instead of .init_array."),
-                                cl::init(false));
-  CGBINDOPT(UseCtors);
-
-  static cl::opt<bool> DataSections(
-      "data-sections", cl::desc("Emit data into separate sections"),
-      cl::init(false));
-  CGBINDOPT(DataSections);
-
-  static cl::opt<bool> FunctionSections(
-      "function-sections", cl::desc("Emit functions into separate sections"),
-      cl::init(false));
-  CGBINDOPT(FunctionSections);
-
-  static cl::opt<bool> IgnoreXCOFFVisibility(
-      "ignore-xcoff-visibility",
-      cl::desc("Not emit the visibility attribute for asm in AIX OS or give "
-               "all symbols 'unspecified' visibility in XCOFF object file"),
-      cl::init(false));
-  CGBINDOPT(IgnoreXCOFFVisibility);
-
-  static cl::opt<bool> XCOFFTracebackTable(
-      "xcoff-traceback-table", cl::desc("Emit the XCOFF traceback table"),
-      cl::init(true));
-  CGBINDOPT(XCOFFTracebackTable);
-
-  static cl::opt<bool> EnableBBAddrMap(
-      "basic-block-address-map",
-      cl::desc("Emit the basic block address map section"), cl::init(false));
-  CGBINDOPT(EnableBBAddrMap);
-
-  static cl::opt<std::string> BBSections(
-      "basic-block-sections",
-      cl::desc("Emit basic blocks into separate sections"),
-      cl::value_desc("all | <function list (file)> | labels | none"),
-      cl::init("none"));
-  CGBINDOPT(BBSections);
-
-  static cl::opt<unsigned> TLSSize(
-      "tls-size", cl::desc("Bit size of immediate TLS offsets"), cl::init(0));
-  CGBINDOPT(TLSSize);
-
-  static cl::opt<bool> EmulatedTLS(
-      "emulated-tls", cl::desc("Use emulated TLS model"), cl::init(false));
-  CGBINDOPT(EmulatedTLS);
-
-  static cl::opt<bool> EnableTLSDESC(
-      "enable-tlsdesc", cl::desc("Enable the use of TLS Descriptors"),
-      cl::init(false));
-  CGBINDOPT(EnableTLSDESC);
-
-  static cl::opt<bool> UniqueSectionNames(
-      "unique-section-names", cl::desc("Give unique names to every section"),
-      cl::init(true));
-  CGBINDOPT(UniqueSectionNames);
-
-  static cl::opt<bool> UniqueBasicBlockSectionNames(
-      "unique-basic-block-section-names",
-      cl::desc("Give unique names to every basic block section"),
-      cl::init(false));
-  CGBINDOPT(UniqueBasicBlockSectionNames);
-
-  static cl::opt<bool> SeparateNamedSections(
-      "separate-named-sections",
-      cl::desc("Use separate unique sections for named sections"),
-      cl::init(false));
-  CGBINDOPT(SeparateNamedSections);
-
-  static cl::opt<EABI> EABIVersion(
-      "meabi", cl::desc("Set EABI type (default depends on triple):"),
-      cl::init(EABI::Default),
-      cl::values(
-          clEnumValN(EABI::Default, "default", "Triple default EABI version"),
-          clEnumValN(EABI::EABI4, "4", "EABI version 4"),
-          clEnumValN(EABI::EABI5, "5", "EABI version 5"),
-          clEnumValN(EABI::GNU, "gnu", "EABI GNU")));
-  CGBINDOPT(EABIVersion);
-
-  static cl::opt<DebuggerKind> DebuggerTuningOpt(
-      "debugger-tune", cl::desc("Tune debug info for a particular debugger"),
-      cl::init(DebuggerKind::Default),
-      cl::values(
-          clEnumValN(DebuggerKind::GDB, "gdb", "gdb"),
-          clEnumValN(DebuggerKind::LLDB, "lldb", "lldb"),
-          clEnumValN(DebuggerKind::DBX, "dbx", "dbx"),
-          clEnumValN(DebuggerKind::SCE, "sce", "SCE targets (e.g. PS4)")));
-  CGBINDOPT(DebuggerTuningOpt);
-
-  static cl::opt<VectorLibrary> VectorLibrary(
-      "vector-library", cl::Hidden, cl::desc("Vector functions library"),
-      cl::init(VectorLibrary::NoLibrary),
-      cl::values(
-          clEnumValN(VectorLibrary::NoLibrary, "none",
-                     "No vector functions library"),
-          clEnumValN(VectorLibrary::Accelerate, "Accelerate",
-                     "Accelerate framework"),
-          clEnumValN(VectorLibrary::DarwinLibSystemM, "Darwin_libsystem_m",
-                     "Darwin libsystem_m"),
-          clEnumValN(VectorLibrary::LIBMVEC, "LIBMVEC",
-                     "GLIBC Vector Math library"),
-          clEnumValN(VectorLibrary::MASSV, "MASSV", "IBM MASS vector library"),
-          clEnumValN(VectorLibrary::SVML, "SVML", "Intel SVML library"),
-          clEnumValN(VectorLibrary::SLEEFGNUABI, "sleefgnuabi",
-                     "SIMD Library for Evaluating Elementary Functions"),
-          clEnumValN(VectorLibrary::ArmPL, "ArmPL",
-                     "Arm Performance Libraries"),
-          clEnumValN(VectorLibrary::AMDLIBM, "AMDLIBM",
-                     "AMD vector math library")));
-  CGBINDOPT(VectorLibrary);
-
-  static cl::opt<bool> EnableStackSizeSection(
-      "stack-size-section",
-      cl::desc("Emit a section containing stack size metadata"),
-      cl::init(false));
-  CGBINDOPT(EnableStackSizeSection);
-
-  static cl::opt<bool> EnableAddrsig(
-      "addrsig", cl::desc("Emit an address-significance table"),
-      cl::init(false));
-  CGBINDOPT(EnableAddrsig);
-
-  static cl::opt<bool> EnableCallGraphSection(
-      "call-graph-section", cl::desc("Emit a call graph section"),
-      cl::init(false));
-  CGBINDOPT(EnableCallGraphSection);
-
-  static cl::opt<bool> EmitCallSiteInfo(
-      "emit-call-site-info",
-      cl::desc(
-          "Emit call site debug information, if debug information is enabled."),
-      cl::init(false));
-  CGBINDOPT(EmitCallSiteInfo);
-
-  static cl::opt<bool> EnableDebugEntryValues(
-      "debug-entry-values",
-      cl::desc("Enable debug info for the debug entry values."),
-      cl::init(false));
-  CGBINDOPT(EnableDebugEntryValues);
-
-  static cl::opt<bool> EnableMachineFunctionSplitter(
-      "split-machine-functions",
-      cl::desc("Split out cold basic blocks from machine functions based on "
-               "profile information"),
-      cl::init(false));
-  CGBINDOPT(EnableMachineFunctionSplitter);
-
-  static cl::opt<bool> EnableStaticDataPartitioning(
-      "partition-static-data-sections",
-      cl::desc("Partition data sections using profile information."),
-      cl::init(false));
-  CGBINDOPT(EnableStaticDataPartitioning);
-
-  static cl::opt<bool> ForceDwarfFrameSection(
-      "force-dwarf-frame-section",
-      cl::desc("Always emit a debug frame section."), cl::init(false));
-  CGBINDOPT(ForceDwarfFrameSection);
-
-  static cl::opt<bool> XRayFunctionIndex("xray-function-index",
-                                         cl::desc("Emit xray_fn_idx section"),
-                                         cl::init(true));
-  CGBINDOPT(XRayFunctionIndex);
-
-  static cl::opt<bool> DebugStrictDwarf(
-      "strict-dwarf", cl::desc("use strict dwarf"), cl::init(false));
-  CGBINDOPT(DebugStrictDwarf);
-
-  static cl::opt<unsigned> AlignLoops("align-loops",
-                                      cl::desc("Default alignment for loops"));
-  CGBINDOPT(AlignLoops);
-
-  static cl::opt<bool> JMCInstrument(
-      "enable-jmc-instrument",
-      cl::desc("Instrument functions with a call to __CheckForDebuggerJustMyCode"),
-      cl::init(false));
-  CGBINDOPT(JMCInstrument);
-
-  static cl::opt<bool> XCOFFReadOnlyPointers(
-      "mxcoff-roptr",
-      cl::desc("When set to true, const objects with relocatable address "
-               "values are put into the RO data section."),
-      cl::init(false));
-  CGBINDOPT(XCOFFReadOnlyPointers);
-
-  static cl::opt<bool> DisableIntegratedAS(
-      "no-integrated-as", cl::desc("Disable integrated assembler"),
-      cl::init(false));
-  CGBINDOPT(DisableIntegratedAS);
-
   mc::RegisterMCTargetOptionsFlags();
 }
 
-codegen::RegisterMTuneFlag::RegisterMTuneFlag() {
-  static cl::opt<std::string> MTune(
-      "mtune",
-      cl::desc("Tune for a specific CPU microarchitecture (-mtune=help for "
-               "details)"),
-      cl::value_desc("tune-cpu-name"), cl::init(""));
-  CGBINDOPT(MTune);
-}
+codegen::RegisterMTuneFlag::RegisterMTuneFlag() {}
 
-codegen::RegisterSaveStatsFlag::RegisterSaveStatsFlag() {
-  static cl::opt<SaveStatsMode> SaveStats(
-      "save-stats",
-      cl::desc(
-          "Save LLVM statistics to a file in the current directory"
-          "(`-save-stats`/`-save-stats=cwd`) or the directory of the output"
-          "file (`-save-stats=obj`). (default: cwd)"),
-      cl::values(clEnumValN(SaveStatsMode::Cwd, "cwd",
-                            "Save to the current working directory"),
-                 clEnumValN(SaveStatsMode::Cwd, "", ""),
-                 clEnumValN(SaveStatsMode::Obj, "obj",
-                            "Save to the output file directory")),
-      cl::init(SaveStatsMode::None), cl::ValueOptional);
-  CGBINDOPT(SaveStats);
-}
+codegen::RegisterSaveStatsFlag::RegisterSaveStatsFlag() {}
 
 llvm::BasicBlockSection
-codegen::getBBSectionsMode(llvm::TargetOptions &Options) {
-  if (getBBSections() == "all")
+codegen::getBBSectionsMode(llvm::TargetOptions &Options,
+                           const clv2::OptionsContext &Ctx) {
+  if (getBBSections(Ctx) == "all")
     return BasicBlockSection::All;
-  else if (getBBSections() == "none")
+  else if (getBBSections(Ctx) == "none")
     return BasicBlockSection::None;
   else {
     ErrorOr<std::unique_ptr<MemoryBuffer>> MBOrErr =
-        MemoryBuffer::getFile(getBBSections());
+        MemoryBuffer::getFile(getBBSections(Ctx));
     if (!MBOrErr) {
       errs() << "Error loading basic block sections function list file: "
              << MBOrErr.getError().message() << "\n";
@@ -581,62 +184,66 @@ codegen::getBBSectionsMode(llvm::TargetOptions &Options) {
 
 // Common utility function tightly tied to the options listed here. Initializes
 // a TargetOptions object with CodeGen flags and returns it.
-TargetOptions
-codegen::InitTargetOptionsFromCodeGenFlags(const Triple &TheTriple) {
+TargetOptions codegen::InitTargetOptionsFromCodeGenFlags(
+    const Triple &TheTriple, const clv2::OptionsContext &OptsCtx) {
   TargetOptions Options;
-  Options.AllowFPOpFusion = getFuseFPOps();
-  Options.NoTrappingFPMath = getEnableNoTrappingFPMath();
+  Options.AllowFPOpFusion = getFuseFPOps(OptsCtx);
+  Options.NoTrappingFPMath = getEnableNoTrappingFPMath(OptsCtx);
 
   Options.HonorSignDependentRoundingFPMathOption =
-      getEnableHonorSignDependentRoundingFPMath();
-  Options.EnableAIXExtendedAltivecABI = getEnableAIXExtendedAltivecABI();
-  Options.NoZerosInBSS = getDontPlaceZerosInBSS();
-  Options.GuaranteedTailCallOpt = getEnableGuaranteedTailCallOpt();
-  Options.StackSymbolOrdering = getStackSymbolOrdering();
-  Options.UseInitArray = !getUseCtors();
-  Options.DisableIntegratedAS = getDisableIntegratedAS();
-  Options.DataSections =
-      getExplicitDataSections().value_or(TheTriple.hasDefaultDataSections());
-  Options.FunctionSections = getFunctionSections();
-  Options.IgnoreXCOFFVisibility = getIgnoreXCOFFVisibility();
-  Options.XCOFFTracebackTable = getXCOFFTracebackTable();
-  Options.BBAddrMap = getEnableBBAddrMap();
-  Options.BBSections = getBBSectionsMode(Options);
-  Options.UniqueSectionNames = getUniqueSectionNames();
-  Options.UniqueBasicBlockSectionNames = getUniqueBasicBlockSectionNames();
-  Options.SeparateNamedSections = getSeparateNamedSections();
-  Options.TLSSize = getTLSSize();
-  Options.EmulatedTLS =
-      getExplicitEmulatedTLS().value_or(TheTriple.hasDefaultEmulatedTLS());
+      getEnableHonorSignDependentRoundingFPMath(OptsCtx);
+  Options.EnableAIXExtendedAltivecABI = getEnableAIXExtendedAltivecABI(OptsCtx);
+  Options.NoZerosInBSS = getDontPlaceZerosInBSS(OptsCtx);
+  Options.GuaranteedTailCallOpt = getEnableGuaranteedTailCallOpt(OptsCtx);
+  Options.StackSymbolOrdering = getStackSymbolOrdering(OptsCtx);
+  Options.UseInitArray = !getUseCtors(OptsCtx);
+  Options.DisableIntegratedAS = getDisableIntegratedAS(OptsCtx);
+  Options.DataSections = getExplicitDataSections(OptsCtx).value_or(
+      TheTriple.hasDefaultDataSections());
+  Options.FunctionSections = getFunctionSections(OptsCtx);
+  Options.IgnoreXCOFFVisibility = getIgnoreXCOFFVisibility(OptsCtx);
+  Options.XCOFFTracebackTable = getXCOFFTracebackTable(OptsCtx);
+  Options.BBAddrMap = getEnableBBAddrMap(OptsCtx);
+  Options.BBSections = getBBSectionsMode(Options, OptsCtx);
+  Options.UniqueSectionNames = getUniqueSectionNames(OptsCtx);
+  Options.UniqueBasicBlockSectionNames =
+      getUniqueBasicBlockSectionNames(OptsCtx);
+  Options.SeparateNamedSections = getSeparateNamedSections(OptsCtx);
+  Options.TLSSize = getTLSSize(OptsCtx);
+  Options.EmulatedTLS = getExplicitEmulatedTLS(OptsCtx).value_or(
+      TheTriple.hasDefaultEmulatedTLS());
   Options.EnableTLSDESC =
-      getExplicitEnableTLSDESC().value_or(TheTriple.hasDefaultTLSDESC());
-  Options.ExceptionModel = getExceptionModel();
-  Options.VecLib = getVectorLibrary();
-  Options.EmitStackSizeSection = getEnableStackSizeSection();
-  Options.EnableMachineFunctionSplitter = getEnableMachineFunctionSplitter();
-  Options.EnableStaticDataPartitioning = getEnableStaticDataPartitioning();
-  Options.EmitAddrsig = getEnableAddrsig();
-  Options.EmitCallGraphSection = getEnableCallGraphSection();
-  Options.EmitCallSiteInfo = getEmitCallSiteInfo();
-  Options.EnableDebugEntryValues = getEnableDebugEntryValues();
-  Options.ForceDwarfFrameSection = getForceDwarfFrameSection();
-  Options.XRayFunctionIndex = getXRayFunctionIndex();
-  Options.DebugStrictDwarf = getDebugStrictDwarf();
-  Options.LoopAlignment = getAlignLoops();
-  Options.JMCInstrument = getJMCInstrument();
-  Options.XCOFFReadOnlyPointers = getXCOFFReadOnlyPointers();
+      getExplicitEnableTLSDESC(OptsCtx).value_or(TheTriple.hasDefaultTLSDESC());
+  Options.ExceptionModel = getExceptionModel(OptsCtx);
+  Options.VecLib = getVectorLibrary(OptsCtx);
+  Options.EmitStackSizeSection = getEnableStackSizeSection(OptsCtx);
+  Options.EnableMachineFunctionSplitter =
+      getEnableMachineFunctionSplitter(OptsCtx);
+  Options.EnableStaticDataPartitioning =
+      getEnableStaticDataPartitioning(OptsCtx);
+  Options.EmitAddrsig = getEnableAddrsig(OptsCtx);
+  Options.EmitCallGraphSection = getEnableCallGraphSection(OptsCtx);
+  Options.EmitCallSiteInfo = getEmitCallSiteInfo(OptsCtx);
+  Options.EnableDebugEntryValues = getEnableDebugEntryValues(OptsCtx);
+  Options.ForceDwarfFrameSection = getForceDwarfFrameSection(OptsCtx);
+  Options.XRayFunctionIndex = getXRayFunctionIndex(OptsCtx);
+  Options.DebugStrictDwarf = getDebugStrictDwarf(OptsCtx);
+  Options.LoopAlignment = getAlignLoops(OptsCtx);
+  Options.JMCInstrument = getJMCInstrument(OptsCtx);
+  Options.XCOFFReadOnlyPointers = getXCOFFReadOnlyPointers(OptsCtx);
 
-  Options.MCOptions = mc::InitMCTargetOptionsFromFlags();
+  Options.MCOptions = mc::InitMCTargetOptionsFromFlags(OptsCtx);
+  Options.OptsCtx = &OptsCtx;
 
-  Options.ThreadModel = getThreadModel();
-  Options.EABIVersion = getEABIVersion();
-  Options.DebuggerTuning = getDebuggerTuningOpt();
-  Options.SwiftAsyncFramePointer = getSwiftAsyncFramePointer();
+  Options.ThreadModel = getThreadModel(OptsCtx);
+  Options.EABIVersion = getEABIVersion(OptsCtx);
+  Options.DebuggerTuning = getDebuggerTuningOpt(OptsCtx);
+  Options.SwiftAsyncFramePointer = getSwiftAsyncFramePointer(OptsCtx);
   return Options;
 }
 
-std::string codegen::getCPUStr() {
-  std::string MCPU = getMCPU();
+std::string codegen::getCPUStr(const clv2::OptionsContext &Ctx) {
+  std::string MCPU = getMCPU(Ctx);
 
   // If user asked for the 'native' CPU, autodetect here. If auto-detection
   // fails, this will set the CPU to an empty string which tells the target to
@@ -647,8 +254,8 @@ std::string codegen::getCPUStr() {
   return MCPU;
 }
 
-std::string codegen::getTuneCPUStr() {
-  std::string TuneCPU = getMTune();
+std::string codegen::getTuneCPUStr(const clv2::OptionsContext &Ctx) {
+  std::string TuneCPU = getMTune(Ctx);
 
   // If user asked for the 'native' tune CPU, autodetect here. If auto-detection
   // fails, this will set the tune CPU to an empty string which tells the target
@@ -659,35 +266,36 @@ std::string codegen::getTuneCPUStr() {
   return TuneCPU;
 }
 
-std::string codegen::getFeaturesStr() {
+std::string codegen::getFeaturesStr(const clv2::OptionsContext &Ctx) {
   SubtargetFeatures Features;
 
   // If user asked for the 'native' CPU, we need to autodetect features.
   // This is necessary for x86 where the CPU might not support all the
   // features the autodetected CPU name lists in the target. For example,
   // not all Sandybridge processors support AVX.
-  if (getMCPU() == "native")
+  if (getMCPU(Ctx) == "native")
     for (const auto &[Feature, IsEnabled] : sys::getHostCPUFeatures())
       Features.AddFeature(Feature, IsEnabled);
 
-  for (auto const &MAttr : getMAttrs())
+  for (auto const &MAttr : getMAttrs(Ctx))
     Features.AddFeature(MAttr);
 
   return Features.getString();
 }
 
-std::vector<std::string> codegen::getFeatureList() {
+std::vector<std::string>
+codegen::getFeatureList(const clv2::OptionsContext &Ctx) {
   SubtargetFeatures Features;
 
   // If user asked for the 'native' CPU, we need to autodetect features.
   // This is necessary for x86 where the CPU might not support all the
   // features the autodetected CPU name lists in the target. For example,
   // not all Sandybridge processors support AVX.
-  if (getMCPU() == "native")
+  if (getMCPU(Ctx) == "native")
     for (const auto &[Feature, IsEnabled] : sys::getHostCPUFeatures())
       Features.AddFeature(Feature, IsEnabled);
 
-  for (auto const &MAttr : getMAttrs())
+  for (auto const &MAttr : getMAttrs(Ctx))
     Features.AddFeature(MAttr);
 
   return Features.getFeatures();
@@ -696,12 +304,6 @@ std::vector<std::string> codegen::getFeatureList() {
 void codegen::renderBoolStringAttr(AttrBuilder &B, StringRef Name, bool Val) {
   B.addAttribute(Name, Val ? "true" : "false");
 }
-
-#define HANDLE_BOOL_ATTR(CL, AttrName)                                         \
-  do {                                                                         \
-    if (CL->getNumOccurrences() > 0 && !F.hasFnAttribute(AttrName))            \
-      renderBoolStringAttr(NewAttrs, AttrName, *CL);                           \
-  } while (0)
 
 void codegen::setFunctionAttributes(Function &F, StringRef CPU,
                                     StringRef Features, StringRef TuneCPU) {
@@ -726,30 +328,32 @@ void codegen::setFunctionAttributes(Function &F, StringRef CPU,
       NewAttrs.addAttribute("target-features", Appended);
     }
   }
-  if (FramePointerUsageView->getNumOccurrences() > 0 &&
+  const clv2::OptionsContext &OptsCtx = F.getContext().getOptionsContext();
+  if (clv2::wasOptSpecified<&clv2::CG_FramePointer>(OptsCtx) &&
       !F.hasFnAttribute("frame-pointer")) {
-    if (getFramePointerUsage() == FramePointerKind::All)
+    if (getFramePointerUsage(OptsCtx) == FramePointerKind::All)
       NewAttrs.addAttribute("frame-pointer", "all");
-    else if (getFramePointerUsage() == FramePointerKind::NonLeaf)
+    else if (getFramePointerUsage(OptsCtx) == FramePointerKind::NonLeaf)
       NewAttrs.addAttribute("frame-pointer", "non-leaf");
-    else if (getFramePointerUsage() == FramePointerKind::NonLeafNoReserve)
+    else if (getFramePointerUsage(OptsCtx) ==
+             FramePointerKind::NonLeafNoReserve)
       NewAttrs.addAttribute("frame-pointer", "non-leaf-no-reserve");
-    else if (getFramePointerUsage() == FramePointerKind::Reserved)
+    else if (getFramePointerUsage(OptsCtx) == FramePointerKind::Reserved)
       NewAttrs.addAttribute("frame-pointer", "reserved");
-    else if (getFramePointerUsage() == FramePointerKind::None)
+    else if (getFramePointerUsage(OptsCtx) == FramePointerKind::None)
       NewAttrs.addAttribute("frame-pointer", "none");
   }
-  if (DisableTailCallsView->getNumOccurrences() > 0)
+  if (clv2::wasOptSpecified<&clv2::CG_DisableTailCalls>(OptsCtx))
     NewAttrs.addAttribute("disable-tail-calls",
-                          toStringRef(getDisableTailCalls()));
-  if (getStackRealign())
+                          toStringRef(getDisableTailCalls(OptsCtx)));
+  if (getStackRealign(OptsCtx))
     NewAttrs.addAttribute("stackrealign");
 
-  if ((DenormalFPMathView->getNumOccurrences() > 0 ||
-       DenormalFP32MathView->getNumOccurrences() > 0) &&
+  if ((clv2::wasOptSpecified<&clv2::CG_DenormalFPMath>(OptsCtx) ||
+       clv2::wasOptSpecified<&clv2::CG_DenormalFP32Math>(OptsCtx)) &&
       !F.hasFnAttribute(Attribute::DenormalFPEnv)) {
-    DenormalMode::DenormalModeKind DenormKind = getDenormalFPMath();
-    DenormalMode::DenormalModeKind DenormKindF32 = getDenormalFP32Math();
+    DenormalMode::DenormalModeKind DenormKind = getDenormalFPMath(OptsCtx);
+    DenormalMode::DenormalModeKind DenormKindF32 = getDenormalFP32Math(OptsCtx);
 
     DenormalFPEnv FPEnv(DenormalMode{DenormKind, DenormKind},
                         DenormalMode{DenormKindF32, DenormKindF32});
@@ -757,15 +361,15 @@ void codegen::setFunctionAttributes(Function &F, StringRef CPU,
     NewAttrs.addDenormalFPEnvAttr(FPEnv);
   }
 
-  if (TrapFuncNameView->getNumOccurrences() > 0)
+  if (clv2::wasOptSpecified<&clv2::CG_TrapFuncName>(OptsCtx))
     for (auto &B : F)
       for (auto &I : B)
         if (auto *Call = dyn_cast<CallInst>(&I))
           if (const auto *F = Call->getCalledFunction())
             if (F->getIntrinsicID() == Intrinsic::debugtrap ||
                 F->getIntrinsicID() == Intrinsic::trap)
-              Call->addFnAttr(
-                  Attribute::get(Ctx, "trap-func-name", getTrapFuncName()));
+              Call->addFnAttr(Attribute::get(Ctx, "trap-func-name",
+                                             getTrapFuncName(OptsCtx)));
 
   // Let NewAttrs override Attrs.
   F.setAttributes(Attrs.addFnAttributes(Ctx, NewAttrs));
@@ -774,7 +378,8 @@ void codegen::setFunctionAttributes(Function &F, StringRef CPU,
 void codegen::setFunctionAttributes(Module &M, StringRef CPU,
                                     StringRef Features, StringRef TuneCPU) {
   // Synthesize the "float-abi" module flag from the -float-abi option.
-  FloatABI::ABIType ABI = getFloatABIForCalls();
+  FloatABI::ABIType ABI =
+      getFloatABIForCalls(M.getContext().getOptionsContext());
   if (ABI != FloatABI::Default) {
     if (auto *Existing =
             dyn_cast_or_null<MDString>(M.getModuleFlag("float-abi"))) {
@@ -798,19 +403,22 @@ void codegen::setFunctionAttributes(Module &M, StringRef CPU,
 
 Expected<std::unique_ptr<TargetMachine>>
 codegen::createTargetMachineForTriple(const Triple &TargetTriple,
+                                      const clv2::OptionsContext &OptsCtx,
                                       CodeGenOptLevel OptLevel) {
   // lookupTarget may mutate the triple, so we need a copy.
   Triple TheTriple(TargetTriple);
   std::string Error;
-  const auto *TheTarget =
-      TargetRegistry::lookupTarget(codegen::getMArch(), TheTriple, Error);
+  const auto *TheTarget = TargetRegistry::lookupTarget(
+      codegen::getMArch(OptsCtx), TheTriple, Error);
   if (!TheTarget)
     return createStringError(inconvertibleErrorCode(), Error);
+  auto Options = codegen::InitTargetOptionsFromCodeGenFlags(TheTriple, OptsCtx);
+  Options.MCOptions.OptsCtx = &OptsCtx;
+  Options.OptsCtx = &OptsCtx;
   auto *Target = TheTarget->createTargetMachine(
-      TheTriple, codegen::getCPUStr(), codegen::getFeaturesStr(),
-      codegen::InitTargetOptionsFromCodeGenFlags(TheTriple),
-      codegen::getExplicitRelocModel(), codegen::getExplicitCodeModel(),
-      OptLevel);
+      TheTriple, codegen::getCPUStr(OptsCtx), codegen::getFeaturesStr(OptsCtx),
+      Options, codegen::getExplicitRelocModel(OptsCtx),
+      codegen::getExplicitCodeModel(OptsCtx), OptLevel);
   if (!Target)
     return createStringError(inconvertibleErrorCode(),
                              Twine("could not allocate target machine for ") +
@@ -818,15 +426,16 @@ codegen::createTargetMachineForTriple(const Triple &TargetTriple,
   return std::unique_ptr<TargetMachine>(Target);
 }
 
-void codegen::MaybeEnableStatistics() {
-  if (getSaveStats() == SaveStatsMode::None)
+void codegen::MaybeEnableStatistics(const clv2::OptionsContext &Ctx) {
+  if (getSaveStats(Ctx) == SaveStatsMode::None)
     return;
 
   llvm::EnableStatistics(false);
 }
 
-int codegen::MaybeSaveStatistics(StringRef OutputFilename, StringRef ToolName) {
-  auto SaveStatsValue = getSaveStats();
+int codegen::MaybeSaveStatistics(StringRef OutputFilename, StringRef ToolName,
+                                 const clv2::OptionsContext &Ctx) {
+  auto SaveStatsValue = getSaveStats(Ctx);
   if (SaveStatsValue == codegen::SaveStatsMode::None)
     return 0;
 

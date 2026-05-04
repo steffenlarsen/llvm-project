@@ -17,7 +17,9 @@
 #include "llvm/ExecutionEngine/Orc/ExecutionUtils.h"
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
 #include "llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -175,12 +177,13 @@ private:
   }
 };
 
-static cl::opt<std::string>
-    EntryPointName("entry", cl::desc("Symbol to call as main entry point"),
-                   cl::init("entry"));
+static constexpr clv2::OptionInfo<std::string> EntryPointNameOpt{
+    "entry", "Symbol to call as main entry point", clv2::Init{"entry"}};
+static constexpr clv2::ListOptionInfo<std::string> InputObjectsOpt{
+    "", "input objects", clv2::Positional{}, clv2::ZeroOrMore};
 
-static cl::list<std::string> InputObjects(cl::Positional,
-                                          cl::desc("input objects"));
+static constexpr clv2::OptionsRegistry<&EntryPointNameOpt, &InputObjectsOpt>
+    ObjLinkingReg;
 
 int main(int argc, char *argv[]) {
   // Initialize LLVM.
@@ -189,8 +192,15 @@ int main(int argc, char *argv[]) {
   InitializeNativeTarget();
   InitializeNativeTargetAsmPrinter();
 
-  cl::ParseCommandLineOptions(argc, argv, "LLJITWithObjectLinkingLayerPlugin");
+  clv2::OptionParser P;
+  P.add<&ObjLinkingReg>();
+  RegisterAllLLVMOptions(P);
+  auto OptsCtx = P.parse(argc, argv, "LLJITWithObjectLinkingLayerPlugin");
+  auto *Opts = OptsCtx->getViewPtr<&ObjLinkingReg>();
   ExitOnErr.setBanner(std::string(argv[0]) + ": ");
+
+  auto EntryPointName = std::string(Opts->get<&EntryPointNameOpt>());
+  const auto &InputObjects = Opts->get<&InputObjectsOpt>();
 
   // Detect the host and set code model to small.
   auto JTMB = ExitOnErr(JITTargetMachineBuilder::detectHost());

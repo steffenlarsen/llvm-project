@@ -15,8 +15,10 @@
 
 #include "llvm/Pass.h"
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Target/CGPassBuilderOption.h"
 #include <cassert>
 #include <string>
 
@@ -167,30 +169,32 @@ public:
 
   /// Returns true if one of the `-start-after`, `-start-before`, `-stop-after`
   /// or `-stop-before` options is set.
-  static bool hasLimitedCodeGenPipeline();
+  static bool hasLimitedCodeGenPipeline(const clv2::OptionsContext &Ctx);
 
   /// Returns true if none of the `-stop-before` and `-stop-after` options is
   /// set.
-  static bool willCompleteCodeGenPipeline();
+  static bool willCompleteCodeGenPipeline(const clv2::OptionsContext &Ctx);
 
   /// If hasLimitedCodeGenPipeline is true, this method returns
   /// a string with the name of the options that caused this
   /// pipeline to be limited.
-  static std::string getLimitedCodeGenPipelineReason();
+  static std::string
+  getLimitedCodeGenPipelineReason(const clv2::OptionsContext &Ctx);
 
   struct StartStopInfo {
     bool StartAfter;
     bool StopAfter;
     unsigned StartInstanceNum;
     unsigned StopInstanceNum;
-    StringRef StartPass;
-    StringRef StopPass;
+    std::string StartPass;
+    std::string StopPass;
   };
 
   /// Returns pass name in `-stop-before` or `-stop-after`
   /// NOTE: New pass manager migration only
   static Expected<StartStopInfo>
-  getStartStopInfo(PassInstrumentationCallbacks &PIC);
+  getStartStopInfo(PassInstrumentationCallbacks &PIC,
+                   const clv2::OptionsContext &Ctx);
 
   void setDisableVerify(bool Disable) { setOpt(DisableVerify, Disable); }
 
@@ -473,6 +477,11 @@ protected:
 
 LLVM_ABI void registerCodeGenCallback(PassInstrumentationCallbacks &PIC,
                                       TargetMachine &);
+
+/// Override the values returned by \c getCGPassBuilderOption() with \p V.
+/// Call this after option parsing, before any CodeGen pass pipeline setup.
+/// When set, \c getCGPassBuilderOption() returns \p V directly.
+LLVM_ABI void setTPCValues(const CGPassBuilderOption &V);
 
 } // end namespace llvm
 

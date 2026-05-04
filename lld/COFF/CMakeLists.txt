@@ -23,6 +23,7 @@ add_lld_library(lldCOFF
   Writer.cpp
 
   LINK_COMPONENTS
+  AllOptions
   ${LLVM_TARGETS_TO_BUILD}
   BinaryFormat
   BitWriter

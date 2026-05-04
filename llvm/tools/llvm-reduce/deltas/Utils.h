@@ -13,15 +13,13 @@
 #ifndef LLVM_TOOLS_LLVM_REDUCE_DELTAS_UTILS_H
 #define LLVM_TOOLS_LLVM_REDUCE_DELTAS_UTILS_H
 
-#include "llvm/Support/CommandLine.h"
+#include "llvm/ADT/ArrayRef.h"
 
 namespace llvm {
 class BasicBlock;
 class Function;
 class Type;
 class Value;
-
-extern cl::opt<bool> Verbose;
 
 Value *getDefaultValue(Type *T);
 bool hasAliasUse(Function &F);

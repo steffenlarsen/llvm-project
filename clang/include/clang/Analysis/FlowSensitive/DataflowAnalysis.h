@@ -328,7 +328,11 @@ diagnoseFunction(const FunctionDecl &FuncDecl, ASTContext &ASTCtx,
     return Context.takeError();
 
   auto Solver = std::make_unique<WatchedLiteralsSolver>(MaxSATIterations);
-  DataflowAnalysisContext AnalysisContext(*Solver);
+  DataflowAnalysisContext::Options DACtxOpts;
+  // Let the framework resolve -dataflow-log from this compilation's options
+  // rather than from a process-wide global.
+  DACtxOpts.OptCtx = &ASTCtx.getOptionsContext();
+  DataflowAnalysisContext AnalysisContext(*Solver, DACtxOpts);
   Environment Env(AnalysisContext, FuncDecl);
   AnalysisT Analysis = createAnalysis<AnalysisT>(ASTCtx, Env);
   llvm::SmallVector<Diagnostic> Diagnostics;

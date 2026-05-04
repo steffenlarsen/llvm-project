@@ -52,9 +52,14 @@ static MCRegisterInfo *createAVRMCRegisterInfo(const Triple &TT) {
   return X;
 }
 
-static MCSubtargetInfo *createAVRMCSubtargetInfo(const Triple &TT,
-                                                 StringRef CPU, StringRef FS) {
-  return createAVRMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+static MCSubtargetInfo *
+createAVRMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                         const llvm::clv2::OptionsContext &Ctx) {
+  MCSubtargetInfo *STI =
+      createAVRMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+  if (STI)
+    STI->setOptionsContext(Ctx);
+  return STI;
 }
 
 static MCInstPrinter *createAVRMCInstPrinter(const Triple &T,

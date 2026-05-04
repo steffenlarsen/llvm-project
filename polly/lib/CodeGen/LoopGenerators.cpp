@@ -12,54 +12,20 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/CodeGen/LoopGenerators.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopDetection.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 using namespace llvm;
 using namespace polly;
 
-int polly::PollyNumThreads;
-OMPGeneralSchedulingType polly::PollyScheduling;
-int polly::PollyChunkSize;
-
-static cl::opt<int, true>
-    XPollyNumThreads("polly-num-threads",
-                     cl::desc("Number of threads to use (0 = auto)"),
-                     cl::Hidden, cl::location(polly::PollyNumThreads),
-                     cl::init(0), cl::cat(PollyCategory));
-
-cl::opt<bool> PollyVectorizeMetadata(
-    "polly-annotate-metadata-vectorize",
-    cl::desc("Append vectorize enable/disable metadata from polly"),
-    cl::init(false), cl::ZeroOrMore, cl::cat(PollyCategory));
-
-static cl::opt<OMPGeneralSchedulingType, true> XPollyScheduling(
-    "polly-scheduling",
-    cl::desc("Scheduling type of parallel OpenMP for loops"),
-    cl::values(clEnumValN(OMPGeneralSchedulingType::StaticChunked, "static",
-                          "Static scheduling"),
-               clEnumValN(OMPGeneralSchedulingType::Dynamic, "dynamic",
-                          "Dynamic scheduling"),
-               clEnumValN(OMPGeneralSchedulingType::Guided, "guided",
-                          "Guided scheduling"),
-               clEnumValN(OMPGeneralSchedulingType::Runtime, "runtime",
-                          "Runtime determined (OMP_SCHEDULE)")),
-    cl::Hidden, cl::location(polly::PollyScheduling),
-    cl::init(OMPGeneralSchedulingType::Runtime), cl::Optional,
-    cl::cat(PollyCategory));
-
-static cl::opt<int, true>
-    XPollyChunkSize("polly-scheduling-chunksize",
-                    cl::desc("Chunksize to use by the OpenMP runtime calls"),
-                    cl::Hidden, cl::location(polly::PollyChunkSize),
-                    cl::init(0), cl::Optional, cl::cat(PollyCategory));
 
 // We generate a loop of either of the following structures:
 //
@@ -170,10 +136,14 @@ Value *polly::createLoop(Value *LB, Value *UB, Value *Stride,
   // (LoopVectDisabled). For dist=1 FP loops (SkipVectorizeEnableMetadata), omit
   // the annotation and let the Loop Vectorizer decide.
   if (Annotator) {
+    bool VecMeta = false;
+    if (auto *Opts =
+            polly_opts::getPollyOpts(F->getContext().getOptionsContext()))
+      VecMeta = Opts->get<&llvm::clv2::POLLY_AnnotateMetadataVectorize>();
     std::optional<bool> EnableVectorizeMetadata;
     if (LoopVectDisabled)
       EnableVectorizeMetadata = false;
-    else if (PollyVectorizeMetadata && !SkipVectorizeEnableMetadata)
+    else if (VecMeta && !SkipVectorizeEnableMetadata)
       EnableVectorizeMetadata = true;
     Annotator->annotateLoopLatch(B, Parallel, EnableVectorizeMetadata);
   }

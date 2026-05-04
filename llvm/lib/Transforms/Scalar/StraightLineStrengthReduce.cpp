@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- StraightLineStrengthReduce.cpp - -----------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -118,9 +120,10 @@ DEBUG_COUNTER(StraightLineStrengthReduceCounter, "slsr-counter",
               "Controls whether rewriteCandidate is executed.");
 
 // Only for testing.
-static cl::opt<bool>
-    EnablePoisonReuseGuard("enable-poison-reuse-guard", cl::init(true),
-                           cl::desc("Enable poison-reuse guard"));
+static bool getEnablePoisonReuseGuard(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_EnablePoisonReuseGuard>(
+      F.getContext().getOptionsContext());
+}
 
 STATISTIC(NumSCEVCandidateBasisDifferences,
           "Number of candidate-basis SCEV differences computed by SLSR");
@@ -759,7 +762,11 @@ bool StraightLineStrengthReduce::hasSameSCEVUnknowns(const SCEV *A,
 bool StraightLineStrengthReduce::candidatePredicate(Candidate *Basis,
                                                     Candidate &C,
                                                     Candidate::DKind K) {
-  if (!isSimilar(C, *Basis, K))
+  SmallVector<Instruction *> DropPoisonGeneratingInsts;
+  if (!isSimilar(C, *Basis, K) ||
+      (getEnablePoisonReuseGuard(*C.Ins->getFunction()) &&
+       !SE->canReuseInstruction(SE->getSCEV(Basis->Ins), Basis->Ins,
+                                DropPoisonGeneratingInsts)))
     return false;
 
   // Once a reusable delta is found, only a constant delta can improve it.
@@ -1103,7 +1110,7 @@ void StraightLineStrengthReduce::allocateCandidatesAndFindBasis(
   // doing this early we avoid calling canReuseInstruction repeatedly for the
   // same instruction. The DropList is stored on the Candidate so
   // candidatePredicate can drop the flags when a rewrite is being done.
-  if (!EnablePoisonReuseGuard ||
+  if (!getEnablePoisonReuseGuard(*C.Ins->getFunction()) ||
       SE->canReuseInstruction(SE->getSCEV(I), I, Candidates.back().DropList)) {
     CandidateDict.add(Candidates.back());
   }

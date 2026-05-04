@@ -29,6 +29,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/Dwarf.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/LexicalScopes.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/LiveIntervals.h"
@@ -52,8 +53,9 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -67,9 +69,9 @@ using namespace llvm;
 
 #define DEBUG_TYPE "livedebugvars"
 
-static cl::opt<bool>
-EnableLDV("live-debug-variables", cl::init(true),
-          cl::desc("Enable the live debug variables pass"), cl::Hidden);
+static bool getLiveDebugVariables(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_LiveDebugVariables>(Ctx);
+}
 
 STATISTIC(NumInsertedDebugValues, "Number of DBG_VALUEs inserted");
 STATISTIC(NumInsertedDebugLabels, "Number of DBG_LABELs inserted");
@@ -1349,7 +1351,7 @@ bool LiveDebugVariables::invalidate(
 }
 
 void LiveDebugVariables::analyze(MachineFunction &MF, LiveIntervals *LIS) {
-  if (!EnableLDV)
+  if (!getLiveDebugVariables(MF.getFunction().getContext().getOptionsContext()))
     return;
   if (!MF.getFunction().getSubprogram()) {
     removeDebugInstrs(MF);

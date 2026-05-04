@@ -15,15 +15,17 @@
 
 #include "llvm/Analysis/CallPrinter.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/HeatUtils.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/DOTGraphTraits.h"
 #include "llvm/Support/GraphWriter.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -34,21 +36,26 @@ template <class GraphType> struct GraphTraits;
 // This option shows static (relative) call counts.
 // FIXME:
 // Need to show real counts when profile data is available
-static cl::opt<bool> ShowHeatColors("callgraph-heat-colors", cl::init(false),
-                                    cl::Hidden,
-                                    cl::desc("Show heat colors in call-graph"));
 
-static cl::opt<bool>
-    ShowEdgeWeight("callgraph-show-weights", cl::init(false), cl::Hidden,
-                       cl::desc("Show edges labeled with weights"));
+static bool getCallGraphShowHeatColors(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::AN_CallGraphHeatColors>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    CallMultiGraph("callgraph-multigraph", cl::init(false), cl::Hidden,
-            cl::desc("Show call-multigraph (do not remove parallel edges)"));
+static bool getCallGraphShowEdgeWeight(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::AN_CallGraphShowWeights>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<std::string> CallGraphDotFilenamePrefix(
-    "callgraph-dot-filename-prefix", cl::Hidden,
-    cl::desc("The prefix used for the CallGraph dot file names."));
+static bool getCallMultiGraph(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::AN_CallMultiGraph>(
+      M.getContext().getOptionsContext());
+}
+
+static std::string getCallGraphDotFilenamePrefix(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::AN_CallGraphDotFilenamePrefix>(
+      M.getContext().getOptionsContext());
+}
 
 namespace llvm {
 
@@ -79,7 +86,7 @@ public:
         MaxFreq = localSumFreq;
       Freq[&F] = localSumFreq;
     }
-    if (!CallMultiGraph)
+    if (!getCallMultiGraph(*M))
       removeParallelEdges();
   }
 
@@ -150,7 +157,7 @@ struct DOTGraphTraits<CallGraphDOTInfo *> : public DefaultDOTGraphTraits {
 
   static bool isNodeHidden(const CallGraphNode *Node,
                            const CallGraphDOTInfo *CGInfo) {
-    if (CallMultiGraph || Node->getFunction())
+    if (getCallMultiGraph(*CGInfo->getModule()) || Node->getFunction())
       return false;
     return true;
   }
@@ -177,7 +184,7 @@ struct DOTGraphTraits<CallGraphDOTInfo *> : public DefaultDOTGraphTraits {
 
   std::string getEdgeAttributes(const CallGraphNode *Node, nodes_iterator I,
                                 CallGraphDOTInfo *CGInfo) {
-    if (!ShowEdgeWeight)
+    if (!getCallGraphShowEdgeWeight(*CGInfo->getModule()))
       return "";
 
     Function *Caller = Node->getFunction();
@@ -202,7 +209,7 @@ struct DOTGraphTraits<CallGraphDOTInfo *> : public DefaultDOTGraphTraits {
     if (F == nullptr)
       return "";
     std::string attrs;
-    if (ShowHeatColors) {
+    if (getCallGraphShowHeatColors(*CGInfo->getModule())) {
       uint64_t freq = CGInfo->getFreq(F);
       std::string color = getHeatColor(freq, CGInfo->getMaxFreq());
       std::string edgeColor = (freq <= (CGInfo->getMaxFreq() / 2))
@@ -221,8 +228,9 @@ namespace {
 void doCallGraphDOTPrinting(
     Module &M, function_ref<BlockFrequencyInfo *(Function &)> LookupBFI) {
   std::string Filename;
-  if (!CallGraphDotFilenamePrefix.empty())
-    Filename = (CallGraphDotFilenamePrefix + ".callgraph.dot");
+  std::string DotFilenamePrefix = getCallGraphDotFilenamePrefix(M);
+  if (!DotFilenamePrefix.empty())
+    Filename = (DotFilenamePrefix + ".callgraph.dot");
   else
     Filename = (std::string(M.getModuleIdentifier()) + ".callgraph.dot");
   errs() << "Writing '" << Filename << "'...";

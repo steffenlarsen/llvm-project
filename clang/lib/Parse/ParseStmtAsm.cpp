@@ -28,6 +28,7 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SourceMgr.h"
 using namespace clang;
 
@@ -555,8 +556,9 @@ StmtResult Parser::ParseMicrosoftAsmStatement(SourceLocation AsmLoc) {
       TheTarget->createMCAsmInfo(*MRI, TheTriple, MCOptions));
   // Get the instruction descriptor.
   std::unique_ptr<llvm::MCInstrInfo> MII(TheTarget->createMCInstrInfo());
-  std::unique_ptr<llvm::MCSubtargetInfo> STI(
-      TheTarget->createMCSubtargetInfo(TheTriple, TO.CPU, FeaturesStr));
+  std::unique_ptr<llvm::MCSubtargetInfo> STI(TheTarget->createMCSubtargetInfo(
+      TheTriple, TO.CPU, FeaturesStr,
+      /*Ctx=*/llvm::clv2::defaultOptionsContext()));
   // Target MCTargetDesc may not be linked in clang-based tools.
 
   if (!MAI || !MII || !STI) {

@@ -22,29 +22,33 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/CGData/CGDataOptionsOptInfos.h"
 #include "llvm/CGData/CodeGenData.h"
 #include "llvm/CodeGen/Analysis.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/AutoUpgrade.h"
 #include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/IROptionsOptInfos.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMRemarkStreamer.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/IR/Metadata.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/RuntimeLibcalls.h"
 #include "llvm/LTO/LTOBackend.h"
+#include "llvm/LTO/LTOOptionsOptInfos.h"
 #include "llvm/Linker/IRMover.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/IRObjectFile.h"
 #include "llvm/Support/Caching.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/SHA1.h"
@@ -58,6 +62,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 #include "llvm/Transforms/IPO/MemProfContextDisambiguation.h"
 #include "llvm/Transforms/IPO/WholeProgramDevirt.h"
 #include "llvm/Transforms/Utils/FunctionImportUtils.h"
@@ -67,6 +72,7 @@
 #include <set>
 
 using namespace llvm;
+using namespace llvm::clv2;
 using namespace lto;
 using namespace object;
 
@@ -105,32 +111,28 @@ void LTO::emitRemark(OptimizationRemark &Remark) {
   ORE.emit(Remark);
 }
 
-static cl::opt<bool>
-    DumpThinCGSCCs("dump-thin-cg-sccs", cl::init(false), cl::Hidden,
-                   cl::desc("Dump the SCCs in the ThinLTO index's callgraph"));
-namespace llvm {
-extern cl::opt<bool> CodeGenDataThinLTOTwoRounds;
-extern cl::opt<bool> ForceImportAll;
-extern cl::opt<bool> AlwaysRenamePromotedLocals;
-} // end namespace llvm
+static bool getDumpThinCGSCCs(const Module &M) {
+  return clv2::getOptValIfSpecified<&clv2::LTOOptsReg,
+                                    &clv2::LTO_DumpThinCGSCCs>(
+      M.getContext().getOptionsContext(), false);
+}
 
-namespace llvm {
-/// Enable global value internalization in LTO.
-cl::opt<bool> EnableLTOInternalization(
-    "enable-lto-internalization", cl::init(true), cl::Hidden,
-    cl::desc("Enable global value internalization in LTO"));
+static bool getEnableLTOInternalization(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::LTO_EnableInternalization>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    LTOKeepSymbolCopies("lto-keep-symbol-copies", cl::init(false), cl::Hidden,
-                        cl::desc("Keep copies of symbols in LTO indexing"));
+// Overload for contexts without IR Module (e.g. summary-based
+// internalization). Reads from the Config's OptionsContext.
+static bool getEnableLTOInternalization(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::LTO_EnableInternalization>(Ctx);
+}
 
-/// Indicate we are linking with an allocator that supports hot/cold operator
-/// new interfaces.
-extern cl::opt<bool> SupportsHotColdNew;
-
-/// Enable MemProf context disambiguation for thin link.
-extern cl::opt<bool> EnableMemProfContextDisambiguation;
-} // namespace llvm
+static bool getLTOKeepSymbolCopies(const Module &M) {
+  return clv2::getOptValIfSpecified<&clv2::LTOOptsReg,
+                                    &clv2::LTO_KeepSymbolCopies>(
+      M.getContext().getOptionsContext(), false);
+}
 
 // Computes a unique hash for the Module considering the current list of
 // export/import and other global analysis results.
@@ -274,7 +276,8 @@ std::string llvm::computeLTOCacheKey(
   };
 
   auto AddUsedThings = [&](GlobalValueSummary *GS) {
-    if (!GS) return;
+    if (!GS)
+      return;
     AddUnsigned(GS->getVisibility());
     AddUnsigned(GS->isLive());
     AddUnsigned(GS->canAutoHide());
@@ -460,7 +463,8 @@ static void thinLTOResolvePrevailingGUID(
     // Also, if the symbol was promoted, it wouldn't have a prevailing variant,
     // but also its linkage is set correctly (to External) already.
     else if (!isa<AliasSummary>(S.get()) &&
-             !GlobalInvolvedWithAlias.count(S.get()) && !ForceImportAll &&
+             !GlobalInvolvedWithAlias.count(S.get()) &&
+             !clv2::getOptValOrDefault<&clv2::IPO_ForceImportAll>(*C.OptsCtx) &&
              !S->wasPromoted())
       S->setLinkage(GlobalValue::AvailableExternallyLinkage);
 
@@ -517,7 +521,8 @@ static void thinLTOInternalizeAndPromoteGUID(
     ValueInfo VI, function_ref<bool(StringRef, ValueInfo)> isExported,
     function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
         isPrevailing,
-    DenseSet<StringRef> *ExternallyVisibleSymbolNamesPtr) {
+    DenseSet<StringRef> *ExternallyVisibleSymbolNamesPtr,
+    const clv2::OptionsContext &OptsCtx) {
   // Before performing index-based internalization and promotion for this GUID,
   // the local flag should be consistent with the summary list linkage types.
   VI.verifyLocal();
@@ -548,7 +553,7 @@ static void thinLTOInternalizeAndPromoteGUID(
     }
 
     // Otherwise, see if we can internalize.
-    if (!EnableLTOInternalization)
+    if (!getEnableLTOInternalization(OptsCtx))
       continue;
 
     // Non-exported values with external linkage can be internalized.
@@ -614,23 +619,25 @@ void llvm::thinLTOInternalizeAndPromoteInIndex(
     function_ref<bool(StringRef, ValueInfo)> isExported,
     function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
         isPrevailing,
+    const clv2::OptionsContext &OptsCtx,
     DenseSet<StringRef> *ExternallyVisibleSymbolNamesPtr) {
   assert(!Index.withInternalizeAndPromote());
 
   for (auto &I : Index)
     thinLTOInternalizeAndPromoteGUID(Index.getValueInfo(I), isExported,
                                      isPrevailing,
-                                     ExternallyVisibleSymbolNamesPtr);
+                                     ExternallyVisibleSymbolNamesPtr, OptsCtx);
   Index.setWithInternalizeAndPromote();
 }
 
 // Requires a destructor for std::vector<InputModule>.
 InputFile::~InputFile() = default;
 
-Expected<std::unique_ptr<InputFile>> InputFile::create(MemoryBufferRef Object) {
+Expected<std::unique_ptr<InputFile>>
+InputFile::create(MemoryBufferRef Object, const clv2::OptionsContext &Ctx) {
   std::unique_ptr<InputFile> File(new InputFile);
 
-  Expected<IRSymtabFile> FOrErr = readIRSymtab(Object);
+  Expected<IRSymtabFile> FOrErr = readIRSymtab(Object, Ctx);
   if (!FOrErr)
     return FOrErr.takeError();
 
@@ -666,9 +673,7 @@ bool InputFile::Symbol::isLibcall(
   return Libcalls.getSupportedLibcallImpl(IRName) != RTLIB::Unsupported;
 }
 
-StringRef InputFile::getName() const {
-  return Mods[0].getModuleIdentifier();
-}
+StringRef InputFile::getName() const { return Mods[0].getModuleIdentifier(); }
 
 BitcodeModule &InputFile::getSingleBitcodeModule() {
   assert(Mods.size() == 1 && "Expect only one bitcode module");
@@ -698,7 +703,8 @@ LTO::LTO(Config Conf, ThinBackend Backend,
       GlobalResolutions(
           std::make_unique<DenseMap<StringRef, GlobalResolution>>()),
       LTOMode(LTOMode) {
-  if (Conf.KeepSymbolNameCopies || LTOKeepSymbolCopies) {
+  if (Conf.KeepSymbolNameCopies ||
+      getLTOKeepSymbolCopies(*RegularLTO.CombinedModule)) {
     Alloc = std::make_unique<BumpPtrAllocator>();
     GlobalResolutionSymbolSaver = std::make_unique<llvm::StringSaver>(*Alloc);
   }
@@ -920,7 +926,8 @@ LTO::addModule(InputFile &Input, ArrayRef<SymbolResolution> InputRes,
 
   // Regular LTO module summaries are added to a dummy module that represents
   // the combined regular LTO module.
-  if (Error Err = BM.readSummary(ThinLTO.CombinedIndex, ""))
+  if (Error Err = BM.readSummary(ThinLTO.CombinedIndex, "", *Conf.OptsCtx,
+                                 /*IsPrevailing=*/nullptr))
     return Err;
   RegularLTO.ModsWithSummaries.push_back(std::move(ModOrErr->first));
   return Res;
@@ -1084,8 +1091,8 @@ LTO::addRegularLTO(InputFile &Input, ArrayRef<SymbolResolution> InputRes,
       if (R.FinalDefinitionInLinkageUnit) {
         GV->setDSOLocal(true);
         if (GV->hasDLLImportStorageClass())
-          GV->setDLLStorageClass(GlobalValue::DLLStorageClassTypes::
-                                 DefaultStorageClass);
+          GV->setDLLStorageClass(
+              GlobalValue::DLLStorageClassTypes::DefaultStorageClass);
       }
     } else if (auto *AS =
                    dyn_cast_if_present<ModuleSymbolTable::AsmSymbol *>(Msym)) {
@@ -1195,18 +1202,8 @@ LTO::addThinLTO(BitcodeModule BM, ArrayRef<InputFile::Symbol> Syms,
   // Track the GUIDs stored in the bitcode GUID table.
   StringMap<GlobalValue::GUID> IRSpecifiedGUIDs;
   if (Error Err = BM.readSummary(
-          ThinLTO.CombinedIndex, BMID,
-          [&](StringRef Name) { return (Prevailing.count(Name) > 0); },
-          [&](ValueInfo VI) {
-            auto IT = IRSpecifiedGUIDs.insert({VI.name(), VI.getGUID()});
-            (void)IT;
-            assert(IT.second);
-            if (auto GRIt = GlobalResolutions->find(VI.name());
-                GRIt != GlobalResolutions->end() &&
-                Prevailing.count(VI.name())) {
-              GRIt->second.setGUID(VI.getGUID());
-            }
-          }))
+          ThinLTO.CombinedIndex, BMID, *Conf.OptsCtx,
+          [&](StringRef Name) { return Prevailing.contains(Name); }))
     return Err;
   LLVM_DEBUG(dbgs() << "Module " << BMID << "\n");
 
@@ -1352,7 +1349,8 @@ Error LTO::run(AddStreamFn AddStream, FileCache Cache) {
     return It->second;
   };
   computeDeadSymbolsWithConstProp(ThinLTO.CombinedIndex, GUIDPreservedSymbols,
-                                  isPrevailing, Conf.OptLevel > 0);
+                                  isPrevailing, Conf.OptLevel > 0,
+                                  *Conf.OptsCtx);
 
   // Setup output file to emit statistics.
   auto StatsFileOrErr = setupStatsFile(Conf.StatsFile);
@@ -1368,7 +1366,7 @@ Error LTO::run(AddStreamFn AddStream, FileCache Cache) {
   // an internal option (which would still be needed for tests, however). For
   // example, if the library exported a symbol like __malloc_hot_cold the linker
   // could recognize that and set a flag in the lto::Config.
-  if (SupportsHotColdNew)
+  if (clv2::getOptValOrDefault<&clv2::IPO_SupportsHotColdNew>(*Conf.OptsCtx))
     ThinLTO.CombinedIndex.setWithSupportsHotColdNew();
 
   Error Result = runRegularLTO(AddStream);
@@ -1490,7 +1488,8 @@ Error LTO::runRegularLTO(AddStreamFn AddStream) {
 
       GV->setUnnamedAddr(R.second.UnnamedAddr ? GlobalValue::UnnamedAddr::Global
                                               : GlobalValue::UnnamedAddr::None);
-      if (EnableLTOInternalization && R.second.Partition == 0)
+      if (getEnableLTOInternalization(*RegularLTO.CombinedModule) &&
+          R.second.Partition == 0)
         GV->setLinkage(GlobalValue::InternalLinkage);
     }
 
@@ -1553,7 +1552,7 @@ Error ThinBackendProc::emitFiles(
   std::error_code EC;
   gatherImportedSummariesForModule(ModulePath, ModuleToDefinedGVSummaries,
                                    ImportList, ModuleToSummariesForIndex,
-                                   DeclarationSummaries);
+                                   DeclarationSummaries, *Conf.OptsCtx);
   // Resolve the output stream (either file-backed or callback-provided) for the
   // index file.
   std::unique_ptr<raw_pwrite_stream> OS;
@@ -1568,8 +1567,8 @@ Error ThinBackendProc::emitFiles(
     OS = std::move(FileOS);
   }
 
-  writeIndexToFile(CombinedIndex, *OS, &ModuleToSummariesForIndex,
-                   &DeclarationSummaries);
+  writeIndexToFile(CombinedIndex, *OS, *Conf.OptsCtx,
+                   &ModuleToSummariesForIndex, &DeclarationSummaries);
 
   // Emit imports files if requested, using callback if provided.
   if (Conf.GetImportsListOutputArray) {
@@ -2101,17 +2100,17 @@ Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
       ThinLTO.ModuleMap.size());
   StringMap<std::map<GlobalValue::GUID, GlobalValue::LinkageTypes>> ResolvedODR;
 
-  if (DumpThinCGSCCs)
+  if (getDumpThinCGSCCs(*RegularLTO.CombinedModule))
     ThinLTO.CombinedIndex.dumpSCCs(outs());
 
   std::set<GlobalValue::GUID> ExportedGUIDs;
 
   bool WholeProgramVisibilityEnabledInLTO =
-      Conf.HasWholeProgramVisibility &&
-      // If validation is enabled, upgrade visibility only when all vtables
-      // have typeinfos.
-      (!Conf.ValidateAllVtablesHaveTypeInfos || Conf.AllVtablesHaveTypeInfos);
-  if (hasWholeProgramVisibility(WholeProgramVisibilityEnabledInLTO))
+      hasWholeProgramVisibility(Conf.HasWholeProgramVisibility &&
+                                    (!Conf.ValidateAllVtablesHaveTypeInfos ||
+                                     Conf.AllVtablesHaveTypeInfos),
+                                /*M=*/nullptr, *Conf.OptsCtx);
+  if (WholeProgramVisibilityEnabledInLTO)
     ThinLTO.CombinedIndex.setWithWholeProgramVisibility();
 
   // If we're validating, get the vtable symbols that should not be
@@ -2137,7 +2136,7 @@ Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
   // the summaries before whole program devirtualization below.
   updateVCallVisibilityInIndex(
       ThinLTO.CombinedIndex, WholeProgramVisibilityEnabledInLTO,
-      DynamicExportSymbols, VisibleToRegularObjSymbols);
+      DynamicExportSymbols, VisibleToRegularObjSymbols, *Conf.OptsCtx);
 
   // Perform index-based WPD. This will return immediately if there are
   // no index entries in the typeIdMetadata map (e.g. if we are instead
@@ -2149,18 +2148,22 @@ Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
   // identifies symbols that should not be renamed during promotion.
   // It is non-null only when whole-program visibility is enabled and
   // renaming is not forced. Otherwise, the default renaming behavior applies.
+  bool AlwaysRename =
+      clv2::getOptValOrDefault<&IR_AlwaysRenamePromotedLocals>(*Conf.OptsCtx);
   DenseSet<StringRef> *ExternallyVisibleSymbolNamesPtr =
-      (WholeProgramVisibilityEnabledInLTO && !AlwaysRenamePromotedLocals)
+      (WholeProgramVisibilityEnabledInLTO && !AlwaysRename)
           ? &ExternallyVisibleSymbolNames
           : nullptr;
   runWholeProgramDevirtOnIndex(ThinLTO.CombinedIndex, ExportedGUIDs,
                                LocalWPDTargetsMap,
-                               ExternallyVisibleSymbolNamesPtr);
+                               ExternallyVisibleSymbolNamesPtr, *Conf.OptsCtx);
 
   auto isPrevailing = [&](GlobalValue::GUID GUID, const GlobalValueSummary *S) {
     return ThinLTO.isPrevailingModuleForGUID(GUID, S->modulePath());
   };
-  if (EnableMemProfContextDisambiguation) {
+  if (clv2::getOptValOr<&clv2::IPOOptsReg,
+                        &clv2::IPO_EnableMemProfContextDisambiguation>(
+          *Conf.OptsCtx, false)) {
     MemProfContextDisambiguation ContextDisambiguation;
     ContextDisambiguation.run(
         ThinLTO.CombinedIndex, isPrevailing, RegularLTO.Ctx,
@@ -2196,7 +2199,8 @@ Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
 
   if (Conf.OptLevel > 0)
     ComputeCrossModuleImport(ThinLTO.CombinedIndex, ModuleToDefinedGVSummaries,
-                             isPrevailing, ImportLists, ExportLists);
+                             isPrevailing, ImportLists, ExportLists,
+                             *Conf.OptsCtx);
 
   // Any functions referenced by the jump table in the regular LTO object must
   // be exported.
@@ -2234,7 +2238,7 @@ Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
   }
 
   thinLTOInternalizeAndPromoteInIndex(ThinLTO.CombinedIndex, isExported,
-                                      isPrevailing,
+                                      isPrevailing, *Conf.OptsCtx,
                                       ExternallyVisibleSymbolNamesPtr);
 
   auto recordNewLinkage = [&](StringRef ModuleIdentifier,
@@ -2245,7 +2249,8 @@ Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
   thinLTOResolvePrevailingInIndex(Conf, ThinLTO.CombinedIndex, isPrevailing,
                                   recordNewLinkage, GUIDPreservedSymbols);
 
-  thinLTOPropagateFunctionAttrs(ThinLTO.CombinedIndex, isPrevailing);
+  thinLTOPropagateFunctionAttrs(ThinLTO.CombinedIndex, isPrevailing,
+                                *Conf.OptsCtx);
 
   generateParamAccessSummary(ThinLTO.CombinedIndex);
 
@@ -2298,7 +2303,8 @@ Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
     return BackendProcess->wait();
   };
 
-  if (!CodeGenDataThinLTOTwoRounds) {
+  if (!clv2::getOptValOr<&CGDataOptsReg, &CGD_CodeGenDataThinLTOTwoRounds>(
+          *Conf.OptsCtx, false)) {
     std::unique_ptr<ThinBackendProc> BackendProc =
         ThinLTO.Backend(Conf, ThinLTO.CombinedIndex, ModuleToDefinedGVSummaries,
                         AddStream, Cache, BitcodeLibFuncs);
@@ -2329,7 +2335,8 @@ Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
     return E;
 
   LLVM_DEBUG(dbgs() << "[TwoRounds] Merging codegen data\n");
-  auto CombinedHashOrErr = cgdata::mergeCodeGenData(*CG.getResult());
+  auto CombinedHashOrErr =
+      cgdata::mergeCodeGenData(*CG.getResult(), *Conf.OptsCtx);
   if (Error E = CombinedHashOrErr.takeError())
     return E;
   auto CombinedHash = *CombinedHashOrErr;

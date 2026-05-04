@@ -26,6 +26,7 @@
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
@@ -46,13 +47,14 @@
 #include "llvm/Support/ARMBuildAttributes.h"
 #include "llvm/Support/ARMEHABI.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SMLoc.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 #include "llvm/TargetParser/SubtargetFeature.h"
 #include "llvm/TargetParser/TargetParser.h"
 #include <algorithm>
@@ -76,20 +78,26 @@ class ARMOperand;
 
 enum class ImplicitItModeTy { Always, Never, ARMOnly, ThumbOnly };
 
-static cl::opt<ImplicitItModeTy> ImplicitItMode(
-    "arm-implicit-it", cl::init(ImplicitItModeTy::ARMOnly),
-    cl::desc("Allow conditional instructions outside of an IT block"),
-    cl::values(clEnumValN(ImplicitItModeTy::Always, "always",
-                          "Accept in both ISAs, emit implicit ITs in Thumb"),
-               clEnumValN(ImplicitItModeTy::Never, "never",
-                          "Warn in ARM, reject in Thumb"),
-               clEnumValN(ImplicitItModeTy::ARMOnly, "arm",
-                          "Accept in ARM, reject in Thumb"),
-               clEnumValN(ImplicitItModeTy::ThumbOnly, "thumb",
-                          "Warn in ARM, emit implicit ITs in Thumb")));
+static ImplicitItModeTy getImplicitItMode(const clv2::OptionsContext &OCtx,
+                                          const Function *F = nullptr) {
+  if (F)
+    if (auto *O = clv2::getView<&clv2::ARMOptsReg>(
+            F->getContext().getOptionsContext()))
+      return static_cast<ImplicitItModeTy>(O->get<&clv2::ARM_ImplicitItMode>());
+  if (auto *O = clv2::getView<&clv2::ARMOptsReg>(OCtx))
+    return static_cast<ImplicitItModeTy>(O->get<&clv2::ARM_ImplicitItMode>());
+  return ImplicitItModeTy::ARMOnly;
+}
 
-static cl::opt<bool> AddBuildAttributes("arm-add-build-attributes",
-                                        cl::init(false));
+static bool getAddBuildAttributes(const clv2::OptionsContext &OCtx,
+                                  const Function *F = nullptr) {
+  if (F)
+    if (auto *O = clv2::getView<&clv2::ARMOptsReg>(
+            F->getContext().getOptionsContext()))
+      return O->get<&clv2::ARM_AddBuildAttributes>();
+  return clv2::getOptValOr<&clv2::ARMOptsReg, &clv2::ARM_AddBuildAttributes>(
+      OCtx, false);
+}
 
 enum VectorLaneTy { NoLanes, AllLanes, IndexedLane };
 
@@ -250,14 +258,16 @@ class ARMAsmParser : public MCTargetAsmParser {
 
   bool NextSymbolIsThumb;
 
-  bool useImplicitITThumb() const {
-    return ImplicitItMode == ImplicitItModeTy::Always ||
-           ImplicitItMode == ImplicitItModeTy::ThumbOnly;
+  bool useImplicitITThumb() {
+    const auto &OCtx = getContext().getOptionsContext();
+    return getImplicitItMode(OCtx) == ImplicitItModeTy::Always ||
+           getImplicitItMode(OCtx) == ImplicitItModeTy::ThumbOnly;
   }
 
-  bool useImplicitITARM() const {
-    return ImplicitItMode == ImplicitItModeTy::Always ||
-           ImplicitItMode == ImplicitItModeTy::ARMOnly;
+  bool useImplicitITARM() {
+    const auto &OCtx = getContext().getOptionsContext();
+    return getImplicitItMode(OCtx) == ImplicitItModeTy::Always ||
+           getImplicitItMode(OCtx) == ImplicitItModeTy::ARMOnly;
   }
 
   struct {
@@ -700,7 +710,7 @@ public:
     setAvailableFeatures(ComputeAvailableFeatures(STI.getFeatureBits()));
 
     // Add build attributes based on the selected target.
-    if (AddBuildAttributes)
+    if (getAddBuildAttributes(getContext().getOptionsContext()))
       getTargetStreamer().emitTargetAttributes(STI);
 
     // Not in an ITBlock to start with.

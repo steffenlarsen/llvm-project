@@ -20,8 +20,8 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/AssumptionCache.h"
-#include "llvm/Analysis/Loads.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Analysis/PHITransAddr.h"
@@ -45,9 +45,10 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include <algorithm>
 #include <cassert>
 #include <iterator>
@@ -71,19 +72,19 @@ STATISTIC(NumCacheCompleteNonLocalPtr,
 
 // Limit for the number of instructions to scan in a block.
 
-static cl::opt<unsigned> BlockScanLimit(
-    "memdep-block-scan-limit", cl::Hidden, cl::init(100),
-    cl::desc("The number of instructions to scan in a block in memory "
-             "dependency analysis (default = 100)"));
+static unsigned getBlockScanLimit(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_BlockScanLimit>(Ctx);
+}
 
-static cl::opt<unsigned>
-    BlockNumberLimit("memdep-block-number-limit", cl::Hidden, cl::init(200),
-                     cl::desc("The number of blocks to scan during memory "
-                              "dependency analysis (default = 200)"));
+static unsigned getBlockNumberLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_BlockNumberLimit>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> CacheGlobalLimit(
-    "memdep-cache-global-limit", cl::Hidden, cl::init(10000),
-    cl::desc("The max number of entries allowed in a cache (default = 10000)"));
+static unsigned getCacheGlobalLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_CacheGlobalLimit>(
+      F.getContext().getOptionsContext());
+}
 
 // Limit on the number of memdep results to process.
 static const unsigned int NumResultsLimit = 100;
@@ -1184,7 +1185,7 @@ bool MemoryDependenceResults::getNonLocalPointerDepFromBB(
   }
 
   // If the size of this cache has surpassed the global limit, stop here.
-  if (Cache->size() > CacheGlobalLimit)
+  if (Cache->size() > getCacheGlobalLimit(*StartBB->getParent()))
     return false;
 
   // Otherwise, either this is a new block, a block with an invalid cache
@@ -1213,7 +1214,7 @@ bool MemoryDependenceResults::getNonLocalPointerDepFromBB(
   // won't get any reuse from currently inserted values, because we don't
   // revisit blocks after we insert info for them.
   unsigned NumSortedEntries = Cache->size();
-  unsigned WorklistEntries = BlockNumberLimit;
+  unsigned WorklistEntries = getBlockNumberLimit(*StartBB->getParent());
   bool GotWorklistLimit = false;
   LLVM_DEBUG(AssertSorted(*Cache));
 
@@ -1767,7 +1768,7 @@ void MemoryDependenceResults::verifyRemoved(Instruction *D) const {
 AnalysisKey MemoryDependenceAnalysis::Key;
 
 MemoryDependenceAnalysis::MemoryDependenceAnalysis()
-    : DefaultBlockScanLimit(BlockScanLimit) {}
+    : DefaultBlockScanLimit(100) {}
 
 MemoryDependenceResults
 MemoryDependenceAnalysis::run(Function &F, FunctionAnalysisManager &AM) {
@@ -1775,7 +1776,8 @@ MemoryDependenceAnalysis::run(Function &F, FunctionAnalysisManager &AM) {
   auto &AC = AM.getResult<AssumptionAnalysis>(F);
   auto &TLI = AM.getResult<TargetLibraryAnalysis>(F);
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
-  return MemoryDependenceResults(AA, AC, TLI, DT, DefaultBlockScanLimit);
+  return MemoryDependenceResults(
+      AA, AC, TLI, DT, getBlockScanLimit(F.getContext().getOptionsContext()));
 }
 
 char MemoryDependenceWrapperPass::ID = 0;
@@ -1832,6 +1834,7 @@ bool MemoryDependenceWrapperPass::runOnFunction(Function &F) {
   auto &AC = getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
   auto &TLI = getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
   auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-  MemDep.emplace(AA, AC, TLI, DT, BlockScanLimit);
+  MemDep.emplace(AA, AC, TLI, DT,
+                 getBlockScanLimit(F.getContext().getOptionsContext()));
   return false;
 }

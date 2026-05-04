@@ -2,6 +2,7 @@ add_llvm_component_library(LLVMPowerPCDesc
   PPCAsmBackend.cpp
   PPCInstPrinter.cpp
   PPCMCTargetDesc.cpp
+  PowerPCOptions.cpp
   PPCMCAsmInfo.cpp
   PPCMCCodeEmitter.cpp
   PPCPredicates.cpp

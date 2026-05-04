@@ -14,6 +14,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/IPO/Attributor.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/PointerIntPair.h"
@@ -31,6 +33,7 @@
 #include "llvm/IR/ConstantFold.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Instruction.h"
@@ -39,7 +42,6 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugCounter.h"
 #include "llvm/Support/FileSystem.h"
@@ -82,6 +84,12 @@ STATISTIC(NumAttributesManifested,
           "Number of abstract attributes manifested in IR");
 
 // TODO: Determine a good default value.
+unsigned
+llvm::getMaxInitializationChainLength(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::IPO_MaxInitializationChainLengthX>(
+      Ctx);
+}
+
 //
 // In the LLVM-TS and SPEC2006, 32 seems to not induce compile time overheads
 // (when run with the first 5 abstract attributes). The results also indicate
@@ -89,94 +97,113 @@ STATISTIC(NumAttributesManifested,
 //
 // This will become more evolved once we perform two interleaved fixpoint
 // iterations: bottom-up and top-down.
-static cl::opt<unsigned>
-    SetFixpointIterations("attributor-max-iterations", cl::Hidden,
-                          cl::desc("Maximal number of fixpoint iterations."),
-                          cl::init(32));
+static unsigned getSetFixpointIterations(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_SetFixpointIterations>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-    MaxSpecializationPerCB("attributor-max-specializations-per-call-base",
-                           cl::Hidden,
-                           cl::desc("Maximal number of callees specialized for "
-                                    "a call base"),
-                           cl::init(UINT32_MAX));
+static unsigned getMaxSpecializationPerCB(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_MaxSpecializationPerCB>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned, true> MaxInitializationChainLengthX(
-    "attributor-max-initialization-chain-length", cl::Hidden,
-    cl::desc(
-        "Maximal number of chained initializations (to avoid stack overflows)"),
-    cl::location(MaxInitializationChainLength), cl::init(1024));
-unsigned llvm::MaxInitializationChainLength;
+static bool getMaxSpecializationPerCBSpecified(const Module &M) {
+  return clv2::wasOptSpecified<&clv2::IPOOptsReg,
+                               &clv2::IPO_MaxSpecializationPerCB>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> AnnotateDeclarationCallSites(
-    "attributor-annotate-decl-cs", cl::Hidden,
-    cl::desc("Annotate call sites of function declarations."), cl::init(false));
+static bool getAnnotateDeclarationCallSites(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_AnnotateDeclarationCallSites>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> EnableHeapToStack("enable-heap-to-stack-conversion",
-                                       cl::init(true), cl::Hidden);
+static bool getEnableHeapToStack(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_EnableHeapToStack>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    AllowShallowWrappers("attributor-allow-shallow-wrappers", cl::Hidden,
-                         cl::desc("Allow the Attributor to create shallow "
-                                  "wrappers for non-exact definitions."),
-                         cl::init(false));
+static bool getAllowShallowWrappers(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_AllowShallowWrappers>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    AllowDeepWrapper("attributor-allow-deep-wrappers", cl::Hidden,
-                     cl::desc("Allow the Attributor to use IP information "
-                              "derived from non-exact functions via cloning"),
-                     cl::init(false));
+static bool getAllowDeepWrapper(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_AllowDeepWrapper>(
+      M.getContext().getOptionsContext());
+}
 
-// These options can only used for debug builds.
 #ifndef NDEBUG
-static cl::list<std::string>
-    SeedAllowList("attributor-seed-allow-list", cl::Hidden,
-                  cl::desc("Comma separated list of attribute names that are "
-                           "allowed to be seeded."),
-                  cl::CommaSeparated);
+static const std::vector<std::string> &getSeedAllowList(const Module &M) {
+  if (auto *O =
+          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
+    if (O->specified<&clv2::IPO_SeedAllowList>())
+      return O->get<&clv2::IPO_SeedAllowList>();
+  static const std::vector<std::string> Default;
+  return Default;
+}
 
-static cl::list<std::string> FunctionSeedAllowList(
-    "attributor-function-seed-allow-list", cl::Hidden,
-    cl::desc("Comma separated list of function names that are "
-             "allowed to be seeded."),
-    cl::CommaSeparated);
+static const std::vector<std::string> &
+getFunctionSeedAllowList(const Module &M) {
+  if (auto *O =
+          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
+    if (O->specified<&clv2::IPO_FunctionSeedAllowList>())
+      return O->get<&clv2::IPO_FunctionSeedAllowList>();
+  static const std::vector<std::string> Default;
+  return Default;
+}
 #endif
 
-static cl::opt<bool>
-    DumpDepGraph("attributor-dump-dep-graph", cl::Hidden,
-                 cl::desc("Dump the dependency graph to dot files."),
-                 cl::init(false));
+static bool getDumpDepGraph(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_DumpDepGraph>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<std::string> DepGraphDotFileNamePrefix(
-    "attributor-depgraph-dot-filename-prefix", cl::Hidden,
-    cl::desc("The prefix used for the CallGraph dot file names."));
+static const std::string &getDepGraphDotFileNamePrefix(const Module &M) {
+  if (auto *O =
+          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
+    if (O->specified<&clv2::IPO_DepGraphDotFileNamePrefix>())
+      return O->get<&clv2::IPO_DepGraphDotFileNamePrefix>();
+  static const std::string Default;
+  return Default;
+}
 
-static cl::opt<bool> ViewDepGraph("attributor-view-dep-graph", cl::Hidden,
-                                  cl::desc("View the dependency graph."),
-                                  cl::init(false));
+static bool getViewDepGraph(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_ViewDepGraph>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> PrintDependencies("attributor-print-dep", cl::Hidden,
-                                       cl::desc("Print attribute dependencies"),
-                                       cl::init(false));
+static bool getPrintDependencies(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_PrintDependencies>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> EnableCallSiteSpecific(
-    "attributor-enable-call-site-specific-deduction", cl::Hidden,
-    cl::desc("Allow the Attributor to do call site specific analysis"),
-    cl::init(false));
+static bool getEnableCallSiteSpecific(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_EnableCallSiteSpecific>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    PrintCallGraph("attributor-print-call-graph", cl::Hidden,
-                   cl::desc("Print Attributor's internal call graph"),
-                   cl::init(false));
+static bool getPrintCallGraph(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_PrintCallGraph>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> SimplifyAllLoads("attributor-simplify-all-loads",
-                                      cl::Hidden,
-                                      cl::desc("Try to simplify all loads."),
-                                      cl::init(true));
+static bool getSimplifyAllLoads(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_SimplifyAllLoads>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> CloseWorldAssumption(
-    "attributor-assume-closed-world", cl::Hidden,
-    cl::desc("Should a closed world be assumed, or not. Default if not set."));
+static bool getCloseWorldAssumption(const Module &M) {
+  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
+                                    &clv2::IPO_CloseWorldAssumption>(
+      M.getContext().getOptionsContext(), false);
+}
+
+static bool getCloseWorldAssumptionSpecified(const Module &M) {
+  return clv2::wasOptSpecified<&clv2::IPOOptsReg,
+                               &clv2::IPO_CloseWorldAssumption>(
+      M.getContext().getOptionsContext());
+}
 
 /// Logic operators for the change status enum class.
 ///
@@ -2057,7 +2084,7 @@ bool Attributor::shouldPropagateCallBaseContext(const IRPosition &IRP) {
   // TODO: Maintain a cache of Values that are
   // on the pathway from a Argument to a Instruction that would effect the
   // liveness/return state etc.
-  return EnableCallSiteSpecific;
+  return getEnableCallSiteSpecific(getModule());
 }
 
 bool Attributor::checkForAllReturnedValues(function_ref<bool(Value &)> Pred,
@@ -2189,8 +2216,8 @@ void Attributor::runTillFixpoint() {
   // the abstract analysis.
 
   unsigned IterationCounter = 1;
-  unsigned MaxIterations =
-      Configuration.MaxFixpointIterations.value_or(SetFixpointIterations);
+  unsigned MaxIterations = Configuration.MaxFixpointIterations.value_or(
+      getSetFixpointIterations(getModule()));
 
   SmallVector<AbstractAttribute *, 32> ChangedAAs;
   SetVector<AbstractAttribute *> Worklist, InvalidAAs;
@@ -2711,20 +2738,20 @@ ChangeStatus Attributor::run() {
   TimeTraceScope TimeScope("Attributor::run");
   AttributorCallGraph ACallGraph(*this);
 
-  if (PrintCallGraph)
+  if (getPrintCallGraph(getModule()))
     ACallGraph.populateAll();
 
   Phase = AttributorPhase::UPDATE;
   runTillFixpoint();
 
   // dump graphs on demand
-  if (DumpDepGraph)
-    DG.dumpGraph();
+  if (getDumpDepGraph(getModule()))
+    DG.dumpGraph(getModule());
 
-  if (ViewDepGraph)
+  if (getViewDepGraph(getModule()))
     DG.viewGraph();
 
-  if (PrintDependencies)
+  if (getPrintDependencies(getModule()))
     DG.print();
 
   Phase = AttributorPhase::MANIFEST;
@@ -2733,7 +2760,7 @@ ChangeStatus Attributor::run() {
   Phase = AttributorPhase::CLEANUP;
   ChangeStatus CleanupChange = cleanupIR();
 
-  if (PrintCallGraph)
+  if (getPrintCallGraph(getModule()))
     ACallGraph.print();
 
   return ManifestChange | CleanupChange;
@@ -2841,7 +2868,7 @@ bool Attributor::isInternalizable(Function &F) {
 }
 
 Function *Attributor::internalizeFunction(Function &F, bool Force) {
-  if (!AllowDeepWrapper && !Force)
+  if (!getAllowDeepWrapper(*F.getParent()) && !Force)
     return nullptr;
   if (!isInternalizable(F))
     return nullptr;
@@ -3026,11 +3053,12 @@ bool Attributor::registerFunctionSignatureRewrite(
 bool Attributor::shouldSeedAttribute(AbstractAttribute &AA) {
   bool Result = true;
 #ifndef NDEBUG
-  if (SeedAllowList.size() != 0)
-    Result = llvm::is_contained(SeedAllowList, AA.getName());
+  if (getSeedAllowList(getModule()).size() != 0)
+    Result = llvm::is_contained(getSeedAllowList(getModule()), AA.getName());
   Function *Fn = AA.getAnchorScope();
-  if (FunctionSeedAllowList.size() != 0 && Fn)
-    Result &= llvm::is_contained(FunctionSeedAllowList, Fn->getName());
+  if (getFunctionSeedAllowList(getModule()).size() != 0 && Fn)
+    Result &= llvm::is_contained(getFunctionSeedAllowList(getModule()),
+                                 Fn->getName());
 #endif
   return Result;
 }
@@ -3435,7 +3463,7 @@ void Attributor::identifyDefaultAbstractAttributes(Function &F) {
   getOrCreateAAFor<AAUndefinedBehavior>(FPos);
 
   // Every function might be applicable for Heap-To-Stack conversion.
-  if (EnableHeapToStack)
+  if (getEnableHeapToStack(getModule()))
     getOrCreateAAFor<AAHeapToStack>(FPos);
 
   // Every function might be "must-progress".
@@ -3601,7 +3629,8 @@ void Attributor::identifyDefaultAbstractAttributes(Function &F) {
 
     // Skip declarations except if annotations on their call sites were
     // explicitly requested.
-    if (!AnnotateDeclarationCallSites && Callee->isDeclaration() &&
+    if (!getAnnotateDeclarationCallSites(getModule()) &&
+        Callee->isDeclaration() &&
         !Callee->hasMetadata(LLVMContext::MD_callback))
       return true;
 
@@ -3683,7 +3712,7 @@ void Attributor::identifyDefaultAbstractAttributes(Function &F) {
   auto LoadStorePred = [&](Instruction &I) -> bool {
     if (auto *LI = dyn_cast<LoadInst>(&I)) {
       getOrCreateAAFor<AAAlign>(IRPosition::value(*LI->getPointerOperand()));
-      if (SimplifyAllLoads)
+      if (getSimplifyAllLoads(getModule()))
         getAssumedSimplified(IRPosition::value(I), nullptr,
                              UsedAssumedInformation, AA::Intraprocedural);
       getOrCreateAAFor<AAInvariantLoadPointer>(
@@ -3720,8 +3749,8 @@ void Attributor::identifyDefaultAbstractAttributes(Function &F) {
 }
 
 bool Attributor::isClosedWorldModule() const {
-  if (CloseWorldAssumption.getNumOccurrences())
-    return CloseWorldAssumption;
+  if (getCloseWorldAssumptionSpecified(InfoCache.getModule()))
+    return getCloseWorldAssumption(InfoCache.getModule());
   return isModulePass() && Configuration.IsClosedWorldModule;
 }
 
@@ -3895,16 +3924,16 @@ static bool runAttributorOnFunctions(InformationCache &InfoCache,
   /// Tracking callback for specialization of indirect calls.
   DenseMap<CallBase *, std::unique_ptr<SmallPtrSet<Function *, 8>>>
       IndirectCalleeTrackingMap;
-  if (MaxSpecializationPerCB.getNumOccurrences()) {
+  if (getMaxSpecializationPerCBSpecified(InfoCache.getModule())) {
     AC.IndirectCalleeSpecializationCallback =
         [&](Attributor &, const AbstractAttribute &AA, CallBase &CB,
             Function &Callee, unsigned) {
-          if (MaxSpecializationPerCB == 0)
+          if (getMaxSpecializationPerCB(InfoCache.getModule()) == 0)
             return false;
           auto &Set = IndirectCalleeTrackingMap[&CB];
           if (!Set)
             Set = std::make_unique<SmallPtrSet<Function *, 8>>();
-          if (Set->size() >= MaxSpecializationPerCB)
+          if (Set->size() >= getMaxSpecializationPerCB(InfoCache.getModule()))
             return Set->contains(&Callee);
           Set->insert(&Callee);
           return true;
@@ -3914,7 +3943,7 @@ static bool runAttributorOnFunctions(InformationCache &InfoCache,
   Attributor A(Functions, InfoCache, AC);
 
   // Create shallow wrappers for all functions that are not IPO amendable
-  if (AllowShallowWrappers)
+  if (getAllowShallowWrappers(InfoCache.getModule()))
     for (Function *F : Functions)
       if (!A.isFunctionIPOAmendable(*F))
         Attributor::createShallowWrapper(*F);
@@ -3923,7 +3952,7 @@ static bool runAttributorOnFunctions(InformationCache &InfoCache,
   // TODO: for now we eagerly internalize functions without calculating the
   //       cost, we need a cost interface to determine whether internalizing
   //       a function is "beneficial"
-  if (AllowDeepWrapper) {
+  if (getAllowDeepWrapper(InfoCache.getModule())) {
     unsigned FunSize = Functions.size();
     for (unsigned u = 0; u < FunSize; u++) {
       Function *F = Functions[u];
@@ -4064,12 +4093,12 @@ static bool runAttributorLightOnFunctions(InformationCache &InfoCache,
 
 void AADepGraph::viewGraph() { llvm::ViewGraph(this, "Dependency Graph"); }
 
-void AADepGraph::dumpGraph() {
+void AADepGraph::dumpGraph(const Module &M) {
   static std::atomic<int> CallTimes;
   std::string Prefix;
 
-  if (!DepGraphDotFileNamePrefix.empty())
-    Prefix = DepGraphDotFileNamePrefix;
+  if (!getDepGraphDotFileNamePrefix(M).empty())
+    Prefix = getDepGraphDotFileNamePrefix(M);
   else
     Prefix = "dep_graph";
   std::string Filename =

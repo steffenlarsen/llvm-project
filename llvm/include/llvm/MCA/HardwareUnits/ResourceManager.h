@@ -217,7 +217,8 @@ class ResourceState {
 
 public:
   LLVM_ABI ResourceState(const MCProcResourceDesc &Desc, unsigned Index,
-                         uint64_t Mask, const MCSchedModel &SM);
+                         uint64_t Mask, const MCSchedModel &SM,
+                         const llvm::clv2::OptionsContext &Ctx);
 
   unsigned getProcResourceID() const { return ProcResourceDescIndex; }
   uint64_t getResourceMask() const { return ResourceMask; }
@@ -391,7 +392,8 @@ class ResourceManager {
                                       uint64_t ResourceMask);
 
 public:
-  LLVM_ABI ResourceManager(const MCSchedModel &SM);
+  LLVM_ABI ResourceManager(const MCSchedModel &SM,
+                           const llvm::clv2::OptionsContext &Ctx);
   virtual ~ResourceManager() = default;
 
   // Overrides the selection strategy for the resource at index ResourceID in

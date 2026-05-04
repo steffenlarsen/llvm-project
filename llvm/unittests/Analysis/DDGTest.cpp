@@ -84,7 +84,7 @@ TEST(DDGTest, getDependencies) {
       "  ret void\n"
       "}\n";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runTest(
@@ -200,7 +200,7 @@ TEST(DDGTest, avoidDuplicateEdgesToFromPiBlocks) {
       "  ret void\n"
       "}\n";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runTest(

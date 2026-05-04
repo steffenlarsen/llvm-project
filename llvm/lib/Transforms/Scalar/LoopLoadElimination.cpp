@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LoopLoadElimination.cpp - Loop Load Elimination Pass ---------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -19,7 +21,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Scalar/LoopLoadElimination.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DepthFirstIterator.h"
@@ -41,14 +42,15 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Scalar/LoopLoadElimination.h"
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/LoopVersioning.h"
@@ -65,15 +67,16 @@ using namespace llvm;
 #define LLE_OPTION "loop-load-elim"
 #define DEBUG_TYPE LLE_OPTION
 
-static cl::opt<unsigned> CheckPerElim(
-    "runtime-check-per-loop-load-elim", cl::Hidden,
-    cl::desc("Max number of memchecks allowed per eliminated load on average"),
-    cl::init(1));
+static unsigned getCheckPerElim(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_RuntimeCheckPerLoopLoadElim>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> LoadElimSCEVCheckThreshold(
-    "loop-load-elimination-scev-check-threshold", cl::init(8), cl::Hidden,
-    cl::desc("The maximum number of SCEV checks allowed for Loop "
-             "Load Elimination"));
+static unsigned getLoadElimSCEVCheckThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::SC_LoopLoadEliminationSCEVCheckThreshold>(
+      F.getContext().getOptionsContext());
+}
 
 STATISTIC(NumLoopLoadEliminted, "Number of loads eliminated by LLE");
 
@@ -565,13 +568,14 @@ public:
     SmallVector<RuntimePointerCheck, 4> Checks = collectMemchecks(Candidates);
 
     // Too many checks are likely to outweigh the benefits of forwarding.
-    if (Checks.size() > Candidates.size() * CheckPerElim) {
+    if (Checks.size() >
+        Candidates.size() * getCheckPerElim(*L->getHeader()->getParent())) {
       LLVM_DEBUG(dbgs() << "Too many run-time checks needed.\n");
       return false;
     }
 
     if (LAI.getPSE().getPredicate().getComplexity() >
-        LoadElimSCEVCheckThreshold) {
+        getLoadElimSCEVCheckThreshold(*L->getHeader()->getParent())) {
       LLVM_DEBUG(dbgs() << "Too many SCEV run-time checks needed.\n");
       return false;
     }

@@ -16,7 +16,7 @@ namespace bolt {
 
 class HugePage : public BinaryFunctionPass {
 public:
-  HugePage(const cl::opt<bool> &PrintPass) : BinaryFunctionPass(PrintPass) {}
+  HugePage(const bool PrintPass) : BinaryFunctionPass(PrintPass) {}
 
   Error runOnFunctions(BinaryContext &BC) override;
 

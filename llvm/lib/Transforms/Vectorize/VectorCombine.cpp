@@ -34,11 +34,12 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/ProfDataUtils.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
+#include "llvm/Transforms/Vectorize/VectorizeOptions.h"
 #include <numeric>
 #include <optional>
 #include <queue>
@@ -59,17 +60,20 @@ STATISTIC(NumScalarOps, "Number of scalar unary + binary ops formed");
 STATISTIC(NumScalarCmp, "Number of scalar compares formed");
 STATISTIC(NumScalarIntrinsic, "Number of scalar intrinsic calls formed");
 
-static cl::opt<bool> DisableVectorCombine(
-    "disable-vector-combine", cl::init(false), cl::Hidden,
-    cl::desc("Disable all vector combine transforms"));
+static bool getDisableVectorCombine(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_DisableVectorCombine>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> DisableBinopExtractShuffle(
-    "disable-binop-extract-shuffle", cl::init(false), cl::Hidden,
-    cl::desc("Disable binop extract to shuffle transforms"));
+static bool getDisableBinopExtractShuffle(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_DisableBinopExtractShuffle>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> MaxInstrsToScan(
-    "vector-combine-max-scan-instrs", cl::init(30), cl::Hidden,
-    cl::desc("Max number of instructions to scan for vector combining."));
+static unsigned getMaxInstrsToScan(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_MaxInstrsToScan>(
+      F.getContext().getOptionsContext());
+}
 
 static const unsigned InvalidIndex = std::numeric_limits<unsigned>::max();
 
@@ -553,7 +557,7 @@ bool VectorCombine::isExtractExtractCheap(ExtractElementInst *Ext0,
 
   ConvertToShuffle = getShuffleExtract(Ext0, Ext1, PreferredExtractIndex);
   if (ConvertToShuffle) {
-    if (IsBinOp && DisableBinopExtractShuffle)
+    if (IsBinOp && getDisableBinopExtractShuffle(F))
       return true;
 
     // If we are extracting from 2 different indexes, then one operand must be
@@ -1717,11 +1721,12 @@ bool VectorCombine::foldBinopOfReductions(Instruction &I) {
 // the same BB.
 static bool isMemModifiedBetween(BasicBlock::iterator Begin,
                                  BasicBlock::iterator End,
-                                 const MemoryLocation &Loc, AAResults &AA) {
+                                 const MemoryLocation &Loc, AAResults &AA,
+                                 const Function &F) {
   unsigned NumScanned = 0;
   if (std::any_of(Begin, End, [&](const Instruction &Instr) {
         return isModSet(AA.getModRefInfo(&Instr, Loc)) ||
-               ++NumScanned > MaxInstrsToScan;
+               ++NumScanned > getMaxInstrsToScan(F);
       }))
     return true;
 
@@ -2009,7 +2014,7 @@ bool VectorCombine::foldInsertElementsToStores(Instruction &I) {
     return false;
 
   if (isMemModifiedBetween(Load->getIterator(), SI->getIterator(),
-                           MemoryLocation::get(SI), AA))
+                           MemoryLocation::get(SI), AA, F))
     return false;
 
   // Step 5: Validate every index before changing IR. A safe-with-freeze result
@@ -2170,7 +2175,7 @@ bool VectorCombine::scalarizeLoad(Instruction &I) {
            make_range(std::next(LI->getIterator()), UI->getIterator())) {
         // Bail out if we reached the check limit or the instruction may write
         // to memory.
-        if (NumInstChecked == MaxInstrsToScan || I.mayWriteToMemory())
+        if (NumInstChecked == getMaxInstrsToScan(F) || I.mayWriteToMemory())
           return false;
         NumInstChecked++;
       }
@@ -3858,7 +3863,7 @@ bool VectorCombine::foldShuffleToIdentity(Instruction &I) {
   bool TraversedElCountChangingBitcast = false;
 
   while (!Candidates.empty()) {
-    if (++NumVisited > MaxInstrsToScan)
+    if (++NumVisited > getMaxInstrsToScan(F))
       return false;
 
     auto ItemFrom = Candidates.pop_back_val();
@@ -6120,7 +6125,7 @@ bool VectorCombine::foldDeinterleaveInterleavePair(Instruction &I) {
   // At each level, expect every chain to perform the same operation with the
   // preceding chain value at the same operand position, until they all reach
   // the matching interleave.
-  while (NumVisited + Factor <= MaxInstrsToScan) {
+  while (NumVisited + Factor <= getMaxInstrsToScan(F)) {
     NumVisited += Factor;
 
     for (Use *&CurrentUse : CurrentUses) {
@@ -6207,7 +6212,8 @@ bool VectorCombine::foldDeinterleaveInterleavePair(Instruction &I) {
     if (isa<SelectInst>(NarrowInst))
       return Builder.CreateSelect(
           NewOperands[0], NewOperands[1], NewOperands[2], /*Name=*/"",
-          ProfcheckDisableMetadataFixes ? nullptr : NarrowInst);
+          getProfcheckDisableMetadataFixes(F.getContext()) ? nullptr
+                                                           : NarrowInst);
     if (isa<FreezeInst>(NarrowInst))
       return Builder.CreateFreeze(NewOperands[0]);
     if (auto *II = dyn_cast<IntrinsicInst>(NarrowInst))
@@ -6862,7 +6868,7 @@ bool VectorCombine::shrinkPhiOfShuffles(Instruction &I) {
 /// This is the entry point for all transforms. Pass manager differences are
 /// handled in the callers of this function.
 bool VectorCombine::run() {
-  if (DisableVectorCombine)
+  if (getDisableVectorCombine(F))
     return false;
 
   // Don't attempt vectorization if the target does not support vectors.

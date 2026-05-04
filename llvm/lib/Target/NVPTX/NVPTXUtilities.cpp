@@ -17,16 +17,12 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/Alignment.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
 #include <algorithm>
 
 using namespace llvm;
-
-static cl::opt<bool> ForceMinByValParamAlign(
-    "nvptx-force-min-byval-param-align", cl::Hidden,
-    cl::desc("NVPTX Specific: force 4-byte minimal alignment for byval"
-             " params of device functions."),
-    cl::init(false));
 
 Function *llvm::getMaybeBitcastedCallee(const CallBase *CB) {
   return dyn_cast<Function>(CB->getCalledOperand()->stripPointerCasts());
@@ -59,7 +55,12 @@ static Align getByValParamAlignFloor(const Function *F) {
   // TODO: remove this after verifying the bug is not reproduced
   // on non-deprecated ptxas versions.
   const bool ShouldForceMinAlign =
-      ForceMinByValParamAlign && (!F || !isKernelFunction(*F));
+      clv2::getOptValOr<&clv2::NVPTXOptsReg,
+                        &clv2::NVPTX_ForceMinByValParamAlign>(
+          F ? F->getContext().getOptionsContext()
+            : clv2::defaultOptionsContext(),
+          false) &&
+      (!F || !isKernelFunction(*F));
   return ShouldForceMinAlign ? Align(4) : Align(1);
 }
 
@@ -80,8 +81,10 @@ Align llvm::getDeviceByValParamAlign(const CallBase *CB, Type *ArgTy,
         ParamAlign,
         CB->getParamAlign(AttrIdx - AttributeList::FirstArgIndex).valueOrOne());
 
-  return std::max(ParamAlign, getByValParamAlignFloor(
-                                  CB ? CB->getCalledFunction() : nullptr));
+  const Function *F = CB ? (CB->getCalledFunction() ? CB->getCalledFunction()
+                                                    : CB->getFunction())
+                         : nullptr;
+  return std::max(ParamAlign, getByValParamAlignFloor(F));
 }
 
 Align llvm::getPTXParamAlign(const Function *F, Type *Ty, unsigned AttrIdx,

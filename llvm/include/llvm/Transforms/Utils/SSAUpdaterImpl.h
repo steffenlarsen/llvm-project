@@ -18,7 +18,6 @@
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Allocator.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -26,7 +25,7 @@
 
 namespace llvm {
 
-extern LLVM_ABI cl::opt<unsigned> SSAUpdaterPhiSearchLimit;
+extern unsigned SSAUpdaterPhiSearchLimit;
 
 template<typename T> class SSAUpdaterTraits;
 

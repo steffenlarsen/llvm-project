@@ -29,6 +29,7 @@
 //    } // namespace x
 
 #include "ChangeNamespace.h"
+#include "clang-tools-extra/ClangToolsExtraOptionsOptInfos.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/Frontend/FrontendActions.h"
 #include "clang/Frontend/TextDiagnosticPrinter.h"
@@ -36,49 +37,65 @@
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Refactoring.h"
 #include "clang/Tooling/Tooling.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/YAMLTraits.h"
 
 using namespace clang;
 using namespace llvm;
 
+static cl::OptionCategory ChangeNamespaceCategory("Change namespace.");
+
+struct ChangeNamespaceOptions {
+  std::string OldNamespace;
+  std::string NewNamespace;
+  std::string FilePattern;
+  bool Inplace = false;
+  bool DumpYAML = false;
+  std::string Style = "LLVM";
+  std::string AllowedFile;
+};
+
+inline constexpr clv2::OptionsRegistry<
+    &clv2::CTE_CN_OldNamespace, &clv2::CTE_CN_NewNamespace,
+    &clv2::CTE_CN_FilePattern, &clv2::CTE_CN_Inplace, &clv2::CTE_CN_DumpResult,
+    &clv2::CTE_CN_Style, &clv2::CTE_CN_AllowedFile>
+    ToolOptsReg;
+
+static void applyToolOpts(const decltype(ToolOptsReg)::ParsedOptionsT &Opts,
+                          ChangeNamespaceOptions &ToolOpts) {
+  ToolOpts.OldNamespace = Opts.get<&clv2::CTE_CN_OldNamespace>();
+  ToolOpts.NewNamespace = Opts.get<&clv2::CTE_CN_NewNamespace>();
+  ToolOpts.FilePattern = Opts.get<&clv2::CTE_CN_FilePattern>();
+  ToolOpts.Inplace = Opts.get<&clv2::CTE_CN_Inplace>();
+  ToolOpts.DumpYAML = Opts.get<&clv2::CTE_CN_DumpResult>();
+  ToolOpts.Style = Opts.get<&clv2::CTE_CN_Style>();
+  ToolOpts.AllowedFile = Opts.get<&clv2::CTE_CN_AllowedFile>();
+}
+
+static void configureParser(clv2::OptionParser &P,
+                            ChangeNamespaceOptions &ToolOpts) {
+  using ParsedT = decltype(ToolOptsReg)::ParsedOptionsT;
+  auto *Storage = new ParsedT();
+  decltype(ToolOptsReg)::applyDefaultsTo(*Storage);
+  std::vector<clv2::detail::OptionEntry> Entries;
+  std::vector<clv2::detail::AliasEntry> Aliases;
+  std::vector<clv2::detail::SubCommandSpec> SubSpecs;
+  decltype(ToolOptsReg)::staticBuildInto(*Storage, Entries, Aliases, SubSpecs);
+  for (auto &E : Entries) {
+    if (!E.Cat)
+      E.Cat = &ChangeNamespaceCategory;
+    P.addDynamicEntry(std::move(E));
+  }
+  clv2::registerDynamicPostParseCallback(
+      [Storage, &ToolOpts]() { applyToolOpts(*Storage, ToolOpts); });
+}
+
 namespace {
 
-cl::OptionCategory ChangeNamespaceCategory("Change namespace.");
-
-cl::opt<std::string> OldNamespace("old_namespace", cl::Required,
-                                  cl::desc("Old namespace."),
-                                  cl::cat(ChangeNamespaceCategory));
-
-cl::opt<std::string> NewNamespace("new_namespace", cl::Required,
-                                  cl::desc("New namespace."),
-                                  cl::cat(ChangeNamespaceCategory));
-
-cl::opt<std::string> FilePattern(
-    "file_pattern", cl::Required,
-    cl::desc("Only rename namespaces in files that match the given pattern."),
-    cl::cat(ChangeNamespaceCategory));
-
-cl::opt<bool> Inplace("i", cl::desc("Inplace edit <file>s, if specified."),
-                      cl::cat(ChangeNamespaceCategory));
-
-cl::opt<bool>
-    DumpYAML("dump_result",
-         cl::desc("Dump new file contents in YAML, if specified."),
-         cl::cat(ChangeNamespaceCategory));
-
-cl::opt<std::string> Style("style",
-                           cl::desc("The style name used for reformatting."),
-                           cl::init("LLVM"), cl::cat(ChangeNamespaceCategory));
-
-cl::opt<std::string> AllowedFile(
-    "allowed_file",
-    cl::desc("A file containing regexes of symbol names that are not expected "
-             "to be updated when changing namespaces around them."),
-    cl::init(""), cl::cat(ChangeNamespaceCategory));
-
-llvm::ErrorOr<std::vector<std::string>> GetAllowedSymbolPatterns() {
+llvm::ErrorOr<std::vector<std::string>>
+GetAllowedSymbolPatterns(const std::string &AllowedFile) {
   std::vector<std::string> Patterns;
   if (AllowedFile.empty())
     return Patterns;
@@ -99,8 +116,12 @@ llvm::ErrorOr<std::vector<std::string>> GetAllowedSymbolPatterns() {
 
 int main(int argc, const char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
-  auto ExpectedParser =
-      tooling::CommonOptionsParser::create(argc, argv, ChangeNamespaceCategory);
+  ChangeNamespaceOptions ToolOpts;
+  auto ExpectedParser = tooling::CommonOptionsParser::create(
+      argc, argv, ChangeNamespaceCategory,
+      [&ToolOpts](llvm::clv2::OptionParser &P) {
+        configureParser(P, ToolOpts);
+      });
   if (!ExpectedParser) {
     llvm::errs() << llvm::toString(ExpectedParser.takeError());
     return 1;
@@ -109,15 +130,15 @@ int main(int argc, const char **argv) {
   const auto &Files = OptionsParser.getSourcePathList();
   tooling::RefactoringTool Tool(OptionsParser.getCompilations(), Files);
   llvm::ErrorOr<std::vector<std::string>> AllowedPatterns =
-      GetAllowedSymbolPatterns();
+      GetAllowedSymbolPatterns(ToolOpts.AllowedFile);
   if (!AllowedPatterns) {
-    llvm::errs() << "Failed to open allow file " << AllowedFile << ". "
+    llvm::errs() << "Failed to open allow file " << ToolOpts.AllowedFile << ". "
                  << AllowedPatterns.getError().message() << "\n";
     return 1;
   }
   change_namespace::ChangeNamespaceTool NamespaceTool(
-      OldNamespace, NewNamespace, FilePattern, *AllowedPatterns,
-      &Tool.getReplacements(), Style);
+      ToolOpts.OldNamespace, ToolOpts.NewNamespace, ToolOpts.FilePattern,
+      *AllowedPatterns, &Tool.getReplacements(), ToolOpts.Style);
   ast_matchers::MatchFinder Finder;
   NamespaceTool.registerMatchers(&Finder);
   std::unique_ptr<tooling::FrontendActionFactory> Factory =
@@ -134,18 +155,19 @@ int main(int argc, const char **argv) {
   SourceManager Sources(Diagnostics, FileMgr);
   Rewriter Rewrite(Sources, DefaultLangOptions);
 
-  if (!formatAndApplyAllReplacements(Tool.getReplacements(), Rewrite, Style)) {
+  if (!formatAndApplyAllReplacements(Tool.getReplacements(), Rewrite,
+                                     ToolOpts.Style)) {
     llvm::errs() << "Failed applying all replacements.\n";
     return 1;
   }
-  if (Inplace)
+  if (ToolOpts.Inplace)
     return Rewrite.overwriteChangedFiles();
 
   std::set<llvm::StringRef> ChangedFiles;
   for (const auto &it : Tool.getReplacements())
     ChangedFiles.insert(it.first);
 
-  if (DumpYAML) {
+  if (ToolOpts.DumpYAML) {
     auto WriteToYAML = [&](llvm::raw_ostream &OS) {
       OS << "[\n";
       for (auto I = ChangedFiles.begin(), E = ChangedFiles.end(); I != E; ++I) {

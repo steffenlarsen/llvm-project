@@ -13,6 +13,7 @@
 #include "llvm/Analysis/VectorUtils.h"
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/DemandedBits.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopIterator.h"
@@ -22,11 +23,13 @@
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/MemoryModelRelaxationAnnotations.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/Value.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
 
 #define DEBUG_TYPE "vectorutils"
 
@@ -34,10 +37,11 @@ using namespace llvm;
 using namespace llvm::PatternMatch;
 
 /// Maximum factor for an interleaved memory access.
-static cl::opt<unsigned> MaxInterleaveGroupFactor(
-    "max-interleave-group-factor", cl::Hidden,
-    cl::desc("Maximum factor for an interleaved access group (default = 8)"),
-    cl::init(8));
+unsigned MaxInterleaveGroupFactor = 8;
+
+static unsigned getMaxInterleaveGroupFactor(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_MaxInterleaveGroupFactor>(Ctx);
+}
 
 /// Return true if all of the intrinsic's arguments and return type are scalars
 /// for the scalar form of the intrinsic, and vectors for the vector form of the
@@ -1283,9 +1287,12 @@ APInt llvm::possiblyDemandedEltsInMask(Value *Mask) {
   return DemandedElts;
 }
 
-bool InterleavedAccessInfo::isStrided(int Stride) {
+bool InterleavedAccessInfo::isStrided(int Stride) const {
   unsigned Factor = std::abs(Stride);
-  return Factor >= 2 && Factor <= MaxInterleaveGroupFactor;
+  const Function *F = TheLoop ? TheLoop->getHeader()->getParent() : nullptr;
+  return Factor >= 2 && Factor <= (F ? getMaxInterleaveGroupFactor(
+                                           F->getContext().getOptionsContext())
+                                     : MaxInterleaveGroupFactor);
 }
 
 void InterleavedAccessInfo::collectConstStrideAccesses(

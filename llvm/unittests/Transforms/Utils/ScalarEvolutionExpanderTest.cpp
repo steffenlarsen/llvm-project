@@ -33,7 +33,7 @@ using namespace PatternMatch;
 // deleting the PassManager.
 class ScalarEvolutionExpanderTest : public testing::Test {
 protected:
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module M;
   TargetLibraryInfoImpl TLII;
   TargetLibraryInfo TLI;
@@ -107,8 +107,8 @@ TEST_F(ScalarEvolutionExpanderTest, ExpandPtrTypeSCEV) {
       GetElementPtrInst::Create(I8Ty, Gep0, Ci32, "gep1", Br->getIterator());
   GetElementPtrInst *Gep2 = GetElementPtrInst::Create(
       I8Ty, UndefPtr, Ci32, "gep2", Br->getIterator());
-  CmpInst *Cmp = CmpInst::Create(Instruction::ICmp, CmpInst::ICMP_ULT,
-                                 UndefPtr, Gep0, "cmp", Br->getIterator());
+  CmpInst *Cmp = CmpInst::Create(Instruction::ICmp, CmpInst::ICMP_ULT, UndefPtr,
+                                 Gep0, "cmp", Br->getIterator());
   SelectInst *Select =
       SelectInst::Create(Cmp, Gep1, Gep2, "select", Br->getIterator());
 
@@ -477,14 +477,13 @@ TEST_F(ScalarEvolutionExpanderTest, SCEVCacheNSW) {
 }
 
 TEST_F(ScalarEvolutionExpanderTest, SCEVExpandInsertCanonicalIV) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
 
   // Expand the addrec produced by GetAddRec into a loop without a canonical IV.
   // SCEVExpander will insert one.
   auto TestNoCanonicalIV =
-      [&](std::function<const SCEV *(ScalarEvolution & SE, Loop * L)>
-              GetAddRec) {
+      [&](std::function<const SCEV *(ScalarEvolution &SE, Loop *L)> GetAddRec) {
         std::unique_ptr<Module> M = parseAssemblyString(
             "define i32 @test(i32 %limit) { "
             "entry: "
@@ -527,7 +526,7 @@ TEST_F(ScalarEvolutionExpanderTest, SCEVExpandInsertCanonicalIV) {
   // SCEVExpander will insert a canonical IV of a wider type to expand the
   // addrec.
   auto TestNarrowCanonicalIV = [&](std::function<const SCEV *(
-                                       ScalarEvolution & SE, Loop * L)>
+                                       ScalarEvolution &SE, Loop *L)>
                                        GetAddRec) {
     std::unique_ptr<Module> M = parseAssemblyString(
         "define i32 @test(i32 %limit) { "
@@ -604,7 +603,7 @@ TEST_F(ScalarEvolutionExpanderTest, SCEVExpandInsertCanonicalIV) {
   // of addrec width.
   // To expand the addrec SCEVExpander should use the existing canonical IV.
   auto TestMatchingCanonicalIV =
-      [&](std::function<const SCEV *(ScalarEvolution & SE, Loop * L)> GetAddRec,
+      [&](std::function<const SCEV *(ScalarEvolution &SE, Loop *L)> GetAddRec,
           unsigned ARBitWidth) {
         auto ARBitWidthTypeStr = "i" + std::to_string(ARBitWidth);
         std::unique_ptr<Module> M = parseAssemblyString(
@@ -679,7 +678,7 @@ TEST_F(ScalarEvolutionExpanderTest, SCEVExpandInsertCanonicalIV) {
 TEST_F(ScalarEvolutionExpanderTest, SCEVExpanderShlNSW) {
 
   auto checkOneCase = [this](std::string &&str) {
-    LLVMContext C;
+    LLVMContext C{llvm::clv2::defaultOptionsContext()};
     SMDiagnostic Err;
     std::unique_ptr<Module> M = parseAssemblyString(str, Err, C);
 
@@ -721,12 +720,12 @@ TEST_F(ScalarEvolutionExpanderTest, SCEVExpanderShlNSW) {
 // type wider than the type of the addrec itself. Currently, SCEVExpander
 // just falls back to literal mode for nested addrecs.
 TEST_F(ScalarEvolutionExpanderTest, SCEVExpandNonAffineAddRec) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
 
   // Expand the addrec produced by GetAddRec into a loop without a canonical IV.
   auto TestNoCanonicalIV =
-      [&](std::function<const SCEVAddRecExpr *(ScalarEvolution & SE, Loop * L)>
+      [&](std::function<const SCEVAddRecExpr *(ScalarEvolution &SE, Loop *L)>
               GetAddRec) {
         std::unique_ptr<Module> M = parseAssemblyString(
             "define i32 @test(i32 %limit) { "
@@ -766,7 +765,7 @@ TEST_F(ScalarEvolutionExpanderTest, SCEVExpandNonAffineAddRec) {
   // Expand the addrec produced by GetAddRec into a loop with a canonical IV
   // which is narrower than addrec type.
   auto TestNarrowCanonicalIV = [&](std::function<const SCEVAddRecExpr *(
-                                       ScalarEvolution & SE, Loop * L)>
+                                       ScalarEvolution &SE, Loop *L)>
                                        GetAddRec) {
     std::unique_ptr<Module> M = parseAssemblyString(
         "define i32 @test(i32 %limit) { "
@@ -815,7 +814,7 @@ TEST_F(ScalarEvolutionExpanderTest, SCEVExpandNonAffineAddRec) {
   // Expand the addrec produced by GetAddRec into a loop with a canonical IV
   // of addrec width.
   auto TestMatchingCanonicalIV =
-      [&](std::function<const SCEVAddRecExpr *(ScalarEvolution & SE, Loop * L)>
+      [&](std::function<const SCEVAddRecExpr *(ScalarEvolution &SE, Loop *L)>
               GetAddRec,
           unsigned ARBitWidth) {
         auto ARBitWidthTypeStr = "i" + std::to_string(ARBitWidth);
@@ -904,7 +903,7 @@ TEST_F(ScalarEvolutionExpanderTest, SCEVExpandNonAffineAddRec) {
 }
 
 TEST_F(ScalarEvolutionExpanderTest, ExpandNonIntegralPtrWithNullBase) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
 
   std::unique_ptr<Module> M =
@@ -955,7 +954,7 @@ TEST_F(ScalarEvolutionExpanderTest, ExpandNonIntegralPtrWithNullBase) {
 }
 
 TEST_F(ScalarEvolutionExpanderTest, GEPFlags) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   StringRef ModStr = R"(
   define void @f(ptr %p, i64 %x) {
@@ -988,7 +987,7 @@ TEST_F(ScalarEvolutionExpanderTest, GEPFlags) {
 
 // Test that InsertBinop scans existing instructions in the block.
 TEST_F(ScalarEvolutionExpanderTest, InsertBinopReuseShlWithMatchingFlags) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString("define void @f(i64 %n) { "
                                                   "  ret void "

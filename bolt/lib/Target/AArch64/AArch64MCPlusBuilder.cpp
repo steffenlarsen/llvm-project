@@ -20,6 +20,7 @@
 #include "Utils/AArch64BaseInfo.h"
 #include "bolt/Core/BinaryBasicBlock.h"
 #include "bolt/Core/BinaryFunction.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
 #include "bolt/Core/MCInstUtils.h"
 #include "bolt/Core/MCPlusBuilder.h"
 #include "llvm/BinaryFormat/ELF.h"
@@ -29,7 +30,7 @@
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegister.h"
 #include "llvm/MC/MCRegisterInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/DataExtractor.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -40,13 +41,14 @@ using namespace llvm;
 using namespace bolt;
 
 namespace opts {
-extern cl::OptionCategory BoltInstrCategory;
-static cl::opt<bool> NoLSEAtomics(
-    "no-lse-atomics",
-    cl::desc("generate instrumentation code sequence without using LSE atomic "
-             "instruction"),
-    cl::init(false), cl::Optional, cl::cat(BoltInstrCategory));
+bool NoLSEAtomics = false;
 } // namespace opts
+
+static bool getNoLSEAtomics(const clv2::OptionsContext &Ctx) {
+  if (auto *O = bolt::bolt_core_opts::getBoltCoreOpts(Ctx))
+    return O->get<&clv2::BOLTCORE_NoLSEAtomics>();
+  return false;
+}
 
 namespace {
 
@@ -119,7 +121,8 @@ static void storeReg(MCInst &Inst, MCPhysReg From, MCPhysReg To) {
 }
 
 static void atomicAdd(MCInst &Inst, MCPhysReg RegTo, MCPhysReg RegCnt) {
-  assert(!opts::NoLSEAtomics && "Supports only ARM with LSE extension");
+  assert(!getNoLSEAtomics(llvm::clv2::defaultOptionsContext()) &&
+         "Supports only ARM with LSE extension");
   Inst.setOpcode(AArch64::LDADDX);
   Inst.clear();
   Inst.addOperand(MCOperand::createReg(AArch64::XZR));
@@ -3309,7 +3312,7 @@ public:
            "helper function of counter increment for instrumentation "
            "has already been created");
 
-    if (!opts::NoLSEAtomics)
+    if (!getNoLSEAtomics(*OptsCtx))
       return;
 
     MCContext *Ctx = BC.Ctx.get();
@@ -3367,9 +3370,9 @@ public:
                                            MCContext *Ctx, bool IsLeaf,
                                            unsigned CodePointerSize) override {
     unsigned int I = 0;
-    InstructionListType Instrs(opts::NoLSEAtomics ? 8 : 6);
+    InstructionListType Instrs(getNoLSEAtomics(*OptsCtx) ? 8 : 6);
 
-    if (opts::NoLSEAtomics) {
+    if (getNoLSEAtomics(*OptsCtx)) {
       createPushRegisters(Instrs[I++], AArch64::X0, AArch64::LR);
       createPushRegisters(Instrs[I++], AArch64::X1, AArch64::X2);
     } else {
@@ -3381,7 +3384,7 @@ public:
     std::copy(Addr.begin(), Addr.end(), Instrs.begin() + I);
     I += Addr.size();
 
-    if (opts::NoLSEAtomics) {
+    if (getNoLSEAtomics(*OptsCtx)) {
       const MCSymbol *Helper = InstrCounterIncrFunc->getSymbol();
       InstructionListType HelperAddr =
           materializeAddress(Helper, Ctx, AArch64::X1);
@@ -3396,7 +3399,7 @@ public:
       I += Insts.size();
     }
     createPopRegisters(Instrs[I++], AArch64::X0,
-                       opts::NoLSEAtomics ? AArch64::LR : AArch64::X1);
+                       getNoLSEAtomics(*OptsCtx) ? AArch64::LR : AArch64::X1);
     return Instrs;
   }
 

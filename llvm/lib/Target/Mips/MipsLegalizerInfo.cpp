@@ -331,7 +331,7 @@ MipsLegalizerInfo::MipsLegalizerInfo(const MipsSubtarget &ST) {
   getActionDefinitionsBuilder(G_FENCE).alwaysLegal();
   getActionDefinitionsBuilder({G_TRAP, G_DEBUGTRAP, G_UBSANTRAP}).alwaysLegal();
 
-  verify(*ST.getInstrInfo());
+  verify(*ST.getInstrInfo(), ST.getOptionsContext());
 }
 
 bool MipsLegalizerInfo::legalizeCustom(

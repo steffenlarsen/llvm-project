@@ -20,7 +20,9 @@
 #ifndef LLVM_TOOLS_OPT_NEWPMDRIVER_H
 #define LLVM_TOOLS_OPT_NEWPMDRIVER_H
 
-#include "llvm/Support/CommandLine.h"
+#include "llvm/ADT/ArrayRef.h"
+#include <functional>
+#include <string>
 
 namespace llvm {
 class PassBuilder;
@@ -30,12 +32,7 @@ class PassPlugin;
 class TargetMachine;
 class ToolOutputFile;
 class TargetLibraryInfoImpl;
-
-extern cl::opt<bool> DebugifyEach;
-extern cl::opt<std::string> DebugifyExport;
-
-extern cl::opt<bool> VerifyEachDebugInfoPreserve;
-extern cl::opt<std::string> VerifyDIPreserveExport;
+class raw_ostream;
 
 namespace opt_tool {
 enum OutputKind {
@@ -52,6 +49,52 @@ enum PGOKind {
   SampleUse
 };
 enum CSPGOKind { NoCSPGO, CSInstrGen, CSInstrUse };
+enum class DebugLogging { None, Normal, Verbose, Quiet };
+enum class PGOColdFuncAttrKind { Default, OptSize, MinSize, OptNone };
+
+/// All options consumed by NewPMDriver.
+struct NPMOptions {
+  // debugify
+  bool DebugifyEach = false;
+  std::string DebugifyExport;
+  bool VerifyEachDebugInfoPreserve = false;
+  std::string VerifyDIPreserveExport;
+
+  // pass manager debug
+  bool EnableLoopFusion = false;
+  DebugLogging DebugPM = DebugLogging::None;
+
+  // AA / EP pipelines
+  std::string AAPipeline = "default";
+  std::string PeepholeEPPipeline;
+  std::string LateLoopOptimizationsEPPipeline;
+  std::string LoopOptimizerEndEPPipeline;
+  std::string ScalarOptimizerLateEPPipeline;
+  std::string CGSCCOptimizerLateEPPipeline;
+  std::string VectorizerStartEPPipeline;
+  std::string VectorizerEndEPPipeline;
+  std::string PipelineStartEPPipeline;
+  std::string PipelineEarlySimplificationEPPipeline;
+  std::string OptimizerEarlyEPPipeline;
+  std::string OptimizerLastEPPipeline;
+  std::string FullLinkTimeOptimizationEarlyEPPipeline;
+  std::string FullLinkTimeOptimizationLastEPPipeline;
+
+  bool DisablePipelineVerification = false;
+
+  // PGO
+  PGOKind PGOKindFlag = NoPGO;
+  std::string ProfileFile;
+  std::string MemoryProfileFile;
+  CSPGOKind CSPGOKindFlag = NoCSPGO;
+  std::string CSProfileGenFile;
+  std::string ProfileRemappingFile;
+  PGOColdFuncAttrKind PGOColdFuncAttr = PGOColdFuncAttrKind::Default;
+  bool DebugInfoForProfiling = false;
+  bool PseudoProbeForProfiling = false;
+
+  bool DisableLoopUnrolling = false;
+};
 } // namespace opt_tool
 
 void printPasses(raw_ostream &OS);
@@ -75,7 +118,7 @@ bool runPassPipeline(
     bool ShouldPreserveAssemblyUseListOrder,
     bool ShouldPreserveBitcodeUseListOrder, bool EmitSummaryIndex,
     bool EmitModuleHash, bool EnableDebugify, bool VerifyDIPreserve,
-    bool EnableProfcheck, bool UnifiedLTO = false);
+    bool EnableProfcheck, bool UnifiedLTO, const opt_tool::NPMOptions &NPMOpts);
 } // namespace llvm
 
 #endif

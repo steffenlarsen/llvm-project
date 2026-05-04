@@ -49,7 +49,7 @@ namespace bolt {
 ///
 class ValidateInternalCalls : public BinaryFunctionPass {
 public:
-  explicit ValidateInternalCalls(const cl::opt<bool> &PrintPass)
+  explicit ValidateInternalCalls(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "validate-internal-calls"; }

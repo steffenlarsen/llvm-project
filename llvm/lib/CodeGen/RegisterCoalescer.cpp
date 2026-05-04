@@ -21,6 +21,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/CalcSpillWeights.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/LiveRangeEdit.h"
@@ -43,15 +44,18 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/LaneBitmask.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -75,51 +79,45 @@ STATISTIC(NumLaneConflicts, "Number of dead lane conflicts tested");
 STATISTIC(NumLaneResolves, "Number of dead lane conflicts resolved");
 STATISTIC(NumShrinkToUses, "Number of shrinkToUses called");
 
-static cl::opt<bool> EnableJoining("join-liveintervals",
-                                   cl::desc("Coalesce copies (default=true)"),
-                                   cl::init(true), cl::Hidden);
-
-static cl::opt<bool> UseTerminalRule("terminal-rule",
-                                     cl::desc("Apply the terminal rule"),
-                                     cl::init(true), cl::Hidden);
-
 /// Temporary flag to test critical edge unsplitting.
-static cl::opt<bool> EnableJoinSplits(
-    "join-splitedges",
-    cl::desc("Coalesce copies on split edges (default=subtarget)"), cl::Hidden);
 
 /// Temporary flag to test global copy optimization.
-static cl::opt<cl::boolOrDefault> EnableGlobalCopies(
-    "join-globalcopies",
-    cl::desc("Coalesce copies that span blocks (default=subtarget)"),
-    cl::init(cl::boolOrDefault::BOU_UNSET), cl::Hidden);
 
-static cl::opt<bool> VerifyCoalescing(
-    "verify-coalescing",
-    cl::desc("Verify machine instrs before and after register coalescing"),
-    cl::Hidden);
+static bool getJoinLiveintervals(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_JoinLiveintervals>(Ctx);
+}
 
-static cl::opt<unsigned> LateRematUpdateThreshold(
-    "late-remat-update-threshold", cl::Hidden,
-    cl::desc("During rematerialization for a copy, if the def instruction has "
-             "many other copy uses to be rematerialized, delay the multiple "
-             "separate live interval update work and do them all at once after "
-             "all those rematerialization are done. It will save a lot of "
-             "repeated work. "),
-    cl::init(100));
+static bool getTerminalRule(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_TerminalRule>(Ctx);
+}
 
-static cl::opt<unsigned> LargeIntervalSizeThreshold(
-    "large-interval-size-threshold", cl::Hidden,
-    cl::desc("If the valnos size of an interval is larger than the threshold, "
-             "it is regarded as a large interval. "),
-    cl::init(100));
+static bool getJoinSplitedges(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_JoinSplitedges>(Ctx);
+}
 
-static cl::opt<unsigned> LargeIntervalFreqThreshold(
-    "large-interval-freq-threshold", cl::Hidden,
-    cl::desc("For a large interval, if it is coalesced with other live "
-             "intervals many times more than the threshold, stop its "
-             "coalescing to control the compile time. "),
-    cl::init(256));
+static bool getVerifyCoalescing(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_VerifyCoalescing>(Ctx);
+}
+
+static unsigned getLateRematUpdateThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_LateRematUpdateThreshold>(Ctx);
+}
+
+static unsigned getLargeIntervalSizeThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_LargeIntervalSizeThreshold>(
+      Ctx);
+}
+
+static unsigned getLargeIntervalFreqThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_LargeIntervalFreqThreshold>(
+      Ctx);
+}
+
+static cl::boolOrDefault getJoinGlobalcopies(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::CGPassRegAllocReg,
+                           &clv2::CGPASS_JoinGlobalcopies>(
+      Ctx, cl::boolOrDefault::BOU_UNSET);
+}
 
 namespace {
 
@@ -1727,7 +1725,8 @@ bool RegisterCoalescer::reMaterializeDef(const CoalescerPair &CP,
     if (UseMO.getParent()->isCopyLike())
       NumCopyUses++;
   }
-  if (NumCopyUses < LateRematUpdateThreshold) {
+  if (NumCopyUses < getLateRematUpdateThreshold(
+                        MF->getFunction().getContext().getOptionsContext())) {
     // The source interval can become smaller because we removed a use.
     shrinkToUses(&SrcInt, &DeadDefs);
     if (!DeadDefs.empty())
@@ -3694,10 +3693,13 @@ void RegisterCoalescer::mergeSubRangeInto(LiveInterval &LI,
 }
 
 bool RegisterCoalescer::isHighCostLiveInterval(LiveInterval &LI) {
-  if (LI.valnos.size() < LargeIntervalSizeThreshold)
+  if (LI.valnos.size() <
+      getLargeIntervalSizeThreshold(
+          MF->getFunction().getContext().getOptionsContext()))
     return false;
   auto &Counter = LargeLIVisitCounter[LI.reg()];
-  if (Counter < LargeIntervalFreqThreshold) {
+  if (Counter < getLargeIntervalFreqThreshold(
+                    MF->getFunction().getContext().getOptionsContext())) {
     Counter++;
     return false;
   }
@@ -4145,7 +4147,7 @@ static bool isTerminalReg(Register DstReg, const MachineInstr &Copy,
 
 bool RegisterCoalescer::applyTerminalRule(const MachineInstr &Copy) const {
   assert(Copy.isCopyLike());
-  if (!UseTerminalRule)
+  if (!getTerminalRule(MF->getFunction().getContext().getOptionsContext()))
     return false;
   Register SrcReg, DstReg;
   unsigned SrcSubReg = 0, DstSubReg = 0;
@@ -4340,10 +4342,14 @@ bool RegisterCoalescer::run(MachineFunction &fn) {
   const TargetSubtargetInfo &STI = fn.getSubtarget();
   TRI = STI.getRegisterInfo();
   TII = STI.getInstrInfo();
-  if (EnableGlobalCopies == cl::boolOrDefault::BOU_UNSET)
+  if (getJoinGlobalcopies(MF->getFunction().getContext().getOptionsContext()) ==
+      cl::boolOrDefault::BOU_UNSET)
     JoinGlobalCopies = STI.enableJoinGlobalCopies();
   else
-    JoinGlobalCopies = (EnableGlobalCopies == cl::boolOrDefault::BOU_TRUE);
+    JoinGlobalCopies =
+        (getJoinGlobalcopies(
+             MF->getFunction().getContext().getOptionsContext()) ==
+         cl::boolOrDefault::BOU_TRUE);
 
   // If there are PHIs tracked by debug-info, they will need updating during
   // coalescing. Build an index of those PHIs to ease updating.
@@ -4361,16 +4367,17 @@ bool RegisterCoalescer::run(MachineFunction &fn) {
   // The MachineScheduler does not currently require JoinSplitEdges. This will
   // either be enabled unconditionally or replaced by a more general live range
   // splitting optimization.
-  JoinSplitEdges = EnableJoinSplits;
+  JoinSplitEdges =
+      getJoinSplitedges(MF->getFunction().getContext().getOptionsContext());
 
-  if (VerifyCoalescing)
+  if (getVerifyCoalescing(MF->getFunction().getContext().getOptionsContext()))
     MF->verify(LIS, SI, "Before register coalescing", &errs());
 
   DbgVRegToValues.clear();
   buildVRegToDbgValueMap(fn);
 
   // Join (coalesce) intervals if requested.
-  if (EnableJoining)
+  if (getJoinLiveintervals(MF->getFunction().getContext().getOptionsContext()))
     joinAllIntervals();
 
   // After deleting a lot of copies, register classes may be less constrained.
@@ -4422,7 +4429,7 @@ bool RegisterCoalescer::run(MachineFunction &fn) {
 
   LLVM_DEBUG(LIS->dump());
 
-  if (VerifyCoalescing)
+  if (getVerifyCoalescing(MF->getFunction().getContext().getOptionsContext()))
     MF->verify(LIS, SI, "After register coalescing", &errs());
   return true;
 }

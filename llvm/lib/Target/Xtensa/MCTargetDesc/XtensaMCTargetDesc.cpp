@@ -264,8 +264,12 @@ static MCRegisterInfo *createXtensaMCRegisterInfo(const Triple &TT) {
 }
 
 static MCSubtargetInfo *
-createXtensaMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
-  return createXtensaMCSubtargetInfoImpl(TT, CPU, CPU, FS);
+createXtensaMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                            const llvm::clv2::OptionsContext &Ctx) {
+  MCSubtargetInfo *STI = createXtensaMCSubtargetInfoImpl(TT, CPU, CPU, FS);
+  if (STI)
+    STI->setOptionsContext(Ctx);
+  return STI;
 }
 
 static MCTargetStreamer *

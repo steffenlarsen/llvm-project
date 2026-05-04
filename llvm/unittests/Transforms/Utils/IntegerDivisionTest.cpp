@@ -18,16 +18,15 @@ using namespace llvm;
 
 namespace {
 
-
 TEST(IntegerDivision, SDiv) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("test division", C);
   IRBuilder<> Builder(C);
 
-  SmallVector<Type*, 2> ArgTys(2, Builder.getInt32Ty());
-  Function *F = Function::Create(FunctionType::get(Builder.getInt32Ty(),
-                                                   ArgTys, false),
-                                 GlobalValue::ExternalLinkage, "F", &M);
+  SmallVector<Type *, 2> ArgTys(2, Builder.getInt32Ty());
+  Function *F =
+      Function::Create(FunctionType::get(Builder.getInt32Ty(), ArgTys, false),
+                       GlobalValue::ExternalLinkage, "F", &M);
   assert(F->arg_size() == 2);
 
   BasicBlock *BB = BasicBlock::Create(C, "", F);
@@ -45,19 +44,19 @@ TEST(IntegerDivision, SDiv) {
   expandDivision(cast<BinaryOperator>(Div));
   EXPECT_TRUE(BB->front().getOpcode() == Instruction::Freeze);
 
-  Instruction* Quotient = dyn_cast<Instruction>(cast<User>(Ret)->getOperand(0));
+  Instruction *Quotient = dyn_cast<Instruction>(cast<User>(Ret)->getOperand(0));
   EXPECT_TRUE(Quotient && Quotient->getOpcode() == Instruction::Sub);
 }
 
 TEST(IntegerDivision, UDiv) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("test division", C);
   IRBuilder<> Builder(C);
 
-  SmallVector<Type*, 2> ArgTys(2, Builder.getInt32Ty());
-  Function *F = Function::Create(FunctionType::get(Builder.getInt32Ty(),
-                                                   ArgTys, false),
-                                 GlobalValue::ExternalLinkage, "F", &M);
+  SmallVector<Type *, 2> ArgTys(2, Builder.getInt32Ty());
+  Function *F =
+      Function::Create(FunctionType::get(Builder.getInt32Ty(), ArgTys, false),
+                       GlobalValue::ExternalLinkage, "F", &M);
   assert(F->arg_size() == 2);
 
   BasicBlock *BB = BasicBlock::Create(C, "", F);
@@ -75,19 +74,19 @@ TEST(IntegerDivision, UDiv) {
   expandDivision(cast<BinaryOperator>(Div));
   EXPECT_TRUE(BB->front().getOpcode() == Instruction::Freeze);
 
-  Instruction* Quotient = dyn_cast<Instruction>(cast<User>(Ret)->getOperand(0));
+  Instruction *Quotient = dyn_cast<Instruction>(cast<User>(Ret)->getOperand(0));
   EXPECT_TRUE(Quotient && Quotient->getOpcode() == Instruction::PHI);
 }
 
 TEST(IntegerDivision, SRem) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("test remainder", C);
   IRBuilder<> Builder(C);
 
-  SmallVector<Type*, 2> ArgTys(2, Builder.getInt32Ty());
-  Function *F = Function::Create(FunctionType::get(Builder.getInt32Ty(),
-                                                   ArgTys, false),
-                                 GlobalValue::ExternalLinkage, "F", &M);
+  SmallVector<Type *, 2> ArgTys(2, Builder.getInt32Ty());
+  Function *F =
+      Function::Create(FunctionType::get(Builder.getInt32Ty(), ArgTys, false),
+                       GlobalValue::ExternalLinkage, "F", &M);
   assert(F->arg_size() == 2);
 
   BasicBlock *BB = BasicBlock::Create(C, "", F);
@@ -105,19 +104,20 @@ TEST(IntegerDivision, SRem) {
   expandRemainder(cast<BinaryOperator>(Rem));
   EXPECT_TRUE(BB->front().getOpcode() == Instruction::Freeze);
 
-  Instruction* Remainder = dyn_cast<Instruction>(cast<User>(Ret)->getOperand(0));
+  Instruction *Remainder =
+      dyn_cast<Instruction>(cast<User>(Ret)->getOperand(0));
   EXPECT_TRUE(Remainder && Remainder->getOpcode() == Instruction::Sub);
 }
 
 TEST(IntegerDivision, URem) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("test remainder", C);
   IRBuilder<> Builder(C);
 
-  SmallVector<Type*, 2> ArgTys(2, Builder.getInt32Ty());
-  Function *F = Function::Create(FunctionType::get(Builder.getInt32Ty(),
-                                                   ArgTys, false),
-                                 GlobalValue::ExternalLinkage, "F", &M);
+  SmallVector<Type *, 2> ArgTys(2, Builder.getInt32Ty());
+  Function *F =
+      Function::Create(FunctionType::get(Builder.getInt32Ty(), ArgTys, false),
+                       GlobalValue::ExternalLinkage, "F", &M);
   assert(F->arg_size() == 2);
 
   BasicBlock *BB = BasicBlock::Create(C, "", F);
@@ -135,20 +135,20 @@ TEST(IntegerDivision, URem) {
   expandRemainder(cast<BinaryOperator>(Rem));
   EXPECT_TRUE(BB->front().getOpcode() == Instruction::Freeze);
 
-  Instruction* Remainder = dyn_cast<Instruction>(cast<User>(Ret)->getOperand(0));
+  Instruction *Remainder =
+      dyn_cast<Instruction>(cast<User>(Ret)->getOperand(0));
   EXPECT_TRUE(Remainder && Remainder->getOpcode() == Instruction::Sub);
 }
 
-
 TEST(IntegerDivision, SDiv64) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("test division", C);
   IRBuilder<> Builder(C);
 
-  SmallVector<Type*, 2> ArgTys(2, Builder.getInt64Ty());
-  Function *F = Function::Create(FunctionType::get(Builder.getInt64Ty(),
-                                                   ArgTys, false),
-                                 GlobalValue::ExternalLinkage, "F", &M);
+  SmallVector<Type *, 2> ArgTys(2, Builder.getInt64Ty());
+  Function *F =
+      Function::Create(FunctionType::get(Builder.getInt64Ty(), ArgTys, false),
+                       GlobalValue::ExternalLinkage, "F", &M);
   assert(F->arg_size() == 2);
 
   BasicBlock *BB = BasicBlock::Create(C, "", F);
@@ -166,19 +166,19 @@ TEST(IntegerDivision, SDiv64) {
   expandDivision(cast<BinaryOperator>(Div));
   EXPECT_TRUE(BB->front().getOpcode() == Instruction::Freeze);
 
-  Instruction* Quotient = dyn_cast<Instruction>(cast<User>(Ret)->getOperand(0));
+  Instruction *Quotient = dyn_cast<Instruction>(cast<User>(Ret)->getOperand(0));
   EXPECT_TRUE(Quotient && Quotient->getOpcode() == Instruction::Sub);
 }
 
 TEST(IntegerDivision, UDiv64) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("test division", C);
   IRBuilder<> Builder(C);
 
-  SmallVector<Type*, 2> ArgTys(2, Builder.getInt64Ty());
-  Function *F = Function::Create(FunctionType::get(Builder.getInt64Ty(),
-                                                   ArgTys, false),
-                                 GlobalValue::ExternalLinkage, "F", &M);
+  SmallVector<Type *, 2> ArgTys(2, Builder.getInt64Ty());
+  Function *F =
+      Function::Create(FunctionType::get(Builder.getInt64Ty(), ArgTys, false),
+                       GlobalValue::ExternalLinkage, "F", &M);
   assert(F->arg_size() == 2);
 
   BasicBlock *BB = BasicBlock::Create(C, "", F);
@@ -196,19 +196,19 @@ TEST(IntegerDivision, UDiv64) {
   expandDivision(cast<BinaryOperator>(Div));
   EXPECT_TRUE(BB->front().getOpcode() == Instruction::Freeze);
 
-  Instruction* Quotient = dyn_cast<Instruction>(cast<User>(Ret)->getOperand(0));
+  Instruction *Quotient = dyn_cast<Instruction>(cast<User>(Ret)->getOperand(0));
   EXPECT_TRUE(Quotient && Quotient->getOpcode() == Instruction::PHI);
 }
 
 TEST(IntegerDivision, SRem64) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("test remainder", C);
   IRBuilder<> Builder(C);
 
-  SmallVector<Type*, 2> ArgTys(2, Builder.getInt64Ty());
-  Function *F = Function::Create(FunctionType::get(Builder.getInt64Ty(),
-                                                   ArgTys, false),
-                                 GlobalValue::ExternalLinkage, "F", &M);
+  SmallVector<Type *, 2> ArgTys(2, Builder.getInt64Ty());
+  Function *F =
+      Function::Create(FunctionType::get(Builder.getInt64Ty(), ArgTys, false),
+                       GlobalValue::ExternalLinkage, "F", &M);
   assert(F->arg_size() == 2);
 
   BasicBlock *BB = BasicBlock::Create(C, "", F);
@@ -226,19 +226,20 @@ TEST(IntegerDivision, SRem64) {
   expandRemainder(cast<BinaryOperator>(Rem));
   EXPECT_TRUE(BB->front().getOpcode() == Instruction::Freeze);
 
-  Instruction* Remainder = dyn_cast<Instruction>(cast<User>(Ret)->getOperand(0));
+  Instruction *Remainder =
+      dyn_cast<Instruction>(cast<User>(Ret)->getOperand(0));
   EXPECT_TRUE(Remainder && Remainder->getOpcode() == Instruction::Sub);
 }
 
 TEST(IntegerDivision, URem64) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("test remainder", C);
   IRBuilder<> Builder(C);
 
-  SmallVector<Type*, 2> ArgTys(2, Builder.getInt64Ty());
-  Function *F = Function::Create(FunctionType::get(Builder.getInt64Ty(),
-                                                   ArgTys, false),
-                                 GlobalValue::ExternalLinkage, "F", &M);
+  SmallVector<Type *, 2> ArgTys(2, Builder.getInt64Ty());
+  Function *F =
+      Function::Create(FunctionType::get(Builder.getInt64Ty(), ArgTys, false),
+                       GlobalValue::ExternalLinkage, "F", &M);
   assert(F->arg_size() == 2);
 
   BasicBlock *BB = BasicBlock::Create(C, "", F);
@@ -256,8 +257,9 @@ TEST(IntegerDivision, URem64) {
   expandRemainder(cast<BinaryOperator>(Rem));
   EXPECT_TRUE(BB->front().getOpcode() == Instruction::Freeze);
 
-  Instruction* Remainder = dyn_cast<Instruction>(cast<User>(Ret)->getOperand(0));
+  Instruction *Remainder =
+      dyn_cast<Instruction>(cast<User>(Ret)->getOperand(0));
   EXPECT_TRUE(Remainder && Remainder->getOpcode() == Instruction::Sub);
 }
 
-}
+} // namespace

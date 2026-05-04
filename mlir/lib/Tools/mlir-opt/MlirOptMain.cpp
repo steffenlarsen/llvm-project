@@ -23,6 +23,7 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/MLIROptionsOptInfos.h"
 #include "mlir/IR/Remarks.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
@@ -34,16 +35,20 @@
 #include "mlir/Tools/ParseUtilities.h"
 #include "mlir/Tools/Plugins/DialectPlugin.h"
 #include "mlir/Tools/Plugins/PassPlugin.h"
+#include "mlir/Tools/mlir-opt/MlirOptToolOptionsOptInfos.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Remarks/RemarkFormat.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Regex.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/SupportOptions.h"
+#include "llvm/Support/SupportOptionsOptInfos.h"
 #include "llvm/Support/ThreadPool.h"
 #include "llvm/Support/ToolOutputFile.h"
 
@@ -51,258 +56,133 @@ using namespace mlir;
 using namespace llvm;
 
 namespace {
-class BytecodeVersionParser : public cl::parser<std::optional<int64_t>> {
-public:
-  BytecodeVersionParser(cl::Option &o)
-      : cl::parser<std::optional<int64_t>>(o) {}
-
-  bool parse(cl::Option &o, StringRef /*argName*/, StringRef arg,
-             std::optional<int64_t> &v) {
-    long long w;
-    if (getAsSignedInteger(arg, 10, w))
-      return o.error("Invalid argument '" + arg +
-                     "', only integer is supported.");
-    v = w;
-    return false;
-  }
-};
-
 /// This class is intended to manage the handling of command line options for
+// Plugins are loaded as a side effect of parsing, and must stay that way: a
+// plugin registers passes/dialects that later options (e.g. --pass-pipeline)
+// need to resolve during the same parse.
+static void loadPassPluginValue(const std::string &Path) {
+  auto plugin = PassPlugin::load(Path);
+  if (!plugin) {
+    errs() << "Failed to load passes from '" << Path << "'. Request ignored.\n";
+    return;
+  }
+  plugin.get().registerPassRegistryCallbacks();
+}
+
+// Needs the DialectRegistry, which a plain function-pointer Callback cannot
+// carry, so its descriptor is built at runtime with a CtxCallback.
+static bool loadDialectPluginValue(void *Ctx, const std::string &Path) {
+  auto *registry = static_cast<DialectRegistry *>(Ctx);
+  if (!registry)
+    return true;
+  auto plugin = DialectPlugin::load(Path);
+  if (!plugin) {
+    errs() << "Failed to load dialect plugin from '" << Path
+           << "'. Request ignored.\n";
+    return true;
+  }
+  plugin.get().registerDialectRegistryCallbacks(*registry);
+  return true;
+}
+
+static constexpr llvm::clv2::OptionInfo<std::string> OI_LoadPassPlugin{
+    "load-pass-plugin", "Load passes from plugin library",
+    llvm::clv2::ZeroOrMore,
+    llvm::clv2::Callback<std::string>{&loadPassPluginValue}};
+
 /// creating a *-opt config. This is a singleton.
 struct MlirOptMainConfigCLOptions : public MlirOptMainConfig {
-  MlirOptMainConfigCLOptions() {
-    // These options are static but all uses ExternalStorage to initialize the
-    // members of the parent class. This is unusual but since this class is a
-    // singleton it basically attaches command line option to the singleton
-    // members.
-
-    static cl::opt<bool, /*ExternalStorage=*/true> allowUnregisteredDialects(
-        "allow-unregistered-dialect",
-        cl::desc("Allow operation with no registered dialects"),
-        cl::location(allowUnregisteredDialectsFlag), cl::init(false));
-
-    static cl::opt<bool, /*ExternalStorage=*/true> dumpPassPipeline(
-        "dump-pass-pipeline", cl::desc("Print the pipeline that will be run"),
-        cl::location(dumpPassPipelineFlag), cl::init(false));
-
-    static cl::opt<bool, /*ExternalStorage=*/true> emitBytecode(
-        "emit-bytecode", cl::desc("Emit bytecode when generating output"),
-        cl::location(emitBytecodeFlag), cl::init(false));
-
-    static cl::opt<bool, /*ExternalStorage=*/true> elideResourcesFromBytecode(
-        "elide-resource-data-from-bytecode",
-        cl::desc("Elide resources when generating bytecode"),
-        cl::location(elideResourceDataFromBytecodeFlag), cl::init(false));
-
-    static cl::opt<std::string, /*ExternalStorage=*/true> emitBytecodeProducer(
-        "emit-bytecode-producer",
-        cl::desc("Use specified producer when generating bytecode output"),
-        cl::location(emitBytecodeProducerFlag), cl::init(""));
-
-    static cl::opt<std::optional<int64_t>, /*ExternalStorage=*/true,
-                   BytecodeVersionParser>
-        bytecodeVersion(
-            "emit-bytecode-version",
-            cl::desc("Use specified bytecode when generating output"),
-            cl::location(emitBytecodeVersion), cl::init(std::nullopt));
-
-    static cl::opt<std::string, /*ExternalStorage=*/true> irdlFile(
-        "irdl-file",
-        cl::desc("IRDL file to register before processing the input"),
-        cl::location(irdlFileFlag), cl::init(""), cl::value_desc("filename"));
-
-    static cl::opt<VerbosityLevel, /*ExternalStorage=*/true>
-        diagnosticVerbosityLevel(
-            "mlir-diagnostic-verbosity-level",
-            cl::desc("Choose level of diagnostic information"),
-            cl::location(diagnosticVerbosityLevelFlag),
-            cl::init(VerbosityLevel::ErrorsWarningsAndRemarks),
-            cl::values(
-                clEnumValN(VerbosityLevel::ErrorsOnly, "errors", "Errors only"),
-                clEnumValN(VerbosityLevel::ErrorsAndWarnings, "warnings",
-                           "Errors and warnings"),
-                clEnumValN(VerbosityLevel::ErrorsWarningsAndRemarks, "remarks",
-                           "Errors, warnings and remarks")));
-
-    static cl::opt<bool, /*ExternalStorage=*/true> disableDiagnosticNotes(
-        "mlir-disable-diagnostic-notes", cl::desc("Disable diagnostic notes."),
-        cl::location(disableDiagnosticNotesFlag), cl::init(false));
-
-    static cl::opt<bool, /*ExternalStorage=*/true> explicitModule(
-        "no-implicit-module",
-        cl::desc("Disable implicit addition of a top-level module op during "
-                 "parsing"),
-        cl::location(useExplicitModuleFlag), cl::init(false));
-
-    static cl::opt<bool, /*ExternalStorage=*/true> listPasses(
-        "list-passes", cl::desc("Print the list of registered passes and exit"),
-        cl::location(listPassesFlag), cl::init(false));
-
-    static cl::opt<bool, /*ExternalStorage=*/true> runReproducer(
-        "run-reproducer", cl::desc("Run the pipeline stored in the reproducer"),
-        cl::location(runReproducerFlag), cl::init(false));
-
-    static cl::opt<bool, /*ExternalStorage=*/true> showDialects(
-        "show-dialects",
-        cl::desc("Print the list of registered dialects and exit"),
-        cl::location(showDialectsFlag), cl::init(false));
-
-    static cl::opt<std::string, /*ExternalStorage=*/true> splitInputFile{
-        "split-input-file",
-        llvm::cl::ValueOptional,
-        cl::callback([&](const std::string &str) {
-          // Implicit value: use default marker if flag was used without value.
-          if (str.empty())
-            splitInputFile.setValue(kDefaultSplitMarker);
-        }),
-        cl::desc("Split the input file into chunks using the given or "
-                 "default marker and process each chunk independently"),
-        cl::location(splitInputFileFlag),
-        cl::init("")};
-
-    static cl::opt<std::string, /*ExternalStorage=*/true> outputSplitMarker(
-        "output-split-marker",
-        cl::desc("Split marker to use for merging the ouput"),
-        cl::location(outputSplitMarkerFlag), cl::init(kDefaultSplitMarker));
-
-    static cl::opt<SourceMgrDiagnosticVerifierHandler::Level,
-                   /*ExternalStorage=*/true>
-        verifyDiagnostics{
-            "verify-diagnostics", llvm::cl::ValueOptional,
-            cl::desc("Check that emitted diagnostics match expected-* lines on "
-                     "the corresponding line"),
-            cl::location(verifyDiagnosticsFlag),
-            cl::values(
-                clEnumValN(SourceMgrDiagnosticVerifierHandler::Level::All,
-                           "all",
-                           "Check all diagnostics (expected, unexpected, "
-                           "near-misses)"),
-                // Implicit value: when passed with no arguments, e.g.
-                // `--verify-diagnostics` or `--verify-diagnostics=`.
-                clEnumValN(SourceMgrDiagnosticVerifierHandler::Level::All, "",
-                           "Check all diagnostics (expected, unexpected, "
-                           "near-misses)"),
-                clEnumValN(
-                    SourceMgrDiagnosticVerifierHandler::Level::OnlyExpected,
-                    "only-expected", "Check only expected diagnostics"))};
-
-    static cl::opt<bool, /*ExternalStorage=*/true> verifyPasses(
-        "verify-each",
-        cl::desc("Run the verifier after each transformation pass"),
-        cl::location(verifyPassesFlag), cl::init(true));
-
-    static cl::opt<bool, /*ExternalStorage=*/true> disableVerifyOnParsing(
-        "mlir-very-unsafe-disable-verifier-on-parsing",
-        cl::desc("Disable the verifier on parsing (very unsafe)"),
-        cl::location(disableVerifierOnParsingFlag), cl::init(false));
-
-    static cl::opt<bool, /*ExternalStorage=*/true> verifyRoundtrip(
-        "verify-roundtrip",
-        cl::desc("Round-trip the IR after parsing and ensure it succeeds"),
-        cl::location(verifyRoundtripFlag), cl::init(false));
-
-    static cl::list<std::string> passPlugins(
-        "load-pass-plugin", cl::desc("Load passes from plugin library"));
-
-    static cl::opt<std::string, /*ExternalStorage=*/true>
-        generateReproducerFile(
-            "mlir-generate-reproducer",
-            llvm::cl::desc(
-                "Generate an mlir reproducer at the provided filename"
-                " (no crash required)"),
-            cl::location(generateReproducerFileFlag), cl::init(""),
-            cl::value_desc("filename"));
-
-    static cl::OptionCategory remarkCategory(
-        "Remark Options",
-        "Filter remarks by regular expression (llvm::Regex syntax).");
-
-    static llvm::cl::opt<RemarkFormat, /*ExternalStorage=*/true> remarkFormat{
-        "remark-format",
-        llvm::cl::desc("Specify the format for remark output."),
-        cl::location(remarkFormatFlag),
-        llvm::cl::value_desc("format"),
-        llvm::cl::init(RemarkFormat::REMARK_FORMAT_STDOUT),
-        llvm::cl::values(clEnumValN(RemarkFormat::REMARK_FORMAT_STDOUT,
-                                    "emitRemark",
-                                    "Print as emitRemark to command-line"),
-                         clEnumValN(RemarkFormat::REMARK_FORMAT_YAML, "yaml",
-                                    "Print yaml file"),
-                         clEnumValN(RemarkFormat::REMARK_FORMAT_BITSTREAM,
-                                    "bitstream", "Print bitstream file")),
-        llvm::cl::cat(remarkCategory)};
-
-    static llvm::cl::opt<RemarkPolicy, /*ExternalStorage=*/true> remarkPolicy{
-        "remark-policy",
-        llvm::cl::desc("Specify the policy for remark output."),
-        cl::location(remarkPolicyFlag),
-        llvm::cl::value_desc("format"),
-        llvm::cl::init(RemarkPolicy::REMARK_POLICY_ALL),
-        llvm::cl::values(clEnumValN(RemarkPolicy::REMARK_POLICY_ALL, "all",
-                                    "Print all remarks"),
-                         clEnumValN(RemarkPolicy::REMARK_POLICY_FINAL, "final",
-                                    "Print final remarks")),
-        llvm::cl::cat(remarkCategory)};
-
-    static cl::opt<std::string, /*ExternalStorage=*/true> remarksAll(
-        "remarks-filter",
-        cl::desc("Show all remarks: passed, missed, failed, analysis"),
-        cl::location(remarksAllFilterFlag), cl::init(""),
-        cl::cat(remarkCategory));
-
-    static cl::opt<std::string, /*ExternalStorage=*/true> remarksFile(
-        "remarks-output-file",
-        cl::desc(
-            "Output file for yaml and bitstream remark formats. Default is "
-            "mlir-remarks.yaml or mlir-remarks.bitstream"),
-        cl::location(remarksOutputFileFlag), cl::init(""),
-        cl::cat(remarkCategory));
-
-    static cl::opt<std::string, /*ExternalStorage=*/true> remarksPassed(
-        "remarks-filter-passed", cl::desc("Show passed remarks"),
-        cl::location(remarksPassedFilterFlag), cl::init(""),
-        cl::cat(remarkCategory));
-
-    static cl::opt<std::string, /*ExternalStorage=*/true> remarksFailed(
-        "remarks-filter-failed", cl::desc("Show failed remarks"),
-        cl::location(remarksFailedFilterFlag), cl::init(""),
-        cl::cat(remarkCategory));
-
-    static cl::opt<std::string, /*ExternalStorage=*/true> remarksMissed(
-        "remarks-filter-missed", cl::desc("Show missed remarks"),
-        cl::location(remarksMissedFilterFlag), cl::init(""),
-        cl::cat(remarkCategory));
-
-    static cl::opt<std::string, /*ExternalStorage=*/true> remarksAnalyse(
-        "remarks-filter-analyse", cl::desc("Show analysis remarks"),
-        cl::location(remarksAnalyseFilterFlag), cl::init(""),
-        cl::cat(remarkCategory));
-
-    /// Set the callback to load a pass plugin.
-    passPlugins.setCallback([&](const std::string &pluginPath) {
-      auto plugin = PassPlugin::load(pluginPath);
-      if (!plugin) {
-        errs() << "Failed to load passes from '" << pluginPath
-               << "'. Request ignored.\n";
-        return;
-      }
-      plugin.get().registerPassRegistryCallbacks();
-    });
-
-    static cl::list<std::string> dialectPlugins(
-        "load-dialect-plugin", cl::desc("Load dialects from plugin library"));
-    this->dialectPlugins = std::addressof(dialectPlugins);
-
-    static PassPipelineCLParser passPipeline("", "Compiler passes to run", "p");
+  MlirOptMainConfigCLOptions()
+      : passPipeline("", "Compiler passes to run", "p") {
     setPassPipelineParser(passPipeline);
   }
 
-  /// Set the callback to load a dialect plugin.
-  void setDialectPluginsCallback(DialectRegistry &registry);
+  PassPipelineCLParser passPipeline;
 
-  /// Pointer to static dialectPlugins variable in constructor, needed by
-  /// setDialectPluginsCallback(DialectRegistry&).
-  cl::list<std::string> *dialectPlugins = nullptr;
+  using MlirOptToolOpts =
+      decltype(llvm::clv2::MlirOptToolOptsReg)::ParsedOptionsT;
+
+  void populateFromParsedOpts(const MlirOptToolOpts &O) {
+    using namespace llvm::clv2;
+    allowUnregisteredDialectsFlag = O.get<&MLIROPT_AllowUnregisteredDialect>();
+    dumpPassPipelineFlag = O.get<&MLIROPT_DumpPassPipeline>();
+    emitBytecodeFlag = O.get<&MLIROPT_EmitBytecode>();
+    elideResourceDataFromBytecodeFlag = O.get<&MLIROPT_ElideResourceData>();
+    emitBytecodeProducerFlag = O.get<&MLIROPT_EmitBytecodeProducer>();
+    if (O.specified<&MLIROPT_EmitBytecodeVersion>())
+      emitBytecodeVersion = O.get<&MLIROPT_EmitBytecodeVersion>();
+    irdlFileFlag = O.get<&MLIROPT_IrdlFile>();
+    diagnosticVerbosityLevelFlag =
+        static_cast<VerbosityLevel>(O.get<&MLIROPT_DiagnosticVerbosityLevel>());
+    disableDiagnosticNotesFlag = O.get<&MLIROPT_DisableDiagnosticNotes>();
+    useExplicitModuleFlag = O.get<&MLIROPT_NoImplicitModule>();
+    listPassesFlag = O.get<&MLIROPT_ListPasses>();
+    runReproducerFlag = O.get<&MLIROPT_RunReproducer>();
+    showDialectsFlag = O.get<&MLIROPT_ShowDialects>();
+    if (O.specified<&MLIROPT_SplitInputFile>()) {
+      auto marker = O.get<&MLIROPT_SplitInputFile>();
+      splitInputFileFlag =
+          marker.empty() ? kDefaultSplitMarker : std::string(marker);
+    }
+    outputSplitMarkerFlag = O.get<&MLIROPT_OutputSplitMarker>();
+    if (O.specified<&MLIROPT_VerifyDiagnostics>()) {
+      auto level = O.get<&MLIROPT_VerifyDiagnostics>();
+      if (level == MLIROpt_VerifyDiagLevel::OnlyExpected)
+        verifyDiagnosticsFlag =
+            SourceMgrDiagnosticVerifierHandler::Level::OnlyExpected;
+      else
+        verifyDiagnosticsFlag = SourceMgrDiagnosticVerifierHandler::Level::All;
+    }
+    verifyPassesFlag = O.get<&MLIROPT_VerifyEach>();
+    disableVerifierOnParsingFlag = O.get<&MLIROPT_DisableVerifierOnParsing>();
+    verifyRoundtripFlag = O.get<&MLIROPT_VerifyRoundtrip>();
+    generateReproducerFileFlag = O.get<&MLIROPT_GenerateReproducer>();
+    remarkFormatFlag =
+        static_cast<RemarkFormat>(O.get<&MLIROPT_RemarkFormat>());
+    remarkPolicyFlag =
+        static_cast<RemarkPolicy>(O.get<&MLIROPT_RemarkPolicy>());
+    remarksOutputFileFlag = O.get<&MLIROPT_RemarksOutputFile>();
+    remarksAllFilterFlag = O.get<&MLIROPT_RemarksFilter>();
+    remarksPassedFilterFlag = O.get<&MLIROPT_RemarksFilterPassed>();
+    remarksFailedFilterFlag = O.get<&MLIROPT_RemarksFilterFailed>();
+    remarksMissedFilterFlag = O.get<&MLIROPT_RemarksFilterMissed>();
+    remarksAnalyseFilterFlag = O.get<&MLIROPT_RemarksFilterAnalyse>();
+  }
+
+  void registerPluginOptions(llvm::clv2::OptionParser &P,
+                             DialectRegistry *registry) {
+    using namespace llvm::clv2;
+    P.addDynamicEntry(llvm::clv2::makeEntry<&OI_LoadPassPlugin>(
+        passPluginPath, passPluginCount));
+
+    dialectPluginOpt.emplace(
+        "load-dialect-plugin", "Load dialects from plugin library", ZeroOrMore,
+        CtxCallback<std::string>{&loadDialectPluginValue, registry});
+    P.addDynamicEntry(dialectPluginOpt->makeEntry());
+  }
+
+  /// Flush all dynamic option entries (pass pipeline + plugin options)
+  /// into the given OptionParser.
+  void registerDynamicOptions(llvm::clv2::OptionParser &P) {
+    passPipeline.registerWith(P);
+    registerPluginOptions(P, dialectRegistryPtr);
+  }
+
+  void setDialectPluginsCallback(DialectRegistry &registry) {
+    this->dialectRegistryPtr = &registry;
+  }
+
+  DialectRegistry *dialectRegistryPtr = nullptr;
+
+  // Parse destinations for the plugin options; the work happens in their
+  // callbacks, but clv2 still needs somewhere to store the value.
+  std::string passPluginPath;
+  unsigned passPluginCount = 0;
+  // Runtime-constructed because it carries the DialectRegistry as context, so
+  // it is a RuntimeOption (which owns the descriptor, its static info, and the
+  // value slot) rather than a constexpr OptionInfo.  Must outlive the parse,
+  // hence a member rather than a local.
+  std::optional<llvm::clv2::RuntimeOption<std::string>> dialectPluginOpt;
 };
 
 /// A scoped diagnostic handler that suppresses certain diagnostics based on
@@ -345,13 +225,27 @@ public:
 
 ManagedStatic<MlirOptMainConfigCLOptions> clOptionsConfig;
 
+static void
+applyMlirOptToolOpts(const MlirOptMainConfigCLOptions::MlirOptToolOpts &Opts) {
+  clOptionsConfig->populateFromParsedOpts(Opts);
+}
+
 void MlirOptMainConfig::registerCLOptions(DialectRegistry &registry) {
   clOptionsConfig->setDialectPluginsCallback(registry);
   tracing::DebugConfig::registerCLOptions();
 }
 
-MlirOptMainConfig MlirOptMainConfig::createFromCLOptions() {
-  clOptionsConfig->setDebugConfig(tracing::DebugConfig::createFromCLOptions());
+void MlirOptMainConfig::registerCLOptions(llvm::clv2::OptionParser &P,
+                                          DialectRegistry &registry) {
+  registerCLOptions(registry);
+  clOptionsConfig->registerPluginOptions(P, &registry);
+}
+
+MlirOptMainConfig MlirOptMainConfig::createFromCLOptions(
+    const llvm::clv2::OptionsContext &optsCtx) {
+  clOptionsConfig->setDebugConfig(
+      tracing::DebugConfig::createFromCLOptions(optsCtx));
+  clOptionsConfig->setOptionsContext(optsCtx);
   return *clOptionsConfig;
 }
 
@@ -374,18 +268,6 @@ MlirOptMainConfig &MlirOptMainConfig::setPassPipelineParser(
   return *this;
 }
 
-void MlirOptMainConfigCLOptions::setDialectPluginsCallback(
-    DialectRegistry &registry) {
-  dialectPlugins->setCallback([&](const std::string &pluginPath) {
-    auto plugin = DialectPlugin::load(pluginPath);
-    if (!plugin) {
-      errs() << "Failed to load dialect plugin from '" << pluginPath
-             << "'. Request ignored.\n";
-      return;
-    };
-    plugin.get().registerDialectRegistryCallbacks(registry);
-  });
-}
 
 LogicalResult loadIRDLDialects(StringRef irdlFile, MLIRContext &ctx) {
   DialectRegistry registry;
@@ -422,7 +304,9 @@ static LogicalResult doVerifyRoundTrip(Operation *op,
                                        const MlirOptMainConfig &config,
                                        bool useBytecode) {
   // We use a new context to avoid resource handle renaming issue in the diff.
-  MLIRContext roundtripContext;
+  // It gets the same options as the original, so that both sides of the
+  // comparison print under identical flags.
+  MLIRContext roundtripContext(op->getContext()->getOptionsContext());
   OwningOpRef<Operation *> roundtripModule;
   roundtripContext.appendDialectRegistry(
       op->getContext()->getDialectRegistry());
@@ -446,7 +330,7 @@ static LogicalResult doVerifyRoundTrip(Operation *op,
       }
     } else {
       op->print(ostream,
-                OpPrintingFlags().printGenericOpForm().enableDebugInfo());
+                opPrintingFlags(op).printGenericOpForm().enableDebugInfo());
     }
     FallbackAsmResourceMap fallbackResourceMap;
     ParserConfig parseConfig(&roundtripContext, config.shouldVerifyOnParsing(),
@@ -465,11 +349,12 @@ static LogicalResult doVerifyRoundTrip(Operation *op,
   {
     llvm::raw_string_ostream ostreamref(reference);
     op->print(ostreamref,
-              OpPrintingFlags().printGenericOpForm().enableDebugInfo());
+              opPrintingFlags(op).printGenericOpForm().enableDebugInfo());
     llvm::raw_string_ostream ostreamrndtrip(roundtrip);
-    roundtripModule.get()->print(
-        ostreamrndtrip,
-        OpPrintingFlags().printGenericOpForm().enableDebugInfo());
+    roundtripModule.get()->print(ostreamrndtrip,
+                                 opPrintingFlags(roundtripModule.get())
+                                     .printGenericOpForm()
+                                     .enableDebugInfo());
   }
   if (reference != roundtrip) {
     // TODO implement a diff.
@@ -502,7 +387,7 @@ performActions(raw_ostream &os,
                const std::shared_ptr<llvm::SourceMgr> &sourceMgr,
                MLIRContext *context, const MlirOptMainConfig &config) {
   DefaultTimingManager tm;
-  applyDefaultTimingManagerCLOptions(tm);
+  applyDefaultTimingManagerCLOptions(tm, context->getOptionsContext());
   TimingScope timing = tm.getRootScope();
 
   // Disable multi-threading when parsing the input file. This removes the
@@ -624,10 +509,11 @@ performActions(raw_ostream &os,
 
   // Don't re-run the verifier if we already ran the verifier at the end of the
   // pass pipeline.
-  AsmState asmState(op.get(),
-                    OpPrintingFlags().assumeVerified(
-                        config.shouldVerifyPasses() && !pm.empty()),
-                    /*locationMap=*/nullptr, &fallbackResourceMap);
+  AsmState asmState(
+      op.get(),
+      OpPrintingFlags(op.get()->getContext())
+          .assumeVerified(config.shouldVerifyPasses() && !pm.empty()),
+      /*locationMap=*/nullptr, &fallbackResourceMap);
   os << OpWithState(op.get(), asmState) << '\n';
 
   // This is required if the remark policy is final. Otherwise, the remarks are
@@ -658,7 +544,8 @@ processBuffer(raw_ostream &os, std::unique_ptr<MemoryBuffer> ownedBuffer,
 
   // Create a context just for the current buffer. Disable threading on
   // creation since we'll inject the thread-pool separately.
-  MLIRContext context(registry, MLIRContext::Threading::DISABLED);
+  MLIRContext context(config.getOptionsContext(), registry,
+                      MLIRContext::Threading::DISABLED);
   if (threadPool)
     context.setThreadPool(*threadPool);
   if (verifyHandler)
@@ -713,19 +600,39 @@ std::string mlir::registerCLIOptions(llvm::StringRef toolName,
   return helpHeader;
 }
 
-std::pair<std::string, std::string>
-mlir::parseCLIOptions(int argc, char **argv, llvm::StringRef helpHeader) {
-  static cl::opt<std::string> inputFilename(
-      cl::Positional, cl::desc("<input file>"), cl::init("-"));
+static constexpr clv2::OptionInfo<std::string> OI_MlirOptInput{
+    "", "<input file>", clv2::Positional{}, clv2::Init{"-"}};
+static constexpr clv2::OptionInfo<std::string> OI_MlirOptOutput{
+    "o", "Output filename", clv2::value_desc("filename"), clv2::Init{"-"}};
+static constexpr clv2::OptionsRegistry<&OI_MlirOptInput, &OI_MlirOptOutput>
+    MlirOptIOReg;
 
-  static cl::opt<std::string> outputFilename("o", cl::desc("Output filename"),
-                                             cl::value_desc("filename"),
-                                             cl::init("-"));
-  cl::ParseCommandLineOptions(argc, argv, helpHeader);
-  return std::make_pair(inputFilename.getValue(), outputFilename.getValue());
+mlir::CLIParseResult mlir::parseCLIOptions(int argc, char **argv,
+                                           llvm::StringRef helpHeader) {
+  llvm::clv2::OptionParser P;
+  P.add<&MlirOptIOReg>();
+  P.add<&clv2::MLIROptsReg>();
+  P.add<&clv2::MlirOptToolOptsReg, applyMlirOptToolOpts>();
+  RegisterAllLLVMOptions(P);
+  P.enableGlobalDynamicEntries();
+  clOptionsConfig->registerDynamicOptions(P);
+  registerPassManagerCLOptions(P);
+  auto parsedCtx = P.parse(argc, argv, helpHeader);
+
+  // Read straight out of the parse rather than via file-scope state.  parse()
+  // returns null when it reported an error, in which case the declared
+  // defaults stand.
+  std::string inputFilename = "-", outputFilename = "-";
+  if (parsedCtx)
+    if (const auto *IO = parsedCtx->getViewPtr<&MlirOptIOReg>()) {
+      inputFilename = IO->get<&OI_MlirOptInput>();
+      outputFilename = IO->get<&OI_MlirOptOutput>();
+    }
+  return {std::move(inputFilename), std::move(outputFilename),
+          std::move(parsedCtx)};
 }
 
-std::pair<std::string, std::string>
+mlir::CLIParseResult
 mlir::registerAndParseCLIOptions(int argc, char **argv,
                                  llvm::StringRef toolName,
                                  DialectRegistry &registry) {
@@ -799,11 +706,12 @@ LogicalResult mlir::MlirOptMain(llvm::raw_ostream &outputStream,
 LogicalResult mlir::MlirOptMain(int argc, char **argv,
                                 llvm::StringRef inputFilename,
                                 llvm::StringRef outputFilename,
-                                DialectRegistry &registry) {
+                                DialectRegistry &registry,
+                                const llvm::clv2::OptionsContext &optsCtx) {
 
   InitLLVM y(argc, argv);
 
-  MlirOptMainConfig config = MlirOptMainConfig::createFromCLOptions();
+  MlirOptMainConfig config = MlirOptMainConfig::createFromCLOptions(optsCtx);
 
   if (config.shouldShowDialects())
     return printRegisteredDialects(registry);
@@ -843,10 +751,12 @@ LogicalResult mlir::MlirOptMain(int argc, char **argv,
 LogicalResult mlir::MlirOptMain(int argc, char **argv, llvm::StringRef toolName,
                                 DialectRegistry &registry) {
 
-  // Register and parse command line options.
-  std::string inputFilename, outputFilename;
-  std::tie(inputFilename, outputFilename) =
+  // Register and parse command line options.  The parse result owns this
+  // run's OptionsContext, so it has to outlive the call below.
+  CLIParseResult parsed =
       registerAndParseCLIOptions(argc, argv, toolName, registry);
 
-  return MlirOptMain(argc, argv, inputFilename, outputFilename, registry);
+  return MlirOptMain(
+      argc, argv, parsed.inputFilename, parsed.outputFilename, registry,
+      parsed.optsCtx ? *parsed.optsCtx : llvm::clv2::defaultOptionsContext());
 }

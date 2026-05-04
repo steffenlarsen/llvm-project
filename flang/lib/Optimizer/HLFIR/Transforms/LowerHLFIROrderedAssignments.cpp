@@ -18,6 +18,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "ScheduleOrderedAssignments.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Common/Fortran-consts.h"
 #include "flang/Optimizer/Builder/FIRBuilder.h"
 #include "flang/Optimizer/Builder/HLFIRTools.h"
@@ -32,6 +33,7 @@
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include <unordered_set>
 
 namespace hlfir {
@@ -40,14 +42,6 @@ namespace hlfir {
 } // namespace hlfir
 
 #define DEBUG_TYPE "flang-ordered-assignment"
-
-// Test option only to test the scheduling part only (operations are erased
-// without codegen). The only goal is to allow printing and testing the debug
-// info.
-static llvm::cl::opt<bool> dbgScheduleOnly(
-    "flang-dbg-order-assignment-schedule-only",
-    llvm::cl::desc("Only run ordered assignment scheduling with no codegen"),
-    llvm::cl::init(false));
 
 namespace {
 
@@ -1521,16 +1515,12 @@ static llvm::LogicalResult rewrite(hlfir::OrderedAssignmentTreeOpInterface root,
   hlfir::Schedule schedule =
       hlfir::buildEvaluationSchedule(root, tryFusingAssignments);
 
-  LLVM_DEBUG(
-      /// Debug option to print the scheduling debug info without doing
-      /// any code generation. The operations are simply erased to avoid
-      /// failing and calling the rewrite patterns on nested operations.
-      /// The only purpose of this is to help testing scheduling without
-      /// having to test generated code.
-      if (dbgScheduleOnly) {
-        rewriter.eraseOp(root);
-        return mlir::success();
-      });
+  LLVM_DEBUG(auto &optsCtx = root->getContext()->getOptionsContext();
+             if (llvm::clv2::getOptValOrDefault<
+                     &llvm::clv2::FLANG_DbgOrderAssignSchedOnly>(optsCtx)) {
+               rewriter.eraseOp(root);
+               return mlir::success();
+             });
   lower(root, rewriter, schedule);
   rewriter.eraseOp(root);
   return mlir::success();

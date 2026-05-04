@@ -22,6 +22,8 @@
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 #include <cmath>
 
 #define DEBUG_TYPE "amdgpu-simplifylib"
@@ -29,15 +31,23 @@
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
-static cl::opt<bool> EnablePreLink("amdgpu-prelink",
-  cl::desc("Enable pre-link mode optimizations"),
-  cl::init(false),
-  cl::Hidden);
+static bool getEnablePreLink(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_EnablePreLink>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::list<std::string> UseNative("amdgpu-use-native",
-  cl::desc("Comma separated list of functions to replace with native, or all"),
-  cl::CommaSeparated, cl::ValueOptional,
-  cl::Hidden);
+static const auto &getUseNative(const Module &M) {
+  if (auto *O = clv2::getView<&clv2::AMDGPUOptsReg>(
+          M.getContext().getOptionsContext()))
+    return O->get<&clv2::AMDGPU_UseNative>();
+  static const std::vector<std::string> Empty;
+  return Empty;
+}
+
+static bool getUseNativeWasSpecified(const Module &M) {
+  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg, &clv2::AMDGPU_UseNative>(
+      M.getContext().getOptionsContext());
+}
 
 #define MATH_PI      numbers::pi
 #define MATH_E       numbers::e
@@ -51,6 +61,7 @@ namespace llvm {
 class AMDGPULibCalls {
 private:
   SimplifyQuery SQ;
+  const Module &Mod;
 
   using FuncInfo = llvm::AMDGPULibFunc;
 
@@ -422,8 +433,8 @@ FunctionCallee AMDGPULibCalls::getFunction(Module *M, const FuncInfo &fInfo) {
   // If we are doing PreLinkOpt, the function is external. So it is safe to
   // use getOrInsertFunction() at this stage.
 
-  return EnablePreLink ? AMDGPULibFunc::getOrInsertFunction(M, fInfo)
-                       : AMDGPULibFunc::getFunction(M, fInfo);
+  return getEnablePreLink(*M) ? AMDGPULibFunc::getOrInsertFunction(M, fInfo)
+                              : AMDGPULibFunc::getFunction(M, fInfo);
 }
 
 FunctionCallee AMDGPULibCalls::getFloatFastVariant(
@@ -461,16 +472,17 @@ AMDGPULibCalls::AMDGPULibCalls(Function &F, FunctionAnalysisManager &FAM)
     : SQ(F.getParent()->getDataLayout(),
          &FAM.getResult<TargetLibraryAnalysis>(F),
          FAM.getCachedResult<DominatorTreeAnalysis>(F),
-         &FAM.getResult<AssumptionAnalysis>(F)) {}
+         &FAM.getResult<AssumptionAnalysis>(F)),
+      Mod(*F.getParent()) {}
 
 bool AMDGPULibCalls::useNativeFunc(const StringRef F) const {
-  return AllNative || llvm::is_contained(UseNative, F);
+  return AllNative || llvm::is_contained(getUseNative(Mod), F);
 }
 
 void AMDGPULibCalls::initNativeFuncs() {
   AllNative = useNativeFunc("all") ||
-              (UseNative.getNumOccurrences() && UseNative.size() == 1 &&
-               UseNative.begin()->empty());
+              (getUseNativeWasSpecified(Mod) && getUseNative(Mod).size() == 1 &&
+               getUseNative(Mod).begin()->empty());
 }
 
 bool AMDGPULibCalls::sincosUseNative(CallInst *aCI, const FuncInfo &FInfo) {
@@ -1763,12 +1775,15 @@ bool AMDGPULibCalls::fold_sincos(FPMathOperator *FPOp, IRBuilder<> &B,
   SmallVector<CallInst *> SinCosCalls;
   FuncInfo PartnerInfo(isSin ? AMDGPULibFunc::EI_COS : AMDGPULibFunc::EI_SIN,
                        fInfo);
-  const std::string PairName = PartnerInfo.mangle();
+  const std::string PairName =
+      PartnerInfo.mangle(M->getContext().getOptionsContext());
 
   StringRef SinName = isSin ? CI->getCalledFunction()->getName() : PairName;
   StringRef CosName = isSin ? PairName : CI->getCalledFunction()->getName();
-  const std::string SinCosPrivateName = SinCosLibFuncPrivate.mangle();
-  const std::string SinCosGenericName = SinCosLibFuncGeneric.mangle();
+  const std::string SinCosPrivateName =
+      SinCosLibFuncPrivate.mangle(M->getContext().getOptionsContext());
+  const std::string SinCosGenericName =
+      SinCosLibFuncGeneric.mangle(M->getContext().getOptionsContext());
 
   // Intersect the two sets of flags.
   FastMathFlags FMF = FPOp->getFastMathFlags();
@@ -2088,7 +2103,7 @@ PreservedAnalyses AMDGPUSimplifyLibCallsPass::run(Function &F,
 
 PreservedAnalyses AMDGPUUseNativeCallsPass::run(Function &F,
                                                 FunctionAnalysisManager &AM) {
-  if (UseNative.empty())
+  if (getUseNative(*F.getParent()).empty())
     return PreservedAnalyses::all();
 
   AMDGPULibCalls Simplifier(F, AM);

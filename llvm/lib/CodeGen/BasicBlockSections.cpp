@@ -73,13 +73,18 @@
 #include "llvm/CodeGen/BasicBlockMatchingAndInference.h"
 #include "llvm/CodeGen/BasicBlockSectionUtils.h"
 #include "llvm/CodeGen/BasicBlockSectionsProfileReader.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachinePostDominators.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/UniqueBBID.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/CodeLayout.h"
@@ -87,20 +92,16 @@
 
 using namespace llvm;
 
-// Placing the cold clusters in a separate section mitigates against poor
-// profiles and allows optimizations such as hugepage mapping to be applied at a
-// section granularity. Defaults to ".text.split." which is recognized by lld
-// via the `-z keep-text-section-prefix` flag.
-cl::opt<std::string> llvm::BBSectionsColdTextPrefix(
-    "bbsections-cold-text-prefix",
-    cl::desc("The text prefix to use for cold basic block clusters"),
-    cl::init(".text.split."), cl::Hidden);
+std::string llvm::getBBSectionsColdTextPrefix(const clv2::OptionsContext &Ctx) {
+  if (auto S = codegen::getBBSectionsColdTextPrefixOverride(Ctx))
+    return *S;
+  return ".text.split.";
+}
 
-static cl::opt<bool> BBSectionsDetectSourceDrift(
-    "bbsections-detect-source-drift",
-    cl::desc("This checks if there is a fdo instr. profile hash "
-             "mismatch for this function"),
-    cl::init(true), cl::Hidden);
+static bool getBbsectionsDetectSourceDrift(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_BbsectionsDetectSourceDrift>(
+      Ctx);
+}
 
 namespace {
 
@@ -226,7 +227,9 @@ createBBClusterInfoForFunction(MachineFunction &MF,
     }
 
     // Run the layout algorithm.
-    auto Result = computeExtTspLayout(BlockSizes, BlockCounts, JumpCounts);
+    auto Result =
+        computeExtTspLayout(BlockSizes, BlockCounts, JumpCounts,
+                            MF.getFunction().getContext().getOptionsContext());
     for (uint64_t R : Result) {
       auto Block = OrigOrder[R];
       if (Block->isEntryBlock() || BlockWeights[Block] > 0)
@@ -353,7 +356,8 @@ void llvm::avoidZeroOffsetLandingPad(MachineFunction &MF) {
 }
 
 bool llvm::hasInstrProfHashMismatch(MachineFunction &MF) {
-  if (!BBSectionsDetectSourceDrift)
+  if (!getBbsectionsDetectSourceDrift(
+          MF.getFunction().getContext().getOptionsContext()))
     return false;
 
   const char MetadataName[] = "instr_prof_hash_mismatch";

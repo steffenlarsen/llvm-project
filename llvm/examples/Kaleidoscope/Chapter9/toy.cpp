@@ -87,7 +87,7 @@ std::string getTokName(int Tok) {
 namespace {
 class PrototypeAST;
 class ExprAST;
-}
+} // namespace
 
 struct DebugInfo {
   DICompileUnit *TheCU;
@@ -527,7 +527,7 @@ static std::unique_ptr<ExprAST> ParseIfExpr() {
     return nullptr;
 
   return std::make_unique<IfExprAST>(IfLoc, std::move(Cond), std::move(Then),
-                                      std::move(Else));
+                                     std::move(Else));
 }
 
 /// forexpr ::= 'for' identifier '=' expr ',' expr (',' expr)? 'in' expression
@@ -573,7 +573,7 @@ static std::unique_ptr<ExprAST> ParseForExpr() {
     return nullptr;
 
   return std::make_unique<ForExprAST>(IdName, std::move(Start), std::move(End),
-                                       std::move(Step), std::move(Body));
+                                      std::move(Step), std::move(Body));
 }
 
 /// varexpr ::= 'var' identifier ('=' expression)?
@@ -700,7 +700,7 @@ static std::unique_ptr<ExprAST> ParseBinOpRHS(int ExprPrec,
 
     // Merge LHS/RHS.
     LHS = std::make_unique<BinaryExprAST>(BinLoc, BinOp, std::move(LHS),
-                                           std::move(RHS));
+                                          std::move(RHS));
   }
 }
 
@@ -780,7 +780,7 @@ static std::unique_ptr<PrototypeAST> ParsePrototype() {
     return LogErrorP("Invalid number of operands for operator");
 
   return std::make_unique<PrototypeAST>(FnLoc, FnName, ArgNames, Kind != 0,
-                                         BinaryPrecedence);
+                                        BinaryPrecedence);
 }
 
 /// definition ::= 'def' prototype expression
@@ -801,7 +801,7 @@ static std::unique_ptr<FunctionAST> ParseTopLevelExpr() {
   if (auto E = ParseExpression()) {
     // Make the top-level expression be our "main" function.
     auto Proto = std::make_unique<PrototypeAST>(FnLoc, "main",
-                                                 std::vector<std::string>());
+                                                std::vector<std::string>());
     return std::make_unique<FunctionAST>(std::move(Proto), std::move(E));
   }
   return nullptr;
@@ -1322,7 +1322,8 @@ Function *FunctionAST::codegen() {
 
 static void InitializeModule() {
   // Open a new module.
-  TheContext = std::make_unique<LLVMContext>();
+  TheContext =
+      std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
   TheModule = std::make_unique<Module>("my cool jit", *TheContext);
   TheModule->setDataLayout(TheJIT->getDataLayout());
 

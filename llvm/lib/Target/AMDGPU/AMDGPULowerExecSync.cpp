@@ -208,7 +208,8 @@ static bool handleNamedBarriersForObjectLinking(Module &M) {
 }
 
 static bool runLowerExecSyncGlobals(Module &M) {
-  if (AMDGPUTargetMachine::EnableObjectLinking)
+  if (AMDGPUTargetMachine::getEnableObjectLinking(
+          M.getContext().getOptionsContext()))
     return handleNamedBarriersForObjectLinking(M);
 
   CallGraph CG = CallGraph(M);

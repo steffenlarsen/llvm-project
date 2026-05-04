@@ -25,6 +25,7 @@
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionAliasAnalysis.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/DroppedVariableStatsMIR.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
@@ -33,15 +34,16 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 using namespace ore;
 
-static cl::opt<bool> DroppedVarStatsMIR(
-    "dropped-variable-stats-mir", cl::Hidden,
-    cl::desc("Dump dropped debug variables stats for MIR passes"),
-    cl::init(false));
+static bool getDroppedVariableStatsMir(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DroppedVariableStatsMir>(Ctx);
+}
 
 Pass *MachineFunctionPass::createPrinterPass(raw_ostream &O,
                                              const std::string &Banner) const {
@@ -86,7 +88,7 @@ bool MachineFunctionPass::runOnFunction(Function &F) {
   MFProps.reset(ClearedProperties);
 
   bool RV;
-  if (DroppedVarStatsMIR) {
+  if (getDroppedVariableStatsMir(F.getContext().getOptionsContext())) {
     DroppedVariableStatsMIR DroppedVarStatsMF;
     auto PassName = getPassName();
     DroppedVarStatsMF.runBeforePass(PassName, &MF);

@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- StructurizeCFG.cpp -------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -39,7 +41,6 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
@@ -61,16 +62,22 @@ const char FlowBlockName[] = "Flow";
 
 namespace {
 
-static cl::opt<bool> ForceSkipUniformRegions(
-  "structurizecfg-skip-uniform-regions",
-  cl::Hidden,
-  cl::desc("Force whether the StructurizeCFG pass skips uniform regions"),
-  cl::init(false));
+static bool
+isForceSkipUniformRegionsSpecified(const clv2::OptionsContext &Ctx) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_StructurizecfgSkipUniformRegions>(Ctx);
+}
+static bool getForceSkipUniformRegions(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_StructurizecfgSkipUniformRegions>(Ctx,
+                                                                       false);
+}
 
-static cl::opt<bool>
-    RelaxedUniformRegions("structurizecfg-relaxed-uniform-regions", cl::Hidden,
-                          cl::desc("Allow relaxed uniform region checks"),
-                          cl::init(true));
+static bool getRelaxedUniformRegions(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::SC_StructurizecfgRelaxedUniformRegions>(
+      F.getContext().getOptionsContext());
+}
 
 // Definition of the complex types used in this pass.
 
@@ -379,21 +386,28 @@ public:
 
   explicit StructurizeCFGLegacyPass(bool SkipUniformRegions_ = false)
       : RegionPass(ID), SkipUniformRegions(SkipUniformRegions_) {
-    if (ForceSkipUniformRegions.getNumOccurrences())
-      SkipUniformRegions = ForceSkipUniformRegions.getValue();
     initializeStructurizeCFGLegacyPassPass(*PassRegistry::getPassRegistry());
   }
 
+  void applyOptionsFromContext(const clv2::OptionsContext &Ctx) {
+    if (isForceSkipUniformRegionsSpecified(Ctx))
+      SkipUniformRegions = getForceSkipUniformRegions(Ctx);
+  }
+
   bool runOnRegion(Region *R, RGPassManager &RGM) override {
+    Function *F = R->getEntry()->getParent();
+    bool SkipUniform = SkipUniformRegions;
+    if (isForceSkipUniformRegionsSpecified(F->getContext().getOptionsContext()))
+      SkipUniform =
+          getForceSkipUniformRegions(F->getContext().getOptionsContext());
     StructurizeCFG SCFG;
     SCFG.init(R);
-    if (SkipUniformRegions) {
+    if (SkipUniform) {
       UniformityInfo &UA =
           getAnalysis<UniformityInfoWrapperPass>().getUniformityInfo();
       if (SCFG.makeUniformRegion(R, UA))
         return false;
     }
-    Function *F = R->getEntry()->getParent();
     const TargetTransformInfo *TTI =
         &getAnalysis<TargetTransformInfoWrapperPass>().getTTI(*F);
     DominatorTree *DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
@@ -407,8 +421,6 @@ public:
       AU.addRequired<UniformityInfoWrapperPass>();
     AU.addRequired<TargetTransformInfoWrapperPass>();
     AU.addRequired<DominatorTreeWrapperPass>();
-    AU.addRequired<TargetTransformInfoWrapperPass>();
-
     AU.addPreserved<DominatorTreeWrapperPass>();
     RegionPass::getAnalysisUsage(AU);
   }
@@ -421,6 +433,7 @@ char StructurizeCFGLegacyPass::ID = 0;
 INITIALIZE_PASS_BEGIN(StructurizeCFGLegacyPass, "structurizecfg",
                       "Structurize the CFG", false, false)
 INITIALIZE_PASS_DEPENDENCY(UniformityInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(TargetTransformInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(RegionInfoPass)
 INITIALIZE_PASS_END(StructurizeCFGLegacyPass, "structurizecfg",
@@ -1327,7 +1340,7 @@ static bool hasOnlyUniformBranches(Region *R, unsigned UniformMDKindID,
 
         if (!Br->getMetadata(UniformMDKindID)) {
           // Early exit if we cannot have relaxed uniform regions.
-          if (!RelaxedUniformRegions)
+          if (!getRelaxedUniformRegions(*R->getEntry()->getParent()))
             return false;
 
           SubRegionsAreUniform = false;
@@ -1451,8 +1464,8 @@ static void addRegionIntoQueue(Region &R, std::vector<Region *> &Regions) {
 
 StructurizeCFGPass::StructurizeCFGPass(bool SkipUniformRegions_)
     : SkipUniformRegions(SkipUniformRegions_) {
-  if (ForceSkipUniformRegions.getNumOccurrences())
-    SkipUniformRegions = ForceSkipUniformRegions.getValue();
+  // The CLI override is checked at runtime in run() where Function context is
+  // available.
 }
 
 void StructurizeCFGPass::printPipeline(
@@ -1465,6 +1478,9 @@ void StructurizeCFGPass::printPipeline(
 
 PreservedAnalyses StructurizeCFGPass::run(Function &F,
                                           FunctionAnalysisManager &AM) {
+  if (isForceSkipUniformRegionsSpecified(F.getContext().getOptionsContext()))
+    SkipUniformRegions =
+        getForceSkipUniformRegions(F.getContext().getOptionsContext());
 
   bool Changed = false;
   DominatorTree *DT = &AM.getResult<DominatorTreeAnalysis>(F);

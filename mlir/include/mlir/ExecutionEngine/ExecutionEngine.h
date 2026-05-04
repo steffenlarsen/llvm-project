@@ -20,6 +20,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/Error.h"
 
+#include "llvm/Support/OptionsContext.h"
 #include <functional>
 #include <memory>
 #include <optional>
@@ -31,6 +32,9 @@ class Module;
 class ExecutionEngine;
 class JITEventListener;
 class MemoryBuffer;
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
 } // namespace llvm
 
 namespace mlir {
@@ -99,6 +103,11 @@ struct ExecutionEngineOptions {
   /// If `enablePerfNotificationListener` is set, the JIT compiler will notify
   /// the llvm's global Perf notification listener.
   bool enablePerfNotificationListener = true;
+
+  /// If `optsCtx` is provided, it will be passed to the LLVMContext used during
+  /// JIT-compilation.
+  const llvm::clv2::OptionsContext *optsCtx =
+      &llvm::clv2::defaultOptionsContext();
 };
 
 /// JIT-backed execution engine for MLIR. Assumes the IR can be converted to
@@ -237,7 +246,7 @@ public:
 private:
   /// Ordering of llvmContext and jit is important for destruction purposes: the
   /// jit must be destroyed before the context.
-  llvm::LLVMContext llvmContext;
+  llvm::LLVMContext llvmContext{llvm::clv2::defaultOptionsContext()};
 
   /// Underlying LLJIT.
   std::unique_ptr<llvm::orc::LLJIT> jit;

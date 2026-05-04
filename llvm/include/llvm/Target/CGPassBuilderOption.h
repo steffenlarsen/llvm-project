@@ -14,12 +14,15 @@
 #ifndef LLVM_TARGET_CGPASSBUILDEROPTION_H
 #define LLVM_TARGET_CGPASSBUILDEROPTION_H
 
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Target/TargetOptions.h"
 #include <optional>
+#include <string>
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+}
 
 enum class RunOutliner {
   TargetDefault,
@@ -30,25 +33,10 @@ enum class RunOutliner {
 };
 enum class RegAllocType { Unset, Default, Basic, Fast, Greedy, PBQP };
 
-class RegAllocTypeParser : public cl::parser<RegAllocType> {
-public:
-  RegAllocTypeParser(cl::Option &O) : cl::parser<RegAllocType>(O) {}
-  void initialize() {
-    cl::parser<RegAllocType>::initialize();
-    addLiteralOption("default", RegAllocType::Default,
-                     "Default register allocator");
-    addLiteralOption("pbqp", RegAllocType::PBQP, "PBQP register allocator");
-    addLiteralOption("fast", RegAllocType::Fast, "Fast register allocator");
-    addLiteralOption("basic", RegAllocType::Basic, "Basic register allocator");
-    addLiteralOption("greedy", RegAllocType::Greedy,
-                     "Greedy register allocator");
-  }
-};
-
 // Not one-on-one but mostly corresponding to commandline options in
 // TargetPassConfig.cpp.
 struct CGPassBuilderOption {
-  cl::boolOrDefault OptimizeRegAlloc = cl::boolOrDefault::BOU_UNSET;
+  std::optional<bool> OptimizeRegAlloc;
   std::optional<bool> EnableIPRA;
   bool DebugPM = false;
   bool DisableVerify = false;
@@ -72,11 +60,29 @@ struct CGPassBuilderOption {
   bool DisableAtExitBasedGlobalDtorLowering = false;
   bool DisableExpandReductions = false;
   bool DisableRAFSProfileLoader = false;
+  bool DisableLayoutFSProfileLoader = false;
   bool DisableCFIFixup = false;
+  bool DisablePostRASched = false;
+  bool DisableBranchFold = false;
+  bool DisableTailDuplicate = false;
+  bool DisableEarlyTailDup = false;
+  bool DisableBlockPlacement = false;
+  bool DisableSSC = false;
+  bool DisableMachineDCE = false;
+  bool DisableEarlyIfConversion = false;
+  bool DisableMachineLICM = false;
+  bool DisableMachineCSE = false;
+  bool DisablePostRAMachineLICM = false;
+  bool DisableMachineSink = false;
+  bool DisablePostRAMachineSink = false;
+  bool DisableCopyProp = false;
   bool PrintAfterISel = false;
   bool PrintISelInput = false;
   bool PrintRegUsage = false;
   bool RequiresCodeGenSCCOrder = false;
+  bool SplitStaticData = false;
+  bool BasicBlockSectionMatchInfer = false;
+  bool EmitBBHash = false;
 
   RunOutliner EnableMachineOutliner = RunOutliner::TargetDefault;
   RegAllocType RegAlloc = RegAllocType::Unset;
@@ -84,14 +90,21 @@ struct CGPassBuilderOption {
   std::string FSProfileFile;
   std::string FSRemappingFile;
 
-  cl::boolOrDefault VerifyMachineCode = cl::boolOrDefault::BOU_UNSET;
-  cl::boolOrDefault EnableFastISelOption = cl::boolOrDefault::BOU_UNSET;
-  cl::boolOrDefault EnableGlobalISelOption = cl::boolOrDefault::BOU_UNSET;
-  cl::boolOrDefault DebugifyAndStripAll = cl::boolOrDefault::BOU_UNSET;
-  cl::boolOrDefault DebugifyCheckAndStripAll = cl::boolOrDefault::BOU_UNSET;
+  std::optional<bool> VerifyMachineCode;
+  std::optional<bool> EnableFastISelOption;
+  std::optional<bool> EnableGlobalISelOption;
+  std::optional<bool> DebugifyAndStripAll;
+  std::optional<bool> DebugifyCheckAndStripAll;
+
+  // Start/stop pass pipeline options.
+  std::string StartBefore;
+  std::string StartAfter;
+  std::string StopBefore;
+  std::string StopAfter;
 };
 
-LLVM_ABI CGPassBuilderOption getCGPassBuilderOption();
+LLVM_ABI CGPassBuilderOption
+getCGPassBuilderOption(const clv2::OptionsContext &Ctx);
 
 } // namespace llvm
 

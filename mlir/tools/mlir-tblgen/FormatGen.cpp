@@ -540,7 +540,4 @@ bool mlir::tblgen::isValidLiteral(StringRef value,
 // Commandline Options
 //===----------------------------------------------------------------------===//
 
-llvm::cl::opt<bool> mlir::tblgen::formatErrorIsFatal(
-    "asmformat-error-is-fatal",
-    llvm::cl::desc("Emit a fatal error if format parsing fails"),
-    llvm::cl::init(true));
+bool mlir::tblgen::formatErrorIsFatal = true;

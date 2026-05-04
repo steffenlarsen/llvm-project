@@ -33,6 +33,7 @@
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/DiagnosticTrap.h"
 #include "clang/Basic/TargetInfo.h"
+#include "clang/CodeGen/ClangCodeGenOptionsOptInfos.h"
 #include "llvm/ADT/APFixedPoint.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/IR/Argument.h"
@@ -50,21 +51,19 @@
 #include "llvm/IR/IntrinsicsWebAssembly.h"
 #include "llvm/IR/MatrixBuilder.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TypeSize.h"
 #include <cstdarg>
 #include <optional>
 
 using namespace clang;
 using namespace CodeGen;
+using namespace llvm::clv2;
 using llvm::Value;
 
 //===----------------------------------------------------------------------===//
 //                         Scalar Expression Emitter
 //===----------------------------------------------------------------------===//
-
-namespace llvm {
-extern cl::opt<bool> EnableSingleByteCoverage;
-} // namespace llvm
 
 namespace {
 
@@ -5999,7 +5998,11 @@ VisitAbstractConditionalOperator(const AbstractConditionalOperator *E) {
   // If this is a really simple expression (like x ? 4 : 5), emit this as a
   // select instead of as control flow.  We can only do this if it is cheap and
   // safe to evaluate the LHS and RHS unconditionally.
-  if (!llvm::EnableSingleByteCoverage &&
+  bool EnableSingleByteCoverageVal = false;
+  if (auto *O = llvm::clv2::getView<&llvm::clv2::ClangCodeGenOptsReg>(
+          VMContext.getOptionsContext()))
+    EnableSingleByteCoverageVal = O->get<&CLANGCG_EnableSingleByteCoverage>();
+  if (!EnableSingleByteCoverageVal &&
       isCheapEnoughToEvaluateUnconditionally(lhsExpr, CGF) &&
       isCheapEnoughToEvaluateUnconditionally(rhsExpr, CGF)) {
     llvm::Value *CondV = CGF.EvaluateExprAsBool(condExpr);

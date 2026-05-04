@@ -20,6 +20,10 @@
 
 namespace llvm {
 
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
+
 class MachineInstr;
 class ScheduleDAGMutation;
 class TargetInstrInfo;
@@ -60,7 +64,8 @@ LLVM_ABI bool fuseInstructionPair(ScheduleDAGInstrs &DAG, SUnit &FirstSU,
 /// If BranchOnly is true, only branch instructions with one of their
 /// predecessors will be fused.
 LLVM_ABI std::unique_ptr<ScheduleDAGMutation>
-createMacroFusionDAGMutation(ArrayRef<MacroFusionPredTy> Predicates,
+createMacroFusionDAGMutation(const clv2::OptionsContext &Ctx,
+                             ArrayRef<MacroFusionPredTy> Predicates,
                              bool BranchOnly = false);
 
 } // end namespace llvm

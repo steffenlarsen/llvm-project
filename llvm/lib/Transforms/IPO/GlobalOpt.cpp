@@ -55,11 +55,12 @@
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/CtorUtils.h"
 #include "llvm/Transforms/Utils/Evaluator.h"
 #include "llvm/Transforms/Utils/GlobalStatus.h"
@@ -94,29 +95,22 @@ STATISTIC(NumColdCC, "Number of functions marked coldcc");
 STATISTIC(NumIFuncsResolved, "Number of statically resolved IFuncs");
 STATISTIC(NumIFuncsDeleted, "Number of IFuncs removed");
 
-static cl::opt<bool>
-    OptimizeNonFMVCallers("optimize-non-fmv-callers",
-                          cl::desc("Statically resolve calls to versioned "
-                                   "functions from non-versioned callers."),
-                          cl::init(true), cl::Hidden);
-
-static cl::opt<unsigned> MaxIFuncVersions(
-    "max-ifunc-versions", cl::Hidden, cl::init(5),
-    cl::desc("Maximum number of caller/callee versions that is allowed for "
-             "using the expensive (cubic) static resolution algorithm."));
-
-static cl::opt<bool>
-    EnableColdCCStressTest("enable-coldcc-stress-test",
-                           cl::desc("Enable stress test of coldcc by adding "
-                                    "calling conv to all internal functions."),
-                           cl::init(false), cl::Hidden);
-
-static cl::opt<int> ColdCCRelFreq(
-    "coldcc-rel-freq", cl::Hidden, cl::init(2),
-    cl::desc(
-        "Maximum block frequency, expressed as a percentage of caller's "
-        "entry frequency, for a call site to be considered cold for enabling "
-        "coldcc"));
+static bool getOptimizeNonFMVCallers(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_OptimizeNonFMVCallers>(
+      M.getContext().getOptionsContext());
+}
+static unsigned getMaxIFuncVersions(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_MaxIFuncVersions>(
+      M.getContext().getOptionsContext());
+}
+static bool getEnableColdCCStressTest(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_EnableColdCCStressTest>(
+      M.getContext().getOptionsContext());
+}
+static int getColdCCRelFreq(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_ColdCCRelFreq>(
+      M.getContext().getOptionsContext());
+}
 
 /// Is this global variable possibly used by a leak checker as a root?  If so,
 /// we might not really want to eliminate the stores to it.
@@ -1757,7 +1751,7 @@ static bool hasChangeableCC(Function *F,
 /// Return true if the block containing the call site has a BlockFrequency of
 /// less than ColdCCRelFreq% of the entry block.
 static bool isColdCallSite(CallBase &CB, BlockFrequencyInfo &CallerBFI) {
-  const BranchProbability ColdProb(ColdCCRelFreq, 100);
+  const BranchProbability ColdProb(getColdCCRelFreq(*CB.getModule()), 100);
   auto *CallSiteBB = CB.getParent();
   auto CallSiteFreq = CallerBFI.getBlockFreq(CallSiteBB);
   auto CallerEntryFreq =
@@ -2019,7 +2013,7 @@ OptimizeFunctions(Module &M,
       // enabled or the target would like to use coldcc on functions which are
       // cold at all call sites and the callers contain no other non coldcc
       // calls.
-      if (EnableColdCCStressTest ||
+      if (getEnableColdCCStressTest(M) ||
           (TTI.useColdCCForColdCall(F) &&
            isValidCandidateForColdCC(F, GetBFI, AllCallsCold))) {
         ChangeableCCCache.erase(&F);
@@ -2625,7 +2619,7 @@ static bool OptimizeNonTrivialIFuncs(
           // The caller is a version of a known IFunc.
           if (auto It = VersionOf.find(Caller); It != VersionOf.end())
             CallerIF = It->second;
-          else if (!CallerIsFMV && OptimizeNonFMVCallers) {
+          else if (!CallerIsFMV && getOptimizeNonFMVCallers(M)) {
             // The caller is non-FMV.
             auto [It, Inserted] = FeatureMask.try_emplace(Caller);
             if (Inserted)
@@ -2658,8 +2652,8 @@ static bool OptimizeNonTrivialIFuncs(
                                       ArrayRef<Function *> Callees,
                                       bool CallerIsFMV) {
       bool AllowExpensiveChecks = CallerIsFMV &&
-                                  Callers.size() <= MaxIFuncVersions &&
-                                  Callees.size() <= MaxIFuncVersions;
+                                  Callers.size() <= getMaxIFuncVersions(M) &&
+                                  Callees.size() <= getMaxIFuncVersions(M);
       // Index to the highest callee candidate.
       unsigned J = 0;
 
@@ -2735,7 +2729,7 @@ static bool OptimizeNonTrivialIFuncs(
     auto &Callees = VersionedFuncs[CalleeIF];
 
     // Optimize non-FMV calls.
-    if (OptimizeNonFMVCallers)
+    if (getOptimizeNonFMVCallers(M))
       staticallyResolveCalls(NonFMVCallers, Callees, /*CallerIsFMV=*/false);
 
     // Optimize FMV calls.

@@ -62,7 +62,7 @@ InstrProfCorrelator::Context::get(std::unique_ptr<MemoryBuffer> Buffer,
   if (auto Err = CountersSection.takeError())
     return std::move(Err);
   Triple::ObjectFormatType ObjFormat = Obj.getTripleObjectFormat();
-  if (FileKind == InstrProfCorrelator::BINARY) {
+  if (FileKind == ProfCorrelatorKind::BINARY) {
     auto DataSection = getInstrProfSection(Obj, IPSK_covdata);
     if (auto Err = DataSection.takeError())
       return std::move(Err);
@@ -155,7 +155,7 @@ InstrProfCorrelator::get(StringRef Filename, ProfCorrelatorKind FileKind,
     EffectiveFilename = *Path;
   }
 
-  if (FileKind == DEBUG_INFO) {
+  if (FileKind == ProfCorrelatorKind::DEBUG_INFO) {
     auto DsymObjectsOrErr =
         object::MachOObjectFile::findDsymObjectMembers(EffectiveFilename);
     if (auto Err = DsymObjectsOrErr.takeError())
@@ -176,7 +176,7 @@ InstrProfCorrelator::get(StringRef Filename, ProfCorrelatorKind FileKind,
 
     return get(std::move(*BufferOrErr), FileKind);
   }
-  if (FileKind == BINARY) {
+  if (FileKind == ProfCorrelatorKind::BINARY) {
     auto BufferOrErr =
         errorOrToExpected(MemoryBuffer::getFile(EffectiveFilename));
     if (auto Err = BufferOrErr.takeError())
@@ -249,7 +249,7 @@ llvm::Expected<std::unique_ptr<InstrProfCorrelatorImpl<IntPtrT>>>
 InstrProfCorrelatorImpl<IntPtrT>::get(
     std::unique_ptr<InstrProfCorrelator::Context> Ctx,
     const object::ObjectFile &Obj, ProfCorrelatorKind FileKind) {
-  if (FileKind == DEBUG_INFO) {
+  if (FileKind == ProfCorrelatorKind::DEBUG_INFO) {
     if (Obj.isELF() || Obj.isMachO()) {
       auto DICtx = DWARFContext::create(Obj);
       return std::make_unique<DwarfInstrProfCorrelator<IntPtrT>>(

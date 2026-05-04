@@ -57,7 +57,7 @@
 #include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -70,7 +70,7 @@ using namespace llvm;
 using namespace rdf;
 
 #ifndef NDEBUG
-extern cl::opt<unsigned> RDFCpLimit;
+extern unsigned RDFCpLimit;
 static unsigned RDFCpCount = 0;
 #endif
 
@@ -294,7 +294,7 @@ bool AggressiveCopyPropagation::run() {
 
   bool Changed = false;
 #ifndef NDEBUG
-  bool HasLimit = RDFCpLimit.getNumOccurrences() > 0;
+  bool HasLimit = RDFCpLimit != 0 > 0;
 #endif
 
   auto MinPhysReg = [this](RegisterRef RR) -> unsigned {

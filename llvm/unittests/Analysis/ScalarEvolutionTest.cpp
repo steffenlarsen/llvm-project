@@ -34,7 +34,7 @@ using namespace SCEVPatternMatch;
 // deleting the PassManager.
 class ScalarEvolutionsTest : public testing::Test {
 protected:
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module M;
   TargetLibraryInfoImpl TLII;
   TargetLibraryInfo TLI;
@@ -62,32 +62,35 @@ protected:
     Test(*F, *LI, SE);
   }
 
-static std::optional<APInt> computeConstantDifference(ScalarEvolution &SE,
-                                                      const SCEV *LHS,
-                                                      const SCEV *RHS) {
-  return SE.computeConstantDifference(LHS, RHS);
-}
+  static std::optional<APInt> computeConstantDifference(ScalarEvolution &SE,
+                                                        const SCEV *LHS,
+                                                        const SCEV *RHS) {
+    return SE.computeConstantDifference(LHS, RHS);
+  }
 
-  static bool isImpliedCond(
-      ScalarEvolution &SE, ICmpInst::Predicate Pred, const SCEV *LHS,
-      const SCEV *RHS, ICmpInst::Predicate FoundPred, const SCEV *FoundLHS,
-      const SCEV *FoundRHS) {
+  static bool isImpliedCond(ScalarEvolution &SE, ICmpInst::Predicate Pred,
+                            const SCEV *LHS, const SCEV *RHS,
+                            ICmpInst::Predicate FoundPred, const SCEV *FoundLHS,
+                            const SCEV *FoundRHS) {
     return SE.isImpliedCond(Pred, LHS, RHS, FoundPred, FoundLHS, FoundRHS);
   }
 };
 
 TEST_F(ScalarEvolutionsTest, SCEVUnknownRAUW) {
-  FunctionType *FTy = FunctionType::get(Type::getVoidTy(Context),
-                                              std::vector<Type *>(), false);
+  FunctionType *FTy =
+      FunctionType::get(Type::getVoidTy(Context), std::vector<Type *>(), false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "f", M);
   BasicBlock *BB = BasicBlock::Create(Context, "entry", F);
   ReturnInst::Create(Context, nullptr, BB);
 
   Type *Ty = Type::getInt1Ty(Context);
   Constant *Init = Constant::getNullValue(Ty);
-  Value *V0 = new GlobalVariable(M, Ty, false, GlobalValue::ExternalLinkage, Init, "V0");
-  Value *V1 = new GlobalVariable(M, Ty, false, GlobalValue::ExternalLinkage, Init, "V1");
-  Value *V2 = new GlobalVariable(M, Ty, false, GlobalValue::ExternalLinkage, Init, "V2");
+  Value *V0 = new GlobalVariable(M, Ty, false, GlobalValue::ExternalLinkage,
+                                 Init, "V0");
+  Value *V1 = new GlobalVariable(M, Ty, false, GlobalValue::ExternalLinkage,
+                                 Init, "V1");
+  Value *V2 = new GlobalVariable(M, Ty, false, GlobalValue::ExternalLinkage,
+                                 Init, "V2");
 
   ScalarEvolution SE = buildSE(*F);
 
@@ -126,8 +129,8 @@ TEST_F(ScalarEvolutionsTest, SCEVUnknownRAUW) {
 }
 
 TEST_F(ScalarEvolutionsTest, SimplifiedPHI) {
-  FunctionType *FTy = FunctionType::get(Type::getVoidTy(Context),
-                                              std::vector<Type *>(), false);
+  FunctionType *FTy =
+      FunctionType::get(Type::getVoidTy(Context), std::vector<Type *>(), false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "f", M);
   BasicBlock *EntryBB = BasicBlock::Create(Context, "entry", F);
   BasicBlock *LoopBB = BasicBlock::Create(Context, "loop", F);
@@ -152,7 +155,6 @@ TEST_F(ScalarEvolutionsTest, SimplifiedPHI) {
   EXPECT_EQ(S1, S2);
 }
 
-
 static Instruction *getInstructionByName(Function &F, StringRef Name) {
   for (auto &I : instructions(F))
     if (I.getName() == Name)
@@ -167,7 +169,7 @@ static Value *getArgByName(Function &F, StringRef Name) {
   llvm_unreachable("Expected to find instruction!");
 }
 TEST_F(ScalarEvolutionsTest, CommutativeExprOperandOrder) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(
       "target datalayout = \"e-m:e-p:32:32-f64:32:64-f80:32-n8:16:32-S128\" "
@@ -291,7 +293,7 @@ TEST_F(ScalarEvolutionsTest, CompareSCEVComplexity) {
   UncondBrInst::Create(LoopBB, EntryBB);
 
   auto *Ty = Type::getInt32Ty(Context);
-  SmallVector<Instruction*, 8> Muls(8), Acc(8), NextAcc(8);
+  SmallVector<Instruction *, 8> Muls(8), Acc(8), NextAcc(8);
 
   Acc[0] = PHINode::Create(Ty, 2, "", LoopBB);
   Acc[1] = PHINode::Create(Ty, 2, "", LoopBB);
@@ -466,7 +468,7 @@ static Instruction &GetInstByName(Function &F, StringRef Name) {
 }
 
 TEST_F(ScalarEvolutionsTest, SCEVNormalization) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(
       "target datalayout = \"e-m:e-p:32:32-f64:32:64-f80:32-n8:16:32-S128\" "
@@ -621,7 +623,7 @@ TEST_F(ScalarEvolutionsTest, SCEVNormalization) {
 
 // Expect the call of getZeroExtendExpr will not cost exponential time.
 TEST_F(ScalarEvolutionsTest, SCEVZeroExtendExpr) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
 
   // Generate a function like below:
@@ -1056,7 +1058,7 @@ TEST_F(ScalarEvolutionsTest, SCEVComputeExpressionSize) {
   Type *T_int64 = Type::getInt64Ty(Context);
 
   FunctionType *FTy =
-      FunctionType::get(Type::getVoidTy(Context), { T_int64, T_int64 }, false);
+      FunctionType::get(Type::getVoidTy(Context), {T_int64, T_int64}, false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "func", M);
   Argument *A = &*F->arg_begin();
   Argument *B = &*std::next(F->arg_begin());
@@ -1088,7 +1090,7 @@ TEST_F(ScalarEvolutionsTest, SCEVComputeExpressionSize) {
 }
 
 TEST_F(ScalarEvolutionsTest, SCEVLoopDecIntrinsic) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(
       "define void @foo(i32 %N) { "
@@ -1099,7 +1101,8 @@ TEST_F(ScalarEvolutionsTest, SCEVLoopDecIntrinsic) {
       "  ret void "
       "for.body: "
       "  %i.04 = phi i32 [ %inc, %for.body ], [ 100, %entry ] "
-      "  %inc = call i32 @llvm.loop.decrement.reg.i32.i32.i32(i32 %i.04, i32 1) "
+      "  %inc = call i32 @llvm.loop.decrement.reg.i32.i32.i32(i32 %i.04, i32 "
+      "1) "
       "  %exitcond = icmp ne i32 %inc, 0 "
       "  br i1 %exitcond, label %for.cond.cleanup, label %for.body "
       "} "
@@ -1116,7 +1119,7 @@ TEST_F(ScalarEvolutionsTest, SCEVLoopDecIntrinsic) {
 }
 
 TEST_F(ScalarEvolutionsTest, SCEVComputeConstantDifference) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(
       R"(define void @foo(ptr %ptr, i32 %sz, i32 %pp, i32 %x) {
@@ -1219,7 +1222,7 @@ TEST_F(ScalarEvolutionsTest, SCEVComputeConstantDifference) {
 }
 
 TEST_F(ScalarEvolutionsTest, SCEVrewriteUnknowns) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(
       "define void @foo(i32 %i) { "
@@ -1260,7 +1263,7 @@ TEST_F(ScalarEvolutionsTest, SCEVrewriteUnknowns) {
 }
 
 TEST_F(ScalarEvolutionsTest, SCEVAddNUW) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString("define void @foo(i32 %x) { "
                                                   "  ret void "
@@ -1280,7 +1283,7 @@ TEST_F(ScalarEvolutionsTest, SCEVAddNUW) {
 }
 
 TEST_F(ScalarEvolutionsTest, SCEVUseDropsRedundantFlags) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M =
       parseAssemblyString("define void @foo(i32 %x, i32 %y, i32 %z) { "
@@ -1341,7 +1344,7 @@ TEST_F(ScalarEvolutionsTest, SCEVUseDropsRedundantFlags) {
 }
 
 TEST_F(ScalarEvolutionsTest, ProveUMinULT) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M =
       parseAssemblyString("define void @foo(i32 %x, i32 %y) { "
@@ -1381,7 +1384,7 @@ TEST_F(ScalarEvolutionsTest, ProveUMinULT) {
 }
 
 TEST_F(ScalarEvolutionsTest, SCEVgetRanges) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(
       "define void @foo(i32 %i) { "
@@ -1415,7 +1418,7 @@ TEST_F(ScalarEvolutionsTest, SCEVgetRanges) {
 }
 
 TEST_F(ScalarEvolutionsTest, SCEVgetExitLimitForGuardedLoop) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(
       "define void @foo(i32 %i) { "
@@ -1447,7 +1450,7 @@ TEST_F(ScalarEvolutionsTest, SCEVgetExitLimitForGuardedLoop) {
 }
 
 TEST_F(ScalarEvolutionsTest, ImpliedViaAddRecStart) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(
       "define void @foo(ptr %p) { "
@@ -1479,7 +1482,7 @@ TEST_F(ScalarEvolutionsTest, ImpliedViaAddRecStart) {
 }
 
 TEST_F(ScalarEvolutionsTest, UnsignedIsImpliedViaOperations) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M =
       parseAssemblyString("define void @foo(ptr %p1, ptr %p2) { "
@@ -1512,7 +1515,7 @@ TEST_F(ScalarEvolutionsTest, UnsignedIsImpliedViaOperations) {
 }
 
 TEST_F(ScalarEvolutionsTest, ProveImplicationViaNarrowing) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(
       "define i32 @foo(i32 %start, ptr %q) { "
@@ -1559,21 +1562,21 @@ TEST_F(ScalarEvolutionsTest, ProveImplicationViaNarrowing) {
 }
 
 TEST_F(ScalarEvolutionsTest, ImpliedCond) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
-  std::unique_ptr<Module> M = parseAssemblyString(
-      "define void @foo(i32 %len) { "
-      "entry: "
-      "  br label %loop "
-      "loop: "
-      "  %iv = phi i32 [ 0, %entry], [%iv.next, %loop] "
-      "  %iv.next = add nsw i32 %iv, 1 "
-      "  %cmp = icmp slt i32 %iv, %len "
-      "  br i1 %cmp, label %loop, label %exit "
-      "exit:"
-      "  ret void "
-      "}",
-      Err, C);
+  std::unique_ptr<Module> M =
+      parseAssemblyString("define void @foo(i32 %len) { "
+                          "entry: "
+                          "  br label %loop "
+                          "loop: "
+                          "  %iv = phi i32 [ 0, %entry], [%iv.next, %loop] "
+                          "  %iv.next = add nsw i32 %iv, 1 "
+                          "  %cmp = icmp slt i32 %iv, %len "
+                          "  br i1 %cmp, label %loop, label %exit "
+                          "exit:"
+                          "  ret void "
+                          "}",
+                          Err, C);
 
   ASSERT_TRUE(M && "Could not parse module?");
   ASSERT_TRUE(!verifyModule(*M) && "Must have been well formed!");
@@ -1590,15 +1593,15 @@ TEST_F(ScalarEvolutionsTest, ImpliedCond) {
 
     // {0,+,1}<nuw><nsw> > 0  ->  {0,+,-1}<nw> < 0
     EXPECT_TRUE(isImpliedCond(SE, ICmpInst::ICMP_SLT, AddRec_0_N1, Zero,
-                                  ICmpInst::ICMP_SGT, AddRec_0_1, Zero));
+                              ICmpInst::ICMP_SGT, AddRec_0_1, Zero));
     // {0,+,-1}<nw> < -1  ->  {0,+,1}<nuw><nsw> > 0
     EXPECT_TRUE(isImpliedCond(SE, ICmpInst::ICMP_SGT, AddRec_0_1, Zero,
-                                  ICmpInst::ICMP_SLT, AddRec_0_N1, MinusOne));
+                              ICmpInst::ICMP_SLT, AddRec_0_N1, MinusOne));
   });
 }
 
 TEST_F(ScalarEvolutionsTest, MatchURem) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(
       "target datalayout = \"e-m:e-p:32:32-f64:32:64-f80:32-n8:16:32-S128\" "
@@ -1651,7 +1654,7 @@ TEST_F(ScalarEvolutionsTest, MatchURem) {
 }
 
 TEST_F(ScalarEvolutionsTest, SCEVUDivFloorCeiling) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString("define void @foo() { "
                                                   "  ret void "
@@ -1698,7 +1701,7 @@ TEST_F(ScalarEvolutionsTest, CheckGetPowerOfTwo) {
 }
 
 TEST_F(ScalarEvolutionsTest, ApplyLoopGuards) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(
       "declare void @llvm.assume(i1)\n"
@@ -1736,7 +1739,7 @@ TEST_F(ScalarEvolutionsTest, ApplyLoopGuards) {
 }
 
 TEST_F(ScalarEvolutionsTest, ForgetValueWithOverflowInst) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(
       "declare { i32, i1 } @llvm.smul.with.overflow.i32(i32, i32) "
@@ -1774,7 +1777,7 @@ TEST_F(ScalarEvolutionsTest, ForgetValueWithOverflowInst) {
 TEST_F(ScalarEvolutionsTest, ComplexityComparatorIsStrictWeakOrdering) {
   // Regression test for a case where caching of equivalent values caused the
   // comparator to get inconsistent.
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(R"(
     define i32 @foo(i32 %arg0) {
@@ -1869,7 +1872,7 @@ TEST_F(ScalarEvolutionsTest, ComplexityComparatorIsStrictWeakOrdering3) {
 }
 
 TEST_F(ScalarEvolutionsTest, SimplifyICmpOperands) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M =
       parseAssemblyString("define i32 @foo(ptr %loc, i32 %a, i32 %b) {"
@@ -2152,7 +2155,7 @@ TEST_F(ScalarEvolutionsTest, SimplifyICmpOperands) {
 // no-wrap flags. Check that SCEV::print renders the operands as uses, so such a
 // flag is visible in the printout of the expression using it.
 TEST_F(ScalarEvolutionsTest, PrintUseFlagsOfOperands) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(
       R"(define void @f(i32 %a, i32 %b) {
@@ -2222,7 +2225,7 @@ TEST_F(ScalarEvolutionsTest, PrintUseFlagsOfOperands) {
 // An operand carrying use-specific no-wrap flags makes the expression built
 // from it distinct from the one built from the bare operand
 TEST_F(ScalarEvolutionsTest, OperandUseFlagsArePartOfIdentity) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(
       R"(define void @f(i32 %x, i32 %y, i32 %z, i1 %c) {
@@ -2285,7 +2288,7 @@ TEST_F(ScalarEvolutionsTest, OperandUseFlagsArePartOfIdentity) {
 }
 
 TEST_F(ScalarEvolutionsTest, CastsOfUsesWithNoWrapFlags) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(
       R"(define void @f(i32 %a, i32 %b) {
@@ -2332,7 +2335,7 @@ TEST_F(ScalarEvolutionsTest, CastsOfUsesWithNoWrapFlags) {
 }
 
 TEST_F(ScalarEvolutionsTest, ExtendFoldCacheKeysUseFlags) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(
       R"(define void @f(i32 %x) {

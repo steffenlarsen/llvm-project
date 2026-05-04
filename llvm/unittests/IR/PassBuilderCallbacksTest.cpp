@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Testing/Support/Error.h"
 #include <functional>
 #include <gmock/gmock.h>
@@ -25,12 +26,12 @@
 using namespace llvm;
 
 namespace {
+using testing::_;
 using testing::AnyNumber;
 using testing::DoAll;
 using testing::Not;
 using testing::Return;
 using testing::WithArgs;
-using testing::_;
 
 /// A CRTP base for analysis mock handles
 ///
@@ -421,12 +422,12 @@ protected:
       PassManager<TestIRUnitT, AnalysisManagerT, ExtraPassArgTs...>;
   using AnalysisT = typename MockAnalysisHandle<IRUnitT>::Analysis;
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
 
   MockPassInstrumentationCallbacks CallbacksHandle;
 
-  PassBuilder PB;
+  PassBuilder PB{llvm::clv2::defaultOptionsContext()};
   ModulePassManager PM;
   LoopAnalysisManager LAM;
   FunctionAnalysisManager FAM;
@@ -439,7 +440,7 @@ protected:
   MockAnalysisHandle<IRUnitT> AnalysisHandle;
 
   static PreservedAnalyses getAnalysisResult(IRUnitT &U, AnalysisManagerT &AM,
-                                             ExtraAnalysisArgTs &&... Args) {
+                                             ExtraAnalysisArgTs &&...Args) {
     (void)AM.template getResult<AnalysisT>(
         U, std::forward<ExtraAnalysisArgTs>(Args)...);
     return PreservedAnalyses::all();
@@ -460,8 +461,10 @@ protected:
                   "exit:\n"
                   "  ret void\n"
                   "}\n")),
-        CallbacksHandle(), PB(nullptr, PipelineTuningOptions(), std::nullopt,
-                              &CallbacksHandle.Callbacks),
+        CallbacksHandle(),
+        PB(/*OptsCtx=*/llvm::clv2::defaultOptionsContext(), /*TM=*/nullptr,
+           PipelineTuningOptions(llvm::clv2::defaultOptionsContext()),
+           std::nullopt, &CallbacksHandle.Callbacks),
         PM(), LAM(), FAM(), CGAM(), AM() {
 
     EXPECT_TRUE(&CallbacksHandle.Callbacks ==

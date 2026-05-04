@@ -99,6 +99,7 @@
 #include "llvm/IR/User.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -116,6 +117,10 @@ class MemoryAccess;
 class MemorySSAWalker;
 class Module;
 class raw_ostream;
+
+namespace clv2 {
+class OptionsContext;
+}
 
 namespace MSSAHelpers {
 
@@ -870,6 +875,7 @@ private:
   DominatorTree *DT;
   Function *F = nullptr;
   Loop *L = nullptr;
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
 
   // Memory SSA mappings
   DenseMap<const Value *, MemoryAccess *> ValueToMemoryAccess;
@@ -903,7 +909,7 @@ private:
 /// The checks which this flag enables is exensive and disabled by default
 /// unless `EXPENSIVE_CHECKS` is defined.  The flag `-verify-memoryssa` can be
 /// used to selectively enable the verification without re-compilation.
-LLVM_ABI extern bool VerifyMemorySSA;
+LLVM_ABI bool getVerifyMemorySSA(const clv2::OptionsContext &Ctx);
 
 // Internal MemorySSA utils, for use by MemorySSA classes and walkers
 class MemorySSAUtil {

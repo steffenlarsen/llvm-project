@@ -12,7 +12,14 @@
 #include "mlir/Debug/BreakpointManagers/FileLineColLocBreakpointManager.h"
 #include "llvm/ADT/StringRef.h"
 
+#include "llvm/Support/OptionsContext.h"
 #include <memory>
+
+namespace llvm {
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
+} // namespace llvm
 
 namespace mlir {
 class MLIRContext;
@@ -25,7 +32,8 @@ public:
   static void registerCLOptions();
 
   /// Create a new config with the default set from the CL options.
-  static DebugConfig createFromCLOptions();
+  static DebugConfig
+  createFromCLOptions(const llvm::clv2::OptionsContext &optsCtx);
 
   ///
   /// Options.
@@ -50,6 +58,11 @@ public:
   /// Get the filename to use for logging actions.
   StringRef getLogActionsTo() const { return logActionsToFlag; }
 
+  /// Set the filename to use for profiling actions, use "-" for stdout.
+  DebugConfig &profileActionsTo(StringRef filename) {
+    profileActionsToFlag = filename;
+    return *this;
+  }
   /// Get the filename to use for profiling actions.
   StringRef getProfileActionsTo() const { return profileActionsToFlag; }
 

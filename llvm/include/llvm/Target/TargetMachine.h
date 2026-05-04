@@ -19,10 +19,11 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/PGOOptions.h"
+#include "llvm/Target/AMDGPUSplitModuleOptions.h"
 #include "llvm/Target/CGPassBuilderOption.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Triple.h"
@@ -32,7 +33,9 @@
 
 namespace llvm {
 
-LLVM_ABI extern llvm::cl::opt<bool> NoKernelInfoEndLTO;
+namespace clv2 {
+class OptionsContext;
+}
 
 class AAManager;
 using ModulePassManager = PassManager<Module>;
@@ -124,6 +127,10 @@ protected: // Can only create subclasses.
   // PGO related tunables.
   std::optional<PGOOptions> PGOOption;
 
+  // Per-session option context (non-owning). When set, library code
+  // reads options from here instead of global state.
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
+
 public:
   TargetOptions Options;
 
@@ -132,6 +139,13 @@ public:
   virtual ~TargetMachine();
 
   const Target &getTarget() const { return TheTarget; }
+
+  /// Set the per-session option context. Non-owning.
+  void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
+
+  /// Get the per-session option context. Returns a static default
+  /// OptionsContext with compile-time defaults if none was set.
+  LLVM_ABI const clv2::OptionsContext &getOptionsContext() const;
 
   const Triple &getTargetTriple() const { return TargetTriple; }
   StringRef getTargetCPU() const { return TargetCPU; }
@@ -211,7 +225,7 @@ public:
   /// TargetSubtargetInfo.  In debug builds, it verifies that the object being
   /// returned is of the correct type.
   template <typename STC> const STC &getSubtarget(const Function &F) const {
-    return *static_cast<const STC*>(getSubtargetImpl(F));
+    return *static_cast<const STC *>(getSubtargetImpl(F));
   }
 
   /// Create a DataLayout.
@@ -492,9 +506,10 @@ public:
   /// \returns `true` if the module was split, `false` otherwise. When  `false`
   /// is returned, it is assumed that \p ModuleCallback has never been called
   /// and \p M has not been modified.
-  virtual bool splitModule(
-      Module &M, unsigned NumParts,
-      function_ref<void(std::unique_ptr<Module> MPart)> ModuleCallback) {
+  virtual bool
+  splitModule(Module &M, unsigned NumParts,
+              function_ref<void(std::unique_ptr<Module> MPart)> ModuleCallback,
+              const AMDGPUSplitModuleOptions *Opts = nullptr) {
     return false;
   }
 

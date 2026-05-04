@@ -11,12 +11,45 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/CodeGen/LoopGeneratorsGOMP.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/CommandLineV2.h"
 
 using namespace llvm;
 using namespace polly;
+
+/// Helper to read Polly loop-generator options from OptionsContext.
+static void getLoopGenOpts(PollyIRBuilder &Builder, int &NumThreads,
+                           OMPGeneralSchedulingType &Scheduling,
+                           int &ChunkSize) {
+  NumThreads = 0;
+  Scheduling = OMPGeneralSchedulingType::Runtime;
+  ChunkSize = 0;
+  if (auto *Opts = polly_opts::getPollyOpts(Builder.GetInsertBlock()
+                                                ->getParent()
+                                                ->getContext()
+                                                .getOptionsContext())) {
+    NumThreads = Opts->get<&llvm::clv2::POLLY_NumThreads>();
+    ChunkSize = Opts->get<&llvm::clv2::POLLY_SchedulingChunksize>();
+    auto SchedType = Opts->get<&llvm::clv2::POLLY_Scheduling>();
+    switch (SchedType) {
+    case llvm::clv2::POLLY_SchedulingType::Static:
+      Scheduling = OMPGeneralSchedulingType::StaticChunked;
+      break;
+    case llvm::clv2::POLLY_SchedulingType::Dynamic:
+      Scheduling = OMPGeneralSchedulingType::Dynamic;
+      break;
+    case llvm::clv2::POLLY_SchedulingType::Guided:
+      Scheduling = OMPGeneralSchedulingType::Guided;
+      break;
+    case llvm::clv2::POLLY_SchedulingType::Runtime:
+      Scheduling = OMPGeneralSchedulingType::Runtime;
+      break;
+    }
+  }
+}
 
 void ParallelLoopGeneratorGOMP::createCallSpawnThreads(Value *SubFn,
                                                        Value *SubFnParam,
@@ -38,7 +71,11 @@ void ParallelLoopGeneratorGOMP::createCallSpawnThreads(Value *SubFn,
     F = Function::Create(Ty, Linkage, Name, M);
   }
 
-  Value *Args[] = {SubFn, SubFnParam, Builder.getInt32(PollyNumThreads),
+  int NumThreads;
+  OMPGeneralSchedulingType Sched;
+  int ChunkSz;
+  getLoopGenOpts(Builder, NumThreads, Sched, ChunkSz);
+  Value *Args[] = {SubFn, SubFnParam, Builder.getInt32(NumThreads),
                    LB,    UB,         Stride};
 
   CallInst *Call = Builder.CreateCall(F, Args);
@@ -90,13 +127,17 @@ std::tuple<Value *, Function *>
 ParallelLoopGeneratorGOMP::createSubFn(Value *Stride, AllocaInst *StructData,
                                        SetVector<Value *> Data,
                                        ValueMapT &Map) {
-  if (PollyScheduling != OMPGeneralSchedulingType::Runtime) {
+  int GompNumThreads;
+  OMPGeneralSchedulingType GompScheduling;
+  int GompChunkSize;
+  getLoopGenOpts(Builder, GompNumThreads, GompScheduling, GompChunkSize);
+  if (GompScheduling != OMPGeneralSchedulingType::Runtime) {
     // User tried to influence the scheduling type (currently not supported)
     errs() << "warning: Polly's GNU OpenMP backend solely "
               "supports the scheduling type 'runtime'.\n";
   }
 
-  if (PollyChunkSize != 0) {
+  if (GompChunkSize != 0) {
     // User tried to influence the chunk size (currently not supported)
     errs() << "warning: Polly's GNU OpenMP backend solely "
               "supports the default chunk size.\n";

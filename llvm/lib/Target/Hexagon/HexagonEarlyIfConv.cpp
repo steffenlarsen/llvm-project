@@ -78,13 +78,15 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/BranchProbability.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <cassert>
 #include <iterator>
 
@@ -92,12 +94,23 @@
 
 using namespace llvm;
 
-static cl::opt<bool> EnableHexagonBP("enable-hexagon-br-prob", cl::Hidden,
-  cl::init(true), cl::desc("Enable branch probability info"));
-static cl::opt<unsigned> SizeLimit("eif-limit", cl::init(6), cl::Hidden,
-  cl::desc("Size limit in Hexagon early if-conversion"));
-static cl::opt<bool> SkipExitBranches("eif-no-loop-exit", cl::init(false),
-  cl::Hidden, cl::desc("Do not convert branches that may exit the loop"));
+static bool EnableHexagonBP = true;
+static unsigned SizeLimit = 6;
+
+static bool getEnableHexagonBP(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_EnableHexagonBP>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getSizeLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_EIFSizeLimit>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getSkipExitBranches(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_SkipExitBranches>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -289,7 +302,8 @@ bool HexagonEarlyIfConversion::matchFlowPattern(MachineBasicBlock *B,
 
   // If requested (via an option), do not consider branches where the
   // true and false targets do not belong to the same loop.
-  if (SkipExitBranches && MLI->getLoopFor(TB) != MLI->getLoopFor(FB))
+  if (getSkipExitBranches(MFN->getFunction()) &&
+      MLI->getLoopFor(TB) != MLI->getLoopFor(FB))
     return false;
 
   // If neither is predicable, there is nothing interesting.
@@ -561,7 +575,7 @@ bool HexagonEarlyIfConversion::isProfitable(const FlowPattern &FP) const {
   LLVM_DEBUG(
       dbgs() << "Total number of instructions to be predicated/speculated: "
              << TotalIn << ", spare room: " << Spare << "\n");
-  if (TotalIn >= SizeLimit+Spare)
+  if (TotalIn >= getSizeLimit(MFN->getFunction()) + Spare)
     return false;
 
   // Count the number of PHI nodes that will need to be updated (converted
@@ -589,7 +603,7 @@ bool HexagonEarlyIfConversion::isProfitable(const FlowPattern &FP) const {
   }
   LLVM_DEBUG(dbgs() << "Total number of extra muxes from converted phis: "
                     << TotalPh << "\n");
-  if (TotalIn+TotalPh >= SizeLimit+Spare)
+  if (TotalIn + TotalPh >= getSizeLimit(MFN->getFunction()) + Spare)
     return false;
 
   LLVM_DEBUG(dbgs() << "Total number of predicate registers: " << PredDefs
@@ -1062,7 +1076,7 @@ bool HexagonEarlyIfConversion::runOnMachineFunction(MachineFunction &MF) {
   MRI = &MF.getRegInfo();
   MDT = &getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
   MLI = &getAnalysis<MachineLoopInfoWrapperPass>().getLI();
-  MBPI = EnableHexagonBP
+  MBPI = getEnableHexagonBP(MF.getFunction())
              ? &getAnalysis<MachineBranchProbabilityInfoWrapperPass>().getMBPI()
              : nullptr;
 

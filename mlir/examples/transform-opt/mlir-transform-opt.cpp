@@ -20,88 +20,107 @@
 #include "mlir/Parser/Parser.h"
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include <cstdlib>
 
-namespace {
-
 using namespace llvm;
 
-/// Structure containing command line options for the tool, these will get
-/// initialized when an instance is created.
+namespace {
+
+/// Enum mirroring mlir::SourceMgrDiagnosticVerifierHandler::Level for
+/// constexpr option description.
+enum class VerifyDiagLevel : int {
+  All = static_cast<int>(mlir::SourceMgrDiagnosticVerifierHandler::Level::All),
+  OnlyExpected = static_cast<int>(
+      mlir::SourceMgrDiagnosticVerifierHandler::Level::OnlyExpected),
+};
+
+} // namespace
+
+static constexpr clv2::OptionInfo<bool> allowUnregisteredDialectOpt{
+    "allow-unregistered-dialect",
+    "Allow operations coming from an unregistered dialect"};
+
+static constexpr clv2::EnumVal<VerifyDiagLevel> verifyDiagVals[] = {
+    {"all", VerifyDiagLevel::All,
+     "Check all diagnostics (expected, unexpected, near-misses)"},
+    {"", VerifyDiagLevel::All,
+     "Check all diagnostics (expected, unexpected, near-misses)"},
+    {"only-expected", VerifyDiagLevel::OnlyExpected,
+     "Check only expected diagnostics"},
+};
+static constexpr auto verifyDiagnosticsOpt =
+    clv2::makeEnumOption<VerifyDiagLevel>(
+        "verify-diagnostics",
+        "Check that emitted diagnostics match expected-* lines on the "
+        "corresponding line",
+        verifyDiagVals, clv2::ValueOptional);
+
+static constexpr clv2::OptionInfo<std::string> payloadFilenameOpt{
+    "", "<input file>", clv2::Positional{}, clv2::Init{"-"}};
+
+static constexpr clv2::OptionInfo<std::string> outputFilenameOpt{
+    "o", "Output filename", clv2::Init{"-"}};
+
+static constexpr clv2::OptionInfo<std::string> transformMainFilenameOpt{
+    "transform",
+    "File containing entry point of the transform script, if "
+    "different from the input file",
+    clv2::value_desc("filename")};
+
+static constexpr clv2::ListOptionInfo<std::string> transformLibraryFilenamesOpt{
+    "transform-library",
+    "File(s) containing definitions of "
+    "additional transform script symbols",
+    clv2::ZeroOrMore};
+
+static constexpr clv2::OptionInfo<std::string> transformEntryPointOpt{
+    "transform-entry-point", "Name of the entry point transform symbol"};
+
+static constexpr clv2::OptionInfo<bool> disableExpensiveChecksOpt{
+    "disable-expensive-checks",
+    "Disables potentially expensive checks in the transform "
+    "interpreter, providing more speed at the expense of "
+    "potential memory problems and silent corruptions"};
+
+static constexpr clv2::OptionInfo<bool> dumpLibraryModuleOpt{
+    "dump-library-module",
+    "Prints the combined library module before the output"};
+
+static constexpr clv2::OptionsRegistry<
+    &allowUnregisteredDialectOpt, &verifyDiagnosticsOpt, &payloadFilenameOpt,
+    &outputFilenameOpt, &transformMainFilenameOpt,
+    &transformLibraryFilenamesOpt, &transformEntryPointOpt,
+    &disableExpensiveChecksOpt, &dumpLibraryModuleOpt>
+    TransformOptReg;
+
+namespace {
+
+/// Structure containing command line options for the tool, populated
+/// from parsed options in runMain().
 struct MlirTransformOptCLOptions {
-  cl::opt<bool> allowUnregisteredDialects{
-      "allow-unregistered-dialect",
-      cl::desc("Allow operations coming from an unregistered dialect"),
-      cl::init(false)};
-
-  cl::opt<mlir::SourceMgrDiagnosticVerifierHandler::Level> verifyDiagnostics{
-      "verify-diagnostics", llvm::cl::ValueOptional,
-      cl::desc("Check that emitted diagnostics match expected-* lines on the "
-               "corresponding line"),
-      cl::values(
-          clEnumValN(
-              mlir::SourceMgrDiagnosticVerifierHandler::Level::All, "all",
-              "Check all diagnostics (expected, unexpected, near-misses)"),
-          // Implicit value: when passed with no arguments, e.g.
-          // `--verify-diagnostics` or `--verify-diagnostics=`.
-          clEnumValN(
-              mlir::SourceMgrDiagnosticVerifierHandler::Level::All, "",
-              "Check all diagnostics (expected, unexpected, near-misses)"),
-          clEnumValN(
-              mlir::SourceMgrDiagnosticVerifierHandler::Level::OnlyExpected,
-              "only-expected", "Check only expected diagnostics"))};
-
-  cl::opt<std::string> payloadFilename{cl::Positional, cl::desc("<input file>"),
-                                       cl::init("-")};
-
-  cl::opt<std::string> outputFilename{"o", cl::desc("Output filename"),
-                                      cl::value_desc("filename"),
-                                      cl::init("-")};
-
-  cl::opt<std::string> transformMainFilename{
-      "transform",
-      cl::desc("File containing entry point of the transform script, if "
-               "different from the input file"),
-      cl::value_desc("filename"), cl::init("")};
-
-  cl::list<std::string> transformLibraryFilenames{
-      "transform-library", cl::desc("File(s) containing definitions of "
-                                    "additional transform script symbols")};
-
-  cl::opt<std::string> transformEntryPoint{
-      "transform-entry-point",
-      cl::desc("Name of the entry point transform symbol"),
-      cl::init(mlir::transform::TransformDialect::kTransformEntryPointSymbolName
-                   .str())};
-
-  cl::opt<bool> disableExpensiveChecks{
-      "disable-expensive-checks",
-      cl::desc("Disables potentially expensive checks in the transform "
-               "interpreter, providing more speed at the expense of "
-               "potential memory problems and silent corruptions"),
-      cl::init(false)};
-
-  cl::opt<bool> dumpLibraryModule{
-      "dump-library-module",
-      cl::desc("Prints the combined library module before the output"),
-      cl::init(false)};
+  bool allowUnregisteredDialects = false;
+  mlir::SourceMgrDiagnosticVerifierHandler::Level verifyDiagnosticsValue =
+      mlir::SourceMgrDiagnosticVerifierHandler::Level::All;
+  bool verifyDiagnosticsWasSet = false;
+  std::string payloadFilename = "-";
+  std::string outputFilename = "-";
+  std::string transformMainFilename;
+  std::vector<std::string> transformLibraryFilenames;
+  std::string transformEntryPoint =
+      mlir::transform::TransformDialect::kTransformEntryPointSymbolName.str();
+  bool disableExpensiveChecks = false;
+  bool dumpLibraryModule = false;
 };
 } // namespace
 
-/// "Managed" static instance of the command-line options structure. This makes
-/// them locally-scoped and explicitly initialized/deinitialized. While this is
-/// not strictly necessary in the tool source file that is not being used as a
-/// library (where the options would pollute the global list of options), it is
-/// good practice to follow this.
+/// "Managed" static instance of the command-line options structure.
 static llvm::ManagedStatic<MlirTransformOptCLOptions> clOptions;
-
-/// Explicitly registers command-line options.
-static void registerCLOptions() { *clOptions; }
 
 namespace {
 /// A wrapper class for source managers diagnostic. This provides both unique
@@ -269,8 +288,8 @@ static llvm::LogicalResult processPayloadBuffer(
   context.allowUnregisteredDialects(clOptions->allowUnregisteredDialects);
   mlir::ParserConfig config(&context);
   TransformSourceMgr sourceMgr(
-      /*verifyDiagnostics=*/clOptions->verifyDiagnostics.getNumOccurrences()
-          ? std::optional{clOptions->verifyDiagnostics.getValue()}
+      /*verifyDiagnostics=*/clOptions->verifyDiagnosticsWasSet
+          ? std::optional{clOptions->verifyDiagnosticsValue}
           : std::nullopt);
 
   // Parse the input buffer that will be used as transform payload.
@@ -353,9 +372,33 @@ static llvm::LogicalResult runMain(int argc, char **argv) {
   llvm::InitLLVM y(argc, argv);
   mlir::registerAsmPrinterCLOptions();
   mlir::registerMLIRContextCLOptions();
-  registerCLOptions();
-  llvm::cl::ParseCommandLineOptions(argc, argv,
-                                    "Minimal Transform dialect driver\n");
+  llvm::clv2::OptionParser P;
+  P.add<&TransformOptReg>();
+  RegisterAllLLVMOptions(P);
+  auto OptsCtx = P.parse(argc, argv, "Minimal Transform dialect driver\n");
+  auto *Opts = OptsCtx->getViewPtr<&TransformOptReg>();
+
+  // Populate the CLOptions struct from parsed options.
+  *clOptions;
+  clOptions->allowUnregisteredDialects =
+      Opts->get<&allowUnregisteredDialectOpt>();
+  clOptions->verifyDiagnosticsValue =
+      static_cast<mlir::SourceMgrDiagnosticVerifierHandler::Level>(
+          Opts->get<&verifyDiagnosticsOpt>());
+  clOptions->verifyDiagnosticsWasSet = Opts->specified<&verifyDiagnosticsOpt>();
+  clOptions->payloadFilename = std::string(Opts->get<&payloadFilenameOpt>());
+  clOptions->outputFilename = std::string(Opts->get<&outputFilenameOpt>());
+  clOptions->transformMainFilename =
+      std::string(Opts->get<&transformMainFilenameOpt>());
+  clOptions->transformLibraryFilenames =
+      Opts->get<&transformLibraryFilenamesOpt>();
+  {
+    auto entryPoint = std::string(Opts->get<&transformEntryPointOpt>());
+    if (!entryPoint.empty())
+      clOptions->transformEntryPoint = std::move(entryPoint);
+  }
+  clOptions->disableExpensiveChecks = Opts->get<&disableExpensiveChecksOpt>();
+  clOptions->dumpLibraryModule = Opts->get<&dumpLibraryModuleOpt>();
 
   // Try opening the main input file.
   std::string errorMessage;

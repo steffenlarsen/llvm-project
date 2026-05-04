@@ -18,8 +18,11 @@
 #include "TargetInfo/SparcTargetInfo.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Sparc/SparcOptionsOptInfos.h"
 #include <optional>
 using namespace llvm;
 
@@ -35,9 +38,12 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeSparcTarget() {
   initializeErrataWorkaroundPass(PR);
 }
 
-static cl::opt<bool>
-    BranchRelaxation("sparc-enable-branch-relax", cl::Hidden, cl::init(true),
-                     cl::desc("Relax out of range conditional branches"));
+static bool BranchRelaxation = true;
+
+static bool getBranchRelaxation(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SPARC_BranchRelaxation>(
+      F.getContext().getOptionsContext());
+}
 
 static Reloc::Model getEffectiveRelocModel(std::optional<Reloc::Model> RM) {
   return RM.value_or(Reloc::Static);

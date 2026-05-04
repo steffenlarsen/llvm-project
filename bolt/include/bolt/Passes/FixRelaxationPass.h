@@ -25,7 +25,7 @@ class FixRelaxations : public BinaryFunctionPass {
   void runOnFunction(BinaryFunction &Function);
 
 public:
-  explicit FixRelaxations(const cl::opt<bool> &PrintPass)
+  explicit FixRelaxations(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "fix-relaxations"; }

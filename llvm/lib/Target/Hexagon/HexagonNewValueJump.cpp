@@ -20,7 +20,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/InitializePasses.h"
 #include "Hexagon.h"
 #include "HexagonInstrInfo.h"
 #include "HexagonRegisterInfo.h"
@@ -38,14 +37,17 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Function.h"
+#include "llvm/InitializePasses.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/BranchProbability.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <cassert>
 #include <cstdint>
 #include <iterator>
@@ -56,14 +58,22 @@ using namespace llvm;
 
 STATISTIC(NumNVJGenerated, "Number of New Value Jump Instructions created");
 
-static cl::opt<int> DbgNVJCount("nvj-count", cl::init(-1), cl::Hidden,
-    cl::desc("Maximum number of predicated jumps to be converted to "
-    "New Value Jump"));
+static int DbgNVJCount = -1;
 
-static cl::opt<bool> DisableNewValueJumps("disable-nvjump", cl::Hidden,
-                                          cl::desc("Disable New Value Jumps"));
+static bool getDisablePacketizer(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DisablePacketizer>(
+      F.getContext().getOptionsContext());
+}
 
-extern cl::opt<bool> DisablePacketizer;
+static int getDbgNVJCount(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DbgNVJCount>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getDisableNewValueJumps(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DisableNewValueJumps>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -457,11 +467,13 @@ bool HexagonNewValueJump::runOnMachineFunction(MachineFunction &MF) {
 
   // New value jumps require the feeder instruction to be in the same packet.
   // If packetization is disabled, we cannot generate new value jumps.
-  if (DisableNewValueJumps || DisablePacketizer ||
+  const Function &F = MF.getFunction();
+  if (getDisableNewValueJumps(F) || getDisablePacketizer(F) ||
       !MF.getSubtarget<HexagonSubtarget>().useNewValueJumps())
     return false;
 
-  int nvjCount = DbgNVJCount;
+  int nvjCount = getDbgNVJCount(F);
+
   int nvjGenerated = 0;
 
   // Loop through all the bb's of the function

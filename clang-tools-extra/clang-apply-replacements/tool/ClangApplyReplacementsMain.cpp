@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang-apply-replacements/Tooling/ApplyReplacements.h"
+#include "clang-tools-extra/ClangToolsExtraOptionsOptInfos.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticOptions.h"
 #include "clang/Basic/SourceManager.h"
@@ -21,14 +22,13 @@
 #include "clang/Rewrite/Core/Rewriter.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSet.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 
 using namespace llvm;
 using namespace clang;
 using namespace clang::replace;
-
-static cl::opt<std::string> Directory(cl::Positional, cl::Required,
-                                      cl::desc("<Search Root Directory>"));
 
 static cl::OptionCategory ReplacementCategory("Replacement Options");
 static cl::OptionCategory FormattingCategory("Formatting Options");
@@ -36,38 +36,33 @@ static cl::OptionCategory FormattingCategory("Formatting Options");
 const cl::OptionCategory *VisibleCategories[] = {&ReplacementCategory,
                                                  &FormattingCategory};
 
-static cl::opt<bool> RemoveTUReplacementFiles(
-    "remove-change-desc-files",
-    cl::desc("Remove the change description files regardless of successful\n"
-             "merging/replacing."),
-    cl::init(false), cl::cat(ReplacementCategory));
+struct ApplyReplacementsOptions {
+  std::string Directory;
+  bool RemoveTUReplacementFiles = false;
+  bool IgnoreInsertConflict = false;
+  bool DoFormat = false;
+  std::string FormatStyleConfig = "";
+  std::string FormatStyleOpt = "LLVM";
+};
 
-static cl::opt<bool> IgnoreInsertConflict(
-    "ignore-insert-conflict",
-    cl::desc("Ignore insert conflict and keep running to fix."),
-    cl::init(false), cl::cat(ReplacementCategory));
+inline constexpr clv2::OptionsRegistry<
+    &clv2::CTE_AR_Directory, &clv2::CTE_AR_RemoveChangeDescFiles,
+    &clv2::CTE_AR_IgnoreInsertConflict, &clv2::CTE_AR_Format,
+    &clv2::CTE_AR_StyleConfig, &clv2::CTE_AR_Style>
+    ApplyReplacementsOptsReg;
 
-static cl::opt<bool> DoFormat(
-    "format",
-    cl::desc("Enable formatting of code changed by applying replacements.\n"
-             "Use -style to choose formatting style.\n"),
-    cl::cat(FormattingCategory));
-
-// FIXME: Consider making the default behaviour for finding a style
-// configuration file to start the search anew for every file being changed to
-// handle situations where the style is different for different parts of a
-// project.
-
-static cl::opt<std::string> FormatStyleConfig(
-    "style-config",
-    cl::desc("Path to a directory containing a .clang-format file\n"
-             "describing a formatting style to use for formatting\n"
-             "code when -style=file.\n"),
-    cl::init(""), cl::cat(FormattingCategory));
-
-static cl::opt<std::string>
-    FormatStyleOpt("style", cl::desc(format::StyleOptionHelpDescription),
-                   cl::init("LLVM"), cl::cat(FormattingCategory));
+static void applyApplyReplacementsOpts(
+    const decltype(ApplyReplacementsOptsReg)::ParsedOptionsT &Opts,
+    ApplyReplacementsOptions &ToolOpts) {
+  ToolOpts.Directory = Opts.get<&clv2::CTE_AR_Directory>();
+  ToolOpts.RemoveTUReplacementFiles =
+      Opts.get<&clv2::CTE_AR_RemoveChangeDescFiles>();
+  ToolOpts.IgnoreInsertConflict =
+      Opts.get<&clv2::CTE_AR_IgnoreInsertConflict>();
+  ToolOpts.DoFormat = Opts.get<&clv2::CTE_AR_Format>();
+  ToolOpts.FormatStyleConfig = Opts.get<&clv2::CTE_AR_StyleConfig>();
+  ToolOpts.FormatStyleOpt = Opts.get<&clv2::CTE_AR_Style>();
+}
 
 namespace {
 // Helper object to remove the TUReplacement and TUDiagnostic (triggered by
@@ -91,17 +86,44 @@ static void printVersion(raw_ostream &OS) {
 }
 
 int main(int argc, char **argv) {
-  cl::HideUnrelatedOptions(ArrayRef(VisibleCategories));
-
   cl::SetVersionPrinter(printVersion);
-  cl::ParseCommandLineOptions(argc, argv);
+  ApplyReplacementsOptions ToolOpts;
+  clv2::OptionParser P;
+  RegisterAllLLVMOptions(P);
+  {
+    using ParsedT = decltype(ApplyReplacementsOptsReg)::ParsedOptionsT;
+    auto *Storage = new ParsedT();
+    decltype(ApplyReplacementsOptsReg)::applyDefaultsTo(*Storage);
+    std::vector<clv2::detail::OptionEntry> Entries;
+    std::vector<clv2::detail::AliasEntry> Aliases;
+    std::vector<clv2::detail::SubCommandSpec> SubSpecs;
+    decltype(ApplyReplacementsOptsReg)::staticBuildInto(*Storage, Entries,
+                                                        Aliases, SubSpecs);
+    for (auto &E : Entries) {
+      if (!E.Cat) {
+        // Assign option categories.
+        StringRef Name(E.name());
+        if (Name == "format" || Name == "style-config" || Name == "style")
+          E.Cat = &FormattingCategory;
+        else
+          E.Cat = &ReplacementCategory;
+      }
+      P.addDynamicEntry(std::move(E));
+    }
+    clv2::registerDynamicPostParseCallback([Storage, &ToolOpts]() {
+      applyApplyReplacementsOpts(*Storage, ToolOpts);
+    });
+  }
+  P.hideUnrelatedOptions(ArrayRef(VisibleCategories));
+  P.parse(argc, argv);
 
   DiagnosticOptions DiagOpts;
   DiagnosticsEngine Diagnostics(DiagnosticIDs::create(), DiagOpts);
 
   // Determine a formatting style from options.
-  auto FormatStyleOrError = format::getStyle(FormatStyleOpt, FormatStyleConfig,
-                                             format::DefaultFallbackStyle);
+  auto FormatStyleOrError =
+      format::getStyle(ToolOpts.FormatStyleOpt, ToolOpts.FormatStyleConfig,
+                       format::DefaultFallbackStyle);
   if (!FormatStyleOrError) {
     llvm::errs() << llvm::toString(FormatStyleOrError.takeError()) << "\n";
     return 1;
@@ -111,16 +133,16 @@ int main(int argc, char **argv) {
   TUReplacements TURs;
   TUReplacementFiles TUFiles;
 
-  std::error_code ErrorCode =
-      collectReplacementsFromDirectory(Directory, TURs, TUFiles, Diagnostics);
+  std::error_code ErrorCode = collectReplacementsFromDirectory(
+      ToolOpts.Directory, TURs, TUFiles, Diagnostics);
 
   TUDiagnostics TUDs;
   TUFiles.clear();
-  ErrorCode =
-      collectReplacementsFromDirectory(Directory, TUDs, TUFiles, Diagnostics);
+  ErrorCode = collectReplacementsFromDirectory(ToolOpts.Directory, TUDs,
+                                               TUFiles, Diagnostics);
 
   if (ErrorCode) {
-    errs() << "Trouble iterating over directory '" << Directory
+    errs() << "Trouble iterating over directory '" << ToolOpts.Directory
            << "': " << ErrorCode.message() << "\n";
     return 1;
   }
@@ -128,21 +150,22 @@ int main(int argc, char **argv) {
   // Remove the TUReplacementFiles (triggered by "remove-change-desc-files"
   // command line option) when exiting main().
   std::unique_ptr<ScopedFileRemover> Remover;
-  if (RemoveTUReplacementFiles)
+  if (ToolOpts.RemoveTUReplacementFiles)
     Remover.reset(new ScopedFileRemover(TUFiles, Diagnostics));
 
   FileManager Files((FileSystemOptions()));
   SourceManager SM(Diagnostics, Files);
 
   FileToChangesMap Changes;
-  if (!mergeAndDeduplicate(TURs, TUDs, Changes, SM, IgnoreInsertConflict))
+  if (!mergeAndDeduplicate(TURs, TUDs, Changes, SM,
+                           ToolOpts.IgnoreInsertConflict))
     return 1;
 
   tooling::ApplyChangesSpec Spec;
-  Spec.Cleanup = DoFormat;
-  Spec.Format = DoFormat ? tooling::ApplyChangesSpec::kAll
-                         : tooling::ApplyChangesSpec::kNone;
-  Spec.Style = DoFormat ? FormatStyle : format::getNoStyle();
+  Spec.Cleanup = ToolOpts.DoFormat;
+  Spec.Format = ToolOpts.DoFormat ? tooling::ApplyChangesSpec::kAll
+                                  : tooling::ApplyChangesSpec::kNone;
+  Spec.Style = ToolOpts.DoFormat ? FormatStyle : format::getNoStyle();
 
   for (const auto &FileChange : Changes) {
     FileEntryRef Entry = FileChange.first;

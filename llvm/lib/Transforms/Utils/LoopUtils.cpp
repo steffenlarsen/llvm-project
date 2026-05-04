@@ -55,7 +55,6 @@ using namespace llvm::PatternMatch;
 static const char *LLVMLoopDisableNonforced = "llvm.loop.disable_nonforced";
 static const char *LLVMLoopDisableLICM = "llvm.licm.disable";
 namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 } // namespace llvm
 
 bool llvm::formDedicatedExitBlocks(Loop *L, DominatorTree *DT, LoopInfo *LI,
@@ -611,7 +610,8 @@ void llvm::deleteDeadLoop(Loop *L, DominatorTree *DT, ScalarEvolution *SE,
       if (MSSA) {
         MSSAU->applyUpdates({{DominatorTree::Insert, Preheader, ExitBlock}},
                             *DT);
-        if (VerifyMemorySSA)
+        if (getVerifyMemorySSA(
+                L->getHeader()->getParent()->getContext().getOptionsContext()))
           MSSA->verifyMemorySSA();
       }
     }
@@ -638,7 +638,8 @@ void llvm::deleteDeadLoop(Loop *L, DominatorTree *DT, ScalarEvolution *SE,
       SmallSetVector<BasicBlock *, 8> DeadBlockSet(L->block_begin(),
                                                    L->block_end());
       MSSAU->removeBlocks(DeadBlockSet);
-      if (VerifyMemorySSA)
+      if (getVerifyMemorySSA(
+              L->getHeader()->getParent()->getContext().getOptionsContext()))
         MSSA->verifyMemorySSA();
     }
   }
@@ -714,7 +715,9 @@ void llvm::deleteDeadLoop(Loop *L, DominatorTree *DT, ScalarEvolution *SE,
   for (auto *Block : L->blocks())
     Block->dropAllReferences();
 
-  if (MSSA && VerifyMemorySSA)
+  if (MSSA &&
+      getVerifyMemorySSA(
+          L->getHeader()->getParent()->getContext().getOptionsContext()))
     MSSA->verifyMemorySSA();
 
   if (LI) {
@@ -994,7 +997,8 @@ bool llvm::setLoopEstimatedTripCount(
     return true;
 
   // Calculate taken and exit weights.
-  unsigned LatchExitWeight = ProfcheckDisableMetadataFixes ? 0 : 1;
+  unsigned LatchExitWeight =
+      getProfcheckDisableMetadataFixes(LatchBranch->getContext()) ? 0 : 1;
   unsigned BackedgeTakenWeight = 0;
 
   if (EstimatedTripCount != 0) {
@@ -2004,7 +2008,10 @@ int llvm::rewriteLoopExitValues(Loop *L, LoopInfo *LI, TargetLibraryInfo *TLI,
 
         // Check if expansions of this SCEV would count as being high cost.
         bool HighCost = Rewriter.isHighCostExpansion(
-            ExitValue, L, SCEVCheapExpansionBudget, TTI, Inst);
+            ExitValue, L,
+            getSCEVCheapExpansionBudget(
+                L->getHeader()->getParent()->getContext().getOptionsContext()),
+            TTI, Inst);
 
         // Note that we must not perform expansions until after
         // we query *all* the costs, because if we perform temporary expansion

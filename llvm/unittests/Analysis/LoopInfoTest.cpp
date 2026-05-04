@@ -75,7 +75,7 @@ TEST(LoopInfoTest, LoopWithSingleLatch) {
       "!1 = !{!\"llvm.loop.distribute.enable\"}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfo(*M, "foo", [&](Function &F, LoopInfo &LI) {
@@ -125,7 +125,7 @@ TEST(LoopInfoTest, LoopWithMultipleLatches) {
       "!1 = !{!\"llvm.loop.distribute.enable\"}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfo(*M, "foo", [&](Function &F, LoopInfo &LI) {
@@ -181,7 +181,7 @@ TEST(LoopInfoTest, PreorderTraversals) {
                           "  ret void\n"
                           "}\n";
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
   Function &F = *M->begin();
 
@@ -255,12 +255,11 @@ TEST(LoopInfoTest, CanonicalLoop) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfoPlus(
-      *M, "foo",
-      [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+      *M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
         Function::iterator FI = F.begin();
         BasicBlock *Entry = &*(FI);
         CondBrInst *Guard = dyn_cast<CondBrInst>(Entry->getTerminator());
@@ -314,12 +313,11 @@ TEST(LoopInfoTest, LoopWithInverseGuardSuccs) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfoPlus(
-      *M, "foo",
-      [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+      *M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
         Function::iterator FI = F.begin();
         BasicBlock *Entry = &*(FI);
         CondBrInst *Guard = dyn_cast<CondBrInst>(Entry->getTerminator());
@@ -373,12 +371,11 @@ TEST(LoopInfoTest, LoopWithSwappedGuardCmp) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfoPlus(
-      *M, "foo",
-      [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+      *M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
         Function::iterator FI = F.begin();
         BasicBlock *Entry = &*(FI);
         CondBrInst *Guard = dyn_cast<CondBrInst>(Entry->getTerminator());
@@ -432,12 +429,11 @@ TEST(LoopInfoTest, LoopWithInverseLatchSuccs) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfoPlus(
-      *M, "foo",
-      [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+      *M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
         Function::iterator FI = F.begin();
         BasicBlock *Entry = &*(FI);
         CondBrInst *Guard = dyn_cast<CondBrInst>(Entry->getTerminator());
@@ -491,12 +487,11 @@ TEST(LoopInfoTest, LoopWithLatchCmpNE) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfoPlus(
-      *M, "foo",
-      [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+      *M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
         Function::iterator FI = F.begin();
         BasicBlock *Entry = &*(FI);
         CondBrInst *Guard = dyn_cast<CondBrInst>(Entry->getTerminator());
@@ -551,12 +546,11 @@ TEST(LoopInfoTest, LoopWithGuardCmpSLE) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfoPlus(
-      *M, "foo",
-      [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+      *M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
         Function::iterator FI = F.begin();
         BasicBlock *Entry = &*(FI);
         CondBrInst *Guard = dyn_cast<CondBrInst>(Entry->getTerminator());
@@ -610,12 +604,11 @@ TEST(LoopInfoTest, LoopNonConstantStep) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfoPlus(
-      *M, "foo",
-      [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+      *M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
         Function::iterator FI = F.begin();
         BasicBlock *Entry = &*(FI);
         CondBrInst *Guard = dyn_cast<CondBrInst>(Entry->getTerminator());
@@ -666,12 +659,11 @@ TEST(LoopInfoTest, LoopUnsignedBounds) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfoPlus(
-      *M, "foo",
-      [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+      *M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
         Function::iterator FI = F.begin();
         BasicBlock *Entry = &*(FI);
         CondBrInst *Guard = dyn_cast<CondBrInst>(Entry->getTerminator());
@@ -725,12 +717,11 @@ TEST(LoopInfoTest, DecreasingLoop) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfoPlus(
-      *M, "foo",
-      [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+      *M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
         Function::iterator FI = F.begin();
         BasicBlock *Entry = &*(FI);
         CondBrInst *Guard = dyn_cast<CondBrInst>(Entry->getTerminator());
@@ -784,12 +775,11 @@ TEST(LoopInfoTest, CannotFindDirection) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfoPlus(
-      *M, "foo",
-      [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+      *M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
         Function::iterator FI = F.begin();
         BasicBlock *Entry = &*(FI);
         CondBrInst *Guard = dyn_cast<CondBrInst>(Entry->getTerminator());
@@ -828,7 +818,8 @@ TEST(LoopInfoTest, ZextIndVar) {
       "for.preheader:\n"
       "  br label %for.body\n"
       "for.body:\n"
-      "  %indvars.iv = phi i64 [ 0, %for.preheader ], [ %indvars.iv.next, %for.body ]\n"
+      "  %indvars.iv = phi i64 [ 0, %for.preheader ], [ %indvars.iv.next, "
+      "%for.body ]\n"
       "  %i = phi i32 [ 0, %for.preheader ], [ %inc, %for.body ]\n"
       "  %idxprom = sext i32 %i to i64\n"
       "  %arrayidx = getelementptr inbounds i32, ptr %A, i64 %idxprom\n"
@@ -845,12 +836,11 @@ TEST(LoopInfoTest, ZextIndVar) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfoPlus(
-      *M, "foo",
-      [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+      *M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
         Function::iterator FI = F.begin();
         BasicBlock *Entry = &*(FI);
         CondBrInst *Guard = dyn_cast<CondBrInst>(Entry->getTerminator());
@@ -906,12 +896,11 @@ TEST(LoopInfoTest, MultiExitingLoop) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfoPlus(
-      *M, "foo",
-      [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+      *M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
         Function::iterator FI = F.begin();
         BasicBlock *Entry = &*(FI);
         CondBrInst *Guard = dyn_cast<CondBrInst>(Entry->getTerminator());
@@ -968,12 +957,11 @@ TEST(LoopInfoTest, MultiExitLoop) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfoPlus(
-      *M, "foo",
-      [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+      *M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
         Function::iterator FI = F.begin();
         // First two basic block are entry and for.preheader - skip them.
         ++FI;
@@ -1021,12 +1009,11 @@ TEST(LoopInfoTest, UnguardedLoop) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfoPlus(
-      *M, "foo",
-      [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+      *M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
         Function::iterator FI = F.begin();
         // First basic block is entry - skip it.
         BasicBlock *Header = &*(++FI);
@@ -1076,12 +1063,11 @@ TEST(LoopInfoTest, UnguardedLoopWithControlFlow) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfoPlus(
-      *M, "foo",
-      [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+      *M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
         Function::iterator FI = F.begin();
         BasicBlock *Entry = &*(FI);
         CondBrInst *Guard = dyn_cast<CondBrInst>(Entry->getTerminator());
@@ -1121,7 +1107,8 @@ TEST(LoopInfoTest, LoopNest) {
       "for.outer.preheader:\n"
       "  br label %for.outer\n"
       "for.outer:\n"
-      "  %j = phi i32 [ 0, %for.outer.preheader ], [ %inc.outer, %for.outer.latch ]\n"
+      "  %j = phi i32 [ 0, %for.outer.preheader ], [ %inc.outer, "
+      "%for.outer.latch ]\n"
       "  br i1 %guardcmp, label %for.inner.preheader, label %for.outer.latch\n"
       "for.inner.preheader:\n"
       "  br label %for.inner\n"
@@ -1146,12 +1133,11 @@ TEST(LoopInfoTest, LoopNest) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfoPlus(
-      *M, "foo",
-      [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+      *M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
         Function::iterator FI = F.begin();
         BasicBlock *Entry = &*(FI);
         CondBrInst *OuterGuard = dyn_cast<CondBrInst>(Entry->getTerminator());
@@ -1219,9 +1205,12 @@ TEST(LoopInfoTest, AuxiliaryIV) {
       "for.body:\n"
       "  %i = phi i32 [ 0, %for.preheader ], [ %inc, %for.body ]\n"
       "  %aux = phi i32 [ 0, %for.preheader ], [ %auxinc, %for.body ]\n"
-      "  %loopvariant = phi i32 [ 0, %for.preheader ], [ %loopvariantinc, %for.body ]\n"
-      "  %usedoutside = phi i32 [ 0, %for.preheader ], [ %usedoutsideinc, %for.body ]\n"
-      "  %mulopcode = phi i32 [ 0, %for.preheader ], [ %mulopcodeinc, %for.body ]\n"
+      "  %loopvariant = phi i32 [ 0, %for.preheader ], [ %loopvariantinc, "
+      "%for.body ]\n"
+      "  %usedoutside = phi i32 [ 0, %for.preheader ], [ %usedoutsideinc, "
+      "%for.body ]\n"
+      "  %mulopcode = phi i32 [ 0, %for.preheader ], [ %mulopcodeinc, "
+      "%for.body ]\n"
       "  %idxprom = sext i32 %i to i64\n"
       "  %arrayidx = getelementptr inbounds i32, ptr %A, i64 %idxprom\n"
       "  store i32 %i, ptr %arrayidx, align 4\n"
@@ -1240,12 +1229,11 @@ TEST(LoopInfoTest, AuxiliaryIV) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfoPlus(
-      *M, "foo",
-      [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+      *M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
         Function::iterator FI = F.begin();
         BasicBlock *Entry = &*(FI);
         CondBrInst *Guard = dyn_cast<CondBrInst>(Entry->getTerminator());
@@ -1310,7 +1298,7 @@ TEST(LoopInfoTest, LoopNotInSimplifyForm) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfo(*M, "foo", [&](Function &F, LoopInfo &LI) {
@@ -1352,27 +1340,27 @@ TEST(LoopInfoTest, LoopLatchNotExiting) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
-  runWithLoopInfoPlus(
-      *M, "foo",
-      [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
-        Function::iterator FI = F.begin();
-        // First two basic block are entry and for.preheader - skip them.
-        ++FI;
-        BasicBlock *Header = &*(++FI);
-        BasicBlock *Latch = &*(++FI);
-        assert(Header && "No header");
-        Loop *L = LI.getLoopFor(Header);
-        EXPECT_NE(L, nullptr);
-        EXPECT_TRUE(L->isLoopSimplifyForm());
-        EXPECT_EQ(L->getLoopLatch(), Latch);
-        EXPECT_FALSE(L->isLoopExiting(Latch));
-        // No loop guard becuase loop is not exiting on latch.
-        EXPECT_EQ(L->getLoopGuardBranch(), nullptr);
-        EXPECT_FALSE(L->isGuarded());
-      });
+  runWithLoopInfoPlus(*M, "foo",
+                      [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+                        Function::iterator FI = F.begin();
+                        // First two basic block are entry and for.preheader -
+                        // skip them.
+                        ++FI;
+                        BasicBlock *Header = &*(++FI);
+                        BasicBlock *Latch = &*(++FI);
+                        assert(Header && "No header");
+                        Loop *L = LI.getLoopFor(Header);
+                        EXPECT_NE(L, nullptr);
+                        EXPECT_TRUE(L->isLoopSimplifyForm());
+                        EXPECT_EQ(L->getLoopLatch(), Latch);
+                        EXPECT_FALSE(L->isLoopExiting(Latch));
+                        // No loop guard becuase loop is not exiting on latch.
+                        EXPECT_EQ(L->getLoopGuardBranch(), nullptr);
+                        EXPECT_FALSE(L->isGuarded());
+                      });
 }
 
 // Examine getUniqueExitBlocks/getUniqueNonLatchExitBlocks functions.
@@ -1400,7 +1388,7 @@ TEST(LoopInfoTest, LoopUniqueExitBlocks) {
       "!1 = !{!\"llvm.loop.distribute.enable\"}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfo(*M, "foo", [&](Function &F, LoopInfo &LI) {
@@ -1443,7 +1431,7 @@ TEST(LoopInfoTest, LoopNonLatchUniqueExitBlocks) {
       "!1 = !{!\"llvm.loop.distribute.enable\"}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfo(*M, "foo", [&](Function &F, LoopInfo &LI) {
@@ -1484,7 +1472,7 @@ TEST(LoopInfoTest, LoopNotRotated) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfo(*M, "foo", [&](Function &F, LoopInfo &LI) {
@@ -1530,7 +1518,7 @@ TEST(LoopInfoTest, LoopUserBranch) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfo(*M, "foo", [&](Function &F, LoopInfo &LI) {
@@ -1573,7 +1561,7 @@ TEST(LoopInfoTest, LoopInductionVariable) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runWithLoopInfoPlus(
@@ -1619,32 +1607,32 @@ TEST(LoopInfoTest, TokenLCSSA) {
       "attributes #0 = { nounwind readnone }\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
-  runWithLoopInfoPlus(*M, "test",
-                      [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
-    Function::iterator FI = F.begin();
-    BasicBlock *OuterHeader = &*(++FI);
-    Loop *OuterLoop = LI.getLoopFor(OuterHeader);
-    BasicBlock *InnerHeader = &*(++FI);
-    Loop *InnerLoop = LI.getLoopFor(InnerHeader);
-    EXPECT_NE(OuterLoop, nullptr);
-    EXPECT_NE(InnerLoop, nullptr);
-    DominatorTree DT(F);
-    EXPECT_TRUE(OuterLoop->isLCSSAForm(DT, /*IgnoreTokens*/ true));
-    EXPECT_FALSE(OuterLoop->isLCSSAForm(DT, /*IgnoreTokens*/ false));
-    EXPECT_TRUE(InnerLoop->isLCSSAForm(DT, /*IgnoreTokens*/ true));
-    EXPECT_FALSE(InnerLoop->isLCSSAForm(DT, /*IgnoreTokens*/ false));
-    EXPECT_TRUE(
-        OuterLoop->isRecursivelyLCSSAForm(DT, LI, /*IgnoreTokens*/ true));
-    EXPECT_FALSE(
-        OuterLoop->isRecursivelyLCSSAForm(DT, LI, /*IgnoreTokens*/ false));
-    EXPECT_TRUE(
-        InnerLoop->isRecursivelyLCSSAForm(DT, LI, /*IgnoreTokens*/ true));
-    EXPECT_FALSE(
-        InnerLoop->isRecursivelyLCSSAForm(DT, LI, /*IgnoreTokens*/ false));
-  });
+  runWithLoopInfoPlus(
+      *M, "test", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+        Function::iterator FI = F.begin();
+        BasicBlock *OuterHeader = &*(++FI);
+        Loop *OuterLoop = LI.getLoopFor(OuterHeader);
+        BasicBlock *InnerHeader = &*(++FI);
+        Loop *InnerLoop = LI.getLoopFor(InnerHeader);
+        EXPECT_NE(OuterLoop, nullptr);
+        EXPECT_NE(InnerLoop, nullptr);
+        DominatorTree DT(F);
+        EXPECT_TRUE(OuterLoop->isLCSSAForm(DT, /*IgnoreTokens*/ true));
+        EXPECT_FALSE(OuterLoop->isLCSSAForm(DT, /*IgnoreTokens*/ false));
+        EXPECT_TRUE(InnerLoop->isLCSSAForm(DT, /*IgnoreTokens*/ true));
+        EXPECT_FALSE(InnerLoop->isLCSSAForm(DT, /*IgnoreTokens*/ false));
+        EXPECT_TRUE(
+            OuterLoop->isRecursivelyLCSSAForm(DT, LI, /*IgnoreTokens*/ true));
+        EXPECT_FALSE(
+            OuterLoop->isRecursivelyLCSSAForm(DT, LI, /*IgnoreTokens*/ false));
+        EXPECT_TRUE(
+            InnerLoop->isRecursivelyLCSSAForm(DT, LI, /*IgnoreTokens*/ true));
+        EXPECT_FALSE(
+            InnerLoop->isRecursivelyLCSSAForm(DT, LI, /*IgnoreTokens*/ false));
+      });
 }
 
 TEST(LoopInfoTest, UnreachableBlock) {
@@ -1669,7 +1657,7 @@ TEST(LoopInfoTest, UnreachableBlock) {
                           "  br label %mid\n"
                           "}\n";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(ModuleStr, Err, Context);
   ASSERT_TRUE(M);

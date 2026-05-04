@@ -33,7 +33,8 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombineOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/BuildLibCalls.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -44,7 +45,6 @@ using namespace PatternMatch;
 #define DEBUG_TYPE "aggressive-instcombine"
 
 namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 }
 
 STATISTIC(NumAnyOrAllBitsSet, "Number of any/all-bits-set patterns folded");
@@ -58,19 +58,20 @@ STATISTIC(NumSelectCTTZFolded,
 STATISTIC(NumSelectCTLZFolded,
           "Number of select-based split ctlz patterns folded");
 
-static cl::opt<unsigned> MaxInstrsToScan(
-    "aggressive-instcombine-max-scan-instrs", cl::init(64), cl::Hidden,
-    cl::desc("Max number of instructions to scan for aggressive instcombine."));
+static unsigned getMaxInstrsToScan(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AIC_MaxInstrsToScan>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> StrNCmpInlineThreshold(
-    "strncmp-inline-threshold", cl::init(3), cl::Hidden,
-    cl::desc("The maximum length of a constant string for a builtin string cmp "
-             "call eligible for inlining. The default value is 3."));
+static unsigned getStrNCmpInlineThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AIC_StrNCmpInlineThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-    MemChrInlineThreshold("memchr-inline-threshold", cl::init(3), cl::Hidden,
-                          cl::desc("The maximum length of a constant string to "
-                                   "inline a memchr call."));
+static unsigned getMemChrInlineThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AIC_MemChrInlineThreshold>(
+      F.getContext().getOptionsContext());
+}
 
 /// Try to fold a select-based split cttz pattern into a single full-width cttz.
 ///
@@ -1005,7 +1006,7 @@ static bool tryToRecognizeTableBasedCttz(LoadInst *LI, Type *AccessType,
     Res = B.CreateSelect(Cmp, ZeroTableElem, Res);
 
     // The true branch of select handles the cttz(0) case, which is rare.
-    if (!ProfcheckDisableMetadataFixes) {
+    if (!getProfcheckDisableMetadataFixes(LI->getContext())) {
       if (Instruction *SelectI = dyn_cast<Instruction>(Res))
         SelectI->setMetadata(
             LLVMContext::MD_prof,
@@ -1222,7 +1223,7 @@ static bool tryToRecognizeTableBasedLog2(LoadInst *LI, Type *AccessType,
         B.CreateSelect(Cmp, B.CreateZExt(ZeroTableElem, XType), Sub);
 
     // The true branch of select handles the log2(0) case, which is rare.
-    if (!ProfcheckDisableMetadataFixes) {
+    if (!getProfcheckDisableMetadataFixes(LI->getContext())) {
       if (Instruction *SelectI = dyn_cast<Instruction>(Select))
         SelectI->setMetadata(
             LLVMContext::MD_prof,
@@ -1384,7 +1385,7 @@ static bool foldLoadsRecursive(Value *V, LoadOps &LOps, const DataLayout &DL,
     if (Inst.mayWriteToMemory() && isModSet(AA.getModRefInfo(&Inst, Loc)))
       return false;
 
-    if (++NumScanned > MaxInstrsToScan)
+    if (++NumScanned > getMaxInstrsToScan(*Inst.getFunction()))
       return false;
   }
 
@@ -1867,7 +1868,7 @@ private:
 /// handled by the instcombine pass.
 ///
 bool StrNCmpInliner::optimizeStrNCmp() {
-  if (StrNCmpInlineThreshold < 2)
+  if (getStrNCmpInlineThreshold(*CI->getFunction()) < 2)
     return false;
 
   if (!isOnlyUsedInZeroComparison(CI))
@@ -1898,7 +1899,8 @@ bool StrNCmpInliner::optimizeStrNCmp() {
       return false;
   }
   // Now N means how many bytes we need to compare at most.
-  if (N > Str.size() || N < 2 || N > StrNCmpInlineThreshold)
+  if (N > Str.size() || N < 2 ||
+      N > getStrNCmpInlineThreshold(*CI->getFunction()))
     return false;
 
   // Cases where StrP has two or more dereferenceable bytes might be better
@@ -2038,7 +2040,7 @@ static bool foldMemChr(CallInst *Call, DomTreeUpdater *DTU,
   } else
     return false;
 
-  if (N > MemChrInlineThreshold)
+  if (N > getMemChrInlineThreshold(*Call->getFunction()))
     return false;
 
   BasicBlock *BB = Call->getParent();

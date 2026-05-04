@@ -32,7 +32,7 @@ bool sortByNameReverse(const GlobalVariable &L, const GlobalVariable &R) {
 }
 
 TEST(ModuleTest, sortGlobalsByName) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   for (auto compare : {&sortByName, &sortByNameReverse}) {
     Module M("M", Context);
     Type *T = Type::getInt8Ty(Context);
@@ -52,7 +52,7 @@ TEST(ModuleTest, sortGlobalsByName) {
 }
 
 TEST(ModuleTest, randomNumberGenerator) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   static char ID;
   struct DummyPass : ModulePass {
     DummyPass() : ModulePass(ID) {}
@@ -76,7 +76,7 @@ TEST(ModuleTest, randomNumberGenerator) {
 }
 
 TEST(ModuleTest, setModuleFlag) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module M("M", Context);
   StringRef Key = "Key";
   Metadata *Val1 = MDString::get(Context, "Val1");
@@ -89,7 +89,7 @@ TEST(ModuleTest, setModuleFlag) {
 }
 
 TEST(ModuleTest, setModuleFlagInt) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module M("M", Context);
   StringRef Key = "Key";
   uint32_t Val1 = 1;
@@ -104,7 +104,7 @@ TEST(ModuleTest, setModuleFlagInt) {
 }
 
 TEST(ModuleTest, setModuleFlagTwoMod) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module MA("MA", Context);
   Module MB("MB", Context);
   StringRef Key = "Key";
@@ -154,7 +154,7 @@ const char *IRString = R"IR(
 
 TEST(ModuleTest, setProfileSummary) {
   SMDiagnostic Err;
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssemblyString(IRString, Err, Context);
   auto *PS = ProfileSummary::getFromMD(M->getProfileSummary(/*IsCS*/ false));
   EXPECT_NE(nullptr, PS);
@@ -191,7 +191,7 @@ TEST(ModuleTest, setPartialSampleProfileRatio) {
   )IR";
 
   SMDiagnostic Err;
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssemblyString(IRString, Err, Context);
   ModuleSummaryIndex Index(/*HaveGVs*/ false);
   const unsigned BlockCount = 100;
@@ -206,9 +206,9 @@ TEST(ModuleTest, setPartialSampleProfileRatio) {
 
 TEST(ModuleTest, AliasList) {
   // This tests all Module's functions that interact with Module::AliasList.
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssemblyString(R"(
 declare void @Foo()
 @GA = alias void (), ptr @Foo
@@ -246,9 +246,9 @@ declare void @Foo()
 
 TEST(ModuleTest, IFuncList) {
   // This tests all Module's functions that interact with Module::IFuncList.
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssemblyString(R"(
 declare void @Foo()
 @GIF = ifunc void (), ptr @Foo
@@ -286,9 +286,9 @@ declare void @Foo()
 
 TEST(ModuleTest, NamedMDList) {
   // This tests all Module's functions that interact with Module::NamedMDList.
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   auto M = std::make_unique<Module>("M", C);
   NamedMDNode *MDN1 = M->getOrInsertNamedMetadata("MDN1");
   EXPECT_EQ(M->named_metadata_size(), 1u);
@@ -320,9 +320,9 @@ TEST(ModuleTest, NamedMDList) {
 
 TEST(ModuleTest, GlobalList) {
   // This tests all Module's functions that interact with Module::GlobalList.
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssemblyString(R"(
 @GV = external global i32
 )",
@@ -361,9 +361,9 @@ TEST(ModuleTest, MoveAssign) {
   // This tests that we can move-assign modules, we parse two modules and
   // move assign the second one to the first one, and check that the print
   // is equal to what we loaded.
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M1 = parseAssemblyString(R"(
 ; ModuleID = '<string>'
 source_filename = "<string1>"
@@ -448,7 +448,7 @@ define void @Foo2() {
 
 TEST(ModuleTest, FunctionDefinitions) {
   // Test getFunctionDefs() method which returns only functions with bodies
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(R"(
 declare void @Decl1()
@@ -501,7 +501,7 @@ define void @Def3() {
 
 TEST(ModuleTest, FunctionDefinitionsEmpty) {
   // Test getFunctionDefs() with no definitions (only declarations)
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(R"(
 declare void @Decl1()

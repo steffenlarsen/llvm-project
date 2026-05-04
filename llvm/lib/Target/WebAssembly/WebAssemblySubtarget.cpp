@@ -54,9 +54,11 @@ WebAssemblySubtarget::WebAssemblySubtarget(const Triple &TT,
                                            const std::string &CPU,
                                            const std::string &FS,
                                            const TargetMachine &TM)
-    : WebAssemblyGenSubtargetInfo(TT, CPU, /*TuneCPU*/ CPU, FS),
+    : WebAssemblyGenSubtargetInfo(TT, CPU, /*TuneCPU*/ CPU, FS,
+                                  TM.getOptionsContext()),
       TargetTriple(TT), InstrInfo(initializeSubtargetDependencies(CPU, FS)),
       TLInfo(TM, *this) {
+  setOptionsContext(TM.getOptionsContext());
   CallLoweringInfo.reset(new WebAssemblyCallLowering(*getTargetLowering()));
   Legalizer.reset(new WebAssemblyLegalizerInfo(*this));
   auto *RBI = new WebAssemblyRegisterBankInfo(*getRegisterInfo());

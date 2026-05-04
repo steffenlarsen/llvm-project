@@ -1552,7 +1552,7 @@ AArch64LegalizerInfo::AArch64LegalizerInfo(const AArch64Subtarget &ST)
   getActionDefinitionsBuilder(G_FENCE).alwaysLegal();
   getActionDefinitionsBuilder(G_INVOKE_REGION_START).alwaysLegal();
 
-  verify(*ST.getInstrInfo());
+  verify(*ST.getInstrInfo(), ST.getOptionsContext());
 }
 
 bool AArch64LegalizerInfo::legalizeCustom(

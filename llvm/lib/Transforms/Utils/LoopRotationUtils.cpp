@@ -441,7 +441,9 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
   }
 
   LLVM_DEBUG(dbgs() << "LoopRotation: rotating "; L->dump());
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU &&
+      getVerifyMemorySSA(
+          L->getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
 
   // Find new Loop header. NewHeader is a Header's one and only successor
@@ -735,7 +737,8 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
 
     if (MSSAU) {
       MSSAU->applyUpdates(Updates, *DT, /*UpdateDT=*/true);
-      if (VerifyMemorySSA)
+      if (getVerifyMemorySSA(
+              L->getHeader()->getParent()->getContext().getOptionsContext()))
         MSSAU->getMemorySSA()->verifyMemorySSA();
     } else {
       DT->applyUpdates(Updates);
@@ -810,7 +813,9 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
   assert(L->getLoopPreheader() && "Invalid loop preheader after loop rotation");
   assert(L->getLoopLatch() && "Invalid loop latch after loop rotation");
 
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU &&
+      getVerifyMemorySSA(
+          L->getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
 
   // Now that the CFG and DomTree are in a consistent state again, try to merge
@@ -823,7 +828,9 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
   if (DidMerge)
     RemoveRedundantDbgInstrs(PredBB);
 
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU &&
+      getVerifyMemorySSA(
+          L->getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
 
   LLVM_DEBUG(dbgs() << "LoopRotation: into "; L->dump());
@@ -936,10 +943,12 @@ bool LoopRotate::simplifyLoopLatch(Loop *L) {
       SE->forgetBlockAndLoopDispositions();
     }
 
-  if (MSSAU && VerifyMemorySSA)
-    MSSAU->getMemorySSA()->verifyMemorySSA();
+    if (MSSAU &&
+        getVerifyMemorySSA(
+            L->getHeader()->getParent()->getContext().getOptionsContext()))
+      MSSAU->getMemorySSA()->verifyMemorySSA();
 
-  return true;
+    return true;
 }
 
 /// Rotate \c L, and return true if any modification was made.

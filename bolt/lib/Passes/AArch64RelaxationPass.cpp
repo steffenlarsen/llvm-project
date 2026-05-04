@@ -12,19 +12,11 @@
 
 #include "bolt/Passes/AArch64RelaxationPass.h"
 #include "bolt/Core/ParallelUtilities.h"
-#include "bolt/Utils/CommandLineOpts.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
+#include "llvm/Support/CommandLineV2.h"
 #include <iterator>
 
 using namespace llvm;
-
-namespace opts {
-extern cl::OptionCategory BoltCategory;
-
-static cl::opt<bool> AArch64PassOpt(
-    "aarch64-relaxation",
-    cl::desc("Replace ARM non-local ADR/LDR instructions with ADRP"),
-    cl::init(true), cl::cat(BoltCategory), cl::ReallyHidden);
-} // namespace opts
 
 namespace llvm {
 namespace bolt {
@@ -106,7 +98,9 @@ void AArch64RelaxationPass::runOnFunction(BinaryFunction &BF) {
 }
 
 Error AArch64RelaxationPass::runOnFunctions(BinaryContext &BC) {
-  if (!opts::AArch64PassOpt || !BC.HasRelocations)
+  const bool AArch64Relaxation = bolt_passes_opts::getAarch64Relaxation(BC);
+
+  if (!AArch64Relaxation || !BC.HasRelocations)
     return Error::success();
 
   ParallelUtilities::WorkFuncTy WorkFun = [&](BinaryFunction &BF) {

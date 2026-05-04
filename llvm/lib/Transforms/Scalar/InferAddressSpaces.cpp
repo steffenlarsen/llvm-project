@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- InferAddressSpace.cpp - --------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -121,7 +123,6 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
@@ -141,10 +142,11 @@
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
-static cl::opt<bool> AssumeDefaultIsFlatAddressSpace(
-    "assume-default-is-flat-addrspace", cl::init(false), cl::ReallyHidden,
-    cl::desc("The default address space is assumed as the flat address space. "
-             "This is mainly for test purpose."));
+static bool getAssumeDefaultIsFlatAddressSpace(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_AssumeDefaultIsFlatAddrspace>(
+      F.getContext().getOptionsContext(), false);
+}
 
 static const unsigned UninitializedAddressSpace =
     std::numeric_limits<unsigned>::max();
@@ -1117,7 +1119,7 @@ bool InferAddressSpacesImpl::run(Function &CurFn) {
   DL = &F->getDataLayout();
   PtrIntCastPairs.clear();
 
-  if (AssumeDefaultIsFlatAddressSpace)
+  if (getAssumeDefaultIsFlatAddressSpace(CurFn))
     FlatAddrSpace = 0;
 
   if (FlatAddrSpace == UninitializedAddressSpace) {

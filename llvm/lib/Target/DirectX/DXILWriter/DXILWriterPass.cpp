@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "DXILWriterPass.h"
+#include "../DirectXOptions.h"
 #include "DXILBitcodeWriter.h"
 #include "DirectXIRPasses/DXILDebugInfo.h"
 #include "llvm/ADT/DenseMap.h"
@@ -27,27 +28,20 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCOptionsOptInfos.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Alignment.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
 using namespace llvm;
 using namespace llvm::dxil;
 
-extern cl::opt<bool> EmbedDebug;
-extern cl::opt<bool> StripDebug;
-cl::opt<std::string> PdbDebugPath(
-    "dx-pdb-path",
-    cl::desc("Write debug information to the given file, or automatically "
-             "named file in directory when ending in '/'"),
-    cl::value_desc("filename"));
-cl::opt<bool> SourceInDebugModule(
-    "dx-source-in-debug-module",
-    cl::desc("Embed source code into debug module on DirectX target"),
-    cl::init(false));
-extern cl::opt<bool> SlimDebug;
+[[maybe_unused]] static const bool DirectXOptsRegistered = [] {
+  clv2::registerDynamicRegistry<&dxil::DirectXOptsReg>();
+  return true;
+}();
 
 namespace {
 class WriteDXILPass : public llvm::ModulePass {
@@ -165,13 +159,18 @@ static void replaceNamedMetadataArray(Module &M, StringRef Name,
 }
 
 class EmbedDXILPass : public llvm::ModulePass {
+  // Null when the pass is run standalone (opt -dxil-embed): there is no
+  // container writer in that configuration, so nothing consumes the
+  // debug-info disposition.
+  MCContext *MCtx;
+
   std::string writeModule(Module &M, bool HasDebugInfo, bool WriteDebug) {
     std::string Data;
     llvm::raw_string_ostream OS(Data);
 
     if (HasDebugInfo) {
       if (WriteDebug) {
-        if (!SourceInDebugModule) {
+        if (!dxil::getSourceInDebugModule(M.getContext().getOptionsContext())) {
           // Replace dx.source metadata nodes with stubs.
           LLVMContext &Ctx = M.getContext();
           MDString *EmptyString = MDString::get(Ctx, "");
@@ -230,7 +229,10 @@ class EmbedDXILPass : public llvm::ModulePass {
 
 public:
   static char ID; // Pass identification, replacement for typeid
-  EmbedDXILPass() : ModulePass(ID) {
+  EmbedDXILPass() : ModulePass(ID), MCtx(nullptr) {
+    initializeEmbedDXILPassPass(*PassRegistry::getPassRegistry());
+  }
+  EmbedDXILPass(MCContext &MCtx) : ModulePass(ID), MCtx(&MCtx) {
     initializeEmbedDXILPassPass(*PassRegistry::getPassRegistry());
   }
 
@@ -242,6 +244,17 @@ public:
     legalizeLifetimeIntrinsics(M);
 
     bool HasDebugInfo = !M.debug_compile_units().empty();
+
+    const clv2::OptionsContext &OptsCtx = M.getContext().getOptionsContext();
+    std::string PdbDebugPath = dxil::getPdbDebugPath(OptsCtx);
+    bool EmbedDebug =
+        clv2::getOptValOr<&clv2::MCOptsReg, &clv2::MC_DXEmbedDebug>(OptsCtx,
+                                                                    false);
+    bool StripDebug =
+        clv2::getOptValOr<&clv2::MCOptsReg, &clv2::MC_DXStripDebug>(OptsCtx,
+                                                                    false);
+    bool SlimDebug = clv2::getOptValOr<&clv2::MCOptsReg, &clv2::MC_DXSlimDebug>(
+        OptsCtx, false);
 
     if (SlimDebug && EmbedDebug)
       reportFatalUsageError("/Qembed_debug is not compatible with /Zs");
@@ -258,6 +271,10 @@ public:
           "Missing debug info for embedding into the container");
     if (!HasDebugInfo && !PdbDebugPath.empty())
       reportFatalUsageError("Missing debug info for writing to the PDB file");
+
+    // Hand the decision to the DXContainer writer, which cannot derive it.
+    if (MCtx)
+      MCtx->setDXDebugInfoDisposition(EmbedDebug, StripDebug);
 
     std::string ILDBData;
     if (HasDebugInfo) {
@@ -309,4 +326,6 @@ ModulePass *llvm::createDXILWriterPass(raw_ostream &Str) {
 char EmbedDXILPass::ID = 0;
 INITIALIZE_PASS(EmbedDXILPass, "dxil-embed", "Embed DXIL", false, true)
 
-ModulePass *llvm::createDXILEmbedderPass() { return new EmbedDXILPass(); }
+ModulePass *llvm::createDXILEmbedderPass(MCContext &MCtx) {
+  return new EmbedDXILPass(MCtx);
+}

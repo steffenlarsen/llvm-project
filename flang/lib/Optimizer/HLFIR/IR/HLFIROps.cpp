@@ -12,6 +12,7 @@
 
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
 
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Optimizer/Dialect/FIROpsSupport.h"
 #include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/Dialect/Support/FIRContext.h"
@@ -24,14 +25,16 @@
 #include "mlir/IR/OpImplementation.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include <mlir/Interfaces/SideEffectInterfaces.h>
 #include <optional>
 #include <tuple>
 
-static llvm::cl::opt<bool> useStrictIntrinsicVerifier(
-    "strict-intrinsic-verifier", llvm::cl::init(false),
-    llvm::cl::desc("use stricter verifier for HLFIR intrinsic operations"));
+static bool getUseStrictIntrinsicVerifier(mlir::MLIRContext *ctx) {
+  auto &optsCtx = ctx->getOptionsContext();
+  return llvm::clv2::getOptValOrDefault<
+      &llvm::clv2::FLANG_StrictIntrinsicVerifier>(optsCtx);
+}
 
 /// generic implementation of the memory side effects interface for hlfir
 /// transformational intrinsic operations
@@ -458,7 +461,7 @@ llvm::LogicalResult hlfir::DesignateOp::verify() {
   unsigned outputRank = 0;
   mlir::Type outputElementType;
   bool hasBoxComponent;
-  if (fir::useStrictVolatileVerification() &&
+  if (fir::useStrictVolatileVerification(getOperation()) &&
       fir::isa_volatile_type(memrefType) !=
           fir::isa_volatile_type(getResult().getType())) {
     return emitOpError("volatility mismatch between memref and result type")
@@ -659,6 +662,8 @@ template <typename LogicalReductionOp>
 static llvm::LogicalResult
 verifyLogicalReductionOp(LogicalReductionOp reductionOp) {
   mlir::Operation *op = reductionOp->getOperation();
+  bool useStrictIntrinsicVerifier =
+      getUseStrictIntrinsicVerifier(op->getContext());
 
   auto results = op->getResultTypes();
   assert(results.size() == 1);
@@ -916,6 +921,8 @@ void hlfir::IndexOp::getEffects(
 template <typename NumericalReductionOp>
 static llvm::LogicalResult
 verifyArrayAndMaskForReductionOp(NumericalReductionOp reductionOp) {
+  bool useStrictIntrinsicVerifier =
+      getUseStrictIntrinsicVerifier(reductionOp->getOperation()->getContext());
   mlir::Value array = reductionOp->getArray();
   mlir::Value mask = reductionOp->getMask();
 
@@ -956,6 +963,8 @@ template <typename NumericalReductionOp>
 static llvm::LogicalResult
 verifyNumericalReductionOp(NumericalReductionOp reductionOp) {
   mlir::Operation *op = reductionOp->getOperation();
+  bool useStrictIntrinsicVerifier =
+      getUseStrictIntrinsicVerifier(op->getContext());
   auto results = op->getResultTypes();
   assert(results.size() == 1);
 
@@ -1025,6 +1034,8 @@ template <typename CharacterReductionOp>
 static llvm::LogicalResult
 verifyCharacterReductionOp(CharacterReductionOp reductionOp) {
   mlir::Operation *op = reductionOp->getOperation();
+  bool useStrictIntrinsicVerifier =
+      getUseStrictIntrinsicVerifier(op->getContext());
   auto results = op->getResultTypes();
   assert(results.size() == 1);
 
@@ -1234,6 +1245,7 @@ void hlfir::SumOp::getEffects(
 //===----------------------------------------------------------------------===//
 
 llvm::LogicalResult hlfir::DotProductOp::verify() {
+  bool useStrictIntrinsicVerifier = getUseStrictIntrinsicVerifier(getContext());
   mlir::Value lhs = getLhs();
   mlir::Value rhs = getRhs();
   fir::SequenceType lhsTy = mlir::cast<fir::SequenceType>(
@@ -1290,6 +1302,7 @@ void hlfir::DotProductOp::getEffects(
 //===----------------------------------------------------------------------===//
 
 llvm::LogicalResult hlfir::MatmulOp::verify() {
+  bool useStrictIntrinsicVerifier = getUseStrictIntrinsicVerifier(getContext());
   mlir::Value lhs = getLhs();
   mlir::Value rhs = getRhs();
   fir::SequenceType lhsTy = mlir::cast<fir::SequenceType>(
@@ -1419,6 +1432,7 @@ void hlfir::MatmulOp::getEffects(
 //===----------------------------------------------------------------------===//
 
 llvm::LogicalResult hlfir::TransposeOp::verify() {
+  bool useStrictIntrinsicVerifier = getUseStrictIntrinsicVerifier(getContext());
   mlir::Value array = getArray();
   fir::SequenceType arrayTy = mlir::cast<fir::SequenceType>(
       hlfir::getFortranElementOrSequenceType(array.getType()));
@@ -1461,6 +1475,7 @@ void hlfir::TransposeOp::getEffects(
 //===----------------------------------------------------------------------===//
 
 llvm::LogicalResult hlfir::MatmulTransposeOp::verify() {
+  bool useStrictIntrinsicVerifier = getUseStrictIntrinsicVerifier(getContext());
   mlir::Value lhs = getLhs();
   mlir::Value rhs = getRhs();
   fir::SequenceType lhsTy = mlir::cast<fir::SequenceType>(
@@ -1535,6 +1550,8 @@ void hlfir::MatmulTransposeOp::getEffects(
 
 template <typename Op>
 static llvm::LogicalResult verifyArrayShift(Op op) {
+  bool useStrictIntrinsicVerifier =
+      getUseStrictIntrinsicVerifier(op->getContext());
   mlir::Value array = op.getArray();
   fir::SequenceType arrayTy = mlir::cast<fir::SequenceType>(
       hlfir::getFortranElementOrSequenceType(array.getType()));
@@ -1687,6 +1704,7 @@ void hlfir::EOShiftOp::getEffects(
 //===----------------------------------------------------------------------===//
 
 llvm::LogicalResult hlfir::ReshapeOp::verify() {
+  bool useStrictIntrinsicVerifier = getUseStrictIntrinsicVerifier(getContext());
   auto results = getOperation()->getResultTypes();
   assert(results.size() == 1);
   hlfir::ExprType resultType = mlir::cast<hlfir::ExprType>(results[0]);

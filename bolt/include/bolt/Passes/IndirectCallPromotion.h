@@ -210,7 +210,7 @@ class IndirectCallPromotion : public BinaryFunctionPass {
                            const std::vector<Callsite> &Targets) const;
 
 public:
-  explicit IndirectCallPromotion(const cl::opt<bool> &PrintPass)
+  explicit IndirectCallPromotion(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "indirect-call-promotion"; }

@@ -68,13 +68,13 @@ AbstractSparseForwardDataFlowAnalysis::initialize(Operation *top) {
 LogicalResult
 AbstractSparseForwardDataFlowAnalysis::initializeRecursively(Operation *op) {
   LDBG() << "Initializing recursively for operation: "
-         << OpWithFlags(op, OpPrintingFlags().skipRegions());
+         << OpWithFlags(op, opPrintingFlags(op).skipRegions());
 
   // Initialize the analysis by visiting every owner of an SSA value (all
   // operations and blocks).
   if (failed(visitOperation(op))) {
     LDBG() << "Failed to visit operation: "
-           << OpWithFlags(op, OpPrintingFlags().skipRegions());
+           << OpWithFlags(op, opPrintingFlags(op).skipRegions());
     return failure();
   }
 
@@ -89,10 +89,10 @@ AbstractSparseForwardDataFlowAnalysis::initializeRecursively(Operation *op) {
       visitBlock(&block);
       for (Operation &op : block) {
         LDBG() << "Recursively initializing nested operation: "
-               << OpWithFlags(&op, OpPrintingFlags().skipRegions());
+               << OpWithFlags(&op, opPrintingFlags(&op).skipRegions());
         if (failed(initializeRecursively(&op))) {
           LDBG() << "Failed to initialize nested operation: "
-                 << OpWithFlags(&op, OpPrintingFlags().skipRegions());
+                 << OpWithFlags(&op, opPrintingFlags(&op).skipRegions());
           return failure();
         }
       }
@@ -100,7 +100,7 @@ AbstractSparseForwardDataFlowAnalysis::initializeRecursively(Operation *op) {
   }
 
   LDBG() << "Successfully completed recursive initialization for operation: "
-         << OpWithFlags(op, OpPrintingFlags().skipRegions());
+         << OpWithFlags(op, opPrintingFlags(op).skipRegions());
   return success();
 }
 
@@ -452,7 +452,7 @@ static MutableArrayRef<OpOperand> operandsToOpOperands(OperandRange &operands) {
 LogicalResult
 AbstractSparseBackwardDataFlowAnalysis::visitOperation(Operation *op) {
   LDBG() << "Visiting operation: "
-         << OpWithFlags(op, OpPrintingFlags().skipRegions()) << " with "
+         << OpWithFlags(op, opPrintingFlags(op).skipRegions()) << " with "
          << op->getNumOperands() << " operands and " << op->getNumResults()
          << " results";
 
@@ -588,7 +588,7 @@ AbstractSparseBackwardDataFlowAnalysis::visitOperation(Operation *op) {
   }
 
   LDBG() << "Using default visitOperationImpl for operation: "
-         << OpWithFlags(op, OpPrintingFlags().skipRegions());
+         << OpWithFlags(op, opPrintingFlags(op).skipRegions());
   return visitOperationImpl(op, operandLattices, resultLattices);
 }
 

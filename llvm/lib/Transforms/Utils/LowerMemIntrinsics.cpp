@@ -27,7 +27,6 @@
 using namespace llvm;
 
 namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 }
 
 /// \returns \p Len urem \p OpSize, checking for optimization opportunities.
@@ -71,7 +70,7 @@ struct LoopExpansionInfo {
 };
 
 std::optional<uint64_t> getAverageMemOpLoopTripCount(const MemIntrinsic &I) {
-  if (ProfcheckDisableMetadataFixes)
+  if (getProfcheckDisableMetadataFixes(I.getContext()))
     return std::nullopt;
   if (std::optional<uint64_t> EC = I.getFunction()->getEntryCount();
       !EC || *EC == 0)

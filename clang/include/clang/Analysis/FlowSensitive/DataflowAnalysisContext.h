@@ -29,9 +29,16 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
 #include <cassert>
 #include <memory>
 #include <optional>
+
+namespace llvm {
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
+} // namespace llvm
 
 namespace clang {
 namespace dataflow {
@@ -70,6 +77,14 @@ public:
     /// (This is always non-null within an AnalysisContext, the framework
     /// provides a fallback no-op logger).
     Logger *Log = nullptr;
+
+    /// Command-line options for this compilation; never null.  When \c Log is
+    /// null and this context has \c -dataflow-log set, the framework
+    /// synthesizes and owns a logger accordingly.  Reading the flag from here
+    /// rather than from a global lets concurrent in-process analyses log
+    /// differently.
+    const llvm::clv2::OptionsContext *OptCtx =
+        &llvm::clv2::defaultOptionsContext();
   };
 
   /// Constructs a dataflow analysis context.
@@ -80,7 +95,8 @@ public:
   DataflowAnalysisContext(std::unique_ptr<Solver> S,
                           Options Opts = Options{
                               /*ContextSensitiveOpts=*/std::nullopt,
-                              /*Logger=*/nullptr})
+                              /*Logger=*/nullptr,
+                              /*OptCtx=*/&llvm::clv2::defaultOptionsContext()})
       : DataflowAnalysisContext(*S, std::move(S), Opts) {}
 
   /// Constructs a dataflow analysis context.
@@ -88,9 +104,11 @@ public:
   /// Requirements:
   ///
   ///  `S` must outlive the `DataflowAnalysisContext`.
-  DataflowAnalysisContext(Solver &S, Options Opts = Options{
-                                         /*ContextSensitiveOpts=*/std::nullopt,
-                                         /*Logger=*/nullptr})
+  DataflowAnalysisContext(Solver &S,
+                          Options Opts = Options{
+                              /*ContextSensitiveOpts=*/std::nullopt,
+                              /*Logger=*/nullptr,
+                              /*OptCtx=*/&llvm::clv2::defaultOptionsContext()})
       : DataflowAnalysisContext(S, nullptr, Opts) {}
 
   ~DataflowAnalysisContext();

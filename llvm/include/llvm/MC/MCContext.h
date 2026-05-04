@@ -29,6 +29,7 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MD5.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -44,6 +45,10 @@
 #include <vector>
 
 namespace llvm {
+
+namespace clv2 {
+class OptionsContext;
+}
 
 class CodeViewContext;
 class MCAsmInfo;
@@ -99,6 +104,9 @@ public:
 
 private:
   Environment Env;
+
+  /// Per-session option context (non-owning).
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
 
   /// The name of the Segment where Swift5 Reflection Section data will be
   /// outputted
@@ -328,11 +336,27 @@ private:
 
   bool HadError = false;
 
+  /// DirectX: the DXIL writer's decision on whether debug bitcode is embedded
+  /// in the container, and whether it was stripped.  Derived from the debug
+  /// options plus the module's debug info, so it is only known once that pass
+  /// has run; the DXContainer writer consults it when emitting the ILDB part.
+  bool DXEmbedDebugInfo = false;
+  bool DXStripDebugInfo = false;
+
   void reportCommon(SMLoc Loc,
                     std::function<void(SMDiagnostic &, const SourceMgr *)>);
 
   MCSymbolTableEntry &getSymbolTableEntry(StringRef Name);
 
+public:
+  void setDXDebugInfoDisposition(bool Embed, bool Strip) {
+    DXEmbedDebugInfo = Embed;
+    DXStripDebugInfo = Strip;
+  }
+  bool getDXEmbedDebugInfo() const { return DXEmbedDebugInfo; }
+  bool getDXStripDebugInfo() const { return DXStripDebugInfo; }
+
+private:
   MCSymbol *createSymbolImpl(const MCSymbolTableEntry *Name, bool IsTemporary);
   MCSymbol *createRenamableSymbol(const Twine &Name, bool AlwaysAddSuffix,
                                   bool IsTemporary);
@@ -385,6 +409,11 @@ public:
   MCContext(const MCContext &) = delete;
   MCContext &operator=(const MCContext &) = delete;
   LLVM_ABI ~MCContext();
+
+  void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
+  /// Never null; an MCContext with none attached reports the shared
+  /// clv2::defaultOptionsContext().
+  LLVM_ABI const clv2::OptionsContext &getOptionsContext() const;
 
   Environment getObjectFileType() const { return Env; }
   bool isELF() const { return Env == IsELF; }

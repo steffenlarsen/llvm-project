@@ -19,13 +19,17 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/Argument.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -42,13 +46,16 @@ STATISTIC(NumNotCapturedBefore, "Number of pointers not captured before");
 /// TODO: we should probably introduce a caching CaptureTracking analysis and
 /// use it where possible. The caching version can use much higher limit or
 /// don't have this cap at all.
-static cl::opt<unsigned>
-    DefaultMaxUsesToExplore("capture-tracking-max-uses-to-explore", cl::Hidden,
-                            cl::desc("Maximal number of uses to explore."),
-                            cl::init(100));
+
+static unsigned
+getDefaultMaxUsesToExploreImpl(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_DefaultMaxUsesToExplore>(Ctx);
+}
 
 unsigned llvm::getDefaultMaxUsesToExploreForCaptureTracking() {
-  return DefaultMaxUsesToExplore;
+  // No per-function context here; the descriptor's default is the same value
+  // and is a compile-time constant.
+  return clv2::AN_DefaultMaxUsesToExplore.DefaultValue;
 }
 
 CaptureTracker::~CaptureTracker() = default;
@@ -397,8 +404,16 @@ UseCaptureInfo llvm::DetermineUseCaptureKind(const Use &U, const Value *Base) {
 void llvm::PointerMayBeCaptured(const Value *V, CaptureTracker *Tracker,
                                 unsigned MaxUsesToExplore) {
   assert(V->getType()->isPointerTy() && "Capture is for pointers only!");
-  if (MaxUsesToExplore == 0)
-    MaxUsesToExplore = DefaultMaxUsesToExplore;
+  if (MaxUsesToExplore == 0) {
+    const Function *F = nullptr;
+    if (auto *I = dyn_cast<Instruction>(V))
+      F = I->getFunction();
+    else if (auto *A = dyn_cast<Argument>(V))
+      F = A->getParent();
+    MaxUsesToExplore =
+        F ? getDefaultMaxUsesToExploreImpl(F->getContext().getOptionsContext())
+          : clv2::AN_DefaultMaxUsesToExplore.DefaultValue;
+  }
 
   SmallVector<const Use *, 20> Worklist;
   Worklist.reserve(getDefaultMaxUsesToExploreForCaptureTracking());

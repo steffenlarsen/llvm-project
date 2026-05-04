@@ -56,7 +56,6 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCTargetOptions.h"
-#include "llvm/MC/MCTargetOptionsCommandFlags.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Object/ObjectFile.h"
@@ -99,8 +98,6 @@
 #include <vector>
 
 namespace llvm {
-
-static mc::RegisterMCTargetOptionsFlags MOF;
 
 using namespace dwarf_linker;
 
@@ -712,7 +709,8 @@ bool DwarfLinkerForBinary::linkImpl(
                 [&](const Twine &Warning, StringRef Context,
                     const DWARFDie *DIE) {
                   reportWarning(Warning, Context, DIE);
-                }))
+                },
+                llvm::clv2::defaultOptionsContext()))
       Streamer = std::move(*StreamerOrErr);
     else {
       handleAllErrors(StreamerOrErr.takeError(), [&](const ErrorInfoBase &EI) {

@@ -13,13 +13,15 @@
 #include "bolt/Passes/BinaryPasses.h"
 #include "bolt/Core/FunctionLayout.h"
 #include "bolt/Core/ParallelUtilities.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "bolt/Passes/BranchLivenessUtils.h"
 #include "bolt/Passes/RegAnalysis.h"
 #include "bolt/Passes/ReorderAlgorithm.h"
 #include "bolt/Passes/ReorderFunctions.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include <atomic>
 #include <cmath>
 #include <mutex>
@@ -47,43 +49,38 @@ static const char *dynoStatsOptName(const bolt::DynoStats::Category C) {
 
 namespace opts {
 
-extern cl::OptionCategory BoltCategory;
-extern cl::OptionCategory BoltOptCategory;
+enum DynoStatsSortOrder : char { Ascending, Descending };
 
-extern cl::opt<unsigned> Verbosity;
-extern cl::opt<bool> EnableBAT;
-extern cl::opt<unsigned> ExecutionCountThreshold;
-extern cl::opt<bool> UpdateDebugSections;
-extern cl::opt<bolt::ReorderFunctions::ReorderType> ReorderFunctions;
+enum SctcModes : char { SctcAlways, SctcPreserveDirection, SctcHeuristic };
 
-enum DynoStatsSortOrder : char {
-  Ascending,
-  Descending
+static const std::vector<bolt::Peepholes::PeepholeOpts> &
+getPeepholes(const bolt::bolt_passes_opts::ParsedOpts *Opts) {
+  if (Opts) {
+    static std::vector<bolt::Peepholes::PeepholeOpts> FromCtx;
+    FromCtx = Opts->get<&llvm::clv2::BOLTPASS_Peepholes>();
+    return FromCtx;
+  }
+  static std::vector<bolt::Peepholes::PeepholeOpts> Empty;
+  return Empty;
+}
+
+} // namespace opts
+
+namespace {
+struct EnumValEntry {
+  StringRef Name;
+  int Value;
+  StringRef Desc;
 };
+} // namespace
 
-static cl::opt<DynoStatsSortOrder> DynoStatsSortOrderOpt(
-    "print-sorted-by-order",
-    cl::desc("use ascending or descending order when printing functions "
-             "ordered by dyno stats"),
-    cl::init(DynoStatsSortOrder::Descending),
-    cl::values(clEnumValN(DynoStatsSortOrder::Ascending, "ascending",
-                          "Ascending order"),
-               clEnumValN(DynoStatsSortOrder::Descending, "descending",
-                          "Descending order")),
-    cl::cat(BoltOptCategory));
-
-cl::list<std::string>
-HotTextMoveSections("hot-text-move-sections",
-  cl::desc("list of sections containing functions used for hugifying hot text. "
-           "BOLT makes sure these functions are not placed on the same page as "
-           "the hot text. (default=\'.stub,.mover\')."),
-  cl::value_desc("sec1,sec2,sec3,..."),
-  cl::CommaSeparated,
-  cl::ZeroOrMore,
-  cl::cat(BoltCategory));
+namespace llvm {
+namespace bolt {
 
 bool isHotTextMover(const BinaryFunction &Function) {
-  for (std::string &SectionName : opts::HotTextMoveSections) {
+  auto HotTextMoveSections =
+      bolt_passes_opts::getHotTextMoveSections(Function.getBinaryContext());
+  for (std::string &SectionName : HotTextMoveSections) {
     if (Function.getOriginSectionName() &&
         *Function.getOriginSectionName() == SectionName)
       return true;
@@ -91,165 +88,6 @@ bool isHotTextMover(const BinaryFunction &Function) {
 
   return false;
 }
-
-static cl::opt<bool> MinBranchClusters(
-    "min-branch-clusters",
-    cl::desc("use a modified clustering algorithm geared towards minimizing "
-             "branches"),
-    cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::list<Peepholes::PeepholeOpts> Peepholes(
-    "peepholes", cl::CommaSeparated, cl::desc("enable peephole optimizations"),
-    cl::value_desc("opt1,opt2,opt3,..."),
-    cl::values(clEnumValN(Peepholes::PEEP_NONE, "none", "disable peepholes"),
-               clEnumValN(Peepholes::PEEP_DOUBLE_JUMPS, "double-jumps",
-                          "remove double jumps when able"),
-               clEnumValN(Peepholes::PEEP_TAILCALL_TRAPS, "tailcall-traps",
-                          "insert tail call traps"),
-               clEnumValN(Peepholes::PEEP_USELESS_BRANCHES, "useless-branches",
-                          "remove useless conditional branches"),
-               clEnumValN(Peepholes::PEEP_ALL, "all",
-                          "enable all peephole optimizations")),
-    cl::ZeroOrMore, cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned>
-    PrintFuncStat("print-function-statistics",
-                  cl::desc("print statistics about basic block ordering"),
-                  cl::init(0), cl::cat(BoltOptCategory));
-
-static cl::opt<bool> PrintLargeFunctions(
-    "print-large-functions",
-    cl::desc("print functions that could not be overwritten due to excessive "
-             "size"),
-    cl::init(false), cl::cat(BoltOptCategory));
-
-static cl::list<bolt::DynoStats::Category>
-    PrintSortedBy("print-sorted-by", cl::CommaSeparated,
-                  cl::desc("print functions sorted by order of dyno stats"),
-                  cl::value_desc("key1,key2,key3,..."),
-                  cl::values(
-#define D(name, description, ...)                                              \
-  clEnumValN(bolt::DynoStats::name, dynoStatsOptName(bolt::DynoStats::name),   \
-             description),
-                      REAL_DYNO_STATS
-#undef D
-                          clEnumValN(bolt::DynoStats::LAST_DYNO_STAT, "all",
-                                     "sorted by all names")),
-                  cl::ZeroOrMore, cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-    PrintUnknown("print-unknown",
-                 cl::desc("print names of functions with unknown control flow"),
-                 cl::cat(BoltCategory), cl::Hidden);
-
-static cl::opt<bool>
-    PrintUnknownCFG("print-unknown-cfg",
-                    cl::desc("dump CFG of functions with unknown control flow"),
-                    cl::cat(BoltCategory), cl::ReallyHidden);
-
-// Please MSVC19 with a forward declaration: otherwise it reports an error about
-// an undeclared variable inside a callback.
-extern cl::opt<bolt::ReorderBasicBlocks::LayoutType> ReorderBlocks;
-cl::opt<bolt::ReorderBasicBlocks::LayoutType> ReorderBlocks(
-    "reorder-blocks", cl::desc("change layout of basic blocks in a function"),
-    cl::init(bolt::ReorderBasicBlocks::LT_NONE),
-    cl::values(
-        clEnumValN(bolt::ReorderBasicBlocks::LT_NONE, "none",
-                   "do not reorder basic blocks"),
-        clEnumValN(bolt::ReorderBasicBlocks::LT_REVERSE, "reverse",
-                   "layout blocks in reverse order"),
-        clEnumValN(bolt::ReorderBasicBlocks::LT_OPTIMIZE, "normal",
-                   "perform optimal layout based on profile"),
-        clEnumValN(bolt::ReorderBasicBlocks::LT_OPTIMIZE_BRANCH,
-                   "branch-predictor",
-                   "perform optimal layout prioritizing branch "
-                   "predictions"),
-        clEnumValN(bolt::ReorderBasicBlocks::LT_OPTIMIZE_CACHE, "cache",
-                   "perform optimal layout prioritizing I-cache "
-                   "behavior"),
-        clEnumValN(bolt::ReorderBasicBlocks::LT_OPTIMIZE_CACHE_PLUS, "cache+",
-                   "perform layout optimizing I-cache behavior"),
-        clEnumValN(bolt::ReorderBasicBlocks::LT_OPTIMIZE_EXT_TSP, "ext-tsp",
-                   "perform layout optimizing I-cache behavior"),
-        clEnumValN(bolt::ReorderBasicBlocks::LT_OPTIMIZE_SHUFFLE,
-                   "cluster-shuffle", "perform random layout of clusters")),
-    cl::ZeroOrMore, cl::cat(BoltOptCategory),
-    cl::callback([](const bolt::ReorderBasicBlocks::LayoutType &option) {
-      if (option == bolt::ReorderBasicBlocks::LT_OPTIMIZE_CACHE_PLUS) {
-        errs() << "BOLT-WARNING: '-reorder-blocks=cache+' is deprecated, please"
-               << " use '-reorder-blocks=ext-tsp' instead\n";
-        ReorderBlocks = bolt::ReorderBasicBlocks::LT_OPTIMIZE_EXT_TSP;
-      }
-    }));
-
-static cl::opt<unsigned> ReportBadLayout(
-    "report-bad-layout",
-    cl::desc("print top <uint> functions with suboptimal code layout on input"),
-    cl::init(0), cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-    ReportStaleFuncs("report-stale",
-                     cl::desc("print the list of functions with stale profile"),
-                     cl::Hidden, cl::cat(BoltOptCategory));
-
-enum SctcModes : char {
-  SctcAlways,
-  SctcPreserveDirection,
-  SctcHeuristic
-};
-
-static cl::opt<SctcModes>
-SctcMode("sctc-mode",
-  cl::desc("mode for simplify conditional tail calls"),
-  cl::init(SctcAlways),
-  cl::values(clEnumValN(SctcAlways, "always", "always perform sctc"),
-    clEnumValN(SctcPreserveDirection,
-      "preserve",
-      "only perform sctc when branch direction is "
-      "preserved"),
-    clEnumValN(SctcHeuristic,
-      "heuristic",
-      "use branch prediction data to control sctc")),
-  cl::ZeroOrMore,
-  cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned>
-StaleThreshold("stale-threshold",
-    cl::desc(
-      "maximum percentage of stale functions to tolerate (default: 100)"),
-    cl::init(100),
-    cl::Hidden,
-    cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned> TSPThreshold(
-    "tsp-threshold",
-    cl::desc(
-        "maximum number of hot basic blocks in a function for which to use "
-        "a precise TSP solution while re-ordering basic blocks"),
-    cl::init(10), cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned> TopCalledLimit(
-    "top-called-limit",
-    cl::desc("maximum number of functions to print in top called "
-             "functions section"),
-    cl::init(100), cl::Hidden, cl::cat(BoltCategory));
-
-// Profile density options, synced with llvm-profgen/ProfileGenerator.cpp
-static cl::opt<int> ProfileDensityCutOffHot(
-    "profile-density-cutoff-hot", cl::init(990000),
-    cl::desc("Total samples cutoff for functions used to calculate "
-             "profile density."));
-
-static cl::opt<double> ProfileDensityThreshold(
-    "profile-density-threshold", cl::init(60),
-    cl::desc("If the profile density is below the given threshold, it "
-             "will be suggested to increase the sampling rate."),
-    cl::Optional);
-
-} // namespace opts
-
-namespace llvm {
-namespace bolt {
 
 bool BinaryFunctionPass::shouldOptimize(const BinaryFunction &BF) const {
   return BF.isSimple() && BF.getState() == BinaryFunction::State::CFG &&
@@ -378,7 +216,7 @@ void EliminateUnreachableBlocks::runOnFunction(BinaryFunction &Function) {
   if (Count) {
     auto L = BC.scopeLock();
     Modified.insert(&Function);
-    if (opts::Verbosity > 0)
+    if (opts::getVerbosity(BC) > 0)
       BC.outs() << "BOLT-INFO: removed " << Count
                 << " dead basic block(s) accounting for " << Bytes
                 << " bytes in function " << Function << '\n';
@@ -405,20 +243,37 @@ Error EliminateUnreachableBlocks::runOnFunctions(BinaryContext &BC) {
 }
 
 bool ReorderBasicBlocks::shouldPrint(const BinaryFunction &BF) const {
+  const auto ReorderBlocks = static_cast<ReorderBasicBlocks::LayoutType>(
+      bolt_passes_opts::getReorderBlocks(BF.getBinaryContext()));
   return (BinaryFunctionPass::shouldPrint(BF) &&
-          opts::ReorderBlocks != ReorderBasicBlocks::LT_NONE);
+          ReorderBlocks != ReorderBasicBlocks::LT_NONE);
 }
 
 bool ReorderBasicBlocks::shouldOptimize(const BinaryFunction &BF) const {
   // Apply execution count threshold
-  if (BF.getKnownExecutionCount() < opts::ExecutionCountThreshold)
+  unsigned ExecutionCountThreshold =
+      bolt_utils_opts::getExecutionCountThreshold(BF.getBinaryContext());
+  if (BF.getKnownExecutionCount() < ExecutionCountThreshold)
     return false;
 
   return BinaryFunctionPass::shouldOptimize(BF);
 }
 
 Error ReorderBasicBlocks::runOnFunctions(BinaryContext &BC) {
-  if (opts::ReorderBlocks == ReorderBasicBlocks::LT_NONE)
+  const auto ReorderBlocks = static_cast<ReorderBasicBlocks::LayoutType>(
+      bolt_passes_opts::getReorderBlocks(BC));
+  // Handle cache+ -> ext-tsp deprecation
+  auto EffectiveReorderBlocks = ReorderBlocks;
+  if (EffectiveReorderBlocks == ReorderBasicBlocks::LT_OPTIMIZE_CACHE_PLUS) {
+    errs() << "BOLT-WARNING: '-reorder-blocks=cache+' is deprecated, please"
+           << " use '-reorder-blocks=ext-tsp' instead\n";
+    EffectiveReorderBlocks = ReorderBasicBlocks::LT_OPTIMIZE_EXT_TSP;
+  }
+  const bool MinBranchClusters = bolt_passes_opts::getMinBranchClusters(BC);
+  const unsigned PrintFuncStat =
+      bolt_passes_opts::getPrintFunctionStatistics(BC);
+
+  if (EffectiveReorderBlocks == ReorderBasicBlocks::LT_NONE)
     return Error::success();
 
   std::atomic_uint64_t ModifiedFuncCount(0);
@@ -427,14 +282,14 @@ Error ReorderBasicBlocks::runOnFunctions(BinaryContext &BC) {
 
   ParallelUtilities::WorkFuncTy WorkFun = [&](BinaryFunction &BF) {
     SmallVector<const BinaryBasicBlock *, 0> OldBlockOrder;
-    if (opts::PrintFuncStat > 0)
+    if (PrintFuncStat > 0)
       llvm::copy(BF.getLayout().blocks(), std::back_inserter(OldBlockOrder));
 
     const bool LayoutChanged =
-        modifyFunctionLayout(BF, opts::ReorderBlocks, opts::MinBranchClusters);
+        modifyFunctionLayout(BF, EffectiveReorderBlocks, MinBranchClusters);
     if (LayoutChanged) {
       ModifiedFuncCount.fetch_add(1, std::memory_order_relaxed);
-      if (opts::PrintFuncStat > 0) {
+      if (PrintFuncStat > 0) {
         const uint64_t Distance = BF.getLayout().getEditDistance(OldBlockOrder);
         std::lock_guard<std::mutex> Lock(FunctionEditDistanceMutex);
         FunctionEditDistance[&BF] = Distance;
@@ -461,7 +316,7 @@ Error ReorderBasicBlocks::runOnFunctions(BinaryContext &BC) {
                    100.0 * ModifiedFuncCount.load(std::memory_order_relaxed) /
                        BC.getBinaryFunctions().size());
 
-  if (opts::PrintFuncStat > 0) {
+  if (PrintFuncStat > 0) {
     raw_ostream &OS = BC.outs();
     // Copy all the values into vector in order to sort them
     std::map<uint64_t, BinaryFunction &> ScoreMap;
@@ -475,12 +330,11 @@ Error ReorderBasicBlocks::runOnFunctions(BinaryContext &BC) {
     OS << "           Number of functions being modified: "
        << ModifiedFuncCount.load(std::memory_order_relaxed) << "\n";
     OS << "           User asks for detailed information on top "
-       << opts::PrintFuncStat << " functions. (Ranked by function score)"
-       << "\n\n";
+       << PrintFuncStat << " functions. (Ranked by function score)" << "\n\n";
     uint64_t I = 0;
     for (std::map<uint64_t, BinaryFunction &>::reverse_iterator Rit =
              ScoreMap.rbegin();
-         Rit != ScoreMap.rend() && I < opts::PrintFuncStat; ++Rit, ++I) {
+         Rit != ScoreMap.rend() && I < PrintFuncStat; ++Rit, ++I) {
       BinaryFunction &Function = Rit->second;
 
       OS << "           Information for function of top: " << (I + 1) << ": \n";
@@ -510,9 +364,12 @@ bool ReorderBasicBlocks::modifyFunctionLayout(BinaryFunction &BF,
   if (Type != LT_REVERSE && !BF.hasValidProfile())
     return false;
 
+  const unsigned TSPThreshold =
+      bolt_passes_opts::getTspThreshold(BF.getBinaryContext());
+
   if (Type == LT_REVERSE) {
     Algo.reset(new ReverseReorderAlgorithm());
-  } else if (BF.size() <= opts::TSPThreshold && Type != LT_OPTIMIZE_SHUFFLE) {
+  } else if (BF.size() <= TSPThreshold && Type != LT_OPTIMIZE_SHUFFLE) {
     // Work on optimal solution if problem is small enough
     LLVM_DEBUG(dbgs() << "finding optimal block layout for " << BF << "\n");
     Algo.reset(new TSPReorderAlgorithm());
@@ -558,7 +415,7 @@ bool ReorderBasicBlocks::modifyFunctionLayout(BinaryFunction &BF,
 
 Error FixupBranches::runOnFunctions(BinaryContext &BC) {
   const bool ShouldRunRegisterAnalysis =
-      opts::FixBranchesWithLiveness &&
+      bolt_utils_opts::getFixBranchesWithLiveness(BC) &&
       llvm::any_of(BC.getBinaryFunctions(), [&](auto &It) {
         BinaryFunction &BF = It.second;
         return BC.shouldEmit(BF) && BF.isSimple() && needsBranchLiveness(BF);
@@ -603,7 +460,7 @@ Error PopulateOutputFunctions::runOnFunctions(BinaryContext &BC) {
   llvm::copy(BC.getInjectedBinaryFunctions(),
              std::back_inserter(OutputFunctions));
 
-  if (opts::HotFunctionsAtEnd) {
+  if (bolt_utils_opts::getHotFunctionsAtEnd(BC)) {
     // Injected functions have no profile and precede other cold functions in
     // the reverse layout.
     std::stable_partition(
@@ -615,10 +472,11 @@ Error PopulateOutputFunctions::runOnFunctions(BinaryContext &BC) {
   }
 
   // Place hot text movers in front.
-  if (opts::HotText) {
+  bool HotText = bolt_utils_opts::getHotText(BC);
+  if (HotText) {
     std::stable_partition(
         OutputFunctions.begin(), OutputFunctions.end(),
-        [](const BinaryFunction *A) { return opts::isHotTextMover(*A); });
+        [](const BinaryFunction *A) { return isHotTextMover(*A); });
   }
 
   BC.updateOutputBinaryFunctions(std::move(OutputFunctions));
@@ -661,6 +519,8 @@ Error CheckLargeFunctions::runOnFunctions(BinaryContext &BC) {
   if (BC.HasRelocations)
     return Error::success();
 
+  const bool PrintLargeFunctions = bolt_passes_opts::getPrintLargeFunctions(BC);
+
   // If the function wouldn't fit, mark it as non-simple. Otherwise, we may emit
   // incorrect meta data.
   ParallelUtilities::WorkFuncTy WorkFun = [&](BinaryFunction &BF) {
@@ -675,7 +535,7 @@ Error CheckLargeFunctions::runOnFunctions(BinaryContext &BC) {
       MainFragmentSize += BF.estimateConstantIslandSize();
     }
     if (MainFragmentSize > BF.getMaxSize()) {
-      if (opts::PrintLargeFunctions)
+      if (PrintLargeFunctions)
         BC.outs() << "BOLT-INFO: " << BF << " size of " << MainFragmentSize
                   << " bytes exceeds allocated space by "
                   << (MainFragmentSize - BF.getMaxSize()) << " bytes\n";
@@ -880,6 +740,10 @@ bool SimplifyConditionalTailCalls::shouldRewriteBranch(
   if (BeenOptimized.count(PredBB))
     return false;
 
+  const BinaryContext &BC = PredBB->getFunction()->getBinaryContext();
+  const auto SctcMode =
+      static_cast<opts::SctcModes>(bolt_passes_opts::getSctcMode(BC));
+
   const bool IsForward = BinaryFunction::isForwardBranch(PredBB, BB);
 
   if (IsForward)
@@ -887,10 +751,10 @@ bool SimplifyConditionalTailCalls::shouldRewriteBranch(
   else
     ++NumOrigBackwardBranches;
 
-  if (opts::SctcMode == opts::SctcAlways)
+  if (SctcMode == opts::SctcAlways)
     return true;
 
-  if (opts::SctcMode == opts::SctcPreserveDirection)
+  if (SctcMode == opts::SctcPreserveDirection)
     return IsForward == DirectionFlag;
 
   const ErrorOr<std::pair<double, double>> Frequency =
@@ -1148,13 +1012,13 @@ uint64_t ShortenInstructions::shortenInstructions(BinaryFunction &Function) {
         continue;
 
       MCInst OriginalInst;
-      if (opts::Verbosity > 2)
+      if (opts::getVerbosity(BC) > 2)
         OriginalInst = Inst;
 
       if (!BC.MIB->shortenInstruction(Inst, *BC.STI))
         continue;
 
-      if (opts::Verbosity > 2) {
+      if (opts::getVerbosity(BC) > 2) {
         BC.scopeLock();
         BC.outs() << "BOLT-INFO: shortening:\nBOLT-INFO:    ";
         BC.printInstruction(BC.outs(), OriginalInst, 0, &Function);
@@ -1225,9 +1089,10 @@ void Peepholes::removeUselessCondBranches(BinaryFunction &Function) {
 }
 
 Error Peepholes::runOnFunctions(BinaryContext &BC) {
-  const char Opts =
-      std::accumulate(opts::Peepholes.begin(), opts::Peepholes.end(), 0,
-                      [](const char A, const PeepholeOpts B) { return A | B; });
+  auto *PassOpts = bolt_passes_opts::getBoltPassesOpts(BC.getOptionsContext());
+  const char Opts = std::accumulate(
+      opts::getPeepholes(PassOpts).begin(), opts::getPeepholes(PassOpts).end(),
+      0, [](const char A, const PeepholeOpts B) { return A | B; });
   if (Opts == PEEP_NONE)
     return Error::success();
 
@@ -1355,12 +1220,13 @@ Error AssignSections::runOnFunctions(BinaryContext &BC) {
   if (!BC.HasRelocations)
     return Error::success();
 
-  const bool UseColdSection =
-      BC.NumProfiledFuncs > 0 ||
-      opts::ReorderFunctions == ReorderFunctions::RT_USER;
+  auto ReorderFunctionsOpt = static_cast<ReorderFunctions::ReorderType>(
+      bolt_passes_opts::getReorderFunctions(BC));
+  const bool UseColdSection = BC.NumProfiledFuncs > 0 ||
+                              ReorderFunctionsOpt == ReorderFunctions::RT_USER;
   for (auto &BFI : BC.getBinaryFunctions()) {
     BinaryFunction &Function = BFI.second;
-    if (opts::isHotTextMover(Function)) {
+    if (isHotTextMover(Function)) {
       Function.setCodeSectionName(BC.getHotTextMoverSectionName());
       Function.setColdCodeSectionName(BC.getHotTextMoverSectionName());
       continue;
@@ -1463,7 +1329,7 @@ Error PrintProfileStats::runOnFunctions(BinaryContext &BC) {
   // Report to user
   BC.outs() << format("BOLT-INFO: Profile bias score: %.4lf%% StDev: %.4lf%%\n",
                       (100.0 * FlowImbalanceMean), (100.0 * FlowImbalanceVar));
-  if (WorstBiasFunc && opts::Verbosity >= 1) {
+  if (WorstBiasFunc && opts::getVerbosity(BC) >= 1) {
     BC.outs() << "Worst average bias observed in "
               << WorstBiasFunc->getPrintName() << "\n";
     LLVM_DEBUG(WorstBiasFunc->dump());
@@ -1472,6 +1338,20 @@ Error PrintProfileStats::runOnFunctions(BinaryContext &BC) {
 }
 
 Error PrintProgramStats::runOnFunctions(BinaryContext &BC) {
+  const bool PrintUnknown = bolt_passes_opts::getPrintUnknown(BC);
+  const bool PrintUnknownCFG = bolt_passes_opts::getPrintUnknownCfg(BC);
+  const bool ReportStaleFuncs = bolt_passes_opts::getReportStale(BC);
+  const unsigned StaleThreshold = bolt_passes_opts::getStaleThreshold(BC);
+  const unsigned TopCalledLimit = bolt_passes_opts::getTopCalledLimit(BC);
+  const unsigned ReportBadLayout = bolt_passes_opts::getReportBadLayout(BC);
+  const int ProfileDensityCutOffHot =
+      bolt_passes_opts::getProfileDensityCutoffHot(BC);
+  const double ProfileDensityThreshold =
+      bolt_passes_opts::getProfileDensityThreshold(BC);
+  const auto DynoStatsSortOrderOpt = static_cast<opts::DynoStatsSortOrder>(
+      bolt_passes_opts::getPrintSortedByOrder(BC));
+  bool ShowDensity = bolt_utils_opts::getShowDensity(BC);
+
   uint64_t NumRegularFunctions = 0;
   uint64_t NumStaleProfileFunctions = 0;
   uint64_t NumAllStaleFunctions = 0;
@@ -1510,9 +1390,9 @@ Error PrintProgramStats::runOnFunctions(BinaryContext &BC) {
     }
 
     if (Function.hasUnknownControlFlow()) {
-      if (opts::PrintUnknownCFG)
+      if (PrintUnknownCFG)
         Function.dump();
-      else if (opts::PrintUnknown)
+      else if (PrintUnknown)
         BC.errs() << "function with unknown control flow: " << Function << '\n';
 
       ++NumUnknownControlFlowFunctions;
@@ -1532,7 +1412,7 @@ Error PrintProgramStats::runOnFunctions(BinaryContext &BC) {
         ++NumAllStaleFunctions;
       }
     } else {
-      if (opts::ReportStaleFuncs) {
+      if (ReportStaleFuncs) {
         BC.outs() << StaleFuncsHeader;
         StaleFuncsHeader = "";
         BC.outs() << "  " << Function << '\n';
@@ -1542,7 +1422,7 @@ Error PrintProgramStats::runOnFunctions(BinaryContext &BC) {
       ++NumAllStaleFunctions;
     }
 
-    if (opts::ShowDensity) {
+    if (ShowDensity) {
       uint64_t Size = Function.getSize();
       // In case of BOLT split functions registered in BAT, executed traces are
       // automatically attributed to the main fragment. Add up function sizes
@@ -1577,7 +1457,7 @@ Error PrintProgramStats::runOnFunctions(BinaryContext &BC) {
     const float PctStale =
         NumAllStaleFunctions / (float)NumAllProfiledFunctions * 100.0f;
     auto printErrorOrWarning = [&]() {
-      if (PctStale > opts::StaleThreshold)
+      if (PctStale > StaleThreshold)
         BC.errs() << "BOLT-ERROR: ";
       else
         BC.errs() << "BOLT-WARNING: ";
@@ -1598,10 +1478,10 @@ Error PrintProgramStats::runOnFunctions(BinaryContext &BC) {
                 << "%) belong to functions with invalid"
                    " (possibly stale) profile.\n";
     }
-    if (PctStale > opts::StaleThreshold) {
+    if (PctStale > StaleThreshold) {
       return createFatalBOLTError(
           Twine("BOLT-ERROR: stale functions exceed specified threshold of ") +
-          Twine(opts::StaleThreshold.getValue()) + Twine("%. Exiting.\n"));
+          Twine(StaleThreshold) + Twine("%. Exiting.\n"));
     }
   }
   if (NumInferredFunctions) {
@@ -1668,7 +1548,7 @@ Error PrintProgramStats::runOnFunctions(BinaryContext &BC) {
   }
 
   if (ProfiledFunctions.size() > 10) {
-    if (opts::Verbosity >= 1) {
+    if (opts::getVerbosity(BC) >= 1) {
       BC.outs() << "BOLT-INFO: top called functions are:\n";
       llvm::sort(ProfiledFunctions,
                  [](const BinaryFunction *A, const BinaryFunction *B) {
@@ -1676,14 +1556,20 @@ Error PrintProgramStats::runOnFunctions(BinaryContext &BC) {
                  });
       auto SFI = ProfiledFunctions.begin();
       auto SFIend = ProfiledFunctions.end();
-      for (unsigned I = 0u; I < opts::TopCalledLimit && SFI != SFIend;
-           ++SFI, ++I)
+      for (unsigned I = 0u; I < TopCalledLimit && SFI != SFIend; ++SFI, ++I)
         BC.outs() << "  " << **SFI << " : " << (*SFI)->getExecutionCount()
                   << '\n';
     }
   }
 
-  if (!opts::PrintSortedBy.empty()) {
+  // Build PrintSortedBy from OptionsContext.
+  std::vector<bolt::DynoStats::Category> SortedByVec;
+  if (auto *PO = bolt_passes_opts::getBoltPassesOpts(BC.getOptionsContext())) {
+    for (auto V : PO->get<&clv2::BOLTPASS_PrintSortedBy>())
+      SortedByVec.push_back(static_cast<bolt::DynoStats::Category>(V));
+  }
+
+  if (!SortedByVec.empty()) {
     BinaryFunctionListType Functions;
     std::map<const BinaryFunction *, DynoStats> Stats;
 
@@ -1696,18 +1582,23 @@ Error PrintProgramStats::runOnFunctions(BinaryContext &BC) {
     }
 
     const bool SortAll =
-        llvm::is_contained(opts::PrintSortedBy, DynoStats::LAST_DYNO_STAT);
+        llvm::is_contained(SortedByVec, DynoStats::LAST_DYNO_STAT);
 
     const bool Ascending =
-        opts::DynoStatsSortOrderOpt == opts::DynoStatsSortOrder::Ascending;
+        DynoStatsSortOrderOpt == opts::DynoStatsSortOrder::Ascending;
 
     std::function<bool(const DynoStats &, const DynoStats &)>
-        DynoStatsComparator =
-            SortAll ? [](const DynoStats &StatsA,
-                         const DynoStats &StatsB) { return StatsA < StatsB; }
-                    : [](const DynoStats &StatsA, const DynoStats &StatsB) {
-                        return StatsA.lessThan(StatsB, opts::PrintSortedBy);
-                      };
+        DynoStatsComparator;
+    if (SortAll)
+      DynoStatsComparator = [](const DynoStats &StatsA,
+                               const DynoStats &StatsB) {
+        return StatsA < StatsB;
+      };
+    else
+      DynoStatsComparator = [&SortedByVec](const DynoStats &StatsA,
+                                           const DynoStats &StatsB) {
+        return StatsA.lessThan(StatsB, SortedByVec);
+      };
 
     llvm::stable_sort(Functions,
                       [Ascending, &Stats, DynoStatsComparator](
@@ -1730,7 +1621,7 @@ Error PrintProgramStats::runOnFunctions(BinaryContext &BC) {
     } else {
       BC.outs() << "(";
       bool PrintComma = false;
-      for (const DynoStats::Category Category : opts::PrintSortedBy) {
+      for (const DynoStats::Category Category : SortedByVec) {
         if (PrintComma)
           BC.outs() << ", ";
         BC.outs() << DynoStats::Description(Category);
@@ -1747,7 +1638,7 @@ Error PrintProgramStats::runOnFunctions(BinaryContext &BC) {
       if (!SortAll) {
         BC.outs() << " (";
         bool PrintComma = false;
-        for (const DynoStats::Category Category : opts::PrintSortedBy) {
+        for (const DynoStats::Category Category : SortedByVec) {
           if (PrintComma)
             BC.outs() << ", ";
           BC.outs() << dynoStatsOptName(Category) << "=" << Stats[Category];
@@ -1764,7 +1655,7 @@ Error PrintProgramStats::runOnFunctions(BinaryContext &BC) {
               << (BC.TrappedFunctions.size() > 1 ? "s" : "")
               << " will trap on entry. Use -trap-avx512=0 to disable"
                  " traps.";
-    if (opts::Verbosity >= 1 || BC.TrappedFunctions.size() <= 5) {
+    if (opts::getVerbosity(BC) >= 1 || BC.TrappedFunctions.size() <= 5) {
       BC.errs() << '\n';
       for (const BinaryFunction *Function : BC.TrappedFunctions)
         BC.errs() << "  " << *Function << '\n';
@@ -1774,7 +1665,7 @@ Error PrintProgramStats::runOnFunctions(BinaryContext &BC) {
   }
 
   // Collect and print information about suboptimal code layout on input.
-  if (opts::ReportBadLayout) {
+  if (ReportBadLayout) {
     BinaryFunctionListType SuboptimalFuncs;
     for (auto &BFI : BC.getBinaryFunctions()) {
       BinaryFunction &BF = BFI.second;
@@ -1806,9 +1697,8 @@ Error PrintProgramStats::runOnFunctions(BinaryContext &BC) {
       BC.outs() << "BOLT-INFO: " << SuboptimalFuncs.size()
                 << " functions have "
                    "cold code in the middle of hot code. Top functions are:\n";
-      for (unsigned I = 0;
-           I < std::min(static_cast<size_t>(opts::ReportBadLayout),
-                        SuboptimalFuncs.size());
+      for (unsigned I = 0; I < std::min(static_cast<size_t>(ReportBadLayout),
+                                        SuboptimalFuncs.size());
            ++I)
         SuboptimalFuncs[I]->print(BC.outs());
     }
@@ -1817,17 +1707,17 @@ Error PrintProgramStats::runOnFunctions(BinaryContext &BC) {
   if (NumUnknownControlFlowFunctions) {
     BC.outs() << "BOLT-INFO: " << NumUnknownControlFlowFunctions
               << " functions have instructions with unknown control flow";
-    if (!opts::PrintUnknown)
+    if (!PrintUnknown)
       BC.outs() << ". Use -print-unknown to see the list.";
     BC.outs() << '\n';
   }
 
-  if (opts::ShowDensity) {
+  if (ShowDensity) {
     double Density = 0.0;
     llvm::sort(FuncDensityList);
 
     uint64_t AccumulatedSamples = 0;
-    assert(opts::ProfileDensityCutOffHot <= 1000000 &&
+    assert(ProfileDensityCutOffHot <= 1000000 &&
            "The cutoff value is greater than 1000000(100%)");
     // Subtract samples in zero-density functions (no fall-throughs) from
     // TotalSampleCount (not used anywhere below).
@@ -1837,7 +1727,7 @@ Error PrintProgramStats::runOnFunctions(BinaryContext &BC) {
       TotalSampleCount -= CurSamples;
     }
     const uint64_t CutoffSampleCount =
-        1.f * TotalSampleCount * opts::ProfileDensityCutOffHot / 1000000;
+        1.f * TotalSampleCount * ProfileDensityCutOffHot / 1000000;
     // Process functions in decreasing density order
     for (const auto [CurDensity, CurSamples] : llvm::reverse(FuncDensityList)) {
       if (AccumulatedSamples >= CutoffSampleCount)
@@ -1849,10 +1739,10 @@ Error PrintProgramStats::runOnFunctions(BinaryContext &BC) {
       BC.errs() << "BOLT-WARNING: the output profile is empty or the "
                    "--profile-density-cutoff-hot option is "
                    "set too low. Please check your command.\n";
-    } else if (Density < opts::ProfileDensityThreshold) {
+    } else if (Density < ProfileDensityThreshold) {
       BC.errs()
           << "BOLT-WARNING: BOLT is estimated to optimize better with "
-          << format("%.1f", opts::ProfileDensityThreshold / Density)
+          << format("%.1f", ProfileDensityThreshold / Density)
           << "x more samples. Please consider increasing sampling rate or "
              "profiling for longer duration to get more samples.\n";
     }
@@ -1860,8 +1750,7 @@ Error PrintProgramStats::runOnFunctions(BinaryContext &BC) {
     BC.outs() << "BOLT-INFO: Functions with density >= "
               << format("%.1f", Density) << " account for "
               << format("%.2f",
-                        static_cast<double>(opts::ProfileDensityCutOffHot) /
-                            10000)
+                        static_cast<double>(ProfileDensityCutOffHot) / 10000)
               << "% total sample counts.\n";
   }
   return Error::success();

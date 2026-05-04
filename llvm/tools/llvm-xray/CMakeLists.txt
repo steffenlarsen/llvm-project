@@ -1,4 +1,5 @@
 set(LLVM_LINK_COMPONENTS
+  AllOptions
   Object
   Support
   Symbolize
@@ -15,6 +16,5 @@ add_llvm_tool(llvm-xray
   xray-fdr-dump.cpp
   xray-graph-diff.cpp
   xray-graph.cpp
-  xray-registry.cpp
   xray-stacks.cpp
   )

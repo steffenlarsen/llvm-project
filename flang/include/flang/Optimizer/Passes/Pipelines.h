@@ -12,10 +12,10 @@
 #ifndef FORTRAN_OPTIMIZER_PASSES_PIPELINES_H
 #define FORTRAN_OPTIMIZER_PASSES_PIPELINES_H
 
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Optimizer/CodeGen/CodeGen.h"
 #include "flang/Optimizer/HLFIR/Passes.h"
 #include "flang/Optimizer/OpenMP/Passes.h"
-#include "flang/Optimizer/Passes/CommandLineOpts.h"
 #include "flang/Optimizer/Transforms/Passes.h"
 #include "flang/Tools/CrossToolHelpers.h"
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
@@ -27,7 +27,6 @@
 #include "mlir/Transforms/Passes.h"
 #include "llvm/Frontend/Debug/Options.h"
 #include "llvm/Passes/OptimizationLevel.h"
-#include "llvm/Support/CommandLine.h"
 
 namespace fir {
 
@@ -49,15 +48,13 @@ void addNestedPassToOps(mlir::PassManager &pm, F ctor) {
 
 /// Generic for adding a pass to the pass manager if it is not disabled.
 template <typename F>
-void addPassConditionally(mlir::PassManager &pm, llvm::cl::opt<bool> &disabled,
-                          F ctor) {
+void addPassConditionally(mlir::PassManager &pm, bool disabled, F ctor) {
   if (!disabled)
     pm.addPass(ctor());
 }
 
 template <typename OP, typename F>
-void addNestedPassConditionally(mlir::PassManager &pm,
-                                llvm::cl::opt<bool> &disabled, F ctor) {
+void addNestedPassConditionally(mlir::PassManager &pm, bool disabled, F ctor) {
   if (!disabled)
     pm.addNestedPass<OP>(ctor());
 }
@@ -70,11 +67,8 @@ void addNestedPassToAllTopLevelOperations(mlir::PassManager &pm, F ctor) {
 }
 
 template <typename F>
-void addNestedPassToAllTopLevelOperationsConditionally(
-    mlir::PassManager &pm, llvm::cl::opt<bool> &disabled, F ctor) {
-  if (!disabled)
-    addNestedPassToAllTopLevelOperations<F>(pm, ctor);
-}
+void addNestedPassToAllTopLevelOperationsConditionally(mlir::PassManager &pm,
+                                                       bool disabled, F ctor);
 
 template <typename F>
 void addPassToGPUModuleOperations(mlir::PassManager &pm, F ctor) {

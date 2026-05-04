@@ -83,7 +83,7 @@ class BinaryContext;
 /// Compute and report to the user the profile quality
 class PrintProfileQualityStats : public BinaryFunctionPass {
 public:
-  explicit PrintProfileQualityStats(const cl::opt<bool> &PrintPass)
+  explicit PrintProfileQualityStats(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   bool shouldOptimize(const BinaryFunction &BF) const override;

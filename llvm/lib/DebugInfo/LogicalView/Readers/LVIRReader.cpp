@@ -2175,7 +2175,7 @@ Error LVIRReader::createScopes() {
   if (Error Err = LVReader::createScopes())
     return Err;
 
-  LLVMContext Context;
+  LLVMContext Context(llvm::clv2::defaultOptionsContext());
   SMDiagnostic Err;
   std::unique_ptr<Module> M =
       parseIR(isa<IRObjectFile *>(InputFile)

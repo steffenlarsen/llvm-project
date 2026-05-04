@@ -16,6 +16,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/IVDescriptors.h"
 #include "llvm/Analysis/LoopIterator.h"
 #include "llvm/Analysis/LoopNestAnalysis.h"
@@ -28,6 +29,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Metadata.h"
@@ -36,9 +38,10 @@
 #include "llvm/IR/PrintPasses.h"
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/GenericLoopInfoImpl.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
@@ -47,17 +50,18 @@ template class LLVM_EXPORT_TEMPLATE llvm::LoopBase<BasicBlock, Loop>;
 template class LLVM_EXPORT_TEMPLATE llvm::LoopInfoBase<BasicBlock, Loop>;
 
 // Always verify loopinfo if expensive checking is enabled.
+bool llvm::getVerifyLoopInfo(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::AnalysisOptsReg>(Ctx))
+    if (O->specified<&clv2::AN_VerifyLoopInfo>())
+      return O->get<&clv2::AN_VerifyLoopInfo>();
 #ifdef EXPENSIVE_CHECKS
-bool llvm::VerifyLoopInfo = true;
+  return true;
 #else
-bool llvm::VerifyLoopInfo = false;
+  return false;
 #endif
-static cl::opt<bool, true>
-    VerifyLoopInfoX("verify-loop-info", cl::location(VerifyLoopInfo),
-                    cl::Hidden, cl::desc("Verify loop info (time consuming)"));
+}
 
 namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 } // end namespace llvm
 
 //===----------------------------------------------------------------------===//
@@ -125,7 +129,7 @@ bool Loop::makeLoopInvariant(Instruction *I, bool &Changed,
   // case, we only hoist from a loop header (which covers a reasonable number
   // of cases) where we are guaranteed to not run into problems.
   SmallVector<unsigned, 1> ProfileMetadataToPreserve;
-  if (!ProfcheckDisableMetadataFixes)
+  if (!getProfcheckDisableMetadataFixes(I->getContext()))
     if (OriginalParent == getHeader())
       ProfileMetadataToPreserve.push_back(LLVMContext::MD_prof);
 
@@ -449,9 +453,9 @@ bool Loop::isCanonical(ScalarEvolution &SE) const {
   return true;
 }
 
-// Check whether the use \p U of a value defined in block \p BB (which is part
-// of loop \p L) does not require a live-out phi, i.e. whether it is contained
-// in the loop for LCSSA purposes.
+// Returns true if the use \p U of a value defined in \p BB (a block of loop
+// \p L) does not require a live-out phi, i.e. whether it is contained in the
+// loop for LCSSA purposes.
 static bool loopContainsUser(const Loop &L, const BasicBlock &BB, const Use &U,
                              const DominatorTree &DT) {
   const Instruction *UI = cast<Instruction>(U.getUser());
@@ -1006,8 +1010,8 @@ void LoopInfo::erase(Loop *Unloop) {
 bool LoopInfo::wouldBeOutOfLoopUseRequiringLCSSA(
     const Value *V, const BasicBlock *ExitBB) const {
   if (V->getType()->isTokenLikeTy())
-    // We can't form PHIs of token-like type, so the definition of LCSSA
-    // excludes values of that type.
+    // We can't form PHIs of token type, so the definition of LCSSA excludes
+    // values of that type.
     return false;
 
   const Instruction *I = dyn_cast<Instruction>(V);
@@ -1054,7 +1058,8 @@ PreservedAnalyses LoopPrinterPass::run(Function &F,
 
 void llvm::printLoop(const Loop &L, raw_ostream &OS,
                      const std::string &Banner) {
-  if (forcePrintModuleIR()) {
+  auto &Ctx = L.getHeader()->getContext();
+  if (forcePrintModuleIR(Ctx)) {
     // handling -print-module-scope
     OS << Banner << " (loop: ";
     L.getHeader()->printAsOperand(OS, false);
@@ -1065,7 +1070,7 @@ void llvm::printLoop(const Loop &L, raw_ostream &OS,
     return;
   }
 
-  if (forcePrintFuncIR()) {
+  if (forcePrintFuncIR(Ctx)) {
     // handling -print-loop-func-scope.
     // -print-module-scope overrides this.
     OS << Banner << " (loop: ";
@@ -1297,7 +1302,9 @@ void LoopInfoWrapperPass::verifyAnalysis() const {
   // -verify-loop-info option can enable this. In order to perform some
   // checking by default, LoopPass has been taught to call verifyLoop manually
   // during loop pass sequences.
-  if (VerifyLoopInfo)
+  // verifyAnalysis() is const and has no Function in scope, so the option is
+  // read through the default context.
+  if (getVerifyLoopInfo(clv2::defaultOptionsContext()))
     LI.verify();
 }
 

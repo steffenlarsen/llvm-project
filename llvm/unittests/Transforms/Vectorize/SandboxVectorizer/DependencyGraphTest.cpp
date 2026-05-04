@@ -27,7 +27,7 @@ static constexpr auto BottomUp = sandboxir::SchedDirection::BottomUp;
 static constexpr auto TopDown = sandboxir::SchedDirection::TopDown;
 
 struct DependencyGraphTest : public testing::Test {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   std::unique_ptr<AssumptionCache> AC;
   std::unique_ptr<DominatorTree> DT;

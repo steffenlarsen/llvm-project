@@ -25,7 +25,6 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/ADT/SmallSet.h"
-#include "llvm/Support/CommandLine.h"
 
 namespace fir {
 #define GEN_PASS_DEF_POLYMORPHICOPCONVERSION

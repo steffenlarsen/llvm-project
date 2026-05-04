@@ -46,9 +46,11 @@
 #include "llvm/Pass.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/ARMTargetParser.h"
@@ -64,26 +66,27 @@
 
 using namespace llvm;
 
-static cl::opt<bool>
-DisableA15SDOptimization("disable-a15-sd-optimization", cl::Hidden,
-                   cl::desc("Inhibit optimization of S->D register accesses on A15"),
-                   cl::init(false));
+static bool getDisableA15SDOptimization(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::ARMOptsReg,
+                           &clv2::ARM_DisableA15SDOptimization>(Ctx, false);
+}
 
-static cl::opt<bool>
-EnableAtomicTidy("arm-atomic-cfg-tidy", cl::Hidden,
-                 cl::desc("Run SimplifyCFG after expanding atomic operations"
-                          " to make use of cmpxchg flow-based information"),
-                 cl::init(true));
+static bool getEnableAtomicTidy(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::ARM_EnableAtomicTidy>(Ctx);
+}
 
-static cl::opt<bool>
-EnableARMLoadStoreOpt("arm-load-store-opt", cl::Hidden,
-                      cl::desc("Enable ARM load/store optimization pass"),
-                      cl::init(true));
+static bool getEnableARMLoadStoreOpt(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::ARM_EnableARMLoadStoreOpt>(Ctx);
+}
 
-// FIXME: Unify control over GlobalMerge.
-static cl::opt<cl::boolOrDefault>
-EnableGlobalMerge("arm-global-merge", cl::Hidden,
-                  cl::desc("Enable the global merge pass"));
+static bool getEnableGlobalMergeSpecified(const clv2::OptionsContext &Ctx) {
+  return clv2::wasOptSpecified<&clv2::ARMOptsReg, &clv2::ARM_EnableGlobalMerge>(
+      Ctx);
+}
+static bool getEnableGlobalMerge(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::ARMOptsReg, &clv2::ARM_EnableGlobalMerge>(
+      Ctx, false);
+}
 
 namespace llvm {
   void initializeARMExecutionDomainFixPass(PassRegistry&);
@@ -317,7 +320,8 @@ ARMBaseTargetMachine::createMachineScheduler(MachineSchedContext *C) const {
   // add DAG Mutations here.
   const ARMSubtarget &ST = C->MF->getSubtarget<ARMSubtarget>();
   if (ST.hasFusion())
-    DAG->addMutation(createARMMacroFusionDAGMutation());
+    DAG->addMutation(createARMMacroFusionDAGMutation(
+        C->MF->getFunction().getContext().getOptionsContext()));
   return DAG;
 }
 
@@ -327,7 +331,8 @@ ARMBaseTargetMachine::createPostMachineScheduler(MachineSchedContext *C) const {
   // add DAG Mutations here.
   const ARMSubtarget &ST = C->MF->getSubtarget<ARMSubtarget>();
   if (ST.hasFusion())
-    DAG->addMutation(createARMMacroFusionDAGMutation());
+    DAG->addMutation(createARMMacroFusionDAGMutation(
+        C->MF->getFunction().getContext().getOptionsContext()));
   if (auto Mutation = createARMLatencyMutations(ST, C->AA))
     DAG->addMutation(std::move(Mutation));
   return DAG;
@@ -417,8 +422,10 @@ void ARMPassConfig::addIRPasses() {
   // Cmpxchg instructions are often used with a subsequent comparison to
   // determine whether it succeeded. We can exploit existing control-flow in
   // ldrex/strex loops to simplify this, but it needs tidying up.
-  if (TM->getOptLevel() != CodeGenOptLevel::None && EnableAtomicTidy)
+  if (TM->getOptLevel() != CodeGenOptLevel::None &&
+      getEnableAtomicTidy(TM->getOptionsContext()))
     addPass(createCFGSimplificationPass(
+        TM->getOptionsContext(),
         SimplifyCFGOptions().hoistCommonInsts(true).sinkCommonInsts(true),
         [this](const Function &F) {
           const auto &ST = this->TM->getSubtarget<ARMSubtarget>(F);
@@ -457,17 +464,17 @@ void ARMPassConfig::addCodeGenPrepare() {
 }
 
 bool ARMPassConfig::addPreISel() {
-  if ((TM->getOptLevel() != CodeGenOptLevel::None &&
-       EnableGlobalMerge == cl::boolOrDefault::BOU_UNSET) ||
-      EnableGlobalMerge == cl::boolOrDefault::BOU_TRUE) {
+  bool GMSpecified = getEnableGlobalMergeSpecified(TM->getOptionsContext());
+  bool GMValue = getEnableGlobalMerge(TM->getOptionsContext());
+  if ((!GMSpecified && TM->getOptLevel() != CodeGenOptLevel::None) ||
+      (GMSpecified && GMValue)) {
     // FIXME: This is using the thumb1 only constant value for
     // maximal global offset for merging globals. We may want
     // to look into using the old value for non-thumb1 code of
     // 4095 based on the TargetMachine, but this starts to become
     // tricky when doing code gen per function.
     bool OnlyOptimizeForSize =
-        (TM->getOptLevel() < CodeGenOptLevel::Aggressive) &&
-        (EnableGlobalMerge == cl::boolOrDefault::BOU_UNSET);
+        (TM->getOptLevel() < CodeGenOptLevel::Aggressive) && !GMSpecified;
     // Merging of extern globals is enabled by default on non-Mach-O as we
     // expect it to be generally either beneficial or harmless. On Mach-O it
     // is disabled as we emit the .subsections_via_symbols directive which
@@ -509,7 +516,7 @@ bool ARMPassConfig::addLegalizeMachineIR() {
 }
 
 bool ARMPassConfig::addRegBankSelect() {
-  addPass(new RegBankSelectLegacy());
+  addPass(new RegBankSelectLegacy(getTM<TargetMachine>().getOptionsContext()));
   return false;
 }
 
@@ -527,17 +534,17 @@ void ARMPassConfig::addPreRegAlloc() {
 
     addPass(createMLxExpansionPass());
 
-    if (EnableARMLoadStoreOpt)
+    if (getEnableARMLoadStoreOpt(TM->getOptionsContext()))
       addPass(createARMLoadStoreOptLegacyPass(/* pre-register alloc */ true));
 
-    if (!DisableA15SDOptimization)
+    if (!getDisableA15SDOptimization(TM->getOptionsContext()))
       addPass(createA15SDOptimizerPass());
   }
 }
 
 void ARMPassConfig::addPreSched2() {
   if (getOptLevel() != CodeGenOptLevel::None) {
-    if (EnableARMLoadStoreOpt)
+    if (getEnableARMLoadStoreOpt(TM->getOptionsContext()))
       addPass(createARMLoadStoreOptLegacyPass());
 
     addPass(new ARMExecutionDomainFix());

@@ -39,7 +39,7 @@ protected:
                const std::vector<std::string> &AllowExtNames,
                llvm::CodeGenOptLevel OLevel, Triple TargetTriple) {
     SMDiagnostic ParseError;
-    LLVMContext Context;
+    LLVMContext Context{llvm::clv2::defaultOptionsContext()};
     std::unique_ptr<Module> M =
         parseAssemblyString(Assembly, ParseError, Context);
     if (!M) {
@@ -59,7 +59,7 @@ protected:
                      const std::vector<std::string> &AllowExtNames,
                      const std::vector<std::string> &Opts) {
     SMDiagnostic ParseError;
-    LLVMContext Context;
+    LLVMContext Context{llvm::clv2::defaultOptionsContext()};
     std::unique_ptr<Module> M =
         parseAssemblyString(Assembly, ParseError, Context);
     if (!M) {

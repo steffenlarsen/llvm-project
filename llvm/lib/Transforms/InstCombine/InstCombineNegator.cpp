@@ -34,11 +34,12 @@
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/DebugCounter.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/InstCombine/InstCombineOptionsOptInfos.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include <cassert>
 #include <cstdint>
@@ -79,24 +80,25 @@ STATISTIC(NegatorNumInstructionsNegatedSuccess,
 DEBUG_COUNTER(NegatorCounter, "instcombine-negator",
               "Controls Negator transformations in InstCombine pass");
 
-static cl::opt<bool>
-    NegatorEnabled("instcombine-negator-enabled", cl::init(true),
-                   cl::desc("Should we attempt to sink negations?"));
+static bool getNegatorEnabled(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::IC_NegatorEnabled>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-    NegatorMaxDepth("instcombine-negator-max-depth",
-                    cl::init(NegatorDefaultMaxDepth),
-                    cl::desc("What is the maximal lookup depth when trying to "
-                             "check for viability of negation sinking."));
+static unsigned getNegatorMaxDepth(const Function &F) {
+  return clv2::getOptValOr<&clv2::InstCombineOptsReg,
+                           &clv2::IC_NegatorMaxDepth>(
+      F.getContext().getOptionsContext(), NegatorDefaultMaxDepth);
+}
 
 Negator::Negator(LLVMContext &C, const DataLayout &DL, const DominatorTree &DT_,
-                 bool IsTrulyNegation_)
+                 Function &F_, bool IsTrulyNegation_)
     : Builder(C, TargetFolder(DL),
               IRBuilderCallbackInserter([&](Instruction *I) {
                 ++NegatorNumInstructionsCreatedTotal;
                 NewInstructions.push_back(I);
               })),
-      DT(DT_), IsTrulyNegation(IsTrulyNegation_) {}
+      DT(DT_), F(F_), IsTrulyNegation(IsTrulyNegation_) {}
 
 #if LLVM_ENABLE_STATS
 Negator::~Negator() {
@@ -289,7 +291,7 @@ std::array<Value *, 2> Negator::getSortedOperandsOfBinOp(Instruction *I) {
   }
 
   // Rest of the logic is recursive, so if it's time to give up then it's time.
-  if (Depth > NegatorMaxDepth) {
+  if (Depth > getNegatorMaxDepth(F)) {
     LLVM_DEBUG(dbgs() << "Negator: reached maximal allowed traversal depth in "
                       << *V << ". Giving up.\n");
     ++NegatorTimesDepthLimitReached;
@@ -548,10 +550,11 @@ std::array<Value *, 2> Negator::getSortedOperandsOfBinOp(Instruction *I) {
   LLVM_DEBUG(dbgs() << "Negator: attempting to sink negation into " << *Root
                     << "\n");
 
-  if (!NegatorEnabled || !DebugCounter::shouldExecute(NegatorCounter))
+  Function &F = *IC.getDominatorTree().getRoot()->getParent();
+  if (!getNegatorEnabled(F) || !DebugCounter::shouldExecute(NegatorCounter))
     return nullptr;
 
-  Negator N(Root->getContext(), IC.getDataLayout(), IC.getDominatorTree(),
+  Negator N(Root->getContext(), IC.getDataLayout(), IC.getDominatorTree(), F,
             LHSIsZero);
   std::optional<Result> Res = N.run(Root, IsNSW);
   if (!Res) { // Negation failed.

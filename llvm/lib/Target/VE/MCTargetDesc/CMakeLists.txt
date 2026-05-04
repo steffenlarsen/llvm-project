@@ -1,5 +1,6 @@
 add_llvm_component_library(LLVMVEDesc
   VEAsmBackend.cpp
+  VEOptions.cpp
   VEELFObjectWriter.cpp
   VEInstPrinter.cpp
   VEMCAsmInfo.cpp

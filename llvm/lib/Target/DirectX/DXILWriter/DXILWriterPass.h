@@ -19,6 +19,7 @@
 #include "llvm/IR/PassManager.h"
 
 namespace llvm {
+class MCContext;
 class Module;
 class raw_ostream;
 
@@ -30,7 +31,9 @@ ModulePass *createDXILWriterPass(raw_ostream &Str);
 /// Create and return a pass that writes the module to a global variable in the
 /// module for later emission in the MCStreamer. Note that this pass is designed
 /// for use with the legacy pass manager because it is run in CodeGen only.
-ModulePass *createDXILEmbedderPass();
+/// \p MCtx receives the pass's decision on debug-info disposition, which
+/// the DXContainer writer needs when emitting the ILDB part.
+ModulePass *createDXILEmbedderPass(MCContext &MCtx);
 
 } // namespace llvm
 

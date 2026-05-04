@@ -8,6 +8,7 @@
 
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -21,6 +22,10 @@ MCTargetOptions::MCTargetOptions()
       MCUseDwarfDirectory(DefaultDwarfDirectory),
       EmitCompactUnwindNonCanonical(false), EmitSFrameUnwind(false),
       PPCUseFullRegisterNames(false), LargeEHEncoding(false) {}
+
+const clv2::OptionsContext &MCTargetOptions::getOptsCtx() const {
+  return OptsCtx ? *OptsCtx : clv2::defaultOptionsContext();
+}
 
 StringRef MCTargetOptions::getABIName() const {
   return ABIName;

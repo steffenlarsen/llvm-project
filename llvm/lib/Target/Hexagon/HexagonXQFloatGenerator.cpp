@@ -141,28 +141,36 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <vector>
 
 #define DEBUG_TYPE "hexagon-xqf-gen"
 
 using namespace llvm;
 
-extern cl::opt<QFloatMode> QFloatModeValue;
+static bool getEnableHVXXQFloat(const MachineFunction &MF) {
+  return clv2::getOptValOrDefault<&clv2::HEX_EnableHVXXQFloat>(
+      MF.getFunction().getContext().getOptionsContext());
+}
 
-// Master flag to enable XQF generations
-cl::opt<bool> EnableHVXXQFloat("enable-xqf-gen", cl::init(false),
-                               cl::desc("Enable XQFloat generations"));
-// Master flag to remove extraneous qf to sf/hf conversions
-cl::opt<bool>
-    EnableConversionsRemoval("enable-rem-conv", cl::init(false),
-                             cl::desc("Enable extraneous conversions removal"));
+static bool getEnableConversionsRemoval(const MachineFunction &MF) {
+  return clv2::getOptValOrDefault<&clv2::HEX_EnableConversionsRemoval>(
+      MF.getFunction().getContext().getOptionsContext());
+}
 
-// Diagnostic flags
-cl::opt<bool> PrintDebug("debug-print", cl::init(false),
-                         cl::desc("Print function mir after transformation"));
+static bool getPrintDebug(const MachineFunction &MF) {
+  return clv2::getOptValOrDefault<&clv2::HEX_PrintDebugXQF>(
+      MF.getFunction().getContext().getOptionsContext());
+}
+
+static QFloatMode getQFloatModeValue(const MachineFunction &MF) {
+  return clv2::getOptValOrDefault<&clv2::HEX_QFloatMode>(
+      MF.getFunction().getContext().getOptionsContext());
+}
 // This vector contains the opcodes which generate qf32 from add/subtract
 static constexpr unsigned XQFPAdd32[] = {
     // vector add instructions
@@ -256,6 +264,7 @@ private:
   const HexagonSubtarget *HST = nullptr;
   const HexagonInstrInfo *HII = nullptr;
   MachineRegisterInfo *MRI = nullptr;
+  MachineFunction *MF = nullptr;
 
   SmallVector<MachineInstr *, 16>
       OriginalMI; // Hold the instructions to be deleted
@@ -973,8 +982,9 @@ bool HexagonXQFloatGenerator::widenMultiplicationInputF16Rt(MachineInstr &MI,
                                                             Register &Dest) {
   // If the first input is not from an adder, for strict-ieee check if
   // input from mult, else return false.
+  QFloatMode QFMode = getQFloatModeValue(*MF);
   if (!checkIfInputFromAdder16(Reg1)) {
-    if (QFloatModeValue == QFloatMode::StrictIEEE) {
+    if (QFMode == QFloatMode::StrictIEEE) {
       if (!checkIfInputFromMult16(Reg1))
         return false;
     } else
@@ -988,7 +998,7 @@ bool HexagonXQFloatGenerator::widenMultiplicationInputF16Rt(MachineInstr &MI,
   BuildMI(MBB, MI, DL, HII->get(Hexagon::V6_lvsplatw), VSplatReg).addReg(Reg2);
 
   Register widenReg = MRI->createVirtualRegister(&Hexagon::HvxWRRegClass);
-  if (QFloatModeValue == QFloatMode::StrictIEEE) {
+  if (QFMode == QFloatMode::StrictIEEE) {
     Register VHf = MRI->createVirtualRegister(&Hexagon::HvxVRRegClass);
     BuildMI(MBB, MI, DL, HII->get(Hexagon::V6_vconv_hf_qf16), VHf).addReg(Reg1);
     BuildMI(MBB, MI, DL, HII->get(Hexagon::V6_vmpy_qf32_hf), widenReg)
@@ -2115,7 +2125,9 @@ bool HexagonXQFloatGenerator::HandleLossyLegacy(MachineFunction &MF) {
 }
 
 bool HexagonXQFloatGenerator::runOnMachineFunction(MachineFunction &MF) {
-  if (!EnableHVXXQFloat || (QFloatModeValue == QFloatMode::Legacy))
+  this->MF = &MF;
+  QFloatMode QFMode = getQFloatModeValue(MF);
+  if (!getEnableHVXXQFloat(MF) || (QFMode == QFloatMode::Legacy))
     return false;
 
   bool Changed = false;
@@ -2123,17 +2135,16 @@ bool HexagonXQFloatGenerator::runOnMachineFunction(MachineFunction &MF) {
   HII = HST->getInstrInfo();
   MRI = &MF.getRegInfo();
 
-  if (EnableConversionsRemoval &&
-      !(QFloatModeValue == QFloatMode::StrictIEEE)) {
+  if (getEnableConversionsRemoval(MF) && !(QFMode == QFloatMode::StrictIEEE)) {
     VectorConvertRemove VCR(MF, MRI, HST);
     VCR.run();
     LLVM_DEBUG(dbgs() << "\nExtraneous conversion instructions removed for "
                       << MF.getName());
-    if (PrintDebug)
+    if (getPrintDebug(MF))
       debug_print(MF);
   }
 
-  switch (QFloatModeValue) {
+  switch (QFMode) {
   case QFloatMode::StrictIEEE:
     LLVM_DEBUG(dbgs() << "\nGenerating code for STRICT-IEEE mode.\n");
     Changed = HandleStrictIEEE(MF);

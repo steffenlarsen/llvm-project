@@ -7,10 +7,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "SafeStackLayout.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Value.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -20,9 +23,9 @@ using namespace llvm::safestack;
 
 #define DEBUG_TYPE "safestacklayout"
 
-static cl::opt<bool> ClLayout("safe-stack-layout",
-                              cl::desc("enable safe stack layout"), cl::Hidden,
-                              cl::init(true));
+static bool getSafeStackLayout(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_SafeStackLayout>(Ctx);
+}
 
 LLVM_DUMP_METHOD void StackLayout::print(raw_ostream &OS) {
   OS << "Stack regions:\n";
@@ -49,7 +52,7 @@ static unsigned AdjustStackOffset(unsigned Offset, unsigned Size,
 }
 
 void StackLayout::layoutObject(StackObject &Obj) {
-  if (!ClLayout) {
+  if (!getSafeStackLayout(*Ctx)) {
     // If layout is disabled, just grab the next aligned address.
     // This effectively disables stack coloring as well.
     unsigned LastRegionEnd = Regions.empty() ? 0 : Regions.back().End;

@@ -38,7 +38,8 @@ struct TestSCFParallelLoopCollapsing
     // Gather the input args into the format required by
     // `collapseParallelLoops`.
     if (!clCollapsedIndices0.empty())
-      combinedLoops.push_back(clCollapsedIndices0);
+      combinedLoops.push_back(
+          {clCollapsedIndices0.begin(), clCollapsedIndices0.end()});
     if (!clCollapsedIndices1.empty()) {
       if (clCollapsedIndices0.empty()) {
         llvm::errs()
@@ -46,7 +47,8 @@ struct TestSCFParallelLoopCollapsing
         signalPassFailure();
         return;
       }
-      combinedLoops.push_back(clCollapsedIndices1);
+      combinedLoops.push_back(
+          {clCollapsedIndices1.begin(), clCollapsedIndices1.end()});
     }
     if (!clCollapsedIndices2.empty()) {
       if (clCollapsedIndices1.empty()) {
@@ -55,7 +57,8 @@ struct TestSCFParallelLoopCollapsing
         signalPassFailure();
         return;
       }
-      combinedLoops.push_back(clCollapsedIndices2);
+      combinedLoops.push_back(
+          {clCollapsedIndices2.begin(), clCollapsedIndices2.end()});
     }
 
     if (combinedLoops.empty()) {

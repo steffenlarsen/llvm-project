@@ -135,7 +135,7 @@ static OpPrintingFlags adjustPrintingFlags(OpPrintingFlags flags,
 
 /// Stream in an Operation.
 Diagnostic &Diagnostic::operator<<(Operation &op) {
-  return appendOp(op, OpPrintingFlags());
+  return appendOp(op, OpPrintingFlags(op.getContext()));
 }
 
 Diagnostic &Diagnostic::operator<<(OpWithFlags op) {
@@ -157,7 +157,9 @@ Diagnostic &Diagnostic::appendOp(Operation &op, const OpPrintingFlags &flags) {
 Diagnostic &Diagnostic::operator<<(Value val) {
   std::string str;
   llvm::raw_string_ostream os(str);
-  val.print(os, adjustPrintingFlags(OpPrintingFlags(), severity));
+  val.print(
+      os, adjustPrintingFlags(OpPrintingFlags(val ? val.getContext() : nullptr),
+                              severity));
   return *this << str;
 }
 

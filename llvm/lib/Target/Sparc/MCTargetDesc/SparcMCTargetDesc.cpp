@@ -79,7 +79,8 @@ static MCRegisterInfo *createSparcMCRegisterInfo(const Triple &TT) {
 }
 
 static MCSubtargetInfo *
-createSparcMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
+createSparcMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                           const llvm::clv2::OptionsContext &Ctx) {
   if (CPU.empty())
     CPU = TT.getArch() == Triple::sparcv9 ? "v9" : "v8";
 

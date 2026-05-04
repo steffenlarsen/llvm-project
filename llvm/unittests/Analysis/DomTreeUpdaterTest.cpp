@@ -50,7 +50,7 @@ TEST(DomTreeUpdater, EagerUpdateBasicOperations) {
                              ret i32 3
                           })";
   // Make the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
   Function *F = M->getFunction(FuncName);
 
@@ -161,7 +161,7 @@ TEST(DomTreeUpdater, EagerUpdateReplaceEntryBB) {
                            }
                            )";
   // Make the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
   Function *F = M->getFunction(FuncName);
 
@@ -235,7 +235,7 @@ TEST(DomTreeUpdater, LazyUpdateDTBasicOperations) {
                            }
                            )";
   // Make the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
   Function *F = M->getFunction(FuncName);
 
@@ -324,7 +324,7 @@ TEST(DomTreeUpdater, LazyUpdateDTInheritedPreds) {
                            }
                            )";
   // Make the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
   Function *F = M->getFunction(FuncName);
 
@@ -448,7 +448,7 @@ TEST(DomTreeUpdater, LazyUpdateBasicOperations) {
                            }
                            )";
   // Make the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
   Function *F = M->getFunction(FuncName);
 
@@ -531,7 +531,7 @@ TEST(DomTreeUpdater, LazyUpdateReplaceEntryBB) {
                            }
                            )";
   // Make the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
   Function *F = M->getFunction(FuncName);
 
@@ -620,7 +620,7 @@ TEST(DomTreeUpdater, LazyUpdateStepTest) {
                            }
                            )";
   // Make the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
   Function *F = M->getFunction(FuncName);
 
@@ -709,7 +709,7 @@ TEST(DomTreeUpdater, NoTreeTest) {
                            }
                            )";
   // Make the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
   Function *F = M->getFunction(FuncName);
 
@@ -739,7 +739,7 @@ TEST(DomTreeUpdater, LazyUpdateDeduplicationTest) {
                            }
                            )";
   // Make the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
   Function *F = M->getFunction(FuncName);
 
@@ -813,7 +813,7 @@ brfalse: ; preds = %brtrue, %entry
 }
                            )";
   // Make the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
   Function *F = M->getFunction(FuncName);
 
@@ -896,7 +896,7 @@ declare void @foo(ptr, ptr)
 
                            )";
   // Make the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
   Function *Caller = M->getFunction("the_caller");
   Function *Callee = M->getFunction("the_callee");
@@ -1001,7 +1001,7 @@ declare void @foo(ptr, ptr)
 
                            )";
   // Make the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
   Function *Caller = M->getFunction("the_caller");
   Function *Callee = M->getFunction("the_callee");

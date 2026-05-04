@@ -30,6 +30,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/MemoryProfileInfo.h"
 #include "llvm/Analysis/ModuleSummaryAnalysis.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
@@ -38,11 +39,13 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ModuleSummaryIndex.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/GraphWriter.h"
+#include "llvm/Support/InterleavedRange.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SHA1.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/CallPromotionUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
@@ -112,20 +115,6 @@ STATISTIC(NumFixedContexts, "Number of contexts with fixed edges");
 STATISTIC(AliaseesPrevailingInDiffModuleFromAlias,
           "Number of aliasees prevailing in a different module than its alias");
 
-static cl::opt<std::string> DotFilePathPrefix(
-    "memprof-dot-file-path-prefix", cl::init(""), cl::Hidden,
-    cl::value_desc("filename"),
-    cl::desc("Specify the path prefix of the MemProf dot files."));
-
-static cl::opt<bool> ExportToDot("memprof-export-to-dot", cl::init(false),
-                                 cl::Hidden,
-                                 cl::desc("Export graph to dot files."));
-
-// TODO: Remove this option once new handling is validated more widely.
-static cl::opt<bool> DoMergeIteration(
-    "memprof-merge-iteration", cl::init(true), cl::Hidden,
-    cl::desc("Iteratively apply merging on a node to catch new callers"));
-
 // How much of the graph to export to dot.
 enum DotScope {
   All,     // The full CCG graph.
@@ -133,111 +122,137 @@ enum DotScope {
   Context, // Only the specified context.
 };
 
-static cl::opt<DotScope> DotGraphScope(
-    "memprof-dot-scope", cl::desc("Scope of graph to export to dot"),
-    cl::Hidden, cl::init(DotScope::All),
-    cl::values(
-        clEnumValN(DotScope::All, "all", "Export full callsite graph"),
-        clEnumValN(DotScope::Alloc, "alloc",
-                   "Export only nodes with contexts feeding given "
-                   "-memprof-dot-alloc-id"),
-        clEnumValN(DotScope::Context, "context",
-                   "Export only nodes with given -memprof-dot-context-id")));
+static bool getMemProfReportHintedSizes(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_MemProfReportHintedSizes>(Ctx);
+}
 
-static cl::opt<unsigned>
-    AllocIdForDot("memprof-dot-alloc-id", cl::init(0), cl::Hidden,
-                  cl::desc("Id of alloc to export if -memprof-dot-scope=alloc "
-                           "or to highlight if -memprof-dot-scope=all"));
+static unsigned getMinClonedColdBytePercent(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_MinClonedColdBytePercent>(Ctx);
+}
 
-static cl::opt<unsigned> ContextIdForDot(
-    "memprof-dot-context-id", cl::init(0), cl::Hidden,
-    cl::desc("Id of context to export if -memprof-dot-scope=context or to "
-             "highlight otherwise"));
+static unsigned getMaxSummaryIndirectEdges(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_MaxSummaryIndirectEdges>(Ctx);
+}
 
-static cl::opt<bool>
-    DumpCCG("memprof-dump-ccg", cl::init(false), cl::Hidden,
-            cl::desc("Dump CallingContextGraph to stdout after each stage."));
+#define MEMPROF_GETTER(Type, Name, Default)                                    \
+  static Type get##Name(const Module &M) {                                     \
+    if (auto *O = clv2::getView<&clv2::IPOOptsReg>(                            \
+            M.getContext().getOptionsContext()))                               \
+      if (O->specified<&clv2::IPO_##Name>())                                   \
+        return O->get<&clv2::IPO_##Name>();                                    \
+    return Default;                                                            \
+  }                                                                            \
+  static Type get##Name(const ipo_opts::ParsedOpts *O) {                       \
+    if (O && O->specified<&clv2::IPO_##Name>())                                \
+      return O->get<&clv2::IPO_##Name>();                                      \
+    return Default;                                                            \
+  }
+#define MEMPROF_REF_GETTER(Type, Name, Default)                                \
+  static const Type &get##Name(const Module &M) {                              \
+    if (auto *O = clv2::getView<&clv2::IPOOptsReg>(                            \
+            M.getContext().getOptionsContext()))                               \
+      if (O->specified<&clv2::IPO_##Name>())                                   \
+        return O->get<&clv2::IPO_##Name>();                                    \
+    static const Type D = Default;                                             \
+    return D;                                                                  \
+  }                                                                            \
+  static const Type &get##Name(const ipo_opts::ParsedOpts *O) {                \
+    if (O && O->specified<&clv2::IPO_##Name>())                                \
+      return O->get<&clv2::IPO_##Name>();                                      \
+    static const Type D = Default;                                             \
+    return D;                                                                  \
+  }
 
-static cl::opt<bool>
-    VerifyCCG("memprof-verify-ccg", cl::init(false), cl::Hidden,
-              cl::desc("Perform verification checks on CallingContextGraph."));
+MEMPROF_REF_GETTER(std::string, DotFilePathPrefix, std::string{})
+MEMPROF_GETTER(bool, ExportToDot, false)
+MEMPROF_GETTER(bool, DoMergeIteration, true)
+MEMPROF_GETTER(unsigned, AllocIdForDot, 0)
+MEMPROF_GETTER(unsigned, ContextIdForDot, 0)
+MEMPROF_GETTER(bool, DumpCCG, false)
+MEMPROF_GETTER(bool, VerifyCCG, false)
+MEMPROF_GETTER(bool, VerifyNodes, false)
+MEMPROF_REF_GETTER(std::string, MemProfImportSummary, std::string{})
+MEMPROF_GETTER(unsigned, TailCallSearchDepth, 5)
+MEMPROF_GETTER(bool, AllowRecursiveCallsites, true)
+MEMPROF_GETTER(bool, CloneRecursiveContexts, true)
+MEMPROF_GETTER(bool, MergeClones, true)
+MEMPROF_GETTER(bool, AllowRecursiveContexts, true)
+MEMPROF_GETTER(unsigned, MemProfICPNoInlineThreshold, 0)
+static bool getEnableMemProfContextDisambiguation(const Module &M) {
+  return clv2::getOptValOr<&clv2::IPOOptsReg,
+                           &clv2::IPO_EnableMemProfContextDisambiguation>(
+      M.getContext().getOptionsContext(), false);
+}
+static bool getSupportsHotColdNew(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_SupportsHotColdNew>(
+      M.getContext().getOptionsContext());
+}
+static bool getSupportsHotColdNew(const ipo_opts::ParsedOpts *O) {
 
-static cl::opt<bool>
-    VerifyNodes("memprof-verify-nodes", cl::init(false), cl::Hidden,
-                cl::desc("Perform frequent verification checks on nodes."));
+  if (O)
+    return O->get<&clv2::IPO_SupportsHotColdNew>();
+  return false;
+}
+MEMPROF_GETTER(bool, MemProfRequireDefinitionForPromotion, false)
+static unsigned getMemProfTopNImportant(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_MemProfTopNImportant>(
+      M.getContext().getOptionsContext());
+}
+static unsigned getMemProfTopNImportant(const ipo_opts::ParsedOpts *O) {
 
-static cl::opt<std::string> MemProfImportSummary(
-    "memprof-import-summary",
-    cl::desc("Import summary to use for testing the ThinLTO backend via opt"),
-    cl::Hidden);
+  if (O)
+    return O->get<&clv2::IPO_MemProfTopNImportant>();
+  return 10;
+}
+static bool getMemProfFixupImportant(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_MemProfFixupImportant>(
+      M.getContext().getOptionsContext());
+}
+static bool getMemProfFixupImportant(const ipo_opts::ParsedOpts *O) {
 
-static cl::opt<unsigned>
-    TailCallSearchDepth("memprof-tail-call-search-depth", cl::init(5),
-                        cl::Hidden,
-                        cl::desc("Max depth to recursively search for missing "
-                                 "frames through tail calls."));
+  if (O)
+    return O->get<&clv2::IPO_MemProfFixupImportant>();
+  return true;
+}
 
-// Optionally enable cloning of callsites involved with recursive cycles
-static cl::opt<bool> AllowRecursiveCallsites(
-    "memprof-allow-recursive-callsites", cl::init(true), cl::Hidden,
-    cl::desc("Allow cloning of callsites involved in recursive cycles"));
+static DotScope getDotGraphScope(const ipo_opts::ParsedOpts *O) {
 
-static cl::opt<bool> CloneRecursiveContexts(
-    "memprof-clone-recursive-contexts", cl::init(true), cl::Hidden,
-    cl::desc("Allow cloning of contexts through recursive cycles"));
+  if (O && O->specified<&clv2::IPO_DotGraphScope>()) {
+    auto V = O->get<&clv2::IPO_DotGraphScope>();
+    switch (V) {
+    case clv2::DotScope_All:
+      return DotScope::All;
+    case clv2::DotScope_Alloc:
+      return DotScope::Alloc;
+    case clv2::DotScope_Context:
+      return DotScope::Context;
+    }
+  }
+  return DotScope::All;
+}
 
-// Generally this is needed for correct assignment of allocation clones to
-// function clones, however, allow it to be disabled for debugging while the
-// functionality is new and being tested more widely.
-static cl::opt<bool>
-    MergeClones("memprof-merge-clones", cl::init(true), cl::Hidden,
-                cl::desc("Merge clones before assigning functions"));
+static bool isAllocIdForDotSpecified(const Module &M) {
+  return clv2::wasOptSpecified<&clv2::IPOOptsReg, &clv2::IPO_AllocIdForDot>(
+      M.getContext().getOptionsContext());
+}
 
-// When disabled, try to detect and prevent cloning of recursive contexts.
-// This is only necessary until we support cloning through recursive cycles.
-// Leave on by default for now, as disabling requires a little bit of compile
-// time overhead and doesn't affect correctness, it will just inflate the cold
-// hinted bytes reporting a bit when -memprof-report-hinted-sizes is enabled.
-static cl::opt<bool> AllowRecursiveContexts(
-    "memprof-allow-recursive-contexts", cl::init(true), cl::Hidden,
-    cl::desc("Allow cloning of contexts having recursive cycles"));
+static bool isAllocIdForDotSpecified(const ipo_opts::ParsedOpts *O) {
 
-// Set the minimum absolute count threshold for allowing inlining of indirect
-// calls promoted during cloning.
-static cl::opt<unsigned> MemProfICPNoInlineThreshold(
-    "memprof-icp-noinline-threshold", cl::init(0), cl::Hidden,
-    cl::desc("Minimum absolute count for promoted target to be inlinable"));
+  return O && O->specified<&clv2::IPO_AllocIdForDot>();
+}
 
-namespace llvm {
-cl::opt<bool> EnableMemProfContextDisambiguation(
-    "enable-memprof-context-disambiguation", cl::Hidden,
-    cl::desc("Enable MemProf context disambiguation"));
+static bool isContextIdForDotSpecified(const Module &M) {
+  return clv2::wasOptSpecified<&clv2::IPOOptsReg, &clv2::IPO_ContextIdForDot>(
+      M.getContext().getOptionsContext());
+}
 
-// Indicate we are linking with an allocator that supports hot/cold operator
-// new interfaces.
-cl::opt<bool> SupportsHotColdNew(
-    "supports-hot-cold-new", cl::init(false), cl::Hidden,
-    cl::desc("Linking with hot/cold operator new interfaces"));
+static bool isContextIdForDotSpecified(const ipo_opts::ParsedOpts *O) {
 
-static cl::opt<bool> MemProfRequireDefinitionForPromotion(
-    "memprof-require-definition-for-promotion", cl::init(false), cl::Hidden,
-    cl::desc(
-        "Require target function definition when promoting indirect calls"));
+  return O && O->specified<&clv2::IPO_ContextIdForDot>();
+}
 
-extern cl::opt<bool> MemProfReportHintedSizes;
-extern cl::opt<unsigned> MinClonedColdBytePercent;
-
-cl::opt<unsigned> MemProfTopNImportant(
-    "memprof-top-n-important", cl::init(10), cl::Hidden,
-    cl::desc("Number of largest cold contexts to consider important"));
-
-cl::opt<bool> MemProfFixupImportant(
-    "memprof-fixup-important", cl::init(true), cl::Hidden,
-    cl::desc("Enables edge fixup for important contexts"));
-
-extern cl::opt<unsigned> MaxSummaryIndirectEdges;
-
-} // namespace llvm
+#undef MEMPROF_GETTER
+#undef MEMPROF_REF_GETTER
 
 namespace {
 
@@ -386,35 +401,20 @@ public:
 
     // Returns true if we need to look at the callee edges for determining the
     // node context ids and allocation type.
-    bool useCallerEdgesForContextInfo() const {
-      // Typically if the callee edges are empty either the caller edges are
-      // also empty, or this is an allocation (leaf node). However, if we are
-      // allowing recursive callsites and contexts this will be violated for
-      // incompletely cloned recursive cycles.
+    bool useCallerEdgesForContextInfo(const ipo_opts::ParsedOpts *O) const {
       assert(!CalleeEdges.empty() || CallerEdges.empty() || IsAllocation ||
-             (AllowRecursiveCallsites && AllowRecursiveContexts));
-      // When cloning for a recursive context, during cloning we might be in the
-      // midst of cloning for a recurrence and have moved context ids off of a
-      // caller edge onto the clone but not yet off of the incoming caller
-      // (back) edge. If we don't look at those we miss the fact that this node
-      // still has context ids of interest.
-      return IsAllocation || CloneRecursiveContexts;
+             (getAllowRecursiveCallsites(O) && getAllowRecursiveContexts(O)));
+      return IsAllocation || getCloneRecursiveContexts(O);
     }
 
-    // Compute the context ids for this node from the union of its edge context
-    // ids.
-    DenseSet<uint32_t> getContextIds() const {
+    DenseSet<uint32_t> getContextIds(const ipo_opts::ParsedOpts *O) const {
       unsigned Count = 0;
-      // Compute the number of ids for reserve below. In general we only need to
-      // look at one set of edges, typically the callee edges, since other than
-      // allocations and in some cases during recursion cloning, all the context
-      // ids on the callers should also flow out via callee edges.
       for (auto &Edge : CalleeEdges.empty() ? CallerEdges : CalleeEdges)
         Count += Edge->getContextIds().size();
       DenseSet<uint32_t> ContextIds;
       ContextIds.reserve(Count);
       auto Edges = llvm::concat<const std::shared_ptr<ContextEdge>>(
-          CalleeEdges, useCallerEdgesForContextInfo()
+          CalleeEdges, useCallerEdgesForContextInfo(O)
                            ? CallerEdges
                            : std::vector<std::shared_ptr<ContextEdge>>());
       for (const auto &Edge : Edges)
@@ -422,30 +422,25 @@ public:
       return ContextIds;
     }
 
-    // Compute the allocation type for this node from the OR of its edge
-    // allocation types.
-    uint8_t computeAllocType() const {
+    uint8_t computeAllocType(const ipo_opts::ParsedOpts *O) const {
       uint8_t BothTypes =
           (uint8_t)AllocationType::Cold | (uint8_t)AllocationType::NotCold;
       uint8_t AllocType = (uint8_t)AllocationType::None;
       auto Edges = llvm::concat<const std::shared_ptr<ContextEdge>>(
-          CalleeEdges, useCallerEdgesForContextInfo()
+          CalleeEdges, useCallerEdgesForContextInfo(O)
                            ? CallerEdges
                            : std::vector<std::shared_ptr<ContextEdge>>());
       for (const auto &Edge : Edges) {
         AllocType |= Edge->AllocTypes;
-        // Bail early if alloc type reached both, no further refinement.
         if (AllocType == BothTypes)
           return AllocType;
       }
       return AllocType;
     }
 
-    // The context ids set for this node is empty if its edge context ids are
-    // also all empty.
-    bool emptyContextIds() const {
+    bool emptyContextIds(const ipo_opts::ParsedOpts *O) const {
       auto Edges = llvm::concat<const std::shared_ptr<ContextEdge>>(
-          CalleeEdges, useCallerEdgesForContextInfo()
+          CalleeEdges, useCallerEdgesForContextInfo(O)
                            ? CallerEdges
                            : std::vector<std::shared_ptr<ContextEdge>>());
       for (const auto &Edge : Edges) {
@@ -497,16 +492,10 @@ public:
 
     void printCall(raw_ostream &OS) const { Call.print(OS); }
 
-    // True if this node was effectively removed from the graph, in which case
-    // it should have an allocation type of None and empty context ids.
-    bool isRemoved() const {
-      // Typically if the callee edges are empty either the caller edges are
-      // also empty, or this is an allocation (leaf node). However, if we are
-      // allowing recursive callsites and contexts this will be violated for
-      // incompletely cloned recursive cycles.
-      assert((AllowRecursiveCallsites && AllowRecursiveContexts) ||
+    bool isRemoved(const ipo_opts::ParsedOpts *O) const {
+      assert((getAllowRecursiveCallsites(O) && getAllowRecursiveContexts(O)) ||
              (AllocTypes == (uint8_t)AllocationType::None) ==
-                 emptyContextIds());
+                 emptyContextIds(O));
       return AllocTypes == (uint8_t)AllocationType::None;
     }
 
@@ -649,6 +638,9 @@ protected:
   // When exporting to dot, and an allocation id is specified, contains the
   // context ids on that allocation.
   DenseSet<uint32_t> DotAllocContextIds;
+
+  const ipo_opts::ParsedOpts *IPOOpts = nullptr;
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
 
 private:
   using EdgeIter = typename std::vector<std::shared_ptr<ContextEdge>>::iterator;
@@ -914,7 +906,7 @@ private:
                        // them in some cases.
                        const DenseSet<uint32_t> &NodeContextIds,
                        const DenseSet<uint32_t> &ImportantContextIds) {
-    if (!MemProfTopNImportant) {
+    if (!getMemProfTopNImportant(IPOOpts)) {
       assert(ImportantContextIds.empty());
       return;
     }
@@ -1045,7 +1037,8 @@ public:
   IndexCallsiteContextGraph(
       ModuleSummaryIndex &Index,
       llvm::function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
-          isPrevailing);
+          isPrevailing,
+      const clv2::OptionsContext &OptsCtx);
 
   ~IndexCallsiteContextGraph() {
     // Now that we are done with the graph it is safe to add the new
@@ -1441,17 +1434,16 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::addStackNodesForMIB(
     auto &Entry = ContextIdToContextSizeInfos[LastContextId];
     // If this is a cold allocation, and we are collecting non-zero largest
     // contexts, see if this is a candidate.
-    if (AllocType == AllocationType::Cold && MemProfTopNImportant > 0) {
+    if (AllocType == AllocationType::Cold &&
+        getMemProfTopNImportant(IPOOpts) > 0) {
       uint64_t TotalCold = 0;
       for (auto &CSI : ContextSizeInfo)
         TotalCold += CSI.TotalSize;
-      // Record this context if either we haven't found the first top-n largest
-      // yet, or if it is larger than the smallest already recorded.
-      if (TotalSizeToContextIdTopNCold.size() < MemProfTopNImportant ||
-          // Since TotalSizeToContextIdTopNCold is a std::map, it is implicitly
-          // sorted in ascending size of its key which is the size.
+      if (TotalSizeToContextIdTopNCold.size() <
+              getMemProfTopNImportant(IPOOpts) ||
           TotalCold > TotalSizeToContextIdTopNCold.begin()->first) {
-        if (TotalSizeToContextIdTopNCold.size() == MemProfTopNImportant) {
+        if (TotalSizeToContextIdTopNCold.size() ==
+            getMemProfTopNImportant(IPOOpts)) {
           // Remove old one and its associated entries.
           auto IdToRemove = TotalSizeToContextIdTopNCold.begin()->second;
           TotalSizeToContextIdTopNCold.erase(
@@ -1491,7 +1483,7 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::addStackNodesForMIB(
     }
     // Marking a node recursive will prevent its cloning completely, even for
     // non-recursive contexts flowing through it.
-    if (!AllowRecursiveCallsites) {
+    if (!getAllowRecursiveCallsites(IPOOpts)) {
       auto Ins = StackIdSet.insert(StackId);
       if (!Ins.second)
         StackNode->Recursive = true;
@@ -1573,7 +1565,7 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::connectNewNode(
       TowardsCallee ? OrigNode->CalleeEdges : OrigNode->CallerEdges;
   DenseSet<uint32_t> RecursiveContextIds;
   DenseSet<uint32_t> AllCallerContextIds;
-  if (AllowRecursiveCallsites) {
+  if (getAllowRecursiveCallsites(IPOOpts)) {
     // Identify which context ids are recursive which is needed to properly
     // update the RemainingContextIds set. The relevant recursive context ids
     // are those that are in multiple edges.
@@ -1651,15 +1643,12 @@ static void checkEdge(
 
 template <typename DerivedCCG, typename FuncTy, typename CallTy>
 static void checkNode(const ContextNode<DerivedCCG, FuncTy, CallTy> *Node,
-                      bool CheckEdges = true) {
-  if (Node->isRemoved())
+                      const ipo_opts::ParsedOpts *O, bool CheckEdges = true) {
+  if (Node->isRemoved(O))
     return;
 #ifndef NDEBUG
-  // Compute node's context ids once for use in asserts.
-  auto NodeContextIds = Node->getContextIds();
+  auto NodeContextIds = Node->getContextIds(O);
 #endif
-  // Node's context ids should be the union of both its callee and caller edge
-  // context ids.
   if (Node->CallerEdges.size()) {
     DenseSet<uint32_t> CallerEdgeContextIds(
         Node->CallerEdges.front()->ContextIds);
@@ -1668,11 +1657,7 @@ static void checkNode(const ContextNode<DerivedCCG, FuncTy, CallTy> *Node,
         checkEdge<DerivedCCG, FuncTy, CallTy>(Edge);
       set_union(CallerEdgeContextIds, Edge->ContextIds);
     }
-    // Node can have more context ids than callers if some contexts terminate at
-    // node and some are longer. If we are allowing recursive callsites and
-    // contexts this will be violated for incompletely cloned recursive cycles,
-    // so skip the checking in that case.
-    assert((AllowRecursiveCallsites && AllowRecursiveContexts) ||
+    assert((getAllowRecursiveCallsites(O) && getAllowRecursiveContexts(O)) ||
            NodeContextIds == CallerEdgeContextIds ||
            set_is_subset(CallerEdgeContextIds, NodeContextIds));
   }
@@ -1684,10 +1669,7 @@ static void checkNode(const ContextNode<DerivedCCG, FuncTy, CallTy> *Node,
         checkEdge<DerivedCCG, FuncTy, CallTy>(Edge);
       set_union(CalleeEdgeContextIds, Edge->getContextIds());
     }
-    // If we are allowing recursive callsites and contexts this will be violated
-    // for incompletely cloned recursive cycles, so skip the checking in that
-    // case.
-    assert((AllowRecursiveCallsites && AllowRecursiveContexts) ||
+    assert((getAllowRecursiveCallsites(O) && getAllowRecursiveContexts(O)) ||
            NodeContextIds == CalleeEdgeContextIds);
   }
   // FIXME: Since this checking is only invoked under an option, we should
@@ -1754,7 +1736,8 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::
       Node->setCall(Call);
       NonAllocationCallToContextNodeMap[Call] = Node;
       NodeToCallingFunc[Node] = Func;
-      recordStackNode(Ids, Node, Node->getContextIds(), ImportantContextIds);
+      recordStackNode(Ids, Node, Node->getContextIds(IPOOpts),
+                      ImportantContextIds);
       return;
     }
   }
@@ -1771,9 +1754,7 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::
   ContextNode *LastNode = Node;
 #endif
 
-  // Compute the last node's context ids once, as it is shared by all calls in
-  // this entry.
-  DenseSet<uint32_t> LastNodeContextIds = LastNode->getContextIds();
+  DenseSet<uint32_t> LastNodeContextIds = LastNode->getContextIds(IPOOpts);
 
   [[maybe_unused]] bool PrevIterCreatedNode = false;
   bool CreatedNode = false;
@@ -1890,19 +1871,20 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::
       // alloc type is None.
       CurNode->AllocTypes = CurNode->CalleeEdges.empty()
                                 ? (uint8_t)AllocationType::None
-                                : CurNode->computeAllocType();
+                                : CurNode->computeAllocType(IPOOpts);
       PrevNode = CurNode;
     }
 
     recordStackNode(Ids, NewNode, SavedContextIds, ImportantContextIds);
 
-    if (VerifyNodes) {
-      checkNode<DerivedCCG, FuncTy, CallTy>(NewNode, /*CheckEdges=*/true);
+    if (getVerifyNodes(IPOOpts)) {
+      checkNode<DerivedCCG, FuncTy, CallTy>(NewNode, IPOOpts,
+                                            /*CheckEdges=*/true);
       for (auto Id : Ids) {
         ContextNode *CurNode = getNodeForStackId(Id);
-        // We should only have kept stack ids that had nodes.
         assert(CurNode);
-        checkNode<DerivedCCG, FuncTy, CallTy>(CurNode, /*CheckEdges=*/true);
+        checkNode<DerivedCCG, FuncTy, CallTy>(CurNode, IPOOpts,
+                                              /*CheckEdges=*/true);
       }
     }
   }
@@ -1917,10 +1899,10 @@ void CallsiteContextGraph<DerivedCCG, FuncTy,
   // Update statistics as we are done building this map at this point.
   NumImportantContextIds = ImportantContextIdInfo.size();
 
-  if (!MemProfFixupImportant)
+  if (!getMemProfFixupImportant(IPOOpts))
     return;
 
-  if (ExportToDot)
+  if (getExportToDot(IPOOpts))
     exportToDot("beforestackfixup");
 
   // For each context we identified as important, walk through the saved context
@@ -2107,7 +2089,7 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::updateStackNodes() {
 
     // Initialize the context ids with the last node's. We will subsequently
     // refine the context ids by computing the intersection along all edges.
-    DenseSet<uint32_t> LastNodeContextIds = LastNode->getContextIds();
+    DenseSet<uint32_t> LastNodeContextIds = LastNode->getContextIds(IPOOpts);
     assert(!LastNodeContextIds.empty());
 
 #ifndef NDEBUG
@@ -2257,10 +2239,9 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::updateStackNodes() {
     }
   }
 
-  // Propagate the duplicate context ids over the graph.
   propagateDuplicateContextIds(OldToNewContextIds);
 
-  if (VerifyCCG)
+  if (getVerifyCCG(IPOOpts))
     check();
 
   // Now perform a post-order traversal over the graph, starting with the
@@ -2277,7 +2258,7 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::updateStackNodes() {
 
   fixupImportantContexts();
 
-  if (VerifyCCG)
+  if (getVerifyCCG(IPOOpts))
     check();
 }
 
@@ -2386,6 +2367,9 @@ ModuleCallsiteContextGraph::ModuleCallsiteContextGraph(
     Module &M,
     llvm::function_ref<OptimizationRemarkEmitter &(Function *)> OREGetter)
     : Mod(M), OREGetter(OREGetter) {
+  IPOOpts =
+      clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext());
+  OptsCtx = &M.getContext().getOptionsContext();
   // Map for keeping track of the largest cold contexts up to the number given
   // by MemProfTopNImportant. Must be a std::map (not DenseMap) because keys
   // must be sorted.
@@ -2429,12 +2413,10 @@ ModuleCallsiteContextGraph::ModuleCallsiteContextGraph(
                 getMIBAllocType(MIBMD), ContextSizeInfo,
                 TotalSizeToContextIdTopNCold);
           }
-          // If exporting the graph to dot and an allocation id of interest was
-          // specified, record all the context ids for this allocation node.
-          if (ExportToDot && AllocNode->OrigStackOrAllocId == AllocIdForDot)
-            DotAllocContextIds = AllocNode->getContextIds();
+          if (getExportToDot(IPOOpts) &&
+              AllocNode->OrigStackOrAllocId == getAllocIdForDot(IPOOpts))
+            DotAllocContextIds = AllocNode->getContextIds(IPOOpts);
           assert(AllocNode->AllocTypes != (uint8_t)AllocationType::None);
-          // Memprof and callsite metadata on memory allocations no longer
           // needed.
           I.setMetadata(LLVMContext::MD_memprof, nullptr);
           I.setMetadata(LLVMContext::MD_callsite, nullptr);
@@ -2449,24 +2431,23 @@ ModuleCallsiteContextGraph::ModuleCallsiteContextGraph(
       FuncToCallsWithMetadata[&F] = CallsWithMetadata;
   }
 
-  if (DumpCCG) {
+  if (getDumpCCG(IPOOpts)) {
     dbgs() << "CCG before updating call stack chains:\n";
     dbgs() << *this;
   }
 
-  if (ExportToDot)
+  if (getExportToDot(IPOOpts))
     exportToDot("prestackupdate");
 
   updateStackNodes();
 
-  if (ExportToDot)
+  if (getExportToDot(IPOOpts))
     exportToDot("poststackupdate");
 
   handleCallsitesWithMultipleTargets();
 
   markBackedges();
 
-  // Strip off remaining callsite metadata, no longer needed.
   for (auto &FuncEntry : FuncToCallsWithMetadata)
     for (auto &Call : FuncEntry.second)
       Call.call()->setMetadata(LLVMContext::MD_callsite, nullptr);
@@ -2510,8 +2491,11 @@ IndexCallsiteContextGraph::findAliaseeGUIDsPrevailingInDifferentModule() {
 IndexCallsiteContextGraph::IndexCallsiteContextGraph(
     ModuleSummaryIndex &Index,
     llvm::function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
-        isPrevailing)
+        isPrevailing,
+    const clv2::OptionsContext &Ctx)
     : Index(Index), isPrevailing(isPrevailing) {
+  OptsCtx = &Ctx;
+  IPOOpts = clv2::getView<&clv2::IPOOptsReg>(Ctx);
   // Since we use the aliasee summary info to create the necessary clones for
   // its aliases, conservatively skip recording the aliasee function's callsites
   // in the CCG for any that are prevailing in a different module than one of
@@ -2563,7 +2547,7 @@ IndexCallsiteContextGraph::IndexCallsiteContextGraph(
           CallStack<MIBInfo, SmallVector<unsigned>::const_iterator>
               EmptyContext;
           unsigned I = 0;
-          assert(!metadataMayIncludeContextSizeInfo() ||
+          assert(!metadataMayIncludeContextSizeInfo(*OptsCtx) ||
                  AN.ContextSizeInfos.size() == AN.MIBs.size());
           // Now add all of the MIBs and their stack nodes.
           for (auto &MIB : AN.MIBs) {
@@ -2579,12 +2563,10 @@ IndexCallsiteContextGraph::IndexCallsiteContextGraph(
                 ContextSizeInfo, TotalSizeToContextIdTopNCold);
             I++;
           }
-          // If exporting the graph to dot and an allocation id of interest was
-          // specified, record all the context ids for this allocation node.
-          if (ExportToDot && AllocNode->OrigStackOrAllocId == AllocIdForDot)
-            DotAllocContextIds = AllocNode->getContextIds();
+          if (getExportToDot(IPOOpts) &&
+              AllocNode->OrigStackOrAllocId == getAllocIdForDot(IPOOpts))
+            DotAllocContextIds = AllocNode->getContextIds(IPOOpts);
           assert(AllocNode->AllocTypes != (uint8_t)AllocationType::None);
-          // Initialize version 0 on the summary alloc node to the current alloc
           // type, unless it has both types in which case make it default, so
           // that in the case where we aren't able to clone the original version
           // always ends up with the default allocation behavior.
@@ -2606,17 +2588,17 @@ IndexCallsiteContextGraph::IndexCallsiteContextGraph(
     }
   }
 
-  if (DumpCCG) {
+  if (getDumpCCG(IPOOpts)) {
     dbgs() << "CCG before updating call stack chains:\n";
     dbgs() << *this;
   }
 
-  if (ExportToDot)
+  if (getExportToDot(IPOOpts))
     exportToDot("prestackupdate");
 
   updateStackNodes();
 
-  if (ExportToDot)
+  if (getExportToDot(IPOOpts))
     exportToDot("poststackupdate");
 
   handleCallsitesWithMultipleTargets();
@@ -2969,9 +2951,7 @@ bool ModuleCallsiteContextGraph::findProfiledCalleeThroughTailCalls(
     const Function *ProfiledCallee, Value *CurCallee, unsigned Depth,
     std::vector<std::pair<Instruction *, Function *>> &FoundCalleeChain,
     bool &FoundMultipleCalleeChains) {
-  // Stop recursive search if we have already explored the maximum specified
-  // depth.
-  if (Depth > TailCallSearchDepth)
+  if (Depth > getTailCallSearchDepth(IPOOpts))
     return false;
 
   auto SaveCallsiteInfo = [&](Instruction *Callsite, Function *F) {
@@ -3114,9 +3094,7 @@ bool IndexCallsiteContextGraph::findProfiledCalleeThroughTailCalls(
     ValueInfo ProfiledCallee, ValueInfo CurCallee, unsigned Depth,
     std::vector<std::pair<IndexCall, FunctionSummary *>> &FoundCalleeChain,
     bool &FoundMultipleCalleeChains) {
-  // Stop recursive search if we have already explored the maximum specified
-  // depth.
-  if (Depth > TailCallSearchDepth)
+  if (Depth > getTailCallSearchDepth(IPOOpts))
     return false;
 
   auto CreateAndSaveCallsiteInfo = [&](ValueInfo Callee, FunctionSummary *FS) {
@@ -3276,8 +3254,7 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::ContextNode::print(
   OS << "\tNodeId: " << NodeId << "\n";
   OS << "\tAllocTypes: " << getAllocTypeString(AllocTypes) << "\n";
   OS << "\tContextIds:";
-  // Make a copy of the computed context ids that we can sort for stability.
-  auto ContextIds = getContextIds();
+  auto ContextIds = getContextIds(nullptr);
   std::vector<uint32_t> SortedIds(ContextIds.begin(), ContextIds.end());
   std::sort(SortedIds.begin(), SortedIds.end());
   for (auto Id : SortedIds)
@@ -3333,7 +3310,7 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::print(
   OS << "Callsite Context Graph:\n";
   using GraphType = const CallsiteContextGraph<DerivedCCG, FuncTy, CallTy> *;
   for (const auto Node : nodes<GraphType>(this)) {
-    if (Node->isRemoved())
+    if (Node->isRemoved(IPOOpts))
       continue;
     Node->print(OS);
     OS << "\n";
@@ -3346,11 +3323,11 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::printTotalSizes(
     function_ref<void(StringRef, StringRef, const Twine &)> EmitRemark) const {
   using GraphType = const CallsiteContextGraph<DerivedCCG, FuncTy, CallTy> *;
   for (const auto Node : nodes<GraphType>(this)) {
-    if (Node->isRemoved())
+    if (Node->isRemoved(IPOOpts))
       continue;
     if (!Node->IsAllocation)
       continue;
-    DenseSet<uint32_t> ContextIds = Node->getContextIds();
+    DenseSet<uint32_t> ContextIds = Node->getContextIds(IPOOpts);
     auto AllocTypeFromCall = getAllocationCallType(Node->Call);
     std::vector<uint32_t> SortedIds(ContextIds.begin(), ContextIds.end());
     std::sort(SortedIds.begin(), SortedIds.end());
@@ -3370,7 +3347,7 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::printTotalSizes(
                    " due to cold byte percent";
           // Print the internal context id to aid debugging and visualization.
           Msg += " (internal context id " + std::to_string(Id) + ")";
-          if (MemProfReportHintedSizes)
+          if (getMemProfReportHintedSizes(*OptsCtx))
             OS << Msg << "\n";
           if (EmitRemark)
             EmitRemark(DEBUG_TYPE, "MemProfReport", Msg);
@@ -3386,7 +3363,7 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::printTotalSizes(
                  " due to cold byte percent";
         // Print the internal context id to aid debugging and visualization.
         Msg += " (internal context id " + std::to_string(Id) + ")";
-        if (MemProfReportHintedSizes)
+        if (getMemProfReportHintedSizes(*OptsCtx))
           OS << Msg << "\n";
         if (EmitRemark)
           EmitRemark(DEBUG_TYPE, "MemProfReport", Msg);
@@ -3399,7 +3376,7 @@ template <typename DerivedCCG, typename FuncTy, typename CallTy>
 void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::check() const {
   using GraphType = const CallsiteContextGraph<DerivedCCG, FuncTy, CallTy> *;
   for (const auto Node : nodes<GraphType>(this)) {
-    checkNode<DerivedCCG, FuncTy, CallTy>(Node, /*CheckEdges=*/false);
+    checkNode<DerivedCCG, FuncTy, CallTy>(Node, IPOOpts, /*CheckEdges=*/false);
     for (auto &Edge : Node->CallerEdges)
       checkEdge<DerivedCCG, FuncTy, CallTy>(Edge);
   }
@@ -3452,15 +3429,13 @@ struct GraphTraits<const CallsiteContextGraph<DerivedCCG, FuncTy, CallTy> *> {
 template <typename DerivedCCG, typename FuncTy, typename CallTy>
 struct DOTGraphTraits<const CallsiteContextGraph<DerivedCCG, FuncTy, CallTy> *>
     : public DefaultDOTGraphTraits {
-  DOTGraphTraits(bool IsSimple = false) : DefaultDOTGraphTraits(IsSimple) {
-    // If the user requested the full graph to be exported, but provided an
-    // allocation id, or if the user gave a context id and requested more than
-    // just a specific context to be exported, note that highlighting is
-    // enabled.
-    DoHighlight =
-        (AllocIdForDot.getNumOccurrences() && DotGraphScope == DotScope::All) ||
-        (ContextIdForDot.getNumOccurrences() &&
-         DotGraphScope != DotScope::Context);
+  DOTGraphTraits(bool IsSimple = false) : DefaultDOTGraphTraits(IsSimple) {}
+
+  static bool shouldHighlight(const ipo_opts::ParsedOpts *O) {
+    return (isAllocIdForDotSpecified(O) &&
+            getDotGraphScope(O) == DotScope::All) ||
+           (isContextIdForDotSpecified(O) &&
+            getDotGraphScope(O) != DotScope::Context);
   }
 
   using GraphType = const CallsiteContextGraph<DerivedCCG, FuncTy, CallTy> *;
@@ -3495,16 +3470,14 @@ struct DOTGraphTraits<const CallsiteContextGraph<DerivedCCG, FuncTy, CallTy> *>
   }
 
   static std::string getNodeAttributes(NodeRef Node, GraphType G) {
-    auto ContextIds = Node->getContextIds();
-    // If highlighting enabled, see if this node contains any of the context ids
-    // of interest. If so, it will use a different color and a larger fontsize
-    // (which makes the node larger as well).
+    auto ContextIds = Node->getContextIds(G->IPOOpts);
+    bool DoHL = shouldHighlight(G->IPOOpts);
     bool Highlight = false;
-    if (DoHighlight) {
-      assert(ContextIdForDot.getNumOccurrences() ||
-             AllocIdForDot.getNumOccurrences());
-      if (ContextIdForDot.getNumOccurrences())
-        Highlight = ContextIds.contains(ContextIdForDot);
+    if (DoHL) {
+      assert(isContextIdForDotSpecified(G->IPOOpts) ||
+             isAllocIdForDotSpecified(G->IPOOpts));
+      if (isContextIdForDotSpecified(G->IPOOpts))
+        Highlight = ContextIds.contains(getContextIdForDot(G->IPOOpts));
       else
         Highlight = set_intersects(ContextIds, G->DotAllocContextIds);
     }
@@ -3514,9 +3487,9 @@ struct DOTGraphTraits<const CallsiteContextGraph<DerivedCCG, FuncTy, CallTy> *>
     // Default fontsize is 14
     if (Highlight)
       AttributeString += ",fontsize=\"30\"";
-    AttributeString +=
-        (Twine(",fillcolor=\"") + getColor(Node->AllocTypes, Highlight) + "\"")
-            .str();
+    AttributeString += (Twine(",fillcolor=\"") +
+                        getColor(Node->AllocTypes, DoHL, Highlight) + "\"")
+                           .str();
     if (Node->CloneOf) {
       AttributeString += ",color=\"blue\"";
       AttributeString += ",style=\"filled,bold,dashed\"";
@@ -3532,16 +3505,17 @@ struct DOTGraphTraits<const CallsiteContextGraph<DerivedCCG, FuncTy, CallTy> *>
     // of interest. If so, it will use a different color and a heavier arrow
     // size and weight (the larger weight makes the highlighted path
     // straighter).
+    bool DoHL = shouldHighlight(G->IPOOpts);
     bool Highlight = false;
-    if (DoHighlight) {
-      assert(ContextIdForDot.getNumOccurrences() ||
-             AllocIdForDot.getNumOccurrences());
-      if (ContextIdForDot.getNumOccurrences())
-        Highlight = Edge->ContextIds.contains(ContextIdForDot);
+    if (DoHL) {
+      assert(isContextIdForDotSpecified(G->IPOOpts) ||
+             isAllocIdForDotSpecified(G->IPOOpts));
+      if (isContextIdForDotSpecified(G->IPOOpts))
+        Highlight = Edge->ContextIds.contains(getContextIdForDot(G->IPOOpts));
       else
         Highlight = set_intersects(Edge->ContextIds, G->DotAllocContextIds);
     }
-    auto Color = getColor(Edge->AllocTypes, Highlight);
+    auto Color = getColor(Edge->AllocTypes, DoHL, Highlight);
     std::string AttributeString =
         (Twine("tooltip=\"") + getContextIds(Edge->ContextIds) + "\"" +
          // fillcolor is the arrow head and color is the line
@@ -3559,14 +3533,14 @@ struct DOTGraphTraits<const CallsiteContextGraph<DerivedCCG, FuncTy, CallTy> *>
   // Since the NodeOwners list includes nodes that are no longer connected to
   // the graph, skip them here.
   static bool isNodeHidden(NodeRef Node, GraphType G) {
-    if (Node->isRemoved())
+    if (Node->isRemoved(G->IPOOpts))
       return true;
-    // If a scope smaller than the full graph was requested, see if this node
-    // contains any of the context ids of interest.
-    if (DotGraphScope == DotScope::Alloc)
-      return !set_intersects(Node->getContextIds(), G->DotAllocContextIds);
-    if (DotGraphScope == DotScope::Context)
-      return !Node->getContextIds().contains(ContextIdForDot);
+    if (getDotGraphScope(G->IPOOpts) == DotScope::Alloc)
+      return !set_intersects(Node->getContextIds(G->IPOOpts),
+                             G->DotAllocContextIds);
+    if (getDotGraphScope(G->IPOOpts) == DotScope::Context)
+      return !Node->getContextIds(G->IPOOpts)
+                  .contains(getContextIdForDot(G->IPOOpts));
     return false;
   }
 
@@ -3584,17 +3558,17 @@ private:
     return IdString;
   }
 
-  static std::string getColor(uint8_t AllocTypes, bool Highlight) {
-    // If DoHighlight is not enabled, we want to use the highlight colors for
+  static std::string getColor(uint8_t AllocTypes, bool DoHL, bool Highlight) {
+    // If highlighting is not enabled, we want to use the highlight colors for
     // NotCold and Cold, and the non-highlight color for NotCold+Cold. This is
     // both compatible with the color scheme before highlighting was supported,
     // and for the NotCold+Cold color the non-highlight color is a bit more
     // readable.
     if (AllocTypes == (uint8_t)AllocationType::NotCold)
       // Color "brown1" actually looks like a lighter red.
-      return !DoHighlight || Highlight ? "brown1" : "lightpink";
+      return !DoHL || Highlight ? "brown1" : "lightpink";
     if (AllocTypes == (uint8_t)AllocationType::Cold)
-      return !DoHighlight || Highlight ? "cyan" : "lightskyblue";
+      return !DoHL || Highlight ? "cyan" : "lightskyblue";
     if (AllocTypes ==
         ((uint8_t)AllocationType::NotCold | (uint8_t)AllocationType::Cold))
       return Highlight ? "magenta" : "mediumorchid1";
@@ -3608,21 +3582,13 @@ private:
     return Result;
   }
 
-  // True if we should highlight a specific context or allocation's contexts in
-  // the emitted graph.
-  static bool DoHighlight;
 };
-
-template <typename DerivedCCG, typename FuncTy, typename CallTy>
-bool DOTGraphTraits<
-    const CallsiteContextGraph<DerivedCCG, FuncTy, CallTy> *>::DoHighlight =
-    false;
 
 template <typename DerivedCCG, typename FuncTy, typename CallTy>
 void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::exportToDot(
     std::string Label) const {
   WriteGraph(this, "", false, Label,
-             DotFilePathPrefix + "ccg." + Label + ".dot");
+             getDotFilePathPrefix(IPOOpts) + "ccg." + Label + ".dot");
 }
 
 template <typename DerivedCCG, typename FuncTy, typename CallTy>
@@ -3753,18 +3719,19 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::
   }
   // Recompute the node alloc type now that its callee edges have been
   // updated (since we will compute from those edges).
-  OldCallee->AllocTypes = OldCallee->computeAllocType();
-  // OldCallee alloc type should be None iff its context id set is now empty.
+  OldCallee->AllocTypes = OldCallee->computeAllocType(IPOOpts);
   assert((OldCallee->AllocTypes == (uint8_t)AllocationType::None) ==
-         OldCallee->emptyContextIds());
-  if (VerifyCCG) {
-    checkNode<DerivedCCG, FuncTy, CallTy>(OldCallee, /*CheckEdges=*/false);
-    checkNode<DerivedCCG, FuncTy, CallTy>(NewCallee, /*CheckEdges=*/false);
+         OldCallee->emptyContextIds(IPOOpts));
+  if (getVerifyCCG(IPOOpts)) {
+    checkNode<DerivedCCG, FuncTy, CallTy>(OldCallee, IPOOpts,
+                                          /*CheckEdges=*/false);
+    checkNode<DerivedCCG, FuncTy, CallTy>(NewCallee, IPOOpts,
+                                          /*CheckEdges=*/false);
     for (const auto &OldCalleeEdge : OldCallee->CalleeEdges)
-      checkNode<DerivedCCG, FuncTy, CallTy>(OldCalleeEdge->Callee,
+      checkNode<DerivedCCG, FuncTy, CallTy>(OldCalleeEdge->Callee, IPOOpts,
                                             /*CheckEdges=*/false);
     for (const auto &NewCalleeEdge : NewCallee->CalleeEdges)
-      checkNode<DerivedCCG, FuncTy, CallTy>(NewCalleeEdge->Callee,
+      checkNode<DerivedCCG, FuncTy, CallTy>(NewCalleeEdge->Callee, IPOOpts,
                                             /*CheckEdges=*/false);
   }
 }
@@ -3852,7 +3819,8 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::
       auto *ExistingCallerEdge = NewCaller->findEdgeFromCaller(OldCallerCaller);
       // Since we would have skipped caller edges when moving a direct recursive
       // edge, this may not hold true when recursive handling enabled.
-      assert(IsNewNode || ExistingCallerEdge || AllowRecursiveCallsites);
+      assert(IsNewNode || ExistingCallerEdge ||
+             getAllowRecursiveCallsites(IPOOpts));
       if (ExistingCallerEdge) {
         ExistingCallerEdge->getContextIds().insert_range(EdgeContextIdsToMove);
         ExistingCallerEdge->AllocTypes |=
@@ -3868,18 +3836,19 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::
   }
   // Recompute the node alloc type now that its caller edges have been
   // updated (since we will compute from those edges).
-  OldCaller->AllocTypes = OldCaller->computeAllocType();
-  // OldCaller alloc type should be None iff its context id set is now empty.
+  OldCaller->AllocTypes = OldCaller->computeAllocType(IPOOpts);
   assert((OldCaller->AllocTypes == (uint8_t)AllocationType::None) ==
-         OldCaller->emptyContextIds());
-  if (VerifyCCG) {
-    checkNode<DerivedCCG, FuncTy, CallTy>(OldCaller, /*CheckEdges=*/false);
-    checkNode<DerivedCCG, FuncTy, CallTy>(NewCaller, /*CheckEdges=*/false);
+         OldCaller->emptyContextIds(IPOOpts));
+  if (getVerifyCCG(IPOOpts)) {
+    checkNode<DerivedCCG, FuncTy, CallTy>(OldCaller, IPOOpts,
+                                          /*CheckEdges=*/false);
+    checkNode<DerivedCCG, FuncTy, CallTy>(NewCaller, IPOOpts,
+                                          /*CheckEdges=*/false);
     for (const auto &OldCallerEdge : OldCaller->CallerEdges)
-      checkNode<DerivedCCG, FuncTy, CallTy>(OldCallerEdge->Caller,
+      checkNode<DerivedCCG, FuncTy, CallTy>(OldCallerEdge->Caller, IPOOpts,
                                             /*CheckEdges=*/false);
     for (const auto &NewCallerEdge : NewCaller->CallerEdges)
-      checkNode<DerivedCCG, FuncTy, CallTy>(NewCallerEdge->Caller,
+      checkNode<DerivedCCG, FuncTy, CallTy>(NewCallerEdge->Caller, IPOOpts,
                                             /*CheckEdges=*/false);
   }
 }
@@ -3915,13 +3884,13 @@ template <typename DerivedCCG, typename FuncTy, typename CallTy>
 void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::markBackedges() {
   // If we are cloning recursive contexts, find and mark backedges from all root
   // callers, using the typical DFS based backedge analysis.
-  if (!CloneRecursiveContexts)
+  if (!getCloneRecursiveContexts(IPOOpts))
     return;
   DenseSet<const ContextNode *> Visited;
   DenseSet<const ContextNode *> CurrentStack;
   for (auto &Entry : NonAllocationCallToContextNodeMap) {
     auto *Node = Entry.second;
-    if (Node->isRemoved())
+    if (Node->isRemoved(IPOOpts))
       continue;
     // It is a root if it doesn't have callers.
     if (!Node->CallerEdges.empty())
@@ -3960,12 +3929,12 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::identifyClones() {
   DenseSet<const ContextNode *> Visited;
   for (auto &Entry : AllocationCallToContextNodeMap) {
     Visited.clear();
-    identifyClones(Entry.second, Visited, Entry.second->getContextIds());
+    identifyClones(Entry.second, Visited, Entry.second->getContextIds(IPOOpts));
   }
   Visited.clear();
   for (auto &Entry : AllocationCallToContextNodeMap)
     recursivelyRemoveNoneTypeCalleeEdges(Entry.second, Visited);
-  if (VerifyCCG)
+  if (getVerifyCCG(IPOOpts))
     check();
 }
 
@@ -3981,8 +3950,8 @@ template <typename DerivedCCG, typename FuncTy, typename CallTy>
 void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::identifyClones(
     ContextNode *Node, DenseSet<const ContextNode *> &Visited,
     const DenseSet<uint32_t> &AllocContextIds) {
-  if (VerifyNodes)
-    checkNode<DerivedCCG, FuncTy, CallTy>(Node, /*CheckEdges=*/false);
+  if (getVerifyNodes(IPOOpts))
+    checkNode<DerivedCCG, FuncTy, CallTy>(Node, IPOOpts, /*CheckEdges=*/false);
   assert(!Node->CloneOf);
 
   // If Node as a null call, then either it wasn't found in the module (regular
@@ -4021,7 +3990,7 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::identifyClones(
       if (Edge->IsBackedge) {
         // We should only mark these if cloning recursive contexts, where we
         // need to do this deferral.
-        assert(CloneRecursiveContexts);
+        assert(getCloneRecursiveContexts(IPOOpts));
         continue;
       }
       // Ignore any caller we previously visited via another edge.
@@ -4077,10 +4046,10 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::identifyClones(
   assert(Node->AllocTypes != (uint8_t)AllocationType::None);
 
   DenseSet<uint32_t> RecursiveContextIds;
-  assert(AllowRecursiveContexts || !CloneRecursiveContexts);
-  // If we are allowing recursive callsites, but have also disabled recursive
-  // contexts, look for context ids that show up in multiple caller edges.
-  if (AllowRecursiveCallsites && !AllowRecursiveContexts) {
+  assert(getAllowRecursiveContexts(IPOOpts) ||
+         !getCloneRecursiveContexts(IPOOpts));
+  if (getAllowRecursiveCallsites(IPOOpts) &&
+      !getAllowRecursiveContexts(IPOOpts)) {
     DenseSet<uint32_t> AllCallerContextIds;
     for (auto &CE : Node->CallerEdges) {
       // Resize to the largest set of caller context ids, since we know the
@@ -4162,9 +4131,7 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::identifyClones(
     }
 
     if (CallerEdge->IsBackedge) {
-      // We should only mark these if cloning recursive contexts, where we
-      // need to do this deferral.
-      assert(CloneRecursiveContexts);
+      assert(getCloneRecursiveContexts(IPOOpts));
       DeferredBackedges++;
     }
 
@@ -4280,13 +4247,13 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::identifyClones(
   }
 
   // We should still have some context ids on the original Node.
-  assert(!Node->emptyContextIds());
+  assert(!Node->emptyContextIds(IPOOpts));
 
   // Sanity check that no alloc types on node or edges are None.
   assert(Node->AllocTypes != (uint8_t)AllocationType::None);
 
-  if (VerifyNodes)
-    checkNode<DerivedCCG, FuncTy, CallTy>(Node, /*CheckEdges=*/false);
+  if (getVerifyNodes(IPOOpts))
+    checkNode<DerivedCCG, FuncTy, CallTy>(Node, IPOOpts, /*CheckEdges=*/false);
 }
 
 void ModuleCallsiteContextGraph::updateAllocationCall(
@@ -4472,18 +4439,16 @@ IndexCallsiteContextGraph::cloneFunctionForCallsite(
 // to calling the wrong allocation clone.
 template <typename DerivedCCG, typename FuncTy, typename CallTy>
 void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::mergeClones() {
-  if (!MergeClones)
+  if (!getMergeClones(IPOOpts))
     return;
 
-  // Generate a map from context id to the associated allocation node for use
-  // when merging clones.
   DenseMap<uint32_t, ContextNode *> ContextIdToAllocationNode;
   for (auto &Entry : AllocationCallToContextNodeMap) {
     auto *Node = Entry.second;
-    for (auto Id : Node->getContextIds())
+    for (auto Id : Node->getContextIds(IPOOpts))
       ContextIdToAllocationNode[Id] = Node->getOrigNode();
     for (auto *Clone : Node->Clones) {
-      for (auto Id : Clone->getContextIds())
+      for (auto Id : Clone->getContextIds(IPOOpts))
         ContextIdToAllocationNode[Id] = Clone->getOrigNode();
     }
   }
@@ -4506,14 +4471,14 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::mergeClones() {
       mergeClones(Clone, Visited, ContextIdToAllocationNode);
   }
 
-  if (DumpCCG) {
+  if (getDumpCCG(IPOOpts)) {
     dbgs() << "CCG after merging:\n";
     dbgs() << *this;
   }
-  if (ExportToDot)
+  if (getExportToDot(IPOOpts))
     exportToDot("aftermerge");
 
-  if (VerifyCCG) {
+  if (getVerifyCCG(IPOOpts)) {
     check();
   }
 }
@@ -4546,7 +4511,7 @@ void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::mergeClones(
         continue;
       // If we found an unvisited caller, note that we should check the caller
       // edges again as mergeClones may add or change caller nodes.
-      if (DoMergeIteration && !Visited.contains(CallerEdge->Caller))
+      if (getDoMergeIteration(IPOOpts) && !Visited.contains(CallerEdge->Caller))
         FoundUnvisited = true;
       mergeClones(CallerEdge->Caller, Visited, ContextIdToAllocationNode);
     }
@@ -4565,8 +4530,7 @@ template <typename DerivedCCG, typename FuncTy, typename CallTy>
 void CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::mergeNodeCalleeClones(
     ContextNode *Node, DenseSet<const ContextNode *> &Visited,
     DenseMap<uint32_t, ContextNode *> &ContextIdToAllocationNode) {
-  // Ignore Node if we moved all of its contexts to clones.
-  if (Node->emptyContextIds())
+  if (Node->emptyContextIds(IPOOpts))
     return;
 
   // First identify groups of clones among Node's callee edges, by building
@@ -4975,8 +4939,7 @@ bool CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::assignFunctions() {
       // function clones. This list may be expanded in the loop body below if we
       // find additional cloning is required.
       std::deque<ContextNode *> ClonesWorklist;
-      // Ignore original Node if we moved all of its contexts to clones.
-      if (!Node->emptyContextIds())
+      if (!Node->emptyContextIds(IPOOpts))
         ClonesWorklist.push_back(Node);
       llvm::append_range(ClonesWorklist, Node->Clones);
 
@@ -4988,8 +4951,8 @@ bool CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::assignFunctions() {
         ContextNode *Clone = ClonesWorklist.front();
         ClonesWorklist.pop_front();
         NodeCloneCount++;
-        if (VerifyNodes)
-          checkNode<DerivedCCG, FuncTy, CallTy>(Clone);
+        if (getVerifyNodes(IPOOpts))
+          checkNode<DerivedCCG, FuncTy, CallTy>(Clone, IPOOpts);
 
         // Need to create a new function clone if we have more callsite clones
         // than existing function clones, which would have been assigned to an
@@ -5331,18 +5294,18 @@ bool CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::assignFunctions() {
               /*IsAlloc=*/AllocationCallToContextNodeMap.contains(Call));
         }
       }
-      if (VerifyCCG) {
-        checkNode<DerivedCCG, FuncTy, CallTy>(Node);
+      if (getVerifyCCG(IPOOpts)) {
+        checkNode<DerivedCCG, FuncTy, CallTy>(Node, IPOOpts);
         for (const auto &PE : Node->CalleeEdges)
-          checkNode<DerivedCCG, FuncTy, CallTy>(PE->Callee);
+          checkNode<DerivedCCG, FuncTy, CallTy>(PE->Callee, IPOOpts);
         for (const auto &CE : Node->CallerEdges)
-          checkNode<DerivedCCG, FuncTy, CallTy>(CE->Caller);
+          checkNode<DerivedCCG, FuncTy, CallTy>(CE->Caller, IPOOpts);
         for (auto *Clone : Node->Clones) {
-          checkNode<DerivedCCG, FuncTy, CallTy>(Clone);
+          checkNode<DerivedCCG, FuncTy, CallTy>(Clone, IPOOpts);
           for (const auto &PE : Clone->CalleeEdges)
-            checkNode<DerivedCCG, FuncTy, CallTy>(PE->Callee);
+            checkNode<DerivedCCG, FuncTy, CallTy>(PE->Callee, IPOOpts);
           for (const auto &CE : Clone->CallerEdges)
-            checkNode<DerivedCCG, FuncTy, CallTy>(CE->Caller);
+            checkNode<DerivedCCG, FuncTy, CallTy>(CE->Caller, IPOOpts);
         }
       }
     }
@@ -5355,12 +5318,8 @@ bool CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::assignFunctions() {
     // themselves get cloned for all of the function clones.
     for (auto &Call : CallsWithMetadata) {
       ContextNode *Node = getNodeForInst(Call);
-      if (!Node || !Node->hasCall() || Node->emptyContextIds())
+      if (!Node || !Node->hasCall() || Node->emptyContextIds(IPOOpts))
         continue;
-      // If Node has enough clones already to cover all function clones, we can
-      // skip it. Need to add one for the original copy.
-      // Use >= in case there were clones that were skipped due to having empty
-      // context ids
       if (Node->Clones.size() + 1 >= FuncCloneInfos.size())
         continue;
       // First collect all function clones we cloned this callsite node for.
@@ -5423,7 +5382,7 @@ bool CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::assignFunctions() {
 
     // Skip if either no call to update, or if we ended up with no context ids
     // (we moved all edges onto other clones).
-    if (!Node->hasCall() || Node->emptyContextIds())
+    if (!Node->hasCall() || Node->emptyContextIds(IPOOpts))
       return;
 
     if (Node->IsAllocation) {
@@ -5432,11 +5391,12 @@ bool CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::assignFunctions() {
       // has been enabled via the MinClonedColdBytePercent flag, see if this
       // allocation should be hinted cold anyway because its fraction cold bytes
       // allocated is at least the given threshold.
-      if (Node->AllocTypes == BothTypes && MinClonedColdBytePercent < 100 &&
+      if (Node->AllocTypes == BothTypes &&
+          getMinClonedColdBytePercent(*OptsCtx) < 100 &&
           !ContextIdToContextSizeInfos.empty()) {
         uint64_t TotalCold = 0;
         uint64_t Total = 0;
-        for (auto Id : Node->getContextIds()) {
+        for (auto Id : Node->getContextIds(IPOOpts)) {
           auto TypeI = ContextIdToAllocationType.find(Id);
           assert(TypeI != ContextIdToAllocationType.end());
           auto CSI = ContextIdToContextSizeInfos.find(Id);
@@ -5448,7 +5408,7 @@ bool CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::assignFunctions() {
             }
           }
         }
-        if (TotalCold * 100 >= Total * MinClonedColdBytePercent)
+        if (TotalCold * 100 >= Total * getMinClonedColdBytePercent(*OptsCtx))
           AT = AllocationType::Cold;
       }
       updateAllocationCall(Node->Call, AT);
@@ -6157,7 +6117,9 @@ unsigned MemProfContextDisambiguation::recordICPInfo(
   uint64_t TotalCount;
   auto CandidateProfileData =
       ICallAnalysis->getPromotionCandidatesForInstruction(
-          CB, TotalCount, NumCandidates, MaxSummaryIndirectEdges);
+          CB, TotalCount, NumCandidates,
+          getMaxSummaryIndirectEdges(
+              CB->getFunction()->getContext().getOptionsContext()));
   if (CandidateProfileData.empty())
     return 0;
 
@@ -6231,7 +6193,7 @@ void MemProfContextDisambiguation::performICP(
           // occurred, so it should be safe to promote when the target is a
           // declaration.
           // TODO: Remove internal option once more fully tested.
-          (MemProfRequireDefinitionForPromotion &&
+          (getMemProfRequireDefinitionForPromotion(M) &&
            TargetFunction->isDeclaration())) {
         ORE.emit([&]() {
           return OptimizationRemarkMissed(DEBUG_TYPE, "UnableToFindTarget", CB)
@@ -6297,8 +6259,8 @@ void MemProfContextDisambiguation::performICP(
         // the ability to generate this synthetic VP metadata. Optionally apply
         // a noinline attribute to promoted direct calls, where the threshold is
         // set to capture synthetic VP metadata targets which get a count of 1.
-        if (MemProfICPNoInlineThreshold &&
-            Candidate.Count < MemProfICPNoInlineThreshold)
+        if (getMemProfICPNoInlineThreshold(M) &&
+            Candidate.Count < getMemProfICPNoInlineThreshold(M))
           DirectCall.setIsNoInline();
         ORE.emit(OptimizationRemark(DEBUG_TYPE, "MemprofCall", CBClone)
                  << ore::NV("Call", CBClone) << " in clone "
@@ -6336,40 +6298,40 @@ template <typename DerivedCCG, typename FuncTy, typename CallTy>
 bool CallsiteContextGraph<DerivedCCG, FuncTy, CallTy>::process(
     function_ref<void(StringRef, StringRef, const Twine &)> EmitRemark,
     bool AllowExtraAnalysis) {
-  if (DumpCCG) {
+  if (getDumpCCG(IPOOpts)) {
     dbgs() << "CCG before cloning:\n";
     dbgs() << *this;
   }
-  if (ExportToDot)
+  if (getExportToDot(IPOOpts))
     exportToDot("postbuild");
 
-  if (VerifyCCG) {
+  if (getVerifyCCG(IPOOpts)) {
     check();
   }
 
   identifyClones();
 
-  if (VerifyCCG) {
+  if (getVerifyCCG(IPOOpts)) {
     check();
   }
 
-  if (DumpCCG) {
+  if (getDumpCCG(IPOOpts)) {
     dbgs() << "CCG after cloning:\n";
     dbgs() << *this;
   }
-  if (ExportToDot)
+  if (getExportToDot(IPOOpts))
     exportToDot("cloned");
 
   bool Changed = assignFunctions();
 
-  if (DumpCCG) {
+  if (getDumpCCG(IPOOpts)) {
     dbgs() << "CCG after assigning function clones:\n";
     dbgs() << *this;
   }
-  if (ExportToDot)
+  if (getExportToDot(IPOOpts))
     exportToDot("clonefuncassign");
 
-  if (MemProfReportHintedSizes || AllowExtraAnalysis)
+  if (getMemProfReportHintedSizes(*OptsCtx) || AllowExtraAnalysis)
     printTotalSizes(errs(), EmitRemark);
 
   return Changed;
@@ -6392,7 +6354,7 @@ bool MemProfContextDisambiguation::processModule(
   // clang processes, which won't necessarily have visibility into the linker
   // dependences. Instead the information is communicated from the LTO link to
   // the backends via the combined summary index.
-  if (!SupportsHotColdNew)
+  if (!getSupportsHotColdNew(M))
     return false;
 
   ModuleCallsiteContextGraph CCG(M, OREGetter);
@@ -6403,43 +6365,44 @@ bool MemProfContextDisambiguation::processModule(
 
 MemProfContextDisambiguation::MemProfContextDisambiguation(
     const ModuleSummaryIndex *Summary, bool isSamplePGO)
-    : ImportSummary(Summary), isSamplePGO(isSamplePGO) {
-  // Check the dot graph printing options once here, to make sure we have valid
-  // and expected combinations.
-  if (DotGraphScope == DotScope::Alloc && !AllocIdForDot.getNumOccurrences())
+    : ImportSummary(Summary), isSamplePGO(isSamplePGO) {}
+
+void MemProfContextDisambiguation::initFromOptions(
+    const clv2::OptionsContext &Ctx) {
+  const ipo_opts::ParsedOpts *O = clv2::getView<&clv2::IPOOptsReg>(Ctx);
+
+  bool AllocIdSpecified = isAllocIdForDotSpecified(O);
+  bool ContextIdSpecified = isContextIdForDotSpecified(O);
+  if (getDotGraphScope(O) == DotScope::Alloc && !AllocIdSpecified)
     llvm::report_fatal_error(
         "-memprof-dot-scope=alloc requires -memprof-dot-alloc-id");
-  if (DotGraphScope == DotScope::Context &&
-      !ContextIdForDot.getNumOccurrences())
+  if (getDotGraphScope(O) == DotScope::Context && !ContextIdSpecified)
     llvm::report_fatal_error(
         "-memprof-dot-scope=context requires -memprof-dot-context-id");
-  if (DotGraphScope == DotScope::All && AllocIdForDot.getNumOccurrences() &&
-      ContextIdForDot.getNumOccurrences())
+  if (getDotGraphScope(O) == DotScope::All && AllocIdSpecified &&
+      ContextIdSpecified)
     llvm::report_fatal_error(
         "-memprof-dot-scope=all can't have both -memprof-dot-alloc-id and "
         "-memprof-dot-context-id");
   if (ImportSummary) {
-    // The MemProfImportSummary should only be used for testing ThinLTO
-    // distributed backend handling via opt, in which case we don't have a
-    // summary from the pass pipeline.
-    assert(MemProfImportSummary.empty());
+    assert(getMemProfImportSummary(O).empty());
     return;
   }
-  if (MemProfImportSummary.empty())
+  if (getMemProfImportSummary(O).empty())
     return;
 
   auto ReadSummaryFile =
-      errorOrToExpected(MemoryBuffer::getFile(MemProfImportSummary));
+      errorOrToExpected(MemoryBuffer::getFile(getMemProfImportSummary(O)));
   if (!ReadSummaryFile) {
     logAllUnhandledErrors(ReadSummaryFile.takeError(), errs(),
-                          "Error loading file '" + MemProfImportSummary +
+                          "Error loading file '" + getMemProfImportSummary(O) +
                               "': ");
     return;
   }
   auto ImportSummaryForTestingOrErr = getModuleSummaryIndex(**ReadSummaryFile);
   if (!ImportSummaryForTestingOrErr) {
     logAllUnhandledErrors(ImportSummaryForTestingOrErr.takeError(), errs(),
-                          "Error parsing file '" + MemProfImportSummary +
+                          "Error parsing file '" + getMemProfImportSummary(O) +
                               "': ");
     return;
   }
@@ -6449,6 +6412,7 @@ MemProfContextDisambiguation::MemProfContextDisambiguation(
 
 PreservedAnalyses MemProfContextDisambiguation::run(Module &M,
                                                     ModuleAnalysisManager &AM) {
+  initFromOptions(M.getContext().getOptionsContext());
   auto &FAM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
   auto OREGetter = [&](Function *F) -> OptimizationRemarkEmitter & {
     return FAM.getResult<OptimizationRemarkEmitterAnalysis>(*F);
@@ -6464,18 +6428,20 @@ void MemProfContextDisambiguation::run(
         isPrevailing,
     LLVMContext &Ctx,
     function_ref<void(StringRef, StringRef, const Twine &)> EmitRemark) {
+  initFromOptions(Ctx.getOptionsContext());
   // TODO: If/when other types of memprof cloning are enabled beyond just for
   // hot and cold, we will need to change this to individually control the
   // AllocationType passed to addStackNodesForMIB during CCG construction.
   // The index was set from the option, so these should be in sync.
-  assert(Index.withSupportsHotColdNew() == SupportsHotColdNew);
-  if (!SupportsHotColdNew)
+  auto *O = clv2::getView<&clv2::IPOOptsReg>(Ctx.getOptionsContext());
+  assert(Index.withSupportsHotColdNew() == getSupportsHotColdNew(O));
+  if (!getSupportsHotColdNew(O))
     return;
 
   bool AllowExtraAnalysis =
       OptimizationRemarkEmitter::allowExtraAnalysis(Ctx, DEBUG_TYPE);
 
-  IndexCallsiteContextGraph CCG(Index, isPrevailing);
+  IndexCallsiteContextGraph CCG(Index, isPrevailing, Ctx.getOptionsContext());
   CCG.process(EmitRemark, AllowExtraAnalysis);
 }
 

@@ -13,8 +13,7 @@
 #include "llvm/TargetParser/Triple.h"
 
 namespace llvm {
-extern llvm::cl::opt<llvm::InstrProfCorrelator::ProfCorrelatorKind>
-    ProfileCorrelate;
+extern llvm::InstrProfCorrelator::ProfCorrelatorKind ProfileCorrelate;
 } // namespace llvm
 
 namespace llvm::driver {
@@ -51,7 +50,7 @@ TargetLibraryInfoImpl *createTLII(const llvm::Triple &TargetTriple,
 }
 
 std::string getDefaultProfileGenName() {
-  return llvm::ProfileCorrelate != InstrProfCorrelator::NONE
+  return llvm::ProfileCorrelate != ProfCorrelatorKind::NONE
              ? "default_%m.proflite"
              : "default_%m.profraw";
 }

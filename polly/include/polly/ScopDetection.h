@@ -52,6 +52,7 @@
 #include "llvm/Analysis/AliasSetTracker.h"
 #include "llvm/Analysis/RegionInfo.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
+#include "llvm/Support/OptionsContext.h"
 #include <set>
 
 namespace polly {
@@ -114,14 +115,6 @@ using PairInstSCEV = std::pair<const Instruction *, const SCEV *>;
 using AFs = std::vector<PairInstSCEV>;
 using BaseToAFs = std::map<const SCEVUnknown *, AFs>;
 using BaseToElSize = std::map<const SCEVUnknown *, const SCEV *>;
-
-extern bool PollyTrackFailures;
-extern bool PollyDelinearize;
-extern bool PollyUseRuntimeAliasChecks;
-extern bool PollyProcessUnprofitable;
-extern bool PollyInvariantLoadHoisting;
-extern bool PollyAllowUnsignedOperations;
-extern bool PollyAllowFullFunction;
 
 /// A function attribute which will cause Polly to skip the function
 extern StringRef PollySkipFnAttr;
@@ -187,7 +180,9 @@ public:
 
     /// Initialize a DetectionContext from scratch.
     DetectionContext(Region &R, AAResults &AA, bool Verify)
-        : CurRegion(R), BAA(AA), AST(BAA), Verifying(Verify), Log(&R) {}
+        : CurRegion(R), BAA(AA),
+          AST(BAA, /*Ctx=*/llvm::clv2::defaultOptionsContext()),
+          Verifying(Verify), Log(&R) {}
   };
 
   /// Helper data structure to collect statistics about loop counts.

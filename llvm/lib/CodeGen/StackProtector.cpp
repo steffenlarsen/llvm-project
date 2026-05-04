@@ -20,6 +20,7 @@
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/CodeGen/Analysis.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
@@ -44,7 +45,8 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -58,10 +60,13 @@ STATISTIC(NumFunProtected, "Number of functions protected");
 STATISTIC(NumAddrTaken, "Number of local variables that have their address"
                         " taken.");
 
-static cl::opt<bool> EnableSelectionDAGSP("enable-selectiondag-sp",
-                                          cl::init(true), cl::Hidden);
-static cl::opt<bool> DisableCheckNoReturn("disable-check-noreturn-call",
-                                          cl::init(false), cl::Hidden);
+static bool getEnableSelectiondagSp(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableSelectiondagSp>(Ctx);
+}
+
+static bool getDisableCheckNoreturnCall(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableCheckNoreturnCall>(Ctx);
+}
 
 /// InsertStackProtectors - Insert code into the prologue and epilogue of the
 /// function.
@@ -611,7 +616,8 @@ bool InsertStackProtectors(const TargetLowering &TLI,
   // protection in SDAG.
   bool SupportsSelectionDAGSP =
       TLI.useStackGuardMixFP() ||
-      (EnableSelectionDAGSP && !TLI.getTargetMachine().Options.EnableFastISel);
+      (getEnableSelectiondagSp(F->getContext().getOptionsContext()) &&
+       !TLI.getTargetMachine().Options.EnableFastISel);
   AllocaInst *AI = nullptr; // Place on stack that stores the stack guard.
   BasicBlock *FailBB = nullptr;
 
@@ -620,7 +626,8 @@ bool InsertStackProtectors(const TargetLowering &TLI,
     if (&BB == FailBB)
       continue;
     Instruction *CheckLoc = dyn_cast<ReturnInst>(BB.getTerminator());
-    if (!CheckLoc && !DisableCheckNoReturn)
+    if (!CheckLoc &&
+        !getDisableCheckNoreturnCall(F->getContext().getOptionsContext()))
       for (auto &Inst : BB) {
         if (IntrinsicInst *IB = dyn_cast<IntrinsicInst>(&Inst);
             IB && (IB->getIntrinsicID() == Intrinsic::eh_sjlj_callsite)) {

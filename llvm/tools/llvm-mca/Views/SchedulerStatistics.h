@@ -46,6 +46,10 @@ namespace mca {
 
 class SchedulerStatistics final : public View {
   const llvm::MCSchedModel &SM;
+  /// The subtarget's options context.  getResourceBufferSize() reads the
+  /// reservation-station scale factor from it, so passing the shared empty
+  /// default here silently ignores that option.
+  const llvm::clv2::OptionsContext &OptsCtx;
   unsigned LQResourceID;
   unsigned SQResourceID;
 

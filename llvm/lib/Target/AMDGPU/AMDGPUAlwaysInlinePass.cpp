@@ -18,17 +18,17 @@
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 
 using namespace llvm;
 
-namespace {
+static bool getStressCalls(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_StressCalls>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> StressCalls(
-  "amdgpu-stress-function-calls",
-  cl::Hidden,
-  cl::desc("Force all functions to be noinline"),
-  cl::init(false));
+namespace {
 
 class AMDGPUAlwaysInline : public ModulePass {
   bool GlobalOpt;
@@ -128,18 +128,21 @@ static bool alwaysInlineImpl(Module &M, bool GlobalOpt) {
     unsigned AS = GV.getAddressSpace();
     if ((AS == AMDGPUAS::REGION_ADDRESS) ||
         (AS == AMDGPUAS::LOCAL_ADDRESS &&
-         (!AMDGPUTargetMachine::EnableLowerModuleLDS)))
+         (!AMDGPUTargetMachine::getEnableLowerModuleLDS(
+             M.getContext().getOptionsContext()))))
       recursivelyVisitUsers(GV, FuncsToAlwaysInline);
   }
 
-  if (!AMDGPUTargetMachine::EnableFunctionCalls || StressCalls) {
-    auto IncompatAttr
-      = StressCalls ? Attribute::AlwaysInline : Attribute::NoInline;
+  if (!AMDGPUTargetMachine::getEnableFunctionCalls(
+          TT, M.getContext().getOptionsContext()) ||
+      getStressCalls(M)) {
+    auto IncompatAttr =
+        getStressCalls(M) ? Attribute::AlwaysInline : Attribute::NoInline;
 
     for (Function &F : M) {
       if (!F.isDeclaration() && !F.use_empty() &&
           !F.hasFnAttribute(IncompatAttr)) {
-        if (StressCalls) {
+        if (getStressCalls(M)) {
           if (!FuncsToAlwaysInline.count(&F))
             FuncsToNoInline.insert(&F);
         } else

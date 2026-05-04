@@ -15,12 +15,13 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/PseudoProbe.h"
+#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
 #include "llvm/ProfileData/SampleProfReader.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/LEB128.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cstdint>
@@ -30,16 +31,13 @@
 using namespace llvm;
 using namespace sampleprof;
 
-static cl::opt<uint64_t> ProfileSymbolListCutOff(
-    "profile-symbol-list-cutoff", cl::Hidden, cl::init(-1),
-    cl::desc("Cutoff value about how many symbols in profile symbol list "
-             "will be used. This is very useful for performance debugging"));
+static uint64_t getProfileSymbolListCutOff(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::PD_ProfileSymbolListCutOff>(Ctx);
+}
 
-static cl::opt<bool> GenerateMergedBaseProfiles(
-    "generate-merged-base-profiles",
-    cl::desc("When generating nested context-sensitive profiles, always "
-             "generate extra base profile for function with all its context "
-             "profiles merged into it."));
+static bool getGenerateMergedBaseProfiles(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::PD_GenerateMergedBaseProfiles>(Ctx);
+}
 
 namespace llvm {
 namespace sampleprof {
@@ -393,22 +391,22 @@ const FunctionSamples *FunctionSamples::findFunctionSamplesAt(
 LLVM_DUMP_METHOD void FunctionSamples::dump() const { print(dbgs(), 0); }
 #endif
 
-std::error_code ProfileSymbolList::read(const uint8_t *Data,
-                                        uint64_t ListSize) {
+std::error_code ProfileSymbolList::read(const uint8_t *Data, uint64_t ListSize,
+                                        const clv2::OptionsContext &Ctx) {
   // Scan forward to see how many elements we expect.
-  reserve(std::min<uint64_t>(ProfileSymbolListCutOff,
+  reserve(std::min<uint64_t>(getProfileSymbolListCutOff(Ctx),
                              std::count(Data, Data + ListSize, 0)));
 
   const char *ListStart = reinterpret_cast<const char *>(Data);
   uint64_t Size = 0;
   uint64_t StrNum = 0;
-  while (Size < ListSize && StrNum < ProfileSymbolListCutOff) {
+  while (Size < ListSize && StrNum < getProfileSymbolListCutOff(Ctx)) {
     StringRef Str(ListStart + Size);
     add(Str);
     Size += Str.size() + 1;
     StrNum++;
   }
-  if (Size != ListSize && StrNum != ProfileSymbolListCutOff)
+  if (Size != ListSize && StrNum != getProfileSymbolListCutOff(Ctx))
     return sampleprof_error::malformed;
   return sampleprof_error::success;
 }
@@ -531,14 +529,15 @@ ProfileConverter::getOrCreateContextPath(const SampleContext &Context) {
   return Node;
 }
 
-void ProfileConverter::convertCSProfiles(ProfileConverter::FrameNode &Node) {
+void ProfileConverter::convertCSProfiles(ProfileConverter::FrameNode &Node,
+                                         const clv2::OptionsContext &Ctx) {
   // Process each child profile. Add each child profile to callsite profile map
   // of the current node `Node` if `Node` comes with a profile. Otherwise
   // promote the child profile to a standalone profile.
   auto *NodeProfile = Node.FuncSamples;
   for (auto &It : Node.AllChildFrames) {
     auto &ChildNode = It.second;
-    convertCSProfiles(ChildNode);
+    convertCSProfiles(ChildNode, Ctx);
     auto *ChildProfile = ChildNode.FuncSamples;
     if (!ChildProfile)
       continue;
@@ -569,7 +568,7 @@ void ProfileConverter::convertCSProfiles(ProfileConverter::FrameNode &Node) {
     if (!NodeProfile) {
       ProfileMap[ChildProfile->getContext()].merge(*ChildProfile);
       NewChildProfileHash = ChildProfile->getContext().getHashCode();
-    } else if (GenerateMergedBaseProfiles) {
+    } else if (getGenerateMergedBaseProfiles(Ctx)) {
       ProfileMap[ChildProfile->getContext()].merge(*ChildProfile);
       NewChildProfileHash = ChildProfile->getContext().getHashCode();
       auto &SamplesMap = NodeProfile->functionSamplesAt(ChildNode.CallSiteLoc);
@@ -585,4 +584,6 @@ void ProfileConverter::convertCSProfiles(ProfileConverter::FrameNode &Node) {
   }
 }
 
-void ProfileConverter::convertCSProfiles() { convertCSProfiles(RootFrame); }
+void ProfileConverter::convertCSProfiles(const clv2::OptionsContext &Ctx) {
+  convertCSProfiles(RootFrame, Ctx);
+}

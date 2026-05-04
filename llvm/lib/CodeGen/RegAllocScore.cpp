@@ -13,29 +13,40 @@
 //===----------------------------------------------------------------------===//
 
 #include "RegAllocScore.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/MCInstrDesc.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
-namespace llvm {
-LLVM_ABI cl::opt<double> CopyWeight("regalloc-copy-weight", cl::init(0.2),
-                                    cl::Hidden);
-LLVM_ABI cl::opt<double> LoadWeight("regalloc-load-weight", cl::init(4.0),
-                                    cl::Hidden);
-LLVM_ABI cl::opt<double> StoreWeight("regalloc-store-weight", cl::init(1.0),
-                                     cl::Hidden);
-LLVM_ABI cl::opt<double> CheapRematWeight("regalloc-cheap-remat-weight",
-                                          cl::init(0.2), cl::Hidden);
-LLVM_ABI cl::opt<double> ExpensiveRematWeight("regalloc-expensive-remat-weight",
-                                              cl::init(1.0), cl::Hidden);
-} // end namespace llvm
+static double getRegallocCopyWeight(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_RegallocCopyWeight>(Ctx);
+}
+
+static double getRegallocLoadWeight(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_RegallocLoadWeight>(Ctx);
+}
+
+static double getRegallocStoreWeight(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_RegallocStoreWeight>(Ctx);
+}
+
+static double getRegallocCheapRematWeight(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_RegallocCheapRematWeight>(Ctx);
+}
+
+static double getRegallocExpensiveRematWeight(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_RegallocExpensiveRematWeight>(
+      Ctx);
+}
 
 #define DEBUG_TYPE "regalloc-score"
 
@@ -64,12 +75,13 @@ bool RegAllocScore::operator!=(const RegAllocScore &Other) const {
 
 double RegAllocScore::getScore() const {
   double Ret = 0.0;
-  Ret += CopyWeight * copyCounts();
-  Ret += LoadWeight * loadCounts();
-  Ret += StoreWeight * storeCounts();
-  Ret += (LoadWeight + StoreWeight) * loadStoreCounts();
-  Ret += CheapRematWeight * cheapRematCounts();
-  Ret += ExpensiveRematWeight * expensiveRematCounts();
+  Ret += getRegallocCopyWeight(*Ctx) * copyCounts();
+  Ret += getRegallocLoadWeight(*Ctx) * loadCounts();
+  Ret += getRegallocStoreWeight(*Ctx) * storeCounts();
+  Ret += (getRegallocLoadWeight(*Ctx) + getRegallocStoreWeight(*Ctx)) *
+         loadStoreCounts();
+  Ret += getRegallocCheapRematWeight(*Ctx) * cheapRematCounts();
+  Ret += getRegallocExpensiveRematWeight(*Ctx) * expensiveRematCounts();
 
   return Ret;
 }
@@ -92,11 +104,12 @@ RegAllocScore llvm::calculateRegAllocScore(
     llvm::function_ref<double(const MachineBasicBlock &)> GetBBFreq,
     llvm::function_ref<bool(const MachineInstr &)>
         IsTriviallyRematerializable) {
-  RegAllocScore Total;
+  const auto &Ctx = MF.getFunction().getContext().getOptionsContext();
+  RegAllocScore Total(Ctx);
 
   for (const MachineBasicBlock &MBB : MF) {
     double BlockFreqRelativeToEntrypoint = GetBBFreq(MBB);
-    RegAllocScore MBBScore;
+    RegAllocScore MBBScore(Ctx);
 
     for (const MachineInstr &MI : MBB) {
       if (MI.isDebugInstr() || MI.isKill() || MI.isInlineAsm()) {

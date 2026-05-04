@@ -16,6 +16,7 @@
 // (intent(inout/out)). Copy-back inlining may be added in the future.
 //===----------------------------------------------------------------------===//
 
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Optimizer/Builder/FIRBuilder.h"
 #include "flang/Optimizer/Builder/HLFIRTools.h"
 #include "flang/Optimizer/Dialect/FIRType.h"
@@ -24,6 +25,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/Support/OptionsContext.h"
 
 namespace hlfir {
 #define GEN_PASS_DEF_INLINEHLFIRCOPY
@@ -31,11 +33,6 @@ namespace hlfir {
 } // namespace hlfir
 
 #define DEBUG_TYPE "inline-hlfir-copy"
-
-static llvm::cl::opt<bool> noInlineHLFIRCopy(
-    "no-inline-hlfir-copy",
-    llvm::cl::desc("Do not inline hlfir.copy_in/copy_out operations"),
-    llvm::cl::init(false));
 
 namespace {
 class InlineCopyInConversion : public mlir::OpRewritePattern<hlfir::CopyInOp> {
@@ -204,8 +201,10 @@ public:
     config.setRegionSimplificationLevel(
         mlir::GreedySimplifyRegionLevel::Disabled);
 
+    auto &optsCtx = getContext().getOptionsContext();
     mlir::RewritePatternSet patterns(context);
-    if (!noInlineHLFIRCopy) {
+    if (!llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_NoInlineHLFIRCopy>(
+            optsCtx)) {
       patterns.insert<InlineCopyInConversion>(context);
     }
 

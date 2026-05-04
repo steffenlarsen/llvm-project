@@ -21,6 +21,8 @@
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 #include <cassert>
 #include <optional>
 #include <vector>
@@ -29,23 +31,17 @@ enum { MAX_LANES = 64 };
 
 using namespace llvm;
 
-// TODO -- delete this flag once we have more robust mechanisms to allocate the
-// optimal RC for Opc and Dest of MFMA. In particular, there are high RP cases
-// where it is better to produce the VGPR form (e.g. if there are VGPR users
-// of the MFMA result).
-static cl::opt<bool, true> MFMAVGPRFormOpt(
-    "amdgpu-mfma-vgpr-form",
-    cl::desc("Whether to force use VGPR for Opc and Dest of MFMA. If "
-             "unspecified, default to compiler heuristics"),
-    cl::location(SIMachineFunctionInfo::MFMAVGPRForm), cl::init(true),
-    cl::Hidden);
-
 const GCNTargetMachine &getTM(const GCNSubtarget *STI) {
   const SITargetLowering *TLI = STI->getTargetLowering();
   return static_cast<const GCNTargetMachine &>(TLI->getTargetMachine());
 }
 
-bool SIMachineFunctionInfo::MFMAVGPRForm = false;
+bool SIMachineFunctionInfo::MFMAVGPRForm = true;
+
+bool SIMachineFunctionInfo::getMFMAVGPRForm(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_MFMAVGPRForm>(
+      F.getContext().getOptionsContext());
+}
 
 SIMachineFunctionInfo::SIMachineFunctionInfo(const Function &F,
                                              const GCNSubtarget *STI)
@@ -57,6 +53,7 @@ SIMachineFunctionInfo::SIMachineFunctionInfo(const Function &F,
       ImplicitArgPtr(false), GITPtrHigh(0xffffffff), HighBitsOf32BitAddress(0),
       IsWholeWaveFunction(F.getCallingConv() ==
                           CallingConv::AMDGPU_Gfx_WholeWave) {
+  ResolvedMFMAVGPRForm = getMFMAVGPRForm(F);
   const GCNSubtarget &ST = *STI;
   FlatWorkGroupSizes = ST.getFlatWorkGroupSizes(F);
   WavesPerEU = ST.getWavesPerEU(F);

@@ -24,6 +24,7 @@
 #include "llvm/Analysis/LoopAccessAnalysis.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicsARM.h"
@@ -32,6 +33,8 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
@@ -42,13 +45,15 @@ using namespace PatternMatch;
 
 STATISTIC(NumSMLAD , "Number of smlad instructions generated");
 
-static cl::opt<bool>
-DisableParallelDSP("disable-arm-parallel-dsp", cl::Hidden, cl::init(false),
-                   cl::desc("Disable the ARM Parallel DSP pass"));
+static bool getDisableParallelDSP(const Function &F) {
+  return clv2::getOptValOr<&clv2::ARMOptsReg, &clv2::ARM_DisableParallelDSP>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<unsigned>
-NumLoadLimit("arm-parallel-dsp-load-limit", cl::Hidden, cl::init(16),
-             cl::desc("Limit the number of loads analysed"));
+static unsigned getNumLoadLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::ARM_NumLoadLimit>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
   struct MulCandidate;
@@ -250,7 +255,7 @@ namespace {
     }
 
     bool runOnFunction(Function &F) override {
-      if (DisableParallelDSP)
+      if (getDisableParallelDSP(F))
         return false;
       if (skipFunction(F))
         return false;
@@ -354,7 +359,7 @@ bool ARMParallelDSP::RecordMemoryOps(BasicBlock *BB) {
     Loads.push_back(Ld);
   }
 
-  if (Loads.empty() || Loads.size() > NumLoadLimit)
+  if (Loads.empty() || Loads.size() > getNumLoadLimit(*BB->getParent()))
     return false;
 
   using InstSet = std::set<Instruction*>;

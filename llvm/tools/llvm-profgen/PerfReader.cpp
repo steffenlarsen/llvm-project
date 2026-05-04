@@ -25,48 +25,6 @@
 
 namespace llvm {
 
-cl::opt<bool> SkipSymbolization("skip-symbolization",
-                                cl::desc("Dump the unsymbolized profile to the "
-                                         "output file. It will show unwinder "
-                                         "output for CS profile generation."),
-                                cl::cat(ProfGenCategory));
-
-static cl::opt<bool> ShowMmapEvents("show-mmap-events",
-                                    cl::desc("Print binary load events."),
-                                    cl::cat(ProfGenCategory));
-
-static cl::opt<bool>
-    UseOffset("use-offset", cl::init(true),
-              cl::desc("Work with `--skip-symbolization` or "
-                       "`--unsymbolized-profile` to write/read the "
-                       "offset instead of virtual address."),
-              cl::cat(ProfGenCategory));
-
-static cl::opt<bool> UseLoadableSegmentAsBase(
-    "use-first-loadable-segment-as-base",
-    cl::desc("Use first loadable segment address as base address "
-             "for offsets in unsymbolized profile. By default "
-             "first executable segment address is used"),
-    cl::cat(ProfGenCategory));
-
-static cl::opt<bool>
-    IgnoreStackSamples("ignore-stack-samples",
-                       cl::desc("Ignore call stack samples for hybrid samples "
-                                "and produce context-insensitive profile."),
-                       cl::cat(ProfGenCategory));
-cl::opt<bool> ShowDetailedWarning("show-detailed-warning",
-                                  cl::desc("Show detailed warning message."),
-                                  cl::cat(ProfGenCategory));
-
-static cl::opt<int> CSProfMaxUnsymbolizedCtxDepth(
-    "csprof-max-unsymbolized-context-depth", cl::init(-1),
-    cl::desc("Keep the last K contexts while merging unsymbolized profile. -1 "
-             "means no depth limit."),
-    cl::cat(ProfGenCategory));
-
-cl::opt<bool> TimeProfGen("time-profgen", cl::desc("Time llvm-profgen phases"),
-                          cl::init(false), cl::cat(ProfGenCategory));
-
 static const char *TimerGroupName = "profgen";
 static const char *TimerGroupDesc = "llvm-profgen";
 
@@ -203,9 +161,8 @@ std::shared_ptr<AddrBasedCtxKey> AddressStack::getContextKey() {
   int Depth = CSProfileGenerator::MaxContextDepth != -1
                   ? CSProfileGenerator::MaxContextDepth
                   : KeyStr->Context.size();
-  Depth = CSProfMaxUnsymbolizedCtxDepth != -1
-              ? std::min(static_cast<int>(CSProfMaxUnsymbolizedCtxDepth), Depth)
-              : Depth;
+  int MaxUnsymCtxDepth = Binary->getConfig().CSProfMaxUnsymbolizedCtxDepth;
+  Depth = MaxUnsymCtxDepth != -1 ? std::min(MaxUnsymCtxDepth, Depth) : Depth;
   CSProfileGenerator::trimContext<uint64_t>(KeyStr->Context, Depth);
   return KeyStr;
 }
@@ -355,12 +312,13 @@ bool VirtualUnwinder::unwind(const PerfSample *Sample, uint64_t Repeat) {
 
 std::unique_ptr<PerfReaderBase>
 PerfReaderBase::create(ProfiledBinary *Binary, InputFile &Input,
-                       std::optional<int32_t> PIDFilter) {
+                       std::optional<int32_t> PIDFilter,
+                       const ProfGenConfig &Config) {
   std::unique_ptr<PerfReaderBase> PerfReader;
 
   if (Input.Format == InputFormat::UnsymbolizedProfile) {
     PerfReader.reset(
-        new UnsymbolizedProfileReader(Binary, Input.InputFilePath));
+        new UnsymbolizedProfileReader(Binary, Input.InputFilePath, Config));
     return PerfReader;
   }
 
@@ -376,9 +334,10 @@ PerfReaderBase::create(ProfiledBinary *Binary, InputFile &Input,
   Input.Content = PerfScriptReader::checkPerfScriptType(Input.InputFilePath);
   if (Input.Content == PerfContent::LBRStack) {
     PerfReader.reset(
-        new HybridPerfReader(Binary, Input.InputFilePath, PIDFilter));
+        new HybridPerfReader(Binary, Input.InputFilePath, PIDFilter, Config));
   } else if (Input.Content == PerfContent::LBR) {
-    PerfReader.reset(new LBRPerfReader(Binary, Input.InputFilePath, PIDFilter));
+    PerfReader.reset(
+        new LBRPerfReader(Binary, Input.InputFilePath, PIDFilter, Config));
   } else {
     exitWithError("Unsupported perfscript!");
   }
@@ -634,8 +593,8 @@ void PerfScriptReader::updateBinaryAddress(const MMapEvent &Event) {
   }
 }
 
-static std::string getContextKeyStr(ContextKey *K,
-                                    const ProfiledBinary *Binary) {
+static std::string getContextKeyStr(ContextKey *K, const ProfiledBinary *Binary,
+                                    const ProfGenConfig &Config) {
   if (const auto *CtxKey = dyn_cast<StringBasedCtxKey>(K)) {
     return SampleContext::getContextString(CtxKey->Context);
   } else if (const auto *CtxKey = dyn_cast<AddrBasedCtxKey>(K)) {
@@ -644,8 +603,8 @@ static std::string getContextKeyStr(ContextKey *K,
       if (OContextStr.str().size())
         OContextStr << " @ ";
       uint64_t Address = CtxKey->Context[I];
-      if (UseOffset) {
-        if (UseLoadableSegmentAsBase)
+      if (Config.UseOffset) {
+        if (Config.UseLoadableSegmentAsBase)
           Address -= Binary->getFirstLoadableAddress();
         else
           Address -= Binary->getPreferredBaseAddress();
@@ -662,15 +621,16 @@ static std::string getContextKeyStr(ContextKey *K,
 
 void HybridPerfReader::unwindSamples() {
   NamedRegionTimer T("unwind", "Unwind samples", TimerGroupName, TimerGroupDesc,
-                     TimeProfGen);
-  VirtualUnwinder Unwinder(&SampleCounters, Binary);
+                     Config.TimeProfGen);
+  VirtualUnwinder Unwinder(&SampleCounters, Binary,
+                           Config.CSProfMaxUnsymbolizedCtxDepth);
   for (const auto &Item : AggregatedSamples) {
     const PerfSample *Sample = Item.first.getPtr();
     Unwinder.unwind(Sample, Item.second);
   }
 
   // Warn about untracked frames due to missing probes.
-  if (ShowDetailedWarning) {
+  if (Config.ShowDetailedWarning) {
     for (auto Address : Unwinder.getUntrackedCallsites())
       WithColor::warning() << "Profile context truncated due to missing probe "
                            << "for call instruction at "
@@ -890,7 +850,7 @@ void HybridPerfReader::parseSample(TraceStream &TraceIt, uint64_t Count) {
   if (!TraceIt.isAtEoF() && isLBRSample(TraceIt.getCurrentLine(), true)) {
     // Parsing LBR stack and populate into PerfSample.LBRStack
     if (extractLBRStack(TraceIt, Sample->LBRStack)) {
-      if (IgnoreStackSamples) {
+      if (Config.IgnoreStackSamples) {
         Sample->CallStack.clear();
       } else {
         // Canonicalize stack leaf to avoid 'random' IP from leaf frame skew LBR
@@ -920,7 +880,8 @@ using OrderedCounterForPrint = std::map<std::string, SampleCounter *>;
 void PerfScriptReader::writeUnsymbolizedProfile(raw_fd_ostream &OS) {
   OrderedCounterForPrint OrderedCounters;
   for (auto &CI : SampleCounters) {
-    OrderedCounters[getContextKeyStr(CI.first.getPtr(), Binary)] = &CI.second;
+    OrderedCounters[getContextKeyStr(CI.first.getPtr(), Binary, Config)] =
+        &CI.second;
   }
 
   auto SCounterPrinter = [&](RangeSample &Counter, StringRef Separator,
@@ -931,8 +892,8 @@ void PerfScriptReader::writeUnsymbolizedProfile(raw_fd_ostream &OS) {
       uint64_t Start = I.first.first;
       uint64_t End = I.first.second;
 
-      if (UseOffset) {
-        if (UseLoadableSegmentAsBase) {
+      if (Config.UseOffset) {
+        if (Config.UseLoadableSegmentAsBase) {
           Start -= Binary->getFirstLoadableAddress();
           End -= Binary->getFirstLoadableAddress();
         } else {
@@ -1010,8 +971,8 @@ void UnsymbolizedProfileReader::readSampleCounters(TraceStream &TraceIt,
           Range.second.getAsInteger(16, Target))
         exitWithErrorForTraceLine(TraceIt);
 
-      if (UseOffset) {
-        if (UseLoadableSegmentAsBase) {
+      if (Config.UseOffset) {
+        if (Config.UseLoadableSegmentAsBase) {
           Source += Binary->getFirstLoadableAddress();
           Target += Binary->getFirstLoadableAddress();
         } else {
@@ -1121,7 +1082,7 @@ bool PerfScriptReader::extractMMapEventForBinary(ProfiledBinary *Binary,
                                                  StringRef Line,
                                                  MMapEvent &MMap) {
   if (!Binary->isKernel() && !Line.contains(Binary->getName()) &&
-      !ShowMmapEvents)
+      !Binary->getConfig().ShowMmapEvents)
     return false;
   // Parse a MMap2 line like:
   //  PERF_RECORD_MMAP2 2113428/2113428: [0x7fd4efb57000(0x204000) @ 0
@@ -1177,7 +1138,7 @@ bool PerfScriptReader::extractMMapEventForBinary(ProfiledBinary *Binary,
   Fields[PAGE_OFFSET].getAsInteger(0, MMap.Offset);
   MMap.MemProtectionFlag = Fields[MEM_PROTECTION_FLAG];
   MMap.BinaryPath = Fields[BINARY_PATH];
-  if (ShowMmapEvents) {
+  if (Binary->getConfig().ShowMmapEvents) {
     outs() << "Mmap: Binary " << MMap.BinaryPath << " loaded at "
            << format("0x%" PRIx64 ":", MMap.Address) << " \n";
   }
@@ -1205,7 +1166,7 @@ void PerfScriptReader::parseEventOrSample(TraceStream &TraceIt) {
 
 void PerfScriptReader::parseAndAggregateTrace() {
   NamedRegionTimer T("parseTrace", "Parse and aggregate trace", TimerGroupName,
-                     TimerGroupDesc, TimeProfGen);
+                     TimerGroupDesc, Config.TimeProfGen);
   // Trace line iterator
   TraceStream TraceIt(PerfTraceFile);
   while (!TraceIt.isAtEoF())
@@ -1284,7 +1245,7 @@ PerfContent PerfScriptReader::checkPerfScriptType(StringRef FileName) {
 }
 
 void HybridPerfReader::generateUnsymbolizedProfile() {
-  ProfileIsCS = !IgnoreStackSamples;
+  ProfileIsCS = !Config.IgnoreStackSamples;
   if (ProfileIsCS)
     unwindSamples();
   else
@@ -1292,7 +1253,7 @@ void HybridPerfReader::generateUnsymbolizedProfile() {
 }
 
 void PerfScriptReader::warnTruncatedStack() {
-  if (ShowDetailedWarning) {
+  if (Config.ShowDetailedWarning) {
     for (auto Address : InvalidReturnAddresses) {
       WithColor::warning()
           << "Truncated stack sample due to invalid return address at "
@@ -1329,7 +1290,7 @@ void PerfScriptReader::warnInvalidRange() {
 
   auto WarnInvalidRange = [&](uint64_t StartAddress, uint64_t EndAddress,
                               StringRef Msg) {
-    if (!ShowDetailedWarning)
+    if (!Config.ShowDetailedWarning)
       return;
     WithColor::warning() << "[" << format("%8" PRIx64, StartAddress) << ","
                          << format("%8" PRIx64, EndAddress) << "]: " << Msg
@@ -1470,8 +1431,8 @@ void PerfScriptReader::parsePerfTraces() {
   generateUnsymbolizedProfile();
   AggregatedSamples.clear();
 
-  if (SkipSymbolization)
-    writeUnsymbolizedProfile(OutputFilename);
+  if (Config.SkipSymbolization)
+    writeUnsymbolizedProfile(Config.OutputFilename);
 }
 
 SmallVector<CleanupInstaller, 2> PerfScriptReader::TempFileCleanups;

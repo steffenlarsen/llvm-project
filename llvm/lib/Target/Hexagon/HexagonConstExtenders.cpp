@@ -16,10 +16,12 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/Register.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <map>
 #include <set>
 #include <utility>
@@ -29,13 +31,22 @@
 
 using namespace llvm;
 
-static cl::opt<unsigned> CountThreshold(
-    "hexagon-cext-threshold", cl::init(3), cl::Hidden,
-    cl::desc("Minimum number of extenders to trigger replacement"));
+static unsigned CountThreshold = 3;
 
-static cl::opt<unsigned>
-    ReplaceLimit("hexagon-cext-limit", cl::init(0), cl::Hidden,
-                 cl::desc("Maximum number of replacements"));
+static unsigned getCountThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_CExtThreshold>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getReplaceLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_CExtLimit>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getReplaceLimitWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::HexagonOptsReg, &clv2::HEX_CExtLimit>(
+      F.getContext().getOptionsContext());
+}
 
 static int32_t adjustUp(int32_t V, uint8_t A, uint8_t O) {
   assert(isPowerOf2_32(A));
@@ -1829,8 +1840,9 @@ bool HCE::replaceInstrExpr(const ExtDesc &ED, const ExtenderInit &ExtI,
 }
 
 bool HCE::replaceInstr(unsigned Idx, Register ExtR, const ExtenderInit &ExtI) {
-  if (ReplaceLimit.getNumOccurrences()) {
-    if (ReplaceLimit <= ReplaceCounter)
+  const Function &F = Extenders[Idx].UseMI->getMF()->getFunction();
+  if (getReplaceLimitWasSpecified(F)) {
+    if (getReplaceLimit(F) <= ReplaceCounter)
       return false;
     ++ReplaceCounter;
   }
@@ -1902,7 +1914,11 @@ bool HCE::replaceExtenders(const AssignmentMap &IMap) {
 
   for (const std::pair<const ExtenderInit, IndexList> &P : IMap) {
     const IndexList &Idxs = P.second;
-    if (Idxs.size() < CountThreshold)
+    if (Idxs.empty())
+      continue;
+    if (Idxs.size() <
+        getCountThreshold(
+            Extenders[Idxs.front()].UseMI->getMF()->getFunction()))
       continue;
 
     Defs.clear();

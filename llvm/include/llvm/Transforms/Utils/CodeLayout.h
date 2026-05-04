@@ -20,6 +20,10 @@
 #include <utility>
 #include <vector>
 
+namespace llvm::clv2 {
+class OptionsContext;
+} // namespace llvm::clv2
+
 namespace llvm::codelayout {
 
 using EdgeT = std::pair<uint64_t, uint64_t>;
@@ -43,7 +47,8 @@ struct EdgeCount {
 /// \returns The best block order found.
 LLVM_ABI std::vector<uint64_t>
 computeExtTspLayout(ArrayRef<uint64_t> NodeSizes, ArrayRef<uint64_t> NodeCounts,
-                    ArrayRef<EdgeCount> EdgeCounts);
+                    ArrayRef<EdgeCount> EdgeCounts,
+                    const clv2::OptionsContext &Ctx);
 
 /// Estimate the "quality" of a given node order in CFG. The higher the score,
 /// the better the order is. The score is designed to reflect the locality of
@@ -51,11 +56,13 @@ computeExtTspLayout(ArrayRef<uint64_t> NodeSizes, ArrayRef<uint64_t> NodeCounts,
 /// in a typical execution of the function.
 LLVM_ABI double calcExtTspScore(ArrayRef<uint64_t> Order,
                                 ArrayRef<uint64_t> NodeSizes,
-                                ArrayRef<EdgeCount> EdgeCounts);
+                                ArrayRef<EdgeCount> EdgeCounts,
+                                const clv2::OptionsContext &Ctx);
 
 /// Estimate the "quality" of the current node order in CFG.
 LLVM_ABI double calcExtTspScore(ArrayRef<uint64_t> NodeSizes,
-                                ArrayRef<EdgeCount> EdgeCounts);
+                                ArrayRef<EdgeCount> EdgeCounts,
+                                const clv2::OptionsContext &Ctx);
 
 /// Algorithm-specific params for Cache-Directed Sort. The values are tuned for
 /// the best performance of large-scale front-end bound binaries.
@@ -83,7 +90,8 @@ struct CDSortConfig {
 /// \returns The best function order found.
 LLVM_ABI std::vector<uint64_t> computeCacheDirectedLayout(
     ArrayRef<uint64_t> FuncSizes, ArrayRef<uint64_t> FuncCounts,
-    ArrayRef<EdgeCount> CallCounts, ArrayRef<uint64_t> CallOffsets);
+    ArrayRef<EdgeCount> CallCounts, ArrayRef<uint64_t> CallOffsets,
+    const clv2::OptionsContext &Ctx);
 
 /// Apply a Cache-Directed Sort with a custom config.
 LLVM_ABI std::vector<uint64_t> computeCacheDirectedLayout(

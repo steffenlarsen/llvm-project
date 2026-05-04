@@ -25,6 +25,7 @@
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/TargetFolder.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -56,6 +57,8 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
+#include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include <cassert>
 #include <cerrno>
 #include <cfenv>
@@ -64,10 +67,10 @@
 
 using namespace llvm;
 
-static cl::opt<bool> DisableFPCallFolding(
-    "disable-fp-call-folding",
-    cl::desc("Disable constant-folding of FP intrinsics and libcalls."),
-    cl::init(false), cl::Hidden);
+static bool getDisableFPCallFolding(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_DisableFPCallFolding>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -2110,7 +2113,7 @@ bool llvm::canConstantFoldCallTo(const CallBase *Call, const Function *F) {
   // This can be useful for GPU targets or in cross-compilation scenarios
   // when the exact target FP behaviour is required, and the host compiler's
   // behaviour may be slightly different from the device's run-time behaviour.
-  if (DisableFPCallFolding &&
+  if (getDisableFPCallFolding(*F) &&
       anyTypeContainsFP(
           F->getReturnType(),
           ArrayRef<Value *>((Value *const *)(F->arg_begin()), F->arg_size())))
@@ -4719,7 +4722,9 @@ Constant *llvm::ConstantFoldIntrinsic(Intrinsic::ID ID,
                                       const DataLayout &DL, Function *CxtF) {
   // In the absence of CxtF, assume strictfp conservatively.
   if (!canConstantFoldIntrinsic(ID, CxtF ? CxtF->isStrictFP() : true) ||
-      (DisableFPCallFolding &&
+      (clv2::getOptValOrDefault<&clv2::AN_DisableFPCallFolding>(
+           CxtF ? CxtF->getContext().getOptionsContext()
+                : clv2::defaultOptionsContext()) &&
        anyTypeContainsFP(
            Ty, ArrayRef<Value *>((Value *const *)Ops.data(), Ops.size()))))
     return nullptr;

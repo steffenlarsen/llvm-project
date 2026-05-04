@@ -104,7 +104,7 @@ TEST(DINodeTest, splitFlags) {
 }
 
 TEST(StripTest, LoopMetadata) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define void @f() !dbg !5 {
       ret void, !dbg !10, !llvm.loop !11
@@ -156,7 +156,7 @@ TEST(StripTest, LoopMetadata) {
 }
 
 TEST(MetadataTest, DeleteInstUsedByDbgRecord) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define i16 @f(i16 %a) !dbg !6 {
       %b = add i16 %a, 1, !dbg !11
@@ -195,7 +195,7 @@ TEST(MetadataTest, DeleteInstUsedByDbgRecord) {
 }
 
 TEST(MetadataTest, GlobalConstantMetadataUsedByDbgRecord) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     @x = dso_local global i32 0, align 4
     declare void @llvm.dbg.value(metadata, metadata, metadata) #0
@@ -237,7 +237,7 @@ TEST(MetadataTest, GlobalConstantMetadataUsedByDbgRecord) {
 }
 
 TEST(DbgVariableIntrinsic, EmptyMDIsKillLocation) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx, R"(
     define dso_local void @fun() local_unnamed_addr #0 !dbg !9 {
     entry:
@@ -279,7 +279,7 @@ TEST(DbgVariableIntrinsic, EmptyMDIsKillLocation) {
 
 // Duplicate of above test, but in DbgVariableRecord representation.
 TEST(MetadataTest, DeleteInstUsedByDbgVariableRecord) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M = parseIR(C, R"(
     define i16 @f(i16 %a) !dbg !6 {
@@ -326,7 +326,7 @@ TEST(MetadataTest, DeleteInstUsedByDbgVariableRecord) {
 // Ensure that the order of dbg.value intrinsics returned by findDbgValues, and
 // their corresponding DbgVariableRecord representation, are consistent.
 TEST(MetadataTest, OrderingOfDbgVariableRecords) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define i16 @f(i16 %a) !dbg !6 {
       %b = add i16 %a, 1, !dbg !11
@@ -371,7 +371,7 @@ TEST(MetadataTest, OrderingOfDbgVariableRecords) {
 }
 
 TEST(DIBuilder, CreateFile) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M(new Module("MyModule", Ctx));
   DIBuilder DIB(*M);
 
@@ -389,12 +389,12 @@ TEST(DIBuilder, CreateFile) {
 }
 
 TEST(DIBuilder, CreateFortranArrayTypeWithAttributes) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M(new Module("MyModule", Ctx));
   DIBuilder DIB(*M);
 
-  DISubrange *Subrange = DIB.getOrCreateSubrange(1,1);
-  SmallVector<Metadata*, 4> Subranges;
+  DISubrange *Subrange = DIB.getOrCreateSubrange(1, 1);
+  SmallVector<Metadata *, 4> Subranges;
   Subranges.push_back(Subrange);
   DINodeArray Subscripts = DIB.getOrCreateArray(Subranges);
 
@@ -418,9 +418,8 @@ TEST(DIBuilder, CreateFortranArrayTypeWithAttributes) {
   DIExpression *Allocated = getDIExpression(2);
   DIExpression *Rank = DIB.createConstantValueExpression(3);
 
-  DICompositeType *ArrayType = DIB.createArrayType(0, 0, nullptr, Subscripts,
-                                                   DataLocation, Associated,
-                                                   Allocated, Rank);
+  DICompositeType *ArrayType = DIB.createArrayType(
+      0, 0, nullptr, Subscripts, DataLocation, Associated, Allocated, Rank);
 
   EXPECT_TRUE(isa_and_nonnull<DICompositeType>(ArrayType));
   EXPECT_EQ(ArrayType->getRawDataLocation(), DataLocation);
@@ -433,7 +432,7 @@ TEST(DIBuilder, CreateFortranArrayTypeWithAttributes) {
 }
 
 TEST(DIBuilder, CreateArrayWithBitStride) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M(new Module("MyModule", Ctx));
   DIBuilder DIB(*M);
 
@@ -451,7 +450,7 @@ TEST(DIBuilder, CreateArrayWithBitStride) {
 }
 
 TEST(DIBuilder, CreateSetType) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M(new Module("MyModule", Ctx));
   DIBuilder DIB(*M);
   DIScope *Scope = DISubprogram::getDistinct(
@@ -465,7 +464,7 @@ TEST(DIBuilder, CreateSetType) {
 }
 
 TEST(DIBuilder, CreateStringType) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M(new Module("MyModule", Ctx));
   DIBuilder DIB(*M);
   DIScope *Scope = DISubprogram::getDistinct(
@@ -504,7 +503,7 @@ TEST(DIBuilder, CreateStringType) {
 }
 
 TEST(DIBuilder, DIEnumerator) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M(new Module("MyModule", Ctx));
   DIBuilder DIB(*M);
   APSInt I1(APInt(32, 1));
@@ -521,7 +520,7 @@ TEST(DIBuilder, DIEnumerator) {
 }
 
 TEST(DIBuilder, FixedPointType) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M(new Module("MyModule", Ctx));
   DIBuilder DIB(*M);
 
@@ -558,7 +557,7 @@ TEST(DIBuilder, FixedPointType) {
 }
 
 TEST(DbgAssignRecordTest, replaceVariableLocationOp) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define dso_local void @fun(i32 %v1, ptr %p1, ptr %p2) !dbg !7 {
     entry:
@@ -627,7 +626,7 @@ TEST(AssignmentTrackingTest, Utils) {
   // intrinsics, one of which is for an inlined variable and appears before the
   // alloca.
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define dso_local void @fun1() !dbg !7 {
     entry:
@@ -762,7 +761,7 @@ TEST(AssignmentTrackingTest, Utils) {
 }
 
 TEST(IRBuilder, GetSetInsertionPointWithEmptyBasicBlock) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<BasicBlock> BB(BasicBlock::Create(C, "start"));
   Module *M = new Module("module", C);
   IRBuilder<> Builder(BB.get());
@@ -780,7 +779,7 @@ TEST(AssignmentTrackingTest, InstrMethods) {
   // This includes:
   //     Instruction::mergeDIAssignID
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define dso_local void @fun() #0 !dbg !8 {
     entry:
@@ -942,7 +941,7 @@ TEST(AssignmentTrackingTest, InstrMethods) {
 // Test some very straight-forward operations on DbgVariableRecords -- these are
 // dbg.values that have been converted to a non-instruction format.
 TEST(MetadataTest, ConvertDbgToDbgVariableRecord) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define i16 @f(i16 %a) !dbg !6 {
       call void @llvm.dbg.value(metadata i16 %a, metadata !9, metadata !DIExpression()), !dbg !11
@@ -1027,7 +1026,8 @@ TEST(MetadataTest, ConvertDbgToDbgVariableRecord) {
   EXPECT_NE(DVR1->getRawLocation(), DVR2->getRawLocation());
 
   // Try manipulating DbgVariableRecords and markers in the exit block.
-  BasicBlock *ExitBlock = &*std::next(M->getFunction("f")->getEntryBlock().getIterator());
+  BasicBlock *ExitBlock =
+      &*std::next(M->getFunction("f")->getEntryBlock().getIterator());
   Instruction *FirstInst = &ExitBlock->front();
   Instruction *RetInst = &*std::next(FirstInst->getIterator());
 
@@ -1051,8 +1051,8 @@ TEST(MetadataTest, ConvertDbgToDbgVariableRecord) {
                                            false);
   EXPECT_EQ(RetInst->DebugMarker->StoredDbgRecords.size(), 2u);
   ItCount = 0;
-  // Check these things store the same information; but that they're not the same
-  // objects.
+  // Check these things store the same information; but that they're not the
+  // same objects.
   for (DbgVariableRecord &Item :
        filterDbgVars(RetInst->DebugMarker->getDbgRecordRange())) {
     EXPECT_TRUE(
@@ -1125,7 +1125,7 @@ TEST(MetadataTest, ConvertDbgToDbgVariableRecord) {
 }
 
 TEST(MetadataTest, DbgVariableRecordConversionRoutines) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M = parseIR(C, R"(
     define i16 @f(i16 %a) !dbg !6 {
@@ -1255,7 +1255,7 @@ TEST(MetadataTest, DbgVariableRecordConversionRoutines) {
 }
 
 TEST(MetadataTest, InlinedAtMethodsWithMultipleLevels) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   // Create IR with 3 levels of inlining:
   // main() calls inline1() which calls inline2() which calls inline3()
@@ -1336,7 +1336,7 @@ TEST(MetadataTest, InlinedAtMethodsWithMultipleLevels) {
 // the same result after replacing their scope (the type containing the
 // subprogram) from a temporary DIType with the permanent one.
 TEST(DIBuilder, HashingDISubprogram) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = std::make_unique<Module>("MyModule", Ctx);
   DIBuilder DIB(*M);
 
@@ -1382,7 +1382,7 @@ TEST(DIBuilder, HashingDISubprogram) {
 }
 
 TEST(DIBuilder, CompositeTypes) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = std::make_unique<Module>("MyModule", Ctx);
   DIBuilder DIB(*M);
 
@@ -1421,7 +1421,7 @@ TEST(DIBuilder, CompositeTypes) {
 }
 
 TEST(DIBuilder, CompositeTypeAnnotations) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = std::make_unique<Module>("MyModule", Ctx);
   DIBuilder DIB(*M);
 
@@ -1483,7 +1483,7 @@ TEST(DIBuilder, CompositeTypeAnnotations) {
 }
 
 TEST(DIBuilder, DynamicOffsetAndSize) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   auto M = std::make_unique<Module>("MyModule", Ctx);
   DIBuilder DIB(*M);
   DIScope *Scope = DISubprogram::getDistinct(

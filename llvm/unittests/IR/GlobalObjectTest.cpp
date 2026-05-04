@@ -26,7 +26,7 @@ static std::unique_ptr<Module> parseIR(LLVMContext &C, const char *IR) {
   return Mod;
 }
 
-static LLVMContext C;
+static LLVMContext C{llvm::clv2::defaultOptionsContext()};
 static std::unique_ptr<Module> M;
 
 class GlobalObjectTest : public testing::Test {

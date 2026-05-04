@@ -18,7 +18,7 @@ using namespace llvm;
 
 namespace {
 struct TargetCallLoweringTest : public CallLowering, testing::Test {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
 public:
   TargetCallLoweringTest() : CallLowering(nullptr) {}

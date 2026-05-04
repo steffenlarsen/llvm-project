@@ -11,7 +11,7 @@
 #include "WebAssemblyDisassemblerEmitter.h"
 #include "X86DisassemblerTables.h"
 #include "X86RecognizableInstr.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Record.h"
 #include "llvm/TableGen/TableGenBackend.h"
@@ -127,7 +127,7 @@ static void emitDisassembler(const RecordKeeper &Records, raw_ostream &OS) {
   EmitDecoder(Records, OS);
 }
 
-cl::OptionCategory DisassemblerEmitterCat("Options for -gen-disassembler");
+clv2::OptionCategory DisassemblerEmitterCat("Options for -gen-disassembler");
 
 static TableGen::Emitter::Opt X("gen-disassembler", emitDisassembler,
                                 "Generate disassembler");

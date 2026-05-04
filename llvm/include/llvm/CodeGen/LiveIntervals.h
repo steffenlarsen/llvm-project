@@ -30,7 +30,6 @@
 #include "llvm/CodeGen/SlotIndexes.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/MC/LaneBitmask.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <cassert>
@@ -39,7 +38,7 @@
 
 namespace llvm {
 
-LLVM_ABI extern cl::opt<bool> UseSegmentSetForPhysRegs;
+LLVM_ABI bool getUseSegmentSetForPhysRegs();
 
 class BitVector;
 class MachineBlockFrequencyInfo;
@@ -441,7 +440,7 @@ public:
       // Compute missing ranges on demand.
       // Use segment set to speed-up initial computation of the live range.
       RegUnitRanges[static_cast<unsigned>(Unit)] = LR =
-          new LiveRange(UseSegmentSetForPhysRegs);
+          new LiveRange(getUseSegmentSetForPhysRegs());
       computeRegUnitRange(*LR, Unit);
     }
     return *LR;

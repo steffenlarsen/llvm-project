@@ -15,24 +15,31 @@
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compression.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 
 #define DEBUG_TYPE "dxil-metadata-analysis"
 
 using namespace llvm;
 using namespace dxil;
 
-cl::OptionCategory DXContainerCategory("DXContainer Options");
-static cl::opt<dxbc::SourceInfo::Contents::CompressionType> CompressSRCI(
-    "compress-srci", cl::ValueOptional,
-    cl::desc("Choose SCRI part compression:"),
-    cl::values(clEnumValN(dxbc::SourceInfo::Contents::CompressionType::None,
-                          "none", "No compression"),
-               clEnumValN(dxbc::SourceInfo::Contents::CompressionType::Zlib,
-                          "zlib", "Use zlib")),
-    cl::cat(DXContainerCategory));
+using CompressionType = dxbc::SourceInfo::Contents::CompressionType;
+
+static constexpr clv2::EnumVal<CompressionType> CompressSRCIVals[] = {
+    {"none", CompressionType::None, "No compression"},
+    {"zlib", CompressionType::Zlib, "Use zlib"},
+};
+static constexpr auto OI_CompressSRCI = clv2::makeEnumOption<CompressionType>(
+    "compress-srci", "Choose SCRI part compression:", CompressSRCIVals,
+    clv2::ValueOptional);
+static constexpr clv2::OptionsRegistry<&OI_CompressSRCI> DXILMetadataOptsReg;
+
+[[maybe_unused]] static const bool DXILMetadataOptsRegistered = [] {
+  clv2::registerDynamicRegistry<&DXILMetadataOptsReg>();
+  return true;
+}();
 
 static ModuleMetadataInfo collectMetadataInfo(Module &M) {
   ModuleMetadataInfo MMDAI;
@@ -53,8 +60,12 @@ static ModuleMetadataInfo collectMetadataInfo(Module &M) {
   NamedMDNode *ArgsNode = M.getNamedMetadata("dx.source.args");
   if (ContentsNode && ArgsNode) {
     MMDAI.SourceInfo.emplace();
-    if (CompressSRCI.getNumOccurrences() > 0) {
-      MMDAI.SourceInfo->setCompressionType(CompressSRCI);
+    const clv2::OptionsContext &OptsCtx = M.getContext().getOptionsContext();
+    if (clv2::wasOptSpecified<&DXILMetadataOptsReg, &OI_CompressSRCI>(
+            OptsCtx)) {
+      MMDAI.SourceInfo->setCompressionType(
+          clv2::getOptValOr<&DXILMetadataOptsReg, &OI_CompressSRCI>(
+              OptsCtx, CompressionType::None));
     } else {
       // If the option is not specified, pick zlib if available.
       MMDAI.SourceInfo->setCompressionType(

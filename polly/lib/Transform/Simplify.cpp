@@ -11,13 +11,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/Simplify.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopInfo.h"
 #include "polly/Support/GICHelper.h"
 #include "polly/Support/ISLOStream.h"
 #include "polly/Support/ISLTools.h"
 #include "polly/Support/VirtualInstruction.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include <optional>
 
@@ -28,12 +29,6 @@ using namespace llvm;
 using namespace polly;
 
 namespace {
-
-static cl::opt<bool>
-    PollyPrintSimplify("polly-print-simplify",
-                       cl::desc("Polly - Print Simplify actions"),
-                       cl::cat(PollyCategory));
-
 #define TWO_STATISTICS(VARNAME, DESC)                                          \
   static llvm::Statistic VARNAME[2] = {                                        \
       {DEBUG_TYPE, #VARNAME "0", DESC " (first)"},                             \
@@ -320,13 +315,17 @@ void SimplifyImpl::coalesceWrites() {
     // ScopStmt, so the map can be local to this scope. TODO: Refactor with
     // ZoneAlgorithm::makeValueSet()
     SmallDenseMap<Value *, isl::set> ValueSets;
-    auto makeValueSet = [&ValueSets, this](Value *V) -> isl::set {
+    bool UseInstNames = false;
+    if (auto *OptCtx = polly_opts::getPollyOpts(
+            S->getFunction().getContext().getOptionsContext()))
+      UseInstNames = OptCtx->get<&llvm::clv2::POLLY_UseLlvmNames>();
+    auto makeValueSet = [&ValueSets, UseInstNames, this](Value *V) -> isl::set {
       assert(V);
       isl::set &Result = ValueSets[V];
       if (Result.is_null()) {
         isl::ctx Ctx = S->getIslCtx();
-        std::string Name = getIslCompatibleName(
-            "Val", V, ValueSets.size() - 1, std::string(), UseInstructionNames);
+        std::string Name = getIslCompatibleName("Val", V, ValueSets.size() - 1,
+                                                std::string(), UseInstNames);
         isl::id Id = isl::id::alloc(Ctx, Name, V);
         Result = isl::set::universe(
             isl::space(Ctx, 0, 0).set_tuple_id(isl::dim::set, Id));
@@ -485,13 +484,17 @@ void SimplifyImpl::coalesceWrites() {
 void SimplifyImpl::removeRedundantWrites() {
   for (auto &Stmt : *S) {
     SmallDenseMap<Value *, isl::set> ValueSets;
-    auto makeValueSet = [&ValueSets, this](Value *V) -> isl::set {
+    bool UseInstNames = false;
+    if (auto *OptCtx = polly_opts::getPollyOpts(
+            S->getFunction().getContext().getOptionsContext()))
+      UseInstNames = OptCtx->get<&llvm::clv2::POLLY_UseLlvmNames>();
+    auto makeValueSet = [&ValueSets, UseInstNames, this](Value *V) -> isl::set {
       assert(V);
       isl::set &Result = ValueSets[V];
       if (Result.is_null()) {
         isl_ctx *Ctx = S->getIslCtx().get();
-        std::string Name = getIslCompatibleName(
-            "Val", V, ValueSets.size() - 1, std::string(), UseInstructionNames);
+        std::string Name = getIslCompatibleName("Val", V, ValueSets.size() - 1,
+                                                std::string(), UseInstNames);
         isl::id Id = isl::manage(isl_id_alloc(Ctx, Name.c_str(), V));
         Result = isl::set::universe(
             isl::space(Ctx, 0, 0).set_tuple_id(isl::dim::set, Id));
@@ -783,7 +786,9 @@ SmallVector<MemoryAccess *, 32> polly::getAccessesInOrder(ScopStmt &Stmt) {
 bool polly::runSimplify(Scop &S, int CallNo) {
   SimplifyImpl Impl(CallNo);
   Impl.run(S, S.getLI());
-  if (PollyPrintSimplify) {
+  auto *Opts = polly_opts::getPollyOpts(
+      S.getFunction().getContext().getOptionsContext());
+  if (Opts && Opts->get<&llvm::clv2::POLLY_PrintSimplify>()) {
     outs() << "Printing analysis 'Polly - Simplify' for region: '"
            << S.getName() << "' in function '" << S.getFunction().getName()
            << "':\n";

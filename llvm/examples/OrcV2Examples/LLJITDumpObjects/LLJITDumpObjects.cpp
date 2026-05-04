@@ -10,7 +10,9 @@
 #include "llvm/ExecutionEngine/Orc/DebugUtils.h"
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
 #include "llvm/ExecutionEngine/Orc/ObjectTransformLayer.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -21,17 +23,16 @@ using namespace llvm::orc;
 
 ExitOnError ExitOnErr;
 
-static cl::opt<bool> DumpJITdObjects("dump-jitted-objects",
-                                     cl::desc("dump jitted objects"),
-                                     cl::Optional, cl::init(true));
+static constexpr clv2::OptionInfo<bool> DumpJITdObjectsOpt{
+    "dump-jitted-objects", "dump jitted objects", clv2::Init{true}};
+static constexpr clv2::OptionInfo<std::string> DumpDirOpt{
+    "dump-dir", "directory to dump objects to"};
+static constexpr clv2::OptionInfo<std::string> DumpFileStemOpt{
+    "dump-file-stem", "Override default dump names"};
 
-static cl::opt<std::string> DumpDir("dump-dir",
-                                    cl::desc("directory to dump objects to"),
-                                    cl::Optional, cl::init(""));
-
-static cl::opt<std::string>
-    DumpFileStem("dump-file-stem", cl::desc("Override default dump names"),
-                 cl::Optional, cl::init(""));
+static constexpr clv2::OptionsRegistry<&DumpJITdObjectsOpt, &DumpDirOpt,
+                                       &DumpFileStemOpt>
+    DumpObjectsReg;
 
 int main(int argc, char *argv[]) {
   // Initialize LLVM.
@@ -40,7 +41,11 @@ int main(int argc, char *argv[]) {
   InitializeNativeTarget();
   InitializeNativeTargetAsmPrinter();
 
-  cl::ParseCommandLineOptions(argc, argv, "LLJITDumpObjects");
+  clv2::OptionParser P;
+  P.add<&DumpObjectsReg>();
+  RegisterAllLLVMOptions(P);
+  auto OptsCtx = P.parse(argc, argv, "LLJITDumpObjects");
+  auto *Opts = OptsCtx->getViewPtr<&DumpObjectsReg>();
   ExitOnErr.setBanner(std::string(argv[0]) + ": ");
 
   outs()
@@ -53,8 +58,10 @@ int main(int argc, char *argv[]) {
 
   auto J = ExitOnErr(LLJITBuilder().create());
 
-  if (DumpJITdObjects)
-    J->getObjTransformLayer().setTransform(DumpObjects(DumpDir, DumpFileStem));
+  if (Opts->get<&DumpJITdObjectsOpt>())
+    J->getObjTransformLayer().setTransform(
+        DumpObjects(std::string(Opts->get<&DumpDirOpt>()),
+                    std::string(Opts->get<&DumpFileStemOpt>())));
 
   auto M = ExitOnErr(parseExampleModule(Add1Example, "add1"));
 

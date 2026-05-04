@@ -12,12 +12,16 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/TypeID.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/Support/OptionsContext.h"
 #include <functional>
 #include <memory>
 #include <vector>
 
 namespace llvm {
 class ThreadPoolInterface;
+namespace clv2 {
+class OptionsContext;
+}
 } // namespace llvm
 
 namespace mlir {
@@ -66,6 +70,11 @@ public:
   /// Create a new Context.
   explicit MLIRContext(Threading multithreading = Threading::ENABLED);
   explicit MLIRContext(const DialectRegistry &registry,
+                       Threading multithreading = Threading::ENABLED);
+  explicit MLIRContext(const llvm::clv2::OptionsContext &optsCtx,
+                       Threading multithreading = Threading::ENABLED);
+  explicit MLIRContext(const llvm::clv2::OptionsContext &optsCtx,
+                       const DialectRegistry &registry,
                        Threading multithreading = Threading::ENABLED);
   ~MLIRContext();
 
@@ -222,6 +231,15 @@ public:
   /// used directly. Users should instead prefer the threading utilities within
   /// Threading.h.
   llvm::ThreadPoolInterface &getThreadPool();
+
+  /// Attach a per-session OptionsContext. The context is NOT owned by
+  /// MLIRContext; the caller must keep it alive.
+  void setOptionsContext(const llvm::clv2::OptionsContext &Ctx);
+
+  /// Return the attached OptionsContext, or nullptr if none.
+  /// Never null; reports llvm::clv2::defaultOptionsContext() when none is
+  /// attached.
+  const llvm::clv2::OptionsContext &getOptionsContext() const;
 
   /// Return true if we should attach the operation to diagnostics emitted via
   /// Operation::emit.

@@ -55,7 +55,9 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Triple.h"
@@ -69,8 +71,6 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "mips-asm-printer"
-
-extern cl::opt<bool> EmitJalrReloc;
 
 MipsTargetStreamer &MipsAsmPrinter::getTargetStreamer() const {
   return static_cast<MipsTargetStreamer &>(*OutStreamer->getTargetStreamer());
@@ -236,8 +236,11 @@ void MipsAsmPrinter::emitInstruction(const MachineInstr *MI) {
     return;
   }
 
-  if (EmitJalrReloc &&
-      (MI->isReturn() || MI->isCall() || MI->isIndirectBranch())) {
+  bool EmitJalr = true;
+  if (auto *O = clv2::getView<&clv2::MipsOptsReg>(
+          MF->getFunction().getContext().getOptionsContext()))
+    EmitJalr = O->get<&clv2::MIPS_EmitJalrReloc>();
+  if (EmitJalr && (MI->isReturn() || MI->isCall() || MI->isIndirectBranch())) {
     emitDirectiveRelocJalr(*MI, OutContext, TM, *OutStreamer, *Subtarget);
   }
 
@@ -968,7 +971,8 @@ void MipsAsmPrinter::EmitFPCallStub(
   // freed) and since we're at the global level we can use the default
   // constructed subtarget.
   std::unique_ptr<MCSubtargetInfo> STI(TM.getTarget().createMCSubtargetInfo(
-      TM.getTargetTriple(), TM.getTargetCPU(), TM.getTargetFeatureString()));
+      TM.getTargetTriple(), TM.getTargetCPU(), TM.getTargetFeatureString(),
+      TM.getOptionsContext()));
 
   //
   // .global xxxx

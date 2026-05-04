@@ -19,29 +19,27 @@
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/Error.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include <limits>
 
 using namespace llvm;
 
-static cl::opt<unsigned>
-    JumpTableSizeThreshold("jump-table-to-switch-size-threshold", cl::Hidden,
-                           cl::desc("Only split jump tables with size less or "
-                                    "equal than JumpTableSizeThreshold."),
-                           cl::init(10));
+static unsigned getJumpTableSizeThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_JumpTableToSwitchSizeThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-// TODO: Consider adding a cost model for profitability analysis of this
-// transformation. Currently we replace a jump table with a switch if all the
-// functions in the jump table are smaller than the provided threshold.
-static cl::opt<unsigned> FunctionSizeThreshold(
-    "jump-table-to-switch-function-size-threshold", cl::Hidden,
-    cl::desc("Only split jump tables containing functions whose sizes are less "
-             "or equal than this threshold."),
-    cl::init(50));
+static unsigned getFunctionSizeThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::SC_JumpTableToSwitchFunctionSizeThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
-} // end namespace llvm
+#include "llvm/IR/ProfDataUtils.h"
 
 #define DEBUG_TYPE "jump-table-to-switch"
 
@@ -87,7 +85,7 @@ static std::optional<JumpTableTy> parseJumpTable(GetElementPtrInst *GEP,
     return std::nullopt;
   ++NumEligibleJumpTables;
   const uint64_t N = JumpTableSizeBytes / StrideBytes.getZExtValue();
-  if (N > JumpTableSizeThreshold)
+  if (N > getJumpTableSizeThreshold(*GEP->getFunction()))
     return std::nullopt;
 
   JumpTableTy JumpTable;
@@ -100,7 +98,8 @@ static std::optional<JumpTableTy> parseJumpTable(GetElementPtrInst *GEP,
         ConstantFoldLoadFromConst(GV->getInitializer(), PtrTy, Offset, DL);
     auto *Func = dyn_cast_or_null<Function>(C);
     if (!Func || Func->isDeclaration() || Func->getFunctionType() != CallFTy ||
-        Func->getInstructionCount() > FunctionSizeThreshold)
+        Func->getInstructionCount() >
+            getFunctionSizeThreshold(*GEP->getFunction()))
       return std::nullopt;
     JumpTable.Funcs.push_back(Func);
   }
@@ -193,7 +192,7 @@ expandToSwitch(CallBase *CB, const JumpTableTy &JT, DomTreeUpdater &DTU,
   // Only set branch weights on the switch if we have non-zero branch weights.
   // We can have no non-zero branch weights while having VP metadata if for
   // example, all of the functions are external and not instrumented.
-  if (HadProfile && !ProfcheckDisableMetadataFixes &&
+  if (HadProfile && !getProfcheckDisableMetadataFixes(F.getContext()) &&
       llvm::any_of(BranchWeights, not_equal_to(0))) {
     setBranchWeights(*Switch, downscaleWeights(BranchWeights),
                      /*IsExpected=*/false);

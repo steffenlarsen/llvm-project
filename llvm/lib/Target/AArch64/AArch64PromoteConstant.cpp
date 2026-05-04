@@ -40,9 +40,10 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
 #include <cassert>
 #include <utility>
 
@@ -50,9 +51,11 @@ using namespace llvm;
 
 #define DEBUG_TYPE "aarch64-promote-const"
 
-// Stress testing mode - disable heuristics.
-static cl::opt<bool> Stress("aarch64-stress-promote-const", cl::Hidden,
-                            cl::desc("Promote all vector constants"));
+static bool getStressPromoteConst(const Function &F) {
+  return clv2::getOptValOr<&clv2::AArch64OptsReg,
+                           &clv2::A64_StressPromoteConst>(
+      F.getContext().getOptionsContext(), false);
+}
 
 STATISTIC(NumPromoted, "Number of promoted constants");
 STATISTIC(NumPromotedUses, "Number of promoted constants uses");
@@ -330,7 +333,7 @@ static bool shouldConvertUse(const Constant *Cst, const Instruction *Instr,
 /// for the regular approach, even for float).
 /// Again, the simplest solution would be to promote every
 /// constant and rematerialize them when they are actually cheap to create.
-static bool shouldConvertImpl(const Constant *Cst) {
+static bool shouldConvertImpl(const Constant *Cst, const Function &F) {
   if (isa<const UndefValue>(Cst))
     return false;
 
@@ -348,7 +351,7 @@ static bool shouldConvertImpl(const Constant *Cst) {
   if (Cst->getType()->isScalableTy())
     return false;
 
-  if (Stress)
+  if (getStressPromoteConst(F))
     return true;
 
   // FIXME: see function \todo
@@ -359,11 +362,12 @@ static bool shouldConvertImpl(const Constant *Cst) {
 
 static bool
 shouldConvert(Constant &C,
-              AArch64PromoteConstant::PromotionCacheTy &PromotionCache) {
+              AArch64PromoteConstant::PromotionCacheTy &PromotionCache,
+              const Function &F) {
   auto Converted = PromotionCache.insert(
       std::make_pair(&C, AArch64PromoteConstant::PromotedConstant()));
   if (Converted.second)
-    Converted.first->second.ShouldConvert = shouldConvertImpl(&C);
+    Converted.first->second.ShouldConvert = shouldConvertImpl(&C, F);
   return Converted.first->second.ShouldConvert;
 }
 
@@ -570,7 +574,7 @@ bool AArch64PromoteConstant::runOnFunction(Function &F,
         continue;
 
       // Check if this constant is worth promoting.
-      if (!shouldConvert(*Cst, PromotionCache))
+      if (!shouldConvert(*Cst, PromotionCache, F))
         continue;
 
       // Check if this use should be promoted.

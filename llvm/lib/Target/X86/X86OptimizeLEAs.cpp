@@ -42,11 +42,12 @@
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/Function.h"
 #include "llvm/MC/MCInstrDesc.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 #include <cassert>
 #include <cstdint>
 #include <iterator>
@@ -55,10 +56,10 @@ using namespace llvm;
 
 #define DEBUG_TYPE "x86-optimize-leas"
 
-static cl::opt<bool>
-    DisableX86LEAOpt("disable-x86-lea-opt", cl::Hidden,
-                     cl::desc("X86: Disable LEA optimizations."),
-                     cl::init(false));
+static bool getDisableX86LEAOpt(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_DisableLEAOpt>(
+      F.getContext().getOptionsContext());
+}
 
 STATISTIC(NumSubstLEAs, "Number of LEA instruction substitutions");
 STATISTIC(NumRedundantLEAs, "Number of redundant LEA instructions removed");
@@ -691,7 +692,7 @@ bool X86OptimizeLEAsImpl::runOnMachineFunction(
     MachineBlockFrequencyInfo *MBFI) {
   bool Changed = false;
 
-  if (DisableX86LEAOpt)
+  if (getDisableX86LEAOpt(MF.getFunction()))
     return false;
 
   MRI = &MF.getRegInfo();

@@ -579,7 +579,8 @@ bool Fortran::lower::CalleeInterface::hasAlternateReturns() const {
 
 std::string Fortran::lower::CalleeInterface::getMangledName() const {
   if (funit.isMainProgram())
-    return fir::NameUniquer::doProgramEntry().str();
+    return fir::NameUniquer::doProgramEntry(
+        converter.getMLIRContext().getOptionsContext());
   return converter.mangleName(funit.getSubprogramSymbol());
 }
 
@@ -660,7 +661,8 @@ static void addSymbolAttribute(mlir::func::FuncOp func,
       if (const Fortran::semantics::Symbol *hostProcedure =
               ultimate.owner().symbol()) {
         std::string hostName = Fortran::lower::mangle::mangleName(
-            *hostProcedure, /*keepExternalInScope=*/true);
+            mlirContext.getOptionsContext(), *hostProcedure,
+            /*keepExternalInScope=*/true);
         func->setAttr(
             fir::getHostSymbolAttrName(),
             mlir::SymbolRefAttr::get(
@@ -668,11 +670,13 @@ static void addSymbolAttribute(mlir::func::FuncOp func,
       }
     } else if (ultimate.owner().kind() ==
                Fortran::semantics::Scope::Kind::MainProgram) {
-      func->setAttr(fir::getHostSymbolAttrName(),
-                    mlir::SymbolRefAttr::get(
-                        &mlirContext,
-                        mlir::StringAttr::get(
-                            &mlirContext, fir::NameUniquer::doProgramEntry())));
+      func->setAttr(
+          fir::getHostSymbolAttrName(),
+          mlir::SymbolRefAttr::get(
+              &mlirContext,
+              mlir::StringAttr::get(&mlirContext,
+                                    fir::NameUniquer::doProgramEntry(
+                                        mlirContext.getOptionsContext()))));
     }
   }
 
@@ -684,7 +688,8 @@ static void addSymbolAttribute(mlir::func::FuncOp func,
   if (!Fortran::semantics::IsBindCProcedure(sym))
     return;
   std::string name =
-      Fortran::lower::mangle::mangleName(sym, /*keepExternalInScope=*/true);
+      Fortran::lower::mangle::mangleName(mlirContext.getOptionsContext(), sym,
+                                         /*keepExternalInScope=*/true);
   func->setAttr(fir::getSymbolAttrName(),
                 mlir::StringAttr::get(&mlirContext, name));
 }

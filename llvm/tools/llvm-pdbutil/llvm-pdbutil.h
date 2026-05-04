@@ -11,10 +11,11 @@
 
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/DebugInfo/PDB/Native/LinePrinter.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/BoolOrDefault.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <memory>
+#include <optional>
 #include <stdint.h>
 
 namespace llvm {
@@ -75,35 +76,43 @@ bool compareFunctionSymbols(
 bool compareDataSymbols(const std::unique_ptr<llvm::pdb::PDBSymbolData> &F1,
                         const std::unique_ptr<llvm::pdb::PDBSymbolData> &F2);
 
-extern llvm::cl::list<std::string> WithName;
+extern std::vector<std::string> WithName;
 
-extern llvm::cl::opt<bool> Compilands;
-extern llvm::cl::opt<bool> Symbols;
-extern llvm::cl::opt<bool> Globals;
-extern llvm::cl::opt<bool> Classes;
-extern llvm::cl::opt<bool> Enums;
-extern llvm::cl::opt<bool> Funcsigs;
-extern llvm::cl::opt<bool> Arrays;
-extern llvm::cl::opt<bool> Typedefs;
-extern llvm::cl::opt<bool> Pointers;
-extern llvm::cl::opt<bool> VTShapes;
-extern llvm::cl::opt<bool> All;
-extern llvm::cl::opt<bool> ExcludeCompilerGenerated;
+extern bool InjectedSources;
+extern bool ShowInjectedSourceContent;
+extern bool Compilands;
+extern bool Symbols;
+extern bool Globals;
+extern bool Externals;
+extern bool Classes;
+extern bool Enums;
+extern bool Funcsigs;
+extern bool Arrays;
+extern bool Typedefs;
+extern bool Pointers;
+extern bool VTShapes;
+extern bool All;
+extern bool Lines;
+extern bool ExcludeCompilerGenerated;
+extern bool ExcludeSystemLibraries;
+extern bool Native;
+extern uint64_t LoadAddress;
+extern llvm::cl::boolOrDefault ColorOutput;
 
-extern llvm::cl::opt<bool> NoEnumDefs;
-extern llvm::cl::list<std::string> ExcludeTypes;
-extern llvm::cl::list<std::string> ExcludeSymbols;
-extern llvm::cl::list<std::string> ExcludeCompilands;
-extern llvm::cl::list<std::string> IncludeTypes;
-extern llvm::cl::list<std::string> IncludeSymbols;
-extern llvm::cl::list<std::string> IncludeCompilands;
-extern llvm::cl::opt<SymbolSortMode> SymbolOrder;
-extern llvm::cl::opt<ClassSortMode> ClassOrder;
-extern llvm::cl::opt<uint32_t> SizeThreshold;
-extern llvm::cl::opt<uint32_t> PaddingThreshold;
-extern llvm::cl::opt<uint32_t> ImmediatePaddingThreshold;
-extern llvm::cl::opt<ClassDefinitionFormat> ClassFormat;
-extern llvm::cl::opt<uint32_t> ClassRecursionDepth;
+extern bool NoEnumDefs;
+extern std::vector<std::string> ExcludeTypes;
+extern std::vector<std::string> ExcludeSymbols;
+extern std::vector<std::string> ExcludeCompilands;
+extern std::vector<std::string> IncludeTypes;
+extern std::vector<std::string> IncludeSymbols;
+extern std::vector<std::string> IncludeCompilands;
+extern SymbolSortMode SymbolOrder;
+extern ClassSortMode ClassOrder;
+extern uint32_t SizeThreshold;
+extern uint32_t PaddingThreshold;
+extern uint32_t ImmediatePaddingThreshold;
+extern ClassDefinitionFormat ClassFormat;
+extern uint32_t ClassRecursionDepth;
 }
 
 namespace bytes {
@@ -114,118 +123,116 @@ struct NumberRange {
 
 extern std::optional<NumberRange> DumpBlockRange;
 extern std::optional<NumberRange> DumpByteRange;
-extern llvm::cl::list<std::string> DumpStreamData;
-extern llvm::cl::opt<bool> NameMap;
-extern llvm::cl::opt<bool> Fpm;
+extern std::vector<std::string> DumpStreamData;
+extern bool NameMap;
+extern bool Fpm;
 
-extern llvm::cl::opt<bool> SectionContributions;
-extern llvm::cl::opt<bool> SectionMap;
-extern llvm::cl::opt<bool> ModuleInfos;
-extern llvm::cl::opt<bool> FileInfo;
-extern llvm::cl::opt<bool> TypeServerMap;
-extern llvm::cl::opt<bool> ECData;
+extern bool SectionContributions;
+extern bool SectionMap;
+extern bool ModuleInfos;
+extern bool FileInfo;
+extern bool TypeServerMap;
+extern bool ECData;
 
-extern llvm::cl::list<uint32_t> TypeIndex;
-extern llvm::cl::list<uint32_t> IdIndex;
+extern std::vector<uint32_t> TypeIndex;
+extern std::vector<uint32_t> IdIndex;
 
-extern llvm::cl::opt<uint32_t> ModuleIndex;
-extern llvm::cl::opt<bool> ModuleSyms;
-extern llvm::cl::opt<bool> ModuleC11;
-extern llvm::cl::opt<bool> ModuleC13;
-extern llvm::cl::opt<bool> SplitChunks;
+extern std::optional<uint32_t> ModuleIndex;
+extern bool ModuleSyms;
+extern bool ModuleC11;
+extern bool ModuleC13;
+extern bool SplitChunks;
 } // namespace bytes
 
 namespace dump {
 
-extern llvm::cl::opt<bool> DumpSummary;
-extern llvm::cl::opt<bool> DumpFpm;
-extern llvm::cl::opt<bool> DumpStreams;
-extern llvm::cl::opt<bool> DumpSymbolStats;
-extern llvm::cl::opt<bool> DumpTypeStats;
-extern llvm::cl::opt<bool> DumpIDStats;
-extern llvm::cl::opt<bool> DumpUdtStats;
-extern llvm::cl::opt<bool> DumpStreamBlocks;
+extern bool DumpSummary;
+extern bool DumpFpm;
+extern bool DumpStreams;
+extern bool DumpSymbolStats;
+extern bool DumpTypeStats;
+extern bool DumpIDStats;
+extern bool DumpUdtStats;
+extern bool DumpStreamBlocks;
 
-extern llvm::cl::opt<bool> DumpLines;
-extern llvm::cl::opt<bool> DumpInlineeLines;
-extern llvm::cl::opt<bool> DumpXmi;
-extern llvm::cl::opt<bool> DumpXme;
-extern llvm::cl::opt<bool> DumpNamedStreams;
-extern llvm::cl::opt<bool> DumpStringTable;
-extern llvm::cl::opt<bool> DumpStringTableDetails;
-extern llvm::cl::opt<bool> DumpTypes;
-extern llvm::cl::opt<bool> DumpTypeData;
-extern llvm::cl::opt<bool> DumpTypeExtras;
-extern llvm::cl::list<uint32_t> DumpTypeIndex;
-extern llvm::cl::opt<bool> DumpTypeDependents;
-extern llvm::cl::opt<bool> DumpTypeRefStats;
-extern llvm::cl::opt<bool> DumpSectionHeaders;
+extern bool DumpLines;
+extern bool DumpInlineeLines;
+extern bool DumpXmi;
+extern bool DumpXme;
+extern bool DumpNamedStreams;
+extern bool DumpStringTable;
+extern bool DumpStringTableDetails;
+extern bool DumpTypes;
+extern bool DumpTypeData;
+extern bool DumpTypeExtras;
+extern std::vector<uint32_t> DumpTypeIndex;
+extern bool DumpTypeDependents;
+extern bool DumpTypeRefStats;
+extern bool DumpSectionHeaders;
 
-extern llvm::cl::opt<bool> DumpIds;
-extern llvm::cl::opt<bool> DumpIdData;
-extern llvm::cl::opt<bool> DumpIdExtras;
-extern llvm::cl::list<uint32_t> DumpIdIndex;
-extern llvm::cl::opt<uint32_t> DumpModi;
-extern llvm::cl::opt<bool> JustMyCode;
-extern llvm::cl::opt<bool> DontResolveForwardRefs;
-extern llvm::cl::opt<bool> DumpSymbols;
-extern llvm::cl::opt<bool> DumpSymRecordBytes;
-extern llvm::cl::opt<bool> DumpGSIRecords;
-extern llvm::cl::opt<bool> DumpGlobals;
-extern llvm::cl::list<std::string> DumpGlobalNames;
-extern llvm::cl::opt<bool> DumpGlobalExtras;
-extern llvm::cl::opt<bool> DumpPublics;
-extern llvm::cl::opt<bool> DumpPublicExtras;
-extern llvm::cl::opt<bool> DumpSectionContribs;
-extern llvm::cl::opt<bool> DumpSectionMap;
-extern llvm::cl::opt<bool> DumpModules;
-extern llvm::cl::opt<bool> DumpModuleFiles;
-extern llvm::cl::opt<bool> DumpFpo;
-extern llvm::cl::opt<bool> DumpDXContainer;
-extern llvm::cl::opt<bool> RawAll;
+extern bool DumpIds;
+extern bool DumpIdData;
+extern bool DumpIdExtras;
+extern std::vector<uint32_t> DumpIdIndex;
+extern std::optional<uint32_t> DumpModi;
+extern bool JustMyCode;
+extern bool DontResolveForwardRefs;
+extern bool DumpSymbols;
+extern bool DumpSymRecordBytes;
+extern bool DumpGSIRecords;
+extern bool DumpGlobals;
+extern std::vector<std::string> DumpGlobalNames;
+extern bool DumpGlobalExtras;
+extern bool DumpPublics;
+extern bool DumpPublicExtras;
+extern bool DumpSectionContribs;
+extern bool DumpSectionMap;
+extern bool DumpModules;
+extern bool DumpModuleFiles;
+extern bool DumpDXContainer;
+extern bool DumpFpo;
+extern bool RawAll;
+extern uint32_t DumpSymbolOffset;
+extern bool DumpParents;
+extern uint32_t DumpParentDepth;
+extern bool DumpChildren;
+extern uint32_t DumpChildrenDepth;
 }
 
 namespace pdb2yaml {
-extern llvm::cl::opt<bool> All;
-extern llvm::cl::opt<bool> NoFileHeaders;
-extern llvm::cl::opt<bool> Minimal;
-extern llvm::cl::opt<bool> StreamMetadata;
-extern llvm::cl::opt<bool> StreamDirectory;
-extern llvm::cl::opt<bool> StringTable;
-extern llvm::cl::opt<bool> PdbStream;
-extern llvm::cl::opt<bool> DbiStream;
-extern llvm::cl::opt<bool> TpiStream;
-extern llvm::cl::opt<bool> IpiStream;
-extern llvm::cl::opt<bool> PublicsStream;
-extern llvm::cl::list<std::string> InputFilename;
-extern llvm::cl::opt<bool> DumpModules;
-extern llvm::cl::opt<bool> DumpModuleFiles;
-extern llvm::cl::list<ModuleSubsection> DumpModuleSubsections;
-extern llvm::cl::opt<bool> DumpModuleSyms;
-extern llvm::cl::opt<bool> DumpSectionHeaders;
-extern llvm::cl::opt<bool> DumpSectionContribs;
-extern llvm::cl::opt<bool> DXContainerStream;
+extern bool All;
+extern bool NoFileHeaders;
+extern bool Minimal;
+extern bool StreamMetadata;
+extern bool StreamDirectory;
+extern bool StringTable;
+extern bool PdbStream;
+extern bool DbiStream;
+extern bool TpiStream;
+extern bool IpiStream;
+extern bool PublicsStream;
+extern std::vector<std::string> InputFilename;
+extern bool DumpModules;
+extern bool DumpModuleFiles;
+extern std::vector<ModuleSubsection> DumpModuleSubsections;
+extern bool DumpModuleSyms;
+extern bool DumpSectionContribs;
+extern bool DumpSectionHeaders;
+extern bool DXContainerStream;
 } // namespace pdb2yaml
-
-namespace yaml2pdb {
-extern llvm::cl::opt<std::string> YamlPdbOutputFile;
-extern llvm::cl::opt<std::string> InputFilename;
-extern llvm::cl::opt<unsigned> DocNum;
-} // namespace yaml2pdb
 
 namespace explain {
 enum class InputFileType { PDBFile, PDBStream, DBIStream, Names, ModuleStream };
 
-extern llvm::cl::list<std::string> InputFilename;
-extern llvm::cl::list<uint64_t> Offsets;
-extern llvm::cl::opt<InputFileType> InputType;
+extern std::vector<std::string> InputFilename;
+extern std::vector<uint64_t> Offsets;
+extern InputFileType InputType;
 } // namespace explain
 
 namespace exportstream {
-extern llvm::cl::opt<std::string> OutputFile;
-extern llvm::cl::opt<std::string> Stream;
-extern llvm::cl::opt<bool> ForceName;
-extern llvm::cl::opt<bool> DXContainer;
+extern std::string OutputFile;
+extern std::string Stream;
+extern bool ForceName;
 } // namespace exportstream
 }
 

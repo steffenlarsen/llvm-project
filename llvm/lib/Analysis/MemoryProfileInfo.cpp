@@ -11,73 +11,78 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/MemoryProfileInfo.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/IR/Constants.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 using namespace llvm::memprof;
 
 #define DEBUG_TYPE "memory-profile-info"
 
-namespace llvm {
+namespace llvm {} // end namespace llvm
 
-cl::opt<bool> MemProfReportHintedSizes(
-    "memprof-report-hinted-sizes", cl::init(false), cl::Hidden,
-    cl::desc("Report total allocation sizes of hinted allocations"));
-
-// This is useful if we have enabled reporting of hinted sizes, and want to get
-// information from the indexing step for all contexts (especially for testing),
-// or have specified a value less than 100% for -memprof-cloning-cold-threshold.
-LLVM_ABI cl::opt<bool> MemProfKeepAllNotColdContexts(
-    "memprof-keep-all-not-cold-contexts", cl::init(false), cl::Hidden,
-    cl::desc("Keep all non-cold contexts (increases cloning overheads)"));
-
-cl::opt<unsigned> MinClonedColdBytePercent(
-    "memprof-cloning-cold-threshold", cl::init(100), cl::Hidden,
-    cl::desc("Min percent of cold bytes to hint alloc cold during cloning"));
-
-// Discard non-cold contexts if they overlap with much larger cold contexts,
-// specifically, if all contexts reaching a given callsite are at least this
-// percent cold byte allocations. This reduces the amount of cloning required
-// to expose the cold contexts when they greatly dominate non-cold contexts.
-cl::opt<unsigned> MinCallsiteColdBytePercent(
-    "memprof-callsite-cold-threshold", cl::init(100), cl::Hidden,
-    cl::desc("Min percent of cold bytes at a callsite to discard non-cold "
-             "contexts"));
-
-// Enable saving context size information for largest cold contexts, which can
-// be used to flag contexts for more aggressive cloning and reporting.
-cl::opt<unsigned> MinPercentMaxColdSize(
-    "memprof-min-percent-max-cold-size", cl::init(100), cl::Hidden,
-    cl::desc("Min percent of max cold bytes for critical cold context"));
-
-// Use this to keep the context size information in the memprof metadata for use
-// in remarks.
-cl::opt<bool> MemProfKeepContextSizeInfo(
-    "memprof-keep-context-size-info", cl::init(false), cl::Hidden,
-    cl::desc("Keep context size information in memprof metadata"));
-
-LLVM_ABI cl::opt<bool> MemProfUseAmbiguousAttributes(
-    "memprof-ambiguous-attributes", cl::init(true), cl::Hidden,
-    cl::desc("Apply ambiguous memprof attribute to ambiguous allocations"));
-
-} // end namespace llvm
-
-bool llvm::memprof::metadataIncludesAllContextSizeInfo() {
-  return MemProfReportHintedSizes || MemProfKeepContextSizeInfo ||
-         MinClonedColdBytePercent < 100;
+static bool getMemProfReportHintedSizes(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_MemProfReportHintedSizes>(
+      F.getContext().getOptionsContext());
 }
 
-bool llvm::memprof::metadataMayIncludeContextSizeInfo() {
-  return metadataIncludesAllContextSizeInfo() || MinPercentMaxColdSize < 100;
+static bool getMemProfUseAmbiguousAttributes(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_MemProfUseAmbiguousAttributes>(
+      F.getContext().getOptionsContext());
 }
 
-bool llvm::memprof::recordContextSizeInfoForAnalysis() {
-  return metadataMayIncludeContextSizeInfo() ||
-         MinCallsiteColdBytePercent < 100;
+// No-arg getter overloads for context-free utility functions.
+// These check clv2::getView when Function context is available, otherwise fall
+// back to clv2::getView<&clv2::AnalysisOptsReg>() for the global override, then
+// the raw global.
+static bool getMemProfReportHintedSizes(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_MemProfReportHintedSizes>(Ctx);
+}
+
+static bool getMemProfKeepAllNotColdContexts(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_MemProfKeepAllNotColdContexts>(Ctx);
+}
+
+static unsigned getMinClonedColdBytePercent(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_MinClonedColdBytePercent>(Ctx);
+}
+
+static unsigned getMinCallsiteColdBytePercent(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_MinCallsiteColdBytePercent>(Ctx);
+}
+
+static unsigned getMinPercentMaxColdSize(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_MinPercentMaxColdSize>(Ctx);
+}
+
+static bool getMemProfKeepContextSizeInfo(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_MemProfKeepContextSizeInfo>(Ctx);
+}
+
+bool llvm::memprof::metadataIncludesAllContextSizeInfo(
+    const clv2::OptionsContext &Ctx) {
+  return getMemProfReportHintedSizes(Ctx) ||
+         getMemProfKeepContextSizeInfo(Ctx) ||
+         getMinClonedColdBytePercent(Ctx) < 100;
+}
+
+bool llvm::memprof::metadataMayIncludeContextSizeInfo(
+    const clv2::OptionsContext &Ctx) {
+  return metadataIncludesAllContextSizeInfo(Ctx) ||
+         getMinPercentMaxColdSize(Ctx) < 100;
+}
+
+bool llvm::memprof::recordContextSizeInfoForAnalysis(
+    const clv2::OptionsContext &Ctx) {
+  return metadataMayIncludeContextSizeInfo(Ctx) ||
+         getMinCallsiteColdBytePercent(Ctx) < 100;
 }
 
 MDNode *llvm::memprof::buildCallstackMetadata(ArrayRef<uint64_t> CallStack,
@@ -144,7 +149,7 @@ void llvm::memprof::removeAnyExistingAmbiguousAttribute(CallBase *CB) {
 }
 
 void llvm::memprof::addAmbiguousAttribute(CallBase *CB) {
-  if (!MemProfUseAmbiguousAttributes)
+  if (!getMemProfUseAmbiguousAttributes(*CB->getFunction()))
     return;
   // We may have an existing ambiguous attribute if we are reanalyzing
   // after inlining.
@@ -243,7 +248,8 @@ static MDNode *createMIBNode(LLVMContext &Ctx, ArrayRef<uint64_t> MIBCallStack,
     // MinCallsiteColdBytePercent < 100. Here we check >=100 to gracefully
     // handle a user-provided percent larger than 100. However, we may not have
     // this information if we built the Trie from existing MD_memprof metadata.
-    assert(BuiltFromExistingMetadata || MinCallsiteColdBytePercent >= 100);
+    assert(BuiltFromExistingMetadata ||
+           getMinCallsiteColdBytePercent(Ctx.getOptionsContext()) >= 100);
     return MDNode::get(Ctx, MIBPayload);
   }
 
@@ -260,15 +266,20 @@ static MDNode *createMIBNode(LLVMContext &Ctx, ArrayRef<uint64_t> MIBCallStack,
       // which case we don't have a MaxSize from the profile - we assume any
       // context size info in existence on the metadata should be propagated.
       if (BuiltFromExistingMetadata ||
-          (MaxColdSize > 0 && MinPercentMaxColdSize < 100 &&
-           TotalSize * 100 >= MaxColdSize * MinPercentMaxColdSize))
+          (MaxColdSize > 0 &&
+           getMinPercentMaxColdSize(Ctx.getOptionsContext()) < 100 &&
+           TotalSize * 100 >=
+               MaxColdSize * getMinPercentMaxColdSize(Ctx.getOptionsContext())))
         LargeColdContext = true;
     }
     // Only add the context size info as metadata if we need it in the thin
     // link (currently if reporting of hinted sizes is enabled, we have
     // specified a threshold for marking allocations cold after cloning, or we
     // have identified this as a large cold context of interest above).
-    if (metadataIncludesAllContextSizeInfo() || LargeColdContext) {
+    auto &MOptsCtx = Ctx.getOptionsContext();
+    if (getMemProfReportHintedSizes(MOptsCtx) ||
+        getMemProfKeepContextSizeInfo(MOptsCtx) ||
+        getMinClonedColdBytePercent(MOptsCtx) < 100 || LargeColdContext) {
       auto *FullStackIdMD = ValueAsMetadata::get(
           ConstantInt::get(Type::getInt64Ty(Ctx), FullStackId));
       auto *TotalSizeMD = ValueAsMetadata::get(
@@ -314,7 +325,8 @@ static void saveFilteredNewMIBNodes(std::vector<Metadata *> &NewMIBNodes,
                                     std::vector<Metadata *> &SavedMIBNodes,
                                     unsigned CallerContextLength,
                                     uint64_t TotalBytes, uint64_t ColdBytes,
-                                    bool BuiltFromExistingMetadata) {
+                                    bool BuiltFromExistingMetadata,
+                                    const clv2::OptionsContext &OptsCtx) {
   const bool MostlyCold =
       // If we have built the Trie from existing MD_memprof metadata, we may or
       // may not have context size information (in which case ColdBytes and
@@ -324,12 +336,12 @@ static void saveFilteredNewMIBNodes(std::vector<Metadata *> &NewMIBNodes,
       // during matching, and it would be overly aggressive to do it again, and
       // we also want to maintain the same behavior with and without reporting
       // of hinted bytes enabled.
-      !BuiltFromExistingMetadata && MinCallsiteColdBytePercent < 100 &&
-      ColdBytes > 0 &&
-      ColdBytes * 100 >= MinCallsiteColdBytePercent * TotalBytes;
+      !BuiltFromExistingMetadata &&
+      getMinCallsiteColdBytePercent(OptsCtx) < 100 && ColdBytes > 0 &&
+      ColdBytes * 100 >= getMinCallsiteColdBytePercent(OptsCtx) * TotalBytes;
 
   // In the simplest case, with pruning disabled, keep all the new MIB nodes.
-  if (MemProfKeepAllNotColdContexts && !MostlyCold) {
+  if (getMemProfKeepAllNotColdContexts(OptsCtx) && !MostlyCold) {
     append_range(SavedMIBNodes, NewMIBNodes);
     return;
   }
@@ -360,7 +372,7 @@ static void saveFilteredNewMIBNodes(std::vector<Metadata *> &NewMIBNodes,
           // Only append cold contexts.
           if (getMIBAllocType(MIBMD) == AllocationType::Cold)
             return true;
-          if (MemProfReportHintedSizes) {
+          if (getMemProfReportHintedSizes(OptsCtx)) {
             const float PercentCold = ColdBytes * 100.0 / TotalBytes;
             std::string PercentStr;
             llvm::raw_string_ostream OS(PercentStr);
@@ -431,7 +443,7 @@ static void saveFilteredNewMIBNodes(std::vector<Metadata *> &NewMIBNodes,
         KeepFirstNewNotCold = false;
         return true;
       }
-      if (MemProfReportHintedSizes)
+      if (getMemProfReportHintedSizes(OptsCtx))
         EmitMessageForRemovedContexts(MIBMD, "pruned", "");
       return false;
     }
@@ -486,7 +498,7 @@ bool CallStackTrie::buildMIBNodes(CallStackTrieNode *Node, LLVMContext &Ctx,
     // which is the current stack length plus 1.
     saveFilteredNewMIBNodes(NewMIBNodes, MIBNodes, MIBCallStack.size() + 1,
                             CallerTotalBytes, CallerColdBytes,
-                            BuiltFromExistingMetadata);
+                            BuiltFromExistingMetadata, Ctx.getOptionsContext());
     TotalBytes += CallerTotalBytes;
     ColdBytes += CallerColdBytes;
 
@@ -548,11 +560,11 @@ void CallStackTrie::addSingleAllocTypeAttribute(CallBase *CI, AllocationType AT,
     // then don't report that it was hinted. Optionally report that we ignored
     // this context.
     if (AT != OrigAT) {
-      if (MemProfReportHintedSizes)
+      if (getMemProfReportHintedSizes(*CI->getFunction()))
         emitIgnoredNonColdContextMessage("ignored", FullStackId, "", TotalSize);
       continue;
     }
-    if (MemProfReportHintedSizes)
+    if (getMemProfReportHintedSizes(*CI->getFunction()))
       errs() << "MemProf hinting: Total size for full allocation context hash "
              << FullStackId << " and " << Descriptor << " alloc type "
              << getAllocTypeAttributeString(AT) << ": " << TotalSize << "\n";

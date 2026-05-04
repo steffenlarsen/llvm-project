@@ -70,6 +70,7 @@
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/IR/Analysis.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/Support/OptionsContext.h"
 
 namespace llvm {
 
@@ -92,6 +93,16 @@ public:
   static char ID;
 
   RegBankSelectLegacy(RegBankSelectMode RunningMode = RegBankSelectMode::Fast);
+
+  /// \p Ctx supplies -regbankselect-fast/-regbankselect-greedy.  The mode must
+  /// be fixed before getAnalysisUsage() runs, since that decides whether to
+  /// require MBFI/MBPI and happens before any function is available.
+  RegBankSelectLegacy(const clv2::OptionsContext &Ctx,
+                      RegBankSelectMode RunningMode = RegBankSelectMode::Fast);
+
+  /// Resolve the mode from \p Ctx.  For tools that construct this pass through
+  /// the pass registry (llc -run-pass), which cannot pass a context.
+  void setModeFromContext(const clv2::OptionsContext &Ctx);
 
   StringRef getPassName() const override { return "RegBankSelect"; }
 

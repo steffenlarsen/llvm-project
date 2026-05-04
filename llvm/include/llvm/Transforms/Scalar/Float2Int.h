@@ -52,6 +52,7 @@ private:
   SmallSetVector<Instruction *, 8> Roots;
   EquivalenceClasses<Instruction *> ECs;
   MapVector<Instruction *, Value *> ConvertedInsts;
+  Function *Fn;
   LLVMContext *Ctx;
 };
 }

@@ -14,6 +14,7 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/StandardInstrumentations.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
@@ -397,7 +398,7 @@ static std::unique_ptr<ExprAST> ParseIfExpr() {
     return nullptr;
 
   return std::make_unique<IfExprAST>(std::move(Cond), std::move(Then),
-                                      std::move(Else));
+                                     std::move(Else));
 }
 
 /// forexpr ::= 'for' identifier '=' expr ',' expr (',' expr)? 'in' expression
@@ -443,7 +444,7 @@ static std::unique_ptr<ExprAST> ParseForExpr() {
     return nullptr;
 
   return std::make_unique<ForExprAST>(IdName, std::move(Start), std::move(End),
-                                       std::move(Step), std::move(Body));
+                                      std::move(Step), std::move(Body));
 }
 
 /// primary
@@ -596,7 +597,7 @@ static std::unique_ptr<PrototypeAST> ParsePrototype() {
     return LogErrorP("Invalid number of operands for operator");
 
   return std::make_unique<PrototypeAST>(FnName, ArgNames, Kind != 0,
-                                         BinaryPrecedence);
+                                        BinaryPrecedence);
 }
 
 /// definition ::= 'def' prototype expression
@@ -616,7 +617,7 @@ static std::unique_ptr<FunctionAST> ParseTopLevelExpr() {
   if (auto E = ParseExpression()) {
     // Make an anonymous proto.
     auto Proto = std::make_unique<PrototypeAST>("__anon_expr",
-                                                 std::vector<std::string>());
+                                                std::vector<std::string>());
     return std::make_unique<FunctionAST>(std::move(Proto), std::move(E));
   }
   return nullptr;
@@ -954,7 +955,8 @@ Function *FunctionAST::codegen() {
 
 static void InitializeModuleAndManagers() {
   // Open a new context and module.
-  TheContext = std::make_unique<LLVMContext>();
+  TheContext =
+      std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
   TheModule = std::make_unique<Module>("KaleidoscopeJIT", *TheContext);
   TheModule->setDataLayout(TheJIT->getDataLayout());
 
@@ -983,7 +985,8 @@ static void InitializeModuleAndManagers() {
   TheFPM->addPass(SimplifyCFGPass());
 
   // Register analysis passes used in these transform passes.
-  PassBuilder PB;
+  PassBuilder PB(llvm::clv2::defaultOptionsContext(), /*TM=*/nullptr,
+                 PipelineTuningOptions(llvm::clv2::defaultOptionsContext()));
   PB.registerModuleAnalyses(*TheMAM);
   PB.registerFunctionAnalyses(*TheFAM);
   PB.crossRegisterProxies(*TheLAM, *TheFAM, *TheCGAM, *TheMAM);

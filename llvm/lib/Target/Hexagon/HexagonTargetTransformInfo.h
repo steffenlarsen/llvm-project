@@ -38,6 +38,7 @@ class HexagonTTIImpl final : public BasicTTIImplBase<HexagonTTIImpl> {
 
   const HexagonSubtarget &ST;
   const HexagonTargetLowering &TLI;
+  const Function &F;
 
   const HexagonSubtarget *getST() const { return &ST; }
   const HexagonTargetLowering *getTLI() const { return &TLI; }
@@ -52,8 +53,8 @@ class HexagonTTIImpl final : public BasicTTIImplBase<HexagonTTIImpl> {
 
 public:
   explicit HexagonTTIImpl(const HexagonTargetMachine *TM, const Function &F)
-      : BaseT(TM, F.getDataLayout()),
-        ST(*TM->getSubtargetImpl(F)), TLI(*ST.getTargetLowering()) {}
+      : BaseT(TM, F.getDataLayout()), ST(*TM->getSubtargetImpl(F)),
+        TLI(*ST.getTargetLowering()), F(F) {}
 
   /// \name Scalar TTI Implementations
   /// @{

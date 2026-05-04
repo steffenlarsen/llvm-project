@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Move.h"
+#include "clang-tools-extra/ClangToolsExtraOptionsOptInfos.h"
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Rewrite/Core/Rewriter.h"
 #include "clang/Tooling/ArgumentsAdjusters.h"
@@ -14,7 +15,8 @@
 #include "clang/Tooling/Refactoring.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Signals.h"
@@ -39,72 +41,72 @@ std::error_code CreateNewFile(const llvm::Twine &path) {
 
 cl::OptionCategory ClangMoveCategory("clang-move options");
 
-cl::list<std::string> Names("names", cl::CommaSeparated,
-                            cl::desc("The list of the names of classes being "
-                                     "moved, e.g. \"Foo,a::Foo,b::Foo\"."),
-                            cl::cat(ClangMoveCategory));
+inline constexpr clv2::OptionsRegistry<
+    &clv2::CTE_CM_Names, &clv2::CTE_CM_OldHeader, &clv2::CTE_CM_OldCC,
+    &clv2::CTE_CM_NewHeader, &clv2::CTE_CM_NewCC, &clv2::CTE_CM_OldDependOnNew,
+    &clv2::CTE_CM_NewDependOnOld, &clv2::CTE_CM_Style, &clv2::CTE_CM_DumpResult,
+    &clv2::CTE_CM_DumpDecls>
+    ToolOptsReg;
 
-cl::opt<std::string>
-    OldHeader("old_header",
-              cl::desc("The relative/absolute file path of old header."),
-              cl::cat(ClangMoveCategory));
+struct ClangMoveOptions {
+  std::vector<std::string> Names;
+  std::string OldHeader;
+  std::string OldCC;
+  std::string NewHeader;
+  std::string NewCC;
+  bool OldDependOnNew = false;
+  bool NewDependOnOld = false;
+  std::string Style = "llvm";
+  bool Dump = false;
+  bool DumpDecls = false;
+};
 
-cl::opt<std::string>
-    OldCC("old_cc", cl::desc("The relative/absolute file path of old cc."),
-          cl::cat(ClangMoveCategory));
+static void applyToolOpts(const decltype(ToolOptsReg)::ParsedOptionsT &Opts,
+                          ClangMoveOptions &ToolOpts) {
+  ToolOpts.Names = Opts.get<&clv2::CTE_CM_Names>();
+  ToolOpts.OldHeader = Opts.get<&clv2::CTE_CM_OldHeader>();
+  ToolOpts.OldCC = Opts.get<&clv2::CTE_CM_OldCC>();
+  ToolOpts.NewHeader = Opts.get<&clv2::CTE_CM_NewHeader>();
+  ToolOpts.NewCC = Opts.get<&clv2::CTE_CM_NewCC>();
+  ToolOpts.OldDependOnNew = Opts.get<&clv2::CTE_CM_OldDependOnNew>();
+  ToolOpts.NewDependOnOld = Opts.get<&clv2::CTE_CM_NewDependOnOld>();
+  ToolOpts.Style = Opts.get<&clv2::CTE_CM_Style>();
+  ToolOpts.Dump = Opts.get<&clv2::CTE_CM_DumpResult>();
+  ToolOpts.DumpDecls = Opts.get<&clv2::CTE_CM_DumpDecls>();
+}
 
-cl::opt<std::string>
-    NewHeader("new_header",
-              cl::desc("The relative/absolute file path of new header."),
-              cl::cat(ClangMoveCategory));
-
-cl::opt<std::string>
-    NewCC("new_cc", cl::desc("The relative/absolute file path of new cc."),
-          cl::cat(ClangMoveCategory));
-
-cl::opt<bool>
-    OldDependOnNew("old_depend_on_new",
-                   cl::desc("Whether old header will depend on new header. If "
-                            "true, clang-move will "
-                            "add #include of new header to old header."),
-                   cl::init(false), cl::cat(ClangMoveCategory));
-
-cl::opt<bool>
-    NewDependOnOld("new_depend_on_old",
-                   cl::desc("Whether new header will depend on old header. If "
-                            "true, clang-move will "
-                            "add #include of old header to new header."),
-                   cl::init(false), cl::cat(ClangMoveCategory));
-
-cl::opt<std::string>
-    Style("style",
-          cl::desc("The style name used for reformatting. Default is \"llvm\""),
-          cl::init("llvm"), cl::cat(ClangMoveCategory));
-
-cl::opt<bool> Dump("dump_result",
-                   cl::desc("Dump results in JSON format to stdout."),
-                   cl::cat(ClangMoveCategory));
-
-cl::opt<bool> DumpDecls(
-    "dump_decls",
-    cl::desc("Dump all declarations in old header (JSON format) to stdout. If "
-             "the option is specified, other command options will be ignored. "
-             "An empty JSON will be returned if old header isn't specified."),
-    cl::cat(ClangMoveCategory));
+static void configureParser(clv2::OptionParser &P, ClangMoveOptions &ToolOpts) {
+  using ParsedT = decltype(ToolOptsReg)::ParsedOptionsT;
+  auto *Storage = new ParsedT();
+  decltype(ToolOptsReg)::applyDefaultsTo(*Storage);
+  std::vector<clv2::detail::OptionEntry> Entries;
+  std::vector<clv2::detail::AliasEntry> Aliases;
+  std::vector<clv2::detail::SubCommandSpec> SubSpecs;
+  decltype(ToolOptsReg)::staticBuildInto(*Storage, Entries, Aliases, SubSpecs);
+  for (auto &E : Entries) {
+    if (!E.Cat)
+      E.Cat = &ClangMoveCategory;
+    P.addDynamicEntry(std::move(E));
+  }
+  clv2::registerDynamicPostParseCallback(
+      [Storage, &ToolOpts]() { applyToolOpts(*Storage, ToolOpts); });
+}
 
 } // namespace
 
 int main(int argc, const char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
-  auto ExpectedParser =
-      tooling::CommonOptionsParser::create(argc, argv, ClangMoveCategory);
+  ClangMoveOptions ToolOpts;
+  auto ExpectedParser = tooling::CommonOptionsParser::create(
+      argc, argv, ClangMoveCategory,
+      [&ToolOpts](clv2::OptionParser &P) { configureParser(P, ToolOpts); });
   if (!ExpectedParser) {
     llvm::errs() << llvm::toString(ExpectedParser.takeError());
     return 1;
   }
   tooling::CommonOptionsParser &OptionsParser = ExpectedParser.get();
 
-  if (OldDependOnNew && NewDependOnOld) {
+  if (ToolOpts.OldDependOnNew && ToolOpts.NewDependOnOld) {
     llvm::errs() << "Provide either --old_depend_on_new or "
                     "--new_depend_on_old. clang-move doesn't support these two "
                     "options at same time (It will introduce include cycle).\n";
@@ -117,13 +119,13 @@ int main(int argc, const char **argv) {
   Tool.appendArgumentsAdjuster(tooling::getInsertArgumentAdjuster(
       "-fparse-all-comments", tooling::ArgumentInsertPosition::BEGIN));
   move::MoveDefinitionSpec Spec;
-  Spec.Names = {Names.begin(), Names.end()};
-  Spec.OldHeader = OldHeader;
-  Spec.NewHeader = NewHeader;
-  Spec.OldCC = OldCC;
-  Spec.NewCC = NewCC;
-  Spec.OldDependOnNew = OldDependOnNew;
-  Spec.NewDependOnOld = NewDependOnOld;
+  Spec.Names = {ToolOpts.Names.begin(), ToolOpts.Names.end()};
+  Spec.OldHeader = ToolOpts.OldHeader;
+  Spec.NewHeader = ToolOpts.NewHeader;
+  Spec.OldCC = ToolOpts.OldCC;
+  Spec.NewCC = ToolOpts.NewCC;
+  Spec.OldDependOnNew = ToolOpts.OldDependOnNew;
+  Spec.NewDependOnOld = ToolOpts.NewDependOnOld;
 
   llvm::SmallString<128> InitialDirectory;
   if (std::error_code EC = llvm::sys::fs::current_path(InitialDirectory))
@@ -131,8 +133,8 @@ int main(int argc, const char **argv) {
                              Twine(EC.message()));
 
   move::ClangMoveContext Context{Spec, Tool.getReplacements(),
-                                 std::string(InitialDirectory), Style,
-                                 DumpDecls};
+                                 std::string(InitialDirectory), ToolOpts.Style,
+                                 ToolOpts.DumpDecls};
   move::DeclarationReporter Reporter;
   move::ClangMoveActionFactory Factory(&Context, &Reporter);
 
@@ -140,7 +142,7 @@ int main(int argc, const char **argv) {
   if (CodeStatus)
     return CodeStatus;
 
-  if (DumpDecls) {
+  if (ToolOpts.DumpDecls) {
     llvm::outs() << "[\n";
     const auto &Declarations = Reporter.getDeclarationList();
     for (auto I = Declarations.begin(), E = Declarations.end(); I != E; ++I) {
@@ -159,19 +161,19 @@ int main(int argc, const char **argv) {
     return 0;
   }
 
-  if (!NewCC.empty()) {
-    std::error_code EC = CreateNewFile(NewCC);
+  if (!ToolOpts.NewCC.empty()) {
+    std::error_code EC = CreateNewFile(ToolOpts.NewCC);
     if (EC) {
-      llvm::errs() << "Failed to create " << NewCC << ": " << EC.message()
-                   << "\n";
+      llvm::errs() << "Failed to create " << ToolOpts.NewCC << ": "
+                   << EC.message() << "\n";
       return EC.value();
     }
   }
-  if (!NewHeader.empty()) {
-    std::error_code EC = CreateNewFile(NewHeader);
+  if (!ToolOpts.NewHeader.empty()) {
+    std::error_code EC = CreateNewFile(ToolOpts.NewHeader);
     if (EC) {
-      llvm::errs() << "Failed to create " << NewHeader << ": " << EC.message()
-                   << "\n";
+      llvm::errs() << "Failed to create " << ToolOpts.NewHeader << ": "
+                   << EC.message() << "\n";
       return EC.value();
     }
   }
@@ -184,12 +186,13 @@ int main(int argc, const char **argv) {
   SourceManager SM(Diagnostics, FileMgr);
   Rewriter Rewrite(SM, LangOptions());
 
-  if (!formatAndApplyAllReplacements(Tool.getReplacements(), Rewrite, Style)) {
+  if (!formatAndApplyAllReplacements(Tool.getReplacements(), Rewrite,
+                                     ToolOpts.Style)) {
     llvm::errs() << "Failed applying all replacements.\n";
     return 1;
   }
 
-  if (Dump) {
+  if (ToolOpts.Dump) {
     std::set<llvm::StringRef> Files;
     for (const auto &it : Tool.getReplacements())
       Files.insert(it.first);

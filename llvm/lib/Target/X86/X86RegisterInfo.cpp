@@ -30,32 +30,41 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Type.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 
 using namespace llvm;
 
 #define GET_REGINFO_TARGET_DESC
 #include "X86GenRegisterInfo.inc"
 
-static cl::opt<bool>
-EnableBasePointer("x86-use-base-pointer", cl::Hidden, cl::init(true),
-          cl::desc("Enable use of a base pointer for complex stack frames"));
+static bool EnableBasePointer = true;
 
-static cl::opt<bool>
-    DisableRegAllocNDDHints("x86-disable-regalloc-hints-for-ndd", cl::Hidden,
-                            cl::init(false),
-                            cl::desc("Disable two address hints for register "
-                                     "allocation"));
+static unsigned SetjmpCSRWarningThreshold = 50;
 
-static cl::opt<unsigned> SetjmpCSRWarningThreshold(
-    "x86-setjmp-csr-warning-threshold", cl::Hidden, cl::init(50),
-    cl::desc("Basic block count threshold for emitting a warning about "
-             "callee-saved registers reserved due to setjmp"));
+static bool getEnableBasePointer(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_UseBasePointer>(
+      F.getContext().getOptionsContext());
+}
 
-extern cl::opt<bool> X86EnableAPXForRelocation;
+static bool getDisableRegAllocNDDHints(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_DisableRegAllocNDDHints>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getX86EnableAPXForRelocation(const Function &F) {
+  return clv2::getOptValOr<&clv2::X86OptsReg,
+                           &clv2::X86_EnableAPXForRelocation>(
+      F.getContext().getOptionsContext(), false);
+}
+
+static unsigned getSetjmpCSRWarningThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_SetjmpCSRWarningThreshold>(
+      F.getContext().getOptionsContext());
+}
 
 X86RegisterInfo::X86RegisterInfo(const Triple &TT)
     : X86GenRegisterInfo((TT.isX86_64() ? X86::RIP : X86::EIP),
@@ -131,7 +140,7 @@ X86RegisterInfo::getLargestLegalSuperClass(const TargetRegisterClass *RC,
 
   // Keep using non-rex2 register class when APX feature (EGPR/NDD/NF) is not
   // enabled for relocation.
-  if (!X86EnableAPXForRelocation && isNonRex2RegClass(RC))
+  if (!getX86EnableAPXForRelocation(MF.getFunction()) && isNonRex2RegClass(RC))
     return RC;
 
   const X86Subtarget &Subtarget = MF.getSubtarget<X86Subtarget>();
@@ -662,7 +671,8 @@ BitVector X86RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
         for (const MCPhysReg &SubReg : subregs_inclusive(Reg))
           Reserved.set(SubReg);
       }
-    if (NumReservedCSRs && MF.size() > SetjmpCSRWarningThreshold &&
+    if (NumReservedCSRs &&
+        MF.size() > getSetjmpCSRWarningThreshold(MF.getFunction()) &&
         !MF.getRegInfo().reservedRegsFrozen()) {
       MF.getContext().reportWarning(
           SMLoc(), Twine(NumReservedCSRs) +
@@ -821,7 +831,7 @@ bool X86RegisterInfo::hasBasePointer(const MachineFunction &MF) const {
 
   const MachineFrameInfo &MFI = MF.getFrameInfo();
 
-  if (!EnableBasePointer)
+  if (!getEnableBasePointer(MF.getFunction()))
     return false;
 
   // When we need stack realignment, we can't address the stack from the frame
@@ -1183,7 +1193,7 @@ bool X86RegisterInfo::getRegAllocationHints(Register VirtReg,
     return BaseImplRetVal;
 
   if (ID != X86::TILERegClassID) {
-    if (DisableRegAllocNDDHints || !ST.hasNDD() ||
+    if (getDisableRegAllocNDDHints(MF.getFunction()) || !ST.hasNDD() ||
         !TRI.isGeneralPurposeRegisterClass(&RC))
       return BaseImplRetVal;
 

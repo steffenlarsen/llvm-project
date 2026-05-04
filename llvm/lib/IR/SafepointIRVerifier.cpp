@@ -38,14 +38,15 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/IROptionsOptInfos.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Statepoint.h"
 #include "llvm/IR/Value.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Allocator.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "safepoint-ir-verifier"
@@ -55,8 +56,11 @@ using namespace llvm;
 /// This option is used for writing test cases.  Instead of crashing the program
 /// when verification fails, report a message to the console (for FileCheck
 /// usage) and continue execution as if nothing happened.
-static cl::opt<bool> PrintOnly("safepoint-ir-verifier-print-only",
-                               cl::init(false));
+
+static bool getPrintOnly(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::IR_SafepointIRVerifierPrintOnly>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -881,7 +885,7 @@ void InstructionVerifier::reportInvalidUse(const Value &V,
   errs() << "Illegal use of unrelocated value found!\n";
   errs() << "Def: " << V << "\n";
   errs() << "Use: " << I << "\n";
-  if (!PrintOnly)
+  if (!getPrintOnly(*I.getFunction()))
     abort();
   AnyInvalidUses = true;
 }
@@ -890,7 +894,7 @@ static void Verify(const Function &F, const DominatorTree &DT,
                    const CFGDeadness &CD) {
   LLVM_DEBUG(dbgs() << "Verifying gc pointers in function: " << F.getName()
                     << "\n");
-  if (PrintOnly)
+  if (getPrintOnly(F))
     dbgs() << "Verifying gc pointers in function: " << F.getName() << "\n";
 
   GCPtrTracker Tracker(F, DT, CD);
@@ -901,7 +905,7 @@ static void Verify(const Function &F, const DominatorTree &DT,
   InstructionVerifier Verifier;
   GCPtrTracker::verifyFunction(std::move(Tracker), Verifier);
 
-  if (PrintOnly && !Verifier.hasAnyInvalidUses()) {
+  if (getPrintOnly(F) && !Verifier.hasAnyInvalidUses()) {
     dbgs() << "No illegal uses found by SafepointIRVerifier in: " << F.getName()
            << "\n";
   }

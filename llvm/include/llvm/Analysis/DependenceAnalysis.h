@@ -302,11 +302,24 @@ private:
   friend class DependenceInfo;
 };
 
+/// Types of dependence test routines.
+enum class DependenceTestType {
+  Default, ///< All tests except BanerjeeMIV
+  All,
+  StrongSIV,
+  WeakCrossingSIV,
+  ExactSIV,
+  WeakZeroSIV,
+  ExactRDIV,
+  GCDMIV,
+  BanerjeeMIV,
+};
+
 /// DependenceInfo - This class is the main dependence-analysis driver.
 class DependenceInfo {
 public:
   DependenceInfo(Function *F, AAResults *AA, ScalarEvolution *SE, LoopInfo *LI)
-      : AA(AA), SE(SE), LI(LI), F(F) {}
+      : AA(AA), SE(SE), LI(LI), F(F), TestType(getDefaultTestType()) {}
 
   /// Handle transitive invalidation when the cached analysis results go away.
   LLVM_ABI bool invalidate(Function &F, const PreservedAnalyses &PA,
@@ -323,6 +336,14 @@ public:
   depends(Instruction *Src, Instruction *Dst,
           bool UnderRuntimeAssumptions = false);
 
+  void setTestType(DependenceTestType T) { TestType = T; }
+
+  /// Set a process-wide default test type for all subsequently constructed
+  /// DependenceInfo instances. Used by opt to translate the legacy
+  /// -da-enable-dependence-test flag without an option in the pass file.
+  LLVM_ABI static void setDefaultTestType(DependenceTestType T);
+  LLVM_ABI static DependenceTestType getDefaultTestType();
+
   Function *getFunction() const { return F; }
 
 private:
@@ -330,6 +351,7 @@ private:
   ScalarEvolution *SE;
   LoopInfo *LI;
   Function *F;
+  DependenceTestType TestType;
 
   /// Subscript - This private struct represents a pair of subscripts from
   /// a pair of potentially multi-dimensional array references. We use a
@@ -622,12 +644,12 @@ private:
   /// in \p RunningGCD. Also, the initial value of \p RunningGCD affects the
   /// result. If we find a term like (c_k * X_k * i_k), where i_k is the
   /// induction variable of \p CurLoop, c_k is stored in \p CurLoopCoeff and not
-  /// included in the GCD computation. Returns nullptr if we fail to find a
+  /// included in the GCD computation. Returns false if we fail to find a
   /// constant coefficient for some loop, e.g., when a term like (X+Y)*i is
-  /// present. Otherwise returns the remaining constant term C.
-  const SCEV *accumulateCoefficientsGCD(const SCEV *Expr, const Loop *CurLoop,
-                                        const SCEV *&CurLoopCoeff,
-                                        APInt &RunningGCD) const;
+  /// present. Otherwise returns true.
+  bool accumulateCoefficientsGCD(const SCEV *Expr, const Loop *CurLoop,
+                                 const SCEV *&CurLoopCoeff,
+                                 APInt &RunningGCD) const;
 
   /// getLowerBound - Looks through all the bounds info and
   /// computes the lower bound given the current direction settings
@@ -712,17 +734,25 @@ private:
   friend struct AnalysisInfoMixin<DependenceAnalysis>;
 }; // class DependenceAnalysis
 
+struct DependenceAnalysisPrintOptions {
+  DependenceTestType TestType = DependenceTestType::Default;
+  bool NormalizeResults = false;
+};
+
 /// Printer pass to dump DA results.
 struct DependenceAnalysisPrinterPass
     : public RequiredPassInfoMixin<DependenceAnalysisPrinterPass> {
-  DependenceAnalysisPrinterPass(raw_ostream &OS, bool NormalizeResults = false)
-      : OS(OS), NormalizeResults(NormalizeResults) {}
+  DependenceAnalysisPrinterPass(raw_ostream &OS,
+                                DependenceAnalysisPrintOptions Options = {})
+      : OS(OS), Options(Options) {}
 
   LLVM_ABI PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM);
 
+  static bool isRequired() { return true; }
+
 private:
   raw_ostream &OS;
-  bool NormalizeResults;
+  DependenceAnalysisPrintOptions Options;
 }; // class DependenceAnalysisPrinterPass
 
 /// Legacy pass manager pass to access dependence information

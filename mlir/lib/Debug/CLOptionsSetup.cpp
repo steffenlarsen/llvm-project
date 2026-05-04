@@ -14,9 +14,10 @@
 #include "mlir/Debug/Observers/ActionLogging.h"
 #include "mlir/Debug/Observers/ActionProfiler.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/MLIROptionsOptInfos.h"
 #include "mlir/Support/FileUtilities.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/Threading.h"
 #include "llvm/Support/ToolOutputFile.h"
 
 using namespace mlir;
@@ -25,60 +26,58 @@ using namespace llvm;
 
 namespace {
 struct DebugConfigCLOptions : public DebugConfig {
-  DebugConfigCLOptions() {
-    static cl::opt<std::string, /*ExternalStorage=*/true> logActionsTo{
-        "log-actions-to",
-        cl::desc("Log action execution to a file, or stderr if "
-                 " '-' is passed"),
-        cl::location(logActionsToFlag)};
+  DebugConfigCLOptions() { locFilterRegistered = false; }
 
-    static cl::opt<std::string, /*ExternalStorage=*/true> profileActionsTo{
-        "profile-actions-to",
-        cl::desc("Profile action execution to a file, or stderr if "
-                 " '-' is passed"),
-        cl::location(profileActionsToFlag)};
+  void applyLocationFilter(StringRef location) {
+    if (!locFilterRegistered) {
+      addLogActionLocFilter(&locBreakpointManager);
+      locFilterRegistered = true;
+    }
+    locationStrings.push_back(location.str());
+    StringRef locStr = locationStrings.back();
 
-    static cl::list<std::string> logActionLocationFilter(
-        "log-mlir-actions-filter",
-        cl::desc(
-            "Comma separated list of locations to filter actions from logging"),
-        cl::CommaSeparated,
-        cl::cb<void, std::string>([&](const std::string &location) {
-          static bool registerOnce = [&] {
-            addLogActionLocFilter(&locBreakpointManager);
-            return true;
-          }();
-          (void)registerOnce;
-          static std::vector<std::string> locations;
-          locations.push_back(location);
-          StringRef locStr = locations.back();
-
-          // Parse the individual location filters and set the breakpoints.
-          auto diag = [](Twine msg) { llvm::errs() << msg << "\n"; };
-          auto locBreakpoint =
-              tracing::FileLineColLocBreakpoint::parseFromString(locStr, diag);
-          if (failed(locBreakpoint)) {
-            llvm::errs() << "Invalid location filter: " << locStr << "\n";
-            exit(1);
-          }
-          auto [file, line, col] = *locBreakpoint;
-          locBreakpointManager.addBreakpoint(file, line, col);
-        }));
-
-    static cl::opt<bool, /*ExternalStorage=*/true> enableDebuggerHook(
-        "mlir-enable-debugger-hook",
-        cl::desc("Enable Debugger hook for debugging MLIR Actions"),
-        cl::location(enableDebuggerActionHookFlag), cl::init(false));
+    auto diag = [](Twine msg) { llvm::errs() << msg << "\n"; };
+    auto locBreakpoint =
+        tracing::FileLineColLocBreakpoint::parseFromString(locStr, diag);
+    if (failed(locBreakpoint)) {
+      llvm::errs() << "Invalid location filter: " << locStr << "\n";
+      exit(1);
+    }
+    auto [file, line, col] = *locBreakpoint;
+    locBreakpointManager.addBreakpoint(file, line, col);
   }
+
   tracing::FileLineColLocBreakpointManager locBreakpointManager;
+  std::vector<std::string> locationStrings;
+  bool locFilterRegistered = false;
 };
 
 } // namespace
 
 static ManagedStatic<DebugConfigCLOptions> clOptionsConfig;
+
 void DebugConfig::registerCLOptions() { *clOptionsConfig; }
 
-DebugConfig DebugConfig::createFromCLOptions() { return *clOptionsConfig; }
+DebugConfig
+DebugConfig::createFromCLOptions(const llvm::clv2::OptionsContext &optsCtx) {
+  using namespace llvm::clv2;
+  auto *O = mlir::mlir_opts::getMLIROptsReg(optsCtx);
+  if (!O)
+    return *clOptionsConfig;
+
+  auto logTo = O->get<&MLIR_LogActionsTo>();
+  if (!logTo.empty())
+    clOptionsConfig->logActionsTo(logTo);
+  auto profileTo = O->get<&MLIR_ProfileActionsTo>();
+  if (!profileTo.empty())
+    clOptionsConfig->profileActionsTo(profileTo);
+  for (const auto &loc : O->get<&MLIR_LogActionsFilter>())
+    clOptionsConfig->applyLocationFilter(loc);
+  if (O->get<&MLIR_EnableDebuggerHook>())
+    clOptionsConfig->enableDebuggerActionHook(true);
+
+  return *clOptionsConfig;
+}
 
 class InstallDebugHandler::Impl {
 public:
@@ -86,12 +85,13 @@ public:
     if (config.getLogActionsTo().empty() &&
         config.getProfileActionsTo().empty() &&
         !config.isDebuggerActionHookEnabled()) {
-      if (tracing::DebugCounter::isActivated())
-        context.registerActionHandler(tracing::DebugCounter());
+      if (tracing::DebugCounter::isActivated(context.getOptionsContext()))
+        context.registerActionHandler(
+            tracing::DebugCounter(context.getOptionsContext()));
       return;
     }
     errs() << "ExecutionContext registered on the context";
-    if (tracing::DebugCounter::isActivated())
+    if (tracing::DebugCounter::isActivated(context.getOptionsContext()))
       emitError(UnknownLoc::get(&context),
                 "Debug counters are incompatible with --log-actions-to and "
                 "--mlir-enable-debugger-hook options and are disabled");

@@ -29,7 +29,7 @@
 using namespace llvm;
 
 TEST(Local, RecursivelyDeleteDeadPHINodes) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   IRBuilder<> builder(C);
 
@@ -38,7 +38,7 @@ TEST(Local, RecursivelyDeleteDeadPHINodes) {
   BasicBlock *bb1 = BasicBlock::Create(C);
 
   builder.SetInsertPoint(bb0);
-  PHINode    *phi = builder.CreatePHI(Type::getInt32Ty(C), 2);
+  PHINode *phi = builder.CreatePHI(Type::getInt32Ty(C), 2);
   CondBrInst *br0 = builder.CreateCondBr(builder.getTrue(), bb0, bb1);
 
   builder.SetInsertPoint(bb1);
@@ -72,7 +72,7 @@ TEST(Local, RecursivelyDeleteDeadPHINodes) {
 }
 
 TEST(Local, RemoveDuplicatePHINodes) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   IRBuilder<> B(C);
 
   std::unique_ptr<Function> F(
@@ -117,7 +117,7 @@ static std::unique_ptr<Module> parseIR(LLVMContext &C, const char *IR) {
 }
 
 TEST(Local, ReplaceDbgDeclare) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   // Original C source to get debug info for a local variable:
   // void f() { int x; }
   std::unique_ptr<Module> M = parseIR(C,
@@ -167,9 +167,9 @@ TEST(Local, ReplaceDbgDeclare) {
 }
 
 /// Build the dominator tree for the function and run the Test.
-static void runWithDomTree(
-    Module &M, StringRef FuncName,
-    function_ref<void(Function &F, DominatorTree *DT)> Test) {
+static void
+runWithDomTree(Module &M, StringRef FuncName,
+               function_ref<void(Function &F, DominatorTree *DT)> Test) {
   auto *F = M.getFunction(FuncName);
   ASSERT_NE(F, nullptr) << "Could not find " << FuncName;
   // Compute the dominator tree for the function.
@@ -178,7 +178,7 @@ static void runWithDomTree(
 }
 
 TEST(Local, MergeBasicBlockIntoOnlyPred) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   auto resetIR = [&]() {
     M = parseIR(C,
@@ -334,7 +334,7 @@ TEST(Local, MergeBasicBlockIntoOnlyPred) {
 }
 
 TEST(Local, ConstantFoldTerminator) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M = parseIR(C,
                                       R"(
@@ -486,7 +486,7 @@ TEST(Local, ConstantFoldTerminator) {
 }
 
 struct SalvageDebugInfoTest : ::testing::Test {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   Function *F = nullptr;
 
@@ -585,7 +585,7 @@ TEST_F(SalvageDebugInfoTest, RecursiveBlockSimplification) {
 }
 
 TEST(Local, ChangeToUnreachable) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M = parseIR(Ctx,
                                       R"(
@@ -634,7 +634,7 @@ TEST(Local, ChangeToUnreachable) {
 
 TEST(Local, FindDbgRecords) {
   // DbgRecord copy of the FindDbgUsers test above.
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx,
                                       R"(
   define dso_local void @fun(ptr %a) #0 !dbg !11 {
@@ -696,7 +696,7 @@ TEST(Local, SalvageDbgAssignAddress) {
   // than kill it.
   //
   // assignment-tracking/salvage-value.ll also covers this path end to end.
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx,
                                       R"(
   define dso_local void @fun(ptr %a) !dbg !11 {
@@ -755,7 +755,7 @@ TEST(Local, SalvageDbgAssignAddress) {
 
 TEST(Local, ReplaceAllDbgUsesWith) {
   using namespace llvm::dwarf;
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   // Note: The datalayout simulates Darwin/x86_64.
   std::unique_ptr<Module> M = parseIR(Ctx,
@@ -908,42 +908,42 @@ TEST(Local, ReplaceAllDbgUsesWith) {
   };
 
   // Case 1: The original expr is empty, so no deref is needed.
-  EXPECT_TRUE(hasADbgVal({DW_OP_LLVM_convert, 32, DW_ATE_signed,
-                         DW_OP_LLVM_convert, 64, DW_ATE_signed,
-                         DW_OP_stack_value}));
+  EXPECT_TRUE(
+      hasADbgVal({DW_OP_LLVM_convert, 32, DW_ATE_signed, DW_OP_LLVM_convert, 64,
+                  DW_ATE_signed, DW_OP_stack_value}));
 
   // Case 2: Perform an address calculation with the original expr, deref it,
   // then sign-extend the result.
-  EXPECT_TRUE(hasADbgVal({DW_OP_lit0, DW_OP_mul, DW_OP_deref,
-                         DW_OP_LLVM_convert, 32, DW_ATE_signed,
-                         DW_OP_LLVM_convert, 64, DW_ATE_signed,
-                         DW_OP_stack_value}));
+  EXPECT_TRUE(
+      hasADbgVal({DW_OP_lit0, DW_OP_mul, DW_OP_deref, DW_OP_LLVM_convert, 32,
+                  DW_ATE_signed, DW_OP_LLVM_convert, 64, DW_ATE_signed,
+                  DW_OP_stack_value}));
 
   // Case 3: Insert the sign-extension logic before the DW_OP_stack_value.
-  EXPECT_TRUE(hasADbgVal({DW_OP_lit0, DW_OP_mul, DW_OP_LLVM_convert, 32,
-                         DW_ATE_signed, DW_OP_LLVM_convert, 64, DW_ATE_signed,
-                         DW_OP_stack_value}));
+  EXPECT_TRUE(
+      hasADbgVal({DW_OP_lit0, DW_OP_mul, DW_OP_LLVM_convert, 32, DW_ATE_signed,
+                  DW_OP_LLVM_convert, 64, DW_ATE_signed, DW_OP_stack_value}));
 
   // Cases 4-6: Just like cases 1-3, but preserve the fragment at the end.
   EXPECT_TRUE(hasADbgVal({DW_OP_LLVM_convert, 32, DW_ATE_signed,
-                         DW_OP_LLVM_convert, 64, DW_ATE_signed,
-                         DW_OP_stack_value, DW_OP_LLVM_fragment, 0, 8}));
+                          DW_OP_LLVM_convert, 64, DW_ATE_signed,
+                          DW_OP_stack_value, DW_OP_LLVM_fragment, 0, 8}));
 
-  EXPECT_TRUE(hasADbgVal({DW_OP_lit0, DW_OP_mul, DW_OP_deref,
-                         DW_OP_LLVM_convert, 32, DW_ATE_signed,
-                         DW_OP_LLVM_convert, 64, DW_ATE_signed,
-                         DW_OP_stack_value, DW_OP_LLVM_fragment, 0, 8}));
+  EXPECT_TRUE(
+      hasADbgVal({DW_OP_lit0, DW_OP_mul, DW_OP_deref, DW_OP_LLVM_convert, 32,
+                  DW_ATE_signed, DW_OP_LLVM_convert, 64, DW_ATE_signed,
+                  DW_OP_stack_value, DW_OP_LLVM_fragment, 0, 8}));
 
   EXPECT_TRUE(hasADbgVal({DW_OP_lit0, DW_OP_mul, DW_OP_LLVM_convert, 32,
-                         DW_ATE_signed, DW_OP_LLVM_convert, 64, DW_ATE_signed,
-                         DW_OP_stack_value, DW_OP_LLVM_fragment, 0, 8}));
+                          DW_ATE_signed, DW_OP_LLVM_convert, 64, DW_ATE_signed,
+                          DW_OP_stack_value, DW_OP_LLVM_fragment, 0, 8}));
 
   verifyModule(*M, &errs(), &BrokenDebugInfo);
   ASSERT_FALSE(BrokenDebugInfo);
 }
 
 TEST(Local, RemoveUnreachableBlocks) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M = parseIR(C,
                                       R"(
@@ -1071,7 +1071,7 @@ TEST(Local, RemoveUnreachableBlocks) {
 }
 
 TEST(Local, SimplifyCFGWithNullAC) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M = parseIR(Ctx, R"(
     declare void @true_path()
@@ -1119,12 +1119,16 @@ TEST(Local, SimplifyCFGWithNullAC) {
   DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Eager);
 
   // %test.bb is expected to be simplified by FoldCondBranchOnPHI.
-  EXPECT_TRUE(simplifyCFG(TestBB, TTI,
-                          RequireAndPreserveDomTree ? &DTU : nullptr, Options));
+  EXPECT_TRUE(simplifyCFG(
+      TestBB, TTI,
+      getRequireAndPreserveDomTree(F.getContext().getOptionsContext())
+          ? &DTU
+          : nullptr,
+      Options));
 }
 
 TEST(LocalTest, TargetTypeInfoHasNoReplacementProperty) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SmallVector<unsigned, 3> Ints = {};
   auto *TT = llvm::TargetExtType::get(Ctx, "dx.RawBuffer", {}, Ints);
 
@@ -1132,28 +1136,26 @@ TEST(LocalTest, TargetTypeInfoHasNoReplacementProperty) {
 }
 
 TEST(Local, CanReplaceOperandWithVariable) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module M("test_module", Ctx);
   IRBuilder<> B(Ctx);
 
-  FunctionType *FnType =
-    FunctionType::get(Type::getVoidTy(Ctx), {}, false);
+  FunctionType *FnType = FunctionType::get(Type::getVoidTy(Ctx), {}, false);
 
   FunctionType *VarArgFnType =
-    FunctionType::get(Type::getVoidTy(Ctx), {B.getInt32Ty()}, true);
+      FunctionType::get(Type::getVoidTy(Ctx), {B.getInt32Ty()}, true);
 
-  Function *TestBody = Function::Create(FnType, GlobalValue::ExternalLinkage,
-                                        0, "", &M);
+  Function *TestBody =
+      Function::Create(FnType, GlobalValue::ExternalLinkage, 0, "", &M);
 
   BasicBlock *BB0 = BasicBlock::Create(Ctx, "", TestBody);
   B.SetInsertPoint(BB0);
 
   FunctionCallee Intrin = M.getOrInsertFunction("llvm.foo", FnType);
   FunctionCallee Func = M.getOrInsertFunction("foo", FnType);
-  FunctionCallee VarArgFunc
-    = M.getOrInsertFunction("foo.vararg", VarArgFnType);
-  FunctionCallee VarArgIntrin
-    = M.getOrInsertFunction("llvm.foo.vararg", VarArgFnType);
+  FunctionCallee VarArgFunc = M.getOrInsertFunction("foo.vararg", VarArgFnType);
+  FunctionCallee VarArgIntrin =
+      M.getOrInsertFunction("llvm.foo.vararg", VarArgFnType);
 
   auto *CallToIntrin = B.CreateCall(Intrin);
   auto *CallToFunc = B.CreateCall(Func);
@@ -1164,15 +1166,15 @@ TEST(Local, CanReplaceOperandWithVariable) {
 
   // That it's invalid to replace an argument in the variadic argument list for
   // an intrinsic, but OK for a normal function.
-  auto *CallToVarArgFunc = B.CreateCall(
-    VarArgFunc, {B.getInt32(0), B.getInt32(1), B.getInt32(2)});
+  auto *CallToVarArgFunc =
+      B.CreateCall(VarArgFunc, {B.getInt32(0), B.getInt32(1), B.getInt32(2)});
   EXPECT_TRUE(canReplaceOperandWithVariable(CallToVarArgFunc, 0));
   EXPECT_TRUE(canReplaceOperandWithVariable(CallToVarArgFunc, 1));
   EXPECT_TRUE(canReplaceOperandWithVariable(CallToVarArgFunc, 2));
   EXPECT_TRUE(canReplaceOperandWithVariable(CallToVarArgFunc, 3));
 
-  auto *CallToVarArgIntrin = B.CreateCall(
-    VarArgIntrin, {B.getInt32(0), B.getInt32(1), B.getInt32(2)});
+  auto *CallToVarArgIntrin =
+      B.CreateCall(VarArgIntrin, {B.getInt32(0), B.getInt32(1), B.getInt32(2)});
   EXPECT_TRUE(canReplaceOperandWithVariable(CallToVarArgIntrin, 0));
   EXPECT_FALSE(canReplaceOperandWithVariable(CallToVarArgIntrin, 1));
   EXPECT_FALSE(canReplaceOperandWithVariable(CallToVarArgIntrin, 2));
@@ -1192,7 +1194,7 @@ TEST(Local, CanReplaceOperandWithVariable) {
 }
 
 TEST(Local, ExpressionForConstant) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module M("test_module", Context);
   DIBuilder DIB(M);
   DIExpression *Expr = nullptr;
@@ -1311,7 +1313,7 @@ TEST(Local, ExpressionForConstant) {
 }
 
 TEST(Local, ReplaceDbgVariableRecord) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   // Test that RAUW also replaces the operands of DbgVariableRecord objects,
   // i.e. non-instruction stored debugging information.

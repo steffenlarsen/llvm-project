@@ -14,6 +14,7 @@
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/FormatAdapters.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 using namespace llvm::logicalview;
@@ -299,8 +300,9 @@ Error LVBinaryReader::loadGenericTargetInfo(StringRef TripleName,
   MAI.reset(AsmInfo);
 
   // Target subtargets.
-  MCSubtargetInfo *SubtargetInfo(
-      TheTarget->createMCSubtargetInfo(TheTriple, TheCPU, TheFeatures));
+  MCSubtargetInfo *SubtargetInfo(TheTarget->createMCSubtargetInfo(
+      TheTriple, TheCPU, TheFeatures,
+      /*Ctx=*/llvm::clv2::defaultOptionsContext()));
   if (!SubtargetInfo)
     return createStringError(errc::invalid_argument,
                              "no subtarget info for target " + TripleName);

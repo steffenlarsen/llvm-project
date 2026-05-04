@@ -31,7 +31,7 @@ static std::unique_ptr<Module> parseIR(LLVMContext &C, const char *IR) {
 }
 
 TEST(LoadsTest, FindAvailableLoadedValueSameBasePtrConstantOffsetsNullAA) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C,
                                       R"IR(
 target datalayout = "p:64:64:64:32"
@@ -59,8 +59,8 @@ entry:
   auto *LI = dyn_cast<LoadInst>(Inst);
   ASSERT_TRUE(LI);
   BasicBlock::iterator BBI(LI);
-  Value *Loaded = FindAvailableLoadedValue(
-      LI, LI->getParent(), BBI, 0, nullptr, nullptr);
+  Value *Loaded =
+      FindAvailableLoadedValue(LI, LI->getParent(), BBI, 0, nullptr, nullptr);
   ASSERT_TRUE(Loaded);
   auto *CI = dyn_cast<ConstantInt>(Loaded);
   ASSERT_TRUE(CI);
@@ -71,7 +71,7 @@ entry:
 // address spaces with different index widths (here AS=0 has 64-bit pointers and
 // AS=5 has 32-bit pointers)
 TEST(LoadsTest, FindAvailableLoadedValueMixedAddrSpaceNullAA) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 target datalayout = "e-p:64:64-p5:32:32-i64:64-n32:64-S32-A5"
 
@@ -97,7 +97,7 @@ entry:
 }
 
 TEST(LoadsTest, CanReplacePointersIfEqual) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C,
                                       R"IR(
 @y = constant [1 x i32] zeroinitializer, align 4
@@ -158,7 +158,7 @@ define void @f(ptr %p1, ptr %p2, i64 %i, ptr addrspace(1) %p1as1) {
 }
 
 TEST(LoadsTest, IsReadOnlyLoop) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C,
                                       R"IR(
 define i64 @f1() {

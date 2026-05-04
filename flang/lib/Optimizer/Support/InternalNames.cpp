@@ -11,16 +11,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "flang/Optimizer/Support/InternalNames.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Optimizer/Dialect/FIRType.h"
 #include "mlir/IR/Diagnostics.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include <optional>
 #include <regex>
-
-static llvm::cl::opt<std::string> mainEntryName(
-    "main-entry-name",
-    llvm::cl::desc("override the name of the default PROGRAM entry (may be "
-                   "helpful for using other runtimes)"));
 
 constexpr std::int64_t badValue = -1;
 
@@ -236,9 +232,12 @@ fir::NameUniquer::doNamelistGroup(llvm::ArrayRef<llvm::StringRef> modules,
       .append(toLower(name));
 }
 
-llvm::StringRef fir::NameUniquer::doProgramEntry() {
-  if (mainEntryName.size())
-    return mainEntryName;
+std::string
+fir::NameUniquer::doProgramEntry(const llvm::clv2::OptionsContext &optsCtx) {
+  std::string entry = llvm::clv2::getOptValOr<&llvm::clv2::FLANG_MainEntryName>(
+      optsCtx, std::string{});
+  if (!entry.empty())
+    return entry;
   return "_QQmain";
 }
 

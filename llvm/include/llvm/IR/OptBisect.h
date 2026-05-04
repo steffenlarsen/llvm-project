@@ -36,10 +36,6 @@ public:
 
   /// isEnabled() should return true before calling shouldRunPass().
   virtual bool isEnabled() const { return false; }
-
-  /// Reset the pass gate to its initial configuration, before any command line
-  /// options were parsed.
-  virtual void reset() {}
 };
 
 /// This class implements a mechanism to disable passes and individual
@@ -76,11 +72,6 @@ public:
     return !BisectIntervals.empty() || !DisabledPasses.empty();
   }
 
-  void reset() override {
-    clearIntervals();
-    DisabledPasses.clear();
-  }
-
   /// Set intervals directly from an IntervalList.
   void setIntervals(IntegerInclusiveIntervalUtils::IntervalList Intervals) {
     BisectIntervals = std::move(Intervals);
@@ -96,7 +87,11 @@ public:
   /// to be disabled. Multiple pass names can be provided with comma separation.
   void setDisabled(StringRef Pass) { DisabledPasses.insert(Pass); }
 
+  void setVerbose(bool V) { Verbose = V; }
+  bool isVerbose() const { return Verbose; }
+
 private:
+  bool Verbose = true;
   mutable int LastBisectNum = 0;
   IntegerInclusiveIntervalUtils::IntervalList BisectIntervals;
 
@@ -106,6 +101,11 @@ private:
 /// Singleton instance of the OptPassGate class, so multiple pass managers don't
 /// need to coordinate their uses of OptBisect and OptDisable.
 LLVM_ABI OptPassGate &getGlobalPassGate();
+
+/// Initialize the global OptBisect singleton from clv2-parsed IR options.
+/// Called by ir_opts::applyIROptions() to configure opt-bisect-limit,
+/// opt-bisect intervals, and opt-disable passes.
+/// Declared in IROptionsOptInfos.h; defined in OptBisect.cpp.
 
 } // end namespace llvm
 

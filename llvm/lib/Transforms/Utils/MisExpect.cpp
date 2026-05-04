@@ -31,13 +31,15 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/IR/DiagnosticInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/Support/BranchProbability.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 #include <algorithm>
 #include <cstdint>
 #include <functional>
@@ -50,24 +52,27 @@ using namespace misexpect;
 
 // Command line option to enable/disable the warning when profile data suggests
 // a mismatch with the use of the llvm.expect intrinsic
-static cl::opt<bool> PGOWarnMisExpect(
-    "pgo-warn-misexpect", cl::init(false), cl::Hidden,
-    cl::desc("Use this option to turn on/off "
-             "warnings about incorrect usage of llvm.expect intrinsics."));
-
-// Command line option for setting the diagnostic tolerance threshold
-static cl::opt<uint32_t> MisExpectTolerance(
-    "misexpect-tolerance", cl::init(0),
-    cl::desc("Prevents emitting diagnostics when profile counts are "
-             "within N% of the threshold.."));
-
-static bool isMisExpectDiagEnabled(const LLVMContext &Ctx) {
-  return PGOWarnMisExpect || Ctx.getMisExpectWarningRequested();
+static bool getPGOWarnMisExpect(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_PGOWarnMisExpect>(
+      F.getContext().getOptionsContext(), false);
 }
 
-static uint32_t getMisExpectTolerance(const LLVMContext &Ctx) {
-  return std::max(static_cast<uint32_t>(MisExpectTolerance),
-                  Ctx.getDiagnosticsMisExpectTolerance());
+// Command line option for setting the diagnostic tolerance threshold
+static unsigned getMisExpectToleranceOpt(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_MisExpectTolerance>(
+      F.getContext().getOptionsContext(), 0);
+}
+
+static bool isMisExpectDiagEnabled(const Function &F) {
+  return getPGOWarnMisExpect(F) ||
+         F.getContext().getMisExpectWarningRequested();
+}
+
+static uint32_t getMisExpectTolerance(const Function &F) {
+  return std::max(static_cast<uint32_t>(getMisExpectToleranceOpt(F)),
+                  F.getContext().getDiagnosticsMisExpectTolerance());
 }
 
 static const Instruction *getInstCondition(const Instruction *I) {
@@ -101,7 +106,7 @@ static void emitMisexpectDiagnostic(const Instruction *I, LLVMContext &Ctx,
       "Annotation was correct on {0} of profiled executions.",
       PerString);
   const Instruction *Cond = getInstCondition(I);
-  if (isMisExpectDiagEnabled(Ctx))
+  if (isMisExpectDiagEnabled(*I->getFunction()))
     Ctx.diagnose(DiagnosticInfoMisExpect(Cond, Twine(PerString)));
   OptimizationRemarkEmitter ORE(I->getParent()->getParent());
   ORE.emit(OptimizationRemark(DEBUG_TYPE, "misexpect", Cond) << RemStr.str());
@@ -149,7 +154,7 @@ void misexpect::verifyMisExpect(const Instruction &I,
   uint64_t ScaledThreshold = LikelyProbablilty.scale(RealWeightsTotal);
 
   // clamp tolerance range to [0, 100)
-  uint32_t Tolerance = getMisExpectTolerance(I.getContext());
+  uint32_t Tolerance = getMisExpectTolerance(*I.getFunction());
   Tolerance = std::clamp(Tolerance, 0u, 99u);
 
   // Allow users to relax checking by N%  i.e., if they use a 5% tolerance,

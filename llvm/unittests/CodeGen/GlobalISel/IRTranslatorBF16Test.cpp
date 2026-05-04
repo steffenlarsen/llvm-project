@@ -32,7 +32,7 @@ using namespace llvm;
 
 namespace {
 struct AArch64IRTranslatorTest : public ::testing::Test {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
 public:
   AArch64IRTranslatorTest() {}

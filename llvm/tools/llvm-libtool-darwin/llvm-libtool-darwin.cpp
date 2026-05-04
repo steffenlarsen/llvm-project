@@ -22,7 +22,7 @@
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/Option.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/LLVMDriver.h"
 #include "llvm/Support/LineIterator.h"
 #include "llvm/Support/TargetSelect.h"
@@ -736,7 +736,7 @@ int llvm_libtool_darwin_main(int Argc, char **Argv, const llvm::ToolContext &) {
   llvm::InitializeAllTargetMCs();
   llvm::InitializeAllAsmParsers();
 
-  LLVMContext LLVMCtx;
+  LLVMContext LLVMCtx(llvm::clv2::defaultOptionsContext());
   Config C = *ConfigOrErr;
   switch (LibraryOperation) {
   case Operation::None:

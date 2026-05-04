@@ -13,12 +13,13 @@
 
 #include "polly/MaximalStaticExpansion.h"
 #include "polly/DependenceInfo.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopInfo.h"
 #include "polly/Support/ISLTools.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "isl/isl-noexceptions.h"
 #include "isl/union_map.h"
 #include <cassert>
@@ -32,11 +33,6 @@ using namespace polly;
 #define DEBUG_TYPE "polly-mse"
 
 namespace {
-
-static cl::opt<bool>
-    PollyPrintMSE("polly-print-mse",
-                  cl::desc("Polly - Print Maximal static expansion of SCoP"),
-                  cl::cat(PollyCategory));
 
 #ifndef NDEBUG
 /// Whether a dimension of a set is bounded (lower and upper) by a constant,
@@ -457,6 +453,11 @@ void polly::runMaximalStaticExpansion(Scop &S, DependenceAnalysis::Result &DI) {
 
   std::unique_ptr<MaximalStaticExpansionImpl> Impl =
       runMaximalStaticExpansionImpl(S, ORE, D);
+
+  bool PollyPrintMSE = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext()))
+    PollyPrintMSE = Opts->get<&llvm::clv2::POLLY_PrintMse>();
 
   if (PollyPrintMSE) {
     outs()

@@ -45,7 +45,7 @@ void runChecks(
     TargetMachine *TM, LoongArchInstrInfo *II, const StringRef InputIRSnippet,
     const StringRef InputMIRSnippet,
     std::function<void(LoongArchInstrInfo &, MachineFunction &)> Checks) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   auto MIRString = "--- |\n"
                    "  declare void @sizes()\n" +

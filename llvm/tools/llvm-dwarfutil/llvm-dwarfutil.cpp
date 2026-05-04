@@ -11,7 +11,6 @@
 #include "Options.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFVerifier.h"
-#include "llvm/MC/MCTargetOptionsCommandFlags.h"
 #include "llvm/ObjCopy/CommonConfig.h"
 #include "llvm/ObjCopy/ConfigManager.h"
 #include "llvm/ObjCopy/ObjCopy.h"
@@ -19,7 +18,7 @@
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/Option.h"
 #include "llvm/Support/CRC.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/InitLLVM.h"
@@ -65,8 +64,6 @@ namespace llvm {
 namespace dwarfutil {
 
 std::string ToolName;
-
-static mc::RegisterMCTargetOptionsFlags MOF;
 
 static Error validateAndSetOptions(opt::InputArgList &Args, Options &Options) {
   auto UnknownArgs = Args.filtered(OPT_UNKNOWN);

@@ -14,7 +14,9 @@
 #include "llvm/IR/ModuleSummaryIndex.h"
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
@@ -26,20 +28,13 @@ STATISTIC(ReadOnlyLiveGVars,
 STATISTIC(WriteOnlyLiveGVars,
           "Number of live global variables marked write only");
 
-namespace llvm {
-cl::opt<bool>
-    AlwaysRenamePromotedLocals("always-rename-promoted-locals", cl::init(true),
-                               cl::Hidden,
-                               cl::desc("Always rename promoted locals."));
-} // namespace llvm
+static bool getPropagateAttrs(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::IR_PropagateAttrs>(Ctx);
+}
 
-static cl::opt<bool> PropagateAttrs("propagate-attrs", cl::init(true),
-                                    cl::Hidden,
-                                    cl::desc("Propagate attributes in index"));
-
-static cl::opt<bool> ImportConstantsWithRefs(
-    "import-constants-with-refs", cl::init(true), cl::Hidden,
-    cl::desc("Import constant global variables with references"));
+static bool getImportConstantsWithRefs(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::IR_ImportConstantsWithRefs>(Ctx);
+}
 
 FunctionSummary FunctionSummary::ExternalNode =
     FunctionSummary::makeDummyFunctionSummary(
@@ -291,8 +286,9 @@ propagateAttributesToRefs(GlobalValueSummary *S,
 // Internalization itself happens in the backend after import is finished
 // See internalizeGVsAfterImport.
 void ModuleSummaryIndex::propagateAttributes(
-    const DenseSet<GlobalValue::GUID> &GUIDPreservedSymbols) {
-  if (!PropagateAttrs)
+    const DenseSet<GlobalValue::GUID> &GUIDPreservedSymbols,
+    const clv2::OptionsContext &Ctx) {
+  if (!getPropagateAttrs(Ctx))
     return;
   DenseSet<ValueInfo> MarkedNonReadWriteOnly;
   for (auto &P : *this) {
@@ -328,7 +324,7 @@ void ModuleSummaryIndex::propagateAttributes(
         // Here we intentionally pass S.get() not GVS, because S could be
         // an alias. We don't analyze references here, because we have to
         // know exactly if GV is readonly to do so.
-        if (!canImportGlobalVar(S.get(), /* AnalyzeRefs */ false) ||
+        if (!canImportGlobalVar(S.get(), /* AnalyzeRefs */ false, Ctx) ||
             GUIDPreservedSymbols.count(P.first)) {
           GVS->setReadOnly(false);
           GVS->setWriteOnly(false);
@@ -360,16 +356,17 @@ void ModuleSummaryIndex::propagateAttributes(
           }
 }
 
-bool ModuleSummaryIndex::canImportGlobalVar(const GlobalValueSummary *S,
-                                            bool AnalyzeRefs) const {
+bool ModuleSummaryIndex::canImportGlobalVar(
+    const GlobalValueSummary *S, bool AnalyzeRefs,
+    const clv2::OptionsContext &Ctx) const {
   bool CanImportDecl;
-  return canImportGlobalVar(S, AnalyzeRefs, CanImportDecl);
+  return canImportGlobalVar(S, AnalyzeRefs, CanImportDecl, Ctx);
 }
 
-bool ModuleSummaryIndex::canImportGlobalVar(const GlobalValueSummary *S,
-                                            bool AnalyzeRefs,
-                                            bool &CanImportDecl) const {
-  auto HasRefsPreventingImport = [this](const GlobalVarSummary *GVS) {
+bool ModuleSummaryIndex::canImportGlobalVar(
+    const GlobalValueSummary *S, bool AnalyzeRefs, bool &CanImportDecl,
+    const clv2::OptionsContext &Ctx) const {
+  auto HasRefsPreventingImport = [this, &Ctx](const GlobalVarSummary *GVS) {
     // We don't analyze GV references during attribute propagation, so
     // GV with non-trivial initializer can be marked either read or
     // write-only.
@@ -384,7 +381,7 @@ bool ModuleSummaryIndex::canImportGlobalVar(const GlobalValueSummary *S,
     // c) Link error (external declaration with internal definition).
     // However we do not promote objects referenced by writeonly GV
     // initializer by means of converting it to 'zeroinitializer'
-    return !(ImportConstantsWithRefs && GVS->isConstant()) &&
+    return !(getImportConstantsWithRefs(Ctx) && GVS->isConstant()) &&
            !isReadOnly(GVS) && !isWriteOnly(GVS) && GVS->refs().size();
   };
   auto *GVS = cast<GlobalVarSummary>(S->getBaseObject());

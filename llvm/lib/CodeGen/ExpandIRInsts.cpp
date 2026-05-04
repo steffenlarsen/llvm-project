@@ -33,12 +33,14 @@
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/SimplifyQuery.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/RuntimeLibcallUtil.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instruction.h"
@@ -51,8 +53,9 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/IntegerDivision.h"
@@ -62,21 +65,17 @@
 
 using namespace llvm;
 
-namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
+static unsigned getExpandFpConvertBits(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::CGPassCore1Reg,
+                           &clv2::CGPASS_ExpandFpConvertBits>(
+      Ctx, llvm::IntegerType::MAX_INT_BITS);
 }
 
-static cl::opt<unsigned>
-    ExpandFpConvertBits("expand-fp-convert-bits", cl::Hidden,
-                        cl::init(IntegerType::MAX_INT_BITS),
-                        cl::desc("fp convert instructions on integers with "
-                                 "more than <N> bits are expanded."));
-
-static cl::opt<unsigned>
-    ExpandDivRemBits("expand-div-rem-bits", cl::Hidden,
-                     cl::init(IntegerType::MAX_INT_BITS),
-                     cl::desc("div and rem instructions on integers with "
-                              "more than <N> bits are expanded."));
+static unsigned getExpandDivRemBits(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::CGPassCore1Reg,
+                           &clv2::CGPASS_ExpandDivRemBits>(
+      Ctx, llvm::IntegerType::MAX_INT_BITS);
+}
 
 static bool isConstantPowerOfTwo(Value *V, bool SignedOp) {
   auto *C = dyn_cast<ConstantInt>(V);
@@ -733,11 +732,12 @@ static void expandFPToI(Instruction *FPToI, bool IsSaturating, bool IsSigned) {
         BiasedExp, ConstantInt::get(FloatIntTy, SaturatingBiasedExp));
     Value *CondBrSat = Builder.CreateCondBr(Cmp3, SaturateBB, CheckExpSizeBB);
     // Saturation is considered an unlikely event.
-    applyProfMetadataIfEnabled(CondBrSat, [&](Instruction *Inst) {
-      Inst->setMetadata(
-          LLVMContext::MD_prof,
-          MDBuilder(Inst->getContext()).createUnlikelyBranchWeights());
-    });
+    applyProfMetadataIfEnabled(
+        Builder.getContext(), CondBrSat, [&](Instruction *Inst) {
+          Inst->setMetadata(
+              LLVMContext::MD_prof,
+              MDBuilder(Inst->getContext()).createUnlikelyBranchWeights());
+        });
 
     // saturate:
     Builder.SetInsertPoint(SaturateBB);
@@ -764,9 +764,10 @@ static void expandFPToI(Instruction *FPToI, bool IsSaturating, bool IsSigned) {
   // so we mark the branch weights as unknown.
   Value *CondBr2 =
       Builder.CreateCondBr(ExpSmallerMantissaWidth, ExpSmallBB, ExpLargeBB);
-  applyProfMetadataIfEnabled(CondBr2, [&](Instruction *Inst) {
-    setExplicitlyUnknownBranchWeightsIfProfiled(*Inst, DEBUG_TYPE, F);
-  });
+  applyProfMetadataIfEnabled(
+      Builder.getContext(), CondBr2, [&](Instruction *Inst) {
+        setExplicitlyUnknownBranchWeightsIfProfiled(*Inst, DEBUG_TYPE, F);
+      });
 
   // exp.small:
   Builder.SetInsertPoint(ExpSmallBB);
@@ -958,11 +959,12 @@ static void expandIToFP(Instruction *IToFP) {
   // is the unlikely path.
   Value *Cmp = Builder.CreateICmpEQ(IntVal, ConstantInt::getSigned(IntTy, 0));
   Value *CondBrEntry = Builder.CreateCondBr(Cmp, End, IfEnd);
-  applyProfMetadataIfEnabled(CondBrEntry, [&](Instruction *Inst) {
-    Inst->setMetadata(
-        LLVMContext::MD_prof,
-        MDBuilder(Inst->getContext()).createUnlikelyBranchWeights());
-  });
+  applyProfMetadataIfEnabled(
+      Builder.getContext(), CondBrEntry, [&](Instruction *Inst) {
+        Inst->setMetadata(
+            LLVMContext::MD_prof,
+            MDBuilder(Inst->getContext()).createUnlikelyBranchWeights());
+      });
 
   // if.end:
   Builder.SetInsertPoint(IfEnd);
@@ -983,11 +985,12 @@ static void expandIToFP(Instruction *IToFP) {
   // carry-out at the most significant bit, necessitating an increment of the
   // exponent. This is rare case, so the True path is mared as likely.
   Value *CondBrIfEnd = Builder.CreateCondBr(Cmp3, IfThen4, IfElse);
-  applyProfMetadataIfEnabled(CondBrIfEnd, [&](Instruction *Inst) {
-    Inst->setMetadata(
-        LLVMContext::MD_prof,
-        MDBuilder(Inst->getContext()).createLikelyBranchWeights());
-  });
+  applyProfMetadataIfEnabled(
+      Builder.getContext(), CondBrIfEnd, [&](Instruction *Inst) {
+        Inst->setMetadata(
+            LLVMContext::MD_prof,
+            MDBuilder(Inst->getContext()).createLikelyBranchWeights());
+      });
 
   // if.then4:
   Builder.SetInsertPoint(IfThen4);
@@ -998,7 +1001,7 @@ static void expandIToFP(Instruction *IToFP) {
   // default case first (SwDefault), followed by each explicit case in the
   // order they were added (SwBB, then SwEpilog). Because the following cases
   // are rare, the defalut case is given a likely weight.
-  if (!ProfcheckDisableMetadataFixes) {
+  if (!getProfcheckDisableMetadataFixes(SI->getContext())) {
     SI->setMetadata(
         LLVMContext::MD_prof,
         MDBuilder(SI->getContext())
@@ -1062,11 +1065,12 @@ static void expandIToFP(Instruction *IToFP) {
   // Rounding usually keeps the exponent within its current magnitude and
   // overflow is rare. The False path is unlikely to be taken.
   Value *CondBrSwEpilog = Builder.CreateCondBr(PosOrNeg, IfEnd26, IfThen20);
-  applyProfMetadataIfEnabled(CondBrSwEpilog, [&](Instruction *Inst) {
-    Inst->setMetadata(
-        LLVMContext::MD_prof,
-        MDBuilder(Inst->getContext()).createLikelyBranchWeights());
-  });
+  applyProfMetadataIfEnabled(
+      Builder.getContext(), CondBrSwEpilog, [&](Instruction *Inst) {
+        Inst->setMetadata(
+            LLVMContext::MD_prof,
+            MDBuilder(Inst->getContext()).createLikelyBranchWeights());
+      });
 
   // if.then20
   Builder.SetInsertPoint(IfThen20);
@@ -1208,11 +1212,12 @@ static void expandIToFP(Instruction *IToFP) {
     }
     A4 = Builder.CreateSelect(Overflow, Inf, A4);
     // We consider overflow to be an unlikely case.
-    applyProfMetadataIfEnabled(A4, [&](Instruction *Inst) {
-      Inst->setMetadata(
-          LLVMContext::MD_prof,
-          MDBuilder(Inst->getContext()).createUnlikelyBranchWeights());
-    });
+    applyProfMetadataIfEnabled(
+        Builder.getContext(), A4, [&](Instruction *Inst) {
+          Inst->setMetadata(
+              LLVMContext::MD_prof,
+              MDBuilder(Inst->getContext()).createUnlikelyBranchWeights());
+        });
   }
   Builder.CreateBr(End);
 
@@ -1280,12 +1285,16 @@ static bool runImpl(Function &F, const TargetLowering &TLI,
 
   unsigned MaxLegalFpConvertBitWidth =
       TLI.getMaxLargeFPConvertBitWidthSupported();
-  if (ExpandFpConvertBits != IntegerType::MAX_INT_BITS)
-    MaxLegalFpConvertBitWidth = ExpandFpConvertBits;
+  if (getExpandFpConvertBits(F.getContext().getOptionsContext()) !=
+      llvm::IntegerType::MAX_INT_BITS)
+    MaxLegalFpConvertBitWidth =
+        getExpandFpConvertBits(F.getContext().getOptionsContext());
 
   unsigned MaxLegalDivRemBitWidth = TLI.getMaxDivRemBitWidthSupported();
-  if (ExpandDivRemBits != IntegerType::MAX_INT_BITS)
-    MaxLegalDivRemBitWidth = ExpandDivRemBits;
+  if (getExpandDivRemBits(F.getContext().getOptionsContext()) !=
+      llvm::IntegerType::MAX_INT_BITS)
+    MaxLegalDivRemBitWidth =
+        getExpandDivRemBits(F.getContext().getOptionsContext());
 
   bool DisableExpandLargeFp =
       MaxLegalFpConvertBitWidth >= IntegerType::MAX_INT_BITS;

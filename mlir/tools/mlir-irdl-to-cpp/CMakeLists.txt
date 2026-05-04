@@ -1,3 +1,7 @@
+set(LLVM_LINK_COMPONENTS
+  AllOptions
+  Support
+  )
 add_llvm_executable(mlir-irdl-to-cpp
     mlir-irdl-to-cpp.cpp
   )

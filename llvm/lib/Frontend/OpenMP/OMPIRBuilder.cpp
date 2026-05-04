@@ -28,6 +28,7 @@
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Frontend/Offloading/Utility.h"
 #include "llvm/Frontend/OpenMP/OMPGridValues.h"
+#include "llvm/Frontend/OpenMP/OpenMPOptionsOptInfos.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
@@ -50,11 +51,11 @@
 #include "llvm/IR/ReplaceConstant.h"
 #include "llvm/IR/Value.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/NVVMAttributes.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
@@ -72,21 +73,12 @@
 using namespace llvm;
 using namespace omp;
 
-static cl::opt<bool>
-    OptimisticAttributes("openmp-ir-builder-optimistic-attributes", cl::Hidden,
-                         cl::desc("Use optimistic attributes describing "
-                                  "'as-if' properties of runtime calls."),
-                         cl::init(false));
-
-static cl::opt<double> UnrollThresholdFactor(
-    "openmp-ir-builder-unroll-threshold-factor", cl::Hidden,
-    cl::desc("Factor for the unroll threshold to account for code "
-             "simplifications still taking place"),
-    cl::init(1.5));
-
-static cl::opt<bool> UseDefaultMaxThreads(
-    "openmp-ir-builder-use-default-max-threads", cl::Hidden,
-    cl::desc("Use a default max threads if none is provided."), cl::init(true));
+static double getUnrollThresholdFactor(const Function &F) {
+  if (auto *O =
+          clv2::getView<&clv2::OMPOptsReg>(F.getContext().getOptionsContext()))
+    return O->get<&clv2::OMP_UnrollThresholdFactor>();
+  return 1.5;
+}
 
 #ifndef NDEBUG
 /// Return whether IP1 and IP2 are ambiguous, i.e. that inserting instructions
@@ -732,6 +724,11 @@ void OpenMPIRBuilder::addAttributes(omp::RuntimeFunction FnID, Function &Fn) {
       FnAS = FnAS.addAttributes(Ctx, AS);
     }
   };
+
+  bool OptimisticAttributes = false;
+  if (auto *O =
+          clv2::getView<&clv2::OMPOptsReg>(Fn.getContext().getOptionsContext()))
+    OptimisticAttributes = O->get<&clv2::OMP_OptimisticAttributes>();
 
 #define OMP_ATTRS_SET(VarName, AttrSet) AttributeSet VarName = AttrSet;
 #include "llvm/Frontend/OpenMP/OMPKinds.def"
@@ -1780,7 +1777,7 @@ static void targetParallelCallback(
   Type *PtrTy = OMPIRBuilder->VoidPtr;
 
   // Add alloca for kernel args
-  OpenMPIRBuilder ::InsertPointTy CurrentIP = Builder.saveIP();
+  OpenMPIRBuilder::InsertPointTy CurrentIP = Builder.saveIP();
   Builder.SetInsertPoint(OuterAllocaBB, OuterAllocaBB->getFirstInsertionPt());
   AllocaInst *ArgsAlloca =
       Builder.CreateAlloca(ArrayType::get(PtrTy, NumCapturedVars));
@@ -1998,11 +1995,11 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createParallel(
   if (ArgsInZeroAddressSpace && M.getDataLayout().getAllocaAddrSpace() != 0) {
     // Add additional casts to enforce pointers in zero address space
     TIDAddr = new AddrSpaceCastInst(
-        TIDAddrAlloca, PointerType ::get(M.getContext(), 0), "tid.addr.ascast");
+        TIDAddrAlloca, PointerType::get(M.getContext(), 0), "tid.addr.ascast");
     TIDAddr->insertAfter(TIDAddrAlloca->getIterator());
     ToBeDeleted.push_back(TIDAddr);
     ZeroAddr = new AddrSpaceCastInst(ZeroAddrAlloca,
-                                     PointerType ::get(M.getContext(), 0),
+                                     PointerType::get(M.getContext(), 0),
                                      "zero.addr.ascast");
     ZeroAddr->insertAfter(ZeroAddrAlloca->getIterator());
     ToBeDeleted.push_back(ZeroAddr);
@@ -7788,8 +7785,9 @@ static int32_t computeHeuristicUnrollFactor(CanonicalLoopInfo *CLI) {
 
   // Account for additional optimizations taking place before the LoopUnrollPass
   // would unroll the loop.
-  UP.Threshold *= UnrollThresholdFactor;
-  UP.PartialThreshold *= UnrollThresholdFactor;
+  double UTFactor = getUnrollThresholdFactor(*F);
+  UP.Threshold *= UTFactor;
+  UP.PartialThreshold *= UTFactor;
 
   // Use normal unroll factors even if the rest of the code is optimized for
   // size.
@@ -8574,7 +8572,10 @@ OpenMPIRBuilder::InsertPointTy OpenMPIRBuilder::createTargetInit(
   // If MaxThreads is not set and needs adjustment, select the maximum between
   // the default workgroup size and the MinThreads value.
   int32_t MaxThreadsVal = Attrs.MaxThreads.front();
-  if (MaxThreadsVal < 0 && UseDefaultMaxThreads) {
+  bool DoUseDefaultMaxThreads =
+      clv2::getOptValOrDefault<&clv2::OMP_UseDefaultMaxThreads>(
+          Kernel->getContext().getOptionsContext());
+  if (MaxThreadsVal < 0 && DoUseDefaultMaxThreads) {
     if (hasGridValue(T)) {
       MaxThreadsVal =
           std::max(int32_t(getGridValue(T, Kernel).GV_Default_WG_Size),
@@ -12764,8 +12765,9 @@ void OpenMPIRBuilder::loadOffloadInfoMetadata(Module &M) {
   }
 }
 
-void OpenMPIRBuilder::loadOffloadInfoMetadata(vfs::FileSystem &VFS,
-                                              StringRef HostFilePath) {
+void OpenMPIRBuilder::loadOffloadInfoMetadata(
+    vfs::FileSystem &VFS, StringRef HostFilePath,
+    const clv2::OptionsContext &OptsCtx) {
   if (HostFilePath.empty())
     return;
 
@@ -12777,7 +12779,7 @@ void OpenMPIRBuilder::loadOffloadInfoMetadata(vfs::FileSystem &VFS,
                            .c_str());
   }
 
-  LLVMContext Ctx;
+  LLVMContext Ctx(OptsCtx);
   auto M = expectedToErrorOrAndEmitErrors(
       Ctx, parseBitcodeFile(Buf.get()->getMemBufferRef(), Ctx));
   if (std::error_code Err = M.getError()) {

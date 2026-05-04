@@ -26,11 +26,8 @@
 namespace llvm {
 namespace exegesis {
 
-static cl::opt<unsigned>
-    RandomGeneratorSeed("random-generator-seed",
-                        cl::desc("The seed value to use for the random number "
-                                 "generator when generating snippets."),
-                        cl::init(0));
+unsigned RandomGeneratorSeed = 0;
+unsigned RandomGeneratorSeedOccurrences = 0;
 
 std::vector<CodeTemplate> getSingleton(CodeTemplate &&CT) {
   std::vector<CodeTemplate> Result;
@@ -196,9 +193,8 @@ generateUnconstrainedCodeTemplates(const InstructionTemplate &Variant,
 
 std::mt19937 &randomGenerator() {
   static std::random_device RandomDevice;
-  unsigned RandomSeed = RandomGeneratorSeed.getNumOccurrences()
-                            ? RandomGeneratorSeed
-                            : RandomDevice();
+  unsigned RandomSeed =
+      RandomGeneratorSeedOccurrences ? RandomGeneratorSeed : RandomDevice();
   LLVM_DEBUG(dbgs() << "Using random seed " << RandomSeed << ".\n");
   static std::mt19937 RandomGenerator(RandomSeed);
   return RandomGenerator;

@@ -21,6 +21,7 @@
 #include "ClangDoc.h"
 #include "Generators.h"
 #include "Representation.h"
+#include "clang-tools-extra/ClangToolsExtraOptionsOptInfos.h"
 #include "support/Utils.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticOptions.h"
@@ -30,7 +31,8 @@
 #include "clang/Tooling/Execution.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/ScopeExit.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Mutex.h"
@@ -48,89 +50,96 @@ using namespace clang::tooling;
 using namespace clang;
 using clang::doc::OutputFormatTy;
 
-static llvm::cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
 static llvm::cl::OptionCategory ClangDocCategory("clang-doc options");
 
-static llvm::cl::opt<std::string>
-    ProjectName("project-name", llvm::cl::desc("Name of project."),
-                llvm::cl::cat(ClangDocCategory));
+namespace {
+struct ClangDocOptions {
+  std::string ProjectName;
+  bool IgnoreMappingFailures = true;
+  std::string OutDirectory = "docs";
+  std::string BaseDirectory;
+  bool PublicOnly = false;
+  bool DoxygenOnly = false;
+  std::vector<std::string> UserStylesheets;
+  std::string UserAssetPath;
+  std::string SourceRoot;
+  std::string RepositoryUrl;
+  std::string RepositoryCodeLinePrefix;
+  bool FTimeTrace = false;
+  bool Pretty = false;
+  OutputFormatTy FormatEnum = OutputFormatTy::json;
+};
+} // namespace
 
-static llvm::cl::opt<bool> IgnoreMappingFailures(
-    "ignore-map-errors",
-    llvm::cl::desc("Continue if files are not mapped correctly."),
-    llvm::cl::init(true), llvm::cl::cat(ClangDocCategory));
+// clv2 options registry for clang-doc.
+inline constexpr llvm::clv2::OptionsRegistry<
+    &llvm::clv2::CTE_CD_ProjectName, &llvm::clv2::CTE_CD_IgnoreMapErrors,
+    &llvm::clv2::CTE_CD_Output, &llvm::clv2::CTE_CD_Base,
+    &llvm::clv2::CTE_CD_Public, &llvm::clv2::CTE_CD_Doxygen,
+    &llvm::clv2::CTE_CD_Stylesheets, &llvm::clv2::CTE_CD_Asset,
+    &llvm::clv2::CTE_CD_SourceRoot, &llvm::clv2::CTE_CD_Repository,
+    &llvm::clv2::CTE_CD_RepositoryLinePrefix, &llvm::clv2::CTE_CD_FTimeTrace,
+    &llvm::clv2::CTE_CD_PrettyJson, &llvm::clv2::CTE_CD_Format>
+    ClangDocOptsReg;
 
-static llvm::cl::opt<std::string>
-    OutDirectory("output",
-                 llvm::cl::desc("Directory for outputting generated files."),
-                 llvm::cl::init("docs"), llvm::cl::cat(ClangDocCategory));
+static void
+applyClangDocOpts(const decltype(ClangDocOptsReg)::ParsedOptionsT &Opts,
+                  ClangDocOptions &DocOpts) {
+  DocOpts.ProjectName = Opts.get<&llvm::clv2::CTE_CD_ProjectName>();
+  DocOpts.IgnoreMappingFailures =
+      Opts.get<&llvm::clv2::CTE_CD_IgnoreMapErrors>();
+  DocOpts.OutDirectory = Opts.get<&llvm::clv2::CTE_CD_Output>();
+  DocOpts.BaseDirectory = Opts.get<&llvm::clv2::CTE_CD_Base>();
+  DocOpts.PublicOnly = Opts.get<&llvm::clv2::CTE_CD_Public>();
+  DocOpts.DoxygenOnly = Opts.get<&llvm::clv2::CTE_CD_Doxygen>();
+  DocOpts.UserStylesheets = Opts.get<&llvm::clv2::CTE_CD_Stylesheets>();
+  DocOpts.UserAssetPath = Opts.get<&llvm::clv2::CTE_CD_Asset>();
+  DocOpts.SourceRoot = Opts.get<&llvm::clv2::CTE_CD_SourceRoot>();
+  DocOpts.RepositoryUrl = Opts.get<&llvm::clv2::CTE_CD_Repository>();
+  DocOpts.RepositoryCodeLinePrefix =
+      Opts.get<&llvm::clv2::CTE_CD_RepositoryLinePrefix>();
+  DocOpts.FTimeTrace = Opts.get<&llvm::clv2::CTE_CD_FTimeTrace>();
+  DocOpts.Pretty = Opts.get<&llvm::clv2::CTE_CD_PrettyJson>();
+  auto Fmt = Opts.get<&llvm::clv2::CTE_CD_Format>();
+  switch (Fmt) {
+  case llvm::clv2::CTEClangDocFormat::Md:
+  case llvm::clv2::CTEClangDocFormat::MdMustache:
+    DocOpts.FormatEnum = OutputFormatTy::md;
+    break;
+  case llvm::clv2::CTEClangDocFormat::Html:
+    DocOpts.FormatEnum = OutputFormatTy::html;
+    break;
+  case llvm::clv2::CTEClangDocFormat::Json:
+  case llvm::clv2::CTEClangDocFormat::Yaml:
+  default:
+    DocOpts.FormatEnum = OutputFormatTy::json;
+    break;
+  }
+}
 
-static llvm::cl::opt<std::string>
-    BaseDirectory("base",
-                  llvm::cl::desc(R"(Base Directory for generated documentation.
-URLs will be rooted at this directory for HTML links.)"),
-                  llvm::cl::init(""), llvm::cl::cat(ClangDocCategory));
-
-static llvm::cl::opt<bool>
-    PublicOnly("public", llvm::cl::desc("Document only public declarations."),
-               llvm::cl::init(false), llvm::cl::cat(ClangDocCategory));
-
-static llvm::cl::opt<bool> DoxygenOnly(
-    "doxygen",
-    llvm::cl::desc("Use only doxygen-style comments to generate docs."),
-    llvm::cl::init(false), llvm::cl::cat(ClangDocCategory));
-
-static llvm::cl::list<std::string> UserStylesheets(
-    "stylesheets", llvm::cl::CommaSeparated,
-    llvm::cl::desc("CSS stylesheets to extend the default styles."),
-    llvm::cl::cat(ClangDocCategory));
-
-static llvm::cl::opt<std::string> UserAssetPath(
-    "asset",
-    llvm::cl::desc("User supplied asset path to "
-                   "override the default css and js files for html output"),
-    llvm::cl::cat(ClangDocCategory));
-
-static llvm::cl::opt<std::string> SourceRoot("source-root", llvm::cl::desc(R"(
-Directory where processed files are stored.
-Links to definition locations will only be
-generated if the file is in this dir.)"),
-                                             llvm::cl::cat(ClangDocCategory));
-
-static llvm::cl::opt<std::string>
-    RepositoryUrl("repository", llvm::cl::desc(R"(
-URL of repository that hosts code.
-Used for links to definition locations.)"),
-                  llvm::cl::cat(ClangDocCategory));
-
-static llvm::cl::opt<std::string> RepositoryCodeLinePrefix(
-    "repository-line-prefix",
-    llvm::cl::desc("Prefix of line code for repository."),
-    llvm::cl::cat(ClangDocCategory));
-
-static llvm::cl::opt<bool> FTimeTrace("ftime-trace", llvm::cl::desc(R"(
-Turn on time profiler. Generates clang-doc-tracing.json)"),
-                                      llvm::cl::init(false),
-                                      llvm::cl::cat(ClangDocCategory));
-
-static llvm::cl::opt<bool>
-    Pretty("pretty-json", llvm::cl::desc("Serialize JSON with whitespace."),
-           llvm::cl::cat(ClangDocCategory));
-
-static llvm::cl::opt<OutputFormatTy>
-    FormatEnum("format", llvm::cl::desc("Format for outputted docs."),
-               llvm::cl::values(clEnumValN(OutputFormatTy::md, "md",
-                                           "Documentation in MD format."),
-                                clEnumValN(OutputFormatTy::html, "html",
-                                           "Documentation in HTML format."),
-                                clEnumValN(OutputFormatTy::json, "json",
-                                           "Documentation in JSON format")),
-               llvm::cl::init(OutputFormatTy::json),
-               llvm::cl::cat(ClangDocCategory));
+static void configureParser(llvm::clv2::OptionParser &P,
+                            ClangDocOptions &DocOpts) {
+  using ParsedT = decltype(ClangDocOptsReg)::ParsedOptionsT;
+  auto *Storage = new ParsedT();
+  decltype(ClangDocOptsReg)::applyDefaultsTo(*Storage);
+  std::vector<llvm::clv2::detail::OptionEntry> Entries;
+  std::vector<llvm::clv2::detail::AliasEntry> Aliases;
+  std::vector<llvm::clv2::detail::SubCommandSpec> SubSpecs;
+  decltype(ClangDocOptsReg)::staticBuildInto(*Storage, Entries, Aliases,
+                                             SubSpecs);
+  for (auto &E : Entries) {
+    if (!E.Cat)
+      E.Cat = &ClangDocCategory;
+    P.addDynamicEntry(std::move(E));
+  }
+  P.setExtraHelp(CommonOptionsParser::HelpMessage);
+  llvm::clv2::registerDynamicPostParseCallback(
+      [Storage, &DocOpts]() { applyClangDocOpts(*Storage, DocOpts); });
+}
 
 static llvm::ExitOnError ExitOnErr;
 
-static llvm::StringRef getFormatString() {
+static llvm::StringRef getFormatString(OutputFormatTy FormatEnum) {
   switch (FormatEnum) {
   case OutputFormatTy::md:
     return "md";
@@ -152,7 +161,8 @@ static std::string getExecutablePath(const char *Argv0, void *MainAddr) {
 }
 
 // TODO: Rename this, since it only gets custom CSS/JS
-static llvm::Error getAssetFiles(clang::doc::ClangDocContext &CDCtx) {
+static llvm::Error getAssetFiles(clang::doc::ClangDocContext &CDCtx,
+                                 llvm::StringRef UserAssetPath) {
   using DirIt = llvm::sys::fs::directory_iterator;
   std::error_code FileErr;
   llvm::SmallString<128> FilePath(UserAssetPath);
@@ -173,14 +183,16 @@ static llvm::Error getAssetFiles(clang::doc::ClangDocContext &CDCtx) {
 }
 
 static llvm::Error getHtmlFiles(const char *Argv0,
-                                clang::doc::ClangDocContext &CDCtx) {
+                                clang::doc::ClangDocContext &CDCtx,
+                                llvm::StringRef UserAssetPath,
+                                OutputFormatTy FormatEnum) {
   bool IsDir = llvm::sys::fs::is_directory(UserAssetPath);
   if (!UserAssetPath.empty() && !IsDir)
     llvm::outs() << "Asset path supply is not a directory: " << UserAssetPath
                  << " falling back to default\n";
   if (IsDir) {
     if (FormatEnum == OutputFormatTy::html) {
-      if (auto Err = getAssetFiles(CDCtx))
+      if (auto Err = getAssetFiles(CDCtx, UserAssetPath))
         return Err;
     }
   }
@@ -199,7 +211,8 @@ static llvm::Error getHtmlFiles(const char *Argv0,
 }
 
 static llvm::Error getMdFiles(const char *Argv0,
-                              clang::doc::ClangDocContext &CDCtx) {
+                              clang::doc::ClangDocContext &CDCtx,
+                              llvm::StringRef UserAssetPath) {
   bool IsDir = llvm::sys::fs::is_directory(UserAssetPath);
   if (!UserAssetPath.empty() && !IsDir)
     llvm::outs() << "Asset path supply is not a directory: " << UserAssetPath
@@ -232,7 +245,8 @@ static void sortUsrToInfo(llvm::StringMap<doc::Info *> &USRToInfo) {
 }
 
 static llvm::Error handleMappingFailures(DiagnosticsEngine &Diags,
-                                         llvm::Error Err) {
+                                         llvm::Error Err,
+                                         bool IgnoreMappingFailures) {
   if (!Err)
     return llvm::Error::success();
   if (IgnoreMappingFailures) {
@@ -271,22 +285,25 @@ Example usage for a project using a compile commands database:
   $ clang-doc --executor=all-TUs compile_commands.json
 )";
 
+  ClangDocOptions DocOpts;
   auto Executor = ExitOnErr(clang::tooling::createExecutorFromCommandLineArgs(
-      argc, argv, ClangDocCategory, Overview));
+      argc, argv, ClangDocCategory,
+      [&DocOpts](llvm::clv2::OptionParser &P) { configureParser(P, DocOpts); },
+      Overview));
 
   // turns on ftime trace profiling
-  if (FTimeTrace)
+  if (DocOpts.FTimeTrace)
     llvm::timeTraceProfilerInitialize(200, "clang-doc");
   {
     llvm::TimeTraceScope("main");
 
     // Fail early if an invalid format was provided.
-    llvm::StringRef Format = getFormatString();
+    llvm::StringRef Format = getFormatString(DocOpts.FormatEnum);
     llvm::outs() << "Emiting docs in " << Format << " format.\n";
     auto G = ExitOnErr(doc::findGeneratorByName(Format));
 
     ArgumentsAdjuster ArgAdjuster;
-    if (!DoxygenOnly)
+    if (!DocOpts.DoxygenOnly)
       ArgAdjuster = combineAdjusters(
           getInsertArgumentAdjuster("-fparse-all-comments",
                                     tooling::ArgumentInsertPosition::END),
@@ -299,22 +316,26 @@ Example usage for a project using a compile commands database:
     DiagnosticsEngine Diags(DiagID, *DiagOpts, DiagClient);
 
     clang::doc::ClangDocContext CDCtx(
-        Executor->getExecutionContext(), ProjectName, PublicOnly, OutDirectory,
-        SourceRoot, RepositoryUrl, RepositoryCodeLinePrefix, BaseDirectory,
-        {UserStylesheets.begin(), UserStylesheets.end()}, Diags, FormatEnum,
-        FTimeTrace, Pretty);
+        Executor->getExecutionContext(), DocOpts.ProjectName,
+        DocOpts.PublicOnly, DocOpts.OutDirectory, DocOpts.SourceRoot,
+        DocOpts.RepositoryUrl, DocOpts.RepositoryCodeLinePrefix,
+        DocOpts.BaseDirectory,
+        {DocOpts.UserStylesheets.begin(), DocOpts.UserStylesheets.end()}, Diags,
+        DocOpts.FormatEnum, DocOpts.FTimeTrace, DocOpts.Pretty);
 
     if (Format == "html")
-      ExitOnErr(getHtmlFiles(argv[0], CDCtx));
+      ExitOnErr(getHtmlFiles(argv[0], CDCtx, DocOpts.UserAssetPath,
+                             DocOpts.FormatEnum));
     else if (Format == "md")
-      ExitOnErr(getMdFiles(argv[0], CDCtx));
+      ExitOnErr(getMdFiles(argv[0], CDCtx, DocOpts.UserAssetPath));
 
     llvm::timeTraceProfilerBegin("Executor Launch", "total runtime");
     // Mapping phase
     llvm::outs() << "Mapping decls...\n";
     ExitOnErr(handleMappingFailures(
         Diags,
-        Executor->execute(doc::newMapperActionFactory(CDCtx), ArgAdjuster)));
+        Executor->execute(doc::newMapperActionFactory(CDCtx), ArgAdjuster),
+        DocOpts.IgnoreMappingFailures));
     llvm::timeTraceProfilerEnd();
 
     // Collect values into output by key.
@@ -422,19 +443,19 @@ Example usage for a project using a compile commands database:
 
     llvm::timeTraceProfilerBegin("Writing output", "total runtime");
     // Ensure the root output directory exists.
-    ExitOnErr(createDirectories(OutDirectory));
+    ExitOnErr(createDirectories(DocOpts.OutDirectory));
 
     // Run the generator.
     llvm::outs() << "Generating docs...\n";
 
-    ExitOnErr(
-        G->generateDocumentation(OutDirectory, std::move(USRToInfo), CDCtx));
+    ExitOnErr(G->generateDocumentation(DocOpts.OutDirectory,
+                                       std::move(USRToInfo), CDCtx));
     llvm::outs() << "Generating assets for docs...\n";
     ExitOnErr(G->createResources(CDCtx));
     llvm::timeTraceProfilerEnd();
   } // time trace main
 
-  if (FTimeTrace) {
+  if (DocOpts.FTimeTrace) {
     std::error_code EC;
     llvm::raw_fd_ostream OS("clang-doc-tracing.json", EC,
                             llvm::sys::fs::OF_Text);

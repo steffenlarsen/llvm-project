@@ -19,6 +19,7 @@
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TargetSelect.h"
 #include "gtest/gtest.h"
 
@@ -83,8 +84,9 @@ TEST(AMDGPUDisassembler, MultiDisassembler) {
   std::unique_ptr<MCAsmInfo> MAI(
       TheTarget->createMCAsmInfo(*MRI, TT, MCOptions));
   std::unique_ptr<const MCInstrInfo> MII(TheTarget->createMCInstrInfo());
-  std::unique_ptr<MCSubtargetInfo> STI(
-      TheTarget->createMCSubtargetInfo(TT, CPUName, ""));
+  std::unique_ptr<MCSubtargetInfo> STI(TheTarget->createMCSubtargetInfo(
+      TT, CPUName, "",
+      /*Ctx=*/llvm::clv2::defaultOptionsContext()));
   auto Ctx = std::make_unique<MCContext>(TT, *MAI, *MRI, *STI);
 
   int AsmPrinterVariant = MAI->getAssemblerDialect();
@@ -155,8 +157,9 @@ TEST(AMDGPUDisassembler, UCVersionOverride) {
   std::unique_ptr<MCAsmInfo> MAI(
       TheTarget->createMCAsmInfo(*MRI, TT, MCOptions));
   std::unique_ptr<const MCInstrInfo> MII(TheTarget->createMCInstrInfo());
-  std::unique_ptr<MCSubtargetInfo> STI(
-      TheTarget->createMCSubtargetInfo(TT, CPUName, ""));
+  std::unique_ptr<MCSubtargetInfo> STI(TheTarget->createMCSubtargetInfo(
+      TT, CPUName, "",
+      /*Ctx=*/llvm::clv2::defaultOptionsContext()));
   auto Ctx = std::make_unique<MCContext>(TT, *MAI, *MRI, *STI);
 
   // Define custom UC_VERSION before initializing disassembler.

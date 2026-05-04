@@ -585,7 +585,7 @@ std::optional<lsp::Hover> MLIRDocument::buildHoverForOperation(
 
   os << "Generic Form:\n\n```mlir\n";
 
-  op.op->print(os, OpPrintingFlags()
+  op.op->print(os, opPrintingFlags(op.op)
                        .printGenericOpForm()
                        .elideLargeElementsAttrs()
                        .skipRegions());
@@ -1425,7 +1425,8 @@ lsp::MLIRServer::convertFromBytecode(const URIForFile &uri) {
     OwningOpRef<Operation *> topOp = &parsedBlock.front();
     topOp->remove();
 
-    AsmState state(*topOp, OpPrintingFlags().enableDebugInfo().assumeVerified(),
+    AsmState state(*topOp,
+                   opPrintingFlags(*topOp).enableDebugInfo().assumeVerified(),
                    /*locationMap=*/nullptr, &fallbackResourceMap);
 
     llvm::raw_string_ostream os(result.output);

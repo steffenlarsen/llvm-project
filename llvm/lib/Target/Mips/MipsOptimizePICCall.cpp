@@ -31,10 +31,12 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/CodeGenTypes/MachineValueType.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/Allocator.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/RecyclingAllocator.h"
+#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
 #include <cassert>
 #include <utility>
 
@@ -42,14 +44,19 @@ using namespace llvm;
 
 #define DEBUG_TYPE "optimize-mips-pic-call"
 
-static cl::opt<bool> LoadTargetFromGOT("mips-load-target-from-got",
-                                       cl::init(true),
-                                       cl::desc("Load target address from GOT"),
-                                       cl::Hidden);
+static bool LoadTargetFromGOT = true;
 
-static cl::opt<bool> EraseGPOpnd("mips-erase-gp-opnd",
-                                 cl::init(true), cl::desc("Erase GP Operand"),
-                                 cl::Hidden);
+static bool EraseGPOpnd = true;
+
+static bool getLoadTargetFromGOT(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::MIPS_LoadTargetFromGOT>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getEraseGPOpnd(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::MIPS_EraseGPOpnd>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -159,7 +166,7 @@ static void setCallTargetReg(MachineBasicBlock *MBB,
 
 /// Search MI's operands for register GP and erase it.
 static void eraseGPOpnd(MachineInstr &MI) {
-  if (!EraseGPOpnd)
+  if (!getEraseGPOpnd(MI.getMF()->getFunction()))
     return;
 
   MachineFunction &MF = *MI.getParent()->getParent();
@@ -244,7 +251,7 @@ bool OptimizePICCall::visitNode(MBBInfo &MBBI) {
       // If a function has been called more than twice, we do not have to emit a
       // load instruction to get the function address from the GOT, but can
       // instead reuse the address that has been loaded before.
-      if (N >= 2 && !LoadTargetFromGOT)
+      if (N >= 2 && !getLoadTargetFromGOT(MBB->getParent()->getFunction()))
         getCallTargetRegOpnd(*I)->setReg(getReg(Entry));
 
       // Erase the $gp operand if this isn't the first time a function has

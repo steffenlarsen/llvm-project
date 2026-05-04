@@ -26,15 +26,18 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Core/HashUtilities.h"
+#include "bolt/Profile/BoltProfileOptionsOptInfos.h"
 #include "bolt/Profile/YAMLProfileReader.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "llvm/ADT/Bitfields.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/MC/MCPseudoProbe.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/xxhash.h"
 #include "llvm/Transforms/Utils/SampleProfileInference.h"
 
+#include "llvm/Support/OptionsContext.h"
 #include <queue>
 
 using namespace llvm;
@@ -55,88 +58,6 @@ static constexpr uint64_t hash_16_bytes(uint64_t low, uint64_t high) {
   b *= kMul;
   return b;
 }
-
-namespace opts {
-
-extern cl::opt<bool> TimeRewrite;
-extern cl::OptionCategory BoltOptCategory;
-
-cl::opt<bool>
-    InferStaleProfile("infer-stale-profile",
-                      cl::desc("Infer counts from stale profile data."),
-                      cl::init(false), cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned> StaleMatchingMinMatchedBlock(
-    "stale-matching-min-matched-block",
-    cl::desc("Percentage threshold of matched basic blocks at which stale "
-             "profile inference is executed."),
-    cl::init(0), cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned> StaleMatchingMaxFuncSize(
-    "stale-matching-max-func-size",
-    cl::desc("The maximum size of a function to consider for inference."),
-    cl::init(10000), cl::Hidden, cl::cat(BoltOptCategory));
-
-// Parameters of the profile inference algorithm. The default values are tuned
-// on several benchmarks.
-static cl::opt<bool> StaleMatchingEvenFlowDistribution(
-    "stale-matching-even-flow-distribution",
-    cl::desc("Try to evenly distribute flow when there are multiple equally "
-             "likely options."),
-    cl::init(true), cl::ReallyHidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool> StaleMatchingRebalanceUnknown(
-    "stale-matching-rebalance-unknown",
-    cl::desc("Evenly re-distribute flow among unknown subgraphs."),
-    cl::init(false), cl::ReallyHidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool> StaleMatchingJoinIslands(
-    "stale-matching-join-islands",
-    cl::desc("Join isolated components having positive flow."), cl::init(true),
-    cl::ReallyHidden, cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned> StaleMatchingCostBlockInc(
-    "stale-matching-cost-block-inc",
-    cl::desc("The cost of increasing a block count by one."), cl::init(150),
-    cl::ReallyHidden, cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned> StaleMatchingCostBlockDec(
-    "stale-matching-cost-block-dec",
-    cl::desc("The cost of decreasing a block count by one."), cl::init(150),
-    cl::ReallyHidden, cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned> StaleMatchingCostJumpInc(
-    "stale-matching-cost-jump-inc",
-    cl::desc("The cost of increasing a jump count by one."), cl::init(150),
-    cl::ReallyHidden, cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned> StaleMatchingCostJumpDec(
-    "stale-matching-cost-jump-dec",
-    cl::desc("The cost of decreasing a jump count by one."), cl::init(150),
-    cl::ReallyHidden, cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned> StaleMatchingCostBlockUnknownInc(
-    "stale-matching-cost-block-unknown-inc",
-    cl::desc("The cost of increasing an unknown block count by one."),
-    cl::init(1), cl::ReallyHidden, cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned> StaleMatchingCostJumpUnknownInc(
-    "stale-matching-cost-jump-unknown-inc",
-    cl::desc("The cost of increasing an unknown jump count by one."),
-    cl::init(140), cl::ReallyHidden, cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned> StaleMatchingCostJumpUnknownFTInc(
-    "stale-matching-cost-jump-unknown-ft-inc",
-    cl::desc(
-        "The cost of increasing an unknown fall-through jump count by one."),
-    cl::init(3), cl::ReallyHidden, cl::cat(BoltOptCategory));
-
-cl::opt<bool> StaleMatchingWithPseudoProbes(
-    "stale-matching-with-pseudo-probes",
-    cl::desc("Turns on stale matching with block pseudo probes."),
-    cl::init(false), cl::ReallyHidden, cl::cat(BoltOptCategory));
-
-} // namespace opts
 
 namespace llvm {
 namespace bolt {
@@ -212,6 +133,7 @@ public:
 class StaleMatcher {
 public:
   FlowBlock *EntryBlock = nullptr;
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
   /// Initialize stale matcher.
   void init(const std::vector<FlowBlock *> &Blocks,
             const std::vector<BlendedBlockHash> &Hashes,
@@ -338,7 +260,10 @@ private:
       const ArrayRef<yaml::bolt::PseudoProbeInfo> BlockPseudoProbes,
       const YAMLProfileReader::InlineTreeNodeMapTy &InlineTreeNodeMap) const {
 
-    if (!opts::StaleMatchingWithPseudoProbes)
+    auto *ProfOpts = bolt_profile_opts::getBoltProfileOpts(*OptsCtx);
+    bool StaleMatchingWithPseudoProbes =
+        ProfOpts->get<&clv2::BOLTPROF_StaleMatchingWithPseudoProbes>();
+    if (!StaleMatchingWithPseudoProbes)
       return {nullptr, false};
 
     DenseMap<const FlowBlock *, uint32_t> FlowBlockMatchCount;
@@ -603,8 +528,11 @@ initMatcher(BinaryContext &BC, const BinaryFunction &BF,
                       << Twine::utohexstr(BB->getHash()) << "\n");
   }
   StaleMatcher Matcher;
+  Matcher.OptsCtx = &BC.getOptionsContext();
   // Collects function pseudo probes for use in the StaleMatcher.
-  if (opts::StaleMatchingWithPseudoProbes) {
+  bool StaleMatchingWithPseudoProbes =
+      bolt_profile_opts::getStaleMatchingWithPseudoProbes(BC);
+  if (StaleMatchingWithPseudoProbes) {
     const MCPseudoProbeDecoder *Decoder = BC.getPseudoProbeDecoder();
     assert(Decoder &&
            "If pseudo probes are in use, pseudo probe decoder should exist");
@@ -915,12 +843,17 @@ void preprocessUnreachableBlocks(FlowFunction &Func) {
 /// having "unexpected" control flow (e.g., having no sink basic blocks).
 bool canApplyInference(const FlowFunction &Func,
                        const yaml::bolt::BinaryFunctionProfile &YamlBF,
-                       const uint64_t &MatchedBlocks) {
-  if (Func.Blocks.size() > opts::StaleMatchingMaxFuncSize)
+                       const uint64_t &MatchedBlocks,
+                       const clv2::OptionsContext &OptsCtx) {
+  auto *ProfOpts = bolt_profile_opts::getBoltProfileOpts(OptsCtx);
+  unsigned StaleMatchingMaxFuncSize =
+      ProfOpts->get<&clv2::BOLTPROF_StaleMatchingMaxFuncSize>();
+  unsigned StaleMatchingMinMatchedBlock =
+      ProfOpts->get<&clv2::BOLTPROF_StaleMatchingMinMatchedBlock>();
+  if (Func.Blocks.size() > StaleMatchingMaxFuncSize)
     return false;
 
-  if (MatchedBlocks * 100 <
-      opts::StaleMatchingMinMatchedBlock * YamlBF.Blocks.size())
+  if (MatchedBlocks * 100 < StaleMatchingMinMatchedBlock * YamlBF.Blocks.size())
     return false;
 
   // Returns false if the artificial sink block has no predecessors meaning
@@ -932,25 +865,41 @@ bool canApplyInference(const FlowFunction &Func,
 }
 
 /// Apply the profile inference algorithm for a given flow function.
-void applyInference(FlowFunction &Func) {
+void applyInference(FlowFunction &Func, const clv2::OptionsContext &OptsCtx) {
+  auto *ProfOpts = bolt_profile_opts::getBoltProfileOpts(OptsCtx);
   ProfiParams Params;
   // Set the params from the command-line flags.
-  Params.EvenFlowDistribution = opts::StaleMatchingEvenFlowDistribution;
-  Params.RebalanceUnknown = opts::StaleMatchingRebalanceUnknown;
-  Params.JoinIslands = opts::StaleMatchingJoinIslands;
+  Params.EvenFlowDistribution =
+      ProfOpts->get<&clv2::BOLTPROF_StaleMatchingEvenFlowDistribution>();
+  Params.RebalanceUnknown =
+      ProfOpts->get<&clv2::BOLTPROF_StaleMatchingRebalanceUnknown>();
+  Params.JoinIslands =
+      ProfOpts->get<&clv2::BOLTPROF_StaleMatchingJoinIslands>();
 
-  Params.CostBlockInc = opts::StaleMatchingCostBlockInc;
-  Params.CostBlockEntryInc = opts::StaleMatchingCostBlockInc;
-  Params.CostBlockDec = opts::StaleMatchingCostBlockDec;
-  Params.CostBlockEntryDec = opts::StaleMatchingCostBlockDec;
-  Params.CostBlockUnknownInc = opts::StaleMatchingCostBlockUnknownInc;
+  unsigned CostBlockInc =
+      ProfOpts->get<&clv2::BOLTPROF_StaleMatchingCostBlockInc>();
+  unsigned CostBlockDec =
+      ProfOpts->get<&clv2::BOLTPROF_StaleMatchingCostBlockDec>();
+  unsigned CostJumpInc =
+      ProfOpts->get<&clv2::BOLTPROF_StaleMatchingCostJumpInc>();
+  unsigned CostJumpDec =
+      ProfOpts->get<&clv2::BOLTPROF_StaleMatchingCostJumpDec>();
 
-  Params.CostJumpInc = opts::StaleMatchingCostJumpInc;
-  Params.CostJumpFTInc = opts::StaleMatchingCostJumpInc;
-  Params.CostJumpDec = opts::StaleMatchingCostJumpDec;
-  Params.CostJumpFTDec = opts::StaleMatchingCostJumpDec;
-  Params.CostJumpUnknownInc = opts::StaleMatchingCostJumpUnknownInc;
-  Params.CostJumpUnknownFTInc = opts::StaleMatchingCostJumpUnknownFTInc;
+  Params.CostBlockInc = CostBlockInc;
+  Params.CostBlockEntryInc = CostBlockInc;
+  Params.CostBlockDec = CostBlockDec;
+  Params.CostBlockEntryDec = CostBlockDec;
+  Params.CostBlockUnknownInc =
+      ProfOpts->get<&clv2::BOLTPROF_StaleMatchingCostBlockUnknownInc>();
+
+  Params.CostJumpInc = CostJumpInc;
+  Params.CostJumpFTInc = CostJumpInc;
+  Params.CostJumpDec = CostJumpDec;
+  Params.CostJumpFTDec = CostJumpDec;
+  Params.CostJumpUnknownInc =
+      ProfOpts->get<&clv2::BOLTPROF_StaleMatchingCostJumpUnknownInc>();
+  Params.CostJumpUnknownFTInc =
+      ProfOpts->get<&clv2::BOLTPROF_StaleMatchingCostJumpUnknownFTInc>();
 
   applyFlowInference(Params, Func);
 }
@@ -1058,8 +1007,9 @@ bool YAMLProfileReader::inferStaleProfile(
     BinaryFunction &BF, const yaml::bolt::BinaryFunctionProfile &YamlBF,
     const ArrayRef<ProbeMatchSpec> ProbeMatchSpecs) {
 
+  bool TimeRewrite = bolt_utils_opts::getTimeRewrite(BF.getBinaryContext());
   NamedRegionTimer T("inferStaleProfile", "stale profile inference", "rewrite",
-                     "Rewrite passes", opts::TimeRewrite);
+                     "Rewrite passes", TimeRewrite);
 
   if (!BF.hasCFG())
     return false;
@@ -1088,11 +1038,12 @@ bool YAMLProfileReader::inferStaleProfile(
   preprocessUnreachableBlocks(Func);
 
   // Check if profile inference can be applied for the instance.
-  if (!canApplyInference(Func, YamlBF, MatchedBlocks))
+  if (!canApplyInference(Func, YamlBF, MatchedBlocks,
+                         BF.getBinaryContext().getOptionsContext()))
     return false;
 
   // Apply the profile inference algorithm.
-  applyInference(Func);
+  applyInference(Func, BF.getBinaryContext().getOptionsContext());
 
   // Collect inferred counts and update function annotations.
   assignProfile(BF, BlockOrder, Func);

@@ -17,7 +17,6 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/LegacyPassNameParser.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/OptBisect.h"
 #include "llvm/PassInfo.h"
@@ -232,16 +231,6 @@ Pass *Pass::createPass(AnalysisID ID) {
 void PassRegistrationListener::enumeratePasses() {
   PassRegistry::getPassRegistry()->enumerateWith(this);
 }
-
-PassNameParser::PassNameParser(cl::Option &O)
-    : cl::parser<const PassInfo *>(O) {
-  PassRegistry::getPassRegistry()->addRegistrationListener(this);
-}
-
-// This only gets called during static destruction, in which case the
-// PassRegistry will have already been destroyed by llvm_shutdown().  So
-// attempting to remove the registration listener is an error.
-PassNameParser::~PassNameParser() = default;
 
 //===----------------------------------------------------------------------===//
 //   AnalysisUsage Class Implementation

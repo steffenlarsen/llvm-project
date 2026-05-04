@@ -68,7 +68,7 @@ void buildGPUPassPipeline(OpPassManager &pm,
   pm.addNestedPass<ModuleOp>(createCSEPass());
   if (options.enableVectorToXeGPU)
     pm.addNestedPass<gpu::GPUModuleOp>(createConvertVectorToXeGPU());
-  if (options.xegpuOpLevel == "workgroup") {
+  if (options.xegpuOpLevel.getValue() == "workgroup") {
     xegpu::XeGPUPropagateLayoutOptions sgLayoutOptions;
     sgLayoutOptions.layoutKind = "subgroup";
     pm.addNestedPass<gpu::GPUModuleOp>(
@@ -84,8 +84,8 @@ void buildGPUPassPipeline(OpPassManager &pm,
     pm.addNestedPass<gpu::GPUModuleOp>(xegpu::createXeGPUBlocking());
     pm.addNestedPass<gpu::GPUModuleOp>(createCSEPass());
   }
-  if (options.xegpuOpLevel == "subgroup" ||
-      options.xegpuOpLevel == "workgroup") {
+  if (options.xegpuOpLevel.getValue() == "subgroup" ||
+      options.xegpuOpLevel.getValue() == "workgroup") {
     pm.addNestedPass<gpu::GPUModuleOp>(
         xegpu::createXeGPUPropagateLayout(laneLayoutOptions));
     pm.addNestedPass<gpu::GPUModuleOp>(xegpu::createXeGPUPeepHoleOptimizer());

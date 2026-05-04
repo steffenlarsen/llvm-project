@@ -23,6 +23,7 @@
 #ifndef LLVM_IR_INTRINSICINST_H
 #define LLVM_IR_INTRINSICINST_H
 
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DerivedTypes.h"

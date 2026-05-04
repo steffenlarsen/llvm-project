@@ -20,7 +20,7 @@
 #include "llvm/Object/Binary.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/Option.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/LLVMDriver.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/VirtualFileSystem.h"
@@ -78,6 +78,7 @@ static StringRef ToolName;
 static std::string OutputFilename = "-";
 static std::string Filename;
 static bool ShowCGDataVersion;
+static bool IndexedLazyLoading = false;
 static bool SkipTrim;
 static CGDataAction Action;
 static std::optional<CGDataFormat> OutputFormat;
@@ -119,7 +120,8 @@ static int convert_main(int argc, const char *argv[]) {
     exitWithErrorCode(EC, OutputFilename);
 
   auto FS = vfs::getRealFileSystem();
-  auto ReaderOrErr = CodeGenDataReader::create(Filename, *FS);
+  auto ReaderOrErr =
+      CodeGenDataReader::create(Filename, *FS, IndexedLazyLoading);
   if (Error E = ReaderOrErr.takeError())
     exitWithError(std::move(E), Filename);
 
@@ -251,7 +253,8 @@ static int show_main(int argc, const char *argv[]) {
     exitWithErrorCode(EC, OutputFilename);
 
   auto FS = vfs::getRealFileSystem();
-  auto ReaderOrErr = CodeGenDataReader::create(Filename, *FS);
+  auto ReaderOrErr =
+      CodeGenDataReader::create(Filename, *FS, IndexedLazyLoading);
   if (Error E = ReaderOrErr.takeError())
     exitWithError(std::move(E), Filename);
 
@@ -362,8 +365,7 @@ static void parseArgs(int argc, char **argv) {
     llvm_unreachable("unrecognized action");
   }
 
-  IndexedCodeGenDataLazyLoading =
-      Args.hasArg(OPT_indexed_codegen_data_lazy_loading);
+  IndexedLazyLoading = Args.hasArg(OPT_indexed_codegen_data_lazy_loading);
 }
 
 int llvm_cgdata_main(int argc, char **argvNonConst, const llvm::ToolContext &) {

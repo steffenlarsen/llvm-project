@@ -31,7 +31,7 @@ namespace {
 #include "MFCommon.inc"
 
 TEST(FindDebugLocTest, DifferentIterators) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module Mod("Module", Ctx);
   auto MF = createMachineFunction(Ctx, Mod);
   auto &MBB = *MF->CreateMachineBasicBlock();

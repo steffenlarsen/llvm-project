@@ -43,6 +43,10 @@ class Loop;
 class LoopAnalysis;
 class LoopInfo;
 
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
+
 namespace vfs {
 class FileSystem;
 } // namespace vfs
@@ -4235,7 +4239,8 @@ public:
   /// used to load in offload metadata for the device, allowing host and device
   /// to maintain the same metadata mapping.
   LLVM_ABI void loadOffloadInfoMetadata(vfs::FileSystem &VFS,
-                                        StringRef HostFilePath);
+                                        StringRef HostFilePath,
+                                        const clv2::OptionsContext &OptsCtx);
 
   /// Gets (if variable with the given name already exist) or creates
   /// internal global variable with the specified Name. The created variable has

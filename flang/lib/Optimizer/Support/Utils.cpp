@@ -150,7 +150,8 @@ std::optional<bool> fir::isNewAllocationResult(mlir::OpResult result) {
 }
 
 std::string fir::getPresentableFunctionName(mlir::FunctionOpInterface func) {
-  if (func.getName() == fir::NameUniquer::doProgramEntry()) {
+  if (func.getName() == fir::NameUniquer::doProgramEntry(
+                            func->getContext()->getOptionsContext())) {
     // Main program entry is all uppercase - to avoid name conflicts. But
     // from a reporting perspective, keep it lowercase for consistency with
     // every other symbol.

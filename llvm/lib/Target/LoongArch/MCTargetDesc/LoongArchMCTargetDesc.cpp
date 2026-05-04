@@ -53,10 +53,15 @@ static MCInstrInfo *createLoongArchMCInstrInfo() {
 }
 
 static MCSubtargetInfo *
-createLoongArchMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
+createLoongArchMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                               const llvm::clv2::OptionsContext &Ctx) {
   if (CPU.empty() || CPU == "generic")
     CPU = TT.isArch64Bit() ? "generic-la64" : "generic-la32";
-  return createLoongArchMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+  MCSubtargetInfo *STI =
+      createLoongArchMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+  if (STI)
+    STI->setOptionsContext(Ctx);
+  return STI;
 }
 
 static MCAsmInfo *createLoongArchMCAsmInfo(const MCRegisterInfo &MRI,

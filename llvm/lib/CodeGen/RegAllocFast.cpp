@@ -21,6 +21,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SparseSet.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -36,11 +37,14 @@
 #include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <tuple>
@@ -55,8 +59,10 @@ STATISTIC(NumLoads, "Number of loads added");
 STATISTIC(NumCoalesced, "Number of copies coalesced");
 
 // FIXME: Remove this switch when all testcases are fixed!
-static cl::opt<bool> IgnoreMissingDefs("rafast-ignore-missing-defs",
-                                       cl::Hidden);
+
+static bool getRafastIgnoreMissingDefs(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_RafastIgnoreMissingDefs>(Ctx);
+}
 
 static RegisterRegAlloc fastRegAlloc("fast", "fast register allocator",
                                      createFastRegisterAllocator);
@@ -726,7 +732,11 @@ void RegAllocFastImpl::reloadAtBegin(MachineBasicBlock &MBB) {
     if (getRegUnitState(FirstUnit) == regLiveIn)
       continue;
 
-    assert((&MBB != &MBB.getParent()->front() || IgnoreMissingDefs) &&
+    assert((&MBB != &MBB.getParent()->front() ||
+            getRafastIgnoreMissingDefs(MBB.getParent()
+                                           ->getFunction()
+                                           .getContext()
+                                           .getOptionsContext())) &&
            "no reload in start block. Missing vreg def?");
 
     if (PrologLiveIns.count(PhysReg)) {

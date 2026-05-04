@@ -52,7 +52,7 @@ public:
       TTI::OperandValueInfo Op2Info = {TTI::OK_AnyValue, TTI::OP_None},
       const llvm::Instruction *I = nullptr) const override {
     if (Opcode == Instruction::Select)
-      return SCEVCheapExpansionBudget.getValue();
+      return getSCEVCheapExpansionBudget(getST()->getOptionsContext());
 
     return BaseT::getCmpSelInstrCost(Opcode, ValTy, CondTy, VecPred, CostKind,
                                      Op1Info, Op2Info, I);
@@ -66,7 +66,7 @@ public:
       const Instruction *CxtI = nullptr) const override {
     int ISD = TLI->InstructionOpcodeToISD(Opcode);
     if (ISD == ISD::ADD && CostKind == TTI::TCK_RecipThroughput)
-      return SCEVCheapExpansionBudget.getValue() + 1;
+      return getSCEVCheapExpansionBudget(getST()->getOptionsContext()) + 1;
 
     return BaseT::getArithmeticInstrCost(Opcode, Ty, CostKind, Op1Info,
                                          Op2Info);

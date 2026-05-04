@@ -21,38 +21,36 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "x86-seses"
 
 STATISTIC(NumLFENCEsInserted, "Number of lfence instructions inserted");
 
-static cl::opt<bool> EnableSpeculativeExecutionSideEffectSuppression(
-    "x86-seses-enable-without-lvi-cfi",
-    cl::desc("Force enable speculative execution side effect suppression. "
-             "(Note: User must pass -mlvi-cfi in order to mitigate indirect "
-             "branches and returns.)"),
-    cl::init(false), cl::Hidden);
+static bool getEnableSESES(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_SESESEnableWithoutLVICFI>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> OneLFENCEPerBasicBlock(
-    "x86-seses-one-lfence-per-bb",
-    cl::desc(
-        "Omit all lfences other than the first to be placed in a basic block."),
-    cl::init(false), cl::Hidden);
+static bool getOneLFENCEPerBasicBlock(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_SESESOneLFENCEPerBB>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> OnlyLFENCENonConst(
-    "x86-seses-only-lfence-non-const",
-    cl::desc("Only lfence before groups of terminators where at least one "
-             "branch instruction has an input to the addressing mode that is a "
-             "register other than %rip."),
-    cl::init(false), cl::Hidden);
+static bool getOnlyLFENCENonConst(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_SESESOnlyLFENCENonConst>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    OmitBranchLFENCEs("x86-seses-omit-branch-lfences",
-                      cl::desc("Omit all lfences before branch instructions."),
-                      cl::init(false), cl::Hidden);
+static bool getOmitBranchLFENCEs(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_SESESOmitBranchLFENCEs>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -96,7 +94,7 @@ runX86SpeculativeExecutionSideEffectSuppression(MachineFunction &MF) {
   // Check whether SESES needs to run as the fallback for LVI at O0, whether the
   // user explicitly passed an SESES flag, or whether the SESES target feature
   // was set.
-  if (!EnableSpeculativeExecutionSideEffectSuppression &&
+  if (!getEnableSESES(MF.getFunction()) &&
       !(Subtarget.useLVILoadHardening() && OptLevel == CodeGenOptLevel::None) &&
       !Subtarget.useSpeculativeExecutionSideEffectSuppression())
     return false;
@@ -127,7 +125,7 @@ runX86SpeculativeExecutionSideEffectSuppression(MachineFunction &MF) {
           NumLFENCEsInserted++;
           Modified = true;
         }
-        if (OneLFENCEPerBasicBlock)
+        if (getOneLFENCEPerBasicBlock(MF.getFunction()))
           break;
       }
       // The following section will be LFENCEing before groups of terminators
@@ -148,13 +146,14 @@ runX86SpeculativeExecutionSideEffectSuppression(MachineFunction &MF) {
 
       // Look for branch instructions that will require an LFENCE to be put
       // before this basic block's terminators.
-      if (!MI.isBranch() || OmitBranchLFENCEs) {
+      if (!MI.isBranch() || getOmitBranchLFENCEs(MF.getFunction())) {
         // This isn't a branch or we're not putting LFENCEs before branches.
         PrevInstIsLFENCE = false;
         continue;
       }
 
-      if (OnlyLFENCENonConst && hasConstantAddressingMode(MI)) {
+      if (getOnlyLFENCENonConst(MF.getFunction()) &&
+          hasConstantAddressingMode(MI)) {
         // This is a branch, but it only has constant addressing mode and we're
         // not adding LFENCEs before such branches.
         PrevInstIsLFENCE = false;

@@ -42,7 +42,7 @@
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/OptTable.h"
 #include "llvm/Option/Option.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -448,6 +448,9 @@ bool FrontendActionFactory::runInvocation(
   CompilerInstance Compiler(std::move(Invocation), std::move(PCHContainerOps));
   Compiler.setVirtualFileSystem(Files->getVirtualFileSystemPtr());
   Compiler.setFileManager(Files);
+  // Share the tool's parsed options with this compilation so they reach the
+  // ASTContext (see CompilerInstance::createASTContext).
+  Compiler.setLLVMOptionsContextRef(getOptionsContext());
   Compiler.createDiagnostics(DiagConsumer, /*ShouldOwnClient=*/false);
   Compiler.createSourceManager();
 
@@ -509,6 +512,11 @@ int ClangTool::run(ToolAction *Action) {
   // Exists solely for the purpose of lookup of the resource path.
   // This just needs to be some symbol in the binary.
   static int StaticSymbol;
+
+  // Propagate the tool's parsed options to the action, which forwards them to
+  // each CompilerInstance it creates.
+  if (OptionsCtx)
+    Action->setOptionsContext(*OptionsCtx);
 
   // First insert all absolute paths into the in-memory VFS. These are global
   // for all compile commands.

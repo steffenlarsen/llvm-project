@@ -32,7 +32,7 @@ static BasicBlock *getBBWithName(Function *F, StringRef Name) {
 }
 
 TEST(FunctionTest, hasLazyArguments) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   Type *ArgTypes[] = {Type::getInt8Ty(C), Type::getInt32Ty(C)};
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), ArgTypes, false);
@@ -62,7 +62,7 @@ TEST(FunctionTest, hasLazyArguments) {
 }
 
 TEST(FunctionTest, stealArgumentListFrom) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   Type *ArgTypes[] = {Type::getInt8Ty(C), Type::getInt32Ty(C)};
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), ArgTypes, false);
@@ -135,7 +135,7 @@ TEST(FunctionTest, stealArgumentListFrom) {
 
 // Test setting and removing section information
 TEST(FunctionTest, setSection) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("test", C);
 
   llvm::Function *F =
@@ -154,11 +154,11 @@ TEST(FunctionTest, setSection) {
 }
 
 TEST(FunctionTest, GetPointerAlignment) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Type *VoidType(Type::getVoidTy(Context));
   FunctionType *FuncType(FunctionType::get(VoidType, false));
-  std::unique_ptr<Function> Func(Function::Create(
-      FuncType, GlobalValue::ExternalLinkage));
+  std::unique_ptr<Function> Func(
+      Function::Create(FuncType, GlobalValue::ExternalLinkage));
   EXPECT_EQ(Align(1), Func->getPointerAlignment(DataLayout("")));
   EXPECT_EQ(Align(1), Func->getPointerAlignment(DataLayout("Fi8")));
   EXPECT_EQ(Align(1), Func->getPointerAlignment(DataLayout("Fn8")));
@@ -179,7 +179,7 @@ TEST(FunctionTest, GetPointerAlignment) {
 }
 
 TEST(FunctionTest, InsertBasicBlockAt) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
 define void @foo(i32 %a, i32 %b) {
 foo_bb0:
@@ -239,7 +239,7 @@ bar_bb2:
 }
 
 TEST(FunctionTest, SpliceOneBB) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx, R"(
     define void @from() {
      from_bb1:
@@ -288,7 +288,7 @@ TEST(FunctionTest, SpliceOneBB) {
 }
 
 TEST(FunctionTest, SpliceOneBBWhenFromIsSameAsTo) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx, R"(
     define void @fromto() {
      bb1:
@@ -312,7 +312,7 @@ TEST(FunctionTest, SpliceOneBBWhenFromIsSameAsTo) {
 }
 
 TEST(FunctionTest, SpliceLastBB) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx, R"(
     define void @from() {
      from_bb1:
@@ -363,7 +363,7 @@ TEST(FunctionTest, SpliceLastBB) {
 }
 
 TEST(FunctionTest, SpliceBBRange) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx, R"(
     define void @from() {
      from_bb1:
@@ -410,7 +410,7 @@ TEST(FunctionTest, SpliceBBRange) {
 
 #ifdef EXPENSIVE_CHECKS
 TEST(FunctionTest, SpliceEndBeforeBegin) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx, R"(
     define void @from() {
      from_bb1:
@@ -441,10 +441,10 @@ TEST(FunctionTest, SpliceEndBeforeBegin) {
                            FromBB1->getIterator()),
                "FromBeginIt not before FromEndIt!");
 }
-#endif //EXPENSIVE_CHECKS
+#endif // EXPENSIVE_CHECKS
 
 TEST(FunctionTest, EraseBBs) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx, R"(
     define void @foo() {
      bb1:
@@ -487,7 +487,7 @@ TEST(FunctionTest, EraseBBs) {
 }
 
 TEST(FunctionTest, BasicBlockNumbers) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Type *VoidType = Type::getVoidTy(Context);
   FunctionType *FuncType = FunctionType::get(VoidType, false);
   std::unique_ptr<Function> Func(
@@ -579,7 +579,7 @@ TEST(FunctionTest, BasicBlockNumbers) {
 }
 
 TEST(FunctionTest, UWTable) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx, R"(
     define void @foo() {
      bb1:
@@ -602,7 +602,7 @@ TEST(FunctionTest, UWTable) {
 }
 
 TEST(FunctionTest, Personality) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module M("test", Ctx);
   Type *Int8Ty = Type::getInt8Ty(Ctx);
   FunctionType *FTy = FunctionType::get(Int8Ty, false);
@@ -626,7 +626,7 @@ TEST(FunctionTest, Personality) {
 }
 
 TEST(FunctionTest, LLVMGetOrInsertFunction) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module M("test", Ctx);
   Type *Int8Ty = Type::getInt8Ty(Ctx);
   FunctionType *FTy = FunctionType::get(Int8Ty, false);
@@ -645,7 +645,7 @@ TEST(FunctionTest, LLVMGetOrInsertFunction) {
 }
 
 TEST(FunctionTest, NoIPAInterposable) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx, R"(
     define void @foo() { bb1: ret void }
     define void @bar() #0 { bb1: ret void }

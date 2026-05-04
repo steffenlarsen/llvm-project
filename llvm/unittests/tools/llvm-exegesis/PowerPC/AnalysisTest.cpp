@@ -12,6 +12,7 @@
 #include <memory>
 
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TargetSelect.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -34,7 +35,9 @@ protected:
       errs() << error << "\n";
       return;
     }
-    STI.reset(TheTarget->createMCSubtargetInfo(TT, "pwr9", ""));
+    STI.reset(TheTarget->createMCSubtargetInfo(
+        TT, "pwr9", "",
+        /*Ctx=*/llvm::clv2::defaultOptionsContext()));
 
     // Compute the ProxResIdx of ports uses in tests.
     const auto &SM = STI->getSchedModel();

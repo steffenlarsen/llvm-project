@@ -97,8 +97,9 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -113,39 +114,18 @@
 
 using namespace llvm;
 
-static cl::opt<unsigned>
-    MaxVarsPrep("ppc-formprep-max-vars", cl::Hidden, cl::init(24),
-                cl::desc("Potential common base number threshold per function "
-                         "for PPC loop prep"));
+static unsigned MaxVarsPrep = 24;
 
-static cl::opt<bool> PreferUpdateForm("ppc-formprep-prefer-update",
-                                 cl::init(true), cl::Hidden,
-  cl::desc("prefer update form when ds form is also a update form"));
-
-static cl::opt<bool> EnableUpdateFormForNonConstInc(
-    "ppc-formprep-update-nonconst-inc", cl::init(false), cl::Hidden,
-    cl::desc("prepare update form when the load/store increment is a loop "
-             "invariant non-const value."));
-
-static cl::opt<bool> EnableChainCommoning(
-    "ppc-formprep-chain-commoning", cl::init(false), cl::Hidden,
-    cl::desc("Enable chain commoning in PPC loop prepare pass."));
+static bool PreferUpdateForm = true;
 
 // Sum of following 3 per loop thresholds for all loops can not be larger
 // than MaxVarsPrep.
 // now the thresholds for each kind prep are exterimental values on Power9.
-static cl::opt<unsigned> MaxVarsUpdateForm("ppc-preinc-prep-max-vars",
-                                 cl::Hidden, cl::init(3),
-  cl::desc("Potential PHI threshold per loop for PPC loop prep of update "
-           "form"));
+static unsigned MaxVarsUpdateForm = 3;
 
-static cl::opt<unsigned> MaxVarsDSForm("ppc-dsprep-max-vars",
-                                 cl::Hidden, cl::init(3),
-  cl::desc("Potential PHI threshold per loop for PPC loop prep of DS form"));
+static unsigned MaxVarsDSForm = 3;
 
-static cl::opt<unsigned> MaxVarsDQForm("ppc-dqprep-max-vars",
-                                 cl::Hidden, cl::init(8),
-  cl::desc("Potential PHI threshold per loop for PPC loop prep of DQ form"));
+static unsigned MaxVarsDQForm = 8;
 
 // Commoning chain will reduce the register pressure, so we don't consider about
 // the PHI nodes number.
@@ -154,23 +134,56 @@ static cl::opt<unsigned> MaxVarsDQForm("ppc-dqprep-max-vars",
 // IssueWidth, because we won't benefit from ILP if the parallel chains number
 // is bigger than IssueWidth. We assume there are 2 chains in one bucket, so
 // there would be 4 buckets at most on P9(IssueWidth is 8).
-static cl::opt<unsigned> MaxVarsChainCommon(
-    "ppc-chaincommon-max-vars", cl::Hidden, cl::init(4),
-    cl::desc("Bucket number per loop for PPC loop chain common"));
+static unsigned MaxVarsChainCommon = 4;
 
 // If would not be profitable if the common base has only one load/store, ISEL
 // should already be able to choose best load/store form based on offset for
 // single load/store. Set minimal profitable value default to 2 and make it as
 // an option.
-static cl::opt<unsigned> DispFormPrepMinThreshold("ppc-dispprep-min-threshold",
-                                    cl::Hidden, cl::init(2),
-  cl::desc("Minimal common base load/store instructions triggering DS/DQ form "
-           "preparation"));
+static unsigned DispFormPrepMinThreshold = 2;
 
-static cl::opt<unsigned> ChainCommonPrepMinThreshold(
-    "ppc-chaincommon-min-threshold", cl::Hidden, cl::init(4),
-    cl::desc("Minimal common base load/store instructions triggering chain "
-             "commoning preparation. Must be not smaller than 4"));
+static unsigned ChainCommonPrepMinThreshold = 4;
+
+static unsigned getMaxVarsPrep(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_MaxVarsPrep>(
+      F.getContext().getOptionsContext());
+}
+static bool getPreferUpdateForm(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_PreferUpdateForm>(
+      F.getContext().getOptionsContext());
+}
+static bool getEnableUpdateFormForNonConstInc(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_EnableUpdateFormForNonConstInc>(
+      F.getContext().getOptionsContext());
+}
+static bool getEnableChainCommoning(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_EnableChainCommoning>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getMaxVarsUpdateForm(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_MaxVarsUpdateForm>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getMaxVarsDSForm(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_MaxVarsDSForm>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getMaxVarsDQForm(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_MaxVarsDQForm>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getMaxVarsChainCommon(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_MaxVarsChainCommon>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getDispFormPrepMinThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_DispFormPrepMinThreshold>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getChainCommonPrepMinThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_ChainCommonPrepMinThreshold>(
+      F.getContext().getOptionsContext());
+}
 
 STATISTIC(PHINodeAlreadyExistsUpdate, "PHI node already in pre-increment form");
 STATISTIC(PHINodeAlreadyExistsDS, "PHI node already in DS form");
@@ -432,9 +445,10 @@ bool PPCLoopInstrFormPrep::prepareBasesForCommoningChains(Bucket &CBucket) {
   //
   // There is benefit because of reuse of offest 'X'.
 
-  assert(ChainCommonPrepMinThreshold >= 4 &&
+  const Function &F = *CBucket.Elements[0].Instr->getFunction();
+  assert(getChainCommonPrepMinThreshold(F) >= 4 &&
          "Thredhold can not be smaller than 4!\n");
-  if (CBucket.Elements.size() < ChainCommonPrepMinThreshold)
+  if (CBucket.Elements.size() < getChainCommonPrepMinThreshold(F))
     return false;
 
   // We simply select the FirstOffset as the first reusable offset between each
@@ -666,7 +680,8 @@ PPCLoopInstrFormPrep::rewriteForBase(Loop *L, const SCEVAddRecExpr *BasePtrSCEV,
     return std::make_pair(nullptr, nullptr);
   }
 
-  if (Form == UpdateForm && !IsConstantInc && !EnableUpdateFormForNonConstInc) {
+  if (Form == UpdateForm && !IsConstantInc &&
+      !getEnableUpdateFormForNonConstInc(*L->getHeader()->getParent())) {
     LLVM_DEBUG(
         dbgs()
         << "Update form prepare for non-const increment is not enabled!\n");
@@ -932,7 +947,9 @@ bool PPCLoopInstrFormPrep::prepareBaseForDispFormChain(Bucket &BucketChain,
       MaxCountRemainder = j;
 
   // Abort when there are too few insts with common base.
-  if (RemainderOffsetInfo[MaxCountRemainder].second < DispFormPrepMinThreshold)
+  const Function &F = *BucketChain.Elements[0].Instr->getFunction();
+  if (RemainderOffsetInfo[MaxCountRemainder].second <
+      getDispFormPrepMinThreshold(F))
     return false;
 
   // If the first value is most profitable, no needed to adjust BucketChain
@@ -1027,7 +1044,7 @@ bool PPCLoopInstrFormPrep::rewriteLoadStores(
                      !cast<SCEVConstant>(BasePtrSCEV->getStepRecurrence(*SE))
                           ->getAPInt()
                           .urem(4) &&
-                     PreferUpdateForm));
+                     getPreferUpdateForm(*L->getHeader()->getParent())));
 
   std::pair<Instruction *, Instruction *> Base =
       rewriteForBase(L, BasePtrSCEV, BucketChain.Elements.begin()->Instr,
@@ -1107,7 +1124,8 @@ bool PPCLoopInstrFormPrep::dispFormPrep(Loop *L,
 
   SmallPtrSet<BasicBlock *, 16> BBChanged;
   for (auto &Bucket : Buckets) {
-    if (Bucket.Elements.size() < DispFormPrepMinThreshold)
+    if (Bucket.Elements.size() <
+        getDispFormPrepMinThreshold(*L->getHeader()->getParent()))
       continue;
     if (prepareBaseForDispFormChain(Bucket, Form))
       MadeChange |= rewriteLoadStores(L, Bucket, BBChanged, Form);
@@ -1275,7 +1293,8 @@ bool PPCLoopInstrFormPrep::runOnLoop(Loop *L) {
     return MadeChange;
 
   // Return if already done enough preparation.
-  if (SuccPrepCount >= MaxVarsPrep)
+  const Function &F = *L->getHeader()->getParent();
+  if (SuccPrepCount >= getMaxVarsPrep(F))
     return MadeChange;
 
   LLVM_DEBUG(dbgs() << "PIP: Examining: " << *L << "\n");
@@ -1430,7 +1449,7 @@ bool PPCLoopInstrFormPrep::runOnLoop(Loop *L) {
   // Collect buckets of comparable addresses used by loads and stores for update
   // form.
   SmallVector<Bucket, 16> UpdateFormBuckets = collectCandidates(
-      L, isUpdateFormCandidate, isValidConstantDiff, MaxVarsUpdateForm);
+      L, isUpdateFormCandidate, isValidConstantDiff, getMaxVarsUpdateForm(F));
 
   // Prepare for update form.
   if (!UpdateFormBuckets.empty())
@@ -1447,7 +1466,7 @@ bool PPCLoopInstrFormPrep::runOnLoop(Loop *L) {
   // Collect buckets of comparable addresses used by loads and stores for DS
   // form.
   SmallVector<Bucket, 16> DSFormBuckets = collectCandidates(
-      L, isDSFormCandidate, isValidConstantDiff, MaxVarsDSForm);
+      L, isDSFormCandidate, isValidConstantDiff, getMaxVarsDSForm(F));
 
   // Prepare for DS form.
   if (!DSFormBuckets.empty())
@@ -1457,7 +1476,7 @@ bool PPCLoopInstrFormPrep::runOnLoop(Loop *L) {
   // Collect buckets of comparable addresses used by loads and stores for DQ
   // form.
   SmallVector<Bucket, 16> DQFormBuckets = collectCandidates(
-      L, isDQFormCandidate, isValidConstantDiff, MaxVarsDQForm);
+      L, isDQFormCandidate, isValidConstantDiff, getMaxVarsDQForm(F));
 
   // Prepare for DQ form.
   if (!DQFormBuckets.empty())
@@ -1466,7 +1485,7 @@ bool PPCLoopInstrFormPrep::runOnLoop(Loop *L) {
   // Collect buckets of comparable addresses used by loads and stores for chain
   // commoning. With chain commoning, we reuse offsets between the chains, so
   // the register pressure will be reduced.
-  if (!EnableChainCommoning) {
+  if (!getEnableChainCommoning(F)) {
     LLVM_DEBUG(dbgs() << "Chain commoning is not enabled.\n");
     return MadeChange;
   }
@@ -1474,7 +1493,7 @@ bool PPCLoopInstrFormPrep::runOnLoop(Loop *L) {
   LLVM_DEBUG(dbgs() << "Start to prepare for chain commoning.\n");
   SmallVector<Bucket, 16> Buckets =
       collectCandidates(L, isChainCommoningCandidate, isValidChainCommoningDiff,
-                        MaxVarsChainCommon);
+                        getMaxVarsChainCommon(F));
 
   // Prepare for chain commoning.
   if (!Buckets.empty())

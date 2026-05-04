@@ -34,8 +34,10 @@
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -59,12 +61,10 @@ static constexpr unsigned EpilogDistanceThreshold = 32767;
 /// exact byte offsets aren't known until MC layout, so (like the V2 pass) an
 /// approximate byte count is used as a proxy — instructions are charged
 /// ApproxBytesPerInstr each and alignment padding is added.
-static cl::opt<unsigned> ApproxBytesPerInstr(
-    "x86-wineh-unwindv3-instr-avg-size", cl::Hidden,
-    cl::desc(
-        "Average size of an instruction. This value is used in determining "
-        "split points for chained unwinder info"),
-    cl::init(7));
+static unsigned getApproxBytesPerInstr(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_ApproxBytesPerInstr>(
+      F.getContext().getOptionsContext());
+}
 
 /// After reporting a recoverable error for `MF`, erase all SEH pseudo-
 /// instructions and clear the WinCFI flag so the AsmPrinter doesn't try to
@@ -181,9 +181,9 @@ FuncletInfo X86WinEHUnwindV3::analyzeFunclet(MachineFunction &MF,
       // Approximate the emitted byte size, mirroring the V2 pass. This
       // estimates how far each epilog sits from its fragment tail; the exact
       // byte offsets aren't available until MC layout, so each real
-      // instruction is charged ApproxBytesPerInstr bytes.
+      // instruction is charged getApproxBytesPerInstr bytes.
       if (!MI.isPseudo() && !MI.isMetaInstruction())
-        ApproxBytePos += ApproxBytesPerInstr;
+        ApproxBytePos += getApproxBytesPerInstr(MF.getFunction());
 
       switch (MI.getOpcode()) {
       case X86::SEH_PushReg:

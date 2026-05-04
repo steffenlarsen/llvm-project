@@ -89,7 +89,7 @@
 #include "llvm/Option/OptSpecifier.h"
 #include "llvm/Option/OptTable.h"
 #include "llvm/Option/Option.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ExitCodes.h"
 #include "llvm/Support/FileSystem.h"
@@ -2508,8 +2508,6 @@ void Driver::PrintVersion(const Compilation &C, raw_ostream &OS) const {
   OS << "InstalledDir: " << Dir << '\n';
 
   // Print the build config if it's non-default.
-  // Intended to help LLVM developers understand the configs of compilers
-  // they're investigating.
   if (!llvm::cl::getCompilerBuildConfig().empty())
     llvm::cl::printBuildConfig(OS);
 

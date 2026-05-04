@@ -16,16 +16,18 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/PatternMatch.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
-static cl::opt<uint32_t> PredicatePassBranchWeight(
-    "guards-predicate-pass-branch-weight", cl::Hidden, cl::init(1 << 20),
-    cl::desc("The probability of a guard failing is assumed to be the "
-             "reciprocal of this value (default = 1 << 20)"));
+static unsigned getPredicatePassBranchWeight(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_PredicatePassBranchWeight>(
+      F.getContext().getOptionsContext(), 1u << 20);
+}
 
 void llvm::makeGuardControlFlowExplicit(Function *DeoptIntrinsic,
                                         CallInst *Guard, bool UseWC) {
@@ -49,8 +51,10 @@ void llvm::makeGuardControlFlowExplicit(Function *DeoptIntrinsic,
     CheckBI->setMetadata(LLVMContext::MD_make_implicit, MD);
 
   MDBuilder MDB(Guard->getContext());
-  CheckBI->setMetadata(LLVMContext::MD_prof,
-                       MDB.createBranchWeights(PredicatePassBranchWeight, 1));
+  CheckBI->setMetadata(
+      LLVMContext::MD_prof,
+      MDB.createBranchWeights(
+          getPredicatePassBranchWeight(*Guard->getFunction()), 1));
 
   IRBuilder<> B(DeoptBlockTerm);
   auto *DeoptCall = B.CreateCall(DeoptIntrinsic, Args, {DeoptOB}, "");

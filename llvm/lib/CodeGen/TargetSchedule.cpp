@@ -12,25 +12,29 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/TargetSchedule.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrItineraries.h"
 #include "llvm/MC/MCSchedule.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
 
 using namespace llvm;
 
-static cl::opt<bool> ForceEnableIntervals(
-    "sched-model-force-enable-intervals", cl::Hidden, cl::init(false),
-    cl::desc("Force the use of resource intervals in the schedule model"));
+static bool getSchedModelForceEnableIntervals(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_SchedModelForceEnableIntervals>(
+      Ctx);
+}
 
 bool TargetSchedModel::hasInstrSchedModel() const {
   return EnableSchedModel && SchedModel.hasInstrSchedModel();
@@ -294,7 +298,8 @@ computeOutputLatency(const MachineInstr *DefMI, unsigned DefOperIdx,
     if (SCDesc->isValid()) {
       for (const MCWriteProcResEntry *PRI = STI->getWriteProcResBegin(SCDesc),
              *PRE = STI->getWriteProcResEnd(SCDesc); PRI != PRE; ++PRI) {
-        if (!SchedModel.getResourceBufferSize(PRI->ProcResourceIdx))
+        if (!SchedModel.getResourceBufferSize(PRI->ProcResourceIdx,
+                                              STI->getOptionsContext()))
           return 1;
       }
     }
@@ -339,7 +344,7 @@ TargetSchedModel::computeReciprocalThroughput(const MCInst &MI) const {
 }
 
 bool TargetSchedModel::enableIntervals() const {
-  if (ForceEnableIntervals)
+  if (STI && getSchedModelForceEnableIntervals(STI->getOptionsContext()))
     return true;
 
   return SchedModel.EnableIntervals;

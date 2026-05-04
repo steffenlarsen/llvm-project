@@ -3821,6 +3821,12 @@ private:
   /// backend supports.
   unsigned MinCmpXchgSizeInBits;
 
+  /// Minimum number of entries to create a jump table.
+  unsigned MinimumJumpTableEntries = 4;
+
+  /// Maximum number of entries in a jump table (0 = no limit).
+  unsigned MaximumJumpTableSize = UINT_MAX;
+
   /// The minimum of largest number of comparisons to use bit test for switch.
   unsigned MinimumBitTestCmps;
 

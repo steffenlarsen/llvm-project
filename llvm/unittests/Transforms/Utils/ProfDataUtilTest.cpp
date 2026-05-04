@@ -27,7 +27,7 @@ static std::unique_ptr<Module> parseIR(LLVMContext &C, const char *IR) {
 }
 
 TEST(ProfDataUtils, extractWeights) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 define void @foo(i1 %cond0) {
 entry:
@@ -57,7 +57,7 @@ bb1:
 }
 
 TEST(ProfDataUtils, NoWeights) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 define void @foo(i1 %cond0) {
 entry:

@@ -16,8 +16,12 @@
 #include "llvm/Analysis/Utils/ImportedFunctionsInliningStatistics.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+}
 
 /// The inliner pass for the new pass manager.
 ///
@@ -65,8 +69,10 @@ class ModuleInlinerWrapperPass
     : public OptionalPassInfoMixin<ModuleInlinerWrapperPass> {
 public:
   LLVM_ABI ModuleInlinerWrapperPass(
-      InlineParams Params = getInlineParams(), bool MandatoryFirst = true,
-      InlineContext IC = {},
+      const clv2::OptionsContext &OptsCtx,
+      InlineParams Params =
+          getInlineParams(llvm::clv2::defaultOptionsContext()),
+      bool MandatoryFirst = true, InlineContext IC = {},
       InliningAdvisorMode Mode = InliningAdvisorMode::Default,
       unsigned MaxDevirtIterations = 0);
   ModuleInlinerWrapperPass(ModuleInlinerWrapperPass &&Arg) = default;

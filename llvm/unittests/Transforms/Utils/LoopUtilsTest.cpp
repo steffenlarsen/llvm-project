@@ -43,7 +43,7 @@ static void run(Module &M, StringRef FuncName,
 }
 
 TEST(LoopUtils, DeleteDeadLoopNest) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M =
       parseIR(C, "define void @foo() {\n"
                  "entry:\n"
@@ -96,7 +96,7 @@ TEST(LoopUtils, DeleteDeadLoopNest) {
 }
 
 TEST(LoopUtils, IsKnownPositiveInLoopTest) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M =
       parseIR(C, "define void @foo(i32 %n, i1 %c) {\n"
                  "entry:\n"
@@ -120,7 +120,7 @@ TEST(LoopUtils, IsKnownPositiveInLoopTest) {
 }
 
 TEST(LoopUtils, IsKnownNonPositiveInLoopTest) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M =
       parseIR(C, "define void @foo(i32 %n, i1 %c) {\n"
                  "entry:\n"
@@ -151,7 +151,7 @@ TEST(LoopUtils, IsKnownNonPositiveInLoopTest) {
 // loops.  They choose to reject the outer loop here because the latch does not
 // exit it.
 TEST(LoopUtils, nestedLoopSharedLatchEstimatedTripCount) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M =
       parseIR(C, "declare i1 @f()\n"
                  "declare i1 @g()\n"
@@ -198,7 +198,7 @@ TEST(LoopUtils, nestedLoopSharedLatchEstimatedTripCount) {
 
 // {get,set}LoopEstimatedTripCount implement special handling of zero.
 TEST(LoopUtils, zeroEstimatedTripCount) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   const char *IR =
       "define void @foo(i1 %c) {\n"
       "entry:\n"

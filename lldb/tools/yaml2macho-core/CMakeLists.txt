@@ -7,6 +7,7 @@ add_lldb_tool(yaml2macho-core
     yaml2macho.cpp
 
     LINK_COMPONENTS
+  AllOptions
       Support
     LINK_LIBS
       lldbUtility

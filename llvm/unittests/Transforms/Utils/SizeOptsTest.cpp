@@ -28,8 +28,8 @@ namespace {
 
 class SizeOptsTest : public testing::Test {
 protected:
-  static const char* IRString;
-  LLVMContext C;
+  static const char *IRString;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   struct BFIData {
     std::unique_ptr<DominatorTree> DT;
@@ -79,7 +79,7 @@ TEST_F(SizeOptsTest, Test) {
   EXPECT_FALSE(shouldOptimizeForSize(BB3, &PSI, BFI_F, PGSOQueryType::Test));
 }
 
-const char* SizeOptsTest::IRString = R"IR(
+const char *SizeOptsTest::IRString = R"IR(
   define i32 @g(i32 %x) !prof !14 {
     ret i32 0
   }

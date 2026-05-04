@@ -1,4 +1,6 @@
 add_llvm_component_library(LLVMObject
+  ObjectOptionsGetters.cpp
+  ObjectOptionsRegistration.cpp
   Archive.cpp
   ArchiveWriter.cpp
   BBAddrMap.cpp

@@ -365,9 +365,9 @@ static void iterateModules(PDBFile &File, LinePrinter &P, uint32_t IndentLevel,
 
   const DbiModuleList &Modules = Stream.modules();
 
-  if (opts::bytes::ModuleIndex.getNumOccurrences() > 0) {
-    iterateOneModule(File, P, Modules, opts::bytes::ModuleIndex, 1, IndentLevel,
-                     Callback);
+  if (opts::bytes::ModuleIndex.has_value()) {
+    iterateOneModule(File, P, Modules, *opts::bytes::ModuleIndex, 1,
+                     IndentLevel, Callback);
   } else {
     uint32_t Count = Modules.getModuleCount();
     uint32_t Digits = NumDigitsBase10(Count);

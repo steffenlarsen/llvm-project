@@ -20,6 +20,7 @@
 #include "llvm/MC/MCInstrItineraries.h"
 #include "llvm/MC/MCSchedule.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/TargetParser/SubtargetFeature.h"
 #include "llvm/TargetParser/Triple.h"
 #include <array>
@@ -138,7 +139,12 @@ struct SubtargetSubTypeKVStorage {
 ///
 /// Generic base class for all target subtargets.
 ///
+namespace clv2 {
+class OptionsContext;
+}
+
 class LLVM_ABI MCSubtargetInfo {
+  const clv2::OptionsContext *OptsCtx_ = &clv2::defaultOptionsContext();
   Triple TargetTriple;
   std::string CPU; // CPU being targeted.
   std::string TuneCPU; // CPU being tuned for.
@@ -161,6 +167,10 @@ class LLVM_ABI MCSubtargetInfo {
   std::string FeatureString;           // Feature string
 
 public:
+  void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx_ = &Ctx; }
+  /// Never null; reports clv2::defaultOptionsContext() when none is set.
+  LLVM_ABI const clv2::OptionsContext &getOptionsContext() const;
+
   MCSubtargetInfo(const MCSubtargetInfo &) = default;
   MCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef TuneCPU,
                   StringRef FS, StringTable PN, ArrayRef<SubtargetFeatureKV> PF,

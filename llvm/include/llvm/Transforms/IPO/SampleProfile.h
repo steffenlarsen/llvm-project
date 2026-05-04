@@ -17,20 +17,22 @@
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include <string>
 
 namespace llvm {
 
 class Module;
+namespace clv2 {
+class OptionsContext;
+}
 
-LLVM_ABI extern cl::opt<int> SampleHotCallSiteThreshold;
-LLVM_ABI extern cl::opt<int> SampleColdCallSiteThreshold;
-LLVM_ABI extern cl::opt<int> ProfileInlineGrowthLimit;
-LLVM_ABI extern cl::opt<int> ProfileInlineLimitMin;
-LLVM_ABI extern cl::opt<int> ProfileInlineLimitMax;
-LLVM_ABI extern cl::opt<bool> SortProfiledSCC;
+LLVM_ABI int getSampleHotCallSiteThreshold(const clv2::OptionsContext &Ctx);
+LLVM_ABI int getSampleColdCallSiteThreshold(const clv2::OptionsContext &Ctx);
+LLVM_ABI int getProfileInlineGrowthLimit(const clv2::OptionsContext &Ctx);
+LLVM_ABI int getProfileInlineLimitMin(const clv2::OptionsContext &Ctx);
+LLVM_ABI int getProfileInlineLimitMax(const clv2::OptionsContext &Ctx);
+LLVM_ABI bool getSortProfiledSCC(const clv2::OptionsContext &Ctx);
 
 namespace vfs {
 class FileSystem;

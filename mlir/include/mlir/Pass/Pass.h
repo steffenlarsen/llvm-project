@@ -88,26 +88,23 @@ public:
   //===--------------------------------------------------------------------===//
 
   /// This class represents a specific pass option, with a provided data type.
-  template <typename DataType,
-            typename OptionParser = detail::PassOptions::OptionParser<DataType>>
-  struct Option : public detail::PassOptions::Option<DataType, OptionParser> {
+  template <typename DataType, typename = void>
+  struct Option : public detail::PassOptions::Option<DataType> {
     template <typename... Args>
     Option(Pass &parent, StringRef arg, Args &&...args)
-        : detail::PassOptions::Option<DataType, OptionParser>(
-              parent.passOptions, arg, std::forward<Args>(args)...) {}
-    using detail::PassOptions::Option<DataType, OptionParser>::operator=;
+        : detail::PassOptions::Option<DataType>(parent.passOptions, arg,
+                                                std::forward<Args>(args)...) {}
+    using detail::PassOptions::Option<DataType>::operator=;
   };
   /// This class represents a specific pass option that contains a list of
   /// values of the provided data type.
-  template <typename DataType,
-            typename OptionParser = detail::PassOptions::OptionParser<DataType>>
-  struct ListOption
-      : public detail::PassOptions::ListOption<DataType, OptionParser> {
+  template <typename DataType, typename = void>
+  struct ListOption : public detail::PassOptions::ListOption<DataType> {
     template <typename... Args>
     ListOption(Pass &parent, StringRef arg, Args &&...args)
-        : detail::PassOptions::ListOption<DataType, OptionParser>(
+        : detail::PassOptions::ListOption<DataType>(
               parent.passOptions, arg, std::forward<Args>(args)...) {}
-    using detail::PassOptions::ListOption<DataType, OptionParser>::operator=;
+    using detail::PassOptions::ListOption<DataType>::operator=;
   };
 
   /// Attempt to initialize the options of this pass from the given string.

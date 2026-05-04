@@ -41,6 +41,8 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
 
 #define GET_GICOMBINER_DEPS
 #include "AArch64GenPostLegalizeGICombiner.inc"
@@ -718,11 +720,10 @@ static bool tryOptimizeConsecStores(SmallVectorImpl<StoreInfo> &Stores,
   return true;
 }
 
-static cl::opt<bool>
-    EnableConsecutiveMemOpOpt("aarch64-postlegalizer-consecutive-memops",
-                              cl::init(true), cl::Hidden,
-                              cl::desc("Enable consecutive memop optimization "
-                                       "in AArch64PostLegalizerCombiner"));
+static bool getEnableConsecutiveMemOpOpt(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableConsecutiveMemOpOpt>(
+      F.getContext().getOptionsContext());
+}
 
 static bool optimizeConsecutiveMemOpAddressing(MachineFunction &MF,
                                                CSEMIRBuilder &MIB) {
@@ -750,7 +751,7 @@ static bool optimizeConsecutiveMemOpAddressing(MachineFunction &MF,
   bool Changed = false;
   auto &MRI = MF.getRegInfo();
 
-  if (!EnableConsecutiveMemOpOpt)
+  if (!getEnableConsecutiveMemOpOpt(MF.getFunction()))
     return Changed;
 
   SmallVector<StoreInfo, 8> Stores;

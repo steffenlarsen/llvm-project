@@ -12,9 +12,9 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Testing/Support/SupportHelpers.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Testing/Support/SupportHelpers.h"
 #include "gtest/gtest.h"
 #include <string>
 
@@ -34,7 +34,7 @@ namespace {
 
 class GraphWriterTest : public testing::Test {
 protected:
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> makeLLVMModule() {
     const char *ModuleStrig = "define i32 @f(i32 %x) {\n"

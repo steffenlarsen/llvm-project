@@ -42,6 +42,7 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/DFAPacketizer.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineOptimizationRemarkEmitter.h"
@@ -59,9 +60,6 @@ namespace llvm {
 class AAResults;
 class NodeSet;
 class SMSchedule;
-
-extern LLVM_ABI cl::opt<bool> SwpEnableCopyToPhi;
-extern LLVM_ABI cl::opt<int> SwpForceIssueWidth;
 
 /// Software pipelining policy for a loop, which a target can customize by
 /// implementing TargetSubtargetInfo::overridePipelinerPolicy.
@@ -399,7 +397,8 @@ public:
         Topo(SUnits, &ExitSU), AA(AA), BAA(*AA) {
     initPolicy();
     P.MF->getSubtarget().getSMSMutations(Mutations);
-    if (SwpEnableCopyToPhi)
+    if (clv2::getOptValOr<&clv2::CGOptsReg, &clv2::CG_PipelinerEnableCopytophi>(
+            P.MF->getFunction().getContext().getOptionsContext(), true))
       Mutations.push_back(std::make_unique<CopyToPhiMutation>());
     BAA.enableCrossIterationMode();
   }
@@ -713,6 +712,9 @@ public:
     if (IssueWidth <= 0)
       // If IssueWidth is not specified, set a sufficiently large value
       IssueWidth = 100;
+    int SwpForceIssueWidth =
+        clv2::getOptValOr<&clv2::CGOptsReg, &clv2::CG_PipelinerForceIssueWidth>(
+            DAG->MF.getFunction().getContext().getOptionsContext(), -1);
     if (SwpForceIssueWidth > 0)
       IssueWidth = SwpForceIssueWidth;
   }

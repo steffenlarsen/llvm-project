@@ -17,6 +17,7 @@
 #include "llvm/ProfileData/DataAccessProf.h"
 #include "llvm/ProfileData/MemProf.h"
 #include "llvm/Support/Compiler.h"
+#include <optional>
 
 namespace llvm {
 class IndexedInstrProfReader;
@@ -31,7 +32,8 @@ class MemProfUsePass : public OptionalPassInfoMixin<MemProfUsePass> {
 public:
   LLVM_ABI explicit MemProfUsePass(
       std::string MemoryProfileFile,
-      IntrusiveRefCntPtr<vfs::FileSystem> FS = nullptr);
+      IntrusiveRefCntPtr<vfs::FileSystem> FS = nullptr,
+      std::optional<bool> NoPGOWarnMismatch = std::nullopt);
   LLVM_ABI PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
 
 private:
@@ -42,6 +44,9 @@ private:
                           const memprof::DataAccessProfData *DataAccessProf);
   std::string MemoryProfileFileName;
   IntrusiveRefCntPtr<vfs::FileSystem> FS;
+  // Forced by the LTO driver via PGOOptions; empty means the
+  // -no-pgo-warn-mismatch option decides on its own.
+  std::optional<bool> NoPGOWarnMismatch;
 };
 
 namespace memprof {

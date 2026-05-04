@@ -88,7 +88,8 @@ public:
     // Create a fake op to trip conversion to LLVM.
     test::dummy::FakeOp::create(builder, loc);
 
-    llvmCtx = std::make_unique<llvm::LLVMContext>();
+    llvmCtx = std::make_unique<llvm::LLVMContext>(
+        llvm::clv2::defaultOptionsContext());
   }
 };
 

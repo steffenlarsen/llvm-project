@@ -19,7 +19,7 @@
 #include "polly/CodeGen/LoopGeneratorsGOMP.h"
 #include "polly/CodeGen/LoopGeneratorsKMP.h"
 #include "polly/CodeGen/RuntimeDebugBuilder.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopInfo.h"
 #include "polly/Support/ISLTools.h"
 #include "polly/Support/SCEVValidator.h"
@@ -28,7 +28,9 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/RegionInfo.h"
@@ -49,7 +51,7 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -74,9 +76,6 @@
 using namespace llvm;
 using namespace polly;
 
-// Declared in LoopGenerators.cpp
-extern llvm::cl::opt<bool> PollyVectorizeMetadata;
-
 #define DEBUG_TYPE "polly-codegen"
 
 STATISTIC(VersionedScops, "Number of SCoPs that required versioning.");
@@ -85,33 +84,7 @@ STATISTIC(SequentialLoops, "Number of generated sequential for-loops");
 STATISTIC(ParallelLoops, "Number of generated parallel for-loops");
 STATISTIC(IfConditions, "Number of generated if-conditions");
 
-/// OpenMP backend options
 enum class OpenMPBackend { GNU, LLVM };
-
-static cl::opt<bool> PollyGenerateRTCPrint(
-    "polly-codegen-emit-rtc-print",
-    cl::desc("Emit code that prints the runtime check result dynamically."),
-    cl::Hidden, cl::cat(PollyCategory));
-
-// If this option is set we always use the isl AST generator to regenerate
-// memory accesses. Without this option set we regenerate expressions using the
-// original SCEV expressions and only generate new expressions in case the
-// access relation has been changed and consequently must be regenerated.
-static cl::opt<bool> PollyGenerateExpressions(
-    "polly-codegen-generate-expressions",
-    cl::desc("Generate AST expressions for unmodified and modified accesses"),
-    cl::Hidden, cl::cat(PollyCategory));
-
-static cl::opt<int> PollyTargetFirstLevelCacheLineSize(
-    "polly-target-first-level-cache-line-size",
-    cl::desc("The size of the first level cache line size specified in bytes."),
-    cl::Hidden, cl::init(64), cl::cat(PollyCategory));
-
-static cl::opt<OpenMPBackend> PollyOmpBackend(
-    "polly-omp-backend", cl::desc("Choose the OpenMP library to use:"),
-    cl::values(clEnumValN(OpenMPBackend::GNU, "GNU", "GNU OpenMP"),
-               clEnumValN(OpenMPBackend::LLVM, "LLVM", "LLVM OpenMP")),
-    cl::Hidden, cl::init(OpenMPBackend::GNU), cl::cat(PollyCategory));
 
 isl::ast_expr IslNodeBuilder::getUpperBound(isl::ast_node_for For,
                                             ICmpInst::Predicate &Predicate) {
@@ -646,7 +619,12 @@ void IslNodeBuilder::createForParallel(__isl_take isl_ast_node *For) {
 
   std::unique_ptr<ParallelLoopGenerator> ParallelLoopGenPtr;
 
-  switch (PollyOmpBackend) {
+  OpenMPBackend OmpBackend = OpenMPBackend::GNU;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext()))
+    OmpBackend = static_cast<OpenMPBackend>(
+        static_cast<int>(Opts->get<&llvm::clv2::POLLY_OmpBackend>()));
+  switch (OmpBackend) {
   case OpenMPBackend::GNU:
     ParallelLoopGenPtr.reset(new ParallelLoopGeneratorGOMP(Builder, DL));
     break;
@@ -790,7 +768,15 @@ void IslNodeBuilder::createForParallel(__isl_take isl_ast_node *For) {
 }
 
 void IslNodeBuilder::createFor(__isl_take isl_ast_node *For) {
-  if (IslAstInfo::isExecutedInParallel(isl::manage_copy(For))) {
+  bool PollyParallel = false;
+  bool PollyParallelForce = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext())) {
+    PollyParallel = Opts->get<&llvm::clv2::POLLY_Parallel>();
+    PollyParallelForce = Opts->get<&llvm::clv2::POLLY_ParallelForce>();
+  }
+  if (IslAstInfo::isExecutedInParallel(isl::manage_copy(For), PollyParallel,
+                                       PollyParallelForce)) {
     createForParallel(For);
     return;
   }
@@ -860,7 +846,11 @@ IslNodeBuilder::createNewAccesses(ScopStmt *Stmt,
 
   for (auto *MA : *Stmt) {
     if (!MA->hasNewAccessRelation()) {
-      if (PollyGenerateExpressions) {
+      bool GenExpr = false;
+      if (auto *Opts = polly_opts::getPollyOpts(
+              S.getFunction().getContext().getOptionsContext()))
+        GenExpr = Opts->get<&llvm::clv2::POLLY_CodegenGenerateExpressions>();
+      if (GenExpr) {
         if (!MA->isAffine())
           continue;
         if (MA->getLatestScopArrayInfo()->getBasePtrOriginSAI())
@@ -1028,7 +1018,11 @@ void IslNodeBuilder::createBlock(__isl_take isl_ast_node *Block) {
 }
 
 void IslNodeBuilder::generateBeginScopTrace() {
-  if (!TraceStmts)
+  bool TraceStmtsVal = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext()))
+    TraceStmtsVal = Opts->get<&llvm::clv2::POLLY_CodegenTraceStmts>();
+  if (!TraceStmtsVal)
     return;
 
   // Sequence of strings to print.
@@ -1444,8 +1438,13 @@ void IslNodeBuilder::allocateNewArrays(BBPair StartExitBlocks) {
 
       auto *CreatedArray = new AllocaInst(NewArrayType, DL.getAllocaAddrSpace(),
                                           SAI->getName(), InstIt);
-      if (PollyTargetFirstLevelCacheLineSize)
-        CreatedArray->setAlignment(Align(PollyTargetFirstLevelCacheLineSize));
+      int CacheLineSize = 64;
+      if (auto *Opts = polly_opts::getPollyOpts(
+              S.getFunction().getContext().getOptionsContext()))
+        CacheLineSize =
+            Opts->get<&llvm::clv2::POLLY_TargetFirstLevelCacheLineSize>();
+      if (CacheLineSize)
+        CreatedArray->setAlignment(Align(CacheLineSize));
       SAI->setBasePtr(CreatedArray);
     }
   }
@@ -1537,7 +1536,11 @@ Value *IslNodeBuilder::createRTC(isl_ast_expr *Condition) {
   Value *OverflowHappened =
       Builder.CreateNot(ExprBuilder.getOverflowState(), "polly.rtc.overflown");
 
-  if (PollyGenerateRTCPrint) {
+  bool RTCPrint = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext()))
+    RTCPrint = Opts->get<&llvm::clv2::POLLY_CodegenEmitRtcPrint>();
+  if (RTCPrint) {
     auto *F = Builder.GetInsertBlock()->getParent();
     RuntimeDebugBuilder::createCPUPrinter(
         Builder,

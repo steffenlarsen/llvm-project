@@ -134,6 +134,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/DIBuilder.h"
@@ -144,26 +145,38 @@
 #include "llvm/IR/Module.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/LineIterator.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "windows-secure-hot-patch"
 
 // A file containing list of mangled function names to mark for hot patching.
-static cl::opt<std::string> LLVMMSSecureHotPatchFunctionsFile(
-    "ms-secure-hotpatch-functions-file", cl::value_desc("filename"),
-    cl::desc("A file containing list of mangled function names to mark for "
-             "Windows Secure Hot-Patching"));
 
-// A list of mangled function names to mark for hot patching.
-static cl::list<std::string> LLVMMSSecureHotPatchFunctionsList(
-    "ms-secure-hotpatch-functions-list", cl::value_desc("list"),
-    cl::desc("A list of mangled function names to mark for Windows Secure "
-             "Hot-Patching"),
-    cl::CommaSeparated);
+static SmallVector<std::string, 8> LLVMMSSecureHotPatchFunctionsList;
+
+static const std::vector<std::string> &
+getHotPatchFunctionsList(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::CGPassCore2Reg>(Ctx))
+    return O->get<&clv2::CGPASS_MsSecureHotpatchFunctionsList>();
+  static const std::vector<std::string> Empty;
+  return Empty;
+}
+
+static bool hasHotPatchFunctionsList(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::CGPassCore2Reg>(Ctx))
+    return !O->get<&clv2::CGPASS_MsSecureHotpatchFunctionsList>().empty();
+  return !LLVMMSSecureHotPatchFunctionsList.empty();
+}
+
+static std::string
+getMsSecureHotpatchFunctionsFile(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_MsSecureHotpatchFunctionsFile>(
+      Ctx);
+}
 
 namespace {
 
@@ -212,12 +225,14 @@ bool WindowsSecureHotPatching::doInitialization(Module &M) {
   // we also allow marking functions by passing -ms-hotpatch-functions-file or
   // -ms-hotpatch-functions-list directly to LLVM. This allows hot-patching to
   // work with languages that have not yet updated their front-ends.
-  if (!LLVMMSSecureHotPatchFunctionsFile.empty() ||
-      !LLVMMSSecureHotPatchFunctionsList.empty()) {
+  auto &Ctx = M.getContext().getOptionsContext();
+  if (!getMsSecureHotpatchFunctionsFile(Ctx).empty() ||
+      hasHotPatchFunctionsList(Ctx)) {
     std::vector<std::string> HotPatchFunctionsList;
 
-    if (!LLVMMSSecureHotPatchFunctionsFile.empty()) {
-      auto BufOrErr = MemoryBuffer::getFile(LLVMMSSecureHotPatchFunctionsFile);
+    if (!getMsSecureHotpatchFunctionsFile(Ctx).empty()) {
+      auto BufOrErr =
+          MemoryBuffer::getFile(getMsSecureHotpatchFunctionsFile(Ctx));
       if (BufOrErr) {
         const MemoryBuffer &FileBuffer = **BufOrErr;
         for (line_iterator I(FileBuffer.getMemBufferRef(), true), E; I != E;
@@ -227,14 +242,24 @@ bool WindowsSecureHotPatching::doInitialization(Module &M) {
         M.getContext().diagnose(DiagnosticInfoGeneric{
             Twine("failed to open hotpatch functions file "
                   "(--ms-hotpatch-functions-file): ") +
-            LLVMMSSecureHotPatchFunctionsFile + Twine(" : ") +
+            getMsSecureHotpatchFunctionsFile(Ctx) + Twine(" : ") +
             BufOrErr.getError().message()});
       }
     }
 
-    if (!LLVMMSSecureHotPatchFunctionsList.empty())
-      for (const auto &FuncName : LLVMMSSecureHotPatchFunctionsList)
-        HotPatchFunctionsList.push_back(FuncName);
+    // Add from the clv2 ListOptionInfo (if available) or legacy fallback.
+    {
+      const cgpass_opts::CGPassCore2RegOpts *O =
+          clv2::getView<&clv2::CGPassCore2Reg>(Ctx);
+      if (O) {
+        for (const auto &FuncName :
+             O->get<&clv2::CGPASS_MsSecureHotpatchFunctionsList>())
+          HotPatchFunctionsList.push_back(FuncName);
+      } else if (!LLVMMSSecureHotPatchFunctionsList.empty()) {
+        for (const auto &FuncName : LLVMMSSecureHotPatchFunctionsList)
+          HotPatchFunctionsList.push_back(FuncName);
+      }
+    }
 
     // Build a set for quick lookups. This points into HotPatchFunctionsList, so
     // HotPatchFunctionsList must live longer than HotPatchFunctionsSet.

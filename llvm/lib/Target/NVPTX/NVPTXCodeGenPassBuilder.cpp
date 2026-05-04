@@ -55,10 +55,11 @@
 #include "llvm/Transforms/Scalar/StraightLineStrengthReduce.h"
 #include "llvm/Transforms/Vectorize/LoadStoreVectorizer.h"
 
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
+
 using namespace llvm;
 
-extern cl::opt<bool> DisableLoadStoreVectorizer;
-extern cl::opt<bool> DisableNVPTXIRPeephole;
 
 // byval arguments in NVPTX are special. We're only allowed to read from them
 // using a special instruction, and if we ever need to write to them or take an
@@ -78,10 +79,20 @@ extern cl::opt<bool> DisableNVPTXIRPeephole;
 // This early injection of the copies has potential to create undesireable
 // side-effects, so it's disabled by default, for now, until it sees more
 // testing.
-static cl::opt<bool> EarlyByValArgsCopy(
-    "nvptx-early-byval-copy",
-    cl::desc("Create a copy of byval function arguments early."),
-    cl::init(false), cl::Hidden);
+static bool getDisableLoadStoreVectorizer(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::NVPTXOptsReg,
+                           &clv2::NVPTX_DisableLoadStoreVectorizer>(Ctx, false);
+}
+
+static bool getDisableNVPTXIRPeephole(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::NVPTXOptsReg, &clv2::NVPTX_DisableIRPeephole>(
+      Ctx, false);
+}
+
+static bool getEarlyByValArgsCopy(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::NVPTXOptsReg,
+                           &clv2::NVPTX_EarlyByValArgsCopy>(Ctx, false);
+}
 
 namespace {
 
@@ -229,13 +240,13 @@ void NVPTXCodeGenPassBuilder::addIRPasses(PassManagerWrapper &PMW) {
   // but EarlyCSE can do neither of them.
   if (getOptLevel() != CodeGenOptLevel::None) {
     addEarlyCSEOrGVNPass(PMW);
-    if (!DisableLoadStoreVectorizer)
+    if (!getDisableLoadStoreVectorizer(TM.getOptionsContext()))
       addFunctionPass(LoadStoreVectorizerPass(), PMW);
     addFunctionPass(SROAPass(SROAOptions(SROAOptions::PreserveCFG,
                                          /*AggregateToVector=*/true)),
                     PMW);
     addFunctionPass(NVPTXTagInvariantLoadsPass(), PMW);
-    if (!DisableNVPTXIRPeephole)
+    if (!getDisableNVPTXIRPeephole(TM.getOptionsContext()))
       addFunctionPass(NVPTXIRPeepholePass(), PMW);
   }
 
@@ -335,12 +346,13 @@ void NVPTXTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
         // Note: NVVMIntrRangePass was causing numerical discrepancies at one
         // point, if issues crop up, consider disabling.
         FPM.addPass(NVVMIntrRangePass());
-        if (EarlyByValArgsCopy)
+        if (getEarlyByValArgsCopy(getOptionsContext()))
           FPM.addPass(NVPTXCopyByValArgsPass());
         PM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
       });
 
-  if (!NoKernelInfoEndLTO) {
+  if (!clv2::getOptValOrDefault<&clv2::CGPASS_NoKernelInfoEndLto>(
+          getOptionsContext())) {
     PB.registerFullLinkTimeOptimizationLastEPCallback(
         [this](ModulePassManager &PM, OptimizationLevel Level) {
           FunctionPassManager FPM;

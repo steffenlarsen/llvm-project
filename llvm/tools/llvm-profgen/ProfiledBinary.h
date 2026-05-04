@@ -33,7 +33,6 @@
 #include "llvm/Object/BuildID.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/ProfileData/SampleProf.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Transforms/IPO/SampleContextTracker.h"
 #include <map>
@@ -45,6 +44,9 @@
 #include <vector>
 
 namespace llvm {
+
+struct ProfGenConfig;
+
 namespace sampleprof {
 
 class ProfiledBinary;
@@ -202,6 +204,7 @@ struct MMapEvent {
 };
 
 class ProfiledBinary {
+  const ProfGenConfig &Config;
   // The executable binary file.
   object::OwningBinary<object::Binary> OBinary;
   // Absolute path of the executable binary.
@@ -423,8 +426,11 @@ class ProfiledBinary {
                                      bool UseProbeDiscriminator = false);
 
 public:
-  ProfiledBinary(const StringRef ExeBinPath, const StringRef DebugBinPath);
+  ProfiledBinary(const StringRef ExeBinPath, const StringRef DebugBinPath,
+                 const ProfGenConfig &Config);
   ~ProfiledBinary();
+
+  const ProfGenConfig &getConfig() const { return Config; }
 
   /// Decode the interesting parts of the binary and build internal data
   /// structures. On high level, the parts of interest are:

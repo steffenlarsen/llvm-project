@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- PlaceSafepoints.cpp - Place GC Safepoints --------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -58,11 +60,11 @@
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Statepoint.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -83,20 +85,26 @@ STATISTIC(FiniteExecution,
 
 // Ignore opportunities to avoid placing safepoints on backedges, useful for
 // validation
-static cl::opt<bool> AllBackedges("spp-all-backedges", cl::Hidden,
-                                  cl::init(false));
+static bool getAllBackedges(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SppAllBackedges>(
+      F.getContext().getOptionsContext(), false);
+}
 
 /// How narrow does the trip count of a loop have to be to have to be considered
 /// "counted"?  Counted loops do not get safepoints at backedges.
-static cl::opt<int> CountedLoopTripWidth("spp-counted-loop-trip-width",
-                                         cl::Hidden, cl::init(32));
+static int getCountedLoopTripWidth(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_SppCountedLoopTripWidth>(
+      F.getContext().getOptionsContext());
+}
 
 // If true, split the backedge of a loop when placing the safepoint, otherwise
 // split the latch block itself.  Both are useful to support for
 // experimentation, but in practice, it looks like splitting the backedge
 // optimizes better.
-static cl::opt<bool> SplitBackedge("spp-split-backedge", cl::Hidden,
-                                   cl::init(false));
+static bool getSplitBackedge(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SppSplitBackedge>(
+      F.getContext().getOptionsContext(), false);
+}
 
 namespace {
 /// An analysis pass whose purpose is to identify each of the backedges in
@@ -157,9 +165,18 @@ private:
 };
 } // namespace
 
-static cl::opt<bool> NoEntry("spp-no-entry", cl::Hidden, cl::init(false));
-static cl::opt<bool> NoCall("spp-no-call", cl::Hidden, cl::init(false));
-static cl::opt<bool> NoBackedge("spp-no-backedge", cl::Hidden, cl::init(false));
+static bool getNoEntry(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SppNoEntry>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool getNoCall(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SppNoCall>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool getNoBackedge(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SppNoBackedge>(
+      F.getContext().getOptionsContext(), false);
+}
 
 char PlaceBackedgeSafepointsLegacyPass::ID = 0;
 
@@ -210,7 +227,7 @@ bool PlaceBackedgeSafepointsLegacyPass::runOnLoop(Loop *L) {
     // Make a policy decision about whether this loop needs a safepoint or
     // not.  Note that this is about unburdening the optimizer in loops, not
     // avoiding the runtime cost of the actual safepoint.
-    if (!AllBackedges) {
+    if (!getAllBackedges(*L->getHeader()->getParent())) {
       if (mustBeFiniteCountedLoop(L, SE, Pred)) {
         LLVM_DEBUG(dbgs() << "skipping safepoint placement in finite loop\n");
         FiniteExecution++;
@@ -319,7 +336,7 @@ bool PlaceSafepointsPass::runImpl(Function &F, const TargetLibraryInfo &TLI) {
       // We are inserting a poll, the function is modified
       Modified = true;
 
-      if (SplitBackedge) {
+      if (getSplitBackedge(F)) {
         // Split the backedge of the loop and insert the poll within that new
         // basic block.  This creates a loop with two latches per original
         // latch (which is non-ideal), but this appears to be easier to
@@ -448,7 +465,7 @@ static bool mustBeFiniteCountedLoop(Loop *L, ScalarEvolution *SE,
   const SCEV *MaxTrips = SE->getConstantMaxBackedgeTakenCount(L);
   if (!isa<SCEVCouldNotCompute>(MaxTrips) &&
       SE->getUnsignedRange(MaxTrips).getUnsignedMax().isIntN(
-          CountedLoopTripWidth))
+          getCountedLoopTripWidth(*L->getHeader()->getParent())))
     return true;
 
   // If this is a conditional branch to the header with the alternate path
@@ -460,8 +477,8 @@ static bool mustBeFiniteCountedLoop(Loop *L, ScalarEvolution *SE,
     const SCEV *MaxExec = SE->getExitCount(L, Pred);
     if (!isa<SCEVCouldNotCompute>(MaxExec) &&
         SE->getUnsignedRange(MaxExec).getUnsignedMax().isIntN(
-            CountedLoopTripWidth))
-        return true;
+            getCountedLoopTripWidth(*L->getHeader()->getParent())))
+      return true;
   }
 
   return /* not finite */ false;
@@ -609,9 +626,9 @@ static bool shouldRewriteFunction(Function &F) {
 
 // TODO: These should become properties of the GCStrategy, possibly with
 // command line overrides.
-static bool enableEntrySafepoints(Function &F) { return !NoEntry; }
-static bool enableBackedgeSafepoints(Function &F) { return !NoBackedge; }
-static bool enableCallSafepoints(Function &F) { return !NoCall; }
+static bool enableEntrySafepoints(Function &F) { return !getNoEntry(F); }
+static bool enableBackedgeSafepoints(Function &F) { return !getNoBackedge(F); }
+static bool enableCallSafepoints(Function &F) { return !getNoCall(F); }
 
 // Insert a safepoint poll immediately before the given instruction.  Does
 // not handle the parsability of state at the runtime call, that's the

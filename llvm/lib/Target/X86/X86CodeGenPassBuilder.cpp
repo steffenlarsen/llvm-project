@@ -33,11 +33,11 @@
 #include "llvm/Passes/CodeGenPassBuilder.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 #include "llvm/Transforms/CFGuard.h"
 
 using namespace llvm;
-
-extern cl::opt<bool> X86EnableMachineCombinerPass;
 
 namespace {
 
@@ -171,7 +171,8 @@ Error X86CodeGenPassBuilder::addGlobalInstructionSelect(
 
 void X86CodeGenPassBuilder::addILPOpts(PassManagerWrapper &PMW) {
   addMachineFunctionPass(EarlyIfConverterPass(), PMW);
-  if (X86EnableMachineCombinerPass)
+  if (clv2::getOptValOrDefault<&clv2::X86_MachineCombiner>(
+          TM.getOptionsContext()))
     addMachineFunctionPass(MachineCombinerPass(), PMW);
   addMachineFunctionPass(X86CmovConversionPass(), PMW);
 }

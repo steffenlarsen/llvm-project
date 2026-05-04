@@ -25,7 +25,7 @@ static std::unique_ptr<Module> parseIR(LLVMContext &C, const char *IR) {
 }
 
 TEST(AbstractCallSite, CallbackCall) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *IR =
       "define void @callback(ptr %X, ptr %A) {\n"
@@ -68,7 +68,7 @@ TEST(AbstractCallSite, CallbackCall) {
 }
 
 TEST(AbstractCallSite, DirectCall) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *IR = "declare void @bar(i32 %x, i32 %y)\n"
                    "define void @foo() {\n"
@@ -110,7 +110,7 @@ TEST(AbstractCallSite, DirectCall) {
 }
 
 TEST(AbstractCallSite, IndirectCall) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *IR = "define void @foo(ptr %0) {\n"
                    "  call void %0(i32 1, i32 2)\n"

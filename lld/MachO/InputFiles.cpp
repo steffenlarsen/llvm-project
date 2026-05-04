@@ -2421,7 +2421,7 @@ BitcodeFile::BitcodeFile(MemoryBufferRef mb, StringRef archiveName,
                                          : archiveName + "(" +
                                                sys::path::filename(path) + ")" +
                                                utostr(offsetInArchive)));
-  obj = check(lto::InputFile::create(mbref));
+  obj = check(lto::InputFile::create(mbref, *commonContext().llvmOptsCtx));
   if (lazy)
     parseLazy();
   else

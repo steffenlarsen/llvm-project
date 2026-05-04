@@ -19,6 +19,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/iterator_range.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/LiveIntervalCalc.h"
 #include "llvm/CodeGen/LiveVariables.h"
@@ -38,16 +39,18 @@
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/CodeGen/VirtRegMap.h"
 #include "llvm/Config/llvm-config.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/ProfileSummary.h"
 #include "llvm/IR/Statepoint.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/LaneBitmask.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -96,18 +99,13 @@ bool LiveIntervalsWrapperPass::runOnMachineFunction(MachineFunction &MF) {
   return false;
 }
 
-#ifndef NDEBUG
-static cl::opt<bool> EnablePrecomputePhysRegs(
-  "precompute-phys-liveness", cl::Hidden,
-  cl::desc("Eagerly compute live intervals for all physreg units."));
-#else
-static bool EnablePrecomputePhysRegs = false;
-#endif // NDEBUG
+static bool getPrecomputePhysLiveness(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_PrecomputePhysLiveness>(Ctx);
+}
 
-cl::opt<bool> llvm::UseSegmentSetForPhysRegs(
-    "use-segment-set-for-physregs", cl::Hidden, cl::init(true),
-    cl::desc(
-        "Use segment set for the computation of the live ranges of physregs."));
+static bool UseSegmentSetForPhysRegs = true;
+
+bool llvm::getUseSegmentSetForPhysRegs() { return UseSegmentSetForPhysRegs; }
 
 void LiveIntervalsWrapperPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesCFG();
@@ -172,7 +170,8 @@ void LiveIntervals::analyze(MachineFunction &fn) {
   computeRegMasks();
   computeLiveInRegUnits();
 
-  if (EnablePrecomputePhysRegs) {
+  if (getPrecomputePhysLiveness(
+          MF->getFunction().getContext().getOptionsContext())) {
     // For stress testing, precompute live ranges of all physical register
     // units, including reserved registers.
     for (MCRegUnit Unit : TRI->regunits())
@@ -384,7 +383,7 @@ void LiveIntervals::computeRegUnitRange(LiveRange &LR, MCRegUnit Unit) {
   }
 
   // Flush the segment set to the segment vector.
-  if (UseSegmentSetForPhysRegs)
+  if (getUseSegmentSetForPhysRegs())
     LR.flushSegmentSet();
 }
 
@@ -413,7 +412,7 @@ void LiveIntervals::computeLiveInRegUnits() {
         if (!LR) {
           // Use segment set to speed-up initial computation of the live range.
           LR = RegUnitRanges[static_cast<unsigned>(Unit)] =
-              new LiveRange(UseSegmentSetForPhysRegs);
+              new LiveRange(getUseSegmentSetForPhysRegs());
           NewRanges.push_back(Unit);
         }
         VNInfo *VNI = LR->createDeadDef(Begin, getVNInfoAllocator());
@@ -1884,3 +1883,13 @@ void LiveIntervals::constructMainRangeFromSubranges(LiveInterval &LI) {
   LICalc->reset(MF, getSlotIndexes(), DomTree, &getVNInfoAllocator());
   LICalc->constructMainRangeFromSubranges(LI);
 }
+
+//===----------------------------------------------------------------------===//
+// Runtime option registration for CLI flags.
+//===----------------------------------------------------------------------===//
+
+static constexpr clv2::OptionInfo<bool> OI_UseSegmentSet{
+    "use-segment-set-for-physregs",
+    "Use segment set for the computation of the live ranges of physregs.",
+    clv2::Hidden};
+static constexpr clv2::OptionsRegistry<&OI_UseSegmentSet> UseSegmentSetReg;

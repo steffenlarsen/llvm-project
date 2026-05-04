@@ -12,13 +12,36 @@
 #include "llvm/IR/PassManager.h"
 
 namespace llvm {
+
+struct CostModelPrintOptions {
+  enum class CostKind {
+    RecipThroughput,
+    Latency,
+    CodeSize,
+    SizeAndLatency,
+    All,
+  };
+  enum class IntrinsicCostStrategy {
+    InstructionCost,
+    IntrinsicCost,
+    TypeBasedIntrinsicCost,
+  };
+
+  CostKind Kind = CostKind::RecipThroughput;
+  IntrinsicCostStrategy IntrinsicStrategy =
+      IntrinsicCostStrategy::InstructionCost;
+};
+
 /// Printer pass for cost modeling results.
 class CostModelPrinterPass
     : public RequiredPassInfoMixin<CostModelPrinterPass> {
   raw_ostream &OS;
+  CostModelPrintOptions Options;
 
 public:
-  explicit CostModelPrinterPass(raw_ostream &OS) : OS(OS) {}
+  explicit CostModelPrinterPass(raw_ostream &OS,
+                                CostModelPrintOptions Options = {})
+      : OS(OS), Options(Options) {}
 
   LLVM_ABI PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 };

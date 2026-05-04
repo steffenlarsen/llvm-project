@@ -110,7 +110,7 @@ private:
   uint16_t NumRegs;
 
 public:
-  StokeInfo(const cl::opt<bool> &PrintPass) : BinaryFunctionPass(PrintPass) {}
+  StokeInfo(const bool PrintPass) : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "stoke-get-stat"; }
 

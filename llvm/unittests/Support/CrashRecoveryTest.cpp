@@ -8,7 +8,7 @@
 
 #include "llvm/Config/config.h"
 #include "llvm/Config/llvm-config.h" // for LLVM_ON_UNIX
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/CrashRecoveryContext.h"
 #include "llvm/Support/FileSystem.h"
@@ -148,7 +148,15 @@ TEST(CrashRecoveryTest, Abort) {
 extern const char *TestMainArgv0;
 
 // Just a reachable symbol to ease resolving of the executable's path.
-static cl::opt<std::string> CrashTestStringArg1("crash-test-string-arg1");
+static std::string CrashTestStringArg1;
+static unsigned CrashTestStringArg1Count = 0;
+// A constexpr descriptor drives the typed parser; the slot is this file's
+// existing global, which makeEntry takes as a separate argument.
+static constexpr clv2::OptionInfo<std::string> OI_CrashTestStringArg1{
+    "crash-test-string-arg1", ""};
+static const int CrashTestInit = ([] {
+  clv2::registerDynamicEntry(clv2::makeEntry<&OI_CrashTestStringArg1>(CrashTestStringArg1, CrashTestStringArg1Count));
+}(), 0);
 
 TEST(CrashRecoveryTest, UnixCRCReturnCode) {
   using namespace llvm::sys;

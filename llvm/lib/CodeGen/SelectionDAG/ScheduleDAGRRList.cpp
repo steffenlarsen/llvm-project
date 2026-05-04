@@ -21,6 +21,7 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineOperand.h"
@@ -37,15 +38,17 @@
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/CodeGenTypes/MachineValueType.h"
 #include "llvm/Config/llvm-config.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -89,45 +92,18 @@ static RegisterScheduler
                       "which tries to balance ILP and register pressure",
                       createILPListDAGScheduler);
 
-static cl::opt<bool> DisableSchedCycles(
-  "disable-sched-cycles", cl::Hidden, cl::init(false),
-  cl::desc("Disable cycle-level precision during preRA scheduling"));
-
-// Temporary sched=list-ilp flags until the heuristics are robust.
-// Some options are also available under sched=list-hybrid.
-static cl::opt<bool> DisableSchedRegPressure(
-  "disable-sched-reg-pressure", cl::Hidden, cl::init(false),
-  cl::desc("Disable regpressure priority in sched=list-ilp"));
-static cl::opt<bool> DisableSchedLiveUses(
-  "disable-sched-live-uses", cl::Hidden, cl::init(true),
-  cl::desc("Disable live use priority in sched=list-ilp"));
-static cl::opt<bool> DisableSchedVRegCycle(
-  "disable-sched-vrcycle", cl::Hidden, cl::init(false),
-  cl::desc("Disable virtual register cycle interference checks"));
-static cl::opt<bool> DisableSchedPhysRegJoin(
-  "disable-sched-physreg-join", cl::Hidden, cl::init(false),
-  cl::desc("Disable physreg def-use affinity"));
-static cl::opt<bool> DisableSchedStalls(
-  "disable-sched-stalls", cl::Hidden, cl::init(true),
-  cl::desc("Disable no-stall priority in sched=list-ilp"));
-static cl::opt<bool> DisableSchedCriticalPath(
-  "disable-sched-critical-path", cl::Hidden, cl::init(false),
-  cl::desc("Disable critical path priority in sched=list-ilp"));
-static cl::opt<bool> DisableSchedHeight(
-  "disable-sched-height", cl::Hidden, cl::init(false),
-  cl::desc("Disable scheduled-height priority in sched=list-ilp"));
-static cl::opt<bool> Disable2AddrHack(
-  "disable-2addr-hack", cl::Hidden, cl::init(true),
-  cl::desc("Disable scheduler's two-address hack"));
-
-static cl::opt<int> MaxReorderWindow(
-  "max-sched-reorder", cl::Hidden, cl::init(6),
-  cl::desc("Number of instructions to allow ahead of the critical path "
-           "in sched=list-ilp"));
-
-static cl::opt<unsigned>
-    AvgIPC("sched-avg-ipc", cl::Hidden, cl::init(1),
-           cl::desc("Average inst/cycle when no target itinerary exists."));
+// Forward declarations for accessor functions defined later in the file.
+static bool getDisableSchedCycles(const clv2::OptionsContext &Ctx);
+static bool getDisableSchedRegPressure(const clv2::OptionsContext &Ctx);
+static bool getDisableSchedLiveUses(const clv2::OptionsContext &Ctx);
+static bool getDisableSchedVrcycle(const clv2::OptionsContext &Ctx);
+static bool getDisableSchedPhysregJoin(const clv2::OptionsContext &Ctx);
+static bool getDisableSchedStalls(const clv2::OptionsContext &Ctx);
+static bool getDisableSchedCriticalPath(const clv2::OptionsContext &Ctx);
+static bool getDisableSchedHeight(const clv2::OptionsContext &Ctx);
+static bool getDisable2addrHack(const clv2::OptionsContext &Ctx);
+static int getMaxSchedReorder(const clv2::OptionsContext &Ctx);
+static unsigned getSchedAvgIpc(const clv2::OptionsContext &Ctx);
 
 namespace {
 
@@ -192,7 +168,9 @@ public:
       : ScheduleDAGSDNodes(mf), NeedLatency(needlatency),
         AvailableQueue(availqueue), Topo(SUnits, nullptr) {
     const TargetSubtargetInfo &STI = mf.getSubtarget();
-    if (DisableSchedCycles || !NeedLatency)
+    if (getDisableSchedCycles(
+            mf.getFunction().getContext().getOptionsContext()) ||
+        !NeedLatency)
       HazardRec = new ScheduleHazardRecognizer();
     else
       HazardRec = STI.getInstrInfo()->CreateTargetHazardRecognizer(&STI, this);
@@ -244,8 +222,9 @@ public:
 
 private:
   bool isReady(SUnit *SU) {
-    return DisableSchedCycles || !AvailableQueue->hasReadyFilter() ||
-      AvailableQueue->isReady(SU);
+    return getDisableSchedCycles(
+               MF.getFunction().getContext().getOptionsContext()) ||
+           !AvailableQueue->hasReadyFilter() || AvailableQueue->isReady(SU);
   }
 
   void ReleasePred(SUnit *SU, const SDep *PredEdge);
@@ -360,7 +339,9 @@ void ScheduleDAGRRList::Schedule() {
   CurCycle = 0;
   IssueCount = 0;
   MinAvailableCycle =
-      DisableSchedCycles ? 0 : std::numeric_limits<unsigned>::max();
+      getDisableSchedCycles(MF.getFunction().getContext().getOptionsContext())
+          ? 0
+          : std::numeric_limits<unsigned>::max();
   NumLiveRegs = 0;
   // Allocate slots for each physical register, plus one for a special register
   // to track the virtual resource of a calling sequence.
@@ -599,7 +580,8 @@ void ScheduleDAGRRList::ReleasePredecessors(SUnit *SU) {
 /// Check to see if any of the pending instructions are ready to issue.  If
 /// so, add them to the available queue.
 void ScheduleDAGRRList::ReleasePending() {
-  if (DisableSchedCycles) {
+  if (getDisableSchedCycles(
+          MF.getFunction().getContext().getOptionsContext())) {
     assert(PendingQueue.empty() && "pending instrs not allowed in this mode");
     return;
   }
@@ -651,7 +633,7 @@ void ScheduleDAGRRList::AdvanceToCycle(unsigned NextCycle) {
 /// Move the scheduler state forward until the specified node's dependents are
 /// ready and can be scheduled with no resource conflicts.
 void ScheduleDAGRRList::AdvancePastStalls(SUnit *SU) {
-  if (DisableSchedCycles)
+  if (getDisableSchedCycles(MF.getFunction().getContext().getOptionsContext()))
     return;
 
   // FIXME: Nodes such as CopyFromReg probably should not advance the current
@@ -762,7 +744,8 @@ void ScheduleDAGRRList::ScheduleNodeBottomUp(SUnit *SU) {
   // If HazardRec is disabled, and each inst counts as one cycle, then
   // advance CurCycle before ReleasePredecessors to avoid useless pushes to
   // PendingQueue for schedulers that implement HasReadyFilter.
-  if (!HazardRec->isEnabled() && AvgIPC < 2)
+  if (!HazardRec->isEnabled() &&
+      getSchedAvgIpc(MF.getFunction().getContext().getOptionsContext()) < 2)
     AdvanceToCycle(CurCycle + 1);
 
   // Update liveness of predecessors before successors to avoid treating a
@@ -808,11 +791,14 @@ void ScheduleDAGRRList::ScheduleNodeBottomUp(SUnit *SU) {
   // ReleasePredecessors. In that case, IssueCount should remain 0.
   //
   // Check AvailableQueue after ReleasePredecessors in case of zero latency.
-  if (HazardRec->isEnabled() || AvgIPC > 1) {
+  if (HazardRec->isEnabled() ||
+      getSchedAvgIpc(MF.getFunction().getContext().getOptionsContext()) > 1) {
     if (SU->getNode() && SU->getNode()->isMachineOpcode())
       ++IssueCount;
-    if ((HazardRec->isEnabled() && HazardRec->atIssueLimit())
-        || (!HazardRec->isEnabled() && IssueCount == AvgIPC))
+    if ((HazardRec->isEnabled() && HazardRec->atIssueLimit()) ||
+        (!HazardRec->isEnabled() &&
+         IssueCount ==
+             getSchedAvgIpc(MF.getFunction().getContext().getOptionsContext())))
       AdvanceToCycle(CurCycle + 1);
   }
 }
@@ -914,12 +900,13 @@ void ScheduleDAGRRList::UnscheduleNodeBottomUp(SUnit *SU) {
   SU->setHeightDirty();
   SU->isScheduled = false;
   SU->isAvailable = true;
-  if (!DisableSchedCycles && AvailableQueue->hasReadyFilter()) {
+  if (!getDisableSchedCycles(
+          MF.getFunction().getContext().getOptionsContext()) &&
+      AvailableQueue->hasReadyFilter()) {
     // Don't make available until backtracking is complete.
     SU->isPending = true;
     PendingQueue.push_back(SU);
-  }
-  else {
+  } else {
     AvailableQueue->push(SU);
   }
   AvailableQueue->unscheduledNode(SU);
@@ -1756,6 +1743,8 @@ public:
     scheduleDAG = scheduleDag;
   }
 
+  const Function &getFunction() const { return MF.getFunction(); }
+
   ScheduleHazardRecognizer* getHazardRec() {
     return scheduleDAG->getHazardRec();
   }
@@ -2398,8 +2387,8 @@ static bool hasOnlyLiveOutUses(const SUnit *SU) {
 // CopyFromReg so that this node becomes the virtual register "kill". This
 // avoids interference between the values live in and out of the block and
 // eliminates a copy inside the loop.
-static void initVRegCycle(SUnit *SU) {
-  if (DisableSchedVRegCycle)
+static void initVRegCycle(SUnit *SU, const clv2::OptionsContext &Ctx) {
+  if (getDisableSchedVrcycle(Ctx))
     return;
 
   if (!hasOnlyLiveInOpers(SU) || !hasOnlyLiveOutUses(SU))
@@ -2519,7 +2508,8 @@ static bool BURRSort(SUnit *left, SUnit *right, RegReductionPQBase *SPQ) {
   // motivated by microarchitectures that can fuse cmp+jump macro-ops. But as
   // long as shortening physreg live ranges is generally good, we can defer
   // creating a subtarget hook.
-  if (!DisableSchedPhysRegJoin) {
+  if (!getDisableSchedPhysregJoin(
+          SPQ->getFunction().getContext().getOptionsContext())) {
     bool LHasPhysReg = left->hasPhysRegDefs;
     bool RHasPhysReg = right->hasPhysRegDefs;
     if (LHasPhysReg != RHasPhysReg) {
@@ -2598,13 +2588,13 @@ static bool BURRSort(SUnit *left, SUnit *right, RegReductionPQBase *SPQ) {
     return (left->NodeQueueId > right->NodeQueueId);
 
   // Do not compare latencies when one or both of the nodes are calls.
-  if (!DisableSchedCycles &&
+  if (!getDisableSchedCycles(
+          SPQ->getFunction().getContext().getOptionsContext()) &&
       !(left->isCall || right->isCall)) {
     int result = BUCompareLatency(left, right, false /*checkPref*/, SPQ);
     if (result != 0)
       return result > 0;
-  }
-  else {
+  } else {
     if (left->getHeight() != right->getHeight())
       return left->getHeight() > right->getHeight();
 
@@ -2736,41 +2726,54 @@ bool ilp_ls_rr_sort::operator()(SUnit *left, SUnit *right) const {
 
   unsigned LLiveUses = 0, RLiveUses = 0;
   int LPDiff = 0, RPDiff = 0;
-  if (!DisableSchedRegPressure || !DisableSchedLiveUses) {
+  if (!getDisableSchedRegPressure(
+          SPQ->getFunction().getContext().getOptionsContext()) ||
+      !getDisableSchedLiveUses(
+          SPQ->getFunction().getContext().getOptionsContext())) {
     LPDiff = SPQ->RegPressureDiff(left, LLiveUses);
     RPDiff = SPQ->RegPressureDiff(right, RLiveUses);
   }
-  if (!DisableSchedRegPressure && LPDiff != RPDiff) {
+  if (!getDisableSchedRegPressure(
+          SPQ->getFunction().getContext().getOptionsContext()) &&
+      LPDiff != RPDiff) {
     LLVM_DEBUG(dbgs() << "RegPressureDiff SU(" << left->NodeNum
                       << "): " << LPDiff << " != SU(" << right->NodeNum
                       << "): " << RPDiff << "\n");
     return LPDiff > RPDiff;
   }
 
-  if (!DisableSchedRegPressure && (LPDiff > 0 || RPDiff > 0)) {
+  if (!getDisableSchedRegPressure(
+          SPQ->getFunction().getContext().getOptionsContext()) &&
+      (LPDiff > 0 || RPDiff > 0)) {
     bool LReduce = canEnableCoalescing(left);
     bool RReduce = canEnableCoalescing(right);
     if (LReduce && !RReduce) return false;
     if (RReduce && !LReduce) return true;
   }
 
-  if (!DisableSchedLiveUses && (LLiveUses != RLiveUses)) {
+  if (!getDisableSchedLiveUses(
+          SPQ->getFunction().getContext().getOptionsContext()) &&
+      (LLiveUses != RLiveUses)) {
     LLVM_DEBUG(dbgs() << "Live uses SU(" << left->NodeNum << "): " << LLiveUses
                       << " != SU(" << right->NodeNum << "): " << RLiveUses
                       << "\n");
     return LLiveUses < RLiveUses;
   }
 
-  if (!DisableSchedStalls) {
+  if (!getDisableSchedStalls(
+          SPQ->getFunction().getContext().getOptionsContext())) {
     bool LStall = BUHasStall(left, left->getHeight(), SPQ);
     bool RStall = BUHasStall(right, right->getHeight(), SPQ);
     if (LStall != RStall)
       return left->getHeight() > right->getHeight();
   }
 
-  if (!DisableSchedCriticalPath) {
+  if (!getDisableSchedCriticalPath(
+          SPQ->getFunction().getContext().getOptionsContext())) {
     int spread = (int)left->getDepth() - (int)right->getDepth();
-    if (std::abs(spread) > MaxReorderWindow) {
+    if (std::abs(spread) >
+        getMaxSchedReorder(
+            SPQ->getFunction().getContext().getOptionsContext())) {
       LLVM_DEBUG(dbgs() << "Depth of SU(" << left->NodeNum << "): "
                         << left->getDepth() << " != SU(" << right->NodeNum
                         << "): " << right->getDepth() << "\n");
@@ -2778,9 +2781,12 @@ bool ilp_ls_rr_sort::operator()(SUnit *left, SUnit *right) const {
     }
   }
 
-  if (!DisableSchedHeight && left->getHeight() != right->getHeight()) {
+  if (!getDisableSchedHeight(
+          SPQ->getFunction().getContext().getOptionsContext()) &&
+      left->getHeight() != right->getHeight()) {
     int spread = (int)left->getHeight() - (int)right->getHeight();
-    if (std::abs(spread) > MaxReorderWindow)
+    if (std::abs(spread) >
+        getMaxSchedReorder(SPQ->getFunction().getContext().getOptionsContext()))
       return left->getHeight() > right->getHeight();
   }
 
@@ -2790,7 +2796,7 @@ bool ilp_ls_rr_sort::operator()(SUnit *left, SUnit *right) const {
 void RegReductionPQBase::initNodes(std::vector<SUnit> &sunits) {
   SUnits = &sunits;
   // Add pseudo dependency edges for two-address nodes.
-  if (!Disable2AddrHack)
+  if (!getDisable2addrHack(MF.getFunction().getContext().getOptionsContext()))
     AddPseudoTwoAddrDeps();
   // Reroute edges to nodes with multiple uses.
   if (!TracksRegPressure && !SrcOrder)
@@ -2799,9 +2805,11 @@ void RegReductionPQBase::initNodes(std::vector<SUnit> &sunits) {
   CalculateSethiUllmanNumbers();
 
   // For single block loops, mark nodes that look like canonical IV increments.
-  if (scheduleDAG->BB->isSuccessor(scheduleDAG->BB))
+  if (scheduleDAG->BB->isSuccessor(scheduleDAG->BB)) {
+    const auto &Ctx = MF.getFunction().getContext().getOptionsContext();
     for (SUnit &SU : sunits)
-      initVRegCycle(&SU);
+      initVRegCycle(&SU, Ctx);
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -3173,4 +3181,48 @@ ScheduleDAGSDNodes *llvm::createILPListDAGScheduler(SelectionDAGISel *IS,
   ScheduleDAGRRList *SD = new ScheduleDAGRRList(*IS->MF, true, PQ, OptLevel);
   PQ->setScheduleDAG(SD);
   return SD;
+}
+
+static bool getDisableSchedCycles(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableSchedCycles>(Ctx);
+}
+
+static bool getDisableSchedRegPressure(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableSchedRegPressure>(Ctx);
+}
+
+static bool getDisableSchedLiveUses(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableSchedLiveUses>(Ctx);
+}
+
+static bool getDisableSchedVrcycle(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableSchedVrcycle>(Ctx);
+}
+
+static bool getDisableSchedPhysregJoin(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableSchedPhysregJoin>(Ctx);
+}
+
+static bool getDisableSchedStalls(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableSchedStalls>(Ctx);
+}
+
+static bool getDisableSchedCriticalPath(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableSchedCriticalPath>(Ctx);
+}
+
+static bool getDisableSchedHeight(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableSchedHeight>(Ctx);
+}
+
+static bool getDisable2addrHack(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_Disable2addrHack>(Ctx);
+}
+
+static int getMaxSchedReorder(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_MaxSchedReorder>(Ctx);
+}
+
+static unsigned getSchedAvgIpc(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_SchedAvgIpc>(Ctx);
 }

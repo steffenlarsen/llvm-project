@@ -23,21 +23,31 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/ProfileData/CtxInstrContextNode.h"
 #include "llvm/ProfileData/InstrProf.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
 #include <utility>
 
 using namespace llvm;
 
 #define DEBUG_TYPE "ctx-instr-lower"
 
-static cl::list<std::string> ContextRoots(
-    "profile-context-root", cl::Hidden,
-    cl::desc(
-        "A function name, assumed to be global, which will be treated as the "
-        "root of an interesting graph, which will be profiled independently "
-        "from other similar graphs."));
+static std::vector<std::string> ContextRoots;
+
+static std::vector<std::string> getContextRoots(const Module &M) {
+  return clv2::getOptValIfSpecified<&clv2::InstrumentationOptsReg,
+                                    &clv2::INST_ProfileContextRoot>(
+      M.getContext().getOptionsContext(), ContextRoots);
+}
 
 bool PGOCtxProfLoweringPass::isCtxIRPGOInstrEnabled() {
+  return !ContextRoots.empty();
+}
+
+bool PGOCtxProfLoweringPass::isCtxIRPGOInstrEnabled(const Module &M) {
+  if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(
+          M.getContext().getOptionsContext()))
+    if (O->specified<&clv2::INST_ProfileContextRoot>())
+      return !O->get<&clv2::INST_ProfileContextRoot>().empty();
   return !ContextRoots.empty();
 }
 
@@ -162,7 +172,7 @@ CtxInstrumentationLowerer::CtxInstrumentationLowerer(Module &M,
 
   // Define a global for each entrypoint. We'll reuse the entrypoint's name
   // as prefix. We assume the entrypoint names to be unique.
-  for (const auto &Fname : ContextRoots) {
+  for (const auto &Fname : getContextRoots(M)) {
     if (const auto *F = M.getFunction(Fname)) {
       if (F->isDeclaration())
         continue;

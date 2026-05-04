@@ -483,7 +483,7 @@ bool dwarfdump::showVariableCoverage(ObjectFile &Obj, DWARFContext &DICtx,
                                      StringRef BitcodeFile,
                                      bool CombineInstances, raw_ostream &OS) {
   BitcodeLineMap LM;
-  LLVMContext Context;
+  LLVMContext Context(llvm::clv2::defaultOptionsContext());
   if (!BitcodeFile.empty()) {
     SMDiagnostic Err;
     std::unique_ptr<Module> Mod = parseIRFile(BitcodeFile, Err, Context);

@@ -14,7 +14,11 @@
 
 #include "llvm/Analysis/LastRunTrackingAnalysis.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Module.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -22,13 +26,29 @@ using namespace llvm;
 STATISTIC(NumSkippedPasses, "Number of skipped passes");
 STATISTIC(NumLRTQueries, "Number of LastRunTracking queries");
 
-static cl::opt<bool>
-    DisableLastRunTracking("disable-last-run-tracking", cl::Hidden,
-                           cl::desc("Disable last run tracking"),
-                           cl::init(false));
+static bool DisableLastRunTracking = false;
+
+static bool getDisableLastRunTracking(const LLVMContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_DisableLastRunTracking>(
+      Ctx.getOptionsContext());
+}
+
+LastRunTrackingInfo LastRunTrackingAnalysis::run(Function &F,
+                                                 FunctionAnalysisManager &) {
+  LastRunTrackingInfo Info;
+  Info.setDisabled(getDisableLastRunTracking(F.getContext()));
+  return Info;
+}
+
+LastRunTrackingInfo LastRunTrackingAnalysis::run(Module &M,
+                                                 ModuleAnalysisManager &) {
+  LastRunTrackingInfo Info;
+  Info.setDisabled(getDisableLastRunTracking(M.getContext()));
+  return Info;
+}
 
 bool LastRunTrackingInfo::shouldSkipImpl(PassID ID, OptionPtr Ptr) const {
-  if (DisableLastRunTracking)
+  if (Disabled)
     return false;
   ++NumLRTQueries;
   auto Iter = TrackedPasses.find(ID);

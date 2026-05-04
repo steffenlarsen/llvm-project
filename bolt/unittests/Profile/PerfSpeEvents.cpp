@@ -9,10 +9,12 @@
 #ifdef AARCH64_AVAILABLE
 
 #include "bolt/Core/BinaryContext.h"
+#include "bolt/Profile/BoltProfileOptionsOptInfos.h"
 #include "bolt/Profile/DataAggregator.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TargetSelect.h"
 #include "gtest/gtest.h"
 
@@ -20,11 +22,6 @@ using namespace llvm;
 using namespace llvm::bolt;
 using namespace llvm::object;
 using namespace llvm::ELF;
-
-namespace opts {
-extern cl::opt<bool> ReadPreAggregated;
-extern cl::opt<bool> ArmSPE;
-} // namespace opts
 
 namespace llvm {
 namespace bolt {
@@ -65,7 +62,8 @@ protected:
     BC = cantFail(BinaryContext::createBinaryContext(
         ObjFile->makeTriple(), std::make_shared<orc::SymbolStringPool>(),
         ObjFile->getFileName(), nullptr, /*IsPIC*/ false,
-        DWARFContext::create(*ObjFile), {llvm::outs(), llvm::errs()}));
+        DWARFContext::create(*ObjFile), {llvm::outs(), llvm::errs()},
+        /*OptsCtx=*/nullptr));
     ASSERT_FALSE(!BC);
   }
 
@@ -90,12 +88,22 @@ protected:
                    << BI.MispredCount << "}" << "\n";
   }
 
+  /// Equivalent of setting opts::ArmSPE and opts::ReadPreAggregated before
+  /// those options moved onto the context.
+  void setTestSpeOptions() {
+    auto *ProfileView =
+        BC->getOptionsContext().getViewPtr<&clv2::BoltProfileOptsReg>();
+    ProfileView->get<&clv2::BOLTPROF_ArmSPE>() = true;
+    ProfileView->get<&clv2::BOLTPROF_ReadPreAggregated>() = true;
+  }
+
   /// Parse and check SPE brstack as LBR.
   void parseAndCheckBrstackEvents(
-      uint64_t PID, StringRef &Buffer,
+      uint64_t PID, StringRef PerfEvents,
       const std::vector<std::pair<Trace, TakenBranchInfo>> &ExpectedSamples) {
+    setTestSpeOptions();
     DataAggregator DA("<pseudo input>");
-    DA.ParsingBuf = Buffer;
+    DA.ParsingBuf = PerfEvents;
     DA.BC = BC.get();
     DataAggregator::MMapInfo MMap;
     DA.BinaryMMapInfo.insert(std::make_pair(PID, MMap));
@@ -133,16 +141,14 @@ TEST_F(PerfSpeEventsTestHelper, SpeBranchesWithBrstack) {
   // perf script -F pid,brstack --itrace=bl
   // ```
 
-  opts::ArmSPE = true;
-  opts::ReadPreAggregated = true;
-  StringRef Buffer = "  1234  0xa001/0xa002/PN/-/-/10/COND/-\n"
-                     "  1234  0xb001/0xb002/P/-/-/4/RET/-\n"
-                     "  1234  0xc456/0xc789/P/-/-/13/-/-\n"
-                     "  1234  0xd123/0xd456/M/-/-/7/RET/-\n"
-                     "  1234  0xe001/0xe002/P/-/-/14/RET/-\n"
-                     "  1234  0xd123/0xd456/M/-/-/7/RET/-\n"
-                     "  1234  0xf001/0xf002/MN/-/-/8/COND/-\n"
-                     "  1234  0xc456/0xc789/M/-/-/13/-/-\n";
+  std::string PerfEvents = "  1234  0xa001/0xa002/PN/-/-/10/COND/-\n"
+                           "  1234  0xb001/0xb002/P/-/-/4/RET/-\n"
+                           "  1234  0xc456/0xc789/P/-/-/13/-/-\n"
+                           "  1234  0xd123/0xd456/M/-/-/7/RET/-\n"
+                           "  1234  0xe001/0xe002/P/-/-/14/RET/-\n"
+                           "  1234  0xd123/0xd456/M/-/-/7/RET/-\n"
+                           "  1234  0xf001/0xf002/MN/-/-/8/COND/-\n"
+                           "  1234  0xc456/0xc789/M/-/-/13/-/-\n";
 
   // ExpectedSamples contains the aggregated information about
   // a branch {{Branch From, To}, {TakenCount, MispredCount}}.
@@ -159,7 +165,7 @@ TEST_F(PerfSpeEventsTestHelper, SpeBranchesWithBrstack) {
       {{0xe001, 0xe002, Trace::BR_ONLY}, {1, 0}},
       {{0xf001, 0xf002, Trace::BR_ONLY}, {1, 1}}};
 
-  parseAndCheckBrstackEvents(1234, Buffer, ExpectedSamples);
+  parseAndCheckBrstackEvents(1234, PerfEvents, ExpectedSamples);
 }
 
 TEST_F(PerfSpeEventsTestHelper, SpeBranchesWithBrstackAndPbt) {
@@ -174,9 +180,7 @@ TEST_F(PerfSpeEventsTestHelper, SpeBranchesWithBrstackAndPbt) {
   // perf script -F pid,brstack --itrace=bl
   // ```
 
-  opts::ArmSPE = true;
-  opts::ReadPreAggregated = true;
-  StringRef Buffer =
+  std::string PerfEvents =
       // "<PID> <SRC>/<DEST>/PN/-/-/10/COND/- <NULL>/<PBT>/-/-/-/0//-\n"
       "  4567  0xa002/0xa003/PN/-/-/10/COND/- 0x0/0xa001/-/-/-/0//-\n"
       "  4567  0xb002/0xb003/P/-/-/4/RET/- 0x0/0xb001/-/-/-/0//-\n"
@@ -248,7 +252,7 @@ TEST_F(PerfSpeEventsTestHelper, SpeBranchesWithBrstackAndPbt) {
       {{0xf002, 0xf003, Trace::BR_ONLY}, {1, 1}},
       {{0x0, 0xf001, 0xf002}, {1, 0}}};
 
-  parseAndCheckBrstackEvents(4567, Buffer, ExpectedSamples);
+  parseAndCheckBrstackEvents(4567, PerfEvents, ExpectedSamples);
 }
 
 #endif

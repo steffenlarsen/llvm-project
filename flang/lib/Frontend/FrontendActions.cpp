@@ -56,6 +56,7 @@
 #include "llvm/Linker/Linker.h"
 #include "llvm/Object/OffloadBinary.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/PassesOptionsOptInfos.h"
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Plugins/PassPlugin.h"
 #include "llvm/ProfileData/InstrProfCorrelator.h"
@@ -119,7 +120,7 @@ static bool saveMLIRTempFile(const CompilerInvocation &ci,
   if (ec)
     return false;
 
-  mlirModule->print(out.os());
+  mlirModule->print(out.os(), mlir::opPrintingFlags(mlirModule.getOperation()));
   out.os().close();
   out.keep();
 
@@ -176,8 +177,8 @@ bool CodeGenAction::beginSourceFileAction() {
   // one.
   if (llvmModule)
     llvmModule.reset(nullptr);
-  llvmCtx = std::make_unique<llvm::LLVMContext>();
   CompilerInstance &ci = this->getInstance();
+  llvmCtx = std::make_unique<llvm::LLVMContext>(ci.getOptionsContext());
   mlir::DefaultTimingManager &timingMgr = ci.getTimingManager();
   mlir::TimingScope &timingScopeRoot = ci.getTimingScopeRoot();
 
@@ -206,7 +207,7 @@ bool CodeGenAction::beginSourceFileAction() {
   if (mlirModule)
     mlirModule = mlir::OwningOpRef<mlir::ModuleOp>(nullptr);
   // Load the MLIR dialects required by Flang
-  mlirCtx = std::make_unique<mlir::MLIRContext>();
+  mlirCtx = std::make_unique<mlir::MLIRContext>(ci.getOptionsContext());
   fir::support::loadDialects(*mlirCtx);
   fir::support::registerLLVMTranslation(*mlirCtx);
   mlir::DialectRegistry registry;
@@ -912,6 +913,7 @@ static void generateMachineCodeOrAssemblyImpl(
   // Currently only the legacy pass manager is supported.
   // TODO: Switch to the new PM once it's available in the backend.
   llvm::legacy::PassManager codeGenPasses;
+  codeGenPasses.setOptionsContext(llvmModule.getContext().getOptionsContext());
   codeGenPasses.add(
       createTargetTransformInfoWrapperPass(tm.getTargetIRAnalysis()));
 
@@ -967,7 +969,7 @@ void CodeGenAction::runOptimizationPipeline(llvm::raw_pwrite_stream &os) {
 
   // Create the pass manager builder.
   llvm::PassInstrumentationCallbacks pic;
-  llvm::PipelineTuningOptions pto;
+  llvm::PipelineTuningOptions pto(llvm::clv2::defaultOptionsContext());
   std::optional<llvm::PGOOptions> pgoOpt;
 
   if (opts.hasProfileIRInstr()) {
@@ -1022,7 +1024,8 @@ void CodeGenAction::runOptimizationPipeline(llvm::raw_pwrite_stream &os) {
   pto.LoopVectorization = opts.VectorizeLoop;
   pto.SLPVectorization = opts.VectorizeSLP;
 
-  llvm::PassBuilder pb(targetMachine, pto, pgoOpt, &pic);
+  llvm::PassBuilder pb(llvm::clv2::defaultOptionsContext(), targetMachine, pto,
+                       pgoOpt, &pic);
 
   // Register plugin callbacks with PB.
   for (const std::unique_ptr<llvm::PassPlugin> &plugin : ci.getPassPlugins())
@@ -1103,7 +1106,11 @@ void CodeGenAction::runOptimizationPipeline(llvm::raw_pwrite_stream &os) {
   // Print a textual, '-passes=' compatible, representation of pipeline if
   // requested. In this case, don't run the passes. This mimics the behavior of
   // clang.
-  if (llvm::PrintPipelinePasses) {
+  bool doPrintPipeline = false;
+  if (auto *O = llvm::clv2::getView<&llvm::clv2::PassesOptsReg>(
+          llvmModule->getContext().getOptionsContext()))
+    doPrintPipeline = O->specified<&llvm::clv2::PAS_PrintPipelinePasses>();
+  if (doPrintPipeline) {
     mpm.printPipeline(llvm::outs(), [&pic](llvm::StringRef className) {
       auto passName = pic.getPassNameForClassName(className);
       return passName.empty() ? className : passName;
@@ -1393,12 +1400,14 @@ void CodeGenAction::executeAction() {
 
   if (action == BackendActionTy::Backend_EmitFIR) {
     lowerHLFIRToFIR();
-    mlirModule->print(ci.isOutputStreamNull() ? *os : ci.getOutputStream());
+    mlirModule->print(ci.isOutputStreamNull() ? *os : ci.getOutputStream(),
+                      mlir::opPrintingFlags(mlirModule->getOperation()));
     return;
   }
 
   if (action == BackendActionTy::Backend_EmitHLFIR) {
-    mlirModule->print(ci.isOutputStreamNull() ? *os : ci.getOutputStream());
+    mlirModule->print(ci.isOutputStreamNull() ? *os : ci.getOutputStream(),
+                      mlir::opPrintingFlags(mlirModule->getOperation()));
     return;
   }
 

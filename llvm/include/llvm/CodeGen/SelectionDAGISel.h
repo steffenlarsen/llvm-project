@@ -19,6 +19,7 @@
 #include "llvm/CodeGen/MachinePassManager.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/Support/CommandLineV2.h"
 #include <memory>
 
 namespace llvm {

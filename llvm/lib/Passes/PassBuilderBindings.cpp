@@ -18,6 +18,7 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Support/CBindingWrapping.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -30,7 +31,8 @@ public:
   explicit LLVMPassBuilderOptions(
       bool DebugLogging = false, bool VerifyEach = false,
       const char *AAPipeline = nullptr,
-      PipelineTuningOptions PTO = PipelineTuningOptions())
+      PipelineTuningOptions PTO =
+          PipelineTuningOptions(llvm::clv2::defaultOptionsContext()))
       : DebugLogging(DebugLogging), VerifyEach(VerifyEach),
         AAPipeline(AAPipeline), PTO(PTO) {}
 
@@ -55,7 +57,8 @@ static LLVMErrorRef runPasses(Module *Mod, Function *Fun, const char *Passes,
   bool VerifyEach = PassOpts->VerifyEach;
 
   PassInstrumentationCallbacks PIC;
-  PassBuilder PB(Machine, PassOpts->PTO, std::nullopt, &PIC);
+  PassBuilder PB(llvm::clv2::defaultOptionsContext(), Machine, PassOpts->PTO,
+                 std::nullopt, &PIC, vfs::getRealFileSystem());
 
   LoopAnalysisManager LAM;
   FunctionAnalysisManager FAM;

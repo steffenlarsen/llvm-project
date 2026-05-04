@@ -24,6 +24,7 @@
 #include "llvm/FileCheck/FileCheck.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
@@ -46,12 +47,10 @@ static inline void initLLVM() {
 
 // Define a printers to help debugging when things go wrong.
 namespace llvm {
-std::ostream &
-operator<<(std::ostream &OS, const LLT Ty);
+std::ostream &operator<<(std::ostream &OS, const LLT Ty);
 
-std::ostream &
-operator<<(std::ostream &OS, const MachineFunction &MF);
-}
+std::ostream &operator<<(std::ostream &OS, const MachineFunction &MF);
+} // namespace llvm
 
 static std::unique_ptr<Module>
 parseMIR(LLVMContext &Context, std::unique_ptr<MIRParser> &MIR,
@@ -131,7 +130,7 @@ protected:
     });
   }
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<TargetMachine> TM;
   MachineFunction *MF;
   std::pair<std::unique_ptr<Module>, std::unique_ptr<MachineModuleInfo>>
@@ -181,7 +180,7 @@ class AMDGPUGISelMITest : public GISelMITest {
       (void)f128;                                                              \
       do                                                                       \
         SettingUpActionsBlock while (0);                                       \
-      verify(*ST.getInstrInfo());                                              \
+      verify(*ST.getInstrInfo(), /*Ctx=*/llvm::clv2::defaultOptionsContext()); \
     }                                                                          \
   };
 

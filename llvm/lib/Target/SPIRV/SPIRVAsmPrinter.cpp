@@ -43,29 +43,17 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "asm-printer"
 
 namespace {
-enum class SPIRVFPContractMode { On, Off, Fast };
-
-static cl::opt<SPIRVFPContractMode> SPIRVFPContract(
-    "spirv-fp-contract",
-    cl::desc("Override FP contraction policy for SPIR-V kernel entry points"),
-    cl::values(
-        clEnumValN(SPIRVFPContractMode::On, "on",
-                   "Follow IR metadata (default)"),
-        clEnumValN(SPIRVFPContractMode::Off, "off",
-                   "Force ContractionOff on all kernel entry points"),
-        clEnumValN(SPIRVFPContractMode::Fast, "fast",
-                   "Suppress ContractionOff on all kernel entry points")),
-    cl::init(SPIRVFPContractMode::On));
-
 class SPIRVAsmPrinter : public AsmPrinter {
   unsigned NLabels = 0;
   SmallPtrSet<const MachineBasicBlock *, 8> LabeledMBB;
@@ -103,8 +91,6 @@ public:
       SPIRV::ExecutionMode::ExecutionMode EM);
   void outputExecutionModeFromEnableMaximalReconvergenceAttr(
       const MCRegister &Reg, const SPIRVSubtarget &ST);
-  void emitSimpleExecutionMode(MCRegister Reg,
-                               SPIRV::ExecutionMode::ExecutionMode EM);
   void outputExecutionMode(const Module &M);
   void outputAnnotations(const Module &M);
   void outputModuleSections();
@@ -114,6 +100,9 @@ public:
         .getFnAttribute(SPIRV_BACKEND_SERVICE_FUN_NAME)
         .isValid();
   }
+
+  void emitSimpleExecutionMode(MCRegister Reg,
+                               SPIRV::ExecutionMode::ExecutionMode EM);
 
   void emitInstruction(const MachineInstr *MI) override;
   void emitFunctionEntryLabel() override {}
@@ -130,12 +119,12 @@ public:
   void getAnalysisUsage(AnalysisUsage &AU) const override;
   SPIRV::ModuleAnalysisInfo *MAI;
 
+  std::unique_ptr<SPIRVAuxDataHandler> AuxDataHandler;
+
   // Non-owning pointer to the NSDI handler registered via addAsmPrinterHandler.
   // The handler's lifetime is managed by AsmPrinter (the base class of this
   // object), so this pointer cannot dangle.
   SPIRVNonSemanticDebugHandler *NSDebugHandler = nullptr;
-
-  std::unique_ptr<SPIRVAuxDataHandler> AuxDataHandler;
 
 protected:
   void cleanUp(Module &M);
@@ -575,7 +564,6 @@ void SPIRVAsmPrinter::outputExecutionModeFromEnableMaximalReconvergenceAttr(
     const MCRegister &Reg, const SPIRVSubtarget &ST) {
   assert(ST.canUseExtension(SPIRV::Extension::SPV_KHR_maximal_reconvergence) &&
          "Function called when SPV_KHR_maximal_reconvergence is not enabled.");
-
   emitSimpleExecutionMode(Reg, SPIRV::ExecutionMode::MaximallyReconvergesKHR);
 }
 
@@ -622,9 +610,8 @@ void SPIRVAsmPrinter::outputExecutionMode(const Module &M) {
       // OriginLowerLeft.
       // VUID-StandaloneSpirv-OriginLowerLeft-04653: Fragment must declare
       // OriginUpperLeft.
-      if (Attr.getValueAsString() == "pixel") {
+      if (Attr.getValueAsString() == "pixel")
         emitSimpleExecutionMode(FReg, SPIRV::ExecutionMode::OriginUpperLeft);
-      }
     }
     if (MDNode *Node = F.getMetadata("reqd_work_group_size"))
       outputExecutionModeFromMDNode(FReg, Node, SPIRV::ExecutionMode::LocalSize,
@@ -668,10 +655,12 @@ void SPIRVAsmPrinter::outputExecutionMode(const Module &M) {
     }
     // --spirv-fp-contract=off forces to emit ContractionOff for this kernel
     // entry point, --spirv-fp-contract=fast suppresses it.
+    auto FPContract = clv2::getOptValOrDefault<&clv2::SPIRV_FPContract>(
+        M.getContext().getOptionsContext());
     bool EmitContractionOff =
         ST->isKernel() && !M.getNamedMetadata("spirv.ExecutionMode") &&
-        SPIRVFPContract != SPIRVFPContractMode::Fast &&
-        (SPIRVFPContract == SPIRVFPContractMode::Off ||
+        FPContract != clv2::SPIRVFPContractMode::Fast &&
+        (FPContract == clv2::SPIRVFPContractMode::Off ||
          !M.getNamedMetadata("opencl.enable.FP_CONTRACT"));
     if (EmitContractionOff) {
       if (ST->canUseExtension(SPIRV::Extension::SPV_KHR_float_controls2)) {
@@ -754,7 +743,10 @@ void SPIRVAsmPrinter::outputExecutionMode(const Module &M) {
 void SPIRVAsmPrinter::outputAnnotations(const Module &M) {
   outputModuleSection(SPIRV::MB_Annotations);
   // Process llvm.global.annotations special global variable.
-  if (const GlobalVariable *V = M.getNamedGlobal("llvm.global.annotations")) {
+  for (auto F = M.global_begin(), E = M.global_end(); F != E; ++F) {
+    if ((*F).getName() != "llvm.global.annotations")
+      continue;
+    const GlobalVariable *V = &(*F);
     const ConstantArray *CA = cast<ConstantArray>(V->getOperand(0));
     for (Value *Op : CA->operands()) {
       ConstantStruct *CS = cast<ConstantStruct>(Op);

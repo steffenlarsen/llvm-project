@@ -20,7 +20,7 @@ using namespace llvm;
 namespace {
 
 TEST(ValueMapperTest, mapMDNode) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   auto *U = MDTuple::get(Context, {});
 
   // The node should be unchanged.
@@ -29,7 +29,7 @@ TEST(ValueMapperTest, mapMDNode) {
 }
 
 TEST(ValueMapperTest, mapMDNodeCycle) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   MDNode *U0;
   MDNode *U1;
   {
@@ -65,7 +65,7 @@ TEST(ValueMapperTest, mapMDNodeCycle) {
 }
 
 TEST(ValueMapperTest, mapMDNodeDuplicatedCycle) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   auto *PtrTy = PointerType::get(Context, 0);
   std::unique_ptr<GlobalVariable> G0 = std::make_unique<GlobalVariable>(
       PtrTy, false, GlobalValue::ExternalLinkage, nullptr, "G0");
@@ -106,7 +106,7 @@ TEST(ValueMapperTest, mapMDNodeDuplicatedCycle) {
 }
 
 TEST(ValueMapperTest, mapMDNodeUnresolved) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   TempMDTuple T = MDTuple::getTemporary(Context, {});
 
   ValueToValueMapTy VM;
@@ -114,7 +114,7 @@ TEST(ValueMapperTest, mapMDNodeUnresolved) {
 }
 
 TEST(ValueMapperTest, mapMDNodeDistinct) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   auto *D = MDTuple::getDistinct(Context, {});
 
   {
@@ -130,7 +130,7 @@ TEST(ValueMapperTest, mapMDNodeDistinct) {
 }
 
 TEST(ValueMapperTest, mapMDNodeDistinctOperands) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Metadata *Old = MDTuple::getDistinct(Context, {});
   auto *D = MDTuple::getDistinct(Context, Old);
   ASSERT_EQ(Old, D->getOperand(0));
@@ -145,7 +145,7 @@ TEST(ValueMapperTest, mapMDNodeDistinctOperands) {
 }
 
 TEST(ValueMapperTest, mapMDNodeSeeded) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   auto *D = MDTuple::getDistinct(Context, {});
 
   // The node should be moved.
@@ -158,7 +158,7 @@ TEST(ValueMapperTest, mapMDNodeSeeded) {
 }
 
 TEST(ValueMapperTest, mapMDNodeSeededWithNull) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   auto *D = MDTuple::getDistinct(Context, {});
 
   // The node should be moved.
@@ -171,7 +171,7 @@ TEST(ValueMapperTest, mapMDNodeSeededWithNull) {
 }
 
 TEST(ValueMapperTest, mapMetadataNullMapGlobalWithIgnoreMissingLocals) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   FunctionType *FTy =
       FunctionType::get(Type::getVoidTy(C), Type::getInt8Ty(C), false);
   std::unique_ptr<Function> F(
@@ -183,7 +183,7 @@ TEST(ValueMapperTest, mapMetadataNullMapGlobalWithIgnoreMissingLocals) {
 }
 
 TEST(ValueMapperTest, mapMetadataMDString) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   auto *S1 = MDString::get(C, "S1");
   ValueToValueMapTy VM;
 
@@ -198,7 +198,7 @@ TEST(ValueMapperTest, mapMetadataMDString) {
 }
 
 TEST(ValueMapperTest, mapMetadataGetMappedMD) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   auto *N0 = MDTuple::get(C, {});
   auto *N1 = MDTuple::get(C, N0);
 
@@ -215,7 +215,7 @@ TEST(ValueMapperTest, mapMetadataGetMappedMD) {
 }
 
 TEST(ValueMapperTest, mapMetadataNoModuleLevelChanges) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   auto *N0 = MDTuple::get(C, {});
   auto *N1 = MDTuple::get(C, N0);
 
@@ -230,7 +230,7 @@ TEST(ValueMapperTest, mapMetadataNoModuleLevelChanges) {
 }
 
 TEST(ValueMapperTest, mapMetadataConstantAsMetadata) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   FunctionType *FTy =
       FunctionType::get(Type::getVoidTy(C), Type::getInt8Ty(C), false);
   std::unique_ptr<Function> F(
@@ -265,7 +265,7 @@ TEST(ValueMapperTest, mapMetadataConstantAsMetadata) {
 #ifdef GTEST_HAS_DEATH_TEST
 #ifndef NDEBUG
 TEST(ValueMapperTest, mapMetadataLocalAsMetadata) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   FunctionType *FTy =
       FunctionType::get(Type::getVoidTy(C), Type::getInt8Ty(C), false);
   std::unique_ptr<Function> F(
@@ -284,7 +284,7 @@ TEST(ValueMapperTest, mapMetadataLocalAsMetadata) {
 #endif
 
 TEST(ValueMapperTest, mapValueLocalAsMetadata) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   FunctionType *FTy =
       FunctionType::get(Type::getVoidTy(C), Type::getInt8Ty(C), false);
   std::unique_ptr<Function> F(
@@ -326,7 +326,7 @@ TEST(ValueMapperTest, mapValueLocalAsMetadata) {
 }
 
 TEST(ValueMapperTest, mapValueLocalInArgList) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   FunctionType *FTy =
       FunctionType::get(Type::getVoidTy(C), Type::getInt8Ty(C), false);
   std::unique_ptr<Function> F(
@@ -334,7 +334,7 @@ TEST(ValueMapperTest, mapValueLocalInArgList) {
   Argument &A = *F->arg_begin();
 
   auto *LAM = LocalAsMetadata::get(&A);
-  std::vector<ValueAsMetadata*> Elts;
+  std::vector<ValueAsMetadata *> Elts;
   Elts.push_back(LAM);
   auto *ArgList = DIArgList::get(C, Elts);
   auto *MAV = MetadataAsValue::get(C, ArgList);
@@ -350,7 +350,7 @@ TEST(ValueMapperTest, mapValueLocalInArgList) {
   // poison for uses in a DIArgList.
   auto *N0 = PoisonValue::get(Type::getInt8Ty(C));
   auto *N0AM = ValueAsMetadata::get(N0);
-  std::vector<ValueAsMetadata*> N0Elts;
+  std::vector<ValueAsMetadata *> N0Elts;
   N0Elts.push_back(N0AM);
   auto *N0ArgList = DIArgList::get(C, N0Elts);
   auto *N0AV = MetadataAsValue::get(C, N0ArgList);
@@ -376,7 +376,7 @@ TEST(ValueMapperTest, mapValueLocalInArgList) {
 }
 
 TEST(ValueMapperTest, mapValueLocalAsMetadataToConstant) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   auto *Int8 = Type::getInt8Ty(Context);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(Context), Int8, false);
   std::unique_ptr<Function> F(
@@ -400,7 +400,7 @@ TEST(ValueMapperTest, mapValueLocalAsMetadataToConstant) {
 // Type remapper which remaps all types to same destination.
 class TestTypeRemapper : public ValueMapTypeRemapper {
 public:
-  TestTypeRemapper(Type *Ty) : DstTy(Ty) { }
+  TestTypeRemapper(Type *Ty) : DstTy(Ty) {}
   Type *remapType(Type *srcTy) override { return DstTy; }
 
 private:
@@ -408,7 +408,7 @@ private:
 };
 
 TEST(ValueMapperTest, mapValuePoisonWithTypeRemap) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Type *OldTy = Type::getInt8Ty(C);
   Type *NewTy = Type::getInt32Ty(C);
 
@@ -423,7 +423,7 @@ TEST(ValueMapperTest, mapValuePoisonWithTypeRemap) {
 }
 
 TEST(ValueMapperTest, mapValueConstantTargetNoneToLayoutTypeNullValue) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   auto *OldTy = TargetExtType::get(C, "spirv.Event");
   Type *NewTy = OldTy->getLayoutType();
 
@@ -438,7 +438,7 @@ TEST(ValueMapperTest, mapValueConstantTargetNoneToLayoutTypeNullValue) {
 }
 
 TEST(ValueMapperTest, mapValuePtrAuth) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Type *PtrTy = PointerType::get(C, 0);
   IntegerType *Int32Ty = Type::getInt32Ty(C);
   IntegerType *Int64Ty = Type::getInt64Ty(C);

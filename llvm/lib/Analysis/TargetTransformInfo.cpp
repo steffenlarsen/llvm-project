@@ -8,6 +8,7 @@
 
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/LoopIterator.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
@@ -20,7 +21,9 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include <optional>
 #include <utility>
 
@@ -28,24 +31,6 @@ using namespace llvm;
 using namespace PatternMatch;
 
 #define DEBUG_TYPE "tti"
-
-static cl::opt<bool> EnableReduxCost("costmodel-reduxcost", cl::init(false),
-                                     cl::Hidden,
-                                     cl::desc("Recognize reduction patterns."));
-
-static cl::opt<unsigned> CacheLineSize(
-    "cache-line-size", cl::init(0), cl::Hidden,
-    cl::desc("Use this to override the target cache line size when "
-             "specified by the user."));
-
-static cl::opt<unsigned> MinPageSize(
-    "min-page-size", cl::init(0), cl::Hidden,
-    cl::desc("Use this to override the target's minimum page size."));
-
-static cl::opt<unsigned> PredictableBranchThreshold(
-    "predictable-branch-threshold", cl::init(99), cl::Hidden,
-    cl::desc(
-        "Use this to override the target's predictable branch threshold (%)."));
 
 namespace {
 /// No-op implementation of the TTI interface using the utility base
@@ -277,10 +262,15 @@ TargetTransformInfo::getInstructionCost(const User *U,
   return Cost;
 }
 
-BranchProbability TargetTransformInfo::getPredictableBranchThreshold() const {
-  return PredictableBranchThreshold.getNumOccurrences() > 0
-             ? BranchProbability(PredictableBranchThreshold, 100)
-             : TTIImpl->getPredictableBranchThreshold();
+BranchProbability TargetTransformInfo::getPredictableBranchThreshold(
+    const clv2::OptionsContext &Ctx) const {
+  if (auto *O = clv2::getView<&clv2::AnalysisOptsReg>(Ctx)) {
+    if (O->specified<&clv2::AN_PredictableBranchThreshold>()) {
+      unsigned Threshold = O->get<&clv2::AN_PredictableBranchThreshold>();
+      return BranchProbability(Threshold, 100);
+    }
+  }
+  return TTIImpl->getPredictableBranchThreshold();
 }
 
 InstructionCost TargetTransformInfo::getBranchMispredictPenalty() const {
@@ -876,9 +866,11 @@ bool TargetTransformInfo::shouldConsiderAddressTypePromotion(
       I, AllowPromotionWithoutCommonHeader);
 }
 
-unsigned TargetTransformInfo::getCacheLineSize() const {
-  return CacheLineSize.getNumOccurrences() > 0 ? CacheLineSize
-                                               : TTIImpl->getCacheLineSize();
+unsigned
+TargetTransformInfo::getCacheLineSize(const clv2::OptionsContext &Ctx) const {
+  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
+                                    &clv2::AN_CacheLineSize>(
+      Ctx, TTIImpl->getCacheLineSize());
 }
 
 std::optional<unsigned>
@@ -891,9 +883,12 @@ TargetTransformInfo::getCacheAssociativity(CacheLevel Level) const {
   return TTIImpl->getCacheAssociativity(Level);
 }
 
-std::optional<unsigned> TargetTransformInfo::getMinPageSize() const {
-  return MinPageSize.getNumOccurrences() > 0 ? MinPageSize
-                                             : TTIImpl->getMinPageSize();
+std::optional<unsigned>
+TargetTransformInfo::getMinPageSize(const clv2::OptionsContext &Ctx) const {
+  if (auto *V = Ctx.getViewPtr<&clv2::AnalysisOptsReg>())
+    if (V->template specified<&clv2::AN_MinPageSize>())
+      return V->template get<&clv2::AN_MinPageSize>();
+  return TTIImpl->getMinPageSize();
 }
 
 unsigned TargetTransformInfo::getPrefetchDistance() const {
@@ -1627,3 +1622,15 @@ ImmutablePass *
 llvm::createTargetTransformInfoWrapperPass(TargetIRAnalysis TIRA) {
   return new TargetTransformInfoWrapperPass(std::move(TIRA));
 }
+
+//===----------------------------------------------------------------------===//
+// Runtime option registration for CLI flags.
+//===----------------------------------------------------------------------===//
+
+// The costmodel-reduxcost option was always dead (never read in new PM),
+// but register it so the CLI flag is accepted without error.
+static constexpr clv2::OptionInfo<bool> OI_ReduxCost{
+    "costmodel-reduxcost", "Recognize reduction patterns.", clv2::Hidden};
+static constexpr clv2::OptionsRegistry<&OI_ReduxCost> ReduxCostReg;
+
+static bool EnableReduxCost = false;

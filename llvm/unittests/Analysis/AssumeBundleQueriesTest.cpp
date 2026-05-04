@@ -12,26 +12,28 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Transforms/Utils/AssumeBundleBuilder.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 #include "gtest/gtest.h"
-#include <random>
 
 using namespace llvm;
 
 static void RunTest(
     StringRef Head, StringRef Tail,
     std::vector<std::pair<StringRef, llvm::function_ref<void(Instruction *)>>>
-        &Tests) {
+        &Tests,
+    const clv2::OptionsContext &OptCtx = clv2::defaultOptionsContext()) {
   for (auto &Elem : Tests) {
     std::string IR;
     IR.append(Head.begin(), Head.end());
     IR.append(Elem.first.begin(), Elem.first.end());
     IR.append(Tail.begin(), Tail.end());
-    LLVMContext C;
+    LLVMContext C{llvm::clv2::defaultOptionsContext()};
+    C.setOptionsContext(OptCtx);
     SMDiagnostic Err;
     std::unique_ptr<Module> Mod = parseAssemblyString(IR, Err, C);
     if (!Mod)
@@ -41,7 +43,7 @@ static void RunTest(
 }
 
 static bool FindExactlyAttributes(RetainedKnowledgeMap &Map, Value *WasOn,
-                                 StringRef AttrToMatch) {
+                                  StringRef AttrToMatch) {
   Regex Reg(AttrToMatch);
   SmallVector<StringRef, 1> Matches;
   for (StringRef Attr : {
@@ -66,14 +68,18 @@ static bool MapHasRightValue(RetainedKnowledgeMap &Map, AssumeInst *II,
 }
 
 TEST(AssumeQueryAPI, fillMapFromAssume) {
-  EnableKnowledgeRetention.setValue(true);
-  StringRef Head =
-      "declare void @llvm.assume(i1)\n"
-      "declare void @func(ptr, ptr, ptr)\n"
-      "declare void @func1(ptr, ptr, ptr, ptr)\n"
-      "declare void @func_many(ptr) \"no-jump-tables\" nounwind "
-      "\"less-precise-fpmad\" willreturn norecurse\n"
-      "define void @test(ptr %P, ptr %P1, ptr %P2, ptr %P3) {\n";
+  // Set up OptionsContext with EnableKnowledgeRetention = true.
+  auto TUOpts = clv2::TransformUtilsOptsReg.makeDefaults();
+  TUOpts.get<&clv2::TU_EnableKnowledgeRetention>() = true;
+  clv2::OptionsContext OptCtx;
+  OptCtx.addView<&clv2::TransformUtilsOptsReg>(TUOpts);
+
+  StringRef Head = "declare void @llvm.assume(i1)\n"
+                   "declare void @func(ptr, ptr, ptr)\n"
+                   "declare void @func1(ptr, ptr, ptr, ptr)\n"
+                   "declare void @func_many(ptr) \"no-jump-tables\" nounwind "
+                   "\"less-precise-fpmad\" willreturn norecurse\n"
+                   "define void @test(ptr %P, ptr %P1, ptr %P2, ptr %P3) {\n";
   StringRef Tail = "ret void\n"
                    "}";
   std::vector<std::pair<StringRef, llvm::function_ref<void(Instruction *)>>>
@@ -88,17 +94,17 @@ TEST(AssumeQueryAPI, fillMapFromAssume) {
         RetainedKnowledgeMap Map;
         fillMapFromAssume(*Assume, Map);
         ASSERT_TRUE(FindExactlyAttributes(Map, I->getOperand(0),
-                                       "(nonnull|align|dereferenceable)"));
-        ASSERT_FALSE(FindExactlyAttributes(Map, I->getOperand(1),
-                                       "(align)"));
+                                          "(nonnull|align|dereferenceable)"));
+        ASSERT_FALSE(FindExactlyAttributes(Map, I->getOperand(1), "(align)"));
         ASSERT_TRUE(FindExactlyAttributes(Map, I->getOperand(2),
-                                       "(align|dereferenceable)"));
+                                          "(align|dereferenceable)"));
         ASSERT_TRUE(MapHasRightValue(
-            Map, Assume, {I->getOperand(0), Attribute::Dereferenceable}, {16, 16}));
-        ASSERT_TRUE(MapHasRightValue(Map, Assume, {I->getOperand(0), Attribute::Alignment},
-                               {4, 4}));
-        ASSERT_TRUE(MapHasRightValue(Map, Assume, {I->getOperand(0), Attribute::Alignment},
-                               {4, 4}));
+            Map, Assume, {I->getOperand(0), Attribute::Dereferenceable},
+            {16, 16}));
+        ASSERT_TRUE(MapHasRightValue(
+            Map, Assume, {I->getOperand(0), Attribute::Alignment}, {4, 4}));
+        ASSERT_TRUE(MapHasRightValue(
+            Map, Assume, {I->getOperand(0), Attribute::Alignment}, {4, 4}));
       }));
   Tests.push_back(std::make_pair(
       "call void @func1(ptr nonnull align 32 dereferenceable(48) %P, ptr "
@@ -114,13 +120,13 @@ TEST(AssumeQueryAPI, fillMapFromAssume) {
         fillMapFromAssume(*Assume, Map);
 
         ASSERT_TRUE(FindExactlyAttributes(Map, I->getOperand(0),
-                                       "(nonnull|align|dereferenceable)"));
+                                          "(nonnull|align|dereferenceable)"));
         ASSERT_TRUE(FindExactlyAttributes(Map, I->getOperand(1),
-                                       "(nonnull|align|dereferenceable)"));
+                                          "(nonnull|align|dereferenceable)"));
         ASSERT_TRUE(FindExactlyAttributes(Map, I->getOperand(2),
-                                       "(nonnull|align|dereferenceable)"));
+                                          "(nonnull|align|dereferenceable)"));
         ASSERT_TRUE(FindExactlyAttributes(Map, I->getOperand(3),
-                                       "(nonnull|align|dereferenceable)"));
+                                          "(nonnull|align|dereferenceable)"));
         ASSERT_TRUE(MapHasRightValue(
             Map, Assume, {I->getOperand(0), Attribute::Dereferenceable},
             {48, 48}));
@@ -149,29 +155,33 @@ TEST(AssumeQueryAPI, fillMapFromAssume) {
         fillMapFromAssume(*Assume, Map);
 
         ASSERT_TRUE(FindExactlyAttributes(Map, I->getOperand(0),
-                                    "(align|dereferenceable)"));
+                                          "(align|dereferenceable)"));
         ASSERT_TRUE(FindExactlyAttributes(Map, I->getOperand(1),
-                                    "(align|dereferenceable)"));
+                                          "(align|dereferenceable)"));
         ASSERT_TRUE(FindExactlyAttributes(Map, I->getOperand(2),
-                                       "(align|dereferenceable)"));
+                                          "(align|dereferenceable)"));
         ASSERT_TRUE(FindExactlyAttributes(Map, I->getOperand(3),
-                                       "(nonnull|align|dereferenceable)"));
-        ASSERT_TRUE(MapHasRightValue(Map, Assume, {I->getOperand(0), Attribute::Alignment},
-                               {32, 32}));
+                                          "(nonnull|align|dereferenceable)"));
         ASSERT_TRUE(MapHasRightValue(
-            Map, Assume, {I->getOperand(0), Attribute::Dereferenceable}, {48, 48}));
+            Map, Assume, {I->getOperand(0), Attribute::Alignment}, {32, 32}));
         ASSERT_TRUE(MapHasRightValue(
-            Map, Assume, {I->getOperand(1), Attribute::Dereferenceable}, {28, 28}));
-        ASSERT_TRUE(MapHasRightValue(Map, Assume, {I->getOperand(1), Attribute::Alignment},
-                               {8, 8}));
-        ASSERT_TRUE(MapHasRightValue(Map, Assume, {I->getOperand(2), Attribute::Alignment},
-                               {64, 64}));
+            Map, Assume, {I->getOperand(0), Attribute::Dereferenceable},
+            {48, 48}));
         ASSERT_TRUE(MapHasRightValue(
-            Map, Assume, {I->getOperand(2), Attribute::Dereferenceable}, {4, 4}));
-        ASSERT_TRUE(MapHasRightValue(Map, Assume, {I->getOperand(3), Attribute::Alignment},
-                               {16, 16}));
+            Map, Assume, {I->getOperand(1), Attribute::Dereferenceable},
+            {28, 28}));
         ASSERT_TRUE(MapHasRightValue(
-            Map, Assume, {I->getOperand(3), Attribute::Dereferenceable}, {12, 12}));
+            Map, Assume, {I->getOperand(1), Attribute::Alignment}, {8, 8}));
+        ASSERT_TRUE(MapHasRightValue(
+            Map, Assume, {I->getOperand(2), Attribute::Alignment}, {64, 64}));
+        ASSERT_TRUE(MapHasRightValue(
+            Map, Assume, {I->getOperand(2), Attribute::Dereferenceable},
+            {4, 4}));
+        ASSERT_TRUE(MapHasRightValue(
+            Map, Assume, {I->getOperand(3), Attribute::Alignment}, {16, 16}));
+        ASSERT_TRUE(MapHasRightValue(
+            Map, Assume, {I->getOperand(3), Attribute::Dereferenceable},
+            {12, 12}));
       }));
 
   /// Keep this test last as it modifies the function.
@@ -188,13 +198,13 @@ TEST(AssumeQueryAPI, fillMapFromAssume) {
         Value *New = I->getFunction()->getArg(3);
         Value *Old = I->getOperand(0);
         ASSERT_TRUE(FindExactlyAttributes(Map, New, ""));
-        ASSERT_TRUE(FindExactlyAttributes(Map, Old,
-                                       "(nonnull|align|dereferenceable)"));
+        ASSERT_TRUE(
+            FindExactlyAttributes(Map, Old, "(nonnull|align|dereferenceable)"));
         Old->replaceAllUsesWith(New);
         Map.clear();
         fillMapFromAssume(*Assume, Map);
-        ASSERT_TRUE(FindExactlyAttributes(Map, New,
-                                       "(nonnull|align|dereferenceable)"));
+        ASSERT_TRUE(
+            FindExactlyAttributes(Map, New, "(nonnull|align|dereferenceable)"));
         ASSERT_TRUE(FindExactlyAttributes(Map, Old, ""));
       }));
   Tests.push_back(std::make_pair(
@@ -206,11 +216,11 @@ TEST(AssumeQueryAPI, fillMapFromAssume) {
 
         ASSERT_TRUE(Map.empty());
       }));
-  RunTest(Head, Tail, Tests);
+  RunTest(Head, Tail, Tests, OptCtx);
 }
 
 TEST(AssumeQueryAPI, AssumptionCache) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> Mod = parseAssemblyString(
       "declare void @llvm.assume(i1)\n"
@@ -272,7 +282,7 @@ TEST(AssumeQueryAPI, AssumptionCache) {
 }
 
 TEST(AssumeQueryAPI, Alignment) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> Mod = parseAssemblyString(
       "declare void @llvm.assume(i1)\n"

@@ -61,9 +61,10 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/NVPTXAddrSpace.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
 #define DEBUG_TYPE "expand-variadics"
@@ -72,20 +73,14 @@ using namespace llvm;
 
 namespace {
 
-cl::opt<ExpandVariadicsMode> ExpandVariadicsModeOption(
-    DEBUG_TYPE "-override", cl::desc("Override the behaviour of " DEBUG_TYPE),
-    cl::init(ExpandVariadicsMode::Unspecified),
-    cl::values(clEnumValN(ExpandVariadicsMode::Unspecified, "unspecified",
-                          "Use the implementation defaults"),
-               clEnumValN(ExpandVariadicsMode::Disable, "disable",
-                          "Disable the pass entirely"),
-               clEnumValN(ExpandVariadicsMode::Optimize, "optimize",
-                          "Optimise without changing ABI"),
-               clEnumValN(ExpandVariadicsMode::Lowering, "lowering",
-                          "Change variadic calling convention")));
+static ExpandVariadicsMode getExpandVariadicsModeOption(const Module &M) {
+  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
+                                    &clv2::IPO_ExpandVariadicsModeOption>(
+      M.getContext().getOptionsContext(), ExpandVariadicsMode::Unspecified);
+}
 
-bool commandLineOverride() {
-  return ExpandVariadicsModeOption != ExpandVariadicsMode::Unspecified;
+bool commandLineOverride(const Module &M) {
+  return getExpandVariadicsModeOption(M) != ExpandVariadicsMode::Unspecified;
 }
 
 // Instances of this class encapsulate the target-dependant behaviour as a
@@ -101,7 +96,7 @@ public:
   static std::unique_ptr<VariadicABIInfo> create(const Triple &T);
 
   // Allow overriding whether the pass runs on a per-target basis
-  virtual bool enableForTarget() = 0;
+  virtual bool enableForTarget(const Module &M) = 0;
 
   // Whether a valist instance is passed by value or by address
   // I.e. does it need to be alloca'ed and stored into, or can
@@ -154,12 +149,10 @@ class ExpandVariadics : public ModulePass {
 
 public:
   static char ID;
-  const ExpandVariadicsMode Mode;
+  ExpandVariadicsMode Mode;
   std::unique_ptr<VariadicABIInfo> ABI;
 
-  ExpandVariadics(ExpandVariadicsMode Mode)
-      : ModulePass(ID),
-        Mode(commandLineOverride() ? ExpandVariadicsModeOption : Mode) {}
+  ExpandVariadics(ExpandVariadicsMode Mode) : ModulePass(ID), Mode(Mode) {}
 
   StringRef getPassName() const override { return "Expand variadic functions"; }
 
@@ -352,6 +345,9 @@ public:
 };
 
 bool ExpandVariadics::runOnModule(Module &M) {
+  if (commandLineOverride(M))
+    Mode = getExpandVariadicsModeOption(M);
+
   bool Changed = false;
   if (Mode == ExpandVariadicsMode::Disable)
     return Changed;
@@ -361,7 +357,7 @@ bool ExpandVariadics::runOnModule(Module &M) {
   if (!ABI)
     return Changed;
 
-  if (!ABI->enableForTarget())
+  if (!ABI->enableForTarget(M))
     return Changed;
 
   auto &Ctx = M.getContext();
@@ -981,7 +977,7 @@ bool ExpandVariadics::expandVAArgInst(IRBuilder<> &Builder,
 
 struct Amdgpu final : public VariadicABIInfo {
 
-  bool enableForTarget() override { return true; }
+  bool enableForTarget(const Module &M) override { return true; }
 
   bool vaListPassedInSSARegister() override { return true; }
 
@@ -1007,7 +1003,7 @@ struct Amdgpu final : public VariadicABIInfo {
 
 struct NVPTX final : public VariadicABIInfo {
 
-  bool enableForTarget() override { return true; }
+  bool enableForTarget(const Module &M) override { return true; }
 
   bool vaListPassedInSSARegister() override { return true; }
 
@@ -1034,7 +1030,7 @@ struct NVPTX final : public VariadicABIInfo {
 
 struct SPIRV final : public VariadicABIInfo {
 
-  bool enableForTarget() override { return true; }
+  bool enableForTarget(const Module &M) override { return true; }
 
   bool vaListPassedInSSARegister() override { return true; }
 
@@ -1087,9 +1083,8 @@ struct SPIRV final : public VariadicABIInfo {
 
 struct Wasm final : public VariadicABIInfo {
 
-  bool enableForTarget() override {
-    // Currently wasm is only used for testing.
-    return commandLineOverride();
+  bool enableForTarget(const Module &M) override {
+    return commandLineOverride(M);
   }
 
   bool vaListPassedInSSARegister() override { return true; }

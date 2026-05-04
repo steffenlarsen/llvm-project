@@ -13,8 +13,10 @@ set(LLVM_LINK_COMPONENTS
   )
 
 add_llvm_library(LLVMBOLTRewrite
+  BoltRewriteOptionsGetters.cpp
   BinaryPassManager.cpp
   BoltDiff.cpp
+  BoltRewriteOptions.cpp
   DWARFRewriter.cpp
   ExecutableFileMemoryManager.cpp
   JITLinkLinker.cpp

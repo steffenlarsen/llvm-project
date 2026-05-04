@@ -52,7 +52,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
   // parsed is always null terminated.
   std::unique_ptr<MemoryBuffer> MemBuf = MemoryBuffer::getMemBufferCopy(Input);
   SMDiagnostic Err;
-  LLVMContext Context;
+  LLVMContext Context(llvm::clv2::defaultOptionsContext());
   std::unique_ptr<Module> M;
 
   if (setjmp(JmpBuf))

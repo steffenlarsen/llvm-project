@@ -34,6 +34,7 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TargetSelect.h"
 #include "gtest/gtest.h"
 
@@ -70,7 +71,8 @@ public:
 
     MRI.reset(TheTarget->createMCRegInfo(TT));
     MAI.reset(TheTarget->createMCAsmInfo(*MRI, TT, MCOptions));
-    STI.reset(TheTarget->createMCSubtargetInfo(TT, "", ""));
+    STI.reset(TheTarget->createMCSubtargetInfo(
+        TT, "", "", /*Ctx=*/llvm::clv2::defaultOptionsContext()));
   }
 
   StreamerContext createStreamer(raw_pwrite_stream &OS) {

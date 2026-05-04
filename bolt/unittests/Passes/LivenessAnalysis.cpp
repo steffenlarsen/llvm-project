@@ -14,6 +14,7 @@
 #include "bolt/Core/BinaryBasicBlock.h"
 #include "bolt/Core/BinaryFunction.h"
 #include "bolt/Core/BinaryFunctionCallGraph.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "bolt/Passes/DataflowInfoManager.h"
 #include "bolt/Passes/RegAnalysis.h"
 #include "bolt/Rewrite/RewriteInstance.h"
@@ -29,7 +30,7 @@ using namespace llvm::ELF;
 using namespace bolt;
 
 namespace opts {
-extern cl::opt<bool> AssumeABI;
+extern bool AssumeABI;
 } // namespace opts
 
 namespace {
@@ -69,7 +70,7 @@ protected:
     BC = cantFail(BinaryContext::createBinaryContext(
         ObjFile->makeTriple(), std::make_shared<orc::SymbolStringPool>(),
         ObjFile->getFileName(), nullptr, true, DWARFContext::create(*ObjFile),
-        {llvm::outs(), llvm::errs()}));
+        {llvm::outs(), llvm::errs()}, /*OptsCtx=*/nullptr));
     ASSERT_FALSE(!BC);
     BC->initializeTarget(std::unique_ptr<MCPlusBuilder>(
         createMCPlusBuilder(GetParam(), BC->MIA.get(), BC->MII.get(),
@@ -91,7 +92,8 @@ TEST_P(LivenessAnalysisTester, AArch64_scavengeRegFromState) {
   if (GetParam() != Triple::aarch64)
     GTEST_SKIP();
 
-  opts::AssumeABI = true;
+  if (auto *V = BC->getOptionsContext().getViewPtr<&clv2::BoltPassesOptsReg>())
+    V->get<&clv2::BOLTPASS_AssumeABI>() = true;
   BinaryFunction *BF = BC->createInjectedBinaryFunction("BF", true);
   BinaryBasicBlock *EntryBB = BF->addBasicBlock();
   BinaryBasicBlock *FallThroughBB = BF->addBasicBlock();

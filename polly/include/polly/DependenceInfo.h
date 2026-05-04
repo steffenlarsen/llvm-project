@@ -202,7 +202,6 @@ private:
   const AnalysisLevel Level;
 };
 
-extern Dependences::AnalysisLevel OptAnalysisLevel;
 
 struct DependenceAnalysis final {
   struct Result {

@@ -1,5 +1,6 @@
 add_llvm_component_library(LLVMARCDesc
   ARCInstPrinter.cpp
+  ARCOptions.cpp
   ARCMCTargetDesc.cpp
   ARCMCAsmInfo.cpp
 

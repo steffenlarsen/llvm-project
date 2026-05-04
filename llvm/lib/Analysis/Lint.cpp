@@ -674,8 +674,10 @@ Value *Lint::findValueImpl(Value *V, bool OffsetOk,
     for (;;) {
       if (!VisitedBlocks.insert(BB).second)
         break;
-      if (Value *U =
-              FindAvailableLoadedValue(L, BB, BBI, DefMaxInstsToScan, &BatchAA))
+      if (Value *U = FindAvailableLoadedValue(
+              L, BB, BBI,
+              getDefMaxInstsToScan(Mod->getContext().getOptionsContext()),
+              &BatchAA))
         return findValueImpl(U, OffsetOk, Visited);
       if (BBI != BB->begin())
         break;

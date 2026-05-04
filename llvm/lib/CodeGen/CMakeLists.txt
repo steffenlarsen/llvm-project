@@ -34,6 +34,9 @@ elseif (DEFINED LLVM_HAVE_TF_AOT OR LLVM_HAVE_TFLITE)
 endif()
 
 add_llvm_component_library(LLVMCodeGen
+  CommandFlagsOptionsGetters.cpp
+  CodeGenOptionsRegistration.cpp
+  CodeGenPassOptionsGetters.cpp
   AggressiveAntiDepBreaker.cpp
   AllocationOrder.cpp
   Analysis.cpp
@@ -54,6 +57,7 @@ add_llvm_component_library(LLVMCodeGen
   CFIInstrInserter.cpp
   CodeGen.cpp
   CodeGenCommonISel.cpp
+  CodeGenPassOptions.cpp
   CodeGenPrepare.cpp
   CommandFlags.cpp
   ComplexDeinterleavingPass.cpp
@@ -296,6 +300,7 @@ add_llvm_component_library(LLVMCodeGen
   CGData
   CodeGenTypes
   Core
+  GlobalISel
   MC
   ObjCARC
   ProfileData

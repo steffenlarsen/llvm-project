@@ -30,6 +30,8 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/IPO/ExpandVariadics.h"
 #include "llvm/Transforms/Scalar.h"
@@ -262,11 +264,11 @@ bool SPIRVPassConfig::addRegBankSelect() {
 // doInitialization() when the module contains debug info (llvm.dbg.cu).
 // TODO: Remove this option after a deprecation period. Callers that used
 // -spv-emit-nonsemantic-debug-info should switch to -g.
-static cl::opt<bool> SPVEnableNonSemanticDI(
-    "spv-emit-nonsemantic-debug-info",
-    cl::desc("Deprecated. Use -g to emit SPIR-V NonSemantic.Shader.DebugInfo "
-             "instructions"),
-    cl::Optional, cl::init(false));
+
+[[maybe_unused]] static bool getEnableNonSemanticDI(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::SPIRV_EnableNonSemanticDI>(
+      M.getContext().getOptionsContext());
+}
 
 // Add the custom SPIRVInstructionSelect from above.
 bool SPIRVPassConfig::addGlobalInstructionSelect() {

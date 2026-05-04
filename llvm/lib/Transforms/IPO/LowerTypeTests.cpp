@@ -66,18 +66,19 @@
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TrailingObjects.h"
 #include "llvm/Support/YAMLTraits.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <algorithm>
@@ -100,35 +101,39 @@ STATISTIC(NumByteArraysCreated, "Number of byte arrays created");
 STATISTIC(NumTypeTestCallsLowered, "Number of type test calls lowered");
 STATISTIC(NumTypeIdDisjointSets, "Number of disjoint sets of type identifiers");
 
-static cl::opt<bool> AvoidReuse(
-    "lowertypetests-avoid-reuse",
-    cl::desc("Try to avoid reuse of byte array addresses using aliases"),
-    cl::Hidden, cl::init(true));
+static bool getAvoidReuse(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_AvoidReuse>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<PassSummaryAction> ClSummaryAction(
-    "lowertypetests-summary-action",
-    cl::desc("What to do with the summary when running this pass"),
-    cl::values(clEnumValN(PassSummaryAction::None, "none", "Do nothing"),
-               clEnumValN(PassSummaryAction::Import, "import",
-                          "Import typeid resolutions from summary and globals"),
-               clEnumValN(PassSummaryAction::Export, "export",
-                          "Export typeid resolutions to summary and globals")),
-    cl::Hidden);
+static PassSummaryAction getClSummaryAction(const Module &M) {
+  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
+                                    &clv2::IPO_LowerTypeTestsSummaryAction>(
+      M.getContext().getOptionsContext(), PassSummaryAction::None);
+}
 
-static cl::opt<std::string> ClReadSummary(
-    "lowertypetests-read-summary",
-    cl::desc("Read summary from given YAML file before running pass"),
-    cl::Hidden);
+static const std::string &getClReadSummary(const Module &M) {
+  if (auto *O =
+          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
+    if (O->specified<&clv2::IPO_LowerTypeTestsReadSummary>())
+      return O->get<&clv2::IPO_LowerTypeTestsReadSummary>();
+  static const std::string Default = "";
+  return Default;
+}
 
-static cl::opt<std::string> ClWriteSummary(
-    "lowertypetests-write-summary",
-    cl::desc("Write summary to given YAML file after running pass"),
-    cl::Hidden);
+static const std::string &getClWriteSummary(const Module &M) {
+  if (auto *O =
+          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
+    if (O->specified<&clv2::IPO_LowerTypeTestsWriteSummary>())
+      return O->get<&clv2::IPO_LowerTypeTestsWriteSummary>();
+  static const std::string Default = "";
+  return Default;
+}
 
-// FIXME: Remove in clang 24.
-static cl::opt<bool> EnableJumpTableDebugInfo(
-    "lowertypetests-jump-table-debug-info", cl::init(true), cl::Hidden,
-    cl::desc("Enable debug info generation for jump tables"));
+static bool getEnableJumpTableDebugInfo(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_EnableJumpTableDebugInfo>(
+      M.getContext().getOptionsContext());
+}
 
 bool BitSetInfo::containsGlobalOffset(uint64_t Offset) const {
   if (Offset < ByteOffset)
@@ -670,7 +675,7 @@ Value *LowerTypeTestsModule::createBitSetTest(IRBuilder<> &B,
     return createMaskedBitTest(B, TIL.InlineBits, BitOffset);
   } else {
     Constant *ByteArray = TIL.TheByteArray;
-    if (AvoidReuse && !ImportSummary) {
+    if (getAvoidReuse(M) && !ImportSummary) {
       // Each use of the byte array uses a different alias. This makes the
       // backend less likely to reuse previously computed byte array addresses,
       // improving the security of the CFI mechanism based on this pass.
@@ -1609,7 +1614,7 @@ void LowerTypeTestsModule::createJumpTable(
   IRBuilder<> IRB(BB);
 
   SmallVector<DILocation *> Locations;
-  if (M.getDwarfVersion() != 0 && EnableJumpTableDebugInfo)
+  if (M.getDwarfVersion() != 0 && getEnableJumpTableDebugInfo(M))
     Locations = createJumpTableDebugInfo(F, Functions);
 
   InlineAsm *JumpTableAsm = createJumpTableEntryAsm(JumpTableArch);
@@ -1989,11 +1994,11 @@ bool LowerTypeTestsModule::runForTesting(Module &M, ModuleAnalysisManager &AM) {
 
   // Handle the command-line summary arguments. This code is for testing
   // purposes only, so we handle errors directly.
-  if (!ClReadSummary.empty()) {
-    ExitOnError ExitOnErr("-lowertypetests-read-summary: " + ClReadSummary +
-                          ": ");
+  if (!getClReadSummary(M).empty()) {
+    ExitOnError ExitOnErr(
+        "-lowertypetests-read-summary: " + getClReadSummary(M) + ": ");
     auto ReadSummaryFile = ExitOnErr(errorOrToExpected(
-        MemoryBuffer::getFile(ClReadSummary, /*IsText=*/true)));
+        MemoryBuffer::getFile(getClReadSummary(M), /*IsText=*/true)));
 
     yaml::Input In(ReadSummaryFile->getBuffer());
     In >> Summary;
@@ -2003,15 +2008,17 @@ bool LowerTypeTestsModule::runForTesting(Module &M, ModuleAnalysisManager &AM) {
   bool Changed =
       LowerTypeTestsModule(
           M, AM,
-          ClSummaryAction == PassSummaryAction::Export ? &Summary : nullptr,
-          ClSummaryAction == PassSummaryAction::Import ? &Summary : nullptr)
+          getClSummaryAction(M) == PassSummaryAction::Export ? &Summary
+                                                             : nullptr,
+          getClSummaryAction(M) == PassSummaryAction::Import ? &Summary
+                                                             : nullptr)
           .lower();
 
-  if (!ClWriteSummary.empty()) {
-    ExitOnError ExitOnErr("-lowertypetests-write-summary: " + ClWriteSummary +
-                          ": ");
+  if (!getClWriteSummary(M).empty()) {
+    ExitOnError ExitOnErr(
+        "-lowertypetests-write-summary: " + getClWriteSummary(M) + ": ");
     std::error_code EC;
-    raw_fd_ostream OS(ClWriteSummary, EC, sys::fs::OF_TextWithCRLF);
+    raw_fd_ostream OS(getClWriteSummary(M), EC, sys::fs::OF_TextWithCRLF);
     ExitOnErr(errorCodeToError(EC));
 
     yaml::Output Out(OS);

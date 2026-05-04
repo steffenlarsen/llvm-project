@@ -15,6 +15,7 @@
 #include "llvm/DebugInfo/DWARF/DWARFObject.h"
 #include "llvm/MC/MCTargetOptionsCommandFlags.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/OptionsContext.h"
 
 namespace llvm {
 namespace dwarf_linker {
@@ -23,8 +24,9 @@ namespace parallel {
 /// This class emits specified line table into the .debug_line section.
 class DebugLineSectionEmitter {
 public:
-  DebugLineSectionEmitter(const Triple &TheTriple, DwarfUnit &U)
-      : TheTriple(TheTriple), U(U) {}
+  DebugLineSectionEmitter(const Triple &TheTriple, DwarfUnit &U,
+                          const clv2::OptionsContext &OptsCtx)
+      : TheTriple(TheTriple), U(U), OptsCtx(&OptsCtx) {}
 
   Error emit(const DWARFDebugLine::LineTable &LineTable,
              ArrayRef<uint64_t> OrigRowIndices = {},
@@ -82,13 +84,14 @@ private:
                                "no register info for target %s",
                                TripleName.c_str());
 
-    MCOptions = mc::InitMCTargetOptionsFromFlags();
+    MCOptions = mc::InitMCTargetOptionsFromFlags(*OptsCtx);
     MAI.reset(TheTarget->createMCAsmInfo(*MRI, TheTriple, MCOptions));
     if (!MAI)
       return createStringError(std::errc::invalid_argument,
                                "no asm info for target %s", TripleName.c_str());
 
-    MSTI.reset(TheTarget->createMCSubtargetInfo(TheTriple, "", ""));
+    MSTI.reset(TheTarget->createMCSubtargetInfo(TheTriple, "", "",
+                                                /*Ctx=*/*OptsCtx));
     if (!MSTI)
       return createStringError(std::errc::invalid_argument,
                                "no subtarget info for target %s",
@@ -439,6 +442,7 @@ private:
 
   Triple TheTriple;
   DwarfUnit &U;
+  const clv2::OptionsContext *OptsCtx;
 
   MCTargetOptions MCOptions;
   std::unique_ptr<MCRegisterInfo> MRI;

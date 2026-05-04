@@ -64,15 +64,18 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 #include <cassert>
 
 using namespace llvm;
 
 #define DEBUG_TYPE "mve-laneinterleave"
 
-static cl::opt<bool> EnableInterleave(
-    "enable-mve-interleave", cl::Hidden, cl::init(true),
-    cl::desc("Enable interleave MVE vector operation lowering"));
+static bool getEnableInterleave(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::ARM_EnableInterleave>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -396,7 +399,7 @@ static bool isAddReduction(Instruction &I) {
 }
 
 bool MVELaneInterleaving::runOnFunction(Function &F) {
-  if (!EnableInterleave)
+  if (!getEnableInterleave(F))
     return false;
   auto &TPC = getAnalysis<TargetPassConfig>();
   auto &TM = TPC.getTM<TargetMachine>();

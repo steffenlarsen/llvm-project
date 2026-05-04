@@ -104,6 +104,8 @@
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cassert>
 
@@ -113,9 +115,10 @@ using namespace llvm;
 
 #define AARCH64_SPECULATION_HARDENING_NAME "AArch64 speculation hardening pass"
 
-static cl::opt<bool> HardenLoads("aarch64-slh-loads", cl::Hidden,
-                                 cl::desc("Sanitize loads from memory."),
-                                 cl::init(true));
+static bool getHardenLoads(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::A64_HardenLoads>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -661,7 +664,7 @@ bool AArch64SpeculationHardening::runOnMachineFunction(MachineFunction &MF) {
   bool Modified = false;
 
   // Step 1: Enable automatic insertion of SpeculationSafeValue.
-  if (HardenLoads) {
+  if (getHardenLoads(MF.getFunction())) {
     LLVM_DEBUG(
         dbgs() << "***** AArch64SpeculationHardening - automatic insertion of "
                   "SpeculationSafeValue intrinsics *****\n");

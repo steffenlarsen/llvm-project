@@ -15,6 +15,7 @@
 #if defined(LLVM_HAVE_TFLITE)
 
 #include "llvm/ADT/BitVector.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/MLInlineAdvisor.h"
 #include "llvm/Analysis/ModelUnderTrainingRunner.h"
@@ -23,56 +24,36 @@
 #include "llvm/Analysis/Utils/TrainingLogger.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/OptionsContext.h"
 
 #include <optional>
 #include <vector>
 
 using namespace llvm;
 
-static cl::opt<std::string> TrainingLog(
-    "training-log", cl::Hidden,
-    cl::desc("Path where the development - mode inlining log is saved."));
+static std::string TFFeedPrefix = "action_";
 
-static cl::opt<std::string> TFModelUnderTrainingPath(
-    "ml-inliner-model-under-training", cl::Hidden,
-    cl::desc(R"(Path to SavedModel from the previous training iteration.
-The directory is also expected to contain a JSON specification of the 
-outputs expected to be logged, where the first entry must be the 
-inlining decision. The file containing the specification should be 
-called output_spec.json. The expected JSON value is an array of 
-dictionaries. Each dictionary should have 2 keys: 
+static std::string getTrainingLog(const LLVMContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_TrainingLog>(
+      Ctx.getOptionsContext());
+}
 
-- "tensor_spec, followed by the TensorSpec description of the
-output; and 
-- "logging_name", a string indicating the name to use when
-logging the output values. 
+static std::string getTFModelUnderTrainingPath(const LLVMContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_TFModelUnderTrainingPath>(
+      Ctx.getOptionsContext());
+}
 
-Example:
-[
-  {
-    "logging_name" : "some_name", 
-    "tensor_spec" : { 
-      "name" : "model_name", 
-      "port" : 0,
-      "shape" : [2, 3],
-      "type" : "float"
-      }
-  }
-]
+static std::string getTFOutputSpecOverride(const LLVMContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_TFOutputSpecOverride>(
+      Ctx.getOptionsContext());
+}
 
-The first value must always correspond to the decision.)"));
-
-static cl::opt<std::string> TFOutputSpecOverride(
-    "ml-inliner-output-spec-override", cl::Hidden,
-    cl::desc("Override the path to the output spec json file. See "
-             "-ml-inliner-model-under-training documentation for the "
-             "specification of that file."));
-
-static cl::opt<std::string> TFFeedPrefix("ml-inliner-trained-model-feed-prefix",
-                                         cl::Hidden, cl::init("action_"),
-                                         cl::desc("Prefix for feature names."));
+static std::string getTFFeedPrefix(const LLVMContext &Ctx) {
+  return clv2::getOptValOr<&clv2::AnalysisOptsReg, &clv2::AN_TFFeedPrefix>(
+      Ctx.getOptionsContext(), TFFeedPrefix);
+}
 
 namespace {
 /// An InlineEvent, used by TrainingLogger.
@@ -218,10 +199,12 @@ static const std::vector<TensorSpec> TrainingOnlyFeatures{
 // the model runner needs to see present. We don't set them ourselves or
 // interact with them.
 static const std::vector<TensorSpec>
-convertInputFeatures(const std::vector<TensorSpec> &OriginalFeatures) {
+convertInputFeatures(const std::vector<TensorSpec> &OriginalFeatures,
+                     LLVMContext &Ctx) {
   std::vector<TensorSpec> InputSpecs;
   for (const auto &Feature : OriginalFeatures)
-    InputSpecs.push_back(TensorSpec(TFFeedPrefix + Feature.name(), Feature));
+    InputSpecs.push_back(
+        TensorSpec(getTFFeedPrefix(Ctx) + Feature.name(), Feature));
   append_range(InputSpecs, TrainingOnlyFeatures);
   return InputSpecs;
 }
@@ -244,9 +227,9 @@ TrainingLogger::TrainingLogger(StringRef LogFileName,
   DecisionPos = FT.size();
   FT.push_back(InlineDecisionSpec);
   std::error_code EC;
-  auto OS = std::make_unique<raw_fd_ostream>(TrainingLog, EC);
+  auto OS = std::make_unique<raw_fd_ostream>(LogFileName, EC);
   if (EC)
-    dbgs() << (EC.message() + ":" + TrainingLog);
+    dbgs() << (EC.message() + ":" + LogFileName.str());
 
   L = std::make_unique<Logger>(std::move(OS), FT,
                                TensorSpec::createSpec<int64_t>(RewardName, {1}),
@@ -292,10 +275,10 @@ DevelopmentModeMLInlineAdvisor::DevelopmentModeMLInlineAdvisor(
     : MLInlineAdvisor(M, MAM, GetModelRunner, GetDefaultAdvice),
       IsDoingInference(isa<ModelUnderTrainingRunner>(getModelRunner())) {
   // We cannot have the case of neither inference nor logging.
-  if (!TrainingLog.empty())
+  if (!getTrainingLog(M.getContext()).empty())
     Logger = std::make_unique<TrainingLogger>(
-        TrainingLog, dyn_cast<ModelUnderTrainingRunner>(ModelRunner.get()),
-        getFeatureMap());
+        getTrainingLog(M.getContext()),
+        dyn_cast<ModelUnderTrainingRunner>(ModelRunner.get()), getFeatureMap());
   assert(IsDoingInference || isLogging());
 }
 
@@ -333,13 +316,13 @@ std::unique_ptr<InlineAdvisor> llvm::getDevelopmentModeAdvisor(
       -> std::unique_ptr<MLModelRunner> {
     std::unique_ptr<MLModelRunner> Runner;
     const std::vector<TensorSpec> ConvertedFeatures =
-        convertInputFeatures(InputFeatures);
-    if (TFModelUnderTrainingPath.empty())
+        convertInputFeatures(InputFeatures, Ctx);
+    if (getTFModelUnderTrainingPath(Ctx).empty())
       Runner.reset(new NoInferenceModelRunner(Ctx, ConvertedFeatures));
     else
       Runner = ModelUnderTrainingRunner::createAndEnsureValid(
-          Ctx, TFModelUnderTrainingPath, DecisionName, ConvertedFeatures,
-          TFOutputSpecOverride);
+          Ctx, getTFModelUnderTrainingPath(Ctx), DecisionName,
+          ConvertedFeatures, getTFOutputSpecOverride(Ctx));
     if (!Runner)
       return nullptr;
     return Runner;

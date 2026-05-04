@@ -66,22 +66,26 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/ReachingDefAnalysis.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/MCInstrDesc.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "arm-low-overhead-loops"
 #define ARM_LOW_OVERHEAD_LOOPS_NAME "ARM Low Overhead Loops pass"
 
-static cl::opt<bool>
-DisableTailPredication("arm-loloops-disable-tailpred", cl::Hidden,
-    cl::desc("Disable tail-predication in the ARM LowOverheadLoop pass"),
-    cl::init(false));
+static bool getDisableTailPredication(const Function &F) {
+  return clv2::getOptValOr<&clv2::ARMOptsReg,
+                           &clv2::ARM_DisableTailPredication>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<bool>
-    DisableOmitDLS("arm-disable-omit-dls", cl::Hidden,
-                   cl::desc("Disable omitting 'dls lr, lr' instructions"),
-                   cl::init(false));
+static bool getDisableOmitDLS(const Function &F) {
+  return clv2::getOptValOr<&clv2::ARMOptsReg, &clv2::ARM_DisableOmitDLS>(
+      F.getContext().getOptionsContext(), false);
+}
 
 static bool isVectorPredicated(MachineInstr *MI) {
   int PIdx = llvm::findFirstVPTPredOperandIdx(*MI);
@@ -604,7 +608,7 @@ bool LowOverheadLoop::ValidateTailPredicate() {
   assert(ML.getBlocks().size() == 1 &&
          "Shouldn't be processing a loop with more than one block");
 
-  if (DisableTailPredication) {
+  if (getDisableTailPredication(MF->getFunction())) {
     LLVM_DEBUG(dbgs() << "ARM Loops: tail-predication is disabled\n");
     return false;
   }
@@ -1548,8 +1552,8 @@ MachineInstr* ARMLowOverheadLoops::ExpandLoopStart(LowOverheadLoop &LoLoop) {
 
   // A DLS lr, lr we needn't emit
   MachineInstr* NewStart;
-  if (!DisableOmitDLS && Opc == ARM::t2DLS && Count.isReg() &&
-      Count.getReg() == ARM::LR) {
+  if (!getDisableOmitDLS(LoLoop.MF->getFunction()) && Opc == ARM::t2DLS &&
+      Count.isReg() && Count.getReg() == ARM::LR) {
     LLVM_DEBUG(dbgs() << "ARM Loops: Didn't insert start: DLS lr, lr");
     NewStart = nullptr;
   } else {

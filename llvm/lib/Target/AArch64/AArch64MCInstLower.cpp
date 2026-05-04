@@ -27,13 +27,17 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
 using namespace llvm;
 using namespace llvm::object;
 
-extern cl::opt<bool> EnableAArch64ELFLocalDynamicTLSGeneration;
+static bool getEnableAArch64ELFLocalDynamicTLSGeneration(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::A64_ELFLocalDynamicTLSGeneration>(
+      F.getContext().getOptionsContext());
+}
 
 AArch64MCInstLower::AArch64MCInstLower(MCContext &ctx, AsmPrinter &printer)
     : Ctx(ctx), Printer(printer) {}
@@ -197,7 +201,7 @@ MCOperand AArch64MCInstLower::lowerSymbolOperandELF(const MachineOperand &MO,
       } else {
         const GlobalValue *GV = MO.getGlobal();
         Model = Printer.TM.getTLSModel(GV);
-        if (!EnableAArch64ELFLocalDynamicTLSGeneration &&
+        if (!getEnableAArch64ELFLocalDynamicTLSGeneration(MF->getFunction()) &&
             Model == TLSModel::LocalDynamic)
           Model = TLSModel::GeneralDynamic;
       }

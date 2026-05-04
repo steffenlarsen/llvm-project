@@ -33,14 +33,16 @@
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CheckedArithmetic.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <algorithm>
 #include <cassert>
@@ -57,40 +59,68 @@ STATISTIC(NumPeeled, "Number of loops peeled");
 STATISTIC(NumPeeledEnd, "Number of loops peeled from end");
 
 namespace llvm {
-static cl::opt<unsigned> UnrollPeelCount(
-    "unroll-peel-count", cl::Hidden,
-    cl::desc("Set the unroll peeling count, for testing purposes"));
+static unsigned getUnrollPeelCount(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_UnrollPeelCount>(
+      F.getContext().getOptionsContext(), 0);
+}
+static bool isUnrollPeelCountSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
+                               &clv2::TU_UnrollPeelCount>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    UnrollAllowPeeling("unroll-allow-peeling", cl::init(true), cl::Hidden,
-                       cl::desc("Allows loops to be peeled when the dynamic "
-                                "trip count is known to be low."));
+static bool getUnrollAllowPeeling(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_UnrollAllowPeeling>(
+      F.getContext().getOptionsContext());
+}
+static bool isUnrollAllowPeelingSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
+                               &clv2::TU_UnrollAllowPeeling>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    UnrollAllowLoopNestsPeeling("unroll-allow-loop-nests-peeling",
-                                cl::init(false), cl::Hidden,
-                                cl::desc("Allows loop nests to be peeled."));
+static bool getUnrollAllowLoopNestsPeeling(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_UnrollAllowLoopNestsPeeling>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool isUnrollAllowLoopNestsPeelingSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
+                               &clv2::TU_UnrollAllowLoopNestsPeeling>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> UnrollPeelMaxCount(
-    "unroll-peel-max-count", cl::init(7), cl::Hidden,
-    cl::desc("Max average trip count which will cause loop peeling."));
+static unsigned getUnrollPeelMaxCount(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_UnrollPeelMaxCount>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> UnrollForcePeelCount(
-    "unroll-force-peel-count", cl::init(0), cl::Hidden,
-    cl::desc("Force a peel count regardless of profiling information."));
+static unsigned getUnrollForcePeelCount(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_UnrollForcePeelCount>(
+      F.getContext().getOptionsContext(), 0);
+}
+static bool isUnrollForcePeelCountSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
+                               &clv2::TU_UnrollForcePeelCount>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> DisableAdvancedPeeling(
-    "disable-advanced-peeling", cl::init(false), cl::Hidden,
-    cl::desc(
-        "Disable advance peeling. Issues for convergent targets (D134803)."));
+static bool getDisableAdvancedPeeling(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_DisableAdvancedPeeling>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<bool> EnablePeelingForIV(
-    "enable-peeling-for-iv", cl::init(false), cl::Hidden,
-    cl::desc("Enable peeling to convert Phi nodes into IVs"));
+static bool getEnablePeelingForIV(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_EnablePeelingForIV>(
+      F.getContext().getOptionsContext(), false);
+}
 
 static const char *PeeledCountMetaData = "llvm.loop.peeled.count";
 
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 } // namespace llvm
 
 // Check whether we are capable of peeling this loop.
@@ -98,7 +128,7 @@ bool llvm::canPeel(const Loop *L) {
   // Make sure the loop is in simplified form
   if (!L->isLoopSimplifyForm())
     return false;
-  if (!DisableAdvancedPeeling)
+  if (!getDisableAdvancedPeeling(*L->getHeader()->getParent()))
     return true;
 
   SmallVector<BasicBlock *, 4> Exits;
@@ -520,8 +550,11 @@ static bool shouldPeelLastIteration(Loop &L, CmpPredicate Pred,
   const SCEV *BTC = SE.getBackedgeTakenCount(&L);
   SCEVExpander Expander(SE, "loop-peel");
   if (!SE.isKnownNonZero(BTC) &&
-      Expander.isHighCostExpansion(BTC, &L, SCEVCheapExpansionBudget, &TTI,
-                                   L.getLoopPredecessor()->getTerminator()))
+      Expander.isHighCostExpansion(
+          BTC, &L,
+          getSCEVCheapExpansionBudget(
+              L.getHeader()->getParent()->getContext().getOptionsContext()),
+          &TTI, L.getLoopPredecessor()->getTerminator()))
     return false;
 
   auto Guards = ScalarEvolution::LoopGuards::collect(&L, SE);
@@ -772,11 +805,12 @@ void llvm::computePeelCount(Loop *L, unsigned LoopSize,
     return;
 
   // If the user provided a peel count, use that.
-  bool UserPeelCount = UnrollForcePeelCount.getNumOccurrences() > 0;
+  const Function &F = *L->getHeader()->getParent();
+  bool UserPeelCount = isUnrollForcePeelCountSpecified(F);
   if (UserPeelCount) {
-    LLVM_DEBUG(dbgs() << "Force-peeling first " << UnrollForcePeelCount
+    LLVM_DEBUG(dbgs() << "Force-peeling first " << getUnrollForcePeelCount(F)
                       << " iterations.\n");
-    PP.PeelCount = UnrollForcePeelCount;
+    PP.PeelCount = getUnrollForcePeelCount(F);
     PP.PeelProfiledIterations = true;
     return;
   }
@@ -793,11 +827,11 @@ void llvm::computePeelCount(Loop *L, unsigned LoopSize,
   if (auto Peeled = getOptionalIntLoopAttribute(L, PeeledCountMetaData))
     AlreadyPeeled = *Peeled;
   // Stop if we already peeled off the maximum number of iterations.
-  if (AlreadyPeeled >= UnrollPeelMaxCount)
+  if (AlreadyPeeled >= getUnrollPeelMaxCount(F))
     return;
 
   // Pay respect to limitations implied by loop size and the max peel count.
-  unsigned MaxPeelCount = UnrollPeelMaxCount;
+  unsigned MaxPeelCount = getUnrollPeelMaxCount(F);
   MaxPeelCount = std::min(MaxPeelCount, Threshold / LoopSize - 1);
 
   // Start the max computation with the PP.PeelCount value set by the target
@@ -811,7 +845,7 @@ void llvm::computePeelCount(Loop *L, unsigned LoopSize,
   // values, thus turning all those Phis into invariants or inductions.
   if (MaxPeelCount > DesiredPeelCount) {
     // Check how many iterations are useful for resolving Phis
-    auto NumPeels = PhiAnalyzer(*L, MaxPeelCount, EnablePeelingForIV)
+    auto NumPeels = PhiAnalyzer(*L, MaxPeelCount, getEnablePeelingForIV(F))
                         .calculateIterationsToPeel();
     if (NumPeels)
       DesiredPeelCount = std::max(DesiredPeelCount, *NumPeels);
@@ -828,7 +862,7 @@ void llvm::computePeelCount(Loop *L, unsigned LoopSize,
     DesiredPeelCount = std::min(DesiredPeelCount, MaxPeelCount);
     // Consider max peel count limitation.
     assert(DesiredPeelCount > 0 && "Wrong loop size estimation?");
-    if (DesiredPeelCount + AlreadyPeeled <= UnrollPeelMaxCount) {
+    if (DesiredPeelCount + AlreadyPeeled <= getUnrollPeelMaxCount(F)) {
       LLVM_DEBUG(dbgs() << "Peel " << DesiredPeelCount
                         << " iteration(s) to turn"
                         << " some Phis into invariants or inductions.\n");
@@ -844,7 +878,7 @@ void llvm::computePeelCount(Loop *L, unsigned LoopSize,
         std::min(CountToEliminateCmpsLast, MaxPeelCount);
     // Consider max peel count limitation.
     assert(DesiredPeelCountLast > 0 && "Wrong loop size estimation?");
-    if (DesiredPeelCountLast + AlreadyPeeled <= UnrollPeelMaxCount) {
+    if (DesiredPeelCountLast + AlreadyPeeled <= getUnrollPeelMaxCount(F)) {
       LLVM_DEBUG(dbgs() << "Peel " << DesiredPeelCount
                         << " iteration(s) to turn"
                         << " some Phis into invariants.\n");
@@ -887,7 +921,8 @@ void llvm::computePeelCount(Loop *L, unsigned LoopSize,
       return;
     }
     LLVM_DEBUG(dbgs() << "Already peel count: " << AlreadyPeeled << "\n");
-    LLVM_DEBUG(dbgs() << "Max peel count: " << UnrollPeelMaxCount << "\n");
+    LLVM_DEBUG(dbgs() << "Max peel count: " << getUnrollPeelMaxCount(F)
+                      << "\n");
     LLVM_DEBUG(dbgs() << "Loop cost: " << LoopSize << "\n");
     LLVM_DEBUG(dbgs() << "Max peel cost: " << Threshold << "\n");
     LLVM_DEBUG(dbgs() << "Max peel count by cost: "
@@ -1078,12 +1113,13 @@ llvm::gatherPeelingPreferences(Loop *L, ScalarEvolution &SE,
 
   // User specified values using cl::opt.
   if (UnrollingSpecficValues) {
-    if (UnrollPeelCount.getNumOccurrences() > 0)
-      PP.PeelCount = UnrollPeelCount;
-    if (UnrollAllowPeeling.getNumOccurrences() > 0)
-      PP.AllowPeeling = UnrollAllowPeeling;
-    if (UnrollAllowLoopNestsPeeling.getNumOccurrences() > 0)
-      PP.AllowLoopNestsPeeling = UnrollAllowLoopNestsPeeling;
+    const Function &F = *L->getHeader()->getParent();
+    if (isUnrollPeelCountSpecified(F))
+      PP.PeelCount = getUnrollPeelCount(F);
+    if (isUnrollAllowPeelingSpecified(F))
+      PP.AllowPeeling = getUnrollAllowPeeling(F);
+    if (isUnrollAllowLoopNestsPeelingSpecified(F))
+      PP.AllowLoopNestsPeeling = getUnrollAllowLoopNestsPeeling(F);
   }
 
   // User specifed values provided by argument.
@@ -1231,8 +1267,9 @@ void llvm::peelLoop(Loop *L, unsigned PeelCount, bool PeelLast, LoopInfo *LI,
       auto *BI = B.CreateCondBr(Cond, NewPreHeader, InsertTop);
       SmallVector<uint32_t> Weights;
       auto *OrigLatchBr = Latch->getTerminator();
-      auto HasBranchWeights = !ProfcheckDisableMetadataFixes &&
-                              extractBranchWeights(*OrigLatchBr, Weights);
+      auto HasBranchWeights =
+          !getProfcheckDisableMetadataFixes(PreHeader->getContext()) &&
+          extractBranchWeights(*OrigLatchBr, Weights);
       if (HasBranchWeights) {
         // The probability that the new guard skips the loop to execute just one
         // iteration is the original loop's probability of exiting at the latch

@@ -36,6 +36,9 @@
 #include <string>
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+}
 
 class AsmPrinter;
 class MCAsmBackend;
@@ -160,9 +163,9 @@ public:
   using MCInstrInfoCtorFnTy = MCInstrInfo *(*)();
   using MCInstrAnalysisCtorFnTy = MCInstrAnalysis *(*)(const MCInstrInfo *Info);
   using MCRegInfoCtorFnTy = MCRegisterInfo *(*)(const Triple &TT);
-  using MCSubtargetInfoCtorFnTy = MCSubtargetInfo *(*)(const Triple &TT,
-                                                       StringRef CPU,
-                                                       StringRef Features);
+  using MCSubtargetInfoCtorFnTy =
+      MCSubtargetInfo *(*)(const Triple &TT, StringRef CPU, StringRef Features,
+                           const clv2::OptionsContext &Ctx);
   using TargetMachineCtorTy = TargetMachine
       *(*)(const Target &T, const Triple &TT, StringRef CPU, StringRef Features,
            const TargetOptions &Options, std::optional<Reloc::Model> RM,
@@ -459,13 +462,15 @@ public:
   /// \param CPU This specifies the name of the target CPU.
   /// \param Features This specifies the string representation of the
   /// additional target features.
-  MCSubtargetInfo *createMCSubtargetInfo(const Triple &TheTriple, StringRef CPU,
-                                         StringRef Features) const {
+  MCSubtargetInfo *
+  createMCSubtargetInfo(const Triple &TheTriple, StringRef CPU,
+                        StringRef Features,
+                        const clv2::OptionsContext &Ctx) const {
     if (!MCSubtargetInfoCtorFn)
       return nullptr;
     if (!isValidFeatureListFormat(Features))
       return nullptr;
-    return MCSubtargetInfoCtorFn(TheTriple, CPU, Features);
+    return MCSubtargetInfoCtorFn(TheTriple, CPU, Features, Ctx);
   }
 
   /// createTargetMachine - Create a target specific machine implementation
@@ -1258,7 +1263,8 @@ template <class MCSubtargetInfoImpl> struct RegisterMCSubtargetInfo {
 
 private:
   static MCSubtargetInfo *Allocator(const Triple & /*TT*/, StringRef /*CPU*/,
-                                    StringRef /*FS*/) {
+                                    StringRef /*FS*/,
+                                    const clv2::OptionsContext & /*Ctx*/) {
     return new MCSubtargetInfoImpl();
   }
 };

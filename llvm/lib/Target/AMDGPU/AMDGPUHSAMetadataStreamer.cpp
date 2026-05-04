@@ -21,6 +21,9 @@
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 
 using namespace llvm;
@@ -61,14 +64,17 @@ static std::string getEnqueuedBlockSymbolName(const AMDGPUTargetMachine &TM,
   return Name.str().str();
 }
 
-namespace llvm {
+static bool getDumpHSAMetadata(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_DumpHSAMetadata>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> DumpHSAMetadata(
-    "amdgpu-dump-hsa-metadata",
-    cl::desc("Dump AMDGPU HSA Metadata"));
-static cl::opt<bool> VerifyHSAMetadata(
-    "amdgpu-verify-hsa-metadata",
-    cl::desc("Verify AMDGPU HSA Metadata"));
+static bool getVerifyHSAMetadata(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_VerifyHSAMetadata>(
+      F.getContext().getOptionsContext());
+}
+
+namespace llvm {
 
 namespace AMDGPU::HSAMD {
 
@@ -358,8 +364,8 @@ void MetadataStreamerMsgPackV4::emitKernelArg(const Argument &Arg,
 
   emitKernelArg(DL, ArgTy, ArgAlign,
                 getValueKind(ArgTy, TypeQual, BaseTypeName), Offset, Args,
-                PointeeAlign, Name, TypeName, BaseTypeName, ActAccQual,
-                AccQual, TypeQual);
+                PointeeAlign, Name, TypeName, BaseTypeName, ActAccQual, AccQual,
+                TypeQual);
 }
 
 void MetadataStreamerMsgPackV4::emitKernelArg(
@@ -476,8 +482,8 @@ void MetadataStreamerMsgPackV4::emitHiddenKernelArgs(
   // Emit the pointer argument for multi-grid object.
   if (HiddenArgNumBytes >= 56) {
     if (!Func.hasFnAttribute("amdgpu-no-multigrid-sync-arg")) {
-      emitKernelArg(DL, Int8PtrTy, Align(8), "hidden_multigrid_sync_arg", Offset,
-                    Args);
+      emitKernelArg(DL, Int8PtrTy, Align(8), "hidden_multigrid_sync_arg",
+                    Offset, Args);
     } else {
       emitKernelArg(DL, Int8PtrTy, Align(8), "hidden_none", Offset, Args);
     }
@@ -514,8 +520,7 @@ MetadataStreamerMsgPackV4::getHSAKernelProps(const MachineFunction &MF,
   // FIXME: The metadata treats the minimum as 16?
   Kern[".kernarg_segment_align"] =
       Kern.getDocument()->getNode(std::max(Align(4), MaxKernArgAlign).value());
-  Kern[".wavefront_size"] =
-      Kern.getDocument()->getNode(STM.getWavefrontSize());
+  Kern[".wavefront_size"] = Kern.getDocument()->getNode(STM.getWavefrontSize());
   DelayedExprs->assignDocNode(Kern[".sgpr_count"], msgpack::Type::UInt,
                               ProgramInfo.NumSGPR);
   DelayedExprs->assignDocNode(Kern[".vgpr_count"], msgpack::Type::UInt,
@@ -572,10 +577,12 @@ void MetadataStreamerMsgPackV4::end() {
   raw_string_ostream StrOS(HSAMetadataString);
   HSAMetadataDoc->toYAML(StrOS);
 
-  if (DumpHSAMetadata)
-    dump(StrOS.str());
-  if (VerifyHSAMetadata)
-    verify(StrOS.str());
+  if (auto *O = clv2::getView<&clv2::AMDGPUOptsReg>(getOptionsContext())) {
+    if (O->get<&llvm::clv2::AMDGPU_DumpHSAMetadata>())
+      dump(StrOS.str());
+    if (O->get<&llvm::clv2::AMDGPU_VerifyHSAMetadata>())
+      verify(StrOS.str());
+  }
 }
 
 void MetadataStreamerMsgPackV4::emitKernel(const MachineFunction &MF,
@@ -589,8 +596,7 @@ void MetadataStreamerMsgPackV4::emitKernel(const MachineFunction &MF,
       AMDGPU::getAMDHSACodeObjectVersion(*Func.getParent());
   auto Kern = getHSAKernelProps(MF, ProgramInfo, CodeObjectVersion);
 
-  auto Kernels =
-      getRootMetadata("amdhsa.kernels").getArray(/*Convert=*/true);
+  auto Kernels = getRootMetadata("amdhsa.kernels").getArray(/*Convert=*/true);
 
   auto &TM = static_cast<const AMDGPUTargetMachine &>(MF.getTarget());
   {
@@ -677,7 +683,7 @@ void MetadataStreamerMsgPackV5::emitHiddenKernelArgs(
 
   if (!Func.hasFnAttribute("amdgpu-no-multigrid-sync-arg")) {
     emitKernelArg(DL, Int8PtrTy, Align(8), "hidden_multigrid_sync_arg", Offset,
-                Args);
+                  Args);
   } else {
     Offset += 8; // Skipped.
   }

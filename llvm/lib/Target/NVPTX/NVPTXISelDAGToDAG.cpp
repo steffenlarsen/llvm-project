@@ -36,10 +36,11 @@
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/NVVMIntrinsicUtils.h"
 #include "llvm/Support/AtomicOrdering.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
 #include "llvm/TargetParser/AtomicScope.h"
 #include <optional>
 
@@ -48,16 +49,15 @@ using namespace llvm;
 #define DEBUG_TYPE "nvptx-isel"
 #define PASS_NAME "NVPTX DAG->DAG Pattern Instruction Selection"
 
-static cl::opt<bool>
-    EnableRsqrtOpt("nvptx-rsqrt-approx-opt", cl::init(true), cl::Hidden,
-                   cl::desc("Enable reciprocal sqrt optimization"));
+static bool getEnableRsqrtOpt(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::NVPTX_EnableRsqrtOpt>(
+      F.getContext().getOptionsContext());
+}
 
-// FIXME: This is a WAR to recover lost performance from #155024.
-// We still need to investigate the regression and find a more permanent
-// solution.
-static cl::opt<bool> EnableMADWide("nvptx-mad-wide-opt", cl::init(false),
-                                   cl::Hidden,
-                                   cl::desc("Enable MAD wide optimization"));
+static bool getEnableMADWide(const Function &F) {
+  return clv2::getOptValOr<&clv2::NVPTXOptsReg, &clv2::NVPTX_EnableMADWide>(
+      F.getContext().getOptionsContext(), false);
+}
 
 namespace {
 
@@ -211,7 +211,7 @@ NVPTXDAGToDAGISel::getDivF32Level(const SDNode *N) const {
 }
 
 bool NVPTXDAGToDAGISel::usePrecSqrtF32(const SDNode *N) const {
-  return Subtarget->getTargetLowering()->usePrecSqrtF32(N);
+  return Subtarget->getTargetLowering()->usePrecSqrtF32(*MF, N);
 }
 
 bool NVPTXDAGToDAGISel::useF32FTZ() const {
@@ -223,9 +223,13 @@ bool NVPTXDAGToDAGISel::allowFMA() const {
   return TL->allowFMA(*MF, OptLevel);
 }
 
-bool NVPTXDAGToDAGISel::doRsqrtOpt() const { return EnableRsqrtOpt; }
+bool NVPTXDAGToDAGISel::doRsqrtOpt() const {
+  return getEnableRsqrtOpt(MF->getFunction());
+}
 
-bool NVPTXDAGToDAGISel::doMADWideOpt() const { return EnableMADWide; }
+bool NVPTXDAGToDAGISel::doMADWideOpt() const {
+  return getEnableMADWide(MF->getFunction());
+}
 
 /// Select - Select instructions not customized! Used for
 /// expanded, promoted and normal instructions.

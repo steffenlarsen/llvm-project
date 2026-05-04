@@ -13,8 +13,9 @@
 #include "bolt/Passes/ProfileQualityStats.h"
 #include "bolt/Core/BinaryBasicBlock.h"
 #include "bolt/Core/BinaryFunction.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include <cmath>
 #include <queue>
 #include <unordered_map>
@@ -22,20 +23,6 @@
 
 using namespace llvm;
 using namespace bolt;
-
-namespace opts {
-extern cl::opt<unsigned> Verbosity;
-static cl::opt<unsigned> TopFunctionsForProfileQualityCheck(
-    "top-functions-for-profile-quality-check",
-    cl::desc("number of hottest functions to print aggregated "
-             "profile quality stats of."),
-    cl::init(1000), cl::ZeroOrMore, cl::Hidden, cl::cat(BoltOptCategory));
-static cl::opt<unsigned> PercentileForProfileQualityCheck(
-    "percentile-for-profile-quality-check",
-    cl::desc("Percentile of profile quality distributions over hottest "
-             "functions to report."),
-    cl::init(95), cl::ZeroOrMore, cl::Hidden, cl::cat(BoltOptCategory));
-} // namespace opts
 
 namespace {
 using FunctionListType = ConstBinaryFunctionListType;
@@ -92,8 +79,9 @@ void printDistribution(raw_ostream &OS, std::vector<T> &values,
   printLine("MIN", 100);
 }
 
-void printCFGContinuityStats(raw_ostream &OS,
-                             iterator_range<function_iterator> &Functions) {
+void printCFGContinuityStats(const BinaryContext &BC, raw_ostream &OS,
+                             iterator_range<function_iterator> &Functions,
+                             unsigned PercentileForProfileQualityCheck) {
   // Given a perfect profile, every positive-execution-count BB should be
   // connected to an entry of the function through a positive-execution-count
   // directed path in the control flow graph.
@@ -162,10 +150,10 @@ void printCFGContinuityStats(raw_ostream &OS,
     if (SumAllBBEC > 0)
       FractionECUnreachable = (double)SumUnreachableBBEC / SumAllBBEC;
 
-    if (opts::Verbosity >= 2 && FractionECUnreachable >= 0.05) {
+    if (opts::getVerbosity(BC) >= 2 && FractionECUnreachable >= 0.05) {
       OS << "Non-trivial CFG discontinuity observed in function "
          << Function->getPrintName() << "\n";
-      if (opts::Verbosity >= 3)
+      if (opts::getVerbosity(BC) >= 3)
         Function->dump();
     }
 
@@ -176,10 +164,10 @@ void printCFGContinuityStats(raw_ostream &OS,
 
   llvm::sort(FractionECUnreachables);
   const int Rank = int(FractionECUnreachables.size() *
-                       opts::PercentileForProfileQualityCheck / 100);
+                       PercentileForProfileQualityCheck / 100);
   OS << formatv("function CFG discontinuity {0:P}; ",
                 FractionECUnreachables[Rank]);
-  if (opts::Verbosity >= 1) {
+  if (opts::getVerbosity(BC) >= 1) {
     OS << "\nabbreviations: EC = execution count, POS BBs = positive EC BBs\n"
        << "distribution of NUM(unreachable POS BBs) per function\n";
     llvm::sort(NumUnreachables);
@@ -196,8 +184,9 @@ void printCFGContinuityStats(raw_ostream &OS,
 }
 
 void printCallGraphFlowConservationStats(
-    raw_ostream &OS, iterator_range<function_iterator> &Functions,
-    FlowInfo &TotalFlowMap) {
+    const BinaryContext &BC, raw_ostream &OS,
+    iterator_range<function_iterator> &Functions, FlowInfo &TotalFlowMap,
+    unsigned PercentileForProfileQualityCheck) {
   std::vector<double> CallGraphGaps;
 
   for (const BinaryFunction *Function : Functions) {
@@ -237,14 +226,14 @@ void printCallGraphFlowConservationStats(
 
     uint64_t NetEntryOutflow = 0;
     if (EntryOutflow < EntryInflow) {
-      if (opts::Verbosity >= 2) {
+      if (opts::getVerbosity(BC) >= 2) {
         // We expect entry blocks' CFG outflow >= inflow, i.e., it has a
         // non-negative net outflow. If this is not the case, then raise a
         // warning if requested.
         OS << "BOLT WARNING: unexpected entry block CFG outflow < inflow "
               "in function "
            << Function->getPrintName() << "\n";
-        if (opts::Verbosity >= 3)
+        if (opts::getVerbosity(BC) >= 3)
           Function->dump();
       }
     } else {
@@ -259,11 +248,11 @@ void printCallGraphFlowConservationStats(
       if (Max > 0)
         CallGraphGap = 1 - (double)Min / Max;
 
-      if (opts::Verbosity >= 2 && CallGraphGap >= 0.5) {
+      if (opts::getVerbosity(BC) >= 2 && CallGraphGap >= 0.5) {
         OS << "Non-trivial call graph gap of size "
            << formatv("{0:P}", CallGraphGap) << " observed in function "
            << Function->getPrintName() << "\n";
-        if (opts::Verbosity >= 3)
+        if (opts::getVerbosity(BC) >= 3)
           Function->dump();
       }
 
@@ -275,10 +264,10 @@ void printCallGraphFlowConservationStats(
 
   llvm::sort(CallGraphGaps);
   const int Rank =
-      int(CallGraphGaps.size() * opts::PercentileForProfileQualityCheck / 100);
+      int(CallGraphGaps.size() * PercentileForProfileQualityCheck / 100);
   OS << formatv("call graph flow conservation gap {0:P}; ",
                 CallGraphGaps[Rank]);
-  if (opts::Verbosity >= 1) {
+  if (opts::getVerbosity(BC) >= 1) {
     OS << "\ndistribution of function entry flow conservation gaps\n";
     printDistribution(OS, CallGraphGaps, /*Fraction=*/true);
   }
@@ -286,7 +275,8 @@ void printCallGraphFlowConservationStats(
 
 void printCFGFlowConservationStats(const BinaryContext &BC, raw_ostream &OS,
                                    iterator_range<function_iterator> &Functions,
-                                   FlowInfo &TotalFlowMap) {
+                                   FlowInfo &TotalFlowMap,
+                                   unsigned PercentileForProfileQualityCheck) {
   std::vector<double> CFGGapsWeightedAvg;
   std::vector<double> CFGGapsWorst;
   std::vector<uint64_t> CFGGapsWorstAbs;
@@ -361,7 +351,7 @@ void printCFGFlowConservationStats(const BinaryContext &BC, raw_ostream &OS,
     double WeightedGap = WeightedGapSum;
     if (WeightSum > 0)
       WeightedGap /= WeightSum;
-    if (opts::Verbosity >= 2 && WorstGap >= 0.9) {
+    if (opts::getVerbosity(BC) >= 2 && WorstGap >= 0.9) {
       OS << "Non-trivial CFG gap observed in function "
          << Function->getPrintName() << "\n"
          << "Weighted gap: " << formatv("{0:P}", WeightedGap) << "\n";
@@ -373,7 +363,7 @@ void printCFGFlowConservationStats(const BinaryContext &BC, raw_ostream &OS,
         OS << "Worst gap (absolute value): " << WorstGapAbs << " at BB with "
            << "input offset 0x"
            << Twine::utohexstr(BBWorstGapAbs->getInputOffset()) << "\n";
-      if (opts::Verbosity >= 3)
+      if (opts::getVerbosity(BC) >= 3)
         Function->dump();
     }
     CFGGapsWeightedAvg.push_back(WeightedGap);
@@ -382,14 +372,14 @@ void printCFGFlowConservationStats(const BinaryContext &BC, raw_ostream &OS,
   }
 
   llvm::sort(CFGGapsWeightedAvg);
-  const int RankWA = int(CFGGapsWeightedAvg.size() *
-                         opts::PercentileForProfileQualityCheck / 100);
+  const int RankWA =
+      int(CFGGapsWeightedAvg.size() * PercentileForProfileQualityCheck / 100);
   llvm::sort(CFGGapsWorst);
   const int RankW =
-      int(CFGGapsWorst.size() * opts::PercentileForProfileQualityCheck / 100);
+      int(CFGGapsWorst.size() * PercentileForProfileQualityCheck / 100);
   OS << formatv("CFG flow conservation gap {0:P} (weighted) {1:P} (worst); ",
                 CFGGapsWeightedAvg[RankWA], CFGGapsWorst[RankW]);
-  if (opts::Verbosity >= 1) {
+  if (opts::getVerbosity(BC) >= 1) {
     OS << "distribution of weighted CFG flow conservation gaps\n";
     printDistribution(OS, CFGGapsWeightedAvg, /*Fraction=*/true);
     OS << format("Consider only blocks with execution counts > %zu:\n",
@@ -405,7 +395,8 @@ void printCFGFlowConservationStats(const BinaryContext &BC, raw_ostream &OS,
 }
 
 void printExceptionHandlingStats(const BinaryContext &BC, raw_ostream &OS,
-                                 iterator_range<function_iterator> &Functions) {
+                                 iterator_range<function_iterator> &Functions,
+                                 unsigned PercentileForProfileQualityCheck) {
   std::vector<double> LPCountFractionsOfTotalBBEC;
   std::vector<double> LPCountFractionsOfTotalInvokeEC;
   for (const BinaryFunction *Function : Functions) {
@@ -441,28 +432,28 @@ void printExceptionHandlingStats(const BinaryContext &BC, raw_ostream &OS,
     LPCountFractionsOfTotalBBEC.push_back(FracTotalBBEC);
     LPCountFractionsOfTotalInvokeEC.push_back(FracTotalInvokeEC);
 
-    if (opts::Verbosity >= 2 && FracTotalInvokeEC >= 0.05) {
+    if (opts::getVerbosity(BC) >= 2 && FracTotalInvokeEC >= 0.05) {
       OS << "Non-trivial usage of exception handling observed in function "
          << Function->getPrintName() << "\n"
          << formatv(
                 "Fraction of total InvokeEC that goes to landing pads: {0:P}\n",
                 FracTotalInvokeEC);
-      if (opts::Verbosity >= 3)
+      if (opts::getVerbosity(BC) >= 3)
         Function->dump();
     }
   }
 
   llvm::sort(LPCountFractionsOfTotalBBEC);
   const int RankBBEC = int(LPCountFractionsOfTotalBBEC.size() *
-                           opts::PercentileForProfileQualityCheck / 100);
+                           PercentileForProfileQualityCheck / 100);
   llvm::sort(LPCountFractionsOfTotalInvokeEC);
   const int RankInvoke = int(LPCountFractionsOfTotalInvokeEC.size() *
-                             opts::PercentileForProfileQualityCheck / 100);
+                             PercentileForProfileQualityCheck / 100);
   OS << formatv("exception handling usage {0:P} (of total BBEC) {1:P} (of "
                 "total InvokeEC)\n",
                 LPCountFractionsOfTotalBBEC[RankBBEC],
                 LPCountFractionsOfTotalInvokeEC[RankInvoke]);
-  if (opts::Verbosity >= 1) {
+  if (opts::getVerbosity(BC) >= 1) {
     OS << "distribution of exception handling usage as a fraction of total "
           "BBEC of each function\n";
     printDistribution(OS, LPCountFractionsOfTotalBBEC, /*Fraction=*/true);
@@ -607,7 +598,8 @@ void computeFlowMappings(const BinaryContext &BC, FlowInfo &TotalFlowMap) {
 }
 
 void printAll(BinaryContext &BC, FunctionListType &ValidFunctions,
-              size_t NumTopFunctions) {
+              size_t NumTopFunctions,
+              unsigned PercentileForProfileQualityCheck) {
   // Sort the list of functions by execution counts (reverse).
   llvm::sort(ValidFunctions,
              [&](const BinaryFunction *A, const BinaryFunction *B) {
@@ -626,13 +618,17 @@ void printAll(BinaryContext &BC, FunctionListType &ValidFunctions,
   BC.outs() << format("BOLT-INFO: profile quality metrics for the hottest %zu "
                       "functions (reporting top %zu%% values): ",
                       RealNumTopFunctions,
-                      100 - opts::PercentileForProfileQualityCheck);
-  printCFGContinuityStats(BC.outs(), Functions);
-  printCallGraphFlowConservationStats(BC.outs(), Functions, TotalFlowMap);
-  printCFGFlowConservationStats(BC, BC.outs(), Functions, TotalFlowMap);
-  printExceptionHandlingStats(BC, BC.outs(), Functions);
+                      100 - PercentileForProfileQualityCheck);
+  printCFGContinuityStats(BC, BC.outs(), Functions,
+                          PercentileForProfileQualityCheck);
+  printCallGraphFlowConservationStats(BC, BC.outs(), Functions, TotalFlowMap,
+                                      PercentileForProfileQualityCheck);
+  printCFGFlowConservationStats(BC, BC.outs(), Functions, TotalFlowMap,
+                                PercentileForProfileQualityCheck);
+  printExceptionHandlingStats(BC, BC.outs(), Functions,
+                              PercentileForProfileQualityCheck);
   // Print more detailed bucketed stats if requested.
-  if (opts::Verbosity >= 1 && RealNumTopFunctions >= 5) {
+  if (opts::getVerbosity(BC) >= 1 && RealNumTopFunctions >= 5) {
     const size_t PerBucketSize = RealNumTopFunctions / 5;
     BC.outs() << format(
         "Detailed stats for 5 buckets, each with  %zu functions:\n",
@@ -658,10 +654,15 @@ void printAll(BinaryContext &BC, FunctionListType &ValidFunctions,
                        "%zu-%zu\n",
                        EndIndex - StartIndex, MinFunctionExecutionCount,
                        MaxFunctionExecutionCount);
-      printCFGContinuityStats(BC.outs(), Functions);
-      printCallGraphFlowConservationStats(BC.outs(), Functions, TotalFlowMap);
-      printCFGFlowConservationStats(BC, BC.outs(), Functions, TotalFlowMap);
-      printExceptionHandlingStats(BC, BC.outs(), Functions);
+      printCFGContinuityStats(BC, BC.outs(), Functions,
+                              PercentileForProfileQualityCheck);
+      printCallGraphFlowConservationStats(BC, BC.outs(), Functions,
+                                          TotalFlowMap,
+                                          PercentileForProfileQualityCheck);
+      printCFGFlowConservationStats(BC, BC.outs(), Functions, TotalFlowMap,
+                                    PercentileForProfileQualityCheck);
+      printExceptionHandlingStats(BC, BC.outs(), Functions,
+                                  PercentileForProfileQualityCheck);
     }
   }
 }
@@ -675,6 +676,11 @@ bool PrintProfileQualityStats::shouldOptimize(const BinaryFunction &BF) const {
 }
 
 Error PrintProfileQualityStats::runOnFunctions(BinaryContext &BC) {
+  const unsigned TopFunctionsForProfileQualityCheck =
+      bolt_passes_opts::getTopFunctionsForProfileQualityCheck(BC);
+  const unsigned PercentileForProfileQualityCheck =
+      bolt_passes_opts::getPercentileForProfileQualityCheck(BC);
+
   // Create a list of functions with valid profiles.
   FunctionListType ValidFunctions;
   for (const auto &BFI : BC.getBinaryFunctions()) {
@@ -682,9 +688,10 @@ Error PrintProfileQualityStats::runOnFunctions(BinaryContext &BC) {
     if (PrintProfileQualityStats::shouldOptimize(*Function))
       ValidFunctions.push_back(Function);
   }
-  if (ValidFunctions.empty() || opts::TopFunctionsForProfileQualityCheck == 0)
+  if (ValidFunctions.empty() || TopFunctionsForProfileQualityCheck == 0)
     return Error::success();
 
-  printAll(BC, ValidFunctions, opts::TopFunctionsForProfileQualityCheck);
+  printAll(BC, ValidFunctions, TopFunctionsForProfileQualityCheck,
+           PercentileForProfileQualityCheck);
   return Error::success();
 }

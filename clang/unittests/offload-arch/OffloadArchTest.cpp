@@ -9,6 +9,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
@@ -27,8 +28,6 @@ llvm::SmallVector<std::string, 8> getCandidateBinPaths(llvm::StringRef ExeDir);
 int printGPUsByKFD(llvm::StringRef NodePath);
 
 using namespace llvm;
-
-cl::opt<bool> Verbose("offload-arch-test-verbose", cl::Hidden, cl::init(false));
 
 #ifdef _WIN32
 

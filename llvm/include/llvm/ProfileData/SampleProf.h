@@ -43,6 +43,9 @@
 #include <utility>
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+}
 
 class DILocation;
 class raw_ostream;
@@ -1602,7 +1605,7 @@ public:
   LLVM_ABI ProfileConverter(SampleProfileMap &Profiles);
   // Convert a full context-sensitive flat sample profile into a nested sample
   // profile.
-  LLVM_ABI void convertCSProfiles();
+  LLVM_ABI void convertCSProfiles(const clv2::OptionsContext &Ctx);
   struct FrameNode {
     FrameNode(FunctionId FName = FunctionId(),
               FunctionSamples *FSamples = nullptr,
@@ -1701,7 +1704,7 @@ private:
   }
 
   // Nest all children profiles into the profile of Node.
-  void convertCSProfiles(FrameNode &Node);
+  void convertCSProfiles(FrameNode &Node, const clv2::OptionsContext &Ctx);
   FrameNode *getOrCreateContextPath(const SampleContext &Context);
 
   SampleProfileMap &ProfileMap;
@@ -1762,7 +1765,8 @@ public:
   }
   bool isMD5() const { return IsMD5; }
 
-  LLVM_ABI std::error_code read(const uint8_t *Data, uint64_t ListSize);
+  LLVM_ABI std::error_code read(const uint8_t *Data, uint64_t ListSize,
+                                const clv2::OptionsContext &Ctx);
   LLVM_ABI std::error_code write(raw_ostream &OS);
   LLVM_ABI void dump(raw_ostream &OS = dbgs()) const;
 

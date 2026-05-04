@@ -39,10 +39,11 @@
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCDwarf.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugCounter.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
 #include <cassert>
 #include <cstdint>
 #include <functional>
@@ -71,28 +72,25 @@ STATISTIC(NumUMOVFoldedToFPRStore,
 DEBUG_COUNTER(RegRenamingCounter, DEBUG_TYPE "-reg-renaming",
               "Controls which pairs are considered for renaming");
 
-// The LdStLimit limits how far we search for load/store pairs.
-static cl::opt<unsigned> LdStLimit("aarch64-load-store-scan-limit",
-                                   cl::init(20), cl::Hidden);
+static unsigned getLdStLimit(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_LdStLimit>(Ctx);
+}
 
-// The UpdateLimit limits how far we search for update instructions when we form
-// pre-/post-index instructions.
-static cl::opt<unsigned> UpdateLimit("aarch64-update-scan-limit", cl::init(100),
-                                     cl::Hidden);
+static unsigned getUMOVFoldLimit(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_UMOVFoldLimit>(Ctx);
+}
 
-// The LdStConstLimit limits how far we search for const offset instructions
-// when we form index address load/store instructions.
-static cl::opt<unsigned> LdStConstLimit("aarch64-load-store-const-scan-limit",
-                                        cl::init(10), cl::Hidden);
+static unsigned getUpdateLimit(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_UpdateLimit>(Ctx);
+}
 
-// The UMOVFoldLimit limits how far back we scan from a GPR store to find a
-// UMOV that can be folded into a direct FPR store.
-static cl::opt<unsigned> UMOVFoldLimit("aarch64-umov-fold-scan-limit",
-                                       cl::init(16), cl::Hidden);
+static unsigned getLdStConstLimit(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_LdStConstLimit>(Ctx);
+}
 
-// Enable register renaming to find additional store pairing opportunities.
-static cl::opt<bool> EnableRenaming("aarch64-load-store-renaming",
-                                    cl::init(true), cl::Hidden);
+static bool getEnableRenaming(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableRenaming>(Ctx);
+}
 
 #define AARCH64_LOAD_STORE_OPT_NAME "AArch64 load / store optimization pass"
 
@@ -1871,7 +1869,11 @@ canRenameUpToDef(MachineInstr &FirstMI, LiveRegUnits &UsedInBetween,
     return true;
   };
 
-  if (!forAllMIsUntilDef(FirstMI, RegToRename, TRI, LdStLimit, CheckMIs))
+  if (!forAllMIsUntilDef(
+          FirstMI, RegToRename, TRI,
+          getLdStLimit(
+              FirstMI.getMF()->getFunction().getContext().getOptionsContext()),
+          CheckMIs))
     return false;
 
   if (!FoundDef) {
@@ -2030,7 +2032,8 @@ AArch64LoadStoreOpt::findMatchingInsn(MachineBasicBlock::iterator I,
   bool IsPromotableZeroStore = isPromotableZeroStoreInst(FirstMI);
 
   std::optional<bool> MaybeCanRename;
-  if (!EnableRenaming)
+  if (!getEnableRenaming(
+          FirstMI.getMF()->getFunction().getContext().getOptionsContext()))
     MaybeCanRename = {false};
 
   SmallPtrSet<const TargetRegisterClass *, 5> RequiredClasses;
@@ -2807,7 +2810,11 @@ bool AArch64LoadStoreOpt::tryToPromoteLoadFromStore(
 
   // Look backward up to LdStLimit instructions.
   MachineBasicBlock::iterator StoreI;
-  if (findMatchingStore(MBBI, LdStLimit, StoreI)) {
+  if (findMatchingStore(
+          MBBI,
+          getLdStLimit(
+              MI.getMF()->getFunction().getContext().getOptionsContext()),
+          StoreI)) {
     ++NumLoadsFromStoresPromoted;
     // Promote the load. Keeping the iterator straight is a
     // pain, so we let the merge routine tell us what the next instruction
@@ -2830,8 +2837,10 @@ bool AArch64LoadStoreOpt::tryToMergeZeroStInst(
 
   // Look ahead up to LdStLimit instructions for a mergeable instruction.
   LdStPairFlags Flags;
-  MachineBasicBlock::iterator MergeMI =
-      findMatchingInsn(MBBI, Flags, LdStLimit, /* FindNarrowMerge = */ true);
+  MachineBasicBlock::iterator MergeMI = findMatchingInsn(
+      MBBI, Flags,
+      getLdStLimit(MI.getMF()->getFunction().getContext().getOptionsContext()),
+      /* FindNarrowMerge = */ true);
   if (MergeMI != E) {
     ++NumZeroStoresPromoted;
 
@@ -2874,8 +2883,10 @@ bool AArch64LoadStoreOpt::tryToPairLdStInst(MachineBasicBlock::iterator &MBBI) {
 
   // Look ahead up to LdStLimit instructions for a pairable instruction.
   LdStPairFlags Flags;
-  MachineBasicBlock::iterator Paired =
-      findMatchingInsn(MBBI, Flags, LdStLimit, /* FindNarrowMerge = */ false);
+  MachineBasicBlock::iterator Paired = findMatchingInsn(
+      MBBI, Flags,
+      getLdStLimit(MI.getMF()->getFunction().getContext().getOptionsContext()),
+      /* FindNarrowMerge = */ false);
 
   if (Paired == E)
     return false;
@@ -2945,7 +2956,10 @@ bool AArch64LoadStoreOpt::tryToMergeLdStUpdate
   // add x20, x20, #32
   //   merged into:
   // ldr x0, [x20], #32
-  Update = findMatchingUpdateInsnForward(MBBI, 0, UpdateLimit);
+  Update = findMatchingUpdateInsnForward(
+      MBBI, 0,
+      getUpdateLimit(
+          MI.getMF()->getFunction().getContext().getOptionsContext()));
   if (Update != E) {
     // Merge the update into the ld/st.
     if (auto NextI = mergeUpdateInsn(MBBI, Update, /*IsForward=*/false,
@@ -2966,7 +2980,11 @@ bool AArch64LoadStoreOpt::tryToMergeLdStUpdate
   //   merged into:
   // ldr x1, [x0, #8]!
   bool MergeEither;
-  Update = findMatchingUpdateInsnBackward(MBBI, UpdateLimit, MergeEither);
+  Update = findMatchingUpdateInsnBackward(
+      MBBI,
+      getUpdateLimit(
+          MI.getMF()->getFunction().getContext().getOptionsContext()),
+      MergeEither);
   if (Update != E) {
     // Merge the update into the ld/st.
     if (auto NextI = mergeUpdateInsn(MBBI, Update, /*IsForward=*/true,
@@ -2987,7 +3005,10 @@ bool AArch64LoadStoreOpt::tryToMergeLdStUpdate
   // add x0, x0, #64
   //   merged into:
   // ldr x1, [x0, #64]!
-  Update = findMatchingUpdateInsnForward(MBBI, UnscaledOffset, UpdateLimit);
+  Update = findMatchingUpdateInsnForward(
+      MBBI, UnscaledOffset,
+      getUpdateLimit(
+          MI.getMF()->getFunction().getContext().getOptionsContext()));
   if (Update != E) {
     // Merge the update into the ld/st.
     if (auto NextI = mergeUpdateInsn(MBBI, Update, /*IsForward=*/false,
@@ -3019,7 +3040,11 @@ bool AArch64LoadStoreOpt::tryToMergeIndexLdSt(MachineBasicBlock::iterator &MBBI,
   // add x8, x0, a * (1<<12)
   // ldr x1, [x8, imm12]
   unsigned Offset;
-  Update = findMatchingConstOffsetBackward(MBBI, LdStConstLimit, Offset);
+  Update = findMatchingConstOffsetBackward(
+      MBBI,
+      getLdStConstLimit(
+          MI.getMF()->getFunction().getContext().getOptionsContext()),
+      Offset);
   if (Update != E && (Offset & (Scale - 1)) == 0) {
     // Merge the imm12 into the ld/st.
     MBBI = mergeConstOffsetInsn(MBBI, Update, Offset, Scale);
@@ -3123,7 +3148,9 @@ bool AArch64LoadStoreOpt::tryToReplaceUMOVStore(
     MachineInstr &MI = *--It;
     if (MI.isDebugInstr())
       continue;
-    if (++Count > UMOVFoldLimit)
+    if (++Count >
+        getUMOVFoldLimit(
+            MI.getMF()->getFunction().getContext().getOptionsContext()))
       return false;
     if (MI.readsRegister(StoreValReg, TRI))
       return false;

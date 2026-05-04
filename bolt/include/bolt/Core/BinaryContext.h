@@ -44,10 +44,12 @@
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/ErrorOr.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/RWMutex.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 #include <atomic>
+#include <cassert>
 #include <functional>
 #include <list>
 #include <map>
@@ -63,6 +65,9 @@
 namespace llvm {
 class MCDisassembler;
 class MCInstPrinter;
+namespace clv2 {
+class OptionsContext;
+}
 
 using namespace object;
 
@@ -75,13 +80,13 @@ using ConstBinaryFunctionListType = std::vector<const BinaryFunction *>;
 
 /// Information on loadable part of the file.
 struct SegmentInfo {
-  uint64_t Address;           /// Address of the segment in memory.
-  uint64_t Size;              /// Size of the segment in memory.
-  uint64_t FileOffset;        /// Offset in the file.
-  uint64_t FileSize;          /// Size in file.
-  uint64_t Alignment;         /// Alignment of the segment.
-  bool IsExecutable;          /// Is the executable bit set on the Segment?
-  bool IsWritable;            /// Is the segment writable.
+  uint64_t Address;    /// Address of the segment in memory.
+  uint64_t Size;       /// Size of the segment in memory.
+  uint64_t FileOffset; /// Offset in the file.
+  uint64_t FileSize;   /// Size in file.
+  uint64_t Alignment;  /// Alignment of the segment.
+  bool IsExecutable;   /// Is the executable bit set on the Segment?
+  bool IsWritable;     /// Is the segment writable.
 
   void print(raw_ostream &OS) const {
     OS << "SegmentInfo { Address: 0x" << Twine::utohexstr(Address)
@@ -146,10 +151,24 @@ public:
   using pointer = typename inner_traits::pointer;
   using reference = typename inner_traits::reference;
 
-  Iterator &operator++() { next(); return *this; }
-  Iterator &operator--() { prev(); return *this; }
-  Iterator operator++(int) { auto Tmp(Itr); next(); return Tmp; }
-  Iterator operator--(int) { auto Tmp(Itr); prev(); return Tmp; }
+  Iterator &operator++() {
+    next();
+    return *this;
+  }
+  Iterator &operator--() {
+    prev();
+    return *this;
+  }
+  Iterator operator++(int) {
+    auto Tmp(Itr);
+    next();
+    return Tmp;
+  }
+  Iterator operator--(int) {
+    auto Tmp(Itr);
+    prev();
+    return Tmp;
+  }
   bool operator==(const Iterator &Other) const { return Itr == Other.Itr; }
   bool operator!=(const Iterator &Other) const { return !operator==(Other); }
   reference operator*() { return *Itr; }
@@ -294,11 +313,40 @@ class BinaryContext {
   /// Mutex used for parallel processing of DWP type units.
   std::mutex DWPUnitsMutex;
 
+  /// Always set by the constructor (to the tool's context, or to
+  /// DefaultOptsCtx below).  Non-const: BOLT adjusts option views at runtime,
+  /// so it cannot alias the shared read-only default.
+  clv2::OptionsContext *OptsCtx = nullptr;
+  clv2::OptionsContext DefaultOptsCtx;
+
 public:
+  /// Never null: the constructor requires a context, so option reads are
+  /// valid from the very first line of it.  (They were not before: the factory
+  /// used to attach the context *after* construction, so anything the ctor
+  /// read silently came back as a default -- that is how --no-huge-pages went
+  /// dead.)
+  const clv2::OptionsContext &getOptionsContext() const {
+    assert(OptsCtx && "the constructor always installs a context");
+    return *OptsCtx;
+  }
+  clv2::OptionsContext &getOptionsContext() {
+    assert(OptsCtx && "the constructor always installs a context");
+    return *OptsCtx;
+  }
+  void setOptionsContext(clv2::OptionsContext *Ctx) {
+    OptsCtx = Ctx;
+    if (MIB)
+      MIB->setOptionsContext(*Ctx);
+  }
+
   static Expected<std::unique_ptr<BinaryContext>> createBinaryContext(
       Triple TheTriple, std::shared_ptr<orc::SymbolStringPool> SSP,
       StringRef InputFileName, SubtargetFeatures *Features, bool IsPIC,
-      std::unique_ptr<DWARFContext> DwCtx, JournalingStreams Logger);
+      std::unique_ptr<DWARFContext> DwCtx, JournalingStreams Logger,
+      /// Null means "use BOLT's own defaults-only context".  There is no
+      /// default argument: a caller that silently got null here shipped a
+      /// Mach-O path that ignored the command line.
+      clv2::OptionsContext *OptsCtx);
 
   /// Returns the mutex guarding concurrent access to DWP units.
   std::mutex &getUnitsMutex() { return DWPUnitsMutex; }
@@ -317,6 +365,8 @@ public:
   // Setup MCPlus target builder
   void initializeTarget(std::unique_ptr<MCPlusBuilder> TargetBuilder) {
     MIB = std::move(TargetBuilder);
+    if (MIB)
+      MIB->setOptionsContext(*OptsCtx);
   }
 
   /// Return function fragments to skip.
@@ -732,6 +782,11 @@ public:
 
   std::unique_ptr<MCObjectFileInfo> MOFI;
 
+  /// Owned rather than a shared static: AsmInfo holds a reference to these
+  /// options, and they carry this context's OptionsContext.  Declared before
+  /// AsmInfo so it is destroyed first.
+  std::unique_ptr<MCTargetOptions> MCOptions;
+
   std::unique_ptr<const MCAsmInfo> AsmInfo;
 
   std::unique_ptr<const MCInstrInfo> MII;
@@ -877,6 +932,13 @@ public:
   bool UseCompactAligner{true};
   bool X86AlignBranchBoundaryHotOnly{true};
 
+  /// Mutable working storage for function-name lists. Populated from files
+  /// during selectFunctionsToProcess() so that passes and other consumers
+  /// read them via BinaryContext instead of opts::* globals.
+  std::vector<std::string> ForceFunctionNames;
+  std::vector<std::string> ForceFunctionNamesNR;
+  std::vector<std::string> SkipFunctionNames;
+
   /// Fold \p Alignment into the running max for the main code section (when
   /// \p InMainSection) and/or the cold code section (when \p InColdSection),
   /// reflecting which output section(s) the object is emitted into. Safe to
@@ -950,7 +1012,7 @@ public:
   /// large code model and position-independent executables.
   void updateLSDAEncoding();
 
-  BinaryContext(std::unique_ptr<MCContext> Ctx,
+  BinaryContext(clv2::OptionsContext *OptsCtxIn, std::unique_ptr<MCContext> Ctx,
                 std::unique_ptr<DWARFContext> DwCtx,
                 std::unique_ptr<Triple> TheTriple,
                 std::shared_ptr<orc::SymbolStringPool> SSP,
@@ -1647,8 +1709,7 @@ public:
   std::unique_ptr<MCStreamer>
   createStreamer(llvm::raw_pwrite_stream &OS) const {
     MCCodeEmitter *MCE = TheTarget->createMCCodeEmitter(*MII, *Ctx);
-    MCAsmBackend *MAB =
-        TheTarget->createMCAsmBackend(*STI, *MRI, MCTargetOptions());
+    MCAsmBackend *MAB = TheTarget->createMCAsmBackend(*STI, *MRI, *MCOptions);
     std::unique_ptr<MCObjectWriter> OW = MAB->createObjectWriter(OS);
     std::unique_ptr<MCStreamer> Streamer(TheTarget->createMCObjectStreamer(
         *TheTriple, *Ctx, std::unique_ptr<MCAsmBackend>(MAB), std::move(OW),

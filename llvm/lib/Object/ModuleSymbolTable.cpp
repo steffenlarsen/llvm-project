@@ -89,13 +89,19 @@ initializeRecordStreamer(const Module &M,
   if (!MAI)
     return;
 
+  std::unique_ptr<MCSubtargetInfo> STI(
+      T->createMCSubtargetInfo(TT, "", "", M.getContext().getOptionsContext()));
+  if (!STI)
+    return;
+
   std::unique_ptr<MCInstrInfo> MCII(T->createMCInstrInfo());
   if (!MCII)
     return;
 
   for (const Module::GlobalAsmFragment &Frag : M.getModuleInlineAsm()) {
     std::unique_ptr<MCSubtargetInfo> STI(T->createMCSubtargetInfo(
-        TT, Frag.Props.TargetCPU, Frag.Props.TargetFeatures));
+        TT, Frag.Props.TargetCPU, Frag.Props.TargetFeatures,
+        M.getContext().getOptionsContext()));
     if (!STI)
       return;
 

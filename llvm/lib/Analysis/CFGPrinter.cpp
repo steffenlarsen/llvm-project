@@ -19,59 +19,64 @@
 
 #include "llvm/Analysis/CFGPrinter.h"
 #include "llvm/ADT/PostOrderIterator.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/IR/ModuleSlotTracker.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/GraphWriter.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
-static cl::opt<std::string>
-    CFGFuncName("cfg-func-name", cl::Hidden,
-                cl::desc("The name of a function (or its substring)"
-                         " whose CFG is viewed/printed."));
+double HideColdPaths = 0.0;
 
-static cl::opt<std::string> CFGDotFilenamePrefix(
-    "cfg-dot-filename-prefix", cl::Hidden,
-    cl::desc("The prefix used for the CFG dot file names."));
-
-static cl::opt<bool> HideUnreachablePaths("cfg-hide-unreachable-paths",
-                                          cl::init(false));
-
-static cl::opt<bool> HideDeoptimizePaths("cfg-hide-deoptimize-paths",
-                                         cl::init(false));
-
-static cl::opt<double> HideColdPaths(
-    "cfg-hide-cold-paths", cl::init(0.0),
-    cl::desc("Hide blocks with relative frequency below the given value"));
-
-static cl::opt<bool> ShowHeatColors("cfg-heat-colors", cl::init(true),
-                                    cl::Hidden,
-                                    cl::desc("Show heat colors in CFG"));
-
-static cl::opt<bool> UseRawEdgeWeight("cfg-raw-weights", cl::init(false),
-                                      cl::Hidden,
-                                      cl::desc("Use raw weights for labels. "
-                                               "Use percentages as default."));
-
-static cl::opt<bool>
-    ShowEdgeWeight("cfg-weights", cl::init(false), cl::Hidden,
-                   cl::desc("Show edges labeled with weights"));
+static std::string getCFGFuncName(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_CFGFuncName>(
+      F.getContext().getOptionsContext());
+}
+static std::string getCFGDotFilenamePrefix(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_CFGDotFilenamePrefix>(
+      F.getContext().getOptionsContext());
+}
+static bool getHideUnreachablePaths(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_HideUnreachablePaths>(
+      F.getContext().getOptionsContext());
+}
+static bool getHideDeoptimizePaths(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_HideDeoptimizePaths>(
+      F.getContext().getOptionsContext());
+}
+static double getHideColdPaths(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_HideColdPaths>(
+      F.getContext().getOptionsContext());
+}
+static bool getShowHeatColors(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_CfgShowHeatColors>(
+      F.getContext().getOptionsContext());
+}
+static bool getUseRawEdgeWeight(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_CfgUseRawEdgeWeight>(
+      F.getContext().getOptionsContext());
+}
+static bool getShowEdgeWeight(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_CfgShowEdgeWeight>(
+      F.getContext().getOptionsContext());
+}
 
 static void writeCFGToDotFile(Function &F, BlockFrequencyInfo *BFI,
                               BranchProbabilityInfo *BPI, uint64_t MaxFreq,
                               bool CFGOnly = false) {
   std::string Filename =
-      (CFGDotFilenamePrefix + "." + F.getName() + ".dot").str();
+      (getCFGDotFilenamePrefix(F) + "." + F.getName() + ".dot").str();
   errs() << "Writing '" << Filename << "'...";
 
   std::error_code EC;
   raw_fd_ostream File(Filename, EC, sys::fs::OF_Text);
 
   DOTFuncInfo CFGInfo(&F, BFI, BPI, MaxFreq);
-  CFGInfo.setHeatColors(ShowHeatColors);
-  CFGInfo.setEdgeWeights(ShowEdgeWeight);
-  CFGInfo.setRawEdgeWeights(UseRawEdgeWeight);
+  CFGInfo.setHeatColors(getShowHeatColors(F));
+  CFGInfo.setEdgeWeights(getShowEdgeWeight(F));
+  CFGInfo.setRawEdgeWeights(getUseRawEdgeWeight(F));
 
   if (!EC)
     WriteGraph(File, &CFGInfo, CFGOnly);
@@ -84,9 +89,9 @@ static void viewCFG(Function &F, const BlockFrequencyInfo *BFI,
                     const BranchProbabilityInfo *BPI, uint64_t MaxFreq,
                     bool CFGOnly = false) {
   DOTFuncInfo CFGInfo(&F, BFI, BPI, MaxFreq);
-  CFGInfo.setHeatColors(ShowHeatColors);
-  CFGInfo.setEdgeWeights(ShowEdgeWeight);
-  CFGInfo.setRawEdgeWeights(UseRawEdgeWeight);
+  CFGInfo.setHeatColors(getShowHeatColors(F));
+  CFGInfo.setEdgeWeights(getShowEdgeWeight(F));
+  CFGInfo.setRawEdgeWeights(getUseRawEdgeWeight(F));
 
   ViewGraph(&CFGInfo, "cfg." + F.getName(), CFGOnly);
 }
@@ -110,7 +115,8 @@ ModuleSlotTracker *DOTFuncInfo::getModuleSlotTracker() {
 }
 
 PreservedAnalyses CFGViewerPass::run(Function &F, FunctionAnalysisManager &AM) {
-  if (!CFGFuncName.empty() && !F.getName().contains(CFGFuncName))
+  auto FuncName = getCFGFuncName(F);
+  if (!FuncName.empty() && !F.getName().contains(FuncName))
     return PreservedAnalyses::all();
   auto *BFI = &AM.getResult<BlockFrequencyAnalysis>(F);
   auto *BPI = &AM.getResult<BranchProbabilityAnalysis>(F);
@@ -120,7 +126,8 @@ PreservedAnalyses CFGViewerPass::run(Function &F, FunctionAnalysisManager &AM) {
 
 PreservedAnalyses CFGOnlyViewerPass::run(Function &F,
                                          FunctionAnalysisManager &AM) {
-  if (!CFGFuncName.empty() && !F.getName().contains(CFGFuncName))
+  auto FuncName = getCFGFuncName(F);
+  if (!FuncName.empty() && !F.getName().contains(FuncName))
     return PreservedAnalyses::all();
   auto *BFI = &AM.getResult<BlockFrequencyAnalysis>(F);
   auto *BPI = &AM.getResult<BranchProbabilityAnalysis>(F);
@@ -130,7 +137,8 @@ PreservedAnalyses CFGOnlyViewerPass::run(Function &F,
 
 PreservedAnalyses CFGPrinterPass::run(Function &F,
                                       FunctionAnalysisManager &AM) {
-  if (!CFGFuncName.empty() && !F.getName().contains(CFGFuncName))
+  auto FuncName = getCFGFuncName(F);
+  if (!FuncName.empty() && !F.getName().contains(FuncName))
     return PreservedAnalyses::all();
   auto *BFI = &AM.getResult<BlockFrequencyAnalysis>(F);
   auto *BPI = &AM.getResult<BranchProbabilityAnalysis>(F);
@@ -140,7 +148,8 @@ PreservedAnalyses CFGPrinterPass::run(Function &F,
 
 PreservedAnalyses CFGOnlyPrinterPass::run(Function &F,
                                           FunctionAnalysisManager &AM) {
-  if (!CFGFuncName.empty() && !F.getName().contains(CFGFuncName))
+  auto FuncName = getCFGFuncName(F);
+  if (!FuncName.empty() && !F.getName().contains(FuncName))
     return PreservedAnalyses::all();
   auto *BFI = &AM.getResult<BlockFrequencyAnalysis>(F);
   auto *BPI = &AM.getResult<BranchProbabilityAnalysis>(F);
@@ -162,7 +171,8 @@ void Function::viewCFG(const char *OutputFileName) const {
 void Function::viewCFG(bool ViewCFGOnly, const BlockFrequencyInfo *BFI,
                        const BranchProbabilityInfo *BPI,
                        const char *OutputFileName) const {
-  if (!CFGFuncName.empty() && !getName().contains(CFGFuncName))
+  auto FuncName = getCFGFuncName(*this);
+  if (!FuncName.empty() && !getName().contains(FuncName))
     return;
   DOTFuncInfo CFGInfo(this, BFI, BPI, BFI ? getMaxFreq(*this, BFI) : 0);
   ViewGraph(&CFGInfo, OutputFileName ? OutputFileName : "cfg" + getName(),
@@ -195,8 +205,8 @@ void DOTGraphTraits<DOTFuncInfo *>::computeDeoptOrUnreachablePaths(
     if (succ_empty(Node)) {
       const Instruction *TI = Node->getTerminator();
       isOnDeoptOrUnreachablePath[Node] =
-          (HideUnreachablePaths && isa<UnreachableInst>(TI)) ||
-          (HideDeoptimizePaths && Node->getTerminatingDeoptimizeCall());
+          (getHideUnreachablePaths(*F) && isa<UnreachableInst>(TI)) ||
+          (getHideDeoptimizePaths(*F) && Node->getTerminatingDeoptimizeCall());
       return;
     }
     isOnDeoptOrUnreachablePath[Node] =
@@ -211,18 +221,19 @@ void DOTGraphTraits<DOTFuncInfo *>::computeDeoptOrUnreachablePaths(
 
 bool DOTGraphTraits<DOTFuncInfo *>::isNodeHidden(const BasicBlock *Node,
                                                  const DOTFuncInfo *CFGInfo) {
-  if (HideColdPaths.getNumOccurrences() > 0)
+  const Function &F = *Node->getParent();
+  if (getHideColdPaths(F) > 0.0)
     if (auto *BFI = CFGInfo->getBFI()) {
       BlockFrequency NodeFreq = BFI->getBlockFreq(Node);
       BlockFrequency EntryFreq = BFI->getEntryFreq();
       // Hide blocks with relative frequency below HideColdPaths threshold.
       if ((double)NodeFreq.getFrequency() / EntryFreq.getFrequency() <
-          HideColdPaths)
+          getHideColdPaths(F))
         return true;
     }
-  if (HideUnreachablePaths || HideDeoptimizePaths) {
+  if (getHideUnreachablePaths(F) || getHideDeoptimizePaths(F)) {
     if (!isOnDeoptOrUnreachablePath.contains(Node))
-      computeDeoptOrUnreachablePaths(Node->getParent());
+      computeDeoptOrUnreachablePaths(&F);
     return isOnDeoptOrUnreachablePath[Node];
   }
   return false;

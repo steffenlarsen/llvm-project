@@ -193,7 +193,7 @@ static bool isLegalToInline(InlinerInterface &interface, Region *src,
       if (!interface.isLegalToInline(&op, insertRegion,
                                      shouldCloneInlinedRegion, valueMapping)) {
         LDBG() << "* Illegal to inline because of op: "
-               << OpWithFlags(&op, OpPrintingFlags().skipRegions());
+               << OpWithFlags(&op, opPrintingFlags(&op).skipRegions());
         return false;
       }
       // Check any nested regions.

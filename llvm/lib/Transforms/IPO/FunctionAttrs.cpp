@@ -52,13 +52,14 @@
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownFPClass.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <cassert>
 #include <iterator>
@@ -95,22 +96,28 @@ STATISTIC(NumThinLinkNoRecurse,
 STATISTIC(NumThinLinkNoUnwind,
           "Number of functions marked as nounwind during thinlink");
 
-static cl::opt<bool> EnablePoisonArgAttrPropagation(
-    "enable-poison-arg-attr-prop", cl::init(true), cl::Hidden,
-    cl::desc("Try to propagate nonnull and nofpclass argument attributes from "
-             "callsites to caller functions."));
-
-static cl::opt<bool> DisableNoUnwindInference(
-    "disable-nounwind-inference", cl::Hidden,
-    cl::desc("Stop inferring nounwind attribute during function-attrs pass"));
-
-static cl::opt<bool> DisableNoFreeInference(
-    "disable-nofree-inference", cl::Hidden,
-    cl::desc("Stop inferring nofree attribute during function-attrs pass"));
-
-static cl::opt<bool> DisableThinLTOPropagation(
-    "disable-thinlto-funcattrs", cl::init(true), cl::Hidden,
-    cl::desc("Don't propagate function-attrs in thinLTO"));
+static bool getEnablePoisonArgAttrPropagation(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::IPO_EnablePoisonArgAttrPropagation>(
+      F.getContext().getOptionsContext());
+}
+static bool getDisableNoUnwindInference(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
+                                    &clv2::IPO_DisableNoUnwindInference>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool getDisableNoFreeInference(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
+                                    &clv2::IPO_DisableNoFreeInference>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool getDisableThinLTOPropagation(const ipo_opts::ParsedOpts *O,
+                                         const clv2::OptionsContext &Ctx) {
+  if (!O)
+    O = clv2::getView<&clv2::IPOOptsReg>(Ctx);
+  if (O && O->specified<&clv2::IPO_DisableThinLTOPropagation>())
+    return O->get<&clv2::IPO_DisableThinLTOPropagation>();
+  return true;
+}
 
 static void addCapturesStat(CaptureInfo CI) {
   if (capturesNothing(CI))
@@ -418,10 +425,11 @@ static FunctionSummary *calculatePrevailingSummary(
 bool llvm::thinLTOPropagateFunctionAttrs(
     ModuleSummaryIndex &Index,
     function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
-        IsPrevailing) {
+        IsPrevailing,
+    const clv2::OptionsContext &Ctx) {
   // TODO: implement addNoAliasAttrs once
   // there's more information about the return type in the summary
-  if (DisableThinLTOPropagation)
+  if (getDisableThinLTOPropagation(nullptr, Ctx))
     return false;
 
   DenseMap<ValueInfo, FunctionSummary *> CachedPrevailingSummary;
@@ -1020,7 +1028,7 @@ static void addArgumentReturnedAttrs(const SCCNodeSet &SCCNodes,
 /// arguments. This may be important because inlining can cause information loss
 /// when attribute knowledge disappears with the inlined call.
 static bool addArgumentAttrsFromCallsites(Function &F) {
-  if (!EnablePoisonArgAttrPropagation)
+  if (!getEnablePoisonArgAttrPropagation(F))
     return false;
 
   bool Changed = false;
@@ -1957,7 +1965,7 @@ static void inferAttrsFromFunctionBodies(const SCCNodeSet &SCCNodes,
                                          SmallPtrSet<Function *, 8> &Changed) {
   AttributeInferer AI;
 
-  if (!DisableNoUnwindInference)
+  if (!getDisableNoUnwindInference(**SCCNodes.begin()))
     // Request to infer nounwind attribute for all the functions in the SCC if
     // every callsite within the SCC is not throwing (except for calls to
     // functions within the SCC). Note that nounwind attribute suffers from
@@ -1979,7 +1987,7 @@ static void inferAttrsFromFunctionBodies(const SCCNodeSet &SCCNodes,
         },
         /* RequiresExactDefinition= */ true});
 
-  if (!DisableNoFreeInference)
+  if (!getDisableNoFreeInference(**SCCNodes.begin()))
     // Request to infer nofree attribute for all the functions in the SCC if
     // every callsite within the SCC does not directly or indirectly free
     // memory (except for calls to functions within the SCC). Note that nofree

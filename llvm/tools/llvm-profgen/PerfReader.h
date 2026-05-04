@@ -13,7 +13,6 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Regex.h"
 #include <cstdint>
@@ -22,6 +21,7 @@
 
 namespace llvm {
 
+struct ProfGenConfig;
 class CleanupInstaller;
 
 namespace sampleprof {
@@ -477,8 +477,10 @@ range as sample counter for further CS profile generation.
 */
 class VirtualUnwinder {
 public:
-  VirtualUnwinder(ContextSampleCounterMap *Counter, ProfiledBinary *B)
-      : CtxCounterMap(Counter), Binary(B) {}
+  VirtualUnwinder(ContextSampleCounterMap *Counter, ProfiledBinary *B,
+                  int CSProfMaxUnsymbolizedCtxDepth)
+      : CtxCounterMap(Counter), Binary(B),
+        CSProfMaxUnsymbolizedCtxDepth(CSProfMaxUnsymbolizedCtxDepth) {}
   bool unwind(const PerfSample *Sample, uint64_t Repeat);
   std::set<uint64_t> &getUntrackedCallsites() { return UntrackedCallsites; }
 
@@ -559,6 +561,7 @@ private:
   ContextSampleCounterMap *CtxCounterMap;
   // Profiled binary that current frame address belongs to
   ProfiledBinary *Binary;
+  int CSProfMaxUnsymbolizedCtxDepth;
   // Keep track of all untracked callsites
   std::set<uint64_t> UntrackedCallsites;
 };
@@ -566,15 +569,16 @@ private:
 // Read perf trace to parse the events and samples.
 class PerfReaderBase {
 public:
-  PerfReaderBase(ProfiledBinary *B, StringRef PerfTrace)
-      : Binary(B), PerfTraceFile(PerfTrace) {
+  PerfReaderBase(ProfiledBinary *B, StringRef PerfTrace,
+                 const ProfGenConfig &Config)
+      : Binary(B), PerfTraceFile(PerfTrace), Config(Config) {
     // Initialize the base address to preferred address.
     Binary->setBaseAddress(Binary->getPreferredBaseAddress());
   };
   virtual ~PerfReaderBase() = default;
   static std::unique_ptr<PerfReaderBase>
   create(ProfiledBinary *Binary, InputFile &Input,
-         std::optional<int32_t> PIDFilter);
+         std::optional<int32_t> PIDFilter, const ProfGenConfig &Config);
 
   // Entry of the reader to parse multiple perf traces
   virtual void parsePerfTraces() = 0;
@@ -593,6 +597,7 @@ public:
 protected:
   ProfiledBinary *Binary = nullptr;
   StringRef PerfTraceFile;
+  const ProfGenConfig &Config;
 
   ContextSampleCounterMap SampleCounters;
   bool ProfileIsCS = false;
@@ -606,8 +611,8 @@ protected:
 class PerfScriptReader : public PerfReaderBase {
 public:
   PerfScriptReader(ProfiledBinary *B, StringRef PerfTrace,
-                   std::optional<int32_t> PID)
-      : PerfReaderBase(B, PerfTrace), PIDFilter(PID) {};
+                   std::optional<int32_t> PID, const ProfGenConfig &Config)
+      : PerfReaderBase(B, PerfTrace, Config), PIDFilter(PID) {};
 
   // Entry of the reader to parse multiple perf traces
   void parsePerfTraces() override;
@@ -689,8 +694,8 @@ protected:
 class LBRPerfReader : public PerfScriptReader {
 public:
   LBRPerfReader(ProfiledBinary *Binary, StringRef PerfTrace,
-                std::optional<int32_t> PID)
-      : PerfScriptReader(Binary, PerfTrace, PID) {};
+                std::optional<int32_t> PID, const ProfGenConfig &Config)
+      : PerfScriptReader(Binary, PerfTrace, PID, Config) {};
   // Parse the LBR only sample.
   void parseSample(TraceStream &TraceIt, uint64_t Count) override;
 };
@@ -707,8 +712,8 @@ public:
 class HybridPerfReader : public PerfScriptReader {
 public:
   HybridPerfReader(ProfiledBinary *Binary, StringRef PerfTrace,
-                   std::optional<int32_t> PID)
-      : PerfScriptReader(Binary, PerfTrace, PID) {};
+                   std::optional<int32_t> PID, const ProfGenConfig &Config)
+      : PerfScriptReader(Binary, PerfTrace, PID, Config) {};
   // Parse the hybrid sample including the call and LBR line
   void parseSample(TraceStream &TraceIt, uint64_t Count) override;
   void generateUnsymbolizedProfile() override;
@@ -739,8 +744,9 @@ Note that non-CS profile doesn't have the empty `[]` context.
 */
 class UnsymbolizedProfileReader : public PerfReaderBase {
 public:
-  UnsymbolizedProfileReader(ProfiledBinary *Binary, StringRef PerfTrace)
-      : PerfReaderBase(Binary, PerfTrace){};
+  UnsymbolizedProfileReader(ProfiledBinary *Binary, StringRef PerfTrace,
+                            const ProfGenConfig &Config)
+      : PerfReaderBase(Binary, PerfTrace, Config) {};
   void parsePerfTraces() override;
 
 private:

@@ -40,13 +40,16 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <cassert>
 #include <cstdint>
 #include <iterator>
@@ -55,26 +58,41 @@ using namespace llvm;
 
 #define DEBUG_TYPE "packets"
 
-cl::opt<bool> DisablePacketizer("disable-packetizer", cl::Hidden,
-                                cl::desc("Disable Hexagon packetizer pass"));
+bool DisablePacketizer = false;
 
-static cl::opt<bool> Slot1Store("slot1-store-slot0-load", cl::Hidden,
-                                cl::init(true),
-                                cl::desc("Allow slot1 store and slot0 load"));
+static bool Slot1Store = true;
 
-static cl::opt<bool> PacketizeVolatiles(
-    "hexagon-packetize-volatiles", cl::Hidden, cl::init(true),
-    cl::desc("Allow non-solo packetization of volatile memory references"));
+static bool PacketizeVolatiles = true;
 
-static cl::opt<bool>
-    EnableGenAllInsnClass("enable-gen-insn", cl::Hidden,
-                          cl::desc("Generate all instruction with TC"));
+static bool getEnableGenAllInsnClass(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_EnableGenAllInsnClass>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    DisableVecDblNVStores("disable-vecdbl-nv-stores", cl::Hidden,
-                          cl::desc("Disable vector double new-value-stores"));
+static bool getDisablePacketizer(const Function &F) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_DisablePacketizer>(
+      F.getContext().getOptionsContext(), DisablePacketizer);
+}
 
-extern cl::opt<bool> ScheduleInlineAsm;
+static bool getSlot1Store(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_Slot1Store>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getPacketizeVolatiles(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_PacketizeVolatiles>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getDisableVecDblNVStores(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DisableVecDblNVStores>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getScheduleInlineAsm(const Function &F) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_ScheduleInlineAsm>(
+      F.getContext().getOptionsContext(), false);
+}
 
 namespace {
 
@@ -203,12 +221,13 @@ bool HexagonPacketizer::runOnMachineFunction(MachineFunction &MF) {
   auto *MBPI =
       &getAnalysis<MachineBranchProbabilityInfoWrapperPass>().getMBPI();
 
-  if (EnableGenAllInsnClass)
+  const Function &F = MF.getFunction();
+  if (getEnableGenAllInsnClass(F))
     HII->genAllInsnTimingClasses(MF);
 
   // Instantiate the packetizer.
-  bool MinOnly = Minimal || DisablePacketizer || !HST.usePackets() ||
-                 skipFunction(MF.getFunction());
+  bool MinOnly = Minimal || getDisablePacketizer(F) || !HST.usePackets() ||
+                 skipFunction(F);
   HexagonPacketizerList Packetizer(MF, MLI, AA, MBPI, MinOnly);
 
   // DFA state table should not be empty.
@@ -863,7 +882,8 @@ bool HexagonPacketizerList::canPromoteToDotNew(const MachineInstr &MI,
 
   const MCInstrDesc& MCID = PI.getDesc();
   const TargetRegisterClass *VecRC = HII->getRegClass(MCID, 0);
-  if (DisableVecDblNVStores && VecRC == &Hexagon::HvxWRRegClass)
+  if (getDisableVecDblNVStores(MF.getFunction()) &&
+      VecRC == &Hexagon::HvxWRRegClass)
     return false;
 
   // predicate .new
@@ -1063,7 +1083,7 @@ bool HexagonPacketizerList::isSoloInstruction(const MachineInstr &MI) {
   // removed, and placed outside of the packet (before or after, depending
   // on dependencies).  This is to reduce the impact of inline asm as a
   // "packet splitting" instruction.
-  if (MI.isInlineAsm() && !ScheduleInlineAsm)
+  if (MI.isInlineAsm() && !getScheduleInlineAsm(MF.getFunction()))
     return true;
 
   if (isSchedBarrier(MI))
@@ -1508,7 +1528,7 @@ bool HexagonPacketizerList::isLegalToPacketizeTogether(SUnit *SUI, SUnit *SUJ) {
     // 3. Store followed by a store is valid.
     // 4. Load followed by any memory operation is allowed.
     if (DepType == SDep::Order) {
-      if (!PacketizeVolatiles) {
+      if (!getPacketizeVolatiles(MF.getFunction())) {
         bool OrdRefs = I.hasOrderedMemoryRef() || J.hasOrderedMemoryRef();
         if (OrdRefs) {
           FoundSequentialDependence = true;
@@ -1530,9 +1550,9 @@ bool HexagonPacketizerList::isLegalToPacketizeTogether(SUnit *SUI, SUnit *SUJ) {
         break;
       }
 
-      if (Slot1Store && MF.getSubtarget<HexagonSubtarget>().hasV65Ops() &&
-          ((LoadJ && StoreI && !NVStoreI) ||
-           (StoreJ && LoadI && !NVStoreJ)) &&
+      if (getSlot1Store(MF.getFunction()) &&
+          MF.getSubtarget<HexagonSubtarget>().hasV65Ops() &&
+          ((LoadJ && StoreI && !NVStoreI) || (StoreJ && LoadI && !NVStoreJ)) &&
           (J.getOpcode() != Hexagon::S2_allocframe &&
            I.getOpcode() != Hexagon::S2_allocframe) &&
           (J.getOpcode() != Hexagon::L2_deallocframe &&

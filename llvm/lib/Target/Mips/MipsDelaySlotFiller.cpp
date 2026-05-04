@@ -37,9 +37,10 @@
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cassert>
 #include <iterator>
@@ -56,31 +57,37 @@ STATISTIC(UsefulSlots, "Number of delay slots filled with instructions that"
 STATISTIC(R5900ShortLoopNops, "Number of delay slots left as NOP for R5900 "
                               "short loop fix");
 
-static cl::opt<bool> DisableDelaySlotFiller(
-  "disable-mips-delay-filler",
-  cl::init(false),
-  cl::desc("Fill all delay slots with NOPs."),
-  cl::Hidden);
+static bool DisableForwardSearch = true;
 
-static cl::opt<bool> DisableForwardSearch(
-  "disable-mips-df-forward-search",
-  cl::init(true),
-  cl::desc("Disallow MIPS delay filler to search forward."),
-  cl::Hidden);
+static bool DisableSuccBBSearch = true;
 
-static cl::opt<bool> DisableSuccBBSearch(
-  "disable-mips-df-succbb-search",
-  cl::init(true),
-  cl::desc("Disallow MIPS delay filler to search successor basic blocks."),
-  cl::Hidden);
+static bool getDisableDelaySlotFiller(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::MIPS_DisableDelaySlotFiller>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> DisableBackwardSearch(
-  "disable-mips-df-backward-search",
-  cl::init(false),
-  cl::desc("Disallow MIPS delay filler to search backward."),
-  cl::Hidden);
+static bool getDisableForwardSearch(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::MIPS_DisableForwardSearch>(
+      F.getContext().getOptionsContext());
+}
 
-extern cl::opt<CompactBranchPolicy> MipsCompactBranchPolicy;
+static bool getDisableSuccBBSearch(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::MIPS_DisableSuccBBSearch>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getDisableBackwardSearch(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::MIPS_DisableBackwardSearch>(
+      F.getContext().getOptionsContext());
+}
+
+static clv2::MipsCompactBranch getMipsCompactBranchPolicy(const Function &F) {
+  if (auto *O =
+          clv2::getView<&clv2::MipsOptsReg>(F.getContext().getOptionsContext()))
+    return O->get<&clv2::MIPS_CompactBranchPolicy>();
+  extern CompactBranchPolicy MipsCompactBranchPolicy;
+  return static_cast<clv2::MipsCompactBranch>(MipsCompactBranchPolicy);
+}
 
 namespace {
 
@@ -767,7 +774,8 @@ bool MipsDelaySlotFiller::runOnMachineBasicBlock(
 
     // Delay slot filling is disabled at -O0, in microMIPS32R6, or for R5900
     // short loop branches.
-    if (!DisableDelaySlotFiller &&
+    const Function &Fn = MBB.getParent()->getFunction();
+    if (!getDisableDelaySlotFiller(Fn) &&
         (TM->getOptLevel() != CodeGenOptLevel::None) &&
         !(InMicroMipsMode && STI.hasMips32r6()) && !SkipForFixR5900) {
 
@@ -775,8 +783,8 @@ bool MipsDelaySlotFiller::runOnMachineBasicBlock(
       const auto BranchInfo =
           BranchInformation(I, MBB.end(), FirstNextMBBInstr);
 
-      if (MipsCompactBranchPolicy.getValue() != CB_Always ||
-           !TII->getEquivalentCompactForm(I)) {
+      if (getMipsCompactBranchPolicy(Fn) != clv2::MipsCompactBranch::Always ||
+          !TII->getEquivalentCompactForm(I)) {
         if (searchBackward(MBB, *I, BranchInfo)) {
           LLVM_DEBUG(dbgs() << DEBUG_TYPE ": found instruction for delay slot"
                                           " in backwards search.\n");
@@ -826,7 +834,8 @@ bool MipsDelaySlotFiller::runOnMachineBasicBlock(
     // form of the CTI. For indirect jumps this will not require inserting a
     // NOP and for branches will hopefully avoid requiring a NOP.
     if ((InMicroMipsMode ||
-         (STI.hasMips32r6() && MipsCompactBranchPolicy != CB_Never)) &&
+         (STI.hasMips32r6() &&
+          getMipsCompactBranchPolicy(Fn) != clv2::MipsCompactBranch::Never)) &&
         TII->getEquivalentCompactForm(I)) {
       I = replaceWithCompactBranch(MBB, I, I->getDebugLoc());
       Changed = true;
@@ -928,7 +937,7 @@ bool MipsDelaySlotFiller::searchRange(MachineBasicBlock &MBB, IterTy Begin,
 bool MipsDelaySlotFiller::searchBackward(
     MachineBasicBlock &MBB, MachineInstr &Slot,
     const BranchInformation &BranchInfo) const {
-  if (DisableBackwardSearch)
+  if (getDisableBackwardSearch(MBB.getParent()->getFunction()))
     return false;
 
   auto *Fn = MBB.getParent();
@@ -956,7 +965,8 @@ bool MipsDelaySlotFiller::searchForward(
     MachineBasicBlock &MBB, Iter Slot,
     const BranchInformation &BranchInfo) const {
   // Can handle only calls.
-  if (DisableForwardSearch || !Slot->isCall())
+  if (getDisableForwardSearch(MBB.getParent()->getFunction()) ||
+      !Slot->isCall())
     return false;
 
   RegDefsUses RegDU(*MBB.getParent()->getSubtarget().getRegisterInfo());
@@ -981,7 +991,7 @@ bool MipsDelaySlotFiller::searchForward(
 bool MipsDelaySlotFiller::searchSuccBBs(
     MachineBasicBlock &MBB, Iter Slot,
     const BranchInformation &BranchInfo) const {
-  if (DisableSuccBBSearch)
+  if (getDisableSuccBBSearch(MBB.getParent()->getFunction()))
     return false;
 
   MachineBasicBlock *SuccBB = selectSuccBB(MBB);

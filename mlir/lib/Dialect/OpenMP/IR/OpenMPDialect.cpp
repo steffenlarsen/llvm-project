@@ -4353,10 +4353,11 @@ LogicalResult NewCliOp::verify() {
         error.attachNote(cons->getOwner()->getLoc())
             .append("first consumer here:")
             .appendOp(*cons->getOwner(),
-                      OpPrintingFlags().printGenericOpForm());
+                      opPrintingFlags(cons->getOwner()).printGenericOpForm());
         error.attachNote(use.getOwner()->getLoc())
             .append("second consumer here:")
-            .appendOp(*use.getOwner(), OpPrintingFlags().printGenericOpForm());
+            .appendOp(*use.getOwner(),
+                      opPrintingFlags(use.getOwner()).printGenericOpForm());
         return error;
       }
 
@@ -4371,7 +4372,8 @@ LogicalResult NewCliOp::verify() {
     InFlightDiagnostic error = emitOpError("CLI has no generator");
     error.attachNote(cons->getOwner()->getLoc())
         .append("see consumer here: ")
-        .appendOp(*cons->getOwner(), OpPrintingFlags().printGenericOpForm());
+        .appendOp(*cons->getOwner(),
+                  opPrintingFlags(cons->getOwner()).printGenericOpForm());
     return error;
   }
 

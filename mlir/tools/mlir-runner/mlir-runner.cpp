@@ -23,7 +23,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Linker/Linker.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/TargetSelect.h"
 
@@ -32,11 +32,20 @@ using namespace mlir;
 // TODO: Consider removing this linking functionality from the SPIR-V CPU Runner
 //       flow in favour of a more proper host/device split like other runners.
 //       https://github.com/llvm/llvm-project/issues/115348
-static llvm::cl::opt<bool> linkNestedModules(
+static bool linkNestedModules = false;
+
+static unsigned linkNestedModulesCount = 0;
+static constexpr llvm::clv2::OptionInfo<bool> OI_LinkNestedModules{
     "link-nested-modules",
-    llvm::cl::desc("Link two nested MLIR modules into a single LLVM IR module. "
-                   "Useful if both the host and device code can be run on the "
-                   "same CPU, as in SPIR-V CPU Runner tests."));
+    "Link two nested MLIR modules into a single LLVM IR module. "
+    "Useful if both the host and device code can be run on the "
+    "same CPU, as in SPIR-V CPU Runner tests.",
+    llvm::clv2::ValueDisallowed};
+
+static void addLinkNestedModulesOpt(llvm::clv2::OptionParser &P) {
+  P.addDynamicEntry(llvm::clv2::makeEntry<&OI_LinkNestedModules>(
+      linkNestedModules, linkNestedModulesCount));
+}
 
 /// A utility function that builds llvm::Module from two nested MLIR modules.
 ///
@@ -90,5 +99,9 @@ int main(int argc, char **argv) {
 
   mlir::JitRunnerConfig jitRunnerConfig;
   jitRunnerConfig.llvmModuleBuilder = convertMLIRModule;
+  jitRunnerConfig.configureParser = [](llvm::clv2::OptionParser &P) {
+    addLinkNestedModulesOpt(P);
+    P.showOptions({"link-nested-modules"});
+  };
   return mlir::JitRunnerMain(argc, argv, registry, jitRunnerConfig);
 }

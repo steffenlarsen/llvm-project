@@ -23,9 +23,10 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/ARC/ARCOptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -35,14 +36,18 @@ using namespace llvm;
 
 namespace llvm {
 
-static cl::opt<unsigned> ArcKillAddrMode("arc-kill-addr-mode", cl::init(0),
-                                         cl::ReallyHidden);
+static unsigned ArcKillAddrMode = 0;
 
-#define DUMP_BEFORE() ((ArcKillAddrMode & 0x0001) != 0)
-#define DUMP_AFTER() ((ArcKillAddrMode & 0x0002) != 0)
-#define VIEW_BEFORE() ((ArcKillAddrMode & 0x0004) != 0)
-#define VIEW_AFTER() ((ArcKillAddrMode & 0x0008) != 0)
-#define KILL_PASS() ((ArcKillAddrMode & 0x0010) != 0)
+static unsigned getArcKillAddrMode(const MachineFunction &MF) {
+  return clv2::getOptValOrDefault<&clv2::ARC_KillAddrMode>(
+      MF.getFunction().getContext().getOptionsContext());
+}
+
+#define DUMP_BEFORE() ((getArcKillAddrMode(MF) & 0x0001) != 0)
+#define DUMP_AFTER() ((getArcKillAddrMode(MF) & 0x0002) != 0)
+#define VIEW_BEFORE() ((getArcKillAddrMode(MF) & 0x0004) != 0)
+#define VIEW_AFTER() ((getArcKillAddrMode(MF) & 0x0008) != 0)
+#define KILL_PASS() ((getArcKillAddrMode(MF) & 0x0010) != 0)
 
 FunctionPass *createARCOptAddrMode();
 void initializeARCOptAddrModePass(PassRegistry &);

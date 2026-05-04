@@ -25,7 +25,7 @@ using namespace llvm;
 namespace {
 
 TEST(VerifierTest, Branch_i1) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
@@ -48,7 +48,7 @@ TEST(VerifierTest, Branch_i1) {
 }
 
 TEST(VerifierTest, Freeze) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
@@ -96,9 +96,10 @@ TEST(VerifierTest, Freeze) {
 }
 
 TEST(VerifierTest, InvalidRetAttribute) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
-  FunctionType *FTy = FunctionType::get(Type::getInt32Ty(C), /*isVarArg=*/false);
+  FunctionType *FTy =
+      FunctionType::get(Type::getInt32Ty(C), /*isVarArg=*/false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
   AttributeList AS = F->getAttributes();
   F->setAttributes(AS.addRetAttribute(
@@ -114,7 +115,7 @@ TEST(VerifierTest, InvalidRetAttribute) {
 /// Test the verifier rejects invalid nofpclass values that the assembler may
 /// also choose to reject.
 TEST(VerifierTest, InvalidNoFPClassAttribute) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const unsigned InvalidMasks[] = {0, fcAllFlags + 1};
 
@@ -147,11 +148,12 @@ TEST(VerifierTest, InvalidNoFPClassAttribute) {
 }
 
 TEST(VerifierTest, CrossModuleRef) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M1("M1", C);
   Module M2("M2", C);
   Module M3("M3", C);
-  FunctionType *FTy = FunctionType::get(Type::getInt32Ty(C), /*isVarArg=*/false);
+  FunctionType *FTy =
+      FunctionType::get(Type::getInt32Ty(C), /*isVarArg=*/false);
   Function *F1 = Function::Create(FTy, Function::ExternalLinkage, "foo1", M1);
   Function *F2 = Function::Create(FTy, Function::ExternalLinkage, "foo2", M2);
   Function *F3 = Function::Create(FTy, Function::ExternalLinkage, "foo3", M3);
@@ -160,7 +162,7 @@ TEST(VerifierTest, CrossModuleRef) {
   BasicBlock *Entry3 = BasicBlock::Create(C, "entry", F3);
 
   // BAD: Referencing function in another module
-  CallInst::Create(F2,"call",Entry1);
+  CallInst::Create(F2, "call", Entry1);
 
   // BAD: Referencing personality routine in another module
   F3->setPersonalityFn(F2);
@@ -204,7 +206,7 @@ TEST(VerifierTest, CrossModuleRef) {
 }
 
 TEST(VerifierTest, InvalidVariableLinkage) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   new GlobalVariable(M, Type::getInt8Ty(C), false,
                      GlobalValue::LinkOnceODRLinkage, nullptr, "Some Global");
@@ -216,7 +218,7 @@ TEST(VerifierTest, InvalidVariableLinkage) {
 }
 
 TEST(VerifierTest, InvalidFunctionLinkage) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
 
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
@@ -230,7 +232,7 @@ TEST(VerifierTest, InvalidFunctionLinkage) {
 
 TEST(VerifierTest, DetectInvalidDebugInfo) {
   {
-    LLVMContext C;
+    LLVMContext C{llvm::clv2::defaultOptionsContext()};
     Module M("M", C);
     DIBuilder DIB(M);
     DIB.createCompileUnit(DISourceLanguageName(dwarf::DW_LANG_C89),
@@ -250,7 +252,7 @@ TEST(VerifierTest, DetectInvalidDebugInfo) {
     // rejected by the verifier. The textual IR parser, the bitcode reader,
     // and the C API all guard against this, so this path is only reachable
     // via programmatic IR construction.
-    LLVMContext C;
+    LLVMContext C{llvm::clv2::defaultOptionsContext()};
     Module M("M", C);
     DIBuilder DIB(M);
     const uint16_t OutOfRangeDialect = dwarf::DW_LLVM_LANG_DIALECT_max + 1;
@@ -265,7 +267,7 @@ TEST(VerifierTest, DetectInvalidDebugInfo) {
     EXPECT_TRUE(StringRef(Error).contains("invalid language dialect")) << Error;
   }
   {
-    LLVMContext C;
+    LLVMContext C{llvm::clv2::defaultOptionsContext()};
     Module M("M", C);
     DIBuilder DIB(M);
     auto *CU = DIB.createCompileUnit(DISourceLanguageName(dwarf::DW_LANG_C89),
@@ -293,7 +295,8 @@ TEST(VerifierTest, DetectInvalidDebugInfo) {
 }
 
 TEST(VerifierTest, MDNodeWrongContext) {
-  LLVMContext C1, C2;
+  LLVMContext C1(llvm::clv2::defaultOptionsContext()),
+      C2(llvm::clv2::defaultOptionsContext());
   auto *Node = MDNode::get(C1, {});
 
   Module M("M", C2);
@@ -308,7 +311,8 @@ TEST(VerifierTest, MDNodeWrongContext) {
 }
 
 TEST(VerifierTest, AttributesWrongContext) {
-  LLVMContext C1, C2;
+  LLVMContext C1(llvm::clv2::defaultOptionsContext()),
+      C2(llvm::clv2::defaultOptionsContext());
   Module M1("M", C1);
   FunctionType *FTy1 =
       FunctionType::get(Type::getVoidTy(C1), /*isVarArg=*/false);
@@ -325,7 +329,7 @@ TEST(VerifierTest, AttributesWrongContext) {
 }
 
 TEST(VerifierTest, SwitchInst) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   IntegerType *Int32Ty = Type::getInt32Ty(C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), {Int32Ty, Int32Ty},
@@ -352,7 +356,7 @@ TEST(VerifierTest, SwitchInst) {
 }
 
 TEST(VerifierTest, CrossFunctionRef) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
   Function *F1 = Function::Create(FTy, Function::ExternalLinkage, "foo1", M);
@@ -379,7 +383,7 @@ TEST(VerifierTest, CrossFunctionRef) {
 }
 
 TEST(VerifierTest, AtomicRMW) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
@@ -405,7 +409,7 @@ TEST(VerifierTest, AtomicRMW) {
 }
 
 TEST(VerifierTest, AtomicRMWElementwiseScalar) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
@@ -429,7 +433,7 @@ TEST(VerifierTest, AtomicRMWElementwiseScalar) {
 }
 
 TEST(VerifierTest, AtomicRMWElementwiseSequentiallyConsistent) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
@@ -454,7 +458,7 @@ TEST(VerifierTest, AtomicRMWElementwiseSequentiallyConsistent) {
 }
 
 TEST(VerifierTest, AtomicRMWElementwiseIntOpOnFPVector) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
@@ -479,7 +483,7 @@ TEST(VerifierTest, AtomicRMWElementwiseIntOpOnFPVector) {
 }
 
 TEST(VerifierTest, AtomicRMWElementwiseOddSizedVector) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
@@ -504,7 +508,7 @@ TEST(VerifierTest, AtomicRMWElementwiseOddSizedVector) {
 }
 
 TEST(VerifierTest, AtomicRMWElementwiseFPOpOnIntVector) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
@@ -530,7 +534,7 @@ TEST(VerifierTest, AtomicRMWElementwiseFPOpOnIntVector) {
 }
 
 TEST(VerifierTest, AtomicRMWIntVector) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
@@ -556,7 +560,7 @@ TEST(VerifierTest, AtomicRMWIntVector) {
 }
 
 TEST(VerifierTest, AtomicRMWXchgVector) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
@@ -582,7 +586,7 @@ TEST(VerifierTest, AtomicRMWXchgVector) {
 }
 
 TEST(VerifierTest, AtomicRMWXchgNonByteSizedVector) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
@@ -605,7 +609,7 @@ TEST(VerifierTest, AtomicRMWXchgNonByteSizedVector) {
 }
 
 TEST(VerifierTest, ElementwiseLoadNonAtomic) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
@@ -632,7 +636,7 @@ TEST(VerifierTest, ElementwiseLoadNonAtomic) {
 }
 
 TEST(VerifierTest, ElementwiseLoadScalar) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
@@ -658,7 +662,7 @@ TEST(VerifierTest, ElementwiseLoadScalar) {
 }
 
 TEST(VerifierTest, ElementwiseLoadSequentiallyConsistent) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
@@ -685,7 +689,7 @@ TEST(VerifierTest, ElementwiseLoadSequentiallyConsistent) {
 }
 
 TEST(VerifierTest, ElementwiseLoadOddSizedVector) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
@@ -712,7 +716,7 @@ TEST(VerifierTest, ElementwiseLoadOddSizedVector) {
 }
 
 TEST(VerifierTest, ElementwiseStoreNonAtomic) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
@@ -740,7 +744,7 @@ TEST(VerifierTest, ElementwiseStoreNonAtomic) {
 }
 
 TEST(VerifierTest, ElementwiseStoreScalar) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
@@ -767,7 +771,7 @@ TEST(VerifierTest, ElementwiseStoreScalar) {
 }
 
 TEST(VerifierTest, ElementwiseStoreOddSizedVector) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
@@ -795,7 +799,7 @@ TEST(VerifierTest, ElementwiseStoreOddSizedVector) {
 }
 
 TEST(VerifierTest, ElementwiseStoreSequentiallyConsistent) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
@@ -823,7 +827,7 @@ TEST(VerifierTest, ElementwiseStoreSequentiallyConsistent) {
 }
 
 TEST(VerifierTest, GetElementPtrInst) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "foo", M);
@@ -853,7 +857,7 @@ TEST(VerifierTest, GetElementPtrInst) {
 }
 
 TEST(VerifierTest, DeeplyNested) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module M("M", Ctx);
 
   // Construct an extremely deeply nested metadata node that should cause
@@ -874,7 +878,7 @@ TEST(VerifierTest, DeeplyNested) {
 }
 
 TEST(VerifierTest, IntrinsicRetInvalidStruct) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   // Create 2 invalid struct types for @llvm.nvvm.elect.sync intrinsic.
   Type *I32Ty = Type::getInt32Ty(Ctx);
@@ -908,4 +912,5 @@ TEST(VerifierTest, IntrinsicRetInvalidStruct) {
         << Error;
   }
 }
+
 } // end anonymous namespace

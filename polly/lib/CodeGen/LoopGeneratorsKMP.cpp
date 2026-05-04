@@ -11,12 +11,45 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/CodeGen/LoopGeneratorsKMP.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/CommandLineV2.h"
 
 using namespace llvm;
 using namespace polly;
+
+/// Helper to read Polly loop-generator options from OptionsContext.
+static void getLoopGenOpts(PollyIRBuilder &Builder, int &NumThreads,
+                           OMPGeneralSchedulingType &Scheduling,
+                           int &ChunkSize) {
+  NumThreads = 0;
+  Scheduling = OMPGeneralSchedulingType::Runtime;
+  ChunkSize = 0;
+  if (auto *Opts = polly_opts::getPollyOpts(Builder.GetInsertBlock()
+                                                ->getParent()
+                                                ->getContext()
+                                                .getOptionsContext())) {
+    NumThreads = Opts->get<&llvm::clv2::POLLY_NumThreads>();
+    ChunkSize = Opts->get<&llvm::clv2::POLLY_SchedulingChunksize>();
+    auto SchedType = Opts->get<&llvm::clv2::POLLY_Scheduling>();
+    switch (SchedType) {
+    case llvm::clv2::POLLY_SchedulingType::Static:
+      Scheduling = OMPGeneralSchedulingType::StaticChunked;
+      break;
+    case llvm::clv2::POLLY_SchedulingType::Dynamic:
+      Scheduling = OMPGeneralSchedulingType::Dynamic;
+      break;
+    case llvm::clv2::POLLY_SchedulingType::Guided:
+      Scheduling = OMPGeneralSchedulingType::Guided;
+      break;
+    case llvm::clv2::POLLY_SchedulingType::Runtime:
+      Scheduling = OMPGeneralSchedulingType::Runtime;
+      break;
+    }
+  }
+}
 
 void ParallelLoopGeneratorKMP::createCallSpawnThreads(Value *SubFn,
                                                       Value *SubFnParam,
@@ -62,10 +95,14 @@ void ParallelLoopGeneratorKMP::deployParallelExecution(Function *SubFn,
                                                        Value *SubFnParam,
                                                        Value *LB, Value *UB,
                                                        Value *Stride) {
+  int NumThreads;
+  OMPGeneralSchedulingType Sched;
+  int ChunkSz;
+  getLoopGenOpts(Builder, NumThreads, Sched, ChunkSz);
   // Inform OpenMP runtime about the number of threads if greater than zero
-  if (PollyNumThreads > 0) {
+  if (NumThreads > 0) {
     Value *GlobalThreadID = createCallGlobalThreadNum();
-    createCallPushNumThreads(GlobalThreadID, Builder.getInt32(PollyNumThreads));
+    createCallPushNumThreads(GlobalThreadID, Builder.getInt32(NumThreads));
   }
 
   // Tell the runtime we start a parallel loop
@@ -187,11 +224,17 @@ ParallelLoopGeneratorKMP::createSubFn(Value *SequentialLoopStride,
   Value *AdjustedUB = Builder.CreateAdd(UB, ConstantInt::get(LongType, -1),
                                         "polly.indvar.UBAdjusted");
 
+  int PollyNumThreadsVal;
+  OMPGeneralSchedulingType PollySchedulingVal;
+  int PollyChunkSizeVal;
+  getLoopGenOpts(Builder, PollyNumThreadsVal, PollySchedulingVal,
+                 PollyChunkSizeVal);
+
   Value *ChunkSize =
-      ConstantInt::get(LongType, std::max<int>(PollyChunkSize, 1));
+      ConstantInt::get(LongType, std::max<int>(PollyChunkSizeVal, 1));
 
   OMPGeneralSchedulingType Scheduling =
-      getSchedType(PollyChunkSize, PollyScheduling);
+      getSchedType(PollyChunkSizeVal, PollySchedulingVal);
 
   switch (Scheduling) {
   case OMPGeneralSchedulingType::Dynamic:
@@ -378,10 +421,14 @@ void ParallelLoopGeneratorKMP::createCallStaticInit(Value *GlobalThreadID,
 
   // The parameter 'ChunkSize' will hold strictly positive integer values,
   // regardless of PollyChunkSize's value
+  int StaticNumThreads;
+  OMPGeneralSchedulingType StaticScheduling;
+  int StaticChunkSz;
+  getLoopGenOpts(Builder, StaticNumThreads, StaticScheduling, StaticChunkSz);
   Value *Args[] = {
       SourceLocationInfo,
       GlobalThreadID,
-      Builder.getInt32(int(getSchedType(PollyChunkSize, PollyScheduling))),
+      Builder.getInt32(int(getSchedType(StaticChunkSz, StaticScheduling))),
       IsLastPtr,
       LBPtr,
       UBPtr,
@@ -437,10 +484,15 @@ void ParallelLoopGeneratorKMP::createCallDispatchInit(Value *GlobalThreadID,
 
   // The parameter 'ChunkSize' will hold strictly positive integer values,
   // regardless of PollyChunkSize's value
+  int DispatchNumThreads;
+  OMPGeneralSchedulingType DispatchScheduling;
+  int DispatchChunkSz;
+  getLoopGenOpts(Builder, DispatchNumThreads, DispatchScheduling,
+                 DispatchChunkSz);
   Value *Args[] = {
       SourceLocationInfo,
       GlobalThreadID,
-      Builder.getInt32(int(getSchedType(PollyChunkSize, PollyScheduling))),
+      Builder.getInt32(int(getSchedType(DispatchChunkSz, DispatchScheduling))),
       LB,
       UB,
       Inc,

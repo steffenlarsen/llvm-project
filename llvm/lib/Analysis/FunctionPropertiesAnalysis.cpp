@@ -15,14 +15,17 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
 #include <deque>
 
 using namespace llvm;
@@ -30,35 +33,41 @@ using namespace llvm;
 #define DEBUG_TYPE "func-properties-stats"
 
 #define FUNCTION_PROPERTY(Name, Description)                                   \
-  STATISTIC(Num##Name, Description);                                           \
-  STATISTIC(Num##Name##PreOptimization, Description " (before "                \
-                                                    "optimizations)");
+  STATISTIC(Num##Name##PreOptimization,                                        \
+            Description " (before optimizations)");                            \
+  STATISTIC(Num##Name, Description);
 #define DETAILED_FUNCTION_PROPERTY(Name, Description)                          \
-  STATISTIC(Num##Name, Description);                                           \
-  STATISTIC(Num##Name##PreOptimization, Description " (before "                \
-                                                    "optimizations)");
+  STATISTIC(Num##Name##PreOptimization,                                        \
+            Description " (before optimizations)");                            \
+  STATISTIC(Num##Name, Description);
 #include "llvm/IR/FunctionProperties.def"
 
-namespace llvm {
-LLVM_ABI cl::opt<bool> EnableDetailedFunctionProperties(
-    "enable-detailed-function-properties", cl::Hidden, cl::init(false),
-    cl::desc("Whether or not to compute detailed function properties."));
+static bool getEnableDetailedFunctionProperties(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_EnableDetailedFunctionProperties>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> BigBasicBlockInstructionThreshold(
-    "big-basic-block-instruction-threshold", cl::Hidden, cl::init(500),
-    cl::desc("The minimum number of instructions a basic block should contain "
-             "before being considered big."));
+static bool
+getEnableDetailedFunctionProperties(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_EnableDetailedFunctionProperties>(
+      Ctx);
+}
 
-static cl::opt<unsigned> MediumBasicBlockInstructionThreshold(
-    "medium-basic-block-instruction-threshold", cl::Hidden, cl::init(15),
-    cl::desc("The minimum number of instructions a basic block should contain "
-             "before being considered medium-sized."));
-} // namespace llvm
+static unsigned getBigBasicBlockInstructionThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_BigBasicBlockInstructionThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> CallWithManyArgumentsThreshold(
-    "call-with-many-arguments-threshold", cl::Hidden, cl::init(4),
-    cl::desc("The minimum number of arguments a function call must have before "
-             "it is considered having many arguments."));
+static unsigned getMediumBasicBlockInstructionThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::AN_MediumBasicBlockInstructionThreshold>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getCallWithManyArgumentsThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_CallWithManyArgumentsThreshold>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 int64_t getNumBlocksFromCond(const BasicBlock &BB) {
@@ -100,7 +109,7 @@ void FunctionPropertiesInfo::updateForBB(const BasicBlock &BB,
   }
   TotalInstructionCount += Direction * BB.size();
 
-  if (EnableDetailedFunctionProperties) {
+  if (getEnableDetailedFunctionProperties(*BB.getParent())) {
     unsigned SuccessorCount = succ_size(&BB);
     if (SuccessorCount == 1)
       BasicBlocksWithSingleSuccessor += Direction;
@@ -109,16 +118,19 @@ void FunctionPropertiesInfo::updateForBB(const BasicBlock &BB,
     else if (SuccessorCount > 2)
       BasicBlocksWithMoreThanTwoSuccessors += Direction;
 
-    if (BB.hasNPredecessors(1))
+    unsigned PredecessorCount = pred_size(&BB);
+    if (PredecessorCount == 1)
       BasicBlocksWithSinglePredecessor += Direction;
-    else if (BB.hasNPredecessors(2))
+    else if (PredecessorCount == 2)
       BasicBlocksWithTwoPredecessors += Direction;
-    else if (BB.hasNPredecessorsOrMore(3))
+    else if (PredecessorCount > 2)
       BasicBlocksWithMoreThanTwoPredecessors += Direction;
 
-    if (TotalInstructionCount > BigBasicBlockInstructionThreshold)
+    if (TotalInstructionCount >
+        getBigBasicBlockInstructionThreshold(*BB.getParent()))
       BigBasicBlocks += Direction;
-    else if (TotalInstructionCount > MediumBasicBlockInstructionThreshold)
+    else if (TotalInstructionCount >
+             getMediumBasicBlockInstructionThreshold(*BB.getParent()))
       MediumBasicBlocks += Direction;
     else
       SmallBasicBlocks += Direction;
@@ -128,7 +140,7 @@ void FunctionPropertiesInfo::updateForBB(const BasicBlock &BB,
     // predecessors, which represent critical edges.
     if (SuccessorCount > 1) {
       for (const auto *Successor : successors(&BB)) {
-        if (Successor->hasNPredecessorsOrMore(2))
+        if (pred_size(Successor) > 1)
           CriticalEdgeCount += Direction;
       }
     }
@@ -162,9 +174,6 @@ void FunctionPropertiesInfo::updateForBB(const BasicBlock &BB,
         ++IntrinsicCount;
 
       if (const auto *Call = dyn_cast<CallInst>(&I)) {
-        if (Call->doesNotReturn())
-          NoReturnCallCount += Direction;
-
         if (Call->isIndirectCall())
           IndirectCallCount += Direction;
         else
@@ -185,7 +194,8 @@ void FunctionPropertiesInfo::updateForBB(const BasicBlock &BB,
             CallReturnsVectorPointerCount += Direction;
         }
 
-        if (Call->arg_size() > CallWithManyArgumentsThreshold)
+        if (Call->arg_size() >
+            getCallWithManyArgumentsThreshold(*BB.getParent()))
           CallWithManyArgumentsCount += Direction;
 
         for (const auto &Arg : Call->args()) {
@@ -327,7 +337,6 @@ bool FunctionPropertiesInfo::operator==(
       ControlFlowEdgeCount != FPI.ControlFlowEdgeCount ||
       UnconditionalBranchCount != FPI.UnconditionalBranchCount ||
       IntrinsicCount != FPI.IntrinsicCount ||
-      NoReturnCallCount != FPI.NoReturnCallCount ||
       DirectCallCount != FPI.DirectCallCount ||
       IndirectCallCount != FPI.IndirectCallCount ||
       CallReturnsIntegerCount != FPI.CallReturnsIntegerCount ||
@@ -348,11 +357,13 @@ bool FunctionPropertiesInfo::operator==(
   return true;
 }
 
-void FunctionPropertiesInfo::print(raw_ostream &OS) const {
+void FunctionPropertiesInfo::print(raw_ostream &OS, const Function *F) const {
 #define FUNCTION_PROPERTY(Name, Description) OS << #Name ": " << Name << "\n";
 
 #define DETAILED_FUNCTION_PROPERTY(Name, Description)                          \
-  if (EnableDetailedFunctionProperties) {                                      \
+  if (F ? getEnableDetailedFunctionProperties(                                 \
+              F->getContext().getOptionsContext())                             \
+        : false) {                                                             \
     OS << #Name ": " << Name << "\n";                                          \
   }
 
@@ -376,7 +387,7 @@ FunctionPropertiesPrinterPass::run(Function &F, FunctionAnalysisManager &AM) {
   OS << "Printing analysis results of CFA for function "
      << "'" << F.getName() << "':"
      << "\n";
-  AM.getResult<FunctionPropertiesAnalysis>(F).print(OS);
+  AM.getResult<FunctionPropertiesAnalysis>(F).print(OS, &F);
   return PreservedAnalyses::all();
 }
 
@@ -402,6 +413,7 @@ FunctionPropertiesStatisticsPass::run(Function &F,
 #undef FUNCTION_PROPERTY
 #undef DETAILED_FUNCTION_PROPERTY
   }
+
   return PreservedAnalyses::all();
 }
 

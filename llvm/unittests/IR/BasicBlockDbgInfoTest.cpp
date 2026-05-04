@@ -6,10 +6,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/IR/BasicBlock.h"
-#include "llvm/IR/DebugInfo.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/AsmParser/Parser.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instruction.h"
@@ -41,7 +41,7 @@ namespace {
 // nothing but the location of debug-info intrinsics. That has to be modelled
 // by DbgVariableRecords, the dbg.value replacement.
 TEST(BasicBlockDbgInfoTest, InsertAfterSelf) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define i16 @f(i16 %a) !dbg !6 {
       call void @llvm.dbg.value(metadata i16 %a, metadata !9, metadata !DIExpression()), !dbg !11
@@ -100,7 +100,7 @@ TEST(BasicBlockDbgInfoTest, InsertAfterSelf) {
 }
 
 TEST(BasicBlockDbgInfoTest, SplitBasicBlockBefore) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"---(
     define dso_local void @func() #0 !dbg !10 {
       %1 = alloca i32, align 4
@@ -150,7 +150,7 @@ TEST(BasicBlockDbgInfoTest, SplitBasicBlockBefore) {
 }
 
 TEST(BasicBlockDbgInfoTest, DropSourceAtomOnSplit) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"---(
     define dso_local void @func() !dbg !10 {
       %1 = alloca i32, align 4
@@ -211,7 +211,7 @@ TEST(BasicBlockDbgInfoTest, DropSourceAtomOnSplit) {
 }
 
 TEST(BasicBlockDbgInfoTest, MarkerOperations) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define i16 @f(i16 %a) !dbg !6 {
       call void @llvm.dbg.value(metadata i16 %a, metadata !9, metadata !DIExpression()), !dbg !11
@@ -338,7 +338,7 @@ TEST(BasicBlockDbgInfoTest, MarkerOperations) {
 }
 
 TEST(BasicBlockDbgInfoTest, HeadBitOperations) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define i16 @f(i16 %a) !dbg !6 {
       %b = add i16 %a, 1, !dbg !11
@@ -441,7 +441,7 @@ TEST(BasicBlockDbgInfoTest, HeadBitOperations) {
 }
 
 TEST(BasicBlockDbgInfoTest, InstrDbgAccess) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define i16 @f(i16 %a) !dbg !6 {
       %b = add i16 %a, 1, !dbg !11
@@ -530,15 +530,14 @@ TEST(BasicBlockDbgInfoTest, InstrDbgAccess) {
 
     define i16 @f(i16 %a) !dbg !6 {
     entry:
-      call void @llvm.dbg.value(metadata i16 %a, metadata !9, metadata !DIExpression()), !dbg !11
-      %b = add i16 %a, 1, !dbg !11
-      call void @llvm.dbg.value(metadata i16 %b, metadata !9, metadata !DIExpression()), !dbg !11
-      br label %exit, !dbg !11
+      call void @llvm.dbg.value(metadata i16 %a, metadata !9, metadata
+  !DIExpression()), !dbg !11 %b = add i16 %a, 1, !dbg !11 call void
+  @llvm.dbg.value(metadata i16 %b, metadata !9, metadata !DIExpression()), !dbg
+  !11 br label %exit, !dbg !11
 
     exit:
-      call void @llvm.dbg.value(metadata i16 0, metadata !9, metadata !DIExpression()), !dbg !11
-      %c = add i16 %b, 1, !dbg !11
-      ret i16 0, !dbg !11
+      call void @llvm.dbg.value(metadata i16 0, metadata !9, metadata
+  !DIExpression()), !dbg !11 %c = add i16 %b, 1, !dbg !11 ret i16 0, !dbg !11
     }
 
   The iterators will be:
@@ -595,7 +594,7 @@ static const std::string SpliceTestIR = R"(
 
 class DbgSpliceTest : public ::testing::Test {
 protected:
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   BasicBlock *BBEntry, *BBExit;
   BasicBlock::iterator Dest, First, Last;
@@ -1207,7 +1206,7 @@ metadata !9, metadata !DIExpression()), !dbg !11 Dest      %c = add i16 %b, 1,
 // If we splice new instructions into a block with trailing DbgVariableRecords,
 // then the trailing DbgVariableRecords should get flushed back out.
 TEST(BasicBlockDbgInfoTest, DbgSpliceTrailing) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define i16 @f(i16 %a) !dbg !6 {
     entry:
@@ -1259,7 +1258,7 @@ TEST(BasicBlockDbgInfoTest, DbgSpliceTrailing) {
 // re-insert the removed instruction back into the middle of a sequence of
 // dbg.values. Test that this can be replicated correctly by DbgVariableRecords
 TEST(BasicBlockDbgInfoTest, RemoveInstAndReinsert) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define i16 @f(i16 %a) !dbg !6 {
     entry:
@@ -1334,7 +1333,7 @@ TEST(BasicBlockDbgInfoTest, RemoveInstAndReinsert) {
 // Test instruction removal and re-insertion, this time with one
 // DbgVariableRecord that should hop up one instruction.
 TEST(BasicBlockDbgInfoTest, RemoveInstAndReinsertForOneDbgVariableRecord) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define i16 @f(i16 %a) !dbg !6 {
     entry:
@@ -1406,7 +1405,7 @@ TEST(BasicBlockDbgInfoTest, RemoveInstAndReinsertForOneDbgVariableRecord) {
 // transferred. The dbg.value of %a should remain at the start, but come ahead
 // of the i16 0 dbg.value.
 TEST(BasicBlockDbgInfoTest, DbgSpliceToEmpty1) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define i16 @f(i16 %a) !dbg !6 {
     entry:
@@ -1471,7 +1470,7 @@ TEST(BasicBlockDbgInfoTest, DbgSpliceToEmpty1) {
 // Similar test again, but this time: splice the contents of exit into entry,
 // with the intention of leaving the first dbg.value (i16 0) behind.
 TEST(BasicBlockDbgInfoTest, DbgSpliceToEmpty2) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define i16 @f(i16 %a) !dbg !6 {
     entry:
@@ -1540,7 +1539,7 @@ TEST(BasicBlockDbgInfoTest, DbgSpliceToEmpty2) {
 // What if we moveBefore end() -- there might be no debug-info there, in which
 // case we shouldn't crash.
 TEST(BasicBlockDbgInfoTest, DbgMoveToEnd) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define i16 @f(i16 %a) !dbg !6 {
     entry:
@@ -1585,7 +1584,7 @@ TEST(BasicBlockDbgInfoTest, DbgMoveToEnd) {
 }
 
 TEST(BasicBlockDbgInfoTest, CloneTrailingRecordsToEmptyBlock) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define i16 @foo(i16 %a) !dbg !6 {
     entry:

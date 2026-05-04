@@ -9,11 +9,14 @@
 #include "bolt/Rewrite/DWARFRewriter.h"
 #include "bolt/Core/BinaryContext.h"
 #include "bolt/Core/BinaryFunction.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
 #include "bolt/Core/DIEBuilder.h"
 #include "bolt/Core/DebugData.h"
 #include "bolt/Core/DynoStats.h"
 #include "bolt/Core/ParallelUtilities.h"
+#include "bolt/Rewrite/BoltRewriteOptionsOptInfos.h"
 #include "bolt/Rewrite/RewriteInstance.h"
+#include "bolt/Utils/CommandLineOpts.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/ADT/STLExtras.h"
@@ -37,7 +40,8 @@
 #include "llvm/MC/MCTargetOptionsCommandFlags.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Error.h"
@@ -101,7 +105,8 @@ using namespace bolt;
 
 llvm::ThreadPoolInterface &
 DWARFRewriter::getOrCreateDebugInfoThreadPool(unsigned ThreadsCount) {
-  if (opts::NoThreads || ThreadsCount == 0)
+  bool DoNoThreads = bolt::bolt_core_opts::getNoThreads(BC);
+  if (DoNoThreads || ThreadsCount == 0)
     ThreadsCount = 1;
 
   if (DebugInfoThreadPool)
@@ -342,59 +347,16 @@ using namespace bolt;
 
 namespace opts {
 
-extern cl::OptionCategory BoltCategory;
-extern cl::opt<unsigned> Verbosity;
-extern cl::opt<std::string> OutputFilename;
+extern unsigned Verbosity;
+extern std::string OutputFilename;
 
-static cl::opt<bool> KeepARanges(
-    "keep-aranges",
-    cl::desc(
-        "keep or generate .debug_aranges section if .gdb_index is written"),
-    cl::Hidden, cl::cat(BoltCategory));
+bool KeepARanges = false;
+unsigned DebugThreadCount = 32;
+std::string DwarfOutputPath = "";
+bool CreateDebugNames = false;
+bool AlwaysConvertToRanges = false;
 
-static cl::opt<unsigned>
-    DebugThreadCount("debug-thread-count",
-                     cl::desc("specifies thread count for the multithreading "
-                              "for updating DWARF debug info"),
-                     cl::init(32), cl::cat(BoltCategory));
-
-static cl::opt<bool>
-    PreserveOrder("dwarf-preserve-order",
-                  cl::desc("Update debug information in deterministic order"),
-                  cl::init(true), cl::cat(BoltCategory));
-
-static cl::opt<std::string> DwarfOutputPath(
-    "dwarf-output-path",
-    cl::desc("Path to where .dwo files will be written out to."), cl::init(""),
-    cl::cat(BoltCategory));
-
-static cl::opt<bool> CreateDebugNames(
-    "create-debug-names-section",
-    cl::desc("Creates .debug_names section, if the input binary doesn't have "
-             "it already, for DWARF5 CU/TUs."),
-    cl::init(false), cl::cat(BoltCategory));
-
-static cl::opt<bool>
-    DebugSkeletonCu("debug-skeleton-cu",
-                    cl::desc("prints out offsets for abbrev and debug_info of "
-                             "Skeleton CUs that get patched."),
-                    cl::ZeroOrMore, cl::Hidden, cl::init(false),
-                    cl::cat(BoltCategory));
-
-static cl::opt<unsigned> BatchSize(
-    "cu-processing-batch-size",
-    cl::desc(
-        "Specifies the size of batches for processing CUs. Higher number has "
-        "better performance, but more memory usage. Default value is 1."),
-    cl::Hidden, cl::init(1), cl::cat(BoltCategory));
-
-static cl::opt<bool> AlwaysConvertToRanges(
-    "always-convert-to-ranges",
-    cl::desc("This option is for testing purposes only. It forces BOLT to "
-             "convert low_pc/high_pc to ranges always."),
-    cl::ReallyHidden, cl::init(false), cl::cat(BoltCategory));
-
-extern cl::opt<std::string> CompDirOverride;
+extern std::string CompDirOverride;
 } // namespace opts
 
 /// If DW_AT_low_pc exists sets LowPC and returns true.
@@ -484,13 +446,14 @@ static std::optional<uint64_t> getAsAddress(const DWARFUnit &DU,
 static std::unique_ptr<DIEStreamer>
 createDIEStreamer(const Triple &TheTriple, raw_pwrite_stream &OutFile,
                   StringRef Swift5ReflectionSegmentName, DIEBuilder &DIEBldr,
-                  GDBIndex &GDBIndexSection) {
+                  GDBIndex &GDBIndexSection,
+                  const clv2::OptionsContext &OptsCtx) {
 
   std::unique_ptr<DIEStreamer> Streamer = std::make_unique<DIEStreamer>(
       &DIEBldr, GDBIndexSection, DWARFLinkerBase::OutputFileType::Object,
       OutFile,
       [&](const Twine &Warning, StringRef Context, const DWARFDie *) {});
-  Error Err = Streamer->init(TheTriple, Swift5ReflectionSegmentName);
+  Error Err = Streamer->init(TheTriple, Swift5ReflectionSegmentName, OptsCtx);
   if (Err)
     errs()
         << "BOLT-WARNING: [internal-dwarf-error]: Could not init DIEStreamer!"
@@ -512,7 +475,8 @@ static void emitDWOBuilder(const std::string &DWOName,
                            DebugLocWriter &LocWriter,
                            DebugStrOffsetsWriter &StrOffstsWriter,
                            DebugStrWriter &StrWriter, GDBIndex &GDBIndexSection,
-                           DebugRangesSectionWriter &TempRangesSectionWriter) {
+                           DebugRangesSectionWriter &TempRangesSectionWriter,
+                           const clv2::OptionsContext &OptsCtx) {
   // Populate debug_info and debug_abbrev for current dwo into StringRef.
   DWODIEBuilder.generateAbbrevs();
   DWODIEBuilder.finish();
@@ -524,7 +488,7 @@ static void emitDWOBuilder(const std::string &DWOName,
   auto TheTriple = std::make_unique<Triple>(File->makeTriple());
   std::unique_ptr<DIEStreamer> Streamer =
       createDIEStreamer(*TheTriple, *ObjOS, "DwoStreamerInitAug2",
-                        DWODIEBuilder, GDBIndexSection);
+                        DWODIEBuilder, GDBIndexSection, OptsCtx);
   if (SplitCU.getContext().getMaxDWOVersion() >= 5) {
     for (DWARFUnit *CU : DWODIEBuilder.getDWARF5TUVector())
       emitUnit(DWODIEBuilder, *Streamer, *CU);
@@ -642,7 +606,8 @@ static SmallVector<SmallVector<DWARFUnit *>> partitionCUs(DWARFContext &DwCtx,
 }
 
 static std::unordered_map<uint64_t, std::string>
-getDWONameMap(DWARFContext &DwCtx, const size_t Size) {
+getDWONameMap(DWARFContext &DwCtx, const size_t Size,
+              StringRef DwarfOutputPath) {
   std::unordered_map<uint64_t, std::string> DWOIDToNameMap(Size);
   std::unordered_map<std::string, uint32_t> NameToIndexMap(Size);
   for (const std::unique_ptr<DWARFUnit> &CU : DwCtx.compile_units()) {
@@ -663,7 +628,7 @@ getDWONameMap(DWARFContext &DwCtx, const size_t Size) {
     if (DWOName.empty())
       continue;
 
-    if (!opts::DwarfOutputPath.empty()) {
+    if (!DwarfOutputPath.empty()) {
       DWOName = std::string(sys::path::filename(DWOName));
       uint32_t &Index = NameToIndexMap[DWOName];
       DWOName.append(std::to_string(Index));
@@ -688,8 +653,9 @@ void DWARFRewriter::finalizeMainCUStrOffsets(
     if (HasSplitCU) {
       auto It = DWOToNameMap.find(*DWOId);
       if (It != DWOToNameMap.end()) {
+        std::string DwarfOutputPath = bolt_rewrite_opts::getDwarfOutputPath(BC);
         PartDIEBlder.updateDWONameCompDir(*StrOffstsWriter, *StrWriter, *CU,
-                                          opts::DwarfOutputPath,
+                                          DwarfOutputPath,
                                           StringRef(It->second));
         if (Version >= 5 && StrOffstsWriter->isStrOffsetsSectionModified())
           StrOffstsWriter->finalizeSection(*CU, PartDIEBlder);
@@ -929,9 +895,9 @@ void DWARFRewriter::processBucket(
     DWODIEBuilder.buildDWOUnit(SplitCU);
     DebugStrOffsetsWriter DWOStrOffstsWriter(BC);
     DebugStrWriter DWOStrWriter(SplitCU.getContext(), true);
-    DWODIEBuilder.updateDWONameCompDirForTypes(DWOStrOffstsWriter, DWOStrWriter,
-                                               SplitCU, opts::DwarfOutputPath,
-                                               DWOName);
+    std::string DwarfOutputPath = bolt_rewrite_opts::getDwarfOutputPath(BC);
+    DWODIEBuilder.updateDWONameCompDirForTypes(
+        DWOStrOffstsWriter, DWOStrWriter, SplitCU, DwarfOutputPath, DWOName);
     DebugLoclistWriter DebugLocDWoWriter(Unit, Unit.getVersion(), true,
                                          AddressWriter);
     updateUnitDebugInfo(SplitCU, DWODIEBuilder, DebugLocDWoWriter,
@@ -942,7 +908,8 @@ void DWARFRewriter::processBucket(
       TempRangesSectionWriter.finalizeSection();
     emitDWOBuilder(DWOName, DWODIEBuilder, *this, SplitCU, Unit,
                    DebugLocDWoWriter, DWOStrOffstsWriter, DWOStrWriter,
-                   GDBIndexSection, TempRangesSectionWriter);
+                   GDBIndexSection, TempRangesSectionWriter,
+                   BC.getOptionsContext());
     {
       std::lock_guard<std::mutex> Lock(DebugNamesUpdateMutex);
       DWODIEBuilder.updateDebugNamesTable();
@@ -1005,12 +972,13 @@ void DWARFRewriter::updateDebugInfo() {
   createRangeLocListAndAddressWriters();
   // If the user requested an output directory for rewritten .dwo files, make
   // sure it exists before any worker attempt to create the files.
-  if (!opts::DwarfOutputPath.empty() && !sys::fs::exists(opts::DwarfOutputPath))
-    (void)sys::fs::create_directories(opts::DwarfOutputPath);
+  std::string DwarfOutputPath = bolt_rewrite_opts::getDwarfOutputPath(BC);
+  if (!DwarfOutputPath.empty() && !sys::fs::exists(DwarfOutputPath))
+    (void)sys::fs::create_directories(DwarfOutputPath);
   std::unordered_map<uint64_t, std::string> DWOToNameMap =
-      getDWONameMap(*BC.DwCtx, CUSize);
-  DWARF5AcceleratorTable DebugNamesTable(opts::CreateDebugNames, BC,
-                                         *StrWriter);
+      getDWONameMap(*BC.DwCtx, CUSize, DwarfOutputPath);
+  bool CreateDebugNames = bolt_rewrite_opts::getCreateDebugNamesSection(BC);
+  DWARF5AcceleratorTable DebugNamesTable(CreateDebugNames, BC, *StrWriter);
   if (DebugNamesTable.isCreated())
     DebugNamesTable.preAllocateUnits(*BC.DwCtx);
   GDBIndex GDBIndexSection(BC);
@@ -1021,14 +989,16 @@ void DWARFRewriter::updateDebugInfo() {
       std::make_unique<raw_svector_ostream>(OutBuffer);
   const object::ObjectFile *File = BC.DwCtx->getDWARFObj().getFile();
   auto TheTriple = std::make_unique<Triple>(File->makeTriple());
-  std::unique_ptr<DIEStreamer> Streamer = createDIEStreamer(
-      *TheTriple, *ObjOS, "TypeStreamer", DIEBlder, GDBIndexSection);
+  std::unique_ptr<DIEStreamer> Streamer =
+      createDIEStreamer(*TheTriple, *ObjOS, "TypeStreamer", DIEBlder,
+                        GDBIndexSection, BC.getOptionsContext());
   CUOffsetMap OffsetMap =
       finalizeTypeSections(DIEBlder, *Streamer, GDBIndexSection);
   SmallVector<SmallVector<DWARFUnit *>> PartVec =
       partitionCUs(*BC.DwCtx, CUSize);
-  const unsigned int ThreadCount =
-      std::min(opts::DebugThreadCount, opts::ThreadCount);
+  unsigned DebugThreadCount = bolt_rewrite_opts::getDebugThreadCount(BC);
+  unsigned DoThreadCount = bolt::bolt_core_opts::getThreadCount(BC);
+  const unsigned int ThreadCount = std::min(DebugThreadCount, DoThreadCount);
   llvm::ThreadPoolInterface &ThreadPool =
       getOrCreateDebugInfoThreadPool(ThreadCount);
   std::vector<BucketLocalWriter> LocalWriters(PartVec.size());
@@ -1073,7 +1043,8 @@ void DWARFRewriter::updateDebugInfo() {
       {
         std::lock_guard<std::mutex> Lock(MergeQueueMutex);
         BucketDone[I] = 1;
-        if (!opts::PreserveOrder)
+        bool DoPreserveOrder = bolt_rewrite_opts::getDwarfPreserveOrder(BC);
+        if (!DoPreserveOrder)
           MergeQueue.push(I);
       }
       // Only the merge thread waits on the CV and it waits on a specific
@@ -1088,7 +1059,8 @@ void DWARFRewriter::updateDebugInfo() {
     size_t ProcessIndex;
     {
       std::unique_lock<std::mutex> Lock(MergeQueueMutex);
-      if (opts::PreserveOrder) {
+      bool DoPreserveOrder2 = bolt_rewrite_opts::getDwarfPreserveOrder(BC);
+      if (DoPreserveOrder2) {
         MergeQueueCV.wait(Lock, [&] { return BucketDone[Idx] != 0; });
         ProcessIndex = Idx;
       } else {
@@ -1112,6 +1084,7 @@ void DWARFRewriter::updateUnitDebugInfo(
     DWARFUnit &Unit, DIEBuilder &DIEBldr, DebugLocWriter &DebugLocWriter,
     DebugRangesSectionWriter &RangesSectionWriter,
     DebugAddrWriter &AddressWriter, std::optional<uint64_t> RangesBase) {
+  bool AlwaysConvertToRanges = bolt_rewrite_opts::getAlwaysConvertToRanges(BC);
   // Cache debug ranges so that the offset for identical ranges could be reused.
   std::map<DebugAddressRangesVector, uint64_t> CachedRanges;
 
@@ -1242,7 +1215,7 @@ void DWARFRewriter::updateUnitDebugInfo(
           FunctionRanges.push_back({0, 1});
       }
 
-      if (FunctionRanges.size() == 1 && !opts::AlwaysConvertToRanges) {
+      if (FunctionRanges.size() == 1 && !AlwaysConvertToRanges) {
         updateLowPCHighPC(Die, LowPCVal, HighPCVal, FunctionRanges.back().LowPC,
                           FunctionRanges.back().HighPC);
         break;
@@ -1274,7 +1247,7 @@ void DWARFRewriter::updateUnitDebugInfo(
                  << Twine::utohexstr(Die->getOffset()) << " in CU at 0x"
                  << Twine::utohexstr(Unit.getOffset()) << '\n';
         });
-        if (opts::AlwaysConvertToRanges || OutputRanges.size() > 1) {
+        if (AlwaysConvertToRanges || OutputRanges.size() > 1) {
           RangesSectionOffset = RangesSectionWriter.addRanges(
               std::move(OutputRanges), CachedRanges);
           OutputRanges.clear();
@@ -1585,7 +1558,7 @@ void DWARFRewriter::updateUnitDebugInfo(
                                  LowPCAttrInfo.getForm(),
                                  DIEInteger(NewAddress));
           }
-        } else if (opts::Verbosity >= 1) {
+        } else if (opts::getVerbosity(BC) >= 1) {
           errs() << "BOLT-WARNING: unexpected form value for attribute "
                     "LowPCAttrInfo\n";
         }
@@ -1685,7 +1658,7 @@ void DWARFRewriter::updateDWARFObjectAddressRanges(
                                   RangesBase);
   } else if (!(Unit.isDWOUnit() &&
                Die.getTag() == dwarf::DW_TAG_compile_unit)) {
-    if (opts::Verbosity >= 1)
+    if (opts::getVerbosity(BC) >= 1)
       errs() << "BOLT-WARNING: cannot update ranges for DIE in Unit offset 0x"
              << Twine::utohexstr(Unit.getOffset()) << '\n';
   }
@@ -1795,8 +1768,9 @@ CUOffsetMap DWARFRewriter::finalizeTypeSections(DIEBuilder &DIEBlder,
       std::make_shared<raw_svector_ostream>(OutBuffer);
   const object::ObjectFile *File = BC.DwCtx->getDWARFObj().getFile();
   auto TheTriple = std::make_unique<Triple>(File->makeTriple());
-  std::unique_ptr<DIEStreamer> TypeStreamer = createDIEStreamer(
-      *TheTriple, *ObjOS, "TypeStreamer", DIEBlder, GDBIndexSection);
+  std::unique_ptr<DIEStreamer> TypeStreamer =
+      createDIEStreamer(*TheTriple, *ObjOS, "TypeStreamer", DIEBlder,
+                        GDBIndexSection, BC.getOptionsContext());
 
   // generate debug_info and CUMap
   CUOffsetMap CUMap;
@@ -1926,12 +1900,13 @@ void DWARFRewriter::finalizeDebugSections(
   }
 
   // Skip .debug_aranges if we are re-generating .gdb_index.
-  if (opts::KeepARanges || !BC.getGdbIndexSection()) {
+  bool KeepARanges = bolt_rewrite_opts::getKeepAranges(BC);
+  if (KeepARanges || !BC.getGdbIndexSection()) {
     SmallVector<char, 16> ARangesBuffer;
     raw_svector_ostream OS(ARangesBuffer);
 
     auto MAB = std::unique_ptr<MCAsmBackend>(
-        BC.TheTarget->createMCAsmBackend(*BC.STI, *BC.MRI, MCTargetOptions()));
+        BC.TheTarget->createMCAsmBackend(*BC.STI, *BC.MRI, *BC.MCOptions));
 
     ARangesSectionWriter->writeARangesSection(OS, CUMap);
     const StringRef &ARangesContents = OS.str();
@@ -2030,14 +2005,15 @@ void DWARFRewriter::finalizeCompileUnits(DIEBuilder &DIEBlder,
 namespace {
 
 std::unique_ptr<BinaryContext>
-createDwarfOnlyBC(const object::ObjectFile &File) {
+createDwarfOnlyBC(const object::ObjectFile &File,
+                  clv2::OptionsContext *OptsCtx = nullptr) {
   return cantFail(BinaryContext::createBinaryContext(
       File.makeTriple(), std::make_shared<orc::SymbolStringPool>(),
       File.getFileName(), nullptr, false,
       DWARFContext::create(File, DWARFContext::ProcessDebugRelocations::Ignore,
                            nullptr, "", WithColor::defaultErrorHandler,
                            WithColor::defaultWarningHandler),
-      {llvm::outs(), llvm::errs()}));
+      {llvm::outs(), llvm::errs()}, OptsCtx));
 }
 
 StringMap<DWARFRewriter::KnownSectionsEntry>
@@ -2266,12 +2242,16 @@ void DWARFRewriter::writeDWOFiles(
   std::string CompDir = CU.getCompilationDir();
   SmallString<16> AbsolutePath(DWOName);
 
-  if (!opts::DwarfOutputPath.empty())
-    CompDir = opts::DwarfOutputPath.c_str();
-  else if (!opts::CompDirOverride.empty())
-    CompDir = opts::CompDirOverride;
-  else if (!sys::fs::exists(CompDir))
-    CompDir = ".";
+  std::string DwarfOutputPath = bolt_rewrite_opts::getDwarfOutputPath(BC);
+  if (!DwarfOutputPath.empty()) {
+    CompDir = DwarfOutputPath;
+  } else {
+    std::string CompDirOvr = bolt_core_opts::getCompDirOverride(BC);
+    if (!CompDirOvr.empty())
+      CompDir = CompDirOvr;
+    else if (!sys::fs::exists(CompDir))
+      CompDir = ".";
+  }
   // Prevent failures when DWOName is already an absolute path.
   sys::path::make_absolute(CompDir, AbsolutePath);
 
@@ -2285,7 +2265,8 @@ void DWARFRewriter::writeDWOFiles(
 
   const object::ObjectFile *File =
       (*DWOCU)->getContext().getDWARFObj().getFile();
-  std::unique_ptr<BinaryContext> TmpBC = createDwarfOnlyBC(*File);
+  std::unique_ptr<BinaryContext> TmpBC =
+      createDwarfOnlyBC(*File, &BC.getOptionsContext());
   std::unique_ptr<MCStreamer> Streamer = TmpBC->createStreamer(TempOut->os());
   const MCObjectFileInfo &MCOFI = *Streamer->getContext().getObjectFileInfo();
   StringMap<KnownSectionsEntry> KnownSections = createKnownSectionsMap(MCOFI);

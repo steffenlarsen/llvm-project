@@ -21,21 +21,14 @@
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
 
 using namespace llvm;
 
-cl::opt<CompactBranchPolicy> MipsCompactBranchPolicy(
-    "mips-compact-branches", cl::Optional, cl::init(CB_Optimal),
-    cl::desc("MIPS Specific: Compact branch policy."),
-    cl::values(clEnumValN(CB_Never, "never",
-                          "Do not use compact branches if possible."),
-               clEnumValN(CB_Optimal, "optimal",
-                          "Use compact branches where appropriate (default)."),
-               clEnumValN(CB_Always, "always",
-                          "Always use compact branches if possible.")));
+CompactBranchPolicy MipsCompactBranchPolicy = CB_Optimal;
 
 #define DEBUG_TYPE "mips-subtarget"
 
@@ -45,29 +38,63 @@ cl::opt<CompactBranchPolicy> MipsCompactBranchPolicy(
 
 // FIXME: Maybe this should be on by default when Mips16 is specified
 //
-static cl::opt<bool>
-    Mixed16_32("mips-mixed-16-32", cl::init(false),
-               cl::desc("Allow for a mixture of Mips16 "
-                        "and Mips32 code in a single output file"),
-               cl::Hidden);
+static bool getMixed16_32(const Function &F) {
+  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_Mixed16_32>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<bool> Mips_Os16("mips-os16", cl::init(false),
-                               cl::desc("Compile all functions that don't use "
-                                        "floating point as Mips 16"),
-                               cl::Hidden);
+static bool getMixed16_32(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_Mixed16_32>(Ctx,
+                                                                       false);
+}
 
-static cl::opt<bool> Mips16HardFloat("mips16-hard-float", cl::NotHidden,
-                                     cl::desc("Enable mips16 hard float."),
-                                     cl::init(false));
+static bool getMips_Os16(const Function &F) {
+  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_Os16>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<bool>
-    Mips16ConstantIslands("mips16-constant-islands", cl::NotHidden,
-                          cl::desc("Enable mips16 constant islands."),
-                          cl::init(true));
+static bool getMips_Os16(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_Os16>(Ctx, false);
+}
 
-static cl::opt<bool>
-    GPOpt("mgpopt", cl::Hidden,
-          cl::desc("Enable gp-relative addressing of mips small data items"));
+static bool getMips16HardFloat(const Function &F) {
+  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_Mips16HardFloat>(
+      F.getContext().getOptionsContext(), false);
+}
+
+static bool getMips16HardFloat(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_Mips16HardFloat>(
+      Ctx, false);
+}
+
+static bool getMips16ConstantIslands(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::MIPS_Mips16ConstantIslands>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getGPOpt(const Function &F) {
+  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_GPOpt>(
+      F.getContext().getOptionsContext(), false);
+}
+
+static bool getGPOpt(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_GPOpt>(Ctx, false);
+}
+
+static CompactBranchPolicy getMipsCompactBranchPolicy(const Function &F) {
+  if (auto *O =
+          clv2::getView<&clv2::MipsOptsReg>(F.getContext().getOptionsContext()))
+    return static_cast<CompactBranchPolicy>(
+        O->get<&clv2::MIPS_CompactBranchPolicy>());
+  return MipsCompactBranchPolicy;
+}
+
+static CompactBranchPolicy
+getMipsCompactBranchPolicy(const clv2::OptionsContext &Ctx) {
+  return static_cast<CompactBranchPolicy>(
+      clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_CompactBranchPolicy>(
+          Ctx, MipsCompactBranchPolicy));
+}
 
 bool MipsSubtarget::DspWarningPrinted = false;
 bool MipsSubtarget::MSAWarningPrinted = false;
@@ -80,26 +107,35 @@ void MipsSubtarget::anchor() {}
 
 MipsSubtarget::MipsSubtarget(const Triple &TT, StringRef CPU, StringRef FS,
                              bool little, const MipsTargetMachine &TM,
-                             MaybeAlign StackAlignOverride)
-    : MipsGenSubtargetInfo(TT, CPU, /*TuneCPU*/ CPU, FS),
+                             MaybeAlign StackAlignOverride, const Function *F)
+    : MipsGenSubtargetInfo(TT, CPU, /*TuneCPU*/ CPU, FS,
+                           TM.getOptionsContext()),
       MipsArchVersion(MipsDefault), IsLittle(little), IsSoftFloat(false),
       IsSingleFloat(false), IsFPXX(false), NoABICalls(false), Abs2008(false),
       IsFP64bit(false), UseOddSPReg(true), IsNaN2008bit(false),
       IsGP64bit(false), HasVFPU(false), HasCnMips(false), HasCnMipsP(false),
       IsR5900(false), FixR5900(false), HasMips3_32(false), HasMips3_32r2(false),
       HasMips4_32(false), HasMips4_32r2(false), HasMips5_32r2(false),
-      InMips16Mode(false), InMips16HardFloat(Mips16HardFloat),
+      InMips16Mode(false),
+      InMips16HardFloat(F ? getMips16HardFloat(*F)
+                          : getMips16HardFloat(TM.getOptionsContext())),
       InMicroMipsMode(false), HasDSP(false), HasDSPR2(false), HasDSPR3(false),
-      AllowMixed16_32(Mixed16_32 || Mips_Os16), Os16(Mips_Os16), HasMSA(false),
-      UseTCCInDIV(false), HasSym32(false), HasEVA(false), DisableMadd4(false),
-      HasMT(false), HasCRC(false), HasVirt(false), HasGINV(false),
-      UseIndirectJumpsHazard(false), StrictAlign(false),
-      UseCompactBranches(MipsCompactBranchPolicy != CB_Never),
+      AllowMixed16_32(F ? (getMixed16_32(*F) || getMips_Os16(*F))
+                        : (getMixed16_32(TM.getOptionsContext()) ||
+                           getMips_Os16(TM.getOptionsContext()))),
+      Os16(F ? getMips_Os16(*F) : getMips_Os16(TM.getOptionsContext())),
+      HasMSA(false), UseTCCInDIV(false), HasSym32(false), HasEVA(false),
+      DisableMadd4(false), HasMT(false), HasCRC(false), HasVirt(false),
+      HasGINV(false), UseIndirectJumpsHazard(false), StrictAlign(false),
+      UseCompactBranches(
+          F ? getMipsCompactBranchPolicy(*F) != CB_Never
+            : getMipsCompactBranchPolicy(TM.getOptionsContext()) != CB_Never),
       StackAlignOverride(StackAlignOverride), TM(TM), TargetTriple(TT),
       InstrInfo(
           MipsInstrInfo::create(initializeSubtargetDependencies(CPU, FS, TM))),
       FrameLowering(MipsFrameLowering::create(*this)),
       TLInfo(MipsTargetLowering::create(TM, *this)) {
+  setOptionsContext(TM.getOptionsContext());
 
   if (MipsArchVersion == MipsDefault)
     MipsArchVersion = Mips32;
@@ -172,8 +208,8 @@ MipsSubtarget::MipsSubtarget(const Triple &TT, StringRef CPU, StringRef FS,
     NoABICalls = true;
 
   // Set UseSmallSection.
-  UseSmallSection = GPOpt;
-  if (!NoABICalls && GPOpt) {
+  UseSmallSection = F ? getGPOpt(*F) : getGPOpt(TM.getOptionsContext());
+  if (!NoABICalls && UseSmallSection) {
     errs() << "warning: cannot use small-data accesses for '-mabicalls'"
            << "\n";
     UseSmallSection = false;
@@ -279,10 +315,10 @@ MipsSubtarget::initializeSubtargetDependencies(StringRef CPU, StringRef FS,
   return *this;
 }
 
-bool MipsSubtarget::useConstantIslands() {
-  LLVM_DEBUG(dbgs() << "use constant islands " << Mips16ConstantIslands
+bool MipsSubtarget::useConstantIslands(const Function &F) {
+  LLVM_DEBUG(dbgs() << "use constant islands " << getMips16ConstantIslands(F)
                     << "\n");
-  return Mips16ConstantIslands;
+  return getMips16ConstantIslands(F);
 }
 
 Reloc::Model MipsSubtarget::getRelocationModel() const {

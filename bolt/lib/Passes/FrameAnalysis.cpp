@@ -11,9 +11,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Passes/FrameAnalysis.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
 #include "bolt/Core/CallGraphWalker.h"
 #include "bolt/Core/ParallelUtilities.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Timer.h"
 #include <fstream>
 #include <stack>
@@ -21,39 +24,39 @@
 #define DEBUG_TYPE "fa"
 
 using namespace llvm;
+using namespace bolt::bolt_passes_opts;
 
 namespace opts {
-extern cl::OptionCategory BoltOptCategory;
-extern cl::opt<unsigned> Verbosity;
+extern unsigned Verbosity;
+} // namespace opts
 
-static cl::list<std::string>
-    FrameOptFunctionNames("funcs-fop", cl::CommaSeparated,
-                          cl::desc("list of functions to apply frame opts"),
-                          cl::value_desc("func1,func2,func3,..."));
+namespace llvm {
+namespace bolt {
 
-static cl::opt<std::string> FrameOptFunctionNamesFile(
-    "funcs-file-fop",
-    cl::desc("file with list of functions to frame optimize"));
-
-static cl::opt<bool> TimeFA("time-fa", cl::desc("time frame analysis steps"),
-                            cl::ReallyHidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-    ExperimentalSW("experimental-shrink-wrapping",
-                   cl::desc("process functions with stack pointer arithmetic"),
-                   cl::ReallyHidden, cl::ZeroOrMore, cl::cat(BoltOptCategory));
-
-bool shouldFrameOptimize(const llvm::bolt::BinaryFunction &Function) {
+bool shouldFrameOptimize(const BinaryFunction &Function) {
   if (Function.hasUnknownControlFlow())
     return false;
 
+  const auto &BC = Function.getBinaryContext();
+  auto *Opts = bolt_passes_opts::getBoltPassesOpts(BC.getOptionsContext());
+
+  std::vector<std::string> FrameOptFunctionNames;
+  if (Opts) {
+    auto FN = Opts->get<&clv2::BOLTPASS_FrameOptFunctionNames>();
+    if (!FN.empty())
+      FrameOptFunctionNames = {FN};
+  }
+
+  std::string FrameOptFunctionNamesFile;
+  if (Opts)
+    FrameOptFunctionNamesFile =
+        Opts->get<&clv2::BOLTPASS_FrameOptFunctionNamesFile>();
+
   if (!FrameOptFunctionNamesFile.empty()) {
-    assert(!FrameOptFunctionNamesFile.empty() && "unexpected empty file name");
     std::ifstream FuncsFile(FrameOptFunctionNamesFile, std::ios::in);
     std::string FuncName;
     while (std::getline(FuncsFile, FuncName))
       FrameOptFunctionNames.push_back(FuncName);
-    FrameOptFunctionNamesFile = "";
   }
 
   if (FrameOptFunctionNames.empty())
@@ -62,10 +65,6 @@ bool shouldFrameOptimize(const llvm::bolt::BinaryFunction &Function) {
     return Function.hasName(Name);
   });
 }
-} // namespace opts
-
-namespace llvm {
-namespace bolt {
 
 raw_ostream &operator<<(raw_ostream &OS, const FrameIndexEntry &FIE) {
   OS << "FrameIndexEntry<IsLoad: " << FIE.IsLoad << ", IsStore: " << FIE.IsStore
@@ -215,7 +214,8 @@ public:
 
     if (BC.MIB->escapesVariable(Inst, SPT.HasFramePointer)) {
       EscapesStackAddress = true;
-      if (!opts::ExperimentalSW) {
+      const bool ExperimentalSW = getExperimentalShrinkWrapping(BC);
+      if (!ExperimentalSW) {
         LLVM_DEBUG(
             dbgs() << "Leaked stack address, giving up on this function.\n");
         LLVM_DEBUG(dbgs() << "Blame insn: ");
@@ -293,7 +293,7 @@ FrameAnalysis::getFIEFor(const MCInst &Inst) const {
 }
 
 void FrameAnalysis::traverseCG(BinaryFunctionCallGraph &CG) {
-  CallGraphWalker CGWalker(CG);
+  CallGraphWalker CGWalker(CG, BC.getOptionsContext());
 
   CGWalker.registerVisitor(
       [&](BinaryFunction *Func) -> bool { return computeArgsAccessed(*Func); });
@@ -499,8 +499,9 @@ bool FrameAnalysis::restoreFrameIndex(BinaryFunction &BF) {
 }
 
 void FrameAnalysis::cleanAnnotations() {
+  const bool TimeFA = getTimeFa(BC);
   NamedRegionTimer T("cleanannotations", "clean annotations", "FA",
-                     "FA breakdown", opts::TimeFA);
+                     "FA breakdown", TimeFA);
 
   ParallelUtilities::WorkFuncTy CleanFunction = [&](BinaryFunction &BF) {
     for (BinaryBasicBlock &BB : BF) {
@@ -518,19 +519,22 @@ void FrameAnalysis::cleanAnnotations() {
 
 FrameAnalysis::FrameAnalysis(BinaryContext &BC, BinaryFunctionCallGraph &CG)
     : BC(BC) {
+  const bool TimeFA = getTimeFa(BC);
+
   // Position 0 of the vector should be always associated with "assume access
   // everything".
   ArgAccessesVector.emplace_back(ArgAccesses(/*AssumeEverything*/ true));
 
-  if (!opts::NoThreads) {
+  bool DoNoThreads = bolt_core_opts::getNoThreads(BC);
+  if (!DoNoThreads) {
     NamedRegionTimer T1("precomputespt", "pre-compute spt", "FA",
-                        "FA breakdown", opts::TimeFA);
+                        "FA breakdown", TimeFA);
     preComputeSPT();
   }
 
   {
     NamedRegionTimer T1("traversecg", "traverse call graph", "FA",
-                        "FA breakdown", opts::TimeFA);
+                        "FA breakdown", TimeFA);
     traverseCG(CG);
   }
 
@@ -539,14 +543,14 @@ FrameAnalysis::FrameAnalysis(BinaryContext &BC, BinaryFunctionCallGraph &CG)
 
     // "shouldOptimize" for passes that run after finalize
     if (!(I.second.isSimple() && I.second.hasCFG() && !I.second.isIgnored()) ||
-        !opts::shouldFrameOptimize(I.second)) {
+        !shouldFrameOptimize(I.second)) {
       ++NumFunctionsNotOptimized;
       continue;
     }
 
     {
       NamedRegionTimer T1("restorefi", "restore frame index", "FA",
-                          "FA breakdown", opts::TimeFA);
+                          "FA breakdown", TimeFA);
       if (!restoreFrameIndex(I.second)) {
         ++NumFunctionsFailedRestoreFI;
         CountFunctionsFailedRestoreFI += I.second.getFunctionScore();
@@ -557,8 +561,7 @@ FrameAnalysis::FrameAnalysis(BinaryContext &BC, BinaryFunctionCallGraph &CG)
   }
 
   {
-    NamedRegionTimer T1("clearspt", "clear spt", "FA", "FA breakdown",
-                        opts::TimeFA);
+    NamedRegionTimer T1("clearspt", "clear spt", "FA", "FA breakdown", TimeFA);
     clearSPTMap();
   }
 }
@@ -575,7 +578,8 @@ void FrameAnalysis::printStats() {
 }
 
 void FrameAnalysis::clearSPTMap() {
-  if (opts::NoThreads) {
+  bool DoNoThreads = bolt_core_opts::getNoThreads(BC);
+  if (DoNoThreads) {
     SPTMap.clear();
     return;
   }

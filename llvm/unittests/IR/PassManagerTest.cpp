@@ -178,7 +178,7 @@ std::unique_ptr<Module> parseIR(LLVMContext &Context, const char *IR) {
 
 class PassManagerTest : public ::testing::Test {
 protected:
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
 
 public:
@@ -698,7 +698,8 @@ private:
 AnalysisKey TestDoublyIndirectFunctionAnalysis::Key;
 
 struct LambdaPass : public OptionalPassInfoMixin<LambdaPass> {
-  using FuncT = std::function<PreservedAnalyses(Function &, FunctionAnalysisManager &)>;
+  using FuncT =
+      std::function<PreservedAnalyses(Function &, FunctionAnalysisManager &)>;
 
   LambdaPass(FuncT Func) : Func(std::move(Func)) {}
 
@@ -817,7 +818,7 @@ TEST_F(PassManagerTest, IndirectAnalysisInvalidation) {
 // Run SimplifyCFGPass that makes CFG changes and reports PreservedAnalyses
 // without CFGAnalyses. So the CFGChecker does not complain.
 TEST_F(PassManagerTest, FunctionPassCFGChecker) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   // SimplifyCFG changes this function to
   // define void @foo {next: ret void}
   auto M = parseIR(Context, "define void @foo() {\n"
@@ -866,7 +867,7 @@ struct TestSimplifyCFGInvalidatingAnalysisPass
 // PreservedAnalyses::all(). CFGChecker does not complain because it resets
 // its saved CFG snapshot when the analyses are invalidated manually.
 TEST_F(PassManagerTest, FunctionPassCFGCheckerInvalidateAnalysis) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   // SimplifyCFG changes this function to
   // define void @foo {next: ret void}
   auto M = parseIR(Context, "define void @foo() {\n"
@@ -935,7 +936,7 @@ struct TestSimplifyCFGWrapperPass
 // preserved but there is no CFG snapshot available (i.e.
 // AM.getCachedResult<PreservedCFGCheckerAnalysis>(F) returns nullptr).
 TEST_F(PassManagerTest, FunctionPassCFGCheckerWrapped) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   // SimplifyCFG changes this function to
   // define void @foo {next: ret void}
   auto M = parseIR(Context, "define void @foo() {\n"
@@ -978,7 +979,7 @@ struct WrongFunctionPass : OptionalPassInfoMixin<WrongFunctionPass> {
 };
 
 TEST_F(PassManagerTest, FunctionPassMissedFunctionAnalysisInvalidation) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   auto M = parseIR(Context, "define void @foo() {\n"
                             "  %a = add i32 0, 0\n"
                             "  ret void\n"
@@ -998,7 +999,8 @@ TEST_F(PassManagerTest, FunctionPassMissedFunctionAnalysisInvalidation) {
   FPM.addPass(WrongFunctionPass());
 
   auto *F = M->getFunction("foo");
-  EXPECT_DEATH(FPM.run(*F, FAM), "Function @foo changed by WrongFunctionPass without invalidating analyses");
+  EXPECT_DEATH(FPM.run(*F, FAM), "Function @foo changed by WrongFunctionPass "
+                                 "without invalidating analyses");
 }
 
 struct WrongModulePass : OptionalPassInfoMixin<WrongModulePass> {
@@ -1015,7 +1017,7 @@ struct WrongModulePass : OptionalPassInfoMixin<WrongModulePass> {
 };
 
 TEST_F(PassManagerTest, ModulePassMissedFunctionAnalysisInvalidation) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   auto M = parseIR(Context, "define void @foo() {\n"
                             "  %a = add i32 0, 0\n"
                             "  ret void\n"
@@ -1053,7 +1055,7 @@ struct WrongModulePass2 : OptionalPassInfoMixin<WrongModulePass2> {
 };
 
 TEST_F(PassManagerTest, ModulePassMissedModuleAnalysisInvalidation) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   auto M = parseIR(Context, "define void @foo() {\n"
                             "  %a = add i32 0, 0\n"
                             "  ret void\n"
@@ -1078,4 +1080,4 @@ TEST_F(PassManagerTest, ModulePassMissedModuleAnalysisInvalidation) {
 }
 
 #endif
-}
+} // namespace
