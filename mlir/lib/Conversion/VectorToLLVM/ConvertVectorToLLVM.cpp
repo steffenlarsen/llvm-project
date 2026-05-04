@@ -75,7 +75,7 @@ LogicalResult getVectorAlignment(const LLVMTypeConverter &typeConverter,
   if (!convertedVectorTy)
     return failure();
 
-  llvm::LLVMContext llvmContext;
+  llvm::LLVMContext llvmContext(llvm::clv2::defaultOptionsContext());
   align = LLVM::TypeToLLVMIRTranslator(llvmContext)
               .getPreferredAlignment(convertedVectorTy,
                                      typeConverter.getDataLayout());
@@ -92,7 +92,7 @@ LogicalResult getMemRefAlignment(const LLVMTypeConverter &typeConverter,
 
   // TODO: this should use the MLIR data layout when it becomes available and
   // stop depending on translation.
-  llvm::LLVMContext llvmContext;
+  llvm::LLVMContext llvmContext(llvm::clv2::defaultOptionsContext());
   align = LLVM::TypeToLLVMIRTranslator(llvmContext)
               .getPreferredAlignment(elementTy, typeConverter.getDataLayout());
   return success();

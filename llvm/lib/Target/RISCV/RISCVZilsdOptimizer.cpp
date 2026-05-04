@@ -36,8 +36,9 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
 #include <algorithm>
 
 using namespace llvm;
@@ -47,13 +48,17 @@ using namespace llvm;
 STATISTIC(NumLDFormed, "Number of LD instructions formed");
 STATISTIC(NumSDFormed, "Number of SD instructions formed");
 
-static cl::opt<bool>
-    DisableZilsdOpt("disable-riscv-zilsd-opt", cl::Hidden, cl::init(false),
-                    cl::desc("Disable Zilsd load/store optimization"));
+static unsigned MaxRescheduleDistance = 10;
 
-static cl::opt<unsigned> MaxRescheduleDistance(
-    "riscv-zilsd-max-reschedule-distance", cl::Hidden, cl::init(10),
-    cl::desc("Maximum distance for rescheduling load/store instructions"));
+static bool getDisableZilsdOpt(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::RV_DisableZilsdOpt>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getMaxRescheduleDistance(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::RV_ZilsdMaxRescheduleDistance>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -130,7 +135,7 @@ INITIALIZE_PASS_END(RISCVPreAllocZilsdOpt, "riscv-prera-zilsd-opt",
 
 bool RISCVPreAllocZilsdOpt::runOnMachineFunction(MachineFunction &MF) {
 
-  if (DisableZilsdOpt || skipFunction(MF.getFunction()))
+  if (getDisableZilsdOpt(MF.getFunction()) || skipFunction(MF.getFunction()))
     return false;
 
   STI = &MF.getSubtarget<RISCVSubtarget>();
@@ -334,7 +339,7 @@ bool RISCVPreAllocZilsdOpt::rescheduleOps(
     unsigned Distance = MI1IsLater ? MI2LocMap[MI1] - MI2LocMap[MI0]
                                    : MI2LocMap[MI0] - MI2LocMap[MI1];
     if (!isSafeToMove(MoveInstr, TargetInstr, !IsLoad) ||
-        Distance > MaxRescheduleDistance)
+        Distance > getMaxRescheduleDistance(MBB->getParent()->getFunction()))
       continue;
 
     // Move the instruction to the target position

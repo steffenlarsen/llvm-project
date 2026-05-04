@@ -52,7 +52,8 @@ static MCInstrInfo *createAArch64MCInstrInfo() {
 }
 
 static MCSubtargetInfo *
-createAArch64MCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
+createAArch64MCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                             const clv2::OptionsContext &Ctx) {
   CPU = AArch64::resolveCPUAlias(CPU);
 
   if (CPU.empty()) {
@@ -64,7 +65,11 @@ createAArch64MCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
       CPU = "apple-a12";
   }
 
-  return createAArch64MCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+  MCSubtargetInfo *STI =
+      createAArch64MCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+  if (STI)
+    STI->setOptionsContext(Ctx);
+  return STI;
 }
 
 void AArch64_MC::initLLVMToCVRegMapping(MCRegisterInfo *MRI) {

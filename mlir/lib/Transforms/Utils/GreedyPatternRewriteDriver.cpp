@@ -183,7 +183,7 @@ static Operation *getDumpRootOp(Operation *op) {
 }
 static void logSuccessfulFolding(Operation *op) {
   LDBG() << "// *** IR Dump After Successful Folding ***\n"
-         << OpWithFlags(op, OpPrintingFlags().elideLargeElementsAttrs());
+         << OpWithFlags(op, opPrintingFlags(op).elideLargeElementsAttrs());
 }
 #endif // NDEBUG
 
@@ -477,7 +477,7 @@ bool GreedyPatternRewriteDriver::processWorklist() {
       if (op->getNumRegions() == 0) {
         op->print(
             logger.startLine(),
-            OpPrintingFlags().printGenericOpForm().elideLargeElementsAttrs());
+            opPrintingFlags(op).printGenericOpForm().elideLargeElementsAttrs());
         logger.getOStream() << "\n\n";
       }
     });

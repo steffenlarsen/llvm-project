@@ -11,6 +11,7 @@
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/DXILABI.h"
+#include "llvm/Support/OptionsContext.h"
 #include "gtest/gtest.h"
 #include <cstdint>
 
@@ -25,9 +26,9 @@ protected:
   LLVMContext *Context;
 
   virtual void SetUp() {
-    PB = new PassBuilder();
+    PB = new PassBuilder(llvm::clv2::defaultOptionsContext());
     MAM = new ModuleAnalysisManager();
-    Context = new LLVMContext();
+    Context = new LLVMContext(llvm::clv2::defaultOptionsContext());
     PB->registerModuleAnalyses(*MAM);
     MAM->registerPass([&] { return DXILResourceBindingAnalysis(); });
   }

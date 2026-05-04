@@ -12,13 +12,15 @@
 
 #include "polly/ManualOptimizer.h"
 #include "polly/DependenceInfo.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScheduleTreeTransform.h"
+#include "polly/ScopInfo.h"
 #include "polly/Support/ScopHelper.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/IR/Metadata.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include <optional>
 
@@ -29,11 +31,6 @@ using namespace polly;
 using namespace llvm;
 
 namespace {
-
-static cl::opt<bool> IgnoreDepcheck(
-    "polly-pragma-ignore-depcheck",
-    cl::desc("Skip the dependency check for pragma-based transformations"),
-    cl::cat(PollyCategory));
 
 /// Same as llvm::hasUnrollTransformation(), but takes a LoopID as argument
 /// instead of a Loop.
@@ -163,6 +160,11 @@ private:
     POLLY_DEBUG(dbgs() << "Dependency violation detected\n");
 
     DebugLoc TransformLoc = findTransformationDebugLoc(LoopMD, DebugLocAttr);
+
+    bool IgnoreDepcheck = false;
+    if (auto *Opts = polly_opts::getPollyOpts(
+            S->getFunction().getContext().getOptionsContext()))
+      IgnoreDepcheck = Opts->get<&llvm::clv2::POLLY_PragmaIgnoreDepcheck>();
 
     if (IgnoreDepcheck) {
       POLLY_DEBUG(dbgs() << "Still accepting transformation due to "

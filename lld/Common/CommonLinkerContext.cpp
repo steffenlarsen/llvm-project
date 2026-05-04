@@ -11,6 +11,7 @@
 #include "lld/Common/Memory.h"
 
 #include "llvm/CodeGen/CommandFlags.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 using namespace lld;

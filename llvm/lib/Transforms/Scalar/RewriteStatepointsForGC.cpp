@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- RewriteStatepointsForGC.cpp - Make GC relocations explicit ---------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -55,7 +57,6 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -78,37 +79,50 @@
 using namespace llvm;
 
 // Print the liveset found at the insert location
-static cl::opt<bool> PrintLiveSet("spp-print-liveset", cl::Hidden,
-                                  cl::init(false));
-static cl::opt<bool> PrintLiveSetSize("spp-print-liveset-size", cl::Hidden,
-                                      cl::init(false));
+static bool getPrintLiveSet(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SppPrintLiveset>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool getPrintLiveSetSize(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SppPrintLivesetSize>(
+      F.getContext().getOptionsContext(), false);
+}
 
 // Print out the base pointers for debugging
-static cl::opt<bool> PrintBasePointers("spp-print-base-pointers", cl::Hidden,
-                                       cl::init(false));
+static bool getPrintBasePointers(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_SppPrintBasePointers>(
+      F.getContext().getOptionsContext(), false);
+}
 
 // Cost threshold measuring when it is profitable to rematerialize value instead
 // of relocating it
-static cl::opt<unsigned>
-RematerializationThreshold("spp-rematerialization-threshold", cl::Hidden,
-                           cl::init(6));
+static unsigned getRematerializationThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_SppRematerializationThreshold>(
+      F.getContext().getOptionsContext());
+}
 
+static bool getClobberNonLive(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::ScalarOptsReg>(
+          F.getContext().getOptionsContext()))
+    return O->get<&clv2::SC_Rs4gcClobberNonLive>();
 #ifdef EXPENSIVE_CHECKS
-static bool ClobberNonLive = true;
+  return true;
 #else
-static bool ClobberNonLive = false;
+  return false;
 #endif
+}
 
-static cl::opt<bool, true> ClobberNonLiveOverride("rs4gc-clobber-non-live",
-                                                  cl::location(ClobberNonLive),
-                                                  cl::Hidden);
+static bool getAllowStatepointWithNoDeoptInfo(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::SC_Rs4gcAllowStatepointWithNoDeoptInfo>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    AllowStatepointWithNoDeoptInfo("rs4gc-allow-statepoint-with-no-deopt-info",
-                                   cl::Hidden, cl::init(true));
-
-static cl::opt<bool> RematDerivedAtUses("rs4gc-remat-derived-at-uses",
-                                        cl::Hidden, cl::init(true));
+static bool getRematDerivedAtUses(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_Rs4gcRematDerivedAtUses>(
+      F.getContext().getOptionsContext());
+}
 
 /// The IR fed into RewriteStatepointsForGC may have had attributes and
 /// metadata implying dereferenceability that are no longer valid/correct after
@@ -232,7 +246,7 @@ static ArrayRef<Use> GetDeoptBundleOperands(const CallBase *Call) {
       Call->getOperandBundle(LLVMContext::OB_deopt);
 
   if (!DeoptBundle) {
-    assert(AllowStatepointWithNoDeoptInfo &&
+    assert(getAllowStatepointWithNoDeoptInfo(*Call->getFunction()) &&
            "Found non-leaf call without deopt info!");
     return {};
   }
@@ -316,12 +330,12 @@ static void analyzeParsePointLiveness(
   StatepointLiveSetTy LiveSet;
   findLiveSetAtInst(Call, OriginalLivenessData, LiveSet, GC);
 
-  if (PrintLiveSet) {
+  if (getPrintLiveSet(*Call->getFunction())) {
     dbgs() << "Live Variables:\n";
     for (Value *V : LiveSet)
       dbgs() << " " << V->getName() << " " << *V << "\n";
   }
-  if (PrintLiveSetSize) {
+  if (getPrintLiveSetSize(*Call->getFunction())) {
     dbgs() << "Safepoint For: " << Call->getCalledOperand()->getName() << "\n";
     dbgs() << "Number live values: " << LiveSet.size() << "\n";
   }
@@ -2088,7 +2102,7 @@ static void relocationViaAlloca(
     insertRematerializationStores(Info.RematerializedValues, AllocaMap,
                                   VisitedLiveValues);
 
-    if (ClobberNonLive) {
+    if (getClobberNonLive(F)) {
       // As a debugging aid, pretend that an unrelocated pointer becomes null at
       // the gc.statepoint.  This will turn some subtle GC problems into
       // slightly easier to debug SEGVs.  Note that on large IR files with
@@ -2411,10 +2425,10 @@ findRematerializationCandidates(PointerToBaseTy PointerToBase,
 // This can be beneficial when derived pointer is live across many
 // statepoints, but uses are rare.
 static void rematerializeLiveValuesAtUses(
-    RematCandTy &RematerizationCandidates,
+    const Function &F, RematCandTy &RematerizationCandidates,
     MutableArrayRef<PartiallyConstructedSafepointRecord> Records,
     PointerToBaseTy &PointerToBase) {
-  if (!RematDerivedAtUses)
+  if (!getRematDerivedAtUses(F))
     return;
 
   SmallVector<Instruction *, 32> LiveValuesToBeDeleted;
@@ -2426,7 +2440,7 @@ static void rematerializeLiveValuesAtUses(
     Instruction *Cand = cast<Instruction>(It.first);
     auto &Record = It.second;
 
-    if (Record.Cost >= RematerializationThreshold)
+    if (Record.Cost >= getRematerializationThreshold(F))
       continue;
 
     if (Cand->user_empty())
@@ -2554,7 +2568,7 @@ static void rematerializeLiveValues(CallBase *Call,
       Cost *= 2;
 
     // If it's too expensive - skip it.
-    if (Cost >= RematerializationThreshold)
+    if (Cost >= getRematerializationThreshold(*Call->getFunction()))
       continue;
 
     // Remove value from the live set
@@ -2709,7 +2723,7 @@ static bool insertParsePoints(Function &F, DominatorTree &DT,
     PartiallyConstructedSafepointRecord &info = Records[i];
     findBasePointers(DT, DVCache, ToUpdate[i], info, PointerToBase, KnownBases);
   }
-  if (PrintBasePointers) {
+  if (getPrintBasePointers(F)) {
     errs() << "Base Pairs (w/o Relocation):\n";
     for (auto &Pair : PointerToBase) {
       errs() << " derived ";
@@ -2752,7 +2766,7 @@ static bool insertParsePoints(Function &F, DominatorTree &DT,
   // not the key issue.
   recomputeLiveInValues(F, DT, ToUpdate, Records, PointerToBase, GC.get());
 
-  if (PrintBasePointers) {
+  if (getPrintBasePointers(F)) {
     errs() << "Base Pairs: (w/Relocation)\n";
     for (auto Pair : PointerToBase) {
       errs() << " derived ";
@@ -2791,7 +2805,7 @@ static bool insertParsePoints(Function &F, DominatorTree &DT,
   // some values instead of relocating them. This is purely an optimization and
   // does not influence correctness.
   // First try rematerialization at uses, then after statepoints.
-  rematerializeLiveValuesAtUses(RematerizationCandidates, Records,
+  rematerializeLiveValuesAtUses(F, RematerizationCandidates, Records,
                                 PointerToBase);
   for (size_t i = 0; i < Records.size(); i++)
     rematerializeLiveValues(ToUpdate[i], Records[i], PointerToBase,
@@ -3034,7 +3048,7 @@ bool RewriteStatepointsForGC::runOnFunction(Function &F, DominatorTree &DT,
          "need function body to rewrite statepoints in");
   assert(shouldRewriteStatepointsIn(F) && "mismatch in rewrite decision");
 
-  auto NeedsRewrite = [&TLI](Instruction &I) {
+  auto NeedsRewrite = [&F, &TLI](Instruction &I) {
     if (const auto *Call = dyn_cast<CallBase>(&I)) {
       if (isa<GCStatepointInst>(Call))
         return false;
@@ -3048,7 +3062,7 @@ bool RewriteStatepointsForGC::runOnFunction(Function &F, DominatorTree &DT,
       // which doesn't know how to produce a proper deopt state. So if we see a
       // non-leaf memcpy/memmove without deopt state just treat it as a leaf
       // copy and don't produce a statepoint.
-      if (!AllowStatepointWithNoDeoptInfo && !Call->hasDeoptState()) {
+      if (!getAllowStatepointWithNoDeoptInfo(F) && !Call->hasDeoptState()) {
         assert(isa<AnyMemTransferInst>(Call) &&
                cast<AnyMemTransferInst>(Call)->isAtomic() &&
                "Don't expect any other calls here!");

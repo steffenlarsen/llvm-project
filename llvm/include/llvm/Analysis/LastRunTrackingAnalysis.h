@@ -80,12 +80,15 @@ public:
     updateImpl(ID, Changed, CompatibilityCheckFn{});
   }
 
+  void setDisabled(bool D) { Disabled = D; }
+
 private:
   LLVM_ABI bool shouldSkipImpl(PassID ID, OptionPtr Ptr) const;
   LLVM_ABI void updateImpl(PassID ID, bool Changed,
                            CompatibilityCheckFn CheckFn);
 
   DenseMap<PassID, CompatibilityCheckFn> TrackedPasses;
+  bool Disabled = false;
 };
 
 /// A function/module analysis which provides an empty \c LastRunTrackingInfo.
@@ -96,12 +99,8 @@ class LastRunTrackingAnalysis final
 
 public:
   using Result = LastRunTrackingInfo;
-  LastRunTrackingInfo run(Function &F, FunctionAnalysisManager &) {
-    return LastRunTrackingInfo();
-  }
-  LastRunTrackingInfo run(Module &M, ModuleAnalysisManager &) {
-    return LastRunTrackingInfo();
-  }
+  LLVM_ABI LastRunTrackingInfo run(Function &F, FunctionAnalysisManager &);
+  LLVM_ABI LastRunTrackingInfo run(Module &M, ModuleAnalysisManager &);
 };
 
 } // namespace llvm

@@ -24,12 +24,14 @@
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <string>
 #include <vector>
 
@@ -37,9 +39,10 @@ using namespace llvm;
 
 #define DEBUG_TYPE "hexagon-vector-print"
 
-static cl::opt<bool>
-    TraceHexVectorStoresOnly("trace-hex-vector-stores-only", cl::Hidden,
-                             cl::desc("Enables tracing of vector stores"));
+static bool getTraceHexVectorStoresOnly(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_TraceHexVectorStoresOnly>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -97,13 +100,14 @@ static void addAsmInstr(MachineBasicBlock *MBB, unsigned Reg,
     .addImm(ExtraInfo);
 }
 
-static bool getInstrVecReg(const MachineInstr &MI, unsigned &Reg) {
+static bool getInstrVecReg(const MachineInstr &MI, unsigned &Reg,
+                           const Function &F) {
   if (MI.getNumOperands() < 1) return false;
   // Vec load or compute.
   if (MI.getOperand(0).isReg() && MI.getOperand(0).isDef()) {
     Reg = MI.getOperand(0).getReg();
     if (isVecReg(Reg))
-      return !TraceHexVectorStoresOnly;
+      return !getTraceHexVectorStoresOnly(F);
   }
   // Vec store.
   if (MI.mayStore() && MI.getNumOperands() >= 3 && MI.getOperand(2).isReg()) {
@@ -125,6 +129,7 @@ bool HexagonVectorPrint::runOnMachineFunction(MachineFunction &Fn) {
   QST = &Fn.getSubtarget<HexagonSubtarget>();
   QRI = QST->getRegisterInfo();
   QII = QST->getInstrInfo();
+  const Function &F = Fn.getFunction();
   std::vector<MachineInstr *> VecPrintList;
   for (auto &MBB : Fn)
     for (auto &MI : MBB) {
@@ -134,7 +139,7 @@ bool HexagonVectorPrint::runOnMachineFunction(MachineFunction &Fn) {
           if (MII->getNumOperands() < 1)
             continue;
           unsigned Reg = 0;
-          if (getInstrVecReg(*MII, Reg)) {
+          if (getInstrVecReg(*MII, Reg, F)) {
             VecPrintList.push_back((&*MII));
             LLVM_DEBUG(dbgs() << "Found vector reg inside bundle \n";
                        MII->dump());
@@ -142,7 +147,7 @@ bool HexagonVectorPrint::runOnMachineFunction(MachineFunction &Fn) {
         }
       } else {
         unsigned Reg = 0;
-        if (getInstrVecReg(MI, Reg)) {
+        if (getInstrVecReg(MI, Reg, F)) {
           VecPrintList.push_back(&MI);
           LLVM_DEBUG(dbgs() << "Found vector reg \n"; MI.dump());
         }
@@ -158,7 +163,7 @@ bool HexagonVectorPrint::runOnMachineFunction(MachineFunction &Fn) {
     MachineBasicBlock *MBB = I->getParent();
     LLVM_DEBUG(dbgs() << "Evaluating V MI\n"; I->dump());
     unsigned Reg = 0;
-    if (!getInstrVecReg(*I, Reg))
+    if (!getInstrVecReg(*I, Reg, F))
       llvm_unreachable("Need a vector reg");
     MachineBasicBlock::instr_iterator MII = I->getIterator();
     if (I->isInsideBundle()) {

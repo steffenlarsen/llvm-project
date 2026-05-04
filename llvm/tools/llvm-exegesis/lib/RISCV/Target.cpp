@@ -32,20 +32,9 @@
 namespace llvm {
 namespace exegesis {
 
-static cl::opt<bool>
-    OnlyUsesVLMAXForVL("riscv-vlmax-for-vl",
-                       cl::desc("Only enumerate VLMAX for VL operand"),
-                       cl::init(false), cl::Hidden);
-
-static cl::opt<bool>
-    EnumerateRoundingModes("riscv-enumerate-rounding-modes",
-                           cl::desc("Enumerate different FRM and VXRM"),
-                           cl::init(true), cl::Hidden);
-
-static cl::opt<std::string>
-    FilterConfig("riscv-filter-config",
-                 cl::desc("Show only the configs matching this regex"),
-                 cl::init(""), cl::Hidden);
+bool OnlyUsesVLMAXForVL = false;
+bool EnumerateRoundingModes = true;
+std::string FilterConfig;
 
 #include "RISCVGenExegesis.inc"
 

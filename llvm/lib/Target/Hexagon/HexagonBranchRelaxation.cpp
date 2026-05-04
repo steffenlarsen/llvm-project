@@ -18,10 +18,12 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/Passes.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
@@ -33,9 +35,11 @@ using namespace llvm;
 
 // Since we have no exact knowledge of code layout, allow some safety buffer
 // for jump target. This is measured in bytes.
-static cl::opt<uint32_t>
-    BranchRelaxSafetyBuffer("branch-relax-safety-buffer", cl::init(200),
-                            cl::Hidden, cl::desc("safety buffer size"));
+
+static uint32_t getBranchRelaxSafetyBuffer(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_BranchRelaxSafetyBuffer>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -161,9 +165,10 @@ bool HexagonBranchRelaxation::isJumpOutOfRange(MachineInstr &MI,
     if (HII->isNewValueJump(*FirstTerm))
       TBB = FirstTerm->getOperand(HII->getCExtOpNum(*FirstTerm)).getMBB();
   }
+  const Function &F = B.getParent()->getFunction();
   if (TBB && &MI == &*FirstTerm) {
-    Distance = std::abs((long long)InstOffset - BlockToInstOffset[TBB])
-                + BranchRelaxSafetyBuffer;
+    Distance = std::abs((long long)InstOffset - BlockToInstOffset[TBB]) +
+               getBranchRelaxSafetyBuffer(F);
     return !HII->isJumpWithinBranchRange(*FirstTerm, Distance);
   }
   if (FBB) {
@@ -175,8 +180,8 @@ bool HexagonBranchRelaxation::isJumpOutOfRange(MachineInstr &MI,
     if (&MI != &*SecondTerm)
       return false;
     // Analyze the second branch in the BB.
-    Distance = std::abs((long long)InstOffset - BlockToInstOffset[FBB])
-                + BranchRelaxSafetyBuffer;
+    Distance = std::abs((long long)InstOffset - BlockToInstOffset[FBB]) +
+               getBranchRelaxSafetyBuffer(F);
     return !HII->isJumpWithinBranchRange(*SecondTerm, Distance);
   }
   return false;

@@ -24,21 +24,23 @@
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/EHPersonalities.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/CRC.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Instrumentation/CFGMST.h"
 #include "llvm/Transforms/Instrumentation/GCOVProfiler.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <algorithm>
@@ -60,12 +62,7 @@ enum : uint32_t {
   GCOV_TAG_LINES = 0x01450000,
 };
 
-static cl::opt<std::string> DefaultGCOVVersion("default-gcov-version",
-                                               cl::init("0000"), cl::Hidden,
-                                               cl::ValueRequired);
 
-static cl::opt<bool> AtomicCounter("gcov-atomic-counter", cl::Hidden,
-                                   cl::desc("Make counter updates atomic"));
 
 // Returns the number of words which will be used to represent this string.
 static unsigned wordsOfString(StringRef s) {
@@ -73,18 +70,34 @@ static unsigned wordsOfString(StringRef s) {
   return (s.size() / 4) + 2;
 }
 
-GCOVOptions GCOVOptions::getDefault() {
+GCOVOptions GCOVOptions::getDefault(const clv2::OptionsContext &Ctx) {
   GCOVOptions Options;
   Options.EmitNotes = true;
   Options.EmitData = true;
   Options.NoRedZone = false;
-  Options.Atomic = AtomicCounter;
 
-  if (DefaultGCOVVersion.size() != 4) {
-    reportFatalUsageError(Twine("Invalid -default-gcov-version: ") +
-                          DefaultGCOVVersion);
+  auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(Ctx);
+
+  if (O) {
+    Options.Atomic = O->specified<&clv2::INST_GcovAtomicCounter>()
+                         ? O->get<&clv2::INST_GcovAtomicCounter>()
+                         : false;
+    std::string GCOVVer = O->specified<&clv2::INST_DefaultGCOVVersion>()
+                              ? O->get<&clv2::INST_DefaultGCOVVersion>()
+                              : std::string("0000");
+    if (GCOVVer.size() != 4) {
+      reportFatalUsageError(Twine("Invalid -default-gcov-version: ") + GCOVVer);
+    }
+    memcpy(Options.Version, GCOVVer.c_str(), 4);
+  } else {
+    Options.Atomic = false;
+    std::string GCOVVer = "0000";
+    if (GCOVVer.size() != 4) {
+      reportFatalUsageError(Twine("Invalid -default-gcov-version: ") + GCOVVer);
+    }
+    memcpy(Options.Version, GCOVVer.c_str(), 4);
   }
-  memcpy(Options.Version, DefaultGCOVVersion.c_str(), 4);
+
   return Options;
 }
 
@@ -559,8 +572,21 @@ bool GCOVProfiler::runOnModule(
 
 PreservedAnalyses GCOVProfilerPass::run(Module &M,
                                         ModuleAnalysisManager &AM) {
+  GCOVOptions Opts = GCOVOpts;
+  if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(
+          M.getContext().getOptionsContext())) {
+    if (O->specified<&clv2::INST_GcovAtomicCounter>())
+      Opts.Atomic = O->get<&clv2::INST_GcovAtomicCounter>();
+    if (O->specified<&clv2::INST_DefaultGCOVVersion>()) {
+      std::string GCOVVer = O->get<&clv2::INST_DefaultGCOVVersion>();
+      if (GCOVVer.size() != 4)
+        reportFatalUsageError(Twine("Invalid -default-gcov-version: ") +
+                              GCOVVer);
+      memcpy(Opts.Version, GCOVVer.c_str(), 4);
+    }
+  }
 
-  GCOVProfiler Profiler(GCOVOpts, *VFS);
+  GCOVProfiler Profiler(Opts, *VFS);
   FunctionAnalysisManager &FAM =
       AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
 

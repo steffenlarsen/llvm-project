@@ -65,8 +65,9 @@ static bool shouldScheduleAdjacent(const TargetInstrInfo &TII,
   return false;
 }
 
-std::unique_ptr<ScheduleDAGMutation> createARMMacroFusionDAGMutation() {
-  return createMacroFusionDAGMutation(shouldScheduleAdjacent);
+std::unique_ptr<ScheduleDAGMutation>
+createARMMacroFusionDAGMutation(const clv2::OptionsContext &Ctx) {
+  return createMacroFusionDAGMutation(Ctx, shouldScheduleAdjacent);
 }
 
 } // end namespace llvm

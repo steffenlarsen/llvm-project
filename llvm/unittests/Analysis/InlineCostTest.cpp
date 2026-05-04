@@ -66,7 +66,7 @@ define i32 @g(i32) {
 }
 )IR";
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(IR, Err, C);
   ASSERT_TRUE(M);
@@ -119,7 +119,7 @@ define void @g_losses(i32) {
 declare void @prevent_sroa(ptr)
 )IR";
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(IR, Err, C);
   ASSERT_TRUE(M);

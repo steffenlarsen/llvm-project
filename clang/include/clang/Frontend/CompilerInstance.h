@@ -26,6 +26,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/BuryPointer.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Support/VirtualOutputBackend.h"
 #include <cassert>
@@ -40,7 +41,10 @@ class raw_fd_ostream;
 class PassPlugin;
 class Timer;
 class TimerGroup;
-}
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
+} // namespace llvm
 
 namespace clang {
 class ASTContext;
@@ -135,6 +139,15 @@ class CompilerInstance : public ModuleLoader {
 
   /// Back-end pass plugins.
   std::vector<std::unique_ptr<llvm::PassPlugin>> PassPlugins;
+
+  /// Parsed LLVM options context from -mllvm flags.
+  std::unique_ptr<llvm::clv2::OptionsContext> LLVMOptsCtx;
+
+  /// Non-owning alternative to \c LLVMOptsCtx, for callers that already own
+  /// the context (e.g. libTooling's ClangTool, which shares one context across
+  /// every file it compiles).
+  const llvm::clv2::OptionsContext *LLVMOptsCtxRef =
+      &llvm::clv2::defaultOptionsContext();
 
   /// The frontend timer group.
   std::unique_ptr<llvm::TimerGroup> timerGroup;
@@ -669,6 +682,24 @@ public:
 
   llvm::ArrayRef<std::unique_ptr<llvm::PassPlugin>> getPassPlugins() const {
     return PassPlugins;
+  }
+
+  /// @}
+  /// @name LLVM Options Context
+  /// @{
+
+  void setLLVMOptionsContext(std::unique_ptr<llvm::clv2::OptionsContext> Ctx) {
+    LLVMOptsCtx = std::move(Ctx);
+  }
+
+  /// Set a non-owned options context.  \p Ctx must outlive this instance.
+  /// Ignored if an owned context was already set.
+  void setLLVMOptionsContextRef(const llvm::clv2::OptionsContext &Ctx) {
+    LLVMOptsCtxRef = &Ctx;
+  }
+
+  const llvm::clv2::OptionsContext *getLLVMOptionsContext() const {
+    return LLVMOptsCtx ? LLVMOptsCtx.get() : LLVMOptsCtxRef;
   }
 
   /// @}

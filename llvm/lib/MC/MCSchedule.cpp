@@ -16,25 +16,25 @@
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCOptionsOptInfos.h"
 #include "llvm/MC/MCSubtargetInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include <optional>
 #include <type_traits>
 
 using namespace llvm;
 
-cl::OptionCategory llvm::MCScheduleOptions("Machine scheduling model options");
+clv2::OptionCategory
+    llvm::MCScheduleOptions("Machine scheduling model options");
 
 static constexpr float DefaultReservationStationScaleFactor = 1.0f;
 
-static cl::opt<float> ReservationStationScaleFactor(
-    "sched-model-reservation-station-scale-factor", cl::Hidden,
-    cl::init(DefaultReservationStationScaleFactor), cl::cat(MCScheduleOptions),
-    cl::desc("Scale the buffer size of all reservation stations by a positive "
-             "factor. Buffer sizes of -1/0/1 (unlimited/unbuffered/in-order) "
-             "are preserved. Likewise, if the scaled result is <= 1, the "
-             "original size is kept. Computed sizes "
-             "are truncated towards zero."));
+// MC_RSScaleFactor belongs to MCOptsReg (MCOptions.td) and is read straight
+// from the OptionsContext in getReservationStationBufferSize below.  It used
+// to be mirrored into a file-scope global through a second registry and an
+// apply hook; the global was never read, and carrying the same descriptor in
+// two registries made the CLI name resolve to whichever was added first.
 
 static_assert(std::is_trivial_v<MCSchedModel>,
               "MCSchedModel is required to be a trivial type");
@@ -232,14 +232,16 @@ unsigned MCSchedModel::getBypassDelayCycles(const MCSubtargetInfo &STI,
 /// Return the buffer size of the resource. If a positive scale factor
 /// is provided and the original buffer size is > 1, the size is scaled
 /// accordingly.
-int MCSchedModel::getResourceBufferSize(unsigned ProcResourceIdx) const {
+int MCSchedModel::getResourceBufferSize(unsigned ProcResourceIdx,
+                                        const clv2::OptionsContext &Ctx) const {
   int BufferSize = getProcResource(ProcResourceIdx)->BufferSize;
+
+  float ScaleFactor = clv2::getOptValOrDefault<&clv2::MC_RSScaleFactor>(Ctx);
 
   // Skip scaling when factor is 1 (the default).
   // Use native float comparison to avoid overhead on the hot fast
   // path, as 1.0f is exactly representable
-  if (LLVM_LIKELY(ReservationStationScaleFactor ==
-                  DefaultReservationStationScaleFactor))
+  if (LLVM_LIKELY(ScaleFactor == DefaultReservationStationScaleFactor))
     return BufferSize;
 
   // Skip scaling for special buffer sizes (-1,0,1)
@@ -247,7 +249,7 @@ int MCSchedModel::getResourceBufferSize(unsigned ProcResourceIdx) const {
     return BufferSize;
 
   // Skip invalid (non-positive) scale factors
-  APFloat Scale(ReservationStationScaleFactor);
+  APFloat Scale(ScaleFactor);
   if (Scale.isNegative() || Scale.isZero())
     return BufferSize;
 

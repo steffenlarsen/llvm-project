@@ -81,10 +81,10 @@ void NVVMAttachTarget::runOnOperation() {
   ArrayRef<std::string> libs(linkLibs);
   SmallVector<StringRef> filesToLink(libs);
   auto target = builder.getAttr<NVVMTargetAttr>(
-      optLevel, triple, chip, features, getFlags(builder),
+      optLevel, *triple, *chip, *features, getFlags(builder),
       filesToLink.empty() ? nullptr : builder.getStrArrayAttr(filesToLink),
       verifyTarget);
-  llvm::Regex matcher(moduleMatcher);
+  llvm::Regex matcher(*moduleMatcher);
   for (Region &region : getOperation()->getRegions())
     for (Block &block : region.getBlocks())
       for (auto module : block.getOps<gpu::GPUModuleOp>()) {

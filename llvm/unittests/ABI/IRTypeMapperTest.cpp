@@ -22,7 +22,7 @@ namespace {
 
 class IRTypeMapperTest : public ::testing::Test {
 protected:
-  llvm::LLVMContext Context;
+  llvm::LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   llvm::DataLayout DL{""};
   llvm::BumpPtrAllocator Alloc;
   llvm::abi::TypeBuilder TB{Alloc};

@@ -32,17 +32,19 @@ using namespace dwarf_linker::classic;
 
 Expected<std::unique_ptr<DwarfStreamer>> DwarfStreamer::createStreamer(
     const Triple &TheTriple, DWARFLinkerBase::OutputFileType FileType,
-    raw_pwrite_stream &OutFile, DWARFLinkerBase::MessageHandlerTy Warning) {
+    raw_pwrite_stream &OutFile, DWARFLinkerBase::MessageHandlerTy Warning,
+    const clv2::OptionsContext &OptsCtx) {
   std::unique_ptr<DwarfStreamer> Streamer =
       std::make_unique<DwarfStreamer>(FileType, OutFile, Warning);
-  if (Error Err = Streamer->init(TheTriple, "__DWARF"))
+  if (Error Err = Streamer->init(TheTriple, "__DWARF", OptsCtx))
     return std::move(Err);
 
   return std::move(Streamer);
 }
 
 Error DwarfStreamer::init(Triple TheTriple,
-                          StringRef Swift5ReflectionSegmentName) {
+                          StringRef Swift5ReflectionSegmentName,
+                          const clv2::OptionsContext &OptsCtx) {
   std::string ErrorStr;
   std::string TripleName;
 
@@ -61,7 +63,7 @@ Error DwarfStreamer::init(Triple TheTriple,
                              "no register info for target %s",
                              TripleName.c_str());
 
-  MCOptions = mc::InitMCTargetOptionsFromFlags();
+  MCOptions = mc::InitMCTargetOptionsFromFlags(OptsCtx);
   MCOptions.AsmVerbose = true;
   MCOptions.MCUseDwarfDirectory = MCTargetOptions::EnableDwarfDirectory;
   MAI.reset(TheTarget->createMCAsmInfo(*MRI, TheTriple, MCOptions));
@@ -69,7 +71,8 @@ Error DwarfStreamer::init(Triple TheTriple,
     return createStringError(std::errc::invalid_argument,
                              "no asm info for target %s", TripleName.c_str());
 
-  MSTI.reset(TheTarget->createMCSubtargetInfo(TheTriple, "", ""));
+  MSTI.reset(TheTarget->createMCSubtargetInfo(TheTriple, "", "",
+                                              /*Ctx=*/OptsCtx));
   if (!MSTI)
     return createStringError(std::errc::invalid_argument,
                              "no subtarget info for target %s",

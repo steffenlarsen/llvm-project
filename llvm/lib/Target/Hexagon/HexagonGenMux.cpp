@@ -35,10 +35,12 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <algorithm>
 #include <cassert>
 #include <iterator>
@@ -49,9 +51,11 @@
 using namespace llvm;
 
 // Initialize this to 0 to always prefer generating mux by default.
-static cl::opt<unsigned> MinPredDist("hexagon-gen-mux-threshold", cl::Hidden,
-  cl::init(0), cl::desc("Minimum distance between predicate definition and "
-  "farther of the two predicated uses"));
+
+static unsigned getMinPredDist(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_MinPredDist>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -264,7 +268,8 @@ bool HexagonGenMux::genMuxInBlock(MachineBasicBlock &B) {
     unsigned MaxX = std::max(CI.TrueX, CI.FalseX);
     // Specifically, check if the predicate definition is within a prescribed
     // distance from the farther of the two predicated instructions.
-    unsigned SearchX = (MaxX >= MinPredDist) ? MaxX-MinPredDist : 0;
+    unsigned MPD = getMinPredDist(B.getParent()->getFunction());
+    unsigned SearchX = (MaxX >= MPD) ? MaxX - MPD : 0;
     bool NearDef = false;
     for (unsigned X = SearchX; X < MaxX; ++X) {
       const DefUseInfo &DU = DUM.lookup(X);

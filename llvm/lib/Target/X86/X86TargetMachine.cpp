@@ -42,26 +42,17 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/CFGuard.h"
 #include <memory>
 #include <optional>
 
 using namespace llvm;
-
-cl::opt<bool>
-    X86EnableMachineCombinerPass("x86-machine-combiner",
-                                 cl::desc("Enable the machine combiner pass"),
-                                 cl::init(true), cl::Hidden);
-
-static cl::opt<bool>
-    EnableTileRAPass("x86-tile-ra",
-                     cl::desc("Enable the tile register allocation pass"),
-                     cl::init(true), cl::Hidden);
 
 extern "C" LLVM_C_ABI void LLVMInitializeX86Target() {
   // Register the target.
@@ -330,14 +321,14 @@ void X86TargetMachine::reset() { SubtargetMap.clear(); }
 ScheduleDAGInstrs *
 X86TargetMachine::createMachineScheduler(MachineSchedContext *C) const {
   ScheduleDAGMILive *DAG = createSchedLive(C);
-  DAG->addMutation(createX86MacroFusionDAGMutation());
+  DAG->addMutation(createX86MacroFusionDAGMutation(getOptionsContext()));
   return DAG;
 }
 
 ScheduleDAGInstrs *
 X86TargetMachine::createPostMachineScheduler(MachineSchedContext *C) const {
   ScheduleDAGMI *DAG = createSchedPostRA(C);
-  DAG->addMutation(createX86MacroFusionDAGMutation());
+  DAG->addMutation(createX86MacroFusionDAGMutation(getOptionsContext()));
   return DAG;
 }
 
@@ -478,7 +469,7 @@ bool X86PassConfig::addLegalizeMachineIR() {
 }
 
 bool X86PassConfig::addRegBankSelect() {
-  addPass(new RegBankSelectLegacy());
+  addPass(new RegBankSelectLegacy(getTM<TargetMachine>().getOptionsContext()));
   return false;
 }
 
@@ -498,7 +489,8 @@ void X86PassConfig::addPreLegalizeMachineIR() {
 
 bool X86PassConfig::addILPOpts() {
   addPass(&EarlyIfConverterLegacyID);
-  if (X86EnableMachineCombinerPass)
+  if (clv2::getOptValOr<&clv2::X86OptsReg, &clv2::X86_MachineCombiner>(
+          TM->getOptionsContext(), true))
     addPass(&MachineCombinerID);
   addPass(createX86CmovConversionLegacyPass());
   return true;
@@ -655,7 +647,9 @@ static bool onlyAllocateTileRegisters(const TargetRegisterInfo &TRI,
 
 bool X86PassConfig::addRegAssignAndRewriteOptimized() {
   // Don't support tile RA when RA is specified by command line "-regalloc".
-  if (!isCustomizedRegAlloc() && EnableTileRAPass) {
+  if (!isCustomizedRegAlloc() &&
+      clv2::getOptValOr<&clv2::X86OptsReg, &clv2::X86_TileRA>(
+          TM->getOptionsContext(), true)) {
     // Allocate tile register first.
     addPass(createGreedyRegisterAllocator(onlyAllocateTileRegisters));
     addPass(createX86TileConfigLegacyPass());

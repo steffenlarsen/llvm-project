@@ -32,7 +32,9 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/Target/WebAssembly/WebAssemblyOptionsOptInfos.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils.h"
 #include <optional>
@@ -40,44 +42,61 @@ using namespace llvm;
 
 #define DEBUG_TYPE "wasm"
 
-// A command-line option to keep implicit locals
-// for the purpose of testing with lit/llc ONLY.
-// This produces output which is not valid WebAssembly, and is not supported
-// by assemblers/disassemblers and other MC based tools.
-cl::opt<bool> WebAssembly::WasmDisableExplicitLocals(
-    "wasm-disable-explicit-locals", cl::Hidden,
-    cl::desc("WebAssembly: output implicit locals in"
-             " instruction output for test purposes only."),
-    cl::init(false));
+// Helpers for pass-pipeline configuration time, where no IR context is
+// available. These read directly from the global CLI override.
+bool WebAssembly::getWasmEnableEmEH(const Function *F) {
+  if (F)
+    return clv2::getOptValOr<&clv2::WebAssemblyOptsReg, &clv2::WASM_EnableEmEH>(
+        F->getContext().getOptionsContext(), false);
+  return false;
+}
+bool WebAssembly::getWasmEnableEmEH(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::WASM_EnableEmEH>(Ctx);
+}
 
-// Exception handling & setjmp-longjmp handling related options.
+bool WebAssembly::getWasmEnableEmSjLj(const Function *F) {
+  if (F)
+    return clv2::getOptValOr<&clv2::WebAssemblyOptsReg,
+                             &clv2::WASM_EnableEmSjLj>(
+        F->getContext().getOptionsContext(), false);
+  return false;
+}
+bool WebAssembly::getWasmEnableEmSjLj(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::WASM_EnableEmSjLj>(Ctx);
+}
 
-// Emscripten's asm.js-style exception handling
-cl::opt<bool> WebAssembly::WasmEnableEmEH(
-    "enable-emscripten-cxx-exceptions",
-    cl::desc("WebAssembly Emscripten-style exception handling"),
-    cl::init(false));
-// Emscripten's asm.js-style setjmp/longjmp handling
-cl::opt<bool> WebAssembly::WasmEnableEmSjLj(
-    "enable-emscripten-sjlj",
-    cl::desc("WebAssembly Emscripten-style setjmp/longjmp handling"),
-    cl::init(false));
-// Exception handling using wasm EH instructions
-cl::opt<bool>
-    WebAssembly::WasmEnableEH("wasm-enable-eh",
-                              cl::desc("WebAssembly exception handling"));
-// setjmp/longjmp handling using wasm EH instructions
-cl::opt<bool> WebAssembly::WasmEnableSjLj(
-    "wasm-enable-sjlj", cl::desc("WebAssembly setjmp/longjmp handling"));
-// If true, use the legacy Wasm EH proposal:
-// https://github.com/WebAssembly/exception-handling/blob/main/proposals/exception-handling/legacy/Exceptions.md
-// And if false, use the standardized Wasm EH proposal:
-// https://github.com/WebAssembly/exception-handling/blob/main/proposals/exception-handling/Exceptions.md
-// Currently set to true by default because not all major web browsers turn on
-// the new standard proposal by default, but will later change to false.
-cl::opt<bool> WebAssembly::WasmUseLegacyEH(
-    "wasm-use-legacy-eh", cl::desc("WebAssembly exception handling (legacy)"),
-    cl::init(true));
+bool WebAssembly::getWasmEnableEH(const Function *F) {
+  if (F)
+    return clv2::getOptValOr<&clv2::WebAssemblyOptsReg, &clv2::WASM_EnableEH>(
+        F->getContext().getOptionsContext(), false);
+  return false;
+}
+bool WebAssembly::getWasmEnableEH(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::WebAssemblyOptsReg, &clv2::WASM_EnableEH>(
+      Ctx, false);
+}
+
+bool WebAssembly::getWasmEnableSjLj(const Function *F) {
+  if (F)
+    return clv2::getOptValOr<&clv2::WebAssemblyOptsReg, &clv2::WASM_EnableSjLj>(
+        F->getContext().getOptionsContext(), false);
+  return false;
+}
+bool WebAssembly::getWasmEnableSjLj(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::WebAssemblyOptsReg, &clv2::WASM_EnableSjLj>(
+      Ctx, false);
+}
+
+bool WebAssembly::getWasmUseLegacyEH(const Function *F) {
+  if (F)
+    return clv2::getOptValOr<&clv2::WebAssemblyOptsReg,
+                             &clv2::WASM_UseLegacyEH>(
+        F->getContext().getOptionsContext(), true);
+  return true;
+}
+bool WebAssembly::getWasmUseLegacyEH(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::WASM_UseLegacyEH>(Ctx);
+}
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void
 LLVMInitializeWebAssemblyTarget() {
@@ -133,37 +152,34 @@ static Reloc::Model getEffectiveRelocModel(std::optional<Reloc::Model> RM) {
   return RM.value_or(Reloc::Static);
 }
 
-using WebAssembly::WasmDisableExplicitLocals;
-using WebAssembly::WasmEnableEH;
-using WebAssembly::WasmEnableEmEH;
-using WebAssembly::WasmEnableEmSjLj;
-using WebAssembly::WasmEnableSjLj;
-
 static void basicCheckForEHAndSjLj(TargetMachine *TM) {
+  auto &Ctx = TM->getOptionsContext();
 
-  // Emscripten EH is selected by the exception model. WasmEnableEmEH is a
+  // Emscripten EH is selected by the exception model. WASM_EnableEmEH is a
   // deprecated cl::opt alias, OR-ed in here until it is removed.
   bool EnableEmEH =
       TM->Options.ExceptionModel == ExceptionHandling::Emscripten ||
-      WasmEnableEmEH;
+      WebAssembly::getWasmEnableEmEH(Ctx);
 
   // You can't enable two modes of EH at the same time
-  if (EnableEmEH && WasmEnableEH)
+  if (EnableEmEH && WebAssembly::getWasmEnableEH(Ctx))
     report_fatal_error(
         "-exception-model=emscripten not allowed with -wasm-enable-eh");
   // You can't enable two modes of SjLj at the same time
-  if (WasmEnableEmSjLj && WasmEnableSjLj)
+  if (WebAssembly::getWasmEnableEmSjLj(Ctx) &&
+      WebAssembly::getWasmEnableSjLj(Ctx))
     report_fatal_error(
         "-enable-emscripten-sjlj not allowed with -wasm-enable-sjlj");
   // You can't mix Emscripten EH with Wasm SjLj.
-  if (EnableEmEH && WasmEnableSjLj)
+  if (EnableEmEH && WebAssembly::getWasmEnableSjLj(Ctx))
     report_fatal_error(
         "-exception-model=emscripten not allowed with -wasm-enable-sjlj");
 
   if (TM->Options.ExceptionModel == ExceptionHandling::Default) {
     // FIXME: These flags should be removed in favor of directly using the
     // generically configured ExceptionsType
-    if (WebAssembly::WasmEnableEH || WebAssembly::WasmEnableSjLj)
+    if (WebAssembly::getWasmEnableEH(Ctx) ||
+        WebAssembly::getWasmEnableSjLj(Ctx))
       TM->Options.ExceptionModel = ExceptionHandling::Wasm;
   }
 
@@ -174,13 +190,16 @@ static void basicCheckForEHAndSjLj(TargetMachine *TM) {
       TM->Options.ExceptionModel != ExceptionHandling::Emscripten)
     report_fatal_error(
         "-exception-model should be either 'none', 'wasm', or 'emscripten'");
-  if (WasmEnableEH && TM->Options.ExceptionModel != ExceptionHandling::Wasm)
+  if (WebAssembly::getWasmEnableEH(Ctx) &&
+      TM->Options.ExceptionModel != ExceptionHandling::Wasm)
     report_fatal_error(
         "-wasm-enable-eh only allowed with -exception-model=wasm");
-  if (WasmEnableSjLj && TM->Options.ExceptionModel != ExceptionHandling::Wasm)
+  if (WebAssembly::getWasmEnableSjLj(Ctx) &&
+      TM->Options.ExceptionModel != ExceptionHandling::Wasm)
     report_fatal_error(
         "-wasm-enable-sjlj only allowed with -exception-model=wasm");
-  if ((!WasmEnableEH && !WasmEnableSjLj) &&
+  if ((!WebAssembly::getWasmEnableEH(Ctx) &&
+       !WebAssembly::getWasmEnableSjLj(Ctx)) &&
       TM->Options.ExceptionModel == ExceptionHandling::Wasm)
     report_fatal_error(
         "-exception-model=wasm only allowed with at least one of "
@@ -219,6 +238,7 @@ WebAssemblyTargetMachine::WebAssemblyTargetMachine(
   this->Options.UniqueSectionNames = true;
 
   basicCheckForEHAndSjLj(this);
+
   initAsmInfo();
 
   LLT::setUseExtended(true);
@@ -310,6 +330,7 @@ WebAssemblyTargetMachine::getTargetTransformInfo(const Function &F) const {
 
 TargetPassConfig *
 WebAssemblyTargetMachine::createPassConfig(PassManagerBase &PM) {
+  basicCheckForEHAndSjLj(this);
   return new WebAssemblyPassConfig(*this, PM);
 }
 
@@ -343,10 +364,11 @@ void WebAssemblyPassConfig::addIRPasses() {
   // TargetPassConfig::addPassesToHandleExceptions, but that runs after these IR
   // passes and Emscripten SjLj handling expects all invokes to be lowered
   // before.
+  auto &Ctx = getWebAssemblyTargetMachine().getOptionsContext();
   bool EnableEmEH =
       TM->Options.ExceptionModel == ExceptionHandling::Emscripten ||
-      WasmEnableEmEH;
-  if (!EnableEmEH && !WasmEnableEH) {
+      WebAssembly::getWasmEnableEmEH(Ctx);
+  if (!EnableEmEH && !WebAssembly::getWasmEnableEH(Ctx)) {
     addPass(createLowerInvokePass());
     // The lower invoke pass may create unreachable code. Remove it in order not
     // to process dead blocks in setjmp/longjmp handling.
@@ -357,7 +379,8 @@ void WebAssemblyPassConfig::addIRPasses() {
   // done in WasmEHPrepare pass, Wasm SjLj preparation shares libraries and
   // transformation algorithms with Emscripten SjLj, so we run
   // LowerEmscriptenEHSjLj pass also when Wasm SjLj is enabled.
-  if (EnableEmEH || WasmEnableEmSjLj || WasmEnableSjLj)
+  if (EnableEmEH || WebAssembly::getWasmEnableEmSjLj(Ctx) ||
+      WebAssembly::getWasmEnableSjLj(Ctx))
     addPass(createWebAssemblyLowerEmscriptenEHSjLjLegacyPass(EnableEmEH));
 
   // Expand indirectbr instructions to switches.
@@ -497,7 +520,9 @@ void WebAssemblyPassConfig::addPreEmitPass() {
   addPass(createWebAssemblyCFGStackifyLegacyPass());
 
   // Insert explicit local.get and local.set operators.
-  if (!WasmDisableExplicitLocals)
+  if (!clv2::getOptValOr<&clv2::WebAssemblyOptsReg,
+                         &clv2::WASM_DisableExplicitLocals>(
+          TM->getOptionsContext(), false))
     addPass(createWebAssemblyExplicitLocalsLegacyPass());
 
   // Lower br_unless into br_if.
@@ -511,7 +536,9 @@ void WebAssemblyPassConfig::addPreEmitPass() {
   addPass(createWebAssemblyRegNumberingLegacyPass());
 
   // Fix debug_values whose defs have been stackified.
-  if (!WasmDisableExplicitLocals)
+  if (!clv2::getOptValOr<&clv2::WebAssemblyOptsReg,
+                         &clv2::WASM_DisableExplicitLocals>(
+          TM->getOptionsContext(), false))
     addPass(createWebAssemblyDebugFixupLegacyPass());
 
   // Collect information to prepare for MC lowering / asm printing.
@@ -545,7 +572,7 @@ void WebAssemblyPassConfig::addPreRegBankSelect() {
 }
 
 bool WebAssemblyPassConfig::addRegBankSelect() {
-  addPass(new RegBankSelectLegacy());
+  addPass(new RegBankSelectLegacy(getTM<TargetMachine>().getOptionsContext()));
   return false;
 }
 

@@ -17,6 +17,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/PassesOptionsOptInfos.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ToolOutputFile.h"
@@ -25,11 +26,9 @@
 
 using namespace llvm;
 
-static cl::opt<cl::boolOrDefault>
-    ForceNewPM("force-new-pm-codegen",
-               cl::desc("Whether to force the NewPM on/off. Not setting the "
-                        "option will default to what the target prefers."),
-               cl::init(cl::boolOrDefault::BOU_UNSET));
+static cl::boolOrDefault getForceNewPMCodeGen(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::PAS_ForceNewPMCodeGen>(Ctx);
+}
 
 static Error
 runCodeGenPipelineLegacy(TargetMachine &TM, Module &M, raw_pwrite_stream &OS,
@@ -37,6 +36,7 @@ runCodeGenPipelineLegacy(TargetMachine &TM, Module &M, raw_pwrite_stream &OS,
                          CodeGenFileType CGFT, bool PrintPipelinePasses,
                          bool DisableVerify, bool DisableSimplifyLibCalls) {
   legacy::PassManager CodeGenPasses;
+  CodeGenPasses.setOptionsContext(M.getContext().getOptionsContext());
   CodeGenPasses.add(
       createTargetTransformInfoWrapperPass(TM.getTargetIRAnalysis()));
   // Add LibraryInfo.
@@ -68,13 +68,14 @@ static Error runCodeGenPipelineNewPM(TargetMachine &TM, Module &M,
   FunctionAnalysisManager FAM;
   CGSCCAnalysisManager CGAM;
   ModuleAnalysisManager MAM;
-  CGPassBuilderOption Opt = getCGPassBuilderOption();
+  const clv2::OptionsContext &OptsCtx = M.getContext().getOptionsContext();
+  CGPassBuilderOption Opt = getCGPassBuilderOption(OptsCtx);
   Opt.DisableVerify = DisableVerify;
   MachineModuleInfo MMI(&TM);
   PassInstrumentationCallbacks PIC;
-  PipelineTuningOptions PTOptions;
+  PipelineTuningOptions PTOptions(OptsCtx);
   TargetMachine *TMPointer = &TM;
-  PassBuilder PB(TMPointer, PTOptions, std::nullopt, &PIC, VFS);
+  PassBuilder PB(OptsCtx, TMPointer, PTOptions, std::nullopt, &PIC, VFS);
   PB.registerModuleAnalyses(MAM);
   PB.registerCGSCCAnalyses(CGAM);
   PB.registerFunctionAnalyses(FAM);
@@ -100,6 +101,8 @@ Error llvm::runCodeGenPipeline(TargetMachine &TM, Module &M,
                                CodeGenFileType CGFT, bool PrintPipelinePasses,
                                bool DisableVerify, bool DisableSimplifyLibCalls,
                                IntrusiveRefCntPtr<vfs::FileSystem> VFS) {
+  cl::boolOrDefault ForceNewPM =
+      getForceNewPMCodeGen(M.getContext().getOptionsContext());
   if (ForceNewPM == cl::boolOrDefault::BOU_TRUE ||
       (TM.shouldDefaultToNewPM() &&
        ForceNewPM != cl::boolOrDefault::BOU_FALSE)) {

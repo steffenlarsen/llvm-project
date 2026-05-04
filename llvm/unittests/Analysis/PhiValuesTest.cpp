@@ -18,7 +18,7 @@
 using namespace llvm;
 
 TEST(PhiValuesTest, SimplePhi) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("PhiValuesTest", C);
 
   Type *VoidTy = Type::getVoidTy(C);
@@ -85,7 +85,7 @@ TEST(PhiValuesTest, SimplePhi) {
 }
 
 TEST(PhiValuesTest, DependentPhi) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("PhiValuesTest", C);
 
   Type *VoidTy = Type::getVoidTy(C);
@@ -144,7 +144,8 @@ TEST(PhiValuesTest, DependentPhi) {
   EXPECT_TRUE(Vals.count(Val2));
   EXPECT_TRUE(Vals.count(Val3));
 
-  // Check that changing an incoming value in the dependent phi changes the depending phi
+  // Check that changing an incoming value in the dependent phi changes the
+  // depending phi
   Phi1->setIncomingValue(0, Val4);
   PV.invalidateValue(Phi1);
   Vals = PV.getValuesForPhi(Phi1);

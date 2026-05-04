@@ -24,7 +24,8 @@ struct BinaryFunction;
 
 class MissingFrameInferrer {
 public:
-  MissingFrameInferrer(ProfiledBinary *Binary) : Binary(Binary) {}
+  MissingFrameInferrer(ProfiledBinary *Binary, uint32_t MaxSearchDepth)
+      : Binary(Binary), MaxSearchDepth(MaxSearchDepth) {}
 
   // Defininig a frame transition from a caller function to the callee function.
   using CallerCalleePair = std::pair<BinaryFunction *, BinaryFunction *>;
@@ -62,6 +63,7 @@ private:
                                      SmallVectorImpl<uint64_t> &UniquePath);
 
   ProfiledBinary *Binary;
+  uint32_t MaxSearchDepth;
 
   // A map of call instructions to their target addresses. This is first
   // populated with static call edges but then trimmed down to dynamic call

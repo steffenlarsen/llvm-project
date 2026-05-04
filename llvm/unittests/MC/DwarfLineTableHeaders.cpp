@@ -26,6 +26,7 @@
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "gtest/gtest.h"
@@ -64,7 +65,8 @@ public:
 
     MRI.reset(TheTarget->createMCRegInfo(TT));
     MAI.reset(TheTarget->createMCAsmInfo(*MRI, TT, MCOptions));
-    STI.reset(TheTarget->createMCSubtargetInfo(TT, "", ""));
+    STI.reset(TheTarget->createMCSubtargetInfo(
+        TT, "", "", /*Ctx=*/llvm::clv2::defaultOptionsContext()));
   }
 
   /// Create all data structures necessary to operate an assembler

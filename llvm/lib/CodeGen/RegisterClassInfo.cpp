@@ -17,13 +17,18 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -33,9 +38,9 @@ using namespace llvm;
 
 #define DEBUG_TYPE "regalloc"
 
-static cl::opt<unsigned>
-StressRA("stress-regalloc", cl::Hidden, cl::init(0), cl::value_desc("N"),
-         cl::desc("Limit all regclasses to N registers"));
+static unsigned getStressRegalloc(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_StressRegalloc>(Ctx);
+}
 
 RegisterClassInfo::RegisterClassInfo() = default;
 
@@ -137,7 +142,8 @@ void RegisterClassInfo::updateReservedRegs(const BitVector &ReservedInput) {
 
   // NumRegs may hide entries beyond the stress limit, so those orders cannot
   // safely be compacted using only their visible prefix.
-  if (!OnlyNewReservations || StressRA) {
+  if (!OnlyNewReservations ||
+      getStressRegalloc(MF->getFunction().getContext().getOptionsContext())) {
     ++Tag;
     return;
   }
@@ -234,8 +240,11 @@ void RegisterClassInfo::compute(const TargetRegisterClass *RC) const {
   }
 
   // Register allocator stress test.  Clip register class to N registers.
-  if (StressRA && RCI.NumRegs > StressRA)
-    RCI.NumRegs = StressRA;
+  if (getStressRegalloc(MF->getFunction().getContext().getOptionsContext()) &&
+      RCI.NumRegs >
+          getStressRegalloc(MF->getFunction().getContext().getOptionsContext()))
+    RCI.NumRegs =
+        getStressRegalloc(MF->getFunction().getContext().getOptionsContext());
 
   // Check if RC is a proper sub-class.
   if (const TargetRegisterClass *Super =

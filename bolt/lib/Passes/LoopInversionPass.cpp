@@ -12,19 +12,13 @@
 
 #include "bolt/Passes/LoopInversionPass.h"
 #include "bolt/Core/ParallelUtilities.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
+#include "llvm/Support/CommandLineV2.h"
 
 using namespace llvm;
+using namespace bolt::bolt_passes_opts;
 
-namespace opts {
-extern cl::OptionCategory BoltCategory;
-
-extern cl::opt<bolt::ReorderBasicBlocks::LayoutType> ReorderBlocks;
-
-static cl::opt<bool> LoopReorder(
-    "loop-inversion-opt",
-    cl::desc("reorder unconditional jump instructions in loops optimization"),
-    cl::init(true), cl::cat(BoltCategory), cl::ReallyHidden);
-} // namespace opts
+namespace opts {} // namespace opts
 
 namespace llvm {
 namespace bolt {
@@ -85,9 +79,13 @@ bool LoopInversionPass::runOnFunction(BinaryFunction &BF) {
 }
 
 Error LoopInversionPass::runOnFunctions(BinaryContext &BC) {
+  const bool LoopReorder = getLoopInversionOpt(BC);
+
+  const auto ReorderBlocks =
+      static_cast<bolt::ReorderBasicBlocks::LayoutType>(getReorderBlocks(BC));
+
   std::atomic<uint64_t> ModifiedFuncCount{0};
-  if (opts::ReorderBlocks == ReorderBasicBlocks::LT_NONE ||
-      opts::LoopReorder == false)
+  if (ReorderBlocks == ReorderBasicBlocks::LT_NONE || !LoopReorder)
     return Error::success();
 
   ParallelUtilities::WorkFuncTy WorkFun = [&](BinaryFunction &BF) {

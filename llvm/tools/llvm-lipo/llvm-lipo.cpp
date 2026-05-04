@@ -23,7 +23,7 @@
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileOutputBuffer.h"
 #include "llvm/Support/LLVMDriver.h"
@@ -661,8 +661,7 @@ createUniversalBinary(LLVMContext &LLVMCtx,
 extractSlice(LLVMContext &LLVMCtx, ArrayRef<OwningBinary<Binary>> InputBinaries,
              const StringMap<const uint32_t> &Alignments, StringRef ArchType,
              StringRef OutputFileName) {
-  assert(!ArchType.empty() &&
-         "The architecture type should be non-empty");
+  assert(!ArchType.empty() && "The architecture type should be non-empty");
   assert(InputBinaries.size() == 1 && "Incorrect number of input binaries");
   assert(!OutputFileName.empty() && "Thin expects a single output file");
 
@@ -681,9 +680,9 @@ extractSlice(LLVMContext &LLVMCtx, ArrayRef<OwningBinary<Binary>> InputBinaries,
   });
 
   if (Slices.empty())
-    reportError(
-        "fat input file " + InputBinaries.front().getBinary()->getFileName() +
-        " does not contain the specified architecture " + ArchType);
+    reportError("fat input file " +
+                InputBinaries.front().getBinary()->getFileName() +
+                " does not contain the specified architecture " + ArchType);
 
   llvm::stable_sort(Slices);
   if (Error E = writeUniversalBinary(Slices, OutputFileName))
@@ -814,7 +813,7 @@ int llvm_lipo_main(int argc, char **argv, const llvm::ToolContext &) {
   llvm::InitializeAllAsmParsers();
 
   Config C = parseLipoOptions(ArrayRef(argv + 1, argc - 1));
-  LLVMContext LLVMCtx;
+  LLVMContext LLVMCtx(llvm::clv2::defaultOptionsContext());
   SmallVector<OwningBinary<Binary>, 1> InputBinaries =
       readInputBinaries(LLVMCtx, C.InputFiles);
 

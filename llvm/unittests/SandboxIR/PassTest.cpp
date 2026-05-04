@@ -21,7 +21,7 @@
 using namespace llvm::sandboxir;
 
 struct PassTest : public testing::Test {
-  llvm::LLVMContext LLVMCtx;
+  llvm::LLVMContext LLVMCtx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<llvm::Module> LLVMM;
   std::unique_ptr<Context> Ctx;
   std::unique_ptr<llvm::TargetTransformInfo> TTI;

@@ -12,13 +12,13 @@
 
 #include "llvm/Transforms/IPO/SampleProfileProbe.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/ADT/StringSet.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/EHUtils.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DiagnosticInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/IntrinsicInst.h"
@@ -28,10 +28,12 @@
 #include "llvm/IR/PseudoProbe.h"
 #include "llvm/ProfileData/SampleProf.h"
 #include "llvm/Support/CRC.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
+#include <unordered_set>
 #include <vector>
 
 using namespace llvm;
@@ -40,17 +42,20 @@ using namespace llvm;
 STATISTIC(ArtificialDbgLine,
           "Number of probes that have an artificial debug line");
 
-static cl::opt<bool>
-    VerifyPseudoProbe("verify-pseudo-probe", cl::init(false), cl::Hidden,
-                      cl::desc("Do pseudo probe verification"));
+static const std::vector<std::string> &
+getVerifyPseudoProbeFuncList(const Function &F) {
+  if (auto *O =
+          clv2::getView<&clv2::IPOOptsReg>(F.getContext().getOptionsContext()))
+    if (O->specified<&clv2::IPO_VerifyPseudoProbeFuncList>())
+      return O->get<&clv2::IPO_VerifyPseudoProbeFuncList>();
+  static const std::vector<std::string> Default;
+  return Default;
+}
 
-static cl::list<std::string> VerifyPseudoProbeFuncList(
-    "verify-pseudo-probe-funcs", cl::Hidden,
-    cl::desc("The option to specify the name of the functions to verify."));
-
-static cl::opt<bool>
-    UpdatePseudoProbe("update-pseudo-probe", cl::init(true), cl::Hidden,
-                      cl::desc("Update pseudo probe distribution factor"));
+static bool getUpdatePseudoProbe(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_UpdatePseudoProbe>(
+      M.getContext().getOptionsContext());
+}
 
 static uint64_t getCallStackHash(const DILocation *DIL) {
   uint64_t Hash = 0;
@@ -78,13 +83,19 @@ bool PseudoProbeVerifier::shouldVerifyFunction(const Function *F) {
   if (F->hasAvailableExternallyLinkage())
     return false;
   // Do a name matching.
-  static const StringSet<> VerifyFuncNames(llvm::from_range,
-                                           VerifyPseudoProbeFuncList);
-  return VerifyFuncNames.empty() || VerifyFuncNames.contains(F->getName());
+  static std::unordered_set<std::string> VerifyFuncNames(
+      getVerifyPseudoProbeFuncList(*F).begin(),
+      getVerifyPseudoProbeFuncList(*F).end());
+  return VerifyFuncNames.empty() || VerifyFuncNames.count(F->getName().str());
 }
 
-void PseudoProbeVerifier::registerCallbacks(PassInstrumentationCallbacks &PIC) {
-  if (VerifyPseudoProbe) {
+static bool getVerifyPseudoProbeEnabled(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::IPO_VerifyPseudoProbe>(Ctx);
+}
+
+void PseudoProbeVerifier::registerCallbacks(PassInstrumentationCallbacks &PIC,
+                                            const clv2::OptionsContext &Ctx) {
+  if (getVerifyPseudoProbeEnabled(Ctx)) {
     PIC.registerAfterPassCallback(
         [this](StringRef P, IRUnitRef IR, const PreservedAnalyses &) {
           this->runAfterPass(P, IR);
@@ -510,7 +521,7 @@ void PseudoProbeUpdatePass::runOnFunction(Function &F,
 
 PreservedAnalyses PseudoProbeUpdatePass::run(Module &M,
                                              ModuleAnalysisManager &AM) {
-  if (UpdatePseudoProbe) {
+  if (getUpdatePseudoProbe(M)) {
     for (auto &F : M) {
       if (F.isDeclaration())
         continue;

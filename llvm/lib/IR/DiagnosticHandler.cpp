@@ -9,7 +9,9 @@
 //
 //===----------------------------------------------------------------------===//
 #include "llvm/IR/DiagnosticHandler.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Regex.h"
 
 using namespace llvm;
@@ -36,52 +38,71 @@ struct PassRemarksOpt {
     }
   }
 };
+
+/// Build a Regex from a clv2 list of patterns. Returns a combined pattern
+/// if any values are present.
+static std::shared_ptr<Regex>
+buildPatternFromList(const std::vector<std::string> &Vals) {
+  if (Vals.empty())
+    return nullptr;
+  // Repeated flags: the last value wins.
+  const std::string &Val = Vals.back();
+  if (Val.empty())
+    return nullptr;
+  auto Pat = std::make_shared<Regex>(Val);
+  std::string RegexError;
+  if (!Pat->isValid(RegexError))
+    report_fatal_error(Twine("Invalid regular expression '") + Val +
+                           "' in -pass-remarks: " + RegexError,
+                       false);
+  return Pat;
+}
 } // namespace
 
 static PassRemarksOpt PassRemarksPassedOptLoc;
 static PassRemarksOpt PassRemarksMissedOptLoc;
 static PassRemarksOpt PassRemarksAnalysisOptLoc;
 
-// -pass-remarks
-//    Command line flag to enable emitOptimizationRemark()
-static cl::opt<PassRemarksOpt, true, cl::parser<std::string>> PassRemarks(
-    "pass-remarks", cl::value_desc("pattern"),
-    cl::desc("Enable optimization remarks from passes whose name match "
-             "the given regular expression"),
-    cl::Hidden, cl::location(PassRemarksPassedOptLoc), cl::ValueRequired);
+static const ir_opts::ParsedOpts *getOptsFromCtx(const LLVMContext *Ctx) {
+  return Ctx ? clv2::getView<&clv2::IROptsReg>(Ctx->getOptionsContext())
+             : nullptr;
+}
 
-// -pass-remarks-missed
-//    Command line flag to enable emitOptimizationRemarkMissed()
-static cl::opt<PassRemarksOpt, true, cl::parser<std::string>> PassRemarksMissed(
-    "pass-remarks-missed", cl::value_desc("pattern"),
-    cl::desc("Enable missed optimization remarks from passes whose name match "
-             "the given regular expression"),
-    cl::Hidden, cl::location(PassRemarksMissedOptLoc), cl::ValueRequired);
+static std::shared_ptr<Regex> getPassRemarksPattern(const LLVMContext *Ctx) {
+  if (auto *O = getOptsFromCtx(Ctx))
+    return buildPatternFromList(O->get<&clv2::IR_PassRemarks>());
+  return PassRemarksPassedOptLoc.Pattern;
+}
 
-// -pass-remarks-analysis
-//    Command line flag to enable emitOptimizationRemarkAnalysis()
-static cl::opt<PassRemarksOpt, true, cl::parser<std::string>>
-    PassRemarksAnalysis(
-        "pass-remarks-analysis", cl::value_desc("pattern"),
-        cl::desc(
-            "Enable optimization analysis remarks from passes whose name match "
-            "the given regular expression"),
-        cl::Hidden, cl::location(PassRemarksAnalysisOptLoc), cl::ValueRequired);
+static std::shared_ptr<Regex>
+getPassRemarksMissedPattern(const LLVMContext *Ctx) {
+  if (auto *O = getOptsFromCtx(Ctx))
+    return buildPatternFromList(O->get<&clv2::IR_PassRemarksMissed>());
+  return PassRemarksMissedOptLoc.Pattern;
+}
+
+static std::shared_ptr<Regex>
+getPassRemarksAnalysisPattern(const LLVMContext *Ctx) {
+  if (auto *O = getOptsFromCtx(Ctx))
+    return buildPatternFromList(O->get<&clv2::IR_PassRemarksAnalysis>());
+  return PassRemarksAnalysisOptLoc.Pattern;
+}
 
 bool DiagnosticHandler::isAnalysisRemarkEnabled(StringRef PassName) const {
-  return (PassRemarksAnalysisOptLoc.Pattern &&
-          PassRemarksAnalysisOptLoc.Pattern->match(PassName));
+  auto Pat = getPassRemarksAnalysisPattern(OwnerCtx);
+  return (Pat && Pat->match(PassName));
 }
 bool DiagnosticHandler::isMissedOptRemarkEnabled(StringRef PassName) const {
-  return (PassRemarksMissedOptLoc.Pattern &&
-          PassRemarksMissedOptLoc.Pattern->match(PassName));
+  auto Pat = getPassRemarksMissedPattern(OwnerCtx);
+  return (Pat && Pat->match(PassName));
 }
 bool DiagnosticHandler::isPassedOptRemarkEnabled(StringRef PassName) const {
-  return (PassRemarksPassedOptLoc.Pattern &&
-          PassRemarksPassedOptLoc.Pattern->match(PassName));
+  auto Pat = getPassRemarksPattern(OwnerCtx);
+  return (Pat && Pat->match(PassName));
 }
 
 bool DiagnosticHandler::isAnyRemarkEnabled() const {
-  return (PassRemarksPassedOptLoc.Pattern || PassRemarksMissedOptLoc.Pattern ||
-          PassRemarksAnalysisOptLoc.Pattern);
+  return (getPassRemarksPattern(OwnerCtx) ||
+          getPassRemarksMissedPattern(OwnerCtx) ||
+          getPassRemarksAnalysisPattern(OwnerCtx));
 }

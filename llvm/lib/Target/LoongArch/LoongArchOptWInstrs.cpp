@@ -36,6 +36,9 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
+#include "llvm/IR/Function.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -46,14 +49,15 @@ STATISTIC(NumRemovedSExtW, "Number of removed sign-extensions");
 STATISTIC(NumTransformedToWInstrs,
           "Number of instructions transformed to W-ops");
 
-static cl::opt<bool>
-    DisableSExtWRemoval("loongarch-disable-sextw-removal",
-                        cl::desc("Disable removal of sign-extend insn"),
-                        cl::init(false), cl::Hidden);
-static cl::opt<bool>
-    DisableCvtToDSuffix("loongarch-disable-cvt-to-d-suffix",
-                        cl::desc("Disable convert to D suffix"),
-                        cl::init(false), cl::Hidden);
+static bool getDisableSExtWRemoval(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::LA_DisableSExtWRemoval>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getDisableCvtToDSuffix(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::LA_DisableCvtToDSuffix>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -715,7 +719,7 @@ bool LoongArchOptWInstrs::removeSExtWInstrs(MachineFunction &MF,
                                             const LoongArchInstrInfo &TII,
                                             const LoongArchSubtarget &ST,
                                             MachineRegisterInfo &MRI) {
-  if (DisableSExtWRemoval)
+  if (getDisableSExtWRemoval(MF.getFunction()))
     return false;
 
   bool MadeChange = false;
@@ -856,7 +860,7 @@ bool LoongArchOptWInstrs::runOnMachineFunction(MachineFunction &MF) {
   bool MadeChange = false;
   MadeChange |= removeSExtWInstrs(MF, TII, ST, MRI);
 
-  if (!(DisableCvtToDSuffix || ST.preferWInst()))
+  if (!(getDisableCvtToDSuffix(MF.getFunction()) || ST.preferWInst()))
     MadeChange |= convertToDSuffixes(MF, TII, ST, MRI);
 
   if (ST.preferWInst())

@@ -33,7 +33,8 @@ protected:
   std::unique_ptr<LLVMContext> Ctx;
   std::unique_ptr<Module> M;
 
-  AttributorTestBase() : Ctx(new LLVMContext) {}
+  AttributorTestBase()
+      : Ctx(new LLVMContext(llvm::clv2::defaultOptionsContext())) {}
 
   Module &parseModule(const char *ModuleString) {
     SMDiagnostic Err;

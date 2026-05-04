@@ -12,17 +12,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Passes/HFSort.h"
-#include "llvm/Support/CommandLine.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 #include <unordered_set>
 
 #define DEBUG_TYPE "hfsort"
-
-namespace opts {
-extern llvm::cl::opt<unsigned> Verbosity;
-}
 
 namespace llvm {
 namespace bolt {
@@ -128,7 +124,8 @@ void Cluster::clear() {
   Frozen = false;
 }
 
-std::vector<Cluster> clusterize(const CallGraph &Cg) {
+std::vector<Cluster> clusterize(const CallGraph &Cg,
+                                const clv2::OptionsContext &OptsCtx) {
   std::vector<NodeId> SortedFuncs;
 
   // indexed by NodeId, keeps it's current cluster
@@ -207,10 +204,15 @@ std::vector<Cluster> clusterize(const CallGraph &Cg) {
       continue;
     }
 
-    LLVM_DEBUG(if (opts::Verbosity > 1) {
-      dbgs() << format("merging %s -> %s: %u\n",
-                       PredCluster->toString().c_str(),
-                       Cluster->toString().c_str(), Cg.samples(Fid));
+    LLVM_DEBUG({
+      unsigned Verbosity = 0;
+      if (auto *UtilOpts = bolt_utils_opts::getBoltUtilsOpts(OptsCtx))
+        Verbosity = UtilOpts->get<&clv2::BOLT_Verbosity>();
+      if (Verbosity > 1) {
+        dbgs() << format("merging %s -> %s: %u\n",
+                         PredCluster->toString().c_str(),
+                         Cluster->toString().c_str(), Cg.samples(Fid));
+      }
     });
 
     for (NodeId F : Cluster->targets())

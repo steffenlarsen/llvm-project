@@ -13,8 +13,10 @@
 #include "NVPTXSubtarget.h"
 #include "NVPTXSelectionDAGInfo.h"
 #include "NVPTXTargetMachine.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -23,16 +25,17 @@ using namespace llvm;
 #define GET_SUBTARGETINFO_TARGET_DESC
 #define GET_SUBTARGETINFO_CTOR
 #include "NVPTXGenSubtargetInfo.inc"
+#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
 
-static cl::opt<bool>
-    NoF16Math("nvptx-no-f16-math", cl::Hidden,
-              cl::desc("NVPTX Specific: Disable generation of f16 math ops."),
-              cl::init(false));
+[[maybe_unused]] static bool getNoF16Math(const Module &M) {
+  return clv2::getOptValOr<&clv2::NVPTXOptsReg, &llvm::clv2::NVPTX_NoF16Math>(
+      M.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<bool> NoF32x2("nvptx-no-f32x2", cl::Hidden,
-                             cl::desc("NVPTX Specific: Disable generation of "
-                                      "f32x2 instructions and registers."),
-                             cl::init(false));
+[[maybe_unused]] static bool getNoF32x2(const Module &M) {
+  return clv2::getOptValOr<&clv2::NVPTXOptsReg, &llvm::clv2::NVPTX_NoF32x2>(
+      M.getContext().getOptionsContext(), false);
+}
 
 // Pin the vtable to this file.
 void NVPTXSubtarget::anchor() {}
@@ -173,18 +176,23 @@ NVPTXSubtarget &NVPTXSubtarget::initializeSubtargetDependencies(StringRef CPU,
 
 NVPTXSubtarget::NVPTXSubtarget(const Triple &TT, StringRef CPU, StringRef FS,
                                const NVPTXTargetMachine &TM)
-    : NVPTXGenSubtargetInfo(TT, CPU, /*TuneCPU*/ CPU, FS), PTXVersion(0),
-      InstrInfo(initializeSubtargetDependencies(CPU, FS)), TLInfo(TM, *this),
-      TSInfo(std::make_unique<NVPTXSelectionDAGInfo>()) {}
+    : NVPTXGenSubtargetInfo(TT, CPU, /*TuneCPU*/ CPU, FS,
+                            TM.getOptionsContext()),
+      PTXVersion(0), InstrInfo(initializeSubtargetDependencies(CPU, FS)),
+      TLInfo(TM, *this), TSInfo(std::make_unique<NVPTXSelectionDAGInfo>()) {}
 
 NVPTXSubtarget::~NVPTXSubtarget() = default;
 
 bool NVPTXSubtarget::allowFP16Math() const {
-  return hasFP16Math() && NoF16Math == false;
+  return hasFP16Math() &&
+         !clv2::getOptValOr<&clv2::NVPTXOptsReg, &clv2::NVPTX_NoF16Math>(
+             getOptionsContext(), false);
 }
 
 bool NVPTXSubtarget::hasF32x2Instructions() const {
-  return hasFeature(NVPTX::SM100) && !NoF32x2;
+  return hasFeature(NVPTX::SM100) &&
+         !clv2::getOptValOr<&clv2::NVPTXOptsReg, &clv2::NVPTX_NoF32x2>(
+             getOptionsContext(), false);
 }
 
 bool NVPTXSubtarget::hasNativeBF16Support(unsigned Opcode) const {

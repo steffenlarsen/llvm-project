@@ -73,6 +73,7 @@ add_llvm_pass_plugin(Polly
   Support/ISLTools.cpp
   Support/DumpModulePass.cpp
   Support/DumpFunctionPass.cpp
+  Support/PollyOptions.cpp
   Support/VirtualInstruction.cpp
   Transform/Canonicalization.cpp
   Transform/CodePreparation.cpp
@@ -145,5 +146,8 @@ endif ()
 
 if (TARGET intrinsics_gen)
   # Check if we are building as part of an LLVM build
-  add_dependencies(obj.Polly intrinsics_gen)
+  # PollyOptionsTableGen generates PollyOptionsOptInfos.inc, which the clv2
+  # option headers include.  Without this edge the .inc is never built before
+  # the library compiles.
+  add_dependencies(obj.Polly intrinsics_gen PollyOptionsTableGen)
 endif()

@@ -6,9 +6,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <random>
-#include "llvm/Analysis/PostDominators.h"
+#include "CFGBuilder.h"
 #include "llvm/Analysis/IteratedDominanceFrontier.h"
+#include "llvm/Analysis/PostDominators.h"
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
@@ -16,11 +16,10 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/SourceMgr.h"
-#include "CFGBuilder.h"
 #include "gtest/gtest.h"
+#include <random>
 
 using namespace llvm;
-
 
 /// Build the dominator tree for the function and run the Test.
 static void runWithDomTree(
@@ -56,7 +55,7 @@ TEST(DominatorTree, PHIs) {
   )";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
 
   runWithDomTree(*M, "f",
@@ -100,7 +99,7 @@ TEST(DominatorTree, Unreachable) {
       "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
 
   runWithDomTree(
@@ -305,22 +304,21 @@ TEST(DominatorTree, Unreachable) {
 }
 
 TEST(DominatorTree, NonUniqueEdges) {
-  StringRef ModuleString =
-      "define i32 @f(i32 %i, i32 *%p) {\n"
-      "bb0:\n"
-      "   store i32 %i, i32 *%p\n"
-      "   switch i32 %i, label %bb2 [\n"
-      "     i32 0, label %bb1\n"
-      "     i32 1, label %bb1\n"
-      "   ]\n"
-      " bb1:\n"
-      "   ret i32 1\n"
-      " bb2:\n"
-      "   ret i32 4\n"
-      "}\n";
+  StringRef ModuleString = "define i32 @f(i32 %i, i32 *%p) {\n"
+                           "bb0:\n"
+                           "   store i32 %i, i32 *%p\n"
+                           "   switch i32 %i, label %bb2 [\n"
+                           "     i32 0, label %bb1\n"
+                           "     i32 1, label %bb1\n"
+                           "   ]\n"
+                           " bb1:\n"
+                           "   ret i32 1\n"
+                           " bb2:\n"
+                           "   ret i32 4\n"
+                           "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
 
   runWithDomTree(
@@ -391,20 +389,19 @@ TEST(DominatorTree, NonUniqueEdges) {
 // PostDominatorTree roots, as they have no successors.
 //
 TEST(DominatorTree, DeletingEdgesIntroducesUnreachables) {
-  StringRef ModuleString =
-      "define void @f() {\n"
-      "A:\n"
-      "  br label %B\n"
-      "B:\n"
-      "  br i1 undef, label %D, label %C\n"
-      "C:\n"
-      "  br label %B\n"
-      "D:\n"
-      "  ret void\n"
-      "}\n";
+  StringRef ModuleString = "define void @f() {\n"
+                           "A:\n"
+                           "  br label %B\n"
+                           "B:\n"
+                           "  br i1 undef, label %D, label %C\n"
+                           "C:\n"
+                           "  br label %B\n"
+                           "D:\n"
+                           "  ret void\n"
+                           "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
 
   runWithDomTree(
@@ -483,22 +480,21 @@ TEST(DominatorTree, DeletingEdgesIntroducesUnreachables) {
 //  - B -> D -> VirtualExit.
 //
 TEST(DominatorTree, DeletingEdgesIntroducesInfiniteLoop) {
-  StringRef ModuleString =
-      "define void @f() {\n"
-      "A:\n"
-      "  br label %B\n"
-      "B:\n"
-      "  br i1 undef, label %D, label %C\n"
-      "C:\n"
-      "  switch i32 undef, label %C [\n"
-      "    i32 0, label %B\n"
-      "  ]\n"
-      "D:\n"
-      "  ret void\n"
-      "}\n";
+  StringRef ModuleString = "define void @f() {\n"
+                           "A:\n"
+                           "  br label %B\n"
+                           "B:\n"
+                           "  br i1 undef, label %D, label %C\n"
+                           "C:\n"
+                           "  switch i32 undef, label %C [\n"
+                           "    i32 0, label %B\n"
+                           "  ]\n"
+                           "D:\n"
+                           "  ret void\n"
+                           "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
 
   runWithDomTree(
@@ -570,24 +566,23 @@ TEST(DominatorTree, DeletingEdgesIntroducesInfiniteLoop) {
 // C becomes a new nontrivial PDT root.
 //
 TEST(DominatorTree, DeletingEdgesIntroducesInfiniteLoop2) {
-  StringRef ModuleString =
-      "define void @f() {\n"
-      "A:\n"
-      "  br label %B\n"
-      "B:\n"
-      "  br i1 undef, label %D, label %C\n"
-      "C:\n"
-      "  switch i32 undef, label %C [\n"
-      "    i32 0, label %C2\n"
-      "  ]\n"
-      "C2:\n"
-      "  ret void\n"
-      "D:\n"
-      "  ret void\n"
-      "}\n";
+  StringRef ModuleString = "define void @f() {\n"
+                           "A:\n"
+                           "  br label %B\n"
+                           "B:\n"
+                           "  br i1 undef, label %D, label %C\n"
+                           "C:\n"
+                           "  switch i32 undef, label %C [\n"
+                           "    i32 0, label %C2\n"
+                           "  ]\n"
+                           "C2:\n"
+                           "  ret void\n"
+                           "D:\n"
+                           "  ret void\n"
+                           "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
 
   runWithDomTree(
@@ -645,53 +640,51 @@ TEST(DominatorTree, DeletingEdgesIntroducesInfiniteLoop2) {
 // their 1) level in dom-tree and 2) DFSIn number if the level is the same.
 //
 TEST(DominatorTree, IDFDeterminismTest) {
-  StringRef ModuleString =
-      "define void @f() {\n"
-      "A:\n"
-      "  br i1 undef, label %B, label %C\n"
-      "B:\n"
-      "  br i1 undef, label %D, label %E\n"
-      "C:\n"
-      "  br i1 undef, label %D, label %E\n"
-      "D:\n"
-      "  ret void\n"
-      "E:\n"
-      "  ret void\n"
-      "}\n";
+  StringRef ModuleString = "define void @f() {\n"
+                           "A:\n"
+                           "  br i1 undef, label %B, label %C\n"
+                           "B:\n"
+                           "  br i1 undef, label %D, label %E\n"
+                           "C:\n"
+                           "  br i1 undef, label %D, label %E\n"
+                           "D:\n"
+                           "  ret void\n"
+                           "E:\n"
+                           "  ret void\n"
+                           "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
 
-  runWithDomTree(
-      *M, "f", [&](Function &F, DominatorTree *DT, PostDominatorTree *PDT) {
-        Function::iterator FI = F.begin();
+  runWithDomTree(*M, "f",
+                 [&](Function &F, DominatorTree *DT, PostDominatorTree *PDT) {
+                   Function::iterator FI = F.begin();
 
-        BasicBlock *A = &*FI++;
-        BasicBlock *B = &*FI++;
-        BasicBlock *C = &*FI++;
-        BasicBlock *D = &*FI++;
-        BasicBlock *E = &*FI++;
-        (void)C;
+                   BasicBlock *A = &*FI++;
+                   BasicBlock *B = &*FI++;
+                   BasicBlock *C = &*FI++;
+                   BasicBlock *D = &*FI++;
+                   BasicBlock *E = &*FI++;
+                   (void)C;
 
-        DT->updateDFSNumbers();
-        ForwardIDFCalculator IDF(*DT);
-        SmallPtrSet<BasicBlock *, 1> DefBlocks;
-        DefBlocks.insert(B);
-        IDF.setDefiningBlocks(DefBlocks);
+                   DT->updateDFSNumbers();
+                   ForwardIDFCalculator IDF(*DT);
+                   SmallPtrSet<BasicBlock *, 1> DefBlocks;
+                   DefBlocks.insert(B);
+                   IDF.setDefiningBlocks(DefBlocks);
 
-        SmallVector<BasicBlock *, 32> IDFBlocks;
-        IDF.resetLiveInBlocks();
-        IDF.calculate(IDFBlocks);
+                   SmallVector<BasicBlock *, 32> IDFBlocks;
+                   IDF.resetLiveInBlocks();
+                   IDF.calculate(IDFBlocks);
 
-
-        EXPECT_EQ(IDFBlocks.size(), 2UL);
-        EXPECT_EQ(DT->getNode(A)->getDFSNumIn(), 0UL);
-        EXPECT_EQ(IDFBlocks[0], D);
-        EXPECT_EQ(IDFBlocks[1], E);
-        EXPECT_TRUE(DT->getNode(IDFBlocks[0])->getDFSNumIn() <
-                    DT->getNode(IDFBlocks[1])->getDFSNumIn());
-      });
+                   EXPECT_EQ(IDFBlocks.size(), 2UL);
+                   EXPECT_EQ(DT->getNode(A)->getDFSNumIn(), 0UL);
+                   EXPECT_EQ(IDFBlocks[0], D);
+                   EXPECT_EQ(IDFBlocks[1], E);
+                   EXPECT_TRUE(DT->getNode(IDFBlocks[0])->getDFSNumIn() <
+                               DT->getNode(IDFBlocks[1])->getDFSNumIn());
+                 });
 }
 
 namespace {
@@ -702,7 +695,7 @@ bool CompUpdates(const CFGBuilder::Update &A, const CFGBuilder::Update &B) {
   return std::tie(A.Action, A.Edge.From, A.Edge.To) <
          std::tie(B.Action, B.Edge.From, B.Edge.To);
 }
-}  // namespace
+} // namespace
 
 TEST(DominatorTree, InsertReachable) {
   CFGHolder Holder;
@@ -735,9 +728,9 @@ TEST(DominatorTree, InsertReachable) {
 TEST(DominatorTree, InsertReachable2) {
   CFGHolder Holder;
   std::vector<CFGBuilder::Arc> Arcs = {
-      {"1", "2"}, {"2", "3"}, {"3", "4"},  {"4", "5"},  {"5", "6"},  {"5", "7"},
-      {"7", "5"}, {"2", "8"}, {"8", "11"}, {"11", "12"}, {"12", "10"},
-      {"10", "9"}, {"9", "10"}};
+      {"1", "2"},   {"2", "3"},  {"3", "4"}, {"4", "5"},  {"5", "6"},
+      {"5", "7"},   {"7", "5"},  {"2", "8"}, {"8", "11"}, {"11", "12"},
+      {"12", "10"}, {"10", "9"}, {"9", "10"}};
 
   std::vector<CFGBuilder::Update> Updates = {{Insert, {"10", "7"}}};
   CFGBuilder B(Holder.F, Arcs, Updates);
@@ -996,14 +989,9 @@ TEST(DominatorTree, InsertDeleteExhaustive) {
 
 TEST(DominatorTree, InsertIntoIrreducible) {
   std::vector<CFGBuilder::Arc> Arcs = {
-      {"0", "1"},
-      {"1", "27"}, {"1", "7"},
-      {"10", "18"},
-      {"13", "10"},
-      {"18", "13"}, {"18", "23"},
-      {"23", "13"}, {"23", "24"},
-      {"24", "1"}, {"24", "18"},
-      {"27", "24"}};
+      {"0", "1"},   {"1", "27"},  {"1", "7"},   {"10", "18"},
+      {"13", "10"}, {"18", "13"}, {"18", "23"}, {"23", "13"},
+      {"23", "24"}, {"24", "1"},  {"24", "18"}, {"27", "24"}};
 
   CFGHolder Holder;
   CFGBuilder B(Holder.F, Arcs, {{Insert, {"7", "23"}}});
@@ -1031,43 +1019,43 @@ TEST(DominatorTree, EdgeDomination) {
                            "}\n";
 
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
 
   runWithDomTree(*M, "f",
                  [&](Function &F, DominatorTree *DT, PostDominatorTree *PDT) {
-    Function::iterator FI = F.begin();
+                   Function::iterator FI = F.begin();
 
-    BasicBlock *BB0 = &*FI++;
-    BasicBlock *BB1 = &*FI++;
-    BasicBlock *BB2 = &*FI++;
-    BasicBlock *BB3 = &*FI++;
+                   BasicBlock *BB0 = &*FI++;
+                   BasicBlock *BB1 = &*FI++;
+                   BasicBlock *BB2 = &*FI++;
+                   BasicBlock *BB3 = &*FI++;
 
-    BasicBlockEdge E01(BB0, BB1);
-    BasicBlockEdge E02(BB0, BB2);
-    BasicBlockEdge E13(BB1, BB3);
-    BasicBlockEdge E23(BB2, BB3);
+                   BasicBlockEdge E01(BB0, BB1);
+                   BasicBlockEdge E02(BB0, BB2);
+                   BasicBlockEdge E13(BB1, BB3);
+                   BasicBlockEdge E23(BB2, BB3);
 
-    EXPECT_TRUE(DT->dominates(E01, E01));
-    EXPECT_FALSE(DT->dominates(E01, E02));
-    EXPECT_TRUE(DT->dominates(E01, E13));
-    EXPECT_FALSE(DT->dominates(E01, E23));
+                   EXPECT_TRUE(DT->dominates(E01, E01));
+                   EXPECT_FALSE(DT->dominates(E01, E02));
+                   EXPECT_TRUE(DT->dominates(E01, E13));
+                   EXPECT_FALSE(DT->dominates(E01, E23));
 
-    EXPECT_FALSE(DT->dominates(E02, E01));
-    EXPECT_TRUE(DT->dominates(E02, E02));
-    EXPECT_FALSE(DT->dominates(E02, E13));
-    EXPECT_TRUE(DT->dominates(E02, E23));
+                   EXPECT_FALSE(DT->dominates(E02, E01));
+                   EXPECT_TRUE(DT->dominates(E02, E02));
+                   EXPECT_FALSE(DT->dominates(E02, E13));
+                   EXPECT_TRUE(DT->dominates(E02, E23));
 
-    EXPECT_FALSE(DT->dominates(E13, E01));
-    EXPECT_FALSE(DT->dominates(E13, E02));
-    EXPECT_TRUE(DT->dominates(E13, E13));
-    EXPECT_FALSE(DT->dominates(E13, E23));
+                   EXPECT_FALSE(DT->dominates(E13, E01));
+                   EXPECT_FALSE(DT->dominates(E13, E02));
+                   EXPECT_TRUE(DT->dominates(E13, E13));
+                   EXPECT_FALSE(DT->dominates(E13, E23));
 
-    EXPECT_FALSE(DT->dominates(E23, E01));
-    EXPECT_FALSE(DT->dominates(E23, E02));
-    EXPECT_FALSE(DT->dominates(E23, E13));
-    EXPECT_TRUE(DT->dominates(E23, E23));
-  });
+                   EXPECT_FALSE(DT->dominates(E23, E01));
+                   EXPECT_FALSE(DT->dominates(E23, E02));
+                   EXPECT_FALSE(DT->dominates(E23, E13));
+                   EXPECT_TRUE(DT->dominates(E23, E23));
+                 });
 }
 
 TEST(DominatorTree, ValueDomination) {
@@ -1078,25 +1066,25 @@ TEST(DominatorTree, ValueDomination) {
     }
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
 
-  runWithDomTree(*M, "f",
-                 [&](Function &F, DominatorTree *DT, PostDominatorTree *PDT) {
-    Argument *A = F.getArg(0);
-    GlobalValue *G = M->getNamedValue("foo");
-    Constant *C = ConstantInt::getNullValue(Type::getInt8Ty(Context));
+  runWithDomTree(
+      *M, "f", [&](Function &F, DominatorTree *DT, PostDominatorTree *PDT) {
+        Argument *A = F.getArg(0);
+        GlobalValue *G = M->getNamedValue("foo");
+        Constant *C = ConstantInt::getNullValue(Type::getInt8Ty(Context));
 
-    Instruction *I = F.getEntryBlock().getTerminator();
-    EXPECT_TRUE(DT->dominates(A, I));
-    EXPECT_TRUE(DT->dominates(G, I));
-    EXPECT_TRUE(DT->dominates(C, I));
+        Instruction *I = F.getEntryBlock().getTerminator();
+        EXPECT_TRUE(DT->dominates(A, I));
+        EXPECT_TRUE(DT->dominates(G, I));
+        EXPECT_TRUE(DT->dominates(C, I));
 
-    const Use &U = I->getOperandUse(0);
-    EXPECT_TRUE(DT->dominates(A, U));
-    EXPECT_TRUE(DT->dominates(G, U));
-    EXPECT_TRUE(DT->dominates(C, U));
-  });
+        const Use &U = I->getOperandUse(0);
+        EXPECT_TRUE(DT->dominates(A, U));
+        EXPECT_TRUE(DT->dominates(G, U));
+        EXPECT_TRUE(DT->dominates(C, U));
+      });
 }
 TEST(DominatorTree, CallBrDomination) {
   StringRef ModuleString = R"(
@@ -1116,7 +1104,7 @@ cleanup:
   ret void
 })";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleString);
 
   runWithDomTree(

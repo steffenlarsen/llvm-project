@@ -6,20 +6,19 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Optimizer/Dialect/FIRDialect.h"
-#include "llvm/Support/CommandLine.h"
-
-static llvm::cl::opt<bool>
-    aggressivelyInline("inline-all",
-                       llvm::cl::desc("aggressively inline everything"),
-                       llvm::cl::init(false));
+#include "mlir/IR/Operation.h"
+#include "llvm/Support/OptionsContext.h"
 
 /// Should we inline the callable `op` into region `reg`?
-bool fir::canLegallyInline(mlir::Operation *, mlir::Region *, bool,
+bool fir::canLegallyInline(mlir::Operation *op, mlir::Region *, bool,
                            mlir::IRMapping &) {
-  return aggressivelyInline;
+  auto &optsCtx = op->getContext()->getOptionsContext();
+  return llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_InlineAll>(optsCtx);
 }
 
-bool fir::canLegallyInline(mlir::Operation *, mlir::Operation *, bool) {
-  return aggressivelyInline;
+bool fir::canLegallyInline(mlir::Operation *op, mlir::Operation *, bool) {
+  auto &optsCtx = op->getContext()->getOptionsContext();
+  return llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_InlineAll>(optsCtx);
 }

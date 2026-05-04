@@ -31,7 +31,21 @@ namespace llvm {
 class AAResults;
 class Function;
 
+struct AAEvaluatorOptions {
+  bool PrintAll = false;
+  bool PrintNoAlias = false;
+  bool PrintMayAlias = false;
+  bool PrintPartialAlias = false;
+  bool PrintMustAlias = false;
+  bool PrintNoModRef = false;
+  bool PrintRef = false;
+  bool PrintMod = false;
+  bool PrintModRef = false;
+  bool EvalAAMD = false;
+};
+
 class AAEvaluator : public OptionalPassInfoMixin<AAEvaluator> {
+  AAEvaluatorOptions Options;
   int64_t FunctionCount = 0;
   int64_t NoAliasCount = 0, MayAliasCount = 0, PartialAliasCount = 0;
   int64_t MustAliasCount = 0;
@@ -39,9 +53,10 @@ class AAEvaluator : public OptionalPassInfoMixin<AAEvaluator> {
 
 public:
   AAEvaluator() = default;
+  explicit AAEvaluator(AAEvaluatorOptions Options) : Options(Options) {}
   AAEvaluator(AAEvaluator &&Arg)
-      : FunctionCount(Arg.FunctionCount), NoAliasCount(Arg.NoAliasCount),
-        MayAliasCount(Arg.MayAliasCount),
+      : Options(Arg.Options), FunctionCount(Arg.FunctionCount),
+        NoAliasCount(Arg.NoAliasCount), MayAliasCount(Arg.MayAliasCount),
         PartialAliasCount(Arg.PartialAliasCount),
         MustAliasCount(Arg.MustAliasCount), NoModRefCount(Arg.NoModRefCount),
         ModCount(Arg.ModCount), RefCount(Arg.RefCount),

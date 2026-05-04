@@ -24,10 +24,12 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/PatternMatch.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 
 #if LLVM_ENABLE_ABI_BREAKING_CHECKS
 #define SCEV_DEBUG_WITH_TYPE(TYPE, X) DEBUG_WITH_TYPE(TYPE, X)
@@ -37,10 +39,9 @@
 
 using namespace llvm;
 
-cl::opt<unsigned> llvm::SCEVCheapExpansionBudget(
-    "scev-cheap-expansion-budget", cl::Hidden, cl::init(4),
-    cl::desc("When performing SCEV expansion only if it is cheap to do, this "
-             "controls the budget that is considered cheap (default = 4)"));
+unsigned llvm::getSCEVCheapExpansionBudget(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::TU_SCEVCheapExpansionBudget>(Ctx);
+}
 
 using namespace PatternMatch;
 using namespace SCEVPatternMatch;

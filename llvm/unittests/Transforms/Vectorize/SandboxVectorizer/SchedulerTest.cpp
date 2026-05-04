@@ -26,7 +26,7 @@ using namespace llvm;
 static constexpr auto BottomUp = sandboxir::SchedDirection::BottomUp;
 
 struct SchedulerTest : public testing::Test {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   std::unique_ptr<AssumptionCache> AC;
   std::unique_ptr<DominatorTree> DT;

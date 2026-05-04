@@ -11,11 +11,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "RemarkUtilHelpers.h"
-#include "RemarkUtilRegistry.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Regex.h"
@@ -28,36 +26,10 @@ using namespace llvm::remarkutil;
 
 namespace summary {
 
-static cl::SubCommand
-    SummarySub("summary", "Summarize remarks using different strategies.");
-
-INPUT_FORMAT_COMMAND_LINE_OPTIONS(SummarySub)
-OUTPUT_FORMAT_COMMAND_LINE_OPTIONS(SummarySub)
-INPUT_OUTPUT_COMMAND_LINE_OPTIONS(SummarySub)
-
-static cl::OptionCategory SummaryStrategyCat("Strategy options");
-
-enum class KeepMode { None, Used, All };
-
-static cl::opt<KeepMode> KeepInputOpt(
-    "keep", cl::desc("Keep input remarks in output"), cl::init(KeepMode::None),
-    cl::values(clEnumValN(KeepMode::None, "none",
-                          "Don't keep input remarks (default)"),
-               clEnumValN(KeepMode::Used, "used",
-                          "Keep only remarks used for summary"),
-               clEnumValN(KeepMode::All, "all", "Keep all input remarks")),
-    cl::sub(SummarySub));
-
-static cl::opt<bool>
-    IgnoreMalformedOpt("ignore-malformed",
-                       cl::desc("Ignore remarks that fail to process"),
-                       cl::init(false), cl::Hidden, cl::sub(SummarySub));
-
-// Use one cl::opt per Strategy, because future strategies might need to take
-// per-strategy parameters.
-static cl::opt<bool> EnableInlineSummaryOpt(
-    "inline-callees", cl::desc("Summarize per-callee inling statistics"),
-    cl::cat(SummaryStrategyCat), cl::init(false), cl::sub(SummarySub));
+KeepMode KeepInputVal;
+bool IgnoreMalformedVal;
+bool EnableInlineSummaryVal;
+bool EnableInlineSummarySpecified;
 
 /// An interface to implement different strategies for creating remark
 /// summaries. Override this class to develop new strategies.
@@ -78,17 +50,7 @@ public:
   virtual void emit(RemarkSerializer &Serializer) = 0;
 };
 
-/// Check if any summary strategy options are explicitly enabled.
-static bool isAnyStrategyRequested() {
-  for (auto &[_, Opt] : cl::getRegisteredOptions(SummarySub)) {
-    if (!is_contained(Opt->Categories, &SummaryStrategyCat))
-      continue;
-    if (!Opt->getNumOccurrences())
-      continue;
-    return true;
-  }
-  return false;
-}
+static bool isAnyStrategyRequested() { return EnableInlineSummarySpecified; }
 
 class InlineCalleeSummary : public SummaryStrategy {
   struct CallsiteCost {
@@ -187,7 +149,7 @@ class InlineCalleeSummary : public SummaryStrategy {
   }
 };
 
-static Error trySummary() {
+Error trySummary() {
   auto MaybeBuf = getInputMemoryBuffer(InputFileName);
   if (!MaybeBuf)
     return MaybeBuf.takeError();
@@ -211,7 +173,7 @@ static Error trySummary() {
 
   bool UseDefaultStrategies = !isAnyStrategyRequested();
   SmallVector<std::unique_ptr<SummaryStrategy>> Strategies;
-  if (EnableInlineSummaryOpt || UseDefaultStrategies)
+  if (EnableInlineSummaryVal || UseDefaultStrategies)
     Strategies.push_back(std::make_unique<InlineCalleeSummary>());
 
   auto MaybeRemark = Parser.next();
@@ -223,7 +185,7 @@ static Error trySummary() {
         continue;
       UsedRemark = true;
       if (auto E = Strategy->process(Remark)) {
-        if (IgnoreMalformedOpt) {
+        if (IgnoreMalformedVal) {
           WithColor::warning() << "Ignored error: " << E << "\n";
           consumeError(std::move(E));
           continue;
@@ -231,8 +193,8 @@ static Error trySummary() {
         return E;
       }
     }
-    if (KeepInputOpt == KeepMode::All ||
-        (KeepInputOpt == KeepMode::Used && UsedRemark))
+    if (KeepInputVal == KeepMode::All ||
+        (KeepInputVal == KeepMode::Used && UsedRemark))
       Serializer.emit(Remark);
   }
 
@@ -247,7 +209,5 @@ static Error trySummary() {
   OF->keep();
   return Error::success();
 }
-
-static CommandRegistration SummaryReg(&SummarySub, trySummary);
 
 } // namespace summary

@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 #include "llvm/Analysis/MLInlineAdvisor.h"
 #include "llvm/ADT/SCCIterator.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/CallGraph.h"
@@ -29,40 +30,44 @@
 #include "llvm/Analysis/TensorSpec.h"
 #include "llvm/Analysis/Utils/MLGOUtils.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
-static cl::opt<std::string> InteractiveChannelBaseName(
-    "inliner-interactive-channel-base", cl::Hidden,
-    cl::desc(
-        "Base file path for the interactive mode. The incoming filename should "
-        "have the name <inliner-interactive-channel-base>.in, while the "
-        "outgoing name should be <inliner-interactive-channel-base>.out"));
 static const std::string InclDefaultMsg =
     (Twine("In interactive mode, also send the default policy decision: ") +
      DefaultDecisionName + ".")
         .str();
-static cl::opt<bool>
-    InteractiveIncludeDefault("inliner-interactive-include-default", cl::Hidden,
-                              cl::desc(InclDefaultMsg));
 
 enum class SkipMLPolicyCriteria { Never, IfCallerIsNotCold };
 
-static cl::opt<SkipMLPolicyCriteria> SkipPolicy(
-    "ml-inliner-skip-policy", cl::Hidden, cl::init(SkipMLPolicyCriteria::Never),
-    cl::values(clEnumValN(SkipMLPolicyCriteria::Never, "never", "never"),
-               clEnumValN(SkipMLPolicyCriteria::IfCallerIsNotCold,
-                          "if-caller-not-cold", "if the caller is not cold")));
-
-static cl::opt<std::string> ModelSelector("ml-inliner-model-selector",
-                                          cl::Hidden, cl::init(""));
-
-static cl::opt<bool> StopImmediatelyForTest("ml-inliner-stop-immediately",
-                                            cl::Hidden);
+static std::string
+getInteractiveChannelBaseName(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
+                                    &clv2::AN_InteractiveChannelBaseName>(
+      Ctx, std::string{});
+}
+static bool getInteractiveIncludeDefault(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
+                                    &clv2::AN_InteractiveIncludeDefault>(Ctx,
+                                                                         false);
+}
+static std::string getModelSelector(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
+                                    &clv2::AN_ModelSelector>(Ctx,
+                                                             std::string{});
+}
+static bool getStopImmediatelyForTest(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
+                                    &clv2::AN_StopImmediatelyForTest>(Ctx,
+                                                                      false);
+}
 
 #if defined(LLVM_HAVE_TF_AOT_INLINERSIZEMODEL)
 // codegen-ed file
@@ -83,21 +88,36 @@ enum class EmitCModelChoice {
 #include "llvm/Analysis/InlinerModels.def"
 };
 
-static llvm::cl::opt<EmitCModelChoice> SelectedMLGOModel(
-    "mlgo-model", llvm::cl::desc("Select the MLGO model to execute:"),
-    llvm::cl::init(EmitCModelChoice::Default),
-    llvm::cl::values(clEnumValN(EmitCModelChoice::Default, "default",
-                                "Use standard heuristic")
+// The set of models comes from InlinerModels.def, which TableGen cannot see,
+// so this option is declared locally as a string and resolved to the enum by
+// name at use time.
+static constexpr clv2::OptionInfo<std::string> OI_MlgoModel{
+    "mlgo-model", "Select the MLGO model to execute", clv2::Hidden};
+static constexpr clv2::OptionsRegistry<&OI_MlgoModel> MlgoModelReg;
+static std::string SelectedMLGOModelName;
+static void applyMlgoModel(const decltype(MlgoModelReg)::ParsedOptionsT &Opts) {
+  SelectedMLGOModelName = Opts.get<&OI_MlgoModel>();
+}
+[[maybe_unused]] static const bool MlgoModelRegistered = [] {
+  clv2::registerDynamicRegistry<&MlgoModelReg>(applyMlgoModel);
+  return true;
+}();
+
+static EmitCModelChoice getSelectedMLGOModel() {
+  StringRef Name = SelectedMLGOModelName;
+  if (Name.empty() || Name == "default")
+    return EmitCModelChoice::Default;
 #define MLGO_MODEL(CLASS_NAME, CLI_FLAG)                                       \
-  , clEnumValN(EmitCModelChoice::CLASS_NAME, CLI_FLAG,                         \
-               "Use the " CLI_FLAG " MLGO model")
+  if (Name == CLI_FLAG)                                                        \
+    return EmitCModelChoice::CLASS_NAME;
 #include "llvm/Analysis/InlinerModels.def"
-                         ));
+  report_fatal_error("Unknown MLGO model: " + Twine(Name));
+}
 
 static std::unique_ptr<MLModelRunner>
 createEmitCModelRunner(LLVMContext &Ctx,
                        const std::vector<TensorSpec> &InputFeatures) {
-  switch (SelectedMLGOModel) {
+  switch (getSelectedMLGOModel()) {
   case EmitCModelChoice::Default:
     return nullptr;
 #define MLGO_MODEL(CLASS_NAME, CLI_FLAG)                                       \
@@ -110,7 +130,9 @@ createEmitCModelRunner(LLVMContext &Ctx,
 #else
 constexpr bool HaveMLIRLoweringInliner = false;
 enum class EmitCModelChoice { Default };
-static const EmitCModelChoice SelectedMLGOModel = EmitCModelChoice::Default;
+static EmitCModelChoice getSelectedMLGOModel() {
+  return EmitCModelChoice::Default;
+}
 static inline std::unique_ptr<MLModelRunner>
 createEmitCModelRunner(LLVMContext &, const std::vector<TensorSpec> &) {
   return nullptr;
@@ -120,16 +142,19 @@ createEmitCModelRunner(LLVMContext &, const std::vector<TensorSpec> &) {
 std::unique_ptr<InlineAdvisor>
 llvm::getReleaseModeAdvisor(Module &M, ModuleAnalysisManager &MAM,
                             std::function<bool(CallBase &)> GetDefaultAdvice) {
-  if (!isReleaseModelValid<CompiledModelType>(InteractiveChannelBaseName,
-                                              SelectedMLGOModel))
+  const auto &OptsCtx = M.getContext().getOptionsContext();
+  if (!isReleaseModelValid<CompiledModelType>(
+          getInteractiveChannelBaseName(OptsCtx), getSelectedMLGOModel()))
     return nullptr;
   auto RunnerFactory = [&](const std::vector<TensorSpec> &InputFeatures)
       -> std::unique_ptr<MLModelRunner> {
     return createReleaseModeModelRunner<CompiledModelType,
                                         HaveMLIRLoweringInliner>(
-        M.getContext(), InputFeatures, DecisionName, InteractiveChannelBaseName,
-        InlineDecisionSpec, createEmitCModelRunner,
-        EmbeddedModelRunnerOptions().setModelSelector(ModelSelector));
+        M.getContext(), InputFeatures, DecisionName,
+        getInteractiveChannelBaseName(OptsCtx), InlineDecisionSpec,
+        createEmitCModelRunner,
+        EmbeddedModelRunnerOptions().setModelSelector(
+            getModelSelector(OptsCtx)));
   };
   return std::make_unique<MLInlineAdvisor>(M, MAM, RunnerFactory,
                                            GetDefaultAdvice);
@@ -137,17 +162,6 @@ llvm::getReleaseModeAdvisor(Module &M, ModuleAnalysisManager &MAM,
 
 #define DEBUG_TYPE "inline-ml"
 
-static cl::opt<float> SizeIncreaseThreshold(
-    "ml-advisor-size-increase-threshold", cl::Hidden,
-    cl::desc("Maximum factor by which expected native size may increase before "
-             "blocking any further inlining."),
-    cl::init(2.0));
-
-static cl::opt<bool> KeepFPICache(
-    "ml-advisor-keep-fpi-cache", cl::Hidden,
-    cl::desc(
-        "For test - keep the ML Inline advisor's FunctionPropertiesInfo cache"),
-    cl::init(false));
 
 const std::vector<TensorSpec> &MLInlineAdvisor::getInitialFeatureMap() {
   // clang-format off
@@ -246,7 +260,8 @@ MLInlineAdvisor::MLInlineAdvisor(
     FeatureMap.push_back(
         TensorSpec::createSpec<float>("caller_embedding", {IR2VecDim}));
   }
-  if (InteractiveIncludeDefault)
+  const auto &MOptsCtx = M.getContext().getOptionsContext();
+  if (getInteractiveIncludeDefault(MOptsCtx))
     FeatureMap.push_back(DefaultDecisionSpec);
 
   ModelRunner = GetModelRunner(getFeatureMap());
@@ -255,7 +270,7 @@ MLInlineAdvisor::MLInlineAdvisor(
     return;
   }
   ModelRunner->switchContext("");
-  ForceStop = StopImmediatelyForTest;
+  ForceStop = getStopImmediatelyForTest(MOptsCtx);
 }
 
 unsigned MLInlineAdvisor::getInitialFunctionLevel(const Function &F) const {
@@ -314,7 +329,7 @@ void MLInlineAdvisor::onPassEntry(LazyCallGraph::SCC *CurSCC) {
 
 void MLInlineAdvisor::onPassExit(LazyCallGraph::SCC *CurSCC) {
   // No need to keep this around - function passes will invalidate it.
-  if (!KeepFPICache)
+  if (!false)
     FPICache.clear();
   if (!CurSCC || ForceStop)
     return;
@@ -348,7 +363,7 @@ int64_t MLInlineAdvisor::getLocalCalls(Function &F) {
 // analysis. Currently, we maintain minimal (and very simple) global state - the
 // number of functions and the number of static calls. We also keep track of the
 // total IR size in this module, to stop misbehaving policies at a certain bloat
-// factor (SizeIncreaseThreshold)
+// factor (2.0x)
 void MLInlineAdvisor::onSuccessfulInlining(const MLInlineAdvice &Advice,
                                            bool CalleeWasDeleted) {
   assert(!ForceStop);
@@ -397,7 +412,7 @@ void MLInlineAdvisor::onSuccessfulInlining(const MLInlineAdvice &Advice,
     }
     EdgeCount += (NewCallerAndCalleeEdges - Advice.CallerAndCalleeEdges);
   }
-  if (CurrentIRSize > SizeIncreaseThreshold * InitialIRSize)
+  if (CurrentIRSize > 2.0 * InitialIRSize)
     ForceStop = true;
 
   assert(CurrentIRSize >= 0 && EdgeCount >= 0 && NodeCount >= 0);
@@ -432,7 +447,7 @@ std::unique_ptr<InlineAdvice> MLInlineAdvisor::getAdviceImpl(CallBase &CB) {
   auto &TIR = FAM.getResult<TargetIRAnalysis>(Callee);
   auto &ORE = FAM.getResult<OptimizationRemarkEmitterAnalysis>(Caller);
 
-  if (SkipPolicy == SkipMLPolicyCriteria::IfCallerIsNotCold) {
+  if (false) { // SkipPolicy default is Never
     if (!PSI.isFunctionEntryCold(&Caller)) {
       // Return a MLInlineAdvice, despite delegating to the default advice,
       // because we need to keep track of the internal state. This is different
@@ -546,7 +561,11 @@ std::unique_ptr<InlineAdvice> MLInlineAdvisor::getAdviceImpl(CallBase &CB) {
         static_cast<InlineCostFeatureIndex>(I))) = CostFeatures->at(I);
   }
   // This one would have been set up to be right at the end.
-  if (!InteractiveChannelBaseName.empty() && InteractiveIncludeDefault)
+  if (!getInteractiveChannelBaseName(
+           CB.getCaller()->getContext().getOptionsContext())
+           .empty() &&
+      getInteractiveIncludeDefault(
+          CB.getCaller()->getContext().getOptionsContext()))
     *ModelRunner->getTensor<int64_t>(getFeatureMap().size() - 1) =
         GetDefaultAdvice(CB);
   return getAdviceFromModel(CB, ORE);

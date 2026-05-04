@@ -19,6 +19,7 @@
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/MemoryBufferRef.h"
+#include "llvm/Support/OptionsContext.h"
 #include <memory>
 #include <vector>
 
@@ -27,6 +28,9 @@ namespace llvm {
 class BitstreamWriter;
 class Module;
 class raw_ostream;
+namespace clv2 {
+class OptionsContext;
+}
 
 class BitcodeWriter {
   std::unique_ptr<BitstreamWriter> Stream;
@@ -46,7 +50,7 @@ class BitcodeWriter {
 public:
   /// Create a BitcodeWriter that writes to Buffer.
   LLVM_ABI BitcodeWriter(SmallVectorImpl<char> &Buffer);
-  LLVM_ABI BitcodeWriter(raw_ostream &FS);
+  LLVM_ABI BitcodeWriter(raw_ostream &FS, const Module &M);
 
   LLVM_ABI ~BitcodeWriter();
 
@@ -89,7 +93,8 @@ public:
                             bool ShouldPreserveUseListOrder = false,
                             const ModuleSummaryIndex *Index = nullptr,
                             bool GenerateHash = false,
-                            ModuleHash *ModHash = nullptr);
+                            ModuleHash *ModHash = nullptr,
+                            unsigned MDIndexThreshold = 25);
 
   /// Write the specified thin link bitcode file (i.e., the minimized bitcode
   /// file) to the buffer specified at construction time. The thin link
@@ -105,7 +110,8 @@ public:
   LLVM_ABI void
   writeIndex(const ModuleSummaryIndex *Index,
              const ModuleToSummariesForIndexTy *ModuleToSummariesForIndex,
-             const GVSummaryPtrSet *DecSummaries);
+             const GVSummaryPtrSet *DecSummaries,
+             const clv2::OptionsContext &OptsCtx);
 };
 
 /// Write the specified module to the specified raw output stream.
@@ -133,7 +139,8 @@ LLVM_ABI void WriteBitcodeToFile(const Module &M, raw_ostream &Out,
                                  bool ShouldPreserveUseListOrder = false,
                                  const ModuleSummaryIndex *Index = nullptr,
                                  bool GenerateHash = false,
-                                 ModuleHash *ModHash = nullptr);
+                                 ModuleHash *ModHash = nullptr,
+                                 unsigned MDIndexThreshold = 25);
 
 /// Write the specified thin link bitcode file (i.e., the minimized bitcode
 /// file) to the given raw output stream, where it will be written in a new
@@ -154,6 +161,7 @@ LLVM_ABI void writeThinLinkBitcodeToFile(const Module &M, raw_ostream &Out,
 /// corresponding value should be imported as a declaration (prototype).
 LLVM_ABI void writeIndexToFile(
     const ModuleSummaryIndex &Index, raw_ostream &Out,
+    const clv2::OptionsContext &OptsCtx,
     const ModuleToSummariesForIndexTy *ModuleToSummariesForIndex = nullptr,
     const GVSummaryPtrSet *DecSummaries = nullptr);
 
@@ -169,6 +177,13 @@ LLVM_ABI void writeIndexToFile(
 LLVM_ABI void embedBitcodeInModule(Module &M, MemoryBufferRef Buf,
                                    bool EmbedBitcode, bool EmbedCmdline,
                                    const std::vector<uint8_t> &CmdArgs);
+
+/// When true, include allocation context in combined memprof summary records.
+/// Defaults to false in NDEBUG builds, true in debug builds.
+/// Prefers the OptionsContext value when \p Ctx is non-null; falls back to the
+/// value carried by the OptionsContext.
+LLVM_ABI bool
+getCombinedIndexMemProfContextEnabled(const clv2::OptionsContext &Ctx);
 
 } // end namespace llvm
 

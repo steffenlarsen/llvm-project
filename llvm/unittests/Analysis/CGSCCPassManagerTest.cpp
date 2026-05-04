@@ -16,8 +16,8 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/PassManager.h"
 #include "llvm/IR/PassInstrumentation.h"
+#include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Transforms/Utils/CallGraphUpdater.h"
@@ -188,14 +188,14 @@ std::unique_ptr<Module> parseIR(const char *IR) {
   // We just use a static context here. This is never called from multiple
   // threads so it is harmless no matter how it is implemented. We just need
   // the context to outlive the module which it does.
-  static LLVMContext C;
+  static LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   return parseAssemblyString(IR, Err, C);
 }
 
 class CGSCCPassManagerTest : public ::testing::Test {
 protected:
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   FunctionAnalysisManager FAM;
   CGSCCAnalysisManager CGAM;
   ModuleAnalysisManager MAM;
@@ -407,20 +407,19 @@ TEST_F(CGSCCPassManagerTest, TestSCCPassInvalidatesModuleAnalysis) {
   // previous time and in one SCC fails to preserve it.
   CGSCCPassManager CGPM2;
   int CountFoundModuleAnalysis2 = 0;
-  CGPM2.addPass(
-      LambdaSCCPass([&](LazyCallGraph::SCC &C, CGSCCAnalysisManager &AM,
-                        LazyCallGraph &CG, CGSCCUpdateResult &UR) {
-        const auto &MAMProxy =
-            AM.getResult<ModuleAnalysisManagerCGSCCProxy>(C, CG);
-        if (MAMProxy.cachedResultExists<TestModuleAnalysis>(
-                *C.begin()->getFunction().getParent()))
-          ++CountFoundModuleAnalysis2;
+  CGPM2.addPass(LambdaSCCPass([&](LazyCallGraph::SCC &C,
+                                  CGSCCAnalysisManager &AM, LazyCallGraph &CG,
+                                  CGSCCUpdateResult &UR) {
+    const auto &MAMProxy = AM.getResult<ModuleAnalysisManagerCGSCCProxy>(C, CG);
+    if (MAMProxy.cachedResultExists<TestModuleAnalysis>(
+            *C.begin()->getFunction().getParent()))
+      ++CountFoundModuleAnalysis2;
 
-        // Only fail to preserve analyses on one SCC and make sure that gets
-        // propagated.
-        return C.getName() == "(g)" ? PreservedAnalyses::none()
-                                  : PreservedAnalyses::all();
-      }));
+    // Only fail to preserve analyses on one SCC and make sure that gets
+    // propagated.
+    return C.getName() == "(g)" ? PreservedAnalyses::none()
+                                : PreservedAnalyses::all();
+  }));
   MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(std::move(CGPM2)));
 
   // The third CGSCC run should fail to find a cached module analysis as it
@@ -449,7 +448,8 @@ TEST_F(CGSCCPassManagerTest, TestSCCPassInvalidatesModuleAnalysis) {
 
 // Similar to the above, but test that this works for function passes embedded
 // *within* a CGSCC layer.
-TEST_F(CGSCCPassManagerTest, TestFunctionPassInsideCGSCCInvalidatesModuleAnalysis) {
+TEST_F(CGSCCPassManagerTest,
+       TestFunctionPassInsideCGSCCInvalidatesModuleAnalysis) {
   int ModuleAnalysisRuns = 0;
   MAM.registerPass([&] { return TestModuleAnalysis(ModuleAnalysisRuns); });
 
@@ -478,8 +478,8 @@ TEST_F(CGSCCPassManagerTest, TestFunctionPassInsideCGSCCInvalidatesModuleAnalysi
   // The second run checks that the module analysis got preserved the previous
   // time and in one function fails to preserve it.
   FunctionPassManager FPM2;
-  // Again, start true and mark false if we ever failed to find a module analysis
-  // because we expect this to succeed for each SCC.
+  // Again, start true and mark false if we ever failed to find a module
+  // analysis because we expect this to succeed for each SCC.
   bool FoundModuleAnalysis2 = true;
   FPM2.addPass(LambdaFunctionPass([&](Function &F,
                                       FunctionAnalysisManager &AM) {
@@ -1182,39 +1182,39 @@ TEST_F(CGSCCPassManagerTest, TestAnalysisInvalidationCGSCCUpdate) {
   // h2)` SCC but also deletes the call edge from `h2` to `h3` and updates the
   // CG. This should successfully invalidate (and force to be re-run) all the
   // analyses for that SCC and for the functions.
-  CGPM.addPass(
-      LambdaSCCPass([&](LazyCallGraph::SCC &C, CGSCCAnalysisManager &AM,
-                        LazyCallGraph &CG, CGSCCUpdateResult &UR) {
-        (void)AM.getResult<TestDoublyIndirectSCCAnalysis>(C, CG);
-        if (C.getName() != "(h3, h1, h2)")
-          return PreservedAnalyses::all();
+  CGPM.addPass(LambdaSCCPass([&](LazyCallGraph::SCC &C,
+                                 CGSCCAnalysisManager &AM, LazyCallGraph &CG,
+                                 CGSCCUpdateResult &UR) {
+    (void)AM.getResult<TestDoublyIndirectSCCAnalysis>(C, CG);
+    if (C.getName() != "(h3, h1, h2)")
+      return PreservedAnalyses::all();
 
-        // Build the preserved set.
-        auto PA = PreservedAnalyses::none();
-        PA.preserve<FunctionAnalysisManagerCGSCCProxy>();
-        PA.preserve<TestIndirectSCCAnalysis>();
-        PA.preserve<TestDoublyIndirectSCCAnalysis>();
+    // Build the preserved set.
+    auto PA = PreservedAnalyses::none();
+    PA.preserve<FunctionAnalysisManagerCGSCCProxy>();
+    PA.preserve<TestIndirectSCCAnalysis>();
+    PA.preserve<TestDoublyIndirectSCCAnalysis>();
 
-        // Delete the call from `h2` to `h3`.
-        auto &H2N = *llvm::find_if(
-            C, [](LazyCallGraph::Node &N) { return N.getName() == "h2"; });
-        auto &H2F = H2N.getFunction();
-        auto &H3F = *cast<CallInst>(H2F.begin()->begin())->getCalledFunction();
-        assert(H3F.getName() == "h3" && "Wrong called function!");
-        H2F.begin()->begin()->eraseFromParent();
-        // Insert a bitcast of `h3` so that we retain a ref edge to it.
-        (void)CastInst::CreatePointerCast(
-            &H3F, PointerType::getUnqual(H2F.getContext()), "dummy",
-            H2F.begin()->begin());
+    // Delete the call from `h2` to `h3`.
+    auto &H2N = *llvm::find_if(
+        C, [](LazyCallGraph::Node &N) { return N.getName() == "h2"; });
+    auto &H2F = H2N.getFunction();
+    auto &H3F = *cast<CallInst>(H2F.begin()->begin())->getCalledFunction();
+    assert(H3F.getName() == "h3" && "Wrong called function!");
+    H2F.begin()->begin()->eraseFromParent();
+    // Insert a bitcast of `h3` so that we retain a ref edge to it.
+    (void)CastInst::CreatePointerCast(&H3F,
+                                      PointerType::getUnqual(H2F.getContext()),
+                                      "dummy", H2F.begin()->begin());
 
-        // Now update the call graph.
-        auto &NewC =
-            updateCGAndAnalysisManagerForFunctionPass(CG, C, H2N, AM, UR, FAM);
-        assert(&NewC != &C && "Should get a new SCC due to update!");
-        (void)&NewC;
+    // Now update the call graph.
+    auto &NewC =
+        updateCGAndAnalysisManagerForFunctionPass(CG, C, H2N, AM, UR, FAM);
+    assert(&NewC != &C && "Should get a new SCC due to update!");
+    (void)&NewC;
 
-        return PA;
-      }));
+    return PA;
+  }));
   // Now use the analysis again on each SCC and function, forcing
   // re-computation for all of them.
   CGPM.addPass(RequireTestDoublyIndirectSCCAnalysisPass());
@@ -1231,36 +1231,37 @@ TEST_F(CGSCCPassManagerTest, TestAnalysisInvalidationCGSCCUpdate) {
   // back to `h2`, and then invalidates everything for what will then be the
   // `(h3, h1, h2)` SCC again.
   CGSCCPassManager CGPM3;
-  CGPM3.addPass(
-      LambdaSCCPass([&](LazyCallGraph::SCC &C, CGSCCAnalysisManager &AM,
-                        LazyCallGraph &CG, CGSCCUpdateResult &UR) {
-        (void)AM.getResult<TestDoublyIndirectSCCAnalysis>(C, CG);
-        if (C.getName() != "(h2)")
-          return PreservedAnalyses::all();
+  CGPM3.addPass(LambdaSCCPass([&](LazyCallGraph::SCC &C,
+                                  CGSCCAnalysisManager &AM, LazyCallGraph &CG,
+                                  CGSCCUpdateResult &UR) {
+    (void)AM.getResult<TestDoublyIndirectSCCAnalysis>(C, CG);
+    if (C.getName() != "(h2)")
+      return PreservedAnalyses::all();
 
-        // Build the preserved set.
-        auto PA = PreservedAnalyses::none();
-        PA.preserve<FunctionAnalysisManagerCGSCCProxy>();
-        PA.preserve<TestIndirectSCCAnalysis>();
-        PA.preserve<TestDoublyIndirectSCCAnalysis>();
+    // Build the preserved set.
+    auto PA = PreservedAnalyses::none();
+    PA.preserve<FunctionAnalysisManagerCGSCCProxy>();
+    PA.preserve<TestIndirectSCCAnalysis>();
+    PA.preserve<TestDoublyIndirectSCCAnalysis>();
 
-        // Delete the bitcast of `h3` that we added earlier.
-        auto &H2N = *C.begin();
-        auto &H2F = H2N.getFunction();
-        auto &H3F = *cast<Function>(cast<BitCastInst>(H2F.begin()->begin())->getOperand(0));
-        assert(H3F.getName() == "h3" && "Wrong called function!");
-        H2F.begin()->begin()->eraseFromParent();
-        // And insert a call to `h3`.
-        (void)CallInst::Create(&H3F, {}, "", H2F.begin()->begin());
+    // Delete the bitcast of `h3` that we added earlier.
+    auto &H2N = *C.begin();
+    auto &H2F = H2N.getFunction();
+    auto &H3F =
+        *cast<Function>(cast<BitCastInst>(H2F.begin()->begin())->getOperand(0));
+    assert(H3F.getName() == "h3" && "Wrong called function!");
+    H2F.begin()->begin()->eraseFromParent();
+    // And insert a call to `h3`.
+    (void)CallInst::Create(&H3F, {}, "", H2F.begin()->begin());
 
-        // Now update the call graph.
-        auto &NewC =
-            updateCGAndAnalysisManagerForFunctionPass(CG, C, H2N, AM, UR, FAM);
-        assert(&NewC != &C && "Should get a new SCC due to update!");
-        (void)&NewC;
+    // Now update the call graph.
+    auto &NewC =
+        updateCGAndAnalysisManagerForFunctionPass(CG, C, H2N, AM, UR, FAM);
+    assert(&NewC != &C && "Should get a new SCC due to update!");
+    (void)&NewC;
 
-        return PA;
-      }));
+    return PA;
+  }));
   // Now use the analysis again on each SCC and function, forcing
   // re-computation for all of them.
   CGPM3.addPass(RequireTestDoublyIndirectSCCAnalysisPass());
@@ -1378,36 +1379,35 @@ TEST_F(CGSCCPassManagerTest, TestUpdateCGAndAnalysisManagerForPasses0) {
 
 TEST_F(CGSCCPassManagerTest, TestUpdateCGAndAnalysisManagerForPasses1) {
   CGSCCPassManager CGPM;
-  CGPM.addPass(LambdaSCCPassNoPreserve([&](LazyCallGraph::SCC &C,
-                                           CGSCCAnalysisManager &AM,
-                                           LazyCallGraph &CG,
-                                           CGSCCUpdateResult &UR) {
-    if (C.getName() != "(h3, h1, h2)")
-      return;
+  CGPM.addPass(LambdaSCCPassNoPreserve(
+      [&](LazyCallGraph::SCC &C, CGSCCAnalysisManager &AM, LazyCallGraph &CG,
+          CGSCCUpdateResult &UR) {
+        if (C.getName() != "(h3, h1, h2)")
+          return;
 
-    auto &FAM =
-        AM.getResult<FunctionAnalysisManagerCGSCCProxy>(C, CG).getManager();
-    Function *FnX = M->getFunction("x");
-    Function *FnH1 = M->getFunction("h1");
-    Function *FnH2 = M->getFunction("h2");
-    Function *FnH3 = M->getFunction("h3");
-    ASSERT_NE(FnX, nullptr);
-    ASSERT_NE(FnH1, nullptr);
-    ASSERT_NE(FnH2, nullptr);
-    ASSERT_NE(FnH3, nullptr);
+        auto &FAM =
+            AM.getResult<FunctionAnalysisManagerCGSCCProxy>(C, CG).getManager();
+        Function *FnX = M->getFunction("x");
+        Function *FnH1 = M->getFunction("h1");
+        Function *FnH2 = M->getFunction("h2");
+        Function *FnH3 = M->getFunction("h3");
+        ASSERT_NE(FnX, nullptr);
+        ASSERT_NE(FnH1, nullptr);
+        ASSERT_NE(FnH2, nullptr);
+        ASSERT_NE(FnH3, nullptr);
 
-    // And insert a call to `h1`, `h2`, and `h3`.
-    BasicBlock::iterator IP = FnH2->getEntryBlock().begin();
-    (void)CallInst::Create(FnH1, {}, "", IP);
-    (void)CallInst::Create(FnH2, {}, "", IP);
-    (void)CallInst::Create(FnH3, {}, "", IP);
+        // And insert a call to `h1`, `h2`, and `h3`.
+        BasicBlock::iterator IP = FnH2->getEntryBlock().begin();
+        (void)CallInst::Create(FnH1, {}, "", IP);
+        (void)CallInst::Create(FnH2, {}, "", IP);
+        (void)CallInst::Create(FnH3, {}, "", IP);
 
-    auto &H2N = *llvm::find_if(
-        C, [](LazyCallGraph::Node &N) { return N.getName() == "h2"; });
-    ASSERT_DEATH(
-        updateCGAndAnalysisManagerForFunctionPass(CG, C, H2N, AM, UR, FAM),
-        "Any new calls should be modeled as");
-  }));
+        auto &H2N = *llvm::find_if(
+            C, [](LazyCallGraph::Node &N) { return N.getName() == "h2"; });
+        ASSERT_DEATH(
+            updateCGAndAnalysisManagerForFunctionPass(CG, C, H2N, AM, UR, FAM),
+            "Any new calls should be modeled as");
+      }));
 
   ModulePassManager MPM;
   MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(std::move(CGPM)));
@@ -1446,30 +1446,29 @@ TEST_F(CGSCCPassManagerTest, TestUpdateCGAndAnalysisManagerForPasses2) {
 
 TEST_F(CGSCCPassManagerTest, TestUpdateCGAndAnalysisManagerForPasses3) {
   CGSCCPassManager CGPM;
-  CGPM.addPass(LambdaSCCPassNoPreserve([&](LazyCallGraph::SCC &C,
-                                           CGSCCAnalysisManager &AM,
-                                           LazyCallGraph &CG,
-                                           CGSCCUpdateResult &UR) {
-    if (C.getName() != "(f)")
-      return;
+  CGPM.addPass(LambdaSCCPassNoPreserve(
+      [&](LazyCallGraph::SCC &C, CGSCCAnalysisManager &AM, LazyCallGraph &CG,
+          CGSCCUpdateResult &UR) {
+        if (C.getName() != "(f)")
+          return;
 
-    auto &FAM =
-        AM.getResult<FunctionAnalysisManagerCGSCCProxy>(C, CG).getManager();
-    Function *FnF = M->getFunction("f");
-    Function *FnH2 = M->getFunction("h2");
-    ASSERT_NE(FnF, nullptr);
-    ASSERT_NE(FnH2, nullptr);
+        auto &FAM =
+            AM.getResult<FunctionAnalysisManagerCGSCCProxy>(C, CG).getManager();
+        Function *FnF = M->getFunction("f");
+        Function *FnH2 = M->getFunction("h2");
+        ASSERT_NE(FnF, nullptr);
+        ASSERT_NE(FnH2, nullptr);
 
-    // And insert a call to `h2`
-    BasicBlock::iterator IP = FnF->getEntryBlock().begin();
-    (void)CallInst::Create(FnH2, {}, "", IP);
+        // And insert a call to `h2`
+        BasicBlock::iterator IP = FnF->getEntryBlock().begin();
+        (void)CallInst::Create(FnH2, {}, "", IP);
 
-    auto &FN = *llvm::find_if(
-        C, [](LazyCallGraph::Node &N) { return N.getName() == "f"; });
-    ASSERT_DEATH(
-        updateCGAndAnalysisManagerForFunctionPass(CG, C, FN, AM, UR, FAM),
-        "Any new calls should be modeled as");
-  }));
+        auto &FN = *llvm::find_if(
+            C, [](LazyCallGraph::Node &N) { return N.getName() == "f"; });
+        ASSERT_DEATH(
+            updateCGAndAnalysisManagerForFunctionPass(CG, C, FN, AM, UR, FAM),
+            "Any new calls should be modeled as");
+      }));
 
   ModulePassManager MPM;
   MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(std::move(CGPM)));
@@ -1733,56 +1732,56 @@ TEST_F(CGSCCPassManagerTest, TestInsertionOfNewFunctions1) {
   bool Ran = false;
 
   CGSCCPassManager CGPM;
-  CGPM.addPass(LambdaSCCPassNoPreserve(
-      [&](LazyCallGraph::SCC &C, CGSCCAnalysisManager &AM, LazyCallGraph &CG,
-          CGSCCUpdateResult &UR) {
-        if (Ran)
-          return;
+  CGPM.addPass(LambdaSCCPassNoPreserve([&](LazyCallGraph::SCC &C,
+                                           CGSCCAnalysisManager &AM,
+                                           LazyCallGraph &CG,
+                                           CGSCCUpdateResult &UR) {
+    if (Ran)
+      return;
 
-        auto &FAM =
-            AM.getResult<FunctionAnalysisManagerCGSCCProxy>(C, CG).getManager();
+    auto &FAM =
+        AM.getResult<FunctionAnalysisManagerCGSCCProxy>(C, CG).getManager();
 
-        for (LazyCallGraph::Node *N : SCCNodes(C)) {
-          Function &F = N->getFunction();
-          if (F.getName() != "f")
-            continue;
+    for (LazyCallGraph::Node *N : SCCNodes(C)) {
+      Function &F = N->getFunction();
+      if (F.getName() != "f")
+        continue;
 
-          // Create a new function 'g'.
-          auto *G = Function::Create(F.getFunctionType(), F.getLinkage(),
-                                     F.getAddressSpace(), "g", F.getParent());
-          auto *GBB =
-              BasicBlock::Create(F.getParent()->getContext(), "entry", G);
-          (void)ReturnInst::Create(G->getContext(), GBB);
-          // Instruct the LazyCallGraph to create a new node for 'g', as the
-          // single node in a new SCC, into the call graph. As a result
-          // the call graph is composed of a single RefSCC with two SCCs:
-          // [(f), (g)].
+      // Create a new function 'g'.
+      auto *G = Function::Create(F.getFunctionType(), F.getLinkage(),
+                                 F.getAddressSpace(), "g", F.getParent());
+      auto *GBB = BasicBlock::Create(F.getParent()->getContext(), "entry", G);
+      (void)ReturnInst::Create(G->getContext(), GBB);
+      // Instruct the LazyCallGraph to create a new node for 'g', as the
+      // single node in a new SCC, into the call graph. As a result
+      // the call graph is composed of a single RefSCC with two SCCs:
+      // [(f), (g)].
 
-          // "Demote" the 'f -> f' call edge to a ref edge.
-          // 1. Erase the call edge from 'f' to 'f'.
-          F.getEntryBlock().front().eraseFromParent();
-          // 2. Insert a ref edge from 'f' to 'f'.
-          (void)CastInst::CreatePointerCast(
-              &F, PointerType::getUnqual(F.getContext()), "f.ref",
-              F.getEntryBlock().begin());
-          // 3. Insert a ref edge from 'f' to 'g'.
-          (void)CastInst::CreatePointerCast(
-              G, PointerType::getUnqual(F.getContext()), "g.ref",
-              F.getEntryBlock().begin());
+      // "Demote" the 'f -> f' call edge to a ref edge.
+      // 1. Erase the call edge from 'f' to 'f'.
+      F.getEntryBlock().front().eraseFromParent();
+      // 2. Insert a ref edge from 'f' to 'f'.
+      (void)CastInst::CreatePointerCast(&F,
+                                        PointerType::getUnqual(F.getContext()),
+                                        "f.ref", F.getEntryBlock().begin());
+      // 3. Insert a ref edge from 'f' to 'g'.
+      (void)CastInst::CreatePointerCast(G,
+                                        PointerType::getUnqual(F.getContext()),
+                                        "g.ref", F.getEntryBlock().begin());
 
-          CG.addSplitFunction(F, *G);
+      CG.addSplitFunction(F, *G);
 
-          ASSERT_FALSE(verifyModule(*F.getParent(), &errs()));
+      ASSERT_FALSE(verifyModule(*F.getParent(), &errs()));
 
-          ASSERT_NO_FATAL_FAILURE(
-              updateCGAndAnalysisManagerForCGSCCPass(CG, C, *N, AM, UR, FAM))
-              << "Updating the call graph with a demoted, self-referential "
-                 "call edge 'f -> f', and a newly inserted ref edge 'f -> g', "
-                 "caused a fatal failure";
+      ASSERT_NO_FATAL_FAILURE(
+          updateCGAndAnalysisManagerForCGSCCPass(CG, C, *N, AM, UR, FAM))
+          << "Updating the call graph with a demoted, self-referential "
+             "call edge 'f -> f', and a newly inserted ref edge 'f -> g', "
+             "caused a fatal failure";
 
-          Ran = true;
-        }
-      }));
+      Ran = true;
+    }
+  }));
 
   ModulePassManager MPM;
   MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(std::move(CGPM)));

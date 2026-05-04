@@ -11,16 +11,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Passes/AllocCombiner.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 
 #define DEBUG_TYPE "alloccombiner"
 
 using namespace llvm;
-
-namespace opts {
-
-extern cl::opt<bolt::FrameOptimizationType> FrameOptimization;
-
-} // end namespace opts
 
 namespace llvm {
 namespace bolt {
@@ -107,7 +102,9 @@ void AllocCombinerPass::combineAdjustments(BinaryFunction &BF) {
 }
 
 Error AllocCombinerPass::runOnFunctions(BinaryContext &BC) {
-  if (opts::FrameOptimization == FOP_NONE)
+  const auto FrameOptimization = static_cast<bolt::FrameOptimizationType>(
+      bolt::bolt_passes_opts::getFrameOpt(BC));
+  if (FrameOptimization == FOP_NONE)
     return Error::success();
 
   runForAllWeCare(BC.getBinaryFunctions(), [&](BinaryFunction &Function) {

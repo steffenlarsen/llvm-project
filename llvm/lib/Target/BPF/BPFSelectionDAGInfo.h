@@ -15,6 +15,10 @@
 
 #include "llvm/CodeGen/SelectionDAGTargetInfo.h"
 
+namespace llvm::clv2 {
+class OptionsContext;
+}
+
 #define GET_SDNODE_ENUM
 #include "BPFGenSDNodeInfo.inc"
 
@@ -31,7 +35,8 @@ public:
                                   MachinePointerInfo DstPtrInfo,
                                   MachinePointerInfo SrcPtrInfo) const override;
 
-  unsigned getCommonMaxStoresPerMemFunc() const;
+  unsigned
+  getCommonMaxStoresPerMemFunc(const clv2::OptionsContext &OptsCtx) const;
 };
 
 } // namespace llvm

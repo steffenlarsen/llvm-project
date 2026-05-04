@@ -15,7 +15,6 @@
 #define LLVM_LIB_TARGET_SPIRV_SPIRVCOMMANDLINE_H
 
 #include "MCTargetDesc/SPIRVBaseInfo.h"
-#include "llvm/Support/CommandLine.h"
 #include <string>
 
 namespace llvm {
@@ -23,16 +22,12 @@ template <typename T> class ArrayRef;
 class StringRef;
 class Triple;
 
-/// Command line parser for toggling SPIR-V extensions.
-struct SPIRVExtensionsParser : public cl::parser<ExtensionSet> {
-public:
-  SPIRVExtensionsParser(cl::Option &O) : cl::parser<ExtensionSet>(O) {}
-
-  /// Parses SPIR-V extension name from CLI arguments.
+/// Parser for toggling SPIR-V extensions via -spirv-ext.
+struct SPIRVExtensionsParser {
+  /// Parses SPIR-V extension list from a CLI argument value.
   ///
   /// \return Returns true on error.
-  bool parse(cl::Option &O, StringRef ArgName, StringRef ArgValue,
-             ExtensionSet &Vals);
+  static bool parse(StringRef ArgValue, ExtensionSet &Vals, std::string &Error);
 
   /// Validates and converts extension names into internal enum values.
   ///

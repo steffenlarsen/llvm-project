@@ -11,6 +11,7 @@ llvm_add_library(MLIRPdllLspServerLib
   DISABLE_LLVM_LINK_LLVM_DYLIB
 
   LINK_COMPONENTS
+  AllOptions
   SupportLSP
 
   LINK_LIBS PUBLIC

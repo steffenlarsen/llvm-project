@@ -22,6 +22,9 @@ namespace llvm {
 
 class RecordKeeper;
 class raw_ostream;
+namespace clv2 {
+class OptionParser;
+}
 
 namespace TableGen::Emitter {
 
@@ -79,6 +82,10 @@ template <class EmitterC> class MultiFileOptClass : Opt {
 public:
   MultiFileOptClass(StringRef Name, StringRef Desc) : Opt(Name, run, Desc) {}
 };
+
+/// Register all backend options into the given option parser.
+/// Call this before command-line parsing.
+void registerBackendOptions(clv2::OptionParser &P);
 
 /// Apply callback for any command line option registered above. Returns false
 /// is no callback was applied.

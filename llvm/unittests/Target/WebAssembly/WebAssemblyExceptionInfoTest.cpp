@@ -154,7 +154,7 @@ body: |
     UNREACHABLE implicit-def $arguments
 )MIR";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<MIRParser> MIR;
   MachineModuleInfo MMI(TM.get());
   std::unique_ptr<Module> M = parseMIR(Context, MIR, *TM, MIRString, MMI);
@@ -328,7 +328,7 @@ body: |
     UNREACHABLE implicit-def $arguments
 )MIR";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<MIRParser> MIR;
   MachineModuleInfo MMI(TM.get());
   std::unique_ptr<Module> M = parseMIR(Context, MIR, *TM, MIRString, MMI);

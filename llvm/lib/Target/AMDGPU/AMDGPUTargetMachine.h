@@ -14,14 +14,19 @@
 #ifndef LLVM_LIB_TARGET_AMDGPU_AMDGPUTARGETMACHINE_H
 #define LLVM_LIB_TARGET_AMDGPU_AMDGPUTARGETMACHINE_H
 
+#include "AMDGPUSplitModule.h"
 #include "GCNSubtarget.h"
 #include "llvm/CodeGen/CodeGenTargetMachineImpl.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/MC/MCStreamer.h"
+#include "llvm/Support/OptionsContext.h"
 #include <optional>
 #include <utility>
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+}
 
 //===----------------------------------------------------------------------===//
 // AMDGPU Target Machine (R600+)
@@ -39,9 +44,13 @@ protected:
   StringRef getFeatureString(const Function &F) const;
 
 public:
-  static bool EnableFunctionCalls;
-  static bool EnableObjectLinking;
-  static bool EnableLowerModuleLDS;
+  static bool getEnableFunctionCalls(const clv2::OptionsContext &Ctx);
+  static bool getEnableFunctionCalls(const Triple &TT,
+                                     const clv2::OptionsContext &Ctx);
+  static bool getEnableObjectLinking(const clv2::OptionsContext &Ctx);
+  static bool getEnableLowerModuleLDS(const clv2::OptionsContext &Ctx);
+  static bool
+  getEnableFunctionCallsWasSpecified(const clv2::OptionsContext &Ctx);
 
   AMDGPUTargetMachine(const Target &T, const Triple &TT, StringRef CPU,
                       StringRef FS, const TargetOptions &Options,
@@ -69,9 +78,10 @@ public:
 
   unsigned getAddressSpaceForPseudoSourceKind(unsigned Kind) const override;
 
-  bool splitModule(Module &M, unsigned NumParts,
-                   function_ref<void(std::unique_ptr<Module> MPart)>
-                       ModuleCallback) override;
+  bool
+  splitModule(Module &M, unsigned NumParts,
+              function_ref<void(std::unique_ptr<Module> MPart)> ModuleCallback,
+              const AMDGPUSplitModuleOptions *Opts = nullptr) override;
   ScheduleDAGInstrs *
   createMachineScheduler(MachineSchedContext *C) const override;
 };
@@ -151,12 +161,12 @@ public:
   std::unique_ptr<CSEConfigBase> getCSEConfig() const override;
 
   /// Check if a pass is enabled given \p Opt option. The option always
-  /// overrides defaults if explicitly used. Otherwise its default will
-  /// be used given that a pass shall work at an optimization \p Level
-  /// minimum.
-  bool isPassEnabled(const cl::opt<bool> &Opt,
+  /// overrides defaults if explicitly used (\p WasSpecified). Otherwise its
+  /// default will be used given that a pass shall work at an optimization
+  /// \p Level minimum.
+  bool isPassEnabled(bool Opt, bool WasSpecified,
                      CodeGenOptLevel Level = CodeGenOptLevel::Default) const {
-    if (Opt.getNumOccurrences())
+    if (WasSpecified)
       return Opt;
     if (TM->getOptLevel() < Level)
       return false;

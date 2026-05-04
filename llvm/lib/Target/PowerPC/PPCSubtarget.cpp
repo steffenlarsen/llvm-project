@@ -26,7 +26,8 @@
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/PPCTargetParser.h"
 
@@ -38,10 +39,10 @@ using namespace llvm;
 #define GET_SUBTARGETINFO_CTOR
 #include "PPCGenSubtargetInfo.inc"
 
-static cl::opt<bool>
-    EnableMachinePipeliner("ppc-enable-pipeliner",
-                           cl::desc("Enable Machine Pipeliner for PPC"),
-                           cl::init(false), cl::Hidden);
+static bool getEnableMachinePipeliner(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::PowerPCOptsReg,
+                           &clv2::PPC_EnableMachinePipeliner>(Ctx, false);
+}
 
 PPCSubtarget &PPCSubtarget::initializeSubtargetDependencies(StringRef CPU,
                                                             StringRef TuneCPU,
@@ -54,10 +55,11 @@ PPCSubtarget &PPCSubtarget::initializeSubtargetDependencies(StringRef CPU,
 PPCSubtarget::PPCSubtarget(const Triple &TT, StringRef CPU, StringRef TuneCPU,
                            StringRef FS, StringRef ABIName,
                            const PPCTargetMachine &TM)
-    : PPCGenSubtargetInfo(TT, CPU, TuneCPU, FS),
+    : PPCGenSubtargetInfo(TT, CPU, TuneCPU, FS, TM.getOptionsContext()),
       TargetABI(PPCTargetMachine::computeABI(TT, ABIName)), TM(TM),
       FrameLowering(initializeSubtargetDependencies(CPU, TuneCPU, FS)),
-      InstrInfo(*this), TLInfo(TM, *this) {
+      InstrInfo((setTargetMachine(&TM), *this)), TLInfo(TM, *this) {
+  setOptionsContext(TM.getOptionsContext());
   TSInfo = std::make_unique<PPCSelectionDAGInfo>();
 
   CallLoweringInfo.reset(new PPCCallLowering(*getTargetLowering()));
@@ -154,7 +156,8 @@ void PPCSubtarget::initSubtargetFeatures(StringRef CPU, StringRef TuneCPU,
 bool PPCSubtarget::enableMachineScheduler() const { return true; }
 
 bool PPCSubtarget::enableMachinePipeliner() const {
-  return getSchedModel().hasInstrSchedModel() && EnableMachinePipeliner;
+  return getSchedModel().hasInstrSchedModel() &&
+         getEnableMachinePipeliner(getOptionsContext());
 }
 
 bool PPCSubtarget::useDFAforSMS() const { return false; }

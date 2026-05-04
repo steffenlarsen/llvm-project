@@ -14,15 +14,19 @@
 #define LLD_COMMON_TARGETOPTIONSCOMMANDFLAGS_H
 
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetOptions.h"
 #include <optional>
 
 namespace lld {
-llvm::TargetOptions initTargetOptionsFromCodeGenFlags();
-std::optional<llvm::Reloc::Model> getRelocModelFromCMModel();
-std::optional<llvm::CodeModel::Model> getCodeModelFromCMModel();
-std::string getCPUStr();
-std::vector<std::string> getMAttrs();
+llvm::TargetOptions
+initTargetOptionsFromCodeGenFlags(const llvm::clv2::OptionsContext &optsCtx);
+std::optional<llvm::Reloc::Model>
+getRelocModelFromCMModel(const llvm::clv2::OptionsContext &optsCtx);
+std::optional<llvm::CodeModel::Model>
+getCodeModelFromCMModel(const llvm::clv2::OptionsContext &optsCtx);
+std::string getCPUStr(const llvm::clv2::OptionsContext &optsCtx);
+std::vector<std::string> getMAttrs(const llvm::clv2::OptionsContext &optsCtx);
 }
 
 #endif

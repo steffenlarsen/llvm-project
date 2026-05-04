@@ -237,7 +237,8 @@ void IR2VecTool::writeEmbeddingsToStream(raw_ostream &OS,
 
 void IR2VecTool::writeEmbeddingsToStream(const Function &F, raw_ostream &OS,
                                          EmbeddingLevel Level) const {
-  auto IR2VecEmbedderObj = createIR2VecEmbedder(F, IR2VecEmbeddingKind);
+  auto IR2VecEmbedderObj = createIR2VecEmbedder(
+      F, ir2vec::getIR2VecEmbeddingKind(M.getContext().getOptionsContext()));
   if (!IR2VecEmbedderObj) {
     WithColor::error(errs(), ToolName)
         << toString(IR2VecEmbedderObj.takeError()) << "\n";

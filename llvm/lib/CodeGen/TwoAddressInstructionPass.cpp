@@ -32,6 +32,8 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/iterator_range.h"
+#include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/LiveVariables.h"
@@ -49,13 +51,15 @@
 #include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cassert>
@@ -73,23 +77,17 @@ STATISTIC(NumConvertedTo3Addr, "Number of instructions promoted to 3-address");
 STATISTIC(NumReSchedUps,       "Number of instructions re-scheduled up");
 STATISTIC(NumReSchedDowns,     "Number of instructions re-scheduled down");
 
-// Temporary flag to disable rescheduling.
-static cl::opt<bool>
-EnableRescheduling("twoaddr-reschedule",
-                   cl::desc("Coalesce copies by rescheduling (default=true)"),
-                   cl::init(true), cl::Hidden);
+static bool getTwoaddrReschedule(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_TwoaddrReschedule>(Ctx);
+}
 
-static cl::opt<bool> AnalyzeRevCopyTied(
-    "twoaddr-analyze-revcopy-tied",
-    cl::desc("Analyze tied operands when looking for reversed copy chain"),
-    cl::init(true), cl::Hidden);
+static bool getTwoaddrAnalyzeRevcopyTied(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_TwoaddrAnalyzeRevcopyTied>(Ctx);
+}
 
-// Limit the number of dataflow edges to traverse when evaluating the benefit
-// of commuting operands.
-static cl::opt<unsigned> MaxDataFlowEdge(
-    "dataflow-edge-limit", cl::Hidden, cl::init(10),
-    cl::desc("Maximum number of dataflow edges to traverse when evaluating "
-             "the benefit of commuting operands"));
+static unsigned getDataflowEdgeLimit(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DataflowEdgeLimit>(Ctx);
+}
 
 namespace {
 
@@ -327,7 +325,9 @@ bool TwoAddressInstructionImpl::isRevCopyChain(Register FromReg, Register ToReg,
     if (Def->isCopy())
       TmpReg = Def->getOperand(1).getReg();
     else if (unsigned TiedOpIdx;
-             AnalyzeRevCopyTied && getTiedUse(TmpReg, Def, TRI, TiedOpIdx)) {
+             getTwoaddrAnalyzeRevcopyTied(
+                 MF->getFunction().getContext().getOptionsContext()) &&
+             getTiedUse(TmpReg, Def, TRI, TiedOpIdx)) {
       Register TiedUseReg = Def->getOperand(TiedOpIdx).getReg();
       // Tied use reg matches def reg. It's not a copy chain. We won't make any
       // forward progress anymore, stop the traversal here.
@@ -731,10 +731,14 @@ bool TwoAddressInstructionImpl::isProfitableToCommute(Register RegA,
   // To more generally minimize register copies, ideally the logic of two addr
   // instruction pass should be integrated with register allocation pass where
   // interference graph is available.
-  if (isRevCopyChain(RegC, RegA, MaxDataFlowEdge))
+  if (isRevCopyChain(RegC, RegA,
+                     getDataflowEdgeLimit(
+                         MF->getFunction().getContext().getOptionsContext())))
     return true;
 
-  if (isRevCopyChain(RegB, RegA, MaxDataFlowEdge))
+  if (isRevCopyChain(RegB, RegA,
+                     getDataflowEdgeLimit(
+                         MF->getFunction().getContext().getOptionsContext())))
     return false;
 
   // Look for other target specific commute preference.
@@ -1383,7 +1387,10 @@ bool TwoAddressInstructionImpl::tryInstructionTransform(
 
   // If there is one more use of regB later in the same MBB, consider
   // re-schedule this MI below it.
-  if (!Commuted && EnableRescheduling && rescheduleMIBelowKill(mi, nmi, regB)) {
+  if (!Commuted &&
+      getTwoaddrReschedule(
+          MF->getFunction().getContext().getOptionsContext()) &&
+      rescheduleMIBelowKill(mi, nmi, regB)) {
     ++NumReSchedDowns;
     return true;
   }
@@ -1413,7 +1420,9 @@ bool TwoAddressInstructionImpl::tryInstructionTransform(
 
   // If there is one more use of regB later in the same MBB, consider
   // re-schedule it before this MI if it's legal.
-  if (EnableRescheduling && rescheduleKillAboveMI(mi, nmi, regB)) {
+  if (getTwoaddrReschedule(
+          MF->getFunction().getContext().getOptionsContext()) &&
+      rescheduleKillAboveMI(mi, nmi, regB)) {
     ++NumReSchedUps;
     return true;
   }

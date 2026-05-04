@@ -37,8 +37,8 @@ static std::string getThinLTOOutputFile(StringRef modulePath) {
 }
 
 static lto::Config createConfig() {
-  lto::Config c;
-  c.Options = initTargetOptionsFromCodeGenFlags();
+  lto::Config c(*commonContext().llvmOptsCtx);
+  c.Options = initTargetOptionsFromCodeGenFlags(*commonContext().llvmOptsCtx);
   c.Options.EmitAddrsig = config->icfLevel == ICFLevel::safe ||
                           config->icfLevel == ICFLevel::safe_thunks;
   for (StringRef C : config->mllvmOpts)
@@ -46,9 +46,9 @@ static lto::Config createConfig() {
   for (StringRef pluginFn : config->passPlugins)
     c.PassPluginFilenames.push_back(std::string(pluginFn));
   c.OptPipeline = std::string(config->ltoNewPmPasses);
-  c.CodeModel = getCodeModelFromCMModel();
-  c.CPU = getCPUStr();
-  c.MAttrs = getMAttrs();
+  c.CodeModel = getCodeModelFromCMModel(*commonContext().llvmOptsCtx);
+  c.CPU = getCPUStr(*commonContext().llvmOptsCtx);
+  c.MAttrs = getMAttrs(*commonContext().llvmOptsCtx);
   c.DiagHandler = diagnosticHandler;
 
   c.AlwaysEmitRegularLTOObj = !config->ltoObjPath.empty();
@@ -199,7 +199,7 @@ static void thinLTOCreateEmptyIndexFiles() {
 
       ModuleSummaryIndex m(/*HaveGVs=*/false);
       m.setSkipModuleByDistributedBackend();
-      writeIndexToFile(m, *os);
+      writeIndexToFile(m, *os, *commonContext().llvmOptsCtx);
       if (config->thinLTOEmitImportsFiles)
         openFile(path + ".imports");
     }

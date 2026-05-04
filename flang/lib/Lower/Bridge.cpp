@@ -12,6 +12,7 @@
 
 #include "flang/Lower/Bridge.h"
 
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Evaluate/tools.h"
 #include "flang/Lower/Allocatable.h"
 #include "flang/Lower/CUDA.h"
@@ -65,7 +66,6 @@
 #include "flang/Semantics/runtime-type-info.h"
 #include "flang/Semantics/symbol.h"
 #include "flang/Semantics/tools.h"
-#include "flang/Support/Flags.h"
 #include "flang/Support/Version.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -78,19 +78,15 @@
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSet.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Target/TargetMachine.h"
 #include <optional>
 
 #define DEBUG_TYPE "flang-lower-bridge"
-
-static llvm::cl::opt<bool> forceLoopToExecuteOnce(
-    "always-execute-loop-body", llvm::cl::init(false),
-    llvm::cl::desc("force the body of a loop to execute at least once"));
 
 namespace {
 /// Information for generating a structured or unstructured increment loop.
@@ -1234,8 +1230,8 @@ public:
   std::string
   mangleName(const Fortran::semantics::Symbol &symbol) override final {
     return Fortran::lower::mangle::mangleName(
-        symbol, scopeBlockIdMap, /*keepExternalInScope=*/false,
-        getLoweringOptions().getUnderscoring());
+        getMLIRContext().getOptionsContext(), symbol, scopeBlockIdMap,
+        /*keepExternalInScope=*/false, getLoweringOptions().getUnderscoring());
   }
   std::string mangleName(
       const Fortran::semantics::DerivedTypeSpec &derivedType) override final {
@@ -1904,7 +1900,9 @@ private:
     mlir::Location loc = toLocation();
     size_t branchCount = labelList.size();
     if (!inArithmeticIfContext && !hasAnyExitCode &&
-        !getEval().forceAsUnstructured()) { // from -no-structured-fir option
+        !getEval().forceAsUnstructured(
+            getMLIRContext()
+                .getOptionsContext())) { // from -no-structured-fir option
       // Generate a SelectOp.
       llvm::SmallVector<mlir::Block *> blockList;
       for (auto label : labelList) {
@@ -2399,7 +2397,10 @@ private:
     // TODO Promote to using `enableDelayedPrivatization` (which is enabled by
     // default unlike the staging flag) once the implementation of this is more
     // complete.
-    bool useDelayedPriv = enableDelayedPrivatization && doConcurrentLoopOp;
+    bool useDelayedPriv = llvm::clv2::getOptValOrDefault<
+                              &llvm::clv2::FLANG_EnableDelayedPrivatization>(
+                              getMLIRContext().getOptionsContext()) &&
+                          doConcurrentLoopOp;
     llvm::SetVector<const Fortran::semantics::Symbol *> allPrivatizedSymbols;
     llvm::SmallPtrSet<const Fortran::semantics::Symbol *, 16>
         mightHaveReadHostSym;
@@ -2602,7 +2603,8 @@ private:
   wrapUnstructuredConstruct(Fortran::lower::pft::Evaluation &eval,
                             mlir::Block *&savedExitBlock) {
     if (!Fortran::lower::pft::isWrappableConstruct(
-            eval, bridge.getSemanticsContext()))
+            eval, bridge.getSemanticsContext(),
+            bridge.getMLIRContext().getOptionsContext()))
       return nullptr;
 
     mlir::Location loc = toLocation();
@@ -2647,7 +2649,8 @@ private:
   void genFIR(const Fortran::parser::DoConstruct &doConstruct) {
     setCurrentPositionAt(doConstruct);
     Fortran::lower::pft::Evaluation &eval = getEval();
-    bool unstructuredContext = eval.lowerAsUnstructured();
+    bool unstructuredContext =
+        eval.lowerAsUnstructured(getMLIRContext().getOptionsContext());
 
     // If this do-loop was absorbed by a collapse clause on a parent acc.loop,
     // skip generating any loop — just lower the body.  The IV value is
@@ -2993,7 +2996,9 @@ private:
         tripCount =
             mlir::arith::DivSIOp::create(*builder, loc, diff2, stepValue);
       }
-      if (forceLoopToExecuteOnce) { // minimum tripCount is 1
+      if (llvm::clv2::getOptValOrDefault<
+              &llvm::clv2::FLANG_AlwaysExecuteLoopBody>(
+              getMLIRContext().getOptionsContext())) {
         mlir::Value one =
             builder->createIntegerConstant(loc, tripCount.getType(), 1);
         auto cond = mlir::arith::CmpIOp::create(
@@ -3170,7 +3175,7 @@ private:
     Fortran::lower::pft::Evaluation &eval = getEval();
 
     // Structured fir.if nest.
-    if (eval.lowerAsStructured()) {
+    if (eval.lowerAsStructured(getMLIRContext().getOptionsContext())) {
       fir::IfOp topIfOp, currentIfOp;
       for (Fortran::lower::pft::Evaluation &e : eval.getNestedEvaluations()) {
         auto genIfOp = [&](mlir::Value cond) {
@@ -3212,7 +3217,8 @@ private:
     // each entry-point pass, so we can trust the pointer isn't stale from a
     // previous pass.
     if (Fortran::lower::pft::isWrappableConstruct(
-            eval, bridge.getSemanticsContext()) &&
+            eval, bridge.getSemanticsContext(),
+            bridge.getMLIRContext().getOptionsContext()) &&
         eval.hasNestedEvaluations()) {
       Fortran::lower::pft::Evaluation &firstStmt =
           eval.getFirstNestedEvaluation();
@@ -3594,7 +3600,8 @@ private:
       localSymbols.pushScope();
     // Allocate exit selector for GOTO jump table if the construct is
     // unstructured (may contain GOTOs that exit the ACC region).
-    bool needsExitSelector = getEval().lowerAsUnstructured();
+    bool needsExitSelector =
+        getEval().lowerAsUnstructured(getMLIRContext().getOptionsContext());
     if (needsExitSelector) {
       AccRegionExitInfo exitInfo;
       exitInfo.selector =
@@ -3646,7 +3653,7 @@ private:
             Fortran::lower::getCollapseSizeAndForce(clauseList);
       }
 
-      if (curEval->lowerAsStructured()) {
+      if (curEval->lowerAsStructured(getMLIRContext().getOptionsContext())) {
         curEval = &curEval->getFirstNestedEvaluation();
         // A DO CONCURRENT holds all controls in one construct; the per-level
         // descent would overshoot into its body and drop it.
@@ -3660,7 +3667,9 @@ private:
       }
     }
 
-    const bool isStructured = curEval && curEval->lowerAsStructured();
+    const bool isStructured =
+        curEval &&
+        curEval->lowerAsStructured(getMLIRContext().getOptionsContext());
     if (isStructured && collapseForce && collapseDepth > 1) {
       // force: collect prologue/epilogue for the first collapseDepth nested
       // loops and sink them into the innermost loop body at that depth
@@ -4012,7 +4021,7 @@ private:
     builder->setInsertionPointToStart(&b);
 
     Fortran::lower::pft::Evaluation *crtEval = &getEval();
-    if (crtEval->lowerAsUnstructured())
+    if (crtEval->lowerAsUnstructured(getMLIRContext().getOptionsContext()))
       Fortran::lower::createEmptyRegionBlocks<fir::FirEndOp>(
           *builder, crtEval->getNestedEvaluations());
     builder->setInsertionPointToStart(&b);
@@ -4024,7 +4033,7 @@ private:
       fir::StoreOp::create(*builder, loc, convArg, value);
     }
 
-    if (crtEval->lowerAsStructured()) {
+    if (crtEval->lowerAsStructured(getMLIRContext().getOptionsContext())) {
       crtEval = &crtEval->getFirstNestedEvaluation();
       if (!outerDoConstruct->IsDoConcurrent())
         for (int64_t i = 1; i < nestedLoops; i++)
@@ -4175,7 +4184,7 @@ private:
     // support. The -no-structured-fir option can be used to force generation
     // of INTEGER type branch code.
     if (!isLogicalSelector && !isCharSelector &&
-        !getEval().forceAsUnstructured()) {
+        !getEval().forceAsUnstructured(getMLIRContext().getOptionsContext())) {
       // The selector is in an ssa register. Any temps that may have been
       // generated while evaluating it can be cleaned up now.
       stmtCtx.finalizeAndReset();
@@ -4243,7 +4252,7 @@ private:
     for (Fortran::lower::pft::Evaluation &e : eval.getNestedEvaluations()) {
       setCurrentPosition(e.position);
       if (auto *stmt = e.getIf<Fortran::parser::AssociateStmt>()) {
-        if (eval.lowerAsUnstructured())
+        if (eval.lowerAsUnstructured(getMLIRContext().getOptionsContext()))
           maybeStartBlock(e.block);
         localSymbols.pushScope();
         for (const Fortran::parser::Association &assoc :
@@ -4255,7 +4264,7 @@ private:
           addSymbol(sym, genAssociateSelector(selector, stmtCtx));
         }
       } else if (e.getIf<Fortran::parser::EndAssociateStmt>()) {
-        if (eval.lowerAsUnstructured())
+        if (eval.lowerAsUnstructured(getMLIRContext().getOptionsContext()))
           maybeStartBlock(e.block);
         localSymbols.popScope();
       } else {
@@ -4272,7 +4281,7 @@ private:
     for (Fortran::lower::pft::Evaluation &e : eval.getNestedEvaluations()) {
       setCurrentPosition(e.position);
       if (e.getIf<Fortran::parser::BlockStmt>()) {
-        if (eval.lowerAsUnstructured())
+        if (eval.lowerAsUnstructured(getMLIRContext().getOptionsContext()))
           maybeStartBlock(e.block);
         const Fortran::parser::CharBlock &endPosition =
             eval.getLastNestedEvaluation().position;
@@ -4293,7 +4302,7 @@ private:
             instantiateVar(var, storeMap);
         }
       } else if (e.getIf<Fortran::parser::EndBlockStmt>()) {
-        if (eval.lowerAsUnstructured())
+        if (eval.lowerAsUnstructured(getMLIRContext().getOptionsContext()))
           maybeStartBlock(e.block);
         localSymbols.popScope();
       } else {
@@ -4308,7 +4317,8 @@ private:
     Fortran::lower::StatementContext stmtCtx;
     pushActiveConstruct(getEval(), stmtCtx);
     Fortran::lower::pft::Evaluation &eval = getEval();
-    bool unstructuredContext = eval.lowerAsUnstructured();
+    bool unstructuredContext =
+        eval.lowerAsUnstructured(getMLIRContext().getOptionsContext());
 
     // CHANGE TEAM statement
     Fortran::lower::pft::Evaluation &changeTeamStmtEval =
@@ -5949,28 +5959,28 @@ private:
   // calls does block management, possibly starting a new block, and possibly
   // generating a branch to end a block. So these calls may still be required
   // for that functionality.
-  void genFIR(const Fortran::parser::AssociateStmt &) {}       // nop
-  void genFIR(const Fortran::parser::BlockStmt &) {}           // nop
-  void genFIR(const Fortran::parser::CaseStmt &) {}            // nop
-  void genFIR(const Fortran::parser::ContinueStmt &) {}        // nop
-  void genFIR(const Fortran::parser::ElseIfStmt &) {}          // nop
-  void genFIR(const Fortran::parser::ElseStmt &) {}            // nop
-  void genFIR(const Fortran::parser::EndAssociateStmt &) {}    // nop
-  void genFIR(const Fortran::parser::EndBlockStmt &) {}        // nop
-  void genFIR(const Fortran::parser::EndDoStmt &) {}           // nop
-  void genFIR(const Fortran::parser::EndFunctionStmt &) {}     // nop
-  void genFIR(const Fortran::parser::EndIfStmt &) {}           // nop
-  void genFIR(const Fortran::parser::EndMpSubprogramStmt &) {} // nop
-  void genFIR(const Fortran::parser::EndProgramStmt &) {}      // nop
-  void genFIR(const Fortran::parser::EndSelectStmt &) {}       // nop
-  void genFIR(const Fortran::parser::EndSubroutineStmt &) {}   // nop
-  void genFIR(const Fortran::parser::EntryStmt &) {}           // nop
-  void genFIR(const Fortran::parser::IfStmt &) {}              // nop
-  void genFIR(const Fortran::parser::IfThenStmt &) {}          // nop
-  void genFIR(const Fortran::parser::NonLabelDoStmt &) {}      // nop
-  void genFIR(const Fortran::parser::SelectTypeStmt &) {}      // nop
-  void genFIR(const Fortran::parser::TypeGuardStmt &) {}       // nop
-  void genFIR(const Fortran::parser::ChangeTeamStmt &stmt) {}  // nop
+  void genFIR(const Fortran::parser::AssociateStmt &) {}         // nop
+  void genFIR(const Fortran::parser::BlockStmt &) {}             // nop
+  void genFIR(const Fortran::parser::CaseStmt &) {}              // nop
+  void genFIR(const Fortran::parser::ContinueStmt &) {}          // nop
+  void genFIR(const Fortran::parser::ElseIfStmt &) {}            // nop
+  void genFIR(const Fortran::parser::ElseStmt &) {}              // nop
+  void genFIR(const Fortran::parser::EndAssociateStmt &) {}      // nop
+  void genFIR(const Fortran::parser::EndBlockStmt &) {}          // nop
+  void genFIR(const Fortran::parser::EndDoStmt &) {}             // nop
+  void genFIR(const Fortran::parser::EndFunctionStmt &) {}       // nop
+  void genFIR(const Fortran::parser::EndIfStmt &) {}             // nop
+  void genFIR(const Fortran::parser::EndMpSubprogramStmt &) {}   // nop
+  void genFIR(const Fortran::parser::EndProgramStmt &) {}        // nop
+  void genFIR(const Fortran::parser::EndSelectStmt &) {}         // nop
+  void genFIR(const Fortran::parser::EndSubroutineStmt &) {}     // nop
+  void genFIR(const Fortran::parser::EntryStmt &) {}             // nop
+  void genFIR(const Fortran::parser::IfStmt &) {}                // nop
+  void genFIR(const Fortran::parser::IfThenStmt &) {}            // nop
+  void genFIR(const Fortran::parser::NonLabelDoStmt &) {}        // nop
+  void genFIR(const Fortran::parser::SelectTypeStmt &) {}        // nop
+  void genFIR(const Fortran::parser::TypeGuardStmt &) {}         // nop
+  void genFIR(const Fortran::parser::ChangeTeamStmt &stmt) {}    // nop
   void genFIR(const Fortran::parser::EndChangeTeamStmt &stmt) {} // nop
 
   /// Generate FIR for Evaluation \p eval.
@@ -5981,9 +5991,11 @@ private:
     // which accounts for the possibility that the structured code could be
     // a target that starts a new block.
     if (unstructuredContext)
-      maybeStartBlock(eval.isConstruct() && eval.lowerAsStructured()
-                          ? eval.getFirstNestedEvaluation().block
-                          : eval.block);
+      maybeStartBlock(
+          eval.isConstruct() &&
+                  eval.lowerAsStructured(getMLIRContext().getOptionsContext())
+              ? eval.getFirstNestedEvaluation().block
+              : eval.block);
 
     if (eval.skipNextLowering) {
       eval.skipNextLowering = false;
@@ -6378,7 +6390,8 @@ private:
         eval.block = builder->createBlock(region);
       if (eval.isConstruct() || eval.isDirective()) {
         if (Fortran::lower::pft::isWrappableConstruct(
-                eval, bridge.getSemanticsContext())) {
+                eval, bridge.getSemanticsContext(),
+                bridge.getMLIRContext().getOptionsContext())) {
           // The wrap owns internal blocks; only create the entry block here
           // so the enclosing CFG can branch to it.
           if (eval.hasNestedEvaluations()) {
@@ -6387,7 +6400,8 @@ private:
             if (constructStmt.isNewBlock)
               constructStmt.block = builder->createBlock(region);
           }
-        } else if (eval.lowerAsUnstructured()) {
+        } else if (eval.lowerAsUnstructured(
+                       getMLIRContext().getOptionsContext())) {
           createEmptyBlocks(eval.getNestedEvaluations());
         } else if (eval.hasNestedEvaluations()) {
           // A structured construct that is a target starts a new block.
@@ -6871,7 +6885,8 @@ void Fortran::lower::LoweringBridge::lower(
     const Fortran::parser::Program &prg,
     const Fortran::semantics::SemanticsContext &semanticsContext) {
   std::unique_ptr<Fortran::lower::pft::Program> pft =
-      Fortran::lower::createPFT(prg, semanticsContext, getLoweringOptions());
+      Fortran::lower::createPFT(prg, semanticsContext, getLoweringOptions(),
+                                getMLIRContext().getOptionsContext());
   FirConverter converter{*this};
   converter.run(*pft);
 }
@@ -6965,7 +6980,8 @@ Fortran::lower::LoweringBridge::LoweringBridge(
   fir::setRelocationModel(*module, cgOpts.getRelocationModel());
   fir::setIsPIE(*module, cgOpts.IsPIE);
   fir::setAllocationPolicy(
-      *module, fir::getCommandLineAllocationPolicy(cgOpts.StackArrays));
+      *module, fir::getCommandLineAllocationPolicy(context.getOptionsContext(),
+                                                   cgOpts.StackArrays));
   if (cgOpts.RecordCommandLine)
     fir::setCommandline(*module, *cgOpts.RecordCommandLine);
   // Under -gpu=mem:unified|managed, host heap allocations use the matching

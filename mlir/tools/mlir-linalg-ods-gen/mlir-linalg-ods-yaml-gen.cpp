@@ -21,7 +21,7 @@
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/ToolOutputFile.h"
@@ -29,6 +29,7 @@
 #include <optional>
 
 using namespace mlir;
+using namespace llvm::clv2;
 
 using llvm::yaml::Input;
 
@@ -1192,26 +1193,29 @@ static LogicalResult generateOp(LinalgOpConfig &opConfig,
 // Command line options and main
 //===----------------------------------------------------------------------===//
 
-static llvm::cl::opt<std::string>
-    inputFilename(llvm::cl::Positional, llvm::cl::desc("<input file>"),
-                  llvm::cl::init("-"), llvm::cl::value_desc("YAML filename"));
+inline constexpr OptionInfo<std::string> inputFilename{
+    "", "<input file>", Positional{}, Init{"-"}, value_desc("YAML filename")};
 
-static llvm::cl::opt<std::string>
-    outputOdsDeclFilename("o-ods-decl", llvm::cl::desc("ODS output filename"),
-                          llvm::cl::value_desc("filename"), llvm::cl::init(""));
+inline constexpr OptionInfo<std::string> outputOdsDeclFilename{
+    "o-ods-decl", "ODS output filename", value_desc("filename"), Init{""}};
 
-static llvm::cl::opt<std::string>
-    outputCppImplFilename("o-impl",
-                          llvm::cl::desc("C++ implementation file name"),
-                          llvm::cl::value_desc("filename"), llvm::cl::init(""));
+inline constexpr OptionInfo<std::string> outputCppImplFilename{
+    "o-impl", "C++ implementation file name", value_desc("filename"), Init{""}};
+
+static constexpr OptionsRegistry<&inputFilename, &outputOdsDeclFilename,
+                                 &outputCppImplFilename>
+    LinalgOdsGenReg;
 
 int main(int argc, char **argv) {
-  llvm::cl::ParseCommandLineOptions(argc, argv, "Linalg ODS Gen from YAML");
+  llvm::clv2::OptionParser P;
+  P.add<&LinalgOdsGenReg>();
+  auto OptsCtx = P.parse(argc, argv, "Linalg ODS Gen from YAML");
+  auto *Opts = OptsCtx->getViewPtr<&LinalgOdsGenReg>();
 
   // Set up the input file.
   std::string errorMessage;
   std::unique_ptr<llvm::MemoryBuffer> file =
-      mlir::openInputFile(inputFilename, &errorMessage);
+      mlir::openInputFile(Opts->get<&inputFilename>(), &errorMessage);
   if (!file) {
     llvm::errs() << errorMessage << "\n";
     return 1;
@@ -1231,8 +1235,9 @@ int main(int argc, char **argv) {
 
   // Open output files.
   std::unique_ptr<llvm::ToolOutputFile> outputOdsDecl;
-  if (!outputOdsDeclFilename.empty()) {
-    outputOdsDecl = openOutputFile(outputOdsDeclFilename, &errorMessage);
+  if (!Opts->get<&outputOdsDeclFilename>().empty()) {
+    outputOdsDecl =
+        openOutputFile(Opts->get<&outputOdsDeclFilename>(), &errorMessage);
     if (!outputOdsDecl) {
       llvm::errs() << errorMessage << "\n";
       return 1;
@@ -1240,8 +1245,9 @@ int main(int argc, char **argv) {
   }
 
   std::unique_ptr<llvm::ToolOutputFile> outputCppImpl;
-  if (!outputCppImplFilename.empty()) {
-    outputCppImpl = openOutputFile(outputCppImplFilename, &errorMessage);
+  if (!Opts->get<&outputCppImplFilename>().empty()) {
+    outputCppImpl =
+        openOutputFile(Opts->get<&outputCppImplFilename>(), &errorMessage);
     if (!outputCppImpl) {
       llvm::errs() << errorMessage << "\n";
       return 1;

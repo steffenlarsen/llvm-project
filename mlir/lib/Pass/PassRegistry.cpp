@@ -12,11 +12,13 @@
 #include "mlir/Pass/PassManager.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 
+#include <deque>
 #include <optional>
 #include <utility>
 
@@ -244,7 +246,7 @@ static StringRef extractArgAndUpdateOptions(StringRef &options,
 }
 
 LogicalResult detail::pass_options::parseCommaSeparatedList(
-    llvm::cl::Option &opt, StringRef argName, StringRef optionStr,
+    StringRef argName, StringRef optionStr,
     function_ref<LogicalResult(StringRef)> elementParseFn) {
   if (optionStr.empty())
     return success();
@@ -351,12 +353,12 @@ LogicalResult detail::PassOptions::parseFromString(StringRef options,
     if (key.empty())
       continue;
 
-    auto it = OptionsMap.find(key);
-    if (it == OptionsMap.end()) {
+    auto it = optionsMap.find(key);
+    if (it == optionsMap.end()) {
       errorStream << "<Pass-Options-Parser>: no such option " << key << "\n";
       return failure();
     }
-    if (llvm::cl::ProvidePositionalOption(it->second, value, 0))
+    if (it->second->parseValue(value))
       return failure();
   }
 
@@ -367,7 +369,7 @@ LogicalResult detail::PassOptions::parseFromString(StringRef options,
 /// 'parseFromString'.
 void detail::PassOptions::print(raw_ostream &os) const {
   // If there are no options, there is nothing left to do.
-  if (OptionsMap.empty())
+  if (optionsMap.empty())
     return;
 
   // Sort the options to make the ordering deterministic.
@@ -394,12 +396,8 @@ void detail::PassOptions::printHelp(size_t indent, size_t descIndent) const {
   };
   llvm::array_pod_sort(orderedOps.begin(), orderedOps.end(), compareOptionArgs);
   for (OptionBase *option : orderedOps) {
-    // TODO: printOptionInfo assumes a specific indent and will
-    // print options with values with incorrect indentation. We should add
-    // support to llvm::cl::Option for passing in a base indent to use when
-    // printing.
     llvm::outs().indent(indent);
-    option->getOption()->printOptionInfo(descIndent - indent);
+    option->printOptionInfo(descIndent - indent);
   }
 }
 
@@ -407,112 +405,27 @@ void detail::PassOptions::printHelp(size_t indent, size_t descIndent) const {
 size_t detail::PassOptions::getOptionWidth() const {
   size_t max = 0;
   for (auto *option : options)
-    max = std::max(max, option->getOption()->getOptionWidth());
+    max = std::max(max, option->getOptionWidth());
   return max;
 }
 
 //===----------------------------------------------------------------------===//
-// MLIR Options
+// OptionTypeHelper<OpPassManager>
 //===----------------------------------------------------------------------===//
 
-//===----------------------------------------------------------------------===//
-// OpPassManager: OptionValue
-//===----------------------------------------------------------------------===//
-
-namespace llvm::cl {
-
-OptionValue<OpPassManager>::OptionValue() = default;
-OptionValue<OpPassManager>::OptionValue(const mlir::OpPassManager &value) {
-  setValue(value);
-}
-OptionValue<OpPassManager>::OptionValue(
-    const OptionValue<mlir::OpPassManager> &rhs) {
-  if (rhs.hasValue())
-    setValue(rhs.getValue());
-}
-OptionValue<OpPassManager> &
-OptionValue<OpPassManager>::operator=(const mlir::OpPassManager &rhs) {
-  setValue(rhs);
-  return *this;
-}
-
-OptionValue<OpPassManager>::~OptionValue() = default;
-
-void OptionValue<OpPassManager>::setValue(const OpPassManager &newValue) {
-  if (hasValue())
-    *value = newValue;
-  else
-    value = std::make_unique<mlir::OpPassManager>(newValue);
-}
-void OptionValue<OpPassManager>::setValue(StringRef pipelineStr) {
-  FailureOr<OpPassManager> pipeline = parsePassPipeline(pipelineStr);
-  assert(succeeded(pipeline) && "invalid pass pipeline");
-  setValue(*pipeline);
-}
-
-bool OptionValue<OpPassManager>::compare(const mlir::OpPassManager &rhs) const {
-  std::string lhsStr, rhsStr;
-  {
-    raw_string_ostream lhsStream(lhsStr);
-    value->printAsTextualPipeline(lhsStream);
-
-    raw_string_ostream rhsStream(rhsStr);
-    rhs.printAsTextualPipeline(rhsStream);
-  }
-
-  // Use the textual format for pipeline comparisons.
-  return lhsStr == rhsStr;
-}
-
-void OptionValue<OpPassManager>::anchor() {}
-
-} // namespace llvm::cl
-
-//===----------------------------------------------------------------------===//
-// OpPassManager: Parser
-//===----------------------------------------------------------------------===//
-
-namespace llvm::cl {
-template class basic_parser<OpPassManager>;
-} // namespace llvm::cl
-
-bool llvm::cl::parser<OpPassManager>::parse(Option &, StringRef, StringRef arg,
-                                            ParsedPassManager &value) {
-  FailureOr<OpPassManager> pipeline = parsePassPipeline(arg);
+bool detail::pass_options::OptionTypeHelper<OpPassManager>::parse(
+    StringRef str, OpPassManager &result) {
+  FailureOr<OpPassManager> pipeline = parsePassPipeline(str);
   if (failed(pipeline))
     return true;
-  value.value = std::make_unique<OpPassManager>(std::move(*pipeline));
+  result = std::move(*pipeline);
   return false;
 }
 
-void llvm::cl::parser<OpPassManager>::print(raw_ostream &os,
-                                            const OpPassManager &value) {
+void detail::pass_options::OptionTypeHelper<OpPassManager>::print(
+    raw_ostream &os, const OpPassManager &value) {
   value.printAsTextualPipeline(os);
 }
-
-void llvm::cl::parser<OpPassManager>::printOptionDiff(
-    const Option &opt, OpPassManager &pm, const OptVal &defaultValue,
-    size_t globalWidth) const {
-  printOptionName(opt, globalWidth);
-  outs() << "= ";
-  pm.printAsTextualPipeline(outs());
-
-  if (defaultValue.hasValue()) {
-    outs().indent(2) << " (default: ";
-    defaultValue.getValue().printAsTextualPipeline(outs());
-    outs() << ")";
-  }
-  outs() << "\n";
-}
-
-void llvm::cl::parser<OpPassManager>::anchor() {}
-
-llvm::cl::parser<OpPassManager>::ParsedPassManager::ParsedPassManager() =
-    default;
-llvm::cl::parser<OpPassManager>::ParsedPassManager::ParsedPassManager(
-    ParsedPassManager &&) = default;
-llvm::cl::parser<OpPassManager>::ParsedPassManager::~ParsedPassManager() =
-    default;
 
 //===----------------------------------------------------------------------===//
 // TextualPassPipeline Parser
@@ -806,140 +719,17 @@ namespace {
 /// list.
 struct PassArgData {
   PassArgData() = default;
-  PassArgData(const PassRegistryEntry *registryEntry)
-      : registryEntry(registryEntry) {}
+  PassArgData(const PassRegistryEntry *registryEntry, std::string options)
+      : registryEntry(registryEntry), options(std::move(options)) {}
 
-  /// This field is used when the parsed option corresponds to a registered pass
-  /// or pass pipeline.
   const PassRegistryEntry *registryEntry{nullptr};
-
-  /// This field is set when instance specific pass options have been provided
-  /// on the command line.
-  StringRef options;
+  std::string options;
 };
 } // namespace
-
-namespace llvm {
-namespace cl {
-/// Define a valid OptionValue for the command line pass argument.
-template <>
-struct OptionValue<PassArgData> final
-    : OptionValueBase<PassArgData, /*isClass=*/true> {
-  OptionValue(const PassArgData &value) { this->setValue(value); }
-  OptionValue() = default;
-  void anchor() override {}
-
-  bool hasValue() const { return true; }
-  const PassArgData &getValue() const { return value; }
-  void setValue(const PassArgData &value) { this->value = value; }
-
-  PassArgData value;
-};
-} // namespace cl
-} // namespace llvm
-
-namespace {
 
 /// The name for the command line option used for parsing the textual pass
 /// pipeline.
 #define PASS_PIPELINE_ARG "pass-pipeline"
-
-/// Adds command line option for each registered pass or pass pipeline, as well
-/// as textual pass pipelines.
-struct PassNameParser : public llvm::cl::parser<PassArgData> {
-  PassNameParser(llvm::cl::Option &opt) : llvm::cl::parser<PassArgData>(opt) {}
-
-  void initialize();
-  void printOptionInfo(const llvm::cl::Option &opt,
-                       size_t globalWidth) const override;
-  size_t getOptionWidth(const llvm::cl::Option &opt) const override;
-  bool parse(llvm::cl::Option &opt, StringRef argName, StringRef arg,
-             PassArgData &value);
-
-  /// If true, this parser only parses entries that correspond to a concrete
-  /// pass registry entry, and does not include pipeline entries or the options
-  /// for pass entries.
-  bool passNamesOnly = false;
-};
-} // namespace
-
-void PassNameParser::initialize() {
-  llvm::cl::parser<PassArgData>::initialize();
-
-  /// Add the pass entries.
-  for (const auto &kv : *passRegistry) {
-    addLiteralOption(kv.second.getPassArgument(), &kv.second,
-                     kv.second.getPassDescription());
-  }
-  /// Add the pass pipeline entries.
-  if (!passNamesOnly) {
-    for (const auto &kv : *passPipelineRegistry) {
-      addLiteralOption(kv.second.getPassArgument(), &kv.second,
-                       kv.second.getPassDescription());
-    }
-  }
-}
-
-void PassNameParser::printOptionInfo(const llvm::cl::Option &opt,
-                                     size_t globalWidth) const {
-  // If this parser is just parsing pass names, print a simplified option
-  // string.
-  if (passNamesOnly) {
-    llvm::outs() << "  --" << opt.ArgStr << "=<pass-arg>";
-    opt.printHelpStr(opt.HelpStr, globalWidth, opt.ArgStr.size() + 18);
-    return;
-  }
-
-  // Print the information for the top-level option.
-  if (opt.hasArgStr()) {
-    llvm::outs() << "  --" << opt.ArgStr;
-    opt.printHelpStr(opt.HelpStr, globalWidth, opt.ArgStr.size() + 7);
-  } else {
-    llvm::outs() << "  " << opt.HelpStr << '\n';
-  }
-
-  // Functor used to print the ordered entries of a registration map.
-  auto printOrderedEntries = [&](StringRef header, auto &map) {
-    llvm::SmallVector<PassRegistryEntry *, 32> orderedEntries;
-    for (auto &kv : map)
-      orderedEntries.push_back(&kv.second);
-    llvm::array_pod_sort(
-        orderedEntries.begin(), orderedEntries.end(),
-        [](PassRegistryEntry *const *lhs, PassRegistryEntry *const *rhs) {
-          return (*lhs)->getPassArgument().compare((*rhs)->getPassArgument());
-        });
-
-    llvm::outs().indent(4) << header << ":\n";
-    for (PassRegistryEntry *entry : orderedEntries)
-      entry->printHelpStr(/*indent=*/6, globalWidth);
-  };
-
-  // Print the available passes.
-  printOrderedEntries("Passes", *passRegistry);
-
-  // Print the available pass pipelines.
-  if (!passPipelineRegistry->empty())
-    printOrderedEntries("Pass Pipelines", *passPipelineRegistry);
-}
-
-size_t PassNameParser::getOptionWidth(const llvm::cl::Option &opt) const {
-  size_t maxWidth = llvm::cl::parser<PassArgData>::getOptionWidth(opt) + 2;
-
-  // Check for any wider pass or pipeline options.
-  for (auto &entry : *passRegistry)
-    maxWidth = std::max(maxWidth, entry.second.getOptionWidth() + 4);
-  for (auto &entry : *passPipelineRegistry)
-    maxWidth = std::max(maxWidth, entry.second.getOptionWidth() + 4);
-  return maxWidth;
-}
-
-bool PassNameParser::parse(llvm::cl::Option &opt, StringRef argName,
-                           StringRef arg, PassArgData &value) {
-  if (llvm::cl::parser<PassArgData>::parse(opt, argName, arg, value))
-    return true;
-  value.options = arg;
-  return false;
-}
 
 //===----------------------------------------------------------------------===//
 // PassPipelineCLParser
@@ -948,49 +738,126 @@ bool PassNameParser::parse(llvm::cl::Option &opt, StringRef argName,
 namespace mlir {
 namespace detail {
 struct PassPipelineCLParserImpl {
-  PassPipelineCLParserImpl(StringRef arg, StringRef description,
-                           bool passNamesOnly)
-      : passList(arg, llvm::cl::desc(description)) {
-    passList.getParser().passNamesOnly = passNamesOnly;
-    passList.setValueExpectedFlag(llvm::cl::ValueExpected::ValueOptional);
+  /// Per-pass parse state.  Pass names only exist at runtime, so each
+  /// descriptor is built here; a deque keeps addresses stable because the
+  /// parser holds a pointer to each RuntimeOption.
+  struct PassOptState {
+    PassPipelineCLParserImpl *Impl = nullptr;
+    const PassRegistryEntry *Entry = nullptr;
+    std::optional<llvm::clv2::RuntimeOption<std::string>> Opt;
+  };
+
+  /// Ctx is a PassOptState: record this pass plus any inline options.
+  static bool addPassFromEntry(void *Ctx, const std::string &Val) {
+    auto *St = static_cast<PassOptState *>(Ctx);
+    St->Impl->passList.push_back(PassArgData(St->Entry, Val));
+    return true;
   }
 
-  /// Returns true if the given pass registry entry was registered at the
-  /// top-level of the parser, i.e. not within an explicit textual pipeline.
+  /// Ctx is the parser: look the pass name up, failing the parse if unknown.
+  static bool addPassByName(void *Ctx, const std::string &Val) {
+    auto *Impl = static_cast<PassPipelineCLParserImpl *>(Ctx);
+    // passRegistry is a file-scope ManagedStatic, not a member.
+    auto It = passRegistry->find(Val);
+    if (It == passRegistry->end())
+      return false;
+    Impl->passList.push_back(PassArgData(&It->second, {}));
+    return true;
+  }
+
+  PassPipelineCLParserImpl(StringRef arg, StringRef description,
+                           bool passNamesOnly) {
+    if (passNamesOnly) {
+      NamesOnlyOpt.emplace(
+          arg, description, llvm::clv2::ValueRequired,
+          llvm::clv2::CommaSeparated, llvm::clv2::value_desc("pass-arg"),
+          llvm::clv2::CtxCallback<std::string>{&addPassByName, this});
+      PendingEntries.push_back(NamesOnlyOpt->makeEntry());
+    } else {
+      auto registerEntry = [&](const PassRegistryEntry &entry) {
+        // RuntimeOption is immovable, so emplace then fill.
+        PassOptStates.emplace_back();
+        PassOptState &St = PassOptStates.back();
+        St.Impl = this;
+        St.Entry = &entry;
+        St.Opt.emplace(
+            entry.getPassArgument(), entry.getPassDescription(),
+            llvm::clv2::ValueOptional,
+            llvm::clv2::CtxCallback<std::string>{&addPassFromEntry, &St});
+        PendingEntries.push_back(St.Opt->makeEntry());
+      };
+
+      for (const auto &kv : *passRegistry)
+        registerEntry(kv.second);
+      for (const auto &kv : *passPipelineRegistry)
+        registerEntry(kv.second);
+    }
+  }
+
+  std::deque<PassOptState> PassOptStates;
+  std::optional<llvm::clv2::RuntimeOption<std::string>> NamesOnlyOpt;
+
+  void registerWith(llvm::clv2::OptionParser &P) {
+    for (auto &E : PendingEntries)
+      P.addDynamicEntry(std::move(E));
+    PendingEntries.clear();
+  }
+
   bool contains(const PassRegistryEntry *entry) const {
     return llvm::any_of(passList, [&](const PassArgData &data) {
       return data.registryEntry == entry;
     });
   }
 
-  /// The set of passes and pass pipelines to run.
-  llvm::cl::list<PassArgData, bool, PassNameParser> passList;
+  std::vector<PassArgData> passList;
+  std::vector<llvm::clv2::detail::OptionEntry> PendingEntries;
+  /// Shared destination + occurrence counter for --pass-pipeline and its
+  /// alias; the owning parser mirrors these into its public members.
+  std::string PipelineValue;
+  unsigned PipelineCount = 0;
+  /// The alias' name is a constructor argument, so its descriptor is built at
+  /// runtime.  Held here (behind the impl's unique_ptr) so it stays put.
+  std::optional<llvm::clv2::RuntimeOption<std::string>> AliasOpt;
 };
 } // namespace detail
 } // namespace mlir
 
+static constexpr llvm::clv2::OptionInfo<std::string> OI_PassPipeline{
+    PASS_PIPELINE_ARG, "Textual description of the pass pipeline to run"};
+
 /// Construct a pass pipeline parser with the given command line description.
 PassPipelineCLParser::PassPipelineCLParser(StringRef arg, StringRef description)
     : impl(std::make_unique<detail::PassPipelineCLParserImpl>(
-          arg, description, /*passNamesOnly=*/false)),
-      passPipeline(
-          PASS_PIPELINE_ARG,
-          llvm::cl::desc("Textual description of the pass pipeline to run")) {}
+          arg, description, /*passNamesOnly=*/false)) {
+  impl->PendingEntries.push_back(llvm::clv2::makeEntry<&OI_PassPipeline>(
+      impl->PipelineValue, impl->PipelineCount));
+}
 
 PassPipelineCLParser::PassPipelineCLParser(StringRef arg, StringRef description,
                                            StringRef alias)
     : PassPipelineCLParser(arg, description) {
-  passPipelineAlias.emplace(alias,
-                            llvm::cl::desc("Alias for --" PASS_PIPELINE_ARG),
-                            llvm::cl::aliasopt(passPipeline));
+  // Shares the slot and occurrence counter with --pass-pipeline, so either
+  // spelling feeds the same value.
+  impl->AliasOpt.emplace(alias, "Alias for --" PASS_PIPELINE_ARG,
+                         llvm::clv2::ValueRequired);
+  // help-only, no descriptor spelling, so it is set on the option's own
+  // static info rather than passed to the OptionInfo constructor.
+  impl->AliasOpt->staticInfo().SuppressValuePlaceholder = true;
+  llvm::clv2::detail::OptionEntry E =
+      impl->AliasOpt->makeEntry(impl->PipelineCount);
+  E.ParseSlot = &impl->PipelineValue;
+  impl->PendingEntries.push_back(std::move(E));
+}
+
+void PassPipelineCLParser::registerWith(llvm::clv2::OptionParser &P) {
+  impl->registerWith(P);
 }
 
 PassPipelineCLParser::~PassPipelineCLParser() = default;
 
 /// Returns true if this parser contains any valid options to add.
 bool PassPipelineCLParser::hasAnyOccurrences() const {
-  return passPipeline.getNumOccurrences() != 0 ||
-         impl->passList.getNumOccurrences() != 0;
+  return impl->PipelineCount != 0 || !impl->passList.empty();
 }
 
 /// Returns true if the given pass registry entry was registered at the
@@ -1003,14 +870,15 @@ bool PassPipelineCLParser::contains(const PassRegistryEntry *entry) const {
 LogicalResult PassPipelineCLParser::addToPipeline(
     OpPassManager &pm,
     function_ref<LogicalResult(const Twine &)> errorHandler) const {
-  if (passPipeline.getNumOccurrences()) {
-    if (impl->passList.getNumOccurrences())
+  if (impl->PipelineCount) {
+    if (!impl->passList.empty())
       return errorHandler(
           "'-" PASS_PIPELINE_ARG
           "' option can't be used with individual pass options");
     std::string errMsg;
     llvm::raw_string_ostream os(errMsg);
-    FailureOr<OpPassManager> parsed = parsePassPipeline(passPipeline, os);
+    FailureOr<OpPassManager> parsed =
+        parsePassPipeline(impl->PipelineValue, os);
     if (failed(parsed))
       return errorHandler(errMsg);
     pm = std::move(*parsed);
@@ -1034,14 +902,16 @@ LogicalResult PassPipelineCLParser::addToPipeline(
 /// Construct a pass pipeline parser with the given command line description.
 PassNameCLParser::PassNameCLParser(StringRef arg, StringRef description)
     : impl(std::make_unique<detail::PassPipelineCLParserImpl>(
-          arg, description, /*passNamesOnly=*/true)) {
-  impl->passList.setMiscFlag(llvm::cl::CommaSeparated);
-}
+          arg, description, /*passNamesOnly=*/true)) {}
 PassNameCLParser::~PassNameCLParser() = default;
+
+void PassNameCLParser::registerWith(llvm::clv2::OptionParser &P) {
+  impl->registerWith(P);
+}
 
 /// Returns true if this parser contains any valid options to add.
 bool PassNameCLParser::hasAnyOccurrences() const {
-  return impl->passList.getNumOccurrences() != 0;
+  return !impl->passList.empty();
 }
 
 /// Returns true if the given pass registry entry was registered at the

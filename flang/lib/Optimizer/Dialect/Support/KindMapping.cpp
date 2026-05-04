@@ -11,9 +11,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "flang/Optimizer/Dialect/Support/KindMapping.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "llvm/IR/LLVMContext.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 
 /// Allow the user to set the FIR intrinsic type kind value to LLVM type
 /// mappings.  Note that these are not mappings from kind values to any
@@ -24,18 +25,6 @@ using Bitsize = fir::KindMapping::Bitsize;
 using KindTy = fir::KindMapping::KindTy;
 using LLVMTypeID = fir::KindMapping::LLVMTypeID;
 using MatchResult = fir::KindMapping::MatchResult;
-
-static llvm::cl::opt<std::string>
-    clKindMapping("kind-mapping",
-                  llvm::cl::desc("kind mapping string to set kind precision"),
-                  llvm::cl::value_desc("kind-mapping-string"),
-                  llvm::cl::init(fir::KindMapping::getDefaultMap()));
-
-static llvm::cl::opt<std::string>
-    clDefaultKinds("default-kinds",
-                   llvm::cl::desc("string to set default kind values"),
-                   llvm::cl::value_desc("default-kind-string"),
-                   llvm::cl::init(fir::KindMapping::getDefaultKinds()));
 
 // Keywords for the floating point types.
 
@@ -234,10 +223,37 @@ fir::KindMapping::KindMapping(mlir::MLIRContext *context, llvm::StringRef map,
 
 fir::KindMapping::KindMapping(mlir::MLIRContext *context,
                               llvm::ArrayRef<KindTy> defs)
-    : KindMapping{context, clKindMapping, defs} {}
+    : KindMapping{
+          context,
+          [&]() -> std::string {
+            const auto &optsCtx = context ? context->getOptionsContext()
+                                          : llvm::clv2::defaultOptionsContext();
+            std::string val =
+                llvm::clv2::getOptValOr<&llvm::clv2::FLANG_KindMapping>(
+                    optsCtx, std::string{});
+            return val.empty() ? fir::KindMapping::getDefaultMap() : val;
+          }(),
+          defs} {}
 
 fir::KindMapping::KindMapping(mlir::MLIRContext *context)
-    : KindMapping{context, clKindMapping, clDefaultKinds} {}
+    : KindMapping{
+          context,
+          [&]() -> std::string {
+            const auto &optsCtx = context ? context->getOptionsContext()
+                                          : llvm::clv2::defaultOptionsContext();
+            std::string val =
+                llvm::clv2::getOptValOr<&llvm::clv2::FLANG_KindMapping>(
+                    optsCtx, std::string{});
+            return val.empty() ? fir::KindMapping::getDefaultMap() : val;
+          }(),
+          [&]() -> std::string {
+            const auto &optsCtx = context ? context->getOptionsContext()
+                                          : llvm::clv2::defaultOptionsContext();
+            std::string val =
+                llvm::clv2::getOptValOr<&llvm::clv2::FLANG_DefaultKinds>(
+                    optsCtx, std::string{});
+            return val.empty() ? fir::KindMapping::getDefaultKinds() : val;
+          }()} {}
 
 MatchResult fir::KindMapping::badMapString(const llvm::Twine &ptr) {
   auto unknown = mlir::UnknownLoc::get(context);
@@ -298,7 +314,7 @@ LLVMTypeID fir::KindMapping::getComplexTypeID(KindTy kind) const {
 
 Bitsize fir::KindMapping::getRealBitsize(KindTy kind) const {
   auto typeId = getFloatLikeTypeID<'r'>(kind, floatMap);
-  llvm::LLVMContext llCtxt; // FIXME
+  llvm::LLVMContext llCtxt(llvm::clv2::defaultOptionsContext()); // FIXME
   return llvm::Type::getPrimitiveType(llCtxt, typeId)->getPrimitiveSizeInBits();
 }
 
@@ -411,8 +427,14 @@ std::vector<KindTy> fir::KindMapping::toDefaultKinds(llvm::StringRef defs) {
   std::vector<KindTy> result(6);
   char code;
   KindTy kind;
-  if (defs.empty())
-    defs = clDefaultKinds;
+  std::string fallback;
+  if (defs.empty()) {
+    fallback = llvm::clv2::getOptValOr<&llvm::clv2::FLANG_DefaultKinds>(
+        llvm::clv2::defaultOptionsContext(), std::string{});
+    if (fallback.empty())
+      fallback = fir::KindMapping::getDefaultKinds();
+    defs = fallback;
+  }
   const char *srcPtr = defs.begin();
   const char *endPtr = defs.end();
   while (srcPtr < endPtr) {

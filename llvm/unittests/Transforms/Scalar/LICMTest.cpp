@@ -6,21 +6,22 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Transforms/Scalar/LICM.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Testing/Support/Error.h"
-#include "llvm/Transforms/Scalar/LICM.h"
 #include "gtest/gtest.h"
 
 namespace llvm {
 
 TEST(LICMTest, TestSCEVInvalidationOnHoisting) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   ModulePassManager MPM;
-  PassBuilder PB;
+  PassBuilder PB(llvm::clv2::defaultOptionsContext());
   LoopAnalysisManager LAM;
   FunctionAnalysisManager FAM;
   CGSCCAnalysisManager CGAM;
@@ -90,4 +91,4 @@ TEST(LICMTest, TestSCEVInvalidationOnHoisting) {
             ScalarEvolution::BlockDisposition::ProperlyDominatesBlock);
   EXPECT_EQ(DispositionBeforeInvalidation, DispositionAfterInvalidation);
 }
-}
+} // namespace llvm

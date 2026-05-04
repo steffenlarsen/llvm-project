@@ -33,10 +33,10 @@
 #include "llvm/Analysis/ScalarEvolutionPatternMatch.h"
 #include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/Analysis/VectorUtils.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/TypeSize.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 
@@ -44,12 +44,10 @@ using namespace llvm;
 using namespace VPlanPatternMatch;
 using namespace SCEVPatternMatch;
 
-// TODO: Remove this once the partial reduction intrinsics are no worse than
-//       normal vector operations.
-static cl::opt<bool> UsePartialReductionsByDefault(
-    "use-partial-reductions-by-default", cl::init(false), cl::Hidden,
-    cl::desc("Use partial reduction intrinsics for "
-             "all supported unordered reductions."));
+static bool getUsePartialReductionsByDefault(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::VEC_UsePartialReductionsByDefault>(
+      Ctx);
+}
 
 /// If the pointer operand \p Addr of a memory access is an affine AddRec
 /// w.r.t. \p L with a constant stride, return the stride in units of
@@ -2123,6 +2121,58 @@ static bool isConditionTrueViaVFAndUF(VPValue *Cond, VPlan &Plan,
 static bool replaceMaskWithCompareForScalarPlan(VPlan &Plan,
                                                 ElementCount BestVF) {
   if (!BestVF.isScalar())
+    return false;
+
+  bool MadeChange = false;
+  VPBuilder Builder;
+  VPRegionBlock *VectorRegion = Plan.getVectorLoopRegion();
+  VPBasicBlock *PreheaderVPBB = Plan.getVectorPreheader();
+  VPBasicBlock *ExitingVPBB = VectorRegion->getExitingBasicBlock();
+
+  VPValue *Start, *TC;
+  uint64_t Idx;
+  for (VPBasicBlock *VPBB : {PreheaderVPBB, ExitingVPBB}) {
+    for (VPRecipeBase &R : make_early_inc_range(*VPBB)) {
+      if (!match(&R, m_ExtractVectorForPart(
+                         m_WideActiveLaneMask(m_VPValue(Start), m_VPValue(TC),
+                                              m_VPValue()),
+                         m_ConstantInt(Idx))))
+        continue;
+
+      auto *Extract = cast<VPInstruction>(&R);
+      Builder.setInsertPoint(Extract);
+
+      if (Idx > 0)
+        Start = Builder.createAdd(
+            Start, Plan.getConstantInt(Start->getScalarType(), Idx));
+
+      VPValue *ICmp = Builder.createICmp(CmpInst::ICMP_ULT, Start, TC);
+      Extract->replaceAllUsesWith(ICmp);
+      Extract->eraseFromParent();
+      MadeChange = true;
+    }
+  }
+
+  return MadeChange;
+}
+
+/// Try to replace multiple active lane masks used for control flow with
+/// a single, wide active lane mask instruction followed by multiple
+/// extract subvector intrinsics. This applies to the active lane mask
+/// instructions both in the loop and in the preheader.
+/// Incoming values of all ActiveLaneMaskPHIs are updated to use the
+/// new extracts from the first active lane mask, which has it's last
+/// operand (multiplier) set to UF.
+static bool getEnableWideActiveLaneMask(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::VEC_EnableWideActiveLaneMask>(Ctx);
+}
+
+static bool tryToReplaceALMWithWideALM(VPlan &Plan, ElementCount VF,
+                                       unsigned UF) {
+  const Function *F = Plan.getScalarHeader()->getIRBasicBlock()->getParent();
+  bool WideALM =
+      getEnableWideActiveLaneMask(F->getContext().getOptionsContext());
+  if (!WideALM || !VF.isVector() || UF == 1)
     return false;
 
   bool MadeChange = false;
@@ -5355,6 +5405,9 @@ void VPlanTransforms::createPartialReductions(VPlan &Plan,
       ChainsByPhi;
   VPBasicBlock *HeaderVPBB = Plan.getVectorLoopRegion()->getEntryBasicBlock();
   SmallVector<VPReductionPHIRecipe *, 4> UnorderedReductions;
+  const Function *F = Plan.getScalarHeader()->getIRBasicBlock()->getParent();
+  bool UsePartialReductionsByDefault =
+      getUsePartialReductionsByDefault(F->getContext().getOptionsContext());
   for (VPRecipeBase &R : HeaderVPBB->phis()) {
     auto *RedPhiR = dyn_cast<VPReductionPHIRecipe>(&R);
     if (!RedPhiR)

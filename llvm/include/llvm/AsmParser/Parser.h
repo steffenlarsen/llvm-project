@@ -221,6 +221,11 @@ LLVM_ABI bool parseMetadataDefinitions(ArrayRef<StringRef> Definitions,
                                        SlotMapping &Slots,
                                        unsigned &ErrorDefinitionIndex);
 
+/// When true, incomplete IR (references to unknown metadata) is allowed
+/// during parsing.  Also driven by the -allow-incomplete-ir option.
+LLVM_ABI bool getAllowIncompleteIRParsing();
+LLVM_ABI void setAllowIncompleteIRParsing(bool Value);
+
 } // End llvm namespace
 
 #endif

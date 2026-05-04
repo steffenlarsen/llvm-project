@@ -56,71 +56,70 @@ std::unique_ptr<Module> parseAssembly(LLVMContext &Context,
 
    All call edges go up between SCCs, and clockwise around the SCC.
  */
-static const char DiamondOfTriangles[] =
-     "define void @a1() {\n"
-     "entry:\n"
-     "  call void @a2()\n"
-     "  call void @b2()\n"
-     "  call void @c3()\n"
-     "  ret void\n"
-     "}\n"
-     "define void @a2() {\n"
-     "entry:\n"
-     "  call void @a3()\n"
-     "  ret void\n"
-     "}\n"
-     "define void @a3() {\n"
-     "entry:\n"
-     "  call void @a1()\n"
-     "  ret void\n"
-     "}\n"
-     "define void @b1() {\n"
-     "entry:\n"
-     "  call void @b2()\n"
-     "  call void @d3()\n"
-     "  ret void\n"
-     "}\n"
-     "define void @b2() {\n"
-     "entry:\n"
-     "  call void @b3()\n"
-     "  ret void\n"
-     "}\n"
-     "define void @b3() {\n"
-     "entry:\n"
-     "  call void @b1()\n"
-     "  ret void\n"
-     "}\n"
-     "define void @c1() {\n"
-     "entry:\n"
-     "  call void @c2()\n"
-     "  call void @d2()\n"
-     "  ret void\n"
-     "}\n"
-     "define void @c2() {\n"
-     "entry:\n"
-     "  call void @c3()\n"
-     "  ret void\n"
-     "}\n"
-     "define void @c3() {\n"
-     "entry:\n"
-     "  call void @c1()\n"
-     "  ret void\n"
-     "}\n"
-     "define void @d1() {\n"
-     "entry:\n"
-     "  call void @d2()\n"
-     "  ret void\n"
-     "}\n"
-     "define void @d2() {\n"
-     "entry:\n"
-     "  call void @d3()\n"
-     "  ret void\n"
-     "}\n"
-     "define void @d3() {\n"
-     "entry:\n"
-     "  call void @d1()\n"
-     "  ret void\n"
-     "}\n";
+static const char DiamondOfTriangles[] = "define void @a1() {\n"
+                                         "entry:\n"
+                                         "  call void @a2()\n"
+                                         "  call void @b2()\n"
+                                         "  call void @c3()\n"
+                                         "  ret void\n"
+                                         "}\n"
+                                         "define void @a2() {\n"
+                                         "entry:\n"
+                                         "  call void @a3()\n"
+                                         "  ret void\n"
+                                         "}\n"
+                                         "define void @a3() {\n"
+                                         "entry:\n"
+                                         "  call void @a1()\n"
+                                         "  ret void\n"
+                                         "}\n"
+                                         "define void @b1() {\n"
+                                         "entry:\n"
+                                         "  call void @b2()\n"
+                                         "  call void @d3()\n"
+                                         "  ret void\n"
+                                         "}\n"
+                                         "define void @b2() {\n"
+                                         "entry:\n"
+                                         "  call void @b3()\n"
+                                         "  ret void\n"
+                                         "}\n"
+                                         "define void @b3() {\n"
+                                         "entry:\n"
+                                         "  call void @b1()\n"
+                                         "  ret void\n"
+                                         "}\n"
+                                         "define void @c1() {\n"
+                                         "entry:\n"
+                                         "  call void @c2()\n"
+                                         "  call void @d2()\n"
+                                         "  ret void\n"
+                                         "}\n"
+                                         "define void @c2() {\n"
+                                         "entry:\n"
+                                         "  call void @c3()\n"
+                                         "  ret void\n"
+                                         "}\n"
+                                         "define void @c3() {\n"
+                                         "entry:\n"
+                                         "  call void @c1()\n"
+                                         "  ret void\n"
+                                         "}\n"
+                                         "define void @d1() {\n"
+                                         "entry:\n"
+                                         "  call void @d2()\n"
+                                         "  ret void\n"
+                                         "}\n"
+                                         "define void @d2() {\n"
+                                         "entry:\n"
+                                         "  call void @d3()\n"
+                                         "  ret void\n"
+                                         "}\n"
+                                         "define void @d3() {\n"
+                                         "entry:\n"
+                                         "  call void @d1()\n"
+                                         "  ret void\n"
+                                         "}\n";
 
 /*
    IR forming a reference graph with a diamond of triangle-shaped RefSCCs
@@ -139,83 +138,82 @@ static const char DiamondOfTriangles[] =
 
    All call edges go up between RefSCCs, and clockwise around the RefSCC.
  */
-static const char DiamondOfTrianglesRefGraph[] =
-     "define void @a1() {\n"
-     "entry:\n"
-     "  %a = alloca ptr\n"
-     "  store ptr @a2, ptr %a\n"
-     "  store ptr @b2, ptr %a\n"
-     "  store ptr @c3, ptr %a\n"
-     "  ret void\n"
-     "}\n"
-     "define void @a2() {\n"
-     "entry:\n"
-     "  %a = alloca ptr\n"
-     "  store ptr @a3, ptr %a\n"
-     "  ret void\n"
-     "}\n"
-     "define void @a3() {\n"
-     "entry:\n"
-     "  %a = alloca ptr\n"
-     "  store ptr @a1, ptr %a\n"
-     "  ret void\n"
-     "}\n"
-     "define void @b1() {\n"
-     "entry:\n"
-     "  %a = alloca ptr\n"
-     "  store ptr @b2, ptr %a\n"
-     "  store ptr @d3, ptr %a\n"
-     "  ret void\n"
-     "}\n"
-     "define void @b2() {\n"
-     "entry:\n"
-     "  %a = alloca ptr\n"
-     "  store ptr @b3, ptr %a\n"
-     "  ret void\n"
-     "}\n"
-     "define void @b3() {\n"
-     "entry:\n"
-     "  %a = alloca ptr\n"
-     "  store ptr @b1, ptr %a\n"
-     "  ret void\n"
-     "}\n"
-     "define void @c1() {\n"
-     "entry:\n"
-     "  %a = alloca ptr\n"
-     "  store ptr @c2, ptr %a\n"
-     "  store ptr @d2, ptr %a\n"
-     "  ret void\n"
-     "}\n"
-     "define void @c2() {\n"
-     "entry:\n"
-     "  %a = alloca ptr\n"
-     "  store ptr @c3, ptr %a\n"
-     "  ret void\n"
-     "}\n"
-     "define void @c3() {\n"
-     "entry:\n"
-     "  %a = alloca ptr\n"
-     "  store ptr @c1, ptr %a\n"
-     "  ret void\n"
-     "}\n"
-     "define void @d1() {\n"
-     "entry:\n"
-     "  %a = alloca ptr\n"
-     "  store ptr @d2, ptr %a\n"
-     "  ret void\n"
-     "}\n"
-     "define void @d2() {\n"
-     "entry:\n"
-     "  %a = alloca ptr\n"
-     "  store ptr @d3, ptr %a\n"
-     "  ret void\n"
-     "}\n"
-     "define void @d3() {\n"
-     "entry:\n"
-     "  %a = alloca ptr\n"
-     "  store ptr @d1, ptr %a\n"
-     "  ret void\n"
-     "}\n";
+static const char DiamondOfTrianglesRefGraph[] = "define void @a1() {\n"
+                                                 "entry:\n"
+                                                 "  %a = alloca ptr\n"
+                                                 "  store ptr @a2, ptr %a\n"
+                                                 "  store ptr @b2, ptr %a\n"
+                                                 "  store ptr @c3, ptr %a\n"
+                                                 "  ret void\n"
+                                                 "}\n"
+                                                 "define void @a2() {\n"
+                                                 "entry:\n"
+                                                 "  %a = alloca ptr\n"
+                                                 "  store ptr @a3, ptr %a\n"
+                                                 "  ret void\n"
+                                                 "}\n"
+                                                 "define void @a3() {\n"
+                                                 "entry:\n"
+                                                 "  %a = alloca ptr\n"
+                                                 "  store ptr @a1, ptr %a\n"
+                                                 "  ret void\n"
+                                                 "}\n"
+                                                 "define void @b1() {\n"
+                                                 "entry:\n"
+                                                 "  %a = alloca ptr\n"
+                                                 "  store ptr @b2, ptr %a\n"
+                                                 "  store ptr @d3, ptr %a\n"
+                                                 "  ret void\n"
+                                                 "}\n"
+                                                 "define void @b2() {\n"
+                                                 "entry:\n"
+                                                 "  %a = alloca ptr\n"
+                                                 "  store ptr @b3, ptr %a\n"
+                                                 "  ret void\n"
+                                                 "}\n"
+                                                 "define void @b3() {\n"
+                                                 "entry:\n"
+                                                 "  %a = alloca ptr\n"
+                                                 "  store ptr @b1, ptr %a\n"
+                                                 "  ret void\n"
+                                                 "}\n"
+                                                 "define void @c1() {\n"
+                                                 "entry:\n"
+                                                 "  %a = alloca ptr\n"
+                                                 "  store ptr @c2, ptr %a\n"
+                                                 "  store ptr @d2, ptr %a\n"
+                                                 "  ret void\n"
+                                                 "}\n"
+                                                 "define void @c2() {\n"
+                                                 "entry:\n"
+                                                 "  %a = alloca ptr\n"
+                                                 "  store ptr @c3, ptr %a\n"
+                                                 "  ret void\n"
+                                                 "}\n"
+                                                 "define void @c3() {\n"
+                                                 "entry:\n"
+                                                 "  %a = alloca ptr\n"
+                                                 "  store ptr @c1, ptr %a\n"
+                                                 "  ret void\n"
+                                                 "}\n"
+                                                 "define void @d1() {\n"
+                                                 "entry:\n"
+                                                 "  %a = alloca ptr\n"
+                                                 "  store ptr @d2, ptr %a\n"
+                                                 "  ret void\n"
+                                                 "}\n"
+                                                 "define void @d2() {\n"
+                                                 "entry:\n"
+                                                 "  %a = alloca ptr\n"
+                                                 "  store ptr @d3, ptr %a\n"
+                                                 "  ret void\n"
+                                                 "}\n"
+                                                 "define void @d3() {\n"
+                                                 "entry:\n"
+                                                 "  %a = alloca ptr\n"
+                                                 "  store ptr @d1, ptr %a\n"
+                                                 "  ret void\n"
+                                                 "}\n";
 
 static LazyCallGraph buildCG(Module &M) {
   TargetLibraryInfoImpl TLII(M.getTargetTriple());
@@ -227,7 +225,7 @@ static LazyCallGraph buildCG(Module &M) {
 }
 
 TEST(LazyCallGraphTest, BasicGraphFormation) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssembly(Context, DiamondOfTriangles);
   LazyCallGraph CG = buildCG(*M);
 
@@ -402,7 +400,7 @@ static Function &lookupFunction(Module &M, StringRef Name) {
 }
 
 TEST(LazyCallGraphTest, BasicGraphMutation) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssembly(Context, "define void @a() {\n"
                                                      "entry:\n"
                                                      "  call void @b()\n"
@@ -453,7 +451,7 @@ TEST(LazyCallGraphTest, BasicGraphMutation) {
 }
 
 TEST(LazyCallGraphTest, InnerSCCFormation) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssembly(Context, DiamondOfTriangles);
   LazyCallGraph CG = buildCG(*M);
 
@@ -521,7 +519,7 @@ TEST(LazyCallGraphTest, InnerSCCFormation) {
 }
 
 TEST(LazyCallGraphTest, MultiArmSCC) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   // Two interlocking cycles. The really useful thing about this SCC is that it
   // will require Tarjan's DFS to backtrack and finish processing all of the
   // children of each node in the SCC. Since this involves call edges, both
@@ -582,7 +580,7 @@ TEST(LazyCallGraphTest, MultiArmSCC) {
 }
 
 TEST(LazyCallGraphTest, OutgoingEdgeMutation) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssembly(Context, "define void @a() {\n"
                                                      "entry:\n"
                                                      "  call void @b()\n"
@@ -731,7 +729,7 @@ TEST(LazyCallGraphTest, OutgoingEdgeMutation) {
 }
 
 TEST(LazyCallGraphTest, IncomingEdgeInsertion) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   // We want to ensure we can add edges even across complex diamond graphs, so
   // we use the diamond of triangles graph defined above. The ascii diagram is
   // repeated here for easy reference.
@@ -836,7 +834,7 @@ TEST(LazyCallGraphTest, IncomingEdgeInsertion) {
 }
 
 TEST(LazyCallGraphTest, IncomingEdgeInsertionRefGraph) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   // Another variation of the above test but with all the edges switched to
   // references rather than calls.
   std::unique_ptr<Module> M =
@@ -928,7 +926,7 @@ TEST(LazyCallGraphTest, IncomingEdgeInsertionRefGraph) {
 }
 
 TEST(LazyCallGraphTest, IncomingEdgeInsertionLargeCallCycle) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssembly(Context, "define void @a() {\n"
                                                      "entry:\n"
                                                      "  call void @b()\n"
@@ -968,7 +966,8 @@ TEST(LazyCallGraphTest, IncomingEdgeInsertionLargeCallCycle) {
   LazyCallGraph::RefSCC &CRC = *CG.lookupRefSCC(C);
   LazyCallGraph::RefSCC &DRC = *CG.lookupRefSCC(D);
 
-  // Connect the top to the bottom forming a large RefSCC made up mostly of calls.
+  // Connect the top to the bottom forming a large RefSCC made up mostly of
+  // calls.
   auto MergedRCs = ARC.insertIncomingRefEdge(D, A);
   // Make sure we connected the nodes.
   EXPECT_NE(D->begin(), D->end());
@@ -1001,30 +1000,29 @@ TEST(LazyCallGraphTest, IncomingEdgeInsertionLargeCallCycle) {
 }
 
 TEST(LazyCallGraphTest, IncomingEdgeInsertionLargeRefCycle) {
-  LLVMContext Context;
-  std::unique_ptr<Module> M =
-      parseAssembly(Context, "define void @a() {\n"
-                             "entry:\n"
-                             "  %p = alloca ptr\n"
-                             "  store ptr @b, ptr %p\n"
-                             "  ret void\n"
-                             "}\n"
-                             "define void @b() {\n"
-                             "entry:\n"
-                             "  %p = alloca ptr\n"
-                             "  store ptr @c, ptr %p\n"
-                             "  ret void\n"
-                             "}\n"
-                             "define void @c() {\n"
-                             "entry:\n"
-                             "  %p = alloca ptr\n"
-                             "  store ptr @d, ptr %p\n"
-                             "  ret void\n"
-                             "}\n"
-                             "define void @d() {\n"
-                             "entry:\n"
-                             "  ret void\n"
-                             "}\n");
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
+  std::unique_ptr<Module> M = parseAssembly(Context, "define void @a() {\n"
+                                                     "entry:\n"
+                                                     "  %p = alloca ptr\n"
+                                                     "  store ptr @b, ptr %p\n"
+                                                     "  ret void\n"
+                                                     "}\n"
+                                                     "define void @b() {\n"
+                                                     "entry:\n"
+                                                     "  %p = alloca ptr\n"
+                                                     "  store ptr @c, ptr %p\n"
+                                                     "  ret void\n"
+                                                     "}\n"
+                                                     "define void @c() {\n"
+                                                     "entry:\n"
+                                                     "  %p = alloca ptr\n"
+                                                     "  store ptr @d, ptr %p\n"
+                                                     "  ret void\n"
+                                                     "}\n"
+                                                     "define void @d() {\n"
+                                                     "entry:\n"
+                                                     "  ret void\n"
+                                                     "}\n");
   LazyCallGraph CG = buildCG(*M);
 
   // Force the graph to be fully expanded.
@@ -1068,7 +1066,7 @@ TEST(LazyCallGraphTest, IncomingEdgeInsertionLargeRefCycle) {
 }
 
 TEST(LazyCallGraphTest, InlineAndDeleteFunction) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   // We want to ensure we can delete nodes from relatively complex graphs and
   // so use the diamond of triangles graph defined above.
   //
@@ -1217,7 +1215,7 @@ TEST(LazyCallGraphTest, InlineAndDeleteFunction) {
 }
 
 TEST(LazyCallGraphTest, InternalEdgeMutation) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssembly(Context, "define void @a() {\n"
                                                      "entry:\n"
                                                      "  call void @b()\n"
@@ -1289,10 +1287,11 @@ TEST(LazyCallGraphTest, InternalEdgeMutation) {
   // be invalidated.
   LazyCallGraph::SCC &AC = *CG.lookupSCC(A);
   LazyCallGraph::SCC &CC = *CG.lookupSCC(C);
-  EXPECT_TRUE(RC.switchInternalEdgeToCall(A, C, [&](ArrayRef<LazyCallGraph::SCC *> MergedCs) {
-    ASSERT_EQ(1u, MergedCs.size());
-    EXPECT_EQ(&AC, MergedCs[0]);
-  }));
+  EXPECT_TRUE(RC.switchInternalEdgeToCall(
+      A, C, [&](ArrayRef<LazyCallGraph::SCC *> MergedCs) {
+        ASSERT_EQ(1u, MergedCs.size());
+        EXPECT_EQ(&AC, MergedCs[0]);
+      }));
   EXPECT_EQ(2, CC.size());
   EXPECT_EQ(&CC, CG.lookupSCC(A));
   EXPECT_EQ(&CC, CG.lookupSCC(C));
@@ -1303,30 +1302,30 @@ TEST(LazyCallGraphTest, InternalEdgeMutation) {
 }
 
 TEST(LazyCallGraphTest, InternalEdgeRemoval) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   // A nice fully connected (including self-edges) RefSCC.
-  std::unique_ptr<Module> M = parseAssembly(
-      Context, "define void @a(ptr %ptr) {\n"
-               "entry:\n"
-               "  store ptr @a, ptr %ptr\n"
-               "  store ptr @b, ptr %ptr\n"
-               "  store ptr @c, ptr %ptr\n"
-               "  ret void\n"
-               "}\n"
-               "define void @b(ptr %ptr) {\n"
-               "entry:\n"
-               "  store ptr @a, ptr %ptr\n"
-               "  store ptr @b, ptr %ptr\n"
-               "  store ptr @c, ptr %ptr\n"
-               "  ret void\n"
-               "}\n"
-               "define void @c(ptr %ptr) {\n"
-               "entry:\n"
-               "  store ptr @a, ptr %ptr\n"
-               "  store ptr @b, ptr %ptr\n"
-               "  store ptr @c, ptr %ptr\n"
-               "  ret void\n"
-               "}\n");
+  std::unique_ptr<Module> M =
+      parseAssembly(Context, "define void @a(ptr %ptr) {\n"
+                             "entry:\n"
+                             "  store ptr @a, ptr %ptr\n"
+                             "  store ptr @b, ptr %ptr\n"
+                             "  store ptr @c, ptr %ptr\n"
+                             "  ret void\n"
+                             "}\n"
+                             "define void @b(ptr %ptr) {\n"
+                             "entry:\n"
+                             "  store ptr @a, ptr %ptr\n"
+                             "  store ptr @b, ptr %ptr\n"
+                             "  store ptr @c, ptr %ptr\n"
+                             "  ret void\n"
+                             "}\n"
+                             "define void @c(ptr %ptr) {\n"
+                             "entry:\n"
+                             "  store ptr @a, ptr %ptr\n"
+                             "  store ptr @b, ptr %ptr\n"
+                             "  store ptr @c, ptr %ptr\n"
+                             "  ret void\n"
+                             "}\n");
   LazyCallGraph CG = buildCG(*M);
 
   // Force the graph to be fully expanded.
@@ -1381,30 +1380,30 @@ TEST(LazyCallGraphTest, InternalEdgeRemoval) {
 }
 
 TEST(LazyCallGraphTest, InternalMultiEdgeRemoval) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   // A nice fully connected (including self-edges) RefSCC.
-  std::unique_ptr<Module> M = parseAssembly(
-      Context, "define void @a(ptr %ptr) {\n"
-               "entry:\n"
-               "  store ptr @a, ptr %ptr\n"
-               "  store ptr @b, ptr %ptr\n"
-               "  store ptr @c, ptr %ptr\n"
-               "  ret void\n"
-               "}\n"
-               "define void @b(ptr %ptr) {\n"
-               "entry:\n"
-               "  store ptr @a, ptr %ptr\n"
-               "  store ptr @b, ptr %ptr\n"
-               "  store ptr @c, ptr %ptr\n"
-               "  ret void\n"
-               "}\n"
-               "define void @c(ptr %ptr) {\n"
-               "entry:\n"
-               "  store ptr @a, ptr %ptr\n"
-               "  store ptr @b, ptr %ptr\n"
-               "  store ptr @c, ptr %ptr\n"
-               "  ret void\n"
-               "}\n");
+  std::unique_ptr<Module> M =
+      parseAssembly(Context, "define void @a(ptr %ptr) {\n"
+                             "entry:\n"
+                             "  store ptr @a, ptr %ptr\n"
+                             "  store ptr @b, ptr %ptr\n"
+                             "  store ptr @c, ptr %ptr\n"
+                             "  ret void\n"
+                             "}\n"
+                             "define void @b(ptr %ptr) {\n"
+                             "entry:\n"
+                             "  store ptr @a, ptr %ptr\n"
+                             "  store ptr @b, ptr %ptr\n"
+                             "  store ptr @c, ptr %ptr\n"
+                             "  ret void\n"
+                             "}\n"
+                             "define void @c(ptr %ptr) {\n"
+                             "entry:\n"
+                             "  store ptr @a, ptr %ptr\n"
+                             "  store ptr @b, ptr %ptr\n"
+                             "  store ptr @c, ptr %ptr\n"
+                             "  ret void\n"
+                             "}\n");
   LazyCallGraph CG = buildCG(*M);
 
   // Force the graph to be fully expanded.
@@ -1447,31 +1446,31 @@ TEST(LazyCallGraphTest, InternalMultiEdgeRemoval) {
 }
 
 TEST(LazyCallGraphTest, InternalNoOpEdgeRemoval) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   // A graph with a single cycle formed both from call and reference edges
   // which makes the reference edges trivial to delete. The graph looks like:
   //
   // Reference edges: a -> b -> c -> a
   //      Call edges: a -> c -> b -> a
-  std::unique_ptr<Module> M = parseAssembly(
-      Context, "define void @a(ptr %ptr) {\n"
-               "entry:\n"
-               "  call void @b(ptr %ptr)\n"
-               "  store ptr @c, ptr %ptr\n"
-               "  ret void\n"
-               "}\n"
-               "define void @b(ptr %ptr) {\n"
-               "entry:\n"
-               "  store ptr @a, ptr %ptr\n"
-               "  call void @c(ptr %ptr)\n"
-               "  ret void\n"
-               "}\n"
-               "define void @c(ptr %ptr) {\n"
-               "entry:\n"
-               "  call void @a(ptr %ptr)\n"
-               "  store ptr @b, ptr %ptr\n"
-               "  ret void\n"
-               "}\n");
+  std::unique_ptr<Module> M =
+      parseAssembly(Context, "define void @a(ptr %ptr) {\n"
+                             "entry:\n"
+                             "  call void @b(ptr %ptr)\n"
+                             "  store ptr @c, ptr %ptr\n"
+                             "  ret void\n"
+                             "}\n"
+                             "define void @b(ptr %ptr) {\n"
+                             "entry:\n"
+                             "  store ptr @a, ptr %ptr\n"
+                             "  call void @c(ptr %ptr)\n"
+                             "  ret void\n"
+                             "}\n"
+                             "define void @c(ptr %ptr) {\n"
+                             "entry:\n"
+                             "  call void @a(ptr %ptr)\n"
+                             "  store ptr @b, ptr %ptr\n"
+                             "  ret void\n"
+                             "}\n");
   LazyCallGraph CG = buildCG(*M);
 
   // Force the graph to be fully expanded.
@@ -1526,7 +1525,7 @@ TEST(LazyCallGraphTest, InternalNoOpEdgeRemoval) {
 }
 
 TEST(LazyCallGraphTest, InternalCallEdgeToRef) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   // A nice fully connected (including self-edges) SCC (and RefSCC)
   std::unique_ptr<Module> M = parseAssembly(Context, "define void @a() {\n"
                                                      "entry:\n"
@@ -1614,7 +1613,7 @@ TEST(LazyCallGraphTest, InternalCallEdgeToRef) {
 }
 
 TEST(LazyCallGraphTest, InternalRefEdgeToCall) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   // Basic tests for making a ref edge a call. This hits the basics of the
   // process only.
   std::unique_ptr<Module> M =
@@ -1686,10 +1685,11 @@ TEST(LazyCallGraphTest, InternalRefEdgeToCall) {
   EXPECT_EQ(&AC, &RC[3]);
 
   // Switch C -> B to a call edge. This forms a cycle and forces merging SCCs.
-  EXPECT_TRUE(RC.switchInternalEdgeToCall(C, B, [&](ArrayRef<LazyCallGraph::SCC *> MergedCs) {
-    ASSERT_EQ(1u, MergedCs.size());
-    EXPECT_EQ(&CC, MergedCs[0]);
-  }));
+  EXPECT_TRUE(RC.switchInternalEdgeToCall(
+      C, B, [&](ArrayRef<LazyCallGraph::SCC *> MergedCs) {
+        ASSERT_EQ(1u, MergedCs.size());
+        EXPECT_EQ(&CC, MergedCs[0]);
+      }));
   ASSERT_EQ(3, RC.size());
   EXPECT_EQ(&DC, &RC[0]);
   EXPECT_EQ(&BC, &RC[1]);
@@ -1700,7 +1700,7 @@ TEST(LazyCallGraphTest, InternalRefEdgeToCall) {
 }
 
 TEST(LazyCallGraphTest, InternalRefEdgeToCallNoCycleInterleaved) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   // Test for having a post-order prior to changing a ref edge to a call edge
   // with SCCs connecting to the source and connecting to the target, but not
   // connecting to both, interleaved between the source and target. This
@@ -1815,7 +1815,7 @@ TEST(LazyCallGraphTest, InternalRefEdgeToCallNoCycleInterleaved) {
 }
 
 TEST(LazyCallGraphTest, InternalRefEdgeToCallBothPartitionAndMerge) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   // Test for having a postorder where between the source and target are all
   // three kinds of other SCCs:
   // 1) One connected to the target only that have to be shifted below the
@@ -1954,7 +1954,7 @@ TEST(LazyCallGraphTest, InternalRefEdgeToCallBothPartitionAndMerge) {
 // These are truly unique constructs: constant expressions with non-constant
 // operands.
 TEST(LazyCallGraphTest, HandleBlockAddress) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M =
       parseAssembly(Context, "define void @f() {\n"
                              "entry:\n"
@@ -1986,7 +1986,7 @@ TEST(LazyCallGraphTest, HandleBlockAddress) {
 // Test that a blockaddress that refers to itself creates no new RefSCC
 // connections. https://bugs.llvm.org/show_bug.cgi?id=40722
 TEST(LazyCallGraphTest, HandleBlockAddress2) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M =
       parseAssembly(Context, "define void @f() {\n"
                              "  ret void\n"
@@ -2013,38 +2013,37 @@ TEST(LazyCallGraphTest, HandleBlockAddress2) {
 }
 
 TEST(LazyCallGraphTest, ReplaceNodeFunction) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   // A graph with several different kinds of edges pointing at a particular
   // function.
   std::unique_ptr<Module> M =
-      parseAssembly(Context,
-                    "define void @a(ptr %ptr) {\n"
-                    "entry:\n"
-                    "  store ptr @d, ptr %ptr\n"
-                    "  ret void\n"
-                    "}\n"
-                    "define void @b(ptr %ptr) {\n"
-                    "entry:\n"
-                    "  store ptr @d, ptr %ptr\n"
-                    "  store ptr @d, ptr %ptr\n"
-                    "  call void @d(ptr %ptr)"
-                    "  ret void\n"
-                    "}\n"
-                    "define void @c(ptr %ptr) {\n"
-                    "entry:\n"
-                    "  call void @d(ptr %ptr)"
-                    "  call void @d(ptr %ptr)"
-                    "  store ptr @d, ptr %ptr\n"
-                    "  ret void\n"
-                    "}\n"
-                    "define void @d(ptr %ptr) {\n"
-                    "entry:\n"
-                    "  store ptr @b, ptr %ptr\n"
-                    "  call void @c(ptr %ptr)"
-                    "  call void @d(ptr %ptr)"
-                    "  store ptr @d, ptr %ptr\n"
-                    "  ret void\n"
-                    "}\n");
+      parseAssembly(Context, "define void @a(ptr %ptr) {\n"
+                             "entry:\n"
+                             "  store ptr @d, ptr %ptr\n"
+                             "  ret void\n"
+                             "}\n"
+                             "define void @b(ptr %ptr) {\n"
+                             "entry:\n"
+                             "  store ptr @d, ptr %ptr\n"
+                             "  store ptr @d, ptr %ptr\n"
+                             "  call void @d(ptr %ptr)"
+                             "  ret void\n"
+                             "}\n"
+                             "define void @c(ptr %ptr) {\n"
+                             "entry:\n"
+                             "  call void @d(ptr %ptr)"
+                             "  call void @d(ptr %ptr)"
+                             "  store ptr @d, ptr %ptr\n"
+                             "  ret void\n"
+                             "}\n"
+                             "define void @d(ptr %ptr) {\n"
+                             "entry:\n"
+                             "  store ptr @b, ptr %ptr\n"
+                             "  call void @c(ptr %ptr)"
+                             "  call void @d(ptr %ptr)"
+                             "  store ptr @d, ptr %ptr\n"
+                             "  ret void\n"
+                             "}\n");
   LazyCallGraph CG = buildCG(*M);
 
   // Force the graph to be fully expanded.
@@ -2094,35 +2093,34 @@ TEST(LazyCallGraphTest, ReplaceNodeFunction) {
 }
 
 TEST(LazyCallGraphTest, RemoveFunctionWithSpuriousRef) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   // A graph with a couple of RefSCCs.
   std::unique_ptr<Module> M =
-      parseAssembly(Context,
-                    "define void @a(ptr %ptr) {\n"
-                    "entry:\n"
-                    "  store ptr @d, ptr %ptr\n"
-                    "  ret void\n"
-                    "}\n"
-                    "define void @b(ptr %ptr) {\n"
-                    "entry:\n"
-                    "  store ptr @c, ptr %ptr\n"
-                    "  ret void\n"
-                    "}\n"
-                    "define void @c(ptr %ptr) {\n"
-                    "entry:\n"
-                    "  call void @d(ptr %ptr)"
-                    "  ret void\n"
-                    "}\n"
-                    "define void @d(ptr %ptr) {\n"
-                    "entry:\n"
-                    "  call void @c(ptr %ptr)"
-                    "  store ptr @b, ptr %ptr\n"
-                    "  ret void\n"
-                    "}\n"
-                    "define void @dead() {\n"
-                    "entry:\n"
-                    "  ret void\n"
-                    "}\n");
+      parseAssembly(Context, "define void @a(ptr %ptr) {\n"
+                             "entry:\n"
+                             "  store ptr @d, ptr %ptr\n"
+                             "  ret void\n"
+                             "}\n"
+                             "define void @b(ptr %ptr) {\n"
+                             "entry:\n"
+                             "  store ptr @c, ptr %ptr\n"
+                             "  ret void\n"
+                             "}\n"
+                             "define void @c(ptr %ptr) {\n"
+                             "entry:\n"
+                             "  call void @d(ptr %ptr)"
+                             "  ret void\n"
+                             "}\n"
+                             "define void @d(ptr %ptr) {\n"
+                             "entry:\n"
+                             "  call void @c(ptr %ptr)"
+                             "  store ptr @b, ptr %ptr\n"
+                             "  ret void\n"
+                             "}\n"
+                             "define void @dead() {\n"
+                             "entry:\n"
+                             "  ret void\n"
+                             "}\n");
   LazyCallGraph CG = buildCG(*M);
 
   // Insert spurious ref edges.
@@ -2176,7 +2174,7 @@ TEST(LazyCallGraphTest, RemoveFunctionWithSpuriousRef) {
 }
 
 TEST(LazyCallGraphTest, RemoveFunctionWithSpuriousRefRecursive) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M =
       parseAssembly(Context, "define void @a(ptr %p) {\n"
                              "  store ptr @b, ptr %p\n"
@@ -2226,7 +2224,7 @@ TEST(LazyCallGraphTest, RemoveFunctionWithSpuriousRefRecursive) {
 }
 
 TEST(LazyCallGraphTest, RemoveFunctionWithSpuriousRefRecursive2) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M =
       parseAssembly(Context, "define void @a(ptr %p) {\n"
                              "  store ptr @b, ptr %p\n"
@@ -2285,7 +2283,7 @@ TEST(LazyCallGraphTest, RemoveFunctionWithSpuriousRefRecursive2) {
 }
 
 TEST(LazyCallGraphTest, RemoveFunctionWithSpuriousRefRecursive3) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M =
       parseAssembly(Context, "define void @a(ptr %p) {\n"
                              "  store ptr @b, ptr %p\n"
@@ -2336,7 +2334,7 @@ TEST(LazyCallGraphTest, RemoveFunctionWithSpuriousRefRecursive3) {
 }
 
 TEST(LazyCallGraphTest, AddSplitFunction1) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssembly(Context, "define void @f() {\n"
                                                      "  ret void\n"
                                                      "}\n");
@@ -2376,7 +2374,7 @@ TEST(LazyCallGraphTest, AddSplitFunction1) {
 }
 
 TEST(LazyCallGraphTest, AddSplitFunction2) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssembly(Context, "define void @f() {\n"
                                                      "  ret void\n"
                                                      "}\n");
@@ -2417,7 +2415,7 @@ TEST(LazyCallGraphTest, AddSplitFunction2) {
 }
 
 TEST(LazyCallGraphTest, AddSplitFunction3) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssembly(Context, "define void @f() {\n"
                                                      "  ret void\n"
                                                      "}\n");
@@ -2462,7 +2460,7 @@ TEST(LazyCallGraphTest, AddSplitFunction3) {
 }
 
 TEST(LazyCallGraphTest, AddSplitFunction4) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssembly(Context, "define void @f() {\n"
                                                      "  ret void\n"
                                                      "}\n");
@@ -2509,7 +2507,7 @@ TEST(LazyCallGraphTest, AddSplitFunction4) {
 }
 
 TEST(LazyCallGraphTest, AddSplitFunction5) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssembly(Context, "define void @f() {\n"
                                                      "  ret void\n"
                                                      "}\n");
@@ -2554,7 +2552,7 @@ TEST(LazyCallGraphTest, AddSplitFunction5) {
 }
 
 TEST(LazyCallGraphTest, AddSplitFunction6) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssembly(Context, "define void @f() {\n"
                                                      "  ret void\n"
                                                      "}\n");
@@ -2598,7 +2596,7 @@ TEST(LazyCallGraphTest, AddSplitFunction6) {
 }
 
 TEST(LazyCallGraphTest, AddSplitFunction7) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssembly(Context, "define void @f() {\n"
                                                      "  call void @f2()\n"
                                                      "  ret void\n"
@@ -2650,7 +2648,7 @@ TEST(LazyCallGraphTest, AddSplitFunction7) {
 }
 
 TEST(LazyCallGraphTest, AddSplitFunction8) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssembly(Context, "define void @f() {\n"
                                                      "  call void @f2()\n"
                                                      "  ret void\n"
@@ -2703,7 +2701,7 @@ TEST(LazyCallGraphTest, AddSplitFunction8) {
 }
 
 TEST(LazyCallGraphTest, AddSplitFunction9) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssembly(Context, "define void @f() {\n"
                                                      "  call void @f2()\n"
                                                      "  ret void\n"
@@ -2756,7 +2754,7 @@ TEST(LazyCallGraphTest, AddSplitFunction9) {
 }
 
 TEST(LazyCallGraphTest, AddSplitFunctions1) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssembly(Context, "define void @f() {\n"
                                                      "  ret void\n"
                                                      "}\n");
@@ -2797,7 +2795,7 @@ TEST(LazyCallGraphTest, AddSplitFunctions1) {
 }
 
 TEST(LazyCallGraphTest, AddSplitFunctions2) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssembly(Context, "define void @f() {\n"
                                                      "  ret void\n"
                                                      "}\n");
@@ -2844,7 +2842,7 @@ TEST(LazyCallGraphTest, AddSplitFunctions2) {
 }
 
 TEST(LazyCallGraphTest, AddSplitFunctions3) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssembly(Context, "define void @f() {\n"
                                                      "  ret void\n"
                                                      "}\n");
@@ -2900,7 +2898,7 @@ TEST(LazyCallGraphTest, AddSplitFunctions3) {
 }
 
 TEST(LazyCallGraphTest, AddSplitFunctions4) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssembly(Context, "define void @f() {\n"
                                                      "  ret void\n"
                                                      "}\n");
@@ -2962,7 +2960,7 @@ TEST(LazyCallGraphTest, AddSplitFunctions4) {
 }
 
 TEST(LazyCallGraphTest, AddSplitFunctions5) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M =
       parseAssembly(Context, "define void @f() {\n"
                              "  %1 = bitcast ptr @f2 to ptr\n"
@@ -3027,4 +3025,4 @@ TEST(LazyCallGraphTest, AddSplitFunctions5) {
   EXPECT_EQ(RC, CG.lookupRefSCC(F2N));
   EXPECT_EQ(CG.postorder_ref_scc_end(), I);
 }
-}
+} // namespace

@@ -18,6 +18,7 @@
 #include "mlir/Support/ToolUtilities.h"
 #include "llvm/ADT/StringRef.h"
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -25,6 +26,9 @@
 namespace llvm {
 class MemoryBuffer;
 class raw_ostream;
+namespace clv2 {
+class OptionParser;
+} // namespace clv2
 } // namespace llvm
 
 namespace mlir {
@@ -92,7 +96,11 @@ LogicalResult mlirTranslateMain(std::unique_ptr<llvm::MemoryBuffer> input,
 /// of tools like `mlir-translate`. The translation to perform is parsed from
 /// the command line. The `toolName` argument is used for the header displayed
 /// by `--help`.
-LogicalResult mlirTranslateMain(int argc, char **argv, StringRef toolName);
+/// If \p ConfigureParser is provided, it is called with the OptionParser
+/// before parsing to allow callers to add tool-specific registries.
+LogicalResult mlirTranslateMain(
+    int argc, char **argv, StringRef toolName,
+    std::function<void(llvm::clv2::OptionParser &)> ConfigureParser = {});
 } // namespace mlir
 
 #endif // MLIR_TOOLS_MLIRTRANSLATE_MLIRTRANSLATEMAIN_H

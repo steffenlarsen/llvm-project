@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- MemCpyOptimizer.cpp - Optimize use of memcpy and friends -----------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -2272,7 +2274,7 @@ bool MemCpyOptPass::runImpl(Function &F, TargetLibraryInfo *TLI_,
     MadeChange = true;
   }
 
-  if (VerifyMemorySSA)
+  if (getVerifyMemorySSA(F.getContext().getOptionsContext()))
     MSSA_->verifyMemorySSA();
 
   return MadeChange;

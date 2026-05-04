@@ -1,4 +1,5 @@
 #include "llvm/Analysis/StaticDataProfileInfo.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/Constants.h"
@@ -7,20 +8,18 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/ProfileData/InstrProf.h"
+#include "llvm/Support/OptionsContext.h"
 
 #define DEBUG_TYPE "static-data-profile-info"
 
 using namespace llvm;
 
 namespace llvm {
-// FIXME: This option is added for incremental rollout purposes.
-// After the option, string literal partitioning should be implied by
-// AnnotateStaticDataSectionPrefix in MemProfUse.cpp and this option should be
-// cleaned up.
-cl::opt<bool> AnnotateStringLiteralSectionPrefix(
-    "memprof-annotate-string-literal-section-prefix", cl::init(false),
-    cl::Hidden,
-    cl::desc("If true, annotate the string literal data section prefix"));
+
+static bool getAnnotateStringLiteralSectionPrefix(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::AN_AnnotateStringLiteralSectionPrefix>(
+      M.getContext().getOptionsContext());
+}
 namespace memprof {
 // Returns true iff the global variable has custom section either by
 // __attribute__((section("name")))
@@ -141,7 +140,7 @@ StringRef StaticDataProfileInfo::getConstantSectionPrefix(
     // cold pages.
     if (const GlobalVariable *GV = dyn_cast<GlobalVariable>(C);
         GV && llvm::memprof::IsAnnotationOK(*GV) &&
-        (AnnotateStringLiteralSectionPrefix ||
+        (getAnnotateStringLiteralSectionPrefix(*GV->getParent()) ||
          !GV->getName().starts_with(".str"))) {
       // Note a global var is covered by data access profiles iff the
       // symbol name is preserved in the symbol table; most notably, a string

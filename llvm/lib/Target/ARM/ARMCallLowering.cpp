@@ -42,6 +42,8 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -52,10 +54,15 @@ using namespace llvm;
 
 // Whether Big-endian GISel is enabled, defaults to off, can be enabled for
 // testing.
-static cl::opt<bool>
-    EnableGISelBigEndian("enable-arm-gisel-bigendian", cl::Hidden,
-                         cl::init(false),
-                         cl::desc("Enable Global-ISel Big Endian Lowering"));
+static bool getEnableGISelBigEndian(const Function &F) {
+  return clv2::getOptValOr<&clv2::ARMOptsReg, &clv2::ARM_EnableGISelBigEndian>(
+      F.getContext().getOptionsContext(), false);
+}
+
+static bool getEnableGISelBigEndian(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::ARMOptsReg, &clv2::ARM_EnableGISelBigEndian>(
+      Ctx, false);
+}
 
 ARMCallLowering::ARMCallLowering(const ARMTargetLowering &TLI)
     : CallLowering(&TLI) {}
@@ -549,4 +556,7 @@ bool ARMCallLowering::lowerCall(MachineIRBuilder &MIRBuilder, CallLoweringInfo &
   return true;
 }
 
-bool ARMCallLowering::enableBigEndian() const { return EnableGISelBigEndian; }
+bool ARMCallLowering::enableBigEndian() const {
+  auto *TLI = getTLI<ARMTargetLowering>();
+  return getEnableGISelBigEndian(TLI->getSubtarget()->getOptionsContext());
+}

@@ -40,7 +40,7 @@ using namespace llvm::objcarc;
 AliasResult ObjCARCAAResult::alias(const MemoryLocation &LocA,
                                    const MemoryLocation &LocB,
                                    AAQueryInfo &AAQI, const Instruction *) {
-  if (!EnableARCOpts)
+  if (!getEnableARCOpts())
     return AAResultBase::alias(LocA, LocB, AAQI, nullptr);
 
   // First, strip off no-ops, including ObjC-specific no-ops, and try making a
@@ -75,7 +75,7 @@ AliasResult ObjCARCAAResult::alias(const MemoryLocation &LocA,
 ModRefInfo ObjCARCAAResult::getModRefInfoMask(const MemoryLocation &Loc,
                                               AAQueryInfo &AAQI,
                                               bool IgnoreLocals) {
-  if (!EnableARCOpts)
+  if (!getEnableARCOpts())
     return AAResultBase::getModRefInfoMask(Loc, AAQI, IgnoreLocals);
 
   // First, strip off no-ops, including ObjC-specific no-ops, and try making
@@ -98,7 +98,7 @@ ModRefInfo ObjCARCAAResult::getModRefInfoMask(const MemoryLocation &Loc,
 }
 
 MemoryEffects ObjCARCAAResult::getMemoryEffects(const Function *F) {
-  if (!EnableARCOpts)
+  if (!getEnableARCOpts())
     return AAResultBase::getMemoryEffects(F);
 
   switch (GetFunctionClass(F)) {
@@ -114,7 +114,7 @@ MemoryEffects ObjCARCAAResult::getMemoryEffects(const Function *F) {
 ModRefInfo ObjCARCAAResult::getModRefInfo(const CallBase *Call,
                                           const MemoryLocation &Loc,
                                           AAQueryInfo &AAQI) {
-  if (!EnableARCOpts)
+  if (!getEnableARCOpts())
     return AAResultBase::getModRefInfo(Call, Loc, AAQI);
 
   switch (GetBasicARCInstKind(Call)) {

@@ -11,8 +11,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Passes/TailDuplication.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/Support/CommandLineV2.h"
 
 #include <numeric>
 #include <queue>
@@ -21,61 +24,7 @@
 
 using namespace llvm;
 
-namespace opts {
-
-extern cl::OptionCategory BoltOptCategory;
-extern cl::opt<bool> NoThreads;
-
-static cl::opt<bolt::TailDuplication::DuplicationMode> TailDuplicationMode(
-    "tail-duplication",
-    cl::desc("duplicate unconditional branches that cross a cache line"),
-    cl::init(bolt::TailDuplication::TD_NONE),
-    cl::values(clEnumValN(bolt::TailDuplication::TD_NONE, "none",
-                          "do not apply"),
-               clEnumValN(bolt::TailDuplication::TD_AGGRESSIVE, "aggressive",
-                          "aggressive strategy"),
-               clEnumValN(bolt::TailDuplication::TD_MODERATE, "moderate",
-                          "moderate strategy"),
-               clEnumValN(bolt::TailDuplication::TD_CACHE, "cache",
-                          "cache-aware duplication strategy")),
-    cl::ZeroOrMore, cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned>
-    TailDuplicationMinimumOffset("tail-duplication-minimum-offset",
-                                 cl::desc("minimum offset needed between block "
-                                          "and successor to allow duplication"),
-                                 cl::ReallyHidden, cl::init(64),
-                                 cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned> TailDuplicationMaximumDuplication(
-    "tail-duplication-maximum-duplication",
-    cl::desc("tail blocks whose size (in bytes) exceeds the value are never "
-             "duplicated"),
-    cl::ZeroOrMore, cl::ReallyHidden, cl::init(24), cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned> TailDuplicationMinimumDuplication(
-    "tail-duplication-minimum-duplication",
-    cl::desc("tail blocks with size (in bytes) not exceeding the value are "
-             "always duplicated"),
-    cl::ReallyHidden, cl::init(2), cl::cat(BoltOptCategory));
-
-static cl::opt<bool> TailDuplicationConstCopyPropagation(
-    "tail-duplication-const-copy-propagation",
-    cl::desc("enable const and copy propagation after tail duplication"),
-    cl::ReallyHidden, cl::init(false), cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned> TailDuplicationMaxCacheDistance(
-    "tail-duplication-max-cache-distance",
-    cl::desc("The weight of backward jumps for ExtTSP value"), cl::init(256),
-    cl::ReallyHidden, cl::cat(BoltOptCategory));
-
-static cl::opt<double> TailDuplicationCacheBackwardWeight(
-    "tail-duplication-cache-backward-weight",
-    cl::desc(
-        "The maximum distance (in bytes) of backward jumps for ExtTSP value"),
-    cl::init(0.5), cl::ReallyHidden, cl::cat(BoltOptCategory));
-
-} // namespace opts
+namespace opts {} // namespace opts
 
 namespace llvm {
 namespace bolt {
@@ -263,13 +212,15 @@ bool TailDuplication::isInCacheLine(const BinaryBasicBlock &BB,
   if (&BB == &Succ)
     return true;
 
+  auto *PassOpts = bolt_passes_opts::getBoltPassesOpts(*OptsCtx);
   uint64_t Distance = 0;
   int Direction = (Succ.getLayoutIndex() > BB.getLayoutIndex()) ? 1 : -1;
 
   for (unsigned I = BB.getLayoutIndex() + Direction; I != Succ.getLayoutIndex();
        I += Direction) {
     Distance += BB.getFunction()->getLayout().getBlock(I)->getOriginalSize();
-    if (Distance > opts::TailDuplicationMinimumOffset)
+    if (Distance >
+        PassOpts->get<&clv2::BOLTPASS_TailDuplicationMinimumOffset>())
       return false;
   }
   return true;
@@ -286,7 +237,9 @@ TailDuplication::moderateDuplicate(BinaryBasicBlock &BB,
   if (isInCacheLine(BB, Tail))
     return BlocksToDuplicate;
   // and its size do not exceed the maximum allowed size
-  if (Tail.getOriginalSize() > opts::TailDuplicationMaximumDuplication)
+  auto *PassOpts = bolt_passes_opts::getBoltPassesOpts(*OptsCtx);
+  if (Tail.getOriginalSize() >
+      PassOpts->get<&clv2::BOLTPASS_TailDuplicationMaximumDuplication>())
     return BlocksToDuplicate;
   // If duplicating would introduce a new branch, don't duplicate
   for (auto Itr = Tail.succ_begin(); Itr != Tail.succ_end(); ++Itr) {
@@ -357,10 +310,15 @@ TailDuplication::aggressiveDuplicate(BinaryBasicBlock &BB,
       [](int value, BinaryBasicBlock *p) {
         return value + p->getOriginalSize();
       });
-  if (DuplicationByteCount > opts::TailDuplicationMaximumDuplication) {
-    LLVM_DEBUG(dbgs() << "Aggressive tail duplication: duplication byte count ("
-                      << DuplicationByteCount << ") exceeds maximum "
-                      << opts::TailDuplicationMaximumDuplication << '\n';);
+  auto *PassOpts = bolt_passes_opts::getBoltPassesOpts(*OptsCtx);
+  if (DuplicationByteCount >
+      PassOpts->get<&clv2::BOLTPASS_TailDuplicationMaximumDuplication>()) {
+    LLVM_DEBUG(
+        dbgs() << "Aggressive tail duplication: duplication byte count ("
+               << DuplicationByteCount << ") exceeds maximum "
+               << PassOpts
+                      ->get<&clv2::BOLTPASS_TailDuplicationMaximumDuplication>()
+               << '\n';);
     BlocksToDuplicate.clear();
   }
   LLVM_DEBUG(dbgs() << "Aggressive tail duplication: found "
@@ -392,6 +350,8 @@ double TailDuplication::cacheScore(uint64_t SrcAddr, uint64_t SrcSize,
                                    uint64_t Count) const {
   assert(Count != BinaryBasicBlock::COUNT_NO_PROFILE);
 
+  auto *PassOpts = bolt_passes_opts::getBoltPassesOpts(*OptsCtx);
+
   bool IsForwardJump = SrcAddr <= DstAddr;
   uint64_t JumpDistance = 0;
   // Computing the length of the jump so that it takes the sizes of the two
@@ -402,11 +362,17 @@ double TailDuplication::cacheScore(uint64_t SrcAddr, uint64_t SrcSize,
     JumpDistance = (SrcAddr + SrcSize) - (DstAddr);
   }
 
-  if (JumpDistance >= opts::TailDuplicationMaxCacheDistance)
+  if (JumpDistance >=
+      PassOpts->get<&clv2::BOLTPASS_TailDuplicationMaxCacheDistance>())
     return 0;
-  double Prob = 1.0 - static_cast<double>(JumpDistance) /
-                          opts::TailDuplicationMaxCacheDistance;
-  return (IsForwardJump ? 1.0 : opts::TailDuplicationCacheBackwardWeight) *
+  double Prob =
+      1.0 -
+      static_cast<double>(JumpDistance) /
+          PassOpts->get<&clv2::BOLTPASS_TailDuplicationMaxCacheDistance>();
+  return (IsForwardJump
+              ? 1.0
+              : PassOpts->get<
+                    &clv2::BOLTPASS_TailDuplicationCacheBackwardWeight>()) *
          Prob * Count;
 }
 
@@ -478,6 +444,7 @@ TailDuplication::cacheDuplicate(const MCCodeEmitter *Emitter,
                                 BinaryFunction &BF, BinaryBasicBlock *Pred,
                                 BinaryBasicBlock *Tail) const {
   std::vector<BinaryBasicBlock *> BlocksToDuplicate;
+  auto *PassOpts = bolt_passes_opts::getBoltPassesOpts(*OptsCtx);
 
   // No need to duplicate cold basic blocks
   if (Pred->isCold() || Tail->isCold()) {
@@ -485,12 +452,14 @@ TailDuplication::cacheDuplicate(const MCCodeEmitter *Emitter,
   }
   // Always duplicate "small" tail basic blocks, which might be beneficial for
   // code size, since a jump instruction is eliminated
-  if (Tail->estimateSize(Emitter) <= opts::TailDuplicationMinimumDuplication) {
+  if (Tail->estimateSize(Emitter) <=
+      PassOpts->get<&clv2::BOLTPASS_TailDuplicationMinimumDuplication>()) {
     BlocksToDuplicate.push_back(Tail);
     return BlocksToDuplicate;
   }
   // Never duplicate "large" tail basic blocks
-  if (Tail->estimateSize(Emitter) > opts::TailDuplicationMaximumDuplication) {
+  if (Tail->estimateSize(Emitter) >
+      PassOpts->get<&clv2::BOLTPASS_TailDuplicationMaximumDuplication>()) {
     return BlocksToDuplicate;
   }
   // Do not append basic blocks after the last hot block in the current layout
@@ -575,10 +544,15 @@ std::vector<BinaryBasicBlock *> TailDuplication::duplicateBlocks(
 }
 
 void TailDuplication::runOnFunction(BinaryFunction &Function) {
+  auto *PassOpts = bolt_passes_opts::getBoltPassesOpts(*OptsCtx);
+  auto *CoreOpts = bolt_core_opts::getBoltCoreOpts(*OptsCtx);
+  bool DoNoThreads = CoreOpts->get<&clv2::BOLTCORE_NoThreads>();
+
   // Create a separate MCCodeEmitter to allow lock-free execution
+  BinaryContext &BC = Function.getBinaryContext();
   BinaryContext::IndependentCodeEmitter Emitter;
-  if (!opts::NoThreads) {
-    Emitter = Function.getBinaryContext().createIndependentMCCodeEmitter();
+  if (!DoNoThreads) {
+    Emitter = BC.createIndependentMCCodeEmitter();
   }
 
   Function.getLayout().updateLayoutIndices();
@@ -600,11 +574,14 @@ void TailDuplication::runOnFunction(BinaryFunction &Function) {
       continue;
 
     std::vector<BinaryBasicBlock *> BlocksToDuplicate;
-    if (opts::TailDuplicationMode == TailDuplication::TD_AGGRESSIVE) {
+    auto TailDuplicationModeOpt =
+        static_cast<bolt::TailDuplication::DuplicationMode>(
+            PassOpts->get<&clv2::BOLTPASS_TailDuplication>());
+    if (TailDuplicationModeOpt == TailDuplication::TD_AGGRESSIVE) {
       BlocksToDuplicate = aggressiveDuplicate(*BB, *Tail);
-    } else if (opts::TailDuplicationMode == TailDuplication::TD_MODERATE) {
+    } else if (TailDuplicationModeOpt == TailDuplication::TD_MODERATE) {
       BlocksToDuplicate = moderateDuplicate(*BB, *Tail);
-    } else if (opts::TailDuplicationMode == TailDuplication::TD_CACHE) {
+    } else if (TailDuplicationModeOpt == TailDuplication::TD_CACHE) {
       BlocksToDuplicate = cacheDuplicate(Emitter.MCE.get(), Function, BB, Tail);
     } else {
       llvm_unreachable("unknown tail duplication mode");
@@ -622,7 +599,7 @@ void TailDuplication::runOnFunction(BinaryFunction &Function) {
       DuplicatedByteCount += BB->estimateSize(Emitter.MCE.get());
     }
 
-    if (opts::TailDuplicationConstCopyPropagation) {
+    if (PassOpts->get<&clv2::BOLTPASS_TailDuplicationConstCopyPropagation>()) {
       constantAndCopyPropagate(*BB, DuplicatedBlocks);
       BinaryBasicBlock *FirstBB = BlocksToDuplicate[0];
       if (FirstBB->pred_size() == 1) {
@@ -640,7 +617,13 @@ void TailDuplication::runOnFunction(BinaryFunction &Function) {
 }
 
 Error TailDuplication::runOnFunctions(BinaryContext &BC) {
-  if (opts::TailDuplicationMode == TailDuplication::TD_NONE)
+  OptsCtx = &BC.getOptionsContext();
+  auto *PassOpts = bolt_passes_opts::getBoltPassesOpts(*OptsCtx);
+
+  auto TailDuplicationModeOpt =
+      static_cast<bolt::TailDuplication::DuplicationMode>(
+          PassOpts->get<&clv2::BOLTPASS_TailDuplication>());
+  if (TailDuplicationModeOpt == TailDuplication::TD_NONE)
     return Error::success();
 
   for (auto &It : BC.getBinaryFunctions()) {
@@ -661,7 +644,7 @@ Error TailDuplication::runOnFunctions(BinaryContext &BC) {
                 100.0 * DuplicationsDynamicCount / AllDynamicCount)
       << "\n";
 
-  if (opts::TailDuplicationConstCopyPropagation) {
+  if (PassOpts->get<&clv2::BOLTPASS_TailDuplicationConstCopyPropagation>()) {
     BC.outs() << "BOLT-INFO: tail duplication "
               << format(
                      "applied %zu static and %zu dynamic propagation deletions",

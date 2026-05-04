@@ -53,9 +53,9 @@
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/IR/ValueMap.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GenericDomTree.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -64,6 +64,7 @@
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/SimplifyIndVar.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <assert.h>
 #include <cmath>
@@ -85,39 +86,56 @@ STATISTIC(NumUnrolled, "Number of loops unrolled (completely or otherwise)");
 STATISTIC(NumUnrolledNotLatch, "Number of loops unrolled without a conditional "
                                "latch (completely or otherwise)");
 
-static cl::opt<bool>
-UnrollRuntimeEpilog("unroll-runtime-epilog", cl::init(false), cl::Hidden,
-                    cl::desc("Allow runtime unrolled loops to be unrolled "
-                             "with epilog instead of prolog."));
+static bool getUnrollRuntimeEpilog(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_UnrollRuntimeEpilog>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool isUnrollRuntimeEpilogSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
+                               &clv2::TU_UnrollRuntimeEpilog>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> UnrollUniformWeights(
-    "unroll-uniform-weights", cl::init(false), cl::Hidden,
-    cl::desc("If new branch weights must be found, work harder to keep them "
-             "uniform."));
-
-static cl::opt<bool>
-UnrollVerifyDomtree("unroll-verify-domtree", cl::Hidden,
-                    cl::desc("Verify domtree after unrolling"),
+static bool getUnrollVerifyDomtree(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::TransformUtilsOptsReg>(
+          F.getContext().getOptionsContext()))
+    if (O->specified<&clv2::TU_UnrollVerifyDomtree>())
+      return O->get<&clv2::TU_UnrollVerifyDomtree>();
 #ifdef EXPENSIVE_CHECKS
-    cl::init(true)
+  return true;
 #else
-    cl::init(false)
+  return false;
 #endif
-                    );
+}
 
-static cl::opt<bool>
-UnrollVerifyLoopInfo("unroll-verify-loopinfo", cl::Hidden,
-                    cl::desc("Verify loopinfo after unrolling"),
+static bool getUnrollUniformWeights(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_UnrollUniformWeights>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getUnrollVerifyLoopInfo(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::TransformUtilsOptsReg>(
+          F.getContext().getOptionsContext()))
+    if (O->specified<&clv2::TU_UnrollVerifyLoopInfo>())
+      return O->get<&clv2::TU_UnrollVerifyLoopInfo>();
 #ifdef EXPENSIVE_CHECKS
-    cl::init(true)
+  return true;
 #else
-    cl::init(false)
+  return false;
 #endif
-                    );
+}
 
-static cl::opt<bool> UnrollAddParallelReductions(
-    "unroll-add-parallel-reductions", cl::init(false), cl::Hidden,
-    cl::desc("Allow unrolling to add parallel reduction phis."));
+static bool getUnrollAddParallelReductions(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_UnrollAddParallelReductions>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool isUnrollAddParallelReductionsSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
+                               &clv2::TU_UnrollAddParallelReductions>(
+      F.getContext().getOptionsContext());
+}
 
 /// Check if unrolling created a situation where we need to insert phi nodes to
 /// preserve LCSSA form.
@@ -832,7 +850,7 @@ static void fixProbContradiction(Loop *L, UnrollLoopOptions ULO,
     SetAllProbs(ComputeProbForLinear());
   } else if (CondLatches.size() == 2) {
     SetAllProbs(ComputeProbForQuadratic());
-  } else if (!UnrollUniformWeights) {
+  } else if (!getUnrollUniformWeights(*L->getHeader()->getParent())) {
     // The polynomial is too complex for a simple formula, and the quick and
     // dirty fix has been selected.  Adjust probabilities starting from the
     // first latch, which has the most influence on the total frequency, so
@@ -1055,8 +1073,9 @@ llvm::UnrollLoop(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
   }
 
   bool EpilogProfitability =
-      UnrollRuntimeEpilog.getNumOccurrences() ? UnrollRuntimeEpilog
-                                              : isEpilogProfitable(L);
+      isUnrollRuntimeEpilogSpecified(*Header->getParent())
+          ? getUnrollRuntimeEpilog(*Header->getParent())
+          : isEpilogProfitable(L);
 
   if (ULO.Runtime &&
       !UnrollRuntimeLoopRemainder(
@@ -1149,8 +1168,8 @@ llvm::UnrollLoop(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
   // to not exit.
   DenseMap<PHINode *, RecurrenceDescriptor> Reductions;
   bool CanAddAdditionalAccumulators =
-      (UnrollAddParallelReductions.getNumOccurrences() > 0
-           ? UnrollAddParallelReductions
+      (isUnrollAddParallelReductionsSpecified(*Header->getParent())
+           ? getUnrollAddParallelReductions(*Header->getParent())
            : ULO.AddAdditionalAccumulators) &&
       !CompletelyUnroll && L->getNumBlocks() == 1 &&
       (ULO.Runtime ||
@@ -1204,7 +1223,7 @@ llvm::UnrollLoop(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
   // When a FSDiscriminator is enabled, we don't need to add the multiply
   // factors to the discriminators.
   if (Header->getParent()->shouldEmitDebugInfoForProfiling() &&
-      !EnableFSDiscriminator)
+      !getEnableFSDiscriminator(Header->getContext()))
     for (BasicBlock *BB : L->getBlocks())
       for (Instruction &I : *BB)
         if (!I.isDebugOrPseudoInst())
@@ -1430,7 +1449,7 @@ llvm::UnrollLoop(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
     }
   }
 
-  assert(!UnrollVerifyDomtree ||
+  assert(!getUnrollVerifyDomtree(*Header->getParent()) ||
          DT->verify(DominatorTree::VerificationLevel::Fast));
 
   SmallVector<DominatorTree::UpdateType> DTUpdates;
@@ -1646,7 +1665,7 @@ llvm::UnrollLoop(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
     // Apply updates to the DomTree.
     DT = &DTU.getDomTree();
   }
-  assert(!UnrollVerifyDomtree ||
+  assert(!getUnrollVerifyDomtree(*Header->getParent()) ||
          DT->verify(DominatorTree::VerificationLevel::Fast));
 
   Loop *OuterL = L->getParentLoop();
@@ -1714,7 +1733,7 @@ llvm::UnrollLoop(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
   }
 
   // LoopInfo should not be valid, confirm that.
-  if (UnrollVerifyLoopInfo)
+  if (getUnrollVerifyLoopInfo(*Header->getParent()))
     LI->verify();
 
   // After complete unrolling most of the blocks should be contained in OuterL.

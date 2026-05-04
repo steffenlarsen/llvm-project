@@ -103,7 +103,8 @@ public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     const Location unknownLoc = UnknownLoc::get(context);
-    const auto maybeArgsParsed = parseInputShapes(unknownLoc, args);
+    const auto maybeArgsParsed = parseInputShapes(
+        unknownLoc, std::vector<std::string>(args.begin(), args.end()));
     if (failed(maybeArgsParsed))
       return;
     const SmallVector<IdxAndShape> argsParsed = maybeArgsParsed.value();

@@ -226,6 +226,8 @@ inline thread::id get_id() { return std::this_thread::get_id(); }
 namespace llvm {
 
 struct thread {
+  using id = unsigned;
+
   thread() {}
   thread(thread &&other) {}
   template <class Function, class... Args>
@@ -244,8 +246,13 @@ struct thread {
                        "threading support");
   }
   void join() {}
+  id get_id() const { return 0; }
   static unsigned hardware_concurrency() { return 1; };
 };
+
+namespace this_thread {
+inline thread::id get_id() { return 0; }
+} // namespace this_thread
 
 } // namespace llvm
 

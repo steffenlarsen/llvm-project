@@ -39,6 +39,8 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <cassert>
 
@@ -46,9 +48,10 @@ using namespace llvm;
 
 #define DEBUG_TYPE "arm-mve-gather-scatter-lowering"
 
-cl::opt<bool> EnableMaskedGatherScatters(
-    "enable-arm-maskedgatscat", cl::Hidden, cl::init(true),
-    cl::desc("Enable the generation of masked gathers and scatters"));
+static bool getEnableMaskedGatherScatters(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::ARM_EnableMaskedGatherScatters>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -1247,7 +1250,7 @@ bool MVEGatherScatterLowering::optimiseAddress(Value *Address, BasicBlock *BB,
 }
 
 bool MVEGatherScatterLowering::runOnFunction(Function &F) {
-  if (!EnableMaskedGatherScatters)
+  if (!getEnableMaskedGatherScatters(F))
     return false;
   auto &TPC = getAnalysis<TargetPassConfig>();
   auto &TM = TPC.getTM<TargetMachine>();

@@ -17,6 +17,7 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 #include "gtest/gtest.h"
@@ -51,7 +52,8 @@ struct Context {
 
     MRI.reset(TheTarget->createMCRegInfo(TT));
     MAI.reset(TheTarget->createMCAsmInfo(*MRI, TT, MCOptions));
-    STI.reset(TheTarget->createMCSubtargetInfo(TT, "", ""));
+    STI.reset(TheTarget->createMCSubtargetInfo(
+        TT, "", "", /*Ctx=*/llvm::clv2::defaultOptionsContext()));
     Ctx = std::make_unique<MCContext>(TT, *MAI, *MRI, *STI);
     DisAsm.reset(TheTarget->createMCDisassembler(*STI, *Ctx));
   }

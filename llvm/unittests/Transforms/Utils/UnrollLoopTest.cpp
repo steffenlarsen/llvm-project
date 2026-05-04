@@ -30,11 +30,11 @@ static std::unique_ptr<Module> parseIR(LLVMContext &C, const char *IR) {
 }
 
 TEST(LoopUnrollRuntime, Latch) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
-  std::unique_ptr<Module> M = parseIR(
-    C,
-    R"(define i32 @test(ptr %a, ptr %b, ptr %c, i64 %n) {
+  std::unique_ptr<Module> M =
+      parseIR(C,
+              R"(define i32 @test(ptr %a, ptr %b, ptr %c, i64 %n) {
 entry:
   br label %while.cond
 
@@ -56,8 +56,7 @@ while.body:                                       ; preds = %while.cond
 
 while.end:                                        ; preds = %while.cond
   ret i32 0
-})"
-    );
+})");
 
   auto *F = M->getFunction("test");
   DominatorTree DT(*F);
@@ -69,7 +68,7 @@ while.end:                                        ; preds = %while.cond
 
   Loop *L = *LI.begin();
 
-  bool PreserveLCSSA = L->isRecursivelyLCSSAForm(DT,LI);
+  bool PreserveLCSSA = L->isRecursivelyLCSSAForm(DT, LI);
 
   bool ret =
       UnrollRuntimeLoopRemainder(L, 4, true, false, false, false, &LI, &SE, &DT,

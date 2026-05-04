@@ -41,7 +41,7 @@
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/Option.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/LLVMDriver.h"
@@ -340,7 +340,7 @@ static void darwinPrintSymbol(SymbolicFile &Obj, const NMSymbol &S,
       H_64 = MachO->MachOObjectFile::getHeader64();
       Filetype = H_64.filetype;
       Flags = H_64.flags;
-      if (SymDRI.p){
+      if (SymDRI.p) {
         MachO::nlist_64 STE_64 = MachO->getSymbol64TableEntry(SymDRI);
         NType = STE_64.n_type;
         NSect = STE_64.n_sect;
@@ -358,7 +358,7 @@ static void darwinPrintSymbol(SymbolicFile &Obj, const NMSymbol &S,
       H = MachO->MachOObjectFile::getHeader();
       Filetype = H.filetype;
       Flags = H.flags;
-      if (SymDRI.p){
+      if (SymDRI.p) {
         MachO::nlist STE = MachO->getSymbolTableEntry(SymDRI);
         NType = STE.n_type;
         NSect = STE.n_sect;
@@ -2058,8 +2058,8 @@ static bool checkMachOAndArchFlags(SymbolicFile *O, StringRef Filename) {
                                        &McpuDefault, &ArchFlag);
   } else {
     H = MachO->MachOObjectFile::getHeader();
-    T = MachOObjectFile::getArchTriple(H.cputype, H.cpusubtype,
-                                       &McpuDefault, &ArchFlag);
+    T = MachOObjectFile::getArchTriple(H.cputype, H.cpusubtype, &McpuDefault,
+                                       &ArchFlag);
   }
   const std::string ArchFlagName(ArchFlag);
   if (!llvm::is_contained(ArchFlags, ArchFlagName)) {
@@ -2427,7 +2427,7 @@ static std::vector<NMSymbol> dumpSymbolNamesFromFile(StringRef Filename) {
       BuffStart[1] == '!')
     return SymbolList;
 
-  LLVMContext Context;
+  LLVMContext Context(llvm::clv2::defaultOptionsContext());
   LLVMContext *ContextPtr = NoLLVMBitcode ? nullptr : &Context;
   Expected<std::unique_ptr<Binary>> BinaryOrErr =
       createBinary(BufferOrErr.get()->getMemBufferRef(), ContextPtr);

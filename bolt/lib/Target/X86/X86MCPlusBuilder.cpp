@@ -16,6 +16,7 @@
 #include "X86MCSymbolizer.h"
 #include "bolt/Core/MCPlus.h"
 #include "bolt/Core/MCPlusBuilder.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInst.h"
@@ -24,7 +25,7 @@
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCRegister.h"
 #include "llvm/MC/MCRegisterInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/DataExtractor.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Errc.h"
@@ -37,21 +38,7 @@
 using namespace llvm;
 using namespace bolt;
 
-namespace opts {
-
-extern cl::OptionCategory BoltOptCategory;
-
-static cl::opt<bool> X86StripRedundantAddressSize(
-    "x86-strip-redundant-address-size",
-    cl::desc("Remove redundant Address-Size override prefix"), cl::init(true),
-    cl::cat(BoltOptCategory));
-
-cl::opt<bool>
-    X86ICPPIC("x86-icp-pic",
-              cl::desc("force x86 ICP to use PC-relative LEA target checks"),
-              cl::cat(BoltOptCategory));
-
-} // namespace opts
+namespace opts {} // namespace opts
 
 namespace {
 
@@ -1701,7 +1688,11 @@ public:
     int MemOpNo = getMemoryOperandNo(Inst);
 
     // Check and remove redundant Address-Size override prefix.
-    if (opts::X86StripRedundantAddressSize) {
+    auto *PassOpts =
+        bolt::bolt_passes_opts::getBoltPassesOpts(getOptionsContext());
+    const bool X86StripRedundantAddressSize =
+        PassOpts->get<&clv2::BOLTPASS_X86StripRedundantAddressSize>();
+    if (X86StripRedundantAddressSize) {
       uint64_t TSFlags = Info->get(OldOpcode).TSFlags;
       unsigned Flags = Inst.getFlags();
 
@@ -3320,9 +3311,12 @@ public:
       const bool MinimizeCodeSize, MCContext *Ctx) override {
     const bool IsTailCall = isTailCall(CallInst);
     const bool IsJumpTable = getJumpTable(CallInst) != 0;
+    auto *PassOpts =
+        bolt::bolt_passes_opts::getBoltPassesOpts(getOptionsContext());
+    const bool X86ICPPIC = PassOpts->get<&clv2::BOLTPASS_X86ICPPIC>();
     const bool UsePIC =
         !IsJumpTable &&
-        (Ctx->getObjectFileInfo()->isPositionIndependent() || opts::X86ICPPIC);
+        (Ctx->getObjectFileInfo()->isPositionIndependent() || X86ICPPIC);
     BlocksVectorTy Results;
 
     // Label for the current code block.

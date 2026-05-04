@@ -27,20 +27,22 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+
 using namespace llvm;
 
 #define DEBUG_TYPE "hexagon-global-array-alignment"
 
-static cl::opt<bool> DisableGlobalArrayAlignment(
-    "hexagon-disable-global-array-align",
-    cl::desc("Disable aligning global integer arrays to an 8-byte boundary"),
-    cl::init(false), cl::Hidden);
+static bool getDisableGlobalArrayAlignment(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DisableGlobalArrayAlignment>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> DisableHexAlignOptByteHalf(
-    "hexagon-disable-align-opt-byte-half",
-    cl::desc("Disable keeping byte and half-word arrays at their natural "
-             "alignment when reducing .rodata size"),
-    cl::Hidden);
+static bool getDisableAlignOptByteHalf(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DisableAlignOptByteHalf>(
+      M.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -82,7 +84,7 @@ static Type *getUnderlyingArrayElmTy(Type *Ty) {
 }
 
 bool HexagonAlignGlobalArrays::runOnModule(Module &M) {
-  if (DisableGlobalArrayAlignment)
+  if (getDisableGlobalArrayAlignment(M))
     return false;
 
   bool Changed = false;
@@ -111,7 +113,7 @@ bool HexagonAlignGlobalArrays::runOnModule(Module &M) {
     // leave byte and half-word arrays that are already at an alignment of two
     // bytes or less at their natural alignment; word arrays are still promoted.
     if (!ReduceRodataSize || !GVAlign || *GVAlign > Align(2) ||
-        DisableHexAlignOptByteHalf) {
+        getDisableAlignOptByteHalf(M)) {
       MaybeAlign NewAlign = std::max(GVAlign.valueOrOne(), Align(8));
       if (NewAlign != GVAlign) {
         GV.setAlignment(NewAlign);

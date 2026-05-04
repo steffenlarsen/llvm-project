@@ -7,6 +7,8 @@ set(LLVM_LINK_COMPONENTS
   )
 
 add_llvm_library(LLVMBOLTRuntimeLibs
+  BoltRuntimeLibsOptionsGetters.cpp
+  BoltRuntimeLibsOptions.cpp
   RuntimeLibrary.cpp
   HugifyRuntimeLibrary.cpp
   InstrumentationRuntimeLibrary.cpp

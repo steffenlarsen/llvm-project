@@ -19,10 +19,12 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IRReader/IRReader.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
@@ -31,6 +33,7 @@
 #include <string>
 
 using namespace llvm;
+using namespace llvm::clv2;
 
 namespace {
 
@@ -186,7 +189,7 @@ protected:
     TheJIT.reset();
   }
 
-  LLVMContext Context; // Global ownership
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()}; // Global ownership
   std::unique_ptr<ExecutionEngine> TheJIT;
 
 public:
@@ -211,15 +214,21 @@ public:
 
 } // end anonymous namespace
 
-static cl::opt<std::string>
-InputFilename(cl::Positional, cl::desc("<input IR file>"),
-               cl::Required);
+static constexpr OptionInfo<std::string> InputFilename{
+    "input", "<input IR file>", Positional{}, Required};
+
+static constexpr OptionsRegistry<&InputFilename> JitListenerReg;
 
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
-  cl::ParseCommandLineOptions(argc, argv, "llvm jit event listener test utility\n");
+
+  clv2::OptionParser P;
+  P.add<&JitListenerReg>();
+  RegisterAllLLVMOptions(P);
+  auto OptsCtx = P.parse(argc, argv, "llvm jit event listener test utility\n");
+  auto *Opts = OptsCtx->getViewPtr<&JitListenerReg>();
 
   JitEventListenerTest Test;
-  Test.ProcessInput(InputFilename);
+  Test.ProcessInput(Opts->get<&InputFilename>());
   return 0;
 }

@@ -10,7 +10,6 @@
 #define BOLT_PASSES_MCF_H
 
 #include "bolt/Passes/BinaryPasses.h"
-#include "llvm/Support/CommandLine.h"
 
 namespace llvm {
 namespace bolt {
@@ -29,7 +28,7 @@ class EstimateEdgeCounts : public BinaryFunctionPass {
   void runOnFunction(BinaryFunction &BF);
 
 public:
-  explicit EstimateEdgeCounts(const cl::opt<bool> &PrintPass)
+  explicit EstimateEdgeCounts(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "estimate-edge-counts"; }

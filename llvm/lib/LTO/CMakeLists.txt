@@ -1,8 +1,11 @@
 add_llvm_component_library(LLVMLTO
+  LTOOptionsGetters.cpp
+  LTOOptionsRegistration.cpp
   LTO.cpp
   LTOBackend.cpp
   LTOModule.cpp
   LTOCodeGenerator.cpp
+  LTOOptions.cpp
   UpdateCompilerUsed.cpp
   ThinLTOCodeGenerator.cpp
 
@@ -16,6 +19,7 @@ add_llvm_component_library(LLVMLTO
   ${LLVM_PTHREAD_LIB}
 
   LINK_COMPONENTS
+  AllOptions
   AggressiveInstCombine
   Analysis
   BinaryFormat

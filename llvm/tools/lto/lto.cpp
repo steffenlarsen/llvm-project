@@ -24,59 +24,61 @@
 #include "llvm/LTO/legacy/LTOCodeGenerator.h"
 #include "llvm/LTO/legacy/LTOModule.h"
 #include "llvm/LTO/legacy/ThinLTOCodeGenerator.h"
+#include "llvm/Support/Allocator.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
+#include "llvm/Support/StringSaver.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
-static codegen::RegisterCodeGenFlags CGF;
-
-// extra command-line flags needed for LTOCodeGenerator
-static cl::opt<char>
-    OptLevel("O",
-             cl::desc("Optimization level. [-O0, -O1, -O2, or -O3] "
-                      "(default = '-O2')"),
-             cl::Prefix, cl::init('2'));
-
-static cl::opt<bool> EnableFreestanding(
-    "lto-freestanding", cl::init(false),
-    cl::desc("Enable Freestanding (disable builtins / TLI) during LTO"));
-
-static cl::opt<std::string> ThinLTOCacheDir(
-    "legacy-thinlto-cache-dir",
-    cl::desc("Experimental option, enable ThinLTO caching. Note: the cache "
-             "currently does not take the mcmodel setting into account, so you "
-             "might get false hits if different mcmodels are used in different "
-             "builds using the same cache directory."));
-
-static cl::opt<int> ThinLTOCachePruningInterval(
-    "legacy-thinlto-cache-pruning-interval", cl::init(1200),
-    cl::desc("Set ThinLTO cache pruning interval (seconds)."));
-
-static cl::opt<uint64_t> ThinLTOCacheMaxSizeBytes(
+// --- clv2 OptionInfo descriptors for LTO-specific options ---
+static constexpr clv2::OptionInfo<bool> OI_LTOFreestanding{
+    "lto-freestanding",
+    "Enable Freestanding (disable builtins / TLI) during LTO"};
+static constexpr clv2::OptionInfo<std::string> OI_ThinLTOCacheDir{
+    "legacy-thinlto-cache-dir", "Experimental option, enable ThinLTO caching"};
+static constexpr clv2::OptionInfo<int> OI_ThinLTOCachePruningInterval{
+    "legacy-thinlto-cache-pruning-interval",
+    "Set ThinLTO cache pruning interval (seconds)", clv2::Init{1200}};
+static constexpr clv2::OptionInfo<uint64_t> OI_ThinLTOCacheMaxSizeBytes{
     "legacy-thinlto-cache-max-size-bytes",
-    cl::desc("Set ThinLTO cache pruning directory maximum size in bytes."));
-
-static cl::opt<int> ThinLTOCacheMaxSizeFiles(
-    "legacy-thinlto-cache-max-size-files", cl::init(1000000),
-    cl::desc("Set ThinLTO cache pruning directory maximum number of files."));
-
-static cl::opt<unsigned> ThinLTOCacheEntryExpiration(
-    "legacy-thinlto-cache-entry-expiration", cl::init(604800) /* 1w */,
-    cl::desc("Set ThinLTO cache entry expiration time (seconds)."));
-
+    "Set ThinLTO cache pruning directory maximum size in bytes"};
+static constexpr clv2::OptionInfo<int> OI_ThinLTOCacheMaxSizeFiles{
+    "legacy-thinlto-cache-max-size-files",
+    "Set ThinLTO cache pruning directory maximum number of files",
+    clv2::Init{1000000}};
+static constexpr clv2::OptionInfo<unsigned> OI_ThinLTOCacheEntryExpiration{
+    "legacy-thinlto-cache-entry-expiration",
+    "Set ThinLTO cache entry expiration time (seconds)", clv2::Init{604800u}};
+static constexpr clv2::OptionInfo<bool> OI_DisableVerify{
+    "disable-llvm-verifier",
+    "Don't run the LLVM verifier during the optimization pipeline",
 #ifdef NDEBUG
-static bool VerifyByDefault = false;
+    clv2::Init{true}
 #else
-static bool VerifyByDefault = true;
+    clv2::Init{false}
 #endif
+};
 
-static cl::opt<bool> DisableVerify(
-    "disable-llvm-verifier", cl::init(!VerifyByDefault),
-    cl::desc("Don't run the LLVM verifier during the optimization pipeline"));
+static constexpr clv2::OptionsRegistry<
+    &OI_LTOFreestanding, &OI_ThinLTOCacheDir, &OI_ThinLTOCachePruningInterval,
+    &OI_ThinLTOCacheMaxSizeBytes, &OI_ThinLTOCacheMaxSizeFiles,
+    &OI_ThinLTOCacheEntryExpiration, &OI_DisableVerify>
+    LTOOptsReg;
+
+static char OptLevel = '2';
+static bool OptLevelSpecified = false;
+
+static constexpr clv2::OptionInfo<std::string> OI_LTOOptLevel{
+    "O", "Optimization level. [-O0, -O1, -O2, or -O3] (default = '-O2')",
+    clv2::PrefixFormat, clv2::Init{"2"}};
+static constexpr clv2::OptionsRegistry<&OI_LTOOptLevel> LTOOptLevelReg;
 
 // Holds most recent error string.
 // *** Not thread safe ***
@@ -94,9 +96,15 @@ static enum class OptParsingState {
 } optionParsingState = OptParsingState::NotParsed;
 
 static LLVMContext *LTOContext = nullptr;
+static std::unique_ptr<clv2::OptionsContext> LTOOptsCtx;
 
-// Records -mllvm arguments parsed through the legacy debug-option APIs.
-static std::vector<std::string> ThinLTOMllvmArgs;
+/// The parsed options for this libLTO session, or the shared empty default.
+/// LTOOptsCtx stays null until lto_codegen_debug_options() runs, and
+/// OptionParser::parse() returns null on error, so entry points that never
+/// saw options must not dereference it.
+static const clv2::OptionsContext &ltoOptsCtx() {
+  return LTOOptsCtx ? *LTOOptsCtx : clv2::defaultOptionsContext();
+}
 
 struct LTOToolDiagnosticHandler : public DiagnosticHandler {
   bool handleDiagnostics(const DiagnosticInfo &DI) override {
@@ -134,7 +142,7 @@ static void lto_initialize() {
     InitializeAllAsmPrinters();
     InitializeAllDisassemblers();
 
-    static LLVMContext Context;
+    static LLVMContext Context(llvm::clv2::defaultOptionsContext());
     LTOContext = &Context;
     LTOContext->setDiagnosticHandler(
         std::make_unique<LTOToolDiagnosticHandler>(), true);
@@ -170,7 +178,7 @@ struct LibLTOCodeGenerator : LTOCodeGenerator {
   std::unique_ptr<LLVMContext> OwnedContext;
 };
 
-}
+} // namespace
 
 DEFINE_SIMPLE_CONVERSION_FUNCTIONS(LibLTOCodeGenerator, lto_code_gen_t)
 DEFINE_SIMPLE_CONVERSION_FUNCTIONS(ThinLTOCodeGenerator, thinlto_code_gen_t)
@@ -179,29 +187,35 @@ DEFINE_SIMPLE_CONVERSION_FUNCTIONS(LTOModule, lto_module_t)
 // Convert the subtarget features into a string to pass to LTOCodeGenerator.
 static void lto_add_attrs(lto_code_gen_t cg) {
   LTOCodeGenerator *CG = unwrap(cg);
-  CG->setAttrs(codegen::getMAttrs());
+  CG->setAttrs(codegen::getMAttrs(ltoOptsCtx()));
 
   if (OptLevel < '0' || OptLevel > '3')
     report_fatal_error("Optimization level must be between 0 and 3");
   CG->setOptLevel(OptLevel - '0');
-  CG->setFreestanding(EnableFreestanding);
-  CG->setDisableVerify(DisableVerify);
+  CG->setFreestanding(
+      clv2::getOptValOr<&LTOOptsReg, &OI_LTOFreestanding>(ltoOptsCtx(), false));
+  CG->setDisableVerify(
+      clv2::getOptValOr<&LTOOptsReg, &OI_DisableVerify>(ltoOptsCtx(),
+#ifdef NDEBUG
+                                                        true
+#else
+                                                        false
+#endif
+                                                        ));
 }
 
-extern const char* lto_get_version() {
+extern const char *lto_get_version() {
   return LTOCodeGenerator::getVersionString();
 }
 
-const char* lto_get_error_message() {
-  return sLastErrorString.c_str();
-}
+const char *lto_get_error_message() { return sLastErrorString.c_str(); }
 
-bool lto_module_is_object_file(const char* path) {
+bool lto_module_is_object_file(const char *path) {
   return LTOModule::isBitcodeFile(StringRef(path));
 }
 
-bool lto_module_is_object_file_for_target(const char* path,
-                                          const char* target_triplet_prefix) {
+bool lto_module_is_object_file_for_target(const char *path,
+                                          const char *target_triplet_prefix) {
   ErrorOr<std::unique_ptr<MemoryBuffer>> Buffer = MemoryBuffer::getFile(path);
   if (!Buffer)
     return false;
@@ -213,20 +227,18 @@ bool lto_module_has_objc_category(const void *mem, size_t length) {
   std::unique_ptr<MemoryBuffer> Buffer(LTOModule::makeBuffer(mem, length));
   if (!Buffer)
     return false;
-  LLVMContext Ctx;
+  LLVMContext Ctx(llvm::clv2::defaultOptionsContext());
   ErrorOr<bool> Result = expectedToErrorOrAndEmitErrors(
       Ctx, llvm::isBitcodeContainingObjCCategory(*Buffer));
   return Result && *Result;
 }
 
-bool lto_module_is_object_file_in_memory(const void* mem, size_t length) {
+bool lto_module_is_object_file_in_memory(const void *mem, size_t length) {
   return LTOModule::isBitcodeFile(mem, length);
 }
 
-bool
-lto_module_is_object_file_in_memory_for_target(const void* mem,
-                                            size_t length,
-                                            const char* target_triplet_prefix) {
+bool lto_module_is_object_file_in_memory_for_target(
+    const void *mem, size_t length, const char *target_triplet_prefix) {
   std::unique_ptr<MemoryBuffer> buffer(LTOModule::makeBuffer(mem, length));
   if (!buffer)
     return false;
@@ -234,10 +246,10 @@ lto_module_is_object_file_in_memory_for_target(const void* mem,
                                        StringRef(target_triplet_prefix));
 }
 
-lto_module_t lto_module_create(const char* path) {
+lto_module_t lto_module_create(const char *path) {
   lto_initialize();
   llvm::TargetOptions Options =
-      codegen::InitTargetOptionsFromCodeGenFlags(Triple());
+      codegen::InitTargetOptionsFromCodeGenFlags(Triple(), ltoOptsCtx());
   ErrorOr<std::unique_ptr<LTOModule>> M =
       LTOModule::createFromFile(*LTOContext, StringRef(path), Options);
   if (!M)
@@ -248,7 +260,7 @@ lto_module_t lto_module_create(const char* path) {
 lto_module_t lto_module_create_from_fd(int fd, const char *path, size_t size) {
   lto_initialize();
   llvm::TargetOptions Options =
-      codegen::InitTargetOptionsFromCodeGenFlags(Triple());
+      codegen::InitTargetOptionsFromCodeGenFlags(Triple(), ltoOptsCtx());
   ErrorOr<std::unique_ptr<LTOModule>> M = LTOModule::createFromOpenFile(
       *LTOContext, fd, StringRef(path), size, Options);
   if (!M)
@@ -262,7 +274,7 @@ lto_module_t lto_module_create_from_fd_at_offset(int fd, const char *path,
                                                  off_t offset) {
   lto_initialize();
   llvm::TargetOptions Options =
-      codegen::InitTargetOptionsFromCodeGenFlags(Triple());
+      codegen::InitTargetOptionsFromCodeGenFlags(Triple(), ltoOptsCtx());
   ErrorOr<std::unique_ptr<LTOModule>> M = LTOModule::createFromOpenFileSlice(
       *LTOContext, fd, StringRef(path), map_size, offset, Options);
   if (!M)
@@ -270,10 +282,10 @@ lto_module_t lto_module_create_from_fd_at_offset(int fd, const char *path,
   return wrap(M->release());
 }
 
-lto_module_t lto_module_create_from_memory(const void* mem, size_t length) {
+lto_module_t lto_module_create_from_memory(const void *mem, size_t length) {
   lto_initialize();
   llvm::TargetOptions Options =
-      codegen::InitTargetOptionsFromCodeGenFlags(Triple());
+      codegen::InitTargetOptionsFromCodeGenFlags(Triple(), ltoOptsCtx());
   ErrorOr<std::unique_ptr<LTOModule>> M =
       LTOModule::createFromBuffer(*LTOContext, mem, length, Options);
   if (!M)
@@ -281,12 +293,12 @@ lto_module_t lto_module_create_from_memory(const void* mem, size_t length) {
   return wrap(M->release());
 }
 
-lto_module_t lto_module_create_from_memory_with_path(const void* mem,
+lto_module_t lto_module_create_from_memory_with_path(const void *mem,
                                                      size_t length,
                                                      const char *path) {
   lto_initialize();
   llvm::TargetOptions Options =
-      codegen::InitTargetOptionsFromCodeGenFlags(Triple());
+      codegen::InitTargetOptionsFromCodeGenFlags(Triple(), ltoOptsCtx());
   ErrorOr<std::unique_ptr<LTOModule>> M = LTOModule::createFromBuffer(
       *LTOContext, mem, length, Options, StringRef(path));
   if (!M)
@@ -298,10 +310,11 @@ lto_module_t lto_module_create_in_local_context(const void *mem, size_t length,
                                                 const char *path) {
   lto_initialize();
   llvm::TargetOptions Options =
-      codegen::InitTargetOptionsFromCodeGenFlags(Triple());
+      codegen::InitTargetOptionsFromCodeGenFlags(Triple(), ltoOptsCtx());
 
   // Create a local context. Ownership will be transferred to LTOModule.
-  std::unique_ptr<LLVMContext> Context = std::make_unique<LLVMContext>();
+  std::unique_ptr<LLVMContext> Context =
+      std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
   Context->setDiagnosticHandler(std::make_unique<LTOToolDiagnosticHandler>(),
                                 true);
 
@@ -318,7 +331,7 @@ lto_module_t lto_module_create_in_codegen_context(const void *mem,
                                                   lto_code_gen_t cg) {
   lto_initialize();
   llvm::TargetOptions Options =
-      codegen::InitTargetOptionsFromCodeGenFlags(Triple());
+      codegen::InitTargetOptionsFromCodeGenFlags(Triple(), ltoOptsCtx());
   ErrorOr<std::unique_ptr<LTOModule>> M = LTOModule::createFromBuffer(
       unwrap(cg)->getContext(), mem, length, Options, StringRef(path));
   if (!M)
@@ -328,7 +341,7 @@ lto_module_t lto_module_create_in_codegen_context(const void *mem,
 
 void lto_module_dispose(lto_module_t mod) { delete unwrap(mod); }
 
-const char* lto_module_get_target_triple(lto_module_t mod) {
+const char *lto_module_get_target_triple(lto_module_t mod) {
   return unwrap(mod)->getTargetTriple().str().c_str();
 }
 
@@ -340,7 +353,7 @@ unsigned int lto_module_get_num_symbols(lto_module_t mod) {
   return unwrap(mod)->getSymbolCount();
 }
 
-const char* lto_module_get_symbol_name(lto_module_t mod, unsigned int index) {
+const char *lto_module_get_symbol_name(lto_module_t mod, unsigned int index) {
   return unwrap(mod)->getSymbolName(index).data();
 }
 
@@ -358,7 +371,7 @@ const char *lto_module_get_asm_undef_symbol_name(lto_module_t mod,
   return unwrap(mod)->getAsmUndefSymbolName(index).data();
 }
 
-const char* lto_module_get_linkeropts(lto_module_t mod) {
+const char *lto_module_get_linkeropts(lto_module_t mod) {
   return unwrap(mod)->getLinkerOpts().data();
 }
 
@@ -392,10 +405,12 @@ void lto_codegen_set_diagnostic_handler(lto_code_gen_t cg,
 static lto_code_gen_t createCodeGen(bool InLocalContext) {
   lto_initialize();
 
-  TargetOptions Options = codegen::InitTargetOptionsFromCodeGenFlags(Triple());
+  TargetOptions Options =
+      codegen::InitTargetOptionsFromCodeGenFlags(Triple(), ltoOptsCtx());
 
   LibLTOCodeGenerator *CodeGen =
-      InLocalContext ? new LibLTOCodeGenerator(std::make_unique<LLVMContext>())
+      InLocalContext ? new LibLTOCodeGenerator(std::make_unique<LLVMContext>(
+                           llvm::clv2::defaultOptionsContext()))
                      : new LibLTOCodeGenerator();
   CodeGen->setTargetOptions(Options);
   return wrap(CodeGen);
@@ -508,12 +523,17 @@ bool lto_codegen_compile_to_file(lto_code_gen_t cg, const char **name) {
 void lto_set_debug_options(const char *const *options, int number) {
   assert(optionParsingState == OptParsingState::NotParsed &&
          "option processing already happened");
-  // Need to put each suboption in a null-terminated string before passing to
-  // parseCommandLineOptions().
-  std::vector<std::string> Options;
-  llvm::append_range(Options, ArrayRef(options, number));
-
-  llvm::parseCommandLineOptions(Options);
+  clv2::OptionParser P;
+  RegisterAllLLVMOptions(P);
+  BumpPtrAllocator Alloc;
+  StringSaver Saver(Alloc);
+  SmallVector<const char *> Argv;
+  Argv.push_back(Saver.save("libLLVMLTO").data());
+  for (int i = 0; i < number; ++i)
+    Argv.push_back(Saver.save(options[i]).data());
+  LTOOptsCtx = P.parse(Argv.size(), Argv.data(), "LLVM LTO Library");
+  if (LTOContext)
+    LTOContext->setOptionsContext(ltoOptsCtx());
   optionParsingState = OptParsingState::Early;
 }
 
@@ -557,12 +577,12 @@ lto_bool_t lto_module_has_ctor_dtor(lto_module_t mod) {
 thinlto_code_gen_t thinlto_create_codegen(void) {
   lto_initialize();
   ThinLTOCodeGenerator *CodeGen = new ThinLTOCodeGenerator();
-  CodeGen->setMllvmArgs(ThinLTOMllvmArgs);
   CodeGen->setTargetOptions(
-      codegen::InitTargetOptionsFromCodeGenFlags(Triple()));
-  CodeGen->setFreestanding(EnableFreestanding);
+      codegen::InitTargetOptionsFromCodeGenFlags(Triple(), ltoOptsCtx()));
+  CodeGen->setFreestanding(
+      clv2::getOptValOr<&LTOOptsReg, &OI_LTOFreestanding>(ltoOptsCtx(), false));
 
-  if (OptLevel.getNumOccurrences()) {
+  if (OptLevelSpecified) {
     if (OptLevel < '0' || OptLevel > '3')
       report_fatal_error("Optimization level must be between 0 and 3");
     CodeGen->setOptLevel(OptLevel - '0');
@@ -571,23 +591,33 @@ thinlto_code_gen_t thinlto_create_codegen(void) {
     assert(CGOptLevelOrNone);
     CodeGen->setCodeGenOptLevel(*CGOptLevelOrNone);
   }
-  if (!ThinLTOCacheDir.empty()) {
-    auto Err = llvm::sys::fs::create_directories(ThinLTOCacheDir);
+  std::string CacheDir = clv2::getOptValOr<&LTOOptsReg, &OI_ThinLTOCacheDir>(
+      ltoOptsCtx(), std::string());
+  if (!CacheDir.empty()) {
+    auto Err = llvm::sys::fs::create_directories(CacheDir);
     if (Err)
       report_fatal_error(Twine("Unable to create thinLTO cache directory: ") +
                          Err.message());
     bool result;
-    Err = llvm::sys::fs::is_directory(ThinLTOCacheDir, result);
+    Err = llvm::sys::fs::is_directory(CacheDir, result);
     if (Err || !result)
       report_fatal_error(Twine("Unable to get status of thinLTO cache path or "
                                "path is not a directory: ") +
                          Err.message());
-    CodeGen->setCacheDir(ThinLTOCacheDir);
+    CodeGen->setCacheDir(CacheDir);
 
-    CodeGen->setCachePruningInterval(ThinLTOCachePruningInterval);
-    CodeGen->setCacheEntryExpiration(ThinLTOCacheEntryExpiration);
-    CodeGen->setCacheMaxSizeFiles(ThinLTOCacheMaxSizeFiles);
-    CodeGen->setCacheMaxSizeBytes(ThinLTOCacheMaxSizeBytes);
+    CodeGen->setCachePruningInterval(
+        clv2::getOptValOr<&LTOOptsReg, &OI_ThinLTOCachePruningInterval>(
+            ltoOptsCtx(), 1200));
+    CodeGen->setCacheEntryExpiration(
+        clv2::getOptValOr<&LTOOptsReg, &OI_ThinLTOCacheEntryExpiration>(
+            ltoOptsCtx(), 604800u));
+    CodeGen->setCacheMaxSizeFiles(
+        clv2::getOptValOr<&LTOOptsReg, &OI_ThinLTOCacheMaxSizeFiles>(
+            ltoOptsCtx(), 1000000));
+    CodeGen->setCacheMaxSizeBytes(
+        clv2::getOptValOr<&LTOOptsReg, &OI_ThinLTOCacheMaxSizeBytes>(
+            ltoOptsCtx(), uint64_t(0)));
   }
 
   return wrap(CodeGen);
@@ -634,12 +664,18 @@ void thinlto_codegen_set_codegen_only(thinlto_code_gen_t cg,
 }
 
 void thinlto_debug_options(const char *const *options, int number) {
-  // If options were requested, parse and retain them.
   if (number && options) {
-    std::vector<const char *> CodegenArgv(1, "libLTO");
-    append_range(CodegenArgv, ArrayRef<const char *>(options, number));
-    cl::ParseCommandLineOptions(CodegenArgv.size(), CodegenArgv.data());
-    ThinLTOMllvmArgs.assign(options, options + number);
+    clv2::OptionParser P;
+    RegisterAllLLVMOptions(P);
+    BumpPtrAllocator Alloc;
+    StringSaver Saver(Alloc);
+    SmallVector<const char *> Argv;
+    Argv.push_back(Saver.save("libLTO").data());
+    for (int i = 0; i < number; ++i)
+      Argv.push_back(Saver.save(options[i]).data());
+    LTOOptsCtx = P.parse(Argv.size(), Argv.data(), "LLVM ThinLTO Library");
+    if (LTOContext)
+      LTOContext->setOptionsContext(ltoOptsCtx());
   }
 }
 
@@ -681,20 +717,20 @@ void thinlto_codegen_set_final_cache_size_relative_to_available_space(
   return unwrap(cg)->setMaxCacheSizeRelativeToAvailableSpace(Percentage);
 }
 
-void thinlto_codegen_set_cache_size_bytes(
-    thinlto_code_gen_t cg, unsigned MaxSizeBytes) {
+void thinlto_codegen_set_cache_size_bytes(thinlto_code_gen_t cg,
+                                          unsigned MaxSizeBytes) {
   return unwrap(cg)->setCacheMaxSizeBytes(MaxSizeBytes);
 }
 
-void thinlto_codegen_set_cache_size_megabytes(
-    thinlto_code_gen_t cg, unsigned MaxSizeMegabytes) {
+void thinlto_codegen_set_cache_size_megabytes(thinlto_code_gen_t cg,
+                                              unsigned MaxSizeMegabytes) {
   uint64_t MaxSizeBytes = MaxSizeMegabytes;
   MaxSizeBytes *= 1024 * 1024;
   return unwrap(cg)->setCacheMaxSizeBytes(MaxSizeBytes);
 }
 
-void thinlto_codegen_set_cache_size_files(
-    thinlto_code_gen_t cg, unsigned MaxSizeFiles) {
+void thinlto_codegen_set_cache_size_files(thinlto_code_gen_t cg,
+                                          unsigned MaxSizeFiles) {
   return unwrap(cg)->setCacheMaxSizeFiles(MaxSizeFiles);
 }
 
@@ -730,21 +766,20 @@ lto_bool_t thinlto_codegen_set_pic_model(thinlto_code_gen_t cg,
 
 DEFINE_SIMPLE_CONVERSION_FUNCTIONS(lto::InputFile, lto_input_t)
 
-lto_input_t lto_input_create(const void *buffer, size_t buffer_size, const char *path) {
-  return wrap(LTOModule::createInputFile(buffer, buffer_size, path, sLastErrorString));
+lto_input_t lto_input_create(const void *buffer, size_t buffer_size,
+                             const char *path) {
+  return wrap(
+      LTOModule::createInputFile(buffer, buffer_size, path, sLastErrorString));
 }
 
-void lto_input_dispose(lto_input_t input) {
-  delete unwrap(input);
-}
+void lto_input_dispose(lto_input_t input) { delete unwrap(input); }
 
 extern unsigned lto_input_get_num_dependent_libraries(lto_input_t input) {
   return LTOModule::getDependentLibraryCount(unwrap(input));
 }
 
 extern const char *lto_input_get_dependent_library(lto_input_t input,
-                                                   size_t index,
-                                                   size_t *size) {
+                                                   size_t index, size_t *size) {
   return LTOModule::getDependentLibrary(unwrap(input), index, size);
 }
 

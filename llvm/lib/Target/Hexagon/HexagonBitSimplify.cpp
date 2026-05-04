@@ -24,32 +24,69 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 
 #define DEBUG_TYPE "hexbit"
 
 using namespace llvm;
 
-static cl::opt<bool> PreserveTiedOps("hexbit-keep-tied", cl::Hidden,
-  cl::init(true), cl::desc("Preserve subregisters in tied operands"));
-static cl::opt<bool> GenExtract("hexbit-extract", cl::Hidden,
-  cl::init(true), cl::desc("Generate extract instructions"));
-static cl::opt<bool> GenBitSplit("hexbit-bitsplit", cl::Hidden,
-  cl::init(true), cl::desc("Generate bitsplit instructions"));
+static bool PreserveTiedOps = true;
+static bool GenExtract = true;
+static bool GenBitSplit = true;
 
-static cl::opt<unsigned> MaxExtract("hexbit-max-extract", cl::Hidden,
-  cl::init(std::numeric_limits<unsigned>::max()));
+static unsigned MaxExtract = std::numeric_limits<unsigned>::max();
 static unsigned CountExtract = 0;
-static cl::opt<unsigned> MaxBitSplit("hexbit-max-bitsplit", cl::Hidden,
-  cl::init(std::numeric_limits<unsigned>::max()));
+static unsigned MaxBitSplit = std::numeric_limits<unsigned>::max();
 static unsigned CountBitSplit = 0;
 
-static cl::opt<unsigned> RegisterSetLimit("hexbit-registerset-limit",
-  cl::Hidden, cl::init(1000));
+static unsigned RegisterSetLimit = 1000;
+
+static bool getPreserveTiedOps(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_PreserveTiedOps>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getGenExtract(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_GenExtractBit>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getGenBitSplit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_GenBitSplit>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getRegisterSetLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_RegisterSetLimit>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getMaxExtract(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_MaxExtract>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getMaxExtractWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::HexagonOptsReg, &clv2::HEX_MaxExtract>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getMaxBitSplit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_MaxBitSplit>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getMaxBitSplitWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::HexagonOptsReg, &clv2::HEX_MaxBitSplit>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -58,6 +95,8 @@ namespace {
     RegisterSet() = default;
     explicit RegisterSet(unsigned s, bool t = false) : Bits(s, t) {}
     RegisterSet(const RegisterSet &RS) = default;
+
+    void setFunction(const Function *F) { Fn = F; }
 
     void clear() {
       Bits.clear();
@@ -89,7 +128,8 @@ namespace {
       Bits.set(Idx);
       if (!Exists) {
         LRU.push_back(Idx);
-        if (LRU.size() > RegisterSetLimit) {
+        unsigned Limit = Fn ? getRegisterSetLimit(*Fn) : RegisterSetLimit;
+        if (LRU.size() > Limit) {
           unsigned T = LRU.front();
           Bits.reset(T);
           LRU.pop_front();
@@ -146,6 +186,7 @@ namespace {
   private:
     BitVector Bits;
     std::deque<unsigned> LRU;
+    const Function *Fn = nullptr;
 
     void ensure(unsigned Idx) {
       if (Bits.size() <= Idx)
@@ -944,7 +985,7 @@ bool HexagonBitSimplify::isTransparentCopy(const BitTracker::RegisterRef &RD,
 
 bool HexagonBitSimplify::hasTiedUse(unsigned Reg, MachineRegisterInfo &MRI,
       unsigned NewSub) {
-  if (!PreserveTiedOps)
+  if (!getPreserveTiedOps(MRI.getVRegDef(Reg)->getMF()->getFunction()))
     return false;
   return llvm::any_of(MRI.use_operands(Reg),
                       [NewSub] (const MachineOperand &Op) -> bool {
@@ -1752,8 +1793,8 @@ namespace {
                       const HexagonInstrInfo &hii,
                       const HexagonRegisterInfo &hri, MachineRegisterInfo &mri,
                       MachineFunction &mf)
-        : Transformation(true), MDT(mdt), HII(hii), HRI(hri), MRI(mri), BT(bt) {
-    }
+        : Transformation(true), MDT(mdt), HII(hii), HRI(hri), MRI(mri), BT(bt),
+          Fn(mf.getFunction()) {}
 
     bool processBlock(MachineBasicBlock &B, const RegisterSet &AVs) override;
 
@@ -1797,6 +1838,7 @@ namespace {
     [[maybe_unused]] const HexagonRegisterInfo &HRI;
     MachineRegisterInfo &MRI;
     BitTracker &BT;
+    const Function &Fn;
   };
 
 } // end anonymous namespace
@@ -2183,10 +2225,10 @@ bool BitSimplification::genExtractLow(MachineInstr *MI,
 bool BitSimplification::genBitSplit(MachineInstr *MI,
       BitTracker::RegisterRef RD, const BitTracker::RegisterCell &RC,
       const RegisterSet &AVs) {
-  if (!GenBitSplit)
+  if (!getGenBitSplit(Fn))
     return false;
-  if (MaxBitSplit.getNumOccurrences()) {
-    if (CountBitSplit >= MaxBitSplit)
+  if (getMaxBitSplitWasSpecified(Fn)) {
+    if (CountBitSplit >= getMaxBitSplit(Fn))
       return false;
   }
 
@@ -2271,7 +2313,7 @@ bool BitSimplification::genBitSplit(MachineInstr *MI,
       continue;
 
     // Generate bitsplit where S is defined.
-    if (MaxBitSplit.getNumOccurrences())
+    if (getMaxBitSplitWasSpecified(Fn))
       CountBitSplit++;
     MachineInstr *DefS = MRI.getVRegDef(S);
     assert(DefS != nullptr);
@@ -2396,10 +2438,10 @@ bool BitSimplification::simplifyTstbit(MachineInstr *MI,
 bool BitSimplification::simplifyExtractLow(MachineInstr *MI,
       BitTracker::RegisterRef RD, const BitTracker::RegisterCell &RC,
       const RegisterSet &AVs) {
-  if (!GenExtract)
+  if (!getGenExtract(Fn))
     return false;
-  if (MaxExtract.getNumOccurrences()) {
-    if (CountExtract >= MaxExtract)
+  if (getMaxExtractWasSpecified(Fn)) {
+    if (CountExtract >= getMaxExtract(Fn))
       return false;
     CountExtract++;
   }
@@ -2788,11 +2830,15 @@ bool HexagonBitSimplify::runOnMachineFunction(MachineFunction &MF) {
 
   MachineBasicBlock &Entry = MF.front();
 
+  const Function *FnPtr = &MF.getFunction();
+
   RegisterSet AIG;  // Available registers for IG.
+  AIG.setFunction(FnPtr);
   ConstGeneration ImmG(BT, HII, MRI);
   Changed |= visitBlock(Entry, ImmG, AIG);
 
   RegisterSet ARE;  // Available registers for RIE.
+  ARE.setFunction(FnPtr);
   RedundantInstrElimination RIE(BT, HII, HRI, MRI);
   bool Ried = visitBlock(Entry, RIE, ARE);
   if (Ried) {
@@ -2801,10 +2847,12 @@ bool HexagonBitSimplify::runOnMachineFunction(MachineFunction &MF) {
   }
 
   RegisterSet ACG;  // Available registers for CG.
+  ACG.setFunction(FnPtr);
   CopyGeneration CopyG(BT, HII, HRI, MRI);
   Changed |= visitBlock(Entry, CopyG, ACG);
 
   RegisterSet ACP;  // Available registers for CP.
+  ACP.setFunction(FnPtr);
   CopyPropagation CopyP(HRI, MRI);
   Changed |= visitBlock(Entry, CopyP, ACP);
 
@@ -2812,6 +2860,7 @@ bool HexagonBitSimplify::runOnMachineFunction(MachineFunction &MF) {
 
   BT.run();
   RegisterSet ABS;  // Available registers for BS.
+  ABS.setFunction(FnPtr);
   BitSimplification BitS(BT, *MDT, HII, HRI, MRI, MF);
   Changed |= visitBlock(Entry, BitS, ABS);
 

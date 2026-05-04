@@ -20,7 +20,8 @@
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/WithColor.h"
@@ -118,8 +119,6 @@ protected:
   }
 };
 
-static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
-
 static IntrusiveRefCntPtr<DiagnosticsEngine> Diags;
 
 static IntrusiveRefCntPtr<DiagnosticsEngine>
@@ -209,8 +208,12 @@ int main(int argc, const char **argv) {
                          "Input can be either source files that are compiled "
                          "with compile database or .ast files that are "
                          "created from clang's -emit-ast option.\n";
-  auto ExpectedParser = CommonOptionsParser::create(
-      argc, argv, ClangExtDefMapGenCategory, cl::OneOrMore, Overview);
+  auto configureParser = [](clv2::OptionParser &P) {
+    P.setExtraHelp(CommonOptionsParser::HelpMessage);
+  };
+  auto ExpectedParser =
+      CommonOptionsParser::create(argc, argv, ClangExtDefMapGenCategory,
+                                  configureParser, cl::OneOrMore, Overview);
   if (!ExpectedParser) {
     llvm::WithColor::error() << llvm::toString(ExpectedParser.takeError());
     return 1;

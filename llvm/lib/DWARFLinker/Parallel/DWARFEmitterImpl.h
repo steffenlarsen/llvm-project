@@ -22,6 +22,7 @@
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
@@ -53,7 +54,8 @@ public:
       : OutFile(OutFile), OutFileType(OutFileType) {}
 
   /// Initialize AsmPrinter data.
-  Error init(Triple TheTriple, StringRef Swift5ReflectionSegmentName);
+  Error init(Triple TheTriple, StringRef Swift5ReflectionSegmentName,
+             const clv2::OptionsContext &OptsCtx);
 
   /// Returns triple of output stream.
   const Triple &getTargetTriple() { return MC->getTargetTriple(); }

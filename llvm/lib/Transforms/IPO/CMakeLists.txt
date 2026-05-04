@@ -1,4 +1,6 @@
 add_llvm_component_library(LLVMipo
+  IPOOptionsRegistration.cpp
+  IPOOptionsGetters.cpp
   AlwaysInliner.cpp
   Annotation2Metadata.cpp
   ArgumentPromotion.cpp
@@ -24,6 +26,7 @@ add_llvm_component_library(LLVMipo
   GlobalSplit.cpp
   HotColdSplitting.cpp
   IPO.cpp
+  IPOOptions.cpp
   InferFunctionAttrs.cpp
   Inliner.cpp
   Instrumentor.cpp

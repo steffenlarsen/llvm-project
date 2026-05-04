@@ -11,24 +11,17 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Core/BinaryData.h"
+#include "bolt/Core/BinaryContext.h"
 #include "bolt/Core/BinarySection.h"
-#include "llvm/Support/CommandLine.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
+#include "bolt/Utils/CommandLineOpts.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Regex.h"
 
 using namespace llvm;
 using namespace bolt;
 
 #define DEBUG_TYPE "bolt"
-
-namespace opts {
-extern cl::OptionCategory BoltCategory;
-extern cl::opt<unsigned> Verbosity;
-
-static cl::opt<bool>
-    PrintSymbolAliases("print-aliases",
-                       cl::desc("print aliases when printing objects"),
-                       cl::Hidden, cl::cat(BoltCategory));
-}
 
 bool BinaryData::isAbsolute() const { return Flags & SymbolRef::SF_Absolute; }
 
@@ -99,7 +92,11 @@ void BinaryData::printBrief(raw_ostream &OS) const {
 
   OS << getName();
 
-  if ((opts::PrintSymbolAliases || opts::Verbosity > 1) && Symbols.size() > 1) {
+  const BinaryContext &BC = getSection().getBinaryContext();
+  bool PrintAliases = false;
+  if (auto *CoreOpts = bolt_core_opts::getBoltCoreOpts(BC.getOptionsContext()))
+    PrintAliases = CoreOpts->get<&clv2::BOLTCORE_PrintSymbolAliases>();
+  if ((PrintAliases || opts::getVerbosity(BC) > 1) && Symbols.size() > 1) {
     OS << ", aliases:";
     for (unsigned I = 1u; I < Symbols.size(); ++I) {
       OS << (I == 1 ? " (" : ", ") << Symbols[I]->getName();

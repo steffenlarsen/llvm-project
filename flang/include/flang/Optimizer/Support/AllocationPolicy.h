@@ -21,6 +21,7 @@
 #ifndef FORTRAN_OPTIMIZER_SUPPORT_ALLOCATIONPOLICY_H
 #define FORTRAN_OPTIMIZER_SUPPORT_ALLOCATIONPOLICY_H
 
+#include "llvm/Support/OptionsContext.h"
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -128,7 +129,9 @@ using AllocationPlacementHook = std::function<AllocationPlacement(
 /// -fstack-arrays part of it from \p stackArrays. Lowering records the result
 /// on the module with setAllocationPolicy so that passes consulting the policy
 /// use the same values.
-AllocationPolicy getCommandLineAllocationPolicy(bool stackArrays);
+AllocationPolicy
+getCommandLineAllocationPolicy(const llvm::clv2::OptionsContext &optsCtx,
+                               bool stackArrays);
 
 /// Record \p policy on \p mod as a fir.allocation_policy attribute, replacing
 /// any policy already recorded there.

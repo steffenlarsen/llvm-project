@@ -19,6 +19,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/ResourcePriorityQueue.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/DFAPacketizer.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
@@ -26,22 +27,26 @@
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/Function.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "scheduler"
 
-static cl::opt<bool>
-    DisableDFASched("disable-dfa-sched", cl::Hidden,
-                    cl::desc("Disable use of DFA during scheduling"));
+static bool getDisableDfaSched(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableDfaSched>(Ctx);
+}
 
-static cl::opt<int> RegPressureThreshold(
-    "dfa-sched-reg-pressure-threshold", cl::Hidden, cl::init(5),
-    cl::desc("Track reg pressure and switch priority to in-depth"));
+static int getDfaSchedRegPressureThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DfaSchedRegPressureThreshold>(
+      Ctx);
+}
 
 ResourcePriorityQueue::ResourcePriorityQueue(SelectionDAGISel *IS)
-    : Picker(this), InstrItins(IS->MF->getSubtarget().getInstrItineraryData()) {
+    : Picker(this), InstrItins(IS->MF->getSubtarget().getInstrItineraryData()),
+      Ctx(&IS->MF->getFunction().getContext().getOptionsContext()) {
   const TargetSubtargetInfo &STI = IS->MF->getSubtarget();
   TRI = STI.getRegisterInfo();
   TLI = IS->TLI;
@@ -401,7 +406,7 @@ int ResourcePriorityQueue::SUSchedulingCost(SUnit *SU) {
   // Adaptable scheduling
   // A small, but very parallel
   // region, where reg pressure is an issue.
-  if (HorizontalVerticalBalance > RegPressureThreshold) {
+  if (HorizontalVerticalBalance > getDfaSchedRegPressureThreshold(*Ctx)) {
     // Critical path first
     ResCount += (SU->getHeight() * ScaleTwo);
     // If resources are available for it, multiply the
@@ -588,7 +593,7 @@ SUnit *ResourcePriorityQueue::pop() {
     return nullptr;
 
   std::vector<SUnit *>::iterator Best = Queue.begin();
-  if (!DisableDFASched) {
+  if (!getDisableDfaSched(*Ctx)) {
     int BestCost = SUSchedulingCost(*Best);
     for (auto I = std::next(Queue.begin()), E = Queue.end(); I != E; ++I) {
 

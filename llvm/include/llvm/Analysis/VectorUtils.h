@@ -816,7 +816,7 @@ private:
       SmallVectorImpl<const SCEVPredicate *> *Predicates);
 
   /// Returns true if \p Stride is allowed in an interleaved group.
-  LLVM_ABI static bool isStrided(int Stride);
+  LLVM_ABI bool isStrided(int Stride) const;
 
   /// Returns true if \p BB is a predicated block.
   bool isPredicated(BasicBlock *BB) const {

@@ -45,16 +45,17 @@ public:
 void OptReductionPass::runOnOperation() {
   LDBG() << "\nOptimization Reduction pass: ";
 
-  Tester test(testerName, testerArgs);
+  SmallVector<std::string> testerArgsVec(testerArgs.begin(), testerArgs.end());
+  Tester test(*testerName, testerArgsVec);
   Operation *topOp = this->getOperation();
 
-  std::string pipelineStr = optPass;
+  std::string pipelineStr = *optPass;
   if (pipelineStr.empty()) {
     if (!optPassFile.empty()) {
-      auto fileOrErr = llvm::MemoryBuffer::getFile(optPassFile);
+      auto fileOrErr = llvm::MemoryBuffer::getFile(*optPassFile);
       if (std::error_code ec = fileOrErr.getError()) {
         topOp->emitError() << "Could not open pass pipeline file: "
-                           << optPassFile << " (" << ec.message() << ")";
+                           << *optPassFile << " (" << ec.message() << ")";
         return signalPassFailure();
       }
       pipelineStr = fileOrErr.get()->getBuffer().trim().str();

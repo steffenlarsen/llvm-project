@@ -567,10 +567,13 @@ std::vector<ClangTidyError>
 runClangTidy(ClangTidyContext &Context, const CompilationDatabase &Compilations,
              ArrayRef<std::string> InputFiles,
              llvm::IntrusiveRefCntPtr<llvm::vfs::OverlayFileSystem> BaseFS,
-             bool ApplyAnyFix, bool EnableCheckProfile,
-             StringRef StoreCheckProfile, bool Quiet) {
+             bool ApplyAnyFix, const llvm::clv2::OptionsContext &OptionsCtx,
+             bool EnableCheckProfile, StringRef StoreCheckProfile, bool Quiet) {
   ClangTool Tool(Compilations, InputFiles,
                  std::make_shared<PCHContainerOperations>(), BaseFS);
+  // Make the tool's parsed options reachable from each compilation's
+  // ASTContext (used e.g. by -dataflow-log in the dataflow framework).
+  Tool.setOptionsContext(OptionsCtx);
 
   // Add extra arguments passed by the clang-tidy command-line.
   const ArgumentsAdjuster PerFileExtraArgumentsInserter =

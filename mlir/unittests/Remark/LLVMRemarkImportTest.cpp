@@ -106,7 +106,7 @@ TEST_F(LLVMRemarkImportTest, HandlerAnswersRemarkQueriesFromEngine) {
                  /*missed=*/"llvm-inline", /*analysis=*/std::nullopt,
                  /*failed=*/std::nullopt});
 
-  llvm::LLVMContext llvmContext;
+  llvm::LLVMContext llvmContext{llvm::clv2::defaultOptionsContext()};
   installHandler(llvmContext);
   const llvm::DiagnosticHandler *handler = llvmContext.getDiagHandlerPtr();
   ASSERT_TRUE(handler);
@@ -122,7 +122,7 @@ TEST_F(LLVMRemarkImportTest, HandlerAnswersRemarkQueriesFromEngine) {
 }
 
 TEST_F(LLVMRemarkImportTest, HandlerWithoutEngineDisablesRemarks) {
-  llvm::LLVMContext llvmContext;
+  llvm::LLVMContext llvmContext{llvm::clv2::defaultOptionsContext()};
   installHandler(llvmContext);
   const llvm::DiagnosticHandler *handler = llvmContext.getDiagHandlerPtr();
   ASSERT_TRUE(handler);
@@ -137,7 +137,7 @@ TEST_F(LLVMRemarkImportTest, ImportsLiveRemarkWithFunctionLocation) {
                  /*missed=*/std::nullopt, /*analysis=*/std::nullopt,
                  /*failed=*/std::nullopt});
 
-  llvm::LLVMContext llvmContext;
+  llvm::LLVMContext llvmContext{llvm::clv2::defaultOptionsContext()};
   installHandler(llvmContext);
   llvm::Module llvmModule("m", llvmContext);
   llvm::Function *fn = createKernel(llvmModule);
@@ -170,7 +170,7 @@ TEST_F(LLVMRemarkImportTest, ImportsLiveRemarkWithDebugLocation) {
                  /*missed=*/"llvm-licm", /*analysis=*/std::nullopt,
                  /*failed=*/std::nullopt});
 
-  llvm::LLVMContext llvmContext;
+  llvm::LLVMContext llvmContext{llvm::clv2::defaultOptionsContext()};
   installHandler(llvmContext);
   llvm::Module llvmModule("m", llvmContext);
   llvm::Function *fn = createKernel(llvmModule);
@@ -214,7 +214,7 @@ TEST_F(LLVMRemarkImportTest, ImportsOptimizationFailureAsFailedRemark) {
                  /*missed=*/std::nullopt, /*analysis=*/std::nullopt,
                  /*failed=*/"llvm-transform-warning"});
 
-  llvm::LLVMContext llvmContext;
+  llvm::LLVMContext llvmContext{llvm::clv2::defaultOptionsContext()};
   installHandler(llvmContext);
   llvm::Module llvmModule("m", llvmContext);
   llvm::Function *fn = createKernel(llvmModule);
@@ -237,7 +237,7 @@ TEST_F(LLVMRemarkImportTest, LeavesRemarksNotEnabledInEngineToLLVM) {
                  /*missed=*/std::nullopt, /*analysis=*/std::nullopt,
                  /*failed=*/std::nullopt});
 
-  llvm::LLVMContext llvmContext;
+  llvm::LLVMContext llvmContext{llvm::clv2::defaultOptionsContext()};
   llvm::Module llvmModule("m", llvmContext);
   llvm::Function *fn = createKernel(llvmModule);
   llvm::BasicBlock *bb = llvm::BasicBlock::Create(llvmContext, "entry", fn);
@@ -266,7 +266,7 @@ TEST_F(LLVMRemarkImportTest, ReportsLLVMDiagnosticsAsMLIRDiagnostics) {
     return success();
   });
 
-  llvm::LLVMContext llvmContext;
+  llvm::LLVMContext llvmContext{llvm::clv2::defaultOptionsContext()};
   installHandler(llvmContext);
   llvm::Module llvmModule("m", llvmContext);
   llvm::Function *fn = createKernel(llvmModule);

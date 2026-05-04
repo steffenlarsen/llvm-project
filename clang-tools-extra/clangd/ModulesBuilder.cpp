@@ -18,8 +18,7 @@
 #include "clang/Serialization/ModuleCache.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/ADT/StringSet.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/LockFileManager.h"
 #include "llvm/Support/Path.h"
@@ -34,17 +33,9 @@ namespace clangd {
 
 namespace {
 
-llvm::cl::opt<bool> DebugModulesBuilder(
-    "debug-modules-builder",
-    llvm::cl::desc("Don't remove clangd's built module files for debugging. "
-                   "Remember to remove them later after debugging."),
-    llvm::cl::init(false));
+static bool DebugModulesBuilder = false;
 
-llvm::cl::opt<unsigned> VersionedModuleFileGCThresholdSeconds(
-    "modules-builder-versioned-gc-threshold-seconds",
-    llvm::cl::desc("Delete versioned copy-on-read module files whose last "
-                   "access time is older than this many seconds."),
-    llvm::cl::init(3 * 24 * 60 * 60));
+static unsigned VersionedModuleFileGCThresholdSeconds = 3 * 24 * 60 * 60;
 
 //===----------------------------------------------------------------------===//
 // Persistent Module Cache Layout.
@@ -508,20 +499,14 @@ public:
     RequiredModules.emplace_back(std::move(MF));
   }
 
-  void setDirectModuleNames(std::vector<std::string> Names) {
-    DirectModuleNames.insert_range(Names);
-  }
-
   llvm::StringSet<> getRequiredModuleNames() const override {
-    return DirectModuleNames;
+    return BuiltModuleNames;
   }
 
 private:
   llvm::SmallVector<std::shared_ptr<const ModuleFile>, 8> RequiredModules;
   // A helper class to speedup the query if a module is built.
   llvm::StringSet<> BuiltModuleNames;
-  // The directly required module names as scanned from the source file.
-  llvm::StringSet<> DirectModuleNames;
 };
 
 bool IsModuleFileUpToDate(PathRef ModuleFilePath,
@@ -1367,7 +1352,6 @@ ModulesBuilder::buildPrerequisiteModulesFor(PathRef File,
     return std::make_unique<ReusablePrerequisiteModules>();
 
   auto RequiredModules = std::make_unique<ReusablePrerequisiteModules>();
-  RequiredModules->setDirectModuleNames(RequiredModuleNames);
   for (llvm::StringRef RequiredModuleName : RequiredModuleNames) {
     // Return early if there is any error.
     if (llvm::Error Err = Impl->getOrBuildModuleFile(

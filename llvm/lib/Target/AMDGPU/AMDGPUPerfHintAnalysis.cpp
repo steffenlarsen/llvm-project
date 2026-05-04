@@ -24,34 +24,41 @@
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "amdgpu-perf-hint"
 
-static cl::opt<unsigned>
-    MemBoundThresh("amdgpu-membound-threshold", cl::init(50), cl::Hidden,
-                   cl::desc("Function mem bound threshold in %"));
+static unsigned getMemBoundThresh(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_MemBoundThresh>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-    LimitWaveThresh("amdgpu-limit-wave-threshold", cl::init(50), cl::Hidden,
-                    cl::desc("Kernel limit wave threshold in %"));
+static unsigned getLimitWaveThresh(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_LimitWaveThresh>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-    IAWeight("amdgpu-indirect-access-weight", cl::init(1000), cl::Hidden,
-             cl::desc("Indirect access memory instruction weight"));
+static unsigned getIAWeight(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_IAWeight>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-    LSWeight("amdgpu-large-stride-weight", cl::init(1000), cl::Hidden,
-             cl::desc("Large stride memory access weight"));
+static unsigned getLSWeight(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_LSWeight>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-    LargeStrideThresh("amdgpu-large-stride-threshold", cl::init(64), cl::Hidden,
-                      cl::desc("Large stride memory access threshold"));
+static unsigned getLargeStrideThresh(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_LargeStrideThresh>(
+      F.getContext().getOptionsContext());
+}
 
 STATISTIC(NumMemBound, "Number of functions marked as memory bound");
 STATISTIC(NumLimitWave, "Number of functions marked as needing limit wave");
@@ -74,7 +81,7 @@ private:
     const Value *Base = nullptr;
     int64_t Offset = 0;
     MemAccessInfo() = default;
-    bool isLargeStride(MemAccessInfo &Reference) const;
+    bool isLargeStride(MemAccessInfo &Reference, const Function &F) const;
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
     Printable print() const {
       return Printable([this](raw_ostream &OS) {
@@ -96,8 +103,10 @@ private:
   const SITargetLowering *TLI;
 
   AMDGPUPerfHintAnalysis::FuncInfo *visit(const Function &F);
-  static bool isMemBound(const AMDGPUPerfHintAnalysis::FuncInfo &F);
-  static bool needLimitWave(const AMDGPUPerfHintAnalysis::FuncInfo &F);
+  static bool isMemBound(const AMDGPUPerfHintAnalysis::FuncInfo &FI,
+                         const Function &F);
+  static bool needLimitWave(const AMDGPUPerfHintAnalysis::FuncInfo &FI,
+                            const Function &F);
 
   bool isIndirectAccess(const Instruction *Inst) const;
 
@@ -108,7 +117,7 @@ private:
   /// z = a[i+2000];
   /// In the above example, the second and third memory access will be marked
   /// large stride memory access.
-  bool isLargeStride(const Instruction *Inst);
+  bool isLargeStride(const Instruction *Inst, const Function &F);
 
   bool isGlobalAddr(const Value *V) const;
   bool isLocalAddr(const Value *V) const;
@@ -228,7 +237,7 @@ AMDGPUPerfHintAnalysis::FuncInfo *AMDGPUPerfHint::visit(const Function &F) {
           UsedGlobalLoadsInBB += Size;
         if (isIndirectAccess(&I))
           FI.IAMInstCost += Size;
-        if (isLargeStride(&I))
+        if (isLargeStride(&I, F))
           FI.LSMInstCost += Size;
         FI.MemInstCost += Size;
         FI.InstCost += Size;
@@ -298,14 +307,15 @@ bool AMDGPUPerfHint::runOnFunction(Function &F) {
 
   bool Changed = false;
 
-  if (isMemBound(*Info)) {
+  if (isMemBound(*Info, F)) {
     LLVM_DEBUG(dbgs() << F.getName() << " is memory bound\n");
     NumMemBound++;
     F.addFnAttr("amdgpu-memory-bound", "true");
     Changed = true;
   }
 
-  if (AMDGPU::isEntryFunctionCC(F.getCallingConv()) && needLimitWave(*Info)) {
+  if (AMDGPU::isEntryFunctionCC(F.getCallingConv()) &&
+      needLimitWave(*Info, F)) {
     LLVM_DEBUG(dbgs() << F.getName() << " needs limit wave\n");
     NumLimitWave++;
     F.addFnAttr("amdgpu-wave-limiter", "true");
@@ -315,18 +325,21 @@ bool AMDGPUPerfHint::runOnFunction(Function &F) {
   return Changed;
 }
 
-bool AMDGPUPerfHint::isMemBound(const AMDGPUPerfHintAnalysis::FuncInfo &FI) {
+bool AMDGPUPerfHint::isMemBound(const AMDGPUPerfHintAnalysis::FuncInfo &FI,
+                                const Function &F) {
   // Reverting optimal scheduling in favour of occupancy with basic block(s)
   // having dense global memory access can potentially hurt performance.
   if (FI.HasDenseGlobalMemAcc)
     return true;
 
-  return FI.MemInstCost * 100 / FI.InstCost > MemBoundThresh;
+  return FI.MemInstCost * 100 / FI.InstCost > getMemBoundThresh(F);
 }
 
-bool AMDGPUPerfHint::needLimitWave(const AMDGPUPerfHintAnalysis::FuncInfo &FI) {
-  return ((FI.MemInstCost + FI.IAMInstCost * IAWeight +
-           FI.LSMInstCost * LSWeight) * 100 / FI.InstCost) > LimitWaveThresh;
+bool AMDGPUPerfHint::needLimitWave(const AMDGPUPerfHintAnalysis::FuncInfo &FI,
+                                   const Function &F) {
+  return ((FI.MemInstCost + FI.IAMInstCost * getIAWeight(F) +
+           FI.LSMInstCost * getLSWeight(F)) *
+          100 / FI.InstCost) > getLimitWaveThresh(F);
 }
 
 bool AMDGPUPerfHint::isGlobalAddr(const Value *V) const {
@@ -344,11 +357,11 @@ bool AMDGPUPerfHint::isLocalAddr(const Value *V) const {
   return false;
 }
 
-bool AMDGPUPerfHint::isLargeStride(const Instruction *Inst) {
+bool AMDGPUPerfHint::isLargeStride(const Instruction *Inst, const Function &F) {
   LLVM_DEBUG(dbgs() << "[isLargeStride] " << *Inst << '\n');
 
   MemAccessInfo MAI = makeMemAccessInfo(const_cast<Instruction *>(Inst));
-  bool IsLargeStride = MAI.isLargeStride(LastAccess);
+  bool IsLargeStride = MAI.isLargeStride(LastAccess, F);
   if (MAI.Base)
     LastAccess = std::move(MAI);
 
@@ -370,15 +383,15 @@ AMDGPUPerfHint::makeMemAccessInfo(Instruction *Inst) const {
   return MAI;
 }
 
-bool AMDGPUPerfHint::MemAccessInfo::isLargeStride(
-    MemAccessInfo &Reference) const {
+bool AMDGPUPerfHint::MemAccessInfo::isLargeStride(MemAccessInfo &Reference,
+                                                  const Function &F) const {
 
   if (!Base || !Reference.Base || Base != Reference.Base)
     return false;
 
   uint64_t Diff = Offset > Reference.Offset ? Offset - Reference.Offset
                                             : Reference.Offset - Offset;
-  bool Result = Diff > LargeStrideThresh;
+  bool Result = Diff > getLargeStrideThresh(F);
   LLVM_DEBUG(dbgs() << "[isLargeStride compare]\n"
                << print() << "<=>\n"
                << Reference.print() << "Result:" << Result << '\n');
@@ -409,7 +422,7 @@ bool AMDGPUPerfHintAnalysis::isMemoryBound(const Function *F) const {
   if (FI == FIM.end())
     return false;
 
-  return AMDGPUPerfHint::isMemBound(FI->second);
+  return AMDGPUPerfHint::isMemBound(FI->second, *F);
 }
 
 bool AMDGPUPerfHintAnalysis::needsWaveLimiter(const Function *F) const {
@@ -417,7 +430,7 @@ bool AMDGPUPerfHintAnalysis::needsWaveLimiter(const Function *F) const {
   if (FI == FIM.end())
     return false;
 
-  return AMDGPUPerfHint::needLimitWave(FI->second);
+  return AMDGPUPerfHint::needLimitWave(FI->second, *F);
 }
 
 bool AMDGPUPerfHintAnalysis::runOnSCC(const GCNTargetMachine &TM,

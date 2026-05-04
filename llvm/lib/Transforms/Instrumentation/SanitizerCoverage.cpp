@@ -30,10 +30,11 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/ValueSymbolTable.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SpecialCaseList.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/EscapeEnumerator.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
@@ -93,93 +94,78 @@ const char SanCovStackDepthCallbackName[] = "__sanitizer_cov_stack_depth";
 const char SanCovLowestStackName[] = "__sancov_lowest_stack";
 const char SanCovCallbackGateName[] = "__sancov_should_track";
 
-static cl::opt<int> ClCoverageLevel(
-    "sanitizer-coverage-level",
-    cl::desc("Sanitizer Coverage. 0: none, 1: entry block, 2: all blocks, "
-             "3: all blocks and critical edges"),
-    cl::Hidden);
-
-static cl::opt<bool> ClTracePC("sanitizer-coverage-trace-pc",
-                               cl::desc("Experimental pc tracing"), cl::Hidden);
-
-static cl::opt<bool> ClTracePCEntryExit(
-    "sanitizer-coverage-trace-pc-entry-exit",
-    cl::desc("pc tracing with separate entry/exit callbacks"), cl::Hidden);
-
-static cl::opt<bool> ClTracePCGuard("sanitizer-coverage-trace-pc-guard",
-                                    cl::desc("pc tracing with a guard"),
-                                    cl::Hidden);
-
-// If true, we create a global variable that contains PCs of all instrumented
-// BBs, put this global into a named section, and pass this section's bounds
-// to __sanitizer_cov_pcs_init.
-// This way the coverage instrumentation does not need to acquire the PCs
-// at run-time. Works with trace-pc-guard, inline-8bit-counters, and
-// inline-bool-flag.
-static cl::opt<bool> ClCreatePCTable("sanitizer-coverage-pc-table",
-                                     cl::desc("create a static PC table"),
-                                     cl::Hidden);
-
-static cl::opt<bool>
-    ClInline8bitCounters("sanitizer-coverage-inline-8bit-counters",
-                         cl::desc("increments 8-bit counter for every edge"),
-                         cl::Hidden);
-
-static cl::opt<bool>
-    ClSancovDropCtors("sanitizer-coverage-drop-ctors",
-                      cl::desc("do not emit module ctors for global counters"),
-                      cl::Hidden);
-
-static cl::opt<bool>
-    ClInlineBoolFlag("sanitizer-coverage-inline-bool-flag",
-                     cl::desc("sets a boolean flag for every edge"),
-                     cl::Hidden);
-
-static cl::opt<bool>
-    ClCMPTracing("sanitizer-coverage-trace-compares",
-                 cl::desc("Tracing of CMP and similar instructions"),
-                 cl::Hidden);
-
-static cl::opt<bool> ClDIVTracing("sanitizer-coverage-trace-divs",
-                                  cl::desc("Tracing of DIV instructions"),
-                                  cl::Hidden);
-
-static cl::opt<bool> ClLoadTracing("sanitizer-coverage-trace-loads",
-                                   cl::desc("Tracing of load instructions"),
-                                   cl::Hidden);
-
-static cl::opt<bool> ClStoreTracing("sanitizer-coverage-trace-stores",
-                                    cl::desc("Tracing of store instructions"),
-                                    cl::Hidden);
-
-static cl::opt<bool> ClGEPTracing("sanitizer-coverage-trace-geps",
-                                  cl::desc("Tracing of GEP instructions"),
-                                  cl::Hidden);
-
-static cl::opt<bool>
-    ClPruneBlocks("sanitizer-coverage-prune-blocks",
-                  cl::desc("Reduce the number of instrumented blocks"),
-                  cl::Hidden, cl::init(true));
-
-static cl::opt<bool> ClStackDepth("sanitizer-coverage-stack-depth",
-                                  cl::desc("max stack depth tracing"),
-                                  cl::Hidden);
-
-static cl::opt<int> ClStackDepthCallbackMin(
-    "sanitizer-coverage-stack-depth-callback-min",
-    cl::desc("max stack depth tracing should use callback and only when "
-             "stack depth more than specified"),
-    cl::Hidden);
-
-static cl::opt<bool>
-    ClCollectCF("sanitizer-coverage-control-flow",
-                cl::desc("collect control flow for each function"), cl::Hidden);
-
-static cl::opt<bool> ClGatedCallbacks(
-    "sanitizer-coverage-gated-trace-callbacks",
-    cl::desc("Gate the invocation of the tracing callbacks on a global variable"
-             ". Currently only supported for trace-pc-guard and trace-cmp."),
-    cl::Hidden, cl::init(false));
+static int getClCoverageLevel(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanCovLevel>(
+      M.getContext().getOptionsContext());
+}
+static bool getClTracePC(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanCovTracePC>(
+      M.getContext().getOptionsContext());
+}
+static bool getClTracePCEntryExit(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanCovTracePCEntryExit>(
+      M.getContext().getOptionsContext());
+}
+static bool getClTracePCGuard(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanCovTracePCGuard>(
+      M.getContext().getOptionsContext());
+}
+static bool getClCreatePCTable(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanCovCreatePCTable>(
+      M.getContext().getOptionsContext());
+}
+static bool getClInline8bitCounters(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanCovInline8bitCounters>(
+      M.getContext().getOptionsContext());
+}
+static bool getClSancovDropCtors(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanCovDropCtors>(
+      M.getContext().getOptionsContext());
+}
+static bool getClInlineBoolFlag(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanCovInlineBoolFlag>(
+      M.getContext().getOptionsContext());
+}
+static bool getClCMPTracing(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanCovTraceCompares>(
+      M.getContext().getOptionsContext());
+}
+static bool getClDIVTracing(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanCovTraceDivs>(
+      M.getContext().getOptionsContext());
+}
+static bool getClLoadTracing(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanCovTraceLoads>(
+      M.getContext().getOptionsContext());
+}
+static bool getClStoreTracing(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanCovTraceStores>(
+      M.getContext().getOptionsContext());
+}
+static bool getClGEPTracing(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanCovTraceGeps>(
+      M.getContext().getOptionsContext());
+}
+static bool getClPruneBlocks(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanCovPruneBlocks>(
+      M.getContext().getOptionsContext());
+}
+static bool getClStackDepth(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanCovStackDepth>(
+      M.getContext().getOptionsContext());
+}
+static int getClStackDepthCallbackMin(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanCovStackDepthCallbackMin>(
+      M.getContext().getOptionsContext());
+}
+static bool getClCollectCF(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanCovControlFlow>(
+      M.getContext().getOptionsContext());
+}
+static bool getClGatedCallbacks(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanCovGatedCallbacks>(
+      M.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -206,32 +192,33 @@ SanitizerCoverageOptions getOptions(int LegacyCoverageLevel) {
   return Res;
 }
 
-SanitizerCoverageOptions OverrideFromCL(SanitizerCoverageOptions Options) {
+SanitizerCoverageOptions OverrideFromCL(SanitizerCoverageOptions Options,
+                                        const Module &M) {
   // Sets CoverageType and IndirectCalls.
-  SanitizerCoverageOptions CLOpts = getOptions(ClCoverageLevel);
+  SanitizerCoverageOptions CLOpts = getOptions(getClCoverageLevel(M));
   Options.CoverageType = std::max(Options.CoverageType, CLOpts.CoverageType);
   Options.IndirectCalls |= CLOpts.IndirectCalls;
-  Options.TraceCmp |= ClCMPTracing;
-  Options.TraceDiv |= ClDIVTracing;
-  Options.TraceGep |= ClGEPTracing;
-  Options.TracePC |= ClTracePC;
-  Options.TracePCEntryExit |= ClTracePCEntryExit;
-  Options.TracePCGuard |= ClTracePCGuard;
-  Options.Inline8bitCounters |= ClInline8bitCounters;
-  Options.InlineBoolFlag |= ClInlineBoolFlag;
-  Options.PCTable |= ClCreatePCTable;
-  Options.NoPrune |= !ClPruneBlocks;
-  Options.StackDepth |= ClStackDepth;
-  Options.StackDepthCallbackMin = std::max(Options.StackDepthCallbackMin,
-                                           ClStackDepthCallbackMin.getValue());
-  Options.TraceLoads |= ClLoadTracing;
-  Options.TraceStores |= ClStoreTracing;
-  Options.GatedCallbacks |= ClGatedCallbacks;
+  Options.TraceCmp |= getClCMPTracing(M);
+  Options.TraceDiv |= getClDIVTracing(M);
+  Options.TraceGep |= getClGEPTracing(M);
+  Options.TracePC |= getClTracePC(M);
+  Options.TracePCEntryExit |= getClTracePCEntryExit(M);
+  Options.TracePCGuard |= getClTracePCGuard(M);
+  Options.Inline8bitCounters |= getClInline8bitCounters(M);
+  Options.InlineBoolFlag |= getClInlineBoolFlag(M);
+  Options.PCTable |= getClCreatePCTable(M);
+  Options.NoPrune |= !getClPruneBlocks(M);
+  Options.StackDepth |= getClStackDepth(M);
+  Options.StackDepthCallbackMin =
+      std::max(Options.StackDepthCallbackMin, getClStackDepthCallbackMin(M));
+  Options.TraceLoads |= getClLoadTracing(M);
+  Options.TraceStores |= getClStoreTracing(M);
+  Options.GatedCallbacks |= getClGatedCallbacks(M);
   if (!Options.TracePCGuard && !Options.TracePC && !Options.TracePCEntryExit &&
       !Options.Inline8bitCounters && !Options.StackDepth &&
       !Options.InlineBoolFlag && !Options.TraceLoads && !Options.TraceStores)
     Options.TracePCGuard = true; // TracePCGuard is default.
-  Options.CollectControlFlow |= ClCollectCF;
+  Options.CollectControlFlow |= getClCollectCF(M);
   return Options;
 }
 
@@ -350,8 +337,8 @@ PreservedAnalyses SanitizerCoveragePass::run(Module &M,
     return FAM.getResult<PostDominatorTreeAnalysis>(F);
   };
   ModuleSanitizerCoverage ModuleSancov(M, DTCallback, PDTCallback,
-                                       OverrideFromCL(Options), Allowlist.get(),
-                                       Blocklist.get());
+                                       OverrideFromCL(Options, M),
+                                       Allowlist.get(), Blocklist.get());
   if (!ModuleSancov.instrumentModule())
     return PreservedAnalyses::all();
 
@@ -393,7 +380,7 @@ ModuleSanitizerCoverage::CreateSecStartEnd(Module &M, const char *Section,
 Function *ModuleSanitizerCoverage::CreateInitCallsForSections(
     Module &M, const char *CtorName, const char *InitFunctionName, Type *Ty,
     const char *Section) {
-  if (ClSancovDropCtors)
+  if (getClSancovDropCtors(M))
     return nullptr;
   auto SecStartEnd = CreateSecStartEnd(M, Section, Ty);
   auto SecStart = SecStartEnd.first;
@@ -521,7 +508,7 @@ bool ModuleSanitizerCoverage::instrumentModule() {
 
   if (Options.GatedCallbacks) {
     if (!Options.TracePCGuard && !Options.TraceCmp) {
-      C->emitError(StringRef("'") + ClGatedCallbacks.ArgStr +
+      C->emitError(StringRef("'") + "sanitizer-coverage-gated-trace-callbacks" +
                    "' is only supported with trace-pc-guard or trace-cmp");
       return true;
     }

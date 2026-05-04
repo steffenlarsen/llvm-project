@@ -267,12 +267,6 @@ struct DominatorTreeVerifierPass
   LLVM_ABI PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 };
 
-/// Enables verification of dominator trees.
-///
-/// This check is expensive and is disabled by default.  `-verify-dom-info`
-/// allows selectively enabling the check without needing to recompile.
-LLVM_ABI extern bool VerifyDomInfo;
-
 /// Legacy analysis pass which computes a \c DominatorTree.
 class LLVM_ABI DominatorTreeWrapperPass : public FunctionPass {
   DominatorTree DT;

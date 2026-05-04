@@ -18,6 +18,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 #include "gtest/gtest.h"
 
@@ -27,7 +28,7 @@ namespace llvm {
 /// given target and creates a module from an MIR string.
 class CodeGenTestBase : public testing::Test {
 public:
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<TargetMachine> TM;
   std::unique_ptr<MachineModuleInfo> MMI;
   std::unique_ptr<MIRParser> MIR;
@@ -58,7 +59,7 @@ protected:
       GTEST_SKIP();
     MMI = std::make_unique<MachineModuleInfo>(TM.get());
 
-    PassBuilder PB(TM.get());
+    PassBuilder PB(llvm::clv2::defaultOptionsContext(), TM.get());
     PB.registerModuleAnalyses(MAM);
     PB.registerCGSCCAnalyses(CGAM);
     PB.registerFunctionAnalyses(FAM);

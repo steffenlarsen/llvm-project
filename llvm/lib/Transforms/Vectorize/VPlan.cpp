@@ -34,30 +34,28 @@
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GraphWriter.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/LoopVersioning.h"
 #include "llvm/Transforms/Vectorize/LoopVectorizationLegality.h"
+#include "llvm/Transforms/Vectorize/VectorizeOptions.h"
 #include <cassert>
 #include <string>
 
 using namespace llvm;
 using namespace llvm::VPlanPatternMatch;
 
-namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
-extern cl::opt<unsigned> ForceTargetInstructionCost;
-extern cl::opt<unsigned> NumberOfStoresToPredicate;
-} // namespace llvm
+#include "llvm/IR/ProfDataUtils.h"
 
 /// @{
 /// Metadata attribute names
@@ -68,9 +66,25 @@ const char LLVMLoopVectorizeFollowupEpilogue[] =
     "llvm.loop.vectorize.followup_epilogue";
 /// @}
 
-static cl::opt<bool> PrintVPlansInDotFormat(
-    "vplan-print-in-dot-format", cl::Hidden,
-    cl::desc("Use dot format instead of plain text when dumping VPlans"));
+static unsigned getForceTargetInstructionCost(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_ForceTargetInstructionCost>(
+      F.getContext().getOptionsContext());
+}
+static bool isForceTargetInstructionCostSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::VectorizeOptsReg,
+                               &clv2::VEC_ForceTargetInstructionCost>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getNumberOfStoresToPredicate(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_NumberOfStoresToPredicate>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getPrintVPlansInDotFormat(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::VectorizeOptsReg,
+                           &clv2::VEC_PrintVPlansInDotFormat>(Ctx, false);
+}
 
 #define DEBUG_TYPE "loop-vectorize"
 
@@ -326,7 +340,7 @@ void VPTransformState::setDebugLocFrom(DebugLoc DL) {
       Builder.GetInsertBlock()
           ->getParent()
           ->shouldEmitDebugInfoForProfiling() &&
-      !EnableFSDiscriminator) {
+      !getEnableFSDiscriminator(DIL->getContext())) {
     // FIXME: For scalable vectors, assume vscale=1.
     unsigned UF = Plan->getConcreteUF();
     auto NewDIL =
@@ -788,10 +802,12 @@ InstructionCost VPRegionBlock::cost(ElementCount VF, VPCostContext &Ctx) {
     InstructionCost Cost = 0;
     for (VPBlockBase *Block : vp_depth_first_shallow(getEntry()))
       Cost += Block->cost(VF, Ctx);
+    const Function &F =
+        *getPlan()->getScalarHeader()->getIRBasicBlock()->getParent();
     // Add the costs of the loop's backedge and canonical IV increment
     auto AddCost = [&](InstructionCost C, const char *Name) {
-      if (ForceTargetInstructionCost.getNumOccurrences())
-        C = InstructionCost(ForceTargetInstructionCost);
+      if (isForceTargetInstructionCostSpecified(F))
+        C = InstructionCost(getForceTargetInstructionCost(F));
       LLVM_DEBUG(dbgs() << "Cost of " << C << " for VF " << VF << ": " << Name
                         << "\n");
       Cost += C;
@@ -1814,7 +1830,9 @@ void LoopVectorizationPlanner::updateLoopMetadataAndProfileInfo(
       return;
     auto &SE = *PSE.getSE();
     AverageVectorTripCount = SE.getSmallConstantTripCount(VectorLoop);
-    if (ProfcheckDisableMetadataFixes || !AverageVectorTripCount)
+    if (getProfcheckDisableMetadataFixes(
+            VectorLoop->getHeader()->getContext()) ||
+        !AverageVectorTripCount)
       return;
     if (ScalarPH)
       RemainderAverageTripCount =
@@ -1845,7 +1863,10 @@ void LoopVectorizationPlanner::printPlans(raw_ostream &O) {
     return;
   }
   for (const auto &Plan : VPlans)
-    if (PrintVPlansInDotFormat)
+    if (getPrintVPlansInDotFormat(OrigLoop->getHeader()
+                                      ->getParent()
+                                      ->getContext()
+                                      .getOptionsContext()))
       Plan->printDOT(O);
     else
       Plan->print(O);
@@ -1955,7 +1976,8 @@ bool VPCostContext::useEmulatedMaskMemRefHack(const VPReplicateRecipe *R,
       }
     }
   }
-  return *NumPredStores > NumberOfStoresToPredicate;
+  return *NumPredStores >
+         getNumberOfStoresToPredicate(*L->getHeader()->getParent());
 }
 
 bool VPCostContext::isFreeScalarIntrinsic(Intrinsic::ID ID) {

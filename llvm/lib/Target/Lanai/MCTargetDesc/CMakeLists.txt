@@ -1,5 +1,6 @@
 add_llvm_component_library(LLVMLanaiDesc
   LanaiAsmBackend.cpp
+  LanaiOptions.cpp
   LanaiELFObjectWriter.cpp
   LanaiInstPrinter.cpp
   LanaiMCAsmInfo.cpp

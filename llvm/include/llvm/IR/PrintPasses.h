@@ -9,8 +9,10 @@
 #ifndef LLVM_IR_PRINTPASSES_H
 #define LLVM_IR_PRINTPASSES_H
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Compiler.h"
 #include <vector>
 
 namespace llvm {
@@ -30,50 +32,67 @@ enum class ChangePrinter {
   DotCfgQuiet
 };
 
-extern LLVM_ABI cl::opt<ChangePrinter> PrintChanged;
+class LLVMContext;
+namespace clv2 {
+class OptionsContext;
+}
 
-// Returns true if printing before/after some pass is enabled, whether all
-// passes or a specific pass.
-LLVM_ABI bool shouldPrintBeforeSomePass();
-LLVM_ABI bool shouldPrintAfterSomePass();
+LLVM_ABI ChangePrinter getPrintChanged(const LLVMContext &Ctx);
 
-// Returns true if we should print before/after a specific pass. The argument
-// should be the pass ID, e.g. "instcombine".
+LLVM_ABI bool shouldPrintBeforeSomePass(const LLVMContext &Ctx);
+LLVM_ABI bool shouldPrintAfterSomePass(const LLVMContext &Ctx);
+
+LLVM_ABI bool shouldPrintBeforePass(const LLVMContext &Ctx, StringRef PassID);
+LLVM_ABI bool shouldPrintAfterPass(const LLVMContext &Ctx, StringRef PassID);
+
+// Overloads without LLVMContext for legacy pass manager use.
 LLVM_ABI bool shouldPrintBeforePass(StringRef PassID);
 LLVM_ABI bool shouldPrintAfterPass(StringRef PassID);
 
-// Returns true if we should print before/after all passes.
-LLVM_ABI bool shouldPrintBeforeAll();
-LLVM_ABI bool shouldPrintAfterAll();
+// Overloads taking OptionsContext directly (used by legacy PM with threaded
+// context).
+LLVM_ABI bool shouldPrintBeforePass(StringRef PassID,
+                                    const clv2::OptionsContext &Ctx);
+LLVM_ABI bool shouldPrintAfterPass(StringRef PassID,
+                                   const clv2::OptionsContext &Ctx);
 
-// The list of passes to print before/after, if we only want to print
-// before/after specific passes.
-LLVM_ABI std::vector<std::string> printBeforePasses();
-LLVM_ABI std::vector<std::string> printAfterPasses();
+LLVM_ABI bool shouldPrintBeforeAll(const LLVMContext &Ctx);
+LLVM_ABI bool shouldPrintAfterAll(const LLVMContext &Ctx);
 
-// Returns true if we should always print the entire module.
-LLVM_ABI bool forcePrintModuleIR();
+LLVM_ABI std::vector<std::string> printBeforePasses(const LLVMContext &Ctx);
+LLVM_ABI std::vector<std::string> printAfterPasses(const LLVMContext &Ctx);
 
-// Returns true if we should print the entire function for loop passes.
-LLVM_ABI bool forcePrintFuncIR();
-
-// Return true if -filter-passes is empty or contains the pass name.
-LLVM_ABI bool isPassInPrintList(StringRef PassName);
-LLVM_ABI bool isFilterPassesEmpty();
-
-// Returns true if we should print the function.
-LLVM_ABI bool isFunctionInPrintList(StringRef FunctionName);
+LLVM_ABI bool forcePrintModuleIR(const LLVMContext &Ctx);
+LLVM_ABI bool forcePrintFuncIR(const LLVMContext &Ctx);
+LLVM_ABI bool isPassInPrintList(const LLVMContext &Ctx, StringRef PassName);
+LLVM_ABI bool isFilterPassesEmpty(const LLVMContext &Ctx);
+LLVM_ABI bool isFunctionInPrintList(const LLVMContext &Ctx,
+                                    StringRef FunctionName);
 
 // Returns true if -filter-print-source-locs is empty or contains the source
 // location.
+LLVM_ABI bool isSourceLocInPrintList(const LLVMContext &Ctx,
+                                     const DebugLoc &Loc);
+LLVM_ABI bool isSourceLocFilterEmpty(const LLVMContext &Ctx);
+
+// Overloads without LLVMContext for legacy pass manager use.
 LLVM_ABI bool isSourceLocInPrintList(const DebugLoc &Loc);
 LLVM_ABI bool isSourceLocFilterEmpty();
 
+// Overloads taking OptionsContext directly (used by legacy PM with threaded
+// context).
+LLVM_ABI bool isSourceLocInPrintList(const DebugLoc &Loc,
+                                     const clv2::OptionsContext &Ctx);
+LLVM_ABI bool isSourceLocFilterEmpty(const clv2::OptionsContext &Ctx);
+
 // Returns true if the print filters allow all functions.
+LLVM_ABI bool shouldPrintAllFunctions(const LLVMContext &Ctx);
 LLVM_ABI bool shouldPrintAllFunctions();
+LLVM_ABI bool shouldPrintAllFunctions(const clv2::OptionsContext &Ctx);
 
 // Returns true if the function passes the function-name and source-location
-// print filters.
+// print filters. Always uses F.getContext(), since a Function carries its
+// own context.
 LLVM_ABI bool shouldPrintFunction(const Function &F);
 
 // Ensure temporary files exist, creating or re-using them.  \p FD contains
@@ -93,7 +112,8 @@ LLVM_ABI std::error_code cleanUpTempFiles(ArrayRef<std::string> FileName);
 // OldLineFormat, \p NewLineFormat, and \p UnchangedLineFormat to control the
 // formatting of the output. Return an error message for any failures instead
 // of the diff.
-LLVM_ABI std::string doSystemDiff(StringRef Before, StringRef After,
+LLVM_ABI std::string doSystemDiff(const clv2::OptionsContext &Ctx,
+                                  StringRef Before, StringRef After,
                                   StringRef OldLineFormat,
                                   StringRef NewLineFormat,
                                   StringRef UnchangedLineFormat);
@@ -101,10 +121,10 @@ LLVM_ABI std::string doSystemDiff(StringRef Before, StringRef After,
 // Report a -print-changed diff for one pass over one IR unit (function or
 // module). IsInteresting is isPassInPrintList(PassID); ShouldReport is whether
 // the unit passed all filters (Before/After are only set then).
-LLVM_ABI void reportChangedIR(StringRef Before, StringRef After,
-                              StringRef PassName, StringRef PassID,
-                              StringRef IRName, bool IsInteresting,
-                              bool ShouldReport);
+LLVM_ABI void reportChangedIR(const LLVMContext &Ctx, StringRef Before,
+                              StringRef After, StringRef PassName,
+                              StringRef PassID, StringRef IRName,
+                              bool IsInteresting, bool ShouldReport);
 
 } // namespace llvm
 

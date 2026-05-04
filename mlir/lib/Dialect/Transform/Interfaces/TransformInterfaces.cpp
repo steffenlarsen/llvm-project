@@ -809,13 +809,13 @@ void transform::TransformState::compactOpHandles() {
 DiagnosedSilenceableFailure
 transform::TransformState::applyTransform(TransformOpInterface transform) {
   LDBG() << "applying: "
-         << OpWithFlags(transform, OpPrintingFlags().skipRegions());
+         << OpWithFlags(transform, opPrintingFlags(transform).skipRegions());
   FULL_LDBG() << "Top-level payload before application:\n" << *getTopLevel();
   llvm::scope_exit printOnFailureRAII([this] {
     (void)this;
     LDBG() << "Failing Top-level payload:\n"
            << OpWithFlags(getTopLevel(),
-                          OpPrintingFlags().printGenericOpForm());
+                          opPrintingFlags(getTopLevel()).printGenericOpForm());
   });
 
   // Set current transform op.

@@ -12,6 +12,7 @@
 
 #include "flang/Lower/Support/ReductionProcessor.h"
 
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Lower/AbstractConverter.h"
 #include "flang/Lower/ConvertType.h"
 #include "flang/Lower/OpenMP.h"
@@ -28,12 +29,8 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include <type_traits>
-
-static llvm::cl::opt<bool> forceByrefReduction(
-    "force-byref-reduction",
-    llvm::cl::desc("Pass all reduction arguments by reference"),
-    llvm::cl::Hidden);
 
 using ReductionModifier =
     Fortran::lower::omp::clause::Reduction::ReductionModifier;
@@ -731,7 +728,8 @@ OpType ReductionProcessor::createDeclareReduction(
 }
 
 bool ReductionProcessor::doReductionByRef(mlir::Type reductionType) {
-  if (forceByrefReduction)
+  if (llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_ForceByrefReduction>(
+          reductionType.getContext()->getOptionsContext()))
     return true;
   // Non-trivial, non-derived types (e.g., boxes, arrays) must be by-ref.
   // Derived types must also be by-ref because user-defined combiners
@@ -742,7 +740,8 @@ bool ReductionProcessor::doReductionByRef(mlir::Type reductionType) {
 }
 
 bool ReductionProcessor::doReductionByRef(mlir::Value reductionVar) {
-  if (forceByrefReduction)
+  if (llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_ForceByrefReduction>(
+          reductionVar.getContext()->getOptionsContext()))
     return true;
 
   if (auto declare =

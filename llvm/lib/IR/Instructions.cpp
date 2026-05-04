@@ -24,6 +24,7 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/IROptionsOptInfos.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Intrinsics.h"
@@ -44,6 +45,7 @@
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/ModRef.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TypeSize.h"
 #include <algorithm>
 #include <cassert>
@@ -53,9 +55,10 @@
 
 using namespace llvm;
 
-static cl::opt<bool> DisableI2pP2iOpt(
-    "disable-i2p-p2i-opt", cl::init(false),
-    cl::desc("Disables inttoptr/ptrtoint roundtrip optimization"));
+static bool getDisableI2pP2iOpt(const LLVMContext &Ctx) {
+  return clv2::getOptValOr<&clv2::IROptsReg, &clv2::IR_DisableI2pP2iOpt>(
+      Ctx.getOptionsContext(), false);
+}
 
 //===----------------------------------------------------------------------===//
 //                            AllocaInst Class
@@ -2989,7 +2992,7 @@ unsigned CastInst::isEliminableCastPair(Instruction::CastOps firstOp,
       return 0;
     case 7: {
       // Disable inttoptr/ptrtoint optimization if enabled.
-      if (DisableI2pP2iOpt)
+      if (getDisableI2pP2iOpt(SrcTy->getContext()))
         return 0;
 
       // Cannot simplify if address spaces are different!

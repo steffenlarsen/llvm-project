@@ -13,15 +13,21 @@
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/iterator.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/BlockFrequencyInfoImpl.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBranchProbabilityInfo.h"
 #include "llvm/CodeGen/MachineCycleAnalysis.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineLoopInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/GraphWriter.h"
+#include "llvm/Support/OptionsContext.h"
 #include <optional>
 #include <string>
 
@@ -29,60 +35,77 @@ using namespace llvm;
 
 #define DEBUG_TYPE "machine-block-freq"
 
-static cl::opt<GVDAGType> ViewMachineBlockFreqPropagationDAG(
-    "view-machine-block-freq-propagation-dags", cl::Hidden,
-    cl::desc("Pop up a window to show a dag displaying how machine block "
-             "frequencies propagate through the CFG."),
-    cl::values(clEnumValN(GVDT_None, "none", "do not display graphs."),
-               clEnumValN(GVDT_Fraction, "fraction",
-                          "display a graph using the "
-                          "fractional block frequency representation."),
-               clEnumValN(GVDT_Integer, "integer",
-                          "display a graph using the raw "
-                          "integer fractional block frequency representation."),
-               clEnumValN(GVDT_Count, "count", "display a graph using the real "
-                                               "profile count if available.")));
+// --- clv2 OptionInfo descriptors for MachineBlockFrequencyInfo options ---
+static constexpr clv2::EnumVal<GVDAGType> ViewBlockLayoutWithBFIVals[] = {
+    {"none", GVDT_None, "do not display graphs."},
+    {"fraction", GVDT_Fraction,
+     "display a graph using the fractional block frequency representation."},
+    {"integer", GVDT_Integer,
+     "display a graph using the raw integer fractional block frequency "
+     "representation."},
+    {"count", GVDT_Count,
+     "display a graph using the real profile count if available."},
+};
+static constexpr auto OI_ViewBlockLayoutWithBFI =
+    clv2::makeEnumOption<GVDAGType>(
+        "view-block-layout-with-bfi",
+        "Pop up a window to show a dag displaying MBP layout and "
+        "associated block frequencies of the CFG.",
+        ViewBlockLayoutWithBFIVals, clv2::Init{GVDT_None}, clv2::Hidden);
 
-namespace llvm {
-// Similar option above, but used to control BFI display only after MBP pass
-cl::opt<GVDAGType> ViewBlockLayoutWithBFI(
-    "view-block-layout-with-bfi", cl::Hidden,
-    cl::desc(
-        "Pop up a window to show a dag displaying MBP layout and associated "
-        "block frequencies of the CFG."),
-    cl::values(clEnumValN(GVDT_None, "none", "do not display graphs."),
-               clEnumValN(GVDT_Fraction, "fraction",
-                          "display a graph using the "
-                          "fractional block frequency representation."),
-               clEnumValN(GVDT_Integer, "integer",
-                          "display a graph using the raw "
-                          "integer fractional block frequency representation."),
-               clEnumValN(GVDT_Count, "count",
-                          "display a graph using the real "
-                          "profile count if available.")));
+static constexpr clv2::EnumVal<GVDAGType> ViewMachineBlockFreqPropDAGVals[] = {
+    {"none", GVDT_None, "do not display graphs."},
+    {"fraction", GVDT_Fraction,
+     "display a graph using the fractional block frequency "
+     "representation."},
+    {"integer", GVDT_Integer,
+     "display a graph using the raw integer fractional block frequency "
+     "representation."},
+    {"count", GVDT_Count,
+     "display a graph using the real profile count if available."},
+};
+static constexpr auto OI_ViewMachineBlockFreqPropDAG =
+    clv2::makeEnumOption<GVDAGType>(
+        "view-machine-block-freq-propagation-dags",
+        "Pop up a window to show a dag displaying how machine block "
+        "frequencies propagate through the CFG.",
+        ViewMachineBlockFreqPropDAGVals, clv2::Init{GVDT_None}, clv2::Hidden);
 
-// Command line option to specify the name of the function for CFG dump
-// Defined in Analysis/BlockFrequencyInfo.cpp:  -view-bfi-func-name=
-extern cl::opt<std::string> ViewBlockFreqFuncName;
+static constexpr clv2::OptionsRegistry<&OI_ViewBlockLayoutWithBFI,
+                                       &OI_ViewMachineBlockFreqPropDAG>
+    MBFIOptsReg;
 
-// Command line option to specify hot frequency threshold.
-// Defined in Analysis/BlockFrequencyInfo.cpp:  -view-hot-freq-perc=
-extern cl::opt<unsigned> ViewHotFreqPercent;
+namespace an_opts = llvm::an_opts;
 
-// Command line option to specify the name of the function for block frequency
-// dump. Defined in Analysis/BlockFrequencyInfo.cpp.
-extern cl::opt<std::string> PrintBFIFuncName;
-} // namespace llvm
+static std::string getViewBlockFreqFuncName(const clv2::OptionsContext &Ctx) {
+  return std::string(
+      clv2::getOptValOr<&clv2::AnalysisOptsReg,
+                        &clv2::AN_ViewBlockFreqFuncName>(Ctx, std::string{}));
+}
 
-static cl::opt<bool>
-    PrintMachineBlockFreq("print-machine-bfi", cl::init(false), cl::Hidden,
-                          cl::desc("Print the machine block frequency info."));
+static unsigned getViewHotFreqPercent(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_ViewHotFreqPercent>(Ctx);
+}
 
-static GVDAGType getGVDT() {
-  if (ViewBlockLayoutWithBFI != GVDT_None)
-    return ViewBlockLayoutWithBFI;
+static std::string getPrintBFIFuncName(const clv2::OptionsContext &Ctx) {
+  return std::string(
+      clv2::getOptValOr<&clv2::AnalysisOptsReg, &clv2::AN_PrintBFIFuncName>(
+          Ctx, std::string{}));
+}
 
-  return ViewMachineBlockFreqPropagationDAG;
+static bool getPrintMachineBfi(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_PrintMachineBfi>(Ctx);
+}
+
+static GVDAGType getGVDT(const clv2::OptionsContext &Ctx) {
+  GVDAGType Layout =
+      clv2::getOptValOr<&MBFIOptsReg, &OI_ViewBlockLayoutWithBFI>(Ctx,
+                                                                  GVDT_None);
+  if (Layout != GVDT_None)
+    return Layout;
+
+  return clv2::getOptValOr<&MBFIOptsReg, &OI_ViewMachineBlockFreqPropDAG>(
+      Ctx, GVDT_None);
 }
 
 template <> struct llvm::GraphTraits<MachineBlockFrequencyInfo *> {
@@ -140,20 +163,26 @@ struct llvm::DOTGraphTraits<MachineBlockFrequencyInfo *>
       }
       layout_order = LayoutOrderMap[Node];
     }
-    return MBFIDOTGraphTraitsBase::getNodeLabel(Node, Graph, getGVDT(),
+    const auto &Ctx =
+        Node->getParent()->getFunction().getContext().getOptionsContext();
+    return MBFIDOTGraphTraitsBase::getNodeLabel(Node, Graph, getGVDT(Ctx),
                                                 layout_order);
   }
 
   std::string getNodeAttributes(const MachineBasicBlock *Node,
                                 const MachineBlockFrequencyInfo *Graph) {
-    return MBFIDOTGraphTraitsBase::getNodeAttributes(Node, Graph,
-                                                     ViewHotFreqPercent);
+    const auto &Ctx =
+        Node->getParent()->getFunction().getContext().getOptionsContext();
+    return MBFIDOTGraphTraitsBase::getNodeAttributes(
+        Node, Graph, getViewHotFreqPercent(Ctx));
   }
 
   std::string getEdgeAttributes(const MachineBasicBlock *Node, EdgeIter EI,
                                 const MachineBlockFrequencyInfo *MBFI) {
+    const auto &Ctx =
+        Node->getParent()->getFunction().getContext().getOptionsContext();
     return MBFIDOTGraphTraitsBase::getEdgeAttributes(
-        Node, EI, MBFI, MBFI->getMBPI(), ViewHotFreqPercent);
+        Node, EI, MBFI, MBFI->getMBPI(), getViewHotFreqPercent(Ctx));
   }
 };
 
@@ -226,13 +255,18 @@ void MachineBlockFrequencyInfo::calculate(
     const MachineCycleInfo &MCI) {
   if (!MBFI)
     MBFI.reset(new ImplType);
+  const clv2::OptionsContext &Ctx =
+      F.getFunction().getContext().getOptionsContext();
+  MBFI->setOptionsContext(Ctx);
   MBFI->calculate(F, MBPI, MCI);
-  if (ViewMachineBlockFreqPropagationDAG != GVDT_None &&
-      (ViewBlockFreqFuncName.empty() || F.getName() == ViewBlockFreqFuncName)) {
+  if (getGVDT(Ctx) != GVDT_None &&
+      (getViewBlockFreqFuncName(Ctx).empty() ||
+       F.getName() == getViewBlockFreqFuncName(Ctx))) {
     view("MachineBlockFrequencyDAGS." + F.getName());
   }
-  if (PrintMachineBlockFreq &&
-      (PrintBFIFuncName.empty() || F.getName() == PrintBFIFuncName)) {
+  if (getPrintMachineBfi(F.getFunction().getContext().getOptionsContext()) &&
+      (getPrintBFIFuncName(Ctx).empty() ||
+       F.getName() == getPrintBFIFuncName(Ctx))) {
     MBFI->print(dbgs());
   }
 }

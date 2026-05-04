@@ -26,6 +26,7 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <cassert>
 #include <cstdint>
 #include <limits>
@@ -133,7 +134,8 @@ bool canonicalizePacketImpl(MCInstrInfo const &MCII, MCSubtargetInfo const &STI,
 
   // Examine the packet and convert pairs of instructions to compound
   // instructions when possible.
-  if (!HexagonDisableCompound)
+  if (!clv2::getOptValOr<&clv2::HEX_DisableCompound>(
+          Context.getOptionsContext(), false))
     HexagonMCInstrInfo::tryCompound(MCII, STI, Context, MCB);
   HexagonMCShuffle(Context, false, MCII, STI, MCB);
 

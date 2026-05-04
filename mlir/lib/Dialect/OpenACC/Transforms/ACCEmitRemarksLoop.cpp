@@ -162,7 +162,7 @@ public:
 
       computeRegion.getRegion().walk([&](LoopLikeOpInterface loopOp) {
         emitLoopMappingRemark(computeRegion, loopOp, accSupport, policy,
-                              gpuDimSeparator);
+                              gpuDimSeparator.getValue());
       });
     });
   }

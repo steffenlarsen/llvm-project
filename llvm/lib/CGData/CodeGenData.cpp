@@ -12,12 +12,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/CGData/CGDataOptionsOptInfos.h"
 #include "llvm/CGData/CodeGenDataReader.h"
 #include "llvm/CGData/OutlinedHashTreeRecord.h"
 #include "llvm/CGData/StableFunctionMapRecord.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Caching.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/WithColor.h"
 
 #define DEBUG_TYPE "cg-data"
@@ -25,20 +26,21 @@
 using namespace llvm;
 using namespace cgdata;
 
-static cl::opt<bool>
-    CodeGenDataGenerate("codegen-data-generate", cl::init(false), cl::Hidden,
-                        cl::desc("Emit CodeGen Data into custom sections"));
-static cl::opt<std::string>
-    CodeGenDataUsePath("codegen-data-use-path", cl::init(""), cl::Hidden,
-                       cl::desc("File path to where .cgdata file is read"));
+static bool getCodeGenDataGenerate(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::CGDataOptsReg,
+                           &clv2::CGD_CodeGenDataGenerate>(Ctx, false);
+}
 
-namespace llvm {
-cl::opt<bool> CodeGenDataThinLTOTwoRounds(
-    "codegen-data-thinlto-two-rounds", cl::init(false), cl::Hidden,
-    cl::desc("Enable two-round ThinLTO code generation. The first round "
-             "emits codegen data, while the second round uses the emitted "
-             "codegen data for further optimizations."));
-} // end namespace llvm
+static std::string getCodeGenDataUsePath(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::CGDataOptsReg,
+                                    &clv2::CGD_CodeGenDataUsePath>(
+      Ctx, std::string(""));
+}
+
+static bool getCodeGenDataThinLTOTwoRounds(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::CGDataOptsReg,
+                           &clv2::CGD_CodeGenDataThinLTOTwoRounds>(Ctx, false);
+}
 
 static std::string getCGDataErrString(cgdata_error Err,
                                       const std::string &ErrMsg = "") {
@@ -144,21 +146,22 @@ std::string getCodeGenDataSectionName(CGDataSectKind CGSK,
 std::unique_ptr<CodeGenData> CodeGenData::Instance = nullptr;
 std::once_flag CodeGenData::OnceFlag;
 
-CodeGenData &CodeGenData::getInstance() {
-  std::call_once(CodeGenData::OnceFlag, []() {
+CodeGenData &CodeGenData::getInstance(const clv2::OptionsContext &Ctx) {
+  std::call_once(CodeGenData::OnceFlag, [&Ctx]() {
     Instance = std::unique_ptr<CodeGenData>(new CodeGenData());
 
-    if (CodeGenDataGenerate || CodeGenDataThinLTOTwoRounds)
+    if (getCodeGenDataGenerate(Ctx) || getCodeGenDataThinLTOTwoRounds(Ctx))
       Instance->EmitCGData = true;
-    else if (!CodeGenDataUsePath.empty()) {
+    else if (!getCodeGenDataUsePath(Ctx).empty()) {
       // Initialize the global CGData if the input file name is given.
       // We do not error-out when failing to parse the input file.
       // Instead, just emit an warning message and fall back as if no CGData
       // were available.
       auto FS = vfs::getRealFileSystem();
-      auto ReaderOrErr = CodeGenDataReader::create(CodeGenDataUsePath, *FS);
+      auto ReaderOrErr = CodeGenDataReader::create(
+          getCodeGenDataUsePath(Ctx), *FS, cgDataLazyLoadingEnabled(Ctx));
       if (Error E = ReaderOrErr.takeError()) {
-        warn(std::move(E), CodeGenDataUsePath);
+        warn(std::move(E), getCodeGenDataUsePath(Ctx));
         return;
       }
       // Publish each CGData based on the data type in the header.
@@ -258,7 +261,8 @@ std::unique_ptr<Module> loadModuleForTwoRounds(BitcodeModule &OrigModule,
   return std::move(*RestoredModule);
 }
 
-Expected<stable_hash> mergeCodeGenData(ArrayRef<StringRef> ObjFiles) {
+Expected<stable_hash> mergeCodeGenData(ArrayRef<StringRef> ObjFiles,
+                                       const clv2::OptionsContext &Ctx) {
   OutlinedHashTreeRecord GlobalOutlineRecord;
   StableFunctionMapRecord GlobalStableFunctionMapRecord;
   stable_hash CombinedHash = 0;
@@ -282,10 +286,11 @@ Expected<stable_hash> mergeCodeGenData(ArrayRef<StringRef> ObjFiles) {
   GlobalStableFunctionMapRecord.finalize();
 
   if (!GlobalOutlineRecord.empty())
-    cgdata::publishOutlinedHashTree(std::move(GlobalOutlineRecord.HashTree));
+    cgdata::publishOutlinedHashTree(std::move(GlobalOutlineRecord.HashTree),
+                                    Ctx);
   if (!GlobalStableFunctionMapRecord.empty())
     cgdata::publishStableFunctionMap(
-        std::move(GlobalStableFunctionMapRecord.FunctionMap));
+        std::move(GlobalStableFunctionMapRecord.FunctionMap), Ctx);
 
   return CombinedHash;
 }

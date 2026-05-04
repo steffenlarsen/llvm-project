@@ -25,9 +25,10 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCTargetOptionsCommandFlags.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/ToolOutputFile.h"
@@ -37,53 +38,51 @@
 #include "llvm/TargetParser/SubtargetFeature.h"
 
 using namespace llvm;
+using namespace llvm::clv2;
 
-static mc::RegisterMCTargetOptionsFlags MOF;
+inline constexpr OptionInfo<std::string> TripleNameOpt{
+    "triple",
+    "Target triple to assemble for, see -version for available targets"};
 
-static cl::opt<std::string>
-    TripleName("triple", cl::desc("Target triple to assemble for, "
-                                  "see -version for available targets"));
+inline constexpr OptionInfo<std::string> MCPUOpt{
+    "mcpu", "Target a specific cpu type (-mcpu=help for details)",
+    value_desc("cpu-name")};
 
-static cl::opt<std::string>
-    MCPU("mcpu",
-         cl::desc("Target a specific cpu type (-mcpu=help for details)"),
-         cl::value_desc("cpu-name"), cl::init(""));
-
-// This is useful for variable-length instruction sets.
-static cl::opt<unsigned> InsnLimit(
+inline constexpr OptionInfo<unsigned> InsnLimitOpt{
     "insn-limit",
-    cl::desc("Limit the number of instructions to process (0 for no limit)"),
-    cl::value_desc("count"), cl::init(0));
+    "Limit the number of instructions to process (0 for no limit)",
+    value_desc("count"), Init{0u}};
 
-static cl::list<std::string>
-    MAttrs("mattr", cl::CommaSeparated,
-           cl::desc("Target specific attributes (-mattr=help for details)"),
-           cl::value_desc("a1,+a2,-a3,..."));
-// The feature string derived from -mattr's values.
-std::string FeaturesStr;
+inline constexpr ListOptionInfo<std::string> MAttrsOpt{
+    "mattr", "Target specific attributes (-mattr=help for details)",
+    CommaSeparated, value_desc("a1,+a2,-a3,...")};
 
-static cl::list<std::string>
-    FuzzerArgs("fuzzer-args", cl::Positional,
-               cl::desc("Options to pass to the fuzzer"),
-               cl::PositionalEatsArgs);
-static std::vector<char *> ModifiedArgv;
+inline constexpr ListOptionInfo<std::string> FuzzerArgsOpt{
+    "fuzzer-args", "Options to pass to the fuzzer", Positional{},
+    PositionalEatsArgs};
 
 enum OutputFileType {
   OFT_Null,
   OFT_AssemblyFile,
   OFT_ObjectFile
 };
-static cl::opt<OutputFileType>
-FileType("filetype", cl::init(OFT_AssemblyFile),
-  cl::desc("Choose an output file type:"),
-  cl::values(
-       clEnumValN(OFT_AssemblyFile, "asm",
-                  "Emit an assembly ('.s') file"),
-       clEnumValN(OFT_Null, "null",
-                  "Don't emit anything (for timing purposes)"),
-       clEnumValN(OFT_ObjectFile, "obj",
-                  "Emit a native object ('.o') file")));
+inline constexpr EnumVal<OutputFileType> FileTypeVals[] = {
+    {"asm", OFT_AssemblyFile, "Emit an assembly ('.s') file"},
+    {"null", OFT_Null, "Don't emit anything (for timing purposes)"},
+    {"obj", OFT_ObjectFile, "Emit a native object ('.o') file"},
+};
+inline constexpr auto FileTypeOpt = makeEnumOption<OutputFileType>(
+    "filetype", "Choose an output file type:", FileTypeVals,
+    Init{OFT_AssemblyFile});
 
+// Parsed values — populated after parsing.
+static std::string TripleName;
+static std::string MCPU;
+static std::vector<std::string> MAttrs;
+static std::vector<std::string> FuzzerArgs;
+static OutputFileType FileType = OFT_AssemblyFile;
+std::string FeaturesStr;
+static std::vector<char *> ModifiedArgv;
 
 class LLVMFuzzerInputBuffer : public MemoryBuffer
 {
@@ -279,7 +278,19 @@ extern "C" LLVM_ATTRIBUTE_USED int LLVMFuzzerInitialize(int *argc,
   LLVMInitializeAllTargetMCs();
   LLVMInitializeAllAsmParsers();
 
-  cl::ParseCommandLineOptions(*argc, OriginalArgv);
+  static constexpr OptionsRegistry<&TripleNameOpt, &MCPUOpt, &InsnLimitOpt,
+                                   &MAttrsOpt, &FuzzerArgsOpt, &FileTypeOpt>
+      FuzzerToolReg;
+  clv2::OptionParser P;
+  P.add<&FuzzerToolReg>();
+  RegisterAllLLVMOptions(P);
+  auto OptsCtx = P.parse(*argc, OriginalArgv, "llvm MC assembler fuzzer\n");
+  auto *Opts = OptsCtx->getViewPtr<&FuzzerToolReg>();
+  TripleName = Opts->get<&TripleNameOpt>();
+  MCPU = Opts->get<&MCPUOpt>();
+  FileType = Opts->get<&FileTypeOpt>();
+  FuzzerArgs = Opts->get<&FuzzerArgsOpt>();
+  MAttrs = Opts->get<&MAttrsOpt>();
 
   // Rebuild the argv without the arguments llvm-mc-fuzzer consumed so that
   // the driver can parse its arguments.

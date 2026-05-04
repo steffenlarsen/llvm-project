@@ -89,7 +89,8 @@ protected:
     BC = cantFail(BinaryContext::createBinaryContext(
         TheTriple, std::make_shared<orc::SymbolStringPool>(),
         ObjFile->getFileName(), TheTriple.isRISCV() ? &Features : nullptr, true,
-        DWARFContext::create(*ObjFile), {llvm::outs(), llvm::errs()}));
+        DWARFContext::create(*ObjFile), {llvm::outs(), llvm::errs()},
+        /*OptsCtx=*/nullptr));
     ASSERT_FALSE(!BC);
     BC->initializeTarget(std::unique_ptr<MCPlusBuilder>(
         createMCPlusBuilder(TheTriple.getArch(), BC->MIA.get(), BC->MII.get(),

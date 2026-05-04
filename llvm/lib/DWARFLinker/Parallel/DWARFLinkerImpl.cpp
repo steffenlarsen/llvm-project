@@ -1392,7 +1392,8 @@ void DWARFLinkerImpl::emitAppleAcceleratorSections(const Triple &TargetTriple) {
         CommonSections.getSectionDescriptor(DebugSectionKind::AppleNamespaces);
     DwarfEmitterImpl Emitter(DWARFLinker::OutputFileType::Object,
                              OutSection.OS);
-    if (Error Err = Emitter.init(TargetTriple, "__DWARF")) {
+    if (Error Err = Emitter.init(TargetTriple, "__DWARF",
+                                 GlobalData.getOptionsContext())) {
       consumeError(std::move(Err));
       return;
     }
@@ -1413,7 +1414,8 @@ void DWARFLinkerImpl::emitAppleAcceleratorSections(const Triple &TargetTriple) {
         CommonSections.getSectionDescriptor(DebugSectionKind::AppleNames);
     DwarfEmitterImpl Emitter(DWARFLinker::OutputFileType::Object,
                              OutSection.OS);
-    if (Error Err = Emitter.init(TargetTriple, "__DWARF")) {
+    if (Error Err = Emitter.init(TargetTriple, "__DWARF",
+                                 GlobalData.getOptionsContext())) {
       consumeError(std::move(Err));
       return;
     }
@@ -1434,7 +1436,8 @@ void DWARFLinkerImpl::emitAppleAcceleratorSections(const Triple &TargetTriple) {
         CommonSections.getSectionDescriptor(DebugSectionKind::AppleObjC);
     DwarfEmitterImpl Emitter(DWARFLinker::OutputFileType::Object,
                              OutSection.OS);
-    if (Error Err = Emitter.init(TargetTriple, "__DWARF")) {
+    if (Error Err = Emitter.init(TargetTriple, "__DWARF",
+                                 GlobalData.getOptionsContext())) {
       consumeError(std::move(Err));
       return;
     }
@@ -1455,7 +1458,8 @@ void DWARFLinkerImpl::emitAppleAcceleratorSections(const Triple &TargetTriple) {
         CommonSections.getSectionDescriptor(DebugSectionKind::AppleTypes);
     DwarfEmitterImpl Emitter(DWARFLinker::OutputFileType::Object,
                              OutSection.OS);
-    if (Error Err = Emitter.init(TargetTriple, "__DWARF")) {
+    if (Error Err = Emitter.init(TargetTriple, "__DWARF",
+                                 GlobalData.getOptionsContext())) {
       consumeError(std::move(Err));
       return;
     }
@@ -1515,7 +1519,8 @@ void DWARFLinkerImpl::emitDWARFv5DebugNamesSection(const Triple &TargetTriple) {
         CommonSections.getSectionDescriptor(DebugSectionKind::DebugNames);
     DwarfEmitterImpl Emitter(DWARFLinker::OutputFileType::Object,
                              OutSection.OS);
-    if (Error Err = Emitter.init(TargetTriple, "__DWARF")) {
+    if (Error Err = Emitter.init(TargetTriple, "__DWARF",
+                                 GlobalData.getOptionsContext())) {
       consumeError(std::move(Err));
       return;
     }

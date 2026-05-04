@@ -59,15 +59,18 @@
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachinePostDominators.h"
 #include "llvm/CodeGen/RegisterClassInfo.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "si-lower-control-flow"
 
-static cl::opt<bool>
-RemoveRedundantEndcf("amdgpu-remove-redundant-endcf",
-    cl::init(true), cl::ReallyHidden);
+static bool getRemoveRedundantEndcf(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_RemoveRedundantEndcf>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -788,7 +791,7 @@ bool SILowerControlFlow::run(MachineFunction &MF) {
   const GCNSubtarget &ST = MF.getSubtarget<GCNSubtarget>();
   TII = ST.getInstrInfo();
   TRI = &TII->getRegisterInfo();
-  EnableOptimizeEndCf = RemoveRedundantEndcf &&
+  EnableOptimizeEndCf = getRemoveRedundantEndcf(MF.getFunction()) &&
                         MF.getTarget().getOptLevel() > CodeGenOptLevel::None;
 
   MRI = &MF.getRegInfo();

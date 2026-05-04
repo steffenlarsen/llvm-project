@@ -1155,15 +1155,31 @@ private:
   }
 };
 
+/// Printing flags seeded from \p op's context, so that the `-mlir-print-*`
+/// command line options apply.  Prefer this to a default-constructed
+/// OpPrintingFlags: that leaves the context null, and a null context silently
+/// yields the compile-time defaults rather than the user's options.
+///
+/// Takes Operation* so it accepts every spelling a print site already has --
+/// `op`, `&op`, `x.getOperation()` -- without the caller reshaping it.
+inline OpPrintingFlags opPrintingFlags(Operation *op) {
+  // Null-tolerant on purpose: print sites reach this with expressions like
+  // region->getParentOp(), which is null for a top-level region.  A null
+  // context is already the documented "no CL options" case, so this degrades
+  // to compile-time defaults rather than faulting.
+  return OpPrintingFlags(op ? op->getContext() : nullptr);
+}
+
 inline raw_ostream &operator<<(raw_ostream &os, const Operation &op) {
-  const_cast<Operation &>(op).print(os, OpPrintingFlags().useLocalScope());
+  const_cast<Operation &>(op).print(
+      os, opPrintingFlags(const_cast<Operation *>(&op)).useLocalScope());
   return os;
 }
 
 /// A wrapper class that allows for printing an operation with a set of flags,
 /// useful to act as a "stream modifier" to customize printing an operation
 /// with a stream using the operator<< overload, e.g.:
-///   llvm::dbgs() << OpWithFlags(op, OpPrintingFlags().skipRegions());
+///   llvm::dbgs() << OpWithFlags(op, opPrintingFlags(op).skipRegions());
 /// This always prints the operation with the local scope, to avoid introducing
 /// spurious newlines in the stream.
 class OpWithFlags {

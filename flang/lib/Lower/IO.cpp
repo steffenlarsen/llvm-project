@@ -459,7 +459,8 @@ getNamelistGroup(Fortran::lower::AbstractConverter &converter,
     // Create descriptors for other cases.
     if (!IsAllocatableOrObjectPointer(&s)) {
       std::string mangleName =
-          Fortran::lower::mangle::globalNamelistDescriptorName(s);
+          Fortran::lower::mangle::globalNamelistDescriptorName(
+              builder.getContext()->getOptionsContext(), s);
       if (builder.getNamedGlobal(mangleName))
         continue;
       const auto expr = Fortran::evaluate::AsGenericExpr(s);
@@ -498,7 +499,8 @@ getNamelistGroup(Fortran::lower::AbstractConverter &converter,
       idx[1] = one;
       mlir::Value descAddr;
       if (auto desc = builder.getNamedGlobal(
-              Fortran::lower::mangle::globalNamelistDescriptorName(s))) {
+              Fortran::lower::mangle::globalNamelistDescriptorName(
+                  builder.getContext()->getOptionsContext(), s))) {
         descAddr = fir::AddrOfOp::create(builder, loc, desc.resultType(),
                                          desc.getSymbol());
       } else if (Fortran::semantics::FindCommonBlockContaining(s) &&
@@ -1768,7 +1770,7 @@ template <typename A>
 std::tuple<mlir::Value, mlir::Value, mlir::Value>
 getFormat(Fortran::lower::AbstractConverter &converter, mlir::Location loc,
           const A &stmt, mlir::Type strTy, mlir::Type lenTy,
-          Fortran ::lower::StatementContext &stmtCtx) {
+          Fortran::lower::StatementContext &stmtCtx) {
   if (stmt.format && !formatIsActuallyNamelist(*stmt.format))
     return genFormat(converter, loc, *stmt.format, strTy, lenTy, stmtCtx);
   return genFormat(converter, loc, *getIOControl<Fortran::parser::Format>(stmt),

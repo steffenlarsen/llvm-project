@@ -129,7 +129,7 @@ void InlinedFunction::print(raw_ostream &OS, const MCRegisterInfo &MRI) const {
   if (!MangledCallerName)
     return;
 
-  if (Demangle)
+  if (Opts.Demangle)
     OS << "inlined into " << demangle(MangledCallerName);
   else
     OS << "inlined into " << MangledCallerName;
@@ -164,7 +164,7 @@ void InlinedFunction::printElementLine(raw_ostream &OS,
 
   std::string CallerName = MangledCallerName;
   std::string CalleeName = Name;
-  if (Demangle) {
+  if (Opts.Demangle) {
     CallerName = demangle(MangledCallerName);
     CalleeName = demangle(Name);
   }
@@ -286,11 +286,11 @@ void LiveElementPrinter::addVariable(DWARFDie FuncDie, DWARFDie VarDie) {
 
 void LiveElementPrinter::addFunction(DWARFDie D) {
   for (const DWARFDie &Child : D.children()) {
-    if (DbgVariables != DFDisabled &&
+    if (Opts.DbgVariables != DFDisabled &&
         (Child.getTag() == dwarf::DW_TAG_variable ||
          Child.getTag() == dwarf::DW_TAG_formal_parameter)) {
       addVariable(D, Child);
-    } else if (DbgInlinedFunctions != DFDisabled &&
+    } else if (Opts.DbgInlinedFunctions != DFDisabled &&
                Child.getTag() == dwarf::DW_TAG_inlined_subroutine) {
       addInlinedFunction(D, Child);
       addFunction(Child);
@@ -302,7 +302,7 @@ void LiveElementPrinter::addFunction(DWARFDie D) {
 // Get the column number (in characters) at which the first live element
 // line should be printed.
 unsigned LiveElementPrinter::getIndentLevel() const {
-  return DbgIndent + getInstStartColumn(STI);
+  return Opts.DbgIndent + getInstStartColumn(STI);
 }
 
 // Indent to the first live-range column to the right of the currently
@@ -399,7 +399,7 @@ void LiveElementPrinter::update(object::SectionedAddress ThisAddr,
                                 object::SectionedAddress NextAddr,
                                 bool IncludeDefinedVars) {
   // Exit early if only printing function limits.
-  if (DbgInlinedFunctions == DFLimitsOnly)
+  if (Opts.DbgInlinedFunctions == DFLimitsOnly)
     return;
 
   // Free columns identified in the previous cycle.
@@ -418,7 +418,8 @@ void LiveElementPrinter::update(object::SectionedAddress ThisAddr,
     ActiveCols[ColIdx].LiveOut = LE->liveAtAddress(NextAddr);
 
     LLVM_DEBUG({
-      std::string Name = Demangle ? demangle(LE->getName()) : LE->getName();
+      std::string Name =
+          Opts.Demangle ? demangle(LE->getName()) : LE->getName();
       dbgs() << "pass 1, " << ThisAddr.Address << "-" << NextAddr.Address
              << ", " << Name << ", Col " << ColIdx
              << ": LiveIn=" << ActiveCols[ColIdx].LiveIn
@@ -491,7 +492,8 @@ void LiveElementPrinter::update(object::SectionedAddress ThisAddr,
       // Assign or create a column.
       unsigned ColIdx = getOrCreateColumn(ElementIdx);
       LLVM_DEBUG({
-        std::string Name = Demangle ? demangle(LE->getName()) : LE->getName();
+        std::string Name =
+            Opts.Demangle ? demangle(LE->getName()) : LE->getName();
         dbgs() << "pass 2, " << ThisAddr.Address << "-" << NextAddr.Address
                << ", " << Name << ", Col " << ColIdx << ": LiveIn=" << LiveIn
                << ", LiveOut=" << LiveOut << "\n";
@@ -518,7 +520,8 @@ enum class LineChar {
   LabelHoriz,
 };
 const char *LiveElementPrinter::getLineChar(LineChar C) const {
-  bool IsASCII = DbgVariables == DFASCII || DbgInlinedFunctions == DFASCII;
+  bool IsASCII =
+      Opts.DbgVariables == DFASCII || Opts.DbgInlinedFunctions == DFASCII;
   switch (C) {
   case LineChar::RangeStart:
     return IsASCII ? "^" : (const char *)u8"\u2548";
@@ -602,7 +605,8 @@ void LiveElementPrinter::printBetweenInsts(formatted_raw_ostream &OS,
                                                   : LineChar::LabelCornerNew)
          << getLineChar(LineChar::LabelHoriz) << " ";
 
-      std::string Name = Demangle ? demangle(LE->getName()) : LE->getName();
+      std::string Name =
+          Opts.Demangle ? demangle(LE->getName()) : LE->getName();
       WithColor(OS, raw_ostream::GREEN) << Name;
       OS << " = ";
       {
@@ -662,7 +666,7 @@ void LiveElementPrinter::printBoundaryLine(formatted_raw_ostream &OS,
                                            bool IsEnd) {
   // Only print the start/end line for inlined functions if DFLimitsOnly is
   // enabled.
-  if (DbgInlinedFunctions != DFLimitsOnly)
+  if (Opts.DbgInlinedFunctions != DFLimitsOnly)
     return;
 
   // Select the appropriate map based on whether we are checking the start
@@ -762,19 +766,18 @@ void SourcePrinter::printSourceLine(formatted_raw_ostream &OS,
       LineInfo.FileName != DILineInfo::BadString)
     LineInfo.FileName = applySubstitutePaths(LineInfo.FileName);
 
-  if (!objdump::Prefix.empty() &&
-      sys::path::is_absolute_gnu(LineInfo.FileName)) {
+  if (!Opts.Prefix.empty() && sys::path::is_absolute_gnu(LineInfo.FileName)) {
     // FileName has at least one character since is_absolute_gnu is false for
     // an empty string.
     assert(!LineInfo.FileName.empty());
-    if (PrefixStrip > 0) {
+    if (Opts.PrefixStrip > 0) {
       uint32_t Level = 0;
       auto StrippedNameStart = LineInfo.FileName.begin();
 
       // Path.h iterator skips extra separators. Therefore it cannot be used
       // here to keep compatibility with GNU Objdump.
       for (auto Pos = StrippedNameStart + 1, End = LineInfo.FileName.end();
-           Pos != End && Level < PrefixStrip; ++Pos) {
+           Pos != End && Level < Opts.PrefixStrip; ++Pos) {
         if (sys::path::is_separator(*Pos)) {
           StrippedNameStart = Pos;
           ++Level;
@@ -786,14 +789,14 @@ void SourcePrinter::printSourceLine(formatted_raw_ostream &OS,
     }
 
     SmallString<128> FilePath;
-    sys::path::append(FilePath, Prefix, LineInfo.FileName);
+    sys::path::append(FilePath, Opts.Prefix, LineInfo.FileName);
 
     LineInfo.FileName = std::string(FilePath);
   }
 
-  if (PrintLines)
+  if (Opts.PrintLines)
     printLines(OS, Address, LineInfo, Delimiter, LEP);
-  if (PrintSource)
+  if (Opts.PrintSource)
     printSources(OS, LineInfo, ObjectFilename, Delimiter, LEP);
   OldLineInfo = std::move(LineInfo);
 }
@@ -870,7 +873,7 @@ SourcePrinter::SourcePrinter(const object::ObjectFile *Obj,
   symbolize::LLVMSymbolizer::Options SymbolizerOpts;
   SymbolizerOpts.PrintFunctions =
       DILineInfoSpecifier::FunctionNameKind::LinkageName;
-  SymbolizerOpts.Demangle = Demangle;
+  SymbolizerOpts.Demangle = Opts.Demangle;
   SymbolizerOpts.DefaultArch = std::string(DefaultArch);
   Symbolizer.reset(new symbolize::LLVMSymbolizer(SymbolizerOpts));
 }

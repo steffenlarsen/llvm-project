@@ -12,6 +12,7 @@
 
 #include "llvm/Analysis/Loads.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/AssumeBundleQueries.h"
 #include "llvm/Analysis/LoopAccessAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -21,9 +22,12 @@
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/GetElementPtrTypeIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -543,11 +547,9 @@ bool llvm::isSafeToLoadUnconditionally(Value *V, Type *Ty, Align Alignment,
 /// threading in part by eliminating partially redundant loads.
 /// At that point, the value of MaxInstsToScan was already set to '6'
 /// without documented explanation.
-cl::opt<unsigned>
-llvm::DefMaxInstsToScan("available-load-scan-limit", cl::init(6), cl::Hidden,
-  cl::desc("Use this to specify the default maximum number of instructions "
-           "to scan backward from a given instruction, when searching for "
-           "available loaded value"));
+unsigned llvm::getDefMaxInstsToScan(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_DefMaxInstsToScan>(Ctx);
+}
 
 Value *llvm::FindAvailableLoadedValue(LoadInst *Load, BasicBlock *ScanBB,
                                       BasicBlock::iterator &ScanFrom,

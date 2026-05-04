@@ -17,15 +17,12 @@
 #define BOLT_CORE_PARALLEL_UTILITIES_H
 
 #include "bolt/Core/MCPlusBuilder.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ThreadPool.h"
 
 using namespace llvm;
 
 namespace opts {
-extern cl::opt<unsigned> ThreadCount;
-extern cl::opt<bool> NoThreads;
-extern cl::opt<unsigned> TaskCount;
+extern unsigned TaskCount;
 } // namespace opts
 
 namespace llvm {
@@ -50,8 +47,8 @@ enum SchedulingPolicy {
 };
 
 /// Return the managed thread pool and initialize it if not initialized.
-ThreadPoolInterface &
-getThreadPool(const unsigned ThreadsCount = opts::ThreadCount);
+/// If ThreadsCount is 0, defaults to hardware_concurrency().
+ThreadPoolInterface &getThreadPool(const unsigned ThreadsCount = 0);
 
 /// Perform the work on each BinaryFunction except those that are accepted
 /// by SkipPredicate, scheduling heuristic is based on SchedPolicy.

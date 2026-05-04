@@ -44,7 +44,7 @@ parseModuleRaw(llvm::StringRef Source, llvm::StringRef Name, LLVMContext &Ctx) {
 
 static ThreadSafeModule parseModule(llvm::StringRef Source,
                                     llvm::StringRef Name) {
-  auto Ctx = std::make_unique<LLVMContext>();
+  auto Ctx = std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
   auto M = parseModuleRaw(Source, Name, *Ctx);
   return ThreadSafeModule(std::move(M), std::move(Ctx));
 }
@@ -52,7 +52,7 @@ static ThreadSafeModule parseModule(llvm::StringRef Source,
 TEST(ThreadSafeModuleTest, ContextWhollyOwnedByOneModule) {
   // Test that ownership of a context can be transferred to a single
   // ThreadSafeModule.
-  auto Ctx = std::make_unique<LLVMContext>();
+  auto Ctx = std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
   auto M = std::make_unique<Module>("M", *Ctx);
   ThreadSafeModule TSM(std::move(M), std::move(Ctx));
 }
@@ -60,7 +60,7 @@ TEST(ThreadSafeModuleTest, ContextWhollyOwnedByOneModule) {
 TEST(ThreadSafeModuleTest, ContextOwnershipSharedByTwoModules) {
   // Test that ownership of a context can be shared between more than one
   // ThreadSafeModule.
-  auto Ctx = std::make_unique<LLVMContext>();
+  auto Ctx = std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
 
   auto M1 = std::make_unique<Module>("M1", *Ctx);
   auto M2 = std::make_unique<Module>("M2", *Ctx);
@@ -73,7 +73,8 @@ TEST(ThreadSafeModuleTest, ContextOwnershipSharedByTwoModules) {
 TEST(ThreadSafeModuleTest, ContextOwnershipSharedWithClient) {
   // Test that ownership of a context can be shared with a client-held
   // ThreadSafeContext so that it can be re-used for new modules.
-  ThreadSafeContext TSCtx(std::make_unique<LLVMContext>());
+  ThreadSafeContext TSCtx(
+      std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext()));
 
   {
     // Create and destroy a module.
@@ -92,7 +93,8 @@ TEST(ThreadSafeModuleTest, ThreadSafeModuleMoveAssignment) {
   // Move assignment needs to move the module before the context (opposite
   // to the field order) to ensure that overwriting with an empty
   // ThreadSafeModule does not destroy the context early.
-  ThreadSafeContext TSCtx(std::make_unique<LLVMContext>());
+  ThreadSafeContext TSCtx(
+      std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext()));
   auto M = TSCtx.withContextDo(
       [](LLVMContext *Ctx) { return std::make_unique<Module>("M", *Ctx); });
   ThreadSafeModule TSM(std::move(M), std::move(TSCtx));
@@ -103,7 +105,7 @@ TEST(ThreadSafeModuleTest, WithContextDoPreservesContext) {
   // Test that withContextDo passes through the LLVMContext that was used
   // to create the ThreadSafeContext.
 
-  auto Ctx = std::make_unique<LLVMContext>();
+  auto Ctx = std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
   LLVMContext *OriginalCtx = Ctx.get();
   ThreadSafeContext TSCtx(std::move(Ctx));
   TSCtx.withContextDo(
@@ -112,7 +114,7 @@ TEST(ThreadSafeModuleTest, WithContextDoPreservesContext) {
 
 TEST(ThreadSafeModuleTest, WithModuleDo) {
   // Test non-const version of withModuleDo.
-  auto Ctx = std::make_unique<LLVMContext>();
+  auto Ctx = std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
   auto M = std::make_unique<Module>("M", *Ctx);
   ThreadSafeModule TSM(std::move(M), std::move(Ctx));
   TSM.withModuleDo([](Module &M) {});
@@ -120,7 +122,7 @@ TEST(ThreadSafeModuleTest, WithModuleDo) {
 
 TEST(ThreadSafeModuleTest, WithModuleDoConst) {
   // Test const version of withModuleDo.
-  auto Ctx = std::make_unique<LLVMContext>();
+  auto Ctx = std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
   auto M = std::make_unique<Module>("M", *Ctx);
   const ThreadSafeModule TSM(std::move(M), std::move(Ctx));
   TSM.withModuleDo([](const Module &M) {});
@@ -128,16 +130,17 @@ TEST(ThreadSafeModuleTest, WithModuleDoConst) {
 
 TEST(ThreadSafeModuleTest, ConsumingModuleDo) {
   // Test consumingModuleDo.
-  auto Ctx = std::make_unique<LLVMContext>();
+  auto Ctx = std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
   auto M = std::make_unique<Module>("M", *Ctx);
   ThreadSafeModule TSM(std::move(M), std::move(Ctx));
   TSM.consumingModuleDo([](std::unique_ptr<Module> M) {});
 }
 
 TEST(ThreadSafeModuleTest, CloneExternalModuleToNewContext) {
-  auto Ctx = std::make_unique<LLVMContext>();
+  auto Ctx = std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
   auto M = parseModuleRaw(FooSrc, "foo.ll", *Ctx);
-  auto TSCtx = ThreadSafeContext(std::make_unique<LLVMContext>());
+  auto TSCtx = ThreadSafeContext(
+      std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext()));
   auto TSM = cloneExternalModuleToContext(*M, TSCtx);
   TSM.withModuleDo([&](Module &NewM) {
     EXPECT_NE(&NewM.getContext(), Ctx.get());
@@ -162,7 +165,8 @@ TEST(ThreadSafeModuleTest, CloneToNewContext) {
 TEST(ObjectFormatsTest, CloneToContext) {
   auto TSM1 = parseModule(FooSrc, "foo.ll");
 
-  auto TSCtx = ThreadSafeContext(std::make_unique<LLVMContext>());
+  auto TSCtx = ThreadSafeContext(
+      std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext()));
   auto TSM2 = cloneToContext(TSM1, TSCtx);
 
   TSM2.withModuleDo([&](Module &M) {

@@ -12,6 +12,7 @@
 
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/ADT/iterator_range.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
@@ -26,25 +27,31 @@
 #include "llvm/IR/Function.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 
 using namespace llvm;
 
-static cl::opt<bool> EnableSubRegLiveness("enable-subreg-liveness", cl::Hidden,
-  cl::init(true), cl::desc("Enable subregister liveness tracking."));
+static bool getEnableSubregLiveness(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableSubregLiveness>(Ctx);
+}
 
 // Pin the vtable to this file.
 void MachineRegisterInfo::Delegate::anchor() {}
 
 MachineRegisterInfo::MachineRegisterInfo(MachineFunction *MF)
     : MF(MF),
-      TracksSubRegLiveness(EnableSubRegLiveness.getNumOccurrences()
-                               ? EnableSubRegLiveness
-                               : MF->getSubtarget().enableSubRegLiveness()) {
+      TracksSubRegLiveness(
+          (false || clv2::wasOptSpecified<&clv2::CGPassMachine2Reg,
+                                          &clv2::CGPASS_EnableSubregLiveness>(
+                        MF->getFunction().getContext().getOptionsContext()))
+              ? getEnableSubregLiveness(
+                    MF->getFunction().getContext().getOptionsContext())
+              : MF->getSubtarget().enableSubRegLiveness()) {
   unsigned NumRegs = getTargetRegisterInfo()->getNumRegs();
   VRegInfo.reserve(256);
   UsedPhysRegMask.resize(NumRegs);

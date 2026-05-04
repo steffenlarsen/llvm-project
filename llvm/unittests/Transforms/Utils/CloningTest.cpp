@@ -40,8 +40,7 @@ class CloneInstruction : public ::testing::Test {
 protected:
   void SetUp() override { V = nullptr; }
 
-  template <typename T>
-  T *clone(T *V1) {
+  template <typename T> T *clone(T *V1) {
     Value *V2 = V1->clone();
     Orig.insert(V1);
     Clones.insert(V2);
@@ -66,7 +65,7 @@ protected:
   SmallPtrSet<Value *, 4> Orig;   // Erase on exit
   SmallPtrSet<Value *, 4> Clones; // Erase in eraseClones
 
-  LLVMContext context;
+  LLVMContext context{llvm::clv2::defaultOptionsContext()};
   Value *V;
 };
 
@@ -180,7 +179,7 @@ TEST_F(CloneInstruction, Attributes) {
   A->addAttr(
       Attribute::getWithCaptureInfo(A->getContext(), CaptureInfo::none()));
 
-  SmallVector<ReturnInst*, 4> Returns;
+  SmallVector<ReturnInst *, 4> Returns;
   ValueToValueMapTy VMap;
   VMap[A] = UndefValue::get(A->getType());
 
@@ -205,7 +204,7 @@ TEST_F(CloneInstruction, CallingConvention) {
 
   Function *F2 = Function::Create(FT1, Function::ExternalLinkage);
 
-  SmallVector<ReturnInst*, 4> Returns;
+  SmallVector<ReturnInst *, 4> Returns;
   ValueToValueMapTy VMap;
   VMap[&*F1->arg_begin()] = &*F2->arg_begin();
 
@@ -390,11 +389,10 @@ static std::unique_ptr<Module> parseIR(LLVMContext &C, const char *IR) {
 
 TEST(CloneLoop, CloneLoopNest) {
   // Parse the module.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
-  std::unique_ptr<Module> M = parseIR(
-    Context,
-    R"(define void @foo(ptr %A, i32 %ub) {
+  std::unique_ptr<Module> M = parseIR(Context,
+                                      R"(define void @foo(ptr %A, i32 %ub) {
 entry:
   %guardcmp = icmp slt i32 0, %ub
   br i1 %guardcmp, label %for.outer.preheader, label %for.end
@@ -423,8 +421,7 @@ for.outer.exit:
   br label %for.end
 for.end:
   ret void
-})"
-    );
+})");
 
   runWithLoopInfoAndDominatorTree(
       *M, "foo", [&](Function &F, LoopInfo &LI, DominatorTree &DT) {
@@ -464,12 +461,10 @@ protected:
 
   void TearDown() override { delete Finder; }
 
-  void SetupModule() {
-    M = new Module("", C);
-  }
+  void SetupModule() { M = new Module("", C); }
 
   void CreateOldFunc() {
-    FunctionType* FuncType = FunctionType::get(Type::getVoidTy(C), false);
+    FunctionType *FuncType = FunctionType::get(Type::getVoidTy(C), false);
     OldFunc = Function::Create(FuncType, GlobalValue::PrivateLinkage, "f", M);
     CreateOldFunctionBodyAndDI();
   }
@@ -481,8 +476,7 @@ protected:
     // Function DI
     auto *File = DBuilder.createFile("filename.c", "/file/dir/");
     DITypeArray ParamTypes = DBuilder.getOrCreateTypeArray({});
-    DISubroutineType *FuncType =
-        DBuilder.createSubroutineType(ParamTypes);
+    DISubroutineType *FuncType = DBuilder.createSubroutineType(ParamTypes);
     auto *CU = DBuilder.createCompileUnit(
         DISourceLanguageName(dwarf::DW_LANG_C99),
         DBuilder.createFile("filename.c", "/file/dir"), "CloneFunc", false, "",
@@ -494,15 +488,15 @@ protected:
     OldFunc->setSubprogram(Subprogram);
 
     // Function body
-    BasicBlock* Entry = BasicBlock::Create(C, "", OldFunc);
+    BasicBlock *Entry = BasicBlock::Create(C, "", OldFunc);
     IBuilder.SetInsertPoint(Entry);
     DebugLoc Loc = DILocation::get(Subprogram->getContext(), 3, 2, Subprogram);
     IBuilder.SetCurrentDebugLocation(Loc);
-    AllocaInst* Alloca = IBuilder.CreateAlloca(IntegerType::getInt32Ty(C));
+    AllocaInst *Alloca = IBuilder.CreateAlloca(IntegerType::getInt32Ty(C));
     IBuilder.SetCurrentDebugLocation(
         DILocation::get(Subprogram->getContext(), 4, 2, Subprogram));
-    Value* AllocaContent = IBuilder.getInt32(1);
-    Instruction* Store = IBuilder.CreateStore(AllocaContent, Alloca);
+    Value *AllocaContent = IBuilder.getInt32(1);
+    Instruction *Store = IBuilder.CreateStore(AllocaContent, Alloca);
     IBuilder.SetCurrentDebugLocation(
         DILocation::get(Subprogram->getContext(), 5, 2, Subprogram));
 
@@ -524,8 +518,8 @@ protected:
     auto *InlinedSP = DBuilder.createFunction(
         CU, "inlined", "inlined", File, 8, FuncType, 9, DINode::FlagZero,
         DISubprogram::SPFlagLocalToUnit | DISubprogram::SPFlagDefinition);
-    auto *InlinedVar =
-        DBuilder.createAutoVariable(InlinedSP, "inlined", File, 5, StructType, true);
+    auto *InlinedVar = DBuilder.createAutoVariable(InlinedSP, "inlined", File,
+                                                   5, StructType, true);
     auto *Scope = DBuilder.createLexicalBlock(
         DBuilder.createLexicalBlockFile(InlinedSP, File), File, 1, 1);
     auto InlinedDL = DILocation::get(
@@ -557,17 +551,15 @@ protected:
     Finder->processModule(*M);
   }
 
-  LLVMContext C;
-  Function* OldFunc;
-  Function* NewFunc;
-  Module* M;
-  DebugInfoFinder* Finder;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  Function *OldFunc;
+  Function *NewFunc;
+  Module *M;
+  DebugInfoFinder *Finder;
 };
 
 // Test that a new, distinct function was created.
-TEST_F(CloneFunc, NewFunctionCreated) {
-  EXPECT_NE(OldFunc, NewFunc);
-}
+TEST_F(CloneFunc, NewFunctionCreated) { EXPECT_NE(OldFunc, NewFunc); }
 
 // Test that a new subprogram entry was added and is pointing to the new
 // function, while the original subprogram still points to the old one.
@@ -587,14 +579,14 @@ TEST_F(CloneFunc, InstructionOwnership) {
   inst_iterator NewIter = inst_begin(NewFunc);
   inst_iterator NewEnd = inst_end(NewFunc);
   while (OldIter != OldEnd && NewIter != NewEnd) {
-    Instruction& OldI = *OldIter;
-    Instruction& NewI = *NewIter;
+    Instruction &OldI = *OldIter;
+    Instruction &NewI = *NewIter;
     EXPECT_NE(&OldI, &NewI);
 
     EXPECT_EQ(OldI.hasMetadata(), NewI.hasMetadata());
     if (OldI.hasMetadata()) {
-      const DebugLoc& OldDL = OldI.getDebugLoc();
-      const DebugLoc& NewDL = NewI.getDebugLoc();
+      const DebugLoc &OldDL = OldI.getDebugLoc();
+      const DebugLoc &NewDL = NewI.getDebugLoc();
 
       // Verify that the debug location data is the same
       EXPECT_EQ(OldDL.getLine(), NewDL.getLine());
@@ -624,18 +616,20 @@ TEST_F(CloneFunc, DebugIntrinsics) {
   inst_iterator NewIter = inst_begin(NewFunc);
   inst_iterator NewEnd = inst_end(NewFunc);
   while (OldIter != OldEnd && NewIter != NewEnd) {
-    Instruction& OldI = *OldIter;
-    Instruction& NewI = *NewIter;
-    if (DbgDeclareInst* OldIntrin = dyn_cast<DbgDeclareInst>(&OldI)) {
-      DbgDeclareInst* NewIntrin = dyn_cast<DbgDeclareInst>(&NewI);
+    Instruction &OldI = *OldIter;
+    Instruction &NewI = *NewIter;
+    if (DbgDeclareInst *OldIntrin = dyn_cast<DbgDeclareInst>(&OldI)) {
+      DbgDeclareInst *NewIntrin = dyn_cast<DbgDeclareInst>(&NewI);
       EXPECT_TRUE(NewIntrin);
 
       // Old address must belong to the old function
-      EXPECT_EQ(OldFunc, cast<AllocaInst>(OldIntrin->getAddress())->
-                         getParent()->getParent());
+      EXPECT_EQ(
+          OldFunc,
+          cast<AllocaInst>(OldIntrin->getAddress())->getParent()->getParent());
       // New address must belong to the new function
-      EXPECT_EQ(NewFunc, cast<AllocaInst>(NewIntrin->getAddress())->
-                         getParent()->getParent());
+      EXPECT_EQ(
+          NewFunc,
+          cast<AllocaInst>(NewIntrin->getAddress())->getParent()->getParent());
 
       if (OldIntrin->getDebugLoc()->getInlinedAt()) {
         // Inlined variable should refer to the same DILocalVariable as in the
@@ -649,8 +643,8 @@ TEST_F(CloneFunc, DebugIntrinsics) {
         EXPECT_EQ(NewFunc->getSubprogram(),
                   cast<DISubprogram>(NewIntrin->getVariable()->getScope()));
       }
-    } else if (DbgValueInst* OldIntrin = dyn_cast<DbgValueInst>(&OldI)) {
-      DbgValueInst* NewIntrin = dyn_cast<DbgValueInst>(&NewI);
+    } else if (DbgValueInst *OldIntrin = dyn_cast<DbgValueInst>(&OldI)) {
+      DbgValueInst *NewIntrin = dyn_cast<DbgValueInst>(&NewI);
       EXPECT_TRUE(NewIntrin);
 
       if (!OldIntrin->getDebugLoc()->getInlinedAt()) {
@@ -668,8 +662,8 @@ TEST_F(CloneFunc, DebugIntrinsics) {
   }
 }
 
-static int GetDICompileUnitCount(const Module& M) {
-  if (const auto* LLVM_DBG_CU = M.getNamedMetadata("llvm.dbg.cu")) {
+static int GetDICompileUnitCount(const Module &M) {
+  if (const auto *LLVM_DBG_CU = M.getNamedMetadata("llvm.dbg.cu")) {
     return LLVM_DBG_CU->getNumOperands();
   }
   return 0;
@@ -705,7 +699,7 @@ TEST(CloneFunction, CloneEmptyFunction) {
     declare void @bar()
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
 
   auto ImplModule = parseAssemblyString(ImplAssembly, Error, Context);
@@ -737,7 +731,7 @@ TEST(CloneFunction, CloneFunctionWithInalloca) {
     declare void @bar()
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
 
   auto ImplModule = parseAssemblyString(ImplAssembly, Error, Context);
@@ -789,7 +783,7 @@ TEST(CloneFunction, CloneFunctionWithSubprograms) {
     !9 = !{null}
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
 
   auto ImplModule = parseAssemblyString(ImplAssembly, Error, Context);
@@ -857,7 +851,7 @@ TEST(CloneFunction, CloneFunctionWithRetainedNodes) {
     !34 = distinct !DIGlobalVariable(name: "global_var", scope: !3, file: !1, line: 5, type: !22, isLocal: true, isDefinition: true)
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
 
   auto ImplModule = parseAssemblyString(ImplAssembly, Error, Context);
@@ -984,7 +978,7 @@ TEST(CloneFunction, CloneFunctionWithInlinedSubprograms) {
     !10 = !{null}
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
 
   auto ImplModule = parseAssemblyString(ImplAssembly, Error, Context);
@@ -1035,27 +1029,27 @@ TEST(CloneFunction, CloneFunctionToDifferentModule) {
     declare void @foo()
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
 
   auto ImplModule = parseAssemblyString(ImplAssembly, Error, Context);
   EXPECT_TRUE(ImplModule != nullptr);
   // DICompileUnits: !2, !6. Only !2 is reachable from @foo().
   EXPECT_TRUE(GetDICompileUnitCount(*ImplModule) == 2);
-  auto* ImplFunction = ImplModule->getFunction("foo");
+  auto *ImplFunction = ImplModule->getFunction("foo");
   EXPECT_TRUE(ImplFunction != nullptr);
 
   auto DeclModule = parseAssemblyString(DeclAssembly, Error, Context);
   EXPECT_TRUE(DeclModule != nullptr);
   // No DICompileUnits defined here.
   EXPECT_TRUE(GetDICompileUnitCount(*DeclModule) == 0);
-  auto* DeclFunction = DeclModule->getFunction("foo");
+  auto *DeclFunction = DeclModule->getFunction("foo");
   EXPECT_TRUE(DeclFunction != nullptr);
 
   ValueToValueMapTy VMap;
   VMap[ImplFunction] = DeclFunction;
   // No args to map
-  SmallVector<ReturnInst*, 8> Returns;
+  SmallVector<ReturnInst *, 8> Returns;
   CloneFunctionInto(DeclFunction, ImplFunction, VMap,
                     CloneFunctionChangeType::DifferentModule, Returns);
 
@@ -1176,7 +1170,7 @@ protected:
 
   void CreateNewModule() { NewM = llvm::CloneModule(*OldM).release(); }
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module *OldM;
   Module *NewM;
 };
@@ -1297,7 +1291,7 @@ TEST_F(CloneModule, IFunc) {
 }
 
 TEST_F(CloneModule, CloneDbgLabel) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M = parseIR(Context,
                                       R"M(
@@ -1334,7 +1328,7 @@ declare i64 @foo(i32 noundef) local_unnamed_addr
 }
 
 TEST_F(CloneInstruction, cloneKeyInstructions) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M = parseIR(Context, R"(
     define void @test(ptr align 4 %dst) !dbg !3 {

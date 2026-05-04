@@ -14,6 +14,7 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/CycleAnalysis.h"
 #include "llvm/Analysis/PostDominators.h"
@@ -37,8 +38,9 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <cstdint>
@@ -48,14 +50,17 @@ using namespace llvm;
 
 #define DEBUG_TYPE "branch-prob"
 
-static cl::opt<bool> PrintBranchProb(
-    "print-bpi", cl::init(false), cl::Hidden,
-    cl::desc("Print the branch probability info."));
+static bool PrintBranchProb = false;
 
-static cl::opt<std::string> PrintBranchProbFuncName(
-    "print-bpi-func-name", cl::Hidden,
-    cl::desc("The option to specify the name of the function "
-             "whose branch probability info is printed."));
+static bool getPrintBranchProb(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_PrintBranchProb>(
+      F.getContext().getOptionsContext());
+}
+
+static std::string getPrintBranchProbFuncName(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_PrintBranchProbFuncName>(
+      F.getContext().getOptionsContext());
+}
 
 INITIALIZE_PASS_BEGIN(BranchProbabilityInfoWrapperPass, "branch-prob",
                       "Branch Probability Analysis", false, true)
@@ -1201,8 +1206,8 @@ void BranchProbabilityInfo::calculate(const Function &F,
   EdgeStarts.clear();
   BPIConstruction(*this).calculate(F, CycleI, TLI, DT, PDT);
 
-  if (PrintBranchProb && (PrintBranchProbFuncName.empty() ||
-                          F.getName() == PrintBranchProbFuncName)) {
+  if (getPrintBranchProb(F) && (getPrintBranchProbFuncName(F).empty() ||
+                                F.getName() == getPrintBranchProbFuncName(F))) {
     print(dbgs());
   }
 }

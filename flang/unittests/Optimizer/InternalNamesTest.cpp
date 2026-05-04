@@ -140,9 +140,10 @@ TEST(InternalNamesTest, doVariableTest) {
 }
 
 TEST(InternalNamesTest, doProgramEntry) {
-  llvm::StringRef actual = NameUniquer::doProgramEntry();
+  std::string actual =
+      NameUniquer::doProgramEntry(llvm::clv2::defaultOptionsContext());
   std::string expectedMangledName = "_QQmain";
-  ASSERT_EQ(actual.str(), expectedMangledName);
+  ASSERT_EQ(actual, expectedMangledName);
 }
 
 TEST(InternalNamesTest, doNamelistGroup) {

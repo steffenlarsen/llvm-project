@@ -16,15 +16,18 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/VectorUtils.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include <optional>
 
@@ -42,21 +45,18 @@ using VPTransform = TargetTransformInfo::VPLegalization::VPTransform;
 #define VPINTERNAL_CASE(X) "|" #X
 
 // Override options.
-static cl::opt<std::string> EVLTransformOverride(
-    "expandvp-override-evl-transform", cl::init(""), cl::Hidden,
-    cl::desc("Options: <empty>" VPINTERNAL_VPLEGAL_CASES
-             ". If non-empty, ignore "
-             "TargetTransformInfo and "
-             "always use this transformation for the %evl parameter (Used in "
-             "testing)."));
 
-static cl::opt<std::string> MaskTransformOverride(
-    "expandvp-override-mask-transform", cl::init(""), cl::Hidden,
-    cl::desc("Options: <empty>" VPINTERNAL_VPLEGAL_CASES
-             ". If non-empty, Ignore "
-             "TargetTransformInfo and "
-             "always use this transformation for the %mask parameter (Used in "
-             "testing)."));
+static std::string
+getExpandvpOverrideEvlTransform(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ExpandvpOverrideEvlTransform>(
+      Ctx);
+}
+
+static std::string
+getExpandvpOverrideMaskTransform(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ExpandvpOverrideMaskTransform>(
+      Ctx);
+}
 
 #undef VPINTERNAL_CASE
 #define VPINTERNAL_CASE(X) .Case(#X, VPLegalization::X)
@@ -68,8 +68,15 @@ static VPTransform parseOverrideOption(const std::string &TextOpt) {
 #undef VPINTERNAL_VPLEGAL_CASES
 
 // Whether any override options are set.
-static bool anyExpandVPOverridesSet() {
-  return !EVLTransformOverride.empty() || !MaskTransformOverride.empty();
+static bool anyExpandVPOverridesSet(const Function *F = nullptr) {
+  return !(F ? getExpandvpOverrideEvlTransform(
+                   F->getContext().getOptionsContext())
+             : std::string())
+              .empty() ||
+         !(F ? getExpandvpOverrideMaskTransform(
+                   F->getContext().getOptionsContext())
+             : std::string())
+              .empty();
 }
 
 #define DEBUG_TYPE "expandvp"
@@ -182,8 +189,8 @@ struct CachingVPExpander {
   bool UsingTTIOverrides;
 
 public:
-  CachingVPExpander(const TargetTransformInfo &TTI)
-      : TTI(TTI), UsingTTIOverrides(anyExpandVPOverridesSet()) {}
+  CachingVPExpander(const TargetTransformInfo &TTI, const Function *F = nullptr)
+      : TTI(TTI), UsingTTIOverrides(anyExpandVPOverridesSet(F)) {}
 
   /// Expand llvm.vp.* intrinsics as requested by \p TTI.
   /// Returns the details of the expansion.
@@ -517,8 +524,11 @@ CachingVPExpander::getVPLegalizationStrategy(const VPIntrinsic &VPI) const {
 
   // Overrides set - we are in testing, the following does not need to be
   // efficient.
-  VPStrat.EVLParamStrategy = parseOverrideOption(EVLTransformOverride);
-  VPStrat.OpStrategy = parseOverrideOption(MaskTransformOverride);
+  VPStrat.EVLParamStrategy =
+      parseOverrideOption(getExpandvpOverrideEvlTransform(
+          VPI.getFunction()->getContext().getOptionsContext()));
+  VPStrat.OpStrategy = parseOverrideOption(getExpandvpOverrideMaskTransform(
+      VPI.getFunction()->getContext().getOptionsContext()));
   return VPStrat;
 }
 
@@ -566,5 +576,5 @@ CachingVPExpander::expandVectorPredication(VPIntrinsic &VPI) {
 VPExpansionDetails
 llvm::expandVectorPredicationIntrinsic(VPIntrinsic &VPI,
                                        const TargetTransformInfo &TTI) {
-  return CachingVPExpander(TTI).expandVectorPredication(VPI);
+  return CachingVPExpander(TTI, VPI.getFunction()).expandVectorPredication(VPI);
 }

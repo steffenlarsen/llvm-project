@@ -24,16 +24,15 @@
 #include "llvm/IR/Value.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <algorithm>
 #include <cstdint>
 #include <iterator>
 
 using namespace llvm;
 
-static cl::opt<unsigned> ExtractCutoff("extract-cutoff", cl::init(~0U),
-  cl::Hidden, cl::desc("Cutoff for generating \"extract\""
-  " instructions"));
+static unsigned ExtractCutoff = ~0U;
 
 // This prevents generating extract instructions that have the offset of 0.
 // One of the reasons for "extract" is to put a sequence of bits in a regis-
@@ -41,8 +40,22 @@ static cl::opt<unsigned> ExtractCutoff("extract-cutoff", cl::init(~0U),
 // "insert"). If the bits are already at offset 0, it is better not to gene-
 // rate "extract", since logical bit operations can be merged into compound
 // instructions (as opposed to "extract").
-static cl::opt<bool> NoSR0("extract-nosr0", cl::init(true), cl::Hidden,
-  cl::desc("No extract instruction with offset 0"));
+static bool NoSR0 = true;
+
+static unsigned getExtractCutoff(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_ExtractCutoff>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getExtractCutoffWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::HexagonOptsReg, &clv2::HEX_ExtractCutoff>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getNoSR0(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_NoSR0>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -110,7 +123,7 @@ bool HexagonGenExtract::convert(Instruction *In) {
     CSR = ConstantInt::get(Type::getInt32Ty(Ctx), 0);
     Match = match(In, m_And(m_Shl(m_Value(BF), m_ConstantInt(CSL)),
                       m_ConstantInt(CM)));
-    if (Match && NoSR0)
+    if (Match && getNoSR0(*In->getFunction()))
       return false;
   }
   if (!Match) {
@@ -216,8 +229,9 @@ bool HexagonGenExtract::visitBlock(BasicBlock *B) {
     Changed |= visitBlock(DTN->getBlock());
 
   // Allow limiting the number of generated extracts for debugging purposes.
-  bool HasCutoff = ExtractCutoff.getPosition();
-  unsigned Cutoff = ExtractCutoff;
+  const Function &F = *B->getParent();
+  bool HasCutoff = getExtractCutoffWasSpecified(F);
+  unsigned Cutoff = getExtractCutoff(F);
 
   BasicBlock::iterator I = std::prev(B->end()), NextI, Begin = B->begin();
   while (true) {

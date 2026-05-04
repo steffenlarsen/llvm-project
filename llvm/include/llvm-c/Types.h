@@ -175,6 +175,11 @@ typedef struct LLVMOpaqueBinary *LLVMBinaryRef;
 typedef struct LLVMOpaqueDbgRecord *LLVMDbgRecordRef;
 
 /**
+ * @see llvm::clv2::OptionsContext
+ */
+typedef struct LLVMOpaqueOptionsContext *LLVMOptionsContextRef;
+
+/**
  * @}
  */
 

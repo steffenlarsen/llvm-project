@@ -11,27 +11,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "flang/Optimizer/Support/AllocationPolicy.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Optimizer/Dialect/FIRAttr.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "llvm/Support/CommandLine.h"
 
 static constexpr const char *allocationPolicyName = "fir.allocation_policy";
-
-static llvm::cl::opt<std::uint64_t> allocationPlacementSmallArraySize(
-    "allocation-placement-small-array-size",
-    llvm::cl::desc(
-        "constant-size arrays up to <size> bytes are placed on the stack "
-        "by the allocation-placement pass and by the copy-in inlining"),
-    llvm::cl::init(fir::AllocationPolicy::smallArrayThresholdBytesDefault),
-    llvm::cl::Hidden);
-
-static llvm::cl::opt<std::uint64_t> allocationPlacementStackLimit(
-    "allocation-placement-stack-limit",
-    llvm::cl::desc(
-        "per-function budget in bytes for small arrays placed on the stack "
-        "by the allocation-placement pass"),
-    llvm::cl::init(fir::AllocationPolicy::totalStackLimitBytesDefault),
-    llvm::cl::Hidden);
 
 bool fir::shouldAllocateOnStack(const PendingAllocationInfo &info,
                                 const AllocationPolicy &policy,
@@ -83,11 +67,15 @@ fir::decideAllocationPlacement(const AllocationInfo &info,
   return info.isCurrentlyOnStack ? P::Heap : P::Leave;
 }
 
-fir::AllocationPolicy fir::getCommandLineAllocationPolicy(bool stackArrays) {
+fir::AllocationPolicy
+fir::getCommandLineAllocationPolicy(const llvm::clv2::OptionsContext &optsCtx,
+                                    bool stackArrays) {
   fir::AllocationPolicy policy;
   policy.stackArrays = stackArrays;
-  policy.smallArrayThresholdBytes = allocationPlacementSmallArraySize;
-  policy.totalStackLimitBytes = allocationPlacementStackLimit;
+  policy.smallArrayThresholdBytes =
+      llvm::flang_opts::getAllocationPlacementSmallArraySize(optsCtx);
+  policy.totalStackLimitBytes =
+      llvm::flang_opts::getAllocationPlacementStackLimit(optsCtx);
   return policy;
 }
 

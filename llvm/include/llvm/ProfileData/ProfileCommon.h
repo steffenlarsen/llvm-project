@@ -28,14 +28,11 @@
 #include <vector>
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+}
 
-LLVM_ABI extern cl::opt<bool> UseContextLessSummary;
-LLVM_ABI extern cl::opt<int> ProfileSummaryCutoffHot;
-LLVM_ABI extern cl::opt<int> ProfileSummaryCutoffCold;
-LLVM_ABI extern cl::opt<unsigned> ProfileSummaryHugeWorkingSetSizeThreshold;
-LLVM_ABI extern cl::opt<unsigned> ProfileSummaryLargeWorkingSetSizeThreshold;
-LLVM_ABI extern cl::opt<uint64_t> ProfileSummaryHotCount;
-LLVM_ABI extern cl::opt<uint64_t> ProfileSummaryColdCount;
+LLVM_ABI bool getUseContextLessSummary();
 
 namespace sampleprof {
 
@@ -73,8 +70,12 @@ public:
   /// Find the summary entry for a desired percentile of counts.
   LLVM_ABI static const ProfileSummaryEntry &
   getEntryForPercentile(const SummaryEntryVector &DS, uint64_t Percentile);
-  LLVM_ABI static uint64_t getHotCountThreshold(const SummaryEntryVector &DS);
-  LLVM_ABI static uint64_t getColdCountThreshold(const SummaryEntryVector &DS);
+  LLVM_ABI static uint64_t
+  getHotCountThreshold(const SummaryEntryVector &DS,
+                       const clv2::OptionsContext &Ctx);
+  LLVM_ABI static uint64_t
+  getColdCountThreshold(const SummaryEntryVector &DS,
+                        const clv2::OptionsContext &Ctx);
 };
 
 class InstrProfSummaryBuilder final : public ProfileSummaryBuilder {
@@ -99,7 +100,8 @@ public:
   LLVM_ABI void addRecord(const sampleprof::FunctionSamples &FS,
                           bool isCallsiteSample = false);
   LLVM_ABI std::unique_ptr<ProfileSummary>
-  computeSummaryForProfiles(const sampleprof::SampleProfileMap &Profiles);
+  computeSummaryForProfiles(const sampleprof::SampleProfileMap &Profiles,
+                            const clv2::OptionsContext &Ctx);
   LLVM_ABI std::unique_ptr<ProfileSummary> getSummary();
 };
 

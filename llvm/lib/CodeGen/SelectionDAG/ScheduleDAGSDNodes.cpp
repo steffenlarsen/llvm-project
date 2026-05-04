@@ -19,6 +19,7 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/SelectionDAG.h"
@@ -27,10 +28,12 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/Config/llvm-config.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/MemoryModelRelaxationAnnotations.h"
 #include "llvm/MC/MCInstrItineraries.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 using namespace llvm;
@@ -42,10 +45,9 @@ STATISTIC(LoadsClustered, "Number of loads clustered together");
 // This allows the latency-based scheduler to notice high latency instructions
 // without a target itinerary. The choice of number here has more to do with
 // balancing scheduler heuristics than with the actual machine latency.
-static cl::opt<int> HighLatencyCycles(
-    "sched-high-latency-cycles", cl::Hidden, cl::init(10),
-    cl::desc("Roughly estimate the number of cycles that 'long latency' "
-             "instructions take for targets with no itinerary"));
+static int getSchedHighLatencyCycles(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_SchedHighLatencyCycles>(Ctx);
+}
 
 ScheduleDAGSDNodes::ScheduleDAGSDNodes(MachineFunction &mf)
     : ScheduleDAG(mf), InstrItins(mf.getSubtarget().getInstrItineraryData()) {}
@@ -630,7 +632,8 @@ void ScheduleDAGSDNodes::computeLatency(SUnit *SU) {
   if (!InstrItins || InstrItins->isEmpty()) {
     if (N && N->isMachineOpcode() &&
         TII->isHighLatencyDef(N->getMachineOpcode()))
-      SU->Latency = HighLatencyCycles;
+      SU->Latency = getSchedHighLatencyCycles(
+          MF.getFunction().getContext().getOptionsContext());
     else
       SU->Latency = 1;
     return;

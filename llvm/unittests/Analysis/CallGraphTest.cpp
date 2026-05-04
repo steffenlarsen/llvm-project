@@ -43,7 +43,7 @@ template <typename Ty> void canSpecializeGraphTraitsIterators(Ty *G) {
 }
 
 TEST(CallGraphTest, GraphTraitsSpecialization) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module M("", Context);
   CallGraph CG(M);
 
@@ -51,10 +51,10 @@ TEST(CallGraphTest, GraphTraitsSpecialization) {
 }
 
 TEST(CallGraphTest, GraphTraitsConstSpecialization) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module M("", Context);
   CallGraph CG(M);
 
   canSpecializeGraphTraitsIterators(const_cast<const CallGraph *>(&CG));
 }
-}
+} // namespace

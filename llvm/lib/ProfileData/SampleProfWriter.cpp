@@ -21,6 +21,7 @@
 #include "llvm/ADT/Eytzinger.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ProfileData/ProfileCommon.h"
+#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
 #include "llvm/ProfileData/SampleProf.h"
 #include "llvm/Support/Compression.h"
 #include "llvm/Support/EndianStream.h"
@@ -28,6 +29,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/MD5.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/raw_ostream.h"
 #include <array>
@@ -43,19 +45,26 @@
 using namespace llvm;
 using namespace sampleprof;
 
-// To begin with, make this option off by default.
-static cl::opt<bool> ExtBinaryWriteVTableTypeProf(
-    "extbinary-write-vtable-type-prof", cl::init(false), cl::Hidden,
-    cl::desc("Write vtable type profile in ext-binary sample profile writer"));
+static bool getExtBinaryWriteVTableTypeProf(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::PD_ExtBinaryWriteVTableTypeProf>(Ctx);
+}
 
-static cl::opt<uint64_t> RequestedVersion(
-    "sample-profile-format-version", cl::init(DefaultVersion), cl::Hidden,
-    cl::desc("Format version to write for extensible binary profiles"));
+static uint64_t getRequestedVersion(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::ProfileDataOptsReg,
+                           &clv2::PD_RequestedVersion>(Ctx, DefaultVersion);
+}
 
-static cl::opt<bool>
-    ExtBinaryCompositeProf("extbinary-composite-prof", cl::init(false),
-                           cl::Hidden,
-                           cl::desc("Use the composite profile format"));
+static bool getExtBinaryCompositeProf(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::PD_ExtBinaryCompositeProf>(Ctx);
+}
+
+static bool getWriteMD5ProfSymList(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::PD_WriteMD5ProfSymList>(Ctx);
+}
+
+static bool getWriteEytzingerNameTables(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::PD_WriteEytzingerNameTables>(Ctx);
+}
 
 namespace llvm {
 namespace support {
@@ -658,7 +667,7 @@ std::error_code SampleProfileWriterExtBinaryBase::writeOneSection(
     addSectionFlag(SecProfSummary, SecProfSummaryFlags::SecFlagIsPreInlined);
   if (Type == SecProfSummary && FunctionSamples::ProfileIsFS)
     addSectionFlag(SecProfSummary, SecProfSummaryFlags::SecFlagFSDiscriminator);
-  if (Type == SecProfSummary && ExtBinaryWriteVTableTypeProf)
+  if (Type == SecProfSummary && WriteVTableProf)
     addSectionFlag(SecProfSummary,
                    SecProfSummaryFlags::SecFlagHasVTableTypeProf);
   if (Type == SecProfileSymbolList && UseMD5ProfSymList)
@@ -718,7 +727,19 @@ std::error_code SampleProfileWriterExtBinaryBase::writeOneSection(
 SampleProfileWriterExtBinary::SampleProfileWriterExtBinary(
     std::unique_ptr<raw_ostream> &OS)
     : SampleProfileWriterExtBinaryBase(OS) {
-  WriteVTableProf = ExtBinaryWriteVTableTypeProf;
+  WriteVTableProf =
+      getExtBinaryWriteVTableTypeProf(llvm::clv2::defaultOptionsContext());
+  CachedWriteMD5ProfSymList =
+      getWriteMD5ProfSymList(llvm::clv2::defaultOptionsContext());
+  CachedWriteEytzingerNameTables =
+      getWriteEytzingerNameTables(llvm::clv2::defaultOptionsContext());
+}
+
+void SampleProfileWriterExtBinary::setOptionsContext(
+    const clv2::OptionsContext &Ctx) {
+  WriteVTableProf = getExtBinaryWriteVTableTypeProf(Ctx);
+  CachedWriteMD5ProfSymList = getWriteMD5ProfSymList(Ctx);
+  CachedWriteEytzingerNameTables = getWriteEytzingerNameTables(Ctx);
 }
 
 std::error_code SampleProfileWriterExtBinary::writeDefaultLayout(
@@ -1278,7 +1299,8 @@ SampleProfileWriterBinary::writeSample(const FunctionSamples &S) {
 ///
 /// \returns an error code indicating the status of the created writer.
 ErrorOr<std::unique_ptr<SampleProfileWriter>>
-SampleProfileWriter::create(StringRef Filename, SampleProfileFormat Format) {
+SampleProfileWriter::create(StringRef Filename, SampleProfileFormat Format,
+                            const clv2::OptionsContext &Ctx) {
   std::error_code EC;
   std::unique_ptr<raw_ostream> OS;
   if (Format == SPF_Binary || Format == SPF_Ext_Binary)
@@ -1288,7 +1310,7 @@ SampleProfileWriter::create(StringRef Filename, SampleProfileFormat Format) {
   if (EC)
     return EC;
 
-  return create(OS, Format);
+  return create(OS, Format, Ctx);
 }
 
 /// Create a sample profile stream writer based on the specified format.
@@ -1300,7 +1322,8 @@ SampleProfileWriter::create(StringRef Filename, SampleProfileFormat Format) {
 /// \returns an error code indicating the status of the created writer.
 ErrorOr<std::unique_ptr<SampleProfileWriter>>
 SampleProfileWriter::create(std::unique_ptr<raw_ostream> &OS,
-                            SampleProfileFormat Format) {
+                            SampleProfileFormat Format,
+                            const clv2::OptionsContext &Ctx) {
   std::error_code EC;
   std::unique_ptr<SampleProfileWriter> Writer;
 
@@ -1327,23 +1350,25 @@ SampleProfileWriter::create(std::unique_ptr<raw_ostream> &OS,
   if (Format != SPF_Ext_Binary) {
     Writer->setFormatVersion(DefaultVersion);
   } else {
-    if (!formatVersionIsSupported(RequestedVersion))
+    uint64_t ReqVersion = getRequestedVersion(Ctx);
+    if (!formatVersionIsSupported(ReqVersion))
       return sampleprof_error::unsupported_version;
 
     // Composite output defaults to its first compatible format version.
     // Preserve a compatible version explicitly selected by the user.
-    if (ExtBinaryCompositeProf) {
-      if (RequestedVersion.getNumOccurrences() == 0) {
+    if (getExtBinaryCompositeProf(Ctx)) {
+      if (!clv2::wasOptSpecified<&clv2::ProfileDataOptsReg,
+                                 &clv2::PD_RequestedVersion>(Ctx)) {
         Writer->setFormatVersion(CompositeProfileVersion);
       } else {
-        if (RequestedVersion < CompositeProfileVersion)
+        if (ReqVersion < CompositeProfileVersion)
           return sampleprof_error::unsupported_version;
-        Writer->setFormatVersion(RequestedVersion);
+        Writer->setFormatVersion(ReqVersion);
       }
-      // Keep subsequent writes independent of the global command-line option.
+      // Keep subsequent writes independent of the command-line option.
       Writer->setUseCompositeProfile(true);
     } else {
-      Writer->setFormatVersion(RequestedVersion);
+      Writer->setFormatVersion(ReqVersion);
     }
   }
 
@@ -1352,5 +1377,6 @@ SampleProfileWriter::create(std::unique_ptr<raw_ostream> &OS,
 
 void SampleProfileWriter::computeSummary(const SampleProfileMap &ProfileMap) {
   SampleProfileSummaryBuilder Builder(ProfileSummaryBuilder::DefaultCutoffs);
-  Summary = Builder.computeSummaryForProfiles(ProfileMap);
+  Summary = Builder.computeSummaryForProfiles(
+      ProfileMap, llvm::clv2::defaultOptionsContext());
 }

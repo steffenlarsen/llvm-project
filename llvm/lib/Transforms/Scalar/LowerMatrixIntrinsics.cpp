@@ -1,3 +1,4 @@
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LowerMatrixIntrinsics.cpp -  Lower matrix intrinsics -----*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -17,7 +18,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Scalar/LowerMatrixIntrinsics.h"
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -43,9 +43,10 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/Support/Alignment.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/LowerMatrixIntrinsics.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/MatrixUtils.h"
@@ -61,52 +62,71 @@ STATISTIC(FlattenedMatrices, "Number of matrix flattenings");
 STATISTIC(ReshapedMatrices, "Number of matrix reshapes");
 STATISTIC(SplitMatrices, "Number of matrix splits");
 
-static cl::opt<bool>
-    FuseMatrix("fuse-matrix", cl::init(true), cl::Hidden,
-               cl::desc("Enable/disable fusing matrix instructions."));
+static bool getFuseMatrix(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_FuseMatrix>(
+      F.getContext().getOptionsContext());
+}
 // TODO: Allow and use non-square tiles.
-static cl::opt<unsigned> TileSize(
-    "fuse-matrix-tile-size", cl::init(4), cl::Hidden,
-    cl::desc(
-        "Tile size for matrix instruction fusion using square-shaped tiles."));
-static cl::opt<unsigned>
-    TileLoopsThreshold("fuse-matrix-loops-threshold", cl::init(200), cl::Hidden,
-                       cl::desc("Generate loop nests for tiling when expected "
-                                "number of operations exceeds threshold."));
-static cl::opt<bool> ForceFusion(
-    "force-fuse-matrix", cl::init(false), cl::Hidden,
-    cl::desc("Force matrix instruction fusion even if not profitable."));
-static cl::opt<bool> AllowContractEnabled(
-    "matrix-allow-contract", cl::init(false), cl::Hidden,
-    cl::desc("Allow the use of FMAs if available and profitable. This may "
-             "result in different results, due to less rounding error."));
+static unsigned getTileSize(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_FuseMatrixTileSize>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getTileLoopsThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_FuseMatrixLoopsThreshold>(
+      F.getContext().getOptionsContext());
+}
+static bool getForceFusion(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_ForceFuseMatrix>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool getAllowContractEnabled(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_MatrixAllowContract>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<bool>
-    VerifyShapeInfo("verify-matrix-shapes", cl::Hidden,
-                    cl::desc("Enable/disable matrix shape verification."),
-                    cl::init(false));
+static bool getVerifyShapeInfo(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_VerifyMatrixShapes>(
+      F.getContext().getOptionsContext(), false);
+}
 
 enum class MatrixLayoutTy { ColumnMajor, RowMajor };
 
-static cl::opt<MatrixLayoutTy> MatrixLayout(
-    "matrix-default-layout", cl::init(MatrixLayoutTy::ColumnMajor),
-    cl::desc("Sets the default matrix layout"),
-    cl::values(clEnumValN(MatrixLayoutTy::ColumnMajor, "column-major",
-                          "Use column-major layout"),
-               clEnumValN(MatrixLayoutTy::RowMajor, "row-major",
-                          "Use row-major layout")));
+/// Return the matrix layout from the Function or OptionsContext.
+/// When F is provided, its LLVMContext is used to obtain the OptionsContext.
+static MatrixLayoutTy getMatrixLayoutDefault(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::ScalarOptsReg>(Ctx)) {
+    if (O->specified<&clv2::SC_MatrixDefaultLayout>()) {
+      auto V = O->get<&clv2::SC_MatrixDefaultLayout>();
+      return static_cast<MatrixLayoutTy>(static_cast<int>(V));
+    }
+  }
+  return MatrixLayoutTy::ColumnMajor;
+}
 
-static cl::opt<bool> PrintAfterTransposeOpt("matrix-print-after-transpose-opt",
-                                            cl::init(false));
+static MatrixLayoutTy getMatrixLayout(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::ScalarOptsReg>(
+          F.getContext().getOptionsContext())) {
+    if (O->specified<&clv2::SC_MatrixDefaultLayout>()) {
+      auto V = O->get<&clv2::SC_MatrixDefaultLayout>();
+      return static_cast<MatrixLayoutTy>(static_cast<int>(V));
+    }
+  }
+  return MatrixLayoutTy::ColumnMajor;
+}
 
-static cl::opt<unsigned> SplitMatmulRemainderOverThreshold(
-    "matrix-split-matmul-remainder-over-threshold", cl::Hidden,
-    cl::desc("Illegal remainder vectors over this size in bits should be split "
-             "in the inner loop of matmul"),
-    cl::init(0));
+static bool getPrintAfterTransposeOpt(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_MatrixPrintAfterTransposeOpt>(
+      F.getContext().getOptionsContext(), false);
+}
+
+static unsigned getSplitMatmulRemainderOverThreshold(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_MatrixSplitMatmulRemainderOverThreshold>(
+      F.getContext().getOptionsContext(), 0);
+}
 
 namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 } // end namespace llvm
 
 /// Helper function to either return Scope, if it is a subprogram or the
@@ -205,13 +225,20 @@ struct ShapeInfo {
 
   bool IsColumnMajor;
 
-  ShapeInfo(unsigned NumRows = 0, unsigned NumColumns = 0)
-      : NumRows(NumRows), NumColumns(NumColumns),
-        IsColumnMajor(MatrixLayout == MatrixLayoutTy::ColumnMajor) {}
+  ShapeInfo() : NumRows(0), NumColumns(0), IsColumnMajor(true) {}
 
-  ShapeInfo(Value *NumRows, Value *NumColumns)
+  ShapeInfo(unsigned NumRows, unsigned NumColumns)
+      : NumRows(NumRows), NumColumns(NumColumns), IsColumnMajor(true) {}
+
+  ShapeInfo(unsigned NumRows, unsigned NumColumns,
+            const clv2::OptionsContext &Ctx)
+      : NumRows(NumRows), NumColumns(NumColumns),
+        IsColumnMajor(getMatrixLayoutDefault(Ctx) ==
+                      MatrixLayoutTy::ColumnMajor) {}
+
+  ShapeInfo(Value *NumRows, Value *NumColumns, const clv2::OptionsContext &Ctx)
       : ShapeInfo(cast<ConstantInt>(NumRows)->getZExtValue(),
-                  cast<ConstantInt>(NumColumns)->getZExtValue()) {}
+                  cast<ConstantInt>(NumColumns)->getZExtValue(), Ctx) {}
 
   bool operator==(const ShapeInfo &other) {
     return NumRows == other.NumRows && NumColumns == other.NumColumns;
@@ -237,8 +264,14 @@ struct ShapeInfo {
     return NumRows;
   }
 
-  /// Returns the transposed shape.
-  ShapeInfo t() const { return ShapeInfo(NumColumns, NumRows); }
+  /// Returns the transposed shape (preserving the layout).
+  ShapeInfo t() const {
+    ShapeInfo S;
+    S.NumRows = NumColumns;
+    S.NumColumns = NumRows;
+    S.IsColumnMajor = IsColumnMajor;
+    return S;
+  }
 
   friend raw_ostream &operator<<(raw_ostream &OS, ShapeInfo SI);
 
@@ -323,24 +356,26 @@ static iterator_range<Use *> getShapedOperandsForInst(Instruction *I) {
 static std::optional<ShapeInfo>
 computeShapeInfoForInst(Instruction *I,
                         const DenseMap<Value *, ShapeInfo> &ShapeMap) {
+  const clv2::OptionsContext &OptCtx =
+      I->getFunction()->getContext().getOptionsContext();
   Value *M;
   Value *N;
   Value *K;
   if (match(I, m_Intrinsic<Intrinsic::matrix_multiply>(
                    m_Value(), m_Value(), m_Value(M), m_Value(N), m_Value(K))))
-    return ShapeInfo(M, K);
+    return ShapeInfo(M, K, OptCtx);
   if (match(I, m_Intrinsic<Intrinsic::matrix_transpose>(m_Value(), m_Value(M),
                                                         m_Value(N)))) {
     // Flip dimensions.
-    return ShapeInfo(N, M);
+    return ShapeInfo(N, M, OptCtx);
   }
   if (match(I, m_Intrinsic<Intrinsic::matrix_column_major_store>(
                    m_Value(), m_Value(), m_Value(), m_Value(), m_Value(M),
                    m_Value(N))))
-    return ShapeInfo(N, M);
+    return ShapeInfo(N, M, OptCtx);
   if (match(I, m_Intrinsic<Intrinsic::matrix_column_major_load>(
                    m_Value(), m_Value(), m_Value(), m_Value(M), m_Value(N))))
-    return ShapeInfo(M, N);
+    return ShapeInfo(M, N, OptCtx);
   Value *MatrixA;
   if (match(I, m_Store(m_Value(MatrixA), m_Value()))) {
     auto OpShape = ShapeMap.find(MatrixA);
@@ -428,12 +463,17 @@ class LowerMatrixIntrinsics {
     bool IsColumnMajor = true;
 
   public:
-    MatrixTy() : IsColumnMajor(MatrixLayout == MatrixLayoutTy::ColumnMajor) {}
-    MatrixTy(ArrayRef<Value *> Vectors)
-        : Vectors(Vectors),
-          IsColumnMajor(MatrixLayout == MatrixLayoutTy::ColumnMajor) {}
-    MatrixTy(unsigned NumRows, unsigned NumColumns, Type *EltTy)
-        : IsColumnMajor(MatrixLayout == MatrixLayoutTy::ColumnMajor) {
+    MatrixTy() : IsColumnMajor(true) {}
+    MatrixTy(const clv2::OptionsContext &Ctx)
+        : IsColumnMajor(getMatrixLayoutDefault(Ctx) ==
+                        MatrixLayoutTy::ColumnMajor) {}
+    MatrixTy(ArrayRef<Value *> Vectors, const clv2::OptionsContext &Ctx)
+        : Vectors(Vectors), IsColumnMajor(getMatrixLayoutDefault(Ctx) ==
+                                          MatrixLayoutTy::ColumnMajor) {}
+    MatrixTy(unsigned NumRows, unsigned NumColumns, Type *EltTy,
+             const clv2::OptionsContext &Ctx)
+        : IsColumnMajor(getMatrixLayoutDefault(Ctx) ==
+                        MatrixLayoutTy::ColumnMajor) {
 
       unsigned D = isColumnMajor() ? NumColumns : NumRows;
       for (unsigned J = 0; J < D; ++J)
@@ -588,9 +628,20 @@ private:
     if (isa<FPMathOperator>(*Inst))
       FMF = Inst->getFastMathFlags();
 
-    FMF.setAllowContract(AllowContractEnabled || FMF.allowContract());
+    FMF.setAllowContract(getAllowContractEnabled(*Inst->getFunction()) ||
+                         FMF.allowContract());
 
     return FMF;
+  }
+
+  /// Create a ShapeInfo with OptionsContext for correct option lookup.
+  ShapeInfo makeShape(unsigned NumRows, unsigned NumColumns) {
+    return ShapeInfo(NumRows, NumColumns,
+                     Func.getContext().getOptionsContext());
+  }
+  ShapeInfo makeShape(Value *NumRows, Value *NumColumns) {
+    return ShapeInfo(NumRows, NumColumns,
+                     Func.getContext().getOptionsContext());
   }
 
 public:
@@ -697,7 +748,7 @@ public:
       }
     }
 
-    return {SplitVecs};
+    return MatrixTy(SplitVecs, Func.getContext().getOptionsContext());
   }
 
   /// If \p V already has a known shape return false.  Otherwise set the shape
@@ -709,8 +760,9 @@ public:
 
     auto SIter = ShapeMap.find(V);
     if (SIter != ShapeMap.end()) {
-      if (VerifyShapeInfo && (SIter->second.NumRows != Shape.NumRows ||
-                              SIter->second.NumColumns != Shape.NumColumns)) {
+      if (getVerifyShapeInfo(Func) &&
+          (SIter->second.NumRows != Shape.NumRows ||
+           SIter->second.NumColumns != Shape.NumColumns)) {
         errs() << "Conflicting shapes (" << SIter->second.NumRows << "x"
                << SIter->second.NumColumns << " vs " << Shape.NumRows << "x"
                << Shape.NumColumns << ") for " << *V << "\n";
@@ -812,21 +864,21 @@ public:
       if (match(V, m_Intrinsic<Intrinsic::matrix_multiply>(
                        m_Value(MatrixA), m_Value(MatrixB), m_Value(M),
                        m_Value(N), m_Value(K)))) {
-        if (setShapeInfo(MatrixA, {M, N}))
+        if (setShapeInfo(MatrixA, makeShape(M, N)))
           pushInstruction(MatrixA, WorkList);
 
-        if (setShapeInfo(MatrixB, {N, K}))
+        if (setShapeInfo(MatrixB, makeShape(N, K)))
           pushInstruction(MatrixB, WorkList);
 
       } else if (match(V, m_Intrinsic<Intrinsic::matrix_transpose>(
                               m_Value(MatrixA), m_Value(M), m_Value(N)))) {
         // Flip dimensions.
-        if (setShapeInfo(MatrixA, {M, N}))
+        if (setShapeInfo(MatrixA, makeShape(M, N)))
           pushInstruction(MatrixA, WorkList);
       } else if (match(V, m_Intrinsic<Intrinsic::matrix_column_major_store>(
                               m_Value(MatrixA), m_Value(), m_Value(), m_Value(),
                               m_Value(M), m_Value(N)))) {
-        if (setShapeInfo(MatrixA, {M, N})) {
+        if (setShapeInfo(MatrixA, makeShape(M, N))) {
           pushInstruction(MatrixA, WorkList);
         }
       } else if (isa<LoadInst>(V) ||
@@ -951,7 +1003,13 @@ public:
                       m_Value(TAMA), m_Value(TAMB), m_ConstantInt(R),
                       m_ConstantInt(K), m_ConstantInt(C)))) {
       auto NewInst = distributeTransposes(
-          TAMB, {K, C}, TAMA, {R, K}, Builder,
+          TAMB,
+          ShapeInfo(K->getZExtValue(), C->getZExtValue(),
+                    Func.getContext().getOptionsContext()),
+          TAMA,
+          ShapeInfo(R->getZExtValue(), K->getZExtValue(),
+                    Func.getContext().getOptionsContext()),
+          Builder,
           [&](Value *T0, ShapeInfo Shape0, Value *T1, ShapeInfo Shape1) {
             return Builder.CreateMatrixMultiply(T0, T1, Shape0.NumRows,
                                                 Shape0.NumColumns,
@@ -974,7 +1032,13 @@ public:
       // We know that the transposed operand is of shape RxC.
       // An when multiplied with a scalar, the shape is preserved.
       auto NewInst = distributeTransposes(
-          TAMA, {R, C}, TAMB, {R, C}, Builder,
+          TAMA,
+          ShapeInfo(R->getZExtValue(), C->getZExtValue(),
+                    Func.getContext().getOptionsContext()),
+          TAMB,
+          ShapeInfo(R->getZExtValue(), C->getZExtValue(),
+                    Func.getContext().getOptionsContext()),
+          Builder,
           [&](Value *T0, ShapeInfo Shape0, Value *T1, ShapeInfo Shape1) {
             bool IsFP = I.getType()->isFPOrFPVectorTy();
             auto *Mul = IsFP ? LocalBuilder.CreateFMul(T0, T1, "mmul")
@@ -995,7 +1059,13 @@ public:
     if (match(TA, m_AnyAdd(m_Value(TAMA), m_Value(TAMB)))) {
       IRBuilder<> LocalBuilder(&I);
       auto NewInst = distributeTransposes(
-          TAMA, {R, C}, TAMB, {R, C}, Builder,
+          TAMA,
+          ShapeInfo(R->getZExtValue(), C->getZExtValue(),
+                    Func.getContext().getOptionsContext()),
+          TAMB,
+          ShapeInfo(R->getZExtValue(), C->getZExtValue(),
+                    Func.getContext().getOptionsContext()),
+          Builder,
           [&](Value *T0, ShapeInfo Shape0, Value *T1, ShapeInfo Shape1) {
             bool IsFP = I.getType()->isFPOrFPVectorTy();
             auto *Add = IsFP ? LocalBuilder.CreateFAdd(T0, T1, "madd")
@@ -1038,7 +1108,7 @@ public:
       MatrixBuilder Builder(IB);
       Value *M = Builder.CreateMatrixMultiply(
           BT, AT, C->getZExtValue(), K->getZExtValue(), R->getZExtValue());
-      setShapeInfo(M, {C, R});
+      setShapeInfo(M, makeShape(C, R));
       Instruction *NewInst = Builder.CreateMatrixTranspose(M, C->getZExtValue(),
                                                            R->getZExtValue());
       updateShapeAndReplaceAllUsesWith(I, NewInst);
@@ -1064,7 +1134,7 @@ public:
              "Shape of new instruction doesn't match original shape.");
       CleanupBinOp(I, A, B);
       if (auto *AddI = dyn_cast<Instruction>(Add)) {
-        setShapeInfo(AddI, {R, C});
+        setShapeInfo(AddI, makeShape(R, C));
         assert(
             computeShapeInfoForInst(AddI, ShapeMap).value_or(ShapeMap[AddI]) ==
                 ShapeMap[AddI] &&
@@ -1143,7 +1213,7 @@ public:
     bool Changed = false;
     if (!isMinimal()) {
       Changed |= optimizeTransposes();
-      if (PrintAfterTransposeOpt) {
+      if (getPrintAfterTransposeOpt(Func)) {
         dbgs() << "Dump after matrix transpose optimization:\n";
         Func.print(dbgs());
       }
@@ -1191,7 +1261,8 @@ public:
 
       const ShapeInfo &SI = ShapeMap.at(Inst);
       auto *EltTy = cast<FixedVectorType>(PHI->getType())->getElementType();
-      MatrixTy PhiM(SI.NumRows, SI.NumColumns, EltTy);
+      MatrixTy PhiM(SI.NumRows, SI.NumColumns, EltTy,
+                    Func.getContext().getOptionsContext());
 
       IRBuilder<> Builder(Inst);
       for (unsigned VI = 0, VE = PhiM.getNumVectors(); VI != VE; ++VI)
@@ -1211,7 +1282,7 @@ public:
 
       Value *Op1;
       Value *Op2;
-      MatrixTy Result;
+      MatrixTy Result(Func.getContext().getOptionsContext());
       IRBuilder<> Builder(Inst);
       if (auto *BinOp = dyn_cast<BinaryOperator>(Inst))
         Result = VisitBinaryOperator(BinOp, SI, Builder);
@@ -1288,7 +1359,7 @@ public:
       return LowerColumnMajorStore(Inst, Builder);
     case Intrinsic::abs:
     case Intrinsic::fabs: {
-      MatrixTy Result;
+      MatrixTy Result(Func.getContext().getOptionsContext());
       MatrixTy M = getMatrix(Inst->getOperand(0), SI, Builder);
       Builder.setFastMathFlags(getFastMathFlags(Inst));
 
@@ -1363,7 +1434,7 @@ public:
     Type *EltTy = VType->getElementType();
     Type *VecTy = FixedVectorType::get(EltTy, Shape.getStride());
     Value *EltPtr = Ptr;
-    MatrixTy Result;
+    MatrixTy Result(Func.getContext().getOptionsContext());
     Stride = castToIndexType(Ptr, Stride, Builder);
     for (unsigned I = 0, E = Shape.getNumVectors(); I < E; ++I) {
       Value *GEP = computeVectorAddr(
@@ -1409,13 +1480,15 @@ public:
   ///
   /// The intrinsic loads a matrix from memory using a stride between columns.
   MatrixTy LowerColumnMajorLoad(CallInst *Inst, IRBuilder<> &Builder) {
-    assert(MatrixLayout == MatrixLayoutTy::ColumnMajor &&
+    assert(getMatrixLayout(Func) == MatrixLayoutTy::ColumnMajor &&
            "Intrinsic only supports column-major layout!");
     Value *Ptr = Inst->getArgOperand(0);
     Value *Stride = Inst->getArgOperand(1);
     return LowerLoad(Inst, Ptr, Inst->getParamAlign(0), Stride,
                      cast<ConstantInt>(Inst->getArgOperand(2))->isOne(),
-                     {Inst->getArgOperand(3), Inst->getArgOperand(4)}, Builder);
+                     ShapeInfo(Inst->getArgOperand(3), Inst->getArgOperand(4),
+                               Func.getContext().getOptionsContext()),
+                     Builder);
   }
 
   /// Stores a sub-matrix \p StoreVal into the \p R x \p C matrix starting at \p
@@ -1455,8 +1528,9 @@ public:
                                                   MAlign),
                                  IsVolatile);
     }
-    return MatrixTy().addNumStores(getNumOps(StoreVal.getVectorTy()) *
-                                   StoreVal.getNumVectors());
+    return MatrixTy(Func.getContext().getOptionsContext())
+        .addNumStores(getNumOps(StoreVal.getVectorTy()) *
+                      StoreVal.getNumVectors());
   }
 
   /// Lower a store instruction with shape information.
@@ -1472,14 +1546,15 @@ public:
   ///
   /// The intrinsic store a matrix back memory using a stride between columns.
   MatrixTy LowerColumnMajorStore(CallInst *Inst, IRBuilder<> &Builder) {
-    assert(MatrixLayout == MatrixLayoutTy::ColumnMajor &&
+    assert(getMatrixLayout(Func) == MatrixLayoutTy::ColumnMajor &&
            "Intrinsic only supports column-major layout!");
     Value *Matrix = Inst->getArgOperand(0);
     Value *Ptr = Inst->getArgOperand(1);
     Value *Stride = Inst->getArgOperand(2);
     return LowerStore(Inst, Matrix, Ptr, Inst->getParamAlign(1), Stride,
                       cast<ConstantInt>(Inst->getArgOperand(3))->isOne(),
-                      {Inst->getArgOperand(4), Inst->getArgOperand(5)},
+                      ShapeInfo(Inst->getArgOperand(4), Inst->getArgOperand(5),
+                                Func.getContext().getOptionsContext()),
                       Builder);
   }
 
@@ -1578,10 +1653,12 @@ public:
                        SmallPtrSet<Instruction *, 16> &FusedInsts,
                        FastMathFlags FMF) {
     if (FusedInsts.contains(MatMul) ||
-        MatrixLayout != MatrixLayoutTy::ColumnMajor)
+        getMatrixLayout(Func) != MatrixLayoutTy::ColumnMajor)
       return;
-    ShapeInfo LShape(MatMul->getArgOperand(2), MatMul->getArgOperand(3));
-    ShapeInfo RShape(MatMul->getArgOperand(3), MatMul->getArgOperand(4));
+    ShapeInfo LShape(MatMul->getArgOperand(2), MatMul->getArgOperand(3),
+                     Func.getContext().getOptionsContext());
+    ShapeInfo RShape(MatMul->getArgOperand(3), MatMul->getArgOperand(4),
+                     Func.getContext().getOptionsContext());
 
     if (LShape.NumRows != 1 || RShape.NumColumns != 1) // not a dot product
       return;
@@ -1788,7 +1865,8 @@ public:
 
     // Similarly, if the vector is small enough that we don't want
     // to split further.
-    if (VecTy->getPrimitiveSizeInBits() <= SplitMatmulRemainderOverThreshold)
+    if (VecTy->getPrimitiveSizeInBits() <=
+        getSplitMatmulRemainderOverThreshold(Func))
       return Remainder;
 
     // Gradually lower the vectorization factor to cover the
@@ -1994,11 +2072,13 @@ public:
   }
 
   bool isFusionProfitable(CallInst *MatMul) {
-    if (ForceFusion)
+    if (getForceFusion(Func))
       return true;
 
-    ShapeInfo LShape(MatMul->getArgOperand(2), MatMul->getArgOperand(3));
-    ShapeInfo RShape(MatMul->getArgOperand(3), MatMul->getArgOperand(4));
+    ShapeInfo LShape(MatMul->getArgOperand(2), MatMul->getArgOperand(3),
+                     Func.getContext().getOptionsContext());
+    ShapeInfo RShape(MatMul->getArgOperand(3), MatMul->getArgOperand(4),
+                     Func.getContext().getOptionsContext());
 
     const unsigned R = LShape.NumRows;
     const unsigned C = RShape.NumColumns;
@@ -2030,10 +2110,12 @@ public:
   }
 
   MatrixTy getZeroMatrix(Type *EltType, unsigned R, unsigned C) {
-    MatrixTy Res;
-    auto *ColumType = FixedVectorType::get(EltType, R);
-    for (unsigned I = 0; I < C; ++I)
-      Res.addVector(ConstantAggregateZero::get(ColumType));
+    MatrixTy Res(Func.getContext().getOptionsContext());
+    unsigned Stride = Res.isColumnMajor() ? R : C;
+    unsigned NumVecs = Res.isColumnMajor() ? C : R;
+    auto *VecType = FixedVectorType::get(EltType, Stride);
+    for (unsigned I = 0; I < NumVecs; ++I)
+      Res.addVector(ConstantAggregateZero::get(VecType));
     return Res;
   }
 
@@ -2042,7 +2124,8 @@ public:
     auto *EltType = cast<FixedVectorType>(MatMul->getType())->getElementType();
 
     // Create the main tiling loop nest.
-    TileInfo TI(LShape.NumRows, RShape.NumColumns, LShape.NumColumns, TileSize);
+    TileInfo TI(LShape.NumRows, RShape.NumColumns, LShape.NumColumns,
+                getTileSize(Func));
     DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Lazy);
     Instruction *InsertI = cast<Instruction>(MatMul);
     BasicBlock *Start = InsertI->getParent();
@@ -2051,14 +2134,14 @@ public:
     IRBuilder<> Builder(MatMul);
     BasicBlock *InnerBody = TI.CreateTiledLoops(Start, End, Builder, DTU, *LI);
 
-    Type *TileVecTy =
-        FixedVectorType::get(MatMul->getType()->getScalarType(), TileSize);
-    MatrixTy TileResult;
+    Type *TileVecTy = FixedVectorType::get(MatMul->getType()->getScalarType(),
+                                           getTileSize(Func));
+    MatrixTy TileResult(Func.getContext().getOptionsContext());
     // Insert in the inner loop header.
     Builder.SetInsertPoint(TI.KLoop.Header->getTerminator());
     // Create PHI nodes for the result columns to accumulate across iterations.
     SmallVector<PHINode *, 4> ColumnPhis;
-    for (unsigned I = 0; I < TileSize; I++) {
+    for (unsigned I = 0; I < getTileSize(Func); I++) {
       auto *Phi = Builder.CreatePHI(TileVecTy, 2, "result.vec." + Twine(I));
       Phi->addIncoming(ConstantAggregateZero::get(TileVecTy),
                        TI.RowLoop.Header->getSingleSuccessor());
@@ -2072,10 +2155,10 @@ public:
     // Load tiles of the operands.
     MatrixTy A =
         loadMatrix(LPtr, {}, false, LShape, TI.RowLoop.Index, TI.KLoop.Index,
-                   {TileSize, TileSize}, EltType, Builder);
+                   {getTileSize(Func), getTileSize(Func)}, EltType, Builder);
     MatrixTy B =
         loadMatrix(RPtr, {}, false, RShape, TI.KLoop.Index, TI.ColumnLoop.Index,
-                   {TileSize, TileSize}, EltType, Builder);
+                   {getTileSize(Func), getTileSize(Func)}, EltType, Builder);
     emitMatrixMultiply(TileResult, A, B, Builder, true, false,
                        getFastMathFlags(MatMul));
     // Store result after the inner loop is done.
@@ -2091,7 +2174,8 @@ public:
     // is enough work per iteration.
     // FIXME: The unroller should make this decision directly instead, but
     // currently the cost-model is not up to the task.
-    unsigned InnerLoopUnrollCount = std::min(10u, LShape.NumColumns / TileSize);
+    unsigned InnerLoopUnrollCount =
+        std::min(10u, LShape.NumColumns / getTileSize(Func));
     addStringMetadataToLoop(LI->getLoopFor(TI.KLoop.Header),
                             "llvm.loop.unroll.count", InnerLoopUnrollCount);
   }
@@ -2099,13 +2183,15 @@ public:
   void emitSIMDTiling(CallInst *MatMul, LoadInst *LoadOp0, LoadInst *LoadOp1,
                       StoreInst *Store,
                       SmallPtrSetImpl<Instruction *> &FusedInsts) {
-    assert(MatrixLayout == MatrixLayoutTy::ColumnMajor &&
+    assert(getMatrixLayout(Func) == MatrixLayoutTy::ColumnMajor &&
            "Tiling only supported for column-major matrixes at the moment!");
     if (!isFusionProfitable(MatMul))
       return;
 
-    ShapeInfo LShape(MatMul->getArgOperand(2), MatMul->getArgOperand(3));
-    ShapeInfo RShape(MatMul->getArgOperand(3), MatMul->getArgOperand(4));
+    ShapeInfo LShape(MatMul->getArgOperand(2), MatMul->getArgOperand(3),
+                     Func.getContext().getOptionsContext());
+    ShapeInfo RShape(MatMul->getArgOperand(3), MatMul->getArgOperand(4),
+                     Func.getContext().getOptionsContext());
 
     const unsigned R = LShape.NumRows;
     const unsigned C = RShape.NumColumns;
@@ -2119,20 +2205,20 @@ public:
     // Use loop-based tiling when the number of expected operations exceeds
     // threshold.
     unsigned NumOps = getNumNativeVectorOps(EltType, R, M, C);
-    bool UseLoops =
-        (NumOps > TileLoopsThreshold) && R % TileSize == 0 && C % TileSize == 0;
+    bool UseLoops = (NumOps > getTileLoopsThreshold(Func)) &&
+                    R % getTileSize(Func) == 0 && C % getTileSize(Func) == 0;
     if (UseLoops)
       createTiledLoops(MatMul, APtr, LShape, BPtr, RShape, Store);
     else {
       IRBuilder<> Builder(Store);
-      for (unsigned J = 0; J < C; J += TileSize)
-        for (unsigned I = 0; I < R; I += TileSize) {
-          const unsigned TileR = std::min(R - I, unsigned(TileSize));
-          const unsigned TileC = std::min(C - J, unsigned(TileSize));
+      for (unsigned J = 0; J < C; J += getTileSize(Func))
+        for (unsigned I = 0; I < R; I += getTileSize(Func)) {
+          const unsigned TileR = std::min(R - I, unsigned(getTileSize(Func)));
+          const unsigned TileC = std::min(C - J, unsigned(getTileSize(Func)));
           MatrixTy Res = getZeroMatrix(EltType, TileR, TileC);
 
-          for (unsigned K = 0; K < M; K += TileSize) {
-            const unsigned TileM = std::min(M - K, unsigned(TileSize));
+          for (unsigned K = 0; K < M; K += getTileSize(Func)) {
+            const unsigned TileM = std::min(M - K, unsigned(getTileSize(Func)));
             MatrixTy A =
                 loadMatrix(APtr, LoadOp0->getAlign(), LoadOp0->isVolatile(),
                            LShape, getIndex(APtr, I), getIndex(APtr, K),
@@ -2181,7 +2267,7 @@ public:
   LowerMatrixMultiplyFused(CallInst *MatMul,
                            SmallPtrSetImpl<Instruction *> &FusedInsts,
                            SmallVector<IntrinsicInst *, 16> &LifetimeEnds) {
-    if (!FuseMatrix || !DT || TileSize == 0)
+    if (!getFuseMatrix(Func) || !DT || getTileSize(Func) == 0)
       return;
 
     assert(AA && LI && "Analyses should be available");
@@ -2191,34 +2277,36 @@ public:
 
     // We can fold the transpose into the operand that is used to fetch scalars.
     Value *T;
-    if (MatrixLayout == MatrixLayoutTy::ColumnMajor
+    if (getMatrixLayout(Func) == MatrixLayoutTy::ColumnMajor
             ? match(B, m_Intrinsic<Intrinsic::matrix_transpose>(m_Value(T)))
             : match(A, m_Intrinsic<Intrinsic::matrix_transpose>(m_Value(T)))) {
       IRBuilder<> Builder(MatMul);
       auto *EltType =
           cast<FixedVectorType>(MatMul->getType())->getElementType();
-      ShapeInfo LShape(MatMul->getArgOperand(2), MatMul->getArgOperand(3));
-      ShapeInfo RShape(MatMul->getArgOperand(3), MatMul->getArgOperand(4));
+      ShapeInfo LShape(MatMul->getArgOperand(2), MatMul->getArgOperand(3),
+                       Func.getContext().getOptionsContext());
+      ShapeInfo RShape(MatMul->getArgOperand(3), MatMul->getArgOperand(4),
+                       Func.getContext().getOptionsContext());
       const unsigned R = LShape.NumRows;
       const unsigned M = LShape.NumColumns;
       const unsigned C = RShape.NumColumns;
 
-      MatrixTy MA;
-      MatrixTy MB;
+      MatrixTy MA(Func.getContext().getOptionsContext());
+      MatrixTy MB(Func.getContext().getOptionsContext());
 
       Value *Transpose;
-      if (MatrixLayout == MatrixLayoutTy::ColumnMajor) {
-        MA = getMatrix(A, ShapeInfo(R, M), Builder);
-        MB = getMatrix(T, ShapeInfo(C, M), Builder);
+      if (getMatrixLayout(Func) == MatrixLayoutTy::ColumnMajor) {
+        MA = getMatrix(A, makeShape(R, M), Builder);
+        MB = getMatrix(T, makeShape(C, M), Builder);
         Transpose = B;
       } else {
-        MA = getMatrix(T, ShapeInfo(R, M), Builder);
-        MB = getMatrix(B, ShapeInfo(C, M), Builder);
+        MA = getMatrix(T, makeShape(R, M), Builder);
+        MB = getMatrix(B, makeShape(C, M), Builder);
         Transpose = A;
       }
 
       // Initialize the output
-      MatrixTy Result(R, C, EltType);
+      MatrixTy Result(R, C, EltType, Func.getContext().getOptionsContext());
 
       emitMatrixMultiply(Result, MA, MB, Builder, false, true,
                          getFastMathFlags(MatMul));
@@ -2229,13 +2317,15 @@ public:
         ToRemove.push_back(cast<Instruction>(Transpose));
         // TODO: add a fake entry for the folded instruction so that this is
         // included in the expression in the remark.
-        Inst2ColumnMatrix[Transpose] = MatrixTy(M, C, EltType);
+        Inst2ColumnMatrix[Transpose] =
+            MatrixTy(M, C, EltType, Func.getContext().getOptionsContext());
       }
       finalizeLowering(MatMul, Result, Builder);
       return;
     }
 
-    if (!MatMul->hasOneUse() || MatrixLayout != MatrixLayoutTy::ColumnMajor)
+    if (!MatMul->hasOneUse() ||
+        getMatrixLayout(Func) != MatrixLayoutTy::ColumnMajor)
       return;
 
     // Lower {ld, ld} -> matmul -> st chains.  No need to call finalizeLowering
@@ -2327,8 +2417,10 @@ public:
   /// Lowers llvm.matrix.multiply.
   MatrixTy LowerMultiply(CallInst *MatMul, IRBuilder<> &Builder) {
     auto *EltType = cast<FixedVectorType>(MatMul->getType())->getElementType();
-    ShapeInfo LShape(MatMul->getArgOperand(2), MatMul->getArgOperand(3));
-    ShapeInfo RShape(MatMul->getArgOperand(3), MatMul->getArgOperand(4));
+    ShapeInfo LShape(MatMul->getArgOperand(2), MatMul->getArgOperand(3),
+                     Func.getContext().getOptionsContext());
+    ShapeInfo RShape(MatMul->getArgOperand(3), MatMul->getArgOperand(4),
+                     Func.getContext().getOptionsContext());
 
     const MatrixTy &Lhs = getMatrix(MatMul->getArgOperand(0), LShape, Builder);
     const MatrixTy &Rhs = getMatrix(MatMul->getArgOperand(1), RShape, Builder);
@@ -2340,7 +2432,7 @@ public:
     assert(LShape.NumColumns == RShape.NumRows);
 
     // Initialize the output
-    MatrixTy Result(R, C, EltType);
+    MatrixTy Result(R, C, EltType, Func.getContext().getOptionsContext());
     assert(Lhs.getElementType() == Result.getElementType() &&
            "Matrix multiply result element type does not match arguments.");
 
@@ -2351,10 +2443,11 @@ public:
 
   /// Lowers llvm.matrix.transpose.
   MatrixTy LowerTranspose(CallInst *Inst, IRBuilder<> &Builder) {
-    MatrixTy Result;
+    MatrixTy Result(Func.getContext().getOptionsContext());
     Value *InputVal = Inst->getArgOperand(0);
     FixedVectorType *VectorTy = cast<FixedVectorType>(InputVal->getType());
-    ShapeInfo ArgShape(Inst->getArgOperand(1), Inst->getArgOperand(2));
+    ShapeInfo ArgShape(Inst->getArgOperand(1), Inst->getArgOperand(2),
+                       Func.getContext().getOptionsContext());
     MatrixTy InputMatrix = getMatrix(InputVal, ArgShape, Builder);
 
     const unsigned NewNumVecs =
@@ -2438,7 +2531,7 @@ public:
     Value *Lhs = Inst->getOperand(0);
     Value *Rhs = Inst->getOperand(1);
 
-    MatrixTy Result;
+    MatrixTy Result(Func.getContext().getOptionsContext());
     MatrixTy A = getMatrix(Lhs, SI, Builder);
     MatrixTy B = getMatrix(Rhs, SI, Builder);
     assert(A.isColumnMajor() == B.isColumnMajor() &&
@@ -2459,7 +2552,7 @@ public:
                               IRBuilder<> &Builder) {
     Value *Op = Inst->getOperand(0);
 
-    MatrixTy Result;
+    MatrixTy Result(Func.getContext().getOptionsContext());
     MatrixTy M = getMatrix(Op, SI, Builder);
 
     Builder.setFastMathFlags(getFastMathFlags(Inst));
@@ -2486,7 +2579,7 @@ public:
                                 IRBuilder<> &Builder) {
     Value *Op = Inst->getOperand(0);
 
-    MatrixTy Result;
+    MatrixTy Result(Func.getContext().getOptionsContext());
     MatrixTy M = getMatrix(Op, Shape, Builder);
 
     Builder.setFastMathFlags(getFastMathFlags(Inst));
@@ -2509,7 +2602,7 @@ public:
     Value *OpA = Inst->getOperand(1);
     Value *OpB = Inst->getOperand(2);
 
-    MatrixTy Result;
+    MatrixTy Result(Func.getContext().getOptionsContext());
     MatrixTy A = getMatrix(OpA, Shape, Builder);
     MatrixTy B = getMatrix(OpB, Shape, Builder);
 
@@ -2521,7 +2614,7 @@ public:
     } else {
       CondV.resize(A.getNumVectors());
       llvm::fill(CondV, Cond);
-      if (!ProfcheckDisableMetadataFixes)
+      if (!getProfcheckDisableMetadataFixes(Inst->getContext()))
         MDFrom = Inst;
     }
 

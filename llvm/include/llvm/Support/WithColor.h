@@ -17,11 +17,11 @@ namespace llvm {
 class Error;
 class StringRef;
 
-namespace cl {
-class OptionCategory;
+namespace clv2 {
+struct OptionCategory;
 }
 
-LLVM_ABI extern cl::OptionCategory &getColorCategory();
+LLVM_ABI extern clv2::OptionCategory &getColorCategory();
 
 // Symbolic names for various syntax elements.
 enum class HighlightColor {

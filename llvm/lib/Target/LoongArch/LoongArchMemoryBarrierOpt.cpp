@@ -24,6 +24,8 @@
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachinePostDominators.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -31,25 +33,25 @@ using namespace llvm;
 #define LOONGARCH_MEMORY_BARRIER_OPT_NAME                                      \
   "LoongArch Memory Barrier Optimisation pass"
 
-static cl::opt<bool> RequireNoPathBypass(
-    "loongarch-require-no-path-bypass",
-    cl::desc("Optimize only when no paths bypass either memory barrier"),
-    cl::init(true), cl::Hidden);
+static bool getRequireNoPathBypass(const MachineFunction &MF) {
+  return clv2::getOptValOrDefault<&clv2::LA_RequireNoPathBypass>(
+      MF.getFunction().getContext().getOptionsContext());
+}
 
-static cl::opt<bool> MergeAMOWithMB(
-    "loongarch-merge-amo-with-dbar",
-    cl::desc("Merge AMOs with DBARs into AMO_DB during optimization"),
-    cl::init(true), cl::Hidden);
+static bool getMergeAMOWithMB(const MachineFunction &MF) {
+  return clv2::getOptValOrDefault<&clv2::LA_MergeAMOWithMB>(
+      MF.getFunction().getContext().getOptionsContext());
+}
 
-static cl::opt<bool> DisableInlineAsm(
-    "loongarch-disable-inline-asm-barrier-opt",
-    cl::desc("Disable optimization of memory barriers in InlineAsm"),
-    cl::init(false), cl::Hidden);
+static bool getDisableInlineAsm(const MachineFunction &MF) {
+  return clv2::getOptValOrDefault<&clv2::LA_DisableInlineAsmBarrierOpt>(
+      MF.getFunction().getContext().getOptionsContext());
+}
 
-static cl::opt<bool> ReplaceEliminatedMBToNop(
-    "loongarch-replace-eliminated-dbar-to-nop",
-    cl::desc("Replace eliminated DBARs with NOPs to preserve code layout"),
-    cl::init(false), cl::Hidden);
+static bool getReplaceEliminatedMBToNop(const MachineFunction &MF) {
+  return clv2::getOptValOrDefault<&clv2::LA_ReplaceEliminatedDbarToNop>(
+      MF.getFunction().getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -96,7 +98,7 @@ static std::optional<std::pair<StringRef, StringRef>> parseMB(StringRef Asm) {
 
 static std::optional<std::pair<StringRef, StringRef>>
 isAsmMB(const MachineInstr &MI) {
-  if (DisableInlineAsm)
+  if (getDisableInlineAsm(*MI.getMF()))
     return std::nullopt;
   if (!MI.isInlineAsm())
     return std::nullopt;
@@ -104,7 +106,7 @@ isAsmMB(const MachineInstr &MI) {
   return parseMB(Asm);
 }
 
-static StringRef getAMDB(StringRef Name) {
+static StringRef getAMDB(StringRef Name, bool MergeAMOWithMB) {
 #define CASE(Name, Suffix)                                                     \
   .Case(#Name "." #Suffix, MergeAMOWithMB ? #Name "_DB." #Suffix : "")         \
       .Case(#Name "_DB." #Suffix, #Name "_DB." #Suffix)
@@ -112,9 +114,10 @@ static StringRef getAMDB(StringRef Name) {
 #undef CASE
 }
 
-static std::optional<std::pair<StringRef, StringRef>> parseAM(StringRef Asm) {
+static std::optional<std::pair<StringRef, StringRef>>
+parseAM(StringRef Asm, bool MergeAMOWithMB) {
   auto T1 = llvm::getToken(Asm);
-  auto OpName = getAMDB(T1.first);
+  auto OpName = getAMDB(T1.first, MergeAMOWithMB);
   if (OpName.empty())
     return std::nullopt;
   auto T2 = llvm::getToken(T1.second, ",");
@@ -137,12 +140,12 @@ static std::optional<std::pair<StringRef, StringRef>> parseAM(StringRef Asm) {
 
 static std::optional<std::pair<StringRef, StringRef>>
 isAsmAM(const MachineInstr &MI) {
-  if (DisableInlineAsm)
+  if (getDisableInlineAsm(*MI.getMF()))
     return std::nullopt;
   if (!MI.isInlineAsm())
     return std::nullopt;
   auto Asm = MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
-  return parseAM(Asm);
+  return parseAM(Asm, getMergeAMOWithMB(*MI.getMF()));
 }
 
 static bool isMB(const MachineInstr &MI) {
@@ -178,6 +181,7 @@ static std::optional<unsigned> isAM(const MachineInstr &MI) {
     [[fallthrough]];                                                           \
   case LoongArch::Name##__DB_##Suffix:                                         \
     return LoongArch::Name##__DB_##Suffix;
+  bool MergeAMOWithMB = getMergeAMOWithMB(*MI.getMF());
   switch (MI.getOpcode()) {
     AMO_CASES
   default:
@@ -466,6 +470,9 @@ bool LoongArchMemoryBarrierOpt::eliminateRedundantBarrier(
   unsigned Mask = resolveBarrierRedundancy(A, B);
   if (!Mask)
     return false;
+
+  bool RequireNoPathBypass = getRequireNoPathBypass(*MF);
+  bool ReplaceEliminatedMBToNop = getReplaceEliminatedMBToNop(*MF);
 
   auto eraseOrReplaceWithNop = [&](MachineInstr *MI) {
     if (ReplaceEliminatedMBToNop) {

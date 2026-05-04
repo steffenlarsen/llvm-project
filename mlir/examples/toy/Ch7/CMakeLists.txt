@@ -8,6 +8,7 @@ include_directories(include)
 add_subdirectory(include)
 
 set(LLVM_LINK_COMPONENTS
+  AllOptions
   Core
   Support
   nativecodegen

@@ -69,13 +69,14 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/YAMLParser.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -85,10 +86,14 @@ using namespace SymbolRewriter;
 
 #define DEBUG_TYPE "symbol-rewriter"
 
-static cl::list<std::string> RewriteMapFiles("rewrite-map-file",
-                                             cl::desc("Symbol Rewrite Map"),
-                                             cl::value_desc("filename"),
-                                             cl::Hidden);
+static const std::vector<std::string> &getRewriteMapFiles(const Module &M) {
+  if (auto *O = clv2::getView<&clv2::TransformUtilsOptsReg>(
+          M.getContext().getOptionsContext()))
+    if (O->specified<&clv2::TU_RewriteMapFiles>())
+      return O->get<&clv2::TU_RewriteMapFiles>();
+  static const std::vector<std::string> Default;
+  return Default;
+}
 
 static void rewriteComdat(Module &M, GlobalObject *GO,
                           const std::string &Source,
@@ -528,6 +533,7 @@ parseRewriteGlobalAliasDescriptor(yaml::Stream &YS, yaml::ScalarNode *K,
 }
 
 PreservedAnalyses RewriteSymbolPass::run(Module &M, ModuleAnalysisManager &AM) {
+  loadAndParseMapFiles(M);
   if (!runImpl(M))
     return PreservedAnalyses::all();
 
@@ -544,8 +550,8 @@ bool RewriteSymbolPass::runImpl(Module &M) {
   return Changed;
 }
 
-void RewriteSymbolPass::loadAndParseMapFiles() {
-  const std::vector<std::string> MapFiles(RewriteMapFiles);
+void RewriteSymbolPass::loadAndParseMapFiles(const Module &M) {
+  const std::vector<std::string> MapFiles(getRewriteMapFiles(M));
   SymbolRewriter::RewriteMapParser Parser;
 
   for (const auto &MapFile : MapFiles)

@@ -19,6 +19,7 @@
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
@@ -52,9 +53,11 @@ public:
 
   static Expected<std::unique_ptr<DwarfStreamer>> createStreamer(
       const Triple &TheTriple, DWARFLinkerBase::OutputFileType FileType,
-      raw_pwrite_stream &OutFile, DWARFLinkerBase::MessageHandlerTy Warning);
+      raw_pwrite_stream &OutFile, DWARFLinkerBase::MessageHandlerTy Warning,
+      const clv2::OptionsContext &OptsCtx);
 
-  Error init(Triple TheTriple, StringRef Swift5ReflectionSegmentName);
+  Error init(Triple TheTriple, StringRef Swift5ReflectionSegmentName,
+             const clv2::OptionsContext &OptsCtx);
 
   /// Dump the file to the disk.
   void finish() override;

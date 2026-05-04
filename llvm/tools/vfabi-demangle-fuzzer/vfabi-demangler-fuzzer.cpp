@@ -18,7 +18,7 @@
 using namespace llvm;
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   const std::unique_ptr<Module> M =
       parseAssemblyString("declare i32 @foo(i32 )\n", Err, Ctx);

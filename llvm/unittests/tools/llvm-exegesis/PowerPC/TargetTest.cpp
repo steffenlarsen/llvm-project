@@ -14,6 +14,7 @@
 #include "MCTargetDesc/PPCMCTargetDesc.h"
 #include "TestBase.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TargetSelect.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -45,8 +46,9 @@ protected:
 };
 
 TEST_F(PowerPCTargetTest, SetRegToConstant) {
-  const std::unique_ptr<MCSubtargetInfo> STI(
-      Target_->createMCSubtargetInfo(TT, "generic", ""));
+  const std::unique_ptr<MCSubtargetInfo> STI(Target_->createMCSubtargetInfo(
+      TT, "generic", "",
+      /*Ctx=*/llvm::clv2::defaultOptionsContext()));
   const auto Insts = ExegesisTarget_->setRegTo(*STI, PPC::X0, APInt());
   EXPECT_THAT(Insts, Not(IsEmpty()));
 }

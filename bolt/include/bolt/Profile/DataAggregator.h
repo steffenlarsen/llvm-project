@@ -18,11 +18,15 @@
 #include "bolt/Profile/YAMLProfileWriter.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Program.h"
 #include <limits>
 #include <unordered_map>
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
 namespace bolt {
 
 class BinaryFunction;
@@ -83,7 +87,8 @@ public:
   void setBAT(BoltAddressTranslation *B) override { BAT = B; }
 
   /// Check whether \p FileName is a perf.data file
-  static bool checkPerfDataMagic(StringRef FileName);
+  static bool checkPerfDataMagic(StringRef FileName,
+                                 const llvm::clv2::OptionsContext &OptsCtx);
 
   /// Checks if a file starts with a specific magic string.
   static bool checkInputFileMagic(StringRef FileName, StringLiteral MagicStr);

@@ -12,12 +12,12 @@
 
 #include "llvm/Transforms/IPO/FunctionImport.h"
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Analysis/CtxProfAnalysis.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/IR/AutoUpgrade.h"
 #include "llvm/IR/Function.h"
@@ -25,7 +25,7 @@
 #include "llvm/IR/GlobalObject.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
-#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/IROptionsOptInfos.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ModuleSummaryIndex.h"
@@ -33,21 +33,22 @@
 #include "llvm/Linker/IRMover.h"
 #include "llvm/ProfileData/PGOCtxProfReader.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 #include "llvm/Transforms/IPO/Internalize.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/FunctionImportUtils.h"
-#include "llvm/Transforms/Utils/ModuleUtils.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <cassert>
 #include <memory>
@@ -76,123 +77,79 @@ STATISTIC(NumDeadSymbols, "Number of dead stripped symbols in index");
 STATISTIC(NumLiveSymbols, "Number of live symbols in index");
 
 namespace llvm {
-extern cl::opt<bool> AlwaysRenamePromotedLocals;
-
-cl::opt<bool>
-    ForceImportAll("force-import-all", cl::init(false), cl::Hidden,
-                   cl::desc("Import functions with noinline attribute"));
-
-/// Limit on instruction count of imported functions.
-static cl::opt<unsigned> ImportInstrLimit(
-    "import-instr-limit", cl::init(100), cl::Hidden, cl::value_desc("N"),
-    cl::desc("Only import functions with less than N instructions"));
-
-static cl::opt<int> ImportCutoff(
-    "import-cutoff", cl::init(-1), cl::Hidden, cl::value_desc("N"),
-    cl::desc("Only import first N functions if N>=0 (default -1)"));
-
-static cl::opt<float>
-    ImportInstrFactor("import-instr-evolution-factor", cl::init(0.7),
-                      cl::Hidden, cl::value_desc("x"),
-                      cl::desc("As we import functions, multiply the "
-                               "`import-instr-limit` threshold by this factor "
-                               "before processing newly imported functions"));
-
-static cl::opt<float> ImportHotInstrFactor(
-    "import-hot-evolution-factor", cl::init(1.0), cl::Hidden,
-    cl::value_desc("x"),
-    cl::desc("As we import functions called from hot callsite, multiply the "
-             "`import-instr-limit` threshold by this factor "
-             "before processing newly imported functions"));
-
-static cl::opt<float> ImportHotMultiplier(
-    "import-hot-multiplier", cl::init(10.0), cl::Hidden, cl::value_desc("x"),
-    cl::desc("Multiply the `import-instr-limit` threshold for hot callsites"));
-
-static cl::opt<float> ImportCriticalMultiplier(
-    "import-critical-multiplier", cl::init(100.0), cl::Hidden,
-    cl::value_desc("x"),
-    cl::desc(
-        "Multiply the `import-instr-limit` threshold for critical callsites"));
-
-// FIXME: This multiplier was not really tuned up.
-static cl::opt<float> ImportColdMultiplier(
-    "import-cold-multiplier", cl::init(0), cl::Hidden, cl::value_desc("N"),
-    cl::desc("Multiply the `import-instr-limit` threshold for cold callsites"));
-
-static cl::opt<bool> PrintImports("print-imports", cl::init(false), cl::Hidden,
-                                  cl::desc("Print imported functions"));
-
-static cl::opt<bool> PrintImportFailures(
-    "print-import-failures", cl::init(false), cl::Hidden,
-    cl::desc("Print information for functions rejected for importing"));
-
-static cl::opt<bool> ComputeDead("compute-dead", cl::init(true), cl::Hidden,
-                                 cl::desc("Compute dead symbols"));
-
-static cl::opt<bool> EnableImportMetadata(
-    "enable-import-metadata", cl::init(false), cl::Hidden,
-    cl::desc("Enable import metadata like 'thinlto_src_module' and "
-             "'thinlto_src_file'"));
-
-/// Summary file to use for function importing when using -function-import from
-/// the command line.
-static cl::opt<std::string>
-    SummaryFile("summary-file",
-                cl::desc("The summary file to use for function importing."));
-
-/// Used when testing importing from distributed indexes via opt
-// -function-import.
-static cl::opt<bool>
-    ImportAllIndex("import-all-index",
-                   cl::desc("Import all external functions in index."));
-
-/// This is a test-only option.
-/// If this option is enabled, the ThinLTO indexing step will import each
-/// function declaration as a fallback. In a real build this may increase ram
-/// usage of the indexing step unnecessarily.
-/// TODO: Implement selective import (based on combined summary analysis) to
-/// ensure the imported function has a use case in the postlink pipeline.
-static cl::opt<bool> ImportDeclaration(
-    "import-declaration", cl::init(false), cl::Hidden,
-    cl::desc("If true, import function declaration as fallback if the function "
-             "definition is not imported."));
-
-/// Pass a workload description file - an example of workload would be the
-/// functions executed to satisfy a RPC request. A workload is defined by a root
-/// function and the list of functions that are (frequently) needed to satisfy
-/// it. The module that defines the root will have all those functions imported.
-/// The file contains a JSON dictionary. The keys are root functions, the values
-/// are lists of functions to import in the module defining the root. It is
-/// assumed -funique-internal-linkage-names was used, thus ensuring function
-/// names are unique even for local linkage ones.
-static cl::opt<std::string> WorkloadDefinitions(
-    "thinlto-workload-def",
-    cl::desc("Pass a workload definition. This is a file containing a JSON "
-             "dictionary. The keys are root functions, the values are lists of "
-             "functions to import in the module defining the root. It is "
-             "assumed -funique-internal-linkage-names was used, to ensure "
-             "local linkage functions have unique names. For example: \n"
-             "{\n"
-             "  \"rootFunction_1\": [\"function_to_import_1\", "
-             "\"function_to_import_2\"], \n"
-             "  \"rootFunction_2\": [\"function_to_import_3\", "
-             "\"function_to_import_4\"] \n"
-             "}"),
-    cl::Hidden);
-
-extern cl::opt<std::string> UseCtxProfile;
-
-static cl::opt<bool> CtxprofMoveRootsToOwnModule(
-    "thinlto-move-ctxprof-trees",
-    cl::desc("Move contextual profiling roots and the graphs under them in "
-             "their own module."),
-    cl::Hidden, cl::init(false));
-
-extern cl::list<GlobalValue::GUID> MoveSymbolGUID;
-
-extern cl::opt<bool> EnableMemProfContextDisambiguation;
 } // end namespace llvm
+
+static bool getForceImportAll(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::IPO_ForceImportAll>(Ctx);
+}
+static unsigned getImportInstrLimit(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::IPO_ImportInstrLimit>(Ctx);
+}
+static int getImportCutoff(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::IPO_ImportCutoff>(Ctx);
+}
+static float getImportInstrFactor(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
+                                    &clv2::IPO_ImportInstrFactor>(Ctx, 0.7f);
+}
+static float getImportHotInstrFactor(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
+                                    &clv2::IPO_ImportHotInstrFactor>(Ctx, 1.0f);
+}
+static float getImportHotMultiplier(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
+                                    &clv2::IPO_ImportHotMultiplier>(Ctx, 10.0f);
+}
+static float getImportCriticalMultiplier(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
+                                    &clv2::IPO_ImportCriticalMultiplier>(
+      Ctx, 100.0f);
+}
+static float getImportColdMultiplier(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
+                                    &clv2::IPO_ImportColdMultiplier>(Ctx, 0.0f);
+}
+static bool getPrintImports(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_PrintImports>(
+      M.getContext().getOptionsContext());
+}
+static bool getPrintImportFailures(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::IPO_PrintImportFailures>(Ctx);
+}
+static bool getComputeDead(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::IPO_ComputeDead>(Ctx);
+}
+static bool getEnableImportMetadata(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_EnableImportMetadata>(
+      M.getContext().getOptionsContext());
+}
+static const std::string &getSummaryFile(const Module &M) {
+  if (auto *O =
+          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
+    if (O->specified<&clv2::IPO_SummaryFile>())
+      return O->get<&clv2::IPO_SummaryFile>();
+  static const std::string Default;
+  return Default;
+}
+static bool getImportAllIndex(const Module &M) {
+  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
+                                    &clv2::IPO_ImportAllIndex>(
+      M.getContext().getOptionsContext(), false);
+}
+static bool getImportDeclaration(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::IPO_ImportDeclaration>(Ctx);
+}
+static const std::string &
+getWorkloadDefinitions(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::IPOOptsReg>(Ctx))
+    if (O->specified<&clv2::IPO_WorkloadDefinitions>())
+      return O->get<&clv2::IPO_WorkloadDefinitions>();
+  static const std::string Default;
+  return Default;
+}
+static bool getCtxprofMoveRootsToOwnModule(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::IPO_CtxprofMoveRootsToOwnModule>(Ctx);
+}
 
 // Load lazily a module from \p FileName in \p Context.
 static std::unique_ptr<Module> loadFile(const std::string &FileName,
@@ -308,7 +265,8 @@ selectCallee(const ModuleSummaryIndex &Index,
              ArrayRef<std::unique_ptr<GlobalValueSummary>> CalleeSummaryList,
              unsigned Threshold, StringRef CallerModulePath,
              const GlobalValueSummary *&TooLargeOrNoInlineSummary,
-             FunctionImporter::ImportFailureReason &Reason) {
+             FunctionImporter::ImportFailureReason &Reason,
+             const clv2::OptionsContext &Ctx) {
   // Records the last summary with reason noinline or too-large.
   TooLargeOrNoInlineSummary = nullptr;
   auto QualifiedCandidates =
@@ -324,14 +282,14 @@ selectCallee(const ModuleSummaryIndex &Index,
     // Don't bother importing the definition if the chance of inlining it is
     // not high enough (except under `--force-import-all`).
     if ((Summary->instCount() > Threshold) && !Summary->fflags().AlwaysInline &&
-        !ForceImportAll) {
+        !getForceImportAll(Ctx)) {
       TooLargeOrNoInlineSummary = Summary;
       Reason = FunctionImporter::ImportFailureReason::TooLarge;
       continue;
     }
 
     // Don't bother importing the definition if we can't inline it anyway.
-    if (Summary->fflags().NoInline && !ForceImportAll) {
+    if (Summary->fflags().NoInline && !getForceImportAll(Ctx)) {
       TooLargeOrNoInlineSummary = Summary;
       Reason = FunctionImporter::ImportFailureReason::NoInline;
       continue;
@@ -403,6 +361,7 @@ class GlobalsImporter final {
       IsPrevailing;
   FunctionImporter::ImportMapTy &ImportList;
   DenseMap<StringRef, FunctionImporter::ExportSetTy> *const ExportLists;
+  const clv2::OptionsContext *Ctx;
 
   bool shouldImportGlobal(const ValueInfo &VI) {
     const auto &GVS = DefinedGVSummaries.find(VI.getGUID());
@@ -460,8 +419,8 @@ class GlobalsImporter final {
         if (shouldSkipLocalInAnotherModule(GVS, VI.getSummaryList().size(),
                                            Summary.modulePath()) ||
             !Index.canImportGlobalVar(GVS, /* AnalyzeRefs */ true,
-                                      CanImportDecl)) {
-          if (ImportDeclaration && CanImportDecl)
+                                      CanImportDecl, *Ctx)) {
+          if (getImportDeclaration(*Ctx) && CanImportDecl)
             ImportList.maybeAddDeclaration(RefSummary->modulePath(),
                                            VI.getGUID());
 
@@ -498,10 +457,11 @@ public:
       function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
           IsPrevailing,
       FunctionImporter::ImportMapTy &ImportList,
-      DenseMap<StringRef, FunctionImporter::ExportSetTy> *ExportLists)
+      DenseMap<StringRef, FunctionImporter::ExportSetTy> *ExportLists,
+      const clv2::OptionsContext &Ctx)
       : Index(Index), DefinedGVSummaries(DefinedGVSummaries),
         IsPrevailing(IsPrevailing), ImportList(ImportList),
-        ExportLists(ExportLists) {}
+        ExportLists(ExportLists), Ctx(&Ctx) {}
 
   void onImportingSummary(const GlobalValueSummary &Summary) {
     SmallVector<const GlobalVarSummary *, 128> Worklist;
@@ -527,13 +487,16 @@ protected:
       IsPrevailing;
   const ModuleSummaryIndex &Index;
   DenseMap<StringRef, FunctionImporter::ExportSetTy> *const ExportLists;
+  const clv2::OptionsContext *Ctx;
 
   ModuleImportsManager(
       function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
           IsPrevailing,
       const ModuleSummaryIndex &Index,
-      DenseMap<StringRef, FunctionImporter::ExportSetTy> *ExportLists = nullptr)
-      : IsPrevailing(IsPrevailing), Index(Index), ExportLists(ExportLists) {}
+      DenseMap<StringRef, FunctionImporter::ExportSetTy> *ExportLists,
+      const clv2::OptionsContext &Ctx)
+      : IsPrevailing(IsPrevailing), Index(Index), ExportLists(ExportLists),
+        Ctx(&Ctx) {}
   virtual bool canImport(ValueInfo VI) { return true; }
 
 public:
@@ -551,8 +514,8 @@ public:
   create(function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
              IsPrevailing,
          const ModuleSummaryIndex &Index,
-         DenseMap<StringRef, FunctionImporter::ExportSetTy> *ExportLists =
-             nullptr);
+         DenseMap<StringRef, FunctionImporter::ExportSetTy> *ExportLists,
+         const clv2::OptionsContext &Ctx);
 };
 
 /// A ModuleImportsManager that operates based on a workload definition (see
@@ -574,7 +537,7 @@ class WorkloadImportsManager : public ModuleImportsManager {
                          StringRef ModName,
                          FunctionImporter::ImportMapTy &ImportList) override {
     StringRef Filename = ModName;
-    if (CtxprofMoveRootsToOwnModule) {
+    if (getCtxprofMoveRootsToOwnModule(*Ctx)) {
       Filename = sys::path::filename(ModName);
       // Drop the file extension.
       Filename = Filename.substr(0, Filename.find_last_of('.'));
@@ -591,7 +554,7 @@ class WorkloadImportsManager : public ModuleImportsManager {
                       << " contains the root(s) of context(s).\n");
 
     GlobalsImporter GVI(Index, DefinedGVSummaries, IsPrevailing, ImportList,
-                        ExportLists);
+                        ExportLists, *Ctx);
     auto &ValueInfos = SetIter->second;
     for (auto &VI : llvm::make_early_inc_range(ValueInfos)) {
       auto It = DefinedGVSummaries.find(VI.getGUID());
@@ -702,7 +665,8 @@ class WorkloadImportsManager : public ModuleImportsManager {
       });
     };
     std::error_code EC;
-    auto BufferOrErr = MemoryBuffer::getFileOrSTDIN(WorkloadDefinitions);
+    auto BufferOrErr =
+        MemoryBuffer::getFileOrSTDIN(getWorkloadDefinitions(*Ctx));
     if (std::error_code EC = BufferOrErr.getError()) {
       report_fatal_error("Failed to open context file");
       return;
@@ -759,7 +723,7 @@ class WorkloadImportsManager : public ModuleImportsManager {
 
   void loadFromCtxProf() {
     std::error_code EC;
-    auto BufferOrErr = MemoryBuffer::getFileOrSTDIN(UseCtxProfile);
+    auto BufferOrErr = MemoryBuffer::getFileOrSTDIN(getUseCtxProfile(*Ctx));
     if (std::error_code EC = BufferOrErr.getError()) {
       report_fatal_error("Failed to open contextual profile file");
       return;
@@ -767,12 +731,12 @@ class WorkloadImportsManager : public ModuleImportsManager {
     auto Buffer = std::move(BufferOrErr.get());
 
     PGOCtxProfileReader Reader(Buffer->getBuffer());
-    auto Ctx = Reader.loadProfiles();
-    if (!Ctx) {
+    auto CtxProf = Reader.loadProfiles();
+    if (!CtxProf) {
       report_fatal_error("Failed to parse contextual profiles");
       return;
     }
-    const auto &CtxMap = Ctx->Contexts;
+    const auto &CtxMap = CtxProf->Contexts;
     SetVector<GlobalValue::GUID> ContainedGUIDs;
     for (const auto &[RootGuid, Root] : CtxMap) {
       // Avoid ContainedGUIDs to get in/out of scope. Reuse its memory for
@@ -793,7 +757,7 @@ class WorkloadImportsManager : public ModuleImportsManager {
       }
       std::string RootDefiningModule =
           RootVI.getSummaryList().front()->modulePath().str();
-      if (CtxprofMoveRootsToOwnModule) {
+      if (getCtxprofMoveRootsToOwnModule(*Ctx)) {
         RootDefiningModule = std::to_string(RootGuid);
         LLVM_DEBUG(
             dbgs() << "[Workload] Moving " << RootGuid
@@ -819,14 +783,15 @@ public:
       function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
           IsPrevailing,
       const ModuleSummaryIndex &Index,
-      DenseMap<StringRef, FunctionImporter::ExportSetTy> *ExportLists)
-      : ModuleImportsManager(IsPrevailing, Index, ExportLists) {
-    if (UseCtxProfile.empty() == WorkloadDefinitions.empty()) {
+      DenseMap<StringRef, FunctionImporter::ExportSetTy> *ExportLists,
+      const clv2::OptionsContext &Ctx)
+      : ModuleImportsManager(IsPrevailing, Index, ExportLists, Ctx) {
+    if (getUseCtxProfile(Ctx).empty() == getWorkloadDefinitions(Ctx).empty()) {
       report_fatal_error(
           "Pass only one of: -thinlto-pgo-ctx-prof or -thinlto-workload-def");
       return;
     }
-    if (!UseCtxProfile.empty())
+    if (!getUseCtxProfile(Ctx).empty())
       loadFromCtxProf();
     else
       loadFromJson();
@@ -847,15 +812,16 @@ std::unique_ptr<ModuleImportsManager> ModuleImportsManager::create(
     function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
         IsPrevailing,
     const ModuleSummaryIndex &Index,
-    DenseMap<StringRef, FunctionImporter::ExportSetTy> *ExportLists) {
-  if (WorkloadDefinitions.empty() && UseCtxProfile.empty()) {
+    DenseMap<StringRef, FunctionImporter::ExportSetTy> *ExportLists,
+    const clv2::OptionsContext &Ctx) {
+  if (getWorkloadDefinitions(Ctx).empty() && getUseCtxProfile(Ctx).empty()) {
     LLVM_DEBUG(dbgs() << "[Workload] Using the regular imports manager.\n");
     return std::unique_ptr<ModuleImportsManager>(
-        new ModuleImportsManager(IsPrevailing, Index, ExportLists));
+        new ModuleImportsManager(IsPrevailing, Index, ExportLists, Ctx));
   }
   LLVM_DEBUG(dbgs() << "[Workload] Using the contextual imports manager.\n");
   return std::make_unique<WorkloadImportsManager>(IsPrevailing, Index,
-                                                  ExportLists);
+                                                  ExportLists, Ctx);
 }
 
 static const char *
@@ -897,9 +863,9 @@ void ModuleImportsManager::computeImportForFunction(
     LLVM_DEBUG(dbgs() << " edge -> " << VI << " Threshold:" << Threshold
                       << "\n");
 
-    if (ImportCutoff >= 0 && ImportCount >= ImportCutoff) {
-      LLVM_DEBUG(dbgs() << "ignored! import-cutoff value of " << ImportCutoff
-                        << " reached.\n");
+    if (getImportCutoff(*Ctx) >= 0 && ImportCount >= getImportCutoff(*Ctx)) {
+      LLVM_DEBUG(dbgs() << "ignored! import-cutoff value of "
+                        << getImportCutoff(*Ctx) << " reached.\n");
       continue;
     }
 
@@ -920,13 +886,13 @@ void ModuleImportsManager::computeImportForFunction(
       continue;
     }
 
-    auto GetBonusMultiplier = [](CalleeInfo::HotnessType Hotness) -> float {
+    auto GetBonusMultiplier = [this](CalleeInfo::HotnessType Hotness) -> float {
       if (Hotness == CalleeInfo::HotnessType::Hot)
-        return ImportHotMultiplier;
+        return getImportHotMultiplier(*Ctx);
       if (Hotness == CalleeInfo::HotnessType::Cold)
-        return ImportColdMultiplier;
+        return getImportColdMultiplier(*Ctx);
       if (Hotness == CalleeInfo::HotnessType::Critical)
-        return ImportCriticalMultiplier;
+        return getImportCriticalMultiplier(*Ctx);
       return 1.0;
     };
 
@@ -968,7 +934,7 @@ void ModuleImportsManager::computeImportForFunction(
         LLVM_DEBUG(
             dbgs() << "ignored! Target was already rejected with Threshold "
             << ProcessedThreshold << "\n");
-        if (PrintImportFailures) {
+        if (getPrintImportFailures(*Ctx)) {
           assert(FailureInfo &&
                  "Expected FailureInfo for previously rejected candidate");
           FailureInfo->Attempts++;
@@ -980,13 +946,13 @@ void ModuleImportsManager::computeImportForFunction(
 
       // `SummaryForDeclImport` is an summary eligible for declaration import.
       const GlobalValueSummary *SummaryForDeclImport = nullptr;
-      CalleeSummary =
-          selectCallee(Index, VI.getSummaryList(), NewThreshold,
-                       Summary.modulePath(), SummaryForDeclImport, Reason);
+      CalleeSummary = selectCallee(Index, VI.getSummaryList(), NewThreshold,
+                                   Summary.modulePath(), SummaryForDeclImport,
+                                   Reason, *Ctx);
       if (!CalleeSummary) {
         // There isn't a callee for definition import but one for declaration
         // import.
-        if (ImportDeclaration && SummaryForDeclImport) {
+        if (getImportDeclaration(*Ctx) && SummaryForDeclImport) {
           StringRef DeclSourceModule = SummaryForDeclImport->modulePath();
 
           // Note `ExportLists` only keeps track of exports due to imported
@@ -998,7 +964,7 @@ void ModuleImportsManager::computeImportForFunction(
         // update failure info if requested.
         if (PreviouslyVisited) {
           ProcessedThreshold = NewThreshold;
-          if (PrintImportFailures) {
+          if (getPrintImportFailures(*Ctx)) {
             assert(FailureInfo &&
                    "Expected FailureInfo for previously rejected candidate");
             FailureInfo->Reason = Reason;
@@ -1006,13 +972,13 @@ void ModuleImportsManager::computeImportForFunction(
             FailureInfo->MaxHotness =
                 std::max(FailureInfo->MaxHotness, Edge.second.getHotness());
           }
-        } else if (PrintImportFailures) {
+        } else if (getPrintImportFailures(*Ctx)) {
           assert(!FailureInfo &&
                  "Expected no FailureInfo for newly rejected candidate");
           FailureInfo = std::make_unique<FunctionImporter::ImportFailureInfo>(
               VI, Edge.second.getHotness(), Reason, 1);
         }
-        if (ForceImportAll) {
+        if (getForceImportAll(*Ctx)) {
           std::string Msg = std::string("Failed to import function ") +
                             VI.name().str() + " due to " +
                             getFailureName(Reason);
@@ -1032,7 +998,8 @@ void ModuleImportsManager::computeImportForFunction(
       CalleeSummary = CalleeSummary->getBaseObject();
       ResolvedCalleeSummary = cast<FunctionSummary>(CalleeSummary);
 
-      assert((ResolvedCalleeSummary->fflags().AlwaysInline || ForceImportAll ||
+      assert((ResolvedCalleeSummary->fflags().AlwaysInline ||
+              getForceImportAll(*Ctx) ||
               (ResolvedCalleeSummary->instCount() <= NewThreshold)) &&
              "selectCallee() didn't honor the threshold");
 
@@ -1056,13 +1023,13 @@ void ModuleImportsManager::computeImportForFunction(
         (*ExportLists)[ExportModulePath].insert(VI);
     }
 
-    auto GetAdjustedThreshold = [](unsigned Threshold, bool IsHotCallsite) {
+    auto GetAdjustedThreshold = [this](unsigned Threshold, bool IsHotCallsite) {
       // Adjust the threshold for next level of imported functions.
       // The threshold is different for hot callsites because we can then
       // inline chains of hot calls.
       if (IsHotCallsite)
-        return Threshold * ImportHotInstrFactor;
-      return Threshold * ImportInstrFactor;
+        return Threshold * getImportHotInstrFactor(*Ctx);
+      return Threshold * getImportInstrFactor(*Ctx);
     };
 
     const auto AdjThreshold = GetAdjustedThreshold(Threshold, IsHotCallsite);
@@ -1081,7 +1048,7 @@ void ModuleImportsManager::computeImportForModule(
   // we will analyse the callees and may import further down the callgraph.
   SmallVector<EdgeInfo, 128> Worklist;
   GlobalsImporter GVI(Index, DefinedGVSummaries, IsPrevailing, ImportList,
-                      ExportLists);
+                      ExportLists, *Ctx);
   FunctionImporter::ImportThresholdsTy ImportThresholds;
 
   // Populate the worklist with the import for the functions in the current
@@ -1102,8 +1069,9 @@ void ModuleImportsManager::computeImportForModule(
       // Skip import for global variables
       continue;
     LLVM_DEBUG(dbgs() << "Initialize import for " << VI << "\n");
-    computeImportForFunction(*FuncSummary, ImportInstrLimit, DefinedGVSummaries,
-                             Worklist, GVI, ImportList, ImportThresholds);
+    computeImportForFunction(*FuncSummary, getImportInstrLimit(*Ctx),
+                             DefinedGVSummaries, Worklist, GVI, ImportList,
+                             ImportThresholds);
   }
 
   // Process the newly imported functions and add callees to the worklist.
@@ -1118,7 +1086,7 @@ void ModuleImportsManager::computeImportForModule(
 
   // Print stats about functions considered but rejected for importing
   // when requested.
-  if (PrintImportFailures) {
+  if (getPrintImportFailures(*Ctx)) {
     dbgs() << "Missed imports into module " << ModName << "\n";
     for (auto &I : ImportThresholds) {
       auto &ProcessedThreshold = std::get<0>(I.second);
@@ -1235,8 +1203,10 @@ void llvm::ComputeCrossModuleImport(
     function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
         isPrevailing,
     FunctionImporter::ImportListsTy &ImportLists,
-    DenseMap<StringRef, FunctionImporter::ExportSetTy> &ExportLists) {
-  auto MIS = ModuleImportsManager::create(isPrevailing, Index, &ExportLists);
+    DenseMap<StringRef, FunctionImporter::ExportSetTy> &ExportLists,
+    const clv2::OptionsContext &Ctx) {
+  auto MIS =
+      ModuleImportsManager::create(isPrevailing, Index, &ExportLists, Ctx);
   // For each module that has function defined, compute the import/export lists.
   for (const auto &DefinedGVSummaries : ModuleToDefinedGVSummaries) {
     auto &ImportList = ImportLists[DefinedGVSummaries.first];
@@ -1351,8 +1321,8 @@ static void ComputeCrossModuleImportForModuleForTest(
     StringRef ModulePath,
     function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
         isPrevailing,
-    const ModuleSummaryIndex &Index,
-    FunctionImporter::ImportMapTy &ImportList) {
+    const ModuleSummaryIndex &Index, FunctionImporter::ImportMapTy &ImportList,
+    const clv2::OptionsContext &Ctx) {
   // Collect the list of functions this module defines.
   // GUID -> Summary
   GVSummaryMapTy FunctionSummaryMap;
@@ -1360,7 +1330,7 @@ static void ComputeCrossModuleImportForModuleForTest(
 
   // Compute the import list for this module.
   LLVM_DEBUG(dbgs() << "Computing import for Module '" << ModulePath << "'\n");
-  auto MIS = ModuleImportsManager::create(isPrevailing, Index);
+  auto MIS = ModuleImportsManager::create(isPrevailing, Index, nullptr, Ctx);
   MIS->computeImportForModule(FunctionSummaryMap, ModulePath, ImportList);
 
 #ifndef NDEBUG
@@ -1443,9 +1413,10 @@ void llvm::updateIndirectCalls(ModuleSummaryIndex &Index) {
 void llvm::computeDeadSymbolsAndUpdateIndirectCalls(
     ModuleSummaryIndex &Index,
     const DenseSet<GlobalValue::GUID> &GUIDPreservedSymbols,
-    function_ref<PrevailingType(GlobalValue::GUID)> isPrevailing) {
+    function_ref<PrevailingType(GlobalValue::GUID)> isPrevailing,
+    const clv2::OptionsContext &Ctx) {
   assert(!Index.withGlobalValueDeadStripping());
-  if (!ComputeDead ||
+  if (!getComputeDead(Ctx) ||
       // Don't do anything when nothing is live, this is friendly with tests.
       GUIDPreservedSymbols.empty()) {
     // Still need to update indirect calls.
@@ -1560,12 +1531,12 @@ void llvm::computeDeadSymbolsWithConstProp(
     ModuleSummaryIndex &Index,
     const DenseSet<GlobalValue::GUID> &GUIDPreservedSymbols,
     function_ref<PrevailingType(GlobalValue::GUID)> isPrevailing,
-    bool ImportEnabled) {
+    bool ImportEnabled, const clv2::OptionsContext &Ctx) {
   llvm::TimeTraceScope timeScope("Drop dead symbols and propagate attributes");
   computeDeadSymbolsAndUpdateIndirectCalls(Index, GUIDPreservedSymbols,
-                                           isPrevailing);
+                                           isPrevailing, Ctx);
   if (ImportEnabled)
-    Index.propagateAttributes(GUIDPreservedSymbols);
+    Index.propagateAttributes(GUIDPreservedSymbols, Ctx);
 }
 
 /// Compute the set of summaries needed for a ThinLTO backend compilation of
@@ -1575,7 +1546,7 @@ void llvm::gatherImportedSummariesForModule(
     const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
     const FunctionImporter::ImportMapTy &ImportList,
     ModuleToSummariesForIndexTy &ModuleToSummariesForIndex,
-    GVSummaryPtrSet &DecSummaries) {
+    GVSummaryPtrSet &DecSummaries, const clv2::OptionsContext &Ctx) {
   // Include all summaries from the importing module.
   ModuleToSummariesForIndex[std::string(ModulePath)] =
       ModuleToDefinedGVSummaries.lookup(ModulePath);
@@ -1621,7 +1592,9 @@ void llvm::gatherImportedSummariesForModule(
   // by the importing module. Computing the precise set would require walking
   // the summary reference graph from each imported function, which is more
   // expensive than the simple scan here.
-  if (!AlwaysRenamePromotedLocals) {
+  bool AlwaysRename =
+      clv2::getOptValOrDefault<&clv2::IR_AlwaysRenamePromotedLocals>(Ctx);
+  if (!AlwaysRename) {
     for (auto &[ModPath, SummariesForIndex] : ModuleToSummariesForIndex) {
       if (ModPath == ModulePath)
         continue;
@@ -1914,33 +1887,6 @@ static void internalizeGVsAfterImport(Module &M) {
     }
 }
 
-/// When a function carrying !implicit.ref is imported via ThinLTO, the
-/// referenced global arrives as available_externally. This string can be dead
-/// code eliminated since it has no IR uses -- only metadata references. Adding
-/// it to llvm.compiler.used prevents elimination.
-static void protectImplicitRefGlobals(Module &M) {
-  SmallPtrSet<GlobalValue *, 4> Seen;
-  SmallVector<GlobalValue *, 4> ToProtect;
-  for (Function &F : M) {
-    if (!F.hasAvailableExternallyLinkage() ||
-        !F.hasMetadata(LLVMContext::MD_implicit_ref))
-      continue;
-    SmallVector<MDNode *> MDs;
-    F.getMetadata(LLVMContext::MD_implicit_ref, MDs);
-    for (MDNode *MD : MDs) {
-      auto *Op = MD->getOperand(0).get();
-      if (!Op)
-        continue;
-      if (auto *VAM = dyn_cast<ValueAsMetadata>(Op))
-        if (auto *GV = dyn_cast<GlobalVariable>(VAM->getValue()))
-          if (GV->hasAvailableExternallyLinkage() && Seen.insert(GV).second)
-            ToProtect.push_back(GV);
-    }
-  }
-  if (!ToProtect.empty())
-    appendToCompilerUsed(M, ToProtect);
-}
-
 // Automatically import functions in Module \p DestModule based on the summaries
 // index.
 Expected<bool> FunctionImporter::importFunctions(
@@ -1953,7 +1899,10 @@ Expected<bool> FunctionImporter::importFunctions(
   // The function will be imported elsewhere, as extenal linkage, and the
   // destination doesn't yet have its definition.
   DenseSet<GlobalValue::GUID> MoveSymbolGUIDSet;
-  MoveSymbolGUIDSet.insert_range(MoveSymbolGUID);
+  if (auto *O = clv2::getView<&clv2::TransformUtilsOptsReg>(
+          DestModule.getContext().getOptionsContext()))
+    if (O->specified<&clv2::TU_MoveSymbolGUID>())
+      MoveSymbolGUIDSet.insert_range(O->get<&clv2::TU_MoveSymbolGUID>());
   for (auto &F : DestModule)
     if (!F.isDeclaration() && MoveSymbolGUIDSet.contains(F.getGUIDOrFallback()))
       F.deleteBody();
@@ -2000,7 +1949,11 @@ Expected<bool> FunctionImporter::importFunctions(
             return std::move(Err);
           // MemProf should match function's definition and summary,
           // 'thinlto_src_module' is needed.
-          if (EnableImportMetadata || EnableMemProfContextDisambiguation) {
+          bool EMPCDVal = false;
+          if (auto *O = clv2::getView<&clv2::IPOOptsReg>(
+                  DestModule.getContext().getOptionsContext()))
+            EMPCDVal = O->get<&clv2::IPO_EnableMemProfContextDisambiguation>();
+          if (getEnableImportMetadata(DestModule) || EMPCDVal) {
             // Add 'thinlto_src_module' and 'thinlto_src_file' metadata for
             // statistics and debugging.
             F.setMetadata(
@@ -2067,13 +2020,15 @@ Expected<bool> FunctionImporter::importFunctions(
           if (Error Err = GO->materialize())
             return std::move(Err);
           auto *Fn = replaceAliasWithAliasee(SrcModule.get(), &GA);
-          assert(Fn);
-          (void)Fn;
           LLVM_DEBUG(dbgs()
                      << "Is importing aliasee fn " << GO->getGUIDOrFallback()
                      << " " << GO->getName() << " from "
                      << SrcModule->getSourceFileName() << "\n");
-          if (EnableImportMetadata || EnableMemProfContextDisambiguation) {
+          bool EMPCDVal = false;
+          if (auto *O = clv2::getView<&clv2::IPOOptsReg>(
+                  DestModule.getContext().getOptionsContext()))
+            EMPCDVal = O->get<&clv2::IPO_EnableMemProfContextDisambiguation>();
+          if (getEnableImportMetadata(DestModule) || EMPCDVal) {
             // Add 'thinlto_src_module' and 'thinlto_src_file' metadata for
             // statistics and debugging.
             Fn->setMetadata(
@@ -2106,7 +2061,7 @@ Expected<bool> FunctionImporter::importFunctions(
     renameModuleForThinLTO(*SrcModule, Index, ClearDSOLocalOnDeclarations,
                            &GlobalsToImport);
 
-    if (PrintImports) {
+    if (getPrintImports(DestModule)) {
       for (const auto *GV : GlobalsToImport)
         dbgs() << DestModule.getSourceFileName() << ": Import " << GV->getName()
                << " from " << SrcModule->getSourceFileName() << "\n";
@@ -2125,11 +2080,6 @@ Expected<bool> FunctionImporter::importFunctions(
 
   internalizeGVsAfterImport(DestModule);
 
-  // Protect !implicit.ref-referenced globals imported as available_externally
-  // from DCE'd. Only needed when globals were actually imported.
-  if (ImportedGVCount > 0)
-    protectImplicitRefGlobals(DestModule);
-
   NumImportedFunctions += (ImportedCount - ImportedGVCount);
   NumImportedGlobalVars += ImportedGVCount;
 
@@ -2146,13 +2096,13 @@ Expected<bool> FunctionImporter::importFunctions(
 static bool doImportingForModuleForTest(
     Module &M, function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
                    isPrevailing) {
-  if (SummaryFile.empty())
+  if (getSummaryFile(M).empty())
     report_fatal_error("error: -function-import requires -summary-file\n");
   Expected<std::unique_ptr<ModuleSummaryIndex>> IndexPtrOrErr =
-      getModuleSummaryIndexForFile(SummaryFile);
+      getModuleSummaryIndexForFile(getSummaryFile(M));
   if (!IndexPtrOrErr) {
     logAllUnhandledErrors(IndexPtrOrErr.takeError(), errs(),
-                          "Error loading file '" + SummaryFile + "': ");
+                          "Error loading file '" + getSummaryFile(M) + "': ");
     return false;
   }
   std::unique_ptr<ModuleSummaryIndex> Index = std::move(*IndexPtrOrErr);
@@ -2163,12 +2113,13 @@ static bool doImportingForModuleForTest(
   // If requested, simply import all functions in the index. This is used
   // when testing distributed backend handling via the opt tool, when
   // we have distributed indexes containing exactly the summaries to import.
-  if (ImportAllIndex)
+  if (getImportAllIndex(M))
     ComputeCrossModuleImportForModuleFromIndexForTest(M.getModuleIdentifier(),
                                                       *Index, ImportList);
   else
-    ComputeCrossModuleImportForModuleForTest(M.getModuleIdentifier(),
-                                             isPrevailing, *Index, ImportList);
+    ComputeCrossModuleImportForModuleForTest(
+        M.getModuleIdentifier(), isPrevailing, *Index, ImportList,
+        M.getContext().getOptionsContext());
 
   // Conservatively mark all internal values as promoted. This interface is
   // only used when doing importing via the function importing pass. The pass

@@ -12,29 +12,17 @@
 
 #include "mlir/Tools/mlir-translate/Translation.h"
 #include "mlir/IR/AsmState.h"
+#include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
+#include "mlir/Target/MLIRTranslateOptionsOptInfos.h"
 #include "mlir/Tools/ParseUtilities.h"
-#include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/SourceMgr.h"
 #include <optional>
 
 using namespace mlir;
 
-//===----------------------------------------------------------------------===//
-// Translation CommandLine Options
-//===----------------------------------------------------------------------===//
-
-struct TranslationOptions {
-  llvm::cl::opt<bool> noImplicitModule{
-      "no-implicit-module",
-      llvm::cl::desc("Disable the parsing of an implicit top-level module op"),
-      llvm::cl::init(false)};
-};
-
-static llvm::ManagedStatic<TranslationOptions> clOptions;
-
-void mlir::registerTranslationCLOptions() { *clOptions; }
+void mlir::registerTranslationCLOptions() {}
 
 //===----------------------------------------------------------------------===//
 // Translation Registry
@@ -42,16 +30,20 @@ void mlir::registerTranslationCLOptions() { *clOptions; }
 
 /// Get the mutable static map between registered file-to-file MLIR
 /// translations.
-static llvm::StringMap<Translation> &getTranslationRegistry() {
+static llvm::StringMap<Translation> &getTranslationRegistryInternal() {
   static llvm::StringMap<Translation> translationBundle;
   return translationBundle;
+}
+
+const llvm::StringMap<Translation> &mlir::getRegisteredTranslations() {
+  return getTranslationRegistryInternal();
 }
 
 /// Register the given translation.
 static void registerTranslation(StringRef name, StringRef description,
                                 std::optional<llvm::Align> inputAlignment,
                                 const TranslateFunction &function) {
-  auto &registry = getTranslationRegistry();
+  auto &registry = getTranslationRegistryInternal();
   if (registry.count(name))
     llvm::report_fatal_error(
         "Attempting to overwrite an existing <file-to-file> function");
@@ -86,7 +78,7 @@ static void registerTranslateToMLIRFunction(
     OwningOpRef<Operation *> op = function(sourceMgr, context);
     if (!op || failed(verify(*op)))
       return failure();
-    op.get()->print(output);
+    op.get()->print(output, opPrintingFlags(op.get()));
     return success();
   };
   registerTranslation(name, description, inputAlignment, wrappedFn);
@@ -143,8 +135,10 @@ TranslateFromMLIRRegistration::TranslateFromMLIRRegistration(
         DialectRegistry registry;
         dialectRegistration(registry);
         context->appendDialectRegistry(registry);
-        bool implicitModule =
-            (!clOptions.isConstructed() || !clOptions->noImplicitModule);
+        bool implicitModule = true;
+        if (auto *O = mlir_translate_opts::getMLIRTranslateOptsReg(
+                context->getOptionsContext()))
+          implicitModule = !O->get<&llvm::clv2::MLIRT_NoImplicitModule>();
         OwningOpRef<Operation *> op =
             parseSourceFileForTool(sourceMgr, context, implicitModule);
         if (!op || failed(verify(*op)))
@@ -153,23 +147,3 @@ TranslateFromMLIRRegistration::TranslateFromMLIRRegistration(
       });
 }
 
-//===----------------------------------------------------------------------===//
-// Translation Parser
-//===----------------------------------------------------------------------===//
-
-TranslationParser::TranslationParser(llvm::cl::Option &opt)
-    : llvm::cl::parser<const Translation *>(opt) {
-  for (const auto &kv : getTranslationRegistry())
-    addLiteralOption(kv.first(), &kv.second, kv.second.getDescription());
-}
-
-void TranslationParser::printOptionInfo(const llvm::cl::Option &o,
-                                        size_t globalWidth) const {
-  TranslationParser *tp = const_cast<TranslationParser *>(this);
-  llvm::array_pod_sort(tp->Values.begin(), tp->Values.end(),
-                       [](const TranslationParser::OptionInfo *lhs,
-                          const TranslationParser::OptionInfo *rhs) {
-                         return lhs->Name.compare(rhs->Name);
-                       });
-  llvm::cl::parser<const Translation *>::printOptionInfo(o, globalWidth);
-}

@@ -21,17 +21,20 @@
 #include "llvm/CodeGen/BasicBlockMatchingAndInference.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/CodeGen/BasicBlockSectionsProfileReader.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineBlockHashInfo.h"
 #include "llvm/CodeGen/Passes.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
-#include <llvm/Support/CommandLine.h>
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
-static cl::opt<float>
-    PropellerInferThreshold("propeller-infer-threshold",
-                            cl::desc("Threshold for infer stale profile"),
-                            cl::init(0.6), cl::Optional);
+static float getPropellerInferThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_PropellerInferThreshold>(Ctx);
+}
 
 /// The object is used to identify and match basic blocks given their hashes.
 class StaleMatcher {
@@ -180,7 +183,8 @@ bool BasicBlockMatchingAndInference::runOnMachineFunction(MachineFunction &MF) {
   // in the function is less than the threshold value, the processing should be
   // abandoned.
   if (static_cast<float>(MatchWeight.BlockWeights.size()) / MF.size() <
-      PropellerInferThreshold) {
+      getPropellerInferThreshold(
+          MF.getFunction().getContext().getOptionsContext())) {
     return false;
   }
   generateWeightInfoByInference(MF, MatchWeight);

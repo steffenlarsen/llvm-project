@@ -56,10 +56,11 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/BlockFrequency.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
 #include <cassert>
@@ -75,21 +76,21 @@ using namespace consthoist;
 STATISTIC(NumConstantsHoisted, "Number of constants hoisted");
 STATISTIC(NumConstantsRebased, "Number of constants rebased");
 
-static cl::opt<bool> ConstHoistWithBlockFrequency(
-    "consthoist-with-block-frequency", cl::init(true), cl::Hidden,
-    cl::desc("Enable the use of the block frequency analysis to reduce the "
-             "chance to execute const materialization more frequently than "
-             "without hoisting."));
+static bool getConstHoistWithBlockFrequency(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_ConsthoistWithBlockFrequency>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> ConstHoistGEP(
-    "consthoist-gep", cl::init(false), cl::Hidden,
-    cl::desc("Try hoisting constant gep expressions"));
+static bool getConstHoistGEP(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_ConsthoistGep>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<unsigned>
-MinNumOfDependentToRebase("consthoist-min-num-to-rebase",
-    cl::desc("Do not rebase if number of dependent constants of a Base is less "
-             "than this number."),
-    cl::init(0), cl::Hidden);
+static unsigned getMinNumOfDependentToRebase(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_ConsthoistMinNumToRebase>(
+      F.getContext().getOptionsContext(), 0);
+}
 
 namespace {
 
@@ -108,8 +109,7 @@ public:
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesCFG();
-    if (ConstHoistWithBlockFrequency)
-      AU.addRequired<BlockFrequencyInfoWrapperPass>();
+    AU.addRequired<BlockFrequencyInfoWrapperPass>();
     AU.addRequired<DominatorTreeWrapperPass>();
     AU.addRequired<ProfileSummaryInfoWrapperPass>();
     AU.addRequired<TargetTransformInfoWrapperPass>();
@@ -147,7 +147,7 @@ bool ConstantHoistingLegacyPass::runOnFunction(Function &Fn) {
   bool MadeChange =
       Impl.runImpl(Fn, getAnalysis<TargetTransformInfoWrapperPass>().getTTI(Fn),
                    getAnalysis<DominatorTreeWrapperPass>().getDomTree(),
-                   ConstHoistWithBlockFrequency
+                   getConstHoistWithBlockFrequency(Fn)
                        ? &getAnalysis<BlockFrequencyInfoWrapperPass>().getBFI()
                        : nullptr,
                    Fn.getEntryBlock(),
@@ -479,7 +479,7 @@ void ConstantHoistingPass::collectConstantCandidates(
   // Visit constant expressions that have constant integers.
   if (auto ConstExpr = dyn_cast<ConstantExpr>(Opnd)) {
     // Handle constant gep expressions.
-    if (ConstHoistGEP && isa<GEPOperator>(ConstExpr))
+    if (getConstHoistGEP(*Fn) && isa<GEPOperator>(ConstExpr))
       collectConstantCandidates(ConstCandMap, Inst, Idx, ConstExpr);
 
     // Only visit constant cast expressions.
@@ -862,7 +862,7 @@ bool ConstantHoistingPass::emitBaseConstants(GlobalVariable *BaseGV) {
 
       // If only few constants depend on this IP of base, skip rebasing,
       // assuming the base and the rebased have the same materialization cost.
-      if (ToBeRebased.size() < MinNumOfDependentToRebase) {
+      if (ToBeRebased.size() < getMinNumOfDependentToRebase(*Fn)) {
         NotRebasedNum += ToBeRebased.size();
         continue;
       }
@@ -930,6 +930,7 @@ bool ConstantHoistingPass::runImpl(Function &Fn, TargetTransformInfo &TTI,
   this->TTI = &TTI;
   this->DT = &DT;
   this->BFI = BFI;
+  this->Fn = &Fn;
   this->DL = &Fn.getDataLayout();
   this->Ctx = &Fn.getContext();
   this->Entry = &Entry;
@@ -970,7 +971,7 @@ PreservedAnalyses ConstantHoistingPass::run(Function &F,
                                             FunctionAnalysisManager &AM) {
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &TTI = AM.getResult<TargetIRAnalysis>(F);
-  auto BFI = ConstHoistWithBlockFrequency
+  auto BFI = getConstHoistWithBlockFrequency(F)
                  ? &AM.getResult<BlockFrequencyAnalysis>(F)
                  : nullptr;
   auto &MAMProxy = AM.getResult<ModuleAnalysisManagerFunctionProxy>(F);

@@ -14,6 +14,7 @@
 #include "llvm/Analysis/InlineAdvisor.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/EphemeralValuesCache.h"
 #include "llvm/Analysis/IR2Vec.h"
@@ -27,7 +28,8 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -41,40 +43,61 @@ using namespace llvm;
 // if those would be more profitable and blocked inline steps.
 STATISTIC(NumCallerCallersAnalyzed, "Number of caller-callers analyzed");
 
-/// Flag to add inline messages as callsite attributes 'inline-remark'.
-static cl::opt<bool>
-    InlineRemarkAttribute("inline-remark-attribute", cl::init(false),
-                          cl::Hidden,
-                          cl::desc("Enable adding inline-remark attribute to"
-                                   " callsites processed by inliner but decided"
-                                   " to be not inlined"));
+namespace llvm {
 
-static cl::opt<bool> EnableInlineDeferral("inline-deferral", cl::init(false),
-                                          cl::Hidden,
-                                          cl::desc("Enable deferred inlining"));
+/// Flag to add inline messages as callsite attributes 'inline-remark'.
 
 // An integer used to limit the cost of inline deferral.  The default negative
 // number tells shouldBeDeferred to only take the secondary cost into account.
-static cl::opt<int>
-    InlineDeferralScale("inline-deferral-scale",
-                        cl::desc("Scale to limit the cost of inline deferral"),
-                        cl::init(2), cl::Hidden);
-
-static cl::opt<bool>
-    AnnotateInlinePhase("annotate-inline-phase", cl::Hidden, cl::init(false),
-                        cl::desc("If true, annotate inline advisor remarks "
-                                 "with LTO and pass information."));
+int InlineDeferralScale = 2;
 
 // This flag is used to enable IR2Vec embeddings in the ML inliner; Only valid
 // with ML inliner. The vocab file is used to initialize the embeddings.
-static cl::opt<std::string> IR2VecVocabFile(
-    "ml-inliner-ir2vec-vocab-file", cl::Hidden,
-    cl::desc("Vocab file for IR2Vec; Setting this enables "
-             "configuring the model to use IR2Vec embeddings."));
+std::string IR2VecVocabFile;
 
-namespace llvm {
-extern cl::opt<InlinerFunctionImportStatsOpts> InlinerFunctionImportStats;
 } // namespace llvm
+
+static InlinerFunctionImportStatsOpts
+getInlinerFunctionImportStats(const Module &M) {
+  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
+                                    &clv2::AN_InlinerFunctionImportStats>(
+      M.getContext().getOptionsContext(), InlinerFunctionImportStatsOpts::No);
+}
+
+static bool getInlineRemarkAttribute(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_InlineRemarkAttribute>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getEnableInlineDeferral(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_EnableInlineDeferral>(
+      F.getContext().getOptionsContext());
+}
+
+static int getInlineDeferralScale(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_InlineDeferralScale>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getAnnotateInlinePhase(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_AnnotateInlinePhase>(
+      F.getContext().getOptionsContext());
+}
+static bool getAnnotateInlinePhase(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::AN_AnnotateInlinePhase>(
+      M.getContext().getOptionsContext());
+}
+
+static std::string getIR2VecVocabFile(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
+                                    &clv2::AN_IR2VecVocabFile>(
+      F.getContext().getOptionsContext(), IR2VecVocabFile);
+}
+static std::string getIR2VecVocabFile(const Module &M) {
+  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
+                                    &clv2::AN_IR2VecVocabFile>(
+      M.getContext().getOptionsContext(), IR2VecVocabFile);
+}
 
 namespace {
 using namespace llvm::ore;
@@ -176,7 +199,7 @@ std::optional<llvm::InlineCost> static getDefaultInlineAdvice(
   };
   return llvm::shouldInline(
       CB, CalleeTTI, GetInlineCost, ORE,
-      Params.EnableDeferral.value_or(EnableInlineDeferral));
+      Params.EnableDeferral.value_or(getEnableInlineDeferral(Caller)));
 }
 
 std::unique_ptr<InlineAdvice>
@@ -216,7 +239,7 @@ AnalysisKey PluginInlineAdvisorAnalysis::Key;
 
 bool InlineAdvisorAnalysis::initializeIR2VecVocabIfRequested(
     Module &M, ModuleAnalysisManager &MAM) {
-  if (!IR2VecVocabFile.empty()) {
+  if (!getIR2VecVocabFile(M).empty()) {
     auto &IR2VecVocabResult = MAM.getResult<IR2VecVocabAnalysis>(M);
     if (!IR2VecVocabResult.isValid()) {
       M.getContext().emitError("Failed to load IR2Vec vocabulary");
@@ -359,11 +382,12 @@ shouldBeDeferred(Function *Caller, TargetTransformInfo &CalleeTTI,
 
   // If InlineDeferralScale is negative, then ignore the cost of primary
   // inlining -- IC.getCost() multiplied by the number of callers to Caller.
-  if (InlineDeferralScale < 0)
+  int DeferralScale = getInlineDeferralScale(*Caller);
+  if (DeferralScale < 0)
     return TotalSecondaryCost < IC.getCost();
 
   int TotalCost = TotalSecondaryCost + IC.getCost() * NumCallerUsers;
-  int Allowance = IC.getCost() * InlineDeferralScale;
+  int Allowance = IC.getCost() * DeferralScale;
   return TotalCost < Allowance;
 }
 
@@ -397,7 +421,7 @@ std::string llvm::inlineCostStr(const InlineCost &IC) {
 }
 
 void llvm::setInlineRemark(CallBase &CB, StringRef Message) {
-  if (!InlineRemarkAttribute)
+  if (!getInlineRemarkAttribute(*CB.getCaller()))
     return;
 
   Attribute Attr = Attribute::get(CB.getContext(), "inline-remark", Message);
@@ -555,10 +579,10 @@ void llvm::emitInlinedIntoBasedOnCost(
 InlineAdvisor::InlineAdvisor(Module &M, FunctionAnalysisManager &FAM,
                              std::optional<InlineContext> IC)
     : M(M), FAM(FAM), IC(IC),
-      AnnotatedInlinePassName((IC && AnnotateInlinePhase)
+      AnnotatedInlinePassName((IC && getAnnotateInlinePhase(M))
                                   ? llvm::AnnotateInlinePassName(*IC)
                                   : DEBUG_TYPE) {
-  if (InlinerFunctionImportStats != InlinerFunctionImportStatsOpts::No) {
+  if (getInlinerFunctionImportStats(M) != InlinerFunctionImportStatsOpts::No) {
     ImportedFunctionsStats =
         std::make_unique<ImportedFunctionsInliningStatistics>();
     ImportedFunctionsStats->setModuleInfo(M);
@@ -567,8 +591,9 @@ InlineAdvisor::InlineAdvisor(Module &M, FunctionAnalysisManager &FAM,
 
 InlineAdvisor::~InlineAdvisor() {
   if (ImportedFunctionsStats) {
-    assert(InlinerFunctionImportStats != InlinerFunctionImportStatsOpts::No);
-    ImportedFunctionsStats->dump(InlinerFunctionImportStats ==
+    assert(getInlinerFunctionImportStats(M) !=
+           InlinerFunctionImportStatsOpts::No);
+    ImportedFunctionsStats->dump(getInlinerFunctionImportStats(M) ==
                                  InlinerFunctionImportStatsOpts::Verbose);
   }
 }

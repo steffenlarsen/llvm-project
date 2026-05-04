@@ -7,21 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "RunIRPasses.h"
+#include "../ReducerWorkItem.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 
 using namespace llvm;
-
-extern cl::OptionCategory LLVMReduceOptions;
-
-static cl::opt<std::string>
-    PassPipeline("ir-passes",
-                 cl::desc("A textual description of the pass pipeline, same as "
-                          "what's passed to `opt -passes`."),
-                 cl::init("function(sroa,instcombine<no-verify-fixpoint>,gvn,"
-                          "simplifycfg,infer-address-spaces)"),
-                 cl::cat(LLVMReduceOptions));
 
 void llvm::runIRPassesDeltaPass(Oracle &O, ReducerWorkItem &WorkItem) {
   Module &Program = WorkItem.getModule();
@@ -33,7 +23,10 @@ void llvm::runIRPassesDeltaPass(Oracle &O, ReducerWorkItem &WorkItem) {
   PassInstrumentationCallbacks PIC;
   PIC.registerShouldRunOptionalPassCallback(
       [&](StringRef, IRUnitRef) { return !O.shouldKeep(); });
-  PassBuilder PB(nullptr, PipelineTuningOptions(), std::nullopt, &PIC);
+  PassBuilder PB(
+      llvm::clv2::defaultOptionsContext(), /*TM=*/nullptr,
+      PipelineTuningOptions(/*Ctx=*/llvm::clv2::defaultOptionsContext()),
+      std::nullopt, &PIC);
 
   PB.registerModuleAnalyses(MAM);
   PB.registerCGSCCAnalyses(CGAM);
@@ -42,7 +35,7 @@ void llvm::runIRPassesDeltaPass(Oracle &O, ReducerWorkItem &WorkItem) {
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
   ModulePassManager MPM;
-  if (auto Err = PB.parsePassPipeline(MPM, PassPipeline))
+  if (auto Err = PB.parsePassPipeline(MPM, WorkItem.getConfig().IRPassPipeline))
     report_fatal_error(std::move(Err), false);
   MPM.run(Program, MAM);
 }

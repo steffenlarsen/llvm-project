@@ -26,21 +26,24 @@
 #include "MIRVRegNamerUtils.h"
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "mir-canonicalizer"
 
-static cl::opt<unsigned>
-    CanonicalizeFunctionNumber("canon-nth-function", cl::Hidden, cl::init(~0u),
-                               cl::value_desc("N"),
-                               cl::desc("Function number to canonicalize."));
+static unsigned getCanonNthFunction(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_CanonNthFunction>(Ctx);
+}
 
 namespace {
 
@@ -392,8 +395,10 @@ static bool runOnBasicBlock(MachineBasicBlock *MBB,
 bool MIRCanonicalizer::runOnMachineFunction(MachineFunction &MF) {
 
   static unsigned functionNum = 0;
-  if (CanonicalizeFunctionNumber != ~0U) {
-    if (CanonicalizeFunctionNumber != functionNum++)
+  if (getCanonNthFunction(MF.getFunction().getContext().getOptionsContext()) !=
+      ~0U) {
+    if (getCanonNthFunction(
+            MF.getFunction().getContext().getOptionsContext()) != functionNum++)
       return false;
     LLVM_DEBUG(dbgs() << "\n Canonicalizing Function " << MF.getName()
                       << "\n";);

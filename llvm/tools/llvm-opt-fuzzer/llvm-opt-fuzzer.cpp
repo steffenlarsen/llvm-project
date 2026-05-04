@@ -18,25 +18,37 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
 
-static codegen::RegisterCodeGenFlags CGF;
+static std::string TargetTripleStr;
+static std::string PassPipeline;
 
-static cl::opt<std::string>
-    TargetTripleStr("mtriple", cl::desc("Override target triple for module"));
+// --- clv2 OptionInfo descriptors ---
+static constexpr clv2::OptionInfo<std::string> OI_MTriple{
+    "mtriple", "Override target triple for module"};
+static constexpr clv2::OptionInfo<std::string> OI_Passes{
+    "passes", "A textual description of the pass pipeline for testing"};
 
-// Passes to run for this fuzzer instance. Expects new pass manager syntax.
-static cl::opt<std::string> PassPipeline(
-    "passes",
-    cl::desc("A textual description of the pass pipeline for testing"));
+static constexpr clv2::OptionsRegistry<&OI_MTriple, &OI_Passes>
+    OptFuzzerOptsReg;
+
+static void
+applyOptFuzzerOptions(const decltype(OptFuzzerOptsReg)::ParsedOptionsT &Opts) {
+  if (Opts.specified<&OI_MTriple>())
+    TargetTripleStr = Opts.get<&OI_MTriple>();
+  if (Opts.specified<&OI_Passes>())
+    PassPipeline = Opts.get<&OI_Passes>();
+}
 
 static std::unique_ptr<IRMutator> Mutator;
 static std::unique_ptr<TargetMachine> TM;
+static std::unique_ptr<clv2::OptionsContext> FuzzerOptsCtx;
 
 std::unique_ptr<IRMutator> createOptMutator() {
   std::vector<TypeGetter> Types{
@@ -58,7 +70,7 @@ extern "C" LLVM_ATTRIBUTE_USED size_t LLVMFuzzerCustomMutator(
   assert(Mutator &&
          "IR mutator should have been created during fuzzer initialization");
 
-  LLVMContext Context;
+  LLVMContext Context(*FuzzerOptsCtx);
   auto M = parseAndVerify(Data, Size, Context);
   if (!M) {
     errs() << "error: mutator input module is broken!\n";
@@ -114,7 +126,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
   // Parse module
   //
 
-  LLVMContext Context;
+  LLVMContext Context(*FuzzerOptsCtx);
   auto M = parseAndVerify(Data, Size, Context);
   if (!M) {
     errs() << "error: input module is broken!\n";
@@ -132,7 +144,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
   // Create pass pipeline
   //
 
-  PassBuilder PB(TM.get());
+  PassBuilder PB(TM->getOptionsContext(), TM.get(),
+                 PipelineTuningOptions(TM->getOptionsContext()));
 
   LoopAnalysisManager LAM;
   FunctionAnalysisManager FAM;
@@ -190,7 +203,10 @@ extern "C" LLVM_ATTRIBUTE_USED int LLVMFuzzerInitialize(int *argc,
   //
 
   handleExecNameEncodedOptimizerOpts(ExecName);
-  parseFuzzerCLOpts(*argc, *argv);
+
+  clv2::OptionParser P;
+  P.add<&OptFuzzerOptsReg, applyOptFuzzerOptions>();
+  FuzzerOptsCtx = parseFuzzerCLOpts(*argc, *argv, P);
 
   // Create TargetMachine
   //
@@ -199,9 +215,9 @@ extern "C" LLVM_ATTRIBUTE_USED int LLVMFuzzerInitialize(int *argc,
     exit(1);
   }
   ExitOnError ExitOnErr(std::string(ExecName) + ": error:");
-
-  Triple TT(Triple::normalize(TargetTripleStr));
-  TM = ExitOnErr(codegen::createTargetMachineForTriple(TT));
+  TM = ExitOnErr(codegen::createTargetMachineForTriple(
+      Triple(Triple::normalize(TargetTripleStr)),
+      /*OptsCtx=*/llvm::clv2::defaultOptionsContext()));
 
   // Check that pass pipeline is specified and correct
   //
@@ -211,7 +227,8 @@ extern "C" LLVM_ATTRIBUTE_USED int LLVMFuzzerInitialize(int *argc,
     exit(1);
   }
 
-  PassBuilder PB(TM.get());
+  PassBuilder PB(TM->getOptionsContext(), TM.get(),
+                 PipelineTuningOptions(TM->getOptionsContext()));
   ModulePassManager MPM;
   if (auto Err = PB.parsePassPipeline(MPM, PassPipeline)) {
     errs() << ExecName << ": " << toString(std::move(Err)) << "\n";

@@ -91,7 +91,7 @@ TEST_F(MLIRTargetLLVM, SKIP_WITHOUT_NATIVE(SerializeToLLVMBitcode)) {
   llvm::MemoryBufferRef buffer(StringRef(serializedModule->getObject().data(),
                                          serializedModule->getObject().size()),
                                "module");
-  llvm::LLVMContext llvmContext;
+  llvm::LLVMContext llvmContext{llvm::clv2::defaultOptionsContext()};
   llvm::Expected<std::unique_ptr<llvm::Module>> llvmModule =
       llvm::getLazyBitcodeModule(buffer, llvmContext);
   ASSERT_TRUE(!!llvmModule);

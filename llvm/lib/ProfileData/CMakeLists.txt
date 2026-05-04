@@ -1,4 +1,6 @@
 add_llvm_component_library(LLVMProfileData
+  ProfileDataOptionsGetters.cpp
+  ProfileDataOptionsRegistration.cpp
   DataAccessProf.cpp
   ETMTraceDecoder.cpp
   GCOV.cpp
@@ -16,6 +18,7 @@ add_llvm_component_library(LLVMProfileData
   MemProfSummaryBuilder.cpp
   PGOCtxProfReader.cpp
   PGOCtxProfWriter.cpp
+  ProfileDataOptions.cpp
   ProfileSummaryBuilder.cpp
   SampleProf.cpp
   SampleProfReader.cpp

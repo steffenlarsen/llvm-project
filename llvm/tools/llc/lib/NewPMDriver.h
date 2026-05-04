@@ -22,6 +22,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/IR/DiagnosticHandler.h"
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Target/CGPassBuilderOption.h"
 #include <memory>
 
 namespace llvm {
@@ -44,7 +45,9 @@ int compileModuleWithNewPM(
     std::unique_ptr<TargetMachine> Target, std::unique_ptr<ToolOutputFile> Out,
     std::unique_ptr<ToolOutputFile> DwoOut, LLVMContext &Context,
     const TargetLibraryInfoImpl &TLII, VerifierKind VK, StringRef PassPipeline,
-    ArrayRef<PassPlugin> PassPlugins, CodeGenFileType FileType);
+    ArrayRef<PassPlugin> PassPlugins, CodeGenFileType FileType,
+    StringRef PrintPipelinePasses, bool DebugPassManager,
+    RegAllocType RegAllocNPM);
 } // namespace llvm
 
 #endif

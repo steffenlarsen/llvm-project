@@ -9,7 +9,7 @@
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/Passes/LoadStoreVec.h"
 #include "llvm/SandboxIR/Module.h"
 #include "llvm/SandboxIR/Region.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/InstructionCost.h"
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/Debug.h"
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/Legality.h"
@@ -19,7 +19,7 @@
 
 namespace llvm {
 
-extern cl::opt<int> CostThreshold; // Defined in TransactionAcceptOrRevert.cpp
+extern int CostThreshold;
 
 namespace sandboxir {
 

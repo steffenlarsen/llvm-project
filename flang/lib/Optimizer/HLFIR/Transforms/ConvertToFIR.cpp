@@ -8,6 +8,7 @@
 // This file defines a pass to lower HLFIR to FIR
 //===----------------------------------------------------------------------===//
 
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Optimizer/Builder/Character.h"
 #include "flang/Optimizer/Builder/FIRBuilder.h"
 #include "flang/Optimizer/Builder/HLFIRTools.h"
@@ -29,10 +30,10 @@ namespace hlfir {
 #define GEN_PASS_DEF_CONVERTHLFIRTOFIR
 #include "flang/Optimizer/HLFIR/Passes.h.inc"
 } // namespace hlfir
-static llvm::cl::opt<bool> useFortranAssignOnly(
-    "use-fortran-assign-only",
-    llvm::cl::desc("Do not use _FortranAAssignSimple. Only _FortranAAssign"),
-    llvm::cl::init(false));
+static bool getUseFortranAssignOnly(mlir::MLIRContext *ctx) {
+  return llvm::clv2::getOptValOrDefault<
+      &llvm::clv2::FLANG_UseFortranAssignOnly>(ctx->getOptionsContext());
+}
 
 using namespace mlir;
 
@@ -103,7 +104,8 @@ public:
     // Fall back to the full Assign runtime for derived types, polymorphic,
     // rank mismatch (scalar-to-array broadcasting), volatile, or CUDA.
     auto genSimpleOrAssign = [&](mlir::Value to, mlir::Value from) {
-      if (!useFortranAssignOnly && !lhs.isPolymorphic() &&
+      if (!getUseFortranAssignOnly(builder.getContext()) &&
+          !lhs.isPolymorphic() &&
           fir::isa_trivial(lhs.getFortranElementType()) &&
           lhs.getRank() == rhs.getRank() &&
           !fir::isa_volatile_type(lhs.getType()) &&

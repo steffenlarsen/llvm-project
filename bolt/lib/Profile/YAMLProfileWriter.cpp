@@ -10,25 +10,21 @@
 #include "bolt/Core/BinaryBasicBlock.h"
 #include "bolt/Core/BinaryFunction.h"
 #include "bolt/Profile/BoltAddressTranslation.h"
+#include "bolt/Profile/BoltProfileOptionsOptInfos.h"
 #include "bolt/Profile/DataAggregator.h"
 #include "bolt/Profile/ProfileReaderBase.h"
 #include "bolt/Rewrite/RewriteInstance.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "llvm/MC/MCPseudoProbe.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 
-#undef  DEBUG_TYPE
+#undef DEBUG_TYPE
 #define DEBUG_TYPE "bolt-prof"
 
 namespace opts {
 using namespace llvm;
-extern cl::opt<bool> ProfileUseDFS;
-cl::opt<bool> ProfileWritePseudoProbes(
-    "profile-write-pseudo-probes",
-    cl::desc("Use pseudo probes in profile generation"), cl::Hidden,
-    cl::cat(BoltOptCategory));
 } // namespace opts
 
 namespace llvm {
@@ -224,8 +220,10 @@ YAMLProfileWriter::convert(const BinaryFunction &BF, bool UseDFS,
                            const BoltAddressTranslation *BAT) {
   yaml::bolt::BinaryFunctionProfile YamlBF;
   const BinaryContext &BC = BF.getBinaryContext();
+  bool ProfileWritePseudoProbes =
+      bolt_profile_opts::getProfileWritePseudoProbes(BC);
   const MCPseudoProbeDecoder *PseudoProbeDecoder =
-      opts::ProfileWritePseudoProbes ? BC.getPseudoProbeDecoder() : nullptr;
+      ProfileWritePseudoProbes ? BC.getPseudoProbeDecoder() : nullptr;
 
   const uint16_t LBRProfile = BF.getProfileFlags() & BinaryFunction::PF_BRANCH;
 
@@ -370,6 +368,9 @@ YAMLProfileWriter::convert(const BinaryFunction &BF, bool UseDFS,
 
 std::error_code YAMLProfileWriter::writeProfile(const RewriteInstance &RI) {
   const BinaryContext &BC = RI.getBinaryContext();
+  bool ProfileUseDFS = bolt_profile_opts::getProfileUseDfs(BC);
+  bool ProfileWritePseudoProbes =
+      bolt_profile_opts::getProfileWritePseudoProbes(BC);
   const auto &Functions = BC.getBinaryFunctions();
 
   std::error_code EC;
@@ -388,7 +389,7 @@ std::error_code YAMLProfileWriter::writeProfile(const RewriteInstance &RI) {
   std::optional<StringRef> BuildID = BC.getFileBuildID();
   BP.Header.Id = BuildID ? std::string(*BuildID) : "<unknown>";
   BP.Header.Origin = std::string(RI.getProfileReader()->getReaderName());
-  BP.Header.IsDFSOrder = opts::ProfileUseDFS;
+  BP.Header.IsDFSOrder = ProfileUseDFS;
   BP.Header.HashFunction = HashFunction::Default;
 
   StringSet<> EventNames = RI.getProfileReader()->getEventNames();
@@ -418,7 +419,7 @@ std::error_code YAMLProfileWriter::writeProfile(const RewriteInstance &RI) {
   // Add probe inline tree nodes.
   InlineTreeDesc InlineTree;
   if (const MCPseudoProbeDecoder *Decoder =
-          opts::ProfileWritePseudoProbes ? BC.getPseudoProbeDecoder() : nullptr)
+          ProfileWritePseudoProbes ? BC.getPseudoProbeDecoder() : nullptr)
     std::tie(BP.PseudoProbeDesc, InlineTree) = convertPseudoProbeDesc(*Decoder);
 
   // Add all function objects.
@@ -428,7 +429,7 @@ std::error_code YAMLProfileWriter::writeProfile(const RewriteInstance &RI) {
       if (!BF.hasValidProfile() && !RI.getProfileReader()->isTrustedSource())
         continue;
 
-      BP.Functions.emplace_back(convert(BF, opts::ProfileUseDFS, InlineTree));
+      BP.Functions.emplace_back(convert(BF, ProfileUseDFS, InlineTree));
     }
   }
 

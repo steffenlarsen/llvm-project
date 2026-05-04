@@ -17,6 +17,8 @@
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/RegisterPressure.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -930,10 +932,10 @@ Printable llvm::print(const GCNRPTracker::LiveRegSet &LiveRegs,
 
 void GCNRegPressure::dump() const { dbgs() << print(*this); }
 
-static cl::opt<bool> UseDownwardTracker(
-    "amdgpu-print-rp-downward",
-    cl::desc("Use GCNDownwardRPTracker for GCNRegPressurePrinter pass"),
-    cl::init(false), cl::Hidden);
+static bool getUseDownwardTracker(const MachineFunction &MF) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_UseDownwardTracker>(
+      MF.getFunction().getContext().getOptionsContext());
+}
 
 char llvm::GCNRegPressurePrinter::ID = 0;
 char &llvm::GCNRegPressurePrinterID = GCNRegPressurePrinter::ID;
@@ -1012,7 +1014,7 @@ bool GCNRegPressurePrinter::runOnMachineFunction(MachineFunction &MF) {
     GCNRPTracker::LiveRegSet LiveIn, LiveOut;
     GCNRegPressure RPAtMBBEnd;
 
-    if (UseDownwardTracker) {
+    if (getUseDownwardTracker(MF)) {
       if (MBB.empty()) {
         LiveIn = LiveOut = getLiveRegs(MBBStartSlot, LIS, MRI);
         RPAtMBBEnd = getRegPressure(MRI, LiveIn);
@@ -1049,7 +1051,7 @@ bool GCNRegPressurePrinter::runOnMachineFunction(MachineFunction &MF) {
     }
 
     OS << PFX "  Live-in: " << llvm::print(LiveIn, MRI);
-    if (!UseDownwardTracker)
+    if (!getUseDownwardTracker(MF))
       ReportLISMismatchIfAny(LiveIn, getLiveRegs(MBBStartSlot, LIS, MRI));
 
     OS << PFX "  SGPR  VGPR\n";
@@ -1057,7 +1059,7 @@ bool GCNRegPressurePrinter::runOnMachineFunction(MachineFunction &MF) {
     for (auto &MI : MBB) {
       if (!MI.isDebugInstr()) {
         auto &[RPBeforeInstr, RPAtInstr] =
-            RP[UseDownwardTracker ? I : (RP.size() - 1 - I)];
+            RP[getUseDownwardTracker(MF) ? I : (RP.size() - 1 - I)];
         ++I;
         OS << printRP(RPBeforeInstr) << '\n' << printRP(RPAtInstr) << "  ";
       } else
@@ -1067,7 +1069,7 @@ bool GCNRegPressurePrinter::runOnMachineFunction(MachineFunction &MF) {
     OS << printRP(RPAtMBBEnd) << '\n';
 
     OS << PFX "  Live-out:" << llvm::print(LiveOut, MRI);
-    if (UseDownwardTracker)
+    if (getUseDownwardTracker(MF))
       ReportLISMismatchIfAny(LiveOut, getLiveRegs(MBBLastSlot, LIS, MRI));
 
     GCNRPTracker::LiveRegSet LiveThrough;

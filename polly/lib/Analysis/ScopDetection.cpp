@@ -44,7 +44,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/ScopDetection.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopDetectionDiagnostic.h"
 #include "polly/Support/SCEVValidator.h"
 #include "polly/Support/ScopHelper.h"
@@ -73,6 +73,7 @@
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Value.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/raw_ostream.h"
@@ -90,145 +91,8 @@ using namespace polly;
 #include "polly/Support/PollyDebug.h"
 #define DEBUG_TYPE "polly-detect"
 
-// This option is set to a very high value, as analyzing such loops increases
-// compile time on several cases. For experiments that enable this option,
-// a value of around 40 has been working to avoid run-time regressions with
-// Polly while still exposing interesting optimization opportunities.
-static cl::opt<int> ProfitabilityMinPerLoopInstructions(
-    "polly-detect-profitability-min-per-loop-insts",
-    cl::desc("The minimal number of per-loop instructions before a single loop "
-             "region is considered profitable"),
-    cl::Hidden, cl::ValueRequired, cl::init(100000000), cl::cat(PollyCategory));
-
-bool polly::PollyProcessUnprofitable;
-
-static cl::opt<bool, true> XPollyProcessUnprofitable(
-    "polly-process-unprofitable",
-    cl::desc(
-        "Process scops that are unlikely to benefit from Polly optimizations."),
-    cl::location(PollyProcessUnprofitable), cl::cat(PollyCategory));
-
-static cl::list<std::string> OnlyFunctions(
-    "polly-only-func",
-    cl::desc("Only run on functions that match a regex. "
-             "Multiple regexes can be comma separated. "
-             "Scop detection will run on all functions that match "
-             "ANY of the regexes provided."),
-    cl::CommaSeparated, cl::cat(PollyCategory));
-
-static cl::list<std::string> IgnoredFunctions(
-    "polly-ignore-func",
-    cl::desc("Ignore functions that match a regex. "
-             "Multiple regexes can be comma separated. "
-             "Scop detection will ignore all functions that match "
-             "ANY of the regexes provided."),
-    cl::CommaSeparated, cl::cat(PollyCategory));
-
-bool polly::PollyAllowFullFunction;
-
-static cl::opt<bool, true>
-    XAllowFullFunction("polly-detect-full-functions",
-                       cl::desc("Allow the detection of full functions"),
-                       cl::location(polly::PollyAllowFullFunction),
-                       cl::init(false), cl::cat(PollyCategory));
-
-static cl::opt<std::string> OnlyRegion(
-    "polly-only-region",
-    cl::desc("Only run on certain regions (The provided identifier must "
-             "appear in the name of the region's entry block"),
-    cl::value_desc("identifier"), cl::ValueRequired, cl::init(""),
-    cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    IgnoreAliasing("polly-ignore-aliasing",
-                   cl::desc("Ignore possible aliasing of the array bases"),
-                   cl::Hidden, cl::cat(PollyCategory));
-
-bool polly::PollyAllowUnsignedOperations;
-
-static cl::opt<bool, true> XPollyAllowUnsignedOperations(
-    "polly-allow-unsigned-operations",
-    cl::desc("Allow unsigned operations such as comparisons or zero-extends."),
-    cl::location(PollyAllowUnsignedOperations), cl::Hidden, cl::init(true),
-    cl::cat(PollyCategory));
-
-bool polly::PollyUseRuntimeAliasChecks;
-
-static cl::opt<bool, true> XPollyUseRuntimeAliasChecks(
-    "polly-use-runtime-alias-checks",
-    cl::desc("Use runtime alias checks to resolve possible aliasing."),
-    cl::location(PollyUseRuntimeAliasChecks), cl::Hidden, cl::init(true),
-    cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    ReportLevel("polly-report",
-                cl::desc("Print information about the activities of Polly"),
-                cl::cat(PollyCategory));
-
-static cl::opt<bool> AllowDifferentTypes(
-    "polly-allow-differing-element-types",
-    cl::desc("Allow different element types for array accesses"), cl::Hidden,
-    cl::init(true), cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    AllowNonAffine("polly-allow-nonaffine",
-                   cl::desc("Allow non affine access functions in arrays"),
-                   cl::Hidden, cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    AllowModrefCall("polly-allow-modref-calls",
-                    cl::desc("Allow functions with known modref behavior"),
-                    cl::Hidden, cl::cat(PollyCategory));
-
-static cl::opt<bool> AllowNonAffineSubRegions(
-    "polly-allow-nonaffine-branches",
-    cl::desc("Allow non affine conditions for branches"), cl::Hidden,
-    cl::init(true), cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    AllowNonAffineSubLoops("polly-allow-nonaffine-loops",
-                           cl::desc("Allow non affine conditions for loops"),
-                           cl::Hidden, cl::cat(PollyCategory));
-
-static cl::opt<bool, true>
-    TrackFailures("polly-detect-track-failures",
-                  cl::desc("Track failure strings in detecting scop regions"),
-                  cl::location(PollyTrackFailures), cl::Hidden, cl::init(true),
-                  cl::cat(PollyCategory));
-
-static cl::opt<bool> KeepGoing("polly-detect-keep-going",
-                               cl::desc("Do not fail on the first error."),
-                               cl::Hidden, cl::cat(PollyCategory));
-
-static cl::opt<bool, true>
-    PollyDelinearizeX("polly-delinearize",
-                      cl::desc("Delinearize array access functions"),
-                      cl::location(PollyDelinearize), cl::Hidden,
-                      cl::init(true), cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    VerifyScops("polly-detect-verify",
-                cl::desc("Verify the detected SCoPs after each transformation"),
-                cl::Hidden, cl::cat(PollyCategory));
-
-bool polly::PollyInvariantLoadHoisting;
-
-static cl::opt<bool, true>
-    XPollyInvariantLoadHoisting("polly-invariant-load-hoisting",
-                                cl::desc("Hoist invariant loads."),
-                                cl::location(PollyInvariantLoadHoisting),
-                                cl::Hidden, cl::cat(PollyCategory));
-
-static cl::opt<bool> PollyAllowErrorBlocks(
-    "polly-allow-error-blocks",
-    cl::desc("Allow to speculate on the execution of 'error blocks'."),
-    cl::Hidden, cl::init(true), cl::cat(PollyCategory));
-
-/// The minimal trip count under which loops are considered unprofitable.
 static const unsigned MIN_LOOP_TRIP_COUNT = 8;
 
-bool polly::PollyTrackFailures = false;
-bool polly::PollyDelinearize = false;
 StringRef polly::PollySkipFnAttr = "polly.skip.fn";
 
 //===----------------------------------------------------------------------===//
@@ -315,7 +179,7 @@ void DiagnosticScopFound::print(DiagnosticPrinter &DP) const {
 /// @param Str the input string to match against.
 /// @param RegexList a list of strings that are regular expressions.
 static bool doesStringMatchAnyRegex(StringRef Str,
-                                    const cl::list<std::string> &RegexList) {
+                                    const std::vector<std::string> &RegexList) {
   for (auto RegexStr : RegexList) {
     Regex R(RegexStr);
 
@@ -341,7 +205,30 @@ ScopDetection::ScopDetection(const DominatorTree &DT, ScalarEvolution &SE,
 void ScopDetection::detect(Function &F) {
   assert(ValidRegions.empty() && "Detection must run only once");
 
-  if (!PollyProcessUnprofitable && LI.empty())
+  auto &OptCtx = F.getContext().getOptionsContext();
+
+  bool ProcessUnprofitable = false;
+  std::vector<std::string> OnlyFunctions;
+  std::vector<std::string> IgnoredFunctions;
+  bool TrackFailures = true;
+  bool Report = false;
+  if (auto *Opts = polly_opts::getPollyOpts(OptCtx)) {
+    ProcessUnprofitable = Opts->get<&llvm::clv2::POLLY_ProcessUnprofitable>();
+    OnlyFunctions = Opts->get<&llvm::clv2::POLLY_OnlyFunc>();
+    IgnoredFunctions = Opts->get<&llvm::clv2::POLLY_IgnoreFunc>();
+    TrackFailures = Opts->get<&llvm::clv2::POLLY_DetectTrackFailures>();
+    Report = Opts->get<&llvm::clv2::POLLY_Report>();
+    // When diagnostic viewers/printers are enabled, force failure tracking
+    // (previously done as a side effect in RegisterPasses.cpp).
+    if (Opts->get<&llvm::clv2::POLLY_Show>() ||
+        Opts->get<&llvm::clv2::POLLY_ShowOnly>() ||
+        Opts->get<&llvm::clv2::POLLY_Dot>() ||
+        Opts->get<&llvm::clv2::POLLY_DotOnly>() ||
+        Opts->get<&llvm::clv2::POLLY_PrintDetect>())
+      TrackFailures = true;
+  }
+
+  if (!ProcessUnprofitable && LI.empty())
     return;
 
   Region *TopRegion = RI.getTopLevelRegion();
@@ -381,10 +268,10 @@ void ScopDetection::detect(Function &F) {
   NumLoopsOverall += countBeneficialLoops(TopRegion, SE, LI, 0).NumLoops;
 
   // Only makes sense when we tracked errors.
-  if (PollyTrackFailures)
+  if (TrackFailures)
     emitMissedRemarks(F);
 
-  if (ReportLevel)
+  if (Report)
     printLocations(F);
 
   assert(ValidRegions.size() <= DetectionContextMap.size() &&
@@ -462,7 +349,13 @@ bool ScopDetection::addOverApproximatedRegion(Region *AR,
       Context.BoxedLoopsSet.insert(L);
   }
 
-  return (AllowNonAffineSubLoops || Context.BoxedLoopsSet.empty());
+  bool NonAffineLoops = false;
+  if (auto *Opts = polly_opts::getPollyOpts(Context.CurRegion.getEntry()
+                                                ->getParent()
+                                                ->getContext()
+                                                .getOptionsContext()))
+    NonAffineLoops = Opts->get<&llvm::clv2::POLLY_AllowNonaffineLoops>();
+  return (NonAffineLoops || Context.BoxedLoopsSet.empty());
 }
 
 bool ScopDetection::onlyValidRequiredInvariantLoads(
@@ -470,7 +363,13 @@ bool ScopDetection::onlyValidRequiredInvariantLoads(
   Region &CurRegion = Context.CurRegion;
   const DataLayout &DL = CurRegion.getEntry()->getModule()->getDataLayout();
 
-  if (!PollyInvariantLoadHoisting && !RequiredILS.empty())
+  bool InvariantLoadHoist = false;
+  if (auto *Opts = polly_opts::getPollyOpts(Context.CurRegion.getEntry()
+                                                ->getParent()
+                                                ->getContext()
+                                                .getOptionsContext()))
+    InvariantLoadHoist = Opts->get<&llvm::clv2::POLLY_InvariantLoadHoisting>();
+  if (!InvariantLoadHoist && !RequiredILS.empty())
     return false;
 
   for (LoadInst *Load : RequiredILS) {
@@ -562,7 +461,13 @@ bool ScopDetection::isValidSwitch(BasicBlock &BB, SwitchInst *SI,
   if (isAffine(ConditionSCEV, L, Context))
     return true;
 
-  if (AllowNonAffineSubRegions &&
+  bool NonAffineBranches = true;
+  if (auto *Opts = polly_opts::getPollyOpts(Context.CurRegion.getEntry()
+                                                ->getParent()
+                                                ->getContext()
+                                                .getOptionsContext()))
+    NonAffineBranches = Opts->get<&llvm::clv2::POLLY_AllowNonaffineBranches>();
+  if (NonAffineBranches &&
       addOverApproximatedRegion(RI.getRegionFor(&BB), Context))
     return true;
 
@@ -573,6 +478,16 @@ bool ScopDetection::isValidSwitch(BasicBlock &BB, SwitchInst *SI,
 bool ScopDetection::isValidBranch(BasicBlock &BB, CondBrInst *BI,
                                   Value *Condition, bool IsLoopBranch,
                                   DetectionContext &Context) {
+  bool AllowUnsigned = true;
+  bool NonAffineBranches = true;
+  if (auto *Opts = polly_opts::getPollyOpts(Context.CurRegion.getEntry()
+                                                ->getParent()
+                                                ->getContext()
+                                                .getOptionsContext())) {
+    AllowUnsigned = Opts->get<&llvm::clv2::POLLY_AllowUnsignedOperations>();
+    NonAffineBranches = Opts->get<&llvm::clv2::POLLY_AllowNonaffineBranches>();
+  }
+
   // Constant integer conditions are always affine.
   if (isa<ConstantInt>(Condition))
     return true;
@@ -602,7 +517,7 @@ bool ScopDetection::isValidBranch(BasicBlock &BB, CondBrInst *BI,
 
   // Non constant conditions of branches need to be ICmpInst.
   if (!isa<ICmpInst>(Condition)) {
-    if (!IsLoopBranch && AllowNonAffineSubRegions &&
+    if (!IsLoopBranch && NonAffineBranches &&
         addOverApproximatedRegion(RI.getRegionFor(&BB), Context))
       return true;
     return invalid<ReportInvalidCond>(Context, /*Assert=*/true, BI, &BB);
@@ -623,8 +538,8 @@ bool ScopDetection::isValidBranch(BasicBlock &BB, CondBrInst *BI,
   RHS = tryForwardThroughPHI(RHS, Context.CurRegion, SE, this);
 
   // If unsigned operations are not allowed try to approximate the region.
-  if (ICmp->isUnsigned() && !PollyAllowUnsignedOperations)
-    return !IsLoopBranch && AllowNonAffineSubRegions &&
+  if (ICmp->isUnsigned() && !AllowUnsigned)
+    return !IsLoopBranch && NonAffineBranches &&
            addOverApproximatedRegion(RI.getRegionFor(&BB), Context);
 
   // Check for invalid usage of different pointers in one expression.
@@ -639,7 +554,7 @@ bool ScopDetection::isValidBranch(BasicBlock &BB, CondBrInst *BI,
   if (isAffine(LHS, L, Context) && isAffine(RHS, L, Context))
     return true;
 
-  if (!IsLoopBranch && AllowNonAffineSubRegions &&
+  if (!IsLoopBranch && NonAffineBranches &&
       addOverApproximatedRegion(RI.getRegionFor(&BB), Context))
     return true;
 
@@ -708,7 +623,13 @@ bool ScopDetection::isValidCallInst(CallInst &CI,
     return true;
   }
 
-  if (AllowModrefCall) {
+  bool ModrefCalls = false;
+  if (auto *Opts = polly_opts::getPollyOpts(Context.CurRegion.getEntry()
+                                                ->getParent()
+                                                ->getContext()
+                                                .getOptionsContext()))
+    ModrefCalls = Opts->get<&llvm::clv2::POLLY_AllowModrefCalls>();
+  if (ModrefCalls) {
     MemoryEffects ME = AA.getMemoryEffects(CalledFunction);
     if (ME.onlyAccessesArgPointees()) {
       for (const auto &Arg : CI.args()) {
@@ -955,7 +876,16 @@ bool ScopDetection::hasValidArraySizes(DetectionContext &Context,
 
   // No array shape derived.
   if (Sizes.empty()) {
-    if (AllowNonAffine)
+    bool NonAffine = false;
+    bool DetectKeepGoing = false;
+    if (auto *Opts = polly_opts::getPollyOpts(Context.CurRegion.getEntry()
+                                                  ->getParent()
+                                                  ->getContext()
+                                                  .getOptionsContext())) {
+      NonAffine = Opts->get<&llvm::clv2::POLLY_AllowNonaffine>();
+      DetectKeepGoing = Opts->get<&llvm::clv2::POLLY_DetectKeepGoing>();
+    }
+    if (NonAffine)
       return true;
 
     for (const auto &Pair : Context.Accesses[BasePointer]) {
@@ -965,7 +895,7 @@ bool ScopDetection::hasValidArraySizes(DetectionContext &Context,
       if (!isAffine(AF, Scope, Context)) {
         invalid<ReportNonAffineAccess>(Context, /*Assert=*/true, AF, Insn,
                                        BaseValue);
-        if (!KeepGoing)
+        if (!DetectKeepGoing)
           return false;
       }
     }
@@ -983,6 +913,15 @@ bool ScopDetection::hasValidArraySizes(DetectionContext &Context,
 bool ScopDetection::computeAccessFunctions(
     DetectionContext &Context, const SCEVUnknown *BasePointer,
     std::shared_ptr<ArrayShape> Shape) const {
+  bool NonAffine = false;
+  bool DetectKeepGoing = false;
+  if (auto *Opts = polly_opts::getPollyOpts(Context.CurRegion.getEntry()
+                                                ->getParent()
+                                                ->getContext()
+                                                .getOptionsContext())) {
+    NonAffine = Opts->get<&llvm::clv2::POLLY_AllowNonaffine>();
+    DetectKeepGoing = Opts->get<&llvm::clv2::POLLY_DetectKeepGoing>();
+  }
   Value *BaseValue = BasePointer->getValue();
   bool BasePtrHasNonAffine = false;
   MapInsnToMemAcc TempMemoryAccesses;
@@ -1017,10 +956,10 @@ bool ScopDetection::computeAccessFunctions(
     // (Possibly) report non affine access
     if (IsNonAffine) {
       BasePtrHasNonAffine = true;
-      if (!AllowNonAffine) {
+      if (!NonAffine) {
         invalid<ReportNonAffineAccess>(Context, /*Assert=*/true, Pair.second,
                                        Insn, BaseValue);
-        if (!KeepGoing)
+        if (!DetectKeepGoing)
           return false;
       }
     }
@@ -1051,17 +990,26 @@ bool ScopDetection::hasBaseAffineAccesses(DetectionContext &Context,
 }
 
 bool ScopDetection::hasAffineMemoryAccesses(DetectionContext &Context) const {
+  bool NonAffine = false;
+  bool DetectKeepGoing = false;
+  if (auto *Opts = polly_opts::getPollyOpts(Context.CurRegion.getEntry()
+                                                ->getParent()
+                                                ->getContext()
+                                                .getOptionsContext())) {
+    NonAffine = Opts->get<&llvm::clv2::POLLY_AllowNonaffine>();
+    DetectKeepGoing = Opts->get<&llvm::clv2::POLLY_DetectKeepGoing>();
+  }
   // TODO: If we have an unknown access and other non-affine accesses we do
   //       not try to delinearize them for now.
   if (Context.HasUnknownAccess && !Context.NonAffineAccesses.empty())
-    return AllowNonAffine;
+    return NonAffine;
 
   for (auto &Pair : Context.NonAffineAccesses) {
     auto *BasePointer = Pair.first;
     auto *Scope = Pair.second;
     if (!hasBaseAffineAccesses(Context, BasePointer, Scope)) {
       Context.IsInvalid = true;
-      if (!KeepGoing)
+      if (!DetectKeepGoing)
         return false;
     }
   }
@@ -1071,6 +1019,21 @@ bool ScopDetection::hasAffineMemoryAccesses(DetectionContext &Context) const {
 bool ScopDetection::isValidAccess(Instruction *Inst, const SCEV *AF,
                                   const SCEVUnknown *BP,
                                   DetectionContext &Context) const {
+  bool DifferentTypes = true;
+  bool Delinearize = true;
+  bool NonAffine = false;
+  bool IgnoreAlias = false;
+  bool UseRtAliasChecks = true;
+  if (auto *Opts = polly_opts::getPollyOpts(Context.CurRegion.getEntry()
+                                                ->getParent()
+                                                ->getContext()
+                                                .getOptionsContext())) {
+    DifferentTypes = Opts->get<&llvm::clv2::POLLY_AllowDifferingElementTypes>();
+    Delinearize = Opts->get<&llvm::clv2::POLLY_Delinearize>();
+    NonAffine = Opts->get<&llvm::clv2::POLLY_AllowNonaffine>();
+    IgnoreAlias = Opts->get<&llvm::clv2::POLLY_IgnoreAliasing>();
+    UseRtAliasChecks = Opts->get<&llvm::clv2::POLLY_UseRuntimeAliasChecks>();
+  }
 
   if (!BP)
     return invalid<ReportNoBasePtr>(Context, /*Assert=*/true, Inst);
@@ -1100,7 +1063,7 @@ bool ScopDetection::isValidAccess(Instruction *Inst, const SCEV *AF,
   }
 
   if (Context.ElementSize[BP]) {
-    if (!AllowDifferentTypes && Context.ElementSize[BP] != Size)
+    if (!DifferentTypes && Context.ElementSize[BP] != Size)
       return invalid<ReportDifferentArrayElementSize>(Context, /*Assert=*/true,
                                                       Inst, BV);
 
@@ -1122,18 +1085,18 @@ bool ScopDetection::isValidAccess(Instruction *Inst, const SCEV *AF,
   if (isa<MemIntrinsic>(Inst) && !IsAffine) {
     return invalid<ReportNonAffineAccess>(Context, /*Assert=*/true, AF, Inst,
                                           BV);
-  } else if (PollyDelinearize && !IsVariantInNonAffineLoop) {
+  } else if (Delinearize && !IsVariantInNonAffineLoop) {
     Context.Accesses[BP].push_back({Inst, AF});
 
     if (!IsAffine)
       Context.NonAffineAccesses.insert(
           std::make_pair(BP, LI.getLoopFor(Inst->getParent())));
-  } else if (!AllowNonAffine && !IsAffine) {
+  } else if (!NonAffine && !IsAffine) {
     return invalid<ReportNonAffineAccess>(Context, /*Assert=*/true, AF, Inst,
                                           BV);
   }
 
-  if (IgnoreAliasing)
+  if (IgnoreAlias)
     return true;
 
   // Check if the base pointer of the memory access does alias with
@@ -1143,7 +1106,7 @@ bool ScopDetection::isValidAccess(Instruction *Inst, const SCEV *AF,
       MemoryLocation::getBeforeOrAfter(BP->getValue(), AATags));
 
   if (!AS.isMustAlias()) {
-    if (PollyUseRuntimeAliasChecks) {
+    if (UseRtAliasChecks) {
       bool CanBuildRunTimeCheck = true;
       // The run-time alias check places code that involves the base pointer at
       // the beginning of the SCoP. This breaks if the base pointer is defined
@@ -1365,7 +1328,16 @@ bool ScopDetection::isValidLoop(Loop *L, DetectionContext &Context) {
   if (canUseISLTripCount(L, Context))
     return true;
 
-  if (AllowNonAffineSubLoops && AllowNonAffineSubRegions) {
+  bool NonAffineLoops = false;
+  bool NonAffineBranches = true;
+  if (auto *Opts = polly_opts::getPollyOpts(Context.CurRegion.getEntry()
+                                                ->getParent()
+                                                ->getContext()
+                                                .getOptionsContext())) {
+    NonAffineLoops = Opts->get<&llvm::clv2::POLLY_AllowNonaffineLoops>();
+    NonAffineBranches = Opts->get<&llvm::clv2::POLLY_AllowNonaffineBranches>();
+  }
+  if (NonAffineLoops && NonAffineBranches) {
     Region *R = RI.getRegionFor(L->getHeader());
     while (R != &Context.CurRegion && !R->contains(L))
       R = R->getParent();
@@ -1488,7 +1460,11 @@ static bool isErrorBlockImpl(BasicBlock &BB, const Region &R, LoopInfo &LI,
 }
 
 bool ScopDetection::isErrorBlock(llvm::BasicBlock &BB, const llvm::Region &R) {
-  if (!PollyAllowErrorBlocks)
+  bool AllowErrorBlocks = true;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          BB.getParent()->getContext().getOptionsContext()))
+    AllowErrorBlocks = Opts->get<&llvm::clv2::POLLY_AllowErrorBlocks>();
+  if (!AllowErrorBlocks)
     return false;
 
   auto It = ErrorBlockCache.insert({std::make_pair(&BB, &R), false});
@@ -1586,14 +1562,24 @@ void ScopDetection::findScops(Region &R) {
   Entry = std::make_unique<DetectionContext>(R, AA, /*Verifying=*/false);
   DetectionContext &Context = *Entry;
 
+  bool ProcessUnprofitable = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          R.getEntry()->getParent()->getContext().getOptionsContext()))
+    ProcessUnprofitable = Opts->get<&llvm::clv2::POLLY_ProcessUnprofitable>();
+
   bool DidBailout = true;
-  if (!PollyProcessUnprofitable && regionWithoutLoops(R, LI))
+  if (!ProcessUnprofitable && regionWithoutLoops(R, LI))
     invalid<ReportUnprofitable>(Context, /*Assert=*/true, &R);
   else
     DidBailout = !isValidRegion(Context);
 
+  bool DetectKeepGoing = false;
+  if (auto *Opts2 = polly_opts::getPollyOpts(
+          R.getEntry()->getParent()->getContext().getOptionsContext()))
+    DetectKeepGoing = Opts2->get<&llvm::clv2::POLLY_DetectKeepGoing>();
+
   (void)DidBailout;
-  if (KeepGoing) {
+  if (DetectKeepGoing) {
     assert((!DidBailout || Context.IsInvalid) &&
            "With -polly-detect-keep-going, it is sufficient that if "
            "isValidRegion short-circuited, that SCoP is invalid");
@@ -1649,13 +1635,18 @@ void ScopDetection::findScops(Region &R) {
 bool ScopDetection::allBlocksValid(DetectionContext &Context) {
   Region &CurRegion = Context.CurRegion;
 
+  bool DetectKeepGoing = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          CurRegion.getEntry()->getParent()->getContext().getOptionsContext()))
+    DetectKeepGoing = Opts->get<&llvm::clv2::POLLY_DetectKeepGoing>();
+
   for (const BasicBlock *BB : CurRegion.blocks()) {
     Loop *L = LI.getLoopFor(BB);
     if (L && L->getHeader() == BB) {
       if (CurRegion.contains(L)) {
         if (!isValidLoop(L, Context)) {
           Context.IsInvalid = true;
-          if (!KeepGoing)
+          if (!DetectKeepGoing)
             return false;
         }
       } else {
@@ -1675,7 +1666,7 @@ bool ScopDetection::allBlocksValid(DetectionContext &Context) {
     // Also check exception blocks (and possibly register them as non-affine
     // regions). Even though exception blocks are not modeled, we use them
     // to forward-propagate domain constraints during ScopInfo construction.
-    if (!isValidCFG(*BB, false, IsErrorBlock, Context) && !KeepGoing)
+    if (!isValidCFG(*BB, false, IsErrorBlock, Context) && !DetectKeepGoing)
       return false;
 
     if (IsErrorBlock)
@@ -1684,7 +1675,7 @@ bool ScopDetection::allBlocksValid(DetectionContext &Context) {
     for (BasicBlock::iterator I = BB->begin(), E = --BB->end(); I != E; ++I)
       if (!isValidInstruction(*I, Context)) {
         Context.IsInvalid = true;
-        if (!KeepGoing)
+        if (!DetectKeepGoing)
           return false;
       }
   }
@@ -1708,7 +1699,14 @@ bool ScopDetection::hasSufficientCompute(DetectionContext &Context,
 
   InstCount = InstCount / NumLoops;
 
-  return InstCount >= ProfitabilityMinPerLoopInstructions;
+  int MinPerLoopInsts = 100000000;
+  if (auto *Opts = polly_opts::getPollyOpts(Context.CurRegion.getEntry()
+                                                ->getParent()
+                                                ->getContext()
+                                                .getOptionsContext()))
+    MinPerLoopInsts =
+        Opts->get<&llvm::clv2::POLLY_DetectProfitabilityMinPerLoopInsts>();
+  return InstCount >= MinPerLoopInsts;
 }
 
 bool ScopDetection::hasPossiblyDistributableLoop(
@@ -1736,7 +1734,11 @@ bool ScopDetection::hasPossiblyDistributableLoop(
 bool ScopDetection::isProfitableRegion(DetectionContext &Context) const {
   Region &CurRegion = Context.CurRegion;
 
-  if (PollyProcessUnprofitable)
+  bool ProcessUnprofitable = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          CurRegion.getEntry()->getParent()->getContext().getOptionsContext()))
+    ProcessUnprofitable = Opts->get<&llvm::clv2::POLLY_ProcessUnprofitable>();
+  if (ProcessUnprofitable)
     return true;
 
   // We can probably not do a lot on scops that only write or only read
@@ -1772,10 +1774,20 @@ bool ScopDetection::isProfitableRegion(DetectionContext &Context) const {
 bool ScopDetection::isValidRegion(DetectionContext &Context) {
   Region &CurRegion = Context.CurRegion;
 
+  bool AllowFullFunction = false;
+  std::string OnlyRegion;
+  if (auto *Opts = polly_opts::getPollyOpts(CurRegion.getEntry()
+                                                ->getParent()
+                                                ->getContext()
+                                                .getOptionsContext())) {
+    AllowFullFunction = Opts->get<&llvm::clv2::POLLY_DetectFullFunctions>();
+    OnlyRegion = Opts->get<&llvm::clv2::POLLY_OnlyRegion>();
+  }
+
   POLLY_DEBUG(dbgs() << "Checking region: " << CurRegion.getNameStr()
                      << "\n\t");
 
-  if (!PollyAllowFullFunction && CurRegion.isTopLevelRegion()) {
+  if (!AllowFullFunction && CurRegion.isTopLevelRegion()) {
     POLLY_DEBUG(dbgs() << "Top level region is invalid\n");
     Context.IsInvalid = true;
     return false;
@@ -1808,7 +1820,7 @@ bool ScopDetection::isValidRegion(DetectionContext &Context) {
 
   // SCoP cannot contain the entry block of the function, because we need
   // to insert alloca instruction there when translate scalar to array.
-  if (!PollyAllowFullFunction &&
+  if (!AllowFullFunction &&
       CurRegion.getEntry() ==
           &(CurRegion.getEntry()->getParent()->getEntryBlock()))
     return invalid<ReportEntry>(Context, /*Assert=*/true, CurRegion.getEntry());
@@ -1992,18 +2004,24 @@ void ScopDetection::verifyRegion(const Region &R) {
 }
 
 void ScopDetection::verifyAnalysis() {
-  if (!VerifyScops)
+  if (ValidRegions.empty())
+    return;
+
+  bool DetectVerify = false;
+  if (auto *Opts = polly_opts::getPollyOpts((*ValidRegions.begin())
+                                                ->getEntry()
+                                                ->getParent()
+                                                ->getContext()
+                                                .getOptionsContext()))
+    DetectVerify = Opts->get<&llvm::clv2::POLLY_DetectVerify>();
+  if (!DetectVerify)
     return;
 
   for (const Region *R : ValidRegions)
     verifyRegion(*R);
 }
 
-ScopAnalysis::ScopAnalysis() {
-  // Disable runtime alias checks if we ignore aliasing all together.
-  if (IgnoreAliasing)
-    PollyUseRuntimeAliasChecks = false;
-}
+ScopAnalysis::ScopAnalysis() {}
 
 AnalysisKey ScopAnalysis::Key;
 

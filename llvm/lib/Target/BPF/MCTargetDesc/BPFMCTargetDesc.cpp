@@ -46,9 +46,14 @@ static MCRegisterInfo *createBPFMCRegisterInfo(const Triple &TT) {
   return X;
 }
 
-static MCSubtargetInfo *createBPFMCSubtargetInfo(const Triple &TT,
-                                                 StringRef CPU, StringRef FS) {
-  return createBPFMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+static MCSubtargetInfo *
+createBPFMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                         const llvm::clv2::OptionsContext &Ctx) {
+  MCSubtargetInfo *STI =
+      createBPFMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+  if (STI)
+    STI->setOptionsContext(Ctx);
+  return STI;
 }
 
 static MCStreamer *

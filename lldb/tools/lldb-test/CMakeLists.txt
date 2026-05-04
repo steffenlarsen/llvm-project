@@ -6,6 +6,7 @@ add_lldb_tool(lldb-test
   SystemInitializerTest.cpp
 
   LINK_COMPONENTS
+  AllOptions
     Support
   LINK_LIBS
     lldbBreakpoint

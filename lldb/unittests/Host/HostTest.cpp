@@ -15,7 +15,7 @@
 #include "lldb/Utility/ProcessInfo.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/Twine.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Testing/Support/Error.h"
 #include "gtest/gtest.h"
@@ -28,7 +28,12 @@ using namespace llvm;
 // From TestMain.cpp.
 extern const char *TestMainArgv0;
 
-static cl::opt<uint64_t> test_arg("test-arg");
+static uint64_t test_arg = 0;
+static unsigned TestArgCount = 0;
+static constexpr llvm::clv2::OptionInfo<uint64_t> OI_TestArg{"test-arg", ""};
+static const int testArgInit = ([] {
+  llvm::clv2::registerDynamicEntry(llvm::clv2::makeEntry<&OI_TestArg>(test_arg, TestArgCount));
+}(), 0);
 
 TEST(Host, WaitStatusFormat) {
   EXPECT_EQ("W01", formatv("{0:g}", WaitStatus{WaitStatus::Exit, 1}).str());
@@ -137,7 +142,7 @@ TEST(Host, LaunchProcessDuplicatesHandle) {
   SubsystemRAII<FileSystem> subsystems;
 
   if (test_arg) {
-    Pipe pipe(LLDB_INVALID_PIPE, (lldb::pipe_t)test_arg.getValue());
+    Pipe pipe(LLDB_INVALID_PIPE, (lldb::pipe_t)test_arg);
     llvm::Expected<size_t> bytes_written =
         pipe.Write(test_msg.data(), test_msg.size());
     if (bytes_written && *bytes_written == test_msg.size())

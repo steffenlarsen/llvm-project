@@ -11,19 +11,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Remarks/RemarkStreamer.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Remarks/RemarksOptionsOptInfos.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include <cassert>
 #include <optional>
 
 using namespace llvm;
 using namespace llvm::remarks;
-
-static cl::opt<cl::boolOrDefault> EnableRemarksSection(
-    "remarks-section",
-    cl::desc(
-        "Emit a section containing remark diagnostics metadata. By default, "
-        "this is enabled for the following formats: bitstream."),
-    cl::init(cl::boolOrDefault::BOU_UNSET), cl::Hidden);
 
 RemarkStreamer::RemarkStreamer(
     std::unique_ptr<remarks::RemarkSerializer> RemarkSerializer,
@@ -57,15 +52,21 @@ bool RemarkStreamer::matchesFilter(StringRef Str) {
   return true;
 }
 
-bool RemarkStreamer::needsSection() const {
-  return EnableRemarksSection == cl::boolOrDefault::BOU_TRUE;
+bool RemarkStreamer::needsSection(const clv2::OptionsContext &Ctx) const {
+  std::optional<bool> V =
+      clv2::getOptValOr<&clv2::RemarksOptsReg, &clv2::REM_RemarksSection>(
+          Ctx, std::optional<bool>(std::nullopt));
+  return V.has_value() && *V;
 }
 
-bool RemarkStreamer::wantsSection() const {
-  if (EnableRemarksSection == cl::boolOrDefault::BOU_FALSE)
+bool RemarkStreamer::wantsSection(const clv2::OptionsContext &Ctx) const {
+  std::optional<bool> V =
+      clv2::getOptValOr<&clv2::RemarksOptsReg, &clv2::REM_RemarksSection>(
+          Ctx, std::optional<bool>(std::nullopt));
+  if (V.has_value() && !*V)
     return false;
   // Enable remark sections by default for bitstream remarks (so dsymutil can
   // find all remarks for a linked binary)
-  return needsSection() ||
+  return needsSection(Ctx) ||
          RemarkSerializer->SerializerFormat == Format::Bitstream;
 }

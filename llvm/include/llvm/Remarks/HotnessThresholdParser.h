@@ -15,7 +15,7 @@
 #ifndef LLVM_REMARKS_HOTNESSTHRESHOLDPARSER_H
 #define LLVM_REMARKS_HOTNESSTHRESHOLDPARSER_H
 
-#include "llvm/Support/CommandLine.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
 #include <optional>
 
@@ -41,23 +41,6 @@ inline Expected<std::optional<uint64_t>> parseHotnessThresholdOption(StringRef A
   // Negative integer effectively means no threshold
   return Val < 0 ? 0 : Val;
 }
-
-// A simple CL parser for '*-remarks-hotness-threshold='
-class HotnessThresholdParser : public cl::parser<std::optional<uint64_t>> {
-public:
-  HotnessThresholdParser(cl::Option &O) : cl::parser<std::optional<uint64_t>>(O) {}
-
-  bool parse(cl::Option &O, StringRef ArgName, StringRef Arg,
-             std::optional<uint64_t> &V) {
-    auto ResultOrErr = parseHotnessThresholdOption(Arg);
-    if (!ResultOrErr)
-      return O.error("Invalid argument '" + Arg +
-                     "', only integer or 'auto' is supported.");
-
-    V = *ResultOrErr;
-    return false;
-  }
-};
 
 } // namespace remarks
 } // namespace llvm

@@ -17,17 +17,21 @@
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/TargetLowering.h"
+#include "llvm/IR/Function.h"
 
 #define GET_SDNODE_DESC
 #include "X86GenSDNodeInfo.inc"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "x86-selectiondag-info"
 
-static cl::opt<bool>
-    UseFSRMForMemcpy("x86-use-fsrm-for-memcpy", cl::Hidden, cl::init(false),
-                     cl::desc("Use fast short rep mov in memcpy lowering"));
+static bool getUseFSRMForMemcpy(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_UseFSRMForMemcpy>(
+      F.getContext().getOptionsContext());
+}
 
 X86SelectionDAGInfo::X86SelectionDAGInfo()
     : SelectionDAGGenTargetInfo(X86GenSDNodeInfo) {}
@@ -405,7 +409,8 @@ SDValue X86SelectionDAGInfo::EmitTargetCodeForMemcpy(
     return SDValue();
 
   // If enabled and available, use fast short rep mov.
-  if (UseFSRMForMemcpy && Subtarget.hasFSRM())
+  if (getUseFSRMForMemcpy(DAG.getMachineFunction().getFunction()) &&
+      Subtarget.hasFSRM())
     return emitRepmovs(Subtarget, DAG, dl, Chain, Dst, Src, Size, MVT::i8);
 
   // Handle constant sizes

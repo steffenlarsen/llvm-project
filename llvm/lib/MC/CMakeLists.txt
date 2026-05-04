@@ -1,4 +1,6 @@
 add_llvm_component_library(LLVMMC
+  MCOptionsGetters.cpp
+  MCOptionsRegistration.cpp
   ConstantPools.cpp
   DXContainerInfo.cpp
   DXContainerPSVInfo.cpp

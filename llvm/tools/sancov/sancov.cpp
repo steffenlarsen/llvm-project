@@ -33,7 +33,7 @@
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/Option.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem.h"
@@ -51,6 +51,7 @@
 #include "llvm/Support/YAMLParser.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "llvm/Support/OptionsContext.h"
 #include <set>
 #include <vector>
 
@@ -756,8 +757,8 @@ static void getObjectCoveragePoints(const object::ObjectFile &O,
   const Target *TheTarget = TargetRegistry::lookupTarget(TheTriple, Error);
   failIfNotEmpty(Error);
 
-  std::unique_ptr<const MCSubtargetInfo> STI(
-      TheTarget->createMCSubtargetInfo(TheTriple, "", ""));
+  std::unique_ptr<const MCSubtargetInfo> STI(TheTarget->createMCSubtargetInfo(
+      TheTriple, "", "", /*Ctx=*/llvm::clv2::defaultOptionsContext()));
   failIfEmpty(STI, "no subtarget info for target " + TripleName);
 
   std::unique_ptr<const MCRegisterInfo> MRI(

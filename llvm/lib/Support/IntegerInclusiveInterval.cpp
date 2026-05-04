@@ -55,7 +55,8 @@ Expected<IntervalList> parseIntervals(StringRef Str, char Separator) {
         return createStringError(std::errc::invalid_argument,
                                  "Failed to parse number: '%s'",
                                  Matches[3].str().c_str());
-      if (Begin >= End)
+      // Equal bounds denote a single-element interval and are valid.
+      if (Begin > End)
         return createStringError(std::errc::invalid_argument,
                                  "Invalid interval: %lld >= %lld", Begin, End);
     } else

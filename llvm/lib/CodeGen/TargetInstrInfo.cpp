@@ -14,6 +14,7 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/Dwarf.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineCombinerPattern.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -30,32 +31,33 @@
 #include "llvm/CodeGen/TargetSchedule.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCInstrItineraries.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/InterleavedRange.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
 
-static cl::opt<bool> DisableHazardRecognizer(
-  "disable-sched-hazard", cl::Hidden, cl::init(false),
-  cl::desc("Disable hazard detection during preRA scheduling"));
+static bool getDisableSchedHazard(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableSchedHazard>(Ctx);
+}
 
-static cl::opt<bool> EnableAccReassociation(
-    "acc-reassoc", cl::Hidden, cl::init(true),
-    cl::desc("Enable reassociation of accumulation chains"));
+static bool getAccReassoc(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_AccReassoc>(Ctx);
+}
 
-static cl::opt<unsigned int>
-    MinAccumulatorDepth("acc-min-depth", cl::Hidden, cl::init(8),
-                        cl::desc("Minimum length of accumulator chains "
-                                 "required for the optimization to kick in"));
+static unsigned getAccMinDepth(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_AccMinDepth>(Ctx);
+}
 
-static cl::opt<unsigned int> MaxAccumulatorWidth(
-    "acc-max-width", cl::Hidden, cl::init(3),
-    cl::desc("Maximum number of branches in the accumulator tree"));
+static unsigned getAccMaxWidth(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_AccMaxWidth>(Ctx);
+}
 
 TargetInstrInfo::~TargetInstrInfo() = default;
 
@@ -1051,7 +1053,8 @@ void TargetInstrInfo::getAccumulatorChain(
 /// ILP.
 bool TargetInstrInfo::getAccumulatorReassociationPatterns(
     MachineInstr &Root, SmallVectorImpl<unsigned> &Patterns) const {
-  if (!EnableAccReassociation)
+  if (!getAccReassoc(
+          Root.getMF()->getFunction().getContext().getOptionsContext()))
     return false;
 
   unsigned Opc = Root.getOpcode();
@@ -1073,7 +1076,9 @@ bool TargetInstrInfo::getAccumulatorReassociationPatterns(
   getAccumulatorChain(&Root, Chain);
 
   // Reject chains which are too short to be worth modifying.
-  if (Chain.size() < MinAccumulatorDepth)
+  if (Chain.size() <
+      getAccMinDepth(
+          Root.getMF()->getFunction().getContext().getOptionsContext()))
     return false;
 
   // Check if the MBB this instruction is a part of contains any other chains.
@@ -1532,11 +1537,14 @@ void TargetInstrInfo::genAlternativeCodeSequence(
     SmallVector<Register, 32> ChainRegs;
     getAccumulatorChain(&Root, ChainRegs);
     unsigned int Depth = ChainRegs.size();
-    assert(MaxAccumulatorWidth > 1 &&
+    assert(getAccMaxWidth(MF.getFunction().getContext().getOptionsContext()) >
+               1 &&
            "Max accumulator width set to illegal value");
-    unsigned int MaxWidth = Log2_32(Depth) < MaxAccumulatorWidth
-                                ? Log2_32(Depth)
-                                : MaxAccumulatorWidth;
+    unsigned int MaxWidth =
+        Log2_32(Depth) < getAccMaxWidth(
+                             MF.getFunction().getContext().getOptionsContext())
+            ? Log2_32(Depth)
+            : getAccMaxWidth(MF.getFunction().getContext().getOptionsContext());
 
     // Walk down the chain and rewrite it as a tree.
     for (auto IndexedReg : llvm::enumerate(llvm::reverse(ChainRegs))) {
@@ -1720,10 +1728,11 @@ bool TargetInstrInfo::isSchedulingBoundary(const MachineInstr &MI,
   return MI.modifiesRegister(TLI.getStackPointerRegisterToSaveRestore(), &TRI);
 }
 
-// Provide a global flag for disabling the PreRA hazard recognizer that targets
-// may choose to honor.
-bool TargetInstrInfo::usePreRAHazardRecognizer() const {
-  return !DisableHazardRecognizer;
+// Provide a flag for disabling the PreRA hazard recognizer that targets may
+// choose to honor.
+bool TargetInstrInfo::usePreRAHazardRecognizer(
+    const clv2::OptionsContext &Ctx) const {
+  return !getDisableSchedHazard(Ctx);
 }
 
 // Default implementation of CreateTargetRAHazardRecognizer.

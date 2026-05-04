@@ -13,8 +13,9 @@
 #include "bolt/Core/DynoStats.h"
 #include "bolt/Core/BinaryBasicBlock.h"
 #include "bolt/Core/BinaryFunction.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -26,27 +27,7 @@
 using namespace llvm;
 using namespace bolt;
 
-namespace opts {
-
-extern cl::OptionCategory BoltCategory;
-
-static cl::opt<uint32_t>
-DynoStatsScale("dyno-stats-scale",
-  cl::desc("scale to be applied while reporting dyno stats"),
-  cl::Optional,
-  cl::init(1),
-  cl::Hidden,
-  cl::cat(BoltCategory));
-
-static cl::opt<uint32_t>
-PrintDynoOpcodeStat("print-dyno-opcode-stats",
-  cl::desc("print per instruction opcode dyno stats and the function"
-              "names:BB offsets of the nth highest execution counts"),
-  cl::init(0),
-  cl::Hidden,
-  cl::cat(BoltCategory));
-
-} // namespace opts
+namespace opts {} // namespace opts
 
 namespace llvm {
 namespace bolt {
@@ -73,9 +54,14 @@ bool DynoStats::lessThan(const DynoStats &Other,
 
 void DynoStats::print(raw_ostream &OS, const DynoStats *Other,
                       MCInstPrinter *Printer) const {
+  auto *CoreOpts = bolt_core_opts::getBoltCoreOpts(*Ctx);
+  const uint32_t DynoStatsScale =
+      CoreOpts ? CoreOpts->get<&clv2::BOLTCORE_DynoStatsScale>() : 1u;
+  const uint32_t PrintDynoOpcodeStat =
+      CoreOpts ? CoreOpts->get<&clv2::BOLTCORE_PrintDynoOpcodeStat>() : 0u;
   auto printStatWithDelta = [&](const std::string &Name, uint64_t Stat,
                                 uint64_t OtherStat) {
-    OS << format("%'20lld : ", Stat * opts::DynoStatsScale) << Name;
+    OS << format("%'20lld : ", Stat * DynoStatsScale) << Name;
     if (Other) {
       if (Stat != OtherStat) {
         OtherStat = std::max(OtherStat, uint64_t(1)); // to prevent divide by 0
@@ -96,7 +82,7 @@ void DynoStats::print(raw_ostream &OS, const DynoStats *Other,
 
     printStatWithDelta(Desc[Stat], Stats[Stat], Other ? (*Other)[Stat] : 0);
   }
-  if (opts::PrintDynoOpcodeStat && Printer) {
+  if (PrintDynoOpcodeStat && Printer) {
     OS << "\nProgram-wide opcode histogram:\n";
     OS << "              Opcode,   Execution Count,     Max Exec Count, "
           "Function Name:Offset ...\n";
@@ -111,13 +97,13 @@ void DynoStats::print(raw_ostream &OS, const DynoStats *Other,
     // count.
     for (auto &Stat : llvm::reverse(SortedHistogram)) {
       OS << format("%20s,%'18lld", Printer->getOpcodeName(Stat.second).data(),
-                   Stat.first * opts::DynoStatsScale);
+                   Stat.first * DynoStatsScale);
       auto It = OpcodeHistogram.find(Stat.second);
       assert(It != OpcodeHistogram.end());
       MaxOpcodeHistogramTy MaxMultiMap = It->second.second;
       // Start with function name:BB offset with highest execution count.
       for (auto &Max : llvm::reverse(MaxMultiMap)) {
-        OS << format(", %'18lld, ", Max.first * opts::DynoStatsScale)
+        OS << format(", %'18lld, ", Max.first * DynoStatsScale)
            << Max.second.first.str() << ':' << Max.second.second;
       }
       OS << '\n';
@@ -130,20 +116,23 @@ void DynoStats::operator+=(const DynoStats &Other) {
        Stat < DynoStats::LAST_DYNO_STAT; ++Stat) {
     Stats[Stat] += Other[Stat];
   }
+  auto *CoreOpts = bolt_core_opts::getBoltCoreOpts(*Ctx);
+  const uint32_t PrintDynoOpcodeStat =
+      CoreOpts ? CoreOpts->get<&clv2::BOLTCORE_PrintDynoOpcodeStat>() : 0u;
   for (const OpcodeStatTy &Stat : Other.OpcodeHistogram) {
     auto I = OpcodeHistogram.find(Stat.first);
     if (I == OpcodeHistogram.end()) {
       OpcodeHistogram.emplace(Stat);
     } else {
-      // Merge other histograms, log only the opts::PrintDynoOpcodeStat'th
+      // Merge other histograms, log only the PrintDynoOpcodeStat'th
       // maximum counts.
       I->second.first += Stat.second.first;
       auto &MMap = I->second.second;
       auto &OtherMMap = Stat.second.second;
       auto Size = MMap.size();
-      assert(Size <= opts::PrintDynoOpcodeStat);
+      assert(Size <= PrintDynoOpcodeStat);
       for (auto OtherMMapPair : llvm::reverse(OtherMMap)) {
-        if (Size++ >= opts::PrintDynoOpcodeStat) {
+        if (Size++ >= PrintDynoOpcodeStat) {
           auto First = MMap.begin();
           if (OtherMMapPair.first <= First->first)
             break;
@@ -157,8 +146,12 @@ void DynoStats::operator+=(const DynoStats &Other) {
 
 DynoStats getDynoStats(BinaryFunction &BF) {
   auto &BC = BF.getBinaryContext();
+  const clv2::OptionsContext &Ctx = BC.getOptionsContext();
+  auto *CoreOpts = bolt_core_opts::getBoltCoreOpts(Ctx);
+  const uint32_t PrintDynoOpcodeStat =
+      CoreOpts ? CoreOpts->get<&clv2::BOLTCORE_PrintDynoOpcodeStat>() : 0u;
 
-  DynoStats Stats(/*PrintAArch64Stats*/ BC.isAArch64());
+  DynoStats Stats(/*PrintAArch64Stats*/ BC.isAArch64(), Ctx);
 
   // Return empty-stats about the function we don't completely understand.
   if (!BF.isSimple() || !BF.hasValidProfile() || !BF.hasCanonicalCFG())
@@ -187,7 +180,7 @@ DynoStats getDynoStats(BinaryFunction &BF) {
     // When -print-dyno-opcode-stats is on, count per each opcode and record
     // maximum execution counts.
     for (const MCInst &Instr : *BB) {
-      if (opts::PrintDynoOpcodeStat) {
+      if (PrintDynoOpcodeStat) {
         unsigned Opcode = Instr.getOpcode();
         auto I = Stats.OpcodeHistogram.find(Opcode);
         if (I == Stats.OpcodeHistogram.end()) {
@@ -199,7 +192,7 @@ DynoStats getDynoStats(BinaryFunction &BF) {
         } else {
           I->second.first += BBExecutionCount;
           bool Insert = true;
-          if (I->second.second.size() == opts::PrintDynoOpcodeStat) {
+          if (I->second.second.size() == PrintDynoOpcodeStat) {
             auto First = I->second.second.begin();
             if (First->first < BBExecutionCount)
               I->second.second.erase(First);

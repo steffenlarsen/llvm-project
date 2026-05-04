@@ -50,13 +50,14 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -88,52 +89,58 @@ STATISTIC(NumP9Setb,
           "Number of compares lowered to setb.");
 
 // FIXME: Remove this once the bug has been fixed!
-cl::opt<bool> ANDIGlueBug("expose-ppc-andi-glue-bug",
-cl::desc("expose the ANDI glue bug on PPC"), cl::Hidden);
 
-static cl::opt<bool>
-    UseBitPermRewriter("ppc-use-bit-perm-rewriter", cl::init(true),
-                       cl::desc("use aggressive ppc isel for bit permutations"),
-                       cl::Hidden);
-static cl::opt<bool> BPermRewriterNoMasking(
-    "ppc-bit-perm-rewriter-stress-rotates",
-    cl::desc("stress rotate selection in aggressive ppc isel for "
-             "bit permutations"),
-    cl::Hidden);
+static bool UseBitPermRewriter = true;
 
-static cl::opt<bool> EnableBranchHint(
-  "ppc-use-branch-hint", cl::init(true),
-    cl::desc("Enable static hinting of branches on ppc"),
-    cl::Hidden);
+static bool EnableBranchHint = true;
 
-static cl::opt<bool> EnableTLSOpt(
-  "ppc-tls-opt", cl::init(true),
-    cl::desc("Enable tls optimization peephole"),
-    cl::Hidden);
+static bool EnableTLSOpt = true;
 
 enum ICmpInGPRType { ICGPR_All, ICGPR_None, ICGPR_I32, ICGPR_I64,
   ICGPR_NonExtIn, ICGPR_Zext, ICGPR_Sext, ICGPR_ZextI32,
   ICGPR_SextI32, ICGPR_ZextI64, ICGPR_SextI64 };
 
-static cl::opt<ICmpInGPRType> CmpInGPR(
-  "ppc-gpr-icmps", cl::Hidden, cl::init(ICGPR_All),
-  cl::desc("Specify the types of comparisons to emit GPR-only code for."),
-  cl::values(clEnumValN(ICGPR_None, "none", "Do not modify integer comparisons."),
-             clEnumValN(ICGPR_All, "all", "All possible int comparisons in GPRs."),
-             clEnumValN(ICGPR_I32, "i32", "Only i32 comparisons in GPRs."),
-             clEnumValN(ICGPR_I64, "i64", "Only i64 comparisons in GPRs."),
-             clEnumValN(ICGPR_NonExtIn, "nonextin",
-                        "Only comparisons where inputs don't need [sz]ext."),
-             clEnumValN(ICGPR_Zext, "zext", "Only comparisons with zext result."),
-             clEnumValN(ICGPR_ZextI32, "zexti32",
-                        "Only i32 comparisons with zext result."),
-             clEnumValN(ICGPR_ZextI64, "zexti64",
-                        "Only i64 comparisons with zext result."),
-             clEnumValN(ICGPR_Sext, "sext", "Only comparisons with sext result."),
-             clEnumValN(ICGPR_SextI32, "sexti32",
-                        "Only i32 comparisons with sext result."),
-             clEnumValN(ICGPR_SextI64, "sexti64",
-                        "Only i64 comparisons with sext result.")));
+static bool CmpInGPRWasSpecified = false;
+static ICmpInGPRType CmpInGPR = ICGPR_All;
+
+static bool getANDIGlueBug(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_ANDIGlueBug>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getUseBitPermRewriter(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_UseBitPermRewriter>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getBPermRewriterNoMasking(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_BPermRewriterNoMasking>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getEnableBranchHint(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_EnableBranchHint>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getEnableTLSOpt(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_EnableTLSOpt>(
+      F.getContext().getOptionsContext());
+}
+
+static ICmpInGPRType getCmpInGPR(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::PowerPCOptsReg>(
+          F.getContext().getOptionsContext()))
+    return static_cast<ICmpInGPRType>(O->get<&clv2::PPC_CmpInGPR>());
+  return CmpInGPR;
+}
+
+static bool getCmpInGPRWasSpecified(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::PowerPCOptsReg>(
+          F.getContext().getOptionsContext()))
+    return O->specified<&clv2::PPC_CmpInGPR>();
+  return CmpInGPRWasSpecified;
+}
 namespace {
 
   //===--------------------------------------------------------------------===//
@@ -2165,7 +2172,7 @@ class BitPermutationSelector {
   // better to rotate, mask explicitly (using andi/andis), and then or the
   // result. Select this part of the result first.
   void SelectAndParts32(const SDLoc &dl, SDValue &Res, unsigned *InstCnt) {
-    if (BPermRewriterNoMasking)
+    if (getBPermRewriterNoMasking(CurDAG->getMachineFunction().getFunction()))
       return;
 
     for (ValueRotInfo &VRI : ValueRotsVec) {
@@ -2479,7 +2486,7 @@ class BitPermutationSelector {
   }
 
   void SelectAndParts64(const SDLoc &dl, SDValue &Res, unsigned *InstCnt) {
-    if (BPermRewriterNoMasking)
+    if (getBPermRewriterNoMasking(CurDAG->getMachineFunction().getFunction()))
       return;
 
     // The idea here is the same as in the 32-bit version, but with additional
@@ -2934,18 +2941,26 @@ public:
            "Only expecting to use this on 64 bit targets.");
   }
   SDNode *Select(SDNode *N) {
-    if (CmpInGPR == ICGPR_None)
+    if (getCmpInGPR(CurDAG->getMachineFunction().getFunction()) == ICGPR_None)
       return nullptr;
     switch (N->getOpcode()) {
     default: break;
     case ISD::ZERO_EXTEND:
-      if (CmpInGPR == ICGPR_Sext || CmpInGPR == ICGPR_SextI32 ||
-          CmpInGPR == ICGPR_SextI64)
+      if (getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+              ICGPR_Sext ||
+          getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+              ICGPR_SextI32 ||
+          getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+              ICGPR_SextI64)
         return nullptr;
       [[fallthrough]];
     case ISD::SIGN_EXTEND:
-      if (CmpInGPR == ICGPR_Zext || CmpInGPR == ICGPR_ZextI32 ||
-          CmpInGPR == ICGPR_ZextI64)
+      if (getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+              ICGPR_Zext ||
+          getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+              ICGPR_ZextI32 ||
+          getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+              ICGPR_ZextI64)
         return nullptr;
       return tryEXTEND(N);
     case ISD::AND:
@@ -3321,8 +3336,12 @@ SDValue
 IntegerCompareEliminator::get32BitZExtCompare(SDValue LHS, SDValue RHS,
                                               ISD::CondCode CC,
                                               int64_t RHSValue, SDLoc dl) {
-  if (CmpInGPR == ICGPR_I64 || CmpInGPR == ICGPR_SextI64 ||
-      CmpInGPR == ICGPR_ZextI64 || CmpInGPR == ICGPR_Sext)
+  if (getCmpInGPR(CurDAG->getMachineFunction().getFunction()) == ICGPR_I64 ||
+      getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+          ICGPR_SextI64 ||
+      getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+          ICGPR_ZextI64 ||
+      getCmpInGPR(CurDAG->getMachineFunction().getFunction()) == ICGPR_Sext)
     return SDValue();
   bool IsRHSZero = RHSValue == 0;
   bool IsRHSOne = RHSValue == 1;
@@ -3369,12 +3388,14 @@ IntegerCompareEliminator::get32BitZExtCompare(SDValue LHS, SDValue RHS,
     [[fallthrough]];
   }
   case ISD::SETLE: {
-    if (CmpInGPR == ICGPR_NonExtIn)
+    if (getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+        ICGPR_NonExtIn)
       return SDValue();
     // (zext (setcc %a, %b, setle)) -> (xor (lshr (sub %b, %a), 63), 1)
     // (zext (setcc %a, 0, setle))  -> (xor (lshr (- %a), 63), 1)
     if(IsRHSZero) {
-      if (CmpInGPR == ICGPR_NonExtIn)
+      if (getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+          ICGPR_NonExtIn)
         return SDValue();
       return getCompoundZeroComparisonInGPR(LHS, dl, ZeroCompare::LEZExt);
     }
@@ -3401,7 +3422,8 @@ IntegerCompareEliminator::get32BitZExtCompare(SDValue LHS, SDValue RHS,
       return getCompoundZeroComparisonInGPR(LHS, dl, ZeroCompare::GEZExt);
 
     if (IsRHSZero) {
-      if (CmpInGPR == ICGPR_NonExtIn)
+      if (getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+          ICGPR_NonExtIn)
         return SDValue();
       // The upper 32-bits of the register can't be undefined for this sequence.
       LHS = signExtendInputIfNeeded(LHS);
@@ -3425,7 +3447,8 @@ IntegerCompareEliminator::get32BitZExtCompare(SDValue LHS, SDValue RHS,
     // (zext (setcc %a, 0, setlt))  -> (lshr %a, 31)
     // Handle SETLT 1 (which is equivalent to SETLE 0).
     if (IsRHSOne) {
-      if (CmpInGPR == ICGPR_NonExtIn)
+      if (getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+          ICGPR_NonExtIn)
         return SDValue();
       return getCompoundZeroComparisonInGPR(LHS, dl, ZeroCompare::LEZExt);
     }
@@ -3437,7 +3460,8 @@ IntegerCompareEliminator::get32BitZExtCompare(SDValue LHS, SDValue RHS,
                                             ShiftOps), 0);
     }
 
-    if (CmpInGPR == ICGPR_NonExtIn)
+    if (getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+        ICGPR_NonExtIn)
       return SDValue();
     // The upper 32-bits of the register can't be undefined for this sequence.
     LHS = signExtendInputIfNeeded(LHS);
@@ -3454,7 +3478,8 @@ IntegerCompareEliminator::get32BitZExtCompare(SDValue LHS, SDValue RHS,
     std::swap(LHS, RHS);
     [[fallthrough]];
   case ISD::SETULE: {
-    if (CmpInGPR == ICGPR_NonExtIn)
+    if (getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+        ICGPR_NonExtIn)
       return SDValue();
     // The upper 32-bits of the register can't be undefined for this sequence.
     LHS = zeroExtendInputIfNeeded(LHS);
@@ -3474,7 +3499,8 @@ IntegerCompareEliminator::get32BitZExtCompare(SDValue LHS, SDValue RHS,
     std::swap(LHS, RHS);
     [[fallthrough]];
   case ISD::SETULT: {
-    if (CmpInGPR == ICGPR_NonExtIn)
+    if (getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+        ICGPR_NonExtIn)
       return SDValue();
     // The upper 32-bits of the register can't be undefined for this sequence.
     LHS = zeroExtendInputIfNeeded(LHS);
@@ -3494,8 +3520,12 @@ SDValue
 IntegerCompareEliminator::get32BitSExtCompare(SDValue LHS, SDValue RHS,
                                               ISD::CondCode CC,
                                               int64_t RHSValue, SDLoc dl) {
-  if (CmpInGPR == ICGPR_I64 || CmpInGPR == ICGPR_SextI64 ||
-      CmpInGPR == ICGPR_ZextI64 || CmpInGPR == ICGPR_Zext)
+  if (getCmpInGPR(CurDAG->getMachineFunction().getFunction()) == ICGPR_I64 ||
+      getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+          ICGPR_SextI64 ||
+      getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+          ICGPR_ZextI64 ||
+      getCmpInGPR(CurDAG->getMachineFunction().getFunction()) == ICGPR_Zext)
     return SDValue();
   bool IsRHSZero = RHSValue == 0;
   bool IsRHSOne = RHSValue == 1;
@@ -3553,7 +3583,8 @@ IntegerCompareEliminator::get32BitSExtCompare(SDValue LHS, SDValue RHS,
     [[fallthrough]];
   }
   case ISD::SETLE: {
-    if (CmpInGPR == ICGPR_NonExtIn)
+    if (getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+        ICGPR_NonExtIn)
       return SDValue();
     // (sext (setcc %a, %b, setge)) -> (add (lshr (sub %b, %a), 63), -1)
     // (sext (setcc %a, 0, setle))  -> (add (lshr (- %a), 63), -1)
@@ -3580,7 +3611,8 @@ IntegerCompareEliminator::get32BitSExtCompare(SDValue LHS, SDValue RHS,
     if (IsRHSNegOne)
       return getCompoundZeroComparisonInGPR(LHS, dl, ZeroCompare::GESExt);
     if (IsRHSZero) {
-      if (CmpInGPR == ICGPR_NonExtIn)
+      if (getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+          ICGPR_NonExtIn)
         return SDValue();
       // The upper 32-bits of the register can't be undefined for this sequence.
       LHS = signExtendInputIfNeeded(LHS);
@@ -3603,7 +3635,8 @@ IntegerCompareEliminator::get32BitSExtCompare(SDValue LHS, SDValue RHS,
     // (sext (setcc %a, 1, setgt))  -> (add (lshr (- %a), 63), -1)
     // (sext (setcc %a, 0, setgt))  -> (ashr %a, 31)
     if (IsRHSOne) {
-      if (CmpInGPR == ICGPR_NonExtIn)
+      if (getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+          ICGPR_NonExtIn)
         return SDValue();
       return getCompoundZeroComparisonInGPR(LHS, dl, ZeroCompare::LESExt);
     }
@@ -3611,7 +3644,8 @@ IntegerCompareEliminator::get32BitSExtCompare(SDValue LHS, SDValue RHS,
       return SDValue(CurDAG->getMachineNode(PPC::SRAWI, dl, MVT::i32, LHS,
                                             S->getI32Imm(31, dl)), 0);
 
-    if (CmpInGPR == ICGPR_NonExtIn)
+    if (getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+        ICGPR_NonExtIn)
       return SDValue();
     // The upper 32-bits of the register can't be undefined for this sequence.
     LHS = signExtendInputIfNeeded(LHS);
@@ -3627,7 +3661,8 @@ IntegerCompareEliminator::get32BitSExtCompare(SDValue LHS, SDValue RHS,
     std::swap(LHS, RHS);
     [[fallthrough]];
   case ISD::SETULE: {
-    if (CmpInGPR == ICGPR_NonExtIn)
+    if (getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+        ICGPR_NonExtIn)
       return SDValue();
     // The upper 32-bits of the register can't be undefined for this sequence.
     LHS = zeroExtendInputIfNeeded(LHS);
@@ -3647,7 +3682,8 @@ IntegerCompareEliminator::get32BitSExtCompare(SDValue LHS, SDValue RHS,
     std::swap(LHS, RHS);
     [[fallthrough]];
   case ISD::SETULT: {
-    if (CmpInGPR == ICGPR_NonExtIn)
+    if (getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+        ICGPR_NonExtIn)
       return SDValue();
     // The upper 32-bits of the register can't be undefined for this sequence.
     LHS = zeroExtendInputIfNeeded(LHS);
@@ -3666,8 +3702,12 @@ SDValue
 IntegerCompareEliminator::get64BitZExtCompare(SDValue LHS, SDValue RHS,
                                               ISD::CondCode CC,
                                               int64_t RHSValue, SDLoc dl) {
-  if (CmpInGPR == ICGPR_I32 || CmpInGPR == ICGPR_SextI32 ||
-      CmpInGPR == ICGPR_ZextI32 || CmpInGPR == ICGPR_Sext)
+  if (getCmpInGPR(CurDAG->getMachineFunction().getFunction()) == ICGPR_I32 ||
+      getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+          ICGPR_SextI32 ||
+      getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+          ICGPR_ZextI32 ||
+      getCmpInGPR(CurDAG->getMachineFunction().getFunction()) == ICGPR_Sext)
     return SDValue();
   bool IsRHSZero = RHSValue == 0;
   bool IsRHSOne = RHSValue == 1;
@@ -3823,8 +3863,12 @@ SDValue
 IntegerCompareEliminator::get64BitSExtCompare(SDValue LHS, SDValue RHS,
                                               ISD::CondCode CC,
                                               int64_t RHSValue, SDLoc dl) {
-  if (CmpInGPR == ICGPR_I32 || CmpInGPR == ICGPR_SextI32 ||
-      CmpInGPR == ICGPR_ZextI32 || CmpInGPR == ICGPR_Zext)
+  if (getCmpInGPR(CurDAG->getMachineFunction().getFunction()) == ICGPR_I32 ||
+      getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+          ICGPR_SextI32 ||
+      getCmpInGPR(CurDAG->getMachineFunction().getFunction()) ==
+          ICGPR_ZextI32 ||
+      getCmpInGPR(CurDAG->getMachineFunction().getFunction()) == ICGPR_Zext)
     return SDValue();
   bool IsRHSZero = RHSValue == 0;
   bool IsRHSOne = RHSValue == 1;
@@ -4064,7 +4108,8 @@ bool PPCDAGToDAGISel::tryIntCompareInGPR(SDNode *N) {
   // For POWER10, it is more profitable to use the set boolean extension
   // instructions rather than the integer compare elimination codegen.
   // Users can override this via the command line option, `--ppc-gpr-icmps`.
-  if (!(CmpInGPR.getNumOccurrences() > 0) && Subtarget->isISA3_1())
+  if (!getCmpInGPRWasSpecified(CurDAG->getMachineFunction().getFunction()) &&
+      Subtarget->isISA3_1())
     return false;
 
   switch (N->getOpcode()) {
@@ -4089,7 +4134,7 @@ bool PPCDAGToDAGISel::tryBitPermutation(SDNode *N) {
       N->getValueType(0) != MVT::i64)
     return false;
 
-  if (!UseBitPermRewriter)
+  if (!getUseBitPermRewriter(CurDAG->getMachineFunction().getFunction()))
     return false;
 
   switch (N->getOpcode()) {
@@ -5574,7 +5619,8 @@ void PPCDAGToDAGISel::Select(SDNode *N) {
     // Change TLS initial-exec (or TLS local-exec on AIX) D-form stores to
     // X-form stores.
     StoreSDNode *ST = cast<StoreSDNode>(N);
-    if (EnableTLSOpt && (Subtarget->isELFv2ABI() || Subtarget->isAIXABI()) &&
+    if (getEnableTLSOpt(CurDAG->getMachineFunction().getFunction()) &&
+        (Subtarget->isELFv2ABI() || Subtarget->isAIXABI()) &&
         ST->getAddressingMode() != ISD::PRE_INC)
       if (tryTLSXFormStore(ST))
         return;
@@ -5589,7 +5635,8 @@ void PPCDAGToDAGISel::Select(SDNode *N) {
     if (LD->getAddressingMode() != ISD::PRE_INC) {
       // Change TLS initial-exec (or TLS local-exec on AIX) D-form loads to
       // X-form loads.
-      if (EnableTLSOpt && (Subtarget->isELFv2ABI() || Subtarget->isAIXABI()))
+      if (getEnableTLSOpt(CurDAG->getMachineFunction().getFunction()) &&
+          (Subtarget->isELFv2ABI() || Subtarget->isAIXABI()))
         if (tryTLSXFormLoad(LD))
           return;
       break;
@@ -5834,7 +5881,7 @@ void PPCDAGToDAGISel::Select(SDNode *N) {
   // FIXME: Remove this once the ANDI glue bug is fixed:
   case PPCISD::ANDI_rec_1_EQ_BIT:
   case PPCISD::ANDI_rec_1_GT_BIT: {
-    if (!ANDIGlueBug)
+    if (!getANDIGlueBug(CurDAG->getMachineFunction().getFunction()))
       break;
 
     EVT InVT = N->getOperand(0).getValueType();
@@ -6043,7 +6090,7 @@ void PPCDAGToDAGISel::Select(SDNode *N) {
     // Op #4 is the Flag.
     // Prevent PPC::PRED_* from being selected into LI.
     unsigned PCC = N->getConstantOperandVal(1);
-    if (EnableBranchHint)
+    if (getEnableBranchHint(CurDAG->getMachineFunction().getFunction()))
       PCC |= getBranchHint(PCC, *FuncInfo, N->getOperand(3));
 
     SDValue Pred = getI32Imm(PCC, dl);
@@ -6091,7 +6138,7 @@ void PPCDAGToDAGISel::Select(SDNode *N) {
       return;
     }
 
-    if (EnableBranchHint)
+    if (getEnableBranchHint(CurDAG->getMachineFunction().getFunction()))
       PCC |= getBranchHint(PCC, *FuncInfo, N->getOperand(4));
 
     SDValue CondCode = SelectCC(N->getOperand(2), N->getOperand(3), CC, dl);

@@ -149,6 +149,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/ZoneAlgo.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopInfo.h"
 #include "polly/Support/GICHelper.h"
 #include "polly/Support/ISLTools.h"
@@ -735,8 +736,12 @@ isl::id ZoneAlgorithm::makeValueId(Value *V) {
 
   auto &Id = ValueIds[V];
   if (Id.is_null()) {
+    bool UseInstNames = false;
+    if (auto *OptCtx = polly_opts::getPollyOpts(
+            S->getFunction().getContext().getOptionsContext()))
+      UseInstNames = OptCtx->get<&llvm::clv2::POLLY_UseLlvmNames>();
     auto Name = getIslCompatibleName("Val_", V, ValueIds.size() - 1,
-                                     std::string(), UseInstructionNames);
+                                     std::string(), UseInstNames);
     Id = isl::id::alloc(IslCtx.get(), Name.c_str(), V);
   }
   return Id;

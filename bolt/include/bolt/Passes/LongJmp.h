@@ -199,8 +199,7 @@ class LongJmpPass : public BinaryFunctionPass {
 public:
   /// BinaryPass public interface
 
-  explicit LongJmpPass(const cl::opt<bool> &PrintPass)
-      : BinaryFunctionPass(PrintPass) {}
+  explicit LongJmpPass(const bool PrintPass) : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "long-jmp"; }
 

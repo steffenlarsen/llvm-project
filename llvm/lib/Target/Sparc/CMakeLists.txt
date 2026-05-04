@@ -17,6 +17,8 @@ tablegen(LLVM SparcGenSubtargetInfo.inc -gen-subtarget)
 add_public_tablegen_target(SparcCommonTableGen)
 
 add_llvm_target(SparcCodeGen
+  SparcOptionsGetters.cpp
+  SparcOptionsRegistration.cpp
   DelaySlotFiller.cpp
   LeonPasses.cpp
   SparcAsmPrinter.cpp

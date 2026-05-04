@@ -671,7 +671,7 @@ def loadi16 : PatFrag<(ops node:$ptr), (i16 (unindexedload node:$ptr)), [{
   ISD::LoadExtType ExtType = LD->getExtensionType();
   if (ExtType == ISD::NON_EXTLOAD)
     return true;
-  if (ExtType == ISD::EXTLOAD && EnablePromoteAnyextLoad)
+  if (ExtType == ISD::EXTLOAD && getEnablePromoteAnyextLoad(CurDAG->getMachineFunction().getFunction()))
     return LD->getAlign() >= 2 && LD->isSimple();
   return false;
 }]> {
@@ -690,7 +690,7 @@ def loadi32 : PatFrag<(ops node:$ptr), (i32 (unindexedload node:$ptr)), [{
   ISD::LoadExtType ExtType = LD->getExtensionType();
   if (ExtType == ISD::NON_EXTLOAD)
     return true;
-  if (ExtType == ISD::EXTLOAD && EnablePromoteAnyextLoad)
+  if (ExtType == ISD::EXTLOAD && getEnablePromoteAnyextLoad(CurDAG->getMachineFunction().getFunction()))
     return LD->getAlign() >= 4 && LD->isSimple();
   return false;
 }]> {

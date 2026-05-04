@@ -39,11 +39,13 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
@@ -57,15 +59,16 @@ using namespace llvm;
 
 STATISTIC(LoopsInterchanged, "Number of loops interchanged");
 
-static cl::opt<int> LoopInterchangeCostThreshold(
-    "loop-interchange-threshold", cl::init(0), cl::Hidden,
-    cl::desc("Interchange if you gain more than this number"));
+static int getLoopInterchangeCostThreshold(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_LoopInterchangeThreshold>(
+      F.getContext().getOptionsContext(), 0);
+}
 
-static cl::opt<unsigned int> MaxMemInstrRatio(
-    "loop-interchange-max-mem-instr-ratio", cl::init(4), cl::Hidden,
-    cl::desc("Maximum number of load/store instructions squared in relation to "
-             "the total number of instructions. Higher value may lead to more "
-             "interchanges at the cost of compile-time"));
+static unsigned int getMaxMemInstrRatio(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_LoopInterchangeMaxMemInstrCount>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -92,37 +95,37 @@ enum class RuleTy {
 } // end anonymous namespace
 
 // Minimum loop depth supported.
-static cl::opt<unsigned int> MinLoopNestDepth(
-    "loop-interchange-min-loop-nest-depth", cl::init(2), cl::Hidden,
-    cl::desc("Minimum depth of loop nest considered for the transform"));
+static unsigned int getMinLoopNestDepth(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_LoopInterchangeMinLoopNestDepth>(
+      F.getContext().getOptionsContext());
+}
 
 // Maximum loop depth supported.
-static cl::opt<unsigned int> MaxLoopNestDepth(
-    "loop-interchange-max-loop-nest-depth", cl::init(10), cl::Hidden,
-    cl::desc("Maximum depth of loop nest considered for the transform"));
+static unsigned int getMaxLoopNestDepth(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_LoopInterchangeMaxLoopNestDepth>(
+      F.getContext().getOptionsContext());
+}
 
-// We prefer cache cost to vectorization by default.
-static cl::list<RuleTy> Profitabilities(
-    "loop-interchange-profitabilities", cl::MiscFlags::CommaSeparated,
-    cl::Hidden,
-    cl::desc("List of profitability heuristics to be used. They are applied in "
-             "the given order"),
-    cl::list_init<RuleTy>({RuleTy::PerInstrOrderCost,
-                           RuleTy::ForVectorization}),
-    cl::values(clEnumValN(RuleTy::PerLoopCacheAnalysis, "cache",
-                          "Prioritize loop cache cost"),
-               clEnumValN(RuleTy::PerInstrOrderCost, "instorder",
-                          "Prioritize the IVs order of each instruction"),
-               clEnumValN(RuleTy::ForVectorization, "vectorize",
-                          "Prioritize vectorization"),
-               clEnumValN(RuleTy::Ignore, "ignore",
-                          "Ignore profitability, force interchange (does not "
-                          "work with other options)")));
+static SmallVector<RuleTy, 4> getProfitabilities(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::ScalarOptsReg>(
+          F.getContext().getOptionsContext())) {
+    const auto &V = O->get<&clv2::SC_LoopInterchangeProfitabilities>();
+    if (!V.empty()) {
+      SmallVector<RuleTy, 4> Result;
+      for (auto E : V)
+        Result.push_back(static_cast<RuleTy>(E));
+      return Result;
+    }
+  }
+  return {RuleTy::PerInstrOrderCost, RuleTy::ForVectorization};
+}
 
 // Support for the inner-loop reduction pattern.
-static cl::opt<bool> EnableReduction2Memory(
-    "loop-interchange-reduction-to-mem", cl::init(false), cl::Hidden,
-    cl::desc("Support for the inner-loop reduction pattern."));
+static bool getEnableReduction2Memory(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_LoopInterchangeReductionToMem>(
+      F.getContext().getOptionsContext(), false);
+}
 
 #ifndef NDEBUG
 static bool noDuplicateRulesAndIgnore(ArrayRef<RuleTy> Rules) {
@@ -203,7 +206,8 @@ static bool populateDependencyMatrix(CharMatrix &DepMatrix, unsigned Level,
   unsigned NumMemInstr = MemInstr.size();
   LLVM_DEBUG(dbgs() << "Found " << NumMemInstr
                     << " Loads and Stores to analyze\n");
-  if (MaxMemInstrRatio * NumInsts < NumMemInstr * NumMemInstr) {
+  if (getMaxMemInstrRatio(*L->getHeader()->getParent()) * NumInsts <
+      NumMemInstr * NumMemInstr) {
     ORE->emit([&]() {
       return OptimizationRemarkMissed(DEBUG_TYPE, "UnsupportedLoop",
                                       L->getStartLoc(), L->getHeader())
@@ -417,18 +421,20 @@ static void populateWorklist(Loop &L, LoopVector &LoopList) {
 static bool hasSupportedLoopDepth(ArrayRef<Loop *> LoopList,
                                   OptimizationRemarkEmitter &ORE) {
   unsigned LoopNestDepth = LoopList.size();
-  if (LoopNestDepth < MinLoopNestDepth || LoopNestDepth > MaxLoopNestDepth) {
+  const Function &F = *LoopList.front()->getHeader()->getParent();
+  if (LoopNestDepth < getMinLoopNestDepth(F) ||
+      LoopNestDepth > getMaxLoopNestDepth(F)) {
     LLVM_DEBUG(dbgs() << "Unsupported depth of loop nest " << LoopNestDepth
-                      << ", the supported range is [" << MinLoopNestDepth
-                      << ", " << MaxLoopNestDepth << "].\n");
+                      << ", the supported range is [" << getMinLoopNestDepth(F)
+                      << ", " << getMaxLoopNestDepth(F) << "].\n");
     Loop *OuterLoop = LoopList.front();
     ORE.emit([&]() {
       return OptimizationRemarkMissed(DEBUG_TYPE, "UnsupportedLoopNestDepth",
                                       OuterLoop->getStartLoc(),
                                       OuterLoop->getHeader())
              << "Unsupported depth of loop nest, the supported range is ["
-             << std::to_string(MinLoopNestDepth) << ", "
-             << std::to_string(MaxLoopNestDepth) << "].\n";
+             << std::to_string(getMinLoopNestDepth(F)) << ", "
+             << std::to_string(getMaxLoopNestDepth(F)) << "].\n";
     });
     return false;
   }
@@ -1432,7 +1438,8 @@ bool LoopInterchangeLegality::checkInductionsAndReductions(Loop *OuterLoop) {
       } else {
         if (OuterInnerReductions.count(&PHI)) {
           LLVM_DEBUG(dbgs() << "Found a reduction across the outer loop.\n");
-        } else if (EnableReduction2Memory &&
+        } else if (getEnableReduction2Memory(
+                       *OuterLoop->getHeader()->getParent()) &&
                    isInnerReduction(CurLoop, &PHI, HasNoWrapReductions)) {
           LLVM_DEBUG(dbgs() << "Found a reduction in the inner loop: \n"
                             << PHI << '\n');
@@ -1952,7 +1959,8 @@ LoopInterchangeProfitability::isProfitablePerInstrOrderCost() {
   // reordering if number of bad orders is more than good.
   int Cost = getInstrOrderCost();
   LLVM_DEBUG(dbgs() << "Cost = " << Cost << "\n");
-  if (Cost < 0 && Cost < LoopInterchangeCostThreshold)
+  if (Cost < 0 && Cost < getLoopInterchangeCostThreshold(
+                             *OuterLoop->getHeader()->getParent()))
     return std::optional<bool>(true);
 
   return std::nullopt;
@@ -2025,9 +2033,10 @@ bool LoopInterchangeProfitability::isProfitable(
   }
 
   // Return true if interchange is forced and the cost-model ignored.
-  if (Profitabilities.size() == 1 && Profitabilities[0] == RuleTy::Ignore)
+  const auto Profs = getProfitabilities(*OuterLoop->getHeader()->getParent());
+  if (Profs.size() == 1 && Profs[0] == RuleTy::Ignore)
     return true;
-  assert(noDuplicateRulesAndIgnore(Profitabilities) &&
+  assert(noDuplicateRulesAndIgnore(Profs) &&
          "Duplicate rules and option 'ignore' are not allowed");
 
   // isProfitable() is structured to avoid endless loop interchange. If the
@@ -2039,7 +2048,7 @@ bool LoopInterchangeProfitability::isProfitable(
   // Likewise, if it failed to analysis the profitability then only, the last
   // rule (isProfitableForVectorization by default) will decide.
   std::optional<bool> shouldInterchange;
-  for (RuleTy RT : Profitabilities) {
+  for (RuleTy RT : Profs) {
     switch (RT) {
     case RuleTy::PerLoopCacheAnalysis: {
       CacheCost *CC = CCM.getCacheCost();

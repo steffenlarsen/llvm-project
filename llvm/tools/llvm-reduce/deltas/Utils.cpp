@@ -19,12 +19,6 @@
 
 using namespace llvm;
 
-extern cl::OptionCategory LLVMReduceOptions;
-
-cl::opt<bool> llvm::Verbose("verbose",
-                            cl::desc("Print extra debugging information"),
-                            cl::init(false), cl::cat(LLVMReduceOptions));
-
 Value *llvm::getDefaultValue(Type *T) {
   if (T->isVoidTy())
     return PoisonValue::get(T);

@@ -42,9 +42,10 @@ VESubtarget &VESubtarget::initializeSubtargetDependencies(StringRef CPU,
 
 VESubtarget::VESubtarget(const Triple &TT, const std::string &CPU,
                          const std::string &FS, const TargetMachine &TM)
-    : VEGenSubtargetInfo(TT, CPU, /*TuneCPU=*/CPU, FS), TargetTriple(TT),
-      InstrInfo(initializeSubtargetDependencies(CPU, FS)), TLInfo(TM, *this),
-      FrameLowering(*this) {
+    : VEGenSubtargetInfo(TT, CPU, /*TuneCPU=*/CPU, FS, TM.getOptionsContext()),
+      TargetTriple(TT), InstrInfo(initializeSubtargetDependencies(CPU, FS)),
+      TLInfo(TM, *this), FrameLowering(*this) {
+  setOptionsContext(TM.getOptionsContext());
   TSInfo = std::make_unique<VESelectionDAGInfo>();
 }
 

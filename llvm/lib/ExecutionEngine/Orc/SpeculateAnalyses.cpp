@@ -17,6 +17,7 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 
 namespace {
 using namespace llvm;
@@ -86,7 +87,8 @@ BlockFreqQuery::ResultTy BlockFreqQuery::operator()(Function &F) {
   DenseSet<StringRef> Calles;
   SmallVector<std::pair<const BasicBlock *, uint64_t>, 8> BBFreqs;
 
-  PassBuilder PB;
+  PassBuilder PB(llvm::clv2::defaultOptionsContext(), /*TM=*/nullptr,
+                 PipelineTuningOptions(llvm::clv2::defaultOptionsContext()));
   FunctionAnalysisManager FAM;
   PB.registerFunctionAnalyses(FAM);
 
@@ -233,7 +235,8 @@ SequenceBBQuery::queryCFG(Function &F, const BlockListTy &CallerBlocks) {
   VisitedBlocksInfoTy VisitedBlocks;
   BackEdgesInfoTy BackEdgesInfo;
 
-  PassBuilder PB;
+  PassBuilder PB(llvm::clv2::defaultOptionsContext(), /*TM=*/nullptr,
+                 PipelineTuningOptions(llvm::clv2::defaultOptionsContext()));
   FunctionAnalysisManager FAM;
   PB.registerFunctionAnalyses(FAM);
 

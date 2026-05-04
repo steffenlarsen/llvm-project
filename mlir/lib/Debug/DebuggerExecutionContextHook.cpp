@@ -63,9 +63,10 @@ void mlirDebuggerPrintContext() {
   llvm::outs() << units.size() << " available IRUnits:\n";
   for (const IRUnit &unit : units) {
     llvm::outs() << "  - ";
-    unit.print(
-        llvm::outs(),
-        OpPrintingFlags().useLocalScope().skipRegions().enableDebugInfo());
+    unit.print(llvm::outs(), OpPrintingFlags(unit.getContext())
+                                 .useLocalScope()
+                                 .skipRegions()
+                                 .enableDebugInfo());
     llvm::outs() << "\n";
   }
 }
@@ -89,7 +90,7 @@ void mlirDebuggerCursorPrint(bool withRegion) {
     llvm::outs() << "No active MLIR cursor, select from the context first\n";
     return;
   }
-  state.cursor.print(llvm::outs(), OpPrintingFlags()
+  state.cursor.print(llvm::outs(), OpPrintingFlags(state.cursor.getContext())
                                        .skipRegions(!withRegion)
                                        .useLocalScope()
                                        .enableDebugInfo());

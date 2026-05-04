@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "COFFDirectiveParser.h"
+#include "llvm/Support/CommandLineTokenizer.h"
 
 using namespace llvm;
 using namespace jitlink;

@@ -16,6 +16,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/TargetFolder.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/Utils/Local.h"
@@ -35,9 +36,10 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <cstdint>
@@ -50,11 +52,14 @@ using namespace llvm;
 
 #define DEBUG_TYPE "memory-builtins"
 
-static cl::opt<unsigned> ObjectSizeOffsetVisitorMaxVisitInstructions(
-    "object-size-offset-visitor-max-visit-instructions",
-    cl::desc("Maximum number of instructions for ObjectSizeOffsetVisitor to "
-             "look at"),
-    cl::init(100));
+static unsigned ObjectSizeOffsetVisitorMaxVisitInstructions = 100;
+
+static unsigned
+getObjectSizeOffsetVisitorMaxVisitInstructions(const LLVMContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::AN_ObjectSizeOffsetVisitorMaxVisitInstructions>(
+      Ctx.getOptionsContext());
+}
 
 // clang-format off
 enum AllocType : uint8_t {
@@ -908,7 +913,8 @@ OffsetSpan ObjectSizeOffsetVisitor::computeValue(Value *V) {
     if (!P.second)
       return P.first->second;
     ++InstructionsVisited;
-    if (InstructionsVisited > ObjectSizeOffsetVisitorMaxVisitInstructions)
+    if (InstructionsVisited >
+        getObjectSizeOffsetVisitorMaxVisitInstructions(I->getContext()))
       return ObjectSizeOffsetVisitor::unknown();
     OffsetSpan Res = visit(*I);
     // Cache the result for later visits. If we happened to visit this during

@@ -17,6 +17,8 @@ tablegen(LLVM SystemZGenSubtargetInfo.inc -gen-subtarget)
 add_public_tablegen_target(SystemZCommonTableGen)
 
 add_llvm_target(SystemZCodeGen
+  SystemZOptionsGetters.cpp
+  SystemZOptionsRegistration.cpp
   SystemZAsmPrinter.cpp
   SystemZCallingConv.cpp
   SystemZConstantPoolValue.cpp

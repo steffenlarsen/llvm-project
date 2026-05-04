@@ -1,4 +1,6 @@
 add_llvm_component_library(LLVMScalarOpts
+  ScalarOptionsRegistration.cpp
+  ScalarOptionsGetters.cpp
   ADCE.cpp
   AlignmentFromAssumptions.cpp
   AnnotationRemarks.cpp
@@ -71,6 +73,7 @@ add_llvm_component_library(LLVMScalarOpts
   SCCP.cpp
   SROA.cpp
   Scalar.cpp
+  ScalarOptions.cpp
   Scalarizer.cpp
   ScalarizeMaskedMemIntrin.cpp
   SeparateConstOffsetFromGEP.cpp

@@ -22,6 +22,7 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Testing/Support/Error.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "gmock/gmock.h"
@@ -272,7 +273,7 @@ protected:
     return Loop;
   }
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   Function *F;
   BasicBlock *BB;
@@ -2001,7 +2002,7 @@ TEST_F(OpenMPIRBuilderTest, ApplySimd) {
   OMPBuilder.finalize();
   EXPECT_FALSE(verifyModule(*M, &errs()));
 
-  PassBuilder PB;
+  PassBuilder PB(llvm::clv2::defaultOptionsContext());
   FunctionAnalysisManager FAM;
   PB.registerFunctionAnalyses(FAM);
   LoopInfo &LI = FAM.getResult<LoopAnalysis>(*F);
@@ -2045,7 +2046,7 @@ TEST_F(OpenMPIRBuilderTest, ApplySimdCustomAligned) {
   OMPBuilder.finalize();
   EXPECT_FALSE(verifyModule(*M, &errs()));
 
-  PassBuilder PB;
+  PassBuilder PB(llvm::clv2::defaultOptionsContext());
   FunctionAnalysisManager FAM;
   PB.registerFunctionAnalyses(FAM);
   LoopInfo &LI = FAM.getResult<LoopAnalysis>(*F);
@@ -2101,7 +2102,7 @@ TEST_F(OpenMPIRBuilderTest, ApplySimdlen) {
   OMPBuilder.finalize();
   EXPECT_FALSE(verifyModule(*M, &errs()));
 
-  PassBuilder PB;
+  PassBuilder PB(llvm::clv2::defaultOptionsContext());
   FunctionAnalysisManager FAM;
   PB.registerFunctionAnalyses(FAM);
   LoopInfo &LI = FAM.getResult<LoopAnalysis>(*F);
@@ -2138,7 +2139,7 @@ TEST_F(OpenMPIRBuilderTest, ApplySafelenOrderConcurrent) {
   OMPBuilder.finalize();
   EXPECT_FALSE(verifyModule(*M, &errs()));
 
-  PassBuilder PB;
+  PassBuilder PB(llvm::clv2::defaultOptionsContext());
   FunctionAnalysisManager FAM;
   PB.registerFunctionAnalyses(FAM);
   LoopInfo &LI = FAM.getResult<LoopAnalysis>(*F);
@@ -2176,7 +2177,7 @@ TEST_F(OpenMPIRBuilderTest, ApplySafelen) {
   OMPBuilder.finalize();
   EXPECT_FALSE(verifyModule(*M, &errs()));
 
-  PassBuilder PB;
+  PassBuilder PB(llvm::clv2::defaultOptionsContext());
   FunctionAnalysisManager FAM;
   PB.registerFunctionAnalyses(FAM);
   LoopInfo &LI = FAM.getResult<LoopAnalysis>(*F);
@@ -2213,7 +2214,7 @@ TEST_F(OpenMPIRBuilderTest, ApplySimdlenSafelen) {
   OMPBuilder.finalize();
   EXPECT_FALSE(verifyModule(*M, &errs()));
 
-  PassBuilder PB;
+  PassBuilder PB(llvm::clv2::defaultOptionsContext());
   FunctionAnalysisManager FAM;
   PB.registerFunctionAnalyses(FAM);
   LoopInfo &LI = FAM.getResult<LoopAnalysis>(*F);
@@ -2261,7 +2262,7 @@ TEST_F(OpenMPIRBuilderTest, ApplySimdIf) {
   OMPBuilder.finalize();
   EXPECT_FALSE(verifyModule(*M, &errs()));
 
-  PassBuilder PB;
+  PassBuilder PB(llvm::clv2::defaultOptionsContext());
   FunctionAnalysisManager FAM;
   PB.registerFunctionAnalyses(FAM);
   LoopInfo &LI = FAM.getResult<LoopAnalysis>(*F);
@@ -2311,7 +2312,7 @@ TEST_F(OpenMPIRBuilderTest, UnrollLoopFull) {
   OMPBuilder.finalize();
   EXPECT_FALSE(verifyModule(*M, &errs()));
 
-  PassBuilder PB;
+  PassBuilder PB(llvm::clv2::defaultOptionsContext());
   FunctionAnalysisManager FAM;
   PB.registerFunctionAnalyses(FAM);
   LoopInfo &LI = FAM.getResult<LoopAnalysis>(*F);
@@ -2339,7 +2340,7 @@ TEST_F(OpenMPIRBuilderTest, UnrollLoopPartial) {
   EXPECT_FALSE(verifyModule(*M, &errs()));
   UnrolledLoop->assertOK();
 
-  PassBuilder PB;
+  PassBuilder PB(llvm::clv2::defaultOptionsContext());
   FunctionAnalysisManager FAM;
   PB.registerFunctionAnalyses(FAM);
   LoopInfo &LI = FAM.getResult<LoopAnalysis>(*F);
@@ -2372,7 +2373,7 @@ TEST_F(OpenMPIRBuilderTest, UnrollLoopHeuristic) {
   OMPBuilder.finalize();
   EXPECT_FALSE(verifyModule(*M, &errs()));
 
-  PassBuilder PB;
+  PassBuilder PB(llvm::clv2::defaultOptionsContext());
   FunctionAnalysisManager FAM;
   PB.registerFunctionAnalyses(FAM);
   LoopInfo &LI = FAM.getResult<LoopAnalysis>(*F);

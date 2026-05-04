@@ -12,13 +12,15 @@
 #include "IncludeFixerContext.h"
 #include "SymbolIndexManager.h"
 #include "YamlSymbolIndex.h"
+#include "clang-tools-extra/ClangToolsExtraOptionsOptInfos.h"
 #include "clang/Format/Format.h"
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Rewrite/Core/Rewriter.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Core/Replacement.h"
 #include "clang/Tooling/Tooling.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/YAMLTraits.h"
 
@@ -87,88 +89,72 @@ enum DatabaseFormatTy {
   fuzzyYaml, ///< Yaml database with fuzzy-matched identifiers.
 };
 
-cl::opt<DatabaseFormatTy> DatabaseFormat(
-    "db", cl::desc("Specify input format"),
-    cl::values(clEnumVal(fixed, "Hard-coded mapping"),
-               clEnumVal(yaml, "Yaml database created by find-all-symbols"),
-               clEnumVal(fuzzyYaml, "Yaml database, with fuzzy-matched names")),
-    cl::init(yaml), cl::cat(IncludeFixerCategory));
+struct IncludeFixerOptions {
+  DatabaseFormatTy DatabaseFormat = yaml;
+  std::string Input;
+  std::string QuerySymbol;
+  bool MinimizeIncludePaths = true;
+  bool Quiet = false;
+  bool STDINMode = false;
+  bool OutputHeaders = false;
+  std::string InsertHeader;
+  std::string Style = "llvm";
+};
 
-cl::opt<std::string> Input("input",
-                           cl::desc("String to initialize the database"),
-                           cl::cat(IncludeFixerCategory));
+inline constexpr clv2::OptionsRegistry<
+    &clv2::CTE_IF_DB, &clv2::CTE_IF_Input, &clv2::CTE_IF_QuerySymbol,
+    &clv2::CTE_IF_MinimizePaths, &clv2::CTE_IF_Quiet, &clv2::CTE_IF_Stdin,
+    &clv2::CTE_IF_OutputHeaders, &clv2::CTE_IF_InsertHeader,
+    &clv2::CTE_IF_Style>
+    IncludeFixerOptsReg;
 
-cl::opt<std::string>
-    QuerySymbol("query-symbol",
-                 cl::desc("Query a given symbol (e.g. \"a::b::foo\") in\n"
-                          "database directly without parsing the file."),
-                 cl::cat(IncludeFixerCategory));
+static void
+applyIncludeFixerOpts(const decltype(IncludeFixerOptsReg)::ParsedOptionsT &Opts,
+                      IncludeFixerOptions &FixerOpts) {
+  FixerOpts.DatabaseFormat = static_cast<DatabaseFormatTy>(
+      static_cast<int>(Opts.get<&clv2::CTE_IF_DB>()));
+  FixerOpts.Input = Opts.get<&clv2::CTE_IF_Input>();
+  FixerOpts.QuerySymbol = Opts.get<&clv2::CTE_IF_QuerySymbol>();
+  FixerOpts.MinimizeIncludePaths = Opts.get<&clv2::CTE_IF_MinimizePaths>();
+  FixerOpts.Quiet = Opts.get<&clv2::CTE_IF_Quiet>();
+  FixerOpts.STDINMode = Opts.get<&clv2::CTE_IF_Stdin>();
+  FixerOpts.OutputHeaders = Opts.get<&clv2::CTE_IF_OutputHeaders>();
+  FixerOpts.InsertHeader = Opts.get<&clv2::CTE_IF_InsertHeader>();
+  FixerOpts.Style = Opts.get<&clv2::CTE_IF_Style>();
+}
 
-cl::opt<bool>
-    MinimizeIncludePaths("minimize-paths",
-                         cl::desc("Whether to minimize added include paths"),
-                         cl::init(true), cl::cat(IncludeFixerCategory));
-
-cl::opt<bool> Quiet("q", cl::desc("Reduce terminal output"), cl::init(false),
-                    cl::cat(IncludeFixerCategory));
-
-cl::opt<bool>
-    STDINMode("stdin",
-              cl::desc("Override source file's content (in the overlaying\n"
-                       "virtual file system) with input from <stdin> and run\n"
-                       "the tool on the new content with the compilation\n"
-                       "options of the source file. This mode is currently\n"
-                       "used for editor integration."),
-              cl::init(false), cl::cat(IncludeFixerCategory));
-
-cl::opt<bool> OutputHeaders(
-    "output-headers",
-    cl::desc("Print the symbol being queried and all its relevant headers in\n"
-             "JSON format to stdout:\n"
-             "  {\n"
-             "    \"FilePath\": \"/path/to/foo.cc\",\n"
-             "    \"QuerySymbolInfos\": [\n"
-             "       {\"RawIdentifier\": \"foo\",\n"
-             "        \"Range\": {\"Offset\": 0, \"Length\": 3}}\n"
-             "    ],\n"
-             "    \"HeaderInfos\": [ {\"Header\": \"\\\"foo_a.h\\\"\",\n"
-             "                      \"QualifiedName\": \"a::foo\"} ]\n"
-             "  }"),
-    cl::init(false), cl::cat(IncludeFixerCategory));
-
-cl::opt<std::string> InsertHeader(
-    "insert-header",
-    cl::desc("Insert a specific header. This should run with STDIN mode.\n"
-             "The result is written to stdout. It is currently used for\n"
-             "editor integration. Support YAML/JSON format:\n"
-             "  -insert-header=\"{\n"
-             "     FilePath: \"/path/to/foo.cc\",\n"
-             "     QuerySymbolInfos: [\n"
-             "       {RawIdentifier: foo,\n"
-             "        Range: {Offset: 0, Length: 3}}\n"
-             "     ],\n"
-             "     HeaderInfos: [ {Headers: \"\\\"foo_a.h\\\"\",\n"
-             "                     QualifiedName: \"a::foo\"} ]}\""),
-    cl::init(""), cl::cat(IncludeFixerCategory));
-
-cl::opt<std::string>
-    Style("style",
-          cl::desc("Fallback style for reformatting after inserting new\n"
-                   "headers if there is no clang-format config file found."),
-          cl::init("llvm"), cl::cat(IncludeFixerCategory));
+static void configureParser(clv2::OptionParser &P,
+                            IncludeFixerOptions &FixerOpts) {
+  using ParsedT = decltype(IncludeFixerOptsReg)::ParsedOptionsT;
+  auto *Storage = new ParsedT();
+  decltype(IncludeFixerOptsReg)::applyDefaultsTo(*Storage);
+  std::vector<clv2::detail::OptionEntry> Entries;
+  std::vector<clv2::detail::AliasEntry> Aliases;
+  std::vector<clv2::detail::SubCommandSpec> SubSpecs;
+  decltype(IncludeFixerOptsReg)::staticBuildInto(*Storage, Entries, Aliases,
+                                                 SubSpecs);
+  for (auto &E : Entries) {
+    if (!E.Cat)
+      E.Cat = &IncludeFixerCategory;
+    P.addDynamicEntry(std::move(E));
+  }
+  clv2::registerDynamicPostParseCallback(
+      [Storage, &FixerOpts]() { applyIncludeFixerOpts(*Storage, FixerOpts); });
+}
 
 std::unique_ptr<include_fixer::SymbolIndexManager>
-createSymbolIndexManager(StringRef FilePath) {
+createSymbolIndexManager(StringRef FilePath,
+                         const IncludeFixerOptions &FixerOpts) {
   using find_all_symbols::SymbolInfo;
 
   auto SymbolIndexMgr = std::make_unique<include_fixer::SymbolIndexManager>();
-  switch (DatabaseFormat) {
+  switch (FixerOpts.DatabaseFormat) {
   case fixed: {
     // Parse input and fill the database with it.
     // <symbol>=<header><, header...>
     // Multiple symbols can be given, separated by semicolons.
     SmallVector<StringRef, 4> SemicolonSplits;
-    StringRef(Input).split(SemicolonSplits, ";");
+    StringRef(FixerOpts.Input).split(SemicolonSplits, ";");
     std::vector<find_all_symbols::SymbolAndSignals> Symbols;
     for (StringRef Pair : SemicolonSplits) {
       auto Split = Pair.split('=');
@@ -191,8 +177,8 @@ createSymbolIndexManager(StringRef FilePath) {
     auto CreateYamlIdx = [=]() -> std::unique_ptr<include_fixer::SymbolIndex> {
       llvm::ErrorOr<std::unique_ptr<include_fixer::YamlSymbolIndex>> DB(
           nullptr);
-      if (!Input.empty()) {
-        DB = include_fixer::YamlSymbolIndex::createFromFile(Input);
+      if (!FixerOpts.Input.empty()) {
+        DB = include_fixer::YamlSymbolIndex::createFromFile(FixerOpts.Input);
       } else {
         // If we don't have any input file, look in the directory of the
         // first
@@ -218,7 +204,8 @@ createSymbolIndexManager(StringRef FilePath) {
     // This mode is not very useful, because we don't correct the identifier.
     // It's main purpose is to expose FuzzySymbolIndex to tests.
     SymbolIndexMgr->addSymbolIndex(
-        []() -> std::unique_ptr<include_fixer::SymbolIndex> {
+        [Input =
+             FixerOpts.Input]() -> std::unique_ptr<include_fixer::SymbolIndex> {
           auto DB = include_fixer::FuzzySymbolIndex::createFromYAML(Input);
           if (!DB) {
             llvm::errs() << "Couldn't load fuzzy YAML db: "
@@ -261,8 +248,10 @@ void writeToJson(llvm::raw_ostream &OS, const IncludeFixerContext& Context) {
 }
 
 int includeFixerMain(int argc, const char **argv) {
-  auto ExpectedParser =
-      tooling::CommonOptionsParser::create(argc, argv, IncludeFixerCategory);
+  IncludeFixerOptions FixerOpts;
+  auto ExpectedParser = tooling::CommonOptionsParser::create(
+      argc, argv, IncludeFixerCategory,
+      [&FixerOpts](clv2::OptionParser &P) { configureParser(P, FixerOpts); });
   if (!ExpectedParser) {
     llvm::errs() << llvm::toString(ExpectedParser.takeError());
     return 1;
@@ -276,7 +265,7 @@ int includeFixerMain(int argc, const char **argv) {
   // Since `tool.mapVirtualFile` takes `StringRef`, we define `Code` outside of
   // the if-block so that `Code` is not released after the if-block.
   std::unique_ptr<llvm::MemoryBuffer> Code;
-  if (STDINMode) {
+  if (FixerOpts.STDINMode) {
     assert(options.getSourcePathList().size() == 1 &&
            "Expect exactly one file path in STDINMode.");
     llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> CodeOrErr =
@@ -292,13 +281,13 @@ int includeFixerMain(int argc, const char **argv) {
     tool.mapVirtualFile(SourceFilePath, Code->getBuffer());
   }
 
-  if (!InsertHeader.empty()) {
-    if (!STDINMode) {
+  if (!FixerOpts.InsertHeader.empty()) {
+    if (!FixerOpts.STDINMode) {
       errs() << "Should be running in STDIN mode\n";
       return 1;
     }
 
-    llvm::yaml::Input yin(InsertHeader);
+    llvm::yaml::Input yin(FixerOpts.InsertHeader);
     IncludeFixerContext Context;
     yin >> Context;
 
@@ -328,7 +317,7 @@ int includeFixerMain(int argc, const char **argv) {
           return LHS.QualifiedName == RHS.QualifiedName;
         });
     auto InsertStyle = format::getStyle(format::DefaultFormatStyle,
-                                        Context.getFilePath(), Style);
+                                        Context.getFilePath(), FixerOpts.Style);
     if (!InsertStyle) {
       llvm::errs() << llvm::toString(InsertStyle.takeError()) << "\n";
       return 1;
@@ -354,14 +343,14 @@ int includeFixerMain(int argc, const char **argv) {
 
   // Set up data source.
   std::unique_ptr<include_fixer::SymbolIndexManager> SymbolIndexMgr =
-      createSymbolIndexManager(SourceFilePath);
+      createSymbolIndexManager(SourceFilePath, FixerOpts);
   if (!SymbolIndexMgr)
     return 1;
 
   // Query symbol mode.
-  if (!QuerySymbol.empty()) {
+  if (!FixerOpts.QuerySymbol.empty()) {
     auto MatchedSymbols = SymbolIndexMgr->search(
-        QuerySymbol, /*IsNestedSearch=*/true, SourceFilePath);
+        FixerOpts.QuerySymbol, /*IsNestedSearch=*/true, SourceFilePath);
     for (auto &Symbol : MatchedSymbols) {
       std::string HeaderPath = Symbol.getFilePath().str();
       Symbol.SetFilePath(((HeaderPath[0] == '"' || HeaderPath[0] == '<')
@@ -373,7 +362,7 @@ int includeFixerMain(int argc, const char **argv) {
     // being queried in this mode. clang-include-fixer won't add namespace
     // qualifiers if the symbol range is empty, which also fits this case.
     IncludeFixerContext::QuerySymbolInfo Symbol;
-    Symbol.RawIdentifier = QuerySymbol;
+    Symbol.RawIdentifier = FixerOpts.QuerySymbol;
     auto Context =
         IncludeFixerContext(SourceFilePath, {Symbol}, MatchedSymbols);
     writeToJson(llvm::outs(), Context);
@@ -382,8 +371,9 @@ int includeFixerMain(int argc, const char **argv) {
 
   // Now run our tool.
   std::vector<include_fixer::IncludeFixerContext> Contexts;
-  include_fixer::IncludeFixerActionFactory Factory(*SymbolIndexMgr, Contexts,
-                                                   Style, MinimizeIncludePaths);
+  include_fixer::IncludeFixerActionFactory Factory(
+      *SymbolIndexMgr, Contexts, FixerOpts.Style,
+      FixerOpts.MinimizeIncludePaths);
 
   if (tool.run(&Factory) != 0) {
     // We suppress all Clang diagnostics (because they would be wrong,
@@ -398,7 +388,7 @@ int includeFixerMain(int argc, const char **argv) {
 
   assert(!Contexts.empty());
 
-  if (OutputHeaders) {
+  if (FixerOpts.OutputHeaders) {
     // FIXME: Print contexts of all processing files instead of the first one.
     writeToJson(llvm::outs(), Contexts.front());
     return 0;
@@ -408,7 +398,7 @@ int includeFixerMain(int argc, const char **argv) {
   for (const auto &Context : Contexts) {
     StringRef FilePath = Context.getFilePath();
     auto InsertStyle =
-        format::getStyle(format::DefaultFormatStyle, FilePath, Style);
+        format::getStyle(format::DefaultFormatStyle, FilePath, FixerOpts.Style);
     if (!InsertStyle) {
       llvm::errs() << llvm::toString(InsertStyle.takeError()) << "\n";
       return 1;
@@ -430,7 +420,7 @@ int includeFixerMain(int argc, const char **argv) {
     FixerReplacements.push_back(*Replacements);
   }
 
-  if (!Quiet) {
+  if (!FixerOpts.Quiet) {
     for (const auto &Context : Contexts) {
       if (!Context.getHeaderInfos().empty()) {
         llvm::errs() << "Added #include "
@@ -440,7 +430,7 @@ int includeFixerMain(int argc, const char **argv) {
     }
   }
 
-  if (STDINMode) {
+  if (FixerOpts.STDINMode) {
     assert(FixerReplacements.size() == 1);
     auto ChangedCode = tooling::applyAllReplacements(Code->getBuffer(),
                                                      FixerReplacements.front());

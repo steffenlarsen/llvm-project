@@ -24,24 +24,19 @@
 #include "llvm/IR/GlobalIFunc.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/IROptionsOptInfos.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 
 using namespace llvm;
+using namespace llvm::clv2;
 using namespace PatternMatch;
-
-// As set of temporary options to help migrate how splats are represented.
-static cl::opt<bool> UseConstantIntForFixedLengthSplat(
-    "use-constant-int-for-fixed-length-splat", cl::init(false), cl::Hidden,
-    cl::desc("Use ConstantInt's native fixed-length vector splat support."));
-static cl::opt<bool> UseConstantIntForScalableSplat(
-    "use-constant-int-for-scalable-splat", cl::init(false), cl::Hidden,
-    cl::desc("Use ConstantInt's native scalable vector splat support."));
 
 //===----------------------------------------------------------------------===//
 //                              Constant Class
@@ -1553,11 +1548,15 @@ Constant *ConstantVector::getImpl(ArrayRef<Constant*> V) {
   // If this is an all-undef or all-zero vector, return a
   // ConstantAggregateZero or UndefValue.
   Constant *C = V[0];
+  auto *IROpts =
+      clv2::getView<&clv2::IROptsReg>(C->getContext().getOptionsContext());
   bool isZero = C->isNullValue();
   bool isUndef = isa<UndefValue>(C);
   bool isPoison = isa<PoisonValue>(C);
   bool isSplatFP = isa<ConstantFP>(C);
-  bool isSplatInt = UseConstantIntForFixedLengthSplat && isa<ConstantInt>(C);
+  bool isSplatInt =
+      (IROpts ? IROpts->get<&IR_UseConstantIntForFixedLengthSplat>() : false) &&
+      isa<ConstantInt>(C);
   bool isSplatByte = isa<ConstantByte>(C);
   bool isSplatPtrNull = isa<ConstantPointerNull>(C);
 
@@ -1611,10 +1610,14 @@ Constant *ConstantVector::getSplat(ElementCount EC, Constant *V) {
   if (auto *CFP = dyn_cast<ConstantFP>(V))
     return ConstantFP::get(V->getContext(), EC, CFP->getValue());
 
+  auto *IROpts =
+      clv2::getView<&clv2::IROptsReg>(V->getContext().getOptionsContext());
   if (!EC.isScalable()) {
     // Maintain special handling of zero.
     if (!V->isNullValue()) {
-      if (UseConstantIntForFixedLengthSplat && isa<ConstantInt>(V))
+      if ((IROpts ? IROpts->get<&IR_UseConstantIntForFixedLengthSplat>()
+                  : false) &&
+          isa<ConstantInt>(V))
         return ConstantInt::get(V->getContext(), EC,
                                 cast<ConstantInt>(V)->getValue());
     }
@@ -1631,7 +1634,8 @@ Constant *ConstantVector::getSplat(ElementCount EC, Constant *V) {
 
   // Maintain special handling of zero.
   if (!V->isNullValue()) {
-    if (UseConstantIntForScalableSplat && isa<ConstantInt>(V))
+    if ((IROpts ? IROpts->get<&IR_UseConstantIntForScalableSplat>() : false) &&
+        isa<ConstantInt>(V))
       return ConstantInt::get(V->getContext(), EC,
                               cast<ConstantInt>(V)->getValue());
   }

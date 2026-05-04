@@ -16,11 +16,16 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/MC/MCInstPrinter.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <map>
 #include <unordered_map>
 
 namespace llvm {
+
+namespace clv2 {
+class OptionsContext;
+}
 
 namespace bolt {
 class BinaryFunction;
@@ -65,14 +70,15 @@ public:
 private:
   uint64_t Stats[LAST_DYNO_STAT + 1];
   bool PrintAArch64Stats;
+  const clv2::OptionsContext *Ctx = &clv2::defaultOptionsContext();
 
 #define D(name, desc, ...) desc,
   static constexpr const char *Desc[] = { DYNO_STATS };
 #undef D
 
 public:
-  DynoStats(bool PrintAArch64Stats) {
-    this->PrintAArch64Stats = PrintAArch64Stats;
+  DynoStats(bool PrintAArch64Stats, const clv2::OptionsContext &Ctx)
+      : PrintAArch64Stats(PrintAArch64Stats), Ctx(&Ctx) {
     for (auto Stat = FIRST_DYNO_STAT + 0; Stat < LAST_DYNO_STAT; ++Stat)
       Stats[Stat] = 0;
   }
@@ -147,8 +153,9 @@ DynoStats getDynoStats(BinaryFunction &BF);
 
 /// Return program-wide dynostats.
 template <typename FuncsType>
-inline DynoStats getDynoStats(FuncsType &Funcs, bool IsAArch64) {
-  DynoStats dynoStats(IsAArch64);
+inline DynoStats getDynoStats(FuncsType &Funcs, bool IsAArch64,
+                              const clv2::OptionsContext &Ctx) {
+  DynoStats dynoStats(IsAArch64, Ctx);
   for (auto &BFI : Funcs) {
     auto &BF = BFI.second;
     if (BF.isSimple())
@@ -160,16 +167,16 @@ inline DynoStats getDynoStats(FuncsType &Funcs, bool IsAArch64) {
 /// Call a function with optional before and after dynostats printing.
 template <typename FnType, typename FuncsType>
 inline void callWithDynoStats(raw_ostream &OS, FnType &&Func, FuncsType &Funcs,
-                              StringRef Phase, const bool Flag,
-                              bool IsAArch64) {
-  DynoStats DynoStatsBefore(IsAArch64);
+                              StringRef Phase, const bool Flag, bool IsAArch64,
+                              const clv2::OptionsContext &Ctx) {
+  DynoStats DynoStatsBefore(IsAArch64, Ctx);
   if (Flag)
-    DynoStatsBefore = getDynoStats(Funcs, IsAArch64);
+    DynoStatsBefore = getDynoStats(Funcs, IsAArch64, Ctx);
 
   Func();
 
   if (Flag) {
-    const DynoStats DynoStatsAfter = getDynoStats(Funcs, IsAArch64);
+    const DynoStats DynoStatsAfter = getDynoStats(Funcs, IsAArch64, Ctx);
     const bool Changed = (DynoStatsAfter != DynoStatsBefore);
     OS << "BOLT-INFO: program-wide dynostats after running " << Phase
        << (Changed ? "" : " (no change)") << ":\n\n"

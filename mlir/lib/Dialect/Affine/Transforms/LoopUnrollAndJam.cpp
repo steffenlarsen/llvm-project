@@ -39,7 +39,6 @@
 #include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/LoopUtils.h"
-#include "llvm/Support/CommandLine.h"
 #include <optional>
 
 namespace mlir {

@@ -17,13 +17,14 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Config/config.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/Mutex.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Signposts.h"
+#include "llvm/Support/SupportOptions.h"
 #include "llvm/Support/raw_ostream.h"
 #include <limits>
 #include <optional>
@@ -515,20 +516,12 @@ const char *TimerGroup::printAllJSONValues(raw_ostream &OS, const char *delim) {
 //===----------------------------------------------------------------------===//
 class llvm::TimerGlobals {
 public:
+  // Option values live here rather than in namespace-scope globals: this
+  // singleton already exists and already owns the state these options
+  // configure.  Written by the setters below from applySupportOptions().
   std::string LibSupportInfoOutputFilename;
-  cl::opt<std::string, true> InfoOutputFilename{
-      "info-output-file", cl::value_desc("filename"),
-      cl::desc("File to append -stats and -timer output to"), cl::Hidden,
-      cl::location(LibSupportInfoOutputFilename)};
-  cl::opt<bool> TrackSpace{
-      "track-memory",
-      cl::desc("Enable -time-passes memory tracking (this may be slow)"),
-      cl::Hidden};
-  cl::opt<bool> SortTimers{
-      "sort-timers",
-      cl::desc("In the report, sort the timers in each group in wall clock"
-               " time order"),
-      cl::init(true), cl::Hidden};
+  bool TrackSpaceFlag = false;
+  bool SortTimersFlag = true;
 
   sys::SmartMutex<true> TimerLock;
   TimerGroup DefaultTimerGroup{"misc", "Miscellaneous Ungrouped Timers",
@@ -553,8 +546,14 @@ static ManagedStatic<TimerGlobals> ManagedTimerGlobals;
 static std::string &libSupportInfoOutputFilename() {
   return ManagedTimerGlobals->LibSupportInfoOutputFilename;
 }
-static bool trackSpace() { return ManagedTimerGlobals->TrackSpace; }
-static bool sortTimers() { return ManagedTimerGlobals->SortTimers; }
+static bool trackSpace() { return ManagedTimerGlobals->TrackSpaceFlag; }
+static bool sortTimers() { return ManagedTimerGlobals->SortTimersFlag; }
+
+void llvm::setInfoOutputFilename(StringRef F) {
+  ManagedTimerGlobals->LibSupportInfoOutputFilename = F.str();
+}
+void llvm::setTrackSpace(bool V) { ManagedTimerGlobals->TrackSpaceFlag = V; }
+void llvm::setSortTimers(bool V) { ManagedTimerGlobals->SortTimersFlag = V; }
 static SignpostEmitter &signposts() { return ManagedTimerGlobals->Signposts; }
 static sys::SmartMutex<true> &timerLock() {
   return ManagedTimerGlobals->TimerLock;

@@ -53,8 +53,8 @@ using llvm::unittest::TempFile;
 static ::testing::AssertionResult NoError(std::error_code EC) {
   if (!EC)
     return ::testing::AssertionSuccess();
-  return ::testing::AssertionFailure() << "error " << EC.value() << ": "
-                                       << EC.message();
+  return ::testing::AssertionFailure()
+         << "error " << EC.value() << ": " << EC.message();
 }
 
 namespace {
@@ -169,7 +169,7 @@ createGuardedMemoryBuffer(ArrayRef<uint8_t> Bytes) {
 }
 
 struct SampleProfTest : ::testing::Test {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<SampleProfileWriter> Writer;
   std::unique_ptr<SampleProfileReader> Reader;
 
@@ -509,9 +509,8 @@ struct SampleProfTest : ::testing::Test {
     // inline instance for GooName. Test the correct FunctionSamples can be
     // found with Remapper support.
     const FunctionSamples *ReadGooSamples =
-        ReadFooSamples->findFunctionSamplesAt(LineLocation(7, 0),
-                                              GooName.stringRef(),
-                                              Reader->getRemapper());
+        ReadFooSamples->findFunctionSamplesAt(
+            LineLocation(7, 0), GooName.stringRef(), Reader->getRemapper());
     ASSERT_TRUE(ReadGooSamples != nullptr);
     ASSERT_EQ(502u, ReadGooSamples->getTotalSamples());
 
@@ -519,9 +518,8 @@ struct SampleProfTest : ::testing::Test {
     // no inline instance for GooName. Test no FunctionSamples will be
     // found with Remapper support.
     const FunctionSamples *ReadGooSamplesAgain =
-        ReadFooSamples->findFunctionSamplesAt(LineLocation(9, 0),
-                                              GooName.stringRef(),
-                                              Reader->getRemapper());
+        ReadFooSamples->findFunctionSamplesAt(
+            LineLocation(9, 0), GooName.stringRef(), Reader->getRemapper());
     ASSERT_TRUE(ReadGooSamplesAgain == nullptr);
 
     // The inline instance of Hoo is inside of the inline instance of Goo.
@@ -529,9 +527,8 @@ struct SampleProfTest : ::testing::Test {
     // inline instance for HooName. Test the correct FunctionSamples can be
     // found with Remapper support.
     const FunctionSamples *ReadHooSamples =
-        ReadGooSamples->findFunctionSamplesAt(LineLocation(9, 0),
-                                              HooName.stringRef(),
-                                              Reader->getRemapper());
+        ReadGooSamples->findFunctionSamplesAt(
+            LineLocation(9, 0), HooName.stringRef(), Reader->getRemapper());
     ASSERT_TRUE(ReadHooSamples != nullptr);
     ASSERT_EQ(317u, ReadHooSamples->getTotalSamples());
 
@@ -562,12 +559,11 @@ struct SampleProfTest : ::testing::Test {
     FunctionSamples *ReadBooSamples = Reader->getSamplesFor(BooName);
     ASSERT_TRUE(ReadBooSamples != nullptr);
     ASSERT_EQ(1232u, ReadBooSamples->getTotalSamples());
-    
+
     FunctionId MconstructRep = getRepInFormat(MconstructName);
     FunctionId StringviewRep = getRepInFormat(StringviewName);
     ASSERT_EQ(1000u, CTMap.get()[MconstructRep]);
     ASSERT_EQ(437u, CTMap.get()[StringviewRep]);
-
 
     ProfileSummary &Summary = Reader->getSummary();
     Summary.setPartialProfile(true);
@@ -1338,7 +1334,7 @@ TEST(SampleProfCanonicalNameTest, CustomSuffixes) {
 }
 
 TEST(SampleProfCanonicalNameTest, FromLLVMFunction) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   auto M = std::make_unique<Module>("test", Ctx);
   auto *FTy = FunctionType::get(Type::getVoidTy(Ctx), false);
 

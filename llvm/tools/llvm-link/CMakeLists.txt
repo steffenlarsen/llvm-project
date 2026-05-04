@@ -1,4 +1,5 @@
 set(LLVM_LINK_COMPONENTS
+  AllOptions
   BinaryFormat
   BitReader
   BitWriter

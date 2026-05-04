@@ -14,14 +14,32 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/ScheduleDAG.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/Function.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 
 using namespace llvm;
 
-static cl::opt<int> DataBankMask("arm-data-bank-mask", cl::init(-1),
-                                 cl::Hidden);
-static cl::opt<bool> AssumeITCMConflict("arm-assume-itcm-bankconflict",
-                                        cl::init(false), cl::Hidden);
+static int getDataBankMask(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::ARM_DataBankMask>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getDataBankMaskWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ARMOptsReg, &clv2::ARM_DataBankMask>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getAssumeITCMConflict(const Function &F) {
+  return clv2::getOptValOr<&clv2::ARMOptsReg, &clv2::ARM_AssumeITCMConflict>(
+      F.getContext().getOptionsContext(), false);
+}
+
+static bool getAssumeITCMConflictWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ARMOptsReg,
+                               &clv2::ARM_AssumeITCMConflict>(
+      F.getContext().getOptionsContext());
+}
 
 static bool hasRAWHazard(MachineInstr *DefMI, MachineInstr *MI,
                          const TargetRegisterInfo &TRI) {
@@ -165,11 +183,13 @@ static bool getBaseOffset(const MachineInstr &MI, const MachineOperand *&BaseOp,
 ARMBankConflictHazardRecognizer::ARMBankConflictHazardRecognizer(
     const ScheduleDAG *DAG, int64_t CPUBankMask, bool CPUAssumeITCMConflict)
     : MF(DAG->MF), DL(DAG->MF.getDataLayout()),
-      DataMask(DataBankMask.getNumOccurrences() ? int64_t(DataBankMask)
-                                                : CPUBankMask),
-      AssumeITCMBankConflict(AssumeITCMConflict.getNumOccurrences()
-                                 ? AssumeITCMConflict
-                                 : CPUAssumeITCMConflict) {
+      DataMask(getDataBankMaskWasSpecified(DAG->MF.getFunction())
+                   ? int64_t(getDataBankMask(DAG->MF.getFunction()))
+                   : CPUBankMask),
+      AssumeITCMBankConflict(
+          getAssumeITCMConflictWasSpecified(DAG->MF.getFunction())
+              ? getAssumeITCMConflict(DAG->MF.getFunction())
+              : CPUAssumeITCMConflict) {
   MaxLookAhead = 1;
 }
 

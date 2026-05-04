@@ -55,8 +55,8 @@ std::string BitcodeCompiler::getThinLTOOutputFile(StringRef path) {
 }
 
 lto::Config BitcodeCompiler::createConfig() {
-  lto::Config c;
-  c.Options = initTargetOptionsFromCodeGenFlags();
+  lto::Config c(*ctx.llvmOptsCtx);
+  c.Options = initTargetOptionsFromCodeGenFlags(*ctx.llvmOptsCtx);
   c.Options.EmitAddrsig = true;
   for (StringRef C : ctx.config.mllvmOpts)
     c.MllvmArgs.emplace_back(C.str());
@@ -81,8 +81,8 @@ lto::Config BitcodeCompiler::createConfig() {
   c.DiagHandler = diagnosticHandler;
   c.DwoDir = ctx.config.dwoDir.str();
   c.OptLevel = ctx.config.ltoo;
-  c.CPU = getCPUStr();
-  c.MAttrs = getMAttrs();
+  c.CPU = getCPUStr(*ctx.llvmOptsCtx);
+  c.MAttrs = getMAttrs(*ctx.llvmOptsCtx);
   std::optional<CodeGenOptLevel> optLevelOrNone = CodeGenOpt::getLevel(
       ctx.config.ltoCgo.value_or(args::getCGOptLevel(ctx.config.ltoo)));
   assert(optLevelOrNone && "Invalid optimization level!");
@@ -121,6 +121,9 @@ lto::Config BitcodeCompiler::createConfig() {
   c.PTO.LoopVectorization = c.OptLevel > 1;
   c.PTO.SLPVectorization = c.OptLevel > 1;
 
+  // Only override the default when the driver actually parsed one; assigning
+  // a null unique_ptr here would replace a valid context with nullptr, which
+  // Config's users now dereference unconditionally.
   return c;
 }
 

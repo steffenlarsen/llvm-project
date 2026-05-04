@@ -207,10 +207,11 @@ static void replaceSwitchResumeCoroFree(const coro::Shape &Shape,
         Builder.CreateSelect(IsElided, Null, FramePtr, "coro.free");
     // Add unknown branch weights to the select since whether the frame is
     // heap-allocated or elided cannot be determined.
-    applyProfMetadataIfEnabled(Replacement, [&](Instruction *Inst) {
-      setExplicitlyUnknownBranchWeightsIfProfiled(*Inst, DEBUG_TYPE,
-                                                  Inst->getFunction());
-    });
+    applyProfMetadataIfEnabled(CF->getContext(), Replacement,
+                               [&](Instruction *Inst) {
+                                 setExplicitlyUnknownBranchWeightsIfProfiled(
+                                     *Inst, DEBUG_TYPE, Inst->getFunction());
+                               });
     CF->replaceAllUsesWith(Replacement);
     CF->eraseFromParent();
   }
@@ -483,7 +484,7 @@ void coro::BaseCloner::handleFinalSuspend() {
           Builder.CreateLoad(Shape.getSwitchResumePointerType(), NewFramePtr);
       auto *Cond = Builder.CreateIsNull(Load);
       auto *Br = Builder.CreateCondBr(Cond, ResumeBB, NewSwitchBB);
-      applyProfMetadataIfEnabled(Br, [&](Instruction *Inst) {
+      applyProfMetadataIfEnabled(Br->getContext(), Br, [&](Instruction *Inst) {
         setExplicitlyUnknownBranchWeightsIfProfiled(*Inst, DEBUG_TYPE,
                                                     Inst->getFunction());
       });
@@ -1703,7 +1704,7 @@ private:
       // If there is a CoroAlloc and it returns false (meaning we elide the
       // allocation, use CleanupFn instead of DestroyFn).
       DestroyOrCleanupFn = Builder.CreateSelect(CA, DestroyFn, CleanupFn);
-      applyProfMetadataIfEnabled(DestroyOrCleanupFn, [&](Instruction *Inst) {
+      applyProfMetadataIfEnabled(C, DestroyOrCleanupFn, [&](Instruction *Inst) {
         setExplicitlyUnknownBranchWeightsIfProfiled(*Inst, DEBUG_TYPE,
                                                     CoroId->getFunction());
       });

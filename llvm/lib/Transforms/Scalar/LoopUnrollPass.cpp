@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LoopUnroll.cpp - Loop unroller pass --------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -11,7 +13,6 @@
 // counts of loops easily.
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Scalar/LoopUnrollPass.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/DenseSet.h"
@@ -47,12 +48,13 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
+#include "llvm/Transforms/Scalar/LoopUnrollPass.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/LoopPeel.h"
 #include "llvm/Transforms/Utils/LoopSimplify.h"
@@ -73,111 +75,164 @@ using namespace llvm;
 
 #define DEBUG_TYPE "loop-unroll"
 
-cl::opt<bool> llvm::ForgetSCEVInLoopUnroll(
-    "forget-scev-loop-unroll", cl::init(false), cl::Hidden,
-    cl::desc("Forget everything in SCEV when doing LoopUnroll, instead of just"
-             " the current top-most loop. This is sometimes preferred to reduce"
-             " compile time."));
+bool llvm::getForgetSCEVInLoopUnroll() { return false; }
 
-static cl::opt<unsigned>
-    UnrollThreshold("unroll-threshold", cl::Hidden,
-                    cl::desc("The cost threshold for loop unrolling"));
+static unsigned getUnrollThreshold(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_UnrollThreshold>(
+      F.getContext().getOptionsContext(), 0);
+}
+static bool isUnrollThresholdSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg, &clv2::SC_UnrollThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-    UnrollOptSizeThreshold(
-      "unroll-optsize-threshold", cl::init(0), cl::Hidden,
-      cl::desc("The cost threshold for loop unrolling when optimizing for "
-               "size"));
+static unsigned getUnrollOptSizeThreshold(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_UnrollOptSizeThreshold>(
+      F.getContext().getOptionsContext(), 0);
+}
 
-static cl::opt<unsigned> UnrollPartialThreshold(
-    "unroll-partial-threshold", cl::Hidden,
-    cl::desc("The cost threshold for partial loop unrolling"));
+static unsigned getUnrollPartialThreshold(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_UnrollPartialThreshold>(
+      F.getContext().getOptionsContext(), 0);
+}
+static bool isUnrollPartialThresholdSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_UnrollPartialThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> UnrollMaxPercentThresholdBoost(
-    "unroll-max-percent-threshold-boost", cl::init(400), cl::Hidden,
-    cl::desc("The maximum 'boost' (represented as a percentage >= 100) applied "
-             "to the threshold when aggressively unrolling a loop due to the "
-             "dynamic cost savings. If completely unrolling a loop will reduce "
-             "the total runtime from X to Y, we boost the loop unroll "
-             "threshold to DefaultThreshold*std::min(MaxPercentThresholdBoost, "
-             "X/Y). This limit avoids excessive code bloat."));
+static unsigned getUnrollMaxPercentThresholdBoost(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_UnrollMaxPercentThresholdBoost>(
+      F.getContext().getOptionsContext());
+}
+static bool isUnrollMaxPercentThresholdBoostSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_UnrollMaxPercentThresholdBoost>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> UnrollMaxIterationsCountToAnalyze(
-    "unroll-max-iteration-count-to-analyze", cl::init(10), cl::Hidden,
-    cl::desc("Don't allow loop unrolling to simulate more than this number of "
-             "iterations when checking full unroll profitability"));
+static unsigned getUnrollMaxIterationsCountToAnalyze(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_UnrollMaxIterationCountToAnalyze>(
+      F.getContext().getOptionsContext());
+}
+static bool isUnrollMaxIterationsCountToAnalyzeSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_UnrollMaxIterationCountToAnalyze>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> UnrollCount(
-    "unroll-count", cl::Hidden,
-    cl::desc("Use this unroll count for all loops including those with "
-             "unroll_count pragma values, for testing purposes"));
+static unsigned getUnrollCount(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_UnrollCount>(
+      F.getContext().getOptionsContext(), 0);
+}
+static bool isUnrollCountSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg, &clv2::SC_UnrollCount>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> UnrollMaxCount(
-    "unroll-max-count", cl::Hidden,
-    cl::desc("Set the max unroll count for partial and runtime unrolling, for"
-             "testing purposes"));
+static unsigned getUnrollMaxCount(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_UnrollMaxCount>(
+      F.getContext().getOptionsContext(), 0);
+}
+static bool isUnrollMaxCountSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg, &clv2::SC_UnrollMaxCount>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> UnrollFullMaxCount(
-    "unroll-full-max-count", cl::Hidden,
-    cl::desc(
-        "Set the max unroll count for full unrolling, for testing purposes"));
+static unsigned getUnrollFullMaxCount(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_UnrollFullMaxCount>(
+      F.getContext().getOptionsContext(), 0);
+}
+static bool isUnrollFullMaxCountSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_UnrollFullMaxCount>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    UnrollAllowPartial("unroll-allow-partial", cl::Hidden,
-                       cl::desc("Allows loops to be partially unrolled until "
-                                "-unroll-threshold loop size is reached."));
+static bool getUnrollAllowPartial(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_UnrollAllowPartial>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool isUnrollAllowPartialSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_UnrollAllowPartial>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> UnrollAllowRemainder(
-    "unroll-allow-remainder", cl::Hidden,
-    cl::desc("Allow generation of a loop remainder (extra iterations) "
-             "when unrolling a loop."));
+static bool getUnrollAllowRemainder(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_UnrollAllowRemainder>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool isUnrollAllowRemainderSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_UnrollAllowRemainder>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    UnrollRuntime("unroll-runtime", cl::Hidden,
-                  cl::desc("Unroll loops with run-time trip counts"));
+static bool getUnrollRuntime(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_UnrollRuntime>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool isUnrollRuntimeSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg, &clv2::SC_UnrollRuntime>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> UnrollMaxUpperBound(
-    "unroll-max-upperbound", cl::init(8), cl::Hidden,
-    cl::desc(
-        "The max of trip count upper bound that is considered in unrolling"));
+static unsigned getUnrollMaxUpperBound(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_UnrollMaxUpperbound>(
+      F.getContext().getOptionsContext());
+}
+static bool isUnrollMaxUpperBoundSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_UnrollMaxUpperbound>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> PragmaUnrollThreshold(
-    "pragma-unroll-threshold", cl::init(16 * 1024), cl::Hidden,
-    cl::desc("Unrolled size limit for loops with unroll metadata "
-             "(full, enable, or count)."));
+static unsigned getPragmaUnrollThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_PragmaUnrollThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> FlatLoopTripCountThreshold(
-    "flat-loop-tripcount-threshold", cl::init(5), cl::Hidden,
-    cl::desc("If the runtime tripcount for the loop is lower than the "
-             "threshold, the loop is considered as flat and will be less "
-             "aggressively unrolled."));
+static unsigned getFlatLoopTripCountThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_FlatLoopTripcountThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> UnrollUnrollRemainder(
-  "unroll-remainder", cl::Hidden,
-  cl::desc("Allow the loop remainder to be unrolled."));
+static bool getUnrollUnrollRemainder(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_UnrollRemainder>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool isUnrollUnrollRemainderSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg, &clv2::SC_UnrollRemainder>(
+      F.getContext().getOptionsContext());
+}
 
 // This option isn't ever intended to be enabled, it serves to allow
 // experiments to check the assumptions about when this kind of revisit is
 // necessary.
-static cl::opt<bool> UnrollRevisitChildLoops(
-    "unroll-revisit-child-loops", cl::Hidden,
-    cl::desc("Enqueue and re-visit child loops in the loop PM after unrolling. "
-             "This shouldn't typically be needed as child loops (or their "
-             "clones) were already visited."));
+static bool getUnrollRevisitChildLoops(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_UnrollRevisitChildLoops>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<unsigned> UnrollThresholdAggressive(
-    "unroll-threshold-aggressive", cl::init(300), cl::Hidden,
-    cl::desc("Threshold (max size of unrolled loop) to use in aggressive (O3) "
-             "optimizations"));
-static cl::opt<unsigned>
-    UnrollThresholdDefault("unroll-threshold-default", cl::init(150),
-                           cl::Hidden,
-                           cl::desc("Default threshold (max size of unrolled "
-                                    "loop), used in all but O3 optimizations"));
+static unsigned getUnrollThresholdAggressive(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_UnrollThresholdAggressive>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> PragmaUnrollFullMaxIterations(
-    "pragma-unroll-full-max-iterations", cl::init(1'000'000), cl::Hidden,
-    cl::desc("Maximum allowed iterations to unroll under pragma unroll full."));
+static unsigned getUnrollThresholdDefault(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_UnrollThresholdDefault>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getPragmaUnrollFullMaxIterations(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_PragmaUnrollFullMaxIterations>(
+      F.getContext().getOptionsContext());
+}
 
 /// A magic value for use with the Threshold parameter to indicate
 /// that the loop unroll should be performed regardless of how much
@@ -193,18 +248,19 @@ TargetTransformInfo::UnrollingPreferences llvm::gatherUnrollingPreferences(
     std::optional<unsigned> UserThreshold, std::optional<bool> UserAllowPartial,
     std::optional<bool> UserRuntime, std::optional<bool> UserUpperBound,
     std::optional<unsigned> UserFullUnrollMaxCount) {
+  const Function &F = *L->getHeader()->getParent();
   TargetTransformInfo::UnrollingPreferences UP;
 
   // Set up the defaults
-  UP.Threshold =
-      OptLevel > 2 ? UnrollThresholdAggressive : UnrollThresholdDefault;
+  UP.Threshold = OptLevel > 2 ? getUnrollThresholdAggressive(F)
+                              : getUnrollThresholdDefault(F);
   UP.MaxPercentThresholdBoost = 400;
-  UP.OptSizeThreshold = UnrollOptSizeThreshold;
+  UP.OptSizeThreshold = getUnrollOptSizeThreshold(F);
   UP.PartialThreshold = 150;
-  UP.PartialOptSizeThreshold = UnrollOptSizeThreshold;
+  UP.PartialOptSizeThreshold = getUnrollOptSizeThreshold(F);
   UP.DefaultUnrollRuntimeCount = 8;
   UP.MaxCount = std::numeric_limits<unsigned>::max();
-  UP.MaxUpperBound = UnrollMaxUpperBound;
+  UP.MaxUpperBound = getUnrollMaxUpperBound(F);
   UP.FullUnrollMaxCount = std::numeric_limits<unsigned>::max();
   UP.BEInsns = 2;
   UP.Partial = false;
@@ -216,8 +272,9 @@ TargetTransformInfo::UnrollingPreferences llvm::gatherUnrollingPreferences(
   UP.UpperBound = false;
   UP.UnrollAndJam = false;
   UP.UnrollAndJamInnerLoopThreshold = 60;
-  UP.MaxIterationsCountToAnalyze = UnrollMaxIterationsCountToAnalyze;
-  UP.SCEVExpansionBudget = SCEVCheapExpansionBudget;
+  UP.MaxIterationsCountToAnalyze = getUnrollMaxIterationsCountToAnalyze(F);
+  UP.SCEVExpansionBudget =
+      getSCEVCheapExpansionBudget(F.getContext().getOptionsContext());
   UP.RuntimeUnrollMultiExit = false;
   UP.AddAdditionalAccumulators = false;
 
@@ -237,30 +294,30 @@ TargetTransformInfo::UnrollingPreferences llvm::gatherUnrollingPreferences(
   }
 
   // Apply any user values specified by cl::opt
-  if (UnrollThreshold.getNumOccurrences() > 0)
-    UP.Threshold = UnrollThreshold;
-  if (UnrollPartialThreshold.getNumOccurrences() > 0)
-    UP.PartialThreshold = UnrollPartialThreshold;
-  if (UnrollMaxPercentThresholdBoost.getNumOccurrences() > 0)
-    UP.MaxPercentThresholdBoost = UnrollMaxPercentThresholdBoost;
-  if (UnrollMaxCount.getNumOccurrences() > 0)
-    UP.MaxCount = UnrollMaxCount;
-  if (UnrollMaxUpperBound.getNumOccurrences() > 0)
-    UP.MaxUpperBound = UnrollMaxUpperBound;
-  if (UnrollFullMaxCount.getNumOccurrences() > 0)
-    UP.FullUnrollMaxCount = UnrollFullMaxCount;
-  if (UnrollAllowPartial.getNumOccurrences() > 0)
-    UP.Partial = UnrollAllowPartial;
-  if (UnrollAllowRemainder.getNumOccurrences() > 0)
-    UP.AllowRemainder = UnrollAllowRemainder;
-  if (UnrollRuntime.getNumOccurrences() > 0)
-    UP.Runtime = UnrollRuntime;
-  if (UnrollMaxUpperBound == 0)
+  if (isUnrollThresholdSpecified(F))
+    UP.Threshold = getUnrollThreshold(F);
+  if (isUnrollPartialThresholdSpecified(F))
+    UP.PartialThreshold = getUnrollPartialThreshold(F);
+  if (isUnrollMaxPercentThresholdBoostSpecified(F))
+    UP.MaxPercentThresholdBoost = getUnrollMaxPercentThresholdBoost(F);
+  if (isUnrollMaxCountSpecified(F))
+    UP.MaxCount = getUnrollMaxCount(F);
+  if (isUnrollMaxUpperBoundSpecified(F))
+    UP.MaxUpperBound = getUnrollMaxUpperBound(F);
+  if (isUnrollFullMaxCountSpecified(F))
+    UP.FullUnrollMaxCount = getUnrollFullMaxCount(F);
+  if (isUnrollAllowPartialSpecified(F))
+    UP.Partial = getUnrollAllowPartial(F);
+  if (isUnrollAllowRemainderSpecified(F))
+    UP.AllowRemainder = getUnrollAllowRemainder(F);
+  if (isUnrollRuntimeSpecified(F))
+    UP.Runtime = getUnrollRuntime(F);
+  if (getUnrollMaxUpperBound(F) == 0)
     UP.UpperBound = false;
-  if (UnrollUnrollRemainder.getNumOccurrences() > 0)
-    UP.UnrollRemainder = UnrollUnrollRemainder;
-  if (UnrollMaxIterationsCountToAnalyze.getNumOccurrences() > 0)
-    UP.MaxIterationsCountToAnalyze = UnrollMaxIterationsCountToAnalyze;
+  if (isUnrollUnrollRemainderSpecified(F))
+    UP.UnrollRemainder = getUnrollUnrollRemainder(F);
+  if (isUnrollMaxIterationsCountToAnalyzeSpecified(F))
+    UP.MaxIterationsCountToAnalyze = getUnrollMaxIterationsCountToAnalyze(F);
 
   // Apply user values provided by argument
   if (UserThreshold) {
@@ -787,7 +844,7 @@ static unsigned unrollCountPragmaValue(const Loop *L) {
 }
 
 UnrollPragmaInfo::UnrollPragmaInfo(const Loop *L)
-    : UserUnrollCount(UnrollCount.getNumOccurrences() > 0),
+    : UserUnrollCount(isUnrollCountSpecified(*L->getHeader()->getParent())),
       PragmaFullUnroll(hasUnrollFullPragma(L)),
       PragmaCount(unrollCountPragmaValue(L)),
       PragmaEnableUnroll(hasUnrollEnablePragma(L)),
@@ -822,15 +879,18 @@ shouldPragmaUnroll(Loop *L, const UnrollPragmaInfo &PInfo,
   // Using unroll pragma
   // 1st priority is unroll count set by "unroll-count" option.
 
+  const Function &F = *L->getHeader()->getParent();
+
   if (PInfo.UserUnrollCount) {
     if (UP.AllowRemainder &&
-        UCE.getUnrolledLoopSize(UP, (unsigned)UnrollCount) < UP.Threshold) {
+        UCE.getUnrolledLoopSize(UP, (unsigned)getUnrollCount(F)) <
+            UP.Threshold) {
       LLVM_DEBUG(dbgs().indent(2) << "Unrolling with user-specified count: "
-                                  << UnrollCount << ".\n");
-      return (unsigned)UnrollCount;
+                                  << getUnrollCount(F) << ".\n");
+      return (unsigned)getUnrollCount(F);
     }
     LLVM_DEBUG(dbgs().indent(2)
-               << "Not unrolling with user count " << UnrollCount << ": "
+               << "Not unrolling with user count " << getUnrollCount(F) << ": "
                << (UP.AllowRemainder ? "exceeds threshold"
                                      : "remainder not allowed")
                << ".\n");
@@ -863,7 +923,7 @@ shouldPragmaUnroll(Loop *L, const UnrollPragmaInfo &PInfo,
       // Certain cases with UBSAN can cause trip count to be calculated as
       // INT_MAX, Block full unrolling at a reasonable limit so that the
       // compiler doesn't hang trying to unroll the loop. See PR77842
-      if (TripCount > PragmaUnrollFullMaxIterations) {
+      if (TripCount > getPragmaUnrollFullMaxIterations(F)) {
         LLVM_DEBUG(dbgs().indent(2)
                    << "Won't unroll; trip count is too large.\n");
         ORE->emit([&]() {
@@ -872,7 +932,7 @@ shouldPragmaUnroll(Loop *L, const UnrollPragmaInfo &PInfo,
                                             L->getStartLoc(), L->getHeader())
                  << "may be unable to fully unroll loop: trip count "
                  << ore::NV("TripCount", TripCount) << " exceeds limit "
-                 << ore::NV("Limit", PragmaUnrollFullMaxIterations);
+                 << ore::NV("Limit", getPragmaUnrollFullMaxIterations(F));
         });
         return std::nullopt;
       }
@@ -1046,10 +1106,12 @@ unsigned llvm::computeUnrollCount(
     }
   });
 
+  const Function &F = *L->getHeader()->getParent();
+
   // Use an explicit peel count that has been specified for testing. In this
   // case it's not permitted to also specify an explicit unroll count.
   if (PP.PeelCount) {
-    if (UnrollCount.getNumOccurrences() > 0) {
+    if (isUnrollCountSpecified(F)) {
       reportFatalUsageError("Cannot specify both explicit peel count and "
                             "explicit unroll count");
     }
@@ -1082,9 +1144,10 @@ unsigned llvm::computeUnrollCount(
       // If the loop has an unrolling pragma, we want to be more aggressive with
       // unrolling limits. Set thresholds to at least the PragmaUnrollThreshold
       // value which is larger than the default limits.
-      UP.Threshold = std::max<unsigned>(UP.Threshold, PragmaUnrollThreshold);
+      UP.Threshold =
+          std::max<unsigned>(UP.Threshold, getPragmaUnrollThreshold(F));
       UP.PartialThreshold =
-          std::max<unsigned>(UP.PartialThreshold, PragmaUnrollThreshold);
+          std::max<unsigned>(UP.PartialThreshold, getPragmaUnrollThreshold(F));
     }
   }
 
@@ -1160,7 +1223,7 @@ unsigned llvm::computeUnrollCount(
   // Check if the runtime trip count is too small when profile is available.
   if (L->getHeader()->getParent()->hasProfileData()) {
     if (auto ProfileTripCount = getLoopEstimatedTripCount(L)) {
-      if (*ProfileTripCount < FlatLoopTripCountThreshold)
+      if (*ProfileTripCount < getFlatLoopTripCountThreshold(F))
         return 0;
       else
         UP.AllowExpensiveTripCount = true;
@@ -1713,7 +1776,7 @@ PreservedAnalyses LoopFullUnrollPass::run(Loop &L, LoopAnalysisManager &AM,
     Updater.markLoopAsDeleted(L, LoopName);
   } else {
     // We can only walk child loops if the current loop remained valid.
-    if (UnrollRevisitChildLoops) {
+    if (getUnrollRevisitChildLoops(*L.getHeader()->getParent())) {
       // Walk *all* of the child loops.
       SmallVector<Loop *, 4> ChildLoops(L.begin(), L.end());
       Updater.addChildLoops(ChildLoops);

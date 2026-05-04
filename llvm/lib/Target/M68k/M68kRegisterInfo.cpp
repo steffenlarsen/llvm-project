@@ -23,10 +23,11 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Type.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/M68k/M68kOptionsOptInfos.h"
 
 #define GET_REGINFO_TARGET_DESC
 #include "M68kGenRegisterInfo.inc"
@@ -35,9 +36,12 @@
 
 using namespace llvm;
 
-static cl::opt<bool> EnableBasePointer(
-    "m68k-use-base-pointer", cl::Hidden, cl::init(true),
-    cl::desc("Enable use of a base pointer for complex stack frames"));
+static bool EnableBasePointer = true;
+
+static bool getEnableBasePointer(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::M68K_EnableBasePointer>(
+      F.getContext().getOptionsContext());
+}
 
 // Pin the vtable to this file.
 void M68kRegisterInfo::anchor() {}
@@ -225,7 +229,7 @@ static bool CantUseSP(const MachineFrameInfo &MFI) {
 bool M68kRegisterInfo::hasBasePointer(const MachineFunction &MF) const {
   const MachineFrameInfo &MFI = MF.getFrameInfo();
 
-  if (!EnableBasePointer)
+  if (!getEnableBasePointer(MF.getFunction()))
     return false;
 
   // When we need stack realignment, we can't address the stack from the frame

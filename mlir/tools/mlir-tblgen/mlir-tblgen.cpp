@@ -10,6 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "MlirTblgenOptions.h"
 #include "mlir/TableGen/GenInfo.h"
 #include "mlir/Tools/mlir-tblgen/MlirTblgenMain.h"
 #include "llvm/TableGen/Record.h"
@@ -25,4 +26,9 @@ static GenRegistration
                    return false;
                  });
 
-int main(int argc, char **argv) { return MlirTblgenMain(argc, argv); }
+int main(int argc, char **argv) {
+  return MlirTblgenMain(argc, argv, [](llvm::clv2::OptionParser &P) {
+    P.add<&mlir::tblgen_opts::MlirTblgenOptsReg,
+          mlir::tblgen_opts::applyMlirTblgenOptions>();
+  });
+}

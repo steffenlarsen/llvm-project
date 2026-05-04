@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- GVNHoist.cpp - Hoist scalar and load expressions -------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -62,7 +64,6 @@
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar/GVN.h"
@@ -86,25 +87,25 @@ STATISTIC(NumStoresRemoved, "Number of stores removed");
 STATISTIC(NumCallsHoisted, "Number of calls hoisted");
 STATISTIC(NumCallsRemoved, "Number of calls removed");
 
-static cl::opt<int>
-    MaxHoistedThreshold("gvn-max-hoisted", cl::Hidden, cl::init(-1),
-                        cl::desc("Max number of instructions to hoist "
-                                 "(default unlimited = -1)"));
+static int getMaxHoistedThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_GvnMaxHoisted>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<int> MaxNumberOfBBSInPath(
-    "gvn-hoist-max-bbs", cl::Hidden, cl::init(4),
-    cl::desc("Max number of basic blocks on the path between "
-             "hoisting locations (default = 4, unlimited = -1)"));
+static int getMaxNumberOfBBSInPath(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_GvnHoistMaxBbs>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<int> MaxDepthInBB(
-    "gvn-hoist-max-depth", cl::Hidden, cl::init(100),
-    cl::desc("Hoist instructions from the beginning of the BB up to the "
-             "maximum specified depth (default = 100, unlimited = -1)"));
+static int getMaxDepthInBB(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_GvnHoistMaxDepth>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<int>
-    MaxChainLength("gvn-hoist-max-chain-length", cl::Hidden, cl::init(10),
-                   cl::desc("Maximum length of dependent chains to hoist "
-                            "(default = 10, unlimited = -1)"));
+static int getMaxChainLength(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_GvnHoistMaxChainLength>(
+      F.getContext().getOptionsContext());
+}
 
 namespace llvm {
 
@@ -521,7 +522,7 @@ bool GVNHoist::run(Function &F) {
 
   // FIXME: use lazy evaluation of VN to avoid the fix-point computation.
   while (true) {
-    if (MaxChainLength != -1 && ++ChainLength >= MaxChainLength)
+    if (getMaxChainLength(F) != -1 && ++ChainLength >= getMaxChainLength(F))
       return Res;
 
     auto HoistStat = hoistExpressions(F);
@@ -756,7 +757,7 @@ bool GVNHoist::valueAnticipable(CHIArgs C, Instruction *TI) const {
 
 void GVNHoist::checkSafety(CHIArgs C, BasicBlock *BB, GVNHoist::InsKind K,
                            SmallVectorImpl<CHIArg> &Safe) {
-  int NumBBsOnAllPaths = MaxNumberOfBBSInPath;
+  int NumBBsOnAllPaths = getMaxNumberOfBBSInPath(*BB->getParent());
   const Instruction *T = BB->getTerminator();
   for (auto CHI : C) {
     Instruction *Insn = CHI.I;
@@ -1126,7 +1127,8 @@ std::pair<unsigned, unsigned> GVNHoist::hoist(HoistingPointList &HPL) {
       ++NI;
   }
 
-  if (MSSA && VerifyMemorySSA)
+  if (MSSA && getVerifyMemorySSA(
+                  DT->getRoot()->getParent()->getContext().getOptionsContext()))
     MSSA->verifyMemorySSA();
 
   NumHoisted += NL + NS + NC + NI;
@@ -1153,7 +1155,7 @@ std::pair<unsigned, unsigned> GVNHoist::hoistExpressions(Function &F) {
       }
       // Only hoist the first instructions in BB up to MaxDepthInBB. Hoisting
       // deeper may increase the register pressure and compilation time.
-      if (MaxDepthInBB != -1 && InstructionNb++ >= MaxDepthInBB)
+      if (getMaxDepthInBB(F) != -1 && InstructionNb++ >= getMaxDepthInBB(F))
         break;
 
       // Do not value number terminator instructions.

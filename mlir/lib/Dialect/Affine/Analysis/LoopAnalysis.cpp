@@ -533,10 +533,11 @@ bool mlir::affine::isTilingValid(ArrayRef<AffineForOp> loops) {
         // violated by the default hyper-rect tiling method.
         LDBG() << "Checking whether tiling legality violated "
                << "for dependence at depth: " << Twine(d) << " between:"
-               << OpWithFlags(srcAccess.opInst, OpPrintingFlags().skipRegions())
+               << OpWithFlags(srcAccess.opInst,
+                              opPrintingFlags(srcAccess.opInst).skipRegions())
                << "\nand:\n"
                << OpWithFlags(dstAccess.opInst,
-                              OpPrintingFlags().skipRegions());
+                              opPrintingFlags(dstAccess.opInst).skipRegions());
         for (const DependenceComponent &depComp : depComps) {
           if (depComp.lb.has_value() && depComp.ub.has_value() &&
               *depComp.lb < *depComp.ub && *depComp.ub < 0) {

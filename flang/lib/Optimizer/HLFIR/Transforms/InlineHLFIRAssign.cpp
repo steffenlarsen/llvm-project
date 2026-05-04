@@ -10,6 +10,7 @@
 // though, we may add performance/code-size heuristics in future.
 //===----------------------------------------------------------------------===//
 
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Optimizer/Analysis/AliasAnalysis.h"
 #include "flang/Optimizer/Analysis/ArraySectionAnalyzer.h"
 #include "flang/Optimizer/Builder/BoxValue.h"
@@ -25,8 +26,8 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 
 namespace hlfir {
 #define GEN_PASS_DEF_INLINEHLFIRASSIGN
@@ -34,12 +35,6 @@ namespace hlfir {
 } // namespace hlfir
 
 #define DEBUG_TYPE "inline-hlfir-assign"
-
-static llvm::cl::opt<bool> inlineAllocatableExprAssignFlag(
-    "inline-hlfir-allocatable-expr-assign",
-    llvm::cl::desc("Enable inlining of allocatable assignments when RHS is an "
-                   "hlfir.expr (e.g., from hlfir.elemental)"),
-    llvm::cl::init(false));
 
 /// Returns true if \p op is CUDA Fortran device code. attributes(host,device)
 /// counts: this pass runs before the device copy is outlined, so the one
@@ -53,7 +48,6 @@ static bool isCUDADeviceCode(mlir::Operation *op) {
       return procAttr.getValue() == cuf::ProcAttribute::HostDevice;
   return false;
 }
-
 namespace {
 /// Expand hlfir.assign of array RHS to array LHS into a loop nest
 /// of element-by-element assignments. Also handles scalar RHS broadcast
@@ -403,8 +397,9 @@ public:
     patterns.insert<InlineHLFIRAssignConversion>(context, onlyScalarRHS,
                                                  onlyCUDADeviceContext);
 
-    // Optionally add the allocatable expr assignment pattern
-    if (inlineAllocatableExprAssignFlag) {
+    auto &optsCtx = getContext().getOptionsContext();
+    if (llvm::clv2::getOptValOrDefault<
+            &llvm::clv2::FLANG_InlineHLFIRAllocExprAssign>(optsCtx)) {
       LLVM_DEBUG(llvm::dbgs()
                  << "InlineHLFIRAssign: enabling allocatable expr assignment "
                     "inlining\n");

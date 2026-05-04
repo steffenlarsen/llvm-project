@@ -10,8 +10,6 @@
 // mode traces specifically.
 //
 //===----------------------------------------------------------------------===//
-#include "xray-registry.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/XRay/BlockIndexer.h"
 #include "llvm/XRay/BlockPrinter.h"
@@ -25,24 +23,18 @@
 using namespace llvm;
 using namespace xray;
 
-static cl::SubCommand Dump("fdr-dump", "FDR Trace Dump");
-static cl::opt<std::string> DumpInput(cl::Positional,
-                                      cl::desc("<xray fdr mode log>"),
-                                      cl::Required, cl::sub(Dump));
-static cl::opt<bool> DumpVerify("verify",
-                                cl::desc("verify structure of the log"),
-                                cl::init(false), cl::sub(Dump));
+std::string DumpInputVal;
+bool DumpVerifyVal;
 
-static CommandRegistration Unused(&Dump, []() -> Error {
-  // Open the file provided.
-  auto FDOrErr = sys::fs::openNativeFileForRead(DumpInput);
+Error tryFdrDump() {
+  auto FDOrErr = sys::fs::openNativeFileForRead(DumpInputVal);
   if (!FDOrErr)
     return FDOrErr.takeError();
 
   uint64_t FileSize;
-  if (auto EC = sys::fs::file_size(DumpInput, FileSize))
+  if (auto EC = sys::fs::file_size(DumpInputVal, FileSize))
     return createStringError(EC, "Failed to get file size for '%s'.",
-                             DumpInput.c_str());
+                             DumpInputVal.c_str());
 
   std::error_code EC;
   sys::fs::mapped_file_region MappedFile(
@@ -61,7 +53,7 @@ static CommandRegistration Unused(&Dump, []() -> Error {
   FileBasedRecordProducer P(H, DE, OffsetPtr);
 
   RecordPrinter RP(outs(), "\n");
-  if (!DumpVerify) {
+  if (!DumpVerifyVal) {
     PipelineConsumer C({&RP});
     while (DE.isValidOffsetForDataOfSize(OffsetPtr, 1)) {
       auto R = P.produce();
@@ -79,7 +71,6 @@ static CommandRegistration Unused(&Dump, []() -> Error {
   while (DE.isValidOffsetForDataOfSize(OffsetPtr, 1)) {
     auto R = P.produce();
     if (!R) {
-      // Print records we've found so far.
       for (auto &Ptr : Records)
         if (auto E = Ptr->apply(RP))
           return joinErrors(std::move(E), R.takeError());
@@ -89,7 +80,6 @@ static CommandRegistration Unused(&Dump, []() -> Error {
       return E;
   }
 
-  // Once we have a trace, we then index the blocks.
   BlockIndexer::Index Index;
   BlockIndexer BI(Index);
   for (auto &Ptr : Records)
@@ -99,7 +89,6 @@ static CommandRegistration Unused(&Dump, []() -> Error {
   if (auto E = BI.flush())
     return E;
 
-  // Then we validate while printing each block.
   BlockVerifier BV;
   for (const auto &ProcessThreadBlocks : Index) {
     auto &Blocks = ProcessThreadBlocks.second;
@@ -116,4 +105,4 @@ static CommandRegistration Unused(&Dump, []() -> Error {
   }
   outs().flush();
   return Error::success();
-});
+}

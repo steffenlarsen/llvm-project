@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- Float2Int.cpp - Demote floating point ops to work on integers ------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -11,18 +13,18 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Scalar/Float2Int.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Scalar/Float2Int.h"
 #include <deque>
 
 #define DEBUG_TYPE "float2int"
@@ -41,10 +43,10 @@ using namespace llvm;
 // integer domain to FP domain (uitofp,sitofp), we terminate our walk.
 
 /// The largest integer type worth dealing with.
-static cl::opt<unsigned>
-MaxIntegerBW("float2int-max-integer-bw", cl::init(64), cl::Hidden,
-             cl::desc("Max integer bitwidth to consider in float2int"
-                      "(default=64)"));
+static unsigned getMaxIntegerBW(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_Float2IntMaxIntegerBw>(
+      F.getContext().getOptionsContext());
+}
 
 // Given a FCmp predicate, return a matching ICmp predicate if one
 // exists, otherwise return BAD_ICMP_PREDICATE.
@@ -120,13 +122,13 @@ void Float2IntPass::seen(Instruction *I, ConstantRange R) {
 
 // Helper - get a range representing a poison value.
 ConstantRange Float2IntPass::badRange() {
-  return ConstantRange::getFull(MaxIntegerBW + 1);
+  return ConstantRange::getFull(getMaxIntegerBW(*Fn) + 1);
 }
 ConstantRange Float2IntPass::unknownRange() {
-  return ConstantRange::getEmpty(MaxIntegerBW + 1);
+  return ConstantRange::getEmpty(getMaxIntegerBW(*Fn) + 1);
 }
 ConstantRange Float2IntPass::validateRange(ConstantRange R) {
-  if (R.getBitWidth() > MaxIntegerBW + 1)
+  if (R.getBitWidth() > getMaxIntegerBW(*Fn) + 1)
     return badRange();
   return R;
 }
@@ -169,7 +171,7 @@ void Float2IntPass::walkBackwards() {
       unsigned BW = I->getOperand(0)->getType()->getPrimitiveSizeInBits();
       auto Input = ConstantRange::getFull(BW);
       auto CastOp = (Instruction::CastOps)I->getOpcode();
-      seen(I, validateRange(Input.castOp(CastOp, MaxIntegerBW+1)));
+      seen(I, validateRange(Input.castOp(CastOp, getMaxIntegerBW(*Fn) + 1)));
       continue;
     }
 
@@ -235,7 +237,7 @@ std::optional<ConstantRange> Float2IntPass::calcRange(Instruction *I) {
         return badRange();
 
       // OK, it's representable. Now get it.
-      APSInt Int(MaxIntegerBW+1, false);
+      APSInt Int(getMaxIntegerBW(*Fn) + 1, false);
       bool Exact;
       APFloat::opStatus Status = CF->getValueAPF().convertToInteger(
           Int, APFloat::rmNearestTiesToEven, &Exact);
@@ -282,7 +284,7 @@ std::optional<ConstantRange> Float2IntPass::calcRange(Instruction *I) {
     // Note: We're ignoring the casts output size here as that's what the
     // caller expects.
     auto CastOp = (Instruction::CastOps)I->getOpcode();
-    return OpRanges[0].castOp(CastOp, MaxIntegerBW+1);
+    return OpRanges[0].castOp(CastOp, getMaxIntegerBW(*Fn) + 1);
   }
 
   case Instruction::FCmp:
@@ -319,7 +321,7 @@ bool Float2IntPass::validateAndTransform(const DataLayout &DL) {
     if (!E->isLeader())
       continue;
 
-    ConstantRange R(MaxIntegerBW + 1, false);
+    ConstantRange R(getMaxIntegerBW(*Fn) + 1, false);
     bool Fail = false;
     Type *ConvertedToTy = nullptr;
 
@@ -490,6 +492,7 @@ bool Float2IntPass::runImpl(Function &F, const DominatorTree &DT) {
   ConvertedInsts.clear();
   Roots.clear();
 
+  Fn = &F;
   Ctx = &F.getParent()->getContext();
 
   findRoots(F, DT);

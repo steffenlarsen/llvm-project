@@ -12,31 +12,21 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Passes/VeneerElimination.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
+#include "llvm/Support/CommandLineV2.h"
 #define DEBUG_TYPE "veneer-elim"
 
 using namespace llvm;
-
-namespace opts {
-
-extern cl::OptionCategory BoltOptCategory;
-
-static llvm::cl::opt<bool>
-    EliminateVeneers("elim-link-veneers",
-                     cl::desc("run veneer elimination pass"), cl::init(true),
-                     cl::Hidden, cl::cat(BoltOptCategory));
-
-static llvm::cl::opt<bool> DropCortexA53843419Veneers(
-    "drop-cortex-a53-843419-veneers",
-    cl::desc("inline and drop Cortex-A53 erratum 843419 linker veneers; only "
-             "use if the BOLTed binary will not run on Cortex-A53"),
-    cl::init(false), cl::cat(BoltOptCategory));
-} // namespace opts
 
 namespace llvm {
 namespace bolt {
 
 Error VeneerElimination::runOnFunctions(BinaryContext &BC) {
-  if (!opts::EliminateVeneers || !BC.isAArch64())
+  const bool EliminateVeneers = bolt_passes_opts::getElimLinkVeneers(BC);
+  const bool DropCortexA53843419Veneers =
+      bolt_passes_opts::getDropCortexA53843419Veneers(BC);
+
+  if (!EliminateVeneers || !BC.isAArch64())
     return Error::success();
 
   std::unordered_map<const MCSymbol *, const MCSymbol *> VeneerDestinations;
@@ -54,7 +44,7 @@ Error VeneerElimination::runOnFunctions(BinaryContext &BC) {
     // branch site instead of redirecting, so LongJmp do not introduce
     // code that clobbers registers (e.g. x16) used by the caller.
     if (BC.MIB->matchE843419Veneer(BF)) {
-      if (!opts::DropCortexA53843419Veneers) {
+      if (!DropCortexA53843419Veneers) {
         BC.errs() << "BOLT-ERROR: binary contains Cortex-A53 erratum 843419 "
                      "workaround veneers; pass "
                      "--drop-cortex-a53-843419-veneers only if the BOLTed "

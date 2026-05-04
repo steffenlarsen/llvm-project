@@ -11,11 +11,17 @@
 
 #include "bolt/Core/BinaryContext.h"
 #include "bolt/Core/CallGraph.h"
+#include "llvm/Support/OptionsContext.h"
 #include <deque>
 #include <functional>
 #include <unordered_map>
 
 namespace llvm {
+
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
+
 namespace bolt {
 
 class BinaryFunction;
@@ -42,7 +48,8 @@ public:
   NodeId addNode(BinaryFunction *BF, uint32_t Size, uint64_t Samples = 0);
 
   /// Compute a DFS traversal of the call graph.
-  std::deque<BinaryFunction *> buildTraversalOrder();
+  std::deque<BinaryFunction *>
+  buildTraversalOrder(const clv2::OptionsContext &OptsCtx);
 
 private:
   std::unordered_map<const BinaryFunction *, NodeId> FuncToNodeId;

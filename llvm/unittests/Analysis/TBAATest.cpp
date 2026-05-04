@@ -12,7 +12,7 @@
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "gtest/gtest.h"
 
 namespace llvm {
@@ -22,7 +22,7 @@ class TBAATest : public testing::Test {
 protected:
   TBAATest() : M("TBAATest", C), MD(C) {}
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M;
   MDBuilder MD;
 };
@@ -83,5 +83,5 @@ TEST_F(TBAATest, checkTBAAMerging) {
   EXPECT_TRUE(!verifyFunction(*F));
 }
 
-} // end anonymous namspace
-} // end llvm namespace
+} // namespace
+} // namespace llvm

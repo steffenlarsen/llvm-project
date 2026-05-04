@@ -94,7 +94,7 @@ class SystemZHazardRecognizer : public ScheduleHazardRecognizer {
   unsigned getCurrGroupSize() {return CurrGroupSize;};
 
   /// Start next decoder group.
-  void nextGroup();
+  void nextGroup(const Function &F);
 
   /// Clear all counters for processor resources.
   void clearProcResCounters();

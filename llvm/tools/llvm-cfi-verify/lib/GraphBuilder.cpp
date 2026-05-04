@@ -27,7 +27,6 @@
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/TargetSelect.h"
@@ -37,23 +36,6 @@ using Instr = llvm::cfi_verify::FileAnalysis::Instr;
 
 namespace llvm {
 namespace cfi_verify {
-
-uint64_t SearchLengthForUndef;
-uint64_t SearchLengthForConditionalBranch;
-
-static cl::opt<uint64_t, true> SearchLengthForUndefArg(
-    "search-length-undef",
-    cl::desc("Specify the maximum amount of instructions "
-             "to inspect when searching for an undefined "
-             "instruction from a conditional branch."),
-    cl::location(SearchLengthForUndef), cl::init(2));
-
-static cl::opt<uint64_t, true> SearchLengthForConditionalBranchArg(
-    "search-length-cb",
-    cl::desc("Specify the maximum amount of instructions "
-             "to inspect when searching for a conditional "
-             "branch from an indirect control flow."),
-    cl::location(SearchLengthForConditionalBranch), cl::init(20));
 
 std::vector<uint64_t> GraphResult::flattenAddress(uint64_t Address) const {
   std::vector<uint64_t> Addresses;
@@ -92,8 +74,9 @@ void GraphResult::printToDOT(const FileAnalysis &Analysis,
   OS << "}\n";
 }
 
-GraphResult GraphBuilder::buildFlowGraph(const FileAnalysis &Analysis,
-                                         object::SectionedAddress Address) {
+GraphResult GraphBuilder::buildFlowGraph(
+    const FileAnalysis &Analysis, object::SectionedAddress Address,
+    uint64_t SearchLengthForUndef, uint64_t SearchLengthForConditionalBranch) {
   GraphResult Result;
   Result.BaseAddress = Address.Address;
   DenseSet<uint64_t> OpenedNodes;
@@ -105,14 +88,16 @@ GraphResult GraphBuilder::buildFlowGraph(const FileAnalysis &Analysis,
     return Result;
   }
 
-  buildFlowGraphImpl(Analysis, OpenedNodes, Result, Address.Address, 0);
+  buildFlowGraphImpl(Analysis, OpenedNodes, Result, Address.Address, 0,
+                     SearchLengthForUndef, SearchLengthForConditionalBranch);
   return Result;
 }
 
 void GraphBuilder::buildFlowsToUndefined(const FileAnalysis &Analysis,
                                          GraphResult &Result,
                                          ConditionalBranchNode &BranchNode,
-                                         const Instr &BranchInstrMeta) {
+                                         const Instr &BranchInstrMeta,
+                                         uint64_t SearchLengthForUndef) {
   assert(SearchLengthForUndef > 0 &&
          "Search length for undefined flow must be greater than zero.");
 
@@ -194,10 +179,10 @@ void GraphBuilder::buildFlowsToUndefined(const FileAnalysis &Analysis,
     BranchNode.CFIProtection = true;
 }
 
-void GraphBuilder::buildFlowGraphImpl(const FileAnalysis &Analysis,
-                                      DenseSet<uint64_t> &OpenedNodes,
-                                      GraphResult &Result, uint64_t Address,
-                                      uint64_t Depth) {
+void GraphBuilder::buildFlowGraphImpl(
+    const FileAnalysis &Analysis, DenseSet<uint64_t> &OpenedNodes,
+    GraphResult &Result, uint64_t Address, uint64_t Depth,
+    uint64_t SearchLengthForUndef, uint64_t SearchLengthForConditionalBranch) {
   // If we've exceeded the flow length, terminate.
   if (Depth >= SearchLengthForConditionalBranch) {
     Result.OrphanedNodes.push_back(Address);
@@ -238,7 +223,8 @@ void GraphBuilder::buildFlowGraphImpl(const FileAnalysis &Analysis,
                                          *Analysis.getRegisterInfo())) {
       // If this cross reference doesn't affect CF, continue the graph.
       buildFlowGraphImpl(Analysis, OpenedNodes, Result, ParentMeta.VMAddress,
-                         Depth + 1);
+                         Depth + 1, SearchLengthForUndef,
+                         SearchLengthForConditionalBranch);
       Result.IntermediateNodes[ParentMeta.VMAddress] = Address;
       HasValidCrossRef = true;
       continue;
@@ -278,7 +264,8 @@ void GraphBuilder::buildFlowGraphImpl(const FileAnalysis &Analysis,
       }
 
       buildFlowGraphImpl(Analysis, OpenedNodes, Result, ParentMeta.VMAddress,
-                         Depth + 1);
+                         Depth + 1, SearchLengthForUndef,
+                         SearchLengthForConditionalBranch);
       Result.IntermediateNodes[ParentMeta.VMAddress] = Address;
       HasValidCrossRef = true;
       continue;
@@ -308,7 +295,8 @@ void GraphBuilder::buildFlowGraphImpl(const FileAnalysis &Analysis,
       BranchNode.Fallthrough = Address;
 
     HasValidCrossRef = true;
-    buildFlowsToUndefined(Analysis, Result, BranchNode, ParentMeta);
+    buildFlowsToUndefined(Analysis, Result, BranchNode, ParentMeta,
+                          SearchLengthForUndef);
     Result.ConditionalBranchNodes.push_back(BranchNode);
   }
 

@@ -53,7 +53,7 @@ std::unique_ptr<MCContext> createMCContext(const MCAsmInfo &AsmInfo) {
 // This test makes sure that MachineInstr::isIdenticalTo handles Defs correctly
 // for various combinations of IgnoreDefs, and also that it is symmetrical.
 TEST(IsIdenticalToTest, DifferentDefs) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module Mod("Module", Ctx);
   auto MF = createMachineFunction(Ctx, Mod);
 
@@ -125,7 +125,7 @@ void checkHashAndIsEqualMatch(MachineInstr *MI1, MachineInstr *MI2) {
 // This test makes sure that MachineInstrExpressionTraits::isEqual is in sync
 // with MachineInstrExpressionTraits::getHashValue.
 TEST(MachineInstrExpressionTraitTest, IsEqualAgreesWithGetHashValue) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module Mod("Module", Ctx);
   auto MF = createMachineFunction(Ctx, Mod);
 
@@ -206,7 +206,7 @@ TEST(MachineInstrExpressionTraitTest, IsEqualAgreesWithGetHashValue) {
 }
 
 TEST(MachineInstrPrintingTest, DebugLocPrinting) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module Mod("Module", Ctx);
   auto MF = createMachineFunction(Ctx, Mod);
 
@@ -227,14 +227,15 @@ TEST(MachineInstrPrintingTest, DebugLocPrinting) {
 
   std::string str;
   raw_string_ostream OS(str);
-  MI->print(OS, /*IsStandalone*/true, /*SkipOpers*/false, /*SkipDebugLoc*/false,
-            /*AddNewLine*/false);
+  MI->print(OS, /*IsStandalone*/ true, /*SkipOpers*/ false,
+            /*SkipDebugLoc*/ false,
+            /*AddNewLine*/ false);
   ASSERT_TRUE(StringRef(str).starts_with("$noreg = UNKNOWN debug-location "));
   ASSERT_TRUE(StringRef(str).ends_with("filename:1:5"));
 }
 
 TEST(MachineInstrSpan, DistanceBegin) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module Mod("Module", Ctx);
   auto MF = createMachineFunction(Ctx, Mod);
   auto MBB = MF->CreateMachineBasicBlock();
@@ -251,7 +252,7 @@ TEST(MachineInstrSpan, DistanceBegin) {
 }
 
 TEST(MachineInstrSpan, DistanceEnd) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module Mod("Module", Ctx);
   auto MF = createMachineFunction(Ctx, Mod);
   auto MBB = MF->CreateMachineBasicBlock();
@@ -268,7 +269,7 @@ TEST(MachineInstrSpan, DistanceEnd) {
 }
 
 TEST(MachineInstrExtraInfo, AddExtraInfo) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module Mod("Module", Ctx);
   auto MF = createMachineFunction(Ctx, Mod);
   MCInstrDesc MCID = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
@@ -349,7 +350,7 @@ TEST(MachineInstrExtraInfo, AddExtraInfo) {
 }
 
 TEST(MachineInstrExtraInfo, ChangeExtraInfo) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module Mod("Module", Ctx);
   auto MF = createMachineFunction(Ctx, Mod);
   MCInstrDesc MCID = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
@@ -404,7 +405,7 @@ TEST(MachineInstrExtraInfo, ChangeExtraInfo) {
 }
 
 TEST(MachineInstrExtraInfo, RemoveExtraInfo) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module Mod("Module", Ctx);
   auto MF = createMachineFunction(Ctx, Mod);
   MCInstrDesc MCID = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
@@ -481,7 +482,7 @@ TEST(MachineInstrExtraInfo, RemoveExtraInfo) {
 }
 
 TEST(MachineInstrDebugValue, AddDebugValueOperand) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module Mod("Module", Ctx);
   auto MF = createMachineFunction(Ctx, Mod);
 
@@ -511,7 +512,7 @@ MATCHER_P(HasMIMetadata, MIMD, "") {
 }
 
 TEST(MachineInstrBuilder, BuildMI) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   MDNode *PCS = MDNode::getDistinct(Ctx, {});
   DIFile *DIF = DIFile::getDistinct(Ctx, "filename", "");
   DISubprogram *DIS = DISubprogram::getDistinct(
@@ -540,7 +541,7 @@ TEST(MachineInstrBuilder, BuildMI) {
 static_assert(std::is_trivially_copyable_v<MCOperand>, "trivially copyable");
 
 TEST(MachineInstrTest, SpliceOperands) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module Mod("Module", Ctx);
   std::unique_ptr<MachineFunction> MF = createMachineFunction(Ctx, Mod);
   MachineBasicBlock *MBB = MF->CreateMachineBasicBlock();
@@ -625,7 +626,7 @@ TEST(MachineInstrTest, SpliceOperands) {
 
 // Checks the iterator returned by MacineInstr::eraseFromParent().
 TEST(MachineInstr, EraseFromParentReturnedIterator) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module Mod("Module", Ctx);
   auto MF = createMachineFunction(Ctx, Mod);
   auto MBB = MF->CreateMachineBasicBlock();
@@ -645,7 +646,7 @@ TEST(MachineInstr, EraseFromParentReturnedIterator) {
 // Checks the iterator returned by MacineInstr::eraseFromParent() when
 // instructions are in bundles.
 TEST(MachineInstr, EraseFromParentReturnedIteratorBundle) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module Mod("Module", Ctx);
   auto MF = createMachineFunction(Ctx, Mod);
   auto MBB = MF->CreateMachineBasicBlock();

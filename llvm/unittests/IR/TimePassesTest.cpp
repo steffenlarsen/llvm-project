@@ -68,7 +68,7 @@ TEST(TimePassesTest, LegacyCustomOut) {
   PassInstrumentationCallbacks PIC;
   PassInstrumentation PI(&PIC);
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module M("TestModule", Context);
 
   SmallString<0> TimePassesStr;
@@ -124,7 +124,7 @@ TEST(TimePassesTest, CustomOut) {
   PassInstrumentationCallbacks PIC;
   PassInstrumentation PI(&PIC);
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module M("TestModule", Context);
   MyPass1 Pass1;
   MyPass2 Pass2;

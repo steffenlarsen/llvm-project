@@ -16,6 +16,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/AssumeBundleQueries.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -29,22 +30,26 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
-static cl::opt<bool>
-    VerifyAssumptionCache("verify-assumption-cache", cl::Hidden,
-                          cl::desc("Enable verification of assumption cache"),
-                          cl::init(false));
+static bool VerifyAssumptionCache = false;
 
-static cl::opt<unsigned> MaxAssumesPerValue(
-    "max-assumes-per-value", cl::Hidden, cl::init(1024),
-    cl::desc("Maximum number of assumptions to cache for a single value"));
+static bool getVerifyAssumptionCache(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_VerifyAssumptionCache>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getMaxAssumesPerValue(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_MaxAssumesPerValue>(
+      F.getContext().getOptionsContext());
+}
 
 SmallVector<AssumptionCache::ResultElem, 1> &
 AssumptionCache::getOrInsertAffectedValues(Value *V) {
@@ -117,7 +122,7 @@ void AssumptionCache::updateAffectedValues(AssumeInst *CI) {
     // Callers walk every entry cached for a value, including the ones left
     // behind by erased assumptions, so cache no more of them than an analysis
     // should walk.
-    if (AVV.size() >= MaxAssumesPerValue)
+    if (AVV.size() >= getMaxAssumesPerValue(F))
       continue;
 
     if (llvm::none_of(AVV, [&](ResultElem &Elem) {
@@ -183,7 +188,7 @@ void AssumptionCache::transferAffectedValuesInCache(Value *OV, Value *NV) {
     return;
 
   for (auto &A : AVI->second) {
-    if (NAVV.size() >= MaxAssumesPerValue)
+    if (NAVV.size() >= getMaxAssumesPerValue(F))
       break;
     if (!llvm::is_contained(NAVV, A))
       NAVV.push_back(A);
@@ -356,7 +361,10 @@ void AssumptionCacheTracker::verifyAnalysis() const {
   // flag. We should either fix all passes to correctly update the assumption
   // cache and enable the verifier unconditionally or somehow arrange for the
   // assumption list to be updated automatically by passes.
-  if (!VerifyAssumptionCache)
+  if (AssumptionCaches.empty())
+    return;
+  const Function &FirstF = cast<Function>(*AssumptionCaches.begin()->first);
+  if (!getVerifyAssumptionCache(FirstF))
     return;
 
   for (const auto &I : AssumptionCaches) {

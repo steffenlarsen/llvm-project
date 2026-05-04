@@ -48,6 +48,8 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -57,7 +59,10 @@
 using namespace llvm;
 using namespace AArch64GISelUtils;
 
-extern cl::opt<bool> EnableSVEGISel;
+static bool getEnableSVEGISel(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableSVEGISel>(
+      F.getContext().getOptionsContext());
+}
 
 static bool isSimpleGPRCallValue(const CallLowering::ArgInfo &Arg) {
   if (Arg.Regs.size() != 1 || any_of(Arg.Flags, [](ISD::ArgFlagsTy Flags) {
@@ -635,10 +640,10 @@ bool AArch64CallLowering::fallBackToDAGISel(const MachineFunction &MF) const {
   auto &F = MF.getFunction();
   const auto &TM = static_cast<const AArch64TargetMachine &>(MF.getTarget());
 
-  if (!EnableSVEGISel && (F.getReturnType()->isScalableTy() ||
-                          llvm::any_of(F.args(), [](const Argument &A) {
-                            return A.getType()->isScalableTy();
-                          })))
+  if (!getEnableSVEGISel(F) && (F.getReturnType()->isScalableTy() ||
+                                llvm::any_of(F.args(), [](const Argument &A) {
+                                  return A.getType()->isScalableTy();
+                                })))
     return true;
   const auto &ST = MF.getSubtarget<AArch64Subtarget>();
   if (!ST.hasNEON() || !ST.hasFPARMv8()) {
@@ -653,11 +658,13 @@ bool AArch64CallLowering::fallBackToDAGISel(const MachineFunction &MF) const {
     return true;
 
   auto OptLevel = MF.getTarget().getOptLevel();
+  auto EnableGlobalISelAtO = TM.getEnableGlobalISelAtO();
+  const bool GlobalISelFlag =
+      getCGPassBuilderOption(MF.getTarget().getOptionsContext())
+          .EnableGlobalISelOption.value_or(false);
   bool IsGlobalISelPreferred =
-      getCGPassBuilderOption().EnableGlobalISelOption ==
-          cl::boolOrDefault::BOU_TRUE ||
-      static_cast<unsigned>(OptLevel) <= TM.getEnableGlobalISelAtO() ||
-      F.hasOptNone();
+      GlobalISelFlag ||
+      static_cast<unsigned>(OptLevel) <= EnableGlobalISelAtO || F.hasOptNone();
   return !IsGlobalISelPreferred;
 }
 

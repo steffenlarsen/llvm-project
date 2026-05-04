@@ -54,7 +54,7 @@ static void orc_rt_lite_reoptimize_helper(
 
 Error ReOptimizeLayer::addOrcRTLiteSupport(JITDylib &PlatformJD,
                                            const DataLayout &DL) {
-  auto Ctx = std::make_unique<LLVMContext>();
+  auto Ctx = std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
   auto Mod = std::make_unique<Module>("orc-rt-lite-reoptimize.ll", *Ctx);
   Mod->setDataLayout(DL);
 

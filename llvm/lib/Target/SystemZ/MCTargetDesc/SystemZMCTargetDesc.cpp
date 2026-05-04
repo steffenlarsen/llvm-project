@@ -23,6 +23,8 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/SystemZ/SystemZOptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -178,8 +180,13 @@ static MCRegisterInfo *createSystemZMCRegisterInfo(const Triple &TT) {
 }
 
 static MCSubtargetInfo *
-createSystemZMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
-  return createSystemZMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+createSystemZMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                             const llvm::clv2::OptionsContext &Ctx) {
+  MCSubtargetInfo *STI =
+      createSystemZMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+  if (STI)
+    STI->setOptionsContext(Ctx);
+  return STI;
 }
 
 static MCInstPrinter *createSystemZMCInstPrinter(const Triple &T,

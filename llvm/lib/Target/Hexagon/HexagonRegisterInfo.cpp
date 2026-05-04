@@ -29,10 +29,11 @@
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Type.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include "llvm/Target/TargetOptions.h"
 
 #define GET_REGINFO_TARGET_DESC
@@ -40,14 +41,19 @@
 
 using namespace llvm;
 
-static cl::opt<unsigned> FrameIndexSearchRange(
-    "hexagon-frame-index-search-range", cl::init(32), cl::Hidden,
-    cl::desc("Limit on instruction search range in frame index elimination"));
+static unsigned FrameIndexSearchRange = 32;
 
-static cl::opt<unsigned> FrameIndexReuseLimit(
-    "hexagon-frame-index-reuse-limit", cl::init(~0), cl::Hidden,
-    cl::desc("Limit on the number of reused registers in frame index "
-    "elimination"));
+static unsigned FrameIndexReuseLimit = ~0;
+
+static unsigned getFrameIndexSearchRange(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_FrameIndexSearchRange>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getFrameIndexReuseLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_FrameIndexReuseLimit>(
+      F.getContext().getOptionsContext());
+}
 
 HexagonRegisterInfo::HexagonRegisterInfo(unsigned HwMode)
     : HexagonGenRegisterInfo(Hexagon::R31, 0/*DwarfFlavor*/, 0/*EHFlavor*/,
@@ -336,8 +342,10 @@ bool HexagonRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     // This will give us a chance to avoid creating a new register.
     Register ReuseBP;
 
-    if (ReuseCount < FrameIndexReuseLimit) {
-      unsigned SearchCount = 0, SearchRange = FrameIndexSearchRange;
+    if (ReuseCount < getFrameIndexReuseLimit(MF.getFunction())) {
+      unsigned SearchCount = 0,
+               SearchRange = getFrameIndexSearchRange(MF.getFunction());
+
       SmallSet<Register,2> SeenVRegs;
       bool PassedCall = false;
       LiveRegUnits Defs(*this), Uses(*this);

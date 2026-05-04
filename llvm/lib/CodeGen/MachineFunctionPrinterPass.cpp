@@ -14,6 +14,7 @@
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/SlotIndexes.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/PrintPasses.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Debug.h"
@@ -23,8 +24,9 @@ using namespace llvm;
 
 namespace {
 bool shouldPrintMachineFunction(const MachineFunction &MF) {
-  bool SourceLocFilterEmpty = isSourceLocFilterEmpty();
-  if (!isFunctionInPrintList(MF.getName()))
+  const LLVMContext &Ctx = MF.getFunction().getContext();
+  bool SourceLocFilterEmpty = isSourceLocFilterEmpty(Ctx);
+  if (!isFunctionInPrintList(Ctx, MF.getName()))
     return false;
 
   if (SourceLocFilterEmpty)
@@ -32,7 +34,7 @@ bool shouldPrintMachineFunction(const MachineFunction &MF) {
 
   for (const MachineBasicBlock &MBB : MF)
     for (const MachineInstr &MI : MBB)
-      if (isSourceLocInPrintList(MI.getDebugLoc()))
+      if (isSourceLocInPrintList(Ctx, MI.getDebugLoc()))
         return true;
   return false;
 }

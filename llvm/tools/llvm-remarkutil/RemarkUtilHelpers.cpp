@@ -12,6 +12,25 @@
 #include "RemarkUtilHelpers.h"
 
 namespace llvm {
+
+namespace remarkutil {
+std::string InputFileName;
+std::string OutputFileName;
+remarks::Format InputFormat;
+remarks::Format OutputFormat;
+bool UseDebugLoc;
+
+std::string FunctionOpt;
+std::string FunctionOptRE;
+std::string RemarkNameOpt;
+std::string RemarkNameOptRE;
+std::string PassNameOpt;
+std::string PassNameOptRE;
+std::optional<remarks::Type> RemarkTypeFilter;
+std::string RemarkFilterArgByOpt;
+std::string RemarkArgFilterOptRE;
+} // namespace remarkutil
+
 namespace remarks {
 /// \returns A MemoryBuffer for the input file on success, and an Error
 /// otherwise.
@@ -68,42 +87,61 @@ Format getSerializerFormat(StringRef OutputFileName, Format SelectedFormat,
   return SelectedFormat;
 }
 
-Expected<FilterMatcher>
-FilterMatcher::createRE(const llvm::cl::opt<std::string> &Arg) {
-  return createRE(Arg.ArgStr, Arg);
-}
-
-Expected<FilterMatcher>
-FilterMatcher::createRE(StringRef Filter, const cl::list<std::string> &Arg) {
-  return createRE(Arg.ArgStr, Filter);
-}
-
-Expected<FilterMatcher> FilterMatcher::createRE(StringRef Arg,
+Expected<FilterMatcher> FilterMatcher::createRE(StringRef ArgName,
                                                 StringRef Value) {
   FilterMatcher FM(Value, true);
   std::string Error;
   if (!FM.FilterRE.isValid(Error))
     return createStringError(make_error_code(std::errc::invalid_argument),
-                             "invalid argument '--" + Arg + "=" + Value +
+                             "invalid argument '--" + ArgName + "=" + Value +
                                  "': " + Error);
   return std::move(FM);
 }
 
 Expected<std::optional<FilterMatcher>>
-FilterMatcher::createExactOrRE(const llvm::cl::opt<std::string> &ExactArg,
-                               const llvm::cl::opt<std::string> &REArg) {
-  if (!ExactArg.empty() && !REArg.empty())
+FilterMatcher::createExactOrRE(StringRef ExactValue, StringRef REValue,
+                               StringRef ExactArgName, StringRef REArgName) {
+  if (!ExactValue.empty() && !REValue.empty())
     return createStringError(make_error_code(std::errc::invalid_argument),
-                             "conflicting arguments: --" + ExactArg.ArgStr +
-                                 " and --" + REArg.ArgStr);
+                             "conflicting arguments: --" + ExactArgName +
+                                 " and --" + REArgName);
 
-  if (!ExactArg.empty())
-    return createExact(ExactArg);
+  if (!ExactValue.empty())
+    return createExact(ExactValue);
 
-  if (!REArg.empty())
-    return createRE(REArg);
+  if (!REValue.empty())
+    return createRE(REArgName, REValue);
 
   return std::nullopt;
+}
+
+Expected<Filters> getRemarkFilters() {
+  using namespace llvm::remarkutil;
+  auto MaybeFunctionFilter = FilterMatcher::createExactOrRE(
+      FunctionOpt, FunctionOptRE, "function", "rfunction");
+  if (!MaybeFunctionFilter)
+    return MaybeFunctionFilter.takeError();
+
+  auto MaybeRemarkNameFilter = FilterMatcher::createExactOrRE(
+      RemarkNameOpt, RemarkNameOptRE, "remark-name", "rremark-name");
+  if (!MaybeRemarkNameFilter)
+    return MaybeRemarkNameFilter.takeError();
+
+  auto MaybePassNameFilter = FilterMatcher::createExactOrRE(
+      PassNameOpt, PassNameOptRE, "pass-name", "rpass-name");
+  if (!MaybePassNameFilter)
+    return MaybePassNameFilter.takeError();
+
+  auto MaybeRemarkArgFilter =
+      FilterMatcher::createExactOrRE(RemarkFilterArgByOpt, RemarkArgFilterOptRE,
+                                     "filter-arg-by", "rfilter-arg-by");
+  if (!MaybeRemarkArgFilter)
+    return MaybeRemarkArgFilter.takeError();
+
+  return Filters{std::move(*MaybeFunctionFilter),
+                 std::move(*MaybeRemarkNameFilter),
+                 std::move(*MaybePassNameFilter),
+                 std::move(*MaybeRemarkArgFilter), RemarkTypeFilter};
 }
 
 bool Filters::filterRemark(const Remark &Remark) {

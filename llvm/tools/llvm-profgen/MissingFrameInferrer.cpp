@@ -34,11 +34,6 @@ STATISTIC(TailCallFuncMultipleTailCalls,
           "Number of functions with multiple tail call sites");
 STATISTIC(TailCallMaxTailCallPath, "Length of the longest tail call path");
 
-static cl::opt<uint32_t>
-    MaximumSearchDepth("max-search-depth", cl::init(UINT32_MAX - 1),
-                       cl::desc("The maximum levels the DFS-based missing "
-                                "frame search should go with"),
-                       cl::cat(ProfGenCategory));
 
 void MissingFrameInferrer::initialize(
     const ContextSampleCounterMap *SampleCounters) {
@@ -164,7 +159,7 @@ uint64_t MissingFrameInferrer::computeUniqueTailCallPath(
 
   // DFS walk each outgoing tail call edges.
   // Bail out if we are already at the the maximum searching depth.
-  if (CurSearchingDepth == MaximumSearchDepth)
+  if (CurSearchingDepth == MaxSearchDepth)
     return 0;
 
   auto It = FuncToTailCallMap.find(From);
@@ -194,7 +189,7 @@ uint64_t MissingFrameInferrer::computeUniqueTailCallPath(
     UniquePaths[{From, To}].assign(Path.begin() + Pos, Path.end());
 #if LLVM_ENABLE_STATS
     auto &LocalPath = UniquePaths[{From, To}];
-    assert((LocalPath.size() <= MaximumSearchDepth + 1) &&
+    assert((LocalPath.size() <= MaxSearchDepth + 1) &&
            "Path should not be longer than the maximum searching depth");
     TailCallMaxTailCallPath = std::max(uint64_t(LocalPath.size()),
                                        TailCallMaxTailCallPath.getValue());

@@ -223,17 +223,18 @@ TEST_F(FIRBuilderTest, createGlobal2) {
 }
 
 TEST_F(FIRBuilderTest, uniqueCFIdent) {
-  auto str1 = fir::factory::uniqueCGIdent("", "func1");
+  const auto &optsCtx = llvm::clv2::defaultOptionsContext();
+  auto str1 = fir::factory::uniqueCGIdent("", "func1", optsCtx);
   EXPECT_EQ("_QQX66756E6331", str1);
-  str1 = fir::factory::uniqueCGIdent("", "");
+  str1 = fir::factory::uniqueCGIdent("", "", optsCtx);
   EXPECT_EQ("_QQX", str1);
-  str1 = fir::factory::uniqueCGIdent("pr", "func1");
+  str1 = fir::factory::uniqueCGIdent("pr", "func1", optsCtx);
   EXPECT_EQ("_QQprX66756E6331", str1);
   str1 = fir::factory::uniqueCGIdent(
-      "", "longnamemorethan32characterneedshashing");
+      "", "longnamemorethan32characterneedshashing", optsCtx);
   EXPECT_EQ("_QQXc22a886b2f30ea8c064ef1178377fc31", str1);
   str1 = fir::factory::uniqueCGIdent(
-      "pr", "longnamemorethan32characterneedshashing");
+      "pr", "longnamemorethan32characterneedshashing", optsCtx);
   EXPECT_EQ("_QQprXc22a886b2f30ea8c064ef1178377fc31", str1);
 }
 

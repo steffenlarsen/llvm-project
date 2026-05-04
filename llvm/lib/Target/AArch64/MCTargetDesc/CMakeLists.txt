@@ -1,5 +1,6 @@
 add_llvm_component_library(LLVMAArch64Desc
   AArch64AsmBackend.cpp
+  AArch64Options.cpp
   AArch64ELFObjectWriter.cpp
   AArch64ELFStreamer.cpp
   AArch64InstPrinter.cpp

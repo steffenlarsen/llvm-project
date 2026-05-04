@@ -96,20 +96,10 @@ TEST(MLGOUtilsTest, IsReleaseModelValid) {
   // With a valid embedded AOT model (MockAOTModel):
   EXPECT_TRUE(
       (isReleaseModelValid<MockAOTModel>("", TestModelChoice::Default)));
-
-  // Overload with cl::opt<EnumType>:
-  cl::opt<TestModelChoice> OptChoice("test-mlgo-utils-choice",
-                                     cl::init(TestModelChoice::Default));
-  EXPECT_FALSE((isReleaseModelValid<NoopSavedModelImpl>("", OptChoice)));
-  OptChoice = TestModelChoice::Model1;
-  EXPECT_TRUE((isReleaseModelValid<NoopSavedModelImpl>("", OptChoice)));
-  OptChoice = TestModelChoice::Default;
-  EXPECT_TRUE((isReleaseModelValid<NoopSavedModelImpl>("channel", OptChoice)));
-  EXPECT_TRUE((isReleaseModelValid<MockAOTModel>("", OptChoice)));
 }
 
 TEST(MLGOUtilsTest, CreateReleaseModeModelRunnerModelSelection) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::vector<TensorSpec> Inputs{TensorSpec::createSpec<int64_t>("a", {1}),
                                  TensorSpec::createSpec<int64_t>("b", {1})};
   TensorSpec OutputSpec = TensorSpec::createSpec<int64_t>("result", {1});
@@ -154,7 +144,7 @@ TEST(MLGOUtilsTest, CreateReleaseModeModelRunnerModelSelection) {
 }
 
 TEST(MLGOUtilsTest, CreateReleaseModeModelRunnerAOTFallback) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::vector<TensorSpec> Inputs{TensorSpec::createSpec<int64_t>("a", {1}),
                                  TensorSpec::createSpec<int64_t>("b", {1})};
   TensorSpec OutputSpec = TensorSpec::createSpec<int64_t>("result", {1});

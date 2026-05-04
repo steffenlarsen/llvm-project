@@ -10,6 +10,7 @@
 #include "bolt/Core/BinaryContext.h"
 #include "bolt/Core/DebugData.h"
 #include "bolt/Core/ParallelUtilities.h"
+#include "bolt/Utils/CommandLineOpts.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/CodeGen/DIE.h"
@@ -38,7 +39,7 @@
 #undef DEBUG_TYPE
 #define DEBUG_TYPE "bolt"
 namespace opts {
-extern cl::opt<unsigned> Verbosity;
+extern unsigned Verbosity;
 }
 namespace llvm {
 namespace bolt {
@@ -159,7 +160,7 @@ uint32_t DIEBuilder::allocDIE(const DWARFUnit &DU, const DWARFDie &DDie,
   // DIE dump is not very useful.
   // It's nice to know original offset from which this DIE was constructed.
   Die->setOffset(DDie.getOffset());
-  if (opts::Verbosity >= 1)
+  if (opts::getVerbosity(BC) >= 1)
     getState().DWARFDieAddressesParsed.insert(DDie.getOffset());
   const uint32_t DId = DWARFUnitInfo.DieInfoVector.size();
   DWARFUnitInfo.DIEIDMap[DDieOffset] = DId;
@@ -558,7 +559,7 @@ void DIEBuilder::finish() {
       continue;
     finalizeCU(*CU, UnitSize);
   }
-  if (opts::Verbosity >= 1) {
+  if (opts::getVerbosity(BC) >= 1) {
     if (!getState().DWARFDieAddressesParsed.empty())
       dbgs() << "Referenced DIE offsets not in .debug_info\n";
     for (const uint64_t Address : getState().DWARFDieAddressesParsed) {

@@ -8,16 +8,36 @@
 
 #include "llvm/FuzzMutate/FuzzerCLI.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 
 using namespace llvm;
+using namespace llvm::clv2;
 
-void llvm::parseFuzzerCLOpts(int ArgC, char *ArgV[]) {
+static std::vector<std::string> &getExecNameArgs() {
+  static std::vector<std::string> Args;
+  return Args;
+}
+
+std::unique_ptr<OptionsContext> llvm::parseFuzzerCLOpts(int ArgC,
+                                                        char *ArgV[]) {
+  OptionParser P;
+  RegisterAllLLVMOptions(P);
+  return parseFuzzerCLOpts(ArgC, ArgV, P);
+}
+
+std::unique_ptr<OptionsContext> llvm::parseFuzzerCLOpts(int ArgC, char *ArgV[],
+                                                        OptionParser &P) {
   std::vector<const char *> CLArgs;
   CLArgs.push_back(ArgV[0]);
+
+  auto &ExecArgs = getExecNameArgs();
+  for (std::size_t J = 1; J < ExecArgs.size(); ++J)
+    CLArgs.push_back(ExecArgs[J].c_str());
 
   int I = 1;
   while (I < ArgC)
@@ -26,7 +46,8 @@ void llvm::parseFuzzerCLOpts(int ArgC, char *ArgV[]) {
   while (I < ArgC)
     CLArgs.push_back(ArgV[I++]);
 
-  cl::ParseCommandLineOptions(CLArgs.size(), CLArgs.data());
+  RegisterAllLLVMOptions(P);
+  return P.parse(CLArgs.size(), CLArgs.data(), "LLVM fuzzer\n");
 }
 
 void llvm::handleExecNameEncodedBEOpts(StringRef ExecName) {
@@ -57,12 +78,7 @@ void llvm::handleExecNameEncodedBEOpts(StringRef ExecName) {
     errs() << " " << Args[I];
   errs() << "\n";
 
-  std::vector<const char *> CLArgs;
-  CLArgs.reserve(Args.size());
-  for (std::string &S : Args)
-    CLArgs.push_back(S.c_str());
-
-  cl::ParseCommandLineOptions(CLArgs.size(), CLArgs.data());
+  getExecNameArgs() = Args;
 }
 
 void llvm::handleExecNameEncodedOptimizerOpts(StringRef ExecName) {
@@ -131,12 +147,7 @@ void llvm::handleExecNameEncodedOptimizerOpts(StringRef ExecName) {
     errs() << " " << Args[I];
   errs() << "\n";
 
-  std::vector<const char *> CLArgs;
-  CLArgs.reserve(Args.size());
-  for (std::string &S : Args)
-    CLArgs.push_back(S.c_str());
-
-  cl::ParseCommandLineOptions(CLArgs.size(), CLArgs.data());
+  getExecNameArgs() = Args;
 }
 
 int llvm::runFuzzerOnInputs(int ArgC, char *ArgV[], FuzzerTestFun TestOne,

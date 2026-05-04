@@ -39,27 +39,23 @@
 #include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "aarch64-a57-fp-load-balancing"
 
-// Enforce the algorithm to use the scavenged register even when the original
-// destination register is the correct color. Used for testing.
-static cl::opt<bool>
-TransformAll("aarch64-a57-fp-load-balancing-force-all",
-             cl::desc("Always modify dest registers regardless of color"),
-             cl::init(false), cl::Hidden);
+static bool getTransformAll(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::A64_A57FPLoadBalancingForceAll>(
+      F.getContext().getOptionsContext());
+}
 
-// Never use the balance information obtained from chains - return a specific
-// color always. Used for testing.
-static cl::opt<unsigned>
-OverrideBalance("aarch64-a57-fp-load-balancing-override",
-              cl::desc("Ignore balance information, always return "
-                       "(1: Even, 2: Odd)."),
-              cl::init(0), cl::Hidden);
+static unsigned getOverrideBalance(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::A64_A57FPLoadBalancingOverride>(
+      F.getContext().getOptionsContext());
+}
 
 //===----------------------------------------------------------------------===//
 // Helper functions
@@ -263,8 +259,10 @@ public:
 
   /// Return the preferred color of this chain.
   Color getPreferredColor() {
-    if (OverrideBalance != 0)
-      return OverrideBalance == 1 ? Color::Even : Color::Odd;
+    if (getOverrideBalance(StartInst->getMF()->getFunction()) != 0)
+      return getOverrideBalance(StartInst->getMF()->getFunction()) == 1
+                 ? Color::Even
+                 : Color::Odd;
     return LastColor;
   }
 
@@ -321,7 +319,6 @@ bool AArch64A57FPLoadBalancingImpl::run(MachineFunction &MF) {
 
   MRI = &MF.getRegInfo();
   TRI = MF.getRegInfo().getTargetRegisterInfo();
-
   for (auto &MBB : MF) {
     Changed |= runOnBasicBlock(MBB);
   }
@@ -528,8 +525,7 @@ int AArch64A57FPLoadBalancingImpl::scavengeRegister(Chain *G, Color C,
   MachineBasicBlock::iterator ChainEnd = G->end();
   while (I != ChainEnd) {
     --I;
-    if (!I->isDebugInstr())
-      Units.stepBackward(*I);
+    Units.stepBackward(*I);
   }
 
   // Check which register units are alive throughout the chain.
@@ -599,7 +595,8 @@ bool AArch64A57FPLoadBalancingImpl::colorChain(Chain *G, Color C,
     if (&I != G->getKill()) {
       MachineOperand &MO = I.getOperand(0);
 
-      bool Change = TransformAll || getColor(MO.getReg()) != C;
+      bool Change = getTransformAll(MBB.getParent()->getFunction()) ||
+                    getColor(MO.getReg()) != C;
       if (G->requiresFixup() && &I == G->getLast())
         Change = false;
 

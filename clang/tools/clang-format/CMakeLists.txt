@@ -1,4 +1,4 @@
-set(LLVM_LINK_COMPONENTS support)
+set(LLVM_LINK_COMPONENTS support AllOptions)
 
 add_clang_tool(clang-format
   ClangFormat.cpp

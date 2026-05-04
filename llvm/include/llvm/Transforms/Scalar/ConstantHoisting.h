@@ -148,6 +148,7 @@ private:
   const TargetTransformInfo *TTI;
   DominatorTree *DT;
   BlockFrequencyInfo *BFI;
+  Function *Fn;
   LLVMContext *Ctx;
   const DataLayout *DL;
   BasicBlock *Entry;

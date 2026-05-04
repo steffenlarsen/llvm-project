@@ -38,9 +38,9 @@ std::unique_ptr<TargetMachine> createTargetMachine() {
 }
 
 class MachineSizeOptsTest : public testing::Test {
- protected:
-  static const char* MIRString;
-  LLVMContext Context;
+protected:
+  static const char *MIRString;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<TargetMachine> TM;
   std::unique_ptr<MachineModuleInfo> MMI;
   std::unique_ptr<MIRParser> Parser;
@@ -125,7 +125,7 @@ TEST_F(MachineSizeOptsTest, Test) {
   EXPECT_FALSE(shouldOptimizeForSize(BB3, &PSI, MBFI_F, PGSOQueryType::Test));
 }
 
-const char* MachineSizeOptsTest::MIRString = R"MIR(
+const char *MachineSizeOptsTest::MIRString = R"MIR(
 --- |
   define i32 @g(i32 %x) !prof !14 {
     ret i32 0

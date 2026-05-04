@@ -47,6 +47,7 @@
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCTargetOptions.h"
+#include "llvm/MC/MCTargetOptionsCommandFlags.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/BuildID.h"
 #include "llvm/Object/COFF.h"
@@ -57,23 +58,48 @@
 #include "llvm/Object/FaultMapParser.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Object/MachOUniversal.h"
+#include "llvm/Object/ObjectOptionsOptInfos.h"
 #include "llvm/Object/OffloadBinary.h"
 #include "llvm/Object/Wasm.h"
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/Option.h"
+#include "llvm/Support/Allocator.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/LLVMDriver.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/StringSaver.h"
+#include "llvm/Support/SupportOptions.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
+#include "llvm/Target/BPF/BPFOptionsOptInfos.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
+#include "llvm/Target/Lanai/LanaiOptionsOptInfos.h"
+#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
+#include "llvm/Target/MSP430/MSP430OptionsOptInfos.h"
+#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
+#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
+#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
+#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
+#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
+#include "llvm/Target/Sparc/SparcOptionsOptInfos.h"
+#include "llvm/Target/SystemZ/SystemZOptionsOptInfos.h"
+#include "llvm/Target/WebAssembly/WebAssemblyOptionsOptInfos.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
+#include "llvm/Target/XCore/XCoreOptionsOptInfos.h"
 #include "llvm/TargetParser/AVRTargetParser.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/RISCVISAInfo.h"
@@ -295,65 +321,36 @@ private:
 static uint64_t AdjustVMA;
 static bool AllHeaders;
 static std::string ArchName;
-bool objdump::ArchiveHeaders;
-bool objdump::Demangle;
-bool objdump::Disassemble;
-bool objdump::DisassembleAll;
-std::vector<std::string> objdump::DisassemblerOptions;
-bool objdump::SymbolDescription;
-bool objdump::TracebackTable;
+ObjdumpOptions objdump::Opts;
+std::vector<std::string> objdump::SourceDirs;
+std::vector<std::pair<std::string, std::string>> objdump::SubstitutePaths;
+bool objdump::UnwindShowWODPool = false;
 static std::vector<std::string> DisassembleSymbols;
 static bool DisassembleZeroes;
-ColorOutput objdump::DisassemblyColor;
-DIDumpType objdump::DwarfDumpType;
 static bool DynamicRelocations;
 static bool FaultMapSection;
 static bool FileHeaders;
-bool objdump::SectionContents;
 static std::vector<std::string> InputFilenames;
-bool objdump::PrintLines;
 static bool MachOOpt;
-std::string objdump::MCPU;
-std::vector<std::string> objdump::MAttrs;
-bool objdump::ShowRawInsn;
-bool objdump::LeadingAddr;
 static bool Offloading;
 static bool RawClangAST;
-bool objdump::Relocations;
-bool objdump::PrintImmHex;
-bool objdump::PrivateHeaders;
-std::vector<std::string> objdump::FilterSections;
-bool objdump::SectionHeaders;
 static bool ShowAllSymbols;
 static bool ShowLMA;
-bool objdump::PrintSource;
 
 static uint64_t StartAddress;
 static bool HasStartAddressFlag;
 static uint64_t StopAddress = UINT64_MAX;
 static bool HasStopAddressFlag;
 
-bool objdump::SymbolTable;
 static std::optional<bool> SymbolizeOperandsOption;
 static bool SymbolizeOperands;
 static bool PrettyPGOAnalysisMap;
 static bool DynamicSymbolTable;
-std::string objdump::TripleName;
-bool objdump::UnwindInfo;
-bool objdump::UnwindShowWODPool;
-std::string objdump::Prefix;
-uint32_t objdump::PrefixStrip;
-std::vector<std::pair<std::string, std::string>> objdump::SubstitutePaths;
-std::vector<std::string> objdump::SourceDirs;
-
-DebugFormat objdump::DbgVariables = DFDisabled;
-DebugFormat objdump::DbgInlinedFunctions = DFDisabled;
-
-int objdump::DbgIndent = 52;
 
 static StringSet<> DisasmSymbolSet;
 StringSet<> objdump::FoundSectionSet;
 static StringRef ToolName;
+static std::unique_ptr<clv2::OptionsContext> ParsedOptsCtx;
 
 std::unique_ptr<BuildIDFetcher> BIDFetcher;
 
@@ -405,7 +402,7 @@ struct FilterResult {
 } // namespace
 
 static FilterResult checkSectionFilter(object::SectionRef S) {
-  if (FilterSections.empty())
+  if (Opts.FilterSections.empty())
     return {/*Keep=*/true, /*IncrementIndex=*/true};
 
   Expected<StringRef> SecNameOrErr = S.getName();
@@ -420,9 +417,9 @@ static FilterResult checkSectionFilter(object::SectionRef S) {
   if (!SecName.empty())
     FoundSectionSet.insert(SecName);
 
-  // Only show the section if it's in the FilterSections list, but always
+  // Only show the section if it's in the Opts.FilterSections list, but always
   // increment so the indexing is stable.
-  return {/*Keep=*/is_contained(FilterSections, SecName),
+  return {/*Keep=*/is_contained(Opts.FilterSections, SecName),
           /*IncrementIndex=*/true};
 }
 
@@ -495,7 +492,7 @@ static void reportCmdLineWarning(const Twine &Message) {
 
 static void warnOnNoMatchForSections() {
   SetVector<StringRef> MissingSections;
-  for (StringRef S : FilterSections) {
+  for (StringRef S : Opts.FilterSections) {
     if (FoundSectionSet.count(S))
       return;
     // User may specify a unnamed section. Don't warn for it.
@@ -503,7 +500,7 @@ static void warnOnNoMatchForSections() {
       MissingSections.insert(S);
   }
 
-  // Warn only if no section in FilterSections is matched.
+  // Warn only if no section in Opts.FilterSections is matched.
   for (StringRef S : MissingSections)
     reportCmdLineWarning("section '" + S +
                          "' mentioned in a -j/--section option, but not "
@@ -513,10 +510,10 @@ static void warnOnNoMatchForSections() {
 static const Target *getTarget(const ObjectFile *Obj) {
   // Figure out the target triple.
   Triple TheTriple("unknown-unknown-unknown");
-  if (TripleName.empty()) {
+  if (Opts.TripleName.empty()) {
     TheTriple = Obj->makeTriple();
   } else {
-    TheTriple.setTriple(Triple::normalize(TripleName));
+    TheTriple.setTriple(Triple::normalize(Opts.TripleName));
     auto Arch = Obj->getArch();
     if (Arch == Triple::arm || Arch == Triple::armeb)
       Obj->setARMSubArch(TheTriple);
@@ -530,7 +527,7 @@ static const Target *getTarget(const ObjectFile *Obj) {
     reportError(Obj->getFileName(), "cannot find target: " + Error);
 
   // Update the triple name and return the found target.
-  TripleName = TheTriple.getTriple();
+  Opts.TripleName = TheTriple.getTriple();
   return TheTarget;
 }
 
@@ -591,7 +588,7 @@ static bool getHidden(RelocationRef RelRef) {
 /// Get the column at which we want to start printing the instruction
 /// disassembly, taking into account anything which appears to the left of it.
 unsigned objdump::getInstStartColumn(const MCSubtargetInfo &STI) {
-  return !ShowRawInsn ? 16 : STI.getTargetTriple().isX86() ? 40 : 24;
+  return !Opts.ShowRawInsn ? 16 : STI.getTargetTriple().isX86() ? 40 : 24;
 }
 
 static void AlignToInstStartColumn(size_t Start, const MCSubtargetInfo &STI,
@@ -607,9 +604,9 @@ void objdump::printRawData(ArrayRef<uint8_t> Bytes, uint64_t Address,
                            formatted_raw_ostream &OS,
                            MCSubtargetInfo const &STI) {
   size_t Start = OS.tell();
-  if (LeadingAddr)
+  if (Opts.LeadingAddr)
     OS << format("%8" PRIx64 ":", Address);
-  if (ShowRawInsn) {
+  if (Opts.ShowRawInsn) {
     OS << ' ';
     dumpBytes(Bytes, OS);
   }
@@ -693,10 +690,10 @@ static void printRelocation(formatted_raw_ostream &OS, StringRef FileName,
   SmallString<32> Val;
   StringRef Name = getRelocTypeName(Rel, RelocName, CurrentRISCVVendorSymbol,
                                     CurrentRISCVVendorOffset);
-  if (Error E = getRelocationValueString(Rel, SymbolDescription, Val))
+  if (Error E = getRelocationValueString(Rel, Opts.SymbolDescription, Val))
     reportError(std::move(E), FileName);
-  OS << (Is64Bits || !LeadingAddr ? "\t\t" : "\t\t\t");
-  if (LeadingAddr)
+  OS << (Is64Bits || !Opts.LeadingAddr ? "\t\t" : "\t\t\t");
+  if (Opts.LeadingAddr)
     OS << format(Fmt.data(), Address);
   OS << Name << "\t" << Val;
 }
@@ -711,7 +708,7 @@ static void printBTFRelocation(formatted_raw_ostream &FOS, llvm::BTFParser &BTF,
   SmallString<64> Val;
   BTF.symbolize(Reloc, Val);
   FOS << "\t\t";
-  if (LeadingAddr)
+  if (Opts.LeadingAddr)
     FOS << format("%016" PRIx64 ":  ", Address.Address + AdjustVMA);
   FOS << "CO-RE " << Val;
   LEP.printAfterOtherLine(FOS, true);
@@ -726,7 +723,7 @@ public:
             StringRef Annot, MCSubtargetInfo const &STI, SourcePrinter *SP,
             StringRef ObjectFilename, std::vector<RelocationRef> *Rels,
             LiveElementPrinter &LEP) {
-    if (SP && (PrintSource || PrintLines))
+    if (SP && (Opts.PrintSource || Opts.PrintLines))
       SP->printSourceLine(OS, Address, ObjectFilename, LEP);
     LEP.printBoundaryLine(OS, Address, false);
     LEP.printBetweenInsts(OS, false);
@@ -781,9 +778,9 @@ public:
 
   void printLead(ArrayRef<uint8_t> Bytes, uint64_t Address,
                  formatted_raw_ostream &OS) {
-    if (LeadingAddr)
+    if (Opts.LeadingAddr)
       OS << format("%8" PRIx64 ":", Address);
-    if (ShowRawInsn) {
+    if (Opts.ShowRawInsn) {
       OS << "\t";
       if (Bytes.size() >= 4) {
         dumpBytes(Bytes.slice(0, 4), OS);
@@ -829,7 +826,7 @@ public:
                  StringRef Annot, MCSubtargetInfo const &STI, SourcePrinter *SP,
                  StringRef ObjectFilename, std::vector<RelocationRef> *Rels,
                  LiveElementPrinter &LEP) override {
-    if (SP && (PrintSource || PrintLines))
+    if (SP && (Opts.PrintSource || Opts.PrintLines))
       SP->printSourceLine(OS, Address, ObjectFilename, LEP, "");
     if (!MI) {
       printLead(Bytes, Address.Address, OS);
@@ -840,7 +837,7 @@ public:
 
     StringRef Preamble = IsStartOfBundle ? " { " : "   ";
 
-    if (SP && (PrintSource || PrintLines))
+    if (SP && (Opts.PrintSource || Opts.PrintLines))
       SP->printSourceLine(OS, Address, ObjectFilename, LEP, "");
     printLead(Bytes, Address.Address, OS);
     OS << Preamble;
@@ -903,7 +900,7 @@ public:
                  StringRef Annot, MCSubtargetInfo const &STI, SourcePrinter *SP,
                  StringRef ObjectFilename, std::vector<RelocationRef> *Rels,
                  LiveElementPrinter &LEP) override {
-    if (SP && (PrintSource || PrintLines))
+    if (SP && (Opts.PrintSource || Opts.PrintLines))
       SP->printSourceLine(OS, Address, ObjectFilename, LEP);
 
     if (MI) {
@@ -956,11 +953,11 @@ public:
                  StringRef Annot, MCSubtargetInfo const &STI, SourcePrinter *SP,
                  StringRef ObjectFilename, std::vector<RelocationRef> *Rels,
                  LiveElementPrinter &LEP) override {
-    if (SP && (PrintSource || PrintLines))
+    if (SP && (Opts.PrintSource || Opts.PrintLines))
       SP->printSourceLine(OS, Address, ObjectFilename, LEP);
-    if (LeadingAddr)
+    if (Opts.LeadingAddr)
       OS << format("%8" PRId64 ":", Address.Address / 8);
-    if (ShowRawInsn) {
+    if (Opts.ShowRawInsn) {
       OS << "\t";
       dumpBytes(Bytes, OS);
     }
@@ -979,15 +976,15 @@ public:
                  StringRef Annot, MCSubtargetInfo const &STI, SourcePrinter *SP,
                  StringRef ObjectFilename, std::vector<RelocationRef> *Rels,
                  LiveElementPrinter &LEP) override {
-    if (SP && (PrintSource || PrintLines))
+    if (SP && (Opts.PrintSource || Opts.PrintLines))
       SP->printSourceLine(OS, Address, ObjectFilename, LEP);
     LEP.printBoundaryLine(OS, Address, false);
     LEP.printBetweenInsts(OS, false);
 
     size_t Start = OS.tell();
-    if (LeadingAddr)
+    if (Opts.LeadingAddr)
       OS << format("%8" PRIx64 ":", Address.Address);
-    if (ShowRawInsn) {
+    if (Opts.ShowRawInsn) {
       size_t Pos = 0, End = Bytes.size();
       if (STI.checkFeatures("+thumb-mode")) {
         for (; Pos + 2 <= End; Pos += 2)
@@ -1034,15 +1031,15 @@ public:
                  StringRef Annot, MCSubtargetInfo const &STI, SourcePrinter *SP,
                  StringRef ObjectFilename, std::vector<RelocationRef> *Rels,
                  LiveElementPrinter &LEP) override {
-    if (SP && (PrintSource || PrintLines))
+    if (SP && (Opts.PrintSource || Opts.PrintLines))
       SP->printSourceLine(OS, Address, ObjectFilename, LEP);
     LEP.printBoundaryLine(OS, Address, false);
     LEP.printBetweenInsts(OS, false);
 
     size_t Start = OS.tell();
-    if (LeadingAddr)
+    if (Opts.LeadingAddr)
       OS << format("%8" PRIx64 ":", Address.Address);
-    if (ShowRawInsn) {
+    if (Opts.ShowRawInsn) {
       size_t Pos = 0, End = Bytes.size();
       for (; Pos + 4 <= End; Pos += 4)
         OS << ' '
@@ -1073,15 +1070,15 @@ public:
                  StringRef Annot, MCSubtargetInfo const &STI, SourcePrinter *SP,
                  StringRef ObjectFilename, std::vector<RelocationRef> *Rels,
                  LiveElementPrinter &LEP) override {
-    if (SP && (PrintSource || PrintLines))
+    if (SP && (Opts.PrintSource || Opts.PrintLines))
       SP->printSourceLine(OS, Address, ObjectFilename, LEP);
     LEP.printBoundaryLine(OS, Address, false);
     LEP.printBetweenInsts(OS, false);
 
     size_t Start = OS.tell();
-    if (LeadingAddr)
+    if (Opts.LeadingAddr)
       OS << format("%8" PRIx64 ":", Address.Address);
-    if (ShowRawInsn) {
+    if (Opts.ShowRawInsn) {
       size_t Pos = 0, End = Bytes.size();
       if (End % 4 == 0) {
         // 32-bit and 64-bit instructions.
@@ -1175,13 +1172,20 @@ DisassemblerTarget::DisassemblerTarget(const Target *TheTarget, ObjectFile &Obj,
   if (!RegisterInfo)
     reportError(Obj.getFileName(), "no register info for target " + TripleName);
 
+  // Thread the OptionsContext from parseOptionsFromArgs into MCTargetOptions
+  // so that MC-layer options (e.g. x86-asm-syntax) are visible.
+  if (ParsedOptsCtx)
+    if (ParsedOptsCtx)
+      Options.OptsCtx = ParsedOptsCtx.get();
+
   // Set up disassembler.
   AsmInfo.reset(TheTarget->createMCAsmInfo(*RegisterInfo, TheTriple, Options));
   if (!AsmInfo)
     reportError(Obj.getFileName(), "no assembly info for target " + TripleName);
 
-  SubtargetInfo.reset(
-      TheTarget->createMCSubtargetInfo(TheTriple, MCPU, Features.getString()));
+  SubtargetInfo.reset(TheTarget->createMCSubtargetInfo(
+      TheTriple, MCPU, Features.getString(),
+      ParsedOptsCtx ? *ParsedOptsCtx : llvm::clv2::defaultOptionsContext()));
   if (!SubtargetInfo)
     reportError(Obj.getFileName(),
                 "no subtarget info for target " + TripleName);
@@ -1191,6 +1195,8 @@ DisassemblerTarget::DisassemblerTarget(const Target *TheTarget, ObjectFile &Obj,
                 "no instruction info for target " + TripleName);
   Context = std::make_shared<MCContext>(TheTriple, *AsmInfo, *RegisterInfo,
                                         *SubtargetInfo);
+  if (ParsedOptsCtx)
+    Context->setOptionsContext(*ParsedOptsCtx);
 
   // FIXME: for now initialize MCObjectFileInfo with default values
   ObjectFileInfo.reset(
@@ -1214,12 +1220,14 @@ DisassemblerTarget::DisassemblerTarget(const Target *TheTarget, ObjectFile &Obj,
   if (!InstPrinter)
     reportError(Obj.getFileName(),
                 "no instruction printer for target " + TripleName);
-  InstPrinter->setPrintImmHex(PrintImmHex);
+  if (ParsedOptsCtx)
+    InstPrinter->setOptionsContext(*ParsedOptsCtx);
+  InstPrinter->setPrintImmHex(Opts.PrintImmHex);
   InstPrinter->setPrintBranchImmAsAddress(true);
   InstPrinter->setSymbolizeOperands(SymbolizeOperands);
   InstPrinter->setMCInstrAnalysis(InstrAnalysis.get());
 
-  switch (DisassemblyColor) {
+  switch (Opts.DisassemblyColor) {
   case ColorOutput::Enable:
     InstPrinter->setUseColor(true);
     break;
@@ -1236,8 +1244,10 @@ DisassemblerTarget::DisassemblerTarget(const Target *TheTarget, ObjectFile &Obj,
 DisassemblerTarget::DisassemblerTarget(DisassemblerTarget &Other,
                                        SubtargetFeatures &Features)
     : TheTarget(Other.TheTarget), TheTriple(Other.TheTriple),
-      SubtargetInfo(TheTarget->createMCSubtargetInfo(TheTriple, MCPU,
-                                                     Features.getString())),
+      SubtargetInfo(TheTarget->createMCSubtargetInfo(
+          TheTriple, Opts.MCPU, Features.getString(),
+          ParsedOptsCtx ? *ParsedOptsCtx
+                        : llvm::clv2::defaultOptionsContext())),
       Context(Other.Context),
       DisAsm(TheTarget->createMCDisassembler(*SubtargetInfo, *Context)),
       InstrAnalysis(Other.InstrAnalysis), InstPrinter(Other.InstPrinter),
@@ -1513,14 +1523,14 @@ public:
         // postProcessAndChecking and catches mutually-exclusive pairs such
         // as f/zfinx.  On conflict, silently drop --mattr for this region
         // rather than producing an inconsistent decoder.
-        if (!MAttrs.empty()) {
+        if (!Opts.MAttrs.empty()) {
           SubtargetFeatures Combined;
           Combined.addFeaturesVector(ISAFeatures);
-          for (auto &F : MAttrs)
+          for (auto &F : Opts.MAttrs)
             Combined.AddFeature(F);
           if (auto Check = RISCVISAInfo::parseFeatures(
                   (*ParseResult)->getXLen(), Combined.getFeatures())) {
-            for (auto &F : MAttrs)
+            for (auto &F : Opts.MAttrs)
               Features.AddFeature(F);
           } else {
             consumeError(Check.takeError());
@@ -1626,7 +1636,7 @@ SymbolInfoTy objdump::createSymbolInfo(const ObjectFile &Obj,
   const uint64_t Addr = unwrapOrError(Symbol.getAddress(), FileName);
   const StringRef Name = unwrapOrError(Symbol.getName(), FileName);
 
-  if (Obj.isXCOFF() && (SymbolDescription || TracebackTable)) {
+  if (Obj.isXCOFF() && (Opts.SymbolDescription || Opts.TracebackTable)) {
     const auto &XCOFFObj = cast<XCOFFObjectFile>(Obj);
     DataRefImpl SymbolDRI = Symbol.getRawDataRefImpl();
 
@@ -1653,7 +1663,7 @@ SymbolInfoTy objdump::createSymbolInfo(const ObjectFile &Obj,
 static SymbolInfoTy createDummySymbolInfo(const ObjectFile &Obj,
                                           const uint64_t Addr, StringRef &Name,
                                           uint8_t Type) {
-  if (Obj.isXCOFF() && (SymbolDescription || TracebackTable))
+  if (Obj.isXCOFF() && (Opts.SymbolDescription || Opts.TracebackTable))
     return SymbolInfoTy(std::nullopt, Addr, Name, std::nullopt, false);
   if (Obj.isWasm())
     return SymbolInfoTy(Addr, Name, wasm::WASM_SYMBOL_TYPE_SECTION);
@@ -1919,7 +1929,7 @@ disassembleObject(ObjectFile &Obj, const ObjectFile &DbgObj,
       reportWarning(toString(NameOrErr.takeError()), FileName);
       continue;
     }
-    if (NameOrErr->empty() && !(Obj.isXCOFF() && SymbolDescription))
+    if (NameOrErr->empty() && !(Obj.isXCOFF() && Opts.SymbolDescription))
       continue;
 
     if (Obj.isELF() &&
@@ -2070,7 +2080,8 @@ disassembleObject(ObjectFile &Obj, const ObjectFile &DbgObj,
   std::unique_ptr<DWARFContext> DICtx;
   LiveElementPrinter LEP(*DT->Context->getRegisterInfo(), *DT->SubtargetInfo);
 
-  if (DbgVariables != DFDisabled || DbgInlinedFunctions != DFDisabled) {
+  if (Opts.DbgVariables != DFDisabled ||
+      Opts.DbgInlinedFunctions != DFDisabled) {
     DICtx = DWARFContext::create(DbgObj);
     for (const std::unique_ptr<DWARFUnit> &CU : DICtx->compile_units())
       LEP.addCompileUnit(CU->getUnitDIE(false));
@@ -2113,7 +2124,7 @@ disassembleObject(ObjectFile &Obj, const ObjectFile &DbgObj,
   }
 
   for (const SectionRef &Section : ToolSectionFilter(Obj)) {
-    if (FilterSections.empty() && !DisassembleAll &&
+    if (Opts.FilterSections.empty() && !Opts.DisassembleAll &&
         (!Section.isText() || Section.isVirtual()))
       continue;
 
@@ -2211,7 +2222,7 @@ disassembleObject(ObjectFile &Obj, const ObjectFile &DbgObj,
       // any. If we don't call demangle() then that vector can stay empty.
       std::vector<StringRef> SymNamesHere;
       std::vector<std::string> DemangledSymNamesHere;
-      if (Demangle) {
+      if (Opts.Demangle) {
         // Fetch the demangled names and store them locally.
         for (const SymbolInfoTy &Symbol : SymbolsHere)
           DemangledSymNamesHere.push_back(demangle(Symbol.Name));
@@ -2244,7 +2255,7 @@ disassembleObject(ObjectFile &Obj, const ObjectFile &DbgObj,
       // code-related symbol name to go with it.
       bool DisassembleAsELFData = false;
       size_t DisplaySymIndex = SymbolsHere.size() - 1;
-      if (Obj.isELF() && !DisassembleAll && Section.isText()) {
+      if (Obj.isELF() && !Opts.DisassembleAll && Section.isText()) {
         DisassembleAsELFData = true; // unless we find a code symbol below
 
         for (size_t i = 0; i < SymbolsHere.size(); ++i) {
@@ -2328,10 +2339,10 @@ disassembleObject(ObjectFile &Obj, const ObjectFile &DbgObj,
           OS << '\n';
           PrintedLabel = true;
         }
-        if (LeadingAddr)
+        if (Opts.LeadingAddr)
           OS << format(Is64Bits ? "%016" PRIx64 " " : "%08" PRIx64 " ",
                        SectionAddr + Start + VMAAdjustment);
-        if (Obj.isXCOFF() && SymbolDescription) {
+        if (Obj.isXCOFF() && Opts.SymbolDescription) {
           OS << getXCOFFSymbolDescription(Symbol, SymbolName) << ":\n";
         } else
           OS << '<' << SymbolName << ">:\n";
@@ -2422,7 +2433,7 @@ disassembleObject(ObjectFile &Obj, const ObjectFile &DbgObj,
 
       bool DumpARMELFData = false;
       bool DumpTracebackTableForXCOFFFunction =
-          Obj.isXCOFF() && Section.isText() && TracebackTable &&
+          Obj.isXCOFF() && Section.isText() && Opts.TracebackTable &&
           Symbols[SI - 1].XCOFFSymInfo.StorageMappingClass &&
           (*Symbols[SI - 1].XCOFFSymInfo.StorageMappingClass == XCOFF::XMC_PR);
 
@@ -2672,8 +2683,9 @@ disassembleObject(ObjectFile &Obj, const ObjectFile &DbgObj,
               if (TargetSym != nullptr) {
                 uint64_t TargetAddress = TargetSym->Addr;
                 uint64_t Disp = Target - TargetAddress;
-                std::string TargetName = Demangle ? demangle(TargetSym->Name)
-                                                  : TargetSym->Name.str();
+                std::string TargetName = Opts.Demangle
+                                             ? demangle(TargetSym->Name)
+                                             : TargetSym->Name.str();
                 bool RelFixedUp = false;
                 SmallString<32> Val;
 
@@ -2822,12 +2834,12 @@ static void disassembleObject(ObjectFile *Obj, bool InlineRelocs,
   if (!FeaturesValue)
     reportError(FeaturesValue.takeError(), Obj->getFileName());
   SubtargetFeatures Features = *FeaturesValue;
-  if (!MAttrs.empty()) {
-    for (unsigned I = 0; I != MAttrs.size(); ++I)
-      Features.AddFeature(MAttrs[I]);
-  } else if (MCPU.empty() && Obj->makeTriple().isAArch64()) {
+  if (!Opts.MAttrs.empty()) {
+    for (unsigned I = 0; I != Opts.MAttrs.size(); ++I)
+      Features.AddFeature(Opts.MAttrs[I]);
+  } else if (Opts.MCPU.empty() && Obj->makeTriple().isAArch64()) {
     Features.AddFeature("+all");
-  } else if (MCPU.empty() && Obj->makeTriple().isAVR()) {
+  } else if (Opts.MCPU.empty() && Obj->makeTriple().isAVR()) {
     if (const auto *Elf = dyn_cast<ELFObjectFileBase>(Obj)) {
       if (Expected<std::string> VersionOrErr = AVR::getFeatureSetFromEFlag(
               Elf->getPlatformFlags() & ELF::EF_AVR_ARCH_MASK)) {
@@ -2844,8 +2856,8 @@ static void disassembleObject(ObjectFile *Obj, bool InlineRelocs,
     }
   }
 
-  if (MCPU.empty())
-    MCPU = Obj->tryGetCPUName().value_or("").str();
+  if (Opts.MCPU.empty())
+    Opts.MCPU = Obj->tryGetCPUName().value_or("").str();
 
   if (isArmElf(*Obj)) {
     // When disassembling big-endian Arm ELF, the instruction endianness is
@@ -2870,7 +2882,8 @@ static void disassembleObject(ObjectFile *Obj, bool InlineRelocs,
     }
   }
 
-  DisassemblerTarget PrimaryTarget(TheTarget, *Obj, TripleName, MCPU, Features);
+  DisassemblerTarget PrimaryTarget(TheTarget, *Obj, Opts.TripleName, Opts.MCPU,
+                                   Features);
 
   // If we have an ARM object file, we need a second disassembler, because
   // ARM CPUs have two different instruction sets: ARM mode, and Thumb mode.
@@ -2890,7 +2903,7 @@ static void disassembleObject(ObjectFile *Obj, bool InlineRelocs,
     const chpe_metadata *CHPEMetadata = COFFObj->getCHPEMetadata();
     if (CHPEMetadata && CHPEMetadata->CodeMapCount) {
       // Set up x86_64 disassembler for ARM64EC binaries.
-      Triple X64Triple(TripleName);
+      Triple X64Triple(Opts.TripleName);
       X64Triple.setArch(Triple::ArchType::x86_64);
 
       std::string Error;
@@ -2933,7 +2946,7 @@ static void disassembleObject(ObjectFile *Obj, bool InlineRelocs,
 
   SourcePrinter SP(DbgObj, TheTarget->getName());
 
-  for (StringRef Opt : DisassemblerOptions)
+  for (StringRef Opt : Opts.DisassemblerOptions)
     if (!PrimaryTarget.InstPrinter->applyTargetSpecificCLOption(Opt))
       reportError(Obj->getFileName(),
                   "Unrecognized disassembler option: " + Opt);
@@ -2995,8 +3008,8 @@ void Dumper::printRelocations() {
         StringRef Name = getRelocTypeName(Reloc, RelocName,
                                           CurrentRISCVVendorSymbol,
                                           CurrentRISCVVendorOffset);
-        if (Error E =
-                getRelocationValueString(Reloc, SymbolDescription, ValueStr))
+        if (Error E = getRelocationValueString(Reloc, Opts.SymbolDescription,
+                                               ValueStr))
           reportUniqueWarning(std::move(E));
 
         outs() << format(Fmt.data(), Address) << " "
@@ -3286,9 +3299,9 @@ void Dumper::printSymbol(const SymbolRef &Symbol,
         if (NameOrErr) {
           outs() << " (csect:";
           std::string SymName =
-              Demangle ? demangle(*NameOrErr) : NameOrErr->str();
+              Opts.Demangle ? demangle(*NameOrErr) : NameOrErr->str();
 
-          if (SymbolDescription)
+          if (Opts.SymbolDescription)
             SymName = getXCOFFSymbolDescription(createSymbolInfo(O, *SymRef),
                                                 SymName);
 
@@ -3344,8 +3357,8 @@ void Dumper::printSymbol(const SymbolRef &Symbol,
     outs() << " .hidden";
   }
 
-  std::string SymName = Demangle ? demangle(Name) : Name.str();
-  if (O.isXCOFF() && SymbolDescription)
+  std::string SymName = Opts.Demangle ? demangle(Name) : Name.str();
+  if (O.isXCOFF() && Opts.SymbolDescription)
     SymName = getXCOFFSymbolDescription(createSymbolInfo(O, Symbol), SymName);
 
   outs() << ' ' << SymName << '\n';
@@ -3577,35 +3590,35 @@ static void dumpObject(ObjectFile *O, const Archive *A = nullptr,
 
   // Note: the order here matches GNU objdump for compatability.
   StringRef ArchiveName = A ? A->getFileName() : "";
-  if (ArchiveHeaders && !MachOOpt && C)
+  if (Opts.ArchiveHeaders && !MachOOpt && C)
     printArchiveChild(ArchiveName, *C);
   if (FileHeaders)
     printFileHeaders(O);
-  if (PrivateHeaders || FirstPrivateHeader)
+  if (Opts.PrivateHeaders || FirstPrivateHeader)
     D.printPrivateHeaders();
-  if (SectionHeaders)
+  if (Opts.SectionHeaders)
     printSectionHeaders(*O);
-  if (SymbolTable)
+  if (Opts.SymbolTable)
     D.printSymbolTable(ArchiveName);
   if (DynamicSymbolTable)
     D.printSymbolTable(ArchiveName, /*ArchitectureName=*/"",
                        /*DumpDynamic=*/true);
-  if (DwarfDumpType != DIDT_Null) {
+  if (Opts.DwarfDumpType != DIDT_Null) {
     std::unique_ptr<DIContext> DICtx = DWARFContext::create(*O);
     // Dump the complete DWARF structure.
     DIDumpOptions DumpOpts;
-    DumpOpts.DumpType = DwarfDumpType;
+    DumpOpts.DumpType = Opts.DwarfDumpType;
     DICtx->dump(outs(), DumpOpts);
   }
-  if (Relocations && !Disassemble)
+  if (Opts.Relocations && !Opts.Disassemble)
     D.printRelocations();
   if (DynamicRelocations)
     D.printDynamicRelocations();
-  if (SectionContents)
+  if (Opts.SectionContents)
     printSectionContents(O);
-  if (Disassemble)
-    disassembleObject(O, Relocations, outs());
-  if (UnwindInfo)
+  if (Opts.Disassemble)
+    disassembleObject(O, Opts.Relocations, outs());
+  if (Opts.UnwindInfo)
     printUnwindInfo(O);
 
   // Mach-O specific options:
@@ -3640,9 +3653,9 @@ static void dumpObject(const COFFImportFile *I, const Archive *A,
            << ":\tfile format COFF-import-file"
            << "\n\n";
 
-  if (ArchiveHeaders && !MachOOpt && C)
+  if (Opts.ArchiveHeaders && !MachOOpt && C)
     printArchiveChild(ArchiveName, *C);
-  if (SymbolTable)
+  if (Opts.SymbolTable)
     printCOFFSymbolTable(*I);
 }
 
@@ -3738,8 +3751,8 @@ commaSeparatedValues(const llvm::opt::InputArgList &InputArgs, int ID) {
 static void mcpuHelp() {
   Triple TheTriple;
 
-  if (!TripleName.empty()) {
-    TheTriple.setTriple(TripleName);
+  if (!Opts.TripleName.empty()) {
+    TheTriple.setTriple(Opts.TripleName);
   } else {
     assert(!InputFilenames.empty());
     Expected<OwningBinary<Binary>> OBinary = createBinary(InputFilenames[0]);
@@ -3785,47 +3798,48 @@ static void mcpuHelp() {
   // We need to access the Help() through the corresponding MCSubtargetInfo.
   // To avoid a memory leak, we wrap the createMcSubtargetInfo result in a
   // unique_ptr.
-  std::unique_ptr<MCSubtargetInfo> MSI(
-      DummyTarget->createMCSubtargetInfo(TheTriple, "help", ""));
+  std::unique_ptr<MCSubtargetInfo> MSI(DummyTarget->createMCSubtargetInfo(
+      TheTriple, "help", "",
+      ParsedOptsCtx ? *ParsedOptsCtx : llvm::clv2::defaultOptionsContext()));
 }
 
 static void parseOtoolOptions(const llvm::opt::InputArgList &InputArgs) {
   MachOOpt = true;
   FullLeadingAddr = true;
-  PrintImmHex = true;
+  Opts.PrintImmHex = true;
 
   ArchName = InputArgs.getLastArgValue(OTOOL_arch).str();
   if (!ArchName.empty())
     ArchFlags.push_back(ArchName);
-  ArchiveHeaders = InputArgs.hasArg(OTOOL_a);
+  Opts.ArchiveHeaders = InputArgs.hasArg(OTOOL_a);
   LinkOptHints = InputArgs.hasArg(OTOOL_C);
   if (InputArgs.hasArg(OTOOL_d))
-    FilterSections.push_back("__DATA,__data");
+    Opts.FilterSections.push_back("__DATA,__data");
   DylibId = InputArgs.hasArg(OTOOL_D);
   UniversalHeaders = InputArgs.hasArg(OTOOL_f);
   DataInCode = InputArgs.hasArg(OTOOL_G);
   FirstPrivateHeader = InputArgs.hasArg(OTOOL_h);
   IndirectSymbols = InputArgs.hasArg(OTOOL_I);
-  ShowRawInsn = InputArgs.hasArg(OTOOL_j);
-  PrivateHeaders = InputArgs.hasArg(OTOOL_l);
+  Opts.ShowRawInsn = InputArgs.hasArg(OTOOL_j);
+  Opts.PrivateHeaders = InputArgs.hasArg(OTOOL_l);
   DylibsUsed = InputArgs.hasArg(OTOOL_L);
-  MCPU = InputArgs.getLastArgValue(OTOOL_mcpu_EQ).str();
+  Opts.MCPU = InputArgs.getLastArgValue(OTOOL_mcpu_EQ).str();
   ObjcMetaData = InputArgs.hasArg(OTOOL_o);
   DisSymName = InputArgs.getLastArgValue(OTOOL_p).str();
   InfoPlist = InputArgs.hasArg(OTOOL_P);
-  Relocations = InputArgs.hasArg(OTOOL_r);
+  Opts.Relocations = InputArgs.hasArg(OTOOL_r);
   if (const Arg *A = InputArgs.getLastArg(OTOOL_s)) {
     auto Filter = (A->getValue(0) + StringRef(",") + A->getValue(1)).str();
-    FilterSections.push_back(Filter);
+    Opts.FilterSections.push_back(Filter);
   }
   if (InputArgs.hasArg(OTOOL_t))
-    FilterSections.push_back("__TEXT,__text");
+    Opts.FilterSections.push_back("__TEXT,__text");
   Verbose = InputArgs.hasArg(OTOOL_v) || InputArgs.hasArg(OTOOL_V) ||
             InputArgs.hasArg(OTOOL_o);
   SymbolicOperands = InputArgs.hasArg(OTOOL_V);
   if (InputArgs.hasArg(OTOOL_x))
-    FilterSections.push_back(",__text");
-  LeadingAddr = LeadingHeaders = !InputArgs.hasArg(OTOOL_X);
+    Opts.FilterSections.push_back(",__text");
+  Opts.LeadingAddr = LeadingHeaders = !InputArgs.hasArg(OTOOL_X);
 
   ChainedFixups = InputArgs.hasArg(OTOOL_chained_fixups);
   DyldInfo = InputArgs.hasArg(OTOOL_dyld_info);
@@ -3849,51 +3863,51 @@ static void parseObjdumpOptions(const llvm::opt::InputArgList &InputArgs) {
   parseIntArg(InputArgs, OBJDUMP_adjust_vma_EQ, AdjustVMA);
   AllHeaders = InputArgs.hasArg(OBJDUMP_all_headers);
   ArchName = InputArgs.getLastArgValue(OBJDUMP_arch_name_EQ).str();
-  ArchiveHeaders = InputArgs.hasArg(OBJDUMP_archive_headers);
-  Demangle = InputArgs.hasArg(OBJDUMP_demangle);
-  Disassemble = InputArgs.hasArg(OBJDUMP_disassemble);
-  DisassembleAll = InputArgs.hasArg(OBJDUMP_disassemble_all);
-  SymbolDescription = InputArgs.hasArg(OBJDUMP_symbol_description);
-  TracebackTable = InputArgs.hasArg(OBJDUMP_traceback_table);
+  Opts.ArchiveHeaders = InputArgs.hasArg(OBJDUMP_archive_headers);
+  Opts.Demangle = InputArgs.hasArg(OBJDUMP_demangle);
+  Opts.Disassemble = InputArgs.hasArg(OBJDUMP_disassemble);
+  Opts.DisassembleAll = InputArgs.hasArg(OBJDUMP_disassemble_all);
+  Opts.SymbolDescription = InputArgs.hasArg(OBJDUMP_symbol_description);
+  Opts.TracebackTable = InputArgs.hasArg(OBJDUMP_traceback_table);
   DisassembleSymbols =
       commaSeparatedValues(InputArgs, OBJDUMP_disassemble_symbols_EQ);
   for (auto Sym : InputArgs.getAllArgValues(OBJDUMP_disassemble_EQ))
     DisassembleSymbols.push_back(Sym);
   DisassembleZeroes = InputArgs.hasArg(OBJDUMP_disassemble_zeroes);
   if (const opt::Arg *A = InputArgs.getLastArg(OBJDUMP_dwarf_EQ)) {
-    DwarfDumpType = StringSwitch<DIDumpType>(A->getValue())
-                        .Case("frames", DIDT_DebugFrame)
-                        .Default(DIDT_Null);
-    if (DwarfDumpType == DIDT_Null)
+    Opts.DwarfDumpType = StringSwitch<DIDumpType>(A->getValue())
+                             .Case("frames", DIDT_DebugFrame)
+                             .Default(DIDT_Null);
+    if (Opts.DwarfDumpType == DIDT_Null)
       invalidArgValue(A);
   }
   DynamicRelocations = InputArgs.hasArg(OBJDUMP_dynamic_reloc);
   FaultMapSection = InputArgs.hasArg(OBJDUMP_fault_map_section);
   Offloading = InputArgs.hasArg(OBJDUMP_offloading);
   FileHeaders = InputArgs.hasArg(OBJDUMP_file_headers);
-  SectionContents = InputArgs.hasArg(OBJDUMP_full_contents);
-  PrintLines = InputArgs.hasArg(OBJDUMP_line_numbers);
+  Opts.SectionContents = InputArgs.hasArg(OBJDUMP_full_contents);
+  Opts.PrintLines = InputArgs.hasArg(OBJDUMP_line_numbers);
   InputFilenames = InputArgs.getAllArgValues(OBJDUMP_INPUT);
   MachOOpt = InputArgs.hasArg(OBJDUMP_macho);
-  MCPU = InputArgs.getLastArgValue(OBJDUMP_mcpu_EQ).str();
-  MAttrs = commaSeparatedValues(InputArgs, OBJDUMP_mattr_EQ);
-  ShowRawInsn = !InputArgs.hasArg(OBJDUMP_no_show_raw_insn);
-  LeadingAddr = !InputArgs.hasArg(OBJDUMP_no_leading_addr);
+  Opts.MCPU = InputArgs.getLastArgValue(OBJDUMP_mcpu_EQ).str();
+  Opts.MAttrs = commaSeparatedValues(InputArgs, OBJDUMP_mattr_EQ);
+  Opts.ShowRawInsn = !InputArgs.hasArg(OBJDUMP_no_show_raw_insn);
+  Opts.LeadingAddr = !InputArgs.hasArg(OBJDUMP_no_leading_addr);
   RawClangAST = InputArgs.hasArg(OBJDUMP_raw_clang_ast);
-  Relocations = InputArgs.hasArg(OBJDUMP_reloc);
-  PrintImmHex =
+  Opts.Relocations = InputArgs.hasArg(OBJDUMP_reloc);
+  Opts.PrintImmHex =
       InputArgs.hasFlag(OBJDUMP_print_imm_hex, OBJDUMP_no_print_imm_hex, true);
-  PrivateHeaders = InputArgs.hasArg(OBJDUMP_private_headers);
-  FilterSections = InputArgs.getAllArgValues(OBJDUMP_section_EQ);
-  SectionHeaders = InputArgs.hasArg(OBJDUMP_section_headers);
+  Opts.PrivateHeaders = InputArgs.hasArg(OBJDUMP_private_headers);
+  Opts.FilterSections = InputArgs.getAllArgValues(OBJDUMP_section_EQ);
+  Opts.SectionHeaders = InputArgs.hasArg(OBJDUMP_section_headers);
   ShowAllSymbols = InputArgs.hasArg(OBJDUMP_show_all_symbols);
   ShowLMA = InputArgs.hasArg(OBJDUMP_show_lma);
-  PrintSource = InputArgs.hasArg(OBJDUMP_source);
+  Opts.PrintSource = InputArgs.hasArg(OBJDUMP_source);
   parseIntArg(InputArgs, OBJDUMP_start_address_EQ, StartAddress);
   HasStartAddressFlag = InputArgs.hasArg(OBJDUMP_start_address_EQ);
   parseIntArg(InputArgs, OBJDUMP_stop_address_EQ, StopAddress);
   HasStopAddressFlag = InputArgs.hasArg(OBJDUMP_stop_address_EQ);
-  SymbolTable = InputArgs.hasArg(OBJDUMP_syms);
+  Opts.SymbolTable = InputArgs.hasArg(OBJDUMP_syms);
   if (const opt::Arg *A = InputArgs.getLastArg(OBJDUMP_symbolize_operands,
                                                OBJDUMP_no_symbolize_operands))
     SymbolizeOperandsOption =
@@ -3903,11 +3917,11 @@ static void parseObjdumpOptions(const llvm::opt::InputArgList &InputArgs) {
     reportCmdLineWarning("--symbolize-operands must be enabled for "
                          "--pretty-pgo-analysis-map to have an effect");
   DynamicSymbolTable = InputArgs.hasArg(OBJDUMP_dynamic_syms);
-  TripleName = InputArgs.getLastArgValue(OBJDUMP_triple_EQ).str();
-  UnwindInfo = InputArgs.hasArg(OBJDUMP_unwind_info);
+  Opts.TripleName = InputArgs.getLastArgValue(OBJDUMP_triple_EQ).str();
+  Opts.UnwindInfo = InputArgs.hasArg(OBJDUMP_unwind_info);
   UnwindShowWODPool = InputArgs.hasArg(OBJDUMP_unwind_show_wod_pool);
-  Prefix = InputArgs.getLastArgValue(OBJDUMP_prefix).str();
-  parseIntArg(InputArgs, OBJDUMP_prefix_strip, PrefixStrip);
+  Opts.Prefix = InputArgs.getLastArgValue(OBJDUMP_prefix).str();
+  parseIntArg(InputArgs, OBJDUMP_prefix_strip, Opts.PrefixStrip);
   for (const opt::Arg *A : InputArgs.filtered(OBJDUMP_substitute_path)) {
     StringRef From = A->getValue(0);
     if (From.empty())
@@ -3919,38 +3933,37 @@ static void parseObjdumpOptions(const llvm::opt::InputArgList &InputArgs) {
       reportCmdLineError("--source-dir argument must not be empty");
     SourceDirs.insert(SourceDirs.end(), Dir.str());
   }
-
   if (const opt::Arg *A = InputArgs.getLastArg(OBJDUMP_debug_vars_EQ)) {
-    DbgVariables = StringSwitch<DebugFormat>(A->getValue())
-                       .Case("ascii", DFASCII)
-                       .Case("unicode", DFUnicode)
-                       .Default(DFInvalid);
-    if (DbgVariables == DFInvalid)
+    Opts.DbgVariables = StringSwitch<DebugFormat>(A->getValue())
+                            .Case("ascii", DFASCII)
+                            .Case("unicode", DFUnicode)
+                            .Default(DFInvalid);
+    if (Opts.DbgVariables == DFInvalid)
       invalidArgValue(A);
   }
 
   if (const opt::Arg *A =
           InputArgs.getLastArg(OBJDUMP_debug_inlined_funcs_EQ)) {
-    DbgInlinedFunctions = StringSwitch<DebugFormat>(A->getValue())
-                              .Case("ascii", DFASCII)
-                              .Case("limits-only", DFLimitsOnly)
-                              .Case("unicode", DFUnicode)
-                              .Default(DFInvalid);
-    if (DbgInlinedFunctions == DFInvalid)
+    Opts.DbgInlinedFunctions = StringSwitch<DebugFormat>(A->getValue())
+                                   .Case("ascii", DFASCII)
+                                   .Case("limits-only", DFLimitsOnly)
+                                   .Case("unicode", DFUnicode)
+                                   .Default(DFInvalid);
+    if (Opts.DbgInlinedFunctions == DFInvalid)
       invalidArgValue(A);
   }
 
   if (const opt::Arg *A = InputArgs.getLastArg(OBJDUMP_disassembler_color_EQ)) {
-    DisassemblyColor = StringSwitch<ColorOutput>(A->getValue())
-                           .Case("on", ColorOutput::Enable)
-                           .Case("off", ColorOutput::Disable)
-                           .Case("terminal", ColorOutput::Auto)
-                           .Default(ColorOutput::Invalid);
-    if (DisassemblyColor == ColorOutput::Invalid)
+    Opts.DisassemblyColor = StringSwitch<ColorOutput>(A->getValue())
+                                .Case("on", ColorOutput::Enable)
+                                .Case("off", ColorOutput::Disable)
+                                .Case("terminal", ColorOutput::Auto)
+                                .Default(ColorOutput::Invalid);
+    if (Opts.DisassemblyColor == ColorOutput::Invalid)
       invalidArgValue(A);
   }
 
-  parseIntArg(InputArgs, OBJDUMP_debug_indent_EQ, DbgIndent);
+  parseIntArg(InputArgs, OBJDUMP_debug_indent_EQ, Opts.DbgIndent);
 
   parseMachOOptions(InputArgs);
 
@@ -3981,16 +3994,70 @@ static void parseObjdumpOptions(const llvm::opt::InputArgList &InputArgs) {
       else if (V == "intel")
         AsmSyntax = "--x86-asm-syntax=intel";
       else
-        DisassemblerOptions.push_back(V.str());
+        Opts.DisassemblerOptions.push_back(V.str());
     }
   }
-  SmallVector<const char *> Args = {"llvm-objdump"};
-  for (const opt::Arg *A : InputArgs.filtered(OBJDUMP_mllvm))
-    Args.push_back(A->getValue());
-  if (AsmSyntax)
-    Args.push_back(AsmSyntax);
-  if (Args.size() > 1)
-    llvm::cl::ParseCommandLineOptions(Args.size(), Args.data());
+  {
+    SmallVector<StringRef> MllvmArgs;
+    for (const opt::Arg *A : InputArgs.filtered(OBJDUMP_mllvm))
+      MllvmArgs.push_back(A->getValue());
+    if (AsmSyntax)
+      MllvmArgs.push_back(AsmSyntax);
+    if (!MllvmArgs.empty()) {
+      clv2::OptionParser P;
+      RegisterAllLLVMOptions(P);
+      P.add<&clv2::X86OptsReg>();
+      P.add<&clv2::AArch64OptsReg>();
+      P.add<&clv2::AMDGPUOptsReg>();
+      P.add<&clv2::ARMOptsReg>();
+      P.add<&clv2::HexagonOptsReg>();
+      P.add<&clv2::RISCVOptsReg>();
+      P.add<&clv2::PowerPCOptsReg>();
+      P.add<&clv2::MipsOptsReg>();
+      P.add<&clv2::SystemZOptsReg>();
+      P.add<&clv2::SparcOptsReg>();
+      P.add<&clv2::WebAssemblyOptsReg>();
+      P.add<&clv2::LoongArchOptsReg>();
+      P.add<&clv2::NVPTXOptsReg>();
+      P.add<&clv2::LanaiOptsReg>();
+      P.add<&clv2::BPFOptsReg>();
+      P.add<&clv2::SPIRVOptsReg>();
+      P.add<&clv2::MSP430OptsReg>();
+      P.add<&clv2::XCoreOptsReg>();
+      BumpPtrAllocator Alloc;
+      StringSaver Saver(Alloc);
+      SmallVector<const char *> Argv;
+      Argv.push_back(Saver.save("llvm-objdump").data());
+      for (StringRef A : MllvmArgs)
+        Argv.push_back(Saver.save(A).data());
+      ParsedOptsCtx = P.parse(Argv.size(), Argv.data());
+    } else {
+      // Even without -mllvm, create a default OptionsContext so target
+      // options (like AsmWriter variants) have valid defaults.
+      clv2::OptionParser P;
+      RegisterAllLLVMOptions(P);
+      P.add<&clv2::X86OptsReg>();
+      P.add<&clv2::AArch64OptsReg>();
+      P.add<&clv2::AMDGPUOptsReg>();
+      P.add<&clv2::ARMOptsReg>();
+      P.add<&clv2::HexagonOptsReg>();
+      P.add<&clv2::RISCVOptsReg>();
+      P.add<&clv2::PowerPCOptsReg>();
+      P.add<&clv2::MipsOptsReg>();
+      P.add<&clv2::SystemZOptsReg>();
+      P.add<&clv2::SparcOptsReg>();
+      P.add<&clv2::WebAssemblyOptsReg>();
+      P.add<&clv2::LoongArchOptsReg>();
+      P.add<&clv2::NVPTXOptsReg>();
+      P.add<&clv2::LanaiOptsReg>();
+      P.add<&clv2::BPFOptsReg>();
+      P.add<&clv2::SPIRVOptsReg>();
+      P.add<&clv2::MSP430OptsReg>();
+      P.add<&clv2::XCoreOptsReg>();
+      const char *Dummy[] = {"llvm-objdump"};
+      ParsedOptsCtx = P.parse(1, Dummy);
+    }
+  }
 
   // Look up any provided build IDs, then append them to the input filenames.
   for (const opt::Arg *A : InputArgs.filtered(OBJDUMP_build_id)) {
@@ -4096,30 +4163,33 @@ int llvm_objdump_main(int argc, char **argv, const llvm::ToolContext &) {
     reportCmdLineError("start address should be less than stop address");
 
   // Removes trailing separators from prefix.
-  while (!Prefix.empty() && sys::path::is_separator(Prefix.back()))
-    Prefix.pop_back();
+  while (!Opts.Prefix.empty() && sys::path::is_separator(Opts.Prefix.back()))
+    Opts.Prefix.pop_back();
 
   if (AllHeaders)
-    ArchiveHeaders = FileHeaders = PrivateHeaders = Relocations =
-        SectionHeaders = SymbolTable = true;
+    Opts.ArchiveHeaders = FileHeaders = Opts.PrivateHeaders = Opts.Relocations =
+        Opts.SectionHeaders = Opts.SymbolTable = true;
 
-  if (DisassembleAll || PrintSource || PrintLines || TracebackTable ||
-      !DisassembleSymbols.empty())
-    Disassemble = true;
+  if (Opts.DisassembleAll || Opts.PrintSource || Opts.PrintLines ||
+      Opts.TracebackTable || !DisassembleSymbols.empty())
+    Opts.Disassemble = true;
 
-  const bool PrintCpuHelp = (MCPU == "help" || is_contained(MAttrs, "help"));
+  const bool PrintCpuHelp =
+      (Opts.MCPU == "help" || is_contained(Opts.MAttrs, "help"));
 
   const bool ShouldDump =
-      ArchiveHeaders || Disassemble || DwarfDumpType != DIDT_Null ||
-      DynamicRelocations || FileHeaders || PrivateHeaders || RawClangAST ||
-      Relocations || SectionHeaders || SectionContents || SymbolTable ||
-      DynamicSymbolTable || UnwindInfo || FaultMapSection || Offloading ||
+      Opts.ArchiveHeaders || Opts.Disassemble ||
+      Opts.DwarfDumpType != DIDT_Null || DynamicRelocations || FileHeaders ||
+      Opts.PrivateHeaders || RawClangAST || Opts.Relocations ||
+      Opts.SectionHeaders || Opts.SectionContents || Opts.SymbolTable ||
+      DynamicSymbolTable || Opts.UnwindInfo || FaultMapSection || Offloading ||
       (MachOOpt &&
        (Bind || DataInCode || ChainedFixups || DyldInfo || DylibId ||
         DylibsUsed || ExportsTrie || FirstPrivateHeader ||
         FunctionStartsType != FunctionStartsMode::None || IndirectSymbols ||
         InfoPlist || LazyBind || LinkOptHints || ObjcMetaData || Rebase ||
-        Rpaths || UniversalHeaders || WeakBind || !FilterSections.empty()));
+        Rpaths || UniversalHeaders || WeakBind ||
+        !Opts.FilterSections.empty()));
 
   if (!ShouldDump && !PrintCpuHelp) {
     T->printHelp(ToolName);

@@ -27,7 +27,7 @@ unittest("SupportTests") {
     "Casting.cpp",
     "CheckedArithmeticTest.cpp",
     "Chrono.cpp",
-    "CommandLineTest.cpp",
+    "CommandLineTestV2.cpp",
     "CompressionTest.cpp",
     "ConvertEBCDICTest.cpp",
     "ConvertUTFTest.cpp",

@@ -12,10 +12,11 @@
 
 #include "bolt/Passes/Instrumentation.h"
 #include "bolt/Core/ParallelUtilities.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "bolt/RuntimeLibs/InstrumentationRuntimeLibrary.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "bolt/Utils/Utils.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/RWMutex.h"
 #include <queue>
 #include <stack>
@@ -24,71 +25,7 @@
 
 using namespace llvm;
 
-namespace opts {
-extern cl::OptionCategory BoltInstrCategory;
-
-cl::opt<std::string> InstrumentationFilename(
-    "instrumentation-file",
-    cl::desc("file name where instrumented profile will be saved (default: "
-             "/tmp/prof.fdata)"),
-    cl::init("/tmp/prof.fdata"), cl::Optional, cl::cat(BoltInstrCategory));
-
-cl::opt<std::string> InstrumentationBinpath(
-    "instrumentation-binpath",
-    cl::desc("path to instrumented binary in case if /proc/self/map_files "
-             "is not accessible due to access restriction issues"),
-    cl::Optional, cl::cat(BoltInstrCategory));
-
-cl::opt<bool> InstrumentationFileAppendPID(
-    "instrumentation-file-append-pid",
-    cl::desc("append PID to saved profile file name (default: false)"),
-    cl::init(false), cl::Optional, cl::cat(BoltInstrCategory));
-
-cl::opt<bool> ConservativeInstrumentation(
-    "conservative-instrumentation",
-    cl::desc("disable instrumentation optimizations that sacrifice profile "
-             "accuracy (for debugging, default: false)"),
-    cl::init(false), cl::Optional, cl::cat(BoltInstrCategory));
-
-cl::opt<uint32_t> InstrumentationMaxSize(
-    "instrumentation-max-size",
-    cl::desc("Set max memory size of the instrumentation bump allocator "
-             "default: 0x6400000)"),
-    cl::init(0x6400000), cl::Optional, cl::cat(BoltInstrCategory));
-
-cl::opt<uint32_t> InstrumentationSleepTime(
-    "instrumentation-sleep-time",
-    cl::desc("interval between profile writes (default: 0 = write only at "
-             "program end).  This is useful for service workloads when you "
-             "want to dump profile every X minutes or if you are killing the "
-             "program and the profile is not being dumped at the end."),
-    cl::init(0), cl::Optional, cl::cat(BoltInstrCategory));
-
-cl::opt<bool> InstrumentationNoCountersClear(
-    "instrumentation-no-counters-clear",
-    cl::desc("Don't clear counters across dumps "
-             "(use with instrumentation-sleep-time option)"),
-    cl::init(false), cl::Optional, cl::cat(BoltInstrCategory));
-
-cl::opt<bool> InstrumentationWaitForks(
-    "instrumentation-wait-forks",
-    cl::desc("Wait until all forks of instrumented process will finish "
-             "(use with instrumentation-sleep-time option)"),
-    cl::init(false), cl::Optional, cl::cat(BoltInstrCategory));
-
-cl::opt<bool>
-    InstrumentHotOnly("instrument-hot-only",
-                      cl::desc("only insert instrumentation on hot functions "
-                               "(needs profile, default: false)"),
-                      cl::init(false), cl::Optional,
-                      cl::cat(BoltInstrCategory));
-
-cl::opt<bool> InstrumentCalls("instrument-calls",
-                              cl::desc("record profile for inter-function "
-                                       "control flow activity (default: true)"),
-                              cl::init(true), cl::Optional,
-                              cl::cat(BoltInstrCategory));
-} // namespace opts
+using namespace bolt::bolt_passes_opts;
 
 namespace llvm {
 namespace bolt {
@@ -120,7 +57,7 @@ hasAArch64ExclusiveMemop(BinaryFunction &Function,
     for (const MCInst &Inst : *BB) {
       // Two loads one after another - skip whole function
       if (BC.MIB->isAArch64ExclusiveLoad(Inst) && IsLoad) {
-        if (opts::Verbosity >= 2) {
+        if (opts::getVerbosity(BC) >= 2) {
           outs() << "BOLT-INSTRUMENTER: function " << Function.getPrintName()
                  << " has two exclusive loads. Ignoring the function.\n";
         }
@@ -131,7 +68,7 @@ hasAArch64ExclusiveMemop(BinaryFunction &Function,
         IsLoad = true;
 
       if (IsLoad && BBToSkip.insert(BB).second) {
-        if (opts::Verbosity >= 2) {
+        if (opts::getVerbosity(BC) >= 2) {
           outs() << "BOLT-INSTRUMENTER: skip BB " << BB->getName()
                  << " due to exclusive instruction in function "
                  << Function.getPrintName() << "\n";
@@ -139,7 +76,7 @@ hasAArch64ExclusiveMemop(BinaryFunction &Function,
       }
 
       if (!IsLoad && BC.MIB->isAArch64ExclusiveStore(Inst)) {
-        if (opts::Verbosity >= 2) {
+        if (opts::getVerbosity(BC) >= 2) {
           outs() << "BOLT-INSTRUMENTER: function " << Function.getPrintName()
                  << " has exclusive store without corresponding load. Ignoring "
                     "the function.\n";
@@ -153,7 +90,7 @@ hasAArch64ExclusiveMemop(BinaryFunction &Function,
     }
 
     if (IsLoad && BB->succ_size() == 0) {
-      if (opts::Verbosity >= 2) {
+      if (opts::getVerbosity(BC) >= 2) {
         outs()
             << "BOLT-INSTRUMENTER: function " << Function.getPrintName()
             << " has exclusive load in trailing BB. Ignoring the function.\n";
@@ -166,7 +103,7 @@ hasAArch64ExclusiveMemop(BinaryFunction &Function,
   }
 
   if (BBToSkip.size() == Visited.size()) {
-    if (opts::Verbosity >= 2) {
+    if (opts::getVerbosity(BC) >= 2) {
       outs() << "BOLT-INSTRUMENTER: all BBs are marked with true. Ignoring the "
                 "function "
              << Function.getPrintName() << "\n";
@@ -198,7 +135,9 @@ bool Instrumentation::createCallDescription(FunctionDescription &FuncDesc,
   // when forced to do so or when we know this callee could be throwing
   // exceptions, in which case there is no other way to accurately record its
   // frequency.
-  bool ForceInstrumentation = opts::ConservativeInstrumentation || IsInvoke;
+  const bool ConservativeInstrumentation =
+      getConservativeInstrumentation(FromFunction.getBinaryContext());
+  bool ForceInstrumentation = ConservativeInstrumentation || IsInvoke;
   CD.FromLoc.FuncString = getFunctionNameIndex(FromFunction);
   CD.FromLoc.Offset = From;
   CD.FromNode = FromNodeID;
@@ -380,6 +319,9 @@ void Instrumentation::instrumentFunction(BinaryFunction &Function,
   if (BC.isMachO() && Function.hasName("___GLOBAL_init_65535/1"))
     return;
 
+  const bool InstrumentCalls = getInstrumentCalls(BC);
+  const bool ConservativeInstrumentation = getConservativeInstrumentation(BC);
+
   DenseSet<const BinaryBasicBlock *> BBToSkip;
   if (BC.isAArch64() && hasAArch64ExclusiveMemop(Function, BBToSkip))
     return;
@@ -416,7 +358,7 @@ void Instrumentation::instrumentFunction(BinaryFunction &Function,
        BBI != Function.getLayout().block_rend(); ++BBI) {
     if ((*BBI)->isEntryPoint() || (*BBI)->isLandingPad()) {
       Stack.push(std::make_pair(nullptr, *BBI));
-      if (opts::InstrumentCalls && (*BBI)->isEntryPoint()) {
+      if (InstrumentCalls && (*BBI)->isEntryPoint()) {
         EntryNode E;
         E.Node = BBToID[&**BBI];
         E.Address = (*BBI)->getInputOffset();
@@ -427,7 +369,7 @@ void Instrumentation::instrumentFunction(BinaryFunction &Function,
   }
 
   // Modified version of BinaryFunction::dfs() to build a spanning tree
-  if (!opts::ConservativeInstrumentation) {
+  if (!ConservativeInstrumentation) {
     while (!Stack.empty()) {
       BinaryBasicBlock *BB;
       const BinaryBasicBlock *Pred;
@@ -491,7 +433,7 @@ void Instrumentation::instrumentFunction(BinaryFunction &Function,
       BinaryFunction *TargetFunc =
           TargetBB ? &Function : BC.getFunctionForSymbol(Target);
       if (TargetFunc && BC.MIB->isCall(Inst)) {
-        if (opts::InstrumentCalls) {
+        if (InstrumentCalls) {
           const BinaryBasicBlock *ForeignBB =
               TargetFunc->getBasicBlockForLabel(Target);
           if (ForeignBB)
@@ -544,7 +486,7 @@ void Instrumentation::instrumentFunction(BinaryFunction &Function,
       // Handle indirect calls -- could be direct calls with unknown targets
       // or secondary entry points of known functions, so check it is indirect
       // to be sure.
-      if (opts::InstrumentCalls && BC.MIB->isIndirectCall(*I))
+      if (InstrumentCalls && BC.MIB->isIndirectCall(*I))
         instrumentIndirectTarget(BB, I, Function, FromOffset);
 
     } // End of instructions loop
@@ -585,7 +527,7 @@ void Instrumentation::instrumentFunction(BinaryFunction &Function,
   } // End of BBs loop
 
   // Instrument spanning tree leaves
-  if (!opts::ConservativeInstrumentation) {
+  if (!ConservativeInstrumentation) {
     for (auto BBI = Function.begin(), BBE = Function.end(); BBI != BBE; ++BBI) {
       BinaryBasicBlock &BB = *BBI;
       auto STIt = STOutSet.find(&BB);
@@ -610,6 +552,9 @@ void Instrumentation::instrumentFunction(BinaryFunction &Function,
 }
 
 Error Instrumentation::runOnFunctions(BinaryContext &BC) {
+  const auto InstrumentationFilename = getInstrumentationFile(BC);
+  const bool InstrumentHotOnly = getInstrumentHotOnly(BC);
+
   if (BC.usesBTI())
     return createFatalBOLTError(
         "BOLT-ERROR: instrumenting binaries using BTI is not supported.\n");
@@ -645,7 +590,7 @@ Error Instrumentation::runOnFunctions(BinaryContext &BC) {
 
   ParallelUtilities::PredicateTy SkipPredicate = [&](const BinaryFunction &BF) {
     return (!BF.isSimple() || BF.isIgnored() ||
-            (opts::InstrumentHotOnly && !BF.getKnownExecutionCount()));
+            (InstrumentHotOnly && !BF.getKnownExecutionCount()));
   };
 
   ParallelUtilities::WorkFuncWithAllocTy WorkFun =
@@ -785,6 +730,8 @@ void Instrumentation::createAuxiliaryFunctions(BinaryContext &BC) {
 }
 
 void Instrumentation::setupRuntimeLibrary(BinaryContext &BC) {
+  const auto InstrumentationFilename = getInstrumentationFile(BC);
+
   uint32_t FuncDescSize = Summary->getFDSize();
 
   BC.outs() << "BOLT-INSTRUMENTER: Number of indirect call site descriptors: "
@@ -814,7 +761,7 @@ void Instrumentation::setupRuntimeLibrary(BinaryContext &BC) {
                     sizeof(IndCallTargetDescription))
             << " bytes in file\n";
   BC.outs() << "BOLT-INSTRUMENTER: Profile will be saved to file "
-            << opts::InstrumentationFilename << "\n";
+            << InstrumentationFilename << "\n";
 
   InstrumentationRuntimeLibrary *RtLibrary =
       static_cast<InstrumentationRuntimeLibrary *>(BC.getRuntimeLibrary());

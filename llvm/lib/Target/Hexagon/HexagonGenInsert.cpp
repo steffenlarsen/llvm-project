@@ -29,13 +29,15 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -47,36 +49,70 @@
 
 using namespace llvm;
 
-static cl::opt<unsigned>
-    VRegIndexCutoff("insert-vreg-cutoff", cl::init(~0U), cl::Hidden,
-                    cl::desc("Vreg# cutoff for insert generation."));
+static unsigned VRegIndexCutoff = ~0U;
+static bool VRegIndexCutoffWasSpecified = false;
 // The distance cutoff is selected based on the precheckin-perf results:
 // cutoffs 20, 25, 35, and 40 are worse than 30.
-static cl::opt<unsigned>
-    VRegDistCutoff("insert-dist-cutoff", cl::init(30U), cl::Hidden,
-                   cl::desc("Vreg distance cutoff for insert "
-                            "generation."));
+static unsigned VRegDistCutoff = 30U;
 
 // Limit the container sizes for extreme cases where we run out of memory.
-static cl::opt<unsigned>
-    MaxORLSize("insert-max-orl", cl::init(4096), cl::Hidden,
-               cl::desc("Maximum size of OrderedRegisterList"));
-static cl::opt<unsigned> MaxIFMSize("insert-max-ifmap", cl::init(1024),
-                                    cl::Hidden,
-                                    cl::desc("Maximum size of IFMap"));
+static unsigned MaxORLSize = 4096;
+static unsigned MaxIFMSize = 1024;
 
-static cl::opt<bool> OptTiming("insert-timing", cl::Hidden,
-                               cl::desc("Enable timing of insert generation"));
-static cl::opt<bool>
-    OptTimingDetail("insert-timing-detail", cl::Hidden,
-                    cl::desc("Enable detailed timing of insert "
-                             "generation"));
-
-static cl::opt<bool> OptSelectAll0("insert-all0", cl::init(false), cl::Hidden);
-static cl::opt<bool> OptSelectHas0("insert-has0", cl::init(false), cl::Hidden);
 // Whether to construct constant values via "insert". Could eliminate constant
 // extenders, but often not practical.
-static cl::opt<bool> OptConst("insert-const", cl::init(false), cl::Hidden);
+
+static unsigned getVRegDistCutoff(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_VRegDistCutoff>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getMaxIFMSize(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_MaxIFMSize>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getOptTiming(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_OptTiming>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getOptSelectAll0(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_OptSelectAll0>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getOptSelectHas0(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_OptSelectHas0>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getOptConst(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_OptInsertConst>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getVRegIndexCutoff(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_VRegIndexCutoff>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getVRegIndexCutoffWasSpecified(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::HexagonOptsReg>(
+          F.getContext().getOptionsContext()))
+    return O->specified<&clv2::HEX_VRegIndexCutoff>();
+  return VRegIndexCutoffWasSpecified;
+}
+
+static unsigned getMaxORLSize(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_MaxORLSize>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getOptTimingDetail(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_OptTimingDetail>(
+      F.getContext().getOptionsContext());
+}
 
 // The preprocessor gets confused when the DEBUG macro is passed larger
 // chunks of code. Use this function to detect debugging.
@@ -382,8 +418,8 @@ namespace {
     const unsigned MaxSize;
 
   public:
-    OrderedRegisterList(const RegisterOrdering &RO)
-      : MaxSize(MaxORLSize), Ord(RO) {}
+    OrderedRegisterList(const RegisterOrdering &RO, unsigned MS)
+        : MaxSize(MS), Ord(RO) {}
 
     void insert(unsigned VR);
     void remove(unsigned VR);
@@ -913,14 +949,15 @@ void HexagonGenInsert::collectInBlock(MachineBasicBlock *B,
   if (!CMS->BT.reached(B))
     return;
 
-  bool DoConst = OptConst;
+  const Function &F = B->getParent()->getFunction();
+  bool DoConst = getOptConst(F);
   // Keep a separate set of registers defined in this block, so that we
   // can remove them from the list of available registers once all DT
   // successors have been processed.
   RegisterSet BlockDefs, InsDefs;
   for (MachineInstr &MI : *B) {
     // Stop if the map size is too large.
-    if (IFMap.size() >= MaxIFMSize)
+    if (IFMap.size() >= getMaxIFMSize(F))
       break;
 
     InsDefs.clear();
@@ -945,7 +982,7 @@ void HexagonGenInsert::collectInBlock(MachineBasicBlock *B,
 
         findRecordInsertForms(VR, AVs);
         // Stop if the map size is too large.
-        if (IFMap.size() >= MaxIFMSize)
+        if (IFMap.size() >= getMaxIFMSize(F))
           break;
       }
     }
@@ -1121,7 +1158,7 @@ void HexagonGenInsert::pruneUsesTooFar(unsigned VR, const UnsignedMap &RPO,
   IFMapType::iterator F = IFMap.find(VR);
   assert(F != IFMap.end());
   IFListType &LL = F->second;
-  unsigned Cutoff = VRegDistCutoff;
+  unsigned Cutoff = getVRegDistCutoff(MFN->getFunction());
   const MachineInstr *DefV = MRI->getVRegDef(VR);
 
   for (unsigned i = LL.size(); i > 0; --i) {
@@ -1283,7 +1320,8 @@ void HexagonGenInsert::selectCandidates() {
     UseC[R] = (C > D) ? C-D : 0;  // doz
   }
 
-  bool SelectAll0 = OptSelectAll0, SelectHas0 = OptSelectHas0;
+  const Function &F = MFN->getFunction();
+  bool SelectAll0 = getOptSelectAll0(F), SelectHas0 = getOptSelectHas0(F);
   if (!SelectAll0 && !SelectHas0)
     SelectAll0 = true;
 
@@ -1469,11 +1507,12 @@ bool HexagonGenInsert::runOnMachineFunction(MachineFunction &MF) {
   if (skipFunction(MF.getFunction()))
     return false;
 
-  bool Timing = OptTiming, TimingDetail = Timing && OptTimingDetail;
+  const Function &F = MF.getFunction();
+  bool Timing = getOptTiming(F), TimingDetail = Timing && getOptTimingDetail(F);
   bool Changed = false;
 
   // Verify: one, but not both.
-  assert(!OptSelectAll0 || !OptSelectHas0);
+  assert(!getOptSelectAll0(F) || !getOptSelectHas0(F));
 
   IFMap.clear();
   BaseOrd.clear();
@@ -1513,7 +1552,7 @@ bool HexagonGenInsert::runOnMachineFunction(MachineFunction &MF) {
 
   // Collect candidates for conversion into the insert forms.
   MachineBasicBlock *RootB = MDT->getRoot();
-  OrderedRegisterList AvailR(CellOrd);
+  OrderedRegisterList AvailR(CellOrd, getMaxORLSize(F));
 
   const char *const TGName = "hexinsert";
   const char *const TGDesc = "Generate Insert Instructions";
@@ -1558,8 +1597,9 @@ bool HexagonGenInsert::runOnMachineFunction(MachineFunction &MF) {
   }
 
   // Filter out vregs beyond the cutoff.
-  if (VRegIndexCutoff.getPosition()) {
-    unsigned Cutoff = VRegIndexCutoff;
+  if (getVRegIndexCutoffWasSpecified(F)) {
+    unsigned Cutoff = getVRegIndexCutoff(F);
+
     IFMap.remove_if([&](const auto &P) {
       return Register(P.first).virtRegIndex() >= Cutoff;
     });

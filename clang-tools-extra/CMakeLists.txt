@@ -3,6 +3,11 @@ set(LLVM_SUBPROJECT_TITLE "Clang Tools Extra")
 include(CMakeDependentOption)
 include(GNUInstallDirs)
 
+# Make clang-tools-extra/include available for clv2 OptInfos headers.
+include_directories(BEFORE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_BINARY_DIR}/include)
+
 option(CLANG_TIDY_ENABLE_STATIC_ANALYZER
   "Include static analyzer checks in clang-tidy" ON)
 option(CLANG_TIDY_ENABLE_QUERY_BASED_CUSTOM_CHECKS
@@ -19,6 +24,13 @@ if(CLANG_INCLUDE_TESTS AND CLANG_TOOLS_EXTRA_INCLUDE_TESTS)
   endif()
 endif()
 
+add_subdirectory(include)
+
+# The generated clv2 options headers are public; make everything configured
+# below wait for tablegen.  See add_clv2_options_gen_target in TableGen.cmake.
+add_clv2_options_gen_target(clang_tools_extra_clv2_options_gen "${CMAKE_CURRENT_SOURCE_DIR}/include")
+list(APPEND LLVM_COMMON_DEPENDS clang_tools_extra_clv2_options_gen)
+list(APPEND LLVM_COMMON_DEPENDS ClangToolsExtraOptionsTableGen)
 add_subdirectory(clang-apply-replacements)
 add_subdirectory(clang-reorder-fields)
 add_subdirectory(modularize)

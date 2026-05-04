@@ -19,17 +19,21 @@
 #include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/DiagnosticInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/BPF/BPFOptionsOptInfos.h"
 
 #define GET_REGINFO_TARGET_DESC
 #include "BPFGenRegisterInfo.inc"
 using namespace llvm;
 
-static cl::opt<int>
-    BPFStackSizeOption("bpf-stack-size",
-                       cl::desc("Specify the BPF stack size limit"),
-                       cl::init(512));
+static int BPFStackSizeOption = 512;
+
+static int getStackSize(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::BPF_StackSize>(
+      F.getContext().getOptionsContext());
+}
 
 BPFRegisterInfo::BPFRegisterInfo()
     : BPFGenRegisterInfo(BPF::R0) {}
@@ -59,7 +63,7 @@ BitVector BPFRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
 
 static void WarnSize(int Offset, MachineFunction &MF, DebugLoc& DL,
                      MachineBasicBlock& MBB) {
-  if (Offset <= -BPFStackSizeOption) {
+  if (Offset <= -getStackSize(MF.getFunction())) {
     if (!DL)
       /* try harder to get some debug loc */
       for (auto &I : MBB)

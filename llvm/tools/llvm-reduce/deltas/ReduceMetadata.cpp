@@ -12,19 +12,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "ReduceMetadata.h"
+#include "../ReducerWorkItem.h"
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 
 using namespace llvm;
-
-extern cl::OptionCategory LLVMReduceOptions;
-
-static cl::opt<bool> AggressiveMetadataReduction(
-    "aggressive-named-md-reduction",
-    cl::desc("Reduce named metadata without taking its type into account"),
-    cl::cat(LLVMReduceOptions));
 
 static bool shouldKeepDebugIntrinsicMetadata(Instruction &I, MDNode &MD) {
   return isa<DILocation>(MD) && isa<DbgInfoIntrinsic>(I);
@@ -53,7 +47,7 @@ void llvm::reduceNamedMetadataDeltaPass(Oracle &O, ReducerWorkItem &WorkItem) {
   for (NamedMDNode &I : M.named_metadata()) {
     // If we don't want to reduce mindlessly, check if our node is part of
     // ListNamedMetadata before reducing it
-    if (!AggressiveMetadataReduction &&
+    if (!WorkItem.getConfig().AggressiveMetadataReduction &&
         !is_contained(ListNamedMetadata, I.getName()))
       continue;
 

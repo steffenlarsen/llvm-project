@@ -46,7 +46,6 @@
 using namespace llvm;
 
 namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 }
 
 #define DEBUG_TYPE "coro-frame"
@@ -1370,7 +1369,7 @@ static void rewritePHIsForCleanupPad(BasicBlock *CleanupPadBB,
     SwitchIndex++;
   }
 
-  if (!ProfcheckDisableMetadataFixes) {
+  if (!getProfcheckDisableMetadataFixes(CleanupPadBB->getContext())) {
     // Add branch weights to SwitchOnDispatch, where branches are unreachable by
     // default. We mark all branches as having equal weights because they are
     // mutually exclusive.

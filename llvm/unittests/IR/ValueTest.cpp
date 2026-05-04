@@ -14,7 +14,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ModuleSlotTracker.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/SourceMgr.h"
 #include "gtest/gtest.h"
@@ -23,7 +23,7 @@ using namespace llvm;
 namespace {
 
 TEST(ValueTest, setNameShrink) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *ModuleString = "define void @f1() {\n"
                              "bb0:\n"
@@ -40,7 +40,7 @@ TEST(ValueTest, setNameShrink) {
 }
 
 TEST(ValueTest, UsedInBasicBlock) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *ModuleString = "define void @f(i32 %x, i32 %y) {\n"
                              "bb0:\n"
@@ -65,21 +65,15 @@ TEST(ValueTest, UsedInBasicBlock) {
 }
 
 TEST(GlobalTest, CreateAddressSpace) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M(new Module("TestModule", Ctx));
   Type *Int8Ty = Type::getInt8Ty(Ctx);
   Type *Int32Ty = Type::getInt32Ty(Ctx);
 
-  GlobalVariable *Dummy0
-    = new GlobalVariable(*M,
-                         Int32Ty,
-                         true,
-                         GlobalValue::ExternalLinkage,
-                         Constant::getAllOnesValue(Int32Ty),
-                         "dummy",
-                         nullptr,
-                         GlobalVariable::NotThreadLocal,
-                         1);
+  GlobalVariable *Dummy0 =
+      new GlobalVariable(*M, Int32Ty, true, GlobalValue::ExternalLinkage,
+                         Constant::getAllOnesValue(Int32Ty), "dummy", nullptr,
+                         GlobalVariable::NotThreadLocal, 1);
 
   const Align kMaxAlignment(Value::MaximumAlignment);
   EXPECT_TRUE(kMaxAlignment.value() == 4294967296ULL);
@@ -92,18 +86,11 @@ TEST(GlobalTest, CreateAddressSpace) {
   EXPECT_EQ(Dummy0, Dummy1);
   EXPECT_EQ(1u, Dummy1->getType()->getPointerAddressSpace());
 
-
   // This one requires a bitcast, but the address space must also stay the same.
-  GlobalVariable *DummyCast0
-    = new GlobalVariable(*M,
-                         Int32Ty,
-                         true,
-                         GlobalValue::ExternalLinkage,
-                         Constant::getAllOnesValue(Int32Ty),
-                         "dummy_cast",
-                         nullptr,
-                         GlobalVariable::NotThreadLocal,
-                         1);
+  GlobalVariable *DummyCast0 =
+      new GlobalVariable(*M, Int32Ty, true, GlobalValue::ExternalLinkage,
+                         Constant::getAllOnesValue(Int32Ty), "dummy_cast",
+                         nullptr, GlobalVariable::NotThreadLocal, 1);
 
   // Make sure the address space isn't dropped when returning this.
   Constant *DummyCast1 = M->getOrInsertGlobal("dummy_cast", Int8Ty);
@@ -115,7 +102,7 @@ TEST(GlobalTest, CreateAddressSpace) {
 #ifndef NDEBUG
 
 TEST(GlobalTest, AlignDeath) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M(new Module("TestModule", Ctx));
   Type *Int32Ty = Type::getInt32Ty(Ctx);
   GlobalVariable *Var =
@@ -132,7 +119,7 @@ TEST(GlobalTest, AlignDeath) {
 TEST(ValueTest, printSlots) {
   // Check that Value::print() and Value::printAsOperand() work with and
   // without a slot tracker.
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *ModuleString = "@g0 = external global %500\n"
                              "@g1 = external global %900\n"
@@ -212,7 +199,7 @@ TEST(ValueTest, printSlots) {
 
 TEST(ValueTest, getLocalSlots) {
   // Verify that the getLocalSlot method returns the correct slot numbers.
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   const char *ModuleString = "define void @f(i32 %x, i32 %y) {\n"
                              "entry:\n"
                              "  %0 = add i32 %y, 1\n"
@@ -247,7 +234,7 @@ TEST(ValueTest, getLocalSlots) {
 
 #if defined(GTEST_HAS_DEATH_TEST) && !defined(NDEBUG)
 TEST(ValueTest, getLocalSlotDeath) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   const char *ModuleString = "define void @f(i32 %x, i32 %y) {\n"
                              "entry:\n"
                              "  %0 = add i32 %y, 1\n"
@@ -306,7 +293,7 @@ TEST(ValueTest, replaceUsesOutsideBlock) {
     !15 = !DILocation(line: 1, column: 1, scope: !6)
     !16 = !DILocation(line: 5, column: 1, scope: !6)
   )";
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(IR, Err, Ctx);
   if (!M)
@@ -341,7 +328,7 @@ TEST(ValueTest, replaceUsesOutsideBlock) {
 }
 
 TEST(GlobalTest, Initializer) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module M("test", Ctx);
   Type *Int8Ty = Type::getInt8Ty(Ctx);
   Constant *Int8Null = Constant::getNullValue(Int8Ty);

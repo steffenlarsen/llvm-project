@@ -1,0 +1,4 @@
+
+set(LLVM_TARGET_DEFINITIONS BoltRuntimeLibsOptions.td)
+tablegen(LLVM BoltRuntimeLibsOptionsOptInfos.inc -gen-clv2-options)
+add_public_tablegen_target(BoltRuntimeLibsOptionsTableGen)

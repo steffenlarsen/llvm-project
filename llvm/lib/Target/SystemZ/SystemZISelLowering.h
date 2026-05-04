@@ -501,8 +501,8 @@ private:
                                     const Function *F, SDValue Callee) const;
   void verifyNarrowIntegerArgs_Ret(const SmallVectorImpl<ISD::OutputArg> &Outs,
                                    const Function *F) const;
-  bool
-  verifyNarrowIntegerArgs(const SmallVectorImpl<ISD::OutputArg> &Outs) const;
+  bool verifyNarrowIntegerArgs(const SmallVectorImpl<ISD::OutputArg> &Outs,
+                               const Function &F) const;
 
 public:
 };

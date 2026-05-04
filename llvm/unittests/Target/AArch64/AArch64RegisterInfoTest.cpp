@@ -163,7 +163,7 @@ TEST(AArch64ReservedRegs, ArtificialHIRegistersAreReserved) {
   const AArch64RegisterInfo &TRI = II->getRegisterInfo();
 
   // Create an empty machine function
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module M("", Context);
   M.setDataLayout(TM->createDataLayout());
   Function *F = Function::Create(

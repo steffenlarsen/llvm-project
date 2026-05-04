@@ -30,6 +30,7 @@
 #include "clang/Tooling/Tooling.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Option/OptTable.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/TargetSelect.h"
@@ -38,63 +39,116 @@ using namespace clang::tooling;
 using namespace clang;
 using namespace llvm;
 
-static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
-static cl::extrahelp MoreHelp(
-    "\tFor example, to run clang-check on all files in a subtree of the\n"
-    "\tsource tree, use:\n"
-    "\n"
-    "\t  find path/in/subtree -name '*.cpp'|xargs clang-check\n"
-    "\n"
-    "\tor using a specific build path:\n"
-    "\n"
-    "\t  find path/in/subtree -name '*.cpp'|xargs clang-check -p build/path\n"
-    "\n"
-    "\tNote, that path/in/subtree and current directory should follow the\n"
-    "\trules described above.\n"
-    "\n"
-);
+// ExtraHelp is set via P.setExtraHelp() in configureParser below.
 
 static cl::OptionCategory ClangCheckCategory("clang-check options");
 static const opt::OptTable &Options = getDriverOptTable();
-static cl::opt<bool>
-    ASTDump("ast-dump",
-            cl::desc(Options.getOptionHelpText(options::OPT_ast_dump)),
-            cl::cat(ClangCheckCategory));
-static cl::opt<bool>
-    ASTList("ast-list",
-            cl::desc(Options.getOptionHelpText(options::OPT_ast_list)),
-            cl::cat(ClangCheckCategory));
-static cl::opt<bool>
-    ASTPrint("ast-print",
-             cl::desc(Options.getOptionHelpText(options::OPT_ast_print)),
-             cl::cat(ClangCheckCategory));
-static cl::opt<std::string> ASTDumpFilter(
+
+// clang-check uses CommonOptionsParser which owns the parse, so we use
+// registerAsRuntime with a bridge callback.
+inline constexpr clv2::OptionInfo<bool> CCASTDumpOpt{
+    "ast-dump", "Build ASTs and then debug dump them"};
+
+inline constexpr clv2::OptionInfo<bool> CCASTListOpt{
+    "ast-list",
+    "Build ASTs and print the list of declaration node qualified names"};
+
+inline constexpr clv2::OptionInfo<bool> CCASTPrintOpt{
+    "ast-print", "Build ASTs and then pretty-print them"};
+
+inline constexpr clv2::OptionInfo<std::string> CCASTDumpFilterOpt{
     "ast-dump-filter",
-    cl::desc(Options.getOptionHelpText(options::OPT_ast_dump_filter)),
-    cl::cat(ClangCheckCategory));
-static cl::opt<bool>
-    Analyze("analyze",
-            cl::desc(Options.getOptionHelpText(options::OPT_analyze)),
-            cl::cat(ClangCheckCategory));
-static cl::opt<std::string>
-    AnalyzerOutput("analyzer-output-path",
-                   cl::desc(Options.getOptionHelpText(options::OPT_o)),
-                   cl::cat(ClangCheckCategory));
+    "Use with -ast-dump or -ast-print to dump/print only AST declaration"
+    " nodes having a certain substring in a qualified name. Use"
+    " -ast-list to list all filterable declaration node names."};
 
-static cl::opt<bool>
-    Fixit("fixit", cl::desc(Options.getOptionHelpText(options::OPT_fixit)),
-          cl::cat(ClangCheckCategory));
-static cl::opt<bool> FixWhatYouCan(
+inline constexpr clv2::OptionInfo<bool> CCAnalyzeOpt{
+    "analyze", "Run static analysis engine"};
+
+inline constexpr clv2::OptionInfo<std::string> CCAnalyzerOutputOpt{
+    "analyzer-output-path", "Write output to <file>"};
+
+inline constexpr clv2::OptionInfo<bool> CCFixitOpt{
+    "fixit", "Apply fix-it advice to the input source"};
+
+inline constexpr clv2::OptionInfo<bool> CCFixWhatYouCanOpt{
     "fix-what-you-can",
-    cl::desc(Options.getOptionHelpText(options::OPT_fix_what_you_can)),
-    cl::cat(ClangCheckCategory));
+    "Apply fix-it advice even in the presence of unfixable errors"};
 
-static cl::opt<bool> SyntaxTreeDump("syntax-tree-dump",
-                                    cl::desc("dump the syntax tree"),
-                                    cl::cat(ClangCheckCategory));
-static cl::opt<bool> TokensDump("tokens-dump",
-                                cl::desc("dump the preprocessed tokens"),
-                                cl::cat(ClangCheckCategory));
+inline constexpr clv2::OptionInfo<bool> CCSyntaxTreeDumpOpt{
+    "syntax-tree-dump", "dump the syntax tree"};
+
+inline constexpr clv2::OptionInfo<bool> CCTokensDumpOpt{
+    "tokens-dump", "dump the preprocessed tokens"};
+
+inline constexpr clv2::OptionsRegistry<
+    &CCASTDumpOpt, &CCASTListOpt, &CCASTPrintOpt, &CCASTDumpFilterOpt,
+    &CCAnalyzeOpt, &CCAnalyzerOutputOpt, &CCFixitOpt, &CCFixWhatYouCanOpt,
+    &CCSyntaxTreeDumpOpt, &CCTokensDumpOpt>
+    ClangCheckReg;
+
+namespace {
+struct ClangCheckOptions {
+  bool ASTDump = false;
+  bool ASTList = false;
+  bool ASTPrint = false;
+  std::string ASTDumpFilter;
+  bool Analyze = false;
+  std::string AnalyzerOutput;
+  bool Fixit = false;
+  bool FixWhatYouCan = false;
+  bool SyntaxTreeDump = false;
+  bool TokensDump = false;
+};
+} // namespace
+
+static void
+applyClangCheckOpts(const decltype(ClangCheckReg)::ParsedOptionsT &Opts,
+                    ClangCheckOptions &CheckOpts) {
+  CheckOpts.ASTDump = Opts.get<&CCASTDumpOpt>();
+  CheckOpts.ASTList = Opts.get<&CCASTListOpt>();
+  CheckOpts.ASTPrint = Opts.get<&CCASTPrintOpt>();
+  CheckOpts.ASTDumpFilter = Opts.get<&CCASTDumpFilterOpt>();
+  CheckOpts.Analyze = Opts.get<&CCAnalyzeOpt>();
+  CheckOpts.AnalyzerOutput = Opts.get<&CCAnalyzerOutputOpt>();
+  CheckOpts.Fixit = Opts.get<&CCFixitOpt>();
+  CheckOpts.FixWhatYouCan = Opts.get<&CCFixWhatYouCanOpt>();
+  CheckOpts.SyntaxTreeDump = Opts.get<&CCSyntaxTreeDumpOpt>();
+  CheckOpts.TokensDump = Opts.get<&CCTokensDumpOpt>();
+}
+
+static void configureParser(clv2::OptionParser &P,
+                            ClangCheckOptions &CheckOpts) {
+  using ParsedT = decltype(ClangCheckReg)::ParsedOptionsT;
+  auto *Storage = new ParsedT();
+  decltype(ClangCheckReg)::applyDefaultsTo(*Storage);
+  std::vector<clv2::detail::OptionEntry> Entries;
+  std::vector<clv2::detail::AliasEntry> Aliases;
+  std::vector<clv2::detail::SubCommandSpec> SubSpecs;
+  decltype(ClangCheckReg)::staticBuildInto(*Storage, Entries, Aliases,
+                                           SubSpecs);
+  for (auto &E : Entries) {
+    if (!E.Cat)
+      E.Cat = &ClangCheckCategory;
+    P.addDynamicEntry(std::move(E));
+  }
+  clv2::registerDynamicPostParseCallback(
+      [Storage, &CheckOpts]() { applyClangCheckOpts(*Storage, CheckOpts); });
+  P.setExtraHelp(
+      std::string(clang::tooling::CommonOptionsParser::HelpMessage) +
+      "\tFor example, to run clang-check on all files in a subtree of the\n"
+      "\tsource tree, use:\n"
+      "\n"
+      "\t  find path/in/subtree -name '*.cpp'|xargs clang-check\n"
+      "\n"
+      "\tor using a specific build path:\n"
+      "\n"
+      "\t  find path/in/subtree -name '*.cpp'|xargs clang-check -p build/path\n"
+      "\n"
+      "\tNote, that path/in/subtree and current directory should follow the\n"
+      "\trules described above.\n"
+      "\n");
+}
 
 namespace {
 
@@ -102,9 +156,7 @@ namespace {
 // into a header file and reuse that.
 class FixItOptions : public clang::FixItOptions {
 public:
-  FixItOptions() {
-    FixWhatYouCan = ::FixWhatYouCan;
-  }
+  FixItOptions(bool FixWhatYouCan) { this->FixWhatYouCan = FixWhatYouCan; }
 
   std::string RewriteFilename(const std::string& filename, int &fd) override {
     // We don't need to do permission checking here since clang will diagnose
@@ -137,21 +189,29 @@ public:
 /// \c FixItRewriter.
 class ClangCheckFixItAction : public clang::FixItAction {
 public:
+  ClangCheckFixItAction(bool FixWhatYouCan) : FixWhatYouCan(FixWhatYouCan) {}
+
   bool BeginSourceFileAction(clang::CompilerInstance& CI) override {
-    FixItOpts.reset(new FixItOptions);
+    FixItOpts.reset(new FixItOptions(FixWhatYouCan));
     Rewriter.reset(new FixItRewriter(CI.getDiagnostics(), CI.getSourceManager(),
                                      CI.getLangOpts(), FixItOpts.get()));
     return true;
   }
+
+private:
+  bool FixWhatYouCan;
 };
 
 class DumpSyntaxTree : public clang::ASTFrontendAction {
 public:
+  DumpSyntaxTree(bool TokensDump) : TokensDump(TokensDump) {}
+
   std::unique_ptr<clang::ASTConsumer>
   CreateASTConsumer(clang::CompilerInstance &CI, StringRef InFile) override {
     class Consumer : public clang::ASTConsumer {
     public:
-      Consumer(clang::CompilerInstance &CI) : Collector(CI.getPreprocessor()) {}
+      Consumer(clang::CompilerInstance &CI, bool TokensDump)
+          : Collector(CI.getPreprocessor()), TokensDump(TokensDump) {}
 
       void HandleTranslationUnit(clang::ASTContext &AST) override {
         clang::syntax::TokenBuffer TB = std::move(Collector).consume();
@@ -166,27 +226,50 @@ public:
 
     private:
       clang::syntax::TokenCollector Collector;
+      bool TokensDump;
     };
-    return std::make_unique<Consumer>(CI);
+    return std::make_unique<Consumer>(CI, TokensDump);
   }
+
+private:
+  bool TokensDump;
 };
 
 class ClangCheckActionFactory {
 public:
+  ClangCheckActionFactory(const ClangCheckOptions &CheckOpts)
+      : CheckOpts(CheckOpts) {}
+
   std::unique_ptr<clang::ASTConsumer> newASTConsumer() {
-    if (ASTList)
+    if (CheckOpts.ASTList)
       return clang::CreateASTDeclNodeLister();
-    if (ASTDump)
-      return clang::CreateASTDumper(nullptr /*Dump to stdout.*/, ASTDumpFilter,
-                                    /*DumpDecls=*/true,
-                                    /*Deserialize=*/false,
-                                    /*DumpLookups=*/false,
-                                    /*DumpDeclTypes=*/false,
-                                    clang::ADOF_Default);
-    if (ASTPrint)
-      return clang::CreateASTPrinter(nullptr, ASTDumpFilter);
+    if (CheckOpts.ASTDump)
+      return clang::CreateASTDumper(
+          nullptr /*Dump to stdout.*/, CheckOpts.ASTDumpFilter,
+          /*DumpDecls=*/true,
+          /*Deserialize=*/false,
+          /*DumpLookups=*/false,
+          /*DumpDeclTypes=*/false, clang::ADOF_Default);
+    if (CheckOpts.ASTPrint)
+      return clang::CreateASTPrinter(nullptr, CheckOpts.ASTDumpFilter);
     return std::make_unique<clang::ASTConsumer>();
   }
+
+private:
+  const ClangCheckOptions &CheckOpts;
+};
+
+template <typename ActionT>
+class ClangCheckActionFactoryWithBoolArg : public FrontendActionFactory {
+public:
+  ClangCheckActionFactoryWithBoolArg(bool Arg) : Arg(Arg) {}
+
+  std::unique_ptr<clang::FrontendAction> create() override {
+    return std::make_unique<ActionT>(Arg);
+  }
+
+private:
+  bool Arg;
 };
 
 } // namespace
@@ -200,8 +283,10 @@ int main(int argc, const char **argv) {
   llvm::InitializeAllAsmPrinters();
   llvm::InitializeAllAsmParsers();
 
-  auto ExpectedParser =
-      CommonOptionsParser::create(argc, argv, ClangCheckCategory);
+  ClangCheckOptions CheckOpts;
+  auto ExpectedParser = CommonOptionsParser::create(
+      argc, argv, ClangCheckCategory,
+      [&CheckOpts](clv2::OptionParser &P) { configureParser(P, CheckOpts); });
   if (!ExpectedParser) {
     llvm::errs() << llvm::toString(ExpectedParser.takeError());
     return 1;
@@ -210,16 +295,16 @@ int main(int argc, const char **argv) {
   ClangTool Tool(OptionsParser.getCompilations(),
                  OptionsParser.getSourcePathList());
 
-  if (Analyze) {
+  if (CheckOpts.Analyze) {
     // Set output path if is provided by user.
     //
     // As the original -o options have been removed by default via the
     // strip-output adjuster, we only need to add the analyzer -o options here
     // when it is provided by users.
-    if (!AnalyzerOutput.empty())
-      Tool.appendArgumentsAdjuster(
-          getInsertArgumentAdjuster(CommandLineArguments{"-o", AnalyzerOutput},
-                                    ArgumentInsertPosition::END));
+    if (!CheckOpts.AnalyzerOutput.empty())
+      Tool.appendArgumentsAdjuster(getInsertArgumentAdjuster(
+          CommandLineArguments{"-o", CheckOpts.AnalyzerOutput},
+          ArgumentInsertPosition::END));
 
     // Running the analyzer requires --analyze. Other modes can work with the
     // -fsyntax-only option.
@@ -242,16 +327,20 @@ int main(int argc, const char **argv) {
         getInsertArgumentAdjuster("--analyze", ArgumentInsertPosition::BEGIN));
   }
 
-  ClangCheckActionFactory CheckFactory;
+  ClangCheckActionFactory CheckFactory(CheckOpts);
   std::unique_ptr<FrontendActionFactory> FrontendFactory;
 
   // Choose the correct factory based on the selected mode.
-  if (Analyze)
+  if (CheckOpts.Analyze)
     FrontendFactory = newFrontendActionFactory<clang::ento::AnalysisAction>();
-  else if (Fixit)
-    FrontendFactory = newFrontendActionFactory<ClangCheckFixItAction>();
-  else if (SyntaxTreeDump || TokensDump)
-    FrontendFactory = newFrontendActionFactory<DumpSyntaxTree>();
+  else if (CheckOpts.Fixit)
+    FrontendFactory = std::make_unique<
+        ClangCheckActionFactoryWithBoolArg<ClangCheckFixItAction>>(
+        CheckOpts.FixWhatYouCan);
+  else if (CheckOpts.SyntaxTreeDump || CheckOpts.TokensDump)
+    FrontendFactory =
+        std::make_unique<ClangCheckActionFactoryWithBoolArg<DumpSyntaxTree>>(
+            CheckOpts.TokensDump);
   else
     FrontendFactory = newFrontendActionFactory(&CheckFactory);
 
