@@ -10,29 +10,13 @@
 //  llvm-dis [options]      - Read LLVM bitcode from stdin, write asm to stdout
 //  llvm-dis [options] x.bc - Read LLVM bitcode from the x.bc file, write asm
 //                            to the x.ll file.
-//  Options:
-//
-//  Color Options:
-//      --color                 - Use colors in output (default=autodetect)
-//
-//  Disassembler Options:
-//      -f                      - Enable binary output on terminals
-//      --materialize-metadata  - Load module without materializing metadata,
-//                                then materialize only the metadata
-//      -o <filename>           - Override output filename
-//      --show-annotations      - Add informational comments to the .ll file
-//
-//  Generic Options:
-//      --help                  - Display available options
-//                                (--help-hidden for more)
-//      --help-list             - Display list of available options
-//                                (--help-list-hidden for more)
-//      --version               - Display the version of this program
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Bitcode/BitcodeOptionsOptInfos.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/IR/AssemblyAnnotationWriter.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/DiagnosticPrinter.h"
@@ -41,55 +25,63 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ModuleSummaryIndex.h"
 #include "llvm/IR/Type.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/WithColor.h"
 #include <system_error>
 using namespace llvm;
+using namespace llvm::clv2;
 
-static cl::OptionCategory DisCategory("Disassembler Options");
+static constexpr OptionCategory DisCategory{"Disassembler Options"};
 
-static cl::list<std::string> InputFilenames(cl::Positional,
-                                            cl::desc("[input bitcode]..."),
-                                            cl::cat(DisCategory));
+static constexpr ListOptionInfo<std::string> InputFilenames{
+    "inputs", "[input bitcode]...", Positional{}, ZeroOrMore, cat(DisCategory)};
 
-static cl::opt<std::string> OutputFilename("o",
-                                           cl::desc("Override output filename"),
-                                           cl::value_desc("filename"),
-                                           cl::cat(DisCategory));
+static constexpr OptionInfo<std::string> OutputFilename{
+    "o", "Override output filename", value_desc("filename"), cat(DisCategory)};
 
-static cl::opt<bool> Force("f", cl::desc("Enable binary output on terminals"),
-                           cl::cat(DisCategory));
+static constexpr OptionInfo<bool> Force{
+    "f", "Enable binary output on terminals", cat(DisCategory)};
 
-static cl::opt<bool> DontPrint("disable-output",
-                               cl::desc("Don't output the .ll file"),
-                               cl::Hidden, cl::cat(DisCategory));
+static constexpr OptionInfo<bool> DontPrint{
+    "disable-output", "Don't output the .ll file", Hidden, cat(DisCategory)};
 
-static cl::opt<bool>
-    SetImporting("set-importing",
-                 cl::desc("Set lazy loading to pretend to import a module"),
-                 cl::Hidden, cl::cat(DisCategory));
+static constexpr OptionInfo<bool> SetImporting{
+    "set-importing", "Set lazy loading to pretend to import a module", Hidden,
+    cat(DisCategory)};
 
-static cl::opt<bool>
-    ShowAnnotations("show-annotations",
-                    cl::desc("Add informational comments to the .ll file"),
-                    cl::cat(DisCategory));
+static constexpr OptionInfo<bool> ShowAnnotations{
+    "show-annotations", "Add informational comments to the .ll file",
+    cat(DisCategory)};
 
-static cl::opt<bool>
-    MaterializeMetadata("materialize-metadata",
-                        cl::desc("Load module without materializing metadata, "
-                                 "then materialize only the metadata"),
-                        cl::cat(DisCategory));
+static constexpr OptionInfo<bool> MaterializeMetadata{
+    "materialize-metadata",
+    "Load module without materializing metadata, "
+    "then materialize only the metadata",
+    cat(DisCategory)};
 
-static cl::opt<bool> PrintThinLTOIndexOnly(
+static constexpr OptionInfo<bool> PrintThinLTOIndexOnly{
     "print-thinlto-index-only",
-    cl::desc("Only read thinlto index and print the index as LLVM assembly."),
-    cl::init(false), cl::Hidden, cl::cat(DisCategory));
+    "Only read thinlto index and print the index as LLVM assembly.",
+    Init{false}, Hidden, cat(DisCategory)};
+
+static constexpr OptionInfo<bool> PreserveLLUselist{
+    "preserve-ll-uselistorder",
+    "Preserve use-list order when writing LLVM assembly.", Hidden,
+    cat(DisCategory)};
+
+static constexpr OptionsRegistry<&InputFilenames, &OutputFilename, &Force,
+                                 &DontPrint, &SetImporting, &ShowAnnotations,
+                                 &MaterializeMetadata, &PrintThinLTOIndexOnly,
+                                 &PreserveLLUselist>
+    DisToolReg;
 
 static void printDebugLoc(const DebugLoc &DL, formatted_raw_ostream &OS) {
   OS << DL.getLine() << ":" << DL.getCol();
@@ -103,7 +95,6 @@ namespace {
 class CommentWriter : public AssemblyAnnotationWriter {
 private:
   bool canSafelyAccessUses(const Value &V) {
-    // Can't safely access uses, if module not materialized.
     const GlobalValue *GV = dyn_cast<GlobalValue>(&V);
     return !GV || (GV->getParent() && GV->getParent()->isMaterialized());
   }
@@ -114,7 +105,7 @@ public:
     if (!canSafelyAccessUses(*F))
       return;
 
-    OS << "; [#uses=" << F->getNumUses() << ']';  // Output # uses
+    OS << "; [#uses=" << F->getNumUses() << ']';
     OS << '\n';
   }
 
@@ -126,7 +117,6 @@ public:
     if (!V.getType()->isVoidTy()) {
       OS.PadToColumn(50);
       Padded = true;
-      // Output # uses and type
       OS << "; [#uses=" << V.getNumUses() << " type=" << *V.getType() << "]";
     }
     if (const Instruction *I = dyn_cast<Instruction>(&V)) {
@@ -137,7 +127,7 @@ public:
           OS << ";";
         }
         OS << " [debug line = ";
-        printDebugLoc(DL,OS);
+        printDebugLoc(DL, OS);
         OS << "]";
       }
     }
@@ -151,10 +141,18 @@ struct LLVMDisDiagnosticHandler : public DiagnosticHandler {
     raw_ostream &OS = errs();
     OS << Prefix << ": ";
     switch (DI.getSeverity()) {
-      case DS_Error: WithColor::error(OS); break;
-      case DS_Warning: WithColor::warning(OS); break;
-      case DS_Remark: OS << "remark: "; break;
-      case DS_Note: WithColor::note(OS); break;
+    case DS_Error:
+      WithColor::error(OS);
+      break;
+    case DS_Warning:
+      WithColor::warning(OS);
+      break;
+    case DS_Remark:
+      OS << "remark: ";
+      break;
+    case DS_Note:
+      WithColor::note(OS);
+      break;
     }
 
     DiagnosticPrinterRawOStream DP(OS);
@@ -175,21 +173,25 @@ int main(int argc, char **argv) {
 
   ExitOnErr.setBanner(std::string(argv[0]) + ": error: ");
 
-  cl::HideUnrelatedOptions({&DisCategory, &getColorCategory()});
-  cl::ParseCommandLineOptions(argc, argv, "llvm .bc -> .ll disassembler\n");
+  clv2::OptionParser P;
+  P.add<&DisToolReg>();
+  P.add<&BitcodeOptsReg>();
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&DisCategory, &getColorCategory()});
+  auto OptsCtx = P.parse(argc, argv, "llvm .bc -> .ll disassembler\n");
+  auto *Opts = OptsCtx->getViewPtr<&DisToolReg>();
 
-  if (InputFilenames.size() < 1) {
-    InputFilenames.push_back("-");
-  } else if (InputFilenames.size() > 1 && !OutputFilename.empty()) {
+  auto Inputs = Opts->get<&InputFilenames>();
+  if (Inputs.size() < 1) {
+    Inputs.push_back("-");
+  } else if (Inputs.size() > 1 && !Opts->get<&OutputFilename>().empty()) {
     errs()
         << "error: output file name cannot be set for multiple input files\n";
     return 1;
   }
 
-  for (const auto &InputFilename : InputFilenames) {
-    // Use a fresh context for each input to avoid state
-    // cross-contamination across inputs (e.g. type name collisions).
-    LLVMContext Context;
+  for (const auto &InputFilename : Inputs) {
+    LLVMContext Context(*OptsCtx);
     Context.setDiagnosticHandler(
         std::make_unique<LLVMDisDiagnosticHandler>(argv[0]));
 
@@ -205,35 +207,35 @@ int main(int argc, char **argv) {
 
     const size_t N = IF.Mods.size();
 
-    if (OutputFilename == "-" && N > 1)
+    if (Opts->get<&OutputFilename>() == "-" && N > 1)
       errs() << "only single module bitcode files can be written to stdout\n";
 
     for (size_t I = 0; I < N; ++I) {
-      BitcodeModule MB = IF.Mods[I];
+      BitcodeModule BM = IF.Mods[I];
 
       std::unique_ptr<Module> M;
 
-      if (!PrintThinLTOIndexOnly) {
-        M = ExitOnErr(
-            MB.getLazyModule(Context, MaterializeMetadata, SetImporting));
-        if (MaterializeMetadata)
+      if (!Opts->get<&PrintThinLTOIndexOnly>()) {
+        M = ExitOnErr(BM.getLazyModule(Context,
+                                       Opts->get<&MaterializeMetadata>(),
+                                       Opts->get<&SetImporting>()));
+        if (Opts->get<&MaterializeMetadata>())
           ExitOnErr(M->materializeMetadata());
         else
           ExitOnErr(M->materializeAll());
       }
 
-      BitcodeLTOInfo LTOInfo = ExitOnErr(MB.getLTOInfo());
+      BitcodeLTOInfo LTOInfo = ExitOnErr(BM.getLTOInfo());
       std::unique_ptr<ModuleSummaryIndex> Index;
       if (LTOInfo.HasSummary)
-        Index = ExitOnErr(MB.getSummary());
+        Index = ExitOnErr(BM.getSummary());
 
-      std::string FinalFilename(OutputFilename);
+      std::string FinalFilename(Opts->get<&OutputFilename>());
 
-      // Just use stdout.  We won't actually print anything on it.
-      if (DontPrint)
+      if (Opts->get<&DontPrint>())
         FinalFilename = "-";
 
-      if (FinalFilename.empty()) { // Unspecified output, infer it.
+      if (FinalFilename.empty()) {
         if (InputFilename == "-") {
           FinalFilename = "-";
         } else {
@@ -257,20 +259,17 @@ int main(int argc, char **argv) {
       }
 
       std::unique_ptr<AssemblyAnnotationWriter> Annotator;
-      if (ShowAnnotations)
+      if (Opts->get<&ShowAnnotations>())
         Annotator.reset(new CommentWriter());
 
-      // All that llvm-dis does is write the assembly to a file.
-      if (!DontPrint) {
+      if (!Opts->get<&DontPrint>()) {
         if (M) {
-          M->print(Out->os(), Annotator.get(),
-                   /* ShouldPreserveUseListOrder */ false);
+          M->print(Out->os(), Annotator.get(), Opts->get<&PreserveLLUselist>());
         }
         if (Index)
           Index->print(Out->os());
       }
 
-      // Declare success.
       Out->keep();
     }
   }

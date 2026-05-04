@@ -18,6 +18,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/LiveVariables.h"
@@ -40,10 +41,12 @@
 #include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <iterator>
@@ -53,21 +56,19 @@ using namespace llvm;
 
 #define DEBUG_TYPE "phi-node-elimination"
 
-static cl::opt<bool>
-    DisableEdgeSplitting("disable-phi-elim-edge-splitting", cl::init(false),
-                         cl::Hidden,
-                         cl::desc("Disable critical edge splitting "
-                                  "during PHI elimination"));
+static bool getDisablePhiElimEdgeSplitting(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisablePhiElimEdgeSplitting>(
+      Ctx);
+}
 
-static cl::opt<bool>
-    SplitAllCriticalEdges("phi-elim-split-all-critical-edges", cl::init(false),
-                          cl::Hidden,
-                          cl::desc("Split all critical edges during "
-                                   "PHI elimination"));
+static bool getPhiElimSplitAllCriticalEdges(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_PhiElimSplitAllCriticalEdges>(
+      Ctx);
+}
 
-static cl::opt<bool> NoPhiElimLiveOutEarlyExit(
-    "no-phi-elim-live-out-early-exit", cl::init(false), cl::Hidden,
-    cl::desc("Do not use an early exit if isLiveOutPastPHIs returns true."));
+static bool getNoPhiElimLiveOutEarlyExit(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_NoPhiElimLiveOutEarlyExit>(Ctx);
+}
 
 namespace {
 
@@ -242,7 +243,9 @@ bool PHIEliminationImpl::run(MachineFunction &MF) {
   bool Changed = false;
 
   // Split critical edges to help the coalescer.
-  if (!DisableEdgeSplitting && (LV || LIS)) {
+  if (!getDisablePhiElimEdgeSplitting(
+          MF.getFunction().getContext().getOptionsContext()) &&
+      (LV || LIS)) {
     // A set of live-in regs for each MBB which is used to update LV
     // efficiently also with large functions.
     std::vector<SparseBitVector<>> LiveInSets;
@@ -821,10 +824,14 @@ bool PHIEliminationImpl::SplitPHIEdges(
 
       // Avoid splitting backedges of loops. It would introduce small
       // out-of-line blocks into the loop which is very bad for code placement.
-      if (PreMBB == &MBB && !SplitAllCriticalEdges)
+      if (PreMBB == &MBB &&
+          !getPhiElimSplitAllCriticalEdges(
+              MF.getFunction().getContext().getOptionsContext()))
         continue;
       const MachineLoop *PreLoop = MLI ? MLI->getLoopFor(PreMBB) : nullptr;
-      if (IsLoopHeader && PreLoop == CurLoop && !SplitAllCriticalEdges)
+      if (IsLoopHeader && PreLoop == CurLoop &&
+          !getPhiElimSplitAllCriticalEdges(
+              MF.getFunction().getContext().getOptionsContext()))
         continue;
 
       // LV doesn't consider a phi use live-out, so isLiveOut only returns true
@@ -834,7 +841,9 @@ bool PHIEliminationImpl::SplitPHIEdges(
       //
       // If the copy would be a kill, there is no need to split the edge.
       bool ShouldSplit = isLiveOutPastPHIs(Reg, PreMBB);
-      if (!ShouldSplit && !NoPhiElimLiveOutEarlyExit)
+      if (!ShouldSplit &&
+          !getNoPhiElimLiveOutEarlyExit(
+              MF.getFunction().getContext().getOptionsContext()))
         continue;
       if (ShouldSplit) {
         LLVM_DEBUG(dbgs() << printReg(Reg) << " live-out before critical edge "
@@ -867,7 +876,9 @@ bool PHIEliminationImpl::SplitPHIEdges(
         // Split unless this edge is entering CurLoop from an outer loop.
         ShouldSplit = PreLoop && !PreLoop->contains(CurLoop);
       }
-      if (!ShouldSplit && !SplitAllCriticalEdges)
+      if (!ShouldSplit &&
+          !getPhiElimSplitAllCriticalEdges(
+              MF.getFunction().getContext().getOptionsContext()))
         continue;
       MachineBasicBlock *NewBB;
       if (P)

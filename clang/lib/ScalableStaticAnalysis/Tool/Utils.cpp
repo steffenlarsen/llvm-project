@@ -9,13 +9,15 @@
 #include "clang/ScalableStaticAnalysis/Tool/Utils.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
@@ -172,21 +174,30 @@ llvm::Triple clang::ssaf::parseTargetTripleOrFail(llvm::StringRef FlagName,
 void clang::ssaf::initTool(int argc, const char **argv, llvm::StringRef Version,
                            llvm::cl::OptionCategory &Category,
                            llvm::StringRef ToolHeading) {
+  initTool(argc, argv, Version, Category, ToolHeading, nullptr);
+}
+
+void clang::ssaf::initTool(
+    int argc, const char **argv, llvm::StringRef Version,
+    llvm::cl::OptionCategory &Category, llvm::StringRef ToolHeading,
+    std::function<void(llvm::clv2::OptionParser &)> ConfigureParser) {
   // path::stem strips the .exe extension on Windows so ToolName is consistent.
   ToolName = path::stem(argv[0]);
 
   // Set tool version for the version printer.
   ToolVersion = Version;
 
-  // Hide options unrelated to the tool from --help output.
-  llvm::cl::HideUnrelatedOptions(Category);
-
   // Register a custom version printer for the --version flag.
   llvm::cl::SetVersionPrinter(printVersion);
 
   // Parse command-line arguments and exit with an error if they are invalid.
   std::string Overview = (ToolHeading + "\n").str();
-  llvm::cl::ParseCommandLineOptions(argc, argv, Overview);
+  llvm::clv2::OptionParser P;
+  llvm::RegisterAllLLVMOptions(P);
+  if (ConfigureParser)
+    ConfigureParser(P);
+  P.hideUnrelatedOptions({&Category});
+  P.parse(argc, argv, Overview);
 }
 
 clang::ssaf::FormatFile

@@ -11,17 +11,27 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/IntegerInclusiveInterval.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Program.h"
 
 using namespace llvm;
+using namespace llvm::clv2;
 
-static cl::opt<std::string> ReproductionCmd(cl::Positional, cl::Required);
+static constexpr OptionInfo<std::string> ReproductionCmdOpt{
+    "reproduction-cmd", "", Positional{}, Required};
 
-static cl::opt<std::string> StartChunks(cl::Positional, cl::Required);
+static constexpr OptionInfo<std::string> StartChunksOpt{"start-chunks", "",
+                                                        Positional{}, Required};
 
-static cl::opt<bool> Pessimist("pessimist", cl::init(false));
+static constexpr OptionInfo<bool> PessimistOpt{"pessimist", ""};
+
+static constexpr OptionsRegistry<&ReproductionCmdOpt, &StartChunksOpt,
+                                 &PessimistOpt>
+    ChunkListToolReg;
+// Mutable copy of the reproduction command (resolved to full path after parse).
+static std::string ReproductionCmd;
 
 namespace {
 
@@ -83,7 +93,14 @@ bool increaseGranularity(IntegerInclusiveIntervalUtils::IntervalList &Chunks) {
 } // namespace
 
 int main(int argc, char **argv) {
-  cl::ParseCommandLineOptions(argc, argv);
+  clv2::OptionParser P;
+  P.add<&ChunkListToolReg>();
+  auto OptsCtx = P.parse(argc, argv);
+  auto *Opts = OptsCtx->getViewPtr<&ChunkListToolReg>();
+
+  ReproductionCmd = Opts->get<&ReproductionCmdOpt>();
+  const std::string &StartChunks = Opts->get<&StartChunksOpt>();
+  bool Pessimist = Opts->get<&PessimistOpt>();
 
   auto ExpectedChunks =
       IntegerInclusiveIntervalUtils::parseIntervals(StartChunks, ',');
@@ -101,7 +118,7 @@ int main(int argc, char **argv) {
     errs() << "failed to find command : " << ReproductionCmd << "\n";
     return 1;
   }
-  ReproductionCmd.setValue(Program.get());
+  ReproductionCmd = Program.get();
 
   errs() << "Input Checking:\n";
   if (!isStillInteresting(CurrChunks)) {

@@ -35,15 +35,16 @@
 #include "llvm/Option/OptTable.h"
 #include "llvm/Option/Option.h"
 #include "llvm/Plugins/PassPlugin.h"
-#include "llvm/Remarks/HotnessThresholdParser.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileOutputBuffer.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Parallel.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/StringSaver.h"
@@ -61,51 +62,65 @@ using namespace llvm::object;
 
 // Various tools (e.g., llc and opt) duplicate this series of declarations for
 // options related to passes and remarks.
+// clang-linker-wrapper uses its own OptTable for most options but registers
+// these via clv2 for -mllvm pass-through.
 
-static cl::opt<bool> RemarksWithHotness(
+inline constexpr clv2::OptionInfo<bool> LWRemarksWithHotnessOpt{
     "pass-remarks-with-hotness",
-    cl::desc("With PGO, include profile count in optimization remarks"),
-    cl::Hidden);
+    "With PGO, include profile count in optimization remarks", clv2::Hidden};
 
-static cl::opt<std::optional<uint64_t>, false, remarks::HotnessThresholdParser>
-    RemarksHotnessThreshold(
-        "pass-remarks-hotness-threshold",
-        cl::desc("Minimum profile count required for "
-                 "an optimization remark to be output. "
-                 "Use 'auto' to apply the threshold from profile summary."),
-        cl::value_desc("N or 'auto'"), cl::init(0), cl::Hidden);
+inline constexpr clv2::OptionInfo<std::string> LWRemarksOutputOpt{
+    "pass-remarks-output", "Output filename for pass remarks"};
 
-static cl::opt<std::string>
-    RemarksFilename("pass-remarks-output",
-                    cl::desc("Output filename for pass remarks"),
-                    cl::value_desc("filename"));
+inline constexpr clv2::OptionInfo<std::string> LWRemarksFilterOpt{
+    "pass-remarks-filter", "Only record optimization remarks from passes whose "
+                           "names match the given regular expression"};
 
-static cl::opt<std::string>
-    RemarksPasses("pass-remarks-filter",
-                  cl::desc("Only record optimization remarks from passes whose "
-                           "names match the given regular expression"),
-                  cl::value_desc("regex"));
-
-static cl::opt<std::string> RemarksFormat(
+inline constexpr clv2::OptionInfo<std::string> LWRemarksFormatOpt{
     "pass-remarks-format",
-    cl::desc("The format used for serializing remarks (default: YAML)"),
-    cl::value_desc("format"), cl::init("yaml"));
+    "The format used for serializing remarks (default: YAML)",
+    clv2::Init{"yaml"}};
 
-static cl::list<std::string>
-    PassPlugins("load-pass-plugin",
-                cl::desc("Load passes from plugin library"));
+inline constexpr clv2::ListOptionInfo<std::string> LWPassPluginsOpt{
+    "load-pass-plugin", "Load passes from plugin library",
+    clv2::value_desc("string")};
 
-static cl::opt<std::string> PassPipeline(
+inline constexpr clv2::OptionInfo<std::string> LWPassesOpt{
     "passes",
-    cl::desc(
-        "A textual description of the pass pipeline. To have analysis passes "
-        "available before a certain pass, add 'require<foo-analysis>'. "
-        "'-passes' overrides the pass pipeline (but not all effects) from "
-        "specifying '--opt-level=O?' (O2 is the default) to "
-        "clang-linker-wrapper.  Be sure to include the corresponding "
-        "'default<O?>' in '-passes'."));
-static cl::alias PassPipeline2("p", cl::aliasopt(PassPipeline),
-                               cl::desc("Alias for -passes"));
+    "A textual description of the pass pipeline. To have analysis "
+    "passes available before a certain pass, add "
+    "'require<foo-analysis>'. '-passes' overrides the pass pipeline "
+    "(but not all effects) from specifying '--opt-level=O?' (O2 is "
+    "the default) to clang-linker-wrapper.  Be sure to include the "
+    "corresponding 'default<O?>' in '-passes'.",
+    clv2::value_desc("string")};
+
+inline constexpr clv2::AliasInfo LWPassesAliasOpt{"p", "passes"};
+
+inline constexpr clv2::OptionsRegistry<
+    &LWRemarksWithHotnessOpt, &LWRemarksOutputOpt, &LWRemarksFilterOpt,
+    &LWRemarksFormatOpt, &LWPassPluginsOpt, &LWPassesOpt, &LWPassesAliasOpt>
+    LinkerWrapperOptsReg;
+
+static bool RemarksWithHotness = false;
+static std::optional<uint64_t> RemarksHotnessThreshold = 0;
+static std::string RemarksFilename;
+static std::string RemarksPasses;
+static std::string RemarksFormat = "yaml";
+static std::vector<std::string> PassPlugins;
+static std::string PassPipeline;
+
+static void applyLinkerWrapperOpts(
+    const decltype(LinkerWrapperOptsReg)::ParsedOptionsT &Opts) {
+  RemarksWithHotness = Opts.get<&LWRemarksWithHotnessOpt>();
+  RemarksFilename = Opts.get<&LWRemarksOutputOpt>();
+  RemarksPasses = Opts.get<&LWRemarksFilterOpt>();
+  auto Fmt = Opts.get<&LWRemarksFormatOpt>();
+  if (!Fmt.empty())
+    RemarksFormat = std::move(Fmt);
+  PassPlugins = Opts.get<&LWPassPluginsOpt>();
+  PassPipeline = Opts.get<&LWPassesOpt>();
+}
 
 /// Path of the current binary.
 static const char *LinkerExecutable;
@@ -691,7 +706,8 @@ Expected<StringRef> writeOffloadFile(const OffloadFile &File) {
 
 // Compile the module to an object file using the appropriate target machine for
 // the host triple.
-Expected<StringRef> compileModule(Module &M, OffloadKind Kind) {
+Expected<StringRef> compileModule(Module &M, OffloadKind Kind,
+                                  const clv2::OptionsContext &OptsCtx) {
   llvm::TimeTraceScope TimeScope("Compile module");
   std::string Msg;
   const Target *T = TargetRegistry::lookupTarget(M.getTargetTriple(), Msg);
@@ -699,7 +715,7 @@ Expected<StringRef> compileModule(Module &M, OffloadKind Kind) {
     return createStringError(Msg);
 
   auto Options =
-      codegen::InitTargetOptionsFromCodeGenFlags(M.getTargetTriple());
+      codegen::InitTargetOptionsFromCodeGenFlags(M.getTargetTriple(), OptsCtx);
   StringRef CPU = "";
   StringRef Features = "";
   std::unique_ptr<TargetMachine> TM(
@@ -795,7 +811,8 @@ wrapDeviceImagesVerbose(ArrayRef<std::unique_ptr<MemoryBuffer>> Buffers,
 /// registration code from the device images stored in \p Images.
 Expected<StringRef>
 wrapDeviceImages(ArrayRef<std::unique_ptr<MemoryBuffer>> Buffers,
-                 const ArgList &Args, OffloadKind Kind) {
+                 const ArgList &Args, OffloadKind Kind,
+                 const clv2::OptionsContext &OptsCtx) {
   llvm::TimeTraceScope TimeScope("Wrap bundled images");
 
   // We use the discrete tools if we are in verbose mode with '--save-temps'.
@@ -807,7 +824,7 @@ wrapDeviceImages(ArrayRef<std::unique_ptr<MemoryBuffer>> Buffers,
     BuffersToWrap.emplace_back(
         ArrayRef<char>(Buffer->getBufferStart(), Buffer->getBufferSize()));
 
-  LLVMContext Context;
+  LLVMContext Context(OptsCtx);
   Module M("offload.wrapper.module", Context);
   M.setTargetTriple(Triple(
       Args.getLastArgValue(OPT_host_triple_EQ, sys::getDefaultTargetTriple())));
@@ -858,7 +875,7 @@ wrapDeviceImages(ArrayRef<std::unique_ptr<MemoryBuffer>> Buffers,
     WriteBitcodeToFile(M, OS);
   }
 
-  auto FileOrErr = compileModule(M, Kind);
+  auto FileOrErr = compileModule(M, Kind, OptsCtx);
   if (!FileOrErr)
     return FileOrErr.takeError();
   return *FileOrErr;
@@ -1110,7 +1127,8 @@ Error handleOverrideImages(
 Expected<SmallVector<StringRef>>
 linkAndWrapDeviceFiles(ArrayRef<SmallVector<OffloadFile>> LinkerInputFiles,
                        const InputArgList &Args, char **Argv, int Argc,
-                       bool NeedsWrapping) {
+                       bool NeedsWrapping,
+                       const clv2::OptionsContext &OptsCtx) {
   llvm::TimeTraceScope TimeScope("Handle all device input");
 
   std::mutex ImageMtx;
@@ -1240,7 +1258,8 @@ linkAndWrapDeviceFiles(ArrayRef<SmallVector<OffloadFile>> LinkerInputFiles,
     }
 
     OffloadKind WrapperKind = usesLLVMOffloadWrapper(Input) ? OFK_OpenMP : Kind;
-    auto OutputOrErr = wrapDeviceImages(*BundledImagesOrErr, Args, WrapperKind);
+    auto OutputOrErr =
+        wrapDeviceImages(*BundledImagesOrErr, Args, WrapperKind, OptsCtx);
     if (!OutputOrErr)
       return OutputOrErr.takeError();
     WrappedOutput.push_back(*OutputOrErr);
@@ -1562,19 +1581,34 @@ int main(int Argc, char **Argv) {
   }
 
   // This forwards '-mllvm' arguments to LLVM if present.
-  SmallVector<const char *> NewArgv = {Argv[0]};
+  SmallVector<StringRef> LLVMArgs;
   for (const opt::Arg *Arg : Args.filtered(OPT_mllvm))
-    NewArgv.push_back(Arg->getValue());
+    LLVMArgs.push_back(Arg->getValue());
   for (const opt::Arg *Arg : Args.filtered(OPT_offload_opt_eq_minus))
-    NewArgv.push_back(Arg->getValue());
+    LLVMArgs.push_back(Arg->getValue());
+  clv2::OptionParser P;
+  RegisterAllLLVMOptions(P);
+  P.add<&LinkerWrapperOptsReg, applyLinkerWrapperOpts>();
+  std::unique_ptr<clv2::OptionsContext> OptsCtx;
+  if (!LLVMArgs.empty()) {
+    BumpPtrAllocator LLVMAlloc;
+    StringSaver LLVMSaver(LLVMAlloc);
+    SmallVector<const char *> LLVMArgv;
+    LLVMArgv.push_back(Argv[0]);
+    for (StringRef Arg : LLVMArgs)
+      LLVMArgv.push_back(LLVMSaver.save(Arg).data());
+    OptsCtx = P.parse(LLVMArgv.size(), LLVMArgv.data());
+  } else {
+    const char *DefaultArgv[] = {Argv[0]};
+    OptsCtx = P.parse(1, DefaultArgv);
+  }
   SmallVector<PassPlugin, 1> PluginList;
-  PassPlugins.setCallback([&](const std::string &PluginPath) {
+  for (const std::string &PluginPath : PassPlugins) {
     auto Plugin = PassPlugin::Load(PluginPath);
     if (!Plugin)
       reportFatalUsageError(Plugin.takeError());
     PluginList.emplace_back(Plugin.get());
-  });
-  cl::ParseCommandLineOptions(NewArgv.size(), &NewArgv[0]);
+  }
 
   Verbose = Args.hasArg(OPT_verbose);
   DryRun = Args.hasArg(OPT_dry_run);
@@ -1630,8 +1664,9 @@ int main(int Argc, char **Argv) {
 
     // Link and process the device images. The function may emit a direct fat
     // binary if --emit-fatbin-only is specified.
-    auto FilesOrErr = linkAndWrapDeviceFiles(*DeviceInputFiles, Args, Argv,
-                                             Argc, !EmitFatbinOnly);
+    auto FilesOrErr = linkAndWrapDeviceFiles(
+        *DeviceInputFiles, Args, Argv, Argc, !EmitFatbinOnly,
+        OptsCtx ? *OptsCtx : clv2::defaultOptionsContext());
     if (!FilesOrErr)
       reportError(FilesOrErr.takeError());
 

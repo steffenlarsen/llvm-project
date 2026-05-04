@@ -1,4 +1,5 @@
 set( LLVM_LINK_COMPONENTS
+  AllOptions
   ${LLVM_TARGETS_TO_BUILD}
   Analysis
   CodeGen

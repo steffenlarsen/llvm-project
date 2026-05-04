@@ -12,12 +12,13 @@
 
 #include "polly/JSONExporter.h"
 #include "polly/DependenceInfo.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopInfo.h"
 #include "polly/Support/ISLTools.h"
 #include "polly/Support/ScopLocation.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -34,26 +35,7 @@ using namespace polly;
 
 #define DEBUG_TYPE "polly-import-jscop"
 
-static cl::opt<bool>
-    PollyPrintImportJscop("polly-print-import-jscop",
-                          cl::desc("Polly - Print Scop import result"),
-                          cl::cat(PollyCategory));
-
 STATISTIC(NewAccessMapFound, "Number of updated access functions");
-
-namespace {
-static cl::opt<std::string>
-    ImportDir("polly-import-jscop-dir",
-              cl::desc("The directory to import the .jscop files from."),
-              cl::Hidden, cl::value_desc("Directory path"), cl::ValueRequired,
-              cl::init("."), cl::cat(PollyCategory));
-
-static cl::opt<std::string>
-    ImportPostfix("polly-import-jscop-postfix",
-                  cl::desc("Postfix to append to the import .jsop files."),
-                  cl::Hidden, cl::value_desc("File postfix"), cl::ValueRequired,
-                  cl::init(""), cl::cat(PollyCategory));
-} // namespace
 
 static std::string getFileName(Scop &S, StringRef Suffix = "") {
   std::string FunctionName = S.getFunction().getName().str();
@@ -148,6 +130,11 @@ static json::Value getJSON(Scop &S) {
 }
 
 static void exportScop(Scop &S) {
+  std::string ImportDir = ".";
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext()))
+    ImportDir = Opts->get<&llvm::clv2::POLLY_ImportJscopDir>();
+
   std::string FileName = ImportDir + "/" + getFileName(S);
 
   json::Value jscop = getJSON(S);
@@ -692,6 +679,14 @@ static bool importArrays(Scop &S, const json::Object &JScop) {
 /// invalid information.
 static bool importScop(Scop &S, const Dependences &D, const DataLayout &DL,
                        std::vector<std::string> *NewAccessStrings = nullptr) {
+  std::string ImportDir = ".";
+  std::string ImportPostfix;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext())) {
+    ImportDir = Opts->get<&llvm::clv2::POLLY_ImportJscopDir>();
+    ImportPostfix = Opts->get<&llvm::clv2::POLLY_ImportJscopPostfix>();
+  }
+
   std::string FileName = ImportDir + "/" + getFileName(S, ImportPostfix);
 
   std::string FunctionName = S.getFunction().getName().str();
@@ -748,6 +743,11 @@ void polly::runImportJSON(Scop &S, DependenceAnalysis::Result &DA) {
 
   // Dependences must be recomputed for the new access functions
   DA.abandonDependences();
+
+  bool PollyPrintImportJscop = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext()))
+    PollyPrintImportJscop = Opts->get<&llvm::clv2::POLLY_PrintImportJscop>();
 
   if (PollyPrintImportJscop) {
     outs()

@@ -27,7 +27,7 @@
 #include "mlir/Transforms/Passes.h"
 
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "affine-super-vectorizer-test"

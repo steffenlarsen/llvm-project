@@ -13,13 +13,16 @@
 
 #include "llvm/CodeGen/MacroFusion.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/ScheduleDAG.h"
 #include "llvm/CodeGen/ScheduleDAGInstrs.h"
 #include "llvm/CodeGen/ScheduleDAGMutation.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/Function.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "machine-scheduler"
@@ -31,8 +34,9 @@ STATISTIC(NumFusionConflicts,
 
 using namespace llvm;
 
-static cl::opt<bool> EnableMacroFusion("misched-fusion", cl::Hidden,
-  cl::desc("Enable scheduling for macro fusion."), cl::init(true));
+static bool getMischedFusion(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_MischedFusion>(Ctx);
+}
 
 static bool isHazard(const SDep &Dep) {
   return Dep.getKind() == SDep::Anti || Dep.getKind() == SDep::Output;
@@ -227,9 +231,10 @@ bool MacroFusion::scheduleAdjacentImpl(ScheduleDAGInstrs &DAG, SUnit &AnchorSU) 
 }
 
 std::unique_ptr<ScheduleDAGMutation>
-llvm::createMacroFusionDAGMutation(ArrayRef<MacroFusionPredTy> Predicates,
+llvm::createMacroFusionDAGMutation(const clv2::OptionsContext &Ctx,
+                                   ArrayRef<MacroFusionPredTy> Predicates,
                                    bool BranchOnly) {
-  if (EnableMacroFusion)
+  if (getMischedFusion(Ctx))
     return std::make_unique<MacroFusion>(Predicates, !BranchOnly);
   return nullptr;
 }

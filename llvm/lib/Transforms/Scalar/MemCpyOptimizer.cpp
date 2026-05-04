@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- MemCpyOptimizer.cpp - Optimize use of memcpy and friends -----------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -64,9 +66,11 @@ using namespace llvm;
 
 #define DEBUG_TYPE "memcpyopt"
 
-static cl::opt<bool> EnableMemCpyOptWithoutLibcalls(
-    "enable-memcpyopt-without-libcalls", cl::Hidden,
-    cl::desc("Enable memcpyopt even when libcalls are disabled"));
+static bool getEnableMemCpyOptWithoutLibcalls(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_EnableMemcpyoptWithoutLibcalls>(
+      F.getContext().getOptionsContext(), false);
+}
 
 STATISTIC(NumMemCpyInstr, "Number of memcpy instructions deleted");
 STATISTIC(NumMemMoveInstr, "Number of memmove instructions deleted");
@@ -641,7 +645,7 @@ bool MemCpyOptPass::processStoreOfLoad(StoreInst *SI, LoadInst *LI,
   // TODO: We should really distinguish between libcall availability and
   // our ability to introduce intrinsics.
   if (T->isAggregateType() &&
-      (EnableMemCpyOptWithoutLibcalls ||
+      (getEnableMemCpyOptWithoutLibcalls(*SI->getFunction()) ||
        (TLI->has(LibFunc_memcpy) && TLI->has(LibFunc_memmove)))) {
     MemoryLocation LoadLoc = MemoryLocation::get(LI);
 
@@ -772,7 +776,8 @@ bool MemCpyOptPass::processStore(StoreInst *SI, BasicBlock::iterator &BBI) {
   // this if the corresponding libfunc is not available.
   // TODO: We should really distinguish between libcall availability and
   // our ability to introduce intrinsics.
-  if (!(TLI->has(LibFunc_memset) || EnableMemCpyOptWithoutLibcalls))
+  if (!(TLI->has(LibFunc_memset) ||
+        getEnableMemCpyOptWithoutLibcalls(*SI->getFunction())))
     return false;
 
   // There are two cases that are interesting for this code to handle: memcpy
@@ -2286,7 +2291,7 @@ bool MemCpyOptPass::runImpl(Function &F, TargetLibraryInfo *TLI_,
     MadeChange = true;
   }
 
-  if (VerifyMemorySSA)
+  if (getVerifyMemorySSA(F.getContext().getOptionsContext()))
     MSSA_->verifyMemorySSA();
 
   return MadeChange;

@@ -38,12 +38,13 @@
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 #include <atomic>
 #include <optional>
 
@@ -54,38 +55,44 @@ using namespace llvm;
 #define GET_INSTRINFO_CTOR_DTOR
 #include "X86GenInstrInfo.inc"
 
-extern cl::opt<bool> X86EnableAPXForRelocation;
+static unsigned PartialRegUpdateClearance = 64;
+static unsigned UndefRegClearance = 128;
 
-static cl::opt<bool>
-    NoFusing("disable-spill-fusing",
-             cl::desc("Disable fusing of spill code into instructions"),
-             cl::Hidden);
-static cl::opt<bool>
-    PrintFailedFusing("print-failed-fuse-candidates",
-                      cl::desc("Print instructions that the allocator wants to"
-                               " fuse, but the X86 backend currently can't"),
-                      cl::Hidden);
-static cl::opt<bool>
-    ReMatPICStubLoad("remat-pic-stub-load",
-                     cl::desc("Re-materialize load from stub in PIC mode"),
-                     cl::init(false), cl::Hidden);
-static cl::opt<unsigned>
-    PartialRegUpdateClearance("partial-reg-update-clearance",
-                              cl::desc("Clearance between two register writes "
-                                       "for inserting XOR to avoid partial "
-                                       "register update"),
-                              cl::init(64), cl::Hidden);
-static cl::opt<unsigned> UndefRegClearance(
-    "undef-reg-clearance",
-    cl::desc("How many idle instructions we would like before "
-             "certain undef register reads"),
-    cl::init(128), cl::Hidden);
+static bool getNoFusing(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_DisableSpillFusing>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> MaxNFConversions(
-    "x86-max-nf-conversions-for-cmp-reuse",
-    cl::desc("Maximum number of NF conversions allowed to reuse EFLAGS from a "
-             "producer dominating a multi-predecessor block"),
-    cl::init(6), cl::Hidden);
+static bool getPrintFailedFusing(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_PrintFailedFusing>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getReMatPICStubLoad(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_ReMatPICStubLoad>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned optPartialRegUpdateClearance(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_PartialRegUpdateClearance>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned optUndefRegClearance(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_UndefRegClearance>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getX86EnableAPXForRelocation(const Function &F) {
+  return clv2::getOptValOr<&clv2::X86OptsReg,
+                           &clv2::X86_EnableAPXForRelocation>(
+      F.getContext().getOptionsContext(), false);
+}
+
+static unsigned getMaxNFConversions(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_MaxNFConversions>(
+      F.getContext().getOptionsContext());
+}
 
 // Pin the vtable to this file.
 void X86InstrInfo::anchor() {}
@@ -927,7 +934,8 @@ bool X86InstrInfo::isReMaterializableImpl(
       if (BaseReg == 0 || BaseReg == X86::RIP)
         return true;
       // Allow re-materialization of PIC load.
-      if (!(!ReMatPICStubLoad && MI.getOperand(1 + X86::AddrDisp).isGlobal())) {
+      if (!(!getReMatPICStubLoad(MI.getMF()->getFunction()) &&
+            MI.getOperand(1 + X86::AddrDisp).isGlobal())) {
         const MachineFunction &MF = *MI.getParent()->getParent();
         const MachineRegisterInfo &MRI = MF.getRegInfo();
         if (regIsPICBase(BaseReg, MRI))
@@ -3300,7 +3308,8 @@ unsigned X86::getNFVariantIfClobberRemovable(const MachineInstr &MI,
   // optimization for replacing non-NF with NF. This is to keep backward
   // compatiblity with old version of linkers without APX relocation type
   // support on Linux OS.
-  if (!X86EnableAPXForRelocation && isAddMemInstrWithRelocation(MI))
+  if (!getX86EnableAPXForRelocation(MI.getMF()->getFunction()) &&
+      isAddMemInstrWithRelocation(MI))
     return 0;
   return X86::getNFVariant(MI.getOpcode());
 }
@@ -5374,7 +5383,8 @@ MachineInstr *X86InstrInfo::findDominatingRedundantFlagInstr(
       unsigned NewOpc = X86::getNFVariantIfClobberRemovable(Inst, TRI);
       if (!NewOpc)
         return nullptr;
-      if (InstsToUpdate.size() + Pending.size() >= MaxNFConversions)
+      if (InstsToUpdate.size() + Pending.size() >=
+          getMaxNFConversions(MBB->getParent()->getFunction()))
         return nullptr;
       Pending.push_back(std::make_pair(&Inst, NewOpc));
     }
@@ -5579,6 +5589,15 @@ bool X86InstrInfo::optimizeCompareInstr(MachineInstr &CmpInstr, Register SrcReg,
           Movr0Inst = &Inst;
           continue;
         }
+
+        // For the instructions are ADDrm/ADDmr with relocation, we'll skip the
+        // optimization for replacing non-NF with NF. This is to keep backward
+        // compatiblity with old version of linkers without APX relocation type
+        // support on Linux OS.
+        bool IsWithReloc =
+            getX86EnableAPXForRelocation(CmpInstr.getMF()->getFunction())
+                ? false
+                : isAddMemInstrWithRelocation(Inst);
 
         // Try to replace non-NF with NF instructions.
         if (HasNF) {
@@ -7022,7 +7041,7 @@ unsigned X86InstrInfo::getPartialRegUpdateClearance(
   // If any instructions in the clearance range are reading Reg, insert a
   // dependency breaking instruction, which is inexpensive and is likely to
   // be hidden in other instruction's cycles.
-  return PartialRegUpdateClearance;
+  return optPartialRegUpdateClearance(MI.getMF()->getFunction());
 }
 
 // Return true for any instruction the copies the high bits of the first source
@@ -7376,7 +7395,7 @@ X86InstrInfo::getUndefRegClearance(const MachineInstr &MI, unsigned OpNum,
                                    const TargetRegisterInfo *TRI) const {
   const MachineOperand &MO = MI.getOperand(OpNum);
   if (MO.getReg().isPhysical() && hasUndefRegUpdate(MI.getOpcode(), OpNum))
-    return UndefRegClearance;
+    return optUndefRegClearance(MI.getMF()->getFunction());
 
   return 0;
 }
@@ -7697,7 +7716,7 @@ unsigned X86InstrInfo::commuteOperandsForFold(MachineInstr &MI,
 }
 
 static void printFailMsgforFold(const MachineInstr &MI, unsigned Idx) {
-  if (PrintFailedFusing && !MI.isCopy())
+  if (getPrintFailedFusing(MI.getMF()->getFunction()) && !MI.isCopy())
     dbgs() << "We failed to fuse operand " << Idx << " in " << MI;
 }
 
@@ -7888,7 +7907,7 @@ X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF, MachineInstr &MI,
                                     VirtRegMap *VRM) const {
   MachineBasicBlock::iterator InsertPt = MI;
   // Check switch flag
-  if (NoFusing)
+  if (getNoFusing(MF.getFunction()))
     return nullptr;
 
   // Avoid partial and undef register update stalls unless optimizing for size.
@@ -8459,7 +8478,7 @@ X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF, MachineInstr &MI,
   }
 
   // Check switch flag
-  if (NoFusing)
+  if (getNoFusing(MF.getFunction()))
     return nullptr;
 
   // Avoid partial and undef register update stalls unless optimizing for size.
@@ -8472,8 +8491,8 @@ X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF, MachineInstr &MI,
   // avoid emit APX relocation when the flag is disabled for backward
   // compatibility.
   uint64_t TSFlags = MI.getDesc().TSFlags;
-  if (!X86EnableAPXForRelocation && isMemInstrWithGOTPCREL(LoadMI) &&
-      X86II::hasNewDataDest(TSFlags))
+  if (!getX86EnableAPXForRelocation(MF.getFunction()) &&
+      isMemInstrWithGOTPCREL(LoadMI) && X86II::hasNewDataDest(TSFlags))
     return nullptr;
 
   // Determine the alignment of the load.

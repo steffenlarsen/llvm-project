@@ -18,7 +18,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Allocator.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"

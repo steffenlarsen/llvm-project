@@ -264,6 +264,11 @@ set(MLIR_SRC_SHARDER_TABLEGEN_EXE "${MLIR_SRC_SHARDER_TABLEGEN_EXE}" CACHE INTER
 set(MLIR_SRC_SHARDER_TABLEGEN_TARGET "${MLIR_SRC_SHARDER_TABLEGEN_TARGET}" CACHE INTERNAL "")
 
 add_subdirectory(include/mlir)
+
+# The generated clv2 options headers are public; make everything configured
+# below wait for tablegen.  See add_clv2_options_gen_target in TableGen.cmake.
+add_clv2_options_gen_target(mlir_clv2_options_gen "${CMAKE_CURRENT_SOURCE_DIR}/include/mlir")
+list(APPEND LLVM_COMMON_DEPENDS mlir_clv2_options_gen)
 add_subdirectory(lib)
 # C API needs all dialects for registration, but should be built before tests.
 add_subdirectory(lib/CAPI)

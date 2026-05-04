@@ -13,10 +13,12 @@
 #include "Utils.h"
 
 #include "ClauseFinder.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Evaluate/fold.h"
 #include "flang/Evaluate/tools.h"
 #include "flang/Optimizer/Dialect/Support/FIRContext.h"
 #include "mlir/Dialect/OpenMP/OpenMPInterfaces.h"
+#include "llvm/Support/OptionsContext.h"
 #include <flang/Lower/AbstractConverter.h>
 #include <flang/Lower/ConvertType.h>
 #include <flang/Lower/DirectivesCommon.h>
@@ -41,7 +43,6 @@
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/StringRef.h>
-#include <llvm/Support/CommandLine.h>
 
 #include <functional>
 #include <iterator>
@@ -65,11 +66,6 @@ std::optional<std::int64_t>
 EvaluateInt64(Fortran::semantics::SemanticsContext &context, const T &expr) {
   return Fortran::evaluate::ToInt64(EvaluateIntExpr(context, expr));
 }
-
-llvm::cl::opt<bool> treatIndexAsSection(
-    "openmp-treat-index-as-section",
-    llvm::cl::desc("In the OpenMP data clauses treat `a(N)` as `a(N:N)`."),
-    llvm::cl::init(true));
 
 namespace Fortran {
 namespace lower {
@@ -451,7 +447,10 @@ mlir::Value createParentSymAndGenIntermediateMaps(
               converter, converter.getFirOpBuilder(), semaCtx,
               converter.getFctCtx(), *objectList[i + 1].sym(),
               objectList[i + 1].ref(), clauseLocation, interimFortran,
-              interimBounds, treatIndexAsSection);
+              interimBounds,
+              llvm::clv2::getOptValOrDefault<
+                  &llvm::clv2::FLANG_OpenMPTreatIndexAsSection>(
+                  converter.getMLIRContext().getOptionsContext()));
         }
 
         // Remove all map-type bits (e.g. TO, FROM, etc.) from the intermediate
@@ -636,7 +635,9 @@ void insertChildMapInfoIntoParent(
               converter, firOpBuilder, semaCtx, converter.getFctCtx(),
               *indices.first.sym(), indices.first.ref(),
               converter.getCurrentLocation(), asFortran, bounds,
-              treatIndexAsSection);
+              llvm::clv2::getOptValOrDefault<
+                  &llvm::clv2::FLANG_OpenMPTreatIndexAsSection>(
+                  converter.getMLIRContext().getOptionsContext()));
 
       mlir::omp::MapInfoOp mapOp = utils::openmp::createMapInfoOp(
           firOpBuilder, info.rawInput.getLoc(), info.rawInput,

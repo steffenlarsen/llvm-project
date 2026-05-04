@@ -70,50 +70,51 @@
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Vectorize/LoopVectorizationLegality.h"
+#include "llvm/Transforms/Vectorize/VectorizeOptions.h"
 
 using namespace llvm;
 using namespace PatternMatch;
 
 #define DEBUG_TYPE "loop-idiom-vectorize"
 
-static cl::opt<bool> DisableAll("disable-loop-idiom-vectorize-all", cl::Hidden,
-                                cl::init(false),
-                                cl::desc("Disable Loop Idiom Vectorize Pass."));
+static bool getDisableAll(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_DisableLoopIdiomVectorizeAll>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<LoopIdiomVectorizeStyle>
-    LITVecStyle("loop-idiom-vectorize-style", cl::Hidden,
-                cl::desc("The vectorization style for loop idiom transform."),
-                cl::values(clEnumValN(LoopIdiomVectorizeStyle::Masked, "masked",
-                                      "Use masked vector intrinsics"),
-                           clEnumValN(LoopIdiomVectorizeStyle::Predicated,
-                                      "predicated", "Use VP intrinsics")),
-                cl::init(LoopIdiomVectorizeStyle::Masked));
+static LoopIdiomVectorizeStyle getLITVecStyle(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::VectorizeOptsReg,
+                                    &clv2::VEC_LoopIdiomVectorizeStyleOpt>(
+      F.getContext().getOptionsContext(), LoopIdiomVectorizeStyle::Masked);
+}
 
-static cl::opt<bool>
-    DisableByteCmp("disable-loop-idiom-vectorize-bytecmp", cl::Hidden,
-                   cl::init(false),
-                   cl::desc("Proceed with Loop Idiom Vectorize Pass, but do "
-                            "not convert byte-compare loop(s)."));
+static bool getDisableByteCmp(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_DisableByteCmp>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-    ByteCmpVF("loop-idiom-vectorize-bytecmp-vf", cl::Hidden,
-              cl::desc("The vectorization factor for byte-compare patterns."),
-              cl::init(16));
+static unsigned getByteCmpVF(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_ByteCmpVF>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    DisableFindFirstByte("disable-loop-idiom-vectorize-find-first-byte",
-                         cl::Hidden, cl::init(false),
-                         cl::desc("Do not convert find-first-byte loop(s)."));
+static bool getDisableFindFirstByte(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_DisableFindFirstByte>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    VerifyLoops("loop-idiom-vectorize-verify", cl::Hidden, cl::init(false),
-                cl::desc("Verify loops generated Loop Idiom Vectorize Pass."));
+static bool getVerifyLoops(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_VerifyLoops>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 class LoopIdiomVectorize {
@@ -191,20 +192,15 @@ private:
 PreservedAnalyses LoopIdiomVectorizePass::run(Loop &L, LoopAnalysisManager &AM,
                                               LoopStandardAnalysisResults &AR,
                                               LPMUpdater &) {
-  if (DisableAll)
+  Function &F = *L.getHeader()->getParent();
+
+  if (getDisableAll(F))
     return PreservedAnalyses::all();
 
   const auto *DL = &L.getHeader()->getDataLayout();
 
-  LoopIdiomVectorizeStyle VecStyle = VectorizeStyle;
-  if (LITVecStyle.getNumOccurrences())
-    VecStyle = LITVecStyle;
-
-  unsigned BCVF = ByteCompareVF;
-  if (ByteCmpVF.getNumOccurrences())
-    BCVF = ByteCmpVF;
-
-  Function &F = *L.getHeader()->getParent();
+  LoopIdiomVectorizeStyle VecStyle = getLITVecStyle(F);
+  unsigned BCVF = getByteCmpVF(F);
   auto &FAMP = AM.getResult<FunctionAnalysisManagerLoopProxy>(L, AR);
   auto *ORE = FAMP.getCachedResult<OptimizationRemarkEmitterAnalysis>(F);
 
@@ -231,7 +227,7 @@ bool LoopIdiomVectorize::run(Loop *L) {
   CurLoop = L;
 
   Function &F = *L->getHeader()->getParent();
-  if (DisableAll || F.hasOptSize())
+  if (getDisableAll(F) || F.hasOptSize())
     return false;
 
   // Bail if vectorization is disabled on loop.
@@ -303,11 +299,13 @@ bool LoopIdiomVectorize::recognizeByteCompare() {
 
   // We also need to know the minimum page size for the target in order to
   // generate runtime memory checks to ensure the vector version won't fault.
-  if (!TTI->supportsScalableVectors() || !TTI->getMinPageSize().has_value() ||
-      DisableByteCmp)
-    return false;
-
   BasicBlock *Header = CurLoop->getHeader();
+  Function &F = *Header->getParent();
+
+  if (!TTI->supportsScalableVectors() ||
+      !TTI->getMinPageSize(F.getContext().getOptionsContext()).has_value() ||
+      getDisableByteCmp(F))
+    return false;
 
   // In LoopIdiomVectorize::run we have already checked that the loop
   // has a preheader so we can assume it's in a canonical form.
@@ -807,7 +805,8 @@ Value *LoopIdiomVectorize::expandFindMismatch(
   Value *LhsEnd = Builder.CreatePtrToInt(LhsEndGEP, I64Type);
   Value *RhsEnd = Builder.CreatePtrToInt(RhsEndGEP, I64Type);
 
-  const uint64_t MinPageSize = TTI->getMinPageSize().value();
+  const uint64_t MinPageSize =
+      TTI->getMinPageSize(Ctx.getOptionsContext()).value();
   const uint64_t AddrShiftAmt = llvm::Log2_64(MinPageSize);
   Value *LhsStartPage = Builder.CreateLShr(LhsStart, AddrShiftAmt);
   Value *LhsEndPage = Builder.CreateLShr(LhsEnd, AddrShiftAmt);
@@ -913,7 +912,8 @@ Value *LoopIdiomVectorize::expandFindMismatch(
 
   Value *FinalRes = Builder.CreateTrunc(ResPhi, ResType);
 
-  if (VerifyLoops) {
+  Function &F = *CurLoop->getHeader()->getParent();
+  if (getVerifyLoops(F)) {
     ScalarLoop->verifyLoop();
     VectorLoop->verifyLoop();
     if (!VectorLoop->isRecursivelyLCSSAForm(*DT, *LI))
@@ -990,10 +990,13 @@ void LoopIdiomVectorize::transformByteCompare(GetElementPtrInst *GEPA,
   if (!CurLoop->isOutermost())
     CurLoop->getParentLoop()->addBasicBlockToLoop(CmpBB, *LI);
 
-  if (VerifyLoops && CurLoop->getParentLoop()) {
-    CurLoop->getParentLoop()->verifyLoop();
-    if (!CurLoop->getParentLoop()->isRecursivelyLCSSAForm(*DT, *LI))
-      report_fatal_error("Loops must remain in LCSSA form!");
+  if (CurLoop->getParentLoop()) {
+    Function &F = *CurLoop->getHeader()->getParent();
+    if (getVerifyLoops(F)) {
+      CurLoop->getParentLoop()->verifyLoop();
+      if (!CurLoop->getParentLoop()->isRecursivelyLCSSAForm(*DT, *LI))
+        report_fatal_error("Loops must remain in LCSSA form!");
+    }
   }
 }
 
@@ -1002,19 +1005,22 @@ bool LoopIdiomVectorize::recognizeFindFirstByte() {
   // there is no fundamental reason why it cannot be made to work for fixed
   // vectors. We also need to know the target's minimum page size in order to
   // generate runtime memory checks to ensure the vector version won't fault.
-  if (!TTI->supportsScalableVectors() || !TTI->getMinPageSize().has_value() ||
-      DisableFindFirstByte)
+  BasicBlock *Header = CurLoop->getHeader();
+  Function &F = *Header->getParent();
+
+  if (!TTI->supportsScalableVectors() ||
+      !TTI->getMinPageSize(F.getContext().getOptionsContext()).has_value() ||
+      getDisableFindFirstByte(F))
     return false;
 
   // We exclude loops with trip counts > minimum page size via runtime checks,
   // so make sure that the minimum page size is something sensible such that
   // induction variables cannot overflow.
-  if (uint64_t(*TTI->getMinPageSize()) >
+  if (uint64_t(*TTI->getMinPageSize(F.getContext().getOptionsContext())) >
       (std::numeric_limits<uint64_t>::max() / 2))
     return false;
 
   // Define some constants we need throughout.
-  BasicBlock *Header = CurLoop->getHeader();
   LLVMContext &Ctx = Header->getContext();
 
   // We are expecting the four blocks defined below: Header, MatchBB, InnerBB,
@@ -1025,7 +1031,6 @@ bool LoopIdiomVectorize::recognizeFindFirstByte() {
     return false;
 
   auto *InnerLoop = CurLoop->getSubLoops().front();
-  Function &F = *InnerLoop->getHeader()->getParent();
 
   // Bail if vectorization is disabled on inner loop.
   LoopVectorizeHints Hints(InnerLoop, /*InterleaveOnlyWhenForced=*/true, ORE);
@@ -1299,7 +1304,8 @@ Value *LoopIdiomVectorize::expandFindFirstByte(
       Builder.CreateIntrinsic(Intrinsic::get_active_lane_mask, {PredVTy, I64Ty},
                               {ConstantInt::get(I64Ty, 0), ConstVF});
 
-  const uint64_t MinPageSize = TTI->getMinPageSize().value();
+  const uint64_t MinPageSize =
+      TTI->getMinPageSize(Ctx.getOptionsContext()).value();
   const uint64_t AddrShiftAmt = llvm::Log2_64(MinPageSize);
   Value *SearchStartPage =
       Builder.CreateLShr(ISearchStart, AddrShiftAmt, "search_start_page");
@@ -1421,11 +1427,14 @@ Value *LoopIdiomVectorize::expandFindFirstByte(
   if (ExitSucc != ExitFail)
     fixSuccessorPhis(CurLoop, IndPhi, MatchVal, ExitFail, BB5);
 
-  if (VerifyLoops) {
-    OuterLoop->verifyLoop();
-    InnerLoop->verifyLoop();
-    if (!OuterLoop->isRecursivelyLCSSAForm(*DT, *LI))
-      report_fatal_error("Loops must remain in LCSSA form!");
+  {
+    Function &F = *CurLoop->getHeader()->getParent();
+    if (getVerifyLoops(F)) {
+      OuterLoop->verifyLoop();
+      InnerLoop->verifyLoop();
+      if (!OuterLoop->isRecursivelyLCSSAForm(*DT, *LI))
+        report_fatal_error("Loops must remain in LCSSA form!");
+    }
   }
 
   return MatchVal;
@@ -1445,9 +1454,12 @@ void LoopIdiomVectorize::transformFindFirstByte(
   expandFindFirstByte(Builder, DTU, VF, CharTy, IndPhi, ExitSucc, ExitFail,
                       SearchStart, SearchEnd, NeedleStart, NeedleEnd);
 
-  if (VerifyLoops && CurLoop->getParentLoop()) {
-    CurLoop->getParentLoop()->verifyLoop();
-    if (!CurLoop->getParentLoop()->isRecursivelyLCSSAForm(*DT, *LI))
-      report_fatal_error("Loops must remain in LCSSA form!");
+  if (CurLoop->getParentLoop()) {
+    Function &F = *CurLoop->getHeader()->getParent();
+    if (getVerifyLoops(F)) {
+      CurLoop->getParentLoop()->verifyLoop();
+      if (!CurLoop->getParentLoop()->isRecursivelyLCSSAForm(*DT, *LI))
+        report_fatal_error("Loops must remain in LCSSA form!");
+    }
   }
 }

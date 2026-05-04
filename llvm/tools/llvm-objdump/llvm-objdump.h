@@ -50,37 +50,44 @@ enum class ColorOutput {
   Invalid,
 };
 
-extern bool ArchiveHeaders;
-extern int DbgIndent;
-extern DebugFormat DbgVariables;
-extern DebugFormat DbgInlinedFunctions;
-extern bool Demangle;
-extern bool Disassemble;
-extern bool DisassembleAll;
-extern std::vector<std::string> DisassemblerOptions;
-extern ColorOutput DisassemblyColor;
-extern DIDumpType DwarfDumpType;
-extern std::vector<std::string> FilterSections;
-extern bool LeadingAddr;
-extern std::vector<std::string> MAttrs;
-extern std::string MCPU;
-extern std::string Prefix;
-extern uint32_t PrefixStrip;
+struct ObjdumpOptions {
+  bool ArchiveHeaders = false;
+  int DbgIndent = 52;
+  DebugFormat DbgVariables = DFDisabled;
+  DebugFormat DbgInlinedFunctions = DFDisabled;
+  bool Demangle = false;
+  bool Disassemble = false;
+  bool DisassembleAll = false;
+  std::vector<std::string> DisassemblerOptions;
+  ColorOutput DisassemblyColor = ColorOutput::Auto;
+  DIDumpType DwarfDumpType = DIDT_Null;
+  std::vector<std::string> FilterSections;
+  bool LeadingAddr = false;
+  bool LoadRelocs = false;
+  bool LoadTypes = false;
+  std::vector<std::string> MAttrs;
+  std::string MCPU;
+  std::string Prefix;
+  uint32_t PrefixStrip = 0;
+  bool PrintImmHex = false;
+  bool PrintLines = false;
+  bool PrintSource = false;
+  bool PrivateHeaders = false;
+  bool Relocations = false;
+  bool SectionHeaders = false;
+  bool SectionContents = false;
+  bool ShowRawInsn = false;
+  bool SymbolDescription = false;
+  bool TracebackTable = false;
+  bool SymbolTable = false;
+  std::string TripleName;
+  bool UnwindInfo = false;
+};
+
+extern ObjdumpOptions Opts;
+
 extern std::vector<std::string> SourceDirs;
 extern std::vector<std::pair<std::string, std::string>> SubstitutePaths;
-extern bool PrintImmHex;
-extern bool PrintLines;
-extern bool PrintSource;
-extern bool PrivateHeaders;
-extern bool Relocations;
-extern bool SectionHeaders;
-extern bool SectionContents;
-extern bool ShowRawInsn;
-extern bool SymbolDescription;
-extern bool TracebackTable;
-extern bool SymbolTable;
-extern std::string TripleName;
-extern bool UnwindInfo;
 extern bool UnwindShowWODPool;
 
 extern StringSet<> FoundSectionSet;

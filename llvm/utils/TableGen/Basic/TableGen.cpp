@@ -13,8 +13,9 @@
 
 #include "TableGen.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TableGen/Main.h"
 #include "llvm/TableGen/Record.h"
@@ -26,12 +27,23 @@
 
 using namespace llvm;
 
-static cl::OptionCategory PrintEnumsCat("Options for -print-enums");
-static cl::opt<std::string> Class("class",
-                                  cl::desc("Print Enum list for this class"),
-                                  cl::value_desc("class name"),
-                                  cl::cat(PrintEnumsCat));
+// Defined in Basic/IntrinsicEmitter.cpp.
+void registerIntrinsicEmitterOptions(clv2::OptionParser &P);
 
+static std::string Class;
+
+static constexpr clv2::OptionCategory
+    PrintEnumsCategory("Options for -print-enums");
+static constexpr clv2::OptionInfo<std::string> OI_Class{
+    "class", "Print Enum list for this class", clv2::value_desc("class name"),
+    clv2::cat(PrintEnumsCategory)};
+
+static constexpr clv2::OptionsRegistry<&OI_Class> TblgenToolReg;
+
+static void
+applyTblgenTool(const decltype(TblgenToolReg)::ParsedOptionsT &Opts) {
+  Class = Opts.get<&OI_Class>();
+}
 static void printRecords(const RecordKeeper &Records, raw_ostream &OS) {
   OS << Records; // No argument, dump all contents
 }
@@ -71,7 +83,13 @@ static TableGen::Emitter::Opt X[] = {
 
 int tblgen_main(int argc, char **argv) {
   InitLLVM X(argc, argv);
-  cl::ParseCommandLineOptions(argc, argv);
+  clv2::OptionParser P;
+  TableGen::Emitter::registerBackendOptions(P);
+  P.add<&TblgenToolReg, applyTblgenTool>();
+  registerTableGenMainOptions(P);
+  registerIntrinsicEmitterOptions(P);
+  registerExtraTblgenOptions(P);
+  P.parse(argc, argv);
 
   MultiFileTableGenMainFn MainFn = nullptr;
   return TableGenMain(argv[0], MainFn);

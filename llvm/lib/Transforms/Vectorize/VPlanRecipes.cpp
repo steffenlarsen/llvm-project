@@ -25,6 +25,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
@@ -32,15 +33,26 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
+#include "llvm/Transforms/Vectorize/VectorizeOptions.h"
 #include <cassert>
 
 using namespace llvm;
 using namespace llvm::VPlanPatternMatch;
+
+static unsigned getForceTargetInstructionCost(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_ForceTargetInstructionCost>(
+      F.getContext().getOptionsContext());
+}
+static bool isForceTargetInstructionCostSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::VectorizeOptsReg,
+                               &clv2::VEC_ForceTargetInstructionCost>(
+      F.getContext().getOptionsContext());
+}
 
 using VectorParts = SmallVector<Value *, 2>;
 
@@ -51,9 +63,11 @@ using VectorParts = SmallVector<Value *, 2>;
 // It is sometimes necessary to disable printing of metadata in tests in order
 // to avoid non-deterministic behaviour due to metadata introduced by VPlan
 // that wasn't present in the original scalar IR.
-static cl::opt<bool> VPlanPrintMetadata(
-    "vplan-print-metadata", cl::init(true), cl::Hidden,
-    cl::desc("Controls the printing of recipe metadata when debugging."));
+
+static bool getVPlanPrintMetadata(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::VEC_VPlanPrintMetadata>(
+      M.getContext().getOptionsContext());
+}
 #endif
 
 bool VPRecipeBase::mayWriteToMemory() const {
@@ -323,10 +337,14 @@ InstructionCost VPRecipeBase::cost(ElementCount VF, VPCostContext &Ctx) {
     RecipeCost = 0;
   } else {
     RecipeCost = computeCost(VF, Ctx);
-    if (ForceTargetInstructionCost.getNumOccurrences() > 0 &&
-        RecipeCost.isValid()) {
+    const Function &F = *getParent()
+                             ->getPlan()
+                             ->getScalarHeader()
+                             ->getIRBasicBlock()
+                             ->getParent();
+    if (isForceTargetInstructionCostSpecified(F) && RecipeCost.isValid()) {
       if (UI)
-        RecipeCost = InstructionCost(ForceTargetInstructionCost);
+        RecipeCost = InstructionCost(getForceTargetInstructionCost(F));
       else
         RecipeCost = InstructionCost(0);
     }
@@ -2147,7 +2165,7 @@ void VPIRMetadata::intersect(const VPIRMetadata &Other) {
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
 void VPIRMetadata::print(raw_ostream &O, VPSlotTracker &SlotTracker) const {
   const Module *M = SlotTracker.getModule();
-  if (Metadata.empty() || !M || !VPlanPrintMetadata)
+  if (Metadata.empty() || !M || !getVPlanPrintMetadata(*M))
     return;
 
   ArrayRef<StringRef> MDNames = SlotTracker.getMDNames();
@@ -3514,9 +3532,14 @@ InstructionCost VPReductionRecipe::computeCost(ElementCount VF,
   }
 
   // TODO: Support any-of reductions.
+  const Function &F = *getParent()
+                           ->getPlan()
+                           ->getScalarHeader()
+                           ->getIRBasicBlock()
+                           ->getParent();
   assert(
       (!RecurrenceDescriptor::isAnyOfRecurrenceKind(RdxKind) ||
-       ForceTargetInstructionCost.getNumOccurrences() > 0) &&
+       isForceTargetInstructionCostSpecified(F)) &&
       "Any-of reduction not implemented in VPlan-based cost model currently.");
 
   // Note that TTI should model the cost of moving result to the scalar register

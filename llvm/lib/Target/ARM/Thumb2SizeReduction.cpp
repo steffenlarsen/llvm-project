@@ -30,11 +30,12 @@
 #include "llvm/IR/Function.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCInstrDesc.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 #include <cassert>
 #include <cstdint>
 #include <functional>
@@ -50,12 +51,20 @@ STATISTIC(NumNarrows,  "Number of 32-bit instrs reduced to 16-bit ones");
 STATISTIC(Num2Addrs,   "Number of 32-bit instrs reduced to 2addr 16-bit ones");
 STATISTIC(NumLdSts,    "Number of 32-bit load / store reduced to 16-bit ones");
 
-static cl::opt<int> ReduceLimit("t2-reduce-limit",
-                                cl::init(-1), cl::Hidden);
-static cl::opt<int> ReduceLimit2Addr("t2-reduce-limit2",
-                                     cl::init(-1), cl::Hidden);
-static cl::opt<int> ReduceLimitLdSt("t2-reduce-limit3",
-                                     cl::init(-1), cl::Hidden);
+static int getReduceLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::ARM_ReduceLimit>(
+      F.getContext().getOptionsContext());
+}
+
+static int getReduceLimit2Addr(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::ARM_ReduceLimit2Addr>(
+      F.getContext().getOptionsContext());
+}
+
+static int getReduceLimitLdSt(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::ARM_ReduceLimitLdSt>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -402,7 +411,8 @@ static bool VerifyLowRegs(MachineInstr *MI) {
 bool
 Thumb2SizeReduce::ReduceLoadStore(MachineBasicBlock &MBB, MachineInstr *MI,
                                   const ReduceEntry &Entry) {
-  if (ReduceLimitLdSt != -1 && ((int)NumLdSts >= ReduceLimitLdSt))
+  if (getReduceLimitLdSt(MBB.getParent()->getFunction()) != -1 &&
+      ((int)NumLdSts >= getReduceLimitLdSt(MBB.getParent()->getFunction())))
     return false;
 
   unsigned Scale = 1;
@@ -744,7 +754,8 @@ bool
 Thumb2SizeReduce::ReduceTo2Addr(MachineBasicBlock &MBB, MachineInstr *MI,
                                 const ReduceEntry &Entry,
                                 bool LiveCPSR, bool IsSelfLoop) {
-  if (ReduceLimit2Addr != -1 && ((int)Num2Addrs >= ReduceLimit2Addr))
+  if (getReduceLimit2Addr(MBB.getParent()->getFunction()) != -1 &&
+      ((int)Num2Addrs >= getReduceLimit2Addr(MBB.getParent()->getFunction())))
     return false;
 
   if (!OptimizeSize && Entry.AvoidMovs && STI->avoidMOVsShifterOperand())
@@ -862,7 +873,8 @@ bool
 Thumb2SizeReduce::ReduceToNarrow(MachineBasicBlock &MBB, MachineInstr *MI,
                                  const ReduceEntry &Entry,
                                  bool LiveCPSR, bool IsSelfLoop) {
-  if (ReduceLimit != -1 && ((int)NumNarrows >= ReduceLimit))
+  if (getReduceLimit(MBB.getParent()->getFunction()) != -1 &&
+      ((int)NumNarrows >= getReduceLimit(MBB.getParent()->getFunction())))
     return false;
 
   if (!OptimizeSize && Entry.AvoidMovs && STI->avoidMOVsShifterOperand())

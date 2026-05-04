@@ -27,6 +27,7 @@
 #include "llvm/ADT/Uniformity.h"
 #include "llvm/Analysis/IVDescriptors.h"
 #include "llvm/Analysis/InterestingMemoryOperand.h"
+#include "llvm/Analysis/TailFoldingStyle.h"
 #include "llvm/IR/FMF.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/PassManager.h"
@@ -71,6 +72,10 @@ class TargetLibraryInfo;
 class Type;
 class VPIntrinsic;
 struct KnownBits;
+
+namespace clv2 {
+class OptionsContext;
+}
 
 /// Information about a load/store intrinsic defined by the target.
 struct MemIntrinsicInfo {
@@ -242,34 +247,7 @@ public:
   bool skipScalarizationCost() const { return ScalarizationCost.isValid(); }
 };
 
-enum class TailFoldingStyle {
-  /// Don't use tail folding
-  None,
-  /// Use predicate only to mask operations on data in the loop.
-  /// When the VL is not known to be a power-of-2, this method requires a
-  /// runtime overflow check for the i + VL in the loop because it compares the
-  /// scalar induction variable against the tripcount rounded up by VL which may
-  /// overflow. When the VL is a power-of-2, both the increment and uprounded
-  /// tripcount will overflow to 0, which does not require a runtime check
-  /// since the loop is exited when the loop induction variable equals the
-  /// uprounded trip-count, which are both 0.
-  Data,
-  /// Same as Data, but avoids using the get.active.lane.mask intrinsic to
-  /// calculate the mask and instead implements this with a
-  /// splat/stepvector/cmp.
-  /// FIXME: Can this kind be removed now that SelectionDAGBuilder expands the
-  /// active.lane.mask intrinsic when it is not natively supported?
-  DataWithoutLaneMask,
-  /// Use predicate to control both data and control flow.
-  /// This method always requires a runtime overflow check for the i + VL
-  /// increment inside the loop, because it uses the result direclty in the
-  /// active.lane.mask to calculate the mask for the next iteration. If the
-  /// increment overflows, the mask is no longer correct.
-  DataAndControlFlow,
-  /// Use predicated EVL instructions for tail-folding.
-  /// Indicates that VP intrinsics should be used.
-  DataWithEVL,
-};
+// TailFoldingStyle now lives in TailFoldingStyle.h (included above).
 
 struct TailFoldingInfo {
   TargetLibraryInfo *TLI;
@@ -512,7 +490,8 @@ public:
 
   /// If a branch or a select condition is skewed in one direction by more than
   /// this factor, it is very likely to be predicted correctly.
-  LLVM_ABI BranchProbability getPredictableBranchThreshold() const;
+  LLVM_ABI BranchProbability
+  getPredictableBranchThreshold(const clv2::OptionsContext &Ctx) const;
 
   /// Returns estimated penalty of a branch misprediction in latency. Indicates
   /// how aggressive the target wants for eliminating unpredictable branches. A
@@ -1415,7 +1394,7 @@ public:
       const Instruction &I, bool &AllowPromotionWithoutCommonHeader) const;
 
   /// \return The size of a cache line in bytes.
-  LLVM_ABI unsigned getCacheLineSize() const;
+  LLVM_ABI unsigned getCacheLineSize(const clv2::OptionsContext &Ctx) const;
 
   /// The possible cache levels
   enum class CacheLevel {
@@ -1435,7 +1414,8 @@ public:
   getCacheAssociativity(CacheLevel Level) const;
 
   /// \return The minimum architectural page size for the target.
-  LLVM_ABI std::optional<unsigned> getMinPageSize() const;
+  LLVM_ABI std::optional<unsigned>
+  getMinPageSize(const clv2::OptionsContext &Ctx) const;
 
   /// \return How much before a load we should place the prefetch
   /// instruction.  This is currently measured in number of

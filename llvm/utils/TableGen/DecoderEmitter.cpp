@@ -32,7 +32,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
@@ -58,7 +58,7 @@ using namespace llvm;
 
 #define DEBUG_TYPE "decoder-emitter"
 
-extern cl::OptionCategory DisassemblerEmitterCat;
+extern clv2::OptionCategory DisassemblerEmitterCat;
 
 enum SuppressLevel {
   SUPPRESSION_DISABLE,
@@ -66,51 +66,71 @@ enum SuppressLevel {
   SUPPRESSION_LEVEL2
 };
 
-static cl::opt<SuppressLevel> DecoderEmitterSuppressDuplicates(
-    "suppress-per-hwmode-duplicates",
-    cl::desc("Suppress duplication of instrs into per-HwMode decoder tables"),
-    cl::values(
-        clEnumValN(
-            SUPPRESSION_DISABLE, "O0",
-            "Do not prevent DecoderTable duplications caused by HwModes"),
-        clEnumValN(
-            SUPPRESSION_LEVEL1, "O1",
-            "Remove duplicate DecoderTable entries generated due to HwModes"),
-        clEnumValN(
-            SUPPRESSION_LEVEL2, "O2",
-            "Extract HwModes-specific instructions into new DecoderTables, "
-            "significantly reducing Table Duplications")),
-    cl::init(SUPPRESSION_DISABLE), cl::cat(DisassemblerEmitterCat));
+static SuppressLevel DecoderEmitterSuppressDuplicates = SUPPRESSION_DISABLE;
 
-static cl::opt<bool> UseFnTableInDecodeToMCInst(
-    "use-fn-table-in-decode-to-mcinst",
-    cl::desc(
-        "Use a table of function pointers instead of a switch case in the\n"
-        "generated `decodeToMCInst` function. Helps improve compile time\n"
-        "of the generated code."),
-    cl::init(false), cl::cat(DisassemblerEmitterCat));
+static bool UseFnTableInDecodeToMCInst = false;
 
 // Enabling this option requires use of different `InsnType` for different
 // bitwidths and defining `InsnBitWidth` template specialization for the
 // `InsnType` types used. Some common specializations are already defined in
 // MCDecoder.h.
-static cl::opt<bool> SpecializeDecodersPerBitwidth(
+static bool SpecializeDecodersPerBitwidth = false;
+
+static bool IgnoreNonDecodableOperands = false;
+
+static bool IgnoreFullyDefinedOperands = false;
+
+static constexpr clv2::EnumVal<SuppressLevel> SuppressDuplicatesVals[] = {
+    {"O0", SUPPRESSION_DISABLE,
+     "Do not prevent DecoderTable duplications caused by HwModes"},
+    {"O1", SUPPRESSION_LEVEL1,
+     "Remove duplicate DecoderTable entries generated due to HwModes"},
+    {"O2", SUPPRESSION_LEVEL2,
+     "Extract HwModes-specific instructions into new DecoderTables, "
+     "significantly reducing Table Duplications"}};
+static constexpr auto OI_SuppressDuplicates =
+    clv2::makeEnumOption<SuppressLevel>(
+        "suppress-per-hwmode-duplicates",
+        "Suppress duplication of instrs into per-HwMode decoder tables",
+        SuppressDuplicatesVals, clv2::ValueOptional,
+        clv2::cat(DisassemblerEmitterCat));
+static constexpr clv2::OptionInfo<bool> OI_UseFnTable{
+    "use-fn-table-in-decode-to-mcinst",
+    "Use a table of function pointers instead of a switch case in the\n"
+    "generated `decodeToMCInst` function. Helps improve compile time\n"
+    "of the generated code.",
+    clv2::cat(DisassemblerEmitterCat)};
+static constexpr clv2::OptionInfo<bool> OI_SpecializePerBitwidth{
     "specialize-decoders-per-bitwidth",
-    cl::desc("Specialize the generated `decodeToMCInst` function per bitwidth. "
-             "Helps reduce the code size."),
-    cl::init(false), cl::cat(DisassemblerEmitterCat));
-
-static cl::opt<bool> IgnoreNonDecodableOperands(
+    "Specialize the generated `decodeToMCInst` function per bitwidth. "
+    "Helps reduce the code size.",
+    clv2::cat(DisassemblerEmitterCat)};
+static constexpr clv2::OptionInfo<bool> OI_IgnoreNonDecodable{
     "ignore-non-decodable-operands",
-    cl::desc(
-        "Do not issue an error if an operand cannot be decoded automatically."),
-    cl::init(false), cl::cat(DisassemblerEmitterCat));
-
-static cl::opt<bool> IgnoreFullyDefinedOperands(
+    "Do not issue an error if an operand cannot be decoded automatically.",
+    clv2::cat(DisassemblerEmitterCat)};
+static constexpr clv2::OptionInfo<bool> OI_IgnoreFullyDefined{
     "ignore-fully-defined-operands",
-    cl::desc(
-        "Do not automatically decode operands with no '?' in their encoding."),
-    cl::init(false), cl::cat(DisassemblerEmitterCat));
+    "Do not automatically decode operands with no '?' in their encoding.",
+    clv2::cat(DisassemblerEmitterCat)};
+
+static constexpr clv2::OptionsRegistry<
+    &OI_SuppressDuplicates, &OI_UseFnTable, &OI_SpecializePerBitwidth,
+    &OI_IgnoreNonDecodable, &OI_IgnoreFullyDefined>
+    DecoderEmitterReg;
+
+static void applyDecoderEmitterOptions(
+    const decltype(DecoderEmitterReg)::ParsedOptionsT &Opts) {
+  DecoderEmitterSuppressDuplicates = Opts.get<&OI_SuppressDuplicates>();
+  UseFnTableInDecodeToMCInst = Opts.get<&OI_UseFnTable>();
+  SpecializeDecodersPerBitwidth = Opts.get<&OI_SpecializePerBitwidth>();
+  IgnoreNonDecodableOperands = Opts.get<&OI_IgnoreNonDecodable>();
+  IgnoreFullyDefinedOperands = Opts.get<&OI_IgnoreFullyDefined>();
+}
+
+void registerDecoderEmitterOptions(clv2::OptionParser &P) {
+  P.add<&DecoderEmitterReg, applyDecoderEmitterOptions>();
+}
 
 STATISTIC(NumEncodings, "Number of encodings considered");
 STATISTIC(NumEncodingsLackingDisasm,

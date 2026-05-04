@@ -1,4 +1,5 @@
 set(LLVM_LINK_COMPONENTS
+  AllOptions
   Demangle
   Remarks
   Support
@@ -14,5 +15,4 @@ add_llvm_tool(llvm-remarkutil
   RemarkSummary.cpp
   RemarkUtil.cpp
   RemarkUtilHelpers.cpp
-  RemarkUtilRegistry.cpp
   )

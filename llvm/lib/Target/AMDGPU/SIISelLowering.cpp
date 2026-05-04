@@ -45,9 +45,10 @@
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/IR/IntrinsicsR600.h"
 #include "llvm/IR/MDBuilder.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/ModRef.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 #include "llvm/TargetParser/AtomicScope.h"
 #include "llvm/Transforms/Utils/LowerAtomic.h"
 #include <optional>
@@ -59,15 +60,15 @@ using namespace llvm::SDPatternMatch;
 
 STATISTIC(NumTailCalls, "Number of tail calls");
 
-static cl::opt<bool>
-    DisableLoopAlignment("amdgpu-disable-loop-alignment",
-                         cl::desc("Do not align and prefetch loops"),
-                         cl::init(false));
+static bool getDisableLoopAlignment(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_DisableLoopAlignment>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> UseDivergentRegisterIndexing(
-    "amdgpu-use-divergent-register-indexing", cl::Hidden,
-    cl::desc("Use indirect register addressing for divergent indexes"),
-    cl::init(false));
+static bool getUseDivergentRegisterIndexing(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_UseDivergentRegisterIndexing>(
+      F.getContext().getOptionsContext());
+}
 
 static DenormalFPEnv getDenormalFPEnv(const MachineFunction &MF) {
   return MF.getInfo<SIMachineFunctionInfo>()->getMode().getDenormalFPEnv();
@@ -8591,7 +8592,8 @@ bool SITargetLowering::shouldUseLDSConstAddress(const GlobalValue *GV) const {
 
   // With object linking, external LDS declarations need relocations so the
   // linker can assign their offsets.
-  if (AMDGPUTargetMachine::EnableObjectLinking) {
+  if (AMDGPUTargetMachine::getEnableObjectLinking(
+          getTargetMachine().getOptionsContext())) {
     if (const auto *GVar = dyn_cast<GlobalVariable>(GV)) {
       if (GVar->getAddressSpace() == AMDGPUAS::LOCAL_ADDRESS) {
         assert(GVar->isDeclaration() && "AS3 GVs should be declaration here "
@@ -16900,8 +16902,14 @@ bool SITargetLowering::shouldExpandVectorDynExt(unsigned EltSize,
                                                 unsigned NumElem,
                                                 bool IsDivergentIdx,
                                                 const GCNSubtarget *Subtarget) {
-  if (UseDivergentRegisterIndexing)
-    return false;
+  if (Subtarget) {
+    auto &Ctx =
+        Subtarget->getTargetLowering()->getTargetMachine().getOptionsContext();
+    if (auto *O = clv2::getView<&clv2::AMDGPUOptsReg>(Ctx)) {
+      if (O->get<&clv2::AMDGPU_UseDivergentRegisterIndexing>())
+        return false;
+    }
+  }
 
   unsigned VecSize = EltSize * NumElem;
 
@@ -20311,7 +20319,8 @@ Align SITargetLowering::getPrefLoopAlignment(MachineLoop *ML) const {
   // the 32-byte instruction fetch window boundary. This avoids a significant
   // fetch delay after backward branch. We use 32-byte alignment with max
   // padding of 4 bytes (one s_nop), see getMaxPermittedBytesForAlignment().
-  if (ML && !DisableLoopAlignment &&
+  if (ML &&
+      !getDisableLoopAlignment(ML->getHeader()->getParent()->getFunction()) &&
       getSubtarget()->hasLoopHeadInstSplitSensitivity()) {
     const MachineBasicBlock *Header = ML->getHeader();
     // Respect user-specified or previously set alignment.
@@ -20322,7 +20331,9 @@ Align SITargetLowering::getPrefLoopAlignment(MachineLoop *ML) const {
   }
 
   // Pre-GFX10 target did not benefit from loop alignment
-  if (!ML || DisableLoopAlignment || !getSubtarget()->hasInstPrefetch() ||
+  if (!ML ||
+      getDisableLoopAlignment(ML->getHeader()->getParent()->getFunction()) ||
+      !getSubtarget()->hasInstPrefetch() ||
       getSubtarget()->hasInstFwdPrefetchBug())
     return PrefAlign;
 

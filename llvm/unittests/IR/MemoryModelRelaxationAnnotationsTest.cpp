@@ -32,7 +32,7 @@ MMRAMetadata createFromMD(LLVMContext &Ctx,
 }
 
 TEST(MMRATest, MDParse) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   // No nesting:
   // !{!"foo", "!bar"}
@@ -53,7 +53,7 @@ TEST(MMRATest, MDParse) {
 }
 
 TEST(MMRATest, GetMD) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   EXPECT_EQ(MMRAMetadata::getMD(Ctx, {}), nullptr);
 
@@ -74,7 +74,7 @@ TEST(MMRATest, GetMD) {
 }
 
 TEST(MMRATest, Utility) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   MMRAMetadata MMRA =
       createFromMD(Ctx, {{"foo", "0"}, {"foo", "1"}, {"bar", "x"}});
 
@@ -88,7 +88,7 @@ TEST(MMRATest, Utility) {
 }
 
 TEST(MMRATest, Operators) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   MMRAMetadata A = createFromMD(Ctx, {{"foo", "0"}, {"bar", "x"}});
   MMRAMetadata B = createFromMD(Ctx, {{"foo", "0"}, {"bar", "y"}});
@@ -111,7 +111,7 @@ TEST(MMRATest, Operators) {
 }
 
 TEST(MMRATest, Compatibility) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   MMRAMetadata Foo0 = createFromMD(Ctx, {{"foo", "0"}});
   MMRAMetadata Foo1 = createFromMD(Ctx, {{"foo", "1"}});
@@ -171,7 +171,7 @@ TEST(MMRATest, Compatibility) {
 }
 
 TEST(MMRATest, Combine) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   MMRAMetadata Foo0 = createFromMD(Ctx, {{"foo", "0"}});
   MMRAMetadata Foo10 = createFromMD(Ctx, {{"foo", "0"}, {"foo", "1"}});

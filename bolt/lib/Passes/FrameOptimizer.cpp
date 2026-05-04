@@ -13,42 +13,21 @@
 #include "bolt/Passes/FrameOptimizer.h"
 #include "bolt/Core/BinaryFunctionCallGraph.h"
 #include "bolt/Core/ParallelUtilities.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "bolt/Passes/DataflowInfoManager.h"
 #include "bolt/Passes/ShrinkWrapping.h"
 #include "bolt/Passes/StackAvailableExpressions.h"
 #include "bolt/Passes/StackReachingUses.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Timer.h"
 #include <deque>
 
 #define DEBUG_TYPE "fop"
 
 using namespace llvm;
-
-namespace opts {
-extern cl::opt<unsigned> Verbosity;
-extern cl::opt<bool> TimeOpts;
-extern cl::OptionCategory BoltOptCategory;
-
-using namespace bolt;
-
-cl::opt<FrameOptimizationType>
-FrameOptimization("frame-opt",
-  cl::init(FOP_NONE),
-  cl::desc("optimize stack frame accesses"),
-  cl::values(
-    clEnumValN(FOP_NONE, "none", "do not perform frame optimization"),
-    clEnumValN(FOP_HOT, "hot", "perform FOP on hot functions"),
-    clEnumValN(FOP_ALL, "all", "perform FOP on all functions")),
-  cl::ZeroOrMore,
-  cl::cat(BoltOptCategory));
-
-static cl::opt<bool> RemoveStores(
-    "frame-opt-rm-stores", cl::init(FOP_NONE),
-    cl::desc("apply additional analysis to remove stores (experimental)"),
-    cl::cat(BoltOptCategory));
-
-} // namespace opts
+using namespace bolt::bolt_passes_opts;
 
 namespace llvm {
 namespace bolt {
@@ -221,7 +200,13 @@ void FrameOptimizerPass::removeUnusedStores(const FrameAnalysis &FA,
 }
 
 Error FrameOptimizerPass::runOnFunctions(BinaryContext &BC) {
-  if (opts::FrameOptimization == FOP_NONE)
+  auto FrameOptimization =
+      static_cast<bolt::FrameOptimizationType>(getFrameOpt(BC));
+  const bool RemoveStores = getFrameOptRmStores(BC);
+
+  bool TimeOpts = bolt_utils_opts::getTimeOpts(BC);
+
+  if (FrameOptimization == FOP_NONE)
     return Error::success();
 
   if (!BC.isX86()) {
@@ -235,19 +220,19 @@ Error FrameOptimizerPass::runOnFunctions(BinaryContext &BC) {
 
   {
     NamedRegionTimer T1("callgraph", "create call graph", "FOP",
-                        "FOP breakdown", opts::TimeOpts);
+                        "FOP breakdown", TimeOpts);
     CG = std::make_unique<BinaryFunctionCallGraph>(buildCallGraph(BC));
   }
 
   {
     NamedRegionTimer T1("frameanalysis", "frame analysis", "FOP",
-                        "FOP breakdown", opts::TimeOpts);
+                        "FOP breakdown", TimeOpts);
     FA = std::make_unique<FrameAnalysis>(BC, *CG);
   }
 
   {
     NamedRegionTimer T1("reganalysis", "reg analysis", "FOP", "FOP breakdown",
-                        opts::TimeOpts);
+                        TimeOpts);
     RA = std::make_unique<RegAnalysis>(BC, &BC.getBinaryFunctions(), CG.get());
   }
 
@@ -257,7 +242,7 @@ Error FrameOptimizerPass::runOnFunctions(BinaryContext &BC) {
     if (!FA->hasFrameInfo(I.second))
       continue;
     // Restrict pass execution if user asked to only run on hot functions
-    if (opts::FrameOptimization == FOP_HOT) {
+    if (FrameOptimization == FOP_HOT) {
       if (I.second.getKnownExecutionCount() < BC.getHotThreshold())
         continue;
       LLVM_DEBUG(
@@ -270,14 +255,14 @@ Error FrameOptimizerPass::runOnFunctions(BinaryContext &BC) {
 
     {
       NamedRegionTimer T1("removeloads", "remove loads", "FOP", "FOP breakdown",
-                          opts::TimeOpts);
+                          TimeOpts);
       if (!FA->hasStackArithmetic(I.second))
         removeUnnecessaryLoads(*RA, *FA, I.second);
     }
 
-    if (opts::RemoveStores) {
+    if (RemoveStores) {
       NamedRegionTimer T1("removestores", "remove stores", "FOP",
-                          "FOP breakdown", opts::TimeOpts);
+                          "FOP breakdown", TimeOpts);
       if (!FA->hasStackArithmetic(I.second))
         removeUnusedStores(*FA, I.second);
     }
@@ -288,7 +273,7 @@ Error FrameOptimizerPass::runOnFunctions(BinaryContext &BC) {
 
   {
     NamedRegionTimer T1("shrinkwrapping", "shrink wrapping", "FOP",
-                        "FOP breakdown", opts::TimeOpts);
+                        "FOP breakdown", TimeOpts);
     if (Error E = performShrinkWrapping(*RA, *FA, BC))
       return Error(std::move(E));
   }
@@ -361,7 +346,9 @@ Error FrameOptimizerPass::performShrinkWrapping(const RegAnalysis &RA,
     return false;
   };
 
-  const bool HotOnly = opts::FrameOptimization == FOP_HOT;
+  auto FrameOptimization =
+      static_cast<bolt::FrameOptimizationType>(getFrameOpt(BC));
+  const bool HotOnly = FrameOptimization == FOP_HOT;
 
   Error SWError = Error::success();
 

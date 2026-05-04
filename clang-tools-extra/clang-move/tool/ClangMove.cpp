@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Move.h"
+#include "clang-tools-extra/ClangToolsExtraOptionsOptInfos.h"
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Rewrite/Core/Rewriter.h"
 #include "clang/Tooling/ArgumentsAdjusters.h"
@@ -14,7 +15,8 @@
 #include "clang/Tooling/Refactoring.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Signals.h"
@@ -39,65 +41,60 @@ std::error_code CreateNewFile(const llvm::Twine &path) {
 
 cl::OptionCategory ClangMoveCategory("clang-move options");
 
-cl::list<std::string> Names("names", cl::CommaSeparated,
-                            cl::desc("The list of the names of classes being "
-                                     "moved, e.g. \"Foo,a::Foo,b::Foo\"."),
-                            cl::cat(ClangMoveCategory));
+static std::vector<std::string> Names;
+static std::string OldHeader;
+static std::string OldCC;
+static std::string NewHeader;
+static std::string NewCC;
+static bool OldDependOnNew = false;
+static bool NewDependOnOld = false;
+static std::string Style = "llvm";
+static bool Dump = false;
+static bool DumpDecls = false;
 
-cl::opt<std::string>
-    OldHeader("old_header",
-              cl::desc("The relative/absolute file path of old header."),
-              cl::cat(ClangMoveCategory));
+inline constexpr clv2::OptionsRegistry<
+    &clv2::CTE_CM_Names, &clv2::CTE_CM_OldHeader, &clv2::CTE_CM_OldCC,
+    &clv2::CTE_CM_NewHeader, &clv2::CTE_CM_NewCC, &clv2::CTE_CM_OldDependOnNew,
+    &clv2::CTE_CM_NewDependOnOld, &clv2::CTE_CM_Style, &clv2::CTE_CM_DumpResult,
+    &clv2::CTE_CM_DumpDecls>
+    ToolOptsReg;
 
-cl::opt<std::string>
-    OldCC("old_cc", cl::desc("The relative/absolute file path of old cc."),
-          cl::cat(ClangMoveCategory));
+static void applyToolOpts(const decltype(ToolOptsReg)::ParsedOptionsT &Opts) {
+  Names = Opts.get<&clv2::CTE_CM_Names>();
+  OldHeader = Opts.get<&clv2::CTE_CM_OldHeader>();
+  OldCC = Opts.get<&clv2::CTE_CM_OldCC>();
+  NewHeader = Opts.get<&clv2::CTE_CM_NewHeader>();
+  NewCC = Opts.get<&clv2::CTE_CM_NewCC>();
+  OldDependOnNew = Opts.get<&clv2::CTE_CM_OldDependOnNew>();
+  NewDependOnOld = Opts.get<&clv2::CTE_CM_NewDependOnOld>();
+  Style = Opts.get<&clv2::CTE_CM_Style>();
+  Dump = Opts.get<&clv2::CTE_CM_DumpResult>();
+  DumpDecls = Opts.get<&clv2::CTE_CM_DumpDecls>();
+}
 
-cl::opt<std::string>
-    NewHeader("new_header",
-              cl::desc("The relative/absolute file path of new header."),
-              cl::cat(ClangMoveCategory));
-
-cl::opt<std::string>
-    NewCC("new_cc", cl::desc("The relative/absolute file path of new cc."),
-          cl::cat(ClangMoveCategory));
-
-cl::opt<bool>
-    OldDependOnNew("old_depend_on_new",
-                   cl::desc("Whether old header will depend on new header. If "
-                            "true, clang-move will "
-                            "add #include of new header to old header."),
-                   cl::init(false), cl::cat(ClangMoveCategory));
-
-cl::opt<bool>
-    NewDependOnOld("new_depend_on_old",
-                   cl::desc("Whether new header will depend on old header. If "
-                            "true, clang-move will "
-                            "add #include of old header to new header."),
-                   cl::init(false), cl::cat(ClangMoveCategory));
-
-cl::opt<std::string>
-    Style("style",
-          cl::desc("The style name used for reformatting. Default is \"llvm\""),
-          cl::init("llvm"), cl::cat(ClangMoveCategory));
-
-cl::opt<bool> Dump("dump_result",
-                   cl::desc("Dump results in JSON format to stdout."),
-                   cl::cat(ClangMoveCategory));
-
-cl::opt<bool> DumpDecls(
-    "dump_decls",
-    cl::desc("Dump all declarations in old header (JSON format) to stdout. If "
-             "the option is specified, other command options will be ignored. "
-             "An empty JSON will be returned if old header isn't specified."),
-    cl::cat(ClangMoveCategory));
+static void configureParser(clv2::OptionParser &P) {
+  using ParsedT = decltype(ToolOptsReg)::ParsedOptionsT;
+  auto *Storage = new ParsedT();
+  decltype(ToolOptsReg)::applyDefaultsTo(*Storage);
+  std::vector<clv2::detail::OptionEntry> Entries;
+  std::vector<clv2::detail::AliasEntry> Aliases;
+  std::vector<clv2::detail::SubCommandSpec> SubSpecs;
+  decltype(ToolOptsReg)::staticBuildInto(*Storage, Entries, Aliases, SubSpecs);
+  for (auto &E : Entries) {
+    if (!E.Cat)
+      E.Cat = &ClangMoveCategory;
+    P.addDynamicEntry(std::move(E));
+  }
+  clv2::registerDynamicPostParseCallback(
+      [Storage]() { applyToolOpts(*Storage); });
+}
 
 } // namespace
 
 int main(int argc, const char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
-  auto ExpectedParser =
-      tooling::CommonOptionsParser::create(argc, argv, ClangMoveCategory);
+  auto ExpectedParser = tooling::CommonOptionsParser::create(
+      argc, argv, ClangMoveCategory, configureParser);
   if (!ExpectedParser) {
     llvm::errs() << llvm::toString(ExpectedParser.takeError());
     return 1;

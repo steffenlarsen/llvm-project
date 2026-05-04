@@ -19,6 +19,7 @@
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
@@ -41,14 +42,15 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SMLoc.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
 #include "llvm/TargetParser/SubtargetFeature.h"
 #include "llvm/TargetParser/Triple.h"
 #include <algorithm>
@@ -68,8 +70,25 @@ class MCInstrInfo;
 
 } // end namespace llvm
 
-extern cl::opt<bool> EmitJalrReloc;
-extern cl::opt<bool> NoZeroDivCheck;
+static bool getEmitJalrReloc(const clv2::OptionsContext &OCtx,
+                             const Function *F = nullptr) {
+  if (F)
+    if (auto *O = clv2::getView<&clv2::MipsOptsReg>(
+            F->getContext().getOptionsContext()))
+      return O->get<&clv2::MIPS_EmitJalrReloc>();
+  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_EmitJalrReloc>(OCtx,
+                                                                          true);
+}
+
+static bool getNoZeroDivCheck(const clv2::OptionsContext &OCtx,
+                              const Function *F = nullptr) {
+  if (F)
+    if (auto *O = clv2::getView<&clv2::MipsOptsReg>(
+            F->getContext().getOptionsContext()))
+      return O->get<&clv2::MIPS_NoZeroDivCheck>();
+  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_NoZeroDivCheck>(
+      OCtx, false);
+}
 
 namespace {
 
@@ -583,7 +602,7 @@ public:
   }
 
   bool isJalrRelocAvailable(const MCExpr *JalExpr) {
-    if (!EmitJalrReloc)
+    if (!getEmitJalrReloc(getContext().getOptionsContext()))
       return false;
     MCValue Res;
     if (!JalExpr->evaluateAsRelocatable(Res, nullptr))
@@ -4249,7 +4268,7 @@ bool MipsAsmParser::expandDivRem(MCInst &Inst, SMLoc IDLoc, MCStreamer &Out,
     if (!ATReg)
       return true;
 
-    if (!NoZeroDivCheck && ImmValue == 0) {
+    if (!getNoZeroDivCheck(getContext().getOptionsContext()) && ImmValue == 0) {
       if (UseTraps)
         TOut.emitRRI(Mips::TEQ, ZeroReg, ZeroReg, 0x7, IDLoc, STI);
       else
@@ -4281,7 +4300,8 @@ bool MipsAsmParser::expandDivRem(MCInst &Inst, SMLoc IDLoc, MCStreamer &Out,
   // break, insert the trap/break and exit. This gives a different result to
   // GAS. GAS has an inconsistency/missed optimization in that not all cases
   // are handled equivalently. As the observed behaviour is the same, we're ok.
-  if (!NoZeroDivCheck && (RtReg == Mips::ZERO || RtReg == Mips::ZERO_64)) {
+  if (!getNoZeroDivCheck(getContext().getOptionsContext()) &&
+      (RtReg == Mips::ZERO || RtReg == Mips::ZERO_64)) {
     if (UseTraps) {
       TOut.emitRRI(Mips::TEQ, ZeroReg, ZeroReg, 0x7, IDLoc, STI);
       return false;
@@ -4303,7 +4323,7 @@ bool MipsAsmParser::expandDivRem(MCInst &Inst, SMLoc IDLoc, MCStreamer &Out,
   MCOperand LabelOp;
 
   TOut.emitRR(DivOp, RsReg, RtReg, IDLoc, STI);
-  if (!NoZeroDivCheck) {
+  if (!getNoZeroDivCheck(getContext().getOptionsContext())) {
     if (UseTraps) {
       TOut.emitRRI(Mips::TEQ, RtReg, ZeroReg, 0x7, IDLoc, STI);
     } else {

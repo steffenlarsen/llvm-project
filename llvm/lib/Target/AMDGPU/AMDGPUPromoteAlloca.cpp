@@ -35,6 +35,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
@@ -43,6 +44,8 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/SSAUpdater.h"
 
@@ -50,41 +53,49 @@
 
 using namespace llvm;
 
+static bool getDisablePromoteAllocaToVector(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_DisablePromoteAllocaToVector>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getDisablePromoteAllocaToLDS(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_DisablePromoteAllocaToLDS>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getPromoteAllocaToVectorLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_PromoteAllocaToVectorLimit>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getLoopUserWeight(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_LoopUserWeight>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getPromoteAllocaToVectorMaxRegs(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_PromoteAllocaToVectorMaxRegs>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getPromoteAllocaToVectorMaxRegsWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
+                               &clv2::AMDGPU_PromoteAllocaToVectorMaxRegs>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getPromoteAllocaToVectorVGPRRatio(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_PromoteAllocaToVectorVGPRRatio>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getPromoteAllocaToVectorVGPRRatioWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
+                               &clv2::AMDGPU_PromoteAllocaToVectorVGPRRatio>(
+      F.getContext().getOptionsContext());
+}
+
 namespace {
-
-static cl::opt<bool>
-    DisablePromoteAllocaToVector("disable-promote-alloca-to-vector",
-                                 cl::desc("Disable promote alloca to vector"),
-                                 cl::init(false));
-
-static cl::opt<bool>
-    DisablePromoteAllocaToLDS("disable-promote-alloca-to-lds",
-                              cl::desc("Disable promote alloca to LDS"),
-                              cl::init(false));
-
-static cl::opt<unsigned> PromoteAllocaToVectorLimit(
-    "amdgpu-promote-alloca-to-vector-limit",
-    cl::desc("Maximum byte size to consider promote alloca to vector"),
-    cl::init(0));
-
-static cl::opt<unsigned> PromoteAllocaToVectorMaxRegs(
-    "amdgpu-promote-alloca-to-vector-max-regs",
-    cl::desc(
-        "Maximum vector size (in 32b registers) to use when promoting alloca"),
-    cl::init(32));
-
-// Use up to 1/4 of available register budget for vectorization.
-// FIXME: Increase the limit for whole function budgets? Perhaps x2?
-static cl::opt<unsigned> PromoteAllocaToVectorVGPRRatio(
-    "amdgpu-promote-alloca-to-vector-vgpr-ratio",
-    cl::desc("Ratio of VGPRs to budget for promoting alloca to vectors"),
-    cl::init(4));
-
-static cl::opt<unsigned>
-    LoopUserWeight("promote-alloca-vector-loop-user-weight",
-                   cl::desc("The bonus weight of users of allocas within loop "
-                            "when sorting profitable allocas"),
-                   cl::init(4));
 
 // We support vector indices of the form ((A * stride) >> shift) + B
 // VarIndex is A, VarMul is stride, VarShift is shift and ConstIndex is B. All
@@ -158,7 +169,8 @@ private:
   /// Check whether we have enough local memory for promotion.
   bool hasSufficientLocalMem(const Function &F);
 
-  FixedVectorType *getVectorTypeForAlloca(Type *AllocaTy) const;
+  FixedVectorType *getVectorTypeForAlloca(Type *AllocaTy,
+                                          const Function &F) const;
   void analyzePromoteToVector(AllocaAnalysis &AA) const;
   void promoteAllocaToVector(AllocaAnalysis &AA);
   void analyzePromoteToLDS(AllocaAnalysis &AA) const;
@@ -336,8 +348,8 @@ void AMDGPUPromoteAllocaImpl::scoreAlloca(AllocaAnalysis &AA) const {
     if (isa<GetElementPtrInst>(Inst) || isa<SelectInst>(Inst) ||
         isa<PHINode>(Inst))
       continue;
-    unsigned UserScore =
-        1 + (LoopUserWeight * LI.getLoopDepth(Inst->getParent()));
+    unsigned UserScore = 1 + (getLoopUserWeight(*AA.Alloca->getFunction()) *
+                              LI.getLoopDepth(Inst->getParent()));
     LLVM_DEBUG(dbgs() << "  [+" << UserScore << "]:\t" << *Inst << "\n");
     Score += UserScore;
   }
@@ -352,18 +364,18 @@ void AMDGPUPromoteAllocaImpl::setFunctionLimits(const Function &F) {
   const int R600MaxVectorRegs = 16;
   MaxVectorRegs = F.getFnAttributeAsParsedInteger(
       "amdgpu-promote-alloca-to-vector-max-regs",
-      IsAMDGCN ? PromoteAllocaToVectorMaxRegs : R600MaxVectorRegs);
-  if (PromoteAllocaToVectorMaxRegs.getNumOccurrences())
-    MaxVectorRegs = PromoteAllocaToVectorMaxRegs;
+      IsAMDGCN ? getPromoteAllocaToVectorMaxRegs(F) : R600MaxVectorRegs);
+  if (getPromoteAllocaToVectorMaxRegsWasSpecified(F))
+    MaxVectorRegs = getPromoteAllocaToVectorMaxRegs(F);
   VGPRBudgetRatio = F.getFnAttributeAsParsedInteger(
       "amdgpu-promote-alloca-to-vector-vgpr-ratio",
-      PromoteAllocaToVectorVGPRRatio);
-  if (PromoteAllocaToVectorVGPRRatio.getNumOccurrences())
-    VGPRBudgetRatio = PromoteAllocaToVectorVGPRRatio;
+      getPromoteAllocaToVectorVGPRRatio(F));
+  if (getPromoteAllocaToVectorVGPRRatioWasSpecified(F))
+    VGPRBudgetRatio = getPromoteAllocaToVectorVGPRRatio(F);
 }
 
 bool AMDGPUPromoteAllocaImpl::run(Function &F, bool PromoteToLDS) {
-  if (DisablePromoteAllocaToLDS && DisablePromoteAllocaToVector)
+  if (getDisablePromoteAllocaToLDS(F) && getDisablePromoteAllocaToVector(F))
     return false;
 
   bool SufficientLDS = PromoteToLDS && hasSufficientLocalMem(F);
@@ -371,8 +383,8 @@ bool AMDGPUPromoteAllocaImpl::run(Function &F, bool PromoteToLDS) {
   setFunctionLimits(F);
 
   unsigned VectorizationBudget =
-      (PromoteAllocaToVectorLimit ? PromoteAllocaToVectorLimit * 8
-                                  : (MaxVGPRs * 32)) /
+      (getPromoteAllocaToVectorLimit(F) ? getPromoteAllocaToVectorLimit(F) * 8
+                                        : (MaxVGPRs * 32)) /
       VGPRBudgetRatio;
 
   std::vector<AllocaAnalysis> Allocas;
@@ -893,8 +905,9 @@ static BasicBlock::iterator skipToNonAllocaInsertPt(BasicBlock &BB,
 }
 
 FixedVectorType *
-AMDGPUPromoteAllocaImpl::getVectorTypeForAlloca(Type *AllocaTy) const {
-  if (DisablePromoteAllocaToVector) {
+AMDGPUPromoteAllocaImpl::getVectorTypeForAlloca(Type *AllocaTy,
+                                                const Function &F) const {
+  if (getDisablePromoteAllocaToVector(F)) {
     LLVM_DEBUG(dbgs() << "  Promote alloca to vectors is disabled\n");
     return nullptr;
   }
@@ -963,7 +976,7 @@ void AMDGPUPromoteAllocaImpl::analyzePromoteToVector(AllocaAnalysis &AA) const {
   }
 
   Type *AllocaTy = AA.Alloca->getAllocatedType();
-  AA.Vector.Ty = getVectorTypeForAlloca(AllocaTy);
+  AA.Vector.Ty = getVectorTypeForAlloca(AllocaTy, *AA.Alloca->getFunction());
   if (!AA.Vector.Ty)
     return;
 
@@ -1362,7 +1375,7 @@ bool AMDGPUPromoteAllocaImpl::binaryOpIsDerivedFromSameAlloca(
 }
 
 void AMDGPUPromoteAllocaImpl::analyzePromoteToLDS(AllocaAnalysis &AA) const {
-  if (DisablePromoteAllocaToLDS) {
+  if (getDisablePromoteAllocaToLDS(*AA.Alloca->getFunction())) {
     LLVM_DEBUG(dbgs() << "  Promote alloca to LDS is disabled\n");
     return;
   }

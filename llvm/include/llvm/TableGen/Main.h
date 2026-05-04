@@ -13,13 +13,17 @@
 #ifndef LLVM_TABLEGEN_MAIN_H
 #define LLVM_TABLEGEN_MAIN_H
 
-#include "llvm/Support/CommandLine.h"
+#include "llvm/ADT/StringRef.h"
 #include <map>
+#include <string>
 
 namespace llvm {
 
 class raw_ostream;
 class RecordKeeper;
+namespace clv2 {
+class OptionParser;
+}
 
 struct TableGenOutputFiles {
   std::string MainFile;
@@ -42,9 +46,11 @@ LLVM_ABI int TableGenMain(const char *argv0, TableGenMainFn MainFn = nullptr);
 LLVM_ABI int TableGenMain(const char *argv0,
                           MultiFileTableGenMainFn MainFn = nullptr);
 
+void registerTableGenMainOptions(clv2::OptionParser &P);
+
 /// Controls emitting large character arrays as strings or character arrays.
 /// Typically set to false when building with MSVC.
-extern LLVM_ABI cl::opt<bool> EmitLongStrLiterals;
+extern bool EmitLongStrLiterals;
 
 } // end namespace llvm
 

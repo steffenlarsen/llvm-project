@@ -18,10 +18,10 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/IR/PassManager.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace llvm {
@@ -71,7 +71,8 @@ public:
   LLVM_ABI
   PGOInstrumentationUse(std::string Filename = "",
                         std::string RemappingFilename = "", bool IsCS = false,
-                        IntrusiveRefCntPtr<vfs::FileSystem> FS = nullptr);
+                        IntrusiveRefCntPtr<vfs::FileSystem> FS = nullptr,
+                        std::optional<bool> NoPGOWarnMismatch = std::nullopt);
 
   LLVM_ABI PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM);
 
@@ -81,6 +82,9 @@ private:
   // If this is a context sensitive instrumentation.
   bool IsCS;
   IntrusiveRefCntPtr<vfs::FileSystem> FS;
+  // Forced by the LTO driver via PGOOptions; empty means the
+  // -no-pgo-warn-mismatch option decides on its own.
+  std::optional<bool> NoPGOWarnMismatch;
 };
 
 /// The indirect function call promotion pass.

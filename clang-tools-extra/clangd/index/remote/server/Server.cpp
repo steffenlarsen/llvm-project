@@ -24,11 +24,12 @@
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Chrono.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/VirtualFileSystem.h"
 
@@ -59,57 +60,70 @@ This is an experimental remote index implementation. The server opens Dex and
 awaits gRPC lookup requests from the client.
 )";
 
-llvm::cl::opt<std::string> IndexPath(llvm::cl::desc("<INDEX FILE>"),
-                                     llvm::cl::Positional, llvm::cl::Required);
+static std::string IndexPath;
+static std::string IndexRoot;
+static Logger::Level LogLevel = Logger::Info;
+static bool LogPublic = false;
+static std::string LogPrefix;
+static std::string TraceFile;
+static bool PrettyPrint = false;
+static std::string ServerAddress = "0.0.0.0:50051";
+static size_t IdleTimeoutSeconds = 8 * 60;
+static size_t LimitResults = 10000;
 
-llvm::cl::opt<std::string> IndexRoot(llvm::cl::desc("<PROJECT ROOT>"),
-                                     llvm::cl::Positional, llvm::cl::Required);
+namespace clv2 = llvm::clv2;
 
-llvm::cl::opt<Logger::Level> LogLevel{
-    "log",
-    llvm::cl::desc("Verbosity of log messages written to stderr"),
-    values(clEnumValN(Logger::Error, "error", "Error messages only"),
-           clEnumValN(Logger::Info, "info", "High level execution tracing"),
-           clEnumValN(Logger::Debug, "verbose", "Low level details")),
-    llvm::cl::init(Logger::Info),
+inline constexpr clv2::OptionInfo<std::string> IndexPathOpt{
+    "", "<INDEX FILE>", clv2::Positional{}, clv2::Required};
+
+inline constexpr clv2::OptionInfo<std::string> IndexRootOpt{
+    "", "<PROJECT ROOT>", clv2::Positional{}, clv2::Required};
+
+inline constexpr clv2::EnumVal<Logger::Level> LogLevelVals[] = {
+    {"error", Logger::Error, "Error messages only"},
+    {"info", Logger::Info, "High level execution tracing"},
+    {"verbose", Logger::Debug, "Low level details"},
 };
+inline constexpr auto LogLevelOpt = clv2::makeEnumOption<Logger::Level>(
+    "log", "Verbosity of log messages written to stderr", LogLevelVals,
+    clv2::Init{Logger::Info});
 
-llvm::cl::opt<bool> LogPublic{
-    "log-public",
-    llvm::cl::desc("Avoid logging potentially-sensitive request details"),
-    llvm::cl::init(false),
-};
+inline constexpr clv2::OptionInfo<bool> LogPublicOpt{
+    "log-public", "Avoid logging potentially-sensitive request details"};
 
-llvm::cl::opt<std::string> LogPrefix{
-    "log-prefix",
-    llvm::cl::desc("A string that'll be prepended to all log statements. "
-                   "Useful when running multiple instances on same host."),
-};
+inline constexpr clv2::OptionInfo<std::string> LogPrefixOpt{
+    "log-prefix", "A string that'll be prepended to all log statements. "
+                  "Useful when running multiple instances on same host."};
 
-llvm::cl::opt<std::string> TraceFile(
-    "trace-file",
-    llvm::cl::desc("Path to the file where tracer logs will be stored"));
+inline constexpr clv2::OptionInfo<std::string> TraceFileOpt{
+    "trace-file", "Path to the file where tracer logs will be stored"};
 
-llvm::cl::opt<bool> PrettyPrint{
-    "pretty",
-    llvm::cl::desc("Pretty-print JSON output in the trace"),
-    llvm::cl::init(false),
-};
+inline constexpr clv2::OptionInfo<bool> PrettyPrintOpt{
+    "pretty", "Pretty-print JSON output in the trace"};
 
-llvm::cl::opt<std::string> ServerAddress(
-    "server-address", llvm::cl::init("0.0.0.0:50051"),
-    llvm::cl::desc("Address of the invoked server. Defaults to 0.0.0.0:50051"));
+inline constexpr clv2::OptionInfo<std::string> ServerAddressOpt{
+    "server-address",
+    "Address of the invoked server. Defaults to 0.0.0.0:50051",
+    clv2::Init{"0.0.0.0:50051"}};
 
-llvm::cl::opt<size_t> IdleTimeoutSeconds(
-    "idle-timeout", llvm::cl::init(8 * 60),
-    llvm::cl::desc("Maximum time a channel may stay idle until server closes "
-                   "the connection, in seconds. Defaults to 480."));
+inline constexpr clv2::OptionInfo<size_t> IdleTimeoutSecondsOpt{
+    "idle-timeout",
+    "Maximum time a channel may stay idle until server closes "
+    "the connection, in seconds. Defaults to 480.",
+    clv2::Init{size_t{8 * 60}}};
 
-llvm::cl::opt<size_t> LimitResults(
-    "limit-results", llvm::cl::init(10000),
-    llvm::cl::desc("Maximum number of results to stream as a response to "
-                   "single request. Limit is to keep the server from being "
-                   "DOS'd. Defaults to 10000."));
+inline constexpr clv2::OptionInfo<size_t> LimitResultsOpt{
+    "limit-results",
+    "Maximum number of results to stream as a response to "
+    "single request. Limit is to keep the server from being "
+    "DOS'd. Defaults to 10000.",
+    clv2::Init{size_t{10000}}};
+
+inline constexpr clv2::OptionsRegistry<
+    &IndexPathOpt, &IndexRootOpt, &LogLevelOpt, &LogPublicOpt, &LogPrefixOpt,
+    &TraceFileOpt, &PrettyPrintOpt, &ServerAddressOpt, &IdleTimeoutSecondsOpt,
+    &LimitResultsOpt>
+    ServerReg;
 
 static Key<grpc::ServerContext *> CurrentRequest;
 
@@ -585,7 +599,24 @@ using clang::clangd::elog;
 
 int main(int argc, char *argv[]) {
   using namespace clang::clangd::remote;
-  llvm::cl::ParseCommandLineOptions(argc, argv, Overview);
+  llvm::clv2::OptionParser P;
+  P.add<&ServerReg>();
+  llvm::RegisterAllLLVMOptions(P);
+  auto OptsCtx = P.parse(argc, argv, Overview);
+  if (!OptsCtx)
+    return 1;
+  if (const auto *O = OptsCtx->getViewPtr<&ServerReg>()) {
+    IndexPath = O->get<&IndexPathOpt>();
+    IndexRoot = O->get<&IndexRootOpt>();
+    LogLevel = O->get<&LogLevelOpt>();
+    LogPublic = O->get<&LogPublicOpt>();
+    LogPrefix = O->get<&LogPrefixOpt>();
+    TraceFile = O->get<&TraceFileOpt>();
+    PrettyPrint = O->get<&PrettyPrintOpt>();
+    ServerAddress = O->get<&ServerAddressOpt>();
+    IdleTimeoutSeconds = O->get<&IdleTimeoutSecondsOpt>();
+    LimitResults = O->get<&LimitResultsOpt>();
+  }
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
   llvm::sys::SetInterruptFunction(&clang::clangd::requestShutdown);
 
@@ -597,7 +628,7 @@ int main(int argc, char *argv[]) {
   }
 
   llvm::errs().SetBuffered();
-  auto Logger = makeLogger(LogPrefix.getValue(), llvm::errs());
+  auto Logger = makeLogger(LogPrefix, llvm::errs());
   clang::clangd::LoggingSession LoggingSession(*Logger);
 
   std::optional<llvm::raw_fd_ostream> TracerStream;

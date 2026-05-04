@@ -28,6 +28,7 @@
 #include "llvm/Object/IRSymtab.h"
 #include "llvm/Support/Caching.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/ThreadPool.h"
 #include "llvm/Support/thread.h"
@@ -66,6 +67,7 @@ LLVM_ABI void thinLTOInternalizeAndPromoteInIndex(
     function_ref<bool(StringRef, ValueInfo)> isExported,
     function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
         isPrevailing,
+    const clv2::OptionsContext &OptsCtx,
     DenseSet<StringRef> *ExternallyVisibleSymbolNamesPtr = nullptr);
 
 /// Computes a unique hash for the Module considering the current list of
@@ -149,7 +151,7 @@ public:
 
   /// Create an InputFile.
   LLVM_ABI static Expected<std::unique_ptr<InputFile>>
-  create(MemoryBufferRef Object);
+  create(MemoryBufferRef Object, const clv2::OptionsContext &Ctx);
 
   /// The purpose of this struct is to only expose the symbol information that
   /// an LTO client should need in order to do symbol resolution.

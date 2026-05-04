@@ -19,7 +19,7 @@
 #include "llvm/Remarks/Remark.h"
 #include "llvm/Remarks/RemarkFormat.h"
 #include "llvm/Remarks/RemarkParser.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem.h"
@@ -29,6 +29,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TypeSize.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
@@ -38,36 +39,41 @@
 #include <set>
 
 using namespace llvm;
+using namespace llvm::clv2;
 
-// Mark all our options with this category, everything else (except for -version
-// and -help) will be hidden.
-static cl::OptionCategory
-    OptReportCategory("llvm-opt-report options");
+static constexpr OptionCategory OptReportCategory{"llvm-opt-report options"};
 
-static cl::opt<std::string>
-  InputFileName(cl::Positional, cl::desc("<input>"), cl::init("-"),
-                cl::cat(OptReportCategory));
+static constexpr OptionInfo<std::string> InputFileNameOpt{
+    "input", "<input>", Positional{}, Init{"-"}, cat(OptReportCategory)};
 
-static cl::opt<std::string>
-  OutputFileName("o", cl::desc("Output file"), cl::init("-"),
-                 cl::cat(OptReportCategory));
+static constexpr OptionInfo<std::string> OutputFileNameOpt{
+    "o", "Output file", Init{"-"}, cat(OptReportCategory)};
 
-static cl::opt<std::string>
-  InputRelDir("r", cl::desc("Root for relative input paths"), cl::init(""),
-              cl::cat(OptReportCategory));
+static constexpr OptionInfo<std::string> InputRelDirOpt{
+    "r", "Root for relative input paths", Init{""}, cat(OptReportCategory)};
 
-static cl::opt<bool>
-  Succinct("s", cl::desc("Don't include vectorization factors, etc."),
-           cl::init(false), cl::cat(OptReportCategory));
+static constexpr OptionInfo<bool> SuccinctOpt{
+    "s", "Don't include vectorization factors, etc.", cat(OptReportCategory)};
 
-static cl::opt<bool>
-  NoDemangle("no-demangle", cl::desc("Don't demangle function names"),
-             cl::init(false), cl::cat(OptReportCategory));
+static constexpr OptionInfo<bool> NoDemangleOpt{
+    "no-demangle", "Don't demangle function names", cat(OptReportCategory)};
 
-static cl::opt<std::string> ParserFormat("format",
-                                         cl::desc("The format of the remarks."),
-                                         cl::init("yaml"),
-                                         cl::cat(OptReportCategory));
+static constexpr OptionInfo<std::string> ParserFormatOpt{
+    "format", "The format of the remarks.", Init{"yaml"},
+    cat(OptReportCategory)};
+
+static constexpr OptionsRegistry<&InputFileNameOpt, &OutputFileNameOpt,
+                                 &InputRelDirOpt, &SuccinctOpt, &NoDemangleOpt,
+                                 &ParserFormatOpt>
+    OptReportToolReg;
+
+// File-scope plain variables populated from parsed options in main().
+static std::string InputFileName;
+static std::string OutputFileName;
+static std::string InputRelDir;
+static bool Succinct;
+static bool NoDemangle;
+static std::string ParserFormat;
 
 namespace {
 // For each location in the source file, the common per-transformation state
@@ -479,11 +485,22 @@ static bool writeReport(LocationInfoTy &LocationInfo) {
 int main(int argc, const char **argv) {
   InitLLVM X(argc, argv);
 
-  cl::HideUnrelatedOptions(OptReportCategory);
-  cl::ParseCommandLineOptions(
-      argc, argv,
-      "A tool to generate an optimization report from YAML optimization"
-      " record files.\n");
+  clv2::OptionParser P;
+  P.add<&OptReportToolReg>();
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&OptReportCategory});
+  auto OptsCtx =
+      P.parse(argc, argv,
+              "A tool to generate an optimization report from YAML optimization"
+              " record files.\n");
+  auto *Opts = OptsCtx->getViewPtr<&OptReportToolReg>();
+
+  InputFileName = Opts->get<&InputFileNameOpt>();
+  OutputFileName = Opts->get<&OutputFileNameOpt>();
+  InputRelDir = Opts->get<&InputRelDirOpt>();
+  Succinct = Opts->get<&SuccinctOpt>();
+  NoDemangle = Opts->get<&NoDemangleOpt>();
+  ParserFormat = Opts->get<&ParserFormatOpt>();
 
   LocationInfoTy LocationInfo;
   if (!readLocationInfo(LocationInfo))

@@ -18,7 +18,8 @@
 #include "clang/ScalableStaticAnalysis/SSAFForceLinker.h" // IWYU pragma: keep
 #include "clang/ScalableStaticAnalysis/Tool/Utils.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
 #include <memory>
 #include <string>
@@ -32,29 +33,51 @@ namespace {
 // Command-Line Options
 //===----------------------------------------------------------------------===//
 
-cl::OptionCategory SsafAnalyzerCategory("clang-ssaf-analyzer options");
+clv2::OptionCategory SsafAnalyzerCategory("clang-ssaf-analyzer options");
 
-cl::opt<std::string> InputPath(cl::Positional, cl::desc("<input file>"),
-                               cl::Required, cl::cat(SsafAnalyzerCategory));
+inline constexpr clv2::OptionInfo<std::string> SAInputPathOpt{
+    "", "<input file>", clv2::Positional{}, clv2::Required,
+    clv2::cat(SsafAnalyzerCategory)};
 
-cl::opt<std::string> OutputPath("o", cl::desc("Output file path"),
-                                cl::value_desc("path"), cl::Required,
-                                cl::cat(SsafAnalyzerCategory));
+inline constexpr clv2::OptionInfo<std::string> SAOutputPathOpt{
+    "o", "Output file path", clv2::Required, clv2::value_desc("path"),
+    clv2::cat(SsafAnalyzerCategory)};
 
-cl::list<std::string> AnalysisNames("a", cl::desc("Analysis name to run"),
-                                    cl::value_desc("name"),
-                                    cl::cat(SsafAnalyzerCategory));
+inline constexpr clv2::ListOptionInfo<std::string> SAAnalysisNamesOpt{
+    "a", "Analysis name to run", clv2::value_desc("name"),
+    clv2::cat(SsafAnalyzerCategory)};
 
-cl::alias AnalysisNamesAlias("analysis", cl::aliasopt(AnalysisNames),
-                             cl::desc("Alias for -a"));
+inline constexpr clv2::AliasInfo SAAnalysisNamesAlias{"analysis", "a",
+                                                      "Alias for -a"};
 
-cl::list<std::string> LoadPlugins("load",
-                                  cl::desc("Load a plugin shared library"),
-                                  cl::value_desc("path"),
-                                  cl::cat(SsafAnalyzerCategory));
+inline constexpr clv2::ListOptionInfo<std::string> SALoadPluginsOpt{
+    "load", "Load a plugin shared library", clv2::value_desc("path"),
+    clv2::cat(SsafAnalyzerCategory)};
 
-cl::alias LoadPluginsAlias("l", cl::aliasopt(LoadPlugins),
-                           cl::desc("Alias for --load"));
+inline constexpr clv2::AliasInfo SALoadPluginsAlias{"l", "load",
+                                                    "Alias for --load"};
+
+inline constexpr clv2::OptionsRegistry<
+    &SAInputPathOpt, &SAOutputPathOpt, &SAAnalysisNamesOpt,
+    &SAAnalysisNamesAlias, &SALoadPluginsOpt, &SALoadPluginsAlias>
+    SsafAnalyzerOptsReg;
+
+std::string InputPath;
+std::string OutputPath;
+std::vector<std::string> AnalysisNames;
+std::vector<std::string> LoadPlugins;
+
+} // namespace
+
+static void applySsafAnalyzerOpts(
+    const decltype(SsafAnalyzerOptsReg)::ParsedOptionsT &Opts) {
+  InputPath = Opts.get<&SAInputPathOpt>();
+  OutputPath = Opts.get<&SAOutputPathOpt>();
+  AnalysisNames = Opts.get<&SAAnalysisNamesOpt>();
+  LoadPlugins = Opts.get<&SALoadPluginsOpt>();
+}
+
+namespace {
 
 //===----------------------------------------------------------------------===//
 // Input Validation
@@ -123,7 +146,10 @@ int main(int argc, const char **argv) {
   llvm::StringRef ToolHeading = "SSAF Analyzer";
 
   InitLLVM X(argc, argv);
-  initTool(argc, argv, "0.1", SsafAnalyzerCategory, ToolHeading);
+  initTool(argc, argv, "0.1", SsafAnalyzerCategory, ToolHeading,
+           [](clv2::OptionParser &P) {
+             P.add<&SsafAnalyzerOptsReg, applySsafAnalyzerOpts>();
+           });
 
   loadPlugins(LoadPlugins);
 

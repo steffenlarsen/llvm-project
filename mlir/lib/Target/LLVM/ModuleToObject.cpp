@@ -244,7 +244,7 @@ ModuleToObject::moduleToObject(llvm::Module &llvmModule) {
 
 std::optional<SmallVector<char, 0>> ModuleToObject::run() {
   // Translate the module to LLVM IR.
-  llvm::LLVMContext llvmContext;
+  llvm::LLVMContext llvmContext(llvm::clv2::defaultOptionsContext());
   std::unique_ptr<llvm::Module> llvmModule = translateToLLVMIR(llvmContext);
   if (!llvmModule) {
     getOperation().emitError() << "Failed creating the llvm::Module.";

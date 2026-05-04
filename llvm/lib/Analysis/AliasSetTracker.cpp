@@ -14,6 +14,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/GuardUtils.h"
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Config/llvm-config.h"
@@ -26,18 +27,18 @@
 #include "llvm/IR/Value.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/AtomicOrdering.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
-static cl::opt<unsigned> SaturationThreshold(
-    "alias-set-saturation-threshold", cl::Hidden, cl::init(250),
-    cl::desc("The maximum total number of memory locations alias "
-             "sets may contain before degradation"));
+static unsigned getSaturationThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_SaturationThreshold>(Ctx);
+}
 
 /// mergeSetIn - Merge the specified alias set into this alias set.
 void AliasSet::mergeSetIn(AliasSet &AS, AliasSetTracker &AST,
@@ -448,14 +449,15 @@ void AliasSetTracker::add(const AliasSetTracker &AST) {
 }
 
 AliasSet &AliasSetTracker::mergeAllAliasSets() {
-  assert(!AliasAnyAS && (TotalAliasSetSize > SaturationThreshold) &&
+  assert(!AliasAnyAS &&
+         (TotalAliasSetSize > getSaturationThreshold(*OptsCtx)) &&
          "Full merge should happen once, when the saturation threshold is "
          "reached");
 
   // Collect all alias sets, so that we can drop references with impunity
   // without worrying about iterator invalidation.
   std::vector<AliasSet *> ASVector;
-  ASVector.reserve(SaturationThreshold);
+  ASVector.reserve(getSaturationThreshold(*OptsCtx));
   for (AliasSet &AS : *this)
     ASVector.push_back(&AS);
 
@@ -489,7 +491,7 @@ AliasSet &AliasSetTracker::addMemoryLocation(MemoryLocation Loc,
   AliasSet &AS = getAliasSetFor(Loc);
   AS.Access |= MR;
 
-  if (!AliasAnyAS && (TotalAliasSetSize > SaturationThreshold)) {
+  if (!AliasAnyAS && (TotalAliasSetSize > getSaturationThreshold(*OptsCtx))) {
     // The AST is now saturated. From here on, we conservatively consider all
     // elements to alias each-other.
     return mergeAllAliasSets();
@@ -575,7 +577,7 @@ PreservedAnalyses AliasSetsPrinterPass::run(Function &F,
                                             FunctionAnalysisManager &AM) {
   auto &AA = AM.getResult<AAManager>(F);
   BatchAAResults BatchAA(AA);
-  AliasSetTracker Tracker(BatchAA);
+  AliasSetTracker Tracker(BatchAA, F.getContext().getOptionsContext());
   OS << "Alias sets for function '" << F.getName() << "':\n";
   for (Instruction &I : instructions(F))
     Tracker.add(&I);

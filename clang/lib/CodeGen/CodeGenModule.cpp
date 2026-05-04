@@ -47,6 +47,7 @@
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/Version.h"
 #include "clang/CodeGen/BackendUtil.h"
+#include "clang/CodeGen/ClangCodeGenOptionsOptInfos.h"
 #include "clang/CodeGen/ConstantInitBuilder.h"
 #include "clang/Lex/Preprocessor.h"
 #include "llvm/ABI/IRTypeMapper.h"
@@ -69,9 +70,10 @@
 #include "llvm/Support/ARMBuildAttributes.h"
 #include "llvm/Support/CRC.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/TargetParser/AArch64TargetParser.h"
@@ -87,10 +89,12 @@
 
 using namespace clang;
 using namespace CodeGen;
+using namespace llvm::clv2;
 
-static llvm::cl::opt<bool> LimitedCoverage(
-    "limited-coverage-experimental", llvm::cl::Hidden,
-    llvm::cl::desc("Emit limited coverage mapping information (experimental)"));
+static const int RegisterClangCodeGenOpts = [] {
+  llvm::clv2::registerDynamicRegistry<&ClangCodeGenOptsReg>();
+  return 0;
+}();
 
 static const char AnnotationSection[] = "llvm.metadata";
 static constexpr auto ErrnoTBAAMDName = "llvm.errno.tbaa";
@@ -8373,10 +8377,18 @@ void CodeGenModule::AddDeferredUnusedCoverageMapping(Decl *D) {
     if (!cast<FunctionDecl>(D)->doesThisDeclarationHaveABody())
       break;
     SourceManager &SM = getContext().getSourceManager();
-    if (LimitedCoverage && SM.getMainFileID() != SM.getFileID(D->getBeginLoc()))
+    bool LimitedCoverageVal = false;
+    if (auto *O = llvm::clv2::getView<&llvm::clv2::ClangCodeGenOptsReg>(
+            getLLVMContext().getOptionsContext()))
+      LimitedCoverageVal = O->get<&CLANGCG_LimitedCoverageExperimental>();
+    if (LimitedCoverageVal &&
+        SM.getMainFileID() != SM.getFileID(D->getBeginLoc()))
       break;
-    if (!llvm::coverage::SystemHeadersCoverage &&
-        SM.isInSystemHeader(D->getBeginLoc()))
+    bool SystemHeadersCoverageVal = false;
+    if (auto *O = llvm::clv2::getView<&llvm::clv2::ClangCodeGenOptsReg>(
+            getLLVMContext().getOptionsContext()))
+      SystemHeadersCoverageVal = O->get<&CLANGCG_SystemHeadersCoverage>();
+    if (!SystemHeadersCoverageVal && SM.isInSystemHeader(D->getBeginLoc()))
       break;
     DeferredEmptyCoverageMappingDecls.try_emplace(D, true);
     break;

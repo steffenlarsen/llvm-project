@@ -12,13 +12,15 @@
 #include "IncludeFixerContext.h"
 #include "SymbolIndexManager.h"
 #include "YamlSymbolIndex.h"
+#include "clang-tools-extra/ClangToolsExtraOptionsOptInfos.h"
 #include "clang/Format/Format.h"
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Rewrite/Core/Rewriter.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Core/Replacement.h"
 #include "clang/Tooling/Tooling.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/YAMLTraits.h"
 
@@ -87,75 +89,54 @@ enum DatabaseFormatTy {
   fuzzyYaml, ///< Yaml database with fuzzy-matched identifiers.
 };
 
-cl::opt<DatabaseFormatTy> DatabaseFormat(
-    "db", cl::desc("Specify input format"),
-    cl::values(clEnumVal(fixed, "Hard-coded mapping"),
-               clEnumVal(yaml, "Yaml database created by find-all-symbols"),
-               clEnumVal(fuzzyYaml, "Yaml database, with fuzzy-matched names")),
-    cl::init(yaml), cl::cat(IncludeFixerCategory));
+static DatabaseFormatTy DatabaseFormat = yaml;
+static std::string Input;
+static std::string QuerySymbol;
+static bool MinimizeIncludePaths = true;
+static bool Quiet = false;
+static bool STDINMode = false;
+static bool OutputHeaders = false;
+static std::string InsertHeader;
+static std::string Style = "llvm";
 
-cl::opt<std::string> Input("input",
-                           cl::desc("String to initialize the database"),
-                           cl::cat(IncludeFixerCategory));
+inline constexpr clv2::OptionsRegistry<
+    &clv2::CTE_IF_DB, &clv2::CTE_IF_Input, &clv2::CTE_IF_QuerySymbol,
+    &clv2::CTE_IF_MinimizePaths, &clv2::CTE_IF_Quiet, &clv2::CTE_IF_Stdin,
+    &clv2::CTE_IF_OutputHeaders, &clv2::CTE_IF_InsertHeader,
+    &clv2::CTE_IF_Style>
+    IncludeFixerOptsReg;
 
-cl::opt<std::string>
-    QuerySymbol("query-symbol",
-                 cl::desc("Query a given symbol (e.g. \"a::b::foo\") in\n"
-                          "database directly without parsing the file."),
-                 cl::cat(IncludeFixerCategory));
+static void applyIncludeFixerOpts(
+    const decltype(IncludeFixerOptsReg)::ParsedOptionsT &Opts) {
+  DatabaseFormat = static_cast<DatabaseFormatTy>(
+      static_cast<int>(Opts.get<&clv2::CTE_IF_DB>()));
+  Input = Opts.get<&clv2::CTE_IF_Input>();
+  QuerySymbol = Opts.get<&clv2::CTE_IF_QuerySymbol>();
+  MinimizeIncludePaths = Opts.get<&clv2::CTE_IF_MinimizePaths>();
+  Quiet = Opts.get<&clv2::CTE_IF_Quiet>();
+  STDINMode = Opts.get<&clv2::CTE_IF_Stdin>();
+  OutputHeaders = Opts.get<&clv2::CTE_IF_OutputHeaders>();
+  InsertHeader = Opts.get<&clv2::CTE_IF_InsertHeader>();
+  Style = Opts.get<&clv2::CTE_IF_Style>();
+}
 
-cl::opt<bool>
-    MinimizeIncludePaths("minimize-paths",
-                         cl::desc("Whether to minimize added include paths"),
-                         cl::init(true), cl::cat(IncludeFixerCategory));
-
-cl::opt<bool> Quiet("q", cl::desc("Reduce terminal output"), cl::init(false),
-                    cl::cat(IncludeFixerCategory));
-
-cl::opt<bool>
-    STDINMode("stdin",
-              cl::desc("Override source file's content (in the overlaying\n"
-                       "virtual file system) with input from <stdin> and run\n"
-                       "the tool on the new content with the compilation\n"
-                       "options of the source file. This mode is currently\n"
-                       "used for editor integration."),
-              cl::init(false), cl::cat(IncludeFixerCategory));
-
-cl::opt<bool> OutputHeaders(
-    "output-headers",
-    cl::desc("Print the symbol being queried and all its relevant headers in\n"
-             "JSON format to stdout:\n"
-             "  {\n"
-             "    \"FilePath\": \"/path/to/foo.cc\",\n"
-             "    \"QuerySymbolInfos\": [\n"
-             "       {\"RawIdentifier\": \"foo\",\n"
-             "        \"Range\": {\"Offset\": 0, \"Length\": 3}}\n"
-             "    ],\n"
-             "    \"HeaderInfos\": [ {\"Header\": \"\\\"foo_a.h\\\"\",\n"
-             "                      \"QualifiedName\": \"a::foo\"} ]\n"
-             "  }"),
-    cl::init(false), cl::cat(IncludeFixerCategory));
-
-cl::opt<std::string> InsertHeader(
-    "insert-header",
-    cl::desc("Insert a specific header. This should run with STDIN mode.\n"
-             "The result is written to stdout. It is currently used for\n"
-             "editor integration. Support YAML/JSON format:\n"
-             "  -insert-header=\"{\n"
-             "     FilePath: \"/path/to/foo.cc\",\n"
-             "     QuerySymbolInfos: [\n"
-             "       {RawIdentifier: foo,\n"
-             "        Range: {Offset: 0, Length: 3}}\n"
-             "     ],\n"
-             "     HeaderInfos: [ {Headers: \"\\\"foo_a.h\\\"\",\n"
-             "                     QualifiedName: \"a::foo\"} ]}\""),
-    cl::init(""), cl::cat(IncludeFixerCategory));
-
-cl::opt<std::string>
-    Style("style",
-          cl::desc("Fallback style for reformatting after inserting new\n"
-                   "headers if there is no clang-format config file found."),
-          cl::init("llvm"), cl::cat(IncludeFixerCategory));
+static void configureParser(clv2::OptionParser &P) {
+  using ParsedT = decltype(IncludeFixerOptsReg)::ParsedOptionsT;
+  auto *Storage = new ParsedT();
+  decltype(IncludeFixerOptsReg)::applyDefaultsTo(*Storage);
+  std::vector<clv2::detail::OptionEntry> Entries;
+  std::vector<clv2::detail::AliasEntry> Aliases;
+  std::vector<clv2::detail::SubCommandSpec> SubSpecs;
+  decltype(IncludeFixerOptsReg)::staticBuildInto(*Storage, Entries, Aliases,
+                                                 SubSpecs);
+  for (auto &E : Entries) {
+    if (!E.Cat)
+      E.Cat = &IncludeFixerCategory;
+    P.addDynamicEntry(std::move(E));
+  }
+  clv2::registerDynamicPostParseCallback(
+      [Storage]() { applyIncludeFixerOpts(*Storage); });
+}
 
 std::unique_ptr<include_fixer::SymbolIndexManager>
 createSymbolIndexManager(StringRef FilePath) {
@@ -261,8 +242,8 @@ void writeToJson(llvm::raw_ostream &OS, const IncludeFixerContext& Context) {
 }
 
 int includeFixerMain(int argc, const char **argv) {
-  auto ExpectedParser =
-      tooling::CommonOptionsParser::create(argc, argv, IncludeFixerCategory);
+  auto ExpectedParser = tooling::CommonOptionsParser::create(
+      argc, argv, IncludeFixerCategory, configureParser);
   if (!ExpectedParser) {
     llvm::errs() << llvm::toString(ExpectedParser.takeError());
     return 1;

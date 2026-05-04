@@ -24,7 +24,6 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/Signals.h"
@@ -43,20 +42,9 @@ using mlir::tblgen::Operator;
 //===----------------------------------------------------------------------===//
 // Commandline Options
 //===----------------------------------------------------------------------===//
-static cl::OptionCategory
-    docCat("Options for -gen-(attrdef|typedef|enum|op|dialect)-doc");
-static cl::opt<std::string>
-    stripPrefix("strip-prefix",
-                cl::desc("Strip prefix of the fully qualified names"),
-                cl::init("::mlir::"), cl::cat(docCat));
-static cl::opt<bool> allowHugoSpecificFeatures(
-    "allow-hugo-specific-features",
-    cl::desc("Allows using features specific to Hugo"), cl::init(false),
-    cl::cat(docCat));
-static cl::opt<bool>
-    keepOpSourceOrder("keep-op-source-order",
-                      cl::desc("Do not sort ops alphabetically"),
-                      cl::init(false), cl::cat(docCat));
+std::string stripPrefix = "::mlir::";
+bool allowHugoSpecificFeatures = false;
+bool keepOpSourceOrder = false;
 
 void mlir::tblgen::emitSummary(StringRef summary, raw_ostream &os) {
   if (summary.empty())

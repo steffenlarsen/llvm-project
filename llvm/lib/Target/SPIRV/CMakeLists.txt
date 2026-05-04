@@ -16,6 +16,8 @@ tablegen(LLVM SPIRVGenPreLegalizeGICombiner.inc -gen-global-isel-combiner
 add_public_tablegen_target(SPIRVCommonTableGen)
 
 add_llvm_target(SPIRVCodeGen
+  SPIRVOptionsGetters.cpp
+  SPIRVOptionsRegistration.cpp
   SPIRVAPI.cpp
   SPIRVAsmPrinter.cpp
   SPIRVBuiltins.cpp

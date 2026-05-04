@@ -68,7 +68,7 @@ size_t mlir::moveLoopInvariantCode(
   for (Region *region : regions) {
     LDBG() << "Original loop:\n"
            << OpWithFlags(region->getParentOp(),
-                          OpPrintingFlags().skipRegions());
+                          opPrintingFlags(region->getParentOp()).skipRegions());
 
     std::queue<Operation *> worklist;
     // Add top-level operations in the loop body to the worklist.
@@ -87,13 +87,13 @@ size_t mlir::moveLoopInvariantCode(
         continue;
 
       LDBG() << "Checking op: "
-             << OpWithFlags(op, OpPrintingFlags().skipRegions());
+             << OpWithFlags(op, opPrintingFlags(op).skipRegions());
       if (!shouldMoveOutOfRegion(op, region) ||
           !canBeHoisted(op, definedOutside))
         continue;
 
       LDBG() << "Moving loop-invariant op: "
-             << OpWithFlags(op, OpPrintingFlags().skipRegions());
+             << OpWithFlags(op, opPrintingFlags(op).skipRegions());
       moveOutOfRegion(op, region);
       ++numMoved;
 

@@ -10,41 +10,45 @@
 
 #include "llvm-c/Disassembler.h"
 #include "llvm-c/Target.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/SubtargetFeature.h"
 
 using namespace llvm;
+using namespace llvm::clv2;
 
 const unsigned AssemblyTextBufSize = 80;
 
-static cl::opt<std::string>
-    TripleName("triple", cl::desc("Target triple to assemble for, "
-                                  "see -version for available targets"));
+inline constexpr OptionInfo<std::string> TripleNameOpt{
+    "triple",
+    "Target triple to assemble for, see -version for available targets"};
 
-static cl::opt<std::string>
-    MCPU("mcpu",
-         cl::desc("Target a specific cpu type (-mcpu=help for details)"),
-         cl::value_desc("cpu-name"), cl::init(""));
+inline constexpr OptionInfo<std::string> MCPUOpt{
+    "mcpu", "Target a specific cpu type (-mcpu=help for details)",
+    value_desc("cpu-name")};
 
-// This is useful for variable-length instruction sets.
-static cl::opt<unsigned> InsnLimit(
+inline constexpr OptionInfo<unsigned> InsnLimitOpt{
     "insn-limit",
-    cl::desc("Limit the number of instructions to process (0 for no limit)"),
-    cl::value_desc("count"), cl::init(0));
+    "Limit the number of instructions to process (0 for no limit)",
+    value_desc("count"), Init{0u}};
 
-static cl::list<std::string>
-    MAttrs("mattr", cl::CommaSeparated,
-           cl::desc("Target specific attributes (-mattr=help for details)"),
-           cl::value_desc("a1,+a2,-a3,..."));
-// The feature string derived from -mattr's values.
+inline constexpr ListOptionInfo<std::string> MAttrsOpt{
+    "mattr", "Target specific attributes (-mattr=help for details)",
+    CommaSeparated, value_desc("a1,+a2,-a3,...")};
+
+inline constexpr ListOptionInfo<std::string> FuzzerArgsOpt{
+    "fuzzer-args", "Options to pass to the fuzzer", Positional{},
+    PositionalEatsArgs};
+
+// Parsed values — populated after parsing.
+static std::string TripleName;
+static std::string MCPU;
+static unsigned InsnLimit = 0;
+static std::vector<std::string> MAttrs;
+static std::vector<std::string> FuzzerArgs;
 std::string FeaturesStr;
-
-static cl::list<std::string>
-    FuzzerArgs("fuzzer-args", cl::Positional,
-               cl::desc("Options to pass to the fuzzer"),
-               cl::PositionalEatsArgs);
 static std::vector<char *> ModifiedArgv;
 
 int DisassembleOneInput(const uint8_t *Data, size_t Size) {
@@ -108,7 +112,19 @@ extern "C" LLVM_ATTRIBUTE_USED int LLVMFuzzerInitialize(int *argc,
   LLVMInitializeAllTargetMCs();
   LLVMInitializeAllDisassemblers();
 
-  cl::ParseCommandLineOptions(*argc, OriginalArgv);
+  static constexpr OptionsRegistry<&TripleNameOpt, &MCPUOpt, &InsnLimitOpt,
+                                   &MAttrsOpt, &FuzzerArgsOpt>
+      FuzzerToolReg;
+  clv2::OptionParser P;
+  P.add<&FuzzerToolReg>();
+  RegisterAllLLVMOptions(P);
+  auto OptsCtx = P.parse(*argc, OriginalArgv, "llvm MC disassembler fuzzer\n");
+  auto *Opts = OptsCtx->getViewPtr<&FuzzerToolReg>();
+  TripleName = Opts->get<&TripleNameOpt>();
+  MCPU = Opts->get<&MCPUOpt>();
+  InsnLimit = Opts->get<&InsnLimitOpt>();
+  FuzzerArgs = Opts->get<&FuzzerArgsOpt>();
+  MAttrs = Opts->get<&MAttrsOpt>();
 
   // Rebuild the argv without the arguments llvm-mc-fuzzer consumed so that
   // the driver can parse its arguments.

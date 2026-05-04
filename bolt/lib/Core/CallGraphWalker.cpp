@@ -12,21 +12,21 @@
 
 #include "bolt/Core/CallGraphWalker.h"
 #include "bolt/Core/BinaryFunctionCallGraph.h"
-#include "llvm/Support/CommandLine.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "llvm/Support/Timer.h"
 #include <queue>
 #include <set>
 
-namespace opts {
-extern llvm::cl::opt<bool> TimeOpts;
-}
+using namespace llvm;
 
 namespace llvm {
 namespace bolt {
 
 void CallGraphWalker::traverseCG() {
+  auto *UtilOpts = bolt_utils_opts::getBoltUtilsOpts(*OptsCtx);
+  bool TimeOpts = UtilOpts ? UtilOpts->get<&clv2::BOLT_TimeOpts>() : false;
   NamedRegionTimer T1("CG Traversal", "CG Traversal", "CG breakdown",
-                      "CG breakdown", opts::TimeOpts);
+                      "CG breakdown", TimeOpts);
   std::queue<BinaryFunction *> Queue;
   std::set<BinaryFunction *> InQueue;
 
@@ -59,7 +59,7 @@ void CallGraphWalker::traverseCG() {
 }
 
 void CallGraphWalker::walk() {
-  TopologicalCGOrder = CG.buildTraversalOrder();
+  TopologicalCGOrder = CG.buildTraversalOrder(*OptsCtx);
   traverseCG();
 }
 

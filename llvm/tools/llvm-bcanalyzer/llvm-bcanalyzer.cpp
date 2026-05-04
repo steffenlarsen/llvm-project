@@ -28,65 +28,62 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Bitcode/BitcodeAnalyzer.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
 #include <optional>
 using namespace llvm;
+using namespace llvm::clv2;
 
-static cl::OptionCategory BCAnalyzerCategory("BC Analyzer Options");
+static constexpr OptionCategory BCAnalyzerCategory{"BC Analyzer Options"};
 
-static cl::opt<std::string> InputFilename(cl::Positional,
-                                          cl::desc("<input bitcode>"),
-                                          cl::init("-"),
-                                          cl::cat(BCAnalyzerCategory));
+static constexpr OptionInfo<std::string> InputFilename{
+    "input", "<input bitcode>", Positional{}, Init{"-"},
+    cat(BCAnalyzerCategory)};
 
-static cl::opt<bool> Dump("dump", cl::desc("Dump low level bitcode trace"),
-                          cl::cat(BCAnalyzerCategory));
+static constexpr OptionInfo<bool> Dump{"dump", "Dump low level bitcode trace",
+                                       cat(BCAnalyzerCategory)};
 
-static cl::opt<bool> DumpBlockinfo("dump-blockinfo",
-                                   cl::desc("Include BLOCKINFO details in low"
-                                            " level dump"),
-                                   cl::cat(BCAnalyzerCategory));
+static constexpr OptionInfo<bool> DumpBlockinfo{
+    "dump-blockinfo", "Include BLOCKINFO details in low level dump",
+    cat(BCAnalyzerCategory)};
 
-//===----------------------------------------------------------------------===//
-// Bitcode specific analysis.
-//===----------------------------------------------------------------------===//
+static constexpr OptionInfo<bool> NoHistogram{"disable-histogram",
+                                              "Do not print per-code histogram",
+                                              cat(BCAnalyzerCategory)};
 
-static cl::opt<bool> NoHistogram("disable-histogram",
-                                 cl::desc("Do not print per-code histogram"),
-                                 cl::cat(BCAnalyzerCategory));
+static constexpr OptionInfo<bool> NonSymbolic{
+    "non-symbolic",
+    "Emit numeric info in dump even if symbolic info is available",
+    cat(BCAnalyzerCategory)};
 
-static cl::opt<bool> NonSymbolic("non-symbolic",
-                                 cl::desc("Emit numeric info in dump even if"
-                                          " symbolic info is available"),
-                                 cl::cat(BCAnalyzerCategory));
+static constexpr OptionInfo<std::string> BlockInfoFilename{
+    "block-info", "Use the BLOCK_INFO from the given file",
+    cat(BCAnalyzerCategory)};
 
-static cl::opt<std::string>
-    BlockInfoFilename("block-info",
-                      cl::desc("Use the BLOCK_INFO from the given file"),
-                      cl::cat(BCAnalyzerCategory));
+static constexpr OptionInfo<bool> ShowBinaryBlobs{
+    "show-binary-blobs", "Print binary blobs using hex escapes",
+    cat(BCAnalyzerCategory)};
 
-static cl::opt<bool>
-    ShowBinaryBlobs("show-binary-blobs",
-                    cl::desc("Print binary blobs using hex escapes"),
-                    cl::cat(BCAnalyzerCategory));
+static constexpr OptionInfo<std::string> CheckHash{
+    "check-hash", "Check module hash using the argument as a string table",
+    cat(BCAnalyzerCategory)};
 
-static cl::opt<std::string> CheckHash(
-    "check-hash",
-    cl::desc("Check module hash using the argument as a string table"),
-    cl::cat(BCAnalyzerCategory));
+static constexpr OptionsRegistry<&InputFilename, &Dump, &DumpBlockinfo,
+                                 &NoHistogram, &NonSymbolic, &BlockInfoFilename,
+                                 &ShowBinaryBlobs, &CheckHash>
+    BCAToolReg;
 
 static Error reportError(StringRef Message) {
   return createStringError(std::errc::illegal_byte_sequence, Message.data());
 }
 
 static Expected<std::unique_ptr<MemoryBuffer>> openBitcodeFile(StringRef Path) {
-  // Read the input file.
   Expected<std::unique_ptr<MemoryBuffer>> MemBufOrErr =
       errorOrToExpected(MemoryBuffer::getFileOrSTDIN(Path));
   if (Error E = MemBufOrErr.takeError())
@@ -103,14 +100,19 @@ static Expected<std::unique_ptr<MemoryBuffer>> openBitcodeFile(StringRef Path) {
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
 
-  cl::HideUnrelatedOptions({&BCAnalyzerCategory, &getColorCategory()});
-  cl::ParseCommandLineOptions(argc, argv, "llvm-bcanalyzer file analyzer\n");
+  clv2::OptionParser P;
+  P.add<&BCAToolReg>();
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&BCAnalyzerCategory, &getColorCategory()});
+  auto OptsCtx = P.parse(argc, argv, "llvm-bcanalyzer file analyzer\n");
+  auto *Opts = OptsCtx->getViewPtr<&BCAToolReg>();
   ExitOnError ExitOnErr("llvm-bcanalyzer: ");
 
-  std::unique_ptr<MemoryBuffer> MB = ExitOnErr(openBitcodeFile(InputFilename));
+  std::unique_ptr<MemoryBuffer> MB =
+      ExitOnErr(openBitcodeFile(Opts->get<&InputFilename>()));
   std::unique_ptr<MemoryBuffer> BlockInfoMB = nullptr;
-  if (!BlockInfoFilename.empty())
-    BlockInfoMB = ExitOnErr(openBitcodeFile(BlockInfoFilename));
+  if (!Opts->get<&BlockInfoFilename>().empty())
+    BlockInfoMB = ExitOnErr(openBitcodeFile(Opts->get<&BlockInfoFilename>()));
 
   BitcodeAnalyzer BA(MB->getBuffer(),
                      BlockInfoMB
@@ -118,18 +120,20 @@ int main(int argc, char **argv) {
                          : std::nullopt);
 
   BCDumpOptions O(outs());
-  O.Histogram = !NoHistogram;
-  O.Symbolic = !NonSymbolic;
-  O.ShowBinaryBlobs = ShowBinaryBlobs;
-  O.DumpBlockinfo = DumpBlockinfo;
+  O.Histogram = !Opts->get<&NoHistogram>();
+  O.Symbolic = !Opts->get<&NonSymbolic>();
+  O.ShowBinaryBlobs = Opts->get<&ShowBinaryBlobs>();
+  O.DumpBlockinfo = Opts->get<&DumpBlockinfo>();
 
-  ExitOnErr(BA.analyze(
-      Dump ? std::optional<BCDumpOptions>(O) : std::optional<BCDumpOptions>(),
-      CheckHash.empty() ? std::nullopt : std::optional<StringRef>(CheckHash)));
+  const auto &Hash = Opts->get<&CheckHash>();
+  ExitOnErr(
+      BA.analyze(Opts->get<&Dump>() ? std::optional<BCDumpOptions>(O)
+                                    : std::optional<BCDumpOptions>(),
+                 Hash.empty() ? std::nullopt : std::optional<StringRef>(Hash)));
 
-  if (Dump)
+  if (Opts->get<&Dump>())
     outs() << "\n\n";
 
-  BA.printStats(O, StringRef(InputFilename.getValue()));
+  BA.printStats(O, StringRef(Opts->get<&InputFilename>()));
   return 0;
 }

@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "flang/Optimizer/Analysis/AliasAnalysis.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Optimizer/Dialect/CUF/CUFOps.h"
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/Dialect/FIROpsSupport.h"
@@ -26,19 +27,14 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include <optional>
 #include <utility>
 
 using namespace mlir;
 
 #define DEBUG_TYPE "fir-alias-analysis"
-
-llvm::cl::opt<bool> supportCrayPointers(
-    "unsafe-cray-pointers",
-    llvm::cl::desc("Support Cray POINTERs that ALIAS with non-TARGET data"),
-    llvm::cl::init(false));
 
 // Inspect for value-scoped Allocate effects and determine whether
 // 'result' is a new allocation. Returns SourceKind::Allocate if a
@@ -763,7 +759,8 @@ AliasResult AliasAnalysis::alias(Source lhsSrc, Source rhsSrc, mlir::Value lhs,
   }
 
   // Cray pointers/pointees can alias with anything via LOC.
-  if (supportCrayPointers) {
+  if (llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_UnsafeCrayPointers>(
+          lhs.getContext()->getOptionsContext())) {
     if (lhsSrc.isCrayPointerOrPointee() || rhsSrc.isCrayPointerOrPointee()) {
       LLVM_DEBUG(llvm::dbgs()
                  << "  aliasing because of Cray pointer/pointee\n");

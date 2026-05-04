@@ -12,7 +12,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Basic/Version.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/Error.h"
 #include <cstdint>
@@ -21,7 +20,7 @@
 
 using namespace llvm;
 
-extern cl::opt<bool> Verbose;
+extern bool Verbose;
 
 typedef enum cudaError_enum {
   CUDA_SUCCESS = 0,

@@ -25,14 +25,19 @@
 #include "llvm/IR/Analysis.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/MSP430/MSP430OptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "msp430-branch-select"
 
-static cl::opt<bool>
-    BranchSelectEnabled("msp430-branch-select", cl::Hidden, cl::init(true),
-                        cl::desc("Expand out of range branches"));
+static bool BranchSelectEnabled = true;
+
+static bool getBranchSelectEnabled(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::MSP430_BranchSelectEnabled>(
+      F.getContext().getOptionsContext());
+}
 
 STATISTIC(NumSplit, "Number of machine basic blocks split");
 STATISTIC(NumExpanded, "Number of branches expanded to long format");
@@ -234,7 +239,7 @@ bool MSP430BSelImpl::runOnMachineFunction(MachineFunction &mf) {
   TII = static_cast<const MSP430InstrInfo *>(MF->getSubtarget().getInstrInfo());
 
   // If the pass is disabled, just bail early.
-  if (!BranchSelectEnabled)
+  if (!getBranchSelectEnabled(mf.getFunction()))
     return false;
 
   LLVM_DEBUG(dbgs() << "\n********** " << DEBUG_TYPE << " **********\n");

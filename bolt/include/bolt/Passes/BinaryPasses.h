@@ -17,13 +17,15 @@
 #include "bolt/Core/BinaryFunction.h"
 #include "bolt/Core/DynoStats.h"
 #include "bolt/Profile/BoltAddressTranslation.h"
-#include "llvm/Support/CommandLine.h"
 #include <atomic>
 #include <set>
 #include <string>
 #include <unordered_set>
 
 namespace llvm {
+namespace clv2 {
+class OptionParser;
+}
 namespace bolt {
 
 /// An optimization/analysis pass that runs on functions.
@@ -65,7 +67,8 @@ public:
   bool shouldPrint(const BinaryFunction &BF) const override { return false; }
 
   Error runOnFunctions(BinaryContext &BC) override {
-    BC.InitialDynoStats = getDynoStats(BC.getBinaryFunctions(), BC.isAArch64());
+    BC.InitialDynoStats = getDynoStats(BC.getBinaryFunctions(), BC.isAArch64(),
+                                       BC.getOptionsContext());
     return Error::success();
   }
 };
@@ -87,8 +90,8 @@ public:
 
   Error runOnFunctions(BinaryContext &BC) override {
     const DynoStats PrevDynoStats = BC.InitialDynoStats;
-    const DynoStats NewDynoStats =
-        getDynoStats(BC.getBinaryFunctions(), BC.isAArch64());
+    const DynoStats NewDynoStats = getDynoStats(
+        BC.getBinaryFunctions(), BC.isAArch64(), BC.getOptionsContext());
     const bool Changed = (NewDynoStats != PrevDynoStats);
     BC.outs() << "BOLT-INFO: program-wide dynostats " << Title
               << (Changed ? "" : " (no change)") << ":\n\n"
@@ -112,8 +115,7 @@ class NormalizeCFG : public BinaryFunctionPass {
   void runOnFunction(BinaryFunction &BF);
 
 public:
-  NormalizeCFG(const cl::opt<bool> &PrintPass)
-      : BinaryFunctionPass(PrintPass) {}
+  NormalizeCFG(const bool PrintPass) : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "normalize CFG"; }
 
@@ -129,7 +131,7 @@ class EliminateUnreachableBlocks : public BinaryFunctionPass {
   void runOnFunction(BinaryFunction &Function);
 
 public:
-  EliminateUnreachableBlocks(const cl::opt<bool> &PrintPass)
+  EliminateUnreachableBlocks(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "eliminate-unreachable"; }
@@ -175,7 +177,7 @@ private:
                             bool MinBranchClusters) const;
 
 public:
-  explicit ReorderBasicBlocks(const cl::opt<bool> &PrintPass)
+  explicit ReorderBasicBlocks(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   bool shouldOptimize(const BinaryFunction &BF) const override;
@@ -188,7 +190,7 @@ public:
 /// Sync local branches with CFG.
 class FixupBranches : public BinaryFunctionPass {
 public:
-  explicit FixupBranches(const cl::opt<bool> &PrintPass)
+  explicit FixupBranches(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "fix-branches"; }
@@ -208,7 +210,7 @@ public:
 /// passes have completed.
 class FinalizeFunctions : public BinaryFunctionPass {
 public:
-  explicit FinalizeFunctions(const cl::opt<bool> &PrintPass)
+  explicit FinalizeFunctions(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "finalize-functions"; }
@@ -219,7 +221,7 @@ public:
 /// original space in non-relocation mode.
 class CheckLargeFunctions : public BinaryFunctionPass {
 public:
-  explicit CheckLargeFunctions(const cl::opt<bool> &PrintPass)
+  explicit CheckLargeFunctions(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "check-large-functions"; }
@@ -232,7 +234,7 @@ public:
 /// Convert and remove all BOLT-related annotations before LLVM code emission.
 class LowerAnnotations : public BinaryFunctionPass {
 public:
-  explicit LowerAnnotations(const cl::opt<bool> &PrintPass)
+  explicit LowerAnnotations(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "lower-annotations"; }
@@ -242,8 +244,7 @@ public:
 /// Clean the state of the MC representation before sending it to emission
 class CleanMCState : public BinaryFunctionPass {
 public:
-  explicit CleanMCState(const cl::opt<bool> &PrintPass)
-      : BinaryFunctionPass(PrintPass) {}
+  explicit CleanMCState(const bool PrintPass) : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "clean-mc-state"; }
   Error runOnFunctions(BinaryContext &BC) override;
@@ -309,7 +310,7 @@ class SimplifyConditionalTailCalls : public BinaryFunctionPass {
   uint64_t fixTailCalls(BinaryFunction &BF);
 
 public:
-  explicit SimplifyConditionalTailCalls(const cl::opt<bool> &PrintPass)
+  explicit SimplifyConditionalTailCalls(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override {
@@ -326,7 +327,7 @@ class ShortenInstructions : public BinaryFunctionPass {
   uint64_t shortenInstructions(BinaryFunction &Function);
 
 public:
-  explicit ShortenInstructions(const cl::opt<bool> &PrintPass)
+  explicit ShortenInstructions(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "shorten-instructions"; }
@@ -361,8 +362,7 @@ private:
   void removeUselessCondBranches(BinaryFunction &Function);
 
 public:
-  explicit Peepholes(const cl::opt<bool> &PrintPass)
-      : BinaryFunctionPass(PrintPass) {}
+  explicit Peepholes(const bool PrintPass) : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "peepholes"; }
   Error runOnFunctions(BinaryContext &BC) override;
@@ -389,7 +389,7 @@ class SimplifyRODataLoads : public BinaryFunctionPass {
   bool simplifyRODataLoads(BinaryFunction &BF);
 
 public:
-  explicit SimplifyRODataLoads(const cl::opt<bool> &PrintPass)
+  explicit SimplifyRODataLoads(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "simplify-read-only-loads"; }
@@ -415,7 +415,7 @@ public:
 /// lower than 100).
 class PrintProfileStats : public BinaryFunctionPass {
 public:
-  explicit PrintProfileStats(const cl::opt<bool> &PrintPass)
+  explicit PrintProfileStats(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "profile-stats"; }
@@ -441,7 +441,7 @@ public:
 /// to be lowered.
 class InstructionLowering : public BinaryFunctionPass {
 public:
-  explicit InstructionLowering(const cl::opt<bool> &PrintPass)
+  explicit InstructionLowering(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "inst-lowering"; }
@@ -452,8 +452,7 @@ public:
 /// Pass for stripping 'repz' from 'repz retq' sequence of instructions.
 class StripRepRet : public BinaryFunctionPass {
 public:
-  explicit StripRepRet(const cl::opt<bool> &PrintPass)
-      : BinaryFunctionPass(PrintPass) {}
+  explicit StripRepRet(const bool PrintPass) : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "strip-rep-ret"; }
 
@@ -463,8 +462,7 @@ public:
 /// Pass for inlining calls to memcpy using 'rep movsb' on X86.
 class InlineMemcpy : public BinaryFunctionPass {
 public:
-  explicit InlineMemcpy(const cl::opt<bool> &PrintPass)
-      : BinaryFunctionPass(PrintPass) {}
+  explicit InlineMemcpy(const bool PrintPass) : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "inline-memcpy"; }
 
@@ -481,8 +479,8 @@ private:
   std::set<size_t> getCallSitesToOptimize(const BinaryFunction &) const;
 
 public:
-  explicit SpecializeMemcpy1(const cl::opt<bool> &PrintPass,
-                             cl::list<std::string> &Spec)
+  explicit SpecializeMemcpy1(const bool PrintPass,
+                             const std::vector<std::string> &Spec)
       : BinaryFunctionPass(PrintPass), Spec(Spec) {}
 
   bool shouldOptimize(const BinaryFunction &BF) const override;
@@ -497,8 +495,7 @@ class RemoveNops : public BinaryFunctionPass {
   void runOnFunction(BinaryFunction &Function);
 
 public:
-  explicit RemoveNops(const cl::opt<bool> &PrintPass)
-      : BinaryFunctionPass(PrintPass) {}
+  explicit RemoveNops(const bool PrintPass) : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "remove-nops"; }
 
@@ -511,6 +508,9 @@ enum FrameOptimizationType : char {
   FOP_HOT,  /// Perform FOP on hot functions.
   FOP_ALL   /// Perform FOP on all functions.
 };
+
+/// Register the --print-sorted-by dynamic option with an OptionParser.
+/// Must be called before P.parse().
 
 } // namespace bolt
 } // namespace llvm

@@ -10,7 +10,6 @@
 #define LLVM_TOOLS_LLVM_OBJDUMP_MACHODUMP_H
 
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/CommandLine.h"
 
 namespace llvm {
 

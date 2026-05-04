@@ -11,6 +11,6 @@
 ! OUTPUT-NEXT: ; ModuleID = 'FIRModule'
 ! OUTPUT-NEXT: source_filename = "FIRModule"
 
-! INVALID_USAGE: flang (LLVM option parsing): for the --print-before option: requires a value!
+! INVALID_USAGE: flang (option parsing): for the --print-before option: requires a value!
 
 end program

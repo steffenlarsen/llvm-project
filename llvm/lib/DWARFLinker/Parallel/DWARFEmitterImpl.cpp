@@ -23,7 +23,8 @@ using namespace dwarf_linker;
 using namespace dwarf_linker::parallel;
 
 Error DwarfEmitterImpl::init(Triple TheTriple,
-                             StringRef Swift5ReflectionSegmentName) {
+                             StringRef Swift5ReflectionSegmentName,
+                             const clv2::OptionsContext &OptsCtx) {
   std::string ErrorStr;
   std::string TripleName;
 
@@ -41,7 +42,7 @@ Error DwarfEmitterImpl::init(Triple TheTriple,
                              "no register info for target %s",
                              TripleName.c_str());
 
-  MCOptions = mc::InitMCTargetOptionsFromFlags();
+  MCOptions = mc::InitMCTargetOptionsFromFlags(OptsCtx);
   MCOptions.AsmVerbose = true;
   MCOptions.MCUseDwarfDirectory = MCTargetOptions::EnableDwarfDirectory;
   MAI.reset(TheTarget->createMCAsmInfo(*MRI, TheTriple, MCOptions));
@@ -49,7 +50,8 @@ Error DwarfEmitterImpl::init(Triple TheTriple,
     return createStringError(std::errc::invalid_argument,
                              "no asm info for target %s", TripleName.c_str());
 
-  MSTI.reset(TheTarget->createMCSubtargetInfo(TheTriple, "", ""));
+  MSTI.reset(TheTarget->createMCSubtargetInfo(TheTriple, "", "",
+                                              /*Ctx=*/OptsCtx));
   if (!MSTI)
     return createStringError(std::errc::invalid_argument,
                              "no subtarget info for target %s",

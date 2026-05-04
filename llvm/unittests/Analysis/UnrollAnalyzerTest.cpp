@@ -76,7 +76,7 @@ TEST(UnrollAnalyzerTest, BasicSimplifications) {
       "  %x.lcssa = phi i64 [ %x2, %loop ]\n"
       "  ret i64 %x.lcssa\n"
       "}\n";
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
   SimplifiedValuesVectorTy SimplifiedValuesVector;
   runUnrollAnalyzer(*M, "propagate_loop_phis", SimplifiedValuesVector);
@@ -123,11 +123,13 @@ TEST(UnrollAnalyzerTest, OuterLoopSimplification) {
       "entry:\n"
       "  br label %outer.loop\n"
       "outer.loop:\n"
-      "  %iv.outer = phi i64 [ 0, %entry ], [ %iv.outer.next, %outer.loop.latch ]\n"
+      "  %iv.outer = phi i64 [ 0, %entry ], [ %iv.outer.next, "
+      "%outer.loop.latch ]\n"
       "  %iv.outer.next = add nuw nsw i64 %iv.outer, 1\n"
       "  br label %inner.loop\n"
       "inner.loop:\n"
-      "  %iv.inner = phi i64 [ 0, %outer.loop ], [ %iv.inner.next, %inner.loop ]\n"
+      "  %iv.inner = phi i64 [ 0, %outer.loop ], [ %iv.inner.next, %inner.loop "
+      "]\n"
       "  %iv.inner.next = add nuw nsw i64 %iv.inner, 1\n"
       "  %exitcond.inner = icmp eq i64 %iv.inner.next, 1000\n"
       "  br i1 %exitcond.inner, label %outer.loop.latch, label %inner.loop\n"
@@ -138,7 +140,7 @@ TEST(UnrollAnalyzerTest, OuterLoopSimplification) {
       "  ret void\n"
       "}\n";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
   SimplifiedValuesVectorTy SimplifiedValuesVector;
   runUnrollAnalyzer(*M, "foo", SimplifiedValuesVector);
@@ -182,7 +184,7 @@ TEST(UnrollAnalyzerTest, CmpSimplifications) {
       "for.end:\n"
       "  ret void\n"
       "}\n";
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
   SimplifiedValuesVectorTy SimplifiedValuesVector;
   runUnrollAnalyzer(*M, "branch_iv_trunc", SimplifiedValuesVector);
@@ -230,7 +232,7 @@ TEST(UnrollAnalyzerTest, PtrCmpSimplifications) {
       "loop.exit:\n"
       "  ret void\n"
       "}\n";
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
   SimplifiedValuesVectorTy SimplifiedValuesVector;
   runUnrollAnalyzer(*M, "ptr_cmp", SimplifiedValuesVector);
@@ -264,14 +266,16 @@ TEST(UnrollAnalyzerTest, PtrCmpSimplifications) {
 TEST(UnrollAnalyzerTest, CastSimplifications) {
   const char *ModuleStr =
       "target datalayout = \"e-m:o-i64:64-f80:128-n8:16:32:64-S128\"\n"
-      "@known_constant = internal unnamed_addr constant [10 x i32] [i32 0, i32 1, i32 0, i32 1, i32 0, i32 259, i32 0, i32 1, i32 0, i32 1], align 16\n"
+      "@known_constant = internal unnamed_addr constant [10 x i32] [i32 0, i32 "
+      "1, i32 0, i32 1, i32 0, i32 259, i32 0, i32 1, i32 0, i32 1], align 16\n"
       "define void @const_load_cast() {\n"
       "entry:\n"
       "  br label %loop\n"
       "\n"
       "loop:\n"
       "  %iv = phi i64 [ 0, %entry ], [ %inc, %loop ]\n"
-      "  %array_const_idx = getelementptr inbounds [10 x i32], ptr @known_constant, i64 0, i64 %iv\n"
+      "  %array_const_idx = getelementptr inbounds [10 x i32], ptr "
+      "@known_constant, i64 0, i64 %iv\n"
       "  %const_array_element = load i32, ptr %array_const_idx, align 4\n"
       "  %se = sext i32 %const_array_element to i64\n"
       "  %ze = zext i32 %const_array_element to i64\n"
@@ -284,7 +288,7 @@ TEST(UnrollAnalyzerTest, CastSimplifications) {
       "  ret void\n"
       "}\n";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
   SimplifiedValuesVectorTy SimplifiedValuesVector;
   runUnrollAnalyzer(*M, "const_load_cast", SimplifiedValuesVector);

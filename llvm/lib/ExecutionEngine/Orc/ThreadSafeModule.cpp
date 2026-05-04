@@ -101,7 +101,8 @@ ThreadSafeModule cloneToNewContext(const ThreadSafeModule &TSM,
                                    GVModifier UpdateClonedDefSource) {
   assert(TSM && "Can not clone null module");
 
-  ThreadSafeContext TSCtx(std::make_unique<LLVMContext>());
+  ThreadSafeContext TSCtx(
+      std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext()));
   return cloneToContext(TSM, std::move(TSCtx), std::move(ShouldCloneDef),
                         std::move(UpdateClonedDefSource));
 }

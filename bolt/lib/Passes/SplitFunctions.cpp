@@ -15,11 +15,13 @@
 #include "bolt/Core/BinaryFunction.h"
 #include "bolt/Core/FunctionLayout.h"
 #include "bolt/Core/ParallelUtilities.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/iterator_range.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FormatVariadic.h"
 #include <algorithm>
 #include <cmath>
@@ -33,75 +35,6 @@
 
 using namespace llvm;
 using namespace bolt;
-
-namespace {
-class DeprecatedSplitFunctionOptionParser : public cl::parser<bool> {
-public:
-  explicit DeprecatedSplitFunctionOptionParser(cl::Option &O)
-      : cl::parser<bool>(O) {}
-
-  bool parse(cl::Option &O, StringRef ArgName, StringRef Arg, bool &Value) {
-    if (Arg == "2" || Arg == "3") {
-      Value = true;
-      errs() << formatv("BOLT-WARNING: specifying non-boolean value \"{0}\" "
-                        "for option -{1} is deprecated\n",
-                        Arg, ArgName);
-      return false;
-    }
-    return cl::parser<bool>::parse(O, ArgName, Arg, Value);
-  }
-};
-} // namespace
-
-namespace opts {
-
-extern cl::OptionCategory BoltOptCategory;
-
-extern cl::opt<bool> SplitEH;
-extern cl::opt<unsigned> ExecutionCountThreshold;
-extern cl::opt<uint32_t> RandomSeed;
-
-static cl::opt<bool> AggressiveSplitting(
-    "split-all-cold", cl::desc("outline as many cold basic blocks as possible"),
-    cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned> SplitAlignThreshold(
-    "split-align-threshold",
-    cl::desc("when deciding to split a function, apply this alignment "
-             "while doing the size comparison (see -split-threshold). "
-             "Default value: 2."),
-    cl::init(2),
-
-    cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool, false, DeprecatedSplitFunctionOptionParser>
-    SplitFunctions("split-functions",
-                   cl::desc("split functions into fragments"),
-                   cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned> SplitThreshold(
-    "split-threshold",
-    cl::desc("split function only if its main size is reduced by more than "
-             "given amount of bytes. Default value: 0, i.e. split iff the "
-             "size is reduced. Note that on some architectures the size can "
-             "increase after splitting."),
-    cl::init(0), cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<double> CallScale(
-    "call-scale",
-    cl::desc("Call score scale coefficient (when --split-strategy=cdsplit)"),
-    cl::init(0.95), cl::ReallyHidden, cl::cat(BoltOptCategory));
-
-static cl::opt<double>
-    CallPower("call-power",
-              cl::desc("Call score power (when --split-strategy=cdsplit)"),
-              cl::init(0.05), cl::ReallyHidden, cl::cat(BoltOptCategory));
-
-static cl::opt<double>
-    JumpPower("jump-power",
-              cl::desc("Jump score power (when --split-strategy=cdsplit)"),
-              cl::init(0.15), cl::ReallyHidden, cl::cat(BoltOptCategory));
-} // namespace opts
 
 namespace {
 bool hasFullProfile(const BinaryFunction &BF) {
@@ -140,6 +73,9 @@ struct SplitCacheDirected final : public SplitStrategy {
   }
 
   explicit SplitCacheDirected(BinaryContext &BC) : BC(BC) {
+    CallScale = bolt_passes_opts::getCallScale(BC);
+    CallPower = bolt_passes_opts::getCallPower(BC);
+    JumpPower = bolt_passes_opts::getJumpPower(BC);
     initializeAuxiliaryVariables();
     buildCallGraph();
   }
@@ -188,6 +124,11 @@ private:
 
     double sum() const { return LocalScore + CoverCallScore; }
   };
+
+  // Option values cached from OptionsContext.
+  double CallScale{0.95};
+  double CallPower{0.05};
+  double JumpPower{0.15};
 
   // Auxiliary variables used by the algorithm.
   size_t TotalNumBlocks{0};
@@ -331,7 +272,7 @@ private:
   std::vector<CallInfo> extractCoverCalls(const BinaryFunction &BF) {
     // Record the length and the count of the calls that can be shortened
     std::vector<CallInfo> CoverCalls;
-    if (opts::CallScale == 0)
+    if (CallScale == 0)
       return CoverCalls;
 
     const BinaryFunction *ThisBF = &BF;
@@ -375,15 +316,15 @@ private:
   /// Compute the edge score of a call edge.
   double computeCallScore(uint64_t CallCount, size_t CallLength) {
     // Increase call lengths by 1 to avoid raising 0 to a negative power.
-    return opts::CallScale * static_cast<double>(CallCount) /
-           std::pow(static_cast<double>(CallLength + 1), opts::CallPower);
+    return CallScale * static_cast<double>(CallCount) /
+           std::pow(static_cast<double>(CallLength + 1), CallPower);
   }
 
   /// Compute the edge score of a jump (branch) edge.
   double computeJumpScore(uint64_t JumpCount, size_t JumpLength) {
     // Increase jump lengths by 1 to avoid raising 0 to a negative power.
     return static_cast<double>(JumpCount) /
-           std::pow(static_cast<double>(JumpLength + 1), opts::JumpPower);
+           std::pow(static_cast<double>(JumpLength + 1), JumpPower);
   }
 
   /// Compute sum of scores over jumps within \p BlockOrder given \p SplitIndex.
@@ -417,7 +358,7 @@ private:
   /// given \p SplitIndex. Increment Score.LocalScore in place by the sum.
   void computeLocalCallScore(const BasicBlockOrder &BlockOrder,
                              const size_t SplitIndex, SplitScore &Score) {
-    if (opts::CallScale == 0)
+    if (CallScale == 0)
       return;
 
     // Global index of the last block in the current function.
@@ -461,7 +402,7 @@ private:
                              const size_t SplitIndex,
                              const std::vector<CallInfo> &CoverCalls,
                              SplitScore &Score) {
-    if (opts::CallScale == 0)
+    if (CallScale == 0)
       return;
 
     for (const CallInfo CI : CoverCalls) {
@@ -609,7 +550,7 @@ static void portableShuffle(It First, It Last, GenT &Gen) {
 struct SplitRandom2 final : public SplitStrategy {
   std::minstd_rand0 Gen;
 
-  SplitRandom2() : Gen(opts::RandomSeed.getValue()) {}
+  SplitRandom2(uint32_t Seed) : Gen(Seed) {}
 
   bool canSplit(const BinaryFunction &BF) override { return true; }
 
@@ -635,7 +576,7 @@ struct SplitRandom2 final : public SplitStrategy {
 struct SplitRandomN final : public SplitStrategy {
   std::minstd_rand0 Gen;
 
-  SplitRandomN() : Gen(opts::RandomSeed.getValue()) {}
+  SplitRandomN(uint32_t Seed) : Gen(Seed) {}
 
   bool canSplit(const BinaryFunction &BF) override { return true; }
 
@@ -705,14 +646,18 @@ namespace bolt {
 
 bool SplitFunctions::shouldOptimize(const BinaryFunction &BF) const {
   // Apply execution count threshold
-  if (BF.getKnownExecutionCount() < opts::ExecutionCountThreshold)
+  unsigned ExecutionCountThreshold =
+      bolt_utils_opts::getExecutionCountThreshold(BF.getBinaryContext());
+  if (BF.getKnownExecutionCount() < ExecutionCountThreshold)
     return false;
 
   return BinaryFunctionPass::shouldOptimize(BF);
 }
 
 Error SplitFunctions::runOnFunctions(BinaryContext &BC) {
-  if (!opts::SplitFunctions)
+  const bool SplitFunctions = bolt_passes_opts::getSplitFunctions(BC);
+
+  if (!SplitFunctions)
     return Error::success();
 
   if (BC.IsLinuxKernel && BC.BOLTReserved.empty()) {
@@ -721,16 +666,21 @@ Error SplitFunctions::runOnFunctions(BinaryContext &BC) {
     exit(1);
   }
 
+  auto SplitStrategyOpt = static_cast<opts::SplitFunctionsStrategy>(
+      bolt_utils_opts::getSplitStrategy(BC));
+
   // If split strategy is not CDSplit, then a second run of the pass is not
   // needed after function reordering.
   if (BC.HasFinalizedFunctionOrder &&
-      opts::SplitStrategy != opts::SplitFunctionsStrategy::CDSplit)
+      SplitStrategyOpt != opts::SplitFunctionsStrategy::CDSplit)
     return Error::success();
+
+  AggressiveSplitting = bolt_passes_opts::getSplitAllCold(BC);
 
   std::unique_ptr<SplitStrategy> Strategy;
   bool ForceSequential = false;
 
-  switch (opts::SplitStrategy) {
+  switch (SplitStrategyOpt) {
   case opts::SplitFunctionsStrategy::CDSplit:
     // CDSplit runs two splitting passes: hot-cold splitting (SplitPrfoile2)
     // before function reordering and hot-warm-cold splitting
@@ -739,23 +689,27 @@ Error SplitFunctions::runOnFunctions(BinaryContext &BC) {
       Strategy = std::make_unique<SplitCacheDirected>(BC);
     else
       Strategy = std::make_unique<SplitProfile2>();
-    opts::AggressiveSplitting = true;
+    AggressiveSplitting = true;
     BC.HasWarmSection = true;
     break;
   case opts::SplitFunctionsStrategy::Profile2:
     Strategy = std::make_unique<SplitProfile2>();
     break;
-  case opts::SplitFunctionsStrategy::Random2:
-    Strategy = std::make_unique<SplitRandom2>();
+  case opts::SplitFunctionsStrategy::Random2: {
+    const uint32_t Seed = bolt_passes_opts::getBoltSeed(BC);
+    Strategy = std::make_unique<SplitRandom2>(Seed);
     // If we split functions randomly, we need to ensure that across runs with
     // the same input, we generate random numbers for each function in the same
     // order.
     ForceSequential = true;
     break;
-  case opts::SplitFunctionsStrategy::RandomN:
-    Strategy = std::make_unique<SplitRandomN>();
+  }
+  case opts::SplitFunctionsStrategy::RandomN: {
+    const uint32_t Seed = bolt_passes_opts::getBoltSeed(BC);
+    Strategy = std::make_unique<SplitRandomN>(Seed);
     ForceSequential = true;
     break;
+  }
   case opts::SplitFunctionsStrategy::All:
     Strategy = std::make_unique<SplitAll>();
     break;
@@ -791,6 +745,11 @@ void SplitFunctions::splitFunction(BinaryFunction &BF, SplitStrategy &S) {
                                                      Layout.block_end());
 
   BinaryContext &BC = BF.getBinaryContext();
+  const unsigned SplitAlignThreshold =
+      bolt_passes_opts::getSplitAlignThreshold(BC);
+  const unsigned SplitThreshold = bolt_passes_opts::getSplitThreshold(BC);
+  bool SplitEH = bolt_utils_opts::getSplitEh(BC);
+
   size_t OriginalHotSize;
   size_t HotSize;
   size_t ColdSize;
@@ -818,7 +777,7 @@ void SplitFunctions::splitFunction(BinaryFunction &BF, SplitStrategy &S) {
       continue;
     }
 
-    if (BF.hasEHRanges() && !opts::SplitEH) {
+    if (BF.hasEHRanges() && !SplitEH) {
       // We cannot move landing pads (or rather entry points for landing pads).
       if (BB->isLandingPad()) {
         BB->setCanOutline(false);
@@ -853,7 +812,7 @@ void SplitFunctions::splitFunction(BinaryFunction &BF, SplitStrategy &S) {
       BB->setFragmentNum(FragmentNum::main());
   }
 
-  if (opts::AggressiveSplitting) {
+  if (AggressiveSplitting) {
     // All blocks with 0 count that we can move go to the end of the function.
     // Even if they were natural to cluster formation and were seen in-between
     // hot basic blocks.
@@ -861,7 +820,7 @@ void SplitFunctions::splitFunction(BinaryFunction &BF, SplitStrategy &S) {
                                      const BinaryBasicBlock *const B) {
       return A->getFragmentNum() < B->getFragmentNum();
     });
-  } else if (BF.hasEHRanges() && !opts::SplitEH) {
+  } else if (BF.hasEHRanges() && !SplitEH) {
     // Typically functions with exception handling have landing pads at the end.
     // We cannot move beginning of landing pads, but we can move 0-count blocks
     // comprising landing pads to the end and thus facilitate splitting.
@@ -949,9 +908,9 @@ void SplitFunctions::splitFunction(BinaryFunction &BF, SplitStrategy &S) {
     LLVM_DEBUG(dbgs() << "Estimated size for function " << BF
                       << " post-split is <0x" << Twine::utohexstr(HotSize)
                       << ", 0x" << Twine::utohexstr(ColdSize) << ">\n");
-    if (alignTo(OriginalHotSize, opts::SplitAlignThreshold) <=
-        alignTo(HotSize, opts::SplitAlignThreshold) + opts::SplitThreshold) {
-      if (opts::Verbosity >= 2) {
+    if (alignTo(OriginalHotSize, SplitAlignThreshold) <=
+        alignTo(HotSize, SplitAlignThreshold) + SplitThreshold) {
+      if (opts::getVerbosity(BC) >= 2) {
         BC.outs() << "BOLT-INFO: Reversing splitting of function "
                   << formatv("{0}:\n  {1:x}, {2:x} -> {3:x}\n", BF, HotSize,
                              ColdSize, OriginalHotSize);

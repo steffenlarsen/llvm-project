@@ -67,7 +67,8 @@ public:
       : MCTargetStreamer(S),
         // Assume the default COV for now, EmitDirectiveAMDHSACodeObjectVersion
         // will update this if it is encountered.
-        CodeObjectVersion(AMDGPU::getDefaultAMDHSACodeObjectVersion()) {}
+        CodeObjectVersion(AMDGPU::getDefaultAMDHSACodeObjectVersion(
+            S.getContext().getOptionsContext())) {}
 
   AMDGPUPALMetadata *getPALMetadata() { return &PALMetadata; }
 

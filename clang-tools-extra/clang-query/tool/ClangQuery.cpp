@@ -28,11 +28,13 @@
 #include "Query.h"
 #include "QueryParser.h"
 #include "QuerySession.h"
+#include "clang-tools-extra/ClangToolsExtraOptionsOptInfos.h"
 #include "clang/Frontend/ASTUnit.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/LineEditor/LineEditor.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Signals.h"
@@ -47,30 +49,48 @@ using namespace clang::query;
 using namespace clang::tooling;
 using namespace llvm;
 
-static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
 static cl::OptionCategory ClangQueryCategory("clang-query options");
 
-static cl::opt<bool>
-    UseColor("use-color",
-             cl::desc(
-                 R"(Use colors in detailed AST output. If not set, colors
-will be used if the terminal connected to
-standard output supports colors.)"),
-             cl::init(false), cl::cat(ClangQueryCategory));
+static bool UseColor = false;
+static bool UseColorSet = false;
+static std::vector<std::string> Commands;
+static std::vector<std::string> CommandFiles;
+static std::string PreloadFile;
 
-static cl::list<std::string> Commands("c", cl::desc("Specify command to run"),
-                                      cl::value_desc("command"),
-                                      cl::cat(ClangQueryCategory));
+inline constexpr clv2::OptionsRegistry<
+    &clv2::CTE_CQ_UseColor, &clv2::CTE_CQ_Command, &clv2::CTE_CQ_CommandFile,
+    &clv2::CTE_CQ_Preload>
+    ClangQueryOptsReg;
 
-static cl::list<std::string> CommandFiles("f",
-                                          cl::desc("Read commands from file"),
-                                          cl::value_desc("file"),
-                                          cl::cat(ClangQueryCategory));
+static void
+applyClangQueryOpts(const decltype(ClangQueryOptsReg)::ParsedOptionsT &Opts) {
+  bool ParsedUseColor = Opts.get<&clv2::CTE_CQ_UseColor>();
+  UseColor = ParsedUseColor;
+  if (ParsedUseColor)
+    UseColorSet = true;
+  Commands = Opts.get<&clv2::CTE_CQ_Command>();
+  CommandFiles = Opts.get<&clv2::CTE_CQ_CommandFile>();
+  PreloadFile = Opts.get<&clv2::CTE_CQ_Preload>();
+}
 
-static cl::opt<std::string> PreloadFile(
-    "preload",
-    cl::desc("Preload commands from file and start interactive mode"),
-    cl::value_desc("file"), cl::cat(ClangQueryCategory));
+static void configureParser(clv2::OptionParser &P) {
+  using ParsedT = decltype(ClangQueryOptsReg)::ParsedOptionsT;
+  auto *Storage = new ParsedT();
+  decltype(ClangQueryOptsReg)::applyDefaultsTo(*Storage);
+  std::vector<clv2::detail::OptionEntry> Entries;
+  std::vector<clv2::detail::AliasEntry> Aliases;
+  std::vector<clv2::detail::SubCommandSpec> SubSpecs;
+  decltype(ClangQueryOptsReg)::staticBuildInto(*Storage, Entries, Aliases,
+                                               SubSpecs);
+  for (auto &E : Entries) {
+    if (!E.Cat)
+      E.Cat = &ClangQueryCategory;
+    P.addDynamicEntry(std::move(E));
+  }
+  clv2::registerDynamicPostParseCallback(
+      [Storage]() { applyClangQueryOpts(*Storage); });
+  P.setExtraHelp(clang::tooling::CommonOptionsParser::HelpMessage);
+}
 
 bool runCommandsInFile(const char *ExeName, std::string const &FileName,
                        QuerySession &QS) {
@@ -83,7 +103,7 @@ int main(int argc, const char **argv) {
 
   llvm::Expected<CommonOptionsParser> OptionsParser =
       CommonOptionsParser::create(argc, argv, ClangQueryCategory,
-                                  llvm::cl::OneOrMore);
+                                  configureParser, llvm::cl::OneOrMore);
 
   if (!OptionsParser) {
     llvm::WithColor::error() << llvm::toString(OptionsParser.takeError());
@@ -104,7 +124,7 @@ int main(int argc, const char **argv) {
   ClangTool Tool(OptionsParser->getCompilations(),
                  OptionsParser->getSourcePathList());
 
-  if (UseColor.getNumOccurrences() > 0) {
+  if (UseColorSet) {
     ArgumentsAdjuster colorAdjustor = [](const CommandLineArguments &Args, StringRef /*unused*/) {
       CommandLineArguments AdjustedArgs = Args;
       if (UseColor)

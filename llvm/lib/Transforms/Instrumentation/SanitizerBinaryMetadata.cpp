@@ -35,11 +35,12 @@
 #include "llvm/IR/Value.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/Allocator.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SpecialCaseList.h"
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
 #include <array>
@@ -86,26 +87,30 @@ using MetadataInfoSet = SetVector<const MetadataInfo *>;
 
 //===--- Command-line options ---------------------------------------------===//
 
-cl::opt<bool> ClWeakCallbacks(
-    "sanitizer-metadata-weak-callbacks",
-    cl::desc("Declare callbacks extern weak, and only call if non-null."),
-    cl::Hidden, cl::init(true));
-cl::opt<bool>
-    ClNoSanitize("sanitizer-metadata-nosanitize-attr",
-                 cl::desc("Mark some metadata features uncovered in functions "
-                          "with associated no_sanitize attributes."),
-                 cl::Hidden, cl::init(true));
+bool getClWeakCallbacks(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanitizerMetadataWeakCallbacks>(
+      M.getContext().getOptionsContext());
+}
 
-cl::opt<bool> ClEmitCovered("sanitizer-metadata-covered",
-                            cl::desc("Emit PCs for covered functions."),
-                            cl::Hidden, cl::init(false));
-cl::opt<bool> ClEmitAtomics("sanitizer-metadata-atomics",
-                            cl::desc("Emit PCs for atomic operations."),
-                            cl::Hidden, cl::init(false));
-cl::opt<bool> ClEmitUAR("sanitizer-metadata-uar",
-                        cl::desc("Emit PCs for start of functions that are "
-                                 "subject for use-after-return checking"),
-                        cl::Hidden, cl::init(false));
+bool getClNoSanitize(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanitizerMetadataNosanitize>(
+      M.getContext().getOptionsContext());
+}
+
+bool getClEmitCovered(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanitizerMetadataCovered>(
+      M.getContext().getOptionsContext());
+}
+
+bool getClEmitAtomics(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanitizerMetadataAtomics>(
+      M.getContext().getOptionsContext());
+}
+
+bool getClEmitUAR(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_SanitizerMetadataUAR>(
+      M.getContext().getOptionsContext());
+}
 
 //===--- Statistics -------------------------------------------------------===//
 
@@ -117,10 +122,10 @@ STATISTIC(NumMetadataUAR, "Metadata attached to UAR functions");
 
 // Apply opt overrides.
 SanitizerBinaryMetadataOptions &&
-transformOptionsFromCl(SanitizerBinaryMetadataOptions &&Opts) {
-  Opts.Covered |= ClEmitCovered;
-  Opts.Atomics |= ClEmitAtomics;
-  Opts.UAR |= ClEmitUAR;
+transformOptionsFromCl(SanitizerBinaryMetadataOptions &&Opts, const Module &M) {
+  Opts.Covered |= getClEmitCovered(M);
+  Opts.Atomics |= getClEmitAtomics(M);
+  Opts.UAR |= getClEmitUAR(M);
   return std::move(Opts);
 }
 
@@ -128,7 +133,7 @@ class SanitizerBinaryMetadata {
 public:
   SanitizerBinaryMetadata(Module &M, SanitizerBinaryMetadataOptions Opts,
                           std::unique_ptr<SpecialCaseList> Ignorelist)
-      : Mod(M), Options(transformOptionsFromCl(std::move(Opts))),
+      : Mod(M), Options(transformOptionsFromCl(std::move(Opts), M)),
         Ignorelist(std::move(Ignorelist)), TargetTriple(M.getTargetTriple()),
         VersionStr(utostr(getVersion())), IRB(M.getContext()) {
     // FIXME: Make it work with other formats.
@@ -223,13 +228,13 @@ bool SanitizerBinaryMetadata::run() {
         createSanitizerCtorAndInitFunctions(
             Mod, StructorPrefix + ".module_ctor",
             (MI->FunctionPrefix + "_add").str(), InitTypes, InitArgs,
-            /*VersionCheckName=*/StringRef(), /*Weak=*/ClWeakCallbacks)
+            /*VersionCheckName=*/StringRef(), /*Weak=*/getClWeakCallbacks(Mod))
             .first;
     Function *Dtor =
         createSanitizerCtorAndInitFunctions(
             Mod, StructorPrefix + ".module_dtor",
             (MI->FunctionPrefix + "_del").str(), InitTypes, InitArgs,
-            /*VersionCheckName=*/StringRef(), /*Weak=*/ClWeakCallbacks)
+            /*VersionCheckName=*/StringRef(), /*Weak=*/getClWeakCallbacks(Mod))
             .first;
     Constant *CtorComdatKey = nullptr;
     Constant *DtorComdatKey = nullptr;
@@ -281,7 +286,7 @@ void SanitizerBinaryMetadata::runOn(Function &F, MetadataInfoSet &MIS) {
         RequiresCovered |= runOn(I, MIS, MDB, FeatureMask);
   }
 
-  if (ClNoSanitize && F.hasFnAttribute("no_sanitize_thread"))
+  if (getClNoSanitize(Mod) && F.hasFnAttribute("no_sanitize_thread"))
     FeatureMask &= ~kSanitizerBinaryMetadataAtomics;
   if (F.isVarArg())
     FeatureMask &= ~kSanitizerBinaryMetadataUAR;

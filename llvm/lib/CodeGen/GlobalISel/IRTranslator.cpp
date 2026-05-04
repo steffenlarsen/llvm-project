@@ -23,6 +23,7 @@
 #include "llvm/Analysis/VectorUtils.h"
 #include "llvm/CodeGen/Analysis.h"
 #include "llvm/CodeGen/CodeGenCommonISel.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/FunctionLoweringInfo.h"
 #include "llvm/CodeGen/GlobalISel/CSEInfo.h"
 #include "llvm/CodeGen/GlobalISel/CSEMIRBuilder.h"
@@ -80,9 +81,11 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -100,10 +103,9 @@
 
 using namespace llvm;
 
-static cl::opt<bool>
-    EnableCSEInIRTranslator("enable-cse-in-irtranslator",
-                            cl::desc("Should enable CSE in irtranslator"),
-                            cl::Optional, cl::init(false));
+static bool getEnableCseInIrtranslator(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableCseInIrtranslator>(Ctx);
+}
 
 namespace llvm {
 
@@ -5016,9 +5018,12 @@ bool IRTranslatorImpl::runOnMachineFunction(
   // Set the CSEConfig and run the analysis.
   GISelCSEInfo *CSEInfo = nullptr;
 
-  bool EnableCSE = EnableCSEInIRTranslator.getNumOccurrences()
-                       ? EnableCSEInIRTranslator
-                       : true;
+  const clv2::OptionsContext &Ctx = F.getContext().getOptionsContext();
+  bool EnableCSE =
+      clv2::wasOptSpecified<&clv2::CGPassGISelReg,
+                            &clv2::CGPASS_EnableCseInIrtranslator>(Ctx)
+          ? getEnableCseInIrtranslator(Ctx)
+          : true;
 
   const TargetSubtargetInfo &Subtarget = MF->getSubtarget();
   TLI = Subtarget.getTargetLowering();

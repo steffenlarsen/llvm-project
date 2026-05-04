@@ -163,7 +163,8 @@ void walkAndApplyPatterns(Operation *op,
       ++blockIt;
       if (blockIt != regionIt->end()) {
         LDBG() << "Incrementing block iterator, next op: "
-               << OpWithFlags(&*blockIt, OpPrintingFlags().skipRegions());
+               << OpWithFlags(&*blockIt,
+                              opPrintingFlags(&*blockIt).skipRegions());
       }
     }
     // The region we're iterating over.
@@ -227,7 +228,7 @@ void walkAndApplyPatterns(Operation *op,
             it.advance();
 
             LDBG() << "Visiting op: "
-                   << OpWithFlags(op, OpPrintingFlags().skipRegions());
+                   << OpWithFlags(op, opPrintingFlags(op).skipRegions());
 #if MLIR_ENABLE_EXPENSIVE_PATTERN_API_CHECKS
             erasedListener.visitedOp = op;
             erasedListener.newlyCreatedOps.clear();

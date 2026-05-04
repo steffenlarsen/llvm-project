@@ -78,7 +78,7 @@ std::unique_ptr<Module> parseAssembly(const char *Assembly,
 }
 
 void IterateOnSource(StringRef Source, IRMutator &Mutator) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   for (int i = 0; i < 10; ++i) {
     auto M = parseAssembly(Source.data(), Ctx);
@@ -95,7 +95,7 @@ static void
 mutateAndVerifyModule(StringRef Source, std::unique_ptr<IRMutator> &Mutator,
                       int repeat = 100,
                       ArrayRef<ModuleVerifier> ExtraModuleVerifiers = {}) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   auto M = parseAssembly(Source.data(), Ctx);
   std::mt19937 mt(Seed);
   std::uniform_int_distribution<int> RandInt(INT_MIN, INT_MAX);
@@ -120,7 +120,7 @@ mutateAndVerifyModule(StringRef Source, int repeat = 100,
 TEST(InjectorIRStrategyTest, EmptyModule) {
   // Test that we can inject into empty module
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   auto M = std::make_unique<Module>("M", Ctx);
   ASSERT_TRUE(M && !verifyModule(*M, &errs()));
 
@@ -185,7 +185,7 @@ TEST(InstDeleterIRStrategyTest, EmptyFunction) {
 TEST(InstDeleterIRStrategyTest, PhiNodes) {
   // Test that inst deleter works correctly with the phi nodes.
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   StringRef Source = "\n\
       define i32 @earlyreturncrash(i32 %x) {\n\
       entry:\n\
@@ -209,7 +209,7 @@ TEST(InstDeleterIRStrategyTest, PhiNodes) {
 }
 
 static void checkModifyNoUnsignedAndNoSignedWrap(StringRef Opc) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::string Source = std::string("\n\
       define i32 @test(i32 %x) {\n\
         %a = ") + Opc.str() +
@@ -254,7 +254,7 @@ TEST(InstModificationIRStrategyTest, Shl) {
 }
 
 TEST(InstModificationIRStrategyTest, ICmp) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   StringRef Source = "\n\
       define i1 @test(i32 %x) {\n\
         %a = icmp eq i32 %x, 10\n\
@@ -279,7 +279,7 @@ TEST(InstModificationIRStrategyTest, ICmp) {
 }
 
 TEST(InstModificationIRStrategyTest, FCmp) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   StringRef Source = "\n\
       define i1 @test(float %x) {\n\
         %a = fcmp oeq float %x, 10.0\n\
@@ -304,7 +304,7 @@ TEST(InstModificationIRStrategyTest, FCmp) {
 }
 
 TEST(InstModificationIRStrategyTest, GEP) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   StringRef Source = "\n\
       define ptr @test(ptr %ptr) {\n\
         %gep = getelementptr i32, ptr %ptr, i32 10\n\
@@ -331,7 +331,7 @@ TEST(InstModificationIRStrategyTest, GEP) {
 /// The caller has to guarantee that function argument are used in the SAME
 /// place as the operand.
 void VerfyOperandShuffled(StringRef Source, std::pair<int, int> ShuffleItems) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   auto Mutator = createMutator<InstModificationIRStrategy>();
   ASSERT_TRUE(Mutator);
 
@@ -371,7 +371,7 @@ TEST(InstModificationIRStrategyTest, ShuffleSelect) {
 }
 
 void VerfyDivDidntShuffle(StringRef Source) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   auto Mutator = createMutator<InstModificationIRStrategy>();
   ASSERT_TRUE(Mutator);
 
@@ -408,7 +408,7 @@ TEST(InstModificationIRStrategyTest, DidntShuffleFRem) {
 }
 
 TEST(InsertFunctionStrategy, Func) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   const char *Source = "";
   auto Mutator = createMutator<InsertFunctionStrategy>();
   ASSERT_TRUE(Mutator);
@@ -422,7 +422,7 @@ TEST(InsertFunctionStrategy, Func) {
 }
 
 TEST(InsertFunctionStrategy, AvoidCallingFunctionWithSpecialParam) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   StringRef Source = "\n\
       declare void @llvm.dbg.value(metadata %0, metadata %1, metadata %2)\n\
       declare i1 @llvm.experimental.gc.result.i1(token %0)\n\
@@ -439,7 +439,7 @@ TEST(InsertFunctionStrategy, AvoidCallingFunctionWithSpecialParam) {
 }
 
 TEST(InstModificationIRStrategy, Exact) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   StringRef Source = "\n\
       define i32 @test(i32 %a, i32 %b) {\n\
         %c = ashr i32 %a, %b \n\
@@ -464,7 +464,7 @@ TEST(InstModificationIRStrategy, Exact) {
   EXPECT_TRUE(FoundExact);
 }
 TEST(InstModificationIRStrategy, FastMath) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   StringRef Source = "\n\
       declare [4 x <4 x double>] @vecdouble(double)  \n\
       define double @test(i1 %C, double %a, double %b) {  \n\
@@ -562,7 +562,7 @@ TEST(InsertPHIStrategy, PHI) {
 }
 
 TEST(InsertPHIStrategy, PHIWithSameIncomingBlock) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   StringRef Source = "\n\
         define void @test(i32 %I) { \n\
         Entry:  \n\
@@ -623,7 +623,7 @@ TEST(SinkInstructionStrategy, DoNotSinkTokenType) {
 }
 
 static void VerifyBlockShuffle(StringRef Source) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   auto Mutator = createMutator<ShuffleBlockStrategy>();
   ASSERT_TRUE(Mutator);
 

@@ -8,10 +8,11 @@ set(LLVM_LINK_COMPONENTS
   )
 
 # Needed by LLVM's CMake checks because this file defines multiple targets.
-set(LLVM_OPTIONAL_SOURCES ClangTidyMain.cpp ClangTidyToolMain.cpp)
+set(LLVM_OPTIONAL_SOURCES ClangTidyMain.cpp ClangTidyToolMain.cpp ClangTidyOptions.cpp)
 
 add_clang_library(clangTidyMain STATIC
   ClangTidyMain.cpp
+  ClangTidyOptions.cpp
 
   LINK_LIBS
   clangTidy

@@ -24,29 +24,43 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "hexagon-copy-combine"
 
-static cl::opt<bool>
-    IsCombinesDisabled("disable-merge-into-combines", cl::Hidden,
+static unsigned MaxNumOfInstsBetweenNewValueStoreAndTFR = 4;
 
-                       cl::desc("Disable merging into combines"));
-static cl::opt<bool>
-    IsConst64Disabled("disable-const64", cl::Hidden,
+static bool getIsCombinesDisabled(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DisableMergeIntoCombines>(
+      F.getContext().getOptionsContext());
+}
 
-                      cl::desc("Disable generation of const64"));
-static
-cl::opt<unsigned>
-MaxNumOfInstsBetweenNewValueStoreAndTFR("max-num-inst-between-tfr-and-nv-store",
-                   cl::Hidden, cl::init(4),
-                   cl::desc("Maximum distance between a tfr feeding a store we "
-                            "consider the store still to be newifiable"));
+static bool getIsConst64Disabled(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DisableConst64>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getIsConst64Disabled(const MachineFunction &MF) {
+  const Function &F = MF.getFunction();
+  if (getIsConst64Disabled(F))
+    return true;
+  // CONST64 takes a LD resource on tiny core, so disable it unless optimizing
+  // for size (where the size benefit outweighs the resource cost).
+  const HexagonSubtarget &ST = MF.getSubtarget<HexagonSubtarget>();
+  return !F.hasOptSize() && ST.isTinyCore();
+}
+
+static unsigned getMaxNumOfInstsBetweenNewValueStoreAndTFR(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::HEX_MaxNumInstBetweenNewValueStoreAndTFR>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -203,7 +217,8 @@ static bool areCombinableOperations(const TargetRegisterInfo *TRI,
   // There is a combine of two constant extended values into CONST64,
   // provided both constants are true immediates.
   if (isGreaterThanNBitTFRI<16>(HighRegInst) &&
-      isGreaterThanNBitTFRI<16>(LowRegInst) && !IsConst64Disabled)
+      isGreaterThanNBitTFRI<16>(LowRegInst) &&
+      !getIsConst64Disabled(*HighRegInst.getMF()))
     return (HighRegInst.getOperand(1).isImm() &&
             LowRegInst.getOperand(1).isImm());
 
@@ -413,7 +428,8 @@ HexagonCopyToCombine::findPotentialNewifiableTFRs(MachineBasicBlock &BB) {
           ++It;
         }
 
-        if (NumInstsToDef > MaxNumOfInstsBetweenNewValueStoreAndTFR)
+        if (NumInstsToDef > getMaxNumOfInstsBetweenNewValueStoreAndTFR(
+                                MI.getMF()->getFunction()))
           continue;
 
         PotentiallyNewifiableTFR.insert(DefInst);
@@ -447,7 +463,8 @@ bool HexagonCopyToCombine::runOnMachineFunction(MachineFunction &MF) {
   if (skipFunction(MF.getFunction()))
     return false;
 
-  if (IsCombinesDisabled) return false;
+  if (getIsCombinesDisabled(MF.getFunction()))
+    return false;
 
   bool HasChanged = false;
 
@@ -462,10 +479,6 @@ bool HexagonCopyToCombine::runOnMachineFunction(MachineFunction &MF) {
   // Combine aggressively (for code size)
   ShouldCombineAggressively =
       MF.getTarget().getOptLevel() <= CodeGenOptLevel::Default;
-
-  // Disable CONST64 for tiny core since it takes a LD resource.
-  if (!OptForSize && ST->isTinyCore())
-    IsConst64Disabled = true;
 
   // Traverse basic blocks.
   for (MachineBasicBlock &MBB : MF) {
@@ -609,7 +622,7 @@ void HexagonCopyToCombine::combine(MachineInstr &I1, MachineInstr &I2,
     emitCombineRI(InsertPt, DoubleRegDest, HiOperand, LoOperand);
   else if (IsLoReg)
     emitCombineIR(InsertPt, DoubleRegDest, HiOperand, LoOperand);
-  else if (IsC64 && !IsConst64Disabled)
+  else if (IsC64 && !getIsConst64Disabled(*I1.getMF()))
     emitConst64(InsertPt, DoubleRegDest, HiOperand, LoOperand);
   else
     emitCombineII(InsertPt, DoubleRegDest, HiOperand, LoOperand);

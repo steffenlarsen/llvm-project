@@ -8,28 +8,35 @@
 
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/Passes/SeedCollection.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/IR/Function.h"
+#include "llvm/SandboxIR/Function.h"
 #include "llvm/SandboxIR/Module.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/RegionWithScore.h"
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/SandboxVectorizerPassBuilder.h"
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/SeedCollector.h"
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/VecUtils.h"
+#include "llvm/Transforms/Vectorize/VectorizeOptions.h"
 
 namespace llvm {
 
-static cl::opt<unsigned>
-    OverrideVecRegBits("sbvec-vec-reg-bits", cl::init(0), cl::Hidden,
-                       cl::desc("Override the vector register size in bits, "
-                                "which is otherwise found by querying TTI."));
-static cl::opt<bool>
-    AllowNonPow2("sbvec-allow-non-pow2", cl::init(false), cl::Hidden,
-                 cl::desc("Allow non-power-of-2 vectorization."));
+static unsigned getOverrideVecRegBits(const llvm::Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_OverrideVecRegBits>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getAllowNonPow2(const llvm::Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_AllowNonPow2>(
+      F.getContext().getOptionsContext());
+}
 
 #define LoadSeedsDef "loads"
 #define StoreSeedsDef "stores"
-cl::opt<std::string> CollectSeeds(
-    "sbvec-collect-seeds", cl::init(StoreSeedsDef), cl::Hidden,
-    cl::desc("Collect these seeds. Use empty for none or a comma-separated "
-             "list of '" StoreSeedsDef "' and '" LoadSeedsDef "'."));
+static std::string getCollectSeeds(const llvm::Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::VectorizeOptsReg,
+                                    &clv2::VEC_CollectSeeds>(
+      F.getContext().getOptionsContext(), StoreSeedsDef);
+}
 
 namespace sandboxir {
 
@@ -50,9 +57,12 @@ SeedCollection::SeedCollection(StringRef Pipeline, StringRef AuxArg)
 
 bool SeedCollection::runOnFunction(Function &F, const Analyses &A) {
   bool Change = false;
+  const auto &LLVMF = F.getLLVMFunction();
   const auto &DL = F.getParent()->getDataLayout();
-  bool CollectStores = CollectSeeds.find(StoreSeedsDef) != std::string::npos;
-  bool CollectLoads = CollectSeeds.find(LoadSeedsDef) != std::string::npos;
+  bool CollectStores =
+      getCollectSeeds(LLVMF).find(StoreSeedsDef) != std::string::npos;
+  bool CollectLoads =
+      getCollectSeeds(LLVMF).find(LoadSeedsDef) != std::string::npos;
 
   // TODO: Start from innermost BBs first
   for (auto &BB : F) {
@@ -68,8 +78,8 @@ bool SeedCollection::runOnFunction(Function &F, const Analyses &A) {
                                   Seeds[FirstUnusedIdx])),
                               DL);
         unsigned AS = getLoadStoreAddressSpace(Seeds[FirstUnusedIdx]);
-        unsigned VecRegBits = OverrideVecRegBits != 0
-                                  ? OverrideVecRegBits
+        unsigned VecRegBits = getOverrideVecRegBits(LLVMF) != 0
+                                  ? getOverrideVecRegBits(LLVMF)
                                   : A.getTTI().getLoadStoreVecRegBitWidth(AS);
 
         auto DivideBy2 = [](unsigned Num) {
@@ -96,8 +106,8 @@ bool SeedCollection::runOnFunction(Function &F, const Analyses &A) {
             if (Seeds.allUsed())
               break;
 
-            auto SeedSlice =
-                Seeds.getSlice(Offset, SliceElms * ElmBits, !AllowNonPow2);
+            auto SeedSlice = Seeds.getSlice(Offset, SliceElms * ElmBits,
+                                            !getAllowNonPow2(LLVMF));
             if (SeedSlice.empty())
               continue;
 

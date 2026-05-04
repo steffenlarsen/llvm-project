@@ -16,7 +16,6 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "llvm/Support/CommandLine.h"
 
 namespace fir {
 #define GEN_PASS_DEF_CFGCONVERSION

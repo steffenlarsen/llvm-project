@@ -358,8 +358,8 @@ void StaticMemoryPlannerAnalysisPass::runOnOperation() {
   // Step 5: Obtain arena based on arena mode.
   Operation *firstAlloc = candidates.front().alloc;
   OpBuilder builder(firstAlloc);
-  FailureOr<Value> arenaValue =
-      createArena(builder, funcOp, arenaMode, totalSize, arenaAlignment);
+  FailureOr<Value> arenaValue = createArena(
+      builder, funcOp, arenaMode.getValue(), totalSize, arenaAlignment);
   if (failed(arenaValue))
     return signalPassFailure();
 

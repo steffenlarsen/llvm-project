@@ -42,7 +42,7 @@
 #include "llvm/CodeGenTypes/LowLevelType.h"
 #include "llvm/CodeGenTypes/MachineValueType.h"
 #include "llvm/Support/CodeGenCoverage.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/TableGen/Error.h"
@@ -63,28 +63,49 @@ STATISTIC(NumPatternImportsSkipped, "Number of SelectionDAG imports skipped");
 STATISTIC(NumPatternsTested,
           "Number of patterns executed according to coverage information");
 
-static cl::OptionCategory GlobalISelEmitterCat("Options for -gen-global-isel");
+static clv2::OptionCategory
+    GlobalISelEmitterCat("Options for -gen-global-isel");
 
-static cl::opt<bool> WarnOnSkippedPatterns(
+static bool WarnOnSkippedPatterns = false;
+
+static bool GenerateCoverage = false;
+
+static std::string UseCoverageFile;
+
+static bool OptimizeMatchTable = true;
+
+static constexpr clv2::OptionInfo<bool> OI_WarnOnSkipped{
     "warn-on-skipped-patterns",
-    cl::desc("Explain why a pattern was skipped for inclusion "
-             "in the GlobalISel selector"),
-    cl::init(false), cl::cat(GlobalISelEmitterCat));
-
-static cl::opt<bool> GenerateCoverage(
+    "Explain why a pattern was skipped for inclusion "
+    "in the GlobalISel selector",
+    clv2::cat(GlobalISelEmitterCat)};
+static constexpr clv2::OptionInfo<bool> OI_InstrumentCoverage{
     "instrument-gisel-coverage",
-    cl::desc("Generate coverage instrumentation for GlobalISel"),
-    cl::init(false), cl::cat(GlobalISelEmitterCat));
+    "Generate coverage instrumentation for GlobalISel",
+    clv2::cat(GlobalISelEmitterCat)};
+static constexpr clv2::OptionInfo<std::string> OI_CoverageFile{
+    "gisel-coverage-file", "Specify file to retrieve coverage information from",
+    clv2::cat(GlobalISelEmitterCat)};
+static constexpr clv2::OptionInfo<bool> OI_OptimizeMatchTable{
+    "optimize-match-table", "Generate an optimized version of the match table",
+    clv2::Init{true}, clv2::cat(GlobalISelEmitterCat)};
 
-static cl::opt<std::string> UseCoverageFile(
-    "gisel-coverage-file", cl::init(""),
-    cl::desc("Specify file to retrieve coverage information from"),
-    cl::cat(GlobalISelEmitterCat));
+static constexpr clv2::OptionsRegistry<&OI_WarnOnSkipped,
+                                       &OI_InstrumentCoverage, &OI_CoverageFile,
+                                       &OI_OptimizeMatchTable>
+    GlobalISelEmitterReg;
 
-static cl::opt<bool> OptimizeMatchTable(
-    "optimize-match-table",
-    cl::desc("Generate an optimized version of the match table"),
-    cl::init(true), cl::cat(GlobalISelEmitterCat));
+static void applyGlobalISelEmitterOptions(
+    const decltype(GlobalISelEmitterReg)::ParsedOptionsT &Opts) {
+  WarnOnSkippedPatterns = Opts.get<&OI_WarnOnSkipped>();
+  GenerateCoverage = Opts.get<&OI_InstrumentCoverage>();
+  UseCoverageFile = Opts.get<&OI_CoverageFile>();
+  OptimizeMatchTable = Opts.get<&OI_OptimizeMatchTable>();
+}
+
+void registerGlobalISelEmitterOptions(clv2::OptionParser &P) {
+  P.add<&GlobalISelEmitterReg, applyGlobalISelEmitterOptions>();
+}
 
 static std::string explainPredicates(const TreePatternNode &N) {
   std::string Explanation;

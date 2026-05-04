@@ -51,7 +51,7 @@ protected:
         TT, "generic", "", Options, std::nullopt, std::nullopt,
         CodeGenOptLevel::Default)));
 
-    Ctx = std::make_unique<LLVMContext>();
+    Ctx = std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
     M = std::make_unique<Module>("Module", *Ctx);
     M->setDataLayout(TM->createDataLayout());
     auto *FType = FunctionType::get(Type::getVoidTy(*Ctx), false);

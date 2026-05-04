@@ -12,7 +12,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm-jitlink.h"
-#include "llvm/Support/CommandLine.h"
 
 #define DEBUG_TYPE "llvm_jitlink"
 
@@ -20,21 +19,11 @@ using namespace llvm;
 using namespace llvm::jitlink;
 using namespace llvm::orc;
 
-static cl::opt<bool> ShowPrePruneTotalBlockSize(
-    "pre-prune-total-block-size",
-    cl::desc("Total size of all blocks (including zero-fill) in all "
-             "graphs (pre-pruning)"),
-    cl::init(false));
-
-static cl::opt<bool> ShowPostFixupTotalBlockSize(
-    "post-fixup-total-block-size",
-    cl::desc("Total size of all blocks (including zero-fill) in all "
-             "graphs (post-fixup)"),
-    cl::init(false));
-
 class StatsPlugin : public ObjectLinkingLayer::Plugin {
 public:
-  static void enableIfNeeded(Session &S, bool UsingOrcRuntime) {
+  static void enableIfNeeded(Session &S, bool UsingOrcRuntime,
+                             bool ShowPrePruneTotalBlockSize,
+                             bool ShowPostFixupTotalBlockSize) {
     std::unique_ptr<StatsPlugin> Instance;
     auto GetStats = [&]() -> StatsPlugin & {
       if (!Instance)
@@ -129,7 +118,10 @@ Error StatsPlugin::recordPostFixupStats(LinkGraph &G) {
 }
 
 namespace llvm {
-void enableStatistics(Session &S, bool UsingOrcRuntime) {
-  StatsPlugin::enableIfNeeded(S, UsingOrcRuntime);
+void enableStatistics(Session &S, bool UsingOrcRuntime,
+                      bool ShowPrePruneTotalBlockSize,
+                      bool ShowPostFixupTotalBlockSize) {
+  StatsPlugin::enableIfNeeded(S, UsingOrcRuntime, ShowPrePruneTotalBlockSize,
+                              ShowPostFixupTotalBlockSize);
 }
 } // namespace llvm

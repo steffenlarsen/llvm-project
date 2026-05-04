@@ -1,4 +1,6 @@
 add_llvm_component_library(LLVMTransformUtils
+  UtilsOptionsRegistration.cpp
+  UtilsOptionsGetters.cpp
   AddDiscriminators.cpp
   AMDGPUEmitPrintf.cpp
   ASanStackFrameLayout.cpp
@@ -96,6 +98,7 @@ add_llvm_component_library(LLVMTransformUtils
   TriggerCrashPass.cpp
   UnifyLoopExits.cpp
   Utils.cpp
+  UtilsOptions.cpp
   ValueMapper.cpp
   VNCoercion.cpp
 

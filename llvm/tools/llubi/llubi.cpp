@@ -19,109 +19,117 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
+using namespace llvm::clv2;
 
-static cl::opt<std::string> InputFile(cl::desc("<input bitcode>"),
-                                      cl::Positional, cl::init("-"));
+static constexpr OptionCategory InterpreterCategory{"Interpreter Options"};
 
-static cl::list<std::string> InputArgv(cl::ConsumeAfter,
-                                       cl::desc("<program arguments>..."));
+static constexpr OptionInfo<std::string> InputFile{"", "<input bitcode>",
+                                                   Positional{}, Init{"-"}};
 
-static cl::opt<std::string>
-    EntryFunc("entry-function",
-              cl::desc("Specify the entry function (default = 'main') "
-                       "of the executable"),
-              cl::value_desc("function"), cl::init("main"));
+static constexpr ListOptionInfo<std::string> InputArgv{
+    "", "<program arguments>...", Positional{}, ConsumeAfter};
 
-static cl::opt<std::string>
-    FakeArgv0("fake-argv0",
-              cl::desc("Override the 'argv[0]' value passed into the executing"
-                       " program"),
-              cl::value_desc("executable"));
+static constexpr OptionInfo<std::string> EntryFunc{
+    "entry-function",
+    "Specify the entry function (default = 'main') of the executable",
+    value_desc("function"), Init{"main"}};
 
-static cl::opt<bool>
-    Verbose("verbose", cl::desc("Print results for each instruction executed."),
-            cl::init(false));
+static constexpr OptionInfo<std::string> FakeArgv0{
+    "fake-argv0",
+    "Override the 'argv[0]' value passed into the executing program",
+    value_desc("executable")};
 
-cl::OptionCategory InterpreterCategory("Interpreter Options");
+static constexpr OptionInfo<bool> Verbose{
+    "verbose", "Print results for each instruction executed.", Init{false}};
 
-static cl::opt<unsigned> MaxMem(
+static constexpr OptionInfo<unsigned> MaxMem{
     "max-mem",
-    cl::desc("Max amount of memory (in bytes) that can be allocated by the"
-             " program, including stack, heap, and global variables."
-             " Set to 0 to disable the limit."),
-    cl::value_desc("N"), cl::init(0), cl::cat(InterpreterCategory));
+    "Max amount of memory (in bytes) that can be allocated by the"
+    " program, including stack, heap, and global variables."
+    " Set to 0 to disable the limit.",
+    value_desc("N"), Init{0u}, cat(InterpreterCategory)};
 
-static cl::opt<unsigned>
-    MaxSteps("max-steps",
-             cl::desc("Max number of instructions executed."
-                      " Set to 0 to disable the limit."),
-             cl::value_desc("N"), cl::init(0), cl::cat(InterpreterCategory));
+static constexpr OptionInfo<unsigned> MaxSteps{
+    "max-steps",
+    "Max number of instructions executed."
+    " Set to 0 to disable the limit.",
+    value_desc("N"), Init{0u}, cat(InterpreterCategory)};
 
-static cl::opt<unsigned> MaxStackDepth(
+static constexpr OptionInfo<unsigned> MaxStackDepth{
     "max-stack-depth",
-    cl::desc("Max stack depth (default = 256). Set to 0 to disable the limit."),
-    cl::value_desc("N"), cl::init(256), cl::cat(InterpreterCategory));
+    "Max stack depth (default = 256). Set to 0 to disable the limit.",
+    value_desc("N"), Init{256u}, cat(InterpreterCategory)};
 
-static cl::opt<unsigned>
-    VScale("vscale", cl::desc("The value of llvm.vscale (default = 4)"),
-           cl::value_desc("N"), cl::init(4), cl::cat(InterpreterCategory));
+static constexpr OptionInfo<unsigned> VScale{
+    "vscale", "The value of llvm.vscale (default = 4)", value_desc("N"),
+    Init{4u}, cat(InterpreterCategory)};
 
-static cl::opt<unsigned>
-    Seed("seed",
-         cl::desc("Random seed for non-deterministic behavior (default = 0)"),
-         cl::value_desc("N"), cl::init(0), cl::cat(InterpreterCategory));
+static constexpr OptionInfo<unsigned> Seed{
+    "seed", "Random seed for non-deterministic behavior (default = 0)",
+    value_desc("N"), Init{0u}, cat(InterpreterCategory)};
 
-static cl::opt<bool>
-    Deterministic("deterministic",
-                  cl::desc("Disable interpreter-introduced non-determinism."),
-                  cl::init(false), cl::cat(InterpreterCategory));
+static constexpr OptionInfo<bool> Deterministic{
+    "deterministic", "Disable interpreter-introduced non-determinism.",
+    Init{false}, cat(InterpreterCategory)};
 
-static cl::opt<bool> FuseFMulAdd("fuse-fmuladd",
-                                 cl::desc("Fuse llvm.fmuladd.* intrinsic"),
-                                 cl::init(true), cl::cat(InterpreterCategory));
+static constexpr OptionInfo<bool> FuseFMulAdd{
+    "fuse-fmuladd", "Fuse llvm.fmuladd.* intrinsic", Init{true},
+    cat(InterpreterCategory)};
 
-static cl::opt<bool> NoVerify("disable-verify",
-                              cl::desc("Do not run the IR verifier"),
-                              cl::init(false), cl::cat(InterpreterCategory));
+static constexpr OptionInfo<bool> NoVerify{
+    "disable-verify", "Do not run the IR verifier", Init{false},
+    cat(InterpreterCategory)};
 
-cl::opt<ubi::UndefValueBehavior> UndefBehavior(
-    "undef-behavior", cl::desc("Choose undef value behavior:"),
-    cl::values(clEnumValN(ubi::UndefValueBehavior::NonDeterministic, "nondet",
-                          "Each load of an uninitialized byte yields a freshly "
-                          "random value."),
-               clEnumValN(ubi::UndefValueBehavior::Zero, "zero",
-                          "All uses of an uninitialized byte yield zero.")));
+static constexpr EnumVal<ubi::UndefValueBehavior> UndefBehaviorVals[] = {
+    {"nondet", ubi::UndefValueBehavior::NonDeterministic,
+     "Each load of an uninitialized byte yields a freshly random value."},
+    {"zero", ubi::UndefValueBehavior::Zero,
+     "All uses of an uninitialized byte yield zero."},
+};
 
-cl::opt<ubi::NaNPropagationBehavior> NaNPropagationBehavior(
-    "nan-behavior", cl::desc("Choose NaN propagation behavior:"),
-    cl::values(
-        clEnumValN(ubi::NaNPropagationBehavior::NonDeterministic, "nondet",
-                   "Non-deterministically choose from valid NaN results as "
-                   "specified by language reference."),
-        clEnumValN(ubi::NaNPropagationBehavior::PreferredNaN, "preferred",
-                   "The quiet bit is set and the payload is all-zero."),
-        clEnumValN(
-            ubi::NaNPropagationBehavior::QuietingNaN, "quieting",
-            "The quiet bit is set and the payload is copied from any input"
-            "operand that is a NaN."),
-        clEnumValN(ubi::NaNPropagationBehavior::UnchangedNaN, "unchanged",
-                   "The quiet bit and payload are copied from any input operand"
-                   "that is a NaN"),
-        clEnumValN(ubi::NaNPropagationBehavior::TargetSpecificNaN,
-                   "target-specific",
-                   "The quiet bit is set and the payload is picked from a "
-                   "known target-specific set of \"extra\" possible NaN "
-                   "payloads.")),
-    cl::init(ubi::NaNPropagationBehavior::NonDeterministic));
+static constexpr auto UndefBehavior = makeEnumOption<ubi::UndefValueBehavior>(
+    "undef-behavior", "Choose undef value behavior:", UndefBehaviorVals);
+
+static constexpr EnumVal<ubi::NaNPropagationBehavior>
+    NaNPropagationBehaviorVals[] = {
+        {"nondet", ubi::NaNPropagationBehavior::NonDeterministic,
+         "Non-deterministically choose from valid NaN results as "
+         "specified by language reference."},
+        {"preferred", ubi::NaNPropagationBehavior::PreferredNaN,
+         "The quiet bit is set and the payload is all-zero."},
+        {"quieting", ubi::NaNPropagationBehavior::QuietingNaN,
+         "The quiet bit is set and the payload is copied from any input"
+         "operand that is a NaN."},
+        {"unchanged", ubi::NaNPropagationBehavior::UnchangedNaN,
+         "The quiet bit and payload are copied from any input operand"
+         "that is a NaN"},
+        {"target-specific", ubi::NaNPropagationBehavior::TargetSpecificNaN,
+         "The quiet bit is set and the payload is picked from a "
+         "known target-specific set of \"extra\" possible NaN "
+         "payloads."},
+};
+
+static constexpr auto NaNBehavior = makeEnumOption<ubi::NaNPropagationBehavior>(
+    "nan-behavior",
+    "Choose NaN propagation behavior:", NaNPropagationBehaviorVals,
+    Init{ubi::NaNPropagationBehavior::NonDeterministic});
+
+static constexpr OptionsRegistry<&InputFile, &InputArgv, &EntryFunc, &FakeArgv0,
+                                 &Verbose, &MaxMem, &MaxSteps, &MaxStackDepth,
+                                 &VScale, &Seed, &Deterministic, &FuseFMulAdd,
+                                 &NoVerify, &UndefBehavior, &NaNBehavior>
+    UbiReg;
 
 class NoopEventHandler : public ubi::EventHandler {
   void onImmediateUB(StringRef Msg) override {
@@ -201,66 +209,86 @@ public:
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
 
-  cl::ParseCommandLineOptions(argc, argv, "llvm ub-aware interpreter\n");
+  clv2::OptionParser P;
+  P.add<&UbiReg>();
+  RegisterCoreLLVMOptions(P);
+  auto OptsCtx = P.parse(argc, argv, "llvm ub-aware interpreter\n");
+  auto *Opts = OptsCtx->getViewPtr<&UbiReg>();
 
-  if (EntryFunc.empty()) {
+  std::string InputFileVal = Opts->get<&InputFile>();
+  std::vector<std::string> InputArgvVal = Opts->get<&InputArgv>();
+  std::string EntryFuncVal = Opts->get<&EntryFunc>();
+  std::string FakeArgv0Val = Opts->get<&FakeArgv0>();
+  bool VerboseVal = Opts->get<&Verbose>();
+  unsigned MaxMemVal = Opts->get<&MaxMem>();
+  unsigned MaxStepsVal = Opts->get<&MaxSteps>();
+  unsigned MaxStackDepthVal = Opts->get<&MaxStackDepth>();
+  unsigned VScaleVal = Opts->get<&VScale>();
+  unsigned SeedVal = Opts->get<&Seed>();
+  bool DeterministicVal = Opts->get<&Deterministic>();
+  bool FuseFMulAddVal = Opts->get<&FuseFMulAdd>();
+  bool NoVerifyVal = Opts->get<&NoVerify>();
+  ubi::UndefValueBehavior UndefBehaviorVal = Opts->get<&UndefBehavior>();
+  ubi::NaNPropagationBehavior NaNBehaviorVal = Opts->get<&NaNBehavior>();
+
+  if (EntryFuncVal.empty()) {
     WithColor::error() << "--entry-function name cannot be empty\n";
     return 1;
   }
 
-  if (VScale == 0) {
+  if (VScaleVal == 0) {
     WithColor::error() << "--vscale value must be positive\n";
     return 1;
   }
 
-  if (!isPowerOf2_32(VScale)) {
+  if (!isPowerOf2_32(VScaleVal)) {
     WithColor::error() << "--vscale value must be a power of 2\n";
     return 1;
   }
 
-  LLVMContext Context;
+  LLVMContext Context(*OptsCtx);
 
   // Load the bitcode...
   SMDiagnostic Err;
   AsmParserContext ParserContext;
   std::unique_ptr<Module> Owner =
-      parseIRFile(InputFile, Err, Context, /*Callbacks=*/{}, &ParserContext);
+      parseIRFile(InputFileVal, Err, Context, /*Callbacks=*/{}, &ParserContext);
   Module *Mod = Owner.get();
   if (!Mod) {
     Err.print(argv[0], errs());
     return 1;
   }
 
-  if (!NoVerify && verifyModule(*Mod, &errs())) {
-    WithColor::error() << InputFile << ": input module is broken!\n";
+  if (!NoVerifyVal && verifyModule(*Mod, &errs())) {
+    WithColor::error() << InputFileVal << ": input module is broken!\n";
     return 1;
   }
 
   // If the user specifically requested an argv[0] to pass into the program,
   // do it now.
-  if (!FakeArgv0.empty()) {
-    InputFile = static_cast<std::string>(FakeArgv0);
+  if (!FakeArgv0Val.empty()) {
+    InputFileVal = FakeArgv0Val;
   } else {
     // Otherwise, if there is a .bc suffix on the executable strip it off, it
     // might confuse the program.
-    if (StringRef(InputFile).ends_with(".bc"))
-      InputFile.erase(InputFile.length() - 3);
+    if (StringRef(InputFileVal).ends_with(".bc"))
+      InputFileVal.erase(InputFileVal.length() - 3);
   }
 
   // Add the module's name to the start of the vector of arguments to main().
-  InputArgv.insert(InputArgv.begin(), InputFile);
+  InputArgvVal.insert(InputArgvVal.begin(), InputFileVal);
 
   // Initialize the execution context and set parameters.
   ubi::Context Ctx(*Mod, &ParserContext);
-  Ctx.setMemoryLimit(MaxMem);
-  Ctx.setVScale(VScale);
-  Ctx.setMaxSteps(MaxSteps);
-  Ctx.setMaxStackDepth(MaxStackDepth);
-  Ctx.setFusedMultiplyAdd(FuseFMulAdd);
-  Ctx.setDeterministic(Deterministic);
-  Ctx.setUndefValueBehavior(UndefBehavior);
-  Ctx.setNaNPropagationBehavior(NaNPropagationBehavior);
-  Ctx.reseed(Seed);
+  Ctx.setMemoryLimit(MaxMemVal);
+  Ctx.setVScale(VScaleVal);
+  Ctx.setMaxSteps(MaxStepsVal);
+  Ctx.setMaxStackDepth(MaxStackDepthVal);
+  Ctx.setFusedMultiplyAdd(FuseFMulAddVal);
+  Ctx.setDeterministic(DeterministicVal);
+  Ctx.setUndefValueBehavior(UndefBehaviorVal);
+  Ctx.setNaNPropagationBehavior(NaNBehaviorVal);
+  Ctx.reseed(SeedVal);
 
   if (!Ctx.initGlobalValues()) {
     WithColor::error() << "Failed to initialize global values (e.g., the "
@@ -271,9 +299,9 @@ int main(int argc, char **argv) {
   // Call the main function from M as if its signature were:
   //   int main (int argc, char **argv)
   // using the contents of Args to determine argc & argv
-  Function *EntryFn = Mod->getFunction(EntryFunc);
+  Function *EntryFn = Mod->getFunction(EntryFuncVal);
   if (!EntryFn) {
-    WithColor::error() << '\'' << EntryFunc
+    WithColor::error() << '\'' << EntryFuncVal
                        << "\' function not found in module.\n";
     return 1;
   }
@@ -284,12 +312,12 @@ int main(int argc, char **argv) {
   SmallVector<ubi::AnyValue> Args;
   if (EntryFn->getFunctionType() == MainFuncTy) {
     const ubi::AnyValue *Argc =
-        Ctx.getConstantValue(ConstantInt::get(IntTy, InputArgv.size()));
+        Ctx.getConstantValue(ConstantInt::get(IntTy, InputArgvVal.size()));
     assert(Argc && "failed to initialize argc");
     Args.push_back(*Argc);
 
     uint32_t PtrSize = Ctx.getDataLayout().getPointerSize();
-    uint64_t PtrsSize = PtrSize * (InputArgv.size() + 1);
+    uint64_t PtrsSize = PtrSize * (InputArgvVal.size() + 1);
     auto ArgvPtrsMem = Ctx.allocate(PtrsSize, 8, "argv",
                                     /*AS=*/0, ubi::MemInitKind::Zeroed,
                                     ubi::MemAllocKind::Global);
@@ -297,7 +325,7 @@ int main(int argc, char **argv) {
       WithColor::error() << "Failed to allocate memory for argv pointers.\n";
       return 1;
     }
-    for (const auto &[Idx, Arg] : enumerate(InputArgv)) {
+    for (const auto &[Idx, Arg] : enumerate(InputArgvVal)) {
       uint64_t Size = Arg.length() + 1;
       auto ArgvStrMem = Ctx.allocate(Size, 8, "argv_str",
                                      /*AS=*/0, ubi::MemInitKind::Zeroed,
@@ -315,7 +343,7 @@ int main(int argc, char **argv) {
     // If the signature does not match (e.g., llvm-reduce change the signature
     // of main), it will pass null values for all arguments.
     WithColor::warning()
-        << "The signature of function '" << EntryFunc
+        << "The signature of function '" << EntryFuncVal
         << "' does not match 'int main(int, char**)', passing null values for "
            "all arguments.\n";
     Args.reserve(EntryFn->arg_size());
@@ -327,10 +355,10 @@ int main(int argc, char **argv) {
   VerboseEventHandler VerboseHandler(Ctx);
   ubi::AnyValue RetVal;
   ubi::ProgramExitInfo ExitInfo = Ctx.runFunction(
-      *EntryFn, Args, RetVal, Verbose ? VerboseHandler : NoopHandler);
+      *EntryFn, Args, RetVal, VerboseVal ? VerboseHandler : NoopHandler);
   switch (ExitInfo.Kind) {
   case ubi::ProgramExitInfo::ProgramExitKind::Failed:
-    WithColor::error() << "Execution of function '" << EntryFunc
+    WithColor::error() << "Execution of function '" << EntryFuncVal
                        << "' failed.\n";
     return 1;
   case ubi::ProgramExitInfo::ProgramExitKind::Aborted:
@@ -343,7 +371,7 @@ int main(int argc, char **argv) {
     if (EntryFn->getReturnType()->isIntegerTy()) {
       assert(!RetVal.isNone() && "Expected a return value from entry function");
       if (RetVal.isPoison()) {
-        WithColor::error() << "Execution of function '" << EntryFunc
+        WithColor::error() << "Execution of function '" << EntryFuncVal
                            << "' resulted in poison return value.\n";
         return 1;
       }

@@ -143,11 +143,12 @@
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include <algorithm>
@@ -162,9 +163,10 @@
 
 using namespace llvm;
 
-static cl::opt<bool>
-SpillAlignedNEONRegs("align-neon-spills", cl::Hidden, cl::init(true),
-                     cl::desc("Align ARM NEON spills in prolog and epilog"));
+static bool getSpillAlignedNEONRegs(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::ARM_SpillAlignedNEONRegs>(
+      F.getContext().getOptionsContext());
+}
 
 static MachineBasicBlock::iterator
 skipAlignedDPRCS2Spills(MachineBasicBlock::iterator MI,
@@ -2659,7 +2661,7 @@ static unsigned estimateRSStackSizeLimit(MachineFunction &MF,
 static void
 checkNumAlignedDPRCS2Regs(MachineFunction &MF, BitVector &SavedRegs) {
   MF.getInfo<ARMFunctionInfo>()->setNumAlignedDPRCS2Regs(0);
-  if (!SpillAlignedNEONRegs)
+  if (!getSpillAlignedNEONRegs(MF.getFunction()))
     return;
 
   // Naked functions don't spill callee-saved registers.

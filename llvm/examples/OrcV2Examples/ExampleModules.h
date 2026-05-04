@@ -18,7 +18,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IRReader/IRReader.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/SourceMgr.h"
 
@@ -44,7 +44,7 @@ inline llvm::Error createSMDiagnosticError(llvm::SMDiagnostic &Diag) {
 inline llvm::Expected<llvm::orc::ThreadSafeModule>
 parseExampleModule(llvm::StringRef Source, llvm::StringRef Name) {
   using namespace llvm;
-  auto Ctx = std::make_unique<LLVMContext>();
+  auto Ctx = std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
   SMDiagnostic Err;
   if (auto M = parseIR(MemoryBufferRef(Source, Name), Err, *Ctx))
     return orc::ThreadSafeModule(std::move(M), std::move(Ctx));
@@ -55,7 +55,7 @@ parseExampleModule(llvm::StringRef Source, llvm::StringRef Name) {
 inline llvm::Expected<llvm::orc::ThreadSafeModule>
 parseExampleModuleFromFile(llvm::StringRef FileName) {
   using namespace llvm;
-  auto Ctx = std::make_unique<LLVMContext>();
+  auto Ctx = std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
   SMDiagnostic Err;
 
   if (auto M = parseIRFile(FileName, Err, *Ctx))

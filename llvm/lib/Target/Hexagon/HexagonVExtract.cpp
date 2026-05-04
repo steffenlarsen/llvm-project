@@ -15,21 +15,26 @@
 #include "HexagonRegisterInfo.h"
 #include "HexagonSubtarget.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Pass.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/Function.h"
+#include "llvm/Pass.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 
 #include <map>
 
 using namespace llvm;
 
-static cl::opt<unsigned> VExtractThreshold(
-    "hexagon-vextract-threshold", cl::Hidden, cl::init(1),
-    cl::desc("Threshold for triggering vextract replacement"));
+static unsigned VExtractThreshold = 1;
+
+static unsigned getVExtractThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_VExtractThreshold>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
   class HexagonVExtract : public MachineFunctionPass {
@@ -127,7 +132,7 @@ bool HexagonVExtract::runOnMachineFunction(MachineFunction &MF) {
 
   for (auto &P : VExtractMap) {
     unsigned VecR = P.first;
-    if (P.second.size() <= VExtractThreshold)
+    if (P.second.size() <= getVExtractThreshold(MF.getFunction()))
       continue;
 
     const auto &VecRC = *MRI.getRegClass(VecR);

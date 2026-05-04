@@ -10,6 +10,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/OptionsContext.h"
 #include "gtest/gtest.h"
 
 namespace {
@@ -18,9 +19,9 @@ using namespace llvm;
 
 class LastRunTrackingAnalysisTest : public testing::Test {
 protected:
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M;
-  PassBuilder PB;
+  PassBuilder PB{llvm::clv2::defaultOptionsContext()};
 
   LoopAnalysisManager LAM;
   FunctionAnalysisManager FAM;

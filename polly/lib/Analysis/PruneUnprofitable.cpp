@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/PruneUnprofitable.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopDetection.h"
 #include "polly/ScopInfo.h"
 #include "llvm/ADT/Statistic.h"
@@ -57,7 +58,11 @@ static void updateStatistics(Scop &S, bool Pruned) {
 } // namespace
 
 bool polly::runPruneUnprofitable(Scop &S) {
-  if (PollyProcessUnprofitable) {
+  bool ProcessUnprofitable = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext()))
+    ProcessUnprofitable = Opts->get<&llvm::clv2::POLLY_ProcessUnprofitable>();
+  if (ProcessUnprofitable) {
     POLLY_DEBUG(
         dbgs() << "NOTE: -polly-process-unprofitable active, won't prune "
                   "anything\n");

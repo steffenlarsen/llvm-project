@@ -17,13 +17,14 @@
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Object/SymbolicFile.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/raw_ostream.h"
 #include <assert.h>
 #include <cstdint>
@@ -39,22 +40,23 @@ using namespace bolt;
 
 namespace opts {
 
-static cl::OptionCategory BatDumpCategory("BAT dump options");
+using namespace llvm::clv2;
 
-static cl::OptionCategory *BatDumpCategories[] = {&BatDumpCategory};
+inline constexpr OptionCategory BatDumpCat{"BAT dump options"};
+inline constexpr OptionInfo<std::string> BatInputFile{
+    "", "<executable>", Positional{}, Required, cat(BatDumpCat)};
+inline constexpr OptionInfo<bool> BatDumpAll{"dump-all", "dump all BAT tables",
+                                             Init{false}, cat(BatDumpCat)};
+inline constexpr ListOptionInfo<uint64_t> BatTranslate{
+    "translate", "translate addresses using BAT", ZeroOrMore,
+    value_desc("addr"), cat(BatDumpCat)};
 
-static cl::opt<std::string> InputFilename(cl::Positional,
-                                          cl::desc("<executable>"),
-                                          cl::Required,
-                                          cl::cat(BatDumpCategory));
+inline constexpr OptionsRegistry<&BatInputFile, &BatDumpAll, &BatTranslate>
+    BatDumpReg;
 
-static cl::list<uint64_t> Translate("translate",
-                                    cl::desc("translate addresses using BAT"),
-                                    cl::value_desc("addr"),
-                                    cl::cat(BatDumpCategory));
-
-static cl::opt<bool> DumpAll("dump-all", cl::desc("dump all BAT tables"),
-                             cl::cat(BatDumpCategory));
+static std::string InputFilename;
+static std::vector<uint64_t> Translate;
+static bool DumpAll = false;
 
 } // namespace opts
 
@@ -146,8 +148,16 @@ void dumpBATFor(llvm::object::ELFObjectFileBase *InputFile) {
 }
 
 int main(int argc, char **argv) {
-  cl::HideUnrelatedOptions(ArrayRef(opts::BatDumpCategories));
-  cl::ParseCommandLineOptions(argc, argv, "");
+  clv2::OptionParser P;
+  P.add<&opts::BatDumpReg>();
+  RegisterCoreLLVMOptions(P);
+  P.hideUnrelatedOptions({&opts::BatDumpCat});
+  auto OptsCtx = P.parse(argc, argv, "");
+  auto *Opts = OptsCtx->getViewPtr<&opts::BatDumpReg>();
+  opts::InputFilename = Opts->get<&opts::BatInputFile>();
+  opts::DumpAll = Opts->get<&opts::BatDumpAll>();
+  auto &TranslateAddrs = Opts->get<&opts::BatTranslate>();
+  opts::Translate.assign(TranslateAddrs.begin(), TranslateAddrs.end());
 
   if (!sys::fs::exists(opts::InputFilename))
     report_error(opts::InputFilename, errc::no_such_file_or_directory);

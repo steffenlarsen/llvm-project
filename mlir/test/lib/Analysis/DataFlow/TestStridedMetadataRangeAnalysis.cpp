@@ -44,7 +44,7 @@ static void printAnalysisResults(DataFlowSolver &solver, Operation *op,
     return;
 
   // Print the metadata.
-  os << "Op: " << OpWithFlags(op, OpPrintingFlags().skipRegions()) << "\n";
+  os << "Op: " << OpWithFlags(op, opPrintingFlags(op).skipRegions()) << "\n";
   for (auto [idx, state] : results)
     os << "  result[" << idx << "]: " << state->getValue() << "\n";
   os << "\n";

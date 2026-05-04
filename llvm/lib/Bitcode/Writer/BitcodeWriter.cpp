@@ -26,6 +26,7 @@
 #include "llvm/Analysis/MemoryProfileInfo.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/Bitcode/BitcodeCommon.h"
+#include "llvm/Bitcode/BitcodeOptionsOptInfos.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/LLVMBitCodes.h"
 #include "llvm/Bitstream/BitCodes.h"
@@ -66,12 +67,12 @@
 #include "llvm/ProfileData/MemProfRadixTree.h"
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SHA1.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
@@ -90,33 +91,35 @@
 using namespace llvm;
 using namespace llvm::memprof;
 
-static cl::opt<unsigned>
-    IndexThreshold("bitcode-mdindex-threshold", cl::Hidden, cl::init(25),
-                   cl::desc("Number of metadatas above which we emit an index "
-                            "to enable lazy-loading"));
-static cl::opt<uint32_t> FlushThreshold(
-    "bitcode-flush-threshold", cl::Hidden, cl::init(512),
-    cl::desc("The threshold (unit M) for flushing LLVM bitcode."));
+static unsigned getIndexThreshold(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::BC_MDIndexThreshold>(
+      M.getContext().getOptionsContext());
+}
 
-// Since we only use the context information in the memprof summary records in
-// the LTO backends to do assertion checking, save time and space by only
-// serializing the context for non-NDEBUG builds.
-// TODO: Currently this controls writing context of the allocation info records,
-// which are larger and more expensive, but we should do this for the callsite
-// records as well.
-// FIXME: Convert to a const once this has undergone more sigificant testing.
-static cl::opt<bool>
-    CombinedIndexMemProfContext("combined-index-memprof-context", cl::Hidden,
-#ifdef NDEBUG
-                                cl::init(false),
-#else
-                                cl::init(true),
-#endif
-                                cl::desc(""));
+static bool isIndexThresholdSpecified(const Module &M) {
+  auto *V =
+      clv2::getView<&clv2::BitcodeOptsReg>(M.getContext().getOptionsContext());
+  return V && V->specified<&clv2::BC_MDIndexThreshold>();
+}
 
-static cl::opt<bool> PreserveBitcodeUseListOrder(
-    "preserve-bc-uselistorder", cl::Hidden, cl::init(true),
-    cl::desc("Preserve use-list order when writing LLVM bitcode."));
+static uint32_t getFlushThreshold(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::BC_FlushThreshold>(
+      M.getContext().getOptionsContext());
+}
+
+// getCombinedIndexMemProfContextEnabled() is defined in BitcodeOptions.cpp
+// (LLVMBitcodeReader) and declared in BitcodeWriter.h.
+
+static bool getPreserveBitcodeUseListOrder(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::BC_PreserveBCUseListOrder>(
+      M.getContext().getOptionsContext());
+}
+
+static bool isPreserveBCUseListOrderSpecified(const Module &M) {
+  auto *V =
+      clv2::getView<&clv2::BitcodeOptsReg>(M.getContext().getOptionsContext());
+  return V && V->specified<&clv2::BC_PreserveBCUseListOrder>();
+}
 
 namespace llvm {
 extern FunctionSummary::ForceSummaryHotnessType ForceSummaryEdgesCold;
@@ -210,18 +213,24 @@ protected:
   /// backpatched with the offset of the actual VST.
   uint64_t VSTOffsetPlaceholder = 0;
 
+  /// Number of non-MDString metadata nodes above which we emit an index.
+  unsigned MDIndexThreshold = 25;
+
 public:
   /// Constructs a ModuleBitcodeWriterBase object for the given Module,
   /// writing to the provided \p Buffer.
   ModuleBitcodeWriterBase(const Module &M, StringTableBuilder &StrtabBuilder,
                           BitstreamWriter &Stream,
                           bool ShouldPreserveUseListOrder,
-                          const ModuleSummaryIndex *Index)
+                          const ModuleSummaryIndex *Index,
+                          unsigned MDIndexThreshold = 25)
       : BitcodeWriterBase(Stream, StrtabBuilder), M(M),
-        VE(M, PreserveBitcodeUseListOrder.getNumOccurrences()
-                  ? PreserveBitcodeUseListOrder
+        VE(M, isPreserveBCUseListOrderSpecified(M)
+                  ? getPreserveBitcodeUseListOrder(M)
                   : ShouldPreserveUseListOrder),
-        Index(Index) {
+        Index(Index),
+        MDIndexThreshold(isIndexThresholdSpecified(M) ? getIndexThreshold(M)
+                                                      : MDIndexThreshold) {
     // Assign ValueIds to any callee values in the index that came from
     // indirect call profiles and were recorded as a GUID not a Value*
     // (which would have been assigned an ID by the ValueEnumerator).
@@ -313,9 +322,11 @@ public:
   ModuleBitcodeWriter(const Module &M, StringTableBuilder &StrtabBuilder,
                       BitstreamWriter &Stream, bool ShouldPreserveUseListOrder,
                       const ModuleSummaryIndex *Index, bool GenerateHash,
-                      ModuleHash *ModHash = nullptr)
+                      ModuleHash *ModHash = nullptr,
+                      unsigned MDIndexThreshold = 25)
       : ModuleBitcodeWriterBase(M, StrtabBuilder, Stream,
-                                ShouldPreserveUseListOrder, Index),
+                                ShouldPreserveUseListOrder, Index,
+                                MDIndexThreshold),
         GenerateHash(GenerateHash), ModHash(ModHash),
         BitcodeStartBit(Stream.GetCurrentBitNo()) {}
 
@@ -497,6 +508,9 @@ class IndexBitcodeWriter : public BitcodeWriterBase {
   /// an id assigned for use in summary references to the module path.
   DenseMap<StringRef, uint64_t> ModuleIdMap;
 
+  /// Options for this write; the memprof record shapes depend on it.
+  const clv2::OptionsContext &OptsCtx;
+
 public:
   /// Constructs a IndexBitcodeWriter object for the given combined index,
   /// writing to the provided \p Buffer. When writing a subset of the index
@@ -506,12 +520,12 @@ public:
   /// declaration (but not definition) for each module.
   IndexBitcodeWriter(
       BitstreamWriter &Stream, StringTableBuilder &StrtabBuilder,
-      const ModuleSummaryIndex &Index,
+      const ModuleSummaryIndex &Index, const clv2::OptionsContext &OptsCtx,
       const GVSummaryPtrSet *DecSummaries = nullptr,
       const ModuleToSummariesForIndexTy *ModuleToSummariesForIndex = nullptr)
       : BitcodeWriterBase(Stream, StrtabBuilder), Index(Index),
         DecSummaries(DecSummaries),
-        ModuleToSummariesForIndex(ModuleToSummariesForIndex) {
+        ModuleToSummariesForIndex(ModuleToSummariesForIndex), OptsCtx(OptsCtx) {
 
     // See if the StackIdIndex was already added to the StackId map and
     // vector. If not, record it.
@@ -560,7 +574,7 @@ public:
         for (auto Idx : CI.StackIdIndices)
           RecordStackIdReference(Idx);
       }
-      if (CombinedIndexMemProfContext) {
+      if (getCombinedIndexMemProfContextEnabled(OptsCtx)) {
         for (auto &AI : FS->allocs())
           for (auto &MIB : AI.MIBs)
             for (auto Idx : MIB.StackIdIndices)
@@ -2694,7 +2708,7 @@ void ModuleBitcodeWriter::writeModuleMetadata() {
 
   // We only emit an index for the metadata record if we have more than a given
   // (naive) threshold of metadatas, otherwise it is not worth it.
-  if (VE.getNonMDStrings().size() > IndexThreshold) {
+  if (VE.getNonMDStrings().size() > MDIndexThreshold) {
     // Write a placeholder value in for the offset of the metadata index,
     // which is written after the records, so that it can include
     // the offset of each entry. The placeholder offset will be
@@ -2715,7 +2729,7 @@ void ModuleBitcodeWriter::writeModuleMetadata() {
   // Write all the records
   writeMetadataRecords(VE.getNonMDStrings(), Record, &MDAbbrevs, &IndexPos);
 
-  if (VE.getNonMDStrings().size() > IndexThreshold) {
+  if (VE.getNonMDStrings().size() > MDIndexThreshold) {
     // Now that we have emitted all the records we will emit the index. But
     // first
     // backpatch the forward reference so that the reader can skip the records
@@ -4596,7 +4610,7 @@ static void writeFunctionHeapProfileRecords(
     std::function<unsigned(unsigned)> GetStackIndex,
     bool WriteContextSizeInfoIndex,
     DenseMap<CallStackId, LinearCallStackId> &CallStackPos,
-    CallStackId &CallStackCount) {
+    CallStackId &CallStackCount, bool CombinedIndexMemProfContext) {
   SmallVector<uint64_t> Record;
 
   for (auto &CI : FS->callsites()) {
@@ -4630,7 +4644,7 @@ static void writeFunctionHeapProfileRecords(
       Record.push_back((uint8_t)MIB.AllocType);
       // The per-module summary always needs to include the alloc context, as we
       // use it during the thin link. For the combined index it is optional (see
-      // comments where CombinedIndexMemProfContext is defined).
+      // comments where getCombinedIndexMemProfContextEnabled() is defined).
       if (PerModule || CombinedIndexMemProfContext) {
         // Record the index into the radix tree array for this context.
         assert(CallStackCount <= CallStackPos.size());
@@ -4718,7 +4732,9 @@ void ModuleBitcodeWriterBase::writePerModuleFunctionSummaryRecord(
       /*PerModule*/ true,
       /*GetValueId*/ [&](const ValueInfo &VI) { return getValueId(VI); },
       /*GetStackIndex*/ [&](unsigned I) { return I; },
-      /*WriteContextSizeInfoIndex*/ true, CallStackPos, CallStackCount);
+      /*WriteContextSizeInfoIndex*/ true, CallStackPos, CallStackCount,
+      getCombinedIndexMemProfContextEnabled(
+          M.getContext().getOptionsContext()));
 }
 
 // Collect the global value references in the given variable's initializer,
@@ -4837,7 +4853,8 @@ void ModuleBitcodeWriterBase::writePerModuleGlobalValueSummary() {
   }
 
   unsigned ContextIdAbbvId = 0;
-  if (metadataMayIncludeContextSizeInfo()) {
+  const auto &OptsCtx = M.getContext().getOptionsContext();
+  if (metadataMayIncludeContextSizeInfo(OptsCtx)) {
     // n x context id
     auto ContextIdAbbv = std::make_shared<BitCodeAbbrev>();
     ContextIdAbbv->Add(BitCodeAbbrevOp(bitc::FS_ALLOC_CONTEXT_IDS));
@@ -4847,7 +4864,7 @@ void ModuleBitcodeWriterBase::writePerModuleGlobalValueSummary() {
     // are emitting them for all MIBs. Otherwise we use VBR to better compress 0
     // values that are expected to more frequently occur in an alloc's memprof
     // summary.
-    if (metadataIncludesAllContextSizeInfo())
+    if (metadataIncludesAllContextSizeInfo(OptsCtx))
       ContextIdAbbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 32));
     else
       ContextIdAbbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 8));
@@ -5159,7 +5176,7 @@ void IndexBitcodeWriter::writeCombinedGlobalValueSummary() {
   unsigned CallsiteAbbrev = Stream.EmitAbbrev(std::move(Abbv));
 
   Abbv = std::make_shared<BitCodeAbbrev>();
-  Abbv->Add(BitCodeAbbrevOp(CombinedIndexMemProfContext
+  Abbv->Add(BitCodeAbbrevOp(getCombinedIndexMemProfContextEnabled(OptsCtx)
                                 ? bitc::FS_COMBINED_ALLOC_INFO
                                 : bitc::FS_COMBINED_ALLOC_INFO_NO_CONTEXT));
   Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 4)); // nummib
@@ -5208,7 +5225,7 @@ void IndexBitcodeWriter::writeCombinedGlobalValueSummary() {
   };
 
   DenseMap<CallStackId, LinearCallStackId> CallStackPos;
-  if (CombinedIndexMemProfContext) {
+  if (getCombinedIndexMemProfContextEnabled(OptsCtx)) {
     Abbv = std::make_shared<BitCodeAbbrev>();
     Abbv->Add(BitCodeAbbrevOp(bitc::FS_CONTEXT_RADIX_TREE_ARRAY));
     // n x entry
@@ -5254,7 +5271,7 @@ void IndexBitcodeWriter::writeCombinedGlobalValueSummary() {
   }
 
   // Keep track of the current index into the CallStackPos map. Not used if
-  // CombinedIndexMemProfContext is false.
+  // getCombinedIndexMemProfContextEnabled() is false.
   CallStackId CallStackCount = 0;
 
   DenseSet<GlobalValue::GUID> DefOrUseGUIDs;
@@ -5382,7 +5399,8 @@ void IndexBitcodeWriter::writeCombinedGlobalValueSummary() {
           assert(StackIdIndicesToIndex.contains(I));
           return StackIdIndicesToIndex[I];
         },
-        /*WriteContextSizeInfoIndex*/ false, CallStackPos, CallStackCount);
+        /*WriteContextSizeInfoIndex*/ false, CallStackPos, CallStackCount,
+        getCombinedIndexMemProfContextEnabled(OptsCtx));
 
     MaybeEmitOriginalName(*S);
   });
@@ -5644,8 +5662,8 @@ BitcodeWriter::BitcodeWriter(SmallVectorImpl<char> &Buffer)
   writeBitcodeHeader(*Stream);
 }
 
-BitcodeWriter::BitcodeWriter(raw_ostream &FS)
-    : Stream(new BitstreamWriter(FS, FlushThreshold)) {
+BitcodeWriter::BitcodeWriter(raw_ostream &FS, const Module &M)
+    : Stream(new BitstreamWriter(FS, getFlushThreshold(M))) {
   writeBitcodeHeader(*Stream);
 }
 
@@ -5718,7 +5736,8 @@ void BitcodeWriter::copyStrtab(StringRef Strtab) {
 void BitcodeWriter::writeModule(const Module &M,
                                 bool ShouldPreserveUseListOrder,
                                 const ModuleSummaryIndex *Index,
-                                bool GenerateHash, ModuleHash *ModHash) {
+                                bool GenerateHash, ModuleHash *ModHash,
+                                unsigned MDIndexThreshold) {
   assert(!WroteStrtab);
 
   // The Mods vector is used by irsymtab::build, which requires non-const
@@ -5730,16 +5749,16 @@ void BitcodeWriter::writeModule(const Module &M,
 
   ModuleBitcodeWriter ModuleWriter(M, StrtabBuilder, *Stream,
                                    ShouldPreserveUseListOrder, Index,
-                                   GenerateHash, ModHash);
+                                   GenerateHash, ModHash, MDIndexThreshold);
   ModuleWriter.write();
 }
 
 void BitcodeWriter::writeIndex(
     const ModuleSummaryIndex *Index,
     const ModuleToSummariesForIndexTy *ModuleToSummariesForIndex,
-    const GVSummaryPtrSet *DecSummaries) {
-  IndexBitcodeWriter IndexWriter(*Stream, StrtabBuilder, *Index, DecSummaries,
-                                 ModuleToSummariesForIndex);
+    const GVSummaryPtrSet *DecSummaries, const clv2::OptionsContext &OptsCtx) {
+  IndexBitcodeWriter IndexWriter(*Stream, StrtabBuilder, *Index, OptsCtx,
+                                 DecSummaries, ModuleToSummariesForIndex);
   IndexWriter.write();
 }
 
@@ -5747,10 +5766,11 @@ void BitcodeWriter::writeIndex(
 void llvm::WriteBitcodeToFile(const Module &M, raw_ostream &Out,
                               bool ShouldPreserveUseListOrder,
                               const ModuleSummaryIndex *Index,
-                              bool GenerateHash, ModuleHash *ModHash) {
+                              bool GenerateHash, ModuleHash *ModHash,
+                              unsigned MDIndexThreshold) {
   auto Write = [&](BitcodeWriter &Writer) {
     Writer.writeModule(M, ShouldPreserveUseListOrder, Index, GenerateHash,
-                       ModHash);
+                       ModHash, MDIndexThreshold);
     Writer.writeSymtab();
     Writer.writeStrtab();
   };
@@ -5768,7 +5788,7 @@ void llvm::WriteBitcodeToFile(const Module &M, raw_ostream &Out,
     emitDarwinBCHeaderAndTrailer(Buffer, TT);
     Out.write(Buffer.data(), Buffer.size());
   } else {
-    BitcodeWriter Writer(Out);
+    BitcodeWriter Writer(Out, M);
     Write(Writer);
   }
 }
@@ -5793,13 +5813,14 @@ void IndexBitcodeWriter::write() {
 // index for a distributed backend, provide a \p ModuleToSummariesForIndex map.
 void llvm::writeIndexToFile(
     const ModuleSummaryIndex &Index, raw_ostream &Out,
+    const clv2::OptionsContext &OptsCtx,
     const ModuleToSummariesForIndexTy *ModuleToSummariesForIndex,
     const GVSummaryPtrSet *DecSummaries) {
   SmallVector<char, 0> Buffer;
   Buffer.reserve(256 * 1024);
 
   BitcodeWriter Writer(Buffer);
-  Writer.writeIndex(&Index, ModuleToSummariesForIndex, DecSummaries);
+  Writer.writeIndex(&Index, ModuleToSummariesForIndex, DecSummaries, OptsCtx);
   Writer.writeStrtab();
 
   Out.write((char *)&Buffer.front(), Buffer.size());

@@ -22,6 +22,7 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/DerivedUser.h"
 #include "llvm/IR/GetElementPtrTypeIterator.h"
+#include "llvm/IR/IROptionsOptInfos.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
@@ -30,16 +31,18 @@
 #include "llvm/IR/TypedPointerType.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/IR/ValueSymbolTable.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 
 using namespace llvm;
 
-static cl::opt<bool> UseDerefAtPointSemantics(
-    "use-dereferenceable-at-point-semantics", cl::Hidden, cl::init(true),
-    cl::desc("Deref attributes and metadata infer facts at definition only"));
+static bool UseDerefAtPointSemantics = true;
+static bool getUseDerefAtPointSemantics(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::IR_UseDerefAtPointSemantics>(
+      F.getContext().getOptionsContext());
+}
 
 //===----------------------------------------------------------------------===//
 //                                Value Class
@@ -991,7 +994,10 @@ uint64_t Value::getPointerDereferenceableBytes(const DataLayout &DL,
     // Call canBeFreed() only if there are dereferenceable bytes and it's not
     // one of the cases that can never be freed.
     if (!CanNotBeFreed && DerefBytes != 0)
-      *CanBeFreed = UseDerefAtPointSemantics && canBeFreed();
+      *CanBeFreed =
+          clv2::getOptValOrDefault<&clv2::IR_UseDerefAtPointSemantics>(
+              getContext().getOptionsContext()) &&
+          canBeFreed();
     else
       *CanBeFreed = false;
   }

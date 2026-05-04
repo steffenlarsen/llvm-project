@@ -11,11 +11,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/Support/SCEVAffinator.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopInfo.h"
 #include "polly/Support/GICHelper.h"
 #include "polly/Support/SCEVValidator.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "isl/aff.h"
 #include "isl/local_space.h"
 #include "isl/set.h"
@@ -24,12 +25,13 @@
 using namespace llvm;
 using namespace polly;
 
-static cl::opt<bool> IgnoreIntegerWrapping(
-    "polly-ignore-integer-wrapping",
-    cl::desc("Do not build run-time checks to proof absence of integer "
-             "wrapping"),
-    cl::Hidden, cl::cat(PollyCategory));
-
+static bool getIgnoreIntegerWrapping(const Scop *S) {
+  if (S)
+    if (auto *Opts = polly_opts::getPollyOpts(
+            S->getFunction().getContext().getOptionsContext()))
+      return Opts->get<&llvm::clv2::POLLY_IgnoreIntegerWrapping>();
+  return false;
+}
 // The maximal number of basic sets we allow during the construction of a
 // piecewise affine function. More complex ones will result in very high
 // compile time.
@@ -139,7 +141,7 @@ PWACtx SCEVAffinator::checkForWrapping(const SCEV *Expr, PWACtx PWAC) const {
   // whereas n is the number of bits of the Expr, hence:
   //   n = bitwidth(ExprType)
 
-  if (IgnoreIntegerWrapping || any(getNoWrapFlags(Expr) & SCEV::FlagNSW))
+  if (getIgnoreIntegerWrapping(S) || any(getNoWrapFlags(Expr) & SCEV::FlagNSW))
     return PWAC;
 
   isl::pw_aff PWAMod = addModuloSemantic(PWAC.first, Expr->getType());

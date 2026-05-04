@@ -13,6 +13,7 @@
 #include "llvm/ProfileData/PGOCtxProfWriter.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Testing/Support/SupportHelpers.h"
 #include "gtest/gtest.h"
@@ -100,7 +101,8 @@ TEST_F(PGOCtxProfRWTest, RoundTrip) {
     raw_fd_stream Out(ProfileFile.path(), EC);
     ASSERT_FALSE(EC);
     {
-      PGOCtxProfileWriter Writer(Out);
+      PGOCtxProfileWriter Writer(Out, std::nullopt, false,
+                                 llvm::clv2::defaultOptionsContext());
       Writer.startContextSection();
       for (auto &[_, R] : roots())
         Writer.writeContextual(*R, nullptr, 1);
@@ -153,7 +155,8 @@ TEST_F(PGOCtxProfRWTest, InvalidCounters) {
     raw_fd_stream Out(ProfileFile.path(), EC);
     ASSERT_FALSE(EC);
     {
-      PGOCtxProfileWriter Writer(Out);
+      PGOCtxProfileWriter Writer(Out, std::nullopt, false,
+                                 llvm::clv2::defaultOptionsContext());
       Writer.startContextSection();
       Writer.writeContextual(*R, nullptr, 2);
       Writer.endContextSection();
@@ -179,7 +182,8 @@ TEST_F(PGOCtxProfRWTest, CountersAllZero) {
     raw_fd_stream Out(ProfileFile.path(), EC);
     ASSERT_FALSE(EC);
     {
-      PGOCtxProfileWriter Writer(Out);
+      PGOCtxProfileWriter Writer(Out, std::nullopt, false,
+                                 llvm::clv2::defaultOptionsContext());
       Writer.startContextSection();
       Writer.writeContextual(*R, nullptr, 42);
       Writer.endContextSection();
@@ -206,7 +210,8 @@ TEST_F(PGOCtxProfRWTest, CountersAllZeroWithOverride) {
     ASSERT_FALSE(EC);
     {
       PGOCtxProfileWriter Writer(Out, /*VersionOverride=*/std::nullopt,
-                                 /*IncludeEmpty=*/true);
+                                 /*IncludeEmpty=*/true,
+                                 /*Ctx=*/llvm::clv2::defaultOptionsContext());
       Writer.startContextSection();
       Writer.writeContextual(*R, nullptr, 8);
       Writer.endContextSection();
@@ -245,7 +250,8 @@ TEST_F(PGOCtxProfRWTest, ValidButEmpty) {
     raw_fd_stream Out(ProfileFile.path(), EC);
     ASSERT_FALSE(EC);
     {
-      PGOCtxProfileWriter Writer(Out);
+      PGOCtxProfileWriter Writer(Out, std::nullopt, false,
+                                 llvm::clv2::defaultOptionsContext());
       // don't write anything - this will just produce the metadata subblock.
     }
   }
@@ -268,7 +274,8 @@ TEST_F(PGOCtxProfRWTest, WrongVersion) {
     raw_fd_stream Out(ProfileFile.path(), EC);
     ASSERT_FALSE(EC);
     {
-      PGOCtxProfileWriter Writer(Out, PGOCtxProfileWriter::CurrentVersion + 1);
+      PGOCtxProfileWriter Writer(Out, PGOCtxProfileWriter::CurrentVersion + 1,
+                                 false, llvm::clv2::defaultOptionsContext());
     }
   }
   {
@@ -291,7 +298,8 @@ TEST_F(PGOCtxProfRWTest, DuplicateRoots) {
     ASSERT_FALSE(EC);
     {
       PGOCtxProfileWriter Writer(Out, /*VersionOverride=*/std::nullopt,
-                                 /*IncludeEmpty=*/true);
+                                 /*IncludeEmpty=*/true,
+                                 /*Ctx=*/llvm::clv2::defaultOptionsContext());
       Writer.startContextSection();
       Writer.writeContextual(*createNode(1, 1, 1), nullptr, 1);
       Writer.writeContextual(*createNode(1, 1, 1), nullptr, 1);
@@ -320,7 +328,8 @@ TEST_F(PGOCtxProfRWTest, DuplicateTargets) {
       auto *L1 = createNode(2, 1, 0);
       auto *L2 = createNode(2, 1, 0, L1);
       R->subContexts()[0] = L2;
-      PGOCtxProfileWriter Writer(Out);
+      PGOCtxProfileWriter Writer(Out, std::nullopt, false,
+                                 llvm::clv2::defaultOptionsContext());
       Writer.startContextSection();
       Writer.writeContextual(*R, nullptr, 1);
       Writer.endContextSection();

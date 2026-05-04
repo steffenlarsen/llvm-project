@@ -1,8 +1,11 @@
 add_llvm_component_library(LLVMFrontendOpenMP
+  OpenMPOptionsGetters.cpp
+  OpenMPOptionsRegistration.cpp
   OMP.cpp
   OMPContext.cpp
   OMPDescriptors.cpp
   OMPIRBuilder.cpp
+  OpenMPOptions.cpp
   DirectiveNameParser.cpp
 
   ADDITIONAL_HEADER_DIRS

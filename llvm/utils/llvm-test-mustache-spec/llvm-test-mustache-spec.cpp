@@ -25,11 +25,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/StringSet.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Mustache.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include <string>
 
@@ -39,14 +40,19 @@ using namespace llvm::mustache;
 
 #define DEBUG_TYPE "llvm-test-mustache-spec"
 
-static cl::OptionCategory Cat("llvm-test-mustache-spec Options");
+inline constexpr clv2::OptionCategory MustacheSpecCat{
+    "llvm-test-mustache-spec Options"};
 
-static cl::list<std::string>
-    InputFiles(cl::Positional, cl::desc("<input files>"), cl::OneOrMore);
+inline constexpr clv2::ListOptionInfo<std::string> InputFilesOpt{
+    "", "<input files>", clv2::Positional{}, clv2::OneOrMore};
 
-static cl::opt<bool> ReportErrors("report-errors",
-                                  cl::desc("Report errors in spec tests"),
-                                  cl::cat(Cat));
+inline constexpr clv2::OptionInfo<bool> ReportErrorsOpt{
+    "report-errors", "Report errors in spec tests", clv2::cat(MustacheSpecCat)};
+
+static constexpr clv2::OptionsRegistry<&InputFilesOpt, &ReportErrorsOpt>
+    MustacheReg;
+
+static bool ReportErrorsVal;
 
 static ExitOnError ExitOnErr;
 
@@ -155,7 +161,7 @@ static void reportTestFailure(const TestData &TD, StringRef ActualStr,
   LLVM_DEBUG(TD.Data->print(dbgs()));
   LLVM_DEBUG(dbgs() << "\n");
   outs() << formatv("Test {}: {}\n", (IsXFail ? "XFailed" : "Failed"), TD.Name);
-  if (ReportErrors) {
+  if (ReportErrorsVal) {
     outs() << "  Expected: \'" << TD.ExpectedStr << "\'\n"
            << "  Actual: \'" << ActualStr << "\'\n"
            << " ====================\n";
@@ -235,8 +241,12 @@ static void runTest(StringRef InputFile) {
 
 int main(int argc, char **argv) {
   ExitOnErr.setBanner(std::string(argv[0]) + " error: ");
-  cl::ParseCommandLineOptions(argc, argv);
-  for (const auto &FileName : InputFiles)
+  clv2::OptionParser P;
+  P.add<&MustacheReg>();
+  auto OptsCtx = P.parse(argc, argv);
+  auto *Opts = OptsCtx->getViewPtr<&MustacheReg>();
+  ReportErrorsVal = Opts->get<&ReportErrorsOpt>();
+  for (const auto &FileName : Opts->get<&InputFilesOpt>())
     runTest(FileName);
   return 0;
 }

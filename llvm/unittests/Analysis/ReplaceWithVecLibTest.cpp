@@ -12,6 +12,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SourceMgr.h"
 #include "gtest/gtest.h"
 
@@ -47,7 +48,7 @@ class ReplaceWithVecLibTest : public ::testing::Test {
   }
 
 protected:
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   /// Creates TLII using the given \p VD, and then runs the ReplaceWithVeclib
   /// pass. The pass should not crash even when the replacement function
@@ -68,7 +69,7 @@ protected:
     FunctionPassManager FPM;
     FPM.addPass(ReplaceWithVeclib());
     std::unique_ptr<Module> M = parseIR(Ctx, IR);
-    PassBuilder PB;
+    PassBuilder PB(llvm::clv2::defaultOptionsContext());
     PB.registerFunctionAnalyses(FAM);
 
     // Enable debugging and capture std error
@@ -95,9 +96,9 @@ declare <vscale x 4 x float> @llvm.powi.f32.i32(<vscale x 4 x float>, i32) #0
 // The VFABI prefix in TLI describes signature which is matching the powi
 // intrinsic declaration.
 TEST_F(ReplaceWithVecLibTest, TestValidMapping) {
-  VecDesc CorrectVD = {"llvm.powi.f32.i32", "_ZGVsMxvu_powi",
-                       ElementCount::getScalable(4), /*Masked*/ true,
-                       "_ZGVsMxvu", /* CC = */ std::nullopt};
+  VecDesc CorrectVD = {
+      "llvm.powi.f32.i32", "_ZGVsMxvu_powi", ElementCount::getScalable(4),
+      /*Masked*/ true,     "_ZGVsMxvu",      /* CC = */ std::nullopt};
   EXPECT_EQ(run(CorrectVD, IR),
             "Intrinsic calls replaced with vector libraries: 1");
 }
@@ -105,9 +106,9 @@ TEST_F(ReplaceWithVecLibTest, TestValidMapping) {
 // The VFABI prefix in TLI describes signature which is not matching the powi
 // intrinsic declaration.
 TEST_F(ReplaceWithVecLibTest, TestInvalidMapping) {
-  VecDesc IncorrectVD = {"llvm.powi.f32.i32", "_ZGVsMxvv_powi",
-                         ElementCount::getScalable(4), /*Masked*/ true,
-                         "_ZGVsMxvv", /* CC = */ std::nullopt};
+  VecDesc IncorrectVD = {
+      "llvm.powi.f32.i32", "_ZGVsMxvv_powi", ElementCount::getScalable(4),
+      /*Masked*/ true,     "_ZGVsMxvv",      /* CC = */ std::nullopt};
   EXPECT_EQ(run(IncorrectVD, IR),
             "replace-with-veclib: Will not replace: llvm.powi.f32.i32. Wrong "
             "type at index 1: i32");

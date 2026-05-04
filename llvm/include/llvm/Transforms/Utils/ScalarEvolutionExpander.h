@@ -23,12 +23,16 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/ValueHandle.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/InstructionCost.h"
 
 namespace llvm {
-LLVM_ABI extern cl::opt<unsigned> SCEVCheapExpansionBudget;
+
+namespace clv2 {
+class OptionsContext;
+}
+
+LLVM_ABI unsigned getSCEVCheapExpansionBudget(const clv2::OptionsContext &Ctx);
 
 /// struct for holding enough information to help calculate the cost of the
 /// given SCEV when expanded into IR.

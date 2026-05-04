@@ -18,6 +18,8 @@
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/M68k/M68kOptionsOptInfos.h"
 
 #include <sstream>
 
@@ -25,10 +27,11 @@
 
 using namespace llvm;
 
-static cl::opt<bool> RegisterPrefixOptional(
-    "m68k-register-prefix-optional", cl::Hidden,
-    cl::desc("Enable specifying registers without the % prefix"),
-    cl::init(false));
+static bool RegisterPrefixOptional = false;
+
+static bool getRegisterPrefixOptional(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::M68K_RegisterPrefixOptional>(Ctx);
+}
 
 namespace {
 /// Parses M68k assembly from a stream.
@@ -237,6 +240,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeM68kAsmParser() {
 #define GET_REGISTER_MATCHER
 #define GET_MATCHER_IMPLEMENTATION
 #include "M68kGenAsmMatcher.inc"
+#include "llvm/Support/CommandLineV2.h"
 
 static inline unsigned getRegisterByIndex(unsigned RegisterIndex) {
   static unsigned RegistersByIndex[] = {
@@ -747,7 +751,7 @@ ParseStatus M68kAsmParser::parseRegister(MCRegister &RegNo,
   if (getTok().is(AsmToken::Percent)) {
     HasPercent = true;
     PercentToken = Lex();
-  } else if (!RegisterPrefixOptional.getValue()) {
+  } else if (!getRegisterPrefixOptional(getContext().getOptionsContext())) {
     return ParseStatus::NoMatch;
   }
 

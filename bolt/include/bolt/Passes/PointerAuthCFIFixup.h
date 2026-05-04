@@ -19,7 +19,7 @@ namespace bolt {
 
 class PointerAuthCFIFixup : public BinaryFunctionPass {
 public:
-  explicit PointerAuthCFIFixup(const cl::opt<bool> &PrintPass)
+  explicit PointerAuthCFIFixup(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "pointer-auth-cfi-fixup"; }

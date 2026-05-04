@@ -30,6 +30,7 @@
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/StackLifetime.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
@@ -57,8 +58,10 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -86,15 +89,14 @@ STATISTIC(NumUnsafeDynamicAllocas, "Number of unsafe dynamic allocas");
 STATISTIC(NumUnsafeByValArguments, "Number of unsafe byval arguments");
 STATISTIC(NumUnsafeStackRestorePoints, "Number of setjmps and landingpads");
 
-/// Use __safestack_pointer_address even if the platform has a faster way of
-/// access safe stack pointer.
-static cl::opt<bool>
-    SafeStackUsePointerAddress("safestack-use-pointer-address",
-                                  cl::init(false), cl::Hidden);
+static bool getSafestackUsePointerAddress(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_SafestackUsePointerAddress>(
+      Ctx);
+}
 
-static cl::opt<bool> ClColoring("safe-stack-coloring",
-                                cl::desc("enable safe stack coloring"),
-                                cl::Hidden, cl::init(true));
+static bool getSafeStackColoring(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_SafeStackColoring>(Ctx);
+}
 
 namespace {
 
@@ -508,7 +510,7 @@ Value *SafeStack::moveStaticAllocasToUnsafeStack(
 
   StackLifetime SSC(F, StaticAllocas, StackLifetime::LivenessType::May);
   static const StackLifetime::LiveRange NoColoringRange(1, true);
-  if (ClColoring)
+  if (getSafeStackColoring(F.getContext().getOptionsContext()))
     SSC.run();
 
   for (const auto *I : SSC.getMarkers()) {
@@ -520,7 +522,7 @@ Value *SafeStack::moveStaticAllocasToUnsafeStack(
   }
 
   // Unsafe stack always grows down.
-  StackLayout SSL(StackAlignment);
+  StackLayout SSL(StackAlignment, F.getContext().getOptionsContext());
   if (StackGuardSlot) {
     SSL.addObject(StackGuardSlot, getStaticAllocaAllocationSize(StackGuardSlot),
                   StackGuardSlot->getAlign(), SSC.getFullLiveRange());
@@ -545,7 +547,9 @@ Value *SafeStack::moveStaticAllocasToUnsafeStack(
       Size = 1; // Don't create zero-sized stack objects.
 
     SSL.addObject(AI, Size, AI->getAlign(),
-                  ClColoring ? SSC.getLiveRange(AI) : NoColoringRange);
+                  getSafeStackColoring(F.getContext().getOptionsContext())
+                      ? SSC.getLiveRange(AI)
+                      : NoColoringRange);
   }
 
   SSL.computeLayout();
@@ -793,7 +797,7 @@ bool SafeStack::run() {
   if (DISubprogram *SP = F.getSubprogram())
     IRB.SetCurrentDebugLocation(
         DILocation::get(SP->getContext(), SP->getScopeLine(), 0, SP));
-  if (SafeStackUsePointerAddress) {
+  if (getSafestackUsePointerAddress(F.getContext().getOptionsContext())) {
     // FIXME: A more correct implementation of SafeStackUsePointerAddress would
     // change the libcall availability in RuntimeLibcallsInfo
     StringRef SafestackPointerAddressName =

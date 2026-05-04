@@ -10,24 +10,23 @@
 /// common to flang and the test tools.
 
 #include "flang/Optimizer/Passes/Pipelines.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Optimizer/Builder/MIFCommon.h"
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/OpenACC/Passes.h"
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/LLVMIR/Transforms/Passes.h"
 #include "mlir/Dialect/OpenMP/Transforms/Passes.h"
-#include "llvm/Support/CommandLine.h"
 
-/// Force setting the no-alias attribute on fuction arguments when possible.
-static llvm::cl::opt<bool> forceNoAlias("force-no-alias", llvm::cl::Hidden,
-                                        llvm::cl::init(true));
-
-/// Disable the use of fake use for arguments.
-static llvm::cl::opt<bool> disableArgumentFakeUse("disable-argument-fake-use",
-                                                  llvm::cl::Hidden,
-                                                  llvm::cl::init(false));
 
 namespace fir {
+
+template <typename F>
+void addNestedPassToAllTopLevelOperationsConditionally(mlir::PassManager &pm,
+                                                       bool disabled, F ctor) {
+  if (!disabled)
+    addNestedPassToAllTopLevelOperations<F>(pm, ctor);
+}
 
 void addCanonicalizerPassWithoutRegionSimplification(mlir::OpPassManager &pm) {
   mlir::GreedyRewriteConfig config;
@@ -38,37 +37,49 @@ void addCanonicalizerPassWithoutRegionSimplification(mlir::OpPassManager &pm) {
 
 void addCfgConversionPass(mlir::PassManager &pm,
                           const MLIRToLLVMPassPipelineConfig &config) {
+  auto &optsCtx = pm.getContext()->getOptionsContext();
   fir::CFGConversionOptions options;
   if (!config.NSWOnLoopVarInc)
     options.setNSW = false;
+  bool disabled = llvm::flang_opts::getDisableCfgConversion(optsCtx);
   addNestedPassToAllTopLevelOperationsConditionally(
-      pm, disableCfgConversion, [&]() { return createCFGConversion(options); });
+      pm, disabled, [&]() { return createCFGConversion(options); });
 }
 
 void addMemoryAllocationOpt(mlir::PassManager &pm) {
-  addNestedPassConditionally<mlir::func::FuncOp>(pm, disableFirMao, [&]() {
-    return fir::createMemoryAllocationOpt(
-        {dynamicArrayStackToHeapAllocation, arrayStackAllocationThreshold});
+  auto &optsCtx = pm.getContext()->getOptionsContext();
+  bool disabled = llvm::flang_opts::getDisableMemoryAllocationOpt(optsCtx);
+  bool dynHeap = llvm::flang_opts::getFdynamicHeapArray(optsCtx);
+  std::size_t stackThreshold = llvm::flang_opts::getFstackArraySize(optsCtx);
+  addNestedPassConditionally<mlir::func::FuncOp>(pm, disabled, [&]() {
+    return fir::createMemoryAllocationOpt({dynHeap, stackThreshold});
   });
 }
 
 void addAllocationPlacement(mlir::PassManager &pm, bool stackArrays) {
+  auto &optsCtx = pm.getContext()->getOptionsContext();
   fir::AllocationPlacementOptions options;
   options.stackArrays = stackArrays;
-  options.smallArrayThresholdBytes = allocationPlacementSmallArraySize;
-  options.totalStackLimitBytes = allocationPlacementStackLimit;
+  options.smallArrayThresholdBytes =
+      llvm::flang_opts::getAllocationPlacementSmallArraySize(optsCtx);
+  options.totalStackLimitBytes =
+      llvm::flang_opts::getAllocationPlacementStackLimit(optsCtx);
   pm.addPass(fir::createAllocationPlacement(options));
 }
 
 void addCodeGenRewritePass(mlir::PassManager &pm, bool preserveDeclare) {
+  auto &optsCtx = pm.getContext()->getOptionsContext();
   fir::CodeGenRewriteOptions options;
   options.preserveDeclare = preserveDeclare;
-  addPassConditionally(pm, disableCodeGenRewrite,
+  bool disabled = llvm::flang_opts::getDisableCodegenRewrite(optsCtx);
+  addPassConditionally(pm, disabled,
                        [&]() { return fir::createCodeGenRewrite(options); });
 }
 
 void addTargetRewritePass(mlir::PassManager &pm) {
-  addPassConditionally(pm, disableTargetRewrite,
+  auto &optsCtx = pm.getContext()->getOptionsContext();
+  bool disabled = llvm::flang_opts::getDisableTargetRewrite(optsCtx);
+  addPassConditionally(pm, disabled,
                        []() { return fir::createTargetRewritePass(); });
 }
 
@@ -89,6 +100,8 @@ getEmissionKind(llvm::codegenoptions::DebugInfoKind kind) {
 void addDebugInfoPass(mlir::PassManager &pm,
                       const MLIRToLLVMPassPipelineConfig &config,
                       llvm::StringRef inputFilename) {
+  auto &optsCtx = pm.getContext()->getOptionsContext();
+  bool disableFakeUse = llvm::flang_opts::getDisableArgumentFakeUse(optsCtx);
   fir::AddDebugInfoOptions options;
   options.debugLevel = getEmissionKind(config.DebugInfo);
   options.isOptimized = config.OptLevel != llvm::OptimizationLevel::O0;
@@ -98,65 +111,89 @@ void addDebugInfoPass(mlir::PassManager &pm,
   options.splitDwarfFile = config.SplitDwarfFile;
   options.dwarfDebugFlags = config.DwarfDebugFlags;
   options.emitFakeUseForDebugVars =
-      (config.OptLevel == llvm::OptimizationLevel::O0) &&
-      !disableArgumentFakeUse;
-  addPassConditionally(pm, disableDebugInfo,
+      (config.OptLevel == llvm::OptimizationLevel::O0) && !disableFakeUse;
+  bool disabled = llvm::flang_opts::getDisableDebugInfo(optsCtx);
+  addPassConditionally(pm, disabled,
                        [&]() { return fir::createAddDebugInfoPass(options); });
 }
 
 fir::FIRToLLVMPassOptions
 getFIRToLLVMPassOptions(const MLIRToLLVMPassPipelineConfig &config) {
   fir::FIRToLLVMPassOptions options;
-  options.ignoreMissingTypeDescriptors = ignoreMissingTypeDescriptors;
-  options.skipExternalRttiDefinition = skipExternalRttiDefinition;
+  // These options are not context-dependent at this level; they are set
+  // from the pipeline config and will be resolved at pipeline build time
+  // via the PassManager's context.
   options.applyTBAA = config.AliasAnalysis;
-  options.forceUnifiedTBAATree = useOldAliasTags;
+  options.ComplexRange = config.ComplexRange;
+  return options;
+}
+
+fir::FIRToLLVMPassOptions
+getFIRToLLVMPassOptions(const MLIRToLLVMPassPipelineConfig &config,
+                        const llvm::clv2::OptionsContext &optsCtx) {
+  fir::FIRToLLVMPassOptions options;
+  options.ignoreMissingTypeDescriptors =
+      llvm::flang_opts::getIgnoreMissingTypeDesc(optsCtx);
+  options.skipExternalRttiDefinition =
+      llvm::flang_opts::getSkipExternalRttiDefinition(optsCtx);
+  options.applyTBAA = config.AliasAnalysis;
+  options.forceUnifiedTBAATree = llvm::flang_opts::getUseOldAliasTags(optsCtx);
   options.typeDescriptorsRenamedForAssembly =
-      !disableCompilerGeneratedNamesConversion;
+      !llvm::flang_opts::getDisableCompilerGeneratedNames(optsCtx);
   options.ComplexRange = config.ComplexRange;
   return options;
 }
 
 void addFIRToLLVMPass(mlir::PassManager &pm,
                       const MLIRToLLVMPassPipelineConfig &config) {
-  fir::FIRToLLVMPassOptions options = getFIRToLLVMPassOptions(config);
-  addPassConditionally(pm, disableFirToLlvmIr,
+  auto &optsCtx = pm.getContext()->getOptionsContext();
+  fir::FIRToLLVMPassOptions options = getFIRToLLVMPassOptions(config, optsCtx);
+  bool disabled = llvm::flang_opts::getDisableFirToLlvmir(optsCtx);
+  addPassConditionally(pm, disabled,
                        [&]() { return fir::createFIRToLLVMPass(options); });
   // The dialect conversion framework may leave dead unrealized_conversion_cast
   // ops behind, so run reconcile-unrealized-casts to clean them up.
-  addPassConditionally(pm, disableFirToLlvmIr, [&]() {
+  addPassConditionally(pm, disabled, [&]() {
     return mlir::createReconcileUnrealizedCastsPass();
   });
 }
 
 void addLLVMDialectToLLVMPass(mlir::PassManager &pm,
                               llvm::raw_ostream &output) {
-  addPassConditionally(pm, disableLlvmIrToLlvm, [&]() {
-    return fir::createLLVMDialectToLLVMPass(output);
-  });
+  auto &optsCtx = pm.getContext()->getOptionsContext();
+  bool disabled = llvm::flang_opts::getDisableLlvm(optsCtx);
+  addPassConditionally(
+      pm, disabled, [&]() { return fir::createLLVMDialectToLLVMPass(output); });
 }
 
 void addBoxedProcedurePass(mlir::PassManager &pm,
                            bool enableSafeTrampolineFromConfig) {
-  addPassConditionally(pm, disableBoxedProcedureRewrite, [&]() {
+  auto &optsCtx = pm.getContext()->getOptionsContext();
+  bool disabled = llvm::flang_opts::getDisableBoxedProcedureRewrite(optsCtx);
+  bool safeTrampolineOpt = llvm::flang_opts::getEnableSafeTrampoline(optsCtx);
+  addPassConditionally(pm, disabled, [&]() {
     fir::BoxedProcedurePassOptions opts;
     // Support both the frontend -fsafe-trampoline flag (via config)
     // and the cl::opt --safe-trampoline (for fir-opt/tco tools).
     opts.useSafeTrampoline =
-        enableSafeTrampolineFromConfig || enableSafeTrampoline;
+        enableSafeTrampolineFromConfig || safeTrampolineOpt;
     return fir::createBoxedProcedurePass(opts);
   });
 }
 
 void addExternalNameConversionPass(mlir::PassManager &pm,
                                    bool appendUnderscore) {
-  addPassConditionally(pm, disableExternalNameConversion, [&]() {
+  auto &optsCtx = pm.getContext()->getOptionsContext();
+  bool disabled = llvm::flang_opts::getDisableExternalNameInterop(optsCtx);
+  addPassConditionally(pm, disabled, [&]() {
     return fir::createExternalNameConversion({appendUnderscore});
   });
 }
 
 void addCompilerGeneratedNamesConversionPass(mlir::PassManager &pm) {
-  addPassConditionally(pm, disableCompilerGeneratedNamesConversion, [&]() {
+  auto &optsCtx = pm.getContext()->getOptionsContext();
+  bool disabled = llvm::flang_opts::getDisableCompilerGeneratedNames(optsCtx);
+  addPassConditionally(pm, disabled, [&]() {
     return fir::createCompilerGeneratedNamesConversion();
   });
 }
@@ -175,6 +212,8 @@ void registerDefaultInlinerPass(MLIRToLLVMPassPipelineConfig &config) {
 
 void createDefaultFIRPreCFGOptimizerPassPipeline(
     mlir::PassManager &pm, MLIRToLLVMPassPipelineConfig &pc) {
+  auto &optsCtx = pm.getContext()->getOptionsContext();
+
   // simplify the IR
   mlir::GreedyRewriteConfig config;
   config.setRegionSimplificationLevel(
@@ -188,7 +227,7 @@ void createDefaultFIRPreCFGOptimizerPassPipeline(
     // These passes may increase code size.
     pm.addPass(fir::createSimplifyIntrinsics());
     pm.addPass(fir::createAlgebraicSimplificationPass(config));
-    if (enableConstantArgumentGlobalisation)
+    if (llvm::flang_opts::getEnableConstantArgumentGlobalisation(optsCtx))
       pm.addPass(fir::createConstantArgumentGlobalisationOpt());
   }
 
@@ -204,7 +243,7 @@ void createDefaultFIRPreCFGOptimizerPassPipeline(
   pm.addPass(fir::createCudaHeapAllocPromotion(
       fir::CudaHeapAllocPromotionOptions{pc.StackArrays}));
 
-  if (enableAllocationPlacement)
+  if (llvm::flang_opts::getEnableAllocationPlacement(optsCtx))
     fir::addAllocationPlacement(pm, pc.StackArrays);
   else if (pc.StackArrays)
     pm.addPass(fir::createStackArrays());
@@ -218,7 +257,8 @@ void createDefaultFIRPreCFGOptimizerPassPipeline(
   pm.addPass(mlir::createCSEPass());
 
   // Run LICM after CSE, which may reduce the number of operations to hoist.
-  if (enableFirLICM && pc.OptLevel != llvm::OptimizationLevel::O0)
+  if (llvm::flang_opts::getEnableFirLicm(optsCtx) &&
+      pc.OptLevel != llvm::OptimizationLevel::O0)
     pm.addPass(fir::createLoopInvariantCodeMotion());
 
   // Polymorphic types
@@ -403,10 +443,13 @@ void createDebugPasses(mlir::PassManager &pm,
 void createDefaultFIRCodeGenPassPipeline(mlir::PassManager &pm,
                                          MLIRToLLVMPassPipelineConfig config,
                                          llvm::StringRef inputFilename) {
+  auto &optsCtx = pm.getContext()->getOptionsContext();
+
   pm.addPass(fir::createMIFOpConversion());
   fir::addBoxedProcedurePass(pm, config.EnableSafeTrampoline);
   if (config.OptLevel != llvm::OptimizationLevel::O0 && config.AliasAnalysis &&
-      !disableFirAliasTags && !useOldAliasTags)
+      !llvm::flang_opts::getDisableFirAliasTags(optsCtx) &&
+      !llvm::flang_opts::getUseOldAliasTags(optsCtx))
     pm.addPass(fir::createAddAliasTags());
   addNestedPassToAllTopLevelOperations<PassConstructor>(
       pm, fir::createAbstractResultOpt);
@@ -444,7 +487,7 @@ void createDefaultFIRCodeGenPassPipeline(mlir::PassManager &pm,
 
   // TODO: re-enable setNoAlias by default (when optimizing for speed) once
   // function specialization is fixed.
-  bool setNoAlias = forceNoAlias;
+  bool setNoAlias = llvm::flang_opts::getForceNoAlias(optsCtx);
   bool setNoCapture = config.OptLevel != llvm::OptimizationLevel::O0;
   bool setReadOnly = config.OptLevel != llvm::OptimizationLevel::O0;
 
@@ -504,6 +547,8 @@ void createMLIRToLLVMPassPipeline(mlir::PassManager &pm,
   if (config.EnableOpenACC)
     fir::acc::populateHLFIROpenACCPassPipeline(pm);
 
+  auto &optsCtx = pm.getContext()->getOptionsContext();
+
   fir::EnableOpenMP enableOpenMP = fir::EnableOpenMP::None;
   if (config.EnableOpenMP)
     enableOpenMP = fir::EnableOpenMP::Full;
@@ -519,7 +564,8 @@ void createMLIRToLLVMPassPipeline(mlir::PassManager &pm,
 
   // Run a pass to prepare for translation of delayed privatization in the
   // context of deferred target tasks.
-  addPassConditionally(pm, disableFirToLlvmIr, [&]() {
+  bool disabled = llvm::flang_opts::getDisableFirToLlvmir(optsCtx);
+  addPassConditionally(pm, disabled, [&]() {
     return mlir::omp::createPrepareForOMPOffloadPrivatizationPass();
   });
 }
@@ -530,6 +576,8 @@ void createMLIRToLLVMPassPipeline(mlir::PassManager &pm,
 /// that function creates the PassNameCLParser which snapshots the pass
 /// registry during initialization.
 void registerFlangPipelinePasses() {
+  llvm::clv2::registerDynamicRegistry<&llvm::clv2::FlangOptsReg>();
+
   // MLIR core passes used in the pipeline.
   mlir::registerCSEPass();
   mlir::registerCanonicalizerPass();

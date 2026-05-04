@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- GuardWidening.cpp - ---- Guard widening ----------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -53,7 +55,6 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/PatternMatch.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Transforms/Scalar.h"
@@ -69,11 +70,10 @@ STATISTIC(GuardsEliminated, "Number of eliminated guards");
 STATISTIC(CondBranchEliminated, "Number of eliminated conditional branches");
 STATISTIC(FreezeAdded, "Number of freeze instruction introduced");
 
-static cl::opt<bool>
-    WidenBranchGuards("guard-widening-widen-branch-guards", cl::Hidden,
-                      cl::desc("Whether or not we should widen guards  "
-                               "expressed as branches by widenable conditions"),
-                      cl::init(true));
+static bool getWidenBranchGuards(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_GuardWideningWidenBranchGuards>(
+      F.getContext().getOptionsContext());
+}
 
 // Get the condition of \p I. It can either be a guard or a conditional branch.
 static Value *getCondition(Instruction *I) {
@@ -333,7 +333,8 @@ public:
 static bool isSupportedGuardInstruction(const Instruction *Insn) {
   if (isGuard(Insn))
     return true;
-  if (WidenBranchGuards && isGuardAsWidenableBranch(Insn))
+  if (getWidenBranchGuards(*Insn->getFunction()) &&
+      isGuardAsWidenableBranch(Insn))
     return true;
   return false;
 }

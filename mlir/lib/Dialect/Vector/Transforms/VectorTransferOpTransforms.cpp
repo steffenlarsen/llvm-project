@@ -1149,7 +1149,7 @@ class RewriteScalarWrite : public OpRewritePattern<vector::TransferWriteOp> {
 void mlir::vector::transferOpflowOpt(RewriterBase &rewriter,
                                      Operation *rootOp) {
   LDBG() << "=== Starting transferOpflowOpt on root operation: "
-         << OpWithFlags(rootOp, OpPrintingFlags().skipRegions());
+         << OpWithFlags(rootOp, opPrintingFlags(rootOp).skipRegions());
   TransferOptimization opt(rewriter, rootOp);
 
   // Run store to load forwarding first since it can expose more dead store

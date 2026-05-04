@@ -124,10 +124,10 @@ void ExtendToSupportedTypesPass::runOnOperation() {
   MLIRContext *ctx = &getContext();
 
   // Parse target type
-  FloatType targetType = arith::parseFloatType(ctx, targetTypeStr);
+  FloatType targetType = arith::parseFloatType(ctx, *targetTypeStr);
   if (!targetType) {
     emitError(UnknownLoc::get(ctx), "could not map target type '" +
-                                        targetTypeStr +
+                                        *targetTypeStr +
                                         "' to a known floating-point type");
     return signalPassFailure();
   }

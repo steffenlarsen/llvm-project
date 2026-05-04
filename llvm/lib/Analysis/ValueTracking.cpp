@@ -22,6 +22,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/AssumeBundleQueries.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/ConstantFolding.h"
@@ -69,12 +70,13 @@
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/KnownFPClass.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/UndefPoison.h"
 #include "llvm/TargetParser/RISCVTargetParser.h"
 #include <algorithm>
@@ -88,8 +90,12 @@ using namespace llvm::PatternMatch;
 
 // Controls the number of uses of the value searched for possible
 // dominating comparisons.
-static cl::opt<unsigned> DomConditionsMaxUses("dom-conditions-max-uses",
-                                              cl::Hidden, cl::init(20));
+static unsigned DomConditionsMaxUses = 20;
+
+static unsigned getDomConditionsMaxUses(const LLVMContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_DomConditionsMaxUses>(
+      Ctx.getOptionsContext());
+}
 
 /// Maximum number of instructions to check between assume and context
 /// instruction.
@@ -2962,10 +2968,12 @@ static bool isKnownNonNullFromDominatingCondition(const Value *V,
   if (!CtxI || !DT)
     return false;
 
+  const unsigned MaxUsesExplored = getDomConditionsMaxUses(V->getContext());
+
   unsigned NumUsesExplored = 0;
   for (auto &U : V->uses()) {
     // Avoid massive lists
-    if (NumUsesExplored >= DomConditionsMaxUses)
+    if (NumUsesExplored >= MaxUsesExplored)
       break;
     NumUsesExplored++;
 

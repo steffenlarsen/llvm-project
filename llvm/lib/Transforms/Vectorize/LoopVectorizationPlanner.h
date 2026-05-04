@@ -50,10 +50,6 @@ class VPRecipeBuilder;
 struct VPRegisterUsage;
 struct VFRange;
 
-extern cl::opt<bool> EnableVPlanNativePath;
-extern cl::opt<unsigned> ForceTargetInstructionCost;
-extern cl::opt<bool> PreferInLoopReductions;
-
 /// \return An upper bound for vscale based on TTI or the vscale_range
 /// attribute.
 std::optional<unsigned> getMaxVScale(const Function &F,
@@ -574,7 +570,7 @@ public:
 
 /// TODO: The following VectorizationFactor was pulled out of
 /// LoopVectorizationCostModel class. LV also deals with
-/// VectorizerParams::VectorizationFactor.
+/// VectorizerParams::getVectorizationFactor().
 /// We need to streamline them.
 
 /// Information about vectorization costs.

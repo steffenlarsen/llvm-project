@@ -23,6 +23,8 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/CodeGen/MachineScheduler.h"
 #include "llvm/CodeGen/TargetOpcodes.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 
 #include <type_traits>
 
@@ -31,37 +33,27 @@ using namespace llvm::AMDGPU;
 
 #define DEBUG_TYPE "igrouplp"
 
+static bool getEnableExactSolver(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_EnableExactSolver>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getCutoffForExact(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_CutoffForExact>(
+      F.getContext().getOptionsContext());
+}
+
+static uint64_t getMaxBranchesExplored(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_MaxBranchesExplored>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getUseCostHeur(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_UseCostHeur>(
+      F.getContext().getOptionsContext());
+}
+
 namespace {
-
-static cl::opt<bool> EnableExactSolver(
-    "amdgpu-igrouplp-exact-solver", cl::Hidden,
-    cl::desc("Whether to use the exponential time solver to fit "
-             "the instructions to the pipeline as closely as "
-             "possible."),
-    cl::init(false));
-
-static cl::opt<unsigned> CutoffForExact(
-    "amdgpu-igrouplp-exact-solver-cutoff", cl::init(0), cl::Hidden,
-    cl::desc("The maximum number of scheduling group conflicts "
-             "which we attempt to solve with the exponential time "
-             "exact solver. Problem sizes greater than this will"
-             "be solved by the less accurate greedy algorithm. Selecting "
-             "solver by size is superseded by manually selecting "
-             "the solver (e.g. by amdgpu-igrouplp-exact-solver"));
-
-static cl::opt<uint64_t> MaxBranchesExplored(
-    "amdgpu-igrouplp-exact-solver-max-branches", cl::init(0), cl::Hidden,
-    cl::desc("The amount of branches that we are willing to explore with"
-             "the exact algorithm before giving up."));
-
-static cl::opt<bool> UseCostHeur(
-    "amdgpu-igrouplp-exact-solver-cost-heur", cl::init(true), cl::Hidden,
-    cl::desc("Whether to use the cost heuristic to make choices as we "
-             "traverse the search space using the exact solver. Defaulted "
-             "to on, and if turned off, we will use the node order -- "
-             "attempting to put the later nodes in the later sched groups. "
-             "Experimentally, results are mixed, so this should be set on a "
-             "case-by-case basis."));
 
 // Components of the mask that determines which instruction types may be may be
 // classified into a SchedGroup.
@@ -696,7 +688,8 @@ bool PipelineSolver::checkOptimal() {
   }
 
   bool DoneExploring = false;
-  if (MaxBranchesExplored > 0 && BranchesExplored >= MaxBranchesExplored)
+  if (getMaxBranchesExplored(DAG->MF.getFunction()) > 0 &&
+      BranchesExplored >= getMaxBranchesExplored(DAG->MF.getFunction()))
     DoneExploring = true;
 
   return (DoneExploring || BestCost == 0);
@@ -717,7 +710,7 @@ void PipelineSolver::populateReadyList(
     });
     assert(Match);
 
-    if (UseCostHeur) {
+    if (getUseCostHeur(DAG->MF.getFunction())) {
       if (Match->isFull()) {
         ReadyList.push_back(std::pair(*I, MissPenalty));
         continue;
@@ -730,7 +723,7 @@ void PipelineSolver::populateReadyList(
       ReadyList.push_back(std::pair(*I, -1));
   }
 
-  if (UseCostHeur)
+  if (getUseCostHeur(DAG->MF.getFunction()))
     std::sort(ReadyList.begin(), ReadyList.end(), llvm::less_second());
 
   assert(ReadyList.size() == CurrSU.second.size());
@@ -939,11 +932,12 @@ void PipelineSolver::solve() {
   unsigned ProblemSize = computeProblemSize();
   assert(ProblemSize > 0);
 
-  bool BelowCutoff = (CutoffForExact > 0) && ProblemSize <= CutoffForExact;
+  bool BelowCutoff = (getCutoffForExact(DAG->MF.getFunction()) > 0) &&
+                     ProblemSize <= getCutoffForExact(DAG->MF.getFunction());
   MissPenalty = (ProblemSize / 2) + 1;
 
   LLVM_DEBUG(DAG->dump());
-  if (EnableExactSolver || BelowCutoff) {
+  if (getEnableExactSolver(DAG->MF.getFunction()) || BelowCutoff) {
     LLVM_DEBUG(dbgs() << "Starting Greedy pipeline solver\n");
     solveGreedy();
     reset();

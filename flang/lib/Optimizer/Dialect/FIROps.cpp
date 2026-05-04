@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "flang/Optimizer/Dialect/FIROps.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Optimizer/Dialect/CUDAKernelOpInterface.h"
 #include "flang/Optimizer/Dialect/FIRAttr.h"
 #include "flang/Optimizer/Dialect/FIRBoxUtils.h"
@@ -36,19 +37,18 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 
 namespace {
 #include "flang/Optimizer/Dialect/CanonicalizationPatterns.inc"
 } // namespace
 
-static llvm::cl::opt<bool> clUseStrictVolatileVerification(
-    "strict-fir-volatile-verifier", llvm::cl::init(false),
-    llvm::cl::desc(
-        "use stricter verifier for FIR operations with volatile types"));
-
-bool fir::useStrictVolatileVerification() {
-  return clUseStrictVolatileVerification;
+bool fir::useStrictVolatileVerification(mlir::Operation *op) {
+  const llvm::clv2::OptionsContext &ctx =
+      op ? op->getContext()->getOptionsContext()
+         : llvm::clv2::defaultOptionsContext();
+  return llvm::clv2::getOptValOrDefault<
+      &llvm::clv2::FLANG_StrictFirVolatileVerifier>(ctx);
 }
 
 static void propagateAttributes(mlir::Operation *fromOp,
@@ -2123,7 +2123,7 @@ static mlir::LogicalResult verifyVolatility(mlir::Type inType,
 llvm::LogicalResult fir::ConvertOp::verify() {
   mlir::Type inType = getValue().getType();
   mlir::Type outType = getType();
-  if (fir::useStrictVolatileVerification()) {
+  if (fir::useStrictVolatileVerification(getOperation())) {
     if (failed(verifyVolatility(inType, outType))) {
       return emitOpError("this conversion does not preserve volatility: ")
              << inType << " / " << outType;
@@ -2460,10 +2460,10 @@ llvm::LogicalResult fir::TypeInfoOp::verify() {
 
 // Conversions from reference types to box types must preserve volatility.
 static llvm::LogicalResult
-verifyEmboxOpVolatilityInvariants(mlir::Type memrefType,
+verifyEmboxOpVolatilityInvariants(mlir::Operation *op, mlir::Type memrefType,
                                   mlir::Type resultType) {
 
-  if (!fir::useStrictVolatileVerification())
+  if (!fir::useStrictVolatileVerification(op))
     return mlir::success();
 
   mlir::Type boxElementType =
@@ -2514,8 +2514,8 @@ llvm::LogicalResult fir::EmboxOp::verify() {
     return emitOpError("slice must not be provided for a scalar");
   if (getSourceBox() && !mlir::isa<fir::ClassType>(getResult().getType()))
     return emitOpError("source_box must be used with fir.class result type");
-  if (failed(verifyEmboxOpVolatilityInvariants(getMemref().getType(),
-                                               getResult().getType())))
+  if (failed(verifyEmboxOpVolatilityInvariants(
+          getOperation(), getMemref().getType(), getResult().getType())))
     return emitOpError(
                "cannot convert between volatile and non-volatile types:")
            << " " << getMemref().getType() << " " << getResult().getType();
@@ -2716,8 +2716,8 @@ llvm::LogicalResult fir::CreateBoxOp::verify() {
   if (fir::characterWithDynamicLen(eleTy) ||
       fir::isRecordWithTypeParameters(eleTy))
     return emitOpError("result box element type must be statically sized");
-  if (failed(verifyEmboxOpVolatilityInvariants(getMemref().getType(),
-                                               getResult().getType())))
+  if (failed(verifyEmboxOpVolatilityInvariants(
+          getOperation(), getMemref().getType(), getResult().getType())))
     return emitOpError(
                "cannot convert between volatile and non-volatile types:")
            << " " << getMemref().getType() << " " << getResult().getType();

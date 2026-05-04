@@ -32,85 +32,17 @@
 #include "llvm/CodeGen/RegAllocRegistry.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/Scalar.h"
 #include <optional>
 using namespace llvm;
-
-static cl::opt<bool> EnableRedundantCopyElimination(
-    "riscv-enable-copyelim",
-    cl::desc("Enable the redundant copy elimination pass"), cl::init(true),
-    cl::Hidden);
-
-// FIXME: Unify control over GlobalMerge.
-static cl::opt<cl::boolOrDefault>
-    EnableGlobalMerge("riscv-enable-global-merge", cl::Hidden,
-                      cl::desc("Enable the global merge pass"));
-
-static cl::opt<bool>
-    EnableMachineCombiner("riscv-enable-machine-combiner",
-                          cl::desc("Enable the machine combiner pass"),
-                          cl::init(true), cl::Hidden);
-
-static cl::opt<unsigned> RVVVectorBitsMaxOpt(
-    "riscv-v-vector-bits-max",
-    cl::desc("Assume V extension vector registers are at most this big, "
-             "with zero meaning no maximum size is assumed."),
-    cl::init(0), cl::Hidden);
-
-static cl::opt<int> RVVVectorBitsMinOpt(
-    "riscv-v-vector-bits-min",
-    cl::desc("Assume V extension vector registers are at least this big, "
-             "with zero meaning no minimum size is assumed. A value of -1 "
-             "means use Zvl*b extension. This is primarily used to enable "
-             "autovectorization with fixed width vectors."),
-    cl::init(-1), cl::Hidden);
-
-static cl::opt<bool> EnableRISCVCopyPropagation(
-    "riscv-enable-copy-propagation",
-    cl::desc("Enable the copy propagation with RISC-V copy instr"),
-    cl::init(true), cl::Hidden);
-
-static cl::opt<bool> EnableRISCVDeadRegisterElimination(
-    "riscv-enable-dead-defs", cl::Hidden,
-    cl::desc("Enable the pass that removes dead"
-             " definitions and replaces stores to"
-             " them with stores to x0"),
-    cl::init(true));
-
-static cl::opt<bool>
-    EnableSinkFold("riscv-enable-sink-fold",
-                   cl::desc("Enable sinking and folding of instruction copies"),
-                   cl::init(true), cl::Hidden);
-
-static cl::opt<bool>
-    EnableLoopDataPrefetch("riscv-enable-loop-data-prefetch", cl::Hidden,
-                           cl::desc("Enable the loop data prefetch pass"),
-                           cl::init(true));
-
-static cl::opt<bool> DisableVectorMaskMutation(
-    "riscv-disable-vector-mask-mutation",
-    cl::desc("Disable the vector mask scheduling mutation"), cl::init(false),
-    cl::Hidden);
-
-static cl::opt<bool>
-    EnableMachinePipeliner("riscv-enable-pipeliner",
-                           cl::desc("Enable Machine Pipeliner for RISC-V"),
-                           cl::init(false), cl::Hidden);
-
-static cl::opt<bool> EnableCFIInstrInserter(
-    "riscv-enable-cfi-instr-inserter",
-    cl::desc("Enable CFI Instruction Inserter for RISC-V"), cl::init(false),
-    cl::Hidden);
-
-static cl::opt<bool>
-    EnableSelectOpt("riscv-select-opt", cl::Hidden,
-                    cl::desc("Enable select to branch optimizations"),
-                    cl::init(true));
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   RegisterTargetMachine<RISCVTargetMachine> X(getTheRISCV32Target());
@@ -191,7 +123,9 @@ RISCVTargetMachine::RISCVTargetMachine(const Target &T, const Triple &TT,
   if (TT.isOSFuchsia() && !TT.isArch64Bit())
     report_fatal_error("Fuchsia is only supported for 64-bit");
 
-  setCFIFixup(!EnableCFIInstrInserter);
+  setCFIFixup(
+      !clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_EnableCFIInstrInserter>(
+          getOptionsContext(), false));
 }
 
 const RISCVSubtarget *
@@ -207,15 +141,21 @@ RISCVTargetMachine::getSubtargetImpl(const Function &F) const {
   std::string FS =
       FSAttr.isValid() ? FSAttr.getValueAsString().str() : TargetFS;
 
-  unsigned RVVBitsMin = RVVVectorBitsMinOpt;
-  unsigned RVVBitsMax = RVVVectorBitsMaxOpt;
+  unsigned RVVBitsMin = clv2::getOptValOrDefault<&clv2::RV_VVectorBitsMin>(
+      F.getContext().getOptionsContext());
+  unsigned RVVBitsMax =
+      clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_VVectorBitsMax>(
+          F.getContext().getOptionsContext(), 0);
 
   Attribute VScaleRangeAttr = F.getFnAttribute(Attribute::VScaleRange);
   if (VScaleRangeAttr.isValid()) {
-    if (!RVVVectorBitsMinOpt.getNumOccurrences())
+    if (!clv2::wasOptSpecified<&clv2::RISCVOptsReg, &clv2::RV_VVectorBitsMin>(
+            F.getContext().getOptionsContext()))
       RVVBitsMin = VScaleRangeAttr.getVScaleRangeMin() * RISCV::RVVBitsPerBlock;
     std::optional<unsigned> VScaleMax = VScaleRangeAttr.getVScaleRangeMax();
-    if (VScaleMax.has_value() && !RVVVectorBitsMaxOpt.getNumOccurrences())
+    if (VScaleMax.has_value() &&
+        !clv2::wasOptSpecified<&clv2::RISCVOptsReg, &clv2::RV_VVectorBitsMax>(
+            F.getContext().getOptionsContext()))
       RVVBitsMax = *VScaleMax * RISCV::RVVBitsPerBlock;
   }
 
@@ -287,7 +227,8 @@ RISCVTargetMachine::createMachineScheduler(MachineSchedContext *C) const {
   // Add MacroFusion mutation first with a higher priority than later clustering
   const auto &MacroFusions = ST.getMacroFusions();
   if (!MacroFusions.empty())
-    DAG->addMutation(createMacroFusionDAGMutation(MacroFusions));
+    DAG->addMutation(
+        createMacroFusionDAGMutation(getOptionsContext(), MacroFusions));
 
   if (ST.enableMISchedLoadClustering())
     DAG->addMutation(createLoadClusterDAGMutation(
@@ -297,7 +238,10 @@ RISCVTargetMachine::createMachineScheduler(MachineSchedContext *C) const {
     DAG->addMutation(createStoreClusterDAGMutation(
         DAG->TII, DAG->TRI, /*ReorderWhileClustering=*/true));
 
-  if (!DisableVectorMaskMutation && ST.hasVInstructions())
+  if (!clv2::getOptValOr<&clv2::RISCVOptsReg,
+                         &clv2::RV_DisableVectorMaskMutation>(
+          getOptionsContext(), false) &&
+      ST.hasVInstructions())
     DAG->addMutation(createRISCVVectorMaskDAGMutation(DAG->TRI));
 
   return DAG;
@@ -311,7 +255,8 @@ RISCVTargetMachine::createPostMachineScheduler(MachineSchedContext *C) const {
   // Add MacroFusion mutation first with a higher priority than later clustering
   const auto &MacroFusions = ST.getMacroFusions();
   if (!MacroFusions.empty())
-    DAG->addMutation(createMacroFusionDAGMutation(MacroFusions));
+    DAG->addMutation(
+        createMacroFusionDAGMutation(getOptionsContext(), MacroFusions));
 
   if (ST.enablePostMISchedLoadClustering())
     DAG->addMutation(createLoadClusterDAGMutation(
@@ -346,11 +291,8 @@ static llvm::once_flag InitializeDefaultRVVRegisterAllocatorFlag;
 /// -riscv-rvv-regalloc=<fast|basic|greedy> command line option.
 /// This option could designate the rvv register allocator only.
 /// For example: -riscv-rvv-regalloc=basic
-static cl::opt<RVVRegisterRegAlloc::FunctionPassCtor, false,
-               RegisterPassParser<RVVRegisterRegAlloc>>
-    RVVRegAlloc("riscv-rvv-regalloc", cl::Hidden,
-                cl::init(&useDefaultRegisterAllocator),
-                cl::desc("Register allocator to use for RVV register."));
+static RVVRegisterRegAlloc::FunctionPassCtor RVVRegAlloc =
+    &useDefaultRegisterAllocator;
 
 static void initializeDefaultRVVRegisterAllocatorOnce() {
   RegisterRegAlloc::FunctionPassCtor Ctor = RVVRegisterRegAlloc::getDefault();
@@ -389,7 +331,8 @@ public:
       : TargetPassConfig(TM, PM) {
     if (TM.getOptLevel() != CodeGenOptLevel::None)
       substitutePass(&PostRASchedulerID, &PostMachineSchedulerID);
-    setEnableSinkAndFold(EnableSinkFold);
+    setEnableSinkAndFold(clv2::getOptValOrDefault<&clv2::RV_EnableSinkFold>(
+        TM.getOptionsContext()));
     EnableLoopTermFold = true;
   }
 
@@ -450,7 +393,9 @@ bool RISCVPassConfig::addRegAssignAndRewriteFast() {
   addPass(createRVVRegAllocPass(false));
   addPass(createRISCVInsertVSETVLIPass());
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
-      EnableRISCVDeadRegisterElimination)
+      clv2::getOptValOr<&clv2::RISCVOptsReg,
+                        &clv2::RV_EnableDeadRegisterElimination>(
+          TM->getOptionsContext(), true))
     addPass(createRISCVDeadRegisterDefinitionsPass());
   return TargetPassConfig::addRegAssignAndRewriteFast();
 }
@@ -460,7 +405,9 @@ bool RISCVPassConfig::addRegAssignAndRewriteOptimized() {
   addPass(createVirtRegRewriter(false));
   addPass(createRISCVInsertVSETVLIPass());
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
-      EnableRISCVDeadRegisterElimination)
+      clv2::getOptValOr<&clv2::RISCVOptsReg,
+                        &clv2::RV_EnableDeadRegisterElimination>(
+          TM->getOptionsContext(), true))
     addPass(createRISCVDeadRegisterDefinitionsPass());
   return TargetPassConfig::addRegAssignAndRewriteOptimized();
 }
@@ -470,7 +417,9 @@ void RISCVPassConfig::addIRPasses() {
   addPass(createRISCVZacasABIFixLegacyPass());
 
   if (getOptLevel() != CodeGenOptLevel::None) {
-    if (EnableLoopDataPrefetch)
+    if (clv2::getOptValOr<&clv2::RISCVOptsReg,
+                          &clv2::RV_EnableLoopDataPrefetch>(
+            TM->getOptionsContext(), true))
       addPass(createLoopDataPrefetchPass());
 
     addPass(createRISCVGatherScatterLoweringLegacyPass());
@@ -480,7 +429,9 @@ void RISCVPassConfig::addIRPasses() {
 
   TargetPassConfig::addIRPasses();
 
-  if (getOptLevel() == CodeGenOptLevel::Aggressive && EnableSelectOpt)
+  if (getOptLevel() == CodeGenOptLevel::Aggressive &&
+      clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_EnableSelectOpt>(
+          TM->getOptionsContext(), true))
     addPass(createSelectOptimizePass());
 }
 
@@ -494,9 +445,14 @@ bool RISCVPassConfig::addPreISel() {
     addPass(createBarrierNoopPass());
   }
 
-  if ((TM->getOptLevel() != CodeGenOptLevel::None &&
-       EnableGlobalMerge == cl::boolOrDefault::BOU_UNSET) ||
-      EnableGlobalMerge == cl::boolOrDefault::BOU_TRUE) {
+  bool RVGMSpecified =
+      clv2::wasOptSpecified<&clv2::RISCVOptsReg, &clv2::RV_EnableGlobalMerge>(
+          TM->getOptionsContext());
+  bool RVGMValue =
+      clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_EnableGlobalMerge>(
+          TM->getOptionsContext(), false);
+  if ((!RVGMSpecified && TM->getOptLevel() != CodeGenOptLevel::None) ||
+      (RVGMSpecified && RVGMValue)) {
     // FIXME: Like AArch64, we disable extern global merging by default due to
     // concerns it might regress some workloads. Unlike AArch64, we don't
     // currently support enabling the pass in an "OnlyOptimizeForSize" mode.
@@ -545,7 +501,7 @@ void RISCVPassConfig::addPreRegBankSelect() {
 }
 
 bool RISCVPassConfig::addRegBankSelect() {
-  addPass(new RegBankSelectLegacy());
+  addPass(new RegBankSelectLegacy(getTM<TargetMachine>().getOptionsContext()));
   return false;
 }
 
@@ -570,7 +526,8 @@ void RISCVPassConfig::addPreEmitPass() {
   // currently leads to incorrect code-gen, where copies to registers within
   // outlined functions are removed erroneously.
   if (TM->getOptLevel() >= CodeGenOptLevel::Default &&
-      EnableRISCVCopyPropagation)
+      clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_EnableCopyPropagation>(
+          TM->getOptionsContext(), true))
     addPass(createMachineCopyPropagationPass(true));
   if (TM->getOptLevel() >= CodeGenOptLevel::Default)
     addPass(createRISCVLateBranchOptPass());
@@ -606,7 +563,8 @@ void RISCVPassConfig::addPreEmitPass2() {
     return MF.getFunction().getParent()->getModuleFlag("kcfi");
   }));
 
-  if (EnableCFIInstrInserter)
+  if (clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_EnableCFIInstrInserter>(
+          TM->getOptionsContext(), false))
     addPass(createCFIInstrInserterLegacy());
 }
 
@@ -646,7 +604,9 @@ void RISCVPassConfig::addPreRegAlloc() {
   addPass(createRISCVInsertWriteVXRMPass());
   addPass(createRISCVLandingPadSetupPass());
 
-  if (TM->getOptLevel() != CodeGenOptLevel::None && EnableMachinePipeliner)
+  if (TM->getOptLevel() != CodeGenOptLevel::None &&
+      clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_EnableMachinePipeliner>(
+          TM->getOptionsContext(), false))
     addPass(&MachinePipelinerID);
 
   addPass(createRISCVVMV0EliminationPass());
@@ -660,12 +620,15 @@ void RISCVPassConfig::addFastRegAlloc() {
 
 void RISCVPassConfig::addPostRegAlloc() {
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
-      EnableRedundantCopyElimination)
+      clv2::getOptValOr<&clv2::RISCVOptsReg,
+                        &clv2::RV_EnableRedundantCopyElimination>(
+          TM->getOptionsContext(), true))
     addPass(createRISCVRedundantCopyEliminationPass());
 }
 
 bool RISCVPassConfig::addILPOpts() {
-  if (EnableMachineCombiner)
+  if (clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_EnableMachineCombiner>(
+          TM->getOptionsContext(), true))
     addPass(&MachineCombinerID);
 
   return true;

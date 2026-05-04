@@ -1,4 +1,7 @@
 add_llvm_component_library(LLVMCGData
+  CGDataOptionsGetters.cpp
+  CGDataOptionsRegistration.cpp
+  CGDataOptions.cpp
   CodeGenData.cpp
   CodeGenDataReader.cpp
   CodeGenDataWriter.cpp

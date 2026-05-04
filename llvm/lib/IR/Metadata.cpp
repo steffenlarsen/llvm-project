@@ -47,8 +47,6 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
-
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/ModRef.h"
@@ -62,7 +60,6 @@
 using namespace llvm;
 
 namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 }
 
 MetadataAsValue::MetadataAsValue(Type *Ty, Metadata *MD)
@@ -1270,7 +1267,7 @@ MDNode *MDNode::getMergedProfMetadata(MDNode *A, MDNode *B,
       BCall->getCalledFunction())
     return mergeDirectCallProfMetadata(A, B, AInstr, BInstr);
 
-  if (A == B && !ProfcheckDisableMetadataFixes)
+  if (A == B && !getProfcheckDisableMetadataFixes(AInstr->getContext()))
     return A;
 
   // The rest of the cases are not implemented but could be added

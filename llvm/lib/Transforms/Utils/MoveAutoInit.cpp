@@ -19,10 +19,12 @@
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -30,9 +32,10 @@ using namespace llvm;
 
 STATISTIC(NumMoved, "Number of instructions moved");
 
-static cl::opt<unsigned> MoveAutoInitThreshold(
-    "move-auto-init-threshold", cl::Hidden, cl::init(128),
-    cl::desc("Maximum instructions to analyze per moved initialization"));
+static unsigned getMoveAutoInitThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_MoveAutoInitThreshold>(
+      F.getContext().getOptionsContext());
+}
 
 static bool hasAutoInitMetadata(const Instruction &I) {
   return I.hasMetadata(LLVMContext::MD_annotation) &&
@@ -74,7 +77,7 @@ static BasicBlock *usersDominator(const MemoryLocation &ML, Instruction *I,
     if (!Visited.insert(MA).second)
       continue;
 
-    if (Visited.size() > MoveAutoInitThreshold)
+    if (Visited.size() > getMoveAutoInitThreshold(*I->getFunction()))
       return nullptr;
 
     bool FoundClobberingUser = false;
@@ -209,7 +212,7 @@ static bool runMoveAutoInit(Function &F, DominatorTree &DT, MemorySSA &MSSA) {
                       MemorySSA::InsertionPlace::Beginning);
   }
 
-  if (VerifyMemorySSA)
+  if (getVerifyMemorySSA(F.getContext().getOptionsContext()))
     MSSA.verifyMemorySSA();
 
   NumMoved += JobList.size();

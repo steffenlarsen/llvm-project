@@ -33,23 +33,24 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "aarch64-ccmp"
 
-// Absolute maximum number of instructions allowed per speculated block.
-// This bypasses all other heuristics, so it should be set fairly high.
-static cl::opt<unsigned> BlockInstrLimit(
-    "aarch64-ccmp-limit", cl::init(30), cl::Hidden,
-    cl::desc("Maximum number of instructions per speculated block."));
+static unsigned getBlockInstrLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::A64_CCMPLimit>(
+      F.getContext().getOptionsContext());
+}
 
-// Stress testing mode - disable heuristics.
-static cl::opt<bool> Stress("aarch64-stress-ccmp", cl::Hidden,
-                            cl::desc("Turn all knobs to 11"));
+static bool getStress(const Function &F) {
+  return clv2::getOptValOr<&clv2::AArch64OptsReg, &clv2::A64_StressCCMP>(
+      F.getContext().getOptionsContext(), false);
+}
 
 STATISTIC(NumConsidered, "Number of ccmps considered");
 STATISTIC(NumPhiRejs, "Number of ccmps rejected (PHI)");
@@ -406,9 +407,11 @@ bool SSACCmpConv::canSpeculateInstrs(MachineBasicBlock *MBB,
     if (I.isDebugInstr())
       continue;
 
-    if (++InstrCount > BlockInstrLimit && !Stress) {
+    if (++InstrCount > getBlockInstrLimit(MF->getFunction()) &&
+        !getStress(MF->getFunction())) {
       LLVM_DEBUG(dbgs() << printMBBReference(*MBB) << " has more than "
-                        << BlockInstrLimit << " instructions.\n");
+                        << getBlockInstrLimit(MF->getFunction())
+                        << " instructions.\n");
       return false;
     }
 
@@ -793,7 +796,7 @@ private:
   void updateDomTree(ArrayRef<MachineBasicBlock *> Removed);
   void updateLoops(ArrayRef<MachineBasicBlock *> Removed);
   void invalidateTraces();
-  bool shouldConvert();
+  bool shouldConvert(const Function &F);
 };
 
 class AArch64ConditionalComparesLegacy : public MachineFunctionPass {
@@ -871,9 +874,9 @@ void AArch64ConditionalComparesImpl::invalidateTraces() {
 /// Apply cost model and heuristics to the if-conversion in IfConv.
 /// Return true if the conversion is a good idea.
 ///
-bool AArch64ConditionalComparesImpl::shouldConvert() {
+bool AArch64ConditionalComparesImpl::shouldConvert(const Function &F) {
   // Stress testing mode disables all cost considerations.
-  if (Stress)
+  if (getStress(F))
     return true;
   if (!MinInstr)
     MinInstr = Traces->getEnsemble(MachineTraceStrategy::TS_MinInstrCount);
@@ -934,7 +937,8 @@ bool AArch64ConditionalComparesImpl::shouldConvert() {
 
 bool AArch64ConditionalComparesImpl::tryConvert(MachineBasicBlock *MBB) {
   bool Changed = false;
-  while (CmpConv.canConvert(MBB) && shouldConvert()) {
+  while (CmpConv.canConvert(MBB) &&
+         shouldConvert(MBB->getParent()->getFunction())) {
     invalidateTraces();
     SmallVector<MachineBasicBlock *, 4> RemovedBlocks;
     CmpConv.convert(RemovedBlocks);

@@ -8,15 +8,21 @@
 
 #include "LiveDebugValues.h"
 
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/LiveDebugValuesPass.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
+#include "llvm/PassRegistry.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Triple.h"
 
@@ -37,27 +43,32 @@
 
 using namespace llvm;
 
-static cl::opt<bool>
-    ForceInstrRefLDV("force-instr-ref-livedebugvalues", cl::Hidden,
-                     cl::desc("Use instruction-ref based LiveDebugValues with "
-                              "normal DBG_VALUE inputs"),
-                     cl::init(false));
-
-static cl::opt<cl::boolOrDefault> ValueTrackingVariableLocations(
-    "experimental-debug-variable-locations",
-    cl::desc("Use experimental new value-tracking variable locations"));
-
 // Options to prevent pathological compile-time behavior. If InputBBLimit and
 // InputDbgValueLimit are both exceeded, range extension is disabled.
-static cl::opt<unsigned> InputBBLimit(
-    "livedebugvalues-input-bb-limit",
-    cl::desc("Maximum input basic blocks before DBG_VALUE limit applies"),
-    cl::init(10000), cl::Hidden);
-static cl::opt<unsigned> InputDbgValueLimit(
-    "livedebugvalues-input-dbg-value-limit",
-    cl::desc(
-        "Maximum input DBG_VALUE insts supported by debug range extension"),
-    cl::init(50000), cl::Hidden);
+
+static bool getForceInstrRefLivedebugvalues(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ForceInstrRefLivedebugvalues>(
+      Ctx);
+}
+
+static unsigned
+getLivedebugvaluesInputBbLimit(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_LivedebugvaluesInputBbLimit>(
+      Ctx);
+}
+
+static unsigned
+getLivedebugvaluesInputDbgValueLimit(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::CGPASS_LivedebugvaluesInputDbgValueLimit>(Ctx);
+}
+
+static cl::boolOrDefault
+getExperimentalDebugVariableLocations(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::CGPassGISelReg,
+                           &clv2::CGPASS_ExperimentalDebugVariableLocations>(
+      Ctx, cl::boolOrDefault::BOU_UNSET);
+}
 
 namespace {
 /// Generic LiveDebugValues pass. Calls through to VarLocBasedLDV or
@@ -135,7 +146,8 @@ bool LiveDebugValues::run(MachineFunction &MF,
                           bool ShouldEmitDebugEntryValues) {
   bool InstrRefBased = MF.useDebugInstrRef();
   // Allow the user to force selection of InstrRef LDV.
-  InstrRefBased |= ForceInstrRefLDV;
+  InstrRefBased |= getForceInstrRefLivedebugvalues(
+      MF.getFunction().getContext().getOptionsContext());
 
   LDVImpl *TheImpl = &*VarLocImpl;
 
@@ -146,16 +158,23 @@ bool LiveDebugValues::run(MachineFunction &MF,
     TheImpl = &*InstrRefImpl;
   }
 
-  return TheImpl->ExtendRanges(MF, DomTree, ShouldEmitDebugEntryValues,
-                               InputBBLimit, InputDbgValueLimit);
+  return TheImpl->ExtendRanges(
+      MF, DomTree, ShouldEmitDebugEntryValues,
+      getLivedebugvaluesInputBbLimit(
+          MF.getFunction().getContext().getOptionsContext()),
+      getLivedebugvaluesInputDbgValueLimit(
+          MF.getFunction().getContext().getOptionsContext()));
 }
 
-bool llvm::debuginfoShouldUseDebugInstrRef(const Triple &T) {
+bool llvm::debuginfoShouldUseDebugInstrRef(const Triple &T,
+                                           const clv2::OptionsContext &Ctx) {
   // Enable by default on x86_64, disable if explicitly turned off on cmdline.
   if (T.getArch() == llvm::Triple::x86_64 &&
-      ValueTrackingVariableLocations != cl::boolOrDefault::BOU_FALSE)
+      getExperimentalDebugVariableLocations(Ctx) !=
+          cl::boolOrDefault::BOU_FALSE)
     return true;
 
   // Enable if explicitly requested on command line.
-  return ValueTrackingVariableLocations == cl::boolOrDefault::BOU_TRUE;
+  return getExperimentalDebugVariableLocations(Ctx) ==
+         cl::boolOrDefault::BOU_TRUE;
 }

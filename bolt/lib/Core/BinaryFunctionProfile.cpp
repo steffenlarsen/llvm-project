@@ -13,7 +13,9 @@
 
 #include "bolt/Core/BinaryBasicBlock.h"
 #include "bolt/Core/BinaryFunction.h"
-#include "llvm/Support/CommandLine.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
+#include "bolt/Utils/CommandLineOpts.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -25,39 +27,7 @@ using namespace bolt;
 
 namespace opts {
 
-extern cl::OptionCategory BoltOptCategory;
-
-cl::opt<IndirectCallPromotionType> ICP(
-    "indirect-call-promotion", cl::init(ICP_NONE),
-    cl::desc("indirect call promotion"),
-    cl::values(
-        clEnumValN(ICP_NONE, "none", "do not perform indirect call promotion"),
-        clEnumValN(ICP_CALLS, "calls", "perform ICP on indirect calls"),
-        clEnumValN(ICP_JUMP_TABLES, "jump-tables",
-                   "perform ICP on jump tables"),
-        clEnumValN(ICP_ALL, "all", "perform ICP on calls and jump tables")),
-    cl::ZeroOrMore, cl::cat(BoltOptCategory));
-
-static cl::alias ICPAlias("icp",
-                          cl::desc("Alias for --indirect-call-promotion"),
-                          cl::aliasopt(ICP));
-
-extern cl::opt<JumpTableSupportLevel> JumpTables;
-
-static cl::opt<bool> FixFuncCounts(
-    "fix-func-counts",
-    cl::desc("adjust function counts based on basic blocks execution count"),
-    cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool> FixBlockCounts(
-    "fix-block-counts",
-    cl::desc("adjust block counts based on outgoing branch counts"),
-    cl::init(true), cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-    InferFallThroughs("infer-fall-throughs",
-                      cl::desc("infer execution count for fall-through blocks"),
-                      cl::Hidden, cl::cat(BoltOptCategory));
+IndirectCallPromotionType ICP = ICP_NONE;
 
 } // namespace opts
 
@@ -73,9 +43,12 @@ void BinaryFunction::postProcessProfile() {
   if (!(getProfileFlags() & PF_BRANCH))
     return;
 
+  auto *CoreOpts = bolt_core_opts::getBoltCoreOpts(BC.getOptionsContext());
+
   // If we have at least some branch data for the function indicate that it
   // was executed.
-  if (opts::FixFuncCounts && ExecutionCount == 0)
+  bool DoFixFuncCounts = CoreOpts->get<&clv2::BOLTCORE_FixFuncCounts>();
+  if (DoFixFuncCounts && ExecutionCount == 0)
     ExecutionCount = 1;
 
   // Compute preliminary execution count for each basic block.
@@ -118,7 +91,8 @@ void BinaryFunction::postProcessProfile() {
     }
   }
 
-  if (opts::FixBlockCounts) {
+  bool DoFixBlockCounts = CoreOpts->get<&clv2::BOLTCORE_FixBlockCounts>();
+  if (DoFixBlockCounts) {
     for (BinaryBasicBlock *BB : BasicBlocks) {
       // Make sure that execution count of a block is at least the branch count
       // of an incoming/outgoing jump.
@@ -145,7 +119,8 @@ void BinaryFunction::postProcessProfile() {
     }
   }
 
-  if (opts::InferFallThroughs)
+  bool DoInferFallThroughs = CoreOpts->get<&clv2::BOLTCORE_InferFallThroughs>();
+  if (DoInferFallThroughs)
     inferFallThroughCounts();
 
   // Update profile information for jump tables based on CFG branch data.
@@ -167,7 +142,15 @@ void BinaryFunction::postProcessProfile() {
     }
     JT->Count += TotalBranchCount;
 
-    if (opts::ICP < ICP_JUMP_TABLES && opts::JumpTables < JTS_AGGRESSIVE)
+    auto ICPLevel = static_cast<IndirectCallPromotionType>(
+        CoreOpts->get<&clv2::BOLTCORE_ICP>());
+    // Check alias too
+    if (CoreOpts->specified<&clv2::BOLTCORE_ICPAlias>())
+      ICPLevel = static_cast<IndirectCallPromotionType>(
+          CoreOpts->get<&clv2::BOLTCORE_ICPAlias>());
+    auto JTLevel = static_cast<JumpTableSupportLevel>(
+        CoreOpts->get<&clv2::BOLTCORE_JumpTables>());
+    if (ICPLevel < ICP_JUMP_TABLES && JTLevel < JTS_AGGRESSIVE)
       continue;
 
     if (JT->Counts.empty())

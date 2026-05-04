@@ -18,7 +18,7 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/GetElementPtrTypeIterator.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
@@ -31,8 +31,24 @@ using namespace llvm;
 
 STATISTIC(NumDynamicInsts, "Number of dynamic instructions executed");
 
-static cl::opt<bool> PrintVolatile("interpreter-print-volatile", cl::Hidden,
-          cl::desc("make the interpreter print every volatile load and store"));
+static constexpr clv2::OptionInfo<bool> OI_PrintVolatile{
+    "interpreter-print-volatile",
+    "make the interpreter print every volatile load and store", clv2::Hidden};
+static constexpr clv2::OptionsRegistry<&OI_PrintVolatile> PrintVolatileReg;
+
+/// Read the option from the LLVMContext owning the IR being interpreted, so
+/// that concurrent interpreter instances can use different settings.
+static bool printVolatile(const LLVMContext &Ctx) {
+  return clv2::getOptValOr<&PrintVolatileReg, &OI_PrintVolatile>(
+      Ctx.getOptionsContext(), false);
+}
+
+// No apply function: the option is read from the OptionsContext at its point
+// of use rather than mirrored into a process-wide global.
+[[maybe_unused]] static const bool Registered = [] {
+  clv2::registerDynamicRegistry<&PrintVolatileReg>();
+  return true;
+}();
 
 //===----------------------------------------------------------------------===//
 //                     Various Helper Functions
@@ -1057,7 +1073,7 @@ void Interpreter::visitLoadInst(LoadInst &I) {
   GenericValue Result;
   LoadValueFromMemory(Result, Ptr, I.getType());
   SetValue(&I, Result, SF);
-  if (I.isVolatile() && PrintVolatile)
+  if (I.isVolatile() && printVolatile(I.getContext()))
     dbgs() << "Volatile load " << I;
 }
 
@@ -1067,7 +1083,7 @@ void Interpreter::visitStoreInst(StoreInst &I) {
   GenericValue SRC = getOperandValue(I.getPointerOperand(), SF);
   StoreValueToMemory(Val, (GenericValue *)GVTOP(SRC),
                      I.getOperand(0)->getType());
-  if (I.isVolatile() && PrintVolatile)
+  if (I.isVolatile() && printVolatile(I.getContext()))
     dbgs() << "Volatile store: " << I;
 }
 

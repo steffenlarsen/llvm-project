@@ -11,13 +11,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Support/Timing.h"
+#include "mlir/IR/MLIROptionsOptInfos.h"
 #include "mlir/Support/ThreadLocalCache.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/Allocator.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/RWMutex.h"
@@ -584,42 +585,24 @@ void DefaultTimingManager::hideTimer(void *handle) {
 // DefaultTimingManager Command Line Options
 //===----------------------------------------------------------------------===//
 
-namespace {
-struct DefaultTimingManagerOptions {
-  llvm::cl::opt<bool> timing{"mlir-timing",
-                             llvm::cl::desc("Display execution times"),
-                             llvm::cl::init(false)};
-  llvm::cl::opt<DisplayMode> displayMode{
-      "mlir-timing-display", llvm::cl::desc("Display method for timing data"),
-      llvm::cl::init(DisplayMode::Tree),
-      llvm::cl::values(
-          clEnumValN(DisplayMode::List, "list",
-                     "display the results in a list sorted by total time"),
-          clEnumValN(DisplayMode::Tree, "tree",
-                     "display the results ina with a nested tree view"))};
-  llvm::cl::opt<OutputFormat> outputFormat{
-      "mlir-output-format", llvm::cl::desc("Output format for timing data"),
-      llvm::cl::init(OutputFormat::Text),
-      llvm::cl::values(clEnumValN(OutputFormat::Text, "text",
-                                  "display the results in text format"),
-                       clEnumValN(OutputFormat::Json, "json",
-                                  "display the results in JSON format"))};
-};
-} // namespace
-
-static llvm::ManagedStatic<DefaultTimingManagerOptions> options;
+static bool timingOptsRegistered = false;
 
 void mlir::registerDefaultTimingManagerCLOptions() {
-  // Make sure that the options struct has been constructed.
-  *options;
+  timingOptsRegistered = true;
 }
 
-void mlir::applyDefaultTimingManagerCLOptions(DefaultTimingManager &tm) {
-  if (!options.isConstructed())
+void mlir::applyDefaultTimingManagerCLOptions(
+    DefaultTimingManager &tm, const llvm::clv2::OptionsContext &optsCtx) {
+  if (!timingOptsRegistered)
     return;
-  tm.setEnabled(options->timing);
-  tm.setDisplayMode(options->displayMode);
-  tm.setOutput(createOutputStrategy(options->outputFormat, llvm::errs()));
+  using namespace llvm::clv2;
+  auto *O = mlir::mlir_opts::getMLIROptsReg(optsCtx);
+  if (!O)
+    return;
+  tm.setEnabled(O->get<&MLIR_Timing>());
+  tm.setDisplayMode(static_cast<DisplayMode>(O->get<&MLIR_TimingDisplay>()));
+  tm.setOutput(createOutputStrategy(
+      static_cast<OutputFormat>(O->get<&MLIR_OutputFormat>()), llvm::errs()));
 }
 
 std::unique_ptr<OutputStrategy>

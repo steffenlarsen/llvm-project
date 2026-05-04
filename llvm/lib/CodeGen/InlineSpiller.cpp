@@ -21,6 +21,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/LiveRangeEdit.h"
@@ -44,12 +45,14 @@
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/CodeGen/VirtRegMap.h"
 #include "llvm/Config/llvm-config.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/BlockFrequency.h"
 #include "llvm/Support/BranchProbability.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <iterator>
@@ -70,10 +73,10 @@ STATISTIC(NumFolded,          "Number of folded stack accesses");
 STATISTIC(NumFoldedLoads,     "Number of folded loads");
 STATISTIC(NumRemats,          "Number of rematerialized defs for spilling");
 
-static cl::opt<bool>
-RestrictStatepointRemat("restrict-statepoint-remat",
-                       cl::init(false), cl::Hidden,
-                       cl::desc("Restrict remat for statepoint operands"));
+static bool getRestrictStatepointRemat(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::CGPassRegAllocReg,
+                           &clv2::CGPASS_RestrictStatepointRemat>(Ctx, false);
+}
 
 namespace {
 class HoistSpillHelper : private LiveRangeEdit::Delegate {
@@ -621,7 +624,8 @@ void InlineSpiller::markValueUsed(LiveInterval *LI, VNInfo *VNI) {
 
 bool InlineSpiller::canGuaranteeAssignmentAfterRemat(Register VReg,
                                                      MachineInstr &MI) {
-  if (!RestrictStatepointRemat)
+  if (!getRestrictStatepointRemat(
+          MF.getFunction().getContext().getOptionsContext()))
     return true;
   // Here's a quick explanation of the problem we're trying to handle here:
   // * There are some pseudo instructions with more vreg uses than there are

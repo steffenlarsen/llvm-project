@@ -22,7 +22,11 @@
 
 #include "clang/ScalableStaticAnalysis/SSAFForceLinker.h" // IWYU pragma: keep
 #include "clang/ScalableStaticAnalysis/Tool/Utils.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
@@ -37,104 +41,165 @@ namespace {
 // Command-Line Options
 //===----------------------------------------------------------------------===//
 
-cl::OptionCategory SsafLinkerCategory("clang-ssaf-linker options");
+clv2::OptionCategory SsafLinkerCategory("clang-ssaf-linker options");
 
-// The `static-library` subcommand groups all StaticLibrary operations.
-cl::SubCommand StaticLibraryCmd("static-library",
-                                "Operations on StaticLibraries");
+// clang-ssaf-linker uses initTool() which owns the parse.
 
-// The `multi-arch` subcommand groups all multi-architecture operations.
-cl::SubCommand MultiArchCmd("multi-arch",
-                            "Operations on multi-architecture StaticLibrary "
-                            "and SharedLibrary artifacts");
+//--- Top-level (default) `link` action options ---
 
-// Top-level (default) `link` action positionals.
-cl::list<std::string> InputPaths(cl::Positional, cl::desc("<input files>"),
-                                 cl::OneOrMore, cl::cat(SsafLinkerCategory));
+inline constexpr clv2::ListOptionInfo<std::string> SLInputPathsOpt{
+    "", "<input files>", clv2::Positional{}, clv2::OneOrMore,
+    clv2::cat(SsafLinkerCategory)};
 
-cl::opt<std::string> OutputPath("o", cl::desc("Output file path"),
-                                cl::value_desc("path"), cl::Required,
-                                cl::cat(SsafLinkerCategory));
+inline constexpr clv2::OptionInfo<std::string> SLOutputPathOpt{
+    "o", "Output file path", clv2::Required, clv2::value_desc("path"),
+    clv2::cat(SsafLinkerCategory)};
 
-cl::opt<std::string> TargetTriple(
+inline constexpr clv2::OptionInfo<std::string> SLTargetTripleOpt{
     "target-triple",
-    cl::desc(
-        "Target triple of the link unit (defaults to the first input's; "
-        "required when the first input is a multi-arch static library with "
-        "several members)"),
-    cl::value_desc("triple"), cl::cat(SsafLinkerCategory));
+    "Target triple of the link unit (defaults to the first input's; required "
+    "when the first input is a multi-arch static library with several members)",
+    clv2::value_desc("triple"), clv2::cat(SsafLinkerCategory)};
 
 // --verbose and --time apply to every subcommand.
-cl::opt<bool> Verbose("verbose", cl::desc("Enable verbose output"),
-                      cl::init(false), cl::cat(SsafLinkerCategory),
-                      cl::sub(cl::SubCommand::getTopLevel()),
-                      cl::sub(StaticLibraryCmd), cl::sub(MultiArchCmd));
+inline constexpr clv2::OptionInfo<bool> SLVerboseOpt{
+    "verbose", "Enable verbose output", clv2::cat(SsafLinkerCategory)};
 
-cl::opt<bool> Time("time", cl::desc("Enable timing"), cl::init(false),
-                   cl::cat(SsafLinkerCategory),
-                   cl::sub(cl::SubCommand::getTopLevel()),
-                   cl::sub(StaticLibraryCmd), cl::sub(MultiArchCmd));
+inline constexpr clv2::OptionInfo<bool> SLTimeOpt{
+    "time", "Enable timing", clv2::cat(SsafLinkerCategory)};
 
-// The `static-library` subcommand's verb positional. Declared BEFORE
-// StaticLibraryInputs so cl-lib binds argv[0] under the subcommand to the
-// verb rather than to the greedy input list.
-cl::opt<std::string> StaticLibraryVerb(cl::Positional, cl::Required,
-                                       cl::sub(StaticLibraryCmd),
-                                       cl::desc("<verb>"),
-                                       cl::cat(SsafLinkerCategory));
+//--- `static-library` subcommand options ---
 
-// The `static-library` subcommand's action-specific positional input
-// list. Currently consumed by `static-library create`; if future verbs
-// need different input shapes they'll declare their own positionals.
-cl::list<std::string> StaticLibraryInputs(cl::Positional,
-                                          cl::sub(StaticLibraryCmd),
-                                          cl::desc("<TU summary files>"),
-                                          cl::cat(SsafLinkerCategory));
+inline constexpr clv2::OptionInfo<std::string> SLStaticLibVerbOpt{
+    "",
+    "<verb>",
+    clv2::Positional{},
+    clv2::Required,
+    clv2::value_desc("create"),
+    clv2::cat(SsafLinkerCategory)};
 
-cl::opt<std::string> StaticLibraryOutput("o", cl::Required,
-                                         cl::sub(StaticLibraryCmd),
-                                         cl::desc("Output file path"),
-                                         cl::value_desc("path"),
-                                         cl::cat(SsafLinkerCategory));
+inline constexpr clv2::ListOptionInfo<std::string> SLStaticLibInputsOpt{
+    "", "<TU summary files>", clv2::Positional{},
+    clv2::cat(SsafLinkerCategory)};
 
-cl::opt<std::string> StaticLibraryNamespace(
-    "namespace", cl::sub(StaticLibraryCmd),
-    cl::desc("Namespace name for the StaticLibrary (defaults to output "
-             "file stem)"),
-    cl::value_desc("name"), cl::cat(SsafLinkerCategory));
+inline constexpr clv2::OptionInfo<std::string> SLStaticLibOutputOpt{
+    "o", "Output file path", clv2::Required, clv2::value_desc("path"),
+    clv2::cat(SsafLinkerCategory)};
 
-cl::opt<std::string> StaticLibraryTriple(
-    "target-triple", cl::sub(StaticLibraryCmd),
-    cl::desc("Target triple (defaults to inputs' triple; must match all "
-             "inputs when set)"),
-    cl::value_desc("triple"), cl::cat(SsafLinkerCategory));
+inline constexpr clv2::OptionInfo<std::string> SLStaticLibNamespaceOpt{
+    "namespace",
+    "Namespace name for the StaticLibrary (defaults to output file stem)",
+    clv2::value_desc("name"), clv2::cat(SsafLinkerCategory)};
 
-// The `multi-arch` subcommand's verb positional. Declared BEFORE
-// MultiArchInputs so cl-lib binds argv[0] under the subcommand to the verb
-// rather than to the greedy input list.
-cl::opt<std::string> MultiArchVerb(cl::Positional, cl::Required,
-                                   cl::sub(MultiArchCmd), cl::desc("<verb>"),
-                                   cl::cat(SsafLinkerCategory));
+inline constexpr clv2::OptionInfo<std::string> SLStaticLibTripleOpt{
+    "target-triple",
+    "Target triple (defaults to inputs' triple; must match all inputs when "
+    "set)",
+    clv2::value_desc("triple"), clv2::cat(SsafLinkerCategory)};
 
-// The `multi-arch` subcommand's action-specific positional input list.
-// Currently consumed by `multi-arch create`.
-cl::list<std::string>
-    MultiArchInputs(cl::Positional, cl::sub(MultiArchCmd),
-                    cl::desc("<static-library or shared-library files>"),
-                    cl::cat(SsafLinkerCategory));
+// The `static-library` subcommand groups the StaticLibrary operations.
+inline constexpr clv2::SubCommandInfo<
+    &SLStaticLibVerbOpt, &SLStaticLibInputsOpt, &SLStaticLibOutputOpt,
+    &SLStaticLibNamespaceOpt, &SLStaticLibTripleOpt, &SLVerboseOpt, &SLTimeOpt>
+    StaticLibraryCmdInfo{"static-library", "Operations on StaticLibraries"};
 
-cl::opt<std::string> MultiArchOutput("o", cl::Required, cl::sub(MultiArchCmd),
-                                     cl::desc("Output file path"),
-                                     cl::value_desc("path"),
-                                     cl::cat(SsafLinkerCategory));
+//--- `multi-arch` subcommand options ---
 
-//===----------------------------------------------------------------------===//
-// StaticLibrary Verbs
-//===----------------------------------------------------------------------===//
+// The verb positional is declared BEFORE the input list so that argv[0] under
+// the subcommand binds to the verb rather than to the greedy input list.
+inline constexpr clv2::OptionInfo<std::string> SLMultiArchVerbOpt{
+    "",
+    "<verb>",
+    clv2::Positional{},
+    clv2::Required,
+    clv2::value_desc("create"),
+    clv2::cat(SsafLinkerCategory)};
 
-// Verb strings for the `static-library` subcommand. Kept in sync with
-// UnknownStaticLibraryVerb below.
-constexpr const char *StaticLibraryCreateVerb = "create";
+// The action-specific positional input list, currently consumed by
+// `multi-arch create`.
+inline constexpr clv2::ListOptionInfo<std::string> SLMultiArchInputsOpt{
+    "", "<static-library or shared-library files>", clv2::Positional{},
+    clv2::cat(SsafLinkerCategory)};
+
+inline constexpr clv2::OptionInfo<std::string> SLMultiArchOutputOpt{
+    "o", "Output file path", clv2::Required, clv2::value_desc("path"),
+    clv2::cat(SsafLinkerCategory)};
+
+// The `multi-arch` subcommand groups all multi-architecture operations.
+inline constexpr clv2::SubCommandInfo<
+    &SLMultiArchVerbOpt, &SLMultiArchInputsOpt, &SLMultiArchOutputOpt,
+    &SLVerboseOpt, &SLTimeOpt>
+    MultiArchCmdInfo{"multi-arch",
+                     "Operations on multi-architecture StaticLibrary and "
+                     "SharedLibrary artifacts"};
+
+//--- Top-level registry (includes the subcommands) ---
+
+inline constexpr clv2::OptionsRegistry<
+    &SLInputPathsOpt, &SLOutputPathOpt, &SLTargetTripleOpt, &SLVerboseOpt,
+    &SLTimeOpt, &StaticLibraryCmdInfo, &MultiArchCmdInfo>
+    SsafLinkerOptsReg;
+
+// Mutable state populated by the apply callback after parsing.
+std::vector<std::string> InputPaths;
+std::string OutputPath;
+std::string TargetTriple;
+bool Verbose = false;
+bool Time = false;
+
+// StaticLibrary subcommand state.
+bool StaticLibraryCmd = false;
+std::string StaticLibraryVerb;
+std::vector<std::string> StaticLibraryInputs;
+std::string StaticLibraryOutput;
+std::string StaticLibraryNamespace;
+std::string StaticLibraryTriple;
+
+// MultiArch subcommand state.
+bool MultiArchCmd = false;
+std::string MultiArchVerb;
+std::vector<std::string> MultiArchInputs;
+std::string MultiArchOutput;
+
+} // namespace
+
+static void
+applySsafLinkerOpts(const decltype(SsafLinkerOptsReg)::ParsedOptionsT &Opts) {
+  // Top-level options (only valid when no subcommand is active).
+  InputPaths = Opts.get<&SLInputPathsOpt>();
+  OutputPath = Opts.get<&SLOutputPathOpt>();
+  TargetTriple = Opts.get<&SLTargetTripleOpt>();
+  Verbose = Opts.get<&SLVerboseOpt>();
+  Time = Opts.get<&SLTimeOpt>();
+
+  // StaticLibrary subcommand.
+  if (Opts.isActive<&StaticLibraryCmdInfo>()) {
+    StaticLibraryCmd = true;
+    const auto &Sub = Opts.getSubOptions<&StaticLibraryCmdInfo>();
+    StaticLibraryVerb = Sub.get<&SLStaticLibVerbOpt>();
+    StaticLibraryInputs = Sub.get<&SLStaticLibInputsOpt>();
+    StaticLibraryOutput = Sub.get<&SLStaticLibOutputOpt>();
+    StaticLibraryNamespace = Sub.get<&SLStaticLibNamespaceOpt>();
+    StaticLibraryTriple = Sub.get<&SLStaticLibTripleOpt>();
+    // --verbose/--time are shared across all subcommands.
+    Verbose = Sub.get<&SLVerboseOpt>();
+    Time = Sub.get<&SLTimeOpt>();
+  }
+
+  // MultiArch subcommand.
+  if (Opts.isActive<&MultiArchCmdInfo>()) {
+    MultiArchCmd = true;
+    const auto &Sub = Opts.getSubOptions<&MultiArchCmdInfo>();
+    MultiArchVerb = Sub.get<&SLMultiArchVerbOpt>();
+    MultiArchInputs = Sub.get<&SLMultiArchInputsOpt>();
+    MultiArchOutput = Sub.get<&SLMultiArchOutputOpt>();
+    // --verbose/--time are shared across all subcommands.
+    Verbose = Sub.get<&SLVerboseOpt>();
+    Time = Sub.get<&SLTimeOpt>();
+  }
+}
+
+namespace {
 
 //===----------------------------------------------------------------------===//
 // MultiArch Verbs
@@ -159,7 +224,15 @@ constexpr const char *UnknownMultiArchVerb =
 } // namespace LocalErrorMessages
 
 //===----------------------------------------------------------------------===//
-// default (no subcommand) link action
+// StaticLibrary Verbs
+//===----------------------------------------------------------------------===//
+
+// Verb strings for the `static-library` subcommand. Kept in sync with
+// UnknownStaticLibraryVerb above.
+constexpr const char *StaticLibraryCreateVerb = "create";
+
+//===----------------------------------------------------------------------===//
+// Diagnostic Utilities
 //===----------------------------------------------------------------------===//
 
 void runLink(llvm::TimerGroup &TG) {
@@ -185,8 +258,7 @@ void runStaticLibrary(llvm::TimerGroup &TG) {
     SLC.run(TG, Cfg);
     return;
   }
-  fail(LocalErrorMessages::UnknownStaticLibraryVerb,
-       StaticLibraryVerb.getValue());
+  fail(LocalErrorMessages::UnknownStaticLibraryVerb, StaticLibraryVerb);
 }
 
 //===----------------------------------------------------------------------===//
@@ -199,7 +271,7 @@ void runMultiArch(llvm::TimerGroup &TG) {
     MAC.run(TG, MultiArchInputs, MultiArchOutput, Verbose, Time);
     return;
   }
-  fail(LocalErrorMessages::UnknownMultiArchVerb, MultiArchVerb.getValue());
+  fail(LocalErrorMessages::UnknownMultiArchVerb, MultiArchVerb);
 }
 
 } // namespace
@@ -212,7 +284,10 @@ int main(int argc, const char **argv) {
   llvm::StringRef ToolHeading = "SSAF Linker";
 
   InitLLVM X(argc, argv);
-  initTool(argc, argv, "0.1", SsafLinkerCategory, ToolHeading);
+  initTool(argc, argv, "0.1", SsafLinkerCategory, ToolHeading,
+           [](clv2::OptionParser &P) {
+             P.add<&SsafLinkerOptsReg, applySsafLinkerOpts>();
+           });
 
   llvm::TimerGroup Timers(getToolName(), ToolHeading);
 

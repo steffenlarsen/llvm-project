@@ -9,6 +9,7 @@
 #ifndef LLVM_TOOLS_LLVM_REDUCE_REDUCERWORKITEM_H
 #define LLVM_TOOLS_LLVM_REDUCE_REDUCERWORKITEM_H
 
+#include "ReduceConfig.h"
 #include "llvm/IR/Module.h"
 #include <memory>
 
@@ -27,10 +28,17 @@ public:
   std::unique_ptr<BitcodeLTOInfo> LTOInfo;
   std::unique_ptr<MachineModuleInfo> MMI;
 
+  const ReduceConfig *Config = nullptr;
+
   ReducerWorkItem();
   ~ReducerWorkItem();
   ReducerWorkItem(ReducerWorkItem &) = delete;
   ReducerWorkItem(ReducerWorkItem &&) = default;
+
+  const ReduceConfig &getConfig() const {
+    assert(Config && "ReducerWorkItem used without ReduceConfig");
+    return *Config;
+  }
 
   bool isMIR() const { return MMI != nullptr; }
 
@@ -64,7 +72,8 @@ private:
 
 std::pair<std::unique_ptr<ReducerWorkItem>, bool>
 parseReducerWorkItem(StringRef ToolName, StringRef Filename, LLVMContext &Ctxt,
-                     std::unique_ptr<TargetMachine> &TM, bool IsMIR);
+                     std::unique_ptr<TargetMachine> &TM, bool IsMIR,
+                     StringRef TargetTriple = "");
 } // namespace llvm
 
 #endif

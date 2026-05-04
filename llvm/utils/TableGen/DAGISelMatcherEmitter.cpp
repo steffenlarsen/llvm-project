@@ -21,7 +21,7 @@
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/TinyPtrVector.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/SourceMgr.h"
@@ -36,17 +36,32 @@ enum {
   HistOpcWidth = 40,
 };
 
-static cl::OptionCategory DAGISelCat("Options for -gen-dag-isel");
+static clv2::OptionCategory DAGISelCat("Options for -gen-dag-isel");
 
 // To reduce generated source code size.
-static cl::opt<bool> OmitComments("omit-comments",
-                                  cl::desc("Do not generate comments"),
-                                  cl::init(false), cl::cat(DAGISelCat));
+static bool OmitComments = false;
 
-static cl::opt<bool> InstrumentCoverage(
-    "instrument-coverage",
-    cl::desc("Generates tables to help identify patterns matched"),
-    cl::init(false), cl::cat(DAGISelCat));
+static bool InstrumentCoverage = false;
+
+static constexpr clv2::OptionInfo<bool> OI_OmitComments{
+    "omit-comments", "Do not generate comments", clv2::cat(DAGISelCat)};
+
+static constexpr clv2::OptionInfo<bool> OI_InstrumentCoverage{
+    "instrument-coverage", "Generates tables to help identify patterns matched",
+    clv2::cat(DAGISelCat)};
+
+static constexpr clv2::OptionsRegistry<&OI_OmitComments, &OI_InstrumentCoverage>
+    DAGISelMatcherEmitterReg;
+
+static void applyDAGISelMatcherEmitter(
+    const decltype(DAGISelMatcherEmitterReg)::ParsedOptionsT &Opts) {
+  OmitComments = Opts.get<&OI_OmitComments>();
+  InstrumentCoverage = Opts.get<&OI_InstrumentCoverage>();
+}
+
+void registerDAGISelMatcherEmitterOptions(clv2::OptionParser &P) {
+  P.add<&DAGISelMatcherEmitterReg, applyDAGISelMatcherEmitter>();
+}
 
 namespace {
 class MatcherTableEmitter {

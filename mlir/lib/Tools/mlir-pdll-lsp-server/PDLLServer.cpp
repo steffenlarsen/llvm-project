@@ -1348,7 +1348,7 @@ void PDLDocument::getPDLLViewOutput(raw_ostream &os,
   if (!pdlModule)
     return;
   if (kind == lsp::PDLLViewOutputKind::MLIR) {
-    pdlModule->print(os, OpPrintingFlags().enableDebugInfo());
+    pdlModule->print(os, opPrintingFlags(*pdlModule).enableDebugInfo());
     return;
   }
 

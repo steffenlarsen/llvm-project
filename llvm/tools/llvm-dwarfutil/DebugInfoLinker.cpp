@@ -342,9 +342,9 @@ Error linkDebugInfoImpl(object::ObjectFile &File, const Options &Options,
   Triple TargetTriple = File.makeTriple();
   std::unique_ptr<classic::DwarfStreamer> Streamer;
   if (Expected<std::unique_ptr<classic::DwarfStreamer>> StreamerOrErr =
-          classic::DwarfStreamer::createStreamer(TargetTriple,
-                                                 Linker::OutputFileType::Object,
-                                                 OutStream, ReportWarn))
+          classic::DwarfStreamer::createStreamer(
+              TargetTriple, Linker::OutputFileType::Object, OutStream,
+              ReportWarn, llvm::clv2::defaultOptionsContext()))
     Streamer = std::move(*StreamerOrErr);
   else
     return StreamerOrErr.takeError();

@@ -20,106 +20,6 @@
 #include <utility>
 
 namespace llvm {
-
-cl::opt<std::string> OutputFilename("output", cl::value_desc("output"),
-                                    cl::Required,
-                                    cl::desc("Output profile file"),
-                                    cl::cat(ProfGenCategory));
-static cl::alias OutputA("o", cl::desc("Alias for --output"),
-                         cl::aliasopt(OutputFilename));
-
-static cl::opt<SampleProfileFormat> OutputFormat(
-    "format", cl::desc("Format of output profile"), cl::init(SPF_Ext_Binary),
-    cl::values(clEnumValN(SPF_Binary, "binary", "Binary encoding (default)"),
-               clEnumValN(SPF_Ext_Binary, "extbinary",
-                          "Extensible binary encoding"),
-               clEnumValN(SPF_Text, "text", "Text encoding"),
-               clEnumValN(SPF_GCC, "gcc",
-                          "GCC encoding (only meaningful for -sample)")),
-    cl::cat(ProfGenCategory));
-
-static cl::opt<bool> UseMD5(
-    "use-md5", cl::Hidden,
-    cl::desc("Use md5 to represent function names in the output profile (only "
-             "meaningful for -extbinary)"));
-
-static cl::opt<bool> PopulateProfileSymbolList(
-    "populate-profile-symbol-list", cl::init(false), cl::Hidden,
-    cl::desc("Populate profile symbol list (only meaningful for -extbinary)"));
-
-static cl::opt<bool> FillZeroForAllFuncs(
-    "fill-zero-for-all-funcs", cl::init(false), cl::Hidden,
-    cl::desc("Attribute all functions' range with zero count "
-             "even it's not hit by any samples."));
-
-static cl::opt<int32_t, true> RecursionCompression(
-    "compress-recursion",
-    cl::desc("Compressing recursion by deduplicating adjacent frame "
-             "sequences up to the specified size. -1 means no size limit."),
-    cl::Hidden,
-    cl::location(llvm::sampleprof::CSProfileGenerator::MaxCompressionSize));
-
-static cl::opt<bool>
-    TrimColdProfile("trim-cold-profile",
-                    cl::desc("If the total count of the profile is smaller "
-                             "than threshold, it will be trimmed."),
-                    cl::cat(ProfGenCategory));
-
-static cl::opt<bool> MarkAllContextPreinlined(
-    "mark-all-context-preinlined",
-    cl::desc("Mark all function samples as preinlined(set "
-             "ContextShouldBeInlined attribute)."),
-    cl::init(false));
-
-static cl::opt<bool> CSProfMergeColdContext(
-    "csprof-merge-cold-context", cl::init(true),
-    cl::desc("If the total count of context profile is smaller than "
-             "the threshold, it will be merged into context-less base "
-             "profile."),
-    cl::cat(ProfGenCategory));
-
-static cl::opt<uint32_t> CSProfMaxColdContextDepth(
-    "csprof-max-cold-context-depth", cl::init(1),
-    cl::desc("Keep the last K contexts while merging cold profile. 1 means the "
-             "context-less base profile"),
-    cl::cat(ProfGenCategory));
-
-static cl::opt<int, true> CSProfMaxContextDepth(
-    "csprof-max-context-depth",
-    cl::desc("Keep the last K contexts while merging profile. -1 means no "
-             "depth limit."),
-    cl::location(llvm::sampleprof::CSProfileGenerator::MaxContextDepth),
-    cl::cat(ProfGenCategory));
-
-static cl::opt<double> ProfileDensityThreshold(
-    "profile-density-threshold", cl::init(50),
-    cl::desc("If the profile density is below the given threshold, it "
-             "will be suggested to increase the sampling rate."),
-    cl::Optional, cl::cat(ProfGenCategory));
-static cl::opt<bool> ShowDensity("show-density", cl::init(false),
-                                 cl::desc("show profile density details"),
-                                 cl::Optional, cl::cat(ProfGenCategory));
-static cl::opt<int> ProfileDensityCutOffHot(
-    "profile-density-cutoff-hot", cl::init(990000),
-    cl::desc("Total samples cutoff for functions used to calculate "
-             "profile density."),
-    cl::cat(ProfGenCategory));
-
-static cl::opt<bool> UpdateTotalSamples(
-    "update-total-samples", cl::init(false),
-    cl::desc("Update total samples by accumulating all its body samples."),
-    cl::Optional, cl::cat(ProfGenCategory));
-
-static cl::opt<bool> GenCSNestedProfile(
-    "gen-cs-nested-profile", cl::Hidden, cl::init(true),
-    cl::desc("Generate nested function profiles for CSSPGO"));
-
-cl::opt<bool> InferMissingFrames(
-    "infer-missing-frames", cl::init(true),
-    cl::desc(
-        "Infer missing call frames due to compiler tail call elimination."),
-    cl::Optional, cl::cat(ProfGenCategory));
-
 namespace sampleprof {
 
 // Initialize the MaxCompressionSize to -1 which means no size limit
@@ -132,12 +32,12 @@ bool ProfileGeneratorBase::UseFSDiscriminator = false;
 std::unique_ptr<ProfileGeneratorBase>
 ProfileGeneratorBase::create(ProfiledBinary *Binary,
                              const ContextSampleCounterMap *SampleCounters,
-                             bool ProfileIsCS) {
+                             bool ProfileIsCS, const ProfGenConfig &Config) {
   std::unique_ptr<ProfileGeneratorBase> Generator;
   if (ProfileIsCS) {
-    Generator.reset(new CSProfileGenerator(Binary, SampleCounters));
+    Generator.reset(new CSProfileGenerator(Binary, SampleCounters, Config));
   } else {
-    Generator.reset(new ProfileGenerator(Binary, SampleCounters));
+    Generator.reset(new ProfileGenerator(Binary, SampleCounters, Config));
   }
   ProfileGeneratorBase::UseFSDiscriminator = Binary->useFSDiscriminator();
   FunctionSamples::ProfileIsFS = Binary->useFSDiscriminator();
@@ -147,12 +47,12 @@ ProfileGeneratorBase::create(ProfiledBinary *Binary,
 
 std::unique_ptr<ProfileGeneratorBase>
 ProfileGeneratorBase::create(ProfiledBinary *Binary, SampleProfileMap &Profiles,
-                             bool ProfileIsCS) {
+                             bool ProfileIsCS, const ProfGenConfig &Config) {
   std::unique_ptr<ProfileGeneratorBase> Generator;
   if (ProfileIsCS) {
-    Generator.reset(new CSProfileGenerator(Binary, Profiles));
+    Generator.reset(new CSProfileGenerator(Binary, Profiles, Config));
   } else {
-    Generator.reset(new ProfileGenerator(Binary, std::move(Profiles)));
+    Generator.reset(new ProfileGenerator(Binary, std::move(Profiles), Config));
   }
   ProfileGeneratorBase::UseFSDiscriminator = Binary->useFSDiscriminator();
   FunctionSamples::ProfileIsFS = Binary->useFSDiscriminator();
@@ -165,7 +65,8 @@ void ProfileGeneratorBase::write(std::unique_ptr<SampleProfileWriter> Writer,
   // Populate profile symbol list if extended binary format is used.
   ProfileSymbolList SymbolList;
 
-  if (PopulateProfileSymbolList && OutputFormat == SPF_Ext_Binary) {
+  if (Config.PopulateProfileSymbolList &&
+      Config.OutputFormat == SPF_Ext_Binary) {
     Binary->populateSymbolListFromDWARF(SymbolList);
     Writer->setProfileSymbolList(&SymbolList);
   }
@@ -175,12 +76,13 @@ void ProfileGeneratorBase::write(std::unique_ptr<SampleProfileWriter> Writer,
 }
 
 void ProfileGeneratorBase::write() {
-  auto WriterOrErr = SampleProfileWriter::create(OutputFilename, OutputFormat);
+  auto WriterOrErr =
+      SampleProfileWriter::create(Config.OutputFilename, Config.OutputFormat);
   if (std::error_code EC = WriterOrErr.getError())
-    exitWithError(EC, OutputFilename);
+    exitWithError(EC, Config.OutputFilename);
 
-  if (UseMD5) {
-    if (OutputFormat != SPF_Ext_Binary)
+  if (Config.UseMD5) {
+    if (Config.OutputFormat != SPF_Ext_Binary)
       WithColor::warning() << "-use-md5 is ignored. Specify "
                               "--format=extbinary to enable it\n";
     else
@@ -195,18 +97,19 @@ void ProfileGeneratorBase::showDensitySuggestion(double Density) {
     WithColor::warning() << "The output profile is empty or the "
                             "--profile-density-cutoff-hot option is "
                             "set too low. Please check your command.\n";
-  else if (Density < ProfileDensityThreshold)
+  else if (Density < Config.ProfileDensityThreshold)
     WithColor::warning()
         << "Sample PGO is estimated to optimize better with "
-        << format("%.1f", ProfileDensityThreshold / Density)
+        << format("%.1f", Config.ProfileDensityThreshold / Density)
         << "x more samples. Please consider increasing sampling rate or "
            "profiling for longer duration to get more samples.\n";
 
-  if (ShowDensity)
+  if (Config.ShowDensity)
     outs() << "Functions with density >= " << format("%.1f", Density)
            << " account for "
            << format("%.2f",
-                     static_cast<double>(ProfileDensityCutOffHot) / 10000)
+                     static_cast<double>(Config.ProfileDensityCutOffHot) /
+                         10000)
            << "% total sample counts.\n";
 }
 
@@ -429,7 +332,7 @@ void ProfileGeneratorBase::updateCallsiteSamples() {
 void ProfileGeneratorBase::updateFunctionSamples() {
   updateCallsiteSamples();
 
-  if (UpdateTotalSamples)
+  if (Config.UpdateTotalSamples)
     updateTotalSamples();
 }
 
@@ -503,12 +406,12 @@ ProfileGenerator::getTopLevelFunctionProfile(FunctionId FuncName) {
 
 void ProfileGenerator::generateProfile() {
   NamedRegionTimer T("generate", "Generate profile", "profgen", "llvm-profgen",
-                     TimeProfGen);
+                     Config.TimeProfGen);
   collectProfiledFunctions();
 
   if (Binary->usePseudoProbes()) {
     Binary->decodePseudoProbe();
-    if (LoadFunctionFromSymbol)
+    if (Config.LoadFunctionFromSymbol)
       Binary->loadSymbolsFromPseudoProbe();
   }
 
@@ -534,13 +437,13 @@ void ProfileGenerator::postProcessProfiles() {
   computeSummaryAndThreshold(ProfileMap);
   trimColdProfiles(ColdCountThreshold);
   filterAmbiguousProfile(ProfileMap);
-  if (MarkAllContextPreinlined)
+  if (Config.MarkAllContextPreinlined)
     markAllContextPreinlined(ProfileMap);
   calculateAndShowDensity(ProfileMap);
 }
 
 void ProfileGenerator::trimColdProfiles(uint64_t ColdCntThreshold) {
-  if (!TrimColdProfile)
+  if (!Config.TrimColdProfile)
     return;
 
   // Move cold profiles into a tmp container.
@@ -674,7 +577,7 @@ FunctionSamples &ProfileGenerator::getLeafProfileAndAddTotalSamples(
 RangeSample
 ProfileGenerator::preprocessRangeCounter(const RangeSample &RangeCounter) {
   RangeSample Ranges(RangeCounter.begin(), RangeCounter.end());
-  if (FillZeroForAllFuncs) {
+  if (Config.FillZeroForAllFuncs) {
     for (auto &FuncI : Binary->getAllBinaryFunctions()) {
       for (auto &R : FuncI.second.Ranges) {
         Ranges[{R.first, R.second - 1}] += 0;
@@ -869,11 +772,11 @@ ProfileGeneratorBase::calculateDensity(const SampleProfileMap &Profiles) {
 
   uint64_t AccumulatedSamples = 0;
   uint32_t I = 0;
-  assert(ProfileDensityCutOffHot <= 1000000 &&
+  assert(Config.ProfileDensityCutOffHot <= 1000000 &&
          "The cutoff value is greater than 1000000(100%)");
-  while (AccumulatedSamples < TotalProfileSamples *
-                                  static_cast<float>(ProfileDensityCutOffHot) /
-                                  1000000 &&
+  while (AccumulatedSamples <
+             TotalProfileSamples *
+                 static_cast<float>(Config.ProfileDensityCutOffHot) / 1000000 &&
          I < FuncDensityList.size()) {
     AccumulatedSamples += FuncDensityList[I].second;
     ProfileDensity = FuncDensityList[I].first;
@@ -925,16 +828,16 @@ CSProfileGenerator::getOrCreateContextNode(const SampleContextFrames Context,
 
 void CSProfileGenerator::generateProfile() {
   NamedRegionTimer T("generate", "Generate CS profile", "profgen",
-                     "llvm-profgen", TimeProfGen);
+                     "llvm-profgen", Config.TimeProfGen);
   FunctionSamples::ProfileIsCS = true;
 
   collectProfiledFunctions();
 
   if (Binary->usePseudoProbes()) {
     Binary->decodePseudoProbe();
-    if (InferMissingFrames)
+    if (Config.InferMissingFrames)
       initializeMissingFrameInferrer();
-    if (LoadFunctionFromSymbol)
+    if (Config.LoadFunctionFromSymbol)
       Binary->loadSymbolsFromPseudoProbe();
   }
 
@@ -974,7 +877,7 @@ void CSProfileGenerator::updateFunctionSamples() {
   for (auto *Node : ContextTracker) {
     FunctionSamples *FSamples = Node->getFunctionSamples();
     if (FSamples) {
-      if (UpdateTotalSamples)
+      if (Config.UpdateTotalSamples)
         FSamples->updateTotalSamples();
       FSamples->updateCallsiteSamples();
     }
@@ -1158,31 +1061,32 @@ void CSProfileGenerator::postProcessProfiles() {
 
   // Run global pre-inliner to adjust/merge context profile based on estimated
   // inline decisions.
-  if (EnableCSPreInliner) {
+  bool MergeColdContext = Config.CSProfMergeColdContext;
+  if (Config.EnableCSPreInliner) {
     ContextTracker.populateFuncToCtxtMap();
-    CSPreInliner(ContextTracker, *Binary, Summary.get()).run();
+    CSPreInliner(ContextTracker, *Binary, Summary.get(), Config).run();
     // Turn off the profile merger by default unless it is explicitly enabled.
-    if (!CSProfMergeColdContext.getNumOccurrences())
-      CSProfMergeColdContext = false;
+    if (!Config.CSProfMergeColdContextOccurrences)
+      MergeColdContext = false;
   }
 
   convertToProfileMap();
 
   // Trim and merge cold context profile using cold threshold above.
-  if (TrimColdProfile || CSProfMergeColdContext) {
+  if (Config.TrimColdProfile || MergeColdContext) {
     SampleContextTrimmer(ProfileMap)
         .trimAndMergeColdContextProfiles(
-            HotCountThreshold, TrimColdProfile, CSProfMergeColdContext,
-            CSProfMaxColdContextDepth, EnableCSPreInliner);
+            HotCountThreshold, Config.TrimColdProfile, MergeColdContext,
+            Config.CSProfMaxColdContextDepth, Config.EnableCSPreInliner);
   }
 
-  if (GenCSNestedProfile) {
+  if (Config.GenCSNestedProfile) {
     ProfileConverter CSConverter(ProfileMap);
-    CSConverter.convertCSProfiles();
+    CSConverter.convertCSProfiles(*Config.OptsCtx);
     FunctionSamples::ProfileIsCS = false;
   }
   filterAmbiguousProfile(ProfileMap);
-  if (MarkAllContextPreinlined)
+  if (Config.MarkAllContextPreinlined)
     markAllContextPreinlined(ProfileMap);
   ProfileGeneratorBase::calculateAndShowDensity(ProfileMap);
 }
@@ -1190,11 +1094,11 @@ void CSProfileGenerator::postProcessProfiles() {
 void ProfileGeneratorBase::computeSummaryAndThreshold(
     SampleProfileMap &Profiles) {
   SampleProfileSummaryBuilder Builder(ProfileSummaryBuilder::DefaultCutoffs);
-  Summary = Builder.computeSummaryForProfiles(Profiles);
+  Summary = Builder.computeSummaryForProfiles(Profiles, *Config.OptsCtx);
   HotCountThreshold = ProfileSummaryBuilder::getHotCountThreshold(
-      (Summary->getDetailedSummary()));
+      (Summary->getDetailedSummary()), *Config.OptsCtx);
   ColdCountThreshold = ProfileSummaryBuilder::getColdCountThreshold(
-      (Summary->getDetailedSummary()));
+      (Summary->getDetailedSummary()), *Config.OptsCtx);
 }
 
 void CSProfileGenerator::computeSummaryAndThreshold() {
@@ -1205,10 +1109,8 @@ void CSProfileGenerator::computeSummaryAndThreshold() {
   // Set the flag below to avoid merging the profile again in
   // computeSummaryAndThreshold
   FunctionSamples::ProfileIsCS = false;
-  assert(
-      (!UseContextLessSummary.getNumOccurrences() || UseContextLessSummary) &&
-      "Don't set --profile-summary-contextless to false for profile "
-      "generation");
+  assert(true && "Don't set --profile-summary-contextless to false for profile "
+                 "generation");
   ProfileGeneratorBase::computeSummaryAndThreshold(ContextLessProfiles);
   // Recover the old value.
   FunctionSamples::ProfileIsCS = true;
@@ -1383,7 +1285,7 @@ ContextTrieNode *CSProfileGenerator::getContextNodeForLeafProbe(
   const SmallVectorImpl<uint64_t> *PContext = &CtxKey->Context;
   SmallVector<uint64_t, 16> NewContext;
 
-  if (InferMissingFrames) {
+  if (Config.InferMissingFrames) {
     SmallVector<uint64_t, 16> Context = CtxKey->Context;
     // Append leaf frame for a complete inference.
     Context.push_back(LeafProbe->getAddress());

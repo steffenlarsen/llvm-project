@@ -30,7 +30,6 @@
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/TargetSelect.h"
@@ -67,7 +66,7 @@ public:
       : SuccessfullyInitialised(false), Analysis(Trip) {}
 protected:
   void SetUp() override {
-    IgnoreDWARFFlag = true;
+    Analysis.setIgnoreDWARF(true);
     SuccessfullyInitialised = true;
     if (auto Err = Analysis.initialiseDisassemblyMembers()) {
       handleAllErrors(std::move(Err), [&](const UnsupportedDisassembly &E) {
@@ -78,6 +77,9 @@ protected:
       });
     }
   }
+
+  static constexpr uint64_t DefaultSearchLengthUndef = 2;
+  static constexpr uint64_t DefaultSearchLengthCB = 20;
 
   bool SuccessfullyInitialised;
   ELFTestFileAnalysis Analysis;
@@ -506,17 +508,24 @@ TEST_F(BasicX86FileAnalysisTest, CFIProtectionInvalidTargets) {
           0x75, 0x00, // 3: jne 5 [+0]
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF, 0x0},
+                                                    DefaultSearchLengthUndef,
+                                                    DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::FAIL_NOT_INDIRECT_CF,
             Analysis.validateCFIProtection(Result));
-  Result = GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 1, 0x0});
+  Result = GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 1, 0x0},
+                                        DefaultSearchLengthUndef,
+                                        DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::FAIL_NOT_INDIRECT_CF,
             Analysis.validateCFIProtection(Result));
-  Result = GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 3, 0x0});
+  Result = GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 3, 0x0},
+                                        DefaultSearchLengthUndef,
+                                        DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::FAIL_NOT_INDIRECT_CF,
             Analysis.validateCFIProtection(Result));
-  Result = GraphBuilder::buildFlowGraph(Analysis, {0x12345678, 0x0});
+  Result = GraphBuilder::buildFlowGraph(Analysis, {0x12345678, 0x0},
+                                        DefaultSearchLengthUndef,
+                                        DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::FAIL_INVALID_INSTRUCTION,
             Analysis.validateCFIProtection(Result));
 }
@@ -531,8 +540,9 @@ TEST_F(BasicX86FileAnalysisTest, CFIProtectionBasicFallthroughToUd2) {
           0xff, 0x10, // 4: callq *(%rax)
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 4, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 4, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::PROTECTED,
             Analysis.validateCFIProtection(Result));
 }
@@ -547,8 +557,9 @@ TEST_F(BasicX86FileAnalysisTest, CFIProtectionBasicJumpToUd2) {
           0x0f, 0x0b, // 4: ud2
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 2, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 2, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::PROTECTED,
             Analysis.validateCFIProtection(Result));
 }
@@ -566,8 +577,9 @@ TEST_F(BasicX86FileAnalysisTest, CFIProtectionDualPathUd2) {
           0x0f, 0x0b, // 9: ud2
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 3, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 3, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::PROTECTED,
             Analysis.validateCFIProtection(Result));
 }
@@ -584,8 +596,9 @@ TEST_F(BasicX86FileAnalysisTest, CFIProtectionDualPathSingleUd2) {
           0x0f, 0x0b, // 7: ud2
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 3, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 3, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::PROTECTED,
             Analysis.validateCFIProtection(Result));
 }
@@ -604,16 +617,11 @@ TEST_F(BasicX86FileAnalysisTest, CFIProtectionDualFailLimitUpwards) {
           0x0f, 0x0b, // 8: ud2
       },
       {0xDEADBEEF, 0x0});
-  uint64_t PrevSearchLengthForConditionalBranch =
-      SearchLengthForConditionalBranch;
-  SearchLengthForConditionalBranch = 2;
-
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 6, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 6, 0x0}, DefaultSearchLengthUndef,
+      /*SearchLengthCB=*/2);
   EXPECT_EQ(CFIProtectionStatus::FAIL_ORPHANS,
             Analysis.validateCFIProtection(Result));
-
-  SearchLengthForConditionalBranch = PrevSearchLengthForConditionalBranch;
 }
 
 TEST_F(BasicX86FileAnalysisTest, CFIProtectionDualFailLimitDownwards) {
@@ -630,15 +638,11 @@ TEST_F(BasicX86FileAnalysisTest, CFIProtectionDualFailLimitDownwards) {
           0x0f, 0x0b, // 8: ud2
       },
       {0xDEADBEEF, 0x0});
-  uint64_t PrevSearchLengthForUndef = SearchLengthForUndef;
-  SearchLengthForUndef = 2;
-
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 2, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 2, 0x0}, /*SearchLengthUndef=*/2,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::FAIL_BAD_CONDITIONAL_BRANCH,
             Analysis.validateCFIProtection(Result));
-
-  SearchLengthForUndef = PrevSearchLengthForUndef;
 }
 
 TEST_F(BasicX86FileAnalysisTest, CFIProtectionGoodAndBadPaths) {
@@ -652,8 +656,9 @@ TEST_F(BasicX86FileAnalysisTest, CFIProtectionGoodAndBadPaths) {
           0x0f, 0x0b, // 6: ud2
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 4, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 4, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::FAIL_ORPHANS,
             Analysis.validateCFIProtection(Result));
 }
@@ -669,8 +674,9 @@ TEST_F(BasicX86FileAnalysisTest, CFIProtectionWithUnconditionalJumpInFallthrough
           0x0f, 0x0b, // 6: ud2
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 4, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 4, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::PROTECTED,
             Analysis.validateCFIProtection(Result));
 }
@@ -697,13 +703,11 @@ TEST_F(BasicX86FileAnalysisTest, CFIProtectionComplexExample) {
           0x0f, 0x0b,                   // 22: ud2
       },
       {0xDEADBEEF, 0x0});
-  uint64_t PrevSearchLengthForUndef = SearchLengthForUndef;
-  SearchLengthForUndef = 5;
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 9, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 9, 0x0}, /*SearchLengthUndef=*/5,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::FAIL_ORPHANS,
             Analysis.validateCFIProtection(Result));
-  SearchLengthForUndef = PrevSearchLengthForUndef;
 }
 
 TEST_F(BasicX86FileAnalysisTest, UndefSearchLengthOneTest) {
@@ -719,12 +723,11 @@ TEST_F(BasicX86FileAnalysisTest, UndefSearchLengthOneTest) {
           0x0f, 0x0b,                   // 0x688127: ud2
       },
       {0x688118, 0x0});
-  uint64_t PrevSearchLengthForUndef = SearchLengthForUndef;
-  SearchLengthForUndef = 1;
-  GraphResult Result = GraphBuilder::buildFlowGraph(Analysis, {0x68811d, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(Analysis, {0x68811d, 0x0},
+                                                    /*SearchLengthUndef=*/1,
+                                                    DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::PROTECTED,
             Analysis.validateCFIProtection(Result));
-  SearchLengthForUndef = PrevSearchLengthForUndef;
 }
 
 TEST_F(BasicX86FileAnalysisTest, UndefSearchLengthOneTestFarAway) {
@@ -752,20 +755,21 @@ TEST_F(BasicX86FileAnalysisTest, UndefSearchLengthOneTestFarAway) {
           0x0f, 0x0b, // 0x775e0e: ud2
       },
       {0x775e0e, 0x0});
-  uint64_t PrevSearchLengthForUndef = SearchLengthForUndef;
-  SearchLengthForUndef = 1;
-  GraphResult Result = GraphBuilder::buildFlowGraph(Analysis, {0x775a68, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(Analysis, {0x775a68, 0x0},
+                                                    /*SearchLengthUndef=*/1,
+                                                    DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::FAIL_BAD_CONDITIONAL_BRANCH,
             Analysis.validateCFIProtection(Result));
-  SearchLengthForUndef = 2;
-  Result = GraphBuilder::buildFlowGraph(Analysis, {0x775a68, 0x0});
+  Result = GraphBuilder::buildFlowGraph(Analysis, {0x775a68, 0x0},
+                                        /*SearchLengthUndef=*/2,
+                                        DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::PROTECTED,
             Analysis.validateCFIProtection(Result));
-  SearchLengthForUndef = 3;
-  Result = GraphBuilder::buildFlowGraph(Analysis, {0x775a68, 0x0});
+  Result = GraphBuilder::buildFlowGraph(Analysis, {0x775a68, 0x0},
+                                        /*SearchLengthUndef=*/3,
+                                        DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::PROTECTED,
             Analysis.validateCFIProtection(Result));
-  SearchLengthForUndef = PrevSearchLengthForUndef;
 }
 
 TEST_F(BasicX86FileAnalysisTest, CFIProtectionClobberSinglePathExplicit) {
@@ -779,8 +783,9 @@ TEST_F(BasicX86FileAnalysisTest, CFIProtectionClobberSinglePathExplicit) {
           0xff, 0x10,                         // 10: callq *(%rax)
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 10, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 10, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::FAIL_REGISTER_CLOBBERED,
             Analysis.validateCFIProtection(Result));
 }
@@ -796,8 +801,9 @@ TEST_F(BasicX86FileAnalysisTest, CFIProtectionClobberSinglePathExplicit2) {
           0xff, 0x10,             // 8: callq *(%rax)
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 8, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 8, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::FAIL_REGISTER_CLOBBERED,
             Analysis.validateCFIProtection(Result));
 }
@@ -813,8 +819,9 @@ TEST_F(BasicX86FileAnalysisTest, CFIProtectionClobberSinglePathImplicit) {
           0xff, 0x10,                   // 9: callq *(%rax)
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 9, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 9, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::FAIL_REGISTER_CLOBBERED,
             Analysis.validateCFIProtection(Result));
 }
@@ -832,8 +839,9 @@ TEST_F(BasicX86FileAnalysisTest, CFIProtectionClobberDualPathImplicit) {
           0x0f, 0x0b, // 10: ud2
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 4, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 4, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::FAIL_REGISTER_CLOBBERED,
             Analysis.validateCFIProtection(Result));
 }
@@ -846,8 +854,9 @@ TEST_F(BasicAArch64FileAnalysisTest, AArch64BasicUnprotected) {
           0x00, 0x01, 0x3f, 0xd6, // 0: blr x8
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF, 0x0},
+                                                    DefaultSearchLengthUndef,
+                                                    DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::FAIL_ORPHANS,
             Analysis.validateCFIProtection(Result));
 }
@@ -862,8 +871,9 @@ TEST_F(BasicAArch64FileAnalysisTest, AArch64BasicProtected) {
           0x00, 0x01, 0x3f, 0xd6, // 8: blr x8
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 8, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 8, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::PROTECTED,
             Analysis.validateCFIProtection(Result));
 }
@@ -879,8 +889,9 @@ TEST_F(BasicAArch64FileAnalysisTest, AArch64ClobberBasic) {
           0x00, 0x01, 0x3f, 0xd6, // 12: blr x8
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 12, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 12, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::FAIL_REGISTER_CLOBBERED,
             Analysis.validateCFIProtection(Result));
 }
@@ -896,8 +907,9 @@ TEST_F(BasicAArch64FileAnalysisTest, AArch64ClobberOneLoad) {
           0x20, 0x00, 0x1f, 0xd6, // 12: br x1
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 12, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 12, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::PROTECTED,
             Analysis.validateCFIProtection(Result));
 }
@@ -914,8 +926,9 @@ TEST_F(BasicAArch64FileAnalysisTest, AArch64ClobberLoadAddGood) {
           0x20, 0x00, 0x1f, 0xd6, // 16: br x1
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 16, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 16, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::PROTECTED,
             Analysis.validateCFIProtection(Result));
 }
@@ -932,8 +945,9 @@ TEST_F(BasicAArch64FileAnalysisTest, AArch64ClobberLoadAddBad) {
           0x20, 0x00, 0x1f, 0xd6, // 16: br x1
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 16, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 16, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::FAIL_REGISTER_CLOBBERED,
             Analysis.validateCFIProtection(Result));
 }
@@ -950,8 +964,9 @@ TEST_F(BasicAArch64FileAnalysisTest, AArch64ClobberLoadAddBad2) {
           0x20, 0x00, 0x1f, 0xd6, // 16: br x1
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 16, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 16, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::FAIL_REGISTER_CLOBBERED,
             Analysis.validateCFIProtection(Result));
 }
@@ -968,8 +983,9 @@ TEST_F(BasicAArch64FileAnalysisTest, AArch64ClobberTwoLoads) {
           0x20, 0x00, 0x1f, 0xd6, // 16: br x1
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 16, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 16, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::FAIL_REGISTER_CLOBBERED,
             Analysis.validateCFIProtection(Result));
 }
@@ -986,8 +1002,9 @@ TEST_F(BasicAArch64FileAnalysisTest, AArch64ClobberUnrelatedSecondLoad) {
           0x20, 0x00, 0x1f, 0xd6, // 16: br x1
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 16, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 16, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::PROTECTED,
             Analysis.validateCFIProtection(Result));
 }
@@ -1004,8 +1021,9 @@ TEST_F(BasicAArch64FileAnalysisTest, AArch64ClobberUnrelatedLoads) {
           0x20, 0x00, 0x1f, 0xd6, // 16: br x1
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 16, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 16, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::PROTECTED,
             Analysis.validateCFIProtection(Result));
 }
@@ -1021,8 +1039,9 @@ TEST_F(BasicAArch64FileAnalysisTest, AArch64GoodAndBadPaths) {
           0x20, 0x00, 0x1f, 0xd6, // 12: br x1
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 12, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 12, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::FAIL_ORPHANS,
             Analysis.validateCFIProtection(Result));
 }
@@ -1041,8 +1060,9 @@ TEST_F(BasicAArch64FileAnalysisTest, AArch64TwoPaths) {
           0x20, 0x00, 0x20, 0xd4, // 24: brk #0x1
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 20, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 20, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::PROTECTED,
             Analysis.validateCFIProtection(Result));
 }
@@ -1062,8 +1082,9 @@ TEST_F(BasicAArch64FileAnalysisTest, AArch64TwoPathsBadLoad1) {
           0x20, 0x00, 0x20, 0xd4, // 28: brk #0x1
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 24, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 24, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::FAIL_REGISTER_CLOBBERED,
             Analysis.validateCFIProtection(Result));
 }
@@ -1083,8 +1104,9 @@ TEST_F(BasicAArch64FileAnalysisTest, AArch64TwoPathsBadLoad2) {
           0x20, 0x00, 0x20, 0xd4, // 28: brk #0x1
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 24, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 24, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_EQ(CFIProtectionStatus::FAIL_REGISTER_CLOBBERED,
             Analysis.validateCFIProtection(Result));
 }
@@ -1095,7 +1117,6 @@ TEST_F(BasicAArch64FileAnalysisTest, AArch64TwoPathsBadLoad2) {
 
 int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
-  llvm::cl::ParseCommandLineOptions(argc, argv);
 
   llvm::InitializeAllTargetInfos();
   llvm::InitializeAllTargetMCs();

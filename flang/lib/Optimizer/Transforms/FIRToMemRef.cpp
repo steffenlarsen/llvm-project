@@ -38,6 +38,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Optimizer/Dialect/CUF/Attributes/CUFAttr.h"
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/Dialect/FIROpsSupport.h"
@@ -74,9 +75,9 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 
 #define DEBUG_TYPE "fir-to-memref"
 
@@ -102,11 +103,6 @@ static bool isMarshalLike(Operation *op) {
 }
 
 using MemRefInfo = FailureOr<std::pair<Value, SmallVector<Value>>>;
-
-static llvm::cl::opt<bool> enableFIRConvertOptimizations(
-    "enable-fir-convert-opts",
-    llvm::cl::desc("enable emilinating redundant fir.convert in FIR-to-MemRef"),
-    llvm::cl::init(false), llvm::cl::Hidden);
 
 class FIRToMemRef : public fir::impl::FIRToMemRefBase<FIRToMemRef> {
 public:
@@ -910,8 +906,10 @@ FIRToMemRef::convertArrayCoorOp(Operation *memOp, fir::ArrayCoorOp arrayCoorOp,
         fir::ConvertOp::create(rewriter, loc, memrefTy, basePtr).getResult();
     rewriter.setInsertionPointAfter(arrayCoorOp);
   } else if ((memref = firMemref.getDefiningOp()) &&
-             enableFIRConvertOptimizations && isMarshalLike(memref) &&
-             !fir::isa_fir_type(firMemref.getType())) {
+             llvm::clv2::getOptValOrDefault<
+                 &llvm::clv2::FLANG_EnableFirConvertOpts>(
+                 getContext().getOptionsContext()) &&
+             isMarshalLike(memref) && !fir::isa_fir_type(firMemref.getType())) {
     converted = firMemref;
     rewriter.setInsertionPoint(arrayCoorOp);
   } else {
@@ -1188,8 +1186,9 @@ FailureOr<Value>
 FIRToMemRef::getFIRConvert(Operation *memOp, Operation *op,
                            PatternRewriter &rewriter,
                            FIRToMemRefTypeConverter &typeConverter) {
-  if (enableFIRConvertOptimizations && !op->hasOneUse() &&
-      !memrefIsOptional(op)) {
+  if (llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_EnableFirConvertOpts>(
+          getContext().getOptionsContext()) &&
+      !op->hasOneUse() && !memrefIsOptional(op)) {
     for (Operation *userOp : op->getUsers()) {
       if (auto convertOp = dyn_cast<fir::ConvertOp>(userOp)) {
         Value converted = convertOp.getResult();

@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- EarlyCSE.cpp - Simple and fast CSE pass ----------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -73,15 +75,15 @@ STATISTIC(NumDSE,      "Number of trivial dead stores removed");
 DEBUG_COUNTER(CSECounter, "early-cse",
               "Controls which instructions are removed");
 
-static cl::opt<unsigned> EarlyCSEMssaOptCap(
-    "earlycse-mssa-optimization-cap", cl::init(500), cl::Hidden,
-    cl::desc("Enable imprecision in EarlyCSE in pathological cases, in exchange "
-             "for faster compile. Caps the MemorySSA clobbering calls."));
+static unsigned getEarlyCSEMssaOptCap(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_EarlyCseMssaOptimizationCap>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> EarlyCSEDebugHash(
-    "earlycse-debug-hash", cl::init(false), cl::Hidden,
-    cl::desc("Perform extra assertion checking to verify that SimpleValue's hash "
-             "function is well-behaved w.r.t. its isEqual predicate"));
+static bool getEarlyCSEDebugHash(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_EarlyCseDebugHash>(
+      F.getContext().getOptionsContext(), false);
+}
 
 //===----------------------------------------------------------------------===//
 // SimpleValue
@@ -328,7 +330,7 @@ unsigned DenseMapInfo<SimpleValue>::getHashValue(SimpleValue Val) {
   // will force all hashing to collide, so we'll exhaustively search
   // the table for a match, and the assertion in isEqual will fire if
   // there's a bug causing equal keys to hash differently.
-  if (EarlyCSEDebugHash)
+  if (getEarlyCSEDebugHash(*Val.Inst->getFunction()))
     return 0;
 #endif
   return getHashValueImpl(Val);
@@ -1033,7 +1035,8 @@ private:
   void removeMSSA(Instruction &Inst) {
     if (!MSSA)
       return;
-    if (VerifyMemorySSA)
+    if (getVerifyMemorySSA(
+            Inst.getFunction()->getContext().getOptionsContext()))
       MSSA->verifyMemorySSA();
     // Removing a store here can leave MemorySSA in an unoptimized state by
     // creating MemoryPhis that have identical arguments and by creating
@@ -1093,7 +1096,7 @@ bool EarlyCSE::isSameMemGeneration(unsigned EarlierGeneration,
   // EarlierInst and LaterInst and neither can any other write that potentially
   // clobbers LaterInst.
   MemoryAccess *LaterDef;
-  if (ClobberCounter < EarlyCSEMssaOptCap) {
+  if (ClobberCounter < getEarlyCSEMssaOptCap(*LaterInst->getFunction())) {
     LaterDef = MSSA->getWalker()->getClobberingMemoryAccess(LaterInst);
     ClobberCounter++;
   } else

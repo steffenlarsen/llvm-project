@@ -81,7 +81,7 @@ static ExpectedErrorOr<void *> RunTest(StringRef Input, size_t SizeLimit,
                                        bool Compress = false) {
   // Read Input profile.
   auto FS = vfs::getRealFileSystem();
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   auto InputBuffer = MemoryBuffer::getMemBuffer(Input);
   DEF_VAR_RETURN_IF_ERROR(
       Reader, SampleProfileReader::create(InputBuffer, Context, *FS));

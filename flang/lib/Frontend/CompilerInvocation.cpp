@@ -11,10 +11,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "flang/Frontend/CompilerInvocation.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Frontend/CodeGenOptions.h"
 #include "flang/Frontend/PreprocessorOptions.h"
 #include "flang/Frontend/TargetOptions.h"
-#include "flang/Optimizer/Passes/CommandLineOpts.h"
 #include "flang/Semantics/semantics.h"
 #include "flang/Support/Fortran-features.h"
 #include "flang/Support/OpenMP-features.h"
@@ -38,6 +38,7 @@
 #include "llvm/Option/OptTable.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/VirtualFileSystem.h"
@@ -2093,13 +2094,16 @@ CompilerInvocation::getSemanticsCtx(
 
 /// Set \p loweringOptions controlling lowering behavior based
 /// on the \p optimizationLevel.
-void CompilerInvocation::setLoweringOptions() {
+void CompilerInvocation::setLoweringOptions(
+    const llvm::clv2::OptionsContext &optsCtx) {
   const CodeGenOptions &codegenOpts = getCodeGenOpts();
 
   // Lower TRANSPOSE as a runtime call under -O0.
   loweringOpts.setOptimizeTranspose(codegenOpts.OptimizationLevel > 0);
   loweringOpts.setUnderscoring(codegenOpts.Underscoring);
-  loweringOpts.setSkipExternalRttiDefinition(skipExternalRttiDefinition);
+  loweringOpts.setSkipExternalRttiDefinition(
+      llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_SkipExternalRttiDef>(
+          optsCtx));
 
   const Fortran::common::LangOptions &langOptions = getLangOpts();
   loweringOpts.setIntegerWrapAround(langOptions.getSignedOverflowBehavior() ==

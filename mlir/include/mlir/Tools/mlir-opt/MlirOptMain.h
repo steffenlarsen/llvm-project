@@ -17,6 +17,7 @@
 #include "mlir/Support/ToolUtilities.h"
 #include "llvm/ADT/StringRef.h"
 
+#include "llvm/Support/OptionsContext.h"
 #include <cstdlib>
 #include <functional>
 #include <memory>
@@ -24,6 +25,10 @@
 namespace llvm {
 class raw_ostream;
 class MemoryBuffer;
+namespace clv2 {
+class OptionParser;
+class OptionsContext;
+} // namespace clv2
 } // namespace llvm
 
 namespace mlir {
@@ -61,8 +66,29 @@ public:
   /// Register the options as global LLVM command line options.
   static void registerCLOptions(DialectRegistry &dialectRegistry);
 
+  /// Register the options, injecting plugin entries into the given
+  /// OptionParser instead of the global registry.
+  static void registerCLOptions(llvm::clv2::OptionParser &P,
+                                DialectRegistry &dialectRegistry);
+
   /// Create a new config with the default set from the CL options.
-  static MlirOptMainConfig createFromCLOptions();
+  /// \p optsCtx is retained (not owned) and must outlive the config; it is
+  /// what the tool's MLIRContexts are built from.
+  static MlirOptMainConfig
+  createFromCLOptions(const llvm::clv2::OptionsContext &optsCtx);
+
+  /// The parsed options backing this run.  Never null.
+  const llvm::clv2::OptionsContext &getOptionsContext() const {
+    return *optsCtx;
+  }
+  MlirOptMainConfig &setOptionsContext(const llvm::clv2::OptionsContext &ctx) {
+    optsCtx = &ctx;
+    return *this;
+  }
+
+  /// Non-owning; see setOptionsContext.
+  const llvm::clv2::OptionsContext *optsCtx =
+      &llvm::clv2::defaultOptionsContext();
 
   ///
   /// Options.
@@ -338,14 +364,14 @@ protected:
   /// Show the notes in diagnostic information. Notes can be included in
   /// any diagnostic information, so it is not specified in the verbosity
   /// level.
-  bool disableDiagnosticNotesFlag = true;
+  bool disableDiagnosticNotesFlag = false;
 
   /// Split the input file based on the given marker into chunks and process
   /// each chunk independently. Input is not split if empty.
   std::string splitInputFileFlag = "";
 
   /// Merge output chunks into one file using the given marker.
-  std::string outputSplitMarkerFlag = "";
+  std::string outputSplitMarkerFlag = kDefaultSplitMarker;
 
   /// Use an explicit top-level module op during parsing.
   bool useExplicitModuleFlag = false;
@@ -380,21 +406,27 @@ using PassPipelineFn = llvm::function_ref<LogicalResult(PassManager &pm)>;
 std::string registerCLIOptions(llvm::StringRef toolName,
                                DialectRegistry &registry);
 
+/// The outcome of parsing a tool's command line: the input/output filenames
+/// plus the OptionsContext owning this parse's option values.  The context is
+/// returned rather than stashed in a process-wide global so that two parses in
+/// one process stay independent; it must outlive any MLIRContext built from it.
+struct CLIParseResult {
+  std::string inputFilename;
+  std::string outputFilename;
+  std::unique_ptr<llvm::clv2::OptionsContext> optsCtx;
+};
+
 /// Parse command line options.
 /// - helpHeader is used for the header displayed by `--help`.
-/// - return std::pair<std::string, std::string> for
-///   inputFilename and outputFilename command line option values.
-std::pair<std::string, std::string> parseCLIOptions(int argc, char **argv,
-                                                    llvm::StringRef helpHeader);
+CLIParseResult parseCLIOptions(int argc, char **argv,
+                               llvm::StringRef helpHeader);
 
 /// Register and parse command line options.
 /// - toolName is used for the header displayed by `--help`.
 /// - registry should contain all the dialects that can be parsed in the source.
-/// - return std::pair<std::string, std::string> for
-///   inputFilename and outputFilename command line option values.
-std::pair<std::string, std::string>
-registerAndParseCLIOptions(int argc, char **argv, llvm::StringRef toolName,
-                           DialectRegistry &registry);
+CLIParseResult registerAndParseCLIOptions(int argc, char **argv,
+                                          llvm::StringRef toolName,
+                                          DialectRegistry &registry);
 
 /// Perform the core processing behind `mlir-opt`.
 /// - outputStream is the stream where the resulting IR is printed.
@@ -420,7 +452,8 @@ LogicalResult MlirOptMain(int argc, char **argv, llvm::StringRef toolName,
 /// - registry should contain all the dialects that can be parsed in the source.
 LogicalResult MlirOptMain(int argc, char **argv, llvm::StringRef inputFilename,
                           llvm::StringRef outputFilename,
-                          DialectRegistry &registry);
+                          DialectRegistry &registry,
+                          const llvm::clv2::OptionsContext &optsCtx);
 
 /// Helper wrapper to return the result of MlirOptMain directly from main.
 ///

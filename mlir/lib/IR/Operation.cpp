@@ -266,7 +266,7 @@ InFlightDiagnostic Operation::emitError(const Twine &message) {
   if (getContext()->shouldPrintOpOnDiagnostic()) {
     diag.attachNote(getLoc())
         .append("see current operation: ")
-        .appendOp(*this, OpPrintingFlags().printGenericOpForm());
+        .appendOp(*this, OpPrintingFlags(getContext()).printGenericOpForm());
   }
   return diag;
 }

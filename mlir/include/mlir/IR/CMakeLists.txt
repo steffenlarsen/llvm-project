@@ -71,3 +71,21 @@ add_mlir_doc(BuiltinLocationAttributes BuiltinLocationAttributes Dialects/ -gen-
 add_mlir_doc(BuiltinOps BuiltinOps Dialects/ -gen-op-doc)
 add_mlir_doc(BuiltinTypes BuiltinTypes Dialects/ -gen-typedef-doc)
 add_mlir_doc(BuiltinTypes BuiltinTypeInterfaces Dialects/ -gen-type-interface-docs)
+
+# Reset TABLEGEN_OUTPUT first: it accumulates across every tablegen() call in
+# this directory, so without this the clv2 target would also depend on the
+# unrelated .inc files generated above -- and in MLIR's case on mlir-tblgen,
+# which creates a dependency cycle.
+set(TABLEGEN_OUTPUT "")
+# Also drop the accumulated LLVM_COMMON_DEPENDS for this one target.
+# add_public_tablegen_target() add_dependencies() it onto the target, which
+# here is every mlir_tablegen IncGen target declared above -- and so
+# transitively mlir-tblgen.  This is a `tablegen(LLVM ...)` rule that needs
+# only llvm-min-tblgen, and inheriting mlir-tblgen forms a cycle:
+# mlir-tblgen -> MLIRTableGen -> ... -> MLIROptionsTableGen.
+set(_mlir_saved_common_depends ${LLVM_COMMON_DEPENDS})
+set(LLVM_COMMON_DEPENDS "")
+set(LLVM_TARGET_DEFINITIONS MLIROptions.td)
+tablegen(LLVM MLIROptionsOptInfos.inc -gen-clv2-options)
+add_public_tablegen_target(MLIROptionsTableGen)
+set(LLVM_COMMON_DEPENDS ${_mlir_saved_common_depends} MLIROptionsTableGen)

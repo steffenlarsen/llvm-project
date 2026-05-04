@@ -8,6 +8,7 @@
 
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/Passes/BundleVec.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/IR/Function.h"
 #include "llvm/SandboxIR/Function.h"
 #include "llvm/SandboxIR/Instruction.h"
 #include "llvm/SandboxIR/Module.h"
@@ -17,27 +18,32 @@
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/Debug.h"
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/VecUtils.h"
 
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Vectorize/VectorizeOptions.h"
+
 namespace llvm {
 
 #ifndef NDEBUG
-static cl::opt<bool>
-    AlwaysVerify("sbvec-always-verify", cl::init(false), cl::Hidden,
-                 cl::desc("Helps find bugs by verifying the IR whenever we "
-                          "emit new instructions (*very* expensive)."));
+static bool getAlwaysVerify(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_AlwaysVerify>(
+      F.getContext().getOptionsContext());
+}
 #endif // NDEBUG
 
 static constexpr unsigned long StopAtDisabled =
     std::numeric_limits<unsigned long>::max();
-static cl::opt<unsigned long>
-    StopAt("sbvec-stop-at", cl::init(StopAtDisabled), cl::Hidden,
-           cl::desc("Vectorize if the invocation count is < than this. 0 "
-                    "disables vectorization."));
+static unsigned long getStopAt(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::VectorizeOptsReg, &clv2::VEC_StopAt>(
+      F.getContext().getOptionsContext(), StopAtDisabled);
+}
 
 static constexpr unsigned long StopBundleDisabled =
     std::numeric_limits<unsigned long>::max();
-static cl::opt<unsigned long>
-    StopBundle("sbvec-stop-bndl", cl::init(StopBundleDisabled), cl::Hidden,
-               cl::desc("Vectorize up to this many bundles."));
+static unsigned long getStopBundle(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::VectorizeOptsReg,
+                                    &clv2::VEC_StopBundle>(
+      F.getContext().getOptionsContext(), StopBundleDisabled);
+}
 
 namespace sandboxir {
 
@@ -281,8 +287,12 @@ void BundleVec::collectPotentiallyDeadInstrs(ArrayRef<Value *> Bndl) {
 Action *BundleVec::vectorizeRec(ArrayRef<Value *> Bndl,
                                 ArrayRef<Value *> UserBndl, unsigned Depth,
                                 LegalityAnalysis &Legality) {
-  bool StopForDebug =
-      DebugBndlCnt++ >= StopBundle && StopBundle != StopBundleDisabled;
+  bool StopForDebug = false;
+  if (auto *I = dyn_cast<Instruction>(Bndl[0])) {
+    const auto &LLVMF = I->getParent()->getParent()->getLLVMFunction();
+    StopForDebug = DebugBndlCnt++ >= getStopBundle(LLVMF) &&
+                   getStopBundle(LLVMF) != StopBundleDisabled;
+  }
   LLVM_DEBUG(dbgs() << DEBUG_PREFIX << "canVectorize() Bundle:\n";
              VecUtils::dump(Bndl));
   const auto &LegalityRes = StopForDebug ? Legality.getForcedPackForDebugging()
@@ -555,14 +565,16 @@ Value *BundleVec::emitVectors() {
       ActionPtr->Vec = NewVec;
     }
 #ifndef NDEBUG
-    if (AlwaysVerify) {
-      // This helps find broken IR by constantly verifying the function. Note
-      // that this is very expensive and should only be used for debugging.
+    {
       Instruction *I0 = isa<Instruction>(Bndl[0])
                             ? cast<Instruction>(Bndl[0])
                             : cast<Instruction>(UserBndl[0]);
-      assert(!Utils::verifyFunction(I0->getParent()->getParent(), dbgs()) &&
-             "Broken function!");
+      if (getAlwaysVerify(I0->getParent()->getParent()->getLLVMFunction())) {
+        // This helps find broken IR by constantly verifying the function. Note
+        // that this is very expensive and should only be used for debugging.
+        assert(!Utils::verifyFunction(I0->getParent()->getParent(), dbgs()) &&
+               "Broken function!");
+      }
     }
 #endif // NDEBUG
   }
@@ -572,7 +584,10 @@ Value *BundleVec::emitVectors() {
 bool BundleVec::tryVectorize(ArrayRef<Value *> Bndl,
                              LegalityAnalysis &Legality) {
   Change = false;
-  if (LLVM_UNLIKELY(InvocationCnt++ >= StopAt && StopAt != StopAtDisabled))
+  const auto &LLVMF =
+      cast<Instruction>(Bndl[0])->getParent()->getParent()->getLLVMFunction();
+  if (LLVM_UNLIKELY(InvocationCnt++ >= getStopAt(LLVMF) &&
+                    getStopAt(LLVMF) != StopAtDisabled))
     return false;
   DeadInstrCandidates.clear();
   Legality.clear();

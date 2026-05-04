@@ -18,25 +18,45 @@
 #include "SIInstrInfo.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallBitVector.h"
-#include "llvm/TargetParser/AMDGPUTargetParser.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/TargetParser/TargetParser.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "amdgpu-wait-sgpr-hazards"
 
-static cl::opt<bool> GlobalCullSGPRHazardsOnFunctionBoundary(
-    "amdgpu-sgpr-hazard-boundary-cull", cl::init(false), cl::Hidden,
-    cl::desc("Cull hazards on function boundaries"));
-
-static cl::opt<bool>
-    GlobalCullSGPRHazardsAtMemWait("amdgpu-sgpr-hazard-mem-wait-cull",
-                                   cl::init(false), cl::Hidden,
-                                   cl::desc("Cull hazards on memory waits"));
-
-static cl::opt<unsigned> GlobalCullSGPRHazardsMemWaitThreshold(
-    "amdgpu-sgpr-hazard-mem-wait-cull-threshold", cl::init(8), cl::Hidden,
-    cl::desc("Number of tracked SGPRs before initiating hazard cull on memory "
-             "wait"));
+static bool getGlobalCullSGPRHazardsOnFunctionBoundary(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::AMDGPU_CullSGPRHazardsOnFunctionBoundary>(
+      F.getContext().getOptionsContext());
+}
+static bool
+getGlobalCullSGPRHazardsOnFunctionBoundaryWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
+                               &clv2::AMDGPU_CullSGPRHazardsOnFunctionBoundary>(
+      F.getContext().getOptionsContext());
+}
+static bool getGlobalCullSGPRHazardsAtMemWait(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_CullSGPRHazardsAtMemWait>(
+      F.getContext().getOptionsContext());
+}
+static bool getGlobalCullSGPRHazardsAtMemWaitWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
+                               &clv2::AMDGPU_CullSGPRHazardsAtMemWait>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getGlobalCullSGPRHazardsMemWaitThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::AMDGPU_CullSGPRHazardsMemWaitThreshold>(
+      F.getContext().getOptionsContext());
+}
+static bool
+getGlobalCullSGPRHazardsMemWaitThresholdWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
+                               &clv2::AMDGPU_CullSGPRHazardsMemWaitThreshold>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -558,21 +578,23 @@ public:
       return false;
 
     // Parse settings
-    CullSGPRHazardsOnFunctionBoundary = GlobalCullSGPRHazardsOnFunctionBoundary;
-    CullSGPRHazardsAtMemWait = GlobalCullSGPRHazardsAtMemWait;
-    CullSGPRHazardsMemWaitThreshold = GlobalCullSGPRHazardsMemWaitThreshold;
+    const Function &F = MF.getFunction();
+    CullSGPRHazardsOnFunctionBoundary =
+        getGlobalCullSGPRHazardsOnFunctionBoundary(F);
+    CullSGPRHazardsAtMemWait = getGlobalCullSGPRHazardsAtMemWait(F);
+    CullSGPRHazardsMemWaitThreshold =
+        getGlobalCullSGPRHazardsMemWaitThreshold(F);
 
-    if (!GlobalCullSGPRHazardsOnFunctionBoundary.getNumOccurrences())
+    if (!getGlobalCullSGPRHazardsOnFunctionBoundaryWasSpecified(F))
       CullSGPRHazardsOnFunctionBoundary =
-          MF.getFunction().hasFnAttribute("amdgpu-sgpr-hazard-boundary-cull");
-    if (!GlobalCullSGPRHazardsAtMemWait.getNumOccurrences())
+          F.hasFnAttribute("amdgpu-sgpr-hazard-boundary-cull");
+    if (!getGlobalCullSGPRHazardsAtMemWaitWasSpecified(F))
       CullSGPRHazardsAtMemWait =
-          MF.getFunction().hasFnAttribute("amdgpu-sgpr-hazard-mem-wait-cull");
-    if (!GlobalCullSGPRHazardsMemWaitThreshold.getNumOccurrences())
-      CullSGPRHazardsMemWaitThreshold =
-          MF.getFunction().getFnAttributeAsParsedInteger(
-              "amdgpu-sgpr-hazard-mem-wait-cull-threshold",
-              CullSGPRHazardsMemWaitThreshold);
+          F.hasFnAttribute("amdgpu-sgpr-hazard-mem-wait-cull");
+    if (!getGlobalCullSGPRHazardsMemWaitThresholdWasSpecified(F))
+      CullSGPRHazardsMemWaitThreshold = F.getFnAttributeAsParsedInteger(
+          "amdgpu-sgpr-hazard-mem-wait-cull-threshold",
+          CullSGPRHazardsMemWaitThreshold);
 
     TII = ST->getInstrInfo();
     TRI = ST->getRegisterInfo();

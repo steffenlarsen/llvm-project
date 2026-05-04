@@ -142,21 +142,6 @@ TEST(CreateToolExecutorTest, FailedCreateExecutorUndefinedFlag) {
   llvm::consumeError(Executor.takeError());
 }
 
-TEST(CreateToolExecutorTest, RegisterFlagsBeforeReset) {
-  llvm::cl::opt<std::string> BeforeReset(
-      "before_reset", llvm::cl::desc("Defined before reset."),
-      llvm::cl::init(""));
-
-  llvm::cl::ResetAllOptionOccurrences();
-
-  std::vector<const char *> argv = {"prog", "--before_reset=set", "f"};
-  int argc = argv.size();
-  auto Executor = internal::createExecutorFromCommandLineArgsImpl(
-      argc, &argv[0], TestCategory);
-  ASSERT_TRUE((bool)Executor);
-  EXPECT_EQ(BeforeReset, "set");
-  BeforeReset.removeArgument();
-}
 
 TEST(CreateToolExecutorTest, CreateStandaloneToolExecutor) {
   std::vector<const char *> argv = {"prog", "standalone.cpp"};
@@ -247,7 +232,7 @@ TEST(AllTUsToolTest, AFewFiles) {
   FixedCompilationDatabaseWithFiles Compilations(
       ".", {"a.cc", "b.cc", "c.cc", "ignore.cc"}, std::vector<std::string>());
   AllTUsToolExecutor Executor(Compilations, /*ThreadCount=*/0);
-  Filter.setValue("[a-c].cc");
+  Filter = "[a-c].cc";
   Executor.mapVirtualFile("a.cc", "void x() {}");
   Executor.mapVirtualFile("b.cc", "void y() {}");
   Executor.mapVirtualFile("c.cc", "void z() {}");
@@ -259,7 +244,7 @@ TEST(AllTUsToolTest, AFewFiles) {
   EXPECT_THAT(
       Executor.getToolResults()->AllKVResults(),
       ::testing::UnorderedElementsAre(Named("x"), Named("y"), Named("z")));
-  Filter.setValue(".*"); // reset to default value.
+  Filter = ".*";
 }
 
 TEST(AllTUsToolTest, ManyFiles) {

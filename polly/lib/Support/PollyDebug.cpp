@@ -11,7 +11,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/Support/PollyDebug.h"
-#include "llvm/Support/CommandLine.h"
+#include "polly/PollyOptionsOptInfos.h"
+#include "llvm/Support/CommandLineV2.h"
 
 using namespace polly;
 using namespace llvm;
@@ -19,9 +20,8 @@ using namespace llvm;
 bool PollyDebugFlag;
 bool polly::getPollyDebugFlag() { return PollyDebugFlag; }
 
-// -debug - Command line option to enable the DEBUG statements in the passes.
-// This flag may only be enabled in debug builds.
-static cl::opt<bool, true>
-    PollyDebug("polly-debug",
-               cl::desc("Enable debug output for only polly passes."),
-               cl::Hidden, cl::location(PollyDebugFlag), cl::ZeroOrMore);
+void polly_opts::initPollyDebugOpts(const polly_opts::ParsedOpts &Opts) {
+  using namespace llvm::clv2;
+  if (Opts.specified<&POLLY_Debug>())
+    PollyDebugFlag = Opts.get<&POLLY_Debug>();
+}

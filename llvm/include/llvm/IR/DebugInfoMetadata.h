@@ -25,7 +25,6 @@
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/PseudoProbe.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Discriminator.h"
 #include <cassert>
@@ -129,7 +128,12 @@ public:
 
 class DbgVariableRecord;
 
-LLVM_ABI extern cl::opt<bool> EnableFSDiscriminator;
+namespace clv2 {
+class OptionsContext;
+}
+
+LLVM_ABI bool getEnableFSDiscriminator(const LLVMContext &Ctx);
+LLVM_ABI bool getEnableFSDiscriminator(const clv2::OptionsContext &Ctx);
 
 /// Tagged DWARF-like metadata node.
 ///
@@ -2929,8 +2933,9 @@ public:
 
   /// Returns the duplication factor for a given encoded discriminator \p D, or
   /// 1 if no value or 0 is encoded.
-  static unsigned getDuplicationFactorFromDiscriminator(unsigned D) {
-    if (EnableFSDiscriminator)
+  static unsigned
+  getDuplicationFactorFromDiscriminator(unsigned D, bool IsFSDiscriminator) {
+    if (IsFSDiscriminator)
       return 1;
     D = getNextComponentInDiscriminator(D);
     unsigned Ret = getUnsignedFromPrefixEncoding(D);
@@ -3109,12 +3114,13 @@ DILocation::cloneWithDiscriminator(unsigned Discriminator) const {
 }
 
 unsigned DILocation::getBaseDiscriminator() const {
-  return getBaseDiscriminatorFromDiscriminator(getDiscriminator(),
-                                               EnableFSDiscriminator);
+  return getBaseDiscriminatorFromDiscriminator(
+      getDiscriminator(), getEnableFSDiscriminator(getContext()));
 }
 
 unsigned DILocation::getDuplicationFactor() const {
-  return getDuplicationFactorFromDiscriminator(getDiscriminator());
+  return getDuplicationFactorFromDiscriminator(
+      getDiscriminator(), getEnableFSDiscriminator(getContext()));
 }
 
 unsigned DILocation::getCopyIdentifier() const {
@@ -3131,7 +3137,7 @@ DILocation::cloneWithBaseDiscriminator(unsigned D) const {
 
   unsigned BD, DF, CI;
 
-  if (EnableFSDiscriminator) {
+  if (getEnableFSDiscriminator(getContext())) {
     BD = getBaseDiscriminator();
     if (D == BD)
       return this;
@@ -3148,7 +3154,8 @@ DILocation::cloneWithBaseDiscriminator(unsigned D) const {
 
 std::optional<const DILocation *>
 DILocation::cloneByMultiplyingDuplicationFactor(unsigned DF) const {
-  assert(!EnableFSDiscriminator && "FSDiscriminator should not call this.");
+  assert(!getEnableFSDiscriminator(getContext()) &&
+         "FSDiscriminator should not call this.");
   // Do no interfere with pseudo probes. Pseudo probe doesn't need duplication
   // factor support as samples collected on cloned probes will be aggregated.
   // Also pseudo probe at a callsite uses the dwarf discriminator to store

@@ -17,8 +17,15 @@
 #include "mlir/Pass/PassOptions.h"
 #include "mlir/Support/TypeID.h"
 #include <functional>
-#include <utility>
 #include <optional>
+#include <string>
+#include <utility>
+
+namespace llvm {
+namespace clv2 {
+class OptionParser;
+} // namespace clv2
+} // namespace llvm
 
 namespace mlir {
 class OpPassManager;
@@ -252,6 +259,10 @@ public:
   PassPipelineCLParser(StringRef arg, StringRef description, StringRef alias);
   ~PassPipelineCLParser();
 
+  /// Flush all pending option entries into the given OptionParser.
+  /// Must be called before P.parse().
+  void registerWith(llvm::clv2::OptionParser &P);
+
   /// Returns true if this parser contains any valid options to add.
   bool hasAnyOccurrences() const;
 
@@ -267,10 +278,9 @@ public:
                 function_ref<LogicalResult(const Twine &)> errorHandler) const;
 
 private:
+  // The pipeline string and its occurrence count now live in the impl, so that
+  // --pass-pipeline and its alias can share one parse destination.
   std::unique_ptr<detail::PassPipelineCLParserImpl> impl;
-
-  llvm::cl::opt<std::string> passPipeline;
-  std::optional<llvm::cl::alias> passPipelineAlias;
 };
 
 /// This class implements a command-line parser specifically for MLIR pass
@@ -281,6 +291,10 @@ public:
   /// Construct a parser with the given command line description.
   PassNameCLParser(StringRef arg, StringRef description);
   ~PassNameCLParser();
+
+  /// Flush all pending option entries into the given OptionParser.
+  /// Must be called before P.parse().
+  void registerWith(llvm::clv2::OptionParser &P);
 
   /// Returns true if this parser contains any valid options to add.
   bool hasAnyOccurrences() const;

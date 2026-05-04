@@ -22,16 +22,21 @@
 #include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/PGOOptions.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO/Inliner.h"
 #include "llvm/Transforms/IPO/ModuleInliner.h"
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
+#include <cassert>
 #include <optional>
 #include <vector>
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+}
 class StringRef;
 class AAManager;
 class TargetMachine;
@@ -42,7 +47,7 @@ class PipelineTuningOptions {
 public:
   /// Constructor sets pipeline tuning defaults based on cl::opts. Each option
   /// can be set in the PassBuilder when using a LLVM as a library.
-  LLVM_ABI PipelineTuningOptions();
+  LLVM_ABI PipelineTuningOptions(const clv2::OptionsContext &Ctx);
 
   /// Tuning option to set loop interleaving on/off, set based on opt level.
   bool LoopInterleaving;
@@ -113,6 +118,7 @@ public:
 /// construction.
 class PassBuilder {
   TargetMachine *TM;
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
   PipelineTuningOptions PTO;
   std::optional<PGOOptions> PGOOpt;
   PassInstrumentationCallbacks *PIC;
@@ -133,11 +139,17 @@ public:
   };
 
   LLVM_ABI explicit PassBuilder(
-      TargetMachine *TM = nullptr,
-      PipelineTuningOptions PTO = PipelineTuningOptions(),
+      const clv2::OptionsContext &OptsCtxIn, TargetMachine *TM = nullptr,
+      PipelineTuningOptions PTO =
+          PipelineTuningOptions(llvm::clv2::defaultOptionsContext()),
       std::optional<PGOOptions> PGOOpt = std::nullopt,
       PassInstrumentationCallbacks *PIC = nullptr,
       IntrusiveRefCntPtr<vfs::FileSystem> FS = vfs::getRealFileSystem());
+
+  const clv2::OptionsContext &getOptionsContext() const {
+    assert(OptsCtx && "OptsCtx is set at construction and never cleared");
+    return *OptsCtx;
+  }
 
   /// Cross register the analysis managers through their proxies.
   ///
@@ -1004,18 +1016,6 @@ enum class PrintPipelinePassesFormat {
   Text,
   Tree,
 };
-
-struct PrintPipelinePassesFormatParser
-    : public cl::parser<std::optional<PrintPipelinePassesFormat>> {
-  using cl::parser<std::optional<PrintPipelinePassesFormat>>::parser;
-  LLVM_ABI bool parse(cl::Option &O, StringRef ArgName, StringRef ArgValue,
-                      std::optional<PrintPipelinePassesFormat> &Val);
-};
-
-/// Common option used by multiple tools to print pipeline passes
-LLVM_ABI extern cl::opt<std::optional<PrintPipelinePassesFormat>, false,
-                        PrintPipelinePassesFormatParser>
-    PrintPipelinePasses;
 
 LLVM_ABI void printFormattedPipelinePasses(
     raw_ostream &OS, StringRef Pipeline,

@@ -14,7 +14,8 @@
 #define MLIR_TOOLS_MLIRTRANSLATE_TRANSLATION_H
 
 #include "mlir/IR/Operation.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/ADT/StringMap.h"
+#include "llvm/Support/Alignment.h"
 #include <optional>
 
 namespace mlir {
@@ -158,13 +159,8 @@ struct TranslateRegistration {
 };
 /// \}
 
-/// A command line parser for translation functions.
-struct TranslationParser : public llvm::cl::parser<const Translation *> {
-  TranslationParser(llvm::cl::Option &opt);
-
-  void printOptionInfo(const llvm::cl::Option &o,
-                       size_t globalWidth) const override;
-};
+/// Returns the translation registry (name -> Translation mapping).
+const llvm::StringMap<Translation> &getRegisteredTranslations();
 
 /// Register command-line options used by the translation registry.
 void registerTranslationCLOptions();

@@ -28,11 +28,12 @@
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ProfDataUtils.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -40,6 +41,8 @@
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
+#include <cmath>
 
 using namespace llvm;
 
@@ -47,13 +50,23 @@ using namespace llvm;
 
 STATISTIC(NumRuntimeUnrolled,
           "Number of loops unrolled with run-time trip counts");
-static cl::opt<bool> UnrollRuntimeMultiExit(
-    "unroll-runtime-multi-exit", cl::init(false), cl::Hidden,
-    cl::desc("Allow runtime unrolling for loops with multiple exits, when "
-             "epilog is generated"));
-static cl::opt<bool> UnrollRuntimeOtherExitPredictable(
-    "unroll-runtime-other-exit-predictable", cl::init(false), cl::Hidden,
-    cl::desc("Assume the non latch exit block to be predictable"));
+static bool getUnrollRuntimeMultiExit(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_UnrollRuntimeMultiExit>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool isUnrollRuntimeMultiExitSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
+                               &clv2::TU_UnrollRuntimeMultiExit>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getUnrollRuntimeOtherExitPredictable(const Function &F) {
+  return clv2::getOptValIfSpecified<
+      &clv2::TransformUtilsOptsReg,
+      &clv2::TU_UnrollRuntimeOtherExitPredictable>(
+      F.getContext().getOptionsContext(), false);
+}
 
 // Probability that the loop trip count is so small that after the prolog
 // we do not enter the unrolled loop at all.
@@ -570,7 +583,7 @@ static bool canProfitablyRuntimeUnrollMultiExitLoop(
 
   // When UnrollRuntimeOtherExitPredictable is specified, we assume the other
   // exit branch is predictable even if it has no deoptimize call.
-  if (UnrollRuntimeOtherExitPredictable)
+  if (getUnrollRuntimeOtherExitPredictable(*L->getHeader()->getParent()))
     return true;
 
   // The second heuristic is that L has one exit other than the latchexit and
@@ -585,7 +598,10 @@ static bool canProfitablyRuntimeUnrollMultiExitLoop(
     // If BranchProbability could not be extracted (returns unknown), then
     // don't return and do the check for deopt block.
     if (!BranchProb.isUnknown()) {
-      auto Threshold = TTI->getPredictableBranchThreshold().getCompl();
+      auto Threshold =
+          TTI->getPredictableBranchThreshold(
+                 L->getHeader()->getParent()->getContext().getOptionsContext())
+              .getCompl();
       return BranchProb < Threshold;
     }
   }
@@ -726,8 +742,8 @@ bool llvm::UnrollRuntimeLoopRemainder(
       return false;
 
     // Priority goes to UnrollRuntimeMultiExit if it's supplied.
-    if (UnrollRuntimeMultiExit.getNumOccurrences()) {
-      if (!UnrollRuntimeMultiExit)
+    if (isUnrollRuntimeMultiExitSpecified(*L->getHeader()->getParent())) {
+      if (!getUnrollRuntimeMultiExit(*L->getHeader()->getParent()))
         return false;
     } else {
       // Otherwise perform multi-exit unrolling, if either the target indicates

@@ -10007,7 +10007,8 @@ LogicalResult OpenMPDialectLLVMIRTranslationInterface::amendOperation(
                 llvm::OpenMPIRBuilder *ompBuilder =
                     moduleTranslation.getOpenMPBuilder();
                 ompBuilder->loadOffloadInfoMetadata(
-                    moduleTranslation.getFileSystem(), filepathAttr.getValue());
+                    moduleTranslation.getFileSystem(), filepathAttr.getValue(),
+                    llvm::clv2::defaultOptionsContext());
                 return success();
               }
               return failure();

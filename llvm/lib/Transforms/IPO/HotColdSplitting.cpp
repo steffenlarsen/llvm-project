@@ -48,10 +48,11 @@
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
 #include <cassert>
 #include <limits>
@@ -64,33 +65,32 @@ STATISTIC(NumColdRegionsOutlined, "Number of cold regions outlined.");
 
 using namespace llvm;
 
-static cl::opt<bool> EnableStaticAnalysis("hot-cold-static-analysis",
-                                          cl::init(true), cl::Hidden);
+static int ColdBranchProbDenom = 100;
 
-static cl::opt<int>
-    SplittingThreshold("hotcoldsplit-threshold", cl::init(2), cl::Hidden,
-                       cl::desc("Base penalty for splitting cold code (as a "
-                                "multiple of TCC_Basic)"));
-
-static cl::opt<bool> EnableColdSection(
-    "enable-cold-section", cl::init(false), cl::Hidden,
-    cl::desc("Enable placement of extracted cold functions"
-             " into a separate section after hot-cold splitting."));
-
-static cl::opt<std::string>
-    ColdSectionName("hotcoldsplit-cold-section-name", cl::init("__llvm_cold"),
-                    cl::Hidden,
-                    cl::desc("Name for the section containing cold functions "
-                             "extracted by hot-cold splitting."));
-
-static cl::opt<int> MaxParametersForSplit(
-    "hotcoldsplit-max-params", cl::init(4), cl::Hidden,
-    cl::desc("Maximum number of parameters for a split function"));
-
-static cl::opt<int> ColdBranchProbDenom(
-    "hotcoldsplit-cold-probability-denom", cl::init(100), cl::Hidden,
-    cl::desc("Divisor of cold branch probability."
-             "BranchProbability = 1/ColdBranchProbDenom"));
+static bool getEnableStaticAnalysis(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::IPO_EnableStaticAnalysis>(
+      F.getContext().getOptionsContext());
+}
+static int getSplittingThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::IPO_SplittingThreshold>(
+      F.getContext().getOptionsContext());
+}
+static bool getEnableColdSection(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::IPO_EnableColdSection>(
+      F.getContext().getOptionsContext());
+}
+static const std::string &getColdSectionName(const Function &F) {
+  if (auto *O =
+          clv2::getView<&clv2::IPOOptsReg>(F.getContext().getOptionsContext()))
+    if (O->specified<&clv2::IPO_ColdSectionName>())
+      return O->get<&clv2::IPO_ColdSectionName>();
+  static const std::string Default = "__llvm_cold";
+  return Default;
+}
+static int getMaxParametersForSplit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::IPO_MaxParametersForSplit>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 // Same as blockEndsInUnreachable in CodeGen/BranchFolding.cpp. Do not modify
@@ -246,7 +246,7 @@ bool HotColdSplitting::isBasicBlockCold(
       return true;
   }
 
-  if (EnableStaticAnalysis && unlikelyExecuted(*BB))
+  if (getEnableStaticAnalysis(*BB->getParent()) && unlikelyExecuted(*BB))
     return true;
 
   return false;
@@ -298,12 +298,13 @@ static InstructionCost getOutliningBenefit(ArrayRef<BasicBlock *> Region,
 /// Get the penalty score for outlining \p Region.
 static int getOutliningPenalty(ArrayRef<BasicBlock *> Region,
                                unsigned NumInputs, unsigned NumOutputs) {
-  int Penalty = SplittingThreshold;
+  const Function &F = *Region[0]->getParent();
+  int Penalty = getSplittingThreshold(F);
   LLVM_DEBUG(dbgs() << "Applying penalty for splitting: " << Penalty << "\n");
 
   // If the splitting threshold is set at or below zero, skip the usual
   // profitability check.
-  if (SplittingThreshold <= 0)
+  if (getSplittingThreshold(F) <= 0)
     return Penalty;
 
   // Find the number of distinct exit blocks for the region. Use a conservative
@@ -351,10 +352,10 @@ static int getOutliningPenalty(ArrayRef<BasicBlock *> Region,
   // materializing all of the parameters.
   int NumOutputsAndSplitPhis = NumOutputs + NumSplitExitPhis;
   int NumParams = NumInputs + NumOutputsAndSplitPhis;
-  if (NumParams > MaxParametersForSplit) {
+  if (NumParams > getMaxParametersForSplit(F)) {
     LLVM_DEBUG(dbgs() << NumInputs << " inputs and " << NumOutputsAndSplitPhis
                       << " outputs exceeds parameter limit ("
-                      << MaxParametersForSplit << ")\n");
+                      << getMaxParametersForSplit(F) << ")\n");
     return std::numeric_limits<int>::max();
   }
   const int CostForArgMaterialization = 2 * TargetTransformInfo::TCC_Basic;
@@ -424,8 +425,8 @@ Function *HotColdSplitting::extractColdRegion(
     }
     CI->setIsNoInline();
 
-    if (EnableColdSection)
-      OutF->setSection(ColdSectionName);
+    if (getEnableColdSection(*OrigF))
+      OutF->setSection(getColdSectionName(*OrigF));
     else {
       if (OrigF->hasSection())
         OutF->setSection(OrigF->getSection());
@@ -669,10 +670,17 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
   TargetTransformInfo &TTI = GetTTI(F);
   OptimizationRemarkEmitter &ORE = (*GetORE)(F);
   AssumptionCache *AC = LookupAC(F);
-  auto ColdProbThresh = TTI.getPredictableBranchThreshold().getCompl();
+  auto ColdProbThresh =
+      TTI.getPredictableBranchThreshold(F.getContext().getOptionsContext())
+          .getCompl();
 
-  if (ColdBranchProbDenom.getNumOccurrences())
-    ColdProbThresh = BranchProbability(1, ColdBranchProbDenom.getValue());
+  {
+    if (auto *O = clv2::getView<&clv2::IPOOptsReg>(
+            F.getContext().getOptionsContext()))
+      if (O->specified<&clv2::IPO_ColdBranchProbDenom>())
+        ColdProbThresh =
+            BranchProbability(1, O->get<&clv2::IPO_ColdBranchProbDenom>());
+  }
 
   unsigned OutlinedFunctionID = 1;
   // Find all cold regions.

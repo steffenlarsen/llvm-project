@@ -35,6 +35,8 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
 #include <llvm/Analysis/VectorUtils.h>
 
 using namespace llvm;
@@ -52,28 +54,20 @@ enum MaterializeFPImm {
   MaterializeFPImm6Ins = 6
 };
 
-static cl::opt<MaterializeFPImm> MaterializeFPImmInsNum(
-    "loongarch-materialize-float-imm", cl::Hidden,
-    cl::desc("Maximum number of instructions used (including code sequence "
-             "to generate the value and moving the value to FPR) when "
-             "materializing floating-point immediates (default = 3)"),
-    cl::init(MaterializeFPImm3Ins),
-    cl::values(clEnumValN(NoMaterializeFPImm, "0", "Use constant pool"),
-               clEnumValN(MaterializeFPImm2Ins, "2",
-                          "Materialize FP immediate within 2 instructions"),
-               clEnumValN(MaterializeFPImm3Ins, "3",
-                          "Materialize FP immediate within 3 instructions"),
-               clEnumValN(MaterializeFPImm4Ins, "4",
-                          "Materialize FP immediate within 4 instructions"),
-               clEnumValN(MaterializeFPImm5Ins, "5",
-                          "Materialize FP immediate within 5 instructions"),
-               clEnumValN(MaterializeFPImm6Ins, "6",
-                          "Materialize FP immediate within 6 instructions "
-                          "(behaves same as 5 on loongarch64)")));
+static MaterializeFPImm MaterializeFPImmInsNum = MaterializeFPImm3Ins;
 
-static cl::opt<bool> ZeroDivCheck("loongarch-check-zero-division", cl::Hidden,
-                                  cl::desc("Trap on integer division by zero."),
-                                  cl::init(false));
+static bool getZeroDivCheck(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::LA_ZeroDivCheck>(
+      F.getContext().getOptionsContext());
+}
+
+static MaterializeFPImm getMaterializeFPImmInsNum(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::LoongArchOptsReg>(
+          F.getContext().getOptionsContext()))
+    return static_cast<MaterializeFPImm>(
+        O->get<&clv2::LA_MaterializeFPImmInsNum>());
+  return MaterializeFPImmInsNum;
+}
 
 LoongArchTargetLowering::LoongArchTargetLowering(const TargetMachine &TM,
                                                  const LoongArchSubtarget &STI)
@@ -953,7 +947,9 @@ SDValue LoongArchTargetLowering::lowerConstantFP(SDValue Op,
   // use floating point load from the constant pool.
   auto Seq = LoongArchMatInt::generateInstSeq(INTVal.getSExtValue());
   int InsNum = Seq.size() + ((VT == MVT::f64 && !Subtarget.is64Bit()) ? 2 : 1);
-  if (InsNum > MaterializeFPImmInsNum && !FPVal.isOne())
+  if (InsNum >
+          getMaterializeFPImmInsNum(DAG.getMachineFunction().getFunction()) &&
+      !FPVal.isExactlyValue(+1.0))
     return SDValue();
 
   switch (VT.getSimpleVT().SimpleTy) {
@@ -8902,7 +8898,7 @@ SDValue LoongArchTargetLowering::PerformDAGCombine(SDNode *N,
 
 static MachineBasicBlock *insertDivByZeroTrap(MachineInstr &MI,
                                               MachineBasicBlock *MBB) {
-  if (!ZeroDivCheck)
+  if (!getZeroDivCheck(MBB->getParent()->getFunction()))
     return MBB;
 
   // Build instructions:

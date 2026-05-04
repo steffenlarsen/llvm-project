@@ -11,12 +11,13 @@
 #include "LibcMemoryBenchmark.h"
 #include "MemorySizeDistributions.h"
 #include "src/__support/macros/config.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstring>
@@ -36,42 +37,51 @@ extern int bcmp(const void *, const void *, size_t);
 namespace llvm {
 namespace libc_benchmarks {
 
-static cl::opt<std::string>
-    StudyName("study-name", cl::desc("The name for this study"), cl::Required);
+static constexpr clv2::OptionInfo<std::string> StudyNameOpt{
+    "study-name", "The name for this study", clv2::Required};
 
-static cl::opt<std::string>
-    SizeDistributionName("size-distribution-name",
-                         cl::desc("The name of the distribution to use"));
+static constexpr clv2::OptionInfo<std::string> SizeDistributionNameOpt{
+    "size-distribution-name", "The name of the distribution to use"};
 
-static cl::opt<bool> SweepMode(
+static constexpr clv2::OptionInfo<bool> SweepModeOpt{
     "sweep-mode",
-    cl::desc(
-        "If set, benchmark all sizes from sweep-min-size to sweep-max-size"));
+    "If set, benchmark all sizes from sweep-min-size to sweep-max-size"};
 
-static cl::opt<uint32_t>
-    SweepMinSize("sweep-min-size",
-                 cl::desc("The minimum size to use in sweep-mode"),
-                 cl::init(0));
+static constexpr clv2::OptionInfo<unsigned> SweepMinSizeOpt{
+    "sweep-min-size", "The minimum size to use in sweep-mode", clv2::Init{0u}};
 
-static cl::opt<uint32_t>
-    SweepMaxSize("sweep-max-size",
-                 cl::desc("The maximum size to use in sweep-mode"),
-                 cl::init(256));
+static constexpr clv2::OptionInfo<unsigned> SweepMaxSizeOpt{
+    "sweep-max-size", "The maximum size to use in sweep-mode",
+    clv2::Init{256u}};
 
-static cl::opt<uint32_t>
-    AlignedAccess("aligned-access",
-                  cl::desc("The alignment to use when accessing the buffers\n"
-                           "Default is unaligned\n"
-                           "Use 0 to disable address randomization"),
-                  cl::init(1));
+static constexpr clv2::OptionInfo<unsigned> AlignedAccessOpt{
+    "aligned-access",
+    "The alignment to use when accessing the buffers\n"
+    "Default is unaligned\n"
+    "Use 0 to disable address randomization",
+    clv2::Init{1u}};
 
-static cl::opt<std::string> Output("output",
-                                   cl::desc("Specify output filename"),
-                                   cl::value_desc("filename"), cl::init("-"));
+static constexpr clv2::OptionInfo<std::string> OutputOpt{
+    "output", "Specify output filename", clv2::value_desc("filename"),
+    clv2::Init{"-"}};
 
-static cl::opt<uint32_t>
-    NumTrials("num-trials", cl::desc("The number of benchmarks run to perform"),
-              cl::init(1));
+static constexpr clv2::OptionInfo<unsigned> NumTrialsOpt{
+    "num-trials", "The number of benchmarks run to perform", clv2::Init{1u}};
+
+static constexpr clv2::OptionsRegistry<
+    &StudyNameOpt, &SizeDistributionNameOpt, &SweepModeOpt, &SweepMinSizeOpt,
+    &SweepMaxSizeOpt, &AlignedAccessOpt, &OutputOpt, &NumTrialsOpt>
+    BenchmarkReg;
+
+// File-scope variables populated from parsed options in main().
+static std::string StudyName;
+static std::string SizeDistributionName;
+static bool SweepMode;
+static uint32_t SweepMinSize;
+static uint32_t SweepMaxSize;
+static uint32_t AlignedAccess;
+static std::string Output;
+static uint32_t NumTrials;
 
 #if defined(LIBC_BENCHMARK_FUNCTION_MEMCPY)
 #define LIBC_BENCHMARK_FUNCTION LIBC_BENCHMARK_FUNCTION_MEMCPY
@@ -258,13 +268,13 @@ void writeStudy(const Study &S) {
 void main() {
   checkRequirements();
   if (!isPowerOf2_32(AlignedAccess))
-    report_fatal_error(AlignedAccess.ArgStr +
+    report_fatal_error(Twine("aligned-access") +
                        Twine(" must be a power of two or zero"));
 
   const bool HasDistributionName = !SizeDistributionName.empty();
   if (SweepMode && HasDistributionName)
-    report_fatal_error("Select only one of `--" + Twine(SweepMode.ArgStr) +
-                       "` or `--" + Twine(SizeDistributionName.ArgStr) + "`");
+    report_fatal_error("Select only one of `--" + Twine("sweep-mode") +
+                       "` or `--" + Twine("size-distribution-name") + "`");
 
   std::unique_ptr<MemfunctionBenchmarkBase> Benchmark;
   if (SweepMode)
@@ -283,7 +293,26 @@ void main() {
 #endif
 
 int main(int argc, char **argv) {
-  llvm::cl::ParseCommandLineOptions(argc, argv);
+  llvm::clv2::OptionParser P;
+  P.add<&llvm::libc_benchmarks::BenchmarkReg>();
+  auto OptsCtx = P.parse(argc, argv);
+  auto *Opts = OptsCtx->getViewPtr<&llvm::libc_benchmarks::BenchmarkReg>();
+  llvm::libc_benchmarks::StudyName =
+      Opts->get<&llvm::libc_benchmarks::StudyNameOpt>();
+  llvm::libc_benchmarks::SizeDistributionName =
+      Opts->get<&llvm::libc_benchmarks::SizeDistributionNameOpt>();
+  llvm::libc_benchmarks::SweepMode =
+      Opts->get<&llvm::libc_benchmarks::SweepModeOpt>();
+  llvm::libc_benchmarks::SweepMinSize =
+      Opts->get<&llvm::libc_benchmarks::SweepMinSizeOpt>();
+  llvm::libc_benchmarks::SweepMaxSize =
+      Opts->get<&llvm::libc_benchmarks::SweepMaxSizeOpt>();
+  llvm::libc_benchmarks::AlignedAccess =
+      Opts->get<&llvm::libc_benchmarks::AlignedAccessOpt>();
+  llvm::libc_benchmarks::Output =
+      Opts->get<&llvm::libc_benchmarks::OutputOpt>();
+  llvm::libc_benchmarks::NumTrials =
+      Opts->get<&llvm::libc_benchmarks::NumTrialsOpt>();
   llvm::libc_benchmarks::main();
   return EXIT_SUCCESS;
 }

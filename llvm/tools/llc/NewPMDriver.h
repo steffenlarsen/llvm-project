@@ -44,7 +44,8 @@ int compileModuleWithNewPM(
     std::unique_ptr<TargetMachine> Target, std::unique_ptr<ToolOutputFile> Out,
     std::unique_ptr<ToolOutputFile> DwoOut, LLVMContext &Context,
     const TargetLibraryInfoImpl &TLII, VerifierKind VK, StringRef PassPipeline,
-    ArrayRef<PassPlugin> PassPlugins, CodeGenFileType FileType);
+    ArrayRef<PassPlugin> PassPlugins, CodeGenFileType FileType,
+    StringRef PrintPipelinePasses);
 } // namespace llvm
 
 #endif

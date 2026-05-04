@@ -22,24 +22,38 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 
-#define DEBUG_TYPE "dxil-remove-unused-resources"
-
-// Hidden option to disable the pass to make it easier to test
-// other passes related to DXIL resources using llc.
-static llvm::cl::opt<bool> DisableDXILRemoveUnusedResources(
-    "disable-dxil-remove-unused-resources",
-    llvm::cl::desc("Disable dxil-remove-unused-resources pass"),
-    llvm::cl::init(false), llvm::cl::Hidden);
+#include "llvm/Support/CommandLineV2.h"
 
 using namespace llvm;
+
+#define DEBUG_TYPE "dxil-remove-unused-resources"
+
+static constexpr clv2::OptionInfo<bool> OI_DisableDXILRemoveUnusedResources{
+    "disable-dxil-remove-unused-resources",
+    "Disable the DXIL Remove Unused Resources pass", clv2::Hidden};
+static constexpr clv2::OptionsRegistry<&OI_DisableDXILRemoveUnusedResources>
+    DisableDXILRemoveUnusedResourcesReg;
+
+static bool DisableDXILRemoveUnusedResources = false;
+static void applyDisableDXILRemoveUnusedResources(
+    const decltype(DisableDXILRemoveUnusedResourcesReg)::ParsedOptionsT &Opts) {
+  DisableDXILRemoveUnusedResources =
+      Opts.get<&OI_DisableDXILRemoveUnusedResources>();
+}
+
+[[maybe_unused]] static const bool Registered = [] {
+  clv2::registerDynamicRegistry<&DisableDXILRemoveUnusedResourcesReg>(
+      applyDisableDXILRemoveUnusedResources);
+  return true;
+}();
+
+// Removes all calls to intrinsics dx_resource_handlefrom{implicit}binding that
 
 static bool isResourceHandleCreation(Intrinsic::ID ID) {
   return ID == Intrinsic::dx_resource_handlefrombinding ||
          ID == Intrinsic::dx_resource_handlefromimplicitbinding ||
          ID == Intrinsic::dx_resource_handlefromheap;
 }
-
-// Removes all calls to resource handle creation intrinsics that
 // either are not used, or their only use is in a store instruction, which
 // stores the initialized handle into a global variable that does not have
 // external linkage and that is not used anywhere else in the module.

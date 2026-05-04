@@ -12,10 +12,24 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/MachinePostDominators.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/GenericDomTreeConstruction.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
+
+static bool getVerifyMachineDomInfo(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::CGPassMachine1Reg>(Ctx))
+    return O->get<&clv2::CGPASS_VerifyMachineDomInfo>();
+#ifdef EXPENSIVE_CHECKS
+  return true;
+#else
+  return false;
+#endif
+}
 
 namespace llvm {
 template class LLVM_EXPORT_TEMPLATE
@@ -39,7 +53,6 @@ Verify<MBBPostDomTree>(const MBBPostDomTree &DT,
                        MBBPostDomTree::VerificationLevel VL);
 
 } // namespace DomTreeBuilder
-extern bool VerifyMachineDomInfo;
 } // namespace llvm
 
 AnalysisKey MachinePostDominatorTreeAnalysis::Key;
@@ -109,9 +122,16 @@ MachineBasicBlock *MachinePostDominatorTree::findNearestCommonDominator(
 }
 
 void MachinePostDominatorTreeWrapperPass::verifyAnalysis() const {
-  if (VerifyMachineDomInfo && PDT &&
-      !PDT->verify(MachinePostDominatorTree::VerificationLevel::Basic))
-    report_fatal_error("MachinePostDominatorTree verification failed!");
+  if (PDT && PDT->root_size() == 1) {
+    const auto &Ctx = PDT->getRoot()
+                          ->getParent()
+                          ->getFunction()
+                          .getContext()
+                          .getOptionsContext();
+    if (getVerifyMachineDomInfo(Ctx) &&
+        !PDT->verify(MachinePostDominatorTree::VerificationLevel::Basic))
+      report_fatal_error("MachinePostDominatorTree verification failed!");
+  }
 }
 
 void MachinePostDominatorTreeWrapperPass::print(llvm::raw_ostream &OS,

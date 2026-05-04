@@ -56,6 +56,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/iterator_range.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -65,12 +66,15 @@
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCRegister.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugCounter.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <iterator>
@@ -87,10 +91,16 @@ STATISTIC(NumSpillageChains, "Number of spillage chains");
 DEBUG_COUNTER(FwdCounter, "machine-cp-fwd",
               "Controls which register COPYs are forwarded");
 
-static cl::opt<bool> MCPUseCopyInstr("mcp-use-is-copy-instr", cl::init(false),
-                                     cl::Hidden);
-static cl::opt<cl::boolOrDefault>
-    EnableSpillageCopyElimination("enable-spill-copy-elim", cl::Hidden);
+static bool getMcpUseIsCopyInstr(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_McpUseIsCopyInstr>(Ctx);
+}
+
+static cl::boolOrDefault
+getEnableSpillCopyElim(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::CGPassMachine1Reg,
+                           &clv2::CGPASS_EnableSpillCopyElim>(
+      Ctx, cl::boolOrDefault::BOU_UNSET);
+}
 
 namespace {
 
@@ -488,8 +498,7 @@ class MachineCopyPropagation {
   bool UseCopyInstr;
 
 public:
-  MachineCopyPropagation(bool CopyInstr = false)
-      : UseCopyInstr(CopyInstr || MCPUseCopyInstr) {}
+  MachineCopyPropagation(bool CopyInstr = false) : UseCopyInstr(CopyInstr) {}
 
   bool run(MachineFunction &MF);
 
@@ -1617,8 +1626,16 @@ MachineCopyPropagationPass::run(MachineFunction &MF,
 }
 
 bool MachineCopyPropagation::run(MachineFunction &MF) {
+  // Apply CLI override for -mcp-use-is-copy-instr using Function context.
+  // This cannot be done in the constructor because no Function is available
+  // there (constructor runs during pass pipeline setup).
+  if (!UseCopyInstr)
+    UseCopyInstr =
+        getMcpUseIsCopyInstr(MF.getFunction().getContext().getOptionsContext());
+
   bool IsSpillageCopyElimEnabled = false;
-  switch (EnableSpillageCopyElimination) {
+  switch (getEnableSpillCopyElim(
+      MF.getFunction().getContext().getOptionsContext())) {
   case cl::boolOrDefault::BOU_UNSET:
     IsSpillageCopyElimEnabled =
         MF.getSubtarget().enableSpillageCopyElimination();

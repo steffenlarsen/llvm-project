@@ -36,7 +36,7 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Plugins/PassPlugin.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -51,15 +51,6 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 
 using namespace llvm;
-
-static cl::opt<RegAllocType, false, RegAllocTypeParser>
-    RegAlloc("regalloc-npm",
-             cl::desc("Register allocator to use for new pass manager"),
-             cl::Hidden, cl::init(RegAllocType::Unset));
-
-static cl::opt<bool>
-    DebugPM("debug-pass-manager", cl::Hidden,
-            cl::desc("Print pass management debugging information"));
 
 bool LLCDiagnosticHandler::handleDiagnostics(const DiagnosticInfo &DI) {
   DiagnosticHandler::handleDiagnostics(DI);
@@ -94,29 +85,33 @@ int llvm::compileModuleWithNewPM(
     std::unique_ptr<TargetMachine> Target, std::unique_ptr<ToolOutputFile> Out,
     std::unique_ptr<ToolOutputFile> DwoOut, LLVMContext &Context,
     const TargetLibraryInfoImpl &TLII, VerifierKind VK, StringRef PassPipeline,
-    ArrayRef<PassPlugin> PassPlugins, CodeGenFileType FileType) {
+    ArrayRef<PassPlugin> PassPlugins, CodeGenFileType FileType,
+    StringRef PrintPipelinePasses) {
 
-  if (!PassPipeline.empty() && TargetPassConfig::hasLimitedCodeGenPipeline()) {
+  if (!PassPipeline.empty() && TargetPassConfig::hasLimitedCodeGenPipeline(
+                                   Target->getOptionsContext())) {
     WithColor::error(errs(), Arg0)
         << "--passes cannot be used with "
-        << TargetPassConfig::getLimitedCodeGenPipelineReason() << ".\n";
+        << TargetPassConfig::getLimitedCodeGenPipelineReason(
+               Target->getOptionsContext())
+        << ".\n";
     return 1;
   }
 
   raw_pwrite_stream *OS = &Out->os();
 
   std::unique_ptr<buffer_ostream> BOS;
-  if (codegen::getFileType() != CodeGenFileType::AssemblyFile &&
+  if (codegen::getFileType(Target->getOptionsContext()) !=
+          CodeGenFileType::AssemblyFile &&
       !Out->os().supportsSeeking()) {
     BOS = std::make_unique<buffer_ostream>(Out->os());
     OS = BOS.get();
   }
 
-  // Fetch options from TargetPassConfig
-  CGPassBuilderOption Opt = getCGPassBuilderOption();
+  // Fetch options from TargetPassConfig (populated by setTPCValues() in
+  // llc.cpp).
+  CGPassBuilderOption Opt = getCGPassBuilderOption(Target->getOptionsContext());
   Opt.DisableVerify = VK != VerifierKind::InputOutput;
-  Opt.DebugPM = DebugPM;
-  Opt.RegAlloc = RegAlloc;
 
   MachineModuleInfo MMI(Target.get());
 
@@ -132,6 +127,7 @@ int llvm::compileModuleWithNewPM(
   FunctionAnalysisManager FAM;
   CGSCCAnalysisManager CGAM;
   ModuleAnalysisManager MAM;
+  auto &OptsCtx = Context.getOptionsContext();
 
   FAM.registerPass([&] { return TargetLibraryAnalysis(TLII); });
 
@@ -140,10 +136,12 @@ int llvm::compileModuleWithNewPM(
     return RuntimeLibraryAnalysis(Options.ExceptionModel, Options.EABIVersion,
                                   Options.MCOptions.ABIName, Options.VecLib);
   });
+  MAM.registerPass([&] { return LibcallLoweringModuleAnalysis(); });
 
   MAM.registerPass([&] { return MachineModuleAnalysis(MMI); });
 
-  PassBuilder PB(Target.get(), PipelineTuningOptions(), std::nullopt, &PIC);
+  PassBuilder PB(OptsCtx, Target.get(), PipelineTuningOptions(OptsCtx),
+                 std::nullopt, &PIC, vfs::getRealFileSystem());
   for (auto &PassPlugin : PassPlugins)
     PassPlugin.registerPassBuilderCallbacks(PB);
   PB.registerModuleAnalyses(MAM);
@@ -177,20 +175,31 @@ int llvm::compileModuleWithNewPM(
     MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
 
   } else {
+    // Use a large buffer for assembly output so the formatted_raw_ostream
+    // created inside the pipeline doesn't auto-flush mid-function.  Only the
+    // file stream is buffered: for other file types OS may be a
+    // buffer_ostream, which is unbuffered by contract and asserts on
+    // destruction if a buffer was installed.
+    if (FileType == CodeGenFileType::AssemblyFile &&
+        OS->GetBufferSize() < (1u << 20))
+      OS->SetBufferSize(1u << 20);
     ExitOnErr(Target->buildCodeGenPipeline(
         MPM, MAM, *OS, DwoOut ? &DwoOut->os() : nullptr, FileType, Opt,
         MMI.getContext(), &PIC));
   }
 
   // If user only wants to print the pipeline, print it before parsing the MIR.
-  if (PrintPipelinePasses) {
+  if (!PrintPipelinePasses.empty()) {
+    PrintPipelinePassesFormat Format = PrintPipelinePassesFormat::Text;
+    if (PrintPipelinePasses == "tree")
+      Format = PrintPipelinePassesFormat::Tree;
     std::string PipelineStr;
     raw_string_ostream OS(PipelineStr);
     MPM.printPipeline(OS, [&PIC](StringRef ClassName) {
       auto PassName = PIC.getPassNameForClassName(ClassName);
       return PassName.empty() ? ClassName : PassName;
     });
-    printFormattedPipelinePasses(outs(), PipelineStr, *PrintPipelinePasses);
+    printFormattedPipelinePasses(outs(), PipelineStr, Format);
     outs() << '\n';
     return 0;
   }
@@ -199,7 +208,6 @@ int llvm::compileModuleWithNewPM(
     return 1;
 
   // Before executing passes, print the final values of the LLVM options.
-  cl::PrintOptionValues();
 
   MPM.run(*M, MAM);
 

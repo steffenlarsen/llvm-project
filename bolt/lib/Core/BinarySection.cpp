@@ -12,20 +12,19 @@
 
 #include "bolt/Core/BinarySection.h"
 #include "bolt/Core/BinaryContext.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "bolt/Utils/Utils.h"
 #include "llvm/MC/MCStreamer.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 
 #define DEBUG_TYPE "bolt"
 
 using namespace llvm;
 using namespace bolt;
 
-namespace opts {
-extern cl::opt<bool> HotData;
-extern cl::opt<bool> PrintRelocations;
-} // namespace opts
+namespace opts {} // namespace opts
 
 uint64_t BinarySection::Count = 0;
 
@@ -73,6 +72,9 @@ BinarySection::hash(const BinaryData &BD,
 
 void BinarySection::emitAsData(MCStreamer &Streamer,
                                const Twine &SectionName) const {
+  using namespace bolt::bolt_utils_opts;
+  bool HotData = getHotData(BC);
+
   StringRef SectionContents =
       isFinalized() ? getOutputContents() : getContents();
   MCSectionELF *ELFSection =
@@ -81,7 +83,7 @@ void BinarySection::emitAsData(MCStreamer &Streamer,
   Streamer.switchSection(ELFSection);
   Streamer.emitValueToAlignment(getAlign());
 
-  if (BC.HasRelocations && opts::HotData && isReordered())
+  if (BC.HasRelocations && HotData && isReordered())
     Streamer.emitLabel(BC.Ctx->getOrCreateSymbol("__hot_data_start"));
 
   LLVM_DEBUG(dbgs() << "BOLT-DEBUG: emitting "
@@ -141,7 +143,7 @@ void BinarySection::emitAsData(MCStreamer &Streamer,
       Streamer.emitBytes(SectionContents.substr(SectionOffset));
   }
 
-  if (BC.HasRelocations && opts::HotData && isReordered())
+  if (BC.HasRelocations && HotData && isReordered())
     Streamer.emitLabel(BC.Ctx->getOrCreateSymbol("__hot_data_end"));
 }
 
@@ -210,7 +212,7 @@ void BinarySection::flushPendingRelocations(raw_fd_ostream &OS,
 
   clearList(PendingRelocations);
 
-  if (SkippedPendingRelocations > 0 && opts::Verbosity >= 1) {
+  if (SkippedPendingRelocations > 0 && opts::getVerbosity(BC) >= 1) {
     BC.outs() << "BOLT-INFO: skipped " << SkippedPendingRelocations
               << " out-of-range optional relocations\n";
   }
@@ -235,7 +237,8 @@ void BinarySection::print(raw_ostream &OS) const {
   if (isTLS())
     OS << " (tls)";
 
-  if (opts::PrintRelocations)
+  bool PrintRelocs = bolt_core_opts::getPrintRelocations(BC);
+  if (PrintRelocs)
     for (const Relocation &R : relocations())
       OS << "\n  " << R;
 }

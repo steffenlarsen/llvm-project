@@ -81,11 +81,12 @@
 
 #include "bolt/Passes/PAuthGadgetScanner.h"
 #include "bolt/Core/ParallelUtilities.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "bolt/Passes/DataflowAnalysis.h"
-#include "bolt/Utils/CommandLineOpts.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/MC/MCInst.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Format.h"
 #include <memory>
 
@@ -95,10 +96,10 @@ namespace llvm {
 namespace bolt {
 namespace PAuthGadgetScanner {
 
-static cl::opt<bool> AuthTrapsOnFailure(
-    "auth-traps-on-failure",
-    cl::desc("Assume authentication instructions always trap on failure"),
-    cl::cat(opts::BinaryAnalysisCategory));
+static bool getAuthTrapsOnFailure(const BinaryContext &BC) {
+  auto *Opts = bolt_passes_opts::getBoltPassesOpts(BC.getOptionsContext());
+  return Opts ? Opts->get<&clv2::BOLTPASS_AuthTrapsOnFailure>() : false;
+}
 
 [[maybe_unused]] static void traceInst(const BinaryContext &BC, StringRef Label,
                                        const MCInst &MI) {
@@ -499,7 +500,7 @@ protected:
   // Returns all registers made trusted by this instruction.
   SmallVector<MCPhysReg> getRegsMadeTrusted(const MCInst &Point,
                                             const SrcState &Cur) const {
-    assert(!AuthTrapsOnFailure && "Use getRegsMadeSafeToDeref instead");
+    assert(!getAuthTrapsOnFailure(BC) && "Use getRegsMadeSafeToDeref instead");
     SmallVector<MCPhysReg> Regs;
 
     // An authenticated pointer can be checked, ...
@@ -562,8 +563,8 @@ protected:
     // If authentication instructions trap on failure, safe-to-dereference
     // registers are always trusted.
     SmallVector<MCPhysReg> NewTrustedRegs =
-        AuthTrapsOnFailure ? NewSafeToDerefRegs
-                           : getRegsMadeTrusted(Point, Cur);
+        getAuthTrapsOnFailure(BC) ? NewSafeToDerefRegs
+                                  : getRegsMadeTrusted(Point, Cur);
 
     // Then, compute the state after this instruction is executed.
     SrcState Next = Cur;
@@ -1221,7 +1222,7 @@ public:
     // As long as DstSafetyAnalysis is only computed to detect authentication
     // oracles, it is a waste of time to compute it when authentication
     // instructions are known to always trap on failure.
-    assert(!AuthTrapsOnFailure &&
+    assert(!getAuthTrapsOnFailure(BC) &&
            "DstSafetyAnalysis is useless with faulting auth");
     for (BinaryBasicBlock &BB : Func) {
       if (auto CheckerInfo = BC.MIB->getAuthCheckedReg(BB)) {
@@ -1672,7 +1673,7 @@ void FunctionAnalysisContext::findUnsafeDefs(
   if (!(EnabledDetectors & HandledDetectors))
     return;
 
-  if (AuthTrapsOnFailure)
+  if (getAuthTrapsOnFailure(BC))
     return;
 
   auto Analysis = DstSafetyAnalysis::create(BF, AllocatorId, {});

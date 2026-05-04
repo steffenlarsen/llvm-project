@@ -13,44 +13,55 @@
 #include "HexagonTargetMachine.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineBranchProbabilityInfo.h"
+#include "llvm/IR/Function.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 
 #define DEBUG_TYPE "hexagon-loop-align"
 
 using namespace llvm;
 
-static cl::opt<bool>
-    DisableLoopAlign("disable-hexagon-loop-align", cl::Hidden,
-                     cl::desc("Disable Hexagon loop alignment pass"));
+static unsigned getLoopEdgeThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_LoopEdgeThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<uint32_t> HVXLoopAlignLimitUB(
-    "hexagon-hvx-loop-align-limit-ub", cl::Hidden, cl::init(16),
-    cl::desc("Set hexagon hvx loop upper bound align limit"));
+static bool getDisableLoopAlign(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DisableLoopAlign>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<uint32_t> TinyLoopAlignLimitUB(
-    "hexagon-tiny-loop-align-limit-ub", cl::Hidden, cl::init(16),
-    cl::desc("Set hexagon tiny-core loop upper bound align limit"));
+static unsigned getHVXLoopAlignLimitUB(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_HVXLoopAlignLimitUB>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<uint32_t>
-    LoopAlignLimitUB("hexagon-loop-align-limit-ub", cl::Hidden, cl::init(8),
-                     cl::desc("Set hexagon loop upper bound align limit"));
+static unsigned getTinyLoopAlignLimitUB(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_TinyLoopAlignLimitUB>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<uint32_t>
-    LoopAlignLimitLB("hexagon-loop-align-limit-lb", cl::Hidden, cl::init(4),
-                     cl::desc("Set hexagon loop lower bound align limit"));
+static unsigned getLoopAlignLimitUB(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_LoopAlignLimitUB>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<uint32_t>
-    LoopBndlAlignLimit("hexagon-loop-bundle-align-limit", cl::Hidden,
-                       cl::init(4),
-                       cl::desc("Set hexagon loop align bundle limit"));
+static unsigned getLoopAlignLimitLB(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_LoopAlignLimitLB>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<uint32_t> TinyLoopBndlAlignLimit(
-    "hexagon-tiny-loop-bundle-align-limit", cl::Hidden, cl::init(8),
-    cl::desc("Set hexagon tiny-core loop align bundle limit"));
+static unsigned getLoopBndlAlignLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_LoopBndlAlignLimit>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<uint32_t>
-    LoopEdgeThreshold("hexagon-loop-edge-threshold", cl::Hidden, cl::init(7500),
-                      cl::desc("Set hexagon loop align edge threshold"));
+static unsigned getTinyLoopBndlAlignLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_TinyLoopBndlAlignLimit>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -110,23 +121,24 @@ bool HexagonLoopAlign::shouldBalignLoop(MachineBasicBlock &BB,
     dbgs() << "Instruction Count : " << InstCnt << "\n";
   });
 
+  const Function &F = BB.getParent()->getFunction();
   unsigned LimitUB = 0;
-  unsigned LimitBndl = LoopBndlAlignLimit;
+  unsigned LimitBndl = getLoopBndlAlignLimit(F);
   // The conditions in the order of priority.
   if (HST->isTinyCore()) {
-    LimitUB = TinyLoopAlignLimitUB;
-    LimitBndl = TinyLoopBndlAlignLimit;
+    LimitUB = getTinyLoopAlignLimitUB(F);
+    LimitBndl = getTinyLoopBndlAlignLimit(F);
   } else if (isVec)
-    LimitUB = HVXLoopAlignLimitUB;
+    LimitUB = getHVXLoopAlignLimitUB(F);
   else if (AboveThres)
-    LimitUB = LoopAlignLimitUB;
+    LimitUB = getLoopAlignLimitUB(F);
 
   // if the upper bound is not set to a value, implies we didn't meet
   // the criteria.
   if (LimitUB == 0)
     return false;
 
-  return InstCnt >= LoopAlignLimitLB && InstCnt <= LimitUB &&
+  return InstCnt >= getLoopAlignLimitLB(F) && InstCnt <= LimitUB &&
          BndlCnt <= LimitBndl;
 }
 
@@ -154,7 +166,9 @@ bool HexagonLoopAlign::attemptToBalignSmallLoop(MachineFunction &MF,
     dbgs() << "\tedge with freq(" << EdgeFreq.getFrequency() << ")\n";
   });
 
-  bool AboveThres = EdgeFreq.getFrequency() > LoopEdgeThreshold;
+  bool AboveThres =
+      EdgeFreq.getFrequency() > getLoopEdgeThreshold(MF.getFunction());
+
   if (shouldBalignLoop(MBB, AboveThres)) {
     // We found a loop, change its alignment to be 32 (5).
     MBB.setAlignment(llvm::Align(1 << 5));
@@ -174,7 +188,7 @@ bool HexagonLoopAlign::runOnMachineFunction(MachineFunction &MF) {
 
   if (skipFunction(MF.getFunction()))
     return false;
-  if (DisableLoopAlign)
+  if (getDisableLoopAlign(MF.getFunction()))
     return false;
 
   // This optimization is performed at

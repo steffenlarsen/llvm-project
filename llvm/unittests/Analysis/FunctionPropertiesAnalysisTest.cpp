@@ -8,6 +8,7 @@
 
 #include "llvm/Analysis/FunctionPropertiesAnalysis.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/IR2Vec.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/AsmParser/Parser.h"
@@ -18,7 +19,7 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/StandardInstrumentations.h"
-#include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "gmock/gmock.h"
@@ -27,15 +28,6 @@
 
 using namespace llvm;
 using namespace testing;
-
-namespace llvm {
-LLVM_ABI extern cl::opt<bool> EnableDetailedFunctionProperties;
-LLVM_ABI extern cl::opt<bool> BigBasicBlockInstructionThreshold;
-LLVM_ABI extern cl::opt<bool> MediumBasicBlockInstrutionThreshold;
-LLVM_ABI extern cl::opt<float> ir2vec::OpcWeight;
-LLVM_ABI extern cl::opt<float> ir2vec::TypeWeight;
-LLVM_ABI extern cl::opt<float> ir2vec::ArgWeight;
-} // namespace llvm
 
 namespace {
 
@@ -54,15 +46,17 @@ public:
     FAM.registerPass([&] { return LoopAnalysis(); });
     FAM.registerPass([&] { return PassInstrumentationAnalysis(); });
 
-    ir2vec::OpcWeight = 1.0;
-    ir2vec::TypeWeight = 1.0;
-    ir2vec::ArgWeight = 1.0;
-  }
+    // Set up OptionsContext with IR2Vec weights all set to 1.0.
+    auto Opts = clv2::AnalysisOptsReg.makeDefaults();
+    Opts.get<&clv2::AN_OpcWeight>() = 1.0f;
+    Opts.get<&clv2::AN_TypeWeight>() = 1.0f;
+    Opts.get<&clv2::AN_ArgWeight>() = 1.0f;
+    BaseOptsCtx.addView<&clv2::AnalysisOptsReg>(Opts);
 
-private:
-  float OriginalOpcWeight = ir2vec::OpcWeight;
-  float OriginalTypeWeight = ir2vec::TypeWeight;
-  float OriginalArgWeight = ir2vec::ArgWeight;
+    // Also create one with EnableDetailedFunctionProperties = true.
+    Opts.get<&clv2::AN_EnableDetailedFunctionProperties>() = true;
+    DetailedOptsCtx.addView<&clv2::AnalysisOptsReg>(Opts);
+  }
 
 protected:
   std::unique_ptr<DominatorTree> DT;
@@ -70,13 +64,8 @@ protected:
   FunctionAnalysisManager FAM;
   ModuleAnalysisManager MAM;
   std::unique_ptr<ir2vec::Vocabulary> IR2VecVocab;
-
-  void TearDown() override {
-    // Restore original IR2Vec weights
-    ir2vec::OpcWeight = OriginalOpcWeight;
-    ir2vec::TypeWeight = OriginalTypeWeight;
-    ir2vec::ArgWeight = OriginalArgWeight;
-  }
+  clv2::OptionsContext BaseOptsCtx;
+  clv2::OptionsContext DetailedOptsCtx;
 
   FunctionPropertiesInfo buildFPI(Function &F) {
     // FunctionPropertiesInfo assumes IR2VecVocabAnalysis has been run to
@@ -116,7 +105,8 @@ protected:
 };
 
 TEST_F(FunctionPropertiesAnalysisTest, BasicTest) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  C.setOptionsContext(BaseOptsCtx);
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
@@ -171,7 +161,7 @@ define internal i32 @top() {
   EXPECT_EQ(BranchesFeatures.MaxLoopDepth, 0);
   EXPECT_EQ(BranchesFeatures.TopLevelLoopCount, 0);
 
-  EnableDetailedFunctionProperties.setValue(true);
+  C.setOptionsContext(DetailedOptsCtx);
   FunctionPropertiesInfo DetailedBranchesFeatures = buildFPI(*BranchesFunction);
   EXPECT_EQ(DetailedBranchesFeatures.BasicBlocksWithSingleSuccessor, 2);
   EXPECT_EQ(DetailedBranchesFeatures.BasicBlocksWithTwoSuccessors, 1);
@@ -208,11 +198,12 @@ define internal i32 @top() {
   EXPECT_TRUE(
       DetailedBranchesFeatures.getFunctionEmbedding().approximatelyEquals(
           createEmbedder(*BranchesFunction)->getFunctionVector()));
-  EnableDetailedFunctionProperties.setValue(false);
+  C.setOptionsContext(BaseOptsCtx);
 }
 
 TEST_F(FunctionPropertiesAnalysisTest, DifferentPredecessorSuccessorCounts) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  C.setOptionsContext(BaseOptsCtx);
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 define i64 @f1() {
@@ -225,7 +216,7 @@ finally:
 )IR");
 
   Function *F1 = M->getFunction("f1");
-  EnableDetailedFunctionProperties.setValue(true);
+  C.setOptionsContext(DetailedOptsCtx);
   FunctionPropertiesInfo DetailedF1Properties = buildFPI(*F1);
   EXPECT_EQ(DetailedF1Properties.BasicBlocksWithSingleSuccessor, 0);
   EXPECT_EQ(DetailedF1Properties.BasicBlocksWithTwoSuccessors, 1);
@@ -261,11 +252,12 @@ finally:
   EXPECT_EQ(DetailedF1Properties.CallWithPointerArgumentCount, 0);
   EXPECT_TRUE(DetailedF1Properties.getFunctionEmbedding().approximatelyEquals(
       createEmbedder(*F1)->getFunctionVector()));
-  EnableDetailedFunctionProperties.setValue(false);
+  C.setOptionsContext(BaseOptsCtx);
 }
 
 TEST_F(FunctionPropertiesAnalysisTest, InlineSameBBSimple) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  C.setOptionsContext(BaseOptsCtx);
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
@@ -313,7 +305,8 @@ define i32 @f2(i32 %a) {
 }
 
 TEST_F(FunctionPropertiesAnalysisTest, InlineSameBBLargerCFG) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  C.setOptionsContext(BaseOptsCtx);
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
@@ -372,7 +365,8 @@ define i32 @f2(i32 %a) {
 }
 
 TEST_F(FunctionPropertiesAnalysisTest, InlineSameBBLoops) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  C.setOptionsContext(BaseOptsCtx);
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
@@ -444,7 +438,8 @@ exit:
 }
 
 TEST_F(FunctionPropertiesAnalysisTest, InvokeSimple) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  C.setOptionsContext(BaseOptsCtx);
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
@@ -493,7 +488,8 @@ declare i32 @__gxx_personality_v0(...)
 }
 
 TEST_F(FunctionPropertiesAnalysisTest, InvokeUnreachableHandler) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  C.setOptionsContext(BaseOptsCtx);
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 declare void @might_throw()
@@ -549,7 +545,8 @@ declare i32 @__gxx_personality_v0(...)
 }
 
 TEST_F(FunctionPropertiesAnalysisTest, Rethrow) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  C.setOptionsContext(BaseOptsCtx);
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 declare void @might_throw()
@@ -603,7 +600,8 @@ declare i32 @__gxx_personality_v0(...)
 }
 
 TEST_F(FunctionPropertiesAnalysisTest, LPadChanges) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  C.setOptionsContext(BaseOptsCtx);
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 declare void @external_func()
@@ -657,7 +655,8 @@ lpad:
 }
 
 TEST_F(FunctionPropertiesAnalysisTest, LPadChangesConditional) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  C.setOptionsContext(BaseOptsCtx);
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 declare void @external_func()
@@ -715,7 +714,8 @@ lpad:
 }
 
 TEST_F(FunctionPropertiesAnalysisTest, InlineSameLoopBB) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  C.setOptionsContext(BaseOptsCtx);
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
@@ -788,7 +788,8 @@ end:
 }
 
 TEST_F(FunctionPropertiesAnalysisTest, Unreachable) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  C.setOptionsContext(BaseOptsCtx);
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
@@ -860,7 +861,8 @@ declare void @llvm.trap()
 }
 
 TEST_F(FunctionPropertiesAnalysisTest, InvokeSkipLP) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  C.setOptionsContext(BaseOptsCtx);
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
@@ -925,7 +927,8 @@ declare void @f3()
 }
 
 TEST_F(FunctionPropertiesAnalysisTest, DetailedOperandCount) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  C.setOptionsContext(BaseOptsCtx);
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 @a = global i64 1
@@ -940,7 +943,7 @@ define i64 @f1(i64 %e) {
 )IR");
 
   Function *F1 = M->getFunction("f1");
-  EnableDetailedFunctionProperties.setValue(true);
+  C.setOptionsContext(DetailedOptsCtx);
   FunctionPropertiesInfo DetailedF1Properties = buildFPI(*F1);
   EXPECT_EQ(DetailedF1Properties.BasicBlocksWithSingleSuccessor, 0);
   EXPECT_EQ(DetailedF1Properties.BasicBlocksWithTwoSuccessors, 0);
@@ -976,11 +979,12 @@ define i64 @f1(i64 %e) {
   EXPECT_EQ(DetailedF1Properties.CallWithPointerArgumentCount, 0);
   EXPECT_TRUE(DetailedF1Properties.getFunctionEmbedding().approximatelyEquals(
       createEmbedder(*F1)->getFunctionVector()));
-  EnableDetailedFunctionProperties.setValue(false);
+  C.setOptionsContext(BaseOptsCtx);
 }
 
 TEST_F(FunctionPropertiesAnalysisTest, IntrinsicCount) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  C.setOptionsContext(BaseOptsCtx);
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 define float @f1(float %a) {
@@ -991,7 +995,7 @@ declare float @llvm.cos.f32(float)
 )IR");
 
   Function *F1 = M->getFunction("f1");
-  EnableDetailedFunctionProperties.setValue(true);
+  C.setOptionsContext(DetailedOptsCtx);
   FunctionPropertiesInfo DetailedF1Properties = buildFPI(*F1);
   EXPECT_EQ(DetailedF1Properties.IntrinsicCount, 1);
   EXPECT_EQ(DetailedF1Properties.DirectCallCount, 1);
@@ -1003,11 +1007,12 @@ declare float @llvm.cos.f32(float)
   EXPECT_EQ(DetailedF1Properties.CallWithPointerArgumentCount, 0);
   EXPECT_TRUE(DetailedF1Properties.getFunctionEmbedding().approximatelyEquals(
       createEmbedder(*F1)->getFunctionVector()));
-  EnableDetailedFunctionProperties.setValue(false);
+  C.setOptionsContext(BaseOptsCtx);
 }
 
 TEST_F(FunctionPropertiesAnalysisTest, FunctionCallMetrics) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  C.setOptionsContext(BaseOptsCtx);
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 define i64 @f1(i64 %a) {
@@ -1026,7 +1031,7 @@ declare float @f5()
 )IR");
 
   Function *F1 = M->getFunction("f1");
-  EnableDetailedFunctionProperties.setValue(true);
+  C.setOptionsContext(DetailedOptsCtx);
   FunctionPropertiesInfo DetailedF1Properties = buildFPI(*F1);
   EXPECT_EQ(DetailedF1Properties.IntrinsicCount, 0);
   EXPECT_EQ(DetailedF1Properties.DirectCallCount, 4);
@@ -1038,11 +1043,12 @@ declare float @f5()
   EXPECT_EQ(DetailedF1Properties.CallWithPointerArgumentCount, 1);
   EXPECT_TRUE(DetailedF1Properties.getFunctionEmbedding().approximatelyEquals(
       createEmbedder(*F1)->getFunctionVector()));
-  EnableDetailedFunctionProperties.setValue(false);
+  C.setOptionsContext(BaseOptsCtx);
 }
 
 TEST_F(FunctionPropertiesAnalysisTest, CriticalEdge) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  C.setOptionsContext(BaseOptsCtx);
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 define i64 @f1(i64 %a) {
@@ -1064,16 +1070,17 @@ BottomBlock2:
 )IR");
 
   Function *F1 = M->getFunction("f1");
-  EnableDetailedFunctionProperties.setValue(true);
+  C.setOptionsContext(DetailedOptsCtx);
   FunctionPropertiesInfo DetailedF1Properties = buildFPI(*F1);
   EXPECT_EQ(DetailedF1Properties.CriticalEdgeCount, 1);
   EXPECT_TRUE(DetailedF1Properties.getFunctionEmbedding().approximatelyEquals(
       createEmbedder(*F1)->getFunctionVector()));
-  EnableDetailedFunctionProperties.setValue(false);
+  C.setOptionsContext(BaseOptsCtx);
 }
 
 TEST_F(FunctionPropertiesAnalysisTest, FunctionReturnVectors) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  C.setOptionsContext(BaseOptsCtx);
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 define <4 x i64> @f1(<4 x i64> %a) {
@@ -1089,18 +1096,19 @@ declare <4 x ptr> @f4()
 )IR");
 
   Function *F1 = M->getFunction("f1");
-  EnableDetailedFunctionProperties.setValue(true);
+  C.setOptionsContext(DetailedOptsCtx);
   FunctionPropertiesInfo DetailedF1Properties = buildFPI(*F1);
   EXPECT_EQ(DetailedF1Properties.CallReturnsVectorIntCount, 1);
   EXPECT_EQ(DetailedF1Properties.CallReturnsVectorFloatCount, 1);
   EXPECT_EQ(DetailedF1Properties.CallReturnsVectorPointerCount, 1);
   EXPECT_TRUE(DetailedF1Properties.getFunctionEmbedding().approximatelyEquals(
       createEmbedder(*F1)->getFunctionVector()));
-  EnableDetailedFunctionProperties.setValue(false);
+  C.setOptionsContext(BaseOptsCtx);
 }
 
 TEST_F(FunctionPropertiesAnalysisTest, ReAddEdges) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  C.setOptionsContext(BaseOptsCtx);
   std::unique_ptr<Module> M = makeLLVMModule(C, R"IR(
 define hidden void @f1(ptr noundef %destatep, i32 noundef %offset, i8 noundef zeroext %byte1) {
 entry:
@@ -1167,7 +1175,8 @@ entry:
 }
 
 TEST_F(FunctionPropertiesAnalysisTest, InvokeLandingCanStillBeReached) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  C.setOptionsContext(BaseOptsCtx);
   // %lpad is reachable from a block not involved in the inlining decision. We
   // make sure that's not the entry - otherwise the DT will be recomputed from
   // scratch. The idea here is that the edge known to the inliner to potentially

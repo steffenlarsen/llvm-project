@@ -45,7 +45,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSet.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/ScopedPrinter.h"
@@ -62,22 +62,48 @@ using namespace llvm::gi;
 
 #define DEBUG_TYPE "gicombiner-emitter"
 
-static cl::OptionCategory
+static clv2::OptionCategory
     GICombinerEmitterCat("Options for -gen-global-isel-combiner");
-static cl::opt<bool> StopAfterParse(
+
+static bool StopAfterParse = false;
+
+static std::vector<std::string> SelectedCombiners;
+
+static bool DebugCXXPreds = false;
+
+static bool DebugTypeInfer = false;
+
+static constexpr clv2::OptionInfo<bool> OI_StopAfterParse{
     "gicombiner-stop-after-parse",
-    cl::desc("Stop processing after parsing rules and dump state"),
-    cl::cat(GICombinerEmitterCat));
-static cl::list<std::string>
-    SelectedCombiners("combiners", cl::desc("Emit the specified combiners"),
-                      cl::cat(GICombinerEmitterCat), cl::CommaSeparated);
-static cl::opt<bool> DebugCXXPreds(
+    "Stop processing after parsing rules and dump state",
+    clv2::cat(GICombinerEmitterCat)};
+static constexpr clv2::ListOptionInfo<std::string> OI_Combiners{
+    "combiners",          "Emit the specified combiners",
+    clv2::ZeroOrMore,     clv2::ValueRequired,
+    clv2::CommaSeparated, clv2::cat(GICombinerEmitterCat)};
+static constexpr clv2::OptionInfo<bool> OI_DebugCXXPreds{
     "gicombiner-debug-cxxpreds",
-    cl::desc("Add Contextual/Debug comments to all C++ predicates"),
-    cl::cat(GICombinerEmitterCat));
-static cl::opt<bool> DebugTypeInfer("gicombiner-debug-typeinfer",
-                                    cl::desc("Print type inference debug logs"),
-                                    cl::cat(GICombinerEmitterCat));
+    "Add Contextual/Debug comments to all C++ predicates",
+    clv2::cat(GICombinerEmitterCat)};
+static constexpr clv2::OptionInfo<bool> OI_DebugTypeInfer{
+    "gicombiner-debug-typeinfer", "Print type inference debug logs",
+    clv2::cat(GICombinerEmitterCat)};
+
+static constexpr clv2::OptionsRegistry<&OI_StopAfterParse, &OI_Combiners,
+                                       &OI_DebugCXXPreds, &OI_DebugTypeInfer>
+    GICombinerEmitterReg;
+
+static void applyGICombinerEmitterOptions(
+    const decltype(GICombinerEmitterReg)::ParsedOptionsT &Opts) {
+  StopAfterParse = Opts.get<&OI_StopAfterParse>();
+  SelectedCombiners = Opts.get<&OI_Combiners>();
+  DebugCXXPreds = Opts.get<&OI_DebugCXXPreds>();
+  DebugTypeInfer = Opts.get<&OI_DebugTypeInfer>();
+}
+
+void registerGlobalISelCombinerEmitterOptions(clv2::OptionParser &P) {
+  P.add<&GICombinerEmitterReg, applyGICombinerEmitterOptions>();
+}
 
 constexpr StringLiteral CXXCustomActionPrefix = "GICXXCustomAction_";
 constexpr StringLiteral CXXPredPrefix = "GICXXPred_MI_Predicate_";
@@ -2530,33 +2556,39 @@ void GICombinerEmitter::emitRuleConfigImpl(raw_ostream &OS) {
        << "}\n\n";
   }
 
-  OS << "static std::vector<std::string> " << Name << "Option;\n"
-     << "static cl::list<std::string> " << Name << "DisableOption(\n"
+  OS << "static std::vector<std::string> " << Name << "Option;\n\n"
+     << "static void " << Name << "DisableCB(const std::string &Val) {\n"
+     << "  " << Name << "Option.push_back(Val);\n"
+     << "}\n"
+     << "static void " << Name << "OnlyEnableCB(const std::string &Val) {\n"
+     << "  " << Name << "Option.push_back(\"*\");\n"
+     << "  StringRef Str = Val;\n"
+     << "  do {\n"
+     << "    auto X = Str.split(\",\");\n"
+     << "    " << Name << "Option.push_back((\"!\" + X.first).str());\n"
+     << "    Str = X.second;\n"
+     << "  } while (!Str.empty());\n"
+     << "}\n\n"
+     << "static constexpr clv2::ListOptionInfo<std::string> OI_" << Name
+     << "Disable{\n"
      << "    \"" << Name.lower() << "-disable-rule\",\n"
-     << "    cl::desc(\"Disable one or more combiner rules temporarily in "
-     << "the " << Name << " pass\"),\n"
-     << "    cl::CommaSeparated,\n"
-     << "    cl::Hidden,\n"
-     << "    cl::cat(GICombinerOptionCategory),\n"
-     << "    cl::callback([](const std::string &Str) {\n"
-     << "      " << Name << "Option.push_back(Str);\n"
-     << "    }));\n"
-     << "static cl::list<std::string> " << Name << "OnlyEnableOption(\n"
+     << "    \"Disable one or more combiner rules temporarily in "
+     << "the " << Name << " pass\",\n"
+     << "    clv2::Hidden, clv2::CommaSeparated, clv2::ZeroOrMore,\n"
+     << "    clv2::Callback<std::string>{" << Name << "DisableCB}};\n"
+     << "static constexpr clv2::ListOptionInfo<std::string> OI_" << Name
+     << "OnlyEnable{\n"
      << "    \"" << Name.lower() << "-only-enable-rule\",\n"
-     << "    cl::desc(\"Disable all rules in the " << Name
-     << " pass then re-enable the specified ones\"),\n"
-     << "    cl::Hidden,\n"
-     << "    cl::cat(GICombinerOptionCategory),\n"
-     << "    cl::callback([](const std::string &CommaSeparatedArg) {\n"
-     << "      StringRef Str = CommaSeparatedArg;\n"
-     << "      " << Name << "Option.push_back(\"*\");\n"
-     << "      do {\n"
-     << "        auto X = Str.split(\",\");\n"
-     << "        " << Name << "Option.push_back((\"!\" + X.first).str());\n"
-     << "        Str = X.second;\n"
-     << "      } while (!Str.empty());\n"
-     << "    }));\n"
-     << "\n\n"
+     << "    \"Disable all rules in the " << Name
+     << " pass then re-enable the specified ones\",\n"
+     << "    clv2::Hidden, clv2::ZeroOrMore,\n"
+     << "    clv2::Callback<std::string>{" << Name << "OnlyEnableCB}};\n"
+     << "static constexpr clv2::OptionsRegistry<&OI_" << Name << "Disable, &OI_"
+     << Name << "OnlyEnable> " << Name << "OptsReg;\n"
+     << "static const int Register" << Name << "Opts = [] {\n"
+     << "  clv2::registerDynamicRegistry<&" << Name << "OptsReg>();\n"
+     << "  return 0;\n"
+     << "}();\n\n"
      << "bool " << getRuleConfigClassName()
      << "::isRuleEnabled(unsigned RuleID) const {\n"
      << "    return  !DisabledRules.test(RuleID);\n"
@@ -2812,9 +2844,9 @@ void GICombinerEmitter::run(raw_ostream &OS) {
   // GET_GICOMBINER_DEPS, which pulls in extra dependencies.
   {
     IfDefGuardEmitter If(OS, "GET_GICOMBINER_DEPS");
-    OS << "#include \"llvm/ADT/SparseBitVector.h\"\n";
+    OS << "#include \"llvm/ADT/SparseBitVector.h\"\n"
+       << "#include \"llvm/Support/CommandLineV2.h\"\n";
     NamespaceEmitter LlvmNS(OS, "llvm");
-    OS << "extern cl::OptionCategory GICombinerOptionCategory;\n";
   }
 
   // GET_GICOMBINER_TYPES, which needs to be included before the declaration of

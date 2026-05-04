@@ -12,23 +12,14 @@
 
 #include "bolt/Passes/StokeInfo.h"
 #include "bolt/Core/BinaryFunctionCallGraph.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "bolt/Passes/DataflowInfoManager.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 
 #define DEBUG_TYPE "stoke"
 
 using namespace llvm;
 using namespace bolt;
-
-namespace opts {
-static cl::OptionCategory StokeOptCategory("STOKE pass options");
-
-static cl::opt<std::string>
-StokeOutputDataFilename("stoke-out",
-  cl::desc("output data (.csv) for Stoke's use"),
-  cl::Optional,
-  cl::cat(StokeOptCategory));
-}
 
 namespace llvm {
 namespace bolt {
@@ -87,7 +78,7 @@ void StokeInfo::checkInstr(const BinaryFunction &BF, StokeFuncInfo &FuncInfo) {
       if (IsRipAddr)
         FuncInfo.HasRipAddr = true;
     } // end of for (auto &It : ...)
-  }   // end of for (auto *BB : ...)
+  } // end of for (auto *BB : ...)
 }
 
 bool StokeInfo::checkFunction(BinaryFunction &BF, DataflowInfoManager &DInfo,
@@ -151,11 +142,13 @@ Error StokeInfo::runOnFunctions(BinaryContext &BC) {
     exit(1);
   }
 
+  const auto StokeOutputDataFilename = bolt_passes_opts::getStokeOut(BC);
+
   BC.outs() << "STOKE-INFO: begin of stoke pass\n";
 
   std::ofstream Outfile;
-  if (!opts::StokeOutputDataFilename.empty()) {
-    Outfile.open(opts::StokeOutputDataFilename);
+  if (!StokeOutputDataFilename.empty()) {
+    Outfile.open(StokeOutputDataFilename);
   } else {
     BC.errs() << "STOKE-INFO: output file is required\n";
     return Error::success();

@@ -22,17 +22,24 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "mlx-expansion"
 
-static cl::opt<bool>
-ForceExpand("expand-all-fp-mlx", cl::init(false), cl::Hidden);
-static cl::opt<unsigned>
-ExpandLimit("expand-limit", cl::init(~0U), cl::Hidden);
+static bool getForceExpand(const Function &F) {
+  return clv2::getOptValOr<&clv2::ARMOptsReg, &clv2::ARM_ForceExpand>(
+      F.getContext().getOptionsContext(), false);
+}
+
+static unsigned getExpandLimit(const Function &F) {
+  return clv2::getOptValOr<&clv2::ARMOptsReg, &clv2::ARM_ExpandLimit>(
+      F.getContext().getOptionsContext(), ~0U);
+}
 
 STATISTIC(NumExpand, "Number of fp MLA / MLS instructions expanded");
 
@@ -214,10 +221,11 @@ static bool isFpMulInstruction(unsigned Opcode) {
 }
 
 bool MLxExpansion::FindMLxHazard(MachineInstr *MI) {
-  if (NumExpand >= ExpandLimit)
+  const Function &F = MI->getMF()->getFunction();
+  if (NumExpand >= getExpandLimit(F))
     return false;
 
-  if (ForceExpand)
+  if (getForceExpand(F))
     return true;
 
   MachineInstr *DefMI = getAccDefMI(MI);

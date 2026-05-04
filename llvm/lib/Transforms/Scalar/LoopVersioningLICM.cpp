@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LoopVersioningLICM.cpp - LICM Loop Versioning ----------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -59,7 +61,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Scalar/LoopVersioningLICM.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/AliasAnalysis.h"
@@ -71,6 +72,7 @@
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
@@ -78,9 +80,9 @@
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Scalar/LoopVersioningLICM.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/LoopVersioning.h"
 #include <cassert>
@@ -93,18 +95,16 @@ static const char *LICMVersioningMetaData = "llvm.loop.licm_versioning.disable";
 
 /// Threshold minimum allowed percentage for possible
 /// invariant instructions in a loop.
-static cl::opt<float>
-    LVInvarThreshold("licm-versioning-invariant-threshold",
-                     cl::desc("LoopVersioningLICM's minimum allowed percentage "
-                              "of possible invariant instructions per loop"),
-                     cl::init(25), cl::Hidden);
+static float getLVInvarThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_LicmVersioningInvariantThreshold>(
+      F.getContext().getOptionsContext());
+}
 
 /// Threshold for maximum allowed loop nest/depth
-static cl::opt<unsigned> LVLoopDepthThreshold(
-    "licm-versioning-max-depth-threshold",
-    cl::desc(
-        "LoopVersioningLICM's threshold for maximum allowed loop nest/depth"),
-    cl::init(2), cl::Hidden);
+static unsigned getLVLoopDepthThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_LicmVersioningMaxDepthThreshold>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -115,11 +115,13 @@ struct LoopVersioningLICM {
   // LoopAccessInfo will take place only when it's necessary.
   LoopVersioningLICM(AliasAnalysis *AA, ScalarEvolution *SE,
                      OptimizationRemarkEmitter *ORE,
-                     LoopAccessInfoManager &LAIs, LoopInfo &LI,
-                     Loop *CurLoop)
+                     LoopAccessInfoManager &LAIs, LoopInfo &LI, Loop *CurLoop)
       : AA(AA), SE(SE), LAIs(LAIs), LI(LI), CurLoop(CurLoop),
-        LoopDepthThreshold(LVLoopDepthThreshold),
-        InvariantThreshold(LVInvarThreshold), ORE(ORE) {}
+        LoopDepthThreshold(
+            getLVLoopDepthThreshold(*CurLoop->getHeader()->getParent())),
+        InvariantThreshold(
+            getLVInvarThreshold(*CurLoop->getHeader()->getParent())),
+        ORE(ORE) {}
 
   bool run(DominatorTree *DT);
 
@@ -224,7 +226,8 @@ bool LoopVersioningLICM::legalLoopStructure() {
 bool LoopVersioningLICM::legalLoopMemoryAccesses() {
   // Loop over the body of this loop, construct AST.
   BatchAAResults BAA(*AA);
-  AliasSetTracker AST(BAA);
+  AliasSetTracker AST(
+      BAA, CurLoop->getHeader()->getParent()->getContext().getOptionsContext());
   for (auto *Block : CurLoop->getBlocks()) {
     // Ignore blocks in subloops.
     if (LI.getLoopFor(Block) == CurLoop)
@@ -398,8 +401,10 @@ bool LoopVersioningLICM::legalLoopInstructions() {
       }
     }
   // Number of runtime-checks should be less then RuntimeMemoryCheckThreshold
+  const auto &LoopOptsCtx =
+      CurLoop->getHeader()->getParent()->getContext().getOptionsContext();
   if (LAI->getNumRuntimePointerChecks() >
-      VectorizerParams::RuntimeMemoryCheckThreshold) {
+      VectorizerParams::getRuntimeMemoryCheckThreshold(LoopOptsCtx)) {
     LLVM_DEBUG(
         dbgs() << "    LAA: Runtime checks are more than threshold !!\n");
     ORE->emit([&]() {
@@ -409,7 +414,9 @@ bool LoopVersioningLICM::legalLoopInstructions() {
              << "Number of runtime checks "
              << NV("RuntimeChecks", LAI->getNumRuntimePointerChecks())
              << " exceeds threshold "
-             << NV("Threshold", VectorizerParams::RuntimeMemoryCheckThreshold);
+             << NV("Threshold",
+                   VectorizerParams::getRuntimeMemoryCheckThreshold(
+                       LoopOptsCtx));
     });
     return false;
   }

@@ -18,6 +18,8 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/KnownBits.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/InstCombine/InstCombineOptionsOptInfos.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 
 using namespace llvm;
@@ -25,17 +27,17 @@ using namespace llvm::PatternMatch;
 
 #define DEBUG_TYPE "instcombine"
 
-static cl::opt<bool>
-    VerifyKnownBits("instcombine-verify-known-bits",
-                    cl::desc("Verify that computeKnownBits() and "
-                             "SimplifyDemandedBits() are consistent"),
-                    cl::Hidden, cl::init(false));
+static bool getVerifyKnownBits(const Function &F) {
+  return clv2::getOptValOr<&clv2::InstCombineOptsReg,
+                           &clv2::IC_VerifyKnownBits>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<unsigned> SimplifyDemandedVectorEltsDepthLimit(
-    "instcombine-simplify-vector-elts-depth",
-    cl::desc(
-        "Depth limit when simplifying vector instructions and their operands"),
-    cl::Hidden, cl::init(10));
+static unsigned getSimplifyDemandedVectorEltsDepthLimit(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::IC_SimplifyDemandedVectorEltsDepthLimit>(
+      F.getContext().getOptionsContext());
+}
 
 /// Check to see if the specified operand of the specified instruction is a
 /// constant integer. If so, check to see if there are any bits set in the
@@ -1204,7 +1206,7 @@ Value *InstCombinerImpl::SimplifyDemandedUseBits(Instruction *I,
       DemandedMask.isSubsetOf(Known.Zero | Known.One))
     return Constant::getIntegerValue(VTy, Known.One);
 
-  if (VerifyKnownBits) {
+  if (getVerifyKnownBits(F)) {
     KnownBits ReferenceKnown = llvm::computeKnownBits(I, Q, Depth);
     if (Known != ReferenceKnown) {
       errs() << "Mismatched known bits for " << *I << " in "
@@ -1581,7 +1583,7 @@ Value *InstCombinerImpl::SimplifyDemandedVectorElts(Value *V,
   }
 
   // Limit search depth.
-  if (Depth == SimplifyDemandedVectorEltsDepthLimit)
+  if (Depth == getSimplifyDemandedVectorEltsDepthLimit(F))
     return nullptr;
 
   if (!AllowMultipleUsers) {
@@ -1659,7 +1661,7 @@ Value *InstCombinerImpl::SimplifyDemandedVectorElts(Value *V,
     break;
   }
   case Instruction::InsertElement: {
-    unsigned DepthLimit = SimplifyDemandedVectorEltsDepthLimit;
+    unsigned DepthLimit = getSimplifyDemandedVectorEltsDepthLimit(F);
     auto *IE = cast<InsertElementInst>(I);
     // Skip only when SDVE cannot simplify this insert chain before the limit.
     if (Depth == 0 && DemandedElts.isAllOnes() && VWidth > DepthLimit &&

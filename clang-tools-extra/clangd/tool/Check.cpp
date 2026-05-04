@@ -65,7 +65,8 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Chrono.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include <array>
@@ -81,33 +82,41 @@ namespace clang {
 namespace clangd {
 namespace {
 
-// These will never be shown in --help, ClangdMain doesn't list the category.
-llvm::cl::opt<std::string> CheckTidyTime{
-    "check-tidy-time",
-    llvm::cl::desc("Print the overhead of checks matching this glob"),
-    llvm::cl::init("")};
-llvm::cl::opt<std::string> CheckFileLines{
+std::string CheckTidyTime = "";
+std::string CheckFileLines = "";
+bool CheckLocations = true;
+bool CheckCompletion = false;
+bool CheckWarnings = false;
+
+// These are deliberately left without a category: ClangdMain does not list one
+// for them, so hideUnrelatedOptions marks them ReallyHidden and they never
+// appear in --help, while still being accepted on the command line.
+namespace clv2 = llvm::clv2;
+
+inline constexpr clv2::OptionInfo<std::string> CheckTidyTimeOpt{
+    "check-tidy-time", "Print the overhead of checks matching this glob",
+    clv2::Init{""}};
+inline constexpr clv2::OptionInfo<std::string> CheckFileLinesOpt{
     "check-lines",
-    llvm::cl::desc(
-        "Limits the range of tokens in -check file on which "
-        "various features are tested. Example --check-lines=3-7 restricts "
-        "testing to lines 3 to 7 (inclusive) or --check-lines=5 to restrict "
-        "to one line. Default is testing entire file."),
-    llvm::cl::init("")};
-llvm::cl::opt<bool> CheckLocations{
+    "Limits the range of tokens in -check file on which "
+    "various features are tested. Example --check-lines=3-7 restricts "
+    "testing to lines 3 to 7 (inclusive) or --check-lines=5 to restrict "
+    "to one line. Default is testing entire file.",
+    clv2::Init{""}};
+inline constexpr clv2::OptionInfo<bool> CheckLocationsOpt{
     "check-locations",
-    llvm::cl::desc(
-        "Runs certain features (e.g. hover) at each point in the file. "
-        "Somewhat slow."),
-    llvm::cl::init(true)};
-llvm::cl::opt<bool> CheckCompletion{
-    "check-completion",
-    llvm::cl::desc("Run code-completion at each point (slow)"),
-    llvm::cl::init(false)};
-llvm::cl::opt<bool> CheckWarnings{
-    "check-warnings",
-    llvm::cl::desc("Print warnings as well as errors"),
-    llvm::cl::init(false)};
+    "Runs certain features (e.g. hover) at each point in the file. "
+    "Somewhat slow.",
+    clv2::Init{true}};
+inline constexpr clv2::OptionInfo<bool> CheckCompletionOpt{
+    "check-completion", "Run code-completion at each point (slow)"};
+inline constexpr clv2::OptionInfo<bool> CheckWarningsOpt{
+    "check-warnings", "Print warnings as well as errors"};
+
+inline constexpr clv2::OptionsRegistry<&CheckTidyTimeOpt, &CheckFileLinesOpt,
+                                       &CheckLocationsOpt, &CheckCompletionOpt,
+                                       &CheckWarningsOpt>
+    CheckReg;
 
 // Print the diagnostics meeting severity threshold, and return count of errors.
 unsigned showErrors(llvm::ArrayRef<Diag> Diags) {
@@ -278,7 +287,7 @@ public:
 
     if (!CheckTidyTime.empty()) {
       if (!CLANGD_TIDY_CHECKS) {
-        elog("-{0} requires -DCLANGD_TIDY_CHECKS!", CheckTidyTime.ArgStr);
+        elog("-check-tidy-time requires -DCLANGD_TIDY_CHECKS!");
         return false;
       }
       #ifndef NDEBUG
@@ -462,6 +471,19 @@ public:
 
 } // namespace
 
+void registerCheckOptions(llvm::clv2::OptionParser &P) { P.add<&CheckReg>(); }
+
+void applyCheckOptions(const llvm::clv2::OptionsContext &Ctx) {
+  const auto *O = Ctx.getViewPtr<&CheckReg>();
+  if (!O)
+    return;
+  CheckTidyTime = O->get<&CheckTidyTimeOpt>();
+  CheckFileLines = O->get<&CheckFileLinesOpt>();
+  CheckLocations = O->get<&CheckLocationsOpt>();
+  CheckCompletion = O->get<&CheckCompletionOpt>();
+  CheckWarnings = O->get<&CheckWarningsOpt>();
+}
+
 bool check(llvm::StringRef File, const ThreadsafeFS &TFS,
            const ClangdLSPServer::Options &Opts) {
   std::optional<Range> LineRange;
@@ -506,7 +528,7 @@ bool check(llvm::StringRef File, const ThreadsafeFS &TFS,
       config::Fragment F;
       // If we're timing clang-tidy checks, implicitly disabling the slow ones
       // is counterproductive!
-      if (CheckTidyTime.getNumOccurrences())
+      if (!CheckTidyTime.empty())
         F.Diagnostics.ClangTidy.FastCheckFilter.emplace("None");
       return {std::move(F).compile(Diag)};
     }

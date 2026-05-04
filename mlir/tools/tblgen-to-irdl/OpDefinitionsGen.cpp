@@ -20,11 +20,10 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/TableGen/AttrOrTypeDef.h"
 #include "mlir/TableGen/GenInfo.h"
-#include "mlir/TableGen/GenNameParser.h"
 #include "mlir/TableGen/Interfaces.h"
 #include "mlir/TableGen/Operator.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TableGen/Main.h"
@@ -35,10 +34,21 @@ using namespace llvm;
 using namespace mlir;
 using tblgen::NamedTypeConstraint;
 
-static llvm::cl::OptionCategory dialectGenCat("Options for -gen-irdl-dialect");
-static llvm::cl::opt<std::string>
-    selectedDialect("dialect", llvm::cl::desc("The dialect to gen for"),
-                    llvm::cl::cat(dialectGenCat), llvm::cl::Required);
+static std::string selectedDialect;
+
+namespace irdl_opts {
+static constexpr llvm::clv2::OptionCategory
+    IrdlDialectCategory("Options for -gen-irdl-dialect");
+inline constexpr llvm::clv2::OptionInfo<std::string> Dialect{
+    "dialect", "The dialect to gen for", llvm::clv2::cat(IrdlDialectCategory)};
+inline constexpr llvm::clv2::OptionsRegistry<&Dialect> Registry;
+
+using ParsedOpts = decltype(Registry)::ParsedOptionsT;
+
+void apply(const ParsedOpts &Opts) { selectedDialect = Opts.get<&Dialect>(); }
+
+void registerOptions(llvm::clv2::OptionParser &P) { P.add<&Registry, apply>(); }
+} // namespace irdl_opts
 
 static Value createPredicate(OpBuilder &builder, tblgen::Pred pred) {
   MLIRContext *ctx = builder.getContext();

@@ -8,7 +8,6 @@
 
 #include "TestRunner.h"
 #include "ReducerWorkItem.h"
-#include "deltas/Utils.h"
 #include "llvm/Support/WithColor.h"
 
 using namespace llvm;
@@ -17,10 +16,11 @@ TestRunner::TestRunner(StringRef TestName, ArrayRef<std::string> RawTestArgs,
                        std::unique_ptr<ReducerWorkItem> Program,
                        std::unique_ptr<TargetMachine> TM, StringRef ToolName,
                        StringRef OutputName, bool InputIsBitcode,
-                       bool OutputBitcode)
+                       bool OutputBitcode, ReduceConfig Config)
     : TestName(TestName), ToolName(ToolName), Program(std::move(Program)),
       TM(std::move(TM)), OutputFilename(OutputName),
-      InputIsBitcode(InputIsBitcode), EmitBitcode(OutputBitcode) {
+      InputIsBitcode(InputIsBitcode), EmitBitcode(OutputBitcode),
+      Config(std::move(Config)) {
   assert(this->Program && "Initialized with null program?");
 
   TestArgs.push_back(TestName); // argv[0]
@@ -41,7 +41,7 @@ int TestRunner::run(StringRef Filename) const {
 
   int Result =
       sys::ExecuteAndWait(TestName, ExecArgs, /*Env=*/std::nullopt,
-                          Verbose ? DefaultRedirects : NullRedirects,
+                          Config.Verbose ? DefaultRedirects : NullRedirects,
                           /*SecondsToWait=*/0, /*MemoryLimit=*/0, &ErrMsg);
 
   if (Result < 0) {

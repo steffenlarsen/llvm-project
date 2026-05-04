@@ -9,6 +9,7 @@
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Testing/Support/Error.h"
 #include "llvm/Transforms/Coroutines/ABI.h"
@@ -20,14 +21,14 @@ using namespace llvm;
 namespace {
 
 struct ExtraRematTest : public testing::Test {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   ModulePassManager MPM;
-  PassBuilder PB;
+  PassBuilder PB{llvm::clv2::defaultOptionsContext()};
   LoopAnalysisManager LAM;
   FunctionAnalysisManager FAM;
   CGSCCAnalysisManager CGAM;
   ModuleAnalysisManager MAM;
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
 
   ExtraRematTest() {

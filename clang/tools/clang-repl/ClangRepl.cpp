@@ -25,10 +25,11 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
 #include "llvm/LineEditor/LineEditor.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/ManagedStatic.h" // llvm_shutdown
 #include "llvm/Support/Path.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/VirtualFileSystem.h"
@@ -52,52 +53,86 @@ LLVM_ATTRIBUTE_USED int __lsan_is_turned_off() { return 1; }
 
 #define DEBUG_TYPE "clang-repl"
 
-static llvm::cl::opt<bool> CudaEnabled("cuda", llvm::cl::Hidden);
-static llvm::cl::opt<std::string> CudaPath("cuda-path", llvm::cl::Hidden);
-static llvm::cl::opt<std::string> OffloadArch("offload-arch", llvm::cl::Hidden);
-static llvm::cl::OptionCategory OOPCategory("Out-of-process Execution Options");
-static llvm::cl::opt<std::string> SlabAllocateSizeString(
+inline constexpr llvm::clv2::OptionCategory OOPCategory{
+    "Out-of-process Execution Options"};
+
+// --- constexpr option descriptors ---
+inline constexpr llvm::clv2::OptionInfo<bool> CRCudaOpt{"cuda", "",
+                                                        llvm::clv2::Hidden};
+
+inline constexpr llvm::clv2::OptionInfo<std::string> CRCudaPathOpt{
+    "cuda-path", "", llvm::clv2::Hidden};
+
+inline constexpr llvm::clv2::OptionInfo<std::string> CROffloadArchOpt{
+    "offload-arch", "", llvm::clv2::Hidden};
+
+inline constexpr llvm::clv2::OptionInfo<std::string> CRSlabAllocateOpt{
     "slab-allocate",
-    llvm::cl::desc("Allocate from a slab of the given size "
-                   "(allowable suffixes: Kb, Mb, Gb. default = "
-                   "Kb)"),
-    llvm::cl::init(""), llvm::cl::cat(OOPCategory));
-static llvm::cl::opt<std::string>
-    OOPExecutor("oop-executor",
-                llvm::cl::desc("Launch an out-of-process executor to run code"),
-                llvm::cl::init(""), llvm::cl::ValueOptional,
-                llvm::cl::cat(OOPCategory));
-static llvm::cl::opt<std::string> OOPExecutorConnect(
+    "Allocate from a slab of the given size "
+    "(allowable suffixes: Kb, Mb, Gb. default = "
+    "Kb)",
+    llvm::clv2::cat(OOPCategory)};
+
+inline constexpr llvm::clv2::OptionInfo<std::string> CROOPExecutorOpt{
+    "oop-executor", "Launch an out-of-process executor to run code",
+    llvm::clv2::ValueOptional, llvm::clv2::cat(OOPCategory)};
+
+inline constexpr llvm::clv2::OptionInfo<std::string> CROOPExecutorConnectOpt{
     "oop-executor-connect",
-    llvm::cl::desc(
-        "Connect to an out-of-process executor through a TCP socket"),
-    llvm::cl::value_desc("<hostname>:<port>"));
-static llvm::cl::opt<std::string>
-    OrcRuntimePath("orc-runtime", llvm::cl::desc("Path to the ORC runtime"),
-                   llvm::cl::init(""), llvm::cl::ValueOptional,
-                   llvm::cl::cat(OOPCategory));
-static llvm::cl::opt<bool> UseSharedMemory(
+    "Connect to an out-of-process executor through a TCP socket",
+    llvm::clv2::value_desc("<hostname>:<port>")};
+
+inline constexpr llvm::clv2::OptionInfo<std::string> CROrcRuntimePathOpt{
+    "orc-runtime", "Path to the ORC runtime", llvm::clv2::ValueOptional,
+    llvm::clv2::cat(OOPCategory)};
+
+inline constexpr llvm::clv2::OptionInfo<bool> CRUseSharedMemoryOpt{
     "use-shared-memory",
-    llvm::cl::desc("Use shared memory to transfer generated code and data"),
-    llvm::cl::init(false), llvm::cl::cat(OOPCategory));
-static llvm::cl::list<std::string>
-    ClangArgs("Xcc",
-              llvm::cl::desc("Argument to pass to the CompilerInvocation"),
-              llvm::cl::CommaSeparated);
-static llvm::cl::opt<bool> OptHostSupportsJit("host-supports-jit",
-                                              llvm::cl::Hidden);
-static llvm::cl::opt<bool> OptHostJitTriple("host-jit-triple",
-                                            llvm::cl::Hidden);
-static llvm::cl::list<std::string> OptInputs(llvm::cl::Positional,
-                                             llvm::cl::desc("[code to run]"));
+    "Use shared memory to transfer generated code and data",
+    llvm::clv2::cat(OOPCategory)};
+
+inline constexpr llvm::clv2::ListOptionInfo<std::string> CRClangArgsOpt{
+    "Xcc", "Argument to pass to the CompilerInvocation",
+    llvm::clv2::CommaSeparated};
+
+inline constexpr llvm::clv2::OptionInfo<bool> CRHostSupportsJitOpt{
+    "host-supports-jit", "", llvm::clv2::Hidden};
+
+inline constexpr llvm::clv2::OptionInfo<bool> CRHostJitTripleOpt{
+    "host-jit-triple", "", llvm::clv2::Hidden};
+
+inline constexpr llvm::clv2::ListOptionInfo<std::string> CRInputsOpt{
+    "code to run", "[code to run]", llvm::clv2::Positional{},
+    llvm::clv2::ZeroOrMore};
+
+inline constexpr llvm::clv2::OptionsRegistry<
+    &CRCudaOpt, &CRCudaPathOpt, &CROffloadArchOpt, &CRSlabAllocateOpt,
+    &CROOPExecutorOpt, &CROOPExecutorConnectOpt, &CROrcRuntimePathOpt,
+    &CRUseSharedMemoryOpt, &CRClangArgsOpt, &CRHostSupportsJitOpt,
+    &CRHostJitTripleOpt, &CRInputsOpt>
+    ClangReplReg;
+
+// Parsed values - populated after parsing.
+static bool CudaEnabled = false;
+static std::string CudaPath;
+static std::string OffloadArch;
+static std::string SlabAllocateSizeString;
+static std::string OOPExecutor;
+static unsigned OOPExecutorCount = 0;
+static std::string OOPExecutorConnect;
+static unsigned OOPExecutorConnectCount = 0;
+static std::string OrcRuntimePath;
+static bool UseSharedMemory = false;
+static std::vector<std::string> ClangArgs;
+static bool OptHostSupportsJit = false;
+static bool OptHostJitTriple = false;
+static std::vector<std::string> OptInputs;
 
 static llvm::Error sanitizeOopArguments(const char *ArgV0) {
   // Only one of -oop-executor and -oop-executor-connect can be used.
-  if (!!OOPExecutor.getNumOccurrences() &&
-      !!OOPExecutorConnect.getNumOccurrences())
+  if (OOPExecutorCount && OOPExecutorConnectCount)
     return llvm::make_error<llvm::StringError>(
-        "Only one of -" + OOPExecutor.ArgStr + " and -" +
-            OOPExecutorConnect.ArgStr + " can be specified",
+        "Only one of -oop-executor and -oop-executor-connect can be specified",
         llvm::inconvertibleErrorCode());
 
   llvm::Triple SystemTriple(llvm::sys::getProcessTriple());
@@ -105,8 +140,7 @@ static llvm::Error sanitizeOopArguments(const char *ArgV0) {
   // non-Unix platforms.
   if ((!SystemTriple.isOSBinFormatELF() &&
        !SystemTriple.isOSBinFormatMachO()) &&
-      (OOPExecutor.getNumOccurrences() ||
-       OOPExecutorConnect.getNumOccurrences()))
+      (OOPExecutorCount || OOPExecutorConnectCount))
     return llvm::make_error<llvm::StringError>(
         "Out-of-process execution is only supported on Unix platforms",
         llvm::inconvertibleErrorCode());
@@ -116,8 +150,7 @@ static llvm::Error sanitizeOopArguments(const char *ArgV0) {
   //
   // FIXME: Remove once we enable remote slab allocation.
   if (SlabAllocateSizeString != "") {
-    if (OOPExecutor.getNumOccurrences() ||
-        OOPExecutorConnect.getNumOccurrences())
+    if (OOPExecutorCount || OOPExecutorConnectCount)
       return llvm::make_error<llvm::StringError>(
           "-slab-allocate cannot be used with -oop-executor or "
           "-oop-executor-connect",
@@ -129,7 +162,7 @@ static llvm::Error sanitizeOopArguments(const char *ArgV0) {
 
   // If -oop-executor was used but no value was specified then use a sensible
   // default.
-  if (!!OOPExecutor.getNumOccurrences() && OOPExecutor.empty()) {
+  if (OOPExecutorCount && OOPExecutor.empty()) {
     llvm::SmallString<256> OOPExecutorPath(llvm::sys::fs::getMainExecutable(
         ArgV0, reinterpret_cast<void *>(&sanitizeOopArguments)));
     llvm::sys::path::remove_filename(OOPExecutorPath);
@@ -259,7 +292,324 @@ int main(int argc, const char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
 
   ExitOnErr.setBanner("clang-repl: ");
-  llvm::cl::ParseCommandLineOptions(argc, argv);
+  llvm::clv2::OptionParser P;
+  P.add<&ClangReplReg>();
+  llvm::RegisterCommonLLVMOptionsHidden(P);
+  // Auto-generated showOptions for clang-repl
+  P.showOptions({
+      "aarch64-neon-syntax",
+      "aarch64-use-aa",
+      "abort-on-max-devirt-iterations-reached",
+      "allow-ginsert-as-artifact",
+      "amdgpu-atomic-optimizer-strategy",
+      "amdgpu-bypass-slow-div",
+      "amdgpu-disable-loop-alignment",
+      "amdgpu-dpp-combine",
+      "amdgpu-dump-hsa-metadata",
+      "amdgpu-enable-merge-m0",
+      "amdgpu-indirect-call-specialization-threshold",
+      "amdgpu-kernarg-preload",
+      "amdgpu-kernarg-preload-count",
+      "amdgpu-module-splitting-max-depth",
+      "amdgpu-promote-alloca-to-vector-limit",
+      "amdgpu-promote-alloca-to-vector-max-regs",
+      "amdgpu-promote-alloca-to-vector-vgpr-ratio",
+      "amdgpu-sdwa-peephole",
+      "amdgpu-use-aa-in-codegen",
+      "amdgpu-verify-hsa-metadata",
+      "amdgpu-vgpr-index-mode",
+      "arc-contract-use-objc-claim-rv",
+      "argext-abi-check",
+      "arm-add-build-attributes",
+      "arm-implicit-it",
+      "atomic-counter-update-promoted",
+      "atomic-first-counter",
+      "basic-block-section-match-infer",
+      "bounds-checking-single-trap",
+      "bpf-stack-size",
+      "cfg-hide-cold-paths",
+      "cfg-hide-deoptimize-paths",
+      "cfg-hide-unreachable-paths",
+      "check-functions-filter",
+      "conditional-counter-update",
+      "cost-kind",
+      "ir2vec-arg-weight",
+      "ir2vec-kind",
+      "ir2vec-opc-weight",
+      "ir2vec-type-weight",
+      "ir2vec-vocab-path",
+      "mir2vec-common-operand-weight",
+      "mir2vec-kind",
+      "mir2vec-opc-weight",
+      "mir2vec-print-all-vocab-entries",
+      "mir2vec-reg-operand-weight",
+      "mir2vec-vocab-path",
+      "ctx-profile-force-is-specialized",
+      "debugify-atoms",
+      "debugify-func-limit",
+      "debugify-level",
+      "debugify-quiet",
+      "devirtualize-speculatively",
+      "disable-auto-upgrade-debug-info",
+      "disable-i2p-p2i-opt",
+      "disable-promote-alloca-to-lds",
+      "disable-promote-alloca-to-vector",
+      "disable-qfp-opt",
+      "disable-qfp-opt-mul",
+      "do-counter-promotion",
+      "dot-cfg-mssa",
+      "elide-all-zero-branch-weights",
+      "emit-bb-hash",
+      "emit-gnuas-syntax-on-zos",
+      "emscripten-cxx-exceptions-allowed",
+      "enable-cse-in-irtranslator",
+      "enable-cse-in-legalizer",
+      "enable-devirtualize-speculatively",
+      "enable-emscripten-cxx-exceptions",
+      "enable-emscripten-sjlj",
+      "enable-gvn-hoist",
+      "enable-gvn-memdep",
+      "enable-gvn-memoryssa",
+      "enable-gvn-sink",
+      "enable-jump-table-to-switch",
+      "enable-load-in-loop-pre",
+      "enable-load-pre",
+      "enable-loop-simplifycfg-term-folding",
+      "enable-name-compression",
+      "enable-poison-reuse-guard",
+      "enable-split-backedge-in-load-pre",
+      "enable-split-loopiv-heuristic",
+      "enable-vtable-profile-use",
+      "enable-vtable-value-profiling",
+      "expand-variadics-override",
+      "experimental-debug-variable-locations",
+      "force-tail-folding-style",
+      "fs-profile-debug-bw-threshold",
+      "fs-profile-debug-prob-diff-threshold",
+      "generate-merged-base-profiles",
+      "gpsize",
+      "hash-based-counter-split",
+      "hexagon-add-build-attributes",
+      "hexagon-rdf-limit",
+      "hot-cold-split",
+      "hwasan-percentile-cutoff-hot",
+      "hwasan-random-rate",
+      "import-all-index",
+      "instcombine-code-sinking",
+      "instcombine-guard-widening-window",
+      "instcombine-maxarray-size",
+      "instcombine-max-num-phis",
+      "instcombine-max-sink-users",
+      "instcombine-negator-enabled",
+      "instcombine-negator-max-depth",
+      "instrprof-atomic-counter-update-all",
+      "internalize-public-api-file",
+      "internalize-public-api-list",
+      "intrinsic-cost-strategy",
+      "iterative-counter-promotion",
+      "loongarch-use-aa",
+      "lower-allow-check-percentile-cutoff-hot",
+      "lower-allow-check-random-rate",
+      "lto-embed-bitcode",
+      "matrix-default-layout",
+      "matrix-print-after-transpose-opt",
+      "max-counter-promotions",
+      "max-counter-promotions-per-loop",
+      "mcabac",
+      "merror-missing-parenthesis",
+      "merror-noncontigious-register",
+      "mhvx",
+      "mips16-constant-islands",
+      "mips16-hard-float",
+      "mips-compact-branches",
+      "mir-strip-debugify-only",
+      "misexpect-tolerance",
+      "mno-compound",
+      "mno-fixup",
+      "mno-ldc1-sdc1",
+      "mno-pairing",
+      "ms-secure-hotpatch-functions-file",
+      "ms-secure-hotpatch-functions-list",
+      "mwarn-missing-parenthesis",
+      "mwarn-noncontigious-register",
+      "mwarn-sign-mismatch",
+      "no-discriminators",
+      "nvptx-approx-log2f32",
+      "nvptx-sched4reg",
+      "object-size-offset-visitor-max-visit-instructions",
+      "oop-executor",
+      "oop-executor-connect",
+      "orc-runtime",
+      "pgo-block-coverage",
+      "pgo-temporal-instrumentation",
+      "pgo-view-block-coverage-graph",
+      "polly",
+      "polly-2nd-level-tiling",
+      "polly-annotate-metadata-vectorize",
+      "polly-ast-print-accesses",
+      "polly-context",
+      "polly-dce-precise-steps",
+      "polly-delicm-max-ops",
+      "polly-detect-full-functions",
+      "polly-dump-after",
+      "polly-dump-after-file",
+      "polly-dump-before",
+      "polly-dump-before-file",
+      "polly-enable-simplify",
+      "polly-ignore-func",
+      "polly-isl-arg",
+      "polly-matmul-opt",
+      "polly-on-isl-error-abort",
+      "polly-only-func",
+      "polly-only-region",
+      "polly-only-scop-detection",
+      "polly-optimized-scops",
+      "polly-parallel",
+      "polly-parallel-force",
+      "polly-pattern-matching-based-opts",
+      "polly-postopts",
+      "polly-pragma-based-opts",
+      "polly-pragma-ignore-depcheck",
+      "polly-print-ast",
+      "polly-print-delicm",
+      "polly-print-deps",
+      "polly-print-detect",
+      "polly-print-flatten-schedule",
+      "polly-print-import-jscop",
+      "polly-print-mse",
+      "polly-print-opt-isl",
+      "polly-print-optree",
+      "polly-print-scops",
+      "polly-print-simplify",
+      "polly-process-unprofitable",
+      "polly-register-tiling",
+      "polly-report",
+      "polly-reschedule",
+      "polly-show",
+      "polly-show-only",
+      "polly-stmt-granularity",
+      "polly-tc-opt",
+      "polly-tiling",
+      "polly-vectorizer",
+      "print-pipeline-passes",
+      "profcheck-annotate-select",
+      "profcheck-default-function-entry-count",
+      "profcheck-default-select-false-weight",
+      "profcheck-default-select-true-weight",
+      "profcheck-weights-for-test",
+      "profile-correlate",
+      "promote-alloca-vector-loop-user-weight",
+      "propeller-infer-threshold",
+      "r600-ir-structurize",
+      "riscv-add-build-attributes",
+      "riscv-use-aa",
+      "runtime-counter-relocation",
+      "safepoint-ir-verifier-print-only",
+      "sampled-instr-burst-duration",
+      "sampled-instr-period",
+      "sampled-instrumentation",
+      "sample-profile-check-record-coverage",
+      "sample-profile-check-sample-coverage",
+      "sample-profile-max-propagate-iterations",
+      "sanitizer-early-opt-ep",
+      "skip-ret-exit-block",
+      "slab-allocate",
+      "speculative-counter-promotion-max-exiting",
+      "speculative-counter-promotion-to-loop",
+      "spirv-emit-op-names",
+      "spirv-ext",
+      "spv-allow-unknown-intrinsics",
+      "spv-dump-deps",
+      "spv-emit-nonsemantic-debug-info",
+      "summary-file",
+      "sve-tail-folding",
+      "tail-predication",
+      "thinlto-assume-merged",
+      "translator-compatibility-mode",
+      "ubsan-guard-checks",
+      "use-shared-memory",
+      "verify-legalizer-debug-locs",
+      "verify-region-info",
+      "vp-counters-per-site",
+      "vp-static-alloc",
+      "wasm-enable-eh",
+      "wasm-enable-sjlj",
+      "wasm-use-legacy-eh",
+      "x86-align-branch",
+      "x86-align-branch-boundary",
+      "x86-branches-within-32B-boundaries",
+      "x86-enable-apx-for-relocation",
+      "x86-pad-max-prefix-size",
+      "polly",
+      "polly-2nd-level-tiling",
+      "polly-annotate-metadata-vectorize",
+      "polly-ast-print-accesses",
+      "polly-context",
+      "polly-dce-precise-steps",
+      "polly-delicm-max-ops",
+      "polly-detect-full-functions",
+      "polly-dump-after",
+      "polly-dump-after-file",
+      "polly-dump-before",
+      "polly-dump-before-file",
+      "polly-enable-simplify",
+      "polly-ignore-func",
+      "polly-isl-arg",
+      "polly-matmul-opt",
+      "polly-on-isl-error-abort",
+      "polly-only-func",
+      "polly-only-region",
+      "polly-only-scop-detection",
+      "polly-optimized-scops",
+      "polly-parallel",
+      "polly-parallel-force",
+      "polly-pattern-matching-based-opts",
+      "polly-postopts",
+      "polly-pragma-based-opts",
+      "polly-pragma-ignore-depcheck",
+      "polly-print-ast",
+      "polly-print-delicm",
+      "polly-print-deps",
+      "polly-print-detect",
+      "polly-print-flatten-schedule",
+      "polly-print-import-jscop",
+      "polly-print-mse",
+      "polly-print-opt-isl",
+      "polly-print-optree",
+      "polly-print-scops",
+      "polly-print-simplify",
+      "polly-process-unprofitable",
+      "polly-register-tiling",
+      "polly-report",
+      "polly-reschedule",
+      "polly-show",
+      "polly-show-only",
+      "polly-stmt-granularity",
+      "polly-tc-opt",
+      "polly-tiling",
+      "polly-vectorizer",
+
+      "Xcc",
+  });
+
+  auto OptsCtx = P.parse(argc, argv);
+  auto *Opts = OptsCtx->getViewPtr<&ClangReplReg>();
+
+  // Extract parsed values.
+  CudaEnabled = Opts->get<&CRCudaOpt>();
+  CudaPath = Opts->get<&CRCudaPathOpt>();
+  OffloadArch = Opts->get<&CROffloadArchOpt>();
+  SlabAllocateSizeString = Opts->get<&CRSlabAllocateOpt>();
+  OOPExecutor = Opts->get<&CROOPExecutorOpt>();
+  OOPExecutorCount = Opts->occurrences<&CROOPExecutorOpt>();
+  OOPExecutorConnect = Opts->get<&CROOPExecutorConnectOpt>();
+  OOPExecutorConnectCount = Opts->occurrences<&CROOPExecutorConnectOpt>();
+  OrcRuntimePath = Opts->get<&CROrcRuntimePathOpt>();
+  UseSharedMemory = Opts->get<&CRUseSharedMemoryOpt>();
+  ClangArgs = Opts->get<&CRClangArgsOpt>();
+  OptHostSupportsJit = Opts->get<&CRHostSupportsJitOpt>();
+  OptHostJitTriple = Opts->get<&CRHostJitTripleOpt>();
+  OptInputs = Opts->get<&CRInputsOpt>();
 
   llvm::llvm_shutdown_obj Y; // Call llvm_shutdown() on exit.
 

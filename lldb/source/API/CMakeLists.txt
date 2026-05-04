@@ -125,6 +125,7 @@ add_lldb_library(liblldb SHARED ${option_framework}
     lldb-sbapi-dwarf-enums
 
   LINK_COMPONENTS
+  AllOptions
     Support
   LINK_LIBS
     lldbBreakpoint

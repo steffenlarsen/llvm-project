@@ -19,7 +19,7 @@
 #include "TGParser.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -39,43 +39,66 @@
 #include <utility>
 using namespace llvm;
 
-static cl::opt<std::string>
-OutputFilename("o", cl::desc("Output filename"), cl::value_desc("filename"),
-               cl::init("-"));
+bool llvm::EmitLongStrLiterals = true;
 
-static cl::opt<std::string>
-DependFilename("d",
-               cl::desc("Dependency filename"),
-               cl::value_desc("filename"),
-               cl::init(""));
+static std::string OutputFilename = "-";
+static std::string DependFilename;
+static std::string InputFilename = "-";
+static std::vector<std::string> IncludeDirs;
+static std::vector<std::string> MacroNames;
+static bool WriteIfChanged = false;
+static bool TimePhases = false;
+static bool NoWarnOnUnusedTemplateArgs = false;
 
-static cl::opt<std::string>
-InputFilename(cl::Positional, cl::desc("<input file>"), cl::init("-"));
-
-static cl::list<std::string>
-IncludeDirs("I", cl::desc("Directory of include files"),
-            cl::value_desc("directory"), cl::Prefix);
-
-static cl::list<std::string>
-MacroNames("D", cl::desc("Name of the macro to be defined"),
-            cl::value_desc("macro name"), cl::Prefix);
-
-static cl::opt<bool>
-WriteIfChanged("write-if-changed", cl::desc("Only write output if it changed"));
-
-static cl::opt<bool>
-TimePhases("time-phases", cl::desc("Time phases of parser and backend"));
-
-cl::opt<bool> llvm::EmitLongStrLiterals(
-    "long-string-literals",
-    cl::desc("when emitting large string tables, prefer string literals over "
-             "comma-separated char literals. This can be a readability and "
-             "compile-time performance win, but upsets some compilers"),
-    cl::Hidden, cl::init(true));
-
-static cl::opt<bool> NoWarnOnUnusedTemplateArgs(
+static constexpr clv2::OptionInfo<std::string> OI_OutputFilename{
+    "o", "Output filename", clv2::value_desc("filename"), clv2::Init{"-"}};
+static constexpr clv2::OptionInfo<std::string> OI_DependFilename{
+    "d", "Dependency filename", clv2::value_desc("filename")};
+static constexpr clv2::OptionInfo<std::string> OI_InputFilename{
+    "", "<input file>", clv2::Positional{}, clv2::Init{"-"}};
+static constexpr clv2::ListOptionInfo<std::string> OI_IncludeDirs{
+    "I",
+    "Directory of include files",
+    clv2::PrefixFormat,
+    clv2::ZeroOrMore,
+    clv2::ValueRequired,
+    clv2::value_desc("directory")};
+static constexpr clv2::ListOptionInfo<std::string> OI_MacroNames{
+    "D",
+    "Name of the macro to be defined",
+    clv2::PrefixFormat,
+    clv2::ZeroOrMore,
+    clv2::ValueRequired,
+    clv2::value_desc("macro name")};
+static constexpr clv2::OptionInfo<bool> OI_WriteIfChanged{
+    "write-if-changed", "Only write output if it changed"};
+static constexpr clv2::OptionInfo<bool> OI_TimePhases{
+    "time-phases", "Time phases of parser and backend"};
+static constexpr clv2::OptionInfo<bool> OI_NoWarnOnUnusedTemplateArgs{
     "no-warn-on-unused-template-args",
-    cl::desc("Disable unused template argument warnings."));
+    "Disable unused template argument warnings."};
+
+static constexpr clv2::OptionsRegistry<
+    &OI_OutputFilename, &OI_DependFilename, &OI_InputFilename, &OI_IncludeDirs,
+    &OI_MacroNames, &OI_WriteIfChanged, &OI_TimePhases,
+    &OI_NoWarnOnUnusedTemplateArgs>
+    TGMainReg;
+
+static void
+applyTGMainOptions(const decltype(TGMainReg)::ParsedOptionsT &Opts) {
+  OutputFilename = Opts.get<&OI_OutputFilename>();
+  DependFilename = Opts.get<&OI_DependFilename>();
+  InputFilename = Opts.get<&OI_InputFilename>();
+  IncludeDirs = Opts.get<&OI_IncludeDirs>();
+  MacroNames = Opts.get<&OI_MacroNames>();
+  WriteIfChanged = Opts.get<&OI_WriteIfChanged>();
+  TimePhases = Opts.get<&OI_TimePhases>();
+  NoWarnOnUnusedTemplateArgs = Opts.get<&OI_NoWarnOnUnusedTemplateArgs>();
+}
+
+void llvm::registerTableGenMainOptions(clv2::OptionParser &P) {
+  P.add<&TGMainReg, applyTGMainOptions>();
+}
 
 static int reportError(const char *ProgName, Twine Msg) {
   errs() << ProgName << ": " << Msg;

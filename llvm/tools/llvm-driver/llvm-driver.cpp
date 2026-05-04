@@ -8,7 +8,6 @@
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/LLVMDriver.h"

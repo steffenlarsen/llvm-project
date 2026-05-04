@@ -35,13 +35,6 @@
 #undef PACKAGE
 
 #include <assert.h>
-#include <iostream>
-#include <stdlib.h>
-#include <type_traits>
-#include <memory>
-#include <llvm/Support/raw_ostream.h>
-#include <llvm/Support/CommandLine.h>
-#include <llvm/Support/ManagedStatic.h>
 #include <clang/AST/ASTConsumer.h>
 #include <clang/Basic/DiagnosticOptions.h>
 #include <clang/Basic/FileSystemOptions.h>
@@ -49,10 +42,17 @@
 #include <clang/Frontend/TextDiagnosticPrinter.h>
 #include <clang/Frontend/Utils.h>
 #include <clang/Lex/HeaderSearch.h>
-#include <clang/Lex/PreprocessorOptions.h>
 #include <clang/Lex/Preprocessor.h>
+#include <clang/Lex/PreprocessorOptions.h>
 #include <clang/Parse/ParseAST.h>
 #include <clang/Sema/Sema.h>
+#include <iostream>
+#include <llvm/Support/CommandLineV2.h>
+#include <llvm/Support/ManagedStatic.h>
+#include <llvm/Support/raw_ostream.h>
+#include <memory>
+#include <stdlib.h>
+#include <type_traits>
 
 #include "isl-interface/clang_wrap.h"
 
@@ -70,16 +70,25 @@ using namespace clang::driver;
 using namespace llvm::opt;
 #endif
 
-static llvm::cl::opt<string> InputFilename(llvm::cl::Positional,
-			llvm::cl::Required, llvm::cl::desc("<input file>"));
-static llvm::cl::list<string> Includes("I",
-			llvm::cl::desc("Header search path"),
-			llvm::cl::value_desc("path"), llvm::cl::Prefix);
+static constexpr llvm::clv2::OptionInfo<std::string> InputFilenameOpt{
+    "", "<input file>", llvm::clv2::Positional{}, llvm::clv2::Required};
 
-static llvm::cl::opt<string> OutputLanguage(llvm::cl::Required,
-	llvm::cl::ValueRequired, "language",
-	llvm::cl::desc("Bindings to generate"),
-	llvm::cl::value_desc("name"));
+static constexpr llvm::clv2::ListOptionInfo<std::string> IncludesOpt{
+    "I", "Header search path", llvm::clv2::value_desc("path"),
+    llvm::clv2::PrefixFormat};
+
+static constexpr llvm::clv2::OptionInfo<std::string> OutputLanguageOpt{
+    "language", "Bindings to generate", llvm::clv2::Required,
+    llvm::clv2::ValueRequired, llvm::clv2::value_desc("name")};
+
+static constexpr llvm::clv2::OptionsRegistry<&InputFilenameOpt, &IncludesOpt,
+                                             &OutputLanguageOpt>
+    ExtractInterfaceReg;
+
+// File-scope variables populated from parsed options.
+static string InputFilename;
+static vector<string> Includes;
+static string OutputLanguage;
 
 /* Does decl have an attribute of the following form?
  *
@@ -173,8 +182,8 @@ void Extractor::suppress_errors(DiagnosticsEngine &Diags)
  */
 void Extractor::add_paths(HeaderSearchOptions &HSO)
 {
-	for (llvm::cl::list<string>::size_type i = 0; i < Includes.size(); ++i)
-		isl::clang::add_path(HSO, Includes[i]);
+  for (size_t i = 0; i < Includes.size(); ++i)
+    isl::clang::add_path(HSO, Includes[i]);
 }
 
 /* Add required macro definitions to "PO".
@@ -253,14 +262,17 @@ bool Extractor::handle(CompilerInstance *Clang)
 
 int main(int argc, char *argv[])
 {
-	llvm::cl::ParseCommandLineOptions(argc, argv);
+  auto Opts = ExtractInterfaceReg.parse(argc, argv);
+  InputFilename = Opts.get<&InputFilenameOpt>();
+  Includes = Opts.get<&IncludesOpt>();
+  OutputLanguage = Opts.get<&OutputLanguageOpt>();
 
-	Extractor extractor;
-	bool ok = extractor.invoke(InputFilename.c_str());
+  Extractor extractor;
+  bool ok = extractor.invoke(InputFilename.c_str());
 
-	llvm::llvm_shutdown();
+  llvm::llvm_shutdown();
 
-	if (!ok)
-		return EXIT_FAILURE;
-	return EXIT_SUCCESS;
+  if (!ok)
+    return EXIT_FAILURE;
+  return EXIT_SUCCESS;
 }

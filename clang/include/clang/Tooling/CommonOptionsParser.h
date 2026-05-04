@@ -28,8 +28,15 @@
 
 #include "clang/Tooling/ArgumentsAdjusters.h"
 #include "clang/Tooling/CompilationDatabase.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Error.h"
+
+namespace llvm {
+namespace clv2 {
+class OptionParser;
+}
+} // namespace llvm
 
 namespace clang {
 namespace tooling {
@@ -44,7 +51,7 @@ namespace tooling {
 /// #include "clang/Frontend/FrontendActions.h"
 /// #include "clang/Tooling/CommonOptionsParser.h"
 /// #include "clang/Tooling/Tooling.h"
-/// #include "llvm/Support/CommandLine.h"
+/// #include "llvm/Support/CommandLineCompat.h"
 ///
 /// using namespace clang::tooling;
 /// using namespace llvm;
@@ -91,6 +98,14 @@ public:
          llvm::cl::NumOccurrencesFlag OccurrencesFlag = llvm::cl::OneOrMore,
          const char *Overview = nullptr);
 
+  /// Overload that accepts a callback to configure the OptionParser before
+  /// command-line parsing. Use this to add tool-specific dynamic entries.
+  static llvm::Expected<CommonOptionsParser>
+  create(int &argc, const char **argv, llvm::cl::OptionCategory &Category,
+         llvm::function_ref<void(llvm::clv2::OptionParser &)> ConfigureParser,
+         llvm::cl::NumOccurrencesFlag OccurrencesFlag = llvm::cl::OneOrMore,
+         const char *Overview = nullptr);
+
   /// Returns a reference to the loaded compilations database.
   CompilationDatabase &getCompilations() {
     return *Compilations;
@@ -105,19 +120,37 @@ public:
   //"--extra-arg-before" options.
   ArgumentsAdjuster getArgumentsAdjuster() { return Adjuster; }
 
+  /// Returns the parsed command-line options for this tool run, or null.
+  /// Pass to ClangTool::setOptionsContext so library code reached during the
+  /// run can read per-job option values instead of process-wide globals.
+  /// Owned by this parser; valid for its lifetime.
+  /// Print the same help --help would, for a tool that detects a usage error
+  /// after parsing and wants to show usage with it.
+  void printHelp(llvm::raw_ostream &OS) const;
+
+  const llvm::clv2::OptionsContext &getOptionsContext() const {
+    return OptionsCtx ? *OptionsCtx : llvm::clv2::defaultOptionsContext();
+  }
+
   static const char *const HelpMessage;
 
 private:
   CommonOptionsParser() = default;
 
-  llvm::Error init(int &argc, const char **argv,
-                   llvm::cl::OptionCategory &Category,
-                   llvm::cl::NumOccurrencesFlag OccurrencesFlag,
-                   const char *Overview);
+  llvm::Error
+  init(int &argc, const char **argv, llvm::cl::OptionCategory &Category,
+       llvm::cl::NumOccurrencesFlag OccurrencesFlag, const char *Overview,
+       llvm::function_ref<void(llvm::clv2::OptionParser &)> ConfigureParser =
+           {});
 
   std::unique_ptr<CompilationDatabase> Compilations;
   std::vector<std::string> SourcePathList;
   ArgumentsAdjuster Adjuster;
+  std::unique_ptr<llvm::clv2::OptionsContext> OptionsCtx;
+  /// Kept so printHelp() can reproduce --help after the parse.
+  std::unique_ptr<llvm::clv2::OptionParser> Parser;
+  std::string HelpOverview;
+  std::string ProgName;
 };
 
 class ArgumentsAdjustingCompilations : public CompilationDatabase {

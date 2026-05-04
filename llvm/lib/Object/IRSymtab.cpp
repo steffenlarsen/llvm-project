@@ -27,8 +27,10 @@
 #include "llvm/Object/SymbolicFile.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/VCSRevision.h"
 #include "llvm/Support/raw_ostream.h"
@@ -41,9 +43,7 @@
 using namespace llvm;
 using namespace irsymtab;
 
-static cl::opt<bool> DisableBitcodeVersionUpgrade(
-    "disable-bitcode-version-upgrade", cl::Hidden,
-    cl::desc("Disable automatic bitcode upgrade for version mismatch"));
+#include "llvm/Object/ObjectOptionsOptInfos.h"
 
 namespace {
 
@@ -358,7 +358,7 @@ Error irsymtab::build(ArrayRef<Module *> Mods, SmallVector<char, 0> &Symtab,
 static Expected<FileContents> upgrade(ArrayRef<BitcodeModule> BMs) {
   FileContents FC;
 
-  LLVMContext Ctx;
+  LLVMContext Ctx(llvm::clv2::defaultOptionsContext());
   std::vector<Module *> Mods;
   std::vector<std::unique_ptr<Module>> OwnedMods;
   for (auto BM : BMs) {
@@ -386,12 +386,14 @@ static Expected<FileContents> upgrade(ArrayRef<BitcodeModule> BMs) {
   return std::move(FC);
 }
 
-Expected<FileContents> irsymtab::readBitcode(const BitcodeFileContents &BFC) {
+Expected<FileContents> irsymtab::readBitcode(const BitcodeFileContents &BFC,
+                                             const clv2::OptionsContext &Ctx) {
   if (BFC.Mods.empty())
     return make_error<StringError>("Bitcode file does not contain any modules",
                                    inconvertibleErrorCode());
 
-  if (!DisableBitcodeVersionUpgrade) {
+  if (!clv2::getOptValOr<&clv2::ObjectOptsReg,
+                         &clv2::OBJ_DisableBitcodeVersionUpgrade>(Ctx, false)) {
     if (BFC.StrtabForSymtab.empty() ||
         BFC.Symtab.size() < sizeof(storage::Header))
       return upgrade(BFC.Mods);

@@ -12,12 +12,117 @@
 
 #include "llvm/ProfileData/GCOV.h"
 #include "llvm/ADT/SmallString.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include <system_error>
 using namespace llvm;
+
+inline constexpr clv2::ListOptionInfo<std::string> GcovSourceFilesOpt{
+    "", "SOURCEFILE", clv2::Positional{}, clv2::OneOrMore};
+
+inline constexpr clv2::OptionInfo<bool> GcovAllBlocksOpt{
+    "a", "Display all basic blocks", clv2::Grouping, clv2::Init{false}};
+inline constexpr clv2::AliasInfo GcovAllBlocksAlias{"all-blocks", "a"};
+
+inline constexpr clv2::OptionInfo<bool> GcovBranchProbOpt{
+    "b", "Display branch probabilities", clv2::Grouping, clv2::Init{false}};
+inline constexpr clv2::AliasInfo GcovBranchProbAlias{"branch-probabilities",
+                                                     "b"};
+
+inline constexpr clv2::OptionInfo<bool> GcovBranchCountOpt{
+    "c", "Display branch counts instead of percentages (requires -b)",
+    clv2::Grouping, clv2::Init{false}};
+inline constexpr clv2::AliasInfo GcovBranchCountAlias{"branch-counts", "c"};
+
+inline constexpr clv2::OptionInfo<bool> GcovLongNamesOpt{
+    "l", "Prefix filenames with the main file", clv2::Grouping,
+    clv2::Init{false}};
+inline constexpr clv2::AliasInfo GcovLongNamesAlias{"long-file-names", "l"};
+
+inline constexpr clv2::OptionInfo<bool> GcovFuncSummaryOpt{
+    "f", "Show coverage for each function", clv2::Grouping, clv2::Init{false}};
+inline constexpr clv2::AliasInfo GcovFuncSummaryAlias{"function-summaries",
+                                                      "f"};
+
+inline constexpr clv2::OptionInfo<bool> GcovIntermediateOpt{
+    "intermediate-format", "Output .gcov in intermediate text format",
+    clv2::Init{false}};
+inline constexpr clv2::OptionInfo<bool> GcovIntermediateShortOpt{
+    "i", "Alias for --intermediate-format", clv2::Grouping};
+
+inline constexpr clv2::OptionInfo<bool> GcovDemangleOpt{
+    "demangled-names", "Demangle function names", clv2::Init{false}};
+inline constexpr clv2::OptionInfo<bool> GcovDemangleShortOpt{
+    "m", "Alias for --demangled-names", clv2::Grouping};
+
+inline constexpr clv2::OptionInfo<bool> GcovNoOutputOpt{
+    "n", "Do not output any .gcov files", clv2::Grouping, clv2::Init{false}};
+inline constexpr clv2::AliasInfo GcovNoOutputAlias{"no-output", "n"};
+
+inline constexpr clv2::OptionInfo<std::string> GcovObjectDirOpt{
+    "o", "Find objects in DIR or based on FILE's path",
+    clv2::value_desc("DIR|FILE"), clv2::Init{""}};
+inline constexpr clv2::AliasInfo GcovObjectDirAliasA{"object-directory", "o"};
+inline constexpr clv2::AliasInfo GcovObjectDirAliasB{"object-file", "o"};
+
+inline constexpr clv2::OptionInfo<bool> GcovPreservePathsOpt{
+    "p", "Preserve path components", clv2::Grouping, clv2::Init{false}};
+inline constexpr clv2::AliasInfo GcovPreservePathsAlias{"preserve-paths", "p"};
+
+inline constexpr clv2::OptionInfo<bool> GcovRelativeOnlyOpt{
+    "r",
+    "Only dump files with relative paths or absolute paths with the "
+    "prefix specified by -s",
+    clv2::Grouping};
+inline constexpr clv2::AliasInfo GcovRelativeOnlyAlias{"relative-only", "r"};
+
+inline constexpr clv2::OptionInfo<std::string> GcovSourcePrefixOpt{
+    "s", "Source prefix to elide"};
+inline constexpr clv2::AliasInfo GcovSourcePrefixAlias{"source-prefix", "s"};
+
+inline constexpr clv2::OptionInfo<bool> GcovUseStdoutOpt{
+    "t", "Print to stdout", clv2::Grouping, clv2::Init{false}};
+inline constexpr clv2::AliasInfo GcovUseStdoutAlias{"stdout", "t"};
+
+inline constexpr clv2::OptionInfo<bool> GcovUncondBranchOpt{
+    "u", "Display unconditional branch info (requires -b)", clv2::Grouping,
+    clv2::Init{false}};
+inline constexpr clv2::AliasInfo GcovUncondBranchAlias{"unconditional-branches",
+                                                       "u"};
+
+inline constexpr clv2::OptionInfo<bool> GcovHashFilenamesOpt{
+    "x", "Hash long pathnames", clv2::Grouping, clv2::Init{false}};
+inline constexpr clv2::AliasInfo GcovHashFilenamesAlias{"hash-filenames", "x"};
+
+inline constexpr clv2::OptionCategory GcovDebugCat{
+    "Internal and debugging options"};
+inline constexpr clv2::OptionInfo<bool> GcovDumpOpt{
+    "dump", "Dump the gcov file to stderr", clv2::Init{false},
+    clv2::cat(GcovDebugCat)};
+inline constexpr clv2::OptionInfo<std::string> GcovInputGCNOOpt{
+    "gcno", "Override inferred gcno file", clv2::Init{""},
+    clv2::cat(GcovDebugCat)};
+inline constexpr clv2::OptionInfo<std::string> GcovInputGCDAOpt{
+    "gcda", "Override inferred gcda file", clv2::Init{""},
+    clv2::cat(GcovDebugCat)};
+
+static constexpr clv2::OptionsRegistry<
+    &GcovSourceFilesOpt, &GcovAllBlocksOpt, &GcovAllBlocksAlias,
+    &GcovBranchProbOpt, &GcovBranchProbAlias, &GcovBranchCountOpt,
+    &GcovBranchCountAlias, &GcovLongNamesOpt, &GcovLongNamesAlias,
+    &GcovFuncSummaryOpt, &GcovFuncSummaryAlias, &GcovIntermediateOpt,
+    &GcovIntermediateShortOpt, &GcovDemangleOpt, &GcovDemangleShortOpt,
+    &GcovNoOutputOpt, &GcovNoOutputAlias, &GcovObjectDirOpt,
+    &GcovObjectDirAliasA, &GcovObjectDirAliasB, &GcovPreservePathsOpt,
+    &GcovPreservePathsAlias, &GcovRelativeOnlyOpt, &GcovRelativeOnlyAlias,
+    &GcovSourcePrefixOpt, &GcovSourcePrefixAlias, &GcovUseStdoutOpt,
+    &GcovUseStdoutAlias, &GcovUncondBranchOpt, &GcovUncondBranchAlias,
+    &GcovHashFilenamesOpt, &GcovHashFilenamesAlias, &GcovDumpOpt,
+    &GcovInputGCDAOpt, &GcovInputGCNOOpt>
+    GcovToolReg;
 
 static void reportCoverage(StringRef SourceFile, StringRef ObjectDir,
                            const std::string &InputGCNO,
@@ -81,98 +186,28 @@ static void reportCoverage(StringRef SourceFile, StringRef ObjectDir,
 }
 
 int gcovMain(int argc, const char *argv[]) {
-  cl::list<std::string> SourceFiles(cl::Positional, cl::OneOrMore,
-                                    cl::desc("SOURCEFILE"));
+  clv2::OptionParser P;
+  P.add<&GcovToolReg>();
+  RegisterAllLLVMOptions(P);
+  auto OptsCtx = P.parse(argc, argv, "LLVM code coverage tool\n");
+  auto *S = OptsCtx->getViewPtr<&GcovToolReg>();
 
-  cl::opt<bool> AllBlocks("a", cl::Grouping, cl::init(false),
-                          cl::desc("Display all basic blocks"));
-  cl::alias AllBlocksA("all-blocks", cl::aliasopt(AllBlocks));
+  bool Intermediate =
+      S->get<&GcovIntermediateOpt>() || S->get<&GcovIntermediateShortOpt>();
+  bool Demangle = S->get<&GcovDemangleOpt>() || S->get<&GcovDemangleShortOpt>();
 
-  cl::opt<bool> BranchProb("b", cl::Grouping, cl::init(false),
-                           cl::desc("Display branch probabilities"));
-  cl::alias BranchProbA("branch-probabilities", cl::aliasopt(BranchProb));
+  GCOV::Options Options(
+      S->get<&GcovAllBlocksOpt>(), S->get<&GcovBranchProbOpt>(),
+      S->get<&GcovBranchCountOpt>(), S->get<&GcovFuncSummaryOpt>(),
+      S->get<&GcovPreservePathsOpt>(), S->get<&GcovUncondBranchOpt>(),
+      Intermediate, S->get<&GcovLongNamesOpt>(), Demangle,
+      S->get<&GcovNoOutputOpt>(), S->get<&GcovRelativeOnlyOpt>(),
+      S->get<&GcovUseStdoutOpt>(), S->get<&GcovHashFilenamesOpt>(),
+      S->get<&GcovSourcePrefixOpt>());
 
-  cl::opt<bool> BranchCount("c", cl::Grouping, cl::init(false),
-                            cl::desc("Display branch counts instead "
-                                     "of percentages (requires -b)"));
-  cl::alias BranchCountA("branch-counts", cl::aliasopt(BranchCount));
-
-  cl::opt<bool> LongNames("l", cl::Grouping, cl::init(false),
-                          cl::desc("Prefix filenames with the main file"));
-  cl::alias LongNamesA("long-file-names", cl::aliasopt(LongNames));
-
-  cl::opt<bool> FuncSummary("f", cl::Grouping, cl::init(false),
-                            cl::desc("Show coverage for each function"));
-  cl::alias FuncSummaryA("function-summaries", cl::aliasopt(FuncSummary));
-
-  // Supported by gcov 4.9~8. gcov 9 (GCC r265587) removed --intermediate-format
-  // and -i was changed to mean --json-format. We consider this format still
-  // useful and support -i.
-  cl::opt<bool> Intermediate(
-      "intermediate-format", cl::init(false),
-      cl::desc("Output .gcov in intermediate text format"));
-  cl::alias IntermediateA("i", cl::desc("Alias for --intermediate-format"),
-                          cl::Grouping, cl::NotHidden,
-                          cl::aliasopt(Intermediate));
-
-  cl::opt<bool> Demangle("demangled-names", cl::init(false),
-                         cl::desc("Demangle function names"));
-  cl::alias DemangleA("m", cl::desc("Alias for --demangled-names"),
-                      cl::Grouping, cl::NotHidden, cl::aliasopt(Demangle));
-
-  cl::opt<bool> NoOutput("n", cl::Grouping, cl::init(false),
-                         cl::desc("Do not output any .gcov files"));
-  cl::alias NoOutputA("no-output", cl::aliasopt(NoOutput));
-
-  cl::opt<std::string> ObjectDir(
-      "o", cl::value_desc("DIR|FILE"), cl::init(""),
-      cl::desc("Find objects in DIR or based on FILE's path"));
-  cl::alias ObjectDirA("object-directory", cl::aliasopt(ObjectDir));
-  cl::alias ObjectDirB("object-file", cl::aliasopt(ObjectDir));
-
-  cl::opt<bool> PreservePaths("p", cl::Grouping, cl::init(false),
-                              cl::desc("Preserve path components"));
-  cl::alias PreservePathsA("preserve-paths", cl::aliasopt(PreservePaths));
-
-  cl::opt<bool> RelativeOnly(
-      "r", cl::Grouping,
-      cl::desc("Only dump files with relative paths or absolute paths with the "
-               "prefix specified by -s"));
-  cl::alias RelativeOnlyA("relative-only", cl::aliasopt(RelativeOnly));
-  cl::opt<std::string> SourcePrefix("s", cl::desc("Source prefix to elide"));
-  cl::alias SourcePrefixA("source-prefix", cl::aliasopt(SourcePrefix));
-
-  cl::opt<bool> UseStdout("t", cl::Grouping, cl::init(false),
-                          cl::desc("Print to stdout"));
-  cl::alias UseStdoutA("stdout", cl::aliasopt(UseStdout));
-
-  cl::opt<bool> UncondBranch("u", cl::Grouping, cl::init(false),
-                             cl::desc("Display unconditional branch info "
-                                      "(requires -b)"));
-  cl::alias UncondBranchA("unconditional-branches", cl::aliasopt(UncondBranch));
-
-  cl::opt<bool> HashFilenames("x", cl::Grouping, cl::init(false),
-                              cl::desc("Hash long pathnames"));
-  cl::alias HashFilenamesA("hash-filenames", cl::aliasopt(HashFilenames));
-
-
-  cl::OptionCategory DebugCat("Internal and debugging options");
-  cl::opt<bool> DumpGCOV("dump", cl::init(false), cl::cat(DebugCat),
-                         cl::desc("Dump the gcov file to stderr"));
-  cl::opt<std::string> InputGCNO("gcno", cl::cat(DebugCat), cl::init(""),
-                                 cl::desc("Override inferred gcno file"));
-  cl::opt<std::string> InputGCDA("gcda", cl::cat(DebugCat), cl::init(""),
-                                 cl::desc("Override inferred gcda file"));
-
-  cl::ParseCommandLineOptions(argc, argv, "LLVM code coverage tool\n");
-
-  GCOV::Options Options(AllBlocks, BranchProb, BranchCount, FuncSummary,
-                        PreservePaths, UncondBranch, Intermediate, LongNames,
-                        Demangle, NoOutput, RelativeOnly, UseStdout,
-                        HashFilenames, SourcePrefix);
-
-  for (const auto &SourceFile : SourceFiles)
-    reportCoverage(SourceFile, ObjectDir, InputGCNO, InputGCDA, DumpGCOV,
-                   Options);
+  for (const auto &SourceFile : S->get<&GcovSourceFilesOpt>())
+    reportCoverage(SourceFile, S->get<&GcovObjectDirOpt>(),
+                   S->get<&GcovInputGCNOOpt>(), S->get<&GcovInputGCDAOpt>(),
+                   S->get<&GcovDumpOpt>(), Options);
   return 0;
 }

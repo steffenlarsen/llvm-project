@@ -43,7 +43,7 @@
 #include "clang/Tooling/Refactoring.h"
 #include "clang/Tooling/Refactoring/AtomicChange.h"
 #include "clang/Tooling/Tooling.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Signals.h"
 
@@ -84,14 +84,16 @@ private:
 } // end anonymous namespace
 
 // Set up the command line options
-static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
 static cl::OptionCategory ToolTemplateCategory("tool-template options");
 
 int main(int argc, const char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
 
+  auto configureParser = [](llvm::clv2::OptionParser &P) {
+    P.setExtraHelp(CommonOptionsParser::HelpMessage);
+  };
   auto Executor = clang::tooling::createExecutorFromCommandLineArgs(
-      argc, argv, ToolTemplateCategory);
+      argc, argv, ToolTemplateCategory, configureParser);
 
   if (!Executor) {
     llvm::errs() << llvm::toString(Executor.takeError()) << "\n";

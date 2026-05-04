@@ -13,9 +13,10 @@
 #include "llvm/ExecutionEngine/Orc/TargetProcess/TargetExecutionUtils.h"
 #include "llvm/ExecutionEngine/SectionMemoryManager.h"
 #include "llvm/IRReader/IRReader.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/ThreadPool.h"
@@ -25,16 +26,19 @@
 using namespace llvm;
 using namespace llvm::orc;
 
-static cl::list<std::string> InputFiles(cl::Positional, cl::OneOrMore,
-                                        cl::desc("input files"));
+static constexpr clv2::ListOptionInfo<std::string> InputFilesOpt{
+    "", "input files", clv2::Positional{}, clv2::OneOrMore};
+static constexpr clv2::ListOptionInfo<std::string> InputArgvOpt{
+    "args", "<program arguments>...", clv2::Positional{}, clv2::ZeroOrMore,
+    clv2::MiscFlags(clv2::PositionalEatsArgs)};
+static constexpr clv2::OptionInfo<unsigned> NumThreadsOpt{
+    "num-threads", "Number of compile threads", clv2::Init{4u}};
 
-static cl::list<std::string> InputArgv("args", cl::Positional,
-                                       cl::desc("<program arguments>..."),
-                                       cl::PositionalEatsArgs);
+static constexpr clv2::OptionsRegistry<&InputFilesOpt, &InputArgvOpt,
+                                       &NumThreadsOpt>
+    SpecJITReg;
 
-static cl::opt<unsigned> NumThreads("num-threads", cl::Optional,
-                                    cl::desc("Number of compile threads"),
-                                    cl::init(4));
+static unsigned NumThreads = 4;
 
 ExitOnError ExitOnErr;
 
@@ -155,8 +159,16 @@ int main(int argc, char *argv[]) {
   InitializeNativeTarget();
   InitializeNativeTargetAsmPrinter();
 
-  cl::ParseCommandLineOptions(argc, argv, "SpeculativeJIT");
+  clv2::OptionParser P;
+  P.add<&SpecJITReg>();
+  RegisterAllLLVMOptions(P);
+  auto OptsCtx = P.parse(argc, argv, "SpeculativeJIT");
+  auto *Opts = OptsCtx->getViewPtr<&SpecJITReg>();
   ExitOnErr.setBanner(std::string(argv[0]) + ": ");
+
+  NumThreads = Opts->get<&NumThreadsOpt>();
+  const auto &InputFiles = Opts->get<&InputFilesOpt>();
+  const auto &InputArgv = Opts->get<&InputArgvOpt>();
 
   if (NumThreads < 1) {
     errs() << "Speculative compilation requires one or more dedicated compile "
@@ -170,7 +182,8 @@ int main(int argc, char *argv[]) {
   // Load the IR inputs.
   for (const auto &InputFile : InputFiles) {
     SMDiagnostic Err;
-    auto Ctx = std::make_unique<LLVMContext>();
+    auto Ctx =
+        std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
     auto M = parseIRFile(InputFile, Err, *Ctx);
     if (!M) {
       Err.print(argv[0], errs());

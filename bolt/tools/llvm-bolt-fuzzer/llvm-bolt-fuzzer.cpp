@@ -7,23 +7,19 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Rewrite/RewriteInstance.h"
-#include "llvm/Support/CommandLine.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TargetSelect.h"
 
 using namespace llvm;
 using namespace object;
 using namespace bolt;
 
-namespace opts {
-extern cl::opt<std::string> OutputFilename;
-extern cl::opt<bool> Lite;
-} // namespace opts
-
 extern "C" int LLVMFuzzerTestOneInput(const char *Data, size_t Size) {
-  const char *argv[] = {"llvm-bolt", nullptr};
-  const char argc = 1;
-  opts::OutputFilename = "/dev/null";
-  opts::Lite = false;
+  const char *argv[] = {"llvm-bolt", "-o", "/dev/null", nullptr};
+  const char argc = 3;
+  // TODO: Build a proper OptionsContext for the fuzzer.
 
   // Input has to be an ELF - we don't want to fuzz createBinary interface.
   if (Size < 4 || strncmp("\177ELF", Data, 4) != 0)

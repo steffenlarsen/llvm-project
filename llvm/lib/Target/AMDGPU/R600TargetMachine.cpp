@@ -19,25 +19,33 @@
 #include "R600MachineFunctionInfo.h"
 #include "R600MachineScheduler.h"
 #include "R600TargetTransformInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Passes/CodeGenPassBuilder.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 #include "llvm/Transforms/Scalar.h"
 #include <optional>
 
 using namespace llvm;
 
-static cl::opt<bool>
-    EnableR600StructurizeCFG("r600-ir-structurize",
-                             cl::desc("Use StructurizeCFG IR pass"),
-                             cl::init(true));
+static bool getEnableR600StructurizeCFG(const Function *F,
+                                        const clv2::OptionsContext &Ctx) {
+  if (F)
+    if (auto *O = clv2::getView<&clv2::AMDGPUOptsReg>(
+            F->getContext().getOptionsContext()))
+      return O->get<&clv2::AMDGPU_EnableR600StructurizeCFG>();
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_EnableR600StructurizeCFG>(Ctx);
+}
 
-static cl::opt<bool> EnableR600IfConvert("r600-if-convert",
-                                         cl::desc("Use if conversion pass"),
-                                         cl::ReallyHidden, cl::init(true));
-
-static cl::opt<bool, true> EnableAMDGPUFunctionCallsOpt(
-    "amdgpu-function-calls", cl::desc("Enable AMDGPU function call support"),
-    cl::location(AMDGPUTargetMachine::EnableFunctionCalls), cl::init(true),
-    cl::Hidden);
+static bool getEnableR600IfConvert(const Function *F,
+                                   const clv2::OptionsContext &Ctx) {
+  if (F)
+    if (auto *O = clv2::getView<&clv2::AMDGPUOptsReg>(
+            F->getContext().getOptionsContext()))
+      return O->get<&clv2::AMDGPU_EnableR600IfConvert>();
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_EnableR600IfConvert>(Ctx);
+}
 
 static ScheduleDAGInstrs *createR600MachineScheduler(MachineSchedContext *C) {
   return new ScheduleDAGMILive(C, std::make_unique<R600SchedStrategy>());
@@ -76,10 +84,9 @@ R600TargetMachine::R600TargetMachine(const Target &T, const Triple &TT,
     : AMDGPUTargetMachine(T, TT, CPU, FS, Options, RM, CM, OL) {
   setRequiresStructuredCFG(true);
 
-  // Override the default since calls aren't supported for r600.
-  if (EnableFunctionCalls &&
-      EnableAMDGPUFunctionCallsOpt.getNumOccurrences() == 0)
-    EnableFunctionCalls = false;
+  // Note: calls aren't supported for r600; callers should check
+  // AMDGPUTargetMachine::getEnableFunctionCalls() and
+  // AMDGPUTargetMachine::getEnableFunctionCallsWasSpecified().
 }
 
 const TargetSubtargetInfo *
@@ -128,7 +135,7 @@ public:
 bool R600PassConfig::addPreISel() {
   AMDGPUPassConfig::addPreISel();
 
-  if (EnableR600StructurizeCFG)
+  if (getEnableR600StructurizeCFG(nullptr, TM->getOptionsContext()))
     addPass(createStructurizeCFGPass());
   return false;
 }
@@ -142,7 +149,7 @@ void R600PassConfig::addPreRegAlloc() { addPass(createR600VectorRegMerger()); }
 
 void R600PassConfig::addPreSched2() {
   addPass(createR600EmitClauseMarkers());
-  if (EnableR600IfConvert)
+  if (getEnableR600IfConvert(nullptr, TM->getOptionsContext()))
     addPass(&IfConverterID);
   addPass(createR600ClauseMergePass());
 }

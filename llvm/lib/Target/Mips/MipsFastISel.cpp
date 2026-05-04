@@ -63,7 +63,9 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -73,8 +75,10 @@
 
 using namespace llvm;
 
-extern cl::opt<bool> EmitJalrReloc;
-extern cl::opt<bool> NoZeroDivCheck;
+static bool getNoZeroDivCheck(const Function &F) {
+  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_NoZeroDivCheck>(
+      F.getContext().getOptionsContext(), false);
+}
 
 namespace {
 
@@ -1582,7 +1586,11 @@ bool MipsFastISel::fastLowerCall(CallLoweringInfo &CLI) {
 
   CLI.Call = MIB;
 
-  if (EmitJalrReloc && !Subtarget->inMips16Mode()) {
+  bool EmitJalr = true;
+  if (auto *O = clv2::getView<&clv2::MipsOptsReg>(
+          FuncInfo.MF->getFunction().getContext().getOptionsContext()))
+    EmitJalr = O->get<&clv2::MIPS_EmitJalrReloc>();
+  if (EmitJalr && !Subtarget->inMips16Mode()) {
     // Attach callee address to the instruction, let asm printer emit
     // .reloc R_MIPS_JALR.
     if (Symbol)
@@ -1954,8 +1962,9 @@ bool MipsFastISel::selectDivRem(const Instruction *I, unsigned ISDOpcode) {
     return false;
 
   emitInst(DivOpc).addReg(Src0Reg).addReg(Src1Reg);
-  if (!NoZeroDivCheck && (!isa<ConstantInt>(I->getOperand(1)) ||
-                          dyn_cast<ConstantInt>(I->getOperand(1))->isZero())) {
+  if (!getNoZeroDivCheck(FuncInfo.MF->getFunction()) &&
+      (!isa<ConstantInt>(I->getOperand(1)) ||
+       dyn_cast<ConstantInt>(I->getOperand(1))->isZero())) {
     emitInst(Mips::TEQ).addReg(Src1Reg).addReg(Mips::ZERO).addImm(7);
   }
 

@@ -324,7 +324,7 @@ computeCacheDirectedSortOrder(Ctx &ctx) {
 
   // Run the layout algorithm.
   std::vector<uint64_t> sortedSections = codelayout::computeCacheDirectedLayout(
-      funcSizes, funcCounts, callCounts, callOffsets);
+      funcSizes, funcCounts, callCounts, callOffsets, *ctx.llvmOptsCtx);
 
   // Create the final order.
   DenseMap<const InputSectionBase *, int> orderMap;

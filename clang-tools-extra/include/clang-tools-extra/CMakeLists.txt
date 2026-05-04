@@ -1,0 +1,3 @@
+set(LLVM_TARGET_DEFINITIONS ClangToolsExtraOptions.td)
+tablegen(LLVM ClangToolsExtraOptionsOptInfos.inc -gen-clv2-options)
+add_public_tablegen_target(ClangToolsExtraOptionsTableGen)

@@ -98,7 +98,8 @@ Error DwarfUnit::emitDebugInfo(const Triple &TargetTriple) {
   SectionDescriptor &OutSection =
       getOrCreateSectionDescriptor(DebugSectionKind::DebugInfo);
   DwarfEmitterImpl Emitter(DWARFLinker::OutputFileType::Object, OutSection.OS);
-  if (Error Err = Emitter.init(TargetTriple, "__DWARF"))
+  if (Error Err = Emitter.init(TargetTriple, "__DWARF",
+                               getGlobalData().getOptionsContext()))
     return Err;
 
   // Emit compile unit header.
@@ -122,7 +123,8 @@ Error DwarfUnit::emitDebugLine(
     const Triple &TargetTriple, const DWARFDebugLine::LineTable &OutLineTable,
     ArrayRef<uint64_t> OrigRowIndices,
     DenseMap<uint64_t, uint64_t> *RowIndexToSeqStartOffset) {
-  DebugLineSectionEmitter DebugLineEmitter(TargetTriple, *this);
+  DebugLineSectionEmitter DebugLineEmitter(TargetTriple, *this,
+                                           getGlobalData().getOptionsContext());
 
   return DebugLineEmitter.emit(OutLineTable, OrigRowIndices,
                                RowIndexToSeqStartOffset);

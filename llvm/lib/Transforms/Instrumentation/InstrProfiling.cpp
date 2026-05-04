@@ -49,12 +49,15 @@
 #include "llvm/Pass.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/ProfileData/InstrProfCorrelator.h"
+#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
 #include "llvm/Transforms/Instrumentation/PGOInstrumentation.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
@@ -70,145 +73,112 @@ using namespace llvm;
 #define DEBUG_TYPE "instrprof"
 
 namespace llvm {
-// Command line option to enable vtable value profiling. Defined in
-// ProfileData/InstrProf.cpp: -enable-vtable-value-profiling=
-extern cl::opt<bool> EnableVTableValueProfiling;
-LLVM_ABI cl::opt<InstrProfCorrelator::ProfCorrelatorKind> ProfileCorrelate(
-    "profile-correlate",
-    cl::desc("Use debug info or binary file to correlate profiles."),
-    cl::init(InstrProfCorrelator::NONE),
-    cl::values(clEnumValN(InstrProfCorrelator::NONE, "",
-                          "No profile correlation"),
-               clEnumValN(InstrProfCorrelator::DEBUG_INFO, "debug-info",
-                          "Use debug info to correlate"),
-               clEnumValN(InstrProfCorrelator::BINARY, "binary",
-                          "Use binary to correlate")));
+LLVM_ABI InstrProfCorrelator::ProfCorrelatorKind ProfileCorrelate =
+    ProfCorrelatorKind::NONE;
 } // namespace llvm
+
+static bool getEnableVTableValueProfiling(const Module &M,
+                                          const clv2::OptionsContext &Ctx) {
+  auto *O = clv2::getView<&clv2::ProfileDataOptsReg>(
+      M.getContext().getOptionsContext());
+  if (!O)
+    O = clv2::getView<&clv2::ProfileDataOptsReg>(Ctx);
+  if (O)
+    return O->get<&clv2::PD_EnableVTableValueProfiling>();
+  return false;
+}
+
+static bool getDoInstrProfNameCompression(const Module &M,
+                                          const clv2::OptionsContext &Ctx) {
+  auto *O = clv2::getView<&clv2::ProfileDataOptsReg>(
+      M.getContext().getOptionsContext());
+  if (!O)
+    O = clv2::getView<&clv2::ProfileDataOptsReg>(Ctx);
+  if (O)
+    return O->get<&clv2::PD_EnableNameCompression>();
+  return true;
+}
+
+static InstrProfCorrelator::ProfCorrelatorKind
+getProfileCorrelate(const Module &M) {
+  return clv2::getOptValIfSpecified<&clv2::InstrumentationOptsReg,
+                                    &clv2::INST_ProfileCorrelate>(
+      M.getContext().getOptionsContext(), ProfileCorrelate);
+}
 
 namespace {
 
-cl::opt<bool> DoHashBasedCounterSplit(
-    "hash-based-counter-split",
-    cl::desc("Rename counter variable of a comdat function based on cfg hash"),
-    cl::init(true));
+// Getters check the clv2 override first, then return a literal default.
 
-cl::opt<bool>
-    RuntimeCounterRelocation("runtime-counter-relocation",
-                             cl::desc("Enable relocating counters at runtime."),
-                             cl::init(false));
+#define INSTRPROF_GETTER(RetTy, FnName, DescName, Default)                     \
+  static RetTy get##FnName(const Module &M) {                                  \
+    if (auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(                \
+            M.getContext().getOptionsContext()))                               \
+      if (O->specified<&clv2::DescName>())                                     \
+        return O->get<&clv2::DescName>();                                      \
+    return Default;                                                            \
+  }
 
-cl::opt<bool> ValueProfileStaticAlloc(
-    "vp-static-alloc",
-    cl::desc("Do static counter allocation for value profiler"),
-    cl::init(true));
+INSTRPROF_GETTER(bool, DoHashBasedCounterSplit, INST_DoHashBasedCounterSplit,
+                 true)
+INSTRPROF_GETTER(bool, RuntimeCounterRelocation, INST_RuntimeCounterRelocation,
+                 false)
+INSTRPROF_GETTER(bool, ValueProfileStaticAlloc, INST_ValueProfileStaticAlloc,
+                 true)
+INSTRPROF_GETTER(double, NumCountersPerValueSite, INST_NumCountersPerValueSite,
+                 1.0)
+INSTRPROF_GETTER(bool, AtomicCounterUpdateAll, INST_AtomicCounterUpdateAll,
+                 false)
+INSTRPROF_GETTER(bool, AtomicCounterUpdatePromoted,
+                 INST_AtomicCounterUpdatePromoted, false)
+INSTRPROF_GETTER(bool, AtomicFirstCounter, INST_AtomicFirstCounter, false)
+INSTRPROF_GETTER(bool, ConditionalCounterUpdate, INST_ConditionalCounterUpdate,
+                 false)
+INSTRPROF_GETTER(bool, DoCounterPromotion, INST_DoCounterPromotion, false)
+INSTRPROF_GETTER(unsigned, MaxNumOfPromotionsPerLoop,
+                 INST_MaxNumOfPromotionsPerLoop, 20)
+INSTRPROF_GETTER(int, MaxNumOfPromotions, INST_MaxNumOfPromotions, -1)
+INSTRPROF_GETTER(unsigned, SpeculativeCounterPromotionMaxExiting,
+                 INST_SpeculativeCounterPromotionMaxExiting, 3)
+INSTRPROF_GETTER(bool, SpeculativeCounterPromotionToLoop,
+                 INST_SpeculativeCounterPromotionToLoop, false)
+INSTRPROF_GETTER(bool, IterativeCounterPromotion,
+                 INST_IterativeCounterPromotion, true)
+INSTRPROF_GETTER(bool, SkipRetExitBlock, INST_SkipRetExitBlock, true)
+INSTRPROF_GETTER(bool, SampledInstr, INST_SampledInstrumentation, false)
+INSTRPROF_GETTER(unsigned, SampledInstrPeriod, INST_SampledInstrPeriod, 65536)
+INSTRPROF_GETTER(unsigned, SampledInstrBurstDuration,
+                 INST_SampledInstrBurstDuration, 200)
 
-cl::opt<double> NumCountersPerValueSite(
-    "vp-counters-per-site",
-    cl::desc("The average number of profile counters allocated "
-             "per value profiling site."),
-    // This is set to a very small value because in real programs, only
-    // a very small percentage of value sites have non-zero targets, e.g, 1/30.
-    // For those sites with non-zero profile, the average number of targets
-    // is usually smaller than 2.
-    cl::init(1.0));
+static bool isRuntimeCounterRelocationSpecified(const Module &M) {
+  return clv2::wasOptSpecified<&clv2::InstrumentationOptsReg,
+                               &clv2::INST_RuntimeCounterRelocation>(
+      M.getContext().getOptionsContext());
+}
 
-cl::opt<bool> AtomicCounterUpdateAll(
-    "instrprof-atomic-counter-update-all",
-    cl::desc("Make all profile counter updates atomic (for testing only)"),
-    cl::init(false));
+static bool isSampledInstrSpecified(const Module &M) {
+  return clv2::wasOptSpecified<&clv2::InstrumentationOptsReg,
+                               &clv2::INST_SampledInstrumentation>(
+      M.getContext().getOptionsContext());
+}
 
-cl::opt<bool> VerifyAtomicPromotion(
-    "verify-atomic-counter-promoted",
-    cl::desc("Check that all profile counter updates were made atomic; no-op "
-             "if atomic updates are not requested (-fprofile-update=atomic)"),
-    cl::init(false));
+static bool isDoCounterPromotionSpecified(const Module &M) {
+  return clv2::wasOptSpecified<&clv2::InstrumentationOptsReg,
+                               &clv2::INST_DoCounterPromotion>(
+      M.getContext().getOptionsContext());
+}
 
-cl::opt<bool> AtomicCounterUpdatePromoted(
-    "atomic-counter-update-promoted",
-    cl::desc("Do counter update using atomic fetch add "
-             " for promoted counters only"),
-    cl::init(false));
+static bool getVerifyAtomicPromotion(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_VerifyAtomicPromotion>(
+      M.getContext().getOptionsContext());
+}
 
-cl::opt<bool> AtomicFirstCounter(
-    "atomic-first-counter",
-    cl::desc("Use atomic fetch add for first counter in a function (usually "
-             "the entry counter)"),
-    cl::init(false));
+static unsigned getOffloadPGOSampling(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_OffloadPGOSampling>(
+      M.getContext().getOptionsContext());
+}
 
-cl::opt<bool> ConditionalCounterUpdate(
-    "conditional-counter-update",
-    cl::desc("Do conditional counter updates in single byte counters mode)"),
-    cl::init(false));
-
-// If the option is not specified, the default behavior about whether
-// counter promotion is done depends on how instrumentation lowering
-// pipeline is setup, i.e., the default value of true of this option
-// does not mean the promotion will be done by default. Explicitly
-// setting this option can override the default behavior.
-cl::opt<bool> DoCounterPromotion("do-counter-promotion",
-                                 cl::desc("Do counter register promotion"),
-                                 cl::init(false));
-cl::opt<unsigned> MaxNumOfPromotionsPerLoop(
-    "max-counter-promotions-per-loop", cl::init(20),
-    cl::desc("Max number counter promotions per loop to avoid"
-             " increasing register pressure too much"));
-
-// A debug option
-cl::opt<int>
-    MaxNumOfPromotions("max-counter-promotions", cl::init(-1),
-                       cl::desc("Max number of allowed counter promotions"));
-
-cl::opt<unsigned> SpeculativeCounterPromotionMaxExiting(
-    "speculative-counter-promotion-max-exiting", cl::init(3),
-    cl::desc("The max number of exiting blocks of a loop to allow "
-             " speculative counter promotion"));
-
-cl::opt<bool> SpeculativeCounterPromotionToLoop(
-    "speculative-counter-promotion-to-loop",
-    cl::desc("When the option is false, if the target block is in a loop, "
-             "the promotion will be disallowed unless the promoted counter "
-             " update can be further/iteratively promoted into an acyclic "
-             " region."));
-
-static cl::opt<unsigned> OffloadPGOSampling(
-    "offload-pgo-sampling",
-    cl::desc("Log2 of the sampling period for offload PGO instrumentation. "
-             "Only 1 in every 2^N blocks is instrumented. "
-             "0 = all blocks, 1 = 50%, 2 = 25%, 3 = 12.5% (default). "
-             "Higher values reduce overhead at the cost of sparser profiles."),
-    cl::init(3));
-
-cl::opt<bool> IterativeCounterPromotion(
-    "iterative-counter-promotion", cl::init(true),
-    cl::desc("Allow counter promotion across the whole loop nest."));
-
-cl::opt<bool> SkipRetExitBlock(
-    "skip-ret-exit-block", cl::init(true),
-    cl::desc("Suppress counter promotion if exit blocks contain ret."));
-
-static cl::opt<bool> SampledInstr("sampled-instrumentation",
-                                  cl::desc("Do PGO instrumentation sampling"));
-
-static cl::opt<unsigned> SampledInstrPeriod(
-    "sampled-instr-period",
-    cl::desc("Set the profile instrumentation sample period. A sample period "
-             "of 0 is invalid. For each sample period, a fixed number of "
-             "consecutive samples will be recorded. The number is controlled "
-             "by 'sampled-instr-burst-duration' flag. The default sample "
-             "period of 65536 is optimized for generating efficient code that "
-             "leverages unsigned short integer wrapping in overflow, but this "
-             "is disabled under simple sampling (burst duration = 1)."),
-    cl::init(USHRT_MAX + 1));
-
-static cl::opt<unsigned> SampledInstrBurstDuration(
-    "sampled-instr-burst-duration",
-    cl::desc("Set the profile instrumentation burst duration, which can range "
-             "from 1 to the value of 'sampled-instr-period' (0 is invalid). "
-             "This number of samples will be recorded for each "
-             "'sampled-instr-period' count update. Setting to 1 enables simple "
-             "sampling, in which case it is recommended to set "
-             "'sampled-instr-period' to a prime number."),
-    cl::init(200));
+#undef INSTRPROF_GETTER
 
 struct SampledInstrumentationConfig {
   unsigned BurstDuration;
@@ -218,10 +188,11 @@ struct SampledInstrumentationConfig {
   bool IsFastSampling;
 };
 
-static SampledInstrumentationConfig getSampledInstrumentationConfig() {
+static SampledInstrumentationConfig
+getSampledInstrumentationConfig(const Module &M) {
   SampledInstrumentationConfig config;
-  config.BurstDuration = SampledInstrBurstDuration.getValue();
-  config.Period = SampledInstrPeriod.getValue();
+  config.BurstDuration = getSampledInstrBurstDuration(M);
+  config.Period = getSampledInstrPeriod(M);
   if (config.BurstDuration > config.Period)
     report_fatal_error(
         "SampledBurstDuration must be less than or equal to SampledPeriod");
@@ -493,6 +464,7 @@ public:
     for (unsigned i = 0, e = ExitBlocks.size(); i != e; ++i) {
       BasicBlock *ExitBlock = ExitBlocks[i];
       Instruction *InsertPos = InsertPts[i];
+      const Module &Mod = *ExitBlock->getModule();
       // Get LiveIn value into the ExitBlock. If there are multiple
       // predecessors, the value is defined by a PHI node in this
       // block.
@@ -513,11 +485,12 @@ public:
         Addr = Builder.CreateIntToPtr(BiasInst,
                                       PointerType::getUnqual(Ty->getContext()));
       }
-      auto *TargetLoop =
-          IterativeCounterPromotion ? LI.getLoopFor(ExitBlock) : nullptr;
+      auto *TargetLoop = getIterativeCounterPromotion(Mod)
+                             ? LI.getLoopFor(ExitBlock)
+                             : nullptr;
       // Generate the relaxed atomic RMW if we've asked for it and no more
       // promotion is possible.
-      if ((IsAtomic && !TargetLoop) || AtomicCounterUpdatePromoted)
+      if ((IsAtomic && !TargetLoop) || getAtomicCounterUpdatePromoted(Mod))
         Builder.CreateAtomicRMW(AtomicRMWInst::Add, Addr, LiveInValue,
                                 MaybeAlign(), AtomicOrdering::Monotonic);
       else {
@@ -596,12 +569,14 @@ private:
     if (ExitBlocks.size() == 0)
       return false;
 
+    const Module &Mod = *L.getHeader()->getModule();
+
     // Skip if any of the ExitBlocks contains a ret instruction.
     // This is to prevent dumping of incomplete profile -- if the
     // the loop is a long running loop and dump is called in the middle
     // of the loop, the result profile is incomplete.
     // FIXME: add other heuristics to detect long running loops.
-    if (SkipRetExitBlock) {
+    if (getSkipRetExitBlock(Mod)) {
       for (auto *BB : ExitBlocks)
         if (isa<ReturnInst>(BB->getTerminator()))
           return false;
@@ -645,7 +620,8 @@ private:
         break;
 
       (*NumPromoted)++;
-      if (MaxNumOfPromotions != -1 && *NumPromoted >= MaxNumOfPromotions)
+      if (getMaxNumOfPromotions(Mod) != -1 &&
+          *NumPromoted >= getMaxNumOfPromotions(Mod))
         break;
     }
 
@@ -658,10 +634,11 @@ private:
   bool allowSpeculativeCounterPromotion(Loop *LP) {
     SmallVector<BasicBlock *, 8> ExitingBlocks;
     L.getExitingBlocks(ExitingBlocks);
+    const Module &Mod = *L.getHeader()->getModule();
     // Not considierered speculative.
     if (ExitingBlocks.size() == 1)
       return true;
-    if (ExitingBlocks.size() > SpeculativeCounterPromotionMaxExiting)
+    if (ExitingBlocks.size() > getSpeculativeCounterPromotionMaxExiting(Mod))
       return false;
     return true;
   }
@@ -697,23 +674,25 @@ private:
     SmallVector<BasicBlock *, 8> ExitingBlocks;
     LP->getExitingBlocks(ExitingBlocks);
 
+    const Module &Mod = *LP->getHeader()->getModule();
+
     // If BFI is set, we do more aggressive promotions based on BFI.
     if (BFI)
       return (unsigned)-1;
 
     // Not considierered speculative.
     if (ExitingBlocks.size() == 1)
-      return MaxNumOfPromotionsPerLoop;
+      return getMaxNumOfPromotionsPerLoop(Mod);
 
-    if (ExitingBlocks.size() > SpeculativeCounterPromotionMaxExiting)
+    if (ExitingBlocks.size() > getSpeculativeCounterPromotionMaxExiting(Mod))
       return 0;
 
     // Whether the target block is in a loop does not matter:
-    if (SpeculativeCounterPromotionToLoop)
-      return MaxNumOfPromotionsPerLoop;
+    if (getSpeculativeCounterPromotionToLoop(Mod))
+      return getMaxNumOfPromotionsPerLoop(Mod);
 
     // Now check the target block:
-    unsigned MaxProm = MaxNumOfPromotionsPerLoop;
+    unsigned MaxProm = getMaxNumOfPromotionsPerLoop(Mod);
     for (auto *TargetBlock : LoopExitBlocks) {
       auto *TargetLoop = LI.getLoopFor(TargetBlock);
       if (!TargetLoop)
@@ -809,7 +788,7 @@ void InstrLowerer::doSampling(Instruction *I) {
   if (!isSamplingEnabled())
     return;
 
-  SampledInstrumentationConfig config = getSampledInstrumentationConfig();
+  SampledInstrumentationConfig config = getSampledInstrumentationConfig(M);
   auto GetConstant = [&config](IRBuilder<> &Builder, uint32_t C) {
     if (config.UseShort)
       return Builder.getInt16(C);
@@ -928,27 +907,28 @@ bool InstrLowerer::isRuntimeCounterRelocationEnabled() const {
   if (TT.isOSBinFormatMachO())
     return false;
 
-  if (RuntimeCounterRelocation.getNumOccurrences() > 0)
-    return RuntimeCounterRelocation;
+  if (isRuntimeCounterRelocationSpecified(M))
+    return getRuntimeCounterRelocation(M);
 
   // Fuchsia uses runtime counter relocation by default.
   return TT.isOSFuchsia();
 }
 
 bool InstrLowerer::isSamplingEnabled() const {
-  if (SampledInstr.getNumOccurrences() > 0)
-    return SampledInstr;
+  if (isSampledInstrSpecified(M))
+    return getSampledInstr(M);
   return Options.Sampling;
 }
 
 bool InstrLowerer::isCounterPromotionEnabled() const {
-  if (DoCounterPromotion.getNumOccurrences() > 0)
-    return DoCounterPromotion;
+  if (isDoCounterPromotionSpecified(M))
+    return getDoCounterPromotion(M);
+
   return Options.DoCounterPromotion;
 }
 
 bool InstrLowerer::isAtomic() const {
-  return Options.Atomic || AtomicCounterUpdateAll;
+  return Options.Atomic || getAtomicCounterUpdateAll(M);
 }
 
 static void doAtomicCheck(Function *F) {
@@ -1007,7 +987,7 @@ void InstrLowerer::promoteCounterLoadStores(Function *F) {
     Promoter.run(&TotalCountersPromoted);
   }
 
-  if (isAtomic() && VerifyAtomicPromotion)
+  if (isAtomic() && getVerifyAtomicPromotion(M))
     doAtomicCheck(F);
 }
 
@@ -1076,7 +1056,7 @@ bool InstrLowerer::lower() {
     }
   }
 
-  if (EnableVTableValueProfiling)
+  if (getEnableVTableValueProfiling(M, M.getContext().getOptionsContext()))
     for (GlobalVariable &GV : M.globals())
       // Global variables with type metadata are virtual table variables.
       if (GV.hasMetadata(LLVMContext::MD_type))
@@ -1149,7 +1129,7 @@ void InstrLowerer::lowerValueProfileInst(InstrProfValueProfileInst *Ind) {
   // in lightweight mode. We need to move the value profile pointer to the
   // Counter struct to get this working.
   assert(
-      ProfileCorrelate == InstrProfCorrelator::NONE &&
+      getProfileCorrelate(M) == ProfCorrelatorKind::NONE &&
       "Value profiling is not yet supported with lightweight instrumentation");
   GlobalVariable *Name = Ind->getName();
   auto It = ProfileDataMap.find(Name);
@@ -1268,7 +1248,7 @@ Value *InstrLowerer::getBitmapAddress(InstrProfMCDCTVBitmapUpdate *I) {
 void InstrLowerer::lowerCover(InstrProfCoverInst *CoverInstruction) {
   auto *Addr = getCounterAddress(CoverInstruction);
   IRBuilder<> Builder(CoverInstruction);
-  if (ConditionalCounterUpdate) {
+  if (getConditionalCounterUpdate(M)) {
     Instruction *SplitBefore = CoverInstruction->getNextNode();
     auto &Ctx = CoverInstruction->getParent()->getContext();
     auto *Int8Ty = llvm::Type::getInt8Ty(Ctx);
@@ -1312,13 +1292,14 @@ InstrLowerer::getOrCreateGPUInvariants(Function *F) {
   IRBuilder<> Builder(&*EntryBB.getFirstInsertionPt());
 
   Value *Matched = ConstantInt::getTrue(Context);
-  if (OffloadPGOSampling > 0) {
+  unsigned OffloadSampling = getOffloadPGOSampling(M);
+  if (OffloadSampling > 0) {
     FunctionCallee IsSampledFn =
         M.getOrInsertFunction(RTLIB::RuntimeLibcallsInfo::getLibcallImplName(
                                   RTLIB::impl___llvm_profile_sampling_gpu),
                               Int32Ty, Int32Ty);
     Value *SampledInt = Builder.CreateCall(
-        IsSampledFn, {ConstantInt::get(Int32Ty, OffloadPGOSampling)},
+        IsSampledFn, {ConstantInt::get(Int32Ty, OffloadSampling)},
         "pgo.sampled");
     Matched = Builder.CreateICmpNE(SampledInt, ConstantInt::get(Int32Ty, 0),
                                    "pgo.matched");
@@ -1394,7 +1375,7 @@ void InstrLowerer::lowerIncrement(InstrProfIncrementInst *Inc) {
                                   RTLIB::impl___llvm_profile_instrument_gpu),
                               CalleeTy);
 
-    if (OffloadPGOSampling > 0) {
+    if (getOffloadPGOSampling(M) > 0) {
       BasicBlock *CurBB = Builder.GetInsertBlock();
       BasicBlock *ContBB =
           CurBB->splitBasicBlock(BasicBlock::iterator(Inc), "po_cont");
@@ -1418,7 +1399,7 @@ void InstrLowerer::lowerIncrement(InstrProfIncrementInst *Inc) {
   // If promotion is enabled then delay generating atomic updates until
   // after promotion is done.
   if ((!isCounterPromotionEnabled() && isAtomic()) ||
-      (Inc->getIndex()->isNullValue() && AtomicFirstCounter)) {
+      (Inc->getIndex()->isNullValue() && getAtomicFirstCounter(M))) {
     Builder.CreateAtomicRMW(AtomicRMWInst::Add, Addr, Inc->getStep(),
                             MaybeAlign(), AtomicOrdering::Monotonic);
   } else {
@@ -1522,7 +1503,7 @@ static std::string getVarName(InstrProfInstBase *Inc, StringRef Prefix,
   StringRef Name = Inc->getName()->getName().substr(NamePrefix.size());
   Function *F = Inc->getParent()->getParent();
   Module *M = F->getParent();
-  if (!DoHashBasedCounterSplit || !isIRPGOFlagSet(M) ||
+  if (!getDoHashBasedCounterSplit(*M) || !isIRPGOFlagSet(M) ||
       !canRenameComdatFunc(*F)) {
     Renamed = false;
     return (Prefix + Name).str();
@@ -1730,7 +1711,7 @@ static inline Constant *getVTableAddrForProfData(GlobalVariable *GV) {
 }
 
 void InstrLowerer::getOrCreateVTableProfData(GlobalVariable *GV) {
-  assert(ProfileCorrelate != InstrProfCorrelator::DEBUG_INFO &&
+  assert(getProfileCorrelate(M) != ProfCorrelatorKind::DEBUG_INFO &&
          "Value profiling is not supported with lightweight instrumentation");
   if (GV->isDeclaration() || GV->hasAvailableExternallyLinkage())
     return;
@@ -1809,7 +1790,7 @@ GlobalVariable *InstrLowerer::setupProfileSection(InstrProfInstBase *Inc,
 
   // Use internal rather than private linkage so the counter variable shows up
   // in the symbol table when using debug info for correlation.
-  if (ProfileCorrelate == InstrProfCorrelator::DEBUG_INFO &&
+  if (getProfileCorrelate(M) == ProfCorrelatorKind::DEBUG_INFO &&
       TT.isOSBinFormatMachO() && Linkage == GlobalValue::PrivateLinkage)
     Linkage = GlobalValue::InternalLinkage;
 
@@ -1881,7 +1862,7 @@ InstrLowerer::getOrCreateRegionBitmaps(InstrProfMCDCBitmapInstBase *Inc) {
   PD.NumBitmapBytes = Inc->getNumBitmapBytes();
 
   if (PD.NumBitmapBytes &&
-      ProfileCorrelate == InstrProfCorrelator::DEBUG_INFO) {
+      getProfileCorrelate(M) == ProfCorrelatorKind::DEBUG_INFO) {
     LLVMContext &Ctx = M.getContext();
     Function *Fn = Inc->getParent()->getParent();
     if (auto *SP = Fn->getSubprogram()) {
@@ -1953,7 +1934,7 @@ InstrLowerer::getOrCreateRegionCounters(InstrProfCntrInstBase *Inc) {
   auto *CounterPtr = setupProfileSection(Inc, IPSK_cnts);
   PD.RegionCounters = CounterPtr;
 
-  if (ProfileCorrelate == InstrProfCorrelator::DEBUG_INFO) {
+  if (getProfileCorrelate(M) == ProfCorrelatorKind::DEBUG_INFO) {
     LLVMContext &Ctx = M.getContext();
     Function *Fn = Inc->getParent()->getParent();
     if (auto *SP = Fn->getSubprogram()) {
@@ -2040,7 +2021,7 @@ InstrLowerer::getOrCreateUniformCounters(InstrProfCntrInstBase *Inc) {
 void InstrLowerer::createDataVariable(InstrProfCntrInstBase *Inc) {
   // When debug information is correlated to profile data, a data variable
   // is not needed.
-  if (ProfileCorrelate == InstrProfCorrelator::DEBUG_INFO)
+  if (getProfileCorrelate(M) == ProfCorrelatorKind::DEBUG_INFO)
     return;
 
   GlobalVariable *NamePtr = Inc->getName();
@@ -2082,7 +2063,7 @@ void InstrLowerer::createDataVariable(InstrProfCntrInstBase *Inc) {
   uint64_t NS = 0;
   for (uint32_t Kind = IPVK_First; Kind <= IPVK_Last; ++Kind)
     NS += PD.NumValueSites[Kind];
-  if (NS > 0 && ValueProfileStaticAlloc &&
+  if (NS > 0 && getValueProfileStaticAlloc(M) &&
       !needsRuntimeRegistrationOfSectionRange(TT)) {
     ArrayType *ValuesTy = ArrayType::get(Type::getInt64Ty(Ctx), NS);
     auto *ValuesVar = new GlobalVariable(
@@ -2162,7 +2143,7 @@ void InstrLowerer::createDataVariable(InstrProfCntrInstBase *Inc) {
   InstrProfSectKind DataSectionKind;
   // With binary profile correlation, profile data is not loaded into memory.
   // profile data must reference profile counter with an absolute relocation.
-  if (ProfileCorrelate == InstrProfCorrelator::BINARY) {
+  if (getProfileCorrelate(M) == ProfCorrelatorKind::BINARY) {
     DataSectionKind = IPSK_covdata;
     RelativeCounterPtr = ConstantExpr::getPtrToInt(CounterPtr, IntPtrTy);
     if (BitmapPtr != nullptr)
@@ -2223,7 +2204,7 @@ void InstrLowerer::createDataVariable(InstrProfCntrInstBase *Inc) {
 }
 
 void InstrLowerer::emitVNodes() {
-  if (!ValueProfileStaticAlloc)
+  if (!getValueProfileStaticAlloc(M))
     return;
 
   // For now only support this on platforms that do
@@ -2241,7 +2222,7 @@ void InstrLowerer::emitVNodes() {
   if (!TotalNS)
     return;
 
-  uint64_t NumCounters = TotalNS * NumCountersPerValueSite;
+  uint64_t NumCounters = TotalNS * getNumCountersPerValueSite(M);
 // Heuristic for small programs with very few total value sites.
 // The default value of vp-counters-per-site is chosen based on
 // the observation that large apps usually have a low percentage
@@ -2325,8 +2306,10 @@ void InstrLowerer::emitNameData() {
     return;
 
   std::string CompressedNameStr;
-  if (Error E = collectPGOFuncNameStrings(ReferencedNames, CompressedNameStr,
-                                          DoInstrProfNameCompression)) {
+  if (Error E = collectPGOFuncNameStrings(
+          ReferencedNames, CompressedNameStr,
+          getDoInstrProfNameCompression(M,
+                                        M.getContext().getOptionsContext()))) {
     report_fatal_error(Twine(toString(std::move(E))), false);
   }
 
@@ -2360,7 +2343,7 @@ void InstrLowerer::emitNameData() {
   NamesSize = CompressedNameStr.size();
   setGlobalVariableLargeSection(TT, *NamesVar);
   std::string NamesSectionName =
-      ProfileCorrelate == InstrProfCorrelator::BINARY
+      getProfileCorrelate(M) == ProfCorrelatorKind::BINARY
           ? getInstrProfSectionName(IPSK_covname, TT.getObjectFormat())
           : getInstrProfSectionName(IPSK_name, TT.getObjectFormat());
   NamesVar->setSection(NamesSectionName);
@@ -2385,13 +2368,16 @@ void InstrLowerer::emitNameData() {
 }
 
 void InstrLowerer::emitVTableNames() {
-  if (!EnableVTableValueProfiling || ReferencedVTables.empty())
+  if (!getEnableVTableValueProfiling(M, M.getContext().getOptionsContext()) ||
+      ReferencedVTables.empty())
     return;
 
   // Collect the PGO names of referenced vtables and compress them.
   std::string CompressedVTableNames;
-  if (Error E = collectVTableStrings(ReferencedVTables, CompressedVTableNames,
-                                     DoInstrProfNameCompression)) {
+  if (Error E =
+          collectVTableStrings(ReferencedVTables, CompressedVTableNames,
+                               getDoInstrProfNameCompression(
+                                   M, M.getContext().getOptionsContext()))) {
     report_fatal_error(Twine(toString(std::move(E))), false);
   }
 
@@ -2561,7 +2547,7 @@ void createProfileSamplingVar(Module &M) {
   const StringRef VarName(INSTR_PROF_QUOTE(INSTR_PROF_PROFILE_SAMPLING_VAR));
   IntegerType *SamplingVarTy;
   Constant *ValueZero;
-  if (getSampledInstrumentationConfig().UseShort) {
+  if (getSampledInstrumentationConfig(M).UseShort) {
     SamplingVarTy = Type::getInt16Ty(M.getContext());
     ValueZero = Constant::getIntegerValue(SamplingVarTy, APInt(16, 0));
   } else {

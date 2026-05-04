@@ -9,6 +9,7 @@
 #include "MCTargetDesc/RISCVBaseInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/TargetParser/Triple.h"
 #include "gtest/gtest.h"
@@ -25,8 +26,8 @@ std::unique_ptr<MCSubtargetInfo> createSTI(StringRef TripleName,
   std::string Error;
   Triple TT(TripleName);
   const Target *TheTarget = TargetRegistry::lookupTarget(TT, Error);
-  return std::unique_ptr<MCSubtargetInfo>(
-      TheTarget->createMCSubtargetInfo(TT, /*CPU=*/"", FeatureStr));
+  return std::unique_ptr<MCSubtargetInfo>(TheTarget->createMCSubtargetInfo(
+      TT, /*CPU=*/"", FeatureStr, llvm::clv2::defaultOptionsContext()));
 }
 
 RISCVABI::ABI computeTargetABI(StringRef TripleName, StringRef FeatureStr,

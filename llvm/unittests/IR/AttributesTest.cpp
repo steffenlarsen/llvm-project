@@ -23,7 +23,7 @@ using namespace llvm;
 namespace {
 
 TEST(Attributes, Uniquing) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   Attribute AttrA = Attribute::get(C, Attribute::AlwaysInline);
   Attribute AttrB = Attribute::get(C, Attribute::AlwaysInline);
@@ -38,7 +38,7 @@ TEST(Attributes, Uniquing) {
 }
 
 TEST(Attributes, Ordering) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   Attribute Align4 = Attribute::get(C, Attribute::Alignment, 4);
   Attribute Align5 = Attribute::get(C, Attribute::Alignment, 5);
@@ -66,7 +66,7 @@ TEST(Attributes, Ordering) {
 }
 
 TEST(Attributes, AddAttributes) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   AttributeList AL;
   AttrBuilder B(C);
   B.addAttribute(Attribute::NoReturn);
@@ -80,7 +80,7 @@ TEST(Attributes, AddAttributes) {
 }
 
 TEST(Attributes, RemoveAlign) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   Attribute AlignAttr = Attribute::getWithAlignment(C, Align(8));
   Attribute StackAlignAttr = Attribute::getWithStackAlignment(C, Align(32));
@@ -150,7 +150,7 @@ TEST(Attributes, RemoveAlign) {
 }
 
 TEST(Attributes, AddMatchingAlignAttr) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   AttributeList AL;
   AL = AL.addParamAttribute(C, 0, Attribute::getWithAlignment(C, Align(8)));
   AL = AL.addParamAttribute(C, 1, Attribute::getWithAlignment(C, Align(32)));
@@ -167,14 +167,14 @@ TEST(Attributes, AddMatchingAlignAttr) {
 }
 
 TEST(Attributes, EmptyGet) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   AttributeList EmptyLists[] = {AttributeList(), AttributeList()};
   AttributeList AL = AttributeList::get(C, EmptyLists);
   EXPECT_TRUE(AL.isEmpty());
 }
 
 TEST(Attributes, OverflowGet) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::pair<unsigned, Attribute> Attrs[] = {
       {AttributeList::ReturnIndex, Attribute::get(C, Attribute::SExt)},
       {AttributeList::FunctionIndex, Attribute::get(C, Attribute::ReadOnly)}};
@@ -183,7 +183,7 @@ TEST(Attributes, OverflowGet) {
 }
 
 TEST(Attributes, StringRepresentation) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   StructType *Ty = StructType::create(Type::getInt32Ty(C), "mystruct");
 
   // Insufficiently careful printing can result in byval(%mystruct = { i32 })
@@ -195,7 +195,8 @@ TEST(Attributes, StringRepresentation) {
 }
 
 TEST(Attributes, HasParentContext) {
-  LLVMContext C1, C2;
+  LLVMContext C1(llvm::clv2::defaultOptionsContext()),
+      C2(llvm::clv2::defaultOptionsContext());
 
   {
     Attribute Attr1 = Attribute::get(C1, Attribute::AlwaysInline);
@@ -228,7 +229,7 @@ TEST(Attributes, HasParentContext) {
 }
 
 TEST(Attributes, AttributeListPrinting) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   {
     std::string S;
@@ -281,7 +282,7 @@ TEST(Attributes, MismatchedABIAttrs) {
   )IR";
 
   SMDiagnostic Err;
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssemblyString(IRString, Err, Context);
   ASSERT_TRUE(M);
 
@@ -302,7 +303,7 @@ TEST(Attributes, MismatchedABIAttrs) {
 }
 
 TEST(Attributes, RemoveParamAttributes) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   AttributeList AL;
   AL = AL.addParamAttribute(C, 1, Attribute::NoUndef);
   EXPECT_EQ(AL.getNumAttrSets(), 4U);
@@ -315,7 +316,7 @@ TEST(Attributes, RemoveParamAttributes) {
 }
 
 TEST(Attributes, ConstantRangeAttributeCAPI) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   {
     const unsigned NumBits = 8;
     const uint64_t LowerWords[] = {0};
@@ -345,7 +346,7 @@ TEST(Attributes, ConstantRangeAttributeCAPI) {
 }
 
 TEST(Attributes, DenormalFPEnvAttributeCAPI) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   LLVMContextRef CtxC = wrap(&C);
   {
     LLVMAttributeRef CAttr = LLVMCreateDenormalFPEnvAttribute(
@@ -398,7 +399,7 @@ TEST(Attributes, CalleeAttributes) {
   )IR";
 
   SMDiagnostic Err;
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseAssemblyString(IRString, Err, Context);
   ASSERT_TRUE(M);
 
@@ -421,7 +422,8 @@ TEST(Attributes, CalleeAttributes) {
 }
 
 TEST(Attributes, SetIntersect) {
-  LLVMContext C0, C1;
+  LLVMContext C0(llvm::clv2::defaultOptionsContext()),
+      C1(llvm::clv2::defaultOptionsContext());
   std::optional<AttributeSet> Res;
   auto BuildAttr = [&](LLVMContext &C, Attribute::AttrKind Kind, uint64_t Int,
                        Type *Ty, ConstantRange &CR,
@@ -569,7 +571,7 @@ TEST(Attributes, SetIntersect) {
 }
 
 TEST(Attributes, SetIntersectByValAlign) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   AttributeSet AS0, AS1;
 
   Attribute ByVal = Attribute::get(C, Attribute::ByVal, Type::getInt32Ty(C));
@@ -640,7 +642,7 @@ TEST(Attributes, SetIntersectByValAlign) {
 }
 
 TEST(Attributes, ListIntersectDifferingMustPreserve) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::optional<AttributeList> Res;
   {
     AttributeList AL0;
@@ -672,7 +674,7 @@ TEST(Attributes, ListIntersectDifferingMustPreserve) {
 }
 
 TEST(Attributes, ListIntersect) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   AttributeList AL0;
   AttributeList AL1;
   std::optional<AttributeList> Res;

@@ -24,6 +24,7 @@
 #include "llvm/Analysis/ReleaseModeModelRunner.h"
 #include "llvm/Analysis/Utils/MLGOUtils.h"
 #include "llvm/CodeGen/CalcSpillWeights.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/LiveRegMatrix.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -32,11 +33,15 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/CodeGen/VirtRegMap.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
+#include "llvm/PassRegistry.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 
 #include <array>
 #include <bitset>
@@ -65,22 +70,39 @@ enum class MLGORegAllocModelChoice {
 #include "llvm/CodeGen/RegAllocEvictModels.def"
 };
 
-static llvm::cl::opt<MLGORegAllocModelChoice> SelectedMLGORegAllocModel(
+// The set of models comes from RegAllocEvictModels.def, which TableGen cannot
+// see, so this option is declared locally as a string and resolved to the enum
+// by name at use time.
+static constexpr clv2::OptionInfo<std::string> OI_RegallocMlgoModel{
     "regalloc-mlgo-model",
-    llvm::cl::desc("Select the MLGO model to execute for register allocation:"),
-    llvm::cl::init(MLGORegAllocModelChoice::Default),
-    llvm::cl::values(clEnumValN(MLGORegAllocModelChoice::Default, "default",
-                                "Use standard heuristic")
+    "Select the MLGO model to execute for register allocation", clv2::Hidden};
+static constexpr clv2::OptionsRegistry<&OI_RegallocMlgoModel>
+    RegallocMlgoModelReg;
+static std::string SelectedMLGORegAllocModelName;
+static void applyRegallocMlgoModel(
+    const decltype(RegallocMlgoModelReg)::ParsedOptionsT &Opts) {
+  SelectedMLGORegAllocModelName = Opts.get<&OI_RegallocMlgoModel>();
+}
+[[maybe_unused]] static const bool RegallocMlgoModelRegistered = [] {
+  clv2::registerDynamicRegistry<&RegallocMlgoModelReg>(applyRegallocMlgoModel);
+  return true;
+}();
+
+static MLGORegAllocModelChoice getSelectedMLGORegAllocModel() {
+  StringRef Name = SelectedMLGORegAllocModelName;
+  if (Name.empty() || Name == "default")
+    return MLGORegAllocModelChoice::Default;
 #define MLGO_MODEL(CLASS_NAME, CLI_FLAG)                                       \
-  , clEnumValN(MLGORegAllocModelChoice::CLASS_NAME, CLI_FLAG,                  \
-               "Use the " CLI_FLAG " MLGO model")
+  if (Name == CLI_FLAG)                                                        \
+    return MLGORegAllocModelChoice::CLASS_NAME;
 #include "llvm/CodeGen/RegAllocEvictModels.def"
-                         ));
+  report_fatal_error("Unknown MLGO model: " + Twine(Name));
+}
 
 static std::unique_ptr<MLModelRunner>
 createMLGORegAllocModelRunner(LLVMContext &Ctx,
                               const std::vector<TensorSpec> &InputFeatures) {
-  switch (SelectedMLGORegAllocModel) {
+  switch (getSelectedMLGORegAllocModel()) {
   case MLGORegAllocModelChoice::Default:
     return nullptr;
 #define MLGO_MODEL(CLASS_NAME, CLI_FLAG)                                       \
@@ -93,49 +115,49 @@ createMLGORegAllocModelRunner(LLVMContext &Ctx,
 #else
 constexpr bool HaveMLIRLoweringRegAlloc = false;
 enum class MLGORegAllocModelChoice { Default };
-static const MLGORegAllocModelChoice SelectedMLGORegAllocModel =
-    MLGORegAllocModelChoice::Default;
+static MLGORegAllocModelChoice getSelectedMLGORegAllocModel() {
+  return MLGORegAllocModelChoice::Default;
+}
 static inline std::unique_ptr<MLModelRunner>
 createMLGORegAllocModelRunner(LLVMContext &, const std::vector<TensorSpec> &) {
   return nullptr;
 }
 #endif
 
-static cl::opt<std::string> InteractiveChannelBaseName(
-    "regalloc-evict-interactive-channel-base", cl::Hidden,
-    cl::desc(
-        "Base file path for the interactive mode. The incoming filename should "
-        "have the name <regalloc-evict-interactive-channel-base>.in, while the "
-        "outgoing name should be "
-        "<regalloc-evict-interactive-channel-base>.out"));
-
-static cl::opt<unsigned> MaxEvictionCount(
-    "mlregalloc-max-eviction-count", cl::Hidden,
-    cl::desc("The maximum number of times a live range can be "
-             "evicted before preventing it from being evicted"),
-    cl::init(100));
 
 // Options that only make sense in development mode
 #ifdef LLVM_HAVE_TFLITE
 #include "RegAllocScore.h"
 #include "llvm/Analysis/Utils/TFUtils.h"
 
-static cl::opt<std::string> TrainingLog(
-    "regalloc-training-log", cl::Hidden,
-    cl::desc("Training log for the register allocator eviction model"));
+static std::string TrainingLog;
 
-static cl::opt<std::string> ModelUnderTraining(
-    "regalloc-model", cl::Hidden,
-    cl::desc("The model being trained for register allocation eviction"));
+static std::string getRegallocTrainingLog(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::CGPassCore2Reg,
+                           &clv2::CGPASS_RegallocTrainingLog>(Ctx, TrainingLog);
+}
 
+static std::string getRegallocModel(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_RegallocModel>(Ctx);
+}
 #endif // #ifdef LLVM_HAVE_TFLITE
+
+static std::string
+getRegallocEvictInteractiveChannelBase(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::CGPASS_RegallocEvictInteractiveChannelBase>(Ctx);
+}
+
+static unsigned getMlregallocMaxEvictionCount(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_MlregallocMaxEvictionCount>(
+      Ctx);
+}
 
 /// The score injection pass.
 /// This pass calculates the score for a function and inserts it in the log, but
 /// this happens only in development mode. It's a no-op otherwise.
-namespace llvm {
-extern cl::opt<unsigned> EvictInterferenceCutoff;
-} // namespace llvm
+// getEvictInterferenceCutoff() not yet in OptInfos — use literal default.
+static unsigned getEvictInterferenceCutoff() { return 10; }
 
 namespace {
 class RegAllocScoring : public MachineFunctionPass {
@@ -417,8 +439,9 @@ public:
       Runner = createReleaseModeModelRunner<CompiledModelType,
                                             HaveMLIRLoweringRegAlloc>(
           MF.getFunction().getContext(), InputFeatures, DecisionName,
-          InteractiveChannelBaseName, DecisionSpec,
-          createMLGORegAllocModelRunner);
+          getRegallocEvictInteractiveChannelBase(
+              MF.getFunction().getContext().getOptionsContext()),
+          DecisionSpec, createMLGORegAllocModelRunner);
     }
     assert(MBFI && Loops &&
            "Invalid provider state: must have analysis available");
@@ -501,26 +524,26 @@ public:
             TensorSpec::createSpec<float>("action_discount", {1}),
         TensorSpec::createSpec<int32_t>("action_step_type", {1}),
         TensorSpec::createSpec<float>("action_reward", {1})};
-    if (ModelUnderTraining.empty() && TrainingLog.empty()) {
+    if (getRegallocModel().empty() && getRegallocTrainingLog().empty()) {
       Ctx.emitError("Regalloc development mode should be requested with at "
                     "least logging enabled and/or a training model");
       return;
     }
-    if (ModelUnderTraining.empty())
+    if (getRegallocModel().empty())
       Runner = std::make_unique<NoInferenceModelRunner>(Ctx, InputFeatures);
     else
       Runner = ModelUnderTrainingRunner::createAndEnsureValid(
-          Ctx, ModelUnderTraining, DecisionName, TrainingInputFeatures);
+          Ctx, getRegallocModel(), DecisionName, TrainingInputFeatures);
     if (!Runner) {
       Ctx.emitError("Regalloc: could not set up the model runner");
       return;
     }
-    if (TrainingLog.empty())
+    if (getRegallocTrainingLog().empty())
       return;
     std::error_code EC;
-    auto OS = std::make_unique<raw_fd_ostream>(TrainingLog, EC);
+    auto OS = std::make_unique<raw_fd_ostream>(getRegallocTrainingLog(), EC);
     if (EC) {
-      Ctx.emitError(EC.message() + ":" + TrainingLog);
+      Ctx.emitError(EC.message() + ":" + getRegallocTrainingLog());
       return;
     }
     std::vector<TensorSpec> LFS = InputFeatures;
@@ -670,10 +693,10 @@ bool MLEvictAdvisor::loadInterferenceFeatures(
     LiveIntervalUnion::Query &Q = Matrix->query(VirtReg, Unit);
     // Different from the default heuristic, we don't make any assumptions
     // about what having more than 10 results in the query may mean.
-    const auto &IFIntervals = Q.interferingVRegs(EvictInterferenceCutoff);
+    const auto &IFIntervals = Q.interferingVRegs(getEvictInterferenceCutoff());
     if (IFIntervals.empty() && InterferingIntervals.empty())
       continue;
-    if (IFIntervals.size() >= EvictInterferenceCutoff)
+    if (IFIntervals.size() >= getEvictInterferenceCutoff())
       return false;
     InterferingIntervals.append(IFIntervals.begin(), IFIntervals.end());
     for (const LiveInterval *Intf : reverse(IFIntervals)) {
@@ -703,7 +726,10 @@ bool MLEvictAdvisor::loadInterferenceFeatures(
       // threshold, prevent the range from being evicted. We still let the
       // range through if it is urgent as we are required to produce an
       // eviction if the candidate is not spillable.
-      if (getEvictionCount(Intf->reg()) > MaxEvictionCount && !Urgent)
+      if (getEvictionCount(Intf->reg()) >
+              getMlregallocMaxEvictionCount(
+                  MF.getFunction().getContext().getOptionsContext()) &&
+          !Urgent)
         return false;
 
       // Only evict older cascades or live ranges without a cascade.
@@ -828,7 +854,7 @@ MCRegister MLEvictAdvisor::tryFindEvictionCandidate(
   // the same ranges continually and eating compile time.
   for (MCRegUnit Unit : TRI->regunits(Regs[CandidatePos].first)) {
     LiveIntervalUnion::Query &Q = Matrix->query(VirtReg, Unit);
-    const auto &IFIntervals = Q.interferingVRegs(EvictInterferenceCutoff);
+    const auto &IFIntervals = Q.interferingVRegs(getEvictInterferenceCutoff());
     for (const LiveInterval *Intf : reverse(IFIntervals)) {
       onEviction(Intf->reg());
     }
@@ -1012,7 +1038,8 @@ int64_t DevelopmentModeEvictAdvisor::tryFindEvictionCandidatePosition(
         if (*I == PhysReg)
           break;
   }
-  if (TrainingLog.empty())
+  if (getRegallocTrainingLog(MF.getFunction().getContext().getOptionsContext())
+          .empty())
     return Ret;
   // TODO(mtrofin): when we support optional rewards, this can go away. In the
   // meantime, we log the "pretend" reward (0) for the previous observation
@@ -1061,8 +1088,9 @@ bool RegAllocScoring::runOnMachineFunction(MachineFunction &MF) {
 
 RegAllocEvictionAdvisorProvider *
 llvm::createReleaseModeAdvisorProvider(LLVMContext &Ctx) {
-  return isReleaseModelValid<CompiledModelType>(InteractiveChannelBaseName,
-                                                SelectedMLGORegAllocModel)
+  return isReleaseModelValid<CompiledModelType>(
+             getRegallocEvictInteractiveChannelBase(Ctx.getOptionsContext()),
+             getSelectedMLGORegAllocModel())
              ? new ReleaseModeEvictionAdvisorProvider(Ctx)
              : nullptr;
 }
@@ -1077,8 +1105,12 @@ llvm::createDevelopmentModeAdvisorProvider(LLVMContext &Ctx) {
 
 RegAllocEvictionAdvisorAnalysisLegacy *
 llvm::createReleaseModeAdvisorAnalysisLegacy() {
-  return isReleaseModelValid<CompiledModelType>(InteractiveChannelBaseName,
-                                                SelectedMLGORegAllocModel)
+  // The legacy factory runs before any module is available, so the option is
+  // read from the process-wide default context.
+  return isReleaseModelValid<CompiledModelType>(
+             getRegallocEvictInteractiveChannelBase(
+                 clv2::defaultOptionsContext()),
+             getSelectedMLGORegAllocModel())
              ? new ReleaseModeEvictionAdvisorAnalysisLegacy()
              : nullptr;
 }

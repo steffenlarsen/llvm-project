@@ -20,15 +20,17 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachinePassManager.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "amdgpu-set-wave-priority"
 
-static cl::opt<unsigned> DefaultVALUInstsThreshold(
-    "amdgpu-set-wave-priority-valu-insts-threshold",
-    cl::desc("VALU instruction count threshold for adjusting wave priority"),
-    cl::init(100), cl::Hidden);
+static unsigned getDefaultVALUInstsThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_DefaultVALUInstsThreshold>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -127,7 +129,7 @@ bool AMDGPUSetWavePriority::run(MachineFunction &MF) {
   const GCNSubtarget &ST = MF.getSubtarget<GCNSubtarget>();
   TII = ST.getInstrInfo();
 
-  unsigned VALUInstsThreshold = DefaultVALUInstsThreshold;
+  unsigned VALUInstsThreshold = getDefaultVALUInstsThreshold(F);
   Attribute A = F.getFnAttribute("amdgpu-wave-priority-threshold");
   if (A.isValid())
     A.getValueAsString().getAsInteger(0, VALUInstsThreshold);

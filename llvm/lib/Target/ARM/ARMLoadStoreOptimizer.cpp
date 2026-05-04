@@ -56,10 +56,11 @@
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Allocator.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdlib>
@@ -88,9 +89,11 @@ STATISTIC(NumSTRD2STR,  "Number of strd instructions turned back into str's");
 /// disabled. This can be used to create libraries that are robust even when
 /// users provoke undefined behaviour by supplying misaligned pointers.
 /// \see mayCombineMisaligned()
-static cl::opt<bool>
-AssumeMisalignedLoadStores("arm-assume-misaligned-load-store", cl::Hidden,
-    cl::init(false), cl::desc("Be more conservative in ARM load/store opt"));
+static bool getAssumeMisalignedLoadStores(const Function &F) {
+  return clv2::getOptValOr<&clv2::ARMOptsReg,
+                           &clv2::ARM_AssumeMisalignedLoadStores>(
+      F.getContext().getOptionsContext(), false);
+}
 
 #define ARM_LOAD_STORE_OPT_NAME "ARM load / store optimization pass"
 
@@ -1050,7 +1053,8 @@ void ARMLoadStoreOpt::FormCandidates(const MemOpQueue &MemOps) {
       CanMergeToLSMulti = CanMergeToLSDouble = false;
 
     // Should we be conservative?
-    if (AssumeMisalignedLoadStores && !mayCombineMisaligned(*STI, *MI))
+    if (getAssumeMisalignedLoadStores(MF->getFunction()) &&
+        !mayCombineMisaligned(*STI, *MI))
       CanMergeToLSMulti = CanMergeToLSDouble = false;
 
     // vldm / vstm limit are 32 for S variants, 16 for D variants.
@@ -2213,13 +2217,15 @@ INITIALIZE_PASS_END(ARMPreAllocLoadStoreOptLegacy, "arm-prera-ldst-opt",
 
 // Limit the number of instructions to be rescheduled.
 // FIXME: tune this limit, and/or come up with some better heuristics.
-static cl::opt<unsigned> InstReorderLimit("arm-prera-ldst-opt-reorder-limit",
-                                          cl::init(8), cl::Hidden);
+static unsigned getInstReorderLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::ARM_InstReorderLimit>(
+      F.getContext().getOptionsContext());
+}
 
 bool ARMPreAllocLoadStoreOpt::runOnMachineFunction(MachineFunction &Fn,
                                                    AliasAnalysis *AAIn,
                                                    MachineDominatorTree *DTIn) {
-  if (AssumeMisalignedLoadStores)
+  if (getAssumeMisalignedLoadStores(Fn.getFunction()))
     return false;
 
   AA = AAIn;
@@ -2397,7 +2403,7 @@ bool ARMPreAllocLoadStoreOpt::RescheduleOps(
       }
 
       // Don't try to reschedule too many instructions.
-      if (NumMove == InstReorderLimit)
+      if (NumMove == getInstReorderLimit(MF->getFunction()))
         break;
 
       // Found a mergeable instruction; save information about it.

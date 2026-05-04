@@ -16,6 +16,7 @@
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/LazyBlockFrequencyInfo.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/GlobalISel/GISelChangeObserver.h"
 #include "llvm/CodeGen/GlobalISel/GISelValueTracking.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelector.h"
@@ -36,9 +37,11 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/CodeGenCoverage.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugCounter.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 
 #define DEBUG_TYPE "instruction-select"
@@ -49,10 +52,8 @@ DEBUG_COUNTER(GlobalISelCounter, "globalisel",
               "Controls whether to select function with GlobalISel");
 
 #ifdef LLVM_GISEL_COV_PREFIX
-static cl::opt<std::string>
-    CoveragePrefix("gisel-coverage-prefix", cl::init(LLVM_GISEL_COV_PREFIX),
-                   cl::desc("Record GlobalISel rule coverage files of this "
-                            "prefix if instrumentation was generated"));
+static const std::string CoveragePrefix = LLVM_GISEL_COV_PREFIX;
+
 #else
 static const std::string CoveragePrefix;
 #endif
@@ -192,12 +193,24 @@ bool InstructionSelectImpl::selectMachineFunction(MachineFunction &MF) {
   // Legalized property, so it should be.
   // FIXME: This should be in the MachineVerifier, as the RegBankSelected
   // property check already is.
-  if (!DisableGISelLegalityCheck)
-    if (const MachineInstr *MI = machineFunctionIsIllegal(MF)) {
-      reportGISelFailure(MF, MORE, "gisel-select", "instruction is not legal",
-                         *MI);
-      return false;
-    }
+  {
+    bool DisableLegalityCheck = false;
+    const cgpass_opts::CGPassGISelRegOpts *O = nullptr;
+    if (const Function *F = &MF.getFunction())
+      O = clv2::getView<&clv2::CGPassGISelReg>(
+          F->getContext().getOptionsContext());
+    if (!O)
+      O = clv2::getView<&clv2::CGPassGISelReg>(
+          MF.getFunction().getContext().getOptionsContext());
+    if (O)
+      DisableLegalityCheck = O->get<&clv2::CGPASS_DisableGiselLegalityCheck>();
+    if (!DisableLegalityCheck)
+      if (const MachineInstr *MI = machineFunctionIsIllegal(MF)) {
+        reportGISelFailure(MF, MORE, "gisel-select", "instruction is not legal",
+                           *MI);
+        return false;
+      }
+  }
   // NumBlocks is an invariant to ensure the number of blocks doesn't change.
   const size_t NumBlocks = MF.size();
 #endif

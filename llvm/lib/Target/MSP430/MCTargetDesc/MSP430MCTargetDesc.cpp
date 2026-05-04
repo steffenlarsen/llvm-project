@@ -67,8 +67,13 @@ static MCAsmInfo *createMSP430MCAsmInfo(const MCRegisterInfo &MRI,
 }
 
 static MCSubtargetInfo *
-createMSP430MCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
-  return createMSP430MCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+createMSP430MCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                            const llvm::clv2::OptionsContext &Ctx) {
+  MCSubtargetInfo *STI =
+      createMSP430MCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+  if (STI)
+    STI->setOptionsContext(Ctx);
+  return STI;
 }
 
 static MCInstPrinter *createMSP430MCInstPrinter(const Triple &T,

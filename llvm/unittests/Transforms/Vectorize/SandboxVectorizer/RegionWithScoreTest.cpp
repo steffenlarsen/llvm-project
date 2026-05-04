@@ -18,7 +18,7 @@
 using namespace llvm;
 
 struct RegionWithScoreTest : public testing::Test {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   std::unique_ptr<TargetTransformInfo> TTI;
 

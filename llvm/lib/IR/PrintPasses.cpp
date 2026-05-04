@@ -7,122 +7,88 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/IR/PrintPasses.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/StringSet.h"
-#include "llvm/ADT/Twine.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Errc.h"
-#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/IOSandbox.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
-// Print IR out before/after specified passes.
-static cl::list<std::string>
-    PrintBefore("print-before",
-                llvm::cl::desc("Print IR before specified passes"),
-                cl::CommaSeparated, cl::Hidden);
-
-static cl::list<std::string>
-    PrintAfter("print-after", llvm::cl::desc("Print IR after specified passes"),
-               cl::CommaSeparated, cl::Hidden);
-
-static cl::opt<bool> PrintBeforeAll("print-before-all",
-                                    llvm::cl::desc("Print IR before each pass"),
-                                    cl::init(false), cl::Hidden);
-static cl::opt<bool> PrintAfterAll("print-after-all",
-                                   llvm::cl::desc("Print IR after each pass"),
-                                   cl::init(false), cl::Hidden);
-
-// Print out the IR after passes, similar to -print-after-all except that it
-// only prints the IR after passes that change the IR. Those passes that do not
-// make changes to the IR are reported as not making any changes. In addition,
-// the initial IR is also reported.  Other hidden options affect the output from
-// this option. -filter-passes will limit the output to the named passes that
-// actually change the IR and other passes are reported as filtered out. The
-// specified passes will either be reported as making no changes (with no IR
-// reported) or the changed IR will be reported. Also, the -filter-print-funcs
-// and -print-module-scope options will do similar filtering based on function
-// name, reporting changed IRs as functions(or modules if -print-module-scope is
-// specified) for a particular function or indicating that the IR has been
-// filtered out. The extra options can be combined, allowing only changed IRs
-// for certain passes on certain functions to be reported in different formats,
-// with the rest being reported as filtered out.  The -print-before-changed
-// option will print the IR as it was before each pass that changed it. The
-// optional value of quiet will only report when the IR changes, suppressing all
-// other messages, including the initial IR. The values "diff" and "diff-quiet"
-// will present the changes in a form similar to a patch, in either verbose or
-// quiet mode, respectively. The lines that are removed and added are prefixed
-// with '-' and '+', respectively. The -filter-print-funcs and -filter-passes
-// can be used to filter the output.  This reporter relies on the linux diff
-// utility to do comparisons and insert the prefixes. For systems that do not
-// have the necessary facilities, the error message will be shown in place of
-// the expected output.
-cl::opt<ChangePrinter> llvm::PrintChanged(
-    "print-changed", cl::desc("Print changed IRs"), cl::Hidden,
-    cl::ValueOptional, cl::init(ChangePrinter::None),
-    cl::values(
-        clEnumValN(ChangePrinter::Quiet, "quiet", "Run in quiet mode"),
-        clEnumValN(ChangePrinter::DiffVerbose, "diff",
-                   "Display patch-like changes"),
-        clEnumValN(ChangePrinter::DiffQuiet, "diff-quiet",
-                   "Display patch-like changes in quiet mode"),
-        clEnumValN(ChangePrinter::ColourDiffVerbose, "cdiff",
-                   "Display patch-like changes with color"),
-        clEnumValN(ChangePrinter::ColourDiffQuiet, "cdiff-quiet",
-                   "Display patch-like changes in quiet mode with color"),
-        clEnumValN(ChangePrinter::DotCfgVerbose, "dot-cfg",
-                   "Create a website with graphical changes"),
-        clEnumValN(ChangePrinter::DotCfgQuiet, "dot-cfg-quiet",
-                   "Create a website with graphical changes in quiet mode"),
-        // Sentinel value for unspecified option.
-        clEnumValN(ChangePrinter::Verbose, "", "")));
-
-// An option for specifying the diff used by print-changed=[diff | diff-quiet]
-static cl::opt<std::string>
-    DiffBinary("print-changed-diff-path", cl::Hidden, cl::init("diff"),
-               cl::desc("system diff used by change reporters"));
-
-static cl::opt<bool>
-    PrintModuleScope("print-module-scope",
-                     cl::desc("When printing IR for print-[before|after]{-all} "
-                              "always print a module IR"),
-                     cl::init(false), cl::Hidden);
-
-static cl::opt<bool> LoopPrintFuncScope(
-    "print-loop-func-scope",
-    cl::desc("When printing IR for print-[before|after]{-all} "
-             "for a loop pass, always print function IR"),
-    cl::init(false), cl::Hidden);
-
-// See the description for -print-changed for an explanation of the use
-// of this option.
-static cl::list<std::string> FilterPasses(
-    "filter-passes", cl::value_desc("pass names"),
-    cl::desc("Only consider IR changes for passes whose names "
-             "match the specified value. No-op without -print-changed"),
-    cl::CommaSeparated, cl::Hidden);
-
-static cl::list<std::string>
-    PrintFuncsList("filter-print-funcs", cl::value_desc("function names"),
-                   cl::desc("Only print IR for functions whose name "
-                            "match this for all print-[before|after][-all] "
-                            "options"),
-                   cl::CommaSeparated, cl::Hidden);
-
-/// This is a helper to determine whether to print IR before or
-/// after a pass.
-
-bool llvm::shouldPrintBeforeSomePass() {
-  return PrintBeforeAll || !PrintBefore.empty();
+static const ir_opts::ParsedOpts *getOpts(const LLVMContext &Ctx) {
+  return clv2::getView<&clv2::IROptsReg>(Ctx.getOptionsContext());
 }
 
-bool llvm::shouldPrintAfterSomePass() {
-  return PrintAfterAll || !PrintAfter.empty();
+static std::vector<std::string> getPrintBefore(const ir_opts::ParsedOpts *O) {
+  if (O)
+    return O->get<&clv2::IR_PrintBefore>();
+  return {};
+}
+
+static std::vector<std::string> getPrintAfter(const ir_opts::ParsedOpts *O) {
+  if (O)
+    return O->get<&clv2::IR_PrintAfter>();
+  return {};
+}
+
+static bool getPrintBeforeAll(const ir_opts::ParsedOpts *O) {
+  if (O)
+    return O->get<&clv2::IR_PrintBeforeAll>();
+  return false;
+}
+
+static bool getPrintAfterAll(const ir_opts::ParsedOpts *O) {
+  if (O)
+    return O->get<&clv2::IR_PrintAfterAll>();
+  return false;
+}
+
+ChangePrinter llvm::getPrintChanged(const LLVMContext &Ctx) {
+  if (auto *O = getOpts(Ctx))
+    return O->get<&clv2::IR_PrintChanged>();
+  return ChangePrinter::None;
+}
+
+static std::string getDiffBinary(const ir_opts::ParsedOpts *O) {
+  if (O)
+    return O->get<&clv2::IR_DiffBinary>();
+  return "diff";
+}
+
+static bool getPrintModuleScope(const ir_opts::ParsedOpts *O) {
+  if (O)
+    return O->get<&clv2::IR_PrintModuleScope>();
+  return false;
+}
+
+static ChangePrinter getPrintChangedVal(const ir_opts::ParsedOpts *O) {
+  if (O)
+    return O->get<&clv2::IR_PrintChanged>();
+  return ChangePrinter::None;
+}
+
+static bool getLoopPrintFuncScope(const ir_opts::ParsedOpts *O) {
+  if (O)
+    return O->get<&clv2::IR_LoopPrintFuncScope>();
+  return false;
+}
+
+static std::vector<std::string> getFilterPasses(const ir_opts::ParsedOpts *O) {
+  if (O)
+    return O->get<&clv2::IR_FilterPasses>();
+  return {};
+}
+
+static std::vector<std::string>
+getPrintFuncsList(const ir_opts::ParsedOpts *O) {
+  if (O)
+    return O->get<&clv2::IR_PrintFuncsList>();
+  return {};
 }
 
 static bool shouldPrintBeforeOrAfterPass(StringRef PassID,
@@ -130,40 +96,90 @@ static bool shouldPrintBeforeOrAfterPass(StringRef PassID,
   return llvm::is_contained(PassesToPrint, PassID);
 }
 
-bool llvm::shouldPrintBeforeAll() { return PrintBeforeAll; }
+bool llvm::shouldPrintBeforeSomePass(const LLVMContext &Ctx) {
+  auto *O = getOpts(Ctx);
+  return getPrintBeforeAll(O) || !getPrintBefore(O).empty();
+}
 
-bool llvm::shouldPrintAfterAll() { return PrintAfterAll; }
+bool llvm::shouldPrintAfterSomePass(const LLVMContext &Ctx) {
+  auto *O = getOpts(Ctx);
+  return getPrintAfterAll(O) || !getPrintAfter(O).empty();
+}
 
+bool llvm::shouldPrintBeforeAll(const LLVMContext &Ctx) {
+  return getPrintBeforeAll(getOpts(Ctx));
+}
+
+bool llvm::shouldPrintAfterAll(const LLVMContext &Ctx) {
+  return getPrintAfterAll(getOpts(Ctx));
+}
+
+bool llvm::shouldPrintBeforePass(const LLVMContext &Ctx, StringRef PassID) {
+  auto *O = getOpts(Ctx);
+  return getPrintBeforeAll(O) ||
+         shouldPrintBeforeOrAfterPass(PassID, getPrintBefore(O));
+}
+
+bool llvm::shouldPrintAfterPass(const LLVMContext &Ctx, StringRef PassID) {
+  auto *O = getOpts(Ctx);
+  return getPrintAfterAll(O) ||
+         shouldPrintBeforeOrAfterPass(PassID, getPrintAfter(O));
+}
+
+// Overloads without LLVMContext for legacy pass manager use.
+// These build an OptionsContext from CLI args each call; acceptable since
+// they're only invoked during pass scheduling, not in hot loops.
 bool llvm::shouldPrintBeforePass(StringRef PassID) {
-  return PrintBeforeAll || shouldPrintBeforeOrAfterPass(PassID, PrintBefore);
+  return shouldPrintBeforePass(PassID, clv2::defaultOptionsContext());
 }
 
 bool llvm::shouldPrintAfterPass(StringRef PassID) {
-  return PrintAfterAll || shouldPrintBeforeOrAfterPass(PassID, PrintAfter);
+  return shouldPrintAfterPass(PassID, clv2::defaultOptionsContext());
 }
 
-std::vector<std::string> llvm::printBeforePasses() {
-  return std::vector<std::string>(PrintBefore);
+bool llvm::shouldPrintBeforePass(StringRef PassID,
+                                 const clv2::OptionsContext &Ctx) {
+  auto *O = clv2::getView<&clv2::IROptsReg>(Ctx);
+  return getPrintBeforeAll(O) ||
+         shouldPrintBeforeOrAfterPass(PassID, getPrintBefore(O));
 }
 
-std::vector<std::string> llvm::printAfterPasses() {
-  return std::vector<std::string>(PrintAfter);
+bool llvm::shouldPrintAfterPass(StringRef PassID,
+                                const clv2::OptionsContext &Ctx) {
+  auto *O = clv2::getView<&clv2::IROptsReg>(Ctx);
+  return getPrintAfterAll(O) ||
+         shouldPrintBeforeOrAfterPass(PassID, getPrintAfter(O));
 }
 
-bool llvm::forcePrintModuleIR() { return PrintModuleScope; }
-
-bool llvm::forcePrintFuncIR() { return LoopPrintFuncScope; }
-
-bool llvm::isPassInPrintList(StringRef PassName) {
-  static const StringSet<> Set(llvm::from_range, FilterPasses);
-  return Set.empty() || Set.contains(PassName);
+std::vector<std::string> llvm::printBeforePasses(const LLVMContext &Ctx) {
+  return getPrintBefore(getOpts(Ctx));
 }
 
-bool llvm::isFilterPassesEmpty() { return FilterPasses.empty(); }
+std::vector<std::string> llvm::printAfterPasses(const LLVMContext &Ctx) {
+  return getPrintAfter(getOpts(Ctx));
+}
 
-bool llvm::isFunctionInPrintList(StringRef FunctionName) {
-  static const StringSet<> PrintFuncNames(llvm::from_range, PrintFuncsList);
-  return PrintFuncNames.empty() || PrintFuncNames.contains(FunctionName);
+bool llvm::forcePrintModuleIR(const LLVMContext &Ctx) {
+  return getPrintModuleScope(getOpts(Ctx));
+}
+
+bool llvm::forcePrintFuncIR(const LLVMContext &Ctx) {
+  return getLoopPrintFuncScope(getOpts(Ctx));
+}
+
+bool llvm::isPassInPrintList(const LLVMContext &Ctx, StringRef PassName) {
+  auto FP = getFilterPasses(getOpts(Ctx));
+  return FP.empty() || llvm::is_contained(FP, PassName);
+}
+
+bool llvm::isFilterPassesEmpty(const LLVMContext &Ctx) {
+  return getFilterPasses(getOpts(Ctx)).empty();
+}
+
+bool llvm::isFunctionInPrintList(const LLVMContext &Ctx,
+                                 StringRef FunctionName) {
+  auto PFL = getPrintFuncsList(getOpts(Ctx));
+  return PFL.empty() || llvm::is_contained(PFL, FunctionName);
 }
 
 std::error_code cleanUpTempFilesImpl(ArrayRef<std::string> FileName,
@@ -205,7 +221,6 @@ std::error_code llvm::prepareTempFiles(SmallVector<int> &FD,
     }
   }
   if (EC && I > 0)
-    // clean up created temporary files
     cleanUpTempFilesImpl(FileName, I);
   return EC;
 }
@@ -214,20 +229,18 @@ std::error_code llvm::cleanUpTempFiles(ArrayRef<std::string> FileName) {
   return cleanUpTempFilesImpl(FileName, FileName.size());
 }
 
-std::string llvm::doSystemDiff(StringRef Before, StringRef After,
+std::string llvm::doSystemDiff(const clv2::OptionsContext &Ctx,
+                               StringRef Before, StringRef After,
                                StringRef OldLineFormat, StringRef NewLineFormat,
                                StringRef UnchangedLineFormat) {
-  auto BypassSandbox = sys::sandbox::scopedDisable();
-
-  // Store the 2 bodies into temporary files and call diff on them
-  // to get the body of the node.
   static SmallVector<int> FD{-1, -1, -1};
   SmallVector<StringRef> SR{Before, After};
   static SmallVector<std::string> FileName{"", "", ""};
   if (prepareTempFiles(FD, SR, FileName))
     return "Unable to create temporary file.";
 
-  static ErrorOr<std::string> DiffExe = sys::findProgramByName(DiffBinary);
+  std::string DiffBin = getDiffBinary(clv2::getView<&clv2::IROptsReg>(Ctx));
+  ErrorOr<std::string> DiffExe = sys::findProgramByName(DiffBin);
   if (!DiffExe)
     return "Unable to find diff executable.";
 
@@ -236,8 +249,8 @@ std::string llvm::doSystemDiff(StringRef Before, StringRef After,
   ("--new-line-format=" + NewLineFormat).toVector(NLF);
   ("--unchanged-line-format=" + UnchangedLineFormat).toVector(ULF);
 
-  StringRef Args[] = {DiffBinary, "-w", "-d",        OLF,
-                      NLF,        ULF,  FileName[0], FileName[1]};
+  StringRef Args[] = {DiffBin, "-w", "-d",        OLF,
+                      NLF,     ULF,  FileName[0], FileName[1]};
   std::optional<StringRef> Redirects[] = {std::nullopt, StringRef(FileName[2]),
                                           std::nullopt};
   int Result = sys::ExecuteAndWait(*DiffExe, Args, std::nullopt, Redirects);
@@ -256,17 +269,20 @@ std::string llvm::doSystemDiff(StringRef Before, StringRef After,
   return Diff;
 }
 
-void llvm::reportChangedIR(StringRef Before, StringRef After,
-                           StringRef PassName, StringRef PassID,
-                           StringRef IRName, bool IsInteresting,
-                           bool ShouldReport) {
+void llvm::reportChangedIR(const LLVMContext &Ctx, StringRef Before,
+                           StringRef After, StringRef PassName,
+                           StringRef PassID, StringRef IRName,
+                           bool IsInteresting, bool ShouldReport) {
   if (!ShouldReport && IsInteresting)
     return;
+
+  auto *O = clv2::getView<&clv2::IROptsReg>(Ctx.getOptionsContext());
+  ChangePrinter PC = getPrintChangedVal(O);
 
   if (IsInteresting && Before != After) {
     errs() << ("*** IR Dump After " + PassName + " (" + PassID + ") on " +
                IRName + " ***\n");
-    switch (PrintChanged) {
+    switch (PC) {
     case ChangePrinter::None:
       llvm_unreachable("");
     case ChangePrinter::Quiet:
@@ -281,18 +297,19 @@ void llvm::reportChangedIR(StringRef Before, StringRef After,
     case ChangePrinter::ColourDiffVerbose: {
       bool Color = llvm::is_contained(
           {ChangePrinter::ColourDiffQuiet, ChangePrinter::ColourDiffVerbose},
-          PrintChanged.getValue());
+          PC);
       StringRef Removed = Color ? "\033[31m-%l\033[0m\n" : "-%l\n";
       StringRef Added = Color ? "\033[32m+%l\033[0m\n" : "+%l\n";
       StringRef NoChange = " %l\n";
-      errs() << doSystemDiff(Before, After, Removed, Added, NoChange);
+      errs() << doSystemDiff(Ctx.getOptionsContext(), Before, After, Removed,
+                             Added, NoChange);
       break;
     }
     }
   } else if (llvm::is_contained({ChangePrinter::Verbose,
                                  ChangePrinter::DiffVerbose,
                                  ChangePrinter::ColourDiffVerbose},
-                                PrintChanged.getValue())) {
+                                PC)) {
     const char *Reason =
         IsInteresting ? " omitted because no change" : " filtered out";
     errs() << "*** IR Dump After " << PassName;

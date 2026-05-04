@@ -18,55 +18,218 @@
 #include "llvm/DebugInfo/LogicalView/Core/LVScope.h"
 #include "llvm/DebugInfo/LogicalView/Core/LVSymbol.h"
 #include "llvm/DebugInfo/LogicalView/Core/LVType.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 
 namespace llvm {
 namespace logicalview {
 namespace cmdline {
 
-class OffsetParser final : public llvm::cl::parser<unsigned long long> {
-public:
-  OffsetParser(llvm::cl::Option &O);
-  ~OffsetParser() override;
+//===----------------------------------------------------------------------===//
+// Option categories
+//===----------------------------------------------------------------------===//
+inline constexpr clv2::OptionCategory
+    AttributeCategory("Attribute Options",
+                      "These control extra attributes that are "
+                      "added when the element is printed.");
+inline constexpr clv2::OptionCategory
+    CompareCategory("Compare Options", "These control the view comparison.");
+inline constexpr clv2::OptionCategory
+    OutputCategory("Output Options", "These control the output generated.");
+inline constexpr clv2::OptionCategory
+    PrintCategory("Print Options", "These control which elements are printed.");
+inline constexpr clv2::OptionCategory
+    ReportCategory("Report Options",
+                   "These control how the elements are printed.");
+inline constexpr clv2::OptionCategory
+    SelectCategory("Select Options",
+                   "These control which elements are selected.");
+inline constexpr clv2::OptionCategory
+    WarningCategory("Warning Options", "These control the generated warnings.");
+inline constexpr clv2::OptionCategory
+    InternalCategory("Internal Options",
+                     "Internal traces and extra debugging code.");
 
-  // Parse an argument representing an offset. Return true on error.
-  // If the prefix is 0, the base is octal, if the prefix is 0x or 0X, the
-  // base is hexadecimal, otherwise the base is decimal.
-  bool parse(llvm::cl::Option &O, StringRef ArgName, StringRef ArgValue,
-             unsigned long long &Val);
-};
+//===----------------------------------------------------------------------===//
+// EnumVal tables (defined in Options.cpp)
+//===----------------------------------------------------------------------===//
+extern const clv2::EnumVal<LVAttributeKind> AttributeKindVals[];
+extern const clv2::EnumVal<LVCompareKind> CompareKindVals[];
+extern const clv2::EnumVal<LVOutputKind> OutputKindVals[];
+extern const clv2::EnumVal<LVSortMode> SortModeVals[];
+extern const clv2::EnumVal<LVPrintKind> PrintKindVals[];
+extern const clv2::EnumVal<LVReportKind> ReportKindVals[];
+extern const clv2::EnumVal<LVElementKind> ElementKindVals[];
+extern const clv2::EnumVal<LVLineKind> LineKindVals[];
+extern const clv2::EnumVal<LVScopeKind> ScopeKindVals[];
+extern const clv2::EnumVal<LVSymbolKind> SymbolKindVals[];
+extern const clv2::EnumVal<LVTypeKind> TypeKindVals[];
+extern const clv2::EnumVal<LVWarningKind> WarningKindVals[];
+extern const clv2::EnumVal<LVInternalKind> InternalKindVals[];
 
-typedef llvm::cl::list<unsigned long long, bool, OffsetParser> OffsetOptionList;
+// Sizes of enum tables (defined in Options.cpp)
+inline constexpr std::size_t NumAttributeKindVals = 37;
+inline constexpr std::size_t NumCompareKindVals = 5;
+inline constexpr std::size_t NumOutputKindVals = 4;
+inline constexpr std::size_t NumSortModeVals = 6;
+inline constexpr std::size_t NumPrintKindVals = 10;
+inline constexpr std::size_t NumReportKindVals = 5;
+inline constexpr std::size_t NumElementKindVals = 3;
+inline constexpr std::size_t NumLineKindVals = 10;
+inline constexpr std::size_t NumScopeKindVals = 24;
+inline constexpr std::size_t NumSymbolKindVals = 7;
+inline constexpr std::size_t NumTypeKindVals = 19;
+inline constexpr std::size_t NumWarningKindVals = 5;
+inline constexpr std::size_t NumInternalKindVals = 6;
 
-extern llvm::cl::OptionCategory AttributeCategory;
-extern llvm::cl::OptionCategory CompareCategory;
-extern llvm::cl::OptionCategory OutputCategory;
-extern llvm::cl::OptionCategory PrintCategory;
-extern llvm::cl::OptionCategory ReportCategory;
-extern llvm::cl::OptionCategory SelectCategory;
-extern llvm::cl::OptionCategory WarningCategory;
-extern llvm::cl::OptionCategory InternalCategory;
+//===----------------------------------------------------------------------===//
+// Option descriptors
+//===----------------------------------------------------------------------===//
 
-extern llvm::cl::list<std::string> InputFilenames;
-extern llvm::cl::opt<std::string> OutputFilename;
+// Input/Output
+inline constexpr clv2::ListOptionInfo<std::string> InputFilenamesOpt{
+    "", "<input object files or .dSYM bundles>", clv2::Positional{}};
+inline constexpr clv2::OptionInfo<std::string> OutputFilenameOpt{
+    "output-file",
+    "Redirect output to the specified file.",
+    clv2::cat(OutputCategory),
+    clv2::Hidden,
+    clv2::value_desc("filename"),
+    clv2::Init<const char *>{"-"}};
 
-extern llvm::cl::list<std::string> SelectPatterns;
+// Attribute options
+inline constexpr clv2::ListOptionInfo<LVAttributeKind> AttributeOptionsOpt{
+    "attribute",
+    "Element attributes.",
+    clv2::ValuesRef<LVAttributeKind>(AttributeKindVals, NumAttributeKindVals),
+    clv2::cat(AttributeCategory),
+    clv2::Hidden,
+    clv2::CommaSeparated};
 
-extern llvm::cl::list<LVElementKind> SelectElements;
-extern llvm::cl::list<LVLineKind> SelectLines;
-extern llvm::cl::list<LVScopeKind> SelectScopes;
-extern llvm::cl::list<LVSymbolKind> SelectSymbols;
-extern llvm::cl::list<LVTypeKind> SelectTypes;
-extern OffsetOptionList SelectOffsets;
+// Compare options
+inline constexpr clv2::OptionInfo<bool> CompareContextOpt{
+    "compare-context", "Add the view as compare context.",
+    clv2::cat(CompareCategory), clv2::Hidden};
+inline constexpr clv2::ListOptionInfo<LVCompareKind> CompareElementsOpt{
+    "compare",
+    "Elements to compare.",
+    clv2::ValuesRef<LVCompareKind>(CompareKindVals, NumCompareKindVals),
+    clv2::cat(CompareCategory),
+    clv2::Hidden,
+    clv2::CommaSeparated};
 
-extern llvm::cl::list<LVAttributeKind> AttributeOptions;
-extern llvm::cl::list<LVOutputKind> OutputOptions;
-extern llvm::cl::list<LVPrintKind> PrintOptions;
-extern llvm::cl::list<LVWarningKind> WarningOptions;
-extern llvm::cl::list<LVInternalKind> InternalOptions;
+// Output options
+inline constexpr clv2::OptionInfo<std::string> OutputFolderOpt{
+    "output-folder", "Folder name for view splitting.",
+    clv2::cat(OutputCategory), clv2::value_desc("pathname"), clv2::Hidden};
+inline constexpr clv2::OptionInfo<unsigned> OutputLevelOpt{
+    "output-level",
+    "Only print to a depth of N elements.",
+    clv2::cat(OutputCategory),
+    clv2::value_desc("N"),
+    clv2::Hidden,
+    clv2::Init{~0u}};
+inline constexpr clv2::ListOptionInfo<LVOutputKind> OutputOptionsOpt{
+    "output",
+    "Outputs for view.",
+    clv2::ValuesRef<LVOutputKind>(OutputKindVals, NumOutputKindVals),
+    clv2::cat(OutputCategory),
+    clv2::Hidden,
+    clv2::CommaSeparated};
+inline constexpr clv2::OptionInfo<LVSortMode> OutputSortOpt{
+    "output-sort",
+    "Primary key when ordering logical view (default: line).",
+    clv2::ValuesRef<LVSortMode>(SortModeVals, NumSortModeVals),
+    clv2::cat(OutputCategory),
+    clv2::Hidden,
+    clv2::Init{LVSortMode::Line}};
 
-extern llvm::cl::list<LVCompareKind> CompareElements;
-extern llvm::cl::list<LVReportKind> ReportOptions;
+// Print options
+inline constexpr clv2::ListOptionInfo<LVPrintKind> PrintOptionsOpt{
+    "print", "Element to print.",
+    clv2::ValuesRef<LVPrintKind>(PrintKindVals, NumPrintKindVals),
+    clv2::cat(PrintCategory), clv2::CommaSeparated};
+
+// Report options
+inline constexpr clv2::ListOptionInfo<LVReportKind> ReportOptionsOpt{
+    "report",
+    "Reports layout used for print, compare and select.",
+    clv2::ValuesRef<LVReportKind>(ReportKindVals, NumReportKindVals),
+    clv2::cat(ReportCategory),
+    clv2::Hidden,
+    clv2::CommaSeparated};
+
+// Select options
+inline constexpr clv2::OptionInfo<bool> SelectIgnoreCaseOpt{
+    "select-nocase", "Ignore case distinctions when searching.",
+    clv2::cat(SelectCategory), clv2::Hidden};
+inline constexpr clv2::OptionInfo<bool> SelectUseRegexOpt{
+    "select-regex",
+    "Treat any <pattern> strings as regular expressions when "
+    "selecting instead of just as an exact string match.",
+    clv2::cat(SelectCategory), clv2::Hidden};
+inline constexpr clv2::ListOptionInfo<std::string> SelectPatternsOpt{
+    "select",
+    "Search elements matching the given pattern.",
+    clv2::cat(SelectCategory),
+    clv2::Hidden,
+    clv2::value_desc("pattern"),
+    clv2::CommaSeparated};
+inline constexpr clv2::ListOptionInfo<uint64_t> SelectOffsetsOpt{
+    "select-offsets", "Offset element to print.", clv2::cat(SelectCategory),
+    clv2::Hidden,     clv2::value_desc("offset"), clv2::CommaSeparated};
+inline constexpr clv2::ListOptionInfo<LVElementKind> SelectElementsOpt{
+    "select-elements",
+    "Conditions to use when printing elements.",
+    clv2::ValuesRef<LVElementKind>(ElementKindVals, NumElementKindVals),
+    clv2::cat(SelectCategory),
+    clv2::Hidden,
+    clv2::CommaSeparated};
+inline constexpr clv2::ListOptionInfo<LVLineKind> SelectLinesOpt{
+    "select-lines",
+    "Line kind to use when printing lines.",
+    clv2::ValuesRef<LVLineKind>(LineKindVals, NumLineKindVals),
+    clv2::cat(SelectCategory),
+    clv2::Hidden,
+    clv2::CommaSeparated};
+inline constexpr clv2::ListOptionInfo<LVScopeKind> SelectScopesOpt{
+    "select-scopes",
+    "Scope kind to use when printing scopes.",
+    clv2::ValuesRef<LVScopeKind>(ScopeKindVals, NumScopeKindVals),
+    clv2::cat(SelectCategory),
+    clv2::Hidden,
+    clv2::CommaSeparated};
+inline constexpr clv2::ListOptionInfo<LVSymbolKind> SelectSymbolsOpt{
+    "select-symbols",
+    "Symbol kind to use when printing symbols.",
+    clv2::ValuesRef<LVSymbolKind>(SymbolKindVals, NumSymbolKindVals),
+    clv2::cat(SelectCategory),
+    clv2::Hidden,
+    clv2::CommaSeparated};
+inline constexpr clv2::ListOptionInfo<LVTypeKind> SelectTypesOpt{
+    "select-types",
+    "Type kind to use when printing types.",
+    clv2::ValuesRef<LVTypeKind>(TypeKindVals, NumTypeKindVals),
+    clv2::cat(SelectCategory),
+    clv2::Hidden,
+    clv2::CommaSeparated};
+
+// Warning options
+inline constexpr clv2::ListOptionInfo<LVWarningKind> WarningOptionsOpt{
+    "warning",
+    "Warnings to generate.",
+    clv2::ValuesRef<LVWarningKind>(WarningKindVals, NumWarningKindVals),
+    clv2::cat(WarningCategory),
+    clv2::Hidden,
+    clv2::CommaSeparated};
+
+// Internal options
+inline constexpr clv2::ListOptionInfo<LVInternalKind> InternalOptionsOpt{
+    "internal",
+    "Traces to enable.",
+    clv2::ValuesRef<LVInternalKind>(InternalKindVals, NumInternalKindVals),
+    clv2::cat(InternalCategory),
+    clv2::Hidden,
+    clv2::CommaSeparated};
 
 extern LVOptions ReaderOptions;
 

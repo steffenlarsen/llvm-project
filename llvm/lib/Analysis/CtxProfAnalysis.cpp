@@ -14,15 +14,20 @@
 #include "llvm/Analysis/CtxProfAnalysis.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/IR/Analysis.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/ProfileData/PGOCtxProfReader.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include <deque>
 #include <memory>
@@ -31,25 +36,33 @@
 
 using namespace llvm;
 
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Support/CommandLineCompat.h"
+using namespace llvm::clv2;
+
 namespace llvm {
 
-cl::opt<std::string>
-    UseCtxProfile("use-ctx-profile", cl::init(""), cl::Hidden,
-                  cl::desc("Use the specified contextual profile file"));
+std::string getUseCtxProfile(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&AnalysisOptsReg, &AN_UseCtxProfile>(
+      Ctx, std::string{});
+}
 
-static cl::opt<CtxProfAnalysisPrinterPass::PrintMode> PrintLevel(
-    "ctx-profile-printer-level",
-    cl::init(CtxProfAnalysisPrinterPass::PrintMode::YAML), cl::Hidden,
-    cl::values(clEnumValN(CtxProfAnalysisPrinterPass::PrintMode::Everything,
-                          "everything", "print everything - most verbose"),
-               clEnumValN(CtxProfAnalysisPrinterPass::PrintMode::YAML, "yaml",
-                          "just the yaml representation of the profile")),
-    cl::desc("Verbosity level of the contextual profile printer pass."));
+static CtxProfAnalysisPrinterPass::PrintMode
+getCtxProfilePrintLevel(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&AnalysisOptsReg,
+                                    &AN_CtxProfilePrinterLevel>(
+      Ctx, CtxProfAnalysisPrinterPass::PrintMode::YAML);
+}
 
-static cl::opt<bool> ForceIsInSpecializedModule(
-    "ctx-profile-force-is-specialized", cl::init(false),
-    cl::desc("Treat the given module as-if it were containing the "
-             "post-thinlink module containing the root"));
+bool getForceIsInSpecializedModule(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_ForceIsInSpecializedModule>(Ctx);
+}
+
+bool getForceIsInSpecializedModuleWasSpecified(
+    const clv2::OptionsContext &Ctx) {
+  return clv2::wasOptSpecified<&AnalysisOptsReg,
+                               &AN_ForceIsInSpecializedModule>(Ctx);
+}
 
 class ProfileAnnotatorImpl final {
   friend class ProfileAnnotator;
@@ -421,19 +434,25 @@ bool ProfileAnnotator::getOutgoingBranchWeights(
 AnalysisKey CtxProfAnalysis::Key;
 
 CtxProfAnalysis::CtxProfAnalysis(std::optional<StringRef> Profile)
-    : Profile([&]() -> std::optional<StringRef> {
+    : Profile([&]() -> std::optional<std::string> {
         if (Profile)
-          return *Profile;
-        if (UseCtxProfile.getNumOccurrences())
-          return UseCtxProfile;
+          return Profile->str();
         return std::nullopt;
       }()) {}
 
 PGOContextualProfile CtxProfAnalysis::run(Module &M,
                                           ModuleAnalysisManager &MAM) {
-  if (!Profile)
-    return {};
-  ErrorOr<std::unique_ptr<MemoryBuffer>> MB = MemoryBuffer::getFile(*Profile);
+  // If no profile was explicitly provided, try to read it from options.
+  // Defer this to run() where the Module context is available.
+  std::optional<std::string> EffectiveProfile = Profile;
+  if (!EffectiveProfile) {
+    auto CtxProfile = getUseCtxProfile(M.getContext().getOptionsContext());
+    if (CtxProfile.empty())
+      return {};
+    EffectiveProfile = CtxProfile;
+  }
+  ErrorOr<std::unique_ptr<MemoryBuffer>> MB =
+      MemoryBuffer::getFile(*EffectiveProfile);
   if (auto EC = MB.getError()) {
     M.getContext().emitError("could not open contextual profile file: " +
                              EC.message());
@@ -467,6 +486,7 @@ PGOContextualProfile CtxProfAnalysis::run(Module &M,
   };
   const auto ProfileRootsInModule = DetermineRootsInModule();
   PGOContextualProfile Result;
+  Result.OptsCtx = &M.getContext().getOptionsContext();
 
   // the logic from here on allows for modules that contain - by design - more
   // than one root. We currently don't support that, because the determination
@@ -521,17 +541,19 @@ PGOContextualProfile CtxProfAnalysis::run(Module &M,
 }
 
 CtxProfAnalysisPrinterPass::CtxProfAnalysisPrinterPass(raw_ostream &OS)
-    : OS(OS), Mode(PrintLevel) {}
+    : OS(OS), Mode(PrintMode::Everything) {}
 
 PreservedAnalyses CtxProfAnalysisPrinterPass::run(Module &M,
                                                   ModuleAnalysisManager &MAM) {
+  auto EffectiveMode =
+      getCtxProfilePrintLevel(M.getContext().getOptionsContext());
   CtxProfAnalysis::Result &C = MAM.getResult<CtxProfAnalysis>(M);
   if (C.contexts().empty()) {
     OS << "No contextual profile was provided.\n";
     return PreservedAnalyses::all();
   }
 
-  if (Mode == PrintMode::Everything) {
+  if (EffectiveMode == PrintMode::Everything) {
     OS << "Function Info:\n";
     for (const auto &[Guid, FuncInfo] : C.FuncInfo)
       OS << Guid << " : " << FuncInfo.Name
@@ -539,11 +561,11 @@ PreservedAnalyses CtxProfAnalysisPrinterPass::run(Module &M,
          << ". MaxCallsiteID: " << FuncInfo.NextCallsiteIndex << "\n";
   }
 
-  if (Mode == PrintMode::Everything)
+  if (EffectiveMode == PrintMode::Everything)
     OS << "\nCurrent Profile:\n";
   convertCtxProfToYaml(OS, C.profiles());
   OS << "\n";
-  if (Mode == PrintMode::YAML)
+  if (EffectiveMode == PrintMode::YAML)
     return PreservedAnalyses::all();
 
   OS << "\nFlat Profile:\n";
@@ -628,8 +650,10 @@ void PGOContextualProfile::initIndex() {
 }
 
 bool PGOContextualProfile::isInSpecializedModule() const {
-  return ForceIsInSpecializedModule.getNumOccurrences() > 0
-             ? ForceIsInSpecializedModule
+  // ForceIsInSpecializedModule is only meaningful when explicitly specified
+  // via the command line.
+  return getForceIsInSpecializedModuleWasSpecified(*OptsCtx)
+             ? getForceIsInSpecializedModule(*OptsCtx)
              : IsInSpecializedModule;
 }
 

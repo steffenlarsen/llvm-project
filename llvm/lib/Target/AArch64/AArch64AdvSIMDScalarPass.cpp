@@ -41,19 +41,18 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "aarch64-simd-scalar"
 
-// Allow forcing all i64 operations with equivalent SIMD instructions to use
-// them. For stress-testing the transformation function.
-static cl::opt<bool>
-TransformAll("aarch64-simd-scalar-force-all",
-             cl::desc("Force use of AdvSIMD scalar instructions everywhere"),
-             cl::init(false), cl::Hidden);
+static bool getTransformAll(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::A64_SIMDScalarForceAll>(
+      F.getContext().getOptionsContext());
+}
 
 STATISTIC(NumScalarInsnsUsed, "Number of scalar instructions used");
 STATISTIC(NumCopiesDeleted, "Number of cross-class copies deleted");
@@ -282,7 +281,7 @@ bool AArch64AdvSIMDScalarImpl::isProfitableToTransform(
 
   // Finally, even if we otherwise wouldn't transform, check if we're forcing
   // transformation of everything.
-  return TransformAll;
+  return getTransformAll(MI.getMF()->getFunction());
 }
 
 static MachineInstr *insertCopy(const TargetInstrInfo *TII, MachineInstr &MI,

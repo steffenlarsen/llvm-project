@@ -26,7 +26,7 @@
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/SymbolSize.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
@@ -34,116 +34,131 @@
 #include "llvm/Support/Memory.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
+#include "llvm/Support/SupportOptionsOptInfos.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "llvm/Support/OptionsContext.h"
 #include <future>
 #include <list>
 
 using namespace llvm;
 using namespace llvm::object;
+using namespace llvm::clv2;
 
-static cl::OptionCategory RTDyldCategory("RTDyld Options");
+static constexpr OptionCategory RTDyldCategory{"RTDyld Options"};
 
-static cl::list<std::string> InputFileList(cl::Positional,
-                                           cl::desc("<input files>"),
-                                           cl::cat(RTDyldCategory));
+static constexpr ListOptionInfo<std::string> InputFileListOpt{
+    "input", "<input files>", Positional{}, ZeroOrMore, cat(RTDyldCategory)};
 
 enum ActionType {
   AC_Execute,
-  AC_PrintObjectLineInfo,
   AC_PrintLineInfo,
   AC_PrintDebugLineInfo,
+  AC_PrintObjectLineInfo,
   AC_Verify
 };
 
-static cl::opt<ActionType> Action(
-    cl::desc("Action to perform:"), cl::init(AC_Execute),
-    cl::values(
-        clEnumValN(AC_Execute, "execute",
-                   "Load, link, and execute the inputs."),
-        clEnumValN(AC_PrintLineInfo, "printline",
-                   "Load, link, and print line information for each function."),
-        clEnumValN(AC_PrintDebugLineInfo, "printdebugline",
-                   "Load, link, and print line information for each function "
-                   "using the debug object"),
-        clEnumValN(AC_PrintObjectLineInfo, "printobjline",
-                   "Like -printlineinfo but does not load the object first"),
-        clEnumValN(AC_Verify, "verify",
-                   "Load, link and verify the resulting memory image.")),
-    cl::cat(RTDyldCategory));
+static constexpr EnumVal<ActionType> ActionVals[] = {
+    {"execute", AC_Execute, "Load, link, and execute the inputs."},
+    {"printline", AC_PrintLineInfo,
+     "Load, link, and print line information for each function."},
+    {"printdebugline", AC_PrintDebugLineInfo,
+     "Load, link, and print line information for each function "
+     "using the debug object"},
+    {"printobjline", AC_PrintObjectLineInfo,
+     "Like -printlineinfo but does not load the object first"},
+    {"verify", AC_Verify, "Load, link and verify the resulting memory image."},
+};
+static constexpr auto ActionOpt =
+    makeEnumOption<ActionType>("", "Action to perform:", ActionVals,
+                               Init{AC_Execute}, cat(RTDyldCategory));
 
-static cl::opt<std::string>
-    EntryPoint("entry", cl::desc("Function to call as entry point."),
-               cl::init("_main"), cl::cat(RTDyldCategory));
+static constexpr OptionInfo<std::string> EntryPointOpt{
+    "entry", "Function to call as entry point.", Init{"_main"},
+    cat(RTDyldCategory)};
 
-static cl::list<std::string> Dylibs("dylib", cl::desc("Add library."),
-                                    cl::cat(RTDyldCategory));
+static constexpr ListOptionInfo<std::string> DylibsOpt{
+    "dylib", "Add library.", ZeroOrMore, cat(RTDyldCategory)};
 
-static cl::list<std::string> InputArgv("args", cl::Positional,
-                                       cl::desc("<program arguments>..."),
-                                       cl::PositionalEatsArgs,
-                                       cl::cat(RTDyldCategory));
+static constexpr ListOptionInfo<std::string> InputArgvOpt{
+    "args", "<program arguments>...", Positional{}, PositionalEatsArgs,
+    cat(RTDyldCategory)};
 
-static cl::opt<std::string>
-    TripleName("triple", cl::desc("Target triple for disassembler"),
-               cl::cat(RTDyldCategory));
+static constexpr OptionInfo<std::string> TripleNameOpt{
+    "triple", "Target triple for disassembler", cat(RTDyldCategory)};
 
-static cl::opt<std::string>
-    MCPU("mcpu",
-         cl::desc("Target a specific cpu type (-mcpu=help for details)"),
-         cl::value_desc("cpu-name"), cl::init(""), cl::cat(RTDyldCategory));
+static constexpr OptionInfo<std::string> MCPUOpt{
+    "mcpu", "Target a specific cpu type (-mcpu=help for details)",
+    value_desc("cpu-name"), Init{""}, cat(RTDyldCategory)};
 
-static cl::list<std::string>
-    CheckFiles("check",
-               cl::desc("File containing RuntimeDyld verifier checks."),
-               cl::cat(RTDyldCategory));
+static constexpr ListOptionInfo<std::string> CheckFilesOpt{
+    "check", "File containing RuntimeDyld verifier checks.", ZeroOrMore,
+    cat(RTDyldCategory)};
 
-static cl::opt<uint64_t>
-    PreallocMemory("preallocate",
-                   cl::desc("Allocate memory upfront rather than on-demand"),
-                   cl::init(0), cl::cat(RTDyldCategory));
+static constexpr OptionInfo<uint64_t> PreallocMemoryOpt{
+    "preallocate", "Allocate memory upfront rather than on-demand",
+    Init{uint64_t(0)}, cat(RTDyldCategory)};
 
-static cl::opt<uint64_t> TargetAddrStart(
+static constexpr OptionInfo<uint64_t> TargetAddrStartOpt{
     "target-addr-start",
-    cl::desc("For -verify only: start of phony target address "
-             "range."),
-    cl::init(4096), // Start at "page 1" - no allocating at "null".
-    cl::Hidden, cl::cat(RTDyldCategory));
+    "For -verify only: start of phony target address range.",
+    Init{uint64_t(4096)}, Hidden, cat(RTDyldCategory)};
 
-static cl::opt<uint64_t> TargetAddrEnd(
-    "target-addr-end",
-    cl::desc("For -verify only: end of phony target address range."),
-    cl::init(~0ULL), cl::Hidden, cl::cat(RTDyldCategory));
+static constexpr OptionInfo<uint64_t> TargetAddrEndOpt{
+    "target-addr-end", "For -verify only: end of phony target address range.",
+    Init{uint64_t(~0ULL)}, Hidden, cat(RTDyldCategory)};
 
-static cl::opt<uint64_t> TargetSectionSep(
+static constexpr OptionInfo<uint64_t> TargetSectionSepOpt{
     "target-section-sep",
-    cl::desc("For -verify only: Separation between sections in "
-             "phony target address space."),
-    cl::init(0), cl::Hidden, cl::cat(RTDyldCategory));
+    "For -verify only: Separation between sections in "
+    "phony target address space.",
+    Init{uint64_t(0)}, Hidden, cat(RTDyldCategory)};
 
-static cl::list<std::string>
-    SpecificSectionMappings("map-section",
-                            cl::desc("For -verify only: Map a section to a "
-                                     "specific address."),
-                            cl::Hidden, cl::cat(RTDyldCategory));
+static constexpr ListOptionInfo<std::string> SpecificSectionMappingsOpt{
+    "map-section", "For -verify only: Map a section to a specific address.",
+    ZeroOrMore, Hidden, cat(RTDyldCategory)};
 
-static cl::list<std::string> DummySymbolMappings(
+static constexpr ListOptionInfo<std::string> DummySymbolMappingsOpt{
     "dummy-extern",
-    cl::desc("For -verify only: Inject a symbol into the extern "
-             "symbol table."),
-    cl::Hidden, cl::cat(RTDyldCategory));
+    "For -verify only: Inject a symbol into the extern symbol table.",
+    ZeroOrMore, Hidden, cat(RTDyldCategory)};
 
-static cl::opt<bool> PrintAllocationRequests(
+static constexpr OptionInfo<bool> PrintAllocationRequestsOpt{
     "print-alloc-requests",
-    cl::desc("Print allocation requests made to the memory "
-             "manager by RuntimeDyld"),
-    cl::Hidden, cl::cat(RTDyldCategory));
+    "Print allocation requests made to the memory manager by RuntimeDyld",
+    Hidden, cat(RTDyldCategory)};
 
-static cl::opt<bool> ShowTimes("show-times",
-                               cl::desc("Show times for llvm-rtdyld phases"),
-                               cl::init(false), cl::cat(RTDyldCategory));
+static constexpr OptionInfo<bool> ShowTimesOpt{
+    "show-times", "Show times for llvm-rtdyld phases", Init{false},
+    cat(RTDyldCategory)};
+
+static constexpr OptionsRegistry<
+    &InputFileListOpt, &ActionOpt, &EntryPointOpt, &DylibsOpt, &InputArgvOpt,
+    &TripleNameOpt, &MCPUOpt, &CheckFilesOpt, &PreallocMemoryOpt,
+    &TargetAddrStartOpt, &TargetAddrEndOpt, &TargetSectionSepOpt,
+    &SpecificSectionMappingsOpt, &DummySymbolMappingsOpt,
+    &PrintAllocationRequestsOpt, &ShowTimesOpt>
+    RTDyldReg;
+
+// Parsed option values, populated in main() before any helper functions run.
+static std::vector<std::string> InputFileList;
+static std::vector<std::string> Dylibs;
+static std::vector<std::string> InputArgv;
+static std::string EntryPoint;
+static std::vector<std::string> CheckFiles;
+static std::vector<std::string> SpecificSectionMappings;
+static std::vector<std::string> DummySymbolMappings;
+static bool PrintAllocationRequests;
+static uint64_t PreallocMemory;
+static std::string TripleName;
+static std::string MCPU;
+static uint64_t TargetAddrStart;
+static uint64_t TargetAddrEnd;
+static uint64_t TargetSectionSep;
+static bool SpecifiedTargetAddrEnd;
 
 ExitOnError ExitOnErr;
 
@@ -725,7 +740,7 @@ static void remapSectionsAndSymbols(const llvm::Triple &TargetTriple,
 
   // If the -target-addr-end option wasn't explicitly passed, then set it to a
   // sensible default based on the target triple.
-  if (TargetAddrEnd.getNumOccurrences() == 0) {
+  if (!SpecifiedTargetAddrEnd) {
     if (TargetTriple.isArch16Bit())
       TargetAddrEnd = (1ULL << 16) - 1;
     else if (TargetTriple.isArch32Bit())
@@ -790,8 +805,9 @@ static int linkAndVerify() {
 
   TripleName = TheTriple.getTriple();
 
-  std::unique_ptr<MCSubtargetInfo> STI(
-      TheTarget->createMCSubtargetInfo(TheTriple, MCPU, ""));
+  std::unique_ptr<MCSubtargetInfo> STI(TheTarget->createMCSubtargetInfo(
+      TheTriple, MCPU, "",
+      /*Ctx=*/llvm::clv2::defaultOptionsContext()));
   if (!STI)
     ErrorAndExit("Unable to create subtarget info!");
 
@@ -1017,18 +1033,43 @@ static int linkAndVerify() {
 
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
-  ProgramName = argv[0];
 
   llvm::InitializeAllTargetInfos();
   llvm::InitializeAllTargetMCs();
   llvm::InitializeAllDisassemblers();
 
-  cl::HideUnrelatedOptions({&RTDyldCategory, &getColorCategory()});
-  cl::ParseCommandLineOptions(argc, argv, "llvm MC-JIT tool\n");
+  clv2::OptionParser P;
+  P.add<&RTDyldReg>();
+  RegisterCoreLLVMOptions(P);
+  P.hideUnrelatedOptions({&RTDyldCategory, &clv2::ColorOptionsCategory});
+  auto OptsCtx = P.parse(argc, argv, "llvm MC-JIT tool\n");
+  auto *Opts = OptsCtx->getViewPtr<&RTDyldReg>();
+
+  // Populate file-scope option values before any helper functions are called.
+  InputFileList = Opts->get<&InputFileListOpt>();
+  Dylibs = Opts->get<&DylibsOpt>();
+  InputArgv = Opts->get<&InputArgvOpt>();
+  EntryPoint = Opts->get<&EntryPointOpt>();
+  CheckFiles = Opts->get<&CheckFilesOpt>();
+  SpecificSectionMappings = Opts->get<&SpecificSectionMappingsOpt>();
+  DummySymbolMappings = Opts->get<&DummySymbolMappingsOpt>();
+  PrintAllocationRequests = Opts->get<&PrintAllocationRequestsOpt>();
+  PreallocMemory = Opts->get<&PreallocMemoryOpt>();
+  TripleName = Opts->get<&TripleNameOpt>();
+  MCPU = Opts->get<&MCPUOpt>();
+  TargetAddrStart = Opts->get<&TargetAddrStartOpt>();
+  TargetAddrEnd = Opts->get<&TargetAddrEndOpt>();
+  TargetSectionSep = Opts->get<&TargetSectionSepOpt>();
+  SpecifiedTargetAddrEnd = Opts->specified<&TargetAddrEndOpt>();
+
+  ProgramName = argv[0];
 
   ExitOnErr.setBanner(std::string(argv[0]) + ": ");
 
-  Timers = ShowTimes ? std::make_unique<RTDyldTimers>() : nullptr;
+  Timers =
+      Opts->get<&ShowTimesOpt>() ? std::make_unique<RTDyldTimers>() : nullptr;
+
+  ActionType Action = Opts->get<&ActionOpt>();
 
   int Result = 0;
   switch (Action) {

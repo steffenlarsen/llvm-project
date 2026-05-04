@@ -33,22 +33,22 @@
 
 #include "polly/DeadCodeElimination.h"
 #include "polly/DependenceInfo.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "isl/isl-noexceptions.h"
 
 using namespace llvm;
 using namespace polly;
 
-namespace {
+static int getDCEPreciseSteps(const Scop &S) {
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext()))
+    return Opts->get<&llvm::clv2::POLLY_DcePreciseSteps>();
+  return -1;
+}
 
-cl::opt<int> DCEPreciseSteps(
-    "polly-dce-precise-steps",
-    cl::desc("The number of precise steps between two approximating "
-             "iterations. (A value of -1 schedules another approximation stage "
-             "before the actual dead code elimination."),
-    cl::init(-1), cl::cat(PollyCategory));
+namespace {
 
 /// Return the set of live iterations.
 ///
@@ -134,7 +134,7 @@ static bool runDeadCodeElimination(Scop &S, int PreciseSteps,
 bool polly::runDeadCodeElim(Scop &S, DependenceAnalysis::Result &DA) {
   const Dependences &Deps = DA.getDependences(Dependences::AL_Statement);
 
-  bool Changed = runDeadCodeElimination(S, DCEPreciseSteps, Deps);
+  bool Changed = runDeadCodeElimination(S, getDCEPreciseSteps(S), Deps);
 
   // FIXME: We can probably avoid the recomputation of all dependences by
   // updating them explicitly.

@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- JumpThreading.cpp - Thread control through conditional blocks ------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -61,7 +63,6 @@
 #include "llvm/Support/BlockFrequency.h"
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -84,34 +85,38 @@ STATISTIC(NumThreads, "Number of jumps threaded");
 STATISTIC(NumFolds,   "Number of terminators folded");
 STATISTIC(NumDupes,   "Number of branch blocks duplicated to eliminate phi");
 
-static cl::opt<unsigned>
-BBDuplicateThreshold("jump-threading-threshold",
-          cl::desc("Max block size to duplicate for jump threading"),
-          cl::init(6), cl::Hidden);
+static unsigned getBBDuplicateThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_JumpThreadingThreshold>(
+      F.getContext().getOptionsContext());
+}
+static bool isBBDuplicateThresholdSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_JumpThreadingThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-ImplicationSearchThreshold(
-  "jump-threading-implication-search-threshold",
-  cl::desc("The number of predecessors to search for a stronger "
-           "condition to use to thread over a weaker condition"),
-  cl::init(3), cl::Hidden);
+static unsigned getImplicationSearchThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::SC_JumpThreadingImplicationSearchThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> PhiDuplicateThreshold(
-    "jump-threading-phi-threshold",
-    cl::desc("Max PHIs in BB to duplicate for jump threading"), cl::init(76),
-    cl::Hidden);
+static unsigned getPhiDuplicateThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_JumpThreadingPhiThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> ThreadAcrossLoopHeaders(
-    "jump-threading-across-loop-headers",
-    cl::desc("Allow JumpThreading to thread across loop headers, for testing"),
-    cl::init(false), cl::Hidden);
+static bool getThreadAcrossLoopHeaders(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_JumpThreadingAcrossLoopHeaders>(
+      F.getContext().getOptionsContext(), false);
+}
 
 namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 }
 
 JumpThreadingPass::JumpThreadingPass(int T) {
-  DefaultBBDupThreshold = (T == -1) ? BBDuplicateThreshold : unsigned(T);
+  DefaultBBDupThreshold = (T == -1) ? 6 : unsigned(T);
 }
 
 // Update branch probability information according to conditional
@@ -304,8 +309,8 @@ bool JumpThreadingPass::runImpl(Function &F_, FunctionAnalysisManager *FAM_,
 
   // Reduce the number of instructions duplicated when optimizing strictly for
   // size.
-  if (BBDuplicateThreshold.getNumOccurrences())
-    BBDupThreshold = BBDuplicateThreshold;
+  if (isBBDuplicateThresholdSpecified(*F))
+    BBDupThreshold = getBBDuplicateThreshold(*F);
   else if (F->hasMinSize())
     BBDupThreshold = 3;
   else
@@ -320,7 +325,7 @@ bool JumpThreadingPass::runImpl(Function &F_, FunctionAnalysisManager *FAM_,
     if (!DT.isReachableFromEntry(&BB))
       Unreachable.insert(&BB);
 
-  if (!ThreadAcrossLoopHeaders)
+  if (!getThreadAcrossLoopHeaders(*F))
     findLoopHeaders(*F);
 
   bool EverChanged = false;
@@ -441,7 +446,7 @@ static unsigned getJumpThreadDuplicationCost(const TargetTransformInfo *TTI,
       FirstNonPHI = &I;
       break;
     }
-    if (++PhiCount > PhiDuplicateThreshold)
+    if (++PhiCount > getPhiDuplicateThreshold(*BB->getParent()))
       return ~0U;
   }
 
@@ -1164,7 +1169,7 @@ bool JumpThreadingPass::processImpliedCondition(BasicBlock *BB) {
 
   auto &DL = BB->getDataLayout();
 
-  while (CurrentPred && Iter++ < ImplicationSearchThreshold) {
+  while (CurrentPred && Iter++ < getImplicationSearchThreshold(*F)) {
     auto *PBI = dyn_cast<CondBrInst>(CurrentPred->getTerminator());
     if (!PBI)
       return false;
@@ -1220,6 +1225,12 @@ static bool isOpDefinedInBlock(Value *Op, BasicBlock *BB) {
 /// This is an important optimization that encourages jump threading, and needs
 /// to be run interlaced with other jump threading tasks.
 bool JumpThreadingPass::simplifyPartiallyRedundantLoad(LoadInst *LoadI) {
+  // Read once: this is loop-invariant, but reaching it goes through
+  // Function::getContext(), which is out-of-line, so the optimizer cannot hoist
+  // it out of the predecessor-scan loop below.
+  const unsigned MaxInstsToScan =
+      getDefMaxInstsToScan(F->getContext().getOptionsContext());
+
   // Don't hack volatile and ordered loads.
   if (!LoadI->isUnordered()) return false;
 
@@ -1250,7 +1261,7 @@ bool JumpThreadingPass::simplifyPartiallyRedundantLoad(LoadInst *LoadI) {
   // The dominator tree is updated lazily and may not be valid at this point.
   BatchAA.disableDominatorTree();
   if (Value *AvailableVal = FindAvailableLoadedValue(
-          LoadI, LoadBB, BBIt, DefMaxInstsToScan, &BatchAA, &IsLoadCSE)) {
+          LoadI, LoadBB, BBIt, MaxInstsToScan, &BatchAA, &IsLoadCSE)) {
     // If the value of the load is locally available within the block, just use
     // it.  This frequently occurs for reg2mem'd allocas.
 
@@ -1314,20 +1325,20 @@ bool JumpThreadingPass::simplifyPartiallyRedundantLoad(LoadInst *LoadI) {
                        LocationSize::precise(DL.getTypeStoreSize(AccessTy)),
                        AATags);
     PredAvailable = findAvailablePtrLoadStore(
-        Loc, AccessTy, LoadI->isAtomic(), PredBB, BBIt, DefMaxInstsToScan,
+        Loc, AccessTy, LoadI->isAtomic(), PredBB, BBIt, MaxInstsToScan,
         &BatchAA, &IsLoadCSE, &NumScanedInst);
 
     // If PredBB has a single predecessor, continue scanning through the
     // single predecessor.
     BasicBlock *SinglePredBB = PredBB;
     while (!PredAvailable && SinglePredBB && BBIt == SinglePredBB->begin() &&
-           NumScanedInst < DefMaxInstsToScan) {
+           NumScanedInst < MaxInstsToScan) {
       SinglePredBB = SinglePredBB->getSinglePredecessor();
       if (SinglePredBB) {
         BBIt = SinglePredBB->end();
         PredAvailable = findAvailablePtrLoadStore(
             Loc, AccessTy, LoadI->isAtomic(), SinglePredBB, BBIt,
-            (DefMaxInstsToScan - NumScanedInst), &BatchAA, &IsLoadCSE,
+            (MaxInstsToScan - NumScanedInst), &BatchAA, &IsLoadCSE,
             &NumScanedInst);
       }
     }
@@ -3050,7 +3061,7 @@ bool JumpThreadingPass::tryToUnfoldSelectInCurrBB(BasicBlock *BB) {
 
     auto *BPI = getBPI();
     auto *BFI = getBFI();
-    if (!ProfcheckDisableMetadataFixes && BranchWeights) {
+    if (!getProfcheckDisableMetadataFixes(BB->getContext()) && BranchWeights) {
       SmallVector<uint32_t, 2> BW;
       [[maybe_unused]] bool Extracted = extractBranchWeights(BranchWeights, BW);
       assert(Extracted);

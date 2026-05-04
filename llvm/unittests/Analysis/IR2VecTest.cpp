@@ -281,7 +281,7 @@ TEST(EmbeddingTest, MismatchedDimensionsApproximatelyEqual) {
 TEST(IR2VecTest, CreateSymbolicEmbedder) {
   Vocabulary V = Vocabulary(Vocabulary::createDummyVocabForTest());
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module M("M", Ctx);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(Ctx), false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "f", M);
@@ -293,7 +293,7 @@ TEST(IR2VecTest, CreateSymbolicEmbedder) {
 TEST(IR2VecTest, CreateFlowAwareEmbedder) {
   Vocabulary V = Vocabulary(Vocabulary::createDummyVocabForTest());
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module M("M", Ctx);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(Ctx), false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "f", M);
@@ -305,7 +305,7 @@ TEST(IR2VecTest, CreateFlowAwareEmbedder) {
 TEST(IR2VecTest, CreateInvalidMode) {
   Vocabulary V = Vocabulary(Vocabulary::createDummyVocabForTest());
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module M("M", Ctx);
   FunctionType *FTy = FunctionType::get(Type::getVoidTy(Ctx), false);
   Function *F = Function::Create(FTy, Function::ExternalLinkage, "f", M);
@@ -329,7 +329,7 @@ TEST(IR2VecTest, ZeroDimensionEmbedding) {
 class IR2VecTestFixture : public ::testing::Test {
 protected:
   std::unique_ptr<Vocabulary> V;
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   Function *F = nullptr;
   BasicBlock *BB = nullptr;
@@ -510,7 +510,7 @@ TEST(IR2VecVocabularyTest, DummyVocabTest) {
       ExpectedVocab.push_back(Emb);
 
     IR2VecVocabAnalysis VocabAnalysis(std::move(VocabVec));
-    LLVMContext TestCtx;
+    LLVMContext TestCtx{llvm::clv2::defaultOptionsContext()};
     Module TestMod("TestModuleForVocabAnalysis", TestCtx);
     ModuleAnalysisManager MAM;
     Vocabulary Result = VocabAnalysis.run(TestMod, MAM);
@@ -544,7 +544,7 @@ TEST(IR2VecVocabularyTest, SlotIdxMapping) {
 #undef EXPECT_TYPE_SLOT
 
   // Test getIndex for Value operands
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module M("TestM", Ctx);
   FunctionType *FTy =
       FunctionType::get(Type::getVoidTy(Ctx), {Type::getInt32Ty(Ctx)}, false);
@@ -1039,75 +1039,29 @@ protected:
     std::string JSON = "{\n  \"Opcodes\": {\n";
 
     // Add all required opcodes
-    const char *Opcodes[] = {"Ret",
-                             "UncondBr",
-                             "CondBr",
-                             "Switch",
-                             "IndirectBr",
-                             "Invoke",
-                             "Resume",
-                             "Unreachable",
-                             "CleanupRet",
-                             "CatchRet",
-                             "CatchSwitch",
-                             "CallBr",
-                             "FNeg",
-                             "Add",
-                             "FAdd",
-                             "Sub",
-                             "FSub",
-                             "Mul",
-                             "FMul",
-                             "UDiv",
-                             "SDiv",
-                             "FDiv",
-                             "URem",
-                             "SRem",
-                             "FRem",
-                             "Shl",
-                             "LShr",
-                             "AShr",
-                             "And",
-                             "Or",
-                             "Xor",
-                             "Alloca",
-                             "Load",
-                             "Store",
-                             "GetElementPtr",
-                             "Fence",
-                             "AtomicCmpXchg",
-                             "AtomicRMW",
-                             "Trunc",
-                             "ZExt",
-                             "SExt",
-                             "FPToUI",
-                             "FPToSI",
-                             "UIToFP",
-                             "SIToFP",
-                             "FPTrunc",
-                             "FPExt",
-                             "PtrToInt",
-                             "IntToPtr",
-                             "BitCast",
-                             "AddrSpaceCast",
-                             "ICmp",
-                             "FCmp",
-                             "PHI",
-                             "Call",
-                             "Select",
-                             "UserOp1",
-                             "UserOp2",
-                             "VAArg",
-                             "ExtractElement",
-                             "InsertElement",
-                             "ShuffleVector",
-                             "ExtractValue",
-                             "InsertValue",
-                             "LandingPad",
-                             "Freeze",
-                             "PtrToAddr",
-                             "AddrToPtr",
-                             "CleanupPad",
+    const char *Opcodes[] = {"Ret",           "UncondBr",      "CondBr",
+                             "Switch",        "IndirectBr",    "Invoke",
+                             "Resume",        "Unreachable",   "CleanupRet",
+                             "CatchRet",      "CatchSwitch",   "CallBr",
+                             "FNeg",          "Add",           "FAdd",
+                             "Sub",           "FSub",          "Mul",
+                             "FMul",          "UDiv",          "SDiv",
+                             "FDiv",          "URem",          "SRem",
+                             "FRem",          "Shl",           "LShr",
+                             "AShr",          "And",           "Or",
+                             "Xor",           "Alloca",        "Load",
+                             "Store",         "GetElementPtr", "Fence",
+                             "AtomicCmpXchg", "AtomicRMW",     "Trunc",
+                             "ZExt",          "SExt",          "FPToUI",
+                             "FPToSI",        "UIToFP",        "SIToFP",
+                             "FPTrunc",       "FPExt",         "PtrToInt",
+                             "IntToPtr",      "BitCast",       "AddrSpaceCast",
+                             "ICmp",          "FCmp",          "PHI",
+                             "Call",          "Select",        "UserOp1",
+                             "UserOp2",       "VAArg",         "ExtractElement",
+                             "InsertElement", "ShuffleVector", "ExtractValue",
+                             "InsertValue",   "LandingPad",    "Freeze",
+                             "PtrToAddr",     "AddrToPtr",     "CleanupPad",
                              "CatchPad"};
 
     bool First = true;
@@ -1271,7 +1225,7 @@ TEST_F(VocabFileTest, FromFileDefaultWeights) {
   EXPECT_TRUE(IntTyEmb.approximatelyEquals(Embedding(2, 0.25)));
 
   // Original arg values are [0.2, 0.2], with default weight 0.2 -> [0.04, 0.04]
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Constant *C = ConstantInt::get(Type::getInt32Ty(Ctx), 42);
   const Embedding &ConstEmb = V[*C];
   EXPECT_TRUE(ConstEmb.approximatelyEquals(Embedding(2, 0.04)));

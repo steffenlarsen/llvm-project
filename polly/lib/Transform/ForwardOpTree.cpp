@@ -11,7 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/ForwardOpTree.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopBuilder.h"
 #include "polly/ScopInfo.h"
 #include "polly/Support/GICHelper.h"
@@ -28,7 +28,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -44,26 +44,7 @@
 using namespace llvm;
 using namespace polly;
 
-static cl::opt<bool>
-    AnalyzeKnown("polly-optree-analyze-known",
-                 cl::desc("Analyze array contents for load forwarding"),
-                 cl::cat(PollyCategory), cl::init(true), cl::Hidden);
 
-static cl::opt<bool>
-    NormalizePHIs("polly-optree-normalize-phi",
-                  cl::desc("Replace PHIs by their incoming values"),
-                  cl::cat(PollyCategory), cl::init(false), cl::Hidden);
-
-static cl::opt<unsigned>
-    MaxOps("polly-optree-max-ops",
-           cl::desc("Maximum number of ISL operations to invest for known "
-                    "analysis; 0=no limit"),
-           cl::init(1000000), cl::cat(PollyCategory), cl::Hidden);
-
-static cl::opt<bool>
-    PollyPrintOptree("polly-print-optree",
-                     cl::desc("Polly - Print forward operand tree result"),
-                     cl::cat(PollyCategory));
 
 STATISTIC(KnownAnalyzed, "Number of successfully analyzed SCoPs");
 STATISTIC(KnownOutOfQuota,
@@ -359,7 +340,11 @@ public:
       IslQuotaScope QuotaScope = MaxOpGuard.enter();
 
       computeCommon();
-      if (NormalizePHIs)
+      bool NormPHIs = false;
+      if (auto *Opts = polly_opts::getPollyOpts(
+              S->getFunction().getContext().getOptionsContext()))
+        NormPHIs = Opts->get<&llvm::clv2::POLLY_OptreeNormalizePhi>();
+      if (NormPHIs)
         computeNormalizedPHIs();
       Known = computeKnown(true, true);
 
@@ -776,7 +761,11 @@ public:
     }
 
     case VirtualUse::ReadOnly: {
-      if (!ModelReadOnlyScalars)
+      bool ModelROScalars = true;
+      if (auto *Opts = polly_opts::getPollyOpts(
+              S->getFunction().getContext().getOptionsContext()))
+        ModelROScalars = Opts->get<&llvm::clv2::POLLY_AnalyzeReadOnlyScalars>();
+      if (!ModelROScalars)
         return ForwardingAction::triviallyForwardable(false, UseVal);
 
       // If we model read-only scalars, we need to create a MemoryAccess for it.
@@ -1037,10 +1026,18 @@ static std::unique_ptr<ForwardOpTreeImpl> runForwardOpTreeImpl(Scop &S,
                                                                LoopInfo &LI) {
   std::unique_ptr<ForwardOpTreeImpl> Impl;
   {
-    IslMaxOperationsGuard MaxOpGuard(S.getIslCtx().get(), MaxOps, false);
+    unsigned MaxOpsVal = 1000000;
+    if (auto *Opts = polly_opts::getPollyOpts(
+            S.getFunction().getContext().getOptionsContext()))
+      MaxOpsVal = Opts->get<&llvm::clv2::POLLY_OptreeMaxOps>();
+    IslMaxOperationsGuard MaxOpGuard(S.getIslCtx().get(), MaxOpsVal, false);
     Impl = std::make_unique<ForwardOpTreeImpl>(&S, &LI, MaxOpGuard);
 
-    if (AnalyzeKnown) {
+    bool AnalyzeKnownVal = true;
+    if (auto *Opts = polly_opts::getPollyOpts(
+            S.getFunction().getContext().getOptionsContext()))
+      AnalyzeKnownVal = Opts->get<&llvm::clv2::POLLY_OptreeAnalyzeKnown>();
+    if (AnalyzeKnownVal) {
       POLLY_DEBUG(dbgs() << "Prepare forwarders...\n");
       Impl->computeKnownValues();
     }
@@ -1075,7 +1072,11 @@ bool polly::runForwardOpTree(Scop &S) {
   LoopInfo &LI = *S.getLI();
 
   std::unique_ptr<ForwardOpTreeImpl> Impl = runForwardOpTreeImpl(S, LI);
-  if (PollyPrintOptree) {
+  bool PrintOptree = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext()))
+    PrintOptree = Opts->get<&llvm::clv2::POLLY_PrintOptree>();
+  if (PrintOptree) {
     outs() << "Printing analysis 'Polly - Forward operand tree' for region: '"
            << S.getName() << "' in function '" << S.getFunction().getName()
            << "':\n";

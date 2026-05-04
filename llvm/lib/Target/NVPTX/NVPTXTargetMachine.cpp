@@ -19,13 +19,18 @@
 #include "NVPTXTargetTransformInfo.h"
 #include "TargetInfo/NVPTXTargetInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/IntrinsicsNVPTX.h"
+#include "llvm/IR/Module.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Pass.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Triple.h"
@@ -39,26 +44,29 @@
 
 using namespace llvm;
 
-// LSV is still relatively new; this switch lets us turn it off in case we
-// encounter (or suspect) a bug.
-cl::opt<bool>
-    DisableLoadStoreVectorizer("disable-nvptx-load-store-vectorizer",
-                               cl::desc("Disable load/store vectorizer"),
-                               cl::init(false), cl::Hidden);
+[[maybe_unused]] static bool getDisableLoadStoreVectorizer(const Module &M) {
+  return clv2::getOptValOr<&clv2::NVPTXOptsReg,
+                           &llvm::clv2::NVPTX_DisableLoadStoreVectorizer>(
+      M.getContext().getOptionsContext(), false);
+}
 
-// NVPTX IR Peephole is a new pass; this option will lets us turn it off in case
-// we encounter some issues.
-cl::opt<bool> DisableNVPTXIRPeephole("disable-nvptx-ir-peephole",
-                                     cl::desc("Disable NVPTX IR Peephole"),
-                                     cl::init(false), cl::Hidden);
+[[maybe_unused]] static bool getDisableNVPTXIRPeephole(const Module &M) {
+  return clv2::getOptValOr<&clv2::NVPTXOptsReg,
+                           &llvm::clv2::NVPTX_DisableIRPeephole>(
+      M.getContext().getOptionsContext(), false);
+}
 
-// TODO: Remove this flag when we are confident with no regressions.
-static cl::opt<bool> DisableRequireStructuredCFG(
-    "disable-nvptx-require-structured-cfg",
-    cl::desc("Transitional flag to turn off NVPTX's requirement on preserving "
-             "structured CFG. The requirement should be disabled only when "
-             "unexpected regressions happen."),
-    cl::init(false), cl::Hidden);
+[[maybe_unused]] static bool getDisableRequireStructuredCFG(const Module &M) {
+  return clv2::getOptValOr<&clv2::NVPTXOptsReg,
+                           &llvm::clv2::NVPTX_DisableRequireStructuredCFG>(
+      M.getContext().getOptionsContext(), false);
+}
+
+[[maybe_unused]] static bool getEarlyByValArgsCopy(const Module &M) {
+  return clv2::getOptValOr<&clv2::NVPTXOptsReg,
+                           &llvm::clv2::NVPTX_EarlyByValArgsCopy>(
+      M.getContext().getOptionsContext(), false);
+}
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeNVPTXTarget() {
   // Register the target.
@@ -108,7 +116,9 @@ NVPTXTargetMachine::NVPTXTargetMachine(const Target &T, const Triple &TT,
                                getEffectiveCodeModel(CM, CodeModel::Small), OL),
       TLOF(std::make_unique<NVPTXTargetObjectFile>()),
       Subtarget(TT, CPU, FS, *this), StrPool(StrAlloc) {
-  if (!DisableRequireStructuredCFG)
+  if (!clv2::getOptValOr<&clv2::NVPTXOptsReg,
+                         &clv2::NVPTX_DisableRequireStructuredCFG>(
+          Options.getOptsCtx(), false))
     setRequiresStructuredCFG(true);
   // NVPTX does not produce verifier-clean MIR yet; see isMachineVerifierClean()
   // for the legacy pass manager equivalent.
@@ -311,13 +321,20 @@ void NVPTXPassConfig::addIRPasses() {
   // but EarlyCSE can do neither of them.
   if (getOptLevel() != CodeGenOptLevel::None) {
     addEarlyCSEOrGVNPass();
-    if (!DisableLoadStoreVectorizer)
-      addPass(createLoadStoreVectorizerPass());
-    addPass(createSROAPass(/*PreserveCFG=*/true,
-                           /*AggregateToVector=*/true));
+    {
+      if (!clv2::getOptValOr<&clv2::NVPTXOptsReg,
+                             &clv2::NVPTX_DisableLoadStoreVectorizer>(
+              getNVPTXTargetMachine().getOptionsContext(), false))
+        addPass(createLoadStoreVectorizerPass());
+    }
+    addPass(createSROAPass());
     addPass(createNVPTXTagInvariantLoadsPass());
-    if (!DisableNVPTXIRPeephole)
-      addPass(createNVPTXIRPeepholePass());
+    {
+      if (!clv2::getOptValOr<&clv2::NVPTXOptsReg,
+                             &clv2::NVPTX_DisableIRPeephole>(
+              getNVPTXTargetMachine().getOptionsContext(), false))
+        addPass(createNVPTXIRPeepholePass());
+    }
   }
 
   if (ST.hasPTXASUnreachableBug()) {

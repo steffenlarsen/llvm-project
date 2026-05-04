@@ -9,6 +9,7 @@
 #include "AnalysisInternal.h"
 #include "clang-include-cleaner/Analysis.h"
 #include "clang-include-cleaner/Record.h"
+#include "clang-tools-extra/ClangToolsExtraOptionsOptInfos.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/Lex/Preprocessor.h"
@@ -18,7 +19,8 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/Signals.h"
@@ -50,71 +52,63 @@ missing entirely. (clang-include-fixer can do this).
 
 cl::OptionCategory IncludeCleaner("clang-include-cleaner");
 
-cl::opt<std::string> HTMLReportPath{
-    "html",
-    cl::desc("Specify an output filename for an HTML report. "
-             "This describes both recommendations and reasons for changes."),
-    cl::cat(IncludeCleaner),
-};
-
-cl::opt<std::string> OnlyHeaders{
-    "only-headers",
-    cl::desc("A comma-separated list of regexes to match against suffix of a "
-             "header. Only headers that match will be analyzed."),
-    cl::init(""),
-    cl::cat(IncludeCleaner),
-};
-
-cl::opt<std::string> IgnoreHeaders{
-    "ignore-headers",
-    cl::desc("A comma-separated list of regexes to match against suffix of a "
-             "header, and disable analysis if matched."),
-    cl::init(""),
-    cl::cat(IncludeCleaner),
-};
-
 enum class PrintStyle { Changes, Final };
-cl::opt<PrintStyle> Print{
-    "print",
-    cl::values(
-        clEnumValN(PrintStyle::Changes, "changes", "Print symbolic changes"),
-        clEnumValN(PrintStyle::Final, "", "Print final code")),
-    cl::ValueOptional,
-    cl::init(PrintStyle::Final),
-    cl::desc("Print the list of headers to insert and remove"),
-    cl::cat(IncludeCleaner),
-};
 
-cl::opt<bool> Edit{
-    "edit",
-    cl::desc("Apply edits to analyzed source files"),
-    cl::cat(IncludeCleaner),
-};
-cl::opt<bool> Insert{
-    "insert",
-    cl::desc(
-        "Allow header insertions (deprecated. Use -disable-insert instead)"),
-    cl::init(true),
-    cl::cat(IncludeCleaner),
-};
-cl::opt<bool> Remove{
-    "remove",
-    cl::desc("Allow header removals (deprecated. Use -disable-remove instead)"),
-    cl::init(true),
-    cl::cat(IncludeCleaner),
-};
-cl::opt<bool> DisableInsert{
-    "disable-insert",
-    cl::desc("Disable header insertions"),
-    cl::init(false),
-    cl::cat(IncludeCleaner),
-};
-cl::opt<bool> DisableRemove{
-    "disable-remove",
-    cl::desc("Disable header removals"),
-    cl::init(false),
-    cl::cat(IncludeCleaner),
-};
+static std::string HTMLReportPath;
+static std::string OnlyHeaders = "";
+static std::string IgnoreHeaders = "";
+static PrintStyle Print = PrintStyle::Final;
+static bool PrintWasSet = false;
+static bool Edit = false;
+static bool Insert = true;
+static bool Remove = true;
+static bool DisableInsert = false;
+static bool DisableRemove = false;
+static bool HTMLReportPathWasSet = false;
+
+inline constexpr llvm::clv2::OptionsRegistry<
+    &llvm::clv2::CTE_IC_Html, &llvm::clv2::CTE_IC_OnlyHeaders,
+    &llvm::clv2::CTE_IC_IgnoreHeaders, &llvm::clv2::CTE_IC_Print,
+    &llvm::clv2::CTE_IC_Edit, &llvm::clv2::CTE_IC_Insert,
+    &llvm::clv2::CTE_IC_Remove, &llvm::clv2::CTE_IC_DisableInsert,
+    &llvm::clv2::CTE_IC_DisableRemove>
+    ToolOptsReg;
+
+static void applyToolOpts(const decltype(ToolOptsReg)::ParsedOptionsT &Opts) {
+  HTMLReportPath = Opts.get<&llvm::clv2::CTE_IC_Html>();
+  HTMLReportPathWasSet = !HTMLReportPath.empty();
+  OnlyHeaders = Opts.get<&llvm::clv2::CTE_IC_OnlyHeaders>();
+  IgnoreHeaders = Opts.get<&llvm::clv2::CTE_IC_IgnoreHeaders>();
+  if (Opts.specified<&llvm::clv2::CTE_IC_Print>()) {
+    PrintWasSet = true;
+    auto PrintVal = Opts.get<&llvm::clv2::CTE_IC_Print>();
+    Print = (PrintVal == llvm::clv2::ICPrintStyle::Changes)
+                ? PrintStyle::Changes
+                : PrintStyle::Final;
+  }
+  Edit = Opts.get<&llvm::clv2::CTE_IC_Edit>();
+  Insert = Opts.get<&llvm::clv2::CTE_IC_Insert>();
+  Remove = Opts.get<&llvm::clv2::CTE_IC_Remove>();
+  DisableInsert = Opts.get<&llvm::clv2::CTE_IC_DisableInsert>();
+  DisableRemove = Opts.get<&llvm::clv2::CTE_IC_DisableRemove>();
+}
+
+static void configureParser(llvm::clv2::OptionParser &P) {
+  using ParsedT = decltype(ToolOptsReg)::ParsedOptionsT;
+  auto *Storage = new ParsedT();
+  decltype(ToolOptsReg)::applyDefaultsTo(*Storage);
+  std::vector<llvm::clv2::detail::OptionEntry> Entries;
+  std::vector<llvm::clv2::detail::AliasEntry> Aliases;
+  std::vector<llvm::clv2::detail::SubCommandSpec> SubSpecs;
+  decltype(ToolOptsReg)::staticBuildInto(*Storage, Entries, Aliases, SubSpecs);
+  for (auto &E : Entries) {
+    if (!E.Cat)
+      E.Cat = &IncludeCleaner;
+    P.addDynamicEntry(std::move(E));
+  }
+  llvm::clv2::registerDynamicPostParseCallback(
+      [Storage]() { applyToolOpts(*Storage); });
+}
 
 std::atomic<unsigned> Errors = ATOMIC_VAR_INIT(0);
 
@@ -218,7 +212,7 @@ private:
       Results.Unused.clear();
     std::string Final = fixIncludes(Results, AbsPath, Code, getStyle(AbsPath));
 
-    if (Print.getNumOccurrences()) {
+    if (PrintWasSet) {
       switch (Print) {
       case PrintStyle::Changes:
         for (const Include *I : Results.Unused)
@@ -359,20 +353,21 @@ int main(int argc, const char **argv) {
   using namespace clang::include_cleaner;
 
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
-  auto OptionsParser =
-      clang::tooling::CommonOptionsParser::create(argc, argv, IncludeCleaner);
+  auto OptionsParser = clang::tooling::CommonOptionsParser::create(
+      argc, argv, IncludeCleaner, configureParser);
   if (!OptionsParser) {
     llvm::errs() << toString(OptionsParser.takeError());
     return 1;
   }
 
   if (OptionsParser->getSourcePathList().size() != 1) {
-    std::vector<cl::Option *> IncompatibleFlags = {&HTMLReportPath, &Print};
-    for (const auto *Flag : IncompatibleFlags) {
-      if (Flag->getNumOccurrences()) {
-        llvm::errs() << "-" << Flag->ArgStr << " requires a single input file";
-        return 1;
-      }
+    if (HTMLReportPathWasSet) {
+      llvm::errs() << "-html requires a single input file";
+      return 1;
+    }
+    if (PrintWasSet) {
+      llvm::errs() << "-print requires a single input file";
+      return 1;
     }
   }
 

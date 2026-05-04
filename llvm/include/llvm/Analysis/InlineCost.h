@@ -46,7 +46,7 @@ const int OptMinSizeThreshold = 5;
 const int OptAggressiveThreshold = 250;
 
 // Various magic constants used to adjust heuristics.
-LLVM_ABI int getInstrCost();
+LLVM_ABI int getInstrCost(const clv2::OptionsContext &Ctx);
 const int IndirectCallThreshold = 100;
 const int LoopPenalty = 25;
 const int ColdccPenalty = 2000;
@@ -249,12 +249,13 @@ LLVM_ABI std::optional<int> getStringFnAttrAsInt(CallBase &CB,
 
 /// Generate the parameters to tune the inline cost analysis based only on the
 /// commandline options.
-LLVM_ABI InlineParams getInlineParams();
+LLVM_ABI InlineParams getInlineParams(const clv2::OptionsContext &Ctx);
 
 /// Generate the parameters to tune the inline cost analysis based on command
 /// line options. If -inline-threshold option is not explicitly passed,
 /// \p Threshold is used as the default threshold.
-LLVM_ABI InlineParams getInlineParams(int Threshold);
+LLVM_ABI InlineParams getInlineParams(int Threshold,
+                                      const clv2::OptionsContext &Ctx);
 
 /// Generate the parameters to tune the inline cost analysis based on command
 /// line options. If -inline-threshold option is not explicitly passed,
@@ -262,7 +263,8 @@ LLVM_ABI InlineParams getInlineParams(int Threshold);
 /// An \p OptLevel value above 3 is considered an aggressive optimization mode.
 /// Optimization for size is handled via separate thresholds for
 /// optsize/minsize, rather than changes to the default threshold.
-LLVM_ABI InlineParams getInlineParamsFromOptLevel(unsigned OptLevel);
+LLVM_ABI InlineParams
+getInlineParamsFromOptLevel(unsigned OptLevel, const clv2::OptionsContext &Ctx);
 
 /// Return the cost associated with a callsite, including parameter passing
 /// and the call/return instruction.

@@ -18,7 +18,7 @@ namespace {
 class VectorTypeUtilsTest : public ::testing::Test {};
 
 TEST(VectorTypeUtilsTest, TestToVectorizedTy) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   Type *ITy = Type::getInt32Ty(C);
   Type *FTy = Type::getFloatTy(C);
@@ -63,7 +63,7 @@ TEST(VectorTypeUtilsTest, TestToVectorizedTy) {
 }
 
 TEST(VectorTypeUtilsTest, TestToScalarizedTy) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   Type *ITy = Type::getInt32Ty(C);
   Type *FTy = Type::getFloatTy(C);
@@ -81,7 +81,7 @@ TEST(VectorTypeUtilsTest, TestToScalarizedTy) {
 }
 
 TEST(VectorTypeUtilsTest, TestGetContainedTypes) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   Type *ITy = Type::getInt32Ty(C);
   Type *FTy = Type::getFloatTy(C);
@@ -98,7 +98,7 @@ TEST(VectorTypeUtilsTest, TestGetContainedTypes) {
 }
 
 TEST(VectorTypeUtilsTest, TestIsVectorizedTy) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   Type *ITy = Type::getInt32Ty(C);
   Type *FTy = Type::getFloatTy(C);
@@ -131,7 +131,7 @@ TEST(VectorTypeUtilsTest, TestIsVectorizedTy) {
 }
 
 TEST(VectorTypeUtilsTest, TestGetVectorizedTypeVF) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   Type *ITy = Type::getInt32Ty(C);
   Type *FTy = Type::getFloatTy(C);

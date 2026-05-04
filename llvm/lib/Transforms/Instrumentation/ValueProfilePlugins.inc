@@ -22,7 +22,7 @@ using namespace llvm;
 using CandidateInfo = ValueProfileCollector::CandidateInfo;
 
 namespace llvm {
-extern cl::opt<bool> MemOPOptMemcmpBcmp;
+extern bool MemOPOptMemcmpBcmp;
 } // end namespace llvm
 
 ///--------------------------- MemIntrinsicPlugin ------------------------------

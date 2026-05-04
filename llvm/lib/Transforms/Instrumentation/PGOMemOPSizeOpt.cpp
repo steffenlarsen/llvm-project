@@ -34,10 +34,11 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Type.h"
 #include "llvm/ProfileData/InstrProf.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
 #define INSTR_PROF_VALUE_PROF_MEMOP_API
 #include "llvm/ProfileData/InstrProfData.inc"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
@@ -55,47 +56,38 @@ STATISTIC(NumOfPGOMemOPOpt, "Number of memop intrinsics optimized.");
 STATISTIC(NumOfPGOMemOPAnnotate, "Number of memop intrinsics annotated.");
 
 namespace llvm {
-
-// The minimum call count to optimize memory intrinsic calls.
-static cl::opt<unsigned>
-    MemOPCountThreshold("pgo-memop-count-threshold", cl::Hidden, cl::init(1000),
-                        cl::desc("The minimum count to optimize memory "
-                                 "intrinsic calls"));
-
-// Command line option to disable memory intrinsic optimization. The default is
-// false. This is for debug purpose.
-static cl::opt<bool> DisableMemOPOPT("disable-memop-opt", cl::init(false),
-                                     cl::Hidden, cl::desc("Disable optimize"));
-
-// The percent threshold to optimize memory intrinsic calls.
-static cl::opt<unsigned>
-    MemOPPercentThreshold("pgo-memop-percent-threshold", cl::init(40),
-                          cl::Hidden,
-                          cl::desc("The percentage threshold for the "
-                                   "memory intrinsic calls optimization"));
-
-// Maximum number of versions for optimizing memory intrinsic call.
-static cl::opt<unsigned>
-    MemOPMaxVersion("pgo-memop-max-version", cl::init(3), cl::Hidden,
-                    cl::desc("The max version for the optimized memory "
-                             " intrinsic calls"));
-
-// Scale the counts from the annotation using the BB count value.
-static cl::opt<bool>
-    MemOPScaleCount("pgo-memop-scale-count", cl::init(true), cl::Hidden,
-                    cl::desc("Scale the memop size counts using the basic "
-                             " block count value"));
-
-cl::opt<bool>
-    MemOPOptMemcmpBcmp("pgo-memop-optimize-memcmp-bcmp", cl::init(true),
-                       cl::Hidden,
-                       cl::desc("Size-specialize memcmp and bcmp calls"));
-
-static cl::opt<unsigned>
-    MemOpMaxOptSize("memop-value-prof-max-opt-size", cl::Hidden, cl::init(128),
-                    cl::desc("Optimize the memop size <= this value"));
+bool MemOPOptMemcmpBcmp = true;
 
 } // end namespace llvm
+
+static unsigned getMemOPCountThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::INST_PGOMemopCountThreshold>(
+      F.getContext().getOptionsContext());
+}
+static bool getDisableMemOPOPT(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::INST_DisableMemopOpt>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getMemOPPercentThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::INST_PGOMemopPercentThreshold>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getMemOPMaxVersion(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::INST_PGOMemopMaxVersion>(
+      F.getContext().getOptionsContext());
+}
+static bool getMemOPScaleCount(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::INST_PGOMemopScaleCount>(
+      F.getContext().getOptionsContext());
+}
+static bool getMemOPOptMemcmpBcmp(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::INST_PGOMemopOptMemcmpBcmp>(
+      F.getContext().getOptionsContext());
+}
+static unsigned getMemOpMaxOptSize(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::INST_MemopValueProfMaxOptSize>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -213,18 +205,19 @@ private:
   bool perform(MemOp MO);
 };
 
-static bool isProfitable(uint64_t Count, uint64_t TotalCount) {
+static bool isProfitable(uint64_t Count, uint64_t TotalCount,
+                         const Function &F) {
   assert(Count <= TotalCount);
-  if (Count < MemOPCountThreshold)
+  if (Count < getMemOPCountThreshold(F))
     return false;
-  if (Count < TotalCount * MemOPPercentThreshold / 100)
+  if (Count < TotalCount * getMemOPPercentThreshold(F) / 100)
     return false;
   return true;
 }
 
 static inline uint64_t getScaledCount(uint64_t Count, uint64_t Num,
-                                      uint64_t Denom) {
-  if (!MemOPScaleCount)
+                                      uint64_t Denom, const Function &F) {
+  if (!getMemOPScaleCount(F))
     return Count;
   bool Overflowed;
   uint64_t ScaleCount = SaturatingMultiply(Count, Num, &Overflowed);
@@ -235,7 +228,7 @@ bool MemOPSizeOpt::perform(MemOp MO) {
   assert(MO.I);
   if (MO.isMemmove())
     return false;
-  if (!MemOPOptMemcmpBcmp && (MO.isMemcmp(TLI) || MO.isBcmp(TLI)))
+  if (!getMemOPOptMemcmpBcmp(Func) && (MO.isMemcmp(TLI) || MO.isBcmp(TLI)))
     return false;
 
   uint32_t MaxNumVals = INSTR_PROF_NUM_BUCKETS;
@@ -247,7 +240,7 @@ bool MemOPSizeOpt::perform(MemOp MO) {
 
   uint64_t ActualCount = TotalCount;
   uint64_t SavedTotalCount = TotalCount;
-  if (MemOPScaleCount) {
+  if (getMemOPScaleCount(Func)) {
     auto BBEdgeCount = BFI.getBlockProfileCount(MO.I->getParent());
     if (!BBEdgeCount)
       return false;
@@ -260,7 +253,7 @@ bool MemOPSizeOpt::perform(MemOp MO) {
       for (auto &VD
            : VDs) { dbgs() << "  (" << VD.Value << "," << VD.Count << ")\n"; });
 
-  if (ActualCount < MemOPCountThreshold)
+  if (ActualCount < getMemOPCountThreshold(Func))
     return false;
   // Skip if the total value profiled count is 0, in which case we can't
   // scale up the counts properly (and there is no profitable transformation).
@@ -268,7 +261,7 @@ bool MemOPSizeOpt::perform(MemOp MO) {
     return false;
 
   TotalCount = ActualCount;
-  if (MemOPScaleCount)
+  if (getMemOPScaleCount(Func))
     LLVM_DEBUG(dbgs() << "Scale counts: numerator = " << ActualCount
                       << " denominator = " << SavedTotalCount << "\n");
 
@@ -286,17 +279,17 @@ bool MemOPSizeOpt::perform(MemOp MO) {
     auto &VD = *I;
     int64_t V = VD.Value;
     uint64_t C = VD.Count;
-    if (MemOPScaleCount)
-      C = getScaledCount(C, ActualCount, SavedTotalCount);
+    if (getMemOPScaleCount(Func))
+      C = getScaledCount(C, ActualCount, SavedTotalCount, Func);
 
-    if (!InstrProfIsSingleValRange(V) || V > MemOpMaxOptSize) {
+    if (!InstrProfIsSingleValRange(V) || V > getMemOpMaxOptSize(Func)) {
       RemainingVDs.push_back(VD);
       continue;
     }
 
     // ValueCounts are sorted on the count. Break at the first un-profitable
     // value.
-    if (!isProfitable(C, RemainCount)) {
+    if (!isProfitable(C, RemainCount, Func)) {
       RemainingVDs.insert(RemainingVDs.end(), I, E);
       break;
     }
@@ -311,7 +304,8 @@ bool MemOPSizeOpt::perform(MemOp MO) {
     assert(SavedRemainCount >= VD.Count);
     SavedRemainCount -= VD.Count;
 
-    if (++Version >= MemOPMaxVersion && MemOPMaxVersion != 0) {
+    if (++Version >= getMemOPMaxVersion(Func) &&
+        getMemOPMaxVersion(Func) != 0) {
       RemainingVDs.insert(RemainingVDs.end(), I + 1, E);
       break;
     }
@@ -437,7 +431,7 @@ bool MemOPSizeOpt::perform(MemOp MO) {
 static bool PGOMemOPSizeOptImpl(Function &F, BlockFrequencyInfo &BFI,
                                 OptimizationRemarkEmitter &ORE,
                                 DominatorTree *DT, TargetLibraryInfo &TLI) {
-  if (DisableMemOPOPT)
+  if (getDisableMemOPOPT(F))
     return false;
 
   if (F.hasOptSize())

@@ -19,6 +19,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MIRFormatter.h"
 #include "llvm/CodeGen/MIRYamlMapping.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -51,9 +52,10 @@
 #include "llvm/MC/LaneBitmask.h"
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/YAMLTraits.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
@@ -68,12 +70,13 @@
 
 using namespace llvm;
 
-static cl::opt<bool> SimplifyMIR(
-    "simplify-mir", cl::Hidden,
-    cl::desc("Leave out unnecessary information when printing MIR"));
+static bool getSimplifyMir(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_SimplifyMir>(Ctx);
+}
 
-static cl::opt<bool> PrintLocations("mir-debug-loc", cl::Hidden, cl::init(true),
-                                    cl::desc("Print MIR debug-locations"));
+static bool getMirDebugLoc(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_MirDebugLoc>(Ctx);
+}
 
 namespace {
 
@@ -250,8 +253,8 @@ static void printMF(raw_ostream &OS, MFGetterFnT Fn, const MachineFunction &MF,
   convertPrefetchTargets(YamlMF, MF);
 
   yaml::Output Out(OS);
-  if (!SimplifyMIR)
-      Out.setWriteDefaultValues(true);
+  if (!getSimplifyMir(MF.getFunction().getContext().getOptionsContext()))
+    Out.setWriteDefaultValues(true);
   Out << YamlMF;
 }
 
@@ -772,15 +775,21 @@ void printMBB(raw_ostream &OS, MFPrintState &State,
   // with an empty successor list. If the parser would see that
   // without the successor list, it would guess the code would
   // fallthrough.
-  if ((!MBB.succ_empty() && !SimplifyMIR) || !canPredictProbs ||
-      !canPredictSuccessors(MBB)) {
+  if ((!MBB.succ_empty() &&
+       !getSimplifyMir(
+           MBB.getParent()->getFunction().getContext().getOptionsContext())) ||
+      !canPredictProbs || !canPredictSuccessors(MBB)) {
     OS.indent(2) << "successors:";
     if (!MBB.succ_empty())
       OS << " ";
     ListSeparator LS;
     for (auto I = MBB.succ_begin(), E = MBB.succ_end(); I != E; ++I) {
       OS << LS << printMBBReference(**I);
-      if (!SimplifyMIR || !canPredictProbs)
+      if (!getSimplifyMir(MBB.getParent()
+                              ->getFunction()
+                              .getContext()
+                              .getOptionsContext()) ||
+          !canPredictProbs)
         OS << format("(0x%08" PRIx32 ")",
                      MBB.getSuccProbability(I).getNumerator());
     }
@@ -941,7 +950,7 @@ static void printMI(raw_ostream &OS, MFPrintState &State,
   if (auto Num = MI.peekDebugInstrNum())
     OS << LS << "debug-instr-number " << Num;
 
-  if (PrintLocations) {
+  if (getMirDebugLoc(MF->getFunction().getContext().getOptionsContext())) {
     if (const DebugLoc &DL = MI.getDebugLoc()) {
       OS << LS << "debug-location ";
       DL->printAsOperand(OS, State.MST);

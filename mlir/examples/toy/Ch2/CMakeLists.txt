@@ -2,6 +2,7 @@
 add_subdirectory(include)
 
 set(LLVM_LINK_COMPONENTS
+  AllOptions
   Support
   )
 

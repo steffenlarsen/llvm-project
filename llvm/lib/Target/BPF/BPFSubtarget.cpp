@@ -16,6 +16,7 @@
 #include "GISel/BPFCallLowering.h"
 #include "GISel/BPFLegalizerInfo.h"
 #include "GISel/BPFRegisterBankInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/TargetParser/Host.h"
 
@@ -26,32 +27,16 @@ using namespace llvm;
 #define GET_SUBTARGETINFO_TARGET_DESC
 #define GET_SUBTARGETINFO_CTOR
 #include "BPFGenSubtargetInfo.inc"
-
-static cl::opt<bool> Disable_ldsx("disable-ldsx", cl::Hidden, cl::init(false),
-  cl::desc("Disable ldsx insns"));
-static cl::opt<bool> Disable_movsx("disable-movsx", cl::Hidden, cl::init(false),
-  cl::desc("Disable movsx insns"));
-static cl::opt<bool> Disable_bswap("disable-bswap", cl::Hidden, cl::init(false),
-  cl::desc("Disable bswap insns"));
-static cl::opt<bool> Disable_sdiv_smod("disable-sdiv-smod", cl::Hidden,
-  cl::init(false), cl::desc("Disable sdiv/smod insns"));
-static cl::opt<bool> Disable_gotol("disable-gotol", cl::Hidden, cl::init(false),
-  cl::desc("Disable gotol insn"));
-static cl::opt<bool>
-    Disable_StoreImm("disable-storeimm", cl::Hidden, cl::init(false),
-                     cl::desc("Disable BPF_ST (immediate store) insn"));
-static cl::opt<bool> Disable_load_acq_store_rel(
-    "disable-load-acq-store-rel", cl::Hidden, cl::init(false),
-    cl::desc("Disable load-acquire and store-release insns"));
-static cl::opt<bool> Disable_gotox("disable-gotox", cl::Hidden, cl::init(false),
-                                   cl::desc("Disable gotox insn"));
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/BPF/BPFOptionsOptInfos.h"
 
 void BPFSubtarget::anchor() {}
 
-BPFSubtarget &BPFSubtarget::initializeSubtargetDependencies(StringRef CPU,
-                                                            StringRef FS) {
+BPFSubtarget &
+BPFSubtarget::initializeSubtargetDependencies(StringRef CPU, StringRef FS,
+                                              const TargetMachine &TM) {
   initializeEnvironment();
-  initSubtargetFeatures(CPU, FS);
+  initSubtargetFeatures(CPU, FS, TM);
   ParseSubtargetFeatures(CPU, /*TuneCPU*/ CPU, FS);
   return *this;
 }
@@ -72,7 +57,8 @@ void BPFSubtarget::initializeEnvironment() {
   AllowsMisalignedMemAccess = false;
 }
 
-void BPFSubtarget::initSubtargetFeatures(StringRef CPU, StringRef FS) {
+void BPFSubtarget::initSubtargetFeatures(StringRef CPU, StringRef FS,
+                                         const TargetMachine &TM) {
   if (CPU.empty())
     CPU = "v3";
   if (CPU == "probe")
@@ -93,23 +79,27 @@ void BPFSubtarget::initSubtargetFeatures(StringRef CPU, StringRef FS) {
     HasJmpExt = true;
     HasJmp32 = true;
     HasAlu32 = true;
-    HasLdsx = !Disable_ldsx;
-    HasMovsx = !Disable_movsx;
-    HasBswap = !Disable_bswap;
-    HasSdivSmod = !Disable_sdiv_smod;
-    HasGotol = !Disable_gotol;
-    HasStoreImm = !Disable_StoreImm;
-    HasLoadAcqStoreRel = !Disable_load_acq_store_rel;
-    HasGotox = !Disable_gotox;
+    const bpf_opts::ParsedOpts *O =
+        clv2::getView<&clv2::BPFOptsReg>(TM.getOptionsContext());
+    HasLdsx = !(O ? O->get<&clv2::BPF_DisableLdsx>() : false);
+    HasMovsx = !(O ? O->get<&clv2::BPF_DisableMovsx>() : false);
+    HasBswap = !(O ? O->get<&clv2::BPF_DisableBswap>() : false);
+    HasSdivSmod = !(O ? O->get<&clv2::BPF_DisableSdivSmod>() : false);
+    HasGotol = !(O ? O->get<&clv2::BPF_DisableGotol>() : false);
+    HasStoreImm = !(O ? O->get<&clv2::BPF_DisableStoreImm>() : false);
+    HasLoadAcqStoreRel =
+        !(O ? O->get<&clv2::BPF_DisableLoadAcqStoreRel>() : false);
+    HasGotox = !(O ? O->get<&clv2::BPF_DisableGotox>() : false);
     return;
   }
 }
 
 BPFSubtarget::BPFSubtarget(const Triple &TT, const std::string &CPU,
                            const std::string &FS, const TargetMachine &TM)
-    : BPFGenSubtargetInfo(TT, CPU, /*TuneCPU*/ CPU, FS),
-      InstrInfo(initializeSubtargetDependencies(CPU, FS)), FrameLowering(*this),
-      TLInfo(TM, *this) {
+    : BPFGenSubtargetInfo(TT, CPU, /*TuneCPU*/ CPU, FS, TM.getOptionsContext()),
+      InstrInfo(initializeSubtargetDependencies(CPU, FS, TM)),
+      FrameLowering(*this), TLInfo(TM, *this) {
+  setOptionsContext(TM.getOptionsContext());
   IsLittleEndian = TT.isLittleEndian();
 
   CallLoweringInfo.reset(new BPFCallLowering(*getTargetLowering()));

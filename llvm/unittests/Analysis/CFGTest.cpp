@@ -70,22 +70,22 @@ protected:
   void ExpectPath(bool ExpectedResult) {
     static char ID;
     class IsPotentiallyReachableTestPass : public FunctionPass {
-     public:
-       IsPotentiallyReachableTestPass(bool ExpectedResult, Instruction *A,
-                                      Instruction *B,
-                                      SmallPtrSet<BasicBlock *, 4> ExclusionSet)
-           : FunctionPass(ID), ExpectedResult(ExpectedResult), A(A), B(B),
-             ExclusionSet(ExclusionSet) {}
+    public:
+      IsPotentiallyReachableTestPass(bool ExpectedResult, Instruction *A,
+                                     Instruction *B,
+                                     SmallPtrSet<BasicBlock *, 4> ExclusionSet)
+          : FunctionPass(ID), ExpectedResult(ExpectedResult), A(A), B(B),
+            ExclusionSet(ExclusionSet) {}
 
-       static int initialize() {
-         PassInfo *PI = new PassInfo("isPotentiallyReachable testing pass", "",
-                                     &ID, nullptr, true, true);
-         PassRegistry::getPassRegistry()->registerPass(*PI, true);
-         initializeLoopInfoWrapperPassPass(*PassRegistry::getPassRegistry());
-         initializeCycleInfoWrapperPassPass(*PassRegistry::getPassRegistry());
-         initializeDominatorTreeWrapperPassPass(
-             *PassRegistry::getPassRegistry());
-         return 0;
+      static int initialize() {
+        PassInfo *PI = new PassInfo("isPotentiallyReachable testing pass", "",
+                                    &ID, nullptr, true, true);
+        PassRegistry::getPassRegistry()->registerPass(*PI, true);
+        initializeLoopInfoWrapperPassPass(*PassRegistry::getPassRegistry());
+        initializeCycleInfoWrapperPassPass(*PassRegistry::getPassRegistry());
+        initializeDominatorTreeWrapperPassPass(
+            *PassRegistry::getPassRegistry());
+        return 0;
       }
 
       void getAnalysisUsage(AnalysisUsage &AU) const override {
@@ -135,241 +135,227 @@ protected:
     PM.run(*M);
   }
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   Instruction *A, *B;
   SmallPtrSet<BasicBlock *, 4> ExclusionSet;
 };
 
-}
+} // namespace
 
 TEST_F(IsPotentiallyReachableTest, SameBlockNoPath) {
-  ParseAssembly(
-      "define void @test() {\n"
-      "entry:\n"
-      "  bitcast i8 undef to i8\n"
-      "  %B = bitcast i8 undef to i8\n"
-      "  bitcast i8 undef to i8\n"
-      "  bitcast i8 undef to i8\n"
-      "  %A = bitcast i8 undef to i8\n"
-      "  ret void\n"
-      "}\n");
+  ParseAssembly("define void @test() {\n"
+                "entry:\n"
+                "  bitcast i8 undef to i8\n"
+                "  %B = bitcast i8 undef to i8\n"
+                "  bitcast i8 undef to i8\n"
+                "  bitcast i8 undef to i8\n"
+                "  %A = bitcast i8 undef to i8\n"
+                "  ret void\n"
+                "}\n");
   ExpectPath(false);
 }
 
 TEST_F(IsPotentiallyReachableTest, SameBlockPath) {
-  ParseAssembly(
-      "define void @test() {\n"
-      "entry:\n"
-      "  %A = bitcast i8 undef to i8\n"
-      "  bitcast i8 undef to i8\n"
-      "  bitcast i8 undef to i8\n"
-      "  %B = bitcast i8 undef to i8\n"
-      "  ret void\n"
-      "}\n");
+  ParseAssembly("define void @test() {\n"
+                "entry:\n"
+                "  %A = bitcast i8 undef to i8\n"
+                "  bitcast i8 undef to i8\n"
+                "  bitcast i8 undef to i8\n"
+                "  %B = bitcast i8 undef to i8\n"
+                "  ret void\n"
+                "}\n");
   ExpectPath(true);
 }
 
 TEST_F(IsPotentiallyReachableTest, SameBlockNoLoop) {
-  ParseAssembly(
-      "define void @test() {\n"
-      "entry:\n"
-      "  br label %middle\n"
-      "middle:\n"
-      "  %B = bitcast i8 undef to i8\n"
-      "  bitcast i8 undef to i8\n"
-      "  bitcast i8 undef to i8\n"
-      "  %A = bitcast i8 undef to i8\n"
-      "  br label %nextblock\n"
-      "nextblock:\n"
-      "  ret void\n"
-      "}\n");
+  ParseAssembly("define void @test() {\n"
+                "entry:\n"
+                "  br label %middle\n"
+                "middle:\n"
+                "  %B = bitcast i8 undef to i8\n"
+                "  bitcast i8 undef to i8\n"
+                "  bitcast i8 undef to i8\n"
+                "  %A = bitcast i8 undef to i8\n"
+                "  br label %nextblock\n"
+                "nextblock:\n"
+                "  ret void\n"
+                "}\n");
   ExpectPath(false);
 }
 
 TEST_F(IsPotentiallyReachableTest, StraightNoPath) {
-  ParseAssembly(
-      "define void @test() {\n"
-      "entry:\n"
-      "  %B = bitcast i8 undef to i8\n"
-      "  br label %exit\n"
-      "exit:\n"
-      "  %A = bitcast i8 undef to i8\n"
-      "  ret void\n"
-      "}");
+  ParseAssembly("define void @test() {\n"
+                "entry:\n"
+                "  %B = bitcast i8 undef to i8\n"
+                "  br label %exit\n"
+                "exit:\n"
+                "  %A = bitcast i8 undef to i8\n"
+                "  ret void\n"
+                "}");
   ExpectPath(false);
 }
 
 TEST_F(IsPotentiallyReachableTest, StraightPath) {
-  ParseAssembly(
-      "define void @test() {\n"
-      "entry:\n"
-      "  %A = bitcast i8 undef to i8\n"
-      "  br label %exit\n"
-      "exit:\n"
-      "  %B = bitcast i8 undef to i8\n"
-      "  ret void\n"
-      "}");
+  ParseAssembly("define void @test() {\n"
+                "entry:\n"
+                "  %A = bitcast i8 undef to i8\n"
+                "  br label %exit\n"
+                "exit:\n"
+                "  %B = bitcast i8 undef to i8\n"
+                "  ret void\n"
+                "}");
   ExpectPath(true);
 }
 
 TEST_F(IsPotentiallyReachableTest, DestUnreachable) {
-  ParseAssembly(
-      "define void @test() {\n"
-      "entry:\n"
-      "  br label %midblock\n"
-      "midblock:\n"
-      "  %A = bitcast i8 undef to i8\n"
-      "  ret void\n"
-      "unreachable:\n"
-      "  %B = bitcast i8 undef to i8\n"
-      "  br label %midblock\n"
-      "}");
+  ParseAssembly("define void @test() {\n"
+                "entry:\n"
+                "  br label %midblock\n"
+                "midblock:\n"
+                "  %A = bitcast i8 undef to i8\n"
+                "  ret void\n"
+                "unreachable:\n"
+                "  %B = bitcast i8 undef to i8\n"
+                "  br label %midblock\n"
+                "}");
   ExpectPath(false);
 }
 
 TEST_F(IsPotentiallyReachableTest, BranchToReturn) {
-  ParseAssembly(
-      "define void @test(i1 %x) {\n"
-      "entry:\n"
-      "  %A = bitcast i8 undef to i8\n"
-      "  br i1 %x, label %block1, label %block2\n"
-      "block1:\n"
-      "  ret void\n"
-      "block2:\n"
-      "  %B = bitcast i8 undef to i8\n"
-      "  ret void\n"
-      "}");
+  ParseAssembly("define void @test(i1 %x) {\n"
+                "entry:\n"
+                "  %A = bitcast i8 undef to i8\n"
+                "  br i1 %x, label %block1, label %block2\n"
+                "block1:\n"
+                "  ret void\n"
+                "block2:\n"
+                "  %B = bitcast i8 undef to i8\n"
+                "  ret void\n"
+                "}");
   ExpectPath(true);
 }
 
 TEST_F(IsPotentiallyReachableTest, SimpleLoop1) {
-  ParseAssembly(
-      "declare i1 @switch()\n"
-      "\n"
-      "define void @test() {\n"
-      "entry:\n"
-      "  br label %loop\n"
-      "loop:\n"
-      "  %B = bitcast i8 undef to i8\n"
-      "  %A = bitcast i8 undef to i8\n"
-      "  %x = call i1 @switch()\n"
-      "  br i1 %x, label %loop, label %exit\n"
-      "exit:\n"
-      "  ret void\n"
-      "}");
+  ParseAssembly("declare i1 @switch()\n"
+                "\n"
+                "define void @test() {\n"
+                "entry:\n"
+                "  br label %loop\n"
+                "loop:\n"
+                "  %B = bitcast i8 undef to i8\n"
+                "  %A = bitcast i8 undef to i8\n"
+                "  %x = call i1 @switch()\n"
+                "  br i1 %x, label %loop, label %exit\n"
+                "exit:\n"
+                "  ret void\n"
+                "}");
   ExpectPath(true);
 }
 
 TEST_F(IsPotentiallyReachableTest, SimpleLoop2) {
-  ParseAssembly(
-      "declare i1 @switch()\n"
-      "\n"
-      "define void @test() {\n"
-      "entry:\n"
-      "  %B = bitcast i8 undef to i8\n"
-      "  br label %loop\n"
-      "loop:\n"
-      "  %A = bitcast i8 undef to i8\n"
-      "  %x = call i1 @switch()\n"
-      "  br i1 %x, label %loop, label %exit\n"
-      "exit:\n"
-      "  ret void\n"
-      "}");
+  ParseAssembly("declare i1 @switch()\n"
+                "\n"
+                "define void @test() {\n"
+                "entry:\n"
+                "  %B = bitcast i8 undef to i8\n"
+                "  br label %loop\n"
+                "loop:\n"
+                "  %A = bitcast i8 undef to i8\n"
+                "  %x = call i1 @switch()\n"
+                "  br i1 %x, label %loop, label %exit\n"
+                "exit:\n"
+                "  ret void\n"
+                "}");
   ExpectPath(false);
 }
 
 TEST_F(IsPotentiallyReachableTest, SimpleLoop3) {
-  ParseAssembly(
-      "declare i1 @switch()\n"
-      "\n"
-      "define void @test() {\n"
-      "entry:\n"
-      "  br label %loop\n"
-      "loop:\n"
-      "  %B = bitcast i8 undef to i8\n"
-      "  %x = call i1 @switch()\n"
-      "  br i1 %x, label %loop, label %exit\n"
-      "exit:\n"
-      "  %A = bitcast i8 undef to i8\n"
-      "  ret void\n"
-      "}");
+  ParseAssembly("declare i1 @switch()\n"
+                "\n"
+                "define void @test() {\n"
+                "entry:\n"
+                "  br label %loop\n"
+                "loop:\n"
+                "  %B = bitcast i8 undef to i8\n"
+                "  %x = call i1 @switch()\n"
+                "  br i1 %x, label %loop, label %exit\n"
+                "exit:\n"
+                "  %A = bitcast i8 undef to i8\n"
+                "  ret void\n"
+                "}");
   ExpectPath(false);
 }
 
-
 TEST_F(IsPotentiallyReachableTest, OneLoopAfterTheOther1) {
-  ParseAssembly(
-      "declare i1 @switch()\n"
-      "\n"
-      "define void @test() {\n"
-      "entry:\n"
-      "  br label %loop1\n"
-      "loop1:\n"
-      "  %A = bitcast i8 undef to i8\n"
-      "  %x = call i1 @switch()\n"
-      "  br i1 %x, label %loop1, label %loop1exit\n"
-      "loop1exit:\n"
-      "  br label %loop2\n"
-      "loop2:\n"
-      "  %B = bitcast i8 undef to i8\n"
-      "  %y = call i1 @switch()\n"
-      "  br i1 %x, label %loop2, label %loop2exit\n"
-      "loop2exit:"
-      "  ret void\n"
-      "}");
+  ParseAssembly("declare i1 @switch()\n"
+                "\n"
+                "define void @test() {\n"
+                "entry:\n"
+                "  br label %loop1\n"
+                "loop1:\n"
+                "  %A = bitcast i8 undef to i8\n"
+                "  %x = call i1 @switch()\n"
+                "  br i1 %x, label %loop1, label %loop1exit\n"
+                "loop1exit:\n"
+                "  br label %loop2\n"
+                "loop2:\n"
+                "  %B = bitcast i8 undef to i8\n"
+                "  %y = call i1 @switch()\n"
+                "  br i1 %x, label %loop2, label %loop2exit\n"
+                "loop2exit:"
+                "  ret void\n"
+                "}");
   ExpectPath(true);
 }
 
 TEST_F(IsPotentiallyReachableTest, OneLoopAfterTheOther2) {
-  ParseAssembly(
-      "declare i1 @switch()\n"
-      "\n"
-      "define void @test() {\n"
-      "entry:\n"
-      "  br label %loop1\n"
-      "loop1:\n"
-      "  %B = bitcast i8 undef to i8\n"
-      "  %x = call i1 @switch()\n"
-      "  br i1 %x, label %loop1, label %loop1exit\n"
-      "loop1exit:\n"
-      "  br label %loop2\n"
-      "loop2:\n"
-      "  %A = bitcast i8 undef to i8\n"
-      "  %y = call i1 @switch()\n"
-      "  br i1 %x, label %loop2, label %loop2exit\n"
-      "loop2exit:"
-      "  ret void\n"
-      "}");
+  ParseAssembly("declare i1 @switch()\n"
+                "\n"
+                "define void @test() {\n"
+                "entry:\n"
+                "  br label %loop1\n"
+                "loop1:\n"
+                "  %B = bitcast i8 undef to i8\n"
+                "  %x = call i1 @switch()\n"
+                "  br i1 %x, label %loop1, label %loop1exit\n"
+                "loop1exit:\n"
+                "  br label %loop2\n"
+                "loop2:\n"
+                "  %A = bitcast i8 undef to i8\n"
+                "  %y = call i1 @switch()\n"
+                "  br i1 %x, label %loop2, label %loop2exit\n"
+                "loop2exit:"
+                "  ret void\n"
+                "}");
   ExpectPath(false);
 }
 
 TEST_F(IsPotentiallyReachableTest, OneLoopAfterTheOtherInsideAThirdLoop) {
-  ParseAssembly(
-      "declare i1 @switch()\n"
-      "\n"
-      "define void @test() {\n"
-      "entry:\n"
-      "  br label %outerloop3\n"
-      "outerloop3:\n"
-      "  br label %innerloop1\n"
-      "innerloop1:\n"
-      "  %B = bitcast i8 undef to i8\n"
-      "  %x = call i1 @switch()\n"
-      "  br i1 %x, label %innerloop1, label %innerloop1exit\n"
-      "innerloop1exit:\n"
-      "  br label %innerloop2\n"
-      "innerloop2:\n"
-      "  %A = bitcast i8 undef to i8\n"
-      "  %y = call i1 @switch()\n"
-      "  br i1 %x, label %innerloop2, label %innerloop2exit\n"
-      "innerloop2exit:"
-      "  ;; In outer loop3 now.\n"
-      "  %z = call i1 @switch()\n"
-      "  br i1 %z, label %outerloop3, label %exit\n"
-      "exit:\n"
-      "  ret void\n"
-      "}");
+  ParseAssembly("declare i1 @switch()\n"
+                "\n"
+                "define void @test() {\n"
+                "entry:\n"
+                "  br label %outerloop3\n"
+                "outerloop3:\n"
+                "  br label %innerloop1\n"
+                "innerloop1:\n"
+                "  %B = bitcast i8 undef to i8\n"
+                "  %x = call i1 @switch()\n"
+                "  br i1 %x, label %innerloop1, label %innerloop1exit\n"
+                "innerloop1exit:\n"
+                "  br label %innerloop2\n"
+                "innerloop2:\n"
+                "  %A = bitcast i8 undef to i8\n"
+                "  %y = call i1 @switch()\n"
+                "  br i1 %x, label %innerloop2, label %innerloop2exit\n"
+                "innerloop2exit:"
+                "  ;; In outer loop3 now.\n"
+                "  %z = call i1 @switch()\n"
+                "  br i1 %z, label %outerloop3, label %exit\n"
+                "exit:\n"
+                "  ret void\n"
+                "}");
   ExpectPath(true);
 }
 

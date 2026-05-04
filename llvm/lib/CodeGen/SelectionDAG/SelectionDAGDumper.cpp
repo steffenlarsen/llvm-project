@@ -15,6 +15,7 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
@@ -38,10 +39,11 @@
 #include "llvm/IR/ModuleSlotTracker.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Printable.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
@@ -50,14 +52,13 @@
 
 using namespace llvm;
 
-static cl::opt<bool>
-VerboseDAGDumping("dag-dump-verbose", cl::Hidden,
-                  cl::desc("Display more information when dumping selection "
-                           "DAG nodes."));
+static bool getDagDumpVerbose(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DagDumpVerbose>(Ctx);
+}
 
-static cl::opt<bool>
-    PrintSDNodeAddrs("print-sdnode-addrs", cl::Hidden,
-                     cl::desc("Print addresses of SDNodes when dumping"));
+static bool getPrintSdnodeAddrs(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_PrintSdnodeAddrs>(Ctx);
+}
 
 std::string SDNode::getOperationName(const SelectionDAG *G) const {
   switch (getOpcode()) {
@@ -77,7 +78,8 @@ std::string SDNode::getOperationName(const SelectionDAG *G) const {
         return Name;
       const TargetLowering &TLI = G->getTargetLoweringInfo();
       const char *Name = TLI.getTargetNodeName(getOpcode());
-      if (Name) return Name;
+      if (Name)
+        return Name;
       return "<<Unknown Target Node #" + utostr(getOpcode()) + ">>";
     }
     return "<<Unknown Node #" + utostr(getOpcode()) + ">>";
@@ -543,34 +545,59 @@ std::string SDNode::getOperationName(const SelectionDAG *G) const {
 
   case ISD::CONDCODE:
     switch (cast<CondCodeSDNode>(this)->get()) {
-    default: llvm_unreachable("Unknown setcc condition!");
-    case ISD::SETOEQ:                   return "setoeq";
-    case ISD::SETOGT:                   return "setogt";
-    case ISD::SETOGE:                   return "setoge";
-    case ISD::SETOLT:                   return "setolt";
-    case ISD::SETOLE:                   return "setole";
-    case ISD::SETONE:                   return "setone";
+    default:
+      llvm_unreachable("Unknown setcc condition!");
+    case ISD::SETOEQ:
+      return "setoeq";
+    case ISD::SETOGT:
+      return "setogt";
+    case ISD::SETOGE:
+      return "setoge";
+    case ISD::SETOLT:
+      return "setolt";
+    case ISD::SETOLE:
+      return "setole";
+    case ISD::SETONE:
+      return "setone";
 
-    case ISD::SETO:                     return "seto";
-    case ISD::SETUO:                    return "setuo";
-    case ISD::SETUEQ:                   return "setueq";
-    case ISD::SETUGT:                   return "setugt";
-    case ISD::SETUGE:                   return "setuge";
-    case ISD::SETULT:                   return "setult";
-    case ISD::SETULE:                   return "setule";
-    case ISD::SETUNE:                   return "setune";
+    case ISD::SETO:
+      return "seto";
+    case ISD::SETUO:
+      return "setuo";
+    case ISD::SETUEQ:
+      return "setueq";
+    case ISD::SETUGT:
+      return "setugt";
+    case ISD::SETUGE:
+      return "setuge";
+    case ISD::SETULT:
+      return "setult";
+    case ISD::SETULE:
+      return "setule";
+    case ISD::SETUNE:
+      return "setune";
 
-    case ISD::SETEQ:                    return "seteq";
-    case ISD::SETGT:                    return "setgt";
-    case ISD::SETGE:                    return "setge";
-    case ISD::SETLT:                    return "setlt";
-    case ISD::SETLE:                    return "setle";
-    case ISD::SETNE:                    return "setne";
+    case ISD::SETEQ:
+      return "seteq";
+    case ISD::SETGT:
+      return "setgt";
+    case ISD::SETGE:
+      return "setge";
+    case ISD::SETLT:
+      return "setlt";
+    case ISD::SETLE:
+      return "setle";
+    case ISD::SETNE:
+      return "setne";
 
-    case ISD::SETTRUE:                  return "settrue";
-    case ISD::SETTRUE2:                 return "settrue2";
-    case ISD::SETFALSE:                 return "setfalse";
-    case ISD::SETFALSE2:                return "setfalse2";
+    case ISD::SETTRUE:
+      return "settrue";
+    case ISD::SETTRUE2:
+      return "settrue2";
+    case ISD::SETFALSE:
+      return "setfalse";
+    case ISD::SETFALSE2:
+      return "setfalse2";
     }
   case ISD::VECREDUCE_FADD:             return "vecreduce_fadd";
   case ISD::VECREDUCE_SEQ_FADD:         return "vecreduce_seq_fadd";
@@ -648,11 +675,16 @@ std::string SDNode::getOperationName(const SelectionDAG *G) const {
 
 const char *SDNode::getIndexedModeName(ISD::MemIndexedMode AM) {
   switch (AM) {
-  default:              return "";
-  case ISD::PRE_INC:    return "<pre-inc>";
-  case ISD::PRE_DEC:    return "<pre-dec>";
-  case ISD::POST_INC:   return "<post-inc>";
-  case ISD::POST_DEC:   return "<post-dec>";
+  default:
+    return "";
+  case ISD::PRE_INC:
+    return "<pre-inc>";
+  case ISD::PRE_DEC:
+    return "<pre-dec>";
+  case ISD::POST_INC:
+    return "<post-inc>";
+  case ISD::POST_DEC:
+    return "<post-dec>";
   }
 }
 
@@ -668,7 +700,7 @@ static Printable PrintNodeId(const SDNode &Node) {
     OS << 't' << Node.PersistentId;
     OS.resetColor();
 #else
-    OS << (const void*)&Node;
+    OS << (const void *)&Node;
 #endif
   });
 }
@@ -694,7 +726,7 @@ static void printMemOperand(raw_ostream &OS, const MachineMemOperand &MMO,
                            G->getSubtarget().getInstrInfo(), *G->getContext());
   }
 
-  LLVMContext Ctx;
+  LLVMContext Ctx(llvm::clv2::defaultOptionsContext());
   return printMemOperand(OS, MMO, /*MF=*/nullptr, /*M=*/nullptr,
                          /*MFI=*/nullptr, /*TII=*/nullptr, Ctx);
 }
@@ -710,7 +742,8 @@ LLVM_DUMP_METHOD void SDNode::dump(const SelectionDAG *G) const {
 
 void SDNode::print_types(raw_ostream &OS, const SelectionDAG *G) const {
   for (unsigned i = 0, e = getNumValues(); i != e; ++i) {
-    if (i) OS << ",";
+    if (i)
+      OS << ",";
     if (getValueType(i) == MVT::Other)
       OS << "ch";
     else
@@ -772,7 +805,8 @@ void SDNode::print_details(raw_ostream &OS, const SelectionDAG *G) const {
       OS << "<";
       OS << "Mem:";
       for (MachineSDNode::mmo_iterator i = MN->memoperands_begin(),
-           e = MN->memoperands_end(); i != e; ++i) {
+                                       e = MN->memoperands_end();
+           i != e; ++i) {
         printMemOperand(OS, **i, G);
         if (std::next(i) != e)
           OS << " ";
@@ -780,11 +814,12 @@ void SDNode::print_details(raw_ostream &OS, const SelectionDAG *G) const {
       OS << ">";
     }
   } else if (const ShuffleVectorSDNode *SVN =
-               dyn_cast<ShuffleVectorSDNode>(this)) {
+                 dyn_cast<ShuffleVectorSDNode>(this)) {
     OS << "<";
     for (unsigned i = 0, e = ValueList[0].getVectorNumElements(); i != e; ++i) {
       int Idx = SVN->getMaskElt(i);
-      if (i) OS << ",";
+      if (i)
+        OS << ",";
       if (Idx < 0)
         OS << "u";
       else
@@ -804,7 +839,7 @@ void SDNode::print_details(raw_ostream &OS, const SelectionDAG *G) const {
       OS << ")>";
     }
   } else if (const GlobalAddressSDNode *GADN =
-             dyn_cast<GlobalAddressSDNode>(this)) {
+                 dyn_cast<GlobalAddressSDNode>(this)) {
     int64_t offset = GADN->getOffset();
     OS << '<';
     GADN->getGlobal()->printAsOperand(OS);
@@ -821,7 +856,8 @@ void SDNode::print_details(raw_ostream &OS, const SelectionDAG *G) const {
     OS << "<" << JTDN->getIndex() << ">";
     if (unsigned int TF = JTDN->getTargetFlags())
       OS << " [TF=" << TF << ']';
-  } else if (const ConstantPoolSDNode *CP = dyn_cast<ConstantPoolSDNode>(this)){
+  } else if (const ConstantPoolSDNode *CP =
+                 dyn_cast<ConstantPoolSDNode>(this)) {
     int offset = CP->getOffset();
     if (CP->isMachineConstantPoolEntry())
       OS << "<" << *CP->getMachineCPVal() << ">";
@@ -839,15 +875,16 @@ void SDNode::print_details(raw_ostream &OS, const SelectionDAG *G) const {
       OS << " [TF=" << TF << ']';
   } else if (const BasicBlockSDNode *BBDN = dyn_cast<BasicBlockSDNode>(this)) {
     OS << "<";
-    const Value *LBB = (const Value*)BBDN->getBasicBlock()->getBasicBlock();
+    const Value *LBB = (const Value *)BBDN->getBasicBlock()->getBasicBlock();
     if (LBB)
       OS << LBB->getName() << " ";
-    OS << (const void*)BBDN->getBasicBlock() << ">";
+    OS << (const void *)BBDN->getBasicBlock() << ">";
   } else if (const RegisterSDNode *R = dyn_cast<RegisterSDNode>(this)) {
-    OS << ' ' << printReg(R->getReg(),
-                          G ? G->getSubtarget().getRegisterInfo() : nullptr);
+    OS << ' '
+       << printReg(R->getReg(),
+                   G ? G->getSubtarget().getRegisterInfo() : nullptr);
   } else if (const ExternalSymbolSDNode *ES =
-             dyn_cast<ExternalSymbolSDNode>(this)) {
+                 dyn_cast<ExternalSymbolSDNode>(this)) {
     OS << "'" << ES->getSymbol() << "'";
     if (unsigned int TF = ES->getTargetFlags())
       OS << " [TF=" << TF << ']';
@@ -863,18 +900,25 @@ void SDNode::print_details(raw_ostream &OS, const SelectionDAG *G) const {
       OS << "<null>";
   } else if (const VTSDNode *N = dyn_cast<VTSDNode>(this)) {
     OS << ":" << N->getVT();
-  }
-  else if (const LoadSDNode *LD = dyn_cast<LoadSDNode>(this)) {
+  } else if (const LoadSDNode *LD = dyn_cast<LoadSDNode>(this)) {
     OS << "<";
 
     printMemOperand(OS, *LD->getMemOperand(), G);
 
     bool doExt = true;
     switch (LD->getExtensionType()) {
-    default: doExt = false; break;
-    case ISD::EXTLOAD:  OS << ", anyext"; break;
-    case ISD::SEXTLOAD: OS << ", sext"; break;
-    case ISD::ZEXTLOAD: OS << ", zext"; break;
+    default:
+      doExt = false;
+      break;
+    case ISD::EXTLOAD:
+      OS << ", anyext";
+      break;
+    case ISD::SEXTLOAD:
+      OS << ", sext";
+      break;
+    case ISD::ZEXTLOAD:
+      OS << ", zext";
+      break;
     }
     if (doExt)
       OS << " from " << LD->getMemoryVT();
@@ -903,10 +947,18 @@ void SDNode::print_details(raw_ostream &OS, const SelectionDAG *G) const {
 
     bool doExt = true;
     switch (MLd->getExtensionType()) {
-    default: doExt = false; break;
-    case ISD::EXTLOAD:  OS << ", anyext"; break;
-    case ISD::SEXTLOAD: OS << ", sext"; break;
-    case ISD::ZEXTLOAD: OS << ", zext"; break;
+    default:
+      doExt = false;
+      break;
+    case ISD::EXTLOAD:
+      OS << ", anyext";
+      break;
+    case ISD::SEXTLOAD:
+      OS << ", sext";
+      break;
+    case ISD::ZEXTLOAD:
+      OS << ", zext";
+      break;
     }
     if (doExt)
       OS << " from " << MLd->getMemoryVT();
@@ -940,10 +992,18 @@ void SDNode::print_details(raw_ostream &OS, const SelectionDAG *G) const {
 
     bool doExt = true;
     switch (MGather->getExtensionType()) {
-    default: doExt = false; break;
-    case ISD::EXTLOAD:  OS << ", anyext"; break;
-    case ISD::SEXTLOAD: OS << ", sext"; break;
-    case ISD::ZEXTLOAD: OS << ", zext"; break;
+    default:
+      doExt = false;
+      break;
+    case ISD::EXTLOAD:
+      OS << ", anyext";
+      break;
+    case ISD::SEXTLOAD:
+      OS << ", sext";
+      break;
+    case ISD::ZEXTLOAD:
+      OS << ", zext";
+      break;
     }
     if (doExt)
       OS << " from " << MGather->getMemoryVT();
@@ -974,17 +1034,25 @@ void SDNode::print_details(raw_ostream &OS, const SelectionDAG *G) const {
       if (A->getOpcode() == ISD::ATOMIC_LOAD) {
         bool doExt = true;
         switch (A->getExtensionType()) {
-        default: doExt = false; break;
-        case ISD::EXTLOAD:  OS << ", anyext"; break;
-        case ISD::SEXTLOAD: OS << ", sext"; break;
-        case ISD::ZEXTLOAD: OS << ", zext"; break;
+        default:
+          doExt = false;
+          break;
+        case ISD::EXTLOAD:
+          OS << ", anyext";
+          break;
+        case ISD::SEXTLOAD:
+          OS << ", sext";
+          break;
+        case ISD::ZEXTLOAD:
+          OS << ", zext";
+          break;
         }
         if (doExt)
           OS << " from " << A->getMemoryVT();
       }
     OS << ">";
   } else if (const BlockAddressSDNode *BA =
-               dyn_cast<BlockAddressSDNode>(this)) {
+                 dyn_cast<BlockAddressSDNode>(this)) {
     int64_t offset = BA->getOffset();
     OS << "<";
     BA->getBlockAddress()->getFunction()->printAsOperand(OS, false);
@@ -998,19 +1066,20 @@ void SDNode::print_details(raw_ostream &OS, const SelectionDAG *G) const {
     if (unsigned int TF = BA->getTargetFlags())
       OS << " [TF=" << TF << ']';
   } else if (const AddrSpaceCastSDNode *ASC =
-               dyn_cast<AddrSpaceCastSDNode>(this)) {
-    OS << '['
-       << ASC->getSrcAddressSpace()
-       << " -> "
-       << ASC->getDestAddressSpace()
-       << ']';
+                 dyn_cast<AddrSpaceCastSDNode>(this)) {
+    OS << '[' << ASC->getSrcAddressSpace() << " -> "
+       << ASC->getDestAddressSpace() << ']';
   } else if (const auto *AA = dyn_cast<AssertAlignSDNode>(this)) {
     OS << '<' << AA->getAlign().value() << '>';
   }
 
-  if (VerboseDAGDumping) {
+  if (G ? getDagDumpVerbose(G->getMachineFunction()
+                                .getFunction()
+                                .getContext()
+                                .getOptionsContext())
+        : false) {
     if (unsigned Order = getIROrder())
-        OS << " [ORD=" << Order << ']';
+      OS << " [ORD=" << Order << ']';
 
     if (getNodeId() != -1)
       OS << " [ID=" << getNodeId() << ']';
@@ -1071,7 +1140,8 @@ LLVM_DUMP_METHOD void SDDbgValue::print(raw_ostream &OS) const {
     Comma = true;
   }
   OS << ")";
-  if (isIndirect()) OS << "(Indirect)";
+  if (isIndirect())
+    OS << "(Indirect)";
   if (isVariadic())
     OS << "(Variadic)";
   OS << ":\"" << Var->getName() << '"';
@@ -1095,7 +1165,12 @@ LLVM_DUMP_METHOD void SDDbgValue::dump() const {
 static bool shouldPrintInline(const SDNode &Node, const SelectionDAG *G) {
   // Avoid lots of cluttering when inline printing nodes with associated
   // DbgValues in verbose mode.
-  if (VerboseDAGDumping && G && !G->GetDbgValues(&Node).empty())
+  if (G &&
+      getDagDumpVerbose(G->getMachineFunction()
+                            .getFunction()
+                            .getContext()
+                            .getOptionsContext()) &&
+      !G->GetDbgValues(&Node).empty())
     return false;
   if (Node.getOpcode() == ISD::EntryToken)
     return false;
@@ -1108,7 +1183,7 @@ static void DumpNodes(const SDNode *N, unsigned indent, const SelectionDAG *G) {
     if (shouldPrintInline(*Op.getNode(), G))
       continue;
     if (Op.getNode()->hasOneUse())
-      DumpNodes(Op.getNode(), indent+2, G);
+      DumpNodes(Op.getNode(), indent + 2, G);
   }
 
   dbgs().indent(indent);
@@ -1137,10 +1212,14 @@ LLVM_DUMP_METHOD void SelectionDAG::dump(bool Sorted) const {
       dumpEachNode(N);
   }
 
-  if (getRoot().getNode()) DumpNodes(getRoot().getNode(), 2, this);
+  if (getRoot().getNode())
+    DumpNodes(getRoot().getNode(), 2, this);
   dbgs() << "\n";
 
-  if (VerboseDAGDumping) {
+  if (getDagDumpVerbose(getMachineFunction()
+                            .getFunction()
+                            .getContext()
+                            .getOptionsContext())) {
     if (DbgBegin() != DbgEnd())
       dbgs() << "SDDbgValues:\n";
     for (auto *Dbg : make_range(DbgBegin(), DbgEnd()))
@@ -1195,7 +1274,8 @@ static void DumpNodesr(raw_ostream &OS, const SDNode *N, unsigned indent,
 
   // Having printed this SDNode, walk the children:
   for (unsigned i = 0, e = N->getNumOperands(); i != e; ++i) {
-    if (i) OS << ",";
+    if (i)
+      OS << ",";
     OS << " ";
 
     const SDValue Op = N->getOperand(i);
@@ -1208,7 +1288,7 @@ static void DumpNodesr(raw_ostream &OS, const SDNode *N, unsigned indent,
 
   // Dump children that have grandchildren on their own line(s).
   for (const SDValue &Op : N->op_values())
-    DumpNodesr(OS, Op.getNode(), indent+2, G, once);
+    DumpNodesr(OS, Op.getNode(), indent + 2, G, once);
 }
 
 LLVM_DUMP_METHOD void SDNode::dumpr() const {
@@ -1245,7 +1325,7 @@ static void printrWithDepthHelper(raw_ostream &OS, const SDNode *N,
 }
 
 void SDNode::printrWithDepth(raw_ostream &OS, const SelectionDAG *G,
-                            unsigned depth) const {
+                             unsigned depth) const {
   printrWithDepthHelper(OS, this, G, depth, 0);
 }
 
@@ -1269,16 +1349,27 @@ LLVM_DUMP_METHOD void SDNode::dumprFull(const SelectionDAG *G) const {
 void SDNode::print(raw_ostream &OS, const SelectionDAG *G) const {
   printr(OS, G);
   // Under VerboseDAGDumping divergence will be printed always.
-  if (isDivergent() && !VerboseDAGDumping)
+  if (isDivergent() && !(G ? getDagDumpVerbose(G->getMachineFunction()
+                                                   .getFunction()
+                                                   .getContext()
+                                                   .getOptionsContext())
+                           : false))
     OS << " # D:1";
   for (unsigned i = 0, e = getNumOperands(); i != e; ++i) {
-    if (i) OS << ", "; else OS << " ";
+    if (i)
+      OS << ", ";
+    else
+      OS << " ";
     printOperand(OS, G, getOperand(i));
   }
   if (DebugLoc DL = getDebugLoc()) {
     OS << ", ";
     DL.print(OS);
   }
-  if (PrintSDNodeAddrs)
+  if (G ? getPrintSdnodeAddrs(G->getMachineFunction()
+                                  .getFunction()
+                                  .getContext()
+                                  .getOptionsContext())
+        : false)
     OS << " ; " << this;
 }

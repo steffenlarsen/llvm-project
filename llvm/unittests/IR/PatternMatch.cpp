@@ -31,7 +31,7 @@ using namespace llvm::PatternMatch;
 namespace {
 
 struct PatternMatchTest : ::testing::Test {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   Function *F;
   BasicBlock *BB;
@@ -743,7 +743,7 @@ TEST_F(PatternMatchTest, BitCast) {
 
 TEST_F(PatternMatchTest, CheckedInt) {
   Type *I8Ty = IRB.getInt8Ty();
-  const Constant * CRes = nullptr;
+  const Constant *CRes = nullptr;
   auto CheckUgt1 = [](const APInt &C) { return C.ugt(1); };
   auto CheckTrue = [](const APInt &) { return true; };
   auto CheckFalse = [](const APInt &) { return false; };
@@ -781,7 +781,6 @@ TEST_F(PatternMatchTest, CheckedInt) {
     EXPECT_EQ(CheckPow2(APVal), m_CheckedInt(CRes, CheckPow2).match(C));
     if (CheckPow2(APVal))
       EXPECT_EQ(CRes, C);
-
   };
 
   DoScalarCheck(0);
@@ -1004,7 +1003,7 @@ TEST_F(PatternMatchTest, FloatingPointOrderedMin) {
 
   // [OU]GE with inverted select.
   EXPECT_FALSE(m_OrdFMin(m_Value(MatchL), m_Value(MatchR))
-                  .match(IRB.CreateSelect(IRB.CreateFCmpOGE(L, R), R, L)));
+                   .match(IRB.CreateSelect(IRB.CreateFCmpOGE(L, R), R, L)));
   EXPECT_TRUE(m_OrdFMin(m_Value(MatchL), m_Value(MatchR))
                   .match(IRB.CreateSelect(IRB.CreateFCmpUGE(L, R), R, L)));
   EXPECT_EQ(L, MatchL);
@@ -1012,7 +1011,7 @@ TEST_F(PatternMatchTest, FloatingPointOrderedMin) {
 
   // [OU]GT with inverted select.
   EXPECT_FALSE(m_OrdFMin(m_Value(MatchL), m_Value(MatchR))
-                  .match(IRB.CreateSelect(IRB.CreateFCmpOGT(L, R), R, L)));
+                   .match(IRB.CreateSelect(IRB.CreateFCmpOGT(L, R), R, L)));
   EXPECT_TRUE(m_OrdFMin(m_Value(MatchL), m_Value(MatchR))
                   .match(IRB.CreateSelect(IRB.CreateFCmpUGT(L, R), R, L)));
   EXPECT_EQ(L, MatchL);
@@ -1044,7 +1043,6 @@ TEST_F(PatternMatchTest, FloatingPointOrderedMax) {
   // Test no match on OLT.
   EXPECT_FALSE(m_OrdFMax(m_Value(MatchL), m_Value(MatchR))
                    .match(IRB.CreateSelect(IRB.CreateFCmpOLT(L, R), L, R)));
-
 
   // Test inverted selects. Note, that this "inverts" the ordering, e.g.:
   // %cmp = fcmp ole L, R
@@ -1105,7 +1103,7 @@ TEST_F(PatternMatchTest, FloatingPointUnorderedMin) {
 
   // [UO]GE with inverted select.
   EXPECT_FALSE(m_UnordFMin(m_Value(MatchL), m_Value(MatchR))
-                  .match(IRB.CreateSelect(IRB.CreateFCmpUGE(L, R), R, L)));
+                   .match(IRB.CreateSelect(IRB.CreateFCmpUGE(L, R), R, L)));
   EXPECT_TRUE(m_UnordFMin(m_Value(MatchL), m_Value(MatchR))
                   .match(IRB.CreateSelect(IRB.CreateFCmpOGE(L, R), R, L)));
   EXPECT_EQ(L, MatchL);
@@ -1113,7 +1111,7 @@ TEST_F(PatternMatchTest, FloatingPointUnorderedMin) {
 
   // [UO]GT with inverted select.
   EXPECT_FALSE(m_UnordFMin(m_Value(MatchL), m_Value(MatchR))
-                  .match(IRB.CreateSelect(IRB.CreateFCmpUGT(L, R), R, L)));
+                   .match(IRB.CreateSelect(IRB.CreateFCmpUGT(L, R), R, L)));
   EXPECT_TRUE(m_UnordFMin(m_Value(MatchL), m_Value(MatchR))
                   .match(IRB.CreateSelect(IRB.CreateFCmpOGT(L, R), R, L)));
   EXPECT_EQ(L, MatchL);
@@ -1155,7 +1153,7 @@ TEST_F(PatternMatchTest, FloatingPointUnorderedMax) {
 
   // [UO]LE with inverted select.
   EXPECT_FALSE(m_UnordFMax(m_Value(MatchL), m_Value(MatchR))
-                  .match(IRB.CreateSelect(IRB.CreateFCmpULE(L, R), R, L)));
+                   .match(IRB.CreateSelect(IRB.CreateFCmpULE(L, R), R, L)));
   EXPECT_TRUE(m_UnordFMax(m_Value(MatchL), m_Value(MatchR))
                   .match(IRB.CreateSelect(IRB.CreateFCmpOLE(L, R), R, L)));
   EXPECT_EQ(L, MatchL);
@@ -1163,7 +1161,7 @@ TEST_F(PatternMatchTest, FloatingPointUnorderedMax) {
 
   // [UO]LT with inverted select.
   EXPECT_FALSE(m_UnordFMax(m_Value(MatchL), m_Value(MatchR))
-                  .match(IRB.CreateSelect(IRB.CreateFCmpULT(L, R), R, L)));
+                   .match(IRB.CreateSelect(IRB.CreateFCmpULT(L, R), R, L)));
   EXPECT_TRUE(m_UnordFMax(m_Value(MatchL), m_Value(MatchR))
                   .match(IRB.CreateSelect(IRB.CreateFCmpOLT(L, R), R, L)));
   EXPECT_EQ(L, MatchL);
@@ -1324,8 +1322,9 @@ TEST_F(PatternMatchTest, OverflowingBinOps) {
   EXPECT_EQ(L, MatchL);
   EXPECT_EQ(R, MatchR);
   MatchL = MatchR = nullptr;
-  EXPECT_TRUE(m_NSWShl(m_Value(MatchL), m_Value(MatchR)).match(
-      IRB.CreateShl(L, R, "", /* NUW */ false, /* NSW */ true)));
+  EXPECT_TRUE(
+      m_NSWShl(m_Value(MatchL), m_Value(MatchR))
+          .match(IRB.CreateShl(L, R, "", /* NUW */ false, /* NSW */ true)));
   EXPECT_EQ(L, MatchL);
   EXPECT_EQ(R, MatchR);
 
@@ -1354,8 +1353,9 @@ TEST_F(PatternMatchTest, OverflowingBinOps) {
   EXPECT_EQ(L, MatchL);
   EXPECT_EQ(R, MatchR);
   MatchL = MatchR = nullptr;
-  EXPECT_TRUE(m_NUWShl(m_Value(MatchL), m_Value(MatchR)).match(
-      IRB.CreateShl(L, R, "", /* NUW */ true, /* NSW */ false)));
+  EXPECT_TRUE(
+      m_NUWShl(m_Value(MatchL), m_Value(MatchR))
+          .match(IRB.CreateShl(L, R, "", /* NUW */ true, /* NSW */ false)));
   EXPECT_EQ(L, MatchL);
   EXPECT_EQ(R, MatchR);
 
@@ -1369,8 +1369,9 @@ TEST_F(PatternMatchTest, OverflowingBinOps) {
   EXPECT_FALSE(m_NSWMul(m_Value(), m_Value()).match(IRB.CreateNUWMul(L, R)));
   EXPECT_FALSE(m_NSWMul(m_Value(), m_Value()).match(IRB.CreateNSWAdd(L, R)));
   EXPECT_FALSE(m_NSWShl(m_Value(), m_Value()).match(IRB.CreateShl(L, R)));
-  EXPECT_FALSE(m_NSWShl(m_Value(), m_Value()).match(
-      IRB.CreateShl(L, R, "", /* NUW */ true, /* NSW */ false)));
+  EXPECT_FALSE(
+      m_NSWShl(m_Value(), m_Value())
+          .match(IRB.CreateShl(L, R, "", /* NUW */ true, /* NSW */ false)));
   EXPECT_FALSE(m_NSWShl(m_Value(), m_Value()).match(IRB.CreateNSWAdd(L, R)));
 
   EXPECT_FALSE(m_NUWAdd(m_Value(), m_Value()).match(IRB.CreateAdd(L, R)));
@@ -1383,8 +1384,9 @@ TEST_F(PatternMatchTest, OverflowingBinOps) {
   EXPECT_FALSE(m_NUWMul(m_Value(), m_Value()).match(IRB.CreateNSWMul(L, R)));
   EXPECT_FALSE(m_NUWMul(m_Value(), m_Value()).match(IRB.CreateNUWAdd(L, R)));
   EXPECT_FALSE(m_NUWShl(m_Value(), m_Value()).match(IRB.CreateShl(L, R)));
-  EXPECT_FALSE(m_NUWShl(m_Value(), m_Value()).match(
-      IRB.CreateShl(L, R, "", /* NUW */ false, /* NSW */ true)));
+  EXPECT_FALSE(
+      m_NUWShl(m_Value(), m_Value())
+          .match(IRB.CreateShl(L, R, "", /* NUW */ false, /* NSW */ true)));
   EXPECT_FALSE(m_NUWShl(m_Value(), m_Value()).match(IRB.CreateNUWAdd(L, R)));
 }
 
@@ -1409,19 +1411,17 @@ TEST_F(PatternMatchTest, LoadStoreOps) {
   EXPECT_FALSE(m_Load(m_Value(MatchLoad)).match(Alloca));
 
   EXPECT_TRUE(m_Store(m_Value(MatchStoreVal), m_Value(MatchStorePointer))
-                .match(StoreInst));
+                  .match(StoreInst));
   EXPECT_EQ(FourtyTwo, MatchStoreVal);
   EXPECT_EQ(Alloca, MatchStorePointer);
 
   EXPECT_FALSE(m_Store(m_Value(MatchStoreVal), m_Value(MatchStorePointer))
-                .match(Alloca));
+                   .match(Alloca));
 
-  EXPECT_TRUE(m_Store(m_SpecificInt(42), m_Specific(Alloca))
-                .match(StoreInst));
-  EXPECT_FALSE(m_Store(m_SpecificInt(42), m_Specific(FourtyTwo))
-                .match(StoreInst));
-  EXPECT_FALSE(m_Store(m_SpecificInt(43), m_Specific(Alloca))
-                .match(StoreInst));
+  EXPECT_TRUE(m_Store(m_SpecificInt(42), m_Specific(Alloca)).match(StoreInst));
+  EXPECT_FALSE(
+      m_Store(m_SpecificInt(42), m_Specific(FourtyTwo)).match(StoreInst));
+  EXPECT_FALSE(m_Store(m_SpecificInt(43), m_Specific(Alloca)).match(StoreInst));
 }
 
 TEST_F(PatternMatchTest, VectorOps) {
@@ -1480,15 +1480,11 @@ TEST_F(PatternMatchTest, VectorOps) {
   EXPECT_TRUE(match(VI1, m_InsertElt(m_Value(), m_Value(), m_Value())));
   EXPECT_TRUE(
       match(VI1, m_InsertElt(m_Undef(), m_ConstantInt(), m_ConstantInt())));
-  EXPECT_TRUE(
-      match(VI1, m_InsertElt(m_Undef(), m_ConstantInt(), m_Zero())));
-  EXPECT_TRUE(
-      match(VI1, m_InsertElt(m_Undef(), m_SpecificInt(1), m_Zero())));
+  EXPECT_TRUE(match(VI1, m_InsertElt(m_Undef(), m_ConstantInt(), m_Zero())));
+  EXPECT_TRUE(match(VI1, m_InsertElt(m_Undef(), m_SpecificInt(1), m_Zero())));
   EXPECT_TRUE(match(VI2, m_InsertElt(m_Value(), m_Value(), m_Value())));
-  EXPECT_FALSE(
-      match(VI2, m_InsertElt(m_Value(), m_Value(), m_ConstantInt())));
-  EXPECT_FALSE(
-      match(VI2, m_InsertElt(m_Value(), m_ConstantInt(), m_Value())));
+  EXPECT_FALSE(match(VI2, m_InsertElt(m_Value(), m_Value(), m_ConstantInt())));
+  EXPECT_FALSE(match(VI2, m_InsertElt(m_Value(), m_ConstantInt(), m_Value())));
   EXPECT_FALSE(match(VI2, m_InsertElt(m_Constant(), m_Value(), m_Value())));
   EXPECT_TRUE(match(VI3, m_InsertElt(m_Value(A), m_Value(B), m_Value(C))));
   EXPECT_TRUE(A == VI1);
@@ -1514,23 +1510,18 @@ TEST_F(PatternMatchTest, VectorOps) {
   A = B = C = nullptr; // reset
 
   // Test matching the vector splat pattern
-  EXPECT_TRUE(match(
-      SI1,
-      m_Shuffle(m_InsertElt(m_Undef(), m_SpecificInt(1), m_Zero()),
-                m_Undef(), m_ZeroMask())));
-  EXPECT_FALSE(match(
-      SI3, m_Shuffle(m_InsertElt(m_Undef(), m_Value(), m_Zero()),
-                     m_Undef(), m_ZeroMask())));
-  EXPECT_FALSE(match(
-      SI4, m_Shuffle(m_InsertElt(m_Undef(), m_Value(), m_Zero()),
-                     m_Undef(), m_ZeroMask())));
-  EXPECT_TRUE(match(
-      SP1,
-      m_Shuffle(m_InsertElt(m_Undef(), m_SpecificInt(2), m_Zero()),
-                m_Undef(), m_ZeroMask())));
-  EXPECT_TRUE(match(
-      SP2, m_Shuffle(m_InsertElt(m_Undef(), m_Value(A), m_Zero()),
-                     m_Undef(), m_ZeroMask())));
+  EXPECT_TRUE(
+      match(SI1, m_Shuffle(m_InsertElt(m_Undef(), m_SpecificInt(1), m_Zero()),
+                           m_Undef(), m_ZeroMask())));
+  EXPECT_FALSE(match(SI3, m_Shuffle(m_InsertElt(m_Undef(), m_Value(), m_Zero()),
+                                    m_Undef(), m_ZeroMask())));
+  EXPECT_FALSE(match(SI4, m_Shuffle(m_InsertElt(m_Undef(), m_Value(), m_Zero()),
+                                    m_Undef(), m_ZeroMask())));
+  EXPECT_TRUE(
+      match(SP1, m_Shuffle(m_InsertElt(m_Undef(), m_SpecificInt(2), m_Zero()),
+                           m_Undef(), m_ZeroMask())));
+  EXPECT_TRUE(match(SP2, m_Shuffle(m_InsertElt(m_Undef(), m_Value(A), m_Zero()),
+                                   m_Undef(), m_ZeroMask())));
   EXPECT_TRUE(A == Val);
 }
 
@@ -2017,13 +2008,13 @@ TEST_F(PatternMatchTest, MinMaxIntrinsics) {
 
   // Check for intrinsic ID mismatch.
   EXPECT_FALSE(m_SMax(m_Value(MatchL), m_Value(MatchR))
-                  .match(IRB.CreateBinaryIntrinsic(Intrinsic::smin, L, R)));
+                   .match(IRB.CreateBinaryIntrinsic(Intrinsic::smin, L, R)));
   EXPECT_FALSE(m_SMin(m_Value(MatchL), m_Value(MatchR))
-                  .match(IRB.CreateBinaryIntrinsic(Intrinsic::umax, L, R)));
+                   .match(IRB.CreateBinaryIntrinsic(Intrinsic::umax, L, R)));
   EXPECT_FALSE(m_UMax(m_Value(MatchL), m_Value(MatchR))
-                  .match(IRB.CreateBinaryIntrinsic(Intrinsic::umin, L, R)));
+                   .match(IRB.CreateBinaryIntrinsic(Intrinsic::umin, L, R)));
   EXPECT_FALSE(m_UMin(m_Value(MatchL), m_Value(MatchR))
-                  .match(IRB.CreateBinaryIntrinsic(Intrinsic::smax, L, R)));
+                   .match(IRB.CreateBinaryIntrinsic(Intrinsic::smax, L, R)));
 }
 
 TEST_F(PatternMatchTest, IntrinsicMatcher) {
@@ -2511,10 +2502,10 @@ TEST_F(PatternMatchTest, NotForbidPoison) {
   EXPECT_FALSE(match(NotWithPoisonsCommute, m_NotForbidPoison(m_Value())));
 }
 
-template <typename T> struct MutableConstTest : PatternMatchTest { };
+template <typename T> struct MutableConstTest : PatternMatchTest {};
 
-typedef ::testing::Types<std::tuple<Value*, Instruction*>,
-                         std::tuple<const Value*, const Instruction *>>
+typedef ::testing::Types<std::tuple<Value *, Instruction *>,
+                         std::tuple<const Value *, const Instruction *>>
     MutableConstTestTypes;
 TYPED_TEST_SUITE(MutableConstTest, MutableConstTestTypes, );
 

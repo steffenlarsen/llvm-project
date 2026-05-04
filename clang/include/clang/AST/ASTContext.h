@@ -46,7 +46,9 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/TinyPtrVector.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TypeSize.h"
+#include <cassert>
 #include <optional>
 
 namespace llvm {
@@ -55,6 +57,10 @@ class APFixedPoint;
 class FixedPointSemantics;
 struct fltSemantics;
 template <typename T, unsigned N> class SmallPtrSet;
+
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
 
 struct ScalableVecTyKey {
   clang::QualType EltTy;
@@ -783,6 +789,15 @@ private:
   ///  this ASTContext object.
   LangOptions &LangOpts;
 
+  /// Command-line options for this compilation, or null if none were
+  /// threaded in.  Not owned; must outlive this ASTContext.  Mirrors
+  /// LLVMContext::getOptionsContext() for the frontend/analysis phases, where
+  /// no LLVMContext exists.  Lets library code read per-job option values
+  /// instead of reading process-wide globals, so that several compilations can
+  /// run concurrently in one process under different options.
+  const llvm::clv2::OptionsContext *OptionsCtx =
+      &llvm::clv2::defaultOptionsContext();
+
   /// NoSanitizeList object that is used by sanitizers to decide which
   /// entities should not be instrumented.
   std::unique_ptr<NoSanitizeList> NoSanitizeL;
@@ -983,6 +998,20 @@ public:
   bool AtomicUsesUnsupportedLibcall(const AtomicExpr *E) const;
 
   const LangOptions& getLangOpts() const { return LangOpts; }
+
+  /// Command-line options for this compilation, or null if none were threaded
+  /// in.  Library code should prefer reading option values from here (via
+  /// clv2::getOptValOr) over consulting process-wide globals, so that
+  /// concurrent in-process compilations can use different settings.
+  const llvm::clv2::OptionsContext &getOptionsContext() const {
+    assert(OptionsCtx && "OptionsCtx defaults to the shared context");
+    return *OptionsCtx;
+  }
+
+  /// \p Ctx must outlive this ASTContext.
+  void setOptionsContext(const llvm::clv2::OptionsContext &Ctx) {
+    OptionsCtx = &Ctx;
+  }
 
   // If this condition is false, typo correction must be performed eagerly
   // rather than delayed in many places, as it makes use of dependent types.

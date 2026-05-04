@@ -25,7 +25,7 @@ namespace bolt {
 
 class AArch64RelaxationPass : public BinaryFunctionPass {
 public:
-  explicit AArch64RelaxationPass(const cl::opt<bool> &PrintPass)
+  explicit AArch64RelaxationPass(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "aarch64-relaxation"; }

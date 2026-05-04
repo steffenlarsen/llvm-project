@@ -34,10 +34,11 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <cassert>
 #include <cstddef>
@@ -52,13 +53,26 @@
 
 using namespace llvm;
 
-static cl::opt<bool> OptSpeculate("commgep-speculate", cl::init(true),
-                                  cl::Hidden);
+static bool OptSpeculate = true;
 
-static cl::opt<bool> OptEnableInv("commgep-inv", cl::init(true), cl::Hidden);
+static bool OptEnableInv = true;
 
-static cl::opt<bool> OptEnableConst("commgep-const", cl::init(true),
-                                    cl::Hidden);
+static bool OptEnableConst = true;
+
+static bool getOptSpeculate(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_OptSpeculate>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getOptEnableInv(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_OptEnableInv>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getOptEnableConst(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_OptEnableConst>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -848,7 +862,7 @@ bool HexagonCommonGEP::isInMainPath(BasicBlock *B, Loop *L) {
 static BasicBlock *preheader(DominatorTree *DT, Loop *L) {
   if (BasicBlock *PH = L->getLoopPreheader())
     return PH;
-  if (!OptSpeculate)
+  if (!getOptSpeculate(*L->getHeader()->getParent()))
     return nullptr;
   DomTreeNode *DN = DT->getNode(L->getHeader());
   if (!DN)
@@ -1047,14 +1061,14 @@ void HexagonCommonGEP::computeNodePlacement(NodeToValueMap &Loc) {
 
   LLVM_DEBUG(dbgs() << "Initial node placement:\n" << LocationAsBlock(Loc));
 
-  if (OptEnableInv) {
+  if (getOptEnableInv(*Fn)) {
     for (GepNode *Root : Roots)
       adjustForInvariance(Root, NCM, Loc);
 
     LLVM_DEBUG(dbgs() << "Node placement after adjustment for invariance:\n"
                       << LocationAsBlock(Loc));
   }
-  if (OptEnableConst) {
+  if (getOptEnableConst(*Fn)) {
     for (GepNode *Root : Roots)
       separateConstantChains(Root, NCM, Loc);
   }

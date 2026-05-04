@@ -21,15 +21,18 @@
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Tools/ParseUtilities.h"
 #include "llvm/ADT/RewriteBuffer.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/LineIterator.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/Regex.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
+#include <deque>
 
 using namespace mlir;
+using namespace llvm::clv2;
 
 namespace mlir {
 using OperationDefinition = AsmParserState::OperationDefinition;
@@ -238,14 +241,6 @@ private:
 
 static llvm::ManagedStatic<std::vector<RewriterInfo>> rewriterRegistry;
 
-/// Adds command line option for each registered rewriter.
-struct RewriterNameParser : public llvm::cl::parser<const RewriterInfo *> {
-  RewriterNameParser(llvm::cl::Option &opt);
-
-  void printOptionInfo(const llvm::cl::Option &o,
-                       size_t globalWidth) const override;
-};
-
 /// RewriterRegistration provides a global initializer that registers a rewriter
 /// function.
 struct RewriterRegistration {
@@ -258,45 +253,37 @@ RewriterRegistration::RewriterRegistration(StringRef arg, StringRef description,
   rewriterRegistry->emplace_back(arg, description, function);
 }
 
-RewriterNameParser::RewriterNameParser(llvm::cl::Option &opt)
-    : llvm::cl::parser<const RewriterInfo *>(opt) {
-  for (const auto &kv : *rewriterRegistry) {
-    addLiteralOption(kv.getRewriterArgument(), &kv,
-                     kv.getRewriterDescription());
-  }
-}
-
-void RewriterNameParser::printOptionInfo(const llvm::cl::Option &o,
-                                         size_t globalWidth) const {
-  RewriterNameParser *tp = const_cast<RewriterNameParser *>(this);
-  llvm::array_pod_sort(tp->Values.begin(), tp->Values.end(),
-                       [](const RewriterNameParser::OptionInfo *vT1,
-                          const RewriterNameParser::OptionInfo *vT2) {
-                         return vT1->Name.compare(vT2->Name);
-                       });
-  using llvm::cl::parser;
-  parser<const RewriterInfo *>::printOptionInfo(o, globalWidth);
-}
-
 } // namespace mlir
 
+/// The selected rewriter, set by the command-line option.
+static const mlir::RewriterInfo *selectedRewriter = nullptr;
+
 // TODO: Make these injectable too in non-global way.
-static llvm::cl::OptionCategory clSimpleRenameCategory{"simple-rename options"};
-static llvm::cl::opt<std::string> simpleRenameOpName{
-    "simple-rename-op-name", llvm::cl::desc("Name of op to match on"),
-    llvm::cl::cat(clSimpleRenameCategory)};
-static llvm::cl::opt<std::string> simpleRenameMatch{
-    "simple-rename-match", llvm::cl::desc("Match string for rename"),
-    llvm::cl::cat(clSimpleRenameCategory)};
-static llvm::cl::opt<std::string> simpleRenameReplace{
-    "simple-rename-replace", llvm::cl::desc("Replace string for rename"),
-    llvm::cl::cat(clSimpleRenameCategory)};
+inline constexpr OptionCategory clSimpleRenameCategory{"simple-rename options"};
+inline constexpr OptionInfo<std::string> simpleRenameOpNameOpt{
+    "simple-rename-op-name", "Name of op to match on",
+    cat(clSimpleRenameCategory)};
+inline constexpr OptionInfo<std::string> simpleRenameMatchOpt{
+    "simple-rename-match", "Match string for rename",
+    cat(clSimpleRenameCategory)};
+inline constexpr OptionInfo<std::string> simpleRenameReplaceOpt{
+    "simple-rename-replace", "Replace string for rename",
+    cat(clSimpleRenameCategory)};
+
+inline constexpr OptionInfo<std::string> inputFilenameOpt{
+    "", "<input file>", Positional{}, Init{"-"}};
+inline constexpr OptionInfo<std::string> outputFilenameOpt{
+    "o", "Output filename", value_desc("filename"), Init{"-"}};
+
+static constexpr OptionsRegistry<&inputFilenameOpt, &outputFilenameOpt,
+                                 &simpleRenameOpNameOpt, &simpleRenameMatchOpt,
+                                 &simpleRenameReplaceOpt>
+    RewriteReg;
 
 // Rewriter that does simple renames.
-static LogicalResult simpleRename(RewritePad &rewriteState, raw_ostream &os) {
-  StringRef opName = simpleRenameOpName;
-  StringRef match = simpleRenameMatch;
-  StringRef replace = simpleRenameReplace;
+static LogicalResult simpleRenameImpl(RewritePad &rewriteState, raw_ostream &os,
+                                      StringRef opName, StringRef match,
+                                      StringRef replace) {
   llvm::Regex regex(match);
 
   rewriteState.getParsed()->walk([&](Operation *op) {
@@ -309,6 +296,11 @@ static LogicalResult simpleRename(RewritePad &rewriteState, raw_ostream &os) {
     std::string str = regex.sub(replace, rewriteState.getSourceString(range));
     rewriteState.replaceRange(range, str);
   });
+  return success();
+}
+
+// Placeholder - actual dispatch happens in main() with parsed options.
+static LogicalResult simpleRename(RewritePad &rewriteState, raw_ostream &os) {
   return success();
 }
 
@@ -348,43 +340,249 @@ static LogicalResult markRanges(RewritePad &rewriteState, raw_ostream &os) {
 static mlir::RewriterRegistration
     rewriteMarkRanges("mark-ranges", "Indicate ranges parsed", markRanges);
 
+/// Ctx is the RewriterInfo this flag selects.
+static bool selectRewriter(void *Ctx, const bool &) {
+  selectedRewriter = static_cast<const mlir::RewriterInfo *>(Ctx);
+  return true;
+}
+
+static void registerRewriterSelectors(llvm::clv2::OptionParser &P) {
+  llvm::SmallVector<const mlir::RewriterInfo *, 4> sorted;
+  for (const auto &rw : *mlir::rewriterRegistry)
+    sorted.push_back(&rw);
+  llvm::sort(sorted, [](const auto *a, const auto *b) {
+    return a->getRewriterArgument() < b->getRewriterArgument();
+  });
+  static std::deque<llvm::clv2::RuntimeOption<bool>> Options;
+  bool first = true;
+  for (const auto *rw : sorted) {
+    Options.emplace_back(
+        rw->getRewriterArgument(), rw->getRewriterDescription(),
+        llvm::clv2::ValueDisallowed,
+        llvm::clv2::CtxCallback<bool>{&selectRewriter,
+                                      const_cast<mlir::RewriterInfo *>(rw)});
+    // Group display has no descriptor spelling, so it is set on the option's
+    // own static info.
+    Options.back().staticInfo().IsEnumGroupMember = true;
+    if (first) {
+      Options.back().staticInfo().EnumGroupHeader = "Rewriter to run";
+      first = false;
+    }
+    llvm::clv2::detail::OptionEntry E = Options.back().makeEntry();
+    P.addDynamicEntry(std::move(E));
+  }
+}
+
 int main(int argc, char **argv) {
-  llvm::cl::opt<std::string> inputFilename(llvm::cl::Positional,
-                                           llvm::cl::desc("<input file>"),
-                                           llvm::cl::init("-"));
+  llvm::clv2::OptionParser P;
+  P.add<&RewriteReg>();
+  llvm::RegisterCommonLLVMOptionsHidden(P);
+  // Auto-generated showOptions for mlir-rewrite
+  P.showOptions({
+      "abort-on-max-devirt-iterations-reached",
+      "allow-ginsert-as-artifact",
+      "amdgpu-atomic-optimizer-strategy",
+      "amdgpu-bypass-slow-div",
+      "amdgpu-disable-loop-alignment",
+      "amdgpu-dpp-combine",
+      "amdgpu-dump-hsa-metadata",
+      "amdgpu-enable-merge-m0",
+      "amdgpu-indirect-call-specialization-threshold",
+      "amdgpu-kernarg-preload",
+      "amdgpu-kernarg-preload-count",
+      "amdgpu-module-splitting-max-depth",
+      "amdgpu-promote-alloca-to-vector-limit",
+      "amdgpu-promote-alloca-to-vector-max-regs",
+      "amdgpu-promote-alloca-to-vector-vgpr-ratio",
+      "amdgpu-sdwa-peephole",
+      "amdgpu-use-aa-in-codegen",
+      "amdgpu-verify-hsa-metadata",
+      "amdgpu-vgpr-index-mode",
+      "arc-contract-use-objc-claim-rv",
+      "atomic-counter-update-promoted",
+      "atomic-first-counter",
+      "basic-block-section-match-infer",
+      "bounds-checking-single-trap",
+      "cfg-hide-cold-paths",
+      "cfg-hide-deoptimize-paths",
+      "cfg-hide-unreachable-paths",
+      "check-functions-filter",
+      "conditional-counter-update",
+      "cost-kind",
+      "ir2vec-arg-weight",
+      "ir2vec-kind",
+      "ir2vec-opc-weight",
+      "ir2vec-type-weight",
+      "ir2vec-vocab-path",
+      "mir2vec-common-operand-weight",
+      "mir2vec-kind",
+      "mir2vec-opc-weight",
+      "mir2vec-print-all-vocab-entries",
+      "mir2vec-reg-operand-weight",
+      "mir2vec-vocab-path",
+      "ctx-profile-force-is-specialized",
+      "debugify-atoms",
+      "debugify-func-limit",
+      "debugify-level",
+      "debugify-quiet",
+      "devirtualize-speculatively",
+      "disable-auto-upgrade-debug-info",
+      "disable-i2p-p2i-opt",
+      "disable-promote-alloca-to-lds",
+      "disable-promote-alloca-to-vector",
+      "do-counter-promotion",
+      "dot-cfg-mssa",
+      "elide-all-zero-branch-weights",
+      "emit-bb-hash",
+      "enable-cse-in-irtranslator",
+      "enable-cse-in-legalizer",
+      "enable-devirtualize-speculatively",
+      "enable-gvn-hoist",
+      "enable-gvn-memdep",
+      "enable-gvn-memoryssa",
+      "enable-gvn-sink",
+      "enable-jump-table-to-switch",
+      "enable-load-in-loop-pre",
+      "enable-load-pre",
+      "enable-loop-simplifycfg-term-folding",
+      "enable-name-compression",
+      "enable-poison-reuse-guard",
+      "enable-split-backedge-in-load-pre",
+      "enable-split-loopiv-heuristic",
+      "enable-vtable-profile-use",
+      "enable-vtable-value-profiling",
+      "expand-variadics-override",
+      "experimental-debug-variable-locations",
+      "force-tail-folding-style",
+      "fs-profile-debug-bw-threshold",
+      "fs-profile-debug-prob-diff-threshold",
+      "generate-merged-base-profiles",
+      "hash-based-counter-split",
+      "hot-cold-split",
+      "hwasan-percentile-cutoff-hot",
+      "hwasan-random-rate",
+      "import-all-index",
+      "instcombine-code-sinking",
+      "instcombine-guard-widening-window",
+      "instcombine-maxarray-size",
+      "instcombine-max-num-phis",
+      "instcombine-max-sink-users",
+      "instcombine-negator-enabled",
+      "instcombine-negator-max-depth",
+      "instrprof-atomic-counter-update-all",
+      "internalize-public-api-file",
+      "internalize-public-api-list",
+      "intrinsic-cost-strategy",
+      "iterative-counter-promotion",
+      "lower-allow-check-percentile-cutoff-hot",
+      "lower-allow-check-random-rate",
+      "mark-ranges",
+      "matrix-default-layout",
+      "matrix-print-after-transpose-opt",
+      "max-counter-promotions",
+      "max-counter-promotions-per-loop",
+      "mir-strip-debugify-only",
+      "misexpect-tolerance",
+      "ms-secure-hotpatch-functions-file",
+      "ms-secure-hotpatch-functions-list",
+      "no-discriminators",
+      "nvptx-approx-log2f32",
+      "nvptx-sched4reg",
+      "o",
+      "object-size-offset-visitor-max-visit-instructions",
+      "pgo-block-coverage",
+      "pgo-temporal-instrumentation",
+      "pgo-view-block-coverage-graph",
+      "print-pipeline-passes",
+      "profcheck-annotate-select",
+      "profcheck-default-function-entry-count",
+      "profcheck-default-select-false-weight",
+      "profcheck-default-select-true-weight",
+      "profcheck-weights-for-test",
+      "profile-correlate",
+      "promote-alloca-vector-loop-user-weight",
+      "propeller-infer-threshold",
+      "r600-ir-structurize",
+      "runtime-counter-relocation",
+      "safepoint-ir-verifier-print-only",
+      "sampled-instr-burst-duration",
+      "sampled-instr-period",
+      "sampled-instrumentation",
+      "sample-profile-check-record-coverage",
+      "sample-profile-check-sample-coverage",
+      "sample-profile-max-propagate-iterations",
+      "simple-rename",
+      "simple-rename-match",
+      "simple-rename-op-name",
+      "simple-rename-replace",
+      "skip-ret-exit-block",
+      "speculative-counter-promotion-max-exiting",
+      "speculative-counter-promotion-to-loop",
+      "spirv-emit-op-names",
+      "spirv-ext",
+      "spv-allow-unknown-intrinsics",
+      "spv-dump-deps",
+      "spv-emit-nonsemantic-debug-info",
+      "summary-file",
+      "translator-compatibility-mode",
+      "verify-legalizer-debug-locs",
+      "verify-region-info",
+      "vp-counters-per-site",
+      "vp-static-alloc",
 
-  llvm::cl::opt<std::string> outputFilename(
-      "o", llvm::cl::desc("Output filename"), llvm::cl::value_desc("filename"),
-      llvm::cl::init("-"));
+      "cost-kind",
+      "intrinsic-cost-strategy",
+      "spirv-ext",
+      "ir2vec-arg-weight",
+      "ir2vec-kind",
+      "ir2vec-opc-weight",
+      "ir2vec-type-weight",
+      "ir2vec-vocab-path",
+      "mir2vec-common-operand-weight",
+      "mir2vec-kind",
+      "mir2vec-opc-weight",
+      "mir2vec-print-all-vocab-entries",
+      "mir2vec-reg-operand-weight",
+      "mir2vec-vocab-path",
+  });
 
-  llvm::cl::opt<const mlir::RewriterInfo *, false, mlir::RewriterNameParser>
-      rewriter("", llvm::cl::desc("Rewriter to run"));
-
-  std::string helpHeader = "mlir-rewrite";
-
-  llvm::cl::ParseCommandLineOptions(argc, argv, helpHeader);
+  registerRewriterSelectors(P);
+  auto OptsCtx = P.parse(argc, argv, "mlir-rewrite");
+  auto *Opts = OptsCtx->getViewPtr<&RewriteReg>();
 
   // If no rewriter has been selected, exit with error code. Could also just
   // return but its unlikely this was intentionally being used as `cp`.
-  if (!rewriter) {
+  if (!selectedRewriter) {
     llvm::errs() << "No rewriter selected!\n";
     return mlir::asMainReturnCode(mlir::failure());
   }
 
   // Set up rewrite buffer.
-  auto rewriterOr = RewritePad::init(inputFilename, outputFilename);
+  auto rewriterOr = RewritePad::init(Opts->get<&inputFilenameOpt>(),
+                                     Opts->get<&outputFilenameOpt>());
   if (!rewriterOr)
     return mlir::asMainReturnCode(mlir::failure());
 
   // Set up the output file.
   std::string errorMessage;
-  auto output = openOutputFile(outputFilename, &errorMessage);
+  auto output = openOutputFile(Opts->get<&outputFilenameOpt>(), &errorMessage);
   if (!output) {
     llvm::errs() << errorMessage << "\n";
     return mlir::asMainReturnCode(mlir::failure());
   }
 
-  LogicalResult result = rewriter->invoke(*rewriterOr, output->os());
+  // Handle simple-rename specially: call the implementation with parsed
+  // clv2 options since the registered function cannot access them.
+  LogicalResult result = mlir::failure();
+  if (selectedRewriter->getRewriterArgument() == "simple-rename") {
+    result = simpleRenameImpl(*rewriterOr, output->os(),
+                              Opts->get<&simpleRenameOpNameOpt>(),
+                              Opts->get<&simpleRenameMatchOpt>(),
+                              Opts->get<&simpleRenameReplaceOpt>());
+  } else {
+    result = selectedRewriter->invoke(*rewriterOr, output->os());
+  }
+
   if (succeeded(result)) {
     rewriterOr->write(output->os());
     output->keep();

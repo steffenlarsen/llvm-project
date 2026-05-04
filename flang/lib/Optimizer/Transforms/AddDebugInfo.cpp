@@ -564,7 +564,8 @@ void AddDebugInfoPass::handleFuncOp(mlir::func::FuncOp funcOp,
   mlir::OpBuilder builder(context);
   llvm::StringRef fileName(fileAttr.getName());
   llvm::StringRef filePath(fileAttr.getDirectory());
-  unsigned int CC = (funcOp.getName() == fir::NameUniquer::doProgramEntry())
+  unsigned int CC = (funcOp.getName() == fir::NameUniquer::doProgramEntry(
+                                             context->getOptionsContext()))
                         ? llvm::dwarf::getCallingConvention("DW_CC_program")
                         : llvm::dwarf::getCallingConvention("DW_CC_normal");
 
@@ -584,7 +585,8 @@ void AddDebugInfoPass::handleFuncOp(mlir::func::FuncOp funcOp,
 
   // try to use a better function name than _QQmain for the program statement
   bool isMain = false;
-  if (funcName == fir::NameUniquer::doProgramEntry()) {
+  if (funcName ==
+      fir::NameUniquer::doProgramEntry(context->getOptionsContext())) {
     isMain = true;
     // The main program symbol name is uppercased in the cooked character stream
     // so that it cannot clash with any other symbol. Go through the presentable
@@ -1023,7 +1025,7 @@ void AddDebugInfoPass::runOnOperation() {
     } else
       fileName = "-";
   } else {
-    fileName = inputFilename;
+    fileName = *inputFilename;
     llvm::SmallString<256> cwd;
     if (!llvm::sys::fs::current_path(cwd))
       filePath = cwd.str();
@@ -1035,7 +1037,7 @@ void AddDebugInfoPass::runOnOperation() {
   // appending -dwarf-debug-flags content when provided.
   std::string producerString = Fortran::common::getFlangFullVersion();
   if (!dwarfDebugFlags.empty())
-    producerString += " " + dwarfDebugFlags;
+    producerString += " " + std::string(*dwarfDebugFlags);
   mlir::StringAttr producer = mlir::StringAttr::get(context, producerString);
   // A unit that only emits line directives has no .debug_info, so the header
   // of its compile unit, and with it the label the DWARF 5 accelerator table
@@ -1051,7 +1053,7 @@ void AddDebugInfoPass::runOnOperation() {
       llvm::dwarf::getLanguage("DW_LANG_Fortran95"), fileAttr, producer,
       isOptimized, debugLevel, debugInfoForProfiling, nameTableKind,
       splitDwarfFile.empty() ? mlir::StringAttr()
-                             : mlir::StringAttr::get(context, splitDwarfFile));
+                             : mlir::StringAttr::get(context, *splitDwarfFile));
 
   // Process module globals early.
   // Walk through all DeclareOps in functions and process globals that are

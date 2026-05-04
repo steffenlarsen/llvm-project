@@ -8,7 +8,7 @@
 
 #include "Basic/SequenceToOffsetTable.h"
 #include "Common/CodeGenDAGPatterns.h" // For SDNodeInfo.
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/TableGen/CodeGenHelpers.h"
 #include "llvm/TableGen/Error.h"
@@ -17,15 +17,38 @@
 
 using namespace llvm;
 
-static cl::OptionCategory SDNodeInfoEmitterCat("Options for -gen-sdnode-info");
+static clv2::OptionCategory
+    SDNodeInfoEmitterCat("Options for -gen-sdnode-info");
 
-static cl::opt<std::string> TargetSDNodeNamespace(
-    "sdnode-namespace", cl::cat(SDNodeInfoEmitterCat),
-    cl::desc("Specify target SDNode namespace (default=<Target>ISD)"));
+static std::string TargetSDNodeNamespace;
+static bool TargetSDNodeNamespaceSpecified = false;
 
-static cl::opt<bool> WarnOnSkippedNodes(
-    "warn-on-skipped-nodes", cl::cat(SDNodeInfoEmitterCat),
-    cl::desc("Explain why a node was skipped (default=true)"), cl::init(true));
+static bool WarnOnSkippedNodes = true;
+
+static constexpr clv2::OptionInfo<std::string> OI_SDNodeNamespace{
+    "sdnode-namespace", "Specify target SDNode namespace (default=<Target>ISD)",
+    clv2::cat(SDNodeInfoEmitterCat)};
+
+static constexpr clv2::OptionInfo<bool> OI_WarnOnSkippedNodes{
+    "warn-on-skipped-nodes", "Explain why a node was skipped (default=true)",
+    clv2::Init{true}, clv2::cat(SDNodeInfoEmitterCat)};
+
+static constexpr clv2::OptionsRegistry<&OI_SDNodeNamespace,
+                                       &OI_WarnOnSkippedNodes>
+    SDNodeInfoEmitterReg;
+
+static void applySDNodeInfoEmitter(
+    const decltype(SDNodeInfoEmitterReg)::ParsedOptionsT &Opts) {
+  if (Opts.specified<&OI_SDNodeNamespace>()) {
+    TargetSDNodeNamespace = Opts.get<&OI_SDNodeNamespace>();
+    TargetSDNodeNamespaceSpecified = true;
+  }
+  WarnOnSkippedNodes = Opts.get<&OI_WarnOnSkippedNodes>();
+}
+
+void registerSDNodeInfoEmitterOptions(clv2::OptionParser &P) {
+  P.add<&SDNodeInfoEmitterReg, applySDNodeInfoEmitter>();
+}
 
 namespace {
 
@@ -89,7 +112,7 @@ SDNodeInfoEmitter::SDNodeInfoEmitter(const RecordKeeper &RK)
   const CodeGenHwModes &HwModes = Target.getHwModes();
 
   // Figure out target SDNode namespace.
-  if (!TargetSDNodeNamespace.getNumOccurrences())
+  if (!TargetSDNodeNamespaceSpecified)
     TargetSDNodeNamespace = Target.getName().str() + "ISD";
 
   // Filter nodes by the target SDNode namespace and create a mapping

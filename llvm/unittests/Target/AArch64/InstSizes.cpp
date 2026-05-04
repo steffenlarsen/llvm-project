@@ -51,23 +51,22 @@ void runChecks(
     TargetMachine *TM, AArch64InstrInfo *II, const StringRef InputIRSnippet,
     const StringRef InputMIRSnippet,
     std::function<void(AArch64InstrInfo &, MachineFunction &)> Checks) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
-  auto MIRString =
-    "--- |\n"
-    "  declare void @sizes()\n"
-    + InputIRSnippet.str() +
-    "...\n"
-    "---\n"
-    "name: sizes\n"
-    "jumpTable:\n"
-    "  kind:            block-address\n"
-    "  entries:\n"
-    "    - id:              0\n"
-    "      blocks:          [ '%bb.0' ]\n"
-    "body: |\n"
-    "  bb.0:\n"
-    + InputMIRSnippet.str();
+  auto MIRString = "--- |\n"
+                   "  declare void @sizes()\n" +
+                   InputIRSnippet.str() +
+                   "...\n"
+                   "---\n"
+                   "name: sizes\n"
+                   "jumpTable:\n"
+                   "  kind:            block-address\n"
+                   "  entries:\n"
+                   "    - id:              0\n"
+                   "      blocks:          [ '%bb.0' ]\n"
+                   "body: |\n"
+                   "  bb.0:\n" +
+                   InputMIRSnippet.str();
 
   std::unique_ptr<MemoryBuffer> MBuffer = MemoryBuffer::getMemBuffer(MIRString);
   std::unique_ptr<MIRParser> MParser =
@@ -116,12 +115,14 @@ TEST(InstSizes, Authenticated) {
 
   runChecks(TM.get(), II.get(), "",
             "    \n"
-            "    frame-destroy AUTIASP implicit-def $lr, implicit killed $lr, implicit $sp\n",
+            "    frame-destroy AUTIASP implicit-def $lr, implicit killed $lr, "
+            "implicit $sp\n",
             isAuthInst);
 
   runChecks(TM.get(), II.get(), "",
             "    \n"
-            "    frame-destroy AUTIBSP implicit-def $lr, implicit killed $lr, implicit $sp\n",
+            "    frame-destroy AUTIBSP implicit-def $lr, implicit killed $lr, "
+            "implicit $sp\n",
             isAuthInst);
 }
 
@@ -130,8 +131,9 @@ TEST(InstSizes, STACKMAP) {
   ASSERT_TRUE(TM);
   auto [ST, II] = createInstrInfo(TM.get());
 
-  runChecks(TM.get(), II.get(), "", "    STACKMAP 0, 16\n"
-                                    "    STACKMAP 1, 32\n",
+  runChecks(TM.get(), II.get(), "",
+            "    STACKMAP 0, 16\n"
+            "    STACKMAP 1, 32\n",
             [](AArch64InstrInfo &II, MachineFunction &MF) {
               auto I = MF.begin()->begin();
               EXPECT_EQ(16u, II.getInstSizeInBytes(*I));
@@ -201,42 +203,39 @@ TEST(InstSizes, StoreSwiftAsyncContext) {
   std::unique_ptr<TargetMachine> TM = createTargetMachine();
   auto [ST, II] = createInstrInfo(TM.get());
 
-  runChecks(
-      TM.get(), II.get(), "",
-      "    StoreSwiftAsyncContext $x0, $x1, 12, implicit-def $x16, "
-      "implicit-def $x17\n",
-      [](AArch64InstrInfo &II, MachineFunction &MF) {
-        auto I = MF.begin()->begin();
-        EXPECT_EQ(20u, II.getInstSizeInBytes(*I));
-      });
+  runChecks(TM.get(), II.get(), "",
+            "    StoreSwiftAsyncContext $x0, $x1, 12, implicit-def $x16, "
+            "implicit-def $x17\n",
+            [](AArch64InstrInfo &II, MachineFunction &MF) {
+              auto I = MF.begin()->begin();
+              EXPECT_EQ(20u, II.getInstSizeInBytes(*I));
+            });
 }
 
 TEST(InstSizes, SpeculationBarrierISBDSBEndBB) {
   std::unique_ptr<TargetMachine> TM = createTargetMachine();
   auto [ST, II] = createInstrInfo(TM.get());
 
-  runChecks(
-      TM.get(), II.get(), "",
-      "    SpeculationBarrierISBDSBEndBB\n"
-      "    BR $x8\n",
-      [](AArch64InstrInfo &II, MachineFunction &MF) {
-        auto I = MF.begin()->begin();
-        EXPECT_EQ(8u, II.getInstSizeInBytes(*I));
-      });
+  runChecks(TM.get(), II.get(), "",
+            "    SpeculationBarrierISBDSBEndBB\n"
+            "    BR $x8\n",
+            [](AArch64InstrInfo &II, MachineFunction &MF) {
+              auto I = MF.begin()->begin();
+              EXPECT_EQ(8u, II.getInstSizeInBytes(*I));
+            });
 }
 
 TEST(InstSizes, SpeculationBarrierSBEndBB) {
   std::unique_ptr<TargetMachine> TM = createTargetMachine();
   auto [ST, II] = createInstrInfo(TM.get());
 
-  runChecks(
-      TM.get(), II.get(), "",
-      "    SpeculationBarrierSBEndBB\n"
-      "    BR $x8\n",
-      [](AArch64InstrInfo &II, MachineFunction &MF) {
-        auto I = MF.begin()->begin();
-        EXPECT_EQ(4u, II.getInstSizeInBytes(*I));
-      });
+  runChecks(TM.get(), II.get(), "",
+            "    SpeculationBarrierSBEndBB\n"
+            "    BR $x8\n",
+            [](AArch64InstrInfo &II, MachineFunction &MF) {
+              auto I = MF.begin()->begin();
+              EXPECT_EQ(4u, II.getInstSizeInBytes(*I));
+            });
 }
 
 TEST(InstSizes, JumpTable) {

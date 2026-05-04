@@ -11,10 +11,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/TableGen/Main.h"
 #include "llvm/TableGen/Record.h"
+#include "llvm/TableGen/TableGenBackend.h"
 
 #include "Generators.hpp"
 
@@ -36,32 +38,28 @@ enum ActionType {
   GenInfo,
 };
 
-namespace {
-cl::opt<ActionType> Action(
-    cl::desc("Action to perform:"),
-    cl::values(
-        clEnumValN(PrintRecords, "print-records",
-                   "Print all records to stdout (default)"),
-        clEnumValN(DumpJSON, "dump-json",
-                   "Dump all records as machine-readable JSON"),
-        clEnumValN(GenAPI, "gen-api", "Generate Offload API header contents"),
-        clEnumValN(GenDoc, "gen-doc",
-                   "Generate Offload API documentation contents"),
-        clEnumValN(GenFuncNames, "gen-func-names",
-                   "Generate a list of all Offload API function names"),
-        clEnumValN(
-            GenImplFuncDecls, "gen-impl-func-decls",
-            "Generate declarations for Offload API implementation functions"),
-        clEnumValN(GenEntryPoints, "gen-entry-points",
-                   "Generate Offload API wrapper function definitions"),
-        clEnumValN(GenPrintHeader, "gen-print-header",
-                   "Generate Offload API print header"),
-        clEnumValN(GenExports, "gen-exports",
-                   "Generate export file for the Offload library"),
-        clEnumValN(GenErrcodes, "gen-errcodes",
-                   "Generate Offload Error Code enum"),
-        clEnumValN(GenInfo, "gen-info", "Generate Offload Info enum")));
-}
+static constexpr clv2::EnumVal<ActionType> ActionVals[] = {
+    {"print-records", PrintRecords, "Print all records to stdout (default)"},
+    {"dump-json", DumpJSON, "Dump all records as machine-readable JSON"},
+    {"gen-api", GenAPI, "Generate Offload API header contents"},
+    {"gen-doc", GenDoc, "Generate Offload API documentation contents"},
+    {"gen-func-names", GenFuncNames,
+     "Generate a list of all Offload API function names"},
+    {"gen-impl-func-decls", GenImplFuncDecls,
+     "Generate declarations for Offload API implementation functions"},
+    {"gen-entry-points", GenEntryPoints,
+     "Generate Offload API wrapper function definitions"},
+    {"gen-print-header", GenPrintHeader, "Generate Offload API print header"},
+    {"gen-exports", GenExports, "Generate export file for the Offload library"},
+    {"gen-errcodes", GenErrcodes, "Generate Offload Error Code enum"},
+    {"gen-info", GenInfo, "Generate Offload Info enum"},
+};
+
+static constexpr auto ActionOpt = clv2::makeEnumOption<ActionType>(
+    "", "Action to perform:", ActionVals, clv2::Init{PrintRecords});
+
+// File-scope variable populated from parsed options.
+static ActionType Action;
 
 static bool OffloadTableGenMain(raw_ostream &OS, const RecordKeeper &Records) {
   switch (Action) {
@@ -103,9 +101,17 @@ static bool OffloadTableGenMain(raw_ostream &OS, const RecordKeeper &Records) {
   return false;
 }
 
+static constexpr clv2::OptionsRegistry<&ActionOpt> OffloadTblgenReg;
+
 int OffloadTblgenMain(int argc, char **argv) {
   InitLLVM y(argc, argv);
-  cl::ParseCommandLineOptions(argc, argv);
+  clv2::OptionParser P;
+  registerTableGenMainOptions(P);
+  TableGen::Emitter::registerBackendOptions(P);
+  P.add<&OffloadTblgenReg>();
+  auto OptsCtx = P.parse(argc, argv, "Offload TableGen\n");
+  auto *Opts = OptsCtx->getViewPtr<&OffloadTblgenReg>();
+  Action = Opts->get<&ActionOpt>();
   return TableGenMain(argv[0], &OffloadTableGenMain);
 }
 } // namespace tblgen

@@ -51,7 +51,7 @@ struct TestMmaSyncF32ToTF32Patterns
       llvm::cl::init("tf32")};
 
   MmaSyncF32Lowering tf32Precision =
-      llvm::StringSwitch<MmaSyncF32Lowering>(precision)
+      llvm::StringSwitch<MmaSyncF32Lowering>(*precision)
           .Case("tf32", MmaSyncF32Lowering::TF32)
           .Case("tf32x3", MmaSyncF32Lowering::TF32x3)
           .Default(MmaSyncF32Lowering::Unkown);

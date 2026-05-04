@@ -41,7 +41,7 @@
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/OptTable.h"
 #include "llvm/Option/Option.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/FileOutputBuffer.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -330,7 +330,8 @@ static Error addBitcodeInput(SmallVector<PendingInput> &Inputs,
   if (identify_magic(Buffer->getBuffer()) != file_magic::bitcode)
     return createStringError("unsupported file type: '" +
                              Buffer->getBufferIdentifier() + "'");
-  Expected<IRSymtabFile> SymtabOrErr = readIRSymtab(Buffer->getMemBufferRef());
+  Expected<IRSymtabFile> SymtabOrErr = readIRSymtab(
+      Buffer->getMemBufferRef(), llvm::clv2::defaultOptionsContext());
   if (!SymtabOrErr)
     return SymtabOrErr.takeError();
   Inputs.push_back(
@@ -937,7 +938,7 @@ static Error runSYCLLink(ArrayRef<std::unique_ptr<MemoryBuffer>> Inputs,
                          StringRef TripleSource, const ArgList &Args) {
   llvm::TimeTraceScope TimeScope("SYCL linking");
 
-  LLVMContext C;
+  LLVMContext C(llvm::clv2::defaultOptionsContext());
 
   // Link all input bitcode files and library files.
   Expected<LinkResult> LinkedOrErr =

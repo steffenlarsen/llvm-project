@@ -36,11 +36,11 @@
 #include "llvm/MC/MCValue.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/RISCVAttributes.h"
+#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
 #include "llvm/TargetParser/RISCVISAInfo.h"
 
 #include <limits>
@@ -54,8 +54,10 @@ using namespace llvm;
 STATISTIC(RISCVNumInstrsCompressed,
           "Number of RISC-V Compressed instructions emitted");
 
-static cl::opt<bool> AddBuildAttributes("riscv-add-build-attributes",
-                                        cl::init(false));
+static bool getAddBuildAttributes(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_AddBuildAttributes>(
+      Ctx, false);
+}
 
 namespace {
 struct RISCVOperand;
@@ -350,7 +352,7 @@ public:
     const MCObjectFileInfo *MOFI = Parser.getContext().getObjectFileInfo();
     ParserOptions.IsPicEnabled = MOFI->isPositionIndependent();
 
-    if (AddBuildAttributes)
+    if (getAddBuildAttributes(getContext().getOptionsContext()))
       getTargetStreamer().emitTargetAttributes(STI, /*EmitStackAlign*/ false);
   }
 };

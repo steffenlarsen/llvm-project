@@ -25,6 +25,7 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormattedStream.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 #include <cassert>
@@ -68,8 +69,9 @@ LLVMCreateDisasmCPUFeatures(const char *TT, const char *CPU,
   if (!MII)
     return nullptr;
 
-  std::unique_ptr<const MCSubtargetInfo> STI(
-      TheTarget->createMCSubtargetInfo(TheTriple, CPU, Features));
+  std::unique_ptr<const MCSubtargetInfo> STI(TheTarget->createMCSubtargetInfo(
+      TheTriple, CPU, Features,
+      /*Ctx=*/llvm::clv2::defaultOptionsContext() /* C API entry point */));
   if (!STI)
     return nullptr;
 

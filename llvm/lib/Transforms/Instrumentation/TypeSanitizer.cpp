@@ -31,9 +31,10 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/ProfileData/InstrProf.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/MD5.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Regex.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
@@ -53,22 +54,27 @@ static const char *const kTysanShadowMemoryAddress =
     "__tysan_shadow_memory_address";
 static const char *const kTysanAppMemMask = "__tysan_app_memory_mask";
 
-static cl::opt<bool>
-    ClWritesAlwaysSetType("tysan-writes-always-set-type",
-                          cl::desc("Writes always set the type"), cl::Hidden,
-                          cl::init(false));
+// When non-negative, overrides the outline instrumentation flag (used by the
+// verify-outlined path to force inline mode).
+static int ClOutlineInstrumentationOverride = -1;
 
-static cl::opt<bool> ClOutlineInstrumentation(
-    "tysan-outline-instrumentation",
-    cl::desc("Uses function calls for all TySan instrumentation, reducing "
-             "ELF size"),
-    cl::Hidden, cl::init(true));
+static bool getClWritesAlwaysSetType(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_TysanWritesAlwaysSetType>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> ClVerifyOutlinedInstrumentation(
-    "tysan-verify-outlined-instrumentation",
-    cl::desc("Check types twice with both inlined instrumentation and "
-             "function calls. This verifies that they behave the same."),
-    cl::Hidden, cl::init(false));
+static bool getClOutlineInstrumentation(const Module &M) {
+  if (ClOutlineInstrumentationOverride >= 0)
+    return ClOutlineInstrumentationOverride != 0;
+  return clv2::getOptValOrDefault<&clv2::INST_TysanOutlineInstrumentation>(
+      M.getContext().getOptionsContext());
+}
+
+static bool getClVerifyOutlinedInstrumentation(const Module &M) {
+  return clv2::getOptValOrDefault<
+      &clv2::INST_TysanVerifyOutlinedInstrumentation>(
+      M.getContext().getOptionsContext());
+}
 
 STATISTIC(NumInstrumentedAccesses, "Number of instrumented accesses");
 
@@ -97,12 +103,13 @@ private:
                                   Value *AppMemMask, bool ForceSetType,
                                   bool SanitizeFunction,
                                   TypeDescriptorsMapTy &TypeDescriptors,
-                                  const DataLayout &DL);
+                                  const DataLayout &DL, const Module &M);
 
   /// Memory-related intrinsics/instructions reset the type of the destination
   /// memory (including allocas and byval arguments).
   bool instrumentMemInst(Value *I, Instruction *ShadowBase,
-                         Instruction *AppMemMask, const DataLayout &DL);
+                         Instruction *AppMemMask, const DataLayout &DL,
+                         const Module &M);
 
   std::string getAnonymousStructIdentifier(const MDNode *MD,
                                            TypeNameMapTy &TypeNames);
@@ -223,7 +230,7 @@ void TypeSanitizer::instrumentGlobals(Module &M) {
     uint64_t AccessSize = DL.getTypeStoreSize(AccessTy);
     instrumentWithShadowUpdate(IRB, TBAAMD, GV, AccessSize, false, false,
                                ShadowBase, AppMemMask, true, false,
-                               TypeDescriptors, DL);
+                               TypeDescriptors, DL, M);
   }
 
   if (TysanGlobalsSetTypeFunction) {
@@ -593,14 +600,14 @@ bool TypeSanitizer::sanitizeFunction(Function &F,
             IRB, MLoc.AATags.TBAA, const_cast<Value *>(MLoc.Ptr),
             MLoc.Size.getValue(), I->mayReadFromMemory(), I->mayWriteToMemory(),
             ShadowBase, AppMemMask, false, SanitizeFunction, TypeDescriptors,
-            DL)) {
+            DL, M)) {
       ++NumInstrumentedAccesses;
       Res = true;
     }
   }
 
   for (auto Inst : MemTypeResetInsts)
-    Res |= instrumentMemInst(Inst, ShadowBase, AppMemMask, DL);
+    Res |= instrumentMemInst(Inst, ShadowBase, AppMemMask, DL, M);
 
   return Res;
 }
@@ -620,7 +627,8 @@ bool TypeSanitizer::instrumentWithShadowUpdate(
     IRBuilder<> &IRB, const MDNode *TBAAMD, Value *Ptr, uint64_t AccessSize,
     bool IsRead, bool IsWrite, Value *ShadowBase, Value *AppMemMask,
     bool ForceSetType, bool SanitizeFunction,
-    TypeDescriptorsMapTy &TypeDescriptors, const DataLayout &DL) {
+    TypeDescriptorsMapTy &TypeDescriptors, const DataLayout &DL,
+    const Module &M) {
   Constant *TDGV;
   if (TBAAMD)
     TDGV = TypeDescriptors[TBAAMD];
@@ -629,8 +637,8 @@ bool TypeSanitizer::instrumentWithShadowUpdate(
 
   Value *TD = IRB.CreateBitCast(TDGV, IRB.getPtrTy());
 
-  if (ClOutlineInstrumentation) {
-    if (!ForceSetType && (!ClWritesAlwaysSetType || IsRead)) {
+  if (getClOutlineInstrumentation(M)) {
+    if (!ForceSetType && (!getClWritesAlwaysSetType(M) || IsRead)) {
       // We need to check the type here. If the type is unknown, then the read
       // sets the type. If the type is known, then it is checked. If the type
       // doesn't match, then we call the runtime type check (which may yet
@@ -679,14 +687,14 @@ bool TypeSanitizer::instrumentWithShadowUpdate(
     }
   };
 
-  if (ForceSetType || (ClWritesAlwaysSetType && IsWrite)) {
+  if (ForceSetType || (getClWritesAlwaysSetType(M) && IsWrite)) {
     // In the mode where writes always set the type, for a write (which does
     // not also read), we just set the type.
     SetType();
     return true;
   }
 
-  assert((!ClWritesAlwaysSetType || IsRead) &&
+  assert((!getClWritesAlwaysSetType(M) || IsRead) &&
          "should have handled case above");
   LLVMContext &C = IRB.getContext();
   MDNode *UnlikelyBW = MDBuilder(C).createBranchWeights(1, 100000);
@@ -828,7 +836,7 @@ bool TypeSanitizer::instrumentWithShadowUpdate(
 
 bool TypeSanitizer::instrumentMemInst(Value *V, Instruction *ShadowBase,
                                       Instruction *AppMemMask,
-                                      const DataLayout &DL) {
+                                      const DataLayout &DL, const Module &M) {
   BasicBlock::iterator IP;
   BasicBlock *BB;
   Function *F;
@@ -896,7 +904,7 @@ bool TypeSanitizer::instrumentMemInst(Value *V, Instruction *ShadowBase,
     }
   }
 
-  if (ClOutlineInstrumentation) {
+  if (getClOutlineInstrumentation(M)) {
     if (!Src)
       Src = ConstantPointerNull::get(IRB.getPtrTy());
 
@@ -961,15 +969,17 @@ PreservedAnalyses TypeSanitizerPass::run(Module &M,
   for (Function &F : M) {
     const TargetLibraryInfo &TLI = FAM.getResult<TargetLibraryAnalysis>(F);
     TySan.sanitizeFunction(F, TLI);
-    if (ClVerifyOutlinedInstrumentation && ClOutlineInstrumentation) {
+    if (getClVerifyOutlinedInstrumentation(M) &&
+        getClOutlineInstrumentation(M)) {
       // Outlined instrumentation is a new option, and so this exists to
       // verify there is no difference in behaviour between the options.
       // If the outlined instrumentation triggers a verification failure
       // when the original inlined instrumentation does not, or vice versa,
       // then there is a discrepency which should be investigated.
-      ClOutlineInstrumentation = false;
+      // Use the override to force inline mode, bypassing the clv2 getter.
+      ClOutlineInstrumentationOverride = 0;
       TySan.sanitizeFunction(F, TLI);
-      ClOutlineInstrumentation = true;
+      ClOutlineInstrumentationOverride = -1;
     }
   }
 

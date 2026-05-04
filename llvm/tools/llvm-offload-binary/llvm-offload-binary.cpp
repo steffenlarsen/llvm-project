@@ -16,45 +16,46 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/Magic.h"
 #include "llvm/Object/ArchiveWriter.h"
-#include "llvm/Object/ELFObjectFile.h"
-#include "llvm/Object/ObjectFile.h"
 #include "llvm/Object/OffloadBinary.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileOutputBuffer.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/WithColor.h"
 
 using namespace llvm;
 using namespace llvm::object;
+using namespace llvm::clv2;
 
-static cl::opt<bool> Help("h", cl::desc("Alias for -help"), cl::Hidden);
+static constexpr OptionCategory OffloadBinaryCategory{
+    "llvm-offload-binary options"};
 
-static cl::OptionCategory OffloadBinaryCategory("llvm-offload-binary options");
+static constexpr OptionInfo<std::string> OutputFile{
+    "o", "Write output to <file>.", value_desc("file"),
+    cat(OffloadBinaryCategory)};
 
-static cl::opt<std::string> OutputFile("o", cl::desc("Write output to <file>."),
-                                       cl::value_desc("file"),
-                                       cl::cat(OffloadBinaryCategory));
+static constexpr OptionInfo<std::string> InputFile{
+    "input", "Extract from <file>.", Positional{}, value_desc("file"),
+    cat(OffloadBinaryCategory)};
 
-static cl::opt<std::string> InputFile(cl::Positional,
-                                      cl::desc("Extract from <file>."),
-                                      cl::value_desc("file"),
-                                      cl::cat(OffloadBinaryCategory));
+static constexpr ListOptionInfo<std::string> DeviceImages{
+    "image",
+    "List of key and value arguments. Required keywords are 'file' and "
+    "'triple'.",
+    value_desc("<key>=<value>,..."), cat(OffloadBinaryCategory)};
 
-static cl::list<std::string>
-    DeviceImages("image",
-                 cl::desc("List of key and value arguments. Required keywords "
-                          "are 'file' and 'triple'."),
-                 cl::value_desc("<key>=<value>,..."),
-                 cl::cat(OffloadBinaryCategory));
+static constexpr OptionInfo<bool> CreateArchive{
+    "archive", "Write extracted files to a static archive",
+    cat(OffloadBinaryCategory)};
 
-static cl::opt<bool>
-    CreateArchive("archive",
-                  cl::desc("Write extracted files to a static archive"),
-                  cl::cat(OffloadBinaryCategory));
+static constexpr OptionsRegistry<&OutputFile, &InputFile, &DeviceImages,
+                                 &CreateArchive>
+    OffloadBinaryReg;
 
 /// Path of the current binary.
 static const char *PackagerExecutable;
@@ -86,9 +87,11 @@ static Error writeFile(StringRef Filename, StringRef Data) {
   return Error::success();
 }
 
-static Error bundleImages() {
-  SmallVector<OffloadBinary::OffloadingImage> AllImages;
-  for (StringRef Image : DeviceImages) {
+static Error bundleImages(const std::vector<std::string> &Images,
+                          StringRef OutFile) {
+  SmallVector<char, 1024> BinaryData;
+  raw_svector_ostream OS(BinaryData);
+  for (StringRef Image : Images) {
     BumpPtrAllocator Alloc;
     StringSaver Saver(Alloc);
     DenseMap<StringRef, StringRef> Args = getImageArguments(Image, Saver);
@@ -122,16 +125,16 @@ static Error bundleImages() {
           ImageBinary.StringData[Key] = Value;
         }
       }
-      AllImages.emplace_back(std::move(ImageBinary));
+      llvm::SmallString<0> Buffer = OffloadBinary::write(ImageBinary);
+      if (Buffer.size() % OffloadBinary::getAlignment() != 0)
+        return createStringError(inconvertibleErrorCode(),
+                                 "Offload binary has invalid size alignment");
+      OS << Buffer;
     }
   }
 
-  SmallString<0> Buffer = OffloadBinary::write(AllImages);
-  if (Buffer.size() % OffloadBinary::getAlignment() != 0)
-    return createStringError(inconvertibleErrorCode(),
-                             "Offload binary has invalid size alignment");
-
-  if (Error E = writeFile(OutputFile, StringRef(Buffer.data(), Buffer.size())))
+  if (Error E =
+          writeFile(OutFile, StringRef(BinaryData.begin(), BinaryData.size())))
     return E;
   return Error::success();
 }
@@ -174,11 +177,12 @@ static Error extractBinary(const OffloadBinary *Binary, StringRef InputFile,
   return Error::success();
 }
 
-static Error unbundleImages() {
+static Error unbundleImages(const std::vector<std::string> &Images,
+                            StringRef InFile, bool DoCreateArchive) {
   ErrorOr<std::unique_ptr<MemoryBuffer>> BufferOrErr =
-      MemoryBuffer::getFileOrSTDIN(InputFile);
+      MemoryBuffer::getFileOrSTDIN(InFile);
   if (std::error_code EC = BufferOrErr.getError())
-    return createFileError(InputFile, EC);
+    return createFileError(InFile, EC);
   std::unique_ptr<MemoryBuffer> Buffer = std::move(*BufferOrErr);
 
   // This data can be misaligned if extracted from an archive.
@@ -192,19 +196,19 @@ static Error unbundleImages() {
     return Err;
 
   // If no filters specified, extract all images.
-  if (DeviceImages.empty()) {
+  if (Images.empty()) {
     BumpPtrAllocator Alloc;
     StringSaver Saver(Alloc);
     uint64_t Idx = 0;
     for (const OffloadFile &File : Binaries) {
-      if (Error E = extractBinary(File.getBinary(), InputFile, Idx, Saver))
+      if (Error E = extractBinary(File.getBinary(), InFile, Idx, Saver))
         return E;
     }
     return Error::success();
   }
 
   // Try to extract each device image specified by the user from the input file.
-  for (StringRef Image : DeviceImages) {
+  for (StringRef Image : Images) {
     BumpPtrAllocator Alloc;
     StringSaver Saver(Alloc);
     auto Args = getImageArguments(Image, Saver);
@@ -232,7 +236,7 @@ static Error unbundleImages() {
     if (Extracted.empty())
       continue;
 
-    if (CreateArchive) {
+    if (DoCreateArchive) {
       if (!Args.count("file"))
         return createStringError(inconvertibleErrorCode(),
                                  "Image must have a 'file' argument.");
@@ -257,7 +261,7 @@ static Error unbundleImages() {
     } else {
       uint64_t Idx = 0;
       for (const OffloadBinary *Binary : Extracted) {
-        if (Error E = extractBinary(Binary, InputFile, Idx, Saver))
+        if (Error E = extractBinary(Binary, InFile, Idx, Saver))
           return E;
       }
     }
@@ -268,20 +272,30 @@ static Error unbundleImages() {
 
 int main(int argc, const char **argv) {
   sys::PrintStackTraceOnErrorSignal(argv[0]);
-  cl::HideUnrelatedOptions(OffloadBinaryCategory);
-  cl::ParseCommandLineOptions(
+
+  clv2::OptionParser P;
+  P.add<&OffloadBinaryReg>();
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&OffloadBinaryCategory});
+  auto OptsCtx = P.parse(
       argc, argv,
       "A utility for bundling several object files into a single binary.\n"
       "The output binary can then be embedded into the host section table\n"
       "to create a fatbinary containing offloading code.\n");
+  auto *Opts = OptsCtx->getViewPtr<&OffloadBinaryReg>();
 
   if (sys::path::stem(argv[0]).ends_with("clang-offload-packager"))
-    WithColor::warning(errs(), PackagerExecutable)
+    WithColor::warning(errs(), argv[0])
         << "'clang-offload-packager' is deprecated. Use 'llvm-offload-binary' "
            "instead.\n";
 
-  if (Help || (OutputFile.empty() && InputFile.empty())) {
-    cl::PrintHelpMessage();
+  const std::string &OutFile = Opts->get<&OutputFile>();
+  const std::string &InFile = Opts->get<&InputFile>();
+  const std::vector<std::string> &Images = Opts->get<&DeviceImages>();
+  bool DoCreateArchive = Opts->get<&CreateArchive>();
+
+  if (OutFile.empty() && InFile.empty()) {
+    outs() << OffloadBinaryReg.helpText(/*ShowHidden=*/false);
     return EXIT_SUCCESS;
   }
 
@@ -291,17 +305,17 @@ int main(int argc, const char **argv) {
     return EXIT_FAILURE;
   };
 
-  if (!InputFile.empty() && !OutputFile.empty())
+  if (!InFile.empty() && !OutFile.empty())
     return reportError(
         createStringError(inconvertibleErrorCode(),
                           "Packaging to an output file and extracting from an "
                           "input file are mutually exclusive."));
 
-  if (!OutputFile.empty()) {
-    if (Error Err = bundleImages())
+  if (!OutFile.empty()) {
+    if (Error Err = bundleImages(Images, OutFile))
       return reportError(std::move(Err));
-  } else if (!InputFile.empty()) {
-    if (Error Err = unbundleImages())
+  } else if (!InFile.empty()) {
+    if (Error Err = unbundleImages(Images, InFile, DoCreateArchive))
       return reportError(std::move(Err));
   }
 

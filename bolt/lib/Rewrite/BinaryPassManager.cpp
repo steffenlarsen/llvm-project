@@ -7,10 +7,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Rewrite/BinaryPassManager.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
 #include "bolt/Passes/AArch64RelaxationPass.h"
 #include "bolt/Passes/Aligner.h"
 #include "bolt/Passes/AllocCombiner.h"
 #include "bolt/Passes/AsmDump.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "bolt/Passes/CMOVConversion.h"
 #include "bolt/Passes/FixRISCVCallsPass.h"
 #include "bolt/Passes/FixRelaxationPass.h"
@@ -40,7 +42,11 @@
 #include "bolt/Passes/ValidateInternalCalls.h"
 #include "bolt/Passes/ValidateMemRefs.h"
 #include "bolt/Passes/VeneerElimination.h"
+#include "bolt/Rewrite/BoltRewriteOptionsOptInfos.h"
+#include "bolt/RuntimeLibs/BoltRuntimeLibsOptionsOptInfos.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
@@ -51,248 +57,25 @@ using namespace llvm;
 
 namespace opts {
 
-extern cl::opt<bool> PrintAll;
-extern cl::opt<bool> PrintDynoStats;
-extern cl::opt<bool> DumpDotAll;
-extern bool shouldDumpDot(const bolt::BinaryFunction &Function);
-extern cl::opt<std::string> AsmDump;
-extern cl::opt<bolt::PLTCall::OptType> PLT;
-extern cl::opt<bolt::IdenticalCodeFolding::ICFLevel, false,
-               llvm::bolt::DeprecatedICFNumericOptionParser>
-    ICF;
+extern bool PrintAll;
+extern bool DumpDotAll;
+extern std::string AsmDump;
 
-static cl::opt<bool>
-DynoStatsAll("dyno-stats-all",
-  cl::desc("print dyno stats after each stage"),
-  cl::ZeroOrMore, cl::Hidden, cl::cat(BoltCategory));
+bool KeepNopsSpecified = false;
+bool NeverPrint = false;
+bool PrintAfterBranchFixup = false;
+bool PrintAArch64Relaxation = false;
+bool PrintPAuthCFIAnalyzer = false;
+bool PrintNormalized = false;
+bool PrintProfileStats = false;
+bool PrintReordered = false;
+bool RegReAssign = false;
+bool SimplifyConditionalTailCalls = true;
+bool SimplifyRODataLoads = false;
+std::vector<std::string> SpecializeMemcpy1;
+bool StripRepRet = true;
+bool UpdateBranchProtection = true;
 
-static cl::opt<bool>
-    EliminateUnreachable("eliminate-unreachable",
-                         cl::desc("eliminate unreachable code"), cl::init(true),
-                         cl::cat(BoltOptCategory));
-
-static cl::opt<bool> JTFootprintReductionFlag(
-    "jt-footprint-reduction",
-    cl::desc("make jump tables size smaller at the cost of using more "
-             "instructions at jump sites"),
-    cl::cat(BoltOptCategory));
-
-cl::opt<bool>
-    KeepNops("keep-nops",
-             cl::desc("keep no-op instructions. By default they are removed."),
-             cl::Hidden, cl::cat(BoltOptCategory));
-
-cl::opt<bool> NeverPrint("never-print", cl::desc("never print"),
-                         cl::ReallyHidden, cl::cat(BoltOptCategory));
-
-cl::opt<bool>
-PrintAfterBranchFixup("print-after-branch-fixup",
-  cl::desc("print function after fixing local branches"),
-  cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-PrintAfterLowering("print-after-lowering",
-  cl::desc("print function after instruction lowering"),
-  cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool> PrintEstimateEdgeCounts(
-    "print-estimate-edge-counts",
-    cl::desc("print function after edge counts are set for no-LBR profile"),
-    cl::Hidden, cl::cat(BoltOptCategory));
-
-cl::opt<bool>
-PrintFinalized("print-finalized",
-  cl::desc("print function after CFG is finalized"),
-  cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-    PrintFOP("print-fop",
-             cl::desc("print functions after frame optimizer pass"), cl::Hidden,
-             cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-    PrintICF("print-icf", cl::desc("print functions after ICF optimization"),
-             cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-    PrintICP("print-icp",
-             cl::desc("print functions after indirect call promotion"),
-             cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-    PrintInline("print-inline",
-                cl::desc("print functions after inlining optimization"),
-                cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool> PrintJTFootprintReduction(
-    "print-after-jt-footprint-reduction",
-    cl::desc("print function after jt-footprint-reduction pass"), cl::Hidden,
-    cl::cat(BoltOptCategory));
-
-static cl::opt<bool> PrintAArch64Relaxation(
-    "print-adr-ldr-relaxation",
-    cl::desc("print functions after ADR/LDR Relaxation pass"), cl::Hidden,
-    cl::cat(BoltOptCategory));
-
-cl::opt<bool> PrintPAuthCFIAnalyzer(
-    "print-pointer-auth-cfi-analyzer",
-    cl::desc("print functions after PointerAuthCFIAnalyzer pass"), cl::Hidden,
-    cl::cat(BoltOptCategory));
-static cl::opt<bool> PrintPAuthCFIFixup(
-    "print-pointer-auth-cfi-fixup",
-    cl::desc("print functions after PointerAuthCFIFixup pass"), cl::Hidden,
-    cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-    PrintLongJmp("print-longjmp",
-                 cl::desc("print functions after longjmp pass"), cl::Hidden,
-                 cl::cat(BoltOptCategory));
-
-cl::opt<bool>
-    PrintNormalized("print-normalized",
-                    cl::desc("print functions after CFG is normalized"),
-                    cl::Hidden, cl::cat(BoltCategory));
-
-static cl::opt<bool> PrintOptimizeBodyless(
-    "print-optimize-bodyless",
-    cl::desc("print functions after bodyless optimization"), cl::Hidden,
-    cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-    PrintPeepholes("print-peepholes",
-                   cl::desc("print functions after peephole optimization"),
-                   cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-    PrintPLT("print-plt", cl::desc("print functions after PLT optimization"),
-             cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-    PrintProfileStats("print-profile-stats",
-                      cl::desc("print profile quality/bias analysis"),
-                      cl::cat(BoltCategory));
-
-static cl::opt<bool>
-    PrintRegReAssign("print-regreassign",
-                     cl::desc("print functions after regreassign pass"),
-                     cl::Hidden, cl::cat(BoltOptCategory));
-
-cl::opt<bool>
-    PrintReordered("print-reordered",
-                   cl::desc("print functions after layout optimization"),
-                   cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-    PrintReorderedFunctions("print-reordered-functions",
-                            cl::desc("print functions after clustering"),
-                            cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool> PrintRetpolineInsertion(
-    "print-retpoline-insertion",
-    cl::desc("print functions after retpoline insertion pass"), cl::Hidden,
-    cl::cat(BoltCategory));
-
-static cl::opt<bool> PrintSCTC(
-    "print-sctc",
-    cl::desc("print functions after conditional tail call simplification"),
-    cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool> PrintSimplifyROLoads(
-    "print-simplify-rodata-loads",
-    cl::desc("print functions after simplification of RO data loads"),
-    cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-    PrintSplit("print-split", cl::desc("print functions after code splitting"),
-               cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-    PrintStoke("print-stoke", cl::desc("print functions after stoke analysis"),
-               cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-    PrintFixRelaxations("print-fix-relaxations",
-                        cl::desc("print functions after fix relaxations pass"),
-                        cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-    PrintFixRISCVCalls("print-fix-riscv-calls",
-                       cl::desc("print functions after fix RISCV calls pass"),
-                       cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool> PrintVeneerElimination(
-    "print-veneer-elimination",
-    cl::desc("print functions after veneer elimination pass"), cl::Hidden,
-    cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-    PrintUCE("print-uce",
-             cl::desc("print functions after unreachable code elimination"),
-             cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool> RegReAssign(
-    "reg-reassign",
-    cl::desc(
-        "reassign registers so as to avoid using REX prefixes in hot code"),
-    cl::cat(BoltOptCategory));
-
-static cl::opt<bool> SimplifyConditionalTailCalls(
-    "simplify-conditional-tail-calls",
-    cl::desc("simplify conditional tail calls by removing unnecessary jumps"),
-    cl::init(true), cl::cat(BoltOptCategory));
-
-static cl::opt<bool> SimplifyRODataLoads(
-    "simplify-rodata-loads",
-    cl::desc("simplify loads from read-only sections by replacing the memory "
-             "operand with the constant found in the corresponding section"),
-    cl::cat(BoltOptCategory));
-
-static cl::list<std::string>
-SpecializeMemcpy1("memcpy1-spec",
-  cl::desc("list of functions with call sites for which to specialize memcpy() "
-           "for size 1"),
-  cl::value_desc("func1,func2:cs1:cs2,func3:cs1,..."),
-  cl::ZeroOrMore, cl::cat(BoltOptCategory));
-
-static cl::opt<bool> Stoke("stoke", cl::desc("turn on the stoke analysis"),
-                           cl::cat(BoltOptCategory));
-
-static cl::opt<bool> StringOps(
-    "inline-memcpy",
-    cl::desc(
-        "inline memcpy using size-specific optimized instructions "
-        "(X86: 'rep movsb', AArch64: width-optimized register operations)"),
-    cl::cat(BoltOptCategory));
-
-static cl::opt<bool> StripRepRet(
-    "strip-rep-ret",
-    cl::desc("strip 'repz' prefix from 'repz retq' sequence (on by default)"),
-    cl::init(true), cl::cat(BoltOptCategory));
-
-static cl::opt<bool> VerifyCFG("verify-cfg",
-                               cl::desc("verify the CFG after every pass"),
-                               cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool> ThreeWayBranchFlag("three-way-branch",
-                                        cl::desc("reorder three way branches"),
-                                        cl::ReallyHidden,
-                                        cl::cat(BoltOptCategory));
-
-static cl::opt<bool> CMOVConversionFlag("cmov-conversion",
-                                        cl::desc("fold jcc+mov into cmov"),
-                                        cl::ReallyHidden,
-                                        cl::cat(BoltOptCategory));
-
-static cl::opt<bool> ShortenInstructions("shorten-instructions",
-                                         cl::desc("shorten instructions"),
-                                         cl::init(true),
-                                         cl::cat(BoltOptCategory));
-
-cl::opt<bool>
-    UpdateBranchProtection("update-branch-protection",
-                           cl::desc("Rewrites pac-ret DWARF CFI instructions "
-                                    "(AArch64-only, on by default)"),
-                           cl::init(true), cl::Hidden, cl::cat(BoltCategory));
 } // namespace opts
 
 namespace llvm {
@@ -305,6 +88,9 @@ const char BinaryFunctionPassManager::TimerGroupDesc[] =
     "Binary Function Pass Manager";
 
 Error BinaryFunctionPassManager::runPasses() {
+  const bool DoDynoStatsAll = bolt::bolt_rewrite_opts::getDynoStatsAll(BC);
+  const bool DoVerifyCFG = bolt::bolt_rewrite_opts::getVerifyCfg(BC);
+
   auto &BFs = BC.getBinaryFunctions();
   for (size_t PassIdx = 0; PassIdx < Passes.size(); PassIdx++) {
     const std::pair<const bool, std::unique_ptr<BinaryFunctionPass>>
@@ -316,11 +102,15 @@ Error BinaryFunctionPassManager::runPasses() {
     std::string PassIdName =
         formatv("{0:2}_{1}", PassIdx, Pass->getName()).str();
 
-    if (opts::Verbosity > 0)
+    if (opts::getVerbosity(BC) > 0)
       BC.outs() << "BOLT-INFO: Starting pass: " << Pass->getName() << "\n";
 
+    bool DoTimeOpts = false;
+    if (auto *UO =
+            bolt::bolt_utils_opts::getBoltUtilsOpts(BC.getOptionsContext()))
+      DoTimeOpts = UO->get<&clv2::BOLT_TimeOpts>();
     NamedRegionTimer T(Pass->getName(), Pass->getName(), TimerGroupName,
-                       TimerGroupDesc, TimeOpts);
+                       TimerGroupDesc, DoTimeOpts);
 
     Error E = Error::success();
     callWithDynoStats(
@@ -328,11 +118,12 @@ Error BinaryFunctionPassManager::runPasses() {
         [this, &E, &Pass] {
           E = joinErrors(std::move(E), Pass->runOnFunctions(BC));
         },
-        BFs, Pass->getName(), opts::DynoStatsAll, BC.isAArch64());
+        BFs, Pass->getName(), DoDynoStatsAll, BC.isAArch64(),
+        BC.getOptionsContext());
     if (E)
       return Error(std::move(E));
 
-    if (opts::VerifyCFG &&
+    if (DoVerifyCFG &&
         !std::accumulate(
             BFs.begin(), BFs.end(), true,
             [](const bool Valid,
@@ -344,11 +135,15 @@ Error BinaryFunctionPassManager::runPasses() {
           Twine(Pass->getName()) + Twine("\n"));
     }
 
-    if (opts::Verbosity > 0)
+    if (opts::getVerbosity(BC) > 0)
       BC.outs() << "BOLT-INFO: Finished pass: " << Pass->getName() << "\n";
 
-    if (!opts::PrintAll && !opts::DumpDotAll && !Pass->printPass())
-      continue;
+    {
+      bool DoPrintAll = bolt_rewrite_opts::getPrintAll(BC);
+      bool DoDumpDotAll = bolt_rewrite_opts::getDumpDotAll(BC);
+      if (!DoPrintAll && !DoDumpDotAll && !Pass->printPass())
+        continue;
+    }
 
     const std::string Message = std::string("after ") + Pass->getName();
 
@@ -360,7 +155,7 @@ Error BinaryFunctionPassManager::runPasses() {
 
       Function.print(BC.outs(), Message);
 
-      if (opts::shouldDumpDot(Function))
+      if (shouldDumpDot(Function))
         Function.dumpGraphForPass(PassIdName);
     }
   }
@@ -370,28 +165,101 @@ Error BinaryFunctionPassManager::runPasses() {
 Error BinaryFunctionPassManager::runAllPasses(BinaryContext &BC) {
   BinaryFunctionPassManager Manager(BC);
 
+  // Read all BoltRewrite options from context into local variables.
+  const bool DoDynoStatsAll = bolt::bolt_rewrite_opts::getDynoStatsAll(BC);
+  const bool DoEliminateUnreachable =
+      bolt::bolt_rewrite_opts::getEliminateUnreachable(BC);
+  const bool DoJTFootprintReduction =
+      bolt::bolt_rewrite_opts::getJtFootprintReduction(BC);
+  const bool DoKeepNops = bolt::bolt_rewrite_opts::getKeepNops(BC);
+  const bool DoNeverPrint = bolt::bolt_rewrite_opts::getNeverPrint(BC);
+  const bool DoPrintAfterBranchFixup =
+      bolt::bolt_rewrite_opts::getPrintAfterBranchFixup(BC);
+  const bool DoPrintAfterLowering =
+      bolt::bolt_rewrite_opts::getPrintAfterLowering(BC);
+  const bool DoPrintEstimateEdgeCounts =
+      bolt::bolt_rewrite_opts::getPrintEstimateEdgeCounts(BC);
+  const bool DoPrintFinalized = bolt::bolt_rewrite_opts::getPrintFinalized(BC);
+  const bool DoPrintFOP = bolt::bolt_rewrite_opts::getPrintFop(BC);
+  const bool DoPrintICF = bolt::bolt_rewrite_opts::getPrintIcf(BC);
+  const bool DoPrintICP = bolt::bolt_rewrite_opts::getPrintIcp(BC);
+  const bool DoPrintInline = bolt::bolt_rewrite_opts::getPrintInline(BC);
+  const bool DoPrintJTFootprintReduction =
+      bolt::bolt_rewrite_opts::getPrintAfterJtFootprintReduction(BC);
+  const bool DoPrintAArch64Relaxation =
+      bolt::bolt_rewrite_opts::getPrintAdrLdrRelaxation(BC);
+  const bool DoPrintPAuthCFIAnalyzer =
+      bolt::bolt_rewrite_opts::getPrintPointerAuthCfiAnalyzer(BC);
+  const bool DoPrintPAuthCFIFixup =
+      bolt::bolt_rewrite_opts::getPrintPointerAuthCfiFixup(BC);
+  const bool DoPrintLongJmp = bolt::bolt_rewrite_opts::getPrintLongjmp(BC);
+  const bool DoPrintNormalized =
+      bolt::bolt_rewrite_opts::getPrintNormalized(BC);
+  const bool DoPrintPeepholes = bolt::bolt_rewrite_opts::getPrintPeepholes(BC);
+  const bool DoPrintPLT = bolt::bolt_rewrite_opts::getPrintPlt(BC);
+  const bool DoPrintProfileStats =
+      bolt::bolt_rewrite_opts::getPrintProfileStats(BC);
+  const bool DoPrintRegReAssign =
+      bolt::bolt_rewrite_opts::getPrintRegreassign(BC);
+  const bool DoPrintReordered = bolt::bolt_rewrite_opts::getPrintReordered(BC);
+  const bool DoPrintReorderedFunctions =
+      bolt::bolt_rewrite_opts::getPrintReorderedFunctions(BC);
+  const bool DoPrintRetpolineInsertion =
+      bolt::bolt_rewrite_opts::getPrintRetpolineInsertion(BC);
+  const bool DoPrintSCTC = bolt::bolt_rewrite_opts::getPrintSctc(BC);
+  const bool DoPrintSimplifyROLoads =
+      bolt::bolt_rewrite_opts::getPrintSimplifyRodataLoads(BC);
+  const bool DoPrintSplit = bolt::bolt_rewrite_opts::getPrintSplit(BC);
+  const bool DoPrintStoke = bolt::bolt_rewrite_opts::getPrintStoke(BC);
+  const bool DoPrintFixRelaxations =
+      bolt::bolt_rewrite_opts::getPrintFixRelaxations(BC);
+  const bool DoPrintFixRISCVCalls =
+      bolt::bolt_rewrite_opts::getPrintFixRiscvCalls(BC);
+  const bool DoPrintVeneerElimination =
+      bolt::bolt_rewrite_opts::getPrintVeneerElimination(BC);
+  const bool DoPrintUCE = bolt::bolt_rewrite_opts::getPrintUce(BC);
+  const bool DoRegReAssign = bolt::bolt_rewrite_opts::getRegReassign(BC);
+  const bool DoSimplifyConditionalTailCalls =
+      bolt::bolt_rewrite_opts::getSimplifyConditionalTailCalls(BC);
+  const bool DoSimplifyRODataLoads =
+      bolt::bolt_rewrite_opts::getSimplifyRodataLoads(BC);
+  const auto DoSpecializeMemcpy1 = bolt::bolt_rewrite_opts::getMemcpy1Spec(BC);
+  const bool DoStoke = bolt::bolt_rewrite_opts::getStoke(BC);
+  const bool DoStringOps = bolt::bolt_rewrite_opts::getInlineMemcpy(BC);
+  const bool DoStripRepRet = bolt::bolt_rewrite_opts::getStripRepRet(BC);
+  const bool DoThreeWayBranch = bolt::bolt_rewrite_opts::getThreeWayBranch(BC);
+  const bool DoCMOVConversion = bolt::bolt_rewrite_opts::getCmovConversion(BC);
+  const bool DoShortenInstructions =
+      bolt::bolt_rewrite_opts::getShortenInstructions(BC);
+
+  auto *PassOpts =
+      bolt::bolt_passes_opts::getBoltPassesOpts(BC.getOptionsContext());
+  const bool AsmDumpSpecified = PassOpts->specified<&clv2::BOLTPASS_AsmDump>();
+  const auto ICF = static_cast<bolt::IdenticalCodeFolding::ICFLevel>(
+      PassOpts->get<&clv2::BOLTPASS_ICF>());
+
   if (BC.isAArch64())
     Manager.registerPass(
-        std::make_unique<PointerAuthCFIAnalyzer>(PrintPAuthCFIAnalyzer));
+        std::make_unique<PointerAuthCFIAnalyzer>(DoPrintPAuthCFIAnalyzer));
 
   Manager.registerPass(
-      std::make_unique<EstimateEdgeCounts>(PrintEstimateEdgeCounts));
+      std::make_unique<EstimateEdgeCounts>(DoPrintEstimateEdgeCounts));
 
   Manager.registerPass(std::make_unique<DynoStatsSetPass>());
 
-  Manager.registerPass(std::make_unique<AsmDumpPass>(),
-                       opts::AsmDump.getNumOccurrences());
+  Manager.registerPass(std::make_unique<AsmDumpPass>(), AsmDumpSpecified);
 
   if (BC.isAArch64()) {
-    Manager.registerPass(std::make_unique<FixRelaxations>(PrintFixRelaxations));
+    Manager.registerPass(
+        std::make_unique<FixRelaxations>(DoPrintFixRelaxations));
 
     Manager.registerPass(
-        std::make_unique<VeneerElimination>(PrintVeneerElimination));
+        std::make_unique<VeneerElimination>(DoPrintVeneerElimination));
   }
 
   if (BC.isRISCV()) {
     Manager.registerPass(
-        std::make_unique<FixRISCVCallsPass>(PrintFixRISCVCalls));
+        std::make_unique<FixRISCVCallsPass>(DoPrintFixRISCVCalls));
   }
 
   // Here we manage dependencies/order manually, since passes are run in the
@@ -400,89 +268,90 @@ Error BinaryFunctionPassManager::runAllPasses(BinaryContext &BC) {
   // Run this pass first to use stats for the original functions.
   Manager.registerPass(std::make_unique<PrintProgramStats>());
 
-  if (opts::PrintProfileStats)
-    Manager.registerPass(std::make_unique<PrintProfileStats>(NeverPrint));
+  if (DoPrintProfileStats)
+    Manager.registerPass(std::make_unique<PrintProfileStats>(DoNeverPrint));
 
-  Manager.registerPass(std::make_unique<PrintProfileQualityStats>(NeverPrint));
+  Manager.registerPass(
+      std::make_unique<PrintProfileQualityStats>(DoNeverPrint));
 
-  Manager.registerPass(std::make_unique<ValidateInternalCalls>(NeverPrint));
+  Manager.registerPass(std::make_unique<ValidateInternalCalls>(DoNeverPrint));
 
-  Manager.registerPass(std::make_unique<ValidateMemRefs>(NeverPrint));
+  Manager.registerPass(std::make_unique<ValidateMemRefs>(DoNeverPrint));
 
-  if (opts::Instrument)
-    Manager.registerPass(std::make_unique<Instrumentation>(NeverPrint));
-  else if (opts::Hugify)
-    Manager.registerPass(std::make_unique<HugePage>(NeverPrint));
+  bool Instrument = bolt::bolt_utils_opts::getInstrument(BC);
+  bool Hugify = bolt::bolt_rtlibs_opts::getHugify(BC);
+  if (Instrument)
+    Manager.registerPass(std::make_unique<Instrumentation>(DoNeverPrint));
+  else if (Hugify)
+    Manager.registerPass(std::make_unique<HugePage>(DoNeverPrint));
 
-  Manager.registerPass(std::make_unique<ShortenInstructions>(NeverPrint),
-                       opts::ShortenInstructions);
+  Manager.registerPass(std::make_unique<ShortenInstructions>(DoNeverPrint),
+                       DoShortenInstructions);
 
-  Manager.registerPass(std::make_unique<RemoveNops>(NeverPrint),
-                       !opts::KeepNops);
+  Manager.registerPass(std::make_unique<RemoveNops>(DoNeverPrint), !DoKeepNops);
 
-  Manager.registerPass(std::make_unique<NormalizeCFG>(PrintNormalized));
+  Manager.registerPass(std::make_unique<NormalizeCFG>(DoPrintNormalized));
 
   if (BC.isX86())
-    Manager.registerPass(std::make_unique<StripRepRet>(NeverPrint),
-                         opts::StripRepRet);
+    Manager.registerPass(std::make_unique<StripRepRet>(DoNeverPrint),
+                         DoStripRepRet);
 
-  Manager.registerPass(std::make_unique<IdenticalCodeFolding>(PrintICF),
-                       opts::ICF != IdenticalCodeFolding::ICFLevel::None);
-
-  Manager.registerPass(
-      std::make_unique<SpecializeMemcpy1>(NeverPrint, opts::SpecializeMemcpy1),
-      !opts::SpecializeMemcpy1.empty());
-
-  Manager.registerPass(std::make_unique<InlineMemcpy>(NeverPrint),
-                       opts::StringOps);
-
-  Manager.registerPass(std::make_unique<IndirectCallPromotion>(PrintICP));
+  Manager.registerPass(std::make_unique<IdenticalCodeFolding>(DoPrintICF),
+                       ICF != bolt::IdenticalCodeFolding::ICFLevel::None);
 
   Manager.registerPass(
-      std::make_unique<JTFootprintReduction>(PrintJTFootprintReduction),
-      opts::JTFootprintReductionFlag);
+      std::make_unique<SpecializeMemcpy1>(DoNeverPrint, DoSpecializeMemcpy1),
+      !DoSpecializeMemcpy1.empty());
+
+  Manager.registerPass(std::make_unique<InlineMemcpy>(DoNeverPrint),
+                       DoStringOps);
+
+  Manager.registerPass(std::make_unique<IndirectCallPromotion>(DoPrintICP));
 
   Manager.registerPass(
-      std::make_unique<SimplifyRODataLoads>(PrintSimplifyROLoads),
-      opts::SimplifyRODataLoads);
+      std::make_unique<JTFootprintReduction>(DoPrintJTFootprintReduction),
+      DoJTFootprintReduction);
 
-  Manager.registerPass(std::make_unique<RegReAssign>(PrintRegReAssign),
-                       opts::RegReAssign);
+  Manager.registerPass(
+      std::make_unique<SimplifyRODataLoads>(DoPrintSimplifyROLoads),
+      DoSimplifyRODataLoads);
 
-  Manager.registerPass(std::make_unique<Inliner>(PrintInline));
+  Manager.registerPass(std::make_unique<RegReAssign>(DoPrintRegReAssign),
+                       DoRegReAssign);
 
-  Manager.registerPass(std::make_unique<IdenticalCodeFolding>(PrintICF),
-                       opts::ICF != IdenticalCodeFolding::ICFLevel::None);
+  Manager.registerPass(std::make_unique<Inliner>(DoPrintInline));
 
-  Manager.registerPass(std::make_unique<PLTCall>(PrintPLT));
+  Manager.registerPass(std::make_unique<IdenticalCodeFolding>(DoPrintICF),
+                       ICF != bolt::IdenticalCodeFolding::ICFLevel::None);
 
-  Manager.registerPass(std::make_unique<ThreeWayBranch>(),
-                       opts::ThreeWayBranchFlag);
+  Manager.registerPass(std::make_unique<PLTCall>(DoPrintPLT));
 
-  Manager.registerPass(std::make_unique<ReorderBasicBlocks>(PrintReordered));
+  Manager.registerPass(std::make_unique<ThreeWayBranch>(), DoThreeWayBranch);
 
-  Manager.registerPass(std::make_unique<EliminateUnreachableBlocks>(PrintUCE),
-                       opts::EliminateUnreachable);
+  Manager.registerPass(std::make_unique<ReorderBasicBlocks>(DoPrintReordered));
 
-  Manager.registerPass(std::make_unique<SplitFunctions>(PrintSplit));
+  Manager.registerPass(std::make_unique<EliminateUnreachableBlocks>(DoPrintUCE),
+                       DoEliminateUnreachable);
+
+  Manager.registerPass(std::make_unique<SplitFunctions>(DoPrintSplit));
 
   Manager.registerPass(std::make_unique<LoopInversionPass>());
 
   Manager.registerPass(std::make_unique<TailDuplication>());
 
-  Manager.registerPass(std::make_unique<CMOVConversion>(),
-                       opts::CMOVConversionFlag);
+  Manager.registerPass(std::make_unique<CMOVConversion>(), DoCMOVConversion);
 
   // This pass syncs local branches with CFG. If any of the following
   // passes breaks the sync - they either need to re-run the pass or
   // fix branches consistency internally.
-  Manager.registerPass(std::make_unique<FixupBranches>(PrintAfterBranchFixup));
+  Manager.registerPass(
+      std::make_unique<FixupBranches>(DoPrintAfterBranchFixup));
 
   // This pass should come close to last since it uses the estimated hot
   // size of a function to determine the order.  It should definitely
   // also happen after any changes to the call graph are made, e.g. inlining.
   Manager.registerPass(
-      std::make_unique<ReorderFunctions>(PrintReorderedFunctions));
+      std::make_unique<ReorderFunctions>(DoPrintReorderedFunctions));
 
   // Produce the list of functions for the output file in a sorted order.
   Manager.registerPass(std::make_unique<PopulateOutputFunctions>());
@@ -492,16 +361,18 @@ Error BinaryFunctionPassManager::runAllPasses(BinaryContext &BC) {
   // after ReorderFunctions allows the finalized function order to be utilized
   // to make more sophisticated splitting decisions, like hot-warm-cold
   // splitting.
-  Manager.registerPass(std::make_unique<SplitFunctions>(PrintSplit));
+  Manager.registerPass(std::make_unique<SplitFunctions>(DoPrintSplit));
 
   // Print final dyno stats right while CFG and instruction analysis are intact.
-  Manager.registerPass(std::make_unique<DynoStatsPrintPass>(
-                           "after all optimizations before SCTC and FOP"),
-                       opts::PrintDynoStats || opts::DynoStatsAll);
+  Manager.registerPass(
+      std::make_unique<DynoStatsPrintPass>(
+          "after all optimizations before SCTC and FOP"),
+      [&] { return bolt::bolt_core_opts::getDynoStats(BC); }() ||
+          DoDynoStatsAll);
 
   // Add the StokeInfo pass, which extract functions for stoke optimization and
   // get the liveness information for them
-  Manager.registerPass(std::make_unique<StokeInfo>(PrintStoke), opts::Stoke);
+  Manager.registerPass(std::make_unique<StokeInfo>(DoPrintStoke), DoStoke);
 
   // This pass introduces conditional jumps into external functions.
   // Between extending CFG to support this and isolating this pass we chose
@@ -513,10 +384,10 @@ Error BinaryFunctionPassManager::runAllPasses(BinaryContext &BC) {
   // reordering so that it can tell whether calls are forward/backward
   // accurately.
   Manager.registerPass(
-      std::make_unique<SimplifyConditionalTailCalls>(PrintSCTC),
-      opts::SimplifyConditionalTailCalls);
+      std::make_unique<SimplifyConditionalTailCalls>(DoPrintSCTC),
+      DoSimplifyConditionalTailCalls);
 
-  Manager.registerPass(std::make_unique<Peepholes>(PrintPeepholes));
+  Manager.registerPass(std::make_unique<Peepholes>(DoPrintPeepholes));
 
   // Assign each function an output section before AlignerPass and LongJmpPass,
   // so those passes can attribute per-section code alignment and tentative
@@ -538,48 +409,48 @@ Error BinaryFunctionPassManager::runAllPasses(BinaryContext &BC) {
 
   if (BC.isAArch64()) {
     Manager.registerPass(
-        std::make_unique<AArch64RelaxationPass>(PrintAArch64Relaxation));
+        std::make_unique<AArch64RelaxationPass>(DoPrintAArch64Relaxation));
 
     // Tighten branches according to offset differences between branch and
     // targets. No extra instructions after this pass, otherwise we may have
     // relocations out of range and crash during linking.
-    Manager.registerPass(std::make_unique<LongJmpPass>(PrintLongJmp));
+    Manager.registerPass(std::make_unique<LongJmpPass>(DoPrintLongJmp));
 
     Manager.registerPass(
-        std::make_unique<PointerAuthCFIFixup>(PrintPAuthCFIFixup));
+        std::make_unique<PointerAuthCFIFixup>(DoPrintPAuthCFIFixup));
   }
 
   // This pass should always run last.*
-  Manager.registerPass(std::make_unique<FinalizeFunctions>(PrintFinalized));
+  Manager.registerPass(std::make_unique<FinalizeFunctions>(DoPrintFinalized));
 
   // FrameOptimizer has an implicit dependency on FinalizeFunctions.
   // FrameOptimizer move values around and needs to update CFIs. To do this, it
   // must read CFI, interpret it and rewrite it, so CFIs need to be correctly
   // placed according to the final layout.
-  Manager.registerPass(std::make_unique<FrameOptimizerPass>(PrintFOP));
+  Manager.registerPass(std::make_unique<FrameOptimizerPass>(DoPrintFOP));
 
-  Manager.registerPass(std::make_unique<AllocCombinerPass>(PrintFOP));
+  Manager.registerPass(std::make_unique<AllocCombinerPass>(DoPrintFOP));
 
   Manager.registerPass(
-      std::make_unique<RetpolineInsertion>(PrintRetpolineInsertion));
+      std::make_unique<RetpolineInsertion>(DoPrintRetpolineInsertion));
 
   // This pass turns tail calls into jumps which makes them invisible to
   // function reordering. It's unsafe to use any CFG or instruction analysis
   // after this point.
   Manager.registerPass(
-      std::make_unique<InstructionLowering>(PrintAfterLowering));
+      std::make_unique<InstructionLowering>(DoPrintAfterLowering));
 
   // In non-relocation mode, mark functions that do not fit into their original
   // space as non-simple if we have to (e.g. for correct debug info update).
   // NOTE: this pass depends on finalized code.
   if (!BC.HasRelocations)
-    Manager.registerPass(std::make_unique<CheckLargeFunctions>(NeverPrint));
+    Manager.registerPass(std::make_unique<CheckLargeFunctions>(DoNeverPrint));
 
-  Manager.registerPass(std::make_unique<LowerAnnotations>(NeverPrint));
+  Manager.registerPass(std::make_unique<LowerAnnotations>(DoNeverPrint));
 
   // Check for dirty state of MCSymbols caused by running calculateEmittedSize
   // in parallel and restore them
-  Manager.registerPass(std::make_unique<CleanMCState>(NeverPrint));
+  Manager.registerPass(std::make_unique<CleanMCState>(DoNeverPrint));
 
   return Manager.runPasses();
 }

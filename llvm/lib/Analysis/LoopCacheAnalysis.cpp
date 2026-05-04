@@ -30,30 +30,35 @@
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/Delinearization.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "loop-cache-cost"
 
-static cl::opt<unsigned> DefaultTripCount(
-    "default-trip-count", cl::init(100), cl::Hidden,
-    cl::desc("Use this to specify the default trip count of a loop"));
+unsigned DefaultTripCount = 100;
+
+static unsigned getDefaultTripCount(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_DefaultTripCount>(
+      F.getContext().getOptionsContext());
+}
 
 // In this analysis two array references are considered to exhibit temporal
 // reuse if they access either the same memory location, or a memory location
 // with distance smaller than a configurable threshold.
-static cl::opt<unsigned> TemporalReuseThreshold(
-    "temporal-reuse-threshold", cl::init(2), cl::Hidden,
-    cl::desc("Use this to specify the max. distance between array elements "
-             "accessed in a loop so that the elements are classified to have "
-             "temporal reuse"));
+
+static unsigned getTemporalReuseThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_TemporalReuseThreshold>(
+      F.getContext().getOptionsContext());
+}
 
 /// Retrieve the innermost loop in the given loop nest \p Loops. It returns a
 /// nullptr if any loops in the loop vector supplied has more than one sibling.
@@ -117,7 +122,8 @@ static const SCEV *computeTripCount(const Loop &L, const SCEV &ElemSize,
   if (!TripCount) {
     LLVM_DEBUG(dbgs() << "Trip count of loop " << L.getName()
                << " could not be computed, using DefaultTripCount\n");
-    TripCount = SE.getConstant(ElemSize.getType(), DefaultTripCount);
+    TripCount = SE.getConstant(
+        ElemSize.getType(), getDefaultTripCount(*L.getHeader()->getParent()));
   }
 
   return TripCount;
@@ -547,13 +553,17 @@ CacheCost::CacheCost(const LoopVectorTy &Loops, const LoopInfo &LI,
                      ScalarEvolution &SE, TargetTransformInfo &TTI,
                      AAResults &AA, DependenceInfo &DI,
                      std::optional<unsigned> TRT)
-    : Loops(Loops), TRT(TRT.value_or(TemporalReuseThreshold)), LI(LI), SE(SE),
-      TTI(TTI), AA(AA), DI(DI) {
+    : Loops(Loops), TRT(TRT.value_or(getTemporalReuseThreshold(
+                        *Loops.front()->getHeader()->getParent()))),
+      LI(LI), SE(SE), TTI(TTI), AA(AA), DI(DI) {
   assert(!Loops.empty() && "Expecting a non-empty loop vector.");
 
   for (const Loop *L : Loops) {
     unsigned TripCount = SE.getSmallConstantTripCount(L);
-    TripCount = (TripCount == 0) ? DefaultTripCount : TripCount;
+    TripCount =
+        (TripCount == 0)
+            ? getDefaultTripCount(*Loops.front()->getHeader()->getParent())
+            : TripCount;
     TripCounts.push_back({L, TripCount});
   }
 
@@ -610,9 +620,12 @@ void CacheCost::calculateCacheFootprint() {
 bool CacheCost::populateReferenceGroups(ReferenceGroupsTy &RefGroups) const {
   assert(RefGroups.empty() && "Reference groups should be empty");
 
-  unsigned CLS = TTI.getCacheLineSize();
   Loop *InnerMostLoop = getInnerMostLoop(Loops);
   assert(InnerMostLoop != nullptr && "Expecting a valid innermost loop");
+  unsigned CLS = TTI.getCacheLineSize(InnerMostLoop->getHeader()
+                                          ->getParent()
+                                          ->getContext()
+                                          .getOptionsContext());
 
   for (BasicBlock *BB : InnerMostLoop->getBlocks()) {
     for (Instruction &I : *BB) {
@@ -714,7 +727,9 @@ CacheCostTy CacheCost::computeRefGroupCacheCost(const ReferenceGroupTy &RG,
   assert(!RG.empty() && "Reference group should have at least one member.");
 
   const IndexedReference *Representative = RG.front().get();
-  return Representative->computeRefCost(L, TTI.getCacheLineSize());
+  return Representative->computeRefCost(
+      L, TTI.getCacheLineSize(
+             L.getHeader()->getParent()->getContext().getOptionsContext()));
 }
 
 //===----------------------------------------------------------------------===//

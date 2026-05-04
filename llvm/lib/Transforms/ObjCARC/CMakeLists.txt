@@ -1,5 +1,8 @@
 add_llvm_component_library(LLVMObjCARCOpts
+  ObjCARCOptionsGetters.cpp
+  ObjCARCOptionsRegistration.cpp
   ObjCARC.cpp
+  ObjCARCOptions.cpp
   ObjCARCOpts.cpp
   ObjCARCExpand.cpp
   ObjCARCContract.cpp

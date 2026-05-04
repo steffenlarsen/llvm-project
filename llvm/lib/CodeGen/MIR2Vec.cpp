@@ -14,12 +14,15 @@
 #include "llvm/CodeGen/MIR2Vec.h"
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/Module.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Regex.h"
 
 using namespace llvm;
@@ -35,36 +38,17 @@ STATISTIC(MIRClasslessRegCounter,
 namespace llvm {
 namespace mir2vec {
 cl::OptionCategory MIR2VecCategory("MIR2Vec Options");
-
-// FIXME: Use a default vocab when not specified
-static cl::opt<std::string>
-    VocabFile("mir2vec-vocab-path", cl::Optional,
-              cl::desc("Path to the vocabulary file for MIR2Vec"), cl::init(""),
-              cl::cat(MIR2VecCategory));
-cl::opt<float> OpcWeight("mir2vec-opc-weight", cl::Optional, cl::init(1.0),
-                         cl::desc("Weight for machine opcode embeddings"),
-                         cl::cat(MIR2VecCategory));
-cl::opt<float> CommonOperandWeight(
-    "mir2vec-common-operand-weight", cl::Optional, cl::init(1.0),
-    cl::desc("Weight for common operand embeddings"), cl::cat(MIR2VecCategory));
-cl::opt<float>
-    RegOperandWeight("mir2vec-reg-operand-weight", cl::Optional, cl::init(1.0),
-                     cl::desc("Weight for register operand embeddings"),
-                     cl::cat(MIR2VecCategory));
-cl::opt<MIR2VecKind> MIR2VecEmbeddingKind(
-    "mir2vec-kind", cl::Optional,
-    cl::values(clEnumValN(MIR2VecKind::Symbolic, "symbolic",
-                          "Generate symbolic embeddings for MIR")),
-    cl::init(MIR2VecKind::Symbolic), cl::desc("MIR2Vec embedding kind"),
-    cl::cat(MIR2VecCategory));
-
-static cl::opt<bool> PrintAllVocabEntries(
-    "mir2vec-print-all-vocab-entries", cl::Optional, cl::init(false),
-    cl::desc("Print all vocabulary entries including zero embeddings"),
-    cl::cat(MIR2VecCategory));
-
 } // namespace mir2vec
 } // namespace llvm
+
+// Forward declarations — defined after OptionInfo declarations below.
+static float getMIR2VecOpcWeight(const clv2::OptionsContext &Ctx);
+static float getMIR2VecCommonOperandWeight(const clv2::OptionsContext &Ctx);
+static float getMIR2VecRegOperandWeight(const clv2::OptionsContext &Ctx);
+// FIXME: Use a default vocab when not specified.
+static std::string getMIR2VecVocabFile(const clv2::OptionsContext &Ctx);
+static bool getMIR2VecPrintAllVocabEntries(const clv2::OptionsContext &Ctx);
+static MIR2VecKind getMIR2VecEmbeddingKind(const clv2::OptionsContext &Ctx);
 
 //===----------------------------------------------------------------------===//
 // Vocabulary
@@ -298,10 +282,12 @@ void MIRVocabulary::generateStorage(const VocabMap &OpcodeMap,
     for (auto &Embedding : Embeddings)
       Embedding *= Weight;
   };
-  scaleVocabSection(OpcodeEmbeddings, OpcWeight);
-  scaleVocabSection(CommonOperandEmbeddings, CommonOperandWeight);
-  scaleVocabSection(PhyRegEmbeddings, RegOperandWeight);
-  scaleVocabSection(VirtRegEmbeddings, RegOperandWeight);
+  const auto &Ctx = MRI.getMF().getFunction().getContext().getOptionsContext();
+  scaleVocabSection(OpcodeEmbeddings, getMIR2VecOpcWeight(Ctx));
+  scaleVocabSection(CommonOperandEmbeddings,
+                    getMIR2VecCommonOperandWeight(Ctx));
+  scaleVocabSection(PhyRegEmbeddings, getMIR2VecRegOperandWeight(Ctx));
+  scaleVocabSection(VirtRegEmbeddings, getMIR2VecRegOperandWeight(Ctx));
 
   std::vector<std::vector<Embedding>> Sections(
       static_cast<unsigned>(Section::MaxSections));
@@ -449,8 +435,9 @@ Expected<mir2vec::MIRVocabulary>
 MIR2VecVocabProvider::getVocabulary(const Module &M) {
   VocabMap OpcVocab, CommonOperandVocab, PhyRegVocabMap, VirtRegVocabMap;
 
-  if (Error Err = readVocabulary(OpcVocab, CommonOperandVocab, PhyRegVocabMap,
-                                 VirtRegVocabMap))
+  if (Error Err =
+          readVocabulary(OpcVocab, CommonOperandVocab, PhyRegVocabMap,
+                         VirtRegVocabMap, M.getContext().getOptionsContext()))
     return std::move(Err);
 
   for (const auto &F : M) {
@@ -474,16 +461,19 @@ MIR2VecVocabProvider::getVocabulary(const Module &M) {
 Error MIR2VecVocabProvider::readVocabulary(VocabMap &OpcodeVocab,
                                            VocabMap &CommonOperandVocab,
                                            VocabMap &PhyRegVocabMap,
-                                           VocabMap &VirtRegVocabMap) {
-  if (VocabFile.empty())
+                                           VocabMap &VirtRegVocabMap,
+                                           const clv2::OptionsContext &Ctx) {
+  std::string EffectiveVocabFile = getMIR2VecVocabFile(Ctx);
+  if (EffectiveVocabFile.empty())
     return createStringError(
         errc::invalid_argument,
         "MIR2Vec vocabulary file path not specified; set it "
         "using --mir2vec-vocab-path");
 
-  auto BufOrError = MemoryBuffer::getFileOrSTDIN(VocabFile, /*IsText=*/true);
+  auto BufOrError =
+      MemoryBuffer::getFileOrSTDIN(EffectiveVocabFile, /*IsText=*/true);
   if (!BufOrError)
-    return createFileError(VocabFile, BufOrError.getError());
+    return createFileError(EffectiveVocabFile, BufOrError.getError());
 
   auto Content = BufOrError.get()->getBuffer();
 
@@ -585,7 +575,13 @@ Embedding MIREmbedder::computeEmbeddings() const {
 
 SymbolicMIREmbedder::SymbolicMIREmbedder(const MachineFunction &MF,
                                          const MIRVocabulary &Vocab)
-    : MIREmbedder(MF, Vocab) {}
+    : MIREmbedder(MF, Vocab,
+                  getMIR2VecOpcWeight(
+                      MF.getFunction().getContext().getOptionsContext()),
+                  getMIR2VecCommonOperandWeight(
+                      MF.getFunction().getContext().getOptionsContext()),
+                  getMIR2VecRegOperandWeight(
+                      MF.getFunction().getContext().getOptionsContext())) {}
 
 std::unique_ptr<SymbolicMIREmbedder>
 SymbolicMIREmbedder::create(const MachineFunction &MF,
@@ -639,7 +635,9 @@ bool MIR2VecVocabPrinterLegacyPass::doFinalization(Module &M) {
   for (const auto &Entry : MIR2VecVocab) {
     // Skip zero embeddings to avoid printing entries not in the vocabulary.
     // This makes the output stable across changes to the opcode list.
-    if (PrintAllVocabEntries || !Entry.isZero()) {
+    bool PrintAll =
+        getMIR2VecPrintAllVocabEntries(M.getContext().getOptionsContext());
+    if (PrintAll || !Entry.isZero()) {
       OS << "Key: " << MIR2VecVocab.getStringKey(Pos) << ": ";
       Entry.print(OS);
     }
@@ -669,7 +667,10 @@ bool MIR2VecPrinterLegacyPass::runOnMachineFunction(MachineFunction &MF) {
   assert(VocabOrErr && "Failed to get MIR2Vec vocabulary");
   auto &MIRVocab = *VocabOrErr;
 
-  auto Emb = mir2vec::MIREmbedder::create(MIR2VecEmbeddingKind, MF, MIRVocab);
+  auto Emb = mir2vec::MIREmbedder::create(
+      getMIR2VecEmbeddingKind(
+          MF.getFunction().getParent()->getContext().getOptionsContext()),
+      MF, MIRVocab);
   if (!Emb) {
     OS << "Error creating MIR2Vec embeddings for function " << MF.getName()
        << "\n";
@@ -706,3 +707,73 @@ bool MIR2VecPrinterLegacyPass::runOnMachineFunction(MachineFunction &MF) {
 MachineFunctionPass *llvm::createMIR2VecPrinterLegacyPass(raw_ostream &OS) {
   return new MIR2VecPrinterLegacyPass(OS);
 }
+
+//===----------------------------------------------------------------------===//
+// Runtime option registration for CLI flags.
+//===----------------------------------------------------------------------===//
+
+static constexpr clv2::OptionInfo<std::string> OI_MIR2VecVocabPath{
+    "mir2vec-vocab-path", "Path to the vocabulary file for MIR2Vec",
+    clv2::cat(clv2::MIR2VecCategory)};
+
+static constexpr clv2::EnumVal<MIR2VecKind> MIR2VecKindVals[] = {
+    {"symbolic", MIR2VecKind::Symbolic, "Generate symbolic embeddings for MIR"},
+};
+static constexpr auto OI_MIR2VecKind = clv2::makeEnumOption<MIR2VecKind>(
+    "mir2vec-kind", "MIR2Vec embedding kind", MIR2VecKindVals,
+    clv2::Init{MIR2VecKind::Symbolic}, clv2::cat(clv2::MIR2VecCategory));
+
+static constexpr clv2::OptionInfo<float> OI_MIR2VecOpcWeight{
+    "mir2vec-opc-weight", "Weight for machine opcode embeddings",
+    clv2::Init{1.0f}, clv2::cat(clv2::MIR2VecCategory)};
+static constexpr clv2::OptionInfo<float> OI_MIR2VecCommonOperandWeight{
+    "mir2vec-common-operand-weight", "Weight for common operand embeddings",
+    clv2::Init{1.0f}, clv2::cat(clv2::MIR2VecCategory)};
+static constexpr clv2::OptionInfo<float> OI_MIR2VecRegOperandWeight{
+    "mir2vec-reg-operand-weight", "Weight for register operand embeddings",
+    clv2::Init{1.0f}, clv2::cat(clv2::MIR2VecCategory)};
+
+static constexpr clv2::OptionInfo<bool> OI_MIR2VecPrintAllVocabEntries{
+    "mir2vec-print-all-vocab-entries",
+    "Print all vocabulary entries including zero embeddings", clv2::Hidden,
+    clv2::cat(clv2::MIR2VecCategory)};
+
+static constexpr clv2::OptionsRegistry<
+    &OI_MIR2VecVocabPath, &OI_MIR2VecKind, &OI_MIR2VecOpcWeight,
+    &OI_MIR2VecCommonOperandWeight, &OI_MIR2VecRegOperandWeight,
+    &OI_MIR2VecPrintAllVocabEntries>
+    MIR2VecOptsReg;
+
+static float getMIR2VecOpcWeight(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&MIR2VecOptsReg, &OI_MIR2VecOpcWeight>(Ctx, 1.0f);
+}
+static float getMIR2VecCommonOperandWeight(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&MIR2VecOptsReg, &OI_MIR2VecCommonOperandWeight>(
+      Ctx, 1.0f);
+}
+static float getMIR2VecRegOperandWeight(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&MIR2VecOptsReg, &OI_MIR2VecRegOperandWeight>(Ctx,
+                                                                         1.0f);
+}
+
+static bool getMIR2VecPrintAllVocabEntries(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&MIR2VecOptsReg, &OI_MIR2VecPrintAllVocabEntries>(
+      Ctx, false);
+}
+
+static std::string getMIR2VecVocabFile(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&MIR2VecOptsReg, &OI_MIR2VecVocabPath>(
+      Ctx, std::string());
+}
+static MIR2VecKind getMIR2VecEmbeddingKind(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&MIR2VecOptsReg, &OI_MIR2VecKind>(
+      Ctx, MIR2VecKind::Symbolic);
+}
+
+// No apply function: every option in this registry is read from the
+// OptionsContext at its point of use, so nothing needs writing back to a
+// process-wide global.
+static const int RegisterMIR2VecOpts = [] {
+  clv2::registerDynamicRegistry<&MIR2VecOptsReg>();
+  return 0;
+}();

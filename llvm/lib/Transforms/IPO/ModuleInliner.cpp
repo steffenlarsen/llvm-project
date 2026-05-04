@@ -35,9 +35,10 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/CallPromotionUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include <cassert>
@@ -49,12 +50,10 @@ using namespace llvm;
 STATISTIC(NumInlined, "Number of functions inlined");
 STATISTIC(NumDeleted, "Number of functions deleted because all callers found");
 
-static cl::opt<bool> CtxProfPromoteAlwaysInline(
-    "ctx-prof-promote-alwaysinline", cl::init(false), cl::Hidden,
-    cl::desc("If using a contextual profile in this module, and an indirect "
-             "call target is marked as alwaysinline, perform indirect call "
-             "promotion for that target. If multiple targets for an indirect "
-             "call site fit this description, they are all promoted."));
+static bool getCtxProfPromoteAlwaysInline(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_CtxProfPromoteAlwaysInline>(
+      M.getContext().getOptionsContext());
+}
 
 InlineAdvisor &ModuleInlinerPass::getAdvisor(const ModuleAnalysisManager &MAM,
                                              FunctionAnalysisManager &FAM,
@@ -156,7 +155,7 @@ PreservedAnalyses ModuleInlinerPass::run(Module &M,
                      << setIsVerbose();
             });
           }
-        } else if (CtxProfPromoteAlwaysInline &&
+        } else if (getCtxProfPromoteAlwaysInline(M) &&
                    CtxProf.isInSpecializedModule() && CB->isIndirectCall()) {
           CtxProfAnalysis::collectIndirectCallPromotionList(*CB, CtxProf,
                                                             ICPCandidates);

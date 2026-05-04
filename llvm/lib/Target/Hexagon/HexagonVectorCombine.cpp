@@ -39,10 +39,12 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/Local.h"
 
@@ -68,18 +70,52 @@
 using namespace llvm;
 
 namespace {
-cl::opt<bool> DumpModule("hvc-dump-module", cl::Hidden);
-cl::opt<bool> VAEnabled("hvc-va", cl::Hidden, cl::init(true)); // Align
-cl::opt<bool> VIEnabled("hvc-vi", cl::Hidden, cl::init(true)); // Idioms
-cl::opt<bool> VADoFullStores("hvc-va-full-stores", cl::Hidden);
 
-cl::opt<unsigned> VAGroupCountLimit("hvc-va-group-count-limit", cl::Hidden,
-                                    cl::init(~0));
-cl::opt<unsigned> VAGroupSizeLimit("hvc-va-group-size-limit", cl::Hidden,
-                                   cl::init(~0));
-cl::opt<unsigned>
-    MinLoadGroupSizeForAlignment("hvc-ld-min-group-size-for-alignment",
-                                 cl::Hidden, cl::init(4));
+bool VAEnabled = true;
+bool VIEnabled = true;
+
+unsigned VAGroupCountLimit = ~0;
+unsigned VAGroupSizeLimit = ~0;
+unsigned MinLoadGroupSizeForAlignment = 4;
+
+} // end anonymous namespace
+
+static unsigned getMinLoadGroupSizeForAlignment(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_MinLoadGroupSizeForAlignment>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getDumpModule(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_HVCDumpModule>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getVAEnabled(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_HVCVAEnabled>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getVIEnabled(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_HVCVIEnabled>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getVADoFullStores(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_HVCVADoFullStores>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getVAGroupCountLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_HVCVAGroupCountLimit>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getVAGroupSizeLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_HVCVAGroupSizeLimit>(
+      F.getContext().getOptionsContext());
+}
+
+namespace {
 
 class HexagonVectorCombine {
 public:
@@ -1001,7 +1037,7 @@ auto AlignVectors::createLoadGroups(const AddrList &Group) const -> MoveList {
   // Form load groups.
   // To avoid complications with moving code across basic blocks, only form
   // groups that are contained within a single basic block.
-  unsigned SizeLimit = VAGroupSizeLimit;
+  unsigned SizeLimit = getVAGroupSizeLimit(HVC.F);
   if (SizeLimit == 0)
     return {};
 
@@ -1057,7 +1093,7 @@ auto AlignVectors::createLoadGroups(const AddrList &Group) const -> MoveList {
   }
 
   // Erase groups smaller than the minimum load group size.
-  unsigned LoadGroupSizeLimit = MinLoadGroupSizeForAlignment;
+  unsigned LoadGroupSizeLimit = getMinLoadGroupSizeForAlignment(HVC.F);
   erase_if(LoadGroups, [LoadGroupSizeLimit](const MoveGroup &G) {
     return G.Main.size() < LoadGroupSizeLimit;
   });
@@ -1084,7 +1120,7 @@ auto AlignVectors::createStoreGroups(const AddrList &Group) const -> MoveList {
   // Form store groups.
   // To avoid complications with moving code across basic blocks, only form
   // groups that are contained within a single basic block.
-  unsigned SizeLimit = VAGroupSizeLimit;
+  unsigned SizeLimit = getVAGroupSizeLimit(HVC.F);
   if (SizeLimit == 0)
     return {};
 
@@ -1156,7 +1192,7 @@ auto AlignVectors::createStoreGroups(const AddrList &Group) const -> MoveList {
   // Erase groups where every store is a full HVX vector. The reason is that
   // aligning predicated stores generates complex code that may be less
   // efficient than a sequence of unaligned vector stores.
-  if (!VADoFullStores) {
+  if (!getVADoFullStores(HVC.F)) {
     erase_if(StoreGroups, [this](const MoveGroup &G) {
       return G.IsHvx && llvm::all_of(G.Main, [this](Instruction *S) {
                auto MaybeInfo = this->getAddrInfo(*S);
@@ -1721,7 +1757,8 @@ auto AlignVectors::run() -> bool {
   });
 
   // Cumulative limit on the number of groups.
-  unsigned CountLimit = VAGroupCountLimit;
+  unsigned CountLimit = getVAGroupCountLimit(HVC.F);
+
   if (CountLimit == 0)
     return false;
 
@@ -3363,18 +3400,18 @@ auto HvxIdioms::run() -> bool {
 // --- End HvxIdioms
 
 auto HexagonVectorCombine::run() -> bool {
-  if (DumpModule)
+  if (getDumpModule(F))
     dbgs() << "Module before HexagonVectorCombine\n" << *F.getParent();
 
   bool Changed = false;
   if (HST.useHVXOps()) {
-    if (VAEnabled)
+    if (getVAEnabled(F))
       Changed |= AlignVectors(*this).run();
-    if (VIEnabled)
+    if (getVIEnabled(F))
       Changed |= HvxIdioms(*this).run();
   }
 
-  if (DumpModule) {
+  if (getDumpModule(F)) {
     dbgs() << "Module " << (Changed ? "(modified)" : "(unchanged)")
            << " after HexagonVectorCombine\n"
            << *F.getParent();

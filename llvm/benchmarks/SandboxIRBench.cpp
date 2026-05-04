@@ -93,7 +93,7 @@ static std::string generateBBWalkIR(unsigned Size) {
 
 template <IR IRTy> static void SBoxIRCreation(benchmark::State &State) {
   static_assert(IRTy != IR::LLVM, "Expected SBoxTracking or SBoxNoTracking");
-  LLVMContext LLVMCtx;
+  LLVMContext LLVMCtx{llvm::clv2::defaultOptionsContext()};
   unsigned NumInstrs = State.range(0);
   std::unique_ptr<llvm::Module> LLVMM;
   std::string IRStr = generateBBWalkIR(NumInstrs);
@@ -117,7 +117,7 @@ template <IR IRTy> static void SBoxIRCreation(benchmark::State &State) {
 }
 
 template <IR IRTy> static void BBWalk(benchmark::State &State) {
-  LLVMContext LLVMCtx;
+  LLVMContext LLVMCtx{llvm::clv2::defaultOptionsContext()};
   sandboxir::Context Ctx(LLVMCtx);
   unsigned NumInstrs = State.range(0);
   std::unique_ptr<llvm::Module> LLVMM;
@@ -139,7 +139,7 @@ define void @foo(i32 %v1, i32 %v2) {
 }
 
 template <IR IRTy> static void GetType(benchmark::State &State) {
-  LLVMContext LLVMCtx;
+  LLVMContext LLVMCtx{llvm::clv2::defaultOptionsContext()};
   sandboxir::Context Ctx(LLVMCtx);
   std::unique_ptr<llvm::Module> LLVMM;
   auto *BB = genIR<IRTy>(LLVMM, LLVMCtx, Ctx, generateGetTypeIR);
@@ -161,7 +161,7 @@ static std::string generateRAUWIR(unsigned Size) {
 }
 
 template <IR IRTy> static void RAUW(benchmark::State &State) {
-  LLVMContext LLVMCtx;
+  LLVMContext LLVMCtx{llvm::clv2::defaultOptionsContext()};
   sandboxir::Context Ctx(LLVMCtx);
   std::unique_ptr<llvm::Module> LLVMM;
   unsigned NumInstrs = State.range(0);
@@ -200,7 +200,7 @@ static std::string generateRUOWIR(unsigned NumOperands) {
 }
 
 template <IR IRTy> static void RUOW(benchmark::State &State) {
-  LLVMContext LLVMCtx;
+  LLVMContext LLVMCtx{llvm::clv2::defaultOptionsContext()};
   sandboxir::Context Ctx(LLVMCtx);
   std::unique_ptr<llvm::Module> LLVMM;
   unsigned NumOperands = State.range(0);

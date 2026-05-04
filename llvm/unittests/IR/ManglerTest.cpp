@@ -43,7 +43,7 @@ static std::string mangleFunc(StringRef IRName,
 namespace {
 
 TEST(ManglerTest, MachO) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   DataLayout DL("m:o"); // macho
   Module Mod("test", Ctx);
   Mod.setDataLayout(DL);
@@ -63,7 +63,7 @@ TEST(ManglerTest, MachO) {
 }
 
 TEST(ManglerTest, WindowsX86) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   DataLayout DL("m:x-p:32:32"); // 32-bit windows
   Module Mod("test", Ctx);
   Mod.setDataLayout(DL);
@@ -99,7 +99,7 @@ TEST(ManglerTest, WindowsX86) {
 }
 
 TEST(ManglerTest, WindowsX64) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   DataLayout DL("m:w-p:64:64"); // windows
   Module Mod("test", Ctx);
   Mod.setDataLayout(DL);
@@ -135,7 +135,7 @@ TEST(ManglerTest, WindowsX64) {
 }
 
 TEST(ManglerTest, UEFIX64) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   DataLayout DL("e-m:w-p270:32:32-p271:32:32-p272:64:64-"
                 "i64:64-i128:128-f80:128-n8:16:32:64-S128"); // uefi X86_64
   Module Mod("test", Ctx);
@@ -156,7 +156,7 @@ TEST(ManglerTest, UEFIX64) {
 }
 
 TEST(ManglerTest, XCOFF) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   DataLayout DL("m:a"); // XCOFF/AIX
   Module Mod("test", Ctx);
   Mod.setDataLayout(DL);
@@ -176,7 +176,7 @@ TEST(ManglerTest, XCOFF) {
 }
 
 TEST(ManglerTest, GOFF) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   DataLayout DL("m:l"); // GOFF
   Module Mod("test", Ctx);
   Mod.setDataLayout(DL);

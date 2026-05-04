@@ -432,8 +432,10 @@ inline llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
                    ->getParentRegion()
                    ->getRegionNumber()
             << ", terminator "
-            << OpWithFlags(point.getTerminatorPredecessorOrNull(),
-                           OpPrintingFlags().skipRegions())
+            << OpWithFlags(
+                   point.getTerminatorPredecessorOrNull(),
+                   opPrintingFlags(point.getTerminatorPredecessorOrNull())
+                       .skipRegions())
             << ">";
 }
 
@@ -442,8 +444,9 @@ inline llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
   if (Region *region = successor.getSuccessor())
     return os << "<to region #" << region->getRegionNumber() << ">";
   return os << "<to operation "
-            << OpWithFlags(successor.getSuccessorOp(),
-                           OpPrintingFlags().skipRegions())
+            << OpWithFlags(
+                   successor.getSuccessorOp(),
+                   opPrintingFlags(successor.getSuccessorOp()).skipRegions())
             << ">";
 }
 } // namespace mlir

@@ -8,16 +8,28 @@
 
 #include "GlobalISelMatchTableExecutorEmitter.h"
 #include "MatchTable/Matchers.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/TableGen/CodeGenHelpers.h"
 
 using namespace llvm;
 using namespace llvm::gi;
 
-static cl::opt<bool>
-    AllowExtendedLLT("gisel-extended-llt",
-                     cl::desc("Generate extended llt names in match tables"),
-                     cl::init(false));
+static bool AllowExtendedLLT = false;
+
+static constexpr clv2::OptionInfo<bool> OI_AllowExtendedLLT{
+    "gisel-extended-llt", "Generate extended llt names in match tables"};
+
+static constexpr clv2::OptionsRegistry<&OI_AllowExtendedLLT>
+    GlobalISelMatchTableReg;
+
+static void applyGlobalISelMatchTable(
+    const decltype(GlobalISelMatchTableReg)::ParsedOptionsT &Opts) {
+  AllowExtendedLLT = Opts.get<&OI_AllowExtendedLLT>();
+}
+
+void registerGlobalISelMatchTableExecutorEmitterOptions(clv2::OptionParser &P) {
+  P.add<&GlobalISelMatchTableReg, applyGlobalISelMatchTable>();
+}
 
 GlobalISelMatchTableExecutorEmitter::GlobalISelMatchTableExecutorEmitter() {
   LLT::setUseExtended(AllowExtendedLLT);

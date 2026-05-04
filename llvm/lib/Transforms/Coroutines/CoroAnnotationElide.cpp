@@ -25,8 +25,9 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/BranchProbability.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Coroutines/CoroutinesOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/CallGraphUpdater.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
@@ -36,10 +37,10 @@ using namespace llvm;
 
 #define DEBUG_TYPE "coro-annotation-elide"
 
-static cl::opt<float> CoroElideBranchRatio(
-    "coro-elide-branch-ratio", cl::init(0.55), cl::Hidden,
-    cl::desc("Minimum BranchProbability to consider a elide a coroutine."));
-extern cl::opt<unsigned> MinBlockCounterExecution;
+static float getCoroElideBranchRatio(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::CORO_ElideBranchRatio>(
+      F.getContext().getOptionsContext());
+}
 
 static Instruction *getFirstNonAllocaInTheEntryBlock(Function *F) {
   for (Instruction &I : F->getEntryBlock())
@@ -158,7 +159,7 @@ PreservedAnalyses CoroAnnotationElidePass::run(LazyCallGraph::SCC &C,
         auto BlockFreq = BFI.getBlockFreq(CB->getParent()).getFrequency();
         auto EntryFreq = BFI.getEntryFreq().getFrequency();
         uint64_t MinFreq =
-            static_cast<uint64_t>(EntryFreq * CoroElideBranchRatio);
+            static_cast<uint64_t>(EntryFreq * getCoroElideBranchRatio(*Caller));
 
         if (BlockFreq < MinFreq) {
           ORE.emit([&]() {

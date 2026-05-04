@@ -19,59 +19,55 @@
 #include "mlir/Query/QuerySession.h"
 #include "mlir/Support/FileUtilities.h"
 #include "llvm/LineEditor/LineEditor.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/Process.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 
-//===----------------------------------------------------------------------===//
-// Query Parser
-//===----------------------------------------------------------------------===//
+using namespace llvm::clv2;
+
+static constexpr OptionCategory MlirQueryCategory{"mlir-query options"};
+
+static constexpr OptionInfo<std::string> queryInputOpt{"", "<input file>",
+                                                       Positional{}, Init{"-"}};
+static constexpr ListOptionInfo<std::string> queryCommandsOpt{
+    "c", "Specify command to run", value_desc("command"),
+    cat(MlirQueryCategory)};
+static constexpr OptionInfo<bool> queryNoImplicitModuleOpt{
+    "no-implicit-module",
+    "Disable implicit addition of a top-level module op during parsing", Hidden,
+    cat(MlirQueryCategory)};
+static constexpr OptionInfo<bool> queryAllowUnregisteredOpt{
+    "allow-unregistered-dialect", "Allow operation with no registered dialects",
+    Hidden, cat(MlirQueryCategory)};
+
+static constexpr OptionsRegistry<&queryInputOpt, &queryCommandsOpt,
+                                 &queryNoImplicitModuleOpt,
+                                 &queryAllowUnregisteredOpt>
+    MlirQueryReg;
 
 llvm::LogicalResult
-mlir::mlirQueryMain(int argc, char **argv, MLIRContext &context,
+mlir::mlirQueryMain(int argc, char **argv, mlir::MLIRContext &context,
                     const mlir::query::matcher::Registry &matcherRegistry) {
-
-  // Override the default '-h' and use the default PrintHelpMessage() which
-  // won't print options in categories.
-  static llvm::cl::opt<bool> help("h", llvm::cl::desc("Alias for -help"),
-                                  llvm::cl::Hidden);
-
-  static llvm::cl::OptionCategory mlirQueryCategory("mlir-query options");
-
-  static llvm::cl::list<std::string> commands(
-      "c", llvm::cl::desc("Specify command to run"),
-      llvm::cl::value_desc("command"), llvm::cl::cat(mlirQueryCategory));
-
-  static llvm::cl::opt<std::string> inputFilename(
-      llvm::cl::Positional, llvm::cl::desc("<input file>"), llvm::cl::init("-"),
-      llvm::cl::cat(mlirQueryCategory));
-
-  static llvm::cl::opt<bool> noImplicitModule{
-      "no-implicit-module",
-      llvm::cl::desc(
-          "Disable implicit addition of a top-level module op during parsing"),
-      llvm::cl::init(false)};
-
-  static llvm::cl::opt<bool> allowUnregisteredDialects(
-      "allow-unregistered-dialect",
-      llvm::cl::desc("Allow operation with no registered dialects"),
-      llvm::cl::init(false));
-
-  llvm::cl::HideUnrelatedOptions(mlirQueryCategory);
 
   llvm::InitLLVM y(argc, argv);
 
-  llvm::cl::ParseCommandLineOptions(argc, argv, "MLIR test case query tool.\n");
-
-  if (help) {
-    llvm::cl::PrintHelpMessage();
-    return mlir::success();
-  }
+  llvm::clv2::OptionParser P;
+  P.add<&MlirQueryReg>();
+  llvm::RegisterCoreLLVMOptions(P);
+  P.hideUnrelatedOptions({&MlirQueryCategory});
+  auto OptsCtx = P.parse(argc, argv, "MLIR test case query tool.\n");
+  auto *Opts = OptsCtx->getViewPtr<&MlirQueryReg>();
 
   // When reading from stdin and the input is a tty, it is often a user mistake
   // and the process "appears to be stuck". Print a message to let the user
   // know!
+  auto &inputFilename = Opts->get<&queryInputOpt>();
+  bool noImplicitModule = Opts->get<&queryNoImplicitModuleOpt>();
+  bool allowUnregisteredDialects = Opts->get<&queryAllowUnregisteredOpt>();
+  auto &commands = Opts->get<&queryCommandsOpt>();
+
   if (inputFilename == "-" &&
       llvm::sys::Process::FileDescriptorIsDisplayed(fileno(stdin)))
     llvm::errs() << "(processing input from stdin now, hit ctrl-c/ctrl-d to "

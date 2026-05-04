@@ -40,9 +40,10 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
@@ -53,23 +54,10 @@
 #include <utility>
 
 using namespace toy;
-namespace cl = llvm::cl;
-
-static cl::opt<std::string> inputFilename(cl::Positional,
-                                          cl::desc("<input toy file>"),
-                                          cl::init("-"),
-                                          cl::value_desc("filename"));
+using namespace llvm;
 
 namespace {
 enum InputType { Toy, MLIR };
-} // namespace
-static cl::opt<enum InputType> inputType(
-    "x", cl::init(Toy), cl::desc("Decided the kind of output desired"),
-    cl::values(clEnumValN(Toy, "toy", "load the input file as a Toy source.")),
-    cl::values(clEnumValN(MLIR, "mlir",
-                          "load the input file as an MLIR file")));
-
-namespace {
 enum Action {
   None,
   DumpAST,
@@ -80,20 +68,41 @@ enum Action {
   RunJIT
 };
 } // namespace
-static cl::opt<enum Action> emitAction(
-    "emit", cl::desc("Select the kind of output desired"),
-    cl::values(clEnumValN(DumpAST, "ast", "output the AST dump")),
-    cl::values(clEnumValN(DumpMLIR, "mlir", "output the MLIR dump")),
-    cl::values(clEnumValN(DumpMLIRAffine, "mlir-affine",
-                          "output the MLIR dump after affine lowering")),
-    cl::values(clEnumValN(DumpMLIRLLVM, "mlir-llvm",
-                          "output the MLIR dump after llvm lowering")),
-    cl::values(clEnumValN(DumpLLVMIR, "llvm", "output the LLVM IR dump")),
-    cl::values(
-        clEnumValN(RunJIT, "jit",
-                   "JIT the code and run it by invoking the main function")));
 
-static cl::opt<bool> enableOpt("opt", cl::desc("Enable optimizations"));
+static constexpr clv2::OptionInfo<std::string> inputFilenameOpt{
+    "", "<input toy file>", clv2::Positional{}, clv2::Init{"-"}};
+
+static constexpr clv2::EnumVal<InputType> inputTypeVals[] = {
+    {"toy", Toy, "load the input file as a Toy source."},
+    {"mlir", MLIR, "load the input file as an MLIR file"},
+};
+static constexpr auto inputTypeOpt = clv2::makeEnumOption<InputType>(
+    "x", "Decided the kind of output desired", inputTypeVals);
+
+static constexpr clv2::EnumVal<Action> emitActionVals[] = {
+    {"ast", DumpAST, "output the AST dump"},
+    {"mlir", DumpMLIR, "output the MLIR dump"},
+    {"mlir-affine", DumpMLIRAffine,
+     "output the MLIR dump after affine lowering"},
+    {"mlir-llvm", DumpMLIRLLVM, "output the MLIR dump after llvm lowering"},
+    {"llvm", DumpLLVMIR, "output the LLVM IR dump"},
+    {"jit", RunJIT, "JIT the code and run it by invoking the main function"},
+};
+static constexpr auto emitActionOpt = clv2::makeEnumOption<Action>(
+    "emit", "Select the kind of output desired", emitActionVals);
+
+static constexpr clv2::OptionInfo<bool> enableOptOpt{"opt",
+                                                     "Enable optimizations"};
+
+static constexpr clv2::OptionsRegistry<&inputFilenameOpt, &inputTypeOpt,
+                                       &emitActionOpt, &enableOptOpt>
+    ToyReg;
+
+// These are populated from parsed options in main().
+static std::string inputFilename;
+static InputType inputType;
+static Action emitAction;
+static bool enableOpt;
 
 /// Returns a Toy AST resulting from parsing the file or a nullptr on error.
 static std::unique_ptr<toy::ModuleAST>
@@ -218,7 +227,7 @@ static int dumpLLVMIR(mlir::ModuleOp module) {
   mlir::registerLLVMDialectTranslation(*module->getContext());
 
   // Convert the module to LLVM IR in a new LLVM IR context.
-  llvm::LLVMContext llvmContext;
+  llvm::LLVMContext llvmContext{llvm::clv2::defaultOptionsContext()};
   auto llvmModule = mlir::translateModuleToLLVMIR(module, llvmContext);
   if (!llvmModule) {
     llvm::errs() << "Failed to emit LLVM IR\n";
@@ -293,9 +302,18 @@ int main(int argc, char **argv) {
   // Register any command line options.
   mlir::registerAsmPrinterCLOptions();
   mlir::registerMLIRContextCLOptions();
-  mlir::registerPassManagerCLOptions();
 
-  cl::ParseCommandLineOptions(argc, argv, "toy compiler\n");
+  llvm::clv2::OptionParser P;
+  P.add<&ToyReg>();
+  RegisterAllLLVMOptions(P);
+  mlir::registerPassManagerCLOptions(P);
+  auto OptsCtx = P.parse(argc, argv, "toy compiler\n");
+  auto *Opts = OptsCtx->getViewPtr<&ToyReg>();
+
+  inputFilename = std::string(Opts->get<&inputFilenameOpt>());
+  inputType = Opts->get<&inputTypeOpt>();
+  emitAction = Opts->get<&emitActionOpt>();
+  enableOpt = Opts->get<&enableOptOpt>();
 
   if (emitAction == Action::DumpAST)
     return dumpAST();

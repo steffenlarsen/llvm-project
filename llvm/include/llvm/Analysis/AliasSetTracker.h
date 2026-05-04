@@ -27,10 +27,14 @@
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ModRef.h"
+#include "llvm/Support/OptionsContext.h"
 #include <cassert>
 #include <vector>
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
 
 class AliasResult;
 class AliasSetTracker;
@@ -152,6 +156,7 @@ inline raw_ostream& operator<<(raw_ostream &OS, const AliasSet &AS) {
 
 class AliasSetTracker {
   BatchAAResults &AA;
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
   ilist<AliasSet> AliasSets;
 
   using PointerMapType = DenseMap<AssertingVH<const Value>, AliasSet *>;
@@ -163,7 +168,8 @@ class AliasSetTracker {
 public:
   /// Create an empty collection of AliasSets, and use the specified alias
   /// analysis object to disambiguate load and store addresses.
-  explicit AliasSetTracker(BatchAAResults &AA) : AA(AA) {}
+  explicit AliasSetTracker(BatchAAResults &AA, const clv2::OptionsContext &Ctx)
+      : AA(AA), OptsCtx(&Ctx) {}
   ~AliasSetTracker() { clear(); }
 
   /// These methods are used to add different types of instructions to the alias

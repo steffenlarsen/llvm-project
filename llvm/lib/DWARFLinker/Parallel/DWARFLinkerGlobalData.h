@@ -13,6 +13,7 @@
 #include "TypePool.h"
 #include "llvm/DWARFLinker/Parallel/DWARFLinker.h"
 #include "llvm/DWARFLinker/StringPool.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/PerThreadBumpPtrAllocator.h"
 
 namespace llvm {
@@ -97,6 +98,12 @@ public:
   /// Returns linking options.
   const DWARFLinkerOptions &getOptions() const { return Options; }
 
+  /// Returns the parsed LLVM options driving the emitters.
+  const clv2::OptionsContext &getOptionsContext() const { return *OptsCtx; }
+
+  /// Set the parsed LLVM options.
+  void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
+
   /// Set warning handler.
   void setWarningHandler(MessageHandlerTy Handler) { WarningHandler = Handler; }
 
@@ -151,6 +158,7 @@ protected:
   DWARFLinkerOptions Options;
   MessageHandlerTy WarningHandler;
   MessageHandlerTy ErrorHandler;
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
 
   /// Triple for output data. May be not set if generation of output
   /// data is not requested.

@@ -45,8 +45,10 @@
 #include "llvm/Pass.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Triple.h"
@@ -58,178 +60,165 @@
 
 using namespace llvm;
 
-static cl::opt<bool> EnableCCMP("aarch64-enable-ccmp",
-                                cl::desc("Enable the CCMP formation pass"),
-                                cl::init(true), cl::Hidden);
-
-static cl::opt<bool>
-    EnableCondBrTuning("aarch64-enable-cond-br-tune",
-                       cl::desc("Enable the conditional branch tuning pass"),
-                       cl::init(true), cl::Hidden);
-
-static cl::opt<bool> EnableAArch64CopyPropagation(
-    "aarch64-enable-copy-propagation",
-    cl::desc("Enable the copy propagation with AArch64 copy instr"),
-    cl::init(true), cl::Hidden);
-
-static cl::opt<bool> EnableMCR("aarch64-enable-mcr",
-                               cl::desc("Enable the machine combiner pass"),
-                               cl::init(true), cl::Hidden);
-
-static cl::opt<bool> EnableStPairSuppress("aarch64-enable-stp-suppress",
-                                          cl::desc("Suppress STP for AArch64"),
-                                          cl::init(true), cl::Hidden);
-
-static cl::opt<bool> EnableAdvSIMDScalar(
-    "aarch64-enable-simd-scalar",
-    cl::desc("Enable use of AdvSIMD scalar integer instructions"),
-    cl::init(false), cl::Hidden);
-
-static cl::opt<bool>
-    EnablePromoteConstant("aarch64-enable-promote-const",
-                          cl::desc("Enable the promote constant pass"),
-                          cl::init(true), cl::Hidden);
-
-static cl::opt<bool> EnableCollectLOH(
-    "aarch64-enable-collect-loh",
-    cl::desc("Enable the pass that emits the linker optimization hints (LOH)"),
-    cl::init(true), cl::Hidden);
-
-static cl::opt<bool>
-    EnableDeadRegisterElimination("aarch64-enable-dead-defs", cl::Hidden,
-                                  cl::desc("Enable the pass that removes dead"
-                                           " definitions and replaces stores to"
-                                           " them with stores to the zero"
-                                           " register"),
-                                  cl::init(true));
-
-static cl::opt<bool> EnableRedundantCopyElimination(
-    "aarch64-enable-copyelim",
-    cl::desc("Enable the redundant copy elimination pass"), cl::init(true),
-    cl::Hidden);
-
-static cl::opt<bool> EnableLoadStoreOpt("aarch64-enable-ldst-opt",
-                                        cl::desc("Enable the load/store pair"
-                                                 " optimization pass"),
-                                        cl::init(true), cl::Hidden);
-
-static cl::opt<bool> EnableAtomicTidy(
-    "aarch64-enable-atomic-cfg-tidy", cl::Hidden,
-    cl::desc("Run SimplifyCFG after expanding atomic operations"
-             " to make use of cmpxchg flow-based information"),
-    cl::init(true));
-
-static cl::opt<bool>
-EnableEarlyIfConversion("aarch64-enable-early-ifcvt", cl::Hidden,
-                        cl::desc("Run early if-conversion"),
-                        cl::init(true));
-
-static cl::opt<bool>
-    EnableCondOpt("aarch64-enable-condopt",
-                  cl::desc("Enable the condition optimizer pass"),
-                  cl::init(true), cl::Hidden);
-
-static cl::opt<bool>
-    EnableGEPOpt("aarch64-enable-gep-opt", cl::Hidden,
-                 cl::desc("Enable optimizations on complex GEPs"),
-                 cl::init(false));
-
-static cl::opt<bool>
-    EnableSelectOpt("aarch64-select-opt", cl::Hidden,
-                    cl::desc("Enable select to branch optimizations"),
-                    cl::init(true));
-
-static cl::opt<bool>
-    BranchRelaxation("aarch64-enable-branch-relax", cl::Hidden, cl::init(true),
-                     cl::desc("Relax out of range conditional branches"));
-
-static cl::opt<bool> EnableCompressJumpTables(
-    "aarch64-enable-compress-jump-tables", cl::Hidden, cl::init(true),
-    cl::desc("Use smallest entry possible for jump tables"));
-
 // FIXME: Unify control over GlobalMerge.
-static cl::opt<cl::boolOrDefault>
-    EnableGlobalMerge("aarch64-enable-global-merge", cl::Hidden,
-                      cl::desc("Enable the global merge pass"));
+static cl::boolOrDefault EnableGlobalMerge;
 
-static cl::opt<bool>
-    EnableLoopDataPrefetch("aarch64-enable-loop-data-prefetch", cl::Hidden,
-                           cl::desc("Enable the loop data prefetch pass"),
-                           cl::init(true));
+static bool getEnableHomogeneousPrologEpilog(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::AArch64OptsReg,
+                           &clv2::A64_HomogeneousPrologEpilog>(Ctx, false);
+}
 
-static cl::opt<int> EnableGlobalISelAtO(
-    "aarch64-enable-global-isel-at-O", cl::Hidden,
-    cl::desc("Enable GlobalISel at or below an opt level (-1 to disable)"),
-    cl::init(0));
+static bool getEnableCCMP(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableCCMP>(Ctx);
+}
 
-static cl::opt<bool>
-    EnableSMEPeepholeOpt("enable-aarch64-sme-peephole-opt", cl::init(true),
-                         cl::Hidden,
-                         cl::desc("Perform SME peephole optimization"));
+static bool getEnableCondBrTuning(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableCondBrTuning>(Ctx);
+}
 
-static cl::opt<bool> EnableFalkorHWPFFix("aarch64-enable-falkor-hwpf-fix",
-                                         cl::init(true), cl::Hidden);
+static bool getEnableAArch64CopyPropagation(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableCopyPropagation>(Ctx);
+}
 
-static cl::opt<bool>
-    EnableBranchTargets("aarch64-enable-branch-targets", cl::Hidden,
-                        cl::desc("Enable the AArch64 branch target pass"),
-                        cl::init(true));
+static bool getEnableMCR(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableMCR>(Ctx);
+}
 
-static cl::opt<unsigned> SVEVectorBitsMaxOpt(
-    "aarch64-sve-vector-bits-max",
-    cl::desc("Assume SVE vector registers are at most this big, "
-             "with zero meaning no maximum size is assumed."),
-    cl::init(0), cl::Hidden);
+static bool getEnableStPairSuppress(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableStPairSuppress>(Ctx);
+}
 
-static cl::opt<unsigned> SVEVectorBitsMinOpt(
-    "aarch64-sve-vector-bits-min",
-    cl::desc("Assume SVE vector registers are at least this big, "
-             "with zero meaning no minimum size is assumed."),
-    cl::init(0), cl::Hidden);
+static bool getEnableAdvSIMDScalar(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableAdvSIMDScalar>(Ctx);
+}
 
-static cl::opt<bool> ForceStreaming(
-    "force-streaming",
-    cl::desc("Force the use of streaming code for all functions"),
-    cl::init(false), cl::Hidden);
+static bool getEnablePromoteConstant(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnablePromoteConstant>(Ctx);
+}
 
-static cl::opt<bool> ForceStreamingCompatible(
-    "force-streaming-compatible",
-    cl::desc("Force the use of streaming-compatible code for all functions"),
-    cl::init(false), cl::Hidden);
+static bool getEnableCollectLOH(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableCollectLOH>(Ctx);
+}
 
-extern cl::opt<bool> EnableHomogeneousPrologEpilog;
+static bool getEnableDeadRegisterElimination(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableDeadRegisterElimination>(
+      Ctx);
+}
 
-static cl::opt<bool> EnableGISelLoadStoreOptPreLegal(
-    "aarch64-enable-gisel-ldst-prelegal",
-    cl::desc("Enable GlobalISel's pre-legalizer load/store optimization pass"),
-    cl::init(true), cl::Hidden);
+static bool getEnableRedundantCopyElimination(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableRedundantCopyElimination>(
+      Ctx);
+}
 
-static cl::opt<bool> EnableGISelLoadStoreOptPostLegal(
-    "aarch64-enable-gisel-ldst-postlegal",
-    cl::desc("Enable GlobalISel's post-legalizer load/store optimization pass"),
-    cl::init(false), cl::Hidden);
+static bool getEnableLoadStoreOpt(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableLoadStoreOpt>(Ctx);
+}
 
-static cl::opt<bool>
-    EnableSinkFold("aarch64-enable-sink-fold",
-                   cl::desc("Enable sinking and folding of instruction copies"),
-                   cl::init(true), cl::Hidden);
+static bool getEnableAtomicTidy(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableAtomicTidy>(Ctx);
+}
 
-static cl::opt<bool>
-    EnableMachinePipeliner("aarch64-enable-pipeliner",
-                           cl::desc("Enable Machine Pipeliner for AArch64"),
-                           cl::init(false), cl::Hidden);
+static bool getEnableEarlyIfConversion(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableEarlyIfConversion>(Ctx);
+}
 
-static cl::opt<bool> EnableSRLTSubregToRegMitigation(
-    "aarch64-srlt-mitigate-sr2r",
-    cl::desc("Enable SUBREG_TO_REG mitigation by adding 'implicit-def' for "
-             "super-regs when using Subreg Liveness Tracking"),
-    cl::init(true), cl::Hidden);
+static bool getEnableCondOpt(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableCondOpt>(Ctx);
+}
 
-static cl::opt<bool> EnableSVEShuffleOpt(
-    "aarch64-enable-sve-shuffle-opts",
-    cl::desc("Enable pattern matching of shuffles that could make use of SVE "
-             "instructions like tbl or the bottom/top variants"),
-    cl::init(true), cl::Hidden);
+static bool getEnableGEPOpt(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableGEPOpt>(Ctx);
+}
+
+static bool getEnableSelectOpt(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableSelectOpt>(Ctx);
+}
+
+static bool getBranchRelaxation(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_BranchRelaxation>(Ctx);
+}
+
+static bool getEnableCompressJumpTables(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableCompressJumpTables>(Ctx);
+}
+
+static std::optional<bool>
+getEnableGlobalMerge(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::AArch64OptsReg>(Ctx))
+    return O->get<&clv2::A64_EnableGlobalMerge>();
+  // Convert cl::boolOrDefault to std::optional<bool>
+  if (EnableGlobalMerge == cl::boolOrDefault::BOU_TRUE)
+    return true;
+  if (EnableGlobalMerge == cl::boolOrDefault::BOU_FALSE)
+    return false;
+  return std::nullopt;
+}
+
+static bool getEnableLoopDataPrefetch(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableLoopDataPrefetch>(Ctx);
+}
+
+static int getEnableGlobalISelAtO(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableGlobalISelAtO>(Ctx);
+}
+
+static bool getEnableSMEPeepholeOpt(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableSMEPeepholeOpt>(Ctx);
+}
+
+static bool getEnableFalkorHWPFFix(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableFalkorHWPFFix>(Ctx);
+}
+
+static bool getEnableBranchTargets(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableBranchTargets>(Ctx);
+}
+
+static unsigned getSVEVectorBitsMaxOpt(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_SVEVectorBitsMax>(Ctx);
+}
+
+static unsigned getSVEVectorBitsMinOpt(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_SVEVectorBitsMin>(Ctx);
+}
+
+static bool getForceStreaming(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_ForceStreaming>(Ctx);
+}
+
+static bool getForceStreamingCompatible(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_ForceStreamingCompatible>(Ctx);
+}
+
+static bool
+getEnableGISelLoadStoreOptPreLegal(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableGISelLoadStoreOptPreLegal>(
+      Ctx);
+}
+
+static bool
+getEnableGISelLoadStoreOptPostLegal(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableGISelLoadStoreOptPostLegal>(
+      Ctx);
+}
+
+static bool getEnableSinkFold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableSinkFold>(Ctx);
+}
+
+static bool getEnableMachinePipeliner(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableMachinePipeliner>(Ctx);
+}
+
+static bool
+getEnableSRLTSubregToRegMitigation(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableSRLTSubregToRegMitigation>(
+      Ctx);
+}
+
+static bool getEnableSVEShuffleOpt(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_EnableSVEShuffleOpt>(Ctx);
+}
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void
 LLVMInitializeAArch64Target() {
@@ -287,12 +276,13 @@ LLVMInitializeAArch64Target() {
 }
 
 bool AArch64TargetMachine::isGlobalISelOptNone() const {
-  const bool GlobalISelFlag = getCGPassBuilderOption().EnableGlobalISelOption ==
-                              cl::boolOrDefault::BOU_TRUE;
+  const bool GlobalISelFlag = getCGPassBuilderOption(getOptionsContext())
+                                  .EnableGlobalISelOption.value_or(false);
 
   return getOptLevel() == CodeGenOptLevel::None ||
          (static_cast<unsigned>(getOptLevel()) >
-              static_cast<unsigned>(EnableGlobalISelAtO) &&
+              static_cast<unsigned>(
+                  ::getEnableGlobalISelAtO(getOptionsContext())) &&
           !GlobalISelFlag);
 }
 
@@ -400,13 +390,15 @@ AArch64TargetMachine::AArch64TargetMachine(const Target &T, const Triple &TT,
       TT.getEnvironment() != Triple::GNUILP32 &&
       !(getCodeModel() == CodeModel::Large && TT.isOSBinFormatMachO());
 
-  const bool GlobalISelFlag = getCGPassBuilderOption().EnableGlobalISelOption ==
-                              cl::boolOrDefault::BOU_TRUE;
+  const bool GlobalISelFlag = getCGPassBuilderOption(getOptionsContext())
+                                  .EnableGlobalISelOption.value_or(false);
 
   // Enable GlobalISel at or below EnableGlobalISelAt0, unless this is
   // MachO/CodeModel::Large, which GlobalISel does not support.
-  if (TargetSupportsGISel && EnableGlobalISelAtO != -1 &&
-      (static_cast<int>(getOptLevel()) <= EnableGlobalISelAtO ||
+  if (TargetSupportsGISel &&
+      ::getEnableGlobalISelAtO(getOptionsContext()) != -1 &&
+      (static_cast<int>(getOptLevel()) <=
+           ::getEnableGlobalISelAtO(getOptionsContext()) ||
        (!GlobalISelFlag && !Options.EnableGlobalISel))) {
     setGlobalISel(true);
     setGlobalISelAbort(GlobalISelAbortMode::Disable);
@@ -429,7 +421,7 @@ AArch64TargetMachine::AArch64TargetMachine(const Target &T, const Triple &TT,
 }
 
 unsigned AArch64TargetMachine::getEnableGlobalISelAtO() const {
-  return EnableGlobalISelAtO;
+  return ::getEnableGlobalISelAtO(getOptionsContext());
 }
 
 AArch64TargetMachine::~AArch64TargetMachine() = default;
@@ -445,11 +437,12 @@ AArch64TargetMachine::getSubtargetImpl(const Function &F) const {
   StringRef FS = FSAttr.isValid() ? FSAttr.getValueAsString() : TargetFS;
   bool HasMinSize = F.hasMinSize();
 
-  bool IsStreaming = ForceStreaming ||
+  bool IsStreaming = getForceStreaming(F.getContext().getOptionsContext()) ||
                      F.hasFnAttribute("aarch64_pstate_sm_enabled") ||
                      F.hasFnAttribute("aarch64_pstate_sm_body");
-  bool IsStreamingCompatible = ForceStreamingCompatible ||
-                               F.hasFnAttribute("aarch64_pstate_sm_compatible");
+  bool IsStreamingCompatible =
+      getForceStreamingCompatible(F.getContext().getOptionsContext()) ||
+      F.hasFnAttribute("aarch64_pstate_sm_compatible");
 
   unsigned MinSVEVectorSize = 0;
   unsigned MaxSVEVectorSize = 0;
@@ -458,8 +451,10 @@ AArch64TargetMachine::getSubtargetImpl(const Function &F) const {
     MinSVEVectorSize = CR.getUnsignedMin().getZExtValue() * 128;
     MaxSVEVectorSize = CR.getUnsignedMax().getZExtValue() * 128;
   } else {
-    MinSVEVectorSize = SVEVectorBitsMinOpt;
-    MaxSVEVectorSize = SVEVectorBitsMaxOpt;
+    MinSVEVectorSize =
+        getSVEVectorBitsMinOpt(F.getContext().getOptionsContext());
+    MaxSVEVectorSize =
+        getSVEVectorBitsMaxOpt(F.getContext().getOptionsContext());
   }
 
   assert(MinSVEVectorSize % 128 == 0 &&
@@ -497,7 +492,7 @@ AArch64TargetMachine::getSubtargetImpl(const Function &F) const {
     I = std::make_unique<AArch64Subtarget>(
         TargetTriple, CPU, TuneCPU, FS, *this, isLittle, MinSVEVectorSize,
         MaxSVEVectorSize, IsStreaming, IsStreamingCompatible, HasMinSize,
-        EnableSRLTSubregToRegMitigation);
+        getEnableSRLTSubregToRegMitigation(F.getContext().getOptionsContext()));
   }
 
   if (IsStreaming && !I->hasSME())
@@ -528,10 +523,12 @@ AArch64TargetMachine::createMachineScheduler(MachineSchedContext *C) const {
   DAG->addMutation(createLoadClusterDAGMutation(DAG->TII, DAG->TRI));
   DAG->addMutation(createStoreClusterDAGMutation(DAG->TII, DAG->TRI));
   if (ST.hasFusion())
-    DAG->addMutation(createAArch64MacroFusionDAGMutation());
+    DAG->addMutation(createAArch64MacroFusionDAGMutation(
+        C->MF->getFunction().getContext().getOptionsContext()));
   if (ST.hasSME() && ST.isStreaming())
     DAG->addMutation(createMacroFusionDAGMutation(
-        scheduleFormTransposedTupleAdjacentToUsers));
+        C->MF->getFunction().getContext().getOptionsContext(),
+        {scheduleFormTransposedTupleAdjacentToUsers}));
   return DAG;
 }
 
@@ -542,7 +539,8 @@ AArch64TargetMachine::createPostMachineScheduler(MachineSchedContext *C) const {
   if (ST.hasFusion()) {
     // Run the Macro Fusion after RA again since literals are expanded from
     // pseudos then (v. addPreSched2()).
-    DAG->addMutation(createAArch64MacroFusionDAGMutation());
+    DAG->addMutation(createAArch64MacroFusionDAGMutation(
+        C->MF->getFunction().getContext().getOptionsContext()));
     return DAG;
   }
 
@@ -583,7 +581,7 @@ public:
       : TargetPassConfig(TM, PM) {
     if (TM.getOptLevel() != CodeGenOptLevel::None)
       substitutePass(&PostRASchedulerID, &PostMachineSchedulerID);
-    setEnableSinkAndFold(EnableSinkFold);
+    setEnableSinkAndFold(getEnableSinkFold(TM.getOptionsContext()));
   }
 
   AArch64TargetMachine &getAArch64TargetMachine() const {
@@ -653,8 +651,10 @@ void AArch64PassConfig::addIRPasses() {
   // Cmpxchg instructions are often used with a subsequent comparison to
   // determine whether it succeeded. We can exploit existing control-flow in
   // ldrex/strex loops to simplify this, but it needs tidying up.
-  if (TM->getOptLevel() != CodeGenOptLevel::None && EnableAtomicTidy)
-    addPass(createCFGSimplificationPass(SimplifyCFGOptions()
+  if (TM->getOptLevel() != CodeGenOptLevel::None &&
+      getEnableAtomicTidy(TM->getOptionsContext()))
+    addPass(createCFGSimplificationPass(TM->getOptionsContext(),
+                                        SimplifyCFGOptions()
                                             .forwardSwitchCondToPhi(true)
                                             .convertSwitchRangeToICmp(true)
                                             .convertSwitchToLookupTable(true)
@@ -667,13 +667,13 @@ void AArch64PassConfig::addIRPasses() {
   // Run this before LSR to remove the multiplies involved in computing the
   // pointer values N iterations ahead.
   if (TM->getOptLevel() != CodeGenOptLevel::None) {
-    if (EnableLoopDataPrefetch)
+    if (getEnableLoopDataPrefetch(TM->getOptionsContext()))
       addPass(createLoopDataPrefetchPass());
-    if (EnableFalkorHWPFFix)
+    if (getEnableFalkorHWPFFix(TM->getOptionsContext()))
       addPass(createFalkorMarkStridedAccessesPass());
   }
 
-  if (EnableGEPOpt) {
+  if (getEnableGEPOpt(TM->getOptionsContext())) {
     // Call SeparateConstOffsetFromGEP pass to extract constants within indices
     // and lower a GEP with multiple indices to either arithmetic operations or
     // multiple GEPs with single index.
@@ -688,7 +688,8 @@ void AArch64PassConfig::addIRPasses() {
 
   TargetPassConfig::addIRPasses();
 
-  if (getOptLevel() == CodeGenOptLevel::Aggressive && EnableSelectOpt)
+  if (getOptLevel() == CodeGenOptLevel::Aggressive &&
+      getEnableSelectOpt(TM->getOptionsContext()))
     addPass(createSelectOptimizePass());
 
   addPass(createAArch64StackTaggingPass(
@@ -698,7 +699,8 @@ void AArch64PassConfig::addIRPasses() {
   // reduce the total number of instructions. Shuffle masks for big endian may
   // be different, so require a little endian target.
   if (TM->createDataLayout().isLittleEndian() &&
-      getOptLevel() >= CodeGenOptLevel::Default && EnableSVEShuffleOpt)
+      getOptLevel() >= CodeGenOptLevel::Default &&
+      getEnableSVEShuffleOpt(TM->getOptionsContext()))
     addPass(createSVEShuffleOptsPass());
 
   // Match complex arithmetic patterns
@@ -727,17 +729,17 @@ void AArch64PassConfig::addIRPasses() {
 bool AArch64PassConfig::addPreISel() {
   // Run promote constant before global merge, so that the promoted constants
   // get a chance to be merged
-  if (TM->getOptLevel() != CodeGenOptLevel::None && EnablePromoteConstant)
+  if (TM->getOptLevel() != CodeGenOptLevel::None &&
+      getEnablePromoteConstant(TM->getOptionsContext()))
     addPass(createAArch64PromoteConstantPass());
   // FIXME: On AArch64, this depends on the type.
   // Basically, the addressable offsets are up to 4095 * Ty.getSizeInBytes().
   // and the offset has to be a multiple of the related size in bytes.
-  if ((TM->getOptLevel() != CodeGenOptLevel::None &&
-       EnableGlobalMerge == cl::boolOrDefault::BOU_UNSET) ||
-      EnableGlobalMerge == cl::boolOrDefault::BOU_TRUE) {
+  auto GlobalMergeOpt = getEnableGlobalMerge(TM->getOptionsContext());
+  if ((TM->getOptLevel() != CodeGenOptLevel::None && !GlobalMergeOpt) ||
+      (GlobalMergeOpt && *GlobalMergeOpt)) {
     bool OnlyOptimizeForSize =
-        (TM->getOptLevel() < CodeGenOptLevel::Aggressive) &&
-        (EnableGlobalMerge == cl::boolOrDefault::BOU_UNSET);
+        (TM->getOptLevel() < CodeGenOptLevel::Aggressive) && !GlobalMergeOpt;
 
     // Merging of extern globals is enabled by default on non-Mach-O as we
     // expect it to be generally either beneficial or harmless. On Mach-O it
@@ -781,7 +783,7 @@ void AArch64PassConfig::addPreLegalizeMachineIR() {
   } else {
     addPass(createAArch64PreLegalizerCombiner());
     addPass(new LocalizerLegacy());
-    if (EnableGISelLoadStoreOptPreLegal)
+    if (getEnableGISelLoadStoreOptPreLegal(TM->getOptionsContext()))
       addPass(new LoadStoreOptLegacy());
   }
 }
@@ -796,14 +798,14 @@ void AArch64PassConfig::addPreRegBankSelect() {
       getAArch64TargetMachine().isGlobalISelOptNone();
   if (!IsGlobalISelOptNone) {
     addPass(createAArch64PostLegalizerCombinerLegacy(IsGlobalISelOptNone));
-    if (EnableGISelLoadStoreOptPostLegal)
+    if (getEnableGISelLoadStoreOptPostLegal(TM->getOptionsContext()))
       addPass(new LoadStoreOptLegacy());
   }
   addPass(createAArch64PostLegalizerLowering());
 }
 
 bool AArch64PassConfig::addRegBankSelect() {
-  addPass(new RegBankSelectLegacy());
+  addPass(new RegBankSelectLegacy(getTM<TargetMachine>().getOptionsContext()));
   return false;
 }
 
@@ -818,7 +820,8 @@ void AArch64PassConfig::addMachineSSAOptimization() {
   if (TM->getOptLevel() != CodeGenOptLevel::None)
     addPass(createMachineSMEABIPass(TM->getOptLevel()));
 
-  if (TM->getOptLevel() != CodeGenOptLevel::None && EnableSMEPeepholeOpt)
+  if (TM->getOptLevel() != CodeGenOptLevel::None &&
+      getEnableSMEPeepholeOpt(TM->getOptionsContext()))
     addPass(createSMEPeepholeOptPass());
 
   // Run default MachineSSAOptimization first.
@@ -831,17 +834,17 @@ void AArch64PassConfig::addMachineSSAOptimization() {
 }
 
 bool AArch64PassConfig::addILPOpts() {
-  if (EnableCondOpt)
+  if (getEnableCondOpt(TM->getOptionsContext()))
     addPass(createAArch64ConditionOptimizerLegacyPass());
-  if (EnableCCMP)
+  if (getEnableCCMP(TM->getOptionsContext()))
     addPass(createAArch64ConditionalCompares());
-  if (EnableMCR)
+  if (getEnableMCR(TM->getOptionsContext()))
     addPass(&MachineCombinerID);
-  if (EnableCondBrTuning)
+  if (getEnableCondBrTuning(TM->getOptionsContext()))
     addPass(createAArch64CondBrTuning());
-  if (EnableEarlyIfConversion)
+  if (getEnableEarlyIfConversion(TM->getOptionsContext()))
     addPass(&EarlyIfConverterLegacyID);
-  if (EnableStPairSuppress)
+  if (getEnableStPairSuppress(TM->getOptionsContext()))
     addPass(createAArch64StorePairSuppressPass());
   addPass(createAArch64SIMDInstrOptPass());
   if (TM->getOptLevel() != CodeGenOptLevel::None)
@@ -855,29 +858,31 @@ void AArch64PassConfig::addPreRegAlloc() {
 
   // Change dead register definitions to refer to the zero register.
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
-      EnableDeadRegisterElimination)
+      getEnableDeadRegisterElimination(TM->getOptionsContext()))
     addPass(createAArch64DeadRegisterDefinitions());
 
   // Use AdvSIMD scalar instructions whenever profitable.
-  if (TM->getOptLevel() != CodeGenOptLevel::None && EnableAdvSIMDScalar) {
+  if (TM->getOptLevel() != CodeGenOptLevel::None &&
+      getEnableAdvSIMDScalar(TM->getOptionsContext())) {
     addPass(createAArch64AdvSIMDScalar());
     // The AdvSIMD pass may produce copies that can be rewritten to
     // be register coalescer friendly.
     addPass(&PeepholeOptimizerLegacyID);
   }
-  if (TM->getOptLevel() != CodeGenOptLevel::None && EnableMachinePipeliner)
+  if (TM->getOptLevel() != CodeGenOptLevel::None &&
+      getEnableMachinePipeliner(TM->getOptionsContext()))
     addPass(&MachinePipelinerID);
 }
 
 void AArch64PassConfig::addPostRewrite() {
-  if (EnableSRLTSubregToRegMitigation)
+  if (getEnableSRLTSubregToRegMitigation(TM->getOptionsContext()))
     addPass(createAArch64SRLTDefineSuperRegsLegacyPass());
 }
 
 void AArch64PassConfig::addPostRegAlloc() {
   // Remove redundant copy instructions.
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
-      EnableRedundantCopyElimination)
+      getEnableRedundantCopyElimination(TM->getOptionsContext()))
     addPass(createAArch64RedundantCopyEliminationPass());
 
   if (TM->getOptLevel() != CodeGenOptLevel::None && usingDefaultRegAlloc())
@@ -887,13 +892,13 @@ void AArch64PassConfig::addPostRegAlloc() {
 
 void AArch64PassConfig::addPreSched2() {
   // Lower homogeneous frame instructions
-  if (EnableHomogeneousPrologEpilog)
+  if (getEnableHomogeneousPrologEpilog(TM->getOptionsContext()))
     addPass(createAArch64LowerHomogeneousPrologEpilogPass());
   // Expand some pseudo instructions to allow proper scheduling.
   addPass(createAArch64ExpandPseudoLegacyPass());
   // Use load/store pair instructions when possible.
   if (TM->getOptLevel() != CodeGenOptLevel::None) {
-    if (EnableLoadStoreOpt)
+    if (getEnableLoadStoreOpt(TM->getOptionsContext()))
       addPass(createAArch64LoadStoreOptLegacyPass());
   }
   // Emit KCFI checks for indirect calls.
@@ -907,7 +912,7 @@ void AArch64PassConfig::addPreSched2() {
   addPass(createAArch64SpeculationHardeningPass());
 
   if (TM->getOptLevel() != CodeGenOptLevel::None) {
-    if (EnableFalkorHWPFFix)
+    if (getEnableFalkorHWPFFix(TM->getOptionsContext()))
       addPass(createFalkorHWPFFixPass());
   }
 }
@@ -916,11 +921,12 @@ void AArch64PassConfig::addPreEmitPass() {
   // Machine Block Placement might have created new opportunities when run
   // at O3, where the Tail Duplication Threshold is set to 4 instructions.
   // Run the load/store optimizer once more.
-  if (TM->getOptLevel() >= CodeGenOptLevel::Aggressive && EnableLoadStoreOpt)
+  if (TM->getOptLevel() >= CodeGenOptLevel::Aggressive &&
+      getEnableLoadStoreOpt(TM->getOptionsContext()))
     addPass(createAArch64LoadStoreOptLegacyPass());
 
   if (TM->getOptLevel() >= CodeGenOptLevel::Aggressive &&
-      EnableAArch64CopyPropagation)
+      getEnableAArch64CopyPropagation(TM->getOptionsContext()))
     addPass(createMachineCopyPropagationPass(true));
   if (TM->getOptLevel() != CodeGenOptLevel::None)
     addPass(createAArch64RedundantCondBranchPass());
@@ -934,7 +940,8 @@ void AArch64PassConfig::addPreEmitPass() {
     addPass(createEHContGuardTargetsLegacy());
   }
 
-  if (TM->getOptLevel() != CodeGenOptLevel::None && EnableCollectLOH &&
+  if (TM->getOptLevel() != CodeGenOptLevel::None &&
+      getEnableCollectLOH(TM->getOptionsContext()) &&
       TM->getTargetTriple().isOSBinFormatMachO())
     addPass(createAArch64CollectLOHPass());
 
@@ -947,14 +954,15 @@ void AArch64PassConfig::addPreEmitPass() {
 void AArch64PassConfig::addPostBBSections() {
   addPass(createAArch64SLSHardeningLegacyPass());
   addPass(createAArch64PointerAuthPass());
-  if (EnableBranchTargets)
+  if (getEnableBranchTargets(TM->getOptionsContext()))
     addPass(createAArch64BranchTargetsPass());
   // Relax conditional branch instructions if they're otherwise out of
   // range of their destination.
-  if (BranchRelaxation)
+  if (getBranchRelaxation(TM->getOptionsContext()))
     addPass(&BranchRelaxationPassID);
 
-  if (TM->getOptLevel() != CodeGenOptLevel::None && EnableCompressJumpTables)
+  if (TM->getOptLevel() != CodeGenOptLevel::None &&
+      getEnableCompressJumpTables(TM->getOptionsContext()))
     addPass(createAArch64CompressJumpTablesPass());
 }
 

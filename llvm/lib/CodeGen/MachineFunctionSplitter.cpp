@@ -29,6 +29,7 @@
 #include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/CodeGen/BasicBlockSectionUtils.h"
 #include "llvm/CodeGen/BasicBlockSectionsProfileReader.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -38,7 +39,8 @@
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include <optional>
 
 using namespace llvm;
@@ -50,22 +52,17 @@ using namespace llvm;
 // The default was empirically determined to be optimal when considering cutoff
 // values between 99%-ile to 100%-ile with respect to iTLB and icache metrics on
 // Intel CPUs.
-static cl::opt<unsigned>
-    PercentileCutoff("mfs-psi-cutoff",
-                     cl::desc("Percentile profile summary cutoff used to "
-                              "determine cold blocks. Unused if set to zero."),
-                     cl::init(999950), cl::Hidden);
+static unsigned getMfsPsiCutoff(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_MfsPsiCutoff>(Ctx);
+}
 
-static cl::opt<unsigned> ColdCountThreshold(
-    "mfs-count-threshold",
-    cl::desc(
-        "Minimum number of times a block must be executed to be retained."),
-    cl::init(1), cl::Hidden);
+static unsigned getMfsCountThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_MfsCountThreshold>(Ctx);
+}
 
-static cl::opt<bool> SplitAllEHCode(
-    "mfs-split-ehcode",
-    cl::desc("Splits all EH code and it's descendants by default."),
-    cl::init(false), cl::Hidden);
+static bool getMfsSplitEhcode(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_MfsSplitEhcode>(Ctx);
+}
 
 namespace {
 
@@ -106,6 +103,7 @@ static void finishAdjustingBasicBlocksAndLandingPads(MachineFunction &MF) {
 static bool isColdBlock(const MachineBasicBlock &MBB,
                         const MachineBlockFrequencyInfo *MBFI,
                         ProfileSummaryInfo *PSI) {
+  const Function &F = MBB.getParent()->getFunction();
   std::optional<uint64_t> Count = MBFI->getBlockProfileCount(&MBB);
   // For instrumentation profiles and sample profiles, we use different ways
   // to judge whether a block is cold and should be split.
@@ -114,8 +112,9 @@ static bool isColdBlock(const MachineBasicBlock &MBB,
     // cold.
     if (!Count)
       return true;
-    if (PercentileCutoff > 0)
-      return PSI->isColdCountNthPercentile(PercentileCutoff, *Count);
+    if (getMfsPsiCutoff(F.getContext().getOptionsContext()) > 0)
+      return PSI->isColdCountNthPercentile(
+          getMfsPsiCutoff(F.getContext().getOptionsContext()), *Count);
     // Fallthrough to end of function.
   } else if (PSI->hasSampleProfile()) {
     // For sample profile, no count means "do not judege coldness".
@@ -123,7 +122,7 @@ static bool isColdBlock(const MachineBasicBlock &MBB,
       return false;
   }
 
-  return (*Count < ColdCountThreshold);
+  return (*Count < getMfsCountThreshold(F.getContext().getOptionsContext()));
 }
 
 bool MachineFunctionSplitter::runOnMachineFunction(MachineFunction &MF) {
@@ -137,7 +136,8 @@ bool MachineFunctionSplitter::runOnMachineFunction(MachineFunction &MF) {
   // of exception handling code may be split to cold if user passes the
   // mfs-split-ehcode flag.
   bool UseProfileData = MF.getFunction().hasProfileData();
-  if (!UseProfileData && !SplitAllEHCode)
+  if (!UseProfileData &&
+      !getMfsSplitEhcode(MF.getFunction().getContext().getOptionsContext()))
     return false;
 
   const TargetInstrInfo &TII = *MF.getSubtarget().getInstrInfo();
@@ -170,7 +170,7 @@ bool MachineFunctionSplitter::runOnMachineFunction(MachineFunction &MF) {
     // quality is not good.)
     if (PSI->hasSampleProfile() && !PSI->isFunctionHotInCallGraph(&MF, *MBFI)) {
       // Split all EH code and it's descendant statically by default.
-      if (SplitAllEHCode)
+      if (getMfsSplitEhcode(MF.getFunction().getContext().getOptionsContext()))
         setDescendantEHBlocksCold(MF);
       finishAdjustingBasicBlocksAndLandingPads(MF);
       return true;
@@ -185,12 +185,14 @@ bool MachineFunctionSplitter::runOnMachineFunction(MachineFunction &MF) {
     if (MBB.isEHPad())
       LandingPads.push_back(&MBB);
     else if (UseProfileData && isColdBlock(MBB, MBFI, PSI) &&
-             TII.isMBBSafeToSplitToCold(MBB) && !SplitAllEHCode)
+             TII.isMBBSafeToSplitToCold(MBB) &&
+             !getMfsSplitEhcode(
+                 MF.getFunction().getContext().getOptionsContext()))
       MBB.setSectionID(MBBSectionID::ColdSectionID);
   }
 
   // Split all EH code and it's descendant statically by default.
-  if (SplitAllEHCode)
+  if (getMfsSplitEhcode(MF.getFunction().getContext().getOptionsContext()))
     setDescendantEHBlocksCold(MF);
   // We only split out eh pads if all of them are cold.
   else {

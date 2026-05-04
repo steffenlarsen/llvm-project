@@ -17,10 +17,13 @@
 #include "llvm/Object/Archive.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Object/SymbolSize.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
@@ -29,15 +32,17 @@
 #include <system_error>
 
 using namespace llvm;
+using namespace llvm::clv2;
 using namespace llvm::object;
 using namespace llvm::support;
 
-namespace opts {
-static cl::OptionCategory CXXDumpCategory("CXX Dump Options");
-cl::list<std::string> InputFilenames(cl::Positional,
-                                     cl::desc("<input object files>"),
-                                     cl::cat(CXXDumpCategory));
-} // namespace opts
+namespace {
+static constexpr OptionCategory CXXDumpCategory{"CXX Dump Options"};
+static constexpr ListOptionInfo<std::string> InputFilenamesOpt{
+    "input", "<input object files>", Positional{}, ZeroOrMore,
+    cat(CXXDumpCategory)};
+static constexpr OptionsRegistry<&InputFilenamesOpt> CXXDumpToolReg;
+} // namespace
 
 namespace llvm {
 
@@ -546,17 +551,21 @@ int main(int argc, const char *argv[]) {
   // Initialize targets.
   llvm::InitializeAllTargetInfos();
 
-  // Register the target printer for --version.
-  cl::AddExtraVersionPrinter(TargetRegistry::printRegisteredTargetsForVersion);
+  clv2::OptionParser P;
+  P.add<&CXXDumpToolReg>();
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&CXXDumpCategory, &getColorCategory()});
+  auto OptsCtx =
+      P.parse(argc, argv, "LLVM C++ ABI Data Dumper\n", /*Errs=*/nullptr,
+              /*VersionString=*/{}, /*HelpOS=*/nullptr,
+              TargetRegistry::printRegisteredTargetsForVersion);
+  auto *Opts = OptsCtx->getViewPtr<&CXXDumpToolReg>();
 
-  cl::HideUnrelatedOptions({&opts::CXXDumpCategory, &getColorCategory()});
-  cl::ParseCommandLineOptions(argc, argv, "LLVM C++ ABI Data Dumper\n");
+  std::vector<std::string> InputFilenames = Opts->get<&InputFilenamesOpt>();
+  if (InputFilenames.empty())
+    InputFilenames.push_back("-");
 
-  // Default to stdin if no filename is specified.
-  if (opts::InputFilenames.size() == 0)
-    opts::InputFilenames.push_back("-");
-
-  llvm::for_each(opts::InputFilenames, dumpInput);
+  llvm::for_each(InputFilenames, dumpInput);
 
   return EXIT_SUCCESS;
 }

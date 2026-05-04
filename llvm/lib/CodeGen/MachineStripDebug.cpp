@@ -11,29 +11,30 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/MachineStripDebug.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionAnalysis.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/Analysis.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/Debugify.h"
 
 #define DEBUG_TYPE "mir-strip-debug"
 
 using namespace llvm;
 
-namespace {
+static bool getMirStripDebugifyOnly(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_MirStripDebugifyOnly>(Ctx);
+}
 
-cl::opt<bool>
-    OnlyDebugifiedDefault("mir-strip-debugify-only",
-                          cl::desc("Should mir-strip-debug only strip debug "
-                                   "info from debugified modules by default"),
-                          cl::init(true));
+namespace {
 
 bool stripDebugMachineModuleImpl(
     Module &M, bool OnlyDebugified,
@@ -85,17 +86,23 @@ bool stripDebugMachineModuleImpl(
 
 struct StripDebugMachineModule : public ModulePass {
   bool runOnModule(Module &M) override {
+    // Re-read the option with context now that we have a Module.
+    bool Effective = OnlyDebugified;
+    if (!OnlyDebugifiedExplicit)
+      Effective = getMirStripDebugifyOnly(M.getContext().getOptionsContext());
     MachineModuleInfo &MMI =
         getAnalysis<MachineModuleInfoWrapperPass>().getMMI();
     return stripDebugMachineModuleImpl(
-        M, OnlyDebugified, [&MMI](Function &F) -> MachineFunction * {
+        M, Effective, [&MMI](Function &F) -> MachineFunction * {
           return MMI.getMachineFunction(F);
         });
   }
 
-  StripDebugMachineModule() : StripDebugMachineModule(OnlyDebugifiedDefault) {}
+  StripDebugMachineModule()
+      : ModulePass(ID), OnlyDebugified(true), OnlyDebugifiedExplicit(false) {}
   StripDebugMachineModule(bool OnlyDebugified)
-      : ModulePass(ID), OnlyDebugified(OnlyDebugified) {}
+      : ModulePass(ID), OnlyDebugified(OnlyDebugified),
+        OnlyDebugifiedExplicit(true) {}
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<MachineModuleInfoWrapperPass>();
@@ -107,6 +114,7 @@ struct StripDebugMachineModule : public ModulePass {
 
 protected:
   bool OnlyDebugified;
+  bool OnlyDebugifiedExplicit; // true when set explicitly by caller
 };
 char StripDebugMachineModule::ID = 0;
 
@@ -126,7 +134,8 @@ PreservedAnalyses StripDebugMachineModulePass::run(Module &M,
   FunctionAnalysisManager &FAM =
       AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
   const bool Changed = stripDebugMachineModuleImpl(
-      M, OnlyDebugifiedDefault, [&FAM](Function &F) -> MachineFunction * {
+      M, getMirStripDebugifyOnly(M.getContext().getOptionsContext()),
+      [&FAM](Function &F) -> MachineFunction * {
         return &FAM.getResult<MachineFunctionAnalysis>(F).getMF();
       });
   if (!Changed)

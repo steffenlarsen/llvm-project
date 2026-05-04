@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===-- LoopSink.cpp - Loop Sink Pass -------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -42,7 +44,6 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/BranchProbability.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
@@ -53,14 +54,15 @@ using namespace llvm;
 STATISTIC(NumLoopSunk, "Number of instructions sunk into loop");
 STATISTIC(NumLoopSunkCloned, "Number of cloned instructions sunk into loop");
 
-static cl::opt<unsigned> SinkFrequencyPercentThreshold(
-    "sink-freq-percent-threshold", cl::Hidden, cl::init(90),
-    cl::desc("Do not sink instructions that require cloning unless they "
-             "execute less than this percent of the time."));
+static unsigned getSinkFrequencyPercentThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_SinkFreqPercentThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> MaxNumberOfUseBBsForSinking(
-    "max-uses-for-sinking", cl::Hidden, cl::init(30),
-    cl::desc("Do not sink instructions that have too many uses."));
+static unsigned getMaxNumberOfUseBBsForSinking(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_MaxUsesForSinking>(
+      F.getContext().getOptionsContext());
+}
 
 /// Return adjusted total frequency of \p BBs.
 ///
@@ -76,12 +78,13 @@ static cl::opt<unsigned> MaxNumberOfUseBBsForSinking(
 ///   To model this, The adjusted Freq(BBs) will be:
 ///     AdjustedFreq(BBs) = 99 / SinkFrequencyPercentThreshold%
 static BlockFrequency adjustedSumFreq(SmallPtrSetImpl<BasicBlock *> &BBs,
-                                      BlockFrequencyInfo &BFI) {
+                                      BlockFrequencyInfo &BFI,
+                                      const Function &F) {
   BlockFrequency T(0);
   for (BasicBlock *B : BBs)
     T += BFI.getBlockFreq(B);
   if (BBs.size() > 1)
-    T /= BranchProbability(SinkFrequencyPercentThreshold, 100);
+    T /= BranchProbability(getSinkFrequencyPercentThreshold(F), 100);
   return T;
 }
 
@@ -115,7 +118,8 @@ static BlockFrequency adjustedSumFreq(SmallPtrSetImpl<BasicBlock *> &BBs,
 static SmallPtrSet<BasicBlock *, 2>
 findBBsToSinkInto(const Loop &L, const SmallPtrSetImpl<BasicBlock *> &UseBBs,
                   const SmallVectorImpl<BasicBlock *> &ColdLoopBBs,
-                  DominatorTree &DT, BlockFrequencyInfo &BFI) {
+                  DominatorTree &DT, BlockFrequencyInfo &BFI,
+                  const Function &F) {
   SmallPtrSet<BasicBlock *, 2> BBsToSinkInto;
   if (UseBBs.size() == 0)
     return BBsToSinkInto;
@@ -138,7 +142,7 @@ findBBsToSinkInto(const Loop &L, const SmallPtrSetImpl<BasicBlock *> &UseBBs,
         BBsDominatedByColdestBB.insert(SinkedBB);
     if (BBsDominatedByColdestBB.size() == 0)
       continue;
-    if (adjustedSumFreq(BBsDominatedByColdestBB, BFI) >
+    if (adjustedSumFreq(BBsDominatedByColdestBB, BFI, F) >
         BFI.getBlockFreq(ColdestBB)) {
       for (BasicBlock *DominatedBB : BBsDominatedByColdestBB) {
         BBsToSinkInto.erase(DominatedBB);
@@ -159,7 +163,7 @@ findBBsToSinkInto(const Loop &L, const SmallPtrSetImpl<BasicBlock *> &UseBBs,
     // that often ended up continuing early due to an empty
     // BBsDominatedByColdestBB set, and the frequency check there was false
     // most of the time anyway).
-    if (adjustedSumFreq(BBsToSinkInto, BFI) <= BFI.getBlockFreq(ColdestBB))
+    if (adjustedSumFreq(BBsToSinkInto, BFI, F) <= BFI.getBlockFreq(ColdestBB))
       break;
   }
 
@@ -173,7 +177,7 @@ findBBsToSinkInto(const Loop &L, const SmallPtrSetImpl<BasicBlock *> &UseBBs,
 
   // If the total frequency of BBsToSinkInto is larger than preheader frequency,
   // do not sink.
-  if (adjustedSumFreq(BBsToSinkInto, BFI) >
+  if (adjustedSumFreq(BBsToSinkInto, BFI, F) >
       BFI.getBlockFreq(L.getLoopPreheader()))
     BBsToSinkInto.clear();
   return BBsToSinkInto;
@@ -217,12 +221,13 @@ static bool sinkInstruction(
   // findBBsToSinkInto is O(BBs.size() * ColdLoopBBs.size()). We cap the max
   // BBs.size() to avoid expensive computation.
   // FIXME: Handle code size growth for min_size and opt_size.
-  if (BBs.size() > MaxNumberOfUseBBsForSinking)
+  const Function &F = *L.getHeader()->getParent();
+  if (BBs.size() > getMaxNumberOfUseBBsForSinking(F))
     return false;
 
   // Find the set of BBs that we should insert a copy of I.
   SmallPtrSet<BasicBlock *, 2> BBsToSinkInto =
-      findBBsToSinkInto(L, BBs, ColdLoopBBs, DT, BFI);
+      findBBsToSinkInto(L, BBs, ColdLoopBBs, DT, BFI, F);
   if (BBsToSinkInto.empty())
     return false;
 
@@ -399,7 +404,7 @@ PreservedAnalyses LoopSinkPass::run(Function &F, FunctionAnalysisManager &FAM) {
   PA.preserveSet<CFGAnalyses>();
   PA.preserve<MemorySSAAnalysis>();
 
-  if (VerifyMemorySSA)
+  if (getVerifyMemorySSA(F.getContext().getOptionsContext()))
     MSSA.verifyMemorySSA();
 
   return PA;

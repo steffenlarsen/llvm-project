@@ -11,10 +11,11 @@
 #include "llvm/ProfileData/Coverage/CoverageMappingWriter.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/Alignment.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/raw_ostream.h"
 #include <functional>
 #include <system_error>
@@ -22,18 +23,25 @@
 using namespace llvm;
 using namespace object;
 
+inline constexpr clv2::OptionInfo<std::string> TS_InputSourceFileOpt{
+    "", "<Source file>", clv2::Positional{}, clv2::Required};
+inline constexpr clv2::OptionInfo<std::string> TS_OutputFilenameOpt{
+    "o", "File with the profile data obtained after an instrumented run",
+    clv2::Required};
+
+static constexpr clv2::OptionsRegistry<&TS_InputSourceFileOpt,
+                                       &TS_OutputFilenameOpt>
+    TSReg;
+
 int convertForTestingMain(int argc, const char *argv[]) {
-  cl::opt<std::string> InputSourceFile(cl::Positional, cl::Required,
-                                       cl::desc("<Source file>"));
+  clv2::OptionParser P;
+  P.add<&TSReg>();
+  RegisterAllLLVMOptions(P);
+  auto OptsCtx = P.parse(argc, argv, "LLVM code coverage tool\n");
+  auto *Opts = OptsCtx->getViewPtr<&TSReg>();
 
-  cl::opt<std::string> OutputFilename(
-      "o", cl::Required,
-      cl::desc(
-          "File with the profile data obtained after an instrumented run"));
-
-  cl::ParseCommandLineOptions(argc, argv, "LLVM code coverage tool\n");
-
-  auto ObjErr = llvm::object::ObjectFile::createObjectFile(InputSourceFile);
+  auto ObjErr = llvm::object::ObjectFile::createObjectFile(
+      Opts->get<&TS_InputSourceFileOpt>());
   if (!ObjErr) {
     std::string Buf;
     raw_string_ostream OS(Buf);
@@ -126,7 +134,8 @@ int convertForTestingMain(int argc, const char *argv[]) {
     ProfileNamesData = ProfileNamesData.drop_front(1);
 
   int FD;
-  if (auto Err = sys::fs::openFileForWrite(OutputFilename, FD)) {
+  if (auto Err =
+          sys::fs::openFileForWrite(Opts->get<&TS_OutputFilenameOpt>(), FD)) {
     errs() << "error: " << Err.message() << "\n";
     return 1;
   }

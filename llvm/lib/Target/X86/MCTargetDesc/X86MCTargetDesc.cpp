@@ -455,8 +455,9 @@ void X86_MC::initLLVMToSEHAndCVRegMapping(MCRegisterInfo *MRI) {
     MRI->mapLLVMRegToCVReg(I.Reg, static_cast<int>(I.CVReg));
 }
 
-MCSubtargetInfo *X86_MC::createX86MCSubtargetInfo(const Triple &TT,
-                                                  StringRef CPU, StringRef FS) {
+MCSubtargetInfo *
+X86_MC::createX86MCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                                 const clv2::OptionsContext &Ctx) {
   std::string ArchFS = X86_MC::ParseX86Triple(TT);
   assert(!ArchFS.empty() && "Failed to parse X86 triple");
   if (!FS.empty())
@@ -465,7 +466,11 @@ MCSubtargetInfo *X86_MC::createX86MCSubtargetInfo(const Triple &TT,
   if (CPU.empty())
     CPU = "generic";
 
-  return createX86MCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, ArchFS);
+  MCSubtargetInfo *STI =
+      createX86MCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, ArchFS);
+  if (STI)
+    STI->setOptionsContext(Ctx);
+  return STI;
 }
 
 static MCInstrInfo *createX86MCInstrInfo() {

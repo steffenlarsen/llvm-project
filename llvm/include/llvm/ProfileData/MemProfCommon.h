@@ -17,6 +17,9 @@
 #include "llvm/Support/Compiler.h"
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+}
 namespace memprof {
 
 struct Frame;
@@ -24,7 +27,8 @@ struct Frame;
 /// Return the allocation type for a given set of memory profile values.
 LLVM_ABI AllocationType getAllocType(uint64_t TotalLifetimeAccessDensity,
                                      uint64_t AllocCount,
-                                     uint64_t TotalLifetime);
+                                     uint64_t TotalLifetime,
+                                     const clv2::OptionsContext &Ctx);
 
 /// Helper to generate a single hash id for a given callstack, used for emitting
 /// matching statistics and useful for uniquing such statistics across modules.

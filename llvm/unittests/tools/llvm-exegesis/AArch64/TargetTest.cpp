@@ -13,6 +13,7 @@
 
 #include "MCTargetDesc/AArch64MCTargetDesc.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TargetSelect.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -40,8 +41,9 @@ protected:
     std::string error;
     Target_ = TargetRegistry::lookupTarget(TT, error);
     EXPECT_THAT(Target_, NotNull());
-    STI_.reset(
-        Target_->createMCSubtargetInfo(TT, "generic", /*no features*/ ""));
+    STI_.reset(Target_->createMCSubtargetInfo(
+        TT, "generic", /*no features*/ "",
+        /*Ctx=*/llvm::clv2::defaultOptionsContext()));
   }
 
   static void SetUpTestCase() {

@@ -21,18 +21,18 @@
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCStreamer.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
 
 using namespace llvm;
 
-static cl::opt<bool> SPVPreserveAuxData(
-    "spirv-preserve-auxdata",
-    cl::desc("Preserve LLVM attributes and metadata as "
-             "NonSemantic.AuxData ExtInst annotations (requires "
-             "SPV_KHR_non_semantic_info)"),
-    cl::Optional, cl::Hidden, cl::init(false));
+static bool getSPVPreserveAuxData(const Module &M) {
+  return clv2::getOptValOr<&clv2::SPIRVOptsReg, &clv2::SPIRV_PreserveAuxData>(
+      M.getContext().getOptionsContext(), false);
+}
 
 namespace {
 enum AuxDataLinkageType : uint32_t {
@@ -63,14 +63,14 @@ SPIRVAuxDataHandler::SPIRVAuxDataHandler(AsmPrinter &AP, const Module &M)
       LinkagePreservedGOs.push_back(&GO);
 }
 
-bool SPIRVAuxDataHandler::hasWork() const { return SPVPreserveAuxData; }
+bool SPIRVAuxDataHandler::hasWork() const { return getSPVPreserveAuxData(Mod); }
 
 void SPIRVAuxDataHandler::prepareModuleOutput(const SPIRVSubtarget &ST,
                                               SPIRV::ModuleAnalysisInfo &MAI) {
   if (!hasWork())
     return;
   if (!ST.canUseExtension(SPIRV::Extension::SPV_KHR_non_semantic_info)) {
-    if (SPVPreserveAuxData)
+    if (getSPVPreserveAuxData(Mod))
       report_fatal_error("-spirv-preserve-auxdata requires the "
                          "SPV_KHR_non_semantic_info extension to be enabled.");
     return;
@@ -169,7 +169,7 @@ void SPIRVAuxDataHandler::collectMetadataFor(const GlobalObject *GO,
 }
 
 void SPIRVAuxDataHandler::emitAuxDataStrings(SPIRV::ModuleAnalysisInfo &MAI) {
-  if (!SPVPreserveAuxData)
+  if (!getSPVPreserveAuxData(Mod))
     return;
   if (!MAI.getExtInstSetReg(NonSemanticAuxDataSet).isValid())
     return;

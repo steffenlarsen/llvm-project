@@ -61,7 +61,7 @@ int main(int argc, const char *argv[]) {
   int MainResult = 0;
 
   // Parse command line arguments and initialize LLVM Core.
-  LLVMParseCommandLineOptions(argc, argv, "");
+  LLVMOptionsContextRef Opts = LLVMParseCommandLineOptions2(argc, argv, "");
 
   // Initialize native target codegen and asm printer.
   LLVMInitializeNativeTarget();
@@ -81,7 +81,7 @@ int main(int argc, const char *argv[]) {
   LLVMMemoryBufferRef ObjectFileBuffer;
   {
     // Create a module.
-    LLVMContextRef Ctx = LLVMContextCreate();
+    LLVMContextRef Ctx = LLVMContextCreateWithOptions(Opts);
     LLVMModuleRef M = createDemoModule(Ctx);
 
     // Get the Target.
@@ -159,6 +159,9 @@ jit_cleanup:
   }
 
 llvm_shutdown:
+  // Dispose of the options context.
+  LLVMDisposeOptionsContext(Opts);
+
   // Shut down LLVM.
   LLVMShutdown();
 

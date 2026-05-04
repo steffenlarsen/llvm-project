@@ -14,7 +14,7 @@
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/MemoryBufferRef.h"
 #include "llvm/Support/raw_ostream.h"
 #include <list>
@@ -22,27 +22,26 @@
 using namespace mlir;
 using namespace llvm;
 
-namespace {
-class TestDialectVersionParser : public cl::parser<test::TestDialectVersion> {
-public:
-  TestDialectVersionParser(cl::Option &o)
-      : cl::parser<test::TestDialectVersion>(o) {}
-
-  bool parse(cl::Option &o, StringRef /*argName*/, StringRef arg,
-             test::TestDialectVersion &v) {
+namespace mlir::detail::pass_options {
+template <>
+struct OptionTypeHelper<test::TestDialectVersion> {
+  static constexpr bool hasCustomHandler = true;
+  static bool parse(StringRef arg, test::TestDialectVersion &v) {
     long long major, minor;
     if (getAsSignedInteger(arg.split(".").first, 10, major))
-      return o.error("Invalid argument '" + arg);
+      return true;
     if (getAsSignedInteger(arg.split(".").second, 10, minor))
-      return o.error("Invalid argument '" + arg);
+      return true;
     v = test::TestDialectVersion(major, minor);
-    // Returns true on error.
     return false;
   }
   static void print(raw_ostream &os, const test::TestDialectVersion &v) {
     os << v.major_ << "." << v.minor_;
-  };
+  }
 };
+} // namespace mlir::detail::pass_options
+
+namespace {
 
 /// This is a test pass which uses callbacks to encode attributes and types in a
 /// custom fashion.
@@ -91,11 +90,10 @@ struct TestBytecodeRoundtripPass
     }
   }
 
-  mlir::Pass::Option<test::TestDialectVersion, TestDialectVersionParser>
-      targetVersion{*this, "test-dialect-version",
-                    llvm::cl::desc(
-                        "Specifies the test dialect version to emit and parse"),
-                    cl::init(test::TestDialectVersion())};
+  mlir::Pass::Option<test::TestDialectVersion> targetVersion{
+      *this, "test-dialect-version",
+      llvm::cl::desc("Specifies the test dialect version to emit and parse"),
+      llvm::cl::init(test::TestDialectVersion())};
 
   mlir::Pass::Option<int> testKind{
       *this, "test-kind", llvm::cl::desc("Specifies the test kind to execute"),

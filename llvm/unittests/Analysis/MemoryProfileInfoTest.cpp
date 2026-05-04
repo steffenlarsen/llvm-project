@@ -7,14 +7,15 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/MemoryProfileInfo.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ModuleSummaryIndex.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Compiler.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SourceMgr.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -23,10 +24,6 @@
 
 using namespace llvm;
 using namespace llvm::memprof;
-
-namespace llvm {
-LLVM_ABI extern cl::opt<bool> MemProfKeepAllNotColdContexts;
-} // end namespace llvm
 
 namespace {
 
@@ -77,7 +74,7 @@ TEST_F(MemoryProfileInfoTest, SingleAllocType) {
 
 // Test buildCallstackMetadata helper.
 TEST_F(MemoryProfileInfoTest, BuildCallStackMD) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   MDNode *CallStack = buildCallstackMetadata({1, 2, 3}, C);
   ASSERT_EQ(CallStack->getNumOperands(), 3u);
   unsigned ExpectedId = 1;
@@ -92,7 +89,7 @@ TEST_F(MemoryProfileInfoTest, BuildCallStackMD) {
 // Check that allocations with a single allocation type along all call stacks
 // get an attribute instead of memprof metadata.
 TEST_F(MemoryProfileInfoTest, Attribute) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
@@ -203,7 +200,7 @@ MATCHER_P(MemprofMetadataEquals, ExpectedVals, "Matching !memprof contents") {
 // Test that an allocation call reached by both cold and non cold call stacks
 // gets memprof metadata representing the different allocation type contexts.
 TEST_F(MemoryProfileInfoTest, ColdAndNotColdMIB) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
@@ -252,7 +249,7 @@ declare dso_local noalias noundef ptr @malloc(i64 noundef)
 // Test that an allocation call reached by both cold and hot call stacks
 // gets memprof metadata representing the different allocation type contexts.
 TEST_F(MemoryProfileInfoTest, ColdAndHotMIB) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
@@ -303,7 +300,7 @@ declare dso_local noalias noundef ptr @malloc(i64 noundef)
 // stacks gets memprof metadata representing the different allocation type
 // contexts.
 TEST_F(MemoryProfileInfoTest, ColdAndNotColdAndHotMIB) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
@@ -355,7 +352,7 @@ declare dso_local noalias noundef ptr @malloc(i64 noundef)
 // metadata with the contexts trimmed to the minimum context required to
 // identify the allocation type.
 TEST_F(MemoryProfileInfoTest, TrimmedMIBContext) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
@@ -410,7 +407,7 @@ declare dso_local noalias noundef ptr @malloc(i64 noundef)
 // Test to ensure that we prune NotCold contexts that are unneeded for
 // determining where Cold contexts need to be cloned to enable correct hinting.
 TEST_F(MemoryProfileInfoTest, PruneUnneededNotColdContexts) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
@@ -469,7 +466,7 @@ declare dso_local noalias noundef ptr @malloc(i64 noundef)
 // Same as PruneUnneededNotColdContexts test but with the
 // MemProfKeepAllNotColdContexts set to true.
 TEST_F(MemoryProfileInfoTest, KeepUnneededNotColdContexts) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
@@ -522,14 +519,14 @@ declare dso_local noalias noundef ptr @malloc(i64 noundef)
   CallBase *Call = findCall(*Func, "call");
   ASSERT_NE(Call, nullptr);
 
-  // Specify that all non-cold contexts should be kept.
-  bool OrigMemProfKeepAllNotColdContexts = MemProfKeepAllNotColdContexts;
-  MemProfKeepAllNotColdContexts = true;
+  // Specify that all non-cold contexts should be kept via OptionsContext.
+  auto Opts = clv2::AnalysisOptsReg.makeDefaults();
+  Opts.get<&clv2::AN_MemProfKeepAllNotColdContexts>() = true;
+  clv2::OptionsContext OptsCtx;
+  OptsCtx.addView<&clv2::AnalysisOptsReg>(Opts);
+  C.setOptionsContext(OptsCtx);
 
   Trie.buildAndAttachMIBMetadata(Call);
-
-  // Restore original option value.
-  MemProfKeepAllNotColdContexts = OrigMemProfKeepAllNotColdContexts;
 
   EXPECT_TRUE(Call->hasFnAttr("memprof"));
   EXPECT_EQ(Call->getFnAttr("memprof").getValueAsString(), "ambiguous");
@@ -542,7 +539,7 @@ declare dso_local noalias noundef ptr @malloc(i64 noundef)
 // Check that allocations annotated with memprof metadata with a single
 // allocation type get simplified to an attribute.
 TEST_F(MemoryProfileInfoTest, SimplifyMIBToAttribute) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
@@ -610,7 +607,7 @@ declare dso_local noalias noundef ptr @malloc(i64 noundef)
 // stacks gets new memprof metadata with the contexts trimmed to the minimum
 // context required to identify the allocation type.
 TEST_F(MemoryProfileInfoTest, ReTrimMIBContext) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
@@ -693,7 +690,7 @@ declare dso_local noalias noundef ptr @malloc(i64 noundef)
 }
 
 TEST_F(MemoryProfileInfoTest, CallStackTestIR) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(C,
                                              R"IR(
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"

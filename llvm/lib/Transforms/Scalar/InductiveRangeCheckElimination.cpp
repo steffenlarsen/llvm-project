@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- InductiveRangeCheckElimination.cpp - -------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -75,7 +77,6 @@
 #include "llvm/IR/Value.h"
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -95,38 +96,54 @@
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
-static cl::opt<unsigned> LoopSizeCutoff("irce-loop-size-cutoff", cl::Hidden,
-                                        cl::init(64));
+static unsigned getLoopSizeCutoff(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_IrceLoopSizeCutoff>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> PrintChangedLoops("irce-print-changed-loops", cl::Hidden,
-                                       cl::init(false));
+static bool getPrintChangedLoops(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_IrcePrintChangedLoops>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<bool> PrintRangeChecks("irce-print-range-checks", cl::Hidden,
-                                      cl::init(false));
+static bool getPrintRangeChecks(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_IrcePrintRangeChecks>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<bool> SkipProfitabilityChecks("irce-skip-profitability-checks",
-                                             cl::Hidden, cl::init(false));
+static bool getSkipProfitabilityChecks(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_IrceSkipProfitabilityChecks>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<unsigned> MinEliminatedChecks("irce-min-eliminated-checks",
-                                             cl::Hidden, cl::init(10));
+static unsigned getMinEliminatedChecks(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_IrceMinEliminatedChecks>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> AllowUnsignedLatchCondition("irce-allow-unsigned-latch",
-                                                 cl::Hidden, cl::init(true));
+static bool getAllowUnsignedLatchCondition(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_IrceAllowUnsignedLatch>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> AllowNarrowLatchCondition(
-    "irce-allow-narrow-latch", cl::Hidden, cl::init(true),
-    cl::desc("If set to true, IRCE may eliminate wide range checks in loops "
-             "with narrow latch condition."));
+static bool getAllowNarrowLatchCondition(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_IrceAllowNarrowLatch>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> MaxTypeSizeForOverflowCheck(
-    "irce-max-type-size-for-overflow-check", cl::Hidden, cl::init(32),
-    cl::desc(
-        "Maximum size of range check type for which can be produced runtime "
-        "overflow check of its limit's computation"));
+static unsigned getMaxTypeSizeForOverflowCheck(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_IrceMaxTypeSizeForOverflowCheck>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    PrintScaledBoundaryRangeChecks("irce-print-scaled-boundary-range-checks",
-                                   cl::Hidden, cl::init(false));
+static bool getPrintScaledBoundaryRangeChecks(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_IrcePrintScaledBoundaryRangeChecks>(
+      F.getContext().getOptionsContext(), false);
+}
 
 #define DEBUG_TYPE "irce"
 
@@ -445,7 +462,8 @@ bool InductiveRangeCheck::reassociateSubLHS(
     // We couldn't prove that the expression does not overflow.
     // Than scale it to a wider type to check overflow at runtime.
     auto *Ty = cast<IntegerType>(LHS->getType());
-    if (Ty->getBitWidth() > MaxTypeSizeForOverflowCheck)
+    if (Ty->getBitWidth() >
+        getMaxTypeSizeForOverflowCheck(*L->getHeader()->getParent()))
       return nullptr;
 
     auto WideTy = IntegerType::get(Ty->getContext(), Ty->getBitWidth() * 2);
@@ -528,13 +546,14 @@ void InductiveRangeCheck::extractRangeChecksFromBranch(
   assert(L->contains(BI->getSuccessor(IndexLoopSucc)) &&
          "No edges coming to loop?");
 
-  if (!SkipProfitabilityChecks && BPI) {
+  const Function &F = *L->getHeader()->getParent();
+  if (!getSkipProfitabilityChecks(F) && BPI) {
     auto SuccessProbability =
         BPI->getEdgeProbability(BI->getParent(), IndexLoopSucc);
     if (EstimatedTripCount) {
       auto EstimatedEliminatedChecks =
           SuccessProbability.scale(*EstimatedTripCount);
-      if (EstimatedEliminatedChecks < MinEliminatedChecks) {
+      if (EstimatedEliminatedChecks < getMinEliminatedChecks(F)) {
         LLVM_DEBUG(dbgs() << "irce: could not prove profitability for branch "
                           << *BI << ": "
                           << "estimated eliminated checks too low "
@@ -585,7 +604,8 @@ calculateSubRanges(ScalarEvolution &SE, const Loop &L,
                    const LoopStructure &MainLoopStructure) {
   auto *RTy = cast<IntegerType>(Range.getType());
   // We only support wide range checks and narrow latches.
-  if (!AllowNarrowLatchCondition && RTy != MainLoopStructure.ExitCountTy)
+  if (!getAllowNarrowLatchCondition(*L.getHeader()->getParent()) &&
+      RTy != MainLoopStructure.ExitCountTy)
     return std::nullopt;
   if (RTy->getBitWidth() < MainLoopStructure.ExitCountTy->getBitWidth())
     return std::nullopt;
@@ -823,7 +843,8 @@ InductiveRangeCheck::computeSafeIterationSpace(ScalarEvolution &SE,
 
   if (EndType->getBitWidth() > RCType->getBitWidth()) {
     assert(EndType->getBitWidth() == RCType->getBitWidth() * 2);
-    if (PrintScaledBoundaryRangeChecks)
+    if (getPrintScaledBoundaryRangeChecks(
+            *IndVar->getLoop()->getHeader()->getParent()))
       PrintRangeCheck(errs());
     // End is computed with extended type but will be truncated to a narrow one
     // type of range check. Therefore we need a check that the result will not
@@ -926,7 +947,7 @@ PreservedAnalyses IRCEPass::run(Function &F, FunctionAnalysisManager &AM) {
     }
     Changed |= CFGChanged;
 
-    if (CFGChanged && !SkipProfitabilityChecks) {
+    if (CFGChanged && !getSkipProfitabilityChecks(F)) {
       PreservedAnalyses PA = PreservedAnalyses::all();
       PA.abandon<CycleAnalysis>();
       PA.abandon<BlockFrequencyAnalysis>();
@@ -945,7 +966,7 @@ PreservedAnalyses IRCEPass::run(Function &F, FunctionAnalysisManager &AM) {
     Loop *L = Worklist.pop_back_val();
     if (IRCE.run(L, LPMAddNewLoop)) {
       Changed = true;
-      if (!SkipProfitabilityChecks) {
+      if (!getSkipProfitabilityChecks(F)) {
         PreservedAnalyses PA = PreservedAnalyses::all();
         PA.abandon<CycleAnalysis>();
         PA.abandon<BlockFrequencyAnalysis>();
@@ -991,7 +1012,8 @@ InductiveRangeCheckElimination::estimatedTripCount(const Loop &L) {
 
 bool InductiveRangeCheckElimination::run(
     Loop *L, function_ref<void(Loop *, bool)> LPMAddNewLoop) {
-  if (L->getBlocks().size() >= LoopSizeCutoff) {
+  const Function &F = *L->getHeader()->getParent();
+  if (L->getBlocks().size() >= getLoopSizeCutoff(F)) {
     LLVM_DEBUG(dbgs() << "irce: giving up constraining loop, too large\n");
     return false;
   }
@@ -1003,8 +1025,8 @@ bool InductiveRangeCheckElimination::run(
   }
 
   auto EstimatedTripCount = estimatedTripCount(*L);
-  if (!SkipProfitabilityChecks && EstimatedTripCount &&
-      *EstimatedTripCount < MinEliminatedChecks) {
+  if (!getSkipProfitabilityChecks(F) && EstimatedTripCount &&
+      *EstimatedTripCount < getMinEliminatedChecks(F)) {
     LLVM_DEBUG(dbgs() << "irce: could not prove profitability: "
                       << "the estimated number of iterations is "
                       << *EstimatedTripCount << "\n");
@@ -1033,7 +1055,7 @@ bool InductiveRangeCheckElimination::run(
 
   LLVM_DEBUG(PrintRecognizedRangeChecks(dbgs()));
 
-  if (PrintRangeChecks)
+  if (getPrintRangeChecks(F))
     PrintRecognizedRangeChecks(errs());
 
   const char *FailureReason = nullptr;
@@ -1041,7 +1063,7 @@ bool InductiveRangeCheckElimination::run(
   SCEVExpanderCleaner LoopStructureExpanderCleaner(LoopStructureExpander);
   std::optional<LoopStructure> MaybeLoopStructure =
       LoopStructure::parseLoopStructure(LoopStructureExpander, *L,
-                                        AllowUnsignedLatchCondition,
+                                        getAllowUnsignedLatchCondition(F),
                                         FailureReason);
   if (!MaybeLoopStructure) {
     LLVM_DEBUG(dbgs() << "irce: could not parse loop structure: "
@@ -1103,7 +1125,7 @@ bool InductiveRangeCheckElimination::run(
 
     LLVM_DEBUG(PrintConstrainedLoopInfo());
 
-    if (PrintChangedLoops)
+    if (getPrintChangedLoops(F))
       PrintConstrainedLoopInfo();
 
     // Optimize away the now-redundant range checks.

@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/ScopInliner.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopDetection.h"
 #include "polly/ScopInliner.h"
 #include "llvm/Analysis/CallGraph.h"
@@ -25,6 +26,7 @@
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 
 #include "polly/Support/PollyDebug.h"
+#include "llvm/Support/OptionsContext.h"
 #define DEBUG_TYPE "polly-scop-inliner"
 
 using namespace llvm;
@@ -53,8 +55,10 @@ bool runScopInlinerImpl(Function *F, SCC_t &SCC,
   }
 
   PassBuilder PB(
+      /*OptsCtx=*/llvm::clv2::defaultOptionsContext(),
       /*TM=*/nullptr,
-      /*PipelineTuningOptions=*/{},
+      /*PipelineTuningOptions=*/
+      PipelineTuningOptions(llvm::clv2::defaultOptionsContext()),
       /*PGOOpt=*/{},
       /*PIC=*/nullptr, std::move(FS));
   // Populate analysis managers and register Polly-specific analyses.
@@ -103,8 +107,19 @@ bool runScopInlinerImpl(Function *F, SCC_t &SCC,
 } // namespace
 
 polly::ScopInlinerPass::ScopInlinerPass(IntrusiveRefCntPtr<vfs::FileSystem> FS)
-    : FS(std::move(FS)) {
-  if (!polly::PollyAllowFullFunction) {
+    : FS(std::move(FS)) {}
+
+PreservedAnalyses polly::ScopInlinerPass::run(llvm::LazyCallGraph::SCC &SCC,
+                                              llvm::CGSCCAnalysisManager &AM,
+                                              llvm::LazyCallGraph &CG,
+                                              llvm::CGSCCUpdateResult &UR) {
+  Function *F = &SCC.begin()->getFunction();
+
+  bool AllowFullFunction = false;
+  if (auto *Opts =
+          polly_opts::getPollyOpts(F->getContext().getOptionsContext()))
+    AllowFullFunction = Opts->get<&llvm::clv2::POLLY_DetectFullFunctions>();
+  if (!AllowFullFunction) {
     report_fatal_error(
         "Aborting from ScopInliner because it only makes sense to run with "
         "-polly-allow-full-function. "
@@ -113,13 +128,6 @@ polly::ScopInlinerPass::ScopInlinerPass(IntrusiveRefCntPtr<vfs::FileSystem> FS)
         " enabled. "
         " If not, the entry block is not included in the Scop");
   }
-}
-
-PreservedAnalyses polly::ScopInlinerPass::run(llvm::LazyCallGraph::SCC &SCC,
-                                              llvm::CGSCCAnalysisManager &AM,
-                                              llvm::LazyCallGraph &CG,
-                                              llvm::CGSCCUpdateResult &UR) {
-  Function *F = &SCC.begin()->getFunction();
   bool Changed = runScopInlinerImpl(F, SCC, FS);
   return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }

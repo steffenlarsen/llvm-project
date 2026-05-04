@@ -275,7 +275,9 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/WebAssembly/WebAssemblyOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SSAUpdater.h"
@@ -286,12 +288,16 @@ using namespace llvm;
 
 #define DEBUG_TYPE "wasm-lower-em-ehsjlj"
 
-static cl::list<std::string>
-    EHAllowlist("emscripten-cxx-exceptions-allowed",
-                cl::desc("The list of function names in which Emscripten-style "
-                         "exception handling is enabled (see emscripten "
-                         "EMSCRIPTEN_CATCHING_ALLOWED options)"),
-                cl::CommaSeparated);
+static SmallVector<std::string, 8> EHAllowlist;
+
+static SmallVector<std::string, 8> getEHAllowlist(const Module &M) {
+  if (auto *O = clv2::getView<&clv2::WebAssemblyOptsReg>(
+          M.getContext().getOptionsContext())) {
+    const auto &V = O->get<&clv2::WASM_EHAllowlist>();
+    return SmallVector<std::string, 8>(V.begin(), V.end());
+  }
+  return EHAllowlist;
+}
 
 namespace {
 class WebAssemblyLowerEmscriptenEHSjLjImpl {
@@ -360,16 +366,8 @@ class WebAssemblyLowerEmscriptenEHSjLjImpl {
 public:
   WebAssemblyLowerEmscriptenEHSjLjImpl(
       std::function<DominatorTree &(Function &F)> GetDominatorTree)
-      : EnableEmEH(WebAssembly::WasmEnableEmEH),
-        EnableEmSjLj(WebAssembly::WasmEnableEmSjLj),
-        EnableWasmSjLj(WebAssembly::WasmEnableSjLj),
-        GetDominatorTree(GetDominatorTree) {
-    assert(!(EnableEmSjLj && EnableWasmSjLj) &&
-           "Two SjLj modes cannot be turned on at the same time");
-    assert(!(EnableEmEH && EnableWasmSjLj) &&
-           "Wasm SjLj should be only used with Wasm EH");
-    EHAllowlistSet.insert(EHAllowlist.begin(), EHAllowlist.end());
-  }
+      : EnableEmEH(false), EnableEmSjLj(false), EnableWasmSjLj(false),
+        GetDominatorTree(GetDominatorTree) {}
 
   bool runOnModule(Module &M);
 };
@@ -617,7 +615,7 @@ Function *WebAssemblyLowerEmscriptenEHSjLjImpl::getInvokeWrapper(CallBase *CI) {
   return F;
 }
 
-static bool canLongjmp(const Value *Callee) {
+static bool canLongjmp(const Value *Callee, bool EnableWasmSjLj = false) {
   if (auto *CalleeF = dyn_cast<Function>(Callee))
     if (CalleeF->isIntrinsic())
       return false;
@@ -680,7 +678,7 @@ static bool canLongjmp(const Value *Callee) {
   // intentionally treat it as longjmpable to work around this problem. This is
   // a hacky fix but an easy one.
   if (CalleeName == "__cxa_end_catch")
-    return WebAssembly::WasmEnableSjLj;
+    return EnableWasmSjLj;
   if (CalleeName == "__cxa_begin_catch" ||
       CalleeName == "__cxa_allocate_exception" || CalleeName == "__cxa_throw" ||
       CalleeName == "__clang_call_terminate")
@@ -886,11 +884,12 @@ void WebAssemblyLowerEmscriptenEHSjLjImpl::replaceLongjmpWith(
   }
 }
 
-static bool containsLongjmpableCalls(const Function *F) {
+static bool containsLongjmpableCalls(const Function *F,
+                                     bool EnableWasmSjLj = false) {
   for (const auto &BB : *F)
     for (const auto &I : BB)
       if (const auto *CB = dyn_cast<CallBase>(&I))
-        if (canLongjmp(CB->getCalledOperand()))
+        if (canLongjmp(CB->getCalledOperand(), EnableWasmSjLj))
           return true;
   return false;
 }
@@ -925,6 +924,18 @@ static void nullifySetjmp(Function *F) {
 
 bool WebAssemblyLowerEmscriptenEHSjLjImpl::runOnModule(Module &M) {
   LLVM_DEBUG(dbgs() << "********** Lower Emscripten EH & SjLj **********\n");
+
+  auto &OptsCtx = M.getContext().getOptionsContext();
+  EnableEmEH = WebAssembly::getWasmEnableEmEH(OptsCtx);
+  EnableEmSjLj = WebAssembly::getWasmEnableEmSjLj(OptsCtx);
+  EnableWasmSjLj = WebAssembly::getWasmEnableSjLj(OptsCtx);
+  assert(!(EnableEmSjLj && EnableWasmSjLj) &&
+         "Two SjLj modes cannot be turned on at the same time");
+  assert(!(EnableEmEH && EnableWasmSjLj) &&
+         "Wasm SjLj should be only used with Wasm EH");
+
+  const auto &AllowList = getEHAllowlist(M);
+  EHAllowlistSet.insert(AllowList.begin(), AllowList.end());
 
   LLVMContext &C = M.getContext();
   IRBuilder<> IRB(C);
@@ -1000,7 +1011,7 @@ bool WebAssemblyLowerEmscriptenEHSjLjImpl::runOnModule(Module &M) {
         // If a function that calls setjmp does not contain any other calls that
         // can longjmp, we don't need to do any transformation on that function,
         // so can ignore it
-        if (containsLongjmpableCalls(UserF))
+        if (containsLongjmpableCalls(UserF, EnableWasmSjLj))
           SetjmpUsers.insert(UserF);
         else
           SetjmpUsersToNullify.insert(UserF);
@@ -1170,7 +1181,7 @@ bool WebAssemblyLowerEmscriptenEHSjLjImpl::runEHOnFunction(Function &F) {
       // tail: ;; Nothing happened or an exception is thrown
       //   ... Continue exception handling ...
       if (DoSjLj && EnableEmSjLj && !SetjmpUsers.count(&F) &&
-          canLongjmp(Callee)) {
+          canLongjmp(Callee, EnableWasmSjLj)) {
         // Create longjmp.rethrow BB once and share it within the function
         if (!RethrowLongjmpBB) {
           RethrowLongjmpBB = BasicBlock::Create(C, "rethrow.longjmp", &F);
@@ -1467,7 +1478,7 @@ void WebAssemblyLowerEmscriptenEHSjLjImpl::
         continue;
 
       const Value *Callee = CI->getCalledOperand();
-      if (!canLongjmp(Callee))
+      if (!canLongjmp(Callee, EnableWasmSjLj))
         continue;
       if (isEmAsmCall(Callee))
         report_fatal_error("Cannot use EM_ASM* alongside setjmp/longjmp in " +
@@ -1738,7 +1749,7 @@ void WebAssemblyLowerEmscriptenEHSjLjImpl::handleLongjmpableCallsForWasmSjLj(
       if (!CI)
         continue;
       const Value *Callee = CI->getCalledOperand();
-      if (!canLongjmp(Callee))
+      if (!canLongjmp(Callee, EnableWasmSjLj))
         continue;
       if (isEmAsmCall(Callee))
         report_fatal_error("Cannot use EM_ASM* alongside setjmp/longjmp in " +

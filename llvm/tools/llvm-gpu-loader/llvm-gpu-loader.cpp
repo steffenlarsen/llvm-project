@@ -17,11 +17,12 @@
 #include "llvm/BinaryFormat/Magic.h"
 #include "llvm/Object/ELF.h"
 #include "llvm/Object/ELFObjectFile.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/TargetParser/Triple.h"
@@ -33,49 +34,45 @@
 #include <string>
 
 using namespace llvm;
+using namespace llvm::clv2;
 
-static cl::OptionCategory LoaderCategory("loader options");
+static constexpr OptionCategory LoaderCategory{"loader options"};
 
-static cl::opt<bool> Help("h", cl::desc("Alias for -help"), cl::Hidden,
-                          cl::cat(LoaderCategory));
+static constexpr OptionInfo<unsigned> ThreadsX{
+    "threads-x", "Number of threads in the 'x' dimension", Init{1u},
+    cat(LoaderCategory)};
+static constexpr OptionInfo<unsigned> ThreadsY{
+    "threads-y", "Number of threads in the 'y' dimension", Init{1u},
+    cat(LoaderCategory)};
+static constexpr OptionInfo<unsigned> ThreadsZ{
+    "threads-z", "Number of threads in the 'z' dimension", Init{1u},
+    cat(LoaderCategory)};
+static constexpr AliasInfo ThreadsA{"threads", "threads-x"};
 
-static cl::opt<unsigned>
-    ThreadsX("threads-x", cl::desc("Number of threads in the 'x' dimension"),
-             cl::init(1), cl::cat(LoaderCategory));
-static cl::opt<unsigned>
-    ThreadsY("threads-y", cl::desc("Number of threads in the 'y' dimension"),
-             cl::init(1), cl::cat(LoaderCategory));
-static cl::opt<unsigned>
-    ThreadsZ("threads-z", cl::desc("Number of threads in the 'z' dimension"),
-             cl::init(1), cl::cat(LoaderCategory));
-static cl::alias threads("threads", cl::aliasopt(ThreadsX),
-                         cl::desc("Alias for --threads-x"),
-                         cl::cat(LoaderCategory));
+static constexpr OptionInfo<unsigned> BlocksX{
+    "blocks-x", "Number of blocks in the 'x' dimension", Init{1u},
+    cat(LoaderCategory)};
+static constexpr OptionInfo<unsigned> BlocksY{
+    "blocks-y", "Number of blocks in the 'y' dimension", Init{1u},
+    cat(LoaderCategory)};
+static constexpr OptionInfo<unsigned> BlocksZ{
+    "blocks-z", "Number of blocks in the 'z' dimension", Init{1u},
+    cat(LoaderCategory)};
+static constexpr AliasInfo BlocksA{"blocks", "blocks-x"};
 
-static cl::opt<unsigned>
-    BlocksX("blocks-x", cl::desc("Number of blocks in the 'x' dimension"),
-            cl::init(1), cl::cat(LoaderCategory));
-static cl::opt<unsigned>
-    BlocksY("blocks-y", cl::desc("Number of blocks in the 'y' dimension"),
-            cl::init(1), cl::cat(LoaderCategory));
-static cl::opt<unsigned>
-    BlocksZ("blocks-z", cl::desc("Number of blocks in the 'z' dimension"),
-            cl::init(1), cl::cat(LoaderCategory));
-static cl::alias Blocks("blocks", cl::aliasopt(BlocksX),
-                        cl::desc("Alias for --blocks-x"),
-                        cl::cat(LoaderCategory));
+static constexpr OptionInfo<std::string> File{
+    "file", "<gpu executable>", Positional{}, Required, cat(LoaderCategory)};
+static constexpr ListOptionInfo<std::string> Args{
+    "args", "<program arguments>...", ConsumeAfter, cat(LoaderCategory)};
 
-static cl::list<std::string> Kernels(
-    "kernel", cl::value_desc("name"),
-    cl::desc("Launch '<name>(void)' instead of the 'main' entry point."),
-    cl::cat(LoaderCategory));
+static constexpr ListOptionInfo<std::string> Kernels{
+    "kernel", "Launch '<name>(void)' instead of the 'main' entry point.",
+    value_desc("name"), cat(LoaderCategory)};
 
-static cl::opt<std::string> File(cl::Positional, cl::Required,
-                                 cl::desc("<gpu executable>"),
-                                 cl::cat(LoaderCategory));
-static cl::list<std::string> Args(cl::ConsumeAfter,
-                                  cl::desc("<program arguments>..."),
-                                  cl::cat(LoaderCategory));
+static constexpr OptionsRegistry<&ThreadsX, &ThreadsY, &ThreadsZ, &ThreadsA,
+                                 &BlocksX, &BlocksY, &BlocksZ, &BlocksA, &File,
+                                 &Args, &Kernels>
+    GpuLoaderReg;
 
 [[noreturn]] static void handleError(Error E) {
   outs().flush();
@@ -190,23 +187,33 @@ void launchKernel(ol_queue_handle_t Queue, ol_device_handle_t Device,
 
 int main(int argc, const char **argv, const char **envp) {
   sys::PrintStackTraceOnErrorSignal(argv[0]);
-  cl::HideUnrelatedOptions(LoaderCategory);
-  cl::ParseCommandLineOptions(
+
+  clv2::OptionParser P;
+  P.add<&GpuLoaderReg>();
+  RegisterCoreLLVMOptions(P);
+  P.hideUnrelatedOptions({&LoaderCategory});
+  auto OptsCtx = P.parse(
       argc, argv,
       "A utility used to launch unit tests built for a GPU target. This is\n"
       "intended to provide an interface similar to cross-compiling "
       "emulators\n");
+  auto *Opts = OptsCtx->getViewPtr<&GpuLoaderReg>();
 
-  if (Help) {
-    cl::PrintHelpMessage();
-    return EXIT_SUCCESS;
-  }
+  const std::string &FileVal = Opts->get<&File>();
+  const std::vector<std::string> &ArgsVal = Opts->get<&Args>();
+  unsigned BlocksXVal = Opts->get<&BlocksX>();
+  unsigned BlocksYVal = Opts->get<&BlocksY>();
+  unsigned BlocksZVal = Opts->get<&BlocksZ>();
+  unsigned ThreadsXVal = Opts->get<&ThreadsX>();
+  unsigned ThreadsYVal = Opts->get<&ThreadsY>();
+  unsigned ThreadsZVal = Opts->get<&ThreadsZ>();
+  const std::vector<std::string> &KernelsVal = Opts->get<&Kernels>();
 
   if (Error Err = loadLLVMOffload())
     handleError(std::move(Err));
 
   ErrorOr<std::unique_ptr<MemoryBuffer>> ImageOrErr =
-      MemoryBuffer::getFileOrSTDIN(File);
+      MemoryBuffer::getFileOrSTDIN(FileVal);
   if (std::error_code EC = ImageOrErr.getError())
     handleError(errorCodeToError(EC));
   MemoryBufferRef Image = **ImageOrErr;
@@ -241,8 +248,8 @@ int main(int argc, const char **argv, const char **envp) {
     InitArgs.Platforms = &Backend;
   }
 
-  SmallVector<const char *> NewArgv = {File.c_str()};
-  llvm::transform(Args, std::back_inserter(NewArgv),
+  SmallVector<const char *> NewArgv = {FileVal.c_str()};
+  llvm::transform(ArgsVal, std::back_inserter(NewArgv),
                   [](const std::string &Arg) { return Arg.c_str(); });
 
   OFFLOAD_ERR(olInit(&InitArgs));
@@ -271,14 +278,15 @@ int main(int argc, const char **argv, const char **envp) {
   OFFLOAD_ERR(olMemAlloc(Device, OL_ALLOC_TYPE_DEVICE, sizeof(int), &DevRet));
   OFFLOAD_ERR(olMemcpy(Queue, DevRet, Device, &Zero, Host, sizeof(int)));
 
-  uint32_t Dims = (BlocksZ > 1) ? 3 : (BlocksY > 1) ? 2 : 1;
-  ol_kernel_launch_size_args_t StartLaunch{Dims,
-                                           {BlocksX, BlocksY, BlocksZ},
-                                           {ThreadsX, ThreadsY, ThreadsZ},
-                                           /*SharedMemBytes=*/0};
-  if (!Kernels.empty()) {
+  uint32_t Dims = (BlocksZVal > 1) ? 3 : (BlocksYVal > 1) ? 2 : 1;
+  ol_kernel_launch_size_args_t StartLaunch{
+      Dims,
+      {BlocksXVal, BlocksYVal, BlocksZVal},
+      {ThreadsXVal, ThreadsYVal, ThreadsZVal},
+      /*SharedMemBytes=*/0};
+  if (!KernelsVal.empty()) {
     // Launch the user-specified kernels in order. These must take no arguments.
-    for (const std::string &Kernel : Kernels)
+    for (const std::string &Kernel : KernelsVal)
       launchKernel(Queue, Device, Program, Kernel.c_str(), StartLaunch);
   } else {
     // The '_begin' and '_end' kernels perform libc startup and teardown. Global

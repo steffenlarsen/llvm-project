@@ -12,6 +12,7 @@
 
 #include "BPF.h"
 #include "BPFCORE.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicsBPF.h"
@@ -21,6 +22,8 @@
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/BPF/BPFOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 #define DEBUG_TYPE "bpf-adjust-opt"
@@ -28,15 +31,15 @@
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
-static cl::opt<bool>
-    DisableBPFserializeICMP("bpf-disable-serialize-icmp", cl::Hidden,
-                            cl::desc("BPF: Disable Serializing ICMP insns."),
-                            cl::init(false));
+static bool getDisableSerializeICMP(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::BPF_DisableSerializeICMP>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> DisableBPFavoidSpeculation(
-    "bpf-disable-avoid-speculation", cl::Hidden,
-    cl::desc("BPF: Disable Avoiding Speculative Code Motion."),
-    cl::init(false));
+static bool getDisableAvoidSpeculation(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::BPF_DisableAvoidSpeculation>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 class BPFAdjustOptImpl {
@@ -358,14 +361,15 @@ bool BPFAdjustOptImpl::avoidSpeculation(Instruction &I) {
 }
 
 void BPFAdjustOptImpl::adjustBasicBlock(BasicBlock &BB) {
-  if (!DisableBPFserializeICMP && serializeICMPCrossBB(BB))
+  if (!getDisableSerializeICMP(*BB.getParent()) && serializeICMPCrossBB(BB))
     return;
 }
 
 void BPFAdjustOptImpl::adjustInst(Instruction &I) {
-  if (!DisableBPFserializeICMP && serializeICMPInBB(I))
+  const Function &F = *I.getFunction();
+  if (!getDisableSerializeICMP(F) && serializeICMPInBB(I))
     return;
-  if (!DisableBPFavoidSpeculation && avoidSpeculation(I))
+  if (!getDisableAvoidSpeculation(F) && avoidSpeculation(I))
     return;
 }
 

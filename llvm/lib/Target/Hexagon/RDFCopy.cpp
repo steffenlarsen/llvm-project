@@ -19,11 +19,13 @@
 #include "llvm/CodeGen/RDFRegisters.h"
 #include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/MCRegisterInfo.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <cassert>
 #include <cstdint>
 
@@ -31,11 +33,19 @@ using namespace llvm;
 using namespace rdf;
 
 #ifndef NDEBUG
-cl::opt<unsigned> RDFCpLimit(
-    "rdf-cp-limit", cl::init(0), cl::Hidden,
-    cl::desc(
-        "Limit number of copy propagations in RDF-based copy propagation"));
-static unsigned RDFCpCount = 0;
+unsigned RDFCpLimit = 0;
+
+static unsigned CpCount = 0;
+
+static unsigned getCpLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_RDFCpLimit>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getCpLimitWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::HexagonOptsReg, &clv2::HEX_RDFCpLimit>(
+      F.getContext().getOptionsContext());
+}
 #endif
 
 bool CopyPropagation::interpretAsCopy(const MachineInstr *MI, EqualityMap &EM) {
@@ -154,7 +164,8 @@ bool CopyPropagation::run() {
 
   bool Changed = false;
 #ifndef NDEBUG
-  bool HasLimit = RDFCpLimit.getNumOccurrences() > 0;
+  const Function &Fn = DFG.getMF().getFunction();
+  bool HasLimit = getCpLimitWasSpecified(Fn);
 #endif
 
   auto MinPhysReg = [this](RegisterRef RR) -> MCRegister {
@@ -173,7 +184,7 @@ bool CopyPropagation::run() {
 
   for (NodeId C : Copies) {
 #ifndef NDEBUG
-    if (HasLimit && RDFCpCount >= RDFCpLimit)
+    if (HasLimit && CpCount >= getCpLimit(Fn))
       break;
 #endif
     auto SA = DFG.addr<InstrNode*>(C);
@@ -230,9 +241,9 @@ bool CopyPropagation::run() {
 
         Changed = true;
 #ifndef NDEBUG
-        if (HasLimit && RDFCpCount >= RDFCpLimit)
+        if (HasLimit && CpCount >= getCpLimit(Fn))
           break;
-        RDFCpCount++;
+        CpCount++;
 #endif
 
         auto FC = CopyMap.find(IA.Id);

@@ -29,12 +29,13 @@
 #include "polly/CodeGen/IslAst.h"
 #include "polly/CodeGen/CodeGeneration.h"
 #include "polly/DependenceInfo.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopDetection.h"
 #include "polly/ScopInfo.h"
 #include "polly/Support/GICHelper.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Function.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "isl/aff.h"
@@ -58,41 +59,6 @@ using namespace polly;
 
 using IslAstUserPayload = IslAstInfo::IslAstUserPayload;
 
-static cl::opt<bool>
-    PollyParallel("polly-parallel",
-                  cl::desc("Generate thread parallel code (isl codegen only)"),
-                  cl::cat(PollyCategory));
-
-static cl::opt<bool> PrintAccesses("polly-ast-print-accesses",
-                                   cl::desc("Print memory access functions"),
-                                   cl::cat(PollyCategory));
-
-static cl::opt<bool> PollyParallelForce(
-    "polly-parallel-force",
-    cl::desc(
-        "Force generation of thread parallel code ignoring any cost model"),
-    cl::cat(PollyCategory));
-
-static cl::opt<bool> UseContext("polly-ast-use-context",
-                                cl::desc("Use context"), cl::Hidden,
-                                cl::init(true), cl::cat(PollyCategory));
-
-static cl::opt<bool> DetectParallel("polly-ast-detect-parallel",
-                                    cl::desc("Detect parallelism"), cl::Hidden,
-                                    cl::cat(PollyCategory));
-
-extern cl::opt<bool> PollyVectorizeMetadata;
-
-static cl::opt<bool>
-    PollyPrintAst("polly-print-ast",
-                  cl::desc("Print the ISL abstract syntax tree"),
-                  cl::cat(PollyCategory));
-
-static cl::opt<unsigned long>
-    AstGenComputeout("polly-astgen-computeout",
-                     cl::desc("Bound the AST generation by a maximal number of "
-                              "ISL operations [0 means un-bounded]"),
-                     cl::Hidden, cl::init(3000000), cl::cat(PollyCategory));
 STATISTIC(ScopsProcessed, "Number of SCoPs processed");
 STATISTIC(ScopsBeneficial, "Number of beneficial SCoPs");
 STATISTIC(BeneficialAffineLoops, "Number of beneficial affine loops");
@@ -171,10 +137,17 @@ static std::string getBrokenReductionsStr(const isl::ast_node &Node) {
   return str;
 }
 
+/// Flags passed through isl C callbacks that need PollyParallel info.
+struct ParallelFlags {
+  bool Parallel;
+  bool ParallelForce;
+};
+
 /// Callback executed for each for node in the ast in order to print it.
 static isl_printer *cbPrintFor(__isl_take isl_printer *Printer,
                                __isl_take isl_ast_print_options *Options,
-                               __isl_keep isl_ast_node *Node, void *) {
+                               __isl_keep isl_ast_node *Node, void *User) {
+  auto *PF = static_cast<ParallelFlags *>(User);
   isl::pw_aff DD =
       IslAstInfo::getMinimalDependenceDistance(isl::manage_copy(Node));
   const std::string BrokenReductionsStr =
@@ -190,7 +163,8 @@ static isl_printer *cbPrintFor(__isl_take isl_printer *Printer,
   if (IslAstInfo::isInnermostParallel(isl::manage_copy(Node)))
     Printer = printLine(Printer, SimdPragmaStr + BrokenReductionsStr);
 
-  if (IslAstInfo::isExecutedInParallel(isl::manage_copy(Node)))
+  if (IslAstInfo::isExecutedInParallel(isl::manage_copy(Node), PF->Parallel,
+                                       PF->ParallelForce))
     Printer = printLine(Printer, OmpPragmaStr);
   else if (IslAstInfo::isOutermostParallel(isl::manage_copy(Node)))
     Printer = printLine(Printer, KnownParallelStr + BrokenReductionsStr);
@@ -457,7 +431,11 @@ isl::ast_expr IslAst::buildRunCondition(Scop &S, const isl::ast_build &Build) {
 ///       performed optimizations (e.g., tiling) or compute properties on the
 ///       original as well as optimized SCoP (e.g., #stride-one-accesses).
 static bool benefitsFromPolly(Scop &Scop, bool PerformParallelTest) {
-  if (PollyProcessUnprofitable)
+  bool ProcessUnprofitable = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          Scop.getFunction().getContext().getOptionsContext()))
+    ProcessUnprofitable = Opts->get<&llvm::clv2::POLLY_ProcessUnprofitable>();
+  if (ProcessUnprofitable)
     return true;
 
   // Check if nothing interesting happened.
@@ -470,11 +448,14 @@ static bool benefitsFromPolly(Scop &Scop, bool PerformParallelTest) {
 }
 
 /// Collect statistics for the syntax tree rooted at @p Ast.
-static void walkAstForStatistics(const isl::ast_node &Ast) {
+static void walkAstForStatistics(const isl::ast_node &Ast, bool Parallel,
+                                 bool ParallelForce) {
   assert(!Ast.is_null());
+  ParallelFlags Flags = {Parallel, ParallelForce};
   isl_ast_node_foreach_descendant_top_down(
       Ast.get(),
       [](__isl_keep isl_ast_node *Node, void *User) -> isl_bool {
+        auto *PF = static_cast<ParallelFlags *>(User);
         switch (isl_ast_node_get_type(Node)) {
         case isl_ast_node_for:
           NumForLoops++;
@@ -486,7 +467,8 @@ static void walkAstForStatistics(const isl::ast_node &Ast) {
             NumOutermostParallel++;
           if (IslAstInfo::isReductionParallel(isl::manage_copy(Node)))
             NumReductionParallel++;
-          if (IslAstInfo::isExecutedInParallel(isl::manage_copy(Node)))
+          if (IslAstInfo::isExecutedInParallel(isl::manage_copy(Node),
+                                               PF->Parallel, PF->ParallelForce))
             NumExecutedInParallel++;
           break;
 
@@ -501,7 +483,7 @@ static void walkAstForStatistics(const isl::ast_node &Ast) {
         // Continue traversing subtrees.
         return isl_bool_true;
       },
-      nullptr);
+      &Flags);
 }
 
 IslAst::IslAst(Scop &Scop) : S(Scop), Ctx(Scop.getSharedIslCtx()) {}
@@ -511,9 +493,24 @@ IslAst::IslAst(IslAst &&O)
       Root(std::move(O.Root)) {}
 
 void IslAst::init(const Dependences &D) {
-  bool PerformParallelTest = PollyParallel || DetectParallel ||
-                             PollyVectorizerChoice != VECTORIZER_NONE ||
-                             PollyVectorizeMetadata;
+  bool DetectParallelVal = false;
+  bool VecMetadata = false;
+  bool UseContextVal = true;
+  bool ParallelVal = false;
+  bool ParallelForceVal = false;
+  auto VectorizerChoice = clv2::POLLY_VectorizerChoice::None;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext())) {
+    DetectParallelVal = Opts->get<&llvm::clv2::POLLY_AstDetectParallel>();
+    VecMetadata = Opts->get<&llvm::clv2::POLLY_AnnotateMetadataVectorize>();
+    UseContextVal = Opts->get<&llvm::clv2::POLLY_AstUseContext>();
+    VectorizerChoice = Opts->get<&llvm::clv2::POLLY_Vectorizer>();
+    ParallelVal = Opts->get<&llvm::clv2::POLLY_Parallel>();
+    ParallelForceVal = Opts->get<&llvm::clv2::POLLY_ParallelForce>();
+  }
+  bool PerformParallelTest =
+      ParallelVal || DetectParallelVal ||
+      VectorizerChoice != clv2::POLLY_VectorizerChoice::None || VecMetadata;
   auto ScheduleTree = S.getScheduleTree();
 
   // Skip AST and code generation if there was no benefit achieved.
@@ -531,7 +528,7 @@ void IslAst::init(const Dependences &D) {
   isl_ast_build *Build;
   AstBuildUserInfo BuildInfo;
 
-  if (UseContext)
+  if (UseContextVal)
     Build = isl_ast_build_from_context(S.getContext().release());
   else
     Build = isl_ast_build_from_context(
@@ -562,6 +559,10 @@ void IslAst::init(const Dependences &D) {
   // schedule tree is too big and complex.
 
   {
+    unsigned long AstGenComputeout = 3000000;
+    if (auto *Opts = clv2::getView<&llvm::clv2::PollyOptsReg>(
+            S.getFunction().getContext().getOptionsContext()))
+      AstGenComputeout = Opts->get<&llvm::clv2::POLLY_AstGenComputeout>();
     IslMaxOperationsGuard MaxOpGuard(Ctx.get(), AstGenComputeout);
     Root = isl::manage(
         isl_ast_build_node_from_schedule(Build, S.getScheduleTree().release()));
@@ -573,7 +574,7 @@ void IslAst::init(const Dependences &D) {
     }
   }
   if (!Root.is_null())
-    walkAstForStatistics(Root);
+    walkAstForStatistics(Root, ParallelVal, ParallelForceVal);
 
   isl_ast_build_free(Build);
 }
@@ -623,8 +624,9 @@ bool IslAstInfo::isReductionParallel(const isl::ast_node &Node) {
   return Payload && Payload->IsReductionParallel;
 }
 
-bool IslAstInfo::isExecutedInParallel(const isl::ast_node &Node) {
-  if (!PollyParallel)
+bool IslAstInfo::isExecutedInParallel(const isl::ast_node &Node, bool Parallel,
+                                      bool ParallelForce) {
+  if (!Parallel)
     return false;
 
   // Do not parallelize innermost loops.
@@ -636,7 +638,7 @@ bool IslAstInfo::isExecutedInParallel(const isl::ast_node &Node) {
   //       executed. This can possibly require run-time checks, which again
   //       raises the question of both run-time check overhead and code size
   //       costs.
-  if (!PollyParallelForce && isInnermost(Node))
+  if (!ParallelForce && isInnermost(Node))
     return false;
 
   return isOutermostParallel(Node) && !isReductionParallel(Node);
@@ -757,10 +759,20 @@ void IslAstInfo::print(raw_ostream &OS) {
 
   Options = isl_ast_print_options_alloc(S.getIslCtx().get());
 
-  if (PrintAccesses)
+  bool PrintAccessesVal = false;
+  bool ParallelVal = false;
+  bool ParallelForceVal = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext())) {
+    PrintAccessesVal = Opts->get<&llvm::clv2::POLLY_AstPrintAccesses>();
+    ParallelVal = Opts->get<&llvm::clv2::POLLY_Parallel>();
+    ParallelForceVal = Opts->get<&llvm::clv2::POLLY_ParallelForce>();
+  }
+  if (PrintAccessesVal)
     Options =
         isl_ast_print_options_set_print_user(Options, cbPrintUser, nullptr);
-  Options = isl_ast_print_options_set_print_for(Options, cbPrintFor, nullptr);
+  ParallelFlags PF = {ParallelVal, ParallelForceVal};
+  Options = isl_ast_print_options_set_print_for(Options, cbPrintFor, &PF);
 
   isl_printer *P = isl_printer_to_str(S.getIslCtx().get());
   P = isl_printer_set_output_format(P, ISL_FORMAT_C);
@@ -793,7 +805,11 @@ polly::runIslAstGen(Scop &S, DependenceAnalysis::Result &DA) {
   };
 
   std::unique_ptr<IslAstInfo> Result = runIslAst(S, GetDeps);
-  if (PollyPrintAst) {
+  bool PrintAstVal = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext()))
+    PrintAstVal = Opts->get<&llvm::clv2::POLLY_PrintAst>();
+  if (PrintAstVal) {
     outs() << "Printing analysis 'Polly - Generate an AST of the SCoP (isl)'"
            << S.getName() << "' in function '" << S.getFunction().getName()
            << "':\n";

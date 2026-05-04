@@ -13,8 +13,9 @@
 #ifndef LLVM_LIB_TARGET_ARM_MCTARGETDESC_ARMMCTARGETDESC_H
 #define LLVM_LIB_TARGET_ARM_MCTARGETDESC_ARMMCTARGETDESC_H
 
-#include "llvm/Support/DataTypes.h"
 #include "llvm/MC/MCInstrDesc.h"
+#include "llvm/Support/DataTypes.h"
+#include "llvm/Support/OptionsContext.h"
 #include <memory>
 #include <string>
 
@@ -36,6 +37,9 @@ class MCTargetStreamer;
 class StringRef;
 class Target;
 class Triple;
+namespace clv2 {
+class OptionsContext;
+}
 
 namespace ARM_MC {
 std::string ParseARMTriple(const Triple &TT, StringRef CPU);
@@ -60,8 +64,9 @@ uint64_t evaluateBranchTarget(const MCInstrDesc &InstDesc, uint64_t Addr,
 
 /// Create a ARM MCSubtargetInfo instance. This is exposed so Asm parser, etc.
 /// do not need to go through TargetRegistry.
-MCSubtargetInfo *createARMMCSubtargetInfo(const Triple &TT, StringRef CPU,
-                                          StringRef FS);
+MCSubtargetInfo *
+createARMMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                         const llvm::clv2::OptionsContext &Ctx);
 }
 
 MCTargetStreamer *createARMNullTargetStreamer(MCStreamer &S);

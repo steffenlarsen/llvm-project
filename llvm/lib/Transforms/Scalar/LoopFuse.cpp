@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LoopFuse.cpp - Loop Fusion Pass ------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -44,7 +46,6 @@
 /// above. These can be added to the current implementation in the future.
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Scalar/LoopFuse.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
@@ -56,9 +57,10 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Verifier.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Scalar/LoopFuse.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/CodeMoverUtils.h"
 #include "llvm/Transforms/Utils/LoopPeel.h"
@@ -97,16 +99,36 @@ STATISTIC(NumHoistedInsts, "Number of hoisted preheader instructions.");
 STATISTIC(NumSunkInsts, "Number of sunk preheader instructions.");
 STATISTIC(NumDA, "DA checks passed");
 
-static cl::opt<uint32_t> FusionPeelMaxCount(
-    "loop-fusion-peel-max-count", cl::init(0), cl::Hidden,
-    cl::desc("Max number of iterations to be peeled from a loop, such that "
-             "fusion can take place"));
+enum FusionDependenceAnalysisChoice {
+  FUSION_DEPENDENCE_ANALYSIS_SCEV,
+  FUSION_DEPENDENCE_ANALYSIS_DA,
+  FUSION_DEPENDENCE_ANALYSIS_ALL,
+};
+
+static FusionDependenceAnalysisChoice
+getFusionDependenceAnalysis(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::ScalarOptsReg>(
+          F.getContext().getOptionsContext()))
+    if (O->specified<&clv2::SC_LoopFusionDependenceAnalysis>()) {
+      auto V = O->get<&clv2::SC_LoopFusionDependenceAnalysis>();
+      return static_cast<FusionDependenceAnalysisChoice>(static_cast<int>(V));
+    }
+  return FUSION_DEPENDENCE_ANALYSIS_DA;
+}
+
+static unsigned getFusionPeelMaxCount(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_LoopFusionPeelMaxCount>(
+      F.getContext().getOptionsContext(), 0);
+}
 
 #ifndef NDEBUG
-static cl::opt<bool>
-    VerboseFusionDebugging("loop-fusion-verbose-debug",
-                           cl::desc("Enable verbose debugging for Loop Fusion"),
-                           cl::Hidden, cl::init(false));
+static constexpr clv2::OptionInfo<bool> OI_LoopFuseVerbose{
+    "loop-fusion-verbose-debug", "Enable verbose debugging for Loop Fusion",
+    clv2::Hidden};
+static constexpr clv2::OptionsRegistry<&OI_LoopFuseVerbose> LoopFuseVerboseReg;
+
+static bool VerboseFusionDebugging = false;
 #endif
 
 namespace {
@@ -767,7 +789,8 @@ private:
         // Peeling the second loop is not currently supported.
         bool WillPeel =
             FC0.AbleToPeel && TCDifference && *TCDifference > 0 &&
-            *TCDifference <= static_cast<int64_t>(FusionPeelMaxCount);
+            *TCDifference <= static_cast<int64_t>(getFusionPeelMaxCount(
+                                 *FC0.L->getHeader()->getParent()));
 
         if (!WillPeel && (!TCDifference || *TCDifference != 0)) {
           LLVM_DEBUG(dbgs() << "Fusion candidates do not have identical trip "

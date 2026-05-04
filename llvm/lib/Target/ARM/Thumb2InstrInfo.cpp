@@ -24,26 +24,23 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstBuilder.h"
 #include "llvm/MC/MCInstrDesc.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cassert>
 
 using namespace llvm;
 
-static cl::opt<bool>
-OldT2IfCvt("old-thumb2-ifcvt", cl::Hidden,
-           cl::desc("Use old-style Thumb2 if-conversion heuristics"),
-           cl::init(false));
-
-static cl::opt<bool>
-PreferNoCSEL("prefer-no-csel", cl::Hidden,
-             cl::desc("Prefer predicated Move to CSEL"),
-             cl::init(false));
+static bool getPreferNoCSEL(const Function &F) {
+  return clv2::getOptValOr<&clv2::ARMOptsReg, &clv2::ARM_PreferNoCSEL>(
+      F.getContext().getOptionsContext(), false);
+}
 
 Thumb2InstrInfo::Thumb2InstrInfo(const ARMSubtarget &STI)
     : ARMBaseInstrInfo(STI, RI), RI(STI) {}
@@ -130,7 +127,8 @@ Thumb2InstrInfo::optimizeSelect(MachineInstr &MI,
   // MOVCC into another instruction. If that fails on 8.1-M fall back to using a
   // CSEL.
   MachineInstr *RV = ARMBaseInstrInfo::optimizeSelect(MI, SeenMIs, PreferFalse);
-  if (!RV && getSubtarget().hasV8_1MMainlineOps() && !PreferNoCSEL) {
+  if (!RV && getSubtarget().hasV8_1MMainlineOps() &&
+      !getPreferNoCSEL(MI.getMF()->getFunction())) {
     Register DestReg = MI.getOperand(0).getReg();
 
     if (!DestReg.isVirtual())

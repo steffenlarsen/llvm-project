@@ -24,17 +24,21 @@
 #include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/CodeGen/VirtRegMap.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "si-pre-allocate-wwm-regs"
 
-static cl::opt<bool>
-    EnablePreallocateSGPRSpillVGPRs("amdgpu-prealloc-sgpr-spill-vgprs",
-                                    cl::init(false), cl::Hidden);
+static bool getEnablePreallocateSGPRSpillVGPRs(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::AMDGPU_EnablePreallocateSGPRSpillVGPRs>(
+      F.getContext().getOptionsContext());
+}
 
 bool llvm::isPreallocateSGPRSpillVGPRsEnabled(const MachineFunction &MF) {
-  return EnablePreallocateSGPRSpillVGPRs ||
+  return getEnablePreallocateSGPRSpillVGPRs(MF.getFunction()) ||
          MF.getFunction().hasFnAttribute("amdgpu-prealloc-sgpr-spill-vgprs");
 }
 

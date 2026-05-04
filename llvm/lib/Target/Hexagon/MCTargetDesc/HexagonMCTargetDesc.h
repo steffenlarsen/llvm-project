@@ -14,8 +14,12 @@
 #define LLVM_LIB_TARGET_HEXAGON_MCTARGETDESC_HEXAGONMCTARGETDESC_H
 
 #include "llvm/MC/MCRegisterInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include <cstdint>
+
+namespace llvm::clv2 {
+class OptionsContext;
+}
 
 #define Hexagon_POINTER_SIZE 4
 
@@ -60,31 +64,30 @@ class Target;
 class Triple;
 class StringRef;
 
-extern cl::opt<bool> HexagonDisableCompound;
-extern cl::opt<bool> HexagonDisableDuplex;
+extern bool HexagonDisableDuplex;
 extern const InstrStage HexagonStages[];
 
 MCInstrInfo *createHexagonMCInstrInfo();
 MCRegisterInfo *createHexagonMCRegisterInfo(StringRef TT);
 
 namespace Hexagon_MC {
-  StringRef selectHexagonCPU(StringRef CPU);
+StringRef selectHexagonCPU(StringRef CPU, const clv2::OptionsContext &Ctx);
 
-  FeatureBitset completeHVXFeatures(const FeatureBitset &FB);
-  /// Create a Hexagon MCSubtargetInfo instance. This is exposed so Asm parser,
-  /// etc. do not need to go through TargetRegistry.
-  MCSubtargetInfo *createHexagonMCSubtargetInfo(const Triple &TT, StringRef CPU,
-                                                StringRef FS);
-  MCSubtargetInfo const *getArchSubtarget(MCSubtargetInfo const *STI);
-  void addArchSubtarget(MCSubtargetInfo const *STI,
-                        StringRef FS);
-  unsigned GetELFFlags(const MCSubtargetInfo &STI);
+FeatureBitset completeHVXFeatures(const FeatureBitset &FB);
+/// Create a Hexagon MCSubtargetInfo instance. This is exposed so Asm parser,
+/// etc. do not need to go through TargetRegistry.
+MCSubtargetInfo *createHexagonMCSubtargetInfo(const Triple &TT, StringRef CPU,
+                                              StringRef FS,
+                                              const clv2::OptionsContext &Ctx);
+MCSubtargetInfo const *getArchSubtarget(MCSubtargetInfo const *STI);
+void addArchSubtarget(MCSubtargetInfo const *STI, StringRef FS);
+unsigned GetELFFlags(const MCSubtargetInfo &STI);
 
-  llvm::ArrayRef<MCPhysReg> GetVectRegRev();
+llvm::ArrayRef<MCPhysReg> GetVectRegRev();
 
-  std::optional<unsigned> getHVXVersion(const FeatureBitset &Features);
+std::optional<unsigned> getHVXVersion(const FeatureBitset &Features);
 
-  unsigned getArchVersion(const FeatureBitset &Features);
+unsigned getArchVersion(const FeatureBitset &Features);
   } // namespace Hexagon_MC
 
 MCCodeEmitter *createHexagonMCCodeEmitter(const MCInstrInfo &MCII,

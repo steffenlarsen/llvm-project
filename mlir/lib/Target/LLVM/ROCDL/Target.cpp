@@ -300,8 +300,9 @@ mlir::ROCDL::assembleIsa(StringRef isa, StringRef targetTriple, StringRef chip,
   std::unique_ptr<llvm::MCRegisterInfo> mri(target->createMCRegInfo(triple));
   std::unique_ptr<llvm::MCAsmInfo> mai(
       target->createMCAsmInfo(*mri, triple, mcOptions));
-  std::unique_ptr<llvm::MCSubtargetInfo> sti(
-      target->createMCSubtargetInfo(triple, chip, features));
+  std::unique_ptr<llvm::MCSubtargetInfo> sti(target->createMCSubtargetInfo(
+      triple, chip, features,
+      /*Ctx=*/llvm::clv2::defaultOptionsContext()));
 
   llvm::MCContext ctx(triple, *mai, *mri, *sti, &srcMgr);
   std::unique_ptr<llvm::MCObjectFileInfo> mofi(target->createMCObjectFileInfo(

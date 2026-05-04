@@ -25,12 +25,14 @@
 #include "index/Symbol.h"
 #include "support/Logger.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Parallel.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/raw_ostream.h"
 #include <atomic>
@@ -41,41 +43,41 @@ namespace clang {
 namespace clangd {
 namespace {
 
-static llvm::cl::OptionCategory RemapCategory("clangd-remap options");
+namespace clv2 = llvm::clv2;
 
-static llvm::cl::opt<std::string> PathMappingsArg{
+static constexpr clv2::OptionCategory RemapCategory{"clangd-remap options"};
+
+static std::string PathMappingsArg;
+static std::string IndexDir;
+static unsigned NumThreads = 0;
+static Logger::Level LogLevel = Logger::Info;
+
+inline constexpr clv2::OptionInfo<std::string> PathMappingsArgOpt{
     "path-mappings",
-    llvm::cl::cat(RemapCategory),
-    llvm::cl::desc(
-        "List of path mappings applied to every string in each background "
-        "index shard. Format: /old/path=/new/path[,/old2=/new2,...]"),
-    llvm::cl::Required,
-};
+    "List of path mappings applied to every string in each background "
+    "index shard. Format: /old/path=/new/path[,/old2=/new2,...]",
+    clv2::Required, clv2::cat(RemapCategory)};
 
-static llvm::cl::opt<std::string> IndexDir{
-    llvm::cl::desc("<index-dir>"),
-    llvm::cl::cat(RemapCategory),
-    llvm::cl::Positional,
-    llvm::cl::Required,
-};
+inline constexpr clv2::OptionInfo<std::string> IndexDirOpt{
+    "", "<index-dir>", clv2::Positional{}, clv2::Required,
+    clv2::cat(RemapCategory)};
 
-static llvm::cl::opt<unsigned> NumThreads{
-    "j",
-    llvm::cl::cat(RemapCategory),
-    llvm::cl::desc("Number of worker threads (0 = all)"),
-    llvm::cl::init(0),
-};
+inline constexpr clv2::OptionInfo<unsigned> NumThreadsOpt{
+    "j", "Number of worker threads (0 = all)", clv2::Init{0u},
+    clv2::cat(RemapCategory)};
 
-static llvm::cl::opt<Logger::Level> LogLevel{
-    "log",
-    llvm::cl::cat(RemapCategory),
-    llvm::cl::desc("Verbosity of log messages written to stderr"),
-    llvm::cl::values(
-        clEnumValN(Logger::Error, "error", "Error messages only"),
-        clEnumValN(Logger::Info, "info", "High level execution tracing"),
-        clEnumValN(Logger::Debug, "verbose", "Low level details")),
-    llvm::cl::init(Logger::Info),
+inline constexpr clv2::EnumVal<Logger::Level> LogLevelVals[] = {
+    {"error", Logger::Error, "Error messages only"},
+    {"info", Logger::Info, "High level execution tracing"},
+    {"verbose", Logger::Debug, "Low level details"},
 };
+inline constexpr auto LogLevelOpt = clv2::makeEnumOption<Logger::Level>(
+    "log", "Verbosity of log messages written to stderr", LogLevelVals,
+    clv2::Init{Logger::Info}, clv2::cat(RemapCategory));
+
+inline constexpr clv2::OptionsRegistry<&PathMappingsArgOpt, &IndexDirOpt,
+                                       &NumThreadsOpt, &LogLevelOpt>
+    RemapReg;
 
 // Apply a path mapping to a URI or raw path string
 //
@@ -250,10 +252,21 @@ int main(int Argc, const char **Argv) {
   using namespace clang::clangd;
 
   llvm::sys::PrintStackTraceOnErrorSignal(Argv[0]);
-  llvm::cl::HideUnrelatedOptions(RemapCategory);
-  llvm::cl::ParseCommandLineOptions(Argc, Argv,
-                                    "clangd-remap: rewrite paths inside "
-                                    "background-index .idx shards\n");
+  llvm::clv2::OptionParser P;
+  P.add<&RemapReg>();
+  llvm::RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&RemapCategory});
+  auto OptsCtx = P.parse(Argc, Argv,
+                         "clangd-remap: rewrite paths inside "
+                         "background-index .idx shards\n");
+  if (!OptsCtx)
+    return 1;
+  if (const auto *O = OptsCtx->getViewPtr<&RemapReg>()) {
+    PathMappingsArg = O->get<&PathMappingsArgOpt>();
+    IndexDir = O->get<&IndexDirOpt>();
+    NumThreads = O->get<&NumThreadsOpt>();
+    LogLevel = O->get<&LogLevelOpt>();
+  }
 
   StreamLogger Logger(llvm::errs(), LogLevel);
   LoggingSession LoggingSession(Logger);
@@ -279,7 +292,7 @@ int main(int Argc, const char **Argv) {
   for (const auto &M : *Mappings)
     log("  Path mapping: {0}", M);
 
-  if (NumThreads.getValue() != 0)
+  if (NumThreads != 0)
     llvm::parallel::strategy = llvm::hardware_concurrency(NumThreads);
 
   std::atomic<unsigned> Errors{0};

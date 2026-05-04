@@ -22,24 +22,27 @@
 // and Embedded Architectures and Compilers", 8 (4),
 // <10.1145/2086696.2086706>. <hal-00647369>
 //
+#include "llvm/CodeGen/RDFLiveness.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineDominanceFrontier.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/RDFGraph.h"
-#include "llvm/CodeGen/RDFLiveness.h"
 #include "llvm/CodeGen/RDFRegisters.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/LaneBitmask.h"
 #include "llvm/MC/MCRegisterInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -52,9 +55,9 @@
 
 using namespace llvm;
 
-static cl::opt<unsigned> MaxRecNest("rdf-liveness-max-rec", cl::init(25),
-                                    cl::Hidden,
-                                    cl::desc("Maximum recursion level"));
+static unsigned getRdfLivenessMaxRec(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_RdfLivenessMaxRec>(Ctx);
+}
 
 namespace llvm::rdf {
 
@@ -303,7 +306,10 @@ NodeList Liveness::getAllReachingDefs(RegisterRef RefRR,
 std::pair<NodeSet, bool>
 Liveness::getAllReachingDefsRec(RegisterRef RefRR, NodeAddr<RefNode *> RefA,
                                 NodeSet &Visited, const NodeSet &Defs) {
-  return getAllReachingDefsRecImpl(RefRR, RefA, Visited, Defs, 0, MaxRecNest);
+  return getAllReachingDefsRecImpl(
+      RefRR, RefA, Visited, Defs, 0,
+      getRdfLivenessMaxRec(
+          DFG.getMF().getFunction().getContext().getOptionsContext()));
 }
 
 std::pair<NodeSet, bool>

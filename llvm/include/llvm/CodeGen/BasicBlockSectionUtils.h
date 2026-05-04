@@ -10,11 +10,13 @@
 #define LLVM_CODEGEN_BASICBLOCKSECTIONUTILS_H
 
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include <string>
 
 namespace llvm {
 
-extern LLVM_ABI cl::opt<std::string> BBSectionsColdTextPrefix;
+LLVM_ABI std::string
+getBBSectionsColdTextPrefix(const clv2::OptionsContext &Ctx);
 
 class MachineFunction;
 class MachineBasicBlock;

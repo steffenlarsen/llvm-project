@@ -7,10 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Core/BinaryContext.h"
+#include "bolt/Profile/BoltProfileOptionsOptInfos.h"
 #include "bolt/Profile/DataAggregator.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Testing/Support/Error.h"
 #include "gtest/gtest.h"
@@ -20,11 +21,6 @@ using namespace llvm;
 using namespace llvm::bolt;
 using namespace llvm::object;
 using namespace llvm::ELF;
-
-namespace opts {
-extern cl::opt<bool> ReadPreAggregated;
-extern cl::opt<bool> ArmSPE;
-} // namespace opts
 
 namespace llvm {
 namespace bolt {
@@ -66,13 +62,21 @@ protected:
     BC = cantFail(BinaryContext::createBinaryContext(
         ObjFile->makeTriple(), std::make_shared<orc::SymbolStringPool>(),
         ObjFile->getFileName(), nullptr, /*IsPIC*/ false,
-        DWARFContext::create(*ObjFile), {llvm::outs(), llvm::errs()}));
+        DWARFContext::create(*ObjFile), {llvm::outs(), llvm::errs()},
+        /*OptsCtx=*/nullptr));
     ASSERT_FALSE(!BC);
   }
 
   char ElfBuf[sizeof(typename ELF64LE::Ehdr)] = {};
   std::unique_ptr<ObjectFile> ObjFile;
   std::unique_ptr<BinaryContext> BC;
+  /// Set profile options on BC's default OptionsContext.
+  void setTestOpts(bool ReadPreAggregated = false, bool ArmSPE = false) {
+    auto *ProfileView =
+        BC->getOptionsContext().getViewPtr<&clv2::BoltProfileOptsReg>();
+    ProfileView->get<&clv2::BOLTPROF_ReadPreAggregated>() = ReadPreAggregated;
+    ProfileView->get<&clv2::BOLTPROF_ArmSPE>() = ArmSPE;
+  }
 
   void createTempFileWithContent(const std::string &Buffer,
                                  SmallVector<char, 256> &Path) {
@@ -115,6 +119,7 @@ protected:
 
     DataAggregator DA(Path.data());
     DA.BC = BC.get();
+    BC->HasFixedLoadAddress = false;
     DataAggregator::MMapInfo MMap;
     DA.BinaryMMapInfo.insert(std::make_pair(Pid, MMap));
 
@@ -144,7 +149,7 @@ INSTANTIATE_TEST_SUITE_P(AArch64, PerfScriptTestHelper,
 #endif
 
 TEST_P(PerfScriptTestHelper, CheckMissingEndOfLineChar) {
-  opts::ReadPreAggregated = true;
+  setTestOpts(/*ReadPreAggregated=*/true);
   std::string ErrorMessage = "expected rest of line";
   std::string Buffer =
       "PERFTEXT;BUILDIDS=32;MMAP=2DC6C0;MAIN=1388;TASK=55730;MEM=128;";
@@ -154,7 +159,7 @@ TEST_P(PerfScriptTestHelper, CheckMissingEndOfLineChar) {
 
 TEST_P(PerfScriptTestHelper, CheckMissingPerfMagicString) {
   // Checks missing/wrong "PERFTEXT" string.
-  opts::ReadPreAggregated = true;
+  setTestOpts(/*ReadPreAggregated=*/true);
   std::string ErrorMessage = "expected 'PERFTEXT' magic string";
   std::string Buffer =
       "PERF;BUILDIDS=32;MMAP=2DC6C0;MAIN=1388;TASK=55730;MEM=128;\n";
@@ -163,7 +168,7 @@ TEST_P(PerfScriptTestHelper, CheckMissingPerfMagicString) {
 }
 
 TEST_P(PerfScriptTestHelper, CheckMissingEventAndSizeContent) {
-  opts::ReadPreAggregated = true;
+  setTestOpts(/*ReadPreAggregated=*/true);
   std::string ErrorMessage = "expected type=length content";
   std::string Buffer = "PERFTEXT;BUILDID?1;\n";
 
@@ -172,7 +177,7 @@ TEST_P(PerfScriptTestHelper, CheckMissingEventAndSizeContent) {
 
 TEST_P(PerfScriptTestHelper, CheckMalformedTypes) {
   // Checks malformed type: actual: BUID, expected: BUILDID.
-  opts::ReadPreAggregated = true;
+  setTestOpts(/*ReadPreAggregated=*/true);
   std::string ErrorMessage = "supported types: BUILDID, MAIN, MMAP, TASK, MEM";
   std::string Buffer =
       "PERFTEXT;BUID=32;MMAP=2DC6C0;MAIN=1388;TASK=55730;MEM=128;\n";
@@ -182,7 +187,7 @@ TEST_P(PerfScriptTestHelper, CheckMalformedTypes) {
 
 TEST_P(PerfScriptTestHelper, CheckExpectedHexNumber) {
   // Checks expected hexadecimal number error message: BUILDIDS=32y.
-  opts::ReadPreAggregated = true;
+  setTestOpts(/*ReadPreAggregated=*/true);
   std::string ErrorMessage = "expected hexadecimal number";
   std::string Buffer =
       "PERFTEXT;BUILDIDS=32y;MMAP=2DC6C0;MAIN=1388;TASK=55730;MEM=128;\n";
@@ -192,7 +197,7 @@ TEST_P(PerfScriptTestHelper, CheckExpectedHexNumber) {
 
 TEST_P(PerfScriptTestHelper, CheckCorruptedTextProfile) {
   // Checks the sum of events length is not equal to file size.
-  opts::ReadPreAggregated = true;
+  setTestOpts(/*ReadPreAggregated=*/true);
   std::string ErrorMessage = "corrupted perfscript profile";
   std::string Buffer =
       "PERFTEXT;BUILDIDS=32;MMAP=2DC6C0;MAIN=1388;TASK=55730;MEM=128;\n";
@@ -201,8 +206,7 @@ TEST_P(PerfScriptTestHelper, CheckCorruptedTextProfile) {
 }
 
 TEST_P(PerfScriptTestHelper, ParseAndCheckFileHeader) {
-  opts::ReadPreAggregated = true;
-  opts::ArmSPE = true;
+  setTestOpts(/*ReadPreAggregated=*/true, /*ArmSPE=*/true);
   const int Pid = 1234;
   StringRef Filename = "ELF";
   std::string BuildID = formatv("{0} /example/{1}\n", Pid, Filename).str();

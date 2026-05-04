@@ -39,6 +39,8 @@ set_source_files_properties("${version_inc}"
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
 add_llvm_library(LLVMBOLTUtils
+  BoltUtilsOptionsGetters.cpp
+  BoltUtilsOptions.cpp
   CommandLineOpts.cpp
   Utils.cpp
   ${version_inc}

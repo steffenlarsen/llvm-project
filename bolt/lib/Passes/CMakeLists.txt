@@ -1,9 +1,11 @@
 add_llvm_library(LLVMBOLTPasses
+  BoltPassesOptionsGetters.cpp
   AArch64RelaxationPass.cpp
   Aligner.cpp
   AllocCombiner.cpp
   AsmDump.cpp
   BinaryPasses.cpp
+  BoltPassesOptions.cpp
   BranchLivenessUtils.cpp
   CMOVConversion.cpp
   CacheMetrics.cpp

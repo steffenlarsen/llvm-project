@@ -29,6 +29,7 @@
 //    } // namespace x
 
 #include "ChangeNamespace.h"
+#include "clang-tools-extra/ClangToolsExtraOptionsOptInfos.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/Frontend/FrontendActions.h"
 #include "clang/Frontend/TextDiagnosticPrinter.h"
@@ -36,47 +37,58 @@
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Refactoring.h"
 #include "clang/Tooling/Tooling.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/YAMLTraits.h"
 
 using namespace clang;
 using namespace llvm;
 
+static cl::OptionCategory ChangeNamespaceCategory("Change namespace.");
+
+static std::string OldNamespace;
+static std::string NewNamespace;
+static std::string FilePattern;
+static bool Inplace = false;
+static bool DumpYAML = false;
+static std::string Style = "LLVM";
+static std::string AllowedFile = "";
+
+inline constexpr clv2::OptionsRegistry<
+    &clv2::CTE_CN_OldNamespace, &clv2::CTE_CN_NewNamespace,
+    &clv2::CTE_CN_FilePattern, &clv2::CTE_CN_Inplace, &clv2::CTE_CN_DumpResult,
+    &clv2::CTE_CN_Style, &clv2::CTE_CN_AllowedFile>
+    ToolOptsReg;
+
+static void applyToolOpts(const decltype(ToolOptsReg)::ParsedOptionsT &Opts) {
+  OldNamespace = Opts.get<&clv2::CTE_CN_OldNamespace>();
+  NewNamespace = Opts.get<&clv2::CTE_CN_NewNamespace>();
+  FilePattern = Opts.get<&clv2::CTE_CN_FilePattern>();
+  Inplace = Opts.get<&clv2::CTE_CN_Inplace>();
+  DumpYAML = Opts.get<&clv2::CTE_CN_DumpResult>();
+  Style = Opts.get<&clv2::CTE_CN_Style>();
+  AllowedFile = Opts.get<&clv2::CTE_CN_AllowedFile>();
+}
+
+static void configureParser(clv2::OptionParser &P) {
+  using ParsedT = decltype(ToolOptsReg)::ParsedOptionsT;
+  auto *Storage = new ParsedT();
+  decltype(ToolOptsReg)::applyDefaultsTo(*Storage);
+  std::vector<clv2::detail::OptionEntry> Entries;
+  std::vector<clv2::detail::AliasEntry> Aliases;
+  std::vector<clv2::detail::SubCommandSpec> SubSpecs;
+  decltype(ToolOptsReg)::staticBuildInto(*Storage, Entries, Aliases, SubSpecs);
+  for (auto &E : Entries) {
+    if (!E.Cat)
+      E.Cat = &ChangeNamespaceCategory;
+    P.addDynamicEntry(std::move(E));
+  }
+  clv2::registerDynamicPostParseCallback(
+      [Storage]() { applyToolOpts(*Storage); });
+}
+
 namespace {
-
-cl::OptionCategory ChangeNamespaceCategory("Change namespace.");
-
-cl::opt<std::string> OldNamespace("old_namespace", cl::Required,
-                                  cl::desc("Old namespace."),
-                                  cl::cat(ChangeNamespaceCategory));
-
-cl::opt<std::string> NewNamespace("new_namespace", cl::Required,
-                                  cl::desc("New namespace."),
-                                  cl::cat(ChangeNamespaceCategory));
-
-cl::opt<std::string> FilePattern(
-    "file_pattern", cl::Required,
-    cl::desc("Only rename namespaces in files that match the given pattern."),
-    cl::cat(ChangeNamespaceCategory));
-
-cl::opt<bool> Inplace("i", cl::desc("Inplace edit <file>s, if specified."),
-                      cl::cat(ChangeNamespaceCategory));
-
-cl::opt<bool>
-    DumpYAML("dump_result",
-         cl::desc("Dump new file contents in YAML, if specified."),
-         cl::cat(ChangeNamespaceCategory));
-
-cl::opt<std::string> Style("style",
-                           cl::desc("The style name used for reformatting."),
-                           cl::init("LLVM"), cl::cat(ChangeNamespaceCategory));
-
-cl::opt<std::string> AllowedFile(
-    "allowed_file",
-    cl::desc("A file containing regexes of symbol names that are not expected "
-             "to be updated when changing namespaces around them."),
-    cl::init(""), cl::cat(ChangeNamespaceCategory));
 
 llvm::ErrorOr<std::vector<std::string>> GetAllowedSymbolPatterns() {
   std::vector<std::string> Patterns;
@@ -99,8 +111,8 @@ llvm::ErrorOr<std::vector<std::string>> GetAllowedSymbolPatterns() {
 
 int main(int argc, const char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
-  auto ExpectedParser =
-      tooling::CommonOptionsParser::create(argc, argv, ChangeNamespaceCategory);
+  auto ExpectedParser = tooling::CommonOptionsParser::create(
+      argc, argv, ChangeNamespaceCategory, configureParser);
   if (!ExpectedParser) {
     llvm::errs() << llvm::toString(ExpectedParser.takeError());
     return 1;

@@ -165,7 +165,8 @@ public:
         ExecutorAddr::fromPtr(registerAtExitHelper), JITSymbolFlags()};
     cantFail(JD.define(absoluteSymbols(std::move(PerJDInterposes))));
 
-    auto Ctx = std::make_unique<LLVMContext>();
+    auto Ctx =
+        std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
     auto M = std::make_unique<Module>("__standard_lib", *Ctx);
     M->setDataLayout(J.getDataLayout());
 
@@ -454,7 +455,8 @@ private:
   // Constructs an LLVM IR module containing platform runtime globals,
   // functions, and interposes.
   ThreadSafeModule createPlatformRuntimeModule() {
-    auto Ctx = std::make_unique<LLVMContext>();
+    auto Ctx =
+        std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
     auto M = std::make_unique<Module>("__standard_lib", *Ctx);
     M->setDataLayout(J.getDataLayout());
 
@@ -769,7 +771,7 @@ Error LLJITBuilderState::prepareForConstruction() {
     std::unique_ptr<TaskDispatcher> D = nullptr;
 #if LLVM_ENABLE_THREADS
     if (*SupportConcurrentCompilation) {
-      std::optional<size_t> NumThreads = std ::nullopt;
+      std::optional<size_t> NumThreads = std::nullopt;
       if (NumCompileThreads)
         NumThreads = NumCompileThreads;
       D = std::make_unique<DynamicThreadPoolTaskDispatcher>(NumThreads);

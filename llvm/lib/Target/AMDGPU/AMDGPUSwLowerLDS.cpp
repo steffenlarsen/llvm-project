@@ -105,7 +105,9 @@
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/ReplaceConstant.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizerCommon.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
@@ -117,13 +119,12 @@
 using namespace llvm;
 using namespace AMDGPU;
 
-namespace {
+static bool getAsanInstrumentLDS(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_AsanInstrumentLDS>(
+      M.getContext().getOptionsContext());
+}
 
-cl::opt<bool>
-    AsanInstrumentLDS("amdgpu-asan-instrument-lds",
-                      cl::desc("Run asan instrumentation on LDS instructions "
-                               "lowered to global memory"),
-                      cl::init(true), cl::Hidden);
+namespace {
 
 using DomTreeCallback = function_ref<DominatorTree *(Function &F)>;
 
@@ -1332,7 +1333,7 @@ bool AMDGPUSwLowerLDS::run() {
     }
   }
 
-  if (AsanInstrumentLDS) {
+  if (getAsanInstrumentLDS(M)) {
     SmallVector<InterestingMemoryOperand, 16> OperandsToInstrument;
     for (Instruction *Inst : AsanInfo.Instructions) {
       SmallVector<InterestingMemoryOperand, 1> InterestingOperands;

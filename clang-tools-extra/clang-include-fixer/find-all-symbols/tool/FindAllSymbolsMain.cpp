@@ -10,6 +10,7 @@
 #include "STLPostfixHeaderMap.h"
 #include "SymbolInfo.h"
 #include "SymbolReporter.h"
+#include "clang-tools-extra/ClangToolsExtraOptionsOptInfos.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Frontend/CompilerInstance.h"
@@ -20,7 +21,8 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
@@ -42,22 +44,40 @@ using SymbolInfo = clang::find_all_symbols::SymbolInfo;
 static cl::OptionCategory FindAllSymbolsCategory("find_all_symbols options");
 
 // CommonOptionsParser declares HelpMessage with a description of the common
-// command-line options related to the compilation database and input files.
-// It's nice to have this help message in all tools.
-static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
+// ExtraHelp is set via P.setExtraHelp() in configureParser below.
 
-// A help message for this specific tool can be added afterwards.
-static cl::extrahelp MoreHelp("\nMore help text...");
+static std::string OutputDir = ".";
+static std::string MergeDir = "";
 
-static cl::opt<std::string> OutputDir("output-dir", cl::desc(R"(
-The output directory for saving the results.)"),
-                                      cl::init("."),
-                                      cl::cat(FindAllSymbolsCategory));
+inline constexpr clv2::OptionsRegistry<&clv2::CTE_FAS_OutputDir,
+                                       &clv2::CTE_FAS_MergeDir>
+    ToolOptsReg;
 
-static cl::opt<std::string> MergeDir("merge-dir", cl::desc(R"(
-The directory for merging symbols.)"),
-                                     cl::init(""),
-                                     cl::cat(FindAllSymbolsCategory));
+static void applyToolOpts(const decltype(ToolOptsReg)::ParsedOptionsT &Opts) {
+  OutputDir = Opts.get<&clv2::CTE_FAS_OutputDir>();
+  MergeDir = Opts.get<&clv2::CTE_FAS_MergeDir>();
+}
+
+static void configureParser(clv2::OptionParser &P) {
+  using ParsedT = decltype(ToolOptsReg)::ParsedOptionsT;
+  auto *Storage = new ParsedT();
+  decltype(ToolOptsReg)::applyDefaultsTo(*Storage);
+  std::vector<clv2::detail::OptionEntry> Entries;
+  std::vector<clv2::detail::AliasEntry> Aliases;
+  std::vector<clv2::detail::SubCommandSpec> SubSpecs;
+  decltype(ToolOptsReg)::staticBuildInto(*Storage, Entries, Aliases, SubSpecs);
+  for (auto &E : Entries) {
+    if (!E.Cat)
+      E.Cat = &FindAllSymbolsCategory;
+    P.addDynamicEntry(std::move(E));
+  }
+  clv2::registerDynamicPostParseCallback(
+      [Storage]() { applyToolOpts(*Storage); });
+  std::string FullHelp = clang::tooling::CommonOptionsParser::HelpMessage;
+  FullHelp += "\nMore help text...";
+  P.setExtraHelp(FullHelp);
+}
+
 namespace clang {
 namespace find_all_symbols {
 
@@ -128,8 +148,8 @@ bool Merge(llvm::StringRef MergeDir, llvm::StringRef OutputFile) {
 } // namespace find_all_symbols
 
 int main(int argc, const char **argv) {
-  auto ExpectedParser =
-      CommonOptionsParser::create(argc, argv, FindAllSymbolsCategory);
+  auto ExpectedParser = CommonOptionsParser::create(
+      argc, argv, FindAllSymbolsCategory, configureParser);
   if (!ExpectedParser) {
     llvm::errs() << llvm::toString(ExpectedParser.takeError());
     return 1;

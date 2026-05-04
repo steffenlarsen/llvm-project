@@ -36,7 +36,7 @@ class AAResults;
 namespace objcarc {
 
 /// A handy option to enable/disable all ARC Optimizations.
-extern LLVM_ABI bool EnableARCOpts;
+LLVM_ABI bool getEnableARCOpts();
 
 /// Test if the given module looks interesting to run ARC optimization
 /// on.
@@ -174,7 +174,7 @@ inline bool IsPotentialRetainableObjPtr(const Value *Op) {
   return true;
 }
 
-LLVM_ABI bool IsPotentialRetainableObjPtr(const Value *Op, AAResults &AA);
+bool IsPotentialRetainableObjPtr(const Value *Op, AAResults &AA);
 
 /// Helper for GetARCInstKind. Determines what kind of construct CS
 /// is.

@@ -14,7 +14,9 @@
 #include "clang/Tooling/ASTDiff/ASTDiff.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 
 using namespace llvm;
 using namespace clang;
@@ -22,53 +24,74 @@ using namespace clang::tooling;
 
 static cl::OptionCategory ClangDiffCategory("clang-diff options");
 
-static cl::opt<bool>
-    ASTDump("ast-dump",
-            cl::desc("Print the internal representation of the AST."),
-            cl::init(false), cl::cat(ClangDiffCategory));
+// --- constexpr option descriptors ---
+inline constexpr clv2::OptionInfo<bool> CDASTDumpOpt{
+    "ast-dump", "Print the internal representation of the AST."};
 
-static cl::opt<bool> ASTDumpJson(
-    "ast-dump-json",
-    cl::desc("Print the internal representation of the AST as JSON."),
-    cl::init(false), cl::cat(ClangDiffCategory));
+inline constexpr clv2::OptionInfo<bool> CDASTDumpJsonOpt{
+    "ast-dump-json", "Print the internal representation of the AST as JSON."};
 
-static cl::opt<bool> PrintMatches("dump-matches",
-                                  cl::desc("Print the matched nodes."),
-                                  cl::init(false), cl::cat(ClangDiffCategory));
+inline constexpr clv2::OptionInfo<bool> CDPrintMatchesOpt{
+    "dump-matches", "Print the matched nodes."};
 
-static cl::opt<bool> HtmlDiff("html",
-                              cl::desc("Output a side-by-side diff in HTML."),
-                              cl::init(false), cl::cat(ClangDiffCategory));
+inline constexpr clv2::OptionInfo<bool> CDHtmlDiffOpt{
+    "html", "Output a side-by-side diff in HTML."};
 
-static cl::opt<std::string> SourcePath(cl::Positional, cl::desc("<source>"),
-                                       cl::Required,
-                                       cl::cat(ClangDiffCategory));
+inline constexpr clv2::OptionInfo<std::string> CDSourcePathOpt{
+    "", "<source>", clv2::Positional{}, clv2::Required};
 
-static cl::opt<std::string> DestinationPath(cl::Positional,
-                                            cl::desc("<destination>"),
-                                            cl::Optional,
-                                            cl::cat(ClangDiffCategory));
+inline constexpr clv2::OptionInfo<std::string> CDDestinationPathOpt{
+    "", "<destination>", clv2::Positional{}};
 
-static cl::opt<std::string> StopAfter("stop-diff-after",
-                                      cl::desc("<topdown|bottomup>"),
-                                      cl::Optional, cl::init(""),
-                                      cl::cat(ClangDiffCategory));
+inline constexpr clv2::OptionInfo<std::string> CDStopAfterOpt{
+    "stop-diff-after", "<topdown|bottomup>"};
 
-static cl::opt<int> MaxSize("s", cl::desc("<maxsize>"), cl::Optional,
-                            cl::init(-1), cl::cat(ClangDiffCategory));
+inline constexpr clv2::OptionInfo<int> CDMaxSizeOpt{"s", "<maxsize>",
+                                                    clv2::Init{-1}};
 
-static cl::opt<std::string> BuildPath("p", cl::desc("Build path"), cl::init(""),
-                                      cl::Optional, cl::cat(ClangDiffCategory));
+inline constexpr clv2::OptionInfo<std::string> CDBuildPathOpt{"p",
+                                                              "Build path"};
 
-static cl::list<std::string> ArgsAfter(
-    "extra-arg",
-    cl::desc("Additional argument to append to the compiler command line"),
-    cl::cat(ClangDiffCategory));
+inline constexpr clv2::ListOptionInfo<std::string> CDArgsAfterOpt{
+    "extra-arg", "Additional argument to append to the compiler command line"};
 
-static cl::list<std::string> ArgsBefore(
+inline constexpr clv2::ListOptionInfo<std::string> CDArgsBeforeOpt{
     "extra-arg-before",
-    cl::desc("Additional argument to prepend to the compiler command line"),
-    cl::cat(ClangDiffCategory));
+    "Additional argument to prepend to the compiler command line"};
+
+inline constexpr clv2::OptionsRegistry<
+    &CDASTDumpOpt, &CDASTDumpJsonOpt, &CDPrintMatchesOpt, &CDHtmlDiffOpt,
+    &CDSourcePathOpt, &CDDestinationPathOpt, &CDStopAfterOpt, &CDMaxSizeOpt,
+    &CDBuildPathOpt, &CDArgsAfterOpt, &CDArgsBeforeOpt>
+    ClangDiffReg;
+
+// Parsed values - populated after parsing.
+static bool ASTDump = false;
+static bool ASTDumpJson = false;
+static bool PrintMatches = false;
+static bool HtmlDiff = false;
+static std::string SourcePath;
+static std::string DestinationPath;
+static std::string StopAfter;
+static int MaxSize = -1;
+static std::string BuildPath;
+static std::vector<std::string> ArgsAfter;
+static std::vector<std::string> ArgsBefore;
+
+static void
+applyClangDiffOpts(const decltype(ClangDiffReg)::ParsedOptionsT &Opts) {
+  ASTDump = Opts.get<&CDASTDumpOpt>();
+  ASTDumpJson = Opts.get<&CDASTDumpJsonOpt>();
+  PrintMatches = Opts.get<&CDPrintMatchesOpt>();
+  HtmlDiff = Opts.get<&CDHtmlDiffOpt>();
+  SourcePath = Opts.get<&CDSourcePathOpt>();
+  DestinationPath = Opts.get<&CDDestinationPathOpt>();
+  StopAfter = Opts.get<&CDStopAfterOpt>();
+  MaxSize = Opts.get<&CDMaxSizeOpt>();
+  BuildPath = Opts.get<&CDBuildPathOpt>();
+  ArgsAfter = Opts.get<&CDArgsAfterOpt>();
+  ArgsBefore = Opts.get<&CDArgsBeforeOpt>();
+}
 
 static void addExtraArgs(std::unique_ptr<CompilationDatabase> &Compilations) {
   if (!Compilations)
@@ -446,11 +469,27 @@ int main(int argc, const char **argv) {
       FixedCompilationDatabase::loadFromCommandLine(argc, argv, ErrorMessage);
   if (!CommonCompilations && !ErrorMessage.empty())
     llvm::errs() << ErrorMessage;
-  cl::HideUnrelatedOptions(ClangDiffCategory);
-  if (!cl::ParseCommandLineOptions(argc, argv)) {
-    cl::PrintOptionValues();
-    return 1;
+  clv2::OptionParser P;
+  {
+    using ParsedT = decltype(ClangDiffReg)::ParsedOptionsT;
+    auto *Storage = new ParsedT();
+    decltype(ClangDiffReg)::applyDefaultsTo(*Storage);
+    std::vector<clv2::detail::OptionEntry> Entries;
+    std::vector<clv2::detail::AliasEntry> Aliases;
+    std::vector<clv2::detail::SubCommandSpec> SubSpecs;
+    decltype(ClangDiffReg)::staticBuildInto(*Storage, Entries, Aliases,
+                                            SubSpecs);
+    for (auto &E : Entries) {
+      if (!E.Cat)
+        E.Cat = &ClangDiffCategory;
+      P.addDynamicEntry(std::move(E));
+    }
+    clv2::registerDynamicPostParseCallback(
+        [Storage]() { applyClangDiffOpts(*Storage); });
   }
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&ClangDiffCategory});
+  P.parse(argc, argv);
 
   addExtraArgs(CommonCompilations);
 

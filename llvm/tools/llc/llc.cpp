@@ -16,20 +16,42 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/AnalysisOptionsRegistration.h"
 #include "llvm/Analysis/RuntimeLibcallInfo.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/AsmParser/AsmParserOptionsRegistration.h"
+#include "llvm/Bitcode/BitcodeOptionsRegistration.h"
+#include "llvm/CGData/CGDataOptionsRegistration.h"
+#include "llvm/CodeGen/CodeGenOptionsRegistration.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/Config/Targets.h"
+#if LLVM_HAS_ARC_TARGET
+#include "llvm/Target/ARC/ARCOptionsOptInfos.h"
+#endif
+#if LLVM_HAS_CSKY_TARGET
+#include "llvm/Target/CSKY/CSKYOptionsOptInfos.h"
+#endif
+#if LLVM_HAS_M68K_TARGET
+#include "llvm/Target/M68k/M68kOptionsOptInfos.h"
+#endif
 #include "llvm/CodeGen/CommandFlags.h"
+#include "llvm/CodeGen/CommandFlagsOptInfos.h"
+#include "llvm/CodeGen/GlobalISel/RegBankSelect.h"
 #include "llvm/CodeGen/LinkAllAsmWriterComponents.h"
 #include "llvm/CodeGen/LinkAllCodegenComponents.h"
 #include "llvm/CodeGen/MIRParser/MIRParser.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
+#include "llvm/CodeGen/MachineScheduler.h"
+#include "llvm/CodeGen/SelectionDAGISel.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/Frontend/OpenMP/OpenMPOptionsRegistration.h"
 #include "llvm/IR/AutoUpgrade.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/DiagnosticPrinter.h"
+#include "llvm/IR/IROptionsRegistration.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LLVMRemarkStreamer.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -37,261 +59,353 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/LTO/LTOOptionsRegistration.h"
+#include "llvm/MC/MCOptionsRegistration.h"
 #include "llvm/MC/MCTargetOptionsCommandFlags.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Object/ObjectOptionsRegistration.h"
 #include "llvm/Pass.h"
+#include "llvm/Passes/PassesOptionsOptInfos.h"
+#include "llvm/Passes/PassesOptionsRegistration.h"
 #include "llvm/Plugins/PassPlugin.h"
-#include "llvm/Remarks/HotnessThresholdParser.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/ProfileData/ProfileDataOptionsRegistration.h"
+#include "llvm/Remarks/RemarksOptionsRegistration.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/PGOOptions.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoader.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/SupportOptions.h"
+#include "llvm/Support/SupportOptionsOptInfos.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/WithColor.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetOptionsRegistration.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/SubtargetFeature.h"
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombineOptionsRegistration.h"
+#include "llvm/Transforms/Coroutines/CoroutinesOptionsRegistration.h"
+#include "llvm/Transforms/IPO/IPOOptionsRegistration.h"
+#include "llvm/Transforms/InstCombine/InstCombineOptionsRegistration.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptionsRegistration.h"
+#include "llvm/Transforms/ObjCARC/ObjCARCOptionsRegistration.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsRegistration.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/UtilsOptionsRegistration.h"
+#include "llvm/Transforms/Vectorize/VectorizeOptions.h"
+#include "llvm/Transforms/Vectorize/VectorizeOptionsRegistration.h"
 #include <cassert>
 #include <memory>
 #include <optional>
 using namespace llvm;
+using namespace llvm::clv2;
 
-static codegen::RegisterCodeGenFlags CGF;
-static codegen::RegisterMTuneFlag MTF;
-static codegen::RegisterSaveStatsFlag SSF;
+//===----------------------------------------------------------------------===//
+// llc-local option declarations
+//===----------------------------------------------------------------------===//
 
-// General options for llc.  Other pass-specific options are specified
-// within the corresponding llc passes, and target-specific options
-// and back-end code generation options are specified with the target machine.
-//
-static cl::opt<std::string>
-    InputFilename(cl::Positional, cl::desc("<input bitcode>"), cl::init("-"));
+inline constexpr OptionInfo<std::string> InputFilenameOpt{
+    "", "<input bitcode>", Positional{}, Init{"-"}};
 
-static cl::list<std::string>
-    InstPrinterOptions("M", cl::desc("InstPrinter options"));
+inline constexpr ListOptionInfo<std::string> InstPrinterOptionsOpt{
+    "M", "InstPrinter options", Hidden};
 
-static cl::opt<std::string>
-    InputLanguage("x", cl::desc("Input language ('ir' or 'mir')"));
+inline constexpr OptionInfo<std::string> InputLanguageOpt{
+    "x", "Input language ('ir' or 'mir')"};
 
-static cl::opt<std::string> OutputFilename("o", cl::desc("Output filename"),
-                                           cl::value_desc("filename"));
+inline constexpr OptionInfo<std::string> OutputFilenameOpt{
+    "o", "Output filename", value_desc("filename")};
 
-static cl::opt<std::string>
-    SplitDwarfOutputFile("split-dwarf-output", cl::desc(".dwo output filename"),
-                         cl::value_desc("filename"));
+inline constexpr OptionInfo<std::string> SplitDwarfOutputFileOpt{
+    "split-dwarf-output", ".dwo output filename", value_desc("filename")};
 
-static cl::opt<unsigned>
-    TimeCompilations("time-compilations", cl::Hidden, cl::init(1u),
-                     cl::value_desc("N"),
-                     cl::desc("Repeat compilation N times for timing"));
+inline constexpr OptionInfo<unsigned> TimeCompilationsOpt{
+    "time-compilations", "Repeat compilation N times for timing",
+    value_desc("N"), Init{1u}, Hidden};
 
-static cl::opt<bool> TimeTrace("time-trace", cl::desc("Record time trace"));
+inline constexpr OptionInfo<bool> TimeTraceOpt{"time-trace",
+                                               "Record time trace"};
 
-static cl::opt<unsigned> TimeTraceGranularity(
+inline constexpr OptionInfo<unsigned> TimeTraceGranularityOpt{
     "time-trace-granularity",
-    cl::desc(
-        "Minimum time granularity (in microseconds) traced by time profiler"),
-    cl::init(500), cl::Hidden);
+    "Minimum time granularity (in microseconds) traced by time profiler",
+    Init{500u}, Hidden};
 
-static cl::opt<std::string>
-    TimeTraceFile("time-trace-file",
-                  cl::desc("Specify time trace file destination"),
-                  cl::value_desc("filename"));
+inline constexpr OptionInfo<std::string> TimeTraceFileOpt{
+    "time-trace-file", "Specify time trace file destination",
+    value_desc("filename")};
 
-static cl::opt<std::string>
-    BinutilsVersion("binutils-version", cl::Hidden,
-                    cl::desc("Produced object files can use all ELF features "
-                             "supported by this binutils version and newer."
-                             "If -no-integrated-as is specified, the generated "
-                             "assembly will consider GNU as support."
-                             "'none' means that all ELF features can be used, "
-                             "regardless of binutils support"));
+inline constexpr OptionInfo<std::string> BinutilsVersionOpt{
+    "binutils-version",
+    "Produced object files can use all ELF features supported by this "
+    "binutils version and newer. If -no-integrated-as is specified, the "
+    "generated assembly will consider GNU as support. 'none' means that all "
+    "ELF features can be used, regardless of binutils support",
+    Hidden};
 
-static cl::opt<bool>
-    PreserveComments("preserve-as-comments", cl::Hidden,
-                     cl::desc("Preserve Comments in outputted assembly"),
-                     cl::init(true));
+inline constexpr OptionInfo<bool> PreserveCommentsOpt{
+    "preserve-as-comments", "Preserve Comments in outputted assembly",
+    Init{true}, Hidden};
 
-// Determine optimization level.
-static cl::opt<char>
-    OptLevel("O",
-             cl::desc("Optimization level. [-O0, -O1, -O2, or -O3] "
-                      "(default = '-O2')"),
-             cl::Prefix, cl::init('2'));
+// -O<level>: optimization level, parsed as a string with PrefixFormat.
+inline constexpr OptionInfo<std::string> OptLevelOpt{
+    "O", "Optimization level. [-O0, -O1, -O2, or -O3] (default = '-O2')",
+    PrefixFormat, value_desc("char"), Init{"2"}};
 
-static cl::opt<std::string>
-    TargetTriple("mtriple", cl::desc("Override target triple for module"));
+inline constexpr OptionInfo<std::string> TargetTripleOpt{
+    "mtriple", "Override target triple for module"};
 
-static cl::opt<std::string> SplitDwarfFile(
+inline constexpr OptionInfo<std::string> SplitDwarfFileOpt{
     "split-dwarf-file",
-    cl::desc(
-        "Specify the name of the .dwo file to encode in the DWARF output"));
+    "Specify the name of the .dwo file to encode in the DWARF output"};
 
-static cl::opt<bool> NoVerify("disable-verify", cl::Hidden,
-                              cl::desc("Do not verify input module"));
+inline constexpr OptionInfo<bool> NoVerifyOpt{
+    "disable-verify", "Do not verify input module", Hidden};
 
-static cl::opt<bool> VerifyEach("verify-each",
-                                cl::desc("Verify after each transform"));
+inline constexpr OptionInfo<bool> VerifyEachOpt{"verify-each",
+                                                "Verify after each transform"};
 
-static cl::opt<bool>
-    DisableSimplifyLibCalls("disable-simplify-libcalls",
-                            cl::desc("Disable simplify-libcalls"));
+inline constexpr OptionInfo<bool> DisableSimplifyLibCallsOpt{
+    "disable-simplify-libcalls", "Disable simplify-libcalls"};
 
-static cl::opt<bool> ShowMCEncoding("show-mc-encoding", cl::Hidden,
-                                    cl::desc("Show encoding in .s output"));
+inline constexpr OptionInfo<bool> ShowMCEncodingOpt{
+    "show-mc-encoding", "Show encoding in .s output", Hidden};
 
-static cl::opt<unsigned>
-    OutputAsmVariant("output-asm-variant",
-                     cl::desc("Syntax variant to use for output printing"));
+inline constexpr OptionInfo<unsigned> OutputAsmVariantOpt{
+    "output-asm-variant", "Syntax variant to use for output printing"};
 
-static cl::opt<bool>
-    DwarfDirectory("dwarf-directory", cl::Hidden,
-                   cl::desc("Use .file directives with an explicit directory"),
-                   cl::init(true));
+inline constexpr OptionInfo<bool> DwarfDirectoryOpt{
+    "dwarf-directory", "Use .file directives with an explicit directory",
+    Init{true}, Hidden};
 
-static cl::opt<bool> AsmVerbose("asm-verbose",
-                                cl::desc("Add comments to directives."),
-                                cl::init(true));
+inline constexpr OptionInfo<bool> AsmVerboseOpt{
+    "asm-verbose", "Add comments to directives.", Init{true}};
 
-static cl::opt<bool>
-    CompileTwice("compile-twice", cl::Hidden,
-                 cl::desc("Run everything twice, re-using the same pass "
-                          "manager and verify the result is the same."),
-                 cl::init(false));
+inline constexpr OptionInfo<bool> CompileTwiceOpt{
+    "compile-twice",
+    "Run everything twice, re-using the same pass manager and verify the "
+    "result is the same.",
+    Init{false}, Hidden};
 
-static cl::opt<bool> DiscardValueNames(
-    "discard-value-names",
-    cl::desc("Discard names from Value (other than GlobalValue)."),
-    cl::init(false), cl::Hidden);
+inline constexpr OptionInfo<bool> DiscardValueNamesOpt{
+    "discard-value-names", "Discard names from Value (other than GlobalValue).",
+    Init{false}, Hidden};
 
-static cl::opt<bool>
-    PrintMIR2VecVocab("print-mir2vec-vocab", cl::Hidden,
-                      cl::desc("Print MIR2Vec vocabulary contents"),
-                      cl::init(false));
+inline constexpr OptionInfo<bool> PrintMIR2VecVocabOpt{
+    "print-mir2vec-vocab", "Print MIR2Vec vocabulary contents", Init{false},
+    Hidden};
 
-static cl::opt<bool>
-    PrintMIR2Vec("print-mir2vec", cl::Hidden,
-                 cl::desc("Print MIR2Vec embeddings for functions"),
-                 cl::init(false));
+inline constexpr OptionInfo<bool> PrintMIR2VecOpt{
+    "print-mir2vec", "Print MIR2Vec embeddings for functions", Init{false},
+    Hidden};
 
-static cl::list<std::string> IncludeDirs("I", cl::desc("include search path"));
+inline constexpr ListOptionInfo<std::string> IncludeDirsOpt{
+    "I", "include search path"};
 
-static cl::opt<bool> RemarksWithHotness(
+inline constexpr OptionInfo<bool> RemarksWithHotnessOpt{
     "pass-remarks-with-hotness",
-    cl::desc("With PGO, include profile count in optimization remarks"),
-    cl::Hidden);
+    "With PGO, include profile count in optimization remarks", Hidden};
 
-static cl::opt<std::optional<uint64_t>, false, remarks::HotnessThresholdParser>
-    RemarksHotnessThreshold(
-        "pass-remarks-hotness-threshold",
-        cl::desc("Minimum profile count required for "
-                 "an optimization remark to be output. "
-                 "Use 'auto' to apply the threshold from profile summary."),
-        cl::value_desc("N or 'auto'"), cl::init(0), cl::Hidden);
+// RemarksHotnessThreshold: 'N or auto' — stored as string, parsed manually.
+inline constexpr OptionInfo<std::string> RemarksHotnessThresholdOpt{
+    "pass-remarks-hotness-threshold",
+    "Minimum profile count required for an optimization remark to be output. "
+    "Use 'auto' to apply the threshold from profile summary.",
+    value_desc("N or 'auto'"), Hidden};
 
-static cl::opt<std::string>
-    RemarksFilename("pass-remarks-output",
-                    cl::desc("Output filename for pass remarks"),
-                    cl::value_desc("filename"));
+inline constexpr OptionInfo<std::string> RemarksFilenameOpt{
+    "pass-remarks-output", "Output filename for pass remarks",
+    value_desc("filename")};
 
-static cl::opt<std::string>
-    RemarksPasses("pass-remarks-filter",
-                  cl::desc("Only record optimization remarks from passes whose "
-                           "names match the given regular expression"),
-                  cl::value_desc("regex"));
+inline constexpr OptionInfo<std::string> RemarksPassesOpt{
+    "pass-remarks-filter",
+    "Only record optimization remarks from passes whose names match the given "
+    "regular expression",
+    value_desc("regex")};
 
-static cl::opt<std::string> RemarksFormat(
+inline constexpr OptionInfo<std::string> RemarksFormatOpt{
     "pass-remarks-format",
-    cl::desc("The format used for serializing remarks (default: YAML)"),
-    cl::value_desc("format"), cl::init("yaml"));
+    "The format used for serializing remarks (default: YAML)",
+    value_desc("format"), Init{"yaml"}};
 
-static cl::list<std::string> PassPlugins("load-pass-plugin",
-                                         cl::desc("Load plugin library"));
+inline constexpr ListOptionInfo<std::string> PassPluginsOpt{
+    "load-pass-plugin", "Load plugin library"};
 
-static cl::opt<bool> EnableNewPassManager(
-    "enable-new-pm", cl::desc("Enable the new pass manager"), cl::init(false));
+inline constexpr OptionInfo<bool> EnableNewPassManagerOpt{
+    "enable-new-pm", "Enable the new pass manager", Init{false}};
 
-// This flag specifies a textual description of the optimization pass pipeline
-// to run over the module. This flag switches opt to use the new pass manager
-// infrastructure, completely disabling all of the flags specific to the old
-// pass management.
-static cl::opt<std::string> PassPipeline(
+inline constexpr OptionInfo<std::string> PassPipelineOpt{
     "passes",
-    cl::desc(
-        "A textual description of the pass pipeline. To have analysis passes "
-        "available before a certain pass, add 'require<foo-analysis>'."));
-static cl::alias PassPipeline2("p", cl::aliasopt(PassPipeline),
-                               cl::desc("Alias for -passes"));
+    "A textual description of the pass pipeline. To have analysis passes "
+    "available before a certain pass, add 'require<foo-analysis>'."};
+
+inline constexpr AliasInfo PassPipelineAliasOpt{"p", "passes"};
+
+// -run-pass: each occurrence adds a pass name.  Multiple -run-pass flags OR
+// a comma-separated list on one flag are both accepted.
+inline constexpr ListOptionInfo<std::string> RunPassOpt{
+    "run-pass", "Run compiler only for specified passes (comma separated list)",
+    value_desc("pass-name"), CommaSeparated};
+
+// PGO kind option. Must use an enum type (not int) for makeEnumOption<>.
+enum class PGOKindEnum { NoPGO = 0, SampleUsePipeline = 1 };
+inline constexpr EnumVal<PGOKindEnum> PGOKindVals[] = {
+    {"nopgo", PGOKindEnum::NoPGO, "Do not use PGO."},
+    {"pgo-sample-use-pipeline", PGOKindEnum::SampleUsePipeline,
+     "Use sampled profile to guide PGO."},
+};
+inline constexpr auto PGOKindFlagOpt = makeEnumOption<PGOKindEnum>(
+    "pgo-kind", "The kind of profile guided optimization", PGOKindVals, Hidden,
+    Init{PGOKindEnum::NoPGO});
+
+//===----------------------------------------------------------------------===//
+// TPC-level options (passed via setTPCValues())
+//===----------------------------------------------------------------------===//
+
+// start-after, start-before, stop-after and stop-before are declared in
+// CodeGenPassOptions.td (CGPassSched2Reg); llc reads them from the context
+// below and forwards them into the override.
+//
+// verify-machineinstrs, fast-isel and global-isel are declared there too, but
+// TargetPassConfig overlays those onto the override itself, so llc must not
+// forward them.  Declaring any of these a second time here would put the same
+// CLI name in two registries, and the copy that loses is silently never set.
+
+//===----------------------------------------------------------------------===//
+// MC_* option descriptors are provided by MCOptionsOptInfos.h (MCOptsReg).
+
+//===----------------------------------------------------------------------===//
+// NewPMDriver options
+//===----------------------------------------------------------------------===//
+
+// Register allocator selection for the new pass manager.
+inline constexpr EnumVal<RegAllocType> NPM_RegAllocVals[] = {
+    {"default", RegAllocType::Default, "Default register allocator"},
+    {"pbqp", RegAllocType::PBQP, "PBQP register allocator"},
+    {"fast", RegAllocType::Fast, "Fast register allocator"},
+    {"basic", RegAllocType::Basic, "Basic register allocator"},
+    {"greedy", RegAllocType::Greedy, "Greedy register allocator"},
+};
+inline constexpr auto NPM_RegAlloc = makeEnumOption<RegAllocType>(
+    "regalloc-npm", "Register allocator to use for new pass manager",
+    NPM_RegAllocVals, Hidden, Init{RegAllocType::Unset});
+
+inline constexpr OptionInfo<bool> NPM_DebugPM{
+    "debug-pass-manager", "Print pass management debugging information",
+    Hidden};
+
+// print-pipeline-passes is declared in PassesOptions.td (PassesOptsReg) and
+// read from the context below.
+
+//===----------------------------------------------------------------------===//
+// Registry
+//===----------------------------------------------------------------------===//
+
+// Tool-only options (including MC and NewPM flags that don't have shared
+// library registries yet).
+inline constexpr OptionsRegistry<
+    &InputFilenameOpt, &InstPrinterOptionsOpt, &InputLanguageOpt,
+    &OutputFilenameOpt, &SplitDwarfOutputFileOpt, &TimeCompilationsOpt,
+    &TimeTraceOpt, &TimeTraceGranularityOpt, &TimeTraceFileOpt,
+    &BinutilsVersionOpt, &PreserveCommentsOpt, &OptLevelOpt, &TargetTripleOpt,
+    &SplitDwarfFileOpt, &NoVerifyOpt, &VerifyEachOpt,
+    &DisableSimplifyLibCallsOpt, &ShowMCEncodingOpt, &OutputAsmVariantOpt,
+    &DwarfDirectoryOpt, &AsmVerboseOpt, &CompileTwiceOpt, &DiscardValueNamesOpt,
+    &PrintMIR2VecVocabOpt, &PrintMIR2VecOpt, &IncludeDirsOpt,
+    &RemarksWithHotnessOpt, &RemarksHotnessThresholdOpt, &RemarksFilenameOpt,
+    &RemarksPassesOpt, &RemarksFormatOpt, &PassPluginsOpt,
+    &EnableNewPassManagerOpt, &PassPipelineOpt, &PassPipelineAliasOpt,
+    &RunPassOpt, &PGOKindFlagOpt,
+    // NewPM driver options
+    &NPM_RegAlloc, &NPM_DebugPM>
+    LLCToolReg;
+
+using LLCToolOpts = decltype(LLCToolReg)::ParsedOptionsT;
+
+// Registries parsed by this tool, with their bridge functions.
+static void configureLLCRegistries(clv2::OptionParser &P) {
+  P.add<&LLCToolReg>();
+  registerCGOptsOptions(P);
+  registerMCOptsOptions(P);
+  P.add<&SupportOptsReg, support::applySupportOptions>();
+  registerRemarksOptsOptions(P);
+  registerObjectOptsOptions(P);
+  registerAsmParserOptsOptions(P);
+  registerPassesOptsOptions(P);
+  registerIROptsOptions(P);
+  registerScalarOptsOptions(P);
+  registerAnalysisOptsOptions(P);
+  registerIPOOptsOptions(P);
+  registerVectorizeOptsOptions(P);
+  registerTransformUtilsOptsOptions(P);
+  registerInstrumentationOptsOptions(P);
+  registerBitcodeOptsOptions(P);
+  registerLTOOptsOptions(P);
+  registerProfileDataOptsOptions(P);
+  registerInstCombineOptsOptions(P);
+  registerAggressiveInstCombineOptsOptions(P);
+  registerCoroutinesOptsOptions(P);
+  registerObjCARCOptsOptions(P);
+  registerCGPassAsmPrintOptions(P);
+  registerCGPassCore1Options(P);
+  registerCGPassCore2Options(P);
+  registerCGPassGISelOptions(P);
+  registerCGPassMachine1Options(P);
+  registerCGPassMachine2Options(P);
+  registerCGPassAllocOptions(P);
+  registerCGPassSched1Options(P);
+  registerCGPassSched2Options(P);
+  registerCGPassSelDAGOptions(P);
+  registerCGDataOptsOptions(P);
+  registerOMPOptsOptions(P);
+#if LLVM_HAS_ARC_TARGET
+  P.add<&clv2::ARCOptsReg>();
+#endif
+#if LLVM_HAS_CSKY_TARGET
+  P.add<&clv2::CSKYOptsReg>();
+#endif
+#if LLVM_HAS_M68K_TARGET
+  P.add<&clv2::M68kOptsReg>();
+#endif
+  registerX86Options(P);
+  registerAArch64Options(P);
+  registerAMDGPUOptionsWithBridge(P);
+  registerARMOptions(P);
+  registerHexagonOptions(P);
+  registerRISCVOptions(P);
+  registerPowerPCOptions(P);
+  registerMipsOptions(P);
+  registerSystemZOptions(P);
+  registerSparcOptions(P);
+  registerWebAssemblyOptions(P);
+  registerLoongArchOptions(P);
+  registerNVPTXOptions(P);
+  registerLanaiOptions(P);
+  registerBPFOptions(P);
+  registerSPIRVOptions(P);
+  registerMSP430Options(P);
+  registerXCoreOptions(P);
+}
+
+//===----------------------------------------------------------------------===//
+// Helpers
+//===----------------------------------------------------------------------===//
 
 static std::vector<std::string> &getRunPassNames() {
   static std::vector<std::string> RunPassNames;
   return RunPassNames;
 }
-
-namespace {
-struct RunPassOption {
-  void operator=(const std::string &Val) const {
-    if (Val.empty())
-      return;
-    SmallVector<StringRef, 8> PassNames;
-    StringRef(Val).split(PassNames, ',', -1, false);
-    for (auto PassName : PassNames)
-      getRunPassNames().push_back(std::string(PassName));
-  }
-};
-} // namespace
-
-static RunPassOption RunPassOpt;
-
-static cl::opt<RunPassOption, true, cl::parser<std::string>> RunPass(
-    "run-pass",
-    cl::desc("Run compiler only for specified passes (comma separated list)"),
-    cl::value_desc("pass-name"), cl::location(RunPassOpt));
-
-// PGO command line options
-enum PGOKind {
-  NoPGO,
-  SampleUse,
-};
-
-static cl::opt<PGOKind>
-    PGOKindFlag("pgo-kind", cl::init(NoPGO), cl::Hidden,
-                cl::desc("The kind of profile guided optimization"),
-                cl::values(clEnumValN(NoPGO, "nopgo", "Do not use PGO."),
-                           clEnumValN(SampleUse, "pgo-sample-use-pipeline",
-                                      "Use sampled profile to guide PGO.")));
-
-// Function to set PGO options on TargetMachine based on command line flags.
-static void setPGOOptions(TargetMachine &TM) {
-  std::optional<PGOOptions> PGOOpt;
-
-  switch (PGOKindFlag) {
-  case SampleUse:
-    // Use default values for other PGOOptions parameters. This parameter
-    // is used to test that PGO data is preserved at -O0.
-    PGOOpt = PGOOptions("", "", "", "", PGOOptions::SampleUse,
-                        PGOOptions::NoCSAction);
-    break;
-  case NoPGO:
-    PGOOpt = std::nullopt;
-    break;
-  }
-
-  if (PGOOpt)
-    TM.setPGOOption(PGOOpt);
-}
-
-static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &,
-                         LLVMContext &Context, std::string &OutputFilename);
 
 [[noreturn]] static void reportError(Twine Msg, StringRef Filename = "") {
   SmallString<256> Prefix;
@@ -311,13 +425,19 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &,
   llvm_unreachable("reportError() should not return");
 }
 
-static std::unique_ptr<ToolOutputFile> GetOutputStream(Triple::OSType OS) {
-  // If we don't yet have an output filename, make one.
+static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &,
+                         LLVMContext &Context, std::string &OutFilename,
+                         const LLCToolOpts *Opts);
+
+static std::unique_ptr<ToolOutputFile>
+GetOutputStream(Triple::OSType OS, const LLCToolOpts *Opts,
+                const clv2::OptionsContext &Ctx) {
+  std::string InputFilename = Opts->get<&InputFilenameOpt>();
+  std::string OutputFilename = Opts->get<&OutputFilenameOpt>();
   if (OutputFilename.empty()) {
     if (InputFilename == "-")
       OutputFilename = "-";
     else {
-      // If InputFilename ends in .bc or .ll, remove it.
       StringRef IFN = InputFilename;
       if (IFN.ends_with(".bc") || IFN.ends_with(".ll"))
         OutputFilename = std::string(IFN.drop_back(3));
@@ -326,7 +446,7 @@ static std::unique_ptr<ToolOutputFile> GetOutputStream(Triple::OSType OS) {
       else
         OutputFilename = std::string(IFN);
 
-      switch (codegen::getFileType()) {
+      switch (codegen::getFileType(Ctx)) {
       case CodeGenFileType::AssemblyFile:
         OutputFilename += ".s";
         break;
@@ -343,9 +463,8 @@ static std::unique_ptr<ToolOutputFile> GetOutputStream(Triple::OSType OS) {
     }
   }
 
-  // Decide if we need "binary" output.
   bool Binary = false;
-  switch (codegen::getFileType()) {
+  switch (codegen::getFileType(Ctx)) {
   case CodeGenFileType::AssemblyFile:
     break;
   case CodeGenFileType::ObjectFile:
@@ -354,7 +473,6 @@ static std::unique_ptr<ToolOutputFile> GetOutputStream(Triple::OSType OS) {
     break;
   }
 
-  // Open the file.
   std::error_code EC;
   sys::fs::OpenFlags OpenFlags = sys::fs::OF_None;
   if (!Binary)
@@ -365,10 +483,25 @@ static std::unique_ptr<ToolOutputFile> GetOutputStream(Triple::OSType OS) {
   return FDOut;
 }
 
-// main - Entry point for the llc compiler.
-//
+// Function to set PGO options on TargetMachine based on parsed flags.
+static void setPGOOptions(TargetMachine &TM, const LLCToolOpts *Opts) {
+  std::optional<PGOOptions> PGOOpt;
+  PGOKindEnum PGOKind = Opts->get<&PGOKindFlagOpt>();
+  if (PGOKind == PGOKindEnum::SampleUsePipeline) {
+    PGOOpt = PGOOptions("", "", "", "", PGOOptions::SampleUse,
+                        PGOOptions::NoCSAction);
+  }
+  if (PGOOpt)
+    TM.setPGOOption(PGOOpt);
+}
+
+//===----------------------------------------------------------------------===//
+// main
+//===----------------------------------------------------------------------===//
+
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
+  registerPluginLoaderOption();
 
   // Enable debug stream buffering.
   EnableDebugBuffering = true;
@@ -378,6 +511,37 @@ int main(int argc, char **argv) {
   InitializeAllTargetMCs();
   InitializeAllAsmPrinters();
   InitializeAllAsmParsers();
+
+  // Register the Target and CPU printer for --version.
+  cl::AddExtraVersionPrinter(sys::printDefaultTargetAndDetectedCPU);
+  // Register the target printer for --version.
+  cl::AddExtraVersionPrinter(TargetRegistry::printRegisteredTargetsForVersion);
+
+  std::vector<clv2::detail::OptionEntry> ExtraEntries;
+  // Pre-load pass plugins so that options they register are available
+  // before parsing.
+  SmallVector<PassPlugin, 1> PreloadedPlugins;
+  for (int I = 1; I < argc; ++I) {
+    StringRef Arg(argv[I]);
+    StringRef PluginPath;
+    if (Arg.starts_with("--load-pass-plugin="))
+      PluginPath = Arg.substr(strlen("--load-pass-plugin="));
+    else if (Arg.starts_with("-load-pass-plugin="))
+      PluginPath = Arg.substr(strlen("-load-pass-plugin="));
+    else if ((Arg == "--load-pass-plugin" || Arg == "-load-pass-plugin") &&
+             I + 1 < argc)
+      PluginPath = argv[++I];
+    if (!PluginPath.empty()) {
+      auto Plugin = PassPlugin::Load(PluginPath.str());
+      if (Plugin) {
+        PreloadedPlugins.emplace_back(Plugin.get());
+      } else {
+        errs() << "Could not load library '" << PluginPath
+               << "': " << toString(Plugin.takeError()) << '\n';
+        return 1;
+      }
+    }
+  }
 
   // Initialize codegen and IR passes used by llc so that the -print-after,
   // -print-before, and -stop-after options work.
@@ -397,20 +561,45 @@ int main(int argc, char **argv) {
   // Initialize debugging passes.
   initializeScavengerTestPass(*Registry);
 
-  SmallVector<PassPlugin, 1> PluginList;
-  PassPlugins.setCallback([&](const std::string &PluginPath) {
-    auto Plugin = PassPlugin::Load(PluginPath);
-    if (!Plugin)
-      reportFatalUsageError(Plugin.takeError());
-    PluginList.emplace_back(Plugin.get());
-  });
+  clv2::OptionParser P;
+  configureLLCRegistries(P);
+  P.enableGlobalDynamicEntries();
+  for (auto &E : ExtraEntries)
+    P.addDynamicEntry(std::move(E));
+  auto OptsCtxOwner =
+      P.parse(argc, argv, "llvm system compiler\n", /*Errs=*/nullptr);
+  const auto &OptsCtx = *OptsCtxOwner;
+  const auto *Opts = OptsCtx.getViewPtr<&LLCToolReg>();
 
-  // Register the Target and CPU printer for --version.
-  cl::AddExtraVersionPrinter(sys::printDefaultTargetAndDetectedCPU);
-  // Register the target printer for --version.
-  cl::AddExtraVersionPrinter(TargetRegistry::printRegisteredTargetsForVersion);
+  {
+    CGPassBuilderOption TPCVals;
+    TPCVals.StartAfter =
+        clv2::getOptValOr<&clv2::CGPassSched2Reg, &clv2::CGPASS_StartAfter>(
+            OptsCtx, std::string{});
+    TPCVals.StartBefore =
+        clv2::getOptValOr<&clv2::CGPassSched2Reg, &clv2::CGPASS_StartBefore>(
+            OptsCtx, std::string{});
+    TPCVals.StopAfter =
+        clv2::getOptValOr<&clv2::CGPassSched2Reg, &clv2::CGPASS_StopAfter>(
+            OptsCtx, std::string{});
+    TPCVals.StopBefore =
+        clv2::getOptValOr<&clv2::CGPassSched2Reg, &clv2::CGPASS_StopBefore>(
+            OptsCtx, std::string{});
+    TPCVals.DebugPM = Opts->get<&NPM_DebugPM>();
+    TPCVals.RegAlloc = Opts->get<&NPM_RegAlloc>();
+    setTPCValues(TPCVals);
+  }
 
-  cl::ParseCommandLineOptions(argc, argv, "llvm system compiler\n");
+  // Use pre-loaded plugins (loaded before parse so their options are visible
+  // to the parser).
+  SmallVector<PassPlugin, 1> PluginList(std::move(PreloadedPlugins));
+
+  // Collect -run-pass names.
+  for (const std::string &PassName : Opts->get<&RunPassOpt>())
+    getRunPassNames().push_back(PassName);
+
+  // Resolve -passes / -p alias.
+  std::string PassPipeline = Opts->get<&PassPipelineOpt>();
 
   if (!PassPipeline.empty() && !getRunPassNames().empty()) {
     errs() << "The `llc -run-pass=...` syntax for the new pass manager is "
@@ -419,9 +608,14 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  bool TimeTrace = Opts->get<&TimeTraceOpt>();
+  std::string TimeTraceFile = Opts->get<&TimeTraceFileOpt>();
+  unsigned TimeTraceGranularity = Opts->get<&TimeTraceGranularityOpt>();
+  std::string OutputFilename = Opts->get<&OutputFilenameOpt>();
+
   if (TimeTrace)
     timeTraceProfilerInitialize(TimeTraceGranularity, argv[0]);
-  llvm::scope_exit TimeTraceScopeExit([]() {
+  llvm::scope_exit TimeTraceScopeExit([&]() {
     if (TimeTrace) {
       if (auto E = timeTraceProfilerWrite(TimeTraceFile, OutputFilename)) {
         handleAllErrors(std::move(E), [&](const StringError &SE) {
@@ -433,37 +627,59 @@ int main(int argc, char **argv) {
     }
   });
 
-  LLVMContext Context;
-  Context.setDiscardValueNames(DiscardValueNames);
+  LLVMContext Context(OptsCtx);
+  Context.setDiscardValueNames(Opts->get<&DiscardValueNamesOpt>());
 
-  // Set a diagnostic handler that doesn't exit on the first error
   Context.setDiagnosticHandler(std::make_unique<LLCDiagnosticHandler>());
 
+  // Parse the hotness threshold for remarks.
+  std::optional<uint64_t> HotnessThreshold = 0;
+  std::string HotnessThresholdStr = Opts->get<&RemarksHotnessThresholdOpt>();
+  if (!HotnessThresholdStr.empty()) {
+    if (HotnessThresholdStr == "auto") {
+      HotnessThreshold = std::nullopt;
+    } else {
+      uint64_t Val;
+      if (StringRef(HotnessThresholdStr).getAsInteger(10, Val)) {
+        WithColor::error(errs(), "llc")
+            << "invalid value for --pass-remarks-hotness-threshold: '"
+            << HotnessThresholdStr << "'\n";
+        return 1;
+      }
+      HotnessThreshold = Val;
+    }
+  }
+
   Expected<LLVMRemarkFileHandle> RemarksFileOrErr =
-      setupLLVMOptimizationRemarks(Context, RemarksFilename, RemarksPasses,
-                                   RemarksFormat, RemarksWithHotness,
-                                   RemarksHotnessThreshold);
+      setupLLVMOptimizationRemarks(
+          Context, Opts->get<&RemarksFilenameOpt>(),
+          Opts->get<&RemarksPassesOpt>(), Opts->get<&RemarksFormatOpt>(),
+          Opts->get<&RemarksWithHotnessOpt>(), HotnessThreshold);
   if (Error E = RemarksFileOrErr.takeError())
-    reportError(std::move(E), RemarksFilename);
+    reportError(std::move(E), Opts->get<&RemarksFilenameOpt>());
   LLVMRemarkFileHandle RemarksFile = std::move(*RemarksFileOrErr);
 
-  codegen::MaybeEnableStatistics();
-  std::string OutputFilename;
+  codegen::MaybeEnableStatistics(OptsCtx);
 
+  std::string InputLanguage = Opts->get<&InputLanguageOpt>();
   if (InputLanguage != "" && InputLanguage != "ir" && InputLanguage != "mir")
     reportError("input language must be '', 'IR' or 'MIR'");
 
-  // Compile the module TimeCompilations times to give better compile time
-  // metrics.
+  unsigned TimeCompilations = Opts->get<&TimeCompilationsOpt>();
   for (unsigned I = TimeCompilations; I; --I)
-    if (int RetVal = compileModule(argv, PluginList, Context, OutputFilename))
+    if (int RetVal =
+            compileModule(argv, PluginList, Context, OutputFilename, Opts))
       return RetVal;
 
   if (RemarksFile)
     RemarksFile->keep();
 
-  return codegen::MaybeSaveStatistics(OutputFilename, "llc");
+  return codegen::MaybeSaveStatistics(OutputFilename, "llc", OptsCtx);
 }
+
+//===----------------------------------------------------------------------===//
+// Pass helpers
+//===----------------------------------------------------------------------===//
 
 static bool addPass(PassManagerBase &PM, const char *argv0, StringRef PassName,
                     TargetPassConfig &TPC) {
@@ -486,6 +702,9 @@ static bool addPass(PassManagerBase &PM, const char *argv0, StringRef PassName,
         << "cannot create pass: " << PI->getPassName() << "\n";
     return true;
   }
+  if (P->getPassID() == &RegBankSelectLegacy::ID)
+    static_cast<RegBankSelectLegacy *>(P)->setModeFromContext(
+        TPC.getTM<TargetMachine>().getOptionsContext());
   std::string Banner = std::string("After ") + std::string(P->getPassName());
   TPC.addMachinePrePasses();
   PM.add(P);
@@ -494,35 +713,41 @@ static bool addPass(PassManagerBase &PM, const char *argv0, StringRef PassName,
   return false;
 }
 
+//===----------------------------------------------------------------------===//
+// compileModule
+//===----------------------------------------------------------------------===//
+
 static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
-                         LLVMContext &Context, std::string &OutputFilename) {
-  // Load the module to be compiled...
+                         LLVMContext &Context, std::string &OutputFilename,
+                         const LLCToolOpts *Opts) {
   SMDiagnostic Err;
   std::unique_ptr<Module> M;
   std::unique_ptr<MIRParser> MIR;
   Triple TheTriple;
-  std::string CPUStr = codegen::getCPUStr();
-  std::string TuneCPUStr = codegen::getTuneCPUStr();
-  std::string FeaturesStr = codegen::getFeaturesStr();
+  std::string CPUStr = codegen::getCPUStr(Context.getOptionsContext());
+  std::string TuneCPUStr = codegen::getTuneCPUStr(Context.getOptionsContext());
+  std::string FeaturesStr =
+      codegen::getFeaturesStr(Context.getOptionsContext());
 
-  // Set attributes on functions as loaded from MIR from command line arguments.
   auto setMIRFunctionAttributes = [&CPUStr, &TuneCPUStr,
                                    &FeaturesStr](Function &F) {
     codegen::setFunctionAttributes(F, CPUStr, FeaturesStr, TuneCPUStr);
   };
 
+  // Extract optimization level from -O<level> string.
+  std::string OStr = Opts->get<&OptLevelOpt>();
+  char OptLevelChar = OStr.empty() ? '2' : OStr[0];
   CodeGenOptLevel OLvl;
-  if (auto Level = CodeGenOpt::parseLevel(OptLevel)) {
+  if (auto Level = CodeGenOpt::parseLevel(OptLevelChar)) {
     OLvl = *Level;
   } else {
     WithColor::error(errs(), argv[0]) << "invalid optimization level.\n";
     return 1;
   }
 
-  // Parse 'none' or '$major.$minor'. Disallow -binutils-version=0 because we
-  // use that to indicate the MC default.
+  std::string BinutilsVersion = Opts->get<&BinutilsVersionOpt>();
   if (!BinutilsVersion.empty() && BinutilsVersion != "none") {
-    StringRef V = BinutilsVersion.getValue();
+    StringRef V = BinutilsVersion;
     unsigned Num;
     if (V.consumeInteger(10, Num) || Num == 0 ||
         !(V.empty() ||
@@ -532,30 +757,42 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
       return 1;
     }
   }
+
+  std::string TargetTripleStr = Opts->get<&TargetTripleOpt>();
+  std::string InputFilename = Opts->get<&InputFilenameOpt>();
+  std::string InputLanguage = Opts->get<&InputLanguageOpt>();
+  bool NoVerify = Opts->get<&NoVerifyOpt>();
+  bool VerifyEach = Opts->get<&VerifyEachOpt>();
+  bool DisableSimplifyLibCalls = Opts->get<&DisableSimplifyLibCallsOpt>();
+  bool ShowMCEncoding = Opts->get<&ShowMCEncodingOpt>();
+  bool AsmVerbose = Opts->get<&AsmVerboseOpt>();
+  bool PreserveComments = Opts->get<&PreserveCommentsOpt>();
+  bool CompileTwice = Opts->get<&CompileTwiceOpt>();
+  bool PrintMIR2VecVocab = Opts->get<&PrintMIR2VecVocabOpt>();
+  bool PrintMIR2Vec = Opts->get<&PrintMIR2VecOpt>();
+  std::string SplitDwarfFile = Opts->get<&SplitDwarfFileOpt>();
+  std::string SplitDwarfOutputFile = Opts->get<&SplitDwarfOutputFileOpt>();
+  std::vector<std::string> IncludeDirs = Opts->get<&IncludeDirsOpt>();
+  std::vector<std::string> InstPrinterOptions =
+      Opts->get<&InstPrinterOptionsOpt>();
+
   TargetOptions Options;
   auto InitializeOptions = [&](const Triple &TheTriple) {
-    Options = codegen::InitTargetOptionsFromCodeGenFlags(TheTriple);
+    Options = codegen::InitTargetOptionsFromCodeGenFlags(
+        TheTriple, Context.getOptionsContext());
 
     if (Options.XCOFFReadOnlyPointers) {
       if (!TheTriple.isOSAIX())
         reportError("-mxcoff-roptr option is only supported on AIX",
                     InputFilename);
-
-      // Since the storage mapping class is specified per csect,
-      // without using data sections, it is less effective to use read-only
-      // pointers. Using read-only pointers may cause other RO variables in the
-      // same csect to become RW when the linker acts upon `-bforceimprw`;
-      // therefore, we require that separate data sections are used in the
-      // presence of ReadOnlyPointers. We respect the setting of data-sections
-      // since we have not found reasons to do otherwise that overcome the user
-      // surprise of not respecting the setting.
       if (!Options.DataSections)
         reportError("-mxcoff-roptr option must be used with -data-sections",
                     InputFilename);
     }
 
     if (TheTriple.isX86() &&
-        codegen::getFuseFPOps() != FPOpFusion::FPOpFusionMode::Standard)
+        codegen::getFuseFPOps(Context.getOptionsContext()) !=
+            FPOpFusion::FPOpFusionMode::Standard)
       WithColor::warning(errs(), argv[0])
           << "X86 backend ignores --fp-contract setting; use IR fast-math "
              "flags instead.";
@@ -565,55 +802,52 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
     Options.MCOptions.ShowMCEncoding = ShowMCEncoding;
     Options.MCOptions.AsmVerbose = AsmVerbose;
     Options.MCOptions.PreserveAsmComments = PreserveComments;
-    if (OutputAsmVariant.getNumOccurrences())
-      Options.MCOptions.OutputAsmVariant = OutputAsmVariant;
+    if (Opts->template specified<&OutputAsmVariantOpt>())
+      Options.MCOptions.OutputAsmVariant =
+          Opts->template get<&OutputAsmVariantOpt>();
     Options.MCOptions.IASSearchPaths = IncludeDirs;
     Options.MCOptions.InstPrinterOptions = InstPrinterOptions;
     Options.MCOptions.SplitDwarfFile = SplitDwarfFile;
-    if (DwarfDirectory.getPosition()) {
+    if (Opts->template specified<&DwarfDirectoryOpt>()) {
       Options.MCOptions.MCUseDwarfDirectory =
-          DwarfDirectory ? MCTargetOptions::EnableDwarfDirectory
-                         : MCTargetOptions::DisableDwarfDirectory;
+          Opts->template get<&DwarfDirectoryOpt>()
+              ? MCTargetOptions::EnableDwarfDirectory
+              : MCTargetOptions::DisableDwarfDirectory;
     } else {
-      // -dwarf-directory is not set explicitly. Some assemblers
-      // (e.g. GNU as or ptxas) do not support `.file directory'
-      // syntax prior to DWARFv5. Let the target decide the default
-      // value.
       Options.MCOptions.MCUseDwarfDirectory =
           MCTargetOptions::DefaultDwarfDirectory;
     }
+    Options.MCOptions.OptsCtx = &Context.getOptionsContext();
+    Options.OptsCtx = &Context.getOptionsContext();
   };
 
-  std::optional<Reloc::Model> RM = codegen::getExplicitRelocModel();
-  std::optional<CodeModel::Model> CM = codegen::getExplicitCodeModel();
+  std::optional<Reloc::Model> RM =
+      codegen::getExplicitRelocModel(Context.getOptionsContext());
+  std::optional<CodeModel::Model> CM =
+      codegen::getExplicitCodeModel(Context.getOptionsContext());
 
   const Target *TheTarget = nullptr;
   std::unique_ptr<TargetMachine> Target;
 
-  // If user just wants to list available options, skip module loading
-  auto MAttrs = codegen::getMAttrs();
+  auto MAttrs = codegen::getMAttrs(Context.getOptionsContext());
   bool SkipModule =
       CPUStr == "help" || TuneCPUStr == "help" || is_contained(MAttrs, "help");
   if (SkipModule) {
-    if (!TargetTriple.empty())
-      TheTriple = Triple(Triple::normalize(TargetTriple));
+    if (!TargetTripleStr.empty())
+      TheTriple = Triple(Triple::normalize(TargetTripleStr));
     else
       TheTriple = Triple(sys::getDefaultTargetTriple());
 
-    // Get the target specific parser.
     std::string Error;
-    TheTarget =
-        TargetRegistry::lookupTarget(codegen::getMArch(), TheTriple, Error);
+    TheTarget = TargetRegistry::lookupTarget(
+        codegen::getMArch(Context.getOptionsContext()), TheTriple, Error);
     if (!TheTarget) {
       WithColor::error(errs(), argv[0]) << Error << "\n";
       return 1;
     }
 
     InitializeOptions(TheTriple);
-    // Pass "help" as CPU for -mtune=help
     std::string SkipModuleCPU = (TuneCPUStr == "help" ? "help" : CPUStr);
-    // Create the target machine just to print the help info. Use unique_ptr
-    // to avoid a memory leak.
     Target = std::unique_ptr<TargetMachine>(TheTarget->createTargetMachine(
         TheTriple, SkipModuleCPU, FeaturesStr, Options, RM, CM, OLvl));
     if (!Target) {
@@ -621,26 +855,21 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
           << "could not allocate target machine\n";
       return 1;
     }
-
-    // If we don't have a module then just exit now. We do this down
-    // here since the CPU/Feature help is underneath the target machine
-    // creation.
     return 0;
   }
 
   auto SetDataLayout = [&](StringRef DataLayoutTargetTriple,
                            StringRef OldDLStr) -> std::optional<std::string> {
-    // If we are supposed to override the target triple, do so now.
     std::string IRTargetTriple = DataLayoutTargetTriple.str();
-    if (!TargetTriple.empty())
-      IRTargetTriple = Triple::normalize(TargetTriple);
+    if (!TargetTripleStr.empty())
+      IRTargetTriple = Triple::normalize(TargetTripleStr);
     TheTriple = Triple(IRTargetTriple);
     if (TheTriple.getTriple().empty())
       TheTriple.setTriple(sys::getDefaultTargetTriple());
 
     std::string Error;
-    TheTarget =
-        TargetRegistry::lookupTarget(codegen::getMArch(), TheTriple, Error);
+    TheTarget = TargetRegistry::lookupTarget(
+        codegen::getMArch(Context.getOptionsContext()), TheTriple, Error);
     if (!TheTarget) {
       WithColor::error(errs(), argv[0]) << Error << "\n";
       exit(1);
@@ -654,12 +883,12 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
           << "could not allocate target machine\n";
       exit(1);
     }
+    Target->setOptionsContext(Context.getOptionsContext());
 
-    // Set PGO options based on command line flags
-    setPGOOptions(*Target);
-
+    setPGOOptions(*Target, Opts);
     return Target->createDataLayout().getStringRepresentation();
   };
+
   if (InputLanguage == "mir" ||
       (InputLanguage == "" && StringRef(InputFilename).ends_with(".mir"))) {
     MIR = createMIRParserFromFile(InputFilename, Err, Context,
@@ -680,22 +909,18 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
   std::optional<CodeModel::Model> CM_IR = M->getCodeModel();
   if (!CM && CM_IR)
     Target->setCodeModel(*CM_IR);
-  if (std::optional<uint64_t> LDT = codegen::getExplicitLargeDataThreshold())
+  if (std::optional<uint64_t> LDT =
+          codegen::getExplicitLargeDataThreshold(Context.getOptionsContext()))
     Target->setLargeDataThreshold(*LDT);
 
   // Figure out where we are going to send the output.
-  std::unique_ptr<ToolOutputFile> Out = GetOutputStream(TheTriple.getOS());
+  std::unique_ptr<ToolOutputFile> Out =
+      GetOutputStream(TheTriple.getOS(), Opts, Context.getOptionsContext());
   if (!Out)
     return 1;
 
-  // Ensure the filename is passed down to CodeViewDebug.
   Target->Options.ObjectFilenameForDebug = Out->outputFilename();
-
-  // Return a copy of the output filename via the output param
   OutputFilename = Out->outputFilename();
-
-  // Tell target that this tool is not necessarily used with argument ABI
-  // compliance (i.e. narrow integer argument extensions).
   Target->Options.VerifyArgABICompliance = 0;
 
   std::unique_ptr<ToolOutputFile> DwoOut;
@@ -707,26 +932,18 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
       reportError(EC.message(), SplitDwarfOutputFile);
   }
 
-  // Add an appropriate TargetLibraryInfo pass for the module's triple.
   TargetLibraryInfoImpl TLII(M->getTargetTriple(), Target->Options.VecLib);
-
-  // The -disable-simplify-libcalls flag actually disables all builtin optzns.
   if (DisableSimplifyLibCalls)
     TLII.disableAllFunctions();
 
-  // Verify module immediately to catch problems before doInitialization() is
-  // called on any passes.
   if (!NoVerify && verifyModule(*M, &errs()))
     reportError("input module cannot be verified", InputFilename);
 
-  // Override function attributes based on CPUStr, TuneCPUStr, FeaturesStr, and
-  // command line flags.
   codegen::setFunctionAttributes(*M, CPUStr, FeaturesStr, TuneCPUStr);
 
   for (auto &Plugin : PluginList) {
-    CodeGenFileType CGFT = codegen::getFileType();
+    CodeGenFileType CGFT = codegen::getFileType(Context.getOptionsContext());
     if (Plugin.invokePreCodeGenCallback(*M, *Target, CGFT, Out->os())) {
-      // TODO: Deduplicate code with below and the NewPMDriver.
       if (Context.getDiagHandlerPtr()->HasErrors)
         exit(1);
       Out->keep();
@@ -734,8 +951,9 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
     }
   }
 
-  if (mc::getExplicitRelaxAll() &&
-      codegen::getFileType() != CodeGenFileType::ObjectFile)
+  if (mc::getExplicitRelaxAll(Context.getOptionsContext()) &&
+      codegen::getFileType(Context.getOptionsContext()) !=
+          CodeGenFileType::ObjectFile)
     WithColor::warning(errs(), argv[0])
         << ": warning: ignoring -mc-relax-all because filetype != obj";
 
@@ -745,23 +963,44 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
   else if (VerifyEach)
     VK = VerifierKind::EachPass;
 
+  std::string PassPipeline = Opts->get<&PassPipelineOpt>();
+
+  bool EnableNewPassManager = Opts->get<&EnableNewPassManagerOpt>();
+  bool EnableNewPassManagerSpecified =
+      Opts->specified<&EnableNewPassManagerOpt>();
+
   // Use the NewPM if the user specifies -passes (NewPM specific), specifically
   // requests the NewPM with -enable-new-pm, or the target defaults to the
   // NewPM, the user has not explicitly disabled the NewPM with
   // -enable-new-pm=false, and the user has not specified -run-pass.
   if (!PassPipeline.empty() ||
-      (EnableNewPassManager.getNumOccurrences() > 0 && EnableNewPassManager) ||
+      (EnableNewPassManagerSpecified && EnableNewPassManager) ||
       (Target->shouldDefaultToNewPM() &&
-       !(EnableNewPassManager.getNumOccurrences() && !EnableNewPassManager) &&
+       !(EnableNewPassManagerSpecified && !EnableNewPassManager) &&
        getRunPassNames().empty())) {
+    // Resolve the print-pipeline-passes format: empty means not requested,
+    // "text" or "tree" selects the output format.
+    // Outlives PipelineFmt, which is a StringRef into it.
+    std::string PipelineFmtStorage;
+    StringRef PipelineFmt;
+    const auto &PipeCtx = Context.getOptionsContext();
+    if (clv2::wasOptSpecified<&clv2::PassesOptsReg,
+                              &clv2::PAS_PrintPipelinePasses>(PipeCtx)) {
+      PipelineFmtStorage = clv2::getOptValOr<&clv2::PassesOptsReg,
+                                             &clv2::PAS_PrintPipelinePasses>(
+          PipeCtx, std::string{});
+      PipelineFmt = PipelineFmtStorage.empty() ? StringRef("text")
+                                               : StringRef(PipelineFmtStorage);
+    }
     return compileModuleWithNewPM(
         argv[0], std::move(M), std::move(MIR), std::move(Target),
         std::move(Out), std::move(DwoOut), Context, TLII, VK, PassPipeline,
-        PluginList, codegen::getFileType());
+        PluginList, codegen::getFileType(Context.getOptionsContext()),
+        PipelineFmt);
   }
 
-  // Build up all of the passes that we want to do to the module.
   legacy::PassManager PM;
+  PM.setOptionsContext(Context.getOptionsContext());
   PM.add(new TargetLibraryInfoWrapperPass(TLII));
   PM.add(new RuntimeLibraryInfoWrapper(
       Target->Options.ExceptionModel, Target->Options.EABIVersion,
@@ -770,11 +1009,10 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
   {
     raw_pwrite_stream *OS = &Out->os();
 
-    // Manually do the buffering rather than using buffer_ostream,
-    // so we can memcmp the contents in CompileTwice mode
     SmallVector<char, 0> Buffer;
     std::unique_ptr<raw_svector_ostream> BOS;
-    if ((codegen::getFileType() != CodeGenFileType::AssemblyFile &&
+    if ((codegen::getFileType(Context.getOptionsContext()) !=
+             CodeGenFileType::AssemblyFile &&
          !Out->os().supportsSeeking()) ||
         CompileTwice) {
       BOS = std::make_unique<raw_svector_ostream>(Buffer);
@@ -785,8 +1023,6 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
     MachineModuleInfoWrapperPass *MMIWP =
         new MachineModuleInfoWrapperPass(Target.get());
 
-    // Set a temporary diagnostic handler. This is used before
-    // MachineModuleInfoWrapperPass::doInitialization for features like -M.
     bool HasMCErrors = false;
     MCContext &MCCtx = MMIWP->getMMI().getContext();
     MCCtx.setDiagnosticHandler([&](const SMDiagnostic &SMD, bool IsInlineAsm,
@@ -796,8 +1032,6 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
       HasMCErrors = true;
     });
 
-    // Construct a custom pass pipeline that starts after instruction
-    // selection.
     if (!getRunPassNames().empty()) {
       if (!MIR) {
         WithColor::error(errs(), argv[0])
@@ -807,10 +1041,11 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
       }
       TargetPassConfig *PTPC = Target->createPassConfig(PM);
       TargetPassConfig &TPC = *PTPC;
-      if (TPC.hasLimitedCodeGenPipeline()) {
+      if (TPC.hasLimitedCodeGenPipeline(Target->getOptionsContext())) {
         WithColor::error(errs(), argv[0])
             << "run-pass cannot be used with "
-            << TPC.getLimitedCodeGenPipelineReason() << ".\n";
+            << TPC.getLimitedCodeGenPipelineReason(Target->getOptionsContext())
+            << ".\n";
         delete PTPC;
         delete MMIWP;
         return 1;
@@ -827,31 +1062,35 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
       TPC.setInitialized();
       PM.add(createPrintMIRPass(*OS));
 
-      // Add MIR2Vec vocabulary printer if requested
       if (PrintMIR2VecVocab) {
         PM.add(createMIR2VecVocabPrinterLegacyPass(errs()));
       }
-
-      // Add MIR2Vec printer if requested
       if (PrintMIR2Vec) {
         PM.add(createMIR2VecPrinterLegacyPass(errs()));
       }
 
       PM.add(createFreeMachineFunctionPass());
     } else {
-      if (Target->addPassesToEmitFile(PM, *OS, DwoOut ? &DwoOut->os() : nullptr,
-                                      codegen::getFileType(), NoVerify,
-                                      MMIWP)) {
+      // Use a large buffer for assembly output so the formatted_raw_ostream
+      // created inside addPassesToEmitFile doesn't auto-flush mid-function.
+      // Without this, GISel fallback warnings (written unbuffered to errs())
+      // interleave with partially-flushed assembly on stdout when both share
+      // a fd via 2>&1.
+      if (codegen::getFileType(Context.getOptionsContext()) ==
+              CodeGenFileType::AssemblyFile &&
+          OS->GetBufferSize() < (1u << 20))
+        OS->SetBufferSize(1u << 20);
+      if (Target->addPassesToEmitFile(
+              PM, *OS, DwoOut ? &DwoOut->os() : nullptr,
+              codegen::getFileType(Context.getOptionsContext()), NoVerify,
+              MMIWP)) {
         if (!HasMCErrors)
           reportError("target does not support generation of this file type");
       }
 
-      // Add MIR2Vec vocabulary printer if requested
       if (PrintMIR2VecVocab) {
         PM.add(createMIR2VecVocabPrinterLegacyPass(errs()));
       }
-
-      // Add MIR2Vec printer if requested
       if (PrintMIR2Vec) {
         PM.add(createMIR2VecPrinterLegacyPass(errs()));
       }
@@ -865,13 +1104,7 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
         return 1;
     }
 
-    // Before executing passes, print the final values of the LLVM options.
-    cl::PrintOptionValues();
 
-    // If requested, run the pass manager over the same module again,
-    // to catch any bugs due to persistent state in the passes. Note that
-    // opt has the same functionality, so it may be worth abstracting this out
-    // in the future.
     SmallVector<char, 0> CompileTwiceBuffer;
     if (CompileTwice) {
       std::unique_ptr<Module> M2(llvm::CloneModule(*M));
@@ -885,7 +1118,6 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
     if (Context.getDiagHandlerPtr()->HasErrors || HasMCErrors)
       return 1;
 
-    // Compare the two outputs and make sure they're the same
     if (CompileTwice) {
       if (Buffer.size() != CompileTwiceBuffer.size() ||
           (memcmp(Buffer.data(), CompileTwiceBuffer.data(), Buffer.size()) !=
@@ -906,7 +1138,6 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
     }
   }
 
-  // Declare success.
   Out->keep();
   if (DwoOut)
     DwoOut->keep();

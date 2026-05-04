@@ -24,6 +24,7 @@ add_llvm_unittest(SupportTests
   CHERICapabilityFormatTest.cpp
   Chrono.cpp
   CommandLineTest.cpp
+  CommandLineV2Test.cpp
   CompressionTest.cpp
   ConvertEBCDICTest.cpp
   ConvertUTFTest.cpp
@@ -161,4 +162,3 @@ if(NOT LLVM_INTEGRATED_CRT_ALLOC)
   add_subdirectory(DynamicLibrary)
 endif()
 
-add_subdirectory(CommandLineInit)

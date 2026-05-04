@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../ReorderFieldsAction.h"
+#include "clang-tools-extra/ClangToolsExtraOptionsOptInfos.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticOptions.h"
 #include "clang/Basic/FileManager.h"
@@ -23,7 +24,8 @@
 #include "clang/Tooling/Refactoring.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include <cstdlib>
 #include <string>
@@ -34,24 +36,45 @@ using namespace clang;
 
 cl::OptionCategory ClangReorderFieldsCategory("clang-reorder-fields options");
 
-static cl::opt<std::string>
-    RecordName("record-name", cl::Required,
-               cl::desc("The name of the struct/class."),
-               cl::cat(ClangReorderFieldsCategory));
+static std::string RecordName;
+static std::vector<std::string> FieldsOrder;
+static bool Inplace = false;
 
-static cl::list<std::string> FieldsOrder("fields-order", cl::CommaSeparated,
-                                         cl::OneOrMore,
-                                         cl::desc("The desired fields order."),
-                                         cl::cat(ClangReorderFieldsCategory));
+inline constexpr clv2::OptionsRegistry<
+    &clv2::CTE_RF_RecordName, &clv2::CTE_RF_FieldsOrder, &clv2::CTE_RF_Inplace>
+    ReorderFieldsOptsReg;
 
-static cl::opt<bool> Inplace("i", cl::desc("Overwrite edited files."),
-                             cl::cat(ClangReorderFieldsCategory));
+static void applyReorderFieldsOpts(
+    const decltype(ReorderFieldsOptsReg)::ParsedOptionsT &Opts) {
+  RecordName = Opts.get<&clv2::CTE_RF_RecordName>();
+  FieldsOrder = Opts.get<&clv2::CTE_RF_FieldsOrder>();
+  Inplace = Opts.get<&clv2::CTE_RF_Inplace>();
+}
+
+static void configureParser(clv2::OptionParser &P) {
+  using ParsedT = decltype(ReorderFieldsOptsReg)::ParsedOptionsT;
+  auto *Storage = new ParsedT();
+  decltype(ReorderFieldsOptsReg)::applyDefaultsTo(*Storage);
+  std::vector<clv2::detail::OptionEntry> Entries;
+  std::vector<clv2::detail::AliasEntry> Aliases;
+  std::vector<clv2::detail::SubCommandSpec> SubSpecs;
+  decltype(ReorderFieldsOptsReg)::staticBuildInto(*Storage, Entries, Aliases,
+                                                  SubSpecs);
+  for (auto &E : Entries) {
+    if (!E.Cat)
+      E.Cat = &ClangReorderFieldsCategory;
+    P.addDynamicEntry(std::move(E));
+  }
+  clv2::registerDynamicPostParseCallback(
+      [Storage]() { applyReorderFieldsOpts(*Storage); });
+}
 
 const char Usage[] = "A tool to reorder fields in C/C++ structs/classes.\n";
 
 int main(int argc, const char **argv) {
   auto ExpectedParser = tooling::CommonOptionsParser::create(
-      argc, argv, ClangReorderFieldsCategory, cl::OneOrMore, Usage);
+      argc, argv, ClangReorderFieldsCategory, configureParser, cl::OneOrMore,
+      Usage);
   if (!ExpectedParser) {
     llvm::errs() << llvm::toString(ExpectedParser.takeError());
     return 1;

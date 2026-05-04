@@ -6,13 +6,13 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Transforms/Utils/Debugify.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/Support/SourceMgr.h"
-#include "llvm/Transforms/Utils/Debugify.h"
 #include "gtest/gtest.h"
 
 using namespace llvm;
@@ -83,14 +83,14 @@ struct DebugInfoDummyAnalysis : public FunctionPass {
 
   DebugInfoDummyAnalysis() : FunctionPass(ID) {}
 };
-}
+} // namespace
 
 char DebugInfoDrop::ID = 0;
 char DebugValueDrop::ID = 0;
 char DebugInfoDummyAnalysis::ID = 0;
 
 TEST(DebugInfoDrop, DropOriginalDebugInfo) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define i16 @f(i16 %a) !dbg !6 {
       %b = add i16 %a, 1, !dbg !11
@@ -141,7 +141,7 @@ TEST(DebugInfoDrop, DropOriginalDebugInfo) {
 }
 
 TEST(DebugValueDrop, DropOriginalDebugValues) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define i16 @f(i16 %a) !dbg !6 {
       %b = add i16 %a, 1, !dbg !11
@@ -194,7 +194,7 @@ TEST(DebugValueDrop, DropOriginalDebugValues) {
 }
 
 TEST(DebugInfoDummyAnalysis, PreserveOriginalDebugInfo) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"(
     define i32 @g(i32 %b) !dbg !6 {
       %c = add i32 %b, 1, !dbg !11
@@ -250,8 +250,8 @@ TEST(DebugInfoDummyAnalysis, PreserveOriginalDebugInfo) {
 
 INITIALIZE_PASS_BEGIN(DebugInfoDrop, "debuginfodroppass", "debuginfodroppass",
                       false, false)
-INITIALIZE_PASS_END(DebugInfoDrop, "debuginfodroppass", "debuginfodroppass", false,
-                    false)
+INITIALIZE_PASS_END(DebugInfoDrop, "debuginfodroppass", "debuginfodroppass",
+                    false, false)
 
 INITIALIZE_PASS_BEGIN(DebugInfoDummyAnalysis, "debuginfodummyanalysispass",
                       "debuginfodummyanalysispass", false, false)

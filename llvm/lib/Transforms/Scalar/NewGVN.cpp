@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- NewGVN.cpp - Global Value Numbering Pass ---------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -96,7 +98,6 @@
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/ArrayRecycler.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugCounter.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -146,12 +147,17 @@ DEBUG_COUNTER(PHIOfOpsCounter, "newgvn-phi",
 // Currently store defining access refinement is too slow due to basicaa being
 // egregiously slow.  This flag lets us keep it working while we work on this
 // issue.
-static cl::opt<bool> EnableStoreRefinement("enable-store-refinement",
-                                           cl::init(false), cl::Hidden);
+static bool getEnableStoreRefinement(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_EnableStoreRefinement>(
+      F.getContext().getOptionsContext(), false);
+}
 
 /// Currently, the generation "phi of ops" can result in correctness issues.
-static cl::opt<bool> EnablePhiOfOps("enable-phi-of-ops", cl::init(true),
-                                    cl::Hidden);
+static bool getEnablePhiOfOps(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_EnablePhiOfOps>(
+      F.getContext().getOptionsContext());
+}
 
 //===----------------------------------------------------------------------===//
 //                                GVN Pass
@@ -1409,7 +1415,7 @@ const Expression *NewGVN::performSymbolicStoreEvaluation(Instruction *I) const {
   auto *StoreAccess = getMemoryAccess(SI);
   // Get the expression, if any, for the RHS of the MemoryDef.
   const MemoryAccess *StoreRHS = StoreAccess->getDefiningAccess();
-  if (EnableStoreRefinement)
+  if (getEnableStoreRefinement(F))
     StoreRHS = MSSAWalker->getClobberingMemoryAccess(StoreAccess);
   // If we bypassed the use-def chains, make sure we add a use.
   StoreRHS = lookupMemoryLeader(StoreRHS);
@@ -2587,7 +2593,7 @@ void NewGVN::addPhiOfOps(PHINode *Op, BasicBlock *BB,
 }
 
 static bool okayForPHIOfOps(const Instruction *I) {
-  if (!EnablePhiOfOps)
+  if (!getEnablePhiOfOps(*I->getFunction()))
     return false;
   return isa<BinaryOperator>(I) || isa<SelectInst>(I) || isa<CmpInst>(I) ||
          isa<LoadInst>(I);

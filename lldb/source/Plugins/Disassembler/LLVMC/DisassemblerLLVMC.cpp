@@ -25,6 +25,7 @@
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/TargetParser/AArch64TargetParser.h"
@@ -1277,7 +1278,9 @@ DisassemblerLLVMC::MCDisasmInstance::Create(const char *triple_name,
     return Instance();
 
   std::unique_ptr<llvm::MCSubtargetInfo> subtarget_info_up(
-      curr_target->createMCSubtargetInfo(triple, cpu, features_str));
+      curr_target->createMCSubtargetInfo(
+          triple, cpu, features_str,
+          /*Ctx=*/llvm::clv2::defaultOptionsContext()));
   if (!subtarget_info_up)
     return Instance();
 

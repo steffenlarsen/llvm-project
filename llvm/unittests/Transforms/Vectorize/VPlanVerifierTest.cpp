@@ -12,13 +12,11 @@
 #include "VPlanTestBase.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Vectorize/VectorizeOptionsOptInfos.h"
 #include "gtest/gtest.h"
 
 using namespace llvm;
-
-namespace llvm {
-LLVM_ABI extern cl::opt<bool> VerifyEachVPlan;
-} // namespace llvm
 
 using VPVerifierTest = VPlanTestBase;
 
@@ -457,6 +455,13 @@ TEST_F(VPVerifierTest, DerivedIVWithStartInLoopRegions) {
 }
 
 TEST_F(VPVerifierTest, testRUN_VPLAN_PASS) {
+  // Set up OptionsContext so VerifyEachVPlan is true via clv2.
+  auto VecOpts = clv2::VectorizeOptsReg.makeDefaults();
+  VecOpts.get<&clv2::VEC_VerifyEachVPlan>() = true;
+  clv2::OptionsContext OptsCtx;
+  OptsCtx.addView<&clv2::VectorizeOptsReg>(VecOpts);
+  C.setOptionsContext(OptsCtx);
+
   VPlan &Plan = getPlan();
   VPIRValue *Zero = Plan.getConstantInt(32, 0);
   VPInstruction *DefI =
@@ -469,13 +474,12 @@ TEST_F(VPVerifierTest, testRUN_VPLAN_PASS) {
   VPBB1->appendRecipe(UseI);
   VPBB1->appendRecipe(DefI);
 
-  bool OrigVerifyEachVPlan = VerifyEachVPlan;
-  VerifyEachVPlan = true;
-  llvm::scope_exit _([&]() { VerifyEachVPlan = OrigVerifyEachVPlan; });
   auto NopPass = [](VPlan &Plan) {};
   EXPECT_DEATH(
       { VPlanTransforms::runPass("simplifyRecipes", NopPass, Plan); },
       "Broken VPlan found, compilation aborted!");
+
+  C.setOptionsContext(llvm::clv2::defaultOptionsContext());
 }
 
 class VPIRVerifierTest : public VPlanTestIRBase {};

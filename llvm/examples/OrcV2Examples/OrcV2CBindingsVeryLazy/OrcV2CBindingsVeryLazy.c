@@ -66,16 +66,22 @@ const char MainMod[] =
     "  declare i32 @foo()                                             \n"
     "  declare i32 @bar()                                             \n";
 
+struct JITContext {
+  LLVMOrcLLJITRef J;
+  LLVMOptionsContextRef Opts;
+};
+
 LLVMErrorRef applyDataLayout(void *Ctx, LLVMModuleRef M) {
-  LLVMSetDataLayout(M, LLVMOrcLLJITGetDataLayoutStr((LLVMOrcLLJITRef)Ctx));
+  struct JITContext *JCtx = (struct JITContext *)Ctx;
+  LLVMSetDataLayout(M, LLVMOrcLLJITGetDataLayoutStr(JCtx->J));
   return LLVMErrorSuccess;
 }
 
-LLVMErrorRef parseExampleModule(const char *Source, size_t Len,
-                                const char *Name,
+LLVMErrorRef parseExampleModule(LLVMOptionsContextRef Opts, const char *Source,
+                                size_t Len, const char *Name,
                                 LLVMOrcThreadSafeModuleRef *TSM) {
-  // Create an LLVMContext.
-  LLVMContextRef Ctx = LLVMContextCreate();
+  // Create an LLVMContext with options.
+  LLVMContextRef Ctx = LLVMContextCreateWithOptions(Opts);
 
   // Parse the LLVM module.
   LLVMModuleRef M;
@@ -118,7 +124,8 @@ void Materialize(void *Ctx, LLVMOrcMaterializationResponsibilityRef MR) {
 
   assert(NumSymbols == 1);
 
-  LLVMOrcLLJITRef J = (LLVMOrcLLJITRef)Ctx;
+  struct JITContext *JCtx = (struct JITContext *)Ctx;
+  LLVMOrcLLJITRef J = JCtx->J;
   LLVMOrcSymbolStringPoolEntryRef Sym = Symbols[0];
 
   LLVMOrcThreadSafeModuleRef TSM = 0;
@@ -130,12 +137,14 @@ void Materialize(void *Ctx, LLVMOrcMaterializationResponsibilityRef MR) {
       LLVMOrcLLJITMangleAndIntern(J, "bar_body");
 
   if (Sym == FooBody) {
-    if ((Err = parseExampleModule(FooMod, strlen(FooMod), "foo-mod", &TSM))) {
+    if ((Err = parseExampleModule(JCtx->Opts, FooMod, strlen(FooMod), "foo-mod",
+                                  &TSM))) {
       MainResult = handleError(Err);
       goto cleanup;
     }
   } else if (Sym == BarBody) {
-    if ((Err = parseExampleModule(BarMod, strlen(BarMod), "bar-mod", &TSM))) {
+    if ((Err = parseExampleModule(JCtx->Opts, BarMod, strlen(BarMod), "bar-mod",
+                                  &TSM))) {
       MainResult = handleError(Err);
       goto cleanup;
     }
@@ -168,7 +177,7 @@ int main(int argc, const char *argv[]) {
   int MainResult = 0;
 
   // Parse command line arguments and initialize LLVM Core.
-  LLVMParseCommandLineOptions(argc, argv, "");
+  LLVMOptionsContextRef Opts = LLVMParseCommandLineOptions2(argc, argv, "");
 
   // Initialize native target codegen and asm printer.
   LLVMInitializeNativeTarget();
@@ -176,6 +185,7 @@ int main(int argc, const char *argv[]) {
 
   // Set up a JIT instance.
   LLVMOrcLLJITRef J;
+  struct JITContext JCtx;
   const char *TargetTriple;
   {
     LLVMErrorRef Err;
@@ -184,6 +194,8 @@ int main(int argc, const char *argv[]) {
       goto llvm_shutdown;
     }
     TargetTriple = LLVMOrcLLJITGetTripleString(J);
+    JCtx.J = J;
+    JCtx.Opts = Opts;
   }
 
   // Add our main module to the JIT.
@@ -192,7 +204,7 @@ int main(int argc, const char *argv[]) {
     LLVMErrorRef Err;
 
     LLVMOrcThreadSafeModuleRef MainTSM;
-    if ((Err = parseExampleModule(MainMod, strlen(MainMod), "main-mod",
+    if ((Err = parseExampleModule(Opts, MainMod, strlen(MainMod), "main-mod",
                                   &MainTSM))) {
       MainResult = handleError(Err);
       goto jit_cleanup;
@@ -215,11 +227,11 @@ int main(int argc, const char *argv[]) {
   // add custom MaterializationUnit
   {
     LLVMOrcMaterializationUnitRef FooMU =
-        LLVMOrcCreateCustomMaterializationUnit("FooMU", J, &FooSym, 1, NULL,
+        LLVMOrcCreateCustomMaterializationUnit("FooMU", &JCtx, &FooSym, 1, NULL,
                                                &Materialize, NULL, &Destroy);
 
     LLVMOrcMaterializationUnitRef BarMU =
-        LLVMOrcCreateCustomMaterializationUnit("BarMU", J, &BarSym, 1, NULL,
+        LLVMOrcCreateCustomMaterializationUnit("BarMU", &JCtx, &BarSym, 1, NULL,
                                                &Materialize, NULL, &Destroy);
 
     LLVMOrcJITDylibRef MainJD = LLVMOrcLLJITGetMainJITDylib(J);
@@ -294,6 +306,9 @@ jit_cleanup:
   }
 
 llvm_shutdown:
+  // Dispose of the options context.
+  LLVMDisposeOptionsContext(Opts);
+
   // Shut down LLVM.
   LLVMShutdown();
 

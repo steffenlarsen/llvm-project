@@ -13,28 +13,23 @@
 #include "bolt/RuntimeLibs/HugifyRuntimeLibrary.h"
 #include "bolt/Core/BinaryContext.h"
 #include "bolt/Core/Linker.h"
+#include "bolt/RuntimeLibs/BoltRuntimeLibsOptionsOptInfos.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "llvm/MC/MCStreamer.h"
-#include "llvm/Support/CommandLine.h"
 
 using namespace llvm;
 using namespace bolt;
 
 namespace opts {
 
-extern cl::OptionCategory BoltOptCategory;
-
-extern cl::opt<bool> HotText;
-
-static cl::opt<std::string>
-    RuntimeHugifyLib("runtime-hugify-lib",
-                     cl::desc("specify path of the runtime hugify library"),
-                     cl::init("libbolt_rt_hugify.a"), cl::cat(BoltOptCategory));
+extern bool HotText;
 
 } // namespace opts
 
 void HugifyRuntimeLibrary::adjustCommandLineOptions(
     const BinaryContext &BC) const {
-  if (opts::HotText) {
+  bool HotText = bolt::bolt_utils_opts::getHotText(BC);
+  if (HotText) {
     errs()
         << "BOLT-ERROR: -hot-text should be applied to binaries with "
            "pre-compiled manual hugify support, while -hugify will add hugify "
@@ -43,7 +38,12 @@ void HugifyRuntimeLibrary::adjustCommandLineOptions(
   }
   // After the check, we set HotText to be true because automated hugify support
   // relies on it.
-  opts::HotText = true;
+  // BC is const here, so writing back to the parsed view still needs the
+  // cast.  (FIXME: mutating a shared options view at runtime is itself
+  // hostile to the parallelism clv2 is meant to enable.)
+  auto &Ctx = const_cast<clv2::OptionsContext &>(BC.getOptionsContext());
+  if (auto *V = Ctx.getViewPtr<&clv2::BoltUtilsOptsReg>())
+    V->get<&clv2::BOLT_HotText>() = true;
   if (!BC.StartFunctionAddress) {
     errs() << "BOLT-ERROR: hugify runtime libraries require a known entry "
               "point of "
@@ -56,7 +56,8 @@ void HugifyRuntimeLibrary::link(BinaryContext &BC, StringRef ToolPath,
                                 BOLTLinker &Linker,
                                 BOLTLinker::SectionsMapper MapSections) {
 
-  std::string LibPath = getLibPath(ToolPath, opts::RuntimeHugifyLib);
+  std::string RuntimeHugifyLib = bolt_rtlibs_opts::getRuntimeHugifyLib(BC);
+  std::string LibPath = getLibPath(ToolPath, RuntimeHugifyLib);
   loadLibrary(LibPath, Linker, MapSections);
 
   assert(!RuntimeStartAddress &&

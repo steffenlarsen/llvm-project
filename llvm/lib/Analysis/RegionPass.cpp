@@ -189,7 +189,8 @@ public:
   }
 
   bool runOnRegion(Region *R, RGPassManager &RGM) override {
-    if (!isFunctionInPrintList(R->getEntry()->getParent()->getName()))
+    if (!isFunctionInPrintList(R->getEntry()->getContext(),
+                               R->getEntry()->getParent()->getName()))
       return false;
     Out << Banner;
     for (const auto *BB : R->blocks()) {

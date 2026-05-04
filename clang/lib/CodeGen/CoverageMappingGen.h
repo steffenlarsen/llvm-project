@@ -19,11 +19,11 @@
 #include "clang/Lex/Preprocessor.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/IR/GlobalValue.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
-namespace llvm::coverage {
-extern cl::opt<bool> SystemHeadersCoverage;
+namespace llvm::clv2 {
+class OptionsContext;
 }
 
 namespace clang {
@@ -71,13 +71,17 @@ class CoverageSourceInfo : public PPCallbacks,
   std::vector<SkippedRange> SkippedRanges;
 
   SourceManager &SourceMgr;
+  const llvm::clv2::OptionsContext *OptsCtx =
+      &llvm::clv2::defaultOptionsContext();
 
 public:
   // Location of the token parsed before HandleComment is called. This is
   // updated every time Preprocessor::Lex lexes a new token.
   SourceLocation PrevTokLoc;
 
-  CoverageSourceInfo(SourceManager &SourceMgr) : SourceMgr(SourceMgr) {}
+  CoverageSourceInfo(SourceManager &SourceMgr,
+                     const llvm::clv2::OptionsContext &OptsCtx)
+      : SourceMgr(SourceMgr), OptsCtx(&OptsCtx) {}
 
   std::vector<SkippedRange> &getSkippedRanges() { return SkippedRanges; }
 
@@ -126,7 +130,9 @@ class CoverageMappingModuleGen {
                                  uint64_t FilenamesRef);
 
 public:
-  static CoverageSourceInfo *setUpCoverageCallbacks(Preprocessor &PP);
+  static CoverageSourceInfo *
+  setUpCoverageCallbacks(Preprocessor &PP,
+                         const llvm::clv2::OptionsContext &OptsCtx);
 
   CoverageMappingModuleGen(CodeGenModule &CGM, CoverageSourceInfo &SourceInfo);
 

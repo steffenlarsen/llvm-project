@@ -13,6 +13,7 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/GlobalISel/LegalizerInfo.h"
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
 #include "llvm/CodeGen/GlobalISel/Utils.h"
@@ -38,10 +39,11 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/BlockFrequency.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include <algorithm>
@@ -62,13 +64,6 @@ using namespace llvm;
 static constexpr unsigned ImpossibleRepairCost =
     std::numeric_limits<unsigned>::max();
 
-static cl::opt<RegBankSelectMode> RegBankSelectModeOption(
-    cl::desc("Mode of the RegBankSelect pass"), cl::Hidden, cl::Optional,
-    cl::values(clEnumValN(RegBankSelectMode::Fast, "regbankselect-fast",
-                          "Run the Fast mode (default mapping)"),
-               clEnumValN(RegBankSelectMode::Greedy, "regbankselect-greedy",
-                          "Use the Greedy mode (best local mapping)")));
-
 char RegBankSelectLegacy::ID = 0;
 
 INITIALIZE_PASS_BEGIN(RegBankSelectLegacy, DEBUG_TYPE,
@@ -81,13 +76,17 @@ INITIALIZE_PASS_END(RegBankSelectLegacy, DEBUG_TYPE,
                     "Assign register bank of generic virtual registers", false,
                     false)
 
-static RegBankSelectMode computeOptMode(RegBankSelectMode RequestedMode) {
-  if (RegBankSelectModeOption.getNumOccurrences() != 0) {
-    if (RegBankSelectModeOption != RequestedMode)
-      LLVM_DEBUG(dbgs() << "RegBankSelect mode overrided by command line\n");
-    return RegBankSelectModeOption;
+/// The mode can be overridden per-function from the command line.  Read at
+/// use time rather than in the constructor, which has no context in scope.
+static RegBankSelectMode getModeFromOpts(RegBankSelectMode Default,
+                                         const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::CGPassGISelReg>(Ctx)) {
+    if (O->specified<&clv2::CGPASS_RegbankselectFast>())
+      return RegBankSelectMode::Fast;
+    if (O->specified<&clv2::CGPASS_RegbankselectGreedy>())
+      return RegBankSelectMode::Greedy;
   }
-  return RequestedMode;
+  return Default;
 }
 
 namespace {
@@ -687,7 +686,15 @@ RegBankSelectImpl::RegBankSelectImpl(RegBankSelectMode RunningMode)
     : OptMode(RunningMode) {}
 
 RegBankSelectLegacy::RegBankSelectLegacy(RegBankSelectMode RunningMode)
-    : MachineFunctionPass(ID), OptMode(computeOptMode(RunningMode)) {}
+    : MachineFunctionPass(ID), OptMode(RunningMode) {}
+
+RegBankSelectLegacy::RegBankSelectLegacy(const clv2::OptionsContext &Ctx,
+                                         RegBankSelectMode RunningMode)
+    : MachineFunctionPass(ID), OptMode(getModeFromOpts(RunningMode, Ctx)) {}
+
+void RegBankSelectLegacy::setModeFromContext(const clv2::OptionsContext &Ctx) {
+  OptMode = getModeFromOpts(OptMode, Ctx);
+}
 
 void RegBankSelectImpl::init(
     MachineFunction &MF, function_ref<MachineBlockFrequencyInfo *()> GetMBFI,
@@ -1350,11 +1357,22 @@ bool RegBankSelectImpl::assignRegisterBanks(
 
 bool RegBankSelectImpl::checkFunctionIsLegal(MachineFunction &MF) const {
 #ifndef NDEBUG
-  if (!DisableGISelLegalityCheck) {
-    if (const MachineInstr *MI = machineFunctionIsIllegal(MF)) {
-      reportGISelFailure(MF, *MORE, "gisel-regbankselect",
-                         "instruction is not legal", *MI);
-      return false;
+  {
+    bool DisableLegalityCheck = false;
+    const cgpass_opts::CGPassGISelRegOpts *O =
+        clv2::getView<&clv2::CGPassGISelReg>(
+            MF.getFunction().getContext().getOptionsContext());
+    if (!O)
+      O = clv2::getView<&clv2::CGPassGISelReg>(
+          MF.getFunction().getContext().getOptionsContext());
+    if (O)
+      DisableLegalityCheck = O->get<&clv2::CGPASS_DisableGiselLegalityCheck>();
+    if (!DisableLegalityCheck) {
+      if (const MachineInstr *MI = machineFunctionIsIllegal(MF)) {
+        reportGISelFailure(MF, *MORE, "gisel-regbankselect",
+                           "instruction is not legal", *MI);
+        return false;
+      }
     }
   }
 #endif

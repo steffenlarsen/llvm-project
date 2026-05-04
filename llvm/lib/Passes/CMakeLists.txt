@@ -1,8 +1,11 @@
 add_llvm_component_library(LLVMPasses
+  PassesOptionsGetters.cpp
+  PassesOptionsRegistration.cpp
   CodeGenPassBuilder.cpp
   PassBuilder.cpp
   PassBuilderBindings.cpp
   PassBuilderPipelines.cpp
+  PassesOptions.cpp
   StandardInstrumentations.cpp
 
   ADDITIONAL_HEADER_DIRS

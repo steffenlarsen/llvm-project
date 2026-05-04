@@ -11,50 +11,40 @@
 //
 //===----------------------------------------------------------------------===//
 
-
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/Process.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/Timer.h"
-#include "llvm/Support/Process.h"
 #include "llvm/Support/YAMLParser.h"
 #include "llvm/Support/raw_ostream.h"
 #include <system_error>
 
 using namespace llvm;
 
-static cl::opt<bool>
-  DumpTokens( "tokens"
-            , cl::desc("Print the tokenization of the file.")
-            , cl::init(false)
-            );
+inline constexpr clv2::OptionInfo<bool> DumpTokensOpt{
+    "tokens", "Print the tokenization of the file.", clv2::Init{false}};
+inline constexpr clv2::OptionInfo<bool> DumpCanonicalOpt{
+    "canonical", "Print the canonical YAML for this file.", clv2::Init{false}};
+inline constexpr clv2::OptionInfo<std::string> InputOpt{"", "<input>",
+                                                        clv2::Positional{}};
+inline constexpr clv2::OptionInfo<bool> VerifyOpt{
+    "verify", "Run a quick verification useful for regression testing",
+    clv2::Init{false}};
+inline constexpr clv2::OptionInfo<unsigned> MemoryLimitMBOpt{
+    "memory-limit", "Do not use more megabytes of memory", clv2::Init{1000u}};
+inline constexpr clv2::OptionInfo<cl::boolOrDefault> UseColorOpt{
+    "use-color", "Emit colored output (default=autodetect)",
+    clv2::Init{cl::boolOrDefault::BOU_UNSET}};
 
-static cl::opt<bool>
-  DumpCanonical( "canonical"
-               , cl::desc("Print the canonical YAML for this file.")
-               , cl::init(false)
-               );
-
-static cl::opt<std::string>
- Input(cl::Positional, cl::desc("<input>"));
-
-static cl::opt<bool>
-  Verify( "verify"
-        , cl::desc(
-            "Run a quick verification useful for regression testing")
-        , cl::init(false)
-        );
-
-static cl::opt<unsigned>
-  MemoryLimitMB("memory-limit", cl::desc(
-                  "Do not use more megabytes of memory"),
-                cl::init(1000));
-
-static cl::opt<cl::boolOrDefault>
-    UseColor("use-color", cl::desc("Emit colored output (default=autodetect)"),
-             cl::init(cl::boolOrDefault::BOU_UNSET));
+static constexpr clv2::OptionsRegistry<&DumpTokensOpt, &DumpCanonicalOpt,
+                                       &InputOpt, &VerifyOpt, &MemoryLimitMBOpt,
+                                       &UseColorOpt>
+    YAMLBenchReg;
 
 /// Pretty print a tag by replacing tag:yaml.org,2002: with !!.
 static std::string prettyTag(yaml::Node *N) {
@@ -181,11 +171,21 @@ static std::string createJSONText(size_t MemoryMB, unsigned ValueSize) {
 }
 
 int main(int argc, char **argv) {
-  llvm::cl::ParseCommandLineOptions(argc, argv);
+  clv2::OptionParser P;
+  P.add<&YAMLBenchReg>();
+  auto OptsCtx = P.parse(argc, argv);
+  auto *Opts = OptsCtx->getViewPtr<&YAMLBenchReg>();
+  auto UseColor = Opts->get<&UseColorOpt>();
   bool ShowColors = UseColor == cl::boolOrDefault::BOU_UNSET
                         ? sys::Process::StandardOutHasColors()
                         : UseColor == cl::boolOrDefault::BOU_TRUE;
-  if (Input.getNumOccurrences()) {
+  bool DumpTokens = Opts->get<&DumpTokensOpt>();
+  bool DumpCanonical = Opts->get<&DumpCanonicalOpt>();
+  bool Verify = Opts->get<&VerifyOpt>();
+  unsigned MemoryLimitMB = Opts->get<&MemoryLimitMBOpt>();
+  const auto &Input = Opts->get<&InputOpt>();
+
+  if (Opts->specified<&InputOpt>()) {
     ErrorOr<std::unique_ptr<MemoryBuffer>> BufOrErr =
         MemoryBuffer::getFileOrSTDIN(Input);
     if (!BufOrErr)

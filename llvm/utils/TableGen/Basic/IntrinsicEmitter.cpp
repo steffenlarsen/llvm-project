@@ -16,7 +16,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/ModRef.h"
@@ -38,11 +38,25 @@
 #include <vector>
 using namespace llvm;
 
-static cl::OptionCategory GenIntrinsicCat("Options for -gen-intrinsic-enums");
-static cl::opt<std::string>
-    IntrinsicPrefix("intrinsic-prefix",
-                    cl::desc("Generate intrinsics with this target prefix"),
-                    cl::value_desc("target prefix"), cl::cat(GenIntrinsicCat));
+static clv2::OptionCategory GenIntrinsicCat("Options for -gen-intrinsic-enums");
+
+static std::string IntrinsicPrefix;
+
+static constexpr clv2::OptionInfo<std::string> OI_IntrinsicPrefix{
+    "intrinsic-prefix", "Generate intrinsics with this target prefix",
+    clv2::ValueRequired, clv2::value_desc("target prefix"),
+    clv2::cat(GenIntrinsicCat)};
+
+static constexpr clv2::OptionsRegistry<&OI_IntrinsicPrefix> IntrinsicEmitterReg;
+
+static void applyIntrinsicEmitter(
+    const decltype(IntrinsicEmitterReg)::ParsedOptionsT &Opts) {
+  IntrinsicPrefix = Opts.get<&OI_IntrinsicPrefix>();
+}
+
+void registerIntrinsicEmitterOptions(clv2::OptionParser &P) {
+  P.add<&IntrinsicEmitterReg, applyIntrinsicEmitter>();
+}
 
 namespace {
 class IntrinsicEmitter {

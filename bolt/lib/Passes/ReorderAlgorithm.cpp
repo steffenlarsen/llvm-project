@@ -14,7 +14,9 @@
 #include "bolt/Passes/ReorderAlgorithm.h"
 #include "bolt/Core/BinaryBasicBlock.h"
 #include "bolt/Core/BinaryFunction.h"
-#include "llvm/Support/CommandLine.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Transforms/Utils/CodeLayout.h"
 #include <queue>
 #include <random>
@@ -26,27 +28,7 @@
 using namespace llvm;
 using namespace bolt;
 
-namespace opts {
-
-extern cl::OptionCategory BoltOptCategory;
-extern cl::opt<bool> NoThreads;
-
-static cl::opt<unsigned> ColdThreshold(
-    "cold-threshold",
-    cl::desc("tenths of percents of main entry frequency to use as a "
-             "threshold when evaluating whether a basic block is cold "
-             "(0 means it is only considered cold if the block has zero "
-             "samples). Default: 0 "),
-    cl::init(0), cl::ZeroOrMore, cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool> PrintClusters("print-clusters", cl::desc("print clusters"),
-                                   cl::Hidden, cl::cat(BoltOptCategory));
-
-cl::opt<uint32_t> RandomSeed("bolt-seed", cl::desc("seed for randomization"),
-                             cl::init(42), cl::Hidden,
-                             cl::cat(BoltOptCategory));
-
-} // namespace opts
+namespace opts {} // namespace opts
 
 namespace {
 
@@ -68,8 +50,9 @@ template <typename A, typename B> struct HashPair {
 
 void ClusterAlgorithm::computeClusterAverageFrequency(const BinaryContext &BC) {
   // Create a separate MCCodeEmitter to allow lock-free execution
+  bool DoNoThreads = bolt_core_opts::getNoThreads(BC);
   BinaryContext::IndependentCodeEmitter Emitter;
-  if (!opts::NoThreads)
+  if (!DoNoThreads)
     Emitter = BC.createIndependentMCCodeEmitter();
 
   AvgFreq.resize(Clusters.size(), 0.0);
@@ -514,9 +497,11 @@ void ExtTSPReorderAlgorithm::reorderBasicBlocks(BinaryFunction &BF,
   }
 
   // Create a separate MCCodeEmitter to allow lock-free execution
+  BinaryContext &BC = BF.getBinaryContext();
+  bool DoNoThreads = bolt_core_opts::getNoThreads(BC);
   BinaryContext::IndependentCodeEmitter Emitter;
-  if (!opts::NoThreads)
-    Emitter = BF.getBinaryContext().createIndependentMCCodeEmitter();
+  if (!DoNoThreads)
+    Emitter = BC.createIndependentMCCodeEmitter();
 
   // Initialize CFG nodes and their data
   std::vector<uint64_t> BlockSizes;
@@ -548,8 +533,9 @@ void ExtTSPReorderAlgorithm::reorderBasicBlocks(BinaryFunction &BF,
   }
 
   // Run the layout algorithm
-  auto Result =
-      codelayout::computeExtTspLayout(BlockSizes, BlockCounts, JumpCounts);
+  auto Result = codelayout::computeExtTspLayout(
+      BlockSizes, BlockCounts, JumpCounts,
+      BF.getBinaryContext().getOptionsContext());
   Order.reserve(BF.getLayout().block_size());
   for (uint64_t R : Result)
     Order.push_back(OrigOrder[R]);
@@ -560,10 +546,13 @@ void OptimizeReorderAlgorithm::reorderBasicBlocks(
   if (BF.getLayout().block_empty())
     return;
 
+  BinaryContext &BC = BF.getBinaryContext();
+  const bool PrintClusters = bolt_passes_opts::getPrintClusters(BC);
+
   // Cluster basic blocks.
   CAlgo->clusterBasicBlocks(BF);
 
-  if (opts::PrintClusters)
+  if (PrintClusters)
     CAlgo->printClusters();
 
   // Arrange basic blocks according to clusters.
@@ -576,6 +565,9 @@ void OptimizeBranchReorderAlgorithm::reorderBasicBlocks(
   if (BF.getLayout().block_empty())
     return;
 
+  BinaryContext &BC = BF.getBinaryContext();
+  const bool PrintClusters = bolt_passes_opts::getPrintClusters(BC);
+
   // Cluster basic blocks.
   CAlgo->clusterBasicBlocks(BF, /* ComputeEdges = */ true);
   std::vector<ClusterAlgorithm::ClusterTy> &Clusters = CAlgo->Clusters;
@@ -586,7 +578,7 @@ void OptimizeBranchReorderAlgorithm::reorderBasicBlocks(
   CAlgo->computeClusterAverageFrequency(BF.getBinaryContext());
   std::vector<double> &AvgFreq = CAlgo->AvgFreq;
 
-  if (opts::PrintClusters)
+  if (PrintClusters)
     CAlgo->printClusters();
 
   // Cluster layout order
@@ -659,7 +651,7 @@ void OptimizeBranchReorderAlgorithm::reorderBasicBlocks(
                      return AvgFreq[A] > AvgFreq[B];
                    });
 
-  if (opts::PrintClusters) {
+  if (PrintClusters) {
     errs() << "New cluster order: ";
     const char *Sep = "";
     for (uint32_t O : ClusterOrder) {
@@ -681,9 +673,13 @@ void OptimizeCacheReorderAlgorithm::reorderBasicBlocks(
   if (BF.getLayout().block_empty())
     return;
 
+  BinaryContext &BC = BF.getBinaryContext();
+  const unsigned ColdThresholdOpt = bolt_passes_opts::getColdThreshold(BC);
+  const bool PrintClusters = bolt_passes_opts::getPrintClusters(BC);
+
   const uint64_t ColdThreshold =
-      opts::ColdThreshold *
-      (*BF.getLayout().block_begin())->getExecutionCount() / 1000;
+      ColdThresholdOpt * (*BF.getLayout().block_begin())->getExecutionCount() /
+      1000;
 
   // Cluster basic blocks.
   CAlgo->clusterBasicBlocks(BF);
@@ -693,7 +689,7 @@ void OptimizeCacheReorderAlgorithm::reorderBasicBlocks(
   CAlgo->computeClusterAverageFrequency(BF.getBinaryContext());
   std::vector<double> &AvgFreq = CAlgo->AvgFreq;
 
-  if (opts::PrintClusters)
+  if (PrintClusters)
     CAlgo->printClusters();
 
   // Cluster layout order
@@ -708,7 +704,7 @@ void OptimizeCacheReorderAlgorithm::reorderBasicBlocks(
       std::next(ClusterOrder.begin()), ClusterOrder.end(),
       [&AvgFreq](uint32_t A, uint32_t B) { return AvgFreq[A] > AvgFreq[B]; });
 
-  if (opts::PrintClusters) {
+  if (PrintClusters) {
     errs() << "New cluster order: ";
     const char *Sep = "";
     for (uint32_t O : ClusterOrder) {
@@ -746,11 +742,15 @@ void RandomClusterReorderAlgorithm::reorderBasicBlocks(
   if (BF.getLayout().block_empty())
     return;
 
+  BinaryContext &BC = BF.getBinaryContext();
+  const bool PrintClusters = bolt_passes_opts::getPrintClusters(BC);
+  const uint32_t RandomSeed = bolt_passes_opts::getBoltSeed(BC);
+
   // Cluster basic blocks.
   CAlgo->clusterBasicBlocks(BF);
   std::vector<ClusterAlgorithm::ClusterTy> &Clusters = CAlgo->Clusters;
 
-  if (opts::PrintClusters)
+  if (PrintClusters)
     CAlgo->printClusters();
 
   // Cluster layout order
@@ -762,9 +762,9 @@ void RandomClusterReorderAlgorithm::reorderBasicBlocks(
       ClusterOrder.push_back(I);
 
   std::shuffle(std::next(ClusterOrder.begin()), ClusterOrder.end(),
-               std::default_random_engine(opts::RandomSeed.getValue()));
+               std::default_random_engine(RandomSeed));
 
-  if (opts::PrintClusters) {
+  if (PrintClusters) {
     errs() << "New cluster order: ";
     const char *Sep = "";
     for (uint32_t O : ClusterOrder) {

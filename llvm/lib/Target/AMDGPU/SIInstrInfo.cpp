@@ -33,7 +33,8 @@
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include <tuple>
 
@@ -54,15 +55,15 @@ namespace llvm::AMDGPU {
 // Must be at least 4 to be able to branch over minimum unconditional branch
 // code. This is only for making it possible to write reasonably small tests for
 // long branches.
-static cl::opt<unsigned>
-BranchOffsetBits("amdgpu-s-branch-bits", cl::ReallyHidden, cl::init(16),
-                 cl::desc("Restrict range of branch instructions (DEBUG)"));
+static unsigned getBranchOffsetBits(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_BranchOffsetBits>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> Fix16BitCopies(
-  "amdgpu-fix-16-bit-physreg-copies",
-  cl::desc("Fix copies between 32 and 16 bit registers by extending to 32 bit"),
-  cl::init(true),
-  cl::ReallyHidden);
+static bool getFix16BitCopies(const MachineFunction &MF) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_Fix16BitCopies>(
+      MF.getFunction().getContext().getOptionsContext());
+}
 
 SIInstrInfo::SIInstrInfo(const GCNSubtarget &ST)
     : AMDGPUGenInstrInfo(ST, RI, AMDGPU::ADJCALLSTACKUP,
@@ -909,7 +910,7 @@ void SIInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
   // The rest of copyPhysReg assumes Src and Dst size are the same size.
   // TODO-GFX11_16BIT If all true 16 bit instruction patterns are completed can
   // we remove Fix16BitCopies and this code block?
-  if (Fix16BitCopies) {
+  if (getFix16BitCopies(*MBB.getParent())) {
     if (((Size == 16) != (SrcSize == 16))) {
       // Non-VGPR Src and Dst will later be expanded back to 32 bits.
       assert(ST.useRealTrue16Insts());
@@ -3005,7 +3006,10 @@ bool SIInstrInfo::isBranchOffsetInRange(unsigned BranchOp,
   // from the next instruction.
   BrOffset -= 1;
 
-  return isIntN(BranchOffsetBits, BrOffset);
+  return isIntN(
+      clv2::getOptValOrDefault<&clv2::AMDGPU_BranchOffsetBits>(
+          ST.getTargetLowering()->getTargetMachine().getOptionsContext()),
+      BrOffset);
 }
 
 MachineBasicBlock *

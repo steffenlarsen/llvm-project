@@ -15,7 +15,8 @@
 #define LLVM_CLANG_FRONTEND_COMMANDLINESOURCELOC_H
 
 #include "clang/Basic/LLVM.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/ADT/Twine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/raw_ostream.h"
 #include <optional>
 
@@ -113,35 +114,5 @@ struct ParsedSourceRange {
 };
 }
 
-namespace llvm {
-  namespace cl {
-    /// Command-line option parser that parses source locations.
-    ///
-    /// Source locations are of the form filename:line:column.
-    template<>
-    class parser<clang::ParsedSourceLocation> final
-      : public basic_parser<clang::ParsedSourceLocation> {
-    public:
-      inline bool parse(Option &O, StringRef ArgName, StringRef ArgValue,
-                 clang::ParsedSourceLocation &Val);
-    };
-
-    bool
-    parser<clang::ParsedSourceLocation>::
-    parse(Option &O, StringRef ArgName, StringRef ArgValue,
-          clang::ParsedSourceLocation &Val) {
-      using namespace clang;
-
-      Val = ParsedSourceLocation::FromString(ArgValue);
-      if (Val.FileName.empty()) {
-        errs() << "error: "
-               << "source location must be of the form filename:line:column\n";
-        return true;
-      }
-
-      return false;
-    }
-  }
-}
 
 #endif

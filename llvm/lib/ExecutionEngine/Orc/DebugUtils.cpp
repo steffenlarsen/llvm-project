@@ -9,7 +9,7 @@
 #include "llvm/ExecutionEngine/Orc/DebugUtils.h"
 
 #include "llvm/ExecutionEngine/Orc/Core.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -24,20 +24,46 @@ namespace {
 
 #ifndef NDEBUG
 
-cl::opt<bool> PrintHidden("debug-orc-print-hidden", cl::init(true),
-                          cl::desc("debug print hidden symbols defined by "
-                                   "materialization units"),
-                          cl::Hidden);
+static constexpr clv2::OptionInfo<bool> OI_OrcPrintHidden{
+    "debug-orc-print-hidden",
+    "debug print hidden symbols defined by materialization units", clv2::Hidden,
+    clv2::Init{true}};
+static constexpr clv2::OptionInfo<bool> OI_OrcPrintCallable{
+    "debug-orc-print-callable",
+    "debug print callable symbols defined by materialization units",
+    clv2::Hidden, clv2::Init{true}};
+static constexpr clv2::OptionInfo<bool> OI_OrcPrintData{
+    "debug-orc-print-data",
+    "debug print data symbols defined by materialization units", clv2::Hidden,
+    clv2::Init{true}};
+static constexpr clv2::OptionsRegistry<&OI_OrcPrintHidden, &OI_OrcPrintCallable,
+                                       &OI_OrcPrintData>
+    OrcDebugOptsReg;
 
-cl::opt<bool> PrintCallable("debug-orc-print-callable", cl::init(true),
-                            cl::desc("debug print callable symbols defined by "
-                                     "materialization units"),
-                            cl::Hidden);
+// NOTE: these are intentionally process-wide globals rather than per-parse
+// values read from an OptionsContext.  They are debug-only (#ifndef NDEBUG)
+// filters consulted from inside operator<< overloads for SymbolFlagsMap,
+// SymbolMap and MaterializationUnit, which receive only the value being
+// printed — there is no ExecutionSession or other context reachable from a
+// stream operator.  Threading one in would mean changing the signature of
+// public debug stream operators used throughout ORC's LLVM_DEBUG output, for
+// no behavioural gain: concurrent jobs share one dbgs() anyway.  Same
+// reasoning as the --color option in Support/WithColor.cpp.
+bool PrintHidden = true;
+bool PrintCallable = true;
+bool PrintData = true;
 
-cl::opt<bool> PrintData("debug-orc-print-data", cl::init(true),
-                        cl::desc("debug print data symbols defined by "
-                                 "materialization units"),
-                        cl::Hidden);
+static void
+applyOrcDebugOpts(const decltype(OrcDebugOptsReg)::ParsedOptionsT &Opts) {
+  PrintHidden = Opts.get<&OI_OrcPrintHidden>();
+  PrintCallable = Opts.get<&OI_OrcPrintCallable>();
+  PrintData = Opts.get<&OI_OrcPrintData>();
+}
+
+static const int RegisterOrcDebugOpts = [] {
+  clv2::registerDynamicRegistry<&OrcDebugOptsReg>(applyOrcDebugOpts);
+  return 0;
+}();
 
 #endif // NDEBUG
 

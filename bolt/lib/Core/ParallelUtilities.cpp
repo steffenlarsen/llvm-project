@@ -13,6 +13,8 @@
 #include "bolt/Core/ParallelUtilities.h"
 #include "bolt/Core/BinaryContext.h"
 #include "bolt/Core/BinaryFunction.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/RWMutex.h"
 #include "llvm/Support/ThreadPool.h"
 #include "llvm/Support/Timer.h"
@@ -21,25 +23,8 @@
 #define DEBUG_TYPE "par-utils"
 
 namespace opts {
-extern cl::OptionCategory BoltCategory;
 
-cl::opt<unsigned>
-ThreadCount("thread-count",
-  cl::desc("number of threads"),
-  cl::init(hardware_concurrency().compute_thread_count()),
-  cl::cat(BoltCategory));
-
-cl::opt<bool>
-NoThreads("no-threads",
-  cl::desc("disable multithreading"),
-  cl::init(false),
-  cl::cat(BoltCategory));
-
-cl::opt<unsigned>
-TaskCount("tasks-per-thread",
-  cl::desc("number of tasks to be created per thread"),
-  cl::init(20),
-  cl::cat(BoltCategory));
+unsigned TaskCount = 20;
 
 } // namespace opts
 
@@ -106,9 +91,11 @@ ThreadPoolInterface &getThreadPool(const unsigned ThreadsCount) {
   if (ThreadPoolPtr)
     return *ThreadPoolPtr;
 
-  if (ThreadsCount > 1)
-    ThreadPoolPtr = std::make_unique<DefaultThreadPool>(
-        llvm::hardware_concurrency(ThreadsCount));
+  unsigned Count = ThreadsCount ? ThreadsCount
+                                : hardware_concurrency().compute_thread_count();
+  if (Count > 1)
+    ThreadPoolPtr =
+        std::make_unique<DefaultThreadPool>(llvm::hardware_concurrency(Count));
   else
     ThreadPoolPtr = std::make_unique<SingleThreadExecutor>();
   return *ThreadPoolPtr;
@@ -120,6 +107,15 @@ void runOnEachFunction(BinaryContext &BC, SchedulingPolicy SchedPolicy,
                        unsigned TasksPerThread) {
   if (BC.getBinaryFunctions().size() == 0)
     return;
+
+  auto *CoreOpts = bolt_core_opts::getBoltCoreOpts(BC.getOptionsContext());
+  bool DoNoThreads =
+      CoreOpts ? CoreOpts->get<&clv2::BOLTCORE_NoThreads>() : false;
+  unsigned DoThreadCount = CoreOpts
+                               ? CoreOpts->get<&clv2::BOLTCORE_ThreadCount>()
+                               : hardware_concurrency().compute_thread_count();
+  if (DoThreadCount == 0)
+    DoThreadCount = std::max(1u, hardware_concurrency().compute_thread_count());
 
   auto runBlock = [&](std::map<uint64_t, BinaryFunction>::iterator BlockBegin,
                       std::map<uint64_t, BinaryFunction>::iterator BlockEnd) {
@@ -136,14 +132,14 @@ void runOnEachFunction(BinaryContext &BC, SchedulingPolicy SchedPolicy,
     LLVM_DEBUG(T.stopTimer());
   };
 
-  if (opts::NoThreads || ForceSequential) {
+  if (DoNoThreads || ForceSequential) {
     runBlock(BC.getBinaryFunctions().begin(), BC.getBinaryFunctions().end());
     return;
   }
 
   // Estimate the overall runtime cost using the scheduling policy
   const unsigned TotalCost = estimateTotalCost(BC, SkipPredicate, SchedPolicy);
-  const unsigned BlocksCount = TasksPerThread * opts::ThreadCount;
+  const unsigned BlocksCount = TasksPerThread * DoThreadCount;
   const unsigned BlockCost =
       TotalCost > BlocksCount ? TotalCost / BlocksCount : 1;
 
@@ -174,6 +170,15 @@ void runOnEachFunctionWithUniqueAllocId(
   if (BC.getBinaryFunctions().size() == 0)
     return;
 
+  auto *CoreOpts = bolt_core_opts::getBoltCoreOpts(BC.getOptionsContext());
+  bool DoNoThreads =
+      CoreOpts ? CoreOpts->get<&clv2::BOLTCORE_NoThreads>() : false;
+  unsigned DoThreadCount = CoreOpts
+                               ? CoreOpts->get<&clv2::BOLTCORE_ThreadCount>()
+                               : hardware_concurrency().compute_thread_count();
+  if (DoThreadCount == 0)
+    DoThreadCount = std::max(1u, hardware_concurrency().compute_thread_count());
+
   llvm::sys::RWMutex MainLock;
   auto runBlock = [&](std::map<uint64_t, BinaryFunction>::iterator BlockBegin,
                       std::map<uint64_t, BinaryFunction>::iterator BlockEnd,
@@ -201,7 +206,7 @@ void runOnEachFunctionWithUniqueAllocId(
     }
   };
 
-  if (opts::NoThreads || ForceSequential) {
+  if (DoNoThreads || ForceSequential) {
     EnsureAllocatorExists(AllocId);
     runBlock(BC.getBinaryFunctions().begin(), BC.getBinaryFunctions().end(),
              AllocId);
@@ -212,7 +217,7 @@ void runOnEachFunctionWithUniqueAllocId(
 
   // Estimate the overall runtime cost using the scheduling policy
   const unsigned TotalCost = estimateTotalCost(BC, SkipPredicate, SchedPolicy);
-  const unsigned BlocksCount = TasksPerThread * opts::ThreadCount;
+  const unsigned BlocksCount = TasksPerThread * DoThreadCount;
   const unsigned BlockCost =
       TotalCost > BlocksCount ? TotalCost / BlocksCount : 1;
 

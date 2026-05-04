@@ -17,6 +17,7 @@
 #include "llvm/IR/PassInstrumentation.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Transforms/Instrumentation/PGOInstrumentation.h"
 #include "gmock/gmock.h"
@@ -74,8 +75,8 @@ attributes #0 = { noinline }
 )IR";
 
 protected:
-  LLVMContext C;
-  PassBuilder PB;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
+  PassBuilder PB{llvm::clv2::defaultOptionsContext()};
   ModuleAnalysisManager MAM;
   FunctionAnalysisManager FAM;
   CGSCCAnalysisManager CGAM;

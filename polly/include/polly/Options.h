@@ -13,7 +13,7 @@
 #ifndef POLLY_OPTIONS_H
 #define POLLY_OPTIONS_H
 
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 
 extern llvm::cl::OptionCategory PollyCategory;
 #endif

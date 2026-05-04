@@ -25,7 +25,7 @@ namespace {
 
 class MachineModuleInfoTest : public testing::Test {
 protected:
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   std::unique_ptr<TargetMachine> TM;
 

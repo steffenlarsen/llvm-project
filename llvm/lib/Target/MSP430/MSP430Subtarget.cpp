@@ -13,24 +13,25 @@
 #include "MSP430Subtarget.h"
 #include "MSP430SelectionDAGInfo.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/MSP430/MSP430OptionsOptInfos.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "msp430-subtarget"
 
-static cl::opt<MSP430Subtarget::HWMultEnum>
-HWMultModeOption("mhwmult", cl::Hidden,
-           cl::desc("Hardware multiplier use mode for MSP430"),
-           cl::init(MSP430Subtarget::NoHWMult),
-           cl::values(
-             clEnumValN(MSP430Subtarget::NoHWMult, "none",
-                "Do not use hardware multiplier"),
-             clEnumValN(MSP430Subtarget::HWMult16, "16bit",
-                "Use 16-bit hardware multiplier"),
-             clEnumValN(MSP430Subtarget::HWMult32, "32bit",
-                "Use 32-bit hardware multiplier"),
-             clEnumValN(MSP430Subtarget::HWMultF5, "f5series",
-                "Use F5 series hardware multiplier")));
+static MSP430Subtarget::HWMultEnum HWMultModeOption = MSP430Subtarget::NoHWMult;
+
+static MSP430Subtarget::HWMultEnum
+getHWMultModeOption(const msp430_opts::ParsedOpts *O,
+                    const clv2::OptionsContext &Ctx) {
+  if (!O)
+    O = clv2::getView<&clv2::MSP430OptsReg>(Ctx);
+  if (O)
+    return static_cast<MSP430Subtarget::HWMultEnum>(
+        O->get<&clv2::MSP430_HWMultMode>());
+  return HWMultModeOption;
+}
 
 #define GET_SUBTARGETINFO_TARGET_DESC
 #define GET_SUBTARGETINFO_CTOR
@@ -49,17 +50,20 @@ MSP430Subtarget::initializeSubtargetDependencies(StringRef CPU, StringRef FS) {
 
   ParseSubtargetFeatures(CPUName, /*TuneCPU*/ CPUName, FS);
 
-  if (HWMultModeOption != NoHWMult)
-    HWMultMode = HWMultModeOption;
+  if (getHWMultModeOption(nullptr, getOptionsContext()) != NoHWMult)
+    HWMultMode = getHWMultModeOption(nullptr, getOptionsContext());
 
   return *this;
 }
 
 MSP430Subtarget::MSP430Subtarget(const Triple &TT, const std::string &CPU,
                                  const std::string &FS, const TargetMachine &TM)
-    : MSP430GenSubtargetInfo(TT, CPU, /*TuneCPU*/ CPU, FS),
-      InstrInfo(initializeSubtargetDependencies(CPU, FS)), TLInfo(TM, *this),
-      FrameLowering(*this) {
+    : MSP430GenSubtargetInfo(TT, CPU, /*TuneCPU*/ CPU, FS,
+                             TM.getOptionsContext()),
+      InstrInfo(
+          (setTargetMachine(&TM), initializeSubtargetDependencies(CPU, FS))),
+      TLInfo(TM, *this), FrameLowering(*this) {
+  setOptionsContext(TM.getOptionsContext());
   TSInfo = std::make_unique<MSP430SelectionDAGInfo>();
 }
 

@@ -1,5 +1,7 @@
 add_llvm_library(LLVMBOLTProfile
+  BoltProfileOptionsGetters.cpp
   BoltAddressTranslation.cpp
+  BoltProfileOptions.cpp
   DataAggregator.cpp
   DataReader.cpp
   Heatmap.cpp

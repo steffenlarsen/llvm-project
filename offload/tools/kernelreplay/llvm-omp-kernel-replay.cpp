@@ -15,11 +15,12 @@
 #include "omptarget.h"
 
 #include "llvm/Frontend/Offloading/Utility.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -30,48 +31,53 @@ using namespace llvm;
 #define TOOL_NAME "llvm-omp-kernel-replay"
 #define TOOL_PREFIX "[" TOOL_NAME "]"
 
-cl::OptionCategory ReplayOptions(TOOL_NAME " Options");
+static constexpr clv2::OptionCategory ReplayOptions{TOOL_NAME " Options"};
 
 /// The filename to read the JSON kernel description.
-static cl::opt<std::string> JsonFilename(cl::Positional,
-                                         cl::desc("<input kernel JSON file>"),
-                                         cl::Required);
+static constexpr clv2::OptionInfo<std::string> JsonFilenameOpt{
+    "", "<input kernel JSON file>", clv2::Positional{}, clv2::Required};
 
-static cl::opt<bool> VerifyOpt(
-    "verify",
-    cl::desc("Verify device memory after replaying against the record output."),
-    cl::init(false), cl::cat(ReplayOptions));
+static constexpr clv2::OptionInfo<bool> VerifyOptInfo{
+    "verify", "Verify device memory after replaying against the record output.",
+    clv2::Init{false}, clv2::cat(ReplayOptions)};
 
-static cl::opt<bool> SaveOutputOpt(
+static constexpr clv2::OptionInfo<bool> SaveOutputOptInfo{
     "save-output",
-    cl::desc("Save the device memory output of the replayed kernel execution."),
-    cl::init(false), cl::cat(ReplayOptions));
+    "Save the device memory output of the replayed kernel execution.",
+    clv2::Init{false}, clv2::cat(ReplayOptions)};
 
-static cl::opt<uint32_t> NumTeamsOpt("num-teams",
-                                     cl::desc("Set the number of teams."),
-                                     cl::init(0), cl::cat(ReplayOptions));
+static constexpr clv2::OptionInfo<unsigned> NumTeamsOptInfo{
+    "num-teams", "Set the number of teams.", clv2::Init{0u},
+    clv2::cat(ReplayOptions)};
 
-static cl::opt<uint32_t> NumThreadsOpt("num-threads",
-                                       cl::desc("Set the number of threads."),
-                                       cl::init(0), cl::cat(ReplayOptions));
+static constexpr clv2::OptionInfo<unsigned> NumThreadsOptInfo{
+    "num-threads", "Set the number of threads.", clv2::Init{0u},
+    clv2::cat(ReplayOptions)};
 
-static cl::opt<int32_t> DeviceIdOpt("device-id", cl::desc("Set the device id."),
-                                    cl::init(-1), cl::cat(ReplayOptions));
+static constexpr clv2::OptionInfo<int> DeviceIdOptInfo{
+    "device-id", "Set the device id.", clv2::Init{-1},
+    clv2::cat(ReplayOptions)};
 
-static cl::opt<uint32_t>
-    RepetitionsOpt("repetitions",
-                   cl::desc("Set the number of replay repetitions."),
-                   cl::init(1), cl::cat(ReplayOptions));
+static constexpr clv2::OptionInfo<unsigned> RepetitionsOptInfo{
+    "repetitions", "Set the number of replay repetitions.", clv2::Init{1u},
+    clv2::cat(ReplayOptions)};
 
-static cl::opt<bool>
-    IgnoreLimitsOpt("ignore-limits",
-                    cl::desc("Ignore thread and team limits (unrecommended)."),
-                    cl::init(false), cl::cat(ReplayOptions));
+static constexpr clv2::OptionsRegistry<
+    &JsonFilenameOpt, &VerifyOptInfo, &SaveOutputOptInfo, &NumTeamsOptInfo,
+    &NumThreadsOptInfo, &DeviceIdOptInfo, &RepetitionsOptInfo>
+    ReplayReg;
 
-static cl::opt<bool>
-    LoadBitcodeOpt("load-bitcode",
-                   cl::desc("Load the recorded IR bitcode image file."),
-                   cl::init(false), cl::cat(ReplayOptions));
+// File-scope variables populated from parsed options in main().
+static std::string JsonFilename;
+static bool VerifyOpt;
+static bool SaveOutputOpt;
+static uint32_t NumTeamsOpt;
+static uint32_t NumThreadsOpt;
+static int32_t DeviceIdOpt;
+static uint32_t RepetitionsOpt;
+
+static bool IgnoreLimitsOpt = false;
+static bool LoadBitcodeOpt = false;
 
 template <typename... ArgsTy>
 Error createErr(const char *ErrFmt, ArgsTy &&...Args) {
@@ -259,7 +265,7 @@ Error replayKernel() {
     return Err;
 
   // Keep the filepath and directory for future use.
-  auto Filepath = std::filesystem::path(JsonFilename.getValue());
+  auto Filepath = std::filesystem::path(JsonFilename);
   auto Directory = Filepath.parent_path();
 
   // Load the recorded globals file.
@@ -383,8 +389,19 @@ Error replayKernel() {
 }
 
 int main(int Argc, char **Argv) {
-  cl::HideUnrelatedOptions(ReplayOptions);
-  cl::ParseCommandLineOptions(Argc, Argv, TOOL_NAME "\n");
+  clv2::OptionParser P;
+  P.add<&ReplayReg>();
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&ReplayOptions});
+  auto OptsCtx = P.parse(Argc, Argv, TOOL_NAME "\n");
+  auto *Opts = OptsCtx->getViewPtr<&ReplayReg>();
+  JsonFilename = Opts->get<&JsonFilenameOpt>();
+  VerifyOpt = Opts->get<&VerifyOptInfo>();
+  SaveOutputOpt = Opts->get<&SaveOutputOptInfo>();
+  NumTeamsOpt = Opts->get<&NumTeamsOptInfo>();
+  NumThreadsOpt = Opts->get<&NumThreadsOptInfo>();
+  DeviceIdOpt = Opts->get<&DeviceIdOptInfo>();
+  RepetitionsOpt = Opts->get<&RepetitionsOptInfo>();
 
   if (auto Err = replayKernel()) {
     errs() << TOOL_PREFIX << " Error: " << llvm::toString(std::move(Err))

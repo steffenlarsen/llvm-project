@@ -28,8 +28,9 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/TypedPointerType.h"
 #include "llvm/IR/Value.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/Local.h"
 
 #include <cassert>
@@ -59,10 +60,10 @@ using namespace llvm::PatternMatch;
 
 #define DEBUG_TYPE "spirv-emit-intrinsics"
 
-static cl::opt<bool>
-    SpirvEmitOpNames("spirv-emit-op-names",
-                     cl::desc("Emit OpName for all instructions"),
-                     cl::init(false));
+static bool getEmitOpNames(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SPIRV_EmitOpNames>(
+      F.getContext().getOptionsContext());
+}
 
 namespace llvm::SPIRV {
 #define GET_BuiltinGroup_DECL
@@ -501,7 +502,8 @@ static void emitAssignName(Instruction *I, IRBuilder<> &B) {
 
   // We want to be conservative when adding the names because they can interfere
   // with later optimizations.
-  bool KeepName = SpirvEmitOpNames;
+  bool KeepName = getEmitOpNames(*I->getFunction());
+
   if (!KeepName) {
     if (isa<AllocaInst>(I)) {
       KeepName = true;

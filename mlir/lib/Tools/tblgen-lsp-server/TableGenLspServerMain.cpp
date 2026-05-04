@@ -9,10 +9,11 @@
 #include "mlir/Tools/tblgen-lsp-server/TableGenLspServerMain.h"
 #include "LSPServer.h"
 #include "TableGenServer.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/LSP/Logging.h"
 #include "llvm/Support/LSP/Transport.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 
 using namespace mlir;
 using namespace mlir::lsp;
@@ -21,49 +22,63 @@ using llvm::lsp::JSONStreamStyle;
 using llvm::lsp::JSONTransport;
 using llvm::lsp::Logger;
 
-LogicalResult mlir::TableGenLspServerMain(int argc, char **argv) {
-  llvm::cl::opt<JSONStreamStyle> inputStyle{
-      "input-style",
-      llvm::cl::desc("Input JSON stream encoding"),
-      llvm::cl::values(clEnumValN(JSONStreamStyle::Standard, "standard",
-                                  "usual LSP protocol"),
-                       clEnumValN(JSONStreamStyle::Delimited, "delimited",
-                                  "messages delimited by `// -----` lines, "
-                                  "with // comment support")),
-      llvm::cl::init(JSONStreamStyle::Standard),
-      llvm::cl::Hidden,
-  };
-  llvm::cl::opt<bool> litTest{
-      "lit-test",
-      llvm::cl::desc(
-          "Abbreviation for -input-style=delimited -pretty -log=verbose. "
-          "Intended to simplify lit tests"),
-      llvm::cl::init(false),
-  };
-  llvm::cl::opt<Logger::Level> logLevel{
-      "log",
-      llvm::cl::desc("Verbosity of log messages written to stderr"),
-      llvm::cl::values(
-          clEnumValN(Logger::Level::Error, "error", "Error messages only"),
-          clEnumValN(Logger::Level::Info, "info",
-                     "High level execution tracing"),
-          clEnumValN(Logger::Level::Debug, "verbose", "Low level details")),
-      llvm::cl::init(Logger::Level::Info),
-  };
-  llvm::cl::opt<bool> prettyPrint{
-      "pretty",
-      llvm::cl::desc("Pretty-print JSON output"),
-      llvm::cl::init(false),
-  };
-  llvm::cl::list<std::string> extraIncludeDirs(
-      "tablegen-extra-dir", llvm::cl::desc("Extra directory of include files"),
-      llvm::cl::value_desc("directory"), llvm::cl::Prefix);
-  llvm::cl::list<std::string> compilationDatabases(
-      "tablegen-compilation-database",
-      llvm::cl::desc("Compilation YAML databases containing additional "
-                     "compilation information for .td files"));
+//===----------------------------------------------------------------------===//
+// Command-line options
+//===----------------------------------------------------------------------===//
 
-  llvm::cl::ParseCommandLineOptions(argc, argv, "TableGen LSP Language Server");
+using namespace llvm::clv2;
+
+static constexpr OptionCategory TblgenLspCategory{"tblgen-lsp-server Options"};
+
+enum class LspInputStyle : int { Standard = 0, Delimited };
+static constexpr EnumVal<LspInputStyle> tblgenInputStyleVals[] = {
+    {"standard", LspInputStyle::Standard, "usual LSP protocol"},
+    {"delimited", LspInputStyle::Delimited,
+     "messages delimited by `// -----` lines, with // comment support"},
+};
+static constexpr auto tblgenInputStyleOpt = makeEnumOption<LspInputStyle>(
+    "input-style", "Input JSON stream encoding", tblgenInputStyleVals,
+    Init{LspInputStyle::Standard}, Hidden);
+static constexpr OptionInfo<bool> tblgenLitTestOpt{
+    "lit-test", "Abbreviation for -input-style=delimited -pretty -log=verbose. "
+                "Intended to simplify lit tests"};
+enum class LspLogLevel : int { Error = 0, Info, Verbose };
+static constexpr EnumVal<LspLogLevel> tblgenLogLevelVals[] = {
+    {"error", LspLogLevel::Error, "Error messages only"},
+    {"info", LspLogLevel::Info, "High level execution tracing"},
+    {"verbose", LspLogLevel::Verbose, "Low level details"},
+};
+static constexpr auto tblgenLogOpt = makeEnumOption<LspLogLevel>(
+    "log", "Verbosity of log messages written to stderr", tblgenLogLevelVals,
+    Init{LspLogLevel::Info});
+static constexpr OptionInfo<bool> tblgenPrettyOpt{"pretty",
+                                                  "Pretty-print JSON output"};
+static constexpr ListOptionInfo<std::string> tblgenExtraDirOpt{
+    "tablegen-extra-dir", "Extra directory of include files",
+    value_desc("directory"), CommaSeparated};
+static constexpr ListOptionInfo<std::string> tblgenCompDbOpt{
+    "tablegen-compilation-database",
+    "Compilation YAML databases containing additional "
+    "compilation information for .td files",
+    CommaSeparated};
+
+static constexpr OptionsRegistry<&tblgenInputStyleOpt, &tblgenLitTestOpt,
+                                 &tblgenLogOpt, &tblgenPrettyOpt,
+                                 &tblgenExtraDirOpt, &tblgenCompDbOpt>
+    TblgenLspReg;
+
+LogicalResult mlir::TableGenLspServerMain(int argc, char **argv) {
+  llvm::clv2::OptionParser P;
+  P.add<&TblgenLspReg>();
+  llvm::RegisterCoreLLVMOptions(P);
+  auto OptsCtx = P.parse(argc, argv, "TableGen LSP Language Server");
+  auto *Opts = OptsCtx->getViewPtr<&TblgenLspReg>();
+
+  auto inputStyle =
+      static_cast<JSONStreamStyle>(Opts->get<&tblgenInputStyleOpt>());
+  bool litTest = Opts->get<&tblgenLitTestOpt>();
+  auto logLevel = static_cast<Logger::Level>(Opts->get<&tblgenLogOpt>());
+  bool prettyPrint = Opts->get<&tblgenPrettyOpt>();
 
   if (litTest) {
     inputStyle = JSONStreamStyle::Delimited;
@@ -71,15 +86,13 @@ LogicalResult mlir::TableGenLspServerMain(int argc, char **argv) {
     prettyPrint = true;
   }
 
-  // Configure the logger.
   Logger::setLogLevel(logLevel);
 
-  // Configure the transport used for communication.
   llvm::sys::ChangeStdinToBinary();
   JSONTransport transport(stdin, llvm::outs(), inputStyle, prettyPrint);
 
-  // Configure the servers and start the main language server.
-  TableGenServer::Options options(compilationDatabases, extraIncludeDirs);
+  TableGenServer::Options options(Opts->get<&tblgenCompDbOpt>(),
+                                  Opts->get<&tblgenExtraDirOpt>());
   TableGenServer server(options);
   return runTableGenLSPServer(server, transport);
 }

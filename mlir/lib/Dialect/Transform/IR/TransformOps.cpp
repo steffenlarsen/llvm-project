@@ -1120,7 +1120,7 @@ transform::CollectMatchingOp::apply(transform::TransformRewriter &rewriter,
     WalkResult walkResult = root->walk([&](Operation *op) {
       LDBG(DEBUG_TYPE_MATCHER, 1)
           << "matching "
-          << OpWithFlags(op, OpPrintingFlags().assumeVerified().skipRegions())
+          << OpWithFlags(op, opPrintingFlags(op).assumeVerified().skipRegions())
           << " @" << op;
 
       // Try matching.
@@ -1267,7 +1267,7 @@ transform::ForeachMatchOp::apply(transform::TransformRewriter &rewriter,
 
       LDBG(DEBUG_TYPE_MATCHER, 1)
           << "matching "
-          << OpWithFlags(op, OpPrintingFlags().assumeVerified().skipRegions())
+          << OpWithFlags(op, opPrintingFlags(op).assumeVerified().skipRegions())
           << " @" << op;
 
       firstMatchArgument.clear();
@@ -3053,7 +3053,7 @@ transform::PrintOp::apply(transform::TransformRewriter &rewriter,
   if (getName().has_value())
     llvm::outs() << *getName() << " ";
 
-  OpPrintingFlags printFlags;
+  OpPrintingFlags printFlags(getContext());
   if (getAssumeVerified().value_or(false))
     printFlags.assumeVerified();
   if (getUseLocalScope().value_or(false))

@@ -41,10 +41,13 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicsARM.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
@@ -55,26 +58,15 @@ using namespace llvm;
 #define DEBUG_TYPE "mve-tail-predication"
 #define DESC "Transform predicated vector loops to use MVE tail predication"
 
-cl::opt<TailPredication::Mode> EnableTailPredication(
-   "tail-predication", cl::desc("MVE tail-predication pass options"),
-   cl::init(TailPredication::Enabled),
-   cl::values(clEnumValN(TailPredication::Disabled, "disabled",
-                         "Don't tail-predicate loops"),
-              clEnumValN(TailPredication::EnabledNoReductions,
-                         "enabled-no-reductions",
-                         "Enable tail-predication, but not for reduction loops"),
-              clEnumValN(TailPredication::Enabled,
-                         "enabled",
-                         "Enable tail-predication, including reduction loops"),
-              clEnumValN(TailPredication::ForceEnabledNoReductions,
-                         "force-enabled-no-reductions",
-                         "Enable tail-predication, but not for reduction loops, "
-                         "and force this which might be unsafe"),
-              clEnumValN(TailPredication::ForceEnabled,
-                         "force-enabled",
-                         "Enable tail-predication, including reduction loops, "
-                         "and force this which might be unsafe")));
+static TailPredication::Mode EnableTailPredication = TailPredication::Enabled;
 
+static TailPredication::Mode getEnableTailPredication(const Function &F) {
+  if (auto *O =
+          clv2::getView<&clv2::ARMOptsReg>(F.getContext().getOptionsContext()))
+    return static_cast<TailPredication::Mode>(
+        O->get<&clv2::ARM_EnableTailPredication>());
+  return EnableTailPredication;
+}
 
 namespace {
 
@@ -117,11 +109,11 @@ private:
 } // end namespace
 
 bool MVETailPredication::runOnLoop(Loop *L, LPPassManager&) {
-  if (skipLoop(L) || !EnableTailPredication)
+  Function &F = *L->getHeader()->getParent();
+  if (skipLoop(L) || !getEnableTailPredication(F))
     return false;
 
   MaskedInsts.clear();
-  Function &F = *L->getHeader()->getParent();
   auto &TPC = getAnalysis<TargetPassConfig>();
   auto &TM = TPC.getTM<TargetMachine>();
   ST = &TM.getSubtarget<ARMSubtarget>(F);
@@ -192,9 +184,11 @@ bool MVETailPredication::runOnLoop(Loop *L, LPPassManager&) {
 //    vector width.
 const SCEV *MVETailPredication::IsSafeActiveMask(IntrinsicInst *ActiveLaneMask,
                                                  Value *TripCount) {
+  const Function &TailPredF = *L->getHeader()->getParent();
   bool ForceTailPredication =
-    EnableTailPredication == TailPredication::ForceEnabledNoReductions ||
-    EnableTailPredication == TailPredication::ForceEnabled;
+      getEnableTailPredication(TailPredF) ==
+          TailPredication::ForceEnabledNoReductions ||
+      getEnableTailPredication(TailPredF) == TailPredication::ForceEnabled;
 
   Value *ElemCount = ActiveLaneMask->getOperand(1);
   bool Changed = false;

@@ -547,7 +547,7 @@ LogicalResult OpToOpPassAdaptor::run(Pass *pass, Operation *op,
                                      AnalysisManager am, bool verifyPasses,
                                      unsigned parentInitGeneration) {
   LDBG() << "Running pass '" << pass->getName() << "' on operation '"
-         << OpWithFlags(op, OpPrintingFlags().skipRegions()) << "' at "
+         << OpWithFlags(op, opPrintingFlags(op).skipRegions()) << "' at "
          << op->getLoc();
 
   std::optional<RegisteredOperationName> opInfo = op->getRegisteredInfo();
@@ -663,7 +663,7 @@ LogicalResult OpToOpPassAdaptor::runPipeline(
     const PassInstrumentation::PipelineParentInfo *parentInfo) {
   LDBG_OS([&](raw_ostream &os) {
     os << "Running pipeline on operation '"
-       << OpWithFlags(op, OpPrintingFlags().skipRegions()) << "' with "
+       << OpWithFlags(op, opPrintingFlags(op).skipRegions()) << "' with "
        << pm.size() << " passes, verifyPasses=" << verifyPasses
        << " pipeline: ";
     pm.printAsTextualPipeline(os, /*pretty=*/false);
@@ -688,7 +688,7 @@ LogicalResult OpToOpPassAdaptor::runPipeline(
     if (failed(run(&pass, op, am, verifyPasses, parentInitGeneration))) {
       LDBG() << "Pipeline failed for pass '" << pass.getName()
              << "' on operation '"
-             << OpWithFlags(op, OpPrintingFlags().skipRegions()) << "'";
+             << OpWithFlags(op, opPrintingFlags(op).skipRegions()) << "'";
       return failure();
     }
   }
@@ -855,7 +855,8 @@ void OpToOpPassAdaptor::runOnOperation(bool verifyPasses) {
 void OpToOpPassAdaptor::runOnOperationImpl(bool verifyPasses) {
   LDBG_OS([&](raw_ostream &os) {
     os << "Running pass adaptor synchronously on operation '"
-       << OpWithFlags(getOperation(), OpPrintingFlags().skipRegions())
+       << OpWithFlags(getOperation(),
+                      opPrintingFlags(getOperation()).skipRegions())
        << "' with " << mgrs.size()
        << " pass managers, verifyPasses=" << verifyPasses << " pipeline: ";
     printAsTextualPipeline(os, /*pretty=*/false);
@@ -873,21 +874,22 @@ void OpToOpPassAdaptor::runOnOperationImpl(bool verifyPasses) {
         auto *mgr = findPassManagerFor(mgrs, op.getName(), *op.getContext());
         if (!mgr) {
           LDBG(2) << "Skipping operation '"
-                  << OpWithFlags(&op, OpPrintingFlags().skipRegions())
+                  << OpWithFlags(&op, opPrintingFlags(&op).skipRegions())
                   << "': no suitable pass manager found";
           continue;
         }
 
         // Run the held pipeline over the current operation.
         LDBG(2) << "Processing operation '"
-                << OpWithFlags(&op, OpPrintingFlags().skipRegions())
+                << OpWithFlags(&op, opPrintingFlags(&op).skipRegions())
                 << "' with pass manager '" << mgr->getOpAnchorName() << "'";
 
         unsigned initGeneration = mgr->impl->initializationGeneration;
         if (failed(runPipeline(*mgr, &op, am.nest(&op), verifyPasses,
                                initGeneration, instrumentor, &parentInfo))) {
           LDBG(2) << "Pipeline failed for operation '"
-                  << OpWithFlags(&op, OpPrintingFlags().skipRegions()) << "'";
+                  << OpWithFlags(&op, opPrintingFlags(&op).skipRegions())
+                  << "'";
           signalPassFailure();
         } else {
           processedOps++;
@@ -913,7 +915,8 @@ static bool hasSizeMismatch(ArrayRef<OpPassManager> lhs,
 void OpToOpPassAdaptor::runOnOperationAsyncImpl(bool verifyPasses) {
   LDBG_OS([&](raw_ostream &os) {
     os << "Running pass adaptor asynchronously on operation '"
-       << OpWithFlags(getOperation(), OpPrintingFlags().skipRegions())
+       << OpWithFlags(getOperation(),
+                      opPrintingFlags(getOperation()).skipRegions())
        << "' with " << mgrs.size()
        << " pass managers, verifyPasses=" << verifyPasses << " pipeline: ";
     printAsTextualPipeline(os, /*pretty=*/false);
@@ -959,7 +962,7 @@ void OpToOpPassAdaptor::runOnOperationAsyncImpl(bool verifyPasses) {
         if (auto *mgr = findPassManagerFor(mgrs, op.getName(), *context)) {
           pmIdxIt.first->second = std::distance(mgrs.begin(), mgr);
           LDBG(2) << "Operation '"
-                  << OpWithFlags(&op, OpPrintingFlags().skipRegions())
+                  << OpWithFlags(&op, opPrintingFlags(&op).skipRegions())
                   << "' will use pass manager '" << mgr->getOpAnchorName()
                   << "'";
         }
@@ -970,7 +973,7 @@ void OpToOpPassAdaptor::runOnOperationAsyncImpl(bool verifyPasses) {
         opInfos.emplace_back(*pmIdxIt.first->second, &op, am.nest(&op));
       } else {
         LDBG(2) << "Operation '"
-                << OpWithFlags(&op, OpPrintingFlags().skipRegions())
+                << OpWithFlags(&op, opPrintingFlags(&op).skipRegions())
                 << "' skipped: no suitable pass manager";
       }
     }
@@ -1035,7 +1038,7 @@ void PassManager::enableVerifier(bool enabled) { verifyPasses = enabled; }
 LogicalResult PassManager::run(Operation *op) {
   LDBG_OS([&](raw_ostream &os) {
     os << "Starting PassManager run on operation '"
-       << OpWithFlags(op, OpPrintingFlags().skipRegions()) << "' with "
+       << OpWithFlags(op, opPrintingFlags(op).skipRegions()) << "' with "
        << size() << " passes, verifyPasses=" << verifyPasses << " pipeline: ";
     printAsTextualPipeline(os, /*pretty=*/false);
   });

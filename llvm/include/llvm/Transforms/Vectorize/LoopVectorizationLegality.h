@@ -30,6 +30,7 @@
 #include "llvm/Analysis/LoopAccessAnalysis.h"
 #include "llvm/Support/TypeSize.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
+#include "llvm/Transforms/Vectorize/ScalableForceKind.h"
 
 namespace llvm {
 class AssumptionCache;
@@ -105,20 +106,9 @@ public:
     FK_Enabled = 1,    ///< Forcing enabled.
   };
 
-  enum ScalableForceKind {
-    /// Not selected.
-    SK_Unspecified = -1,
-    /// Disables vectorization with scalable vectors.
-    SK_FixedWidthOnly = 0,
-    /// Vectorize loops using scalable vectors or fixed-width vectors, but favor
-    /// scalable vectors when the cost-model is inconclusive. This is the
-    /// default when the scalable.enable hint is enabled through a pragma.
-    SK_PreferScalable = 1,
-    /// Always vectorize loops using scalable vectors if feasible (i.e. the plan
-    /// has a valid cost and is not restricted by fixed-length dependence
-    /// distances).
-    SK_AlwaysScalable = 2
-  };
+  /// Alias only; the enum lives in ScalableForceKind.h at namespace scope so
+  /// the options header can name it without including this file.
+  using ScalableForceKind = ::llvm::ScalableForceKind;
 
   LLVM_ABI LoopVectorizeHints(const Loop *L, bool InterleaveOnlyWhenForced,
                               OptimizationRemarkEmitter &ORE,

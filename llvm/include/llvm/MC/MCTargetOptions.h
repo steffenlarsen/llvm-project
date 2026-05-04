@@ -13,10 +13,15 @@
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Compression.h"
+#include "llvm/Support/OptionsContext.h"
 #include <string>
 #include <vector>
 
 namespace llvm {
+
+namespace clv2 {
+class OptionsContext;
+}
 
 enum class EmitDwarfUnwindType {
   Always,          // Always emit dwarf unwind
@@ -120,11 +125,12 @@ public:
   // Whether or not to use full register names on PowerPC.
   bool PPCUseFullRegisterNames : 1;
 
-  // Force 8-byte (sdata8) pointer encodings for ELF exception-handling.
-  // On x86_64 this affects the .eh_frame FDE CFI plus the personality, LSDA,
-  // and TType encodings; on AArch64/PPC64 only the FDE CFI encoding changes
-  // (personality/LSDA/TType already default to sdata8).
   bool LargeEHEncoding = false;
+
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
+
+  /// Never null; reports clv2::defaultOptionsContext() when none is set.
+  LLVM_ABI const clv2::OptionsContext &getOptsCtx() const;
 
   LLVM_ABI MCTargetOptions();
 

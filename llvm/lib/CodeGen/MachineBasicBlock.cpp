@@ -13,6 +13,7 @@
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/LiveVariables.h"
@@ -30,11 +31,14 @@
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/ModuleSlotTracker.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include <algorithm>
@@ -43,11 +47,9 @@ using namespace llvm;
 
 #define DEBUG_TYPE "codegen"
 
-static cl::opt<bool> PrintSlotIndexes(
-    "print-slotindexes",
-    cl::desc("When printing machine IR, annotate instructions and blocks with "
-             "SlotIndexes when available"),
-    cl::init(true), cl::Hidden);
+static bool getPrintSlotindexes(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_PrintSlotindexes>(Ctx);
+}
 
 MachineBasicBlock::MachineBasicBlock(MachineFunction &MF, const BasicBlock *B)
     : BB(B), Number(-1), xParent(&MF) {
@@ -368,7 +370,8 @@ void MachineBasicBlock::print(raw_ostream &OS, ModuleSlotTracker &MST,
     return;
   }
 
-  if (Indexes && PrintSlotIndexes)
+  if (Indexes &&
+      getPrintSlotindexes(MF->getFunction().getContext().getOptionsContext()))
     OS << Indexes->getMBBStartIdx(this) << '\t';
 
   printName(OS, PrintNameIr | PrintNameAttributes, &MST);
@@ -440,7 +443,8 @@ void MachineBasicBlock::print(raw_ostream &OS, ModuleSlotTracker &MST,
 
   bool IsInBundle = false;
   for (const MachineInstr &MI : instrs()) {
-    if (Indexes && PrintSlotIndexes) {
+    if (Indexes && getPrintSlotindexes(
+                       MF->getFunction().getContext().getOptionsContext())) {
       if (Indexes->hasIndex(MI))
         OS << Indexes->getInstructionIndex(MI);
       OS << '\t';

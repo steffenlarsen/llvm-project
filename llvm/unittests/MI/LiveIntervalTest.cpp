@@ -22,7 +22,7 @@
 using namespace llvm;
 
 namespace llvm {
-  void initializeTestPassPass(PassRegistry &);
+void initializeTestPassPass(PassRegistry &);
 }
 
 namespace {
@@ -83,17 +83,15 @@ struct TestPass : public MachineFunctionPass {
   TestPass() : MachineFunctionPass(ID) {}
 };
 
-template <typename AnalysisType>
-struct TestPassT : public TestPass {
+template <typename AnalysisType> struct TestPassT : public TestPass {
 
-  typedef std::function<void(MachineFunction&,AnalysisType&)> TestFx;
+  typedef std::function<void(MachineFunction &, AnalysisType &)> TestFx;
 
   TestPassT() {
     // We should never call this but always use PM.add(new TestPass(...))
     abort();
   }
-  TestPassT(TestFx T, bool ShouldPass)
-      : T(T), ShouldPass(ShouldPass) {
+  TestPassT(TestFx T, bool ShouldPass) : T(T), ShouldPass(ShouldPass) {
     initializeTestPassPass(*PassRegistry::getPassRegistry());
   }
 
@@ -113,6 +111,7 @@ struct TestPassT : public TestPass {
     AU.addPreserved<AnalysisType>();
     MachineFunctionPass::getAnalysisUsage(AU);
   }
+
 private:
   TestFx T;
   bool ShouldPass;
@@ -204,7 +203,7 @@ template <typename AnalysisType>
 static void doTest(StringRef MIRFunc,
                    typename TestPassT<AnalysisType>::TestFx T,
                    bool ShouldPass = true) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<TargetMachine> TM = createTargetMachine();
   // This test is designed for the X86 backend; stop if it is not available.
   if (!TM)
@@ -232,7 +231,8 @@ registers:
   - { id: 0, class: sreg_64 }
 body: |
   bb.0:
-)MIR") + Twine(MIRFunc) + Twine("...\n")).toNullTerminatedStringRef(S);
+)MIR") + Twine(MIRFunc) + Twine("...\n"))
+                            .toNullTerminatedStringRef(S);
 
   doTest<LiveIntervalsWrapperPass>(MIRString, T, ShouldPass);
 }
@@ -250,7 +250,8 @@ registers:
   - { id: 0, class: sreg_64 }
 body: |
   bb.0:
-)MIR") + Twine(MIRFunc) + Twine("...\n")).toNullTerminatedStringRef(S);
+)MIR") + Twine(MIRFunc) + Twine("...\n"))
+                            .toNullTerminatedStringRef(S);
   doTest<LiveVariablesWrapperPass>(MIRString, T, ShouldPass);
 }
 

@@ -21,15 +21,19 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/AMDGPUSplitModuleOptions.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/IPO/GlobalDCE.h"
@@ -37,45 +41,41 @@
 #include "llvm/Transforms/Utils/SplitModuleByCategory.h"
 
 using namespace llvm;
+using namespace llvm::clv2;
 
-static cl::OptionCategory SplitCategory("Split Options");
+static constexpr OptionCategory SplitCategory{"Split Options"};
 
-static cl::opt<std::string> InputFilename(cl::Positional,
-                                          cl::desc("<input bitcode file>"),
-                                          cl::init("-"),
-                                          cl::value_desc("filename"),
-                                          cl::cat(SplitCategory));
+static constexpr OptionInfo<std::string> InputFilename{
+    "input", "<input bitcode file>", Positional{}, Init{"-"},
+    cat(SplitCategory)};
 
-static cl::opt<std::string> OutputFilename("o",
-                                           cl::desc("Override output filename"),
-                                           cl::value_desc("filename"),
-                                           cl::cat(SplitCategory));
+static constexpr OptionInfo<std::string> OutputFilename{
+    "o", "Override output filename", value_desc("filename"),
+    cat(SplitCategory)};
 
-static cl::opt<unsigned> NumOutputs("j", cl::Prefix, cl::init(2),
-                                    cl::desc("Number of output files"),
-                                    cl::cat(SplitCategory));
+static constexpr OptionInfo<unsigned> NumOutputs{
+    "j", "Number of output files", PrefixFormat, Init{2u}, cat(SplitCategory)};
 
-static cl::opt<bool>
-    PreserveLocals("preserve-locals", cl::Prefix, cl::init(false),
-                   cl::desc("Split without externalizing locals"),
-                   cl::cat(SplitCategory));
+static constexpr OptionInfo<bool> PreserveLocals{
+    "preserve-locals", "Split without externalizing locals",
+    cat(SplitCategory)};
 
-static cl::opt<bool>
-    RoundRobin("round-robin", cl::Prefix, cl::init(false),
-               cl::desc("Use round-robin distribution of functions to "
-                        "modules instead of the default name-hash-based one"),
-               cl::cat(SplitCategory));
+static constexpr OptionInfo<bool> RoundRobin{
+    "round-robin",
+    "Use round-robin distribution of functions to modules instead of the "
+    "default name-hash-based one",
+    cat(SplitCategory)};
 
-static cl::opt<std::string>
-    MTriple("mtriple",
-            cl::desc("Target triple. When present, a TargetMachine is created "
-                     "and TargetMachine::splitModule is used instead of the "
-                     "common SplitModule logic."),
-            cl::value_desc("triple"), cl::cat(SplitCategory));
+static constexpr OptionInfo<std::string> MTriple{
+    "mtriple",
+    "Target triple. When present, a TargetMachine is created and "
+    "TargetMachine::splitModule is used instead of the common SplitModule "
+    "logic.",
+    value_desc("triple"), cat(SplitCategory)};
 
-static cl::opt<std::string>
-    MCPU("mcpu", cl::desc("Target CPU, ignored if --mtriple is not used"),
-         cl::value_desc("cpu"), cl::cat(SplitCategory));
+static constexpr OptionInfo<std::string> MCPU{
+    "mcpu", "Target CPU, ignored if --mtriple is not used", value_desc("cpu"),
+    cat(SplitCategory)};
 
 enum class SplitByCategoryType {
   SBCT_ByAttribute,
@@ -83,26 +83,83 @@ enum class SplitByCategoryType {
   SBCT_None,
 };
 
-static cl::opt<SplitByCategoryType> SplitByCategory(
+static constexpr EnumVal<SplitByCategoryType> SplitByCategoryVals[] = {
+    {"attribute", SplitByCategoryType::SBCT_ByAttribute,
+     "one output module per unique value of the function attribute named by "
+     "--category-attribute"},
+    {"kernel", SplitByCategoryType::SBCT_ByKernel,
+     "one output module per kernel"},
+};
+
+static constexpr auto SplitByCategory = makeEnumOption<SplitByCategoryType>(
     "split-by-category",
-    cl::desc("Split by category. If present, splitting by category is used "
-             "with the specified categorization type."),
-    cl::Optional, cl::init(SplitByCategoryType::SBCT_None),
-    cl::values(clEnumValN(SplitByCategoryType::SBCT_ByAttribute, "attribute",
-                          "one output module per unique value of the function "
-                          "attribute named by --category-attribute"),
-               clEnumValN(SplitByCategoryType::SBCT_ByKernel, "kernel",
-                          "one output module per kernel")),
-    cl::cat(SplitCategory));
+    "Split by category. If present, splitting by category is used with the "
+    "specified categorization type.",
+    SplitByCategoryVals, Init{SplitByCategoryType::SBCT_None},
+    cat(SplitCategory));
 
-static cl::opt<std::string>
-    CategoryAttribute("category-attribute",
-                      cl::desc("Function attribute name to use when splitting "
-                               "with -split-by-category=attribute"),
-                      cl::value_desc("name"), cl::cat(SplitCategory));
+static constexpr OptionInfo<std::string> CategoryAttribute{
+    "category-attribute",
+    "Function attribute name to use when splitting with "
+    "-split-by-category=attribute",
+    value_desc("name"), cat(SplitCategory)};
 
-static cl::opt<bool> OutputAssembly{
-    "S", cl::desc("Write output as LLVM assembly"), cl::cat(SplitCategory)};
+static constexpr OptionInfo<bool> OutputAssembly{
+    "S", "Write output as LLVM assembly", cat(SplitCategory)};
+
+static constexpr OptionInfo<unsigned> AMDGPUMaxDepth{
+    "amdgpu-module-splitting-max-depth",
+    "maximum search depth. 0 forces a greedy approach. "
+    "warning: the algorithm is up to O(2^N), where N is the max depth.",
+    Hidden, Init{8u}, cat(SplitCategory)};
+
+static constexpr OptionInfo<float> AMDGPULargeFnFactor{
+    "amdgpu-module-splitting-large-threshold",
+    "when max depth is reached and we can no longer branch out, this value "
+    "determines if a function is worth merging into an already existing "
+    "partition to reduce code duplication.",
+    Hidden, Init{2.0f}, cat(SplitCategory)};
+
+static constexpr OptionInfo<float> AMDGPULargeFnOverlapForMerge{
+    "amdgpu-module-splitting-merge-threshold",
+    "when a function is considered for merging into a partition that already "
+    "contains some of its callees, do the merge if at least n% of the code "
+    "it can reach is already present inside the partition.",
+    Hidden, Init{0.7f}, cat(SplitCategory)};
+
+static constexpr OptionInfo<bool> AMDGPUNoExternalizeGlobals{
+    "amdgpu-module-splitting-no-externalize-globals",
+    "disables externalization of global variable with local linkage.", Hidden,
+    cat(SplitCategory)};
+
+static constexpr OptionInfo<bool> AMDGPUNoExternalizeOnAddrTaken{
+    "amdgpu-module-splitting-no-externalize-address-taken",
+    "disables externalization of functions whose addresses are taken.", Hidden,
+    cat(SplitCategory)};
+
+static constexpr OptionInfo<std::string> AMDGPUModuleDotCfgOutput{
+    "amdgpu-module-splitting-print-module-dotcfg",
+    "output file to write out the dotgraph representation of the input module.",
+    Hidden, cat(SplitCategory)};
+
+static constexpr OptionInfo<std::string> AMDGPUPartitionSummariesOutput{
+    "amdgpu-module-splitting-print-partition-summaries",
+    "output file to write out a summary of the partitions created for each "
+    "module.",
+    Hidden, cat(SplitCategory)};
+
+static constexpr OptionInfo<std::string> DebugOnly{
+    "debug-only",
+    "Enable a specific type of debug output (comma separated list of types)",
+    Hidden, cat(SplitCategory)};
+
+static constexpr OptionsRegistry<
+    &InputFilename, &OutputFilename, &NumOutputs, &PreserveLocals, &RoundRobin,
+    &MTriple, &MCPU, &SplitByCategory, &CategoryAttribute, &OutputAssembly,
+    &AMDGPUMaxDepth, &AMDGPULargeFnFactor, &AMDGPULargeFnOverlapForMerge,
+    &AMDGPUNoExternalizeGlobals, &AMDGPUNoExternalizeOnAddrTaken,
+    &AMDGPUModuleDotCfgOutput, &AMDGPUPartitionSummariesOutput, &DebugOnly>
+    SplitToolReg;
 
 void writeStringToFile(StringRef Content, StringRef Path) {
   std::error_code EC;
@@ -116,7 +173,7 @@ void writeStringToFile(StringRef Content, StringRef Path) {
   OS << Content << "\n";
 }
 
-void writeModuleToFile(const Module &M, StringRef Path, bool OutputAssembly) {
+void writeModuleToFile(const Module &M, StringRef Path, bool DoOutputAssembly) {
   int FD = -1;
   if (std::error_code EC = sys::fs::openFileForWrite(Path, FD)) {
     errs() << formatv("error opening file: {0}, error: {1}", Path, EC.message())
@@ -125,7 +182,7 @@ void writeModuleToFile(const Module &M, StringRef Path, bool OutputAssembly) {
   }
 
   raw_fd_ostream OS(FD, /*ShouldClose*/ true);
-  if (OutputAssembly)
+  if (DoOutputAssembly)
     M.print(OS, /*AssemblyAnnotationWriter*/ nullptr);
   else
     WriteBitcodeToFile(M, OS);
@@ -211,9 +268,12 @@ void cleanupModule(Module &M) {
   MPM.run(M, MAM);
 }
 
-Error runSplitModuleByCategory(std::unique_ptr<Module> M) {
-  if (SplitByCategory == SplitByCategoryType::SBCT_ByAttribute &&
-      CategoryAttribute.empty())
+Error runSplitModuleByCategory(std::unique_ptr<Module> M,
+                               SplitByCategoryType CategoryType,
+                               StringRef AttributeName, StringRef OutFilename,
+                               bool DoOutputAssembly) {
+  if (CategoryType == SplitByCategoryType::SBCT_ByAttribute &&
+      AttributeName.empty())
     return createStringError(
         "-split-by-category=attribute requires --category-attribute=<name>");
 
@@ -224,19 +284,17 @@ Error runSplitModuleByCategory(std::unique_ptr<Module> M) {
       exit(1);
     }
 
-    // TODO: DCE is a crucial pass since it removes unused declarations.
-    //       At the moment, LIT checking can't be perfomed without DCE.
     cleanupModule(*MPart);
     size_t ID = OutputID;
     ++OutputID;
-    StringRef ModuleSuffix = OutputAssembly ? ".ll" : ".bc";
+    StringRef ModuleSuffix = DoOutputAssembly ? ".ll" : ".bc";
     std::string ModulePath =
-        (Twine(OutputFilename) + "_" + Twine(ID) + ModuleSuffix).str();
-    writeModuleToFile(*MPart, ModulePath, OutputAssembly);
+        (Twine(OutFilename) + "_" + Twine(ID) + ModuleSuffix).str();
+    writeModuleToFile(*MPart, ModulePath, DoOutputAssembly);
     return Error::success();
   };
 
-  auto Categorizer = EntryPointCategorizer(SplitByCategory, CategoryAttribute);
+  auto Categorizer = EntryPointCategorizer(CategoryType, AttributeName);
   return splitModuleTransitiveFromEntryPoints(std::move(M), Categorizer,
                                               PostSplitCallback);
 }
@@ -244,42 +302,59 @@ Error runSplitModuleByCategory(std::unique_ptr<Module> M) {
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
 
-  LLVMContext Context;
-  SMDiagnostic Err;
-  cl::HideUnrelatedOptions({&SplitCategory, &getColorCategory()});
-  cl::ParseCommandLineOptions(argc, argv, "LLVM module splitter\n");
+  clv2::OptionParser P;
+  P.add<&SplitToolReg>();
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&SplitCategory, &getColorCategory()});
+  auto OptsCtx = P.parse(argc, argv, "LLVM module splitter\n");
+  auto *Opts = OptsCtx->getViewPtr<&SplitToolReg>();
 
-  Triple TT(MTriple);
+  if (!Opts->get<&DebugOnly>().empty()) {
+    llvm::DebugFlag = true;
+    setCurrentDebugType(Opts->get<&DebugOnly>().c_str());
+  }
+
+  LLVMContext Context(*OptsCtx);
+  SMDiagnostic Err;
+
+  Triple TT(Opts->get<&MTriple>());
 
   std::unique_ptr<TargetMachine> TM;
-  if (!MTriple.empty()) {
+  if (!Opts->get<&MTriple>().empty()) {
     InitializeAllTargets();
     InitializeAllTargetMCs();
 
     std::string Error;
     const Target *T = TargetRegistry::lookupTarget(TT, Error);
     if (!T) {
-      errs() << "unknown target '" << MTriple << "': " << Error << "\n";
+      errs() << "unknown target '" << Opts->get<&MTriple>() << "': " << Error
+             << "\n";
       return 1;
     }
 
     TargetOptions Options;
-    TM = std::unique_ptr<TargetMachine>(T->createTargetMachine(
-        TT, MCPU, /*FS*/ "", Options, std::nullopt, std::nullopt));
+    TM = std::unique_ptr<TargetMachine>(
+        T->createTargetMachine(TT, Opts->get<&MCPU>(), /*FS*/ "", Options,
+                               std::nullopt, std::nullopt));
   }
 
-  std::unique_ptr<Module> M = parseIRFile(InputFilename, Err, Context);
+  std::unique_ptr<Module> M =
+      parseIRFile(Opts->get<&InputFilename>(), Err, Context);
 
   if (!M) {
     Err.print(argv[0], errs());
     return 1;
   }
 
+  const std::string &OutFilename = Opts->get<&OutputFilename>();
+  bool DoOutputAssembly = Opts->get<&OutputAssembly>();
+  unsigned NOutputs = Opts->get<&NumOutputs>();
+
   unsigned I = 0;
   const auto HandleModulePart = [&](std::unique_ptr<Module> MPart) {
     std::error_code EC;
     std::unique_ptr<ToolOutputFile> Out(
-        new ToolOutputFile(OutputFilename + utostr(I++), EC, sys::fs::OF_None));
+        new ToolOutputFile(OutFilename + utostr(I++), EC, sys::fs::OF_None));
     if (EC) {
       errs() << EC.message() << '\n';
       exit(1);
@@ -292,12 +367,13 @@ int main(int argc, char **argv) {
 
     WriteBitcodeToFile(*MPart, Out->os());
 
-    // Declare success.
     Out->keep();
   };
 
-  if (SplitByCategory != SplitByCategoryType::SBCT_None) {
-    auto E = runSplitModuleByCategory(std::move(M));
+  if (Opts->get<&SplitByCategory>() != SplitByCategoryType::SBCT_None) {
+    auto E = runSplitModuleByCategory(
+        std::move(M), Opts->get<&SplitByCategory>(),
+        Opts->get<&CategoryAttribute>(), OutFilename, DoOutputAssembly);
     if (E) {
       errs() << "error: " << toString(std::move(E)) << "\n";
       return 1;
@@ -307,15 +383,26 @@ int main(int argc, char **argv) {
   }
 
   if (TM) {
-    if (PreserveLocals) {
+    if (Opts->get<&PreserveLocals>()) {
       errs() << "warning: --preserve-locals has no effect when using "
                 "TargetMachine::splitModule\n";
     }
-    if (RoundRobin)
+    if (Opts->get<&RoundRobin>())
       errs() << "warning: --round-robin has no effect when using "
                 "TargetMachine::splitModule\n";
 
-    if (TM->splitModule(*M, NumOutputs, HandleModulePart))
+    AMDGPUSplitModuleOptions AmdOpts;
+    AmdOpts.MaxDepth = Opts->get<&AMDGPUMaxDepth>();
+    AmdOpts.LargeFnFactor = Opts->get<&AMDGPULargeFnFactor>();
+    AmdOpts.LargeFnOverlapForMerge = Opts->get<&AMDGPULargeFnOverlapForMerge>();
+    AmdOpts.NoExternalizeGlobals = Opts->get<&AMDGPUNoExternalizeGlobals>();
+    AmdOpts.NoExternalizeOnAddrTaken =
+        Opts->get<&AMDGPUNoExternalizeOnAddrTaken>();
+    AmdOpts.ModuleDotCfgOutput = Opts->get<&AMDGPUModuleDotCfgOutput>();
+    AmdOpts.PartitionSummariesOutput =
+        Opts->get<&AMDGPUPartitionSummariesOutput>();
+
+    if (TM->splitModule(*M, NOutputs, HandleModulePart, &AmdOpts))
       return 0;
 
     errs() << "warning: "
@@ -323,6 +410,7 @@ int main(int argc, char **argv) {
               "splitModule implementation\n";
   }
 
-  SplitModule(*M, NumOutputs, HandleModulePart, PreserveLocals, RoundRobin);
+  SplitModule(*M, NOutputs, HandleModulePart, Opts->get<&PreserveLocals>(),
+              Opts->get<&RoundRobin>());
   return 0;
 }

@@ -13,7 +13,8 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Sequence.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/Error.h"
@@ -61,7 +62,7 @@ typedef hipError_t (*hipGetDeviceProperties_t)(hipDeviceProp_tR0000 *, int);
 typedef hipError_t (*hipRuntimeGetVersion_t)(int *);
 typedef const char *(*hipGetErrorString_t)(hipError_t);
 
-extern cl::opt<bool> Verbose;
+extern bool Verbose;
 
 cl::OptionCategory AMDGPUArchByHIPCategory("amdgpu-arch (HIP) options");
 
@@ -72,15 +73,44 @@ enum class HipApiVersion {
   Unversioned // Force unversioned API (very old HIP)
 };
 
-static cl::opt<HipApiVersion> HipApi(
-    "hip-api-version", cl::desc("Select HIP API version for device properties"),
-    cl::values(clEnumValN(HipApiVersion::Auto, "auto",
-                          "Auto-detect (R0600 -> R0000 -> unversioned)"),
-               clEnumValN(HipApiVersion::R0600, "r0600", "Force R0600 API"),
-               clEnumValN(HipApiVersion::R0000, "r0000", "Force R0000 API"),
-               clEnumValN(HipApiVersion::Unversioned, "unversioned",
-                          "Force unversioned API")),
-    cl::init(HipApiVersion::Auto), cl::cat(AMDGPUArchByHIPCategory));
+inline constexpr clv2::EnumVal<HipApiVersion> HipApiVersionVals[] = {
+    {"auto", HipApiVersion::Auto,
+     "Auto-detect (R0600 -> R0000 -> unversioned)"},
+    {"r0600", HipApiVersion::R0600, "Force R0600 API"},
+    {"r0000", HipApiVersion::R0000, "Force R0000 API"},
+    {"unversioned", HipApiVersion::Unversioned, "Force unversioned API"},
+};
+
+inline constexpr auto HipApiVersionOpt = clv2::makeEnumOption<HipApiVersion>(
+    "hip-api-version", "Select HIP API version for device properties",
+    HipApiVersionVals, clv2::Init{HipApiVersion::Auto});
+
+inline constexpr clv2::OptionsRegistry<&HipApiVersionOpt> AMDGPUArchByHIPReg;
+
+static HipApiVersion HipApi = HipApiVersion::Auto;
+
+static void
+applyAMDGPUArchOpts(const decltype(AMDGPUArchByHIPReg)::ParsedOptionsT &Opts) {
+  HipApi = Opts.get<&HipApiVersionOpt>();
+}
+
+void configureAMDGPUArchByHIP(clv2::OptionParser &P) {
+  using ParsedT = decltype(AMDGPUArchByHIPReg)::ParsedOptionsT;
+  auto *Storage = new ParsedT();
+  decltype(AMDGPUArchByHIPReg)::applyDefaultsTo(*Storage);
+  std::vector<clv2::detail::OptionEntry> Entries;
+  std::vector<clv2::detail::AliasEntry> Aliases;
+  std::vector<clv2::detail::SubCommandSpec> SubSpecs;
+  decltype(AMDGPUArchByHIPReg)::staticBuildInto(*Storage, Entries, Aliases,
+                                                SubSpecs);
+  for (auto &E : Entries) {
+    if (!E.Cat)
+      E.Cat = &AMDGPUArchByHIPCategory;
+    P.addDynamicEntry(std::move(E));
+  }
+  clv2::registerDynamicPostParseCallback(
+      [Storage]() { applyAMDGPUArchOpts(*Storage); });
+}
 
 #ifdef _WIN32
 // Return candidate bin/ directories by walking parent dirs of ExeDir.

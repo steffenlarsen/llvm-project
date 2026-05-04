@@ -45,6 +45,10 @@
 
 namespace llvm {
 
+namespace clv2 {
+class OptionsContext;
+}
+
 class OverflowingBinaryOperator;
 class AssumptionCache;
 class BasicBlock;
@@ -67,7 +71,7 @@ class Type;
 class VPSCEVExpander;
 enum SCEVTypes : unsigned short;
 
-LLVM_ABI extern bool VerifySCEV;
+LLVM_ABI bool getVerifySCEV(const clv2::OptionsContext &Ctx);
 
 /// NoWrapFlags are bitfield indices into SCEV's SubclassData.
 ///
@@ -1513,7 +1517,7 @@ public:
   /// Return the size of an element read or written by Inst.
   LLVM_ABI const SCEV *getElementSize(Instruction *Inst);
 
-  LLVM_ABI void print(raw_ostream &OS) const;
+  LLVM_ABI void print(raw_ostream &OS, bool ClassifyExpressions = true) const;
   LLVM_ABI void verify() const;
   LLVM_ABI bool invalidate(Function &F, const PreservedAnalyses &PA,
                            FunctionAnalysisManager::Invalidator &Inv);
@@ -1679,6 +1683,15 @@ private:
   /// at all?  If this is false, we avoid doing work that will only help if
   /// thare are guards present in the IR.
   bool HasGuards;
+
+  /// Limits consulted on per-node paths -- expression folding and range
+  /// computation visit every operand, so these are read once here rather than
+  /// at each visit.
+  unsigned MaxArithDepth;
+  unsigned MaxCastDepth;
+  unsigned HugeExprThreshold;
+  unsigned RangeIterThreshold;
+  bool UseExpensiveRangeSharpening;
 
   /// The target library information for the target we are targeting.
   TargetLibraryInfo &TLI;
@@ -2604,13 +2617,20 @@ public:
   LLVM_ABI PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 };
 
+struct ScalarEvolutionPrintOptions {
+  bool ClassifyExpressions = true;
+};
+
 /// Printer pass for the \c ScalarEvolutionAnalysis results.
 class ScalarEvolutionPrinterPass
     : public RequiredPassInfoMixin<ScalarEvolutionPrinterPass> {
   raw_ostream &OS;
+  ScalarEvolutionPrintOptions Options;
 
 public:
-  explicit ScalarEvolutionPrinterPass(raw_ostream &OS) : OS(OS) {}
+  explicit ScalarEvolutionPrinterPass(raw_ostream &OS,
+                                      ScalarEvolutionPrintOptions Options = {})
+      : OS(OS), Options(Options) {}
 
   LLVM_ABI PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 };

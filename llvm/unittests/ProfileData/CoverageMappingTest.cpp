@@ -16,6 +16,7 @@
 #include "llvm/Testing/Support/SupportHelpers.h"
 #include "gtest/gtest.h"
 
+#include "llvm/Support/OptionsContext.h"
 #include <map>
 #include <ostream>
 #include <utility>
@@ -1074,7 +1075,7 @@ TEST(CoverageMappingTest, filename_roundtrip) {
     {
       raw_string_ostream OS(EncodedFilenames);
       CoverageFilenamesSectionWriter Writer(Paths);
-      Writer.write(OS, Compress);
+      Writer.write(OS, Compress, /*Ctx=*/llvm::clv2::defaultOptionsContext());
     }
 
     std::vector<std::string> ReadFilenames;
@@ -1098,7 +1099,7 @@ TEST(CoverageMappingTest, filename_compilation_dir) {
     {
       raw_string_ostream OS(EncodedFilenames);
       CoverageFilenamesSectionWriter Writer(Paths);
-      Writer.write(OS, Compress);
+      Writer.write(OS, Compress, /*Ctx=*/llvm::clv2::defaultOptionsContext());
     }
 
     StringRef CompilationDir = "out";

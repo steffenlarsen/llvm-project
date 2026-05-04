@@ -34,6 +34,7 @@
 #include "llvm/CodeGen/StackMaps.h"
 #include "llvm/CodeGen/WinEHFuncInfo.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/MC/MCAsmInfo.h"
@@ -47,8 +48,10 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 #include "llvm/Transforms/CFGuard.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizer.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizerCommon.h"
@@ -56,13 +59,17 @@
 
 using namespace llvm;
 
-static cl::opt<bool> EnableBranchHint("enable-branch-hint",
-                                      cl::desc("Enable branch hint."),
-                                      cl::init(false), cl::Hidden);
-static cl::opt<unsigned> BranchHintProbabilityThreshold(
-    "branch-hint-probability-threshold",
-    cl::desc("The probability threshold of enabling branch hint."),
-    cl::init(50), cl::Hidden);
+static unsigned BranchHintProbabilityThreshold = 50;
+
+static bool getEnableBranchHint(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_EnableBranchHint>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getBranchHintProbabilityThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_BranchHintProbabilityThreshold>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -2652,13 +2659,15 @@ void X86AsmPrinter::emitInstruction(const MachineInstr *MI) {
     // Two instruction prefixes (2EH for branch not-taken and 3EH for branch
     // taken) are used as branch hints. Here we add branch taken prefix for
     // jump instruction with higher probability than threshold.
-    if (getSubtarget().hasBranchHint() && EnableBranchHint) {
+    if (getSubtarget().hasBranchHint() &&
+        getEnableBranchHint(MF->getFunction())) {
       const MachineBranchProbabilityInfo *MBPI =
           &getAnalysis<MachineBranchProbabilityInfoWrapperPass>().getMBPI();
       MachineBasicBlock *DestBB = MI->getOperand(0).getMBB();
       BranchProbability EdgeProb =
           MBPI->getEdgeProbability(MI->getParent(), DestBB);
-      BranchProbability Threshold(BranchHintProbabilityThreshold, 100);
+      BranchProbability Threshold(
+          getBranchHintProbabilityThreshold(MF->getFunction()), 100);
       if (EdgeProb > Threshold)
         EmitAndCountInstruction(MCInstBuilder(X86::DS_PREFIX));
     }

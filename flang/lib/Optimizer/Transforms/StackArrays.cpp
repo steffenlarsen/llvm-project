@@ -43,19 +43,10 @@ namespace fir {
 #include "flang/Optimizer/Transforms/Passes.h.inc"
 } // namespace fir
 
+#include "flang/Common/FlangOptionsOptInfos.h"
+#include "llvm/Support/OptionsContext.h"
+
 #define DEBUG_TYPE "stack-arrays"
-
-static llvm::cl::opt<std::size_t> maxAllocsPerFunc(
-    "stack-arrays-max-allocs",
-    llvm::cl::desc("The maximum number of heap allocations to consider in one "
-                   "function before skipping (to save compilation time). Set "
-                   "to 0 for no limit."),
-    llvm::cl::init(1000), llvm::cl::Hidden);
-
-static llvm::cl::opt<bool> emitLifetimeMarkers(
-    "stack-arrays-lifetime",
-    llvm::cl::desc("Add lifetime markers to generated constant size allocas"),
-    llvm::cl::init(false), llvm::cl::Hidden);
 
 namespace {
 
@@ -356,6 +347,10 @@ fir::StackArraysAnalysisWrapper::analyseFunction(mlir::Operation *func) {
   // don't bother with the analysis if there are no heap allocations
   if (nAllocs == 0)
     return mlir::success();
+  auto &optsCtx = func->getContext()->getOptionsContext();
+  unsigned maxAllocsPerFunc =
+      llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_StackArraysMaxAllocs>(
+          optsCtx);
   if ((maxAllocsPerFunc != 0) && (nAllocs > maxAllocsPerFunc)) {
     LLVM_DEBUG(llvm::dbgs() << "Skipping stack arrays for function with "
                             << nAllocs << " heap allocations");
@@ -709,7 +704,9 @@ fir::AllocMemConversion::insertAlloca(fir::AllocMemOp &oldAlloc,
   auto alloca =
       fir::AllocaOp::create(rewriter, loc, varTy, uniqName, bindcName,
                             oldAlloc.getTypeparams(), oldAlloc.getShape());
-  if (emitLifetimeMarkers)
+  auto &optsCtx = oldAlloc->getContext()->getOptionsContext();
+  if (llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_StackArraysLifetime>(
+          optsCtx))
     insertLifetimeMarkers(oldAlloc, alloca, rewriter);
 
   return alloca;

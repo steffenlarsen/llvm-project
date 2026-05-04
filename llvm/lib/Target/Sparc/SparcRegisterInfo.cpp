@@ -18,18 +18,23 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Type.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Sparc/SparcOptionsOptInfos.h"
 
 using namespace llvm;
 
 #define GET_REGINFO_TARGET_DESC
 #include "SparcGenRegisterInfo.inc"
 
-static cl::opt<bool>
-ReserveAppRegisters("sparc-reserve-app-registers", cl::Hidden, cl::init(false),
-                    cl::desc("Reserve application registers (%g2-%g4)"));
+static bool ReserveAppRegisters = false;
+
+static bool getReserveAppRegisters(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SPARC_ReserveAppRegisters>(
+      F.getContext().getOptionsContext());
+}
 
 SparcRegisterInfo::SparcRegisterInfo(const SparcSubtarget &STI)
     : SparcGenRegisterInfo(SP::O7), Is64Bit(STI.is64Bit()) {}
@@ -57,7 +62,7 @@ BitVector SparcRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   Reserved.set(SP::G1);
 
   // G1-G4 can be used in applications.
-  if (ReserveAppRegisters) {
+  if (getReserveAppRegisters(MF.getFunction())) {
     Reserved.set(SP::G2);
     Reserved.set(SP::G3);
     Reserved.set(SP::G4);
@@ -76,9 +81,9 @@ BitVector SparcRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   // Also reserve the register pair aliases covering the above
   // registers, with the same conditions.
   Reserved.set(SP::G0_G1);
-  if (ReserveAppRegisters)
+  if (getReserveAppRegisters(MF.getFunction()))
     Reserved.set(SP::G2_G3);
-  if (ReserveAppRegisters || !Subtarget.is64Bit())
+  if (getReserveAppRegisters(MF.getFunction()) || !Subtarget.is64Bit())
     Reserved.set(SP::G4_G5);
 
   Reserved.set(SP::O6_O7);

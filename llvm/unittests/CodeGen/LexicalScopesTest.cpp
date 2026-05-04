@@ -39,7 +39,7 @@ namespace {
 class LexicalScopesTest : public testing::Test {
 public:
   // Boilerplate,
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module Mod;
   std::unique_ptr<MachineFunction> MF;
   DICompileUnit *OurCU;
@@ -63,7 +63,8 @@ public:
   MCInstrDesc BeanInst{};
   MCInstrDesc DbgValueInst{};
 
-  LexicalScopesTest() : Ctx(), Mod("beehives", Ctx) {
+  LexicalScopesTest()
+      : Ctx(llvm::clv2::defaultOptionsContext()), Mod("beehives", Ctx) {
     memset(&BeanInst, 0, sizeof(BeanInst));
     BeanInst.Opcode = 1;
     BeanInst.Size = 1;

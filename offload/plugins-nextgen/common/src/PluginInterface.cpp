@@ -1411,7 +1411,7 @@ Expected<bool> GenericPluginTy::checkBitcodeImage(StringRef Image) const {
   if (identify_magic(Image) != file_magic::bitcode)
     return false;
 
-  LLVMContext Context;
+  LLVMContext Context{nullptr};
   auto ModuleOrErr = getLazyBitcodeModule(MemoryBufferRef(Image, ""), Context,
                                           /*ShouldLazyLoadMetadata=*/true);
   if (!ModuleOrErr)

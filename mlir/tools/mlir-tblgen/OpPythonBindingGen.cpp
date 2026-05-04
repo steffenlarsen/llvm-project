@@ -19,7 +19,6 @@
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Record.h"
@@ -419,20 +418,9 @@ def {0}({2}) -> _Union[_ods_ir.OpResult, _ods_ir.OpResultList, {1}]:
   return results if len(results) > 1 else (results[0] if len(results) == 1 else op)
 )Py";
 
-static llvm::cl::OptionCategory
-    clOpPythonBindingCat("Options for -gen-python-op-bindings");
-
 std::string dialectNameStorage;
 
-llvm::cl::opt<std::string, /*ExternalStorage=*/true>
-    clDialectName("bind-dialect",
-                  llvm::cl::desc("The dialect to run the generator for"),
-                  llvm::cl::location(dialectNameStorage),
-                  llvm::cl::cat(clOpPythonBindingCat));
-
-static llvm::cl::opt<std::string> clDialectExtensionName(
-    "dialect-extension", llvm::cl::desc("The prefix of the dialect extension"),
-    llvm::cl::init(""), llvm::cl::cat(clOpPythonBindingCat));
+std::string clDialectExtensionName;
 
 using AttributeClasses = DenseMap<StringRef, StringRef>;
 

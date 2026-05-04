@@ -13,24 +13,27 @@
 
 #include "llvm/DebugInfo/Symbolize/SymbolizableModule.h"
 #include "llvm/DebugInfo/Symbolize/Symbolize.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Transforms/Utils/SanitizerStats.h"
 #include <stdint.h>
 
 using namespace llvm;
+using namespace llvm::clv2;
 
-static cl::OptionCategory Cat("sanstats Options");
+static constexpr OptionCategory Cat{"sanstats Options"};
 
-static cl::opt<std::string> ClInputFile(cl::Positional, cl::Required,
-                                        cl::desc("<filename>"));
+static constexpr OptionInfo<std::string> ClInputFile{"input", "<filename>",
+                                                     Positional{}, Required};
 
-static cl::opt<bool> ClDemangle("demangle", cl::init(false),
-                                cl::desc("Print demangled function name"),
-                                cl::cat(Cat));
+static constexpr OptionInfo<bool> ClDemangle{
+    "demangle", "Print demangled function name", cat(Cat)};
+
+static constexpr OptionsRegistry<&ClInputFile, &ClDemangle> SanStatsToolReg;
 
 inline uint64_t KindFromData(uint64_t Data, char SizeofPtr) {
   return Data >> (SizeofPtr * 8 - kSanitizerStatKindBits);
@@ -52,7 +55,8 @@ static uint64_t ReadLE(char Size, const char *Begin, const char *End) {
 }
 
 static const char *ReadModule(char SizeofPtr, const char *Begin,
-                              const char *End) {
+                              const char *End, StringRef InputFilePath,
+                              bool Demangle) {
   const char *FilenameBegin = Begin;
   while (Begin != End && *Begin)
     ++Begin;
@@ -61,7 +65,7 @@ static const char *ReadModule(char SizeofPtr, const char *Begin,
   std::string Filename(FilenameBegin, Begin - FilenameBegin);
 
   if (!llvm::sys::fs::exists(Filename))
-    Filename = std::string(llvm::sys::path::parent_path(ClInputFile)) +
+    Filename = std::string(llvm::sys::path::parent_path(InputFilePath)) +
                std::string(llvm::sys::path::filename(Filename));
 
   ++Begin;
@@ -69,7 +73,7 @@ static const char *ReadModule(char SizeofPtr, const char *Begin,
     return nullptr;
 
   symbolize::LLVMSymbolizer::Options SymbolizerOptions;
-  SymbolizerOptions.Demangle = ClDemangle;
+  SymbolizerOptions.Demangle = Demangle;
   SymbolizerOptions.UseSymbolTable = true;
   symbolize::LLVMSymbolizer Symbolizer(SymbolizerOptions);
 
@@ -126,28 +130,34 @@ static const char *ReadModule(char SizeofPtr, const char *Begin,
 }
 
 int main(int argc, char **argv) {
-  cl::HideUnrelatedOptions(Cat);
-  cl::ParseCommandLineOptions(argc, argv,
-                              "Sanitizer Statistics Processing Tool");
+  clv2::OptionParser P;
+  P.add<&SanStatsToolReg>();
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&Cat});
+  auto OptsCtx = P.parse(argc, argv, "Sanitizer Statistics Processing Tool");
+  auto *Opts = OptsCtx->getViewPtr<&SanStatsToolReg>();
+
+  const std::string &InputFilePath = Opts->get<&ClInputFile>();
+  bool Demangle = Opts->get<&ClDemangle>();
 
   ErrorOr<std::unique_ptr<MemoryBuffer>> MBOrErr = MemoryBuffer::getFile(
-      ClInputFile, /*IsText=*/false, /*RequiresNullTerminator=*/false);
+      InputFilePath, /*IsText=*/false, /*RequiresNullTerminator=*/false);
   if (!MBOrErr) {
-    errs() << argv[0] << ": " << ClInputFile << ": "
+    errs() << argv[0] << ": " << InputFilePath << ": "
            << MBOrErr.getError().message() << '\n';
     return 1;
   }
   std::unique_ptr<MemoryBuffer> MB = std::move(MBOrErr.get());
   const char *Begin = MB->getBufferStart(), *End = MB->getBufferEnd();
   if (Begin == End) {
-    errs() << argv[0] << ": " << ClInputFile << ": short read\n";
+    errs() << argv[0] << ": " << InputFilePath << ": short read\n";
     return 1;
   }
   char SizeofPtr = *Begin++;
   while (Begin != End) {
-    Begin = ReadModule(SizeofPtr, Begin, End);
+    Begin = ReadModule(SizeofPtr, Begin, End, InputFilePath, Demangle);
     if (Begin == nullptr) {
-      errs() << argv[0] << ": " << ClInputFile << ": short read\n";
+      errs() << argv[0] << ": " << InputFilePath << ": short read\n";
       return 1;
     }
     assert(Begin <= End);

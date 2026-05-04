@@ -27,21 +27,23 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/ControlFlowUtils.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 
 #define DEBUG_TYPE "unify-loop-exits"
 
 using namespace llvm;
 
-static cl::opt<unsigned> MaxBooleansInControlFlowHub(
-    "max-booleans-in-control-flow-hub", cl::init(32), cl::Hidden,
-    cl::desc("Set the maximum number of outgoing blocks for using a boolean "
-             "value to record the exiting block in the ControlFlowHub."));
+static unsigned getMaxBooleansInControlFlowHub(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_MaxBooleansInControlFlowHub>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 struct UnifyLoopExitsLegacyPass : public FunctionPass {
@@ -242,7 +244,8 @@ static bool unifyLoopExits(DominatorTree &DT, LoopInfo &LI, Loop *L) {
   BasicBlock *LoopExitBlock;
   bool ChangedCFG;
   std::tie(LoopExitBlock, ChangedCFG) = CHub.finalize(
-      &DTU, GuardBlocks, "loop.exit", MaxBooleansInControlFlowHub.getValue());
+      &DTU, GuardBlocks, "loop.exit",
+      getMaxBooleansInControlFlowHub(*L->getHeader()->getParent()));
   ChangedCFG |= Changed;
   if (!ChangedCFG)
     return false;

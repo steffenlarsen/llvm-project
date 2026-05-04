@@ -1204,7 +1204,15 @@ private:
 /// (e.g. Operation::Print).
 class OpPrintingFlags {
 public:
-  OpPrintingFlags();
+  /// \p ctx supplies the parsed options.  A null context -- which is what
+  /// the default gives -- yields the compile-time defaults rather than the
+  /// user's options; the ctor routes that case through
+  /// clv2::defaultOptionsContext() so the opt-out is greppable.  Prefer
+  /// opPrintingFlags(op) (Operation.h), which always supplies a context.
+  ///
+  /// The default is retained because OpPrintingFlags() is widely
+  /// default-constructed, including in MLIR's public API.
+  OpPrintingFlags(MLIRContext *ctx = nullptr);
 
   /// Enables the elision of large elements attributes by printing a lexically
   /// valid but otherwise meaningless form instead of the element data. The

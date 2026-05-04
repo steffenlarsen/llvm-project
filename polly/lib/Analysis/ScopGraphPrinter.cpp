@@ -14,26 +14,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/ScopGraphPrinter.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopDetection.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 
 using namespace polly;
 using namespace llvm;
-
-namespace polly {
-std::string ViewFilter;
-bool ViewAll;
-} // namespace polly
-
-static cl::opt<std::string, true>
-    XViewFilter("polly-view-only",
-                cl::desc("Only view functions that match this pattern"),
-                cl::location(ViewFilter), cl::Hidden, cl::init(""));
-
-static cl::opt<bool, true>
-    XViewAll("polly-view-all",
-             cl::desc("Also show functions without any scops"),
-             cl::location(ViewAll), cl::Hidden, cl::init(false));
 
 namespace llvm {
 
@@ -141,6 +127,14 @@ void DOTGraphTraits<ScopDetection *>::addCustomGraphFeatures(
 } // namespace llvm
 
 bool ScopViewer::processFunction(Function &F, const ScopDetection &SD) {
+  std::string ViewFilter;
+  bool ViewAll = false;
+  if (auto *Opts =
+          polly_opts::getPollyOpts(F.getContext().getOptionsContext())) {
+    ViewFilter = Opts->get<&llvm::clv2::POLLY_ViewOnly>();
+    ViewAll = Opts->get<&llvm::clv2::POLLY_ViewAll>();
+  }
+
   if (ViewFilter != "" && !F.getName().count(ViewFilter))
     return false;
 

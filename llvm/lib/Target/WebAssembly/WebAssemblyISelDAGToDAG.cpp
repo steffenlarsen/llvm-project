@@ -25,6 +25,7 @@
 #include "llvm/IR/IntrinsicsWebAssembly.h"
 #include "llvm/MC/MCSymbolWasm.h"
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/raw_ostream.h"
@@ -368,7 +369,9 @@ void WebAssemblyDAGToDAGISel::Select(SDNode *Node) {
     case Intrinsic::wasm_catch: {
       int Tag = Node->getConstantOperandVal(2);
       SDValue SymNode = getTagSymNode(Tag, CurDAG);
-      unsigned CatchOpcode = WebAssembly::WasmUseLegacyEH
+      auto &OptsCtx =
+          CurDAG->getMachineFunction().getTarget().getOptionsContext();
+      unsigned CatchOpcode = WebAssembly::getWasmUseLegacyEH(OptsCtx)
                                  ? WebAssembly::CATCH_LEGACY
                                  : WebAssembly::CATCH;
       MachineSDNode *Catch =

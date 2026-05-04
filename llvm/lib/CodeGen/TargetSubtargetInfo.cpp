@@ -21,9 +21,15 @@ TargetSubtargetInfo::TargetSubtargetInfo(
     ArrayRef<SubtargetSubTypeKV> PD, ArrayRef<SubtargetSubTypeAliasKV> PA,
     const MCSchedModel *PSM, const MCWriteProcResEntry *WPR,
     const MCWriteLatencyEntry *WL, const MCReadAdvanceEntry *RA,
-    const InstrStage *IS, const unsigned *OC, const unsigned *FP)
+    const InstrStage *IS, const unsigned *OC, const unsigned *FP,
+    const clv2::OptionsContext &OptsCtx)
     : MCSubtargetInfo(TT, CPU, TuneCPU, FS, PN, PF, PD, PA, PSM, WPR, WL, RA,
-                      IS, OC, FP) {}
+                      IS, OC, FP),
+      // Preserve the null sentinel: only an explicitly-supplied context is
+      // recorded here.  Leaving it null lets setTargetMachine() fill it in
+      // from the TargetMachine, which is how most subtargets get theirs.
+      OptsCtx_(&OptsCtx != &clv2::defaultOptionsContext() ? &OptsCtx
+                                                          : nullptr) {}
 
 TargetSubtargetInfo::~TargetSubtargetInfo() = default;
 

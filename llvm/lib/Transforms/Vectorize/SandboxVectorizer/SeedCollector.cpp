@@ -9,23 +9,29 @@
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/SeedCollector.h"
 #include "llvm/Analysis/LoopAccessAnalysis.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Type.h"
+#include "llvm/SandboxIR/Function.h"
 #include "llvm/SandboxIR/Instruction.h"
 #include "llvm/SandboxIR/Utils.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Vectorize/VectorizeOptions.h"
 
 using namespace llvm;
+
 namespace llvm::sandboxir {
 
-static cl::opt<unsigned> SeedBundleSizeLimit(
-    "sbvec-seed-bundle-size-limit", cl::init(32), cl::Hidden,
-    cl::desc("Limit the size of the seed bundle to cap compilation time."));
+static unsigned getSeedBundleSizeLimit(const llvm::Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_SeedBundleSizeLimit>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> SeedGroupsLimit(
-    "sbvec-seed-groups-limit", cl::init(256), cl::Hidden,
-    cl::desc("Limit the number of collected seeds groups in a BB to "
-             "cap compilation time."));
+static unsigned getSeedGroupsLimit(const llvm::Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_SeedGroupsLimit>(
+      F.getContext().getOptionsContext());
+}
 
 ArrayRef<Instruction *> SeedBundle::getSlice(unsigned StartIdx,
                                              unsigned MaxVecRegBits,
@@ -113,7 +119,10 @@ void SeedContainer::insert(LoadOrStoreT *LSI, bool AllowDiffTypes) {
   // Fill this vector of bundles front to back so that only the last bundle in
   // the vector may have available space. This avoids iteration to find one with
   // space.
-  if (BundleVec.empty() || BundleVec.back()->size() == SeedBundleSizeLimit)
+  if (BundleVec.empty() ||
+      BundleVec.back()->size() ==
+          getSeedBundleSizeLimit(
+              LSI->getParent()->getParent()->getLLVMFunction()))
     BundleVec.emplace_back(std::make_unique<MemSeedBundle<LoadOrStoreT>>(LSI));
   else
     BundleVec.back()->tryInsert(LSI, SE);
@@ -189,7 +198,8 @@ SeedCollector::SeedCollector(BasicBlock *BB, ScalarEvolution &SE,
       if (CollectLoads && isValidMemSeed(LI))
         LoadSeeds.insert(LI, AllowDiffTypes);
     // Cap compilation time.
-    if (totalNumSeedGroups() > SeedGroupsLimit)
+    if (totalNumSeedGroups() >
+        getSeedGroupsLimit(BB->getParent()->getLLVMFunction()))
       break;
   }
 }

@@ -13,8 +13,10 @@
 
 #include "SPIRVCommandLine.h"
 #include "MCTargetDesc/SPIRVBaseInfo.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/TargetParser/Triple.h"
 
 #include <functional>
@@ -184,8 +186,8 @@ static const StringMap<SPIRV::Extension::Extension> SPIRVExtensionMap = {
      SPIRV::Extension::Extension::SPV_KHR_untyped_pointers},
     {"SPV_EXT_long_vector", SPIRV::Extension::Extension::SPV_EXT_long_vector}};
 
-bool SPIRVExtensionsParser::parse(cl::Option &O, StringRef ArgName,
-                                  StringRef ArgValue, ExtensionSet &Vals) {
+bool SPIRVExtensionsParser::parse(StringRef ArgValue, ExtensionSet &Vals,
+                                  std::string &Error) {
   SmallVector<StringRef, 10> Tokens;
   ArgValue.split(Tokens, ",", -1, false);
 
@@ -201,8 +203,10 @@ bool SPIRVExtensionsParser::parse(cl::Option &O, StringRef ArgName,
     StringRef ExtensionName = Token.substr(1);
     auto NameValuePair = SPIRVExtensionMap.find(ExtensionName);
 
-    if (NameValuePair == SPIRVExtensionMap.end())
-      return O.error("Unknown SPIR-V extension: " + Token);
+    if (NameValuePair == SPIRVExtensionMap.end()) {
+      Error = "Unknown SPIR-V extension: " + Token.str();
+      return true;
+    }
 
     EnabledExtensions.insert(NameValuePair->second);
   }
@@ -218,17 +222,22 @@ bool SPIRVExtensionsParser::parse(cl::Option &O, StringRef ArgName,
       continue;
     }
 
-    if (Token.empty() || (!Token.starts_with("+") && !Token.starts_with("-")))
-      return O.error("Invalid extension list format: " + Token);
+    if (Token.empty() || (!Token.starts_with("+") && !Token.starts_with("-"))) {
+      Error = "Invalid extension list format: " + Token.str();
+      return true;
+    }
 
     auto NameValuePair = SPIRVExtensionMap.find(Token.substr(1));
 
-    if (NameValuePair == SPIRVExtensionMap.end())
-      return O.error("Unknown SPIR-V extension: " + Token);
-    if (EnabledExtensions.count(NameValuePair->second))
-      return O.error(
-          "Extension cannot be allowed and disallowed at the same time: " +
-          NameValuePair->first());
+    if (NameValuePair == SPIRVExtensionMap.end()) {
+      Error = "Unknown SPIR-V extension: " + Token.str();
+      return true;
+    }
+    if (EnabledExtensions.count(NameValuePair->second)) {
+      Error = "Extension cannot be allowed and disallowed at the same time: " +
+              NameValuePair->first().str();
+      return true;
+    }
     DisabledExtensions.insert(NameValuePair->second);
     Vals.erase(NameValuePair->second);
   }

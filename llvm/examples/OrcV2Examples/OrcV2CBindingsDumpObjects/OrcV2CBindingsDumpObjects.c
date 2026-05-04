@@ -30,8 +30,8 @@ int handleError(LLVMErrorRef Err) {
   return 1;
 }
 
-LLVMOrcThreadSafeModuleRef createDemoModule(void) {
-  LLVMContextRef Ctx = LLVMContextCreate();
+LLVMOrcThreadSafeModuleRef createDemoModule(LLVMOptionsContextRef Opts) {
+  LLVMContextRef Ctx = LLVMContextCreateWithOptions(Opts);
   LLVMModuleRef M = LLVMModuleCreateWithNameInContext("demo", Ctx);
   LLVMTypeRef Int32Type = LLVMInt32TypeInContext(Ctx);
   LLVMTypeRef ParamTypes[] = {Int32Type, Int32Type};
@@ -61,7 +61,7 @@ int main(int argc, const char *argv[]) {
 
   int MainResult = 0;
 
-  LLVMParseCommandLineOptions(argc, argv, "");
+  LLVMOptionsContextRef Opts = LLVMParseCommandLineOptions2(argc, argv, "");
 
   LLVMInitializeNativeTarget();
   LLVMInitializeNativeAsmPrinter();
@@ -85,7 +85,7 @@ int main(int argc, const char *argv[]) {
                                           dumpObjectsTransform, &DumpObjects);
 
   // Create our demo module.
-  LLVMOrcThreadSafeModuleRef TSM = createDemoModule();
+  LLVMOrcThreadSafeModuleRef TSM = createDemoModule(Opts);
 
   // Add our demo module to the JIT.
   {
@@ -132,6 +132,9 @@ jit_cleanup:
 llvm_shutdown:
   // Destroy our DumpObjects instance.
   LLVMOrcDisposeDumpObjects(DumpObjects);
+
+  // Dispose of the options context.
+  LLVMDisposeOptionsContext(Opts);
 
   // Shut down LLVM.
   LLVMShutdown();

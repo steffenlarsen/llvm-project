@@ -107,7 +107,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -126,12 +126,25 @@ using namespace llvm;
 
 #define DEBUG_TYPE "asm-matcher-emitter"
 
-static cl::OptionCategory AsmMatcherEmitterCat("Options for -gen-asm-matcher");
+static clv2::OptionCategory
+    AsmMatcherEmitterCat("Options for -gen-asm-matcher");
 
-static cl::opt<std::string>
-    MatchPrefix("match-prefix", cl::init(""),
-                cl::desc("Only match instructions with the given prefix"),
-                cl::cat(AsmMatcherEmitterCat));
+static std::string MatchPrefix;
+
+static constexpr clv2::OptionInfo<std::string> OI_MatchPrefix{
+    "match-prefix", "Only match instructions with the given prefix",
+    clv2::cat(AsmMatcherEmitterCat)};
+
+static constexpr clv2::OptionsRegistry<&OI_MatchPrefix> AsmMatcherEmitterReg;
+
+static void applyAsmMatcherEmitter(
+    const decltype(AsmMatcherEmitterReg)::ParsedOptionsT &Opts) {
+  MatchPrefix = Opts.get<&OI_MatchPrefix>();
+}
+
+void registerAsmMatcherEmitterOptions(clv2::OptionParser &P) {
+  P.add<&AsmMatcherEmitterReg, applyAsmMatcherEmitter>();
+}
 
 namespace {
 class AsmMatcherInfo;

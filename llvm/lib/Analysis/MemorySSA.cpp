@@ -23,6 +23,7 @@
 #include "llvm/ADT/iterator.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/CFGPrinter.h"
 #include "llvm/Analysis/IteratedDominanceFrontier.h"
 #include "llvm/Analysis/Loads.h"
@@ -44,12 +45,13 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/Support/GraphWriter.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -61,10 +63,10 @@ using namespace llvm;
 
 #define DEBUG_TYPE "memoryssa"
 
-static cl::opt<std::string>
-    DotCFGMSSA("dot-cfg-mssa",
-               cl::value_desc("file name for generated dot file"),
-               cl::desc("file name for generated dot file"), cl::init(""));
+static std::string getDotCFGMSSA(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
+                                    &clv2::AN_DotCFGMSSA>(Ctx, std::string{});
+}
 
 INITIALIZE_PASS_BEGIN(MemorySSAWrapperPass, "memoryssa", "Memory SSA", false,
                       true)
@@ -73,21 +75,22 @@ INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
 INITIALIZE_PASS_END(MemorySSAWrapperPass, "memoryssa", "Memory SSA", false,
                     true)
 
-static cl::opt<unsigned> MaxCheckLimit(
-    "memssa-check-limit", cl::Hidden, cl::init(100),
-    cl::desc("The maximum number of stores/phis MemorySSA"
-             "will consider trying to walk past (default = 100)"));
+static unsigned getMaxCheckLimit(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_MaxCheckLimit>(Ctx);
+}
 
 // Always verify MemorySSA if expensive checking is enabled.
+bool llvm::getVerifyMemorySSA(const clv2::OptionsContext &Ctx) {
+  auto *O = clv2::getView<&clv2::AnalysisOptsReg>(Ctx);
+  if (O)
+    if (O->specified<&clv2::AN_VerifyMemorySSA>())
+      return O->get<&clv2::AN_VerifyMemorySSA>();
 #ifdef EXPENSIVE_CHECKS
-bool llvm::VerifyMemorySSA = true;
+  return true;
 #else
-bool llvm::VerifyMemorySSA = false;
+  return false;
 #endif
-
-static cl::opt<bool, true>
-    VerifyMemorySSAX("verify-memoryssa", cl::location(VerifyMemorySSA),
-                     cl::Hidden, cl::desc("Enable verification of MemorySSA."));
+}
 
 const static char LiveOnEntryStr[] = "liveOnEntry";
 
@@ -1039,13 +1042,13 @@ public:
 
   MemoryAccess *getClobberingMemoryAccess(MemoryAccess *MA,
                                           BatchAAResults &BAA) override {
-    unsigned UpwardWalkLimit = MaxCheckLimit;
+    unsigned UpwardWalkLimit = getMaxCheckLimit(*MSSA->OptsCtx);
     return getClobberingMemoryAccess(MA, BAA, UpwardWalkLimit);
   }
   MemoryAccess *getClobberingMemoryAccess(MemoryAccess *MA,
                                           const MemoryLocation &Loc,
                                           BatchAAResults &BAA) override {
-    unsigned UpwardWalkLimit = MaxCheckLimit;
+    unsigned UpwardWalkLimit = getMaxCheckLimit(*MSSA->OptsCtx);
     return getClobberingMemoryAccess(MA, Loc, BAA, UpwardWalkLimit);
   }
 
@@ -1077,13 +1080,13 @@ public:
 
   MemoryAccess *getClobberingMemoryAccess(MemoryAccess *MA,
                                           BatchAAResults &BAA) override {
-    unsigned UpwardWalkLimit = MaxCheckLimit;
+    unsigned UpwardWalkLimit = getMaxCheckLimit(*MSSA->OptsCtx);
     return getClobberingMemoryAccess(MA, BAA, UpwardWalkLimit);
   }
   MemoryAccess *getClobberingMemoryAccess(MemoryAccess *MA,
                                           const MemoryLocation &Loc,
                                           BatchAAResults &BAA) override {
-    unsigned UpwardWalkLimit = MaxCheckLimit;
+    unsigned UpwardWalkLimit = getMaxCheckLimit(*MSSA->OptsCtx);
     return getClobberingMemoryAccess(MA, Loc, BAA, UpwardWalkLimit);
   }
 
@@ -1234,8 +1237,8 @@ void MemorySSA::markUnreachableAsLiveOnEntry(BasicBlock *BB) {
 }
 
 MemorySSA::MemorySSA(Function &Func, AliasAnalysis *AA, DominatorTree *DT)
-    : DT(DT), F(&Func), LiveOnEntryDef(nullptr), Walker(nullptr),
-      SkipWalker(nullptr) {
+    : DT(DT), F(&Func), OptsCtx(&Func.getContext().getOptionsContext()),
+      LiveOnEntryDef(nullptr), Walker(nullptr), SkipWalker(nullptr) {
   // Build MemorySSA using a batch alias analysis. This reuses the internal
   // state that AA collects during an alias()/getModRefInfo() call. This is
   // safe because there are no CFG changes while building MemorySSA and can
@@ -1252,8 +1255,9 @@ MemorySSA::MemorySSA(Function &Func, AliasAnalysis *AA, DominatorTree *DT)
 }
 
 MemorySSA::MemorySSA(Loop &L, AliasAnalysis *AA, DominatorTree *DT)
-    : DT(DT), L(&L), LiveOnEntryDef(nullptr), Walker(nullptr),
-      SkipWalker(nullptr) {
+    : DT(DT), L(&L),
+      OptsCtx(&L.getHeader()->getParent()->getContext().getOptionsContext()),
+      LiveOnEntryDef(nullptr), Walker(nullptr), SkipWalker(nullptr) {
   // Build MemorySSA using a batch alias analysis. This reuses the internal
   // state that AA collects during an alias()/getModRefInfo() call. This is
   // safe because there are no CFG changes while building MemorySSA and can
@@ -1438,7 +1442,7 @@ void MemorySSA::OptimizeUses::optimizeUsesInBlock(
     // In any case, the new upper bound is the top of the stack.
     unsigned long UpperBound = VersionStack.size() - 1;
 
-    if (UpperBound - LocInfo.LowerBound > MaxCheckLimit) {
+    if (UpperBound - LocInfo.LowerBound > getMaxCheckLimit(*MSSA->OptsCtx)) {
       LLVM_DEBUG(dbgs() << "MemorySSA skipping optimization of " << *MU << " ("
                         << *(MU->getMemoryInst()) << ")"
                         << " because there are "
@@ -1450,7 +1454,7 @@ void MemorySSA::OptimizeUses::optimizeUsesInBlock(
       continue;
     }
     bool FoundClobberResult = false;
-    unsigned UpwardWalkLimit = MaxCheckLimit;
+    unsigned UpwardWalkLimit = getMaxCheckLimit(*MSSA->OptsCtx);
     while (UpperBound > LocInfo.LowerBound) {
       if (isa<MemoryPhi>(VersionStack[UpperBound])) {
         // For phis, use the walker, see where we ended up, go there.
@@ -2387,9 +2391,10 @@ PreservedAnalyses MemorySSAPrinterPass::run(Function &F,
   auto &MSSA = AM.getResult<MemorySSAAnalysis>(F).getMSSA();
   if (EnsureOptimizedUses)
     MSSA.ensureOptimizedUses();
-  if (DotCFGMSSA != "") {
+  std::string DotFile = getDotCFGMSSA(F.getContext().getOptionsContext());
+  if (DotFile != "") {
     DOTFuncMSSAInfo CFGInfo(F, MSSA);
-    WriteGraph(&CFGInfo, "", false, "MSSA", DotCFGMSSA);
+    WriteGraph(&CFGInfo, "", false, "MSSA", DotFile);
   } else {
     OS << "MemorySSA for function: " << F.getName() << "\n";
     MSSA.print(OS);
@@ -2435,7 +2440,11 @@ bool MemorySSAWrapperPass::runOnFunction(Function &F) {
 }
 
 void MemorySSAWrapperPass::verifyAnalysis() const {
-  if (VerifyMemorySSA)
+  if (getVerifyMemorySSA(MSSA->getDomTree()
+                             .getRoot()
+                             ->getParent()
+                             ->getContext()
+                             .getOptionsContext()))
     MSSA->verifyMemorySSA();
 }
 

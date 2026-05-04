@@ -24,6 +24,7 @@
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
@@ -33,8 +34,11 @@
 #include "llvm/IR/Value.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
+#include "llvm/PassRegistry.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -47,31 +51,31 @@
 
 using namespace llvm;
 
-static cl::opt<bool>
-ForceHardwareLoops("force-hardware-loops", cl::Hidden, cl::init(false),
-                   cl::desc("Force hardware loops intrinsics to be inserted"));
+static bool getForceHardwareLoops(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ForceHardwareLoops>(Ctx);
+}
 
-static cl::opt<bool>
-ForceHardwareLoopPHI(
-  "force-hardware-loop-phi", cl::Hidden, cl::init(false),
-  cl::desc("Force hardware loop counter to be updated through a phi"));
+static bool getForceHardwareLoopPhi(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ForceHardwareLoopPhi>(Ctx);
+}
 
-static cl::opt<bool>
-ForceNestedLoop("force-nested-hardware-loop", cl::Hidden, cl::init(false),
-                cl::desc("Force allowance of nested hardware loops"));
+static bool getForceNestedHardwareLoop(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ForceNestedHardwareLoop>(Ctx);
+}
 
-static cl::opt<unsigned>
-LoopDecrement("hardware-loop-decrement", cl::Hidden, cl::init(1),
-            cl::desc("Set the loop decrement value"));
+static unsigned getHardwareLoopDecrement(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_HardwareLoopDecrement>(Ctx);
+}
 
-static cl::opt<unsigned>
-CounterBitWidth("hardware-loop-counter-bitwidth", cl::Hidden, cl::init(32),
-                cl::desc("Set the loop counter bitwidth"));
+static unsigned
+getHardwareLoopCounterBitwidth(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_HardwareLoopCounterBitwidth>(
+      Ctx);
+}
 
-static cl::opt<bool>
-ForceGuardLoopEntry(
-  "force-hardware-loop-guard", cl::Hidden, cl::init(false),
-  cl::desc("Force generation of loop guard intrinsic"));
+static bool getForceHardwareLoopGuard(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ForceHardwareLoopGuard>(Ctx);
+}
 
 STATISTIC(NumHWLoops, "Number of loops converted to hardware loops");
 
@@ -236,18 +240,35 @@ bool HardwareLoopsLegacy::runOnFunction(Function &F) {
   bool PreserveLCSSA = mustPreserveAnalysisID(LCSSAID);
 
   HardwareLoopOptions Opts;
-  if (ForceHardwareLoops.getNumOccurrences())
-    Opts.setForce(ForceHardwareLoops);
-  if (ForceHardwareLoopPHI.getNumOccurrences())
-    Opts.setForcePhi(ForceHardwareLoopPHI);
-  if (ForceNestedLoop.getNumOccurrences())
-    Opts.setForceNested(ForceNestedLoop);
-  if (ForceGuardLoopEntry.getNumOccurrences())
-    Opts.setForceGuard(ForceGuardLoopEntry);
-  if (LoopDecrement.getNumOccurrences())
-    Opts.setDecrement(LoopDecrement);
-  if (CounterBitWidth.getNumOccurrences())
-    Opts.setCounterBitwidth(CounterBitWidth);
+  const auto &OptsCtx = F.getContext().getOptionsContext();
+  if (false || clv2::wasOptSpecified<&clv2::CGPassCore1Reg,
+                                     &clv2::CGPASS_ForceHardwareLoops>(OptsCtx))
+    Opts.setForce(getForceHardwareLoops(F.getContext().getOptionsContext()));
+  if (false ||
+      clv2::wasOptSpecified<&clv2::CGPassCore1Reg,
+                            &clv2::CGPASS_ForceHardwareLoopPhi>(OptsCtx))
+    Opts.setForcePhi(
+        getForceHardwareLoopPhi(F.getContext().getOptionsContext()));
+  if (false ||
+      clv2::wasOptSpecified<&clv2::CGPassCore1Reg,
+                            &clv2::CGPASS_ForceNestedHardwareLoop>(OptsCtx))
+    Opts.setForceNested(
+        getForceNestedHardwareLoop(F.getContext().getOptionsContext()));
+  if (false ||
+      clv2::wasOptSpecified<&clv2::CGPassCore2Reg,
+                            &clv2::CGPASS_ForceHardwareLoopGuard>(OptsCtx))
+    Opts.setForceGuard(
+        getForceHardwareLoopGuard(F.getContext().getOptionsContext()));
+  if (false ||
+      clv2::wasOptSpecified<&clv2::CGPassCore1Reg,
+                            &clv2::CGPASS_HardwareLoopDecrement>(OptsCtx))
+    Opts.setDecrement(
+        getHardwareLoopDecrement(F.getContext().getOptionsContext()));
+  if (false ||
+      clv2::wasOptSpecified<&clv2::CGPassCore2Reg,
+                            &clv2::CGPASS_HardwareLoopCounterBitwidth>(OptsCtx))
+    Opts.setCounterBitwidth(
+        getHardwareLoopCounterBitwidth(F.getContext().getOptionsContext()));
 
   HardwareLoopsImpl Impl(SE, LI, PreserveLCSSA, DT, TTI, TLI, AC, ORE, Opts);
   return Impl.run(F);

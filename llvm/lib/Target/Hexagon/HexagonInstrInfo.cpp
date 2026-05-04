@@ -40,17 +40,19 @@
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/CodeGenTypes/MachineValueType.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCInstBuilder.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrItineraries.h"
 #include "llvm/Support/BranchProbability.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cassert>
 #include <cctype>
@@ -71,36 +73,55 @@ using namespace llvm;
 #include "HexagonGenDFAPacketizer.inc"
 #include "HexagonGenInstrInfo.inc"
 
-cl::opt<bool> ScheduleInlineAsm("hexagon-sched-inline-asm", cl::Hidden,
-  cl::init(false), cl::desc("Do not consider inline-asm a scheduling/"
-                            "packetization boundary."));
+static bool EnableBranchPrediction = true;
 
-static cl::opt<bool> EnableBranchPrediction("hexagon-enable-branch-prediction",
-  cl::Hidden, cl::init(true), cl::desc("Enable branch prediction"));
+static bool EnableALUForwarding = true;
 
-static cl::opt<bool> DisableNVSchedule(
-    "disable-hexagon-nv-schedule", cl::Hidden,
-    cl::desc("Disable schedule adjustment for new value stores."));
+static bool EnableACCForwarding = true;
 
-static cl::opt<bool> EnableTimingClassLatency(
-  "enable-timing-class-latency", cl::Hidden, cl::init(false),
-  cl::desc("Enable timing class latency"));
+static bool BranchRelaxAsmLarge = true;
 
-static cl::opt<bool> EnableALUForwarding(
-  "enable-alu-forwarding", cl::Hidden, cl::init(true),
-  cl::desc("Enable vec alu forwarding"));
+static bool UseDFAHazardRec = true;
 
-static cl::opt<bool> EnableACCForwarding(
-  "enable-acc-forwarding", cl::Hidden, cl::init(true),
-  cl::desc("Enable vec acc forwarding"));
+static bool getScheduleInlineAsm(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_ScheduleInlineAsm>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> BranchRelaxAsmLarge("branch-relax-asm-large",
-                                         cl::init(true), cl::Hidden,
-                                         cl::desc("branch relax asm"));
+static bool getEnableBranchPrediction(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_EnableBranchPrediction>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    UseDFAHazardRec("dfa-hazard-rec", cl::init(true), cl::Hidden,
-                    cl::desc("Use the DFA based hazard recognizer."));
+static bool getDisableNVSchedule(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DisableNVSchedule>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getEnableTimingClassLatency(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_EnableTimingClassLatency>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getEnableALUForwarding(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_EnableALUForwarding>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getEnableACCForwarding(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_EnableACCForwarding>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getBranchRelaxAsmLarge(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_BranchRelaxAsmLarge>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getUseDFAHazardRec(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_UseDFAHazardRec>(
+      F.getContext().getOptionsContext());
+}
 
 /// Constants for Hexagon instructions.
 const int Hexagon_MEMW_OFFSET_MAX = 4095;
@@ -1855,7 +1876,7 @@ bool HexagonInstrInfo::isSchedulingBoundary(const MachineInstr &MI,
   if (MI.getOpcode() == TargetOpcode::INLINEASM_BR)
     return true;
 
-  if (MI.isInlineAsm() && !ScheduleInlineAsm)
+  if (MI.isInlineAsm() && !getScheduleInlineAsm(MF.getFunction()))
     return true;
 
   return false;
@@ -1901,7 +1922,7 @@ unsigned HexagonInstrInfo::getInlineAsmLength(const char *Str,
 ScheduleHazardRecognizer*
 HexagonInstrInfo::CreateTargetPostRAHazardRecognizer(
       const InstrItineraryData *II, const ScheduleDAG *DAG) const {
-  if (UseDFAHazardRec)
+  if (getUseDFAHazardRec(DAG->MF.getFunction()))
     return new HexagonHazardRecognizer(II, this, Subtarget);
   return TargetInstrInfo::CreateTargetPostRAHazardRecognizer(II, DAG);
 }
@@ -3007,10 +3028,12 @@ bool HexagonInstrInfo::isVecALU(const MachineInstr &MI) const {
 
 bool HexagonInstrInfo::isVecUsableNextPacket(const MachineInstr &ProdMI,
       const MachineInstr &ConsMI) const {
-  if (EnableACCForwarding && isVecAcc(ProdMI) && isVecAcc(ConsMI))
+  const Function &F = ProdMI.getParent()->getParent()->getFunction();
+  if (getEnableACCForwarding(F) && isVecAcc(ProdMI) && isVecAcc(ConsMI))
     return true;
 
-  if (EnableALUForwarding && (isVecALU(ConsMI) || isLateSourceInstr(ConsMI)))
+  if (getEnableALUForwarding(F) &&
+      (isVecALU(ConsMI) || isLateSourceInstr(ConsMI)))
     return true;
 
   if (mayBeNewStore(ConsMI))
@@ -3127,7 +3150,7 @@ bool HexagonInstrInfo::canExecuteInBundle(const MachineInstr &First,
     if (Op.isReg() && Op.isUse() && Op.getReg() == Hexagon::R29)
       return true;
   }
-  if (DisableNVSchedule)
+  if (getDisableNVSchedule(First.getParent()->getParent()->getFunction()))
     return false;
   if (mayBeNewStore(Second)) {
     // Make sure the definition of the first instruction is the value being
@@ -4631,7 +4654,8 @@ unsigned HexagonInstrInfo::getSize(const MachineInstr &MI) const {
     Size += HEXAGON_INSTR_SIZE;
 
   // Try and compute number of instructions in asm.
-  if (BranchRelaxAsmLarge && MI.getOpcode() == Hexagon::INLINEASM) {
+  if (getBranchRelaxAsmLarge(MI.getParent()->getParent()->getFunction()) &&
+      MI.getOpcode() == Hexagon::INLINEASM) {
     const MachineBasicBlock &MBB = *MI.getParent();
     const MachineFunction *MF = MBB.getParent();
     const MCAsmInfo &MAI = MF->getTarget().getMCAsmInfo();
@@ -4705,7 +4729,8 @@ bool HexagonInstrInfo::invertAndChangeJumpTarget(
     --TargetPos;
   assert((TargetPos >= 0) && MI.getOperand(TargetPos).isMBB());
   MI.getOperand(TargetPos).setMBB(NewTarget);
-  if (EnableBranchPrediction && isPredicatedNew(MI)) {
+  if (getEnableBranchPrediction(MI.getParent()->getParent()->getFunction()) &&
+      isPredicatedNew(MI)) {
     NewOpcode = reversePrediction(NewOpcode);
   }
   MI.setDesc(get(NewOpcode));

@@ -7,47 +7,27 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Debug/Counter.h"
-#include "llvm/Support/CommandLine.h"
+#include "mlir/IR/MLIROptionsOptInfos.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
-#include "llvm/Support/ManagedStatic.h"
 
 using namespace mlir;
 using namespace mlir::tracing;
 
-//===----------------------------------------------------------------------===//
-// DebugCounter CommandLine Options
-//===----------------------------------------------------------------------===//
-
-namespace {
-/// This struct contains command line options that can be used to initialize
-/// various bits of a DebugCounter. This uses a struct wrapper to avoid the need
-/// for global command line options.
-struct DebugCounterOptions {
-  llvm::cl::list<std::string> counters{
-      "mlir-debug-counter",
-      llvm::cl::desc(
-          "Comma separated list of debug counter skip and count arguments"),
-      llvm::cl::CommaSeparated};
-
-  llvm::cl::opt<bool> printCounterInfo{
-      "mlir-print-debug-counter", llvm::cl::init(false), llvm::cl::Optional,
-      llvm::cl::desc("Print out debug counter information after all counters "
-                     "have been accumulated")};
-};
-} // namespace
-
-static llvm::ManagedStatic<DebugCounterOptions> clOptions;
 
 //===----------------------------------------------------------------------===//
 // DebugCounter
 //===----------------------------------------------------------------------===//
 
-DebugCounter::DebugCounter() { applyCLOptions(); }
+DebugCounter::DebugCounter(const llvm::clv2::OptionsContext &ctx)
+    : optsCtx(&ctx) {
+  applyCLOptions(*optsCtx);
+}
 
 DebugCounter::~DebugCounter() {
-  // Print information when destroyed, iff command line option is specified.
-  if (clOptions.isConstructed() && clOptions->printCounterInfo)
+  using namespace llvm::clv2;
+  auto *O = mlir_opts::getMLIROptsReg(*optsCtx);
+  if (O && O->get<&MLIR_PrintDebugCounter>())
     print(llvm::dbgs());
 }
 
@@ -109,45 +89,51 @@ void DebugCounter::print(raw_ostream &os) const {
 /// Register a set of useful command-line options that can be used to configure
 /// various flags within the DebugCounter. These flags are used when
 /// constructing a DebugCounter for initialization.
-void DebugCounter::registerCLOptions() {
-  // Make sure that the options struct has been initialized.
-  *clOptions;
-}
+void DebugCounter::registerCLOptions() {}
 
-bool DebugCounter::isActivated() {
-  return clOptions->counters.getNumOccurrences() ||
-         clOptions->printCounterInfo.getNumOccurrences();
+bool DebugCounter::isActivated(const llvm::clv2::OptionsContext &optsCtx) {
+  using namespace llvm::clv2;
+  auto *O = mlir_opts::getMLIROptsReg(optsCtx);
+  if (!O)
+    return false;
+  return !O->get<&MLIR_DebugCounter>().empty() ||
+         O->get<&MLIR_PrintDebugCounter>();
 }
 
 // This is called by the command line parser when it sees a value for the
 // debug-counter option defined above.
-void DebugCounter::applyCLOptions() {
-  if (!clOptions.isConstructed())
+void DebugCounter::applyCLOptions(const llvm::clv2::OptionsContext &optsCtx) {
+  using namespace llvm::clv2;
+  auto *O = mlir_opts::getMLIROptsReg(optsCtx);
+  if (!O)
+    return;
+  const auto &counterArgs = O->get<&MLIR_DebugCounter>();
+  if (counterArgs.empty())
     return;
 
-  for (StringRef arg : clOptions->counters) {
+  for (StringRef arg : counterArgs) {
     if (arg.empty())
       continue;
 
     // Debug counter arguments are expected to be in the form: `counter=value`.
     auto [counterName, counterValueStr] = arg.split('=');
     if (counterValueStr.empty()) {
-      clOptions->counters.error(
-          llvm::Twine(
-              "expected DebugCounter argument to have an `=` separating "
-              "the counter name and value, but the provided argument "
-              "was: `") +
-          arg + "`");
+      llvm::errs()
+          << "error: for the --mlir-debug-counter option: "
+          << "expected DebugCounter argument to have an `=` separating "
+             "the counter name and value, but the provided argument "
+             "was: `"
+          << arg << "`\n";
       exit(1);
     }
 
     // Extract the counter value.
     int64_t counterValue;
     if (counterValueStr.getAsInteger(0, counterValue)) {
-      clOptions->counters.error(
-          llvm::Twine("expected DebugCounter counter value to be numeric, but "
-                      "got `") +
-          counterValueStr + "`");
+      llvm::errs() << "error: for the --mlir-debug-counter option: "
+                   << "expected DebugCounter counter value to be numeric, but "
+                      "got `"
+                   << counterValueStr << "`\n";
       exit(1);
     }
 
@@ -160,10 +146,10 @@ void DebugCounter::applyCLOptions() {
       counters[counterName].countToStopAfter = counterValue;
 
     } else {
-      clOptions->counters.error(
-          llvm::Twine("expected DebugCounter counter name to end with either "
-                      "`-skip` or `-count`, but got `") +
-          counterName + "`");
+      llvm::errs() << "error: for the --mlir-debug-counter option: "
+                   << "expected DebugCounter counter name to end with either "
+                      "`-skip` or `-count`, but got `"
+                   << counterName << "`\n";
       exit(1);
     }
   }

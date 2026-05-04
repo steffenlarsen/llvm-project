@@ -13,11 +13,13 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/ModuleSummaryAnalysis.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/StackLifetime.h"
 #include "llvm/IR/ConstantRange.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instruction.h"
@@ -26,8 +28,9 @@
 #include "llvm/IR/ModuleSummaryIndex.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <tuple>
@@ -57,15 +60,19 @@ STATISTIC(NumIndexCalleeUnhandled, "Number of index callee which are unhandled."
 STATISTIC(NumIndexCalleeMultipleWeak, "Number of index callee non-unique weak.");
 STATISTIC(NumIndexCalleeMultipleExternal, "Number of index callee non-unique external.");
 
+static int getStackSafetyMaxIterations(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_StackSafetyMaxIterations>(Ctx);
+}
 
-static cl::opt<int> StackSafetyMaxIterations("stack-safety-max-iterations",
-                                             cl::init(20), cl::Hidden);
+static bool getStackSafetyPrint(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::AN_StackSafetyPrint>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> StackSafetyPrint("stack-safety-print", cl::init(false),
-                                      cl::Hidden);
-
-static cl::opt<bool> StackSafetyRun("stack-safety-run", cl::init(false),
-                                    cl::Hidden);
+static bool getStackSafetyRun(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::AN_StackSafetyRun>(
+      M.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -588,6 +595,7 @@ template <typename CalleeTy> class StackSafetyDataFlowAnalysis {
 
   FunctionMap Functions;
   const ConstantRange UnknownRange;
+  const int MaxIterations;
 
   // Callee-to-Caller multimap.
   DenseMap<const CalleeTy *, SmallVector<const CalleeTy *, 4>> Callers;
@@ -608,9 +616,11 @@ template <typename CalleeTy> class StackSafetyDataFlowAnalysis {
 #endif
 
 public:
-  StackSafetyDataFlowAnalysis(uint32_t PointerBitWidth, FunctionMap Functions)
+  StackSafetyDataFlowAnalysis(uint32_t PointerBitWidth, FunctionMap Functions,
+                              int MaxIterations)
       : Functions(std::move(Functions)),
-        UnknownRange(ConstantRange::getFull(PointerBitWidth)) {}
+        UnknownRange(ConstantRange::getFull(PointerBitWidth)),
+        MaxIterations(MaxIterations) {}
 
   const FunctionMap &run();
 
@@ -662,7 +672,7 @@ bool StackSafetyDataFlowAnalysis<CalleeTy>::updateOneUse(UseInfo<CalleeTy> &US,
 template <typename CalleeTy>
 void StackSafetyDataFlowAnalysis<CalleeTy>::updateOneNode(
     const CalleeTy *Callee, FunctionInfo<CalleeTy> &FS) {
-  bool UpdateToFullSet = FS.UpdateCount > StackSafetyMaxIterations;
+  bool UpdateToFullSet = FS.UpdateCount > MaxIterations;
   bool Changed = false;
   for (auto &KV : FS.Params)
     Changed |= updateOneUse(KV.second, UpdateToFullSet);
@@ -852,7 +862,10 @@ GVToSSI createGlobalStackSafetyInfo(
 
   uint32_t PointerSize =
       Copy.begin()->first->getDataLayout().getPointerSizeInBits();
-  StackSafetyDataFlowAnalysis<GlobalValue> SSDFA(PointerSize, std::move(Copy));
+  const clv2::OptionsContext &Ctx =
+      Copy.begin()->first->getContext().getOptionsContext();
+  StackSafetyDataFlowAnalysis<GlobalValue> SSDFA(
+      PointerSize, std::move(Copy), getStackSafetyMaxIterations(Ctx));
 
   for (const auto &F : SSDFA.run()) {
     auto FI = F.second;
@@ -930,7 +943,7 @@ const StackSafetyGlobalInfo::InfoTy &StackSafetyGlobalInfo::getInfo() const {
       }
     }
 
-    if (StackSafetyPrint)
+    if (getStackSafetyPrint(*M))
       print(errs());
   }
   return *Info;
@@ -982,7 +995,7 @@ StackSafetyGlobalInfo::StackSafetyGlobalInfo(
     Module *M, std::function<const StackSafetyInfo &(Function &F)> GetSSI,
     const ModuleSummaryIndex *Index)
     : M(M), GetSSI(GetSSI), Index(Index) {
-  if (StackSafetyRun)
+  if (getStackSafetyRun(*M))
     getInfo();
 }
 
@@ -1069,17 +1082,14 @@ AnalysisKey StackSafetyGlobalAnalysis::Key;
 
 StackSafetyGlobalInfo
 StackSafetyGlobalAnalysis::run(Module &M, ModuleAnalysisManager &AM) {
+  // FIXME: Lookup Module Summary.
   FunctionAnalysisManager &FAM =
       AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
-  const ModuleSummaryIndex *Index = nullptr;
-  if (auto *IndexPass =
-          AM.getCachedResult<ImmutableModuleSummaryIndexAnalysis>(M))
-    Index = IndexPass->getIndex();
   return {&M,
           [&FAM](Function &F) -> const StackSafetyInfo & {
             return FAM.getResult<StackSafetyAnalysis>(F);
           },
-          Index};
+          nullptr};
 }
 
 PreservedAnalyses StackSafetyGlobalPrinterPass::run(Module &M,
@@ -1122,7 +1132,7 @@ bool StackSafetyGlobalInfoWrapperPass::runOnModule(Module &M) {
 }
 
 bool llvm::needsParamAccessSummary(const Module &M) {
-  if (StackSafetyRun)
+  if (getStackSafetyRun(M))
     return true;
   for (const auto &F : M.functions())
     if (F.hasFnAttribute(Attribute::SanitizeMemTag))
@@ -1186,8 +1196,10 @@ void llvm::generateParamAccessSummary(ModuleSummaryIndex &Index) {
     }
   }
   NumCombinedDataFlowNodes += Functions.size();
+  // A summary index carries no Module, so there is no session context here.
   StackSafetyDataFlowAnalysis<FunctionSummary> SSDFA(
-      FunctionSummary::ParamAccess::RangeWidth, std::move(Functions));
+      FunctionSummary::ParamAccess::RangeWidth, std::move(Functions),
+      getStackSafetyMaxIterations(clv2::defaultOptionsContext()));
   for (const auto &KV : SSDFA.run()) {
     std::vector<FunctionSummary::ParamAccess> NewParams;
     NewParams.reserve(KV.second.Params.size());

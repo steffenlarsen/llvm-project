@@ -13,6 +13,7 @@
 
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/Target/AMDGPUSplitModuleOptions.h"
 #include <memory>
 
 namespace llvm {
@@ -25,14 +26,16 @@ public:
   using ModuleCreationCallback =
       function_ref<void(std::unique_ptr<Module> MPart)>;
 
-  AMDGPUSplitModulePass(unsigned N, ModuleCreationCallback ModuleCallback)
-      : N(N), ModuleCallback(ModuleCallback) {}
+  AMDGPUSplitModulePass(unsigned N, ModuleCreationCallback ModuleCallback,
+                        AMDGPUSplitModuleOptions Opts = {})
+      : N(N), ModuleCallback(ModuleCallback), Opts(std::move(Opts)) {}
 
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM);
 
 private:
   unsigned N;
   ModuleCreationCallback ModuleCallback;
+  AMDGPUSplitModuleOptions Opts;
 };
 
 } // end namespace llvm

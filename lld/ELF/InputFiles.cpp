@@ -1389,9 +1389,9 @@ template <class ELFT> void ObjFile<ELFT>::postParse() {
 //
 //  The following functions search archive members for definitions to replace
 //  tentative definitions (implementing behavior 2).
-static bool isBitcodeNonCommonDef(MemoryBufferRef mb, StringRef symName,
-                                  StringRef archiveName) {
-  IRSymtabFile symtabFile = check(readIRSymtab(mb));
+static bool isBitcodeNonCommonDef(Ctx &ctx, MemoryBufferRef mb,
+                                  StringRef symName, StringRef archiveName) {
+  IRSymtabFile symtabFile = check(readIRSymtab(mb, *ctx.llvmOptsCtx));
   for (const irsymtab::Reader::SymbolRef &sym :
        symtabFile.TheReader.symbols()) {
     if (sym.isGlobal() && sym.getName() == symName)
@@ -1833,7 +1833,7 @@ BitcodeFile::BitcodeFile(Ctx &ctx, MemoryBufferRef mb, StringRef archiveName,
 
   MemoryBufferRef mbref(mb.getBuffer(), name);
 
-  obj = CHECK2(lto::InputFile::create(mbref), this);
+  obj = CHECK2(lto::InputFile::create(mbref, *ctx.llvmOptsCtx), this);
   obj->setArchivePathAndName(archiveName, mb.getBufferIdentifier());
 
   Triple t(obj->getTargetTriple());
@@ -2033,7 +2033,7 @@ template <class ELFT> void ObjFile<ELFT>::parseLazy() {
 
 bool InputFile::shouldExtractForCommon(StringRef name) const {
   if (isa<BitcodeFile>(this))
-    return isBitcodeNonCommonDef(mb, name, archiveName);
+    return isBitcodeNonCommonDef(ctx, mb, name, archiveName);
 
   return isNonCommonDef(ctx, mb, name, archiveName);
 }

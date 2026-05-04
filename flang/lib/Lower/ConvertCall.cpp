@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "flang/Lower/ConvertCall.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Lower/Allocatable.h"
 #include "flang/Lower/CUDA.h"
 #include "flang/Lower/ConvertExprToHLFIR.h"
@@ -37,16 +38,11 @@
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
 #include "mlir/IR/IRMapping.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include <optional>
 
 #define DEBUG_TYPE "flang-lower-expr"
-
-static llvm::cl::opt<bool> useHlfirIntrinsicOps(
-    "use-hlfir-intrinsic-ops", llvm::cl::init(true),
-    llvm::cl::desc("Lower via HLFIR transformational intrinsic operations such "
-                   "as hlfir.sum"));
 
 static constexpr char tempResultName[] = ".tmp.func_result";
 
@@ -2387,7 +2383,9 @@ static std::optional<hlfir::EntityWithAttributes> genHLFIRIntrinsicRefCore(
     return genCustomIntrinsicRefCore(loweredActuals, intrinsic, callContext);
   // Try lowering transformational intrinsic ops to HLFIR ops if enabled
   // (transformational always have a result type)
-  if (useHlfirIntrinsicOps && callContext.resultType) {
+  if (llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_UseHlfirIntrinsicOps>(
+          callContext.converter.getMLIRContext().getOptionsContext()) &&
+      callContext.resultType) {
     fir::FirOpBuilder &builder = callContext.getBuilder();
     mlir::Location loc = callContext.loc;
     const std::string intrinsicName = callContext.getProcedureName();

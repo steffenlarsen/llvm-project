@@ -37,11 +37,13 @@
 #include "llvm/IR/Type.h"
 #include "llvm/Support/AllocToken.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/RandomNumberGenerator.h"
 #include "llvm/Support/SipHash.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
 #include <cassert>
 #include <cstdint>
 #include <memory>
@@ -59,41 +61,60 @@ namespace {
 
 //===--- Command-line options ---------------------------------------------===//
 
-cl::opt<std::string> ClFuncPrefix("alloc-token-prefix",
-                                  cl::desc("The allocation function prefix"),
-                                  cl::Hidden, cl::init("__alloc_token_"));
+bool ClCoverReplaceableNew = true;
+uint64_t ClFallbackToken = 0;
 
-cl::opt<uint64_t>
-    ClMaxTokens("alloc-token-max",
-                cl::desc("Maximum number of tokens (0 = target SIZE_MAX)"),
-                cl::Hidden, cl::init(0));
+std::string getClFuncPrefix(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_AllocTokenPrefix>(
+      M.getContext().getOptionsContext());
+}
 
-cl::opt<bool>
-    ClFastABI("alloc-token-fast-abi",
-              cl::desc("The token ID is encoded in the function name"),
-              cl::Hidden, cl::init(false));
+uint64_t getClFallbackToken(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_AllocTokenFallback>(
+      M.getContext().getOptionsContext());
+}
 
-// Instrument libcalls only by default - compatible allocators only need to take
-// care of providing standard allocation functions. With extended coverage, also
-// instrument non-libcall allocation function calls with !alloc_token
-// metadata.
-cl::opt<bool>
-    ClExtended("alloc-token-extended",
-               cl::desc("Extend coverage to custom allocation functions"),
-               cl::Hidden, cl::init(false));
+bool isClMaxTokensSpecified(const Module &M) {
+  return clv2::wasOptSpecified<&clv2::InstrumentationOptsReg,
+                               &clv2::INST_AllocTokenMax>(
+      M.getContext().getOptionsContext());
+}
+
+uint64_t getClMaxTokens(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_AllocTokenMax>(
+      M.getContext().getOptionsContext());
+}
+
+bool isClFastABISpecified(const Module &M) {
+  return clv2::wasOptSpecified<&clv2::InstrumentationOptsReg,
+                               &clv2::INST_AllocTokenFastABI>(
+      M.getContext().getOptionsContext());
+}
+
+bool getClFastABI(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_AllocTokenFastABI>(
+      M.getContext().getOptionsContext());
+}
+
+bool isClExtendedSpecified(const Module &M) {
+  return clv2::wasOptSpecified<&clv2::InstrumentationOptsReg,
+                               &clv2::INST_AllocTokenExtended>(
+      M.getContext().getOptionsContext());
+}
+
+bool getClExtended(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_AllocTokenExtended>(
+      M.getContext().getOptionsContext());
+}
 
 // C++ defines ::operator new (and variants) as replaceable (vs. standard
 // library versions), which are nobuiltin, and are therefore not covered by
 // isAllocationFn(). Cover by default, as users of AllocToken are already
 // required to provide token-aware allocation functions (no defaults).
-cl::opt<bool> ClCoverReplaceableNew("alloc-token-cover-replaceable-new",
-                                    cl::desc("Cover replaceable operator new"),
-                                    cl::Hidden, cl::init(true));
-
-cl::opt<uint64_t> ClFallbackToken(
-    "alloc-token-fallback",
-    cl::desc("The default fallback token where none could be determined"),
-    cl::Hidden, cl::init(0));
+bool getClCoverReplaceableNew(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::INST_AllocTokenCoverReplaceableNew>(
+      M.getContext().getOptionsContext());
+}
 
 //===--- Statistics -------------------------------------------------------===//
 
@@ -191,7 +212,7 @@ public:
     }
     // Fallback.
     remarkNoMetadata(CB, ORE);
-    return ClFallbackToken;
+    return getClFallbackToken(*CB.getModule());
   }
 
 protected:
@@ -226,7 +247,7 @@ public:
     // it'll fall into the pointer-less bucket. Override by setting
     // -alloc-token-fallback if that is the wrong choice.
     remarkNoMetadata(CB, ORE);
-    return ClFallbackToken;
+    return getClFallbackToken(*CB.getModule());
   }
 };
 
@@ -248,12 +269,12 @@ static AllocTokenOptions resolveOptions(AllocTokenOptions Opts,
     Opts.Extended |= Val->isOne();
 
   // Allow overriding options from command line options.
-  if (ClMaxTokens.getNumOccurrences())
-    Opts.MaxTokens = ClMaxTokens;
-  if (ClFastABI.getNumOccurrences())
-    Opts.FastABI = ClFastABI;
-  if (ClExtended.getNumOccurrences())
-    Opts.Extended = ClExtended;
+  if (isClMaxTokensSpecified(M))
+    Opts.MaxTokens = getClMaxTokens(M);
+  if (isClFastABISpecified(M))
+    Opts.FastABI = getClFastABI(M);
+  if (isClExtendedSpecified(M))
+    Opts.Extended = getClExtended(M);
 
   return Opts;
 }
@@ -449,7 +470,7 @@ bool AllocToken::isInstrumentableLibFunc(LibFunc Func, const CallBase &CB,
   case LibFunc_ZnamSt11align_val_t12__hot_cold_t:
   case LibFunc_ZnamSt11align_val_tRKSt9nothrow_t:
   case LibFunc_ZnamSt11align_val_tRKSt9nothrow_t12__hot_cold_t:
-    return ClCoverReplaceableNew;
+    return getClCoverReplaceableNew(*CB.getModule());
 
   default:
     return false;
@@ -530,7 +551,7 @@ FunctionCallee AllocToken::getTokenAllocFunction(const CallBase &CB,
   // Copy params, and append token ID type.
   Type *RetTy = OldFTy->getReturnType();
   SmallVector<Type *, 4> NewParams{OldFTy->params()};
-  std::string TokenAllocName = ClFuncPrefix;
+  std::string TokenAllocName = getClFuncPrefix(Mod);
   if (Options.FastABI)
     TokenAllocName += utostr(TokenID) + "_";
   else

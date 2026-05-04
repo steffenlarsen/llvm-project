@@ -13,43 +13,16 @@
 #include "bolt/Passes/CMOVConversion.h"
 #include "bolt/Core/BinaryBasicBlock.h"
 #include "bolt/Core/BinaryContext.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "llvm/ADT/PostOrderIterator.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
 
 #define DEBUG_TYPE "cmov"
 
 using namespace llvm;
-
-namespace opts {
-
-extern cl::OptionCategory BoltOptCategory;
-
-static cl::opt<int> BiasThreshold(
-    "cmov-conversion-bias-threshold",
-    cl::desc("minimum condition bias (pct) to perform a CMOV conversion, "
-             "-1 to not account bias"),
-    cl::ReallyHidden, cl::init(1), cl::cat(BoltOptCategory));
-
-static cl::opt<int> MispredictionThreshold(
-    "cmov-conversion-misprediction-threshold",
-    cl::desc("minimum misprediction rate (pct) to perform a CMOV conversion, "
-             "-1 to not account misprediction rate"),
-    cl::ReallyHidden, cl::init(5), cl::cat(BoltOptCategory));
-
-static cl::opt<bool> ConvertStackMemOperand(
-    "cmov-conversion-convert-stack-mem-operand",
-    cl::desc("convert moves with stack memory operand (potentially unsafe)"),
-    cl::ReallyHidden, cl::init(false), cl::cat(BoltOptCategory));
-
-static cl::opt<bool> ConvertBasePtrStackMemOperand(
-    "cmov-conversion-convert-rbp-stack-mem-operand",
-    cl::desc("convert moves with rbp stack memory operand (unsafe, must be off "
-             "for binaries compiled with -fomit-frame-pointer)"),
-    cl::ReallyHidden, cl::init(false), cl::cat(BoltOptCategory));
-
-} // namespace opts
+using namespace bolt::bolt_passes_opts;
 
 namespace llvm {
 namespace bolt {
@@ -98,7 +71,8 @@ bool matchCFGSubgraph(BinaryBasicBlock &BB, BinaryBasicBlock *&ConditionalSucc,
 
 // Return true if basic block instructions can be converted into cmov(s).
 bool canConvertInstructions(const BinaryContext &BC, const BinaryBasicBlock &BB,
-                            unsigned CC) {
+                            unsigned CC, bool ConvertStackMemOperand,
+                            bool ConvertBasePtrStackMemOperand) {
   if (BB.empty())
     return false;
   const MCInst *LastInst = BB.getLastNonPseudoInstr();
@@ -113,9 +87,8 @@ bool canConvertInstructions(const BinaryContext &BC, const BinaryBasicBlock &BB,
       continue;
     MCInst Cmov(Inst);
     // GPR move is OK
-    if (!BC.MIB->convertMoveToConditionalMove(
-            Cmov, CC, opts::ConvertStackMemOperand,
-            opts::ConvertBasePtrStackMemOperand)) {
+    if (!BC.MIB->convertMoveToConditionalMove(Cmov, CC, ConvertStackMemOperand,
+                                              ConvertBasePtrStackMemOperand)) {
       LLVM_DEBUG({
         dbgs() << BB.getName() << ": can't convert instruction ";
         BC.printInstruction(dbgs(), Cmov);
@@ -126,7 +99,9 @@ bool canConvertInstructions(const BinaryContext &BC, const BinaryBasicBlock &BB,
   return true;
 }
 
-void convertMoves(const BinaryContext &BC, BinaryBasicBlock &BB, unsigned CC) {
+void convertMoves(const BinaryContext &BC, BinaryBasicBlock &BB, unsigned CC,
+                  bool ConvertStackMemOperand,
+                  bool ConvertBasePtrStackMemOperand) {
   for (auto II = BB.begin(), IE = BB.end(); II != IE; ++II) {
     if (BC.MIB->isPseudo(*II))
       continue;
@@ -136,8 +111,7 @@ void convertMoves(const BinaryContext &BC, BinaryBasicBlock &BB, unsigned CC) {
       return;
     }
     bool Result = BC.MIB->convertMoveToConditionalMove(
-        *II, CC, opts::ConvertStackMemOperand,
-        opts::ConvertBasePtrStackMemOperand);
+        *II, CC, ConvertStackMemOperand, ConvertBasePtrStackMemOperand);
     assert(Result && "unexpected instruction");
     (void)Result;
   }
@@ -179,6 +153,14 @@ void CMOVConversion::Stats::dumpTo(raw_ostream &OS) {
 
 void CMOVConversion::runOnFunction(BinaryFunction &Function) {
   BinaryContext &BC = Function.getBinaryContext();
+  const int BiasThreshold = getCmovConversionBiasThreshold(BC);
+  const int MispredictionThreshold =
+      getCmovConversionMispredictionThreshold(BC);
+  const bool ConvertStackMemOperand =
+      getCmovConversionConvertStackMemOperand(BC);
+  const bool ConvertBasePtrStackMemOperand =
+      getCmovConversionConvertRbpStackMemOperand(BC);
+
   bool Modified = false;
   // Function-local stats
   Stats Local;
@@ -213,7 +195,9 @@ void CMOVConversion::runOnFunction(BinaryFunction &Function) {
     if (!IsConditionalTaken)
       CC = BC.MIB->getInvertedCondCode(CC);
     // Check contents of the conditional block
-    if (!canConvertInstructions(BC, *ConditionalSucc, CC))
+    if (!canConvertInstructions(BC, *ConditionalSucc, CC,
+                                ConvertStackMemOperand,
+                                ConvertBasePtrStackMemOperand))
       continue;
 
     int ConditionBias = calculateConditionBias(*BB, *ConditionalSucc);
@@ -227,19 +211,18 @@ void CMOVConversion::runOnFunction(BinaryFunction &Function) {
     Local.PossibleMP += MispredictionCount;
 
     // If the conditional successor is never executed, don't convert it
-    if (ConditionBias < opts::BiasThreshold) {
+    if (ConditionBias < BiasThreshold) {
       LLVM_DEBUG(dbgs() << BB->getName() << "->" << ConditionalSucc->getName()
                         << " bias = " << ConditionBias
-                        << ", less than threshold " << opts::BiasThreshold
-                        << '\n');
+                        << ", less than threshold " << BiasThreshold << '\n');
       continue;
     }
 
     // Check the misprediction rate of a branch
-    if (MispredictionRate < opts::MispredictionThreshold) {
+    if (MispredictionRate < MispredictionThreshold) {
       LLVM_DEBUG(dbgs() << BB->getName() << " misprediction rate = "
                         << MispredictionRate << ", less than threshold "
-                        << opts::MispredictionThreshold << '\n');
+                        << MispredictionThreshold << '\n');
       continue;
     }
 
@@ -247,7 +230,8 @@ void CMOVConversion::runOnFunction(BinaryFunction &Function) {
     BB->eraseInstruction(std::prev(BranchInstrIter.base()));
     BB->removeAllSuccessors();
     // Convert instructions from the conditional successor into cmov's in BB.
-    convertMoves(BC, *ConditionalSucc, CC);
+    convertMoves(BC, *ConditionalSucc, CC, ConvertStackMemOperand,
+                 ConvertBasePtrStackMemOperand);
     BB->addInstructions(ConditionalSucc->begin(), ConditionalSucc->end());
     ConditionalSucc->markValid(false);
 
@@ -263,7 +247,7 @@ void CMOVConversion::runOnFunction(BinaryFunction &Function) {
   }
   if (Modified)
     Function.eraseInvalidBBs();
-  if (opts::Verbosity > 1) {
+  if (opts::getVerbosity(BC) > 1) {
     BC.outs() << "BOLT-INFO: CMOVConversion: " << Function << ", ";
     Local.dumpTo(BC.outs());
   }

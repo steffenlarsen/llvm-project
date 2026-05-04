@@ -8,59 +8,57 @@
 
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/SandboxVectorizer.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/SandboxIR/Constant.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/Debug.h"
 #include "llvm/Transforms/Vectorize/SandboxVectorizer/SandboxVectorizerPassBuilder.h"
+#include "llvm/Transforms/Vectorize/VectorizeOptions.h"
 
 using namespace llvm;
 
-static cl::opt<bool>
-    PrintPassPipeline("sbvec-print-pass-pipeline", cl::init(false), cl::Hidden,
-                      cl::desc("Prints the pass pipeline and returns."));
+static bool getPrintPassPipeline(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::VEC_PrintPassPipeline>(
+      F.getContext().getOptionsContext());
+}
 
 /// A magic string for the default pass pipeline.
 static const char *DefaultPipelineMagicStr = "*";
 
-static cl::opt<std::string> UserDefinedPassPipeline(
-    "sbvec-passes", cl::init(DefaultPipelineMagicStr), cl::Hidden,
-    cl::desc("Comma-separated list of vectorizer passes. If not set "
-             "we run the predefined pipeline."));
+static std::string getUserDefinedPassPipeline(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::VectorizeOptsReg,
+                                    &clv2::VEC_UserDefinedPassPipeline>(
+      Ctx, std::string(DefaultPipelineMagicStr));
+}
 
 // This option is useful for bisection debugging.
-// For example you may use it to figure out which filename is the one causing a
-// miscompile. You can specify a regex for the filename like: "/[a-m][^/]*"
-// which will enable any file name starting with 'a' to 'm' and disable the
-// rest. If the miscompile goes away, then we try "/[n-z][^/]*" for the other
-// half of the range, from 'n' to 'z'. If we can reproduce the miscompile then
-// we can keep looking in [n-r] and [s-z] and so on, in a binary-search fashion.
-//
-// Please note that we are using [^/]* and not .* to make sure that we are
-// matching the actual filename and not some other directory in the path.
-cl::opt<std::string> AllowFiles(
-    "sbvec-allow-files", cl::init(".*"), cl::Hidden,
-    cl::desc("Run the vectorizer only on file paths that match any in the "
-             "list of comma-separated regex's."));
+static std::string getAllowFiles(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::VectorizeOptsReg,
+                                    &clv2::VEC_AllowFiles>(
+      F.getContext().getOptionsContext(), ".*");
+}
 static constexpr char AllowFilesDelim = ',';
 
-SandboxVectorizerPass::SandboxVectorizerPass() : FPM("fpm") {
-  if (UserDefinedPassPipeline == DefaultPipelineMagicStr) {
-    // TODO: Add passes to the default pipeline. It currently contains:
-    //       - Seed collection, which creates seed regions and runs the pipeline
-    //         - Bundle Vectorizer pass that starts from a seed
-    //         - Load-Store Vectorizer pass for load-store chains
-    //         - Accept or revert IR state pass
+SandboxVectorizerPass::SandboxVectorizerPass()
+    : FPM("fpm"), PipelineInitialized(false) {}
+
+void SandboxVectorizerPass::initPipeline(const Function &F) {
+  if (PipelineInitialized)
+    return;
+  PipelineInitialized = true;
+  std::string Pipeline =
+      getUserDefinedPassPipeline(F.getContext().getOptionsContext());
+  if (Pipeline == DefaultPipelineMagicStr) {
     FPM.setPassPipeline(
         "seed-collection<tr-save,bundle-vec(bottom-up),load-store-vec,"
         "tr-accept-or-revert>",
         sandboxir::SandboxVectorizerPassBuilder::createFunctionPass);
   } else {
-    // Create the user-defined pipeline.
     FPM.setPassPipeline(
-        UserDefinedPassPipeline,
-        sandboxir::SandboxVectorizerPassBuilder::createFunctionPass);
+        Pipeline, sandboxir::SandboxVectorizerPassBuilder::createFunctionPass);
   }
 }
 
@@ -84,13 +82,15 @@ PreservedAnalyses SandboxVectorizerPass::run(Function &F,
   return PA;
 }
 
-bool SandboxVectorizerPass::allowFile(const std::string &SrcFilePath) {
+bool SandboxVectorizerPass::allowFile(const std::string &SrcFilePath,
+                                      const Function &LLVMF) {
   // Iterate over all files in AllowFiles separated by `AllowFilesDelim`.
+  std::string AllowFilesVal = getAllowFiles(LLVMF);
   size_t DelimPos = 0;
   do {
     size_t LastPos = DelimPos != 0 ? DelimPos + 1 : DelimPos;
-    DelimPos = AllowFiles.find(AllowFilesDelim, LastPos);
-    auto FileNameToMatch = AllowFiles.substr(LastPos, DelimPos - LastPos);
+    DelimPos = AllowFilesVal.find(AllowFilesDelim, LastPos);
+    auto FileNameToMatch = AllowFilesVal.substr(LastPos, DelimPos - LastPos);
     if (FileNameToMatch.empty())
       return false;
     // Note: This only runs when debugging so its OK not to reuse the regex.
@@ -103,18 +103,19 @@ bool SandboxVectorizerPass::allowFile(const std::string &SrcFilePath) {
 }
 
 bool SandboxVectorizerPass::runImpl(Function &LLVMF) {
+  initPipeline(LLVMF);
   if (Ctx == nullptr)
     Ctx = std::make_unique<sandboxir::Context>(LLVMF.getContext());
 
-  if (PrintPassPipeline) {
+  if (getPrintPassPipeline(LLVMF)) {
     FPM.printPipeline(outs());
     return false;
   }
 
   // This is used for debugging.
-  if (LLVM_UNLIKELY(AllowFiles != ".*")) {
+  if (LLVM_UNLIKELY(getAllowFiles(LLVMF) != ".*")) {
     const auto &SrcFilePath = LLVMF.getParent()->getSourceFileName();
-    if (!allowFile(SrcFilePath))
+    if (!allowFile(SrcFilePath, LLVMF))
       return false;
   }
 

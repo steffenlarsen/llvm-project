@@ -19,11 +19,13 @@
 #include "clang/ScalableStaticAnalysis/Core/Serialization/SerializationFormatRegistry.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/TargetParser/Triple.h"
+#include <functional>
 #include <string>
 
 namespace clang::ssaf {
@@ -76,6 +78,12 @@ void loadPlugins(llvm::ArrayRef<std::string> Paths);
 /// command-line options, and parses arguments. Must be called after InitLLVM.
 void initTool(int argc, const char **argv, llvm::StringRef Version,
               llvm::cl::OptionCategory &Category, llvm::StringRef ToolHeading);
+
+/// Overload that accepts a callback to register tool-specific option registries
+/// with the OptionParser before parsing.
+void initTool(int argc, const char **argv, llvm::StringRef Version,
+              llvm::cl::OptionCategory &Category, llvm::StringRef ToolHeading,
+              std::function<void(llvm::clv2::OptionParser &)> ConfigureParser);
 
 //===----------------------------------------------------------------------===//
 // Target Triples

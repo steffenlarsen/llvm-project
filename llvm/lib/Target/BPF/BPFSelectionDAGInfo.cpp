@@ -13,6 +13,8 @@
 #include "BPFSelectionDAGInfo.h"
 #include "BPFTargetMachine.h"
 #include "llvm/CodeGen/SelectionDAG.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Target/BPF/BPFOptionsOptInfos.h"
 
 #define GET_SDNODE_DESC
 #include "BPFGenSDNodeInfo.inc"
@@ -21,16 +23,12 @@ using namespace llvm;
 
 #define DEBUG_TYPE "bpf-selectiondag-info"
 
-static cl::opt<unsigned> BPFMaxStoresPerMemFunc(
-    "bpf-max-stores-per-memfunc", cl::Hidden, cl::init(192),
-    cl::desc("Set the maximum number of stores for inlined BPF memory "
-             "intrinsics"));
-
 BPFSelectionDAGInfo::BPFSelectionDAGInfo()
     : SelectionDAGGenTargetInfo(BPFGenSDNodeInfo) {}
 
-unsigned BPFSelectionDAGInfo::getCommonMaxStoresPerMemFunc() const {
-  return BPFMaxStoresPerMemFunc;
+unsigned BPFSelectionDAGInfo::getCommonMaxStoresPerMemFunc(
+    const clv2::OptionsContext &OptsCtx) const {
+  return clv2::getOptValOrDefault<&clv2::BPF_MaxStoresPerMemFunc>(OptsCtx);
 }
 
 SDValue BPFSelectionDAGInfo::EmitTargetCodeForMemcpy(
@@ -52,7 +50,8 @@ SDValue BPFSelectionDAGInfo::EmitTargetCodeForMemcpy(
   unsigned CopyLen = ConstantSize->getZExtValue();
   unsigned StoresNumEstimate = alignTo(CopyLen, Alignment) >> Log2(Alignment);
   // Impose the same copy length limit as MaxStoresPerMemcpy.
-  if (StoresNumEstimate > getCommonMaxStoresPerMemFunc())
+  if (StoresNumEstimate >
+      getCommonMaxStoresPerMemFunc(DAG.getContext()->getOptionsContext()))
     return SDValue();
 
   return DAG.getNode(BPFISD::MEMCPY, dl, MVT::Other, Chain, Dst, Src,

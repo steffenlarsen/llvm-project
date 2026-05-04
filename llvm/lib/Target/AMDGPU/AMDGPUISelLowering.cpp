@@ -24,8 +24,9 @@
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/KnownBits.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
@@ -33,10 +34,10 @@ using namespace llvm;
 #define GET_CALLING_CONV_IMPL
 #include "AMDGPUGenCallingConv.inc"
 
-static cl::opt<bool> AMDGPUBypassSlowDiv(
-  "amdgpu-bypass-slow-div",
-  cl::desc("Skip 64-bit divide for dynamic 32-bit values"),
-  cl::init(true));
+static bool getAMDGPUBypassSlowDiv(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_BypassSlowDiv>(
+      F.getContext().getOptionsContext());
+}
 
 // Find a larger type to do a load / store of a vector with.
 EVT AMDGPUTargetLowering::getEquivalentMemType(LLVMContext &Ctx, EVT VT) {
@@ -629,8 +630,12 @@ AMDGPUTargetLowering::AMDGPUTargetLowering(const TargetMachine &TM,
   MaxStoresPerMemset  = 0xffffffff;
 
   // The expansion for 64-bit division is enormous.
-  if (AMDGPUBypassSlowDiv)
-    addBypassSlowDiv(64, 32);
+  {
+    bool BypassSlowDiv = clv2::getOptValOrDefault<&clv2::AMDGPU_BypassSlowDiv>(
+        TM.Options.getOptsCtx());
+    if (BypassSlowDiv)
+      addBypassSlowDiv(64, 32);
+  }
 
   setTargetDAGCombine({ISD::BITCAST,    ISD::SHL,
                        ISD::SRA,        ISD::SRL,

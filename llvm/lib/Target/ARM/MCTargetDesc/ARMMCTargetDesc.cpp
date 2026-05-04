@@ -196,8 +196,9 @@ uint64_t ARM_MC::evaluateBranchTarget(const MCInstrDesc &InstDesc,
   return Addr + Imm + Offset;
 }
 
-MCSubtargetInfo *ARM_MC::createARMMCSubtargetInfo(const Triple &TT,
-                                                  StringRef CPU, StringRef FS) {
+MCSubtargetInfo *
+ARM_MC::createARMMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                                 const clv2::OptionsContext &Ctx) {
   std::string ArchFS = ARM_MC::ParseARMTriple(TT, CPU);
   if (!FS.empty()) {
     if (!ArchFS.empty())
@@ -206,7 +207,11 @@ MCSubtargetInfo *ARM_MC::createARMMCSubtargetInfo(const Triple &TT,
       ArchFS = std::string(FS);
   }
 
-  return createARMMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, ArchFS);
+  MCSubtargetInfo *STI =
+      createARMMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, ArchFS);
+  if (STI)
+    STI->setOptionsContext(Ctx);
+  return STI;
 }
 
 static MCInstrInfo *createARMMCInstrInfo() {

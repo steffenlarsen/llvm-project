@@ -12,10 +12,12 @@
 
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/IROptionsOptInfos.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -77,7 +79,12 @@ bool PostDominatorTreeWrapperPass::runOnFunction(Function &F) {
 }
 
 void PostDominatorTreeWrapperPass::verifyAnalysis() const {
-  if (VerifyDomInfo)
+  bool DoVerifyDom = false;
+  if (DT.root_size() > 0)
+    if (auto *O = clv2::getView<&clv2::IROptsReg>(
+            (*DT.root_begin())->getContext().getOptionsContext()))
+      DoVerifyDom = O->get<&clv2::IR_VerifyDomInfo>();
+  if (DoVerifyDom)
     assert(DT.verify(PostDominatorTree::VerificationLevel::Full));
   else if (ExpensiveChecksEnabled)
     assert(DT.verify(PostDominatorTree::VerificationLevel::Basic));

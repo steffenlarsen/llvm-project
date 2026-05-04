@@ -19,6 +19,7 @@
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include <cassert>
 #include <optional>
 
@@ -32,11 +33,12 @@ class MCInst;
 class MCInstrDesc;
 class InstrItineraryData;
 
-namespace cl {
-class OptionCategory;
-}
+namespace clv2 {
+struct OptionCategory;
+class OptionsContext;
+} // namespace clv2
 
-extern LLVM_ABI cl::OptionCategory MCScheduleOptions;
+extern LLVM_ABI clv2::OptionCategory MCScheduleOptions;
 
 /// Define a kind of processor resource that will be modeled by the scheduler.
 struct MCProcResourceDesc {
@@ -438,7 +440,8 @@ struct MCSchedModel {
   /// Return the buffer size of the resource. If a positive scale factor
   /// is provided and the original buffer size is > 1, the size is scaled
   /// accordingly.
-  LLVM_ABI int getResourceBufferSize(unsigned ProcResourceIdx) const;
+  LLVM_ABI int getResourceBufferSize(unsigned ProcResourceIdx,
+                                     const clv2::OptionsContext &Ctx) const;
 
   /// Returns the default initialized model.
   LLVM_ABI static const MCSchedModel Default;

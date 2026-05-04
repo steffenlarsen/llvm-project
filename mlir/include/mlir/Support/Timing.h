@@ -16,8 +16,15 @@
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringMapEntry.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <optional>
+
+namespace llvm {
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
+} // namespace llvm
 
 namespace mlir {
 
@@ -471,7 +478,8 @@ void registerDefaultTimingManagerCLOptions();
 
 /// Apply any values that were registered with
 /// 'registerDefaultTimingManagerOptions' to a `DefaultTimingManager`.
-void applyDefaultTimingManagerCLOptions(DefaultTimingManager &tm);
+void applyDefaultTimingManagerCLOptions(
+    DefaultTimingManager &tm, const llvm::clv2::OptionsContext &optsCtx);
 
 /// Create an output strategy for the specified format, to be passed to
 /// DefaultTimingManager::setOutput().

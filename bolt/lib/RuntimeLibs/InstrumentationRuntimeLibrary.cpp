@@ -12,44 +12,45 @@
 
 #include "bolt/RuntimeLibs/InstrumentationRuntimeLibrary.h"
 #include "bolt/Core/BinaryFunction.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
 #include "bolt/Core/JumpTable.h"
 #include "bolt/Core/Linker.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
+#include "bolt/RuntimeLibs/BoltRuntimeLibsOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/Support/Alignment.h"
-#include "llvm/Support/CommandLine.h"
 
 using namespace llvm;
 using namespace bolt;
 
 namespace opts {
 
-cl::opt<std::string> RuntimeInstrumentationLib(
-    "runtime-instrumentation-lib",
-    cl::desc("specify path of the runtime instrumentation library"),
-    cl::init("libbolt_rt_instr.a"), cl::cat(BoltOptCategory));
-
-extern cl::opt<bool> InstrumentationFileAppendPID;
-extern cl::opt<bool> ConservativeInstrumentation;
-extern cl::opt<std::string> InstrumentationFilename;
-extern cl::opt<std::string> InstrumentationBinpath;
-extern cl::opt<uint32_t> InstrumentationMaxSize;
-extern cl::opt<uint32_t> InstrumentationSleepTime;
-extern cl::opt<bool> InstrumentationNoCountersClear;
-extern cl::opt<bool> InstrumentationWaitForks;
-extern cl::opt<JumpTableSupportLevel> JumpTables;
+extern JumpTableSupportLevel JumpTables;
 
 } // namespace opts
 
 void InstrumentationRuntimeLibrary::adjustCommandLineOptions(
     const BinaryContext &BC) const {
+  const uint32_t InstrumentationSleepTime =
+      bolt_passes_opts::getInstrumentationSleepTime(BC);
+  const bool InstrumentationWaitForks =
+      bolt_passes_opts::getInstrumentationWaitForks(BC);
+  const bool InstrumentationFileAppendPID =
+      bolt_passes_opts::getInstrumentationFileAppendPid(BC);
+
   if (!BC.HasRelocations) {
     errs() << "BOLT-ERROR: instrumentation runtime libraries require "
               "relocations\n";
     exit(1);
   }
-  if (opts::JumpTables != JTS_MOVE) {
-    opts::JumpTables = JTS_MOVE;
+  auto JTLevel = static_cast<JumpTableSupportLevel>(
+      bolt::bolt_core_opts::getJumpTables(BC));
+  if (JTLevel != JTS_MOVE) {
+    auto &Ctx = const_cast<clv2::OptionsContext &>(BC.getOptionsContext());
+    if (auto *V = Ctx.getViewPtr<&clv2::BoltCoreOptsReg>())
+      V->get<&clv2::BOLTCORE_JumpTables>() =
+          clv2::BoltCoreJumpTableSupportLevel::JTS_MOVE;
     outs() << "BOLT-INFO: forcing -jump-tables=move for instrumentation\n";
   }
   if (!BC.StartFunctionAddress) {
@@ -59,14 +60,14 @@ void InstrumentationRuntimeLibrary::adjustCommandLineOptions(
     exit(1);
   }
 
-  if (BC.IsStaticExecutable && !opts::InstrumentationSleepTime) {
+  if (BC.IsStaticExecutable && !InstrumentationSleepTime) {
     errs() << "BOLT-ERROR: instrumentation of static binary currently does not "
               "support profile output on binary finalization, so it "
               "requires -instrumentation-sleep-time=N (N>0) usage\n";
     exit(1);
   }
 
-  if (opts::InstrumentationWaitForks && opts::InstrumentationFileAppendPID) {
+  if (InstrumentationWaitForks && InstrumentationFileAppendPID) {
     errs() << "BOLT-ERROR: instrumentation-file-append-pid is not compatible "
               "with instrumentation-wait-forks. If you want a separate profile "
               "for each fork, it can only be dumped in the end of process when "
@@ -165,14 +166,30 @@ void InstrumentationRuntimeLibrary::emitBinary(BinaryContext &BC,
   for (MCSymbol *const &Label : Summary->Counters)
     emitFill(sizeof(uint64_t), Label);
 
+  const uint32_t InstrumentationMaxSize =
+      bolt_passes_opts::getInstrumentationMaxSize(BC);
+  const uint32_t InstrumentationSleepTime =
+      bolt_passes_opts::getInstrumentationSleepTime(BC);
+  const bool InstrumentationNoCountersClear =
+      bolt_passes_opts::getInstrumentationNoCountersClear(BC);
+  const bool ConservativeInstrumentation =
+      bolt_passes_opts::getConservativeInstrumentation(BC);
+  const bool InstrumentationWaitForks =
+      bolt_passes_opts::getInstrumentationWaitForks(BC);
+  const auto InstrumentationFilename =
+      bolt_passes_opts::getInstrumentationFile(BC);
+  const auto InstrumentationBinpath =
+      bolt_passes_opts::getInstrumentationBinpath(BC);
+  const bool InstrumentationFileAppendPID =
+      bolt_passes_opts::getInstrumentationFileAppendPid(BC);
+
   emitPadding(BC.RegularPageSize);
-  emitIntValue("__bolt_instr_max_size", opts::InstrumentationMaxSize);
-  emitIntValue("__bolt_instr_sleep_time", opts::InstrumentationSleepTime);
+  emitIntValue("__bolt_instr_max_size", InstrumentationMaxSize);
+  emitIntValue("__bolt_instr_sleep_time", InstrumentationSleepTime);
   emitIntValue("__bolt_instr_no_counters_clear",
-               !!opts::InstrumentationNoCountersClear, 1);
-  emitIntValue("__bolt_instr_conservative", !!opts::ConservativeInstrumentation,
-               1);
-  emitIntValue("__bolt_instr_wait_forks", !!opts::InstrumentationWaitForks, 1);
+               !!InstrumentationNoCountersClear, 1);
+  emitIntValue("__bolt_instr_conservative", !!ConservativeInstrumentation, 1);
+  emitIntValue("__bolt_instr_wait_forks", !!InstrumentationWaitForks, 1);
   emitIntValue("__bolt_num_counters", Summary->Counters.size());
   emitValue(Summary->IndCallCounterFuncPtr, nullptr);
   emitValue(Summary->IndTailCallCounterFuncPtr, nullptr);
@@ -181,9 +198,9 @@ void InstrumentationRuntimeLibrary::emitBinary(BinaryContext &BC,
   emitIntValue("__bolt_instr_num_ind_targets",
                Summary->IndCallTargetDescriptions.size());
   emitIntValue("__bolt_instr_num_funcs", Summary->FunctionDescriptions.size());
-  emitString("__bolt_instr_filename", opts::InstrumentationFilename);
-  emitString("__bolt_instr_binpath", opts::InstrumentationBinpath);
-  emitIntValue("__bolt_instr_use_pid", !!opts::InstrumentationFileAppendPID, 1);
+  emitString("__bolt_instr_filename", InstrumentationFilename);
+  emitString("__bolt_instr_binpath", InstrumentationBinpath);
+  emitIntValue("__bolt_instr_use_pid", !!InstrumentationFileAppendPID, 1);
 
   if (BC.isMachO()) {
     MCSection *TablesSection = BC.Ctx->getMachOSection(
@@ -197,7 +214,11 @@ void InstrumentationRuntimeLibrary::emitBinary(BinaryContext &BC,
 void InstrumentationRuntimeLibrary::link(
     BinaryContext &BC, StringRef ToolPath, BOLTLinker &Linker,
     BOLTLinker::SectionsMapper MapSections) {
-  std::string LibPath = getLibPath(ToolPath, opts::RuntimeInstrumentationLib);
+  std::string DefaultLib =
+      BC.isMachO() ? "libbolt_rt_instr_osx.a" : "libbolt_rt_instr.a";
+  std::string RuntimeInstrumentationLib =
+      bolt_rtlibs_opts::getRuntimeInstrumentationLib(BC);
+  std::string LibPath = getLibPath(ToolPath, RuntimeInstrumentationLib);
   loadLibrary(LibPath, Linker, MapSections);
 
   if (BC.isMachO())

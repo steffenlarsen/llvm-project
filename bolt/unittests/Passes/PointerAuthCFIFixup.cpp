@@ -30,7 +30,7 @@ using namespace llvm::ELF;
 using namespace bolt;
 
 namespace opts {
-extern cl::opt<bool> PrintPAuthCFIAnalyzer;
+extern bool PrintPAuthCFIAnalyzer;
 } // namespace opts
 
 namespace {
@@ -81,7 +81,7 @@ protected:
     BC = cantFail(BinaryContext::createBinaryContext(
         ObjFile->makeTriple(), std::make_shared<orc::SymbolStringPool>(),
         ObjFile->getFileName(), nullptr, true, DWARFContext::create(*ObjFile),
-        {llvm::outs(), llvm::errs()}));
+        {llvm::outs(), llvm::errs()}, /*OptsCtx=*/nullptr));
     ASSERT_FALSE(!BC);
     BC->initializeTarget(std::unique_ptr<MCPlusBuilder>(
         createMCPlusBuilder(GetParam(), BC->MIA.get(), BC->MII.get(),

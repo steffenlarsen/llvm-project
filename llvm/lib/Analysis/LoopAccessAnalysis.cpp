@@ -23,6 +23,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AliasSetTracker.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/AssumeBundleQueries.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/LoopAnalysisManager.h"
@@ -54,10 +55,11 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -72,85 +74,70 @@ using namespace llvm::SCEVPatternMatch;
 
 #define DEBUG_TYPE "loop-accesses"
 
-static cl::opt<ElementCount, true>
-    VectorizationFactor("force-vector-width", cl::Hidden,
-                        cl::desc("Sets the SIMD width. Zero is autoselect."),
-                        cl::location(VectorizerParams::VectorizationFactor));
-ElementCount VectorizerParams::VectorizationFactor;
-
-static cl::opt<unsigned, true>
-VectorizationInterleave("force-vector-interleave", cl::Hidden,
-                        cl::desc("Sets the vectorization interleave count. "
-                                 "Zero is autoselect."),
-                        cl::location(
-                            VectorizerParams::VectorizationInterleave));
-unsigned VectorizerParams::VectorizationInterleave;
-
-static cl::opt<unsigned, true> RuntimeMemoryCheckThreshold(
-    "runtime-memory-check-threshold", cl::Hidden,
-    cl::desc("When performing memory disambiguation checks at runtime do not "
-             "generate more than this number of comparisons (default = 8)."),
-    cl::location(VectorizerParams::RuntimeMemoryCheckThreshold), cl::init(8));
-unsigned VectorizerParams::RuntimeMemoryCheckThreshold;
-
-/// The maximum iterations used to merge memory checks
-static cl::opt<unsigned> MemoryCheckMergeThreshold(
-    "memory-check-merge-threshold", cl::Hidden,
-    cl::desc("Maximum number of comparisons done when trying to merge "
-             "runtime memory checks. (default = 100)"),
-    cl::init(100));
 
 /// Maximum SIMD width.
 const unsigned VectorizerParams::MaxVectorWidth = 64;
 
-/// We collect dependences up to this threshold.
-static cl::opt<unsigned>
-    MaxDependences("max-dependences", cl::Hidden,
-                   cl::desc("Maximum number of dependences collected by "
-                            "loop-access analysis (default = 100)"),
-                   cl::init(100));
+unsigned MaxDependences = 100;
 
-/// This enables versioning on the strides of symbolically striding memory
-/// accesses in code like the following.
-///   for (i = 0; i < N; ++i)
-///     A[i * Stride1] += B[i * Stride2] ...
-///
-/// Will be roughly translated to
-///    if (Stride1 == 1 && Stride2 == 1) {
-///      for (i = 0; i < N; i+=4)
-///       A[i:i+3] += ...
-///    } else
-///      ...
-static cl::opt<bool> EnableMemAccessVersioning(
-    "enable-mem-access-versioning", cl::init(true), cl::Hidden,
-    cl::desc("Enable symbolic stride memory access versioning"));
+unsigned MaxForkedSCEVDepth = 5;
+static unsigned getMaxForkedSCEVDepth(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_MaxForkedSCEVDepth>(
+      F.getContext().getOptionsContext());
+}
 
-/// Enable store-to-load forwarding conflict detection. This option can
-/// be disabled for correctness testing.
-static cl::opt<bool> EnableForwardingConflictDetection(
-    "store-to-load-forwarding-conflict-detection", cl::Hidden,
-    cl::desc("Enable conflict detection in loop-access analysis"),
-    cl::init(true));
+namespace an_opts = llvm::an_opts;
 
-static cl::opt<unsigned> MaxForkedSCEVDepth(
-    "max-forked-scev-depth", cl::Hidden,
-    cl::desc("Maximum recursion depth when finding forked SCEVs (default = 5)"),
-    cl::init(5));
+ElementCount
+VectorizerParams::getVectorizationFactor(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
+                                    &clv2::AN_VectorizationFactor>(
+      Ctx, ElementCount::getFixed(0));
+}
 
-static cl::opt<bool> SpeculateUnitStride(
-    "laa-speculate-unit-stride", cl::Hidden,
-    cl::desc("Speculate that non-constant strides are unit in LAA"),
-    cl::init(true));
+unsigned
+VectorizerParams::getVectorizationInterleave(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
+                                    &clv2::AN_VectorizationInterleave>(Ctx, 0u);
+}
 
-static cl::opt<bool, true> HoistRuntimeChecks(
-    "hoist-runtime-checks", cl::Hidden,
-    cl::desc(
-        "Hoist inner loop runtime memory checks to outer loop if possible"),
-    cl::location(VectorizerParams::HoistRuntimeChecks), cl::init(true));
-bool VectorizerParams::HoistRuntimeChecks;
+unsigned VectorizerParams::getRuntimeMemoryCheckThreshold(
+    const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_RuntimeMemoryCheckThreshold>(Ctx);
+}
 
-bool VectorizerParams::isInterleaveForced() {
-  return ::VectorizationInterleave.getNumOccurrences() > 0;
+bool VectorizerParams::getHoistRuntimeChecks(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_HoistRuntimeChecks>(Ctx);
+}
+
+static unsigned getMemoryCheckMergeThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_MemoryCheckMergeThreshold>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getMaxDependences(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_MaxDependences>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getEnableMemAccessVersioning(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_EnableMemAccessVersioning>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getEnableForwardingConflictDetection(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_EnableForwardingConflictDetection>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getSpeculateUnitStride(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_SpeculateUnitStride>(
+      F.getContext().getOptionsContext());
+}
+
+bool VectorizerParams::isInterleaveForced(const clv2::OptionsContext &Ctx) {
+  return clv2::wasOptSpecified<&clv2::AnalysisOptsReg,
+                               &clv2::AN_VectorizationInterleave>(Ctx);
 }
 
 const SCEV *
@@ -514,8 +501,12 @@ bool RuntimePointerChecking::tryToCreateDiffCheck(
   // loop, then it's probably better to avoid creating diff checks because
   // they may not be hoisted. We should instead let llvm::addRuntimeChecks
   // do the expanded full range overlap checks, which can be hoisted.
-  if (HoistRuntimeChecks && InnerLoop->getParentLoop() &&
-      isa<SCEVAddRecExpr>(SinkStartInt) && isa<SCEVAddRecExpr>(SrcStartInt)) {
+  if (VectorizerParams::getHoistRuntimeChecks(InnerLoop->getHeader()
+                                                  ->getParent()
+                                                  ->getContext()
+                                                  .getOptionsContext()) &&
+      InnerLoop->getParentLoop() && isa<SCEVAddRecExpr>(SinkStartInt) &&
+      isa<SCEVAddRecExpr>(SrcStartInt)) {
     auto *SrcStartAR = cast<SCEVAddRecExpr>(SrcStartInt);
     auto *SinkStartAR = cast<SCEVAddRecExpr>(SinkStartInt);
     const Loop *StartARLoop = SrcStartAR->getLoop();
@@ -718,7 +709,9 @@ void RuntimePointerChecking::groupChecks(
           // This should limit the cost of grouping the pointers to something
           // reasonable.  If we do end up hitting this threshold, the algorithm
           // will create separate groups for all remaining pointers.
-          if (TotalComparisons > MemoryCheckMergeThreshold)
+          if (TotalComparisons >
+              getMemoryCheckMergeThreshold(
+                  *DC.getInnermostLoop()->getHeader()->getParent()))
             break;
 
           TotalComparisons++;
@@ -826,8 +819,12 @@ public:
                  DominatorTree &DT, MemoryDepChecker::DepCandidates &DA,
                  PredicatedScalarEvolution &PSE,
                  SmallPtrSetImpl<MDNode *> &LoopAliasScopes)
-      : TheLoop(TheLoop), BAA(*AA), AST(BAA), LI(LI), DT(DT), DepCands(DA),
-        PSE(PSE), LoopAliasScopes(LoopAliasScopes) {
+      : TheLoop(TheLoop), BAA(*AA), AST(BAA, TheLoop->getHeader()
+                                                 ->getParent()
+                                                 ->getContext()
+                                                 .getOptionsContext()),
+        LI(LI), DT(DT), DepCands(DA), PSE(PSE),
+        LoopAliasScopes(LoopAliasScopes) {
     // We're analyzing dependences across loop iterations.
     BAA.enableCrossIterationMode();
   }
@@ -1287,7 +1284,8 @@ bool AccessAnalysis::createCheckForAccess(RuntimePointerChecking &RtCheck,
   assert(SE->isSCEVable(Ptr->getType()) && "Value is not SCEVable!");
 
   SmallVector<PointerIntPair<const SCEV *, 1, bool>> RTCheckPtrs;
-  findForkedSCEVs(SE, TheLoop, Ptr, RTCheckPtrs, MaxForkedSCEVDepth);
+  findForkedSCEVs(SE, TheLoop, Ptr, RTCheckPtrs,
+                  getMaxForkedSCEVDepth(*TheLoop->getHeader()->getParent()));
   assert(!RTCheckPtrs.empty() &&
          "Must have some runtime-check pointer candidates");
 
@@ -2329,7 +2327,8 @@ MemoryDepChecker::isDependent(const MemAccessInfo &A, unsigned AIdx,
     // couldPreventStoreLoadForward, even if it changed MinDepDistBytes, since a
     // forward dependency will allow vectorization using any width.
 
-    if (IsTrueDataDependence && EnableForwardingConflictDetection) {
+    if (IsTrueDataDependence && getEnableForwardingConflictDetection(
+                                    *InnermostLoop->getHeader()->getParent())) {
       if (!ConstDist) {
         return CheckCompletelyBeforeOrAfter() ? Dependence::NoDep
                                               : Dependence::Unknown;
@@ -2367,10 +2366,15 @@ MemoryDepChecker::isDependent(const MemAccessInfo &A, unsigned AIdx,
     return Dependence::Unknown;
   }
   // Bail out early if passed-in parameters make vectorization not feasible.
-  unsigned MinForcedFactor =
-      std::max(1U, VectorizerParams::VectorizationFactor.getKnownMinValue());
-  unsigned ForcedUnroll = (VectorizerParams::VectorizationInterleave ?
-                           VectorizerParams::VectorizationInterleave : 1);
+  const auto &LAAOptsCtx =
+      InnermostLoop->getHeader()->getParent()->getContext().getOptionsContext();
+  unsigned MinForcedFactor = std::max(
+      1U,
+      VectorizerParams::getVectorizationFactor(LAAOptsCtx).getKnownMinValue());
+  unsigned ForcedUnroll =
+      (VectorizerParams::getVectorizationInterleave(LAAOptsCtx)
+           ? VectorizerParams::getVectorizationInterleave(LAAOptsCtx)
+           : 1);
   // The minimum number of iterations for a vectorized/unrolled version.
   unsigned MinNumIter = std::max(MinForcedFactor * ForcedUnroll, 2U);
 
@@ -2434,7 +2438,10 @@ MemoryDepChecker::isDependent(const MemAccessInfo &A, unsigned AIdx,
       std::min(static_cast<uint64_t>(MinDistance), MinDepDistBytes);
 
   bool IsTrueDataDependence = (!AIsWrite && BIsWrite);
-  if (IsTrueDataDependence && EnableForwardingConflictDetection && ConstDist &&
+  if (IsTrueDataDependence &&
+      getEnableForwardingConflictDetection(
+          *InnermostLoop->getHeader()->getParent()) &&
+      ConstDist &&
       couldPreventStoreLoadForward(MinDistance, TypeByteSize, *CommonStride))
     return Dependence::BackwardVectorizableButPreventsForwarding;
 
@@ -2513,7 +2520,8 @@ bool MemoryDepChecker::areDepsSafe(const DepCandidates &DepCands,
               if (Type != Dependence::NoDep)
                 Dependences.emplace_back(A.second, B.second, Type);
 
-              if (Dependences.size() >= MaxDependences) {
+              if (Dependences.size() >=
+                  getMaxDependences(*InnermostLoop->getHeader()->getParent())) {
                 RecordDependences = false;
                 Dependences.clear();
                 LLVM_DEBUG(dbgs()
@@ -2626,7 +2634,7 @@ bool LoopAccessInfo::analyzeLoop(AAResults *AA, const LoopInfo *LI,
   const bool IsAnnotatedParallel = TheLoop->isAnnotatedParallel();
 
   const bool EnableMemAccessVersioningOfLoop =
-      EnableMemAccessVersioning &&
+      getEnableMemAccessVersioning(*TheLoop->getHeader()->getParent()) &&
       !TheLoop->getHeader()->getParent()->hasOptSize();
 
   // Traverse blocks in fixed RPOT order, regardless of their storage in the
@@ -3135,7 +3143,7 @@ void LoopAccessInfo::collectStridedAccess(Value *MemAccess) {
                        "versioning:");
   LLVM_DEBUG(dbgs() << "  Ptr: " << *Ptr << " Stride: " << *StrideExpr << "\n");
 
-  if (!SpeculateUnitStride) {
+  if (!getSpeculateUnitStride(*TheLoop->getHeader()->getParent())) {
     LLVM_DEBUG(dbgs() << "  Chose not to due to -laa-speculate-unit-stride\n");
     return;
   }

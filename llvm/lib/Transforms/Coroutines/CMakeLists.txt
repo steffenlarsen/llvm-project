@@ -1,5 +1,8 @@
 add_llvm_component_library(LLVMCoroutines
+  CoroutinesOptionsGetters.cpp
+  CoroutinesOptionsRegistration.cpp
   Coroutines.cpp
+  CoroutinesOptions.cpp
   CoroAnnotationElide.cpp
   CoroCleanup.cpp
   CoroConditionalWrapper.cpp

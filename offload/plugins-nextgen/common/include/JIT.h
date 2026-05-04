@@ -86,7 +86,7 @@ private:
 
   struct ComputeUnitInfo {
     /// LLVM Context in which the modules will be constructed.
-    LLVMContext Context;
+    LLVMContext Context{nullptr};
   };
 
   /// Map from (march) "CPUs" (e.g., sm_80, or gfx90a), which we call compute

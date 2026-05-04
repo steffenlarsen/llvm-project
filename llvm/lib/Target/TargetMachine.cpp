@@ -25,13 +25,17 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 using namespace llvm;
 
-cl::opt<bool> llvm::NoKernelInfoEndLTO(
-    "no-kernel-info-end-lto",
-    cl::desc("remove the kernel-info pass at the end of the full LTO pipeline"),
-    cl::init(false), cl::Hidden);
+const clv2::OptionsContext &TargetOptions::getOptsCtx() const {
+  return OptsCtx ? *OptsCtx : clv2::defaultOptionsContext();
+}
+
+const clv2::OptionsContext &TargetMachine::getOptionsContext() const {
+  return OptsCtx ? *OptsCtx : Options.getOptsCtx();
+}
 
 //---------------------------------------------------------------------------
 // TargetMachine Class
@@ -43,7 +47,9 @@ TargetMachine::TargetMachine(const Target &T, StringRef DataLayoutString,
     : TheTarget(T), DL(DataLayoutString), TargetTriple(TT),
       TargetCPU(std::string(CPU)), TargetFS(std::string(FS)), AsmInfo(nullptr),
       MRI(nullptr), MII(nullptr), STI(nullptr), RequireStructuredCFG(false),
-      O0WantsFastISel(false), Options(Options) {}
+      O0WantsFastISel(false), Options(Options) {
+  OptsCtx = Options.MCOptions.OptsCtx;
+}
 
 TargetMachine::~TargetMachine() = default;
 
@@ -358,6 +364,7 @@ const MCSubtargetInfo &TargetMachine::getMCSubtargetInfo(StringRef CPU,
   Key += FS;
   auto &Entry = MCSubtargetMap[Key];
   if (!Entry)
-    Entry.reset(getTarget().createMCSubtargetInfo(getTargetTriple(), CPU, FS));
+    Entry.reset(getTarget().createMCSubtargetInfo(
+        getTargetTriple(), CPU, FS, llvm::clv2::defaultOptionsContext()));
   return *Entry;
 }

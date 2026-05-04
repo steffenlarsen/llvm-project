@@ -10,48 +10,24 @@
 #include "bolt/Core/BinaryBasicBlock.h"
 #include "bolt/Core/BinaryFunction.h"
 #include "bolt/Passes/MCF.h"
+#include "bolt/Profile/BoltProfileOptionsOptInfos.h"
 #include "bolt/Profile/ProfileYAMLMapping.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "bolt/Utils/NameResolver.h"
 #include "bolt/Utils/Utils.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/edit_distance.h"
 #include "llvm/Demangle/Demangle.h"
 #include "llvm/MC/MCPseudoProbe.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 
 using namespace llvm;
 
 namespace opts {
 
-extern cl::opt<unsigned> Verbosity;
-extern cl::OptionCategory BoltOptCategory;
-extern cl::opt<bool> InferStaleProfile;
-extern cl::opt<bool> Lite;
+extern unsigned Verbosity;
+extern bool Lite;
 
-static cl::opt<unsigned> NameSimilarityFunctionMatchingThreshold(
-    "name-similarity-function-matching-threshold",
-    cl::desc("Match functions using namespace and edit distance"), cl::init(0),
-    cl::Hidden, cl::cat(BoltOptCategory));
-
-static llvm::cl::opt<bool>
-    IgnoreHash("profile-ignore-hash",
-               cl::desc("ignore hash while reading function profile"),
-               cl::Hidden, cl::cat(BoltOptCategory));
-
-static llvm::cl::opt<bool>
-    MatchProfileWithFunctionHash("match-profile-with-function-hash",
-                                 cl::desc("Match profile with function hash"),
-                                 cl::Hidden, cl::cat(BoltOptCategory));
-static llvm::cl::opt<bool>
-    MatchWithCallGraph("match-with-call-graph",
-                       cl::desc("Match functions with call graph"), cl::Hidden,
-                       cl::cat(BoltOptCategory));
-
-llvm::cl::opt<bool> ProfileUseDFS("profile-use-dfs",
-                                  cl::desc("use DFS order for YAML profile"),
-                                  cl::Hidden, cl::cat(BoltOptCategory));
-
-extern llvm::cl::opt<bool> StaleMatchingWithPseudoProbes;
 } // namespace opts
 
 namespace llvm {
@@ -165,6 +141,8 @@ bool YAMLProfileReader::hasLocalsWithFileName() const {
 bool YAMLProfileReader::parseFunctionProfile(
     BinaryFunction &BF, const yaml::bolt::BinaryFunctionProfile &YamlBF) {
   BinaryContext &BC = BF.getBinaryContext();
+  bool IgnoreHash = bolt_profile_opts::getProfileIgnoreHash(BC);
+  bool InferStaleProfile = bolt_profile_opts::getInferStaleProfile(BC);
 
   const bool IsDFSOrder = YamlBP.Header.IsDFSOrder;
   const HashFunction HashFunction = YamlBP.Header.HashFunction;
@@ -187,18 +165,18 @@ bool YAMLProfileReader::parseFunctionProfile(
   if (BF.empty())
     return true;
 
-  if (!opts::IgnoreHash) {
+  if (!IgnoreHash) {
     if (!BF.getHash())
       BF.computeHash(IsDFSOrder, HashFunction);
     if (YamlBF.Hash != BF.getHash()) {
-      if (opts::Verbosity >= 1)
+      if (opts::getVerbosity(BC) >= 1)
         errs() << "BOLT-WARNING: function hash mismatch\n";
       ProfileMatched = false;
     }
   }
 
   if (YamlBF.NumBasicBlocks != BF.size()) {
-    if (opts::Verbosity >= 1)
+    if (opts::getVerbosity(BC) >= 1)
       errs() << "BOLT-WARNING: number of basic blocks mismatch\n";
     ProfileMatched = false;
   }
@@ -211,7 +189,7 @@ bool YAMLProfileReader::parseFunctionProfile(
 
   for (const yaml::bolt::BinaryBasicBlockProfile &YamlBB : YamlBF.Blocks) {
     if (YamlBB.Index >= Order.size()) {
-      if (opts::Verbosity >= 2)
+      if (opts::getVerbosity(BC) >= 2)
         errs() << "BOLT-WARNING: index " << YamlBB.Index
                << " is out of bounds\n";
       ++MismatchedBlocks;
@@ -252,7 +230,7 @@ bool YAMLProfileReader::parseFunctionProfile(
                                         YamlCSI.Mispreds, YamlCSI.Offset);
 
       if (YamlCSI.Offset >= BB.getOriginalSize()) {
-        if (opts::Verbosity >= 2)
+        if (opts::getVerbosity(BC) >= 2)
           errs() << "BOLT-WARNING: offset " << YamlCSI.Offset
                  << " out of bounds in block " << BB.getName() << '\n';
         ++MismatchedCalls;
@@ -262,14 +240,14 @@ bool YAMLProfileReader::parseFunctionProfile(
       MCInst *Instr =
           BF.getInstructionAtOffset(BB.getInputOffset() + YamlCSI.Offset);
       if (!Instr) {
-        if (opts::Verbosity >= 2)
+        if (opts::getVerbosity(BC) >= 2)
           errs() << "BOLT-WARNING: no instruction at offset " << YamlCSI.Offset
                  << " in block " << BB.getName() << '\n';
         ++MismatchedCalls;
         continue;
       }
       if (!BC.MIB->isCall(*Instr) && !BC.MIB->isIndirectBranch(*Instr)) {
-        if (opts::Verbosity >= 2)
+        if (opts::getVerbosity(BC) >= 2)
           errs() << "BOLT-WARNING: expected call at offset " << YamlCSI.Offset
                  << " in block " << BB.getName() << '\n';
         ++MismatchedCalls;
@@ -278,7 +256,7 @@ bool YAMLProfileReader::parseFunctionProfile(
 
       auto setAnnotation = [&](StringRef Name, uint64_t Count) {
         if (BC.MIB->hasAnnotation(*Instr, Name)) {
-          if (opts::Verbosity >= 1)
+          if (opts::getVerbosity(BC) >= 1)
             errs() << "BOLT-WARNING: ignoring duplicate " << Name
                    << " info for offset 0x" << Twine::utohexstr(YamlCSI.Offset)
                    << " in function " << BF << '\n';
@@ -301,7 +279,7 @@ bool YAMLProfileReader::parseFunctionProfile(
 
     for (const yaml::bolt::SuccessorInfo &YamlSI : YamlBB.Successors) {
       if (YamlSI.Index >= Order.size()) {
-        if (opts::Verbosity >= 1)
+        if (opts::getVerbosity(BC) >= 1)
           errs() << "BOLT-WARNING: index out of bounds for profiled block\n";
         ++MismatchedEdges;
         continue;
@@ -319,7 +297,7 @@ bool YAMLProfileReader::parseFunctionProfile(
           FTBI.MispredictedCount += YamlSI.Mispreds;
           ToBB = FTSuccessor;
         } else {
-          if (opts::Verbosity >= 1)
+          if (opts::getVerbosity(BC) >= 1)
             errs() << "BOLT-WARNING: no successor for block " << BB.getName()
                    << " that matches index " << YamlSI.Index << " or block "
                    << ToBB->getName() << '\n';
@@ -345,12 +323,12 @@ bool YAMLProfileReader::parseFunctionProfile(
   ProfileMatched &= !MismatchedBlocks && !MismatchedCalls && !MismatchedEdges;
 
   if (!ProfileMatched) {
-    if (opts::Verbosity >= 1)
+    if (opts::getVerbosity(BC) >= 1)
       errs() << "BOLT-WARNING: " << MismatchedBlocks << " blocks, "
              << MismatchedCalls << " calls, and " << MismatchedEdges
              << " edges in profile did not match function " << BF << '\n';
 
-    if (!opts::InferStaleProfile)
+    if (!InferStaleProfile)
       return false;
     ArrayRef<ProbeMatchSpec> ProbeMatchSpecs;
     auto BFIt = BFToProbeMatchSpecs.find(&BF);
@@ -403,7 +381,7 @@ Error YAMLProfileReader::preprocessProfile(BinaryContext &BC) {
     if (!BF->hasProfile()) {
       BF->setExecutionCount(YamlBF.ExecCount);
     } else {
-      if (opts::Verbosity >= 1) {
+      if (opts::getVerbosity(BC) >= 1) {
         errs() << "BOLT-WARNING: dropping duplicate profile for " << YamlBF.Name
                << '\n';
       }
@@ -415,14 +393,21 @@ Error YAMLProfileReader::preprocessProfile(BinaryContext &BC) {
 }
 
 bool YAMLProfileReader::profileMatches(
-    const yaml::bolt::BinaryFunctionProfile &Profile, const BinaryFunction &BF) {
-  if (opts::IgnoreHash)
+    const yaml::bolt::BinaryFunctionProfile &Profile,
+    const BinaryFunction &BF) {
+  bool IgnoreHash =
+      bolt_profile_opts::getProfileIgnoreHash(BF.getBinaryContext());
+  if (IgnoreHash)
     return Profile.NumBasicBlocks == BF.size();
   return Profile.Hash == static_cast<uint64_t>(BF.getHash());
 }
 
 bool YAMLProfileReader::mayHaveProfileData(const BinaryFunction &BF) {
-  if (opts::MatchProfileWithFunctionHash || opts::MatchWithCallGraph)
+  bool MatchProfileWithFunctionHash =
+      bolt_profile_opts::getMatchProfileWithFunctionHash(BF.getBinaryContext());
+  bool MatchWithCallGraph =
+      bolt_profile_opts::getMatchWithCallGraph(BF.getBinaryContext());
+  if (MatchProfileWithFunctionHash || MatchWithCallGraph)
     return true;
   for (StringRef Name : BF.getNames())
     if (ProfileFunctionNames.contains(Name))
@@ -437,7 +422,8 @@ bool YAMLProfileReader::mayHaveProfileData(const BinaryFunction &BF) {
   return false;
 }
 
-size_t YAMLProfileReader::matchWithExactName() {
+size_t YAMLProfileReader::matchWithExactName(BinaryContext &BC) {
+  bool InferStaleProfile = bolt_profile_opts::getInferStaleProfile(BC);
   size_t MatchedWithExactName = 0;
   // This first pass assigns profiles that match 100% by name and by hash.
   for (auto [YamlBF, BF] : llvm::zip_equal(YamlBP.Functions, ProfileBFs)) {
@@ -449,7 +435,7 @@ size_t YAMLProfileReader::matchWithExactName() {
     Function.setExecutionCount(BinaryFunction::COUNT_NO_PROFILE);
 
     // Match with stale profile when stale matching is enabled.
-    if (profileMatches(YamlBF, Function) || opts::InferStaleProfile) {
+    if (profileMatches(YamlBF, Function) || InferStaleProfile) {
       matchProfileToFunction(YamlBF, Function);
       ++MatchedWithExactName;
     }
@@ -462,7 +448,9 @@ size_t YAMLProfileReader::matchWithHash(BinaryContext &BC) {
   // the same exact hash. Serves to match identical, renamed functions.
   // Collisions are possible where multiple functions share the same exact hash.
   size_t MatchedWithHash = 0;
-  if (opts::MatchProfileWithFunctionHash) {
+  bool MatchProfileWithFunctionHash =
+      bolt_profile_opts::getMatchProfileWithFunctionHash(BC);
+  if (MatchProfileWithFunctionHash) {
     DenseMap<size_t, BinaryFunction *> StrictHashToBF;
     StrictHashToBF.reserve(BC.getBinaryFunctions().size());
 
@@ -520,7 +508,8 @@ size_t YAMLProfileReader::matchWithLTOCommonName() {
 }
 
 size_t YAMLProfileReader::matchWithCallGraph(BinaryContext &BC) {
-  if (!opts::MatchWithCallGraph)
+  bool MatchWithCallGraph = bolt_profile_opts::getMatchWithCallGraph(BC);
+  if (!MatchWithCallGraph)
     return 0;
 
   size_t MatchedWithCallGraph = 0;
@@ -659,7 +648,9 @@ decodeYamlInlineTree(const yaml::bolt::ProfilePseudoProbeDesc &YamlPD,
 }
 
 size_t YAMLProfileReader::matchWithPseudoProbes(BinaryContext &BC) {
-  if (!opts::StaleMatchingWithPseudoProbes)
+  bool StaleMatchingWithPseudoProbes =
+      bolt_profile_opts::getStaleMatchingWithPseudoProbes(BC);
+  if (!StaleMatchingWithPseudoProbes)
     return 0;
 
   const MCPseudoProbeDecoder *Decoder = BC.getPseudoProbeDecoder();
@@ -699,7 +690,14 @@ size_t YAMLProfileReader::matchWithPseudoProbes(BinaryContext &BC) {
 }
 
 size_t YAMLProfileReader::matchWithNameSimilarity(BinaryContext &BC) {
-  if (opts::NameSimilarityFunctionMatchingThreshold == 0)
+  auto *ProfOpts =
+      bolt_profile_opts::getBoltProfileOpts(BC.getOptionsContext());
+  unsigned NameSimilarityFunctionMatchingThreshold =
+      ProfOpts
+          ? ProfOpts
+                ->get<&clv2::BOLTPROF_NameSimilarityFunctionMatchingThreshold>()
+          : 0u;
+  if (NameSimilarityFunctionMatchingThreshold == 0)
     return 0;
 
   size_t MatchedWithNameSimilarity = 0;
@@ -793,7 +791,7 @@ size_t YAMLProfileReader::matchWithNameSimilarity(BinaryContext &BC) {
     }
 
     if (ClosestNameBF &&
-        MinEditDistance <= opts::NameSimilarityFunctionMatchingThreshold) {
+        MinEditDistance <= NameSimilarityFunctionMatchingThreshold) {
       matchProfileToFunction(YamlBF, *ClosestNameBF);
       ++MatchedWithNameSimilarity;
     }
@@ -803,7 +801,14 @@ size_t YAMLProfileReader::matchWithNameSimilarity(BinaryContext &BC) {
 }
 
 Error YAMLProfileReader::readProfile(BinaryContext &BC) {
-  if (opts::Verbosity >= 1) {
+  bool MatchProfileWithFunctionHash =
+      bolt_profile_opts::getMatchProfileWithFunctionHash(BC);
+  bool IgnoreHash = bolt_profile_opts::getProfileIgnoreHash(BC);
+  bool StaleMatchingWithPseudoProbes =
+      bolt_profile_opts::getStaleMatchingWithPseudoProbes(BC);
+  bool MatchWithCallGraph = bolt_profile_opts::getMatchWithCallGraph(BC);
+
+  if (opts::getVerbosity(BC) >= 1) {
     outs() << "BOLT-INFO: YAML profile with hash: ";
     switch (YamlBP.Header.HashFunction) {
     case HashFunction::StdHash:
@@ -817,11 +822,11 @@ Error YAMLProfileReader::readProfile(BinaryContext &BC) {
   YamlProfileToFunction.reserve(YamlBP.Functions.size());
 
   // Computes hash for binary functions.
-  if (opts::MatchProfileWithFunctionHash) {
+  if (MatchProfileWithFunctionHash) {
     for (auto &[_, BF] : BC.getBinaryFunctions()) {
       BF.computeHash(YamlBP.Header.IsDFSOrder, YamlBP.Header.HashFunction);
     }
-  } else if (!opts::IgnoreHash) {
+  } else if (!IgnoreHash) {
     for (BinaryFunction *BF : ProfileBFs) {
       if (!BF)
         continue;
@@ -829,7 +834,7 @@ Error YAMLProfileReader::readProfile(BinaryContext &BC) {
     }
   }
 
-  if (opts::StaleMatchingWithPseudoProbes) {
+  if (StaleMatchingWithPseudoProbes) {
     const MCPseudoProbeDecoder *Decoder = BC.getPseudoProbeDecoder();
     assert(Decoder &&
            "If pseudo probes are in use, pseudo probe decoder should exist");
@@ -842,7 +847,7 @@ Error YAMLProfileReader::readProfile(BinaryContext &BC) {
   for (yaml::bolt::BinaryFunctionProfile &YamlBF : YamlBP.Functions)
     IdToYamLBF[YamlBF.Id] = &YamlBF;
 
-  const size_t MatchedWithExactName = matchWithExactName();
+  const size_t MatchedWithExactName = matchWithExactName(BC);
   const size_t MatchedWithHash = matchWithHash(BC);
   const size_t MatchedWithLTOCommonName = matchWithLTOCommonName();
   const size_t MatchedWithCallGraph = matchWithCallGraph(BC);
@@ -852,11 +857,11 @@ Error YAMLProfileReader::readProfile(BinaryContext &BC) {
   const size_t MatchedUnused = matchUnusedWithExactName();
 
   for (yaml::bolt::BinaryFunctionProfile &YamlBF : YamlBP.Functions)
-    if (!YamlBF.Used && opts::Verbosity >= 1)
+    if (!YamlBF.Used && opts::getVerbosity(BC) >= 1)
       errs() << "BOLT-WARNING: profile ignored for function " << YamlBF.Name
              << '\n';
 
-  if (opts::Verbosity >= 1) {
+  if (opts::getVerbosity(BC) >= 1) {
     outs() << "BOLT-INFO: matched " << MatchedWithExactName
            << " functions with identical names\n";
     outs() << "BOLT-INFO: matched " << MatchedWithHash
@@ -884,8 +889,8 @@ Error YAMLProfileReader::readProfile(BinaryContext &BC) {
 
   BC.setNumUnusedProfiledObjects(NumUnused);
 
-  if (opts::Lite &&
-      (opts::MatchProfileWithFunctionHash || opts::MatchWithCallGraph)) {
+  bool Lite = bolt_utils_opts::getLite(BC);
+  if (Lite && (MatchProfileWithFunctionHash || MatchWithCallGraph)) {
     for (BinaryFunction *BF : BC.getAllBinaryFunctions())
       if (!BF->hasProfile())
         BF->setIgnored();

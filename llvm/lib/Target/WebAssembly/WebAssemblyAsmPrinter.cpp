@@ -53,6 +53,7 @@
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCSymbolWasm.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -61,7 +62,6 @@ using namespace llvm;
 
 #define DEBUG_TYPE "asm-printer"
 
-extern cl::opt<bool> WasmKeepRegisters;
 
 //===----------------------------------------------------------------------===//
 // Helpers.
@@ -165,8 +165,9 @@ MCSymbolWasm *WebAssemblyAsmPrinter::getMCSymbolForFunction(
     const Function *F, wasm::WasmSignature *Sig, bool &InvokeDetected) {
   MCSymbolWasm *WasmSym = nullptr;
 
-  const bool EnableEmEH =
-      WebAssembly::WasmEnableEmEH || WebAssembly::WasmEnableEmSjLj;
+  auto &OptsCtx = TM.getOptionsContext();
+  const bool EnableEmEH = WebAssembly::getWasmEnableEmEH(OptsCtx) ||
+                          WebAssembly::getWasmEnableEmSjLj(OptsCtx);
   if (EnableEmEH && isEmscriptenInvokeName(F->getName())) {
     assert(Sig);
     InvokeDetected = true;

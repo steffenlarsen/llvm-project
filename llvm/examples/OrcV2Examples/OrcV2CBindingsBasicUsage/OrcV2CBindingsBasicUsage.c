@@ -21,9 +21,9 @@ int handleError(LLVMErrorRef Err) {
   return 1;
 }
 
-LLVMOrcThreadSafeModuleRef createDemoModule(void) {
-  // Create an LLVMContext.
-  LLVMContextRef Ctx = LLVMContextCreate();
+LLVMOrcThreadSafeModuleRef createDemoModule(LLVMOptionsContextRef Opts) {
+  // Create an LLVMContext with options.
+  LLVMContextRef Ctx = LLVMContextCreateWithOptions(Opts);
 
   // Create a new LLVM module.
   LLVMModuleRef M = LLVMModuleCreateWithNameInContext("demo", Ctx);
@@ -76,7 +76,7 @@ int main(int argc, const char *argv[]) {
   int MainResult = 0;
 
   // Parse command line arguments and initialize LLVM Core.
-  LLVMParseCommandLineOptions(argc, argv, "");
+  LLVMOptionsContextRef Opts = LLVMParseCommandLineOptions2(argc, argv, "");
 
   // Initialize native target codegen and asm printer.
   LLVMInitializeNativeTarget();
@@ -93,7 +93,7 @@ int main(int argc, const char *argv[]) {
   }
 
   // Create our demo module.
-  LLVMOrcThreadSafeModuleRef TSM = createDemoModule();
+  LLVMOrcThreadSafeModuleRef TSM = createDemoModule(Opts);
 
   // Add our demo module to the JIT.
   {
@@ -140,6 +140,9 @@ jit_cleanup:
   }
 
 llvm_shutdown:
+  // Dispose of the options context.
+  LLVMDisposeOptionsContext(Opts);
+
   // Shut down LLVM.
   LLVMShutdown();
 

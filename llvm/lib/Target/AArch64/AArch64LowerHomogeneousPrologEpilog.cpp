@@ -27,6 +27,8 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
 #include <optional>
 #include <sstream>
 
@@ -35,10 +37,10 @@ using namespace llvm;
 #define AARCH64_LOWER_HOMOGENEOUS_PROLOG_EPILOG_NAME                           \
   "AArch64 homogeneous prolog/epilog lowering pass"
 
-static cl::opt<int> FrameHelperSizeThreshold(
-    "frame-helper-size-threshold", cl::init(2), cl::Hidden,
-    cl::desc("The minimum number of instructions that are outlined in a frame "
-             "helper (default = 2)"));
+static int getFrameHelperSizeThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::A64_FrameHelperSizeThreshold>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -449,7 +451,8 @@ static bool shouldUseFrameHelper(MachineBasicBlock &MBB,
   }
   }
 
-  return InstCount >= FrameHelperSizeThreshold;
+  return InstCount >=
+         getFrameHelperSizeThreshold(MBB.getParent()->getFunction());
 }
 
 /// Lower a HOM_Epilog pseudo instruction into a helper call while

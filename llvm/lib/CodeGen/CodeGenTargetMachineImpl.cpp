@@ -15,9 +15,11 @@
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/BasicTTIImpl.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCAsmInfo.h"
@@ -30,21 +32,21 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FormattedStream.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/RegisterTargetPassConfigCallback.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 using namespace llvm;
 
-static cl::opt<bool>
-    EnableTrapUnreachable("trap-unreachable", cl::Hidden,
-                          cl::desc("Enable generating trap for unreachable"));
+static bool getTrapUnreachable(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_TrapUnreachable>(Ctx);
+}
 
-static cl::opt<bool> EnableNoTrapAfterNoreturn(
-    "no-trap-after-noreturn", cl::Hidden,
-    cl::desc("Do not emit a trap instruction for 'unreachable' IR instructions "
-             "after noreturn calls, even if --trap-unreachable is set."));
+static bool getNoTrapAfterNoreturn(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_NoTrapAfterNoreturn>(Ctx);
+}
 
 void CodeGenTargetMachineImpl::initAsmInfo() {
   MRI.reset(TheTarget.createMCRegInfo(getTargetTriple()));
@@ -56,7 +58,8 @@ void CodeGenTargetMachineImpl::initAsmInfo() {
   // code generation. This is similar to the hack in the AsmPrinter for
   // module level assembly etc.
   STI.reset(TheTarget.createMCSubtargetInfo(getTargetTriple(), getTargetCPU(),
-                                            getTargetFeatureString()));
+                                            getTargetFeatureString(),
+                                            getOptionsContext()));
   assert(STI && "Unable to create subtarget info");
 
   MCAsmInfo *TmpAsmInfo =
@@ -102,9 +105,9 @@ CodeGenTargetMachineImpl::CodeGenTargetMachineImpl(
   this->CMModel = CM;
   this->OptLevel = OL;
 
-  if (EnableTrapUnreachable)
+  if (getTrapUnreachable(Options.getOptsCtx()))
     this->Options.TrapUnreachable = true;
-  if (EnableNoTrapAfterNoreturn)
+  if (getNoTrapAfterNoreturn(Options.getOptsCtx()))
     this->Options.NoTrapAfterNoreturn = true;
 }
 
@@ -180,6 +183,7 @@ CodeGenTargetMachineImpl::createMCStreamer(raw_pwrite_stream &Out,
   case CodeGenFileType::AssemblyFile: {
     std::unique_ptr<MCInstPrinter> InstPrinter(getTarget().createMCInstPrinter(
         getTargetTriple(), MAI.getOutputAssemblerDialect(), MAI, MII, MRI));
+    InstPrinter->setOptionsContext(getOptionsContext());
     for (StringRef Opt : Options.MCOptions.InstPrinterOptions)
       if (!InstPrinter->applyTargetSpecificCLOption(Opt))
         return createStringError("invalid InstPrinter option '" + Opt + "'");
@@ -241,7 +245,7 @@ bool CodeGenTargetMachineImpl::addPassesToEmitFile(
   if (!PassConfig)
     return true;
 
-  if (TargetPassConfig::willCompleteCodeGenPipeline()) {
+  if (TargetPassConfig::willCompleteCodeGenPipeline(getOptionsContext())) {
     if (addAsmPrinter(PM, Out, DwoOut, FileType, MMIWP->getMMI().getContext()))
       return true;
   } else {
@@ -269,7 +273,7 @@ bool CodeGenTargetMachineImpl::addPassesToEmitMC(PassManagerBase &PM,
       addPassesToGenerateCode(*this, PM, DisableVerify, *MMIWP);
   if (!PassConfig)
     return true;
-  assert(TargetPassConfig::willCompleteCodeGenPipeline() &&
+  assert(TargetPassConfig::willCompleteCodeGenPipeline(getOptionsContext()) &&
          "Cannot emit MC with limited codegen pipeline");
 
   Ctx = &MMIWP->getMMI().getContext();

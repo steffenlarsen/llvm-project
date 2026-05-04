@@ -24,7 +24,6 @@
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 
 using namespace llvm;
@@ -34,8 +33,6 @@ using namespace llvm;
 #define GET_SUBTARGETINFO_TARGET_DESC
 #define GET_SUBTARGETINFO_CTOR
 #include "M68kGenSubtargetInfo.inc"
-
-extern bool FixGlobalBaseReg;
 
 /// Select the M68k CPU for the given triple and cpu name.
 static StringRef selectM68kCPU(Triple TT, StringRef CPU) {
@@ -49,10 +46,12 @@ void M68kSubtarget::anchor() {}
 
 M68kSubtarget::M68kSubtarget(const Triple &TT, StringRef CPU, StringRef FS,
                              const M68kTargetMachine &TM)
-    : M68kGenSubtargetInfo(TT, CPU, /*TuneCPU*/ CPU, FS), TM(TM),
-      InstrInfo(initializeSubtargetDependencies(CPU, TT, FS, TM)),
+    : M68kGenSubtargetInfo(TT, CPU, /*TuneCPU*/ CPU, FS,
+                           TM.getOptionsContext()),
+      TM(TM), InstrInfo(initializeSubtargetDependencies(CPU, TT, FS, TM)),
       FrameLowering(*this, this->getStackAlignment()), TLInfo(TM, *this),
       TargetTriple(TT) {
+  setOptionsContext(TM.getOptionsContext());
   TSInfo = std::make_unique<M68kSelectionDAGInfo>();
 
   CallLoweringInfo.reset(new M68kCallLowering(*getTargetLowering()));

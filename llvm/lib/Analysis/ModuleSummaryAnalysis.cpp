@@ -20,6 +20,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/BranchProbabilityInfo.h"
 #include "llvm/Analysis/ConstantFolding.h"
@@ -52,9 +53,10 @@
 #include "llvm/Object/SymbolicFile.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/OptionsContext.h"
 #include <cassert>
 #include <cstdint>
 #include <vector>
@@ -67,45 +69,40 @@ using namespace llvm::memprof;
 // Option to force edges cold which will block importing when the
 // -import-cold-multiplier is set to 0. Useful for debugging.
 namespace llvm {
-FunctionSummary::ForceSummaryHotnessType ForceSummaryEdgesCold =
-    FunctionSummary::FSHT_None;
 
-static cl::opt<FunctionSummary::ForceSummaryHotnessType, true> FSEC(
-    "force-summary-edges-cold", cl::Hidden, cl::location(ForceSummaryEdgesCold),
-    cl::desc("Force all edges in the function summary to cold"),
-    cl::values(clEnumValN(FunctionSummary::FSHT_None, "none", "None."),
-               clEnumValN(FunctionSummary::FSHT_AllNonCritical,
-                          "all-non-critical", "All non-critical edges."),
-               clEnumValN(FunctionSummary::FSHT_All, "all", "All edges.")));
+static std::string ModuleSummaryDotFile;
 
-static cl::opt<std::string> ModuleSummaryDotFile(
-    "module-summary-dot-file", cl::Hidden, cl::value_desc("filename"),
-    cl::desc("File to emit dot graph of new summary into"));
+unsigned MaxSummaryIndirectEdges = 0;
 
-static cl::opt<bool> EnableMemProfIndirectCallSupport(
-    "enable-memprof-indirect-call-support", cl::init(true), cl::Hidden,
-    cl::desc(
-        "Enable MemProf support for summarizing and cloning indirect calls"));
-
-// This can be used to override the number of callees created from VP metadata
-// normally taken from the -icp-max-prom option with a larger amount, if useful
-// for analysis. Use a separate option so that we can control the number of
-// indirect callees for ThinLTO summary based analysis (e.g. for MemProf which
-// needs this information for a correct and not overly-conservative callsite
-// graph analysis, especially because allocation contexts may not be very
-// frequent), without affecting normal ICP.
-cl::opt<unsigned>
-    MaxSummaryIndirectEdges("module-summary-max-indirect-edges", cl::init(0),
-                            cl::Hidden,
-                            cl::desc("Max number of summary edges added from "
-                                     "indirect call profile metadata"));
-
-LLVM_ABI extern cl::opt<bool> ScalePartialSampleProfileWorkingSetSize;
-
-extern cl::opt<unsigned> MaxNumVTableAnnotations;
-
-extern cl::opt<bool> MemProfReportHintedSizes;
 } // namespace llvm
+
+static bool getScalePartialSampleProfileWorkingSetSize(const Module &M) {
+  return clv2::getOptValOrDefault<
+      &clv2::AN_ScalePartialSampleProfileWorkingSetSize>(
+      M.getContext().getOptionsContext());
+}
+
+static FunctionSummary::ForceSummaryHotnessType
+getForceSummaryEdgesCold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_ForceSummaryEdgesCold>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getMaxSummaryIndirectEdges(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_MaxSummaryIndirectEdges>(
+      F.getContext().getOptionsContext());
+}
+
+static bool
+getEnableMemProfIndirectCallSupport(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_EnableMemProfIndirectCallSupport>(
+      Ctx);
+}
+
+static unsigned getMaxNumVTableAnnotations(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_MaxNumVTableAnnotations>(
+      F.getContext().getOptionsContext());
+}
 
 // Walk through the operands of a given User via worklist iteration and populate
 // the set of GlobalValue references encountered. Invoked either on an
@@ -170,7 +167,8 @@ findRefEdges(ModuleSummaryIndex &Index, const User *CurUser,
     // MaxNumVTableAnnotations is the maximum number of vtables annotated on
     // the instruction.
     auto ValueDataArray = getValueProfDataFromInst(
-        *I, IPVK_VTableTarget, MaxNumVTableAnnotations, TotalCount);
+        *I, IPVK_VTableTarget, getMaxNumVTableAnnotations(*I->getFunction()),
+        TotalCount);
 
     for (const auto &V : ValueDataArray)
       RefEdges.insert(Index.getOrInsertValueInfo(/* VTableGUID = */
@@ -481,7 +479,7 @@ static void computeFunctionSummary(
         auto ScaledCount = PSI->getProfileCount(*CB, BFI);
         auto Hotness = ScaledCount ? getHotness(*ScaledCount, PSI)
                                    : CalleeInfo::HotnessType::Unknown;
-        if (ForceSummaryEdgesCold != FunctionSummary::FSHT_None)
+        if (getForceSummaryEdgesCold(F) != FSHT_None)
           Hotness = CalleeInfo::HotnessType::Cold;
 
         // Use the original CalledValue, in case it was an alias. We want
@@ -526,7 +524,7 @@ static void computeFunctionSummary(
 
         CandidateProfileData =
             ICallAnalysis.getPromotionCandidatesForInstruction(
-                &I, TotalCount, NumCandidates, MaxSummaryIndirectEdges);
+                &I, TotalCount, NumCandidates, getMaxSummaryIndirectEdges(F));
         for (const auto &Candidate : CandidateProfileData)
           CallGraphEdges[Index.getOrInsertValueInfo(Candidate.Value)]
               .updateHotness(getHotness(Candidate.Count, PSI));
@@ -537,7 +535,8 @@ static void computeFunctionSummary(
         continue;
 
       // Skip indirect calls if we haven't enabled memprof ICP.
-      if (!CalledFunction && !EnableMemProfIndirectCallSupport)
+      if (!CalledFunction && !getEnableMemProfIndirectCallSupport(
+                                 F.getContext().getOptionsContext()))
         continue;
 
       // Ensure we keep this analysis in sync with the handling in the ThinLTO
@@ -577,7 +576,8 @@ static void computeFunctionSummary(
           // If we have context size information, collect it for inclusion in
           // the summary.
           assert(MIBMD->getNumOperands() > 2 ||
-                 !metadataIncludesAllContextSizeInfo());
+                 !metadataIncludesAllContextSizeInfo(
+                     M.getContext().getOptionsContext()));
           if (MIBMD->getNumOperands() > 2) {
             std::vector<ContextTotalSize> ContextSizes;
             for (unsigned I = 2; I < MIBMD->getNumOperands(); I++) {
@@ -610,7 +610,8 @@ static void computeFunctionSummary(
         }
         Allocs.push_back(AllocInfo(std::move(MIBs)));
         assert(HasNonZeroContextSizeInfos ||
-               !metadataIncludesAllContextSizeInfo());
+               !metadataIncludesAllContextSizeInfo(
+                   M.getContext().getOptionsContext()));
         // We eagerly build the ContextSizeInfos array, but it will be filled
         // with sub arrays of pairs of 0s if no MIBs on this alloc actually
         // contained context size info metadata. Only save it if any MIBs had
@@ -632,7 +633,8 @@ static void computeFunctionSummary(
               Index.getOrInsertValueInfo(cast<GlobalValue>(CalledValue));
           Callsites.push_back({CalleeValueInfo, StackIdIndices});
         } else {
-          assert(EnableMemProfIndirectCallSupport);
+          assert(getEnableMemProfIndirectCallSupport(
+              F.getContext().getOptionsContext()));
           // For indirect callsites, create multiple Callsites, one per target.
           // This enables having a different set of clone versions per target,
           // and we will apply the cloning decisions while speculatively
@@ -646,7 +648,8 @@ static void computeFunctionSummary(
     }
   }
 
-  if (PSI->hasPartialSampleProfile() && ScalePartialSampleProfileWorkingSetSize)
+  if (PSI->hasPartialSampleProfile() &&
+      getScalePartialSampleProfileWorkingSetSize(M))
     Index.addBlockCount(F.size());
 
   SmallVector<ValueInfo, 0> Refs;
@@ -707,7 +710,7 @@ static void computeFunctionSummary(
   // sample PGO, to enable the same inlines as the profiled optimized binary.
   for (auto &I : F.getImportGUIDs())
     CallGraphEdges[Index.getOrInsertValueInfo(I)].updateHotness(
-        ForceSummaryEdgesCold == FunctionSummary::FSHT_All
+        getForceSummaryEdgesCold(F) == FSHT_All
             ? CalleeInfo::HotnessType::Cold
             : CalleeInfo::HotnessType::Critical);
 
@@ -1295,7 +1298,8 @@ bool llvm::mayHaveMemprofSummary(const CallBase *CB) {
       return false;
   } else {
     // Skip indirect calls if we haven't enabled memprof ICP.
-    if (!EnableMemProfIndirectCallSupport)
+    if (!getEnableMemProfIndirectCallSupport(
+            CB->getFunction()->getContext().getOptionsContext()))
       return false;
     // Skip inline assembly calls.
     if (CI && CI->isInlineAsm())

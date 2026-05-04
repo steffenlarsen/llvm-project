@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- IndVarSimplify.cpp - Induction Variable Elimination ----------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -62,7 +64,6 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
@@ -88,42 +89,52 @@ STATISTIC(NumLFTR        , "Number of loop exit tests replaced");
 STATISTIC(NumElimExt     , "Number of IV sign/zero extends eliminated");
 STATISTIC(NumElimIV      , "Number of congruent IVs eliminated");
 
-static cl::opt<ReplaceExitVal> ReplaceExitValue(
-    "replexitval", cl::Hidden, cl::init(OnlyCheapRepl),
-    cl::desc("Choose the strategy to replace exit value in IndVarSimplify"),
-    cl::values(
-        clEnumValN(NeverRepl, "never", "never replace exit value"),
-        clEnumValN(OnlyCheapRepl, "cheap",
-                   "only replace exit value when the cost is cheap"),
-        clEnumValN(
-            UnusedIndVarInLoop, "unusedindvarinloop",
-            "only replace exit value when it is an unused "
-            "induction variable in the loop and has cheap replacement cost"),
-        clEnumValN(NoHardUse, "noharduse",
-                   "only replace exit values when loop def likely dead"),
-        clEnumValN(AlwaysRepl, "always",
-                   "always replace exit value whenever possible")));
+static ReplaceExitVal getReplaceExitValue(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::ScalarOptsReg>(
+          F.getContext().getOptionsContext())) {
+    if (O->specified<&clv2::SC_ReplExitVal>()) {
+      auto V = O->get<&clv2::SC_ReplExitVal>();
+      switch (V) {
+      case clv2::ReplaceExitValV2::NeverRepl:
+        return NeverRepl;
+      case clv2::ReplaceExitValV2::OnlyCheapRepl:
+        return OnlyCheapRepl;
+      case clv2::ReplaceExitValV2::UnusedIndVarInLoop:
+        return UnusedIndVarInLoop;
+      case clv2::ReplaceExitValV2::NoHardUse:
+        return NoHardUse;
+      case clv2::ReplaceExitValV2::AlwaysRepl:
+        return AlwaysRepl;
+      }
+    }
+  }
+  return OnlyCheapRepl;
+}
 
-static cl::opt<bool> UsePostIncrementRanges(
-  "indvars-post-increment-ranges", cl::Hidden,
-  cl::desc("Use post increment control-dependent ranges in IndVarSimplify"),
-  cl::init(true));
+static bool getUsePostIncrementRanges(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_IndvarsPostIncrementRanges>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-DisableLFTR("disable-lftr", cl::Hidden, cl::init(false),
-            cl::desc("Disable Linear Function Test Replace optimization"));
+static bool getDisableLFTR(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_DisableLftr>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<bool>
-LoopPredication("indvars-predicate-loops", cl::Hidden, cl::init(true),
-                cl::desc("Predicate conditions in read only loops"));
+static bool getLoopPredication(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_IndvarsPredicateLoops>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> LoopPredicationTraps(
-    "indvars-predicate-loop-traps", cl::Hidden, cl::init(true),
-    cl::desc("Predicate conditions that trap in loops with only local writes"));
+static bool getLoopPredicationTraps(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_IndvarsPredicateLoopTraps>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-AllowIVWidening("indvars-widen-indvars", cl::Hidden, cl::init(true),
-                cl::desc("Allow widening of indvars to eliminate s/zext"));
+static bool getAllowIVWidening(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_IndvarsWidenIndvars>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -747,9 +758,10 @@ bool IndVarSimplify::simplifyAndExtend(Loop *L,
     for (; !WideIVs.empty(); WideIVs.pop_back()) {
       unsigned ElimExt;
       unsigned Widened;
-      if (PHINode *WidePhi = createWideIV(WideIVs.back(), LI, SE, Rewriter,
-                                          DT, DeadInsts, ElimExt, Widened,
-                                          HasGuards, UsePostIncrementRanges)) {
+      if (PHINode *WidePhi = createWideIV(
+              WideIVs.back(), LI, SE, Rewriter, DT, DeadInsts, ElimExt, Widened,
+              HasGuards,
+              getUsePostIncrementRanges(*L->getHeader()->getParent()))) {
         NumElimExt += ElimExt;
         NumWidened += Widened;
         Changed = true;
@@ -1855,7 +1867,7 @@ bool IndVarSimplify::predicateLoopExits(Loop *L, SCEVExpander &Rewriter) {
   // This transformation looks a lot like a restricted form of dead loop
   // elimination, but restricted to read-only loops and without neccesssarily
   // needing to kill the loop entirely.
-  if (!LoopPredication)
+  if (!getLoopPredication(*L->getHeader()->getParent()))
     return false;
 
   // Note: ExactBTC is the exact backedge taken count *iff* the loop exits
@@ -1959,7 +1971,7 @@ bool IndVarSimplify::predicateLoopExits(Loop *L, SCEVExpander &Rewriter) {
     for (auto &I : *BB) {
       // TODO:isGuaranteedToTransfer
       if (I.mayHaveSideEffects()) {
-        if (!LoopPredicationTraps)
+        if (!getLoopPredicationTraps(*L->getHeader()->getParent()))
           return false;
         HasThreadLocalSideEffects = true;
         if (StoreInst *SI = dyn_cast<StoreInst>(&I)) {
@@ -2091,9 +2103,10 @@ bool IndVarSimplify::run(Loop *L) {
   // that are recurrent in the loop, and substitute the exit values from the
   // loop into any instructions outside of the loop that use the final values
   // of the current expressions.
-  if (ReplaceExitValue != NeverRepl) {
-    if (int Rewrites = rewriteLoopExitValues(L, LI, TLI, SE, TTI, Rewriter, DT,
-                                             ReplaceExitValue, DeadInsts)) {
+  if (getReplaceExitValue(*L->getHeader()->getParent()) != NeverRepl) {
+    if (int Rewrites = rewriteLoopExitValues(
+            L, LI, TLI, SE, TTI, Rewriter, DT,
+            getReplaceExitValue(*L->getHeader()->getParent()), DeadInsts)) {
       NumReplaced += Rewrites;
       Changed = true;
     }
@@ -2125,7 +2138,7 @@ bool IndVarSimplify::run(Loop *L) {
 
   // If we have a trip count expression, rewrite the loop's exit condition
   // using it.
-  if (!DisableLFTR) {
+  if (!getDisableLFTR(*L->getHeader()->getParent())) {
     BasicBlock *PreHeader = L->getLoopPreheader();
 
     SmallVector<BasicBlock*, 16> ExitingBlocks;
@@ -2161,8 +2174,13 @@ bool IndVarSimplify::run(Loop *L) {
 
       // Avoid high cost expansions.  Note: This heuristic is questionable in
       // that our definition of "high cost" is not exactly principled.
-      if (Rewriter.isHighCostExpansion(ExitCount, L, SCEVCheapExpansionBudget,
-                                       TTI, PreHeader->getTerminator()))
+      if (Rewriter.isHighCostExpansion(
+              ExitCount, L,
+              getSCEVCheapExpansionBudget(L->getHeader()
+                                              ->getParent()
+                                              ->getContext()
+                                              .getOptionsContext()),
+              TTI, PreHeader->getTerminator()))
         continue;
 
       if (!Rewriter.isSafeToExpand(ExitCount))
@@ -2207,7 +2225,9 @@ bool IndVarSimplify::run(Loop *L) {
   // Check a post-condition.
   assert(L->isRecursivelyLCSSAForm(*DT, *LI) &&
          "Indvars did not preserve LCSSA!");
-  if (VerifyMemorySSA && MSSAU)
+  if (getVerifyMemorySSA(
+          L->getHeader()->getParent()->getContext().getOptionsContext()) &&
+      MSSAU)
     MSSAU->getMemorySSA()->verifyMemorySSA();
 
   return Changed;
@@ -2220,7 +2240,7 @@ PreservedAnalyses IndVarSimplifyPass::run(Loop &L, LoopAnalysisManager &AM,
   const DataLayout &DL = F->getDataLayout();
 
   IndVarSimplify IVS(&AR.LI, &AR.SE, &AR.DT, DL, &AR.TLI, &AR.TTI, AR.MSSA,
-                     WidenIndVars && AllowIVWidening);
+                     WidenIndVars && getAllowIVWidening(*F));
   if (!IVS.run(&L))
     return PreservedAnalyses::all();
 

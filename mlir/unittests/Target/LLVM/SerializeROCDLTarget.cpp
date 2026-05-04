@@ -96,7 +96,7 @@ TEST_F(MLIRTargetLLVMROCDL, SKIP_WITHOUT_AMDGPU(SerializeROCDLToLLVM)) {
     llvm::MemoryBufferRef buffer(
         StringRef(object->getObject().data(), object->getObject().size()),
         "module");
-    llvm::LLVMContext llvmContext;
+    llvm::LLVMContext llvmContext{llvm::clv2::defaultOptionsContext()};
     llvm::Expected<std::unique_ptr<llvm::Module>> llvmModule =
         llvm::getLazyBitcodeModule(buffer, llvmContext);
     ASSERT_TRUE(!!llvmModule);
