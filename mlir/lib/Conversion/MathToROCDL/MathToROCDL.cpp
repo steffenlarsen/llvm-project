@@ -186,7 +186,7 @@ void ConvertMathToROCDLPass::runOnOperation() {
 
   FailureOr<amdgpu::Chipset> maybeChipset;
   if (!chipset.empty()) {
-    maybeChipset = amdgpu::Chipset::parse(chipset);
+    maybeChipset = amdgpu::Chipset::parse(*chipset);
     if (failed(maybeChipset))
       return signalPassFailure();
   }

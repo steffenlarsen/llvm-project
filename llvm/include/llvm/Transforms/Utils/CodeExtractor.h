@@ -343,6 +343,9 @@ private:
                      const DenseMap<BasicBlock *, BlockFrequency> &ExitWeights);
 };
 
+/// When true, arguments to code-extracted functions are passed as an aggregate.
+/// Also driven by the -aggregate-extracted-args option.
+
 } // end namespace llvm
 
 #endif // LLVM_TRANSFORMS_UTILS_CODEEXTRACTOR_H

@@ -72,7 +72,9 @@ static bool simplifyLoopInst(Loop &L, DominatorTree &DT, LoopInfo &LI,
 
   bool Changed = false;
   for (;;) {
-    if (MSSAU && VerifyMemorySSA)
+    if (MSSAU &&
+        getVerifyMemorySSA(
+            L.getHeader()->getParent()->getContext().getOptionsContext()))
       MSSA->verifyMemorySSA();
     for (BasicBlock *BB : RPOT) {
       for (Instruction &I : *BB) {
@@ -148,7 +150,9 @@ static bool simplifyLoopInst(Loop &L, DominatorTree &DT, LoopInfo &LI,
       RecursivelyDeleteTriviallyDeadInstructions(DeadInsts, &TLI, MSSAU);
     }
 
-    if (MSSAU && VerifyMemorySSA)
+    if (MSSAU &&
+        getVerifyMemorySSA(
+            L.getHeader()->getParent()->getContext().getOptionsContext()))
       MSSA->verifyMemorySSA();
 
     // If we never found a PHI that needs to be simplified in the next
@@ -173,7 +177,8 @@ PreservedAnalyses LoopInstSimplifyPass::run(Loop &L, LoopAnalysisManager &AM,
   std::optional<MemorySSAUpdater> MSSAU;
   if (AR.MSSA) {
     MSSAU = MemorySSAUpdater(AR.MSSA);
-    if (VerifyMemorySSA)
+    if (getVerifyMemorySSA(
+            L.getHeader()->getParent()->getContext().getOptionsContext()))
       AR.MSSA->verifyMemorySSA();
   }
   if (!simplifyLoopInst(L, AR.DT, AR.LI, AR.AC, AR.TLI,

@@ -14,16 +14,20 @@
 
 #include "llvm/IR/PassManager.h"
 namespace llvm {
+class Module;
 class Type;
 
 class PGOCtxProfLoweringPass
     : public OptionalPassInfoMixin<PGOCtxProfLoweringPass> {
 public:
   explicit PGOCtxProfLoweringPass() = default;
-  // True if contextual instrumentation is enabled.
-  LLVM_ABI static bool isCtxIRPGOInstrEnabled();
+  // True if contextual instrumentation is enabled, for pipeline construction
+  // where no Module is available.
+  static bool isCtxIRPGOInstrEnabled();
+  // True if contextual instrumentation is enabled, checking per-module options.
+  static bool isCtxIRPGOInstrEnabled(const Module &M);
 
-  LLVM_ABI PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM);
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM);
 };
 
 // Utility pass blocking inlining for any function that may be overridden during
@@ -38,7 +42,7 @@ class NoinlineNonPrevailing
 public:
   explicit NoinlineNonPrevailing() = default;
 
-  LLVM_ABI PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM);
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM);
 };
 
 } // namespace llvm

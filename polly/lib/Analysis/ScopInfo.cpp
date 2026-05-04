@@ -17,7 +17,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/ScopInfo.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopBuilder.h"
 #include "polly/ScopDetection.h"
 #include "polly/Support/GICHelper.h"
@@ -55,6 +55,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -123,49 +124,6 @@ static int const MaxDisjunctsInContext = 4;
 // often.
 static int const MaxDisjunktsInDefinedBehaviourContext = 8;
 
-static cl::opt<bool> PollyRemarksMinimal(
-    "polly-remarks-minimal",
-    cl::desc("Do not emit remarks about assumptions that are known"),
-    cl::Hidden, cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    IslOnErrorAbort("polly-on-isl-error-abort",
-                    cl::desc("Abort if an isl error is encountered"),
-                    cl::init(true), cl::cat(PollyCategory));
-
-static cl::opt<bool> PollyPreciseInbounds(
-    "polly-precise-inbounds",
-    cl::desc("Take more precise inbounds assumptions (do not scale well)"),
-    cl::Hidden, cl::init(false), cl::cat(PollyCategory));
-
-static cl::opt<bool> PollyIgnoreParamBounds(
-    "polly-ignore-parameter-bounds",
-    cl::desc(
-        "Do not add parameter bounds and do no gist simplify sets accordingly"),
-    cl::Hidden, cl::init(false), cl::cat(PollyCategory));
-
-static cl::opt<bool> PollyPreciseFoldAccesses(
-    "polly-precise-fold-accesses",
-    cl::desc("Fold memory accesses to model more possible delinearizations "
-             "(does not scale well)"),
-    cl::Hidden, cl::init(false), cl::cat(PollyCategory));
-
-bool polly::UseInstructionNames;
-
-static cl::opt<bool, true> XUseInstructionNames(
-    "polly-use-llvm-names",
-    cl::desc("Use LLVM-IR names when deriving statement names"),
-    cl::location(UseInstructionNames), cl::Hidden, cl::cat(PollyCategory));
-
-static cl::opt<bool> PollyPrintInstructions(
-    "polly-print-instructions", cl::desc("Output instructions per ScopStmt"),
-    cl::Hidden, cl::Optional, cl::init(false), cl::cat(PollyCategory));
-
-static cl::list<std::string> IslArgs("polly-isl-arg",
-                                     cl::value_desc("argument"),
-                                     cl::desc("Option passed to ISL"),
-                                     cl::cat(PollyCategory));
-
 //===----------------------------------------------------------------------===//
 
 static isl::set addRangeBoundsToSet(isl::set S, const ConstantRange &Range,
@@ -230,11 +188,15 @@ ScopArrayInfo::ScopArrayInfo(Value *BasePtr, Type *ElementType, isl::ctx Ctx,
                              const DataLayout &DL, Scop *S,
                              const char *BaseName)
     : BasePtr(BasePtr), ElementType(ElementType), Kind(Kind), DL(DL), S(*S) {
+  bool UseInstNames = false;
+  if (auto *OptCtx = polly_opts::getPollyOpts(
+          S->getFunction().getContext().getOptionsContext()))
+    UseInstNames = OptCtx->get<&llvm::clv2::POLLY_UseLlvmNames>();
   std::string BasePtrName =
       BaseName ? BaseName
                : getIslCompatibleName("MemRef", BasePtr, S->getNextArrayIdx(),
                                       Kind == MemoryKind::PHI ? "__phi" : "",
-                                      UseInstructionNames);
+                                      UseInstNames);
   Id = isl::id::alloc(Ctx, BasePtrName, this);
 
   updateSizes(Sizes);
@@ -670,7 +632,13 @@ isl::set MemoryAccess::assumeNoOutOfBound() {
   Outside = Outside.remove_divs();
   Outside = Outside.complement();
 
-  if (!PollyPreciseInbounds)
+  bool PreciseInbounds = false;
+  if (auto *OptCtx = polly_opts::getPollyOpts(Statement->getParent()
+                                                  ->getFunction()
+                                                  .getContext()
+                                                  .getOptionsContext()))
+    PreciseInbounds = OptCtx->get<&llvm::clv2::POLLY_PreciseInbounds>();
+  if (!PreciseInbounds)
     Outside = Outside.gist_params(Statement->getDomain().params());
   return Outside;
 }
@@ -804,8 +772,14 @@ void MemoryAccess::foldAccessRelation() {
   // Access dimension folding might in certain cases increase the number of
   // disjuncts in the memory access, which can possibly complicate the generated
   // run-time checks and can lead to costly compilation.
-  if (!PollyPreciseFoldAccesses && NewAccessRelation.n_basic_map().release() >
-                                       AccessRelation.n_basic_map().release()) {
+  bool PreciseFold = false;
+  if (auto *OptCtx = polly_opts::getPollyOpts(Statement->getParent()
+                                                  ->getFunction()
+                                                  .getContext()
+                                                  .getOptionsContext()))
+    PreciseFold = OptCtx->get<&llvm::clv2::POLLY_PreciseFoldAccesses>();
+  if (!PreciseFold && NewAccessRelation.n_basic_map().release() >
+                          AccessRelation.n_basic_map().release()) {
   } else {
     AccessRelation = NewAccessRelation;
   }
@@ -1351,7 +1325,11 @@ MemoryAccess *ScopStmt::ensureValueRead(Value *V) {
 }
 
 raw_ostream &polly::operator<<(raw_ostream &OS, const ScopStmt &S) {
-  S.print(OS, PollyPrintInstructions);
+  bool PrintInstr = false;
+  if (auto *OptCtx = polly_opts::getPollyOpts(
+          S.getParent()->getFunction().getContext().getOptionsContext()))
+    PrintInstr = OptCtx->get<&llvm::clv2::POLLY_PrintInstructions>();
+  S.print(OS, PrintInstr);
   return OS;
 }
 
@@ -1447,7 +1425,11 @@ void Scop::createParameterId(const SCEV *Parameter) {
   if (const SCEVUnknown *ValueParameter = dyn_cast<SCEVUnknown>(Parameter)) {
     Value *Val = ValueParameter->getValue();
 
-    if (UseInstructionNames) {
+    bool UseInstNames = false;
+    if (auto *OptCtx = polly_opts::getPollyOpts(
+            getFunction().getContext().getOptionsContext()))
+      UseInstNames = OptCtx->get<&llvm::clv2::POLLY_UseLlvmNames>();
+    if (UseInstNames) {
       // If this parameter references a specific Value and this value has a name
       // we use this name as it is likely to be unique and more useful than just
       // a number.
@@ -1502,7 +1484,11 @@ void Scop::addParameterBounds() {
 }
 
 void Scop::realignParams() {
-  if (PollyIgnoreParamBounds)
+  bool IgnoreParamBounds = false;
+  if (auto *OptCtx = polly_opts::getPollyOpts(
+          getFunction().getContext().getOptionsContext()))
+    IgnoreParamBounds = OptCtx->get<&llvm::clv2::POLLY_IgnoreParameterBounds>();
+  if (IgnoreParamBounds)
     return;
 
   // Add all parameters into a common model.
@@ -1604,13 +1590,17 @@ Scop::Scop(Region &R, ScalarEvolution &ScalarEvolution, LoopInfo &LI,
   // Options defaults that are different from ISL's.
   isl_options_set_schedule_serialize_sccs(IslCtx.get(), true);
 
+  std::vector<std::string> IslArgsVal;
+  if (auto *OptCtx = polly_opts::getPollyOpts(
+          getFunction().getContext().getOptionsContext()))
+    IslArgsVal = OptCtx->get<&llvm::clv2::POLLY_IslArg>();
   SmallVector<char *, 8> IslArgv;
-  IslArgv.reserve(1 + IslArgs.size());
+  IslArgv.reserve(1 + IslArgsVal.size());
 
   // Substitute for program name.
   IslArgv.push_back(const_cast<char *>("-polly-isl-arg"));
 
-  for (std::string &Arg : IslArgs)
+  for (std::string &Arg : IslArgsVal)
     IslArgv.push_back(const_cast<char *>(Arg.c_str()));
 
   // Abort if unknown argument is passed.
@@ -1621,7 +1611,11 @@ Scop::Scop(Region &R, ScalarEvolution &ScalarEvolution, LoopInfo &LI,
   isl_ctx_parse_options(IslCtx.get(), IslArgv.size(), IslArgv.data(),
                         IslParseFlags);
 
-  if (IslOnErrorAbort)
+  bool OnErrorAbort = true;
+  if (auto *OptCtx = polly_opts::getPollyOpts(
+          getFunction().getContext().getOptionsContext()))
+    OnErrorAbort = OptCtx->get<&llvm::clv2::POLLY_OnIslErrorAbort>();
+  if (OnErrorAbort)
     isl_options_set_on_error(IslCtx.get(), ISL_ON_ERROR_ABORT);
 
   isl::space Space = isl::space::params_alloc(getIslCtx(), 0);
@@ -1851,7 +1845,11 @@ isl::set Scop::getAssumedContext() const {
 }
 
 bool Scop::isProfitable(bool ScalarsAreUnprofitable) const {
-  if (PollyProcessUnprofitable)
+  bool ProcessUnprofitable = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          getFunction().getContext().getOptionsContext()))
+    ProcessUnprofitable = Opts->get<&llvm::clv2::POLLY_ProcessUnprofitable>();
+  if (ProcessUnprofitable)
     return true;
 
   if (isEmpty())
@@ -1949,11 +1947,15 @@ bool Scop::isEffectiveAssumption(isl::set Set, AssumptionSign Sign) {
 
 bool Scop::trackAssumption(AssumptionKind Kind, isl::set Set, DebugLoc Loc,
                            AssumptionSign Sign, BasicBlock *BB) {
-  if (PollyRemarksMinimal && !isEffectiveAssumption(Set, Sign))
+  bool RemarksMinimal = false;
+  if (auto *OptCtx = polly_opts::getPollyOpts(
+          getFunction().getContext().getOptionsContext()))
+    RemarksMinimal = OptCtx->get<&llvm::clv2::POLLY_RemarksMinimal>();
+  if (RemarksMinimal && !isEffectiveAssumption(Set, Sign))
     return false;
 
   // Do never emit trivial assumptions as they only clutter the output.
-  if (!PollyRemarksMinimal) {
+  if (!RemarksMinimal) {
     isl::set Univ;
     if (Sign == AS_ASSUMPTION)
       Univ = isl::set::universe(Set.get_space());
@@ -2542,7 +2544,11 @@ Scop::ScopStatistics Scop::getStatistics() const {
 }
 
 raw_ostream &polly::operator<<(raw_ostream &OS, const Scop &scop) {
-  scop.print(OS, PollyPrintInstructions);
+  bool PrintInstr = false;
+  if (auto *OptCtx = polly_opts::getPollyOpts(
+          scop.getFunction().getContext().getOptionsContext()))
+    PrintInstr = OptCtx->get<&llvm::clv2::POLLY_PrintInstructions>();
+  scop.print(OS, PrintInstr);
   return OS;
 }
 

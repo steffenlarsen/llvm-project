@@ -572,7 +572,7 @@ public:
 
 /// TODO: The following VectorizationFactor was pulled out of
 /// LoopVectorizationCostModel class. LV also deals with
-/// VectorizerParams::VectorizationFactor.
+/// VectorizerParams::getVectorizationFactor().
 /// We need to streamline them.
 
 /// Information about vectorization costs.

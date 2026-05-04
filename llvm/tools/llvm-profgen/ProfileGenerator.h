@@ -20,6 +20,9 @@
 #include <unordered_set>
 
 namespace llvm {
+
+struct ProfGenConfig;
+
 namespace sampleprof {
 
 using ProbeCounterMap = DenseMap<const MCDecodedPseudoProbe *, uint64_t>;
@@ -30,21 +33,24 @@ using ProbeCounterMap = DenseMap<const MCDecodedPseudoProbe *, uint64_t>;
 class ProfileGeneratorBase {
 
 public:
-  ProfileGeneratorBase(ProfiledBinary *Binary) : Binary(Binary){};
+  ProfileGeneratorBase(ProfiledBinary *Binary, const ProfGenConfig &Config)
+      : Binary(Binary), Config(Config) {};
   ProfileGeneratorBase(ProfiledBinary *Binary,
-                       const ContextSampleCounterMap *Counters)
-      : Binary(Binary), SampleCounters(Counters){};
+                       const ContextSampleCounterMap *Counters,
+                       const ProfGenConfig &Config)
+      : Binary(Binary), Config(Config), SampleCounters(Counters) {};
   ProfileGeneratorBase(ProfiledBinary *Binary,
-                       const SampleProfileMap &&Profiles)
-      : Binary(Binary), ProfileMap(std::move(Profiles)){};
+                       const SampleProfileMap &&Profiles,
+                       const ProfGenConfig &Config)
+      : Binary(Binary), Config(Config), ProfileMap(std::move(Profiles)) {};
 
   virtual ~ProfileGeneratorBase() = default;
   static std::unique_ptr<ProfileGeneratorBase>
   create(ProfiledBinary *Binary, const ContextSampleCounterMap *Counters,
-         bool profileIsCS);
+         bool profileIsCS, const ProfGenConfig &Config);
   static std::unique_ptr<ProfileGeneratorBase>
-  create(ProfiledBinary *Binary, SampleProfileMap &ProfileMap,
-         bool profileIsCS);
+  create(ProfiledBinary *Binary, SampleProfileMap &ProfileMap, bool profileIsCS,
+         const ProfGenConfig &Config);
   virtual void generateProfile() = 0;
   void write();
 
@@ -53,7 +59,7 @@ public:
                        bool UseFSD = ProfileGeneratorBase::UseFSDiscriminator) {
     return UseFSD ? 1
                   : llvm::DILocation::getDuplicationFactorFromDiscriminator(
-                        Discriminator);
+                        Discriminator, UseFSD);
   }
 
   static uint32_t
@@ -148,6 +154,8 @@ protected:
 
   std::unique_ptr<ProfileSummary> Summary;
 
+  const ProfGenConfig &Config;
+
   // Used by SampleProfileWriter
   SampleProfileMap ProfileMap;
 
@@ -158,10 +166,12 @@ class ProfileGenerator : public ProfileGeneratorBase {
 
 public:
   ProfileGenerator(ProfiledBinary *Binary,
-                   const ContextSampleCounterMap *Counters)
-      : ProfileGeneratorBase(Binary, Counters){};
-  ProfileGenerator(ProfiledBinary *Binary, const SampleProfileMap &&Profiles)
-      : ProfileGeneratorBase(Binary, std::move(Profiles)){};
+                   const ContextSampleCounterMap *Counters,
+                   const ProfGenConfig &Config)
+      : ProfileGeneratorBase(Binary, Counters, Config) {};
+  ProfileGenerator(ProfiledBinary *Binary, const SampleProfileMap &&Profiles,
+                   const ProfGenConfig &Config)
+      : ProfileGeneratorBase(Binary, std::move(Profiles), Config) {};
   void generateProfile() override;
 
 private:
@@ -193,10 +203,13 @@ private:
 class CSProfileGenerator : public ProfileGeneratorBase {
 public:
   CSProfileGenerator(ProfiledBinary *Binary,
-                     const ContextSampleCounterMap *Counters)
-      : ProfileGeneratorBase(Binary, Counters){};
-  CSProfileGenerator(ProfiledBinary *Binary, SampleProfileMap &Profiles)
-      : ProfileGeneratorBase(Binary), ContextTracker(Profiles, nullptr){};
+                     const ContextSampleCounterMap *Counters,
+                     const ProfGenConfig &Config)
+      : ProfileGeneratorBase(Binary, Counters, Config) {};
+  CSProfileGenerator(ProfiledBinary *Binary, SampleProfileMap &Profiles,
+                     const ProfGenConfig &Config)
+      : ProfileGeneratorBase(Binary, Config),
+        ContextTracker(Profiles, nullptr) {};
   void generateProfile() override;
 
   // Trim the context stack at a given depth.

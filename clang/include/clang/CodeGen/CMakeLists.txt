@@ -1,0 +1,3 @@
+set(LLVM_TARGET_DEFINITIONS ClangCodeGenOptions.td)
+tablegen(LLVM ClangCodeGenOptionsOptInfos.inc -gen-clv2-options)
+add_public_tablegen_target(ClangCodeGenOptionsTableGen)

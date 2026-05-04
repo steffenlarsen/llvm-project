@@ -231,8 +231,8 @@ static void processSimpleOp(Operation *op, RunLivenessAnalysis &la,
       markLives(op->getOperands(), nonLiveSet, la).flip().any();
   if (hasDeadOperand) {
     LDBG() << "Simple op has dead operands, so the op must be dead: "
-           << OpWithFlags(op,
-                          OpPrintingFlags().skipRegions().printGenericOpForm());
+           << OpWithFlags(
+                  op, opPrintingFlags(op).skipRegions().printGenericOpForm());
     assert(!hasLive(op->getResults(), nonLiveSet, la) &&
            "expected the op to have no live results");
     cl.operations.push_back(op);
@@ -244,15 +244,16 @@ static void processSimpleOp(Operation *op, RunLivenessAnalysis &la,
   if (!isMemoryEffectFree(op) || hasLive(op->getResults(), nonLiveSet, la)) {
     LDBG() << "Simple op is not memory effect free or has live results, "
               "preserving it: "
-           << OpWithFlags(op,
-                          OpPrintingFlags().skipRegions().printGenericOpForm());
+           << OpWithFlags(
+                  op, opPrintingFlags(op).skipRegions().printGenericOpForm());
     return;
   }
 
   LDBG()
       << "Simple op has all dead results and is memory effect free, scheduling "
          "for removal: "
-      << OpWithFlags(op, OpPrintingFlags().skipRegions().printGenericOpForm());
+      << OpWithFlags(op,
+                     opPrintingFlags(op).skipRegions().printGenericOpForm());
   cl.operations.push_back(op);
   collectNonLiveValues(nonLiveSet, op->getResults(),
                        BitVector(op->getNumResults(), true));
@@ -273,8 +274,9 @@ static void processFuncOp(FunctionOpInterface funcOp,
                           RunLivenessAnalysis &la, DenseSet<Value> &nonLiveSet,
                           RDVFinalCleanupList &cl) {
   LDBG() << "Processing function op: "
-         << OpWithFlags(funcOp,
-                        OpPrintingFlags().skipRegions().printGenericOpForm());
+         << OpWithFlags(
+                funcOp,
+                opPrintingFlags(funcOp).skipRegions().printGenericOpForm());
   if (funcOp.isPublic() || funcOp.isExternal()) {
     LDBG() << "Function is public or external, skipping: "
            << funcOp.getOperation()->getName();
@@ -397,8 +399,9 @@ static void processRegionBranchOp(RegionBranchOpInterface regionBranchOp,
                                   DenseSet<Value> &nonLiveSet,
                                   RDVFinalCleanupList &cl) {
   LDBG() << "Processing region branch op: "
-         << OpWithFlags(regionBranchOp,
-                        OpPrintingFlags().skipRegions().printGenericOpForm());
+         << OpWithFlags(regionBranchOp, opPrintingFlags(regionBranchOp)
+                                            .skipRegions()
+                                            .printGenericOpForm());
 
   // Scenario 1. This is the only case where the entire `regionBranchOp`
   // is removed. It will not happen in any other scenario. Note that in this
@@ -572,8 +575,8 @@ static void cleanUpDeadVals(MLIRContext *ctx, RDVFinalCleanupList &list) {
       os << "Replacing non-live operands [";
       llvm::interleaveComma(o.nonLive.set_bits(), os);
       os << "] with poison in operation: "
-         << OpWithFlags(o.op,
-                        OpPrintingFlags().skipRegions().printGenericOpForm());
+         << OpWithFlags(
+                o.op, opPrintingFlags(o.op).skipRegions().printGenericOpForm());
     });
     rewriter.setInsertionPoint(o.op);
     for (auto deadIdx : o.nonLive.set_bits()) {
@@ -596,7 +599,9 @@ static void cleanUpDeadVals(MLIRContext *ctx, RDVFinalCleanupList &list) {
       os << "] from block #" << b.b->computeBlockNumber() << " in region #"
          << b.b->getParent()->getRegionNumber() << " of operation "
          << OpWithFlags(b.b->getParent()->getParentOp(),
-                        OpPrintingFlags().skipRegions().printGenericOpForm());
+                        opPrintingFlags(b.b->getParent()->getParentOp())
+                            .skipRegions()
+                            .printGenericOpForm());
     });
     // Note: Iterate from the end to make sure that that indices of not yet
     // processes arguments do not change.
@@ -622,7 +627,9 @@ static void cleanUpDeadVals(MLIRContext *ctx, RDVFinalCleanupList &list) {
       llvm::interleaveComma(op.nonLiveOperands.set_bits(), os);
       os << "] from successor " << op.successorIndex << " of branch: "
          << OpWithFlags(op.branch.getOperation(),
-                        OpPrintingFlags().skipRegions().printGenericOpForm());
+                        opPrintingFlags(op.branch.getOperation())
+                            .skipRegions()
+                            .printGenericOpForm());
     });
     // it iterates backwards because erase invalidates all successor indexes
     for (int i = successorOperands.size() - 1; i >= 0; --i) {
@@ -710,8 +717,9 @@ static void cleanUpDeadVals(MLIRContext *ctx, RDVFinalCleanupList &list) {
         os << "Erasing non-live operands [";
         llvm::interleaveComma(o.nonLive.set_bits(), os);
         os << "] from operation: "
-           << OpWithFlags(o.op,
-                          OpPrintingFlags().skipRegions().printGenericOpForm());
+           << OpWithFlags(
+                  o.op,
+                  opPrintingFlags(o.op).skipRegions().printGenericOpForm());
       });
       o.op->eraseOperands(o.nonLive);
     }
@@ -724,8 +732,8 @@ static void cleanUpDeadVals(MLIRContext *ctx, RDVFinalCleanupList &list) {
       os << "Erasing non-live results [";
       llvm::interleaveComma(r.nonLive.set_bits(), os);
       os << "] from operation: "
-         << OpWithFlags(r.op,
-                        OpPrintingFlags().skipRegions().printGenericOpForm());
+         << OpWithFlags(
+                r.op, opPrintingFlags(r.op).skipRegions().printGenericOpForm());
     });
     dropUsesAndEraseResults(rewriter, r.op, r.nonLive);
   }
@@ -734,8 +742,8 @@ static void cleanUpDeadVals(MLIRContext *ctx, RDVFinalCleanupList &list) {
   LDBG() << "Cleaning up " << list.operations.size() << " operations";
   for (Operation *op : list.operations) {
     LDBG() << "Erasing operation: "
-           << OpWithFlags(op,
-                          OpPrintingFlags().skipRegions().printGenericOpForm());
+           << OpWithFlags(
+                  op, opPrintingFlags(op).skipRegions().printGenericOpForm());
     rewriter.setInsertionPoint(op);
     if (op->hasTrait<OpTrait::IsTerminator>()) {
       // When erasing a terminator, insert an unreachable op in its place.

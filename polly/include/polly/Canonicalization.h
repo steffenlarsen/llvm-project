@@ -10,6 +10,11 @@
 #define POLLY_CANONICALIZATION_H
 
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/OptionsContext.h"
+
+namespace llvm::clv2 {
+class OptionsContext;
+}
 
 namespace polly {
 
@@ -22,7 +27,8 @@ namespace polly {
 /// optimal. TODO: Optimize the set of canonicalization passes.
 llvm::FunctionPassManager
 buildCanonicalicationPassesForNPM(llvm::ModulePassManager &MPM,
-                                  llvm::OptimizationLevel Level);
+                                  llvm::OptimizationLevel Level,
+                                  const llvm::clv2::OptionsContext &Ctx);
 
 } // namespace polly
 

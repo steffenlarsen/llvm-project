@@ -11,14 +11,16 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "bolt/Passes/IdenticalCodeFolding.h"
 #include "bolt/Profile/ProfileReaderBase.h"
+#include "bolt/Rewrite/BoltRewriteOptionsOptInfos.h"
 #include "bolt/Rewrite/RewriteInstance.h"
 #include "bolt/Utils/Utils.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 
-#undef  DEBUG_TYPE
+#undef DEBUG_TYPE
 #define DEBUG_TYPE "boltdiff"
 
 using namespace llvm;
@@ -26,69 +28,17 @@ using namespace object;
 using namespace bolt;
 
 namespace opts {
-extern cl::OptionCategory BoltDiffCategory;
-extern cl::opt<bool> NeverPrint;
-extern cl::opt<bolt::IdenticalCodeFolding::ICFLevel, false,
-               llvm::bolt::DeprecatedICFNumericOptionParser>
-    ICF;
+extern bool NeverPrint;
 
-static cl::opt<bool> IgnoreLTOSuffix(
-    "ignore-lto-suffix",
-    cl::desc("ignore lto_priv or const suffixes when matching functions"),
-    cl::init(true), cl::cat(BoltDiffCategory));
-
-static cl::opt<bool> PrintUnmapped(
-    "print-unmapped",
-    cl::desc("print functions of binary 2 that were not matched to any "
-             "function in binary 1"),
-    cl::cat(BoltDiffCategory));
-
-static cl::opt<bool> PrintProfiledUnmapped(
-    "print-profiled-unmapped",
-    cl::desc("print functions that have profile in binary 1 but do not "
-             "in binary 2"),
-    cl::cat(BoltDiffCategory));
-
-static cl::opt<bool> PrintDiffCFG(
-    "print-diff-cfg",
-    cl::desc("print the CFG of important functions that changed in "
-             "binary 2"),
-    cl::cat(BoltDiffCategory));
-
-static cl::opt<bool>
-    PrintDiffBBs("print-diff-bbs",
-                 cl::desc("print the basic blocks showed in top differences"),
-                 cl::cat(BoltDiffCategory));
-
-static cl::opt<bool> MatchByHash(
-    "match-by-hash",
-    cl::desc("match functions in binary 2 to binary 1 if they have the same "
-             "hash of a function in binary 1"),
-    cl::cat(BoltDiffCategory));
-
-static cl::opt<bool> IgnoreUnchanged(
-    "ignore-unchanged",
-    cl::desc("do not diff functions whose contents have not been changed from "
-             "one binary to another"),
-    cl::cat(BoltDiffCategory));
-
-static cl::opt<unsigned> DisplayCount(
-    "display-count",
-    cl::desc("number of functions to display when printing the top largest "
-             "differences in function activity"),
-    cl::init(10), cl::cat(BoltDiffCategory));
-
-static cl::opt<bool> NormalizeByBin1(
-    "normalize-by-bin1",
-    cl::desc("show execution count of functions in binary 2 as a ratio of the "
-             "total samples in binary 1 - make sure both profiles have equal "
-             "collection time and sampling rate for this to make sense"),
-    cl::cat(BoltDiffCategory));
-
-static cl::opt<bool>
-    SkipNonSimple("skip-non-simple",
-                  cl::desc("skip non-simple functions in reporting"),
-                  cl::ReallyHidden, cl::cat(BoltDiffCategory));
+bool IgnoreLTOSuffix = true;
+bool PrintUnmapped = false;
+bool PrintDiffCFG = false;
+bool PrintDiffBBs = false;
+bool MatchByHash = false;
+bool IgnoreUnchanged = false;
+unsigned DisplayCount = 10;
+bool NormalizeByBin1 = false;
+bool SkipNonSimple = false;
 
 } // end namespace opts
 
@@ -110,8 +60,8 @@ void printColoredPercentage(double Perc) {
     outs().resetColor();
 }
 
-void setLightColor() {
-  if (opts::PrintDiffBBs && outs().has_colors())
+void setLightColor(bool PrintDiffBBs = false) {
+  if (PrintDiffBBs && outs().has_colors())
     outs().changeColor(raw_ostream::CYAN);
 }
 
@@ -176,7 +126,8 @@ class RewriteInstanceDiff {
 
   double getNormalizedScore(const BinaryFunction &Function,
                             const RewriteInstance &Ctx) {
-    if (!opts::NormalizeByBin1)
+    bool NormalizeByBin1 = bolt_rewrite_opts::getNormalizeByBin1(*RI1.BC);
+    if (!NormalizeByBin1)
       return static_cast<double>(Function.getFunctionScore()) /
              Ctx.getTotalScore();
     return static_cast<double>(Function.getFunctionScore()) /
@@ -185,7 +136,8 @@ class RewriteInstanceDiff {
 
   double getNormalizedScore(const BinaryBasicBlock &BB,
                             const RewriteInstance &Ctx) {
-    if (!opts::NormalizeByBin1)
+    bool NormalizeByBin1 = bolt_rewrite_opts::getNormalizeByBin1(*RI1.BC);
+    if (!NormalizeByBin1)
       return static_cast<double>(BB.getKnownExecutionCount()) /
              Ctx.getTotalScore();
     return static_cast<double>(BB.getKnownExecutionCount()) /
@@ -196,7 +148,8 @@ class RewriteInstanceDiff {
                             const RewriteInstance &Ctx) {
     double Score =
         BIIter->Count == BinaryBasicBlock::COUNT_NO_PROFILE ? 0 : BIIter->Count;
-    if (!opts::NormalizeByBin1)
+    bool NormalizeByBin1 = bolt_rewrite_opts::getNormalizeByBin1(*RI1.BC);
+    if (!NormalizeByBin1)
       return Score / Ctx.getTotalScore();
     return Score / RI1.getTotalScore();
   }
@@ -205,6 +158,8 @@ class RewriteInstanceDiff {
   /// later when matching functions in binary 2 to corresponding functions
   /// in binary 1
   void buildLookupMaps() {
+    bool MatchByHash = bolt_rewrite_opts::getMatchByHash(*RI1.BC);
+    bool IgnoreLTOSuffix = bolt_rewrite_opts::getIgnoreLtoSuffix(*RI1.BC);
     for (const auto &BFI : RI1.BC->getBinaryFunctions()) {
       StringRef LTOName;
       const BinaryFunction &Function = BFI.second;
@@ -215,9 +170,9 @@ class RewriteInstanceDiff {
           LTOName = *OptionalLTOName;
         NameLookup[Name] = &Function;
       }
-      if (opts::MatchByHash && Function.hasCFG())
+      if (MatchByHash && Function.hasCFG())
         HashLookup[Function.computeHash(/*UseDFS=*/true)] = &Function;
-      if (opts::IgnoreLTOSuffix && !LTOName.empty()) {
+      if (IgnoreLTOSuffix && !LTOName.empty()) {
         if (!LTONameLookup1.count(LTOName))
           LTONameLookup1[LTOName] = &Function;
         LTOMap1[&Function] = LTONameLookup1[LTOName];
@@ -234,7 +189,7 @@ class RewriteInstanceDiff {
         if (std::optional<StringRef> OptionalLTOName = getLTOCommonName(Name))
           LTOName = *OptionalLTOName;
       }
-      if (opts::IgnoreLTOSuffix && !LTOName.empty()) {
+      if (IgnoreLTOSuffix && !LTOName.empty()) {
         if (!LTONameLookup2.count(LTOName))
           LTONameLookup2[LTOName] = &Function;
         LTOMap2[&Function] = LTONameLookup2[LTOName];
@@ -302,7 +257,7 @@ class RewriteInstanceDiff {
     outs() << "=====\n";
     outs() << "Inputs share " << BothHaveProfile
            << " functions with valid profile.\n";
-    if (opts::PrintProfiledUnmapped) {
+    if (bolt_rewrite_opts::getPrintProfiledUnmapped(*RI1.BC)) {
       outs() << "\nFunctions in profile 1 that are missing in the profile 2:\n";
       std::vector<const BinaryFunction *> Unmapped;
       for (const auto &BFI : RI1.BC->getBinaryFunctions()) {
@@ -413,6 +368,9 @@ class RewriteInstanceDiff {
   /// Print the largest differences in basic block performance from binary 1
   /// to binary 2
   void reportHottestBBDiffs() {
+    unsigned DisplayCount = bolt_rewrite_opts::getDisplayCount(*RI1.BC);
+    bool SkipNonSimple = bolt_rewrite_opts::getSkipNonSimple(*RI1.BC);
+    bool PrintDiffBBs = bolt_rewrite_opts::getPrintDiffBbs(*RI1.BC);
     std::map<double, const BinaryBasicBlock *> LargestDiffs;
     for (const auto &MapEntry : BBMap) {
       const BinaryBasicBlock *BB2 = MapEntry.first;
@@ -426,7 +384,7 @@ class RewriteInstanceDiff {
     unsigned Printed = 0;
     setTitleColor();
     outs()
-        << "\nTop " << opts::DisplayCount
+        << "\nTop " << DisplayCount
         << " largest differences in basic block performance bin 2 -> bin 1:\n";
     outs() << "=========================================================\n";
     setRegularColor();
@@ -436,7 +394,7 @@ class RewriteInstanceDiff {
       const double Score2 = getNormalizedScore(*BB2, RI2);
       const double Score1 = getNormalizedScore(*BBMap[BB2], RI1);
       const BinaryFunction *Func = BBToFuncMap[BB2];
-      if (opts::SkipNonSimple && !Func->isSimple())
+      if (SkipNonSimple && !Func->isSimple())
         continue;
       outs() << "BB " << BB2->getName() << " from " << Func->getDemangledName()
              << "\n\tScore bin1 = " << format("%.4f", Score1 * 100.0)
@@ -444,21 +402,24 @@ class RewriteInstanceDiff {
       outs() << "%\t(Difference: ";
       printColoredPercentage((Score2 - Score1) * 100.0);
       outs() << ")\n";
-      if (opts::PrintDiffBBs) {
-        setLightColor();
+      if (PrintDiffBBs) {
+        setLightColor(PrintDiffBBs);
         BB2->dump();
         setRegularColor();
       }
-      if (Printed++ == opts::DisplayCount)
+      if (Printed++ == DisplayCount)
         break;
     }
   }
 
   /// Print the largest differences in edge counts from one binary to another
   void reportHottestEdgeDiffs() {
+    unsigned DisplayCount = bolt_rewrite_opts::getDisplayCount(*RI1.BC);
+    bool SkipNonSimple = bolt_rewrite_opts::getSkipNonSimple(*RI1.BC);
+    bool PrintDiffBBs = bolt_rewrite_opts::getPrintDiffBbs(*RI1.BC);
     unsigned Printed = 0;
     setTitleColor();
-    outs() << "\nTop " << opts::DisplayCount
+    outs() << "\nTop " << DisplayCount
            << " largest differences in edge hotness bin 2 -> bin 1:\n";
     outs() << "=========================================================\n";
     setRegularColor();
@@ -470,7 +431,7 @@ class RewriteInstanceDiff {
       const double Score2 = std::get<2>(Edge2);
       const double Score1 = std::get<2>(Edge1);
       const BinaryFunction *Func = BBToFuncMap[std::get<0>(Edge2)];
-      if (opts::SkipNonSimple && !Func->isSimple())
+      if (SkipNonSimple && !Func->isSimple())
         continue;
       outs() << "Edge (" << std::get<0>(Edge2)->getName() << " -> "
              << std::get<1>(Edge2)->getName() << ") in "
@@ -480,13 +441,13 @@ class RewriteInstanceDiff {
       outs() << "%\t(Difference: ";
       printColoredPercentage((Score2 - Score1) * 100.0);
       outs() << ")\n";
-      if (opts::PrintDiffBBs) {
-        setLightColor();
+      if (PrintDiffBBs) {
+        setLightColor(PrintDiffBBs);
         std::get<0>(Edge2)->dump();
         std::get<1>(Edge2)->dump();
         setRegularColor();
       }
-      if (Printed++ == opts::DisplayCount)
+      if (Printed++ == DisplayCount)
         break;
     }
   }
@@ -535,6 +496,11 @@ class RewriteInstanceDiff {
 
   /// Print the largest hotness differences from binary 2 to binary 1
   void reportHottestFuncDiffs() {
+    bool SkipNonSimple = bolt_rewrite_opts::getSkipNonSimple(*RI1.BC);
+    unsigned DisplayCount = bolt_rewrite_opts::getDisplayCount(*RI1.BC);
+    bool IgnoreUnchanged = bolt_rewrite_opts::getIgnoreUnchanged(*RI1.BC);
+    bool PrintDiffCFG = bolt_rewrite_opts::getPrintDiffCfg(*RI1.BC);
+    bool PrintDiffBBsLocal = bolt_rewrite_opts::getPrintDiffBbs(*RI1.BC);
     std::multimap<double, decltype(FuncMap)::value_type> LargestDiffs;
     for (const auto &MapEntry : FuncMap) {
       const BinaryFunction *const &Func1 = MapEntry.second;
@@ -549,7 +515,7 @@ class RewriteInstanceDiff {
         Score2 = LTOAggregatedScore2[Iter2->second];
       if (Score1 == 0.0 || Score2 == 0.0)
         continue;
-      if (opts::SkipNonSimple && !Func1->isSimple() && !Func2->isSimple())
+      if (SkipNonSimple && !Func1->isSimple() && !Func2->isSimple())
         continue;
       LargestDiffs.insert(
           std::make_pair<>(std::abs(Score1 - Score2), MapEntry));
@@ -558,15 +524,14 @@ class RewriteInstanceDiff {
 
     unsigned Printed = 0;
     setTitleColor();
-    outs() << "\nTop " << opts::DisplayCount
+    outs() << "\nTop " << DisplayCount
            << " largest differences in performance bin 2 -> bin 1:\n";
     outs() << "=========================================================\n";
     setRegularColor();
     for (decltype(this->FuncMap)::value_type &MapEntry :
          llvm::make_second_range(llvm::reverse(LargestDiffs))) {
-      if (opts::IgnoreUnchanged &&
-          MapEntry.second->computeHash(/*UseDFS=*/true) ==
-              MapEntry.first->computeHash(/*UseDFS=*/true))
+      if (IgnoreUnchanged && MapEntry.second->computeHash(/*UseDFS=*/true) ==
+                                 MapEntry.first->computeHash(/*UseDFS=*/true))
         continue;
       const std::pair<double, double> &Scores = ScoreMap[MapEntry.first];
       outs() << "Function " << MapEntry.first->getDemangledName();
@@ -581,29 +546,29 @@ class RewriteInstanceDiff {
       if (MapEntry.second->computeHash(/*UseDFS=*/true) !=
           MapEntry.first->computeHash(/*UseDFS=*/true)) {
         outs() << "\t[Functions have different contents]";
-        if (opts::PrintDiffCFG) {
+        if (PrintDiffCFG) {
           outs() << "\n *** CFG for function in binary 1:\n";
-          setLightColor();
+          setLightColor(PrintDiffBBsLocal);
           MapEntry.second->dump();
           setRegularColor();
           outs() << "\n *** CFG for function in binary 2:\n";
-          setLightColor();
+          setLightColor(PrintDiffBBsLocal);
           MapEntry.first->dump();
           setRegularColor();
         }
       }
       outs() << "\n";
-      if (Printed++ == opts::DisplayCount)
+      if (Printed++ == DisplayCount)
         break;
     }
   }
 
   /// Print hottest functions from each binary
   void reportHottestFuncs() {
+    unsigned DisplayCount = bolt_rewrite_opts::getDisplayCount(*RI1.BC);
     unsigned Printed = 0;
     setTitleColor();
-    outs() << "\nTop " << opts::DisplayCount
-           << " hottest functions in binary 2:\n";
+    outs() << "\nTop " << DisplayCount << " hottest functions in binary 2:\n";
     outs() << "=====================================\n";
     setRegularColor();
     for (std::pair<const double, const BinaryFunction *> &MapEntry :
@@ -615,14 +580,13 @@ class RewriteInstanceDiff {
                << format("%.2f", Iter->second.first * 100.0) << "%\n";
       outs() << "\tScore bin2 = " << format("%.2f", MapEntry.first * 100.0)
              << "%\n";
-      if (Printed++ == opts::DisplayCount)
+      if (Printed++ == DisplayCount)
         break;
     }
 
     Printed = 0;
     setTitleColor();
-    outs() << "\nTop " << opts::DisplayCount
-           << " hottest functions in binary 1:\n";
+    outs() << "\nTop " << DisplayCount << " hottest functions in binary 1:\n";
     outs() << "=====================================\n";
     setRegularColor();
     for (const std::pair<const double, const BinaryFunction *> &MapEntry :
@@ -630,7 +594,7 @@ class RewriteInstanceDiff {
       outs() << "Function " << MapEntry.second->getDemangledName()
              << "\n\tScore bin1 = " << format("%.2f", MapEntry.first * 100.0)
              << "%\n";
-      if (Printed++ == opts::DisplayCount)
+      if (Printed++ == DisplayCount)
         break;
     }
   }
@@ -653,16 +617,18 @@ class RewriteInstanceDiff {
 public:
   /// Main entry point: coordinate all tasks necessary to compare two binaries
   void compareAndReport() {
+    bool IgnoreLTOSuffix = bolt_rewrite_opts::getIgnoreLtoSuffix(*RI1.BC);
+    bool PrintUnmapped = bolt_rewrite_opts::getPrintUnmapped(*RI1.BC);
     buildLookupMaps();
     matchFunctions();
-    if (opts::IgnoreLTOSuffix)
+    if (IgnoreLTOSuffix)
       computeAggregatedLTOScore();
     matchBasicBlocks();
     reportHottestFuncDiffs();
     reportHottestBBDiffs();
     reportHottestEdgeDiffs();
     reportHottestFuncs();
-    if (!opts::PrintUnmapped)
+    if (!PrintUnmapped)
       return;
     reportUnmapped();
   }
@@ -671,7 +637,6 @@ public:
       : RI1(RI1), RI2(RI2) {
     compareAndReport();
   }
-
 };
 
 } // end namespace bolt
@@ -683,7 +648,8 @@ void RewriteInstance::compare(RewriteInstance &RI2) {
          << " instructions executed.\n";
   outs() << "Trace for binary 2 has " << RI2.getTotalScore()
          << " instructions executed.\n";
-  if (opts::NormalizeByBin1) {
+  bool NormalizeByBin1 = bolt_rewrite_opts::getNormalizeByBin1(*BC);
+  if (NormalizeByBin1) {
     double Diff2to1 =
         static_cast<double>(RI2.getTotalScore() - this->getTotalScore()) /
         this->getTotalScore();
@@ -699,8 +665,11 @@ void RewriteInstance::compare(RewriteInstance &RI2) {
   }
 
   // Pre-pass ICF
-  if (opts::ICF != IdenticalCodeFolding::ICFLevel::None) {
-    IdenticalCodeFolding ICF(opts::NeverPrint);
+  auto ICF = static_cast<IdenticalCodeFolding::ICFLevel>(
+      bolt::bolt_passes_opts::getIcf(*BC));
+  if (ICF != IdenticalCodeFolding::ICFLevel::None) {
+    bool NeverPrint = bolt::bolt_rewrite_opts::getNeverPrint(*BC);
+    IdenticalCodeFolding ICF(NeverPrint);
     outs() << "BOLT-DIFF: Starting ICF pass for binary 1";
     BC->logBOLTErrorsAndQuitOnFatal(ICF.runOnFunctions(*BC));
     outs() << "BOLT-DIFF: Starting ICF pass for binary 2";

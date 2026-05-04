@@ -11,6 +11,7 @@
 #include "AMDGPUTargetMachine.h"
 #include "GCNSubtarget.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/TargetParser/AMDGPUTargetParser.h"
 #include "gtest/gtest.h"
@@ -40,9 +41,14 @@ createAMDGPUTargetMachine(const Triple &TT, StringRef CPU, StringRef FS) {
           TT, CPU, FS, Options, std::nullopt, std::nullopt)));
 }
 
-static cl::opt<bool> PrintCpuRegLimits(
-    "print-cpu-reg-limits", cl::NotHidden, cl::init(false),
-    cl::desc("force printing per AMDGPU CPU register limits"));
+static bool PrintCpuRegLimits = false;
+static unsigned PrintCpuRegLimitsCount = 0;
+static constexpr clv2::OptionInfo<bool> OI_PrintCpuRegLimits{
+    "print-cpu-reg-limits", "force printing per AMDGPU CPU register limits",
+    clv2::ValueDisallowed};
+static const int PrintCpuRegLimitsInit = ([] {
+  clv2::registerDynamicEntry(clv2::makeEntry<&OI_PrintCpuRegLimits>(PrintCpuRegLimits, PrintCpuRegLimitsCount));
+}(), 0);
 
 static bool checkMinMax(std::stringstream &OS, unsigned Occ, unsigned MinOcc,
                         unsigned MaxOcc,
@@ -239,7 +245,7 @@ static void testAbsoluteLimits(llvm::Triple::SubArchType SubArch, StringRef FS,
   StringRef ArchName = AMDGPU::getArchNameFromSubArch(SubArch);
 
   // Test function without attributes.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module M("", Context);
   Function *Func =
       Function::Create(FunctionType::get(Type::getVoidTy(Context), false),

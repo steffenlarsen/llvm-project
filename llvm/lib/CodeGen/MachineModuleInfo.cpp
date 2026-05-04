@@ -43,6 +43,9 @@ MachineModuleInfo::MachineModuleInfo(MachineModuleInfo &&MMI)
               TM.getMCSubtargetInfo(), nullptr, false),
       MachineFunctions(std::move(MMI.MachineFunctions)) {
   Context.setObjectFileInfo(TM.getObjFileLowering());
+  // Context is freshly constructed here, not moved, so it needs the options
+  // context installed just like the other two constructors do.
+  Context.setOptionsContext(TM.getOptionsContext());
   ObjFileMMI = MMI.ObjFileMMI;
   ExternalContext = MMI.ExternalContext;
   TheModule = MMI.TheModule;
@@ -53,6 +56,7 @@ MachineModuleInfo::MachineModuleInfo(const TargetMachine *TM)
                        TM->getMCRegisterInfo(), TM->getMCSubtargetInfo(),
                        nullptr, false) {
   Context.setObjectFileInfo(TM->getObjFileLowering());
+  Context.setOptionsContext(TM->getOptionsContext());
   initialize();
 }
 
@@ -63,6 +67,7 @@ MachineModuleInfo::MachineModuleInfo(const TargetMachine *TM,
                        nullptr, false),
       ExternalContext(ExtContext) {
   Context.setObjectFileInfo(TM->getObjFileLowering());
+  Context.setOptionsContext(TM->getOptionsContext());
   initialize();
 }
 

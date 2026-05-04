@@ -26,7 +26,7 @@ namespace bolt {
 
 class Instrumentation : public BinaryFunctionPass {
 public:
-  Instrumentation(const cl::opt<bool> &PrintPass)
+  Instrumentation(const bool PrintPass)
       : BinaryFunctionPass(PrintPass),
         Summary(std::make_unique<InstrumentationSummary>()) {}
 

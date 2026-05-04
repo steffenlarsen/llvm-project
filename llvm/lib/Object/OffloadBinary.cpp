@@ -130,7 +130,7 @@ Error extractFromObject(const ObjectFile &Obj,
 
 Error extractFromBitcode(MemoryBufferRef Buffer,
                          SmallVectorImpl<OffloadFile> &Binaries) {
-  LLVMContext Context;
+  LLVMContext Context(llvm::clv2::defaultOptionsContext());
   SMDiagnostic Err;
   std::unique_ptr<Module> M = getLazyIRModule(
       MemoryBuffer::getMemBuffer(Buffer, /*RequiresNullTerminator=*/false), Err,

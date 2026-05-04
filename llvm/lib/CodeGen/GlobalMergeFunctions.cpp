@@ -15,11 +15,14 @@
 #include "llvm/Analysis/ModuleSummaryAnalysis.h"
 #include "llvm/CGData/CodeGenData.h"
 #include "llvm/CGData/CodeGenDataWriter.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/Passes.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/StructuralHash.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
 #define DEBUG_TYPE "global-merge-func"
@@ -27,11 +30,9 @@
 using namespace llvm;
 using namespace llvm::support;
 
-static cl::opt<bool> DisableCGDataForMerging(
-    "disable-cgdata-for-merging", cl::Hidden,
-    cl::desc("Disable codegen data for function merging. Local "
-             "merging is still enabled within a module."),
-    cl::init(false));
+static bool getDisableCgdataForMerging(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableCgdataForMerging>(Ctx);
+}
 
 STATISTIC(NumMergedFunctions,
           "Number of functions that are actually merged using function hash");
@@ -519,7 +520,7 @@ void GlobalMergeFunc::initializeMergerMode(const Module &M) {
   LocalFunctionMap = std::make_unique<StableFunctionMap>();
 
   // Disable codegen data for merging. The local merge is still enabled.
-  if (DisableCGDataForMerging)
+  if (getDisableCgdataForMerging(M.getContext().getOptionsContext()))
     return;
 
   // (Full)LTO module does not have functions added to the index.
@@ -527,9 +528,9 @@ void GlobalMergeFunc::initializeMergerMode(const Module &M) {
   if (Index && !Index->hasExportedFunctions(M))
     return;
 
-  if (cgdata::emitCGData())
+  if (cgdata::emitCGData(M.getContext().getOptionsContext()))
     MergerMode = HashFunctionMode::BuildingHashFuncion;
-  else if (cgdata::hasStableFunctionMap())
+  else if (cgdata::hasStableFunctionMap(M.getContext().getOptionsContext()))
     MergerMode = HashFunctionMode::UsingHashFunction;
 }
 
@@ -562,14 +563,14 @@ bool GlobalMergeFunc::run(Module &M) {
   const StableFunctionMap *FuncMap;
   if (MergerMode == HashFunctionMode::UsingHashFunction) {
     // Use the prior CG data to optimistically create global merge candidates.
-    FuncMap = cgdata::getStableFunctionMap();
+    FuncMap = cgdata::getStableFunctionMap(M.getContext().getOptionsContext());
   } else {
     analyze(M);
     // Emit the local function map to the custom section, __llvm_merge before
     // finalizing it.
     if (MergerMode == HashFunctionMode::BuildingHashFuncion)
       emitFunctionMap(M);
-    LocalFunctionMap->finalize();
+    LocalFunctionMap->finalize(/*SkipTrim=*/false, &M);
     FuncMap = LocalFunctionMap.get();
   }
 

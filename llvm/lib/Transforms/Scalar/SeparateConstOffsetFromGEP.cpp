@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- SeparateConstOffsetFromGEP.cpp -------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -159,7 +161,6 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/raw_ostream.h"
@@ -172,18 +173,20 @@
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
-static cl::opt<bool> DisableSeparateConstOffsetFromGEP(
-    "disable-separate-const-offset-from-gep", cl::init(false),
-    cl::desc("Do not separate the constant offset from a GEP instruction"),
-    cl::Hidden);
+static bool getDisableSeparateConstOffsetFromGEP(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_DisableSeparateConstOffsetFromGep>(
+      F.getContext().getOptionsContext(), false);
+}
 
 // Setting this flag may emit false positives when the input module already
 // contains dead instructions. Therefore, we set it only in unit tests that are
 // free of dead code.
-static cl::opt<bool>
-    VerifyNoDeadCode("reassociate-geps-verify-no-dead-code", cl::init(false),
-                     cl::desc("Verify this pass produces no dead code"),
-                     cl::Hidden);
+static bool getVerifyNoDeadCode(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_ReassociateGepsVerifyNoDeadCode>(
+      F.getContext().getOptionsContext(), false);
+}
 
 namespace {
 
@@ -1398,7 +1401,7 @@ bool SeparateConstOffsetFromGEPLegacyPass::runOnFunction(Function &F) {
 }
 
 bool SeparateConstOffsetFromGEP::run(Function &F) {
-  if (DisableSeparateConstOffsetFromGEP)
+  if (getDisableSeparateConstOffsetFromGEP(F))
     return false;
 
   DL = &F.getDataLayout();
@@ -1418,7 +1421,7 @@ bool SeparateConstOffsetFromGEP::run(Function &F) {
 
   Changed |= reuniteExts(F);
 
-  if (VerifyNoDeadCode)
+  if (getVerifyNoDeadCode(F))
     verifyNoDeadCode(F);
 
   return Changed;

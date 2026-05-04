@@ -15,11 +15,11 @@
 #include "index/Relation.h"
 #include "index/Serialization.h"
 #include "index/remote/Client.h"
-#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/LineEditor/LineEditor.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 #include <optional>
 
@@ -27,17 +27,26 @@ namespace clang {
 namespace clangd {
 namespace {
 
-llvm::cl::opt<std::string> IndexLocation(
-    llvm::cl::desc("<path to index file | remote:server.address>"),
-    llvm::cl::Positional);
+using llvm::clv2::Init;
+using llvm::clv2::OptionInfo;
+using llvm::clv2::OptionsRegistry;
+using llvm::clv2::Positional;
 
-llvm::cl::opt<std::string>
-    ExecCommand("c", llvm::cl::desc("Command to execute and then exit."));
+static std::string IndexLocation;
+static std::string ExecCommand;
+static std::string ProjectRoot;
 
-llvm::cl::opt<std::string> ProjectRoot(
+static constexpr OptionInfo<std::string> dexpIndexLocationOpt{
+    "", "<path to index file | remote:server.address>", Positional{}};
+static constexpr OptionInfo<std::string> dexpExecCommandOpt{
+    "c", "Command to execute and then exit."};
+static constexpr OptionInfo<std::string> dexpProjectRootOpt{
     "project-root",
-    llvm::cl::desc(
-        "Path to the project. Required when connecting using remote index."));
+    "Path to the project. Required when connecting using remote index."};
+
+static constexpr OptionsRegistry<&dexpIndexLocationOpt, &dexpExecCommandOpt,
+                                 &dexpProjectRootOpt>
+    DexpGlobalReg;
 
 static constexpr char Overview[] = R"(
 This is an **experimental** interactive tool to process user-provided search
@@ -85,15 +94,9 @@ std::vector<SymbolID> getSymbolIDsFromIndex(llvm::StringRef QualifiedName,
   return SymIDs;
 }
 
-// REPL commands inherit from Command and contain their options as members.
-// Creating a Command populates parser options, parseAndRun() resets them.
 class Command {
-  // By resetting the parser options, we lost the standard -help flag.
-  llvm::cl::opt<bool, false, llvm::cl::parser<bool>> Help{
-      "help", llvm::cl::desc("Display available options"),
-      llvm::cl::ValueDisallowed, llvm::cl::cat(llvm::cl::getGeneralCategory())};
-  // FIXME: Allow commands to signal failure.
   virtual void run() = 0;
+  virtual void addOptions(llvm::clv2::OptionParser &P) = 0;
 
 protected:
   const SymbolIndex *Index;
@@ -104,23 +107,14 @@ public:
                    const SymbolIndex &Index) {
     std::string ParseErrs;
     llvm::raw_string_ostream OS(ParseErrs);
-    bool Ok = llvm::cl::ParseCommandLineOptions(Argv.size(), Argv.data(),
-                                                Overview, &OS);
-    // must do this before opts are destroyed
-    llvm::scope_exit Cleanup(llvm::cl::ResetCommandLineParser);
-    if (Help.getNumOccurrences() > 0) {
-      // Avoid printing parse errors in this case.
-      // (Well, in theory. A bunch get printed to llvm::errs() regardless!)
-      llvm::cl::PrintHelpMessage();
-      return true;
-    }
+    llvm::clv2::OptionParser SubP;
+    addOptions(SubP);
+    SubP.parse(Argv.size(), Argv.data(), Overview, &OS);
 
     llvm::outs() << OS.str();
-    if (Ok) {
-      this->Index = &Index;
-      reportTime(Argv[0], [&] { run(); });
-    }
-    return Ok;
+    this->Index = &Index;
+    reportTime(Argv[0], [&] { run(); });
+    return true;
   }
 };
 
@@ -133,31 +127,37 @@ public:
 // * print out tokens with the most dense posting lists
 // * print out tokens with least dense posting lists
 
-class FuzzyFind : public Command {
-  llvm::cl::opt<std::string> Query{
-      "query",
-      llvm::cl::Positional,
-      llvm::cl::Required,
-      llvm::cl::desc("Query string to be fuzzy-matched"),
-  };
-  llvm::cl::opt<std::string> Scopes{
-      "scopes",
-      llvm::cl::desc("Allowed symbol scopes (comma-separated list)"),
-  };
-  llvm::cl::opt<unsigned> Limit{
-      "limit",
-      llvm::cl::init(10),
-      llvm::cl::desc("Max results to display"),
-  };
+static constexpr OptionInfo<std::string> OI_FFQuery{
+    "", "Query string to be fuzzy-matched", Positional{}, llvm::clv2::Required};
+static constexpr OptionInfo<std::string> OI_FFScopes{
+    "scopes", "Allowed symbol scopes (comma-separated list)"};
+static constexpr OptionInfo<unsigned> OI_FFLimit{
+    "limit", "Max results to display", Init{10u}};
 
+class FuzzyFind : public Command {
+  std::string Query;
+  std::string Scopes;
+  unsigned Limit = 10;
+  unsigned QueryCount = 0;
+  unsigned ScopesCount = 0;
+  unsigned LimitCount = 0;
+
+  void addOptions(llvm::clv2::OptionParser &P) override {
+    using namespace llvm::clv2;
+    P.addDynamicEntry(llvm::clv2::makeEntry<&OI_FFQuery>(Query, QueryCount));
+    P.addDynamicEntry(llvm::clv2::makeEntry<&OI_FFScopes>(Scopes, ScopesCount));
+    P.addDynamicEntry(llvm::clv2::makeEntry<&OI_FFLimit>(Limit, LimitCount));
+  }
+
+private:
   void run() override {
     FuzzyFindRequest Request;
     Request.Limit = Limit;
     Request.Query = Query;
-    if (Scopes.getNumOccurrences() > 0) {
-      llvm::SmallVector<llvm::StringRef> Scopes;
-      llvm::StringRef(this->Scopes).split(Scopes, ',');
-      Request.Scopes = {Scopes.begin(), Scopes.end()};
+    if (ScopesCount > 0) {
+      llvm::SmallVector<llvm::StringRef> ScopeList;
+      llvm::StringRef(Scopes).split(ScopeList, ',');
+      Request.Scopes = {ScopeList.begin(), ScopeList.end()};
     }
     Request.AnyScope = Request.Scopes.empty();
     // FIXME(kbobyrev): Print symbol final scores to see the distribution.
@@ -172,25 +172,32 @@ class FuzzyFind : public Command {
   }
 };
 
-class Lookup : public Command {
-  llvm::cl::opt<std::string> ID{
-      "id",
-      llvm::cl::Positional,
-      llvm::cl::desc("Symbol ID to look up (hex)"),
-  };
-  llvm::cl::opt<std::string> Name{
-      "name",
-      llvm::cl::desc("Qualified name to look up."),
-  };
+static constexpr OptionInfo<std::string> OI_LookupId{
+    "id", "Symbol ID to look up (hex)", Positional{}};
+static constexpr OptionInfo<std::string> OI_LookupName{
+    "name", "Qualified name to look up."};
 
+class Lookup : public Command {
+  std::string ID;
+  std::string Name;
+  unsigned IDCount = 0;
+  unsigned NameCount = 0;
+
+  void addOptions(llvm::clv2::OptionParser &P) override {
+    using namespace llvm::clv2;
+    P.addDynamicEntry(llvm::clv2::makeEntry<&OI_LookupId>(ID, IDCount));
+    P.addDynamicEntry(llvm::clv2::makeEntry<&OI_LookupName>(Name, NameCount));
+  }
+
+private:
   void run() override {
-    if (ID.getNumOccurrences() == 0 && Name.getNumOccurrences() == 0) {
+    if (IDCount == 0 && NameCount == 0) {
       llvm::errs()
           << "Missing required argument: please provide id or -name.\n";
       return;
     }
     std::vector<SymbolID> IDs;
-    if (ID.getNumOccurrences()) {
+    if (IDCount > 0) {
       auto SID = SymbolID::fromStr(ID);
       if (!SID) {
         llvm::errs() << llvm::toString(SID.takeError()) << "\n";
@@ -213,31 +220,39 @@ class Lookup : public Command {
   }
 };
 
-class Refs : public Command {
-  llvm::cl::opt<std::string> ID{
-      "id",
-      llvm::cl::Positional,
-      llvm::cl::desc("Symbol ID of the symbol being queried (hex)."),
-  };
-  llvm::cl::opt<std::string> Name{
-      "name",
-      llvm::cl::desc("Qualified name of the symbol being queried."),
-  };
-  llvm::cl::opt<std::string> Filter{
-      "filter",
-      llvm::cl::init(".*"),
-      llvm::cl::desc(
-          "Print all results from files matching this regular expression."),
-  };
+static constexpr OptionInfo<std::string> OI_RefsId{
+    "id", "Symbol ID of the symbol being queried (hex).", Positional{}};
+static constexpr OptionInfo<std::string> OI_RefsName{
+    "name", "Qualified name of the symbol being queried."};
+static constexpr OptionInfo<std::string> OI_RefsFilter{
+    "filter", "Print all results from files matching this regular expression.",
+    Init{".*"}};
 
+class Refs : public Command {
+  std::string ID;
+  std::string Name;
+  std::string Filter = ".*";
+  unsigned IDCount = 0;
+  unsigned NameCount = 0;
+  unsigned FilterCount = 0;
+
+  void addOptions(llvm::clv2::OptionParser &P) override {
+    using namespace llvm::clv2;
+    P.addDynamicEntry(llvm::clv2::makeEntry<&OI_RefsId>(ID, IDCount));
+    P.addDynamicEntry(llvm::clv2::makeEntry<&OI_RefsName>(Name, NameCount));
+    P.addDynamicEntry(
+        llvm::clv2::makeEntry<&OI_RefsFilter>(Filter, FilterCount));
+  }
+
+private:
   void run() override {
-    if (ID.getNumOccurrences() == 0 && Name.getNumOccurrences() == 0) {
+    if (IDCount == 0 && NameCount == 0) {
       llvm::errs()
           << "Missing required argument: please provide id or -name.\n";
       return;
     }
     std::vector<SymbolID> IDs;
-    if (ID.getNumOccurrences()) {
+    if (IDCount > 0) {
       auto SID = SymbolID::fromStr(ID);
       if (!SID) {
         llvm::errs() << llvm::toString(SID.takeError()) << "\n";
@@ -269,61 +284,78 @@ class Refs : public Command {
   }
 };
 
-class Relations : public Command {
-  llvm::cl::opt<std::string> ID{
-      "id",
-      llvm::cl::Positional,
-      llvm::cl::desc("Symbol ID of the symbol being queried (hex)."),
-  };
-  llvm::cl::opt<RelationKind> Relation{
-      "relation",
-      llvm::cl::desc("Relation kind for the predicate."),
-      values(clEnumValN(RelationKind::BaseOf, "base_of",
-                        "Find subclasses of a class."),
-             clEnumValN(RelationKind::OverriddenBy, "overridden_by",
-                        "Find methods that overrides a virtual method.")),
-  };
+static constexpr OptionInfo<std::string> OI_RelationsId{
+    "id", "Symbol ID of the symbol being queried (hex).", Positional{}};
+static constexpr llvm::clv2::EnumVal<RelationKind> RelationKindVals[] = {
+    {"base_of", RelationKind::BaseOf, "Find subclasses of a class."},
+    {"overridden_by", RelationKind::OverriddenBy,
+     "Find methods that overrides a virtual method."},
+};
+// CaseInsensitiveValues preserves the previous equals_insensitive matching.
+static constexpr auto OI_RelationsRelation =
+    llvm::clv2::makeEnumOption<RelationKind>(
+        "relation", "Relation kind for the predicate.", RelationKindVals,
+        Init{RelationKind::BaseOf}, llvm::clv2::CaseInsensitiveValues);
 
+class Relations : public Command {
+  std::string ID;
+  RelationKind Relation = RelationKind::BaseOf;
+  unsigned IDCount = 0;
+  unsigned RelationCount = 0;
+
+  void addOptions(llvm::clv2::OptionParser &P) override {
+    using namespace llvm::clv2;
+    P.addDynamicEntry(llvm::clv2::makeEntry<&OI_RelationsId>(ID, IDCount));
+    P.addDynamicEntry(
+        llvm::clv2::makeEntry<&OI_RelationsRelation>(Relation, RelationCount));
+  }
+
+private:
   void run() override {
-    if (ID.getNumOccurrences() == 0 || Relation.getNumOccurrences() == 0) {
+    if (IDCount == 0 || RelationCount == 0) {
       llvm::errs()
           << "Missing required argument: please provide id and -relation.\n";
       return;
     }
     RelationsRequest Req;
-    if (ID.getNumOccurrences()) {
-      auto SID = SymbolID::fromStr(ID);
-      if (!SID) {
-        llvm::errs() << llvm::toString(SID.takeError()) << "\n";
-        return;
-      }
-      Req.Subjects.insert(*SID);
+    auto SID = SymbolID::fromStr(ID);
+    if (!SID) {
+      llvm::errs() << llvm::toString(SID.takeError()) << "\n";
+      return;
     }
-    Req.Predicate = Relation.getValue();
+    Req.Subjects.insert(*SID);
+    Req.Predicate = Relation;
     Index->relations(Req, [](const SymbolID &SID, const Symbol &S) {
       llvm::outs() << toYAML(S);
     });
   }
 };
 
-class Export : public Command {
-  llvm::cl::opt<IndexFileFormat> Format{
-      "format",
-      llvm::cl::desc("Format of index export"),
-      llvm::cl::values(
-          clEnumValN(IndexFileFormat::YAML, "yaml",
-                     "human-readable YAML format"),
-          clEnumValN(IndexFileFormat::RIFF, "binary", "binary RIFF format")),
-      llvm::cl::init(IndexFileFormat::YAML),
-  };
-  llvm::cl::opt<std::string> OutputFile{
-      "output-file",
-      llvm::cl::Positional,
-      llvm::cl::Required,
-      llvm::cl::desc("Output file for export"),
-  };
+static constexpr OptionInfo<std::string> OI_ExportOutputFile{
+    "output-file", "Output file for export", Positional{},
+    llvm::clv2::Required};
+static constexpr llvm::clv2::EnumVal<IndexFileFormat> IndexFormatVals[] = {
+    {"yaml", IndexFileFormat::YAML, "human-readable YAML format"},
+    {"binary", IndexFileFormat::RIFF, "binary RIFF format"},
+};
+static constexpr auto OI_ExportFormat =
+    llvm::clv2::makeEnumOption<IndexFileFormat>(
+        "format", "Format of index export", IndexFormatVals,
+        Init{IndexFileFormat::YAML}, llvm::clv2::CaseInsensitiveValues);
 
-public:
+class Export : public Command {
+  IndexFileFormat Format = IndexFileFormat::YAML;
+  std::string OutputFile;
+  unsigned FormatCount = 0;
+  unsigned OutputFileCount = 0;
+
+  void addOptions(llvm::clv2::OptionParser &P) override {
+    using namespace llvm::clv2;
+    P.addDynamicEntry(
+        llvm::clv2::makeEntry<&OI_ExportFormat>(Format, FormatCount));
+    P.addDynamicEntry(llvm::clv2::makeEntry<&OI_ExportOutputFile>(
+        OutputFile, OutputFileCount));
+  }
   void run() override {
     using namespace clang::clangd;
     // Read input file (as specified in global option)
@@ -414,15 +446,14 @@ bool runCommand(std::string Request, const SymbolIndex &Index) {
 int main(int argc, const char *argv[]) {
   using namespace clang::clangd;
 
-  llvm::cl::ParseCommandLineOptions(argc, argv, Overview);
-
-  // Preserve global options when flag parser is reset, so commands can use
-  // them.
-  IndexLocation.setValue(IndexLocation, /*initial=*/true);
-  ExecCommand.setValue(ExecCommand, /*initial=*/true);
-  ProjectRoot.setValue(ProjectRoot, /*initial=*/true);
-
-  llvm::cl::ResetCommandLineParser(); // We reuse it for REPL commands.
+  llvm::clv2::OptionParser P;
+  P.add<&DexpGlobalReg>();
+  llvm::RegisterAllLLVMOptions(P);
+  auto OptsCtx = P.parse(argc, argv, Overview);
+  auto *GlobalOpts = OptsCtx->getViewPtr<&DexpGlobalReg>();
+  IndexLocation = GlobalOpts->get<&dexpIndexLocationOpt>();
+  ExecCommand = GlobalOpts->get<&dexpExecCommandOpt>();
+  ProjectRoot = GlobalOpts->get<&dexpProjectRootOpt>();
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
 
   bool RemoteMode = llvm::StringRef(IndexLocation).starts_with("remote:");

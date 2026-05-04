@@ -13,6 +13,7 @@
 
 #include "SIMachineScheduler.h"
 #include "SIInstrInfo.h"
+#include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 
@@ -1870,9 +1871,10 @@ void SIScheduleDAGMI::schedule()
   postProcessDAG();
 
   LLVM_DEBUG(dump());
-  if (PrintDAGs)
+  if (clv2::getOptValOrDefault<&clv2::CG_MischedPrintDags>(
+          MF.getFunction().getContext().getOptionsContext()))
     dump();
-  if (ViewMISchedDAGs)
+  if (getViewMISchedDAGs())
     viewGraph();
 
   topologicalSort();

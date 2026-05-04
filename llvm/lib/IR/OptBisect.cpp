@@ -14,12 +14,13 @@
 
 #include "llvm/IR/OptBisect.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/IR/IROptionsOptInfos.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/IntegerInclusiveInterval.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <cstdlib>
+#include <limits>
 
 using namespace llvm;
 
@@ -27,64 +28,6 @@ static OptBisect &getOptBisector() {
   static OptBisect OptBisector;
   return OptBisector;
 }
-
-static cl::opt<int> OptBisectLimit(
-    "opt-bisect-limit", cl::Hidden, cl::init(-1), cl::Optional,
-    cl::cb<void, int>([](int Limit) {
-      if (Limit == -1)
-        // -1 means run all passes.
-        getOptBisector().setIntervals({{1, std::numeric_limits<int>::max()}});
-      else if (Limit == 0)
-        // 0 means run no passes.
-        getOptBisector().setIntervals({{0, 0}});
-      else if (Limit > 0)
-        // Convert limit to interval 1-Limit.
-        getOptBisector().setIntervals({{1, Limit}});
-      else
-        llvm_unreachable(
-            ("Invalid limit for -opt-bisect-limit: " + llvm::utostr(Limit))
-                .c_str());
-    }),
-    cl::desc(
-        "Maximum optimization to perform (equivalent to -opt-bisect=1-N)"));
-
-static cl::opt<std::string> OptBisectIntervals(
-    "opt-bisect", cl::Hidden, cl::Optional,
-    cl::cb<void, const std::string &>([](const std::string &IntervalStr) {
-      if (IntervalStr == "-1") {
-        // -1 means run all passes.
-        getOptBisector().setIntervals({{1, std::numeric_limits<int>::max()}});
-        return;
-      }
-
-      auto Intervals =
-          IntegerInclusiveIntervalUtils::parseIntervals(IntervalStr);
-      if (!Intervals) {
-        handleAllErrors(Intervals.takeError(), [&](const StringError &E) {
-          errs() << "Error: Invalid interval specification for -opt-bisect: "
-                 << IntervalStr << " (" << E.getMessage() << ")\n";
-        });
-        exit(1);
-      }
-      getOptBisector().setIntervals(std::move(*Intervals));
-    }),
-    cl::desc("Run optimization passes only for the specified intervals. "
-             "Format: '1-10,20-30,45' runs passes 1-10, 20-30, and 45, where "
-             "index 1 is the first pass. Supply '0' to run no passes and -1 to "
-             "run all passes."));
-
-static cl::opt<bool> OptBisectVerbose(
-    "opt-bisect-verbose",
-    cl::desc(
-        "Show verbose output when opt-bisect-limit and/or opt-disable are set"),
-    cl::Hidden, cl::init(true), cl::Optional);
-
-static cl::list<std::string> OptDisablePasses(
-    "opt-disable", cl::Hidden, cl::CommaSeparated, cl::Optional,
-    cl::cb<void, std::string>([](const std::string &Pass) {
-      getOptBisector().setDisabled(Pass);
-    }),
-    cl::desc("Optimization pass(es) to disable (comma-separated list)"));
 
 static void printPassMessage(StringRef Name, int PassNum, StringRef TargetDesc,
                              bool Running) {
@@ -109,9 +52,69 @@ bool OptBisect::shouldRunPass(StringRef PassName,
   // Also check if the pass is disabled via -opt-disable.
   ShouldRun = ShouldRun && !DisabledPasses.contains(PassName);
 
-  if (OptBisectVerbose)
+  if (isVerbose())
     printPassMessage(PassName, CurBisectNum, IRDescription, ShouldRun);
   return ShouldRun;
 }
 
 OptPassGate &llvm::getGlobalPassGate() { return getOptBisector(); }
+
+void llvm::initOptBisectFromOptions(const ir_opts::ParsedOpts &Opts) {
+  getOptBisector().setVerbose(Opts.get<&clv2::IR_OptBisectVerbose>());
+
+  // Handle -opt-bisect-limit=N (legacy single-limit form).
+  // -1 means run all passes but still enable verbose output.
+  // 0 means run no passes (but still enable verbose output).
+  // N>0 means run passes 1..N.
+  if (Opts.specified<&clv2::IR_OptBisectLimit>()) {
+    int Limit = Opts.get<&clv2::IR_OptBisectLimit>();
+    std::string RangeStr;
+    if (Limit == -1) {
+      // Run all passes — use a very large upper bound so isEnabled() is true.
+      RangeStr = "1-" + std::to_string(std::numeric_limits<int>::max());
+    } else if (Limit == 0) {
+      // Run no passes — use "0" which matches nothing since passes start at 1.
+      RangeStr = "0";
+    } else if (Limit > 0) {
+      RangeStr = "1-" + std::to_string(Limit);
+    }
+    if (!RangeStr.empty()) {
+      auto Intervals = IntegerInclusiveIntervalUtils::parseIntervals(RangeStr);
+      if (Intervals)
+        getOptBisector().setIntervals(std::move(*Intervals));
+      else
+        consumeError(Intervals.takeError());
+    }
+  }
+
+  // Handle -opt-bisect=<intervals> (e.g. "1-10,20-30,45").
+  // Special values: -1 means run all passes, 0 means run no passes.
+  if (Opts.specified<&clv2::IR_OptBisectIntervals>()) {
+    std::string IntervalsStr = Opts.get<&clv2::IR_OptBisectIntervals>();
+    if (!IntervalsStr.empty()) {
+      if (IntervalsStr == "-1") {
+        // Run all passes — use a very large upper bound.
+        std::string AllStr =
+            "1-" + std::to_string(std::numeric_limits<int>::max());
+        auto Intervals = IntegerInclusiveIntervalUtils::parseIntervals(AllStr);
+        if (Intervals)
+          getOptBisector().setIntervals(std::move(*Intervals));
+        else
+          consumeError(Intervals.takeError());
+      } else {
+        auto Intervals =
+            IntegerInclusiveIntervalUtils::parseIntervals(IntervalsStr);
+        if (Intervals)
+          getOptBisector().setIntervals(std::move(*Intervals));
+        else
+          consumeError(Intervals.takeError());
+      }
+    }
+  }
+
+  // Handle -opt-disable=pass1,pass2,...
+  if (Opts.specified<&clv2::IR_OptDisablePasses>()) {
+    for (const auto &PassName : Opts.get<&clv2::IR_OptDisablePasses>())
+      getOptBisector().setDisabled(PassName);
+  }
+}

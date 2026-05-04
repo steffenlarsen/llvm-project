@@ -15,6 +15,7 @@
 
 #include "NVPTXSubtarget.h"
 #include "llvm/CodeGen/CodeGenTargetMachineImpl.h"
+#include "llvm/Support/StringSaver.h"
 #include <optional>
 #include <utility>
 

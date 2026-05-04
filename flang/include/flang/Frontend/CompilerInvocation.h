@@ -25,10 +25,14 @@
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticOptions.h"
 #include "llvm/Option/ArgList.h"
+#include "llvm/Support/OptionsContext.h"
 #include <memory>
 
 namespace llvm {
 class TargetMachine;
+namespace clv2 {
+class OptionsContext;
+}
 } // namespace llvm
 
 namespace Fortran::frontend {
@@ -293,7 +297,7 @@ public:
 
   /// Set \p loweringOptions controlling lowering behavior based
   /// on the \p optimizationLevel.
-  void setLoweringOptions();
+  void setLoweringOptions(const llvm::clv2::OptionsContext &optsCtx);
 };
 
 } // end namespace Fortran::frontend

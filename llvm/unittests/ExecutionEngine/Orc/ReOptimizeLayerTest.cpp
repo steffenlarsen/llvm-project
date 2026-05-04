@@ -173,7 +173,7 @@ TEST_F(ReOptimizeLayerTest, BasicReOptimization) {
       });
   EXPECT_THAT_ERROR(ROLayer->registerRuntimeFunctions(*JD), Succeeded());
 
-  auto Ctx = std::make_unique<LLVMContext>();
+  auto Ctx = std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
   auto M = std::make_unique<Module>("<main>", *Ctx);
   M->setTargetTriple(Triple(sys::getProcessTriple()));
 

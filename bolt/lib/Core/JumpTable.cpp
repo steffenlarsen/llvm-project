@@ -13,7 +13,6 @@
 #include "bolt/Core/JumpTable.h"
 #include "bolt/Core/BinaryFunction.h"
 #include "bolt/Core/BinarySection.h"
-#include "llvm/Support/CommandLine.h"
 
 #define DEBUG_TYPE "bolt"
 
@@ -23,8 +22,8 @@ using namespace bolt;
 using JumpTable = bolt::JumpTable;
 
 namespace opts {
-extern cl::opt<JumpTableSupportLevel> JumpTables;
-extern cl::opt<unsigned> Verbosity;
+extern JumpTableSupportLevel JumpTables;
+extern unsigned Verbosity;
 } // namespace opts
 
 bolt::JumpTable::JumpTable(MCSymbol &Symbol, uint64_t Address, size_t EntrySize,

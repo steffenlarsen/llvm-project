@@ -14,21 +14,25 @@
 #include "MCTargetDesc/HexagonMCShuffler.h"
 #include "MCTargetDesc/HexagonMCInstrInfo.h"
 #include "MCTargetDesc/HexagonShuffler.h"
+#include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <cassert>
 
 #define DEBUG_TYPE "hexagon-shuffle"
 
 using namespace llvm;
 
-static cl::opt<bool>
-    DisableShuffle("disable-hexagon-shuffle", cl::Hidden, cl::init(false),
-                   cl::desc("Disable Hexagon instruction shuffling"));
+static bool getDisableShuffle(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_DisableShuffle>(
+      Ctx, false);
+}
 
 void HexagonMCShuffler::init(MCInst &MCB) {
   if (HexagonMCInstrInfo::isBundle(MCB)) {
@@ -105,7 +109,7 @@ bool llvm::HexagonMCShuffle(MCContext &Context, bool ReportErrors,
                             MCInst &MCB) {
   HexagonMCShuffler MCS(Context, ReportErrors, MCII, STI, MCB);
 
-  if (DisableShuffle)
+  if (getDisableShuffle(Context.getOptionsContext()))
     // Ignore if user chose so.
     return false;
 
@@ -131,7 +135,8 @@ bool llvm::HexagonMCShuffle(MCContext &Context, MCInstrInfo const &MCII,
                             MCSubtargetInfo const &STI, MCInst &MCB,
                             SmallVector<DuplexCandidate, 8> possibleDuplexes) {
 
-  if (DisableShuffle || possibleDuplexes.size() == 0)
+  if (getDisableShuffle(Context.getOptionsContext()) ||
+      possibleDuplexes.size() == 0)
     return false;
 
   if (!HexagonMCInstrInfo::bundleSize(MCB)) {
@@ -201,7 +206,7 @@ bool llvm::HexagonMCShuffle(MCContext &Context, MCInstrInfo const &MCII,
       return false;
   }
 
-  if (DisableShuffle)
+  if (getDisableShuffle(Context.getOptionsContext()))
     return false;
 
   // mgl: temporary code (shuffler doesn't take into account the fact that

@@ -22,6 +22,8 @@
 namespace llvm {
 class Triple;
 
+LLVM_ABI void setX86AsmSyntax(unsigned Dialect);
+
 class X86MCAsmInfoDarwin : public MCAsmInfoDarwin {
   virtual void anchor();
 

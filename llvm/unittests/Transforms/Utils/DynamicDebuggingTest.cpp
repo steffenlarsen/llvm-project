@@ -46,7 +46,7 @@ TEST(DynamicDebugging, UnoptimizedModuleAttributes) {
     !7 = !{null}
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
 
   std::unique_ptr<Module> OptModule = parseAssemblyString(IR, Error, Context);
@@ -111,7 +111,7 @@ TEST(DynamicDebugging, OptimizedModuleAttributes) {
     !7 = !{null}
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
 
   std::unique_ptr<Module> M = parseAssemblyString(IR, Error, Context);
@@ -153,7 +153,7 @@ TEST(DynamicDebugging, FunctionLinkage) {
     !6 = !{null}
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
 
   std::unique_ptr<Module> M = parseAssemblyString(IR, Error, Context);
@@ -321,7 +321,7 @@ TEST(DynamicDebugging, GlobalVariableLinkage) {
     !3 = !{i32 2, !"Debug Info Version", i32 3}
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
 
   std::unique_ptr<Module> M = parseAssemblyString(IR, Error, Context);
@@ -500,7 +500,7 @@ TEST(DynamicDebugging, DiscardableGlobal) {
     !3 = !{i32 2, !"Debug Info Version", i32 3}
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
   std::unique_ptr<Module> M = parseAssemblyString(IR, Error, Context);
   ASSERT_TRUE(M != nullptr) << Error.getMessage();
@@ -547,7 +547,7 @@ TEST(DynamicDebugging, UnnamedGlobal) {
     !3 = !{i32 2, !"Debug Info Version", i32 3}
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
   std::unique_ptr<Module> M = parseAssemblyString(IR, Error, Context);
   ASSERT_TRUE(M != nullptr) << Error.getMessage();

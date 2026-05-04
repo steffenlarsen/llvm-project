@@ -178,6 +178,14 @@ public:
       Counter->reset();
   }
 
+  void setPrintCounter(bool V) {
+    ShouldPrintCounter = V;
+    if (V)
+      activateAllCounters();
+  }
+  void setPrintCounterQueries(bool V) { ShouldPrintCounterQueries = V; }
+  void setBreakOnLast(bool V) { BreakOnLast = V; }
+
 protected:
   void addCounter(CounterInfo *Info) { Counters[Info->Name] = Info; }
   LLVM_ABI bool handleCounterIncrement(CounterInfo &Info);

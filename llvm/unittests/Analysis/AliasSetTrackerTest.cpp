@@ -13,6 +13,7 @@
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/Triple.h"
 #include "gtest/gtest.h"
@@ -52,7 +53,7 @@ TEST(AliasSetTracker, AliasUnknownInst) {
   )";
 
   // Parse the IR. The two calls in @test can not access aliasing elements.
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
   auto M = parseAssemblyString(Assembly, Error, Context);
   ASSERT_TRUE(M) << "Bad assembly?";
@@ -62,14 +63,14 @@ TEST(AliasSetTracker, AliasUnknownInst) {
   TargetLibraryInfoImpl TLII(Trip);
   TargetLibraryInfo TLI(TLII);
   AAResults AA(TLI);
-  TypeBasedAAResult TBAAR(false);
+  TypeBasedAAResult TBAAR(false, Context.getOptionsContext());
   AA.addAAResult(TBAAR);
 
   // Initialize the alias set tracker for the @test function.
   Function *Test = M->getFunction("test");
   ASSERT_NE(Test, nullptr);
   BatchAAResults BAA(AA);
-  AliasSetTracker AST(BAA);
+  AliasSetTracker AST(BAA, /*Ctx=*/llvm::clv2::defaultOptionsContext());
   for (auto &BB : *Test)
     AST.add(BB);
   // There should be 2 disjoint alias sets. 1 from each call.

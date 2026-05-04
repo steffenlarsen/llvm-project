@@ -17,6 +17,7 @@
 #include "DataSharingProcessor.h"
 #include "Decomposer.h"
 #include "Utils.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Common/idioms.h"
 #include "flang/Common/reference-wrapper.h"
 #include "flang/Evaluate/expression.h"
@@ -50,7 +51,6 @@
 #include "flang/Semantics/openmp-dsa.h"
 #include "flang/Semantics/openmp-utils.h"
 #include "flang/Semantics/tools.h"
-#include "flang/Support/Flags.h"
 #include "flang/Support/OpenMP-utils.h"
 #include "flang/Utils/OpenMP.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -68,11 +68,18 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Frontend/OpenMP/OMP.h"
+#include "llvm/Support/OptionsContext.h"
 #include <atomic>
 
 using namespace Fortran::lower::omp;
 using namespace Fortran::common::openmp;
 using namespace Fortran::utils::openmp;
+
+static bool useDelayedPrivatization(lower::AbstractConverter &converter) {
+  return llvm::clv2::getOptValOrDefault<
+      &llvm::clv2::FLANG_EnableDelayedPrivatization>(
+      converter.getMLIRContext().getOptionsContext());
+}
 
 // Forward declarations
 static fir::RecordType buildConditionalLpType(
@@ -2022,7 +2029,8 @@ static void createBodyOfOp(mlir::Operation &op, const OpWithBodyGenInfo &info,
 
   // If it is an unstructured region, create empty blocks for all evaluations.
   if (lower::omp::isLastItemInQueue(item, queue) &&
-      info.eval.lowerAsUnstructured()) {
+      info.eval.lowerAsUnstructured(
+          info.converter.getMLIRContext().getOptionsContext())) {
     lower::createEmptyRegionBlocks<mlir::omp::TerminatorOp, mlir::omp::YieldOp>(
         firOpBuilder, info.eval.getNestedEvaluations());
   }
@@ -2188,7 +2196,8 @@ static void genBodyOfTargetDataOp(
 
   // Create blocks for unstructured regions. This has to be done since
   // blocks are initially allocated with the function as the parent region.
-  if (eval.lowerAsUnstructured()) {
+  if (eval.lowerAsUnstructured(
+          converter.getMLIRContext().getOptionsContext())) {
     lower::createEmptyRegionBlocks<mlir::omp::TerminatorOp, mlir::omp::YieldOp>(
         firOpBuilder, eval.getNestedEvaluations());
   }
@@ -2284,7 +2293,8 @@ static void genBodyOfTargetOp(
   // Create blocks for unstructured regions. This has to be done since
   // blocks are initially allocated with the function as the parent region.
   if (lower::omp::isLastItemInQueue(item, queue) &&
-      eval.lowerAsUnstructured()) {
+      eval.lowerAsUnstructured(
+          converter.getMLIRContext().getOptionsContext())) {
     lower::createEmptyRegionBlocks<mlir::omp::TerminatorOp, mlir::omp::YieldOp>(
         firOpBuilder, eval.getNestedEvaluations());
   }
@@ -2670,7 +2680,7 @@ genTargetClauses(lower::AbstractConverter &converter,
       loc, llvm::omp::Directive::OMPD_target);
 
   // `target private(..)` is only supported in delayed privatization mode.
-  if (!enableDelayedPrivatization)
+  if (!useDelayedPrivatization(converter))
     cp.processTODO<clause::Firstprivate, clause::Private>(
         loc, llvm::omp::Directive::OMPD_target);
 }
@@ -3506,7 +3516,7 @@ genParallelOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
               mlir::omp::ParallelOperands &clauseOps,
               const ObjectEntryBlockArgs &args, DataSharingProcessor *dsp,
               bool isComposite = false) {
-  assert((!enableDelayedPrivatization || dsp) &&
+  assert((!useDelayedPrivatization(converter) || dsp) &&
          "expected valid DataSharingProcessor");
 
   if (!clauseOps.allocateVars.empty()) {
@@ -3923,7 +3933,7 @@ genScopeOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
                   reductionObjects);
 
   std::optional<DataSharingProcessor> dsp;
-  if (enableDelayedPrivatization) {
+  if (useDelayedPrivatization(converter)) {
     dsp.emplace(converter, semaCtx, item->clauses, eval,
                 lower::omp::isLastItemInQueue(item, queue),
                 /*useDelayedPrivatization=*/true, symTable);
@@ -3942,8 +3952,8 @@ genScopeOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
                         llvm::omp::Directive::OMPD_scope)
           .setClauses(&item->clauses)
           .setEntryBlockArgs(&args)
-          .setDataSharingProcessor(enableDelayedPrivatization ? &dsp.value()
-                                                              : nullptr),
+          .setDataSharingProcessor(
+              useDelayedPrivatization(converter) ? &dsp.value() : nullptr),
       queue, item, clauseOps);
 }
 
@@ -4622,7 +4632,7 @@ genTaskOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
   genTaskClauses(converter, semaCtx, symTable, stmtCtx, item->clauses, loc,
                  clauseOps, inReductionObjects);
 
-  if (!enableDelayedPrivatization)
+  if (!useDelayedPrivatization(converter))
     return genOpWithBody<mlir::omp::TaskOp>(
         OpWithBodyGenInfo(converter, symTable, semaCtx, loc, eval,
                           llvm::omp::Directive::OMPD_task)
@@ -4765,7 +4775,7 @@ static mlir::omp::DistributeOp genStandaloneDistribute(
 
   DataSharingProcessor dsp(converter, semaCtx, item->clauses, eval,
                            /*shouldCollectPreDeterminedSymbols=*/true,
-                           enableDelayedPrivatization, symTable);
+                           useDelayedPrivatization(converter), symTable);
   // Dynamic private arrays cannot safely be allocated in GPU scratch when the
   // descriptor is captured through the distribute callback.
   dsp.setForceHeapAllocationForPrivateDynamicArrays();
@@ -4995,7 +5005,7 @@ static mlir::omp::WsloopOp genStandaloneDo(
 
   DataSharingProcessor dsp(converter, semaCtx, item->clauses, eval,
                            /*shouldCollectPreDeterminedSymbols=*/true,
-                           enableDelayedPrivatization, symTable,
+                           useDelayedPrivatization(converter), symTable,
                            /*isTargetPrivatization=*/false,
                            metadirectiveLoopIVs);
   // Worksharing loops use the private-copy lowering for conditional lastprivate
@@ -5188,7 +5198,7 @@ static mlir::omp::ParallelOp genStandaloneParallel(
                      parallelClauseOps, parallelReductionObjects);
 
   std::optional<DataSharingProcessor> dsp;
-  if (enableDelayedPrivatization) {
+  if (useDelayedPrivatization(converter)) {
     dsp.emplace(converter, semaCtx, item->clauses, eval,
                 lower::omp::isLastItemInQueue(item, queue),
                 /*useDelayedPrivatization=*/true, symTable);
@@ -5203,7 +5213,8 @@ static mlir::omp::ParallelOp genStandaloneParallel(
   parallelArgs.reduction.vars = parallelClauseOps.reductionVars;
   return genParallelOp(converter, symTable, semaCtx, eval, loc, queue, item,
                        parallelClauseOps, parallelArgs,
-                       enableDelayedPrivatization ? &dsp.value() : nullptr);
+                       useDelayedPrivatization(converter) ? &dsp.value()
+                                                          : nullptr);
 }
 
 static mlir::omp::SimdOp genStandaloneSimd(
@@ -5219,7 +5230,7 @@ static mlir::omp::SimdOp genStandaloneSimd(
 
   DataSharingProcessor dsp(converter, semaCtx, item->clauses, eval,
                            /*shouldCollectPreDeterminedSymbols=*/true,
-                           enableDelayedPrivatization, symTable,
+                           useDelayedPrivatization(converter), symTable,
                            /*isTargetPrivatization=*/false,
                            metadirectiveLoopIVs);
   dsp.processStep1(&simdClauseOps);
@@ -5259,7 +5270,7 @@ static mlir::omp::TaskloopContextOp genStandaloneTaskloop(
                      taskloopClauseOps, reductionObjects, inReductionObjects);
   DataSharingProcessor dsp(converter, semaCtx, item->clauses, eval,
                            /*shouldCollectPreDeterminedSymbols=*/true,
-                           enableDelayedPrivatization, symTable);
+                           useDelayedPrivatization(converter), symTable);
   dsp.processStep1(&taskloopClauseOps);
 
   if (hasPrivatizedArrayElementReduction(inReductionObjects,
@@ -7692,7 +7703,7 @@ static void genMetadirective(lower::AbstractConverter &converter,
       // Eager privatization requires a construct-scoped IV symbol with a host
       // association, which name resolution cannot create for a
       // metadirective-selected loop.
-      if (!enableDelayedPrivatization)
+      if (!useDelayedPrivatization(converter))
         TODO(variantLoc,
              "loop-associated METADIRECTIVE with eager privatization");
       lower::pft::Evaluation *loopEval = spliceAssociatedDoEval(eval);
@@ -7705,7 +7716,8 @@ static void genMetadirective(lower::AbstractConverter &converter,
       // Unstructured loops own PFT blocks that cannot be reused by begin/end
       // metadirectives or alternate ENTRY lowering without independent block
       // mappings. Keep Part 2 conservative for all such loops.
-      if (loopEval->lowerAsUnstructured())
+      if (loopEval->lowerAsUnstructured(
+              converter.getMLIRContext().getOptionsContext()))
         TODO(variantLoc, "unstructured associated DO in loop-associated "
                          "METADIRECTIVE variant");
       if (hasNestedOpenMPConstruct(*loopEval))
@@ -7811,7 +7823,9 @@ static void genMetadirective(lower::AbstractConverter &converter,
     // Unstructured evaluations own PFT blocks that lowering reparents into the
     // generated region. They cannot be reused for both sides of a runtime
     // selection until each arm can receive an independent block mapping.
-    if (associatedLoopEval && associatedLoopEval->lowerAsUnstructured())
+    if (associatedLoopEval &&
+        associatedLoopEval->lowerAsUnstructured(
+            converter.getMLIRContext().getOptionsContext()))
       TODO(converter.genLocation(candidate.dynamicCondition->source),
            "unstructured associated DO in loop-associated METADIRECTIVE "
            "variant");

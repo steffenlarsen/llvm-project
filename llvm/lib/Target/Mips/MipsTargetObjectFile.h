@@ -36,7 +36,8 @@ class MipsTargetMachine;
 
     /// Return true if this constant should be placed into small data section.
     bool IsConstantInSmallSection(const DataLayout &DL, const Constant *CN,
-                                  const TargetMachine &TM) const;
+                                  const TargetMachine &TM,
+                                  const Function *F = nullptr) const;
 
     MCSection *getSectionForConstant(const DataLayout &DL, SectionKind Kind,
                                      const Constant *C, Align &Alignment,

@@ -21,10 +21,16 @@
 
 #include "lld/Common/ErrorHandler.h"
 #include "lld/Common/Memory.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/StringSaver.h"
+
+#include <memory>
 
 namespace llvm {
 class raw_ostream;
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
 } // namespace llvm
 
 namespace lld {
@@ -42,6 +48,12 @@ public:
   llvm::DenseMap<void *, SpecificAllocBase *> instances;
 
   ErrorHandler e;
+
+  /// The parsed -mllvm options for this link.  Never null: an empty context is
+  /// installed at construction and replaced if parsing succeeds, so every
+  /// consumer can dereference it unconditionally.
+  std::unique_ptr<llvm::clv2::OptionsContext> llvmOptsCtx =
+      std::make_unique<llvm::clv2::OptionsContext>();
 };
 
 // Retrieve the global state. Currently only one state can exist per process,

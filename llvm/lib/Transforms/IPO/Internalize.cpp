@@ -23,14 +23,15 @@
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GlobPattern.h"
 #include "llvm/Support/LineIterator.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "internalize"
@@ -39,35 +40,48 @@ STATISTIC(NumAliases, "Number of aliases internalized");
 STATISTIC(NumFunctions, "Number of functions internalized");
 STATISTIC(NumGlobals, "Number of global vars internalized");
 
-// APIFile - A file which contains a list of symbol glob patterns that should
-// not be marked external.
-static cl::opt<std::string>
-    APIFile("internalize-public-api-file", cl::value_desc("filename"),
-            cl::desc("A file containing list of symbol names to preserve"));
+static const std::string &getAPIFile(const Module &M) {
+  if (auto *O =
+          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
+    if (O->specified<&clv2::IPO_APIFile>())
+      return O->get<&clv2::IPO_APIFile>();
+  static const std::string Default;
+  return Default;
+}
 
-// APIList - A list of symbol glob patterns that should not be marked internal.
-static cl::list<std::string>
-    APIList("internalize-public-api-list", cl::value_desc("list"),
-            cl::desc("A list of symbol names to preserve"), cl::CommaSeparated);
+static const std::vector<std::string> &getAPIList(const Module &M) {
+  if (auto *O =
+          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
+    if (O->specified<&clv2::IPO_APIList>())
+      return O->get<&clv2::IPO_APIList>();
+  static const std::vector<std::string> Default;
+  return Default;
+}
 
 namespace {
 // Helper to load an API list to preserve from file and expose it as a functor
 // for internalization.
 class PreserveAPIList {
 public:
-  PreserveAPIList() {
-    if (!APIFile.empty())
-      LoadFile(APIFile);
-    for (StringRef Pattern : APIList)
+  PreserveAPIList() = default;
+
+  void init(const Module &M) {
+    if (!getAPIFile(M).empty())
+      LoadFile(getAPIFile(M));
+    for (StringRef Pattern : getAPIList(M))
       addGlob(Pattern);
+    Initialized = true;
   }
 
   bool operator()(const GlobalValue &GV) {
+    if (!Initialized)
+      init(*GV.getParent());
     return llvm::any_of(
         ExternalNames, [&](GlobPattern &GP) { return GP.match(GV.getName()); });
   }
 
 private:
+  bool Initialized = false;
   // Contains the set of symbols loaded from file
   SmallVector<GlobPattern> ExternalNames;
 

@@ -620,7 +620,8 @@ private:
 /// Determine the branch weights for the resulting conditional branch, resulting
 /// after merging \p Comparisons.
 static std::optional<SmallVector<uint32_t, 2>>
-computeMergedBranchWeights(ArrayRef<BCECmpBlock> Comparisons) {
+computeMergedBranchWeights(const LLVMContext &Ctx,
+                           ArrayRef<BCECmpBlock> Comparisons) {
   assert(!Comparisons.empty());
   if (Comparisons.size() == 1) {
     SmallVector<uint32_t, 2> Weights;
@@ -640,7 +641,7 @@ computeMergedBranchWeights(ArrayRef<BCECmpBlock> Comparisons) {
       return std::nullopt;
 
     std::swap(W[0], W[1]);
-    Weights = getDisjunctionWeights(Weights, W);
+    Weights = getDisjunctionWeights(Ctx, Weights, W);
   }
   std::swap(Weights[0], Weights[1]);
   return fitWeights(Weights);
@@ -743,7 +744,7 @@ static BasicBlock *mergeComparisons(ArrayRef<BCECmpBlock> Comparisons,
   } else {
     // Continue to next block if equal, exit to phi else.
     auto *BI = Builder.CreateCondBr(IsEqual, NextCmpBlock, PhiBB);
-    if (auto BranchWeights = computeMergedBranchWeights(Comparisons))
+    if (auto BranchWeights = computeMergedBranchWeights(Context, Comparisons))
       setBranchWeights(*BI, BranchWeights.value(), /*IsExpected=*/false);
     Phi.addIncoming(ConstantInt::getFalse(Context), BB);
     DTU.applyUpdates({{DominatorTree::Insert, BB, NextCmpBlock},

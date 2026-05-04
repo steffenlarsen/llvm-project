@@ -23,15 +23,19 @@
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "x86-indirect-branch-tracking"
 
-cl::opt<bool> IndirectBranchTracking(
-    "x86-indirect-branch-tracking", cl::init(false), cl::Hidden,
-    cl::desc("Enable X86 indirect branch tracking pass."));
+static bool getIndirectBranchTracking(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_IndirectBranchTracking>(
+      F.getContext().getOptionsContext());
+}
 
 STATISTIC(NumEndBranchAdded, "Number of ENDBR instructions added");
 
@@ -125,7 +129,8 @@ static bool runIndirectBranchTracking(MachineFunction &MF) {
 #else
   bool isJITwithCET = false;
 #endif
-  if (!isCFProtectionSupported && !IndirectBranchTracking && !isJITwithCET)
+  if (!isCFProtectionSupported &&
+      !getIndirectBranchTracking(MF.getFunction()) && !isJITwithCET)
     return false;
 
   // True if the current MF was changed and false otherwise.

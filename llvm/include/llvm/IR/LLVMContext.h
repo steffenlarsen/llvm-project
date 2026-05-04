@@ -18,6 +18,7 @@
 #include "llvm/IR/DiagnosticHandler.h"
 #include "llvm/Support/CBindingWrapping.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -41,6 +42,11 @@ class LLVMRemarkStreamer;
 namespace remarks {
 class RemarkStreamer;
 }
+
+namespace clv2 {
+class ParsedOptionsBase;
+class OptionsContext;
+} // namespace clv2
 
 namespace SyncScope {
 
@@ -66,9 +72,16 @@ enum {
 /// LLVMContext itself provides no locking guarantees, so you should be careful
 /// to have one context per thread.
 class LLVMContext {
+  /// The session's parsed options.  Set by the constructor (which clamps to
+  /// clv2::defaultOptionsContext()) and by setOptionsContext; never null.
+  const clv2::OptionsContext *OptsCtx = nullptr;
+
 public:
   LLVMContextImpl *const pImpl;
-  LLVM_ABI LLVMContext();
+  /// \p OptsCtx is the session's parsed options.  A caller with none to give
+  /// must say so explicitly with clv2::defaultOptionsContext(); there is no
+  /// null spelling, so an unthreaded context is greppable rather than silent.
+  LLVM_ABI explicit LLVMContext(const clv2::OptionsContext &OptsCtx);
   LLVMContext(const LLVMContext &) = delete;
   LLVMContext &operator=(const LLVMContext &) = delete;
   LLVM_ABI ~LLVMContext();
@@ -175,9 +188,9 @@ public:
 
   /// setDiagnosticHandlerCallBack - This method sets a handler call back
   /// that is invoked when the backend needs to report anything to the user.
-  /// The first argument is a function pointer and the second is a context pointer
-  /// that gets passed into the DiagHandler.  The third argument should be set to
-  /// true if the handler only expects enabled diagnostics.
+  /// The first argument is a function pointer and the second is a context
+  /// pointer that gets passed into the DiagHandler.  The third argument should
+  /// be set to true if the handler only expects enabled diagnostics.
   ///
   /// LLVMContext doesn't take ownership or interpret either of these
   /// pointers.
@@ -195,8 +208,8 @@ public:
   LLVM_ABI void setDiagnosticHandler(std::unique_ptr<DiagnosticHandler> &&DH,
                                      bool RespectFilters = false);
 
-  /// getDiagnosticHandlerCallBack - Return the diagnostic handler call back set by
-  /// setDiagnosticHandlerCallBack.
+  /// getDiagnosticHandlerCallBack - Return the diagnostic handler call back set
+  /// by setDiagnosticHandlerCallBack.
   LLVM_ABI DiagnosticHandler::DiagnosticHandlerTy
   getDiagnosticHandlerCallBack() const;
 
@@ -353,13 +366,75 @@ public:
   /// the global tracker.
   LLVM_ABI uint64_t incNextDILocationAtomGroup();
 
+  //===--------------------------------------------------------------------===//
+  // CommandLine v2 — parsed option storage
+  //
+  // Attach an owned ParsedOptions to this context so subsystems can retrieve
+  // per-job option values rather than reading process-wide state.
+  //
+  //   // In main() / per-job setup:
+  //   auto Opts = MyRegistry.parse(argc, argv);
+  //   Ctx.setParsedOptions(
+  //       std::make_shared<decltype(Opts)>(std::move(Opts)));
+  //
+  //   // In a subsystem that reads options:
+  //   if (auto *P = Ctx.getOptions<MyRegistry>())
+  //       int V = P->get<&MyOpt>();
+  //   else
+  //       int V = MyGlobalCLOpt;   // legacy fallback
+  //===--------------------------------------------------------------------===//
+
+  /// Attach parsed options to this context.  Replaces any previously attached
+  /// options.  Pass nullptr to detach.
+  LLVM_ABI void setParsedOptions(std::shared_ptr<clv2::ParsedOptionsBase> Opts);
+
+  /// Return the attached parsed options, or nullptr if none have been set.
+  LLVM_ABI clv2::ParsedOptionsBase *getParsedOptions() const;
+
+  /// Return the attached parsed options cast to the ParsedOptions type of
+  /// \p Reg, or nullptr if no options are attached or they were produced by a
+  /// different registry.
+  ///
+  /// Callers must include CommandLineV2.h so that ParsedOptions<...> is a
+  /// complete type for dynamic_cast.
+  ///
+  ///   if (auto *P = Ctx.getOptions(MyRegistry))
+  ///       doSomething(P->get<&MyOpt>());
+  template <typename RegistryT>
+  typename RegistryT::ParsedOptionsT *getOptions(const RegistryT &) const {
+    using POT = typename RegistryT::ParsedOptionsT;
+    return static_cast<POT *>(getOptionsImpl(POT::staticTypeKey()));
+  }
+
+  /// Attach a per-session OptionsContext.  The context is NOT owned by
+  /// LLVMContext — the caller must ensure it outlives this context.
+  /// This is the primary mechanism for per-session option state.
+  LLVM_ABI void setOptionsContext(const clv2::OptionsContext &Ctx);
+
+  /// Return the attached OptionsContext.
+  ///
+  /// Never null.  A context built with clv2::defaultOptionsContext() uses the
+  /// shared clv2::defaultOptionsContext(), so readers never have to test.  To
+  /// detach a context that is about to die, re-attach
+  /// clv2::defaultOptionsContext() rather than clearing it.
+  ///
+  /// Inline, and the pointer lives here rather than in LLVMContextImpl, because
+  /// every option read goes through this.  Inline so the compiler can CSE
+  /// repeated reads and hoist them out of loops.
+  const clv2::OptionsContext &getOptionsContext() const { return *OptsCtx; }
+
 private:
   // Module needs access to the add/removeModule methods.
   friend class Module;
 
+  /// Type-key-based options lookup.  Returns the attached options if their
+  /// typeKey() equals \p Key, nullptr otherwise.  Implemented in
+  /// LLVMContext.cpp where ParsedOptionsBase is complete.
+  LLVM_ABI clv2::ParsedOptionsBase *getOptionsImpl(const void *Key) const;
+
   /// addModule - Register a module as being instantiated in this context.  If
   /// the context is deleted, the module will be deleted as well.
-  void addModule(Module*);
+  void addModule(Module *);
 
   /// removeModule - Unregister a module from this context.
   void removeModule(Module *);
@@ -370,12 +445,12 @@ DEFINE_SIMPLE_CONVERSION_FUNCTIONS(LLVMContext, LLVMContextRef)
 
 /* Specialized opaque context conversions.
  */
-inline LLVMContext **unwrap(LLVMContextRef* Tys) {
-  return reinterpret_cast<LLVMContext**>(Tys);
+inline LLVMContext **unwrap(LLVMContextRef *Tys) {
+  return reinterpret_cast<LLVMContext **>(Tys);
 }
 
 inline LLVMContextRef *wrap(const LLVMContext **Tys) {
-  return reinterpret_cast<LLVMContextRef*>(const_cast<LLVMContext**>(Tys));
+  return reinterpret_cast<LLVMContextRef *>(const_cast<LLVMContext **>(Tys));
 }
 
 /// Get the deprecated global context for use by the C API.

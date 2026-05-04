@@ -19,6 +19,8 @@
 
 namespace llvm::xray {
 
+enum class ConvertFormats { BINARY, YAML, CHROME_TRACE_EVENT };
+
 class TraceConverter {
   FuncIdConversionHelper &FuncIdHelper;
   bool Symbolize;

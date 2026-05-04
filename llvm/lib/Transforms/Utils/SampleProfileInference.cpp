@@ -16,8 +16,9 @@
 #include "llvm/Transforms/Utils/SampleProfileInference.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseSet.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 #include <queue>
 #include <set>
 #include <stack>
@@ -27,42 +28,56 @@ using namespace llvm;
 
 namespace {
 
-static cl::opt<bool> SampleProfileEvenFlowDistribution(
-    "sample-profile-even-flow-distribution", cl::init(true), cl::Hidden,
-    cl::desc("Try to evenly distribute flow when there are multiple equally "
-             "likely options."));
+static bool
+getSampleProfileEvenFlowDistribution(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::TU_SampleProfileEvenFlowDistribution>(
+      Ctx);
+}
 
-static cl::opt<bool> SampleProfileRebalanceUnknown(
-    "sample-profile-rebalance-unknown", cl::init(true), cl::Hidden,
-    cl::desc("Evenly re-distribute flow among unknown subgraphs."));
+static bool getSampleProfileRebalanceUnknown(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::TU_SampleProfileRebalanceUnknown>(Ctx);
+}
 
-static cl::opt<bool> SampleProfileJoinIslands(
-    "sample-profile-join-islands", cl::init(true), cl::Hidden,
-    cl::desc("Join isolated components having positive flow."));
+static bool getSampleProfileJoinIslands(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::TU_SampleProfileJoinIslands>(Ctx);
+}
 
-static cl::opt<unsigned> SampleProfileProfiCostBlockInc(
-    "sample-profile-profi-cost-block-inc", cl::init(10), cl::Hidden,
-    cl::desc("The cost of increasing a block's count by one."));
+static unsigned
+getSampleProfileProfiCostBlockInc(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::TU_SampleProfileProfiCostBlockInc>(
+      Ctx);
+}
 
-static cl::opt<unsigned> SampleProfileProfiCostBlockDec(
-    "sample-profile-profi-cost-block-dec", cl::init(20), cl::Hidden,
-    cl::desc("The cost of decreasing a block's count by one."));
+static unsigned
+getSampleProfileProfiCostBlockDec(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::TU_SampleProfileProfiCostBlockDec>(
+      Ctx);
+}
 
-static cl::opt<unsigned> SampleProfileProfiCostBlockEntryInc(
-    "sample-profile-profi-cost-block-entry-inc", cl::init(40), cl::Hidden,
-    cl::desc("The cost of increasing the entry block's count by one."));
+static unsigned
+getSampleProfileProfiCostBlockEntryInc(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::TU_SampleProfileProfiCostBlockEntryInc>(Ctx);
+}
 
-static cl::opt<unsigned> SampleProfileProfiCostBlockEntryDec(
-    "sample-profile-profi-cost-block-entry-dec", cl::init(10), cl::Hidden,
-    cl::desc("The cost of decreasing the entry block's count by one."));
+static unsigned
+getSampleProfileProfiCostBlockEntryDec(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::TU_SampleProfileProfiCostBlockEntryDec>(Ctx);
+}
 
-static cl::opt<unsigned> SampleProfileProfiCostBlockZeroInc(
-    "sample-profile-profi-cost-block-zero-inc", cl::init(11), cl::Hidden,
-    cl::desc("The cost of increasing a count of zero-weight block by one."));
+static unsigned
+getSampleProfileProfiCostBlockZeroInc(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::TU_SampleProfileProfiCostBlockZeroInc>(
+      Ctx);
+}
 
-static cl::opt<unsigned> SampleProfileProfiCostBlockUnknownInc(
-    "sample-profile-profi-cost-block-unknown-inc", cl::init(0), cl::Hidden,
-    cl::desc("The cost of increasing an unknown block's count by one."));
+static unsigned
+getSampleProfileProfiCostBlockUnknownInc(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<
+      &clv2::TransformUtilsOptsReg,
+      &clv2::TU_SampleProfileProfiCostBlockUnknownInc>(Ctx, 0u);
+}
 
 /// A value indicating an infinite flow/capacity/weight of a block/edge.
 /// Not using numeric_limits<int64_t>::max(), as the values can be summed up
@@ -1360,18 +1375,18 @@ void llvm::applyFlowInference(const ProfiParams &Params, FlowFunction &Func) {
 }
 
 /// Apply the profile inference algorithm for a given flow function
-void llvm::applyFlowInference(FlowFunction &Func) {
+void llvm::applyFlowInference(FlowFunction &Func,
+                              const clv2::OptionsContext &Ctx) {
   ProfiParams Params;
-  // Set the params from the command-line flags.
-  Params.EvenFlowDistribution = SampleProfileEvenFlowDistribution;
-  Params.RebalanceUnknown = SampleProfileRebalanceUnknown;
-  Params.JoinIslands = SampleProfileJoinIslands;
-  Params.CostBlockInc = SampleProfileProfiCostBlockInc;
-  Params.CostBlockDec = SampleProfileProfiCostBlockDec;
-  Params.CostBlockEntryInc = SampleProfileProfiCostBlockEntryInc;
-  Params.CostBlockEntryDec = SampleProfileProfiCostBlockEntryDec;
-  Params.CostBlockZeroInc = SampleProfileProfiCostBlockZeroInc;
-  Params.CostBlockUnknownInc = SampleProfileProfiCostBlockUnknownInc;
+  Params.EvenFlowDistribution = getSampleProfileEvenFlowDistribution(Ctx);
+  Params.RebalanceUnknown = getSampleProfileRebalanceUnknown(Ctx);
+  Params.JoinIslands = getSampleProfileJoinIslands(Ctx);
+  Params.CostBlockInc = getSampleProfileProfiCostBlockInc(Ctx);
+  Params.CostBlockDec = getSampleProfileProfiCostBlockDec(Ctx);
+  Params.CostBlockEntryInc = getSampleProfileProfiCostBlockEntryInc(Ctx);
+  Params.CostBlockEntryDec = getSampleProfileProfiCostBlockEntryDec(Ctx);
+  Params.CostBlockZeroInc = getSampleProfileProfiCostBlockZeroInc(Ctx);
+  Params.CostBlockUnknownInc = getSampleProfileProfiCostBlockUnknownInc(Ctx);
 
   applyFlowInference(Params, Func);
 }

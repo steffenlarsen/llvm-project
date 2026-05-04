@@ -19,21 +19,22 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Passes/PatchEntries.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "bolt/Utils/NameResolver.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 
 namespace opts {
 extern llvm::cl::OptionCategory BoltCategory;
-extern llvm::cl::opt<unsigned> Verbosity;
 } // namespace opts
 
 namespace llvm {
 namespace bolt {
 
 Error PatchEntries::runOnFunctions(BinaryContext &BC) {
-  if (!opts::ForcePatch) {
+  bool ForcePatch = bolt::bolt_utils_opts::getForcePatch(BC);
+  if (!ForcePatch) {
     // Mark the binary for patching if we did not create external references
     // for original code in any of functions we are not going to emit.
     auto needsPatching = [&](const BinaryFunction &BF) {
@@ -53,7 +54,7 @@ Error PatchEntries::runOnFunctions(BinaryContext &BC) {
       return Error::success();
   }
 
-  if (opts::Verbosity >= 1)
+  if (opts::getVerbosity(BC) >= 1)
     BC.outs() << "BOLT-INFO: patching entries in original code\n";
 
   // Calculate the size of the patch.
@@ -78,8 +79,8 @@ Error PatchEntries::runOnFunctions(BinaryContext &BC) {
       continue;
 
     // Check if we can skip patching the function.
-    if (!opts::ForcePatch && !Function.hasEHRanges() &&
-        !Function.needsPatch() && Function.getSize() < PatchThreshold)
+    if (!ForcePatch && !Function.hasEHRanges() && !Function.needsPatch() &&
+        Function.getSize() < PatchThreshold)
       continue;
 
     // List of patches for function entries. We either successfully patch
@@ -91,7 +92,7 @@ Error PatchEntries::runOnFunctions(BinaryContext &BC) {
     bool Success = Function.forEachEntryPoint([&](uint64_t Offset,
                                                   const MCSymbol *Symbol) {
       if (Offset < NextValidByte) {
-        if (opts::Verbosity >= 1)
+        if (opts::getVerbosity(BC) >= 1)
           BC.outs() << "BOLT-INFO: unable to patch entry point in " << Function
                     << " at offset 0x" << Twine::utohexstr(Offset) << '\n';
         return false;
@@ -99,7 +100,7 @@ Error PatchEntries::runOnFunctions(BinaryContext &BC) {
 
       NextValidByte = Offset + PatchSize;
       if (NextValidByte > Function.getMaxSize()) {
-        if (opts::Verbosity >= 1)
+        if (opts::getVerbosity(BC) >= 1)
           BC.outs() << "BOLT-INFO: function " << Function
                     << " too small to patch its entry point\n";
         return false;

@@ -17,6 +17,7 @@
 #include "llvm/ADT/UniqueVector.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/BinaryFormat/Dwarf.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugInfo.h"
@@ -29,8 +30,10 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/PrintPasses.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include <assert.h>
@@ -48,23 +51,24 @@ STATISTIC(NumDefsRemoved, "Number of dbg locs removed");
 STATISTIC(NumWedgesScanned, "Number of dbg wedges scanned");
 STATISTIC(NumWedgesChanged, "Number of dbg wedges changed");
 
-static cl::opt<unsigned>
-    MaxNumBlocks("debug-ata-max-blocks", cl::init(10000),
-                 cl::desc("Maximum num basic blocks before debug info dropped"),
-                 cl::Hidden);
-/// Option for debugging the pass, determines if the memory location fragment
-/// filling happens after generating the variable locations.
-static cl::opt<bool> EnableMemLocFragFill("mem-loc-frag-fill", cl::init(true),
-                                          cl::Hidden);
-/// Print the results of the analysis. Respects -filter-print-funcs.
-static cl::opt<bool> PrintResults("print-debug-ata", cl::init(false),
-                                  cl::Hidden);
+static unsigned getDebugAtaMaxBlocks(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DebugAtaMaxBlocks>(Ctx);
+}
 
-/// Coalesce adjacent dbg locs describing memory locations that have contiguous
-/// fragments. This reduces the cost of LiveDebugValues which does SSA
-/// construction for each explicitly stated variable fragment.
-static cl::opt<cl::boolOrDefault>
-    CoalesceAdjacentFragmentsOpt("debug-ata-coalesce-frags", cl::Hidden);
+static bool getMemLocFragFill(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_MemLocFragFill>(Ctx);
+}
+
+static bool getPrintDebugAta(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_PrintDebugAta>(Ctx);
+}
+
+static cl::boolOrDefault
+getDebugAtaCoalesceFrags(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::CGPassCore1Reg,
+                           &clv2::CGPASS_DebugAtaCoalesceFrags>(
+      Ctx, cl::boolOrDefault());
+}
 
 // Implicit conversions are disabled for enum class types, so unfortunately we
 // need to create a DenseMapInfo wrapper around the specified underlying type.
@@ -328,9 +332,10 @@ static bool shouldCoalesceFragments(Function &F) {
   // incorrect locations. Since instruction-referencing mode effectively
   // bypasses LiveDebugVariables we only enable coalescing if the cl::opt flag
   // has not been explicitly set and instruction-referencing is turned on.
-  switch (CoalesceAdjacentFragmentsOpt) {
+  switch (getDebugAtaCoalesceFrags(F.getContext().getOptionsContext())) {
   case cl::boolOrDefault::BOU_UNSET:
-    return debuginfoShouldUseDebugInstrRef(F.getParent()->getTargetTriple());
+    return debuginfoShouldUseDebugInstrRef(F.getParent()->getTargetTriple(),
+                                           F.getContext().getOptionsContext());
   case cl::boolOrDefault::BOU_TRUE:
     return true;
   case cl::boolOrDefault::BOU_FALSE:
@@ -858,7 +863,7 @@ public:
   ///     var x bits 32 to 61: value in memory ; <-- new loc def
   ///
   void run(FunctionVarLocsBuilder *FnVarLocs) {
-    if (!EnableMemLocFragFill)
+    if (!getMemLocFragFill(Fn.getContext().getOptionsContext()))
       return;
 
     this->FnVarLocs = FnVarLocs;
@@ -2364,7 +2369,7 @@ static AssignmentTrackingLowering::OverlapMap buildOverlapMapAndRecordDeclares(
 }
 
 bool AssignmentTrackingLowering::run(FunctionVarLocsBuilder *FnVarLocsBuilder) {
-  if (Fn.size() > MaxNumBlocks) {
+  if (Fn.size() > getDebugAtaMaxBlocks(Fn.getContext().getOptionsContext())) {
     LLVM_DEBUG(dbgs() << "[AT] Dropping var locs in: " << Fn.getName()
                       << ": too many blocks (" << Fn.size() << ")\n");
     at::deleteAll(&Fn);
@@ -2911,7 +2916,8 @@ bool AssignmentTrackingAnalysis::runOnFunction(Function &F) {
   // Save these results.
   Results->init(Builder);
 
-  if (PrintResults && isFunctionInPrintList(F.getName()))
+  if (getPrintDebugAta(F.getContext().getOptionsContext()) &&
+      isFunctionInPrintList(F.getContext(), F.getName()))
     Results->print(errs(), F);
 
   // Return false because this pass does not modify the function.

@@ -52,6 +52,11 @@ extern "C" {
 #define LLVM_TARGETMCA(TargetName)                                             \
   LLVM_ABI void LLVMInitialize##TargetName##TargetMCA();
 #include "llvm/Config/TargetMCAs.def"
+
+// Declare all of the target-options registration functions that are available.
+#define LLVM_TARGET(TargetName)                                                \
+  LLVM_ABI void LLVMRegister##TargetName##TargetOptions();
+#include "llvm/Config/Targets.def"
 }
 
 namespace llvm {

@@ -16,7 +16,9 @@
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/IR/CFG.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/Debug.h"
@@ -25,6 +27,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 using namespace ir2vec;
@@ -39,30 +42,42 @@ namespace ir2vec {
 cl::OptionCategory IR2VecCategory("IR2Vec Options");
 
 // FIXME: Use a default vocab when not specified
-cl::opt<std::string>
-    VocabFile("ir2vec-vocab-path", cl::Optional,
-              cl::desc("Path to the vocabulary file for IR2Vec"), cl::init(""),
-              cl::cat(IR2VecCategory));
-cl::opt<float> OpcWeight("ir2vec-opc-weight", cl::Optional, cl::init(1.0),
-                         cl::desc("Weight for opcode embeddings"),
-                         cl::cat(IR2VecCategory));
-cl::opt<float> TypeWeight("ir2vec-type-weight", cl::Optional, cl::init(0.5),
-                          cl::desc("Weight for type embeddings"),
-                          cl::cat(IR2VecCategory));
-cl::opt<float> ArgWeight("ir2vec-arg-weight", cl::Optional, cl::init(0.2),
-                         cl::desc("Weight for argument embeddings"),
-                         cl::cat(IR2VecCategory));
-cl::opt<IR2VecKind> IR2VecEmbeddingKind(
-    "ir2vec-kind", cl::Optional,
-    cl::values(clEnumValN(IR2VecKind::Symbolic, "symbolic",
-                          "Generate symbolic embeddings"),
-               clEnumValN(IR2VecKind::FlowAware, "flow-aware",
-                          "Generate flow-aware embeddings")),
-    cl::init(IR2VecKind::Symbolic), cl::desc("IR2Vec embedding kind"),
-    cl::cat(IR2VecCategory));
+
+float getOpcWeight(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_OpcWeight>(Ctx);
+}
+float getTypeWeight(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_TypeWeight>(Ctx);
+}
+float getArgWeight(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_ArgWeight>(Ctx);
+}
+IR2VecKind getIR2VecEmbeddingKind(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_IR2VecEmbeddingKind>(Ctx);
+}
+std::string getVocabFile(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_VocabFile>(Ctx);
+}
 
 } // namespace ir2vec
 } // namespace llvm
+
+static std::string getVocabFile(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::AN_VocabFile>(
+      M.getContext().getOptionsContext());
+}
+static float getOpcWeight(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::AN_OpcWeight>(
+      M.getContext().getOptionsContext());
+}
+static float getTypeWeight(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::AN_TypeWeight>(
+      M.getContext().getOptionsContext());
+}
+static float getArgWeight(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::AN_ArgWeight>(
+      M.getContext().getOptionsContext());
+}
 
 AnalysisKey IR2VecVocabAnalysis::Key;
 
@@ -644,17 +659,20 @@ IR2VecVocabAnalysis::run(Module &M, ModuleAnalysisManager &AM) {
     return Vocabulary(std::move(Vocab.value()));
 
   // Otherwise, try to read from the vocabulary file specified via CLI.
-  if (VocabFile.empty())
+  if (getVocabFile(M).empty()) {
     // FIXME: Use default vocabulary
     reportFatalUsageError(
         "IR2Vec vocabulary file path not specified; You may need to "
         "set it using --ir2vec-vocab-path");
+  }
 
   // Use the static factory method to load the vocabulary.
-  auto VocabOrErr =
-      Vocabulary::fromFile(VocabFile, OpcWeight, TypeWeight, ArgWeight);
-  if (!VocabOrErr)
+  auto VocabOrErr = Vocabulary::fromFile(getVocabFile(M), getOpcWeight(M),
+                                         getTypeWeight(M), getArgWeight(M));
+  if (!VocabOrErr) {
     emitError(VocabOrErr.takeError());
+    return Vocabulary();
+  }
 
   return std::move(*VocabOrErr);
 }
@@ -669,7 +687,9 @@ PreservedAnalyses IR2VecPrinterPass::run(Module &M,
   assert(Vocabulary.isValid() && "IR2Vec Vocabulary is invalid");
 
   for (Function &F : M) {
-    auto Emb = Embedder::create(IR2VecEmbeddingKind, F, Vocabulary);
+    auto Emb = Embedder::create(
+        getIR2VecEmbeddingKind(F.getContext().getOptionsContext()), F,
+        Vocabulary);
     if (!Emb) {
       OS << "Error creating IR2Vec embeddings \n";
       continue;

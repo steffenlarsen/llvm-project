@@ -94,7 +94,7 @@ LogicalResult StridedMetadataRangeAnalysis::visitOperation(
   }
 
   LDBG() << "Inferring metadata for: "
-         << OpWithFlags(op, OpPrintingFlags().skipRegions());
+         << OpWithFlags(op, opPrintingFlags(op).skipRegions());
 
   // Helper function to retrieve int range values.
   auto getIntRange = [&](Value value) -> IntegerValueRange {

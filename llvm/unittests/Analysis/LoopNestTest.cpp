@@ -51,36 +51,36 @@ static Instruction *getInstructionByName(Function &F, StringRef Name) {
 
 TEST(LoopNestTest, PerfectLoopNest) {
   const char *ModuleStr =
-    "target datalayout = \"e-m:o-i64:64-f80:128-n8:16:32:64-S128\"\n"
-    "define void @foo(i64 signext %nx, i64 signext %ny) {\n"
-    "entry:\n"
-    "  br label %for.outer\n"
-    "for.outer:\n"
-    "  %i = phi i64 [ 0, %entry ], [ %inc13, %for.outer.latch ]\n"
-    "  %cmp21 = icmp slt i64 0, %ny\n"
-    "  br i1 %cmp21, label %for.inner.preheader, label %for.outer.latch\n"
-    "for.inner.preheader:\n"
-    "  br label %for.inner\n"
-    "for.inner:\n"
-    "  %j = phi i64 [ 0, %for.inner.preheader ], [ %inc, %for.inner.latch ]\n"
-    "  br label %for.inner.latch\n"
-    "for.inner.latch:\n"
-    "  %inc = add nsw i64 %j, 1\n"
-    "  %cmp2 = icmp slt i64 %inc, %ny\n"
-    "  br i1 %cmp2, label %for.inner, label %for.inner.exit\n"
-    "for.inner.exit:\n"
-    "  br label %for.outer.latch\n"
-    "for.outer.latch:\n"
-    "  %inc13 = add nsw i64 %i, 1\n"
-    "  %cmp = icmp slt i64 %inc13, %nx\n"
-    "  br i1 %cmp, label %for.outer, label %for.outer.exit\n"
-    "for.outer.exit:\n"
-    "  br label %for.end\n"
-    "for.end:\n"
-    "  ret void\n"
-    "}\n";
+      "target datalayout = \"e-m:o-i64:64-f80:128-n8:16:32:64-S128\"\n"
+      "define void @foo(i64 signext %nx, i64 signext %ny) {\n"
+      "entry:\n"
+      "  br label %for.outer\n"
+      "for.outer:\n"
+      "  %i = phi i64 [ 0, %entry ], [ %inc13, %for.outer.latch ]\n"
+      "  %cmp21 = icmp slt i64 0, %ny\n"
+      "  br i1 %cmp21, label %for.inner.preheader, label %for.outer.latch\n"
+      "for.inner.preheader:\n"
+      "  br label %for.inner\n"
+      "for.inner:\n"
+      "  %j = phi i64 [ 0, %for.inner.preheader ], [ %inc, %for.inner.latch ]\n"
+      "  br label %for.inner.latch\n"
+      "for.inner.latch:\n"
+      "  %inc = add nsw i64 %j, 1\n"
+      "  %cmp2 = icmp slt i64 %inc, %ny\n"
+      "  br i1 %cmp2, label %for.inner, label %for.inner.exit\n"
+      "for.inner.exit:\n"
+      "  br label %for.outer.latch\n"
+      "for.outer.latch:\n"
+      "  %inc13 = add nsw i64 %i, 1\n"
+      "  %cmp = icmp slt i64 %inc13, %nx\n"
+      "  br i1 %cmp, label %for.outer, label %for.outer.exit\n"
+      "for.outer.exit:\n"
+      "  br label %for.end\n"
+      "for.end:\n"
+      "  ret void\n"
+      "}\n";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runTest(*M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
@@ -104,7 +104,7 @@ TEST(LoopNestTest, PerfectLoopNest) {
     EXPECT_EQ(IL->getName(), "for.inner");
 
     // Ensure the loop nest is recognized as having 2 loops.
-    const ArrayRef<Loop*> Loops = LN.getLoops();
+    const ArrayRef<Loop *> Loops = LN.getLoops();
     EXPECT_EQ(Loops.size(), 2ull);
 
     // Ensure that we can obtain loops by depth.
@@ -176,7 +176,7 @@ TEST(LoopNestTest, ImperfectLoopNest) {
       "}\n"
       "declare void @bar()\n";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runTest(*M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
@@ -202,10 +202,11 @@ TEST(LoopNestTest, ImperfectLoopNest) {
     EXPECT_EQ(IL->getName(), "loop.k");
 
     // Ensure the loop nest is recognized as having 3 loops.
-    const ArrayRef<Loop*> Loops = LN.getLoops();
+    const ArrayRef<Loop *> Loops = LN.getLoops();
     EXPECT_EQ(Loops.size(), 3ull);
 
-    // Ensure the loop nest is recognized as having 2 separate perfect loops groups.
+    // Ensure the loop nest is recognized as having 2 separate perfect loops
+    // groups.
     const SmallVector<LoopVectorTy, 4> &PLV = LN.getPerfectLoops(SE);
     EXPECT_EQ(PLV.size(), 2ull);
     EXPECT_EQ(PLV.front().size(), 2ull);
@@ -262,7 +263,7 @@ TEST(LoopNestTest, InterveningInstrLoopNest) {
       "declare void @outerlatch()\n"
       "declare void @innerexit()\n";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
   runTest(*M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {

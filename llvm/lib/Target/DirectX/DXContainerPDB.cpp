@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "DirectX.h"
+#include "DirectXOptions.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/BinaryFormat/DXContainer.h"
@@ -17,15 +18,15 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCDXContainerWriter.h"
+#include "llvm/MC/MCOptionsOptInfos.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/IOSandbox.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
 using namespace llvm;
 
-extern cl::opt<bool> PdbInPrivate;
 
 namespace {
 
@@ -59,6 +60,12 @@ public:
 bool DXContainerPDB::shouldSkipSection(StringRef SectionName,
                                        size_t SectionSize) {
   if (MCDXContainerBaseWriter::shouldSkipSection(SectionName, SectionSize))
+    return true;
+
+  // Slim debug omits ILDB from every DXContainer output, the PDB included.
+  if (SectionName == "ILDB" &&
+      clv2::getOptValOr<&clv2::MCOptsReg, &clv2::MC_DXSlimDebug>(
+          M->getContext().getOptionsContext(), false))
     return true;
 
   // Skip sections that are irrelevant for debug info.
@@ -120,7 +127,8 @@ bool DXContainerPDB::runOnModule(Module &M) {
   }
 
   // PDB emission was not requested.
-  if (DebugFileName.empty() && !PdbInPrivate)
+  if (DebugFileName.empty() &&
+      !dxil::getPdbInPrivate(M.getContext().getOptionsContext()))
     return false;
   if (ModuleHash.empty())
     report_fatal_error("Module hash for PDB not found");
@@ -181,7 +189,7 @@ bool DXContainerPDB::runOnModule(Module &M) {
     reportFatalUsageError("Couldn't write to PDB file: " +
                           Twine(toString(std::move(Err))));
 
-  if (!PdbInPrivate)
+  if (!dxil::getPdbInPrivate(M.getContext().getOptionsContext()))
     return false;
 
   ErrorOr<std::unique_ptr<MemoryBuffer>> Buf = MemoryBuffer::getFile(

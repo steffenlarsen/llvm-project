@@ -30,7 +30,6 @@
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/TargetSelect.h"
@@ -44,8 +43,6 @@ namespace llvm {
 namespace cfi_verify {
 
 struct GraphResult;
-
-extern bool IgnoreDWARFFlag;
 
 enum class CFIProtectionStatus {
   // This instruction is protected by CFI.
@@ -83,7 +80,8 @@ public:
   };
 
   // Construct a FileAnalysis from a file path.
-  static Expected<FileAnalysis> Create(StringRef Filename);
+  static Expected<FileAnalysis> Create(StringRef Filename,
+                                       bool IgnoreDWARF = false);
 
   // Construct and take ownership of the supplied object. Do not use this
   // constructor, prefer to use FileAnalysis::Create instead.
@@ -144,6 +142,9 @@ public:
   const MCInstrInfo *getMCInstrInfo() const;
   const MCInstrAnalysis *getMCInstrAnalysis() const;
 
+  bool ignoreDWARF() const { return IgnoreDWARF; }
+  void setIgnoreDWARF(bool V) { IgnoreDWARF = V; }
+
   // Returns the inlining information for the provided address.
   Expected<DIInliningInfo>
   symbolizeInlinedCode(object::SectionedAddress Address);
@@ -192,6 +193,8 @@ protected:
   Error parseSymbolTable();
 
 private:
+  bool IgnoreDWARF = false;
+
   // Members that describe the input file.
   object::OwningBinary<object::Binary> Binary;
   const object::ObjectFile *Object = nullptr;

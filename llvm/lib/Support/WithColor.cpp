@@ -10,33 +10,58 @@
 
 #include "DebugOptions.h"
 
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/SupportOptions.h"
+#include "llvm/Support/SupportOptionsOptInfos.h"
 
 using namespace llvm;
 
 cl::OptionCategory &llvm::getColorCategory() {
-  static cl::OptionCategory ColorCategory("Color Options");
-  return ColorCategory;
+  return const_cast<cl::OptionCategory &>(clv2::ColorOptionsCategory);
 }
-namespace {
-struct CreateUseColor {
-  static void *call() {
-    return new cl::opt<cl::boolOrDefault>(
-        "color", cl::cat(getColorCategory()),
-        cl::desc("Use colors in output (default=autodetect)"),
-        cl::init(cl::boolOrDefault::BOU_UNSET));
-  }
-};
-} // namespace
-static ManagedStatic<cl::opt<cl::boolOrDefault>, CreateUseColor> UseColor;
-void llvm::initWithColorOptions() { *UseColor; }
+
+cl::boolOrDefault UseColorVal = cl::boolOrDefault::BOU_UNSET;
+
+static constexpr clv2::OptionsRegistry<&clv2::SUP_Color> ColorOptsReg;
+static void applyColorOpts(const decltype(ColorOptsReg)::ParsedOptionsT &Opts) {
+  UseColorVal = Opts.get<&clv2::SUP_Color>();
+}
+
+static cl::boolOrDefault getUseColor() { return UseColorVal; }
+
+const clv2::detail::DynamicRegistration &
+clv2::detail::getColorDynamicRegistration() {
+  // A function-local static gives thread-safe exactly-once initialisation:
+  // concurrent callers (runParser can be entered from several threads at
+  // once) block until the first has built R, so every caller sees the same
+  // fully-constructed registration.
+  static const DynamicRegistration R =
+      clv2::makeDynamicRegistration<&ColorOptsReg>(applyColorOpts);
+  return R;
+}
+
+// NOTE: --color is intentionally mirrored into a process-wide global rather
+// than read from an OptionsContext at each use.  WithColor's API is built
+// around a bare raw_ostream with no context in scope, and colorization is a
+// property of the shared output stream: two concurrent in-process jobs writing
+// to the same terminal cannot meaningfully disagree about it.  Threading a
+// context here would mean changing every WithColor call site for no behavioural
+// gain.  See also the ORC debug-print filters in ExecutionEngine/Orc/
+// DebugUtils.cpp, which are global for the same reason.
+void llvm::initWithColorOptions() {
+  // Legacy cl:: bootstrap (CommandLine.cpp's initCommonOptions) calls this to
+  // make sure --color is registered before a cl:: parse; clv2's runParser
+  // reaches the same registration directly via getColorDynamicRegistration().
+  (void)clv2::detail::getColorDynamicRegistration();
+}
 
 static bool DefaultAutoDetectFunction(const raw_ostream &OS) {
-  return *UseColor == cl::boolOrDefault::BOU_UNSET
+  cl::boolOrDefault Val = getUseColor();
+  return Val == cl::boolOrDefault::BOU_UNSET
              ? OS.has_colors()
-             : *UseColor == cl::boolOrDefault::BOU_TRUE;
+             : Val == cl::boolOrDefault::BOU_TRUE;
 }
 
 WithColor::AutoDetectFunctionType WithColor::AutoDetectFunction =

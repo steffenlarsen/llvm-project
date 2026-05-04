@@ -19,6 +19,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/CaptureTracking.h"
@@ -52,9 +53,10 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/KnownBits.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include <cassert>
 #include <cstdint>
@@ -67,11 +69,26 @@
 using namespace llvm;
 
 /// Enable analysis of recursive PHI nodes.
-static cl::opt<bool> EnableRecPhiAnalysis("basic-aa-recphi", cl::Hidden,
-                                          cl::init(true));
+static bool EnableRecPhiAnalysis = true;
 
-static cl::opt<bool> EnableSeparateStorageAnalysis("basic-aa-separate-storage",
-                                                   cl::Hidden, cl::init(true));
+static bool getEnableRecPhiAnalysis(const LLVMContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_EnableRecPhiAnalysis>(
+      Ctx.getOptionsContext());
+}
+
+static bool EnableSeparateStorageAnalysis = true;
+
+static bool getEnableSeparateStorageAnalysis(const LLVMContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_EnableSeparateStorageAnalysis>(
+      Ctx.getOptionsContext());
+}
+
+bool BasicAAResult::enableSeparateStorageAnalysis() const {
+  if (!EnableSeparateStorageAnalysisCache)
+    EnableSeparateStorageAnalysisCache =
+        getEnableSeparateStorageAnalysis(F.getContext());
+  return *EnableSeparateStorageAnalysisCache;
+}
 
 /// SearchLimitReached / SearchTimes shows how often the limit of
 /// to decompose GEPs is reached. It will affect the precision
@@ -1433,7 +1450,7 @@ AliasResult BasicAAResult::aliasPHI(const PHINode *PN, LocationSize PNSize,
   // know that the recursive phi needs to be based on them in some way.
   bool isRecursive = false;
   auto CheckForRecPhi = [&](Value *PV) {
-    if (!EnableRecPhiAnalysis)
+    if (!getEnableRecPhiAnalysis(F.getContext()))
       return false;
     if (getUnderlyingObject(PV) == PN) {
       isRecursive = true;
@@ -1609,7 +1626,9 @@ AliasResult BasicAAResult::aliasCheck(const Value *V1, LocationSize V1Size,
           TLI, NullIsValidLocation)))
     return AliasResult::NoAlias;
 
-  if (EnableSeparateStorageAnalysis) {
+  // Read once per aliasCheck: the optimizer cannot hoist it, and aliasCheck is
+  // one of the hottest functions in the compiler.
+  if (enableSeparateStorageAnalysis()) {
     for (AssumptionCache::ResultElem &Elem : AC.assumptionsFor(O1)) {
       if (!Elem || Elem.Index == AssumptionCache::ExprResultIdx)
         continue;

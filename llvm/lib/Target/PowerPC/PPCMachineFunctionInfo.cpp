@@ -10,19 +10,22 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/XCOFF.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
 
 using namespace llvm;
-static cl::opt<bool> PPCDisableNonVolatileCR(
-    "ppc-disable-non-volatile-cr",
-    cl::desc("Disable the use of non-volatile CR register fields"),
-    cl::init(false), cl::Hidden);
+
+static bool getPPCDisableNonVolatileCR(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_DisableNonVolatileCR>(
+      F.getContext().getOptionsContext());
+}
 
 void PPCFunctionInfo::anchor() {}
 PPCFunctionInfo::PPCFunctionInfo(const Function &F,
                                  const TargetSubtargetInfo *STI)
-    : DisableNonVolatileCR(PPCDisableNonVolatileCR) {}
+    : DisableNonVolatileCR(getPPCDisableNonVolatileCR(F)) {}
 
 MachineFunctionInfo *
 PPCFunctionInfo::clone(BumpPtrAllocator &Allocator, MachineFunction &DestMF,

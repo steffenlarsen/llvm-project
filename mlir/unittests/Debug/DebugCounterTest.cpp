@@ -21,7 +21,7 @@ struct CounterAction : public ActionImpl<CounterAction> {
 };
 
 TEST(DebugCounterTest, CounterTest) {
-  DebugCounter counter;
+  DebugCounter counter(llvm::clv2::defaultOptionsContext());
   counter.addCounter(CounterAction::tag, /*countToSkip=*/1,
                      /*countToStopAfter=*/3);
 

@@ -11,9 +11,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Passes/ShrinkWrapping.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "bolt/Passes/DataflowInfoManager.h"
 #include "bolt/Passes/MCF.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
+#include "llvm/Support/CommandLineV2.h"
 #include <numeric>
 #include <optional>
 #include <stack>
@@ -21,19 +24,6 @@
 #define DEBUG_TYPE "shrinkwrapping"
 
 using namespace llvm;
-
-namespace opts {
-
-extern cl::opt<bool> TimeOpts;
-extern cl::OptionCategory BoltOptCategory;
-
-static cl::opt<unsigned> ShrinkWrappingThreshold(
-    "shrink-wrapping-threshold",
-    cl::desc("Percentage of prologue execution count to use as threshold when"
-             " evaluating whether a block is cold enough to be profitable to"
-             " move eligible spills there"),
-    cl::init(30), cl::ZeroOrMore, cl::cat(BoltOptCategory));
-} // namespace opts
 
 namespace llvm {
 namespace bolt {
@@ -885,7 +875,9 @@ bool ShrinkWrapping::isBestSavePosCold(unsigned CSR, MCInst *&BestPosSave,
 
   const uint64_t BestCount = BestSaveCount[CSR].back();
   BestPosSave = BestSavePos[CSR].back();
-  if (BestCount >= (opts::ShrinkWrappingThreshold / 100.0) * CurSavingCost)
+  const unsigned ShrinkWrappingThreshold =
+      bolt_passes_opts::getShrinkWrappingThreshold(BC);
+  if (BestCount >= (ShrinkWrappingThreshold / 100.0) * CurSavingCost)
     return false;
 
   LLVM_DEBUG({
@@ -1834,8 +1826,7 @@ Expected<BBIterTy> ShrinkWrapping::processInsertionsList(
     if (Item.Action == WorklistItem::InsertPushOrPop &&
         Item.FIEToInsert.IsStore)
       SPVal -= Item.FIEToInsert.Size;
-    if (Item.Action == WorklistItem::InsertPushOrPop &&
-        Item.FIEToInsert.IsLoad)
+    if (Item.Action == WorklistItem::InsertPushOrPop && Item.FIEToInsert.IsLoad)
       SPVal += Item.FIEToInsert.Size;
   }
   return InsertionPoint;
@@ -1975,7 +1966,8 @@ Expected<bool> ShrinkWrapping::perform(bool HotOnly) {
   if (HotOnly && (BF.getKnownExecutionCount() < BC.getHotThreshold()))
     return false;
 
-  if (opts::EqualizeBBCounts)
+  bool EqualizeBBCounts = bolt::bolt_utils_opts::getEqualizeBbCounts(BC);
+  if (EqualizeBBCounts)
     equalizeBBCounts(Info, BF);
 
   if (BF.checkForAmbiguousJumpTables()) {

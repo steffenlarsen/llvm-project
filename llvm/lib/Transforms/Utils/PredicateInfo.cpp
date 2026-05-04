@@ -19,21 +19,25 @@
 #include "llvm/IR/AssemblyAnnotationWriter.h"
 #include "llvm/IR/BundleAttributes.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/PatternMatch.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugCounter.h"
 #include "llvm/Support/FormattedStream.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 #define DEBUG_TYPE "predicateinfo"
 using namespace llvm;
 using namespace PatternMatch;
 
-static cl::opt<bool> VerifyPredicateInfo(
-    "verify-predicateinfo", cl::init(false), cl::Hidden,
-    cl::desc("Verify PredicateInfo in legacy printer pass."));
+static bool getVerifyPredicateInfo(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_VerifyPredicateInfo>(
+      F.getContext().getOptionsContext(), false);
+}
 DEBUG_COUNTER(RenameCounter, "predicateinfo-rename",
               "Controls which variables are renamed with predicateinfo");
 

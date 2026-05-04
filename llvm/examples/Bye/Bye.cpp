@@ -3,21 +3,37 @@
 #include "llvm/Pass.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Plugins/PassPlugin.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
-static cl::opt<bool> Wave("wave-goodbye", cl::init(false),
-                          cl::desc("wave good bye"));
+static constexpr clv2::OptionInfo<bool> OI_Wave{"wave-goodbye",
+                                                "wave good bye"};
+static constexpr clv2::OptionInfo<bool> OI_LastWords{
+    "last-words", "say last words (suppress codegen)"};
+static constexpr clv2::OptionsRegistry<&OI_Wave, &OI_LastWords> ByeOptsReg;
 
-static cl::opt<bool> LastWords("last-words", cl::init(false),
-                               cl::desc("say last words (suppress codegen)"));
+// Options are read from the LLVMContext owning the IR rather than mirrored
+// into globals, so concurrent in-process jobs can use different settings.
+static bool waveGoodbye(const LLVMContext &Ctx) {
+  return clv2::getOptValOr<&ByeOptsReg, &OI_Wave>(Ctx.getOptionsContext(),
+                                                  false);
+}
+static bool lastWords(const LLVMContext &Ctx) {
+  return clv2::getOptValOr<&ByeOptsReg, &OI_LastWords>(Ctx.getOptionsContext(),
+                                                       false);
+}
+
+static const int RegisterByeOpts = [] {
+  clv2::registerDynamicRegistry<&ByeOptsReg>();
+  return 0;
+}();
 
 namespace {
 
 bool runBye(Function &F) {
-  if (Wave) {
+  if (waveGoodbye(F.getContext())) {
     errs() << "Bye: ";
     errs().write_escaped(F.getName()) << '\n';
   }
@@ -56,7 +72,7 @@ void registerPassBuilderCallbacks(PassBuilder &PB) {
 
 bool preCodeGenCallback(Module &M, TargetMachine &, CodeGenFileType CGFT,
                         raw_pwrite_stream &OS) {
-  if (LastWords) {
+  if (lastWords(M.getContext())) {
     if (CGFT != CodeGenFileType::AssemblyFile) {
       // Test error emission.
       M.getContext().emitError("last words unsupported for binary output");

@@ -28,13 +28,15 @@
 #include "llvm/CodeGen/RDFGraph.h"
 #include "llvm/CodeGen/RDFLiveness.h"
 #include "llvm/CodeGen/RDFRegisters.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <cassert>
 #include <limits>
 
@@ -42,18 +44,39 @@ using namespace llvm;
 using namespace rdf;
 
 static unsigned RDFCount = 0;
-extern cl::opt<unsigned> RDFFuncBlockLimit;
 
-static cl::opt<unsigned>
-    RDFLimit("hexagon-rdf-limit",
-             cl::init(std::numeric_limits<unsigned>::max()));
-static cl::opt<bool> EnableAggressiveRDFCopy(
-    "hexagon-aggressive-rdf-copy",
-    cl::desc("Enable aggressive RDF copy propagation with super-register "
-             "support"),
-    cl::init(false), cl::Hidden);
-static cl::opt<bool> RDFDump("hexagon-rdf-dump", cl::Hidden);
-static cl::opt<bool> RDFTrackReserved("hexagon-rdf-track-reserved", cl::Hidden);
+static unsigned RDFLimit = std::numeric_limits<unsigned>::max();
+
+static unsigned getRDFFuncBlockLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_RDFFuncBlockLimit>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getEnableAggressiveRDFCopy(const Function &F) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg,
+                           &clv2::HEX_EnableAggressiveRDFCopy>(
+      F.getContext().getOptionsContext(), false);
+}
+
+static unsigned getRDFLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_RDFLimit>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getRDFLimitWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::HexagonOptsReg, &clv2::HEX_RDFLimit>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getRDFDump(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_RDFDump>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getRDFTrackReserved(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_RDFTrackReserved>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -338,16 +361,18 @@ bool HexagonRDFOpt::runOnMachineFunction(MachineFunction &MF) {
   if (skipFunction(MF.getFunction()))
     return false;
 
+  const Function &F = MF.getFunction();
+
   // Perform RDF optimizations only if number of basic blocks in the
   // function is less than the limit
-  if (MF.size() > RDFFuncBlockLimit) {
-    if (RDFDump)
+  if (MF.size() > getRDFFuncBlockLimit(F)) {
+    if (getRDFDump(F))
       dbgs() << "Skipping " << getPassName() << ": too many basic blocks\n";
     return false;
   }
 
-  if (RDFLimit.getPosition()) {
-    if (RDFCount >= RDFLimit)
+  if (getRDFLimitWasSpecified(F)) {
+    if (RDFCount >= getRDFLimit(F))
       return false;
     RDFCount++;
   }
@@ -359,7 +384,7 @@ bool HexagonRDFOpt::runOnMachineFunction(MachineFunction &MF) {
   MRI = &MF.getRegInfo();
   bool Changed;
 
-  if (RDFDump)
+  if (getRDFDump(F))
     MF.print(dbgs() << "Before " << getPassName() << "\n", nullptr);
 
   DataFlowGraph G(MF, HII, HRI, *MDT, MDF);
@@ -367,44 +392,43 @@ bool HexagonRDFOpt::runOnMachineFunction(MachineFunction &MF) {
   // of a register in a block where it would need a phi node, but which
   // was dead (and removed) during the graph build time.
   DataFlowGraph::Config Cfg;
-  Cfg.Options = RDFTrackReserved
+  Cfg.Options = getRDFTrackReserved(F)
                     ? BuildOptions::KeepDeadPhis
                     : BuildOptions::KeepDeadPhis | BuildOptions::OmitReserved;
   G.build(Cfg);
 
-  if (EnableAggressiveRDFCopy) {
-    if (RDFDump)
+  if (getEnableAggressiveRDFCopy(F)) {
+    if (getRDFDump(F))
       dbgs() << "Starting aggressive copy propagation on: " << MF.getName()
              << '\n'
              << PrintNode<FuncNode *>(G.getFunc(), G) << '\n';
     HexagonAggressiveCP CP(G);
-    CP.trace(RDFDump);
+    CP.trace(getRDFDump(F));
     Changed = CP.run();
   } else {
-    if (RDFDump)
+    if (getRDFDump(F))
       dbgs() << "Starting copy propagation on: " << MF.getName() << '\n'
              << PrintNode<FuncNode *>(G.getFunc(), G) << '\n';
     HexagonCP CP(G);
-    CP.trace(RDFDump);
+    CP.trace(getRDFDump(F));
     Changed = CP.run();
   }
 
-  if (RDFDump)
+  if (getRDFDump(F))
     dbgs() << "Starting dead code elimination on: " << MF.getName() << '\n'
            << PrintNode<FuncNode*>(G.getFunc(), G) << '\n';
   HexagonDCE DCE(G, *MRI);
-  DCE.trace(RDFDump);
+  DCE.trace(getRDFDump(F));
   Changed |= DCE.run();
 
   if (Changed) {
-    if (RDFDump) {
+    if (getRDFDump(F)) {
       dbgs() << "Starting liveness recomputation on: " << MF.getName() << '\n'
              << PrintNode<FuncNode*>(G.getFunc(), G) << '\n';
     }
     Liveness LV(*MRI, G);
-    LV.trace(RDFDump);
+    LV.trace(getRDFDump(F));
     LV.computeLiveIns();
-
     // Set entry-block live-ins from the RDF LiveMap: calling-convention
     // registers may not have direct uses and cannot be recovered by a
     // backward walk.
@@ -452,7 +476,7 @@ bool HexagonRDFOpt::runOnMachineFunction(MachineFunction &MF) {
     LV.resetKills();
   }
 
-  if (RDFDump)
+  if (getRDFDump(F))
     MF.print(dbgs() << "After " << getPassName() << "\n", nullptr);
 
   return false;

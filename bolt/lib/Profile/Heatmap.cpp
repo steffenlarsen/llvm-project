@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Profile/Heatmap.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "llvm/ADT/AddressRanges.h"
 #include "llvm/ADT/StringMap.h"
@@ -61,6 +62,9 @@ void Heatmap::print(StringRef FileName) const {
 }
 
 void Heatmap::print(raw_ostream &OS) const {
+  auto *UtilOpts = bolt_utils_opts::getBoltUtilsOpts(*OptsCtx);
+  unsigned BucketsPerLine = UtilOpts->get<&clv2::BOLT_BucketsPerLine>();
+
   const char FillChar = '.';
 
   const auto DefaultColor = raw_ostream::WHITE;
@@ -72,7 +76,7 @@ void Heatmap::print(raw_ostream &OS) const {
     CurrentColor = Color;
   };
 
-  const uint64_t BytesPerLine = opts::BucketsPerLine * BucketSize;
+  const uint64_t BytesPerLine = BucketsPerLine * BucketSize;
 
   // Calculate the max value for scaling.
   uint64_t MaxValue = 0;
@@ -177,7 +181,8 @@ void Heatmap::print(raw_ostream &OS) const {
     OS << " : (" << PrevValue << ", " << Value << "]\n";
     PrevValue = Value;
   }
-  if (opts::HeatmapPrintMappings) {
+  bool HeatmapPrintMappings = UtilOpts->get<&clv2::BOLT_HeatmapPrintMappings>();
+  if (HeatmapPrintMappings) {
     OS << "\nSections:\n";
     unsigned SectionIdx = 0;
     for (auto TxtSeg : TextSections) {
@@ -279,7 +284,7 @@ void Heatmap::printCDF(raw_ostream &OS, StringRef Label) const {
   uint64_t RunningCount = 0;
 
   // Buckets covering the cutoff share of the samples.
-  const uint64_t CutOff = opts::HeatmapCdfPct;
+  const uint64_t CutOff = bolt_utils_opts::getHeatmapCdfPct(*OptsCtx);
   assert(CutOff <= 1000000 && "cutoff must be at most 1000000");
   const uint64_t Target = (NumTotalCounts * CutOff) / 1000000;
   uint64_t NumBuckets = 0;
@@ -319,8 +324,11 @@ void Heatmap::printSectionHotness(raw_ostream &OS) const {
     return;
 
   uint64_t UnmappedHotness = 0;
+  unsigned Verbosity = 0;
+  if (auto *UtilOpts = bolt_utils_opts::getBoltUtilsOpts(*OptsCtx))
+    Verbosity = UtilOpts->get<&clv2::BOLT_Verbosity>();
   auto RecordUnmappedBucket = [&](uint64_t Address, uint64_t Frequency) {
-    if (opts::Verbosity >= 1)
+    if (Verbosity >= 1)
       errs() << "Couldn't map the address bucket [0x"
              << Twine::utohexstr(Address) << ", 0x"
              << Twine::utohexstr(Address + BucketSize) << "] containing "

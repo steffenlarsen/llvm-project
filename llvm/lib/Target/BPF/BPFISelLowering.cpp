@@ -25,28 +25,32 @@
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/DiagnosticPrinter.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/BPF/BPFOptionsOptInfos.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "bpf-lower"
 
-static cl::opt<bool> BPFExpandMemcpyInOrder("bpf-expand-memcpy-in-order",
-  cl::Hidden, cl::init(false),
-  cl::desc("Expand memcpy into load/store pairs in order"));
+static bool getExpandMemcpyInOrder(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::BPFOptsReg, &clv2::BPF_ExpandMemcpyInOrder>(
+      Ctx, false);
+}
 
-static cl::opt<unsigned> BPFMinimumJumpTableEntries(
-    "bpf-min-jump-table-entries", cl::init(13), cl::Hidden,
-    cl::desc("Set minimum number of entries to use a jump table on BPF"));
+static unsigned getBPFMinimumJumpTableEntries(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::BPF_MinimumJumpTableEntries>(Ctx);
+}
 
-static cl::opt<bool> BPFAllowsLibcalls(
-    "bpf-allows-libcalls", cl::Hidden, cl::init(false),
-    cl::desc("Allow libcalls instead of rejecting unsupported built-in "
-             "functions"));
+static bool getBPFAllowsLibcalls(const Function &F) {
+  return clv2::getOptValOr<&clv2::BPFOptsReg, &clv2::BPF_AllowsLibcalls>(
+      F.getContext().getOptionsContext(), false);
+}
 
 static void fail(const SDLoc &DL, SelectionDAG &DAG, const Twine &Msg,
                  SDValue Val = {}) {
@@ -175,13 +179,14 @@ BPFTargetLowering::BPFTargetLowering(const TargetMachine &TM,
 
   setBooleanContents(ZeroOrOneBooleanContent);
   setMaxAtomicSizeInBitsSupported(64);
-  setMinimumJumpTableEntries(BPFMinimumJumpTableEntries);
+  setMinimumJumpTableEntries(
+      getBPFMinimumJumpTableEntries(TM.getOptionsContext()));
 
   // Function alignments
   setMinFunctionAlignment(Align(8));
   setPrefFunctionAlignment(Align(8));
 
-  if (BPFExpandMemcpyInOrder) {
+  if (getExpandMemcpyInOrder(TM.getOptionsContext())) {
     // LLVM generic code will try to expand memcpy into load/store pairs at this
     // stage which is before quite a few IR optimization passes, therefore the
     // loads and stores could potentially be moved apart from each other which
@@ -200,7 +205,8 @@ BPFTargetLowering::BPFTargetLowering(const TargetMachine &TM,
   } else {
     // inline memcpy() for kernel to see explicit copy
     unsigned CommonMaxStores =
-      STI.getSelectionDAGInfo()->getCommonMaxStoresPerMemFunc();
+        STI.getSelectionDAGInfo()->getCommonMaxStoresPerMemFunc(
+            TM.getOptionsContext());
 
     MaxStoresPerMemset = MaxStoresPerMemsetOptSize = CommonMaxStores;
     MaxStoresPerMemcpy = MaxStoresPerMemcpyOptSize = CommonMaxStores;
@@ -607,10 +613,10 @@ SDValue BPFTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   } else if (ExternalSymbolSDNode *E = dyn_cast<ExternalSymbolSDNode>(Callee)) {
     Callee = DAG.getTargetExternalSymbol(E->getSymbol(), PtrVT, 0);
     StringRef Sym = E->getSymbol();
-    if (!BPFAllowsLibcalls && Sym != BPF_TRAP && Sym != "__multi3" &&
-        Sym != "__divti3" && Sym != "__modti3" && Sym != "__udivti3" &&
-        Sym != "__umodti3" && Sym != "memcpy" && Sym != "memset" &&
-        Sym != "memmove")
+    if (!getBPFAllowsLibcalls(MF.getFunction()) && Sym != BPF_TRAP &&
+        Sym != "__multi3" && Sym != "__divti3" && Sym != "__modti3" &&
+        Sym != "__udivti3" && Sym != "__umodti3" && Sym != "memcpy" &&
+        Sym != "memset" && Sym != "memmove")
       fail(
           CLI.DL, DAG,
           Twine("A call to built-in function '" + Sym + "' is not supported."));

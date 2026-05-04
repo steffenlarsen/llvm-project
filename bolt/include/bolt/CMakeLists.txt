@@ -1,0 +1,6 @@
+add_subdirectory(Core)
+add_subdirectory(Passes)
+add_subdirectory(Profile)
+add_subdirectory(Rewrite)
+add_subdirectory(RuntimeLibs)
+add_subdirectory(Utils)

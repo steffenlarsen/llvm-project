@@ -214,7 +214,7 @@ TEST(AddressingModes, AddressingModes) {
 
   auto *TLI = ST.getTargetLowering();
   DataLayout DL("e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128");
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   for (const auto &Test : Tests) {
     Type *Typ = Type::getIntNTy(Ctx, Test.TypeBits);

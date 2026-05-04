@@ -8,6 +8,7 @@
 
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/OptionsContext.h"
 #include <climits>
 
 using namespace llvm;
@@ -30,6 +31,10 @@ std::pair<int, int> MCTargetOptions::parseBinutilsVersion(StringRef Version) {
   if (!Version.consumeInteger(10, Ret.first) && Version.consume_front("."))
     Version.consumeInteger(10, Ret.second);
   return Ret;
+}
+
+const clv2::OptionsContext &MCTargetOptions::getOptsCtx() const {
+  return OptsCtx ? *OptsCtx : clv2::defaultOptionsContext();
 }
 
 StringRef MCTargetOptions::getABIName() const {

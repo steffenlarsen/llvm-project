@@ -17,6 +17,7 @@
 
 namespace llvm {
 class DiagnosticInfo;
+class LLVMContext;
 
 /// This is the base class for diagnostic handling in LLVM.
 /// The handleDiagnostics method must be overriden by the subclasses to handle
@@ -24,6 +25,7 @@ class DiagnosticInfo;
 /// which remarks are enabled.
 struct LLVM_ABI DiagnosticHandler {
   void *DiagnosticContext = nullptr;
+  LLVMContext *OwnerCtx = nullptr;
   bool HasErrors = false;
   DiagnosticHandler(void *DiagContext = nullptr)
       : DiagnosticContext(DiagContext) {}

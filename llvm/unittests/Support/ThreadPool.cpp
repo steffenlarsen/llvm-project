@@ -12,7 +12,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Config/llvm-config.h" // for LLVM_ENABLE_THREADS
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/Threading.h"
@@ -481,7 +481,14 @@ TYPED_TEST(ThreadPoolTest, AllThreads_OneThreadPerCore) {
 extern const char *TestMainArgv0;
 
 // Just a reachable symbol to ease resolving of the executable's path.
-static cl::opt<std::string> ThreadPoolTestStringArg1("thread-pool-string-arg1");
+static std::string ThreadPoolTestStringArg1;
+static unsigned ThreadPoolStringArg1Count = 0;
+static constexpr clv2::OptionInfo<std::string> OI_ThreadPoolStringArg1{
+    "thread-pool-string-arg1", ""};
+static const int ThreadPoolTestInit = ([] {
+  clv2::registerDynamicEntry(clv2::makeEntry<&OI_ThreadPoolStringArg1>(ThreadPoolTestStringArg1,
+      ThreadPoolStringArg1Count));
+}(), 0);
 
 #ifdef _WIN32
 #define setenv(name, var, ignore) _putenv_s(name, var)

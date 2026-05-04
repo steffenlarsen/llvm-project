@@ -131,7 +131,7 @@ class CodeGenData {
 public:
   ~CodeGenData() = default;
 
-  LLVM_ABI static CodeGenData &getInstance();
+  LLVM_ABI static CodeGenData &getInstance(const clv2::OptionsContext &Ctx);
 
   /// Returns true if we have a valid outlined hash tree.
   bool hasOutlinedHashTree() {
@@ -169,32 +169,38 @@ public:
 
 namespace cgdata {
 
-inline bool hasOutlinedHashTree() {
-  return CodeGenData::getInstance().hasOutlinedHashTree();
+inline bool hasOutlinedHashTree(const clv2::OptionsContext &Ctx) {
+  return CodeGenData::getInstance(Ctx).hasOutlinedHashTree();
 }
 
-inline bool hasStableFunctionMap() {
-  return CodeGenData::getInstance().hasStableFunctionMap();
+inline bool hasStableFunctionMap(const clv2::OptionsContext &Ctx) {
+  return CodeGenData::getInstance(Ctx).hasStableFunctionMap();
 }
 
-inline const OutlinedHashTree *getOutlinedHashTree() {
-  return CodeGenData::getInstance().getOutlinedHashTree();
+inline const OutlinedHashTree *
+getOutlinedHashTree(const clv2::OptionsContext &Ctx) {
+  return CodeGenData::getInstance(Ctx).getOutlinedHashTree();
 }
 
-inline const StableFunctionMap *getStableFunctionMap() {
-  return CodeGenData::getInstance().getStableFunctionMap();
+inline const StableFunctionMap *
+getStableFunctionMap(const clv2::OptionsContext &Ctx) {
+  return CodeGenData::getInstance(Ctx).getStableFunctionMap();
 }
 
-inline bool emitCGData() { return CodeGenData::getInstance().emitCGData(); }
+inline bool emitCGData(const clv2::OptionsContext &Ctx) {
+  return CodeGenData::getInstance(Ctx).emitCGData();
+}
+
+inline void publishOutlinedHashTree(std::unique_ptr<OutlinedHashTree> HashTree,
+                                    const clv2::OptionsContext &Ctx) {
+  CodeGenData::getInstance(Ctx).publishOutlinedHashTree(std::move(HashTree));
+}
 
 inline void
-publishOutlinedHashTree(std::unique_ptr<OutlinedHashTree> HashTree) {
-  CodeGenData::getInstance().publishOutlinedHashTree(std::move(HashTree));
-}
-
-inline void
-publishStableFunctionMap(std::unique_ptr<StableFunctionMap> FunctionMap) {
-  CodeGenData::getInstance().publishStableFunctionMap(std::move(FunctionMap));
+publishStableFunctionMap(std::unique_ptr<StableFunctionMap> FunctionMap,
+                         const clv2::OptionsContext &Ctx) {
+  CodeGenData::getInstance(Ctx).publishStableFunctionMap(
+      std::move(FunctionMap));
 }
 
 struct StreamCacheData {
@@ -263,7 +269,8 @@ loadModuleForTwoRounds(BitcodeModule &OrigModule, unsigned Task,
 /// first codegen round.
 /// \return the combined hash of the merged codegen data.
 LLVM_ABI Expected<stable_hash>
-mergeCodeGenData(ArrayRef<StringRef> ObjectFiles);
+mergeCodeGenData(ArrayRef<StringRef> ObjectFiles,
+                 const clv2::OptionsContext &Ctx);
 
 LLVM_ABI void warn(Error E, StringRef Whence = "");
 LLVM_ABI void warn(Twine Message, StringRef Whence = "", StringRef Hint = "");

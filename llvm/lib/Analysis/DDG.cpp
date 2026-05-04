@@ -10,19 +10,13 @@
 //===----------------------------------------------------------------------===//
 #include "llvm/Analysis/DDG.h"
 #include "llvm/ADT/SCCIterator.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopIterator.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 
 using namespace llvm;
 
-static cl::opt<bool> SimplifyDDG(
-    "ddg-simplify", cl::init(true), cl::Hidden,
-    cl::desc(
-        "Simplify DDG by merging nodes that have less interesting edges."));
-
-static cl::opt<bool> CreatePiBlocks("ddg-pi-blocks", cl::init(true), cl::Hidden,
-                                    cl::desc("Create pi-block nodes."));
 
 #define DEBUG_TYPE "ddg"
 
@@ -296,9 +290,9 @@ void DDGBuilder::mergeNodes(DDGNode &A, DDGNode &B) {
   destroyNode(B);
 }
 
-bool DDGBuilder::shouldSimplify() const { return SimplifyDDG; }
+bool DDGBuilder::shouldSimplify() const { return true; }
 
-bool DDGBuilder::shouldCreatePiBlocks() const { return CreatePiBlocks; }
+bool DDGBuilder::shouldCreatePiBlocks() const { return true; }
 
 //===--------------------------------------------------------------------===//
 // DDG Analysis Passes

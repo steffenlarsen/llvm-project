@@ -41,8 +41,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Utils/CodeLayout.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 
 #include <cmath>
 #include <set>
@@ -53,86 +55,112 @@ using namespace llvm::codelayout;
 #define DEBUG_TYPE "code-layout"
 
 namespace llvm {
-cl::opt<bool> EnableExtTspBlockPlacement(
-    "enable-ext-tsp-block-placement", cl::Hidden, cl::init(false),
-    cl::desc("Enable machine block placement based on the ext-tsp model, "
-             "optimizing I-cache utilization."));
-
-cl::opt<bool> ApplyExtTspWithoutProfile(
-    "ext-tsp-apply-without-profile",
-    cl::desc("Whether to apply ext-tsp placement for instances w/o profile"),
-    cl::init(true), cl::Hidden);
+bool EnableExtTspBlockPlacement = false;
 } // namespace llvm
 
-// Algorithm-specific params for Ext-TSP. The values are tuned for the best
-// performance of large-scale front-end bound binaries.
-static cl::opt<double> ForwardWeightCond(
-    "ext-tsp-forward-weight-cond", cl::ReallyHidden, cl::init(0.1),
-    cl::desc("The weight of conditional forward jumps for ExtTSP value"));
+static double getForwardWeightCond(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_ForwardWeightCond>(Ctx, 0.1);
+}
 
-static cl::opt<double> ForwardWeightUncond(
-    "ext-tsp-forward-weight-uncond", cl::ReallyHidden, cl::init(0.1),
-    cl::desc("The weight of unconditional forward jumps for ExtTSP value"));
+static double getForwardWeightUncond(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_ForwardWeightUncond>(Ctx, 0.1);
+}
 
-static cl::opt<double> BackwardWeightCond(
-    "ext-tsp-backward-weight-cond", cl::ReallyHidden, cl::init(0.1),
-    cl::desc("The weight of conditional backward jumps for ExtTSP value"));
+static double getBackwardWeightCond(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_BackwardWeightCond>(Ctx, 0.1);
+}
 
-static cl::opt<double> BackwardWeightUncond(
-    "ext-tsp-backward-weight-uncond", cl::ReallyHidden, cl::init(0.1),
-    cl::desc("The weight of unconditional backward jumps for ExtTSP value"));
+static double getBackwardWeightUncond(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_BackwardWeightUncond>(Ctx, 0.1);
+}
 
-static cl::opt<double> FallthroughWeightCond(
-    "ext-tsp-fallthrough-weight-cond", cl::ReallyHidden, cl::init(1.0),
-    cl::desc("The weight of conditional fallthrough jumps for ExtTSP value"));
+static double getFallthroughWeightCond(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_FallthroughWeightCond>(Ctx, 1.0);
+}
 
-static cl::opt<double> FallthroughWeightUncond(
-    "ext-tsp-fallthrough-weight-uncond", cl::ReallyHidden, cl::init(1.05),
-    cl::desc("The weight of unconditional fallthrough jumps for ExtTSP value"));
+static double getFallthroughWeightUncond(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_FallthroughWeightUncond>(Ctx,
+                                                                       1.05);
+}
 
-static cl::opt<unsigned> ForwardDistance(
-    "ext-tsp-forward-distance", cl::ReallyHidden, cl::init(1024),
-    cl::desc("The maximum distance (in bytes) of a forward jump for ExtTSP"));
+static unsigned getForwardDistance(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_ForwardDistance>(Ctx, 1024);
+}
 
-static cl::opt<unsigned> BackwardDistance(
-    "ext-tsp-backward-distance", cl::ReallyHidden, cl::init(640),
-    cl::desc("The maximum distance (in bytes) of a backward jump for ExtTSP"));
+static unsigned getBackwardDistance(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_BackwardDistance>(Ctx, 640);
+}
 
 // The maximum size of a chain created by the algorithm. The size is bounded
 // so that the algorithm can efficiently process extremely large instances.
-static cl::opt<unsigned>
-    MaxChainSize("ext-tsp-max-chain-size", cl::ReallyHidden, cl::init(512),
-                 cl::desc("The maximum size of a chain to create"));
+static unsigned getMaxChainSize(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_MaxChainSize>(Ctx, 512);
+}
 
-// The maximum size of a chain for splitting. Larger values of the threshold
-// may yield better quality at the cost of worsen run-time.
-static cl::opt<unsigned> ChainSplitThreshold(
-    "ext-tsp-chain-split-threshold", cl::ReallyHidden, cl::init(128),
-    cl::desc("The maximum size of a chain to apply splitting"));
+static unsigned getChainSplitThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_ChainSplitThreshold>(Ctx, 128);
+}
 
-// The maximum ratio between densities of two chains for merging.
-static cl::opt<double> MaxMergeDensityRatio(
-    "ext-tsp-max-merge-density-ratio", cl::ReallyHidden, cl::init(100),
-    cl::desc("The maximum ratio between densities of two chains for merging"));
+static double getMaxMergeDensityRatio(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_MaxMergeDensityRatio>(Ctx, 100.0);
+}
 
 // Algorithm-specific options for CDSort.
-static cl::opt<unsigned> CacheEntries("cdsort-cache-entries", cl::ReallyHidden,
-                                      cl::desc("The size of the cache"));
+static unsigned getCacheEntries(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_CacheEntries>(Ctx, 0);
+}
+static bool isCacheEntriesSpecified(const clv2::OptionsContext &Ctx) {
+  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
+                               &clv2::TU_CacheEntries>(Ctx);
+}
 
-static cl::opt<unsigned> CacheSize("cdsort-cache-size", cl::ReallyHidden,
-                                   cl::desc("The size of a line in the cache"));
+static unsigned getCacheSize(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_CacheSize>(Ctx, 0);
+}
+static bool isCacheSizeSpecified(const clv2::OptionsContext &Ctx) {
+  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
+                               &clv2::TU_CacheSize>(Ctx);
+}
 
-static cl::opt<unsigned>
-    CDMaxChainSize("cdsort-max-chain-size", cl::ReallyHidden,
-                   cl::desc("The maximum size of a chain to create"));
+static unsigned getCDMaxChainSize(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_CDMaxChainSize>(Ctx, 0);
+}
+static bool isCDMaxChainSizeSpecified(const clv2::OptionsContext &Ctx) {
+  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
+                               &clv2::TU_CDMaxChainSize>(Ctx);
+}
 
-static cl::opt<double> DistancePower(
-    "cdsort-distance-power", cl::ReallyHidden,
-    cl::desc("The power exponent for the distance-based locality"));
+static double getDistancePower(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_DistancePower>(Ctx, 0.0);
+}
+static bool isDistancePowerSpecified(const clv2::OptionsContext &Ctx) {
+  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
+                               &clv2::TU_DistancePower>(Ctx);
+}
 
-static cl::opt<double> FrequencyScale(
-    "cdsort-frequency-scale", cl::ReallyHidden,
-    cl::desc("The scale factor for the frequency-based locality"));
+static double getFrequencyScale(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_FrequencyScale>(Ctx, 0.0);
+}
+static bool isFrequencyScaleSpecified(const clv2::OptionsContext &Ctx) {
+  return clv2::wasOptSpecified<&clv2::TransformUtilsOptsReg,
+                               &clv2::TU_FrequencyScale>(Ctx);
+}
 
 namespace {
 
@@ -151,25 +179,26 @@ double jumpExtTSPScore(uint64_t JumpDist, uint64_t JumpMaxDist, uint64_t Count,
 // Compute the Ext-TSP score for a jump between a given pair of blocks,
 // using their sizes, (estimated) addresses and the jump execution count.
 double extTSPScore(uint64_t SrcAddr, uint64_t SrcSize, uint64_t DstAddr,
-                   uint64_t Count, bool IsConditional) {
+                   uint64_t Count, bool IsConditional,
+                   const clv2::OptionsContext &Ctx) {
   // Fallthrough
   if (SrcAddr + SrcSize == DstAddr) {
     return jumpExtTSPScore(0, 1, Count,
-                           IsConditional ? FallthroughWeightCond
-                                         : FallthroughWeightUncond);
+                           IsConditional ? getFallthroughWeightCond(Ctx)
+                                         : getFallthroughWeightUncond(Ctx));
   }
   // Forward
   if (SrcAddr + SrcSize < DstAddr) {
     const uint64_t Dist = DstAddr - (SrcAddr + SrcSize);
-    return jumpExtTSPScore(Dist, ForwardDistance, Count,
-                           IsConditional ? ForwardWeightCond
-                                         : ForwardWeightUncond);
+    return jumpExtTSPScore(Dist, getForwardDistance(Ctx), Count,
+                           IsConditional ? getForwardWeightCond(Ctx)
+                                         : getForwardWeightUncond(Ctx));
   }
   // Backward
   const uint64_t Dist = SrcAddr + SrcSize - DstAddr;
-  return jumpExtTSPScore(Dist, BackwardDistance, Count,
-                         IsConditional ? BackwardWeightCond
-                                       : BackwardWeightUncond);
+  return jumpExtTSPScore(Dist, getBackwardDistance(Ctx), Count,
+                         IsConditional ? getBackwardWeightCond(Ctx)
+                                       : getBackwardWeightUncond(Ctx));
 }
 
 /// A type of merging two chains, X and Y. The former chain is split into
@@ -588,9 +617,9 @@ MergedNodesT mergeNodes(const std::vector<NodeT *> &X,
 /// The implementation of the ExtTSP algorithm.
 class ExtTSPImpl {
 public:
-  ExtTSPImpl(ArrayRef<uint64_t> NodeSizes, ArrayRef<uint64_t> NodeCounts,
-             ArrayRef<EdgeCount> EdgeCounts)
-      : NumNodes(NodeSizes.size()) {
+  ExtTSPImpl(const clv2::OptionsContext &Ctx, ArrayRef<uint64_t> NodeSizes,
+             ArrayRef<uint64_t> NodeCounts, ArrayRef<EdgeCount> EdgeCounts)
+      : Ctx(Ctx), NumNodes(NodeSizes.size()) {
     initialize(NodeSizes, NodeCounts, EdgeCounts);
   }
 
@@ -758,7 +787,8 @@ private:
             continue;
           // Skip the merge if the combined chain violates the maximum specified
           // size.
-          if (ChainPred->numBlocks() + ChainSucc->numBlocks() >= MaxChainSize)
+          if (ChainPred->numBlocks() + ChainSucc->numBlocks() >=
+              getMaxChainSize(Ctx))
             continue;
           // Don't merge the chains if they have vastly different densities.
           // Skip the merge if the ratio between the densities exceeds
@@ -771,7 +801,7 @@ private:
           auto [MinDensity, MaxDensity] =
               std::minmax(ChainPredDensity, ChainSuccDensity);
           const double Ratio = MaxDensity / MinDensity;
-          if (Ratio > MaxMergeDensityRatio)
+          if (Ratio > getMaxMergeDensityRatio(Ctx))
             continue;
 
           // Compute the gain of merging the two chains.
@@ -837,7 +867,7 @@ private:
       const NodeT *DstBlock = Jump->Target;
       Score += ::extTSPScore(SrcBlock->EstimatedAddr, SrcBlock->Size,
                              DstBlock->EstimatedAddr, Jump->ExecutionCount,
-                             Jump->IsConditional);
+                             Jump->IsConditional, Ctx);
     });
     return Score;
   }
@@ -903,7 +933,7 @@ private:
     }
 
     // Try to break ChainPred in various ways and concatenate with ChainSucc.
-    if (ChainPred->Nodes.size() <= ChainSplitThreshold) {
+    if (ChainPred->Nodes.size() <= getChainSplitThreshold(Ctx)) {
       for (size_t Offset = 1; Offset < ChainPred->Nodes.size(); Offset++) {
         // Do not split the chain along a fall-through jump. One of the two
         // loops above may still "break" such a jump whenever it results in a
@@ -1007,6 +1037,8 @@ private:
   }
 
 private:
+  const clv2::OptionsContext &Ctx;
+
   /// The number of nodes in the graph.
   const size_t NumNodes;
 
@@ -1407,16 +1439,15 @@ private:
 
 } // end of anonymous namespace
 
-std::vector<uint64_t>
-codelayout::computeExtTspLayout(ArrayRef<uint64_t> NodeSizes,
-                                ArrayRef<uint64_t> NodeCounts,
-                                ArrayRef<EdgeCount> EdgeCounts) {
+std::vector<uint64_t> codelayout::computeExtTspLayout(
+    ArrayRef<uint64_t> NodeSizes, ArrayRef<uint64_t> NodeCounts,
+    ArrayRef<EdgeCount> EdgeCounts, const clv2::OptionsContext &Ctx) {
   // Verify correctness of the input data.
   assert(NodeCounts.size() == NodeSizes.size() && "Incorrect input");
   assert(NodeSizes.size() > 2 && "Incorrect input");
 
   // Apply the reordering algorithm.
-  ExtTSPImpl Alg(NodeSizes, NodeCounts, EdgeCounts);
+  ExtTSPImpl Alg(Ctx, NodeSizes, NodeCounts, EdgeCounts);
   std::vector<uint64_t> Result = Alg.run();
 
   // Verify correctness of the output.
@@ -1427,7 +1458,8 @@ codelayout::computeExtTspLayout(ArrayRef<uint64_t> NodeSizes,
 
 double codelayout::calcExtTspScore(ArrayRef<uint64_t> Order,
                                    ArrayRef<uint64_t> NodeSizes,
-                                   ArrayRef<EdgeCount> EdgeCounts) {
+                                   ArrayRef<EdgeCount> EdgeCounts,
+                                   const clv2::OptionsContext &Ctx) {
   // Estimate addresses of the blocks in memory.
   SmallVector<uint64_t> Addr(NodeSizes.size(), 0);
   for (uint64_t Idx = 1; Idx < Order.size(); Idx++)
@@ -1441,17 +1473,18 @@ double codelayout::calcExtTspScore(ArrayRef<uint64_t> Order,
   for (auto &Edge : EdgeCounts) {
     bool IsConditional = OutDegree[Edge.src] > 1;
     Score += ::extTSPScore(Addr[Edge.src], NodeSizes[Edge.src], Addr[Edge.dst],
-                           Edge.count, IsConditional);
+                           Edge.count, IsConditional, Ctx);
   }
   return Score;
 }
 
 double codelayout::calcExtTspScore(ArrayRef<uint64_t> NodeSizes,
-                                   ArrayRef<EdgeCount> EdgeCounts) {
+                                   ArrayRef<EdgeCount> EdgeCounts,
+                                   const clv2::OptionsContext &Ctx) {
   SmallVector<uint64_t> Order(NodeSizes.size());
   for (uint64_t Idx = 0; Idx < NodeSizes.size(); Idx++)
     Order[Idx] = Idx;
-  return calcExtTspScore(Order, NodeSizes, EdgeCounts);
+  return calcExtTspScore(Order, NodeSizes, EdgeCounts, Ctx);
 }
 
 std::vector<uint64_t> codelayout::computeCacheDirectedLayout(
@@ -1470,19 +1503,19 @@ std::vector<uint64_t> codelayout::computeCacheDirectedLayout(
 
 std::vector<uint64_t> codelayout::computeCacheDirectedLayout(
     ArrayRef<uint64_t> FuncSizes, ArrayRef<uint64_t> FuncCounts,
-    ArrayRef<EdgeCount> CallCounts, ArrayRef<uint64_t> CallOffsets) {
+    ArrayRef<EdgeCount> CallCounts, ArrayRef<uint64_t> CallOffsets,
+    const clv2::OptionsContext &Ctx) {
   CDSortConfig Config;
-  // Populate the config from the command-line options.
-  if (CacheEntries.getNumOccurrences() > 0)
-    Config.CacheEntries = CacheEntries;
-  if (CacheSize.getNumOccurrences() > 0)
-    Config.CacheSize = CacheSize;
-  if (CDMaxChainSize.getNumOccurrences() > 0)
-    Config.MaxChainSize = CDMaxChainSize;
-  if (DistancePower.getNumOccurrences() > 0)
-    Config.DistancePower = DistancePower;
-  if (FrequencyScale.getNumOccurrences() > 0)
-    Config.FrequencyScale = FrequencyScale;
+  if (isCacheEntriesSpecified(Ctx))
+    Config.CacheEntries = getCacheEntries(Ctx);
+  if (isCacheSizeSpecified(Ctx))
+    Config.CacheSize = getCacheSize(Ctx);
+  if (isCDMaxChainSizeSpecified(Ctx))
+    Config.MaxChainSize = getCDMaxChainSize(Ctx);
+  if (isDistancePowerSpecified(Ctx))
+    Config.DistancePower = getDistancePower(Ctx);
+  if (isFrequencyScaleSpecified(Ctx))
+    Config.FrequencyScale = getFrequencyScale(Ctx);
   return computeCacheDirectedLayout(Config, FuncSizes, FuncCounts, CallCounts,
                                     CallOffsets);
 }

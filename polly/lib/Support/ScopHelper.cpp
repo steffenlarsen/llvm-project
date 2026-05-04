@@ -11,13 +11,15 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/Support/ScopHelper.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopInfo.h"
 #include "polly/Support/SCEVValidator.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/RegionInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
@@ -28,13 +30,13 @@ using namespace polly;
 
 #define DEBUG_TYPE "polly-scop-helper"
 
-static cl::list<std::string> DebugFunctions(
-    "polly-debug-func",
-    cl::desc("Allow calls to the specified functions in SCoPs even if their "
-             "side-effects are unknown. This can be used to do debug output in "
-             "Polly-transformed code."),
-    cl::Hidden, cl::CommaSeparated, cl::cat(PollyCategory));
-
+static const std::vector<std::string> &
+getDebugFunctions(const clv2::OptionsContext &Ctx) {
+  static const std::vector<std::string> Empty;
+  if (auto *Opts = polly_opts::getPollyOpts(Ctx))
+    return Opts->get<&llvm::clv2::POLLY_DebugFunc>();
+  return Empty;
+}
 // Ensures that there is just one predecessor to the entry node from outside the
 // region.
 // The identity of the region entry node is preserved.
@@ -686,8 +688,9 @@ bool polly::isDebugCall(Instruction *Inst) {
   if (!CF)
     return false;
 
-  return std::find(DebugFunctions.begin(), DebugFunctions.end(),
-                   CF->getName()) != DebugFunctions.end();
+  auto &Ctx = Inst->getFunction()->getContext().getOptionsContext();
+  const auto &DF = getDebugFunctions(Ctx);
+  return std::find(DF.begin(), DF.end(), CF->getName()) != DF.end();
 }
 
 static bool hasDebugCall(BasicBlock *BB) {
@@ -700,7 +703,11 @@ static bool hasDebugCall(BasicBlock *BB) {
 
 bool polly::hasDebugCall(ScopStmt *Stmt) {
   // Quick skip if no debug functions have been defined.
-  if (DebugFunctions.empty())
+  const auto &Ctx =
+      Stmt && Stmt->getParent()
+          ? Stmt->getParent()->getFunction().getContext().getOptionsContext()
+          : clv2::defaultOptionsContext();
+  if (getDebugFunctions(Ctx).empty())
     return false;
 
   if (!Stmt)

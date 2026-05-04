@@ -23,6 +23,7 @@
 #include "llvm/CodeGen/MachinePassManager.h"
 #include "llvm/IR/Analysis.h"
 #include "llvm/MC/MCAsmInfo.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Target/TargetMachine.h"
 using namespace llvm;
@@ -130,6 +131,7 @@ bool WebAssemblyLateEHPrepareImpl::runOnMachineFunction(MachineFunction &MF) {
       ExceptionHandling::Wasm)
     return false;
 
+  auto &OptsCtx = MF.getTarget().getOptionsContext();
   bool Changed = false;
   if (MF.getFunction().hasPersonalityFn()) {
     Changed |= removeUnreachableEHPads(MF);
@@ -137,7 +139,7 @@ bool WebAssemblyLateEHPrepareImpl::runOnMachineFunction(MachineFunction &MF) {
     Changed |= hoistCatches(MF);
     Changed |= addCatchAlls(MF);
     Changed |= replaceFuncletReturns(MF);
-    if (!WebAssembly::WasmUseLegacyEH)
+    if (!WebAssembly::getWasmUseLegacyEH(OptsCtx))
       Changed |= addCatchRefsAndThrowRefs(MF);
   }
   Changed |= removeUnnecessaryUnreachables(MF);
@@ -227,9 +229,10 @@ bool WebAssemblyLateEHPrepareImpl::addCatchAlls(MachineFunction &MF) {
     if (InsertPos == MBB.end() ||
         !WebAssembly::isCatch(InsertPos->getOpcode())) {
       Changed = true;
-      unsigned CatchAllOpcode = WebAssembly::WasmUseLegacyEH
-                                    ? WebAssembly::CATCH_ALL_LEGACY
-                                    : WebAssembly::CATCH_ALL;
+      unsigned CatchAllOpcode =
+          WebAssembly::getWasmUseLegacyEH(MF.getTarget().getOptionsContext())
+              ? WebAssembly::CATCH_ALL_LEGACY
+              : WebAssembly::CATCH_ALL;
       BuildMI(MBB, InsertPos,
               InsertPos == MBB.end() ? DebugLoc() : InsertPos->getDebugLoc(),
               TII.get(CatchAllOpcode));

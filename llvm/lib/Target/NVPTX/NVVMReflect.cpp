@@ -33,25 +33,25 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
+#define NVVM_REFLECT_FUNCTION "__nvvm_reflect"
+#define NVVM_REFLECT_OCL_FUNCTION "__nvvm_reflect_ocl"
+// Argument of reflect call to retrive arch number
+#define CUDA_ARCH_NAME "__CUDA_ARCH"
+// Argument of reflect call to retrive ftz mode
+#define CUDA_FTZ_NAME "__CUDA_FTZ"
+// Name of module metadata where ftz mode is stored
+#define CUDA_FTZ_MODULE_NAME "nvvm-reflect-ftz"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "nvvm-reflect"
-
-#define NVVM_REFLECT_FUNCTION "__nvvm_reflect"
-#define NVVM_REFLECT_OCL_FUNCTION "__nvvm_reflect_ocl"
-// Argument of reflect call to retrive arch number.
-#define CUDA_ARCH_NAME "__CUDA_ARCH"
-// Argument of reflect call to retrive ftz mode.
-#define CUDA_FTZ_NAME "__CUDA_FTZ"
-// Name of module metadata where ftz mode is stored.
-#define CUDA_FTZ_MODULE_NAME "nvvm-reflect-ftz"
 
 namespace {
 class NVVMReflect {
@@ -84,23 +84,24 @@ ModulePass *llvm::createNVVMReflectPass(unsigned SmVersion) {
   return new NVVMReflectLegacyPass(SmVersion);
 }
 
-static cl::opt<bool>
-    NVVMReflectEnabled("nvvm-reflect-enable", cl::init(true), cl::Hidden,
-                       cl::desc("NVVM reflection, enabled by default"));
+static bool getNVVMReflectEnabled(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::NVPTX_NVVMReflectEnabled>(
+      M.getContext().getOptionsContext());
+}
+
+static SmallVector<std::string, 4> getReflectList(const Module &M) {
+  if (auto *O = clv2::getView<&clv2::NVPTXOptsReg>(
+          M.getContext().getOptionsContext())) {
+    const auto &V = O->get<&clv2::NVPTX_NVVMReflectList>();
+    return SmallVector<std::string, 4>(V.begin(), V.end());
+  }
+  return {};
+}
 
 char NVVMReflectLegacyPass::ID = 0;
 INITIALIZE_PASS(NVVMReflectLegacyPass, "nvvm-reflect",
                 "Replace occurrences of __nvvm_reflect() calls with 0/1", false,
                 false)
-
-// Allow users to specify additional key/value pairs to reflect. These key/value
-// pairs are the last to be added to the ReflectMap, and therefore will take
-// precedence over initial values (i.e. __CUDA_FTZ from module medadata and
-// __CUDA_ARCH from SmVersion).
-static cl::list<std::string> ReflectList(
-    "nvvm-reflect-add", cl::value_desc("name=<int>"), cl::Hidden,
-    cl::desc("A key=value pair. Replace __nvvm_reflect(name) with value."),
-    cl::ValueRequired);
 
 // Set the ReflectMap with, first, the value of __CUDA_FTZ from module metadata,
 // and then the key/value pairs from the command line.
@@ -109,19 +110,21 @@ void NVVMReflect::populateReflectMap(Module &M) {
           M.getModuleFlag(CUDA_FTZ_MODULE_NAME)))
     ReflectMap[CUDA_FTZ_NAME] = Flag->getSExtValue();
 
-  for (StringRef Option : ReflectList) {
+  for (const auto &Option : getReflectList(M)) {
     LLVM_DEBUG(dbgs() << "ReflectOption : " << Option << "\n");
-    auto [Name, Val] = Option.split('=');
+    StringRef OptionRef(Option);
+    auto [Name, Val] = OptionRef.split('=');
     if (Name.empty())
-      report_fatal_error("Empty name in nvvm-reflect-add option '" + Option +
-                         "'");
+      report_fatal_error(Twine("Empty name in nvvm-reflect-add option '") +
+                         Option + "'");
     if (Val.empty())
-      report_fatal_error("Missing value in nvvm-reflect-add option '" + Option +
-                         "'");
+      report_fatal_error(Twine("Missing value in nvvm-reflect-add option '") +
+                         Option + "'");
     unsigned ValInt;
     if (!to_integer(Val.trim(), ValInt, 10))
-      report_fatal_error("integer value expected in nvvm-reflect-add option '" +
-                         Option + "'");
+      report_fatal_error(
+          Twine("integer value expected in nvvm-reflect-add option '") +
+          Option + "'");
     ReflectMap[Name] = ValInt;
   }
 }
@@ -191,7 +194,7 @@ void NVVMReflect::foldReflectCall(CallInst *Call, Constant *NewValue) {
   // Replace an instruction with a constant and add all users of the instruction
   // to the worklist
   auto ReplaceInstructionWithConst = [&](Instruction *I, Constant *C) {
-    for (User *U : I->users())
+    for (auto *U : I->users())
       if (auto *UI = dyn_cast<Instruction>(U))
         Worklist.push_back(UI);
     I->replaceAllUsesWith(C);
@@ -202,7 +205,7 @@ void NVVMReflect::foldReflectCall(CallInst *Call, Constant *NewValue) {
   auto &DL = Call->getModule()->getDataLayout();
   while (!Worklist.empty()) {
     auto *I = Worklist.pop_back_val();
-    if (Constant *C = ConstantFoldInstruction(I, DL)) {
+    if (auto *C = ConstantFoldInstruction(I, DL)) {
       ReplaceInstructionWithConst(I, C);
       if (isInstructionTriviallyDead(I))
         I->eraseFromParent();
@@ -213,7 +216,7 @@ void NVVMReflect::foldReflectCall(CallInst *Call, Constant *NewValue) {
 }
 
 bool NVVMReflect::runOnModule(Module &M) {
-  if (!NVVMReflectEnabled)
+  if (!getNVVMReflectEnabled(M))
     return false;
   populateReflectMap(M);
   bool Changed = false;

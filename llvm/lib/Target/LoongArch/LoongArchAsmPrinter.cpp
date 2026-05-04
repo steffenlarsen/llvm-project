@@ -21,22 +21,25 @@
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineModuleInfoImpls.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInstBuilder.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "loongarch-asm-printer"
 
-cl::opt<bool> LArchAnnotateTableJump(
-    "loongarch-annotate-tablejump", cl::Hidden,
-    cl::desc(
-        "Annotate table jump instruction to correlate it with the jump table."),
-    cl::init(false));
+static bool getAnnotateTableJump(const Function &F) {
+  return clv2::getOptValOr<&clv2::LoongArchOptsReg,
+                           &clv2::LA_AnnotateTableJump>(
+      F.getContext().getOptionsContext(), false);
+}
 
 // Simple pseudo-instructions have their lowering (with expansion to real
 // instructions) auto-generated.
@@ -265,7 +268,7 @@ void LoongArchAsmPrinter::emitSled(const MachineInstr &MI, SledKind Kind) {
 void LoongArchAsmPrinter::emitJumpTableInfo() {
   AsmPrinter::emitJumpTableInfo();
 
-  if (!LArchAnnotateTableJump)
+  if (!getAnnotateTableJump(MF->getFunction()))
     return;
 
   assert(TM.getTargetTriple().isOSBinFormatELF());

@@ -76,9 +76,10 @@ public:
   /// (e.g. getSubRegFromChannel(0) -> AMDGPU::sub0)
   static unsigned getSubRegFromChannel(unsigned Channel, unsigned NumRegs = 1);
 
-  bool spillSGPRToVGPR() const {
-    return SpillSGPRToVGPR;
-  }
+  /// Returns whether SGPR spills to VGPRs are enabled.
+  /// Note: reads the option lazily because the OptionsContext may not be set
+  /// on the subtarget when SIRegisterInfo is constructed.
+  bool spillSGPRToVGPR() const;
 
   bool isCFISavedRegsSpillEnabled() const;
 

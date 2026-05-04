@@ -29,6 +29,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/LEB128.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
@@ -460,13 +461,15 @@ llvm::Error dwarfgen::Generator::init(Triple TheTriple, uint16_t V) {
                                        TripleName,
                                    inconvertibleErrorCode());
 
-  MCOptions = mc::InitMCTargetOptionsFromFlags();
+  MCOptions = mc::InitMCTargetOptionsFromFlags(clv2::defaultOptionsContext());
   MAI.reset(TheTarget->createMCAsmInfo(*MRI, TheTriple, MCOptions));
   if (!MAI)
     return make_error<StringError>("no asm info for target " + TripleName,
                                    inconvertibleErrorCode());
 
-  MSTI.reset(TheTarget->createMCSubtargetInfo(TheTriple, "", ""));
+  MSTI.reset(TheTarget->createMCSubtargetInfo(
+      TheTriple, "", "",
+      /*Ctx=*/llvm::clv2::defaultOptionsContext()));
   if (!MSTI)
     return make_error<StringError>("no subtarget info for target " + TripleName,
                                    inconvertibleErrorCode());

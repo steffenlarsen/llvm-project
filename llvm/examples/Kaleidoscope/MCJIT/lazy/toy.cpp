@@ -30,24 +30,30 @@ enum Token {
   tok_eof = -1,
 
   // commands
-  tok_def = -2, tok_extern = -3,
+  tok_def = -2,
+  tok_extern = -3,
 
   // primary
-  tok_identifier = -4, tok_number = -5,
+  tok_identifier = -4,
+  tok_number = -5,
 
   // control
-  tok_if = -6, tok_then = -7, tok_else = -8,
-  tok_for = -9, tok_in = -10,
+  tok_if = -6,
+  tok_then = -7,
+  tok_else = -8,
+  tok_for = -9,
+  tok_in = -10,
 
   // operators
-  tok_binary = -11, tok_unary = -12,
+  tok_binary = -11,
+  tok_unary = -12,
 
   // var definition
   tok_var = -13
 };
 
-static std::string IdentifierStr;  // Filled in if tok_identifier
-static double NumVal;              // Filled in if tok_number
+static std::string IdentifierStr; // Filled in if tok_identifier
+static double NumVal;             // Filled in if tok_number
 
 /// gettok - Return the next token from standard input.
 static int gettok() {
@@ -62,20 +68,30 @@ static int gettok() {
     while (isalnum((LastChar = getchar())))
       IdentifierStr += LastChar;
 
-    if (IdentifierStr == "def") return tok_def;
-    if (IdentifierStr == "extern") return tok_extern;
-    if (IdentifierStr == "if") return tok_if;
-    if (IdentifierStr == "then") return tok_then;
-    if (IdentifierStr == "else") return tok_else;
-    if (IdentifierStr == "for") return tok_for;
-    if (IdentifierStr == "in") return tok_in;
-    if (IdentifierStr == "binary") return tok_binary;
-    if (IdentifierStr == "unary") return tok_unary;
-    if (IdentifierStr == "var") return tok_var;
+    if (IdentifierStr == "def")
+      return tok_def;
+    if (IdentifierStr == "extern")
+      return tok_extern;
+    if (IdentifierStr == "if")
+      return tok_if;
+    if (IdentifierStr == "then")
+      return tok_then;
+    if (IdentifierStr == "else")
+      return tok_else;
+    if (IdentifierStr == "for")
+      return tok_for;
+    if (IdentifierStr == "in")
+      return tok_in;
+    if (IdentifierStr == "binary")
+      return tok_binary;
+    if (IdentifierStr == "unary")
+      return tok_unary;
+    if (IdentifierStr == "var")
+      return tok_var;
     return tok_identifier;
   }
 
-  if (isdigit(LastChar) || LastChar == '.') {   // Number: [0-9.]+
+  if (isdigit(LastChar) || LastChar == '.') { // Number: [0-9.]+
     std::string NumStr;
     do {
       NumStr += LastChar;
@@ -88,7 +104,8 @@ static int gettok() {
 
   if (LastChar == '#') {
     // Comment until end of line.
-    do LastChar = getchar();
+    do
+      LastChar = getchar();
     while (LastChar != EOF && LastChar != '\n' && LastChar != '\r');
 
     if (LastChar != EOF)
@@ -119,6 +136,7 @@ public:
 /// NumberExprAST - Expression class for numeric literals like "1.0".
 class NumberExprAST : public ExprAST {
   double Val;
+
 public:
   NumberExprAST(double val) : Val(val) {}
   virtual Value *Codegen();
@@ -127,6 +145,7 @@ public:
 /// VariableExprAST - Expression class for referencing a variable, like "a".
 class VariableExprAST : public ExprAST {
   std::string Name;
+
 public:
   VariableExprAST(const std::string &name) : Name(name) {}
   const std::string &getName() const { return Name; }
@@ -137,9 +156,10 @@ public:
 class UnaryExprAST : public ExprAST {
   char Opcode;
   ExprAST *Operand;
+
 public:
   UnaryExprAST(char opcode, ExprAST *operand)
-    : Opcode(opcode), Operand(operand) {}
+      : Opcode(opcode), Operand(operand) {}
   virtual Value *Codegen();
 };
 
@@ -147,28 +167,31 @@ public:
 class BinaryExprAST : public ExprAST {
   char Op;
   ExprAST *LHS, *RHS;
+
 public:
   BinaryExprAST(char op, ExprAST *lhs, ExprAST *rhs)
-    : Op(op), LHS(lhs), RHS(rhs) {}
+      : Op(op), LHS(lhs), RHS(rhs) {}
   virtual Value *Codegen();
 };
 
 /// CallExprAST - Expression class for function calls.
 class CallExprAST : public ExprAST {
   std::string Callee;
-  std::vector<ExprAST*> Args;
+  std::vector<ExprAST *> Args;
+
 public:
-  CallExprAST(const std::string &callee, std::vector<ExprAST*> &args)
-    : Callee(callee), Args(args) {}
+  CallExprAST(const std::string &callee, std::vector<ExprAST *> &args)
+      : Callee(callee), Args(args) {}
   virtual Value *Codegen();
 };
 
 /// IfExprAST - Expression class for if/then/else.
 class IfExprAST : public ExprAST {
   ExprAST *Cond, *Then, *Else;
+
 public:
   IfExprAST(ExprAST *cond, ExprAST *then, ExprAST *_else)
-  : Cond(cond), Then(then), Else(_else) {}
+      : Cond(cond), Then(then), Else(_else) {}
   virtual Value *Codegen();
 };
 
@@ -176,21 +199,23 @@ public:
 class ForExprAST : public ExprAST {
   std::string VarName;
   ExprAST *Start, *End, *Step, *Body;
+
 public:
   ForExprAST(const std::string &varname, ExprAST *start, ExprAST *end,
              ExprAST *step, ExprAST *body)
-    : VarName(varname), Start(start), End(end), Step(step), Body(body) {}
+      : VarName(varname), Start(start), End(end), Step(step), Body(body) {}
   virtual Value *Codegen();
 };
 
 /// VarExprAST - Expression class for var/in
 class VarExprAST : public ExprAST {
-  std::vector<std::pair<std::string, ExprAST*> > VarNames;
+  std::vector<std::pair<std::string, ExprAST *>> VarNames;
   ExprAST *Body;
+
 public:
-  VarExprAST(const std::vector<std::pair<std::string, ExprAST*> > &varnames,
+  VarExprAST(const std::vector<std::pair<std::string, ExprAST *>> &varnames,
              ExprAST *body)
-  : VarNames(varnames), Body(body) {}
+      : VarNames(varnames), Body(body) {}
 
   virtual Value *Codegen();
 };
@@ -201,18 +226,18 @@ class PrototypeAST {
   std::string Name;
   std::vector<std::string> Args;
   bool isOperator;
-  unsigned Precedence;  // Precedence if a binary op.
+  unsigned Precedence; // Precedence if a binary op.
 public:
   PrototypeAST(const std::string &name, const std::vector<std::string> &args,
                bool isoperator = false, unsigned prec = 0)
-  : Name(name), Args(args), isOperator(isoperator), Precedence(prec) {}
+      : Name(name), Args(args), isOperator(isoperator), Precedence(prec) {}
 
   bool isUnaryOp() const { return isOperator && Args.size() == 1; }
   bool isBinaryOp() const { return isOperator && Args.size() == 2; }
 
   char getOperatorName() const {
     assert(isUnaryOp() || isBinaryOp());
-    return Name[Name.size()-1];
+    return Name[Name.size() - 1];
   }
 
   unsigned getBinaryPrecedence() const { return Precedence; }
@@ -226,9 +251,9 @@ public:
 class FunctionAST {
   PrototypeAST *Proto;
   ExprAST *Body;
+
 public:
-  FunctionAST(PrototypeAST *proto, ExprAST *body)
-    : Proto(proto), Body(body) {}
+  FunctionAST(PrototypeAST *proto, ExprAST *body) : Proto(proto), Body(body) {}
 
   Function *Codegen();
 };
@@ -241,9 +266,7 @@ public:
 /// token the parser is looking at.  getNextToken reads another token from the
 /// lexer and updates CurTok with its results.
 static int CurTok;
-static int getNextToken() {
-  return CurTok = gettok();
-}
+static int getNextToken() { return CurTok = gettok(); }
 
 /// BinopPrecedence - This holds the precedence for each binary operator that is
 /// defined.
@@ -256,14 +279,24 @@ static int GetTokPrecedence() {
 
   // Make sure it's a declared binop.
   int TokPrec = BinopPrecedence[CurTok];
-  if (TokPrec <= 0) return -1;
+  if (TokPrec <= 0)
+    return -1;
   return TokPrec;
 }
 
 /// Error* - These are little helper functions for error handling.
-ExprAST *Error(const char *Str) { fprintf(stderr, "Error: %s\n", Str);return 0;}
-PrototypeAST *ErrorP(const char *Str) { Error(Str); return 0; }
-FunctionAST *ErrorF(const char *Str) { Error(Str); return 0; }
+ExprAST *Error(const char *Str) {
+  fprintf(stderr, "Error: %s\n", Str);
+  return 0;
+}
+PrototypeAST *ErrorP(const char *Str) {
+  Error(Str);
+  return 0;
+}
+FunctionAST *ErrorF(const char *Str) {
+  Error(Str);
+  return 0;
+}
 
 static ExprAST *ParseExpression();
 
@@ -273,21 +306,23 @@ static ExprAST *ParseExpression();
 static ExprAST *ParseIdentifierExpr() {
   std::string IdName = IdentifierStr;
 
-  getNextToken();  // eat identifier.
+  getNextToken(); // eat identifier.
 
   if (CurTok != '(') // Simple variable ref.
     return new VariableExprAST(IdName);
 
   // Call.
-  getNextToken();  // eat (
-  std::vector<ExprAST*> Args;
+  getNextToken(); // eat (
+  std::vector<ExprAST *> Args;
   if (CurTok != ')') {
     while (1) {
       ExprAST *Arg = ParseExpression();
-      if (!Arg) return 0;
+      if (!Arg)
+        return 0;
       Args.push_back(Arg);
 
-      if (CurTok == ')') break;
+      if (CurTok == ')')
+        break;
 
       if (CurTok != ',')
         return Error("Expected ')' or ',' in argument list");
@@ -310,30 +345,33 @@ static ExprAST *ParseNumberExpr() {
 
 /// parenexpr ::= '(' expression ')'
 static ExprAST *ParseParenExpr() {
-  getNextToken();  // eat (.
+  getNextToken(); // eat (.
   ExprAST *V = ParseExpression();
-  if (!V) return 0;
+  if (!V)
+    return 0;
 
   if (CurTok != ')')
     return Error("expected ')'");
-  getNextToken();  // eat ).
+  getNextToken(); // eat ).
   return V;
 }
 
 /// ifexpr ::= 'if' expression 'then' expression 'else' expression
 static ExprAST *ParseIfExpr() {
-  getNextToken();  // eat the if.
+  getNextToken(); // eat the if.
 
   // condition.
   ExprAST *Cond = ParseExpression();
-  if (!Cond) return 0;
+  if (!Cond)
+    return 0;
 
   if (CurTok != tok_then)
     return Error("expected then");
-  getNextToken();  // eat the then
+  getNextToken(); // eat the then
 
   ExprAST *Then = ParseExpression();
-  if (Then == 0) return 0;
+  if (Then == 0)
+    return 0;
 
   if (CurTok != tok_else)
     return Error("expected else");
@@ -341,49 +379,53 @@ static ExprAST *ParseIfExpr() {
   getNextToken();
 
   ExprAST *Else = ParseExpression();
-  if (!Else) return 0;
+  if (!Else)
+    return 0;
 
   return new IfExprAST(Cond, Then, Else);
 }
 
 /// forexpr ::= 'for' identifier '=' expr ',' expr (',' expr)? 'in' expression
 static ExprAST *ParseForExpr() {
-  getNextToken();  // eat the for.
+  getNextToken(); // eat the for.
 
   if (CurTok != tok_identifier)
     return Error("expected identifier after for");
 
   std::string IdName = IdentifierStr;
-  getNextToken();  // eat identifier.
+  getNextToken(); // eat identifier.
 
   if (CurTok != '=')
     return Error("expected '=' after for");
-  getNextToken();  // eat '='.
-
+  getNextToken(); // eat '='.
 
   ExprAST *Start = ParseExpression();
-  if (Start == 0) return 0;
+  if (Start == 0)
+    return 0;
   if (CurTok != ',')
     return Error("expected ',' after for start value");
   getNextToken();
 
   ExprAST *End = ParseExpression();
-  if (End == 0) return 0;
+  if (End == 0)
+    return 0;
 
   // The step value is optional.
   ExprAST *Step = 0;
   if (CurTok == ',') {
     getNextToken();
     Step = ParseExpression();
-    if (Step == 0) return 0;
+    if (Step == 0)
+      return 0;
   }
 
   if (CurTok != tok_in)
     return Error("expected 'in' after for");
-  getNextToken();  // eat 'in'.
+  getNextToken(); // eat 'in'.
 
   ExprAST *Body = ParseExpression();
-  if (Body == 0) return 0;
+  if (Body == 0)
+    return 0;
 
   return new ForExprAST(IdName, Start, End, Step, Body);
 }
@@ -391,9 +433,9 @@ static ExprAST *ParseForExpr() {
 /// varexpr ::= 'var' identifier ('=' expression)?
 //                    (',' identifier ('=' expression)?)* 'in' expression
 static ExprAST *ParseVarExpr() {
-  getNextToken();  // eat the var.
+  getNextToken(); // eat the var.
 
-  std::vector<std::pair<std::string, ExprAST*> > VarNames;
+  std::vector<std::pair<std::string, ExprAST *>> VarNames;
 
   // At least one variable name is required.
   if (CurTok != tok_identifier)
@@ -401,7 +443,7 @@ static ExprAST *ParseVarExpr() {
 
   while (1) {
     std::string Name = IdentifierStr;
-    getNextToken();  // eat identifier.
+    getNextToken(); // eat identifier.
 
     // Read the optional initializer.
     ExprAST *Init = 0;
@@ -409,13 +451,15 @@ static ExprAST *ParseVarExpr() {
       getNextToken(); // eat the '='.
 
       Init = ParseExpression();
-      if (Init == 0) return 0;
+      if (Init == 0)
+        return 0;
     }
 
     VarNames.push_back(std::make_pair(Name, Init));
 
     // End of var list, exit loop.
-    if (CurTok != ',') break;
+    if (CurTok != ',')
+      break;
     getNextToken(); // eat the ','.
 
     if (CurTok != tok_identifier)
@@ -425,10 +469,11 @@ static ExprAST *ParseVarExpr() {
   // At this point, we have to have 'in'.
   if (CurTok != tok_in)
     return Error("expected 'in' keyword after 'var'");
-  getNextToken();  // eat 'in'.
+  getNextToken(); // eat 'in'.
 
   ExprAST *Body = ParseExpression();
-  if (Body == 0) return 0;
+  if (Body == 0)
+    return 0;
 
   return new VarExprAST(VarNames, Body);
 }
@@ -442,13 +487,20 @@ static ExprAST *ParseVarExpr() {
 ///   ::= varexpr
 static ExprAST *ParsePrimary() {
   switch (CurTok) {
-  default: return Error("unknown token when expecting an expression");
-  case tok_identifier: return ParseIdentifierExpr();
-  case tok_number:     return ParseNumberExpr();
-  case '(':            return ParseParenExpr();
-  case tok_if:         return ParseIfExpr();
-  case tok_for:        return ParseForExpr();
-  case tok_var:        return ParseVarExpr();
+  default:
+    return Error("unknown token when expecting an expression");
+  case tok_identifier:
+    return ParseIdentifierExpr();
+  case tok_number:
+    return ParseNumberExpr();
+  case '(':
+    return ParseParenExpr();
+  case tok_if:
+    return ParseIfExpr();
+  case tok_for:
+    return ParseForExpr();
+  case tok_var:
+    return ParseVarExpr();
   }
 }
 
@@ -482,18 +534,20 @@ static ExprAST *ParseBinOpRHS(int ExprPrec, ExprAST *LHS) {
 
     // Okay, we know this is a binop.
     int BinOp = CurTok;
-    getNextToken();  // eat binop
+    getNextToken(); // eat binop
 
     // Parse the unary expression after the binary operator.
     ExprAST *RHS = ParseUnary();
-    if (!RHS) return 0;
+    if (!RHS)
+      return 0;
 
     // If BinOp binds less tightly with RHS than the operator after RHS, let
     // the pending operator take RHS as its LHS.
     int NextPrec = GetTokPrecedence();
     if (TokPrec < NextPrec) {
-      RHS = ParseBinOpRHS(TokPrec+1, RHS);
-      if (RHS == 0) return 0;
+      RHS = ParseBinOpRHS(TokPrec + 1, RHS);
+      if (RHS == 0)
+        return 0;
     }
 
     // Merge LHS/RHS.
@@ -506,7 +560,8 @@ static ExprAST *ParseBinOpRHS(int ExprPrec, ExprAST *LHS) {
 ///
 static ExprAST *ParseExpression() {
   ExprAST *LHS = ParseUnary();
-  if (!LHS) return 0;
+  if (!LHS)
+    return 0;
 
   return ParseBinOpRHS(0, LHS);
 }
@@ -567,7 +622,7 @@ static PrototypeAST *ParsePrototype() {
     return ErrorP("Expected ')' in prototype");
 
   // success.
-  getNextToken();  // eat ')'.
+  getNextToken(); // eat ')'.
 
   // Verify right number of names for operator.
   if (Kind && ArgNames.size() != Kind)
@@ -578,9 +633,10 @@ static PrototypeAST *ParsePrototype() {
 
 /// definition ::= 'def' prototype expression
 static FunctionAST *ParseDefinition() {
-  getNextToken();  // eat def.
+  getNextToken(); // eat def.
   PrototypeAST *Proto = ParsePrototype();
-  if (Proto == 0) return 0;
+  if (Proto == 0)
+    return 0;
 
   if (ExprAST *E = ParseExpression())
     return new FunctionAST(Proto, E);
@@ -599,7 +655,7 @@ static FunctionAST *ParseTopLevelExpr() {
 
 /// external ::= 'extern' prototype
 static PrototypeAST *ParseExtern() {
-  getNextToken();  // eat extern.
+  getNextToken(); // eat extern.
   return ParsePrototype();
 }
 
@@ -608,8 +664,7 @@ static PrototypeAST *ParseExtern() {
 //===----------------------------------------------------------------------===//
 
 // FIXME: Obviously we can do better than this
-std::string GenerateUniqueName(const char *root)
-{
+std::string GenerateUniqueName(const char *root) {
   static int i = 0;
   char s[16];
   sprintf(s, "%s%d", root, i++);
@@ -617,11 +672,10 @@ std::string GenerateUniqueName(const char *root)
   return S;
 }
 
-std::string MakeLegalFunctionName(std::string Name)
-{
+std::string MakeLegalFunctionName(std::string Name) {
   std::string NewName;
   if (!Name.length())
-      return GenerateUniqueName("anon_func_");
+    return GenerateUniqueName("anon_func_");
 
   // Start with what we have
   NewName = Name;
@@ -632,9 +686,11 @@ std::string MakeLegalFunctionName(std::string Name)
   }
 
   // Replace illegal characters with their ASCII equivalent
-  std::string legal_elements = "_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  std::string legal_elements =
+      "_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   size_t pos;
-  while ((pos = NewName.find_first_not_of(legal_elements)) != std::string::npos) {
+  while ((pos = NewName.find_first_not_of(legal_elements)) !=
+         std::string::npos) {
     char old_c = NewName.at(pos);
     char new_str[16];
     sprintf(new_str, "%d", (int)old_c);
@@ -648,33 +704,31 @@ std::string MakeLegalFunctionName(std::string Name)
 // MCJIT helper class
 //===----------------------------------------------------------------------===//
 
-class MCJITHelper
-{
+class MCJITHelper {
 public:
-  MCJITHelper(LLVMContext& C) : Context(C), OpenModule(NULL) {}
+  MCJITHelper(LLVMContext &C) : Context(C), OpenModule(NULL) {}
   ~MCJITHelper();
 
   Function *getFunction(const std::string FnName);
   Module *getModuleForNewFunction();
-  void *getPointerToFunction(Function* F);
+  void *getPointerToFunction(Function *F);
   void *getPointerToNamedFunction(const std::string &Name);
   ExecutionEngine *compileModule(Module *M);
   void closeCurrentModule();
   void dump();
 
 private:
-  typedef std::vector<Module*> ModuleVector;
+  typedef std::vector<Module *> ModuleVector;
 
-  LLVMContext  &Context;
-  Module       *OpenModule;
-  ModuleVector  Modules;
+  LLVMContext &Context;
+  Module *OpenModule;
+  ModuleVector Modules;
   std::map<Module *, ExecutionEngine *> EngineMap;
 };
 
-class HelpingMemoryManager : public SectionMemoryManager
-{
-  HelpingMemoryManager(const HelpingMemoryManager&) = delete;
-  void operator=(const HelpingMemoryManager&) = delete;
+class HelpingMemoryManager : public SectionMemoryManager {
+  HelpingMemoryManager(const HelpingMemoryManager &) = delete;
+  void operator=(const HelpingMemoryManager &) = delete;
 
 public:
   HelpingMemoryManager(MCJITHelper *Helper) : MasterHelper(Helper) {}
@@ -690,13 +744,13 @@ public:
   /// message to stderr and aborts.
   virtual void *getPointerToNamedFunction(const std::string &Name,
                                           bool AbortOnFailure = true);
+
 private:
   MCJITHelper *MasterHelper;
 };
 
 void *HelpingMemoryManager::getPointerToNamedFunction(const std::string &Name,
-                                        bool AbortOnFailure)
-{
+                                                      bool AbortOnFailure) {
   // Try the standard symbol resolution first, but ask it not to abort.
   void *pfn = SectionMemoryManager::getPointerToNamedFunction(Name, false);
   if (pfn)
@@ -705,18 +759,16 @@ void *HelpingMemoryManager::getPointerToNamedFunction(const std::string &Name,
   pfn = MasterHelper->getPointerToNamedFunction(Name);
   if (!pfn && AbortOnFailure)
     report_fatal_error("Program used external function '" + Name +
-                        "' which could not be resolved!");
+                       "' which could not be resolved!");
   return pfn;
 }
 
-MCJITHelper::~MCJITHelper()
-{
+MCJITHelper::~MCJITHelper() {
   // Walk the vector of modules.
   ModuleVector::iterator it, end;
-  for (it = Modules.begin(), end = Modules.end();
-       it != end; ++it) {
+  for (it = Modules.begin(), end = Modules.end(); it != end; ++it) {
     // See if we have an execution engine for this module.
-    std::map<Module*, ExecutionEngine*>::iterator mapIt = EngineMap.find(*it);
+    std::map<Module *, ExecutionEngine *>::iterator mapIt = EngineMap.find(*it);
     // If we have an EE, the EE owns the module so just delete the EE.
     if (mapIt != EngineMap.end()) {
       delete mapIt->second;
@@ -735,7 +787,7 @@ Function *MCJITHelper::getFunction(const std::string FnName) {
     Function *F = (*it)->getFunction(FnName);
     if (F) {
       if (*it == OpenModule)
-          return F;
+        return F;
 
       assert(OpenModule != NULL);
 
@@ -749,10 +801,8 @@ Function *MCJITHelper::getFunction(const std::string FnName) {
 
       // If we don't have a prototype yet, create one.
       if (!PF)
-        PF = Function::Create(F->getFunctionType(),
-                                      Function::ExternalLinkage,
-                                      FnName,
-                                      OpenModule);
+        PF = Function::Create(F->getFunctionType(), Function::ExternalLinkage,
+                              FnName, OpenModule);
       return PF;
     }
   }
@@ -772,7 +822,7 @@ Module *MCJITHelper::getModuleForNewFunction() {
   return M;
 }
 
-void *MCJITHelper::getPointerToFunction(Function* F) {
+void *MCJITHelper::getPointerToFunction(Function *F) {
   // Look for this function in an existing module
   ModuleVector::iterator begin = Modules.begin();
   ModuleVector::iterator end = Modules.end();
@@ -781,7 +831,8 @@ void *MCJITHelper::getPointerToFunction(Function* F) {
   for (it = begin; it != end; ++it) {
     Function *MF = (*it)->getFunction(FnName);
     if (MF == F) {
-      std::map<Module*, ExecutionEngine*>::iterator eeIt = EngineMap.find(*it);
+      std::map<Module *, ExecutionEngine *>::iterator eeIt =
+          EngineMap.find(*it);
       if (eeIt != EngineMap.end()) {
         void *P = eeIt->second->getPointerToFunction(F);
         if (P)
@@ -797,19 +848,18 @@ void *MCJITHelper::getPointerToFunction(Function* F) {
   return NULL;
 }
 
-void MCJITHelper::closeCurrentModule() {
-  OpenModule = NULL;
-}
+void MCJITHelper::closeCurrentModule() { OpenModule = NULL; }
 
 ExecutionEngine *MCJITHelper::compileModule(Module *M) {
   if (M == OpenModule)
     closeCurrentModule();
 
   std::string ErrStr;
-  ExecutionEngine *NewEngine = EngineBuilder(M)
-                                            .setErrorStr(&ErrStr)
-                                            .setMCJITMemoryManager(new HelpingMemoryManager(this))
-                                            .create();
+  ExecutionEngine *NewEngine =
+      EngineBuilder(M)
+          .setErrorStr(&ErrStr)
+          .setMCJITMemoryManager(new HelpingMemoryManager(this))
+          .create();
   if (!NewEngine) {
     fprintf(stderr, "Could not create ExecutionEngine: %s\n", ErrStr.c_str());
     exit(1);
@@ -832,7 +882,7 @@ ExecutionEngine *MCJITHelper::compileModule(Module *M) {
   // Eliminate Common SubExpressions.
   FPM->add(createGVNPass());
   // Simplify the control flow graph (deleting unreachable blocks, etc).
-  FPM->add(createCFGSimplificationPass());
+  FPM->add(createCFGSimplificationPass(M->getContext().getOptionsContext()));
   FPM->doInitialization();
 
   // For each function in the module
@@ -853,8 +903,7 @@ ExecutionEngine *MCJITHelper::compileModule(Module *M) {
   return NewEngine;
 }
 
-void *MCJITHelper::getPointerToNamedFunction(const std::string &Name)
-{
+void *MCJITHelper::getPointerToNamedFunction(const std::string &Name) {
   // Look for the functions in our modules, compiling only as necessary
   ModuleVector::iterator begin = Modules.begin();
   ModuleVector::iterator end = Modules.end();
@@ -862,7 +911,8 @@ void *MCJITHelper::getPointerToNamedFunction(const std::string &Name)
   for (it = begin; it != end; ++it) {
     Function *F = (*it)->getFunction(Name);
     if (F && !F->empty()) {
-      std::map<Module*, ExecutionEngine*>::iterator eeIt = EngineMap.find(*it);
+      std::map<Module *, ExecutionEngine *>::iterator eeIt =
+          EngineMap.find(*it);
       if (eeIt != EngineMap.end()) {
         void *P = eeIt->second->getPointerToFunction(F);
         if (P)
@@ -878,8 +928,7 @@ void *MCJITHelper::getPointerToNamedFunction(const std::string &Name)
   return NULL;
 }
 
-void MCJITHelper::dump()
-{
+void MCJITHelper::dump() {
   ModuleVector::iterator begin = Modules.begin();
   ModuleVector::iterator end = Modules.end();
   ModuleVector::iterator it;
@@ -892,18 +941,21 @@ void MCJITHelper::dump()
 //===----------------------------------------------------------------------===//
 
 static MCJITHelper *TheHelper;
-static LLVMContext TheContext;
+static LLVMContext TheContext{llvm::clv2::defaultOptionsContext()};
 static IRBuilder<> Builder(TheContext);
-static std::map<std::string, AllocaInst*> NamedValues;
+static std::map<std::string, AllocaInst *> NamedValues;
 
-Value *ErrorV(const char *Str) { Error(Str); return 0; }
+Value *ErrorV(const char *Str) {
+  Error(Str);
+  return 0;
+}
 
 /// CreateEntryBlockAlloca - Create an alloca instruction in the entry block of
 /// the function.  This is used for mutable variables etc.
 static AllocaInst *CreateEntryBlockAlloca(Function *TheFunction,
                                           const std::string &VarName) {
   IRBuilder<> TmpB(&TheFunction->getEntryBlock(),
-                 TheFunction->getEntryBlock().begin());
+                   TheFunction->getEntryBlock().begin());
   return TmpB.CreateAlloca(Type::getDoubleTy(TheContext), 0, VarName.c_str());
 }
 
@@ -916,7 +968,8 @@ Value *VariableExprAST::Codegen() {
   Value *V = NamedValues[Name];
   char ErrStr[256];
   sprintf(ErrStr, "Unknown variable name %s", Name.c_str());
-  if (V == 0) return ErrorV(ErrStr);
+  if (V == 0)
+    return ErrorV(ErrStr);
 
   // Load the value.
   return Builder.CreateLoad(V, Name.c_str());
@@ -924,9 +977,11 @@ Value *VariableExprAST::Codegen() {
 
 Value *UnaryExprAST::Codegen() {
   Value *OperandV = Operand->Codegen();
-  if (OperandV == 0) return 0;
+  if (OperandV == 0)
+    return 0;
 
-  Function *F = TheHelper->getFunction(MakeLegalFunctionName(std::string("unary")+Opcode));
+  Function *F = TheHelper->getFunction(
+      MakeLegalFunctionName(std::string("unary") + Opcode));
   if (F == 0)
     return ErrorV("Unknown unary operator");
 
@@ -937,16 +992,18 @@ Value *BinaryExprAST::Codegen() {
   // Special case '=' because we don't want to emit the LHS as an expression.
   if (Op == '=') {
     // Assignment requires the LHS to be an identifier.
-    VariableExprAST *LHSE = static_cast<VariableExprAST*>(LHS);
+    VariableExprAST *LHSE = static_cast<VariableExprAST *>(LHS);
     if (!LHSE)
       return ErrorV("destination of '=' must be a variable");
     // Codegen the RHS.
     Value *Val = RHS->Codegen();
-    if (Val == 0) return 0;
+    if (Val == 0)
+      return 0;
 
     // Look up the name.
     Value *Variable = NamedValues[LHSE->getName()];
-    if (Variable == 0) return ErrorV("Unknown variable name");
+    if (Variable == 0)
+      return ErrorV("Unknown variable name");
 
     Builder.CreateStore(Val, Variable);
     return Val;
@@ -954,26 +1011,33 @@ Value *BinaryExprAST::Codegen() {
 
   Value *L = LHS->Codegen();
   Value *R = RHS->Codegen();
-  if (L == 0 || R == 0) return 0;
+  if (L == 0 || R == 0)
+    return 0;
 
   switch (Op) {
-  case '+': return Builder.CreateFAdd(L, R, "addtmp");
-  case '-': return Builder.CreateFSub(L, R, "subtmp");
-  case '*': return Builder.CreateFMul(L, R, "multmp");
-  case '/': return Builder.CreateFDiv(L, R, "divtmp");
+  case '+':
+    return Builder.CreateFAdd(L, R, "addtmp");
+  case '-':
+    return Builder.CreateFSub(L, R, "subtmp");
+  case '*':
+    return Builder.CreateFMul(L, R, "multmp");
+  case '/':
+    return Builder.CreateFDiv(L, R, "divtmp");
   case '<':
     L = Builder.CreateFCmpULT(L, R, "cmptmp");
     // Convert bool 0/1 to double 0.0 or 1.0
     return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
-  default: break;
+  default:
+    break;
   }
 
   // If it wasn't a builtin binary operator, it must be a user defined one. Emit
   // a call to it.
-  Function *F = TheHelper->getFunction(MakeLegalFunctionName(std::string("binary")+Op));
+  Function *F =
+      TheHelper->getFunction(MakeLegalFunctionName(std::string("binary") + Op));
   assert(F && "binary operator not found!");
 
-  Value *Ops[] = { L, R };
+  Value *Ops[] = {L, R};
   return Builder.CreateCall(F, Ops, "binop");
 }
 
@@ -987,10 +1051,11 @@ Value *CallExprAST::Codegen() {
   if (CalleeF->arg_size() != Args.size())
     return ErrorV("Incorrect # arguments passed");
 
-  std::vector<Value*> ArgsV;
+  std::vector<Value *> ArgsV;
   for (unsigned i = 0, e = Args.size(); i != e; ++i) {
     ArgsV.push_back(Args[i]->Codegen());
-    if (ArgsV.back() == 0) return 0;
+    if (ArgsV.back() == 0)
+      return 0;
   }
 
   return Builder.CreateCall(CalleeF, ArgsV, "calltmp");
@@ -998,7 +1063,8 @@ Value *CallExprAST::Codegen() {
 
 Value *IfExprAST::Codegen() {
   Value *CondV = Cond->Codegen();
-  if (CondV == 0) return 0;
+  if (CondV == 0)
+    return 0;
 
   // Convert condition to a bool by comparing equal to 0.0.
   CondV = Builder.CreateFCmpONE(
@@ -1018,7 +1084,8 @@ Value *IfExprAST::Codegen() {
   Builder.SetInsertPoint(ThenBB);
 
   Value *ThenV = Then->Codegen();
-  if (ThenV == 0) return 0;
+  if (ThenV == 0)
+    return 0;
 
   Builder.CreateBr(MergeBB);
   // Codegen of 'Then' can change the current block, update ThenBB for the PHI.
@@ -1029,7 +1096,8 @@ Value *IfExprAST::Codegen() {
   Builder.SetInsertPoint(ElseBB);
 
   Value *ElseV = Else->Codegen();
-  if (ElseV == 0) return 0;
+  if (ElseV == 0)
+    return 0;
 
   Builder.CreateBr(MergeBB);
   // Codegen of 'Else' can change the current block, update ElseBB for the PHI.
@@ -1073,7 +1141,8 @@ Value *ForExprAST::Codegen() {
 
   // Emit the start code first, without 'variable' in scope.
   Value *StartVal = Start->Codegen();
-  if (StartVal == 0) return 0;
+  if (StartVal == 0)
+    return 0;
 
   // Store the value into the alloca.
   Builder.CreateStore(StartVal, Alloca);
@@ -1103,7 +1172,8 @@ Value *ForExprAST::Codegen() {
   Value *StepVal;
   if (Step) {
     StepVal = Step->Codegen();
-    if (StepVal == 0) return 0;
+    if (StepVal == 0)
+      return 0;
   } else {
     // If not specified, use 1.0.
     StepVal = ConstantFP::get(TheContext, APFloat(1.0));
@@ -1111,7 +1181,8 @@ Value *ForExprAST::Codegen() {
 
   // Compute the end condition.
   Value *EndCond = End->Codegen();
-  if (EndCond == 0) return EndCond;
+  if (EndCond == 0)
+    return EndCond;
 
   // Reload, increment, and restore the alloca.  This handles the case where
   // the body of the loop mutates the variable.
@@ -1139,7 +1210,6 @@ Value *ForExprAST::Codegen() {
   else
     NamedValues.erase(VarName);
 
-
   // for expr always returns 0.0.
   return Constant::getNullValue(Type::getDoubleTy(TheContext));
 }
@@ -1162,7 +1232,8 @@ Value *VarExprAST::Codegen() {
     Value *InitVal;
     if (Init) {
       InitVal = Init->Codegen();
-      if (InitVal == 0) return 0;
+      if (InitVal == 0)
+        return 0;
     } else { // If not specified, use 0.0.
       InitVal = ConstantFP::get(TheContext, APFloat(0.0));
     }
@@ -1180,7 +1251,8 @@ Value *VarExprAST::Codegen() {
 
   // Codegen the body, now that all vars are in scope.
   Value *BodyVal = Body->Codegen();
-  if (BodyVal == 0) return 0;
+  if (BodyVal == 0)
+    return 0;
 
   // Pop all our variables from scope.
   for (unsigned i = 0, e = VarNames.size(); i != e; ++i)
@@ -1198,7 +1270,7 @@ Function *PrototypeAST::Codegen() {
 
   std::string FnName = MakeLegalFunctionName(Name);
 
-  Module* M = TheHelper->getModuleForNewFunction();
+  Module *M = TheHelper->getModuleForNewFunction();
 
   Function *F = Function::Create(FT, Function::ExternalLinkage, FnName, M);
 
@@ -1347,11 +1419,20 @@ static void MainLoop() {
     fprintf(stderr, "ready> ");
 #endif
     switch (CurTok) {
-    case tok_eof:    return;
-    case ';':        getNextToken(); break;  // ignore top-level semicolons.
-    case tok_def:    HandleDefinition(); break;
-    case tok_extern: HandleExtern(); break;
-    default:         HandleTopLevelExpression(); break;
+    case tok_eof:
+      return;
+    case ';':
+      getNextToken();
+      break; // ignore top-level semicolons.
+    case tok_def:
+      HandleDefinition();
+      break;
+    case tok_extern:
+      HandleExtern();
+      break;
+    default:
+      HandleTopLevelExpression();
+      break;
     }
   }
 }
@@ -1361,21 +1442,18 @@ static void MainLoop() {
 //===----------------------------------------------------------------------===//
 
 /// putchard - putchar that takes a double and returns 0.
-extern "C"
-double putchard(double X) {
+extern "C" double putchard(double X) {
   putchar((char)X);
   return 0;
 }
 
 /// printd - printf that takes a double prints it as "%f\n", returning 0.
-extern "C"
-double printd(double X) {
+extern "C" double printd(double X) {
   printf("%f", X);
   return 0;
 }
 
-extern "C"
-double printlf() {
+extern "C" double printlf() {
   printf("\n");
   return 0;
 }
@@ -1397,7 +1475,7 @@ int main() {
   BinopPrecedence['+'] = 20;
   BinopPrecedence['-'] = 20;
   BinopPrecedence['/'] = 40;
-  BinopPrecedence['*'] = 40;  // highest.
+  BinopPrecedence['*'] = 40; // highest.
 
   // Prime the first token.
 #ifndef MINIMAL_STDERR_OUTPUT

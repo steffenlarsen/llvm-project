@@ -36,7 +36,7 @@ protected:
   PALMetadata() {
     TM = createAMDGPUTargetMachine(Triple("amdgpu10.10--amdpal"), "", "");
 
-    Ctx = std::make_unique<LLVMContext>();
+    Ctx = std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
     M = std::make_unique<Module>("Module", *Ctx);
     M->setDataLayout(TM->createDataLayout());
     auto *FType = FunctionType::get(Type::getVoidTy(*Ctx), false);

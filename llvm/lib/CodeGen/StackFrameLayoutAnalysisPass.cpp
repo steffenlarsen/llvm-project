@@ -105,10 +105,10 @@ struct StackFrameLayoutAnalysis {
   bool run(MachineFunction &MF) {
     // TODO: We should implement a similar filter for remarks:
     //   -Rpass-func-filter=<regex>
-    if (!isFunctionInPrintList(MF.getName()))
+    const LLVMContext &Ctx = MF.getFunction().getContext();
+    if (!isFunctionInPrintList(Ctx, MF.getName()))
       return false;
 
-    LLVMContext &Ctx = MF.getFunction().getContext();
     if (!Ctx.getDiagHandlerPtr()->isAnalysisRemarkEnabled(DEBUG_TYPE))
       return false;
 

@@ -12,6 +12,7 @@
 
 #include "llvm/ProfileData/MemProfSummaryBuilder.h"
 #include "llvm/ProfileData/MemProfCommon.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 using namespace llvm::memprof;
@@ -29,7 +30,8 @@ void MemProfSummaryBuilder::addRecord(uint64_t CSId,
     return;
   NumContexts++;
   auto AllocType = getAllocType(Info.getTotalLifetimeAccessDensity(),
-                                Info.getAllocCount(), Info.getTotalLifetime());
+                                Info.getAllocCount(), Info.getTotalLifetime(),
+                                /*Ctx=*/llvm::clv2::defaultOptionsContext());
   auto TotalSize = Info.getTotalSize();
   switch (AllocType) {
   case AllocationType::Cold:

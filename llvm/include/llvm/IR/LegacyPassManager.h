@@ -23,13 +23,16 @@ namespace llvm {
 
 class Function;
 class Pass;
+namespace clv2 {
+class OptionsContext;
+}
 class Module;
 
 namespace legacy {
 
 // Whether or not -debug-pass has been specified. For use to check if it's
 // specified alongside the new PM.
-LLVM_ABI bool debugPassSpecified();
+LLVM_ABI bool debugPassSpecified(const clv2::OptionsContext &Ctx);
 
 class PassManagerImpl;
 class FunctionPassManagerImpl;
@@ -57,6 +60,9 @@ public:
   ~PassManager() override;
 
   void add(Pass *P) override;
+
+  /// Set the OptionsContext for print-before/print-after support.
+  void setOptionsContext(const clv2::OptionsContext &Ctx);
 
   /// run - Execute all of the passes scheduled for execution.  Keep track of
   /// whether any of the passes modifies the module, and if so, return true.

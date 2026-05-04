@@ -7,11 +7,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -299,13 +302,19 @@ PreservedAnalyses FunctionToLoopPassAdaptor::run(Function &F,
 
 #ifndef NDEBUG
     // LoopAnalysisResults should always be valid.
-    if (VerifyDomInfo)
-      LAR.DT.verify();
-    if (VerifyLoopInfo)
+    {
+      bool DoVerifyDom = false;
+      if (auto *O = clv2::getView<&clv2::IROptsReg>(
+              F.getContext().getOptionsContext()))
+        DoVerifyDom = O->get<&clv2::IR_VerifyDomInfo>();
+      if (DoVerifyDom)
+        LAR.DT.verify();
+    }
+    if (getVerifyLoopInfo(F.getContext().getOptionsContext()))
       LAR.LI.verify();
-    if (VerifySCEV)
+    if (getVerifySCEV(F.getContext().getOptionsContext()))
       LAR.SE.verify();
-    if (LAR.MSSA && VerifyMemorySSA)
+    if (LAR.MSSA && getVerifyMemorySSA(F.getContext().getOptionsContext()))
       LAR.MSSA->verifyMemorySSA();
 #endif
 

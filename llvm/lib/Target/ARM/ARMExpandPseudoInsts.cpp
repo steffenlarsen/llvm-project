@@ -28,15 +28,19 @@
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/Support/Debug.h"
 
+#include "llvm/IR/Function.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 #include <atomic>
 
 using namespace llvm;
 
 #define DEBUG_TYPE "arm-pseudo"
 
-static cl::opt<bool>
-VerifyARMPseudo("verify-arm-pseudo-expand", cl::Hidden,
-                cl::desc("Verify machine code after expanding ARM pseudos"));
+static bool getVerifyARMPseudo(const Function &F) {
+  return clv2::getOptValOr<&clv2::ARMOptsReg, &clv2::ARM_VerifyARMPseudo>(
+      F.getContext().getOptionsContext(), false);
+}
 
 #define ARM_EXPAND_PSEUDO_NAME "ARM pseudo instruction expansion pass"
 
@@ -3337,7 +3341,7 @@ bool ARMExpandPseudo::runOnMachineFunction(MachineFunction &MF) {
   bool Modified = false;
   for (MachineBasicBlock &MBB : MF)
     Modified |= ExpandMBB(MBB);
-  if (VerifyARMPseudo)
+  if (getVerifyARMPseudo(MF.getFunction()))
     MF.verify(this, "After expanding ARM pseudo instructions.");
 
   LLVM_DEBUG(dbgs() << "***************************************************\n");

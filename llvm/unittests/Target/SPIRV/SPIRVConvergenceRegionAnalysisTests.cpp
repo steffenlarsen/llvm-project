@@ -119,7 +119,7 @@ protected:
   }
 
 protected:
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   FunctionAnalysisManager FAM;
   ModuleAnalysisManager MAM;
   std::unique_ptr<Module> M;

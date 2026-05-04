@@ -46,8 +46,13 @@ static MCRegisterInfo *createSPIRVMCRegisterInfo(const Triple &TT) {
 }
 
 static MCSubtargetInfo *
-createSPIRVMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
-  return createSPIRVMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+createSPIRVMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                           const llvm::clv2::OptionsContext &Ctx) {
+  MCSubtargetInfo *STI =
+      createSPIRVMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+  if (STI)
+    STI->setOptionsContext(Ctx);
+  return STI;
 }
 
 static MCTargetStreamer *createTargetAsmStreamer(MCStreamer &S,

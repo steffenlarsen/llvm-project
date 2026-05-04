@@ -117,7 +117,7 @@ private:
 
 class RewriteSymbolPass : public OptionalPassInfoMixin<RewriteSymbolPass> {
 public:
-  RewriteSymbolPass() { loadAndParseMapFiles(); }
+  RewriteSymbolPass() {}
 
   RewriteSymbolPass(SymbolRewriter::RewriteDescriptorList &DL) {
     Descriptors.splice(Descriptors.begin(), DL);
@@ -129,7 +129,7 @@ public:
   LLVM_ABI bool runImpl(Module &M);
 
 private:
-  LLVM_ABI void loadAndParseMapFiles();
+  LLVM_ABI void loadAndParseMapFiles(const Module &M);
 
   SymbolRewriter::RewriteDescriptorList Descriptors;
 };

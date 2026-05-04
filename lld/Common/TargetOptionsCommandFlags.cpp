@@ -12,18 +12,27 @@
 #include "llvm/TargetParser/Triple.h"
 #include <optional>
 
-llvm::TargetOptions lld::initTargetOptionsFromCodeGenFlags() {
-  return llvm::codegen::InitTargetOptionsFromCodeGenFlags(llvm::Triple());
+llvm::TargetOptions lld::initTargetOptionsFromCodeGenFlags(
+    const llvm::clv2::OptionsContext &optsCtx) {
+  return llvm::codegen::InitTargetOptionsFromCodeGenFlags(llvm::Triple(),
+                                                          optsCtx);
 }
 
-std::optional<llvm::Reloc::Model> lld::getRelocModelFromCMModel() {
-  return llvm::codegen::getExplicitRelocModel();
+std::optional<llvm::Reloc::Model>
+lld::getRelocModelFromCMModel(const llvm::clv2::OptionsContext &optsCtx) {
+  return llvm::codegen::getExplicitRelocModel(optsCtx);
 }
 
-std::optional<llvm::CodeModel::Model> lld::getCodeModelFromCMModel() {
-  return llvm::codegen::getExplicitCodeModel();
+std::optional<llvm::CodeModel::Model>
+lld::getCodeModelFromCMModel(const llvm::clv2::OptionsContext &optsCtx) {
+  return llvm::codegen::getExplicitCodeModel(optsCtx);
 }
 
-std::string lld::getCPUStr() { return llvm::codegen::getCPUStr(); }
+std::string lld::getCPUStr(const llvm::clv2::OptionsContext &optsCtx) {
+  return llvm::codegen::getCPUStr(optsCtx);
+}
 
-std::vector<std::string> lld::getMAttrs() { return llvm::codegen::getMAttrs(); }
+std::vector<std::string>
+lld::getMAttrs(const llvm::clv2::OptionsContext &optsCtx) {
+  return llvm::codegen::getMAttrs(optsCtx);
+}

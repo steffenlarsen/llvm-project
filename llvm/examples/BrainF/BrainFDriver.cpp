@@ -37,9 +37,10 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Value.h"
 #include "llvm/IR/Verifier.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdlib>
@@ -52,28 +53,27 @@
 
 using namespace llvm;
 
-//Command line options
+static constexpr clv2::OptionInfo<std::string> bfInputOpt{"", "<input brainf>",
+                                                          clv2::Positional{}};
+static constexpr clv2::OptionInfo<std::string> bfOutputOpt{"o",
+                                                           "Output filename"};
+static constexpr clv2::OptionInfo<bool> bfAbcOpt{
+    "abc", "Enable array bounds checking"};
+static constexpr clv2::OptionInfo<bool> bfJitOpt{"jit",
+                                                 "Run program Just-In-Time"};
 
-static cl::opt<std::string>
-InputFilename(cl::Positional, cl::desc("<input brainf>"));
+static constexpr clv2::OptionsRegistry<&bfInputOpt, &bfOutputOpt, &bfAbcOpt,
+                                       &bfJitOpt>
+    BrainFReg;
 
-static cl::opt<std::string>
-OutputFilename("o", cl::desc("Output filename"), cl::value_desc("filename"));
-
-static cl::opt<bool>
-ArrayBoundsChecking("abc", cl::desc("Enable array bounds checking"));
-
-static cl::opt<bool>
-JIT("jit", cl::desc("Run program Just-In-Time"));
-
-//Add main function so can be fully compiled
+// Add main function so can be fully compiled
 void addMainFunction(Module *mod) {
-  //define i32 @main(i32 %argc, i8 **%argv)
-  FunctionType *main_func_fty = FunctionType::get(
-      Type::getInt32Ty(mod->getContext()),
-      {Type::getInt32Ty(mod->getContext()),
-       PointerType::getUnqual(mod->getContext())},
-      false);
+  // define i32 @main(i32 %argc, i8 **%argv)
+  FunctionType *main_func_fty =
+      FunctionType::get(Type::getInt32Ty(mod->getContext()),
+                        {Type::getInt32Ty(mod->getContext()),
+                         PointerType::getUnqual(mod->getContext())},
+                        false);
   Function *main_func =
       Function::Create(main_func_fty, Function::ExternalLinkage, "main", mod);
 
@@ -85,41 +85,52 @@ void addMainFunction(Module *mod) {
     arg_1->setName("argv");
   }
 
-  //main.0:
+  // main.0:
   BasicBlock *bb = BasicBlock::Create(mod->getContext(), "main.0", main_func);
 
-  //call void @brainf()
+  // call void @brainf()
   {
-    CallInst *brainf_call = CallInst::Create(mod->getFunction("brainf"),
-                                             "", bb);
+    CallInst *brainf_call =
+        CallInst::Create(mod->getFunction("brainf"), "", bb);
     brainf_call->setTailCall(false);
   }
 
-  //ret i32 0
+  // ret i32 0
   ReturnInst::Create(mod->getContext(),
                      ConstantInt::get(mod->getContext(), APInt(32, 0)), bb);
 }
 
 int main(int argc, char **argv) {
-  cl::ParseCommandLineOptions(argc, argv, " BrainF compiler\n");
+  clv2::OptionParser P;
+  P.add<&BrainFReg>();
+  RegisterAllLLVMOptions(P);
+  auto OptsCtx = P.parse(argc, argv, " BrainF compiler\n");
+  auto *Opts = OptsCtx->getViewPtr<&BrainFReg>();
 
-  LLVMContext Context;
+  auto InputFilename = std::string(Opts->get<&bfInputOpt>());
+  auto OutputFilename = std::string(Opts->get<&bfOutputOpt>());
+  bool ArrayBoundsChecking = Opts->get<&bfAbcOpt>();
+  bool JIT = Opts->get<&bfJitOpt>();
 
-  if (InputFilename == "") {
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
+
+  if (InputFilename.empty()) {
     errs() << "Error: You must specify the filename of the program to "
-    "be compiled.  Use --help to see the options.\n";
+              "be compiled.  Use --help to see the options.\n";
     abort();
   }
 
-  //Get the output stream
+  // Get the output stream
   raw_ostream *out = &outs();
   if (!JIT) {
-    if (OutputFilename == "") {
+    if (OutputFilename.empty()) {
       std::string base = InputFilename;
-      if (InputFilename == "-") { base = "a"; }
+      if (InputFilename == "-") {
+        base = "a";
+      }
 
       // Use default filename.
-      OutputFilename = base+".bc";
+      OutputFilename = base + ".bc";
     }
     if (OutputFilename != "-") {
       std::error_code EC;
@@ -127,30 +138,30 @@ int main(int argc, char **argv) {
     }
   }
 
-  //Get the input stream
+  // Get the input stream
   std::istream *in = &std::cin;
   if (InputFilename != "-")
     in = new std::ifstream(InputFilename.c_str());
 
-  //Gather the compile flags
+  // Gather the compile flags
   BrainF::CompileFlags cf = BrainF::flag_off;
   if (ArrayBoundsChecking)
     cf = BrainF::CompileFlags(cf | BrainF::flag_arraybounds);
 
-  //Read the BrainF program
+  // Read the BrainF program
   BrainF bf;
   std::unique_ptr<Module> Mod(bf.parse(in, 65536, cf, Context)); // 64 KiB
   if (in != &std::cin)
     delete in;
   addMainFunction(Mod.get());
 
-  //Verify generated code
+  // Verify generated code
   if (verifyModule(*Mod)) {
     errs() << "Error: module failed verification.  This shouldn't happen.\n";
     abort();
   }
 
-  //Write it out
+  // Write it out
   if (JIT) {
     InitializeNativeTarget();
     InitializeNativeTargetAsmPrinter();
@@ -165,15 +176,16 @@ int main(int argc, char **argv) {
     std::vector<GenericValue> args;
     Function *brainf_func = M.getFunction("brainf");
     GenericValue gv = ee->runFunction(brainf_func, args);
-    // Genereated code calls putchar, and output is not guaranteed without fflush.
-    // The better place for fflush(stdout) call would be the generated code, but it
-    // is unmanageable because stdout linkage name depends on stdlib implementation.
+    // Genereated code calls putchar, and output is not guaranteed without
+    // fflush. The better place for fflush(stdout) call would be the generated
+    // code, but it is unmanageable because stdout linkage name depends on
+    // stdlib implementation.
     fflush(stdout);
   } else {
     WriteBitcodeToFile(*Mod, *out);
   }
 
-  //Clean up
+  // Clean up
   if (out != &outs())
     delete out;
 

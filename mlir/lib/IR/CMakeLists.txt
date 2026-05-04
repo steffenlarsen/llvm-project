@@ -5,6 +5,8 @@ if(MLIR_ENABLE_PDL_IN_PATTERNMATCH)
 endif()
 
 add_mlir_library(MLIRIR
+  MLIROptionsGetters.cpp
+  MLIRTranslateOptionsGetters.cpp
   AffineExpr.cpp
   AffineMap.cpp
   AsmPrinter.cpp
@@ -26,6 +28,8 @@ add_mlir_library(MLIRIR
   IntegerSet.cpp
   Location.cpp
   MLIRContext.cpp
+  MLIROptions.cpp
+  MLIRTranslateOptions.cpp
   ODSSupport.cpp
   Operation.cpp
   OperationSupport.cpp

@@ -45,7 +45,7 @@ TEST(CaptureTracking, MaxUsesToExplore) {
     }
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
   auto M = parseAssemblyString(Assembly, Error, Context);
   ASSERT_TRUE(M) << "Bad assembly?";
@@ -76,7 +76,7 @@ TEST(CaptureTracking, MaxUsesToExplore) {
 
 struct CollectingCaptureTracker : public CaptureTracker {
   SmallVector<const Use *, 4> Captures;
-  void tooManyUses() override { }
+  void tooManyUses() override {}
   Action captured(const Use *U, UseCaptureInfo CI) override {
     Captures.push_back(U);
     return Continue;
@@ -95,7 +95,7 @@ TEST(CaptureTracking, MultipleUsesInSameInstruction) {
     }
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
   auto M = parseAssemblyString(Assembly, Error, Context);
   ASSERT_TRUE(M) << "Bad assembly?";

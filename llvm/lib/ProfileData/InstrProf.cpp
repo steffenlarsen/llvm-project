@@ -30,9 +30,9 @@
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/IR/Type.h"
 #include "llvm/ProfileData/InstrProfReader.h"
+#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
 #include "llvm/ProfileData/SampleProf.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Compression.h"
 #include "llvm/Support/Debug.h"
@@ -41,6 +41,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/SwapByteOrder.h"
 #include "llvm/Support/VirtualFileSystem.h"
@@ -62,23 +63,18 @@ using namespace llvm;
 
 #define DEBUG_TYPE "instrprof"
 
-static cl::opt<bool> StaticFuncFullModulePrefix(
-    "static-func-full-module-prefix", cl::init(true), cl::Hidden,
-    cl::desc("Use full module build paths in the profile counter names for "
-             "static functions."));
+static bool StaticFuncFullModulePrefix = true;
+static unsigned StaticFuncStripDirNamePrefix = 0;
 
-// This option is tailored to users that have different top-level directory in
-// profile-gen and profile-use compilation. Users need to specific the number
-// of levels to strip. A value larger than the number of directories in the
-// source file will strip all the directory names and only leave the basename.
-//
-// Note current ThinLTO module importing for the indirect-calls assumes
-// the source directory name not being stripped. A non-zero option value here
-// can potentially prevent some inter-module indirect-call-promotions.
-static cl::opt<unsigned> StaticFuncStripDirNamePrefix(
-    "static-func-strip-dirname-prefix", cl::init(0), cl::Hidden,
-    cl::desc("Strip specified level of directory name from source path in "
-             "the profile counter name for static functions."));
+static bool getStaticFuncFullModulePrefix(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::PD_StaticFuncFullModulePrefix>(
+      M.getContext().getOptionsContext());
+}
+
+static unsigned getStaticFuncStripDirNamePrefix(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::PD_StaticFuncStripDirNamePrefix>(
+      M.getContext().getOptionsContext());
+}
 
 static std::string getInstrProfErrString(instrprof_error Err,
                                          const std::string &ErrMsg = "") {
@@ -227,22 +223,6 @@ const char *InstrProfSectNamePrefix[] = {
 
 namespace llvm {
 
-cl::opt<bool> DoInstrProfNameCompression(
-    "enable-name-compression",
-    cl::desc("Enable name/filename string compression"), cl::init(true));
-
-cl::opt<bool> EnableVTableValueProfiling(
-    "enable-vtable-value-profiling", cl::init(false),
-    cl::desc("If true, the virtual table address will be instrumented to know "
-             "the types of a C++ pointer. The information is used in indirect "
-             "call promotion to do selective vtable-based comparison."));
-
-cl::opt<bool> EnableVTableProfileUse(
-    "enable-vtable-profile-use", cl::init(false),
-    cl::desc("If ThinLTO and WPD is enabled and this option is true, vtable "
-             "profiles will be used by ICP pass for more efficient indirect "
-             "call sequence. If false, type profiles won't be used."));
-
 std::string getInstrProfSectionName(InstrProfSectKind IPSK,
                                     Triple::ObjectFormatType OF,
                                     bool AddSegmentInfo) {
@@ -350,10 +330,11 @@ static StringRef stripDirPrefix(StringRef PathNameStr, uint32_t NumPrefix) {
 }
 
 static StringRef getStrippedSourceFileName(const GlobalObject &GO) {
-  StringRef FileName(GO.getParent()->getSourceFileName());
-  uint32_t StripLevel = StaticFuncFullModulePrefix ? 0 : (uint32_t)-1;
-  if (StripLevel < StaticFuncStripDirNamePrefix)
-    StripLevel = StaticFuncStripDirNamePrefix;
+  const Module &M = *GO.getParent();
+  StringRef FileName(M.getSourceFileName());
+  uint32_t StripLevel = getStaticFuncFullModulePrefix(M) ? 0 : (uint32_t)-1;
+  if (StripLevel < getStaticFuncStripDirNamePrefix(M))
+    StripLevel = getStaticFuncStripDirNamePrefix(M);
   if (StripLevel)
     FileName = stripDirPrefix(FileName, StripLevel);
   return FileName;

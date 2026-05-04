@@ -22,8 +22,9 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -36,9 +37,10 @@ using namespace llvm;
 /// is MaxFunctionsPerValue. As such, this value should be kept very small. We
 /// likely can't do anything useful for call sites with a large number of
 /// possible targets, anyway.
-static cl::opt<unsigned> MaxFunctionsPerValue(
-    "cvp-max-functions-per-value", cl::Hidden, cl::init(4),
-    cl::desc("The maximum number of functions to track per lattice value"));
+static unsigned getMaxFunctionsPerValue(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_MaxFunctionsPerValue>(
+      M.getContext().getOptionsContext());
+}
 
 namespace {
 /// To enable interprocedural analysis, we assign LLVM values to the following
@@ -115,10 +117,11 @@ private:
 class CVPLatticeFunc
     : public AbstractLatticeFunction<CVPLatticeKey, CVPLatticeVal> {
 public:
-  CVPLatticeFunc()
+  CVPLatticeFunc(const Module &M)
       : AbstractLatticeFunction(CVPLatticeVal(CVPLatticeVal::Undefined),
                                 CVPLatticeVal(CVPLatticeVal::Overdefined),
-                                CVPLatticeVal(CVPLatticeVal::Untracked)) {}
+                                CVPLatticeVal(CVPLatticeVal::Untracked)),
+        M(M) {}
 
   /// Compute and return a CVPLatticeVal for the given CVPLatticeKey.
   CVPLatticeVal ComputeLatticeVal(CVPLatticeKey Key) override {
@@ -159,7 +162,7 @@ public:
     std::set_union(X.getFunctions().begin(), X.getFunctions().end(),
                    Y.getFunctions().begin(), Y.getFunctions().end(),
                    std::back_inserter(Union), CVPLatticeVal::Compare{});
-    if (Union.size() > MaxFunctionsPerValue)
+    if (Union.size() > getMaxFunctionsPerValue(M))
       return getOverdefinedVal();
     return CVPLatticeVal(std::move(Union));
   }
@@ -220,6 +223,8 @@ public:
   SmallPtrSetImpl<CallBase *> &getIndirectCalls() { return IndirectCalls; }
 
 private:
+  const Module &M;
+
   /// Holds the indirect calls we encounter during the analysis. We will attach
   /// metadata to these calls after the analysis indicating the functions the
   /// calls can possibly target.
@@ -374,7 +379,7 @@ template <> struct LatticeKeyInfo<CVPLatticeKey> {
 
 static bool runCVP(Module &M) {
   // Our custom lattice function and generic sparse propagation solver.
-  CVPLatticeFunc Lattice;
+  CVPLatticeFunc Lattice(M);
   SparseSolver<CVPLatticeKey, CVPLatticeVal> Solver(&Lattice);
 
   // For each function in the module, if we can't track its arguments, let the

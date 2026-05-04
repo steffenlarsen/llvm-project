@@ -14,19 +14,15 @@
 #define LLVM_TRANSFORMS_UTILS_SIZEOPTS_H
 
 #include "llvm/Analysis/ProfileSummaryInfo.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
+#include <type_traits>
 
 namespace llvm {
-LLVM_ABI extern cl::opt<bool> EnablePGSO;
-LLVM_ABI extern cl::opt<bool> PGSOLargeWorkingSetSizeOnly;
-LLVM_ABI extern cl::opt<bool> PGSOColdCodeOnly;
-LLVM_ABI extern cl::opt<bool> PGSOColdCodeOnlyForInstrPGO;
-LLVM_ABI extern cl::opt<bool> PGSOColdCodeOnlyForSamplePGO;
-LLVM_ABI extern cl::opt<bool> PGSOColdCodeOnlyForPartialSamplePGO;
-LLVM_ABI extern cl::opt<bool> ForcePGSO;
-LLVM_ABI extern cl::opt<int> PgsoCutoffInstrProf;
-LLVM_ABI extern cl::opt<int> PgsoCutoffSampleProf;
+
+namespace clv2 {
+class OptionsContext;
+}
 
 class BasicBlock;
 class BlockFrequencyInfo;
@@ -38,14 +34,20 @@ enum class PGSOQueryType {
   Other,  // Others.
 };
 
-static inline bool isPGSOColdCodeOnly(ProfileSummaryInfo *PSI) {
-  return PGSOColdCodeOnly ||
-         (PSI->hasInstrumentationProfile() && PGSOColdCodeOnlyForInstrPGO) ||
-         (PSI->hasSampleProfile() &&
-          ((!PSI->hasPartialSampleProfile() && PGSOColdCodeOnlyForSamplePGO) ||
-           (PSI->hasPartialSampleProfile() &&
-            PGSOColdCodeOnlyForPartialSamplePGO))) ||
-         (PGSOLargeWorkingSetSizeOnly && !PSI->hasLargeWorkingSetSize());
+LLVM_ABI bool getEnablePGSO(const clv2::OptionsContext &Ctx);
+LLVM_ABI bool getForcePGSO(const clv2::OptionsContext &Ctx);
+LLVM_ABI int getPgsoCutoffInstrProf(const clv2::OptionsContext &Ctx);
+LLVM_ABI int getPgsoCutoffSampleProf(const clv2::OptionsContext &Ctx);
+LLVM_ABI bool isPGSOColdCodeOnly(ProfileSummaryInfo *PSI,
+                                 const clv2::OptionsContext &Ctx);
+
+/// Helper to extract a Function* from either a Function* or a type that
+/// provides getFunction() (e.g. MachineFunction).
+template <typename T> inline const Function *extractFunction(const T *V) {
+  if constexpr (std::is_same_v<T, Function>)
+    return V;
+  else
+    return &V->getFunction();
 }
 
 template <typename FuncT, typename BFIT>
@@ -54,39 +56,55 @@ bool shouldFuncOptimizeForSizeImpl(const FuncT *F, ProfileSummaryInfo *PSI,
   assert(F);
   if (!PSI || !BFI || !PSI->hasProfileSummary())
     return false;
-  if (ForcePGSO)
+  const Function *IRF = extractFunction(F);
+  if (getForcePGSO(IRF ? IRF->getContext().getOptionsContext()
+                       : clv2::defaultOptionsContext()))
     return true;
-  if (!EnablePGSO)
+  if (!getEnablePGSO(IRF ? IRF->getContext().getOptionsContext()
+                         : clv2::defaultOptionsContext()))
     return false;
-  if (isPGSOColdCodeOnly(PSI))
+  if (isPGSOColdCodeOnly(PSI, IRF ? IRF->getContext().getOptionsContext()
+                                  : clv2::defaultOptionsContext()))
     return PSI->isFunctionColdInCallGraph(F, *BFI);
   if (PSI->hasSampleProfile())
-    // The "isCold" check seems to work better for Sample PGO as it could have
-    // many profile-unannotated functions.
-    return PSI->isFunctionColdInCallGraphNthPercentile(PgsoCutoffSampleProf, F,
-                                                       *BFI);
-  return !PSI->isFunctionHotInCallGraphNthPercentile(PgsoCutoffInstrProf, F,
-                                                     *BFI);
+    return PSI->isFunctionColdInCallGraphNthPercentile(
+        getPgsoCutoffSampleProf(IRF ? IRF->getContext().getOptionsContext()
+
+                                    : clv2::defaultOptionsContext()),
+        F, *BFI);
+  return !PSI->isFunctionHotInCallGraphNthPercentile(
+      getPgsoCutoffInstrProf(IRF ? IRF->getContext().getOptionsContext()
+
+                                 : clv2::defaultOptionsContext()),
+      F, *BFI);
 }
 
 template <typename BlockTOrBlockFreq, typename BFIT>
 bool shouldOptimizeForSizeImpl(BlockTOrBlockFreq BBOrBlockFreq,
                                ProfileSummaryInfo *PSI, BFIT *BFI,
-                               PGSOQueryType QueryType) {
+                               PGSOQueryType QueryType,
+                               const Function *F = nullptr) {
   if (!PSI || !BFI || !PSI->hasProfileSummary())
     return false;
-  if (ForcePGSO)
+  if (getForcePGSO(F ? F->getContext().getOptionsContext()
+                     : clv2::defaultOptionsContext()))
     return true;
-  if (!EnablePGSO)
+  if (!getEnablePGSO(F ? F->getContext().getOptionsContext()
+                       : clv2::defaultOptionsContext()))
     return false;
-  if (isPGSOColdCodeOnly(PSI))
+  if (isPGSOColdCodeOnly(PSI, F ? F->getContext().getOptionsContext()
+                                : clv2::defaultOptionsContext()))
     return PSI->isColdBlock(BBOrBlockFreq, BFI);
   if (PSI->hasSampleProfile())
-    // The "isCold" check seems to work better for Sample PGO as it could have
-    // many profile-unannotated functions.
-    return PSI->isColdBlockNthPercentile(PgsoCutoffSampleProf, BBOrBlockFreq,
-                                         BFI);
-  return !PSI->isHotBlockNthPercentile(PgsoCutoffInstrProf, BBOrBlockFreq, BFI);
+    return PSI->isColdBlockNthPercentile(
+        getPgsoCutoffSampleProf(F ? F->getContext().getOptionsContext()
+
+                                  : clv2::defaultOptionsContext()),
+        BBOrBlockFreq, BFI);
+  return !PSI->isHotBlockNthPercentile(
+      getPgsoCutoffInstrProf(F ? F->getContext().getOptionsContext()
+                               : clv2::defaultOptionsContext()),
+      BBOrBlockFreq, BFI);
 }
 
 /// Returns true if function \p F is suggested to be size-optimized based on the

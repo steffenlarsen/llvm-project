@@ -25,6 +25,10 @@ namespace object {
 class MachOObjectFile;
 } // namespace object
 
+namespace clv2 {
+class OptionsContext;
+}
+
 namespace bolt {
 
 class BinaryContext;
@@ -70,10 +74,14 @@ public:
   // construction. Constructors can’t return errors, so clients must test \p Err
   // after the object is constructed. Use `create` method instead.
   MachORewriteInstance(object::MachOObjectFile *InputFile, StringRef ToolPath,
-                       Error &Err);
+                       Error &Err, clv2::OptionsContext *OptsCtx);
 
+  /// \p OptsCtx must be supplied here rather than attached afterwards: the
+  /// BinaryContext reads options while it is being constructed, so a context
+  /// installed later is too late to affect them.
   static Expected<std::unique_ptr<MachORewriteInstance>>
-  create(object::MachOObjectFile *InputFile, StringRef ToolPath);
+  create(object::MachOObjectFile *InputFile, StringRef ToolPath,
+         clv2::OptionsContext *OptsCtx = nullptr);
   ~MachORewriteInstance();
 
   Error setProfile(StringRef FileName);

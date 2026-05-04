@@ -1,1 +1,4 @@
 add_subdirectory(LLVMIR)
+set(LLVM_TARGET_DEFINITIONS MLIRTranslateOptions.td)
+tablegen(LLVM MLIRTranslateOptionsOptInfos.inc -gen-clv2-options)
+add_public_tablegen_target(MLIRTranslateOptionsTableGen)

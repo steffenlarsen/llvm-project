@@ -13,11 +13,19 @@
 #ifndef BOLT_UTILS_COMMAND_LINE_OPTS_H
 #define BOLT_UTILS_COMMAND_LINE_OPTS_H
 
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
+#include <string>
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+}
 namespace bolt {
+class BinaryContext;
 class BinaryFunction;
+enum IndirectCallPromotionType : char;
+enum JumpTableSupportLevel : char;
 }
 } // namespace llvm
 
@@ -48,24 +56,7 @@ enum SplitFunctionsStrategy : char {
   All
 };
 
-/// A bucket size and how it was spelled on the command line, so output can
-/// echo "64K" rather than reformatting the value.
-struct HeatmapBlockSize {
-  unsigned Value = 0;
-  std::string Spec;
-};
-using HeatmapBlockSizes = std::vector<HeatmapBlockSize>;
-struct HeatmapBlockSpecParser : public llvm::cl::parser<HeatmapBlockSizes> {
-  explicit HeatmapBlockSpecParser(llvm::cl::Option &O)
-      : llvm::cl::parser<HeatmapBlockSizes>(O) {}
-  // Return true on error.
-  bool parse(llvm::cl::Option &O, llvm::StringRef ArgName, llvm::StringRef Arg,
-             HeatmapBlockSizes &Val);
-};
-
-extern HeatmapModeKind HeatmapMode;
-extern bool BinaryAnalysisMode;
-
+// cl::OptionCategory objects.
 extern llvm::cl::OptionCategory BoltCategory;
 extern llvm::cl::OptionCategory BoltDiffCategory;
 extern llvm::cl::OptionCategory BoltOptCategory;
@@ -76,79 +67,11 @@ extern llvm::cl::OptionCategory BoltInstrCategory;
 extern llvm::cl::OptionCategory HeatmapCategory;
 extern llvm::cl::OptionCategory BinaryAnalysisCategory;
 
-extern llvm::cl::opt<unsigned> AlignText;
-extern llvm::cl::opt<unsigned> AlignFunctions;
-extern llvm::cl::opt<bool> AlignBlocks;
-extern llvm::cl::opt<unsigned> AlignBlocksMinSize;
-extern llvm::cl::opt<unsigned> AlignBlocksThreshold;
-extern llvm::cl::opt<unsigned> AlignFunctionsMaxBytes;
-extern llvm::cl::opt<unsigned> BlockAlignment;
-extern llvm::cl::opt<bool> PreserveBlocksAlignment;
-extern llvm::cl::opt<bool> UseCompactAligner;
-extern llvm::cl::opt<bool> X86AlignBranchBoundaryHotOnly;
-extern llvm::cl::opt<bool> AggregateOnly;
-extern llvm::cl::opt<bool> ArmSPE;
-extern llvm::cl::opt<unsigned> BucketsPerLine;
-extern llvm::cl::opt<bool> CompactCodeModel;
-extern llvm::cl::opt<bool> DiffOnly;
-extern llvm::cl::opt<bool> EnableBAT;
-extern llvm::cl::opt<bool> EqualizeBBCounts;
-extern llvm::cl::opt<bool> ForcePatch;
-extern llvm::cl::opt<bool> RemoveSymtab;
-extern llvm::cl::opt<unsigned> ExecutionCountThreshold;
-extern llvm::cl::opt<HeatmapBlockSizes, false, HeatmapBlockSpecParser>
-    HeatmapBlock;
-extern llvm::cl::opt<unsigned long long> HeatmapMaxAddress;
-extern llvm::cl::opt<unsigned long long> HeatmapMinAddress;
-extern llvm::cl::opt<int> HeatmapCdfPct;
-extern llvm::cl::opt<bool> HeatmapPrintMappings;
-extern llvm::cl::opt<std::string> HeatmapOutput;
-extern llvm::cl::opt<bool> HotData;
-extern llvm::cl::opt<bool> HotFunctionsAtEnd;
-extern llvm::cl::opt<bool> HotText;
-extern llvm::cl::opt<bool> Hugify;
-extern llvm::cl::opt<bool> Instrument;
-extern llvm::cl::opt<std::string> OutputFilename;
-extern llvm::cl::list<std::string> PerfData;
-extern llvm::cl::opt<bool> PrintCacheMetrics;
-extern llvm::cl::opt<bool> PrintSections;
-extern llvm::cl::opt<bool> UpdateBranchProtection;
-extern llvm::cl::opt<SplitFunctionsStrategy> SplitStrategy;
-
 // The format to use with -o in aggregation mode (perf2bolt)
 enum ProfileFormatKind { PF_Fdata, PF_YAML, PF_PreAgg, PF_PerfScript };
 
-extern llvm::cl::opt<ProfileFormatKind> ProfileFormat;
-extern llvm::cl::list<std::string> ReorderData;
-extern llvm::cl::opt<bool> ShowDensity;
-extern llvm::cl::opt<bool> SplitEH;
-extern llvm::cl::opt<bool> StrictMode;
-extern llvm::cl::opt<bool> TimeOpts;
-extern llvm::cl::opt<bool> UseOldText;
-extern llvm::cl::opt<bool> UpdateDebugSections;
-
-// The default verbosity level (0) is pretty terse, level 1 is fairly
-// verbose and usually prints some informational message for every
-// function processed.  Level 2 is for the noisiest of messages and
-// often prints a message per basic block.
-// Error messages should never be suppressed by the verbosity level.
-// Only warnings and info messages should be affected.
-//
-// The rationale behind stream usage is as follows:
-// outs() for info and debugging controlled by command line flags.
-// errs() for errors and warnings.
-// dbgs() for output within DEBUG().
-extern llvm::cl::opt<unsigned> Verbosity;
-
-// Option to control whether liveness analysis should be used by
-// FixupBranches and LongJmpPass. Needed for branch inversion on AArch64.
-extern llvm::cl::opt<bool> FixBranchesWithLiveness;
-
-/// Return true if we should process all functions in the binary.
-bool processAllFunctions();
-
-/// Return true if we should dump dot graphs for the given function.
-bool shouldDumpDot(const llvm::bolt::BinaryFunction &Function);
+/// Return the verbosity level from the options context, falling back to 0.
+unsigned getVerbosity(const llvm::bolt::BinaryContext &BC);
 
 /// Bitmask representing a subset of possible gadget kinds.
 enum GadgetKindBitmask : unsigned {
@@ -177,7 +100,13 @@ enum GadgetKindBitmask : unsigned {
 namespace llvm {
 namespace bolt {
 extern const char *BoltRevision;
-}
+
+/// Return true if we should process all functions in the binary.
+bool processAllFunctions(const clv2::OptionsContext &Ctx);
+
+/// Return true if we should dump dot graphs for the given function.
+bool shouldDumpDot(const BinaryFunction &Function);
+} // namespace bolt
 } // namespace llvm
 
 #endif

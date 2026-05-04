@@ -118,7 +118,7 @@ void registerTestToLLVMIR() {
   TranslateFromMLIRRegistration registration(
       "test-to-llvmir", "test dialect to LLVM IR",
       [](Operation *op, raw_ostream &output) {
-        llvm::LLVMContext llvmContext;
+        llvm::LLVMContext llvmContext(llvm::clv2::defaultOptionsContext());
         auto llvmModule = translateModuleToLLVMIR(op, llvmContext);
         if (!llvmModule)
           return failure();

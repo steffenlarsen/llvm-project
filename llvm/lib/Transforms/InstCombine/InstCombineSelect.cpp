@@ -55,7 +55,6 @@ using namespace llvm;
 using namespace PatternMatch;
 
 namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 }
 
 /// Replace a select operand based on an equality comparison with the identity
@@ -5286,7 +5285,8 @@ Instruction *InstCombinerImpl::visitSelectInst(SelectInst &SI) {
         if (Value *V = canonicalizeSPF(*Cmp, TrueVal, FalseVal, *this)) {
           return SelectInst::Create(
               A, IsAnd ? V : TrueVal, IsAnd ? FalseVal : V, "", nullptr,
-              ProfcheckDisableMetadataFixes ? nullptr : &SI);
+              getProfcheckDisableMetadataFixes(SI.getContext()) ? nullptr
+                                                                : &SI);
         }
     }
 

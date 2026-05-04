@@ -30,7 +30,7 @@ TEST(GlobalsModRef, OptNone) {
     }
   )";
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
   auto M = parseAssemblyString(Assembly, Error, Context);
   ASSERT_TRUE(M) << "Bad assembly?";

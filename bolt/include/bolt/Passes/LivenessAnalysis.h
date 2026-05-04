@@ -9,15 +9,10 @@
 #ifndef BOLT_PASSES_LIVENESSANALYSIS_H
 #define BOLT_PASSES_LIVENESSANALYSIS_H
 
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "bolt/Passes/DataflowAnalysis.h"
 #include "bolt/Passes/RegAnalysis.h"
 #include "llvm/MC/MCRegisterInfo.h"
-#include "llvm/Support/CommandLine.h"
-
-namespace opts {
-extern llvm::cl::opt<bool> AssumeABI;
-extern llvm::cl::opt<bool> TimeOpts;
-} // namespace opts
 
 namespace llvm {
 namespace bolt {
@@ -33,7 +28,11 @@ public:
   LivenessAnalysis(const RegAnalysis &RA, BinaryFunction &BF,
                    MCPlusBuilder::AllocatorIdTy AllocId)
       : Parent(BF, AllocId), RA(RA),
-        NumRegs(BF.getBinaryContext().MRI->getNumRegs()) {}
+        NumRegs(BF.getBinaryContext().MRI->getNumRegs()) {
+    if (auto *PassOpts =
+            bolt_passes_opts::getBoltPassesOpts(BC.getOptionsContext()))
+      AssumeABI = PassOpts->get<&clv2::BOLTPASS_AssumeABI>();
+  }
   virtual ~LivenessAnalysis();
 
   // Return the state before the execution of an Instruction.
@@ -79,6 +78,7 @@ protected:
   /// Reference to the result of reg analysis
   const RegAnalysis &RA;
   const uint16_t NumRegs;
+  bool AssumeABI = false;
 
   void preflight() {}
 
@@ -87,7 +87,7 @@ protected:
     // values).
     if (BB.succ_size() == 0) {
       BitVector State(NumRegs, false);
-      if (opts::AssumeABI) {
+      if (AssumeABI) {
         BC.MIB->getDefaultLiveOut(State);
         BC.MIB->getCalleeSavedRegs(State);
       } else {
@@ -125,7 +125,7 @@ protected:
         BC.MIB->getDefaultLiveOut(Written);
         // If ABI is respected, everything except CSRs should be dead after a
         // call
-        if (opts::AssumeABI) {
+        if (AssumeABI) {
           BitVector CSR = BitVector(NumRegs, false);
           BC.MIB->getCalleeSavedRegs(CSR);
           CSR.flip();

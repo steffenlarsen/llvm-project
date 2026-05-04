@@ -100,6 +100,8 @@ set(sources
   )
 
 add_llvm_target(X86CodeGen ${sources}
+  X86OptionsGetters.cpp
+  X86OptionsRegistration.cpp
   LINK_COMPONENTS
   Analysis
   AsmPrinter

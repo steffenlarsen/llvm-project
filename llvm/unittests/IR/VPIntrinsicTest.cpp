@@ -32,11 +32,9 @@ static const char *ReductionFPOpcodes[] = {"fadd", "fmul",     "fmin",
 
 class VPIntrinsicTest : public testing::Test {
 protected:
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
-  VPIntrinsicTest() : Context() {}
-
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
 
   std::unique_ptr<Module> createVPDeclarationModule() {
@@ -135,7 +133,7 @@ TEST_F(VPIntrinsicTest, VPModuleComplete) {
 /// Check that VPIntrinsic:canIgnoreVectorLengthParam() returns true
 /// if the vector length parameter does not mask off any lanes.
 TEST_F(VPIntrinsicTest, CanIgnoreVectorLength) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
 
   // clang-format off
@@ -250,7 +248,7 @@ TEST_F(VPIntrinsicTest, VPIntrinsicDeclarationForParams) {
 
 /// Check various properties of VPReductionIntrinsics
 TEST_F(VPIntrinsicTest, VPReductions) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
 
   std::stringstream Str;

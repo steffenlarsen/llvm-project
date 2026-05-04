@@ -474,7 +474,9 @@ static bool simplifyOneLoop(Loop *L, SmallVectorImpl<Loop *> &Worklist,
                             ScalarEvolution *SE, AssumptionCache *AC,
                             MemorySSAUpdater *MSSAU, bool PreserveLCSSA) {
   bool Changed = false;
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU &&
+      getVerifyMemorySSA(
+          L->getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
 
 ReprocessLoop:
@@ -506,7 +508,9 @@ ReprocessLoop:
     }
   }
 
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU &&
+      getVerifyMemorySSA(
+          L->getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
 
   // If there are exiting blocks with branches on undef, resolve the undef in
@@ -544,7 +548,9 @@ ReprocessLoop:
   if (formDedicatedExitBlocks(L, DT, LI, MSSAU, PreserveLCSSA))
     Changed = true;
 
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU &&
+      getVerifyMemorySSA(
+          L->getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
 
   // If the header has more than two predecessors at this point (from the
@@ -578,7 +584,9 @@ ReprocessLoop:
       Changed = true;
   }
 
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU &&
+      getVerifyMemorySSA(
+          L->getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
 
   const DataLayout &DL = L->getHeader()->getDataLayout();
@@ -683,7 +691,9 @@ ReprocessLoop:
     }
   }
 
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU &&
+      getVerifyMemorySSA(
+          L->getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
 
   return Changed;

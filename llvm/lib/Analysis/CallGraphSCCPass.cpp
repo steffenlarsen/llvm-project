@@ -19,6 +19,7 @@
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/IR/AbstractCallSite.h"
 #include "llvm/IR/Function.h"
@@ -30,7 +31,7 @@
 #include "llvm/IR/PrintPasses.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
@@ -43,9 +44,14 @@ using namespace llvm;
 
 #define DEBUG_TYPE "cgscc-passmgr"
 
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
+
 namespace llvm {
-cl::opt<unsigned> MaxDevirtIterations("max-devirt-iterations", cl::ReallyHidden,
-                                      cl::init(4));
+unsigned getMaxDevirtIterations(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_MaxDevirtIterations>(Ctx);
+}
 } // namespace llvm
 
 STATISTIC(MaxSCCIterations, "Maximum CGSCCPassMgr iterations on one SCC");
@@ -318,7 +324,8 @@ bool CGPassManager::RefreshCallGraph(const CallGraphSCC &CurSCC, CallGraph &CG,
 
         // If this call site already existed in the callgraph, just verify it
         // matches up to expectations and remove it from Calls.
-        auto ExistingIt = Calls.find(Call);
+        DenseMap<Value *, CallGraphNode *>::iterator ExistingIt =
+            Calls.find(Call);
         if (ExistingIt != Calls.end()) {
           CallGraphNode *ExistingNode = ExistingIt->second;
 
@@ -531,7 +538,9 @@ bool CGPassManager::runOnModule(Module &M) {
                  << '\n');
       DevirtualizedCall = false;
       Changed |= RunAllPassesOnSCC(CurSCC, CG, DevirtualizedCall);
-    } while (Iteration++ < MaxDevirtIterations && DevirtualizedCall);
+    } while (Iteration++ <
+                 getMaxDevirtIterations(M.getContext().getOptionsContext()) &&
+             DevirtualizedCall);
 
     if (DevirtualizedCall)
       LLVM_DEBUG(dbgs() << "  CGSCCPASSMGR: Stopped iteration after "
@@ -682,8 +691,11 @@ namespace {
         BannerPrinted = true;
       };
 
-      bool NeedModule = llvm::forcePrintModuleIR();
-      if (shouldPrintAllFunctions() && NeedModule) {
+      const auto &Ctx = SCC.getCallGraph().getModule().getContext();
+      bool NeedModule = llvm::forcePrintModuleIR(Ctx);
+      bool PrintAllFunctions =
+          isSourceLocFilterEmpty(Ctx) && isFunctionInPrintList(Ctx, "*");
+      if (PrintAllFunctions && NeedModule) {
         PrintBannerOnce();
         OS << "\n";
         SCC.getCallGraph().getModule().print(OS, nullptr);
@@ -699,7 +711,7 @@ namespace {
               F->print(OS);
             }
           }
-        } else if (shouldPrintAllFunctions()) {
+        } else if (PrintAllFunctions) {
           PrintBannerOnce();
           OS << "\nPrinting <null> Function\n";
         }

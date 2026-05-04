@@ -38,6 +38,7 @@ add_lld_library(lldMachO
   Writer.cpp
 
   LINK_COMPONENTS
+  AllOptions
   ${LLVM_TARGETS_TO_BUILD}
   BinaryFormat
   BitReader

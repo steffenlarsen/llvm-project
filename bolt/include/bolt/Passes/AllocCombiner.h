@@ -23,7 +23,7 @@ class AllocCombinerPass : public BinaryFunctionPass {
   void combineAdjustments(BinaryFunction &BF);
 
 public:
-  explicit AllocCombinerPass(const cl::opt<bool> &PrintPass)
+  explicit AllocCombinerPass(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "alloc-combiner"; }

@@ -11,6 +11,7 @@ set(LLVM_LINK_COMPONENTS
 
 add_llvm_unittest(IRTests
   AbstractCallSiteTest.cpp
+  CommandLineV2ContextTest.cpp
   AsmWriterTest.cpp
   AttributesTest.cpp
   BasicBlockTest.cpp

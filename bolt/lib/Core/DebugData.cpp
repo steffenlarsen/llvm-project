@@ -22,7 +22,6 @@
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCObjectStreamer.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/EndianStream.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/SHA1.h"
@@ -38,7 +37,7 @@
 #define DEBUG_TYPE "bolt-debug-info"
 
 namespace opts {
-extern llvm::cl::opt<unsigned> Verbosity;
+extern unsigned Verbosity;
 } // namespace opts
 
 namespace llvm {

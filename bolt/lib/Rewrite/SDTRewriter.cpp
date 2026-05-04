@@ -13,21 +13,18 @@
 
 #include "bolt/Core/BinaryFunction.h"
 #include "bolt/Core/DebugData.h"
+#include "bolt/Rewrite/BoltRewriteOptionsOptInfos.h"
 #include "bolt/Rewrite/MetadataRewriter.h"
 #include "bolt/Rewrite/MetadataRewriters.h"
 #include "bolt/Utils/CommandLineOpts.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/Timer.h"
 
 using namespace llvm;
 using namespace bolt;
 
-namespace opts {
-static cl::opt<bool> PrintSDTMarkers("print-sdt",
-                                     cl::desc("print all SDT markers"),
-                                     cl::Hidden, cl::cat(BoltCategory));
-}
+namespace opts {}
 
 namespace {
 class SDTRewriter final : public MetadataRewriter {
@@ -103,7 +100,7 @@ void SDTRewriter::readSection() {
     SDTMarkers[Marker.PC] = Marker;
   }
 
-  if (opts::PrintSDTMarkers)
+  if (bolt_rewrite_opts::getPrintSdt(BC))
     printSDTMarkers();
 }
 

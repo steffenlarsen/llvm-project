@@ -22,6 +22,9 @@
 #include "llvm/Support/Compiler.h"
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+}
 class BasicBlock;
 class Function;
 class Instruction;
@@ -46,7 +49,8 @@ using FuncProbeFactorMap = StringMap<ProbeFactorMap>;
 // function pass, the factor sum for a probe would be typically 100%.
 class PseudoProbeVerifier {
 public:
-  LLVM_ABI void registerCallbacks(PassInstrumentationCallbacks &PIC);
+  LLVM_ABI void registerCallbacks(PassInstrumentationCallbacks &PIC,
+                                  const clv2::OptionsContext &Ctx);
 
   // Implementation of pass instrumentation callbacks for new pass manager.
   LLVM_ABI void runAfterPass(StringRef PassID, IRUnitRef IR);

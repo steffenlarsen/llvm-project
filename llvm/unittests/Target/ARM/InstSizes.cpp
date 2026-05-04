@@ -23,7 +23,7 @@ void runChecks(
     unsigned Expected,
     std::function<void(const ARMBaseInstrInfo &, MachineFunction &, unsigned &)>
         Checks) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   auto MIRString = "--- |\n"
                    "  declare void @sizes()\n" +

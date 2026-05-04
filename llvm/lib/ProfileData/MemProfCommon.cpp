@@ -12,63 +12,54 @@
 
 #include "llvm/ProfileData/MemProfCommon.h"
 #include "llvm/ProfileData/MemProf.h"
+#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
 #include "llvm/Support/BLAKE3.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/HashBuilder.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 using namespace llvm::memprof;
 
-namespace llvm {
+static float
+getMemProfLifetimeAccessDensityColdThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::PD_MemProfLifetimeAccessDensityColdThreshold>(Ctx);
+}
 
-// Upper bound on lifetime access density (accesses per byte per lifetime sec)
-// for marking an allocation cold.
-LLVM_ABI cl::opt<float> MemProfLifetimeAccessDensityColdThreshold(
-    "memprof-lifetime-access-density-cold-threshold", cl::init(0.05),
-    cl::Hidden,
-    cl::desc("The threshold the lifetime access density (accesses per byte per "
-             "lifetime sec) must be under to consider an allocation cold"));
+static unsigned
+getMemProfAveLifetimeColdThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::PD_MemProfAveLifetimeColdThreshold>(
+      Ctx);
+}
 
-// Lower bound on lifetime to mark an allocation cold (in addition to accesses
-// per byte per sec above). This is to avoid pessimizing short lived objects.
-LLVM_ABI cl::opt<unsigned> MemProfAveLifetimeColdThreshold(
-    "memprof-ave-lifetime-cold-threshold", cl::init(200), cl::Hidden,
-    cl::desc("The average lifetime (s) for an allocation to be considered "
-             "cold"));
+static unsigned getMemProfMinAveLifetimeAccessDensityHotThreshold(
+    const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::PD_MemProfMinAveLifetimeAccessDensityHotThreshold>(Ctx);
+}
 
-// Lower bound on average lifetime accesses density (total life time access
-// density / alloc count) for marking an allocation hot.
-LLVM_ABI cl::opt<unsigned> MemProfMinAveLifetimeAccessDensityHotThreshold(
-    "memprof-min-ave-lifetime-access-density-hot-threshold", cl::init(1000),
-    cl::Hidden,
-    cl::desc("The minimum TotalLifetimeAccessDensity / AllocCount for an "
-             "allocation to be considered hot"));
-
-LLVM_ABI cl::opt<bool>
-    MemProfUseHotHints("memprof-use-hot-hints", cl::init(false), cl::Hidden,
-                       cl::desc("Enable use of hot hints (only supported for "
-                                "unambigously hot allocations)"));
-
-} // end namespace llvm
+static bool getMemProfUseHotHints(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::PD_MemProfUseHotHints>(Ctx);
+}
 
 AllocationType llvm::memprof::getAllocType(uint64_t TotalLifetimeAccessDensity,
                                            uint64_t AllocCount,
-                                           uint64_t TotalLifetime) {
+                                           uint64_t TotalLifetime,
+                                           const clv2::OptionsContext &Ctx) {
   // The access densities are multiplied by 100 to hold 2 decimal places of
   // precision, so need to divide by 100.
   if (((float)TotalLifetimeAccessDensity) / AllocCount / 100 <
-          MemProfLifetimeAccessDensityColdThreshold
+          getMemProfLifetimeAccessDensityColdThreshold(Ctx)
       // Lifetime is expected to be in ms, so convert the threshold to ms.
       && ((float)TotalLifetime) / AllocCount >=
-             MemProfAveLifetimeColdThreshold * 1000)
+             getMemProfAveLifetimeColdThreshold(Ctx) * 1000)
     return AllocationType::Cold;
 
   // The access densities are multiplied by 100 to hold 2 decimal places of
   // precision, so need to divide by 100.
-  if (MemProfUseHotHints &&
+  if (getMemProfUseHotHints(Ctx) &&
       ((float)TotalLifetimeAccessDensity) / AllocCount / 100 >
-          MemProfMinAveLifetimeAccessDensityHotThreshold)
+          getMemProfMinAveLifetimeAccessDensityHotThreshold(Ctx))
     return AllocationType::Hot;
 
   return AllocationType::NotCold;

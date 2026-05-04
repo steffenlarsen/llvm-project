@@ -16,9 +16,11 @@ using namespace llvm::bolt;
 TEST(DynoStatsTest, emptyFuncs) {
   std::map<uint64_t, BinaryFunction> BinaryFunctions;
   DynoStats DynoStatsAArch64 =
-      getDynoStats(BinaryFunctions, /* BC.isAArch64() = */ true);
+      getDynoStats(BinaryFunctions, /* BC.isAArch64() = */ true,
+                   llvm::clv2::defaultOptionsContext());
   DynoStats DynoStatsNonAArch64 =
-      getDynoStats(BinaryFunctions, /* BC.isAArch64() = */ false);
+      getDynoStats(BinaryFunctions, /* BC.isAArch64() = */ false,
+                   llvm::clv2::defaultOptionsContext());
   // Both should be null
   ASSERT_EQ(DynoStatsAArch64, DynoStatsNonAArch64);
 }

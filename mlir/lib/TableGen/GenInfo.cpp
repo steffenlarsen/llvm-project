@@ -8,8 +8,7 @@
 
 #include "mlir/TableGen/GenInfo.h"
 
-#include "mlir/TableGen/GenNameParser.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/ManagedStatic.h"
 
 using namespace mlir;
@@ -21,21 +20,4 @@ GenRegistration::GenRegistration(StringRef arg, StringRef description,
   generatorRegistry->emplace_back(arg, description, function);
 }
 
-GenNameParser::GenNameParser(llvm::cl::Option &opt)
-    : llvm::cl::parser<const GenInfo *>(opt) {
-  for (const auto &kv : *generatorRegistry) {
-    addLiteralOption(kv.getGenArgument(), &kv, kv.getGenDescription());
-  }
-}
-
-void GenNameParser::printOptionInfo(const llvm::cl::Option &o,
-                                    size_t globalWidth) const {
-  GenNameParser *tp = const_cast<GenNameParser *>(this);
-  llvm::array_pod_sort(tp->Values.begin(), tp->Values.end(),
-                       [](const GenNameParser::OptionInfo *vT1,
-                          const GenNameParser::OptionInfo *vT2) {
-                         return vT1->Name.compare(vT2->Name);
-                       });
-  using llvm::cl::parser;
-  parser<const GenInfo *>::printOptionInfo(o, globalWidth);
-}
+ArrayRef<GenInfo> mlir::getRegisteredGenerators() { return *generatorRegistry; }

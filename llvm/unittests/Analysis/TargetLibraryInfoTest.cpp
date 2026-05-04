@@ -23,7 +23,7 @@ namespace {
 
 class TargetLibraryInfoTest : public testing::Test {
 protected:
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   TargetLibraryInfoImpl TLII;
   TargetLibraryInfo TLI;
 
@@ -729,7 +729,7 @@ private:
   const Triple TargetTriple;
 
 protected:
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<TargetLibraryInfoImpl> TLII;
   std::unique_ptr<TargetLibraryInfo> TLI;
 

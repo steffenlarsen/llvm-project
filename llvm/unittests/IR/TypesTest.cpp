@@ -15,7 +15,7 @@ using namespace llvm;
 namespace {
 
 TEST(TypesTest, StructType) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   // PR13522
   StructType *Struct = StructType::create(C, "FooBar");
@@ -28,7 +28,7 @@ TEST(TypesTest, StructType) {
 }
 
 TEST(TypesTest, LayoutIdenticalEmptyStructs) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   StructType *Foo = StructType::create(C, "Foo");
   StructType *Bar = StructType::create(C, "Bar");
@@ -36,7 +36,7 @@ TEST(TypesTest, LayoutIdenticalEmptyStructs) {
 }
 
 TEST(TypesTest, TargetExtType) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Type *A = TargetExtType::get(Context, "typea");
   Type *Aparam = TargetExtType::get(Context, "typea", {}, {0, 1});
   Type *Aparam2 = TargetExtType::get(Context, "typea", {}, {0, 1});
@@ -78,7 +78,7 @@ TEST(TypesTest, TargetExtType) {
 
 TEST(TypedPointerType, PrintTest) {
   std::string Buffer;
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   raw_string_ostream OS(Buffer);
 
   Type *I8Ptr = TypedPointerType::get(Type::getInt8Ty(Context), 0);
@@ -86,4 +86,4 @@ TEST(TypedPointerType, PrintTest) {
   EXPECT_EQ(StringRef(Buffer), ("typedptr(i8, 0)"));
 }
 
-}  // end anonymous namespace
+} // end anonymous namespace

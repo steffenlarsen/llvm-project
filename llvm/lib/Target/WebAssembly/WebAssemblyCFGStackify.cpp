@@ -40,6 +40,8 @@
 #include "llvm/CodeGen/MachinePassManager.h"
 #include "llvm/IR/Analysis.h"
 #include "llvm/MC/MCAsmInfo.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 using namespace llvm;
 using WebAssembly::SortRegionInfo;
@@ -54,6 +56,7 @@ class WebAssemblyCFGStackifyImpl {
   MachineDominatorTree &MDT;
   MachineLoopInfo &MLI;
   WebAssemblyExceptionInfo &WEI;
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
 
   // For each block whose label represents the end of a scope, record the block
   // which holds the beginning of the scope. This will allow us to quickly skip
@@ -165,8 +168,9 @@ class WebAssemblyCFGStackifyImpl {
 
 public:
   WebAssemblyCFGStackifyImpl(MachineDominatorTree &MDT, MachineLoopInfo &MLI,
-                             WebAssemblyExceptionInfo &WEI)
-      : MDT(MDT), MLI(MLI), WEI(WEI) {}
+                             WebAssemblyExceptionInfo &WEI,
+                             const clv2::OptionsContext &OptsCtx)
+      : MDT(MDT), MLI(MLI), WEI(WEI), OptsCtx(&OptsCtx) {}
 
   bool runOnMachineFunction(MachineFunction &MF);
 };
@@ -1855,7 +1859,7 @@ bool WebAssemblyCFGStackifyImpl::fixCallUnwindMismatches(MachineFunction &MF) {
         EHPadStack.pop_back();
       else if (MI.getOpcode() == WebAssembly::DELEGATE)
         EHPadStack.push_back(MI.getOperand(0).getMBB());
-      else if (WebAssembly::WasmUseLegacyEH &&
+      else if (WebAssembly::getWasmUseLegacyEH(*OptsCtx) &&
                WebAssembly::isCatch(MI.getOpcode()))
         EHPadStack.push_back(MI.getParent());
       else if (MI.getOpcode() == WebAssembly::END_TRY_TABLE)
@@ -2006,10 +2010,10 @@ bool WebAssemblyCFGStackifyImpl::fixCallUnwindMismatches(MachineFunction &MF) {
         EHPadStack.pop_back();
       else if (MI.getOpcode() == WebAssembly::DELEGATE)
         EHPadStack.push_back(MI.getOperand(0).getMBB());
-      else if (WebAssembly::WasmUseLegacyEH &&
+      else if (WebAssembly::getWasmUseLegacyEH(*OptsCtx) &&
                WebAssembly::isCatch(MI.getOpcode()))
         EHPadStack.push_back(MI.getParent());
-      else if (!WebAssembly::WasmUseLegacyEH &&
+      else if (!WebAssembly::getWasmUseLegacyEH(*OptsCtx) &&
                MI.getOpcode() == WebAssembly::END_TRY_TABLE)
         EHPadStack.push_back(TryToEHPad[EndToBegin[&MI]]);
     }
@@ -2026,7 +2030,7 @@ bool WebAssemblyCFGStackifyImpl::fixCallUnwindMismatches(MachineFunction &MF) {
 
   // When end_loop is before end_try_table within the same BB in unwind
   // destinations, we should split the end_loop into another BB.
-  if (!WebAssembly::WasmUseLegacyEH)
+  if (!WebAssembly::getWasmUseLegacyEH(*OptsCtx))
     for (auto &[UnwindDest, _] : UnwindDestToTryRanges) {
       auto It = EHPadToTry.find(UnwindDest);
       // If UnwindDest is the fake caller block, it will not be in EHPadToTry
@@ -2067,7 +2071,7 @@ bool WebAssemblyCFGStackifyImpl::fixCallUnwindMismatches(MachineFunction &MF) {
           MBB->removeSuccessor(EHPad);
       }
 
-      if (WebAssembly::WasmUseLegacyEH)
+      if (WebAssembly::getWasmUseLegacyEH(*OptsCtx))
         addNestedTryDelegate(RangeBegin, RangeEnd, UnwindDest);
       else
         addNestedTryTable(RangeBegin, RangeEnd, UnwindDest);
@@ -2284,7 +2288,7 @@ bool WebAssemblyCFGStackifyImpl::fixCatchUnwindMismatches(MachineFunction &MF) {
   for (auto &[EHPad, UnwindDest] : EHPadToUnwindDest) {
     MachineInstr *Try = EHPadToTry[EHPad];
     MachineInstr *EndTry = BeginToEnd[Try];
-    if (WebAssembly::WasmUseLegacyEH) {
+    if (WebAssembly::getWasmUseLegacyEH(*OptsCtx)) {
       addNestedTryDelegate(Try, EndTry, UnwindDest);
       NewEndTryBBs.insert(EndTry->getParent());
     } else {
@@ -2292,7 +2296,7 @@ bool WebAssemblyCFGStackifyImpl::fixCatchUnwindMismatches(MachineFunction &MF) {
     }
   }
 
-  if (!WebAssembly::WasmUseLegacyEH)
+  if (!WebAssembly::getWasmUseLegacyEH(*OptsCtx))
     return true;
 
   // Adding a try-delegate wrapping an existing try-catch-end can make existing
@@ -2524,7 +2528,7 @@ void WebAssemblyCFGStackifyImpl::placeMarkers(MachineFunction &MF) {
       // Place the TRY/TRY_TABLE for MBB if MBB is the EH pad of an exception.
       if (MCAI.getExceptionHandlingType() == ExceptionHandling::Wasm &&
           MF.getFunction().hasPersonalityFn()) {
-        if (WebAssembly::WasmUseLegacyEH)
+        if (WebAssembly::getWasmUseLegacyEH(*OptsCtx))
           placeTryMarker(MBB);
         else
           placeTryTableMarker(MBB);
@@ -2708,7 +2712,8 @@ bool WebAssemblyCFGStackifyImpl::runOnMachineFunction(MachineFunction &MF) {
 
   // Remove unnecessary instructions possibly introduced by try/end_trys.
   if (MCAI.getExceptionHandlingType() == ExceptionHandling::Wasm &&
-      MF.getFunction().hasPersonalityFn() && WebAssembly::WasmUseLegacyEH)
+      MF.getFunction().hasPersonalityFn() &&
+      WebAssembly::getWasmUseLegacyEH(*OptsCtx))
     removeUnnecessaryInstrs(MF);
 
   // Convert MBB operands in terminators to relative depth immediates.
@@ -2734,7 +2739,8 @@ bool WebAssemblyCFGStackifyLegacy::runOnMachineFunction(MachineFunction &MF) {
   MachineLoopInfo &MLI = getAnalysis<MachineLoopInfoWrapperPass>().getLI();
   WebAssemblyExceptionInfo &WEI =
       getAnalysis<WebAssemblyExceptionInfoWrapperPass>().getWEI();
-  WebAssemblyCFGStackifyImpl Impl(MDT, MLI, WEI);
+  const clv2::OptionsContext &OptsCtx = MF.getTarget().getOptionsContext();
+  WebAssemblyCFGStackifyImpl Impl(MDT, MLI, WEI, OptsCtx);
   return Impl.runOnMachineFunction(MF);
 }
 
@@ -2745,7 +2751,8 @@ WebAssemblyCFGStackifyPass::run(MachineFunction &MF,
   MachineLoopInfo &MLI = MFAM.getResult<MachineLoopAnalysis>(MF);
   WebAssemblyExceptionInfo &WEI =
       MFAM.getResult<WebAssemblyExceptionAnalysis>(MF);
-  WebAssemblyCFGStackifyImpl Impl(MDT, MLI, WEI);
+  const clv2::OptionsContext &OptsCtx = MF.getTarget().getOptionsContext();
+  WebAssemblyCFGStackifyImpl Impl(MDT, MLI, WEI, OptsCtx);
   return Impl.runOnMachineFunction(MF)
              ? getMachineFunctionPassPreservedAnalyses()
              : PreservedAnalyses::all();

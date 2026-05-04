@@ -31,6 +31,7 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TargetSelect.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -158,7 +159,9 @@ EmulateInstructionMIPS64::EmulateInstructionMIPS64(
   assert(m_insn_info.get());
 
   m_asm_info.reset(target->createMCAsmInfo(*m_reg_info, triple, m_mc_options));
-  m_subtype_info.reset(target->createMCSubtargetInfo(triple, cpu, features));
+  m_subtype_info.reset(target->createMCSubtargetInfo(
+      triple, cpu, features,
+      /*Ctx=*/llvm::clv2::defaultOptionsContext()));
   assert(m_asm_info.get() && m_subtype_info.get());
 
   m_context = std::make_unique<llvm::MCContext>(triple, *m_asm_info,

@@ -28,7 +28,7 @@ namespace {
 
 static void printModule(raw_ostream &OS, StringRef Banner,
                         bool ShouldPreserveUseListOrder, Module &M) {
-  if (shouldPrintAllFunctions()) {
+  if (shouldPrintAllFunctions(M.getContext())) {
     if (!Banner.empty())
       OS << Banner << "\n";
     M.print(OS, nullptr, ShouldPreserveUseListOrder);
@@ -92,10 +92,10 @@ public:
   // This pass just prints a banner followed by the function as it's processed.
   bool runOnFunction(Function &F) override {
     if (shouldPrintFunction(F)) {
-      if (forcePrintModuleIR()) {
-        OS << Banner << " (function: " << F.getName() << ")\n";
-        F.getParent()->print(OS, nullptr);
-      } else
+      if (forcePrintModuleIR(F.getContext()))
+        OS << Banner << " (function: " << F.getName() << ")\n"
+           << *F.getParent();
+      else
         OS << Banner << '\n' << static_cast<Value &>(F);
     }
 

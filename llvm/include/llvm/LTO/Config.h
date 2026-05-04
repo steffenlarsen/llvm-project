@@ -25,6 +25,7 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Target/TargetOptions.h"
 
+#include "llvm/Support/OptionsContext.h"
 #include <functional>
 #include <optional>
 
@@ -36,11 +37,20 @@ class ModuleSummaryIndex;
 class raw_pwrite_stream;
 class PassPlugin;
 
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
+
 namespace lto {
 
 /// LTO configuration. A linker can configure LTO by setting fields in this data
 /// structure and passing it to the lto::LTO constructor.
 struct Config {
+  /// Construct an LTO configuration. \p OptsCtx is the parsed LLVM options
+  /// context required by PipelineTuningOptions.
+  explicit Config(const clv2::OptionsContext &OptsCtx)
+      : OptsCtx(&OptsCtx), PTO(OptsCtx) {}
+
   enum VisScheme {
     FromPrevailing,
     ELF,
@@ -200,6 +210,11 @@ struct Config {
   /// Add FSAFDO discriminators.
   bool AddFSDiscriminator = false;
 
+  /// Non-owning pointer to the parsed LLVM options context. When set, this is
+  /// attached to any LLVMContext created during LTO so that passes can read
+  /// option values via LLVMContext::getOptionsContext().
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
+
   /// If this field is set, LTO will write input file paths and symbol
   /// resolutions here in llvm-lto2 command line flag format. This can be
   /// used for testing and for running the LTO pipeline outside of the linker
@@ -328,7 +343,8 @@ struct LTOLLVMDiagnosticHandler : public DiagnosticHandler {
 // FIXME: This should not be required as diagnostic handler is not callback.
 struct LTOLLVMContext : LLVMContext {
 
-  LTOLLVMContext(const Config &C) : DiagHandler(C.DiagHandler) {
+  LTOLLVMContext(const Config &C)
+      : LLVMContext(*C.OptsCtx), DiagHandler(C.DiagHandler) {
     setDiscardValueNames(C.ShouldDiscardValueNames);
     enableDebugTypeODRUniquing();
     setDiagnosticHandler(
@@ -337,7 +353,7 @@ struct LTOLLVMContext : LLVMContext {
   DiagnosticHandlerFunction DiagHandler;
 };
 
-}
-}
+} // namespace lto
+} // namespace llvm
 
 #endif

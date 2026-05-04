@@ -20,6 +20,8 @@ tablegen(LLVM PPCGenGlobalISel.inc -gen-global-isel)
 add_public_tablegen_target(PowerPCCommonTableGen)
 
 add_llvm_target(PowerPCCodeGen
+  PowerPCOptionsGetters.cpp
+  PowerPCOptionsRegistration.cpp
   GISel/PPCInstructionSelector.cpp
   PPCBoolRetToInt.cpp
   PPCAsmPrinter.cpp

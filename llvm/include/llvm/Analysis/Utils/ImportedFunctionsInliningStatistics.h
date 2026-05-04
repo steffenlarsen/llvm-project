@@ -15,6 +15,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Analysis/Utils/InlinerFunctionImportStatsOpts.h"
 #include "llvm/Support/Compiler.h"
 #include <memory>
 #include <vector>
@@ -102,11 +103,6 @@ private:
   StringRef ModuleName;
 };
 
-enum class InlinerFunctionImportStatsOpts {
-  No = 0,
-  Basic = 1,
-  Verbose = 2,
-};
 
 } // llvm
 

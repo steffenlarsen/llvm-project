@@ -16,14 +16,18 @@
 #include "clang/AST/StmtVisitor.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticFrontend.h"
+#include "clang/CodeGen/ClangCodeGenOptionsOptInfos.h"
 #include "clang/Lex/Lexer.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/ProfileData/Coverage/CoverageMapping.h"
 #include "llvm/ProfileData/Coverage/CoverageMappingReader.h"
 #include "llvm/ProfileData/Coverage/CoverageMappingWriter.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include <optional>
 
@@ -31,37 +35,20 @@
 // is textually included.
 #define COVMAP_V3
 
-namespace llvm {
-cl::opt<bool>
-    EnableSingleByteCoverage("enable-single-byte-coverage",
-                             llvm::cl::ZeroOrMore,
-                             llvm::cl::desc("Enable single byte coverage"),
-                             llvm::cl::Hidden, llvm::cl::init(false));
-} // namespace llvm
-
-static llvm::cl::opt<bool> EmptyLineCommentCoverage(
-    "emptyline-comment-coverage",
-    llvm::cl::desc("Emit emptylines and comment lines as skipped regions (only "
-                   "disable it on test)"),
-    llvm::cl::init(true), llvm::cl::Hidden);
-
-namespace llvm::coverage {
-cl::opt<bool> SystemHeadersCoverage(
-    "system-headers-coverage",
-    cl::desc("Enable collecting coverage from system headers"), cl::init(false),
-    cl::Hidden);
-}
-
 using namespace clang;
 using namespace CodeGen;
 using namespace llvm::coverage;
+using namespace llvm::clv2;
 
-CoverageSourceInfo *
-CoverageMappingModuleGen::setUpCoverageCallbacks(Preprocessor &PP) {
+CoverageSourceInfo *CoverageMappingModuleGen::setUpCoverageCallbacks(
+    Preprocessor &PP, const llvm::clv2::OptionsContext &OptsCtx) {
   CoverageSourceInfo *CoverageInfo =
-      new CoverageSourceInfo(PP.getSourceManager());
+      new CoverageSourceInfo(PP.getSourceManager(), OptsCtx);
   PP.addPPCallbacks(std::unique_ptr<PPCallbacks>(CoverageInfo));
-  if (EmptyLineCommentCoverage) {
+  bool EmptyLineCommentCoverageVal = true;
+  if (auto *O = llvm::clv2::getView<&llvm::clv2::ClangCodeGenOptsReg>(OptsCtx))
+    EmptyLineCommentCoverageVal = O->get<&CLANGCG_EmptylineCommentCoverage>();
+  if (EmptyLineCommentCoverageVal) {
     PP.addCommentHandler(CoverageInfo);
     PP.setEmptylineHandler(CoverageInfo);
     PP.setPreprocessToken(true);
@@ -77,7 +64,10 @@ CoverageMappingModuleGen::setUpCoverageCallbacks(Preprocessor &PP) {
 
 void CoverageSourceInfo::AddSkippedRange(SourceRange Range,
                                          SkippedRange::Kind RangeKind) {
-  if (EmptyLineCommentCoverage && !SkippedRanges.empty() &&
+  bool EmptyLineCommentCoverageVal = true;
+  if (auto *O = llvm::clv2::getView<&llvm::clv2::ClangCodeGenOptsReg>(*OptsCtx))
+    EmptyLineCommentCoverageVal = O->get<&CLANGCG_EmptylineCommentCoverage>();
+  if (EmptyLineCommentCoverageVal && !SkippedRanges.empty() &&
       PrevTokLoc == SkippedRanges.back().PrevTokLoc &&
       SourceMgr.isWrittenInSameFile(SkippedRanges.back().Range.getEnd(),
                                     Range.getBegin()))
@@ -372,6 +362,11 @@ public:
   void gatherFileIDs(SmallVectorImpl<unsigned> &Mapping) {
     FileIDMapping.clear();
 
+    bool SystemHeadersCoverageVal = false;
+    if (auto *O = llvm::clv2::getView<&llvm::clv2::ClangCodeGenOptsReg>(
+            CVM.getCodeGenModule().getLLVMContext().getOptionsContext()))
+      SystemHeadersCoverageVal = O->get<&CLANGCG_SystemHeadersCoverage>();
+
     llvm::SmallSet<FileID, 8> Visited;
     SmallVector<std::pair<SourceLocation, unsigned>, 8> FileLocs;
     for (auto &Region : SourceRegions) {
@@ -390,7 +385,7 @@ public:
       // tokens to their user-code call site so coverage is attributed to
       // the user expression. Drop anything still in a system header
       // (e.g. a plain FileID into a -isystem .def file).
-      if (!SystemHeadersCoverage &&
+      if (!SystemHeadersCoverageVal &&
           SM.isInSystemHeader(SM.getSpellingLoc(Loc))) {
         if (Loc.isMacroID()) {
           auto BeginLoc = SM.getSpellingLoc(Loc);
@@ -408,6 +403,9 @@ public:
       FileID File = SM.getFileID(Loc);
       if (!Visited.insert(File).second)
         continue;
+
+      assert(SystemHeadersCoverageVal ||
+             !SM.isInSystemHeader(SM.getSpellingLoc(Loc)));
 
       unsigned Depth = 0;
       for (SourceLocation Parent = getIncludeOrExpansionLoc(Loc);
@@ -522,7 +520,11 @@ public:
 
       // Ignore regions from system headers unless collecting coverage from
       // system headers is explicitly enabled.
-      if (!SystemHeadersCoverage &&
+      bool SystemHeadersCoverageVal = false;
+      if (auto *O = llvm::clv2::getView<&llvm::clv2::ClangCodeGenOptsReg>(
+              CVM.getCodeGenModule().getLLVMContext().getOptionsContext()))
+        SystemHeadersCoverageVal = O->get<&CLANGCG_SystemHeadersCoverage>();
+      if (!SystemHeadersCoverageVal &&
           SM.isInSystemHeader(SM.getSpellingLoc(LocStart))) {
         assert(!Region.isMCDCBranch() && !Region.isMCDCDecision() &&
                "Don't suppress the condition in system headers");
@@ -950,7 +952,11 @@ struct CounterCoverageMappingBuilder
 
   /// Return a counter for the subtraction of \c RHS from \c LHS
   Counter subtractCounters(Counter LHS, Counter RHS, bool Simplify = true) {
-    assert(!llvm::EnableSingleByteCoverage &&
+    bool EnableSingleByteCoverageVal = false;
+    if (auto *O = llvm::clv2::getView<&llvm::clv2::ClangCodeGenOptsReg>(
+            CVM.getCodeGenModule().getLLVMContext().getOptionsContext()))
+      EnableSingleByteCoverageVal = O->get<&CLANGCG_EnableSingleByteCoverage>();
+    assert(!EnableSingleByteCoverageVal &&
            "cannot add counters when single byte coverage mode is enabled");
     return Builder.subtract(LHS, RHS, Simplify);
   }
@@ -997,7 +1003,11 @@ struct CounterCoverageMappingBuilder
     BranchCounterPair Counters = {ExecCnt,
                                   Builder.subtract(ParentCnt, ExecCnt)};
 
-    if (!llvm::EnableSingleByteCoverage || !Counters.Skipped.isExpression()) {
+    bool EnableSingleByteCoverageVal = false;
+    if (auto *O = llvm::clv2::getView<&llvm::clv2::ClangCodeGenOptsReg>(
+            CVM.getCodeGenModule().getLLVMContext().getOptionsContext()))
+      EnableSingleByteCoverageVal = O->get<&CLANGCG_EnableSingleByteCoverage>();
+    if (!EnableSingleByteCoverageVal || !Counters.Skipped.isExpression()) {
       assert(
           !TheMap.Skipped.hasValue() &&
           "SkipCnt shouldn't be allocated but refer to an existing counter.");
@@ -1020,7 +1030,11 @@ struct CounterCoverageMappingBuilder
   std::pair<Counter, Counter>
   getSwitchImplicitDefaultCounterPair(const Stmt *Cond, Counter ParentCount,
                                       Counter CaseCountSum) {
-    if (llvm::EnableSingleByteCoverage) {
+    bool EnableSingleByteCoverageVal = false;
+    if (auto *O = llvm::clv2::getView<&llvm::clv2::ClangCodeGenOptsReg>(
+            CVM.getCodeGenModule().getLLVMContext().getOptionsContext()))
+      EnableSingleByteCoverageVal = O->get<&CLANGCG_EnableSingleByteCoverage>();
+    if (EnableSingleByteCoverageVal) {
       // Allocate the new Counter since `subtract(Parent - Sum)` is unavailable.
       unsigned Idx = NextCounterNum++;
       CounterMap[Cond].Skipped = Idx;
@@ -1268,9 +1282,13 @@ struct CounterCoverageMappingBuilder
   /// Returns Counter that corresponds to SC.
   Counter createSwitchCaseRegion(const SwitchCase *SC, Counter ParentCount) {
     Counter TrueCnt = getRegionCounter(SC);
-    Counter FalseCnt = (llvm::EnableSingleByteCoverage
-                            ? Counter::getZero() // Folded
-                            : subtractCounters(ParentCount, TrueCnt));
+    bool EnableSingleByteCoverageVal = false;
+    if (auto *O = llvm::clv2::getView<&llvm::clv2::ClangCodeGenOptsReg>(
+            CVM.getCodeGenModule().getLLVMContext().getOptionsContext()))
+      EnableSingleByteCoverageVal = O->get<&CLANGCG_EnableSingleByteCoverage>();
+    Counter FalseCnt =
+        (EnableSingleByteCoverageVal ? Counter::getZero() // Folded
+                                     : subtractCounters(ParentCount, TrueCnt));
     // Push region onto RegionStack but immediately pop it (which adds it to
     // the function's SourceRegions) because it doesn't apply to any other
     // source other than the SwitchCase.
@@ -1432,8 +1450,7 @@ struct CounterCoverageMappingBuilder
         EndDepth--;
       }
       if (UnnestStart) {
-        assert(SM.isWrittenInSameFile(AfterLoc,
-                                      getEndOfFileOrMacro(AfterLoc)));
+        assert(SM.isWrittenInSameFile(AfterLoc, getEndOfFileOrMacro(AfterLoc)));
 
         AfterLoc = getIncludeOrExpansionLoc(AfterLoc);
         assert(AfterLoc.isValid());
@@ -1600,7 +1617,11 @@ struct CounterCoverageMappingBuilder
 
     // Do not propagate region counts into system headers unless collecting
     // coverage from system headers is explicitly enabled.
-    if (!SystemHeadersCoverage && Body &&
+    bool SystemHeadersCoverageVal = false;
+    if (auto *O = llvm::clv2::getView<&llvm::clv2::ClangCodeGenOptsReg>(
+            CVM.getCodeGenModule().getLLVMContext().getOptionsContext()))
+      SystemHeadersCoverageVal = O->get<&CLANGCG_SystemHeadersCoverage>();
+    if (!SystemHeadersCoverageVal && Body &&
         SM.isInSystemHeader(SM.getSpellingLoc(getStart(Body))))
       return;
 
@@ -2268,7 +2289,11 @@ struct CounterCoverageMappingBuilder
 
   /// Check if E belongs to system headers.
   bool isExprInSystemHeader(const BinaryOperator *E) const {
-    return (!SystemHeadersCoverage &&
+    bool SystemHeadersCoverageVal = false;
+    if (auto *O = llvm::clv2::getView<&llvm::clv2::ClangCodeGenOptsReg>(
+            CVM.getCodeGenModule().getLLVMContext().getOptionsContext()))
+      SystemHeadersCoverageVal = O->get<&CLANGCG_SystemHeadersCoverage>();
+    return (!SystemHeadersCoverageVal &&
             SM.isInSystemHeader(SM.getSpellingLoc(E->getOperatorLoc())) &&
             SM.isInSystemHeader(SM.getSpellingLoc(E->getBeginLoc())) &&
             SM.isInSystemHeader(SM.getSpellingLoc(E->getEndLoc())));
@@ -2425,7 +2450,7 @@ struct CounterCoverageMappingBuilder
     VisitStmt(POE->getSyntacticForm());
   }
 
-  void VisitOpaqueValueExpr(const OpaqueValueExpr* OVE) {
+  void VisitOpaqueValueExpr(const OpaqueValueExpr *OVE) {
     if (OVE->isUnique())
       Visit(OVE->getSourceExpr());
   }
@@ -2548,7 +2573,7 @@ void CoverageMappingModuleGen::emitFunctionMappingRecord(
   // Create the function record constant.
 #define COVMAP_FUNC_RECORD(Type, LLVMType, Name, Init) Init,
   llvm::Constant *FunctionRecordVals[] = {
-      #include "llvm/ProfileData/InstrProfData.inc"
+#include "llvm/ProfileData/InstrProfData.inc"
   };
   auto *FuncRecordConstant =
       llvm::ConstantStruct::get(FunctionRecordTy, ArrayRef(FunctionRecordVals));
@@ -2621,7 +2646,8 @@ void CoverageMappingModuleGen::emit() {
   std::string Filenames;
   {
     llvm::raw_string_ostream OS(Filenames);
-    CoverageFilenamesSectionWriter(FilenameStrs).write(OS);
+    CoverageFilenamesSectionWriter(FilenameStrs)
+        .write(OS, /*Compress=*/true, Ctx.getOptionsContext());
   }
   auto *FilenamesVal =
       llvm::ConstantDataArray::getString(Ctx, Filenames, false);

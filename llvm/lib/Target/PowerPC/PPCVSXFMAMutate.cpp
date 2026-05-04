@@ -27,12 +27,14 @@
 #include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/CodeGen/ScheduleDAG.h"
 #include "llvm/CodeGen/SlotIndexes.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -40,10 +42,12 @@ using namespace llvm;
 // cross-basic-block intervals well.
 // See: http://lists.llvm.org/pipermail/llvm-dev/2016-February/095669.html
 //      http://reviews.llvm.org/D17087
-static cl::opt<bool> DisableVSXFMAMutate(
-    "disable-ppc-vsx-fma-mutation",
-    cl::desc("Disable VSX FMA instruction mutation"), cl::init(true),
-    cl::Hidden);
+static bool DisableVSXFMAMutate = true;
+
+static bool getDisableVSXFMAMutate(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_DisableVSXFMAMutate>(
+      F.getContext().getOptionsContext());
+}
 
 #define DEBUG_TYPE "ppc-vsx-fma-mutate"
 
@@ -339,7 +343,7 @@ public:
 
       bool Changed = false;
 
-      if (DisableVSXFMAMutate)
+      if (getDisableVSXFMAMutate(MF.getFunction()))
         return Changed;
 
       for (MachineBasicBlock &B : llvm::make_early_inc_range(MF))
@@ -354,8 +358,8 @@ public:
       AU.addPreserved<LiveIntervalsWrapperPass>();
       AU.addPreserved<SlotIndexesWrapperPass>();
       AU.addPreserved<MachineDominatorTreeWrapperPass>();
-      AU.addPreserved<MachineBlockFrequencyInfoWrapperPass>();
       AU.addPreserved<MachineRegisterClassInfoWrapperPass>();
+      AU.addPreserved<MachineBlockFrequencyInfoWrapperPass>();
       MachineFunctionPass::getAnalysisUsage(AU);
     }
   };

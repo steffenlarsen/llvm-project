@@ -39,7 +39,7 @@ ExpectThatElementsAre(sandboxir::SeedBundle &SR,
 }
 
 struct SeedBundleTest : public testing::Test {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
 
   void parseIR(LLVMContext &C, const char *IR) {

@@ -20,10 +20,12 @@
 #include "clang/Serialization/ASTReader.h"
 #include "clang/Serialization/ObjectFilePCHContainerReader.h"
 #include "clang/UnifiedSymbolResolution/USRGeneration.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/VirtualFileSystem.h"
@@ -47,35 +49,36 @@ namespace options {
 
 static cl::OptionCategory IndexTestCoreCategory("index-test-core options");
 
-static cl::opt<ActionType>
-Action(cl::desc("Action:"), cl::init(ActionType::None),
-       cl::values(
-          clEnumValN(ActionType::PrintSourceSymbols,
-                     "print-source-symbols", "Print symbols from source")),
-       cl::cat(IndexTestCoreCategory));
-
 static cl::extrahelp MoreHelp(
   "\nAdd \"-- <compiler arguments>\" at the end to setup the compiler "
   "invocation\n"
 );
 
-static cl::opt<bool>
-DumpModuleImports("dump-imported-module-files",
-               cl::desc("Print symbols and input files from imported modules"));
+inline constexpr clv2::OptionInfo<bool> CMPrintSourceSymbolsOpt{
+    "print-source-symbols", "Print symbols from source"};
 
-static cl::opt<bool>
-IncludeLocals("include-locals", cl::desc("Print local symbols"));
+inline constexpr clv2::OptionInfo<bool> CMDumpModuleImportsOpt{
+    "dump-imported-module-files",
+    "Print symbols and input files from imported modules"};
 
-static cl::opt<bool> IgnoreMacros("ignore-macros",
-                                  cl::desc("Skip indexing macros"));
+inline constexpr clv2::OptionInfo<bool> CMIncludeLocalsOpt{
+    "include-locals", "Print local symbols"};
 
-static cl::opt<std::string>
-ModuleFilePath("module-file",
-               cl::desc("Path to module file to print symbols from"));
-static cl::opt<std::string>
-  ModuleFormat("fmodule-format", cl::init("raw"),
-        cl::desc("Container format for clang modules and PCH, 'raw' or 'obj'"));
+inline constexpr clv2::OptionInfo<bool> CMIgnoreMacrosOpt{
+    "ignore-macros", "Skip indexing macros"};
 
+inline constexpr clv2::OptionInfo<std::string> CMModuleFilePathOpt{
+    "module-file", "Path to module file to print symbols from"};
+
+inline constexpr clv2::OptionInfo<std::string> CMModuleFormatOpt{
+    "fmodule-format",
+    "Container format for clang modules and PCH, 'raw' or 'obj'",
+    clv2::Init{"raw"}};
+
+inline constexpr clv2::OptionsRegistry<
+    &CMPrintSourceSymbolsOpt, &CMDumpModuleImportsOpt, &CMIncludeLocalsOpt,
+    &CMIgnoreMacrosOpt, &CMModuleFilePathOpt, &CMModuleFormatOpt>
+    CoreMainReg;
 }
 } // anonymous namespace
 
@@ -362,26 +365,39 @@ int indextest_core_main(int argc, const char **argv) {
     argc = DoubleDash - argv;
   }
 
-  cl::HideUnrelatedOptions(options::IndexTestCoreCategory);
-  cl::ParseCommandLineOptions(argc, argv, "index-test-core");
+  clv2::OptionParser P;
+  P.add<&options::CoreMainReg>();
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&options::IndexTestCoreCategory});
+  auto OptsCtx = P.parse(argc, argv, "index-test-core");
+  auto *Opts = OptsCtx->getViewPtr<&options::CoreMainReg>();
 
-  if (options::Action == ActionType::None) {
+  ActionType Action = ActionType::None;
+  if (Opts->get<&options::CMPrintSourceSymbolsOpt>())
+    Action = ActionType::PrintSourceSymbols;
+  bool DumpModuleImports = Opts->get<&options::CMDumpModuleImportsOpt>();
+  bool IncludeLocals = Opts->get<&options::CMIncludeLocalsOpt>();
+  bool IgnoreMacros = Opts->get<&options::CMIgnoreMacrosOpt>();
+  std::string ModuleFilePath = Opts->get<&options::CMModuleFilePathOpt>();
+  std::string ModuleFormat = Opts->get<&options::CMModuleFormatOpt>();
+  if (ModuleFormat.empty())
+    ModuleFormat = "raw";
+
+  if (Action == ActionType::None) {
     errs() << "error: action required; pass '-help' for options\n";
     return 1;
   }
 
-  if (options::Action == ActionType::PrintSourceSymbols) {
-    if (!options::ModuleFilePath.empty()) {
-      return printSourceSymbolsFromModule(options::ModuleFilePath,
-                                          options::ModuleFormat);
+  if (Action == ActionType::PrintSourceSymbols) {
+    if (!ModuleFilePath.empty()) {
+      return printSourceSymbolsFromModule(ModuleFilePath, ModuleFormat);
     }
     if (CompArgs.empty()) {
       errs() << "error: missing compiler args; pass '-- <compiler arguments>'\n";
       return 1;
     }
-    return printSourceSymbols(Executable.c_str(), CompArgs,
-                              options::DumpModuleImports,
-                              options::IncludeLocals, options::IgnoreMacros);
+    return printSourceSymbols(Executable.c_str(), CompArgs, DumpModuleImports,
+                              IncludeLocals, IgnoreMacros);
   }
 
   return 0;

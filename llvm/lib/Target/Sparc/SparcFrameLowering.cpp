@@ -20,15 +20,17 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/Function.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Sparc/SparcOptionsOptInfos.h"
+#include "llvm/Target/TargetOptions.h"
 
 using namespace llvm;
 
-static cl::opt<bool>
-DisableLeafProc("disable-sparc-leaf-proc",
-                cl::init(false),
-                cl::desc("Disable Sparc leaf procedure optimization."),
-                cl::Hidden);
+static bool getDisableLeafProc(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SPARC_DisableLeafProc>(
+      F.getContext().getOptionsContext());
+}
 
 SparcFrameLowering::SparcFrameLowering(const SparcSubtarget &ST)
     : TargetFrameLowering(TargetFrameLowering::StackGrowsDown,
@@ -317,11 +319,10 @@ void SparcFrameLowering::determineCalleeSaves(MachineFunction &MF,
                                               BitVector &SavedRegs,
                                               RegScavenger *RS) const {
   TargetFrameLowering::determineCalleeSaves(MF, SavedRegs, RS);
-  if (!DisableLeafProc && isLeafProc(MF)) {
+  if (!getDisableLeafProc(MF.getFunction()) && isLeafProc(MF)) {
     SparcMachineFunctionInfo *MFI = MF.getInfo<SparcMachineFunctionInfo>();
     MFI->setLeafProc(true);
 
     remapRegsForLeafProc(MF);
   }
-
 }

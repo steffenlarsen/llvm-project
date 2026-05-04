@@ -8,7 +8,7 @@
 
 #include "llvm/Support/Program.h"
 #include "llvm/Config/llvm-config.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/ExponentialBackoff.h"
 #include "llvm/Support/FileSystem.h"
@@ -56,10 +56,20 @@ namespace {
 using namespace llvm;
 using namespace sys;
 
-static cl::opt<std::string>
-ProgramTestStringArg1("program-test-string-arg1");
-static cl::opt<std::string>
-ProgramTestStringArg2("program-test-string-arg2");
+static std::string ProgramTestStringArg1;
+static std::string ProgramTestStringArg2;
+static unsigned ProgramTestStringArg1Count = 0;
+static unsigned ProgramTestStringArg2Count = 0;
+static constexpr clv2::OptionInfo<std::string> OI_ProgramTestStringArg1{
+    "program-test-string-arg1", ""};
+static constexpr clv2::OptionInfo<std::string> OI_ProgramTestStringArg2{
+    "program-test-string-arg2", ""};
+static const int ProgramTestOptsInit = ([] {
+  clv2::registerDynamicEntry(clv2::makeEntry<&OI_ProgramTestStringArg1>(ProgramTestStringArg1,
+      ProgramTestStringArg1Count));
+  clv2::registerDynamicEntry(clv2::makeEntry<&OI_ProgramTestStringArg2>(ProgramTestStringArg2,
+      ProgramTestStringArg2Count));
+}(), 0);
 
 class ProgramEnvTest : public testing::Test {
   std::vector<StringRef> EnvTable;

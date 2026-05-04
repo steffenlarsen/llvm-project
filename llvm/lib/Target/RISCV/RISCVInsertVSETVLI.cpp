@@ -33,6 +33,9 @@
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/LiveStacks.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/RegisterClassInfo.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
 #include <queue>
 using namespace llvm;
 using namespace RISCV;
@@ -43,11 +46,11 @@ using namespace RISCV;
 STATISTIC(NumInsertedVSETVL, "Number of VSETVL inst inserted");
 STATISTIC(NumCoalescedVSETVL, "Number of VSETVL inst coalesced");
 
-static cl::opt<bool> EnsureWholeVectorRegisterMoveValidVTYPE(
-    DEBUG_TYPE "-whole-vector-register-move-valid-vtype", cl::Hidden,
-    cl::desc("Insert vsetvlis before vmvNr.vs to ensure vtype is valid and "
-             "vill is cleared"),
-    cl::init(true));
+static bool getEnsureWholeVectorRegisterMoveValidVTYPE(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::RV_EnsureWholeVectorRegisterMoveValidVTYPE>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -303,7 +306,7 @@ static VSETVLIInfo adjustIncoming(const VSETVLIInfo &PrevInfo,
 // legal for MI, but may not be the state requested by MI.
 void RISCVInsertVSETVLI::transferBefore(VSETVLIInfo &Info,
                                         const MachineInstr &MI) const {
-  if (EnsureWholeVectorRegisterMoveValidVTYPE &&
+  if (getEnsureWholeVectorRegisterMoveValidVTYPE(MI.getMF()->getFunction()) &&
       RISCV::isVectorCopy(ST->getRegisterInfo(), MI) &&
       (!Info.isKnown() || Info.hasSEWLMULRatioOnly())) {
     // Use an arbitrary but valid AVL and VTYPE so vill will be cleared. It may
@@ -558,7 +561,8 @@ void RISCVInsertVSETVLI::emitVSETVLIs(MachineBasicBlock &MBB) {
       PrefixTransparent = false;
     }
 
-    if (EnsureWholeVectorRegisterMoveValidVTYPE &&
+    if (getEnsureWholeVectorRegisterMoveValidVTYPE(
+            MBB.getParent()->getFunction()) &&
         RISCV::isVectorCopy(ST->getRegisterInfo(), MI)) {
       if (!PrevInfo.isCompatible(DemandedFields::all(), CurInfo, LIS)) {
         insertVSETVLI(MBB, MI, MI.getDebugLoc(), CurInfo, PrevInfo);

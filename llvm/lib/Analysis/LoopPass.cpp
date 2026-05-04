@@ -32,9 +32,14 @@ using namespace llvm;
 namespace {
 
 bool shouldPrintLoop(const Loop &L) {
-  Function *F = L.getHeader()->getParent();
-  bool SourceLocFilterEmpty = isSourceLocFilterEmpty();
-  if (!isFunctionInPrintList(F->getName()))
+  auto BBI = llvm::find_if(L.blocks(), [](BasicBlock *BB) { return BB; });
+  if (BBI == L.blocks().end())
+    return false;
+
+  const BasicBlock *FirstBB = *BBI;
+  const LLVMContext &Ctx = FirstBB->getContext();
+  bool SourceLocFilterEmpty = isSourceLocFilterEmpty(Ctx);
+  if (!isFunctionInPrintList(Ctx, FirstBB->getParent()->getName()))
     return false;
 
   if (SourceLocFilterEmpty)
@@ -42,7 +47,7 @@ bool shouldPrintLoop(const Loop &L) {
 
   for (const BasicBlock *BB : L.blocks())
     for (const Instruction &I : *BB)
-      if (isSourceLocInPrintList(I.getDebugLoc()))
+      if (isSourceLocInPrintList(Ctx, I.getDebugLoc()))
         return true;
   return false;
 }

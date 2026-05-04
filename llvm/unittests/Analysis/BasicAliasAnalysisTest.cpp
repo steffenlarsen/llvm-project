@@ -33,7 +33,7 @@ class BasicAATest : public testing::Test {
 protected:
   // N.B. Many of these members depend on each other (e.g. the Module depends on
   // the Context, etc.). So, order matters here (and in TestAnalyses).
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M;
   IRBuilder<> B;
   DataLayout DL;

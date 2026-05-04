@@ -11,10 +11,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Passes/IdenticalCodeFolding.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
 #include "bolt/Core/HashUtilities.h"
 #include "bolt/Core/ParallelUtilities.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/ThreadPool.h"
 #include "llvm/Support/Timer.h"
@@ -28,43 +30,13 @@
 
 using namespace llvm;
 using namespace bolt;
+using namespace bolt::bolt_passes_opts;
 
-namespace opts {
-
-extern cl::OptionCategory BoltOptCategory;
-
-extern bool isHotTextMover(const BinaryFunction &Function);
-
-static cl::opt<bool>
-    ICFUseDFS("icf-dfs", cl::desc("use DFS ordering when using -icf option"),
-              cl::ReallyHidden, cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-TimeICF("time-icf",
-  cl::desc("time icf steps"),
-  cl::ReallyHidden,
-  cl::ZeroOrMore,
-  cl::cat(BoltOptCategory));
-
-cl::opt<bolt::IdenticalCodeFolding::ICFLevel, false,
-        DeprecatedICFNumericOptionParser>
-    ICF("icf", cl::desc("fold functions with identical code"),
-        cl::init(bolt::IdenticalCodeFolding::ICFLevel::None),
-        cl::values(clEnumValN(bolt::IdenticalCodeFolding::ICFLevel::All, "all",
-                              "Enable identical code folding"),
-                   clEnumValN(bolt::IdenticalCodeFolding::ICFLevel::All, "1",
-                              "Enable identical code folding"),
-                   clEnumValN(bolt::IdenticalCodeFolding::ICFLevel::All, "",
-                              "Enable identical code folding"),
-                   clEnumValN(bolt::IdenticalCodeFolding::ICFLevel::None,
-                              "none",
-                              "Disable identical code folding (default)"),
-                   clEnumValN(bolt::IdenticalCodeFolding::ICFLevel::None, "0",
-                              "Disable identical code folding (default)"),
-                   clEnumValN(bolt::IdenticalCodeFolding::ICFLevel::Safe,
-                              "safe", "Enable safe identical code folding")),
-        cl::ZeroOrMore, cl::ValueOptional, cl::cat(BoltOptCategory));
-} // namespace opts
+namespace llvm {
+namespace bolt {
+bool isHotTextMover(const BinaryFunction &Function);
+} // namespace bolt
+} // namespace llvm
 
 bool IdenticalCodeFolding::shouldOptimize(const BinaryFunction &BF) const {
   if (BF.hasUnknownControlFlow())
@@ -75,7 +47,9 @@ bool IdenticalCodeFolding::shouldOptimize(const BinaryFunction &BF) const {
     return false;
   if (BF.isPseudo())
     return false;
-  if (opts::ICF == ICFLevel::Safe && BF.hasAddressTaken())
+  auto ICF = static_cast<bolt::IdenticalCodeFolding::ICFLevel>(
+      getIcf(BF.getBinaryContext()));
+  if (ICF == ICFLevel::Safe && BF.hasAddressTaken())
     return false;
   return BinaryFunctionPass::shouldOptimize(BF);
 }
@@ -185,12 +159,12 @@ static bool isInstrEquivalentWith(const MCInst &InstA,
 /// potentially identical but different functions are ignored during the
 /// comparison.
 static bool isIdenticalWith(const BinaryFunction &A, const BinaryFunction &B,
-                            bool CongruentSymbols) {
+                            bool CongruentSymbols, bool ICFUseDFS) {
   assert(A.hasCFG() && B.hasCFG() && "both functions should have CFG");
 
   // Hot text mover functions should not be folded. They need to stay in their
   // original section to avoid being placed on hot/huge pages.
-  if (opts::isHotTextMover(A) || opts::isHotTextMover(B))
+  if (isHotTextMover(A) || isHotTextMover(B))
     return false;
 
   // Compare the two functions, one basic block at a time.
@@ -211,7 +185,7 @@ static bool isIdenticalWith(const BinaryFunction &A, const BinaryFunction &B,
   // Process both functions in either DFS or existing order.
   SmallVector<const BinaryBasicBlock *, 0> OrderA;
   SmallVector<const BinaryBasicBlock *, 0> OrderB;
-  if (opts::ICFUseDFS) {
+  if (ICFUseDFS) {
     copy(A.dfs(), std::back_inserter(OrderA));
     copy(B.dfs(), std::back_inserter(OrderB));
   } else {
@@ -356,18 +330,24 @@ struct KeyHash {
 ///
 /// Congruent functions are required to have identical hash.
 struct KeyCongruent {
+  bool ICFUseDFS = false;
+  KeyCongruent() = default;
+  explicit KeyCongruent(bool UseDFS) : ICFUseDFS(UseDFS) {}
   bool operator()(const BinaryFunction *A, const BinaryFunction *B) const {
     if (A == B)
       return true;
-    return isIdenticalWith(*A, *B, /*CongruentSymbols=*/true);
+    return isIdenticalWith(*A, *B, /*CongruentSymbols=*/true, ICFUseDFS);
   }
 };
 
 struct KeyEqual {
+  bool ICFUseDFS = false;
+  KeyEqual() = default;
+  explicit KeyEqual(bool UseDFS) : ICFUseDFS(UseDFS) {}
   bool operator()(const BinaryFunction *A, const BinaryFunction *B) const {
     if (A == B)
       return true;
-    return isIdenticalWith(*A, *B, /*CongruentSymbols=*/false);
+    return isIdenticalWith(*A, *B, /*CongruentSymbols=*/false, ICFUseDFS);
   }
 };
 
@@ -443,9 +423,10 @@ void IdenticalCodeFolding::analyzeFunctions(BinaryContext &BC) {
 }
 
 void IdenticalCodeFolding::markFunctionsUnsafeToFold(BinaryContext &BC) {
+  const bool TimeICF = getTimeIcf(BC);
   NamedRegionTimer MarkFunctionsUnsafeToFoldTimer(
       "markFunctionsUnsafeToFold", "markFunctionsUnsafeToFold", "ICF breakdown",
-      "ICF breakdown", opts::TimeICF);
+      "ICF breakdown", TimeICF);
   if (!BC.isX86() && !BC.isAArch64())
     BC.outs()
         << "BOLT-WARNING: safe ICF is only supported for x86 and AArch64\n";
@@ -454,21 +435,26 @@ void IdenticalCodeFolding::markFunctionsUnsafeToFold(BinaryContext &BC) {
 }
 
 Error IdenticalCodeFolding::runOnFunctions(BinaryContext &BC) {
+  const bool ICFUseDFS = getIcfDfs(BC);
+  const bool TimeICF = getTimeIcf(BC);
+  auto ICF = static_cast<bolt::IdenticalCodeFolding::ICFLevel>(getIcf(BC));
+
   const size_t OriginalFunctionCount = BC.getBinaryFunctions().size();
   uint64_t NumFunctionsFolded = 0;
   std::atomic<uint64_t> NumJTFunctionsFolded{0};
   std::atomic<uint64_t> BytesSavedEstimate{0};
   std::atomic<uint64_t> NumCalled{0};
   std::atomic<uint64_t> NumFoldedLastIteration{0};
-  CongruentBucketsMap CongruentBuckets;
+  CongruentBucketsMap CongruentBuckets(
+      /*bucket_count=*/0, KeyHash(), KeyCongruent(ICFUseDFS));
 
   // Hash all the functions
   auto hashFunctions = [&]() {
     NamedRegionTimer HashFunctionsTimer("hashing", "hashing", "ICF breakdown",
-                                        "ICF breakdown", opts::TimeICF);
+                                        "ICF breakdown", TimeICF);
     ParallelUtilities::WorkFuncTy WorkFun = [&](BinaryFunction &BF) {
       // Make sure indices are in-order.
-      if (opts::ICFUseDFS)
+      if (ICFUseDFS)
         BF.getLayout().updateLayoutIndices(BF.dfs());
       else
         BF.getLayout().updateLayoutIndices();
@@ -476,7 +462,7 @@ Error IdenticalCodeFolding::runOnFunctions(BinaryContext &BC) {
       // Pre-compute hash before pushing into hashtable.
       // Hash instruction operands to minimize hash collisions.
       BF.computeHash(
-          opts::ICFUseDFS, HashFunction::Default,
+          ICFUseDFS, HashFunction::Default,
           [&BC](const MCOperand &Op) { return hashInstOperand(BC, Op); });
     };
 
@@ -494,7 +480,7 @@ Error IdenticalCodeFolding::runOnFunctions(BinaryContext &BC) {
   auto createCongruentBuckets = [&]() {
     NamedRegionTimer CongruentBucketsTimer("congruent buckets",
                                            "congruent buckets", "ICF breakdown",
-                                           "ICF breakdown", opts::TimeICF);
+                                           "ICF breakdown", TimeICF);
     for (auto &BFI : BC.getBinaryFunctions()) {
       BinaryFunction &BF = BFI.second;
       if (!shouldOptimize(BF))
@@ -508,12 +494,13 @@ Error IdenticalCodeFolding::runOnFunctions(BinaryContext &BC) {
   auto performFoldingPass = [&]() {
     NamedRegionTimer FoldingPassesTimer("folding passes", "folding passes",
                                         "ICF breakdown", "ICF breakdown",
-                                        opts::TimeICF);
+                                        TimeICF);
     Timer SinglePass("single fold pass", "single fold pass");
     LLVM_DEBUG(SinglePass.startTimer());
 
+    bool DoNoThreads = bolt_core_opts::getNoThreads(BC);
     ThreadPoolInterface *ThPool;
-    if (!opts::NoThreads)
+    if (!DoNoThreads)
       ThPool = &ParallelUtilities::getThreadPool();
 
     // Fold identical functions within a single congruent bucket
@@ -522,7 +509,8 @@ Error IdenticalCodeFolding::runOnFunctions(BinaryContext &BC) {
       LLVM_DEBUG(T.startTimer());
 
       // Identical functions go into the same bucket.
-      IdenticalBucketsMap IdenticalBuckets;
+      IdenticalBucketsMap IdenticalBuckets(
+          /*bucket_count=*/0, KeyHash(), KeyEqual(ICFUseDFS));
       for (BinaryFunction *BF : Candidates) {
         IdenticalBuckets[BF].emplace_back(BF);
       }
@@ -570,7 +558,7 @@ Error IdenticalCodeFolding::runOnFunctions(BinaryContext &BC) {
       LLVM_DEBUG(T.stopTimer());
     };
 
-    if (opts::NoThreads) {
+    if (DoNoThreads) {
       // Sort buckets by address for deterministic folding order when running
       // single-threaded.
       SmallVector<std::pair<uint64_t, std::set<BinaryFunction *> *>>
@@ -597,7 +585,7 @@ Error IdenticalCodeFolding::runOnFunctions(BinaryContext &BC) {
 
     LLVM_DEBUG(SinglePass.stopTimer());
   };
-  if (opts::ICF == ICFLevel::Safe)
+  if (ICF == ICFLevel::Safe)
     markFunctionsUnsafeToFold(BC);
   hashFunctions();
   createCongruentBuckets();

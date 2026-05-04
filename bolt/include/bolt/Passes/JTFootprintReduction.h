@@ -60,7 +60,7 @@ class JTFootprintReduction : public BinaryFunctionPass {
   void optimizeFunction(BinaryFunction &Function, DataflowInfoManager &Info);
 
 public:
-  explicit JTFootprintReduction(const cl::opt<bool> &PrintPass)
+  explicit JTFootprintReduction(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   /// BinaryPass interface functions

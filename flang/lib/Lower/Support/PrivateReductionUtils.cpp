@@ -12,6 +12,7 @@
 
 #include "flang/Lower/Support/PrivateReductionUtils.h"
 
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Lower/AbstractConverter.h"
 #include "flang/Lower/Allocatable.h"
 #include "flang/Lower/CUDA.h"
@@ -31,13 +32,7 @@
 #include "flang/Semantics/type.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/IR/Location.h"
-#include "llvm/Support/CommandLine.h"
-
-static llvm::cl::opt<bool> enableGPUHeapAlloc(
-    "enable-gpu-heap-alloc",
-    llvm::cl::desc(
-        "Allow the use of heap allocation for dynamically sized arrays on GPU"),
-    llvm::cl::init(false));
+#include "llvm/Support/OptionsContext.h"
 
 static bool hasFinalization(const Fortran::semantics::Symbol &sym) {
   if (sym.has<Fortran::semantics::ObjectEntityDetails>())
@@ -525,7 +520,9 @@ bool PopulateInitAndCleanupRegionsHelper::shouldAllocateTempOnStack(
   bool isGPU = offloadMod && offloadMod.getIsGPU();
   if (isGPU && forceHeapAllocation)
     return false;
-  if (isGPU && enableGPUHeapAlloc) {
+  if (isGPU &&
+      llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_EnableGpuHeapAlloc>(
+          converter.getMLIRContext().getOptionsContext())) {
     // Check if it is adjustable array
     if (auto seqTy = mlir::dyn_cast<fir::SequenceType>(boxTy.getEleTy())) {
       if (seqTy.hasUnknownShape() || seqTy.hasDynamicExtents()) {

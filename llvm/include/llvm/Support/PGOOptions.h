@@ -16,6 +16,7 @@
 
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
+#include <optional>
 
 namespace llvm {
 /// A struct capturing PGO tunables.
@@ -45,6 +46,13 @@ struct PGOOptions {
   bool DebugInfoForProfiling;
   bool PseudoProbeForProfiling;
   bool AtomicCounterUpdate;
+
+  /// Set by the LTO driver to force the -no-pgo-warn-mismatch decision it was
+  /// configured with, overriding the command-line option.  Empty everywhere
+  /// else, in which case the option stands on its own.  This travels with the
+  /// PGO configuration rather than being written into the shared
+  /// OptionsContext, which every ThinLTO backend thread aliases.
+  std::optional<bool> NoPGOWarnMismatch;
 };
 } // namespace llvm
 

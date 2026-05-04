@@ -1056,7 +1056,8 @@ CGOpenMPRuntime::CGOpenMPRuntime(CodeGenModule &CGM)
   OMPBuilder.loadOffloadInfoMetadata(*CGM.getFileSystem(),
                                      CGM.getLangOpts().OpenMPIsTargetDevice
                                          ? CGM.getLangOpts().OMPHostIRFile
-                                         : StringRef{});
+                                         : StringRef{},
+                                     CGM.getLLVMContext().getOptionsContext());
 
   // The user forces the compiler to behave as if omp requires
   // unified_shared_memory was given.

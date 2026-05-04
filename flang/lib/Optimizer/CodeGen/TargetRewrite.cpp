@@ -93,19 +93,19 @@ public:
 
     auto mod = getModule();
     if (!forcedTargetTriple.empty())
-      fir::setTargetTriple(mod, forcedTargetTriple);
+      fir::setTargetTriple(mod, *forcedTargetTriple);
 
     if (!forcedTargetCPU.empty())
-      fir::setTargetCPU(mod, forcedTargetCPU);
+      fir::setTargetCPU(mod, *forcedTargetCPU);
 
     if (!forcedTuneCPU.empty())
-      fir::setTuneCPU(mod, forcedTuneCPU);
+      fir::setTuneCPU(mod, *forcedTuneCPU);
 
     if (!forcedTargetFeatures.empty())
-      fir::setTargetFeatures(mod, forcedTargetFeatures);
+      fir::setTargetFeatures(mod, *forcedTargetFeatures);
 
     if (!forcedTargetABI.empty())
-      fir::setTargetABI(mod, forcedTargetABI);
+      fir::setTargetABI(mod, *forcedTargetABI);
 
     // If no data layout is set, derive it from the target triple to get
     // correct target-specific alignments rather than a generic default.

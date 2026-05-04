@@ -13,25 +13,34 @@
 #include "llvm/ProfileData/PGOCtxProfWriter.h"
 #include "llvm/Bitstream/BitCodeEnums.h"
 #include "llvm/ProfileData/CtxInstrContextNode.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/YAMLTraits.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 using namespace llvm::ctx_profile;
 
-static cl::opt<bool>
-    IncludeEmptyOpt("ctx-prof-include-empty", cl::init(false),
-                    cl::desc("Also write profiles with all-zero counters. "
-                             "Intended for testing/debugging."));
+static bool getCtxProfIncludeEmpty(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::PD_CtxProfIncludeEmpty>(Ctx);
+}
+
+static bool
+getCtxProfIncludeEmptyWasSpecified(const clv2::OptionsContext &Ctx) {
+  return clv2::wasOptSpecified<&clv2::ProfileDataOptsReg,
+                               &clv2::PD_CtxProfIncludeEmpty>(Ctx);
+}
 
 PGOCtxProfileWriter::PGOCtxProfileWriter(
     raw_ostream &Out, std::optional<unsigned> VersionOverride,
-    bool IncludeEmpty)
-    : Writer(Out, 0),
-      IncludeEmpty(IncludeEmptyOpt.getNumOccurrences() > 0 ? IncludeEmptyOpt
-                                                           : IncludeEmpty) {
+    bool IncludeEmpty, const clv2::OptionsContext &Ctx)
+    : Writer(Out, 0), IncludeEmpty([IncludeEmpty, &Ctx]() {
+        return getCtxProfIncludeEmptyWasSpecified(Ctx)
+                   ? getCtxProfIncludeEmpty(Ctx)
+                   : IncludeEmpty;
+      }()) {
   static_assert(ContainerMagic.size() == 4);
   Out.write(ContainerMagic.data(), ContainerMagic.size());
   Writer.EnterBlockInfoBlock();
@@ -265,7 +274,8 @@ Error llvm::createCtxProfFromYAML(StringRef Profile, raw_ostream &Out) {
   std::error_code EC;
   if (EC)
     return createStringError(EC, "failed to open output");
-  PGOCtxProfileWriter Writer(Out);
+  PGOCtxProfileWriter Writer(Out, std::nullopt, /*IncludeEmpty=*/false,
+                             /*Ctx=*/clv2::defaultOptionsContext());
 
   if (!SPR.Contexts.empty()) {
     Writer.startContextSection();

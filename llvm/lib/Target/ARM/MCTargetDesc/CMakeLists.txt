@@ -1,5 +1,6 @@
 add_llvm_component_library(LLVMARMDesc
   ARMAsmBackend.cpp
+  ARMOptions.cpp
   ARMELFObjectWriter.cpp
   ARMELFStreamer.cpp
   ARMInstPrinter.cpp

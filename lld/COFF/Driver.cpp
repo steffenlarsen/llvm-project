@@ -35,13 +35,16 @@
 #include "llvm/Option/Option.h"
 #include "llvm/Remarks/HotnessThresholdParser.h"
 #include "llvm/Support/BinaryStreamReader.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Parallel.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TarWriter.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/TimeProfiler.h"
@@ -1633,16 +1636,26 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   llvm::TimeTraceScope timeScope("COFF link");
 
   // Parse and evaluate -mllvm options.
-  std::vector<const char *> v;
-  v.push_back("lld-link (LLVM option parsing)");
-  for (const auto *arg : args.filtered(OPT_mllvm)) {
-    v.push_back(arg->getValue());
-    config->mllvmOpts.emplace_back(arg->getValue());
-  }
   {
+    SmallVector<StringRef> LLVMOpts;
+    for (const auto *arg : args.filtered(OPT_mllvm)) {
+      LLVMOpts.push_back(arg->getValue());
+      config->mllvmOpts.emplace_back(arg->getValue());
+    }
     llvm::TimeTraceScope timeScope2("Parse cl::opt");
-    cl::ResetAllOptionOccurrences();
-    cl::ParseCommandLineOptions(v.size(), v.data());
+    // Build the context unconditionally: library code writes settings into
+    // the module's OptionsContext, and those writes are dropped when the
+    // registry view is absent.
+    {
+      clv2::OptionParser P;
+      RegisterAllLLVMOptions(P);
+      std::vector<const char *> Argv;
+      Argv.push_back("lld-link (LLVM option parsing)");
+      for (auto &A : LLVMOpts)
+        Argv.push_back(A.data());
+      if (auto Parsed = P.parse(Argv.size(), Argv.data()))
+        ctx.llvmOptsCtx = std::move(Parsed);
+    }
   }
 
   // Handle /errorlimit early, because error() depends on it.

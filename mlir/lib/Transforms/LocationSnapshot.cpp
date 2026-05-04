@@ -136,14 +136,14 @@ struct LocationSnapshotPass
 
   void runOnOperation() override {
     Operation *op = getOperation();
-    if (failed(generateLocationsFromIR(fileName, op, getFlags(), tag)))
+    if (failed(generateLocationsFromIR(*fileName, op, getFlags(), *tag)))
       return signalPassFailure();
   }
 
 private:
   /// build the flags from the command line arguments to the pass
   OpPrintingFlags getFlags() {
-    OpPrintingFlags flags;
+    OpPrintingFlags flags(&getContext());
     flags.enableDebugInfo(enableDebugInfo, printPrettyDebugInfo);
     flags.printGenericOpForm(printGenericOpForm);
     if (useLocalScope)

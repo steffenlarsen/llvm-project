@@ -25,6 +25,7 @@
 #include "mlir/IR/DialectResourceBlobManager.h"
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/MLIROptionsOptInfos.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Verifier.h"
@@ -39,7 +40,6 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/DebugLog.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/ManagedStatic.h"
@@ -47,8 +47,10 @@
 #include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/raw_ostream.h"
+#include <atomic>
 #include <type_traits>
 
+#include "llvm/Support/OptionsContext.h"
 #include <optional>
 #include <tuple>
 
@@ -139,106 +141,44 @@ OpAsmDialectInterface::parseResource(AsmParsedResourceEntry &entry) const {
 // OpPrintingFlags
 //===----------------------------------------------------------------------===//
 
-namespace {
-/// This struct contains command line options that can be used to initialize
-/// various bits of the AsmPrinter. This uses a struct wrapper to avoid the need
-/// for global command line options.
-struct AsmPrinterOptions {
-  llvm::cl::opt<int64_t> printElementsAttrWithHexIfLarger{
-      "mlir-print-elementsattrs-with-hex-if-larger",
-      llvm::cl::desc(
-          "Print DenseElementsAttrs with a hex string that have "
-          "more elements than the given upper limit (use -1 to disable)")};
+// Records only whether the tool opted into CL options.  Relaxed ordering is
+// enough: it implies nothing about the OptionsContext it guards, which is
+// const after parsing.
+static std::atomic<bool> asmPrinterOptsRegistered{false};
 
-  llvm::cl::opt<unsigned> elideElementsAttrIfLarger{
-      "mlir-elide-elementsattrs-if-larger",
-      llvm::cl::desc("Elide ElementsAttrs with \"...\" that have "
-                     "more elements than the given upper limit")};
-
-  llvm::cl::opt<unsigned> elideResourceStringsIfLarger{
-      "mlir-elide-resource-strings-if-larger",
-      llvm::cl::desc(
-          "Elide printing value of resources if string is too long in chars.")};
-
-  llvm::cl::opt<bool> printDebugInfoOpt{
-      "mlir-print-debuginfo", llvm::cl::init(false),
-      llvm::cl::desc("Print debug info in MLIR output")};
-
-  llvm::cl::opt<bool> printPrettyDebugInfoOpt{
-      "mlir-pretty-debuginfo", llvm::cl::init(false),
-      llvm::cl::desc("Print pretty debug info in MLIR output")};
-
-  // Use the generic op output form in the operation printer even if the custom
-  // form is defined.
-  llvm::cl::opt<bool> printGenericOpFormOpt{
-      "mlir-print-op-generic", llvm::cl::init(false),
-      llvm::cl::desc("Print the generic op form"), llvm::cl::Hidden};
-
-  llvm::cl::opt<bool> assumeVerifiedOpt{
-      "mlir-print-assume-verified", llvm::cl::init(false),
-      llvm::cl::desc("Skip op verification when using custom printers"),
-      llvm::cl::Hidden};
-
-  llvm::cl::opt<bool> printLocalScopeOpt{
-      "mlir-print-local-scope", llvm::cl::init(false),
-      llvm::cl::desc("Print with local scope and inline information (eliding "
-                     "aliases for attributes, types, and locations)")};
-
-  llvm::cl::opt<bool> skipRegionsOpt{
-      "mlir-print-skip-regions", llvm::cl::init(false),
-      llvm::cl::desc("Skip regions when printing ops.")};
-
-  llvm::cl::opt<bool> printValueUsers{
-      "mlir-print-value-users", llvm::cl::init(false),
-      llvm::cl::desc(
-          "Print users of operation results and block arguments as a comment")};
-
-  llvm::cl::opt<bool> printUniqueSSAIDs{
-      "mlir-print-unique-ssa-ids", llvm::cl::init(false),
-      llvm::cl::desc("Print unique SSA ID numbers for values, block arguments "
-                     "and naming conflicts across all regions")};
-
-  llvm::cl::opt<bool> useNameLocAsPrefix{
-      "mlir-use-nameloc-as-prefix", llvm::cl::init(false),
-      llvm::cl::desc("Print SSA IDs using NameLocs as prefixes")};
-};
-} // namespace
-
-static llvm::ManagedStatic<AsmPrinterOptions> clOptions;
-
-/// Register a set of useful command-line options that can be used to configure
-/// various flags within the AsmPrinter.
 void mlir::registerAsmPrinterCLOptions() {
-  // Make sure that the options struct has been initialized.
-  *clOptions;
+  asmPrinterOptsRegistered.store(true, std::memory_order_relaxed);
 }
 
-/// Initialize the printing flags with default supplied by the cl::opts above.
-OpPrintingFlags::OpPrintingFlags()
+OpPrintingFlags::OpPrintingFlags(MLIRContext *ctx)
     : printDebugInfoFlag(false), printDebugInfoPrettyFormFlag(false),
       printGenericOpFormFlag(false), skipRegionsFlag(false),
       assumeVerifiedFlag(false), printLocalScope(false),
       printValueUsersFlag(false), printUniqueSSAIDsFlag(false),
       useNameLocAsPrefix(false) {
-  // Initialize based upon command line options, if they are available.
-  if (!clOptions.isConstructed())
+  if (!asmPrinterOptsRegistered.load(std::memory_order_relaxed))
     return;
-  if (clOptions->elideElementsAttrIfLarger.getNumOccurrences())
-    elementsAttrElementLimit = clOptions->elideElementsAttrIfLarger;
-  if (clOptions->printElementsAttrWithHexIfLarger.getNumOccurrences())
+  auto *O = mlir::mlir_opts::getMLIROptsReg(
+      ctx ? ctx->getOptionsContext() : llvm::clv2::defaultOptionsContext());
+  if (!O)
+    return;
+  using namespace llvm::clv2;
+  if (O->specified<&MLIR_ElideElementsAttrsIfLarger>())
+    elementsAttrElementLimit = O->get<&MLIR_ElideElementsAttrsIfLarger>();
+  if (O->specified<&MLIR_PrintElementsAttrsWithHexIfLarger>())
     elementsAttrHexElementLimit =
-        clOptions->printElementsAttrWithHexIfLarger.getValue();
-  if (clOptions->elideResourceStringsIfLarger.getNumOccurrences())
-    resourceStringCharLimit = clOptions->elideResourceStringsIfLarger;
-  printDebugInfoFlag = clOptions->printDebugInfoOpt;
-  printDebugInfoPrettyFormFlag = clOptions->printPrettyDebugInfoOpt;
-  printGenericOpFormFlag = clOptions->printGenericOpFormOpt;
-  assumeVerifiedFlag = clOptions->assumeVerifiedOpt;
-  printLocalScope = clOptions->printLocalScopeOpt;
-  skipRegionsFlag = clOptions->skipRegionsOpt;
-  printValueUsersFlag = clOptions->printValueUsers;
-  printUniqueSSAIDsFlag = clOptions->printUniqueSSAIDs;
-  useNameLocAsPrefix = clOptions->useNameLocAsPrefix;
+        O->get<&MLIR_PrintElementsAttrsWithHexIfLarger>();
+  if (O->specified<&MLIR_ElideResourceStringsIfLarger>())
+    resourceStringCharLimit = O->get<&MLIR_ElideResourceStringsIfLarger>();
+  printDebugInfoFlag = O->get<&MLIR_PrintDebugInfo>();
+  printDebugInfoPrettyFormFlag = O->get<&MLIR_PrettyDebugInfo>();
+  printGenericOpFormFlag = O->get<&MLIR_PrintOpGeneric>();
+  assumeVerifiedFlag = O->get<&MLIR_PrintAssumeVerified>();
+  printLocalScope = O->get<&MLIR_PrintLocalScope>();
+  skipRegionsFlag = O->get<&MLIR_PrintSkipRegions>();
+  printValueUsersFlag = O->get<&MLIR_PrintValueUsers>();
+  printUniqueSSAIDsFlag = O->get<&MLIR_PrintUniqueSSAIDs>();
+  useNameLocAsPrefix = O->get<&MLIR_UseNameLocAsPrefix>();
 }
 
 /// Enable the elision of large elements attributes, by printing a '...'
@@ -4147,7 +4087,9 @@ void IntegerSet::print(raw_ostream &os) const {
   AsmPrinter::Impl(os, state.getImpl()).printIntegerSet(*this);
 }
 
-void Value::print(raw_ostream &os) const { print(os, OpPrintingFlags()); }
+void Value::print(raw_ostream &os) const {
+  print(os, OpPrintingFlags(impl ? getContext() : nullptr));
+}
 void Value::print(raw_ostream &os, const OpPrintingFlags &flags) const {
   if (!impl) {
     os << "<<NULL VALUE>>";
@@ -4177,12 +4119,15 @@ void Value::print(raw_ostream &os, AsmState &state) const {
 }
 
 raw_ostream &mlir::operator<<(raw_ostream &os, Value value) {
-  value.print(os, OpPrintingFlags().useLocalScope());
+  value.print(
+      os,
+      OpPrintingFlags(value ? value.getContext() : nullptr).useLocalScope());
   return os;
 }
 
 void Value::dump() const {
-  print(llvm::errs(), OpPrintingFlags().useLocalScope());
+  print(llvm::errs(),
+        OpPrintingFlags(impl ? getContext() : nullptr).useLocalScope());
   llvm::errs() << "\n";
 }
 
@@ -4245,12 +4190,13 @@ void Operation::print(raw_ostream &os, AsmState &state) {
 }
 
 void Operation::dump() {
-  print(llvm::errs(), OpPrintingFlags().useLocalScope());
+  print(llvm::errs(), OpPrintingFlags(getContext()).useLocalScope());
   llvm::errs() << "\n";
 }
 
 void Operation::dumpPretty() {
-  print(llvm::errs(), OpPrintingFlags().useLocalScope().assumeVerified());
+  print(llvm::errs(),
+        OpPrintingFlags(getContext()).useLocalScope().assumeVerified());
   llvm::errs() << "\n";
 }
 

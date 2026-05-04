@@ -608,7 +608,8 @@ void llvm::deleteDeadLoop(Loop *L, DominatorTree *DT, ScalarEvolution *SE,
       if (MSSA) {
         MSSAU->applyUpdates({{DominatorTree::Insert, Preheader, ExitBlock}},
                             *DT);
-        if (VerifyMemorySSA)
+        if (getVerifyMemorySSA(
+                L->getHeader()->getParent()->getContext().getOptionsContext()))
           MSSA->verifyMemorySSA();
       }
     }
@@ -635,7 +636,8 @@ void llvm::deleteDeadLoop(Loop *L, DominatorTree *DT, ScalarEvolution *SE,
       SmallSetVector<BasicBlock *, 8> DeadBlockSet(L->block_begin(),
                                                    L->block_end());
       MSSAU->removeBlocks(DeadBlockSet);
-      if (VerifyMemorySSA)
+      if (getVerifyMemorySSA(
+              L->getHeader()->getParent()->getContext().getOptionsContext()))
         MSSA->verifyMemorySSA();
     }
   }
@@ -711,7 +713,9 @@ void llvm::deleteDeadLoop(Loop *L, DominatorTree *DT, ScalarEvolution *SE,
   for (auto *Block : L->blocks())
     Block->dropAllReferences();
 
-  if (MSSA && VerifyMemorySSA)
+  if (MSSA &&
+      getVerifyMemorySSA(
+          L->getHeader()->getParent()->getContext().getOptionsContext()))
     MSSA->verifyMemorySSA();
 
   if (LI) {
@@ -2001,7 +2005,10 @@ int llvm::rewriteLoopExitValues(Loop *L, LoopInfo *LI, TargetLibraryInfo *TLI,
 
         // Check if expansions of this SCEV would count as being high cost.
         bool HighCost = Rewriter.isHighCostExpansion(
-            ExitValue.getPointer(), L, SCEVCheapExpansionBudget, TTI, Inst);
+            ExitValue.getPointer(), L,
+            getSCEVCheapExpansionBudget(
+                L->getHeader()->getParent()->getContext().getOptionsContext()),
+            TTI, Inst);
 
         // Note that we must not perform expansions until after
         // we query *all* the costs, because if we perform temporary expansion

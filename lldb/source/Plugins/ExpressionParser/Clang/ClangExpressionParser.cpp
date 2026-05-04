@@ -918,7 +918,8 @@ ClangExpressionParser::ClangExpressionParser(
 
   std::string module_name("$__lldb_module");
 
-  m_llvm_context = std::make_unique<LLVMContext>();
+  m_llvm_context =
+      std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
   m_code_generator =
       CreateLLVMCodeGen(*m_compiler, module_name, *m_llvm_context);
 }

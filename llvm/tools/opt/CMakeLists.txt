@@ -1,4 +1,5 @@
 set(LLVM_LINK_COMPONENTS
+  AllOptions
   AllTargetsAsmParsers
   AllTargetsCodeGens
   AllTargetsDescs
@@ -28,6 +29,7 @@ set(LLVM_LINK_COMPONENTS
   TransformUtils
   Vectorize
   Passes
+  LTO
   )
 
 # We don't want to link this into libLLVM
@@ -52,3 +54,14 @@ add_llvm_tool(opt
 target_link_libraries(opt PRIVATE LLVMOptDriver)
 
 setup_host_tool(opt OPT opt_exe opt_target)
+
+if (LLVM_POLLY_LINK_INTO_TOOLS)
+  target_compile_definitions(LLVMOptDriver PRIVATE LINK_POLLY_INTO_TOOLS)
+  target_include_directories(LLVMOptDriver PRIVATE
+    ${LLVM_MAIN_SRC_DIR}/../polly/include
+    ${LLVM_BINARY_DIR}/tools/polly/include)
+  target_compile_definitions(opt PRIVATE LINK_POLLY_INTO_TOOLS)
+  target_include_directories(opt PRIVATE
+    ${LLVM_MAIN_SRC_DIR}/../polly/include
+    ${LLVM_BINARY_DIR}/tools/polly/include)
+endif()

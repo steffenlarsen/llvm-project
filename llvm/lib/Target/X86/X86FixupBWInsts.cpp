@@ -58,8 +58,11 @@
 #include "llvm/CodeGen/MachineSizeOpts.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 using namespace llvm;
 
 #define FIXUPBW_DESC "X86 Byte/Word Instruction Fixup"
@@ -68,10 +71,12 @@ using namespace llvm;
 #define DEBUG_TYPE FIXUPBW_NAME
 
 // Option to allow this optimization pass to have fine-grained control.
-static cl::opt<bool>
-    FixupBWInsts("fixup-byte-word-insts",
-                 cl::desc("Change byte and word instructions to larger sizes"),
-                 cl::init(true), cl::Hidden);
+static bool FixupBWInsts = true;
+
+static bool getFixupBWInsts(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_FixupBWInsts>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 class X86FixupBWInstImpl {
@@ -163,7 +168,7 @@ FunctionPass *llvm::createX86FixupBWInstsLegacyPass() {
 }
 
 bool X86FixupBWInstImpl::runOnMachineFunction(MachineFunction &MF) {
-  if (!FixupBWInsts)
+  if (!getFixupBWInsts(MF.getFunction()))
     return false;
 
   this->MF = &MF;

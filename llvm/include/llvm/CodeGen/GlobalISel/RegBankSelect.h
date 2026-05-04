@@ -70,6 +70,7 @@
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/IR/Analysis.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/Support/OptionsContext.h"
 
 namespace llvm {
 
@@ -86,12 +87,27 @@ enum RegBankSelectMode {
 /// This pass implements the reg bank selector pass used in the GlobalISel
 /// pipeline. At the end of this pass, all register operands have been assigned
 class LLVM_ABI RegBankSelectLegacy : public MachineFunctionPass {
-  RegBankSelectMode OptMode;
+  // Resolved from the OptionsContext in getAnalysisUsage() (const), since that
+  // is the first point at which a context installed via setOptionsContext()
+  // is visible for passes constructed through the zero-argument pass-registry
+  // factory (e.g. llc -run-pass=); see setModeFromContext().
+  mutable RegBankSelectMode OptMode;
 
 public:
   static char ID;
 
   RegBankSelectLegacy(RegBankSelectMode RunningMode = RegBankSelectMode::Fast);
+
+  /// \p Ctx supplies -regbankselect-fast/-regbankselect-greedy.  The mode must
+  /// be fixed before getAnalysisUsage() runs, since that decides whether to
+  /// require MBFI/MBPI and happens before any function is available.
+  RegBankSelectLegacy(const clv2::OptionsContext &Ctx,
+                      RegBankSelectMode RunningMode = RegBankSelectMode::Fast);
+
+  /// Resolve the mode from \p Ctx.  For tools that construct this pass through
+  /// the pass registry (llc -run-pass), which cannot pass a context.  Called
+  /// from getAnalysisUsage(), hence const (OptMode is mutable).
+  void setModeFromContext(const clv2::OptionsContext &Ctx) const;
 
   StringRef getPassName() const override { return "RegBankSelect"; }
 

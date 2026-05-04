@@ -14,6 +14,7 @@
 #include "MipsMachineFunction.h"
 #include "MipsRegisterInfo.h"
 #include "MipsSubtarget.h"
+#include "MipsTargetMachine.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/CallingConvLower.h"
@@ -35,10 +36,11 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsMips.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
 #include "llvm/TargetParser/Triple.h"
 #include <algorithm>
 #include <cassert>
@@ -51,10 +53,15 @@ using namespace llvm;
 
 #define DEBUG_TYPE "mips-isel"
 
-static cl::opt<bool> NoDPLoadStore("mno-ldc1-sdc1", cl::init(false),
-                                   cl::desc("Expand double precision loads and "
-                                            "stores to their single precision "
-                                            "counterparts"));
+static bool getNoDPLoadStore(const Function &F) {
+  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_NoDPLoadStore>(
+      F.getContext().getOptionsContext(), false);
+}
+
+static bool getNoDPLoadStore(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_NoDPLoadStore>(
+      Ctx, false);
+}
 
 // Widen the v2 vectors to the register width, i.e. v2i16 -> v8i16,
 // v2i32 -> v4i32, etc, to ensure the correct rail size is used, i.e.
@@ -247,7 +254,8 @@ MipsSETargetLowering::MipsSETargetLowering(const MipsTargetMachine &TM,
     setOperationAction(ISD::BITCAST, MVT::i64, Custom);
   }
 
-  if (NoDPLoadStore || (Subtarget.hasMips1() && !Subtarget.hasMips2())) {
+  if (getNoDPLoadStore(TM.getOptionsContext()) ||
+      (Subtarget.hasMips1() && !Subtarget.hasMips2())) {
     setOperationAction(ISD::LOAD, MVT::f64, Custom);
     setOperationAction(ISD::STORE, MVT::f64, Custom);
   }
@@ -1357,7 +1365,9 @@ getOpndList(SmallVectorImpl<SDValue> &Ops,
 SDValue MipsSETargetLowering::lowerLOAD(SDValue Op, SelectionDAG &DAG) const {
   LoadSDNode &Nd = *cast<LoadSDNode>(Op);
 
-  if (Nd.getMemoryVT() != MVT::f64 || (!NoDPLoadStore && Subtarget.hasMips2()))
+  if (Nd.getMemoryVT() != MVT::f64 ||
+      (!getNoDPLoadStore(DAG.getMachineFunction().getFunction()) &&
+       Subtarget.hasMips2()))
     return MipsTargetLowering::lowerLOAD(Op, DAG);
 
   // Replace a double precision load with two i32 loads and a buildpair64.
@@ -1392,7 +1402,9 @@ SDValue MipsSETargetLowering::lowerLOAD(SDValue Op, SelectionDAG &DAG) const {
 SDValue MipsSETargetLowering::lowerSTORE(SDValue Op, SelectionDAG &DAG) const {
   StoreSDNode &Nd = *cast<StoreSDNode>(Op);
 
-  if (Nd.getMemoryVT() != MVT::f64 || (!NoDPLoadStore && Subtarget.hasMips2()))
+  if (Nd.getMemoryVT() != MVT::f64 ||
+      (!getNoDPLoadStore(DAG.getMachineFunction().getFunction()) &&
+       Subtarget.hasMips2()))
     return MipsTargetLowering::lowerSTORE(Op, DAG);
 
   // Replace a double precision store with two extractelement64s and i32 stores.

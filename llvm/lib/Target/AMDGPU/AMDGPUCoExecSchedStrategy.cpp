@@ -15,6 +15,8 @@
 #include "AMDGPUIGroupLP.h"
 #include "GCNHazardRecognizer.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 
 using namespace llvm;
 using namespace llvm::AMDGPU;
@@ -24,19 +26,10 @@ namespace {
 enum class CarriedLatency { Off, Fence, All };
 } // namespace
 
-static cl::opt<CarriedLatency> BlockCarriedLatency(
-    "amdgpu-block-carried-latency", cl::Hidden, cl::init(CarriedLatency::Off),
-    cl::desc("Estimate block-carried latency and include it in the effective "
-             "candidate stall cost."),
-    cl::values(
-        clEnumValN(CarriedLatency::Off, "off",
-                   "Disabled - do not pad latency."),
-        clEnumValN(CarriedLatency::Fence, "fence",
-                   "Only pad latency for memory fence (e.g. those surrounding "
-                   "barrier_signal/wait)."),
-        clEnumValN(
-            CarriedLatency::All, "all",
-            "Pad latency for any SU with an incoming ds_load dependency.")));
+static CarriedLatency getBlockCarriedLatency(const clv2::OptionsContext &Ctx) {
+  return static_cast<CarriedLatency>(
+      clv2::getOptValOrDefault<&clv2::AMDGPU_BlockCarriedLatency>(Ctx));
+}
 
 namespace {
 
@@ -627,10 +620,12 @@ void CandidateHeuristics::initialize(ScheduleDAGMI *SchedDAG,
 }
 
 unsigned CandidateHeuristics::getCarriedLatency(SUnit *SU) {
-  if (BlockCarriedLatency == CarriedLatency::Off)
+  MachineInstr *MI = SU->getInstr();
+  const CarriedLatency BlockLatencyMode = getBlockCarriedLatency(
+      MI->getMF()->getFunction().getContext().getOptionsContext());
+  if (BlockLatencyMode == CarriedLatency::Off)
     return 0;
 
-  MachineInstr *MI = SU->getInstr();
   unsigned CarriedLatency = 0;
   const InstructionFlavor Flavor = classifyFlavor(*MI, *SII);
   if (Flavor == InstructionFlavor::Fence) {
@@ -652,7 +647,7 @@ unsigned CandidateHeuristics::getCarriedLatency(SUnit *SU) {
     }
   }
 
-  if (BlockCarriedLatency == CarriedLatency::Fence)
+  if (BlockLatencyMode == CarriedLatency::Fence)
     return CarriedLatency;
 
   for (MachineOperand &Op : MI->all_uses()) {

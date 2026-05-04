@@ -41,8 +41,8 @@ static std::string getThinLTOOutputFile(StringRef modulePath) {
 }
 
 static lto::Config createConfig() {
-  lto::Config c;
-  c.Options = initTargetOptionsFromCodeGenFlags();
+  lto::Config c(*commonContext().llvmOptsCtx);
+  c.Options = initTargetOptionsFromCodeGenFlags(*commonContext().llvmOptsCtx);
 
   // Always emit a section per function/data with LTO.
   c.Options.FunctionSections = true;
@@ -51,8 +51,8 @@ static lto::Config createConfig() {
   c.DisableVerify = ctx.arg.disableVerify;
   c.DiagHandler = diagnosticHandler;
   c.OptLevel = ctx.arg.ltoo;
-  c.CPU = getCPUStr();
-  c.MAttrs = getMAttrs();
+  c.CPU = getCPUStr(*commonContext().llvmOptsCtx);
+  c.MAttrs = getMAttrs(*commonContext().llvmOptsCtx);
 
   // If shared memory is enabled, ensure the TargetMachine backend is
   // instantiated with atomics and bulk-memory features so that empty
@@ -70,7 +70,7 @@ static lto::Config createConfig() {
   c.DebugPassManager = ctx.arg.ltoDebugPassManager;
   c.AlwaysEmitRegularLTOObj = !ctx.arg.ltoObjPath.empty();
 
-  if (auto relocModel = getRelocModelFromCMModel())
+  if (auto relocModel = getRelocModelFromCMModel(*commonContext().llvmOptsCtx))
     c.RelocModel = *relocModel;
   else if (ctx.arg.relocatable)
     c.RelocModel = std::nullopt;
@@ -88,6 +88,7 @@ static lto::Config createConfig() {
   if (ctx.arg.saveTemps)
     checkError(c.addSaveTemps(ctx.arg.outputFile.str() + ".",
                               /*UseInputModulePath*/ true));
+
   return c;
 }
 
@@ -189,7 +190,7 @@ static void thinLTOCreateEmptyIndexFiles() {
 
     ModuleSummaryIndex m(/*HaveGVs*/ false);
     m.setSkipModuleByDistributedBackend();
-    writeIndexToFile(m, *os);
+    writeIndexToFile(m, *os, *commonContext().llvmOptsCtx);
     if (ctx.arg.thinLTOEmitImportsFiles)
       openFile(path + ".imports");
   }

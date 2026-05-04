@@ -11,8 +11,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Passes/AsmDump.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Target/TargetMachine.h"
@@ -22,16 +24,11 @@
 
 using namespace llvm;
 
-namespace opts {
-extern bool shouldPrint(const bolt::BinaryFunction &Function);
-extern cl::OptionCategory BoltCategory;
-extern cl::opt<unsigned> Verbosity;
-
-cl::opt<std::string> AsmDump("asm-dump",
-                             cl::desc("dump function into assembly"),
-                             cl::value_desc("dump folder"), cl::ValueOptional,
-                             cl::Hidden, cl::cat(BoltCategory));
-} // end namespace opts
+namespace llvm {
+namespace bolt {
+bool shouldPrint(const BinaryFunction &Function);
+} // namespace bolt
+} // namespace llvm
 
 namespace llvm {
 namespace bolt {
@@ -42,7 +39,7 @@ void dumpCFI(const BinaryFunction &BF, const MCInst &Instr, AsmPrinter &MAP) {
   // Skip unsupported CFI instructions.
   case MCCFIInstruction::OpRememberState:
   case MCCFIInstruction::OpRestoreState:
-    if (opts::Verbosity >= 2)
+    if (opts::getVerbosity(BF.getBinaryContext()) >= 2)
       BF.getBinaryContext().errs()
           << "BOLT-WARNING: AsmDump: skipping unsupported CFI instruction in "
           << BF << ".\n";
@@ -96,13 +93,15 @@ void dumpBinaryDataSymbols(raw_ostream &OS, const BinaryData *BD,
 
 void dumpFunction(const BinaryFunction &BF) {
   const BinaryContext &BC = BF.getBinaryContext();
-  if (!opts::shouldPrint(BF))
+  if (!shouldPrint(BF))
     return;
 
+  const auto AsmDump = bolt_passes_opts::getAsmDump(BC);
+
   // Make sure the new directory exists, creating it if necessary.
-  if (!opts::AsmDump.empty()) {
-    if (std::error_code EC = sys::fs::create_directories(opts::AsmDump)) {
-      BC.errs() << "BOLT-ERROR: could not create directory '" << opts::AsmDump
+  if (!AsmDump.empty()) {
+    if (std::error_code EC = sys::fs::create_directories(AsmDump)) {
+      BC.errs() << "BOLT-ERROR: could not create directory '" << AsmDump
                 << "': " << EC.message() << '\n';
       return;
     }
@@ -111,10 +110,9 @@ void dumpFunction(const BinaryFunction &BF) {
   std::string PrintName = BF.getPrintName();
   llvm::replace(PrintName, '/', '-');
   std::string Filename =
-      opts::AsmDump.empty()
+      AsmDump.empty()
           ? (PrintName + ".s")
-          : (opts::AsmDump + sys::path::get_separator() + PrintName + ".s")
-                .str();
+          : (AsmDump + sys::path::get_separator() + PrintName + ".s").str();
   BC.outs() << "BOLT-INFO: Dumping function assembly to " << Filename << "\n";
 
   std::error_code EC;
@@ -132,7 +130,7 @@ void dumpFunction(const BinaryFunction &BF) {
       BC.createIndependentMCCodeEmitter();
   MCContext *LocalCtx = MCEInstance.LocalCtx.get();
   std::unique_ptr<MCAsmBackend> MAB(
-      BC.TheTarget->createMCAsmBackend(*BC.STI, *BC.MRI, MCTargetOptions()));
+      BC.TheTarget->createMCAsmBackend(*BC.STI, *BC.MRI, *BC.MCOptions));
   int AsmPrinterVariant = BC.AsmInfo->getAssemblerDialect();
   std::unique_ptr<MCInstPrinter> InstructionPrinter(
       BC.TheTarget->createMCInstPrinter(*BC.TheTriple, AsmPrinterVariant,

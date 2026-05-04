@@ -23,7 +23,8 @@ using namespace llvm;
 
 extern const char *TestMainArgv0;
 
-// NOTE! This test model is currently also used by test/Transforms/Inline/ML tests
+// NOTE! This test model is currently also used by test/Transforms/Inline/ML
+// tests
 //- relevant if updating this model.
 static std::string getModelPath() {
   SmallString<128> InputsDir = unittest::getInputFileDirectory(TestMainArgv0);
@@ -99,7 +100,7 @@ TEST(TFUtilsTest, UnsupportedFeature) {
                                       {1, KnownSize}),
       TensorSpec::createSpec<float>("this_feature_does_not_exist", {2, 5})};
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   ModelUnderTrainingRunner Evaluator(
       Ctx, getModelPath(), InputSpecs,
       {TensorSpec::createSpec<float>("StatefulPartitionedCall", {1})});

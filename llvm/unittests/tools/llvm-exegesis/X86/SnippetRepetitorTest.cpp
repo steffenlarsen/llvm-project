@@ -28,7 +28,8 @@ class X86SnippetRepetitorTest : public X86TestBase {
 protected:
   void SetUp() override {
     TM = State.createTargetMachine();
-    Context = std::make_unique<LLVMContext>();
+    Context =
+        std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
     Mod = std::make_unique<Module>("X86SnippetRepetitorTest", *Context);
     Mod->setDataLayout(TM->createDataLayout());
     MMI = std::make_unique<MachineModuleInfo>(TM.get());

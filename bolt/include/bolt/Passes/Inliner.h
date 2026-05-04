@@ -33,7 +33,10 @@ struct InliningInfo {
 };
 
 /// Check if the inliner can handle inlining of \p BF.
-InliningInfo getInliningInfo(const BinaryFunction &BF);
+InliningInfo
+getInliningInfo(const BinaryFunction &BF, bool InlineIgnoreLeafCFI,
+                bool InlineIgnoreCFI,
+                const std::vector<std::string> &ForceInlineFunctions);
 
 class Inliner : public BinaryFunctionPass {
   std::unordered_map<const BinaryFunction *, InliningInfo> InliningCandidates;
@@ -66,7 +69,12 @@ class Inliner : public BinaryFunctionPass {
 
   void findInliningCandidates(BinaryContext &BC);
 
-  bool inlineCallsInFunction(BinaryFunction &Function);
+  bool
+  inlineCallsInFunction(BinaryFunction &Function, bool AdjustProfile,
+                        bool InlineAll, bool InlineSmallFunctions,
+                        unsigned InlineSmallFunctionsBytes,
+                        unsigned InlineLimit,
+                        const std::vector<std::string> &ForceInlineFunctions);
 
   /// Inline a function call \p CallInst to function \p Callee.
   ///
@@ -74,11 +82,10 @@ class Inliner : public BinaryFunctionPass {
   /// of the caller function continues after the inlined code.
   std::pair<BinaryBasicBlock *, BinaryBasicBlock::iterator>
   inlineCall(BinaryBasicBlock &CallerBB, BinaryBasicBlock::iterator CallInst,
-             const BinaryFunction &Callee);
+             const BinaryFunction &Callee, bool AdjustProfile);
 
 public:
-  explicit Inliner(const cl::opt<bool> &PrintPass)
-      : BinaryFunctionPass(PrintPass) {}
+  explicit Inliner(const bool PrintPass) : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "inlining"; }
 

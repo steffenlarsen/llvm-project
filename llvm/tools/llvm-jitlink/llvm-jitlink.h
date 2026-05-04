@@ -34,6 +34,8 @@
 
 namespace llvm {
 
+struct JITLinkArgs;
+
 struct Session {
 
   class WaitingOnGraphOpRecorder
@@ -78,6 +80,7 @@ struct Session {
   };
 
   orc::ExecutionSession ES;
+  const JITLinkArgs &Args;
   std::unique_ptr<jitlink::JITLinkMemoryManager> MemoryMgr;
   std::unique_ptr<orc::DylibManager> DylibMgr;
   orc::JITDylib *MainJD = nullptr;
@@ -91,8 +94,8 @@ struct Session {
 
   ~Session();
 
-  static Expected<std::unique_ptr<Session>> Create(Triple TT,
-                                                   SubtargetFeatures Features);
+  static Expected<std::unique_ptr<Session>>
+  Create(Triple TT, SubtargetFeatures Features, const JITLinkArgs &Args);
   void dumpSessionInfo(raw_ostream &OS);
   void modifyPassConfig(jitlink::LinkGraph &G,
                         jitlink::PassConfiguration &PassConfig);
@@ -176,7 +179,8 @@ struct Session {
   std::optional<Regex> ShowGraphsRegex;
 
 private:
-  Session(std::unique_ptr<orc::ExecutorProcessControl> EPC, Error &Err);
+  Session(std::unique_ptr<orc::ExecutorProcessControl> EPC,
+          const JITLinkArgs &Args, Error &Err);
 
   std::unique_ptr<WaitingOnGraphOpRecorder> GOpRecorder;
 };
@@ -191,7 +195,9 @@ Error registerMachOGraphInfo(Session &S, jitlink::LinkGraph &G);
 Error registerCOFFGraphInfo(Session &S, jitlink::LinkGraph &G);
 
 /// Adds a statistics gathering plugin if any stats options are used.
-void enableStatistics(Session &S, bool UsingOrcRuntime);
+void enableStatistics(Session &S, bool UsingOrcRuntime,
+                      bool ShowPrePruneTotalBlockSize,
+                      bool ShowPostFixupTotalBlockSize);
 
 } // end namespace llvm
 

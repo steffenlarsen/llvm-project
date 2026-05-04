@@ -61,7 +61,8 @@ AMDGPUDisassembler::AMDGPUDisassembler(const MCSubtargetInfo &STI,
       HwModeRegClass(STI.getHwMode(MCSubtargetInfo::HwMode_RegInfo)),
       TargetMaxInstBytes(MAI.getMaxInstLength(&STI)),
       TargetID(AMDGPU::createAMDGPUTargetID(STI, "")),
-      CodeObjectVersion(AMDGPU::getDefaultAMDHSACodeObjectVersion()) {
+      CodeObjectVersion(
+          AMDGPU::getDefaultAMDHSACodeObjectVersion(Ctx.getOptionsContext())) {
   // ToDo: AMDGPUDisassembler supports only VI ISA.
   if (!STI.hasFeature(AMDGPU::FeatureGCN3Encoding) && !isGFX10Plus())
     reportFatalUsageError("disassembly not yet supported for subtarget");
@@ -75,7 +76,8 @@ AMDGPUDisassembler::AMDGPUDisassembler(const MCSubtargetInfo &STI,
 }
 
 void AMDGPUDisassembler::setABIVersion(unsigned Version) {
-  CodeObjectVersion = AMDGPU::getAMDHSACodeObjectVersion(Version);
+  CodeObjectVersion = AMDGPU::getAMDHSACodeObjectVersion(
+      Version, getContext().getOptionsContext());
 }
 
 void AMDGPUDisassembler::emitTargetIDIfSupported(raw_ostream &OS,

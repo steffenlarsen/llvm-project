@@ -41,25 +41,29 @@ using namespace llvm::bfi_detail;
 #define DEBUG_TYPE "block-freq"
 
 namespace llvm {
-cl::opt<bool> CheckBFIUnknownBlockQueries(
-    "check-bfi-unknown-block-queries",
-    cl::init(false), cl::Hidden,
-    cl::desc("Check if block frequency is queried for an unknown block "
-             "for debugging missed BFI updates"));
+static bool UseIterativeBFIInference = false;
+} // namespace llvm
 
-cl::opt<bool> UseIterativeBFIInference(
-    "use-iterative-bfi-inference", cl::Hidden,
-    cl::desc("Apply an iterative post-processing to infer correct BFI counts"));
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Support/OptionsContext.h"
 
-cl::opt<unsigned> IterativeBFIMaxIterationsPerBlock(
-    "iterative-bfi-max-iterations-per-block", cl::init(1000), cl::Hidden,
-    cl::desc("Iterative inference: maximum number of update iterations "
-             "per block"));
-
-cl::opt<double> IterativeBFIPrecision(
-    "iterative-bfi-precision", cl::init(1e-12), cl::Hidden,
-    cl::desc("Iterative inference: delta convergence precision; smaller values "
-             "typically lead to better results at the cost of worsen runtime"));
+namespace llvm {
+bool getUseIterativeBFIInference(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
+                                    &clv2::AN_UseIterativeBFIInference>(
+      F.getContext().getOptionsContext(), false);
+}
+void setUseIterativeBFIInference(bool V) { UseIterativeBFIInference = V; }
+bool getCheckBFIUnknownBlockQueries(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_CheckBFIUnknownBlockQueries>(Ctx);
+}
+unsigned getIterativeBFIMaxIterationsPerBlock(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_IterativeBFIMaxIterationsPerBlock>(
+      Ctx);
+}
+double getIterativeBFIPrecision(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_IterativeBFIPrecision>(Ctx);
+}
 } // namespace llvm
 
 ScaledNumber<uint64_t> BlockMass::toScaled() const {
@@ -545,7 +549,7 @@ BlockFrequency
 BlockFrequencyInfoImplBase::getBlockFreq(const BlockNode &Node) const {
   if (!Node.isValid()) {
 #ifndef NDEBUG
-    if (CheckBFIUnknownBlockQueries) {
+    if (getCheckBFIUnknownBlockQueries(*OptsCtx)) {
       SmallString<256> Msg;
       raw_svector_ostream OS(Msg);
       OS << "*** Detected BFI query for unknown block " << getBlockName(Node);

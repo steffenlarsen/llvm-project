@@ -14,25 +14,10 @@
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
-static cl::opt<bool> PrintAll("print-all-alias-modref-info", cl::ReallyHidden);
-
-static cl::opt<bool> PrintNoAlias("print-no-aliases", cl::ReallyHidden);
-static cl::opt<bool> PrintMayAlias("print-may-aliases", cl::ReallyHidden);
-static cl::opt<bool> PrintPartialAlias("print-partial-aliases", cl::ReallyHidden);
-static cl::opt<bool> PrintMustAlias("print-must-aliases", cl::ReallyHidden);
-
-static cl::opt<bool> PrintNoModRef("print-no-modref", cl::ReallyHidden);
-static cl::opt<bool> PrintRef("print-ref", cl::ReallyHidden);
-static cl::opt<bool> PrintMod("print-mod", cl::ReallyHidden);
-static cl::opt<bool> PrintModRef("print-modref", cl::ReallyHidden);
-
-static cl::opt<bool> EvalAAMD("evaluate-aa-metadata", cl::ReallyHidden);
-
-static void PrintResults(AliasResult AR, bool P,
+static void PrintResults(AliasResult AR, bool PrintAll, bool P,
                          std::pair<const Value *, Type *> Loc1,
                          std::pair<const Value *, Type *> Loc2,
                          const Module *M) {
@@ -66,9 +51,10 @@ static void PrintResults(AliasResult AR, bool P,
   }
 }
 
-static inline void PrintModRefResults(
-    const char *Msg, bool P, Instruction *I,
-    std::pair<const Value *, Type *> Loc, Module *M) {
+static inline void PrintModRefResults(const char *Msg, bool PrintAll, bool P,
+                                      Instruction *I,
+                                      std::pair<const Value *, Type *> Loc,
+                                      Module *M) {
   if (PrintAll || P) {
     errs() << "  " << Msg << ":  Ptr: ";
     Loc.second->print(errs(), false, /* NoDetails */ true);
@@ -78,7 +64,7 @@ static inline void PrintModRefResults(
   }
 }
 
-static inline void PrintModRefResults(const char *Msg, bool P,
+static inline void PrintModRefResults(const char *Msg, bool PrintAll, bool P,
                                       Instruction *MemOpA, Instruction *MemOpB,
                                       Module *M) {
   if (PrintAll || P) {
@@ -86,7 +72,7 @@ static inline void PrintModRefResults(const char *Msg, bool P,
   }
 }
 
-static inline void PrintLoadStoreResults(AliasResult AR, bool P,
+static inline void PrintLoadStoreResults(AliasResult AR, bool PrintAll, bool P,
                                          const Value *V1, const Value *V2,
                                          const Module *M) {
   if (PrintAll || P) {
@@ -101,6 +87,7 @@ PreservedAnalyses AAEvaluator::run(Function &F, FunctionAnalysisManager &AM) {
 
 void AAEvaluator::runInternal(Function &F, AAResults &AA) {
   const DataLayout &DL = F.getDataLayout();
+  const bool PrintAll = Options.PrintAll;
 
   ++FunctionCount;
 
@@ -123,8 +110,10 @@ void AAEvaluator::runInternal(Function &F, AAResults &AA) {
       OtherMemOps.insert(&Inst);
   }
 
-  if (PrintAll || PrintNoAlias || PrintMayAlias || PrintPartialAlias ||
-      PrintMustAlias || PrintNoModRef || PrintMod || PrintRef || PrintModRef)
+  if (PrintAll || Options.PrintNoAlias || Options.PrintMayAlias ||
+      Options.PrintPartialAlias || Options.PrintMustAlias ||
+      Options.PrintNoModRef || Options.PrintMod || Options.PrintRef ||
+      Options.PrintModRef)
     errs() << "Function: " << F.getName() << ": " << Pointers.size()
            << " pointers, " << OtherMemOps.size() << " call sites\n";
 
@@ -137,26 +126,30 @@ void AAEvaluator::runInternal(Function &F, AAResults &AA) {
       AliasResult AR = AA.alias(I1->first, Size1, I2->first, Size2);
       switch (AR) {
       case AliasResult::NoAlias:
-        PrintResults(AR, PrintNoAlias, *I1, *I2, F.getParent());
+        PrintResults(AR, PrintAll, Options.PrintNoAlias, *I1, *I2,
+                     F.getParent());
         ++NoAliasCount;
         break;
       case AliasResult::MayAlias:
-        PrintResults(AR, PrintMayAlias, *I1, *I2, F.getParent());
+        PrintResults(AR, PrintAll, Options.PrintMayAlias, *I1, *I2,
+                     F.getParent());
         ++MayAliasCount;
         break;
       case AliasResult::PartialAlias:
-        PrintResults(AR, PrintPartialAlias, *I1, *I2, F.getParent());
+        PrintResults(AR, PrintAll, Options.PrintPartialAlias, *I1, *I2,
+                     F.getParent());
         ++PartialAliasCount;
         break;
       case AliasResult::MustAlias:
-        PrintResults(AR, PrintMustAlias, *I1, *I2, F.getParent());
+        PrintResults(AR, PrintAll, Options.PrintMustAlias, *I1, *I2,
+                     F.getParent());
         ++MustAliasCount;
         break;
       }
     }
   }
 
-  if (EvalAAMD) {
+  if (Options.EvalAAMD) {
     // iterate over all pairs of load, store
     for (Value *Load : Loads) {
       for (Value *Store : Stores) {
@@ -164,19 +157,23 @@ void AAEvaluator::runInternal(Function &F, AAResults &AA) {
                                   MemoryLocation::get(cast<StoreInst>(Store)));
         switch (AR) {
         case AliasResult::NoAlias:
-          PrintLoadStoreResults(AR, PrintNoAlias, Load, Store, F.getParent());
+          PrintLoadStoreResults(AR, PrintAll, Options.PrintNoAlias, Load, Store,
+                                F.getParent());
           ++NoAliasCount;
           break;
         case AliasResult::MayAlias:
-          PrintLoadStoreResults(AR, PrintMayAlias, Load, Store, F.getParent());
+          PrintLoadStoreResults(AR, PrintAll, Options.PrintMayAlias, Load,
+                                Store, F.getParent());
           ++MayAliasCount;
           break;
         case AliasResult::PartialAlias:
-          PrintLoadStoreResults(AR, PrintPartialAlias, Load, Store, F.getParent());
+          PrintLoadStoreResults(AR, PrintAll, Options.PrintPartialAlias, Load,
+                                Store, F.getParent());
           ++PartialAliasCount;
           break;
         case AliasResult::MustAlias:
-          PrintLoadStoreResults(AR, PrintMustAlias, Load, Store, F.getParent());
+          PrintLoadStoreResults(AR, PrintAll, Options.PrintMustAlias, Load,
+                                Store, F.getParent());
           ++MustAliasCount;
           break;
         }
@@ -191,19 +188,23 @@ void AAEvaluator::runInternal(Function &F, AAResults &AA) {
                                   MemoryLocation::get(cast<StoreInst>(*I2)));
         switch (AR) {
         case AliasResult::NoAlias:
-          PrintLoadStoreResults(AR, PrintNoAlias, *I1, *I2, F.getParent());
+          PrintLoadStoreResults(AR, PrintAll, Options.PrintNoAlias, *I1, *I2,
+                                F.getParent());
           ++NoAliasCount;
           break;
         case AliasResult::MayAlias:
-          PrintLoadStoreResults(AR, PrintMayAlias, *I1, *I2, F.getParent());
+          PrintLoadStoreResults(AR, PrintAll, Options.PrintMayAlias, *I1, *I2,
+                                F.getParent());
           ++MayAliasCount;
           break;
         case AliasResult::PartialAlias:
-          PrintLoadStoreResults(AR, PrintPartialAlias, *I1, *I2, F.getParent());
+          PrintLoadStoreResults(AR, PrintAll, Options.PrintPartialAlias, *I1,
+                                *I2, F.getParent());
           ++PartialAliasCount;
           break;
         case AliasResult::MustAlias:
-          PrintLoadStoreResults(AR, PrintMustAlias, *I1, *I2, F.getParent());
+          PrintLoadStoreResults(AR, PrintAll, Options.PrintMustAlias, *I1, *I2,
+                                F.getParent());
           ++MustAliasCount;
           break;
         }
@@ -218,21 +219,23 @@ void AAEvaluator::runInternal(Function &F, AAResults &AA) {
           LocationSize::precise(DL.getTypeStoreSize(Pointer.second));
       switch (AA.getModRefInfo(MemOp, Pointer.first, Size)) {
       case ModRefInfo::NoModRef:
-        PrintModRefResults("NoModRef", PrintNoModRef, MemOp, Pointer,
-                           F.getParent());
+        PrintModRefResults("NoModRef", PrintAll, Options.PrintNoModRef, MemOp,
+                           Pointer, F.getParent());
         ++NoModRefCount;
         break;
       case ModRefInfo::Mod:
-        PrintModRefResults("Just Mod", PrintMod, MemOp, Pointer, F.getParent());
+        PrintModRefResults("Just Mod", PrintAll, Options.PrintMod, MemOp,
+                           Pointer, F.getParent());
         ++ModCount;
         break;
       case ModRefInfo::Ref:
-        PrintModRefResults("Just Ref", PrintRef, MemOp, Pointer, F.getParent());
+        PrintModRefResults("Just Ref", PrintAll, Options.PrintRef, MemOp,
+                           Pointer, F.getParent());
         ++RefCount;
         break;
       case ModRefInfo::ModRef:
-        PrintModRefResults("Both ModRef", PrintModRef, MemOp, Pointer,
-                           F.getParent());
+        PrintModRefResults("Both ModRef", PrintAll, Options.PrintModRef, MemOp,
+                           Pointer, F.getParent());
         ++ModRefCount;
         break;
       }
@@ -246,21 +249,23 @@ void AAEvaluator::runInternal(Function &F, AAResults &AA) {
         continue;
       switch (AA.getModRefInfo(MemOpA, MemOpB)) {
       case ModRefInfo::NoModRef:
-        PrintModRefResults("NoModRef", PrintNoModRef, MemOpA, MemOpB,
-                           F.getParent());
+        PrintModRefResults("NoModRef", PrintAll, Options.PrintNoModRef, MemOpA,
+                           MemOpB, F.getParent());
         ++NoModRefCount;
         break;
       case ModRefInfo::Mod:
-        PrintModRefResults("Just Mod", PrintMod, MemOpA, MemOpB, F.getParent());
+        PrintModRefResults("Just Mod", PrintAll, Options.PrintMod, MemOpA,
+                           MemOpB, F.getParent());
         ++ModCount;
         break;
       case ModRefInfo::Ref:
-        PrintModRefResults("Just Ref", PrintRef, MemOpA, MemOpB, F.getParent());
+        PrintModRefResults("Just Ref", PrintAll, Options.PrintRef, MemOpA,
+                           MemOpB, F.getParent());
         ++RefCount;
         break;
       case ModRefInfo::ModRef:
-        PrintModRefResults("Both ModRef", PrintModRef, MemOpA, MemOpB,
-                           F.getParent());
+        PrintModRefResults("Both ModRef", PrintAll, Options.PrintModRef, MemOpA,
+                           MemOpB, F.getParent());
         ++ModRefCount;
         break;
       }

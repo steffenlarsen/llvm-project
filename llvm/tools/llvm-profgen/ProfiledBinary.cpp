@@ -21,7 +21,6 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/COFF.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/TargetSelect.h"
@@ -33,58 +32,6 @@
 namespace llvm {
 
 using namespace object;
-
-cl::opt<bool> ShowDisassemblyOnly("show-disassembly-only",
-                                  cl::desc("Print disassembled code."),
-                                  cl::cat(ProfGenCategory));
-
-cl::opt<bool> ShowSourceLocations("show-source-locations",
-                                  cl::desc("Print source locations."),
-                                  cl::cat(ProfGenCategory));
-
-cl::opt<bool> LoadFunctionFromSymbol(
-    "load-function-from-symbol", cl::init(true),
-    cl::desc("Gather additional binary function info from symbols (e.g. "
-             "symtab) in case dwarf info is incomplete."),
-    cl::cat(ProfGenCategory));
-
-static cl::opt<bool>
-    ShowCanonicalFnName("show-canonical-fname",
-                        cl::desc("Print canonical function name."),
-                        cl::cat(ProfGenCategory));
-
-static cl::opt<bool> ShowPseudoProbe(
-    "show-pseudo-probe",
-    cl::desc("Print pseudo probe section and disassembled info."),
-    cl::cat(ProfGenCategory));
-
-static cl::opt<bool> UseDwarfCorrelation(
-    "use-dwarf-correlation",
-    cl::desc("Use dwarf for profile correlation even when binary contains "
-             "pseudo probe."),
-    cl::cat(ProfGenCategory));
-
-static cl::opt<std::string>
-    DWPPath("dwp", cl::init(""),
-            cl::desc("Path of .dwp file. When not specified, it will be "
-                     "<binary>.dwp in the same directory as the main binary."),
-            cl::cat(ProfGenCategory));
-
-static cl::list<std::string> DisassembleFunctions(
-    "disassemble-functions", cl::CommaSeparated,
-    cl::desc("List of functions to print disassembly for. Accept demangled "
-             "names only. Only work with show-disassembly-only"),
-    cl::cat(ProfGenCategory));
-
-static cl::opt<bool>
-    KernelBinary("kernel",
-                 cl::desc("Generate the profile for Linux kernel binary."),
-                 cl::cat(ProfGenCategory));
-
-static cl::opt<bool>
-    WarnNotSymbolized("warn-not-symbolized", cl::init(false),
-                      cl::desc("Generate warnings for unsymbolized addresses"),
-                      cl::cat(ProfGenCategory));
 
 namespace sampleprof {
 
@@ -201,15 +148,18 @@ void BinarySizeContextTracker::trackInlineesOptimizedAway(
 }
 
 ProfiledBinary::ProfiledBinary(const StringRef ExeBinPath,
-                               const StringRef DebugBinPath)
-    : Path(ExeBinPath), DebugBinaryPath(DebugBinPath),
+                               const StringRef DebugBinPath,
+                               const ProfGenConfig &Config)
+    : Config(Config), Path(ExeBinPath), DebugBinaryPath(DebugBinPath),
       SymbolizerOpts(getSymbolizerOpts()), ProEpilogTracker(this),
       Symbolizer(std::make_unique<symbolize::LLVMSymbolizer>(SymbolizerOpts)),
-      TrackFuncContextSize(EnableCSPreInliner && UseContextCostForPreInliner) {
+      TrackFuncContextSize(Config.EnableCSPreInliner &&
+                           Config.UseContextCostForPreInliner) {
   // Point to executable binary if debug info binary is not specified.
   SymbolizerPath = DebugBinPath.empty() ? ExeBinPath : DebugBinPath;
-  if (InferMissingFrames)
-    MissingContextInferrer = std::make_unique<MissingFrameInferrer>(this);
+  if (Config.InferMissingFrames)
+    MissingContextInferrer =
+        std::make_unique<MissingFrameInferrer>(this, Config.MaximumSearchDepth);
 }
 
 ProfiledBinary::~ProfiledBinary() = default;
@@ -231,7 +181,7 @@ void ProfiledBinary::warnNoFuncEntry() {
 
     if (!hasFuncEntry) {
       NoFuncEntryNum++;
-      if (ShowDetailedWarning)
+      if (Config.ShowDetailedWarning)
         WithColor::warning()
             << "Failed to determine function entry for " << F.first()
             << " due to inconsistent name from symbol table and dwarf info.\n";
@@ -260,7 +210,7 @@ void ProfiledBinary::load(StringRef TripleStr) {
   LLVM_DEBUG(dbgs() << "Loading " << Path << "\n");
 
   // Mark the binary as a kernel image;
-  IsKernel = KernelBinary;
+  IsKernel = Config.KernelBinary;
 
   // Find the preferred load address for text sections.
   setPreferredTextSegmentAddresses(Obj);
@@ -297,15 +247,15 @@ void ProfiledBinary::load(StringRef TripleStr) {
   if (checkPseudoProbe(Obj, Path))
     PseudoProbeObj = Obj;
 
-  DisassembleFunctionSet.insert_range(DisassembleFunctions);
+  DisassembleFunctionSet.insert_range(Config.DisassembleFunctions);
 
   if (usePseudoProbes())
     populateSymbolAddressList(Obj);
 
-  if (ShowDisassemblyOnly && PseudoProbeObj)
+  if (Config.ShowDisassemblyOnly && PseudoProbeObj)
     decodePseudoProbe(PseudoProbeObj);
 
-  if (LoadFunctionFromSymbol && usePseudoProbes())
+  if (Config.LoadFunctionFromSymbol && usePseudoProbes())
     loadSymbolsFromSymtab(Obj);
 
   // Disassemble the text sections.
@@ -468,7 +418,7 @@ void ProfiledBinary::setPreferredTextSegmentAddresses(const ObjectFile *Obj) {
 
 bool ProfiledBinary::checkPseudoProbe(const ObjectFile *Obj,
                                       StringRef ObjPath) {
-  if (UseDwarfCorrelation)
+  if (Config.UseDwarfCorrelation)
     return false;
 
   bool HasProbeDescSection = false;
@@ -503,7 +453,7 @@ void ProfiledBinary::decodePseudoProbe(const ObjectFile *Obj) {
 
   MCPseudoProbeDecoder::Uint64Set GuidFilter;
   MCPseudoProbeDecoder::Uint64Map FuncStartAddresses;
-  if (ShowDisassemblyOnly) {
+  if (Config.ShowDisassemblyOnly) {
     if (DisassembleFunctionSet.empty()) {
       FuncStartAddresses = SymbolStartAddrs;
     } else {
@@ -545,7 +495,7 @@ void ProfiledBinary::decodePseudoProbe(const ObjectFile *Obj) {
       StringRef Contents = unwrapOrError(Section.getContents(), FileName);
       if (!ProbeDecoder.buildGUID2FuncDescMap(
               reinterpret_cast<const uint8_t *>(Contents.data()),
-              Contents.size(), /*IsMMapped=*/false, ShowDetailedWarning))
+              Contents.size(), /*IsMMapped=*/false, Config.ShowDetailedWarning))
         exitWithError(
             "Pseudo Probe decoder fail in .pseudo_probe_desc section");
     } else if (SectionName == ".pseudo_probe") {
@@ -568,7 +518,7 @@ void ProfiledBinary::decodePseudoProbe(const ObjectFile *Obj) {
     }
   }
 
-  if (ShowPseudoProbe)
+  if (Config.ShowPseudoProbe)
     ProbeDecoder.printGUID2FuncDescMap(outs());
 }
 
@@ -606,12 +556,12 @@ bool ProfiledBinary::dissassembleSymbol(std::size_t SI, ArrayRef<uint8_t> Bytes,
   FuncRange *FRange = findFuncRange(StartAddress);
   setIsFuncEntry(FRange, FunctionSamples::getCanonicalFnName(Symbols[SI].Name));
   StringRef SymbolName =
-      ShowCanonicalFnName
+      Config.ShowCanonicalFnName
           ? FunctionSamples::getCanonicalFnName(Symbols[SI].Name)
           : Symbols[SI].Name;
   bool ShowDisassembly =
-      ShowDisassemblyOnly && (DisassembleFunctionSet.empty() ||
-                              DisassembleFunctionSet.count(SymbolName));
+      Config.ShowDisassemblyOnly && (DisassembleFunctionSet.empty() ||
+                                     DisassembleFunctionSet.count(SymbolName));
   if (ShowDisassembly)
     outs() << '<' << SymbolName << ">:\n";
 
@@ -629,7 +579,7 @@ bool ProfiledBinary::dissassembleSymbol(std::size_t SI, ArrayRef<uint8_t> Bytes,
       Size = 1;
 
     if (ShowDisassembly) {
-      if (ShowPseudoProbe) {
+      if (Config.ShowPseudoProbe) {
         ProbeDecoder.printProbeForAddress(outs(), Address);
       }
       outs() << format("%8" PRIx64 ":", Address);
@@ -638,13 +588,13 @@ bool ProfiledBinary::dissassembleSymbol(std::size_t SI, ArrayRef<uint8_t> Bytes,
         IPrinter->printInst(&Inst, Address + Size, "", *STI, outs());
       else
         outs() << "\t<unknown>";
-      if (ShowSourceLocations) {
+      if (Config.ShowSourceLocations) {
         unsigned Cur = outs().tell() - Start;
         if (Cur < 40)
           outs().indent(40 - Cur);
         InstructionPointer IP(this, Address);
         outs() << getReversedLocWithContext(
-            symbolize(IP, ShowCanonicalFnName, ShowPseudoProbe));
+            symbolize(IP, Config.ShowCanonicalFnName, Config.ShowPseudoProbe));
       }
       outs() << "\n";
     }
@@ -683,7 +633,7 @@ bool ProfiledBinary::dissassembleSymbol(std::size_t SI, ArrayRef<uint8_t> Bytes,
       }
 
       // Record potential call targets for tail frame inference later-on.
-      if (InferMissingFrames && FRange) {
+      if (Config.InferMissingFrames && FRange) {
         uint64_t Target = 0;
         [[maybe_unused]] bool Err =
             MIA->evaluateBranch(Inst, Address, Size, Target);
@@ -751,6 +701,7 @@ void ProfiledBinary::setUpDisassembler(const ObjectFile *Obj) {
     exitWithError("no register info for target " + TheTriple.str(), FileName);
 
   MCTargetOptions MCOptions;
+  MCOptions.OptsCtx = Config.OptsCtx;
   AsmInfo.reset(TheTarget->createMCAsmInfo(*MRI, TheTriple, MCOptions));
   if (!AsmInfo)
     exitWithError("no assembly info for target " + TheTriple.str(), FileName);
@@ -768,8 +719,8 @@ void ProfiledBinary::setUpDisassembler(const ObjectFile *Obj) {
   // compiler emitted, matching llvm-objdump's default for AArch64.
   if (TheTriple.isAArch64())
     Features->AddFeature("+all");
-  STI.reset(
-      TheTarget->createMCSubtargetInfo(TheTriple, "", Features->getString()));
+  STI.reset(TheTarget->createMCSubtargetInfo(
+      TheTriple, "", Features->getString(), *Config.OptsCtx));
   if (!STI)
     exitWithError("no subtarget info for target " + TheTriple.str(), FileName);
 
@@ -814,11 +765,11 @@ void ProfiledBinary::disassemble(const ObjectFile *Obj) {
   for (std::pair<const SectionRef, SectionSymbolsTy> &SecSyms : AllSymbols)
     stable_sort(SecSyms.second);
 
-  assert((DisassembleFunctionSet.empty() || ShowDisassemblyOnly) &&
+  assert((DisassembleFunctionSet.empty() || Config.ShowDisassemblyOnly) &&
          "Functions to disassemble should be only specified together with "
          "--show-disassembly-only");
 
-  if (ShowDisassemblyOnly)
+  if (Config.ShowDisassemblyOnly)
     outs() << "\nDisassembly of " << FileName << ":\n";
 
   // Dissassemble a text section.
@@ -839,7 +790,7 @@ void ProfiledBinary::disassemble(const ObjectFile *Obj) {
 
     StringRef SectionName = unwrapOrError(Section.getName(), FileName);
 
-    if (ShowDisassemblyOnly) {
+    if (Config.ShowDisassemblyOnly) {
       outs() << "\nDisassembly of section " << SectionName;
       outs() << " [" << format("0x%" PRIx64, Section.getAddress()) << ", "
              << format("0x%" PRIx64, Section.getAddress() + SectSize)
@@ -864,7 +815,7 @@ void ProfiledBinary::disassemble(const ObjectFile *Obj) {
   }
 
   if (!AddrsWithInvalidInstruction.empty()) {
-    if (ShowDetailedWarning) {
+    if (Config.ShowDetailedWarning) {
       for (auto &Addr : AddrsWithInvalidInstruction) {
         WithColor::warning()
             << "Invalid instructions at " << format("%8" PRIx64, Addr.first)
@@ -990,7 +941,7 @@ void ProfiledBinary::loadSymbolsFromSymtab(const ObjectFile *Obj) {
       // Function range already found from DWARF or symtab, but the symbol name
       // from symbol table is inconsistent with the existing name associated
       // with the range. Log this discrepancy and the alternative function GUID.
-      if (ShowDetailedWarning)
+      if (Config.ShowDetailedWarning)
         WithColor::warning()
             << "Conflicting name for symbol " << Name << " with range ("
             << format("%8" PRIx64, StartAddr) << ", "
@@ -1071,7 +1022,7 @@ void ProfiledBinary::loadSymbolsFromDWARFUnit(DWARFUnit &CompilationUnit) {
         FRange.EndAddress = EndAddress;
       } else {
         AddrsWithMultipleSymbols.insert(StartAddress);
-        if (ShowDetailedWarning)
+        if (Config.ShowDetailedWarning)
           WithColor::warning()
               << "Duplicated symbol start address at "
               << format("%8" PRIx64, StartAddress) << " "
@@ -1083,7 +1034,8 @@ void ProfiledBinary::loadSymbolsFromDWARFUnit(DWARFUnit &CompilationUnit) {
 
 void ProfiledBinary::loadSymbolsFromDWARF(ObjectFile &Obj) {
   auto DebugContext = llvm::DWARFContext::create(
-      Obj, DWARFContext::ProcessDebugRelocations::Process, nullptr, DWPPath);
+      Obj, DWARFContext::ProcessDebugRelocations::Process, nullptr,
+      Config.DWPPath);
   if (!DebugContext)
     exitWithError("Error creating the debug info context", Path);
 
@@ -1098,7 +1050,7 @@ void ProfiledBinary::loadSymbolsFromDWARF(ObjectFile &Obj) {
       DWARFUnit *DWOCU = DwarfUnit->getNonSkeletonUnitDIE(false).getDwarfUnit();
       if (!DWOCU->isDWOUnit()) {
         NumOfDWOMissing++;
-        if (ShowDetailedWarning) {
+        if (Config.ShowDetailedWarning) {
           std::string DWOName = dwarf::toString(
               DwarfUnit->getUnitDIE().find(
                   {dwarf::DW_AT_dwo_name, dwarf::DW_AT_GNU_dwo_name}),
@@ -1147,7 +1099,7 @@ symbolize::LLVMSymbolizer::Options ProfiledBinary::getSymbolizerOpts() const {
   SymbolizerOpts.DefaultArch = TheTriple.getArchName().str();
   SymbolizerOpts.UseSymbolTable = false;
   SymbolizerOpts.RelativeAddresses = false;
-  SymbolizerOpts.DWPName = DWPPath;
+  SymbolizerOpts.DWPName = Config.DWPPath;
   return SymbolizerOpts;
 }
 
@@ -1189,7 +1141,7 @@ SampleContextFrameVector ProfiledBinary::symbolize(const InstructionPointer &IP,
     CallStack.emplace_back(FunctionId(It.first->getKey()), Line);
   }
 
-  if (WarnNotSymbolized && CallStack.empty()) {
+  if (Config.WarnNotSymbolized && CallStack.empty()) {
     uint64_t VAddr = IP.Address + BaseAddress - getPreferredBaseAddress();
     if (isVaddrMMapped(VAddr))
       WithColor::warning() << "Failed to symbolize address "
@@ -1278,7 +1230,7 @@ void ProfiledBinary::loadSymbolsFromPseudoProbe() {
         const auto *ProbeDesc = getFuncDescForGUID(InlineTreeNode->Guid);
         auto Ret = PseudoProbeNames.try_emplace(Func, ProbeDesc->FuncName);
         if (!Ret.second && Ret.first->second != ProbeDesc->FuncName &&
-            ShowDetailedWarning)
+            Config.ShowDetailedWarning)
           WithColor::warning()
               << "Mismatched pseudo probe names in function " << Func->FuncName
               << " at range: (" << format("%8" PRIx64, StartAddr) << ", "

@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- TailRecursionElimination.cpp - Eliminate Tail Calls ----------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -77,7 +79,6 @@
 #include "llvm/IR/Module.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
@@ -94,21 +95,22 @@ STATISTIC(NumTREPreventedCold,
           "Number of tail calls/recursion eliminations prevented due to cold "
           "calling convention or attribute");
 
-static cl::opt<bool> DisableEntryCountRecompute(
-    "tre-disable-entrycount-recompute", cl::init(false), cl::Hidden,
-    cl::desc("Force disabling recomputing of function entry count, on "
-             "successful tail recursion elimination."));
-
-static cl::opt<bool> DisableTailCallElimForColdCalls(
-    "disable-tail-call-elim-for-cold-calls", cl::Hidden, cl::init(false),
-    cl::desc("Disable tail call elimination and optimization for cold calls or "
-             "in cold functions"));
+static bool getForceDisableBFI(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_TreDisableEntrycountRecompute>(
+      F.getContext().getOptionsContext(), false);
+}
 
 static bool shouldDisableTailCallsForCold(const CallBase *CB,
                                           const Function *Caller,
                                           const ProfileSummaryInfo *PSI,
                                           BlockFrequencyInfo *BFI) {
-  if (!DisableTailCallElimForColdCalls)
+  bool Disable = clv2::getOptValOr<&clv2::ScalarOptsReg,
+                                   &clv2::SC_DisableTailCallElimForColdCalls>(
+      Caller ? Caller->getContext().getOptionsContext()
+             : clv2::defaultOptionsContext(),
+      false);
+  if (!Disable)
     return false;
 
   if (CB && CB->isMustTailCall())
@@ -911,8 +913,7 @@ bool TailRecursionEliminator::eliminateCall(CallInst *CI) {
   CI->eraseFromParent();   // Remove call.
   DTU.applyUpdates({{DominatorTree::Insert, BB, HeaderBB}});
   ++NumEliminated;
-  if (!DisableEntryCountRecompute && UpdateFunctionEntryCount &&
-      OrigEntryBBFreq) {
+  if (!getForceDisableBFI(F) && UpdateFunctionEntryCount && OrigEntryBBFreq) {
     assert(F.getEntryCount().has_value());
     // This pass is not expected to remove BBs, only add an entry BB. For that
     // reason, and because the BB here isn't the new entry BB, the BFI lookup is
@@ -1158,7 +1159,8 @@ PreservedAnalyses TailCallElimPass::run(Function &F,
   // This must come first. It needs the 2 analyses, meaning, if it came after
   // the lines asking for the cached result, should they be nullptr (which, in
   // the case of the PDT, is likely), updates to the trees would be missed.
-  auto *BFI = F.getEntryCount().has_value()
+  auto *BFI = (!getForceDisableBFI(F) && UpdateFunctionEntryCount &&
+               F.getEntryCount().has_value() && *F.getEntryCount())
                   ? &AM.getResult<BlockFrequencyAnalysis>(F)
                   : nullptr;
   auto &MAMProxy = AM.getResult<ModuleAnalysisManagerFunctionProxy>(F);

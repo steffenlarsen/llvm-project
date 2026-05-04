@@ -7,10 +7,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Core/BinaryContext.h"
+#include "bolt/Profile/BoltProfileOptionsOptInfos.h"
 #include "bolt/Profile/DataAggregator.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/TargetParser/SubtargetFeature.h"
 #include "llvm/Testing/Support/Error.h"
@@ -21,15 +23,11 @@ using namespace llvm::object;
 using namespace llvm::ELF;
 using namespace bolt;
 
-namespace opts {
-extern cl::opt<bool> ReadPreAggregated;
-} // namespace opts
-
 namespace {
 
-/// Perform checks on memory map events normally captured in perf. Tests use
-/// the 'opts::ReadPerfEvents' flag to emulate these events, passing a custom
-/// 'perf script' output to DataAggregator.
+/// Perform checks on memory map events normally captured in perf. Tests set
+/// the pre-aggregated flag on the context and feed DataAggregator a custom
+/// 'perf script' output through setParsingBuffer().
 struct MemoryMapsTester : public testing::TestWithParam<Triple::ArchType> {
   void SetUp() override {
     initalizeLLVM();
@@ -69,7 +67,8 @@ protected:
     BC = cantFail(BinaryContext::createBinaryContext(
         TheTriple, std::make_shared<orc::SymbolStringPool>(),
         ObjFile->getFileName(), TheTriple.isRISCV() ? &Features : nullptr, true,
-        DWARFContext::create(*ObjFile), {llvm::outs(), llvm::errs()}));
+        DWARFContext::create(*ObjFile), {llvm::outs(), llvm::errs()},
+        /*OptsCtx=*/nullptr));
     ASSERT_FALSE(!BC);
   }
 
@@ -82,6 +81,14 @@ protected:
     llvm::raw_fd_ostream FileStream(FD, true);
     FileStream << Buffer;
     FileStream.flush();
+  }
+
+  /// Equivalent of setting opts::ReadPreAggregated before the option moved
+  /// onto the context.
+  void setReadPreAggregated() {
+    BC->getOptionsContext()
+        .getViewPtr<&clv2::BoltProfileOptsReg>()
+        ->get<&clv2::BOLTPROF_ReadPreAggregated>() = true;
   }
 
   char ElfBuf[sizeof(typename ELF64LE::Ehdr)] = {};
@@ -116,7 +123,7 @@ INSTANTIATE_TEST_SUITE_P(AArch64, MemoryMapsTester,
 TEST_P(MemoryMapsTester, ParseMultipleSegments) {
   const int Pid = 1234;
   StringRef Filename = "BINARY";
-  opts::ReadPreAggregated = true;
+  setReadPreAggregated();
   std::string MemEvents =
       formatv(
           "name       0 [000]     0.000000: PERF_RECORD_MMAP2 {0}/{0}: "
@@ -157,7 +164,7 @@ TEST_P(MemoryMapsTester, ParseMultipleSegments) {
 TEST_P(MemoryMapsTester, MultipleSegmentsMismatchedBaseAddress) {
   const int Pid = 1234;
   StringRef Filename = "BINARY";
-  opts::ReadPreAggregated = true;
+  setReadPreAggregated();
   std::string MemEvents =
       formatv(
           "name       0 [000]     0.000000: PERF_RECORD_MMAP2 {0}/{0}: "
@@ -166,7 +173,6 @@ TEST_P(MemoryMapsTester, MultipleSegmentsMismatchedBaseAddress) {
           "[0xabc2000000(0x8000000) @ 0x31d0000 103:01 1573523 0]: r-xp {1}\n",
           Pid, Filename)
           .str();
-
   std::string Buffer =
       formatv("PERFTEXT;MMAP={0:x-};\n{1}", MemEvents.size(), MemEvents).str();
 

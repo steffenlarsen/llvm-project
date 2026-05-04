@@ -39,14 +39,16 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -71,18 +73,15 @@ STATISTIC(NumJTMoved,    "Number of jump table destination blocks moved");
 STATISTIC(NumJTInserted, "Number of jump table intermediate blocks inserted");
 STATISTIC(NumLEInserted, "Number of LE backwards branches inserted");
 
-static cl::opt<bool>
-AdjustJumpTableBlocks("arm-adjust-jump-tables", cl::Hidden, cl::init(true),
-          cl::desc("Adjust basic block layout to better use TB[BH]"));
+static bool getAdjustJumpTableBlocks(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::ARM_AdjustJumpTableBlocks>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-CPMaxIteration("arm-constant-island-max-iteration", cl::Hidden, cl::init(30),
-          cl::desc("The max number of iteration for converge"));
-
-static cl::opt<bool> SynthesizeThumb1TBB(
-    "arm-synthesize-thumb-1-tbb", cl::Hidden, cl::init(true),
-    cl::desc("Use compressed jump tables in Thumb-1 by synthesizing an "
-             "equivalent to the TBB/TBH instructions"));
+static unsigned getCPMaxIteration(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::ARM_CPMaxIteration>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -399,7 +398,7 @@ bool ARMConstantIslands::runOnMachineFunction(MachineFunction &mf) {
   isThumb1 = AFI->isThumb1OnlyFunction();
   isThumb2 = AFI->isThumb2Function();
 
-  bool GenerateTBB = isThumb2 || (isThumb1 && SynthesizeThumb1TBB);
+  bool GenerateTBB = isThumb2 || (isThumb1 && true);
   // TBB generation code in this constant island pass has not been adapted to
   // deal with speculation barriers.
   if (STI->hardenSlsRetBr())
@@ -412,7 +411,7 @@ bool ARMConstantIslands::runOnMachineFunction(MachineFunction &mf) {
   // Try to reorder and otherwise adjust the block layout to make good use
   // of the TB[BH] instructions.
   bool MadeChange = false;
-  if (GenerateTBB && AdjustJumpTableBlocks) {
+  if (GenerateTBB && getAdjustJumpTableBlocks(MF->getFunction())) {
     scanFunctionJumpTables();
     MadeChange |= reorderThumb2JumpTables();
     // Data is out of date, so clear it. It'll be re-computed later.
@@ -461,8 +460,9 @@ bool ARMConstantIslands::runOnMachineFunction(MachineFunction &mf) {
       // For most inputs, it converges in no more than 5 iterations.
       // If it doesn't end in 10, the input may have huge BB or many CPEs.
       // In this case, we will try different heuristics.
-      CPChange |= handleConstantPoolUser(i, NoCPIters >= CPMaxIteration / 2);
-    if (CPChange && ++NoCPIters > CPMaxIteration)
+      CPChange |= handleConstantPoolUser(
+          i, NoCPIters >= getCPMaxIteration(MF->getFunction()) / 2);
+    if (CPChange && ++NoCPIters > getCPMaxIteration(MF->getFunction()))
       report_fatal_error("Constant Island pass failed to converge!");
     LLVM_DEBUG(dumpBBs());
 

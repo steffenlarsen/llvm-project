@@ -83,7 +83,7 @@ void registerTestFromLLVMIR() {
       [](llvm::SourceMgr &sourceMgr,
          MLIRContext *context) -> OwningOpRef<Operation *> {
         llvm::SMDiagnostic err;
-        llvm::LLVMContext llvmContext;
+        llvm::LLVMContext llvmContext(llvm::clv2::defaultOptionsContext());
         std::unique_ptr<llvm::Module> llvmModule =
             llvm::parseIR(*sourceMgr.getMemoryBuffer(sourceMgr.getMainFileID()),
                           err, llvmContext);

@@ -39,8 +39,12 @@
 #define BOLT_PASSES_TAILDUPLICATION_H
 
 #include "bolt/Passes/BinaryPasses.h"
+#include "llvm/Support/OptionsContext.h"
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+}
 namespace bolt {
 
 /// Pass for duplicating blocks that would require a jump.
@@ -65,6 +69,9 @@ class TailDuplication : public BinaryFunctionPass {
 
   /// Record the number of instructions deleted because of propagation
   uint64_t DynamicInstructionDeletionCount = 0;
+
+  /// Options context for commandline options.
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
 
   /// Sets Regs with the caller saved registers
   void getCallerSavedRegs(const MCInst &Inst, BitVector &Regs,

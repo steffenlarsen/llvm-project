@@ -25,7 +25,7 @@ TEST(TensorSpecTest, JSONParsing) {
         "shape":[1,4]
         })");
   EXPECT_TRUE(!!Value);
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::optional<TensorSpec> Spec = getTensorSpecFromJSON(Ctx, *Value);
   EXPECT_TRUE(Spec);
   EXPECT_EQ(*Spec, TensorSpec::createSpec<int32_t>("tensor_name", {1, 4}, 2));
@@ -41,7 +41,7 @@ TEST(TensorSpecTest, JSONParsingInvalidTensorType) {
         }
       )");
   EXPECT_TRUE(!!Value);
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   auto Spec = getTensorSpecFromJSON(Ctx, *Value);
   EXPECT_FALSE(Spec);
 }

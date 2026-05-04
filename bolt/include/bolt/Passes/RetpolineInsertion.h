@@ -57,7 +57,7 @@ public:
     NEVER = 2   ///  r11 not available
   };
 
-  explicit RetpolineInsertion(const cl::opt<bool> &PrintPass)
+  explicit RetpolineInsertion(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "retpoline-insertion"; }

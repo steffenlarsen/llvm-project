@@ -20,6 +20,7 @@
 #include "llvm/ProfileData/SampleProf.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorOr.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdint>
 #include <memory>
@@ -119,12 +120,14 @@ public:
   ///
   /// Create a new file writer based on the value of \p Format.
   static ErrorOr<std::unique_ptr<SampleProfileWriter>>
-  create(StringRef Filename, SampleProfileFormat Format);
+  create(StringRef Filename, SampleProfileFormat Format,
+         const clv2::OptionsContext &Ctx = clv2::defaultOptionsContext());
 
   /// Create a new stream writer based on the value of \p Format.
   /// For testing.
   static ErrorOr<std::unique_ptr<SampleProfileWriter>>
-  create(std::unique_ptr<raw_ostream> &OS, SampleProfileFormat Format);
+  create(std::unique_ptr<raw_ostream> &OS, SampleProfileFormat Format,
+         const clv2::OptionsContext &Ctx = clv2::defaultOptionsContext());
 
   virtual void setProfileSymbolList(ProfileSymbolList *PSL) {}
   virtual void setToCompressAllSections() {}
@@ -134,6 +137,7 @@ public:
   virtual void setUseMD5ProfileSymbolList() {}
   virtual void setUseMD5IndexedTables() {}
   virtual void setUseCompositeProfile(bool /*Enable*/) {}
+  virtual void setOptionsContext(const clv2::OptionsContext &) {}
 
   void setFormatVersion(uint64_t V) {
     assert(sampleprof::formatVersionIsSupported(V) &&
@@ -207,7 +211,8 @@ private:
 
   LLVM_ABI friend ErrorOr<std::unique_ptr<SampleProfileWriter>>
   SampleProfileWriter::create(std::unique_ptr<raw_ostream> &OS,
-                              SampleProfileFormat Format);
+                              SampleProfileFormat Format,
+                              const clv2::OptionsContext &Ctx);
 };
 
 /// Sample-based profile writer (binary format).
@@ -261,7 +266,8 @@ protected:
 private:
   LLVM_ABI friend ErrorOr<std::unique_ptr<SampleProfileWriter>>
   SampleProfileWriter::create(std::unique_ptr<raw_ostream> &OS,
-                              SampleProfileFormat Format);
+                              SampleProfileFormat Format,
+                              const clv2::OptionsContext &Ctx);
 };
 
 class SampleProfileWriterRawBinary : public SampleProfileWriterBinary {
@@ -468,12 +474,19 @@ private:
   MapVector<SampleContext, uint32_t> CSNameTable;
 
   ProfileSymbolList *ProfSymList = nullptr;
+
+protected:
+  bool CachedWriteMD5ProfSymList = false;
+  bool CachedWriteEytzingerNameTables = false;
 };
 
 class LLVM_ABI SampleProfileWriterExtBinary
     : public SampleProfileWriterExtBinaryBase {
 public:
   SampleProfileWriterExtBinary(std::unique_ptr<raw_ostream> &OS);
+
+  /// Re-initialize options that depend on OptionsContext.
+  void setOptionsContext(const clv2::OptionsContext &Ctx) override;
 
 private:
   std::error_code writeDefaultLayout(const SampleProfileMap &ProfileMap);

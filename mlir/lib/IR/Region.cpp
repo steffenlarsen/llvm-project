@@ -270,7 +270,7 @@ llvm::raw_ostream &mlir::operator<<(llvm::raw_ostream &os, Region &region) {
   for (auto it : llvm::enumerate(region.getBlocks())) {
     os << "\n  Block #" << it.index() << ":";
     for (Operation &op : it.value().getOperations())
-      os << "\n    " << OpWithFlags(&op, OpPrintingFlags().skipRegions());
+      os << "\n    " << OpWithFlags(&op, opPrintingFlags(&op).skipRegions());
   }
   return os;
 }

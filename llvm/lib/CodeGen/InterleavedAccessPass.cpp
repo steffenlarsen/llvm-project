@@ -49,6 +49,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/VectorUtils.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/InterleavedAccess.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
@@ -65,8 +66,9 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -77,10 +79,9 @@ using namespace llvm;
 
 #define DEBUG_TYPE "interleaved-access"
 
-static cl::opt<bool> LowerInterleavedAccesses(
-    "lower-interleaved-accesses",
-    cl::desc("Enable lowering interleaved accesses to intrinsics"),
-    cl::init(true), cl::Hidden);
+static bool getLowerInterleavedAccesses(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_LowerInterleavedAccesses>(Ctx);
+}
 
 namespace {
 
@@ -177,7 +178,7 @@ bool InterleavedAccess::runOnFunction(Function &F) {
     return false;
 
   auto *TPC = getAnalysisIfAvailable<TargetPassConfig>();
-  if (!TPC || !LowerInterleavedAccesses)
+  if (!TPC || !getLowerInterleavedAccesses(F.getContext().getOptionsContext()))
     return false;
 
   LLVM_DEBUG(dbgs() << "*** " << getPassName() << ": " << F.getName() << "\n");

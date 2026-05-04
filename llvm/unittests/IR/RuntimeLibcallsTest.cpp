@@ -65,7 +65,7 @@ TEST(RuntimeLibcallsTest, LibcallImplByName) {
 }
 
 TEST(RuntimeLibcallsTest, LibcallForIntrinsic) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   using Info = RTLIB::RuntimeLibcallsInfo;
   auto UnarySig = [&](Type *Ty) { return FunctionType::get(Ty, {Ty}, false); };
   auto BinarySig = [&](Type *Ty) {

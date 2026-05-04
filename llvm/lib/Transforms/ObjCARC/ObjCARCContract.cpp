@@ -41,9 +41,11 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/ObjCARC.h"
+#include "llvm/Transforms/ObjCARC/ObjCARCOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/Local.h"
 
 using namespace llvm;
@@ -54,10 +56,10 @@ using namespace llvm::objcarc;
 STATISTIC(NumPeeps,       "Number of calls peephole-optimized");
 STATISTIC(NumStoreStrongs, "Number objc_storeStrong calls formed");
 
-static cl::opt<cl::boolOrDefault> UseObjCClaimRV(
-    "arc-contract-use-objc-claim-rv",
-    cl::desc(
-        "Enable generation of calls to objc_claimAutoreleasedReturnValue"));
+static std::optional<bool> getUseObjCClaimRV(const Module &M) {
+  return clv2::getOptValOr<&clv2::ObjCARCOptsReg, &clv2::ARC_UseObjCClaimRV>(
+      M.getContext().getOptionsContext(), std::nullopt);
+}
 
 //===----------------------------------------------------------------------===//
 //                                Declarations
@@ -529,8 +531,9 @@ bool ObjCARCContract::tryToPeepholeInstruction(
 /// Should we use objc_claimAutoreleasedReturnValue?
 static bool useClaimRuntimeCall(Module &M) {
   // Let the flag override our OS-based default.
-  if (UseObjCClaimRV != cl::boolOrDefault::BOU_UNSET)
-    return UseObjCClaimRV == cl::boolOrDefault::BOU_TRUE;
+  std::optional<bool> ClaimRV = getUseObjCClaimRV(M);
+  if (ClaimRV.has_value())
+    return *ClaimRV;
 
   Triple TT(M.getTargetTriple());
 
@@ -578,7 +581,7 @@ bool ObjCARCContract::init(Module &M) {
 }
 
 bool ObjCARCContract::run(Function &F, AAResults *A, DominatorTree *D) {
-  if (!EnableARCOpts)
+  if (!getEnableARCOpts())
     return false;
 
   Changed = CFGChanged = false;

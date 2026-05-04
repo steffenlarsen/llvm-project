@@ -45,7 +45,7 @@ static BasicBlock *getBasicBlockByName(Function &F, StringRef Name) {
 }
 
 TEST(BasicBlockUtils, EliminateUnreachableBlocks) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 define i32 @has_unreachable(i1 %cond) {
 entry:
@@ -71,7 +71,7 @@ bb2:
 }
 
 TEST(BasicBlockUtils, SplitEdge_ex1) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 define void @foo(i1 %cond0) {
 entry:
@@ -110,7 +110,7 @@ bb2:
 }
 
 TEST(BasicBlockUtils, SplitEdge_ex2) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 define void @foo() {
 bb0:
@@ -147,7 +147,7 @@ bb2:
 }
 
 TEST(BasicBlockUtils, SplitEdge_ex3) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 define i32 @foo(i32 %n) {
 entry:
@@ -219,7 +219,7 @@ bb4:
 }
 
 TEST(BasicBlockUtils, SplitEdge_ex4) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 define void @bar(i32 %cond) personality i8 0 {
 entry:
@@ -291,7 +291,7 @@ declare void @sink_alt() cold
 }
 
 TEST(BasicBlockUtils, splitBasicBlockBefore_ex1) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 define void @foo() {
 bb0:
@@ -326,7 +326,7 @@ bb3:
 
 #ifndef NDEBUG
 TEST(BasicBlockUtils, splitBasicBlockBefore_ex2) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 define void @foo() {
 bb0:
@@ -356,7 +356,7 @@ bb3:
 #endif
 
 TEST(BasicBlockUtils, splitBlockBefore2) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 define void @split-block-before-test(i1 %flag) {
 entry:
@@ -387,7 +387,7 @@ exit:
 }
 
 TEST(BasicBlockUtils, NoUnreachableBlocksToEliminate) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 define i32 @no_unreachable(i1 %cond) {
 entry:
@@ -411,7 +411,7 @@ bb1:
 }
 
 TEST(BasicBlockUtils, splitBlockBefore) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 define i32 @basic_func(i1 %cond) {
 entry:
@@ -436,7 +436,7 @@ bb1:
 }
 
 TEST(BasicBlockUtils, SplitBlockPredecessors) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 define i32 @basic_func(i1 %cond) {
 entry:
@@ -458,7 +458,7 @@ bb1:
 }
 
 TEST(BasicBlockUtils, SplitLandingPadPredecessors) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 declare void @foo()
 
@@ -499,7 +499,7 @@ exit:
 }
 
 TEST(BasicBlockUtils, SplitLandingPadPredecessorsLoopStruct) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 declare void @foo()
 
@@ -550,7 +550,7 @@ exit:
 }
 
 TEST(BasicBlockUtils, SplitCriticalEdge) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 define void @crit_edge(i1 %cond0, i1 %cond1) {
 entry:
@@ -574,7 +574,7 @@ bb2:
 }
 
 TEST(BasicBlockUtils, SplitLoopCriticalEdge) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 declare i1 @predicate(ptr %p)
 
@@ -631,7 +631,7 @@ exit:
 }
 
 TEST(BasicBlockUtils, SplitIndirectBrCriticalEdgesIgnorePHIs) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 define void @crit_edge(ptr %tgt, i1 %cond0, i1 %cond1) {
 entry:
@@ -674,7 +674,7 @@ bb4:
 }
 
 TEST(BasicBlockUtils, SplitIndirectBrCriticalEdges) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 define void @crit_edge(ptr %tgt, i1 %cond0, i1 %cond1) {
 entry:
@@ -723,7 +723,7 @@ bb4:
 }
 
 TEST(BasicBlockUtils, SetEdgeProbability) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 define void @edge_probability(i32 %0) {
 entry:
@@ -809,7 +809,7 @@ L19:
 }
 
 TEST(BasicBlockUtils, IsPresplitCoroSuspendExitTest) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 define void @positive_case(i32 %0) #0 {
 entry:
@@ -875,7 +875,7 @@ TEST(BasicBlockUtils, BasicBlockPrintable) {
   llvm::raw_string_ostream OS{S};
   llvm::raw_string_ostream OSCheck{SCheck};
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C, R"IR(
 define void @foo() {
   br label %bb0

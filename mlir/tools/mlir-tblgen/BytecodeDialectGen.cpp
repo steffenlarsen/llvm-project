@@ -11,7 +11,6 @@
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVectorExtras.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Record.h"
@@ -19,10 +18,7 @@
 
 using namespace llvm;
 
-static cl::OptionCategory dialectGenCat("Options for -gen-bytecode");
-static cl::opt<std::string>
-    selectedBcDialect("bytecode-dialect", cl::desc("The dialect to gen for"),
-                      cl::cat(dialectGenCat), cl::CommaSeparated);
+std::string selectedBcDialect;
 
 namespace {
 

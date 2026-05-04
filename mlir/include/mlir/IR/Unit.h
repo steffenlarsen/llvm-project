@@ -21,6 +21,7 @@ class Operation;
 class Region;
 class Block;
 class Value;
+class MLIRContext;
 
 /// IRUnit is a union of the different types of IR objects that constitute the
 /// IR structure (other than Type and Attribute), that is Operation, Region, and
@@ -28,6 +29,10 @@ class Value;
 class IRUnit : public PointerUnion<Operation *, Region *, Block *, Value> {
 public:
   using PointerUnion::PointerUnion;
+
+  /// The context owning whichever IR object this unit holds.  Printing needs
+  /// it so that the `-mlir-print-*` options apply.
+  MLIRContext *getContext() const;
 
   /// Print the IRUnit to the given stream.
   void print(raw_ostream &os,

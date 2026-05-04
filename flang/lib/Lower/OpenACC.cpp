@@ -12,6 +12,7 @@
 
 #include "flang/Lower/OpenACC.h"
 
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Common/idioms.h"
 #include "flang/Evaluate/shape.h"
 #include "flang/Lower/Bridge.h"
@@ -47,47 +48,11 @@
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Frontend/OpenACC/ACC.h.inc"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 
 #define DEBUG_TYPE "flang-lower-openacc"
-
-static llvm::cl::opt<bool> generateDefaultBounds(
-    "openacc-generate-default-bounds",
-    llvm::cl::desc("Whether to generate default bounds for arrays."),
-    llvm::cl::init(false));
-
-static llvm::cl::opt<bool> strideIncludeLowerExtent(
-    "openacc-stride-include-lower-extent",
-    llvm::cl::desc(
-        "Whether to include the lower dimensions extents in the stride."),
-    llvm::cl::init(true));
-
-static llvm::cl::opt<bool> lowerDoLoopToAccLoop(
-    "openacc-do-loop-to-acc-loop",
-    llvm::cl::desc(
-        "Whether to lower do loops inside OpenACC compute constructs "
-        "as `acc.loop` operations."),
-    llvm::cl::init(true));
-
-static llvm::cl::opt<bool> lowerDoLoopToAccLoopInAccRoutine(
-    "openacc-do-loop-to-acc-loop-in-acc-routine",
-    llvm::cl::desc("Whether to lower do loops inside explicit `!$acc routine` "
-                   "procedures as `acc.loop` operations."),
-    llvm::cl::init(true));
-
-static llvm::cl::opt<bool> enableSymbolRemapping(
-    "openacc-remap-symbols",
-    llvm::cl::desc("Whether to remap symbols that appears in data clauses."),
-    llvm::cl::init(true));
-
-static llvm::cl::opt<bool> emitIndependentLoopsAsUnstructured(
-    "emit-independent-loops-as-unstructured",
-    llvm::cl::desc("Whether to allow lowering unstructured do loops inside "
-                   "independent OpenACC loop constructs instead of emitting "
-                   "a TODO."),
-    llvm::cl::init(true));
 
 // Special value for * passed in device_type or gang clauses.
 static constexpr std::int64_t starCst = -1;
@@ -855,8 +820,14 @@ static void genDataOperandOperations(
             converter, builder, semanticsContext, stmtCtx, symbol, designator,
             operandLocation, asFortran, bounds,
             /*treatIndexAsSection=*/true, /*unwrapFirBox=*/false,
-            /*genDefaultBounds=*/generateDefaultBounds,
-            /*strideIncludeLowerExtent=*/strideIncludeLowerExtent,
+            /*genDefaultBounds=*/
+            llvm::clv2::getOptValOrDefault<
+                &llvm::clv2::FLANG_OpenACCGenDefaultBounds>(
+                converter.getMLIRContext().getOptionsContext()),
+            /*strideIncludeLowerExtent=*/
+            llvm::clv2::getOptValOrDefault<
+                &llvm::clv2::FLANG_OpenACCStrideIncludeLowerExtent>(
+                converter.getMLIRContext().getOptionsContext()),
             /*loadAllocatableAndPointerComponent=*/false);
     LLVM_DEBUG(llvm::dbgs() << __func__ << "\n"; info.dump(llvm::dbgs()));
 
@@ -1085,8 +1056,14 @@ static void genDeclareDataOperandOperations(
             converter, builder, semanticsContext, stmtCtx, symbol, designator,
             operandLocation, asFortran, bounds,
             /*treatIndexAsSection=*/true, /*unwrapFirBox=*/false,
-            /*genDefaultBounds=*/generateDefaultBounds,
-            /*strideIncludeLowerExtent=*/strideIncludeLowerExtent,
+            /*genDefaultBounds=*/
+            llvm::clv2::getOptValOrDefault<
+                &llvm::clv2::FLANG_OpenACCGenDefaultBounds>(
+                converter.getMLIRContext().getOptionsContext()),
+            /*strideIncludeLowerExtent=*/
+            llvm::clv2::getOptValOrDefault<
+                &llvm::clv2::FLANG_OpenACCStrideIncludeLowerExtent>(
+                converter.getMLIRContext().getOptionsContext()),
             /*loadAllocatableAndPointerComponent=*/false);
     LLVM_DEBUG(llvm::dbgs() << __func__ << "\n"; info.dump(llvm::dbgs()));
     EntryOp op = createDataEntryOp<EntryOp>(
@@ -1251,8 +1228,14 @@ genReductions(const Fortran::parser::AccObjectListWithReduction &objectList,
             converter, builder, semanticsContext, stmtCtx, symbol, designator,
             operandLocation, asFortran, bounds,
             /*treatIndexAsSection=*/true, /*unwrapFirBox=*/false,
-            /*genDefaultBounds=*/generateDefaultBounds,
-            /*strideIncludeLowerExtent=*/strideIncludeLowerExtent,
+            /*genDefaultBounds=*/
+            llvm::clv2::getOptValOrDefault<
+                &llvm::clv2::FLANG_OpenACCGenDefaultBounds>(
+                converter.getMLIRContext().getOptionsContext()),
+            /*strideIncludeLowerExtent=*/
+            llvm::clv2::getOptValOrDefault<
+                &llvm::clv2::FLANG_OpenACCStrideIncludeLowerExtent>(
+                converter.getMLIRContext().getOptionsContext()),
             /*loadAllocatableAndPointerComponent=*/false);
     LLVM_DEBUG(llvm::dbgs() << __func__ << "\n"; info.dump(llvm::dbgs()));
 
@@ -1318,8 +1301,8 @@ createRegionOp(fir::FirOpBuilder &builder, mlir::Location loc,
 
   // If it is an unstructured region and is not the outer region of a combined
   // construct, create empty blocks for all evaluations.
-  if (eval.lowerAsUnstructured() && !outerCombined &&
-      eval.hasNestedEvaluations())
+  if (eval.lowerAsUnstructured(builder.getContext()->getOptionsContext()) &&
+      !outerCombined && eval.hasNestedEvaluations())
     Fortran::lower::createEmptyRegionBlocks<mlir::acc::TerminatorOp,
                                             mlir::acc::YieldOp>(
         builder, eval.getNestedEvaluations());
@@ -2049,7 +2032,9 @@ static void remapCommonBlockMember(
 void AccDataMap::remapDataOperandSymbols(
     Fortran::lower::AbstractConverter &converter, fir::FirOpBuilder &builder,
     mlir::Region &region) const {
-  if (!enableSymbolRemapping || empty())
+  if (!llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_OpenACCRemapSymbols>(
+          converter.getMLIRContext().getOptionsContext()) ||
+      empty())
     return;
 
   // Map Symbols that appeared inside data clauses to a new hlfir.declare whose
@@ -2254,7 +2239,8 @@ buildACCLoopOp(Fortran::lower::AbstractConverter &converter,
   // Look at the do/do concurrent loops to extract bounds information unless
   // this loop is lowered in an unstructured fashion, in which case bounds are
   // not represented on acc.loop and explicit control flow is used inside body.
-  if (!eval.lowerAsUnstructured()) {
+  if (!eval.lowerAsUnstructured(
+          converter.getMLIRContext().getOptionsContext())) {
     processDoLoopBounds(converter, semanticsContext, currentLocation, stmtCtx,
                         builder, outerDoConstruct, eval, lowerbounds,
                         upperbounds, steps, privateOperands, ivPrivate, ivTypes,
@@ -2318,7 +2304,8 @@ buildACCLoopOp(Fortran::lower::AbstractConverter &converter,
   for (auto &[hostAssocSym, ultimateSym] : localSymPairs)
     converter.copySymbolBinding(ultimateSym, hostAssocSym);
 
-  if (!eval.lowerAsUnstructured()) {
+  if (!eval.lowerAsUnstructured(
+          converter.getMLIRContext().getOptionsContext())) {
     for (auto [arg, iv] :
          llvm::zip(loopOp.getLoopRegions().front()->front().getArguments(),
                    ivPrivate)) {
@@ -2567,7 +2554,9 @@ static mlir::acc::LoopOp createLoopOp(
 
   llvm::SmallVector<mlir::Type> retTy;
   mlir::Value yieldValue;
-  if (eval.lowerAsUnstructured() && hasEarlyReturn(eval)) {
+  if (eval.lowerAsUnstructured(
+          converter.getMLIRContext().getOptionsContext()) &&
+      hasEarlyReturn(eval)) {
     // When there is a return statement inside the loop, add a result to the
     // acc.loop that will be used in a conditional branch after the loop to
     // return.
@@ -2699,9 +2688,13 @@ genACC(Fortran::lower::AbstractConverter &converter,
   const auto &outerDoConstruct =
       std::get<std::optional<Fortran::parser::DoConstruct>>(loopConstruct.t);
 
-  if (outerDoConstruct.has_value() && eval.lowerAsUnstructured() &&
+  if (outerDoConstruct.has_value() &&
+      eval.lowerAsUnstructured(
+          converter.getMLIRContext().getOptionsContext()) &&
       loopWillBeIndependent(converter, accClauseList, loopDirective.v) &&
-      !emitIndependentLoopsAsUnstructured)
+      !llvm::clv2::getOptValOrDefault<
+          &llvm::clv2::FLANG_EmitIndependentAsUnstructured>(
+          converter.getMLIRContext().getOptionsContext()))
     TODO(currentLocation,
          "unstructured do loop in independent OpenACC loop construct");
 
@@ -3315,7 +3308,7 @@ static void genACCDataOp(Fortran::lower::AbstractConverter &converter,
   addOperands(operands, operandSegments, dataClauseOperands);
 
   if (dataClauseOperands.empty() && !hasDefaultNone && !hasDefaultPresent &&
-      !eval.lowerAsUnstructured())
+      !eval.lowerAsUnstructured(converter.getMLIRContext().getOptionsContext()))
     return;
 
   auto dataOp = createRegionOp<mlir::acc::DataOp, mlir::acc::TerminatorOp>(
@@ -3515,9 +3508,13 @@ genACC(Fortran::lower::AbstractConverter &converter,
       converter.genLocation(beginCombinedDirective.source);
   Fortran::lower::StatementContext stmtCtx;
 
-  if (outerDoConstruct.has_value() && eval.lowerAsUnstructured() &&
+  if (outerDoConstruct.has_value() &&
+      eval.lowerAsUnstructured(
+          converter.getMLIRContext().getOptionsContext()) &&
       loopWillBeIndependent(converter, accClauseList, combinedDirective.v) &&
-      !emitIndependentLoopsAsUnstructured)
+      !llvm::clv2::getOptValOrDefault<
+          &llvm::clv2::FLANG_EmitIndependentAsUnstructured>(
+          converter.getMLIRContext().getOptionsContext()))
     TODO(currentLocation, "unstructured do loop in combined acc construct");
 
   if (combinedDirective.v == llvm::acc::ACCD_kernels_loop) {
@@ -5482,8 +5479,13 @@ static bool isInsideSeqOpenACCRoutine(fir::FirOpBuilder &builder) {
 
 bool Fortran::lower::shouldLowerDoConstructAsAccLoop(
     fir::FirOpBuilder &builder) {
-  return (lowerDoLoopToAccLoop && isInsideOpenACCComputeConstruct(builder)) ||
-         (lowerDoLoopToAccLoopInAccRoutine && isInsideOpenACCRoutine(builder));
+  auto &optsCtx = builder.getContext()->getOptionsContext();
+  return (llvm::clv2::getOptValOrDefault<
+              &llvm::clv2::FLANG_OpenACCDoLoopToAccLoop>(optsCtx) &&
+          isInsideOpenACCComputeConstruct(builder)) ||
+         (llvm::clv2::getOptValOrDefault<
+              &llvm::clv2::FLANG_OpenACCDoLoopInAccRoutine>(optsCtx) &&
+          isInsideOpenACCRoutine(builder));
 }
 
 void Fortran::lower::setInsertionPointAfterOpenACCLoopIfInside(
@@ -5591,11 +5593,14 @@ mlir::Operation *Fortran::lower::genOpenACCLoopFromDoConstruct(
   // wrappable loop that reaches this condition is a loop that is NOT attached
   // to any OpenACC directives (e.g. `kernels` ops), it is just nested inside
   // the kernels region.
-  if (eval.lowerAsUnstructured()) {
+  if (eval.lowerAsUnstructured(
+          converter.getMLIRContext().getOptionsContext())) {
     if (mlir::isa_and_present<mlir::acc::KernelsOp>(
             mlir::acc::getEnclosingComputeOp(
                 converter.getFirOpBuilder().getRegion())) &&
-        !Fortran::lower::pft::isWrappableConstruct(eval, semanticsContext))
+        !Fortran::lower::pft::isWrappableConstruct(
+            eval, semanticsContext,
+            converter.getMLIRContext().getOptionsContext()))
       TODO(converter.getCurrentLocation(),
            "unstructured do loop in acc kernels");
     return nullptr;

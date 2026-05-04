@@ -3,6 +3,7 @@ if ( LLVM_INCLUDE_UTILS )
 endif()
 
 set(LLVM_LINK_COMPONENTS
+  AllOptions
   AllTargetsDescs
   AllTargetsDisassemblers
   AllTargetsInfos

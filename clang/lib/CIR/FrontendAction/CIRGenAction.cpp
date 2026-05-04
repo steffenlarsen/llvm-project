@@ -199,6 +199,8 @@ public:
       if (CI.getDiagnostics().hasErrorOccurred())
         return;
 
+      if (auto *MllvmCtx = CI.getLLVMOptionsContext())
+        LLVMCtx.setOptionsContext(*MllvmCtx);
       std::unique_ptr<llvm::Module> LLVMModule = lowerFromCIRToLLVMIR(
           MlirModule, LLVMCtx, C.getLangOpts().OpenMP, mlirSaveTempsOutFile,
           &CI.getVirtualFileSystem());
@@ -273,7 +275,9 @@ void CIRGenConsumer::anchor() {}
 
 CIRGenAction::CIRGenAction(OutputType Act, mlir::MLIRContext *MLIRCtx)
     : MLIRCtx(MLIRCtx ? MLIRCtx : new mlir::MLIRContext),
-      Ctx(std::make_unique<llvm::LLVMContext>()), Action(Act) {}
+      Ctx(std::make_unique<llvm::LLVMContext>(
+          llvm::clv2::defaultOptionsContext())),
+      Action(Act) {}
 
 CIRGenAction::~CIRGenAction() { MLIRMod.release(); }
 

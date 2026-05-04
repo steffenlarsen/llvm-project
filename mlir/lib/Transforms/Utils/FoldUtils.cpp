@@ -234,7 +234,7 @@ LogicalResult OperationFolder::tryToFold(Operation *op,
   int count = 1;
   do {
     LDBG() << "Folded in place #" << count
-           << " times: " << OpWithFlags(op, OpPrintingFlags().skipRegions());
+           << " times: " << OpWithFlags(op, opPrintingFlags(op).skipRegions());
   } while (count++ < maxIterations && foldResults.empty() &&
            succeeded(op->fold(foldResults)));
 

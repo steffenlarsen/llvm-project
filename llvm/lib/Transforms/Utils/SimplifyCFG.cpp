@@ -66,16 +66,17 @@
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LockstepReverseIterator.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <algorithm>
 #include <cassert>
@@ -97,115 +98,113 @@ using namespace PatternMatch;
 
 namespace llvm {
 
-cl::opt<bool> RequireAndPreserveDomTree(
-    "simplifycfg-require-and-preserve-domtree", cl::Hidden,
-
-    cl::desc(
-        "Temporary development switch used to gradually uplift SimplifyCFG "
-        "into preserving DomTree,"));
+bool getRequireAndPreserveDomTree(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::TransformUtilsOptsReg,
+                           &clv2::TU_RequireAndPreserveDomTree>(Ctx, false);
+}
 
 // Chosen as 2 so as to be cheap, but still to have enough power to fold
 // a select, so the "clamp" idiom (of a min followed by a max) will be caught.
 // To catch this, we need to fold a compare and a select, hence '2' being the
 // minimum reasonable default.
-static cl::opt<unsigned> PHINodeFoldingThreshold(
-    "phi-node-folding-threshold", cl::Hidden, cl::init(2),
-    cl::desc(
-        "Control the amount of phi node folding to perform (default = 2)"));
+static unsigned getPHINodeFoldingThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_PHINodeFoldingThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> TwoEntryPHINodeFoldingThreshold(
-    "two-entry-phi-node-folding-threshold", cl::Hidden, cl::init(4),
-    cl::desc("Control the maximal total instruction cost that we are willing "
-             "to speculatively execute to fold a 2-entry PHI node into a "
-             "select (default = 4)"));
+static unsigned getTwoEntryPHINodeFoldingThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_TwoEntryPHINodeFoldingThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    HoistCommon("simplifycfg-hoist-common", cl::Hidden, cl::init(true),
-                cl::desc("Hoist common instructions up to the parent block"));
+static bool getHoistCommon(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_HoistCommon>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> HoistLoadsWithCondFaulting(
-    "simplifycfg-hoist-loads-with-cond-faulting", cl::Hidden, cl::init(true),
-    cl::desc("Hoist loads if the target supports conditional faulting"));
+static bool getHoistLoadsWithCondFaulting(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_HoistLoadsWithCondFaulting>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> HoistStoresWithCondFaulting(
-    "simplifycfg-hoist-stores-with-cond-faulting", cl::Hidden, cl::init(true),
-    cl::desc("Hoist stores if the target supports conditional faulting"));
+static bool getHoistStoresWithCondFaulting(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_HoistStoresWithCondFaulting>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> HoistLoadsStoresWithCondFaultingThreshold(
-    "hoist-loads-stores-with-cond-faulting-threshold", cl::Hidden, cl::init(6),
-    cl::desc("Control the maximal conditional load/store that we are willing "
-             "to speculatively execute to eliminate conditional branch "
-             "(default = 6)"));
+static unsigned
+getHoistLoadsStoresWithCondFaultingThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::TU_HoistLoadsStoresWithCondFaultingThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-    HoistCommonSkipLimit("simplifycfg-hoist-common-skip-limit", cl::Hidden,
-                         cl::init(20),
-                         cl::desc("Allow reordering across at most this many "
-                                  "instructions when hoisting"));
+static unsigned getHoistCommonSkipLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_HoistCommonSkipLimit>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    SinkCommon("simplifycfg-sink-common", cl::Hidden, cl::init(true),
-               cl::desc("Sink common instructions down to the end block"));
+static bool getSinkCommon(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_SinkCommon>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> HoistCondStores(
-    "simplifycfg-hoist-cond-stores", cl::Hidden, cl::init(true),
-    cl::desc("Hoist conditional stores if an unconditional store precedes"));
+static bool getHoistCondStores(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_HoistCondStores>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> MergeCondStores(
-    "simplifycfg-merge-cond-stores", cl::Hidden, cl::init(true),
-    cl::desc("Hoist conditional stores even if an unconditional store does not "
-             "precede - hoist multiple conditional stores into a single "
-             "predicated store"));
+static bool getMergeCondStores(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_MergeCondStores>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> MergeCondStoresAggressively(
-    "simplifycfg-merge-cond-stores-aggressively", cl::Hidden, cl::init(false),
-    cl::desc("When merging conditional stores, do so even if the resultant "
-             "basic blocks are unlikely to be if-converted as a result"));
+static bool getMergeCondStoresAggressively(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_MergeCondStoresAggressively>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<bool> SpeculateOneExpensiveInst(
-    "speculate-one-expensive-inst", cl::Hidden, cl::init(true),
-    cl::desc("Allow exactly one expensive instruction to be speculatively "
-             "executed"));
+static bool getSpeculateOneExpensiveInst(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_SpeculateOneExpensiveInst>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> MaxSpeculationDepth(
-    "max-speculation-depth", cl::Hidden, cl::init(10),
-    cl::desc("Limit maximum recursion depth when calculating costs of "
-             "speculatively executed instructions"));
+static unsigned getMaxSpeculationDepth(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_MaxSpeculationDepth>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<int>
-    MaxSmallBlockSize("simplifycfg-max-small-block-size", cl::Hidden,
-                      cl::init(10),
-                      cl::desc("Max size of a block which is still considered "
-                               "small enough to thread through"));
+static int getMaxSmallBlockSize(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_MaxSmallBlockSize>(
+      F.getContext().getOptionsContext());
+}
 
-// Two is chosen to allow one negation and a logical combine.
-static cl::opt<unsigned>
-    BranchFoldThreshold("simplifycfg-branch-fold-threshold", cl::Hidden,
-                        cl::init(2),
-                        cl::desc("Maximum cost of combining conditions when "
-                                 "folding branches"));
+static unsigned getBranchFoldThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_BranchFoldThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> BranchFoldToCommonDestVectorMultiplier(
-    "simplifycfg-branch-fold-common-dest-vector-multiplier", cl::Hidden,
-    cl::init(2),
-    cl::desc("Multiplier to apply to threshold when determining whether or not "
-             "to fold branch to common destination when vector operations are "
-             "present"));
+static unsigned getBranchFoldToCommonDestVectorMultiplier(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::TU_BranchFoldToCommonDestVectorMultiplier>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> EnableMergeCompatibleInvokes(
-    "simplifycfg-merge-compatible-invokes", cl::Hidden, cl::init(true),
-    cl::desc("Allow SimplifyCFG to merge invokes together when appropriate"));
+static bool getEnableMergeCompatibleInvokes(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_EnableMergeCompatibleInvokes>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> MaxSwitchCasesPerResult(
-    "max-switch-cases-per-result", cl::Hidden, cl::init(16),
-    cl::desc("Limit cases to analyze when converting a switch to select"));
+static unsigned getMaxSwitchCasesPerResult(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_MaxSwitchCasesPerResult>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> MaxJumpThreadingLiveBlocks(
-    "max-jump-threading-live-blocks", cl::Hidden, cl::init(24),
-    cl::desc("Limit number of blocks a define in a threaded block is allowed "
-             "to be live in"));
-
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
+static unsigned getMaxJumpThreadingLiveBlocks(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_MaxJumpThreadingLiveBlocks>(
+      F.getContext().getOptionsContext());
+}
 
 } // end namespace llvm
 
@@ -462,7 +461,7 @@ static bool dominatesMergePoint(
   // so limit the recursion depth.
   // TODO: While this recursion limit does prevent pathological behavior, it
   // would be better to track visited instructions to avoid cycles.
-  if (Depth == MaxSpeculationDepth)
+  if (Depth == getMaxSpeculationDepth(*BB->getParent()))
     return false;
 
   Instruction *I = dyn_cast<Instruction>(V);
@@ -514,8 +513,8 @@ static bool dominatesMergePoint(
   // is expected to be undone in CodeGenPrepare if the speculation has not
   // enabled further IR optimizations.
   if (Cost > Budget &&
-      (!SpeculateOneExpensiveInst || !AggressiveInsts.empty() || Depth > 0 ||
-       !Cost.isValid()))
+      (!getSpeculateOneExpensiveInst(*BB->getParent()) ||
+       !AggressiveInsts.empty() || Depth > 0 || !Cost.isValid()))
     return false;
 
   // Okay, we can only really hoist these out if their operands do
@@ -1849,10 +1848,10 @@ static bool isSafeCheapLoadStore(const Instruction *I,
   // Not handle volatile or atomic.
   bool IsStore = false;
   if (auto *L = dyn_cast<LoadInst>(I)) {
-    if (!L->isSimple() || !HoistLoadsWithCondFaulting)
+    if (!L->isSimple() || !getHoistLoadsWithCondFaulting(*I->getFunction()))
       return false;
   } else if (auto *S = dyn_cast<StoreInst>(I)) {
-    if (!S->isSimple() || !HoistStoresWithCondFaulting)
+    if (!S->isSimple() || !getHoistStoresWithCondFaulting(*I->getFunction()))
       return false;
     IsStore = true;
   } else
@@ -2058,7 +2057,7 @@ bool SimplifyCFGOpt::hoistCommonCodeFromSuccessors(Instruction *TI,
       Changed = true;
       NumHoistCommonInstrs += SuccIterPairs.size();
     } else {
-      if (NumSkipped >= HoistCommonSkipLimit) {
+      if (NumSkipped >= getHoistCommonSkipLimit(*BB->getParent())) {
         hoistLockstepIdenticalDbgVariableRecords(TI, I1, OtherInsts);
         return Changed;
       }
@@ -2977,7 +2976,7 @@ static void mergeCompatibleInvokesImpl(ArrayRef<InvokeInst *> Invokes,
 /// edges invoke0->cont0 and invoke1->cont1 are "compatible",
 /// and the invoked functions are "compatible".
 static bool mergeCompatibleInvokes(BasicBlock *BB, DomTreeUpdater *DTU) {
-  if (!EnableMergeCompatibleInvokes)
+  if (!getEnableMergeCompatibleInvokes(*BB->getParent()))
     return false;
 
   bool Changed = false;
@@ -3165,8 +3164,8 @@ static bool validateAndCostRequiredSelects(BasicBlock *BB, BasicBlock *ThenBB,
 
     InstructionCost OrigCost = OrigCE ? computeSpeculationCost(OrigCE, TTI) : 0;
     InstructionCost ThenCost = ThenCE ? computeSpeculationCost(ThenCE, TTI) : 0;
-    InstructionCost MaxCost =
-        2 * PHINodeFoldingThreshold * TargetTransformInfo::TCC_Basic;
+    InstructionCost MaxCost = 2 * getPHINodeFoldingThreshold(*BB->getParent()) *
+                              TargetTransformInfo::TCC_Basic;
     if (OrigCost + ThenCost > MaxCost)
       return false;
 
@@ -3200,7 +3199,8 @@ static bool isProfitableToSpeculate(const CondBrInst *BI,
   uint64_t EndWeight = *Invert ? TWeight : FWeight;
   BranchProbability BIEndProb =
       BranchProbability::getBranchProbability(EndWeight, TWeight + FWeight);
-  BranchProbability Likely = TTI.getPredictableBranchThreshold();
+  BranchProbability Likely = TTI.getPredictableBranchThreshold(
+      BI->getFunction()->getContext().getOptionsContext());
   return BIEndProb < Likely;
 }
 
@@ -3248,8 +3248,8 @@ bool SimplifyCFGOpt::speculativelyExecuteBB(CondBrInst *BI,
 
   BasicBlock *BB = BI->getParent();
   BasicBlock *EndBB = ThenBB->getTerminator()->getSuccessor(0);
-  InstructionCost Budget =
-      PHINodeFoldingThreshold * TargetTransformInfo::TCC_Basic;
+  InstructionCost Budget = getPHINodeFoldingThreshold(*BB->getParent()) *
+                           TargetTransformInfo::TCC_Basic;
 
   // If ThenBB is actually on the false edge of the conditional branch, remember
   // to swap the select operands later.
@@ -3297,10 +3297,10 @@ bool SimplifyCFGOpt::speculativelyExecuteBB(CondBrInst *BI,
 
     // Only speculatively execute a single instruction (not counting the
     // terminator) for now.
-    bool IsSafeCheapLoadStore = HoistLoadsStores &&
-                                isSafeCheapLoadStore(&I, TTI) &&
-                                SpeculatedConditionalLoadsStores.size() <
-                                    HoistLoadsStoresWithCondFaultingThreshold;
+    bool IsSafeCheapLoadStore =
+        HoistLoadsStores && isSafeCheapLoadStore(&I, TTI) &&
+        SpeculatedConditionalLoadsStores.size() <
+            getHoistLoadsStoresWithCondFaultingThreshold(*BB->getParent());
     // Not count load/store into cost if target supports conditional faulting
     // b/c it's cheap to speculate it.
     if (IsSafeCheapLoadStore)
@@ -3314,13 +3314,14 @@ bool SimplifyCFGOpt::speculativelyExecuteBB(CondBrInst *BI,
     // Don't hoist the instruction if it's unsafe or expensive.
     if (!IsSafeCheapLoadStore &&
         !isSafeToSpeculativelyExecute(&I, BI, Options.AC) &&
-        !(HoistCondStores && !SpeculatedStoreValue &&
+        !(getHoistCondStores(*BB->getParent()) && !SpeculatedStoreValue &&
           (SpeculatedStoreValue =
                isSafeToSpeculateStore(&I, BB, ThenBB, EndBB))))
       return false;
     if (!IsSafeCheapLoadStore && !SpeculatedStoreValue &&
         computeSpeculationCost(&I, TTI) >
-            PHINodeFoldingThreshold * TargetTransformInfo::TCC_Basic)
+            getPHINodeFoldingThreshold(*BB->getParent()) *
+                TargetTransformInfo::TCC_Basic)
       return false;
 
     // Store the store speculation candidate.
@@ -3481,16 +3482,17 @@ using BlocksSet = SmallPtrSet<BasicBlock *, 8>;
 
 // Return false if number of blocks searched is too much.
 static bool findReaching(BasicBlock *BB, BasicBlock *DefBB,
-                         BlocksSet &ReachesNonLocalUses) {
+                         BlocksSet &ReachesNonLocalUses,
+                         unsigned MaxLiveBlocks) {
   if (BB == DefBB)
     return true;
   if (!ReachesNonLocalUses.insert(BB).second)
     return true;
 
-  if (ReachesNonLocalUses.size() > MaxJumpThreadingLiveBlocks)
+  if (ReachesNonLocalUses.size() > MaxLiveBlocks)
     return false;
   for (BasicBlock *Pred : predecessors(BB))
-    if (!findReaching(Pred, DefBB, ReachesNonLocalUses))
+    if (!findReaching(Pred, DefBB, ReachesNonLocalUses, MaxLiveBlocks))
       return false;
   return true;
 }
@@ -3513,7 +3515,7 @@ static bool blockIsSimpleEnoughToThreadThrough(BasicBlock *BB,
     // We will delete Phis while threading, so Phis should not be accounted in
     // block's size.
     if (!EphTracker.track(&I) && !isa<PHINode>(I)) {
-      if (Size++ > MaxSmallBlockSize)
+      if (Size++ > getMaxSmallBlockSize(*BB->getParent()))
         return false; // Don't clone large BB's.
     }
 
@@ -3668,9 +3670,10 @@ static std::optional<bool> foldCondBranchOnValueKnownInPredecessorImpl(
 
   // Search backward from NonLocalUseBlocks to find which blocks
   // reach non-local uses.
+  unsigned MaxLiveBlocks = getMaxJumpThreadingLiveBlocks(*BB->getParent());
   for (BasicBlock *UseBB : NonLocalUseBlocks)
     // Give up if too many blocks are searched.
-    if (!findReaching(UseBB, BB, ReachesNonLocalUseBlocks))
+    if (!findReaching(UseBB, BB, ReachesNonLocalUseBlocks, MaxLiveBlocks))
       return false;
 
   for (const auto &Pair : KnownValues) {
@@ -3873,7 +3876,8 @@ static bool foldTwoEntryPHINode(PHINode *PN, const TargetTransformInfo &TTI,
         (TWeight + FWeight) != 0) {
       BranchProbability BITrueProb =
           BranchProbability::getBranchProbability(TWeight, TWeight + FWeight);
-      BranchProbability Likely = TTI.getPredictableBranchThreshold();
+      BranchProbability Likely = TTI.getPredictableBranchThreshold(
+          DomBI->getFunction()->getContext().getOptionsContext());
       BranchProbability BIFalseProb = BITrueProb.getCompl();
       if (IfBlocks.size() == 1) {
         BranchProbability BIBBProb =
@@ -3910,7 +3914,8 @@ static bool foldTwoEntryPHINode(PHINode *PN, const TargetTransformInfo &TTI,
   SmallPtrSet<Instruction *, 2> ZeroCostInstructions;
   InstructionCost Cost = 0;
   InstructionCost Budget =
-      TwoEntryPHINodeFoldingThreshold * TargetTransformInfo::TCC_Basic;
+      getTwoEntryPHINodeFoldingThreshold(*PN->getFunction()) *
+      TargetTransformInfo::TCC_Basic;
   if (SpeculateUnpredictables && IsUnpredictable)
     Budget += TTI.getBranchMispredictPenalty();
 
@@ -4079,7 +4084,8 @@ shouldFoldCondBranchesToCommonDestination(CondBrInst *BI, CondBrInst *PBI,
       (PTWeight + PFWeight) != 0) {
     PBITrueProb =
         BranchProbability::getBranchProbability(PTWeight, PTWeight + PFWeight);
-    Likely = TTI->getPredictableBranchThreshold();
+    Likely = TTI->getPredictableBranchThreshold(
+        BI->getFunction()->getContext().getOptionsContext());
   }
 
   if (PBI->getSuccessor(0) == BI->getSuccessor(0)) {
@@ -4277,7 +4283,7 @@ bool llvm::foldBranchToCommonDest(CondBrInst *BI, DomTreeUpdater *DTU,
                              !isa<CmpInst>(PBI->getCondition())))
         Cost += TTI->getArithmeticInstrCost(Instruction::Xor, Ty, CostKind);
 
-      if (Cost > BranchFoldThreshold)
+      if (Cost > getBranchFoldThreshold(*BB->getParent()))
         continue;
     }
 
@@ -4326,7 +4332,8 @@ bool llvm::foldBranchToCommonDest(CondBrInst *BI, DomTreeUpdater *DTU,
 
       // Early exits once we reach the limit.
       if (NumBonusInsts >
-          BonusInstThreshold * BranchFoldToCommonDestVectorMultiplier)
+          BonusInstThreshold *
+              getBranchFoldToCommonDestVectorMultiplier(*BB->getParent()))
         return false;
     }
 
@@ -4343,7 +4350,9 @@ bool llvm::foldBranchToCommonDest(CondBrInst *BI, DomTreeUpdater *DTU,
   }
   if (NumBonusInsts >
       BonusInstThreshold *
-          (SawVectorOp ? BranchFoldToCommonDestVectorMultiplier : 1))
+          (SawVectorOp
+               ? getBranchFoldToCommonDestVectorMultiplier(*BB->getParent())
+               : 1))
     return false;
 
   // Ok, we have the budget. Perform the transformation.
@@ -4480,8 +4489,8 @@ static bool mergeConditionalStoreToAddress(
     // instructions inside are all cheap (arithmetic/GEPs), it's worthwhile to
     // thread this store.
     InstructionCost Cost = 0;
-    InstructionCost Budget =
-        PHINodeFoldingThreshold * TargetTransformInfo::TCC_Basic;
+    InstructionCost Budget = getPHINodeFoldingThreshold(*PostBB->getParent()) *
+                             TargetTransformInfo::TCC_Basic;
     for (auto &I : *BB) {
       // Consider terminator instruction to be free.
       if (I.isTerminator())
@@ -4508,7 +4517,7 @@ static bool mergeConditionalStoreToAddress(
   };
 
   const std::array<StoreInst *, 2> FreeStores = {PStore, QStore};
-  if (!MergeCondStoresAggressively &&
+  if (!getMergeCondStoresAggressively(*PostBB->getParent()) &&
       (!IsWorthwhile(PTB, FreeStores) || !IsWorthwhile(PFB, FreeStores) ||
        !IsWorthwhile(QTB, FreeStores) || !IsWorthwhile(QFB, FreeStores)))
     return false;
@@ -4565,7 +4574,8 @@ static bool mergeConditionalStoreToAddress(
       std::swap(PWeights[0], PWeights[1]);
     if (InvertQCond)
       std::swap(QWeights[0], QWeights[1]);
-    auto CombinedWeights = getDisjunctionWeights(PWeights, QWeights);
+    auto CombinedWeights =
+        getDisjunctionWeights(PBranch->getContext(), PWeights, QWeights);
     setFittedBranchWeights(*PostBB->getTerminator(),
                            {CombinedWeights[0], CombinedWeights[1]},
                            /*IsExpected=*/false, /*ElideAllZero=*/true);
@@ -4802,7 +4812,8 @@ static bool SimplifyCondBranchToCondBranch(CondBrInst *PBI, CondBrInst *BI,
   // If both branches are conditional and both contain stores to the same
   // address, remove the stores from the conditionals and create a conditional
   // merged store at the end.
-  if (MergeCondStores && mergeConditionalStores(PBI, BI, DTU, DL, TTI))
+  if (getMergeCondStores(*BB->getParent()) &&
+      mergeConditionalStores(PBI, BI, DTU, DL, TTI))
     return true;
 
   // If this is a conditional branch in an empty block, and if any
@@ -4846,7 +4857,8 @@ static bool SimplifyCondBranchToCondBranch(CondBrInst *PBI, CondBrInst *BI,
         PredWeights[PBIOp],
         static_cast<uint64_t>(PredWeights[0]) + PredWeights[1]);
 
-    BranchProbability Likely = TTI.getPredictableBranchThreshold();
+    BranchProbability Likely = TTI.getPredictableBranchThreshold(
+        BI->getFunction()->getContext().getOptionsContext());
     if (CommonDestProb >= Likely)
       return false;
   }
@@ -5139,7 +5151,7 @@ bool SimplifyCFGOpt::simplifySwitchOnSelectRemap(SwitchInst *SI,
     if (Negate)
       std::swap(SelectTrueWeight, SelectFalseWeight);
     if (SwitchHasBranchWeights && SelectHasBranchWeights &&
-        !ProfcheckDisableMetadataFixes) {
+        !getProfcheckDisableMetadataFixes(SI->getContext())) {
       // We update the branch weights by subtracting P(x=C) from the probability
       // of case K in the switch (what C redirect to before the transformation),
       // plugging the probability for case C into the switch (which we derive
@@ -6752,7 +6764,7 @@ static bool initializeUniqueCases(SwitchInst *SI, PHINode *&PHI,
         mapCaseToResult(CaseVal, UniqueResults, Results.begin()->second);
 
     // Early out if there are too many cases for this result.
-    if (NumCasesForResult > MaxSwitchCasesPerResult)
+    if (NumCasesForResult > getMaxSwitchCasesPerResult(*SI->getFunction()))
       return false;
 
     // Early out if there are too many unique results.
@@ -8631,7 +8643,7 @@ bool SimplifyCFGOpt::simplifySwitch(SwitchInst *SI, IRBuilder<> &Builder) {
   if (reduceSwitchRange(SI, Builder, DL, TTI))
     return requestResimplify();
 
-  if (HoistCommon &&
+  if (getHoistCommon(*BB->getParent()) &&
       hoistCommonCodeFromSuccessors(SI, !Options.HoistCommonInsts))
     return requestResimplify();
 
@@ -9000,7 +9012,7 @@ bool SimplifyCFGOpt::simplifyCondBranch(CondBrInst *BI, IRBuilder<> &Builder) {
   // can hoist it up to the branching block.
   if (BI->getSuccessor(0)->getSinglePredecessor()) {
     if (BI->getSuccessor(1)->getSinglePredecessor()) {
-      if (HoistCommon &&
+      if (getHoistCommon(*BB->getParent()) &&
           hoistCommonCodeFromSuccessors(BI, !Options.HoistCommonInsts))
         return requestResimplify();
 
@@ -9016,7 +9028,8 @@ bool SimplifyCFGOpt::simplifyCondBranch(CondBrInst *BI, IRBuilder<> &Builder) {
                 continue;
               } else if (!isSafeCheapLoadStore(&I, TTI) ||
                          SpeculatedConditionalLoadsStores.size() ==
-                             HoistLoadsStoresWithCondFaultingThreshold) {
+                             getHoistLoadsStoresWithCondFaultingThreshold(
+                                 *BB->getParent())) {
                 return false;
               }
               SpeculatedConditionalLoadsStores.push_back(&I);
@@ -9064,7 +9077,7 @@ bool SimplifyCFGOpt::simplifyCondBranch(CondBrInst *BI, IRBuilder<> &Builder) {
           return requestResimplify();
 
   // Look for diamond patterns.
-  if (MergeCondStores)
+  if (getMergeCondStores(*BB->getParent()))
     if (BasicBlock *PrevBB = allPredecessorsComeFromSameSource(BB))
       if (CondBrInst *PBI = dyn_cast<CondBrInst>(PrevBB->getTerminator()))
         if (PBI != BI)
@@ -9321,7 +9334,7 @@ bool SimplifyCFGOpt::simplifyOnce(BasicBlock *BB) {
   if (MergeBlockIntoPredecessor(BB, DTU))
     return true;
 
-  if (SinkCommon && Options.SinkCommonInsts) {
+  if (getSinkCommon(*BB->getParent()) && Options.SinkCommonInsts) {
     if (sinkCommonCodeFromPredecessors(BB, DTU) ||
         mergeCompatibleInvokes(BB, DTU)) {
       // sinkCommonCodeFromPredecessors() does not automatically CSE PHI's,

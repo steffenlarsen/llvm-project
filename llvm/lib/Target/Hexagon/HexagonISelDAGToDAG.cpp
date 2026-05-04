@@ -18,35 +18,43 @@
 #include "llvm/CodeGen/FunctionLoweringInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsHexagon.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "hexagon-isel"
 #define PASS_NAME "Hexagon DAG->DAG Pattern Instruction Selection"
 
-static
-cl::opt<bool>
-EnableAddressRebalancing("isel-rebalance-addr", cl::Hidden, cl::init(true),
-  cl::desc("Rebalance address calculation trees to improve "
-          "instruction selection"));
+static bool EnableAddressRebalancing = true;
 
 // Rebalance only if this allows e.g. combining a GA with an offset or
 // factoring out a shift.
-static
-cl::opt<bool>
-RebalanceOnlyForOptimizations("rebalance-only-opt", cl::Hidden, cl::init(false),
-  cl::desc("Rebalance address tree only if this allows optimizations"));
 
-static
-cl::opt<bool>
-RebalanceOnlyImbalancedTrees("rebalance-only-imbal", cl::Hidden,
-  cl::init(false), cl::desc("Rebalance address tree only if it is imbalanced"));
+static bool CheckSingleUse = true;
 
-static cl::opt<bool> CheckSingleUse("hexagon-isel-su", cl::Hidden,
-  cl::init(true), cl::desc("Enable checking of SDNode's single-use status"));
+static bool getEnableAddressRebalancing(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_EnableAddressRebalancing>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getRebalanceOnlyForOptimizations(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_RebalanceOnlyForOptimizations>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getRebalanceOnlyImbalancedTrees(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_RebalanceOnlyImbalanced>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getCheckSingleUse(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_CheckSingleUse>(
+      F.getContext().getOptionsContext());
+}
 
 //===----------------------------------------------------------------------===//
 // Instruction Selector Implementation
@@ -1418,7 +1426,7 @@ void HexagonDAGToDAGISel::PreprocessISelDAG() {
     CurDAG->dump();
   });
 
-  if (EnableAddressRebalancing) {
+  if (getEnableAddressRebalancing(CurDAG->getMachineFunction().getFunction())) {
     rebalanceAddressTrees();
 
     DEBUG_WITH_TYPE("isel", {
@@ -1758,7 +1766,8 @@ bool HexagonDAGToDAGISel::isPositiveHalfWord(const SDNode *N) const {
 }
 
 bool HexagonDAGToDAGISel::hasOneUse(const SDNode *N) const {
-  return !CheckSingleUse || N->hasOneUse();
+  return !getCheckSingleUse(CurDAG->getMachineFunction().getFunction()) ||
+         N->hasOneUse();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -2307,8 +2316,9 @@ SDValue HexagonDAGToDAGISel::balanceSubTree(SDNode *N, bool TopLevel) {
     }
   }
 
-  if ((RebalanceOnlyForOptimizations && !CanFactorize && !CombinedGA) ||
-      (RebalanceOnlyImbalancedTrees && !Imbalanced)) {
+  const Function &F = CurDAG->getMachineFunction().getFunction();
+  if ((getRebalanceOnlyForOptimizations(F) && !CanFactorize && !CombinedGA) ||
+      (getRebalanceOnlyImbalancedTrees(F) && !Imbalanced)) {
     RootWeights[N] = CurrentWeight;
     RootHeights[N] = NodeHeights[SDValue(N, 0)];
 

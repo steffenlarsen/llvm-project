@@ -7,6 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Instrumentation/LowerAllowCheckPass.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
@@ -16,6 +18,7 @@
 #include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DiagnosticInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
@@ -32,14 +35,30 @@ using namespace llvm;
 
 #define DEBUG_TYPE "lower-allow-check"
 
-static cl::opt<int>
-    HotPercentileCutoff("lower-allow-check-percentile-cutoff-hot",
-                        cl::desc("Hot percentile cutoff."));
+static bool isHotPercentileCutoffSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::InstrumentationOptsReg,
+                               &clv2::INST_LowerAllowCheckPercentileCutoffHot>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<float>
-    RandomRate("lower-allow-check-random-rate",
-               cl::desc("Probability value in the range [0.0, 1.0] of "
-                        "unconditional pseudo-random checks."));
+static int getHotPercentileCutoff(const Function &F) {
+  return clv2::getOptValIfSpecified<
+      &clv2::InstrumentationOptsReg,
+      &clv2::INST_LowerAllowCheckPercentileCutoffHot>(
+      F.getContext().getOptionsContext(), 0);
+}
+
+static bool isRandomRateSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::InstrumentationOptsReg,
+                               &clv2::INST_LowerAllowCheckRandomRate>(
+      F.getContext().getOptionsContext());
+}
+
+static float getRandomRate(const Function &F) {
+  return clv2::getOptValIfSpecified<&clv2::InstrumentationOptsReg,
+                                    &clv2::INST_LowerAllowCheckRandomRate>(
+      F.getContext().getOptionsContext(), 0.0f);
+}
 
 STATISTIC(NumChecksTotal, "Number of checks");
 STATISTIC(NumChecksRemoved, "Number of removed checks");
@@ -108,8 +127,8 @@ static bool lowerAllowChecks(Function &F, FunctionAnalysisManager &AM,
   };
 
   auto GetCutoff = [&](const IntrinsicInst *II) -> unsigned {
-    if (HotPercentileCutoff.getNumOccurrences())
-      return HotPercentileCutoff;
+    if (isHotPercentileCutoffSpecified(F))
+      return getHotPercentileCutoff(F);
     else if (II->getIntrinsicID() == Intrinsic::allow_ubsan_check) {
       auto *Kind = cast<ConstantInt>(II->getArgOperand(0));
       if (Kind->getZExtValue() < Opts.cutoffs.size())
@@ -130,8 +149,8 @@ static bool lowerAllowChecks(Function &F, FunctionAnalysisManager &AM,
   };
 
   auto ShouldRemoveRandom = [&]() {
-    return RandomRate.getNumOccurrences() &&
-           !std::bernoulli_distribution(RandomRate)(GetRng());
+    return isRandomRateSpecified(F) &&
+           !std::bernoulli_distribution(getRandomRate(F))(GetRng());
   };
 
   auto ShouldRemove = [&](const IntrinsicInst *II) {
@@ -200,9 +219,30 @@ PreservedAnalyses LowerAllowCheckPass::run(Function &F,
              : PreservedAnalyses::all();
 }
 
-bool LowerAllowCheckPass::IsRequested() {
-  return RandomRate.getNumOccurrences() ||
-         HotPercentileCutoff.getNumOccurrences();
+bool LowerAllowCheckPass::IsRequested(const clv2::OptionsContext &Ctx) {
+  auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(Ctx);
+  if (O) {
+    if (O->specified<&clv2::INST_LowerAllowCheckRandomRate>())
+      return true;
+    if (O->specified<&clv2::INST_LowerAllowCheckPercentileCutoffHot>())
+      return true;
+  }
+  return false;
+}
+
+bool LowerAllowCheckPass::IsRequested(const Module &M,
+                                      const clv2::OptionsContext &Ctx) {
+  auto *O = clv2::getView<&clv2::InstrumentationOptsReg>(
+      M.getContext().getOptionsContext());
+  if (!O)
+    O = clv2::getView<&clv2::InstrumentationOptsReg>(Ctx);
+  if (O) {
+    if (O->specified<&clv2::INST_LowerAllowCheckRandomRate>())
+      return true;
+    if (O->specified<&clv2::INST_LowerAllowCheckPercentileCutoffHot>())
+      return true;
+  }
+  return false;
 }
 
 void LowerAllowCheckPass::printPipeline(

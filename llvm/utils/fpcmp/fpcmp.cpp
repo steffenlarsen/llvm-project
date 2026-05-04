@@ -11,29 +11,31 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
-namespace {
-  cl::opt<std::string>
-  File1(cl::Positional, cl::desc("<input file #1>"), cl::Required);
-  cl::opt<std::string>
-  File2(cl::Positional, cl::desc("<input file #2>"), cl::Required);
+inline constexpr clv2::OptionInfo<std::string> File1Opt{
+    "", "input file #1", clv2::Positional{}, clv2::Required};
+inline constexpr clv2::OptionInfo<std::string> File2Opt{
+    "", "input file #2", clv2::Positional{}, clv2::Required};
+inline constexpr clv2::OptionInfo<double> RelToleranceOpt{
+    "r", "Relative error tolerated", clv2::Init{0.0}};
+inline constexpr clv2::OptionInfo<double> AbsToleranceOpt{
+    "a", "Absolute error tolerated", clv2::Init{0.0}};
 
-  cl::opt<double>
-  RelTolerance("r", cl::desc("Relative error tolerated"), cl::init(0));
-  cl::opt<double>
-  AbsTolerance("a", cl::desc("Absolute error tolerated"), cl::init(0));
-}
+static constexpr clv2::OptionsRegistry<&File1Opt, &File2Opt, &RelToleranceOpt,
+                                       &AbsToleranceOpt>
+    FpcmpReg;
 
 int main(int argc, char **argv) {
-  cl::ParseCommandLineOptions(argc, argv);
+  auto Opts = FpcmpReg.parse(argc, argv);
 
   std::string ErrorMsg;
-  int DF = DiffFilesWithTolerance(File1, File2, AbsTolerance, RelTolerance,
-                                  &ErrorMsg);
+  int DF = DiffFilesWithTolerance(
+      Opts->get<&File1Opt>(), Opts->get<&File2Opt>(),
+      Opts->get<&AbsToleranceOpt>(), Opts->get<&RelToleranceOpt>(), &ErrorMsg);
   if (!ErrorMsg.empty())
     errs() << argv[0] << ": " << ErrorMsg << "\n";
   return DF;

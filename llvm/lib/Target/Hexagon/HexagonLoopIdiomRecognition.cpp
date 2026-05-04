@@ -50,12 +50,13 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils.h"
@@ -78,33 +79,48 @@
 
 using namespace llvm;
 
-static cl::opt<bool> DisableMemcpyIdiom("disable-memcpy-idiom",
-  cl::Hidden, cl::init(false),
-  cl::desc("Disable generation of memcpy in loop idiom recognition"));
+static unsigned CompileTimeMemSizeThreshold = 64;
 
-static cl::opt<bool> DisableMemmoveIdiom("disable-memmove-idiom",
-  cl::Hidden, cl::init(false),
-  cl::desc("Disable generation of memmove in loop idiom recognition"));
+static bool OnlyNonNestedMemmove = true;
 
-static cl::opt<unsigned> RuntimeMemSizeThreshold("runtime-mem-idiom-threshold",
-  cl::Hidden, cl::init(0), cl::desc("Threshold (in bytes) for the runtime "
-  "check guarding the memmove."));
+static bool HexagonVolatileMemcpy = false;
 
-static cl::opt<unsigned> CompileTimeMemSizeThreshold(
-  "compile-time-mem-idiom-threshold", cl::Hidden, cl::init(64),
-  cl::desc("Threshold (in bytes) to perform the transformation, if the "
-    "runtime loop count (mem transfer size) is known at compile-time."));
+static unsigned SimplifyLimit = 10000;
 
-static cl::opt<bool> OnlyNonNestedMemmove("only-nonnested-memmove-idiom",
-  cl::Hidden, cl::init(true),
-  cl::desc("Only enable generating memmove in non-nested loops"));
+static bool getDisableMemcpyIdiom(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DisableMemcpyIdiom>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> HexagonVolatileMemcpy(
-    "disable-hexagon-volatile-memcpy", cl::Hidden, cl::init(false),
-    cl::desc("Enable Hexagon-specific memcpy for volatile destination."));
+static bool getDisableMemmoveIdiom(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DisableMemmoveIdiom>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> SimplifyLimit("hlir-simplify-limit", cl::init(10000),
-  cl::Hidden, cl::desc("Maximum number of simplification steps in HLIR"));
+static unsigned getRuntimeMemSizeThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_RuntimeMemSizeThreshold>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getCompileTimeMemSizeThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_CompileTimeMemSizeThreshold>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getOnlyNonNestedMemmove(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_OnlyNonNestedMemmove>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getHexagonVolatileMemcpy(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_VolatileMemcpy>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getSimplifyLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_HLIRSimplifyLimit>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -212,9 +228,11 @@ public:
     ValueSetType Used;   // The set of all cloned values used by Root.
     ValueSetType Clones; // The set of all cloned values.
     LLVMContext &Ctx;
+    const Function &Fn;
 
     Context(Instruction *Exp)
-        : Ctx(Exp->getParent()->getParent()->getContext()) {
+        : Ctx(Exp->getParent()->getParent()->getContext()),
+          Fn(*Exp->getParent()->getParent()) {
       initialize(Exp);
     }
 
@@ -527,7 +545,7 @@ Value *Simplifier::simplify(Context &C) {
   WorkListType Q;
   Q.push_back(C.Root);
   unsigned Count = 0;
-  const unsigned Limit = SimplifyLimit;
+  const unsigned Limit = getSimplifyLimit(C.Fn);
 
   while (!Q.empty()) {
     if (Count++ >= Limit)
@@ -1933,7 +1951,9 @@ int HexagonLoopIdiomRecognize::getSCEVStride(const SCEVAddRecExpr *S) {
 
 bool HexagonLoopIdiomRecognize::isLegalStore(Loop *CurLoop, StoreInst *SI) {
   // Allow volatile stores if HexagonVolatileMemcpy is enabled.
-  if (!(SI->isVolatile() && HexagonVolatileMemcpy) && !SI->isSimple())
+  if (!(SI->isVolatile() &&
+        getHexagonVolatileMemcpy(*CurLoop->getHeader()->getParent())) &&
+      !SI->isSimple())
     return false;
 
   Value *StoredVal = SI->getValueOperand();
@@ -2050,9 +2070,11 @@ void HexagonLoopIdiomRecognize::collectStores(Loop *CurLoop, BasicBlock *BB,
 
 bool HexagonLoopIdiomRecognize::processCopyingStore(Loop *CurLoop,
       StoreInst *SI, const SCEV *BECount) {
-  assert((SI->isSimple() || (SI->isVolatile() && HexagonVolatileMemcpy)) &&
-         "Expected only non-volatile stores, or Hexagon-specific memcpy"
-         "to volatile destination.");
+  const Function &F = *CurLoop->getHeader()->getParent();
+  assert(
+      (SI->isSimple() || (SI->isVolatile() && getHexagonVolatileMemcpy(F))) &&
+      "Expected only non-volatile stores, or Hexagon-specific memcpy"
+      "to volatile destination.");
 
   Value *StorePtr = SI->getPointerOperand();
   auto *StoreEv = cast<SCEVAddRecExpr>(SE->getSCEV(StorePtr));
@@ -2131,7 +2153,7 @@ CleanupAndExit:
   }
 
   if (!Overlap) {
-    if (DisableMemcpyIdiom || !HasMemcpy) {
+    if (getDisableMemcpyIdiom(F) || !HasMemcpy) {
       ORE.emit([&]() {
         return OptimizationRemarkMissed(DEBUG_TYPE, "MemcpyDisabled",
                                         SI->getDebugLoc(), SI->getParent())
@@ -2162,7 +2184,7 @@ CleanupAndExit:
       goto CleanupAndExit;
     }
 
-    if (DisableMemmoveIdiom || !HasMemmove) {
+    if (getDisableMemmoveIdiom(F) || !HasMemmove) {
       ORE.emit([&]() {
         return OptimizationRemarkMissed(DEBUG_TYPE, "MemmoveDisabled",
                                         SI->getDebugLoc(), SI->getParent())
@@ -2171,7 +2193,7 @@ CleanupAndExit:
       goto CleanupAndExit;
     }
     bool IsNested = CurLoop->getParentLoop() != nullptr;
-    if (IsNested && OnlyNonNestedMemmove) {
+    if (IsNested && getOnlyNonNestedMemmove(F)) {
       ORE.emit([&]() {
         return OptimizationRemarkMissed(DEBUG_TYPE, "NestedLoop",
                                         SI->getDebugLoc(), SI->getParent())
@@ -2230,12 +2252,13 @@ CleanupAndExit:
   CallInst *NewCall;
 
   if (RuntimeCheck) {
-    unsigned Threshold = RuntimeMemSizeThreshold;
+    unsigned Threshold = getRuntimeMemSizeThreshold(F);
+
     if (ConstantInt *CI = dyn_cast<ConstantInt>(NumBytes)) {
       uint64_t C = CI->getZExtValue();
       if (Threshold != 0 && C < Threshold)
         goto CleanupAndExit;
-      if (C < CompileTimeMemSizeThreshold)
+      if (C < getCompileTimeMemSizeThreshold(F))
         goto CleanupAndExit;
     }
 

@@ -12,7 +12,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Basic/Version.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/Error.h"
 #include <cstdint>
@@ -20,8 +19,6 @@
 #include <memory>
 
 using namespace llvm;
-
-extern cl::opt<bool> Verbose;
 
 typedef enum cudaError_enum {
   CUDA_SUCCESS = 0,
@@ -77,7 +74,7 @@ static int handleError(CUresult Err) {
   return 1;
 }
 
-int printGPUsByCUDA() {
+int printGPUsByCUDA(bool Verbose) {
   // Attempt to load the NVPTX driver runtime.
   if (llvm::Error Err = loadCUDA()) {
     if (Verbose)

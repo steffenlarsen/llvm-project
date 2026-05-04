@@ -39,7 +39,9 @@
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
 #include "llvm/Target/TargetOptions.h"
 #include <optional>
 #include <string>
@@ -48,9 +50,15 @@ using namespace llvm;
 
 #define DEBUG_TYPE "mips"
 
-static cl::opt<bool>
-    EnableMulMulFix("mfix4300", cl::init(false),
-                    cl::desc("Enable the VR4300 mulmul bug fix."), cl::Hidden);
+static bool getEnableMulMulFix(const Function &F) {
+  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_EnableMulMulFix>(
+      F.getContext().getOptionsContext(), false);
+}
+
+static bool getEnableMulMulFix(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_EnableMulMulFix>(
+      Ctx, false);
+}
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeMipsTarget() {
   // Register the target.
@@ -173,7 +181,7 @@ MipsTargetMachine::getSubtargetImpl(const Function &F) const {
   if (!I) {
     I = std::make_unique<MipsSubtarget>(
         TargetTriple, CPU, FS, isLittle, *this,
-        MaybeAlign(F.getParent()->getOverrideStackAlignment()));
+        MaybeAlign(F.getParent()->getOverrideStackAlignment()), &F);
   }
   return I.get();
 }
@@ -283,7 +291,7 @@ void MipsPassConfig::addPreEmitPass() {
 
   // This pass inserts a nop instruction between two back-to-back multiplication
   // instructions when the "mfix4300" flag is passed.
-  if (EnableMulMulFix)
+  if (getEnableMulMulFix(getMipsTargetMachine().getOptionsContext()))
     addPass(createMipsMulMulBugPass());
 
   // The delay slot filler pass can potientially create forbidden slot hazards
@@ -323,7 +331,7 @@ void MipsPassConfig::addPreRegBankSelect() {
 }
 
 bool MipsPassConfig::addRegBankSelect() {
-  addPass(new RegBankSelectLegacy());
+  addPass(new RegBankSelectLegacy(getTM<TargetMachine>().getOptionsContext()));
   return false;
 }
 

@@ -33,7 +33,7 @@ using namespace llvm;
 namespace {
 class IntrinsicsTest : public ::testing::Test {
 protected:
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   BasicBlock *BB = nullptr;
 
@@ -190,7 +190,7 @@ TEST_F(IntrinsicsTest, InstrProfInheritance) {
 TEST(IntrinsicAttributes,
      SPIRVResourceImplicitDerivativeIntrinsicsAreConvergent) {
   using namespace Intrinsic;
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   static constexpr ID ConvergentResourceIntrinsics[] = {
       spv_resource_sample,        spv_resource_sample_clamp,
       spv_resource_samplebias,    spv_resource_samplebias_clamp,
@@ -213,7 +213,7 @@ TEST(IntrinsicAttributes,
 // attributes correctly returns an empty set.
 TEST(IntrinsicAttributes, TestGetFnAttributesBug) {
   using namespace Intrinsic;
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   AttributeSet AS = getFnAttributes(Context, experimental_guard);
   EXPECT_FALSE(AS.hasAttributes());
 }

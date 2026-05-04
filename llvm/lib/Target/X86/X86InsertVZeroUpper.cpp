@@ -35,17 +35,21 @@
 #include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 #include <cassert>
 
 using namespace llvm;
 
 #define DEBUG_TYPE "x86-insert-vzeroupper"
 
-static cl::opt<bool>
-    UseVZeroUpper("x86-use-vzeroupper", cl::Hidden,
-                  cl::desc("Minimize AVX to SSE transition penalty"),
-                  cl::init(true));
+static bool UseVZeroUpper = true;
+
+static bool getUseVZeroUpper(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_UseVZeroUpper>(
+      F.getContext().getOptionsContext());
+}
 
 STATISTIC(NumVZU, "Number of vzeroupper instructions inserted");
 
@@ -277,7 +281,7 @@ static bool processBasicBlock(MachineBasicBlock &MBB,
 /// Loop over all of the basic blocks, inserting vzeroupper instructions before
 /// function calls.
 static bool insertVZeroUpper(MachineFunction &MF) {
-  if (!UseVZeroUpper)
+  if (!getUseVZeroUpper(MF.getFunction()))
     return false;
 
   const X86Subtarget &ST = MF.getSubtarget<X86Subtarget>();

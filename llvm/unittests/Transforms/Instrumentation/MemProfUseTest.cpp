@@ -83,7 +83,7 @@ declare !dbg !19 void @_Z2f3v()
 !19 = !DISubprogram(name: "f3", linkageName: "_Z2f3v", scope: !1, file: !1, line: 3, type: !11, flags: DIFlagPrototyped, spFlags: DISPFlagOptimized)
 )IR";
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(IR, Err, Ctx);
   ASSERT_TRUE(M);
@@ -183,7 +183,7 @@ declare !dbg !25 void @_Z2g2v() local_unnamed_addr
 !25 = !DISubprogram(name: "g2", linkageName: "_Z2g2v", scope: !1, file: !1, line: 11, type: !11, flags: DIFlagPrototyped, spFlags: DISPFlagOptimized)
 )IR";
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(IR, Err, Ctx);
   ASSERT_TRUE(M);
@@ -274,7 +274,7 @@ attributes #2 = { builtin allocsize(0) }
 !14 = !DILocation(line: 2, column: 3, scope: !10)
 )IR";
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(IR, Err, Ctx);
   ASSERT_TRUE(M);
@@ -390,7 +390,7 @@ attributes #1 = { "no-trapping-math"="true" "stack-protector-buffer-size"="8" "t
 !17 = !DISubprogram(name: "baz", linkageName: "_Z3bazv", scope: !1, file: !1, line: 2, type: !11, flags: DIFlagPrototyped, spFlags: DISPFlagOptimized)
 )IR";
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic SMErr;
   std::unique_ptr<Module> M = parseAssemblyString(IR, SMErr, Ctx);
   ASSERT_TRUE(M);

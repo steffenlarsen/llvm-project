@@ -13,9 +13,12 @@
 #include "bolt/Passes/RegReAssign.h"
 #include "bolt/Core/BinaryFunctionCallGraph.h"
 #include "bolt/Core/MCPlus.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "bolt/Passes/DataflowAnalysis.h"
 #include "bolt/Passes/DataflowInfoManager.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "bolt/Utils/Utils.h"
+#include "llvm/Support/CommandLineV2.h"
 #include <numeric>
 
 #define DEBUG_TYPE "regreassign"
@@ -23,14 +26,7 @@
 using namespace llvm;
 
 namespace opts {
-extern cl::OptionCategory BoltOptCategory;
-extern cl::opt<bool> UpdateDebugSections;
-
-static cl::opt<bool> AggressiveReAssign(
-    "use-aggr-reg-reassign",
-    cl::desc("use register liveness analysis to try to find more opportunities "
-             "for -reg-reassign optimization"),
-    cl::cat(BoltOptCategory));
+extern bool UpdateDebugSections;
 }
 
 namespace llvm {
@@ -95,7 +91,7 @@ void RegReAssign::swap(BinaryFunction &Function, MCPhysReg A, MCPhysReg B) {
                             false)));
         }
       }
-      [[fallthrough]];
+        [[fallthrough]];
       case MCCFIInstruction::OpUndefined:
       case MCCFIInstruction::OpDefCfa:
       case MCCFIInstruction::OpOffset:
@@ -454,10 +450,12 @@ Error RegReAssign::runOnFunctions(BinaryContext &BC) {
     exit(1);
   }
 
+  const bool AggressiveReAssign = bolt_passes_opts::getUseAggrRegReassign(BC);
+
   RegScore = std::vector<int64_t>(BC.MRI->getNumRegs(), 0);
   RankedRegs = std::vector<size_t>(BC.MRI->getNumRegs(), 0);
 
-  if (opts::AggressiveReAssign)
+  if (AggressiveReAssign)
     setupAggressivePass(BC, BC.getBinaryFunctions());
   else
     setupConservativePass(BC, BC.getBinaryFunctions());
@@ -470,7 +468,7 @@ Error RegReAssign::runOnFunctions(BinaryContext &BC) {
 
     LLVM_DEBUG(dbgs() << "====================================\n");
     LLVM_DEBUG(dbgs() << " - " << Function.getPrintName() << "\n");
-    if (!conservativePassOverFunction(Function) && opts::AggressiveReAssign) {
+    if (!conservativePassOverFunction(Function) && AggressiveReAssign) {
       aggressivePassOverFunction(Function);
       LLVM_DEBUG({
         if (FuncsChanged.count(&Function))
@@ -484,7 +482,8 @@ Error RegReAssign::runOnFunctions(BinaryContext &BC) {
     BC.outs() << "BOLT-INFO: Reg Reassignment Pass: no changes were made.\n";
     return Error::success();
   }
-  if (opts::UpdateDebugSections)
+  bool UpdateDebugSections = bolt::bolt_utils_opts::getUpdateDebugSections(BC);
+  if (UpdateDebugSections)
     BC.outs()
         << "BOLT-WARNING: You used -reg-reassign and -update-debug-sections."
         << " Some registers were changed but associated AT_LOCATION for "

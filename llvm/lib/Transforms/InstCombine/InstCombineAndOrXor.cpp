@@ -30,7 +30,6 @@ using namespace PatternMatch;
 #define DEBUG_TYPE "instcombine"
 
 namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 }
 
 /// This is the complement of getICmpCode, which turns an opcode and two
@@ -4137,7 +4136,7 @@ Instruction *InstCombinerImpl::FoldOrOfLogicalAnds(Value *Op0, Value *Op1) {
                                m_Not(m_Specific(SelOp0->getTrueValue())));
     if (MayNeedFreeze)
       C = Builder.CreateFreeze(C);
-    if (!ProfcheckDisableMetadataFixes) {
+    if (!getProfcheckDisableMetadataFixes(Op0->getContext())) {
       Value *C2 = nullptr, *A2 = nullptr, *B2 = nullptr;
       if (match(Op0, m_LogicalAnd(m_Specific(C), m_Value(A2))) && SelOp0) {
         return SelectInst::Create(C, A, B, "", nullptr, SelOp0);
@@ -4168,7 +4167,7 @@ Instruction *InstCombinerImpl::FoldOrOfLogicalAnds(Value *Op0, Value *Op1) {
                                m_Not(m_Specific(SelOp1->getTrueValue())));
     if (MayNeedFreeze)
       C = Builder.CreateFreeze(C);
-    if (!ProfcheckDisableMetadataFixes) {
+    if (!getProfcheckDisableMetadataFixes(Op0->getContext())) {
       Value *C2 = nullptr, *A2 = nullptr, *B2 = nullptr;
       if (match(Op0, m_LogicalAnd(m_Not(m_Value(C2)), m_Value(A2))) && SelOp0) {
         SelectInst *NewSI = SelectInst::Create(C, B, A, "", nullptr, SelOp0);

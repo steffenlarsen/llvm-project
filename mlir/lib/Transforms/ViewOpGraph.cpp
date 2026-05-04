@@ -33,10 +33,10 @@ static const StringRef kShapeNode = "Mrecord";
 static const StringRef kShapeNone = "plain";
 
 /// Return the size limits for eliding large attributes.
-static int64_t getLargeAttributeSizeLimit() {
+static int64_t getLargeAttributeSizeLimit(MLIRContext *ctx) {
   // Use the default from the printer flags if possible.
   if (std::optional<int64_t> limit =
-          OpPrintingFlags().getLargeElementsAttrLimit())
+          OpPrintingFlags(ctx).getLargeElementsAttrLimit())
     return *limit;
   return 16;
 }
@@ -193,7 +193,7 @@ private:
   // Print an MLIR attribute to `os`. Large attributes are truncated.
   void emitMlirAttr(raw_ostream &os, Attribute attr) {
     // A value used to elide large container attribute.
-    int64_t largeAttrLimit = getLargeAttributeSizeLimit();
+    int64_t largeAttrLimit = getLargeAttributeSizeLimit(attr.getContext());
 
     // Always emit splat attributes.
     if (isa<SplatElementsAttr>(attr)) {
@@ -234,7 +234,7 @@ private:
 
   // Print a truncated and escaped MLIR operand to `os`.
   void emitMlirOperand(raw_ostream &os, Value operand) {
-    operand.printAsOperand(os, OpPrintingFlags());
+    operand.printAsOperand(os, OpPrintingFlags(operand.getContext()));
   }
 
   /// Append an edge to the list of edges.
@@ -293,7 +293,7 @@ private:
   std::string getValuePortName(Value operand) {
     // Print value as an operand and omit the leading '%' character.
     auto str = strFromOs([&](raw_ostream &os) {
-      operand.printAsOperand(os, OpPrintingFlags());
+      operand.printAsOperand(os, OpPrintingFlags(operand.getContext()));
     });
     // Replace % and # with _
     llvm::replace(str, '%', '_');
@@ -384,7 +384,7 @@ private:
   std::string getLabel(BlockArgument arg) {
     return strFromOs([&](raw_ostream &os) {
       os << "<res" << getValuePortName(arg) << "> ";
-      arg.printAsOperand(os, OpPrintingFlags());
+      arg.printAsOperand(os, OpPrintingFlags(arg.getContext()));
       if (printResultTypes) {
         os << " ";
         emitMlirType(os, arg.getType());

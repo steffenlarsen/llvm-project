@@ -145,6 +145,9 @@
 #include <optional>
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+}
 
 class DataLayout;
 class LLVMContext;
@@ -479,7 +482,8 @@ struct DenseMapInfo<const AA::InstExclusionSetTy *>
 
 /// The value passed to the line option that defines the maximal initialization
 /// chain length.
-LLVM_ABI extern unsigned MaxInitializationChainLength;
+LLVM_ABI unsigned
+getMaxInitializationChainLength(const clv2::OptionsContext &Ctx);
 
 ///{
 enum class ChangeStatus {
@@ -564,7 +568,7 @@ struct AADepGraph {
   LLVM_ABI void viewGraph();
 
   /// Dump graph to file
-  LLVM_ABI void dumpGraph();
+  LLVM_ABI void dumpGraph(const Module &M);
 
   /// Print dependency graph
   LLVM_ABI void print();
@@ -1792,7 +1796,9 @@ struct Attributor {
       return false;
 
     // Avoid too many nested initializations to prevent a stack overflow.
-    if (InitializationChainLength > MaxInitializationChainLength)
+    if (InitializationChainLength >
+        getMaxInitializationChainLength(
+            getModule().getContext().getOptionsContext()))
       return false;
 
     ShouldUpdateAA = shouldUpdateAA<AAType>(IRP);

@@ -12,6 +12,7 @@
 #include "llvm/CodeGen/RegAllocEvictionAdvisor.h"
 #include "AllocationOrder.h"
 #include "RegAllocGreedy.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/LiveRegMatrix.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -19,40 +20,38 @@
 #include "llvm/CodeGen/RegAllocPriorityAdvisor.h"
 #include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/CodeGen/VirtRegMap.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
+#include <optional>
 
 using namespace llvm;
 
-static cl::opt<RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode> Mode(
-    "regalloc-enable-advisor", cl::Hidden,
-    cl::init(RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode::Default),
-    cl::desc("Enable regalloc advisor mode"),
-    cl::values(
-        clEnumValN(RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode::Default,
-                   "default", "Default"),
-        clEnumValN(RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode::Release,
-                   "release", "precompiled"),
-        clEnumValN(
-            RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode::Development,
-            "development", "for training")));
+static RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode
+getAdvisorMode(const clv2::OptionsContext &Ctx) {
+  return static_cast<RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode>(
+      clv2::getOptValOrDefault<&clv2::CGPASS_RegallocEnableAdvisor>(Ctx));
+}
 
-static cl::opt<cl::boolOrDefault> EnableLocalReassignment(
-    "enable-local-reassign", cl::Hidden,
-    cl::desc("Local reassignment can yield better allocation decisions, but "
-             "may be compile time intensive"));
+static unsigned getEvictInterferenceCutoff(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::CGPASS_RegallocEvictionMaxInterferenceCutoff>(Ctx);
+}
 
-namespace llvm {
-cl::opt<unsigned> EvictInterferenceCutoff(
-    "regalloc-eviction-max-interference-cutoff", cl::Hidden,
-    cl::desc("Number of interferences after which we declare "
-             "an interference unevictable and bail out. This "
-             "is a compilation cost-saving consideration. To "
-             "disable, pass a very large number."),
-    cl::init(10));
+// -enable-local-reassign used to be a tri-state cl::opt<cl::boolOrDefault>:
+// explicitly-false must override the subtarget default below, which a plain
+// bool (unset indistinguishable from false) cannot represent. Return the
+// explicitly-specified value, or std::nullopt if the option was left unset.
+static std::optional<bool>
+getEnableLocalReassignExplicit(const clv2::OptionsContext &Ctx) {
+  auto *O = clv2::getView<&clv2::CGPassRegAllocReg>(Ctx);
+  if (!O || !O->specified<&clv2::CGPASS_EnableLocalReassign>())
+    return std::nullopt;
+  return O->get<&clv2::CGPASS_EnableLocalReassign>();
 }
 
 #define DEBUG_TYPE "regalloc"
@@ -108,6 +107,49 @@ public:
 private:
   const bool NotAsRequested;
 };
+
+/// Deferred advisor analysis that reads the mode from the Module's
+/// LLVMContext OptionsContext in doInitialization, rather than at
+/// construction time when no context is available.
+class DeferredEvictionAdvisorAnalysisLegacy final
+    : public RegAllocEvictionAdvisorAnalysisLegacy {
+public:
+  DeferredEvictionAdvisorAnalysisLegacy()
+      : RegAllocEvictionAdvisorAnalysisLegacy(AdvisorMode::Default) {}
+
+  bool doInitialization(Module &M) override {
+    auto &Ctx = M.getContext();
+    AdvisorMode Mode = ::getAdvisorMode(Ctx.getOptionsContext());
+    switch (Mode) {
+    case AdvisorMode::Default:
+      Provider.reset(
+          new DefaultEvictionAdvisorProvider(/*NotAsRequested=*/false, Ctx));
+      break;
+    case AdvisorMode::Development:
+#if defined(LLVM_HAVE_TFLITE)
+      Provider.reset(createDevelopmentModeAdvisorProvider(Ctx));
+#else
+      Provider.reset(
+          new DefaultEvictionAdvisorProvider(/*NotAsRequested=*/true, Ctx));
+#endif
+      break;
+    case AdvisorMode::Release: {
+      auto *Ret = createReleaseModeAdvisorProvider(Ctx);
+      if (Ret)
+        Provider.reset(Ret);
+      else
+        Provider.reset(
+            new DefaultEvictionAdvisorProvider(/*NotAsRequested=*/true, Ctx));
+      break;
+    }
+    }
+    return false;
+  }
+
+  static bool classof(const RegAllocEvictionAdvisorAnalysisLegacy *R) {
+    return true;
+  }
+};
 } // namespace
 
 AnalysisKey RegAllocEvictionAdvisorAnalysis::Key;
@@ -129,9 +171,15 @@ void RegAllocEvictionAdvisorAnalysis::initializeProvider(
         new DefaultEvictionAdvisorProvider(/*NotAsRequested=*/true, Ctx));
 #endif
     return;
-  case RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode::Release:
-    Provider.reset(createReleaseModeAdvisorProvider(Ctx));
+  case RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode::Release: {
+    auto *Ret = createReleaseModeAdvisorProvider(Ctx);
+    if (Ret)
+      Provider.reset(Ret);
+    else
+      Provider.reset(
+          new DefaultEvictionAdvisorProvider(/*NotAsRequested=*/true, Ctx));
     return;
+  }
   }
 }
 
@@ -139,30 +187,17 @@ RegAllocEvictionAdvisorAnalysis::Result
 RegAllocEvictionAdvisorAnalysis::run(MachineFunction &MF,
                                      MachineFunctionAnalysisManager &MFAM) {
   // Lazy initialization of the provider.
-  initializeProvider(::Mode, MF.getFunction().getContext());
+  initializeProvider(
+      getAdvisorMode(MF.getFunction().getContext().getOptionsContext()),
+      MF.getFunction().getContext());
   return Result{Provider.get()};
 }
 
 template <>
 Pass *llvm::callDefaultCtor<RegAllocEvictionAdvisorAnalysisLegacy>() {
-  switch (Mode) {
-  case RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode::Default:
-    return new DefaultEvictionAdvisorAnalysisLegacy(/*NotAsRequested=*/false);
-  case RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode::Release: {
-    Pass *Ret = createReleaseModeAdvisorAnalysisLegacy();
-    // release mode advisor may not be supported
-    if (Ret)
-      return Ret;
-    return new DefaultEvictionAdvisorAnalysisLegacy(/*NotAsRequested=*/true);
-  }
-  case RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode::Development:
-#if defined(LLVM_HAVE_TFLITE)
-    return createDevelopmentModeAdvisorAnalysisLegacy();
-#else
-    return new DefaultEvictionAdvisorAnalysisLegacy(/*NotAsRequested=*/true);
-#endif
-  }
-  llvm_unreachable("unexpected advisor mode");
+  // Defer mode selection to doInitialization where the Module's
+  // LLVMContext OptionsContext is available for reading CLI options.
+  return new DeferredEvictionAdvisorAnalysisLegacy();
 }
 
 StringRef RegAllocEvictionAdvisorAnalysisLegacy::getPassName() const {
@@ -184,10 +219,10 @@ RegAllocEvictionAdvisor::RegAllocEvictionAdvisor(const MachineFunction &MF,
       MRI(&VRM->getRegInfo()), TRI(MF.getSubtarget().getRegisterInfo()),
       RegClassInfo(RA.getRegClassInfo()), RegCosts(TRI->getRegisterCosts(MF)),
       EnableLocalReassign(
-          EnableLocalReassignment == cl::boolOrDefault::BOU_TRUE ||
-          (EnableLocalReassignment != cl::boolOrDefault::BOU_FALSE &&
-           MF.getSubtarget().enableRALocalReassignment(
-               MF.getTarget().getOptLevel()))) {}
+          getEnableLocalReassignExplicit(
+              MF.getFunction().getContext().getOptionsContext())
+              .value_or(MF.getSubtarget().enableRALocalReassignment(
+                  MF.getTarget().getOptLevel()))) {}
 
 /// isUrgentEviction - Returns true if this is an urgent eviction. Once a live
 /// range becomes small enough, it is urgent that we find a register for it.
@@ -276,8 +311,10 @@ bool DefaultEvictionAdvisor::canEvictInterferenceBasedOnCost(
   for (MCRegUnit Unit : TRI->regunits(PhysReg)) {
     LiveIntervalUnion::Query &Q = Matrix->query(VirtReg, Unit);
     // If there is 10 or more interferences, chances are one is heavier.
-    const auto &Interferences = Q.interferingVRegs(EvictInterferenceCutoff);
-    if (Interferences.size() >= EvictInterferenceCutoff)
+    unsigned InterferenceCutoff = getEvictInterferenceCutoff(
+        MF.getFunction().getContext().getOptionsContext());
+    const auto &Interferences = Q.interferingVRegs(InterferenceCutoff);
+    if (Interferences.size() >= InterferenceCutoff)
       return false;
 
     // Check if any interfering live range is heavier than MaxWeight.

@@ -10,11 +10,6 @@
 #define BOLT_PASSES_STACKPOINTERTRACKING_H
 
 #include "bolt/Passes/DataflowAnalysis.h"
-#include "llvm/Support/CommandLine.h"
-
-namespace opts {
-extern llvm::cl::opt<bool> TimeOpts;
-} // namespace opts
 
 namespace llvm {
 namespace bolt {

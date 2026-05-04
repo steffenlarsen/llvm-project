@@ -21,10 +21,14 @@
 
 #include "bolt/Core/CallGraph.h"
 
+#include "llvm/Support/OptionsContext.h"
 #include <string>
 #include <vector>
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+}
 namespace bolt {
 
 class Cluster {
@@ -78,7 +82,8 @@ inline bool compareClustersDensity(const Cluster &C1, const Cluster &C2) {
 /*
  * Cluster functions in order to minimize call distance.
  */
-std::vector<Cluster> clusterize(const CallGraph &Cg);
+std::vector<Cluster> clusterize(const CallGraph &Cg,
+                                const clv2::OptionsContext &OptsCtx);
 
 /*
  * Pettis-Hansen code layout algorithm

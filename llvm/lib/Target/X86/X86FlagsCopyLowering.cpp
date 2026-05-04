@@ -50,10 +50,13 @@
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Analysis.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/MCSchedule.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 #include <cassert>
 #include <iterator>
 #include <utility>
@@ -68,6 +71,12 @@ STATISTIC(NumSetCCsInserted, "Number of setCC instructions inserted");
 STATISTIC(NumTestsInserted, "Number of test instructions inserted");
 STATISTIC(NumAddsInserted, "Number of adds instructions inserted");
 STATISTIC(NumNFsConvertedTo, "Number of NF instructions converted to");
+
+static bool getX86EnableAPXForRelocation(const MachineInstr &MI) {
+  return clv2::getOptValOr<&clv2::X86OptsReg,
+                           &clv2::X86_EnableAPXForRelocation>(
+      MI.getMF()->getFunction().getContext().getOptionsContext(), false);
+}
 
 namespace {
 
@@ -254,7 +263,15 @@ static EFLAGSClobber getClobberType(const MachineInstr &MI) {
   if (!FlagDef)
     return NoClobber;
 
-  if (X86::getNFVariantIfClobberRemovable(MI))
+  // For the instructions are ADDrm/ADDmr with relocation, we'll skip the
+  // optimization for replacing non-NF with NF. This is to keep backward
+  // compatiblity with old version of linkers without APX relocation type
+  // support on Linux OS.
+  bool IsWithReloc = getX86EnableAPXForRelocation(MI)
+                         ? false
+                         : isAddMemInstrWithRelocation(MI);
+
+  if (FlagDef->isDead() && X86::getNFVariant(MI.getOpcode()) && !IsWithReloc)
     return EvitableClobber;
 
   return InevitableClobber;

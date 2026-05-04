@@ -14,7 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/ScopBuilder.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopDetection.h"
 #include "polly/ScopInfo.h"
 #include "polly/Support/GICHelper.h"
@@ -28,6 +28,7 @@
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/Delinearization.h"
@@ -50,10 +51,11 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Use.h"
 #include "llvm/IR/Value.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <deque>
@@ -69,94 +71,13 @@ STATISTIC(RichScopFound, "Number of Scops containing a loop");
 STATISTIC(InfeasibleScops,
           "Number of SCoPs with statically infeasible context.");
 
-bool polly::ModelReadOnlyScalars;
-
 // The maximal number of dimensions we allow during invariant load construction.
 // More complex access ranges will result in very high compile time and are also
 // unlikely to result in good code. This value is very high and should only
 // trigger for corner cases (e.g., the "dct_luma" function in h264, SPEC2006).
 static unsigned const MaxDimensionsInAccessRange = 9;
 
-static cl::opt<bool, true> XModelReadOnlyScalars(
-    "polly-analyze-read-only-scalars",
-    cl::desc("Model read-only scalar values in the scop description"),
-    cl::location(ModelReadOnlyScalars), cl::Hidden, cl::init(true),
-    cl::cat(PollyCategory));
-
-static cl::opt<int>
-    OptComputeOut("polly-analysis-computeout",
-                  cl::desc("Bound the scop analysis by a maximal amount of "
-                           "computational steps (0 means no bound)"),
-                  cl::Hidden, cl::init(800000), cl::cat(PollyCategory));
-
-static cl::opt<bool> PollyAllowDereferenceOfAllFunctionParams(
-    "polly-allow-dereference-of-all-function-parameters",
-    cl::desc(
-        "Treat all parameters to functions that are pointers as dereferencible."
-        " This is useful for invariant load hoisting, since we can generate"
-        " less runtime checks. This is only valid if all pointers to functions"
-        " are always initialized, so that Polly can choose to hoist"
-        " their loads. "),
-    cl::Hidden, cl::init(false), cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    PollyIgnoreInbounds("polly-ignore-inbounds",
-                        cl::desc("Do not take inbounds assumptions at all"),
-                        cl::Hidden, cl::init(false), cl::cat(PollyCategory));
-
-static cl::opt<unsigned> RunTimeChecksMaxArraysPerGroup(
-    "polly-rtc-max-arrays-per-group",
-    cl::desc("The maximal number of arrays to compare in each alias group."),
-    cl::Hidden, cl::init(20), cl::cat(PollyCategory));
-
-static cl::opt<unsigned> RunTimeChecksMaxAccessDisjuncts(
-    "polly-rtc-max-array-disjuncts",
-    cl::desc("The maximal number of disjunts allowed in memory accesses to "
-             "to build RTCs."),
-    cl::Hidden, cl::init(8), cl::cat(PollyCategory));
-
-static cl::opt<unsigned> RunTimeChecksMaxParameters(
-    "polly-rtc-max-parameters",
-    cl::desc("The maximal number of parameters allowed in RTCs."), cl::Hidden,
-    cl::init(8), cl::cat(PollyCategory));
-
-static cl::opt<bool> UnprofitableScalarAccs(
-    "polly-unprofitable-scalar-accs",
-    cl::desc("Count statements with scalar accesses as not optimizable"),
-    cl::Hidden, cl::init(false), cl::cat(PollyCategory));
-
-static cl::opt<std::string> UserContextStr(
-    "polly-context", cl::value_desc("isl parameter set"),
-    cl::desc("Provide additional constraints on the context parameters"),
-    cl::init(""), cl::cat(PollyCategory));
-
-static cl::opt<bool> DetectReductions("polly-detect-reductions",
-                                      cl::desc("Detect and exploit reductions"),
-                                      cl::Hidden, cl::init(true),
-                                      cl::cat(PollyCategory));
-
-// Multiplicative reductions can be disabled separately as these kind of
-// operations can overflow easily. Additive reductions and bit operations
-// are in contrast pretty stable.
-static cl::opt<bool> DisableMultiplicativeReductions(
-    "polly-disable-multiplicative-reductions",
-    cl::desc("Disable multiplicative reductions"), cl::Hidden,
-    cl::cat(PollyCategory));
-
 enum class GranularityChoice { BasicBlocks, ScalarIndependence, Stores };
-
-static cl::opt<GranularityChoice> StmtGranularity(
-    "polly-stmt-granularity",
-    cl::desc(
-        "Algorithm to use for splitting basic blocks into multiple statements"),
-    cl::values(clEnumValN(GranularityChoice::BasicBlocks, "bb",
-                          "One statement per basic block"),
-               clEnumValN(GranularityChoice::ScalarIndependence, "scalar-indep",
-                          "Scalar independence heuristic"),
-               clEnumValN(GranularityChoice::Stores, "store",
-                          "Store-level granularity")),
-    cl::init(GranularityChoice::ScalarIndependence), cl::cat(PollyCategory));
-
 /// Helper to treat non-affine regions and basic blocks the same.
 ///
 ///{
@@ -1554,7 +1475,11 @@ bool ScopBuilder::buildAccessMultiDimParam(MemAccInst Inst, ScopStmt *Stmt) {
   if (!Inst.isLoad() && !Inst.isStore())
     return false;
 
-  if (!PollyDelinearize)
+  bool Delinearize = true;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          scop->getFunction().getContext().getOptionsContext()))
+    Delinearize = Opts->get<&llvm::clv2::POLLY_Delinearize>();
+  if (!Delinearize)
     return false;
 
   Value *Address = Inst.getPointerOperand();
@@ -1831,7 +1756,8 @@ bool ScopBuilder::shouldModelInst(Instruction *Inst, Loop *L) {
 ///               no suffix will be added.
 /// @param IsLast Uses a special indicator for the last statement of a BB.
 static std::string makeStmtName(BasicBlock *BB, long BBIdx, int Count,
-                                bool IsMain, bool IsLast = false) {
+                                bool IsMain, bool UseInstructionNames,
+                                bool IsLast = false) {
   std::string Suffix;
   if (!IsMain) {
     if (UseInstructionNames)
@@ -1850,13 +1776,19 @@ static std::string makeStmtName(BasicBlock *BB, long BBIdx, int Count,
 ///
 /// @param R    The region the statement will represent.
 /// @param RIdx The index of the @p R relative to other BBs/regions.
-static std::string makeStmtName(Region *R, long RIdx) {
+static std::string makeStmtName(Region *R, long RIdx,
+                                bool UseInstructionNames) {
   return getIslCompatibleName("Stmt", R->getNameStr(), RIdx, "",
                               UseInstructionNames);
 }
 
 void ScopBuilder::buildSequentialBlockStmts(BasicBlock *BB, bool SplitOnStore) {
   Loop *SurroundingLoop = LI.getLoopFor(BB);
+
+  bool UseInstNames = false;
+  if (auto *OptCtx = polly_opts::getPollyOpts(
+          scop->getFunction().getContext().getOptionsContext()))
+    UseInstNames = OptCtx->get<&llvm::clv2::POLLY_UseLlvmNames>();
 
   int Count = 0;
   long BBIdx = scop->getNextStmtIdx();
@@ -1866,14 +1798,15 @@ void ScopBuilder::buildSequentialBlockStmts(BasicBlock *BB, bool SplitOnStore) {
       Instructions.push_back(&Inst);
     if (Inst.getMetadata("polly_split_after") ||
         (SplitOnStore && isa<StoreInst>(Inst))) {
-      std::string Name = makeStmtName(BB, BBIdx, Count, Count == 0);
+      std::string Name =
+          makeStmtName(BB, BBIdx, Count, Count == 0, UseInstNames);
       scop->addScopStmt(BB, Name, SurroundingLoop, Instructions);
       Count++;
       Instructions.clear();
     }
   }
 
-  std::string Name = makeStmtName(BB, BBIdx, Count, Count == 0);
+  std::string Name = makeStmtName(BB, BBIdx, Count, Count == 0, UseInstNames);
   scop->addScopStmt(BB, Name, SurroundingLoop, Instructions);
 }
 
@@ -1988,6 +1921,11 @@ static void joinOrderedPHIs(EquivalenceClasses<Instruction *> &UnionFind,
 void ScopBuilder::buildEqivClassBlockStmts(BasicBlock *BB) {
   Loop *L = LI.getLoopFor(BB);
 
+  bool UseInstNames = false;
+  if (auto *OptCtx = polly_opts::getPollyOpts(
+          scop->getFunction().getContext().getOptionsContext()))
+    UseInstNames = OptCtx->get<&llvm::clv2::POLLY_UseLlvmNames>();
+
   // Extracting out modeled instructions saves us from checking
   // shouldModelInst() repeatedly.
   SmallVector<Instruction *, 32> ModeledInsts;
@@ -2054,7 +1992,7 @@ void ScopBuilder::buildEqivClassBlockStmts(BasicBlock *BB) {
     // If there is no main instruction, make the first statement the main.
     bool IsMain = (MainInst ? MainLeader == Instructions.first : Count == 0);
 
-    std::string Name = makeStmtName(BB, BBIdx, Count, IsMain);
+    std::string Name = makeStmtName(BB, BBIdx, Count, IsMain, UseInstNames);
     scop->addScopStmt(BB, Name, L, std::move(InstList));
     Count += 1;
   }
@@ -2065,7 +2003,8 @@ void ScopBuilder::buildEqivClassBlockStmts(BasicBlock *BB) {
   // The epilogue becomes the main statement only if there is no other
   // statement that could become main.
   // The epilogue will be removed if no PHIWrite is added to it.
-  std::string EpilogueName = makeStmtName(BB, BBIdx, Count, Count == 0, true);
+  std::string EpilogueName =
+      makeStmtName(BB, BBIdx, Count, Count == 0, UseInstNames, true);
   scop->addScopStmt(BB, EpilogueName, L, {});
 }
 
@@ -2078,7 +2017,11 @@ void ScopBuilder::buildStmts(Region &SR) {
       if (shouldModelInst(&Inst, SurroundingLoop))
         Instructions.push_back(&Inst);
     long RIdx = scop->getNextStmtIdx();
-    std::string Name = makeStmtName(&SR, RIdx);
+    bool UseInstNames = false;
+    if (auto *OptCtx = polly_opts::getPollyOpts(
+            scop->getFunction().getContext().getOptionsContext()))
+      UseInstNames = OptCtx->get<&llvm::clv2::POLLY_UseLlvmNames>();
+    std::string Name = makeStmtName(&SR, RIdx, UseInstNames);
     scop->addScopStmt(&SR, Name, SurroundingLoop, Instructions);
     return;
   }
@@ -2088,7 +2031,12 @@ void ScopBuilder::buildStmts(Region &SR) {
       buildStmts(*I->getNodeAs<Region>());
     else {
       BasicBlock *BB = I->getNodeAs<BasicBlock>();
-      switch (StmtGranularity) {
+      GranularityChoice Granularity = GranularityChoice::ScalarIndependence;
+      if (auto *Opts = polly_opts::getPollyOpts(
+              scop->getFunction().getContext().getOptionsContext()))
+        Granularity = static_cast<GranularityChoice>(
+            static_cast<int>(Opts->get<&llvm::clv2::POLLY_StmtGranularity>()));
+      switch (Granularity) {
       case GranularityChoice::BasicBlocks:
         buildSequentialBlockStmts(BB);
         break;
@@ -2370,7 +2318,11 @@ void ScopBuilder::foldAccessRelations() {
 }
 
 void ScopBuilder::assumeNoOutOfBounds() {
-  if (PollyIgnoreInbounds)
+  bool IgnoreInbounds = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          scop->getFunction().getContext().getOptionsContext()))
+    IgnoreInbounds = Opts->get<&llvm::clv2::POLLY_IgnoreInbounds>();
+  if (IgnoreInbounds)
     return;
   for (auto &Stmt : *scop)
     for (auto &Access : Stmt) {
@@ -2432,8 +2384,14 @@ void ScopBuilder::ensureValueRead(Value *V, ScopStmt *UserStmt) {
 
   case VirtualUse::ReadOnly:
     // Add MemoryAccess for invariant values only if requested.
-    if (!ModelReadOnlyScalars)
-      break;
+    {
+      bool ModelROScalars = true;
+      if (auto *Opts = polly_opts::getPollyOpts(
+              scop->getFunction().getContext().getOptionsContext()))
+        ModelROScalars = Opts->get<&llvm::clv2::POLLY_AnalyzeReadOnlyScalars>();
+      if (!ModelROScalars)
+        break;
+    }
 
     [[fallthrough]];
   case VirtualUse::Inter:
@@ -2524,8 +2482,8 @@ void ScopBuilder::collectSurroundingLoops(ScopStmt &Stmt) {
 }
 
 /// Return the reduction type for a given binary operator.
-static MemoryAccess::ReductionType
-getReductionType(const BinaryOperator *BinOp) {
+static MemoryAccess::ReductionType getReductionType(const BinaryOperator *BinOp,
+                                                    bool DisableMultRed) {
   if (!BinOp)
     return MemoryAccess::RT_NONE;
   switch (BinOp->getOpcode()) {
@@ -2546,7 +2504,7 @@ getReductionType(const BinaryOperator *BinOp) {
       return MemoryAccess::RT_NONE;
     [[fallthrough]];
   case Instruction::Mul:
-    if (DisableMultiplicativeReductions)
+    if (DisableMultRed)
       return MemoryAccess::RT_NONE;
     return MemoryAccess::RT_MUL;
   default:
@@ -2633,6 +2591,12 @@ bool checkCandidatePairAccesses(MemoryAccess *LoadMA, MemoryAccess *StoreMA,
 }
 
 void ScopBuilder::checkForReductions(ScopStmt &Stmt) {
+  bool DisableMultRed = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          scop->getFunction().getContext().getOptionsContext()))
+    DisableMultRed =
+        Opts->get<&llvm::clv2::POLLY_DisableMultiplicativeReductions>();
+
   // Perform a data flow analysis on the current scop statement to propagate the
   // uses of loaded values. Then check and mark the memory accesses which are
   // part of reduction like chains.
@@ -2708,7 +2672,8 @@ void ScopBuilder::checkForReductions(ScopStmt &Stmt) {
       // Non load and store instructions are either binary operators or they
       // will invalidate all used loads.
       auto *BinOp = dyn_cast<BinaryOperator>(&Inst);
-      MemoryAccess::ReductionType CurRedType = getReductionType(BinOp);
+      MemoryAccess::ReductionType CurRedType =
+          getReductionType(BinOp, DisableMultRed);
       POLLY_DEBUG(dbgs() << "CurInst: " << Inst << " RT: " << CurRedType
                          << "\n");
 
@@ -2839,7 +2804,11 @@ void ScopBuilder::verifyInvariantLoads() {
 }
 
 void ScopBuilder::hoistInvariantLoads() {
-  if (!PollyInvariantLoadHoisting)
+  bool InvariantLoadHoist = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          scop->getFunction().getContext().getOptionsContext()))
+    InvariantLoadHoist = Opts->get<&llvm::clv2::POLLY_InvariantLoadHoisting>();
+  if (!InvariantLoadHoist)
     return;
 
   isl::union_map Writes = scop->getWrites();
@@ -2900,10 +2869,14 @@ bool ScopBuilder::hasNonHoistableBasePtrInScop(MemoryAccess *MA,
 }
 
 void ScopBuilder::addUserContext() {
-  if (UserContextStr.empty())
+  std::string UserCtxStr;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          scop->getFunction().getContext().getOptionsContext()))
+    UserCtxStr = Opts->get<&llvm::clv2::POLLY_Context>();
+  if (UserCtxStr.empty())
     return;
 
-  isl::set UserContext = isl::set(scop->getIslCtx(), UserContextStr.c_str());
+  isl::set UserContext = isl::set(scop->getIslCtx(), UserCtxStr.c_str());
   isl::space Space = scop->getParamSpace();
   isl::size SpaceParams = Space.dim(isl::dim::param);
   if (unsignedFromIslSize(SpaceParams) !=
@@ -3024,7 +2997,12 @@ bool ScopBuilder::canAlwaysBeHoisted(MemoryAccess *MA,
                                      bool NonHoistableCtxIsEmpty) {
   LoadInst *LInst = cast<LoadInst>(MA->getAccessInstruction());
   const DataLayout &DL = LInst->getDataLayout();
-  if (PollyAllowDereferenceOfAllFunctionParams &&
+  bool AllowDeref = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          scop->getFunction().getContext().getOptionsContext()))
+    AllowDeref =
+        Opts->get<&llvm::clv2::POLLY_AllowDereferenceOfAllFunctionParams>();
+  if (AllowDeref &&
       isAParameter(LInst->getPointerOperand(), scop->getFunction()))
     return true;
 
@@ -3288,7 +3266,9 @@ void ScopBuilder::buildAccessRelations(ScopStmt &Stmt) {
 /// @return True if more accesses should be added, false if we reached the
 ///         maximal number of run-time checks to be generated.
 static bool buildMinMaxAccess(isl::set Set,
-                              Scop::MinMaxVectorTy &MinMaxAccesses, Scop &S) {
+                              Scop::MinMaxVectorTy &MinMaxAccesses, Scop &S,
+                              unsigned MaxAccessDisjuncts,
+                              unsigned MaxParameters) {
   isl::pw_multi_aff MinPMA, MaxPMA;
   isl::pw_aff LastDimAff;
   isl::aff OneAff;
@@ -3300,7 +3280,7 @@ static bool buildMinMaxAccess(isl::set Set,
   if (Set.is_null())
     return false;
 
-  if (unsignedFromIslSize(Set.n_basic_set()) > RunTimeChecksMaxAccessDisjuncts)
+  if (unsignedFromIslSize(Set.n_basic_set()) > MaxAccessDisjuncts)
     Set = Set.simple_hull();
 
   // Restrict the number of parameters involved in the access as the lexmin/
@@ -3317,14 +3297,13 @@ static bool buildMinMaxAccess(isl::set Set,
   //           11          |     6.78
   //           12          |    30.38
   //
-  if (isl_set_n_param(Set.get()) >
-      static_cast<isl_size>(RunTimeChecksMaxParameters)) {
+  if (isl_set_n_param(Set.get()) > static_cast<isl_size>(MaxParameters)) {
     unsigned InvolvedParams = 0;
     for (unsigned u = 0, e = isl_set_n_param(Set.get()); u < e; u++)
       if (Set.involves_dims(isl::dim::param, u, 1))
         InvolvedParams++;
 
-    if (InvolvedParams > RunTimeChecksMaxParameters)
+    if (InvolvedParams > MaxParameters)
       return false;
   }
 
@@ -3365,6 +3344,14 @@ bool ScopBuilder::calculateMinMaxAccess(AliasGroupTy AliasGroup,
                                         Scop::MinMaxVectorTy &MinMaxAccesses) {
   MinMaxAccesses.reserve(AliasGroup.size());
 
+  unsigned MaxAccessDisjuncts = 8;
+  unsigned MaxParameters = 8;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          scop->getFunction().getContext().getOptionsContext())) {
+    MaxAccessDisjuncts = Opts->get<&llvm::clv2::POLLY_RtcMaxArrayDisjuncts>();
+    MaxParameters = Opts->get<&llvm::clv2::POLLY_RtcMaxParameters>();
+  }
+
   isl::union_set Domains = scop->getDomains();
   isl::union_map Accesses = isl::union_map::empty(scop->getIslCtx());
 
@@ -3376,7 +3363,8 @@ bool ScopBuilder::calculateMinMaxAccess(AliasGroupTy AliasGroup,
 
   bool LimitReached = false;
   for (isl::set Set : Locations.get_set_list()) {
-    LimitReached |= !buildMinMaxAccess(Set, MinMaxAccesses, *scop);
+    LimitReached |= !buildMinMaxAccess(Set, MinMaxAccesses, *scop,
+                                       MaxAccessDisjuncts, MaxParameters);
     if (LimitReached)
       break;
   }
@@ -3392,7 +3380,11 @@ static isl::set getAccessDomain(MemoryAccess *MA) {
 }
 
 bool ScopBuilder::buildAliasChecks() {
-  if (!PollyUseRuntimeAliasChecks)
+  bool UseRtAliasChecks = true;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          scop->getFunction().getContext().getOptionsContext()))
+    UseRtAliasChecks = Opts->get<&llvm::clv2::POLLY_UseRuntimeAliasChecks>();
+  if (!UseRtAliasChecks)
     return true;
 
   if (buildAliasGroups()) {
@@ -3416,7 +3408,7 @@ bool ScopBuilder::buildAliasChecks() {
 std::tuple<ScopBuilder::AliasGroupVectorTy, DenseSet<const ScopArrayInfo *>>
 ScopBuilder::buildAliasGroupsForAccesses() {
   BatchAAResults BAA(AA);
-  AliasSetTracker AST(BAA);
+  AliasSetTracker AST(BAA, /*Ctx=*/llvm::clv2::defaultOptionsContext());
 
   DenseMap<Value *, MemoryAccess *> PtrToAcc;
   DenseSet<const ScopArrayInfo *> HasWriteAccess;
@@ -3476,7 +3468,11 @@ bool ScopBuilder::buildAliasGroups() {
       return false;
 
     {
-      IslMaxOperationsGuard MaxOpGuard(scop->getIslCtx().get(), OptComputeOut);
+      int ComputeOut = 800000;
+      if (auto *Opts = polly_opts::getPollyOpts(
+              scop->getFunction().getContext().getOptionsContext()))
+        ComputeOut = Opts->get<&llvm::clv2::POLLY_AnalysisComputeout>();
+      IslMaxOperationsGuard MaxOpGuard(scop->getIslCtx().get(), ComputeOut);
       bool Valid = buildAliasGroup(AG, HasWriteAccess);
       if (!Valid)
         return false;
@@ -3556,8 +3552,12 @@ bool ScopBuilder::buildAliasGroup(
   // Bail out if the number of values we need to compare is too large.
   // This is important as the number of comparisons grows quadratically with
   // the number of values we need to compare.
+  unsigned MaxArraysPerGroup = 20;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          scop->getFunction().getContext().getOptionsContext()))
+    MaxArraysPerGroup = Opts->get<&llvm::clv2::POLLY_RtcMaxArraysPerGroup>();
   if (MinMaxAccessesReadWrite.size() + ReadOnlyArrays.size() >
-      RunTimeChecksMaxArraysPerGroup)
+      MaxArraysPerGroup)
     return false;
 
   Valid = calculateMinMaxAccess(ReadOnlyAccesses, MinMaxAccessesReadOnly);
@@ -3755,13 +3755,17 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
   }
 
   // The ScopStmts now have enough information to initialize themselves.
+  bool DetectRed = true;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          scop->getFunction().getContext().getOptionsContext()))
+    DetectRed = Opts->get<&llvm::clv2::POLLY_DetectReductions>();
   for (ScopStmt &Stmt : *scop) {
     collectSurroundingLoops(Stmt);
 
     buildDomain(Stmt);
     buildAccessRelations(Stmt);
 
-    if (DetectReductions)
+    if (DetectRed)
       checkForReductions(Stmt);
   }
 
@@ -3774,7 +3778,11 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
 
   // Check early for profitability. Afterwards it cannot change anymore,
   // only the runtime context could become infeasible.
-  if (!scop->isProfitable(UnprofitableScalarAccs)) {
+  bool UnprofScalarAccs = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          scop->getFunction().getContext().getOptionsContext()))
+    UnprofScalarAccs = Opts->get<&llvm::clv2::POLLY_UnprofitableScalarAccs>();
+  if (!scop->isProfitable(UnprofScalarAccs)) {
     scop->invalidate(PROFITABLE, DebugLoc());
     POLLY_DEBUG(
         dbgs() << "Bailing-out because SCoP is not considered profitable\n");

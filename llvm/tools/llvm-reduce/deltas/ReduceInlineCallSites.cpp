@@ -7,19 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "ReduceInlineCallSites.h"
+#include "../ReducerWorkItem.h"
 #include "llvm/IR/InstrTypes.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
 using namespace llvm;
-
-extern cl::OptionCategory LLVMReduceOptions;
-
-static cl::opt<int> CallsiteInlineThreshold(
-    "reduce-callsite-inline-threshold",
-    cl::desc("Number of instructions in a function to unconditionally inline "
-             "(-1 for inline all)"),
-    cl::init(5), cl::cat(LLVMReduceOptions));
 
 static bool functionHasMoreThanNonTerminatorInsts(const Function &F,
                                                   uint64_t NumInsts) {
@@ -50,9 +42,9 @@ static bool hasOnlyOneCallUse(const Function &F) {
 
 // TODO: This could use more thought.
 static bool inlineWillReduceComplexity(const Function &Caller,
-                                       const Function &Callee) {
+                                       const Function &Callee, int Threshold) {
   // Backdoor to force all possible inlining.
-  if (CallsiteInlineThreshold < 0)
+  if (Threshold < 0)
     return true;
 
   if (!hasOnlyOneCallUse(Callee))
@@ -60,14 +52,14 @@ static bool inlineWillReduceComplexity(const Function &Caller,
 
   // Permit inlining small functions into big functions, or big functions into
   // small functions.
-  if (!functionHasMoreThanNonTerminatorInsts(Callee, CallsiteInlineThreshold) &&
-      !functionHasMoreThanNonTerminatorInsts(Caller, CallsiteInlineThreshold))
+  if (!functionHasMoreThanNonTerminatorInsts(Callee, Threshold) &&
+      !functionHasMoreThanNonTerminatorInsts(Caller, Threshold))
     return true;
 
   return false;
 }
 
-static void reduceCallSites(Oracle &O, Function &F) {
+static void reduceCallSites(Oracle &O, Function &F, int Threshold) {
   std::vector<std::pair<CallBase *, InlineFunctionInfo>> CallSitesToInline;
 
   for (Use &U : F.uses()) {
@@ -84,7 +76,8 @@ static void reduceCallSites(Oracle &O, Function &F) {
       // TODO: Should we delete the function body?
       InlineFunctionInfo IFI;
       if (CanInlineCallSite(*CB, IFI).isSuccess() &&
-          inlineWillReduceComplexity(*CB->getFunction(), F) && !O.shouldKeep())
+          inlineWillReduceComplexity(*CB->getFunction(), F, Threshold) &&
+          !O.shouldKeep())
         CallSitesToInline.emplace_back(CB, std::move(IFI));
     }
   }
@@ -96,8 +89,9 @@ static void reduceCallSites(Oracle &O, Function &F) {
 }
 
 void llvm::reduceInlineCallSitesDeltaPass(Oracle &O, ReducerWorkItem &Program) {
+  int Threshold = Program.getConfig().CallsiteInlineThreshold;
   for (Function &F : Program.getModule()) {
     if (!F.isDeclaration())
-      reduceCallSites(O, F);
+      reduceCallSites(O, F, Threshold);
   }
 }

@@ -31,6 +31,7 @@ class RISCVTTIImpl final : public BasicTTIImplBase<RISCVTTIImpl> {
 
   friend BaseT;
 
+  const Function &F;
   const RISCVSubtarget *ST;
   const RISCVTargetLowering *TLI;
 
@@ -74,7 +75,7 @@ class RISCVTTIImpl final : public BasicTTIImplBase<RISCVTTIImpl> {
 
 public:
   explicit RISCVTTIImpl(const RISCVTargetMachine *TM, const Function &F)
-      : BaseT(TM, F.getDataLayout()), ST(TM->getSubtargetImpl(F)),
+      : BaseT(TM, F.getDataLayout()), F(F), ST(TM->getSubtargetImpl(F)),
         TLI(ST->getTargetLowering()) {}
 
   /// Return the cost of materializing an immediate for a value operand of

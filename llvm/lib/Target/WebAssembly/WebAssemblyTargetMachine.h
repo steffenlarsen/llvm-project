@@ -21,14 +21,23 @@
 
 namespace llvm {
 
+class Function;
+namespace clv2 {
+class OptionsContext;
+}
+
 namespace WebAssembly {
-// Exception handling / setjmp-longjmp handling command-line options
-extern cl::opt<bool> WasmDisableExplicitLocals;
-extern cl::opt<bool> WasmEnableEmEH;   // asm.js-style EH
-extern cl::opt<bool> WasmEnableEmSjLj; // asm.js-style SjLJ
-extern cl::opt<bool> WasmEnableEH;     // EH using Wasm EH instructions
-extern cl::opt<bool> WasmEnableSjLj;   // SjLj using Wasm EH instructions
-extern cl::opt<bool> WasmUseLegacyEH;  // Legacy Wasm EH
+// Exception handling / setjmp-longjmp handling option getters
+LLVM_ABI bool getWasmEnableEmEH(const Function *F = nullptr);
+LLVM_ABI bool getWasmEnableEmSjLj(const Function *F = nullptr);
+LLVM_ABI bool getWasmEnableEH(const Function *F = nullptr);
+LLVM_ABI bool getWasmEnableSjLj(const Function *F = nullptr);
+LLVM_ABI bool getWasmUseLegacyEH(const Function *F = nullptr);
+LLVM_ABI bool getWasmEnableEmEH(const clv2::OptionsContext &Ctx);
+LLVM_ABI bool getWasmEnableEmSjLj(const clv2::OptionsContext &Ctx);
+LLVM_ABI bool getWasmEnableEH(const clv2::OptionsContext &Ctx);
+LLVM_ABI bool getWasmEnableSjLj(const clv2::OptionsContext &Ctx);
+LLVM_ABI bool getWasmUseLegacyEH(const clv2::OptionsContext &Ctx);
 } // namespace WebAssembly
 
 class WebAssemblyTargetMachine final : public CodeGenTargetMachineImpl {

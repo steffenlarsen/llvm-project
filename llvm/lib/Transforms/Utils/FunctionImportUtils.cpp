@@ -12,8 +12,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Utils/FunctionImportUtils.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/IROptionsOptInfos.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TimeProfiler.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -22,22 +25,18 @@ namespace llvm {
 /// Uses the "source_filename" instead of a Module hash ID for the suffix of
 /// promoted locals during LTO. NOTE: This requires that the source filename
 /// has a unique name / path to avoid name collisions.
-static cl::opt<bool> UseSourceFilenameForPromotedLocals(
-    "use-source-filename-for-promoted-locals", cl::Hidden,
-    cl::desc("Uses the source file name instead of the Module hash. "
-             "This requires that the source filename has a unique name / "
-             "path to avoid name collisions."));
+std::vector<GlobalValue::GUID> MoveSymbolGUID;
+static bool getUseSourceFilenameForPromotedLocals(const Module &M) {
+  return clv2::getOptValIfSpecified<
+      &clv2::TransformUtilsOptsReg,
+      &clv2::TU_UseSourceFilenameForPromotedLocals>(
+      M.getContext().getOptionsContext(), false);
+}
 
-extern cl::opt<bool> AlwaysRenamePromotedLocals;
-
-cl::list<GlobalValue::GUID> MoveSymbolGUID(
-    "thinlto-move-symbols",
-    cl::desc(
-        "Move the symbols with the given name. This will delete these symbols "
-        "wherever they are originally defined, and make sure their "
-        "linkage is External where they are imported. It is meant to be "
-        "used with the name of contextual profiling roots."),
-    cl::Hidden);
+static std::vector<GlobalValue::GUID> getMoveSymbolGUID(const Module &M) {
+  return clv2::getOptValOr<&clv2::TU_MoveSymbolGUID>(
+      M.getContext().getOptionsContext(), MoveSymbolGUID);
+}
 
 } // end namespace llvm
 
@@ -61,7 +60,8 @@ FunctionImportGlobalProcessing::FunctionImportGlobalProcessing(
   collectUsedGlobalVariables(M, Vec, /*CompilerUsed=*/true);
   Used = {llvm::from_range, Vec};
 #endif
-  SymbolsToMove.insert_range(MoveSymbolGUID);
+  if (!M.empty())
+    SymbolsToMove.insert_range(getMoveSymbolGUID(M));
 }
 
 /// Checks if we should import SGV as a definition, otherwise import as a
@@ -146,7 +146,7 @@ FunctionImportGlobalProcessing::getPromotedName(const GlobalValue *SGV) {
   // For locals that must be promoted to global scope, ensure that
   // the promoted name uniquely identifies the copy in the original module,
   // using the ID assigned during combined index creation.
-  if (UseSourceFilenameForPromotedLocals &&
+  if (!M.empty() && getUseSourceFilenameForPromotedLocals(M) &&
       !SGV->getParent()->getSourceFileName().empty()) {
     SmallString<256> Suffix(SGV->getParent()->getSourceFileName());
     std::replace_if(std::begin(Suffix), std::end(Suffix),
@@ -318,8 +318,11 @@ void FunctionImportGlobalProcessing::processGlobalForThinLTO(GlobalValue &GV) {
   if (GV.hasLocalLinkage() && shouldPromoteLocalToGlobal(&GV, Summary)) {
     // Save the original name string before we rename GV below.
     auto Name = GV.getName().str();
-    if (AlwaysRenamePromotedLocals || !Summary ||
-        !Summary->noRenameOnPromotion())
+    bool AlwaysRename = true;
+    if (auto *O = clv2::getView<&clv2::IROptsReg>(
+            GV.getParent()->getContext().getOptionsContext()))
+      AlwaysRename = O->get<&clv2::IR_AlwaysRenamePromotedLocals>();
+    if (AlwaysRename || !Summary || !Summary->noRenameOnPromotion())
       GV.setName(getPromotedName(&GV));
 
     GV.setLinkage(getLinkage(&GV, /* DoPromote */ true));

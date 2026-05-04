@@ -92,13 +92,14 @@
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Triple.h"
@@ -123,34 +124,37 @@ STATISTIC(NumLoopByVals, "Number of loops generated for byval arguments");
 STATISTIC(NumConstpoolPromoted,
   "Number of constants with their storage promoted into constant pools");
 
-static cl::opt<bool>
-ARMInterworking("arm-interworking", cl::Hidden,
-  cl::desc("Enable / disable ARM interworking (for debugging only)"),
-  cl::init(true));
+static bool getARMInterworking(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::ARM_Interworking>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> EnableConstpoolPromotion(
-    "arm-promote-constant", cl::Hidden,
-    cl::desc("Enable / disable promotion of unnamed_addr constants into "
-             "constant pools"),
-    cl::init(false)); // FIXME: set to true by default once PR32780 is fixed
-static cl::opt<unsigned> ConstpoolPromotionMaxSize(
-    "arm-promote-constant-max-size", cl::Hidden,
-    cl::desc("Maximum size of constant to promote into a constant pool"),
-    cl::init(64));
-static cl::opt<unsigned> ConstpoolPromotionMaxTotal(
-    "arm-promote-constant-max-total", cl::Hidden,
-    cl::desc("Maximum size of ALL constants to promote into a constant pool"),
-    cl::init(128));
+static bool getEnableConstpoolPromotion(const Function &F) {
+  return clv2::getOptValOr<&clv2::ARMOptsReg,
+                           &clv2::ARM_EnableConstpoolPromotion>(
+      F.getContext().getOptionsContext(), false);
+}
 
-cl::opt<unsigned>
-MVEMaxSupportedInterleaveFactor("mve-max-interleave-factor", cl::Hidden,
-  cl::desc("Maximum interleave factor for MVE VLDn to generate."),
-  cl::init(2));
+static unsigned getConstpoolPromotionMaxSize(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::ARM_ConstpoolPromotionMaxSize>(
+      F.getContext().getOptionsContext());
+}
 
-cl::opt<unsigned> ArmMaxBaseUpdatesToCheck(
-    "arm-max-base-updates-to-check", cl::Hidden,
-    cl::desc("Maximum number of base-updates to check generating postindex."),
-    cl::init(64));
+static unsigned getConstpoolPromotionMaxTotal(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::ARM_ConstpoolPromotionMaxTotal>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned
+getMVEMaxSupportedInterleaveFactor(const ::llvm::clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::ARM_MVEMaxSupportedInterleaveFactor>(
+      Ctx);
+}
+
+static unsigned getArmMaxBaseUpdatesToCheck(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::ARM_MaxBaseUpdatesToCheck>(
+      F.getContext().getOptionsContext());
+}
 
 /// Value type used for "flags" operands / results (either CPSR or FPSCR_NZCV).
 constexpr MVT FlagsVT = MVT::i32;
@@ -2533,7 +2537,9 @@ ARMTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
       bool isDef = GVal->isStrongDefinitionForLinker();
 
       // ARM call to a local ARM function is predicable.
-      isLocalARMFunc = !Subtarget->isThumb() && (isDef || !ARMInterworking);
+      isLocalARMFunc = !Subtarget->isThumb() &&
+                       (isDef || !getARMInterworking(
+                                     DAG.getMachineFunction().getFunction()));
       // tBX takes a register source operand.
       if (isStub && Subtarget->isThumb1Only() && !Subtarget->hasV5TOps()) {
         assert(TT.isOSBinFormatMachO() && "WrapperPIC use on non-MachO?");
@@ -3579,9 +3585,9 @@ static SDValue promoteToConstantPool(const ARMTargetLowering *TLI,
   // doesn't know about this optimization, so bail out if it's enabled else
   // we could decide to inline here (and thus never emit the GV) but require
   // the GV from fast-isel generated code.
-  if (!EnableConstpoolPromotion ||
+  if (!getEnableConstpoolPromotion(F) ||
       DAG.getMachineFunction().getTarget().Options.EnableFastISel)
-      return SDValue();
+    return SDValue();
 
   auto *GVar = dyn_cast<GlobalVariable>(GV);
   if (!GVar || !GVar->hasInitializer() ||
@@ -3608,8 +3614,8 @@ static SDValue promoteToConstantPool(const ARMTargetLowering *TLI,
   unsigned RequiredPadding = 4 - (Size % 4);
   bool PaddingPossible =
     RequiredPadding == 4 || (CDAInit && CDAInit->isString());
-  if (!PaddingPossible || PrefAlign > 4 || Size > ConstpoolPromotionMaxSize ||
-      Size == 0)
+  if (!PaddingPossible || PrefAlign > 4 ||
+      Size > getConstpoolPromotionMaxSize(F) || Size == 0)
     return SDValue();
 
   unsigned PaddedSize = Size + ((RequiredPadding == 4) ? 0 : RequiredPadding);
@@ -3622,7 +3628,7 @@ static SDValue promoteToConstantPool(const ARMTargetLowering *TLI,
   // > 4), ensure we have space to do so up to MaxTotal.
   if (!AFI->getGlobalsPromotedToConstantPool().count(GVar) && Size > 4)
     if (AFI->getPromotedConstpoolIncrease() + PaddedSize - 4 >=
-        ConstpoolPromotionMaxTotal)
+        getConstpoolPromotionMaxTotal(F))
       return SDValue();
 
   // This is only valid if all users are in a single function; we can't clone
@@ -16349,7 +16355,8 @@ static SDValue CombineBaseUpdate(SDNode *N,
 
   // Limit the number of possible base-updates we look at to prevent degenerate
   // cases.
-  unsigned MaxBaseUpdates = ArmMaxBaseUpdatesToCheck;
+  unsigned MaxBaseUpdates =
+      getArmMaxBaseUpdatesToCheck(DCI.DAG.getMachineFunction().getFunction());
 
   SDValue Addr = N->getOperand(AddrOpIdx);
 
@@ -21905,7 +21912,7 @@ unsigned ARMTargetLowering::getMaxSupportedInterleaveFactor() const {
   if (Subtarget->hasNEON())
     return 4;
   if (Subtarget->hasMVEIntegerOps())
-    return MVEMaxSupportedInterleaveFactor;
+    return getMVEMaxSupportedInterleaveFactor(Subtarget->getOptionsContext());
   return TargetLoweringBase::getMaxSupportedInterleaveFactor();
 }
 

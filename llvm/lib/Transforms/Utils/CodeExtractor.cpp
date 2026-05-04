@@ -53,11 +53,12 @@
 #include "llvm/Support/BlockFrequency.h"
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 #include <cassert>
 #include <cstdint>
 #include <iterator>
@@ -73,9 +74,10 @@ using namespace llvm::PatternMatch;
 // for functions produced by the code extractor. This is useful when converting
 // extracted functions to pthread-based code, as only one argument (void*) can
 // be passed in to pthread_create().
-static cl::opt<bool>
-AggregateArgsOpt("aggregate-extracted-args", cl::Hidden,
-                 cl::desc("Aggregate arguments to code-extracted functions"));
+static bool getAggregateArgsOpt(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::TU_AggregateArgsOpt>(
+      F.getContext().getOptionsContext());
+}
 
 /// Test whether a block is valid for extraction.
 static bool isBlockValidForExtraction(const BasicBlock &BB,
@@ -271,8 +273,9 @@ CodeExtractor::CodeExtractor(ArrayRef<BasicBlock *> BBs, DominatorTree *DT,
                              ArrayRef<BasicBlock *> DeallocationBlocks,
                              std::string Suffix, bool ArgsInZeroAddressSpace,
                              bool VoidReturnWithSingleOutput)
-    : DT(DT), AggregateArgs(AggregateArgs || AggregateArgsOpt), BFI(BFI),
-      BPI(BPI), AC(AC), AllocationBlock(AllocationBlock),
+    : DT(DT), AggregateArgs(AggregateArgs ||
+                            getAggregateArgsOpt(*BBs.front()->getParent())),
+      BFI(BFI), BPI(BPI), AC(AC), AllocationBlock(AllocationBlock),
       DeallocationBlocks(DeallocationBlocks), AllowVarArgs(AllowVarArgs),
       Blocks(buildExtractionBlockSet(BBs, DT, AllowVarArgs, AllowAlloca)),
       Suffix(Suffix), ArgsInZeroAddressSpace(ArgsInZeroAddressSpace),

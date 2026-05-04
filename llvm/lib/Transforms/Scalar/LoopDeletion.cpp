@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LoopDeletion.cpp - Dead Loop Deletion Pass ---------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -13,7 +15,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Scalar/LoopDeletion.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/CFG.h"
@@ -24,8 +25,9 @@
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/IR/Dominators.h"
-
+#include "llvm/IR/Function.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/Transforms/Scalar/LoopDeletion.h"
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 
@@ -37,10 +39,11 @@ STATISTIC(NumDeleted, "Number of loops deleted");
 STATISTIC(NumBackedgesBroken,
           "Number of loops for which we managed to break the backedge");
 
-static cl::opt<bool> EnableSymbolicExecution(
-    "loop-deletion-enable-symbolic-execution", cl::Hidden, cl::init(true),
-    cl::desc("Break backedge through symbolic execution of 1st iteration "
-             "attempting to prove that the backedge is never taken"));
+static bool getEnableSymbolicExecution(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::SC_LoopDeletionEnableSymbolicExecution>(
+      F.getContext().getOptionsContext());
+}
 
 enum class LoopDeletionResult {
   Unmodified,
@@ -216,7 +219,7 @@ getValueOnFirstIteration(Value *V, DenseMap<Value *, Value *> &FirstIterValue,
 static bool canProveExitOnFirstIteration(Loop *L, DominatorTree &DT,
                                          LoopInfo &LI) {
   // Disabled by option.
-  if (!EnableSymbolicExecution)
+  if (!getEnableSymbolicExecution(*L->getHeader()->getParent()))
     return false;
 
   BasicBlock *Predecessor = L->getLoopPredecessor();

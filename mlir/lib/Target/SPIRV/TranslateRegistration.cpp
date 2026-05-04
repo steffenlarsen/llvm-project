@@ -17,6 +17,7 @@
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Support/FileUtilities.h"
+#include "mlir/Target/MLIRTranslateOptionsOptInfos.h"
 #include "mlir/Target/SPIRV/Deserialization.h"
 #include "mlir/Target/SPIRV/Serialization.h"
 #include "mlir/Tools/mlir-translate/Translation.h"
@@ -56,21 +57,18 @@ deserializeModule(const llvm::MemoryBuffer *input, MLIRContext *context,
 
 namespace mlir {
 void registerFromSPIRVTranslation() {
-  static llvm::cl::opt<bool> enableControlFlowStructurization(
-      "spirv-structurize-control-flow",
-      llvm::cl::desc(
-          "Enable control flow structurization into `spirv.mlir.selection` and "
-          "`spirv.mlir.loop`. This may need to be disabled to support "
-          "deserialization of early exits (see #138688)"),
-      llvm::cl::init(true));
-
   TranslateToMLIRRegistration fromBinary(
       "deserialize-spirv", "deserializes the SPIR-V module",
       [](llvm::SourceMgr &sourceMgr, MLIRContext *context) {
         assert(sourceMgr.getNumBuffers() == 1 && "expected one buffer");
+        bool structurize = true;
+        if (auto *O = mlir_translate_opts::getMLIRTranslateOptsReg(
+                context->getOptionsContext()))
+          structurize =
+              O->get<&llvm::clv2::MLIRT_SPIRVStructurizeControlFlow>();
         return deserializeModule(
             sourceMgr.getMemoryBuffer(sourceMgr.getMainFileID()), context,
-            {enableControlFlowStructurization});
+            {structurize});
       });
 }
 } // namespace mlir
@@ -122,29 +120,15 @@ serializeModule(spirv::ModuleOp moduleOp, raw_ostream &output,
 
 namespace mlir {
 void registerToSPIRVTranslation() {
-  static llvm::cl::opt<bool> emitDebugInfo(
-      "spirv-emit-debug-info",
-      llvm::cl::desc("Emit SPIR-V debug information during serialization"),
-      llvm::cl::init(false));
-
-  static llvm::cl::opt<std::string> validationFilesPrefix(
-      "spirv-save-validation-files-with-prefix",
-      llvm::cl::desc(
-          "When non-empty string is passed each serialized SPIR-V module is "
-          "saved to an additional file that starts with the given prefix. This "
-          "is used to generate separate binaries for validation, where "
-          "`--split-input-file` normally combines all outputs into one. The "
-          "one combined output (`-o`) is still written. Created files need to "
-          "be removed manually once processed."),
-      llvm::cl::init(""));
-
   TranslateFromMLIRRegistration toBinary(
       "serialize-spirv", "serialize SPIR-V dialect",
       [](spirv::ModuleOp moduleOp, raw_ostream &output) {
+        std::string prefix;
+        if (auto *O = mlir_translate_opts::getMLIRTranslateOptsReg(
+                moduleOp->getContext()->getOptionsContext()))
+          prefix = O->get<&llvm::clv2::MLIRT_SPIRVSaveValidationFilesPrefix>();
         return serializeModule(moduleOp, output,
-                               {true, emitDebugInfo,
-                                !validationFilesPrefix.empty(),
-                                validationFilesPrefix});
+                               {true, false, !prefix.empty(), prefix});
       },
       [](DialectRegistry &registry) {
         registry.insert<spirv::SPIRVDialect>();
@@ -166,7 +150,8 @@ static LogicalResult roundTripModule(spirv::ModuleOp module, bool emitDebugInfo,
   if (failed(spirv::serialize(module, binary, options)))
     return failure();
 
-  MLIRContext deserializationContext(context->getDialectRegistry());
+  MLIRContext deserializationContext(context->getOptionsContext(),
+                                     context->getDialectRegistry());
   // TODO: we should only load the required dialects instead of all dialects.
   deserializationContext.loadAllAvailableDialects();
   // Then deserialize to get back a SPIR-V module.
@@ -174,7 +159,7 @@ static LogicalResult roundTripModule(spirv::ModuleOp module, bool emitDebugInfo,
       spirv::deserialize(binary, &deserializationContext);
   if (!spirvModule)
     return failure();
-  spirvModule->print(output);
+  spirvModule->print(output, opPrintingFlags(*spirvModule));
 
   return mlir::success();
 }

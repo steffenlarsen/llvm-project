@@ -19,7 +19,7 @@ namespace {
 
 class MDBuilderTest : public testing::Test {
 protected:
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 };
 
 TEST_F(MDBuilderTest, createString) {

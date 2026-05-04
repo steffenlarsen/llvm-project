@@ -58,6 +58,7 @@ if(MSVC AND NOT CMAKE_CXX_COMPILER_ID MATCHES Clang
 endif()
 
 add_clang_library(clangCodeGen
+  ClangCodeGenOptionsGetters.cpp
   ABIInfo.cpp
   ABIInfoImpl.cpp
   BackendUtil.cpp
@@ -100,6 +101,7 @@ add_clang_library(clangCodeGen
   CGStmtOpenMP.cpp
   CGVTT.cpp
   CGVTables.cpp
+  ClangCodeGenOptions.cpp
   CodeGenABITypes.cpp
   CodeGenAction.cpp
   CodeGenFunction.cpp

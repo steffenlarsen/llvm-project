@@ -17,10 +17,11 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
 
@@ -30,24 +31,31 @@ using namespace llvm;
 
 STATISTIC(NumExtracted, "Number of basic blocks extracted");
 
-static cl::opt<std::string> BlockExtractorFile(
-    "extract-blocks-file", cl::value_desc("filename"),
-    cl::desc("A file containing list of basic blocks to extract"), cl::Hidden);
+static const std::string &getBlockExtractorFile(const Module &M) {
+  if (auto *O =
+          clv2::getView<&clv2::IPOOptsReg>(M.getContext().getOptionsContext()))
+    if (O->specified<&clv2::IPO_BlockExtractorFile>())
+      return O->get<&clv2::IPO_BlockExtractorFile>();
+  static const std::string Default = "";
+  return Default;
+}
 
-static cl::opt<bool>
-    BlockExtractorEraseFuncs("extract-blocks-erase-funcs",
-                             cl::desc("Erase the existing functions"),
-                             cl::Hidden);
+static bool getBlockExtractorEraseFuncs(const Module &M) {
+  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
+                                    &clv2::IPO_BlockExtractorEraseFuncs>(
+      M.getContext().getOptionsContext(), false);
+}
 namespace {
 class BlockExtractor {
 public:
   BlockExtractor(bool EraseFunctions) : EraseFunctions(EraseFunctions) {}
   bool runOnModule(Module &M);
   void
-  init(const std::vector<std::vector<BasicBlock *>> &GroupsOfBlocksToExtract) {
+  init(const std::vector<std::vector<BasicBlock *>> &GroupsOfBlocksToExtract,
+       const Module &M) {
     GroupsOfBlocks = GroupsOfBlocksToExtract;
-    if (!BlockExtractorFile.empty())
-      loadFile();
+    if (!getBlockExtractorFile(M).empty())
+      loadFile(M);
   }
 
 private:
@@ -57,15 +65,15 @@ private:
   SmallVector<std::pair<std::string, SmallVector<std::string, 4>>, 4>
       BlocksByName;
 
-  void loadFile();
+  void loadFile(const Module &M);
   bool splitLandingPadPreds(Function &F);
 };
 
 } // end anonymous namespace
 
 /// Gets all of the blocks specified in the input file.
-void BlockExtractor::loadFile() {
-  auto ErrOrBuf = MemoryBuffer::getFile(BlockExtractorFile);
+void BlockExtractor::loadFile(const Module &M) {
+  auto ErrOrBuf = MemoryBuffer::getFile(getBlockExtractorFile(M));
   if (ErrOrBuf.getError())
     report_fatal_error("BlockExtractor couldn't load the file.");
   // Read the file.
@@ -181,7 +189,7 @@ bool BlockExtractor::runOnModule(Module &M) {
   }
 
   // Erase the functions.
-  if (EraseFunctions || BlockExtractorEraseFuncs) {
+  if (EraseFunctions || getBlockExtractorEraseFuncs(M)) {
     for (Function *F : Functions) {
       LLVM_DEBUG(dbgs() << "BlockExtractor: Trying to delete " << F->getName()
                         << "\n");
@@ -205,7 +213,7 @@ BlockExtractorPass::BlockExtractorPass(
 PreservedAnalyses BlockExtractorPass::run(Module &M,
                                           ModuleAnalysisManager &AM) {
   BlockExtractor BE(EraseFunctions);
-  BE.init(GroupsOfBlocks);
+  BE.init(GroupsOfBlocks, M);
   return BE.runOnModule(M) ? PreservedAnalyses::none()
                            : PreservedAnalyses::all();
 }

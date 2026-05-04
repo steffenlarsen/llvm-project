@@ -10,16 +10,20 @@
 #include "bolt/Core/BinaryContext.h"
 #include "bolt/Core/BinaryEmitter.h"
 #include "bolt/Core/BinaryFunction.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
 #include "bolt/Core/JumpTable.h"
 #include "bolt/Core/MCPlusBuilder.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "bolt/Passes/Instrumentation.h"
 #include "bolt/Passes/PatchEntries.h"
 #include "bolt/Profile/DataReader.h"
 #include "bolt/Rewrite/BinaryPassManager.h"
+#include "bolt/Rewrite/BoltRewriteOptionsOptInfos.h"
 #include "bolt/Rewrite/ExecutableFileMemoryManager.h"
 #include "bolt/Rewrite/JITLinkLinker.h"
 #include "bolt/Rewrite/RewriteInstance.h"
 #include "bolt/RuntimeLibs/InstrumentationRuntimeLibrary.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "bolt/Utils/Utils.h"
 #include "llvm/MC/MCObjectStreamer.h"
@@ -32,23 +36,8 @@
 namespace opts {
 
 using namespace llvm;
-// FIXME! Upstream change
-// extern cl::opt<bool> CheckOverlappingElements;
-extern cl::opt<bool> Instrument;
-extern cl::opt<bool> InstrumentCalls;
-extern cl::opt<bolt::JumpTableSupportLevel> JumpTables;
-extern cl::opt<bool> KeepTmp;
-extern cl::opt<bool> NeverPrint;
-extern cl::opt<std::string> OutputFilename;
-extern cl::opt<bool> PrintAfterBranchFixup;
-extern cl::opt<bool> PrintFinalized;
-extern cl::opt<bool> PrintNormalized;
-extern cl::opt<bool> PrintReordered;
-extern cl::opt<bool> PrintSections;
-extern cl::opt<bool> PrintDisasm;
-extern cl::opt<bool> PrintCFG;
-extern cl::opt<std::string> RuntimeInstrumentationLib;
-extern cl::opt<unsigned> Verbosity;
+// InstrumentCalls is now read from OptionsContext in Instrumentation.cpp
+extern bolt::JumpTableSupportLevel JumpTables;
 } // namespace opts
 
 namespace llvm {
@@ -58,17 +47,19 @@ namespace bolt {
 
 Expected<std::unique_ptr<MachORewriteInstance>>
 MachORewriteInstance::create(object::MachOObjectFile *InputFile,
-                             StringRef ToolPath) {
+                             StringRef ToolPath,
+                             clv2::OptionsContext *OptsCtx) {
   Error Err = Error::success();
   auto MachORI =
-      std::make_unique<MachORewriteInstance>(InputFile, ToolPath, Err);
+      std::make_unique<MachORewriteInstance>(InputFile, ToolPath, Err, OptsCtx);
   if (Err)
     return std::move(Err);
   return std::move(MachORI);
 }
 
 MachORewriteInstance::MachORewriteInstance(object::MachOObjectFile *InputFile,
-                                           StringRef ToolPath, Error &Err)
+                                           StringRef ToolPath, Error &Err,
+                                           clv2::OptionsContext *OptsCtx)
     : InputFile(InputFile), ToolPath(ToolPath) {
   ErrorAsOutParameter EAO(&Err);
   Relocation::Arch = InputFile->makeTriple().getArch();
@@ -76,7 +67,7 @@ MachORewriteInstance::MachORewriteInstance(object::MachOObjectFile *InputFile,
       InputFile->makeTriple(), std::make_shared<orc::SymbolStringPool>(),
       InputFile->getFileName(), nullptr,
       /* IsPIC */ true, DWARFContext::create(*InputFile),
-      {llvm::outs(), llvm::errs()});
+      {llvm::outs(), llvm::errs()}, OptsCtx);
   if (Error E = BCOrErr.takeError()) {
     Err = std::move(E);
     return;
@@ -85,7 +76,8 @@ MachORewriteInstance::MachORewriteInstance(object::MachOObjectFile *InputFile,
   BC->initializeTarget(std::unique_ptr<MCPlusBuilder>(
       createMCPlusBuilder(BC->TheTriple->getArch(), BC->MIA.get(),
                           BC->MII.get(), BC->MRI.get(), BC->STI.get())));
-  if (opts::Instrument)
+  bool Instrument = bolt_utils_opts::getInstrument(*BC);
+  if (Instrument)
     BC->setRuntimeLibrary(std::make_unique<InstrumentationRuntimeLibrary>());
 }
 
@@ -95,9 +87,10 @@ Error MachORewriteInstance::setProfile(StringRef Filename) {
 
   if (ProfileReader) {
     // Already exists
-    return make_error<StringError>(
-        Twine("multiple profiles specified: ") + ProfileReader->getFilename() +
-        " and " + Filename, inconvertibleErrorCode());
+    return make_error<StringError>(Twine("multiple profiles specified: ") +
+                                       ProfileReader->getFilename() + " and " +
+                                       Filename,
+                                   inconvertibleErrorCode());
   }
 
   ProfileReader = std::make_unique<DataReader>(Filename);
@@ -127,7 +120,8 @@ void MachORewriteInstance::processProfileData() {
 
 void MachORewriteInstance::readSpecialSections() {
   for (const object::SectionRef &Section : InputFile->sections()) {
-    Expected<StringRef> SectionName = Section.getName();;
+    Expected<StringRef> SectionName = Section.getName();
+    ;
     check_error(SectionName.takeError(), "cannot get section name");
     // Only register sections with names.
     if (!SectionName->empty()) {
@@ -140,7 +134,8 @@ void MachORewriteInstance::readSpecialSections() {
     }
   }
 
-  if (opts::PrintSections) {
+  bool PrintSections = bolt_utils_opts::getPrintSections(*BC);
+  if (PrintSections) {
     outs() << "BOLT-INFO: Sections from original binary:\n";
     BC->printSections(outs());
   }
@@ -213,6 +208,7 @@ std::optional<uint64_t> readStartAddress(const MachOObjectFile &O) {
 } // anonymous namespace
 
 void MachORewriteInstance::discoverFileObjects() {
+  bool Instrument = bolt_utils_opts::getInstrument(*BC);
   std::vector<SymbolRef> FunctionSymbols;
   for (const SymbolRef &S : InputFile->symbols()) {
     SymbolRef::Type Type = cantFail(S.getType(), "cannot get symbol type");
@@ -260,7 +256,7 @@ void MachORewriteInstance::discoverFileObjects() {
     if (It == BC->getBinaryFunctions().end()) {
       BinaryFunction *Function = BC->createBinaryFunction(
           std::move(SymbolName), *Section, Address, SymbolSize);
-      if (!opts::Instrument)
+      if (!Instrument)
         Function->setOutputAddress(Function->getAddress());
 
     } else {
@@ -311,7 +307,7 @@ void MachORewriteInstance::disassembleFunctions() {
     if (!Function.isSimple())
       continue;
     BC->logBOLTErrorsAndQuitOnFatal(Function.disassemble());
-    if (opts::PrintDisasm)
+    if (bolt_rewrite_opts::getPrintDisasm(*BC))
       Function.print(outs(), "after disassembly");
   }
 }
@@ -331,39 +327,43 @@ void MachORewriteInstance::postProcessFunctions() {
     if (Function.empty())
       continue;
     Function.postProcessCFG();
-    if (opts::PrintCFG)
+    if (bolt_rewrite_opts::getPrintCfg(*BC))
       Function.print(outs(), "after building cfg");
   }
 }
 
 void MachORewriteInstance::runOptimizationPasses() {
+  bool Instrument = bolt_utils_opts::getInstrument(*BC);
+  bool NeverPrint = bolt_rewrite_opts::getNeverPrint(*BC);
+  bool PrintNormalized = bolt_rewrite_opts::getPrintNormalized(*BC);
+  bool PrintReordered = bolt_rewrite_opts::getPrintReordered(*BC);
+  bool PrintAfterBranchFixup = bolt_rewrite_opts::getPrintAfterBranchFixup(*BC);
+  bool PrintFinalized = bolt_rewrite_opts::getPrintFinalized(*BC);
   BinaryFunctionPassManager Manager(*BC);
-  if (opts::Instrument) {
+  if (Instrument) {
     Manager.registerPass(std::make_unique<PatchEntries>());
-    Manager.registerPass(std::make_unique<Instrumentation>(opts::NeverPrint));
+    Manager.registerPass(std::make_unique<Instrumentation>(NeverPrint));
   }
 
-  Manager.registerPass(std::make_unique<ShortenInstructions>(opts::NeverPrint));
+  Manager.registerPass(std::make_unique<ShortenInstructions>(NeverPrint));
 
-  Manager.registerPass(std::make_unique<RemoveNops>(opts::NeverPrint));
+  Manager.registerPass(std::make_unique<RemoveNops>(NeverPrint));
 
-  Manager.registerPass(std::make_unique<NormalizeCFG>(opts::PrintNormalized));
+  Manager.registerPass(std::make_unique<NormalizeCFG>(PrintNormalized));
 
-  Manager.registerPass(
-      std::make_unique<ReorderBasicBlocks>(opts::PrintReordered));
-  Manager.registerPass(
-      std::make_unique<FixupBranches>(opts::PrintAfterBranchFixup));
+  Manager.registerPass(std::make_unique<ReorderBasicBlocks>(PrintReordered));
+  Manager.registerPass(std::make_unique<FixupBranches>(PrintAfterBranchFixup));
   Manager.registerPass(std::make_unique<PopulateOutputFunctions>());
   // This pass should always run last.*
-  Manager.registerPass(
-      std::make_unique<FinalizeFunctions>(opts::PrintFinalized));
+  Manager.registerPass(std::make_unique<FinalizeFunctions>(PrintFinalized));
 
   BC->logBOLTErrorsAndQuitOnFatal(Manager.runPasses());
 }
 
 void MachORewriteInstance::mapInstrumentationSection(
     StringRef SectionName, BOLTLinker::SectionMapper MapSection) {
-  if (!opts::Instrument)
+  bool Instrument = bolt_utils_opts::getInstrument(*BC);
+  if (!Instrument)
     return;
   ErrorOr<BinarySection &> Section = BC->getUniqueSectionByName(SectionName);
   if (!Section) {
@@ -390,15 +390,17 @@ void MachORewriteInstance::mapCodeSections(
           FuncSection.getError());
 
     FuncSection->setOutputAddress(Function->getOutputAddress());
-    LLVM_DEBUG(dbgs() << "BOLT: mapping 0x"
-                 << Twine::utohexstr(FuncSection->getAllocAddress()) << " to 0x"
-                 << Twine::utohexstr(Function->getOutputAddress()) << '\n');
+    LLVM_DEBUG(
+        dbgs() << "BOLT: mapping 0x"
+               << Twine::utohexstr(FuncSection->getAllocAddress()) << " to 0x"
+               << Twine::utohexstr(Function->getOutputAddress()) << '\n');
     MapSection(*FuncSection, Function->getOutputAddress());
     Function->setImageAddress(FuncSection->getAllocAddress());
     Function->setImageSize(FuncSection->getOutputSize());
   }
 
-  if (opts::Instrument) {
+  bool Instrument = bolt_utils_opts::getInstrument(*BC);
+  if (Instrument) {
     ErrorOr<BinarySection &> BOLT = BC->getUniqueSectionByName("__bolt");
     if (!BOLT) {
       llvm::errs() << "Cannot find __bolt section\n";
@@ -426,13 +428,14 @@ void MachORewriteInstance::mapCodeSections(
 }
 
 void MachORewriteInstance::emitAndLink() {
+  std::string OutputFilename = bolt_utils_opts::getO(*BC);
   std::error_code EC;
   std::unique_ptr<::llvm::ToolOutputFile> TempOut =
-      std::make_unique<::llvm::ToolOutputFile>(
-          opts::OutputFilename + ".bolt.o", EC, sys::fs::OF_None);
+      std::make_unique<::llvm::ToolOutputFile>(OutputFilename + ".bolt.o", EC,
+                                               sys::fs::OF_None);
   check_error(EC, "cannot create output object file");
 
-  if (opts::KeepTmp)
+  if (bolt_rewrite_opts::getKeepTmp(*BC))
     TempOut->keep();
 
   std::unique_ptr<buffer_ostream> BOS =
@@ -483,7 +486,8 @@ void MachORewriteInstance::emitAndLink() {
 
 void MachORewriteInstance::writeInstrumentationSection(StringRef SectionName,
                                                        raw_fd_ostream &OS) {
-  if (!opts::Instrument)
+  bool Instrument = bolt_utils_opts::getInstrument(*BC);
+  if (!Instrument)
     return;
   ErrorOr<BinarySection &> Section = BC->getUniqueSectionByName(SectionName);
   if (!Section) {
@@ -501,9 +505,10 @@ void MachORewriteInstance::writeInstrumentationSection(StringRef SectionName,
 }
 
 void MachORewriteInstance::rewriteFile() {
+  bool Instrument = bolt_utils_opts::getInstrument(*BC);
+  std::string OutputFilename = bolt_utils_opts::getO(*BC);
   std::error_code EC;
-  Out = std::make_unique<ToolOutputFile>(opts::OutputFilename, EC,
-                                         sys::fs::OF_None);
+  Out = std::make_unique<ToolOutputFile>(OutputFilename, EC, sys::fs::OF_None);
   check_error(EC, "cannot create output executable file");
   raw_fd_ostream &OS = Out->os();
   OS << InputFile->getData();
@@ -513,9 +518,9 @@ void MachORewriteInstance::rewriteFile() {
     if (!Function.isSimple())
       continue;
     assert(Function.isEmitted() && "Simple function has not been emitted");
-    if (!opts::Instrument && (Function.getImageSize() > Function.getMaxSize()))
+    if (!Instrument && (Function.getImageSize() > Function.getMaxSize()))
       continue;
-    if (opts::Verbosity >= 2)
+    if (opts::getVerbosity(*BC) >= 2)
       outs() << "BOLT: rewriting function \"" << Function << "\"\n";
     safePWrite(OS, reinterpret_cast<char *>(Function.getImageAddress()),
                Function.getImageSize(), Function.getFileOffset());
@@ -540,35 +545,52 @@ void MachORewriteInstance::rewriteFile() {
 
   Out->keep();
   EC = sys::fs::setPermissions(
-      opts::OutputFilename,
-      static_cast<sys::fs::perms>(sys::fs::perms::all_all &
-                                  ~sys::fs::getUmask()));
+      OutputFilename, static_cast<sys::fs::perms>(sys::fs::perms::all_all &
+                                                  ~sys::fs::getUmask()));
   check_error(EC, "cannot set permissions of output file");
 }
 
 void MachORewriteInstance::adjustCommandLineOptions() {
-//FIXME! Upstream change
-//  opts::CheckOverlappingElements = false;
-  if (!opts::AlignText.getNumOccurrences())
-    opts::AlignText = BC->PageAlign;
-  if (opts::Instrument.getNumOccurrences())
-    opts::ForcePatch = true;
-  opts::JumpTables = JTS_MOVE;
-  opts::InstrumentCalls = false;
-  opts::RuntimeInstrumentationLib = "libbolt_rt_instr_osx.a";
+  // FIXME! Upstream change
+  //   opts::CheckOverlappingElements = false;
+  auto *UtilOpts = bolt_utils_opts::getBoltUtilsOpts(BC->getOptionsContext());
+  bool AlignTextSpecified = UtilOpts->specified<&clv2::BOLT_AlignText>();
+  if (!AlignTextSpecified) {
+    if (auto *V = BC->getOptionsContext().getViewPtr<&clv2::BoltUtilsOptsReg>())
+      V->get<&clv2::BOLT_AlignText>() = BC->PageAlign;
+  }
 
   // Mirror alignment-related command line options onto BinaryContext so passes
   // and the emitter can read them via BC instead of touching opts::*.
-  BC->AlignText = opts::AlignText;
-  BC->AlignFunctions = opts::AlignFunctions;
-  BC->AlignBlocks = opts::AlignBlocks;
-  BC->AlignBlocksMinSize = opts::AlignBlocksMinSize;
-  BC->AlignBlocksThreshold = opts::AlignBlocksThreshold;
-  BC->AlignFunctionsMaxBytes = opts::AlignFunctionsMaxBytes;
-  BC->BlockAlignment = opts::BlockAlignment;
-  BC->PreserveBlocksAlignment = opts::PreserveBlocksAlignment;
-  BC->UseCompactAligner = opts::UseCompactAligner;
-  BC->X86AlignBranchBoundaryHotOnly = opts::X86AlignBranchBoundaryHotOnly;
+  unsigned AlignFunctions = UtilOpts->get<&clv2::BOLT_AlignFunctions>();
+  {
+    BC->AlignText = UtilOpts->get<&clv2::BOLT_AlignText>();
+    BC->AlignFunctions = AlignFunctions;
+    BC->AlignBlocks = bolt::bolt_core_opts::getAlignBlocks(*BC);
+    BC->AlignBlocksMinSize = bolt::bolt_passes_opts::getAlignBlocksMinSize(*BC);
+    BC->AlignBlocksThreshold =
+        bolt::bolt_passes_opts::getAlignBlocksThreshold(*BC);
+    BC->AlignFunctionsMaxBytes =
+        bolt::bolt_passes_opts::getAlignFunctionsMaxBytes(*BC);
+    BC->BlockAlignment = bolt::bolt_passes_opts::getBlockAlignment(*BC);
+    BC->PreserveBlocksAlignment =
+        bolt::bolt_core_opts::getPreserveBlocksAlignment(*BC);
+    BC->UseCompactAligner = bolt::bolt_passes_opts::getUseCompactAligner(*BC);
+    BC->X86AlignBranchBoundaryHotOnly =
+        bolt::bolt_core_opts::getX86AlignBranchBoundaryHotOnly(*BC);
+  }
+
+  bool InstrumentSpecified = UtilOpts->specified<&clv2::BOLT_Instrument>();
+  if (InstrumentSpecified) {
+    if (auto *V = BC->getOptionsContext().getViewPtr<&clv2::BoltUtilsOptsReg>())
+      V->get<&clv2::BOLT_ForcePatch>() = true;
+  }
+  if (auto *V = BC->getOptionsContext().getViewPtr<&clv2::BoltCoreOptsReg>())
+    V->get<&clv2::BOLTCORE_JumpTables>() =
+        clv2::BoltCoreJumpTableSupportLevel::JTS_MOVE;
+  // TODO: InstrumentCalls=false for MachO was handled by setting a global.
+  // Now that Instrumentation reads from OptionsContext, this override
+  // needs to be plumbed through the OptionsContext mechanism instead.
 }
 
 void MachORewriteInstance::run() {

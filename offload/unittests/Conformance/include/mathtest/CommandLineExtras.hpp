@@ -19,16 +19,14 @@
 #include "mathtest/TestConfig.hpp"
 
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/CommandLine.h"
 
 namespace mathtest {
 namespace cl {
 
-extern llvm::cl::opt<bool> IsVerbose;
+extern bool IsVerbose;
 
 namespace detail {
-
-extern llvm::cl::opt<llvm::cl::TestConfigsArg> TestConfigsOpt;
+extern TestConfigsArg TestConfigsOpt;
 } // namespace detail
 
 const llvm::SmallVector<TestConfig, 4> &getTestConfigs();

@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Core/BinaryFunction.h"
+#include "bolt/Rewrite/BoltRewriteOptionsOptInfos.h"
 #include "bolt/Rewrite/MetadataRewriter.h"
 #include "bolt/Rewrite/MetadataRewriters.h"
 #include "bolt/Utils/CommandLineOpts.h"
@@ -18,7 +19,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
 #include "llvm/Support/BinaryStreamWriter.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/ErrorOr.h"
@@ -31,63 +32,12 @@ using namespace bolt;
 
 namespace opts {
 
-static cl::opt<bool>
-    AltInstHasPadLen("alt-inst-has-padlen",
-                     cl::desc("specify that .altinstructions has padlen field"),
-                     cl::init(false), cl::Hidden, cl::cat(BoltCategory));
-
-static cl::opt<uint32_t>
-    AltInstFeatureSize("alt-inst-feature-size",
-                       cl::desc("size of feature field in .altinstructions"),
-                       cl::init(2), cl::Hidden, cl::cat(BoltCategory));
-
-static cl::opt<bool>
-    DumpAltInstructions("dump-alt-instructions",
-                        cl::desc("dump Linux alternative instructions info"),
-                        cl::init(false), cl::Hidden, cl::cat(BoltCategory));
-
-static cl::opt<bool>
-    DumpExceptions("dump-linux-exceptions",
-                   cl::desc("dump Linux kernel exception table"),
-                   cl::init(false), cl::Hidden, cl::cat(BoltCategory));
-
-static cl::opt<bool>
-    DumpORC("dump-orc", cl::desc("dump raw ORC unwind information (sorted)"),
-            cl::init(false), cl::Hidden, cl::cat(BoltCategory));
-
-static cl::opt<bool> DumpParavirtualPatchSites(
-    "dump-para-sites", cl::desc("dump Linux kernel paravitual patch sites"),
-    cl::init(false), cl::Hidden, cl::cat(BoltCategory));
-
-static cl::opt<bool>
-    DumpPCIFixups("dump-pci-fixups",
-                  cl::desc("dump Linux kernel PCI fixup table"),
-                  cl::init(false), cl::Hidden, cl::cat(BoltCategory));
-
-static cl::opt<bool> DumpSMPLocks("dump-smp-locks",
-                                  cl::desc("dump Linux kernel SMP locks"),
-                                  cl::init(false), cl::Hidden,
-                                  cl::cat(BoltCategory));
-
-static cl::opt<bool> DumpStaticCalls("dump-static-calls",
-                                     cl::desc("dump Linux kernel static calls"),
-                                     cl::init(false), cl::Hidden,
-                                     cl::cat(BoltCategory));
-
-static cl::opt<bool>
-    DumpStaticKeys("dump-static-keys",
-                   cl::desc("dump Linux kernel static keys jump table"),
-                   cl::init(false), cl::Hidden, cl::cat(BoltCategory));
-
-static cl::opt<bool> LongJumpLabels(
-    "long-jump-labels",
-    cl::desc("always use long jumps/nops for Linux kernel static keys"),
-    cl::init(false), cl::Hidden, cl::cat(BoltCategory));
-
-static cl::opt<bool>
-    PrintORC("print-orc",
-             cl::desc("print ORC unwind information for instructions"),
-             cl::init(true), cl::Hidden, cl::cat(BoltCategory));
+bool AltInstHasPadLen = false;
+bool AltInstHasPadLenSpecified = false;
+uint32_t AltInstFeatureSize = 2;
+bool AltInstFeatureSizeSpecified = false;
+bool LongJumpLabels = false;
+bool PrintORC = true;
 
 } // namespace opts
 
@@ -140,8 +90,6 @@ static ORCState NullORC = {0, 0, 0};
 /// Basic printer for ORC entry. It does not provide the same level of
 /// information as objtool (for now).
 inline raw_ostream &operator<<(raw_ostream &OS, const ORCState &E) {
-  if (!opts::PrintORC)
-    return OS;
   if (E != NullORC)
     OS << format("{sp: %d, bp: %d, info: 0x%x}", E.SPOffset, E.BPOffset,
                  E.Info);
@@ -525,7 +473,7 @@ Error LinuxKernelRewriter::processSMPLocks() {
                                "error while reading .smp_locks: %s",
                                toString(Cursor.takeError()).c_str());
 
-    if (opts::DumpSMPLocks)
+    if (bolt_rewrite_opts::getDumpSmpLocks(BC))
       BC.outs() << "SMP lock at 0x: " << Twine::utohexstr(IP) << '\n';
 
     BinaryFunction *BF = BC.getBinaryFunctionContainingAddress(IP);
@@ -603,7 +551,7 @@ Error LinuxKernelRewriter::readORCTables() {
                                "out of bounds while reading ORC IP table: %s",
                                toString(IPCursor.takeError()).c_str());
 
-    if (IP < PrevIP && opts::Verbosity)
+    if (IP < PrevIP && opts::getVerbosity(BC))
       BC.errs() << "BOLT-WARNING: out of order IP 0x" << Twine::utohexstr(IP)
                 << " detected while reading ORC\n";
 
@@ -638,7 +586,7 @@ Error LinuxKernelRewriter::readORCTables() {
       BF = 0;
 
     if (!BF) {
-      if (opts::Verbosity)
+      if (opts::getVerbosity(BC))
         BC.errs() << "BOLT-WARNING: no binary function found matching ORC 0x"
                   << Twine::utohexstr(IP) << ": " << Entry.ORC << '\n';
       continue;
@@ -685,7 +633,7 @@ Error LinuxKernelRewriter::readORCTables() {
 
   BC.outs() << "BOLT-INFO: parsed " << NumORCEntries << " ORC entries\n";
 
-  if (opts::DumpORC) {
+  if (bolt_rewrite_opts::getDumpOrc(BC)) {
     BC.outs() << "BOLT-INFO: ORC unwind information:\n";
     for (const ORCListEntry &E : ORCEntries) {
       BC.outs() << "0x" << Twine::utohexstr(E.IP) << ": " << E.ORC;
@@ -723,7 +671,7 @@ Error LinuxKernelRewriter::readORCTables() {
   llvm::copy(NewEntries, std::back_inserter(ORCEntries));
   llvm::sort(ORCEntries);
 
-  if (opts::DumpORC) {
+  if (bolt_rewrite_opts::getDumpOrc(BC)) {
     BC.outs() << "BOLT-INFO: amended ORC unwind information:\n";
     for (const ORCListEntry &E : ORCEntries) {
       BC.outs() << "0x" << Twine::utohexstr(E.IP) << ": " << E.ORC;
@@ -788,7 +736,7 @@ Error LinuxKernelRewriter::processORCPostCFG() {
         }
 
         // While printing ORC, attach info to every instruction for convenience.
-        if (opts::PrintORC || &Inst == &BB.front())
+        if ((bolt_rewrite_opts::getPrintOrc(BC)) || &Inst == &BB.front())
           BC.MIB->addAnnotation(Inst, "ORC", *CurrentState);
       }
     }
@@ -1014,7 +962,7 @@ Error LinuxKernelRewriter::readStaticCalls() {
 
     ++EntryID;
 
-    if (opts::DumpStaticCalls) {
+    if (bolt_rewrite_opts::getDumpStaticCalls(BC)) {
       BC.outs() << "Static Call Site: " << EntryID << '\n';
       BC.outs() << "\tCallAddress:   0x" << Twine::utohexstr(CallAddress)
                 << "\n\tKeyAddress:    0x" << Twine::utohexstr(KeyAddress)
@@ -1125,7 +1073,7 @@ Error LinuxKernelRewriter::readExceptionTable() {
 
     ++EntryID;
 
-    if (opts::DumpExceptions) {
+    if (bolt_rewrite_opts::getDumpLinuxExceptions(BC)) {
       BC.outs() << "Exception Entry: " << EntryID << '\n';
       BC.outs() << "\tInsn:  0x" << Twine::utohexstr(InstAddress) << '\n'
                 << "\tFixup: 0x" << Twine::utohexstr(FixupAddress) << '\n'
@@ -1147,7 +1095,7 @@ Error LinuxKernelRewriter::readExceptionTable() {
       FunctionsWithExceptions.insert(InstBF);
     }
 
-    if (!InstBF && opts::Verbosity) {
+    if (!InstBF && opts::getVerbosity(BC)) {
       BC.outs() << "BOLT-INFO: no function matches instruction at 0x"
                 << Twine::utohexstr(InstAddress)
                 << " referenced by Linux exception table\n";
@@ -1169,7 +1117,7 @@ Error LinuxKernelRewriter::readExceptionTable() {
       FunctionsWithExceptions.insert(FixupBF);
     }
 
-    if (!FixupBF && opts::Verbosity) {
+    if (!FixupBF && opts::getVerbosity(BC)) {
       BC.outs() << "BOLT-INFO: no function matches fixup code at 0x"
                 << Twine::utohexstr(FixupAddress)
                 << " referenced by Linux exception table\n";
@@ -1233,7 +1181,7 @@ Error LinuxKernelRewriter::readParaInstructions() {
 
     ++EntryID;
 
-    if (opts::DumpParavirtualPatchSites) {
+    if (bolt_rewrite_opts::getDumpParaSites(BC)) {
       BC.outs() << "Paravirtual patch site: " << EntryID << '\n';
       BC.outs() << "\tInstr: 0x" << Twine::utohexstr(InstrLocation)
                 << "\n\tType:  0x" << Twine::utohexstr(Type) << "\n\tLen:   0x"
@@ -1241,7 +1189,7 @@ Error LinuxKernelRewriter::readParaInstructions() {
     }
 
     BinaryFunction *BF = BC.getBinaryFunctionContainingAddress(InstrLocation);
-    if (!BF && opts::Verbosity) {
+    if (!BF && opts::getVerbosity(BC)) {
       BC.outs() << "BOLT-INFO: no function matches address 0x"
                 << Twine::utohexstr(InstrLocation)
                 << " referenced by paravirutal patch site\n";
@@ -1328,7 +1276,7 @@ Error LinuxKernelRewriter::readBugTable() {
     ++EntryID;
 
     BinaryFunction *BF = BC.getBinaryFunctionContainingAddress(InstAddress);
-    if (!BF && opts::Verbosity) {
+    if (!BF && opts::getVerbosity(BC)) {
       BC.outs() << "BOLT-INFO: no function matches address 0x"
                 << Twine::utohexstr(InstAddress)
                 << " referenced by bug table\n";
@@ -1426,17 +1374,27 @@ Error LinuxKernelRewriter::readAltInstructions() {
   if (!AltInstrSection)
     return Error::success();
 
+  auto *RWOpts = bolt_rewrite_opts::getBoltRewriteOpts(BC.getOptionsContext());
+  const bool AltInstHasPadLenSpecified =
+      RWOpts->specified<&clv2::BOLTRW_AltInstHasPadLen>();
+  const bool AltInstHasPadLenVal =
+      RWOpts->get<&clv2::BOLTRW_AltInstHasPadLen>();
+  const bool AltInstFeatureSizeSpecified =
+      RWOpts->specified<&clv2::BOLTRW_AltInstFeatureSize>();
+  const uint32_t AltInstFeatureSizeVal =
+      RWOpts->get<&clv2::BOLTRW_AltInstFeatureSize>();
+
   // Presence of "padlen" field.
   std::vector<bool> PadLenVariants;
-  if (opts::AltInstHasPadLen.getNumOccurrences())
-    PadLenVariants.push_back(opts::AltInstHasPadLen);
+  if (AltInstHasPadLenSpecified)
+    PadLenVariants.push_back(AltInstHasPadLenVal);
   else
     PadLenVariants = {false, true};
 
   // Size (in bytes) variants of "feature" field.
   std::vector<uint32_t> FeatureSizeVariants;
-  if (opts::AltInstFeatureSize.getNumOccurrences())
-    FeatureSizeVariants.push_back(opts::AltInstFeatureSize);
+  if (AltInstFeatureSizeSpecified)
+    FeatureSizeVariants.push_back(AltInstFeatureSizeVal);
   else
     FeatureSizeVariants = {2, 4};
 
@@ -1454,13 +1412,13 @@ Error LinuxKernelRewriter::readAltInstructions() {
 
       LLVM_DEBUG(dbgs() << "Matched .altinstructions format\n");
 
-      if (!opts::AltInstHasPadLen.getNumOccurrences())
-        BC.outs() << "BOLT-INFO: setting --" << opts::AltInstHasPadLen.ArgStr
-                  << '=' << AltInstHasPadLen << '\n';
+      if (!AltInstHasPadLenSpecified)
+        BC.outs() << "BOLT-INFO: setting --" << "alt-inst-has-padlen" << '='
+                  << AltInstHasPadLen << '\n';
 
-      if (!opts::AltInstFeatureSize.getNumOccurrences())
-        BC.outs() << "BOLT-INFO: setting --" << opts::AltInstFeatureSize.ArgStr
-                  << '=' << AltInstFeatureSize << '\n';
+      if (!AltInstFeatureSizeSpecified)
+        BC.outs() << "BOLT-INFO: setting --" << "alt-inst-feature-size" << '='
+                  << AltInstFeatureSize << '\n';
 
       return tryReadAltInstructions(AltInstFeatureSize, AltInstHasPadLen,
                                     /*ParseOnly*/ false);
@@ -1469,8 +1427,8 @@ Error LinuxKernelRewriter::readAltInstructions() {
 
   // We couldn't match the format. Read again to properly propagate the error
   // to the user.
-  return tryReadAltInstructions(opts::AltInstFeatureSize,
-                                opts::AltInstHasPadLen, /*ParseOnly*/ false);
+  return tryReadAltInstructions(AltInstFeatureSizeVal, AltInstHasPadLenVal,
+                                /*ParseOnly*/ false);
 }
 
 Error LinuxKernelRewriter::tryReadAltInstructions(uint32_t AltInstFeatureSize,
@@ -1499,7 +1457,7 @@ Error LinuxKernelRewriter::tryReadAltInstructions(uint32_t AltInstFeatureSize,
 
     ++EntryID;
 
-    if (opts::DumpAltInstructions) {
+    if (bolt_rewrite_opts::getDumpAltInstructions(BC)) {
       BC.outs() << "Alternative instruction entry: " << EntryID
                 << "\n\tOrg:     0x" << Twine::utohexstr(OrgInstAddress)
                 << "\n\tAlt:     0x" << Twine::utohexstr(AltInstAddress)
@@ -1515,7 +1473,7 @@ Error LinuxKernelRewriter::tryReadAltInstructions(uint32_t AltInstFeatureSize,
                                "error reading .altinstructions");
 
     BinaryFunction *BF = BC.getBinaryFunctionContainingAddress(OrgInstAddress);
-    if (!BF && opts::Verbosity) {
+    if (!BF && opts::getVerbosity(BC)) {
       BC.outs() << "BOLT-INFO: no function matches address 0x"
                 << Twine::utohexstr(OrgInstAddress)
                 << " of instruction from .altinstructions\n";
@@ -1627,7 +1585,7 @@ Error LinuxKernelRewriter::readPCIFixupTable() {
 
     ++EntryID;
 
-    if (opts::DumpPCIFixups) {
+    if (bolt_rewrite_opts::getDumpPciFixups(BC)) {
       BC.outs() << "PCI fixup entry: " << EntryID << "\n\tVendor       0x"
                 << Twine::utohexstr(Vendor) << "\n\tDevice:      0x"
                 << Twine::utohexstr(Device) << "\n\tClass:       0x"
@@ -1637,7 +1595,7 @@ Error LinuxKernelRewriter::readPCIFixupTable() {
     }
 
     BinaryFunction *BF = BC.getBinaryFunctionContainingAddress(HookAddress);
-    if (!BF && opts::Verbosity) {
+    if (!BF && opts::getVerbosity(BC)) {
       BC.outs() << "BOLT-INFO: no function matches address 0x"
                 << Twine::utohexstr(HookAddress)
                 << " of hook from .pci_fixup\n";
@@ -1745,7 +1703,7 @@ Error LinuxKernelRewriter::readStaticKeysJumpTable() {
     JumpInfoEntry &Info = JumpInfo.back();
     Info.Likely = KeyAddress & 1;
 
-    if (opts::DumpStaticKeys) {
+    if (bolt_rewrite_opts::getDumpStaticKeys(BC)) {
       BC.outs() << "Static key jump entry: " << EntryID
                 << "\n\tJumpAddress:   0x" << Twine::utohexstr(JumpAddress)
                 << "\n\tTargetAddress: 0x" << Twine::utohexstr(TargetAddress)
@@ -1754,7 +1712,7 @@ Error LinuxKernelRewriter::readStaticKeysJumpTable() {
     }
 
     BinaryFunction *BF = BC.getBinaryFunctionContainingAddress(JumpAddress);
-    if (!BF && opts::Verbosity) {
+    if (!BF && opts::getVerbosity(BC)) {
       BC.outs()
           << "BOLT-INFO: no function matches address 0x"
           << Twine::utohexstr(JumpAddress)
@@ -1806,7 +1764,8 @@ Error LinuxKernelRewriter::readStaticKeysJumpTable() {
     //     by the kernel patching code. Newer kernels can work with both short
     //     and long branches. The code for long conditional branch is larger
     //     than unconditional one, so we are pessimistic in our estimations.
-    if (opts::LongJumpLabels)
+    bool LongJumpLabels = bolt_rewrite_opts::getLongJumpLabels(BC);
+    if (LongJumpLabels)
       BC.MIB->createLongCondBranch(StaticKeyBranch, Target, 0, BC.Ctx.get());
     else
       BC.MIB->createCondBranch(StaticKeyBranch, Target, 0, BC.Ctx.get());
@@ -1833,7 +1792,7 @@ Error LinuxKernelRewriter::readStaticKeysJumpTable() {
     if (!BC.MIB->getOffset(*Inst))
       BC.MIB->setOffset(*Inst, JumpAddress - BF->getAddress());
 
-    if (opts::LongJumpLabels)
+    if (LongJumpLabels)
       BC.MIB->setSize(*Inst, 5);
   }
 
@@ -1880,7 +1839,7 @@ Error LinuxKernelRewriter::rewriteStaticKeysJumpTable() {
         MCInst NewInst;
         // Replace the instruction with unconditional jump even if it needs to
         // be nop in the binary.
-        if (opts::LongJumpLabels) {
+        if (bolt_rewrite_opts::getLongJumpLabels(BC)) {
           BC.MIB->createLongUncondBranch(NewInst, Target, BC.Ctx.get());
         } else {
           // Newer kernels can handle short and long jumps for static keys.

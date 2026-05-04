@@ -26,7 +26,7 @@ void registerToLLVMIRTranslation() {
   TranslateFromMLIRRegistration registration(
       "mlir-to-llvmir", "Translate MLIR to LLVMIR",
       [](Operation *op, raw_ostream &output) {
-        llvm::LLVMContext llvmContext;
+        llvm::LLVMContext llvmContext(llvm::clv2::defaultOptionsContext());
         auto llvmModule = translateModuleToLLVMIR(op, llvmContext);
         if (!llvmModule)
           return failure();

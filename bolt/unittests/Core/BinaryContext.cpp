@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Core/BinaryContext.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
@@ -60,7 +61,8 @@ protected:
     BC = cantFail(BinaryContext::createBinaryContext(
         TheTriple, std::make_shared<orc::SymbolStringPool>(),
         ObjFile->getFileName(), TheTriple.isRISCV() ? &Features : nullptr, true,
-        DWARFContext::create(*ObjFile), {llvm::outs(), llvm::errs()}));
+        DWARFContext::create(*ObjFile), {llvm::outs(), llvm::errs()},
+        /*OptsCtx=*/nullptr));
     ASSERT_FALSE(!BC);
   }
 
@@ -192,9 +194,10 @@ TEST_P(BinaryContextTester,
 
   // Tests that flushPendingRelocations can skip flushing any optional pending
   // relocations that cannot be encoded, given that PatchEntries runs.
-  opts::ForcePatch = true;
-
-  opts::Verbosity = 1;
+  if (auto *V = BC->getOptionsContext().getViewPtr<&clv2::BoltUtilsOptsReg>()) {
+    V->get<&clv2::BOLT_ForcePatch>() = true;
+    V->get<&clv2::BOLT_Verbosity>() = 1;
+  }
   testing::internal::CaptureStdout();
 
   BinarySection &BS = BC->registerOrUpdateSection(

@@ -12,10 +12,14 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdint>
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+} // end namespace clv2
 
 class MCAsmInfo;
 class MCInst;
@@ -53,6 +57,9 @@ protected:
   const MCInstrInfo &MII;
   const MCRegisterInfo &MRI;
   const MCInstrAnalysis *MIA = nullptr;
+
+  /// Options context for target-specific clv2 option lookups.
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
 
   /// True if we are printing marked up assembly.
   bool UseMarkup = false;
@@ -171,6 +178,10 @@ public:
 
   void setSymbolizeOperands(bool Value) { SymbolizeOperands = Value; }
   void setMCInstrAnalysis(const MCInstrAnalysis *Value) { MIA = Value; }
+
+  void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
+  /// Never null; reports clv2::defaultOptionsContext() when none is set.
+  LLVM_ABI const clv2::OptionsContext &getOptionsContext() const;
 
   /// Utility function to print immediates in decimal or hex.
   format_object<int64_t> formatImm(int64_t Value) const {

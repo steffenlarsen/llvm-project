@@ -19,7 +19,6 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/PassInstrumentation.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/ManagedStatic.h"
@@ -34,17 +33,9 @@ using namespace llvm;
 
 using namespace llvm;
 
+// These extern variables are written by ir_opts::applyIROptions().
 bool llvm::TimePassesIsEnabled = false;
 bool llvm::TimePassesPerRun = false;
-
-static cl::opt<bool, true> EnableTiming(
-    "time-passes", cl::location(TimePassesIsEnabled), cl::Hidden,
-    cl::desc("Time each pass, printing elapsed time for each on exit"));
-
-static cl::opt<bool, true> EnableTimingPerRun(
-    "time-passes-per-run", cl::location(TimePassesPerRun), cl::Hidden,
-    cl::desc("Time each pass run, printing elapsed time for each run on exit"),
-    cl::callback([](const bool &) { TimePassesIsEnabled = true; }));
 
 namespace {
 namespace legacy {

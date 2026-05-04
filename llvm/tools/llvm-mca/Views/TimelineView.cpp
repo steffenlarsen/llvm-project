@@ -46,7 +46,8 @@ void TimelineView::onReservedBuffers(const InstRef &IR,
   const MCSchedModel &SM = getSubTargetInfo().getSchedModel();
   std::pair<unsigned, int> BufferInfo = {0, -1};
   for (const unsigned Buffer : Buffers) {
-    const int BufferSize = SM.getResourceBufferSize(Buffer);
+    const int BufferSize = SM.getResourceBufferSize(
+        Buffer, getSubTargetInfo().getOptionsContext());
     if (!BufferInfo.first || BufferInfo.second > BufferSize) {
       BufferInfo.first = Buffer;
       BufferInfo.second = BufferSize;

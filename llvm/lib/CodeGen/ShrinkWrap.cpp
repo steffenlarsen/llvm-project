@@ -55,6 +55,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -78,9 +79,11 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cassert>
@@ -95,12 +98,14 @@ STATISTIC(NumCandidates, "Number of shrink-wrapping candidates");
 STATISTIC(NumCandidatesDropped,
           "Number of shrink-wrapping candidates dropped because of frequency");
 
-static cl::opt<cl::boolOrDefault>
-EnableShrinkWrapOpt("enable-shrink-wrap", cl::Hidden,
-                    cl::desc("enable the shrink-wrapping pass"));
-static cl::opt<bool> EnablePostShrinkWrapOpt(
-    "enable-shrink-wrap-region-split", cl::init(true), cl::Hidden,
-    cl::desc("enable splitting of the restore block if possible"));
+static cl::boolOrDefault getEnableShrinkWrap(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableShrinkWrap>(Ctx);
+}
+
+static bool getEnableShrinkWrapRegionSplit(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableShrinkWrapRegionSplit>(
+      Ctx);
+}
 
 namespace {
 
@@ -583,7 +588,8 @@ bool ShrinkWrapImpl::checkIfRestoreSplittable(
 
 bool ShrinkWrapImpl::postShrinkWrapping(bool HasCandidate, MachineFunction &MF,
                                         RegScavenger *RS) {
-  if (!EnablePostShrinkWrapOpt)
+  if (!getEnableShrinkWrapRegionSplit(
+          MF.getFunction().getContext().getOptionsContext()))
     return false;
 
   MachineBasicBlock *InitSave = nullptr;
@@ -1000,8 +1006,6 @@ bool ShrinkWrapLegacy::runOnMachineFunction(MachineFunction &MF) {
       !ShrinkWrapImpl::isShrinkWrapEnabled(MF))
     return false;
 
-  const RegisterClassInfo *RCI =
-      &getAnalysis<MachineRegisterClassInfoWrapperPass>().getRCI();
   MachineDominatorTree *MDT =
       &getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
   MachinePostDominatorTree *MPDT =
@@ -1011,6 +1015,8 @@ bool ShrinkWrapLegacy::runOnMachineFunction(MachineFunction &MF) {
   MachineLoopInfo *MLI = &getAnalysis<MachineLoopInfoWrapperPass>().getLI();
   MachineOptimizationRemarkEmitter *ORE =
       &getAnalysis<MachineOptimizationRemarkEmitterPass>().getORE();
+  const RegisterClassInfo *RCI =
+      &getAnalysis<MachineRegisterClassInfoWrapperPass>().getRCI();
 
   return ShrinkWrapImpl(RCI, MDT, MPDT, MBFI, MLI, ORE).run(MF);
 }
@@ -1021,8 +1027,6 @@ PreservedAnalyses ShrinkWrapPass::run(MachineFunction &MF,
   if (MF.empty() || !ShrinkWrapImpl::isShrinkWrapEnabled(MF))
     return PreservedAnalyses::all();
 
-  const RegisterClassInfo &RCI =
-      MFAM.getResult<MachineRegisterClassAnalysis>(MF);
   MachineDominatorTree &MDT = MFAM.getResult<MachineDominatorTreeAnalysis>(MF);
   MachinePostDominatorTree &MPDT =
       MFAM.getResult<MachinePostDominatorTreeAnalysis>(MF);
@@ -1031,6 +1035,8 @@ PreservedAnalyses ShrinkWrapPass::run(MachineFunction &MF,
   MachineLoopInfo &MLI = MFAM.getResult<MachineLoopAnalysis>(MF);
   MachineOptimizationRemarkEmitter &ORE =
       MFAM.getResult<MachineOptimizationRemarkEmitterAnalysis>(MF);
+  const RegisterClassInfo &RCI =
+      MFAM.getResult<MachineRegisterClassAnalysis>(MF);
 
   ShrinkWrapImpl(&RCI, &MDT, &MPDT, &MBFI, &MLI, &ORE).run(MF);
   return PreservedAnalyses::all();
@@ -1039,7 +1045,8 @@ PreservedAnalyses ShrinkWrapPass::run(MachineFunction &MF,
 bool ShrinkWrapImpl::isShrinkWrapEnabled(const MachineFunction &MF) {
   const TargetFrameLowering *TFI = MF.getSubtarget().getFrameLowering();
 
-  switch (EnableShrinkWrapOpt) {
+  switch (
+      getEnableShrinkWrap(MF.getFunction().getContext().getOptionsContext())) {
   case cl::boolOrDefault::BOU_UNSET:
     return TFI->enableShrinkWrapping(MF) &&
            // Windows with CFI has some limitations that make it impossible

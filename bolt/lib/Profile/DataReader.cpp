@@ -14,27 +14,21 @@
 #include "bolt/Profile/DataReader.h"
 #include "bolt/Core/BinaryFunction.h"
 #include "bolt/Passes/MCF.h"
+#include "bolt/Profile/BoltProfileOptionsOptInfos.h"
 #include "bolt/Utils/NameResolver.h"
 #include "bolt/Utils/Utils.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Errc.h"
 
-#undef  DEBUG_TYPE
+#undef DEBUG_TYPE
 #define DEBUG_TYPE "bolt-prof"
 
 using namespace llvm;
 
 namespace opts {
 
-extern cl::OptionCategory BoltCategory;
-extern llvm::cl::opt<unsigned> Verbosity;
-
-static cl::opt<bool>
-DumpData("dump-data",
-  cl::desc("dump parsed bolt data for debugging"),
-  cl::Hidden,
-  cl::cat(BoltCategory));
+extern unsigned Verbosity;
 
 } // namespace opts
 
@@ -241,7 +235,8 @@ Error DataReader::preprocessProfile(BinaryContext &BC) {
   if (std::error_code EC = parseInput())
     return errorCodeToError(EC);
 
-  if (opts::DumpData)
+  bool DumpData = bolt_profile_opts::getDumpData(BC);
+  if (DumpData)
     dump();
 
   if (SymbolsMode) {
@@ -569,7 +564,8 @@ float DataReader::evaluateProfileData(BinaryFunction &BF,
   }
 
   const float MatchRatio = (float)NumMatchedBranches / BranchData.Data.size();
-  if (opts::Verbosity >= 2 && NumMatchedBranches < BranchData.Data.size())
+  if (opts::getVerbosity(BC) >= 2 &&
+      NumMatchedBranches < BranchData.Data.size())
     errs() << "BOLT-WARNING: profile branches match only "
            << format("%.1f%%", MatchRatio * 100.0f) << " ("
            << NumMatchedBranches << '/' << BranchData.Data.size()
@@ -654,7 +650,7 @@ void DataReader::convertBranchData(BinaryFunction &BF) const {
       continue;
 
     auto setOrUpdateAnnotation = [&](StringRef Name, uint64_t Count) {
-      if (opts::Verbosity >= 1 && BC.MIB->hasAnnotation(*Instr, Name))
+      if (opts::getVerbosity(BC) >= 1 && BC.MIB->hasAnnotation(*Instr, Name))
         errs() << "BOLT-WARNING: duplicate " << Name << " info for offset 0x"
                << Twine::utohexstr(BI.From.Offset) << " in function " << BF
                << '\n';

@@ -93,7 +93,7 @@ LogicalResult NextAccessAnalysis::visitOperation(Operation *op,
                                                  const NextAccess &after,
                                                  NextAccess *before) {
   LDBG() << "visitOperation: "
-         << OpWithFlags(op, OpPrintingFlags().skipRegions());
+         << OpWithFlags(op, opPrintingFlags(op).skipRegions());
   LDBG() << "  after state: " << after;
   LDBG() << "  before state: " << *before;
 
@@ -160,7 +160,7 @@ LogicalResult NextAccessAnalysis::visitOperation(Operation *op,
     }
 
     LDBG() << "  Setting next access for value " << value << " to operation "
-           << OpWithFlags(op, OpPrintingFlags().skipRegions());
+           << OpWithFlags(op, opPrintingFlags(op).skipRegions());
     result |= before->set(value, op);
   }
   LDBG() << "  Final result: "
@@ -171,7 +171,7 @@ LogicalResult NextAccessAnalysis::visitOperation(Operation *op,
 
 void NextAccessAnalysis::buildOperationEquivalentLatticeAnchor(Operation *op) {
   LDBG() << "buildOperationEquivalentLatticeAnchor: "
-         << OpWithFlags(op, OpPrintingFlags().skipRegions());
+         << OpWithFlags(op, opPrintingFlags(op).skipRegions());
   if (isMemoryEffectFree(op)) {
     LDBG() << "  Operation is memory effect free, unioning lattice anchors";
     unionLatticeAnchors<NextAccess>(getProgramPointBefore(op),
@@ -185,7 +185,8 @@ void NextAccessAnalysis::visitCallControlFlowTransfer(
     CallOpInterface call, CallControlFlowAction action, const NextAccess &after,
     NextAccess *before) {
   LDBG() << "visitCallControlFlowTransfer: "
-         << OpWithFlags(call.getOperation(), OpPrintingFlags().skipRegions());
+         << OpWithFlags(call.getOperation(),
+                        opPrintingFlags(call.getOperation()).skipRegions());
   LDBG() << "  action: "
          << (action == CallControlFlowAction::ExternalCallee ? "ExternalCallee"
              : action == CallControlFlowAction::EnterCallee  ? "EnterCallee"
@@ -244,7 +245,8 @@ void NextAccessAnalysis::visitRegionBranchControlFlowTransfer(
     RegionBranchOpInterface branch, RegionBranchPoint regionFrom,
     RegionSuccessor regionTo, const NextAccess &after, NextAccess *before) {
   LDBG() << "visitRegionBranchControlFlowTransfer: "
-         << OpWithFlags(branch.getOperation(), OpPrintingFlags().skipRegions());
+         << OpWithFlags(branch.getOperation(),
+                        opPrintingFlags(branch.getOperation()).skipRegions());
   LDBG() << "  regionFrom: " << (regionFrom.isParent() ? "parent" : "region");
   LDBG() << "  regionTo: " << (regionTo.isOperation() ? "operation" : "region");
 
@@ -337,7 +339,7 @@ struct TestNextAccessPass
   void runOnOperation() override {
     Operation *op = getOperation();
     LDBG() << "runOnOperation: Starting test-next-access pass on "
-           << OpWithFlags(op, OpPrintingFlags().skipRegions());
+           << OpWithFlags(op, opPrintingFlags(op).skipRegions());
     LDBG() << "  interprocedural: " << interprocedural;
     LDBG() << "  assumeFuncReads: " << assumeFuncReads;
 
@@ -361,7 +363,7 @@ struct TestNextAccessPass
         return;
 
       LDBG() << "  Processing tagged operation: "
-             << OpWithFlags(op, OpPrintingFlags().skipRegions());
+             << OpWithFlags(op, opPrintingFlags(op).skipRegions());
       const NextAccess *nextAccess =
           solver.lookupState<NextAccess>(solver.getProgramPointAfter(op));
       op->setDiscardableAttr(kNextAccessAttrName,

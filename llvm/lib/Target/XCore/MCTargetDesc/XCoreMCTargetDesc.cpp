@@ -51,8 +51,13 @@ static MCRegisterInfo *createXCoreMCRegisterInfo(const Triple &TT) {
 }
 
 static MCSubtargetInfo *
-createXCoreMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
-  return createXCoreMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+createXCoreMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                           const llvm::clv2::OptionsContext &Ctx) {
+  MCSubtargetInfo *STI =
+      createXCoreMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+  if (STI)
+    STI->setOptionsContext(Ctx);
+  return STI;
 }
 
 static MCAsmInfo *createXCoreMCAsmInfo(const MCRegisterInfo &MRI,

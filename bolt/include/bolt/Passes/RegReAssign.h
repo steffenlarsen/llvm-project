@@ -46,8 +46,7 @@ class RegReAssign : public BinaryFunctionPass {
 public:
   /// BinaryPass public interface
 
-  explicit RegReAssign(const cl::opt<bool> &PrintPass)
-      : BinaryFunctionPass(PrintPass) {}
+  explicit RegReAssign(const bool PrintPass) : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "regreassign"; }
 

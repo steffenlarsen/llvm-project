@@ -17,6 +17,8 @@
 #include "llvm/IR/InstIterator.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Coroutines/CoroutinesOptionsOptInfos.h"
 #include <optional>
 
 using namespace llvm;
@@ -26,9 +28,13 @@ using namespace llvm;
 STATISTIC(NumOfCoroElided, "The # of coroutine get elided.");
 
 #ifndef NDEBUG
-static cl::opt<std::string> CoroElideInfoOutputFilename(
-    "coro-elide-info-output-file", cl::value_desc("filename"),
-    cl::desc("File to record the coroutines got elided"), cl::Hidden);
+static const std::string &getCoroElideInfoOutputFilename(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::CoroutinesOptsReg>(
+          F.getContext().getOptionsContext()))
+    return O->get<&clv2::CORO_ElideInfoOutputFile>();
+  static const std::string Default;
+  return Default;
+}
 #endif
 
 namespace {
@@ -130,16 +136,16 @@ static Instruction *getFirstNonAllocaInTheEntryBlock(Function *F) {
 }
 
 #ifndef NDEBUG
-static std::unique_ptr<raw_fd_ostream> getOrCreateLogFile() {
-  assert(!CoroElideInfoOutputFilename.empty() &&
+static std::unique_ptr<raw_fd_ostream> getOrCreateLogFile(const Function &F) {
+  assert(!getCoroElideInfoOutputFilename(F).empty() &&
          "coro-elide-info-output-file shouldn't be empty");
   std::error_code EC;
-  auto Result = std::make_unique<raw_fd_ostream>(CoroElideInfoOutputFilename,
-                                                 EC, sys::fs::OF_Append);
+  auto Result = std::make_unique<raw_fd_ostream>(
+      getCoroElideInfoOutputFilename(F), EC, sys::fs::OF_Append);
   if (!EC)
     return Result;
   llvm::errs() << "Error opening coro-elide-info-output-file '"
-               << CoroElideInfoOutputFilename << " for appending!\n";
+               << getCoroElideInfoOutputFilename(F) << " for appending!\n";
   return std::make_unique<raw_fd_ostream>(2, false); // stderr.
 }
 #endif
@@ -412,9 +418,10 @@ bool CoroIdElider::attemptElide() {
     NumOfCoroElided++;
 
 #ifndef NDEBUG
-      if (!CoroElideInfoOutputFilename.empty())
-        *getOrCreateLogFile() << "Elide " << CalleeCoroutineName << " in "
-                              << FEI.ContainingFunction->getName() << "\n";
+    if (!getCoroElideInfoOutputFilename(*FEI.ContainingFunction).empty())
+      *getOrCreateLogFile(*FEI.ContainingFunction)
+          << "Elide " << CalleeCoroutineName << " in "
+          << FEI.ContainingFunction->getName() << "\n";
 #endif
 
       ORE.emit([&]() {

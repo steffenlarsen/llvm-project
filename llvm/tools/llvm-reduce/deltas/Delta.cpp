@@ -16,7 +16,6 @@
 #include "DeltaPass.h"
 #include "ReducerWorkItem.h"
 #include "TestRunner.h"
-#include "Utils.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
@@ -25,40 +24,11 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/MemoryBufferRef.h"
 #include "llvm/Support/ThreadPool.h"
 #include "llvm/Support/WithColor.h"
 
 using namespace llvm;
-
-extern cl::OptionCategory LLVMReduceOptions;
-
-static cl::opt<bool> AbortOnInvalidReduction(
-    "abort-on-invalid-reduction",
-    cl::desc("Abort if any reduction results in invalid IR"),
-    cl::cat(LLVMReduceOptions));
-
-static cl::opt<bool> SkipVerifyAfterCountingChunks(
-    "skip-verify-interesting-after-counting-chunks",
-    cl::desc("Do not validate testcase is interesting after counting chunks "
-             "(may speed up reduction)"),
-    cl::cat(LLVMReduceOptions));
-
-static cl::opt<unsigned int> StartingGranularityLevel(
-    "starting-granularity-level",
-    cl::desc("Number of times to divide chunks prior to first test"),
-    cl::cat(LLVMReduceOptions));
-
-#ifdef LLVM_ENABLE_THREADS
-static cl::opt<unsigned> NumJobs(
-    "j",
-    cl::desc("Maximum number of threads to use to process chunks. Set to 1 to "
-             "disable parallelism."),
-    cl::init(1), cl::cat(LLVMReduceOptions));
-#else
-unsigned NumJobs = 1;
-#endif
 
 static StringLiteral SeparatorLine =
     "--------------------------------------------------------------------------"
@@ -66,7 +36,7 @@ static StringLiteral SeparatorLine =
 
 /// Splits Chunks in half and prints them.
 /// If unable to split (when chunk size is 1) returns false.
-static bool increaseGranularity(std::vector<Chunk> &Chunks) {
+static bool increaseGranularity(std::vector<Chunk> &Chunks, bool Verbose) {
   if (Verbose)
     errs() << "Increasing granularity...";
   std::vector<Chunk> NewChunks;
@@ -121,21 +91,23 @@ CheckChunk(const Chunk ChunkToCheckForUninterestingness,
   Oracle O(CurrentChunks);
   ExtractChunksFromModule(O, *Clone);
 
+  const ReduceConfig &Config = Test.getConfig();
+
   // Some reductions may result in invalid IR. Skip such reductions.
   if (Clone->verify(&errs())) {
-    if (AbortOnInvalidReduction) {
+    if (Config.AbortOnInvalidReduction) {
       errs() << "Invalid reduction, aborting.\n";
       Clone->print(errs());
       exit(1);
     }
-    if (Verbose) {
+    if (Config.Verbose) {
       errs() << " **** WARNING | reduction resulted in invalid module, "
                 "skipping\n";
     }
     return nullptr;
   }
 
-  if (Verbose) {
+  if (Config.Verbose) {
     errs() << "Ignoring: ";
     ChunkToCheckForUninterestingness.print();
     for (const Chunk &C : UninterestingChunks)
@@ -145,7 +117,7 @@ CheckChunk(const Chunk ChunkToCheckForUninterestingness,
 
   if (!Clone->isReduced(Test)) {
     // Program became non-reduced, so this chunk appears to be interesting.
-    if (Verbose)
+    if (Config.Verbose)
       errs() << "\n";
     return nullptr;
   }
@@ -158,8 +130,9 @@ static SmallString<0> ProcessChunkFromSerializedBitcode(
     const DenseSet<Chunk> &UninterestingChunks,
     ArrayRef<Chunk> ChunksStillConsideredInteresting, StringRef OriginalBC,
     std::atomic<bool> &AnyReduced) {
-  LLVMContext Ctx;
+  LLVMContext Ctx(Test.getOptionsContext());
   auto CloneMMM = std::make_unique<ReducerWorkItem>();
+  CloneMMM->Config = &Test.getConfig();
   MemoryBufferRef Data(OriginalBC, "<bc file>");
   CloneMMM->readBitcode(Data, Ctx, Test.getToolName());
 
@@ -187,6 +160,8 @@ void llvm::runDeltaPass(TestRunner &Test, const DeltaPass &Pass) {
          "input module is broken before making changes");
   errs() << "*** " << Pass.Desc << " (" << Pass.Name << ")...\n";
 
+  const ReduceConfig &Config = Test.getConfig();
+
   int Targets;
   {
     // Count the number of chunks by counting the number of calls to
@@ -200,7 +175,8 @@ void llvm::runDeltaPass(TestRunner &Test, const DeltaPass &Pass) {
     assert(!Test.getProgram().verify(&errs()) &&
            "input module is broken after counting chunks");
 
-    if (!SkipVerifyAfterCountingChunks && !Test.getProgram().isReduced(Test)) {
+    if (!Config.SkipVerifyAfterCountingChunks &&
+        !Test.getProgram().isReduced(Test)) {
       WithColor::warning()
           << "input module no longer interesting after counting chunks\n";
       WithColor::note() << "the interestingness test may be flaky, or there "
@@ -224,7 +200,7 @@ void llvm::runDeltaPass(TestRunner &Test, const DeltaPass &Pass) {
 #endif
   }
   if (!Targets) {
-    if (Verbose)
+    if (Config.Verbose)
       errs() << "\nNothing to reduce\n";
     errs() << SeparatorLine;
     return;
@@ -233,15 +209,16 @@ void llvm::runDeltaPass(TestRunner &Test, const DeltaPass &Pass) {
   std::vector<Chunk> ChunksStillConsideredInteresting = {{0, Targets - 1}};
   std::unique_ptr<ReducerWorkItem> ReducedProgram;
 
-  for (unsigned int Level = 0; Level < StartingGranularityLevel; Level++) {
-    increaseGranularity(ChunksStillConsideredInteresting);
+  for (unsigned int Level = 0; Level < Config.StartingGranularityLevel;
+       Level++) {
+    increaseGranularity(ChunksStillConsideredInteresting, Config.Verbose);
   }
 
   std::atomic<bool> AnyReduced;
   std::unique_ptr<ThreadPoolInterface> ChunkThreadPoolPtr;
-  if (NumJobs > 1)
-    ChunkThreadPoolPtr =
-        std::make_unique<DefaultThreadPool>(hardware_concurrency(NumJobs));
+  if (Config.NumJobs > 1)
+    ChunkThreadPoolPtr = std::make_unique<DefaultThreadPool>(
+        hardware_concurrency(Config.NumJobs));
 
   SmallString<0> OriginalBC;
   DenseSet<Chunk> UninterestingChunks;
@@ -255,7 +232,7 @@ void llvm::runDeltaPass(TestRunner &Test, const DeltaPass &Pass) {
 
     // When running with more than one thread, serialize the original bitcode
     // to OriginalBC.
-    if (NumJobs > 1) {
+    if (Config.NumJobs > 1) {
       OriginalBC.clear();
       raw_svector_ostream BCOS(OriginalBC);
       Test.getProgram().writeBitcode(BCOS);
@@ -270,8 +247,8 @@ void llvm::runDeltaPass(TestRunner &Test, const DeltaPass &Pass) {
 
       // Run in parallel mode, if the user requested more than one thread and
       // there are at least a few chunks to process.
-      if (NumJobs > 1 && WorkLeft > 1) {
-        unsigned NumInitialTasks = std::min(WorkLeft, unsigned(NumJobs));
+      if (Config.NumJobs > 1 && WorkLeft > 1) {
+        unsigned NumInitialTasks = std::min(WorkLeft, unsigned(Config.NumJobs));
         unsigned NumChunksProcessed = 0;
 
         ThreadPoolInterface &ChunkThreadPool = *ChunkThreadPoolPtr;
@@ -319,6 +296,7 @@ void llvm::runDeltaPass(TestRunner &Test, const DeltaPass &Pass) {
           }
 
           Result = std::make_unique<ReducerWorkItem>();
+          Result->Config = &Test.getConfig();
           MemoryBufferRef Data(StringRef(Res), "<bc file>");
           Result->readBitcode(Data, Test.getProgram().M->getContext(),
                               Test.getToolName());
@@ -354,9 +332,10 @@ void llvm::runDeltaPass(TestRunner &Test, const DeltaPass &Pass) {
              [&UninterestingChunks](const Chunk &C) {
                return UninterestingChunks.count(C);
              });
-  } while (!ChunksStillConsideredInteresting.empty() &&
-           (FoundAtLeastOneNewUninterestingChunkWithCurrentGranularity ||
-            increaseGranularity(ChunksStillConsideredInteresting)));
+  } while (
+      !ChunksStillConsideredInteresting.empty() &&
+      (FoundAtLeastOneNewUninterestingChunkWithCurrentGranularity ||
+       increaseGranularity(ChunksStillConsideredInteresting, Config.Verbose)));
 
   // If we reduced the testcase replace it
   if (ReducedProgram) {
@@ -364,7 +343,7 @@ void llvm::runDeltaPass(TestRunner &Test, const DeltaPass &Pass) {
     // FIXME: Report meaningful progress info
     Test.writeOutput(" **** SUCCESS | Saved new best reduction to ");
   }
-  if (Verbose)
+  if (Config.Verbose)
     errs() << "Couldn't increase anymore.\n";
   errs() << SeparatorLine;
 }

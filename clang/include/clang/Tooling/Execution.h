@@ -36,7 +36,7 @@
 namespace clang {
 namespace tooling {
 
-extern llvm::cl::opt<std::string> ExecutorName;
+extern std::string ExecutorName;
 
 /// An abstraction for the result of a tool execution. For example, the
 /// underlying result can be in-memory or on-disk.
@@ -173,11 +173,24 @@ createExecutorFromCommandLineArgs(int &argc, const char **argv,
                                   llvm::cl::OptionCategory &Category,
                                   const char *Overview = nullptr);
 
+/// Overload that accepts a callback to configure the OptionParser before
+/// command-line parsing. Use this to add tool-specific dynamic entries.
+llvm::Expected<std::unique_ptr<ToolExecutor>> createExecutorFromCommandLineArgs(
+    int &argc, const char **argv, llvm::cl::OptionCategory &Category,
+    llvm::function_ref<void(llvm::clv2::OptionParser &)> ConfigureParser,
+    const char *Overview = nullptr);
+
 namespace internal {
 llvm::Expected<std::unique_ptr<ToolExecutor>>
 createExecutorFromCommandLineArgsImpl(int &argc, const char **argv,
                                       llvm::cl::OptionCategory &Category,
                                       const char *Overview = nullptr);
+
+llvm::Expected<std::unique_ptr<ToolExecutor>>
+createExecutorFromCommandLineArgsImpl(
+    int &argc, const char **argv, llvm::cl::OptionCategory &Category,
+    llvm::function_ref<void(llvm::clv2::OptionParser &)> ConfigureParser,
+    const char *Overview = nullptr);
 } // end namespace internal
 
 } // end namespace tooling

@@ -33,18 +33,6 @@ STATISTIC(NumTwoIterations, "Number of functions with two iterations");
 STATISTIC(NumThreeOrMoreIterations,
           "Number of functions with three or more iterations");
 
-namespace llvm {
-cl::OptionCategory GICombinerOptionCategory(
-    "GlobalISel Combiner",
-    "Control the rules which are enabled. These options all take a comma "
-    "separated list of rules to disable and may be specified by number "
-    "or number range (e.g. 1-10)."
-#ifndef NDEBUG
-    " They may also be specified by name."
-#endif
-);
-} // end namespace llvm
-
 /// This class acts as the glue that joins the CombinerHelper to the overall
 /// Combine algorithm. The CombinerHelper is intended to report the
 /// modifications it makes to the MIR to the GISelChangeObserver and the

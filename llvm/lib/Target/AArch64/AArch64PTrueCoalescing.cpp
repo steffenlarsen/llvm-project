@@ -30,16 +30,16 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "aarch64-ptrue-coalesce"
 
-static cl::opt<bool> EnablePTrueCoalescing(
-    "aarch64-enable-ptrue-coalescing", cl::init(false), cl::Hidden,
-    cl::desc("Enable coalescing of compatible AArch64 SVE PTRUE instructions"));
+static bool EnablePTrueCoalescing = false;
 
 namespace {
 
@@ -203,7 +203,9 @@ bool AArch64PTrueCoalescingImpl::tryCoalesce(PredicateInfo &DomPI,
 }
 
 bool AArch64PTrueCoalescingImpl::run(MachineFunction &MF) {
-  if (!EnablePTrueCoalescing ||
+  bool Enabled = clv2::getOptValOrDefault<&clv2::A64_EnablePTrueCoalescing>(
+      MF.getFunction().getContext().getOptionsContext());
+  if (!Enabled ||
       !MF.getSubtarget<AArch64Subtarget>().isSVEorStreamingSVEAvailable())
     return false;
 

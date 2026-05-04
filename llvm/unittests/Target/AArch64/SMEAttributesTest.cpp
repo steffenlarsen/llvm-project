@@ -12,13 +12,13 @@ using SA = SMEAttrs;
 using CA = SMECallAttrs;
 
 std::unique_ptr<Module> parseIR(const char *IR) {
-  static LLVMContext C;
+  static LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   return parseAssemblyString(IR, Err, C);
 }
 
 TEST(SMEAttributes, Constructors) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   ASSERT_TRUE(SA(*parseIR("declare void @foo()")->getFunction("foo"))
                   .hasNonStreamingInterfaceAndBody());

@@ -13,14 +13,17 @@
 
 #include "llvm/CodeGen/DebugHandlerBase.h"
 #include "llvm/CodeGen/AsmPrinter.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DebugInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCStreamer.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -28,7 +31,9 @@ using namespace llvm;
 
 /// If true, we drop variable location ranges which exist entirely outside the
 /// variable's lexical scope instruction ranges.
-static cl::opt<bool> TrimVarLocs("trim-var-locs", cl::Hidden, cl::init(true));
+static bool getTrimVarLocs(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_TrimVarLocs>(Ctx);
+}
 
 std::optional<DbgVariableLocation>
 DbgVariableLocation::extractFromMachineInstruction(
@@ -291,7 +296,7 @@ void DebugHandlerBase::beginFunction(const MachineFunction *MF) {
   calculateDbgEntityHistory(MF, Asm->MF->getSubtarget().getRegisterInfo(),
                             DbgValues, DbgLabels);
   InstOrdering.initialize(*MF);
-  if (TrimVarLocs)
+  if (getTrimVarLocs(MF->getFunction().getContext().getOptionsContext()))
     DbgValues.trimLocationRanges(*MF, LScopes, InstOrdering);
   LLVM_DEBUG(DbgValues.dump(MF->getName()));
 

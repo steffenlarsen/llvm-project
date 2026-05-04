@@ -49,7 +49,7 @@ static Constant *getVTableAddressPointOffset(GlobalVariable *VTable,
 }
 
 TEST(CallPromotionUtilsTest, TryPromoteCall) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C,
                                       R"IR(
 %class.Impl = type <{ %class.Interface, i32, [4 x i8] }>
@@ -94,7 +94,7 @@ declare void @_ZN4Impl3RunEv(ptr %this)
 }
 
 TEST(CallPromotionUtilsTest, TryPromoteCall_NoFPLoad) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C,
                                       R"IR(
 %class.Impl = type <{ %class.Interface, i32, [4 x i8] }>
@@ -120,7 +120,7 @@ entry:
 }
 
 TEST(CallPromotionUtilsTest, TryPromoteCall_NoVTablePtrLoad) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C,
                                       R"IR(
 %class.Impl = type <{ %class.Interface, i32, [4 x i8] }>
@@ -147,7 +147,7 @@ entry:
 }
 
 TEST(CallPromotionUtilsTest, TryPromoteCall_NoVTableInitFound) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C,
                                       R"IR(
 %class.Impl = type <{ %class.Interface, i32, [4 x i8] }>
@@ -181,7 +181,7 @@ declare void @_ZN4Impl3RunEv(ptr %this)
 }
 
 TEST(CallPromotionUtilsTest, TryPromoteCall_EmptyVTable) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C,
                                       R"IR(
 %class.Impl = type <{ %class.Interface, i32, [4 x i8] }>
@@ -222,7 +222,7 @@ declare void @_ZN4Impl3RunEv(ptr %this)
 }
 
 TEST(CallPromotionUtilsTest, TryPromoteCall_NullFP) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C,
                                       R"IR(
 %class.Impl = type <{ %class.Interface, i32, [4 x i8] }>
@@ -264,7 +264,7 @@ declare void @_ZN4Impl3RunEv(ptr %this)
 
 // Based on clang/test/CodeGenCXX/member-function-pointer-calls.cpp
 TEST(CallPromotionUtilsTest, TryPromoteCall_MemberFunctionCalls) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C,
                                       R"IR(
 %struct.A = type { ptr }
@@ -337,7 +337,7 @@ declare i32 @_ZN1A3vf2Ev(ptr %this)
 
 // Check that it isn't crashing due to missing promotion legality.
 TEST(CallPromotionUtilsTest, TryPromoteCall_Legality) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C,
                                       R"IR(
 %struct1 = type <{ i32, i64 }>
@@ -381,7 +381,7 @@ declare %struct2 @_ZN4Impl3RunEv(ptr %this)
 }
 
 TEST(CallPromotionUtilsTest, promoteCallWithVTableCmp) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C,
                                       R"IR(
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
@@ -451,7 +451,7 @@ declare void @_ZN5Base35func3Ev(ptr)
 }
 
 TEST(CallPromotionUtilsTest, PromoteWithIcmpAndCtxProf) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C,
                                       R"IR(
 define i32 @testfunc1(ptr %d) !guid !0 {

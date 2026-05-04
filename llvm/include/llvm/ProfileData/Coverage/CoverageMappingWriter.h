@@ -20,6 +20,9 @@
 #include "llvm/Support/Compiler.h"
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+}
 
 class raw_ostream;
 
@@ -35,7 +38,8 @@ public:
 
   /// Write encoded filenames to the given output stream. If \p Compress is
   /// true, attempt to compress the filenames.
-  LLVM_ABI void write(raw_ostream &OS, bool Compress = true);
+  LLVM_ABI void write(raw_ostream &OS, bool Compress,
+                      const clv2::OptionsContext &Ctx);
 };
 
 /// Writer for instrumentation based coverage mapping data.

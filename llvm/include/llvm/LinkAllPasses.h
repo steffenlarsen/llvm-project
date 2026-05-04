@@ -72,7 +72,8 @@ struct ForcePassLinking {
     (void)llvm::createBreakCriticalEdgesPass();
     (void)llvm::createCallGraphDOTPrinterPass();
     (void)llvm::createCallGraphViewerPass();
-    (void)llvm::createCFGSimplificationPass();
+    (void)llvm::createCFGSimplificationPass(
+        llvm::clv2::defaultOptionsContext());
     (void)llvm::createStructurizeCFGPass();
     (void)llvm::createDXILResourceWrapperPassPass();
     (void)llvm::createDXILResourceTypeWrapperPassPass();
@@ -152,7 +153,8 @@ struct ForcePassLinking {
     llvm::TargetLibraryInfo TLI(TLII);
     llvm::AliasAnalysis AA(TLI);
     llvm::BatchAAResults BAA(AA);
-    llvm::AliasSetTracker X(BAA);
+    llvm::AliasSetTracker X(BAA, llvm::clv2::defaultOptionsContext());
+    X.add(llvm::MemoryLocation()); // for -print-alias-sets
     (void)llvm::AreStatisticsEnabled();
     (void)llvm::sys::RunningOnValgrind();
   }

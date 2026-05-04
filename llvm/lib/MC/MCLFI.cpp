@@ -16,12 +16,14 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCLFIRewriter.h"
+#include "llvm/MC/MCOptionsOptInfos.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCTargetOptionsCommandFlags.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Alignment.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/TargetParser/Triple.h"
 
 static const char NoteNamespace[] = "LFI";
@@ -29,10 +31,6 @@ static const char NoteNamespace[] = "LFI";
 static constexpr unsigned X86BundleSize = 32;
 
 namespace llvm {
-
-cl::opt<bool> FlagEnableRewriting("lfi-enable-rewriter",
-                                  cl::desc("Enable rewriting for LFI."),
-                                  cl::init(true), cl::Hidden);
 
 void initializeLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
                              const Triple &TheTriple) {
@@ -43,7 +41,12 @@ void initializeLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
 
   // Create the target-specific MCLFIRewriter.
   assert(TheTarget != nullptr);
-  if (FlagEnableRewriting) {
+  // The context is always present now, so the former fallback to the legacy
+  // global (mc::getLFIEnableRewriter()) is unreachable and has been dropped.
+  const bool EnableRewriter =
+      clv2::getOptValIfSpecified<&clv2::MCOptsReg, &clv2::MC_LFIEnableRewriter>(
+          Ctx.getOptionsContext(), true);
+  if (EnableRewriter) {
     auto MRI =
         std::unique_ptr<MCRegisterInfo>(TheTarget->createMCRegInfo(TheTriple));
     auto MII = std::unique_ptr<MCInstrInfo>(TheTarget->createMCInstrInfo());

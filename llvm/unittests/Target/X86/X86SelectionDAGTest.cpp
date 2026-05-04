@@ -65,7 +65,7 @@ protected:
     DAG->init(*MF, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
   }
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<TargetMachine> TM;
   std::unique_ptr<Module> M;
   Function *F;

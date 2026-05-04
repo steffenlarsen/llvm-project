@@ -21,7 +21,6 @@
 #include "mlir/TableGen/Trait.h"
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Record.h"
@@ -33,10 +32,7 @@ using namespace mlir;
 using namespace mlir::tblgen;
 using llvm::RecordKeeper;
 
-static llvm::cl::OptionCategory dialectGenCat("Options for -gen-dialect-*");
-static llvm::cl::opt<std::string>
-    selectedDialect("dialect", llvm::cl::desc("The dialect to gen for"),
-                    llvm::cl::cat(dialectGenCat), llvm::cl::CommaSeparated);
+std::string selectedDialect;
 
 static void populateDiscardableAttributes(
     Dialect &dialect, const llvm::DagInit *discardableAttrDag,
@@ -61,10 +57,10 @@ tblgen::findDialectToGenerate(ArrayRef<Dialect> dialects) {
   }
 
   // Select the dialect to gen for.
-  if (dialects.size() == 1 && selectedDialect.getNumOccurrences() == 0)
+  if (dialects.size() == 1 && selectedDialect.empty())
     return dialects.front();
 
-  if (selectedDialect.getNumOccurrences() == 0) {
+  if (selectedDialect.empty()) {
     llvm::errs() << "when more than 1 dialect is present, one must be selected "
                     "via '-dialect'\n";
     return std::nullopt;

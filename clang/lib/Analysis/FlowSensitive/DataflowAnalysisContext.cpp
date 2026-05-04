@@ -23,7 +23,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/SetVector.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
@@ -35,11 +35,23 @@
 #include <utility>
 #include <vector>
 
-static llvm::cl::opt<std::string> DataflowLog(
-    "dataflow-log", llvm::cl::Hidden, llvm::cl::ValueOptional,
-    llvm::cl::desc("Emit log of dataflow analysis. With no arg, writes textual "
-                   "log to stderr. With an arg, writes HTML logs under the "
-                   "specified directory (one per analyzed function)."));
+namespace {
+using namespace llvm::clv2;
+static constexpr OptionInfo<std::string> OI_DataflowLog{
+    "dataflow-log",
+    "Emit log of dataflow analysis. With no arg, writes textual "
+    "log to stderr. With an arg, writes HTML logs under the "
+    "specified directory (one per analyzed function).",
+    ValueOptional, Hidden};
+static constexpr OptionsRegistry<&OI_DataflowLog> DataflowLogReg;
+
+// No apply function: the flag is read from the per-compilation OptionsContext
+// carried in DataflowAnalysisContext::Options, not mirrored into a global.
+[[maybe_unused]] static const bool Registered = [] {
+  registerDynamicRegistry<&DataflowLogReg>();
+  return true;
+}();
+} // namespace
 
 namespace clang {
 namespace dataflow {
@@ -156,8 +168,7 @@ void DataflowAnalysisContext::addFlowConditionConstraint(
     Atom Token, const Formula &Constraint) {
   auto Res = FlowConditionConstraints.try_emplace(Token, &Constraint);
   if (!Res.second) {
-    Res.first->second =
-        &arena().makeAnd(*Res.first->second, Constraint);
+    Res.first->second = &arena().makeAnd(*Res.first->second, Constraint);
   }
 }
 
@@ -168,9 +179,8 @@ Atom DataflowAnalysisContext::forkFlowCondition(Atom Token) {
   return ForkToken;
 }
 
-Atom
-DataflowAnalysisContext::joinFlowConditions(Atom FirstToken,
-                                            Atom SecondToken) {
+Atom DataflowAnalysisContext::joinFlowConditions(Atom FirstToken,
+                                                 Atom SecondToken) {
   Atom Token = arena().makeFlowConditionToken();
   auto &TokenDeps = FlowConditionDeps[Token];
   TokenDeps.insert(FirstToken);
@@ -412,11 +422,12 @@ DataflowAnalysisContext::getAdornedCFG(const FunctionDecl *F) {
   return nullptr;
 }
 
-static std::unique_ptr<Logger> makeLoggerFromCommandLine() {
-  if (DataflowLog.empty())
+static std::unique_ptr<Logger>
+makeLoggerFromCommandLine(llvm::StringRef LogDir) {
+  if (LogDir.empty())
     return Logger::textual(llvm::errs());
 
-  llvm::StringRef Dir = DataflowLog;
+  llvm::StringRef Dir = LogDir;
   if (auto EC = llvm::sys::fs::create_directories(Dir))
     llvm::errs() << "Failed to create log dir: " << EC.message() << "\n";
   // All analysis runs within a process will log to the same directory.
@@ -444,12 +455,17 @@ DataflowAnalysisContext::DataflowAnalysisContext(
     Solver &S, std::unique_ptr<Solver> &&OwnedSolver, Options Opts)
     : S(S), OwnedSolver(std::move(OwnedSolver)), A(std::make_unique<Arena>()),
       Opts(Opts) {
-  // If the -dataflow-log command-line flag was set, synthesize a logger.
-  // This is ugly but provides a uniform method for ad-hoc debugging dataflow-
-  // based tools.
+  // If the -dataflow-log command-line flag was set for this compilation,
+  // synthesize a logger.  The flag is read from the per-compilation
+  // OptionsContext (threaded in via Opts.OptCtx, normally from
+  // ASTContext::getOptionsContext) rather than from a global, so concurrent
+  // in-process analyses can log independently.
   if (Opts.Log == nullptr) {
-    if (DataflowLog.getNumOccurrences() > 0) {
-      LogOwner = makeLoggerFromCommandLine();
+    if (llvm::clv2::wasOptSpecified<&DataflowLogReg, &OI_DataflowLog>(
+            *Opts.OptCtx)) {
+      LogOwner = makeLoggerFromCommandLine(
+          llvm::clv2::getOptValOr<&DataflowLogReg, &OI_DataflowLog>(
+              *Opts.OptCtx, std::string()));
       this->Opts.Log = LogOwner.get();
       // FIXME: if the flag is given a value, write an HTML log to a file.
     } else {

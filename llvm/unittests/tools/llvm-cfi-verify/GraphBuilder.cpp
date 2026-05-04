@@ -30,7 +30,6 @@
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/TargetSelect.h"
@@ -124,7 +123,7 @@ public:
 class BasicGraphBuilderTest : public ::testing::Test {
 protected:
   void SetUp() override {
-    IgnoreDWARFFlag = true;
+    Analysis.setIgnoreDWARF(true);
     SuccessfullyInitialised = true;
     if (auto Err = Analysis.initialiseDisassemblyMembers()) {
       handleAllErrors(std::move(Err), [&](const UnsupportedDisassembly &E) {
@@ -135,6 +134,9 @@ protected:
       });
     }
   }
+
+  static constexpr uint64_t DefaultSearchLengthUndef = 2;
+  static constexpr uint64_t DefaultSearchLengthCB = 20;
 
   bool SuccessfullyInitialised;
   ELFx86TestFileAnalysis Analysis;
@@ -156,8 +158,9 @@ TEST_F(BasicGraphBuilderTest, BuildFlowGraphTestSinglePathFallthroughUd2) {
           0xff, 0x10, // 4: callq *(%rax)
       },
       {0xDEADBEEF, 0x0});
-  const auto Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 4, 0x0});
+  const auto Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 4, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
 
   EXPECT_THAT(Result.OrphanedNodes, IsEmpty());
   EXPECT_THAT(Result.ConditionalBranchNodes, SizeIs(1));
@@ -183,8 +186,9 @@ TEST_F(BasicGraphBuilderTest, BuildFlowGraphTestSinglePathJumpUd2) {
           0x0f, 0x0b, // 4: ud2
       },
       {0xDEADBEEF, 0x0});
-  const auto Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 2, 0x0});
+  const auto Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 2, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
 
   EXPECT_THAT(Result.OrphanedNodes, IsEmpty());
   EXPECT_THAT(Result.ConditionalBranchNodes, SizeIs(1));
@@ -213,8 +217,9 @@ TEST_F(BasicGraphBuilderTest, BuildFlowGraphTestDualPathDualUd2) {
           0x0f, 0x0b, // 9: ud2
       },
       {0xDEADBEEF, 0x0});
-  const auto Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 3, 0x0});
+  const auto Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 3, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
 
   EXPECT_THAT(Result.OrphanedNodes, IsEmpty());
   EXPECT_THAT(Result.ConditionalBranchNodes, SizeIs(2));
@@ -252,8 +257,9 @@ TEST_F(BasicGraphBuilderTest, BuildFlowGraphTestDualPathSingleUd2) {
           0x0f, 0x0b, // 7: ud2
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 3, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 3, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
 
   EXPECT_THAT(Result.OrphanedNodes, IsEmpty());
   EXPECT_THAT(Result.ConditionalBranchNodes, SizeIs(2));
@@ -288,16 +294,21 @@ TEST_F(BasicGraphBuilderTest, BuildFlowGraphFailures) {
           0x75, 0xfe, // 1: jne 1 [-2]
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF, 0x0},
+                                                    DefaultSearchLengthUndef,
+                                                    DefaultSearchLengthCB);
   EXPECT_THAT(Result.OrphanedNodes, IsEmpty());
   EXPECT_THAT(Result.ConditionalBranchNodes, IsEmpty());
 
-  Result = GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 1, 0x0});
+  Result = GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 1, 0x0},
+                                        DefaultSearchLengthUndef,
+                                        DefaultSearchLengthCB);
   EXPECT_THAT(Result.OrphanedNodes, IsEmpty());
   EXPECT_THAT(Result.ConditionalBranchNodes, IsEmpty());
 
-  Result = GraphBuilder::buildFlowGraph(Analysis, {0xDEADC0DE, 0x0});
+  Result = GraphBuilder::buildFlowGraph(Analysis, {0xDEADC0DE, 0x0},
+                                        DefaultSearchLengthUndef,
+                                        DefaultSearchLengthCB);
   EXPECT_THAT(Result.OrphanedNodes, IsEmpty());
   EXPECT_THAT(Result.ConditionalBranchNodes, IsEmpty());
 }
@@ -311,8 +322,9 @@ TEST_F(BasicGraphBuilderTest, BuildFlowGraphNoXrefs) {
           0xff, 0x10, // 2: callq *(%rax)
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 2, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 2, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_THAT(Result.ConditionalBranchNodes, IsEmpty());
   EXPECT_THAT(Result.OrphanedNodes, ElementsAre(0xDEADBEEF + 2));
   EXPECT_THAT(Result.IntermediateNodes, IsEmpty());
@@ -327,8 +339,9 @@ TEST_F(BasicGraphBuilderTest, BuildFlowGraphConditionalInfiniteLoop) {
           0xff, 0x10, // 2: callq *(%rax)
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 2, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 2, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_THAT(Result.OrphanedNodes, IsEmpty());
   EXPECT_THAT(Result.ConditionalBranchNodes, SizeIs(1));
   EXPECT_THAT(
@@ -351,8 +364,9 @@ TEST_F(BasicGraphBuilderTest, BuildFlowGraphUnconditionalInfiniteLoop) {
           0xff, 0x10, // 4: callq *(%rax)
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 4, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 4, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_THAT(Result.OrphanedNodes, IsEmpty());
   EXPECT_THAT(Result.ConditionalBranchNodes, SizeIs(1));
   EXPECT_THAT(
@@ -376,8 +390,9 @@ TEST_F(BasicGraphBuilderTest, BuildFlowGraphNoFlowsToIndirection) {
           0xff, 0x10, // 4: callq *(%rax)
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 4, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 4, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_THAT(Result.OrphanedNodes, ElementsAre(0xDEADBEEF + 4));
   EXPECT_THAT(Result.ConditionalBranchNodes, IsEmpty());
 }
@@ -396,20 +411,15 @@ TEST_F(BasicGraphBuilderTest, BuildFlowGraphLengthExceededUpwards) {
           0x0f, 0x0b, // 8: ud2
       },
       {0xDEADBEEF, 0x0});
-  uint64_t PrevSearchLengthForConditionalBranch =
-      SearchLengthForConditionalBranch;
-  SearchLengthForConditionalBranch = 2;
-
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 6, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 6, 0x0}, DefaultSearchLengthUndef,
+      /*SearchLengthCB=*/2);
   EXPECT_THAT(Result.OrphanedNodes, SizeIs(1));
   EXPECT_THAT(Result.OrphanedNodes,
               Each(HasPath(Result, ElementsAre(0xDEADBEEF + 4, 0xDEADBEEF + 5,
                                                0xDEADBEEF + 6))))
       << PrintToString(Result);
   EXPECT_THAT(Result.ConditionalBranchNodes, IsEmpty());
-
-  SearchLengthForConditionalBranch = PrevSearchLengthForConditionalBranch;
 }
 
 TEST_F(BasicGraphBuilderTest, BuildFlowGraphLengthExceededDownwards) {
@@ -426,11 +436,9 @@ TEST_F(BasicGraphBuilderTest, BuildFlowGraphLengthExceededDownwards) {
           0x0f, 0x0b, // 8: ud2
       },
       {0xDEADBEEF, 0x0});
-  uint64_t PrevSearchLengthForUndef = SearchLengthForUndef;
-  SearchLengthForUndef = 2;
-
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 2, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 2, 0x0}, /*SearchLengthUndef=*/2,
+      DefaultSearchLengthCB);
   EXPECT_THAT(Result.OrphanedNodes, IsEmpty());
   EXPECT_THAT(
       Result.ConditionalBranchNodes,
@@ -442,8 +450,6 @@ TEST_F(BasicGraphBuilderTest, BuildFlowGraphLengthExceededDownwards) {
           Field(&ConditionalBranchNode::Fallthrough,
                 HasPath(Result, ElementsAre(0xDEADBEEF + 2))))))
       << PrintToString(Result);
-
-  SearchLengthForUndef = PrevSearchLengthForUndef;
 }
 
 // This test ensures when avoiding doing repeated work we still generate the
@@ -461,8 +467,9 @@ TEST_F(BasicGraphBuilderTest, BuildFlowGraphWithRepeatedWork) {
           0x0f, 0x0b, // 7: ud2
       },
       {0xDEADBEEF, 0x0});
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0xDEADBEEF + 3, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(
+      Analysis, {0xDEADBEEF + 3, 0x0}, DefaultSearchLengthUndef,
+      DefaultSearchLengthCB);
   EXPECT_THAT(Result.OrphanedNodes, IsEmpty());
   EXPECT_THAT(Result.ConditionalBranchNodes, SizeIs(2));
   EXPECT_THAT(
@@ -541,11 +548,9 @@ TEST_F(BasicGraphBuilderTest, BuildFlowGraphComplexExample) {
           0x0f, 0x0b,                   // 22: ud2
       },
       {0x1000, 0x0});
-  uint64_t PrevSearchLengthForUndef = SearchLengthForUndef;
-  SearchLengthForUndef = 5;
-
-  GraphResult Result =
-      GraphBuilder::buildFlowGraph(Analysis, {0x1000 + 9, 0x0});
+  GraphResult Result = GraphBuilder::buildFlowGraph(Analysis, {0x1000 + 9, 0x0},
+                                                    /*SearchLengthUndef=*/5,
+                                                    DefaultSearchLengthCB);
 
   EXPECT_THAT(Result.OrphanedNodes, SizeIs(1));
   EXPECT_THAT(Result.ConditionalBranchNodes, SizeIs(3));
@@ -589,7 +594,6 @@ TEST_F(BasicGraphBuilderTest, BuildFlowGraphComplexExample) {
                            HasPath(Result, ElementsAre(0x1000 + 15))))))
       << PrintToString(Result);
 
-  SearchLengthForUndef = PrevSearchLengthForUndef;
 }
 
 } // anonymous namespace

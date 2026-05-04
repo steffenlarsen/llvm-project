@@ -30,8 +30,9 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsARM.h"
 #include "llvm/IR/LLVMContext.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 #include "llvm/Target/TargetOptions.h"
 #include <optional>
 
@@ -40,10 +41,10 @@ using namespace llvm;
 #define DEBUG_TYPE "arm-isel"
 #define PASS_NAME "ARM Instruction Selection"
 
-static cl::opt<bool>
-DisableShifterOp("disable-shifter-op", cl::Hidden,
-  cl::desc("Disable isel of shifter-op"),
-  cl::init(false));
+static bool getDisableShifterOp(const Function &F) {
+  return clv2::getOptValOr<&clv2::ARMOptsReg, &clv2::ARM_DisableShifterOp>(
+      F.getContext().getOptionsContext(), false);
+}
 
 //===--------------------------------------------------------------------===//
 /// ARMDAGToDAGISel - ARM specific code to select ARM machine
@@ -591,7 +592,7 @@ bool ARMDAGToDAGISel::SelectImmShifterOperand(SDValue N,
                                               SDValue &BaseReg,
                                               SDValue &Opc,
                                               bool CheckProfitability) {
-  if (DisableShifterOp)
+  if (getDisableShifterOp(CurDAG->getMachineFunction().getFunction()))
     return false;
 
   // If N is a multiply-by-constant and it's profitable to extract a shift and
@@ -631,7 +632,7 @@ bool ARMDAGToDAGISel::SelectRegShifterOperand(SDValue N,
                                               SDValue &ShReg,
                                               SDValue &Opc,
                                               bool CheckProfitability) {
-  if (DisableShifterOp)
+  if (getDisableShifterOp(CurDAG->getMachineFunction().getFunction()))
     return false;
 
   ARM_AM::ShiftOpc ShOpcVal = ARM_AM::getShiftOpcForNode(N.getOpcode());
