@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Basic/DiagnosticFrontend.h"
+#include "clang/CodeGen/ClangCodeGenOptionsOptInfos.h"
 #include "clang/CodeGen/CodeGenAction.h"
 #include "clang/Config/config.h"
 #include "clang/ExtractAPI/FrontendActions.h"
@@ -30,14 +31,22 @@
 #include "clang/StaticAnalyzer/Core/AnalyzerOptions.h"
 #include "clang/StaticAnalyzer/Frontend/AnalyzerHelpFlags.h"
 #include "clang/StaticAnalyzer/Frontend/FrontendActions.h"
+#include "llvm/CodeGen/SelectionDAGISel.h"
 #include "llvm/Option/OptTable.h"
+#include "llvm/Support/Allocator.h"
 #include "llvm/Support/BuryPointer.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
+#include "llvm/Support/StringSaver.h"
+#include "llvm/Support/TargetSelect.h"
 
 #if CLANG_ENABLE_CIR
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/MLIROptionsOptInfos.h"
 #include "mlir/Pass/PassManager.h"
 #include "clang/CIR/Dialect/Passes.h"
 #include "clang/CIR/FrontendAction/CIRGenAction.h"
@@ -257,16 +266,24 @@ bool ExecuteCompilerInvocation(CompilerInstance *Clang) {
   //
   // FIXME: Remove this, one day.
   // This should happen AFTER plugins have been loaded!
+  // pre-RA-sched registration is handled by llc's ExtraEntries;
+  // clang's BackendUtil creates TargetMachines directly without this option.
   if (!Clang->getFrontendOpts().LLVMArgs.empty()) {
-    unsigned NumArgs = Clang->getFrontendOpts().LLVMArgs.size();
-    auto Args = std::make_unique<const char*[]>(NumArgs + 2);
-    Args[0] = "clang (LLVM option parsing)";
-    for (unsigned i = 0; i != NumArgs; ++i)
-      Args[i + 1] = Clang->getFrontendOpts().LLVMArgs[i].c_str();
-    Args[NumArgs + 1] = nullptr;
-    llvm::cl::ParseCommandLineOptions(NumArgs + 1, Args.get(), /*Overview=*/"",
-                                      /*Errs=*/nullptr,
-                                      /*VFS=*/&Clang->getVirtualFileSystem());
+    llvm::SmallVector<llvm::StringRef> ArgRefs;
+    for (const auto &A : Clang->getFrontendOpts().LLVMArgs)
+      ArgRefs.push_back(A);
+    {
+      llvm::clv2::OptionParser P;
+      llvm::RegisterAllLLVMOptions(P);
+      P.add<&llvm::clv2::ClangCodeGenOptsReg>();
+      llvm::BumpPtrAllocator Alloc;
+      llvm::StringSaver Saver(Alloc);
+      llvm::SmallVector<const char *> Argv;
+      Argv.push_back(Saver.save("clang (LLVM option parsing)").data());
+      for (llvm::StringRef A : ArgRefs)
+        Argv.push_back(Saver.save(A).data());
+      Clang->setLLVMOptionsContext(P.parse(Argv.size(), Argv.data()));
+    }
   }
 
 #if CLANG_ENABLE_STATIC_ANALYZER
@@ -305,7 +322,6 @@ bool ExecuteCompilerInvocation(CompilerInstance *Clang) {
   if (!Clang->getFrontendOpts().MLIRArgs.empty()) {
     mlir::registerCIRPasses();
     mlir::registerMLIRContextCLOptions();
-    mlir::registerPassManagerCLOptions();
     mlir::registerAsmPrinterCLOptions();
     unsigned NumArgs = Clang->getFrontendOpts().MLIRArgs.size();
     auto Args = std::make_unique<const char *[]>(NumArgs + 2);
@@ -313,9 +329,10 @@ bool ExecuteCompilerInvocation(CompilerInstance *Clang) {
     for (unsigned i = 0; i != NumArgs; ++i)
       Args[i + 1] = Clang->getFrontendOpts().MLIRArgs[i].c_str();
     Args[NumArgs + 1] = nullptr;
-    llvm::cl::ParseCommandLineOptions(NumArgs + 1, Args.get(),
-                                      /*Description=*/"", /*Errs=*/nullptr,
-                                      &Clang->getVirtualFileSystem());
+    llvm::clv2::OptionParser MP;
+    MP.add<&llvm::clv2::MLIROptsReg, mlir::mlir_opts::applyMLIROpts>();
+    mlir::registerPassManagerCLOptions(MP);
+    MP.parse(NumArgs + 1, Args.get());
   }
 #endif
 

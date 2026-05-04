@@ -16,6 +16,7 @@
 #include "llvm/IR/AttributeMask.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/IROptionsOptInfos.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
@@ -26,21 +27,19 @@
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/IR/Type.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
 using namespace llvm;
-
-namespace llvm {
+using namespace llvm::clv2;
 
 // FIXME: Flag used for an ablation performance test, Issue #147390. Placing it
 // here because referencing IR should be feasible from anywhere. Will be
 // removed after the ablation test.
-cl::opt<bool> ProfcheckDisableMetadataFixes(
-    "profcheck-disable-metadata-fixes", cl::Hidden, cl::init(false),
-    cl::desc(
-        "Disable metadata propagation fixes discovered through Issue #147390"));
-
-} // end namespace llvm
+bool llvm::getProfcheckDisableMetadataFixes(const LLVMContext &Ctx) {
+  return getOptValIfSpecified<&IROptsReg, &IR_ProfcheckDisableMetadataFixes>(
+      Ctx.getOptionsContext(), false);
+}
 
 InsertPosition::InsertPosition(BasicBlock *InsertAtEnd)
     : InsertAt(InsertAtEnd ? InsertAtEnd->end() : InstListType::iterator()) {}
@@ -583,8 +582,9 @@ void Instruction::dropUBImplyingAttrsAndMetadata(ArrayRef<unsigned> Keep) {
       LLVMContext::MD_mem_cache_hint, LLVMContext::MD_nofpclass};
   SmallVector<unsigned> KeepIDs;
   KeepIDs.reserve(Keep.size() + std::size(KnownIDs));
-  append_range(KeepIDs, (!ProfcheckDisableMetadataFixes ? KnownIDs
-                                                        : drop_end(KnownIDs)));
+  append_range(KeepIDs, (!getProfcheckDisableMetadataFixes(getContext())
+                             ? KnownIDs
+                             : drop_end(KnownIDs)));
   append_range(KeepIDs, Keep);
   dropUBImplyingAttrsAndUnknownMetadata(KeepIDs);
 }

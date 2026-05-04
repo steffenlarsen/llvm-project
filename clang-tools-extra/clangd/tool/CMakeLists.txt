@@ -15,6 +15,7 @@ add_clang_tool(clangd
   )
 
 set(LLVM_LINK_COMPONENTS
+  AllOptions
   support
   )
 

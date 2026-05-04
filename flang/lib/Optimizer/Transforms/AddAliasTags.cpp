@@ -12,6 +12,7 @@
 /// fir::AliasAnalysis. More are added later in CodeGen - see fir::TBAABuilder
 //===----------------------------------------------------------------------===//
 
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Optimizer/Analysis/AliasAnalysis.h"
 #include "flang/Optimizer/Analysis/TBAAForest.h"
 #include "flang/Optimizer/Builder/FIRBuilder.h"
@@ -24,8 +25,8 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <optional>
 
@@ -35,30 +36,6 @@ namespace fir {
 } // namespace fir
 
 #define DEBUG_TYPE "fir-add-alias-tags"
-
-static llvm::cl::opt<bool>
-    enableDummyArgs("dummy-arg-tbaa", llvm::cl::init(true), llvm::cl::Hidden,
-                    llvm::cl::desc("Add TBAA tags to dummy arguments"));
-static llvm::cl::opt<bool>
-    enableGlobals("globals-tbaa", llvm::cl::init(true), llvm::cl::Hidden,
-                  llvm::cl::desc("Add TBAA tags to global variables"));
-static llvm::cl::opt<bool>
-    enableDirect("direct-tbaa", llvm::cl::init(true), llvm::cl::Hidden,
-                 llvm::cl::desc("Add TBAA tags to direct variables"));
-static llvm::cl::opt<bool>
-    enableLocalAllocs("local-alloc-tbaa", llvm::cl::init(true),
-                      llvm::cl::Hidden,
-                      llvm::cl::desc("Add TBAA tags to local allocations."));
-
-// Engineering option to triage TBAA tags attachment for accesses
-// of allocatable entities.
-static llvm::cl::opt<unsigned> localAllocsThreshold(
-    "local-alloc-tbaa-threshold", llvm::cl::init(0), llvm::cl::ReallyHidden,
-    llvm::cl::desc("If present, stops generating TBAA tags for accesses of "
-                   "local allocations after N accesses in a module"));
-
-// Defined in AliasAnalysis.cpp
-extern llvm::cl::opt<bool> supportCrayPointers;
 
 namespace {
 
@@ -686,6 +663,20 @@ void AddAliasTagsPass::runOnAliasInterface(fir::FirAliasTagOpInterface op,
       scopeOp = state.getDeclarationScope(declareOp);
   }
 
+  auto &optsCtx = getContext().getOptionsContext();
+  bool enableDummyArgs =
+      llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_DummyArgTBAA>(optsCtx);
+  bool enableGlobals =
+      llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_GlobalsTBAA>(optsCtx);
+  bool enableDirect =
+      llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_DirectTBAA>(optsCtx);
+  bool enableLocalAllocs =
+      llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_LocalAllocTBAA>(
+          optsCtx);
+  bool supportCrayPointers =
+      llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_UnsafeCrayPointers>(
+          optsCtx);
+
   mlir::LLVM::TBAATagAttr tag;
   // Cray pointer/pointee is a special case. These might alias with any data.
   if (supportCrayPointers && source.isCrayPointerOrPointee()) {
@@ -914,11 +905,17 @@ void AddAliasTagsPass::runOnOperation() {
   // runOnAliasInterface
   auto &domInfo = getAnalysis<mlir::DominanceInfo>();
   mlir::ModuleOp module = getOperation();
+  auto &optsCtx = getContext().getOptionsContext();
   mlir::DataLayout dl = *fir::support::getOrSetMLIRDataLayout(
       module, /*allowDefaultLayout=*/false);
+  unsigned localAllocsThresholdVal = llvm::clv2::getOptValOrDefault<
+      &llvm::clv2::FLANG_LocalAllocTBAAThreshold>(optsCtx);
+  bool localAllocsThresholdSpecified =
+      llvm::clv2::wasOptSpecified<&llvm::clv2::FLANG_LocalAllocTBAAThreshold>(
+          optsCtx);
   PassState state(module, dl, domInfo,
-                  localAllocsThreshold.getPosition()
-                      ? std::optional<unsigned>(localAllocsThreshold)
+                  localAllocsThresholdSpecified
+                      ? std::optional<unsigned>(localAllocsThresholdVal)
                       : std::nullopt);
 
   module.walk(

@@ -82,13 +82,15 @@ public:
   // Glue for old PM
   LLVM_ABI bool runImpl(Function &F, TargetTransformInfo *TTI);
 
+  void setOnlyIfDivergentTarget(bool V) { OnlyIfDivergentTarget = V; }
+
 private:
   bool runOnBasicBlock(BasicBlock &B);
   bool considerHoistingFromTo(BasicBlock &FromBlock, BasicBlock &ToBlock);
 
   // If true, this pass is a nop unless the target architecture has branch
   // divergence.
-  const bool OnlyIfDivergentTarget = false;
+  bool OnlyIfDivergentTarget = false;
 
   TargetTransformInfo *TTI = nullptr;
 };

@@ -348,7 +348,8 @@ Interpreter::Interpreter(std::unique_ptr<CompilerInstance> Instance,
     : IncrExecutorBuilder(std::move(IEB)) {
   CI = std::move(Instance);
   llvm::ErrorAsOutParameter EAO(&ErrOut);
-  auto LLVMCtx = std::make_unique<llvm::LLVMContext>();
+  auto LLVMCtx =
+      std::make_unique<llvm::LLVMContext>(llvm::clv2::defaultOptionsContext());
   TSCtx = std::make_unique<llvm::orc::ThreadSafeContext>(std::move(LLVMCtx));
 
   Act = TSCtx->withContextDo([&](llvm::LLVMContext *Ctx) {

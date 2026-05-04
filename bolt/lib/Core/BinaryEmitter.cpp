@@ -14,14 +14,16 @@
 #include "bolt/Core/BinaryEmitter.h"
 #include "bolt/Core/BinaryContext.h"
 #include "bolt/Core/BinaryFunction.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
 #include "bolt/Core/DebugData.h"
 #include "bolt/Core/FunctionLayout.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "bolt/Utils/Utils.h"
 #include "llvm/DebugInfo/DWARF/DWARFCompileUnit.h"
 #include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCStreamer.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/SMLoc.h"
 
@@ -30,43 +32,12 @@
 using namespace llvm;
 using namespace bolt;
 
-namespace opts {
+namespace llvm {
+namespace bolt {
 
-extern cl::opt<JumpTableSupportLevel> JumpTables;
-
-static cl::list<std::string>
-BreakFunctionNames("break-funcs",
-  cl::CommaSeparated,
-  cl::desc("list of functions to core dump on (debugging)"),
-  cl::value_desc("func1,func2,func3,..."),
-  cl::Hidden,
-  cl::cat(BoltCategory));
-
-static cl::list<std::string>
-    FunctionPadSpec("pad-funcs", cl::CommaSeparated,
-                    cl::desc("list of functions to pad with amount of bytes"),
-                    cl::value_desc("func1:pad1,func2:pad2,func3:pad3,..."),
-                    cl::Hidden, cl::cat(BoltCategory));
-
-static cl::list<std::string> FunctionPadBeforeSpec(
-    "pad-funcs-before", cl::CommaSeparated,
-    cl::desc("list of functions to pad with amount of bytes"),
-    cl::value_desc("func1:pad1,func2:pad2,func3:pad3,..."), cl::Hidden,
-    cl::cat(BoltCategory));
-
-static cl::opt<bool> MarkFuncs(
-    "mark-funcs",
-    cl::desc("mark function boundaries with break instruction to make "
-             "sure we accidentally don't cross them"),
-    cl::ReallyHidden, cl::cat(BoltCategory));
-
-static cl::opt<bool> PrintJumpTables("print-jump-tables",
-                                     cl::desc("print jump tables"), cl::Hidden,
-                                     cl::cat(BoltCategory));
-
-size_t padFunction(std::map<std::string, size_t> &FunctionPadding,
-                   const cl::list<std::string> &Spec,
-                   const BinaryFunction &Function) {
+static size_t padFunction(std::map<std::string, size_t> &FunctionPadding,
+                          const std::vector<std::string> &Spec,
+                          const BinaryFunction &Function) {
   if (FunctionPadding.empty() && !Spec.empty()) {
     for (const std::string &Spec : Spec) {
       size_t N = Spec.find(':');
@@ -90,14 +61,21 @@ size_t padFunction(std::map<std::string, size_t> &FunctionPadding,
 
 size_t padFunctionBefore(const BinaryFunction &Function) {
   static std::map<std::string, size_t> CacheFunctionPadding;
-  return padFunction(CacheFunctionPadding, FunctionPadBeforeSpec, Function);
+  std::vector<std::string> Spec =
+      bolt_core_opts::getPadFuncsBefore(Function.getBinaryContext());
+  return padFunction(CacheFunctionPadding, Spec, Function);
 }
 size_t padFunctionAfter(const BinaryFunction &Function) {
   static std::map<std::string, size_t> CacheFunctionPadding;
-  return padFunction(CacheFunctionPadding, FunctionPadSpec, Function);
+  std::vector<std::string> Spec =
+      bolt_core_opts::getPadFuncs(Function.getBinaryContext());
+  return padFunction(CacheFunctionPadding, Spec, Function);
 }
 
-} // namespace opts
+} // namespace bolt
+} // namespace llvm
+
+using bolt::bolt_core_opts::getBoltCoreOpts;
 
 namespace {
 using JumpTable = bolt::JumpTable;
@@ -187,7 +165,8 @@ void BinaryEmitter::emitAll(StringRef OrgSecPrefix) {
   Streamer.initSections(*BC.STI);
   Streamer.setUseAssemblerInfoForParsing(false);
 
-  if (opts::UpdateDebugSections && BC.isELF()) {
+  bool UpdateDebugSections = bolt_utils_opts::getUpdateDebugSections(BC);
+  if (UpdateDebugSections && BC.isELF()) {
     // Force the emission of debug line info into allocatable section to ensure
     // JITLink will process it.
     //
@@ -208,7 +187,7 @@ void BinaryEmitter::emitAll(StringRef OrgSecPrefix) {
 
   emitFunctions();
 
-  if (opts::UpdateDebugSections) {
+  if (UpdateDebugSections) {
     emitDebugLineInfoForOriginalFunctions();
     DwarfLineTable::emit(BC, Streamer);
   }
@@ -222,6 +201,9 @@ void BinaryEmitter::emitAll(StringRef OrgSecPrefix) {
 }
 
 void BinaryEmitter::emitFunctions() {
+  bool PrintCacheMetrics = bolt_utils_opts::getPrintCacheMetrics(BC);
+  bool HotText = bolt_utils_opts::getHotText(BC);
+
   auto emit = [&](const BinaryFunctionListType &Functions) {
     const bool HasProfile = BC.NumProfiledFuncs > 0;
     const bool OriginalAllowAutoPadding = Streamer.getAllowAutoPadding();
@@ -261,12 +243,12 @@ void BinaryEmitter::emitFunctions() {
       Streamer.setAllowAutoPadding(OriginalAllowAutoPadding);
 
       if (Emitted)
-        Function->setEmitted(/*KeepCFG=*/opts::PrintCacheMetrics);
+        Function->setEmitted(/*KeepCFG=*/PrintCacheMetrics);
     }
   };
 
   // Mark the start of hot text.
-  if (opts::HotText) {
+  if (HotText) {
     Streamer.switchSection(BC.getTextSection());
     Streamer.emitLabel(BC.getHotTextStartSymbol());
   }
@@ -275,7 +257,7 @@ void BinaryEmitter::emitFunctions() {
   emit(BC.getOutputBinaryFunctions());
 
   // Mark the end of hot text.
-  if (opts::HotText) {
+  if (HotText) {
     if (BC.HasWarmSection)
       Streamer.switchSection(BC.getCodeSection(BC.getWarmCodeSectionName()));
     else
@@ -319,7 +301,7 @@ bool BinaryEmitter::emitFunction(BinaryFunction &Function,
     Streamer.emitCodeAlignment(Function.getAlign(), *BC.STI);
   }
 
-  if (size_t Padding = opts::padFunctionBefore(Function)) {
+  if (size_t Padding = bolt::padFunctionBefore(Function)) {
     // Handle padFuncsBefore after the above alignment logic but before
     // symbol addresses are decided.
     if (!BC.HasRelocations) {
@@ -387,11 +369,15 @@ bool BinaryEmitter::emitFunction(BinaryFunction &Function,
          "first basic block should never be cold");
 
   // Emit UD2 at the beginning if requested by user.
-  if (!opts::BreakFunctionNames.empty()) {
-    for (std::string &Name : opts::BreakFunctionNames) {
-      if (Function.hasNameRegex(Name)) {
-        Streamer.emitIntValue(0x0B0F, 2); // UD2: 0F 0B
-        break;
+  {
+    std::vector<std::string> BreakNames =
+        llvm::bolt::bolt_core_opts::getBreakFuncs(BC);
+    if (!BreakNames.empty()) {
+      for (std::string &Name : BreakNames) {
+        if (Function.hasNameRegex(Name)) {
+          Streamer.emitIntValue(0x0B0F, 2); // UD2: 0F 0B
+          break;
+        }
       }
     }
   }
@@ -400,14 +386,17 @@ bool BinaryEmitter::emitFunction(BinaryFunction &Function,
   emitFunctionBody(Function, FF, /*EmitCodeOnly=*/false);
 
   // Emit padding if requested.
-  if (size_t Padding = opts::padFunctionAfter(Function)) {
+  if (size_t Padding = bolt::padFunctionAfter(Function)) {
     LLVM_DEBUG(dbgs() << "BOLT-DEBUG: padding function " << Function << " with "
                       << Padding << " bytes\n");
     Streamer.emitFill(Padding, MAI.getTextAlignFillValue());
   }
 
-  if (opts::MarkFuncs)
-    Streamer.emitBytes(BC.MIB->getTrapFillValue());
+  {
+    bool DoMarkFuncs = llvm::bolt::bolt_core_opts::getMarkFuncs(BC);
+    if (DoMarkFuncs)
+      Streamer.emitBytes(BC.MIB->getTrapFillValue());
+  }
 
   // Emit CFI end
   if (NeedsFDE)
@@ -423,15 +412,22 @@ bool BinaryEmitter::emitFunction(BinaryFunction &Function,
     Streamer.emitELFSize(StartSymbol, SizeExpr);
   }
 
-  if (opts::UpdateDebugSections && !Function.getDWARFUnits().empty())
-    for (const auto &[_, Unit] : Function.getDWARFUnits())
-      emitLineInfoEnd(Function, EndSymbol, *Unit);
+  {
+    bool UpdateDS = bolt_utils_opts::getUpdateDebugSections(BC);
+    if (UpdateDS && !Function.getDWARFUnits().empty())
+      for (const auto &[_, Unit] : Function.getDWARFUnits())
+        emitLineInfoEnd(Function, EndSymbol, *Unit);
+  }
 
   // Exception handling info for the function.
   emitLSDA(Function, FF);
 
-  if (FF.isMainFragment() && opts::JumpTables > JTS_NONE)
-    emitJumpTables(Function);
+  {
+    auto JTLevel = static_cast<JumpTableSupportLevel>(
+        llvm::bolt::bolt_core_opts::getJumpTables(BC));
+    if (FF.isMainFragment() && JTLevel > JTS_NONE)
+      emitJumpTables(Function);
+  }
 
   return true;
 }
@@ -443,6 +439,8 @@ void BinaryEmitter::emitFunctionBody(BinaryFunction &BF, FunctionFragment &FF,
            "Constant island support only with hot/cold split");
     BF.duplicateConstantIslands();
   }
+
+  bool UpdateDebugSectionsFB = bolt_utils_opts::getUpdateDebugSections(BC);
 
   // Track the first emitted instruction with debug info.
   bool FirstInstr = true;
@@ -474,16 +472,16 @@ void BinaryEmitter::emitFunctionBody(BinaryFunction &BF, FunctionFragment &FF,
         // A symbol to be emitted before the instruction to mark its location.
         MCSymbol *InstrLabel = BC.MIB->getInstLabel(Instr);
 
-        if (opts::UpdateDebugSections && !BF.getDWARFUnits().empty()) {
+        if (UpdateDebugSectionsFB && !BF.getDWARFUnits().empty()) {
           LastLocSeen = emitLineInfo(BF, Instr.getLoc(), LastLocSeen,
                                      FirstInstr, InstrLabel);
           FirstInstr = false;
         }
 
-        // Prepare to tag this location with a label if we need to keep track of
-        // an instruction's output address to augment the IO address map (BAT,
-        // SDT/probe address translation, or --update-debug-sections DWARF range
-        // updates).
+        // Prepare to tag this location with a label if we need to keep
+        // an instruction's output address to augment the IO address map
+        // (BAT, SDT/probe address translation, or --update-debug-sections
+        // DWARF range updates).
         if (BF.requiresPreciseAddressMap() && BC.MIB->getOffset(Instr)) {
           const uint32_t Offset = *BC.MIB->getOffset(Instr);
           if (!InstrLabel)
@@ -550,7 +548,7 @@ void BinaryEmitter::emitConstantIslands(BinaryFunction &BF, bool EmitColdPart,
   StringRef FunctionContents = SectionContents.substr(
       BF.getAddress() - BF.getOriginSection()->getAddress(), BF.getMaxSize());
 
-  if (opts::Verbosity && !OnBehalfOf)
+  if (opts::getVerbosity(BC) && !OnBehalfOf)
     BC.outs() << "BOLT-INFO: emitting constant island for function " << BF
               << "\n";
 
@@ -776,7 +774,8 @@ void BinaryEmitter::emitJumpTables(const BinaryFunction &BF) {
   if (!BF.hasJumpTables())
     return;
 
-  if (opts::PrintJumpTables)
+  bool DoPrintJT = llvm::bolt::bolt_core_opts::getPrintJumpTables(BC);
+  if (DoPrintJT)
     BC.outs() << "BOLT-INFO: jump tables for function " << BF << ":\n";
 
   for (auto &JTI : BF.jumpTables()) {
@@ -784,9 +783,11 @@ void BinaryEmitter::emitJumpTables(const BinaryFunction &BF) {
     // Only emit shared jump tables once, when processing the first parent
     if (JT.Parents.size() > 1 && JT.Parents[0] != &BF)
       continue;
-    if (opts::PrintJumpTables)
+    if (DoPrintJT)
       JT.print(BC.outs());
-    if (opts::JumpTables == JTS_BASIC) {
+    auto JTLevel = static_cast<JumpTableSupportLevel>(
+        llvm::bolt::bolt_core_opts::getJumpTables(BC));
+    if (JTLevel == JTS_BASIC) {
       JT.updateOriginal();
     } else {
       MCSection *HotSection, *ColdSection;
@@ -808,7 +809,9 @@ void BinaryEmitter::emitJumpTable(const JumpTable &JT, MCSection *HotSection,
   // Each label represents a separate switch table and gets its own count
   // determining its destination.
   std::map<MCSymbol *, uint64_t> LabelCounts;
-  if (opts::JumpTables > JTS_SPLIT && !JT.Counts.empty()) {
+  auto JTLevel = static_cast<JumpTableSupportLevel>(
+      llvm::bolt::bolt_core_opts::getJumpTables(BC));
+  if (JTLevel > JTS_SPLIT && !JT.Counts.empty()) {
     auto It = JT.Labels.find(0);
     assert(It != JT.Labels.end());
     MCSymbol *CurrentLabel = It->second;
@@ -970,7 +973,7 @@ void BinaryEmitter::emitLSDA(BinaryFunction &BF, const FunctionFragment &FF) {
   if (!LPStartSymbol) {
     // Since landing pads are not in the same fragment, we fall back to emitting
     // absolute addresses for this FDE.
-    if (opts::Verbosity >= 2) {
+    if (opts::getVerbosity(BC) >= 2) {
       BC.outs() << "BOLT-INFO: falling back to generating absolute-address "
                 << "exception ranges for " << BF << '\n';
     }

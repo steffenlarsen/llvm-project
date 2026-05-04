@@ -22,6 +22,9 @@
 #include "llvm/Support/Compiler.h"
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
 
 class GlobalValueSummary;
 class ModuleSummaryIndex;
@@ -37,7 +40,8 @@ LLVM_ABI MemoryEffects computeFunctionBodyMemoryAccess(Function &F,
 LLVM_ABI bool thinLTOPropagateFunctionAttrs(
     ModuleSummaryIndex &Index,
     function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
-        isPrevailing);
+        isPrevailing,
+    const clv2::OptionsContext &Ctx);
 
 /// Computes function attributes in post-order over the call graph.
 ///

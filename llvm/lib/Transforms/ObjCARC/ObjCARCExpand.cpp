@@ -41,7 +41,7 @@ using namespace llvm::objcarc;
 
 namespace {
 static bool runImpl(Function &F) {
-  if (!EnableARCOpts)
+  if (!getEnableARCOpts())
     return false;
 
   // If nothing in the Module uses ARC, don't do anything.

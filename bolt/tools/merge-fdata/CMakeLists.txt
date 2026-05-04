@@ -1,4 +1,4 @@
-set(LLVM_LINK_COMPONENTS Support)
+set(LLVM_LINK_COMPONENTS Support AllOptions)
 
 add_bolt_tool(merge-fdata
   merge-fdata.cpp

@@ -11,12 +11,7 @@
 
 #include "bolt/Passes/DataflowAnalysis.h"
 #include "bolt/Passes/RegAnalysis.h"
-#include "llvm/Support/CommandLine.h"
 #include <optional>
-
-namespace opts {
-extern llvm::cl::opt<bool> TimeOpts;
-}
 
 namespace llvm {
 namespace bolt {

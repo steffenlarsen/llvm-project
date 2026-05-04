@@ -255,7 +255,8 @@ public:
   /// This constructor initializes the data members to match that
   /// of the specified triple.
   MipsSubtarget(const Triple &TT, StringRef CPU, StringRef FS, bool little,
-                const MipsTargetMachine &TM, MaybeAlign StackAlignOverride);
+                const MipsTargetMachine &TM, MaybeAlign StackAlignOverride,
+                const Function *F = nullptr);
 
   ~MipsSubtarget() override;
 
@@ -385,7 +386,7 @@ public:
 
   // for now constant islands are on for the whole compilation unit but we only
   // really use them if in addition we are in mips16 mode
-  static bool useConstantIslands();
+  static bool useConstantIslands(const Function &F);
 
   Align getStackAlignment() const { return stackAlignment; }
 

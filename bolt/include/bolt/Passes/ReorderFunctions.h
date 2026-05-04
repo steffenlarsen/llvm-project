@@ -50,13 +50,14 @@ public:
     RT_USER
   };
 
-  explicit ReorderFunctions(const cl::opt<bool> &PrintPass)
+  explicit ReorderFunctions(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "reorder-functions"; }
   Error runOnFunctions(BinaryContext &BC) override;
 
-  static Error readFunctionOrderFile(std::vector<std::string> &FunctionNames);
+  static Error readFunctionOrderFile(StringRef OrderFile,
+                                     std::vector<std::string> &FunctionNames);
 };
 
 } // namespace bolt

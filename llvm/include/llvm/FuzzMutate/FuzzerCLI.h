@@ -16,16 +16,28 @@
 
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/DataTypes.h"
+#include <memory>
 #include <stddef.h>
 
 namespace llvm {
 
 class StringRef;
+namespace clv2 {
+class OptionParser;
+class OptionsContext;
+} // namespace clv2
 
 /// Parse cl::opts from a fuzz target commandline.
 ///
 /// This handles all arguments after -ignore_remaining_args=1 as cl::opts.
-LLVM_ABI void parseFuzzerCLOpts(int ArgC, char *ArgV[]);
+LLVM_ABI std::unique_ptr<clv2::OptionsContext> parseFuzzerCLOpts(int ArgC,
+                                                                 char *ArgV[]);
+
+/// Overload that parses into a caller-provided OptionParser.
+/// The caller can pre-configure P with tool-specific registries before calling.
+/// RegisterAllLLVMOptions is called automatically.
+LLVM_ABI std::unique_ptr<clv2::OptionsContext>
+parseFuzzerCLOpts(int ArgC, char *ArgV[], clv2::OptionParser &P);
 
 /// Handle backend options that are encoded in the executable name.
 ///

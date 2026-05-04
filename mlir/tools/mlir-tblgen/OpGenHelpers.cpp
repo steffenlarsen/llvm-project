@@ -12,7 +12,6 @@
 
 #include "OpGenHelpers.h"
 #include "llvm/ADT/StringSet.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/TableGen/Error.h"
@@ -21,20 +20,9 @@ using namespace llvm;
 using namespace mlir;
 using namespace mlir::tblgen;
 
-cl::OptionCategory opDefGenCat("Options for op definition generators");
-
-static cl::opt<std::string> opIncFilter(
-    "op-include-regex",
-    cl::desc("Regex of name of op's to include (no filter if empty)"),
-    cl::cat(opDefGenCat));
-static cl::opt<std::string> opExcFilter(
-    "op-exclude-regex",
-    cl::desc("Regex of name of op's to exclude (no filter if empty)"),
-    cl::cat(opDefGenCat));
-static cl::opt<unsigned> opShardCount(
-    "op-shard-count",
-    cl::desc("The number of shards into which the op classes will be divided"),
-    cl::cat(opDefGenCat), cl::init(1));
+std::string opIncFilter;
+std::string opExcFilter;
+unsigned opShardCount = 1;
 
 static std::string getOperationName(const Record &def) {
   auto prefix = def.getValueAsDef("opDialect")->getValueAsString("name");

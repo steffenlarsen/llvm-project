@@ -24,7 +24,6 @@
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MachineLocation.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormattedStream.h"
 
@@ -57,8 +56,9 @@ static MCRegisterInfo *createM68kMCRegisterInfo(const Triple &TT) {
   return X;
 }
 
-static MCSubtargetInfo *createM68kMCSubtargetInfo(const Triple &TT,
-                                                  StringRef CPU, StringRef FS) {
+static MCSubtargetInfo *
+createM68kMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                          const llvm::clv2::OptionsContext &Ctx) {
   std::string ArchFS = ParseM68kTriple(TT, CPU);
   if (!FS.empty()) {
     if (!ArchFS.empty()) {
@@ -67,7 +67,11 @@ static MCSubtargetInfo *createM68kMCSubtargetInfo(const Triple &TT,
       ArchFS = FS.str();
     }
   }
-  return createM68kMCSubtargetInfoImpl(TT, CPU, /*TuneCPU=*/CPU, ArchFS);
+  MCSubtargetInfo *STI =
+      createM68kMCSubtargetInfoImpl(TT, CPU, /*TuneCPU=*/CPU, ArchFS);
+  if (STI)
+    STI->setOptionsContext(Ctx);
+  return STI;
 }
 
 static MCAsmInfo *createM68kMCAsmInfo(const MCRegisterInfo &MRI,

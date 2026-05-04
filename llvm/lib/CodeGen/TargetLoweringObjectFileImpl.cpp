@@ -23,6 +23,7 @@
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/BinaryFormat/Wasm.h"
 #include "llvm/CodeGen/BasicBlockSectionUtils.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
@@ -64,8 +65,10 @@
 #include "llvm/Support/Base64.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
@@ -76,9 +79,10 @@
 using namespace llvm;
 using namespace dwarf;
 
-static cl::opt<bool> JumpTableInFunctionSection(
-    "jumptable-in-function-section", cl::Hidden, cl::init(false),
-    cl::desc("Putting Jump Table in function section"));
+static bool getJumptableInFunctionSection(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_JumptableInFunctionSection>(
+      Ctx);
+}
 
 static void GetObjCImageInfo(Module &M, unsigned &Version, unsigned &Flags,
                              StringRef &Section) {
@@ -1132,7 +1136,8 @@ MCSection *TargetLoweringObjectFileELF::getSectionForMachineBasicBlock(
     // Function is in a regular .text section.
     StringRef FunctionName = MBB.getParent()->getName();
     if (MBB.getSectionID() == MBBSectionID::ColdSectionID) {
-      Name += BBSectionsColdTextPrefix;
+      Name += getBBSectionsColdTextPrefix(
+          MBB.getParent()->getFunction().getContext().getOptionsContext());
       Name += FunctionName;
     } else if (MBB.getSectionID() == MBBSectionID::ExceptionSectionID) {
       Name += ".text.eh.";
@@ -1918,7 +1923,7 @@ MCSection *TargetLoweringObjectFileCOFF::getSectionForJumpTable(
 bool TargetLoweringObjectFileCOFF::shouldPutJumpTableInFunctionSection(
     bool UsesLabelDifference, const Function &F) const {
   if (TM->getTargetTriple().getArch() == Triple::x86_64) {
-    if (!JumpTableInFunctionSection) {
+    if (!getJumptableInFunctionSection(F.getContext().getOptionsContext())) {
       // We can always create relative relocations, so use another section
       // that can be marked non-executable.
       return false;

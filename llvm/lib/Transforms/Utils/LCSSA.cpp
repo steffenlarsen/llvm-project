@@ -44,10 +44,10 @@
 #include "llvm/IR/PredIteratorCache.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/SSAUpdater.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "lcssa"
@@ -55,14 +55,10 @@ using namespace llvm;
 STATISTIC(NumLCSSA, "Number of live out of a loop variables");
 
 #ifdef EXPENSIVE_CHECKS
-static bool VerifyLoopLCSSA = true;
+static constexpr bool VerifyLoopLCSSADefault = true;
 #else
-static bool VerifyLoopLCSSA = false;
+static constexpr bool VerifyLoopLCSSADefault = false;
 #endif
-static cl::opt<bool, true>
-    VerifyLoopLCSSAFlag("verify-loop-lcssa", cl::location(VerifyLoopLCSSA),
-                        cl::Hidden,
-                        cl::desc("Verify loop lcssa form (time consuming)"));
 
 /// Return true if the specified block is in the list.
 static bool isExitBlock(BasicBlock *BB,
@@ -500,7 +496,16 @@ struct LCSSAWrapperPass : public FunctionPass {
     // up to 10x slowdown. Currently it's disabled by default. LPPassManager
     // always does limited form of the LCSSA verification. Similar reasoning
     // was used for the LoopInfo verifier.
-    if (VerifyLoopLCSSA) {
+    const clv2::OptionsContext &OptsCtx = LI->empty()
+                                              ? clv2::defaultOptionsContext()
+                                              : (*LI->begin())
+                                                    ->getHeader()
+                                                    ->getParent()
+                                                    ->getContext()
+                                                    .getOptionsContext();
+    if (clv2::getOptValOr<&clv2::TransformUtilsOptsReg,
+                          &clv2::TU_VerifyLoopLCSSAFlag>(
+            OptsCtx, VerifyLoopLCSSADefault)) {
       assert(all_of(*LI,
                     [&](Loop *L) {
                       return L->isRecursivelyLCSSAForm(*DT, *LI);

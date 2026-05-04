@@ -15,11 +15,12 @@
 #include "omptarget.h"
 
 #include "llvm/Frontend/Offloading/Utility.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -30,48 +31,57 @@ using namespace llvm;
 #define TOOL_NAME "llvm-omp-kernel-replay"
 #define TOOL_PREFIX "[" TOOL_NAME "]"
 
-cl::OptionCategory ReplayOptions(TOOL_NAME " Options");
+static constexpr clv2::OptionCategory ReplayOptions{TOOL_NAME " Options"};
 
 /// The filename to read the JSON kernel description.
-static cl::opt<std::string> JsonFilename(cl::Positional,
-                                         cl::desc("<input kernel JSON file>"),
-                                         cl::Required);
+static constexpr clv2::OptionInfo<std::string> JsonFilenameOpt{
+    "", "<input kernel JSON file>", clv2::Positional{}, clv2::Required};
 
-static cl::opt<bool> VerifyOpt(
-    "verify",
-    cl::desc("Verify device memory after replaying against the record output."),
-    cl::init(false), cl::cat(ReplayOptions));
+static constexpr clv2::OptionInfo<bool> VerifyOptInfo{
+    "verify", "Verify device memory after replaying against the record output.",
+    clv2::Init{false}, clv2::cat(ReplayOptions)};
 
-static cl::opt<bool> SaveOutputOpt(
+static constexpr clv2::OptionInfo<bool> SaveOutputOptInfo{
     "save-output",
-    cl::desc("Save the device memory output of the replayed kernel execution."),
-    cl::init(false), cl::cat(ReplayOptions));
+    "Save the device memory output of the replayed kernel execution.",
+    clv2::Init{false}, clv2::cat(ReplayOptions)};
 
-static cl::opt<uint32_t> NumTeamsOpt("num-teams",
-                                     cl::desc("Set the number of teams."),
-                                     cl::init(0), cl::cat(ReplayOptions));
+static constexpr clv2::OptionInfo<unsigned> NumTeamsOptInfo{
+    "num-teams", "Set the number of teams.", clv2::Init{0u},
+    clv2::cat(ReplayOptions)};
 
-static cl::opt<uint32_t> NumThreadsOpt("num-threads",
-                                       cl::desc("Set the number of threads."),
-                                       cl::init(0), cl::cat(ReplayOptions));
+static constexpr clv2::OptionInfo<unsigned> NumThreadsOptInfo{
+    "num-threads", "Set the number of threads.", clv2::Init{0u},
+    clv2::cat(ReplayOptions)};
 
-static cl::opt<int32_t> DeviceIdOpt("device-id", cl::desc("Set the device id."),
-                                    cl::init(-1), cl::cat(ReplayOptions));
+static constexpr clv2::OptionInfo<int> DeviceIdOptInfo{
+    "device-id", "Set the device id.", clv2::Init{-1},
+    clv2::cat(ReplayOptions)};
 
-static cl::opt<uint32_t>
-    RepetitionsOpt("repetitions",
-                   cl::desc("Set the number of replay repetitions."),
-                   cl::init(1), cl::cat(ReplayOptions));
+static constexpr clv2::OptionInfo<unsigned> RepetitionsOptInfo{
+    "repetitions", "Set the number of replay repetitions.", clv2::Init{1u},
+    clv2::cat(ReplayOptions)};
 
-static cl::opt<bool>
-    IgnoreLimitsOpt("ignore-limits",
-                    cl::desc("Ignore thread and team limits (unrecommended)."),
-                    cl::init(false), cl::cat(ReplayOptions));
+static constexpr clv2::OptionsRegistry<
+    &JsonFilenameOpt, &VerifyOptInfo, &SaveOutputOptInfo, &NumTeamsOptInfo,
+    &NumThreadsOptInfo, &DeviceIdOptInfo, &RepetitionsOptInfo>
+    ReplayReg;
 
-static cl::opt<bool>
-    LoadBitcodeOpt("load-bitcode",
-                   cl::desc("Load the recorded IR bitcode image file."),
-                   cl::init(false), cl::cat(ReplayOptions));
+// Values populated from parsed options in main() and threaded through to
+// replayKernel().
+struct KernelReplayOptions {
+  std::string JsonFilename;
+  bool VerifyOpt = false;
+  bool SaveOutputOpt = false;
+  uint32_t NumTeamsOpt = 0;
+  uint32_t NumThreadsOpt = 0;
+  int32_t DeviceIdOpt = -1;
+  uint32_t RepetitionsOpt = 1;
+
+  // Not backed by any registered option; always false.
+  bool IgnoreLimitsOpt = false;
+  bool LoadBitcodeOpt = false;
+};
 
 template <typename... ArgsTy>
 Error createErr(const char *ErrFmt, ArgsTy &&...Args) {
@@ -152,13 +162,13 @@ Error verifyReplayOutput(StringRef RecordOutputFilename,
 }
 
 /// Replay the kernel and return whether verification occurred.
-Error replayKernel() {
-  if (RepetitionsOpt == 0)
+Error replayKernel(const KernelReplayOptions &Opts) {
+  if (Opts.RepetitionsOpt == 0)
     return createErr("invalid number of repetitions");
 
   // Load the kernel descriptor JSON file.
   auto KernelDescrBufferOrErr =
-      MemoryBuffer::getFile(JsonFilename, /*isText=*/true,
+      MemoryBuffer::getFile(Opts.JsonFilename, /*isText=*/true,
                             /*RequiresNullTerminator=*/true);
   if (!KernelDescrBufferOrErr)
     return createErr("failed read the kernel info JSON file");
@@ -200,9 +210,9 @@ Error replayKernel() {
     return Err;
 
   // If needed, adjust number of teams and threads, and the device identifier.
-  NumTeams = NumTeamsOpt > 0 ? NumTeamsOpt : NumTeams;
-  NumThreads = NumThreadsOpt > 0 ? NumThreadsOpt : NumThreads;
-  DeviceId = DeviceIdOpt >= 0 ? DeviceIdOpt : DeviceId;
+  NumTeams = Opts.NumTeamsOpt > 0 ? Opts.NumTeamsOpt : NumTeams;
+  NumThreads = Opts.NumThreadsOpt > 0 ? Opts.NumThreadsOpt : NumThreads;
+  DeviceId = Opts.DeviceIdOpt >= 0 ? Opts.DeviceIdOpt : DeviceId;
 
   // Retrieve the teams and threads limits (min and max).
   SmallVector<uint32_t> TeamsLimits;
@@ -230,13 +240,13 @@ Error replayKernel() {
     return createErr("ThreadsLimits min and max are inconsistent");
 
   // If the limits were specified, verify the selected values are valid.
-  if (!IgnoreLimitsOpt && TeamsLimits[0] > 0 &&
+  if (!Opts.IgnoreLimitsOpt && TeamsLimits[0] > 0 &&
       (NumTeams < TeamsLimits[0] || NumTeams > TeamsLimits[1]))
     return createErr("number of teams (%" PRIu32
                      ") is out of the allowed limits (min,max: %" PRIu32
                      ",%" PRIu32 ")",
                      NumTeams, TeamsLimits[0], TeamsLimits[1]);
-  if (!IgnoreLimitsOpt && ThreadsLimits[0] > 0 &&
+  if (!Opts.IgnoreLimitsOpt && ThreadsLimits[0] > 0 &&
       (NumThreads < ThreadsLimits[0] || NumThreads > ThreadsLimits[1]))
     return createErr("number of threads (%" PRIu32
                      ") is out of the allowed limits (min,max: %" PRIu32
@@ -259,7 +269,7 @@ Error replayKernel() {
     return Err;
 
   // Keep the filepath and directory for future use.
-  auto Filepath = std::filesystem::path(JsonFilename.getValue());
+  auto Filepath = std::filesystem::path(Opts.JsonFilename);
   auto Directory = Filepath.parent_path();
 
   // Load the recorded globals file.
@@ -305,7 +315,7 @@ Error replayKernel() {
   }
 
   // Load the device image file.
-  Filepath.replace_extension(LoadBitcodeOpt ? "bc" : "image");
+  Filepath.replace_extension(Opts.LoadBitcodeOpt ? "bc" : "image");
   auto ImageBufferOrErr =
       MemoryBuffer::getFile(Filepath.c_str(), /*isText=*/false,
                             /*RequiresNullTerminator=*/false);
@@ -331,7 +341,7 @@ Error replayKernel() {
 
   int Rc = __tgt_activate_record_replay(
       DeviceId, VAllocSize, VAllocAddr, /*IsRecord=*/false,
-      VerifyOpt || SaveOutputOpt,
+      Opts.VerifyOpt || Opts.SaveOutputOpt,
       /*EmitReport=*/false, Directory.c_str());
   if (Rc != OMP_TGT_SUCCESS)
     return createErr("failed to activate record replay");
@@ -348,7 +358,7 @@ Error replayKernel() {
   KernelReplayOutcomeTy Outcome;
 
   // Perform the kernel replay and verification (if needed) for each repetition.
-  for (uint32_t R = 1; R <= RepetitionsOpt; ++R) {
+  for (uint32_t R = 1; R <= Opts.RepetitionsOpt; ++R) {
     Rc = __tgt_target_kernel_replay(
         /*Loc=*/nullptr, DeviceId, OffloadEntries[0].Address,
         const_cast<char *>(RecordInputBuffer->getBufferStart()),
@@ -365,7 +375,7 @@ Error replayKernel() {
   }
 
   // Verify the replay output if requested.
-  if (VerifyOpt) {
+  if (Opts.VerifyOpt) {
     if (Outcome.OutputFilepath.empty())
       return createErr("replay output file was not generated");
 
@@ -383,10 +393,22 @@ Error replayKernel() {
 }
 
 int main(int Argc, char **Argv) {
-  cl::HideUnrelatedOptions(ReplayOptions);
-  cl::ParseCommandLineOptions(Argc, Argv, TOOL_NAME "\n");
+  clv2::OptionParser P;
+  P.add<&ReplayReg>();
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&ReplayOptions});
+  auto OptsCtx = P.parse(Argc, Argv, TOOL_NAME "\n");
+  auto *Opts = OptsCtx->getViewPtr<&ReplayReg>();
+  KernelReplayOptions ReplayOpts;
+  ReplayOpts.JsonFilename = Opts->get<&JsonFilenameOpt>();
+  ReplayOpts.VerifyOpt = Opts->get<&VerifyOptInfo>();
+  ReplayOpts.SaveOutputOpt = Opts->get<&SaveOutputOptInfo>();
+  ReplayOpts.NumTeamsOpt = Opts->get<&NumTeamsOptInfo>();
+  ReplayOpts.NumThreadsOpt = Opts->get<&NumThreadsOptInfo>();
+  ReplayOpts.DeviceIdOpt = Opts->get<&DeviceIdOptInfo>();
+  ReplayOpts.RepetitionsOpt = Opts->get<&RepetitionsOptInfo>();
 
-  if (auto Err = replayKernel()) {
+  if (auto Err = replayKernel(ReplayOpts)) {
     errs() << TOOL_PREFIX << " Error: " << llvm::toString(std::move(Err))
            << "\n";
     return 1;

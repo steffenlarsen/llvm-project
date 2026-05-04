@@ -23,8 +23,9 @@
 #include "llvm/IR/Module.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/CtorUtils.h"
 #include "llvm/Transforms/Utils/GlobalStatus.h"
 
@@ -59,9 +60,10 @@ INITIALIZE_PASS(GlobalDCELegacyPass, "globaldce", "Dead Global Elimination",
 // Public interface to the GlobalDCEPass.
 ModulePass *llvm::createGlobalDCEPass() { return new GlobalDCELegacyPass(); }
 
-static cl::opt<bool>
-    ClEnableVFE("enable-vfe", cl::Hidden, cl::init(true),
-                cl::desc("Enable virtual function elimination"));
+static bool getClEnableVFE(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_ClEnableVFE>(
+      M.getContext().getOptionsContext());
+}
 
 STATISTIC(NumAliases  , "Number of global aliases removed");
 STATISTIC(NumFunctions, "Number of functions removed");
@@ -248,7 +250,7 @@ void GlobalDCEPass::ScanTypeCheckedLoadIntrinsics(Module &M) {
 }
 
 void GlobalDCEPass::AddVirtualFunctionDependencies(Module &M) {
-  if (!ClEnableVFE)
+  if (!getClEnableVFE(M))
     return;
 
   // If the Virtual Function Elim module flag is present and set to zero, then

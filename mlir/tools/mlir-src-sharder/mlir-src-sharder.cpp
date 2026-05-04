@@ -8,12 +8,13 @@
 
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Support/LLVM.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/ToolOutputFile.h"
 
 using namespace mlir;
+using namespace llvm::clv2;
 
 /// Create a dependency file for `-d` option.
 ///
@@ -39,46 +40,48 @@ static LogicalResult createDependencyFile(StringRef outputFilename,
   return success();
 }
 
+inline constexpr OptionInfo<unsigned> opShardIndex{"op-shard-index",
+                                                   "The current shard index"};
+
+inline constexpr OptionInfo<std::string> inputFilename{"", "<input file>",
+                                                       Positional{}, Init{"-"}};
+
+inline constexpr OptionInfo<std::string> outputFilename{
+    "o", "Output filename", value_desc("filename"), Init{"-"}};
+
+inline constexpr ListOptionInfo<std::string> includeDirs{
+    "I", "Directory of include files", value_desc("directory"), PrefixFormat};
+
+inline constexpr OptionInfo<std::string> dependencyFilename{
+    "d", "Dependency filename", value_desc("filename"), Init{""}};
+
+inline constexpr OptionInfo<bool> writeIfChanged{
+    "write-if-changed", "Only write to the output file if it changed"};
+
+// `ResetCommandLineParser` at the above unregistered the "D" option
+// of `llvm-tblgen`, which caused `TestOps.cpp` to fail due to
+// "Unknnown command line argument '-D...`" when a macros name is
+// present. The following is a workaround to re-register it again.
+inline constexpr ListOptionInfo<std::string> macroNames{
+    "D", "Name of the macro to be defined -- ignored by mlir-src-sharder",
+    value_desc("macro name"), PrefixFormat};
+
+static constexpr OptionsRegistry<&opShardIndex, &inputFilename, &outputFilename,
+                                 &includeDirs, &dependencyFilename,
+                                 &writeIfChanged, &macroNames>
+    SharderReg;
+
 int main(int argc, char **argv) {
-  // FIXME: This is necessary because we link in TableGen, which defines its
-  // options as static variables.. some of which overlap with our options.
-  llvm::cl::ResetCommandLineParser();
-
-  llvm::cl::opt<unsigned> opShardIndex(
-      "op-shard-index", llvm::cl::desc("The current shard index"));
-  llvm::cl::opt<std::string> inputFilename(llvm::cl::Positional,
-                                           llvm::cl::desc("<input file>"),
-                                           llvm::cl::init("-"));
-  llvm::cl::opt<std::string> outputFilename(
-      "o", llvm::cl::desc("Output filename"), llvm::cl::value_desc("filename"),
-      llvm::cl::init("-"));
-  llvm::cl::list<std::string> includeDirs(
-      "I", llvm::cl::desc("Directory of include files"),
-      llvm::cl::value_desc("directory"), llvm::cl::Prefix);
-  llvm::cl::opt<std::string> dependencyFilename(
-      "d", llvm::cl::desc("Dependency filename"),
-      llvm::cl::value_desc("filename"), llvm::cl::init(""));
-  llvm::cl::opt<bool> writeIfChanged(
-      "write-if-changed",
-      llvm::cl::desc("Only write to the output file if it changed"));
-
-  // `ResetCommandLineParser` at the above unregistered the "D" option
-  // of `llvm-tblgen`, which caused `TestOps.cpp` to fail due to
-  // "Unknnown command line argument '-D...`" when a macros name is
-  // present. The following is a workaround to re-register it again.
-  llvm::cl::list<std::string> macroNames(
-      "D",
-      llvm::cl::desc(
-          "Name of the macro to be defined -- ignored by mlir-src-sharder"),
-      llvm::cl::value_desc("macro name"), llvm::cl::Prefix);
-
   llvm::InitLLVM y(argc, argv);
-  llvm::cl::ParseCommandLineOptions(argc, argv);
+  llvm::clv2::OptionParser P;
+  P.add<&SharderReg>();
+  auto OptsCtx = P.parse(argc, argv);
+  auto *Opts = OptsCtx->getViewPtr<&SharderReg>();
 
   // Open the input file.
   std::string errorMessage;
   std::unique_ptr<llvm::MemoryBuffer> inputFile =
-      openInputFile(inputFilename, &errorMessage);
+      openInputFile(Opts->get<&inputFilename>(), &errorMessage);
   if (!inputFile) {
     llvm::errs() << errorMessage << "\n";
     return 1;
@@ -87,17 +90,17 @@ int main(int argc, char **argv) {
   // Write the output to a buffer.
   std::string outputStr;
   llvm::raw_string_ostream os(outputStr);
-  os << "#define GET_OP_DEFS_" << opShardIndex << "\n"
+  os << "#define GET_OP_DEFS_" << Opts->get<&opShardIndex>() << "\n"
      << inputFile->getBuffer();
 
   // Determine whether we need to write the output file.
   bool shouldWriteOutput = true;
-  if (writeIfChanged) {
+  if (Opts->get<&writeIfChanged>()) {
     // Only update the real output file if there are any differences. This
     // prevents recompilation of all the files depending on it if there aren't
     // any.
-    if (auto existingOrErr =
-            llvm::MemoryBuffer::getFile(outputFilename, /*IsText=*/true))
+    if (auto existingOrErr = llvm::MemoryBuffer::getFile(
+            Opts->get<&outputFilename>(), /*IsText=*/true))
       if (std::move(existingOrErr.get())->getBuffer() == outputStr)
         shouldWriteOutput = false;
   }
@@ -105,7 +108,7 @@ int main(int argc, char **argv) {
   // Populate the output file if necessary.
   if (shouldWriteOutput) {
     std::unique_ptr<llvm::ToolOutputFile> outputFile =
-        openOutputFile(outputFilename, &errorMessage);
+        openOutputFile(Opts->get<&outputFilename>(), &errorMessage);
     if (!outputFile) {
       llvm::errs() << errorMessage << "\n";
       return 1;
@@ -116,8 +119,9 @@ int main(int argc, char **argv) {
 
   // Always write the depfile, even if the main output hasn't changed. If it's
   // missing, Ninja considers the output dirty.
-  if (!dependencyFilename.empty())
-    if (failed(createDependencyFile(outputFilename, dependencyFilename)))
+  if (!Opts->get<&dependencyFilename>().empty())
+    if (failed(createDependencyFile(Opts->get<&outputFilename>(),
+                                    Opts->get<&dependencyFilename>())))
       return 1;
 
   return 0;

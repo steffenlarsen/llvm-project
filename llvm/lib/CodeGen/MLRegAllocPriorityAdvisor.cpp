@@ -18,6 +18,7 @@
 #include "llvm/Analysis/ReleaseModeModelRunner.h"
 #include "llvm/Analysis/TensorSpec.h"
 #include "llvm/CodeGen/CalcSpillWeights.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/LiveRegMatrix.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -28,10 +29,12 @@
 #include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/CodeGen/SlotIndexes.h"
 #include "llvm/CodeGen/VirtRegMap.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/PassRegistry.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 
 #if defined(LLVM_HAVE_TFLITE)
 #include "llvm/Analysis/ModelUnderTrainingRunner.h"
@@ -42,13 +45,7 @@
 
 using namespace llvm;
 
-static cl::opt<std::string> InteractiveChannelBaseName(
-    "regalloc-priority-interactive-channel-base", cl::Hidden,
-    cl::desc(
-        "Base file path for the interactive mode. The incoming filename should "
-        "have the name <regalloc-priority-interactive-channel-base>.in, while "
-        "the outgoing name should be "
-        "<regalloc-priority-interactive-channel-base>.out"));
+static std::string InteractiveChannelBaseName;
 
 using CompiledModelType = NoopSavedModelImpl;
 
@@ -57,15 +54,31 @@ using CompiledModelType = NoopSavedModelImpl;
 #include "RegAllocScore.h"
 #include "llvm/Analysis/Utils/TFUtils.h"
 
-static cl::opt<std::string> TrainingLog(
-    "regalloc-priority-training-log", cl::Hidden,
-    cl::desc("Training log for the register allocator priority model"));
+static std::string TrainingLog;
 
-static cl::opt<std::string> ModelUnderTraining(
-    "regalloc-priority-model", cl::Hidden,
-    cl::desc("The model being trained for register allocation priority"));
+static std::string ModelUnderTraining;
 
+static std::string
+getRegallocPriorityTrainingLog(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::CGPassCore2Reg,
+                           &clv2::CGPASS_RegallocPriorityTrainingLog>(
+      Ctx, TrainingLog);
+}
+
+static std::string getRegallocPriorityModel(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::CGPassCore2Reg,
+                           &clv2::CGPASS_RegallocPriorityModel>(
+      Ctx, ModelUnderTraining);
+}
 #endif // #ifdef LLVM_HAVE_TFLITE
+
+static std::string
+getRegallocPriorityInteractiveChannelBase(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<
+      &clv2::CGPassCore2Reg,
+      &clv2::CGPASS_RegallocPriorityInteractiveChannelBase>(
+      Ctx, InteractiveChannelBaseName);
+}
 
 namespace llvm {
 
@@ -130,14 +143,20 @@ public:
   getAdvisor(const MachineFunction &MF, const RAGreedy &RA,
              SlotIndexes &SI) override {
     if (!Runner) {
-      if (InteractiveChannelBaseName.empty())
+      if (getRegallocPriorityInteractiveChannelBase(
+              MF.getFunction().getContext().getOptionsContext())
+              .empty())
         Runner = std::make_unique<ReleaseModeModelRunner<CompiledModelType>>(
             MF.getFunction().getContext(), InputFeatures, DecisionName);
       else
         Runner = std::make_unique<InteractiveModelRunner>(
             MF.getFunction().getContext(), InputFeatures, DecisionSpec,
-            InteractiveChannelBaseName + ".out",
-            InteractiveChannelBaseName + ".in");
+            getRegallocPriorityInteractiveChannelBase(
+                MF.getFunction().getContext().getOptionsContext()) +
+                ".out",
+            getRegallocPriorityInteractiveChannelBase(
+                MF.getFunction().getContext().getOptionsContext()) +
+                ".in");
     }
     return std::make_unique<MLPriorityAdvisor>(MF, RA, &SI, Runner.get());
   }
@@ -206,26 +225,28 @@ public:
   // Save all the logs (when requested).
   DevelopmentModePriorityAdvisorProvider(LLVMContext &Ctx)
       : RegAllocPriorityAdvisorProvider(AdvisorMode::Development) {
-    if (ModelUnderTraining.empty() && TrainingLog.empty()) {
+    if (getRegallocPriorityModel().empty() &&
+        getRegallocPriorityTrainingLog().empty()) {
       Ctx.emitError("Regalloc development mode should be requested with at "
                     "least logging enabled and/or a training model");
       return;
     }
-    if (ModelUnderTraining.empty())
+    if (getRegallocPriorityModel().empty())
       Runner = std::make_unique<NoInferenceModelRunner>(Ctx, InputFeatures);
     else
       Runner = ModelUnderTrainingRunner::createAndEnsureValid(
-          Ctx, ModelUnderTraining, DecisionName, TrainingInputFeatures);
+          Ctx, getRegallocPriorityModel(), DecisionName, TrainingInputFeatures);
     if (!Runner) {
       Ctx.emitError("Regalloc: could not set up the model runner");
       return;
     }
-    if (TrainingLog.empty())
+    if (getRegallocPriorityTrainingLog().empty())
       return;
     std::error_code EC;
-    auto OS = std::make_unique<raw_fd_ostream>(TrainingLog, EC);
+    auto OS =
+        std::make_unique<raw_fd_ostream>(getRegallocPriorityTrainingLog(), EC);
     if (EC) {
-      Ctx.emitError(EC.message() + ":" + TrainingLog);
+      Ctx.emitError(EC.message() + ":" + getRegallocPriorityTrainingLog());
       return;
     }
     std::vector<TensorSpec> LFS = InputFeatures;
@@ -309,8 +330,7 @@ private:
 
 RegAllocPriorityAdvisorAnalysisLegacy *
 llvm::createReleaseModePriorityAdvisorAnalysis() {
-  return llvm::isEmbeddedModelEvaluatorValid<CompiledModelType>() ||
-                 !InteractiveChannelBaseName.empty()
+  return llvm::isEmbeddedModelEvaluatorValid<CompiledModelType>()
              ? new ReleaseModePriorityAdvisorAnalysisLegacy()
              : nullptr;
 }
@@ -356,7 +376,7 @@ DevelopmentModePriorityAdvisor::getPriority(const LiveInterval &LI) const {
     Prio = getDefaultAdvisor().getPriority(LI);
   }
 
-  if (TrainingLog.empty())
+  if (getRegallocPriorityTrainingLog().empty())
     return Prio;
 
   // TODO(mtrofin): when we support optional rewards, this can go away. In the
@@ -397,5 +417,7 @@ llvm::createDevelopmentModePriorityAdvisorProvider(LLVMContext &Ctx) {
 
 RegAllocPriorityAdvisorProvider *
 llvm::createReleaseModePriorityAdvisorProvider() {
-  return new ReleaseModePriorityAdvisorProvider();
+  if (llvm::isEmbeddedModelEvaluatorValid<CompiledModelType>())
+    return new ReleaseModePriorityAdvisorProvider();
+  return nullptr;
 }

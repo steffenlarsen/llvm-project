@@ -53,8 +53,8 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Debug.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/Debug.h">
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
@@ -62,10 +62,19 @@
 
 using namespace llvm;
 
-static cl::opt<bool>
-    DisableCopyrightMetadata("disable-lower-comment-string", cl::ReallyHidden,
-                             cl::desc("Disable LowerCommentString pass."),
-                             cl::init(false));
+static constexpr clv2::OptionInfo<bool> OI_DisableCopyrightMetadata{
+    "disable-copyright-metadata",
+    "Disable copyright metadata handling in LowerCommentStringPass",
+    clv2::Hidden};
+static constexpr clv2::OptionsRegistry<&OI_DisableCopyrightMetadata>
+    DisableCopyrightMetadataReg;
+
+// Registered without an apply function: the parsed view is published into the
+// OptionsContext, and run() reads it from the module rather than from a global.
+[[maybe_unused]] static const bool Registered = [] {
+  clv2::registerDynamicRegistry<&DisableCopyrightMetadataReg>();
+  return true;
+}();
 
 static bool isSupportedTarget(const Module &M) {
   Triple T{M.getTargetTriple()};
@@ -74,7 +83,10 @@ static bool isSupportedTarget(const Module &M) {
 
 PreservedAnalyses LowerCommentStringPass::run(Module &M,
                                               ModuleAnalysisManager &AM) {
-  if (DisableCopyrightMetadata || !isSupportedTarget(M))
+  if (clv2::getOptValOr<&DisableCopyrightMetadataReg,
+                        &OI_DisableCopyrightMetadata>(
+          M.getContext().getOptionsContext(), false) ||
+      !isSupportedTarget(M))
     return PreservedAnalyses::all();
 
   LLVMContext &Ctx = M.getContext();

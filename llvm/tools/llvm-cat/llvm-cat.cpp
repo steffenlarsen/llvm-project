@@ -18,46 +18,49 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IRReader/IRReader.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
-#include <algorithm>
 #include <memory>
 #include <string>
 #include <system_error>
 #include <vector>
 
 using namespace llvm;
+using namespace llvm::clv2;
 
-static cl::OptionCategory CatCategory("llvm-cat Options");
+static constexpr OptionCategory CatCategory{"llvm-cat Options"};
 
-static cl::opt<bool>
-    BinaryCat("b", cl::desc("Whether to perform binary concatenation"),
-              cl::cat(CatCategory));
+static constexpr OptionInfo<bool> BinaryCat{
+    "b", "Whether to perform binary concatenation", cat(CatCategory)};
 
-static cl::opt<std::string> OutputFilename("o", cl::Required,
-                                           cl::desc("Output filename"),
-                                           cl::value_desc("filename"),
-                                           cl::cat(CatCategory));
+static constexpr OptionInfo<std::string> OutputFilename{
+    "o", "Output filename", Required, value_desc("filename"), cat(CatCategory)};
 
-static cl::list<std::string> InputFilenames(cl::Positional,
-                                            cl::desc("<input files>"),
-                                            cl::cat(CatCategory));
+static constexpr ListOptionInfo<std::string> InputFilenames{
+    "inputs", "<input files>", Positional{}, ZeroOrMore, cat(CatCategory)};
 
+static constexpr OptionsRegistry<&BinaryCat, &OutputFilename, &InputFilenames>
+    CatToolReg;
 int main(int argc, char **argv) {
-  cl::HideUnrelatedOptions(CatCategory);
-  cl::ParseCommandLineOptions(argc, argv, "Module concatenation");
+  clv2::OptionParser P;
+  P.add<&CatToolReg>();
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&CatCategory});
+  auto OptsCtx = P.parse(argc, argv, "Module concatenation");
+  auto *Opts = OptsCtx->getViewPtr<&CatToolReg>();
 
   ExitOnError ExitOnErr("llvm-cat: ");
-  LLVMContext Context;
+  LLVMContext Context(*OptsCtx);
 
   SmallVector<char, 0> Buffer;
   BitcodeWriter Writer(Buffer);
-  if (BinaryCat) {
-    for (const auto &InputFilename : InputFilenames) {
+  if (Opts->get<&BinaryCat>()) {
+    for (const auto &InputFilename : Opts->get<&InputFilenames>()) {
       std::unique_ptr<MemoryBuffer> MB = ExitOnErr(
           errorOrToExpected(MemoryBuffer::getFileOrSTDIN(InputFilename)));
       std::vector<BitcodeModule> Mods = ExitOnErr(getBitcodeModuleList(*MB));
@@ -70,7 +73,7 @@ int main(int argc, char **argv) {
     // The string table does not own strings added to it, some of which are
     // owned by the modules; keep them alive until we write the string table.
     std::vector<std::unique_ptr<Module>> OwnedMods;
-    for (const auto &InputFilename : InputFilenames) {
+    for (const auto &InputFilename : Opts->get<&InputFilenames>()) {
       SMDiagnostic Err;
       std::unique_ptr<Module> M = parseIRFile(InputFilename, Err, Context);
       if (!M) {
@@ -84,10 +87,11 @@ int main(int argc, char **argv) {
   }
 
   std::error_code EC;
-  raw_fd_ostream OS(OutputFilename, EC, sys::fs::OpenFlags::OF_None);
+  raw_fd_ostream OS(Opts->get<&OutputFilename>(), EC,
+                    sys::fs::OpenFlags::OF_None);
   if (EC) {
-    errs() << argv[0] << ": cannot open " << OutputFilename << " for writing: "
-           << EC.message();
+    errs() << argv[0] << ": cannot open " << Opts->get<&OutputFilename>()
+           << " for writing: " << EC.message();
     return 1;
   }
 

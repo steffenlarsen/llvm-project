@@ -31,7 +31,7 @@ namespace llvm {
 /// Helper class that can build very simple Modules
 class TrivialModuleBuilder {
 protected:
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   IRBuilder<> Builder;
   const Triple &BuilderTriple;
 
@@ -39,7 +39,7 @@ protected:
       : Builder(Context), BuilderTriple(TT) {}
 
   Module *createEmptyModule(StringRef Name = StringRef()) {
-    Module * M = new Module(Name, Context);
+    Module *M = new Module(Name, Context);
     M->setTargetTriple(BuilderTriple);
     return M;
   }
@@ -114,25 +114,20 @@ protected:
 
   // Inserts an declaration to a function defined elsewhere
   Function *insertExternalReferenceToFunction(Module *M, Function *Func) {
-    Function *Result = Function::Create(Func->getFunctionType(),
-                                        GlobalValue::ExternalLinkage,
-                                        Func->getName(), M);
+    Function *Result =
+        Function::Create(Func->getFunctionType(), GlobalValue::ExternalLinkage,
+                         Func->getName(), M);
     return Result;
   }
 
   // Inserts a global variable of type int32
   // FIXME: make this a template function to support any type
-  GlobalVariable *insertGlobalInt32(Module *M,
-                                    StringRef name,
+  GlobalVariable *insertGlobalInt32(Module *M, StringRef name,
                                     int32_t InitialValue) {
     Type *GlobalTy = Type::getInt32Ty(Context);
     Constant *IV = ConstantInt::get(Context, APInt(32, InitialValue));
-    GlobalVariable *Global = new GlobalVariable(*M,
-                                                GlobalTy,
-                                                false,
-                                                GlobalValue::ExternalLinkage,
-                                                IV,
-                                                name);
+    GlobalVariable *Global = new GlobalVariable(
+        *M, GlobalTy, false, GlobalValue::ExternalLinkage, IV, name);
     return Global;
   }
 
@@ -146,8 +141,7 @@ protected:
   //     }
   //   }
   // NOTE: if Helper is left as the default parameter, Helper == recursive_add.
-  Function *insertAccumulateFunction(Module *M,
-                                     Function *Helper = nullptr,
+  Function *insertAccumulateFunction(Module *M, Function *Helper = nullptr,
                                      StringRef Name = "accumulate") {
     Function *Result =
         startFunction(M,
@@ -163,8 +157,8 @@ protected:
     // if (num == 0)
     Value *Param = &*Result->arg_begin();
     Value *Zero = ConstantInt::get(Context, APInt(32, 0));
-    Builder.CreateCondBr(Builder.CreateICmpEQ(Param, Zero),
-                         BaseCase, RecursiveCase);
+    Builder.CreateCondBr(Builder.CreateICmpEQ(Param, Zero), BaseCase,
+                         RecursiveCase);
 
     //   return num;
     Builder.SetInsertPoint(BaseCase);

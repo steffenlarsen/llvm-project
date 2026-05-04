@@ -34,6 +34,7 @@
 #include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
@@ -42,19 +43,26 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
 // A handy option for disabling scoped no-alias functionality. The same effect
 // can also be achieved by stripping the associated metadata tags from IR, but
 // this option is sometimes more convenient.
-static cl::opt<bool> EnableScopedNoAlias("enable-scoped-noalias",
-                                         cl::init(true), cl::Hidden);
+static bool getEnableScopedNoAlias(const LLVMContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_EnableScopedNoAlias>(
+      Ctx.getOptionsContext());
+}
 
 AliasResult ScopedNoAliasAAResult::alias(const MemoryLocation &LocA,
                                          const MemoryLocation &LocB) {
-  if (!EnableScopedNoAlias)
+  // Read the option through the module's OptionsContext like every other
+  // entry point in this file.  This used to test a file-scope static that
+  // nothing ever assigned, so --enable-scoped-noalias=false was honoured by
+  // getModRefInfo() but silently ignored here.
+  if (LocA.Ptr && !getEnableScopedNoAlias(LocA.Ptr->getContext()))
     return AliasResult::MayAlias;
 
   // Get the attached MDNodes.
@@ -80,7 +88,7 @@ AliasResult ScopedNoAliasAAResult::alias(const MemoryLocation &LocA,
 ModRefInfo ScopedNoAliasAAResult::getModRefInfo(const CallBase *Call,
                                                 const MemoryLocation &Loc,
                                                 AAQueryInfo &AAQI) {
-  if (!EnableScopedNoAlias)
+  if (!getEnableScopedNoAlias(Call->getContext()))
     return ModRefInfo::ModRef;
 
   if (!mayAliasInScopes(Loc.AATags.Scope,
@@ -97,7 +105,7 @@ ModRefInfo ScopedNoAliasAAResult::getModRefInfo(const CallBase *Call,
 ModRefInfo ScopedNoAliasAAResult::getModRefInfo(const FenceInst *F,
                                                 const MemoryLocation &Loc,
                                                 AAQueryInfo &AAQI) {
-  if (!EnableScopedNoAlias)
+  if (!getEnableScopedNoAlias(F->getContext()))
     return ModRefInfo::ModRef;
 
   if (!mayAliasInScopes(Loc.AATags.Scope,
@@ -114,7 +122,7 @@ ModRefInfo ScopedNoAliasAAResult::getModRefInfo(const FenceInst *F,
 ModRefInfo ScopedNoAliasAAResult::getModRefInfo(const CallBase *Call1,
                                                 const CallBase *Call2,
                                                 AAQueryInfo &AAQI) {
-  if (!EnableScopedNoAlias)
+  if (!getEnableScopedNoAlias(Call1->getContext()))
     return ModRefInfo::ModRef;
 
   if (!mayAliasInScopes(Call1->getMetadata(LLVMContext::MD_alias_scope),

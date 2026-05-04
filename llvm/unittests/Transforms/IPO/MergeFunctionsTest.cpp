@@ -19,6 +19,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassInstrumentation.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/SourceMgr.h"
 #include "gtest/gtest.h"
 #include <memory>
@@ -29,7 +30,7 @@ namespace {
 
 class MergeFunctionsTest : public testing::Test {
 protected:
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   FunctionAnalysisManager FAM;
   ModuleAnalysisManager MAM;
 

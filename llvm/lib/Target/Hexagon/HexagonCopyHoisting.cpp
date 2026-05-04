@@ -18,15 +18,19 @@
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 
 #define DEBUG_TYPE "CopyHoist"
 
 using namespace llvm;
 
-static cl::opt<std::string> CPHoistFn("cphoistfn", cl::Hidden, cl::desc(""),
-                                      cl::init(""));
+static std::string getCPHoistFn(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_CPHoistFn>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -71,7 +75,8 @@ char &HexagonCopyHoistingID = HexagonCopyHoisting::ID;
 
 bool HexagonCopyHoisting::runOnMachineFunction(MachineFunction &Fn) {
 
-  if ((CPHoistFn != "") && (CPHoistFn != Fn.getFunction().getName()))
+  const Function &F = Fn.getFunction();
+  if ((getCPHoistFn(F) != "") && (getCPHoistFn(F) != F.getName()))
     return false;
 
   MFN = &Fn;

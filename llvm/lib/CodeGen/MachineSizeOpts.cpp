@@ -18,11 +18,6 @@
 
 using namespace llvm;
 
-extern cl::opt<bool> EnablePGSO;
-extern cl::opt<bool> PGSOLargeWorkingSetSizeOnly;
-extern cl::opt<bool> ForcePGSO;
-extern cl::opt<int> PgsoCutoffInstrProf;
-extern cl::opt<int> PgsoCutoffSampleProf;
 
 bool llvm::shouldOptimizeForSize(const MachineFunction *MF,
                                  ProfileSummaryInfo *PSI,
@@ -40,7 +35,8 @@ bool llvm::shouldOptimizeForSize(const MachineBasicBlock *MBB,
   assert(MBB);
   if (MBB->getParent()->getFunction().hasOptSize())
     return true;
-  return shouldOptimizeForSizeImpl(MBB, PSI, MBFI, QueryType);
+  return shouldOptimizeForSizeImpl(MBB, PSI, MBFI, QueryType,
+                                   &MBB->getParent()->getFunction());
 }
 
 bool llvm::shouldOptimizeForSize(const MachineBasicBlock *MBB,
@@ -53,6 +49,6 @@ bool llvm::shouldOptimizeForSize(const MachineBasicBlock *MBB,
   if (!MBFIW)
     return false;
   BlockFrequency BlockFreq = MBFIW->getBlockFreq(MBB);
-  return shouldOptimizeForSizeImpl(BlockFreq, PSI, &MBFIW->getMBFI(),
-                                   QueryType);
+  return shouldOptimizeForSizeImpl(BlockFreq, PSI, &MBFIW->getMBFI(), QueryType,
+                                   &MBB->getParent()->getFunction());
 }

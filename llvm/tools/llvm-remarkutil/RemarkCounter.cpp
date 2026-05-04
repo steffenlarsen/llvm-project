@@ -11,8 +11,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "RemarkCounter.h"
-#include "RemarkUtilRegistry.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/InterleavedRange.h"
 #include "llvm/Support/Regex.h"
 
@@ -20,51 +18,10 @@ using namespace llvm;
 using namespace remarks;
 using namespace llvm::remarkutil;
 
-static cl::SubCommand CountSub("count",
-                               "Collect remarks based on specified criteria.");
-
-INPUT_FORMAT_COMMAND_LINE_OPTIONS(CountSub)
-INPUT_OUTPUT_COMMAND_LINE_OPTIONS(CountSub)
-REMARK_FILTER_COMMAND_LINE_OPTIONS(CountSub)
-
-REMARK_FILTER_SETUP_FUNC()
-
-static cl::list<std::string>
-    Keys("args", cl::desc("Specify remark argument/s to count by."),
-         cl::value_desc("arguments"), cl::sub(CountSub), cl::ValueOptional);
-static cl::list<std::string> RKeys(
-    "rargs",
-    cl::desc(
-        "Specify remark argument/s to count (accepts regular expressions)."),
-    cl::value_desc("arguments"), cl::sub(CountSub), cl::ValueOptional);
-
-static cl::opt<CountBy> CountByOpt(
-    "count-by", cl::desc("Specify the property to collect remarks by."),
-    cl::values(
-        clEnumValN(CountBy::REMARK, "remark-name",
-                   "Counts individual remarks based on how many of the remark "
-                   "exists."),
-        clEnumValN(CountBy::ARGUMENT, "arg",
-                   "Counts based on the value each specified argument has. The "
-                   "argument has to have a number value to be considered.")),
-    cl::init(CountBy::REMARK), cl::sub(CountSub));
-static cl::opt<GroupBy> GroupByOpt(
-    "group-by", cl::desc("Specify the property to group remarks by."),
-    cl::values(
-        clEnumValN(
-            GroupBy::PER_SOURCE, "source",
-            "Display the count broken down by the filepath of each remark "
-            "emitted. Requires remarks to have DebugLoc information."),
-        clEnumValN(GroupBy::PER_FUNCTION, "function",
-                   "Breakdown the count by function name."),
-        clEnumValN(
-            GroupBy::PER_FUNCTION_WITH_DEBUG_LOC, "function-with-loc",
-            "Breakdown the count by function name taking into consideration "
-            "the filepath info from the DebugLoc of the remark."),
-        clEnumValN(GroupBy::TOTAL, "total",
-                   "Output the total number corresponding to the count for the "
-                   "provided input file.")),
-    cl::init(GroupBy::PER_SOURCE), cl::sub(CountSub));
+std::vector<std::string> Keys;
+std::vector<std::string> RKeys;
+CountBy CountByVal;
+GroupBy GroupByVal;
 
 /// Look for matching argument with \p Key in \p Remark and return the parsed
 /// integer value or 0 if it is has no integer value.
@@ -86,7 +43,6 @@ Error ArgumentCounter::getAllMatchingArgumentsInRemark(
   auto MaybeRemark = Parser.next();
   for (; MaybeRemark; MaybeRemark = Parser.next()) {
     auto &Remark = **MaybeRemark;
-    // Only collect keys from remarks included in the filter.
     if (!Filter.filterRemark(Remark))
       continue;
     for (auto &Key : Arguments) {
@@ -124,7 +80,6 @@ std::optional<std::string> Counter::getGroupByKey(const Remark &Remark) {
 void ArgumentCounter::collect(const Remark &Remark) {
   SmallVector<unsigned, 4> Row(ArgumentSetIdxMap.size());
   std::optional<std::string> GroupByKey = getGroupByKey(Remark);
-  // Early return if we don't have a value
   if (!GroupByKey)
     return;
   auto GroupVal = *GroupByKey;
@@ -174,7 +129,6 @@ Error RemarkCounter::print(StringRef OutputFileName) {
 }
 
 Error useCollectRemark(StringRef Buffer, Counter &Counter, Filters &Filter) {
-  // Create Parser.
   auto MaybeParser = createRemarkParser(InputFormat, Buffer);
   if (!MaybeParser)
     return MaybeParser.takeError();
@@ -195,8 +149,7 @@ Error useCollectRemark(StringRef Buffer, Counter &Counter, Filters &Filter) {
   return Error::success();
 }
 
-static Error collectRemarks() {
-  // Create a parser for the user-specified input format.
+Error collectRemarks() {
   auto MaybeBuf = getInputMemoryBuffer(InputFileName);
   if (!MaybeBuf)
     return MaybeBuf.takeError();
@@ -205,18 +158,18 @@ static Error collectRemarks() {
   if (!MaybeFilter)
     return MaybeFilter.takeError();
   auto &Filter = *MaybeFilter;
-  if (CountByOpt == CountBy::REMARK) {
-    RemarkCounter RC(GroupByOpt);
+  if (CountByVal == CountBy::REMARK) {
+    RemarkCounter RC(GroupByVal);
     if (auto E = useCollectRemark(Buffer, RC, Filter))
       return E;
-  } else if (CountByOpt == CountBy::ARGUMENT) {
+  } else if (CountByVal == CountBy::ARGUMENT) {
     SmallVector<FilterMatcher, 4> ArgumentsVector;
     if (!Keys.empty()) {
       for (auto &Key : Keys)
         ArgumentsVector.push_back(FilterMatcher::createExact(Key));
     } else if (!RKeys.empty())
       for (auto Key : RKeys) {
-        auto FM = FilterMatcher::createRE(Key, RKeys);
+        auto FM = FilterMatcher::createRE("rargs", Key);
         if (!FM)
           return FM.takeError();
         ArgumentsVector.push_back(std::move(*FM));
@@ -225,7 +178,7 @@ static Error collectRemarks() {
       ArgumentsVector.push_back(FilterMatcher::createAny());
 
     Expected<ArgumentCounter> AC = ArgumentCounter::createArgumentCounter(
-        GroupByOpt, ArgumentsVector, Buffer, Filter);
+        GroupByVal, ArgumentsVector, Buffer, Filter);
     if (!AC)
       return AC.takeError();
     if (auto E = useCollectRemark(Buffer, *AC, Filter))
@@ -233,5 +186,3 @@ static Error collectRemarks() {
   }
   return Error::success();
 }
-
-static CommandRegistration CountReg(&CountSub, collectRemarks);

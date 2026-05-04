@@ -41,6 +41,8 @@ tablegen(LLVM R600GenSubtargetInfo.inc -gen-subtarget)
 add_public_tablegen_target(AMDGPUCommonTableGen)
 
 add_llvm_target(AMDGPUCodeGen
+  AMDGPUOptionsRegistration.cpp
+  AMDGPUOptionsGetters.cpp
   AMDGPUAliasAnalysis.cpp
   AMDGPUAlwaysInlinePass.cpp
   AMDGPUAnnotateUniformValues.cpp

@@ -11,13 +11,15 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Core/BinaryFunction.h"
+#include "bolt/Profile/BoltProfileOptionsOptInfos.h"
+#include "bolt/Rewrite/BoltRewriteOptionsOptInfos.h"
 #include "bolt/Rewrite/MetadataRewriter.h"
 #include "bolt/Rewrite/MetadataRewriters.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "bolt/Utils/Utils.h"
 #include "llvm/IR/Function.h"
 #include "llvm/MC/MCPseudoProbe.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/LEB128.h"
 #include <memory>
@@ -38,20 +40,11 @@ enum PrintPseudoProbesOptions {
   PPP_All = 0xf
 };
 
-static cl::opt<PrintPseudoProbesOptions> PrintPseudoProbes(
-    "print-pseudo-probes", cl::desc("print pseudo probe info"),
-    cl::init(PPP_None),
-    cl::values(clEnumValN(PPP_Probes_Section_Decode, "decode",
-                          "decode probes section from binary"),
-               clEnumValN(PPP_Probes_Address_Conversion, "address_conversion",
-                          "update address2ProbesMap with output block address"),
-               clEnumValN(PPP_Encoded_Probes, "encoded_probes",
-                          "display the encoded probes in binary section"),
-               clEnumValN(PPP_All, "all", "enable all debugging printout")),
-    cl::Hidden, cl::cat(BoltCategory));
+PrintPseudoProbesOptions PrintPseudoProbes = PPP_None;
 
-extern cl::opt<bool> ProfileWritePseudoProbes;
-extern cl::opt<bool> StaleMatchingWithPseudoProbes;
+extern bool ProfileWritePseudoProbes;
+extern bool StaleMatchingWithPseudoProbes;
+
 } // namespace opts
 
 namespace {
@@ -93,14 +86,17 @@ public:
 };
 
 Error PseudoProbeRewriter::preCFGInitializer() {
-  if (opts::ProfileWritePseudoProbes || opts::StaleMatchingWithPseudoProbes)
-    parsePseudoProbe(opts::ProfileWritePseudoProbes);
+  bool WriteProbes = bolt_profile_opts::getProfileWritePseudoProbes(BC);
+  bool StaleProbes = bolt_profile_opts::getStaleMatchingWithPseudoProbes(BC);
+  if (WriteProbes || StaleProbes)
+    parsePseudoProbe(WriteProbes);
 
   return Error::success();
 }
 
 Error PseudoProbeRewriter::postEmitFinalizer() {
-  if (!opts::StaleMatchingWithPseudoProbes)
+  bool StaleProbes = bolt_profile_opts::getStaleMatchingWithPseudoProbes(BC);
+  if (!StaleProbes)
     parsePseudoProbe();
   updatePseudoProbes();
 
@@ -169,9 +165,9 @@ void PseudoProbeRewriter::parsePseudoProbe(bool ProfiledOnly) {
     return;
   }
 
-  if (opts::PrintPseudoProbes == opts::PrintPseudoProbesOptions::PPP_All ||
-      opts::PrintPseudoProbes ==
-          opts::PrintPseudoProbesOptions::PPP_Probes_Section_Decode) {
+  auto PrintPseudoProbes = bolt_rewrite_opts::getPrintPseudoProbes(BC);
+  if (PrintPseudoProbes == clv2::BOLTRW_PPP_All ||
+      PrintPseudoProbes == clv2::BOLTRW_PPP_Probes_Section_Decode) {
     outs() << "Report of decoding input pseudo probe binaries \n";
     ProbeDecoder.printGUID2FuncDescMap(outs());
     ProbeDecoder.printProbesForAllAddresses(outs());
@@ -255,9 +251,9 @@ void PseudoProbeRewriter::updatePseudoProbes() {
     }
   }
 
-  if (opts::PrintPseudoProbes == opts::PrintPseudoProbesOptions::PPP_All ||
-      opts::PrintPseudoProbes ==
-          opts::PrintPseudoProbesOptions::PPP_Probes_Address_Conversion) {
+  auto PrintPseudoProbes2 = bolt_rewrite_opts::getPrintPseudoProbes(BC);
+  if (PrintPseudoProbes2 == clv2::BOLTRW_PPP_All ||
+      PrintPseudoProbes2 == clv2::BOLTRW_PPP_Probes_Address_Conversion) {
     outs() << "Pseudo Probe Address Conversion results:\n";
     // table that correlates address to block
     std::unordered_map<uint64_t, StringRef> Addr2BlockNames;
@@ -427,9 +423,9 @@ void PseudoProbeRewriter::encodePseudoProbes() {
   BC.registerOrUpdateSection(".pseudo_probe", PseudoProbeSection->getELFType(),
                              PseudoProbeSection->getELFFlags(), Output,
                              Contents.str().size(), 1);
-  if (opts::PrintPseudoProbes == opts::PrintPseudoProbesOptions::PPP_All ||
-      opts::PrintPseudoProbes ==
-          opts::PrintPseudoProbesOptions::PPP_Encoded_Probes) {
+  auto PrintPseudoProbes3 = bolt_rewrite_opts::getPrintPseudoProbes(BC);
+  if (PrintPseudoProbes3 == clv2::BOLTRW_PPP_All ||
+      PrintPseudoProbes3 == clv2::BOLTRW_PPP_Encoded_Probes) {
     // create a dummy decoder;
     MCPseudoProbeDecoder DummyDecoder;
     StringRef DescContents = PseudoProbeDescSection->getContents();

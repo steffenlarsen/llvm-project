@@ -42,7 +42,6 @@ using namespace llvm;
 using namespace PatternMatch;
 
 namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 }
 
 /// The specific integer value is used in a context where it is known to be
@@ -1721,9 +1720,10 @@ Value *InstCombinerImpl::takeLog2(Value *Op, unsigned Depth, bool AssumeNonZero,
       if (Value *LogY =
               takeLog2(SI->getOperand(2), Depth, AssumeNonZero, DoFold))
         return IfFold([&]() {
-          return Builder.CreateSelect(SI->getOperand(0), LogX, LogY, "",
-                                      ProfcheckDisableMetadataFixes ? nullptr
-                                                                    : SI);
+          return Builder.CreateSelect(
+              SI->getOperand(0), LogX, LogY, "",
+              getProfcheckDisableMetadataFixes(SI->getContext()) ? nullptr
+                                                                 : SI);
         });
 
   // log2(umin(X, Y)) -> umin(log2(X), log2(Y))

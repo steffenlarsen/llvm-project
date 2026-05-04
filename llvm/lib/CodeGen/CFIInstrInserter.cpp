@@ -19,21 +19,24 @@
 
 #include "llvm/CodeGen/CFIInstrInserter.h"
 #include "llvm/ADT/DepthFirstIterator.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDwarf.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 using namespace llvm;
 
-static cl::opt<bool> VerifyCFI("verify-cfiinstrs",
-    cl::desc("Verify Call Frame Information instructions"),
-    cl::init(false),
-    cl::Hidden);
+static bool getVerifyCfiinstrs(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_VerifyCfiinstrs>(Ctx);
+}
 
 namespace {
 class CFIInstrInserterImpl {
@@ -45,7 +48,7 @@ public:
     MBBVector.resize(MF.getNumBlockIDs());
     calculateCFAInfo(MF);
 
-    if (VerifyCFI) {
+    if (getVerifyCfiinstrs(MF.getFunction().getContext().getOptionsContext())) {
       if (unsigned ErrorNum = verify(MF))
         report_fatal_error("Found " + Twine(ErrorNum) +
                            " in/out CFI information errors.");

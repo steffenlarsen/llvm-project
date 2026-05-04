@@ -9,18 +9,12 @@
 #define LLVM_TRANSFORMS_IPO_EXPANDVARIADICS_H
 
 #include "llvm/IR/PassManager.h"
+#include "llvm/Transforms/IPO/ExpandVariadicsMode.h"
 
 namespace llvm {
 
 class Module;
 class ModulePass;
-
-enum class ExpandVariadicsMode {
-  Unspecified, // Use the implementation defaults
-  Disable,     // Disable the pass entirely
-  Optimize,    // Optimise without changing ABI
-  Lowering,    // Change variadic calling convention
-};
 
 class ExpandVariadicsPass : public RequiredPassInfoMixin<ExpandVariadicsPass> {
   const ExpandVariadicsMode Mode;

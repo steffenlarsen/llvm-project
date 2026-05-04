@@ -70,20 +70,20 @@ static std::unique_ptr<Module> getLazyModuleFromAssembly(LLVMContext &Context,
 // Tests that lazy evaluation can parse functions out of order.
 TEST(BitReaderTest, MaterializeFunctionsOutOfOrder) {
   SmallString<1024> Mem;
-  LLVMContext Context;
-  std::unique_ptr<Module> M = getLazyModuleFromAssembly(
-      Context, Mem, "define void @f() {\n"
-                    "  unreachable\n"
-                    "}\n"
-                    "define void @g() {\n"
-                    "  unreachable\n"
-                    "}\n"
-                    "define void @h() {\n"
-                    "  unreachable\n"
-                    "}\n"
-                    "define void @j() {\n"
-                    "  unreachable\n"
-                    "}\n");
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
+  std::unique_ptr<Module> M = getLazyModuleFromAssembly(Context, Mem,
+                                                        "define void @f() {\n"
+                                                        "  unreachable\n"
+                                                        "}\n"
+                                                        "define void @g() {\n"
+                                                        "  unreachable\n"
+                                                        "}\n"
+                                                        "define void @h() {\n"
+                                                        "  unreachable\n"
+                                                        "}\n"
+                                                        "define void @j() {\n"
+                                                        "  unreachable\n"
+                                                        "}\n");
   EXPECT_FALSE(verifyModule(*M, &dbgs()));
 
   Function *F = M->getFunction("f");
@@ -134,13 +134,14 @@ TEST(BitReaderTest, MaterializeFunctionsOutOfOrder) {
 TEST(BitReaderTest, MaterializeFunctionsStrictFP) {
   SmallString<1024> Mem;
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = getLazyModuleFromAssembly(
-      Context, Mem, "define double @foo(double %a) {\n"
-                    "  %result = call double @bar(double %a) strictfp\n"
-                    "  ret double %result\n"
-                    "}\n"
-                    "declare double @bar(double)\n");
+      Context, Mem,
+      "define double @foo(double %a) {\n"
+      "  %result = call double @bar(double %a) strictfp\n"
+      "  ret double %result\n"
+      "}\n"
+      "declare double @bar(double)\n");
   Function *Foo = M->getFunction("foo");
   ASSERT_FALSE(Foo->materialize());
   EXPECT_FALSE(Foo->empty());
@@ -164,7 +165,7 @@ TEST(BitReaderTest, MaterializeFunctionsStrictFP) {
 TEST(BitReaderTest, MaterializeConstrainedFPStrictFP) {
   SmallString<1024> Mem;
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = getLazyModuleFromAssembly(
       Context, Mem,
       "define double @foo(double %a) strictfp {\n"
@@ -198,14 +199,15 @@ TEST(BitReaderTest, MaterializeConstrainedFPStrictFP) {
 TEST(BitReaderTest, MaterializeFunctionsForBlockAddr) { // PR11677
   SmallString<1024> Mem;
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = getLazyModuleFromAssembly(
-      Context, Mem, "@table = constant ptr blockaddress(@func, %bb)\n"
-                    "define void @func() {\n"
-                    "  unreachable\n"
-                    "bb:\n"
-                    "  unreachable\n"
-                    "}\n");
+      Context, Mem,
+      "@table = constant ptr blockaddress(@func, %bb)\n"
+      "define void @func() {\n"
+      "  unreachable\n"
+      "bb:\n"
+      "  unreachable\n"
+      "}\n");
   EXPECT_FALSE(verifyModule(*M, &dbgs()));
   EXPECT_FALSE(M->getFunction("func")->empty());
 }
@@ -213,19 +215,20 @@ TEST(BitReaderTest, MaterializeFunctionsForBlockAddr) { // PR11677
 TEST(BitReaderTest, MaterializeFunctionsForBlockAddrInFunctionBefore) {
   SmallString<1024> Mem;
 
-  LLVMContext Context;
-  std::unique_ptr<Module> M = getLazyModuleFromAssembly(
-      Context, Mem, "define ptr @before() {\n"
-                    "  ret ptr blockaddress(@func, %bb)\n"
-                    "}\n"
-                    "define void @other() {\n"
-                    "  unreachable\n"
-                    "}\n"
-                    "define void @func() {\n"
-                    "  unreachable\n"
-                    "bb:\n"
-                    "  unreachable\n"
-                    "}\n");
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
+  std::unique_ptr<Module> M =
+      getLazyModuleFromAssembly(Context, Mem,
+                                "define ptr @before() {\n"
+                                "  ret ptr blockaddress(@func, %bb)\n"
+                                "}\n"
+                                "define void @other() {\n"
+                                "  unreachable\n"
+                                "}\n"
+                                "define void @func() {\n"
+                                "  unreachable\n"
+                                "bb:\n"
+                                "  unreachable\n"
+                                "}\n");
   EXPECT_TRUE(M->getFunction("before")->empty());
   EXPECT_TRUE(M->getFunction("func")->empty());
   EXPECT_FALSE(verifyModule(*M, &dbgs()));
@@ -240,19 +243,20 @@ TEST(BitReaderTest, MaterializeFunctionsForBlockAddrInFunctionBefore) {
 TEST(BitReaderTest, MaterializeFunctionsForBlockAddrInFunctionAfter) {
   SmallString<1024> Mem;
 
-  LLVMContext Context;
-  std::unique_ptr<Module> M = getLazyModuleFromAssembly(
-      Context, Mem, "define void @func() {\n"
-                    "  unreachable\n"
-                    "bb:\n"
-                    "  unreachable\n"
-                    "}\n"
-                    "define void @other() {\n"
-                    "  unreachable\n"
-                    "}\n"
-                    "define ptr @after() {\n"
-                    "  ret ptr blockaddress(@func, %bb)\n"
-                    "}\n");
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
+  std::unique_ptr<Module> M =
+      getLazyModuleFromAssembly(Context, Mem,
+                                "define void @func() {\n"
+                                "  unreachable\n"
+                                "bb:\n"
+                                "  unreachable\n"
+                                "}\n"
+                                "define void @other() {\n"
+                                "  unreachable\n"
+                                "}\n"
+                                "define ptr @after() {\n"
+                                "  ret ptr blockaddress(@func, %bb)\n"
+                                "}\n");
   EXPECT_TRUE(M->getFunction("after")->empty());
   EXPECT_TRUE(M->getFunction("func")->empty());
   EXPECT_FALSE(verifyModule(*M, &dbgs()));
@@ -354,7 +358,7 @@ TEST(BitReaderTest, AccessFunctionTypeInfo) {
   StringRef Bitcode(reinterpret_cast<const char *>(AccessFunctionTypeInfoBc),
                     sizeof(AccessFunctionTypeInfoBc));
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   ParserCallbacks Callbacks;
   // Supply a callback that stores the signature of a function into metadata,
   // so that the types behind pointers can be accessed.
@@ -398,7 +402,7 @@ TEST(BitReaderTest, AccessMetadataTypeInfo) {
   StringRef Bitcode(reinterpret_cast<const char *>(AccessMetadataTypeInfoBc),
                     sizeof(AccessFunctionTypeInfoBc));
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   ParserCallbacks Callbacks;
   // Supply a callback that stores types from metadata,
   // so that the types behind pointers can be accessed.
@@ -602,7 +606,7 @@ static void expectRecordForm(Function &F) {
 TEST(BitReaderTest, SkipDebugIntrinsicUpgrade) {
   SmallString<1024> Mem;
   {
-    LLVMContext Context;
+    LLVMContext Context{llvm::clv2::defaultOptionsContext()};
     std::unique_ptr<Module> M = parseAssembly(Context, DebugIntrinsicAssembly);
     // Lower the debug records produced by the parser back to intrinsic calls so
     // the bitcode we write out encodes llvm.dbg.* intrinsics.
@@ -618,7 +622,7 @@ TEST(BitReaderTest, SkipDebugIntrinsicUpgrade) {
 
   // Default behavior: every debug intrinsic is upgraded to a debug record.
   {
-    LLVMContext Context;
+    LLVMContext Context{llvm::clv2::defaultOptionsContext()};
     Expected<std::unique_ptr<Module>> ModuleOrErr =
         parseBitcodeFile(MemoryBufferRef(Mem.str(), "test"), Context);
     if (!ModuleOrErr)
@@ -638,7 +642,7 @@ TEST(BitReaderTest, SkipDebugIntrinsicUpgrade) {
   // preserved for every kind and the caller is left responsible for upgrading
   // it.
   {
-    LLVMContext Context;
+    LLVMContext Context{llvm::clv2::defaultOptionsContext()};
     ParserCallbacks Callbacks;
     Callbacks.SkipDebugIntrinsicUpgrade = true;
     Expected<std::unique_ptr<Module>> ModuleOrErr = parseBitcodeFile(
@@ -663,7 +667,7 @@ TEST(BitReaderTest, SkipDebugIntrinsicUpgrade) {
     SmallString<1024> RoundTripMem;
     writeModuleToBuffer(std::move(M), RoundTripMem);
 
-    LLVMContext RoundTripContext;
+    LLVMContext RoundTripContext{llvm::clv2::defaultOptionsContext()};
     Expected<std::unique_ptr<Module>> RoundTripOrErr =
         parseBitcodeFile(MemoryBufferRef(RoundTripMem.str(), "test"),
                          RoundTripContext, Callbacks);

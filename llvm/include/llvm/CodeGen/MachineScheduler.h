@@ -90,7 +90,7 @@
 #include "llvm/CodeGen/ScheduleDAGMutation.h"
 #include "llvm/CodeGen/ScheduleHazardRecognizer.h"
 #include "llvm/CodeGen/TargetSchedule.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <algorithm>
@@ -117,15 +117,12 @@ enum Direction {
 };
 } // namespace MISched
 
-LLVM_ABI extern cl::opt<MISched::Direction> PreRADirection;
-LLVM_ABI extern cl::opt<bool> VerifyScheduling;
+LLVM_ABI extern MISched::Direction PreRADirection;
 
 #ifndef NDEBUG
-extern cl::opt<bool> ViewMISchedDAGs;
-extern cl::opt<bool> PrintDAGs;
+bool getViewMISchedDAGs();
 #else
-LLVM_ABI extern const bool ViewMISchedDAGs;
-LLVM_ABI extern const bool PrintDAGs;
+LLVM_ABI bool getViewMISchedDAGs();
 #endif
 
 class AAResults;
@@ -165,7 +162,6 @@ class MachineSchedRegistry
 public:
   using ScheduleDAGCtor = ScheduleDAGInstrs *(*)(MachineSchedContext *);
 
-  // RegisterPassParser requires a (misnamed) FunctionPassCtor type.
   using FunctionPassCtor = ScheduleDAGCtor;
 
   LLVM_ABI static MachinePassRegistry<ScheduleDAGCtor> Registry;
@@ -1477,6 +1473,7 @@ public:
   LLVM_ABI PreservedAnalyses run(MachineFunction &MF,
                                  MachineFunctionAnalysisManager &MFAM);
 };
+
 } // end namespace llvm
 
 #endif // LLVM_CODEGEN_MACHINESCHEDULER_H

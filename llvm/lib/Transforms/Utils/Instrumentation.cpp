@@ -16,13 +16,17 @@
 #include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 
 using namespace llvm;
 
-static cl::opt<bool> ClIgnoreRedundantInstrumentation(
-    "ignore-redundant-instrumentation",
-    cl::desc("Ignore redundant instrumentation"), cl::Hidden, cl::init(false));
+static bool getClIgnoreRedundantInstrumentation(const Module &M) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_ClIgnoreRedundantInstrumentation>(
+      M.getContext().getOptionsContext(), false);
+}
 
 /// Check if module has flag attached, if not add the flag.
 bool llvm::checkIfAlreadyInstrumented(Module &M, StringRef Flag) {
@@ -30,7 +34,7 @@ bool llvm::checkIfAlreadyInstrumented(Module &M, StringRef Flag) {
     M.addModuleFlag(Module::ModFlagBehavior::Override, Flag, 1);
     return false;
   }
-  if (ClIgnoreRedundantInstrumentation)
+  if (getClIgnoreRedundantInstrumentation(M))
     return true;
   std::string diagInfo =
       "Redundant instrumentation detected, with module flag: " +

@@ -16,6 +16,8 @@
 #include "llvm/Analysis/ValueLattice.h"
 #include "llvm/Analysis/ValueLatticeUtils.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 #include "llvm/Transforms/Scalar/SCCP.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/SCCPSolver.h"
@@ -27,79 +29,60 @@ using namespace llvm;
 
 STATISTIC(NumSpecsCreated, "Number of specializations created");
 
-namespace llvm {
-
-static cl::opt<bool> ForceSpecialization(
-    "force-specialization", cl::init(false), cl::Hidden,
-    cl::desc(
-        "Force function specialization for every call site with a constant "
-        "argument"));
-
-static cl::opt<unsigned> MaxClones(
-    "funcspec-max-clones", cl::init(3), cl::Hidden, cl::desc(
-    "The maximum number of clones allowed for a single function "
-    "specialization"));
-
-static cl::opt<unsigned>
-    MaxDiscoveryIterations("funcspec-max-discovery-iterations", cl::init(100),
-                           cl::Hidden,
-                           cl::desc("The maximum number of iterations allowed "
-                                    "when searching for transitive "
-                                    "phis"));
-
-static cl::opt<unsigned> MaxIncomingPhiValues(
-    "funcspec-max-incoming-phi-values", cl::init(8), cl::Hidden,
-    cl::desc("The maximum number of incoming values a PHI node can have to be "
-             "considered during the specialization bonus estimation"));
-
-static cl::opt<unsigned> MaxBlockPredecessors(
-    "funcspec-max-block-predecessors", cl::init(2), cl::Hidden, cl::desc(
-    "The maximum number of predecessors a basic block can have to be "
-    "considered during the estimation of dead code"));
-
-static cl::opt<unsigned> MinFunctionSize(
-    "funcspec-min-function-size", cl::init(500), cl::Hidden,
-    cl::desc("Don't specialize functions that have less than this number of "
-             "instructions"));
-
-static cl::opt<unsigned> MaxCodeSizeGrowth(
-    "funcspec-max-codesize-growth", cl::init(3), cl::Hidden, cl::desc(
-    "Maximum codesize growth allowed per function"));
-
-static cl::opt<unsigned> MinCodeSizeSavings(
-    "funcspec-min-codesize-savings", cl::init(20), cl::Hidden,
-    cl::desc("Reject specializations whose codesize savings are less than this "
-             "much percent of the original function size"));
-
-static cl::opt<unsigned> MinLatencySavings(
-    "funcspec-min-latency-savings", cl::init(20), cl::Hidden,
-    cl::desc("Reject specializations whose latency savings are less than this "
-             "much percent of the original function size"));
-
-static cl::opt<unsigned> MinInliningBonus(
-    "funcspec-min-inlining-bonus", cl::init(300), cl::Hidden,
-    cl::desc("Reject specializations whose inlining bonus is less than this "
-             "much percent of the original function size"));
-
-static cl::opt<bool> SpecializeOnAddress(
-    "funcspec-on-address", cl::init(false), cl::Hidden, cl::desc(
-    "Enable function specialization on the address of global values"));
-
-static cl::opt<bool> SpecializeLiteralConstant(
-    "funcspec-for-literal-constant", cl::init(true), cl::Hidden,
-    cl::desc(
-        "Enable specialization of functions that take a literal constant as an "
-        "argument"));
-
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
-
-} // end namespace llvm
+static bool getForceSpecialization(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_ForceSpecialization>(
+      M.getContext().getOptionsContext());
+}
+static unsigned getMaxClones(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_MaxClones>(
+      M.getContext().getOptionsContext());
+}
+static unsigned getMaxDiscoveryIterations(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_MaxDiscoveryIterations>(
+      M.getContext().getOptionsContext());
+}
+static unsigned getMaxIncomingPhiValues(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_MaxIncomingPhiValues>(
+      M.getContext().getOptionsContext());
+}
+static unsigned getMaxBlockPredecessors(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_MaxBlockPredecessors>(
+      M.getContext().getOptionsContext());
+}
+static unsigned getMinFunctionSize(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_MinFunctionSize>(
+      M.getContext().getOptionsContext());
+}
+static unsigned getMaxCodeSizeGrowth(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_MaxCodeSizeGrowth>(
+      M.getContext().getOptionsContext());
+}
+static unsigned getMinCodeSizeSavings(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_MinCodeSizeSavings>(
+      M.getContext().getOptionsContext());
+}
+static unsigned getMinLatencySavings(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_MinLatencySavings>(
+      M.getContext().getOptionsContext());
+}
+static unsigned getMinInliningBonus(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_MinInliningBonus>(
+      M.getContext().getOptionsContext());
+}
+static bool getSpecializeOnAddress(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_SpecializeOnAddress>(
+      M.getContext().getOptionsContext());
+}
+static bool getSpecializeLiteralConstant(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_SpecializeLiteralConstant>(
+      M.getContext().getOptionsContext());
+}
 
 bool InstCostVisitor::canEliminateSuccessor(BasicBlock *BB,
                                             BasicBlock *Succ) const {
   unsigned I = 0;
   return all_of(predecessors(Succ), [&I, BB, Succ, this](BasicBlock *Pred) {
-    return I++ < MaxBlockPredecessors &&
+    return I++ < getMaxBlockPredecessors(*F->getParent()) &&
            (Pred == BB || Pred == Succ || !isBlockExecutable(Pred));
   });
 }
@@ -305,8 +288,8 @@ bool InstCostVisitor::discoverTransitivelyIncomingValues(
   while (!WorkList.empty()) {
     PHINode *PN = WorkList.pop_back_val();
 
-    if (++Iter > MaxDiscoveryIterations ||
-        PN->getNumIncomingValues() > MaxIncomingPhiValues)
+    if (++Iter > getMaxDiscoveryIterations(*F->getParent()) ||
+        PN->getNumIncomingValues() > getMaxIncomingPhiValues(*F->getParent()))
       return false;
 
     if (!TransitivePHIs.insert(PN).second)
@@ -340,7 +323,7 @@ bool InstCostVisitor::discoverTransitivelyIncomingValues(
 }
 
 Constant *InstCostVisitor::visitPHINode(PHINode &I) {
-  if (I.getNumIncomingValues() > MaxIncomingPhiValues)
+  if (I.getNumIncomingValues() > getMaxIncomingPhiValues(*F->getParent()))
     return nullptr;
 
   bool Inserted = VisitedPHIs.insert(&I).second;
@@ -689,21 +672,21 @@ bool FunctionSpecializer::run() {
     // When specializing literal constants is enabled, always require functions
     // to be larger than MinFunctionSize, to prevent excessive specialization.
     const bool RequireMinSize =
-        !ForceSpecialization &&
-        (SpecializeLiteralConstant || !F.hasFnAttribute(Attribute::NoInline));
+        !getForceSpecialization(M) && (getSpecializeLiteralConstant(M) ||
+                                       !F.hasFnAttribute(Attribute::NoInline));
 
     // If the code metrics reveal that we shouldn't duplicate the function,
     // or if the code size implies that this function is easy to get inlined,
     // then we shouldn't specialize it.
     if (Metrics.notDuplicatable || !Metrics.NumInsts.isValid() ||
-        (RequireMinSize && Metrics.NumInsts < MinFunctionSize))
+        (RequireMinSize && Metrics.NumInsts < getMinFunctionSize(M)))
       continue;
 
     // When specialization on literal constants is disabled, only consider
     // recursive functions when running multiple times to save wasted analysis,
     // as we will not be able to specialize on any newly found literal constant
     // return values.
-    if (!SpecializeLiteralConstant && !Inserted && !Metrics.isRecursive)
+    if (!getSpecializeLiteralConstant(M) && !Inserted && !Metrics.isRecursive)
       continue;
 
     int64_t Sz = Metrics.NumInsts.getValue();
@@ -743,7 +726,7 @@ bool FunctionSpecializer::run() {
     return I > J;
   };
   const unsigned NSpecs =
-      std::min(NumCandidates * MaxClones, unsigned(AllSpecs.size()));
+      std::min(NumCandidates * getMaxClones(M), unsigned(AllSpecs.size()));
   SmallVector<unsigned> BestSpecs(NSpecs + 1);
   std::iota(BestSpecs.begin(), BestSpecs.begin() + NSpecs, 0);
   if (AllSpecs.size() > NSpecs) {
@@ -793,7 +776,7 @@ bool FunctionSpecializer::run() {
       auto &BFI = GetBFI(*Call->getFunction());
       std::optional<uint64_t> Count =
           BFI.getBlockProfileCount(Call->getParent());
-      if (Count && !ProfcheckDisableMetadataFixes) {
+      if (Count && !getProfcheckDisableMetadataFixes(Clone->getContext())) {
         std::optional<uint64_t> MaybeCloneCount = Clone->getEntryCount();
         if (MaybeCloneCount) {
           uint64_t CallCount = *Count + *MaybeCloneCount;
@@ -972,7 +955,7 @@ bool FunctionSpecializer::findSpecializations(Function *F, unsigned FuncSize,
 
       auto IsProfitable = [&]() -> bool {
         // No check required.
-        if (ForceSpecialization)
+        if (getForceSpecialization(M))
           return true;
 
         LLVM_DEBUG(
@@ -980,7 +963,7 @@ bool FunctionSpecializer::findSpecializations(Function *F, unsigned FuncSize,
                    << Score << " (" << (Score * 100 / FuncSize) << "%)}\n");
 
         // Minimum inlining bonus.
-        if (Score > MinInliningBonus * FuncSize / 100)
+        if (Score > getMinInliningBonus(M) * FuncSize / 100)
           return true;
 
         LLVM_DEBUG(
@@ -989,7 +972,7 @@ bool FunctionSpecializer::findSpecializations(Function *F, unsigned FuncSize,
                    << (CodeSizeSavings * 100 / FuncSize) << "%)}\n");
 
         // Minimum codesize savings.
-        if (CodeSizeSavings < MinCodeSizeSavings * FuncSize / 100)
+        if (CodeSizeSavings < getMinCodeSizeSavings(M) * FuncSize / 100)
           return false;
 
         // Lazily compute the Latency, to avoid unnecessarily computing BFI.
@@ -1002,10 +985,10 @@ bool FunctionSpecializer::findSpecializations(Function *F, unsigned FuncSize,
                    << (LatencySavings * 100 / FuncSize) << "%)}\n");
 
         // Minimum latency savings.
-        if (LatencySavings < MinLatencySavings * FuncSize / 100)
+        if (LatencySavings < getMinLatencySavings(M) * FuncSize / 100)
           return false;
         // Maximum codesize growth.
-        if ((FunctionGrowth[F] + SpecSize) / FuncSize > MaxCodeSizeGrowth)
+        if ((FunctionGrowth[F] + SpecSize) / FuncSize > getMaxCodeSizeGrowth(M))
           return false;
 
         Score += std::max(CodeSizeSavings, LatencySavings);
@@ -1073,7 +1056,7 @@ Function *FunctionSpecializer::createSpecialization(Function *F,
   // clone must.
   Clone->setLinkage(GlobalValue::InternalLinkage);
 
-  if (F->getEntryCount() && !ProfcheckDisableMetadataFixes)
+  if (F->getEntryCount() && !getProfcheckDisableMetadataFixes(F->getContext()))
     Clone->setEntryCount(0);
 
   // Initialize the lattice state of the arguments of the function clone,
@@ -1127,7 +1110,8 @@ unsigned FunctionSpecializer::getInliningBonus(Argument *A, Constant *C) {
     //
     // We apply a boost for performing indirect call promotion by increasing
     // the default threshold by the threshold for indirect calls.
-    auto Params = getInlineParams();
+    auto Params =
+        getInlineParams(CalledFunction->getContext().getOptionsContext());
     Params.DefaultThreshold += InlineConstants::IndirectCallThreshold;
     InlineCost IC =
         getInlineCost(*CS, CalledFunction, Params, CalleeTTI, GetAC, GetTLI);
@@ -1154,8 +1138,9 @@ bool FunctionSpecializer::isArgumentInteresting(Argument *A) {
     return false;
 
   Type *Ty = A->getType();
-  if (!Ty->isPointerTy() && (!SpecializeLiteralConstant ||
-      (!Ty->isIntegerTy() && !Ty->isFloatingPointTy() && !Ty->isStructTy())))
+  if (!Ty->isPointerTy() &&
+      (!getSpecializeLiteralConstant(M) ||
+       (!Ty->isIntegerTy() && !Ty->isFloatingPointTy() && !Ty->isStructTy())))
     return false;
 
   // SCCP solver does not record an argument that will be constructed on
@@ -1201,7 +1186,7 @@ Constant *FunctionSpecializer::getCandidateConstant(Value *V) {
   // global variable, unless explicitly enabled.
   if (C && C->getType()->isPointerTy() && !C->isNullValue())
     if (auto *GV = dyn_cast<GlobalVariable>(getUnderlyingObject(C));
-        GV && !(GV->isConstant() || SpecializeOnAddress))
+        GV && !(GV->isConstant() || getSpecializeOnAddress(M)))
       return nullptr;
 
   return C;

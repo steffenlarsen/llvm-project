@@ -10,20 +10,13 @@
 #include "llvm/BinaryFormat/DXContainer.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCOptionsOptInfos.h"
 #include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCValue.h"
 #include "llvm/Support/Alignment.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
-
-cl::opt<bool> EmbedDebug("dx-embed-debug",
-                         cl::desc("Embed PDB in shader container"));
-cl::opt<bool>
-    StripDebug("dx-strip-debug",
-               cl::desc("Strip debug information from shader bytecode"));
-cl::opt<bool> SlimDebug("dx-slim-debug",
-                        cl::desc("Generate slim PDB without ILDB part"));
 
 MCDXContainerTargetWriter::~MCDXContainerTargetWriter() = default;
 
@@ -32,11 +25,8 @@ MCDXContainerBaseWriter::~MCDXContainerBaseWriter() = default;
 bool MCDXContainerBaseWriter::shouldSkipSection(StringRef SectionName,
                                                 size_t SectionSize) {
   // Skip empty and auxiliary sections.
-  if (SectionSize == 0 || SectionName == PdbFileNameSectionName ||
-      SectionName == ModuleHashSectionName)
-    return true;
-  // Slim debug omits ILDB from all DXContainer outputs.
-  return SlimDebug && SectionName == "ILDB";
+  return SectionSize == 0 || SectionName == PdbFileNameSectionName ||
+         SectionName == ModuleHashSectionName;
 }
 
 void MCDXContainerBaseWriter::write(raw_ostream &OS, const Triple &TT) {
@@ -165,9 +155,18 @@ ArrayRef<MCDXContainerPart> DXContainerObjectWriter::collectParts() {
 
 bool DXContainerObjectWriter::shouldSkipSection(StringRef SectionName,
                                                 size_t SectionSize) {
-  // Do not write ILDB part if we're not embedding it.
-  if (SectionName == "ILDB" && (!EmbedDebug || StripDebug))
-    return true;
+  if (SectionName == "ILDB") {
+    // Slim debug omits ILDB from all DXContainer outputs.
+    if (clv2::getOptValOr<&clv2::MCOptsReg, &clv2::MC_DXSlimDebug>(
+            getContext().getOptionsContext(), false))
+      return true;
+    // Do not write ILDB part if we're not embedding it.  The disposition is
+    // decided by the DXIL writer, which is the only place that knows whether
+    // the module carries debug info.
+    if (!getContext().getDXEmbedDebugInfo() ||
+        getContext().getDXStripDebugInfo())
+      return true;
+  }
   if (SectionName == "SRCI")
     return true;
   return MCDXContainerBaseWriter::shouldSkipSection(SectionName, SectionSize);

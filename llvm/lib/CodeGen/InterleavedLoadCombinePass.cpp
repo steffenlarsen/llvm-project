@@ -23,6 +23,7 @@
 #include "llvm/Analysis/MemorySSAUpdater.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/InterleavedLoadCombine.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetLowering.h"
@@ -35,8 +36,10 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 
@@ -53,10 +56,10 @@ namespace {
 /// Statistic counter
 STATISTIC(NumInterleavedLoadCombine, "Number of combined loads");
 
-/// Option to disable the pass
-static cl::opt<bool> DisableInterleavedLoadCombine(
-    "disable-" DEBUG_TYPE, cl::init(false), cl::Hidden,
-    cl::desc("Disable combining of interleaved loads"));
+static bool getDisableInterleavedLoadCombine(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableInterleavedLoadCombine>(
+      Ctx);
+}
 
 struct VectorInfo;
 
@@ -1313,7 +1316,7 @@ struct InterleavedLoadCombine : public FunctionPass {
   }
 
   bool runOnFunction(Function &F) override {
-    if (DisableInterleavedLoadCombine)
+    if (getDisableInterleavedLoadCombine(F.getContext().getOptionsContext()))
       return false;
 
     auto *TPC = getAnalysisIfAvailable<TargetPassConfig>();

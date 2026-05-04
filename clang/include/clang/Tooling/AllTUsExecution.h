@@ -70,8 +70,8 @@ private:
   unsigned ThreadCount;
 };
 
-extern llvm::cl::opt<unsigned> ExecutorConcurrency;
-extern llvm::cl::opt<std::string> Filter;
+extern unsigned ExecutorConcurrency;
+extern std::string Filter;
 
 } // end namespace tooling
 } // end namespace clang

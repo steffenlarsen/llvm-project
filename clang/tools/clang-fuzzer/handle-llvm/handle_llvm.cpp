@@ -8,7 +8,7 @@
 //
 // Implements HandleLLVM for use by the Clang fuzzers. First runs a loop
 // vectorizer optimization pass over the given IR code. Then mimics lli on both
-// versions to JIT the generated code and execute it. Currently, functions are 
+// versions to JIT the generated code and execute it. Currently, functions are
 // executed on dummy inputs.
 //
 //===----------------------------------------------------------------------===//
@@ -45,7 +45,7 @@
 using namespace llvm;
 
 // Define a type for the functions that are compiled and executed
-typedef void (*LLVMFunc)(int*, int*, int*, int);
+typedef void (*LLVMFunc)(int *, int *, int *, int);
 
 // Helper function to parse command line args and find the optimization level
 static CodeGenOptLevel getOptLevel(const std::vector<const char *> &ExtraArgs) {
@@ -65,11 +65,11 @@ static CodeGenOptLevel getOptLevel(const std::vector<const char *> &ExtraArgs) {
 }
 
 static void ErrorAndExit(std::string message) {
-  errs()<< "ERROR: " << message << "\n";
+  errs() << "ERROR: " << message << "\n";
   std::exit(1);
 }
 
-// Helper function to add optimization passes to the TargetMachine at the 
+// Helper function to add optimization passes to the TargetMachine at the
 // specified optimization level, OptLevel
 static void RunOptimizationPasses(raw_ostream &OS, Module &M,
                                   CodeGenOptLevel OptLevel) {
@@ -94,7 +94,7 @@ static void RunOptimizationPasses(raw_ostream &OS, Module &M,
   CGSCCAnalysisManager CGAM;
   ModuleAnalysisManager MAM;
 
-  PassBuilder PB;
+  PassBuilder PB(llvm::clv2::defaultOptionsContext());
 
   PB.registerModuleAnalyses(MAM);
   PB.registerCGSCCAnalyses(CGAM);
@@ -112,29 +112,33 @@ static void RunOptimizationPasses(raw_ostream &OS, Module &M,
 static std::string OptLLVM(const std::string &IR, CodeGenOptLevel OLvl) {
   // Create a module that will run the optimization passes
   SMDiagnostic Err;
-  LLVMContext Context;
+  LLVMContext Context(llvm::clv2::defaultOptionsContext());
   std::unique_ptr<Module> M = parseIR(MemoryBufferRef(IR, "IR"), Err, Context);
   if (!M || verifyModule(*M, &errs()))
     ErrorAndExit("Could not parse IR");
 
   Triple ModuleTriple(M->getTargetTriple());
-  const TargetOptions Options =
-      codegen::InitTargetOptionsFromCodeGenFlags(ModuleTriple);
+  const TargetOptions Options = codegen::InitTargetOptionsFromCodeGenFlags(
+      ModuleTriple, Context.getOptionsContext());
   std::string E;
-  const Target *TheTarget =
-      TargetRegistry::lookupTarget(codegen::getMArch(), ModuleTriple, E);
+  const Target *TheTarget = TargetRegistry::lookupTarget(
+      codegen::getMArch(llvm::clv2::defaultOptionsContext()), ModuleTriple, E);
   if (!TheTarget)
     ErrorAndExit(E);
 
   std::unique_ptr<TargetMachine> TM(TheTarget->createTargetMachine(
-      M->getTargetTriple(), codegen::getCPUStr(), codegen::getFeaturesStr(),
-      Options, codegen::getExplicitRelocModel(),
-      codegen::getExplicitCodeModel(), OLvl));
+      M->getTargetTriple(),
+      codegen::getCPUStr(llvm::clv2::defaultOptionsContext()),
+      codegen::getFeaturesStr(llvm::clv2::defaultOptionsContext()), Options,
+      codegen::getExplicitRelocModel(llvm::clv2::defaultOptionsContext()),
+      codegen::getExplicitCodeModel(llvm::clv2::defaultOptionsContext()),
+      OLvl));
   if (!TM)
     ErrorAndExit("Could not create target machine");
 
-  codegen::setFunctionAttributes(*M, codegen::getCPUStr(),
-                                 codegen::getFeaturesStr());
+  codegen::setFunctionAttributes(
+      *M, codegen::getCPUStr(llvm::clv2::defaultOptionsContext()),
+      codegen::getFeaturesStr(llvm::clv2::defaultOptionsContext()));
 
   // Add a pass that writes the optimized IR to an output stream
   std::string outString;
@@ -155,7 +159,7 @@ static void RunFuncOnInputs(LLVMFunc f, int Arr[kNumArrays][kArraySize]) {
 // Takes a string of IR and compiles it using LLVM's JIT Engine
 static void CreateAndRunJITFunc(const std::string &IR, CodeGenOptLevel OLvl) {
   SMDiagnostic Err;
-  LLVMContext Context;
+  LLVMContext Context(llvm::clv2::defaultOptionsContext());
   std::unique_ptr<Module> M = parseIR(MemoryBufferRef(IR, "IR"), Err, Context);
   if (!M)
     ErrorAndExit("Could not parse IR");
@@ -168,15 +172,16 @@ static void CreateAndRunJITFunc(const std::string &IR, CodeGenOptLevel OLvl) {
   Triple ModuleTriple(M->getTargetTriple());
 
   EngineBuilder builder(std::move(M));
-  builder.setMArch(codegen::getMArch());
-  builder.setMCPU(codegen::getCPUStr());
-  builder.setMAttrs(codegen::getFeatureList());
+  builder.setMArch(codegen::getMArch(llvm::clv2::defaultOptionsContext()));
+  builder.setMCPU(codegen::getCPUStr(llvm::clv2::defaultOptionsContext()));
+  builder.setMAttrs(
+      codegen::getFeatureList(llvm::clv2::defaultOptionsContext()));
   builder.setErrorStr(&ErrorMsg);
   builder.setEngineKind(EngineKind::JIT);
   builder.setMCJITMemoryManager(std::make_unique<SectionMemoryManager>());
   builder.setOptLevel(OLvl);
-  builder.setTargetOptions(
-      codegen::InitTargetOptionsFromCodeGenFlags(ModuleTriple));
+  builder.setTargetOptions(codegen::InitTargetOptionsFromCodeGenFlags(
+      ModuleTriple, Context.getOptionsContext()));
 
   std::unique_ptr<ExecutionEngine> EE(builder.create());
   if (!EE)

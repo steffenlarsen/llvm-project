@@ -1,4 +1,6 @@
 add_llvm_component_library(LLVMCore
+  IROptionsGetters.cpp
+  IROptionsRegistration.cpp
   AbstractCallSite.cpp
   AsmWriter.cpp
   Assumptions.cpp
@@ -38,6 +40,7 @@ add_llvm_component_library(LLVMCore
   Intrinsics.cpp
   NVVMIntrinsicUtils.cpp
   IRBuilder.cpp
+  IROptions.cpp
   IRPrintingPasses.cpp
   SSAContext.cpp
   InlineAsm.cpp

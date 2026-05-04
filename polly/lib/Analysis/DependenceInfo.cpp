@@ -20,11 +20,13 @@
 //===----------------------------------------------------------------------===//
 //
 #include "polly/DependenceInfo.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopInfo.h"
 #include "polly/Support/GICHelper.h"
 #include "polly/Support/ISLTools.h"
 #include "llvm/ADT/Sequence.h"
+#include "llvm/ADT/StringSwitch.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "isl/aff.h"
 #include "isl/ctx.h"
@@ -41,51 +43,36 @@ using namespace llvm;
 #include "polly/Support/PollyDebug.h"
 #define DEBUG_TYPE "polly-dependence"
 
-namespace polly {
-Dependences::AnalysisLevel OptAnalysisLevel;
-}
-
-static cl::opt<int> OptComputeOut(
-    "polly-dependences-computeout",
-    cl::desc("Bound the dependence analysis by a maximal amount of "
-             "computational steps (0 means no bound)"),
-    cl::Hidden, cl::init(500000), cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    LegalityCheckDisabled("disable-polly-legality",
-                          cl::desc("Disable polly legality check"), cl::Hidden,
-                          cl::cat(PollyCategory));
-
-static cl::opt<bool>
-    UseReductions("polly-dependences-use-reductions",
-                  cl::desc("Exploit reductions in dependence analysis"),
-                  cl::Hidden, cl::init(true), cl::cat(PollyCategory));
-
 enum AnalysisType { VALUE_BASED_ANALYSIS, MEMORY_BASED_ANALYSIS };
 
-static cl::opt<enum AnalysisType> OptAnalysisType(
-    "polly-dependences-analysis-type",
-    cl::desc("The kind of dependence analysis to use"),
-    cl::values(clEnumValN(VALUE_BASED_ANALYSIS, "value-based",
-                          "Exact dependences without transitive dependences"),
-               clEnumValN(MEMORY_BASED_ANALYSIS, "memory-based",
-                          "Overapproximation of dependences")),
-    cl::Hidden, cl::init(VALUE_BASED_ANALYSIS), cl::cat(PollyCategory));
+static int getOptComputeOut(Scop &S) {
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext()))
+    return Opts->get<&llvm::clv2::POLLY_DependencesComputeout>();
+  return 500000;
+}
 
-static cl::opt<Dependences::AnalysisLevel, true> XOptAnalysisLevel(
-    "polly-dependences-analysis-level",
-    cl::desc("The level of dependence analysis"),
-    cl::location(OptAnalysisLevel),
-    cl::values(clEnumValN(Dependences::AL_Statement, "statement-wise",
-                          "Statement-level analysis"),
-               clEnumValN(Dependences::AL_Reference, "reference-wise",
-                          "Memory reference level analysis that distinguish"
-                          " accessed references in the same statement"),
-               clEnumValN(Dependences::AL_Access, "access-wise",
-                          "Memory reference level analysis that distinguish"
-                          " access instructions in the same statement")),
-    cl::Hidden, cl::init(Dependences::AL_Statement), cl::cat(PollyCategory));
+static bool getLegalityCheckDisabled(Scop &S) {
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext()))
+    return Opts->get<&llvm::clv2::POLLY_DisableLegality>();
+  return false;
+}
 
+static bool getUseReductions(Scop &S) {
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext()))
+    return Opts->get<&llvm::clv2::POLLY_DependencesUseReductions>();
+  return true;
+}
+
+static AnalysisType getOptAnalysisType(Scop &S) {
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext()))
+    return static_cast<AnalysisType>(static_cast<int>(
+        Opts->get<&llvm::clv2::POLLY_DependencesAnalysisType>()));
+  return VALUE_BASED_ANALYSIS;
+}
 //===----------------------------------------------------------------------===//
 
 /// Tag the @p Relation domain with @p TagId
@@ -128,7 +115,7 @@ static void collectInfo(Scop &S, isl_union_map *&Read,
   isl_union_map *StmtSchedule = isl_union_map_empty(Space);
 
   SmallPtrSet<const ScopArrayInfo *, 8> ReductionArrays;
-  if (UseReductions)
+  if (getUseReductions(S))
     for (ScopStmt &Stmt : S)
       for (MemoryAccess *MA : Stmt)
         if (MA->isReductionLike())
@@ -372,7 +359,7 @@ void Dependences::calculateDependences(Scop &S) {
 
   isl_union_map *StrictWAW = nullptr;
   {
-    IslMaxOperationsGuard MaxOpGuard(IslCtx.get(), OptComputeOut);
+    IslMaxOperationsGuard MaxOpGuard(IslCtx.get(), getOptComputeOut(S));
 
     RAW = WAW = WAR = RED = nullptr;
     isl_union_map *Write = isl_union_map_union(isl_union_map_copy(MustWrite),
@@ -441,7 +428,7 @@ void Dependences::calculateDependences(Scop &S) {
     StrictWAW = isl_union_flow_get_must_dependence(Flow);
     isl_union_flow_free(Flow);
 
-    if (OptAnalysisType == VALUE_BASED_ANALYSIS) {
+    if (getOptAnalysisType(S) == VALUE_BASED_ANALYSIS) {
       Flow = buildFlow(Read, MustWrite, MayWrite, nullptr, Schedule);
       RAW = isl_union_flow_get_may_dependence(Flow);
       isl_union_flow_free(Flow);
@@ -654,7 +641,7 @@ bool Dependences::isValidSchedule(Scop &S, isl::schedule NewSched) const {
 
 bool Dependences::isValidSchedule(
     Scop &S, const StatementToIslMapTy &NewSchedule) const {
-  if (LegalityCheckDisabled)
+  if (getLegalityCheckDisabled(S))
     return true;
 
   isl::union_map Dependences = getDependences(TYPE_RAW | TYPE_WAW | TYPE_WAR);

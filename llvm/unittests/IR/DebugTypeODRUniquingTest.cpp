@@ -15,7 +15,7 @@ using namespace llvm;
 namespace {
 
 TEST(DebugTypeODRUniquingTest, enableDebugTypeODRUniquing) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   EXPECT_FALSE(Context.isODRUniquingDebugTypes());
   Context.enableDebugTypeODRUniquing();
   EXPECT_TRUE(Context.isODRUniquingDebugTypes());
@@ -24,7 +24,7 @@ TEST(DebugTypeODRUniquingTest, enableDebugTypeODRUniquing) {
 }
 
 TEST(DebugTypeODRUniquingTest, getODRType) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   MDString &UUID = *MDString::get(Context, "string");
 
   // Without a type map, this should return null.
@@ -70,7 +70,7 @@ TEST(DebugTypeODRUniquingTest, getODRType) {
 }
 
 TEST(DebugTypeODRUniquingTest, buildODRType) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Context.enableDebugTypeODRUniquing();
 
   // Build an ODR type that's a forward decl.
@@ -123,7 +123,7 @@ TEST(DebugTypeODRUniquingTest, buildODRType) {
 }
 
 TEST(DebugTypeODRUniquingTest, buildODRTypeFields) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Context.enableDebugTypeODRUniquing();
 
   // Build an ODR type that's a forward decl with no other fields set.

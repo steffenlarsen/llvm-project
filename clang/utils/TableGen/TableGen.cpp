@@ -12,12 +12,15 @@
 
 #include "ASTTableGen.h"
 #include "TableGenBackends.h" // Declares all backends.
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/TableGen/Main.h"
 #include "llvm/TableGen/Record.h"
+#include "llvm/TableGen/TableGenBackend.h"
+#include <deque>
 
 using namespace llvm;
 using namespace clang;
@@ -131,254 +134,288 @@ enum ActionType {
 };
 
 namespace {
-cl::opt<ActionType> Action(
-    cl::desc("Action to perform:"),
-    cl::values(
-        clEnumValN(PrintRecords, "print-records",
-                   "Print all records to stdout (default)"),
-        clEnumValN(DumpJSON, "dump-json",
-                   "Dump all records as machine-readable JSON"),
-        clEnumValN(GenCIRLowering, "gen-cir-lowering",
-                   "Generate CIR operation lowering patterns"),
-        clEnumValN(GenClangAttrClasses, "gen-clang-attr-classes",
-                   "Generate clang attribute clases"),
-        clEnumValN(GenClangAttrParserStringSwitches,
-                   "gen-clang-attr-parser-string-switches",
-                   "Generate all parser-related attribute string switches"),
-        clEnumValN(GenClangAttrSubjectMatchRulesParserStringSwitches,
-                   "gen-clang-attr-subject-match-rules-parser-string-switches",
-                   "Generate all parser-related attribute subject match rule"
-                   "string switches"),
-        clEnumValN(GenClangAttrImpl, "gen-clang-attr-impl",
-                   "Generate clang attribute implementations"),
-        clEnumValN(GenClangAttrList, "gen-clang-attr-list",
-                   "Generate a clang attribute list"),
-        clEnumValN(GenClangAttrDocTable, "gen-clang-attr-doc-table",
-                   "Generate a table of attribute documentation"),
-        clEnumValN(GenClangAttrSubjectMatchRuleList,
-                   "gen-clang-attr-subject-match-rule-list",
-                   "Generate a clang attribute subject match rule list"),
-        clEnumValN(GenClangAttrPCHRead, "gen-clang-attr-pch-read",
-                   "Generate clang PCH attribute reader"),
-        clEnumValN(GenClangAttrPCHWrite, "gen-clang-attr-pch-write",
-                   "Generate clang PCH attribute writer"),
-        clEnumValN(GenClangRegularKeywordAttributeInfo,
-                   "gen-clang-regular-keyword-attr-info",
-                   "Generate a list of regular keyword attributes with info "
-                   "about their arguments"),
-        clEnumValN(GenClangAttrHasAttributeImpl,
-                   "gen-clang-attr-has-attribute-impl",
-                   "Generate a clang attribute spelling list"),
-        clEnumValN(GenClangAttrSpellingListIndex,
-                   "gen-clang-attr-spelling-index",
-                   "Generate a clang attribute spelling index"),
-        clEnumValN(GenClangAttrASTVisitor, "gen-clang-attr-ast-visitor",
-                   "Generate a recursive AST visitor for clang attributes"),
-        clEnumValN(GenClangAttrTemplateInstantiate,
-                   "gen-clang-attr-template-instantiate",
-                   "Generate a clang template instantiate code"),
-        clEnumValN(GenClangAttrParsedAttrList,
-                   "gen-clang-attr-parsed-attr-list",
-                   "Generate a clang parsed attribute list"),
-        clEnumValN(GenClangAttrParsedAttrImpl,
-                   "gen-clang-attr-parsed-attr-impl",
-                   "Generate the clang parsed attribute helpers"),
-        clEnumValN(GenClangAttrParsedAttrKinds,
-                   "gen-clang-attr-parsed-attr-kinds",
-                   "Generate a clang parsed attribute kinds"),
-        clEnumValN(GenClangAttrIsTypeDependent,
-                   "gen-clang-attr-is-type-dependent",
-                   "Generate clang is type dependent attribute code"),
-        clEnumValN(GenClangAttrTextNodeDump, "gen-clang-attr-text-node-dump",
-                   "Generate clang attribute text node dumper"),
-        clEnumValN(GenClangAttrNodeTraverse, "gen-clang-attr-node-traverse",
-                   "Generate clang attribute traverser"),
-        clEnumValN(GenClangAttrUndocumentedAttrList,
-                   "gen-clang-attr-undocumented-list",
-                   "Generate a list of undocumented attributes"),
-        clEnumValN(GenClangBuiltins, "gen-clang-builtins",
-                   "Generate clang builtins list"),
-        clEnumValN(GenClangBuiltinTemplates, "gen-clang-builtin-templates",
-                   "Generate clang builtins list"),
-        clEnumValN(GenClangDiagsCompatIDs, "gen-clang-diags-compat-ids",
-                   "Generate Clang diagnostic compatibility ids"),
-        clEnumValN(GenClangDiagsDefs, "gen-clang-diags-defs",
-                   "Generate Clang diagnostics definitions"),
-        clEnumValN(GenClangDiagsEnums, "gen-clang-diags-enums",
-                   "Generate Clang diagnostic enums for selects"),
-        clEnumValN(GenClangDiagGroups, "gen-clang-diag-groups",
-                   "Generate Clang diagnostic groups"),
-        clEnumValN(GenClangDiagsIndexName, "gen-clang-diags-index-name",
-                   "Generate Clang diagnostic name index"),
-        clEnumValN(GenClangDiagsStableIDs, "gen-clang-diags-stable-ids",
-                   "Generate Clang diagnostic stable IDs"),
-        clEnumValN(GenClangDiagsInterface, "gen-clang-diags-iface",
-                   "Generate Clang diagnostic interface headers"),
-        clEnumValN(GenClangBasicReader, "gen-clang-basic-reader",
-                   "Generate Clang BasicReader classes"),
-        clEnumValN(GenClangBasicWriter, "gen-clang-basic-writer",
-                   "Generate Clang BasicWriter classes"),
-        clEnumValN(GenClangCommentNodes, "gen-clang-comment-nodes",
-                   "Generate Clang AST comment nodes"),
-        clEnumValN(GenClangDeclNodes, "gen-clang-decl-nodes",
-                   "Generate Clang AST declaration nodes"),
-        clEnumValN(GenClangStmtNodes, "gen-clang-stmt-nodes",
-                   "Generate Clang AST statement nodes"),
-        clEnumValN(GenClangTypeNodes, "gen-clang-type-nodes",
-                   "Generate Clang AST type nodes"),
-        clEnumValN(GenClangTypeReader, "gen-clang-type-reader",
-                   "Generate Clang AbstractTypeReader class"),
-        clEnumValN(GenClangTypeWriter, "gen-clang-type-writer",
-                   "Generate Clang AbstractTypeWriter class"),
-        clEnumValN(GenClangOpcodes, "gen-clang-opcodes",
-                   "Generate Clang constexpr interpreter opcodes"),
-        clEnumValN(GenClangSACheckers, "gen-clang-sa-checkers",
-                   "Generate Clang Static Analyzer checkers"),
-        clEnumValN(GenClangSyntaxNodeList, "gen-clang-syntax-node-list",
-                   "Generate list of Clang Syntax Tree node types"),
-        clEnumValN(GenClangSyntaxNodeClasses, "gen-clang-syntax-node-classes",
-                   "Generate definitions of Clang Syntax Tree node clasess"),
-        clEnumValN(GenClangCommentHTMLTags, "gen-clang-comment-html-tags",
-                   "Generate efficient matchers for HTML tag "
-                   "names that are used in documentation comments"),
-        clEnumValN(GenClangCommentHTMLTagsProperties,
-                   "gen-clang-comment-html-tags-properties",
-                   "Generate efficient matchers for HTML tag "
-                   "properties"),
-        clEnumValN(GenClangCommentHTMLNamedCharacterReferences,
-                   "gen-clang-comment-html-named-character-references",
-                   "Generate function to translate named character "
-                   "references to UTF-8 sequences"),
-        clEnumValN(GenClangCommentCommandInfo, "gen-clang-comment-command-info",
-                   "Generate command properties for commands that "
-                   "are used in documentation comments"),
-        clEnumValN(GenClangCommentCommandList, "gen-clang-comment-command-list",
-                   "Generate list of commands that are used in "
-                   "documentation comments"),
-        clEnumValN(GenClangOpenCLBuiltins, "gen-clang-opencl-builtins",
-                   "Generate OpenCL builtin declaration handlers"),
-        clEnumValN(GenClangOpenCLBuiltinHeader,
-                   "gen-clang-opencl-builtin-header",
-                   "Generate OpenCL builtin header"),
-        clEnumValN(GenClangOpenCLBuiltinTests, "gen-clang-opencl-builtin-tests",
-                   "Generate OpenCL builtin declaration tests"),
-        clEnumValN(GenCXX11AttributeInfo, "gen-cxx11-attribute-info",
-                   "Generate CXX11 attributes info"),
-        clEnumValN(GenAttributeSpellingList, "gen-attribute-spelling-list",
-                   "Generate attribute spelling list"),
-        clEnumValN(GenArmNeon, "gen-arm-neon", "Generate arm_neon.h for clang"),
-        clEnumValN(GenArmFP16, "gen-arm-fp16", "Generate arm_fp16.h for clang"),
-        clEnumValN(GenArmBF16, "gen-arm-bf16", "Generate arm_bf16.h for clang"),
-        clEnumValN(GenArmVectorType, "gen-arm-vector-type",
-                   "Generate arm_vector_types.h for clang"),
-        clEnumValN(GenArmNeonSema, "gen-arm-neon-sema",
-                   "Generate ARM NEON sema support for clang"),
-        clEnumValN(GenArmNeonTest, "gen-arm-neon-test",
-                   "Generate ARM NEON tests for clang"),
-        clEnumValN(
-            GenArmImmCheckTypes, "gen-arm-immcheck-types",
-            "Generate arm_immcheck_types.inc (immediate range check types)"
-            " for clang"),
-        clEnumValN(GenArmSveHeader, "gen-arm-sve-header",
-                   "Generate arm_sve.h for clang"),
-        clEnumValN(GenArmSveBuiltins, "gen-arm-sve-builtins",
-                   "Generate arm_sve_builtins.inc for clang"),
-        clEnumValN(GenArmSveBuiltinsJSON, "gen-arm-sve-builtins-json",
-                   "Generate arm_sve_buitins.json"),
-        clEnumValN(GenArmSveBuiltinCG, "gen-arm-sve-builtin-codegen",
-                   "Generate arm_sve_builtin_cg_map.inc for clang"),
-        clEnumValN(GenArmSveTypeFlags, "gen-arm-sve-typeflags",
-                   "Generate arm_sve_typeflags.inc for clang"),
-        clEnumValN(GenArmSveRangeChecks, "gen-arm-sve-sema-rangechecks",
-                   "Generate arm_sve_sema_rangechecks.inc for clang"),
-        clEnumValN(GenArmSveStreamingAttrs, "gen-arm-sve-streaming-attrs",
-                   "Generate arm_sve_streaming_attrs.inc for clang"),
-        clEnumValN(GenArmSmeHeader, "gen-arm-sme-header",
-                   "Generate arm_sme.h for clang"),
-        clEnumValN(GenArmSmeBuiltins, "gen-arm-sme-builtins",
-                   "Generate arm_sme_builtins.inc for clang"),
-        clEnumValN(GenArmSmeBuiltinsJSON, "gen-arm-sme-builtins-json",
-                   "Generate arm_sme_buitins.json"),
-        clEnumValN(GenArmSmeBuiltinCG, "gen-arm-sme-builtin-codegen",
-                   "Generate arm_sme_builtin_cg_map.inc for clang"),
-        clEnumValN(GenArmSmeRangeChecks, "gen-arm-sme-sema-rangechecks",
-                   "Generate arm_sme_sema_rangechecks.inc for clang"),
-        clEnumValN(GenArmSmeStreamingAttrs, "gen-arm-sme-streaming-attrs",
-                   "Generate arm_sme_streaming_attrs.inc for clang"),
-        clEnumValN(GenArmSmeBuiltinZAState, "gen-arm-sme-builtin-za-state",
-                   "Generate arm_sme_builtins_za_state.inc for clang"),
-        clEnumValN(GenArmMveHeader, "gen-arm-mve-header",
-                   "Generate arm_mve.h for clang"),
-        clEnumValN(GenArmMveBuiltinDef, "gen-arm-mve-builtin-def",
-                   "Generate ARM MVE builtin definitions for clang"),
-        clEnumValN(GenArmMveBuiltinSema, "gen-arm-mve-builtin-sema",
-                   "Generate ARM MVE builtin sema checks for clang"),
-        clEnumValN(GenArmMveBuiltinCG, "gen-arm-mve-builtin-codegen",
-                   "Generate ARM MVE builtin code-generator for clang"),
-        clEnumValN(GenArmMveBuiltinAliases, "gen-arm-mve-builtin-aliases",
-                   "Generate list of valid ARM MVE builtin aliases for clang"),
-        clEnumValN(GenArmCdeHeader, "gen-arm-cde-header",
-                   "Generate arm_cde.h for clang"),
-        clEnumValN(GenArmCdeBuiltinDef, "gen-arm-cde-builtin-def",
-                   "Generate ARM CDE builtin definitions for clang"),
-        clEnumValN(GenArmCdeBuiltinSema, "gen-arm-cde-builtin-sema",
-                   "Generate ARM CDE builtin sema checks for clang"),
-        clEnumValN(GenArmCdeBuiltinCG, "gen-arm-cde-builtin-codegen",
-                   "Generate ARM CDE builtin code-generator for clang"),
-        clEnumValN(GenArmCdeBuiltinAliases, "gen-arm-cde-builtin-aliases",
-                   "Generate list of valid ARM CDE builtin aliases for clang"),
-        clEnumValN(GenRISCVVectorHeader, "gen-riscv-vector-header",
-                   "Generate riscv_vector.h for clang"),
-        clEnumValN(GenRISCVVectorBuiltins, "gen-riscv-vector-builtins",
-                   "Generate riscv_vector_builtins.inc for clang"),
-        clEnumValN(GenRISCVVectorBuiltinCG, "gen-riscv-vector-builtin-codegen",
-                   "Generate riscv_vector_builtin_cg.inc for clang"),
-        clEnumValN(GenRISCVVectorBuiltinSema, "gen-riscv-vector-builtin-sema",
-                   "Generate riscv_vector_builtin_sema.inc for clang"),
-        clEnumValN(GenRISCVSiFiveVectorBuiltins,
-                   "gen-riscv-sifive-vector-builtins",
-                   "Generate riscv_sifive_vector_builtins.inc for clang"),
-        clEnumValN(GenRISCVSiFiveVectorBuiltinCG,
-                   "gen-riscv-sifive-vector-builtin-codegen",
-                   "Generate riscv_sifive_vector_builtin_cg.inc for clang"),
-        clEnumValN(GenRISCVSiFiveVectorBuiltinSema,
-                   "gen-riscv-sifive-vector-builtin-sema",
-                   "Generate riscv_sifive_vector_builtin_sema.inc for clang"),
-        clEnumValN(GenRISCVAndesVectorBuiltins,
-                   "gen-riscv-andes-vector-builtins",
-                   "Generate riscv_andes_vector_builtins.inc for clang"),
-        clEnumValN(GenRISCVAndesVectorBuiltinCG,
-                   "gen-riscv-andes-vector-builtin-codegen",
-                   "Generate riscv_andes_vector_builtin_cg.inc for clang"),
-        clEnumValN(GenRISCVAndesVectorBuiltinSema,
-                   "gen-riscv-andes-vector-builtin-sema",
-                   "Generate riscv_andes_vector_builtin_sema.inc for clang"),
-        clEnumValN(GenHLSLAliasIntrinsics, "gen-hlsl-alias-intrinsics",
-                   "Generate HLSL alias intrinsic overloads for "
-                   "hlsl_alias_intrinsics.h"),
-        clEnumValN(GenHLSLInlineIntrinsics, "gen-hlsl-inline-intrinsics",
-                   "Generate HLSL inline intrinsic overloads for "
-                   "hlsl_intrinsics.h"),
-        clEnumValN(GenAttrDocs, "gen-attr-docs",
-                   "Generate attribute documentation"),
-        clEnumValN(GenBuiltinDocs, "gen-builtin-docs",
-                   "Generate builtin documentation"),
-        clEnumValN(GenDiagDocs, "gen-diag-docs",
-                   "Generate diagnostic documentation"),
-        clEnumValN(GenOptDocs, "gen-opt-docs", "Generate option documentation"),
-        clEnumValN(GenDataCollectors, "gen-clang-data-collectors",
-                   "Generate data collectors for AST nodes"),
-        clEnumValN(GenTestPragmaAttributeSupportedAttributes,
-                   "gen-clang-test-pragma-attribute-supported-attributes",
-                   "Generate a list of attributes supported by #pragma clang "
-                   "attribute for testing purposes"),
-        clEnumValN(GenClangBuiltinTraits, "gen-clang-builtin-traits",
-                   "Generate BuiltinTraits.inc for clang")));
+static ActionType Action = PrintRecords;
+static std::string ClangComponent;
 
-cl::opt<std::string>
-ClangComponent("clang-component",
-               cl::desc("Only use warnings from specified component"),
-               cl::value_desc("component"), cl::Hidden);
+static unsigned ClangComponentCount = 0;
+static constexpr clv2::OptionInfo<std::string> OI_ClangComponent{
+    "clang-component", "Only use warnings from specified component",
+    clv2::Hidden};
+
+static bool FirstAction = true;
+
+/// One flag per ActionType.  The flags are enumerated by regAction calls
+/// rather than a table, so each descriptor is built at runtime; the deque
+/// keeps their addresses stable for the parser.
+namespace {
+struct ActionOption {
+  ActionType Val;
+  std::optional<clv2::RuntimeOption<bool>> Opt;
+};
+} // namespace
+static std::deque<ActionOption> ActionOptions;
+
+/// Ctx is the ActionOption whose flag was given.
+static bool selectAction(void *Ctx, const bool &) {
+  Action = static_cast<ActionOption *>(Ctx)->Val;
+  return true;
+}
+
+static void regAction(clv2::OptionParser &P, const char *Name, ActionType Val,
+                      const char *Desc) {
+  // RuntimeOption is deliberately immovable (the parser holds its address),
+  // so construct in place rather than push_back-ing a temporary.
+  ActionOptions.emplace_back();
+  ActionOption &A = ActionOptions.back();
+  A.Val = Val;
+  A.Opt.emplace(Name, Desc, clv2::ValueDisallowed,
+                clv2::CtxCallback<bool>{&selectAction, &A});
+  // Group display has no descriptor spelling, so it is set on the option's own
+  // static info.
+  A.Opt->staticInfo().IsEnumGroupMember = true;
+  if (FirstAction) {
+    A.Opt->staticInfo().EnumGroupHeader = "Action to perform:";
+    FirstAction = false;
+  }
+  clv2::detail::OptionEntry E = A.Opt->makeEntry();
+  P.addDynamicEntry(std::move(E));
+}
+
+static void registerClangTblgenBackends(clv2::OptionParser &P) {
+
+  regAction(P, "print-records", PrintRecords,
+            "Print all records to stdout (default)");
+  regAction(P, "dump-json", DumpJSON,
+            "Dump all records as machine-readable JSON");
+  regAction(P, "gen-cir-lowering", GenCIRLowering,
+            "Generate CIR operation lowering patterns");
+  regAction(P, "gen-clang-attr-classes", GenClangAttrClasses,
+            "Generate clang attribute classes");
+  regAction(P, "gen-clang-attr-parser-string-switches",
+            GenClangAttrParserStringSwitches,
+            "Generate all parser-related attribute string switches");
+  regAction(P, "gen-clang-attr-subject-match-rules-parser-string-switches",
+            GenClangAttrSubjectMatchRulesParserStringSwitches,
+            "Generate all parser-related attribute subject match rule "
+            "string switches");
+  regAction(P, "gen-clang-attr-impl", GenClangAttrImpl,
+            "Generate clang attribute implementations");
+  regAction(P, "gen-clang-attr-list", GenClangAttrList,
+            "Generate a clang attribute list");
+  regAction(P, "gen-clang-attr-doc-table", GenClangAttrDocTable,
+            "Generate a table of attribute documentation");
+  regAction(P, "gen-clang-attr-subject-match-rule-list",
+            GenClangAttrSubjectMatchRuleList,
+            "Generate a clang attribute subject match rule list");
+  regAction(P, "gen-clang-attr-pch-read", GenClangAttrPCHRead,
+            "Generate clang PCH attribute reader");
+  regAction(P, "gen-clang-attr-pch-write", GenClangAttrPCHWrite,
+            "Generate clang PCH attribute writer");
+  regAction(P, "gen-clang-regular-keyword-attr-info",
+            GenClangRegularKeywordAttributeInfo,
+            "Generate a list of regular keyword attributes with info "
+            "about their arguments");
+  regAction(P, "gen-clang-attr-has-attribute-impl",
+            GenClangAttrHasAttributeImpl,
+            "Generate a clang attribute spelling list");
+  regAction(P, "gen-clang-attr-spelling-index", GenClangAttrSpellingListIndex,
+            "Generate a clang attribute spelling index");
+  regAction(P, "gen-clang-attr-ast-visitor", GenClangAttrASTVisitor,
+            "Generate a recursive AST visitor for clang attributes");
+  regAction(P, "gen-clang-attr-template-instantiate",
+            GenClangAttrTemplateInstantiate,
+            "Generate a clang template instantiate code");
+  regAction(P, "gen-clang-attr-parsed-attr-list", GenClangAttrParsedAttrList,
+            "Generate a clang parsed attribute list");
+  regAction(P, "gen-clang-attr-parsed-attr-impl", GenClangAttrParsedAttrImpl,
+            "Generate the clang parsed attribute helpers");
+  regAction(P, "gen-clang-attr-parsed-attr-kinds", GenClangAttrParsedAttrKinds,
+            "Generate a clang parsed attribute kinds");
+  regAction(P, "gen-clang-attr-is-type-dependent", GenClangAttrIsTypeDependent,
+            "Generate clang is type dependent attribute code");
+  regAction(P, "gen-clang-attr-text-node-dump", GenClangAttrTextNodeDump,
+            "Generate clang attribute text node dumper");
+  regAction(P, "gen-clang-attr-node-traverse", GenClangAttrNodeTraverse,
+            "Generate clang attribute traverser");
+  regAction(P, "gen-clang-attr-undocumented-list",
+            GenClangAttrUndocumentedAttrList,
+            "Generate a list of undocumented attributes");
+  regAction(P, "gen-clang-builtins", GenClangBuiltins,
+            "Generate clang builtins list");
+  regAction(P, "gen-clang-builtin-templates", GenClangBuiltinTemplates,
+            "Generate clang builtins list");
+  regAction(P, "gen-clang-diags-compat-ids", GenClangDiagsCompatIDs,
+            "Generate Clang diagnostic compatibility ids");
+  regAction(P, "gen-clang-diags-defs", GenClangDiagsDefs,
+            "Generate Clang diagnostics definitions");
+  regAction(P, "gen-clang-diags-enums", GenClangDiagsEnums,
+            "Generate Clang diagnostic enums for selects");
+  regAction(P, "gen-clang-diag-groups", GenClangDiagGroups,
+            "Generate Clang diagnostic groups");
+  regAction(P, "gen-clang-diags-index-name", GenClangDiagsIndexName,
+            "Generate Clang diagnostic name index");
+  regAction(P, "gen-clang-diags-stable-ids", GenClangDiagsStableIDs,
+            "Generate Clang diagnostic stable IDs");
+  regAction(P, "gen-clang-diags-iface", GenClangDiagsInterface,
+            "Generate Clang diagnostic interface headers");
+  regAction(P, "gen-clang-basic-reader", GenClangBasicReader,
+            "Generate Clang BasicReader classes");
+  regAction(P, "gen-clang-basic-writer", GenClangBasicWriter,
+            "Generate Clang BasicWriter classes");
+  regAction(P, "gen-clang-comment-nodes", GenClangCommentNodes,
+            "Generate Clang AST comment nodes");
+  regAction(P, "gen-clang-decl-nodes", GenClangDeclNodes,
+            "Generate Clang AST declaration nodes");
+  regAction(P, "gen-clang-stmt-nodes", GenClangStmtNodes,
+            "Generate Clang AST statement nodes");
+  regAction(P, "gen-clang-type-nodes", GenClangTypeNodes,
+            "Generate Clang AST type nodes");
+  regAction(P, "gen-clang-type-reader", GenClangTypeReader,
+            "Generate Clang AbstractTypeReader class");
+  regAction(P, "gen-clang-type-writer", GenClangTypeWriter,
+            "Generate Clang AbstractTypeWriter class");
+  regAction(P, "gen-clang-opcodes", GenClangOpcodes,
+            "Generate Clang constexpr interpreter opcodes");
+  regAction(P, "gen-clang-sa-checkers", GenClangSACheckers,
+            "Generate Clang Static Analyzer checkers");
+  regAction(P, "gen-clang-syntax-node-list", GenClangSyntaxNodeList,
+            "Generate list of Clang Syntax Tree node types");
+  regAction(P, "gen-clang-syntax-node-classes", GenClangSyntaxNodeClasses,
+            "Generate definitions of Clang Syntax Tree node classes");
+  regAction(P, "gen-clang-comment-html-tags", GenClangCommentHTMLTags,
+            "Generate efficient matchers for HTML tag "
+            "names that are used in documentation comments");
+  regAction(P, "gen-clang-comment-html-tags-properties",
+            GenClangCommentHTMLTagsProperties,
+            "Generate efficient matchers for HTML tag properties");
+  regAction(P, "gen-clang-comment-html-named-character-references",
+            GenClangCommentHTMLNamedCharacterReferences,
+            "Generate function to translate named character "
+            "references to UTF-8 sequences");
+  regAction(P, "gen-clang-comment-command-info", GenClangCommentCommandInfo,
+            "Generate command properties for commands that "
+            "are used in documentation comments");
+  regAction(P, "gen-clang-comment-command-list", GenClangCommentCommandList,
+            "Generate list of commands that are used in "
+            "documentation comments");
+  regAction(P, "gen-clang-opencl-builtins", GenClangOpenCLBuiltins,
+            "Generate OpenCL builtin declaration handlers");
+  regAction(P, "gen-clang-opencl-builtin-header", GenClangOpenCLBuiltinHeader,
+            "Generate OpenCL builtin header");
+  regAction(P, "gen-clang-opencl-builtin-tests", GenClangOpenCLBuiltinTests,
+            "Generate OpenCL builtin declaration tests");
+  regAction(P, "gen-cxx11-attribute-info", GenCXX11AttributeInfo,
+            "Generate CXX11 attributes info");
+  regAction(P, "gen-attribute-spelling-list", GenAttributeSpellingList,
+            "Generate attribute spelling list");
+  regAction(P, "gen-arm-neon", GenArmNeon, "Generate arm_neon.h for clang");
+  regAction(P, "gen-arm-fp16", GenArmFP16, "Generate arm_fp16.h for clang");
+  regAction(P, "gen-arm-bf16", GenArmBF16, "Generate arm_bf16.h for clang");
+  regAction(P, "gen-arm-vector-type", GenArmVectorType,
+            "Generate arm_vector_types.h for clang");
+  regAction(P, "gen-arm-neon-sema", GenArmNeonSema,
+            "Generate ARM NEON sema support for clang");
+  regAction(P, "gen-arm-neon-test", GenArmNeonTest,
+            "Generate ARM NEON tests for clang");
+  regAction(P, "gen-arm-immcheck-types", GenArmImmCheckTypes,
+            "Generate arm_immcheck_types.inc (immediate range check "
+            "types) for clang");
+  regAction(P, "gen-arm-mve-header", GenArmMveHeader,
+            "Generate arm_mve.h for clang");
+  regAction(P, "gen-arm-mve-builtin-def", GenArmMveBuiltinDef,
+            "Generate ARM MVE builtin definitions for clang");
+  regAction(P, "gen-arm-mve-builtin-sema", GenArmMveBuiltinSema,
+            "Generate ARM MVE builtin sema checks for clang");
+  regAction(P, "gen-arm-mve-builtin-codegen", GenArmMveBuiltinCG,
+            "Generate ARM MVE builtin code-generator for clang");
+  regAction(P, "gen-arm-mve-builtin-aliases", GenArmMveBuiltinAliases,
+            "Generate list of valid ARM MVE builtin aliases for clang");
+  regAction(P, "gen-arm-sve-header", GenArmSveHeader,
+            "Generate arm_sve.h for clang");
+  regAction(P, "gen-arm-sve-builtins", GenArmSveBuiltins,
+            "Generate arm_sve_builtins.inc for clang");
+  regAction(P, "gen-arm-sve-builtins-json", GenArmSveBuiltinsJSON,
+            "Generate arm_sve_buitins.json");
+  regAction(P, "gen-arm-sve-builtin-codegen", GenArmSveBuiltinCG,
+            "Generate arm_sve_builtin_cg_map.inc for clang");
+  regAction(P, "gen-arm-sve-typeflags", GenArmSveTypeFlags,
+            "Generate arm_sve_typeflags.inc for clang");
+  regAction(P, "gen-arm-sve-sema-rangechecks", GenArmSveRangeChecks,
+            "Generate arm_sve_sema_rangechecks.inc for clang");
+  regAction(P, "gen-arm-sve-streaming-attrs", GenArmSveStreamingAttrs,
+            "Generate arm_sve_streaming_attrs.inc for clang");
+  regAction(P, "gen-arm-sme-header", GenArmSmeHeader,
+            "Generate arm_sme.h for clang");
+  regAction(P, "gen-arm-sme-builtins", GenArmSmeBuiltins,
+            "Generate arm_sme_builtins.inc for clang");
+  regAction(P, "gen-arm-sme-builtins-json", GenArmSmeBuiltinsJSON,
+            "Generate arm_sme_buitins.json");
+  regAction(P, "gen-arm-sme-builtin-codegen", GenArmSmeBuiltinCG,
+            "Generate arm_sme_builtin_cg_map.inc for clang");
+  regAction(P, "gen-arm-sme-sema-rangechecks", GenArmSmeRangeChecks,
+            "Generate arm_sme_sema_rangechecks.inc for clang");
+  regAction(P, "gen-arm-sme-streaming-attrs", GenArmSmeStreamingAttrs,
+            "Generate arm_sme_streaming_attrs.inc for clang");
+  regAction(P, "gen-arm-sme-builtin-za-state", GenArmSmeBuiltinZAState,
+            "Generate arm_sme_builtins_za_state.inc for clang");
+  regAction(P, "gen-arm-cde-header", GenArmCdeHeader,
+            "Generate arm_cde.h for clang");
+  regAction(P, "gen-arm-cde-builtin-def", GenArmCdeBuiltinDef,
+            "Generate ARM CDE builtin definitions for clang");
+  regAction(P, "gen-arm-cde-builtin-sema", GenArmCdeBuiltinSema,
+            "Generate ARM CDE builtin sema checks for clang");
+  regAction(P, "gen-arm-cde-builtin-codegen", GenArmCdeBuiltinCG,
+            "Generate ARM CDE builtin code-generator for clang");
+  regAction(P, "gen-arm-cde-builtin-aliases", GenArmCdeBuiltinAliases,
+            "Generate list of valid ARM CDE builtin aliases for clang");
+  regAction(P, "gen-riscv-vector-header", GenRISCVVectorHeader,
+            "Generate riscv_vector.h for clang");
+  regAction(P, "gen-riscv-vector-builtins", GenRISCVVectorBuiltins,
+            "Generate riscv_vector_builtins.inc for clang");
+  regAction(P, "gen-riscv-vector-builtin-codegen", GenRISCVVectorBuiltinCG,
+            "Generate riscv_vector_builtin_cg.inc for clang");
+  regAction(P, "gen-riscv-vector-builtin-sema", GenRISCVVectorBuiltinSema,
+            "Generate riscv_vector_builtin_sema.inc for clang");
+  regAction(P, "gen-riscv-sifive-vector-builtins", GenRISCVSiFiveVectorBuiltins,
+            "Generate riscv_sifive_vector_builtins.inc for clang");
+  regAction(P, "gen-riscv-sifive-vector-builtin-codegen",
+            GenRISCVSiFiveVectorBuiltinCG,
+            "Generate riscv_sifive_vector_builtin_cg.inc for clang");
+  regAction(P, "gen-riscv-sifive-vector-builtin-sema",
+            GenRISCVSiFiveVectorBuiltinSema,
+            "Generate riscv_sifive_vector_builtin_sema.inc for clang");
+  regAction(P, "gen-riscv-andes-vector-builtins", GenRISCVAndesVectorBuiltins,
+            "Generate riscv_andes_vector_builtins.inc for clang");
+  regAction(P, "gen-riscv-andes-vector-builtin-codegen",
+            GenRISCVAndesVectorBuiltinCG,
+            "Generate riscv_andes_vector_builtin_cg.inc for clang");
+  regAction(P, "gen-riscv-andes-vector-builtin-sema",
+            GenRISCVAndesVectorBuiltinSema,
+            "Generate riscv_andes_vector_builtin_sema.inc for clang");
+  regAction(P, "gen-hlsl-alias-intrinsics", GenHLSLAliasIntrinsics,
+            "Generate HLSL alias intrinsic overloads for "
+            "hlsl_alias_intrinsics.h");
+  regAction(P, "gen-hlsl-inline-intrinsics", GenHLSLInlineIntrinsics,
+            "Generate HLSL inline intrinsic overloads for "
+            "hlsl_intrinsics.h");
+  regAction(P, "gen-attr-docs", GenAttrDocs,
+            "Generate attribute documentation");
+  regAction(P, "gen-builtin-docs", GenBuiltinDocs,
+            "Generate builtin documentation");
+  regAction(P, "gen-diag-docs", GenDiagDocs,
+            "Generate diagnostic documentation");
+  regAction(P, "gen-opt-docs", GenOptDocs, "Generate option documentation");
+  regAction(P, "gen-clang-data-collectors", GenDataCollectors,
+            "Generate data collectors for AST nodes");
+  regAction(P, "gen-clang-test-pragma-attribute-supported-attributes",
+            GenTestPragmaAttributeSupportedAttributes,
+            "Generate a list of attributes supported by #pragma clang "
+            "attribute for testing purposes");
+  regAction(P, "gen-clang-builtin-traits", GenClangBuiltinTraits,
+            "Generate BuiltinTraits.inc for clang");
+  P.addDynamicEntry(
+      clv2::makeEntry<&OI_ClangComponent>(ClangComponent, ClangComponentCount));
+}
 
 bool ClangTableGenMain(raw_ostream &OS, const RecordKeeper &Records) {
   switch (Action) {
@@ -708,7 +745,11 @@ bool ClangTableGenMain(raw_ostream &OS, const RecordKeeper &Records) {
 int main(int argc, char **argv) {
   sys::PrintStackTraceOnErrorSignal(argv[0]);
   PrettyStackTraceProgram X(argc, argv);
-  cl::ParseCommandLineOptions(argc, argv);
+  clv2::OptionParser P;
+  registerTableGenMainOptions(P);
+  registerClangTblgenBackends(P);
+  llvm::TableGen::Emitter::registerBackendOptions(P);
+  P.parse(argc, argv);
 
   llvm_shutdown_obj Y;
 

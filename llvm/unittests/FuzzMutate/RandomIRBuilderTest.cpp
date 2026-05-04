@@ -48,7 +48,7 @@ TEST(RandomIRBuilderTest, ShuffleVectorIncorrectOperands) {
   // Test that we don't create load instruction as a source for the shuffle
   // vector operation.
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   const char *Source =
       "define <2 x i32> @test(<2 x i1> %cond, <2 x i32> %a) {\n"
       "  %A = alloca <2 x i32>\n"
@@ -88,7 +88,7 @@ TEST(RandomIRBuilderTest, ShuffleVectorIncorrectOperands) {
 TEST(RandomIRBuilderTest, InsertValueIndexes) {
   // Check that we will generate correct indexes for the insertvalue operation
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   const char *Source = "%T = type {i8, i32, i64}\n"
                        "define void @test() {\n"
                        "  %A = alloca %T\n"
@@ -134,7 +134,7 @@ TEST(RandomIRBuilderTest, ShuffleVectorSink) {
   // Check that we will never use shuffle vector mask as a sink from the
   // unrelated operation.
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   const char *SourceCode =
       "define void @test(<4 x i32> %a) {\n"
       "  %S1 = shufflevector <4 x i32> %a, <4 x i32> %a, <4 x i32> undef\n"
@@ -167,7 +167,7 @@ TEST(RandomIRBuilderTest, ShuffleVectorSink) {
 TEST(RandomIRBuilderTest, InsertValueArray) {
   // Check that we can generate insertvalue for the vector operations
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   const char *SourceCode = "define void @test() {\n"
                            "  %A = alloca [8 x i32]\n"
                            "  %L = load [8 x i32], ptr %A"
@@ -202,7 +202,7 @@ TEST(RandomIRBuilderTest, InsertValueArray) {
 TEST(RandomIRBuilderTest, Invokes) {
   // Check that we never generate load or store after invoke instruction
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   const char *SourceCode =
       "declare ptr @f()"
       "declare i32 @personality_function()"
@@ -238,7 +238,7 @@ TEST(RandomIRBuilderTest, SwiftError) {
   // Check that we never pick swifterror value as a source for operation
   // other than load, store and call.
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   const char *SourceCode = "declare void @use(ptr swifterror %err)"
                            "define void @test() {\n"
                            "entry:\n"
@@ -267,7 +267,7 @@ TEST(RandomIRBuilderTest, SwiftError) {
 TEST(RandomIRBuilderTest, dontConnectToSwitch) {
   // Check that we never put anything into switch's case branch
   // If we accidently put a variable, the module is invalid.
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   const char *SourceCode = "\n\
     define void @test(i1 %C1, i1 %C2, i32 %I, i32 %J) { \n\
     Entry:  \n\
@@ -310,7 +310,7 @@ TEST(RandomIRBuilderTest, dontConnectToSwitch) {
 }
 
 TEST(RandomIRBuilderTest, createStackMemory) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   const char *SourceCode = "\n\
     define void @test(i1 %C1, i1 %C2, i32 %I, i32 %J) { \n\
     Entry:  \n\
@@ -362,7 +362,7 @@ TEST(RandomIRBuilderTest, createStackMemory) {
 }
 
 TEST(RandomIRBuilderTest, findOrCreateGlobalVariable) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   const char *SourceCode = "\n\
     @G0 = external global i16 \n\
     @G1 = global i32 1 \n\
@@ -453,7 +453,7 @@ TEST(RandomIRBuilderTest, findSourceAndSink) {
           %Add.5 = add i64 %PHI.3, 3 \n\
           ret i64 %Add.5  \n\
       }";
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::array<Type *, 3> Types = {Type::getInt1Ty(Ctx), Type::getInt32Ty(Ctx),
                                  Type::getInt64Ty(Ctx)};
   std::mt19937 mt(Seed);
@@ -496,7 +496,7 @@ TEST(RandomIRBuilderTest, sinkToIntrinsic) {
             call void @llvm.ubsantrap(i8 1)  \n\
             ret double %sqrt \n\
         }";
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::array<Type *, 3> Types = {Type::getInt8Ty(Ctx), Type::getInt64Ty(Ctx),
                                  Type::getDoubleTy(Ctx)};
   std::mt19937 mt(Seed);
@@ -540,7 +540,7 @@ TEST(RandomIRBuilderTest, DoNotCallPointerWhenSink) {
             call void @g()  \n\
             ret void \n\
         }";
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::mt19937 mt(Seed);
   std::uniform_int_distribution<int> RandInt(INT_MIN, INT_MAX);
 
@@ -581,7 +581,7 @@ TEST(RandomIRBuilderTest, SrcAndSinkWOrphanBlock) {
             %Le42 = icmp sle i32 %Int, 42 \n\
             ret i1 %Le42 \n\
         }";
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::mt19937 mt(Seed);
   std::uniform_int_distribution<int> RandInt(INT_MIN, INT_MAX);
   std::array<Type *, 3> IntTys(

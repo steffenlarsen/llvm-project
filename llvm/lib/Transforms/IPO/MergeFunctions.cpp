@@ -123,12 +123,13 @@
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/FunctionComparator.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <algorithm>
@@ -136,7 +137,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
-#include <optional>
 #include <set>
 #include <utility>
 #include <vector>
@@ -149,13 +149,6 @@ STATISTIC(NumFunctionsMerged, "Number of functions merged");
 STATISTIC(NumThunksWritten, "Number of thunks generated");
 STATISTIC(NumAliasesWritten, "Number of aliases generated");
 STATISTIC(NumDoubleWeak, "Number of new functions created");
-
-static cl::opt<unsigned> NumFunctionsForVerificationCheck(
-    "mergefunc-verify",
-    cl::desc("How many functions in a module could be used for "
-             "MergeFunctions to pass a basic correctness check. "
-             "'0' disables this check. Works only with '-debug' key."),
-    cl::init(0), cl::Hidden);
 
 // Under option -mergefunc-preserve-debug-info we:
 // - Do not create a new function for a thunk.
@@ -171,16 +164,21 @@ static cl::opt<unsigned> NumFunctionsForVerificationCheck(
 //   behaviour differs from the underlying -mergefunc implementation which
 //   modifies the thunk's call site to point to the shared implementation
 //   when both occur within the same translation unit.
-static cl::opt<bool>
-    MergeFunctionsPDI("mergefunc-preserve-debug-info", cl::Hidden,
-                      cl::init(false),
-                      cl::desc("Preserve debug info in thunk when mergefunc "
-                               "transformations are made."));
 
-static cl::opt<bool>
-    MergeFunctionsAliases("mergefunc-use-aliases", cl::Hidden,
-                          cl::init(false),
-                          cl::desc("Allow mergefunc to create aliases"));
+static unsigned getNumFunctionsForVerificationCheck(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_NumFunctionsForVerificationCheck>(
+      M.getContext().getOptionsContext());
+}
+
+static bool getMergeFunctionsPDI(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_MergeFunctionsPDI>(
+      M.getContext().getOptionsContext());
+}
+
+static bool getMergeFunctionsAliases(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_MergeFunctionsAliases>(
+      M.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -361,7 +359,10 @@ MergeFunctionsPass::runOnFunctions(ArrayRef<Function *> Funcs,
 
 #ifndef NDEBUG
 bool MergeFunctions::doFunctionalCheck(std::vector<WeakTrackingVH> &Worklist) {
-  if (const unsigned Max = NumFunctionsForVerificationCheck) {
+  if (Worklist.empty())
+    return true;
+  if (const unsigned Max = getNumFunctionsForVerificationCheck(
+          *cast<Function>(Worklist.front())->getParent())) {
     unsigned TripleNumber = 0;
     bool Valid = true;
 
@@ -767,7 +768,8 @@ void MergeFunctions::writeThunk(Function *F, Function *G) {
   std::vector<DbgVariableRecord *> PDVRUnrelatedWL;
   BasicBlock *BB = nullptr;
   Function *NewG = nullptr;
-  if (MergeFunctionsPDI) {
+  const Module &M = *F->getParent();
+  if (getMergeFunctionsPDI(M)) {
     LLVM_DEBUG(dbgs() << "writeThunk: (MergeFunctionsPDI) Do not create a new "
                          "function as thunk; retain original: "
                       << G->getName() << "()\n");
@@ -787,7 +789,7 @@ void MergeFunctions::writeThunk(Function *F, Function *G) {
   }
 
   IRBuilder<> Builder(BB);
-  Function *H = MergeFunctionsPDI ? G : NewG;
+  Function *H = getMergeFunctionsPDI(M) ? G : NewG;
   SmallVector<Value *, 16> Args;
   unsigned i = 0;
   FunctionType *FFTy = F->getFunctionType();
@@ -810,7 +812,7 @@ void MergeFunctions::writeThunk(Function *F, Function *G) {
     RI = Builder.CreateRet(Builder.CreateAggregateCast(CI, H->getReturnType()));
   }
 
-  if (MergeFunctionsPDI) {
+  if (getMergeFunctionsPDI(M)) {
     DISubprogram *DIS = G->getSubprogram();
     if (DIS) {
       DebugLoc CIDbgLoc =
@@ -849,7 +851,7 @@ void MergeFunctions::writeThunk(Function *F, Function *G) {
 
 // Whether this function may be replaced by an alias
 static bool canCreateAliasFor(Function *F) {
-  if (!MergeFunctionsAliases || !F->hasGlobalUnnamedAddr())
+  if (!getMergeFunctionsAliases(*F->getParent()) || !F->hasGlobalUnnamedAddr())
     return false;
 
   // We should only see linkages supported by aliases here
@@ -914,8 +916,8 @@ static void mergeEntryCountsAndImportsInto(Function &F, Function &G) {
 // is set, G's profile metadata is merged into F.
 bool MergeFunctions::writeThunkOrAliasIfNeeded(Function *F, Function *G,
                                                bool MergeProfile) {
-  bool ShouldErase =
-      G->isDiscardableIfUnused() && G->use_empty() && !MergeFunctionsPDI;
+  bool ShouldErase = G->isDiscardableIfUnused() && G->use_empty() &&
+                     !getMergeFunctionsPDI(*G->getParent());
   bool ShouldAlias = canCreateAliasFor(G);
   bool ShouldThunk = canCreateThunkFor(F);
 
@@ -1181,7 +1183,7 @@ void MergeFunctions::mergeTwoFunctions(Function *F, Function *G) {
   } else {
     // For better debugability, under MergeFunctionsPDI, we do not modify G's
     // call sites to point to F even when within the same translation unit.
-    if (!G->isInterposable() && !MergeFunctionsPDI) {
+    if (!G->isInterposable() && !getMergeFunctionsPDI(*G->getParent())) {
       // Functions referred to by llvm.used/llvm.compiler.used are special:
       // there are uses of the symbol name that are not visible to LLVM,
       // usually from inline asm.
@@ -1202,7 +1204,8 @@ void MergeFunctions::mergeTwoFunctions(Function *F, Function *G) {
     // If G was internal then we may have replaced all uses of G with F. If so,
     // stop here and delete G. There's no need for a thunk. (See note on
     // MergeFunctionsPDI above).
-    if (G->isDiscardableIfUnused() && G->use_empty() && !MergeFunctionsPDI) {
+    if (G->isDiscardableIfUnused() && G->use_empty() &&
+        !getMergeFunctionsPDI(*G->getParent())) {
       mergeInstrProfMetadataInto(F, G);
       mergeEntryCountsAndImportsInto(*F, *G);
       G->eraseFromParent();

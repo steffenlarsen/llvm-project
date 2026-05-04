@@ -28,52 +28,70 @@
 
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/TargetParser/Host.h"
 
 #include <memory>
 #include <string>
+#include <vector>
 
 using namespace clang;
 
-static llvm::cl::opt<std::string> Expression(
-    "expression", llvm::cl::Required,
-    llvm::cl::desc("Path to a file containing the expression to parse"));
+// --- constexpr option descriptors ---
+inline constexpr llvm::clv2::OptionInfo<std::string> CITExpressionOpt{
+    "expression", "Path to a file containing the expression to parse",
+    llvm::clv2::Required};
 
-static llvm::cl::list<std::string>
-    Imports("import",
-            llvm::cl::desc("Path to a file containing declarations to import"));
+inline constexpr llvm::clv2::ListOptionInfo<std::string> CITImportOpt{
+    "import", "Path to a file containing declarations to import"};
 
-static llvm::cl::opt<bool>
-    Direct("direct", llvm::cl::Optional,
-           llvm::cl::desc("Use the parsed declarations without indirection"));
+inline constexpr llvm::clv2::OptionInfo<bool> CITDirectOpt{
+    "direct", "Use the parsed declarations without indirection"};
 
-static llvm::cl::opt<bool> UseOrigins(
-    "use-origins", llvm::cl::Optional,
-    llvm::cl::desc(
-        "Use DeclContext origin information for more accurate lookups"));
+inline constexpr llvm::clv2::OptionInfo<bool> CITUseOriginsOpt{
+    "use-origins",
+    "Use DeclContext origin information for more accurate lookups"};
 
-static llvm::cl::list<std::string>
-    ClangArgs("Xcc",
-              llvm::cl::desc("Argument to pass to the CompilerInvocation"),
-              llvm::cl::CommaSeparated);
+inline constexpr llvm::clv2::ListOptionInfo<std::string> CITClangArgsOpt{
+    "Xcc", "Argument to pass to the CompilerInvocation",
+    llvm::clv2::CommaSeparated};
 
-static llvm::cl::opt<std::string>
-    Input("x", llvm::cl::Optional,
-          llvm::cl::desc("The language to parse (default: c++)"),
-          llvm::cl::init("c++"));
+inline constexpr llvm::clv2::OptionInfo<std::string> CITInputOpt{
+    "x", "The language to parse (default: c++)", llvm::clv2::Init{"c++"}};
 
-static llvm::cl::opt<bool> ObjCARC("objc-arc", llvm::cl::init(false),
-                                   llvm::cl::desc("Emable ObjC ARC"));
+inline constexpr llvm::clv2::OptionInfo<bool> CITObjCARCOpt{"objc-arc",
+                                                            "Emable ObjC ARC"};
 
-static llvm::cl::opt<bool> DumpAST("dump-ast", llvm::cl::init(false),
-                                   llvm::cl::desc("Dump combined AST"));
+inline constexpr llvm::clv2::OptionInfo<bool> CITDumpASTOpt{
+    "dump-ast", "Dump combined AST"};
 
-static llvm::cl::opt<bool> DumpIR("dump-ir", llvm::cl::init(false),
-                                  llvm::cl::desc("Dump IR from final parse"));
+inline constexpr llvm::clv2::OptionInfo<bool> CITDumpIROpt{
+    "dump-ir", "Dump IR from final parse"};
+
+inline constexpr llvm::clv2::OptionsRegistry<
+    &CITExpressionOpt, &CITImportOpt, &CITDirectOpt, &CITUseOriginsOpt,
+    &CITClangArgsOpt, &CITInputOpt, &CITObjCARCOpt, &CITDumpASTOpt,
+    &CITDumpIROpt>
+    ClangImportTestReg;
+
+namespace {
+struct ClangImportTestOptions {
+  std::string Expression;
+  std::vector<std::string> Imports;
+  bool Direct = false;
+  bool UseOrigins = false;
+  std::vector<std::string> ClangArgs;
+  std::string Input = "c++";
+  bool ObjCARC = false;
+  bool DumpAST = false;
+  bool DumpIR = false;
+};
+} // namespace
 
 namespace init_convenience {
 class TestDiagnosticConsumer : public DiagnosticConsumer {
@@ -161,7 +179,8 @@ private:
   }
 };
 
-std::unique_ptr<CompilerInstance> BuildCompilerInstance() {
+std::unique_ptr<CompilerInstance>
+BuildCompilerInstance(const ClangImportTestOptions &Opts) {
   DiagnosticOptions DiagOpts;
   auto DC = std::make_unique<TestDiagnosticConsumer>();
   auto Diags = CompilerInstance::createDiagnostics(
@@ -170,14 +189,15 @@ std::unique_ptr<CompilerInstance> BuildCompilerInstance() {
 
   auto Inv = std::make_unique<CompilerInvocation>();
 
-  std::vector<const char *> ClangArgv(ClangArgs.size());
-  std::transform(ClangArgs.begin(), ClangArgs.end(), ClangArgv.begin(),
+  std::vector<const char *> ClangArgv(Opts.ClangArgs.size());
+  std::transform(Opts.ClangArgs.begin(), Opts.ClangArgs.end(),
+                 ClangArgv.begin(),
                  [](const std::string &s) -> const char * { return s.data(); });
   CompilerInvocation::CreateFromArgs(*Inv, ClangArgv, *Diags);
 
   {
     using namespace driver::types;
-    ID Id = lookupTypeForTypeSpecifier(Input.c_str());
+    ID Id = lookupTypeForTypeSpecifier(Opts.Input.c_str());
     assert(Id != TY_INVALID);
     if (isCXX(Id)) {
       Inv->getLangOpts().CPlusPlus = true;
@@ -188,7 +208,7 @@ std::unique_ptr<CompilerInstance> BuildCompilerInstance() {
       Inv->getLangOpts().ObjC = 1;
     }
   }
-  Inv->getLangOpts().ObjCAutoRefCount = ObjCARC;
+  Inv->getLangOpts().ObjCAutoRefCount = Opts.ObjCARC;
 
   Inv->getLangOpts().Bool = true;
   Inv->getLangOpts().WChar = true;
@@ -225,9 +245,9 @@ std::unique_ptr<CompilerInstance> BuildCompilerInstance() {
 std::unique_ptr<ASTContext>
 BuildASTContext(CompilerInstance &CI, SelectorTable &ST, Builtin::Context &BC) {
   auto &PP = CI.getPreprocessor();
-  auto AST = std::make_unique<ASTContext>(
-      CI.getLangOpts(), CI.getSourceManager(),
-      PP.getIdentifierTable(), ST, BC, PP.TUKind);
+  auto AST =
+      std::make_unique<ASTContext>(CI.getLangOpts(), CI.getSourceManager(),
+                                   PP.getIdentifierTable(), ST, BC, PP.TUKind);
   AST->InitBuiltinTypes(CI.getTarget());
   return AST;
 }
@@ -280,8 +300,9 @@ void AddExternalSource(CIAndOrigins &CI,
   CI.getASTContext().getTranslationUnitDecl()->setHasExternalVisibleStorage();
 }
 
-CIAndOrigins BuildIndirect(CIAndOrigins &CI) {
-  CIAndOrigins IndirectCI{init_convenience::BuildCompilerInstance()};
+CIAndOrigins BuildIndirect(CIAndOrigins &CI,
+                           const ClangImportTestOptions &Opts) {
+  CIAndOrigins IndirectCI{init_convenience::BuildCompilerInstance(Opts)};
   auto ST = std::make_unique<SelectorTable>();
   auto BC = std::make_unique<Builtin::Context>();
   std::unique_ptr<ASTContext> AST = init_convenience::BuildASTContext(
@@ -307,8 +328,9 @@ llvm::Error ParseSource(const std::string &Path, CompilerInstance &CI,
 
 llvm::Expected<CIAndOrigins> Parse(const std::string &Path,
                                    llvm::MutableArrayRef<CIAndOrigins> Imports,
-                                   bool ShouldDumpAST, bool ShouldDumpIR) {
-  CIAndOrigins CI{init_convenience::BuildCompilerInstance()};
+                                   bool ShouldDumpAST, bool ShouldDumpIR,
+                                   const ClangImportTestOptions &Opts) {
+  CIAndOrigins CI{init_convenience::BuildCompilerInstance(Opts)};
   auto ST = std::make_unique<SelectorTable>();
   auto BC = std::make_unique<Builtin::Context>();
   std::unique_ptr<ASTContext> AST =
@@ -319,7 +341,8 @@ llvm::Expected<CIAndOrigins> Parse(const std::string &Path,
 
   std::vector<std::unique_ptr<ASTConsumer>> ASTConsumers;
 
-  auto LLVMCtx = std::make_unique<llvm::LLVMContext>();
+  auto LLVMCtx =
+      std::make_unique<llvm::LLVMContext>(llvm::clv2::defaultOptionsContext());
   ASTConsumers.push_back(
       init_convenience::BuildCodeGen(CI.getCompilerInstance(), *LLVMCtx));
   auto &CG = *static_cast<CodeGenerator *>(ASTConsumers.back().get());
@@ -361,10 +384,252 @@ void Forget(CIAndOrigins &CI, llvm::MutableArrayRef<CIAndOrigins> Imports) {
 int main(int argc, const char **argv) {
   const bool DisableCrashReporting = true;
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0], DisableCrashReporting);
-  llvm::cl::ParseCommandLineOptions(argc, argv);
+  llvm::clv2::OptionParser P;
+  P.add<&ClangImportTestReg>();
+  llvm::RegisterCommonLLVMOptionsHidden(P);
+  // Auto-generated showOptions for clang-import-test
+  P.showOptions({
+      "abort-on-max-devirt-iterations-reached",
+      "arc-contract-use-objc-claim-rv",
+      "atomic-counter-update-promoted",
+      "atomic-first-counter",
+      "basic-block-section-match-infer",
+      "bounds-checking-single-trap",
+      "cfg-hide-cold-paths",
+      "cfg-hide-deoptimize-paths",
+      "cfg-hide-unreachable-paths",
+      "check-functions-filter",
+      "conditional-counter-update",
+      "cost-kind",
+      "ir2vec-arg-weight",
+      "ir2vec-kind",
+      "ir2vec-opc-weight",
+      "ir2vec-type-weight",
+      "ir2vec-vocab-path",
+      "mir2vec-common-operand-weight",
+      "mir2vec-kind",
+      "mir2vec-opc-weight",
+      "mir2vec-print-all-vocab-entries",
+      "mir2vec-reg-operand-weight",
+      "mir2vec-vocab-path",
+      "ctx-profile-force-is-specialized",
+      "debugify-atoms",
+      "debugify-func-limit",
+      "debugify-level",
+      "debugify-quiet",
+      "devirtualize-speculatively",
+      "direct",
+      "disable-auto-upgrade-debug-info",
+      "disable-i2p-p2i-opt",
+      "do-counter-promotion",
+      "dot-cfg-mssa",
+      "dump-ast",
+      "dump-ir",
+      "elide-all-zero-branch-weights",
+      "emit-bb-hash",
+      "enable-devirtualize-speculatively",
+      "enable-gvn-hoist",
+      "enable-gvn-memdep",
+      "enable-gvn-memoryssa",
+      "enable-gvn-sink",
+      "enable-jump-table-to-switch",
+      "enable-load-in-loop-pre",
+      "enable-load-pre",
+      "enable-loop-simplifycfg-term-folding",
+      "enable-name-compression",
+      "enable-poison-reuse-guard",
+      "enable-split-backedge-in-load-pre",
+      "enable-split-loopiv-heuristic",
+      "enable-vtable-profile-use",
+      "enable-vtable-value-profiling",
+      "expand-variadics-override",
+      "experimental-debug-variable-locations",
+      "expression",
+      "force-tail-folding-style",
+      "fs-profile-debug-bw-threshold",
+      "fs-profile-debug-prob-diff-threshold",
+      "generate-merged-base-profiles",
+      "hash-based-counter-split",
+      "hot-cold-split",
+      "hwasan-percentile-cutoff-hot",
+      "hwasan-random-rate",
+      "import",
+      "import-all-index",
+      "instcombine-code-sinking",
+      "instcombine-guard-widening-window",
+      "instcombine-maxarray-size",
+      "instcombine-max-num-phis",
+      "instcombine-max-sink-users",
+      "instcombine-negator-enabled",
+      "instcombine-negator-max-depth",
+      "instrprof-atomic-counter-update-all",
+      "internalize-public-api-file",
+      "internalize-public-api-list",
+      "intrinsic-cost-strategy",
+      "iterative-counter-promotion",
+      "lower-allow-check-percentile-cutoff-hot",
+      "lower-allow-check-random-rate",
+      "lto-embed-bitcode",
+      "matrix-default-layout",
+      "matrix-print-after-transpose-opt",
+      "max-counter-promotions",
+      "max-counter-promotions-per-loop",
+      "mir-strip-debugify-only",
+      "misexpect-tolerance",
+      "ms-secure-hotpatch-functions-file",
+      "ms-secure-hotpatch-functions-list",
+      "no-discriminators",
+      "objc-arc",
+      "object-size-offset-visitor-max-visit-instructions",
+      "pgo-block-coverage",
+      "pgo-temporal-instrumentation",
+      "pgo-view-block-coverage-graph",
+      "polly",
+      "polly-2nd-level-tiling",
+      "polly-annotate-metadata-vectorize",
+      "polly-ast-print-accesses",
+      "polly-context",
+      "polly-dce-precise-steps",
+      "polly-delicm-max-ops",
+      "polly-detect-full-functions",
+      "polly-dump-after",
+      "polly-dump-after-file",
+      "polly-dump-before",
+      "polly-dump-before-file",
+      "polly-enable-simplify",
+      "polly-ignore-func",
+      "polly-isl-arg",
+      "polly-matmul-opt",
+      "polly-on-isl-error-abort",
+      "polly-only-func",
+      "polly-only-region",
+      "polly-only-scop-detection",
+      "polly-optimized-scops",
+      "polly-parallel",
+      "polly-parallel-force",
+      "polly-pattern-matching-based-opts",
+      "polly-postopts",
+      "polly-pragma-based-opts",
+      "polly-pragma-ignore-depcheck",
+      "polly-print-ast",
+      "polly-print-delicm",
+      "polly-print-deps",
+      "polly-print-detect",
+      "polly-print-flatten-schedule",
+      "polly-print-import-jscop",
+      "polly-print-mse",
+      "polly-print-opt-isl",
+      "polly-print-optree",
+      "polly-print-scops",
+      "polly-print-simplify",
+      "polly-process-unprofitable",
+      "polly-register-tiling",
+      "polly-report",
+      "polly-reschedule",
+      "polly-show",
+      "polly-show-only",
+      "polly-stmt-granularity",
+      "polly-tc-opt",
+      "polly-tiling",
+      "polly-vectorizer",
+      "print-pipeline-passes",
+      "profcheck-annotate-select",
+      "profcheck-default-function-entry-count",
+      "profcheck-default-select-false-weight",
+      "profcheck-default-select-true-weight",
+      "profcheck-weights-for-test",
+      "profile-correlate",
+      "propeller-infer-threshold",
+      "runtime-counter-relocation",
+      "safepoint-ir-verifier-print-only",
+      "sampled-instr-burst-duration",
+      "sampled-instr-period",
+      "sampled-instrumentation",
+      "sample-profile-check-record-coverage",
+      "sample-profile-check-sample-coverage",
+      "sample-profile-max-propagate-iterations",
+      "sanitizer-early-opt-ep",
+      "skip-ret-exit-block",
+      "speculative-counter-promotion-max-exiting",
+      "speculative-counter-promotion-to-loop",
+      "summary-file",
+      "thinlto-assume-merged",
+      "ubsan-guard-checks",
+      "use-origins",
+      "verify-region-info",
+      "vp-counters-per-site",
+      "vp-static-alloc",
+      "x",
+      "polly",
+      "polly-2nd-level-tiling",
+      "polly-annotate-metadata-vectorize",
+      "polly-ast-print-accesses",
+      "polly-context",
+      "polly-dce-precise-steps",
+      "polly-delicm-max-ops",
+      "polly-detect-full-functions",
+      "polly-dump-after",
+      "polly-dump-after-file",
+      "polly-dump-before",
+      "polly-dump-before-file",
+      "polly-enable-simplify",
+      "polly-ignore-func",
+      "polly-isl-arg",
+      "polly-matmul-opt",
+      "polly-on-isl-error-abort",
+      "polly-only-func",
+      "polly-only-region",
+      "polly-only-scop-detection",
+      "polly-optimized-scops",
+      "polly-parallel",
+      "polly-parallel-force",
+      "polly-pattern-matching-based-opts",
+      "polly-postopts",
+      "polly-pragma-based-opts",
+      "polly-pragma-ignore-depcheck",
+      "polly-print-ast",
+      "polly-print-delicm",
+      "polly-print-deps",
+      "polly-print-detect",
+      "polly-print-flatten-schedule",
+      "polly-print-import-jscop",
+      "polly-print-mse",
+      "polly-print-opt-isl",
+      "polly-print-optree",
+      "polly-print-scops",
+      "polly-print-simplify",
+      "polly-process-unprofitable",
+      "polly-register-tiling",
+      "polly-report",
+      "polly-reschedule",
+      "polly-show",
+      "polly-show-only",
+      "polly-stmt-granularity",
+      "polly-tc-opt",
+      "polly-tiling",
+      "polly-vectorizer",
+
+      "Xcc",
+  });
+
+  auto OptsCtx = P.parse(argc, argv);
+  auto *Opts = OptsCtx->getViewPtr<&ClangImportTestReg>();
+
+  ClangImportTestOptions CITOpts;
+  CITOpts.Expression = Opts->get<&CITExpressionOpt>();
+  CITOpts.Imports = Opts->get<&CITImportOpt>();
+  CITOpts.Direct = Opts->get<&CITDirectOpt>();
+  CITOpts.UseOrigins = Opts->get<&CITUseOriginsOpt>();
+  CITOpts.ClangArgs = Opts->get<&CITClangArgsOpt>();
+  CITOpts.Input = Opts->get<&CITInputOpt>();
+  if (CITOpts.Input.empty())
+    CITOpts.Input = "c++";
+  CITOpts.ObjCARC = Opts->get<&CITObjCARCOpt>();
+  CITOpts.DumpAST = Opts->get<&CITDumpASTOpt>();
+  CITOpts.DumpIR = Opts->get<&CITDumpIROpt>();
   std::vector<CIAndOrigins> ImportCIs;
-  for (auto I : Imports) {
-    llvm::Expected<CIAndOrigins> ImportCI = Parse(I, {}, false, false);
+  for (auto I : CITOpts.Imports) {
+    llvm::Expected<CIAndOrigins> ImportCI = Parse(I, {}, false, false, CITOpts);
     if (auto E = ImportCI.takeError()) {
       llvm::errs() << "error: " << llvm::toString(std::move(E)) << "\n";
       exit(-1);
@@ -372,22 +637,24 @@ int main(int argc, const char **argv) {
     ImportCIs.push_back(std::move(*ImportCI));
   }
   std::vector<CIAndOrigins> IndirectCIs;
-  if (!Direct || UseOrigins) {
+  if (!CITOpts.Direct || CITOpts.UseOrigins) {
     for (auto &ImportCI : ImportCIs) {
-      CIAndOrigins IndirectCI = BuildIndirect(ImportCI);
+      CIAndOrigins IndirectCI = BuildIndirect(ImportCI, CITOpts);
       IndirectCIs.push_back(std::move(IndirectCI));
     }
   }
-  if (UseOrigins)
+  if (CITOpts.UseOrigins)
     for (auto &ImportCI : ImportCIs)
       IndirectCIs.push_back(std::move(ImportCI));
   llvm::Expected<CIAndOrigins> ExpressionCI =
-      Parse(Expression, (Direct && !UseOrigins) ? ImportCIs : IndirectCIs,
-            DumpAST, DumpIR);
+      Parse(CITOpts.Expression,
+            (CITOpts.Direct && !CITOpts.UseOrigins) ? ImportCIs : IndirectCIs,
+            CITOpts.DumpAST, CITOpts.DumpIR, CITOpts);
   if (auto E = ExpressionCI.takeError()) {
     llvm::errs() << "error: " << llvm::toString(std::move(E)) << "\n";
     exit(-1);
   }
-  Forget(*ExpressionCI, (Direct && !UseOrigins) ? ImportCIs : IndirectCIs);
+  Forget(*ExpressionCI,
+         (CITOpts.Direct && !CITOpts.UseOrigins) ? ImportCIs : IndirectCIs);
   return 0;
 }

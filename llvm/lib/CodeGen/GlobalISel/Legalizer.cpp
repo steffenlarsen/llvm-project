@@ -16,6 +16,7 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/GlobalISel/CSEInfo.h"
 #include "llvm/CodeGen/GlobalISel/CSEMIRBuilder.h"
 #include "llvm/CodeGen/GlobalISel/GISelChangeObserver.h"
@@ -31,24 +32,28 @@
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Analysis.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/OptionsContext.h"
 
 #define DEBUG_TYPE "legalizer"
 
 using namespace llvm;
 
-static cl::opt<bool>
-    EnableCSEInLegalizer("enable-cse-in-legalizer",
-                         cl::desc("Should enable CSE in Legalizer"),
-                         cl::Optional, cl::init(false));
+static bool getEnableCseInLegalizer(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableCseInLegalizer>(Ctx);
+}
 
-// This is a temporary hack, should be removed soon.
-static cl::opt<bool> AllowGInsertAsArtifact(
-    "allow-ginsert-as-artifact",
-    cl::desc("Allow G_INSERT to be considered an artifact. Hack around AMDGPU "
-             "test infinite loops."),
-    cl::Optional, cl::init(true));
+static bool
+getEnableCseInLegalizerWasSpecified(const clv2::OptionsContext &Ctx) {
+  return clv2::wasOptSpecified<&clv2::CGPassGISelReg,
+                               &clv2::CGPASS_EnableCseInLegalizer>(Ctx);
+}
+
+static bool getAllowGinsertAsArtifact(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_AllowGinsertAsArtifact>(Ctx);
+}
 
 enum class DebugLocVerifyLevel {
   None,
@@ -56,21 +61,14 @@ enum class DebugLocVerifyLevel {
   LegalizationsAndArtifactCombiners,
 };
 #ifndef NDEBUG
-static cl::opt<DebugLocVerifyLevel> VerifyDebugLocs(
-    "verify-legalizer-debug-locs",
-    cl::desc("Verify that debug locations are handled"),
-    cl::values(
-        clEnumValN(DebugLocVerifyLevel::None, "none", "No verification"),
-        clEnumValN(DebugLocVerifyLevel::Legalizations, "legalizations",
-                   "Verify legalizations"),
-        clEnumValN(DebugLocVerifyLevel::LegalizationsAndArtifactCombiners,
-                   "legalizations+artifactcombiners",
-                   "Verify legalizations and artifact combines")),
-    cl::init(DebugLocVerifyLevel::Legalizations));
+static DebugLocVerifyLevel getVerifyDebugLocs(const clv2::OptionsContext &Ctx) {
+  return static_cast<DebugLocVerifyLevel>(
+      clv2::getOptValOrDefault<&clv2::CGPASS_VerifyLegalizerDebugLocs>(Ctx));
+}
 #else
-// Always disable it for release builds by preventing the observer from being
-// installed.
-static const DebugLocVerifyLevel VerifyDebugLocs = DebugLocVerifyLevel::None;
+static DebugLocVerifyLevel getVerifyDebugLocs(const clv2::OptionsContext &) {
+  return DebugLocVerifyLevel::None;
+}
 #endif
 
 char LegalizerLegacy::ID = 0;
@@ -113,7 +111,8 @@ static bool isArtifact(const MachineInstr &MI) {
   case TargetOpcode::G_EXTRACT:
     return true;
   case TargetOpcode::G_INSERT:
-    return AllowGInsertAsArtifact;
+    return getAllowGinsertAsArtifact(
+        MI.getMF()->getFunction().getContext().getOptionsContext());
   }
 }
 using InstListTy = GISelWorkList<256>;
@@ -291,7 +290,8 @@ LegalizerMFResult llvm::legalizeMachineFunction(
         WorkListObserver.printNewInstrs();
         eraseInstrs(DeadInstructions, MRI, &LocObserver);
         LocObserver.checkpoint(
-            VerifyDebugLocs ==
+            getVerifyDebugLocs(
+                MF.getFunction().getContext().getOptionsContext()) ==
             DebugLocVerifyLevel::LegalizationsAndArtifactCombiners);
         Changed = true;
         continue;
@@ -309,8 +309,11 @@ LegalizerMFResult llvm::legalizeMachineFunction(
   return {Changed, /*FailedOn*/ nullptr};
 }
 
-static bool isCSEEnabled() {
-  return EnableCSEInLegalizer.getNumOccurrences() ? EnableCSEInLegalizer : true;
+static bool isCSEEnabled(const MachineFunction &MF) {
+  const clv2::OptionsContext &Ctx =
+      MF.getFunction().getContext().getOptionsContext();
+  return getEnableCseInLegalizerWasSpecified(Ctx) ? getEnableCseInLegalizer(Ctx)
+                                                  : true;
 }
 
 static bool
@@ -326,7 +329,7 @@ runLegalizerOnMachineFunction(MachineFunction &MF,
 
   std::unique_ptr<MachineIRBuilder> MIRBuilder;
   GISelCSEInfo *CSEInfo = nullptr;
-  bool EnableCSE = isCSEEnabled();
+  bool EnableCSE = isCSEEnabled(MF);
   if (EnableCSE) {
     MIRBuilder = std::make_unique<CSEMIRBuilder>();
     CSEInfo = GetCSEInfo();
@@ -342,7 +345,8 @@ runLegalizerOnMachineFunction(MachineFunction &MF,
   }
   assert(!CSEInfo || !errorToBool(CSEInfo->verify()));
   LostDebugLocObserver LocObserver(DEBUG_TYPE);
-  if (VerifyDebugLocs > DebugLocVerifyLevel::None)
+  if (getVerifyDebugLocs(MF.getFunction().getContext().getOptionsContext()) >
+      DebugLocVerifyLevel::None)
     AuxObservers.push_back(&LocObserver);
 
   const TargetSubtargetInfo &Subtarget = MF.getSubtarget();
@@ -405,7 +409,7 @@ bool LegalizerLegacy::runOnMachineFunction(MachineFunction &MF) {
   // CSEInfo object (as we currently declare that the analysis is preserved).
   // The next time get on the wrapper is called, it will force it to recompute
   // the analysis.
-  if (!isCSEEnabled())
+  if (!isCSEEnabled(MF))
     Wrapper.setComputed(false);
 
   return Changed;

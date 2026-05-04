@@ -12,16 +12,24 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
+#include "bolt/Profile/BoltProfileOptionsOptInfos.h"
+#include "bolt/Rewrite/BoltRewriteOptionsOptInfos.h"
 #include "bolt/Rewrite/RewriteInstance.h"
+#include "bolt/RuntimeLibs/BoltRuntimeLibsOptionsOptInfos.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/Binary.h"
 #include "llvm/Object/ELFObjectFile.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/VirtualFileSystem.h"
@@ -31,17 +39,13 @@
 using namespace llvm;
 using namespace object;
 using namespace bolt;
+using namespace llvm::clv2;
 
 namespace opts {
 
-static cl::OptionCategory *BinaryAnalysisCategories[] = {
-    &BinaryAnalysisCategory};
-
-static cl::opt<std::string> InputFilename(cl::Positional,
-                                          cl::desc("<executable>"),
-                                          cl::Required,
-                                          cl::cat(BinaryAnalysisCategory),
-                                          cl::sub(cl::SubCommand::getAll()));
+inline constexpr OptionInfo<std::string> BAInputFile{
+    "", "<executable>", Positional{}, Required, cat(BinaryAnalysisCat)};
+inline constexpr OptionsRegistry<&BAInputFile> BADriverReg;
 
 } // namespace opts
 
@@ -60,12 +64,25 @@ static void report_error(StringRef Message, Error E) {
   exit(1);
 }
 
-void ParseCommandLine(int argc, char **argv) {
-  cl::HideUnrelatedOptions(ArrayRef(opts::BinaryAnalysisCategories));
+std::unique_ptr<clv2::OptionsContext>
+ParseCommandLine(int argc, char **argv, std::string &InputFilename) {
   // Register the target printer for --version.
   cl::AddExtraVersionPrinter(TargetRegistry::printRegisteredTargetsForVersion);
 
-  cl::ParseCommandLineOptions(argc, argv, "BinaryAnalysis\n");
+  clv2::OptionParser P;
+  P.add<&opts::BADriverReg>();
+  P.add<&clv2::BoltUtilsOptsReg>();
+  P.add<&clv2::BoltCoreOptsReg>();
+  P.add<&clv2::BoltProfileOptsReg>();
+  P.add<&clv2::BoltPassesOptsReg>();
+  P.add<&clv2::BoltRewriteOptsReg>();
+  P.add<&clv2::BoltRuntimeLibsOptsReg>();
+  RegisterCoreLLVMOptions(P);
+  P.hideUnrelatedOptions({&clv2::BinaryAnalysisCat});
+  auto OptsCtx = P.parse(argc, argv, "BinaryAnalysis\n");
+  auto *Opts = OptsCtx->getViewPtr<&opts::BADriverReg>();
+  InputFilename = Opts->get<&opts::BAInputFile>();
+  return OptsCtx;
 }
 
 static std::string GetExecutablePath(const char *Argv0) {
@@ -98,26 +115,29 @@ int main(int argc, char **argv) {
 
 #include "bolt/Core/TargetConfig.def"
 
-  ParseCommandLine(argc, argv);
+  std::string InputFilename;
+  std::unique_ptr<clv2::OptionsContext> ToolOptsCtx =
+      ParseCommandLine(argc, argv, InputFilename);
 
-  opts::BinaryAnalysisMode = true;
+  if (auto *V = ToolOptsCtx->getViewPtr<&clv2::BoltUtilsOptsReg>())
+    V->get<&clv2::BOLT_BinaryAnalysisMode>() = true;
 
-  if (!sys::fs::exists(opts::InputFilename))
-    report_error(opts::InputFilename, errc::no_such_file_or_directory);
+  if (!sys::fs::exists(InputFilename))
+    report_error(InputFilename, errc::no_such_file_or_directory);
 
-  Expected<OwningBinary<Binary>> BinaryOrErr =
-      createBinary(opts::InputFilename);
+  Expected<OwningBinary<Binary>> BinaryOrErr = createBinary(InputFilename);
   if (Error E = BinaryOrErr.takeError())
-    report_error(opts::InputFilename, std::move(E));
+    report_error(InputFilename, std::move(E));
   Binary &Binary = *BinaryOrErr.get().getBinary();
 
   if (auto *e = dyn_cast<ELFObjectFileBase>(&Binary)) {
-    auto RIOrErr = RewriteInstance::create(e, argc, argv, ToolPath);
+    auto RIOrErr = RewriteInstance::create(
+        e, argc, argv, ToolPath, llvm::outs(), llvm::errs(), ToolOptsCtx.get());
     if (Error E = RIOrErr.takeError())
-      report_error(opts::InputFilename, std::move(E));
+      report_error(InputFilename, std::move(E));
     RewriteInstance &RI = *RIOrErr.get();
     if (Error E = RI.run())
-      report_error(opts::InputFilename, std::move(E));
+      report_error(InputFilename, std::move(E));
   }
 
   return EXIT_SUCCESS;

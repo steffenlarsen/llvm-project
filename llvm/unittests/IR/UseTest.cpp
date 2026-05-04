@@ -20,7 +20,7 @@ using namespace llvm;
 namespace {
 
 TEST(UseTest, sort) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *ModuleString = "define void @f(i32 %x) {\n"
                              "entry:\n"
@@ -65,7 +65,7 @@ TEST(UseTest, sort) {
 }
 
 TEST(UseTest, reverse) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *ModuleString = "define void @f(i32 %x) {\n"
                              "entry:\n"

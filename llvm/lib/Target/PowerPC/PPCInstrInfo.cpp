@@ -37,10 +37,12 @@
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/PowerPC/PowerPCOptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -62,28 +64,39 @@ STATISTIC(MissedConvertibleImmediateInstrs,
 STATISTIC(NumRcRotatesConvertedToRcAnd,
           "Number of record-form rotates converted to record-form andi");
 
-static cl::
-opt<bool> DisableCTRLoopAnal("disable-ppc-ctrloop-analysis", cl::Hidden,
-            cl::desc("Disable analysis for CTR loops"));
+static bool getDisableCTRLoopAnal(const MachineFunction &MF) {
+  return clv2::getOptValOrDefault<&clv2::PPC_DisableCTRLoopAnal>(
+      MF.getFunction().getContext().getOptionsContext());
+}
 
-static cl::opt<bool> DisableCmpOpt("disable-ppc-cmp-opt",
-cl::desc("Disable compare instruction optimization"), cl::Hidden);
+static float FMARPFactor = 1.5;
 
-static cl::opt<bool> VSXSelfCopyCrash("crash-on-ppc-vsx-self-copy",
-cl::desc("Causes the backend to crash instead of generating a nop VSX copy"),
-cl::Hidden);
+static bool EnableFMARegPressureReduction = true;
 
-static cl::opt<bool>
-UseOldLatencyCalc("ppc-old-latency-calc", cl::Hidden,
-  cl::desc("Use the old (incorrect) instruction latency calculation"));
+static bool getDisableCmpOpt(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_DisableCmpOpt>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<float>
-    FMARPFactor("ppc-fma-rp-factor", cl::Hidden, cl::init(1.5),
-                cl::desc("register pressure factor for the transformations."));
+static bool getVSXSelfCopyCrash(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_VSXSelfCopyCrash>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> EnableFMARegPressureReduction(
-    "ppc-fma-rp-reduction", cl::Hidden, cl::init(true),
-    cl::desc("enable register pressure reduce in machine combiner pass."));
+static bool getUseOldLatencyCalc(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_UseOldLatencyCalc>(
+      F.getContext().getOptionsContext());
+}
+
+static float getFMARPFactor(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_FMARPFactor>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getEnableFMARegPressureReduction(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::PPC_EnableFMARegPressureReduction>(
+      F.getContext().getOptionsContext());
+}
 
 // Pin the vtable to this file.
 void PPCInstrInfo::anchor() {}
@@ -137,7 +150,8 @@ PPCInstrInfo::CreateTargetPostRAHazardRecognizer(const InstrItineraryData *II,
 unsigned PPCInstrInfo::getInstrLatency(const InstrItineraryData *ItinData,
                                        const MachineInstr &MI,
                                        unsigned *PredCost) const {
-  if (!ItinData || UseOldLatencyCalc)
+  if (!ItinData || !MI.getParent() || !MI.getParent()->getParent() ||
+      getUseOldLatencyCalc(MI.getParent()->getParent()->getFunction()))
     return PPCGenInstrInfo::getInstrLatency(ItinData, MI, PredCost);
 
   // The default implementation of getInstrLatency calls getStageLatency, but
@@ -592,7 +606,7 @@ void PPCInstrInfo::finalizeInsInstrs(
 bool PPCInstrInfo::shouldReduceRegisterPressure(
     const MachineBasicBlock *MBB, const RegisterClassInfo *RegClassInfo) const {
 
-  if (!EnableFMARegPressureReduction)
+  if (!getEnableFMARegPressureReduction(MBB->getParent()->getFunction()))
     return false;
 
   // Currently, we only enable register pressure reducing in machine combiner
@@ -645,7 +659,7 @@ bool PPCInstrInfo::shouldReduceRegisterPressure(
 
   // Only reduce register pressure when pressure is high.
   return GetMBBPressure(MBB)[PPC::RegisterPressureSets::VSSRC] >
-         (float)VSSRCLimit * FMARPFactor;
+         (float)VSSRCLimit * getFMARPFactor(MBB->getParent()->getFunction());
 }
 
 bool PPCInstrInfo::isLoadFromConstantPool(MachineInstr *I) const {
@@ -1318,7 +1332,7 @@ bool PPCInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
                LastInst.getOpcode() == PPC::BDNZ) {
       if (!LastInst.getOperand(0).isMBB())
         return true;
-      if (DisableCTRLoopAnal)
+      if (getDisableCTRLoopAnal(*MBB.getParent()))
         return true;
       TBB = LastInst.getOperand(0).getMBB();
       Cond.push_back(MachineOperand::CreateImm(1));
@@ -1329,7 +1343,7 @@ bool PPCInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
                LastInst.getOpcode() == PPC::BDZ) {
       if (!LastInst.getOperand(0).isMBB())
         return true;
-      if (DisableCTRLoopAnal)
+      if (getDisableCTRLoopAnal(*MBB.getParent()))
         return true;
       TBB = LastInst.getOperand(0).getMBB();
       Cond.push_back(MachineOperand::CreateImm(0));
@@ -1386,7 +1400,7 @@ bool PPCInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
     if (!SecondLastInst.getOperand(0).isMBB() ||
         !LastInst.getOperand(0).isMBB())
       return true;
-    if (DisableCTRLoopAnal)
+    if (getDisableCTRLoopAnal(*MBB.getParent()))
       return true;
     TBB = SecondLastInst.getOperand(0).getMBB();
     Cond.push_back(MachineOperand::CreateImm(1));
@@ -1400,7 +1414,7 @@ bool PPCInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
     if (!SecondLastInst.getOperand(0).isMBB() ||
         !LastInst.getOperand(0).isMBB())
       return true;
-    if (DisableCTRLoopAnal)
+    if (getDisableCTRLoopAnal(*MBB.getParent()))
       return true;
     TBB = SecondLastInst.getOperand(0).getMBB();
     Cond.push_back(MachineOperand::CreateImm(0));
@@ -1682,7 +1696,8 @@ void PPCInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
     MCRegister SuperReg =
         RI.getMatchingSuperReg(DestReg, PPC::sub_64, &PPC::VSRCRegClass);
 
-    if (VSXSelfCopyCrash && SrcReg == SuperReg)
+    if (getVSXSelfCopyCrash(MBB.getParent()->getFunction()) &&
+        SrcReg == SuperReg)
       llvm_unreachable("nop VSX copy");
 
     DestReg = SuperReg;
@@ -1691,7 +1706,8 @@ void PPCInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
     MCRegister SuperReg =
         RI.getMatchingSuperReg(SrcReg, PPC::sub_64, &PPC::VSRCRegClass);
 
-    if (VSXSelfCopyCrash && DestReg == SuperReg)
+    if (getVSXSelfCopyCrash(MBB.getParent()->getFunction()) &&
+        DestReg == SuperReg)
       llvm_unreachable("nop VSX copy");
 
     SrcReg = SuperReg;
@@ -2428,7 +2444,7 @@ bool PPCInstrInfo::optimizeCompareInstr(MachineInstr &CmpInstr, Register SrcReg,
                                         Register SrcReg2, int64_t Mask,
                                         int64_t Value,
                                         const MachineRegisterInfo *MRI) const {
-  if (DisableCmpOpt)
+  if (getDisableCmpOpt(CmpInstr.getMF()->getFunction()))
     return false;
 
   int OpC = CmpInstr.getOpcode();

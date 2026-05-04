@@ -24,7 +24,8 @@
 #include "clang/Tooling/Tooling.h"
 
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
@@ -35,13 +36,19 @@ using namespace clang::tooling;
 
 static llvm::cl::OptionCategory RPCGenCategory("Tool for generating LLDBRPC");
 
-static llvm::cl::opt<std::string>
-    OutputDir("output-dir",
-              llvm::cl::desc("Directory to output generated files to"),
-              llvm::cl::init(""), llvm::cl::cat(RPCGenCategory));
+static std::string OutputDir;
+
+static unsigned OutputDirCount = 0;
+static constexpr llvm::clv2::OptionInfo<std::string> OI_OutputDir{
+    "output-dir", "Directory to output generated files to"};
+
+static void addOutputDirOption(llvm::clv2::OptionParser &P) {
+  P.addDynamicEntry(
+      llvm::clv2::makeEntry<&OI_OutputDir>(OutputDir, OutputDirCount));
+}
 
 static std::string GetServerOutputDirectory() {
-  llvm::SmallString<128> Path(OutputDir.getValue());
+  llvm::SmallString<128> Path(OutputDir);
   llvm::sys::path::append(Path, "server");
   return std::string(Path);
 }
@@ -364,7 +371,7 @@ bool EmitSkippedMethodsFile(std::set<std::string> &SkippedMethodNames) {
 
 int main(int argc, const char *argv[]) {
   auto ExpectedParser = CommonOptionsParser::create(
-      argc, argv, RPCGenCategory, llvm::cl::OneOrMore,
+      argc, argv, RPCGenCategory, addOutputDirOption, llvm::cl::OneOrMore,
       "Tool for generating LLDBRPC interfaces and implementations");
 
   if (!ExpectedParser) {

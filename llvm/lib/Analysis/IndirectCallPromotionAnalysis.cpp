@@ -13,10 +13,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/IndirectCallPromotionAnalysis.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/ProfileData/InstrProf.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -26,44 +29,65 @@ namespace llvm {
 
 // The percent threshold for the direct-call target (this call site vs the
 // remaining call count) for it to be considered as the promotion target.
-static cl::opt<unsigned> ICPRemainingPercentThreshold(
-    "icp-remaining-percent-threshold", cl::init(30), cl::Hidden,
-    cl::desc("The percentage threshold against remaining unpromoted indirect "
-             "call count for the promotion"));
 
 // The percent threshold for the direct-call target (this call site vs the
 // total call count) for it to be considered as the promotion target.
-static cl::opt<uint64_t>
-    ICPTotalPercentThreshold("icp-total-percent-threshold", cl::init(5),
-                             cl::Hidden,
-                             cl::desc("The percentage threshold against total "
-                                      "count for the promotion"));
 
 // Set the minimum absolute count threshold for indirect call promotion.
 // Candidates with counts below this threshold will not be promoted.
-static cl::opt<unsigned> ICPMinimumCountThreshold(
-    "icp-minimum-count-threshold", cl::init(0), cl::Hidden,
-    cl::desc("Minimum absolute count for promotion candidate"));
 
 // Set the maximum number of targets to promote for a single indirect-call
 // callsite.
-static cl::opt<unsigned>
-    MaxNumPromotions("icp-max-prom", cl::init(3), cl::Hidden,
-                     cl::desc("Max number of promotions for a single indirect "
-                              "call callsite"));
 
-cl::opt<unsigned> MaxNumVTableAnnotations(
-    "icp-max-num-vtables", cl::init(6), cl::Hidden,
-    cl::desc("Max number of vtables annotated for a vtable load instruction."));
 
 } // end namespace llvm
 
+static unsigned getICPRemainingPercentThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_ICPRemainingPercentThreshold>(
+      F.getContext().getOptionsContext());
+}
+
+static uint64_t getICPTotalPercentThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_ICPTotalPercentThreshold>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getICPMinimumCountThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_ICPMinimumCountThreshold>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getMaxNumPromotions(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_MaxNumPromotions>(
+      F.getContext().getOptionsContext());
+}
+
+// Overloads with optional OptionsContext, using single-path.
+static unsigned
+getICPRemainingPercentThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_ICPRemainingPercentThreshold>(Ctx);
+}
+
+static uint64_t getICPTotalPercentThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_ICPTotalPercentThreshold>(Ctx);
+}
+
+static unsigned getICPMinimumCountThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_ICPMinimumCountThreshold>(Ctx);
+}
+
 bool ICallPromotionAnalysis::isPromotionProfitable(uint64_t Count,
                                                    uint64_t TotalCount,
-                                                   uint64_t RemainingCount) {
-  return Count >= ICPMinimumCountThreshold &&
-         Count * 100 >= ICPRemainingPercentThreshold * RemainingCount &&
-         Count * 100 >= ICPTotalPercentThreshold * TotalCount;
+                                                   uint64_t RemainingCount,
+                                                   const Function *F) {
+  unsigned MinCount = getICPMinimumCountThreshold(
+      F ? F->getContext().getOptionsContext() : clv2::defaultOptionsContext());
+  unsigned RemPct = getICPRemainingPercentThreshold(
+      F ? F->getContext().getOptionsContext() : clv2::defaultOptionsContext());
+  uint64_t TotPct = getICPTotalPercentThreshold(
+      F ? F->getContext().getOptionsContext() : clv2::defaultOptionsContext());
+  return Count >= MinCount && Count * 100 >= RemPct * RemainingCount &&
+         Count * 100 >= TotPct * TotalCount;
 }
 
 // Indirect-call promotion heuristic. The direct targets are sorted based on
@@ -74,15 +98,22 @@ uint32_t ICallPromotionAnalysis::getProfitablePromotionCandidates(
   LLVM_DEBUG(dbgs() << " \nWork on callsite " << *Inst
                     << " Num_targets: " << ValueDataArray.size() << "\n");
 
+  const Function &F = *Inst->getFunction();
+  unsigned MinCount = getICPMinimumCountThreshold(F);
+  unsigned RemPct = getICPRemainingPercentThreshold(F);
+  uint64_t TotPct = getICPTotalPercentThreshold(F);
   uint32_t I = 0;
   uint64_t RemainingCount = TotalCount;
-  for (; I < MaxNumPromotions && I < ValueDataArray.size(); I++) {
+  for (; I < getMaxNumPromotions(F) && I < ValueDataArray.size(); I++) {
     uint64_t Count = ValueDataArray[I].Count;
     assert(Count <= RemainingCount);
     LLVM_DEBUG(dbgs() << " Candidate " << I << " Count=" << Count
                       << "  Target_func: " << ValueDataArray[I].Value << "\n");
 
-    if (!isPromotionProfitable(Count, TotalCount, RemainingCount)) {
+    bool Profitable = Count >= MinCount &&
+                      Count * 100 >= RemPct * RemainingCount &&
+                      Count * 100 >= TotPct * TotalCount;
+    if (!Profitable) {
       LLVM_DEBUG(dbgs() << " Not promote: Cold target.\n");
       return I;
     }
@@ -97,8 +128,9 @@ ICallPromotionAnalysis::getPromotionCandidatesForInstruction(
     unsigned MaxNumValueData) {
   // Use the max of the values specified by -icp-max-prom and the provided
   // MaxNumValueData parameter.
-  if (MaxNumPromotions > MaxNumValueData)
-    MaxNumValueData = MaxNumPromotions;
+  const Function &F = *I->getFunction();
+  if (getMaxNumPromotions(F) > MaxNumValueData)
+    MaxNumValueData = getMaxNumPromotions(F);
   ValueDataArray = getValueProfDataFromInst(*I, IPVK_IndirectCallTarget,
                                             MaxNumValueData, TotalCount);
   if (ValueDataArray.empty()) {

@@ -11,6 +11,7 @@
 #include "check-acc-structure.h"
 #include "check-omp-structure.h"
 #include "resolve-names-utils.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Common/idioms.h"
 #include "flang/Evaluate/fold.h"
 #include "flang/Evaluate/tools.h"
@@ -25,11 +26,11 @@
 #include "flang/Semantics/openmp-utils.h"
 #include "flang/Semantics/symbol.h"
 #include "flang/Semantics/tools.h"
-#include "flang/Support/Flags.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Frontend/OpenMP/OMP.h.inc"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include <list>
 #include <map>
 
@@ -2807,7 +2808,9 @@ void OmpAttributeVisitor::CreateImplicitSymbols(
       // 4) not mapped target variable  -> firstprivate
       //    - i.e. implicit, but meets OpenMP specification rules for
       //    firstprivate "promotion"
-      if (enableDelayedPrivatizationStaging &&
+      if (llvm::clv2::getOptValOrDefault<
+              &llvm::clv2::FLANG_EnableDelayedPrivatizationStaging>(
+              context_.getOptionsContext()) &&
           IsTargetCaptureImplicitlyFirstprivatizeable(*symbol, prevDSA,
               dataSharingAttributeFlags, dataMappingAttributeFlags,
               dirContext.defaultMap)) {

@@ -136,6 +136,12 @@ option(LLVM_POLLY_LINK_INTO_TOOLS "Statically link Polly into tools (if availabl
 add_definitions( -D_GNU_SOURCE )
 
 add_subdirectory(docs)
+add_subdirectory(include)
+
+# The generated clv2 options headers are public; make everything configured
+# below wait for tablegen.  See add_clv2_options_gen_target in TableGen.cmake.
+add_clv2_options_gen_target(polly_clv2_options_gen "${CMAKE_CURRENT_SOURCE_DIR}/include")
+list(APPEND LLVM_COMMON_DEPENDS polly_clv2_options_gen)
 add_subdirectory(lib)
 add_subdirectory(test)
 if (POLLY_GTEST_AVAIL)

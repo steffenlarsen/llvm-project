@@ -34,7 +34,7 @@ namespace {
   } while (false)
 
 TEST(VectorTypesTest, FixedLength) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   Type *Int8Ty = Type::getInt8Ty(Ctx);
   Type *Int16Ty = Type::getInt16Ty(Ctx);
@@ -132,7 +132,7 @@ TEST(VectorTypesTest, FixedLength) {
 }
 
 TEST(VectorTypesTest, Scalable) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   Type *Int8Ty = Type::getInt8Ty(Ctx);
   Type *Int16Ty = Type::getInt16Ty(Ctx);
@@ -228,7 +228,7 @@ TEST(VectorTypesTest, Scalable) {
 }
 
 TEST(VectorTypesTest, BaseVectorType) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   Type *Int16Ty = Type::getInt16Ty(Ctx);
   Type *Int32Ty = Type::getInt32Ty(Ctx);
@@ -279,7 +279,7 @@ TEST(VectorTypesTest, BaseVectorType) {
 }
 
 TEST(VectorTypesTest, FixedLenComparisons) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   DataLayout DL;
 
   Type *Int32Ty = Type::getInt32Ty(Ctx);
@@ -325,7 +325,7 @@ TEST(VectorTypesTest, FixedLenComparisons) {
 }
 
 TEST(VectorTypesTest, ScalableComparisons) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   DataLayout DL;
 
   Type *Int32Ty = Type::getInt32Ty(Ctx);
@@ -367,7 +367,7 @@ TEST(VectorTypesTest, ScalableComparisons) {
 }
 
 TEST(VectorTypesTest, CrossComparisons) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   Type *Int32Ty = Type::getInt32Ty(Ctx);
 

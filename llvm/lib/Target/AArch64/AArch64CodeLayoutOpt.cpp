@@ -26,10 +26,12 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
+#include <optional>
 
 using namespace llvm;
 
@@ -39,28 +41,27 @@ using namespace llvm;
 
 enum CodeLayoutOpt {
   None = 0,
-  CmpCsel = 1 << 0,   // Align CMP/CMN-CSEL pairs
-  FcmpFcsel = 1 << 1, // Align FCMP-FCSEL pairs
+  CmpCsel = 1 << static_cast<int>(clv2::A64CodeLayoutOpt::CmpCsel),
+  FcmpFcsel = 1 << static_cast<int>(clv2::A64CodeLayoutOpt::FcmpFcsel),
   LLVM_MARK_AS_BITMASK_ENUM(FcmpFcsel)
 };
 
-static cl::bits<CodeLayoutOpt> EnableCodeAlignment(
-    "aarch64-code-layout-opt-enable", cl::Hidden, cl::CommaSeparated,
-    cl::desc("Enable code alignment optimization for instruction pairs"),
-    cl::values(
-        clEnumValN(None, "none", "Disable the code alignment pass"),
-        clEnumValN(CmpCsel, "cmp-csel", "CMP/CMN-CSEL pair alignment (32-bit)"),
-        clEnumValN(FcmpFcsel, "fcmp-fcsel", "FCMP-FCSEL pair alignment")));
+/// \returns the pairs selected by -aarch64-code-layout-opt-enable, or
+/// std::nullopt if the option was not given.  The option's slot uses one bit
+/// per enumerator, matching CodeLayoutOpt; "none" occupies a bit of its own
+/// that is masked off here.
+static std::optional<CodeLayoutOpt>
+getSelectedCodeLayoutOpts(const clv2::OptionsContext &Ctx) {
+  const auto *V = clv2::getView<&clv2::AArch64OptsReg>(Ctx);
+  if (!V || !V->specified<&clv2::A64_CodeLayoutOptEnable>())
+    return std::nullopt;
+  return static_cast<CodeLayoutOpt>(V->get<&clv2::A64_CodeLayoutOptEnable>() &
+                                    (CmpCsel | FcmpFcsel));
+}
 
-static cl::opt<unsigned> FunctionAlignBytes(
-    "aarch64-code-layout-opt-align-functions", cl::Hidden,
-    cl::desc("Function alignment in bytes for code layout optimization "
-             "(must be a power of 2)"),
-    cl::init(64), cl::callback([](const unsigned &Val) {
-      if (!isPowerOf2_32(Val))
-        report_fatal_error(
-            "aarch64-code-layout-opt-align must be a power of 2");
-    }));
+static unsigned getFunctionAlignBytes(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_CodeLayoutOptAlignFunctions>(Ctx);
+}
 
 STATISTIC(NumFunctionsAligned,
           "Number of functions with aligned (to 64-bytes by default)");
@@ -93,7 +94,8 @@ private:
   void emitP2Align(MachineInstr &MI, Align DesiredAlign,
                    unsigned MaxSkipBytes = 4);
 
-  bool optimizeForCodeLayout(MachineFunction &MF, CodeLayoutOpt CLO);
+  bool optimizeForCodeLayout(MachineFunction &MF, CodeLayoutOpt CLO,
+                             const clv2::OptionsContext &Ctx);
 };
 
 } // end anonymous namespace
@@ -173,12 +175,11 @@ bool AArch64CodeLayoutOpt::runOnMachineFunction(MachineFunction &MF) {
   const auto *Subtarget = &MF.getSubtarget<AArch64Subtarget>();
   TII = Subtarget->getInstrInfo();
 
+  const clv2::OptionsContext &Ctx = F.getContext().getOptionsContext();
+
   CodeLayoutOpt CLO = None;
-  if (EnableCodeAlignment.getNumOccurrences()) {
-    if (EnableCodeAlignment.isSet(CodeLayoutOpt::CmpCsel))
-      CLO |= CodeLayoutOpt::CmpCsel;
-    if (EnableCodeAlignment.isSet(CodeLayoutOpt::FcmpFcsel))
-      CLO |= CodeLayoutOpt::FcmpFcsel;
+  if (std::optional<CodeLayoutOpt> Selected = getSelectedCodeLayoutOpts(Ctx)) {
+    CLO = *Selected;
   } else {
     // Default: enable when the subtarget opts in via FeatureAlignCmpCSelPairs.
     if (Subtarget->hasAlignCmpCSelPairs()) {
@@ -192,7 +193,7 @@ bool AArch64CodeLayoutOpt::runOnMachineFunction(MachineFunction &MF) {
   if (CLO == None)
     return false;
 
-  return optimizeForCodeLayout(MF, CLO);
+  return optimizeForCodeLayout(MF, CLO, Ctx);
 }
 
 void AArch64CodeLayoutOpt::emitP2Align(MachineInstr &MI, Align DesiredAlign,
@@ -251,8 +252,8 @@ bool AArch64CodeLayoutOpt::alignLayoutSensitivePatterns(MachineBasicBlock *MBB,
   return !Pairs.empty();
 }
 
-bool AArch64CodeLayoutOpt::optimizeForCodeLayout(MachineFunction &MF,
-                                                 CodeLayoutOpt CLO) {
+bool AArch64CodeLayoutOpt::optimizeForCodeLayout(
+    MachineFunction &MF, CodeLayoutOpt CLO, const clv2::OptionsContext &Ctx) {
   DBG("optimizeForCodeLayout: " << MF.getName() << "\n");
 
   bool Changed = false;
@@ -262,10 +263,11 @@ bool AArch64CodeLayoutOpt::optimizeForCodeLayout(MachineFunction &MF,
   if (!Changed)
     return false;
 
-  if (MF.getAlignment() < Align(FunctionAlignBytes)) {
-    MF.setAlignment(Align(FunctionAlignBytes));
+  unsigned FuncAlignBytes = getFunctionAlignBytes(Ctx);
+  if (MF.getAlignment() < Align(FuncAlignBytes)) {
+    MF.setAlignment(Align(FuncAlignBytes));
     ++NumFunctionsAligned;
-    DBG("Set " << FunctionAlignBytes << "-byte alignment for function "
+    DBG("Set " << FuncAlignBytes << "-byte alignment for function "
                << MF.getName() << "\n");
   } else {
     DBG("Function " << MF.getName() << " already has sufficient alignment\n");

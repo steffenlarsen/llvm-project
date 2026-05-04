@@ -71,6 +71,7 @@ struct SLPVectorizerPass : public OptionalPassInfoMixin<SLPVectorizerPass> {
   AssumptionCache *AC = nullptr;
   DemandedBits *DB = nullptr;
   const DataLayout *DL = nullptr;
+  Function *F = nullptr;
 
 public:
   LLVM_ABI PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);

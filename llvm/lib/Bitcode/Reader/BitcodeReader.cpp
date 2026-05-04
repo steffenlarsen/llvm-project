@@ -19,6 +19,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Bitcode/BitcodeCommon.h"
+#include "llvm/Bitcode/BitcodeOptionsOptInfos.h"
 #include "llvm/Bitcode/LLVMBitCodes.h"
 #include "llvm/Bitstream/BitstreamReader.h"
 #include "llvm/Config/llvm-config.h"
@@ -64,7 +65,6 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
@@ -73,6 +73,7 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/ModRef.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SwapByteOrder.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
@@ -92,15 +93,9 @@
 
 using namespace llvm;
 
-static cl::opt<bool> PrintSummaryGUIDs(
-    "print-summary-global-ids", cl::init(false), cl::Hidden,
-    cl::desc(
-        "Print the global id for each value when reading the module summary"));
-
-static cl::opt<bool> ExpandConstantExprs(
-    "expand-constant-exprs", cl::Hidden,
-    cl::desc(
-        "Expand constant expressions to instructions for testing purposes"));
+static bool getPrintSummaryGUIDs(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::BC_PrintSummaryGUIDs>(Ctx);
+}
 
 namespace {
 
@@ -961,6 +956,8 @@ class ModuleSummaryIndexBitcodeReader : public BitcodeReaderBase {
   /// The module index built during parsing.
   ModuleSummaryIndex &TheIndex;
 
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
+
   /// Indicates whether we have encountered a global value summary section
   /// yet during parsing.
   bool SeenGlobalValSummary = false;
@@ -1020,11 +1017,11 @@ class ModuleSummaryIndexBitcodeReader : public BitcodeReaderBase {
   std::vector<uint64_t> DefinedGUIDs;
 
 public:
-  ModuleSummaryIndexBitcodeReader(
-      BitstreamCursor Stream, StringRef Strtab, ModuleSummaryIndex &TheIndex,
-      StringRef ModulePath,
-      std::function<bool(StringRef)> IsPrevailing = nullptr,
-      std::function<void(ValueInfo)> OnValueInfo = nullptr);
+  ModuleSummaryIndexBitcodeReader(BitstreamCursor Stream, StringRef Strtab,
+                                  ModuleSummaryIndex &TheIndex,
+                                  StringRef ModulePath,
+                                  std::function<bool(StringRef)> IsPrevailing,
+                                  const clv2::OptionsContext &Ctx);
 
   Error parseModule();
 
@@ -1564,7 +1561,8 @@ static GEPNoWrapFlags toGEPNoWrapFlags(uint64_t Flags) {
   return NW;
 }
 
-static bool isConstExprSupported(const BitcodeConstant *BC) {
+static bool isConstExprSupported(const BitcodeConstant *BC,
+                                 LLVMContext &Context) {
   uint8_t Opcode = BC->Opcode;
 
   // These are not real constant expressions, always consider them supported.
@@ -1573,8 +1571,10 @@ static bool isConstExprSupported(const BitcodeConstant *BC) {
 
   // If -expand-constant-exprs is set, we want to consider all expressions
   // as unsupported.
-  if (ExpandConstantExprs)
-    return false;
+  if (auto *O =
+          clv2::getView<&clv2::BitcodeOptsReg>(Context.getOptionsContext()))
+    if (O->get<&clv2::BC_ExpandConstantExprs>())
+      return false;
 
   if (Instruction::isBinaryOp(Opcode))
     return ConstantExpr::isSupportedBinOp(Opcode);
@@ -1648,7 +1648,7 @@ Expected<Value *> BitcodeReader::materializeValue(unsigned StartValID,
         ConstOps.push_back(C);
 
     // Materialize as constant expression if possible.
-    if (isConstExprSupported(BC) && ConstOps.size() == Ops.size()) {
+    if (isConstExprSupported(BC, Context) && ConstOps.size() == Ops.size()) {
       Constant *C;
       if (Instruction::isCast(BC->Opcode)) {
         C = UpgradeBitCastExpr(BC->Opcode, ConstOps[0], BC->getType());
@@ -7340,10 +7340,9 @@ std::vector<StructType *> BitcodeReader::getIdentifiedStructTypes() const {
 ModuleSummaryIndexBitcodeReader::ModuleSummaryIndexBitcodeReader(
     BitstreamCursor Cursor, StringRef Strtab, ModuleSummaryIndex &TheIndex,
     StringRef ModulePath, std::function<bool(StringRef)> IsPrevailing,
-    std::function<void(ValueInfo)> OnValueInfo)
+    const clv2::OptionsContext &Ctx)
     : BitcodeReaderBase(std::move(Cursor), Strtab), TheIndex(TheIndex),
-      ModulePath(ModulePath), IsPrevailing(IsPrevailing),
-      OnValueInfo(OnValueInfo) {}
+      ModulePath(ModulePath), IsPrevailing(IsPrevailing), OptsCtx(&Ctx) {}
 
 void ModuleSummaryIndexBitcodeReader::addThisModule() {
   TheIndex.addModule(ModulePath);
@@ -7383,7 +7382,7 @@ void ModuleSummaryIndexBitcodeReader::setValueGUID(
   auto OriginalNameID = ValueGUID;
   if (GlobalValue::isLocalLinkage(Linkage))
     OriginalNameID = GlobalValue::getGUIDAssumingExternalLinkage(ValueName);
-  if (PrintSummaryGUIDs)
+  if (getPrintSummaryGUIDs(*OptsCtx))
     dbgs() << "GUID " << ValueGUID << "(" << OriginalNameID << ") is "
            << ValueName << "\n";
 
@@ -8847,14 +8846,14 @@ BitcodeModule::getLazyModule(LLVMContext &Context, bool ShouldLazyLoadMetadata,
 // regular LTO modules).
 Error BitcodeModule::readSummary(ModuleSummaryIndex &CombinedIndex,
                                  StringRef ModulePath,
-                                 std::function<bool(StringRef)> IsPrevailing,
-                                 std::function<void(ValueInfo)> OnValueInfo) {
+                                 const clv2::OptionsContext &Ctx,
+                                 std::function<bool(StringRef)> IsPrevailing) {
   BitstreamCursor Stream(Buffer);
   if (Error JumpFailed = Stream.JumpToBit(ModuleBit))
     return JumpFailed;
 
   ModuleSummaryIndexBitcodeReader R(std::move(Stream), Strtab, CombinedIndex,
-                                    ModulePath, IsPrevailing, OnValueInfo);
+                                    ModulePath, IsPrevailing, Ctx);
   return R.parseModule();
 }
 
@@ -8866,7 +8865,8 @@ Expected<std::unique_ptr<ModuleSummaryIndex>> BitcodeModule::getSummary() {
 
   auto Index = std::make_unique<ModuleSummaryIndex>(/*HaveGVs=*/false);
   ModuleSummaryIndexBitcodeReader R(std::move(Stream), Strtab, *Index,
-                                    ModuleIdentifier, 0);
+                                    ModuleIdentifier, 0,
+                                    clv2::defaultOptionsContext());
 
   if (Error Err = R.parseModule())
     return std::move(Err);
@@ -9044,12 +9044,14 @@ Expected<std::string> llvm::getBitcodeProducerString(MemoryBufferRef Buffer) {
 }
 
 Error llvm::readModuleSummaryIndex(MemoryBufferRef Buffer,
-                                   ModuleSummaryIndex &CombinedIndex) {
+                                   ModuleSummaryIndex &CombinedIndex,
+                                   const clv2::OptionsContext &Ctx) {
   Expected<BitcodeModule> BM = getSingleModule(Buffer);
   if (!BM)
     return BM.takeError();
 
-  return BM->readSummary(CombinedIndex, BM->getModuleIdentifier());
+  return BM->readSummary(CombinedIndex, BM->getModuleIdentifier(), Ctx,
+                         /*IsPrevailing=*/nullptr);
 }
 
 Expected<std::unique_ptr<ModuleSummaryIndex>>

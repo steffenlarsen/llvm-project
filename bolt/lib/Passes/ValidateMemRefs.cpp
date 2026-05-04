@@ -7,12 +7,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Passes/ValidateMemRefs.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
 #include "bolt/Core/ParallelUtilities.h"
 
 #define DEBUG_TYPE "bolt-memrefs"
 
 namespace opts {
-extern llvm::cl::opt<llvm::bolt::JumpTableSupportLevel> JumpTables;
+extern llvm::bolt::JumpTableSupportLevel JumpTables;
 }
 
 namespace llvm::bolt {
@@ -77,7 +78,9 @@ Error ValidateMemRefs::runOnFunctions(BinaryContext &BC) {
     return Error::success();
 
   // Skip validation if not moving JT
-  if (opts::JumpTables == JTS_NONE || opts::JumpTables == JTS_BASIC)
+  auto JTLevel =
+      static_cast<JumpTableSupportLevel>(bolt_core_opts::getJumpTables(BC));
+  if (JTLevel == JTS_NONE || JTLevel == JTS_BASIC)
     return Error::success();
 
   ParallelUtilities::WorkFuncWithAllocTy ProcessFunction =

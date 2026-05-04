@@ -11,29 +11,39 @@
 #include "llvm/Object/Archive.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Object/Minidump.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/WithColor.h"
 
 using namespace llvm;
 using namespace llvm::object;
+using namespace llvm::clv2;
 
-static cl::OptionCategory Cat("obj2yaml Options");
+static constexpr OptionCategory Cat{"obj2yaml Options"};
 
-static cl::opt<std::string>
-    InputFilename(cl::Positional, cl::desc("<input file>"), cl::init("-"));
-static cl::opt<std::string> OutputFilename("o", cl::desc("Output filename"),
-                                           cl::value_desc("filename"),
-                                           cl::init("-"), cl::Prefix,
-                                           cl::cat(Cat));
-static cl::bits<RawSegments> RawSegment(
+static constexpr OptionInfo<std::string> InputFilename{
+    "input", "<input file>", Positional{}, Init{"-"}, cat(Cat)};
+
+static constexpr OptionInfo<std::string> OutputFilename{
+    "o",       "Output filename", value_desc("filename"),
+    Init{"-"}, PrefixFormat,      cat(Cat)};
+
+static constexpr EnumVal<RawSegments> RawSegmentVals[] = {
+    {"data", RawSegments::data, "__DATA"},
+    {"linkedit", RawSegments::linkedit, "__LINKEDIT"},
+};
+
+static constexpr BitsOptionInfo<RawSegments> RawSegment{
     "raw-segment",
-    cl::desc("Mach-O: dump the raw contents of the listed segments instead of "
-             "parsing them:"),
-    cl::values(clEnumVal(data, "__DATA"), clEnumVal(linkedit, "__LINKEDIT")),
-    cl::cat(Cat));
+    "Mach-O: dump the raw contents of the listed segments instead of "
+    "parsing them:",
+    RawSegmentVals, cat(Cat)};
+
+static constexpr OptionsRegistry<&InputFilename, &OutputFilename, &RawSegment>
+    Obj2YamlToolReg;
 
 static Error dumpObject(const ObjectFile &Obj, raw_ostream &OS) {
   if (Obj.isCOFF())
@@ -54,7 +64,7 @@ static Error dumpObject(const ObjectFile &Obj, raw_ostream &OS) {
   llvm_unreachable("unexpected object file format");
 }
 
-static Error dumpInput(StringRef File, raw_ostream &OS) {
+static Error dumpInput(StringRef File, raw_ostream &OS, unsigned RawBits) {
   ErrorOr<std::unique_ptr<MemoryBuffer>> FileOrErr =
       MemoryBuffer::getFileOrSTDIN(File, /*IsText=*/false,
                                    /*RequiresNullTerminator=*/false);
@@ -82,7 +92,7 @@ static Error dumpInput(StringRef File, raw_ostream &OS) {
   // Universal MachO is not a subclass of ObjectFile, so it needs to be handled
   // here with the other binary types.
   if (Binary.isMachO() || Binary.isMachOUniversalBinary())
-    return macho2yaml(OS, Binary, RawSegment.getBits());
+    return macho2yaml(OS, Binary, RawBits);
   if (ObjectFile *Obj = dyn_cast<ObjectFile>(&Binary))
     return dumpObject(*Obj, OS);
   if (MinidumpFile *Minidump = dyn_cast<MinidumpFile>(&Binary))
@@ -103,21 +113,29 @@ static void reportError(StringRef Input, Error Err) {
 
 int main(int argc, char *argv[]) {
   InitLLVM X(argc, argv);
-  cl::HideUnrelatedOptions(Cat);
-  cl::ParseCommandLineOptions(
-      argc, argv, "Dump a YAML description from an object file", nullptr,
-      nullptr, nullptr, /*LongOptionsUseDoubleDash=*/true);
+
+  clv2::OptionParser P;
+  P.add<&Obj2YamlToolReg>();
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&Cat});
+  auto OptsCtx =
+      P.parse(argc, argv, "Dump a YAML description from an object file");
+  auto *Opts = OptsCtx->getViewPtr<&Obj2YamlToolReg>();
+
+  const std::string &InFile = Opts->get<&InputFilename>();
+  const std::string &OutFile = Opts->get<&OutputFilename>();
+  unsigned RawBits = Opts->get<&RawSegment>();
 
   std::error_code EC;
   std::unique_ptr<ToolOutputFile> Out(
-      new ToolOutputFile(OutputFilename, EC, sys::fs::OF_Text));
+      new ToolOutputFile(OutFile, EC, sys::fs::OF_Text));
   if (EC) {
     WithColor::error(errs(), "obj2yaml")
-        << "failed to open '" + OutputFilename + "': " + EC.message() << '\n';
+        << "failed to open '" + OutFile + "': " + EC.message() << '\n';
     return 1;
   }
-  if (Error Err = dumpInput(InputFilename, Out->os())) {
-    reportError(InputFilename, std::move(Err));
+  if (Error Err = dumpInput(InFile, Out->os(), RawBits)) {
+    reportError(InFile, std::move(Err));
     return 1;
   }
   Out->keep();

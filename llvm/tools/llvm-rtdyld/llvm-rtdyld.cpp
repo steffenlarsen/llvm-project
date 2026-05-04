@@ -26,7 +26,7 @@
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/SymbolSize.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
@@ -34,116 +34,134 @@
 #include "llvm/Support/Memory.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
+#include "llvm/Support/SupportOptionsOptInfos.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "llvm/Support/OptionsContext.h"
 #include <future>
 #include <list>
 
 using namespace llvm;
 using namespace llvm::object;
+using namespace llvm::clv2;
 
-static cl::OptionCategory RTDyldCategory("RTDyld Options");
+static constexpr OptionCategory RTDyldCategory{"RTDyld Options"};
 
-static cl::list<std::string> InputFileList(cl::Positional,
-                                           cl::desc("<input files>"),
-                                           cl::cat(RTDyldCategory));
+static constexpr ListOptionInfo<std::string> InputFileListOpt{
+    "input", "<input files>", Positional{}, ZeroOrMore, cat(RTDyldCategory)};
 
 enum ActionType {
   AC_Execute,
-  AC_PrintObjectLineInfo,
   AC_PrintLineInfo,
   AC_PrintDebugLineInfo,
+  AC_PrintObjectLineInfo,
   AC_Verify
 };
 
-static cl::opt<ActionType> Action(
-    cl::desc("Action to perform:"), cl::init(AC_Execute),
-    cl::values(
-        clEnumValN(AC_Execute, "execute",
-                   "Load, link, and execute the inputs."),
-        clEnumValN(AC_PrintLineInfo, "printline",
-                   "Load, link, and print line information for each function."),
-        clEnumValN(AC_PrintDebugLineInfo, "printdebugline",
-                   "Load, link, and print line information for each function "
-                   "using the debug object"),
-        clEnumValN(AC_PrintObjectLineInfo, "printobjline",
-                   "Like -printlineinfo but does not load the object first"),
-        clEnumValN(AC_Verify, "verify",
-                   "Load, link and verify the resulting memory image.")),
-    cl::cat(RTDyldCategory));
+static constexpr EnumVal<ActionType> ActionVals[] = {
+    {"execute", AC_Execute, "Load, link, and execute the inputs."},
+    {"printline", AC_PrintLineInfo,
+     "Load, link, and print line information for each function."},
+    {"printdebugline", AC_PrintDebugLineInfo,
+     "Load, link, and print line information for each function "
+     "using the debug object"},
+    {"printobjline", AC_PrintObjectLineInfo,
+     "Like -printlineinfo but does not load the object first"},
+    {"verify", AC_Verify, "Load, link and verify the resulting memory image."},
+};
+static constexpr auto ActionOpt =
+    makeEnumOption<ActionType>("", "Action to perform:", ActionVals,
+                               Init{AC_Execute}, cat(RTDyldCategory));
 
-static cl::opt<std::string>
-    EntryPoint("entry", cl::desc("Function to call as entry point."),
-               cl::init("_main"), cl::cat(RTDyldCategory));
+static constexpr OptionInfo<std::string> EntryPointOpt{
+    "entry", "Function to call as entry point.", Init{"_main"},
+    cat(RTDyldCategory)};
 
-static cl::list<std::string> Dylibs("dylib", cl::desc("Add library."),
-                                    cl::cat(RTDyldCategory));
+static constexpr ListOptionInfo<std::string> DylibsOpt{
+    "dylib", "Add library.", ZeroOrMore, cat(RTDyldCategory)};
 
-static cl::list<std::string> InputArgv("args", cl::Positional,
-                                       cl::desc("<program arguments>..."),
-                                       cl::PositionalEatsArgs,
-                                       cl::cat(RTDyldCategory));
+static constexpr ListOptionInfo<std::string> InputArgvOpt{
+    "args", "<program arguments>...", Positional{}, PositionalEatsArgs,
+    cat(RTDyldCategory)};
 
-static cl::opt<std::string>
-    TripleName("triple", cl::desc("Target triple for disassembler"),
-               cl::cat(RTDyldCategory));
+static constexpr OptionInfo<std::string> TripleNameOpt{
+    "triple", "Target triple for disassembler", cat(RTDyldCategory)};
 
-static cl::opt<std::string>
-    MCPU("mcpu",
-         cl::desc("Target a specific cpu type (-mcpu=help for details)"),
-         cl::value_desc("cpu-name"), cl::init(""), cl::cat(RTDyldCategory));
+static constexpr OptionInfo<std::string> MCPUOpt{
+    "mcpu", "Target a specific cpu type (-mcpu=help for details)",
+    value_desc("cpu-name"), Init{""}, cat(RTDyldCategory)};
 
-static cl::list<std::string>
-    CheckFiles("check",
-               cl::desc("File containing RuntimeDyld verifier checks."),
-               cl::cat(RTDyldCategory));
+static constexpr ListOptionInfo<std::string> CheckFilesOpt{
+    "check", "File containing RuntimeDyld verifier checks.", ZeroOrMore,
+    cat(RTDyldCategory)};
 
-static cl::opt<uint64_t>
-    PreallocMemory("preallocate",
-                   cl::desc("Allocate memory upfront rather than on-demand"),
-                   cl::init(0), cl::cat(RTDyldCategory));
+static constexpr OptionInfo<uint64_t> PreallocMemoryOpt{
+    "preallocate", "Allocate memory upfront rather than on-demand",
+    Init{uint64_t(0)}, cat(RTDyldCategory)};
 
-static cl::opt<uint64_t> TargetAddrStart(
+static constexpr OptionInfo<uint64_t> TargetAddrStartOpt{
     "target-addr-start",
-    cl::desc("For -verify only: start of phony target address "
-             "range."),
-    cl::init(4096), // Start at "page 1" - no allocating at "null".
-    cl::Hidden, cl::cat(RTDyldCategory));
+    "For -verify only: start of phony target address range.",
+    Init{uint64_t(4096)}, Hidden, cat(RTDyldCategory)};
 
-static cl::opt<uint64_t> TargetAddrEnd(
-    "target-addr-end",
-    cl::desc("For -verify only: end of phony target address range."),
-    cl::init(~0ULL), cl::Hidden, cl::cat(RTDyldCategory));
+static constexpr OptionInfo<uint64_t> TargetAddrEndOpt{
+    "target-addr-end", "For -verify only: end of phony target address range.",
+    Init{uint64_t(~0ULL)}, Hidden, cat(RTDyldCategory)};
 
-static cl::opt<uint64_t> TargetSectionSep(
+static constexpr OptionInfo<uint64_t> TargetSectionSepOpt{
     "target-section-sep",
-    cl::desc("For -verify only: Separation between sections in "
-             "phony target address space."),
-    cl::init(0), cl::Hidden, cl::cat(RTDyldCategory));
+    "For -verify only: Separation between sections in "
+    "phony target address space.",
+    Init{uint64_t(0)}, Hidden, cat(RTDyldCategory)};
 
-static cl::list<std::string>
-    SpecificSectionMappings("map-section",
-                            cl::desc("For -verify only: Map a section to a "
-                                     "specific address."),
-                            cl::Hidden, cl::cat(RTDyldCategory));
+static constexpr ListOptionInfo<std::string> SpecificSectionMappingsOpt{
+    "map-section", "For -verify only: Map a section to a specific address.",
+    ZeroOrMore, Hidden, cat(RTDyldCategory)};
 
-static cl::list<std::string> DummySymbolMappings(
+static constexpr ListOptionInfo<std::string> DummySymbolMappingsOpt{
     "dummy-extern",
-    cl::desc("For -verify only: Inject a symbol into the extern "
-             "symbol table."),
-    cl::Hidden, cl::cat(RTDyldCategory));
+    "For -verify only: Inject a symbol into the extern symbol table.",
+    ZeroOrMore, Hidden, cat(RTDyldCategory)};
 
-static cl::opt<bool> PrintAllocationRequests(
+static constexpr OptionInfo<bool> PrintAllocationRequestsOpt{
     "print-alloc-requests",
-    cl::desc("Print allocation requests made to the memory "
-             "manager by RuntimeDyld"),
-    cl::Hidden, cl::cat(RTDyldCategory));
+    "Print allocation requests made to the memory manager by RuntimeDyld",
+    Hidden, cat(RTDyldCategory)};
 
-static cl::opt<bool> ShowTimes("show-times",
-                               cl::desc("Show times for llvm-rtdyld phases"),
-                               cl::init(false), cl::cat(RTDyldCategory));
+static constexpr OptionInfo<bool> ShowTimesOpt{
+    "show-times", "Show times for llvm-rtdyld phases", Init{false},
+    cat(RTDyldCategory)};
+
+static constexpr OptionsRegistry<
+    &InputFileListOpt, &ActionOpt, &EntryPointOpt, &DylibsOpt, &InputArgvOpt,
+    &TripleNameOpt, &MCPUOpt, &CheckFilesOpt, &PreallocMemoryOpt,
+    &TargetAddrStartOpt, &TargetAddrEndOpt, &TargetSectionSepOpt,
+    &SpecificSectionMappingsOpt, &DummySymbolMappingsOpt,
+    &PrintAllocationRequestsOpt, &ShowTimesOpt>
+    RTDyldReg;
+
+namespace {
+struct RTDyldToolOptions {
+  std::vector<std::string> InputFileList;
+  std::vector<std::string> Dylibs;
+  std::vector<std::string> InputArgv;
+  std::string EntryPoint;
+  std::vector<std::string> CheckFiles;
+  std::vector<std::string> SpecificSectionMappings;
+  std::vector<std::string> DummySymbolMappings;
+  bool PrintAllocationRequests = false;
+  uint64_t PreallocMemory = 0;
+  std::string TripleName;
+  std::string MCPU;
+  uint64_t TargetAddrStart = 4096;
+  uint64_t TargetAddrEnd = ~0ULL;
+  uint64_t TargetSectionSep = 0;
+  bool SpecifiedTargetAddrEnd = false;
+};
+} // namespace
 
 ExitOnError ExitOnErr;
 
@@ -153,8 +171,6 @@ struct RTDyldTimers {
   Timer LinkTimer{"link", "time to link object files", RTDyldTG};
   Timer RunTimer{"run", "time to execute jitlink'd code", RTDyldTG};
 };
-
-std::unique_ptr<RTDyldTimers> Timers;
 
 /* *** */
 
@@ -212,6 +228,10 @@ public:
   /// If non null, records subsequent Name -> SectionID mappings.
   void setSectionIDsMap(SectionIDMap *SecIDMap) {
     this->SecIDMap = SecIDMap;
+  }
+
+  void setPrintAllocationRequests(bool Print) {
+    PrintAllocationRequests = Print;
   }
 
   void *getPointerToNamedFunction(const std::string &Name,
@@ -285,6 +305,7 @@ private:
   uintptr_t SlabSize = 0;
   uintptr_t CurrentSlabOffset = 0;
   SectionIDMap *SecIDMap = nullptr;
+  bool PrintAllocationRequests = false;
 #if defined(__x86_64__) && defined(__ELF__) && defined(__linux__)
   unsigned UsedTLSStorage = 0;
 #endif
@@ -394,7 +415,7 @@ static void ErrorAndExit(const Twine &Msg) {
   exit(1);
 }
 
-static void loadDylibs() {
+static void loadDylibs(const std::vector<std::string> &Dylibs) {
   for (const std::string &Dylib : Dylibs) {
     if (!sys::fs::is_regular_file(Dylib))
       report_fatal_error(Twine("Dylib not found: '") + Dylib + "'.");
@@ -406,18 +427,20 @@ static void loadDylibs() {
 
 /* *** */
 
-static int printLineInfoForInput(bool LoadObjects, bool UseDebugObj) {
+static int printLineInfoForInput(bool LoadObjects, bool UseDebugObj,
+                                 RTDyldToolOptions &Opts) {
   assert(LoadObjects || !UseDebugObj);
 
   // Load any dylibs requested on the command line.
-  loadDylibs();
+  loadDylibs(Opts.Dylibs);
 
   // If we don't have any input files, read from stdin.
-  if (!InputFileList.size())
-    InputFileList.push_back("-");
-  for (auto &File : InputFileList) {
+  if (!Opts.InputFileList.size())
+    Opts.InputFileList.push_back("-");
+  for (auto &File : Opts.InputFileList) {
     // Instantiate a dynamic linker.
     TrivialMemoryManager MemMgr;
+    MemMgr.setPrintAllocationRequests(Opts.PrintAllocationRequests);
     RuntimeDyld Dyld(MemMgr, MemMgr);
 
     // Load the input memory buffer.
@@ -531,7 +554,8 @@ static int printLineInfoForInput(bool LoadObjects, bool UseDebugObj) {
   return 0;
 }
 
-static void doPreallocation(TrivialMemoryManager &MemMgr) {
+static void doPreallocation(TrivialMemoryManager &MemMgr,
+                            uint64_t PreallocMemory) {
   // Allocate a slab of memory upfront, if required. This is used if
   // we want to test small code models.
   if (static_cast<intptr_t>(PreallocMemory) < 0)
@@ -542,21 +566,22 @@ static void doPreallocation(TrivialMemoryManager &MemMgr) {
     MemMgr.preallocateSlab(PreallocMemory);
 }
 
-static int executeInput() {
+static int executeInput(RTDyldToolOptions &Opts, RTDyldTimers *Timers) {
   // Load any dylibs requested on the command line.
-  loadDylibs();
+  loadDylibs(Opts.Dylibs);
 
   // Instantiate a dynamic linker.
   TrivialMemoryManager MemMgr;
-  doPreallocation(MemMgr);
+  MemMgr.setPrintAllocationRequests(Opts.PrintAllocationRequests);
+  doPreallocation(MemMgr, Opts.PreallocMemory);
   RuntimeDyld Dyld(MemMgr, MemMgr);
 
   // If we don't have any input files, read from stdin.
-  if (!InputFileList.size())
-    InputFileList.push_back("-");
+  if (!Opts.InputFileList.size())
+    Opts.InputFileList.push_back("-");
   {
     TimeRegion TR(Timers ? &Timers->LoadObjectsTimer : nullptr);
-    for (auto &File : InputFileList) {
+    for (auto &File : Opts.InputFileList) {
       // Load the input memory buffer.
       ErrorOr<std::unique_ptr<MemoryBuffer>> InputBuffer =
           MemoryBuffer::getFileOrSTDIN(File);
@@ -590,9 +615,9 @@ static int executeInput() {
   }
 
   // Get the address of the entry point (_main by default).
-  void *MainAddress = Dyld.getSymbolLocalAddress(EntryPoint);
+  void *MainAddress = Dyld.getSymbolLocalAddress(Opts.EntryPoint);
   if (!MainAddress)
-    ErrorAndExit("no definition for '" + EntryPoint + "'");
+    ErrorAndExit("no definition for '" + Opts.EntryPoint + "'");
 
   // Invalidate the instruction cache for each loaded function.
   for (auto &FM : MemMgr.FunctionMemory) {
@@ -609,14 +634,15 @@ static int executeInput() {
   }
 
   // Dispatch to _main().
-  errs() << "loaded '" << EntryPoint << "' at: " << (void*)MainAddress << "\n";
+  errs() << "loaded '" << Opts.EntryPoint << "' at: " << (void *)MainAddress
+         << "\n";
 
   int (*Main)(int, const char**) =
     (int(*)(int,const char**)) uintptr_t(MainAddress);
   std::vector<const char *> Argv;
   // Use the name of the first input object module as argv[0] for the target.
-  Argv.push_back(InputFileList[0].data());
-  for (auto &Arg : InputArgv)
+  Argv.push_back(Opts.InputFileList[0].data());
+  for (auto &Arg : Opts.InputArgv)
     Argv.push_back(Arg.data());
   Argv.push_back(nullptr);
   int Result = 0;
@@ -628,7 +654,8 @@ static int executeInput() {
   return Result;
 }
 
-static int checkAllExpressions(RuntimeDyldChecker &Checker) {
+static int checkAllExpressions(RuntimeDyldChecker &Checker,
+                               const std::vector<std::string> &CheckFiles) {
   for (const auto& CheckerFileName : CheckFiles) {
     ErrorOr<std::unique_ptr<MemoryBuffer>> CheckerFileBuf =
         MemoryBuffer::getFileOrSTDIN(CheckerFileName);
@@ -643,8 +670,9 @@ static int checkAllExpressions(RuntimeDyldChecker &Checker) {
   return 0;
 }
 
-void applySpecificSectionMappings(RuntimeDyld &Dyld,
-                                  const FileToSectionIDMap &FileToSecIDMap) {
+void applySpecificSectionMappings(
+    RuntimeDyld &Dyld, const FileToSectionIDMap &FileToSecIDMap,
+    const std::vector<std::string> &SpecificSectionMappings) {
 
   for (StringRef Mapping : SpecificSectionMappings) {
     size_t EqualsIdx = Mapping.find_first_of('=');
@@ -685,7 +713,8 @@ void applySpecificSectionMappings(RuntimeDyld &Dyld,
 //
 static void remapSectionsAndSymbols(const llvm::Triple &TargetTriple,
                                     RuntimeDyld &Dyld,
-                                    TrivialMemoryManager &MemMgr) {
+                                    TrivialMemoryManager &MemMgr,
+                                    RTDyldToolOptions &Opts) {
 
   // Set up a work list (section addr/size pairs).
   typedef std::list<const TrivialMemoryManager::SectionInfo*> WorklistT;
@@ -725,11 +754,11 @@ static void remapSectionsAndSymbols(const llvm::Triple &TargetTriple,
 
   // If the -target-addr-end option wasn't explicitly passed, then set it to a
   // sensible default based on the target triple.
-  if (TargetAddrEnd.getNumOccurrences() == 0) {
+  if (!Opts.SpecifiedTargetAddrEnd) {
     if (TargetTriple.isArch16Bit())
-      TargetAddrEnd = (1ULL << 16) - 1;
+      Opts.TargetAddrEnd = (1ULL << 16) - 1;
     else if (TargetTriple.isArch32Bit())
-      TargetAddrEnd = (1ULL << 32) - 1;
+      Opts.TargetAddrEnd = (1ULL << 32) - 1;
     // TargetAddrEnd already has a sensible default for 64-bit systems, so
     // there's nothing to do in the 64-bit case.
   }
@@ -739,21 +768,22 @@ static void remapSectionsAndSymbols(const llvm::Triple &TargetTriple,
     auto *CurEntry = Worklist.front();
     Worklist.pop_front();
 
-    uint64_t NextSectionAddr = TargetAddrStart;
+    uint64_t NextSectionAddr = Opts.TargetAddrStart;
 
     for (const auto &Alloc : AlreadyAllocated)
-      if (NextSectionAddr + CurEntry->MB.allocatedSize() + TargetSectionSep <=
+      if (NextSectionAddr + CurEntry->MB.allocatedSize() +
+              Opts.TargetSectionSep <=
           Alloc.first)
         break;
       else
-        NextSectionAddr = Alloc.first + Alloc.second + TargetSectionSep;
+        NextSectionAddr = Alloc.first + Alloc.second + Opts.TargetSectionSep;
 
     Dyld.mapSectionAddress(CurEntry->MB.base(), NextSectionAddr);
     AlreadyAllocated[NextSectionAddr] = CurEntry->MB.allocatedSize();
   }
 
   // Add dummy symbols to the memory manager.
-  for (const auto &Mapping : DummySymbolMappings) {
+  for (const auto &Mapping : Opts.DummySymbolMappings) {
     size_t EqualsIdx = Mapping.find_first_of('=');
 
     if (EqualsIdx == StringRef::npos)
@@ -774,24 +804,26 @@ static void remapSectionsAndSymbols(const llvm::Triple &TargetTriple,
 // Load and link the objects specified on the command line, but do not execute
 // anything. Instead, attach a RuntimeDyldChecker instance and call it to
 // verify the correctness of the linked memory.
-static int linkAndVerify() {
+static int linkAndVerify(RTDyldToolOptions &Opts) {
 
   // Check for missing triple.
-  if (TripleName == "")
+  if (Opts.TripleName == "")
     ErrorAndExit("-triple required when running in -verify mode.");
 
   // Look up the target and build the disassembler.
-  Triple TheTriple(Triple::normalize(TripleName));
+  Triple TheTriple(Triple::normalize(Opts.TripleName));
   std::string ErrorStr;
   const Target *TheTarget =
     TargetRegistry::lookupTarget("", TheTriple, ErrorStr);
   if (!TheTarget)
-    ErrorAndExit("Error accessing target '" + TripleName + "': " + ErrorStr);
+    ErrorAndExit("Error accessing target '" + Opts.TripleName +
+                 "': " + ErrorStr);
 
-  TripleName = TheTriple.getTriple();
+  Opts.TripleName = TheTriple.getTriple();
 
-  std::unique_ptr<MCSubtargetInfo> STI(
-      TheTarget->createMCSubtargetInfo(TheTriple, MCPU, ""));
+  std::unique_ptr<MCSubtargetInfo> STI(TheTarget->createMCSubtargetInfo(
+      TheTriple, Opts.MCPU, "",
+      /*Ctx=*/llvm::clv2::defaultOptionsContext()));
   if (!STI)
     ErrorAndExit("Unable to create subtarget info!");
 
@@ -820,11 +852,12 @@ static int linkAndVerify() {
       TheTarget->createMCInstPrinter(TheTriple, 0, *MAI, *MII, *MRI));
 
   // Load any dylibs requested on the command line.
-  loadDylibs();
+  loadDylibs(Opts.Dylibs);
 
   // Instantiate a dynamic linker.
   TrivialMemoryManager MemMgr;
-  doPreallocation(MemMgr);
+  MemMgr.setPrintAllocationRequests(Opts.PrintAllocationRequests);
+  doPreallocation(MemMgr, Opts.PreallocMemory);
 
   struct StubID {
     unsigned SectionID;
@@ -957,9 +990,9 @@ static int linkAndVerify() {
   std::unique_ptr<RuntimeDyldChecker> Checker;
 
   // If we don't have any input files, read from stdin.
-  if (!InputFileList.size())
-    InputFileList.push_back("-");
-  for (auto &InputFile : InputFileList) {
+  if (!Opts.InputFileList.size())
+    Opts.InputFileList.push_back("-");
+  for (auto &InputFile : Opts.InputFileList) {
     // Load the input memory buffer.
     ErrorOr<std::unique_ptr<MemoryBuffer>> InputBuffer =
         MemoryBuffer::getFileOrSTDIN(InputFile);
@@ -984,7 +1017,7 @@ static int linkAndVerify() {
           IsSymbolValid, GetSymbolInfo, GetSectionInfo, GetStubInfo, GetGOTInfo,
           Obj.isLittleEndian() ? llvm::endianness::little
                                : llvm::endianness::big,
-          TheTriple, MCPU, SubtargetFeatures(), dbgs());
+          TheTriple, Opts.MCPU, SubtargetFeatures(), dbgs());
 
     auto FileName = sys::path::filename(InputFile);
     MemMgr.setSectionIDsMap(&FileToSecIDMap[FileName]);
@@ -998,8 +1031,9 @@ static int linkAndVerify() {
 
   // Re-map the section addresses into the phony target address space and add
   // dummy symbols.
-  applySpecificSectionMappings(Dyld, FileToSecIDMap);
-  remapSectionsAndSymbols(TheTriple, Dyld, MemMgr);
+  applySpecificSectionMappings(Dyld, FileToSecIDMap,
+                               Opts.SpecificSectionMappings);
+  remapSectionsAndSymbols(TheTriple, Dyld, MemMgr, Opts);
 
   // Resolve all the relocations we can.
   Dyld.resolveRelocations();
@@ -1007,7 +1041,7 @@ static int linkAndVerify() {
   // Register EH frames.
   Dyld.registerEHFrames();
 
-  int ErrorCode = checkAllExpressions(*Checker);
+  int ErrorCode = checkAllExpressions(*Checker, Opts.CheckFiles);
   if (Dyld.hasError())
     ErrorAndExit("RTDyld reported an error applying relocations:\n  " +
                  Dyld.getErrorString());
@@ -1017,38 +1051,63 @@ static int linkAndVerify() {
 
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
-  ProgramName = argv[0];
 
   llvm::InitializeAllTargetInfos();
   llvm::InitializeAllTargetMCs();
   llvm::InitializeAllDisassemblers();
 
-  cl::HideUnrelatedOptions({&RTDyldCategory, &getColorCategory()});
-  cl::ParseCommandLineOptions(argc, argv, "llvm MC-JIT tool\n");
+  clv2::OptionParser P;
+  P.add<&RTDyldReg>();
+  RegisterCoreLLVMOptions(P);
+  P.hideUnrelatedOptions({&RTDyldCategory, &clv2::ColorOptionsCategory});
+  auto OptsCtx = P.parse(argc, argv, "llvm MC-JIT tool\n");
+  auto *Opts = OptsCtx->getViewPtr<&RTDyldReg>();
+
+  RTDyldToolOptions ToolOpts;
+  ToolOpts.InputFileList = Opts->get<&InputFileListOpt>();
+  ToolOpts.Dylibs = Opts->get<&DylibsOpt>();
+  ToolOpts.InputArgv = Opts->get<&InputArgvOpt>();
+  ToolOpts.EntryPoint = Opts->get<&EntryPointOpt>();
+  ToolOpts.CheckFiles = Opts->get<&CheckFilesOpt>();
+  ToolOpts.SpecificSectionMappings = Opts->get<&SpecificSectionMappingsOpt>();
+  ToolOpts.DummySymbolMappings = Opts->get<&DummySymbolMappingsOpt>();
+  ToolOpts.PrintAllocationRequests = Opts->get<&PrintAllocationRequestsOpt>();
+  ToolOpts.PreallocMemory = Opts->get<&PreallocMemoryOpt>();
+  ToolOpts.TripleName = Opts->get<&TripleNameOpt>();
+  ToolOpts.MCPU = Opts->get<&MCPUOpt>();
+  ToolOpts.TargetAddrStart = Opts->get<&TargetAddrStartOpt>();
+  ToolOpts.TargetAddrEnd = Opts->get<&TargetAddrEndOpt>();
+  ToolOpts.TargetSectionSep = Opts->get<&TargetSectionSepOpt>();
+  ToolOpts.SpecifiedTargetAddrEnd = Opts->specified<&TargetAddrEndOpt>();
+
+  ProgramName = argv[0];
 
   ExitOnErr.setBanner(std::string(argv[0]) + ": ");
 
-  Timers = ShowTimes ? std::make_unique<RTDyldTimers>() : nullptr;
+  std::unique_ptr<RTDyldTimers> Timers =
+      Opts->get<&ShowTimesOpt>() ? std::make_unique<RTDyldTimers>() : nullptr;
+
+  ActionType Action = Opts->get<&ActionOpt>();
 
   int Result = 0;
   switch (Action) {
   case AC_Execute:
-    Result = executeInput();
+    Result = executeInput(ToolOpts, Timers.get());
     break;
   case AC_PrintDebugLineInfo:
-    Result =
-        printLineInfoForInput(/* LoadObjects */ true, /* UseDebugObj */ true);
+    Result = printLineInfoForInput(/* LoadObjects */ true,
+                                   /* UseDebugObj */ true, ToolOpts);
     break;
   case AC_PrintLineInfo:
-    Result =
-        printLineInfoForInput(/* LoadObjects */ true, /* UseDebugObj */ false);
+    Result = printLineInfoForInput(/* LoadObjects */ true,
+                                   /* UseDebugObj */ false, ToolOpts);
     break;
   case AC_PrintObjectLineInfo:
-    Result =
-        printLineInfoForInput(/* LoadObjects */ false, /* UseDebugObj */ false);
+    Result = printLineInfoForInput(/* LoadObjects */ false,
+                                   /* UseDebugObj */ false, ToolOpts);
     break;
   case AC_Verify:
-    Result = linkAndVerify();
+    Result = linkAndVerify(ToolOpts);
     break;
   }
   return Result;

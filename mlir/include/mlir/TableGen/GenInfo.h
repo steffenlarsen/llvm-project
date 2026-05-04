@@ -69,6 +69,9 @@ struct GenRegistration {
                   const GenFunction &function);
 };
 
+/// Returns all registered generators.
+ArrayRef<GenInfo> getRegisteredGenerators();
+
 } // namespace mlir
 
 #endif // MLIR_TABLEGEN_GENINFO_H_

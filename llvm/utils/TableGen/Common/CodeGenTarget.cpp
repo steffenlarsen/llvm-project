@@ -20,25 +20,40 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Twine.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Record.h"
 #include <tuple>
 using namespace llvm;
 
-static cl::OptionCategory AsmParserCat("Options for -gen-asm-parser");
-static cl::OptionCategory AsmWriterCat("Options for -gen-asm-writer");
+static clv2::OptionCategory AsmParserCat("Options for -gen-asm-parser");
+static clv2::OptionCategory AsmWriterCat("Options for -gen-asm-writer");
 
-static cl::opt<unsigned>
-    AsmParserNum("asmparsernum", cl::init(0),
-                 cl::desc("Make -gen-asm-parser emit assembly parser #N"),
-                 cl::cat(AsmParserCat));
+static unsigned AsmParserNum = 0;
 
-static cl::opt<unsigned>
-    AsmWriterNum("asmwriternum", cl::init(0),
-                 cl::desc("Make -gen-asm-writer emit assembly writer #N"),
-                 cl::cat(AsmWriterCat));
+static unsigned AsmWriterNum = 0;
+
+static constexpr clv2::OptionInfo<unsigned> OI_AsmParserNum{
+    "asmparsernum", "Make -gen-asm-parser emit assembly parser #N",
+    clv2::cat(AsmParserCat)};
+
+static constexpr clv2::OptionInfo<unsigned> OI_AsmWriterNum{
+    "asmwriternum", "Make -gen-asm-writer emit assembly writer #N",
+    clv2::cat(AsmWriterCat)};
+
+static constexpr clv2::OptionsRegistry<&OI_AsmParserNum, &OI_AsmWriterNum>
+    CodeGenTargetReg;
+
+static void
+applyCodeGenTarget(const decltype(CodeGenTargetReg)::ParsedOptionsT &Opts) {
+  AsmParserNum = Opts.get<&OI_AsmParserNum>();
+  AsmWriterNum = Opts.get<&OI_AsmWriterNum>();
+}
+
+void registerCodeGenTargetOptions(clv2::OptionParser &P) {
+  P.add<&CodeGenTargetReg, applyCodeGenTarget>();
+}
 
 /// Returns the MVT that the specified TableGen
 /// record corresponds to.

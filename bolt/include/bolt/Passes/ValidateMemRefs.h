@@ -20,7 +20,7 @@ namespace llvm::bolt {
 ///
 class ValidateMemRefs : public BinaryFunctionPass {
 public:
-  explicit ValidateMemRefs(const cl::opt<bool> &PrintPass)
+  explicit ValidateMemRefs(const bool PrintPass)
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "validate-mem-refs"; }

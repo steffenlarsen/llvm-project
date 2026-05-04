@@ -24,17 +24,19 @@
 #include "llvm/CodeGen/MachineVerifier.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassInstrumentation.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/PrintPasses.h"
 #include "llvm/IR/StructuralHash.h"
 #include "llvm/IR/Verifier.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Passes/PassesOptions.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/GraphWriter.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/Regex.h"
@@ -46,100 +48,150 @@
 
 using namespace llvm;
 
-static cl::opt<bool> VerifyAnalysisInvalidation("verify-analysis-invalidation",
-                                                cl::Hidden,
+static bool getVerifyAnalysisInvalidation(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::PassesOptsReg>(Ctx))
+    if (O->specified<&clv2::PAS_VerifyAnalysisInvalidation>())
+      return O->get<&clv2::PAS_VerifyAnalysisInvalidation>();
 #ifdef EXPENSIVE_CHECKS
-                                                cl::init(true)
+  return true;
 #else
-                                                cl::init(false)
+  return false;
 #endif
-);
+}
 
 // An option that supports the -print-changed option.  See
 // the description for -print-changed for an explanation of the use
 // of this option.  Note that this option has no effect without -print-changed.
-static cl::opt<bool>
-    PrintChangedBefore("print-before-changed",
-                       cl::desc("Print before passes that change them"),
-                       cl::init(false), cl::Hidden);
+static bool getPrintChangedBefore(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::PassesOptsReg,
+                                    &clv2::PAS_PrintChangedBefore>(Ctx, false);
+}
 
 // An option for specifying the dot used by
 // print-changed=[dot-cfg | dot-cfg-quiet]
-static cl::opt<std::string>
-    DotBinary("print-changed-dot-path", cl::Hidden, cl::init("dot"),
-              cl::desc("system dot used by change reporters"));
+static const std::string &getDotBinary(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::PassesOptsReg>(Ctx))
+    if (O->specified<&clv2::PAS_DotBinary>())
+      return O->get<&clv2::PAS_DotBinary>();
+  static const std::string Default = "dot";
+  return Default;
+}
 
 // An option that determines the colour used for elements that are only
 // in the before part.  Must be a colour named in appendix J of
 // https://graphviz.org/pdf/dotguide.pdf
-static cl::opt<std::string>
-    BeforeColour("dot-cfg-before-color",
-                 cl::desc("Color for dot-cfg before elements"), cl::Hidden,
-                 cl::init("red"));
+static const std::string &getBeforeColour(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::PassesOptsReg>(Ctx))
+    if (O->specified<&clv2::PAS_BeforeColour>())
+      return O->get<&clv2::PAS_BeforeColour>();
+  static const std::string Default = "red";
+  return Default;
+}
 // An option that determines the colour used for elements that are only
 // in the after part.  Must be a colour named in appendix J of
 // https://graphviz.org/pdf/dotguide.pdf
-static cl::opt<std::string>
-    AfterColour("dot-cfg-after-color",
-                cl::desc("Color for dot-cfg after elements"), cl::Hidden,
-                cl::init("forestgreen"));
+static const std::string &getAfterColour(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::PassesOptsReg>(Ctx))
+    if (O->specified<&clv2::PAS_AfterColour>())
+      return O->get<&clv2::PAS_AfterColour>();
+  static const std::string Default = "forestgreen";
+  return Default;
+}
 // An option that determines the colour used for elements that are in both
 // the before and after parts.  Must be a colour named in appendix J of
 // https://graphviz.org/pdf/dotguide.pdf
-static cl::opt<std::string>
-    CommonColour("dot-cfg-common-color",
-                 cl::desc("Color for dot-cfg common elements"), cl::Hidden,
-                 cl::init("black"));
+static const std::string &getCommonColour(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::PassesOptsReg>(Ctx))
+    if (O->specified<&clv2::PAS_CommonColour>())
+      return O->get<&clv2::PAS_CommonColour>();
+  static const std::string Default = "black";
+  return Default;
+}
 
 // An option that determines where the generated website file (named
 // passes.html) and the associated pdf files (named diff_*.pdf) are saved.
-static cl::opt<std::string> DotCfgDir(
-    "dot-cfg-dir",
-    cl::desc("Generate dot files into specified directory for changed IRs"),
-    cl::Hidden, cl::init("./"));
+static std::string DotCfgDir = "./";
+static const std::string &getDotCfgDir(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::PassesOptsReg>(Ctx))
+    if (O->specified<&clv2::PAS_DotCfgDir>())
+      return O->get<&clv2::PAS_DotCfgDir>();
+  return DotCfgDir;
+}
 
 // Options to print the IR that was being processed when a pass crashes.
-static cl::opt<std::string> PrintOnCrashPath(
-    "print-on-crash-path",
-    cl::desc("Print the last form of the IR before crash to a file"),
-    cl::Hidden);
+static const std::string &getPrintOnCrashPath(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::PassesOptsReg>(Ctx))
+    if (O->specified<&clv2::PAS_PrintOnCrashPath>())
+      return O->get<&clv2::PAS_PrintOnCrashPath>();
+  static const std::string Default;
+  return Default;
+}
 
-static cl::opt<bool> PrintOnCrash(
-    "print-on-crash",
-    cl::desc("Print the last form of the IR before crash (use -print-on-crash-path to dump to a file)"),
-    cl::Hidden);
+static bool getPrintOnCrash(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::PassesOptsReg,
+                                    &clv2::PAS_PrintOnCrash>(Ctx, false);
+}
 
-static cl::opt<std::string> OptBisectPrintIRPath(
-    "opt-bisect-print-ir-path",
-    cl::desc("Print IR to path when opt-bisect-limit is reached"), cl::Hidden);
+static const std::string &
+getOptBisectPrintIRPath(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::PassesOptsReg>(Ctx))
+    if (O->specified<&clv2::PAS_OptBisectPrintIRPath>())
+      return O->get<&clv2::PAS_OptBisectPrintIRPath>();
+  static const std::string Default;
+  return Default;
+}
 
-static cl::opt<bool> PrintPassNumbers(
-    "print-pass-numbers", cl::init(false), cl::Hidden,
-    cl::desc("Print pass names and their ordinals"));
+static bool getPrintPassNumbers(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::PassesOptsReg,
+                                    &clv2::PAS_PrintPassNumbers>(Ctx, false);
+}
 
-static cl::list<unsigned> PrintBeforePassNumber(
-    "print-before-pass-number", cl::CommaSeparated, cl::Hidden,
-    cl::desc("Print IR before the passes with specified numbers as "
-             "reported by print-pass-numbers"));
+static const std::vector<unsigned> &
+getPrintBeforePassNumber(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::PassesOptsReg>(Ctx))
+    if (O->specified<&clv2::PAS_PrintBeforePassNumber>())
+      return O->get<&clv2::PAS_PrintBeforePassNumber>();
+  static const std::vector<unsigned> Default;
+  return Default;
+}
 
-static cl::list<unsigned> PrintAfterPassNumber(
-    "print-after-pass-number", cl::CommaSeparated, cl::Hidden,
-    cl::desc("Print IR after the passes with specified numbers as "
-             "reported by print-pass-numbers"));
+static const std::vector<unsigned> &
+getPrintAfterPassNumber(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::PassesOptsReg>(Ctx))
+    if (O->specified<&clv2::PAS_PrintAfterPassNumber>())
+      return O->get<&clv2::PAS_PrintAfterPassNumber>();
+  static const std::vector<unsigned> Default;
+  return Default;
+}
 
-static cl::opt<std::string> IRDumpDirectory(
-    "ir-dump-directory",
-    cl::desc("If specified, IR printed using the "
-             "-print-[before|after]{-all} options will be dumped into "
-             "files in this directory rather than written to stderr"),
-    cl::Hidden, cl::value_desc("filename"));
+static const std::string &getIRDumpDirectory(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::PassesOptsReg>(Ctx))
+    if (O->specified<&clv2::PAS_IRDumpDirectory>())
+      return O->get<&clv2::PAS_IRDumpDirectory>();
+  static const std::string Default;
+  return Default;
+}
 
-static cl::opt<bool>
-    DroppedVarStats("dropped-variable-stats", cl::Hidden,
-                    cl::desc("Dump dropped debug variables stats"),
-                    cl::init(false));
+static bool getDroppedVarStats(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::PassesOptsReg,
+                                    &clv2::PAS_DroppedVarStats>(Ctx, false);
+}
 
-namespace {
+static LLVMContext &getIRContext(IRUnitRef IR) {
+  if (const auto *M = dyn_cast<Module>(IR))
+    return M->getContext();
+  if (const auto *F = dyn_cast<Function>(IR))
+    return F->getContext();
+  if (const auto *C = dyn_cast<LazyCallGraph::SCC>(IR)) {
+    assert(C->begin() != C->end());
+    return C->begin()->getFunction().getContext();
+  }
+  if (const auto *L = dyn_cast<Loop>(IR))
+    return L->getHeader()->getContext();
+  if (const auto *MF = dyn_cast<MachineFunction>(IR))
+    return MF->getFunction().getContext();
+  llvm_unreachable("Unknown wrapped IR type");
+}
 
 // An option for specifying an executable that will be called with the IR
 // everytime it changes in the opt pipeline.  It will also be called on
@@ -148,10 +200,15 @@ namespace {
 // be used, for example, to call llc on the IR and run a test to determine
 // which pass makes a change that changes the functioning of the IR.
 // The usual modifier options work as expected.
-static cl::opt<std::string>
-    TestChanged("exec-on-ir-change", cl::Hidden, cl::init(""),
-                cl::desc("exe called with module IR after each pass that "
-                         "changes it"));
+static const std::string &getTestChanged(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::PassesOptsReg>(Ctx))
+    if (O->specified<&clv2::PAS_TestChanged>())
+      return O->get<&clv2::PAS_TestChanged>();
+  static const std::string Default;
+  return Default;
+}
+
+namespace {
 
 /// Extract Module out of \p IR unit. May return nullptr if \p IR does not match
 /// certain global filters. Will never return nullptr if \p Force is true.
@@ -160,7 +217,7 @@ const Module *unwrapModule(IRUnitRef IR, bool Force = false) {
     return M;
 
   if (const auto *F = dyn_cast<Function>(IR)) {
-    if (!Force && !isFunctionInPrintList(F->getName()))
+    if (!Force && !isFunctionInPrintList(F->getContext(), F->getName()))
       return nullptr;
 
     return F->getParent();
@@ -169,7 +226,8 @@ const Module *unwrapModule(IRUnitRef IR, bool Force = false) {
   if (const auto *C = dyn_cast<LazyCallGraph::SCC>(IR)) {
     for (const LazyCallGraph::Node &N : *C) {
       const Function &F = N.getFunction();
-      if (Force || (!F.isDeclaration() && isFunctionInPrintList(F.getName()))) {
+      if (Force || (!F.isDeclaration() &&
+                    isFunctionInPrintList(F.getContext(), F.getName()))) {
         return F.getParent();
       }
     }
@@ -179,13 +237,14 @@ const Module *unwrapModule(IRUnitRef IR, bool Force = false) {
 
   if (const auto *L = dyn_cast<Loop>(IR)) {
     const Function *F = L->getHeader()->getParent();
-    if (!Force && !isFunctionInPrintList(F->getName()))
+    if (!Force && !isFunctionInPrintList(F->getContext(), F->getName()))
       return nullptr;
     return F->getParent();
   }
 
   if (const auto *MF = dyn_cast<MachineFunction>(IR)) {
-    if (!Force && !isFunctionInPrintList(MF->getName()))
+    if (!Force &&
+        !isFunctionInPrintList(MF->getFunction().getContext(), MF->getName()))
       return nullptr;
     return MF->getFunction().getParent();
   }
@@ -194,13 +253,14 @@ const Module *unwrapModule(IRUnitRef IR, bool Force = false) {
 }
 
 void printIR(raw_ostream &OS, const Function *F) {
-  if (!isFunctionInPrintList(F->getName()))
+  if (!isFunctionInPrintList(F->getContext(), F->getName()))
     return;
   OS << *F;
 }
 
 void printIR(raw_ostream &OS, const Module *M) {
-  if (isFunctionInPrintList("*") || forcePrintModuleIR()) {
+  if (isFunctionInPrintList(M->getContext(), "*") ||
+      forcePrintModuleIR(M->getContext())) {
     M->print(OS, nullptr);
   } else {
     for (const auto &F : M->functions()) {
@@ -212,7 +272,8 @@ void printIR(raw_ostream &OS, const Module *M) {
 void printIR(raw_ostream &OS, const LazyCallGraph::SCC *C) {
   for (const LazyCallGraph::Node &N : *C) {
     const Function &F = N.getFunction();
-    if (!F.isDeclaration() && isFunctionInPrintList(F.getName())) {
+    if (!F.isDeclaration() &&
+        isFunctionInPrintList(F.getContext(), F.getName())) {
       F.print(OS);
     }
   }
@@ -220,13 +281,13 @@ void printIR(raw_ostream &OS, const LazyCallGraph::SCC *C) {
 
 void printIR(raw_ostream &OS, const Loop *L) {
   const Function *F = L->getHeader()->getParent();
-  if (!isFunctionInPrintList(F->getName()))
+  if (!isFunctionInPrintList(F->getContext(), F->getName()))
     return;
   printLoop(const_cast<Loop &>(*L), OS);
 }
 
 void printIR(raw_ostream &OS, const MachineFunction *MF) {
-  if (!isFunctionInPrintList(MF->getName()))
+  if (!isFunctionInPrintList(MF->getFunction().getContext(), MF->getName()))
     return;
   MF->print(OS);
 }
@@ -253,18 +314,19 @@ std::string getIRName(IRUnitRef IR) {
 
 bool moduleContainsFilterPrintFunc(const Module &M) {
   return any_of(M.functions(),
-                [](const Function &F) {
-                  return isFunctionInPrintList(F.getName());
+                [&M](const Function &F) {
+                  return isFunctionInPrintList(M.getContext(), F.getName());
                 }) ||
-         isFunctionInPrintList("*");
+         isFunctionInPrintList(M.getContext(), "*");
 }
 
 bool sccContainsFilterPrintFunc(const LazyCallGraph::SCC &C) {
+  LLVMContext &Ctx = C.begin()->getFunction().getContext();
   return any_of(C,
-                [](const LazyCallGraph::Node &N) {
-                  return isFunctionInPrintList(N.getName());
+                [&Ctx](const LazyCallGraph::Node &N) {
+                  return isFunctionInPrintList(Ctx, N.getName());
                 }) ||
-         isFunctionInPrintList("*");
+         isFunctionInPrintList(Ctx, "*");
 }
 
 bool shouldPrintIR(IRUnitRef IR) {
@@ -272,16 +334,17 @@ bool shouldPrintIR(IRUnitRef IR) {
     return moduleContainsFilterPrintFunc(*M);
 
   if (const auto *F = dyn_cast<Function>(IR))
-    return isFunctionInPrintList(F->getName());
+    return isFunctionInPrintList(F->getContext(), F->getName());
 
   if (const auto *C = dyn_cast<LazyCallGraph::SCC>(IR))
     return sccContainsFilterPrintFunc(*C);
 
   if (const auto *L = dyn_cast<Loop>(IR))
-    return isFunctionInPrintList(L->getHeader()->getParent()->getName());
+    return isFunctionInPrintList(L->getHeader()->getContext(),
+                                 L->getHeader()->getParent()->getName());
 
   if (const auto *MF = dyn_cast<MachineFunction>(IR))
-    return isFunctionInPrintList(MF->getName());
+    return isFunctionInPrintList(MF->getFunction().getContext(), MF->getName());
   llvm_unreachable("Unknown wrapped IR type");
 }
 
@@ -291,7 +354,7 @@ void unwrapAndPrint(raw_ostream &OS, IRUnitRef IR) {
   if (!shouldPrintIR(IR))
     return;
 
-  if (forcePrintModuleIR()) {
+  if (forcePrintModuleIR(getIRContext(IR))) {
     auto *M = unwrapModule(IR);
     assert(M && "should have unwrapped module");
     printIR(OS, M);
@@ -360,13 +423,13 @@ const Module *getModuleForComparison(IRUnitRef IR) {
 }
 
 bool isInterestingFunction(const Function &F) {
-  return isFunctionInPrintList(F.getName());
+  return isFunctionInPrintList(F.getContext(), F.getName());
 }
 
 // Return true when this is a pass on IR for which printing
 // of changes is desired.
 bool isInteresting(IRUnitRef IR, StringRef PassID, StringRef PassName) {
-  if (isIgnored(PassID) || !isPassInPrintList(PassName))
+  if (isIgnored(PassID) || !isPassInPrintList(getIRContext(IR), PassName))
     return false;
   if (const auto *F = dyn_cast<Function>(IR))
     return isInterestingFunction(*F);
@@ -504,9 +567,9 @@ void TextChangeReporter<T>::handleIgnored(StringRef PassID, std::string &Name) {
 IRChangedPrinter::~IRChangedPrinter() = default;
 
 void IRChangedPrinter::registerCallbacks(PassInstrumentationCallbacks &PIC) {
-  if (PrintChanged == ChangePrinter::Verbose ||
-      PrintChanged == ChangePrinter::Quiet)
-    TextChangeReporter<std::string>::registerRequiredCallbacks(PIC);
+  // Note: the caller (StandardInstrumentations) gates this call based on
+  // getPrintChanged(). We always register if called.
+  TextChangeReporter<std::string>::registerRequiredCallbacks(PIC);
 }
 
 void IRChangedPrinter::generateIRRepresentation(IRUnitRef IR, StringRef PassID,
@@ -520,7 +583,7 @@ void IRChangedPrinter::handleAfter(StringRef PassID, std::string &Name,
                                    const std::string &Before,
                                    const std::string &After, IRUnitRef) {
   // Report the IR before the changes when requested.
-  if (PrintChangedBefore)
+  if (getPrintChangedBefore(*OptsCtx))
     Out << "*** IR Dump Before " << PassID << " on " << Name << " ***\n"
         << Before;
 
@@ -537,7 +600,7 @@ void IRChangedPrinter::handleAfter(StringRef PassID, std::string &Name,
 IRChangedTester::~IRChangedTester() = default;
 
 void IRChangedTester::registerCallbacks(PassInstrumentationCallbacks &PIC) {
-  if (TestChanged != "")
+  if (getTestChanged(*OptsCtx) != "")
     TextChangeReporter<std::string>::registerRequiredCallbacks(PIC);
 }
 
@@ -550,13 +613,14 @@ void IRChangedTester::handleIR(const std::string &S, StringRef PassID) {
     dbgs() << "Unable to create temporary file.";
     return;
   }
-  static ErrorOr<std::string> Exe = sys::findProgramByName(TestChanged);
+  static ErrorOr<std::string> Exe =
+      sys::findProgramByName(getTestChanged(*OptsCtx));
   if (!Exe) {
     dbgs() << "Unable to find test-changed executable.";
     return;
   }
 
-  StringRef Args[] = {TestChanged, FileName[0], PassID};
+  StringRef Args[] = {getTestChanged(*OptsCtx), FileName[0], PassID};
   int Result = sys::ExecuteAndWait(*Exe, Args);
   if (Result < 0) {
     dbgs() << "Error executing test-changed executable.";
@@ -714,11 +778,12 @@ void IRComparer<T>::analyzeIR(IRUnitRef IR, IRDataT<T> &Data) {
 }
 
 static bool shouldGenerateData(const Function &F) {
-  return !F.isDeclaration() && isFunctionInPrintList(F.getName());
+  return !F.isDeclaration() &&
+         isFunctionInPrintList(F.getContext(), F.getName());
 }
 
 static bool shouldGenerateData(const MachineFunction &MF) {
-  return isFunctionInPrintList(MF.getName());
+  return isFunctionInPrintList(MF.getFunction().getContext(), MF.getName());
 }
 
 template <typename T>
@@ -795,7 +860,7 @@ StringRef PrintIRInstrumentation::getFileSuffix(IRDumpFileSuffixType Type) {
 std::string PrintIRInstrumentation::fetchDumpFilename(
     StringRef PassName, StringRef IRFileDisplayName, unsigned PassNumber,
     IRDumpFileSuffixType SuffixType) {
-  assert(!IRDumpDirectory.empty() &&
+  assert(Ctx && !getIRDumpDirectory(Ctx->getOptionsContext()).empty() &&
          "The flag -ir-dump-directory must be passed to dump IR to files");
 
   SmallString<64> Filename;
@@ -806,7 +871,8 @@ std::string PrintIRInstrumentation::fetchDumpFilename(
   FilenameStream << getFileSuffix(SuffixType);
 
   SmallString<128> ResultPath;
-  sys::path::append(ResultPath, IRDumpDirectory, Filename);
+  sys::path::append(ResultPath, getIRDumpDirectory(Ctx->getOptionsContext()),
+                    Filename);
   return std::string(ResultPath);
 }
 
@@ -879,7 +945,7 @@ void PrintIRInstrumentation::printBeforePass(StringRef PassID, IRUnitRef IR) {
     unwrapAndPrint(Stream, IR);
   };
 
-  if (!IRDumpDirectory.empty()) {
+  if (Ctx && !getIRDumpDirectory(Ctx->getOptionsContext()).empty()) {
     std::string DumpIRFilename =
         fetchDumpFilename(PassID, getIRFileDisplayName(IR), CurrentPassNumber,
                           IRDumpFileSuffixType::Before);
@@ -914,7 +980,7 @@ void PrintIRInstrumentation::printAfterPass(StringRef PassID, IRUnitRef IR) {
     unwrapAndPrint(Stream, IR);
   };
 
-  if (!IRDumpDirectory.empty()) {
+  if (Ctx && !getIRDumpDirectory(Ctx->getOptionsContext()).empty()) {
     std::string DumpIRFilename =
         fetchDumpFilename(PassID, getIRFileDisplayName(IR), CurrentPassNumber,
                           IRDumpFileSuffixType::After);
@@ -952,7 +1018,7 @@ void PrintIRInstrumentation::printAfterPassInvalidated(StringRef PassID) {
     printIR(Stream, M);
   };
 
-  if (!IRDumpDirectory.empty()) {
+  if (Ctx && !getIRDumpDirectory(Ctx->getOptionsContext()).empty()) {
     std::string DumpIRFilename =
         fetchDumpFilename(PassID, IRFileDisplayName, PassNumber,
                           IRDumpFileSuffixType::Invalidated);
@@ -966,41 +1032,43 @@ void PrintIRInstrumentation::printAfterPassInvalidated(StringRef PassID) {
 }
 
 bool PrintIRInstrumentation::shouldPrintBeforePass(StringRef PassID) {
-  if (shouldPrintBeforeAll())
+  if (shouldPrintBeforeAll(*Ctx))
     return true;
 
   StringRef PassName = PIC->getPassNameForClassName(PassID);
-  return is_contained(printBeforePasses(), PassName);
+  return is_contained(printBeforePasses(*Ctx), PassName);
 }
 
 bool PrintIRInstrumentation::shouldPrintAfterPass(StringRef PassID) {
-  if (shouldPrintAfterAll())
+  if (shouldPrintAfterAll(*Ctx))
     return true;
 
   StringRef PassName = PIC->getPassNameForClassName(PassID);
-  return is_contained(printAfterPasses(), PassName);
+  return is_contained(printAfterPasses(*Ctx), PassName);
 }
 
 bool PrintIRInstrumentation::shouldPrintBeforeCurrentPassNumber() {
-  return shouldPrintBeforeSomePassNumber() &&
-         (is_contained(PrintBeforePassNumber, CurrentPassNumber));
+  return shouldPrintBeforeSomePassNumber() && Ctx &&
+         (is_contained(getPrintBeforePassNumber(Ctx->getOptionsContext()),
+                       CurrentPassNumber));
 }
 
 bool PrintIRInstrumentation::shouldPrintAfterCurrentPassNumber() {
-  return shouldPrintAfterSomePassNumber() &&
-         (is_contained(PrintAfterPassNumber, CurrentPassNumber));
+  return shouldPrintAfterSomePassNumber() && Ctx &&
+         (is_contained(getPrintAfterPassNumber(Ctx->getOptionsContext()),
+                       CurrentPassNumber));
 }
 
 bool PrintIRInstrumentation::shouldPrintPassNumbers() {
-  return PrintPassNumbers;
+  return Ctx && getPrintPassNumbers(Ctx->getOptionsContext());
 }
 
 bool PrintIRInstrumentation::shouldPrintBeforeSomePassNumber() {
-  return !PrintBeforePassNumber.empty();
+  return Ctx && !getPrintBeforePassNumber(Ctx->getOptionsContext()).empty();
 }
 
 bool PrintIRInstrumentation::shouldPrintAfterSomePassNumber() {
-  return !PrintAfterPassNumber.empty();
+  return Ctx && !getPrintAfterPassNumber(Ctx->getOptionsContext()).empty();
 }
 
 void PrintIRInstrumentation::registerCallbacks(
@@ -1011,12 +1079,12 @@ void PrintIRInstrumentation::registerCallbacks(
   // for later use in AfterPassInvalidated and keeps tracks of the
   // CurrentPassNumber.
   if (shouldPrintPassNumbers() || shouldPrintBeforeSomePassNumber() ||
-      shouldPrintAfterSomePassNumber() || shouldPrintBeforeSomePass() ||
-      shouldPrintAfterSomePass())
+      shouldPrintAfterSomePassNumber() || shouldPrintBeforeSomePass(*Ctx) ||
+      shouldPrintAfterSomePass(*Ctx))
     PIC.registerBeforeNonSkippedPassCallback(
         [this](StringRef P, IRUnitRef IR) { this->printBeforePass(P, IR); });
 
-  if (shouldPrintAfterSomePass() || shouldPrintAfterSomePassNumber()) {
+  if (shouldPrintAfterSomePass(*Ctx) || shouldPrintAfterSomePassNumber()) {
     PIC.registerAfterPassCallback(
         [this](StringRef P, IRUnitRef IR, const PreservedAnalyses &) {
           this->printAfterPass(P, IR);
@@ -1056,14 +1124,15 @@ bool OptPassGateInstrumentation::shouldRun(StringRef PassName, IRUnitRef IR) {
 
   bool ShouldRun =
       Context.getOptPassGate().shouldRunPass(PassName, getIRName(IR));
-  if (!ShouldRun && !this->HasWrittenIR && !OptBisectPrintIRPath.empty()) {
+  if (!ShouldRun && !this->HasWrittenIR &&
+      !getOptBisectPrintIRPath(Context.getOptionsContext()).empty()) {
     // FIXME: print IR if limit is higher than number of opt-bisect
     // invocations
     this->HasWrittenIR = true;
     const Module *M = unwrapModule(IR, /*Force=*/true);
     assert((M && &M->getContext() == &Context) && "Missing/Mismatching Module");
     std::error_code EC;
-    raw_fd_ostream OS(OptBisectPrintIRPath, EC);
+    raw_fd_ostream OS(getOptBisectPrintIRPath(Context.getOptionsContext()), EC);
     if (EC)
       report_fatal_error(errorCodeToError(EC));
     M->print(OS, nullptr);
@@ -1353,7 +1422,7 @@ static SmallVector<Function *, 1> GetFunctions(IRUnitRef IR) {
 
 void PreservedCFGCheckerInstrumentation::registerCallbacks(
     PassInstrumentationCallbacks &PIC, ModuleAnalysisManager &MAM) {
-  if (!VerifyAnalysisInvalidation)
+  if (!getVerifyAnalysisInvalidation(*OptsCtx))
     return;
 
   bool Registered = false;
@@ -1555,16 +1624,14 @@ void InLineChangePrinter::handleFunctionCompare(
             UseColour ? "\033[31m-%l\033[0m\n" : "-%l\n";
         const std::string Added = UseColour ? "\033[32m+%l\033[0m\n" : "+%l\n";
         const std::string NoChange = " %l\n";
-        Out << doSystemDiff(BStr, AStr, Removed, Added, NoChange);
+        Out << doSystemDiff(*OptsCtx, BStr, AStr, Removed, Added, NoChange);
       });
 }
 
 void InLineChangePrinter::registerCallbacks(PassInstrumentationCallbacks &PIC) {
-  if (PrintChanged == ChangePrinter::DiffVerbose ||
-      PrintChanged == ChangePrinter::DiffQuiet ||
-      PrintChanged == ChangePrinter::ColourDiffVerbose ||
-      PrintChanged == ChangePrinter::ColourDiffQuiet)
-    TextChangeReporter<IRDataT<EmptyData>>::registerRequiredCallbacks(PIC);
+  // Note: the caller (StandardInstrumentations) gates this call based on
+  // getPrintChanged(). We always register if called.
+  TextChangeReporter<IRDataT<EmptyData>>::registerRequiredCallbacks(PIC);
 }
 
 TimeProfilingPassesHandler::TimeProfilingPassesHandler() = default;
@@ -1810,16 +1877,13 @@ public:
   StringRef getColour() const { return Colour; }
   // Change this basic block from being only in before to being common.
   // Save the pointer to \p Other.
-  void setCommon(const BlockDataT<DCData> &Other) {
-    assert(!Data[1] && "Expected only one block datum");
-    Data[1] = &Other;
-    Colour = CommonColour;
-  }
+  void setCommon(const BlockDataT<DCData> &Other);
   // Add an edge to \p E of colour {\p Value, \p Colour}.
   void addEdge(unsigned E, StringRef Value, StringRef Colour) {
     // This is a new edge or it is an edge being made common.
-    assert((EdgesMap.count(E) == 0 || Colour == CommonColour) &&
-           "Unexpected edge count and color.");
+    assert(
+        (EdgesMap.count(E) == 0 || Colour == getCommonColour(*getOptsCtx())) &&
+        "Unexpected edge count and color.");
     EdgesMap[E] = {Value.str(), Colour};
   }
   // Record the children and create edges.
@@ -1836,6 +1900,9 @@ public:
 
   void createDisplayEdges(DotCfgDiffDisplayGraph &Graph, unsigned DisplayNode,
                           std::map<const unsigned, unsigned> &NodeMap) const;
+
+  // Get the options context from the owning graph.
+  const clv2::OptionsContext *getOptsCtx() const;
 
 protected:
   DotCfgDiff &Graph;
@@ -1855,10 +1922,16 @@ public:
   // after versions of the function, respectively.  \p Dir is the directory
   // in which to store the results.
   DotCfgDiff(StringRef Title, const FuncDataT<DCData> &Before,
-             const FuncDataT<DCData> &After);
+             const FuncDataT<DCData> &After,
+             const clv2::OptionsContext &OptsCtx);
 
   DotCfgDiff(const DotCfgDiff &) = delete;
   DotCfgDiff &operator=(const DotCfgDiff &) = delete;
+
+  const clv2::OptionsContext &getOptionsContext() const {
+    assert(OptsCtx && "OptsCtx is set at construction and never cleared");
+    return *OptsCtx;
+  }
 
   DotCfgDiffDisplayGraph createDisplayGraph(StringRef Title,
                                             StringRef EntryNodeName);
@@ -1901,10 +1974,21 @@ protected:
   const std::string GraphName;
 
   StringMap<std::string> EdgeLabels;
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
 };
 
+const clv2::OptionsContext *DotCfgDiffNode::getOptsCtx() const {
+  return &Graph.getOptionsContext();
+}
+
+void DotCfgDiffNode::setCommon(const BlockDataT<DCData> &Other) {
+  assert(!Data[1] && "Expected only one block datum");
+  Data[1] = &Other;
+  Colour = getCommonColour(*getOptsCtx());
+}
+
 std::string DotCfgDiffNode::getBodyContent() const {
-  if (Colour == CommonColour) {
+  if (Colour == getCommonColour(*getOptsCtx())) {
     assert(Data[1] && "Expected Data[1] to be set.");
 
     StringRef SR[2];
@@ -1916,16 +2000,20 @@ std::string DotCfgDiffNode::getBodyContent() const {
       SR[I] = SR[I].drop_until([](char C) { return C == '\n'; }).drop_front();
     }
 
-    SmallString<80> OldLineFormat = formatv(
-        "<FONT COLOR=\"{0}\">%l</FONT><BR align=\"left\"/>", BeforeColour);
-    SmallString<80> NewLineFormat = formatv(
-        "<FONT COLOR=\"{0}\">%l</FONT><BR align=\"left\"/>", AfterColour);
-    SmallString<80> UnchangedLineFormat = formatv(
-        "<FONT COLOR=\"{0}\">%l</FONT><BR align=\"left\"/>", CommonColour);
+    SmallString<80> OldLineFormat =
+        formatv("<FONT COLOR=\"{0}\">%l</FONT><BR align=\"left\"/>",
+                getBeforeColour(*getOptsCtx()));
+    SmallString<80> NewLineFormat =
+        formatv("<FONT COLOR=\"{0}\">%l</FONT><BR align=\"left\"/>",
+                getAfterColour(*getOptsCtx()));
+    SmallString<80> UnchangedLineFormat =
+        formatv("<FONT COLOR=\"{0}\">%l</FONT><BR align=\"left\"/>",
+                getCommonColour(*getOptsCtx()));
     std::string Diff = Data[0]->getLabel().str();
-    Diff += ":\n<BR align=\"left\"/>" +
-            doSystemDiff(makeHTMLReady(SR[0]), makeHTMLReady(SR[1]),
-                         OldLineFormat, NewLineFormat, UnchangedLineFormat);
+    Diff +=
+        ":\n<BR align=\"left\"/>" +
+        doSystemDiff(*getOptsCtx(), makeHTMLReady(SR[0]), makeHTMLReady(SR[1]),
+                     OldLineFormat, NewLineFormat, UnchangedLineFormat);
 
     // Diff adds in some empty colour changes which are not valid HTML
     // so remove them.  Colours are all lowercase alpha characters (as
@@ -1976,15 +2064,16 @@ std::string DotCfgDiff::colourize(std::string S, StringRef Colour) const {
 }
 
 DotCfgDiff::DotCfgDiff(StringRef Title, const FuncDataT<DCData> &Before,
-                       const FuncDataT<DCData> &After)
-    : GraphName(Title.str()) {
+                       const FuncDataT<DCData> &After,
+                       const clv2::OptionsContext &OptsCtx)
+    : GraphName(Title.str()), OptsCtx(&OptsCtx) {
   StringMap<StringRef> EdgesMap;
 
   // Handle each basic block in the before IR.
   for (auto &B : Before.getData()) {
     StringRef Label = B.getKey();
     const BlockDataT<DCData> &BD = B.getValue();
-    createNode(Label, BD, BeforeColour);
+    createNode(Label, BD, getBeforeColour(OptsCtx));
 
     // Create transitions with names made up of the from block label, the value
     // on which the transition is made and the to block label.
@@ -1993,7 +2082,7 @@ DotCfgDiff::DotCfgDiff(StringRef Title, const FuncDataT<DCData> &Before,
          Sink != E; ++Sink) {
       std::string Key = (Label + " " + Sink->getKey().str()).str() + " " +
                         BD.getData().getSuccessorLabel(Sink->getKey()).str();
-      EdgesMap.insert({Key, BeforeColour});
+      EdgesMap.insert({Key, getBeforeColour(OptsCtx)});
     }
   }
 
@@ -2004,7 +2093,7 @@ DotCfgDiff::DotCfgDiff(StringRef Title, const FuncDataT<DCData> &Before,
     auto It = NodePosition.find(Label);
     if (It == NodePosition.end())
       // This only exists in the after IR.  Create the node.
-      createNode(Label, BD, AfterColour);
+      createNode(Label, BD, getAfterColour(OptsCtx));
     else
       Nodes[It->second].setCommon(BD);
     // Add in the edges between the nodes (as common or only in after).
@@ -2013,9 +2102,9 @@ DotCfgDiff::DotCfgDiff(StringRef Title, const FuncDataT<DCData> &Before,
          Sink != E; ++Sink) {
       std::string Key = (Label + " " + Sink->getKey().str()).str() + " " +
                         BD.getData().getSuccessorLabel(Sink->getKey()).str();
-      auto [It, Inserted] = EdgesMap.try_emplace(Key, AfterColour);
+      auto [It, Inserted] = EdgesMap.try_emplace(Key, getAfterColour(OptsCtx));
       if (!Inserted)
-        It->second = CommonColour;
+        It->second = getCommonColour(OptsCtx);
     }
   }
 
@@ -2043,7 +2132,7 @@ DotCfgDiff::DotCfgDiff(StringRef Title, const FuncDataT<DCData> &Before,
     else {
       StringRef V = It->getValue();
       std::string NV = colourize(V.str() + " " + Value.str(), Colour);
-      Colour = CommonColour;
+      Colour = getCommonColour(OptsCtx);
       It->getValue() = NV;
     }
     SourceNode.addEdge(SinkNode, Value, Colour);
@@ -2243,7 +2332,7 @@ void DotCfgChangeReporter::handleFunctionCompare(
   Text = formatv("{0}.{1}{2}{3}{4}", Number, Prefix, makeHTMLReady(PassID),
                  Divider, Name);
 
-  DotCfgDiff Diff(Text, Before, After);
+  DotCfgDiff Diff(Text, Before, After, *OptsCtx);
   std::string EntryBlockName = After.getEntryBlockName();
   // Use the before entry block if the after entry block was removed.
   if (EntryBlockName == "")
@@ -2263,11 +2352,12 @@ std::string DotCfgChangeReporter::genHTML(StringRef Text, StringRef DotFile,
                                           StringRef PDFFileName) {
   SmallString<20> PDFFile = formatv("{0}/{1}", DotCfgDir, PDFFileName);
   // Create the PDF file.
-  static ErrorOr<std::string> DotExe = sys::findProgramByName(DotBinary);
+  static ErrorOr<std::string> DotExe =
+      sys::findProgramByName(getDotBinary(*OptsCtx));
   if (!DotExe)
     return "Unable to find dot executable.";
 
-  StringRef Args[] = {DotBinary, "-Tpdf", "-o", PDFFile, DotFile};
+  StringRef Args[] = {getDotBinary(*OptsCtx), "-Tpdf", "-o", PDFFile, DotFile};
   int Result = sys::ExecuteAndWait(*DotExe, Args, std::nullopt);
   if (Result < 0)
     return "Error executing system dot.";
@@ -2422,42 +2512,47 @@ DotCfgChangeReporter::~DotCfgChangeReporter() {
 
 void DotCfgChangeReporter::registerCallbacks(
     PassInstrumentationCallbacks &PIC) {
-  if (PrintChanged == ChangePrinter::DotCfgVerbose ||
-       PrintChanged == ChangePrinter::DotCfgQuiet) {
-    SmallString<128> OutputDir;
-    sys::fs::expand_tilde(DotCfgDir, OutputDir);
-    sys::fs::make_absolute(OutputDir);
-    assert(!OutputDir.empty() && "expected output dir to be non-empty");
-    DotCfgDir = OutputDir.c_str();
-    if (initializeHTML()) {
-      ChangeReporter<IRDataT<DCData>>::registerRequiredCallbacks(PIC);
-      return;
-    }
-    dbgs() << "Unable to open output stream for -cfg-dot-changed\n";
+  // Note: the caller (StandardInstrumentations) gates this call based on
+  // getPrintChanged(). We always attempt registration if called.
+  SmallString<128> OutputDir;
+  DotCfgDir = getDotCfgDir(*OptsCtx);
+  sys::fs::expand_tilde(DotCfgDir, OutputDir);
+  sys::fs::make_absolute(OutputDir);
+  assert(!OutputDir.empty() && "expected output dir to be non-empty");
+  DotCfgDir = OutputDir.c_str();
+  if (initializeHTML()) {
+    ChangeReporter<IRDataT<DCData>>::registerRequiredCallbacks(PIC);
+    return;
   }
+  dbgs() << "Unable to open output stream for -cfg-dot-changed\n";
 }
 
 StandardInstrumentations::StandardInstrumentations(
     LLVMContext &Context, bool DebugLogging, bool VerifyEach,
     PrintPassOptions PrintPassOpts)
-    : PrintPass(DebugLogging, PrintPassOpts), OptNone(DebugLogging),
-      OptPassGate(Context),
-      PrintChangedIR(PrintChanged == ChangePrinter::Verbose),
-      PrintChangedDiff(PrintChanged == ChangePrinter::DiffVerbose ||
-                           PrintChanged == ChangePrinter::ColourDiffVerbose,
-                       PrintChanged == ChangePrinter::ColourDiffVerbose ||
-                           PrintChanged == ChangePrinter::ColourDiffQuiet),
-      WebsiteChangeReporter(PrintChanged == ChangePrinter::DotCfgVerbose),
-      Verify(DebugLogging), DroppedStatsIR(DroppedVarStats),
-      VerifyEach(VerifyEach) {}
+    : Ctx(Context), PrintPass(DebugLogging, PrintPassOpts),
+      OptNone(DebugLogging), OptPassGate(Context),
+      PrintChangedIR(getPrintChanged(Context) == ChangePrinter::Verbose),
+      PrintChangedDiff(
+          getPrintChanged(Context) == ChangePrinter::DiffVerbose ||
+              getPrintChanged(Context) == ChangePrinter::ColourDiffVerbose,
+          getPrintChanged(Context) == ChangePrinter::ColourDiffVerbose ||
+              getPrintChanged(Context) == ChangePrinter::ColourDiffQuiet),
+      WebsiteChangeReporter(getPrintChanged(Context) ==
+                            ChangePrinter::DotCfgVerbose),
+      Verify(DebugLogging),
+      DroppedStatsIR(getDroppedVarStats(Context.getOptionsContext())),
+      VerifyEach(VerifyEach) {
+  PrintIR.setContext(Context);
+}
 
 PrintCrashIRInstrumentation *PrintCrashIRInstrumentation::CrashReporter =
     nullptr;
 
 void PrintCrashIRInstrumentation::reportCrashIR() {
-  if (!PrintOnCrashPath.empty()) {
+  if (!getPrintOnCrashPath(*OptsCtx).empty()) {
     std::error_code EC;
-    raw_fd_ostream Out(PrintOnCrashPath, EC);
+    raw_fd_ostream Out(getPrintOnCrashPath(*OptsCtx), EC);
     if (EC)
       report_fatal_error(errorCodeToError(EC));
     Out << SavedIR;
@@ -2472,7 +2567,8 @@ void PrintCrashIRInstrumentation::SignalHandler(void *) {
   if (!CrashReporter)
     return;
 
-  assert((PrintOnCrash || !PrintOnCrashPath.empty()) &&
+  assert((getPrintOnCrash(*CrashReporter->OptsCtx) ||
+          !getPrintOnCrashPath(*CrashReporter->OptsCtx).empty()) &&
          "Did not expect to get here without option set.");
   CrashReporter->reportCrashIR();
 }
@@ -2481,14 +2577,16 @@ PrintCrashIRInstrumentation::~PrintCrashIRInstrumentation() {
   if (!CrashReporter)
     return;
 
-  assert((PrintOnCrash || !PrintOnCrashPath.empty()) &&
-         "Did not expect to get here without option set.");
+  assert(
+      (getPrintOnCrash(*OptsCtx) || !getPrintOnCrashPath(*OptsCtx).empty()) &&
+      "Did not expect to get here without option set.");
   CrashReporter = nullptr;
 }
 
 void PrintCrashIRInstrumentation::registerCallbacks(
     PassInstrumentationCallbacks &PIC) {
-  if ((!PrintOnCrash && PrintOnCrashPath.empty()) || CrashReporter)
+  if ((!getPrintOnCrash(*OptsCtx) && getPrintOnCrashPath(*OptsCtx).empty()) ||
+      CrashReporter)
     return;
 
   sys::AddSignalHandler(SignalHandler, nullptr);
@@ -2499,7 +2597,9 @@ void PrintCrashIRInstrumentation::registerCallbacks(
         SavedIR.clear();
         raw_string_ostream OS(SavedIR);
         OS << formatv("; *** Dump of {0}IR Before Last Pass {1}",
-                      llvm::forcePrintModuleIR() ? "Module " : "", PassID);
+                      llvm::forcePrintModuleIR(getIRContext(IR)) ? "Module "
+                                                                 : "",
+                      PassID);
         if (!isInteresting(IR, PassID, PIC.getPassNameForClassName(PassID))) {
           OS << " Filtered Out ***\n";
           return;
@@ -2511,17 +2611,35 @@ void PrintCrashIRInstrumentation::registerCallbacks(
 
 void StandardInstrumentations::registerCallbacks(
     PassInstrumentationCallbacks &PIC, ModuleAnalysisManager *MAM) {
+  const clv2::OptionsContext &OptsCtx = Ctx.getOptionsContext();
+
+  // Propagate options context to sub-instruments.
+  PrintChangedIR.setOptionsContext(OptsCtx);
+  ChangeTester.setOptionsContext(OptsCtx);
+  WebsiteChangeReporter.setOptionsContext(OptsCtx);
+  PrintChangedDiff.setOptionsContext(OptsCtx);
+  PrintCrashIR.setOptionsContext(OptsCtx);
+  PreservedCFGChecker.setOptionsContext(OptsCtx);
+
   PrintIR.registerCallbacks(PIC);
   PrintPass.registerCallbacks(PIC);
   TimePasses.registerCallbacks(PIC);
   OptNone.registerCallbacks(PIC);
   OptPassGate.registerCallbacks(PIC);
-  PrintChangedIR.registerCallbacks(PIC);
-  PseudoProbeVerification.registerCallbacks(PIC);
+  if (getPrintChanged(Ctx) == ChangePrinter::Verbose ||
+      getPrintChanged(Ctx) == ChangePrinter::Quiet)
+    PrintChangedIR.registerCallbacks(PIC);
+  PseudoProbeVerification.registerCallbacks(PIC, OptsCtx);
   if (VerifyEach)
     Verify.registerCallbacks(PIC, MAM);
-  PrintChangedDiff.registerCallbacks(PIC);
-  WebsiteChangeReporter.registerCallbacks(PIC);
+  if (getPrintChanged(Ctx) == ChangePrinter::DiffVerbose ||
+      getPrintChanged(Ctx) == ChangePrinter::DiffQuiet ||
+      getPrintChanged(Ctx) == ChangePrinter::ColourDiffVerbose ||
+      getPrintChanged(Ctx) == ChangePrinter::ColourDiffQuiet)
+    PrintChangedDiff.registerCallbacks(PIC);
+  if (getPrintChanged(Ctx) == ChangePrinter::DotCfgVerbose ||
+      getPrintChanged(Ctx) == ChangePrinter::DotCfgQuiet)
+    WebsiteChangeReporter.registerCallbacks(PIC);
   ChangeTester.registerCallbacks(PIC);
   PrintCrashIR.registerCallbacks(PIC);
   DroppedStatsIR.registerCallbacks(PIC);

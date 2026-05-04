@@ -19,6 +19,8 @@
 #include "GCNRegPressure.h"
 #include "SIMachineFunctionInfo.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -26,9 +28,10 @@ using namespace llvm;
 
 // Clauses longer then 15 instructions would overflow one of the counters
 // and stall. They can stall even earlier if there are outstanding counters.
-static cl::opt<unsigned>
-MaxClause("amdgpu-max-memory-clause", cl::Hidden, cl::init(15),
-          cl::desc("Maximum length of a memory clause, instructions"));
+static unsigned getMaxClause(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_MaxClause>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -272,7 +275,7 @@ bool SIFormMemoryClausesImpl::run(MachineFunction &MF) {
   MaxVGPRs = TRI->getAllocatableSet(MF, &AMDGPU::VGPR_32RegClass).count();
   MaxSGPRs = TRI->getAllocatableSet(MF, &AMDGPU::SGPR_32RegClass).count();
   unsigned FuncMaxClause = MF.getFunction().getFnAttributeAsParsedInteger(
-      "amdgpu-max-memory-clause", MaxClause);
+      "amdgpu-max-memory-clause", getMaxClause(MF.getFunction()));
 
   for (MachineBasicBlock &MBB : MF) {
     GCNDownwardRPTracker RPT(*LIS);

@@ -52,13 +52,16 @@
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -68,9 +71,12 @@ using namespace llvm;
 
 #define DEBUG_TYPE "hexagon-load-store-widening"
 
-static cl::opt<unsigned> MaxMBBSizeForLoadStoreWidening(
-    "max-bb-size-for-load-store-widening", cl::Hidden, cl::init(1000),
-    cl::desc("Limit block size to analyze in load/store widening pass"));
+static unsigned MaxMBBSizeForLoadStoreWidening = 1000;
+
+static unsigned getMaxMBBSizeForLoadStoreWidening(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_MaxMBBSizeForLoadStoreWidening>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -956,7 +962,7 @@ bool HexagonLoadStoreWidening::processBasicBlock(MachineBasicBlock &MBB) {
   bool Changed = false;
 
   // To prevent long compile time check for max BB size.
-  if (MBB.size() > MaxMBBSizeForLoadStoreWidening)
+  if (MBB.size() > getMaxMBBSizeForLoadStoreWidening(MF->getFunction()))
     return false;
 
   createGroups(MBB, SGs);

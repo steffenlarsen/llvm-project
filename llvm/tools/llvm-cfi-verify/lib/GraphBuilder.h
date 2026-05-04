@@ -30,7 +30,6 @@
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/TargetSelect.h"
@@ -42,9 +41,6 @@ using Instr = llvm::cfi_verify::FileAnalysis::Instr;
 
 namespace llvm {
 namespace cfi_verify {
-
-extern uint64_t SearchLengthForUndef;
-extern uint64_t SearchLengthForConditionalBranch;
 
 struct ConditionalBranchNode {
   uint64_t Address;
@@ -99,7 +95,9 @@ public:
   // (i.e. the upwards traversal did not make it to a branch node) flows to the
   // provided node in GraphResult::OrphanedNodes.
   static GraphResult buildFlowGraph(const FileAnalysis &Analysis,
-                                    object::SectionedAddress Address);
+                                    object::SectionedAddress Address,
+                                    uint64_t SearchLengthForUndef,
+                                    uint64_t SearchLengthForConditionalBranch);
 
 private:
   // Implementation function that actually builds the flow graph. Retrieves a
@@ -114,17 +112,14 @@ private:
   static void buildFlowGraphImpl(const FileAnalysis &Analysis,
                                  DenseSet<uint64_t> &OpenedNodes,
                                  GraphResult &Result, uint64_t Address,
-                                 uint64_t Depth);
+                                 uint64_t Depth, uint64_t SearchLengthForUndef,
+                                 uint64_t SearchLengthForConditionalBranch);
 
-  // Utilised by buildFlowGraphImpl to build the tree out from the provided
-  // conditional branch node to an undefined instruction. The provided
-  // conditional branch node must have exactly one of its subtrees set, and will
-  // update the node's CFIProtection field if a deterministic flow can be found
-  // to an undefined instruction.
   static void buildFlowsToUndefined(const FileAnalysis &Analysis,
                                     GraphResult &Result,
                                     ConditionalBranchNode &BranchNode,
-                                    const Instr &BranchInstrMeta);
+                                    const Instr &BranchInstrMeta,
+                                    uint64_t SearchLengthForUndef);
 };
 
 } // end namespace cfi_verify

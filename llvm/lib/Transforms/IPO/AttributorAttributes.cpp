@@ -11,7 +11,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/IPO/Attributor.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -61,7 +63,6 @@
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/GraphWriter.h"
 #include "llvm/Support/InterleavedRange.h"
@@ -82,31 +83,25 @@ using namespace llvm;
 
 #define DEBUG_TYPE "attributor"
 
-static cl::opt<bool> ManifestInternal(
-    "attributor-manifest-internal", cl::Hidden,
-    cl::desc("Manifest Attributor internal string attributes."),
-    cl::init(false));
-
-static cl::opt<int> MaxHeapToStackSize("max-heap-to-stack-size", cl::init(128),
-                                       cl::Hidden);
-
 template <>
-unsigned llvm::PotentialConstantIntValuesState::MaxPotentialValues = 0;
+unsigned llvm::PotentialConstantIntValuesState::MaxPotentialValues = 7;
 
 template <> unsigned llvm::PotentialLLVMValuesState::MaxPotentialValues = -1;
 
-static cl::opt<unsigned, true> MaxPotentialValues(
-    "attributor-max-potential-values", cl::Hidden,
-    cl::desc("Maximum number of potential values to be "
-             "tracked for each position."),
-    cl::location(llvm::PotentialConstantIntValuesState::MaxPotentialValues),
-    cl::init(7));
+static bool getManifestInternal(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_ManifestInternal>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<int> MaxPotentialValuesIterations(
-    "attributor-max-potential-values-iterations", cl::Hidden,
-    cl::desc(
-        "Maximum number of iterations we keep dismantling potential values."),
-    cl::init(64));
+static int getMaxHeapToStackSize(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_MaxHeapToStackSize>(
+      M.getContext().getOptionsContext());
+}
+
+static int getMaxPotentialValuesIterations(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::IPO_MaxPotentialValuesIterations>(
+      M.getContext().getOptionsContext());
+}
 
 STATISTIC(NumAAs, "Number of abstract attributes created");
 STATISTIC(NumIndirectCallsPromoted, "Number of indirect calls promoted");
@@ -5989,7 +5984,7 @@ struct AANoCaptureImpl : public AANoCapture {
     if (isArgumentPosition()) {
       if (isAssumedNoCapture())
         Attrs.emplace_back(Attribute::get(Ctx, Attribute::Captures));
-      else if (ManifestInternal)
+      else if (getManifestInternal(A.getModule()))
         Attrs.emplace_back(Attribute::get(Ctx, "no-capture-maybe-returned"));
     }
   }
@@ -7282,14 +7277,14 @@ ChangeStatus AAHeapToStackFunction::updateImpl(Attributor &A) {
     }
 
     std::optional<APInt> Size = getSize(A, *this, AI);
-    if (!AI.IsGlobalizedLocal && MaxHeapToStackSize != -1) {
-      if (!Size || Size->ugt(MaxHeapToStackSize)) {
+    if (!AI.IsGlobalizedLocal && getMaxHeapToStackSize(A.getModule()) != -1) {
+      if (!Size || Size->ugt(getMaxHeapToStackSize(A.getModule()))) {
         LLVM_DEBUG({
           if (!Size)
             dbgs() << "[H2S] Unknown allocation size: " << *AI.CB << "\n";
           else
             dbgs() << "[H2S] Allocation size too large: " << *AI.CB << " vs. "
-                   << MaxHeapToStackSize << "\n";
+                   << getMaxHeapToStackSize(A.getModule()) << "\n";
         });
 
         AI.Status = AllocationInfo::INVALID;
@@ -11541,7 +11536,7 @@ struct AAPotentialValuesFloating : AAPotentialValuesImpl {
         continue;
 
       // Make sure we limit the compile time for complex expressions.
-      if (Iteration++ >= MaxPotentialValuesIterations) {
+      if (Iteration++ >= getMaxPotentialValuesIterations(A.getModule())) {
         LLVM_DEBUG(dbgs() << "Generic value traversal reached iteration limit: "
                           << Iteration << "!\n");
         addValue(A, getState(), *V, CtxI, S, getAnchorScope());

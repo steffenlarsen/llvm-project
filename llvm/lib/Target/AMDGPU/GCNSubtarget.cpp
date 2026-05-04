@@ -27,7 +27,8 @@
 #include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/MDBuilder.h"
-#include "llvm/TargetParser/AMDGPUTargetParser.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 #include <algorithm>
 
 using namespace llvm;
@@ -40,19 +41,34 @@ using namespace llvm;
 #include "AMDGPUGenSubtargetInfo.inc"
 #undef AMDGPUSubtarget
 
-static cl::opt<bool> EnableVGPRIndexMode(
-    "amdgpu-vgpr-index-mode",
-    cl::desc("Use GPR indexing mode instead of movrel for vector indexing"),
-    cl::init(false));
+static bool getEnableVGPRIndexMode(const amdgpu_opts::ParsedOpts *O,
+                                   const llvm::clv2::OptionsContext &Ctx) {
+  if (!O)
+    O = clv2::getView<&clv2::AMDGPUOptsReg>(Ctx);
+  if (O)
+    return O->get<&llvm::clv2::AMDGPU_EnableVGPRIndexMode>();
+  return false;
+}
 
-static cl::opt<bool> UseAA("amdgpu-use-aa-in-codegen",
-                           cl::desc("Enable the use of AA during codegen."),
-                           cl::init(true));
+static bool getUseAA(const amdgpu_opts::ParsedOpts *O,
+                     const llvm::clv2::OptionsContext &Ctx) {
+  if (!O)
+    O = clv2::getView<&clv2::AMDGPUOptsReg>(Ctx);
+  if (O)
+    return O->get<&llvm::clv2::AMDGPU_UseAA>();
+  return true;
+}
 
-static cl::opt<unsigned>
-    NSAThreshold("amdgpu-nsa-threshold",
-                 cl::desc("Number of addresses from which to enable MIMG NSA."),
-                 cl::init(2), cl::Hidden);
+static unsigned getNSAThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_NSAThreshold>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getNSAThresholdWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::AMDGPUOptsReg,
+                               &llvm::clv2::AMDGPU_NSAThreshold>(
+      F.getContext().getOptionsContext());
+}
 
 GCNSubtarget::~GCNSubtarget() = default;
 
@@ -220,7 +236,7 @@ GCNSubtarget::GCNSubtarget(const Triple &TT, StringRef GPU, StringRef FS,
                            AMDGPU::TargetIDSetting XnackSetting,
                            AMDGPU::TargetIDSetting SramEccSetting)
     : // clang-format off
-    AMDGPUGenSubtargetInfo(TT, GPU, /*TuneCPU*/ GPU, FS),
+    AMDGPUGenSubtargetInfo(TT, GPU, /*TuneCPU*/ GPU, FS, TM.getOptionsContext()),
     AMDGPUSubtarget(TT),
     TargetID(AMDGPU::createAMDGPUTargetID(*this, "")),
     InstrItins(getInstrItineraryForCPU(GPU)),
@@ -231,7 +247,7 @@ GCNSubtarget::GCNSubtarget(const Triple &TT, StringRef GPU, StringRef FS,
     // Frame index expansion sometimes assumes the low bit of SP is 0
     FrameLowering(TargetFrameLowering::StackGrowsUp, getStackAlignment(), 0,
                   /*TransAl=*/Align(4)) {
-
+  setOptionsContext(TM.getOptionsContext());
   // clang-format on
 
   // Apply the module flag's xnack setting if the target supports on/off modes.
@@ -475,10 +491,13 @@ bool GCNSubtarget::hasMadF16() const {
 }
 
 bool GCNSubtarget::useVGPRIndexMode() const {
-  return hasVGPRIndexMode() && (!hasMovrel() || EnableVGPRIndexMode);
+  return hasVGPRIndexMode() &&
+         (!hasMovrel() || getEnableVGPRIndexMode(nullptr, getOptionsContext()));
 }
 
-bool GCNSubtarget::useAA() const { return UseAA; }
+bool GCNSubtarget::useAA() const {
+  return getUseAA(nullptr, getOptionsContext());
+}
 
 unsigned GCNSubtarget::getOccupancyWithNumSGPRs(unsigned SGPRs) const {
   return AMDGPU::IsaInfo::getOccupancyWithNumSGPRs(*this, SGPRs);
@@ -883,15 +902,15 @@ unsigned GCNSubtarget::getNSAThreshold(const MachineFunction &MF) const {
   if (getGeneration() >= AMDGPUSubtarget::GFX12)
     return 0; // Not MIMG encoding.
 
-  if (NSAThreshold.getNumOccurrences() > 0)
-    return std::max(NSAThreshold.getValue(), 2u);
+  const Function &F = MF.getFunction();
+  if (::getNSAThresholdWasSpecified(F))
+    return std::max(::getNSAThreshold(F), 2u);
 
-  int Value = MF.getFunction().getFnAttributeAsParsedInteger(
-      "amdgpu-nsa-threshold", -1);
+  int Value = F.getFnAttributeAsParsedInteger("amdgpu-nsa-threshold", -1);
   if (Value > 0)
     return std::max(Value, 2);
 
-  return NSAThreshold;
+  return ::getNSAThreshold(F);
 }
 
 GCNUserSGPRUsageInfo::GCNUserSGPRUsageInfo(const Function &F,

@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- LoopDistribute.cpp - Loop Distribution Pass ------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -53,7 +55,6 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -83,34 +84,34 @@ static const char *const LLVMLoopDistributeFollowupFallback =
     "llvm.loop.distribute.followup_fallback";
 /// @}
 
-static cl::opt<bool>
-    LDistVerify("loop-distribute-verify", cl::Hidden,
-                cl::desc("Turn on DominatorTree and LoopInfo verification "
-                         "after Loop Distribution"),
-                cl::init(false));
+static bool getLDistVerify(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_LoopDistributeVerify>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<bool> DistributeNonIfConvertible(
-    "loop-distribute-non-if-convertible", cl::Hidden,
-    cl::desc("Whether to distribute into a loop that may not be "
-             "if-convertible by the loop vectorizer"),
-    cl::init(false));
+static bool getDistributeNonIfConvertible(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_LoopDistributeNonIfConvertible>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<unsigned> DistributeSCEVCheckThreshold(
-    "loop-distribute-scev-check-threshold", cl::init(8), cl::Hidden,
-    cl::desc("The maximum number of SCEV checks allowed for Loop "
-             "Distribution"));
+static unsigned getDistributeSCEVCheckThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_LoopDistributeSCEVCheckThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> PragmaDistributeSCEVCheckThreshold(
-    "loop-distribute-scev-check-threshold-with-pragma", cl::init(128),
-    cl::Hidden,
-    cl::desc("The maximum number of SCEV checks allowed for Loop "
-             "Distribution for loop marked with #pragma clang loop "
-             "distribute(enable)"));
+static unsigned getPragmaDistributeSCEVCheckThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::SC_LoopDistributeSCEVCheckThresholdWithPragma>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> EnableLoopDistribute(
-    "enable-loop-distribute", cl::Hidden,
-    cl::desc("Enable the new, experimental LoopDistribution Pass"),
-    cl::init(false));
+static bool getEnableLoopDistribute(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_EnableLoopDistribute>(
+      F.getContext().getOptionsContext(), false);
+}
 
 static const char *DistributedMetaData = "llvm.loop.isdistributed";
 
@@ -333,7 +334,7 @@ public:
   /// Merges the partitions according to various heuristics.
   void mergeBeforePopulating() {
     mergeAdjacentNonCyclic();
-    if (!DistributeNonIfConvertible)
+    if (!getDistributeNonIfConvertible(*L->getHeader()->getParent()))
       mergeNonIfConvertible();
   }
 
@@ -776,8 +777,8 @@ public:
     }
 
     if (Pred.getComplexity() > (IsForced.value_or(false)
-                                    ? PragmaDistributeSCEVCheckThreshold
-                                    : DistributeSCEVCheckThreshold))
+                                    ? getPragmaDistributeSCEVCheckThreshold(*F)
+                                    : getDistributeSCEVCheckThreshold(*F)))
       return fail("TooManySCEVRuntimeChecks",
                   "too many SCEV run-time checks needed.\n");
 
@@ -844,7 +845,7 @@ public:
     LLVM_DEBUG(dbgs() << "LDist: After removing unused Instrs:\n");
     LLVM_DEBUG(Partitions.printBlocks(dbgs()));
 
-    if (LDistVerify) {
+    if (getLDistVerify(*F)) {
       LI->verify();
       assert(DT->verify(DominatorTree::VerificationLevel::Fast));
     }
@@ -997,7 +998,7 @@ static bool runImpl(Function &F, LoopInfo *LI, DominatorTree *DT,
 
     // If distribution was forced for the specific loop to be
     // enabled/disabled, follow that.  Otherwise use the global flag.
-    if (LDL.isForced().value_or(EnableLoopDistribute))
+    if (LDL.isForced().value_or(getEnableLoopDistribute(F)))
       Changed |= LDL.processLoop();
   }
 

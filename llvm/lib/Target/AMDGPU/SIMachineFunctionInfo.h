@@ -25,6 +25,7 @@
 #include "llvm/CodeGen/MIRYamlMapping.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 #include <optional>
 
 namespace llvm {
@@ -550,6 +551,8 @@ private:
 
 public:
   static bool MFMAVGPRForm;
+  bool ResolvedMFMAVGPRForm = true;
+  static bool getMFMAVGPRForm(const Function &F);
 
   struct VGPRSpillToAGPR {
     SmallVector<MCPhysReg, 32> Lanes;
@@ -1237,7 +1240,7 @@ public:
   /// Return true if an MFMA that requires at least \p NumRegs should select to
   /// the AGPR form, instead of the VGPR form.
   bool selectAGPRFormMFMA(unsigned NumRegs) const {
-    return !MFMAVGPRForm && getMinNumAGPRs() >= NumRegs;
+    return !ResolvedMFMAVGPRForm && getMinNumAGPRs() >= NumRegs;
   }
 
   // \returns true if a function has a use of AGPRs via inline asm or

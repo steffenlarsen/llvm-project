@@ -20,6 +20,9 @@
 #include "llvm/Support/Compiler.h"
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+}
 enum PGOCtxProfileRecords {
   Invalid = 0,
   Version,
@@ -89,9 +92,8 @@ class LLVM_ABI PGOCtxProfileWriter final : public ctx_profile::ProfileWriter {
   void writeSubcontexts(const ctx_profile::ContextNode &Node);
 
 public:
-  PGOCtxProfileWriter(raw_ostream &Out,
-                      std::optional<unsigned> VersionOverride = std::nullopt,
-                      bool IncludeEmpty = false);
+  PGOCtxProfileWriter(raw_ostream &Out, std::optional<unsigned> VersionOverride,
+                      bool IncludeEmpty, const clv2::OptionsContext &Ctx);
   ~PGOCtxProfileWriter() override { Writer.ExitBlock(); }
 
   void startContextSection() override;

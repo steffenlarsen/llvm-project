@@ -20,6 +20,8 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/InstCombine/InstCombineOptionsOptInfos.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include "llvm/Transforms/Utils/Local.h"
 using namespace llvm;
@@ -28,16 +30,15 @@ using namespace PatternMatch;
 #define DEBUG_TYPE "instcombine"
 
 namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 }
 
 STATISTIC(NumDeadStore, "Number of dead stores eliminated");
 STATISTIC(NumGlobalCopies, "Number of allocas copied from constant global");
 
-static cl::opt<unsigned> MaxCopiedFromConstantUsers(
-    "instcombine-max-copied-from-constant-users", cl::init(300),
-    cl::desc("Maximum users to visit in copy from constant transform"),
-    cl::Hidden);
+static unsigned getMaxCopiedFromConstantUsers(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::IC_MaxCopiedFromConstantUsers>(
+      F.getContext().getOptionsContext());
+}
 
 /// isOnlyCopiedFromConstantMemory - Recursively walk the uses of a (derived)
 /// pointer to an alloca.  Ignore any reads of the pointer, return false if we
@@ -62,7 +63,7 @@ isOnlyCopiedFromConstantMemory(AAResults *AA, AllocaInst *V,
     ValueAndIsOffset Elem = Worklist.pop_back_val();
     if (!Visited.insert(Elem).second)
       continue;
-    if (Visited.size() > MaxCopiedFromConstantUsers)
+    if (Visited.size() > getMaxCopiedFromConstantUsers(*V->getFunction()))
       return false;
 
     const auto [Value, IsOffset] = Elem;
@@ -1116,7 +1117,8 @@ Instruction *InstCombinerImpl::visitLoadInst(LoadInst &LI) {
   // separated by a few arithmetic operations.
   bool IsLoadCSE = false;
   BatchAAResults BatchAA(*AA);
-  if (Value *AvailableVal = FindAvailableLoadedValue(&LI, BatchAA, &IsLoadCSE)) {
+  if (Value *AvailableVal = FindAvailableLoadedValue(
+          &LI, BatchAA, &IsLoadCSE, getDefMaxInstsToScanCached())) {
     if (IsLoadCSE)
       combineMetadataForCSE(cast<LoadInst>(AvailableVal), &LI, false);
 
@@ -1184,8 +1186,9 @@ Instruction *InstCombinerImpl::visitLoadInst(LoadInst &LI) {
         // poison-generating metadata.
         V1->copyMetadata(LI, Metadata::PoisonGeneratingIDs);
         V2->copyMetadata(LI, Metadata::PoisonGeneratingIDs);
-        return SelectInst::Create(SI->getCondition(), V1, V2, "", nullptr,
-                                  ProfcheckDisableMetadataFixes ? nullptr : SI);
+        return SelectInst::Create(
+            SI->getCondition(), V1, V2, "", nullptr,
+            getProfcheckDisableMetadataFixes(LI.getContext()) ? nullptr : SI);
       }
     }
   }

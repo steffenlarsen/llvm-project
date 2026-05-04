@@ -24,10 +24,10 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/LoongArch/LoongArchOptionsOptInfos.h"
 
 using namespace llvm;
-
-extern cl::opt<bool> LArchAnnotateTableJump;
 
 #define LOONGARCH_PRERA_EXPAND_PSEUDO_NAME                                     \
   "LoongArch Pre-RA pseudo instruction expansion pass"
@@ -170,7 +170,11 @@ bool LoongArchPreRAExpandPseudo::expandMI(
   case LoongArch::PseudoBRIND:
     // If the PseudoBRIND is used to table jump, then emit a label to annotate
     // the `jr` instruction, and save the instructions.
-    if (LArchAnnotateTableJump)
+    bool AnnotateTableJump = false;
+    if (auto *O = clv2::getView<&clv2::LoongArchOptsReg>(
+            MBB.getParent()->getFunction().getContext().getOptionsContext()))
+      AnnotateTableJump = O->get<&clv2::LA_AnnotateTableJump>();
+    if (AnnotateTableJump)
       annotateTableJump(MBB, MBBI);
     break;
   }

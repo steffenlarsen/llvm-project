@@ -21,7 +21,7 @@ namespace {
 // deleting the PassManager.
 class ValueLatticeTest : public testing::Test {
 protected:
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   DataLayout DL;
 };
 

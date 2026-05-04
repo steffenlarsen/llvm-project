@@ -22,7 +22,10 @@
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DiagnosticInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -33,23 +36,36 @@ STATISTIC(MeetsUnwindV2Criteria,
 STATISTIC(FailsUnwindV2Criteria,
           "Number of functions that fail Unwind v2 criteria");
 
-static cl::opt<unsigned>
-    UnwindCodeThreshold("x86-wineh-unwindv2-unwind-codes-threshold", cl::Hidden,
-                        cl::desc("Maximum number of unwind codes before "
-                                 "splitting into a new unwind info."),
-                        cl::init(UINT8_MAX));
+static unsigned UnwindCodeThreshold = UINT8_MAX;
 
-static cl::opt<unsigned>
-    ForceMode("x86-wineh-unwindv2-force-mode", cl::Hidden,
-              cl::desc("Overwrites the Unwind v2 mode for testing purposes."));
+static bool ForceModeWasSpecified = false;
 
 // This threshold is for the *approximate* number of instructions, see the
 // comment in runAnalysisOnFuncOrFunclet for more details.
-static cl::opt<unsigned> InstructionCountThreshold(
-    "x86-wineh-unwindv2-instruction-count-threshold", cl::Hidden,
-    cl::desc("Maximum number of (approximate) instructions before splitting "
-             "into a new unwind info."),
-    cl::init(600));
+static unsigned InstructionCountThreshold = 600;
+
+static unsigned getUnwindCodeThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_WinEHUnwindV2UnwindCodesThreshold>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getInstructionCountThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::X86_WinEHUnwindV2InstructionCountThreshold>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getForceModeWasSpecified(const Function &F) {
+  if (auto *O =
+          clv2::getView<&clv2::X86OptsReg>(F.getContext().getOptionsContext()))
+    return O->specified<&clv2::X86_WinEHUnwindV2ForceMode>();
+  return ForceModeWasSpecified;
+}
+
+static unsigned getForceMode(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_WinEHUnwindV2ForceMode>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -374,8 +390,8 @@ runAnalysisOnFuncOrFunclet(MachineFunction &MF, MachineFunction::iterator &Iter,
 
 bool runX86WinEHUnwindV2(MachineFunction &MF) {
   WinX64EHUnwindMode Mode =
-      ForceMode.getNumOccurrences()
-          ? static_cast<WinX64EHUnwindMode>(ForceMode.getValue())
+      getForceModeWasSpecified(MF.getFunction())
+          ? static_cast<WinX64EHUnwindMode>(getForceMode(MF.getFunction()))
           : MF.getFunction().getParent()->getWinX64EHUnwindMode();
 
   // Only act on V2 modes; V1 = disabled, V3 handled by the V3 pass.
@@ -421,8 +437,8 @@ bool runX86WinEHUnwindV2(MachineFunction &MF) {
               TII->get(X86::SEH_UnwindV2Start));
 
       if ((LastUnwindInfoEndPosition - Info.ApproximateInstructionPosition >=
-           InstructionCountThreshold) ||
-          (UnwindCodeCount >= UnwindCodeThreshold)) {
+           getInstructionCountThreshold(MF.getFunction())) ||
+          (UnwindCodeCount >= getUnwindCodeThreshold(MF.getFunction()))) {
         BuildMI(MBB, MBB.begin(), DL,
                 TII->get(X86::SEH_SplitChainedAtEndOfBlock));
         LastUnwindInfoEndPosition = Info.ApproximateInstructionPosition;

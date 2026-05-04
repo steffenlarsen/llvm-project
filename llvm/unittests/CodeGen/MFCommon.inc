@@ -94,7 +94,7 @@ public:
   BogusSubtarget(TargetMachine &TM)
       : TargetSubtargetInfo(Triple(""), "", "", "", "", {}, {}, {}, nullptr,
                             nullptr, nullptr, nullptr, nullptr, nullptr,
-                            nullptr),
+                            nullptr, TM.getOptionsContext()),
         FL(), TL(TM, *this) {}
   ~BogusSubtarget() override = default;
 

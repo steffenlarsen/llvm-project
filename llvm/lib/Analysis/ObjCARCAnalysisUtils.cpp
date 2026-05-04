@@ -14,16 +14,13 @@
 
 #include "llvm/Analysis/ObjCARCAnalysisUtils.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Support/CommandLineCompat.h"
 
 using namespace llvm;
 using namespace llvm::objcarc;
 
-/// A handy option to enable/disable all ARC Optimizations.
-bool llvm::objcarc::EnableARCOpts;
-static cl::opt<bool, true> EnableARCOptimizations(
-    "enable-objc-arc-opts", cl::desc("enable/disable all ARC Optimizations"),
-    cl::location(EnableARCOpts), cl::init(true), cl::Hidden);
+bool llvm::objcarc::getEnableARCOpts() { return true; }
 
 bool llvm::objcarc::IsPotentialRetainableObjPtr(const Value *Op,
                                                 AAResults &AA) {

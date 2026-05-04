@@ -43,7 +43,6 @@ using namespace PatternMatch;
 STATISTIC(NumSel, "Number of select opts");
 
 namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 }
 
 /// Compute Result = In1+In2, returning true if the result overflowed for this
@@ -4548,8 +4547,9 @@ Instruction *InstCombinerImpl::foldSelectICmp(CmpPredicate Pred, SelectInst *SI,
       Op1 = Builder.CreateICmp(Pred, SI->getOperand(1), RHS, I.getName());
     if (!Op2)
       Op2 = Builder.CreateICmp(Pred, SI->getOperand(2), RHS, I.getName());
-    return SelectInst::Create(SI->getOperand(0), Op1, Op2, "", nullptr,
-                              ProfcheckDisableMetadataFixes ? nullptr : SI);
+    return SelectInst::Create(
+        SI->getOperand(0), Op1, Op2, "", nullptr,
+        getProfcheckDisableMetadataFixes(I.getContext()) ? nullptr : SI);
   }
 
   return nullptr;
@@ -6116,7 +6116,9 @@ struct OffsetResult {
       return V0;
     case OffsetKind::Select:
       return Builder.CreateSelect(
-          V0, V1, V2, "", ProfcheckDisableMetadataFixes ? nullptr : MDFrom);
+          V0, V1, V2, "",
+          getProfcheckDisableMetadataFixes(MDFrom->getContext()) ? nullptr
+                                                                 : MDFrom);
     }
     llvm_unreachable("Unknown OffsetKind enum");
   }
@@ -8110,14 +8112,18 @@ Instruction *InstCombinerImpl::visitICmpInst(ICmpInst &I) {
         Value *NewICMP = Builder.CreateICmp(Pred, B, D);
         return SelectInst::Create(
             Cond, Res, NewICMP, /*NameStr=*/"", /*InsertBefore=*/nullptr,
-            ProfcheckDisableMetadataFixes ? nullptr : cast<Instruction>(Op0));
+            getProfcheckDisableMetadataFixes(I.getContext())
+                ? nullptr
+                : cast<Instruction>(Op0));
       }
       // Check whether comparison of FalseValues can be simplified
       if (Value *Res = simplifyICmpInst(Pred, B, D, SQ)) {
         Value *NewICMP = Builder.CreateICmp(Pred, A, C);
         return SelectInst::Create(
             Cond, NewICMP, Res, /*NameStr=*/"", /*InsertBefore=*/nullptr,
-            ProfcheckDisableMetadataFixes ? nullptr : cast<Instruction>(Op0));
+            getProfcheckDisableMetadataFixes(I.getContext())
+                ? nullptr
+                : cast<Instruction>(Op0));
       }
     }
   }

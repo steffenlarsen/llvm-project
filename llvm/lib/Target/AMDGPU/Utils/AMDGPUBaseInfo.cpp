@@ -25,7 +25,8 @@
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 #include "llvm/TargetParser/AMDGPUTargetParser.h"
 #include <optional>
 
@@ -33,11 +34,15 @@
 #define GET_INSTRMAP_INFO
 #include "AMDGPUGenInstrInfo.inc"
 
-static llvm::cl::opt<unsigned> DefaultAMDHSACodeObjectVersion(
-    "amdhsa-code-object-version", llvm::cl::Hidden,
-    llvm::cl::init(llvm::AMDGPU::AMDHSA_COV6),
-    llvm::cl::desc("Set default AMDHSA Code Object Version (module flag "
-                   "or asm directive still take priority if present)"));
+static unsigned
+getDefaultAMDHSACodeObjectVersionOpt(const llvm::amdgpu_opts::ParsedOpts *O,
+                                     const llvm::clv2::OptionsContext &Ctx) {
+  if (!O)
+    O = llvm::clv2::getView<&llvm::clv2::AMDGPUOptsReg>(Ctx);
+  if (O)
+    return O->get<&llvm::clv2::AMDGPU_DefaultAMDHSACodeObjectVersion>();
+  return llvm::AMDGPU::AMDHSA_COV6;
+}
 
 namespace {
 
@@ -216,14 +221,15 @@ unsigned getAMDHSACodeObjectVersion(const Module &M) {
     return (unsigned)Ver->getZExtValue() / 100;
   }
 
-  return getDefaultAMDHSACodeObjectVersion();
+  return getDefaultAMDHSACodeObjectVersion(M.getContext().getOptionsContext());
 }
 
-unsigned getDefaultAMDHSACodeObjectVersion() {
-  return DefaultAMDHSACodeObjectVersion;
+unsigned getDefaultAMDHSACodeObjectVersion(const clv2::OptionsContext &Ctx) {
+  return getDefaultAMDHSACodeObjectVersionOpt(nullptr, Ctx);
 }
 
-unsigned getAMDHSACodeObjectVersion(unsigned ABIVersion) {
+unsigned getAMDHSACodeObjectVersion(unsigned ABIVersion,
+                                    const clv2::OptionsContext &Ctx) {
   switch (ABIVersion) {
   case ELF::ELFABIVERSION_AMDGPU_HSA_V4:
     return 4;
@@ -232,7 +238,7 @@ unsigned getAMDHSACodeObjectVersion(unsigned ABIVersion) {
   case ELF::ELFABIVERSION_AMDGPU_HSA_V6:
     return 6;
   default:
-    return getDefaultAMDHSACodeObjectVersion();
+    return getDefaultAMDHSACodeObjectVersion(Ctx);
   }
 }
 

@@ -37,8 +37,9 @@
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 
@@ -46,7 +47,6 @@ using namespace llvm;
 using namespace PatternMatch;
 
 namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 } // end namespace llvm
 
 #define DEBUG_TYPE "x86-lower-amx-intrinsics"
@@ -60,9 +60,10 @@ static bool isV256I32Ty(Type *Ty) {
 }
 #endif
 
-static cl::opt<bool>
-    X86ScalarizeAMX("enable-x86-scalar-amx", cl::init(false), cl::Hidden,
-                    cl::desc("X86: enable AMX scalarizition."));
+static bool getX86ScalarizeAMX(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_ScalarizeAMX>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 class X86LowerAMXIntrinsics {
@@ -130,7 +131,7 @@ BasicBlock *X86LowerAMXIntrinsics::createLoop(BasicBlock *Preheader,
   Value *Inc = B.CreateAdd(IV, Step, Name + ".step");
   Value *Cond = B.CreateICmpNE(Inc, Bound, Name + ".cond");
   auto *BR = CondBrInst::Create(Cond, Header, Exit, Latch);
-  if (!ProfcheckDisableMetadataFixes) {
+  if (!getProfcheckDisableMetadataFixes(Ctx)) {
     if (auto *BoundInt = dyn_cast<ConstantInt>(Bound)) {
       assert(Step->getZExtValue() != 0 &&
              "Expected a non-zero step size. This is chosen by the pass and "
@@ -649,8 +650,8 @@ bool X86LowerAMXIntrinsics::visit() {
 
 namespace {
 bool shouldRunLowerAMXIntrinsics(const Function &F, const TargetMachine *TM) {
-  return X86ScalarizeAMX && (F.hasFnAttribute(Attribute::OptimizeNone) ||
-                             TM->getOptLevel() == CodeGenOptLevel::None);
+  return getX86ScalarizeAMX(F) && (F.hasFnAttribute(Attribute::OptimizeNone) ||
+                                   TM->getOptLevel() == CodeGenOptLevel::None);
 }
 
 bool runLowerAMXIntrinsics(Function &F, DominatorTree *DT, LoopInfo *LI) {

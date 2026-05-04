@@ -25,17 +25,20 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Instrumentation/InstrumentationOptionsOptInfos.h"
 #include <utility>
 
 using namespace llvm;
 
 #define DEBUG_TYPE "bounds-checking"
 
-static cl::opt<bool> SingleTrapBB("bounds-checking-single-trap",
-                                  cl::desc("Use one trap block per function"));
+static bool getSingleTrapBB(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::INST_BoundsCheckingSingleTrap>(
+      F.getContext().getOptionsContext());
+}
 
 STATISTIC(ChecksAdded, "Bounds checks added");
 STATISTIC(ChecksSkipped, "Bounds checks skipped");
@@ -251,8 +254,8 @@ static bool addBoundsChecking(Function &F, TargetLibraryInfo &TLI,
   // flags, this will either create a single block for the entire function or
   // will create a fresh block every time it is called.
   BasicBlock *ReuseTrapBB = nullptr;
-  auto GetTrapBB = [&ReuseTrapBB, &Opts, &Name](BuilderTy &IRB,
-                                                BasicBlock *Cont) {
+  auto GetTrapBB = [&ReuseTrapBB, &Opts, &Name, &F](BuilderTy &IRB,
+                                                    BasicBlock *Cont) {
     Function *Fn = IRB.GetInsertBlock()->getParent();
     auto DebugLoc = IRB.getCurrentDebugLocation();
     IRBuilder<>::InsertPointGuard Guard(IRB);
@@ -286,7 +289,7 @@ static bool addBoundsChecking(Function &F, TargetLibraryInfo &TLI,
     // local-bounds. Make sure to change that too.
     if (Opts.Rt && Opts.Rt->HandlerPreserveAllRegs && MayReturn)
       TrapCall->setCallingConv(CallingConv::PreserveAll);
-    if (!MayReturn && SingleTrapBB && !DebugTrapBB)
+    if (!MayReturn && getSingleTrapBB(F) && !DebugTrapBB)
       ReuseTrapBB = TrapBB;
 
     return TrapBB;

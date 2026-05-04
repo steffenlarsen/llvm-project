@@ -38,10 +38,11 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 #include <algorithm>
 #include <cstdint>
 #include <memory>
@@ -49,10 +50,10 @@
 
 using namespace llvm;
 
-static cl::opt<bool> LVIInlineAsmHardening(
-    "x86-experimental-lvi-inline-asm-hardening",
-    cl::desc("Harden inline assembly code that may be vulnerable to Load Value"
-             " Injection (LVI). This feature is experimental."), cl::Hidden);
+static bool getLVIInlineAsmHardening(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::X86OptsReg, &clv2::X86_LVIInlineAsmHardening>(
+      Ctx, false);
+}
 
 static bool checkScale(unsigned Scale, StringRef &ErrMsg) {
   if (Scale != 1 && Scale != 2 && Scale != 4 && Scale != 8) {
@@ -4332,13 +4333,13 @@ void X86AsmParser::applyLVILoadHardeningMitigation(MCInst &Inst,
 
 void X86AsmParser::emitInstruction(MCInst &Inst, OperandVector &Operands,
                                    MCStreamer &Out) {
-  if (LVIInlineAsmHardening &&
+  if (getLVIInlineAsmHardening(getContext().getOptionsContext()) &&
       getSTI().hasFeature(X86::FeatureLVIControlFlowIntegrity))
     applyLVICFIMitigation(Inst, Out);
 
   Out.emitInstruction(Inst, getSTI());
 
-  if (LVIInlineAsmHardening &&
+  if (getLVIInlineAsmHardening(getContext().getOptionsContext()) &&
       getSTI().hasFeature(X86::FeatureLVILoadHardening))
     applyLVILoadHardeningMitigation(Inst, Out);
 }

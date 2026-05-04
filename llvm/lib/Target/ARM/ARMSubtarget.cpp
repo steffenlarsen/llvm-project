@@ -34,7 +34,8 @@
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/ARMTargetParser.h"
 #include "llvm/TargetParser/Triple.h"
@@ -47,27 +48,38 @@ using namespace llvm;
 #define GET_SUBTARGETINFO_CTOR
 #include "ARMGenSubtargetInfo.inc"
 
-static cl::opt<bool>
-UseFusedMulOps("arm-use-mulops",
-               cl::init(true), cl::Hidden);
-
 enum ITMode {
   DefaultIT,
   RestrictedIT
 };
 
-static cl::opt<ITMode>
-    IT(cl::desc("IT block support"), cl::Hidden, cl::init(DefaultIT),
-       cl::values(clEnumValN(DefaultIT, "arm-default-it",
-                             "Generate any type of IT block"),
-                  clEnumValN(RestrictedIT, "arm-restrict-it",
-                             "Disallow complex IT blocks")));
+static bool getUseFusedMulOps(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::ARM_UseFusedMulOps>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getUseFusedMulOps(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::ARM_UseFusedMulOps>(Ctx);
+}
+
+static ITMode getIT(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::ARMOptsReg>(Ctx))
+    if (O->specified<&clv2::ARM_IT>())
+      return static_cast<ITMode>(O->get<&clv2::ARM_IT>());
+  return DefaultIT;
+}
 
 /// ForceFastISel - Use the fast-isel, even for subtargets where it is not
 /// currently supported (for testing only).
-static cl::opt<bool>
-ForceFastISel("arm-force-fast-isel",
-               cl::init(false), cl::Hidden);
+static bool getForceFastISel(const Function &F) {
+  return clv2::getOptValOr<&clv2::ARMOptsReg, &clv2::ARM_ForceFastISel>(
+      F.getContext().getOptionsContext(), false);
+}
+
+static bool getForceFastISel(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::ARMOptsReg, &clv2::ARM_ForceFastISel>(Ctx,
+                                                                        false);
+}
 
 /// initializeSubtargetDependencies - Initializes using a CPU and feature string
 /// so that we can use initializer lists for subtarget initialization.
@@ -91,17 +103,20 @@ ARMSubtarget::ARMSubtarget(const Triple &TT, const std::string &CPU,
                            const ARMBaseTargetMachine &TM, bool IsLittle,
                            FloatABI::ABIType FloatABI, ARM::ARMABI ABI,
                            bool MinSize, DenormalMode DM)
-    : ARMGenSubtargetInfo(TT, CPU, /*TuneCPU*/ CPU, FS),
-      UseMulOps(UseFusedMulOps), CPUString(CPU), OptMinSize(MinSize),
-      IsLittle(IsLittle), DM(DM), TargetTriple(TT), Options(TM.Options), TM(TM),
-      FloatABIType(FloatABI), ABI(ABI),
+    : ARMGenSubtargetInfo(TT, CPU, /*TuneCPU*/ CPU, FS, TM.getOptionsContext()),
+      UseMulOps(getUseFusedMulOps(TM.getOptionsContext())), CPUString(CPU),
+      OptMinSize(MinSize), IsLittle(IsLittle), DM(DM), TargetTriple(TT),
+      Options(TM.Options), TM(TM), FloatABIType(FloatABI), ABI(ABI),
       FrameLowering(initializeFrameLowering(CPU, FS)),
       // At this point initializeSubtargetDependencies has been called so
       // we can query directly.
-      InstrInfo(isThumb1Only() ? (ARMBaseInstrInfo *)new Thumb1InstrInfo(*this)
-                : !isThumb() ? (ARMBaseInstrInfo *)new ARMInstrInfo(*this)
-                             : (ARMBaseInstrInfo *)new Thumb2InstrInfo(*this)),
+      InstrInfo((setTargetMachine(&TM),
+                 isThumb1Only() ? (ARMBaseInstrInfo *)new Thumb1InstrInfo(*this)
+                 : !isThumb()
+                     ? (ARMBaseInstrInfo *)new ARMInstrInfo(*this)
+                     : (ARMBaseInstrInfo *)new Thumb2InstrInfo(*this))),
       TLInfo(TM, *this) {
+  setOptionsContext(TM.getOptionsContext());
 
   CallLoweringInfo.reset(new ARMCallLowering(*getTargetLowering()));
   Legalizer.reset(new ARMLegalizerInfo(*this));
@@ -359,7 +374,7 @@ void ARMSubtarget::initSubtargetFeatures(StringRef CPU, StringRef FS) {
 
   SupportsTailCall = !isThumb1Only() || hasV8MBaselineOps();
 
-  switch (IT) {
+  switch (getIT(TM.getOptionsContext())) {
   case DefaultIT:
     RestrictIT = false;
     break;
@@ -542,7 +557,7 @@ bool ARMSubtarget::useMovt() const {
 
 bool ARMSubtarget::useFastISel() const {
   // Enable fast-isel for any target, for testing only.
-  if (ForceFastISel)
+  if (getForceFastISel(TM.getOptionsContext()))
     return true;
 
   // Limit fast-isel to the targets that are or have been tested.

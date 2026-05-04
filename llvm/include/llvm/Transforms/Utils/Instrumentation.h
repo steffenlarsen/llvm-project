@@ -25,6 +25,10 @@
 #include <limits>
 #include <string>
 
+namespace llvm::clv2 {
+class OptionsContext;
+}
+
 namespace llvm {
 
 class Triple;
@@ -62,7 +66,18 @@ LLVM_ABI void setGlobalVariableLargeSection(const Triple &TargetTriple,
 
 // Insert GCOV profiling instrumentation
 struct GCOVOptions {
-  LLVM_ABI static GCOVOptions getDefault();
+  LLVM_ABI static GCOVOptions getDefault(const clv2::OptionsContext &Ctx);
+
+  /// Return hard-coded defaults without an OptionsContext.
+  static GCOVOptions getDefault() {
+    GCOVOptions Options;
+    Options.EmitNotes = true;
+    Options.EmitData = true;
+    Options.NoRedZone = false;
+    Options.Atomic = false;
+    memcpy(Options.Version, "0000", 4);
+    return Options;
+  }
 
   // Specify whether to emit .gcno files.
   bool EmitNotes;

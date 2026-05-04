@@ -39,6 +39,8 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -51,12 +53,17 @@ STATISTIC(NumTransformedToWInstrs,
 STATISTIC(NumTransformedToNonWInstrs,
           "Number of instructions transformed to non-W-ops");
 
-static cl::opt<bool> DisableSExtWRemoval("riscv-disable-sextw-removal",
-                                         cl::desc("Disable removal of sext.w"),
-                                         cl::init(false), cl::Hidden);
-static cl::opt<bool> DisableStripWSuffix("riscv-disable-strip-w-suffix",
-                                         cl::desc("Disable strip W suffix"),
-                                         cl::init(false), cl::Hidden);
+static bool DisableSExtWRemoval = false;
+
+static bool getDisableSExtWRemoval(const Function &F) {
+  return clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_DisableSExtWRemoval>(
+      F.getContext().getOptionsContext(), DisableSExtWRemoval);
+}
+
+static bool getDisableStripWSuffix(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::RV_DisableStripWSuffix>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -740,7 +747,7 @@ bool RISCVOptWInstrsImpl::removeSExtWInstrs(MachineFunction &MF,
                                             const RISCVInstrInfo &TII,
                                             const RISCVSubtarget &ST,
                                             MachineRegisterInfo &MRI) {
-  if (DisableSExtWRemoval)
+  if (getDisableSExtWRemoval(MF.getFunction()))
     return false;
 
   bool MadeChange = false;
@@ -794,7 +801,8 @@ bool RISCVOptWInstrsImpl::canonicalizeWSuffixes(MachineFunction &MF,
                                                 const RISCVInstrInfo &TII,
                                                 const RISCVSubtarget &ST,
                                                 MachineRegisterInfo &MRI) {
-  bool ShouldStripW = !(DisableStripWSuffix || ST.preferWInst());
+  bool ShouldStripW =
+      !(getDisableStripWSuffix(MF.getFunction()) || ST.preferWInst());
   bool ShouldPreferW = ST.preferWInst();
   bool MadeChange = false;
 

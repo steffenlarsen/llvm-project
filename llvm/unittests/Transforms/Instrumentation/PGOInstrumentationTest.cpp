@@ -15,6 +15,7 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
+#include "llvm/Support/OptionsContext.h"
 #include <tuple>
 
 namespace {
@@ -107,13 +108,13 @@ struct PGOInstrumentationGenTest
     : public Test,
       WithParamInterface<std::tuple<StringRef, StringRef>> {
   ModulePassManager MPM;
-  PassBuilder PB;
+  PassBuilder PB{llvm::clv2::defaultOptionsContext()};
   MockModuleAnalysisHandle MMAHandle;
   LoopAnalysisManager LAM;
   FunctionAnalysisManager FAM;
   CGSCCAnalysisManager CGAM;
   ModuleAnalysisManager MAM;
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
 
   PGOInstrumentationGenTest() {

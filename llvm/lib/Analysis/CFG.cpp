@@ -12,21 +12,25 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/CFG.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/CycleAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
 // The max number of basic blocks explored during reachability analysis between
 // two basic blocks. This is kept reasonably small to limit compile time when
 // repeatedly used by clients of this analysis (such as captureTracking).
-static cl::opt<unsigned> DefaultMaxBBsToExplore(
-    "dom-tree-reachability-max-bbs-to-explore", cl::Hidden,
-    cl::desc("Max number of BBs to explore for reachability analysis"),
-    cl::init(32));
+unsigned DefaultMaxBBsToExplore = 32;
+
+static unsigned getDefaultMaxBBsToExplore(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_DefaultMaxBBsToExplore>(Ctx);
+}
 
 /// FindFunctionBackedges - Analyze the specified function to find all of the
 /// loop backedges in the function and return them.  This is a relatively cheap
@@ -202,7 +206,11 @@ static bool isReachableImpl(SmallVectorImpl<BasicBlock *> &Worklist,
     }
   }
 
-  unsigned Limit = DefaultMaxBBsToExplore;
+  const Function *Fn =
+      Worklist.empty() ? nullptr : Worklist.front()->getParent();
+  unsigned Limit =
+      Fn ? getDefaultMaxBBsToExplore(Fn->getContext().getOptionsContext())
+         : DefaultMaxBBsToExplore;
   SmallPtrSet<const BasicBlock*, 32> Visited;
   do {
     BasicBlock *BB = Worklist.pop_back_val();

@@ -17,13 +17,13 @@
 #include "RISCVSubtarget.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "riscv-lpad-setup"
 #define PASS_NAME "RISC-V Landing Pad Setup"
-
-extern cl::opt<uint32_t> PreferredLandingPadLabel;
 
 namespace {
 
@@ -53,12 +53,21 @@ bool RISCVLandingPadSetup::runOnMachineFunction(MachineFunction &MF) {
     return false;
 
   uint32_t Label = 0;
-  if (PreferredLandingPadLabel.getNumOccurrences() > 0) {
-    if (!isUInt<20>(PreferredLandingPadLabel))
-      report_fatal_error("riscv-landing-pad-label=<val>, <val> needs to fit in "
-                         "unsigned 20-bits");
-    Label = PreferredLandingPadLabel;
+  bool LabelSpecified = false;
+  {
+    const rv_opts::ParsedOpts *O = clv2::getView<&clv2::RISCVOptsReg>(
+        MF.getFunction().getContext().getOptionsContext());
+    if (O) {
+      LabelSpecified = O->specified<&clv2::RV_PreferredLandingPadLabel>();
+      if (LabelSpecified)
+        Label = O->get<&clv2::RV_PreferredLandingPadLabel>();
+    } else {
+      LabelSpecified = false;
+    }
   }
+  if (LabelSpecified && !isUInt<20>(Label))
+    report_fatal_error("riscv-landing-pad-label=<val>, <val> needs to fit in "
+                       "unsigned 20-bits");
 
   // Zicfilp does not check X7 if landing pad label is zero.
   if (Label == 0)

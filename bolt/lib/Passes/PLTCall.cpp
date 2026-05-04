@@ -12,35 +12,21 @@
 //===----------------------------------------------------------------------===//
 
 #include "bolt/Passes/PLTCall.h"
-#include "llvm/Support/CommandLine.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
+#include "llvm/Support/CommandLineV2.h"
 
 #define DEBUG_TYPE "bolt-plt"
 
 using namespace llvm;
-
-namespace opts {
-
-extern cl::OptionCategory BoltOptCategory;
-
-static cl::opt<bolt::PLTCall::OptType>
-    PLT("plt",
-        cl::desc("optimize PLT calls (requires linking with -znow on "
-                 "non-x86 architectures)"),
-        cl::init(bolt::PLTCall::OT_NONE),
-        cl::values(clEnumValN(bolt::PLTCall::OT_NONE, "none",
-                              "do not optimize PLT calls"),
-                   clEnumValN(bolt::PLTCall::OT_HOT, "hot",
-                              "optimize executed (hot) PLT calls"),
-                   clEnumValN(bolt::PLTCall::OT_ALL, "all",
-                              "optimize all PLT calls")),
-        cl::ZeroOrMore, cl::cat(BoltOptCategory));
-}
+using namespace bolt::bolt_passes_opts;
 
 namespace llvm {
 namespace bolt {
 
 Error PLTCall::runOnFunctions(BinaryContext &BC) {
-  if (opts::PLT == OT_NONE)
+  auto PLT = static_cast<bolt::PLTCall::OptType>(getPlt(BC));
+
+  if (PLT == OT_NONE)
     return Error::success();
 
   uint64_t NumCallsOptimized = 0;
@@ -49,12 +35,12 @@ Error PLTCall::runOnFunctions(BinaryContext &BC) {
     if (!shouldOptimize(Function))
       continue;
 
-    if (opts::PLT == OT_HOT &&
+    if (PLT == OT_HOT &&
         Function.getExecutionCount() == BinaryFunction::COUNT_NO_PROFILE)
       continue;
 
     for (BinaryBasicBlock &BB : Function) {
-      if (opts::PLT == OT_HOT && !BB.getKnownExecutionCount())
+      if (PLT == OT_HOT && !BB.getKnownExecutionCount())
         continue;
 
       for (auto II = BB.begin(); II != BB.end(); II++) {

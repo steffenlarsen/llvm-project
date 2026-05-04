@@ -12,7 +12,7 @@
 #include "support/Threading.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include <deque>
 #include <optional>
 #include <string>

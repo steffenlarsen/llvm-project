@@ -83,10 +83,11 @@
 #include "llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h"
 #include "llvm/ExecutionEngine/Orc/SimpleRemoteEPC.h"
 #include "llvm/ExecutionEngine/Orc/ThreadSafeModule.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Host.h"
@@ -101,39 +102,41 @@ using namespace llvm;
 using namespace llvm::orc;
 
 // The LLVM IR file to run.
-static cl::list<std::string> InputFiles(cl::Positional, cl::OneOrMore,
-                                        cl::desc("<input files>"));
+static constexpr clv2::ListOptionInfo<std::string> InputFilesOpt{
+    "", "<input files>", clv2::Positional{}, clv2::OneOrMore};
 
 // Command line arguments to pass to the JITed main function.
-static cl::list<std::string> InputArgv("args", cl::Positional,
-                                       cl::desc("<program arguments>..."),
-                                       cl::PositionalEatsArgs);
+static constexpr clv2::ListOptionInfo<std::string> InputArgvOpt{
+    "args", "<program arguments>...", clv2::Positional{}, clv2::ZeroOrMore,
+    clv2::MiscFlags(clv2::PositionalEatsArgs)};
 
 // Given paths must exist on the remote target.
-static cl::list<std::string>
-    Dylibs("dlopen", cl::desc("Dynamic libraries to load before linking"),
-           cl::value_desc("filename"));
+static constexpr clv2::ListOptionInfo<std::string> DylibsOpt{
+    "dlopen", "Dynamic libraries to load before linking", clv2::ZeroOrMore,
+    clv2::value_desc("filename")};
 
 // File path of the executable to launch for execution in a child process.
 // Inter-process communication will go through stdin/stdout pipes.
-static cl::opt<std::string>
-    OOPExecutor("executor", cl::desc("Set the out-of-process executor"),
-                cl::value_desc("filename"));
+static constexpr clv2::OptionInfo<std::string> OOPExecutorOpt{
+    "executor", "Set the out-of-process executor",
+    clv2::value_desc("filename")};
 
 // Network address of a running executor process that we can connect via TCP. It
 // may run locally or on a remote machine.
-static cl::opt<std::string> OOPExecutorConnectTCP(
-    "connect",
-    cl::desc("Connect to an out-of-process executor through a TCP socket"),
-    cl::value_desc("<hostname>:<port>"));
+static constexpr clv2::OptionInfo<std::string> OOPExecutorConnectTCPOpt{
+    "connect", "Connect to an out-of-process executor through a TCP socket",
+    clv2::value_desc("<hostname>:<port>")};
 
 // Give the user a chance to connect a debugger. Once we connected the executor
 // process, wait for the user to press a key (and print out its PID if it's a
 // child process).
-static cl::opt<bool>
-    WaitForDebugger("wait-for-debugger",
-                    cl::desc("Wait for user input before entering JITed code"),
-                    cl::init(false));
+static constexpr clv2::OptionInfo<bool> WaitForDebuggerOpt{
+    "wait-for-debugger", "Wait for user input before entering JITed code"};
+
+static constexpr clv2::OptionsRegistry<
+    &InputFilesOpt, &InputArgvOpt, &DylibsOpt, &OOPExecutorOpt,
+    &OOPExecutorConnectTCPOpt, &WaitForDebuggerOpt>
+    RemoteDebugReg;
 
 ExitOnError ExitOnErr;
 
@@ -144,10 +147,22 @@ int main(int argc, char *argv[]) {
   InitializeNativeTargetAsmPrinter();
 
   ExitOnErr.setBanner(std::string(argv[0]) + ": ");
-  cl::ParseCommandLineOptions(argc, argv, "LLJITWithRemoteDebugging");
+  clv2::OptionParser P;
+  P.add<&RemoteDebugReg>();
+  RegisterAllLLVMOptions(P);
+  auto OptsCtx = P.parse(argc, argv, "LLJITWithRemoteDebugging");
+  auto *Opts = OptsCtx->getViewPtr<&RemoteDebugReg>();
+
+  const auto &InputFiles = Opts->get<&InputFilesOpt>();
+  const auto &InputArgv = Opts->get<&InputArgvOpt>();
+  const auto &Dylibs = Opts->get<&DylibsOpt>();
+  auto OOPExecutor = std::string(Opts->get<&OOPExecutorOpt>());
+  auto OOPExecutorConnectTCP =
+      std::string(Opts->get<&OOPExecutorConnectTCPOpt>());
+  bool WaitForDebugger = Opts->get<&WaitForDebuggerOpt>();
 
   std::unique_ptr<SimpleRemoteEPC> EPC;
-  if (OOPExecutorConnectTCP.getNumOccurrences() > 0) {
+  if (!OOPExecutorConnectTCP.empty()) {
     // Connect to a running out-of-process executor through a TCP socket.
     EPC = ExitOnErr(connectTCPSocket(OOPExecutorConnectTCP));
     outs() << "Connected to executor at " << OOPExecutorConnectTCP << "\n";

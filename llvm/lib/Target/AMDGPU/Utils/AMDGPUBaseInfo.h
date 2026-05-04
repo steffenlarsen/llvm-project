@@ -27,6 +27,7 @@
 // Pull in OpName enum definition and getNamedOperandIdx() declaration.
 #define GET_INSTRINFO_OPERAND_ENUM
 #include "AMDGPUGenInstrInfo.inc"
+#include "llvm/Support/OptionsContext.h"
 
 struct amd_kernel_code_t;
 
@@ -45,6 +46,9 @@ class MDNode;
 class StringRef;
 class Triple;
 class raw_ostream;
+namespace clv2 {
+class OptionsContext;
+}
 
 namespace AMDGPU {
 
@@ -78,12 +82,13 @@ bool isHsaAbi(const MCSubtargetInfo &STI);
 unsigned getAMDHSACodeObjectVersion(const Module &M);
 
 /// \returns Code object version from ELF's e_ident[EI_ABIVERSION].
-unsigned getAMDHSACodeObjectVersion(unsigned ABIVersion);
+unsigned getAMDHSACodeObjectVersion(unsigned ABIVersion,
+                                    const clv2::OptionsContext &Ctx);
 
 /// \returns The default HSA code object version. This should only be used when
 /// we lack a more accurate CodeObjectVersion value (e.g. from the IR module
 /// flag or a .amdhsa_code_object_version directive)
-unsigned getDefaultAMDHSACodeObjectVersion();
+unsigned getDefaultAMDHSACodeObjectVersion(const clv2::OptionsContext &Ctx);
 
 /// \returns ABIVersion suitable for use in ELF's e_ident[EI_ABIVERSION]. \param
 /// CodeObjectVersion is a value returned by getAMDHSACodeObjectVersion().

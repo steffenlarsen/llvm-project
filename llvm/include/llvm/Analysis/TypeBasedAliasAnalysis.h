@@ -28,6 +28,10 @@ class Function;
 class MDNode;
 class MemoryLocation;
 
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
+
 /// A simple AA result that uses TBAA metadata to answer queries.
 class TypeBasedAAResult : public AAResultBase {
   /// True if type sanitizer is enabled. When TypeSanitizer is used, don't use
@@ -35,9 +39,13 @@ class TypeBasedAAResult : public AAResultBase {
   /// memory accesses that we need to verify at runtime.
   bool UsingTypeSanitizer;
 
+  /// Whether TBAA metadata may be used at all.  Every query consults this, so
+  /// it is resolved once at construction rather than per query.
+  bool ShouldUseTBAA;
+
 public:
-  TypeBasedAAResult(bool UsingTypeSanitizer)
-      : UsingTypeSanitizer(UsingTypeSanitizer) {}
+  LLVM_ABI TypeBasedAAResult(bool UsingTypeSanitizer,
+                             const clv2::OptionsContext &Ctx);
 
   /// Handle invalidation events from the new pass manager.
   ///

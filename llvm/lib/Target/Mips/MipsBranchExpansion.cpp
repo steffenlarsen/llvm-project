@@ -92,8 +92,10 @@
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DebugLoc.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include <algorithm>
 #include <cassert>
@@ -108,14 +110,15 @@ using namespace llvm;
 STATISTIC(NumInsertedNops, "Number of nops inserted");
 STATISTIC(LongBranches, "Number of long branches.");
 
-static cl::opt<bool>
-    SkipLongBranch("skip-mips-long-branch", cl::init(false),
-                   cl::desc("MIPS: Skip branch expansion pass."), cl::Hidden);
+static bool getSkipLongBranch(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::MIPS_SkipLongBranch>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    ForceLongBranch("force-mips-long-branch", cl::init(false),
-                    cl::desc("MIPS: Expand all branches to long format."),
-                    cl::Hidden);
+static bool getForceLongBranch(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::MIPS_ForceLongBranch>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -869,7 +872,7 @@ bool MipsBranchExpansion::handlePossibleLongBranch() {
   if (STI->inMips16Mode() || !STI->enableLongBranchPass())
     return false;
 
-  if (SkipLongBranch)
+  if (getSkipLongBranch(MFp->getFunction()))
     return false;
 
   bool EverMadeChange = false, MadeChange = true;
@@ -932,7 +935,7 @@ bool MipsBranchExpansion::runOnMachineFunction(MachineFunction &MF) {
 
   MFp = &MF;
 
-  ForceLongBranchFirstPass = ForceLongBranch;
+  ForceLongBranchFirstPass = getForceLongBranch(MF.getFunction());
   // Run these at least once.
   bool longBranchChanged = handlePossibleLongBranch();
   bool forbiddenSlotChanged = handleForbiddenSlot();

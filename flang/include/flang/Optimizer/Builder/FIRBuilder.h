@@ -27,8 +27,13 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/Support/OptionsContext.h"
 #include <optional>
 #include <utility>
+
+namespace llvm::clv2 {
+class OptionsContext;
+}
 
 namespace mlir {
 class DataLayout;
@@ -816,7 +821,8 @@ fir::ExtendedValue createStringLiteral(fir::FirOpBuilder &, mlir::Location,
 
 /// Unique a compiler generated identifier. A short prefix should be provided
 /// to hint at the origin of the identifier.
-std::string uniqueCGIdent(llvm::StringRef prefix, llvm::StringRef name);
+std::string uniqueCGIdent(llvm::StringRef prefix, llvm::StringRef name,
+                          const llvm::clv2::OptionsContext &optsCtx);
 
 /// Lowers the extents from the sequence type to Values.
 /// Any unknown extents are lowered to undefined values.

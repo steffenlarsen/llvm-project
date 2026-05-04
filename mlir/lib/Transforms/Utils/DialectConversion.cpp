@@ -2561,8 +2561,8 @@ LogicalResult OperationLegalizer::legalize(Operation *op) {
 
     // If the operation has no regions, just print it here.
     if (!isIgnored && op->getNumRegions() == 0) {
-      logger.startLine() << OpWithFlags(op,
-                                        OpPrintingFlags().printGenericOpForm())
+      logger.startLine() << OpWithFlags(
+                                op, opPrintingFlags(op).printGenericOpForm())
                          << "\n";
     }
   });
@@ -3315,7 +3315,7 @@ LogicalResult OperationConverter::convert(Operation *op,
                               << op->getName() << "'";
     if (wasExplicitlyIllegal)
       diag << " that was explicitly marked illegal";
-    diag << ": " << OpWithFlags(op, OpPrintingFlags().skipRegions());
+    diag << ": " << OpWithFlags(op, opPrintingFlags(op).skipRegions());
   };
 
   // Legalize the given operation.

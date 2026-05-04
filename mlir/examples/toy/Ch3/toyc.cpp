@@ -26,9 +26,10 @@
 #include "mlir/Transforms/Passes.h"
 
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
@@ -37,31 +38,43 @@
 #include <utility>
 
 using namespace toy;
-namespace cl = llvm::cl;
-
-static cl::opt<std::string> inputFilename(cl::Positional,
-                                          cl::desc("<input toy file>"),
-                                          cl::init("-"),
-                                          cl::value_desc("filename"));
+using namespace llvm;
 
 namespace {
 enum InputType { Toy, MLIR };
-} // namespace
-static cl::opt<enum InputType> inputType(
-    "x", cl::init(Toy), cl::desc("Decided the kind of output desired"),
-    cl::values(clEnumValN(Toy, "toy", "load the input file as a Toy source.")),
-    cl::values(clEnumValN(MLIR, "mlir",
-                          "load the input file as an MLIR file")));
-
-namespace {
 enum Action { None, DumpAST, DumpMLIR };
 } // namespace
-static cl::opt<enum Action> emitAction(
-    "emit", cl::desc("Select the kind of output desired"),
-    cl::values(clEnumValN(DumpAST, "ast", "output the AST dump")),
-    cl::values(clEnumValN(DumpMLIR, "mlir", "output the MLIR dump")));
 
-static cl::opt<bool> enableOpt("opt", cl::desc("Enable optimizations"));
+static constexpr clv2::OptionInfo<std::string> inputFilenameOpt{
+    "", "<input toy file>", clv2::Positional{}, clv2::Init{"-"}};
+
+static constexpr clv2::EnumVal<InputType> inputTypeVals[] = {
+    {"toy", Toy, "load the input file as a Toy source."},
+    {"mlir", MLIR, "load the input file as an MLIR file"},
+};
+static constexpr auto inputTypeOpt = clv2::makeEnumOption<InputType>(
+    "x", "Decided the kind of output desired", inputTypeVals);
+
+static constexpr clv2::EnumVal<Action> emitActionVals[] = {
+    {"ast", DumpAST, "output the AST dump"},
+    {"mlir", DumpMLIR, "output the MLIR dump"},
+};
+static constexpr auto emitActionOpt = clv2::makeEnumOption<Action>(
+    "emit", "Select the kind of output desired", emitActionVals);
+
+static constexpr clv2::OptionInfo<bool> enableOptOpt{"opt",
+                                                     "Enable optimizations"};
+
+static constexpr clv2::OptionsRegistry<&inputFilenameOpt, &inputTypeOpt,
+                                       &emitActionOpt, &enableOptOpt>
+    ToyReg;
+
+struct ToyOptions {
+  std::string InputFilename;
+  InputType InputTypeVal;
+  Action EmitAction;
+  bool EnableOpt = false;
+};
 
 /// Returns a Toy AST resulting from parsing the file or a nullptr on error.
 static std::unique_ptr<toy::ModuleAST>
@@ -79,11 +92,12 @@ parseInputFile(llvm::StringRef filename) {
 }
 
 static int loadMLIR(llvm::SourceMgr &sourceMgr, mlir::MLIRContext &context,
-                    mlir::OwningOpRef<mlir::ModuleOp> &module) {
+                    mlir::OwningOpRef<mlir::ModuleOp> &module,
+                    const ToyOptions &Opts) {
   // Handle '.toy' input to the compiler.
-  if (inputType != InputType::MLIR &&
-      !llvm::StringRef(inputFilename).ends_with(".mlir")) {
-    auto moduleAST = parseInputFile(inputFilename);
+  if (Opts.InputTypeVal != InputType::MLIR &&
+      !llvm::StringRef(Opts.InputFilename).ends_with(".mlir")) {
+    auto moduleAST = parseInputFile(Opts.InputFilename);
     if (!moduleAST)
       return 6;
     module = mlirGen(context, *moduleAST);
@@ -92,7 +106,7 @@ static int loadMLIR(llvm::SourceMgr &sourceMgr, mlir::MLIRContext &context,
 
   // Otherwise, the input is '.mlir'.
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
-      llvm::MemoryBuffer::getFileOrSTDIN(inputFilename);
+      llvm::MemoryBuffer::getFileOrSTDIN(Opts.InputFilename);
   if (std::error_code ec = fileOrErr.getError()) {
     llvm::errs() << "Could not open input file: " << ec.message() << "\n";
     return -1;
@@ -102,13 +116,13 @@ static int loadMLIR(llvm::SourceMgr &sourceMgr, mlir::MLIRContext &context,
   sourceMgr.AddNewSourceBuffer(std::move(*fileOrErr), llvm::SMLoc());
   module = mlir::parseSourceFile<mlir::ModuleOp>(sourceMgr, &context);
   if (!module) {
-    llvm::errs() << "Error can't load file " << inputFilename << "\n";
+    llvm::errs() << "Error can't load file " << Opts.InputFilename << "\n";
     return 3;
   }
   return 0;
 }
 
-static int dumpMLIR() {
+static int dumpMLIR(const ToyOptions &Opts) {
   mlir::MLIRContext context;
   // Load our Dialect in this MLIR Context.
   context.getOrLoadDialect<mlir::toy::ToyDialect>();
@@ -116,10 +130,10 @@ static int dumpMLIR() {
   mlir::OwningOpRef<mlir::ModuleOp> module;
   llvm::SourceMgr sourceMgr;
   mlir::SourceMgrDiagnosticHandler sourceMgrHandler(sourceMgr, &context);
-  if (int error = loadMLIR(sourceMgr, context, module))
+  if (int error = loadMLIR(sourceMgr, context, module, Opts))
     return error;
 
-  if (enableOpt) {
+  if (Opts.EnableOpt) {
     mlir::PassManager pm(module.get()->getName());
     // Apply any generic pass manager command line options and run the pipeline.
     if (mlir::failed(mlir::applyPassManagerCLOptions(pm)))
@@ -135,13 +149,13 @@ static int dumpMLIR() {
   return 0;
 }
 
-static int dumpAST() {
-  if (inputType == InputType::MLIR) {
+static int dumpAST(const ToyOptions &Opts) {
+  if (Opts.InputTypeVal == InputType::MLIR) {
     llvm::errs() << "Can't dump a Toy AST when the input is MLIR\n";
     return 5;
   }
 
-  auto moduleAST = parseInputFile(inputFilename);
+  auto moduleAST = parseInputFile(Opts.InputFilename);
   if (!moduleAST)
     return 1;
 
@@ -153,15 +167,25 @@ int main(int argc, char **argv) {
   // Register any command line options.
   mlir::registerAsmPrinterCLOptions();
   mlir::registerMLIRContextCLOptions();
-  mlir::registerPassManagerCLOptions();
 
-  cl::ParseCommandLineOptions(argc, argv, "toy compiler\n");
+  llvm::clv2::OptionParser P;
+  P.add<&ToyReg>();
+  RegisterAllLLVMOptions(P);
+  mlir::registerPassManagerCLOptions(P);
+  auto OptsCtx = P.parse(argc, argv, "toy compiler\n");
+  auto *View = OptsCtx->getViewPtr<&ToyReg>();
 
-  switch (emitAction) {
+  ToyOptions Opts;
+  Opts.InputFilename = std::string(View->get<&inputFilenameOpt>());
+  Opts.InputTypeVal = View->get<&inputTypeOpt>();
+  Opts.EmitAction = View->get<&emitActionOpt>();
+  Opts.EnableOpt = View->get<&enableOptOpt>();
+
+  switch (Opts.EmitAction) {
   case Action::DumpAST:
-    return dumpAST();
+    return dumpAST(Opts);
   case Action::DumpMLIR:
-    return dumpMLIR();
+    return dumpMLIR(Opts);
   default:
     llvm::errs() << "No action specified (parsing only?), use -emit=<action>\n";
   }

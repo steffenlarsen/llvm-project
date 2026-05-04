@@ -27,11 +27,11 @@
 #include "llvm/IR/OptBisect.h"
 #include "llvm/IR/PassTimingInfo.h"
 #include "llvm/IR/ValueHandle.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Transforms/IPO/SampleProfileProbe.h"
 
+#include "llvm/Support/OptionsContext.h"
 #include <string>
 #include <utility>
 
@@ -96,12 +96,16 @@ private:
                                 IRDumpFileSuffixType SuffixType);
 
   PassInstrumentationCallbacks *PIC;
+  LLVMContext *Ctx = nullptr;
   /// Stack of Pass Run descriptions, enough to print the IR unit after a given
   /// pass.
   SmallVector<PassRunDescriptor, 2> PassRunDescriptorStack;
 
   /// Used for print-at-pass-number
   unsigned CurrentPassNumber = 0;
+
+public:
+  void setContext(LLVMContext &C) { Ctx = &C; }
 };
 
 class OptNoneInstrumentation {
@@ -192,8 +196,12 @@ public:
   SmallVector<StringRef, 8> PassStack;
 #endif
 
+  void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
   LLVM_ABI void registerCallbacks(PassInstrumentationCallbacks &PIC,
                                   ModuleAnalysisManager &MAM);
+
+private:
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
 };
 
 // Base class for classes that report changes to the IR.
@@ -290,6 +298,7 @@ public:
       : TextChangeReporter<std::string>(VerboseMode) {}
   ~IRChangedPrinter() override;
   void registerCallbacks(PassInstrumentationCallbacks &PIC);
+  void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
 
 protected:
   // Called before and after a pass to get the representation of the IR.
@@ -299,6 +308,8 @@ protected:
   void handleAfter(StringRef PassID, std::string &Name,
                    const std::string &Before, const std::string &After,
                    IRUnitRef) override;
+
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
 };
 
 class LLVM_ABI IRChangedTester : public IRChangedPrinter {
@@ -306,6 +317,7 @@ public:
   IRChangedTester() : IRChangedPrinter(true) {}
   ~IRChangedTester() override;
   void registerCallbacks(PassInstrumentationCallbacks &PIC);
+  // OptsCtx is inherited from IRChangedPrinter
 
 protected:
   void handleIR(const std::string &IR, StringRef PassID);
@@ -472,6 +484,10 @@ protected:
                              const FuncDataT<EmptyData> &After);
 
   bool UseColour;
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
+
+public:
+  void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
 };
 
 class VerifyInstrumentation {
@@ -540,6 +556,7 @@ public:
   DotCfgChangeReporter(bool Verbose);
   ~DotCfgChangeReporter() override;
   void registerCallbacks(PassInstrumentationCallbacks &PIC);
+  void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
 
 protected:
   // Initialize the HTML file and output the header.
@@ -565,8 +582,7 @@ protected:
 
   // Generate the pdf file into \p Dir / \p PDFFileName using \p DotFile as
   // input and return the html <a> tag with \Text as the content.
-  static std::string genHTML(StringRef Text, StringRef DotFile,
-                             StringRef PDFFileName);
+  std::string genHTML(StringRef Text, StringRef DotFile, StringRef PDFFileName);
 
   void handleFunctionCompare(StringRef Name, StringRef Prefix, StringRef PassID,
                              StringRef Divider, bool InModule, unsigned Minor,
@@ -575,6 +591,7 @@ protected:
 
   unsigned N = 0;
   std::unique_ptr<raw_fd_ostream> HTML;
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
 };
 
 // Print IR on crash.
@@ -585,11 +602,13 @@ public:
   LLVM_ABI ~PrintCrashIRInstrumentation();
   LLVM_ABI void registerCallbacks(PassInstrumentationCallbacks &PIC);
   LLVM_ABI void reportCrashIR();
+  void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
 
 protected:
   std::string SavedIR;
 
 private:
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
   // The crash reporter that will report on a crash.
   static PrintCrashIRInstrumentation *CrashReporter;
   // Crash handler registered when print-on-crash is specified.
@@ -599,6 +618,7 @@ private:
 /// This class provides an interface to register all the standard pass
 /// instrumentations and manages their state (if any).
 class StandardInstrumentations {
+  LLVMContext &Ctx;
   PrintIRInstrumentation PrintIR;
   PrintPassInstrumentation PrintPass;
   TimePassesHandler TimePasses;

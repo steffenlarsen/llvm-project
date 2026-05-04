@@ -628,7 +628,8 @@ hasReadAfterWriteInterference(const DenseSet<OpOperand *> &usesRead,
                  << "  unConflictingWrite = operand "
                  << uConflictingWrite->getOperandNumber() << " of "
                  << OpWithFlags(uConflictingWrite->getOwner(),
-                                OpPrintingFlags().skipRegions());
+                                opPrintingFlags(uConflictingWrite->getOwner())
+                                    .skipRegions());
           return true;
         }
       }
@@ -639,7 +640,7 @@ hasReadAfterWriteInterference(const DenseSet<OpOperand *> &usesRead,
     Operation *readingOp = uRead->getOwner();
     LDBG() << "\n- check conflict:\n"
            << "  uRead = operand " << uRead->getOperandNumber() << " of "
-           << OpWithFlags(readingOp, OpPrintingFlags().skipRegions());
+           << OpWithFlags(readingOp, opPrintingFlags(readingOp).skipRegions());
 
     // Find the definition of uRead by following the SSA use-def chain.
     // E.g.:
@@ -664,7 +665,8 @@ hasReadAfterWriteInterference(const DenseSet<OpOperand *> &usesRead,
       LDBG() << "  unConflictingWrite = operand "
              << uConflictingWrite->getOperandNumber() << " of "
              << OpWithFlags(uConflictingWrite->getOwner(),
-                            OpPrintingFlags().skipRegions());
+                            opPrintingFlags(uConflictingWrite->getOwner())
+                                .skipRegions());
 
       // Check if op dominance can be used to rule out read-after-write
       // conflicts.
@@ -994,7 +996,8 @@ bufferizableInPlaceAnalysisImpl(OpOperand &operand, OneShotAnalysisState &state,
                                 const DominanceInfo &domInfo) {
   LDBG() << "//===-------------------------------------------===//\n"
          << "Analyzing operand #" << operand.getOperandNumber() << " of "
-         << OpWithFlags(operand.getOwner(), OpPrintingFlags().skipRegions());
+         << OpWithFlags(operand.getOwner(),
+                        opPrintingFlags(operand.getOwner()).skipRegions());
 
   bool foundInterference =
       wouldCreateWriteToNonWritableBuffer(operand, state) ||

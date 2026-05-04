@@ -11,66 +11,46 @@
 //===----------------------------------------------------------------------===//
 
 #include "LLDBTableGenBackends.h" // Declares all backends.
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Main.h"
 #include "llvm/TableGen/Record.h"
+#include "llvm/TableGen/TableGenBackend.h"
 
 using namespace llvm;
 using namespace lldb_private;
 
-enum ActionType {
-  PrintRecords,
-  DumpJSON,
-  GenOptionDefs,
-  GenPropertyDefs,
-  GenPropertyEnumDefs,
-};
-
-static cl::opt<ActionType> Action(
-    cl::desc("Action to perform:"),
-    cl::values(clEnumValN(PrintRecords, "print-records",
-                          "Print all records to stdout (default)"),
-               clEnumValN(DumpJSON, "dump-json",
-                          "Dump all records as machine-readable JSON"),
-               clEnumValN(GenOptionDefs, "gen-lldb-option-defs",
-                          "Generate lldb option definitions"),
-               clEnumValN(GenPropertyDefs, "gen-lldb-property-defs",
-                          "Generate lldb property definitions"),
-               clEnumValN(GenPropertyEnumDefs, "gen-lldb-property-enum-defs",
-                          "Generate lldb property enum definitions")));
-
-static bool LLDBTableGenMain(raw_ostream &OS, const RecordKeeper &Records) {
-  switch (Action) {
-  case PrintRecords:
-    OS << Records; // No argument, dump all contents
-    break;
-  case DumpJSON:
-    EmitJSON(Records, OS);
-    break;
-  case GenOptionDefs:
-    EmitOptionDefs(Records, OS);
-    break;
-  case GenPropertyDefs:
-    EmitPropertyDefs(Records, OS);
-    break;
-  case GenPropertyEnumDefs:
-    EmitPropertyEnumDefs(Records, OS);
-    break;
-  }
-  return false;
+static void printRecords(const RecordKeeper &Records, raw_ostream &OS) {
+  OS << Records;
 }
+
+static TableGen::Emitter::Opt LLDBOpts[] = {
+    {"print-records", printRecords, "Print all records to stdout (default)",
+     true},
+    {"dump-json", EmitJSON, "Dump all records as machine-readable JSON"},
+    {"gen-lldb-option-defs", EmitOptionDefs,
+     "Generate lldb option definitions"},
+    {"gen-lldb-property-defs", EmitPropertyDefs,
+     "Generate lldb property definitions"},
+    {"gen-lldb-property-enum-defs", EmitPropertyEnumDefs,
+     "Generate lldb property enum definitions"},
+};
 
 int main(int argc, char **argv) {
   sys::PrintStackTraceOnErrorSignal(argv[0]);
   PrettyStackTraceProgram X(argc, argv);
-  cl::ParseCommandLineOptions(argc, argv);
+  clv2::OptionParser P;
+  registerTableGenMainOptions(P);
+  TableGen::Emitter::registerBackendOptions(P);
+  P.parse(argc, argv);
   llvm_shutdown_obj Y;
 
-  return TableGenMain(argv[0], &LLDBTableGenMain);
+  MultiFileTableGenMainFn MainFn = nullptr;
+  return TableGenMain(argv[0], MainFn);
 }
 
 #ifdef __has_feature

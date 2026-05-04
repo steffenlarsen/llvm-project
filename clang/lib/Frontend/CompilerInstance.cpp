@@ -57,6 +57,7 @@
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/SmallVectorMemoryBuffer.h"
@@ -582,6 +583,9 @@ void CompilerInstance::createASTContext() {
       getLangOpts(), PP.getSourceManager(), PP.getIdentifierTable(),
       PP.getSelectorTable(), PP.getBuiltinInfo(), PP.TUKind);
   Context->InitBuiltinTypes(getTarget(), getAuxTarget());
+  // Make this compilation's parsed command-line options reachable from the
+  // AST, so analysis code can read per-job values instead of globals.
+  Context->setOptionsContext(*getLLVMOptionsContext());
   setASTContext(std::move(Context));
 }
 

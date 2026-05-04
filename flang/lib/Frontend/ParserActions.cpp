@@ -51,7 +51,7 @@ void dumpPreFIRTree(CompilerInstance &ci) {
   // Use default lowering options for PFT dump
   lower::LoweringOptions loweringOptions{};
   if (auto ast{lower::createPFT(parseTree, ci.getSemanticsContext(),
-                                loweringOptions)}) {
+                                loweringOptions, ci.getOptionsContext())}) {
     lower::dumpPFT(llvm::outs(), *ast);
   } else {
     unsigned diagID = ci.getDiagnostics().getCustomDiagID(

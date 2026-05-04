@@ -148,7 +148,7 @@ TEST(NoInferenceModelRunner, AccessTensors) {
       TensorSpec::createSpec<int64_t>("F2", {10}),
       TensorSpec::createSpec<float>("F2", {5}),
   };
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   NoInferenceModelRunner NIMR(Ctx, Inputs);
   NIMR.getTensor<int64_t>(0)[0] = 1;
   std::memcpy(NIMR.getTensor<int64_t>(1),
@@ -163,7 +163,7 @@ TEST(NoInferenceModelRunner, AccessTensors) {
 }
 
 TEST(ReleaseModeRunner, NormalUse) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::vector<TensorSpec> Inputs{TensorSpec::createSpec<int64_t>("a", {1}),
                                  TensorSpec::createSpec<int64_t>("b", {1})};
   auto Evaluator = std::make_unique<ReleaseModeModelRunner<AdditionAOTModel>>(
@@ -176,7 +176,7 @@ TEST(ReleaseModeRunner, NormalUse) {
 }
 
 TEST(ReleaseModeRunner, ExtraFeatures) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::vector<TensorSpec> Inputs{TensorSpec::createSpec<int64_t>("a", {1}),
                                  TensorSpec::createSpec<int64_t>("b", {1}),
                                  TensorSpec::createSpec<int64_t>("c", {1})};
@@ -192,7 +192,7 @@ TEST(ReleaseModeRunner, ExtraFeatures) {
 }
 
 TEST(ReleaseModeRunner, ExtraFeaturesOutOfOrder) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::vector<TensorSpec> Inputs{
       TensorSpec::createSpec<int64_t>("a", {1}),
       TensorSpec::createSpec<int64_t>("c", {1}),
@@ -226,7 +226,7 @@ struct AbortOnErrorDiagnosticHandler : public DiagnosticHandler {
 // We expect an error to be reported early if the user tried to specify a model
 // selector, but the model in fact doesn't support that.
 TEST(ReleaseModelRunner, ModelSelectorNoInputFeaturePresent) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Ctx.setDiagnosticHandler(std::make_unique<AbortOnErrorDiagnosticHandler>());
   std::vector<TensorSpec> Inputs{TensorSpec::createSpec<int64_t>("a", {1}),
                                  TensorSpec::createSpec<int64_t>("b", {1})};
@@ -237,7 +237,7 @@ TEST(ReleaseModelRunner, ModelSelectorNoInputFeaturePresent) {
 }
 
 TEST(ReleaseModelRunner, ModelSelectorNoSelectorGiven) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Ctx.setDiagnosticHandler(std::make_unique<AbortOnErrorDiagnosticHandler>());
   std::vector<TensorSpec> Inputs{TensorSpec::createSpec<int64_t>("a", {1}),
                                  TensorSpec::createSpec<int64_t>("b", {1})};
@@ -254,7 +254,7 @@ TEST(ReleaseModelRunner, ModelSelectorNoSelectorGiven) {
 // populate the tensor, and do so upfront (in case the model implementation
 // needs that for subsequent tensor buffer lookups).
 TEST(ReleaseModelRunner, ModelSelector) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::vector<TensorSpec> Inputs{TensorSpec::createSpec<int64_t>("a", {1}),
                                  TensorSpec::createSpec<int64_t>("b", {1})};
   // This explicitly asks for M1
@@ -276,7 +276,7 @@ TEST(ReleaseModelRunner, ModelSelector) {
 }
 
 TEST(EmitCModelRunner, NormalUse) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::vector<TensorSpec> Inputs{TensorSpec::createSpec<int64_t>("a", {1}),
                                  TensorSpec::createSpec<int64_t>("b", {1})};
   auto Evaluator =
@@ -291,7 +291,7 @@ TEST(EmitCModelRunner, NormalUse) {
 }
 
 TEST(EmitCModelRunner, ExtraFeatures) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::vector<TensorSpec> Inputs{TensorSpec::createSpec<int64_t>("a", {1}),
                                  TensorSpec::createSpec<int64_t>("b", {1}),
                                  TensorSpec::createSpec<int64_t>("c", {1})};
@@ -307,7 +307,7 @@ TEST(EmitCModelRunner, ExtraFeatures) {
 }
 
 TEST(EmitCModelRunner, ExtraFeaturesOutOfOrder) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::vector<TensorSpec> Inputs{TensorSpec::createSpec<int64_t>("b", {1}),
                                  TensorSpec::createSpec<int64_t>("a", {1})};
   auto Evaluator =
@@ -321,7 +321,7 @@ TEST(EmitCModelRunner, ExtraFeaturesOutOfOrder) {
 
 #if defined(LLVM_ON_UNIX)
 TEST(InteractiveModelRunner, Evaluation) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   // Test the interaction with an external advisor by asking for advice twice.
   // Use simple values, since we use the Logger underneath, that's tested more
   // extensively elsewhere.

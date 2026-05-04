@@ -26,6 +26,9 @@
 #include "llvm/Transforms/IPO/FunctionImport.h"
 
 namespace llvm {
+namespace clv2 {
+class OptionsContext;
+}
 
 class BitcodeModule;
 class Error;
@@ -70,10 +73,12 @@ LLVM_ABI Error thinBackend(
 LLVM_ABI Error finalizeOptimizationRemarks(LLVMRemarkFileHandle DiagOutputFile);
 
 /// Returns the BitcodeModule that is ThinLTO.
-LLVM_ABI BitcodeModule *findThinLTOModule(MutableArrayRef<BitcodeModule> BMs);
+LLVM_ABI BitcodeModule *findThinLTOModule(MutableArrayRef<BitcodeModule> BMs,
+                                          const clv2::OptionsContext &OptsCtx);
 
 /// Variant of the above.
-LLVM_ABI Expected<BitcodeModule> findThinLTOModule(MemoryBufferRef MBRef);
+LLVM_ABI Expected<BitcodeModule>
+findThinLTOModule(MemoryBufferRef MBRef, const clv2::OptionsContext &OptsCtx);
 
 /// Distributed ThinLTO: collect the referenced modules based on
 /// module summary and initialize ImportList. Returns false if the

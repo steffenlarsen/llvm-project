@@ -88,7 +88,7 @@ bool Sinker::allUsersDominatedBy(Operation *op, Region *region) {
 void Sinker::tryToSinkPredecessors(Operation *user, Region *region,
                                    std::vector<Operation *> &stack) {
   LDBG() << "Contained op: "
-         << OpWithFlags(user, OpPrintingFlags().skipRegions());
+         << OpWithFlags(user, opPrintingFlags(user).skipRegions());
   for (Value value : user->getOperands()) {
     Operation *op = value.getDefiningOp();
     // Ignore block arguments and ops already contained in the target region,
@@ -96,7 +96,8 @@ void Sinker::tryToSinkPredecessors(Operation *user, Region *region,
     if (!op || region->isAncestor(op->getParentRegion()))
       continue;
     LDBG() << "Try to sink:\n"
-           << OpWithFlags(op, OpPrintingFlags().skipRegions());
+           << OpWithFlags(op, opPrintingFlags(op).skipRegions());
+
     // If the op's users are all in the region and it can be moved, then do so.
     if (allUsersDominatedBy(op, region) && shouldMoveIntoRegion(op, region)) {
       moveIntoRegion(op, region);

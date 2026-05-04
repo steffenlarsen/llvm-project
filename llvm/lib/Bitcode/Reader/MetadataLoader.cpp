@@ -22,6 +22,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/Dwarf.h"
+#include "llvm/Bitcode/BitcodeOptionsOptInfos.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/LLVMBitCodes.h"
 #include "llvm/Bitstream/BitstreamReader.h"
@@ -41,9 +42,9 @@
 #include "llvm/IR/TrackingMDRef.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TimeProfiler.h"
 
 #include <algorithm>
@@ -70,14 +71,16 @@ STATISTIC(NumMDRecordLoaded, "Number of Metadata records loaded");
 
 /// Flag whether we need to import full type definitions for ThinLTO.
 /// Currently needed for Darwin and LLDB.
-static cl::opt<bool> ImportFullTypeDefinitions(
-    "import-full-type-definitions", cl::init(false), cl::Hidden,
-    cl::desc("Import full type definitions for ThinLTO."));
 
-static cl::opt<bool> DisableLazyLoading(
-    "disable-ondemand-mds-loading", cl::init(false), cl::Hidden,
-    cl::desc("Force disable the lazy-loading on-demand of metadata when "
-             "loading bitcode for importing."));
+static bool getImportFullTypeDefinitions(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::BC_ImportFullTypeDefinitions>(
+      M.getContext().getOptionsContext());
+}
+
+static bool getDisableLazyLoading(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::BC_DisableLazyLoading>(
+      M.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -1120,7 +1123,7 @@ Error MetadataLoader::MetadataLoaderImpl::parseMetadata(bool ModuleLevel) {
   // We lazy-load module-level metadata: we build an index for each record, and
   // then load individual record as needed, starting with the named metadata.
   if (ModuleLevel && IsImporting && MetadataList.empty() &&
-      !DisableLazyLoading) {
+      !getDisableLazyLoading(TheModule)) {
     auto SuccessOrErr = lazyLoadModuleMetadataBlock();
     if (!SuccessOrErr)
       return SuccessOrErr.takeError();
@@ -1792,7 +1795,8 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
     // We always import full definitions for anonymous composite types,
     // as without a name, debuggers cannot easily resolve a declaration
     // to its definition.
-    if (IsImporting && !ImportFullTypeDefinitions && Identifier && Name &&
+    if (IsImporting && !getImportFullTypeDefinitions(TheModule) && Identifier &&
+        Name &&
         (Tag == dwarf::DW_TAG_enumeration_type ||
          Tag == dwarf::DW_TAG_class_type ||
          Tag == dwarf::DW_TAG_structure_type ||

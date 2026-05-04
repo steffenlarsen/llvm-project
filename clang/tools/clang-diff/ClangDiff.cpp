@@ -14,7 +14,9 @@
 #include "clang/Tooling/ASTDiff/ASTDiff.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 
 using namespace llvm;
 using namespace clang;
@@ -22,55 +24,82 @@ using namespace clang::tooling;
 
 static cl::OptionCategory ClangDiffCategory("clang-diff options");
 
-static cl::opt<bool>
-    ASTDump("ast-dump",
-            cl::desc("Print the internal representation of the AST."),
-            cl::init(false), cl::cat(ClangDiffCategory));
+// --- constexpr option descriptors ---
+inline constexpr clv2::OptionInfo<bool> CDASTDumpOpt{
+    "ast-dump", "Print the internal representation of the AST."};
 
-static cl::opt<bool> ASTDumpJson(
-    "ast-dump-json",
-    cl::desc("Print the internal representation of the AST as JSON."),
-    cl::init(false), cl::cat(ClangDiffCategory));
+inline constexpr clv2::OptionInfo<bool> CDASTDumpJsonOpt{
+    "ast-dump-json", "Print the internal representation of the AST as JSON."};
 
-static cl::opt<bool> PrintMatches("dump-matches",
-                                  cl::desc("Print the matched nodes."),
-                                  cl::init(false), cl::cat(ClangDiffCategory));
+inline constexpr clv2::OptionInfo<bool> CDPrintMatchesOpt{
+    "dump-matches", "Print the matched nodes."};
 
-static cl::opt<bool> HtmlDiff("html",
-                              cl::desc("Output a side-by-side diff in HTML."),
-                              cl::init(false), cl::cat(ClangDiffCategory));
+inline constexpr clv2::OptionInfo<bool> CDHtmlDiffOpt{
+    "html", "Output a side-by-side diff in HTML."};
 
-static cl::opt<std::string> SourcePath(cl::Positional, cl::desc("<source>"),
-                                       cl::Required,
-                                       cl::cat(ClangDiffCategory));
+inline constexpr clv2::OptionInfo<std::string> CDSourcePathOpt{
+    "", "<source>", clv2::Positional{}, clv2::Required};
 
-static cl::opt<std::string> DestinationPath(cl::Positional,
-                                            cl::desc("<destination>"),
-                                            cl::Optional,
-                                            cl::cat(ClangDiffCategory));
+inline constexpr clv2::OptionInfo<std::string> CDDestinationPathOpt{
+    "", "<destination>", clv2::Positional{}};
 
-static cl::opt<std::string> StopAfter("stop-diff-after",
-                                      cl::desc("<topdown|bottomup>"),
-                                      cl::Optional, cl::init(""),
-                                      cl::cat(ClangDiffCategory));
+inline constexpr clv2::OptionInfo<std::string> CDStopAfterOpt{
+    "stop-diff-after", "<topdown|bottomup>"};
 
-static cl::opt<int> MaxSize("s", cl::desc("<maxsize>"), cl::Optional,
-                            cl::init(-1), cl::cat(ClangDiffCategory));
+inline constexpr clv2::OptionInfo<int> CDMaxSizeOpt{"s", "<maxsize>",
+                                                    clv2::Init{-1}};
 
-static cl::opt<std::string> BuildPath("p", cl::desc("Build path"), cl::init(""),
-                                      cl::Optional, cl::cat(ClangDiffCategory));
+inline constexpr clv2::OptionInfo<std::string> CDBuildPathOpt{"p",
+                                                              "Build path"};
 
-static cl::list<std::string> ArgsAfter(
-    "extra-arg",
-    cl::desc("Additional argument to append to the compiler command line"),
-    cl::cat(ClangDiffCategory));
+inline constexpr clv2::ListOptionInfo<std::string> CDArgsAfterOpt{
+    "extra-arg", "Additional argument to append to the compiler command line"};
 
-static cl::list<std::string> ArgsBefore(
+inline constexpr clv2::ListOptionInfo<std::string> CDArgsBeforeOpt{
     "extra-arg-before",
-    cl::desc("Additional argument to prepend to the compiler command line"),
-    cl::cat(ClangDiffCategory));
+    "Additional argument to prepend to the compiler command line"};
 
-static void addExtraArgs(std::unique_ptr<CompilationDatabase> &Compilations) {
+inline constexpr clv2::OptionsRegistry<
+    &CDASTDumpOpt, &CDASTDumpJsonOpt, &CDPrintMatchesOpt, &CDHtmlDiffOpt,
+    &CDSourcePathOpt, &CDDestinationPathOpt, &CDStopAfterOpt, &CDMaxSizeOpt,
+    &CDBuildPathOpt, &CDArgsAfterOpt, &CDArgsBeforeOpt>
+    ClangDiffReg;
+
+namespace {
+struct ClangDiffOptions {
+  bool ASTDump = false;
+  bool ASTDumpJson = false;
+  bool PrintMatches = false;
+  bool HtmlDiff = false;
+  std::string SourcePath;
+  std::string DestinationPath;
+  std::string StopAfter;
+  int MaxSize = -1;
+  std::string BuildPath;
+  std::vector<std::string> ArgsAfter;
+  std::vector<std::string> ArgsBefore;
+};
+} // namespace
+
+static void
+applyClangDiffOpts(const decltype(ClangDiffReg)::ParsedOptionsT &Opts,
+                   ClangDiffOptions &DiffOpts) {
+  DiffOpts.ASTDump = Opts.get<&CDASTDumpOpt>();
+  DiffOpts.ASTDumpJson = Opts.get<&CDASTDumpJsonOpt>();
+  DiffOpts.PrintMatches = Opts.get<&CDPrintMatchesOpt>();
+  DiffOpts.HtmlDiff = Opts.get<&CDHtmlDiffOpt>();
+  DiffOpts.SourcePath = Opts.get<&CDSourcePathOpt>();
+  DiffOpts.DestinationPath = Opts.get<&CDDestinationPathOpt>();
+  DiffOpts.StopAfter = Opts.get<&CDStopAfterOpt>();
+  DiffOpts.MaxSize = Opts.get<&CDMaxSizeOpt>();
+  DiffOpts.BuildPath = Opts.get<&CDBuildPathOpt>();
+  DiffOpts.ArgsAfter = Opts.get<&CDArgsAfterOpt>();
+  DiffOpts.ArgsBefore = Opts.get<&CDArgsBeforeOpt>();
+}
+
+static void addExtraArgs(std::unique_ptr<CompilationDatabase> &Compilations,
+                         const std::vector<std::string> &ArgsBefore,
+                         const std::vector<std::string> &ArgsAfter) {
   if (!Compilations)
     return;
   auto AdjustingCompilations =
@@ -85,12 +114,13 @@ static void addExtraArgs(std::unique_ptr<CompilationDatabase> &Compilations) {
 
 static std::unique_ptr<ASTUnit>
 getAST(const std::unique_ptr<CompilationDatabase> &CommonCompilations,
-       const StringRef Filename) {
+       const StringRef Filename, const ClangDiffOptions &DiffOpts) {
   std::string ErrorMessage;
   std::unique_ptr<CompilationDatabase> Compilations;
   if (!CommonCompilations) {
     Compilations = CompilationDatabase::autoDetectFromSource(
-        BuildPath.empty() ? Filename : BuildPath, ErrorMessage);
+        DiffOpts.BuildPath.empty() ? Filename : DiffOpts.BuildPath,
+        ErrorMessage);
     if (!Compilations) {
       llvm::errs()
           << "Error while trying to load a compilation database, running "
@@ -101,7 +131,7 @@ getAST(const std::unique_ptr<CompilationDatabase> &CommonCompilations,
               ".", std::vector<std::string>());
     }
   }
-  addExtraArgs(Compilations);
+  addExtraArgs(Compilations, DiffOpts.ArgsBefore, DiffOpts.ArgsAfter);
   std::array<std::string, 1> Files = {{std::string(Filename)}};
   ClangTool Tool(Compilations ? *Compilations : *CommonCompilations, Files);
   std::vector<std::unique_ptr<ASTUnit>> ASTs;
@@ -446,52 +476,72 @@ int main(int argc, const char **argv) {
       FixedCompilationDatabase::loadFromCommandLine(argc, argv, ErrorMessage);
   if (!CommonCompilations && !ErrorMessage.empty())
     llvm::errs() << ErrorMessage;
-  cl::HideUnrelatedOptions(ClangDiffCategory);
-  if (!cl::ParseCommandLineOptions(argc, argv)) {
-    cl::PrintOptionValues();
-    return 1;
+  clv2::OptionParser P;
+  ClangDiffOptions DiffOpts;
+  {
+    using ParsedT = decltype(ClangDiffReg)::ParsedOptionsT;
+    auto *Storage = new ParsedT();
+    decltype(ClangDiffReg)::applyDefaultsTo(*Storage);
+    std::vector<clv2::detail::OptionEntry> Entries;
+    std::vector<clv2::detail::AliasEntry> Aliases;
+    std::vector<clv2::detail::SubCommandSpec> SubSpecs;
+    decltype(ClangDiffReg)::staticBuildInto(*Storage, Entries, Aliases,
+                                            SubSpecs);
+    for (auto &E : Entries) {
+      if (!E.Cat)
+        E.Cat = &ClangDiffCategory;
+      P.addDynamicEntry(std::move(E));
+    }
+    clv2::registerDynamicPostParseCallback(
+        [Storage, &DiffOpts]() { applyClangDiffOpts(*Storage, DiffOpts); });
   }
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&ClangDiffCategory});
+  P.parse(argc, argv);
 
-  addExtraArgs(CommonCompilations);
+  addExtraArgs(CommonCompilations, DiffOpts.ArgsBefore, DiffOpts.ArgsAfter);
 
-  if (ASTDump || ASTDumpJson) {
-    if (!DestinationPath.empty()) {
+  if (DiffOpts.ASTDump || DiffOpts.ASTDumpJson) {
+    if (!DiffOpts.DestinationPath.empty()) {
       llvm::errs() << "Error: Please specify exactly one filename.\n";
       return 1;
     }
-    std::unique_ptr<ASTUnit> AST = getAST(CommonCompilations, SourcePath);
+    std::unique_ptr<ASTUnit> AST =
+        getAST(CommonCompilations, DiffOpts.SourcePath, DiffOpts);
     if (!AST)
       return 1;
     diff::SyntaxTree Tree(AST->getASTContext());
-    if (ASTDump) {
+    if (DiffOpts.ASTDump) {
       printTree(llvm::outs(), Tree);
       return 0;
     }
     llvm::outs() << R"({"filename":")";
-    printJsonString(llvm::outs(), SourcePath);
+    printJsonString(llvm::outs(), DiffOpts.SourcePath);
     llvm::outs() << R"(","root":)";
     printNodeAsJson(llvm::outs(), Tree, Tree.getRootId());
     llvm::outs() << "}\n";
     return 0;
   }
 
-  if (DestinationPath.empty()) {
+  if (DiffOpts.DestinationPath.empty()) {
     llvm::errs() << "Error: Exactly two paths are required.\n";
     return 1;
   }
 
-  std::unique_ptr<ASTUnit> Src = getAST(CommonCompilations, SourcePath);
-  std::unique_ptr<ASTUnit> Dst = getAST(CommonCompilations, DestinationPath);
+  std::unique_ptr<ASTUnit> Src =
+      getAST(CommonCompilations, DiffOpts.SourcePath, DiffOpts);
+  std::unique_ptr<ASTUnit> Dst =
+      getAST(CommonCompilations, DiffOpts.DestinationPath, DiffOpts);
   if (!Src || !Dst)
     return 1;
 
   diff::ComparisonOptions Options;
-  if (MaxSize != -1)
-    Options.MaxSize = MaxSize;
-  if (!StopAfter.empty()) {
-    if (StopAfter == "topdown")
+  if (DiffOpts.MaxSize != -1)
+    Options.MaxSize = DiffOpts.MaxSize;
+  if (!DiffOpts.StopAfter.empty()) {
+    if (DiffOpts.StopAfter == "topdown")
       Options.StopAfterTopDown = true;
-    else if (StopAfter != "bottomup") {
+    else if (DiffOpts.StopAfter != "bottomup") {
       llvm::errs() << "Error: Invalid argument for -stop-after\n";
       return 1;
     }
@@ -500,7 +550,7 @@ int main(int argc, const char **argv) {
   diff::SyntaxTree DstTree(Dst->getASTContext());
   diff::ASTDiff Diff(SrcTree, DstTree, Options);
 
-  if (HtmlDiff) {
+  if (DiffOpts.HtmlDiff) {
     llvm::outs() << HtmlDiffHeader << "<pre>";
     llvm::outs() << "<div id='L' class='code'>";
     printHtmlForNode(llvm::outs(), Diff, SrcTree, true, SrcTree.getRootId(), 0);
@@ -515,7 +565,7 @@ int main(int argc, const char **argv) {
 
   for (diff::NodeId Dst : DstTree) {
     diff::NodeId Src = Diff.getMapped(DstTree, Dst);
-    if (PrintMatches && Src.isValid()) {
+    if (DiffOpts.PrintMatches && Src.isValid()) {
       llvm::outs() << "Match ";
       printNode(llvm::outs(), SrcTree, Src);
       llvm::outs() << " to ";

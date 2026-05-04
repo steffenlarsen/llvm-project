@@ -2,7 +2,7 @@
 
 #include "DebugOptions.h"
 
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/ManagedStatic.h"
 
@@ -18,83 +18,14 @@ void DebugCounter::printChunks(raw_ostream &OS,
 } // namespace llvm
 
 namespace {
-// This class overrides the default list implementation of printing so we
-// can pretty print the list of debug counter options.  This type of
-// dynamic option is pretty rare (basically this and pass lists).
-class DebugCounterList : public cl::list<std::string, DebugCounter> {
-private:
-  using Base = cl::list<std::string, DebugCounter>;
 
-public:
-  template <class... Mods>
-  explicit DebugCounterList(Mods &&... Ms) : Base(std::forward<Mods>(Ms)...) {}
-
-private:
-  void printOptionInfo(size_t GlobalWidth) const override {
-    // This is a variant of from generic_parser_base::printOptionInfo.  Sadly,
-    // it's not easy to make it more usable.  We could get it to print these as
-    // options if we were a cl::opt and registered them, but lists don't have
-    // options, nor does the parser for std::string.  The other mechanisms for
-    // options are global and would pollute the global namespace with our
-    // counters.  Rather than go that route, we have just overridden the
-    // printing, which only a few things call anyway.
-    outs() << "  -" << ArgStr;
-    // All of the other options in CommandLine.cpp use ArgStr.size() + 6 for
-    // width, so we do the same.
-    Option::printHelpStr(HelpStr, GlobalWidth, ArgStr.size() + 6);
-    const auto &CounterInstance = DebugCounter::instance();
-    for (const auto &Entry : CounterInstance) {
-      const auto &[Name, Desc] = CounterInstance.getCounterDesc(Entry.second);
-      size_t NumSpaces = GlobalWidth - Name.size() - 8;
-      outs() << "    =" << Name;
-      outs().indent(NumSpaces) << " -   " << Desc << '\n';
-    }
-  }
-};
-
-// All global objects associated to the DebugCounter, including the DebugCounter
-// itself, are owned by a single global instance of the DebugCounterOwner
-// struct. This makes it easier to control the order in which constructors and
-// destructors are run.
+// Values are set by applySupportOptions() via
+// setPrintCounter()/push_back()/etc.
 struct DebugCounterOwner : DebugCounter {
-  DebugCounterList DebugCounterOption{
-      "debug-counter", cl::Hidden,
-      cl::desc("Comma separated list of debug counter skip and count"),
-      cl::CommaSeparated, cl::location<DebugCounter>(*this)};
-  cl::opt<bool, true> PrintDebugCounter{
-      "print-debug-counter",
-      cl::Hidden,
-      cl::Optional,
-      cl::location(this->ShouldPrintCounter),
-      cl::init(false),
-      cl::desc("Print out debug counter info after all counters accumulated"),
-      cl::callback([&](const bool &Value) {
-        if (Value)
-          activateAllCounters();
-      })};
-  cl::opt<bool, true> PrintDebugCounterQueries{
-      "print-debug-counter-queries",
-      cl::Hidden,
-      cl::Optional,
-      cl::location(this->ShouldPrintCounterQueries),
-      cl::init(false),
-      cl::desc("Print out each query of an enabled debug counter")};
-  cl::opt<bool, true> BreakOnLastCount{
-      "debug-counter-break-on-last",
-      cl::Hidden,
-      cl::Optional,
-      cl::location(this->BreakOnLast),
-      cl::init(false),
-      cl::desc("Insert a break point on the last enabled count of a "
-               "chunks list")};
-
   DebugCounterOwner() {
-    // Our destructor uses the debug stream. By referencing it here, we
-    // ensure that its destructor runs after our destructor.
     (void)dbgs();
   }
 
-  // Print information when destroyed, iff command line option is specified.
   ~DebugCounterOwner() {
     if (ShouldPrintCounter)
       print(dbgs());

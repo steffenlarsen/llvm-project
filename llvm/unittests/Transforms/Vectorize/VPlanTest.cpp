@@ -1785,7 +1785,7 @@ TEST(VPDoubleValueDefTest, traverseUseLists) {
   // directions.
 
   // Create a new VPRecipeBase which defines 2 values and has 2 operands.
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   IntegerType *Int32 = IntegerType::get(C, 32);
   VPInstructionWithType Op0(VPInstruction::StepVector, {}, Int32);
   VPInstructionWithType Op1(VPInstruction::StepVector, {}, Int32);

@@ -370,7 +370,7 @@ Error objdump::getXCOFFRelocationValueString(const XCOFFObjectFile &Obj,
     return SymNameOrErr.takeError();
 
   std::string SymName =
-      Demangle ? demangle(*SymNameOrErr) : SymNameOrErr->str();
+      Opts.Demangle ? demangle(*SymNameOrErr) : SymNameOrErr->str();
   if (SymbolDescription)
     SymName = getXCOFFSymbolDescription(createSymbolInfo(Obj, *SymI), SymName);
 

@@ -28,6 +28,7 @@
 #include "llvm/Support/DataExtractor.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Testing/Support/Error.h"
@@ -66,7 +67,9 @@ public:
 
     MRI.reset(TheTarget->createMCRegInfo(TheTriple));
     MAI.reset(TheTarget->createMCAsmInfo(*MRI, TheTriple, MCOptions));
-    STI.reset(TheTarget->createMCSubtargetInfo(TheTriple, "", ""));
+    STI.reset(TheTarget->createMCSubtargetInfo(
+        TheTriple, "", "",
+        /*Ctx=*/llvm::clv2::defaultOptionsContext()));
   }
 
   struct StreamerContext {

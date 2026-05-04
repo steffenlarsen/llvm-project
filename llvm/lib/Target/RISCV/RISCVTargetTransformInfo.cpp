@@ -17,6 +17,8 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicsRISCV.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include <cmath>
 #include <optional>
@@ -25,28 +27,40 @@ using namespace llvm::PatternMatch;
 
 #define DEBUG_TYPE "riscvtti"
 
-static cl::opt<unsigned> RVVRegisterWidthLMUL(
-    "riscv-v-register-bit-width-lmul",
-    cl::desc(
-        "The LMUL to use for getRegisterBitWidth queries. Affects LMUL used "
-        "by autovectorized code. Fractional LMULs are not supported."),
-    cl::init(2), cl::Hidden);
+static unsigned RVVRegisterWidthLMUL = 2;
 
-static cl::opt<unsigned> SLPMaxVF(
-    "riscv-v-slp-max-vf",
-    cl::desc(
-        "Overrides result used for getMaximumVF query which is used "
-        "exclusively by SLP vectorizer."),
-    cl::Hidden);
+static bool SLPMaxVFWasSpecified = false;
 
-static cl::opt<unsigned>
-    RVVMinTripCount("riscv-v-min-trip-count",
-                    cl::desc("Set the lower bound of a trip count to decide on "
-                             "vectorization while tail-folding."),
-                    cl::init(5), cl::Hidden);
+static unsigned RVVMinTripCount = 5;
 
-static cl::opt<bool> EnableOrLikeSelectOpt("enable-riscv-or-like-select",
-                                           cl::init(true), cl::Hidden);
+static bool EnableOrLikeSelectOpt = true;
+
+static unsigned getRVVRegisterWidthLMUL(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::RV_RegisterWidthLMUL>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getSLPMaxVF(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::RV_SLPMaxVF>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getSLPMaxVFWasSpecified(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::RISCVOptsReg>(
+          F.getContext().getOptionsContext()))
+    return O->specified<&clv2::RV_SLPMaxVF>();
+  return SLPMaxVFWasSpecified;
+}
+
+static unsigned getRVVMinTripCount(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::RV_MinTripCount>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getEnableOrLikeSelectOpt(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::RV_EnableOrLikeSelectOpt>(
+      F.getContext().getOptionsContext());
+}
 
 InstructionCost
 RISCVTTIImpl::getRISCVInstructionCost(ArrayRef<unsigned> OpCodes, MVT VT,
@@ -461,7 +475,7 @@ std::optional<unsigned> RISCVTTIImpl::getVScaleForTuning() const {
 TypeSize
 RISCVTTIImpl::getRegisterBitWidth(TargetTransformInfo::RegisterKind K) const {
   unsigned LMUL =
-      llvm::bit_floor(std::clamp<unsigned>(RVVRegisterWidthLMUL, 1, 8));
+      llvm::bit_floor(std::clamp<unsigned>(getRVVRegisterWidthLMUL(F), 1, 8));
   switch (K) {
   case TargetTransformInfo::RGK_Scalar:
     return TypeSize::getFixed(ST->getXLen());
@@ -3421,8 +3435,8 @@ unsigned RISCVTTIImpl::getRegUsageForType(Type *Ty) const {
 }
 
 unsigned RISCVTTIImpl::getMaximumVF(unsigned ElemWidth, unsigned Opcode) const {
-  if (SLPMaxVF.getNumOccurrences())
-    return SLPMaxVF;
+  if (getSLPMaxVFWasSpecified(F))
+    return getSLPMaxVF(F);
 
   // Return how many elements can fit in getRegisterBitwidth.  This is the
   // same routine as used in LoopVectorizer.  We should probably be
@@ -3437,7 +3451,7 @@ unsigned RISCVTTIImpl::getMaximumVF(unsigned ElemWidth, unsigned Opcode) const {
 }
 
 unsigned RISCVTTIImpl::getMinTripCountTailFoldingThreshold() const {
-  return RVVMinTripCount;
+  return getRVVMinTripCount(F);
 }
 
 bool RISCVTTIImpl::preferAlternateOpcodeVectorization() const {
@@ -3722,7 +3736,7 @@ RISCVTTIImpl::enableMemCmpExpansion(bool OptSize, bool IsZeroCmp) const {
 
 bool RISCVTTIImpl::shouldTreatInstructionLikeSelect(
     const Instruction *I) const {
-  if (EnableOrLikeSelectOpt) {
+  if (getEnableOrLikeSelectOpt(F)) {
     // For the binary operators (e.g. or) we need to be more careful than
     // selects, here we only transform them if they are already at a natural
     // break point in the code - the end of a block with an unconditional

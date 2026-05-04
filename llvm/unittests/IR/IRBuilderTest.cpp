@@ -49,7 +49,7 @@ protected:
     M.reset();
   }
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   Function *F;
   BasicBlock *BB;
@@ -338,8 +338,8 @@ TEST_F(IRBuilderTest, ConstrainedFP) {
   Value *VInt;
   CallInst *Call;
   IntrinsicInst *II;
-  GlobalVariable *GVDouble = new GlobalVariable(*M, Type::getDoubleTy(Ctx),
-                            true, GlobalValue::ExternalLinkage, nullptr);
+  GlobalVariable *GVDouble = new GlobalVariable(
+      *M, Type::getDoubleTy(Ctx), true, GlobalValue::ExternalLinkage, nullptr);
 
   V = Builder.CreateLoad(GV->getValueType(), GV);
   VDouble = Builder.CreateLoad(GVDouble->getValueType(), GVDouble);
@@ -498,9 +498,10 @@ TEST_F(IRBuilderTest, ConstrainedFPIntrinsics) {
   Function *Fn = Intrinsic::getOrInsertDeclaration(
       M.get(), Intrinsic::experimental_constrained_roundeven,
       {Type::getDoubleTy(Ctx)});
-  V = Builder.CreateConstrainedFPCall(Fn, { VDouble });
+  V = Builder.CreateConstrainedFPCall(Fn, {VDouble});
   CII = cast<ConstrainedFPIntrinsic>(V);
-  EXPECT_EQ(Intrinsic::experimental_constrained_roundeven, CII->getIntrinsicID());
+  EXPECT_EQ(Intrinsic::experimental_constrained_roundeven,
+            CII->getIntrinsicID());
   EXPECT_EQ(fp::ebStrict, CII->getExceptionBehavior());
 }
 
@@ -535,8 +536,8 @@ TEST_F(IRBuilderTest, Lifetime) {
   IRBuilder<> Builder(BB);
   AllocaInst *Var1 = Builder.CreateAlloca(Builder.getInt8Ty());
   AllocaInst *Var2 = Builder.CreateAlloca(Builder.getInt32Ty());
-  AllocaInst *Var3 = Builder.CreateAlloca(Builder.getInt8Ty(),
-                                          Builder.getInt32(123));
+  AllocaInst *Var3 =
+      Builder.CreateAlloca(Builder.getInt8Ty(), Builder.getInt32(123));
 
   CallInst *Start1 = Builder.CreateLifetimeStart(Var1);
   CallInst *Start2 = Builder.CreateLifetimeStart(Var2);
@@ -1471,4 +1472,4 @@ TEST_F(IRBuilderTest, CreateAggregateRet) {
 
   EXPECT_FALSE(verifyModule(*M));
 }
-}
+} // namespace

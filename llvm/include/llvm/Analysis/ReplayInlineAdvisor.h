@@ -11,6 +11,7 @@
 
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Analysis/InlineAdvisor.h"
+#include "llvm/Analysis/ReplayInlinerEnums.h"
 
 namespace llvm {
 class CallBase;
@@ -18,12 +19,9 @@ class LLVMContext;
 class Module;
 
 struct CallSiteFormat {
-  enum class Format : int {
-    Line,
-    LineColumn,
-    LineDiscriminator,
-    LineColumnDiscriminator
-  };
+  /// Alias; the enum lives in ReplayInlinerEnums.h so the options header can
+  /// name it without including this file.  Scoped, so Format::X still works.
+  using Format = CallSiteFormatKind;
 
   bool outputColumn() const {
     return OutputFormat == Format::LineColumn ||
@@ -40,8 +38,10 @@ struct CallSiteFormat {
 
 /// Replay Inliner Setup
 struct ReplayInlinerSettings {
-  enum class Scope : int { Function, Module };
-  enum class Fallback : int { Original, AlwaysInline, NeverInline };
+  /// Aliases; the enums live in ReplayInlinerEnums.h.  Both scoped, so the
+  /// qualified spellings and Scope::X / Fallback::X still resolve.
+  using Scope = ReplayInlinerScope;
+  using Fallback = ReplayInlinerFallback;
 
   StringRef ReplayFile;
   Scope ReplayScope;

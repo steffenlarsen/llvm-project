@@ -39,6 +39,8 @@
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/StringSaver.h"
 #include <algorithm>
 #include <cassert>
@@ -1577,6 +1579,17 @@ public:
   std::unique_ptr<remarks::RemarkStreamer> MainRemarkStreamer;
 
   std::unique_ptr<DiagnosticHandler> DiagHandler;
+
+  /// Parsed command-line options for this context.  Populated by calling
+  /// LLVMContext::setParsedOptions().  Null if no options have been attached.
+  std::shared_ptr<clv2::ParsedOptionsBase> ParsedOpts;
+
+  /// Per-session option context.  Stores type-erased ParsedOptions views
+  /// keyed by registry address.  Set by LLVMContext::setOptionsContext().
+  /// Non-owning pointer to a tool-owned context, or to the shared
+  /// clv2::defaultOptionsContext() when no tool context is provided, so
+  /// getOptionsContext() never returns null.
+
   bool RespectDiagnosticFilters = false;
   bool DiagnosticsHotnessRequested = false;
   /// The minimum hotness value a diagnostic needs in order to be included in

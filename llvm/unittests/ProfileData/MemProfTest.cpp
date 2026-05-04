@@ -19,7 +19,8 @@
 #include "llvm/ProfileData/MemProfData.inc"
 #include "llvm/ProfileData/MemProfRadixTree.h"
 #include "llvm/ProfileData/MemProfReader.h"
-#include "llvm/Support/Compiler.h"
+#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -28,11 +29,10 @@
 
 namespace llvm {
 
-LLVM_ABI extern cl::opt<float> MemProfLifetimeAccessDensityColdThreshold;
-LLVM_ABI extern cl::opt<unsigned> MemProfAveLifetimeColdThreshold;
-LLVM_ABI extern cl::opt<unsigned>
-    MemProfMinAveLifetimeAccessDensityHotThreshold;
-LLVM_ABI extern cl::opt<bool> MemProfUseHotHints;
+// Literal defaults matching the Init{} values in ProfileDataOptionsOptInfos.h.
+static constexpr float MemProfLifetimeAccessDensityColdThreshold = 0.05f;
+static constexpr unsigned MemProfAveLifetimeColdThreshold = 200;
+static constexpr unsigned MemProfMinAveLifetimeAccessDensityHotThreshold = 1000;
 
 namespace memprof {
 
@@ -964,45 +964,50 @@ TEST(MemProf, GetAllocType) {
       (uint64_t)(MemProfMinAveLifetimeAccessDensityHotThreshold * AllocCount *
                  100);
 
-  // Make sure the option for detecting hot allocations is set.
-  bool OrigMemProfUseHotHints = MemProfUseHotHints;
-  MemProfUseHotHints = true;
+  // Make sure the option for detecting hot allocations is set via
+  // OptionsContext.
+  auto PDOpts = clv2::ProfileDataOptsReg.makeDefaults();
+  PDOpts.get<&clv2::PD_MemProfUseHotHints>() = true;
+  clv2::OptionsContext OptsCtx;
+  OptsCtx.addView<&clv2::ProfileDataOptsReg>(PDOpts);
 
   // Test Hot
   // More accesses per byte per sec than hot threshold is hot.
   EXPECT_EQ(getAllocType(HotTotalLifetimeAccessDensityThreshold + 1, AllocCount,
-                         ColdTotalLifetimeThreshold + 1),
+                         ColdTotalLifetimeThreshold + 1, OptsCtx),
             AllocationType::Hot);
-
-  // Restore original option value.
-  MemProfUseHotHints = OrigMemProfUseHotHints;
 
   // Without MemProfUseHotHints (default) we should treat simply as NotCold.
   EXPECT_EQ(getAllocType(HotTotalLifetimeAccessDensityThreshold + 1, AllocCount,
-                         ColdTotalLifetimeThreshold + 1),
+                         ColdTotalLifetimeThreshold + 1,
+                         /*Ctx=*/llvm::clv2::defaultOptionsContext()),
             AllocationType::NotCold);
 
   // Test Cold
   // Long lived with less accesses per byte per sec than cold threshold is cold.
   EXPECT_EQ(getAllocType(ColdTotalLifetimeAccessDensityThreshold - 1,
-                         AllocCount, ColdTotalLifetimeThreshold + 1),
+                         AllocCount, ColdTotalLifetimeThreshold + 1,
+                         /*Ctx=*/llvm::clv2::defaultOptionsContext()),
             AllocationType::Cold);
 
   // Test NotCold
   // Long lived with more accesses per byte per sec than cold threshold is not
   // cold.
   EXPECT_EQ(getAllocType(ColdTotalLifetimeAccessDensityThreshold + 1,
-                         AllocCount, ColdTotalLifetimeThreshold + 1),
+                         AllocCount, ColdTotalLifetimeThreshold + 1,
+                         /*Ctx=*/llvm::clv2::defaultOptionsContext()),
             AllocationType::NotCold);
   // Short lived with more accesses per byte per sec than cold threshold is not
   // cold.
   EXPECT_EQ(getAllocType(ColdTotalLifetimeAccessDensityThreshold + 1,
-                         AllocCount, ColdTotalLifetimeThreshold - 1),
+                         AllocCount, ColdTotalLifetimeThreshold - 1,
+                         /*Ctx=*/llvm::clv2::defaultOptionsContext()),
             AllocationType::NotCold);
   // Short lived with less accesses per byte per sec than cold threshold is not
   // cold.
   EXPECT_EQ(getAllocType(ColdTotalLifetimeAccessDensityThreshold - 1,
-                         AllocCount, ColdTotalLifetimeThreshold - 1),
+                         AllocCount, ColdTotalLifetimeThreshold - 1,
+                         /*Ctx=*/llvm::clv2::defaultOptionsContext()),
             AllocationType::NotCold);
 }
 

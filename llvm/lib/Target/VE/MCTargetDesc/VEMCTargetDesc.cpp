@@ -55,11 +55,16 @@ static MCRegisterInfo *createVEMCRegisterInfo(const Triple &TT) {
   return X;
 }
 
-static MCSubtargetInfo *createVEMCSubtargetInfo(const Triple &TT, StringRef CPU,
-                                                StringRef FS) {
+static MCSubtargetInfo *
+createVEMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                        const llvm::clv2::OptionsContext &Ctx) {
   if (CPU.empty())
     CPU = "generic";
-  return createVEMCSubtargetInfoImpl(TT, CPU, /*TuneCPU=*/CPU, FS);
+  MCSubtargetInfo *STI =
+      createVEMCSubtargetInfoImpl(TT, CPU, /*TuneCPU=*/CPU, FS);
+  if (STI)
+    STI->setOptionsContext(Ctx);
+  return STI;
 }
 
 static MCTargetStreamer *

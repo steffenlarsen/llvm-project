@@ -28,13 +28,15 @@
 #include "llvm/Object/BuildID.h"
 #include "llvm/ProfileData/Coverage/CoverageMapping.h"
 #include "llvm/ProfileData/InstrProfReader.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/BoolOrDefault.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/Support/SpecialCaseList.h"
 #include "llvm/Support/ThreadPool.h"
@@ -54,6 +56,290 @@ using namespace coverage;
 void exportCoverageDataToJson(const coverage::CoverageMapping &CoverageMapping,
                               const CoverageViewOptions &Options,
                               raw_ostream &OS);
+
+// ---------------------------------------------------------------------------
+// File-scope clv2 option descriptors
+// ---------------------------------------------------------------------------
+
+// Common options (from run())
+inline constexpr clv2::OptionInfo<std::string> CC_CovFilenameOpt{
+    "", "Covered executable or object file.", clv2::Positional{}};
+
+inline constexpr clv2::ListOptionInfo<std::string> CC_CovFilenamesOpt{
+    "object", "Coverage executable or object file"};
+
+inline constexpr clv2::OptionInfo<bool> CC_DebugDumpObjsOpt{
+    "dump-collected-objects", "Show the collected coverage object files",
+    clv2::Hidden};
+
+inline constexpr clv2::ListOptionInfo<std::string> CC_InputSourceFilesOpt{
+    "sources", "<Source files>", clv2::Positional{}};
+
+inline constexpr clv2::OptionInfo<bool> CC_DebugDumpPathsOpt{
+    "dump-collected-paths", "Show the collected paths to source files",
+    clv2::Hidden};
+
+inline constexpr clv2::OptionInfo<std::string> CC_PGOFilenameOpt{
+    "instr-profile",
+    "File with the profile data obtained after an instrumented run",
+    clv2::Init{""}};
+
+inline constexpr clv2::OptionInfo<bool> CC_EmptyProfileOpt{
+    "empty-profile",
+    "Use a synthetic profile with no data to generate baseline coverage"};
+
+inline constexpr clv2::ListOptionInfo<std::string> CC_ArchesOpt{
+    "arch", "architectures of the coverage mapping binaries"};
+
+inline constexpr clv2::OptionInfo<bool> CC_DebugDumpOpt{
+    "dump", "Show internal debug dump"};
+
+inline constexpr clv2::ListOptionInfo<std::string> CC_DebugFileDirOpt{
+    "debug-file-directory",
+    "Directories to search for object files by build ID"};
+
+inline constexpr clv2::OptionInfo<bool> CC_DebuginfodOpt{
+    "debuginfod", "Use debuginfod to look up object files from profile"};
+
+constexpr clv2::EnumVal<CoverageViewOptions::OutputFormat> CC_FormatVals[] = {
+    {"text", CoverageViewOptions::OutputFormat::Text, "Text output"},
+    {"html", CoverageViewOptions::OutputFormat::HTML, "HTML output"},
+    {"lcov", CoverageViewOptions::OutputFormat::Lcov, "lcov tracefile output"},
+};
+inline constexpr auto CC_FormatOpt =
+    clv2::makeEnumOption<CoverageViewOptions::OutputFormat>(
+        "format", "Output format for line-based coverage reports",
+        CC_FormatVals, clv2::Init{CoverageViewOptions::OutputFormat::Text});
+
+inline constexpr clv2::ListOptionInfo<std::string> CC_PathRemapsOpt{
+    "path-equivalence",
+    "<from>,<to> Map coverage data paths to local source file paths"};
+
+// Filtering category and options
+inline constexpr clv2::OptionCategory CC_FilteringCat{
+    "Function filtering options"};
+
+inline constexpr clv2::ListOptionInfo<std::string> CC_NameFiltersOpt{
+    "name", "Show code coverage only for functions with the given name",
+    clv2::cat(CC_FilteringCat)};
+
+inline constexpr clv2::ListOptionInfo<std::string> CC_NameFilterFilesOpt{
+    "name-allowlist",
+    "Show code coverage only for functions listed in the given file",
+    clv2::cat(CC_FilteringCat)};
+
+inline constexpr clv2::ListOptionInfo<std::string> CC_NameRegexFiltersOpt{
+    "name-regex",
+    "Show code coverage only for functions that match the given regular "
+    "expression",
+    clv2::cat(CC_FilteringCat)};
+
+inline constexpr clv2::ListOptionInfo<std::string> CC_IgnoreFilenameRegexOpt{
+    "ignore-filename-regex",
+    "Skip source code files with file paths that match the given regular "
+    "expression",
+    clv2::cat(CC_FilteringCat)};
+
+inline constexpr clv2::ListOptionInfo<std::string> CC_IncludeFilenameRegexOpt{
+    "include-filename-regex",
+    "Only include source code files with file paths that match the given "
+    "regular expression",
+    clv2::cat(CC_FilteringCat)};
+
+inline constexpr clv2::OptionInfo<double> CC_RegionCoverageLtOpt{
+    "region-coverage-lt",
+    "Show code coverage only for functions with region coverage less than the "
+    "given threshold",
+    clv2::cat(CC_FilteringCat)};
+
+inline constexpr clv2::OptionInfo<double> CC_RegionCoverageGtOpt{
+    "region-coverage-gt",
+    "Show code coverage only for functions with region coverage greater than "
+    "the given threshold",
+    clv2::cat(CC_FilteringCat)};
+
+inline constexpr clv2::OptionInfo<double> CC_LineCoverageLtOpt{
+    "line-coverage-lt",
+    "Show code coverage only for functions with line coverage less than the "
+    "given threshold",
+    clv2::cat(CC_FilteringCat)};
+
+inline constexpr clv2::OptionInfo<double> CC_LineCoverageGtOpt{
+    "line-coverage-gt",
+    "Show code coverage only for functions with line coverage greater than the "
+    "given threshold",
+    clv2::cat(CC_FilteringCat)};
+
+inline constexpr clv2::OptionInfo<bool> CC_UseColorOpt{
+    "use-color", "Emit colored output (default=autodetect)"};
+
+inline constexpr clv2::ListOptionInfo<std::string> CC_DemanglerOpt{
+    "Xdemangler", "<demangler-path>|<demangler-option>"};
+
+inline constexpr clv2::OptionInfo<bool> CC_RegionSummaryOpt{
+    "show-region-summary", "Show region statistics in summary table",
+    clv2::Init{true}};
+
+inline constexpr clv2::OptionInfo<bool> CC_FunctionSummaryOpt{
+    "show-function-summary", "Show function statistics in summary table",
+    clv2::Init{true}};
+
+inline constexpr clv2::OptionInfo<bool> CC_BranchSummaryOpt{
+    "show-branch-summary", "Show branch condition statistics in summary table",
+    clv2::Init{true}};
+
+inline constexpr clv2::OptionInfo<bool> CC_MCDCSummaryOpt{
+    "show-mcdc-summary", "Show MCDC statistics in summary table"};
+
+inline constexpr clv2::OptionInfo<bool> CC_InstantiationSummaryOpt{
+    "show-instantiation-summary",
+    "Show instantiation statistics in summary table"};
+
+inline constexpr clv2::OptionInfo<bool> CC_SummaryOnlyOpt{
+    "summary-only", "Export only summary information for each source file"};
+
+inline constexpr clv2::OptionInfo<unsigned> CC_NumThreadsOpt{
+    "num-threads", "Number of merge threads to use (default: autodetect)",
+    clv2::Init{0u}};
+
+inline constexpr clv2::AliasInfo CC_NumThreadsAlias{"j", "num-threads"};
+
+inline constexpr clv2::OptionInfo<std::string> CC_CompilationDirOpt{
+    "compilation-dir",
+    "Directory used as a base for relative coverage mapping paths",
+    clv2::Init{""}};
+
+inline constexpr clv2::OptionInfo<bool> CC_CheckBinaryIDsOpt{
+    "check-binary-ids",
+    "Fail if an object couldn't be found for a binary ID in the profile"};
+
+// View options (from doShow())
+inline constexpr clv2::OptionCategory CC_ViewCat{"Viewing options"};
+
+inline constexpr clv2::OptionInfo<bool> CC_ShowLineCountsOpt{
+    "show-line-counts", "Show the execution counts for each line",
+    clv2::Init{true}, clv2::cat(CC_ViewCat)};
+
+inline constexpr clv2::OptionInfo<bool> CC_ShowRegionsOpt{
+    "show-regions", "Show the execution counts for each region",
+    clv2::cat(CC_ViewCat)};
+
+constexpr clv2::EnumVal<CoverageViewOptions::BranchOutputType>
+    CC_ShowBranchesVals[] = {
+        {"count", CoverageViewOptions::BranchOutputType::Count,
+         "Show True/False counts"},
+        {"percent", CoverageViewOptions::BranchOutputType::Percent,
+         "Show True/False percent"},
+};
+inline constexpr auto CC_ShowBranchesOpt =
+    clv2::makeEnumOption<CoverageViewOptions::BranchOutputType>(
+        "show-branches", "Show coverage for branch conditions",
+        CC_ShowBranchesVals,
+        clv2::Init{CoverageViewOptions::BranchOutputType::Off},
+        clv2::cat(CC_ViewCat));
+
+inline constexpr clv2::OptionInfo<bool> CC_ShowMCDCOpt{
+    "show-mcdc",
+    "Show the MCDC Coverage for each applicable boolean expression",
+    clv2::cat(CC_ViewCat)};
+
+inline constexpr clv2::OptionInfo<bool> CC_ShowMCDCNonExecOpt{
+    "show-mcdc-non-executed-vectors",
+    "Show MC/DC test vectors that were not executed"};
+
+inline constexpr clv2::OptionInfo<bool> CC_ShowBestLineRegionsOpt{
+    "show-line-counts-or-regions",
+    "Show the execution counts for each line, or the execution counts for "
+    "each region on lines that have multiple regions",
+    clv2::cat(CC_ViewCat)};
+
+inline constexpr clv2::OptionInfo<bool> CC_ShowExpansionsOpt{
+    "show-expansions", "Show expanded source regions", clv2::cat(CC_ViewCat)};
+
+inline constexpr clv2::OptionInfo<bool> CC_ShowInstantiationsOpt{
+    "show-instantiations", "Show function instantiations", clv2::Init{true},
+    clv2::cat(CC_ViewCat)};
+
+inline constexpr clv2::OptionInfo<bool> CC_ShowDirCoverageOpt{
+    "show-directory-coverage", "Show directory coverage",
+    clv2::cat(CC_ViewCat)};
+
+inline constexpr clv2::OptionInfo<bool> CC_ShowCreatedTimeOpt{
+    "show-created-time", "Show created time for each page.", clv2::Init{true},
+    clv2::cat(CC_ViewCat)};
+
+inline constexpr clv2::OptionInfo<std::string> CC_OutputDirOpt{
+    "output-dir", "Directory in which coverage information is written out",
+    clv2::Init{""}};
+
+inline constexpr clv2::AliasInfo CC_OutputDirAlias{"o", "output-dir"};
+
+inline constexpr clv2::OptionInfo<bool> CC_BinaryCountersOpt{
+    "binary-counters",
+    "Show binary counters (1/0) in lines and branches instead of integer "
+    "execution counts",
+    clv2::cat(CC_ViewCat)};
+
+inline constexpr clv2::OptionInfo<unsigned> CC_TabSizeOpt{
+    "tab-size",
+    "Set tab expansion size for html coverage reports (default = 2)",
+    clv2::Init{2u}};
+
+inline constexpr clv2::OptionInfo<std::string> CC_ProjectTitleOpt{
+    "project-title", "Set project title for the coverage report"};
+
+inline constexpr clv2::OptionInfo<std::string> CC_CovWatermarkOpt{
+    "coverage-watermark",
+    "<high>,<low> value indicate thresholds for high and low"
+    "coverage watermark"};
+
+// Report options (from doReport())
+inline constexpr clv2::OptionInfo<bool> CC_ShowFunctionsOpt{
+    "show-functions", "Show coverage summaries for each function",
+    clv2::Init{false}};
+
+// Export options (from doExport())
+inline constexpr clv2::OptionCategory CC_ExportCat{"Exporting options"};
+
+inline constexpr clv2::OptionInfo<bool> CC_SkipExpansionsOpt{
+    "skip-expansions", "Don't export expanded source regions",
+    clv2::cat(CC_ExportCat)};
+
+inline constexpr clv2::OptionInfo<bool> CC_SkipFunctionsOpt{
+    "skip-functions", "Don't export per-function data",
+    clv2::cat(CC_ExportCat)};
+
+inline constexpr clv2::OptionInfo<bool> CC_SkipBranchesOpt{
+    "skip-branches", "Don't export branch data (LCOV)",
+    clv2::cat(CC_ExportCat)};
+
+inline constexpr clv2::OptionInfo<bool> CC_UnifyInstantiationsOpt{
+    "unify-instantiations", "Unify function instantiations", clv2::Init{true},
+    clv2::cat(CC_ExportCat)};
+
+// ---------------------------------------------------------------------------
+// OptionsRegistry
+// ---------------------------------------------------------------------------
+static constexpr clv2::OptionsRegistry<
+    &CC_CovFilenameOpt, &CC_CovFilenamesOpt, &CC_DebugDumpObjsOpt,
+    &CC_InputSourceFilesOpt, &CC_DebugDumpPathsOpt, &CC_PGOFilenameOpt,
+    &CC_EmptyProfileOpt, &CC_ArchesOpt, &CC_DebugDumpOpt, &CC_DebugFileDirOpt,
+    &CC_DebuginfodOpt, &CC_FormatOpt, &CC_PathRemapsOpt, &CC_NameFiltersOpt,
+    &CC_NameFilterFilesOpt, &CC_NameRegexFiltersOpt, &CC_IgnoreFilenameRegexOpt,
+    &CC_IncludeFilenameRegexOpt, &CC_RegionCoverageLtOpt,
+    &CC_RegionCoverageGtOpt, &CC_LineCoverageLtOpt, &CC_LineCoverageGtOpt,
+    &CC_UseColorOpt, &CC_DemanglerOpt, &CC_RegionSummaryOpt,
+    &CC_FunctionSummaryOpt, &CC_BranchSummaryOpt, &CC_MCDCSummaryOpt,
+    &CC_InstantiationSummaryOpt, &CC_SummaryOnlyOpt, &CC_NumThreadsOpt,
+    &CC_NumThreadsAlias, &CC_CompilationDirOpt, &CC_CheckBinaryIDsOpt,
+    &CC_ShowLineCountsOpt, &CC_ShowRegionsOpt, &CC_ShowBranchesOpt,
+    &CC_ShowMCDCOpt, &CC_ShowMCDCNonExecOpt, &CC_ShowBestLineRegionsOpt,
+    &CC_ShowExpansionsOpt, &CC_ShowInstantiationsOpt, &CC_ShowDirCoverageOpt,
+    &CC_ShowCreatedTimeOpt, &CC_OutputDirOpt, &CC_OutputDirAlias,
+    &CC_BinaryCountersOpt, &CC_TabSizeOpt, &CC_ProjectTitleOpt,
+    &CC_CovWatermarkOpt, &CC_ShowFunctionsOpt, &CC_SkipExpansionsOpt,
+    &CC_SkipFunctionsOpt, &CC_SkipBranchesOpt, &CC_UnifyInstantiationsOpt>
+    CC_ToolReg;
 
 namespace {
 /// The implementation of the coverage tool.
@@ -133,16 +419,11 @@ private:
   void writeSourceFileView(StringRef SourceFile, CoverageMapping *Coverage,
                            CoveragePrinter *Printer, bool ShowFilenames);
 
-  typedef llvm::function_ref<int(int, const char **)> CommandLineParserType;
+  int doShow();
 
-  int doShow(int argc, const char **argv,
-             CommandLineParserType commandLineParser);
+  int doReport(bool ShowFunctionSummaries);
 
-  int doReport(int argc, const char **argv,
-               CommandLineParserType commandLineParser);
-
-  int doExport(int argc, const char **argv,
-               CommandLineParserType commandLineParser);
+  int doExport();
 
   std::vector<StringRef> ObjectFilenames;
   CoverageViewOptions ViewOpts;
@@ -653,527 +934,358 @@ void CodeCoverageTool::writeSourceFileView(StringRef SourceFile,
 }
 
 int CodeCoverageTool::run(Command Cmd, int argc, const char **argv) {
-  cl::opt<std::string> CovFilename(
-      cl::Positional, cl::desc("Covered executable or object file."));
+  clv2::OptionParser P;
+  P.add<&CC_ToolReg>();
+  RegisterAllLLVMOptions(P);
+  auto OptsCtx = P.parse(argc, argv, "LLVM code coverage tool\n");
+  auto *S = OptsCtx->getViewPtr<&CC_ToolReg>();
 
-  cl::list<std::string> CovFilenames(
-      "object", cl::desc("Coverage executable or object file"));
+  // --- Common setup (formerly in commandLineParser lambda) ---
 
-  cl::opt<bool> DebugDumpCollectedObjects(
-      "dump-collected-objects", cl::Optional, cl::Hidden,
-      cl::desc("Show the collected coverage object files"));
+  ViewOpts.Debug = S->get<&CC_DebugDumpOpt>();
 
-  cl::list<std::string> InputSourceFiles("sources", cl::Positional,
-                                         cl::desc("<Source files>"));
+  // Handle debuginfod: runtime default if not specified on command line.
+  bool UseDebuginfod = S->specified<&CC_DebuginfodOpt>()
+                           ? S->get<&CC_DebuginfodOpt>()
+                           : canUseDebuginfod();
 
-  cl::opt<bool> DebugDumpCollectedPaths(
-      "dump-collected-paths", cl::Optional, cl::Hidden,
-      cl::desc("Show the collected paths to source files"));
+  const auto &DebugFileDirRef = S->get<&CC_DebugFileDirOpt>();
+  std::vector<std::string> DebugFileDirVec(DebugFileDirRef.begin(),
+                                           DebugFileDirRef.end());
+  if (UseDebuginfod) {
+    HTTPClient::initialize();
+    BIDFetcher = std::make_unique<DebuginfodFetcher>(DebugFileDirVec);
+  } else {
+    BIDFetcher = std::make_unique<object::BuildIDFetcher>(DebugFileDirVec);
+  }
+  this->CheckBinaryIDs = S->get<&CC_CheckBinaryIDsOpt>();
 
-  cl::opt<std::string> PGOFilename(
-      "instr-profile", cl::Optional,
-      cl::desc(
-          "File with the profile data obtained after an instrumented run"));
+  const auto &PGOFilenameVal = S->get<&CC_PGOFilenameOpt>();
+  bool EmptyProfile = S->get<&CC_EmptyProfileOpt>();
+  if (!PGOFilenameVal.empty() == EmptyProfile) {
+    error("exactly one of -instr-profile and -empty-profile must be specified");
+    return 1;
+  }
+  if (!PGOFilenameVal.empty()) {
+    this->PGOFilename = std::make_optional(PGOFilenameVal);
+  }
 
-  cl::opt<bool> EmptyProfile(
-      "empty-profile", cl::Optional,
-      cl::desc("Use a synthetic profile with no data to generate "
-               "baseline coverage"));
+  const auto &CovFilenameVal = S->get<&CC_CovFilenameOpt>();
+  if (!CovFilenameVal.empty())
+    ObjectFilenames.emplace_back(CovFilenameVal);
+  for (const auto &Filename : S->get<&CC_CovFilenamesOpt>())
+    ObjectFilenames.emplace_back(Filename);
+  if (ObjectFilenames.empty() && !UseDebuginfod && DebugFileDirRef.empty()) {
+    errs() << "No filenames specified!\n";
+    ::exit(1);
+  }
 
-  cl::list<std::string> Arches(
-      "arch", cl::desc("architectures of the coverage mapping binaries"));
+  if (S->get<&CC_DebugDumpObjsOpt>()) {
+    for (StringRef OF : ObjectFilenames)
+      outs() << OF << '\n';
+    ::exit(0);
+  }
 
-  cl::opt<bool> DebugDump("dump", cl::Optional,
-                          cl::desc("Show internal debug dump"));
+  ViewOpts.Format = S->get<&CC_FormatOpt>();
+  cl::boolOrDefault UseColor = cl::boolOrDefault::BOU_UNSET;
+  if (S->specified<&CC_UseColorOpt>())
+    UseColor = S->get<&CC_UseColorOpt>() ? cl::boolOrDefault::BOU_TRUE
+                                         : cl::boolOrDefault::BOU_FALSE;
+  switch (ViewOpts.Format) {
+  case CoverageViewOptions::OutputFormat::Text:
+    ViewOpts.Colors = UseColor == cl::boolOrDefault::BOU_UNSET
+                          ? sys::Process::StandardOutHasColors()
+                          : UseColor == cl::boolOrDefault::BOU_TRUE;
+    break;
+  case CoverageViewOptions::OutputFormat::HTML:
+    if (UseColor == cl::boolOrDefault::BOU_FALSE)
+      errs() << "Color output cannot be disabled when generating html.\n";
+    ViewOpts.Colors = true;
+    break;
+  case CoverageViewOptions::OutputFormat::Lcov:
+    if (UseColor == cl::boolOrDefault::BOU_TRUE)
+      errs() << "Color output cannot be enabled when generating lcov.\n";
+    ViewOpts.Colors = false;
+    break;
+  }
 
-  cl::list<std::string> DebugFileDirectory(
-      "debug-file-directory",
-      cl::desc("Directories to search for object files by build ID"));
-  cl::opt<bool> Debuginfod(
-      "debuginfod",
-      cl::desc("Use debuginfod to look up object files from profile"),
-      cl::init(canUseDebuginfod()));
+  const auto &PathRemapsRef = S->get<&CC_PathRemapsOpt>();
+  if (!PathRemapsRef.empty()) {
+    std::vector<std::pair<std::string, std::string>> Remappings;
 
-  cl::opt<CoverageViewOptions::OutputFormat> Format(
-      "format", cl::desc("Output format for line-based coverage reports"),
-      cl::values(clEnumValN(CoverageViewOptions::OutputFormat::Text, "text",
-                            "Text output"),
-                 clEnumValN(CoverageViewOptions::OutputFormat::HTML, "html",
-                            "HTML output"),
-                 clEnumValN(CoverageViewOptions::OutputFormat::Lcov, "lcov",
-                            "lcov tracefile output")),
-      cl::init(CoverageViewOptions::OutputFormat::Text));
+    for (const auto &PathRemap : PathRemapsRef) {
+      auto EquivPair = StringRef(PathRemap).split(',');
+      if (EquivPair.first.empty() || EquivPair.second.empty()) {
+        error("invalid argument '" + PathRemap +
+                  "', must be in format 'from,to'",
+              "-path-equivalence");
+        return 1;
+      }
 
-  cl::list<std::string> PathRemaps(
-      "path-equivalence", cl::Optional,
-      cl::desc("<from>,<to> Map coverage data paths to local source file "
-               "paths"));
-
-  cl::OptionCategory FilteringCategory("Function filtering options");
-
-  cl::list<std::string> NameFilters(
-      "name", cl::Optional,
-      cl::desc("Show code coverage only for functions with the given name"),
-      cl::cat(FilteringCategory));
-
-  cl::list<std::string> NameFilterFiles(
-      "name-allowlist", cl::Optional,
-      cl::desc("Show code coverage only for functions listed in the given "
-               "file"),
-      cl::cat(FilteringCategory));
-
-  cl::list<std::string> NameRegexFilters(
-      "name-regex", cl::Optional,
-      cl::desc("Show code coverage only for functions that match the given "
-               "regular expression"),
-      cl::cat(FilteringCategory));
-
-  cl::list<std::string> IgnoreFilenameRegexFilters(
-      "ignore-filename-regex", cl::Optional,
-      cl::desc("Skip source code files with file paths that match the given "
-               "regular expression"),
-      cl::cat(FilteringCategory));
-
-  cl::list<std::string> IncludeFilenameRegexFilters(
-      "include-filename-regex", cl::Optional,
-      cl::desc("Only include source code files with file paths that match the "
-               "given regular expression"),
-      cl::cat(FilteringCategory));
-
-  cl::opt<double> RegionCoverageLtFilter(
-      "region-coverage-lt", cl::Optional,
-      cl::desc("Show code coverage only for functions with region coverage "
-               "less than the given threshold"),
-      cl::cat(FilteringCategory));
-
-  cl::opt<double> RegionCoverageGtFilter(
-      "region-coverage-gt", cl::Optional,
-      cl::desc("Show code coverage only for functions with region coverage "
-               "greater than the given threshold"),
-      cl::cat(FilteringCategory));
-
-  cl::opt<double> LineCoverageLtFilter(
-      "line-coverage-lt", cl::Optional,
-      cl::desc("Show code coverage only for functions with line coverage less "
-               "than the given threshold"),
-      cl::cat(FilteringCategory));
-
-  cl::opt<double> LineCoverageGtFilter(
-      "line-coverage-gt", cl::Optional,
-      cl::desc("Show code coverage only for functions with line coverage "
-               "greater than the given threshold"),
-      cl::cat(FilteringCategory));
-
-  cl::opt<cl::boolOrDefault> UseColor(
-      "use-color", cl::desc("Emit colored output (default=autodetect)"),
-      cl::init(cl::boolOrDefault::BOU_UNSET));
-
-  cl::list<std::string> DemanglerOpts(
-      "Xdemangler", cl::desc("<demangler-path>|<demangler-option>"));
-
-  cl::opt<bool> RegionSummary(
-      "show-region-summary", cl::Optional,
-      cl::desc("Show region statistics in summary table"),
-      cl::init(true));
-
-  cl::opt<bool> FunctionSummary(
-      "show-function-summary", cl::Optional,
-      cl::desc("Show function statistics in summary table"), cl::init(true));
-
-  cl::opt<bool> BranchSummary(
-      "show-branch-summary", cl::Optional,
-      cl::desc("Show branch condition statistics in summary table"),
-      cl::init(true));
-
-  cl::opt<bool> MCDCSummary("show-mcdc-summary", cl::Optional,
-                            cl::desc("Show MCDC statistics in summary table"),
-                            cl::init(false));
-
-  cl::opt<bool> InstantiationSummary(
-      "show-instantiation-summary", cl::Optional,
-      cl::desc("Show instantiation statistics in summary table"));
-
-  cl::opt<bool> SummaryOnly(
-      "summary-only", cl::Optional,
-      cl::desc("Export only summary information for each source file"));
-
-  cl::opt<unsigned> NumThreads(
-      "num-threads", cl::init(0),
-      cl::desc("Number of merge threads to use (default: autodetect)"));
-  cl::alias NumThreadsA("j", cl::desc("Alias for --num-threads"),
-                        cl::aliasopt(NumThreads));
-
-  cl::opt<std::string> CompilationDirectory(
-      "compilation-dir", cl::init(""),
-      cl::desc("Directory used as a base for relative coverage mapping paths"));
-
-  cl::opt<bool> CheckBinaryIDs(
-      "check-binary-ids", cl::desc("Fail if an object couldn't be found for a "
-                                   "binary ID in the profile"));
-
-  auto commandLineParser = [&, this](int argc, const char **argv) -> int {
-    cl::ParseCommandLineOptions(argc, argv, "LLVM code coverage tool\n");
-    ViewOpts.Debug = DebugDump;
-
-    // Initialize `Format` and `Colors` before any call to `error()` or
-    // `warning()`, which use `ViewOpts.colored_ostream()` and would read
-    // uninitialized `Colors`.
-    ViewOpts.Format = Format;
-    switch (ViewOpts.Format) {
-    case CoverageViewOptions::OutputFormat::Text:
-      ViewOpts.Colors = UseColor == cl::boolOrDefault::BOU_UNSET
-                            ? sys::Process::StandardOutHasColors()
-                            : UseColor == cl::boolOrDefault::BOU_TRUE;
-      break;
-    case CoverageViewOptions::OutputFormat::HTML:
-      if (UseColor == cl::boolOrDefault::BOU_FALSE)
-        errs() << "Color output cannot be disabled when generating html.\n";
-      ViewOpts.Colors = true;
-      break;
-    case CoverageViewOptions::OutputFormat::Lcov:
-      if (UseColor == cl::boolOrDefault::BOU_TRUE)
-        errs() << "Color output cannot be enabled when generating lcov.\n";
-      ViewOpts.Colors = false;
-      break;
+      Remappings.push_back(
+          {std::string(EquivPair.first), std::string(EquivPair.second)});
     }
 
-    if (Debuginfod) {
-      HTTPClient::initialize();
-      BIDFetcher = std::make_unique<DebuginfodFetcher>(DebugFileDirectory);
-    } else {
-      BIDFetcher = std::make_unique<object::BuildIDFetcher>(DebugFileDirectory);
-    }
-    this->CheckBinaryIDs = CheckBinaryIDs;
+    PathRemappings = Remappings;
+  }
 
-    if (!PGOFilename.empty() == EmptyProfile) {
-      error(
-          "exactly one of -instr-profile and -empty-profile must be specified");
+  // If a demangler is supplied, check if it exists and register it.
+  const auto &DemanglerOptsRef = S->get<&CC_DemanglerOpt>();
+  if (!DemanglerOptsRef.empty()) {
+    auto DemanglerPathOrErr = sys::findProgramByName(DemanglerOptsRef[0]);
+    if (!DemanglerPathOrErr) {
+      error("could not find the demangler!",
+            DemanglerPathOrErr.getError().message());
       return 1;
     }
-    if (!PGOFilename.empty()) {
-      this->PGOFilename = std::make_optional(PGOFilename.getValue());
-    }
+    ViewOpts.DemanglerOpts.assign(DemanglerOptsRef.begin(),
+                                  DemanglerOptsRef.end());
+    ViewOpts.DemanglerOpts[0] = *DemanglerPathOrErr;
+  }
 
-    if (!CovFilename.empty())
-      ObjectFilenames.emplace_back(CovFilename);
-    for (const std::string &Filename : CovFilenames)
-      ObjectFilenames.emplace_back(Filename);
-    if (ObjectFilenames.empty() && !Debuginfod && DebugFileDirectory.empty()) {
-      errs() << "No filenames specified!\n";
-      ::exit(1);
-    }
+  // Read in -name-allowlist files.
+  const auto &NameFilterFilesRef = S->get<&CC_NameFilterFilesOpt>();
+  if (!NameFilterFilesRef.empty()) {
+    std::string SpecialCaseListErr;
+    std::vector<std::string> NameFilterFilesVec(NameFilterFilesRef.begin(),
+                                                NameFilterFilesRef.end());
+    NameAllowlist = SpecialCaseList::create(
+        NameFilterFilesVec, *vfs::getRealFileSystem(), SpecialCaseListErr);
+    if (!NameAllowlist)
+      error(SpecialCaseListErr);
+  }
 
-    if (DebugDumpCollectedObjects) {
-      for (StringRef OF : ObjectFilenames)
-        outs() << OF << '\n';
-      ::exit(0);
-    }
+  // Create the function filters
+  const auto &NameFiltersRef = S->get<&CC_NameFiltersOpt>();
+  const auto &NameRegexFiltersRef = S->get<&CC_NameRegexFiltersOpt>();
+  if (!NameFiltersRef.empty() || NameAllowlist ||
+      !NameRegexFiltersRef.empty()) {
+    auto NameFilterer = std::make_unique<CoverageFilters>();
+    for (const auto &Name : NameFiltersRef)
+      NameFilterer->push_back(std::make_unique<NameCoverageFilter>(Name));
+    if (NameAllowlist && !NameFilterFilesRef.empty())
+      NameFilterer->push_back(
+          std::make_unique<NameAllowlistCoverageFilter>(*NameAllowlist));
+    for (const auto &Regex : NameRegexFiltersRef)
+      NameFilterer->push_back(std::make_unique<NameRegexCoverageFilter>(Regex));
+    Filters.push_back(std::move(NameFilterer));
+  }
 
-    if (!PathRemaps.empty()) {
-      std::vector<std::pair<std::string, std::string>> Remappings;
+  if (S->specified<&CC_RegionCoverageLtOpt>() ||
+      S->specified<&CC_RegionCoverageGtOpt>() ||
+      S->specified<&CC_LineCoverageLtOpt>() ||
+      S->specified<&CC_LineCoverageGtOpt>()) {
+    auto StatFilterer = std::make_unique<CoverageFilters>();
+    if (S->specified<&CC_RegionCoverageLtOpt>())
+      StatFilterer->push_back(std::make_unique<RegionCoverageFilter>(
+          RegionCoverageFilter::LessThan, S->get<&CC_RegionCoverageLtOpt>()));
+    if (S->specified<&CC_RegionCoverageGtOpt>())
+      StatFilterer->push_back(std::make_unique<RegionCoverageFilter>(
+          RegionCoverageFilter::GreaterThan,
+          S->get<&CC_RegionCoverageGtOpt>()));
+    if (S->specified<&CC_LineCoverageLtOpt>())
+      StatFilterer->push_back(std::make_unique<LineCoverageFilter>(
+          LineCoverageFilter::LessThan, S->get<&CC_LineCoverageLtOpt>()));
+    if (S->specified<&CC_LineCoverageGtOpt>())
+      StatFilterer->push_back(std::make_unique<LineCoverageFilter>(
+          RegionCoverageFilter::GreaterThan, S->get<&CC_LineCoverageGtOpt>()));
+    Filters.push_back(std::move(StatFilterer));
+  }
 
-      for (const std::string &PathRemap : PathRemaps) {
-        auto EquivPair = StringRef(PathRemap).split(',');
-        if (EquivPair.first.empty() || EquivPair.second.empty()) {
-          error("invalid argument '" + PathRemap +
-                    "', must be in format 'from,to'",
-                "-path-equivalence");
-          return 1;
-        }
+  // Create the ignore filename filters.
+  for (const auto &RE : S->get<&CC_IgnoreFilenameRegexOpt>())
+    FilenameFilters.push_back(std::make_unique<NameRegexCoverageFilter>(RE));
 
-        Remappings.push_back(
-            {std::string(EquivPair.first), std::string(EquivPair.second)});
-      }
+  for (const auto &RE : S->get<&CC_IncludeFilenameRegexOpt>())
+    FilenameFilters.push_back(std::make_unique<NameRegexCoverageFilter>(
+        RE, NameRegexCoverageFilter::FilterType::Include));
 
-      PathRemappings = Remappings;
-    }
-
-    // If a demangler is supplied, check if it exists and register it.
-    if (!DemanglerOpts.empty()) {
-      auto DemanglerPathOrErr = sys::findProgramByName(DemanglerOpts[0]);
-      if (!DemanglerPathOrErr) {
-        error("could not find the demangler!",
-              DemanglerPathOrErr.getError().message());
+  const auto &ArchesRef = S->get<&CC_ArchesOpt>();
+  if (!ArchesRef.empty()) {
+    for (const auto &Arch : ArchesRef) {
+      if (Triple(Arch).getArch() == llvm::Triple::ArchType::UnknownArch) {
+        error("unknown architecture: " + Arch);
         return 1;
       }
-      DemanglerOpts[0] = *DemanglerPathOrErr;
-      ViewOpts.DemanglerOpts.swap(DemanglerOpts);
+      CoverageArches.emplace_back(Arch);
     }
-
-    // Read in -name-allowlist files.
-    if (!NameFilterFiles.empty()) {
-      std::string SpecialCaseListErr;
-      NameAllowlist = SpecialCaseList::create(
-          NameFilterFiles, *vfs::getRealFileSystem(), SpecialCaseListErr);
-      if (!NameAllowlist)
-        error(SpecialCaseListErr);
+    if (CoverageArches.size() != 1 &&
+        CoverageArches.size() != ObjectFilenames.size()) {
+      error("number of architectures doesn't match the number of objects");
+      return 1;
     }
+  }
 
-    // Create the function filters
-    if (!NameFilters.empty() || NameAllowlist || !NameRegexFilters.empty()) {
-      auto NameFilterer = std::make_unique<CoverageFilters>();
-      for (const auto &Name : NameFilters)
-        NameFilterer->push_back(std::make_unique<NameCoverageFilter>(Name));
-      if (NameAllowlist && !NameFilterFiles.empty())
-        NameFilterer->push_back(
-            std::make_unique<NameAllowlistCoverageFilter>(*NameAllowlist));
-      for (const auto &Regex : NameRegexFilters)
-        NameFilterer->push_back(
-            std::make_unique<NameRegexCoverageFilter>(Regex));
-      Filters.push_back(std::move(NameFilterer));
-    }
+  // FilenameFilters are applied even when InputSourceFiles specified.
+  for (const auto &File : S->get<&CC_InputSourceFilesOpt>())
+    collectPaths(File);
 
-    if (RegionCoverageLtFilter.getNumOccurrences() ||
-        RegionCoverageGtFilter.getNumOccurrences() ||
-        LineCoverageLtFilter.getNumOccurrences() ||
-        LineCoverageGtFilter.getNumOccurrences()) {
-      auto StatFilterer = std::make_unique<CoverageFilters>();
-      if (RegionCoverageLtFilter.getNumOccurrences())
-        StatFilterer->push_back(std::make_unique<RegionCoverageFilter>(
-            RegionCoverageFilter::LessThan, RegionCoverageLtFilter));
-      if (RegionCoverageGtFilter.getNumOccurrences())
-        StatFilterer->push_back(std::make_unique<RegionCoverageFilter>(
-            RegionCoverageFilter::GreaterThan, RegionCoverageGtFilter));
-      if (LineCoverageLtFilter.getNumOccurrences())
-        StatFilterer->push_back(std::make_unique<LineCoverageFilter>(
-            LineCoverageFilter::LessThan, LineCoverageLtFilter));
-      if (LineCoverageGtFilter.getNumOccurrences())
-        StatFilterer->push_back(std::make_unique<LineCoverageFilter>(
-            RegionCoverageFilter::GreaterThan, LineCoverageGtFilter));
-      Filters.push_back(std::move(StatFilterer));
-    }
+  if (S->get<&CC_DebugDumpPathsOpt>()) {
+    for (const std::string &SF : SourceFiles)
+      outs() << SF << '\n';
+    ::exit(0);
+  }
 
-    // Create the ignore filename filters.
-    for (const auto &RE : IgnoreFilenameRegexFilters)
-      FilenameFilters.push_back(std::make_unique<NameRegexCoverageFilter>(RE));
+  ViewOpts.ShowMCDCSummary = S->get<&CC_MCDCSummaryOpt>();
+  ViewOpts.ShowBranchSummary = S->get<&CC_BranchSummaryOpt>();
+  ViewOpts.ShowRegionSummary = S->get<&CC_RegionSummaryOpt>();
+  ViewOpts.ShowFunctionSummary = S->get<&CC_FunctionSummaryOpt>();
+  ViewOpts.ShowInstantiationSummary = S->get<&CC_InstantiationSummaryOpt>();
+  ViewOpts.ExportSummaryOnly = S->get<&CC_SummaryOnlyOpt>();
+  ViewOpts.NumThreads = S->get<&CC_NumThreadsOpt>();
+  ViewOpts.CompilationDirectory = S->get<&CC_CompilationDirOpt>();
 
-    for (const auto &RE : IncludeFilenameRegexFilters)
-      FilenameFilters.push_back(std::make_unique<NameRegexCoverageFilter>(
-          RE, NameRegexCoverageFilter::FilterType::Include));
-
-    if (!Arches.empty()) {
-      for (const std::string &Arch : Arches) {
-        if (Triple(Arch).getArch() == llvm::Triple::ArchType::UnknownArch) {
-          error("unknown architecture: " + Arch);
-          return 1;
-        }
-        CoverageArches.emplace_back(Arch);
-      }
-      if (CoverageArches.size() != 1 &&
-          CoverageArches.size() != ObjectFilenames.size()) {
-        error("number of architectures doesn't match the number of objects");
-        return 1;
-      }
-    }
-
-    // FilenameFilters are applied even when InputSourceFiles specified.
-    for (const std::string &File : InputSourceFiles)
-      collectPaths(File);
-
-    if (DebugDumpCollectedPaths) {
-      for (const std::string &SF : SourceFiles)
-        outs() << SF << '\n';
-      ::exit(0);
-    }
-
-    ViewOpts.ShowMCDCSummary = MCDCSummary;
-    ViewOpts.ShowBranchSummary = BranchSummary;
-    ViewOpts.ShowRegionSummary = RegionSummary;
-    ViewOpts.ShowFunctionSummary = FunctionSummary;
-    ViewOpts.ShowInstantiationSummary = InstantiationSummary;
-    ViewOpts.ExportSummaryOnly = SummaryOnly;
-    ViewOpts.NumThreads = NumThreads;
-    ViewOpts.CompilationDirectory = CompilationDirectory;
-
-    return 0;
-  };
-
+  // --- Command-specific setup ---
   switch (Cmd) {
-  case Show:
-    return doShow(argc, argv, commandLineParser);
-  case Report:
-    return doReport(argc, argv, commandLineParser);
-  case Export:
-    return doExport(argc, argv, commandLineParser);
+  case Show: {
+    if (ViewOpts.Format == CoverageViewOptions::OutputFormat::Lcov) {
+      error("lcov format should be used with 'llvm-cov export'.");
+      return 1;
+    }
+
+    ViewOpts.HighCovWatermark = 100.0;
+    ViewOpts.LowCovWatermark = 80.0;
+    const auto &CovWatermark = S->get<&CC_CovWatermarkOpt>();
+    if (!CovWatermark.empty()) {
+      auto WaterMarkPair = StringRef(CovWatermark).split(',');
+      if (WaterMarkPair.first.empty() || WaterMarkPair.second.empty()) {
+        error("invalid argument '" + CovWatermark +
+                  "', must be in format 'high,low'",
+              "-coverage-watermark");
+        return 1;
+      }
+
+      char *EndPointer = nullptr;
+      ViewOpts.HighCovWatermark =
+          strtod(WaterMarkPair.first.begin(), &EndPointer);
+      if (EndPointer != WaterMarkPair.first.end()) {
+        error("invalid number '" + WaterMarkPair.first +
+                  "', invalid value for 'high'",
+              "-coverage-watermark");
+        return 1;
+      }
+
+      ViewOpts.LowCovWatermark =
+          strtod(WaterMarkPair.second.begin(), &EndPointer);
+      if (EndPointer != WaterMarkPair.second.end()) {
+        error("invalid number '" + WaterMarkPair.second +
+                  "', invalid value for 'low'",
+              "-coverage-watermark");
+        return 1;
+      }
+
+      if (ViewOpts.HighCovWatermark > 100 || ViewOpts.LowCovWatermark < 0 ||
+          ViewOpts.HighCovWatermark <= ViewOpts.LowCovWatermark) {
+        error("invalid number range '" + CovWatermark +
+                  "', must be both high and low should be between 0-100, and "
+                  "high "
+                  "> low",
+              "-coverage-watermark");
+        return 1;
+      }
+    }
+
+    ViewOpts.ShowLineNumbers = true;
+    ViewOpts.ShowLineStats = S->specified<&CC_ShowLineCountsOpt>() ||
+                             !S->get<&CC_ShowRegionsOpt>() ||
+                             S->get<&CC_ShowBestLineRegionsOpt>();
+    ViewOpts.ShowRegionMarkers =
+        S->get<&CC_ShowRegionsOpt>() || S->get<&CC_ShowBestLineRegionsOpt>();
+    ViewOpts.ShowExpandedRegions = S->get<&CC_ShowExpansionsOpt>();
+    ViewOpts.ShowBranchCounts = S->get<&CC_ShowBranchesOpt>() ==
+                                CoverageViewOptions::BranchOutputType::Count;
+    ViewOpts.ShowMCDC = S->get<&CC_ShowMCDCOpt>();
+    ViewOpts.ShowMCDCNonExecutedVectors = S->get<&CC_ShowMCDCNonExecOpt>();
+    ViewOpts.ShowBranchPercents =
+        S->get<&CC_ShowBranchesOpt>() ==
+        CoverageViewOptions::BranchOutputType::Percent;
+    ViewOpts.ShowFunctionInstantiations = S->get<&CC_ShowInstantiationsOpt>();
+    ViewOpts.ShowDirectoryCoverage = S->get<&CC_ShowDirCoverageOpt>();
+    ViewOpts.ShowOutputDirectory = S->get<&CC_OutputDirOpt>();
+    ViewOpts.BinaryCounters = S->get<&CC_BinaryCountersOpt>();
+    ViewOpts.TabSize = S->get<&CC_TabSizeOpt>();
+    ViewOpts.ProjectTitle = S->get<&CC_ProjectTitleOpt>();
+
+    if (ViewOpts.hasOutputDirectory()) {
+      if (auto E = sys::fs::create_directories(ViewOpts.ShowOutputDirectory)) {
+        error("could not create output directory!", E.message());
+        return 1;
+      }
+    }
+
+    if (PGOFilename) {
+      sys::fs::file_status Status;
+      if (std::error_code EC = sys::fs::status(PGOFilename.value(), Status)) {
+        error("could not read profile data!" + EC.message(),
+              PGOFilename.value());
+        return 1;
+      }
+
+      if (S->get<&CC_ShowCreatedTimeOpt>()) {
+        auto ModifiedTime = Status.getLastModificationTime();
+        std::string ModifiedTimeStr = to_string(ModifiedTime);
+        size_t found = ModifiedTimeStr.rfind(':');
+        ViewOpts.CreatedTimeStr =
+            (found != std::string::npos)
+                ? "Created: " + ModifiedTimeStr.substr(0, found)
+                : "Created: " + ModifiedTimeStr;
+      }
+    }
+
+    return doShow();
+  }
+
+  case Report: {
+    if (ViewOpts.Format == CoverageViewOptions::OutputFormat::HTML) {
+      error("HTML output for summary reports is not yet supported.");
+      return 1;
+    } else if (ViewOpts.Format == CoverageViewOptions::OutputFormat::Lcov) {
+      error("lcov format should be used with 'llvm-cov export'.");
+      return 1;
+    }
+
+    if (PGOFilename) {
+      sys::fs::file_status Status;
+      if (std::error_code EC = sys::fs::status(PGOFilename.value(), Status)) {
+        error("could not read profile data!" + EC.message(),
+              PGOFilename.value());
+        return 1;
+      }
+    }
+
+    return doReport(S->get<&CC_ShowFunctionsOpt>());
+  }
+
+  case Export: {
+    ViewOpts.SkipExpansions = S->get<&CC_SkipExpansionsOpt>();
+    ViewOpts.SkipFunctions = S->get<&CC_SkipFunctionsOpt>();
+    ViewOpts.SkipBranches = S->get<&CC_SkipBranchesOpt>();
+    ViewOpts.UnifyFunctionInstantiations = S->get<&CC_UnifyInstantiationsOpt>();
+    ViewOpts.ShowMCDCNonExecutedVectors = S->get<&CC_ShowMCDCNonExecOpt>();
+
+    if (ViewOpts.Format != CoverageViewOptions::OutputFormat::Text &&
+        ViewOpts.Format != CoverageViewOptions::OutputFormat::Lcov) {
+      error("coverage data can only be exported as textual JSON or an "
+            "lcov tracefile.");
+      return 1;
+    }
+
+    if (PGOFilename) {
+      sys::fs::file_status Status;
+      if (std::error_code EC = sys::fs::status(PGOFilename.value(), Status)) {
+        error("could not read profile data!" + EC.message(),
+              PGOFilename.value());
+        return 1;
+      }
+    }
+
+    return doExport();
+  }
   }
   return 0;
 }
 
-int CodeCoverageTool::doShow(int argc, const char **argv,
-                             CommandLineParserType commandLineParser) {
-
-  cl::OptionCategory ViewCategory("Viewing options");
-
-  cl::opt<bool> ShowLineExecutionCounts(
-      "show-line-counts", cl::Optional,
-      cl::desc("Show the execution counts for each line"), cl::init(true),
-      cl::cat(ViewCategory));
-
-  cl::opt<bool> ShowRegions(
-      "show-regions", cl::Optional,
-      cl::desc("Show the execution counts for each region"),
-      cl::cat(ViewCategory));
-
-  cl::opt<CoverageViewOptions::BranchOutputType> ShowBranches(
-      "show-branches", cl::Optional,
-      cl::desc("Show coverage for branch conditions"), cl::cat(ViewCategory),
-      cl::values(clEnumValN(CoverageViewOptions::BranchOutputType::Count,
-                            "count", "Show True/False counts"),
-                 clEnumValN(CoverageViewOptions::BranchOutputType::Percent,
-                            "percent", "Show True/False percent")),
-      cl::init(CoverageViewOptions::BranchOutputType::Off));
-
-  cl::opt<bool> ShowMCDC(
-      "show-mcdc", cl::Optional,
-      cl::desc("Show the MCDC Coverage for each applicable boolean expression"),
-      cl::cat(ViewCategory));
-
-  cl::opt<bool> ShowMCDCNonExecutedVectors(
-      "show-mcdc-non-executed-vectors", cl::Optional,
-      cl::desc("Show MC/DC test vectors that were not executed"),
-      cl::cat(ViewCategory));
-
-  cl::opt<bool> ShowBestLineRegionsCounts(
-      "show-line-counts-or-regions", cl::Optional,
-      cl::desc("Show the execution counts for each line, or the execution "
-               "counts for each region on lines that have multiple regions"),
-      cl::cat(ViewCategory));
-
-  cl::opt<bool> ShowExpansions("show-expansions", cl::Optional,
-                               cl::desc("Show expanded source regions"),
-                               cl::cat(ViewCategory));
-
-  cl::opt<bool> ShowInstantiations("show-instantiations", cl::Optional,
-                                   cl::desc("Show function instantiations"),
-                                   cl::init(true), cl::cat(ViewCategory));
-
-  cl::opt<bool> ShowDirectoryCoverage("show-directory-coverage", cl::Optional,
-                                      cl::desc("Show directory coverage"),
-                                      cl::cat(ViewCategory));
-
-  cl::opt<bool> ShowCreatedTime("show-created-time", cl::Optional,
-                                cl::desc("Show created time for each page."),
-                                cl::init(true), cl::cat(ViewCategory));
-
-  cl::opt<std::string> ShowOutputDirectory(
-      "output-dir", cl::init(""),
-      cl::desc("Directory in which coverage information is written out"));
-  cl::alias ShowOutputDirectoryA("o", cl::desc("Alias for --output-dir"),
-                                 cl::aliasopt(ShowOutputDirectory));
-
-  cl::opt<bool> BinaryCounters(
-      "binary-counters", cl::Optional,
-      cl::desc("Show binary counters (1/0) in lines and branches instead of "
-               "integer execution counts"),
-      cl::cat(ViewCategory));
-
-  cl::opt<uint32_t> TabSize(
-      "tab-size", cl::init(2),
-      cl::desc(
-          "Set tab expansion size for html coverage reports (default = 2)"));
-
-  cl::opt<std::string> ProjectTitle(
-      "project-title", cl::Optional,
-      cl::desc("Set project title for the coverage report"));
-
-  cl::opt<std::string> CovWatermark(
-      "coverage-watermark", cl::Optional,
-      cl::desc("<high>,<low> value indicate thresholds for high and low"
-               "coverage watermark"));
-
-  auto Err = commandLineParser(argc, argv);
-  if (Err)
-    return Err;
-
-  if (ViewOpts.Format == CoverageViewOptions::OutputFormat::Lcov) {
-    error("lcov format should be used with 'llvm-cov export'.");
-    return 1;
-  }
-
-  ViewOpts.HighCovWatermark = 100.0;
-  ViewOpts.LowCovWatermark = 80.0;
-  if (!CovWatermark.empty()) {
-    auto WaterMarkPair = StringRef(CovWatermark).split(',');
-    if (WaterMarkPair.first.empty() || WaterMarkPair.second.empty()) {
-      error("invalid argument '" + CovWatermark +
-                "', must be in format 'high,low'",
-            "-coverage-watermark");
-      return 1;
-    }
-
-    char *EndPointer = nullptr;
-    ViewOpts.HighCovWatermark =
-        strtod(WaterMarkPair.first.begin(), &EndPointer);
-    if (EndPointer != WaterMarkPair.first.end()) {
-      error("invalid number '" + WaterMarkPair.first +
-                "', invalid value for 'high'",
-            "-coverage-watermark");
-      return 1;
-    }
-
-    ViewOpts.LowCovWatermark =
-        strtod(WaterMarkPair.second.begin(), &EndPointer);
-    if (EndPointer != WaterMarkPair.second.end()) {
-      error("invalid number '" + WaterMarkPair.second +
-                "', invalid value for 'low'",
-            "-coverage-watermark");
-      return 1;
-    }
-
-    if (ViewOpts.HighCovWatermark > 100 || ViewOpts.LowCovWatermark < 0 ||
-        ViewOpts.HighCovWatermark <= ViewOpts.LowCovWatermark) {
-      error(
-          "invalid number range '" + CovWatermark +
-              "', must be both high and low should be between 0-100, and high "
-              "> low",
-          "-coverage-watermark");
-      return 1;
-    }
-  }
-
-  ViewOpts.ShowLineNumbers = true;
-  ViewOpts.ShowLineStats = ShowLineExecutionCounts.getNumOccurrences() != 0 ||
-                           !ShowRegions || ShowBestLineRegionsCounts;
-  ViewOpts.ShowRegionMarkers = ShowRegions || ShowBestLineRegionsCounts;
-  ViewOpts.ShowExpandedRegions = ShowExpansions;
-  ViewOpts.ShowBranchCounts =
-      ShowBranches == CoverageViewOptions::BranchOutputType::Count;
-  ViewOpts.ShowMCDC = ShowMCDC;
-  ViewOpts.ShowMCDCNonExecutedVectors = ShowMCDCNonExecutedVectors;
-  ViewOpts.ShowBranchPercents =
-      ShowBranches == CoverageViewOptions::BranchOutputType::Percent;
-  ViewOpts.ShowFunctionInstantiations = ShowInstantiations;
-  ViewOpts.ShowDirectoryCoverage = ShowDirectoryCoverage;
-  ViewOpts.ShowOutputDirectory = ShowOutputDirectory;
-  ViewOpts.BinaryCounters = BinaryCounters;
-  ViewOpts.TabSize = TabSize;
-  ViewOpts.ProjectTitle = ProjectTitle;
-
-  if (ViewOpts.hasOutputDirectory()) {
-    if (auto E = sys::fs::create_directories(ViewOpts.ShowOutputDirectory)) {
-      error("could not create output directory!", E.message());
-      return 1;
-    }
-  }
-
-  if (PGOFilename) {
-    sys::fs::file_status Status;
-    if (std::error_code EC = sys::fs::status(PGOFilename.value(), Status)) {
-      error("could not read profile data!" + EC.message(), PGOFilename.value());
-      return 1;
-    }
-
-    if (ShowCreatedTime) {
-      auto ModifiedTime = Status.getLastModificationTime();
-      std::string ModifiedTimeStr = to_string(ModifiedTime);
-      size_t found = ModifiedTimeStr.rfind(':');
-      ViewOpts.CreatedTimeStr =
-          (found != std::string::npos)
-              ? "Created: " + ModifiedTimeStr.substr(0, found)
-              : "Created: " + ModifiedTimeStr;
-    }
-  }
-
+int CodeCoverageTool::doShow() {
   auto Coverage = load();
   if (!Coverage)
     return 1;
@@ -1262,32 +1374,7 @@ int CodeCoverageTool::doShow(int argc, const char **argv,
   return 0;
 }
 
-int CodeCoverageTool::doReport(int argc, const char **argv,
-                               CommandLineParserType commandLineParser) {
-  cl::opt<bool> ShowFunctionSummaries(
-      "show-functions", cl::Optional, cl::init(false),
-      cl::desc("Show coverage summaries for each function"));
-
-  auto Err = commandLineParser(argc, argv);
-  if (Err)
-    return Err;
-
-  if (ViewOpts.Format == CoverageViewOptions::OutputFormat::HTML) {
-    error("HTML output for summary reports is not yet supported.");
-    return 1;
-  } else if (ViewOpts.Format == CoverageViewOptions::OutputFormat::Lcov) {
-    error("lcov format should be used with 'llvm-cov export'.");
-    return 1;
-  }
-
-  if (PGOFilename) {
-    sys::fs::file_status Status;
-    if (std::error_code EC = sys::fs::status(PGOFilename.value(), Status)) {
-      error("could not read profile data!" + EC.message(), PGOFilename.value());
-      return 1;
-    }
-  }
-
+int CodeCoverageTool::doReport(bool ShowFunctionSummaries) {
   auto Coverage = load();
   if (!Coverage)
     return 1;
@@ -1310,58 +1397,7 @@ int CodeCoverageTool::doReport(int argc, const char **argv,
   return 0;
 }
 
-int CodeCoverageTool::doExport(int argc, const char **argv,
-                               CommandLineParserType commandLineParser) {
-
-  cl::OptionCategory ExportCategory("Exporting options");
-
-  cl::opt<bool> SkipExpansions("skip-expansions", cl::Optional,
-                               cl::desc("Don't export expanded source regions"),
-                               cl::cat(ExportCategory));
-
-  cl::opt<bool> SkipFunctions("skip-functions", cl::Optional,
-                              cl::desc("Don't export per-function data"),
-                              cl::cat(ExportCategory));
-
-  cl::opt<bool> SkipBranches("skip-branches", cl::Optional,
-                              cl::desc("Don't export branch data (LCOV)"),
-                              cl::cat(ExportCategory));
-
-  cl::opt<bool> UnifyInstantiations("unify-instantiations", cl::Optional,
-                                    cl::desc("Unify function instantiations"),
-                                    cl::init(true), cl::cat(ExportCategory));
-
-  cl::opt<bool> ShowMCDCNonExecutedVectors(
-      "show-mcdc-non-executed-vectors", cl::Optional,
-      cl::desc("Include MC/DC test vectors that were not executed in the "
-               "export"),
-      cl::cat(ExportCategory));
-
-  auto Err = commandLineParser(argc, argv);
-  if (Err)
-    return Err;
-
-  ViewOpts.SkipExpansions = SkipExpansions;
-  ViewOpts.SkipFunctions = SkipFunctions;
-  ViewOpts.SkipBranches = SkipBranches;
-  ViewOpts.UnifyFunctionInstantiations = UnifyInstantiations;
-  ViewOpts.ShowMCDCNonExecutedVectors = ShowMCDCNonExecutedVectors;
-
-  if (ViewOpts.Format != CoverageViewOptions::OutputFormat::Text &&
-      ViewOpts.Format != CoverageViewOptions::OutputFormat::Lcov) {
-    error("coverage data can only be exported as textual JSON or an "
-          "lcov tracefile.");
-    return 1;
-  }
-
-  if (PGOFilename) {
-    sys::fs::file_status Status;
-    if (std::error_code EC = sys::fs::status(PGOFilename.value(), Status)) {
-      error("could not read profile data!" + EC.message(), PGOFilename.value());
-      return 1;
-    }
-  }
-
+int CodeCoverageTool::doExport() {
   auto Coverage = load();
   if (!Coverage) {
     error("could not load coverage information");

@@ -22,7 +22,8 @@
 #include "clang/ScalableStaticAnalysis/Tool/Utils.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -36,12 +37,6 @@
 using namespace llvm;
 using namespace clang::ssaf;
 
-namespace {
-
-//===----------------------------------------------------------------------===//
-// Summary Type
-//===----------------------------------------------------------------------===//
-
 enum class SummaryType {
   Auto,
   TU,
@@ -52,56 +47,103 @@ enum class SummaryType {
   WPA
 };
 
-//===----------------------------------------------------------------------===//
-// Command-Line Options
-//===----------------------------------------------------------------------===//
+llvm::clv2::OptionCategory SsafFormatCategory("clang-ssaf-format options");
 
-cl::OptionCategory SsafFormatCategory("clang-ssaf-format options");
+namespace {
 
-cl::list<std::string> LoadPlugins("load",
-                                  cl::desc("Load a plugin shared library"),
-                                  cl::value_desc("path"),
-                                  cl::cat(SsafFormatCategory));
+struct SsafFormatOptions {
+  std::vector<std::string> LoadPlugins;
+  SummaryType Type = SummaryType::Auto;
+  bool TypeSet = false;
+  std::string InputPath;
+  std::string OutputPath;
+  bool UseEncoding = false;
+  bool ListFormats = false;
+};
 
-// Defaults to 'auto', which inspects the file's self-describing 'type'
-// field and dispatches to the matching reader/writer. Explicit values
-// force the use of the corresponding kind-specific reader/writer.
-cl::opt<SummaryType> Type(
-    "type",
-    cl::desc("Summary type (defaults to 'auto', which uses the file's "
-             "self-describing 'type' field)"),
-    cl::values(clEnumValN(SummaryType::Auto, "auto",
-                          "Detect type from the file's 'type' field"),
-               clEnumValN(SummaryType::TU, "tu", "Translation unit summary"),
-               clEnumValN(SummaryType::LU, "lu", "Link unit summary"),
-               clEnumValN(SummaryType::StaticLibrary, "static-library",
-                          "Static library of translation unit summaries"),
-               clEnumValN(SummaryType::MultiArchStaticLibrary,
-                          "multi-arch-static-library",
-                          "Multi-architecture static library"),
-               clEnumValN(SummaryType::MultiArchSharedLibrary,
-                          "multi-arch-shared-library",
-                          "Multi-architecture shared library"),
-               clEnumValN(SummaryType::WPA, "wpa",
-                          "Whole-program analysis suite")),
-    cl::init(SummaryType::Auto), cl::cat(SsafFormatCategory));
+} // namespace
 
-cl::opt<std::string> InputPath(cl::Positional, cl::desc("<input file>"),
-                               cl::cat(SsafFormatCategory));
+// clang-ssaf-format uses initTool() which owns the parse, so we use
+// registerAsRuntime with a bridge callback.
 
-cl::opt<std::string> OutputPath("o", cl::desc("Output file path"),
-                                cl::value_desc("path"),
-                                cl::cat(SsafFormatCategory));
+inline constexpr llvm::clv2::ListOptionInfo<std::string> SFLoadOpt{
+    "load", "Load a plugin shared library", llvm::clv2::value_desc("path"),
+    llvm::clv2::cat(SsafFormatCategory)};
 
-cl::opt<bool> UseEncoding("encoding",
-                          cl::desc("Read and write summary encodings rather "
-                                   "than decoded summaries"),
-                          cl::cat(SsafFormatCategory));
+inline constexpr llvm::clv2::EnumVal<SummaryType> SFTypeVals[] = {
+    {"auto", SummaryType::Auto, "Detect type from the file's 'type' field"},
+    {"tu", SummaryType::TU, "Translation unit summary"},
+    {"lu", SummaryType::LU, "Link unit summary"},
+    {"static-library", SummaryType::StaticLibrary,
+     "Static library of translation unit summaries"},
+    {"multi-arch-static-library", SummaryType::MultiArchStaticLibrary,
+     "Multi-architecture static library"},
+    {"multi-arch-shared-library", SummaryType::MultiArchSharedLibrary,
+     "Multi-architecture shared library"},
+    {"wpa", SummaryType::WPA, "Whole-program analysis suite"},
+};
 
-cl::opt<bool> ListFormats("list",
-                          cl::desc("List registered serialization formats and "
-                                   "analyses, then exit"),
-                          cl::init(false), cl::cat(SsafFormatCategory));
+inline constexpr llvm::clv2::OptionInfo<SummaryType> SFTypeOpt{
+    "type", "Summary type (required unless --list is given)",
+    llvm::clv2::ValuesRef<SummaryType>(SFTypeVals),
+    llvm::clv2::cat(SsafFormatCategory)};
+
+inline constexpr llvm::clv2::OptionInfo<std::string> SFInputPathOpt{
+    "", "<input file>", llvm::clv2::Positional{},
+    llvm::clv2::cat(SsafFormatCategory)};
+
+inline constexpr llvm::clv2::OptionInfo<std::string> SFOutputPathOpt{
+    "o", "Output file path", llvm::clv2::value_desc("path"),
+    llvm::clv2::cat(SsafFormatCategory)};
+
+inline constexpr llvm::clv2::OptionInfo<bool> SFUseEncodingOpt{
+    "encoding",
+    "Read and write summary encodings rather "
+    "than decoded summaries",
+    llvm::clv2::cat(SsafFormatCategory)};
+
+inline constexpr llvm::clv2::OptionInfo<bool> SFListFormatsOpt{
+    "list",
+    "List registered serialization formats and "
+    "analyses, then exit",
+    llvm::clv2::cat(SsafFormatCategory)};
+
+inline constexpr llvm::clv2::OptionsRegistry<
+    &SFLoadOpt, &SFTypeOpt, &SFInputPathOpt, &SFOutputPathOpt,
+    &SFUseEncodingOpt, &SFListFormatsOpt>
+    SsafFormatOptsReg;
+
+static void
+applySsafFormatOpts(const decltype(SsafFormatOptsReg)::ParsedOptionsT &Opts,
+                    SsafFormatOptions &ToolOpts) {
+  ToolOpts.LoadPlugins = Opts.get<&SFLoadOpt>();
+  if (Opts.occurrences<&SFTypeOpt>() > 0) {
+    ToolOpts.Type = Opts.get<&SFTypeOpt>();
+    ToolOpts.TypeSet = true;
+  }
+  ToolOpts.InputPath = Opts.get<&SFInputPathOpt>();
+  ToolOpts.OutputPath = Opts.get<&SFOutputPathOpt>();
+  ToolOpts.UseEncoding = Opts.get<&SFUseEncodingOpt>();
+  ToolOpts.ListFormats = Opts.get<&SFListFormatsOpt>();
+}
+
+static void configureParser(clv2::OptionParser &P,
+                            SsafFormatOptions &ToolOpts) {
+  using ParsedT = decltype(SsafFormatOptsReg)::ParsedOptionsT;
+  auto *Storage = new ParsedT();
+  decltype(SsafFormatOptsReg)::applyDefaultsTo(*Storage);
+  std::vector<clv2::detail::OptionEntry> Entries;
+  std::vector<clv2::detail::AliasEntry> Aliases;
+  std::vector<clv2::detail::SubCommandSpec> SubSpecs;
+  decltype(SsafFormatOptsReg)::staticBuildInto(*Storage, Entries, Aliases,
+                                               SubSpecs);
+  for (auto &E : Entries)
+    P.addDynamicEntry(std::move(E));
+  clv2::registerDynamicPostParseCallback(
+      [Storage, &ToolOpts]() { applySsafFormatOpts(*Storage, ToolOpts); });
+}
+
+namespace {
 
 //===----------------------------------------------------------------------===//
 // Format Listing
@@ -241,23 +283,23 @@ struct FormatInput {
   std::optional<FormatFile> OutputFile;
 };
 
-FormatInput validateInput() {
-  assert(!ListFormats);
+FormatInput validateInput(const SsafFormatOptions &ToolOpts) {
+  assert(!ToolOpts.ListFormats);
 
   FormatInput FI;
 
   // Validate the input path.
   {
-    if (InputPath.empty()) {
+    if (ToolOpts.InputPath.empty()) {
       fail("no input file specified");
     }
 
-    FI.InputFile = FormatFile::fromInputPath(InputPath);
+    FI.InputFile = FormatFile::fromInputPath(ToolOpts.InputPath);
   }
 
   // Validate the output path.
-  if (!OutputPath.empty()) {
-    FI.OutputFile = FormatFile::fromOutputPath(OutputPath);
+  if (!ToolOpts.OutputPath.empty()) {
+    FI.OutputFile = FormatFile::fromOutputPath(ToolOpts.OutputPath);
   }
 
   return FI;
@@ -285,10 +327,10 @@ void run(const FormatInput &FI, ReadFn Read, WriteFn Write) {
   }
 }
 
-void convert(const FormatInput &FI) {
-  switch (Type) {
+void convert(const FormatInput &FI, const SsafFormatOptions &ToolOpts) {
+  switch (ToolOpts.Type) {
   case SummaryType::Auto:
-    if (UseEncoding) {
+    if (ToolOpts.UseEncoding) {
       run(FI, &SerializationFormat::readArtifactEncoding,
           &SerializationFormat::writeArtifactEncoding);
     } else {
@@ -297,7 +339,7 @@ void convert(const FormatInput &FI) {
     }
     return;
   case SummaryType::TU:
-    if (UseEncoding) {
+    if (ToolOpts.UseEncoding) {
       run(FI, &SerializationFormat::readTUSummaryEncoding,
           &SerializationFormat::writeTUSummaryEncoding);
     } else {
@@ -306,7 +348,7 @@ void convert(const FormatInput &FI) {
     }
     return;
   case SummaryType::LU:
-    if (UseEncoding) {
+    if (ToolOpts.UseEncoding) {
       run(FI, &SerializationFormat::readLUSummaryEncoding,
           &SerializationFormat::writeLUSummaryEncoding);
     } else {
@@ -353,15 +395,18 @@ int main(int argc, const char **argv) {
   llvm::StringRef ToolHeading = "SSAF Format";
 
   InitLLVM X(argc, argv);
-  initTool(argc, argv, "0.1", SsafFormatCategory, ToolHeading);
+  SsafFormatOptions ToolOpts;
+  initTool(
+      argc, argv, "0.1", SsafFormatCategory, ToolHeading,
+      [&ToolOpts](clv2::OptionParser &P) { configureParser(P, ToolOpts); });
 
-  loadPlugins(LoadPlugins);
+  loadPlugins(ToolOpts.LoadPlugins);
 
-  if (ListFormats) {
+  if (ToolOpts.ListFormats) {
     listFormats();
   } else {
-    FormatInput FI = validateInput();
-    convert(FI);
+    FormatInput FI = validateInput(ToolOpts);
+    convert(FI, ToolOpts);
   }
 
   return 0;

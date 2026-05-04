@@ -40,9 +40,10 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
@@ -53,23 +54,10 @@
 #include <utility>
 
 using namespace toy;
-namespace cl = llvm::cl;
-
-static cl::opt<std::string> inputFilename(cl::Positional,
-                                          cl::desc("<input toy file>"),
-                                          cl::init("-"),
-                                          cl::value_desc("filename"));
+using namespace llvm;
 
 namespace {
 enum InputType { Toy, MLIR };
-} // namespace
-static cl::opt<enum InputType> inputType(
-    "x", cl::init(Toy), cl::desc("Decided the kind of output desired"),
-    cl::values(clEnumValN(Toy, "toy", "load the input file as a Toy source.")),
-    cl::values(clEnumValN(MLIR, "mlir",
-                          "load the input file as an MLIR file")));
-
-namespace {
 enum Action {
   None,
   DumpAST,
@@ -80,20 +68,42 @@ enum Action {
   RunJIT
 };
 } // namespace
-static cl::opt<enum Action> emitAction(
-    "emit", cl::desc("Select the kind of output desired"),
-    cl::values(clEnumValN(DumpAST, "ast", "output the AST dump")),
-    cl::values(clEnumValN(DumpMLIR, "mlir", "output the MLIR dump")),
-    cl::values(clEnumValN(DumpMLIRAffine, "mlir-affine",
-                          "output the MLIR dump after affine lowering")),
-    cl::values(clEnumValN(DumpMLIRLLVM, "mlir-llvm",
-                          "output the MLIR dump after llvm lowering")),
-    cl::values(clEnumValN(DumpLLVMIR, "llvm", "output the LLVM IR dump")),
-    cl::values(
-        clEnumValN(RunJIT, "jit",
-                   "JIT the code and run it by invoking the main function")));
 
-static cl::opt<bool> enableOpt("opt", cl::desc("Enable optimizations"));
+static constexpr clv2::OptionInfo<std::string> inputFilenameOpt{
+    "", "<input toy file>", clv2::Positional{}, clv2::Init{"-"}};
+
+static constexpr clv2::EnumVal<InputType> inputTypeVals[] = {
+    {"toy", Toy, "load the input file as a Toy source."},
+    {"mlir", MLIR, "load the input file as an MLIR file"},
+};
+static constexpr auto inputTypeOpt = clv2::makeEnumOption<InputType>(
+    "x", "Decided the kind of output desired", inputTypeVals);
+
+static constexpr clv2::EnumVal<Action> emitActionVals[] = {
+    {"ast", DumpAST, "output the AST dump"},
+    {"mlir", DumpMLIR, "output the MLIR dump"},
+    {"mlir-affine", DumpMLIRAffine,
+     "output the MLIR dump after affine lowering"},
+    {"mlir-llvm", DumpMLIRLLVM, "output the MLIR dump after llvm lowering"},
+    {"llvm", DumpLLVMIR, "output the LLVM IR dump"},
+    {"jit", RunJIT, "JIT the code and run it by invoking the main function"},
+};
+static constexpr auto emitActionOpt = clv2::makeEnumOption<Action>(
+    "emit", "Select the kind of output desired", emitActionVals);
+
+static constexpr clv2::OptionInfo<bool> enableOptOpt{"opt",
+                                                     "Enable optimizations"};
+
+static constexpr clv2::OptionsRegistry<&inputFilenameOpt, &inputTypeOpt,
+                                       &emitActionOpt, &enableOptOpt>
+    ToyReg;
+
+struct ToyOptions {
+  std::string InputFilename;
+  InputType InputTypeVal;
+  Action EmitAction;
+  bool EnableOpt = false;
+};
 
 /// Returns a Toy AST resulting from parsing the file or a nullptr on error.
 static std::unique_ptr<toy::ModuleAST>
@@ -111,11 +121,12 @@ parseInputFile(llvm::StringRef filename) {
 }
 
 static int loadMLIR(mlir::MLIRContext &context,
-                    mlir::OwningOpRef<mlir::ModuleOp> &module) {
+                    mlir::OwningOpRef<mlir::ModuleOp> &module,
+                    const ToyOptions &Opts) {
   // Handle '.toy' input to the compiler.
-  if (inputType != InputType::MLIR &&
-      !llvm::StringRef(inputFilename).ends_with(".mlir")) {
-    auto moduleAST = parseInputFile(inputFilename);
+  if (Opts.InputTypeVal != InputType::MLIR &&
+      !llvm::StringRef(Opts.InputFilename).ends_with(".mlir")) {
+    auto moduleAST = parseInputFile(Opts.InputFilename);
     if (!moduleAST)
       return 6;
     module = mlirGen(context, *moduleAST);
@@ -124,7 +135,7 @@ static int loadMLIR(mlir::MLIRContext &context,
 
   // Otherwise, the input is '.mlir'.
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
-      llvm::MemoryBuffer::getFileOrSTDIN(inputFilename);
+      llvm::MemoryBuffer::getFileOrSTDIN(Opts.InputFilename);
   if (std::error_code ec = fileOrErr.getError()) {
     llvm::errs() << "Could not open input file: " << ec.message() << "\n";
     return -1;
@@ -135,15 +146,16 @@ static int loadMLIR(mlir::MLIRContext &context,
   sourceMgr.AddNewSourceBuffer(std::move(*fileOrErr), llvm::SMLoc());
   module = mlir::parseSourceFile<mlir::ModuleOp>(sourceMgr, &context);
   if (!module) {
-    llvm::errs() << "Error can't load file " << inputFilename << "\n";
+    llvm::errs() << "Error can't load file " << Opts.InputFilename << "\n";
     return 3;
   }
   return 0;
 }
 
 static int loadAndProcessMLIR(mlir::MLIRContext &context,
-                              mlir::OwningOpRef<mlir::ModuleOp> &module) {
-  if (int error = loadMLIR(context, module))
+                              mlir::OwningOpRef<mlir::ModuleOp> &module,
+                              const ToyOptions &Opts) {
+  if (int error = loadMLIR(context, module, Opts))
     return error;
 
   mlir::PassManager pm(module.get()->getName());
@@ -152,10 +164,10 @@ static int loadAndProcessMLIR(mlir::MLIRContext &context,
     return 4;
 
   // Check to see what granularity of MLIR we are compiling to.
-  bool isLoweringToAffine = emitAction >= Action::DumpMLIRAffine;
-  bool isLoweringToLLVM = emitAction >= Action::DumpMLIRLLVM;
+  bool isLoweringToAffine = Opts.EmitAction >= Action::DumpMLIRAffine;
+  bool isLoweringToLLVM = Opts.EmitAction >= Action::DumpMLIRLLVM;
 
-  if (enableOpt || isLoweringToAffine) {
+  if (Opts.EnableOpt || isLoweringToAffine) {
     // Inline all functions into main and then delete them.
     pm.addPass(mlir::createInlinerPass());
 
@@ -177,7 +189,7 @@ static int loadAndProcessMLIR(mlir::MLIRContext &context,
     optPM.addPass(mlir::createCSEPass());
 
     // Add optimizations if enabled.
-    if (enableOpt) {
+    if (Opts.EnableOpt) {
       optPM.addPass(mlir::affine::createLoopFusionPass());
       optPM.addPass(mlir::affine::createAffineScalarReplacementPass());
     }
@@ -197,13 +209,13 @@ static int loadAndProcessMLIR(mlir::MLIRContext &context,
   return 0;
 }
 
-static int dumpAST() {
-  if (inputType == InputType::MLIR) {
+static int dumpAST(const ToyOptions &Opts) {
+  if (Opts.InputTypeVal == InputType::MLIR) {
     llvm::errs() << "Can't dump a Toy AST when the input is MLIR\n";
     return 5;
   }
 
-  auto moduleAST = parseInputFile(inputFilename);
+  auto moduleAST = parseInputFile(Opts.InputFilename);
   if (!moduleAST)
     return 1;
 
@@ -211,13 +223,13 @@ static int dumpAST() {
   return 0;
 }
 
-static int dumpLLVMIR(mlir::ModuleOp module) {
+static int dumpLLVMIR(mlir::ModuleOp module, const ToyOptions &Opts) {
   // Register the translation to LLVM IR with the MLIR context.
   mlir::registerBuiltinDialectTranslation(*module->getContext());
   mlir::registerLLVMDialectTranslation(*module->getContext());
 
   // Convert the module to LLVM IR in a new LLVM IR context.
-  llvm::LLVMContext llvmContext;
+  llvm::LLVMContext llvmContext{llvm::clv2::defaultOptionsContext()};
   auto llvmModule = mlir::translateModuleToLLVMIR(module, llvmContext);
   if (!llvmModule) {
     llvm::errs() << "Failed to emit LLVM IR\n";
@@ -245,7 +257,7 @@ static int dumpLLVMIR(mlir::ModuleOp module) {
 
   /// Optionally run an optimization pipeline over the llvm module.
   auto optPipeline = mlir::makeOptimizingTransformer(
-      /*optLevel=*/enableOpt ? 3 : 0, /*sizeLevel=*/0,
+      /*optLevel=*/Opts.EnableOpt ? 3 : 0, /*sizeLevel=*/0,
       /*targetMachine=*/nullptr);
   if (auto err = optPipeline(llvmModule.get())) {
     llvm::errs() << "Failed to optimize LLVM IR " << err << "\n";
@@ -255,7 +267,7 @@ static int dumpLLVMIR(mlir::ModuleOp module) {
   return 0;
 }
 
-static int runJit(mlir::ModuleOp module) {
+static int runJit(mlir::ModuleOp module, const ToyOptions &Opts) {
   // Initialize LLVM targets.
   llvm::InitializeNativeTarget();
   llvm::InitializeNativeTargetAsmPrinter();
@@ -267,7 +279,7 @@ static int runJit(mlir::ModuleOp module) {
 
   // An optimization pipeline to use within the execution engine.
   auto optPipeline = mlir::makeOptimizingTransformer(
-      /*optLevel=*/enableOpt ? 3 : 0, /*sizeLevel=*/0,
+      /*optLevel=*/Opts.EnableOpt ? 3 : 0, /*sizeLevel=*/0,
       /*targetMachine=*/nullptr);
 
   // Create an MLIR execution engine. The execution engine eagerly JIT-compiles
@@ -292,12 +304,22 @@ int main(int argc, char **argv) {
   // Register any command line options.
   mlir::registerAsmPrinterCLOptions();
   mlir::registerMLIRContextCLOptions();
-  mlir::registerPassManagerCLOptions();
 
-  cl::ParseCommandLineOptions(argc, argv, "toy compiler\n");
+  llvm::clv2::OptionParser P;
+  P.add<&ToyReg>();
+  RegisterAllLLVMOptions(P);
+  mlir::registerPassManagerCLOptions(P);
+  auto OptsCtx = P.parse(argc, argv, "toy compiler\n");
+  auto *View = OptsCtx->getViewPtr<&ToyReg>();
 
-  if (emitAction == Action::DumpAST)
-    return dumpAST();
+  ToyOptions Opts;
+  Opts.InputFilename = std::string(View->get<&inputFilenameOpt>());
+  Opts.InputTypeVal = View->get<&inputTypeOpt>();
+  Opts.EmitAction = View->get<&emitActionOpt>();
+  Opts.EnableOpt = View->get<&enableOptOpt>();
+
+  if (Opts.EmitAction == Action::DumpAST)
+    return dumpAST(Opts);
 
   // If we aren't dumping the AST, then we are compiling with/to MLIR.
   mlir::DialectRegistry registry;
@@ -309,23 +331,23 @@ int main(int argc, char **argv) {
   context.getOrLoadDialect<mlir::toy::ToyDialect>();
 
   mlir::OwningOpRef<mlir::ModuleOp> module;
-  if (int error = loadAndProcessMLIR(context, module))
+  if (int error = loadAndProcessMLIR(context, module, Opts))
     return error;
 
   // If we aren't exporting to non-mlir, then we are done.
-  bool isOutputingMLIR = emitAction <= Action::DumpMLIRLLVM;
+  bool isOutputingMLIR = Opts.EmitAction <= Action::DumpMLIRLLVM;
   if (isOutputingMLIR) {
     module->dump();
     return 0;
   }
 
   // Check to see if we are compiling to LLVM IR.
-  if (emitAction == Action::DumpLLVMIR)
-    return dumpLLVMIR(*module);
+  if (Opts.EmitAction == Action::DumpLLVMIR)
+    return dumpLLVMIR(*module, Opts);
 
   // Otherwise, we must be running the jit.
-  if (emitAction == Action::RunJIT)
-    return runJit(*module);
+  if (Opts.EmitAction == Action::RunJIT)
+    return runJit(*module, Opts);
 
   llvm::errs() << "No action specified (parsing only?), use -emit=<action>\n";
   return -1;

@@ -42,7 +42,7 @@ TEST(DroppedVariableStatsIR, BothDeleted) {
   PassInstrumentationCallbacks PIC;
   PassInstrumentation PI(&PIC);
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *IR =
       R"(
@@ -96,7 +96,7 @@ TEST(DroppedVariableStatsIR, DbgValLost) {
   PassInstrumentationCallbacks PIC;
   PassInstrumentation PI(&PIC);
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *IR =
       R"(
@@ -149,7 +149,7 @@ TEST(DroppedVariableStatsIR, UnrelatedScopes) {
   PassInstrumentationCallbacks PIC;
   PassInstrumentation PI(&PIC);
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *IR =
       R"(
@@ -203,7 +203,7 @@ TEST(DroppedVariableStatsIR, ChildScopes) {
   PassInstrumentationCallbacks PIC;
   PassInstrumentation PI(&PIC);
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *IR =
       R"(
@@ -258,7 +258,7 @@ TEST(DroppedVariableStatsIR, InlinedAt) {
   PassInstrumentationCallbacks PIC;
   PassInstrumentation PI(&PIC);
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *IR =
       R"(; Function Attrs: mustprogress nounwind ssp uwtable(sync)
@@ -313,7 +313,7 @@ TEST(DroppedVariableStatsIR, InlinedAtShared) {
   PassInstrumentationCallbacks PIC;
   PassInstrumentation PI(&PIC);
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *IR =
       R"(; Function Attrs: mustprogress nounwind ssp uwtable(sync)
@@ -368,7 +368,7 @@ TEST(DroppedVariableStatsIR, InlinedAtChild) {
   PassInstrumentationCallbacks PIC;
   PassInstrumentation PI(&PIC);
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *IR =
       R"(; Function Attrs: mustprogress nounwind ssp uwtable(sync)

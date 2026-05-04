@@ -13,6 +13,7 @@
 #include "llvm/MC/MCInstrItineraries.h"
 #include "llvm/MC/MCSchedule.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/SubtargetFeature.h"
 #include <algorithm>
@@ -253,6 +254,10 @@ void MCSubtargetInfo::setDefaultFeatures(StringRef CPU, StringRef TuneCPU,
   FeatureBits =
       getFeatures(*this, CPU, TuneCPU, FS, ProcNames, ProcDesc, ProcFeatures);
   FeatureString = std::string(FS);
+}
+
+const clv2::OptionsContext &MCSubtargetInfo::getOptionsContext() const {
+  return OptsCtx_ ? *OptsCtx_ : clv2::defaultOptionsContext();
 }
 
 MCSubtargetInfo::MCSubtargetInfo(

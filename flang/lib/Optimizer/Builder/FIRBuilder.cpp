@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "flang/Optimizer/Builder/FIRBuilder.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Optimizer/Analysis/AliasAnalysis.h"
 #include "flang/Optimizer/Analysis/ArraySectionAnalyzer.h"
 #include "flang/Optimizer/Builder/BoxValue.h"
@@ -33,17 +34,10 @@
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MD5.h"
+#include "llvm/Support/OptionsContext.h"
 #include <optional>
-
-static llvm::cl::opt<std::size_t>
-    nameLengthHashSize("length-to-hash-string-literal",
-                       llvm::cl::desc("string literals that exceed this length"
-                                      " will use a hash value as their symbol "
-                                      "name"),
-                       llvm::cl::init(32));
 
 mlir::func::FuncOp
 fir::FirOpBuilder::createFunction(mlir::Location loc, mlir::ModuleOp module,
@@ -1180,10 +1174,13 @@ fir::factory::getTypeParams(mlir::Location loc, fir::FirOpBuilder &builder,
       [&](const auto &) { return fir::getTypeParams(exv); });
 }
 
-std::string fir::factory::uniqueCGIdent(llvm::StringRef prefix,
-                                        llvm::StringRef name) {
+std::string
+fir::factory::uniqueCGIdent(llvm::StringRef prefix, llvm::StringRef name,
+                            const llvm::clv2::OptionsContext &optsCtx) {
   // For "long" identifiers use a hash value
-  if (name.size() > nameLengthHashSize) {
+  if (name.size() >
+      llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_LengthToHashStrLit>(
+          optsCtx)) {
     llvm::MD5 hash;
     hash.update(name);
     llvm::MD5::MD5Result result;
@@ -1221,7 +1218,8 @@ mlir::Value fir::factory::locationToLineNo(fir::FirOpBuilder &builder,
 fir::ExtendedValue fir::factory::createStringLiteral(fir::FirOpBuilder &builder,
                                                      mlir::Location loc,
                                                      llvm::StringRef str) {
-  std::string globalName = fir::factory::uniqueCGIdent("cl", str);
+  std::string globalName = fir::factory::uniqueCGIdent(
+      "cl", str, builder.getContext()->getOptionsContext());
   auto type = fir::CharacterType::get(builder.getContext(), 1, str.size());
   auto global = builder.getNamedGlobal(globalName);
   if (!global)

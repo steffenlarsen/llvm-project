@@ -1,6 +1,7 @@
 add_llvm_component_library(LLVMAMDGPUUtils
   AMDGPUAsmUtils.cpp
   AMDGPUBaseInfo.cpp
+  AMDGPUOptions.cpp
   AMDGPUDelayedMCExpr.cpp
   AMDGPUPALMetadata.cpp
   AMDKernelCodeTUtils.cpp

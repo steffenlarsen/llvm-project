@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CAS/OnDiskCASLogger.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/LineIterator.h"
@@ -188,7 +188,12 @@ TEST_F(OnDiskCASLoggerTest, MultiThread) {
   ASSERT_THAT_ERROR(checkLog(Dir.path()), Succeeded());
 }
 
-static cl::opt<std::string> CASLogDir("cas-log-dir");
+static std::string CASLogDir;
+static unsigned CASLogDirCount = 0;
+static constexpr clv2::OptionInfo<std::string> OI_CASLogDir{"cas-log-dir", ""};
+static const int CASLogDirInit = ([] {
+  clv2::registerDynamicEntry(clv2::makeEntry<&OI_CASLogDir>(CASLogDir, CASLogDirCount));
+}(), 0);
 // From TestMain.cpp.
 extern const char *TestMainArgv0;
 

@@ -14,7 +14,9 @@
 #ifndef LLVM_MC_MCTARGETOPTIONSCOMMANDFLAGS_H
 #define LLVM_MC_MCTARGETOPTIONSCOMMANDFLAGS_H
 
+#include "llvm/MC/MCTargetOptions.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
 #include <optional>
 #include <string>
 
@@ -27,50 +29,73 @@ class StringRef;
 
 namespace mc {
 
-LLVM_ABI bool getRelaxAll();
-LLVM_ABI std::optional<bool> getExplicitRelaxAll();
+LLVM_ABI bool getRelaxAll(const clv2::OptionsContext &Ctx);
+LLVM_ABI std::optional<bool>
+getExplicitRelaxAll(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI bool getIncrementalLinkerCompatible();
+LLVM_ABI bool getIncrementalLinkerCompatible(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI bool getFDPIC();
+LLVM_ABI bool getFDPIC(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI int getDwarfVersion();
+LLVM_ABI int getDwarfVersion(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI bool getDwarf64();
+LLVM_ABI bool getDwarf64(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI EmitDwarfUnwindType getEmitDwarfUnwind();
+LLVM_ABI EmitDwarfUnwindType
+getEmitDwarfUnwind(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI bool getEmitCompactUnwindNonCanonical();
+LLVM_ABI bool getEmitCompactUnwindNonCanonical(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI bool getEmitSFrameUnwind();
+LLVM_ABI bool getEmitSFrameUnwind(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI bool getShowMCInst();
+LLVM_ABI bool getShowMCInst(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI bool getFatalWarnings();
+LLVM_ABI bool getFatalWarnings(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI bool getNoWarn();
+LLVM_ABI bool getNoWarn(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI bool getNoDeprecatedWarn();
+LLVM_ABI bool getNoDeprecatedWarn(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI bool getNoTypeCheck();
+LLVM_ABI bool getNoTypeCheck(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI bool getSaveTempLabels();
+LLVM_ABI bool getSaveTempLabels(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI bool getCrel();
+LLVM_ABI bool getCrel(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI bool getImplicitMapSyms();
+LLVM_ABI bool getImplicitMapSyms(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI bool getX86RelaxRelocations();
+LLVM_ABI bool getX86RelaxRelocations(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI bool getX86Sse2Avx();
+LLVM_ABI bool getX86Sse2Avx(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI RelocSectionSymType getRelocSectionSym();
+LLVM_ABI RelocSectionSymType
+getRelocSectionSym(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI bool getLargeEHEncoding();
+LLVM_ABI std::string getABIName(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI StringRef getABIName();
+LLVM_ABI std::string getAsSecureLogFile(const clv2::OptionsContext &Ctx);
 
-LLVM_ABI StringRef getAsSecureLogFile();
+LLVM_ABI std::optional<bool>
+getDwarfExtendedLoc(const clv2::OptionsContext &Ctx);
+
+LLVM_ABI std::optional<bool>
+getUseLEB128Directives(const clv2::OptionsContext &Ctx);
+
+LLVM_ABI bool getLFIEnableRewriter(const clv2::OptionsContext &Ctx);
+
+LLVM_ABI unsigned getAsmMacroMaxNestingDepth(const clv2::OptionsContext &Ctx);
+
+LLVM_ABI bool getLargeEHEncoding(const clv2::OptionsContext &Ctx);
+
+} // namespace mc
+} // namespace llvm
+
+#include "llvm/MC/MCOptionsOptInfos.h"
+
+namespace llvm::mc {
+
+/// The parsed-options view type for the MC library registry.
+using ParsedOpts = decltype(clv2::MCOptsReg)::ParsedOptionsT;
 
 /// Create this object with static storage to register mc-related command
 /// line options.
@@ -78,10 +103,11 @@ struct RegisterMCTargetOptionsFlags {
   LLVM_ABI RegisterMCTargetOptionsFlags();
 };
 
-LLVM_ABI MCTargetOptions InitMCTargetOptionsFromFlags();
+LLVM_ABI MCTargetOptions
+InitMCTargetOptionsFromFlags(const clv2::OptionsContext &OptsCtx);
 
-} // namespace mc
+/// Self-register MCOptsReg for runtime option parsing.
 
-} // namespace llvm
+} // namespace llvm::mc
 
 #endif

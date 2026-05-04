@@ -43,6 +43,7 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -74,7 +75,16 @@ public:
 class AMDGPUUnifyDivergentExitNodesLegacy : public FunctionPass {
 public:
   static char ID;
-  AMDGPUUnifyDivergentExitNodesLegacy() : FunctionPass(ID) {}
+  // The default is required: the legacy pass registry instantiates this pass
+  // by ID with no arguments.  The pass manager supplies the real context
+  // before getAnalysisUsage() runs.
+  AMDGPUUnifyDivergentExitNodesLegacy(
+      const clv2::OptionsContext &Ctx = clv2::defaultOptionsContext())
+      : FunctionPass(ID) {
+    // Seed the inherited context; the pass manager overrides it with its own
+    // before getAnalysisUsage() runs, when it has one.
+    setOptionsContext(Ctx);
+  }
   void getAnalysisUsage(AnalysisUsage &AU) const override;
   bool runOnFunction(Function &F) override;
 };
@@ -84,6 +94,11 @@ char AMDGPUUnifyDivergentExitNodesLegacy::ID = 0;
 
 char &llvm::AMDGPUUnifyDivergentExitNodesID =
     AMDGPUUnifyDivergentExitNodesLegacy::ID;
+
+FunctionPass *
+llvm::createAMDGPUUnifyDivergentExitNodesPass(const clv2::OptionsContext &Ctx) {
+  return new AMDGPUUnifyDivergentExitNodesLegacy(Ctx);
+}
 
 INITIALIZE_PASS_BEGIN(AMDGPUUnifyDivergentExitNodesLegacy, DEBUG_TYPE,
                       "Unify divergent function exit nodes", false, false)
@@ -95,20 +110,15 @@ INITIALIZE_PASS_END(AMDGPUUnifyDivergentExitNodesLegacy, DEBUG_TYPE,
 
 void AMDGPUUnifyDivergentExitNodesLegacy::getAnalysisUsage(
     AnalysisUsage &AU) const {
-  if (RequireAndPreserveDomTree)
+  if (getRequireAndPreserveDomTree(getOptionsContext()))
     AU.addRequired<DominatorTreeWrapperPass>();
-
   AU.addRequired<PostDominatorTreeWrapperPass>();
-
   AU.addRequired<UniformityInfoWrapperPass>();
-
-  if (RequireAndPreserveDomTree) {
-    AU.addPreserved<DominatorTreeWrapperPass>();
-    // FIXME: preserve PostDominatorTreeWrapperPass
-  }
 
   // We preserve the non-critical-edgeness property
   AU.addPreservedID(BreakCriticalEdgesID);
+  if (getRequireAndPreserveDomTree(getOptionsContext()))
+    AU.addPreserved<DominatorTreeWrapperPass>();
 
   FunctionPass::getAnalysisUsage(AU);
 
@@ -149,8 +159,8 @@ BasicBlock *AMDGPUUnifyDivergentExitNodesImpl::unifyReturnBlockSet(
     B.CreateRetVoid();
   } else {
     // If the function doesn't return void... add a PHI node to the block...
-    PN = B.CreatePHI(F.getReturnType(), ReturningBlocks.size(),
-                     "UnifiedRetVal");
+    PN =
+        B.CreatePHI(F.getReturnType(), ReturningBlocks.size(), "UnifiedRetVal");
     B.CreateRet(PN);
   }
 
@@ -170,13 +180,13 @@ BasicBlock *AMDGPUUnifyDivergentExitNodesImpl::unifyReturnBlockSet(
     Updates.emplace_back(DominatorTree::Insert, BB, NewRetBlock);
   }
 
-  if (RequireAndPreserveDomTree)
+  if (DTU.hasDomTree())
     DTU.applyUpdates(Updates);
   Updates.clear();
 
   for (BasicBlock *BB : ReturningBlocks) {
     // Cleanup possible branch to unconditional branch to the return.
-    simplifyCFG(BB, *TTI, RequireAndPreserveDomTree ? &DTU : nullptr,
+    simplifyCFG(BB, *TTI, DTU.hasDomTree() ? &DTU : nullptr,
                 SimplifyCFGOptions().bonusInstThreshold(2));
   }
 
@@ -290,8 +300,8 @@ bool AMDGPUUnifyDivergentExitNodesImpl::run(Function &F, DominatorTree *DT,
     if (UnreachableBlocks.size() == 1) {
       UnreachableBlock = UnreachableBlocks.front();
     } else {
-      UnreachableBlock = BasicBlock::Create(F.getContext(),
-                                            "UnifiedUnreachableBlock", &F);
+      UnreachableBlock =
+          BasicBlock::Create(F.getContext(), "UnifiedUnreachableBlock", &F);
       new UnreachableInst(F.getContext(), UnreachableBlock);
 
       Updates.reserve(Updates.size() + UnreachableBlocks.size());
@@ -331,7 +341,7 @@ bool AMDGPUUnifyDivergentExitNodesImpl::run(Function &F, DominatorTree *DT,
 
   // FIXME: add PDT here once simplifycfg is ready.
   DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Eager);
-  if (RequireAndPreserveDomTree)
+  if (DTU.hasDomTree())
     DTU.applyUpdates(Updates);
   Updates.clear();
 
@@ -348,7 +358,7 @@ bool AMDGPUUnifyDivergentExitNodesImpl::run(Function &F, DominatorTree *DT,
 
 bool AMDGPUUnifyDivergentExitNodesLegacy::runOnFunction(Function &F) {
   DominatorTree *DT = nullptr;
-  if (RequireAndPreserveDomTree)
+  if (getRequireAndPreserveDomTree(getOptionsContext()))
     DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   const auto &PDT =
       getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
@@ -362,7 +372,7 @@ PreservedAnalyses
 AMDGPUUnifyDivergentExitNodesPass::run(Function &F,
                                        FunctionAnalysisManager &AM) {
   DominatorTree *DT = nullptr;
-  if (RequireAndPreserveDomTree)
+  if (getRequireAndPreserveDomTree(F.getContext().getOptionsContext()))
     DT = &AM.getResult<DominatorTreeAnalysis>(F);
 
   const auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);

@@ -1,5 +1,6 @@
 
 #include "polly/Support/SCEVValidator.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopDetection.h"
 #include "llvm/Analysis/RegionInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
@@ -125,11 +126,17 @@ private:
   Loop *Scope;
   ScalarEvolution &SE;
   InvariantLoadsSetTy *ILS;
+  bool AllowUnsignedOps = true;
 
 public:
   SCEVValidator(const Region *R, Loop *Scope, ScalarEvolution &SE,
                 InvariantLoadsSetTy *ILS)
-      : R(R), Scope(Scope), SE(SE), ILS(ILS) {}
+      : R(R), Scope(Scope), SE(SE), ILS(ILS) {
+    if (auto *Opts = polly_opts::getPollyOpts(
+            R->getEntry()->getParent()->getContext().getOptionsContext()))
+      AllowUnsignedOps =
+          Opts->get<&llvm::clv2::POLLY_AllowUnsignedOperations>();
+  }
 
   ValidatorResult visitConstant(const SCEVConstant *Constant) {
     return ValidatorResult(SCEVType::INT);
@@ -148,7 +155,7 @@ public:
 
     // If unsigned operations are allowed return the operand, otherwise
     // check if we can model the expression without unsigned assumptions.
-    if (PollyAllowUnsignedOperations || Type == SCEVType::INVALID)
+    if (AllowUnsignedOps || Type == SCEVType::INVALID)
       return Op;
 
     if (Type == SCEVType::IV)
@@ -400,7 +407,7 @@ public:
   }
 
   ValidatorResult visitUDivExpr(const SCEVUDivExpr *Expr) {
-    if (!PollyAllowUnsignedOperations)
+    if (!AllowUnsignedOps)
       return ValidatorResult(SCEVType::INVALID);
 
     const SCEV *Dividend = Expr->getLHS();

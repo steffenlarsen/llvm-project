@@ -32,6 +32,7 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/MemoryBufferRef.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/WithColor.h"
@@ -48,20 +49,6 @@ using namespace llvm;
 ReducerWorkItem::ReducerWorkItem() = default;
 ReducerWorkItem::~ReducerWorkItem() = default;
 
-extern cl::OptionCategory LLVMReduceOptions;
-static cl::opt<std::string> TargetTriple("mtriple",
-                                         cl::desc("Set the target triple"),
-                                         cl::cat(LLVMReduceOptions));
-static cl::opt<bool> PrintInvalidMachineReductions(
-    "print-invalid-reduction-machine-verifier-errors",
-    cl::desc(
-        "Print machine verifier errors on invalid reduction attempts triple"),
-    cl::cat(LLVMReduceOptions));
-
-static cl::opt<bool> TmpFilesAsBitcode(
-    "write-tmp-files-as-bitcode",
-    cl::desc("Always write temporary files as bitcode instead of textual IR"),
-    cl::init(false), cl::cat(LLVMReduceOptions));
 
 static SaveRestorePoints constructSaveRestorePoints(
     const SaveRestorePoints &SRPoints,
@@ -461,16 +448,18 @@ bool ReducerWorkItem::verify(raw_fd_ostream *OS) const {
   if (!MMI)
     return false;
 
+  const bool PrintErrors = Config && Config->PrintInvalidMachineReductions;
+
   for (const Function &F : getModule()) {
     if (const MachineFunction *MF = MMI->getMachineFunction(F)) {
       // With the current state of quality, most reduction attempts fail the
       // machine verifier. Avoid spamming large function dumps on nearly every
       // attempt until the situation is better.
       if (!MF->verify(nullptr, "",
-                      /*OS=*/PrintInvalidMachineReductions ? &errs() : nullptr,
+                      /*OS=*/PrintErrors ? &errs() : nullptr,
                       /*AbortOnError=*/false)) {
 
-        if (!PrintInvalidMachineReductions) {
+        if (!PrintErrors) {
           WithColor::warning(errs())
               << "reduction attempt on function '" << MF->getName()
               << "' failed machine verifier (debug with "
@@ -485,7 +474,8 @@ bool ReducerWorkItem::verify(raw_fd_ostream *OS) const {
 }
 
 bool ReducerWorkItem::isReduced(const TestRunner &Test) const {
-  const bool UseBitcode = Test.inputIsBitcode() || TmpFilesAsBitcode;
+  const bool UseBitcode =
+      Test.inputIsBitcode() || getConfig().TmpFilesAsBitcode;
 
   SmallString<128> CurrentFilepath;
 
@@ -520,6 +510,7 @@ bool ReducerWorkItem::isReduced(const TestRunner &Test) const {
 std::unique_ptr<ReducerWorkItem>
 ReducerWorkItem::clone(const TargetMachine *TM) const {
   auto CloneMMM = std::make_unique<ReducerWorkItem>();
+  CloneMMM->Config = Config;
   if (TM) {
     // We're assuming the Module IR contents are always unchanged by MIR
     // reductions, and can share it as a constant.
@@ -789,7 +780,7 @@ void ReducerWorkItem::writeBitcode(raw_ostream &OutStream) const {
   const bool ShouldPreserveUseListOrder = true;
 
   if (LTOInfo && LTOInfo->IsThinLTO && LTOInfo->EnableSplitLTOUnit) {
-    PassBuilder PB;
+    PassBuilder PB(llvm::clv2::defaultOptionsContext());
     LoopAnalysisManager LAM;
     FunctionAnalysisManager FAM;
     CGSCCAnalysisManager CGAM;
@@ -815,10 +806,9 @@ void ReducerWorkItem::writeBitcode(raw_ostream &OutStream) const {
   }
 }
 
-std::pair<std::unique_ptr<ReducerWorkItem>, bool>
-llvm::parseReducerWorkItem(StringRef ToolName, StringRef Filename,
-                           LLVMContext &Ctxt,
-                           std::unique_ptr<TargetMachine> &TM, bool IsMIR) {
+std::pair<std::unique_ptr<ReducerWorkItem>, bool> llvm::parseReducerWorkItem(
+    StringRef ToolName, StringRef Filename, LLVMContext &Ctxt,
+    std::unique_ptr<TargetMachine> &TM, bool IsMIR, StringRef TargetTriple) {
   bool IsBitcode = false;
   Triple TheTriple;
 
@@ -846,7 +836,8 @@ llvm::parseReducerWorkItem(StringRef ToolName, StringRef Filename,
       if (TheTriple.getTriple().empty())
         TheTriple.setTriple(sys::getDefaultTargetTriple());
       ExitOnError ExitOnErr(std::string(ToolName) + ": error: ");
-      TM = ExitOnErr(codegen::createTargetMachineForTriple(TheTriple));
+      TM = ExitOnErr(codegen::createTargetMachineForTriple(
+          TheTriple, Ctxt.getOptionsContext()));
 
       return TM->createDataLayout().getStringRepresentation();
     };

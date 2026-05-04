@@ -22,7 +22,8 @@
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/GlobalStatus.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
@@ -30,20 +31,28 @@ using namespace llvm;
 
 #define DEBUG_TYPE "elim-avail-extern"
 
-static cl::opt<bool> ConvertToLocal(
-    "avail-extern-to-local", cl::Hidden,
-    cl::desc("Convert available_externally into locals, renaming them "
-             "to avoid link-time clashes."));
-
 // This option was originally introduced to correctly support the lowering of
 // LDS variables for AMDGPU when ThinLTO is enabled. It can be utilized for
 // other purposes, but make sure it is safe to do so, as privatizing global
 // variables is generally not safe.
-static cl::opt<unsigned> ConvertGlobalVariableInAddrSpace(
-    "avail-extern-gv-in-addrspace-to-local", cl::Hidden,
-    cl::desc(
-        "Convert available_externally global variables into locals if they are "
-        "in specificed addrspace, renaming them to avoid link-time clashes."));
+
+static bool getConvertToLocal(const Module &M) {
+  return clv2::getOptValIfSpecified<&clv2::IPOOptsReg,
+                                    &clv2::IPO_ConvertToLocal>(
+      M.getContext().getOptionsContext(), false);
+}
+
+static unsigned getConvertGlobalVariableInAddrSpace(const Module &M) {
+  return clv2::getOptValIfSpecified<
+      &clv2::IPOOptsReg, &clv2::IPO_ConvertGlobalVariableInAddrSpace>(
+      M.getContext().getOptionsContext(), 0);
+}
+
+static bool getConvertGlobalVariableInAddrSpaceSpecified(const Module &M) {
+  return clv2::wasOptSpecified<&clv2::IPOOptsReg,
+                               &clv2::IPO_ConvertGlobalVariableInAddrSpace>(
+      M.getContext().getOptionsContext());
+}
 
 STATISTIC(NumRemovals, "Number of functions removed");
 STATISTIC(NumFunctionsConverted, "Number of functions converted");
@@ -120,8 +129,8 @@ static bool eliminateAvailableExternally(Module &M, bool Convert) {
   for (GlobalVariable &GV : M.globals()) {
     if (!GV.hasAvailableExternallyLinkage())
       continue;
-    if (ConvertGlobalVariableInAddrSpace.getNumOccurrences() &&
-        GV.getAddressSpace() == ConvertGlobalVariableInAddrSpace &&
+    if (getConvertGlobalVariableInAddrSpaceSpecified(M) &&
+        GV.getAddressSpace() == getConvertGlobalVariableInAddrSpace(M) &&
         !GV.use_empty()) {
       convertToLocalCopy(M, GV);
       Changed = true;
@@ -144,7 +153,7 @@ static bool eliminateAvailableExternally(Module &M, bool Convert) {
     if (F.isDeclaration() || !F.hasAvailableExternallyLinkage())
       continue;
 
-    if (Convert || ConvertToLocal)
+    if (Convert || getConvertToLocal(M))
       convertToLocalCopy(M, F);
     else
       deleteFunction(F);

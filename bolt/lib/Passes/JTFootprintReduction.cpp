@@ -12,27 +12,22 @@
 
 #include "bolt/Passes/JTFootprintReduction.h"
 #include "bolt/Core/BinaryFunctionCallGraph.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "bolt/Passes/DataflowInfoManager.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 
 #define DEBUG_TYPE "JT"
 
 using namespace llvm;
 using namespace bolt;
+using namespace bolt::bolt_passes_opts;
 
 namespace opts {
 
-extern cl::OptionCategory BoltOptCategory;
+extern unsigned Verbosity;
 
-extern cl::opt<unsigned> Verbosity;
-
-extern cl::opt<JumpTableSupportLevel> JumpTables;
-
-static cl::opt<bool> JTFootprintOnlyPIC(
-    "jt-footprint-optimize-for-icache",
-    cl::desc("with jt-footprint-reduction, only process PIC jumptables and turn"
-             " off other transformations that increase code size"),
-    cl::init(false), cl::ZeroOrMore, cl::cat(BoltOptCategory));
+extern JumpTableSupportLevel JumpTables;
 
 } // namespace opts
 
@@ -42,6 +37,7 @@ namespace bolt {
 void JTFootprintReduction::checkOpportunities(BinaryFunction &Function,
                                               DataflowInfoManager &Info) {
   BinaryContext &BC = Function.getBinaryContext();
+  const bool JTFootprintOnlyPIC = getJtFootprintOptimizeForIcache(BC);
   std::map<JumpTable *, uint64_t> AllJTs;
 
   for (BinaryBasicBlock &BB : Function) {
@@ -64,7 +60,7 @@ void JTFootprintReduction::checkOpportunities(BinaryFunction &Function,
           BC.MIB->matchIndJmp(BC.MIB->matchAnyOperand(),
                               BC.MIB->matchImm(Scale), BC.MIB->matchReg(),
                               BC.MIB->matchAnyOperand());
-      if (!opts::JTFootprintOnlyPIC &&
+      if (!JTFootprintOnlyPIC &&
           IndJmpMatcher->match(*BC.MRI, *BC.MIB,
                                MutableArrayRef<MCInst>(&*BB.begin(), &Inst + 1),
                                -1) &&
@@ -130,7 +126,8 @@ void JTFootprintReduction::checkOpportunities(BinaryFunction &Function,
 bool JTFootprintReduction::tryOptimizeNonPIC(
     BinaryContext &BC, BinaryBasicBlock &BB, BinaryBasicBlock::iterator Inst,
     uint64_t JTAddr, JumpTable *JumpTable, DataflowInfoManager &Info) {
-  if (opts::JTFootprintOnlyPIC)
+  const bool JTFootprintOnlyPIC = getJtFootprintOptimizeForIcache(BC);
+  if (JTFootprintOnlyPIC)
     return false;
 
   MCOperand Base;
@@ -247,17 +244,21 @@ void JTFootprintReduction::optimizeFunction(BinaryFunction &Function,
 }
 
 Error JTFootprintReduction::runOnFunctions(BinaryContext &BC) {
+  const bool JTFootprintOnlyPIC = getJtFootprintOptimizeForIcache(BC);
+
   if (!BC.isX86()) {
     BC.errs() << "BOLT-ERROR: " << getName() << " is supported only on X86\n";
     exit(1);
   }
 
-  if (opts::JumpTables == JTS_BASIC && BC.HasRelocations)
+  auto JTLevel =
+      static_cast<JumpTableSupportLevel>(bolt_core_opts::getJumpTables(BC));
+  if (JTLevel == JTS_BASIC && BC.HasRelocations)
     return Error::success();
 
   std::unique_ptr<RegAnalysis> RA;
   std::unique_ptr<BinaryFunctionCallGraph> CG;
-  if (!opts::JTFootprintOnlyPIC) {
+  if (!JTFootprintOnlyPIC) {
     CG.reset(new BinaryFunctionCallGraph(buildCallGraph(BC)));
     RA.reset(new RegAnalysis(BC, &BC.getBinaryFunctions(), &*CG));
   }

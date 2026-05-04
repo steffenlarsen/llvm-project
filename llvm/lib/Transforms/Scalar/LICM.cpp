@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===-- LICM.cpp - Loop Invariant Code Motion Pass ------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -74,7 +76,6 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/PredIteratorCache.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
@@ -117,34 +118,38 @@ STATISTIC(NumBOAssociationsHoisted, "Number of invariant BinaryOp expressions "
                                     "reassociated and hoisted out of the loop");
 
 /// Memory promotion is enabled by default.
-static cl::opt<bool>
-    DisablePromotion("disable-licm-promotion", cl::Hidden, cl::init(false),
-                     cl::desc("Disable memory promotion in LICM pass"));
+static bool getDisablePromotion(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_DisableLicmPromotion>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<bool> ControlFlowHoisting(
-    "licm-control-flow-hoisting", cl::Hidden, cl::init(false),
-    cl::desc("Enable control flow (and PHI) hoisting in LICM"));
+static bool getControlFlowHoisting(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_LicmControlFlowHoisting>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<bool>
-    SingleThread("licm-force-thread-model-single", cl::Hidden, cl::init(false),
-                 cl::desc("Force thread model single in LICM pass"));
+static bool getSingleThread(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_LicmForceThreadModelSingle>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<uint32_t> MaxNumUsesTraversed(
-    "licm-max-num-uses-traversed", cl::Hidden, cl::init(8),
-    cl::desc("Max num uses visited for identifying load "
-             "invariance in loop using invariant start (default = 8)"));
+static uint32_t getMaxNumUsesTraversed(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_LicmMaxNumUsesTraversed>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> FPAssociationUpperLimit(
-    "licm-max-num-fp-reassociations", cl::init(5U), cl::Hidden,
-    cl::desc(
-        "Set upper limit for the number of transformations performed "
-        "during a single round of hoisting the reassociated expressions."));
+static unsigned getFPAssociationUpperLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_LicmMaxNumFpReassociations>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> IntAssociationUpperLimit(
-    "licm-max-num-int-reassociations", cl::init(5U), cl::Hidden,
-    cl::desc(
-        "Set upper limit for the number of transformations performed "
-        "during a single round of hoisting the reassociated expressions."));
+static unsigned getIntAssociationUpperLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_LicmMaxNumIntReassociations>(
+      F.getContext().getOptionsContext());
+}
 
 // Experimental option to allow imprecision in LICM in pathological cases, in
 // exchange for faster compile. This is to be removed if MemorySSA starts to
@@ -154,23 +159,28 @@ static cl::opt<unsigned> IntAssociationUpperLimit(
 // which may not be precise, since optimizeUses is capped. The result is
 // correct, but we may not get as "far up" as possible to get which access is
 // clobbering the one queried.
-cl::opt<unsigned> llvm::SetLicmMssaOptCap(
-    "licm-mssa-optimization-cap", cl::init(100), cl::Hidden,
-    cl::desc("Enable imprecision in LICM in pathological cases, in exchange "
-             "for faster compile. Caps the MemorySSA clobbering calls."));
+// No context at this call site (LICMOptions' default constructor); the
+// descriptor's default is the same value and is a compile-time constant.
+unsigned llvm::getSetLicmMssaOptCap() {
+  return clv2::SC_LicmMssaOptimizationCap.DefaultValue;
+}
+static unsigned getSetLicmMssaOptCapFrom(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_LicmMssaOptimizationCap>(
+      F.getContext().getOptionsContext());
+}
 
 // Experimentally, memory promotion carries less importance than sinking and
 // hoisting. Limit when we do promotion when using MemorySSA, in order to save
 // compile time.
-cl::opt<unsigned> llvm::SetLicmMssaNoAccForPromotionCap(
-    "licm-mssa-max-acc-promotion", cl::init(250), cl::Hidden,
-    cl::desc("[LICM & MemorySSA] When MSSA in LICM is disabled, this has no "
-             "effect. When MSSA in LICM is enabled, then this is the maximum "
-             "number of accesses allowed to be present in a loop in order to "
-             "enable memory promotion."));
+unsigned llvm::getSetLicmMssaNoAccForPromotionCap() {
+  return clv2::SC_LicmMssaMaxAccPromotion.DefaultValue;
+}
+static unsigned getSetLicmMssaNoAccForPromotionCapFrom(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_LicmMssaMaxAccPromotion>(
+      F.getContext().getOptionsContext());
+}
 
 namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 } // end namespace llvm
 
 static bool inSubLoop(BasicBlock *BB, Loop *CurLoop, LoopInfo *LI);
@@ -252,10 +262,10 @@ private:
 
 struct LegacyLICMPass : public LoopPass {
   static char ID; // Pass identification, replacement for typeid
-  LegacyLICMPass(
-      unsigned LicmMssaOptCap = SetLicmMssaOptCap,
-      unsigned LicmMssaNoAccForPromotionCap = SetLicmMssaNoAccForPromotionCap,
-      bool LicmAllowSpeculation = true)
+  LegacyLICMPass(unsigned LicmMssaOptCap = getSetLicmMssaOptCap(),
+                 unsigned LicmMssaNoAccForPromotionCap =
+                     getSetLicmMssaNoAccForPromotionCap(),
+                 bool LicmAllowSpeculation = true)
       : LoopPass(ID), LICM(LicmMssaOptCap, LicmMssaNoAccForPromotionCap,
                            LicmAllowSpeculation) {
     initializeLegacyLICMPassPass(*PassRegistry::getPassRegistry());
@@ -395,8 +405,10 @@ Pass *llvm::createLICMPass() { return new LegacyLICMPass(); }
 
 llvm::SinkAndHoistLICMFlags::SinkAndHoistLICMFlags(bool IsSink, Loop &L,
                                                    MemorySSA &MSSA)
-    : SinkAndHoistLICMFlags(SetLicmMssaOptCap, SetLicmMssaNoAccForPromotionCap,
-                            IsSink, L, MSSA) {}
+    : SinkAndHoistLICMFlags(
+          getSetLicmMssaOptCapFrom(*L.getHeader()->getParent()),
+          getSetLicmMssaNoAccForPromotionCapFrom(*L.getHeader()->getParent()),
+          IsSink, L, MSSA) {}
 
 llvm::SinkAndHoistLICMFlags::SinkAndHoistLICMFlags(
     unsigned LicmMssaOptCap, unsigned LicmMssaNoAccForPromotionCap, bool IsSink,
@@ -492,8 +504,9 @@ bool LoopInvariantCodeMotion::runOnLoop(Loop *L, AAResults *AA, LoopInfo *LI,
   // make sure we catch that. An additional load may be generated in the
   // preheader for SSA updater, so also avoid sinking when no preheader
   // is available.
-  if (!DisablePromotion && Preheader && L->hasDedicatedExits() &&
-      !Flags.tooManyMemoryAccesses() && !HasCoroSuspendInst) {
+  if (!getDisablePromotion(*L->getHeader()->getParent()) && Preheader &&
+      L->hasDedicatedExits() && !Flags.tooManyMemoryAccesses() &&
+      !HasCoroSuspendInst) {
     // Figure out the loop exits and their insertion points
     SmallVector<BasicBlock *, 8> ExitBlocks;
     L->getUniqueExitBlocks(ExitBlocks);
@@ -551,7 +564,8 @@ bool LoopInvariantCodeMotion::runOnLoop(Loop *L, AAResults *AA, LoopInfo *LI,
   assert((L->isOutermost() || L->getParentLoop()->isLCSSAForm(*DT)) &&
          "Parent loop not left in LCSSA form after LICM!");
 
-  if (VerifyMemorySSA)
+  if (getVerifyMemorySSA(
+          L->getHeader()->getParent()->getContext().getOptionsContext()))
     MSSA->verifyMemorySSA();
 
   if (Changed && SE)
@@ -626,7 +640,8 @@ bool llvm::sinkRegion(DomTreeNode *N, AAResults *AA, LoopInfo *LI,
       }
     }
   }
-  if (VerifyMemorySSA)
+  if (getVerifyMemorySSA(
+          CurLoop->getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU.getMemorySSA()->verifyMemorySSA();
   return Changed;
 }
@@ -682,7 +697,8 @@ public:
 
   void registerPossiblyHoistableBranch(CondBrInst *BI) {
     // We can only hoist conditional branches with loop invariant operands.
-    if (!ControlFlowHoisting || !CurLoop->hasLoopInvariantOperands(BI))
+    if (!getControlFlowHoisting(*CurLoop->getHeader()->getParent()) ||
+        !CurLoop->hasLoopInvariantOperands(BI))
       return;
 
     // The branch destinations need to be in the loop, and we don't gain
@@ -738,7 +754,8 @@ public:
 
   bool canHoistPHI(PHINode *PN) {
     // The phi must have loop invariant operands.
-    if (!ControlFlowHoisting || !CurLoop->hasLoopInvariantOperands(PN))
+    if (!getControlFlowHoisting(*CurLoop->getHeader()->getParent()) ||
+        !CurLoop->hasLoopInvariantOperands(PN))
       return false;
     // We can hoist phis if the block they are in is the target of hoistable
     // branches which cover all of the predecessors of the block.
@@ -774,7 +791,7 @@ public:
   }
 
   BasicBlock *getOrCreateHoistedBlock(BasicBlock *BB) {
-    if (!ControlFlowHoisting)
+    if (!getControlFlowHoisting(*CurLoop->getHeader()->getParent()))
       return CurLoop->getLoopPreheader();
     // If BB has already been hoisted, return that
     if (auto It = HoistDestinationMap.find(BB); It != HoistDestinationMap.end())
@@ -873,7 +890,7 @@ public:
     HoistTarget->getTerminator()->eraseFromParent();
     // md_prof should also come from the original branch - since the
     // condition was hoisted, the branch probabilities shouldn't change.
-    if (!ProfcheckDisableMetadataFixes)
+    if (!getProfcheckDisableMetadataFixes(BI->getContext()))
       NewBI->copyMetadata(*BI, {LLVMContext::MD_prof});
     // FIXME: Issue #152767: debug info should also be the same as the
     // original branch, **if** the user explicitly indicated that.
@@ -1036,7 +1053,7 @@ bool llvm::hoistRegion(DomTreeNode *N, AAResults *AA, LoopInfo *LI,
   // and also keep track of where in the block we are rehoisting to make sure
   // that we rehoist instructions before the instructions that use them.
   Instruction *HoistPoint = nullptr;
-  if (ControlFlowHoisting) {
+  if (getControlFlowHoisting(*CurLoop->getHeader()->getParent())) {
     for (Instruction *I : reverse(HoistedInstructions)) {
       if (!llvm::all_of(I->uses(),
                         [&](Use &U) { return DT->dominates(I, U); })) {
@@ -1058,7 +1075,8 @@ bool llvm::hoistRegion(DomTreeNode *N, AAResults *AA, LoopInfo *LI,
       }
     }
   }
-  if (VerifyMemorySSA)
+  if (getVerifyMemorySSA(
+          CurLoop->getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU.getMemorySSA()->verifyMemorySSA();
 
     // Now that we've finished hoisting make sure that LI and DT are still
@@ -1179,7 +1197,8 @@ static bool isLoadInvariantInLoop(LoadInst *LI, DominatorTree *DT,
   // one of the uses, and whether it dominates the load instruction.
   for (auto *U : Addr->users()) {
     // Avoid traversing for Load operand with high number of users.
-    if (++UsesVisited > MaxNumUsesTraversed)
+    if (++UsesVisited >
+        getMaxNumUsesTraversed(*CurLoop->getHeader()->getParent()))
       return false;
     IntrinsicInst *II = dyn_cast<IntrinsicInst>(U);
     // If there are escaping uses of invariant.start instruction, the load maybe
@@ -1240,7 +1259,7 @@ static MemoryAccess *getClobberingMemoryAccess(MemorySSA &MSSA,
                                                BatchAAResults &BAA,
                                                SinkAndHoistLICMFlags &Flags,
                                                MemoryUseOrDef *MA) {
-  // See declaration of SetLicmMssaOptCap for usage details.
+  // See definition of SetLicmMssaOptCap for usage details.
   if (Flags.tooManyClobberingCalls())
     return MA->getDefiningAccess();
 
@@ -1995,7 +2014,8 @@ bool isThreadLocalObject(const Value *Object, const Loop *L, DominatorTree *DT,
   // before/in the loop.
   return (isIdentifiedFunctionLocal(Object) &&
           isNotCapturedBeforeOrInLoop(Object, L, DT)) ||
-         (TTI->isSingleThreaded() || SingleThread);
+         (TTI->isSingleThreaded() ||
+          getSingleThread(*L->getHeader()->getParent()));
 }
 
 } // namespace
@@ -2310,13 +2330,15 @@ bool llvm::promoteLoopAccessesToScalars(
     SSA.AddAvailableValue(Preheader, PoisonValue::get(AccessTy));
   }
 
-  if (VerifyMemorySSA)
+  if (getVerifyMemorySSA(
+          CurLoop->getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU.getMemorySSA()->verifyMemorySSA();
   // Rewrite all the loads in the loop and remember all the definitions from
   // stores in the loop.
   Promoter.run(LoopUses);
 
-  if (VerifyMemorySSA)
+  if (getVerifyMemorySSA(
+          CurLoop->getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU.getMemorySSA()->verifyMemorySSA();
   // If the SSAUpdater didn't use the load in the preheader, just zap it now.
   if (PreheaderLoad && PreheaderLoad->use_empty())
@@ -2341,7 +2363,8 @@ collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA,
                            DominatorTree *DT, ICFLoopSafetyInfo *SafetyInfo,
                            Loop *L) {
   BatchAAResults BatchAA(*AA);
-  AliasSetTracker AST(BatchAA);
+  AliasSetTracker AST(
+      BatchAA, L->getHeader()->getParent()->getContext().getOptionsContext());
 
   auto IsPotentiallyPromotable = [L](const Instruction *I) {
     if (const auto *SI = dyn_cast<StoreInst>(I)) {
@@ -2900,9 +2923,10 @@ static bool hoistMulAddAssociation(Instruction &I, Loop &L,
       Changes.push_back(&U1);
     else
       return false;
-    unsigned Limit = I.getType()->isIntOrIntVectorTy()
-                         ? IntAssociationUpperLimit
-                         : FPAssociationUpperLimit;
+    unsigned Limit =
+        I.getType()->isIntOrIntVectorTy()
+            ? getIntAssociationUpperLimit(*L.getHeader()->getParent())
+            : getFPAssociationUpperLimit(*L.getHeader()->getParent());
     if (Changes.size() > Limit)
       return false;
   }

@@ -20,6 +20,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
@@ -27,6 +28,7 @@
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
@@ -36,7 +38,8 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 
 #define DEBUG_TYPE "type-promotion"
@@ -44,9 +47,9 @@
 
 using namespace llvm;
 
-static cl::opt<bool> DisablePromotion("disable-type-promotion", cl::Hidden,
-                                      cl::init(false),
-                                      cl::desc("Disable type promotion pass"));
+static bool getDisableTypePromotion(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableTypePromotion>(Ctx);
+}
 
 // The goal of this pass is to enable more efficient code generation for
 // operations on narrow types (i.e. types with < 32-bits) and this is a
@@ -928,7 +931,7 @@ bool TypePromotionImpl::TryToPromote(Value *V, unsigned PromotedWidth,
 bool TypePromotionImpl::run(Function &F, const TargetMachine *TM,
                             const TargetTransformInfo &TTI,
                             const LoopInfo &LI) {
-  if (DisablePromotion)
+  if (getDisableTypePromotion(F.getContext().getOptionsContext()))
     return false;
 
   LLVM_DEBUG(dbgs() << "IR Promotion: Running on " << F.getName() << "\n");

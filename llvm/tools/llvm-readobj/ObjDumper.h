@@ -18,7 +18,7 @@
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Object/OffloadBinary.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/BoolOrDefault.h"
 
 namespace llvm {
 namespace object {

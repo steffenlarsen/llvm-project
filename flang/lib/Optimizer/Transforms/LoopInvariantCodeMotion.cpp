@@ -31,12 +31,10 @@ namespace fir {
 #include "flang/Optimizer/Transforms/Passes.h.inc"
 } // namespace fir
 
-#define DEBUG_TYPE "flang-licm"
+#include "flang/Common/FlangOptionsOptInfos.h"
+#include "llvm/Support/OptionsContext.h"
 
-// Temporary engineering option for triaging LICM.
-static llvm::cl::opt<bool> disableFlangLICM(
-    "disable-flang-licm", llvm::cl::init(false), llvm::cl::Hidden,
-    llvm::cl::desc("Disable Flang's loop invariant code motion"));
+#define DEBUG_TYPE "flang-licm"
 
 namespace {
 
@@ -280,7 +278,8 @@ static void collectNestedRegions(Region &region,
 }
 
 void LoopInvariantCodeMotion::runOnOperation() {
-  if (disableFlangLICM) {
+  if (llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_DisableFlangLICM>(
+          getContext().getOptionsContext())) {
     LDBG() << "Skipping [HL]FIR LoopInvariantCodeMotion()";
     return;
   }
@@ -343,7 +342,7 @@ void LoopInvariantCodeMotion::runOnOperation() {
     if (!fir::canMoveOutOf(loopLike, nullptr)) {
       LDBG() << "Cannot hoist anything out of loop operation: ";
       LDBG_OS([&](llvm::raw_ostream &os) {
-        loopLike->print(os, OpPrintingFlags().skipRegions());
+        loopLike->print(os, opPrintingFlags(loopLike).skipRegions());
       });
       return;
     }
@@ -361,7 +360,7 @@ void LoopInvariantCodeMotion::runOnOperation() {
     } else if (!fir::canMoveFromDescendant(parentOp, loopLike, nullptr)) {
       LDBG() << "Cannot hoist anything into operation: ";
       LDBG_OS([&](llvm::raw_ostream &os) {
-        parentOp->print(os, OpPrintingFlags().skipRegions());
+        parentOp->print(os, opPrintingFlags(parentOp).skipRegions());
       });
       return;
     }
@@ -446,7 +445,7 @@ void LoopInvariantCodeMotion::runOnOperation() {
           LDBG() << "Cannot hoist " << *op
                  << " out of intermediate operation: ";
           LDBG_OS([&](llvm::raw_ostream &os) {
-            ancestor->print(os, OpPrintingFlags().skipRegions());
+            ancestor->print(os, opPrintingFlags(ancestor).skipRegions());
           });
           return false;
         }

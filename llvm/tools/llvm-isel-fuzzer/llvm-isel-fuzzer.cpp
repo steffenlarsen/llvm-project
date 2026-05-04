@@ -25,9 +25,10 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/DataTypes.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
@@ -36,19 +37,33 @@
 
 using namespace llvm;
 
-static codegen::RegisterCodeGenFlags CGF;
-
-static cl::opt<char>
-    OptLevel("O",
-             cl::desc("Optimization level. [-O0, -O1, -O2, or -O3] "
-                      "(default = '-O2')"),
-             cl::Prefix, cl::init('2'));
-
-static cl::opt<std::string>
-    TargetTriple("mtriple", cl::desc("Override target triple for module"));
+static char OptLevel = '2';
+static std::string TargetTriple;
 
 static std::unique_ptr<TargetMachine> TM;
 static std::unique_ptr<IRMutator> Mutator;
+static std::unique_ptr<clv2::OptionsContext> FuzzerOptsCtx;
+
+// --- clv2 OptionInfo descriptors ---
+static constexpr clv2::OptionInfo<std::string> OI_ISelMTriple{
+    "mtriple", "Override target triple for module"};
+static constexpr clv2::OptionInfo<std::string> OI_ISelOptLevel{
+    "O", "Optimization level. [-O0, -O1, -O2, or -O3] (default = '-O2')",
+    clv2::PrefixFormat, clv2::Init{"2"}};
+
+static constexpr clv2::OptionsRegistry<&OI_ISelMTriple, &OI_ISelOptLevel>
+    ISelFuzzerOptsReg;
+
+static void applyISelFuzzerOptions(
+    const decltype(ISelFuzzerOptsReg)::ParsedOptionsT &Opts) {
+  if (Opts.specified<&OI_ISelMTriple>())
+    TargetTriple = Opts.get<&OI_ISelMTriple>();
+  if (Opts.specified<&OI_ISelOptLevel>()) {
+    auto Val = Opts.get<&OI_ISelOptLevel>();
+    if (Val.size() == 1)
+      OptLevel = Val[0];
+  }
+}
 
 std::unique_ptr<IRMutator> createISelMutator() {
   std::vector<TypeGetter> Types{
@@ -65,7 +80,7 @@ std::unique_ptr<IRMutator> createISelMutator() {
 
 extern "C" LLVM_ATTRIBUTE_USED size_t LLVMFuzzerCustomMutator(
     uint8_t *Data, size_t Size, size_t MaxSize, unsigned int Seed) {
-  LLVMContext Context;
+  LLVMContext Context(*FuzzerOptsCtx);
   std::unique_ptr<Module> M;
   if (Size <= 1)
     // We get bogus data given an empty corpus - just create a new module.
@@ -83,7 +98,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
     // We get bogus data given an empty corpus - ignore it.
     return 0;
 
-  LLVMContext Context;
+  LLVMContext Context(*FuzzerOptsCtx);
   auto M = parseAndVerify(Data, Size, Context);
   if (!M) {
     errs() << "error: input module is broken!\n";
@@ -122,8 +137,13 @@ extern "C" LLVM_ATTRIBUTE_USED int LLVMFuzzerInitialize(int *argc,
   InitializeAllAsmPrinters();
   InitializeAllAsmParsers();
 
+  // -O prefix option is registered via static init (ISelFuzzerOptLevelReg).
+
   handleExecNameEncodedBEOpts(ExecName);
-  parseFuzzerCLOpts(*argc, *argv);
+
+  clv2::OptionParser P;
+  P.add<&ISelFuzzerOptsReg, applyISelFuzzerOptions>();
+  FuzzerOptsCtx = parseFuzzerCLOpts(*argc, *argv, P);
 
   if (TargetTriple.empty()) {
     errs() << ExecName << ": -mtriple must be specified\n";
@@ -140,10 +160,9 @@ extern "C" LLVM_ATTRIBUTE_USED int LLVMFuzzerInitialize(int *argc,
     return 1;
   }
   ExitOnError ExitOnErr(std::string(ExecName) + ": error:");
-
-  Triple TT(Triple::normalize(TargetTriple));
-
-  TM = ExitOnErr(codegen::createTargetMachineForTriple(TT, OLvl));
+  TM = ExitOnErr(codegen::createTargetMachineForTriple(
+      Triple(Triple::normalize(TargetTriple)),
+      /*OptsCtx=*/llvm::clv2::defaultOptionsContext(), OLvl));
   assert(TM && "Could not allocate target machine!");
 
   // Make sure we print the summary and the current unit when LLVM errors out.

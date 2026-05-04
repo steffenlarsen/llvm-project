@@ -21,42 +21,37 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 
 #include <algorithm>
 #include <string>
 #include <utility>
 
-namespace llvm::cl {
+namespace mlir::detail::pass_options {
+/// Custom parsing support for std::pair<std::string, int32_t> used by
+/// TosaToSPIRVTosa's custom-op-domain-to-opcode option.
 template <>
-class parser<std::pair<std::string, int32_t>>
-    : public basic_parser<std::pair<std::string, int32_t>> {
-public:
-  parser(Option &option) : basic_parser(option) {}
+struct OptionTypeHelper<std::pair<std::string, int32_t>> {
+  static constexpr bool hasCustomHandler = true;
 
-  bool parse(Option &option, StringRef argName, StringRef arg,
-             std::pair<std::string, int32_t> &value) {
+  static bool parse(llvm::StringRef arg,
+                    std::pair<std::string, int32_t> &value) {
     auto [domain, opcodeString] = arg.rsplit(":");
     if (domain.empty() || opcodeString.empty())
-      return option.error("expected <domain>:<opcode>", argName);
-
+      return true;
     int32_t opcode;
     if (opcodeString.getAsInteger(0, opcode))
-      return option.error("invalid opcode in custom op domain mapping",
-                          argName);
-
+      return true;
     value = {domain.str(), opcode};
     return false;
   }
 
-  StringRef getValueName() const override { return "domain:opcode"; }
-
-  static void print(raw_ostream &os,
+  static void print(llvm::raw_ostream &os,
                     const std::pair<std::string, int32_t> &value) {
     os << value.first << ":" << value.second;
   }
 };
-} // namespace llvm::cl
+} // namespace mlir::detail::pass_options
 
 namespace mlir {
 #define GEN_PASS_DEF_TOSATOSPIRVTOSA

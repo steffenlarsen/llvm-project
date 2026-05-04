@@ -131,12 +131,12 @@ public:
     ModuleOp transformModule =
         transform::detail::getPreloadedTransformModule(context);
     Operation *payloadRoot =
-        findPayloadRoot(getOperation(), debugPayloadRootTag);
+        findPayloadRoot(getOperation(), *debugPayloadRootTag);
     if (!payloadRoot)
       return signalPassFailure();
 
     Operation *transformEntryPoint = transform::detail::findTransformEntryPoint(
-        getOperation(), transformModule, entryPoint);
+        getOperation(), transformModule, *entryPoint);
     if (!transformEntryPoint)
       return signalPassFailure();
 

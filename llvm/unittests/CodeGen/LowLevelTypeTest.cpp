@@ -19,7 +19,7 @@ using namespace llvm;
 namespace {
 
 TEST(LowLevelTypeTest, Token) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const LLT TTy = LLT::token();
 
@@ -36,7 +36,7 @@ TEST(LowLevelTypeTest, Token) {
 }
 
 TEST(LowLevelTypeTest, Scalar) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   DataLayout DL;
 
   for (unsigned S : {0U, 1U, 17U, 32U, 64U, 0xfffffU}) {
@@ -68,7 +68,7 @@ TEST(LowLevelTypeTest, Scalar) {
 }
 
 TEST(LowLevelTypeTest, Vector) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   DataLayout DL;
 
   for (unsigned S : {0U, 1U, 17U, 32U, 64U, 0xfffU}) {
@@ -261,11 +261,11 @@ TEST(LowLevelTypeTest, ChangeElementTypeDeath) {
 #endif
 
 TEST(LowLevelTypeTest, Pointer) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   DataLayout DL("p64:64:64-p127:512:512:512-p16777215:65528:8");
 
-  for (unsigned AS : {0U, 1U, 127U, 0xffffU,
-        static_cast<unsigned>(maxUIntN(23)),
+  for (unsigned AS :
+       {0U, 1U, 127U, 0xffffU, static_cast<unsigned>(maxUIntN(23)),
         static_cast<unsigned>(maxUIntN(24))}) {
     for (ElementCount EC :
          {ElementCount::getFixed(2), ElementCount::getFixed(3),
@@ -449,4 +449,4 @@ TEST(LowLevelTypeTest, IsScalableVector) {
   EXPECT_TRUE(LLT::scalable_vector(2, 32).isScalableVector());
   EXPECT_TRUE(LLT::scalable_vector(1, 32).isScalableVector());
 }
-}
+} // namespace

@@ -72,9 +72,10 @@ const llvm::StringRef MainMod =
 // module as it passes through the IRTransformLayer.
 class MyOptimizationTransform {
 public:
-  MyOptimizationTransform() : PM(std::make_unique<legacy::PassManager>()) {
+  MyOptimizationTransform(const clv2::OptionsContext &Ctx)
+      : PM(std::make_unique<legacy::PassManager>()) {
     PM->add(createTailCallEliminationPass());
-    PM->add(createCFGSimplificationPass());
+    PM->add(createCFGSimplificationPass(Ctx));
   }
 
   Expected<ThreadSafeModule> operator()(ThreadSafeModule TSM,
@@ -104,7 +105,10 @@ int main(int argc, char *argv[]) {
   auto J = ExitOnErr(LLJITBuilder().create());
 
   // (2) Install transform to optimize modules when they're materialized.
-  J->getIRTransformLayer().setTransform(MyOptimizationTransform());
+  // This example parses no command-line options, so the pipeline runs on an
+  // empty context.
+  J->getIRTransformLayer().setTransform(
+      MyOptimizationTransform(clv2::defaultOptionsContext()));
 
   // (3) Add modules.
   ExitOnErr(J->addIRModule(ExitOnErr(parseExampleModule(MainMod, "MainMod"))));

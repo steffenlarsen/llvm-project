@@ -8,18 +8,16 @@
 
 #include "bolt/Profile/DataAggregator.h"
 #include "bolt/Core/BinaryContext.h"
+#include "bolt/Profile/BoltProfileOptionsOptInfos.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/TargetSelect.h"
 #include "gtest/gtest.h"
 
 using namespace llvm;
 using namespace llvm::bolt;
-
-namespace opts {
-extern cl::opt<bool> ReadPreAggregated;
-} // namespace opts
 
 namespace llvm {
 namespace bolt {
@@ -28,7 +26,7 @@ namespace bolt {
 /// Used for both parseHexField tests (no BC needed) and pre-aggregated
 /// parsing tests (BC needed, X86-only).
 struct PreAggregatedTestHelper : public testing::Test {
-  void SetUp() override { opts::ReadPreAggregated = true; }
+  void SetUp() override {}
 
 protected:
   using Trace = DataAggregator::Trace;
@@ -74,21 +72,26 @@ protected:
     BC = cantFail(BinaryContext::createBinaryContext(
         ObjFile->makeTriple(), std::make_shared<orc::SymbolStringPool>(),
         ObjFile->getFileName(), nullptr, /*IsPIC*/ false,
-        DWARFContext::create(*ObjFile), {llvm::outs(), llvm::errs()}));
+        DWARFContext::create(*ObjFile), {llvm::outs(), llvm::errs()},
+        /*OptsCtx=*/nullptr));
     ASSERT_FALSE(!BC);
   }
 
   char ElfBuf[sizeof(typename ELF64LE::Ehdr)] = {};
   std::unique_ptr<object::ObjectFile> ObjFile;
   std::unique_ptr<BinaryContext> BC;
+  /// Set profile options on BC's default OptionsContext.
+  void setTestOptsOnBC() {
+    BC->getOptionsContext()
+        .getViewPtr<&clv2::BoltProfileOptsReg>()
+        ->get<&clv2::BOLTPROF_ReadPreAggregated>() = true;
+  }
 };
 
 } // namespace bolt
 } // namespace llvm
 
 TEST(DataAggregatorTest, buildID) {
-  opts::ReadPreAggregated = true;
-
   DataAggregator DA("<pseudo input>");
   std::optional<StringRef> FileName;
 
@@ -161,6 +164,7 @@ struct PreAggregatedX86TestHelper : PreAggregatedTestHelper {
   void SetUp() override {
     PreAggregatedTestHelper::SetUp();
     initializeBOLTForX86();
+    setTestOptsOnBC();
   }
 };
 

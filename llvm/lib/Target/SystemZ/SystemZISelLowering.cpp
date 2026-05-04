@@ -25,9 +25,10 @@
 #include "llvm/IR/IntrinsicsS390.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PatternMatch.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/SystemZ/SystemZOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cctype>
 #include <optional>
@@ -38,10 +39,20 @@ using namespace llvm;
 
 // Temporarily let this be disabled by default until all known problems
 // related to argument extensions are fixed.
-static cl::opt<bool> EnableIntArgExtCheck(
-    "argext-abi-check", cl::init(false),
-    cl::desc("Verify that narrow int args are properly extended per the "
-             "SystemZ ABI."));
+static bool EnableIntArgExtCheckWasSpecified = false;
+static bool EnableIntArgExtCheck = false;
+
+static bool getEnableIntArgExtCheck(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SZ_EnableIntArgExtCheck>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getEnableIntArgExtCheckWasSpecified(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::SystemZOptsReg>(
+          F.getContext().getOptionsContext()))
+    return O->specified<&clv2::SZ_EnableIntArgExtCheck>();
+  return EnableIntArgExtCheckWasSpecified;
+}
 
 namespace {
 // Represents information about a comparison.
@@ -11456,7 +11467,7 @@ verifyNarrowIntegerArgs_Call(const SmallVectorImpl<ISD::OutputArg> &Outs,
                              const Function *F, SDValue Callee) const {
   // Temporarily only do the check when explicitly requested, until it can be
   // enabled by default.
-  if (!EnableIntArgExtCheck)
+  if (!getEnableIntArgExtCheck(*F))
     return;
 
   bool IsInternal = false;
@@ -11464,7 +11475,7 @@ verifyNarrowIntegerArgs_Call(const SmallVectorImpl<ISD::OutputArg> &Outs,
   if (auto *G = dyn_cast<GlobalAddressSDNode>(Callee))
     if ((CalleeFn = dyn_cast<Function>(G->getGlobal())))
       IsInternal = isInternal(CalleeFn);
-  if (!IsInternal && !verifyNarrowIntegerArgs(Outs)) {
+  if (!IsInternal && !verifyNarrowIntegerArgs(Outs, *F)) {
     errs() << "ERROR: Missing extension attribute of passed "
            << "value in call to function:\n" << "Callee:  ";
     if (CalleeFn != nullptr)
@@ -11482,10 +11493,10 @@ verifyNarrowIntegerArgs_Ret(const SmallVectorImpl<ISD::OutputArg> &Outs,
                             const Function *F) const {
   // Temporarily only do the check when explicitly requested, until it can be
   // enabled by default.
-  if (!EnableIntArgExtCheck)
+  if (!getEnableIntArgExtCheck(*F))
     return;
 
-  if (!isInternal(F) && !verifyNarrowIntegerArgs(Outs)) {
+  if (!isInternal(F) && !verifyNarrowIntegerArgs(Outs, *F)) {
     errs() << "ERROR: Missing extension attribute of returned "
            << "value from function:\n";
     printFunctionArgExts(F, errs());
@@ -11496,12 +11507,12 @@ verifyNarrowIntegerArgs_Ret(const SmallVectorImpl<ISD::OutputArg> &Outs,
 // Verify that narrow integer arguments are extended as required by the ABI.
 // Return false if an error is found.
 bool SystemZTargetLowering::verifyNarrowIntegerArgs(
-    const SmallVectorImpl<ISD::OutputArg> &Outs) const {
+    const SmallVectorImpl<ISD::OutputArg> &Outs, const Function &F) const {
   if (!Subtarget.isTargetELF())
     return true;
 
-  if (EnableIntArgExtCheck.getNumOccurrences()) {
-    if (!EnableIntArgExtCheck)
+  if (getEnableIntArgExtCheckWasSpecified(F)) {
+    if (!getEnableIntArgExtCheck(F))
       return true;
   } else if (!getTargetMachine().Options.VerifyArgABICompliance)
     return true;

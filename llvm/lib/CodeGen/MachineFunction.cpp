@@ -24,6 +24,7 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
@@ -59,12 +60,13 @@
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/SectionKind.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/DOTGraphTraits.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/GraphWriter.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include <algorithm>
@@ -82,11 +84,9 @@ using namespace llvm;
 
 #define DEBUG_TYPE "codegen"
 
-static cl::opt<unsigned> AlignAllFunctions(
-    "align-all-functions",
-    cl::desc("Force the alignment of all functions in log2 format (e.g. 4 "
-             "means align on 16B boundaries)."),
-    cl::init(0), cl::Hidden);
+static unsigned getAlignAllFunctions(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_AlignAllFunctions>(Ctx);
+}
 
 static const char *getPropertyName(MachineFunctionProperties::Property Prop) {
   using P = MachineFunctionProperties::Property;
@@ -236,8 +236,9 @@ void MachineFunction::init() {
       F.getMetadata(LLVMContext::MD_kcfi_type))
     Alignment = std::max(Alignment, Align(4));
 
-  if (AlignAllFunctions)
-    Alignment = Align(1ULL << AlignAllFunctions);
+  if (getAlignAllFunctions(F.getContext().getOptionsContext()))
+    Alignment =
+        Align(1ULL << getAlignAllFunctions(F.getContext().getOptionsContext()));
 
   JumpTableInfo = nullptr;
 
@@ -1356,7 +1357,8 @@ bool MachineFunction::shouldUseDebugInstrRef() const {
   if (F.hasFnAttribute(Attribute::OptimizeNone))
     return false;
 
-  if (llvm::debuginfoShouldUseDebugInstrRef(getTarget().getTargetTriple()))
+  if (llvm::debuginfoShouldUseDebugInstrRef(getTarget().getTargetTriple(),
+                                            F.getContext().getOptionsContext()))
     return true;
 
   return false;

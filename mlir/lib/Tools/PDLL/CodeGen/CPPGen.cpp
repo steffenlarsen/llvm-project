@@ -112,7 +112,7 @@ struct {0} : ::mlir::PDLPatternModule {{
   os << llvm::formatv(patternClassStartStr, patternName);
 
   os << "R\"mlir(";
-  pattern->print(os, OpPrintingFlags().enableDebugInfo());
+  pattern->print(os, opPrintingFlags(pattern).enableDebugInfo());
   os << "\n    )mlir\", context), std::forward<ConfigsT>(configs)...) {\n";
 
   // Register any native functions used within the pattern.

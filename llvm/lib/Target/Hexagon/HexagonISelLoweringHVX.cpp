@@ -18,22 +18,17 @@
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IntrinsicsHexagon.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 
 #include <algorithm>
 #include <string>
 #include <utility>
 
 using namespace llvm;
-
-static cl::opt<unsigned> HvxWidenThreshold("hexagon-hvx-widen",
-  cl::Hidden, cl::init(16),
-  cl::desc("Lower threshold (in bytes) for widening to HVX vectors"));
-
-static cl::opt<bool>
-    EnableFpFastConvert("hexagon-fp-fast-convert", cl::Hidden, cl::init(false),
-                        cl::desc("Enable FP fast conversion routine."));
 
 static const MVT LegalV64[] =  { MVT::v64i8,  MVT::v32i16,  MVT::v16i32 };
 static const MVT LegalW64[] =  { MVT::v128i8, MVT::v64i16,  MVT::v32i32 };
@@ -621,8 +616,13 @@ HexagonTargetLowering::getPreferredHvxVectorAction(MVT VecTy) const {
     if (VecWidth > 2*HwWidth)
       return TargetLoweringBase::TypeSplitVector;
 
-    bool HaveThreshold = HvxWidenThreshold.getNumOccurrences() > 0;
-    if (HaveThreshold && 8*HvxWidenThreshold <= VecWidth)
+    bool HaveThreshold = clv2::wasOptSpecified<&clv2::HexagonOptsReg,
+                                               &clv2::HEX_HvxWidenThreshold>(
+        Subtarget.getOptionsContext());
+    if (HaveThreshold &&
+        8 * clv2::getOptValOrDefault<&clv2::HEX_HvxWidenThreshold>(
+                Subtarget.getOptionsContext()) <=
+            VecWidth)
       return TargetLoweringBase::TypeWidenVector;
     if (VecWidth >= HwWidth/2 && VecWidth < HwWidth)
       return TargetLoweringBase::TypeWidenVector;
@@ -3226,12 +3226,25 @@ HexagonTargetLowering::ExpandHvxFpToInt(SDValue Op, SelectionDAG &DAG) const {
       SDValue ConvVec =
           getInstr(Hexagon::V6_vconv_h_hf_rnd, dl, ResTy, {Op0}, DAG);
       return ConvVec;
-    } else if (EnableFpFastConvert) {
+    } else if (clv2::getOptValOr<&clv2::HexagonOptsReg,
+                                 &clv2::HEX_EnableFpFastConvert>(
+                   DAG.getMachineFunction()
+                       .getFunction()
+                       .getContext()
+                       .getOptionsContext(),
+                   false)) {
       // Vd32.h=Vu32.hf same as Q6_Vh_equals_Vhf
       SDValue ConvVec = getInstr(Hexagon::V6_vconv_h_hf, dl, ResTy, {Op0}, DAG);
       return ConvVec;
     }
-  } else if (EnableFpFastConvert && InpTy == MVT::v32f32) {
+  } else if (clv2::getOptValOr<&clv2::HexagonOptsReg,
+                               &clv2::HEX_EnableFpFastConvert>(
+                 DAG.getMachineFunction()
+                     .getFunction()
+                     .getContext()
+                     .getOptionsContext(),
+                 false) &&
+             InpTy == MVT::v32f32) {
     // Vd32.w=Vu32.sf same as Q6_Vw_equals_Vsf
     SDValue ConvVec = getInstr(Hexagon::V6_vconv_w_sf, dl, ResTy, {Op0}, DAG);
     return ConvVec;

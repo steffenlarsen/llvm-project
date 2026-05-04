@@ -91,7 +91,7 @@ LogicalResult IntegerRangeAnalysis::visitOperation(
   }
 
   LDBG() << "Inferring ranges for "
-         << OpWithFlags(op, OpPrintingFlags().skipRegions());
+         << OpWithFlags(op, opPrintingFlags(op).skipRegions());
   auto argRanges = llvm::map_to_vector(
       operands, [](const IntegerValueRangeLattice *lattice) {
         return lattice->getValue();
@@ -120,7 +120,7 @@ void IntegerRangeAnalysis::visitNonControlFlowArguments(
          "size mismatch");
   if (auto inferrable = dyn_cast<InferIntRangeInterface>(op)) {
     LDBG() << "Inferring ranges for "
-           << OpWithFlags(op, OpPrintingFlags().skipRegions());
+           << OpWithFlags(op, opPrintingFlags(op).skipRegions());
 
     auto argRanges = llvm::map_to_vector(op->getOperands(), [&](Value value) {
       return getLatticeElementFor(getProgramPointAfter(op), value)->getValue();

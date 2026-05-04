@@ -11,6 +11,7 @@
 #include "bolt/Core/BinaryContext.h"
 #include "bolt/Core/BinaryEmitter.h"
 #include "bolt/Core/BinaryFunction.h"
+#include "bolt/Core/BoltCoreOptionsOptInfos.h"
 #include "bolt/Core/DebugData.h"
 #include "bolt/Core/Exceptions.h"
 #include "bolt/Core/FunctionLayout.h"
@@ -18,6 +19,7 @@
 #include "bolt/Core/ParallelUtilities.h"
 #include "bolt/Core/Relocation.h"
 #include "bolt/Passes/BinaryPasses.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "bolt/Passes/CacheMetrics.h"
 #include "bolt/Passes/IdenticalCodeFolding.h"
 #include "bolt/Passes/PAuthGadgetScanner.h"
@@ -28,12 +30,15 @@
 #include "bolt/Profile/YAMLProfileReader.h"
 #include "bolt/Profile/YAMLProfileWriter.h"
 #include "bolt/Rewrite/BinaryPassManager.h"
+#include "bolt/Rewrite/BoltRewriteOptionsOptInfos.h"
 #include "bolt/Rewrite/DWARFRewriter.h"
 #include "bolt/Rewrite/ExecutableFileMemoryManager.h"
 #include "bolt/Rewrite/JITLinkLinker.h"
 #include "bolt/Rewrite/MetadataRewriters.h"
+#include "bolt/RuntimeLibs/BoltRuntimeLibsOptionsOptInfos.h"
 #include "bolt/RuntimeLibs/HugifyRuntimeLibrary.h"
 #include "bolt/RuntimeLibs/InstrumentationRuntimeLibrary.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "bolt/Utils/Utils.h"
 #include "llvm/ADT/AddressRanges.h"
@@ -51,7 +56,8 @@
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/DataExtractor.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/Error.h"
@@ -66,260 +72,53 @@
 #include <optional>
 #include <system_error>
 
-#undef  DEBUG_TYPE
+#undef DEBUG_TYPE
 #define DEBUG_TYPE "bolt"
 
 using namespace llvm;
 using namespace object;
 using namespace bolt;
 
-extern cl::opt<uint32_t> X86AlignBranchBoundary;
-extern cl::opt<bool> X86AlignBranchWithin32BBoundaries;
+extern unsigned X86AlignBranchBoundary;
+extern bool X86AlignBranchWithin32BBoundaries;
 
 namespace opts {
 
-extern cl::list<std::string> HotTextMoveSections;
-extern cl::opt<bool> Hugify;
-extern cl::opt<bool> Instrument;
-extern cl::opt<uint32_t> InstrumentationSleepTime;
-extern cl::opt<bool> KeepNops;
-extern cl::opt<bool> LargeCodeModel;
-extern cl::opt<bool> Lite;
-extern cl::list<std::string> PrintOnly;
-extern cl::opt<std::string> PrintOnlyFile;
-extern cl::list<std::string> ReorderData;
-extern cl::opt<bolt::ReorderFunctions::ReorderType> ReorderFunctions;
-extern cl::opt<bool> TerminalHLT;
-extern cl::opt<bool> TerminalTrap;
-extern cl::opt<bool> TimeBuild;
-extern cl::opt<bool> TimeRewrite;
-extern cl::opt<bolt::IdenticalCodeFolding::ICFLevel, false,
-               llvm::bolt::DeprecatedICFNumericOptionParser>
-    ICF;
+extern bool Hugify;
+extern bool KeepNopsSpecified;
+extern std::vector<std::string> PrintOnly;
 
-static cl::opt<bool>
-    AllowStripped("allow-stripped",
-                  cl::desc("allow processing of stripped binaries"), cl::Hidden,
-                  cl::cat(BoltCategory));
+bool AllowStripped = false;
+bool ForceToDataRelocations = false;
+bool DumpDotAll = false;
+std::vector<std::string> DumpDotFunc;
 
-static cl::opt<bool> ForceToDataRelocations(
-    "force-data-relocations",
-    cl::desc("force relocations to data sections to always be processed"),
-
-    cl::Hidden, cl::cat(BoltCategory));
-
-static cl::opt<bool> MergeTextSections(
-    "merge-text-sections",
-    cl::desc("emit new hot and cold code under a single .text section header "
-             "instead of separate .text/.text.cold sections (relocation mode)"),
-    cl::init(false), cl::cat(BoltCategory));
-
-static cl::opt<std::string>
-    BoltID("bolt-id",
-           cl::desc("add any string to tag this execution in the "
-                    "output binary via bolt info section"),
-           cl::cat(BoltCategory));
-
-cl::opt<bool> DumpDotAll(
-    "dump-dot-all",
-    cl::desc("dump function CFGs to graphviz format after each stage;"
-             "enable '-print-loops' for color-coded blocks"),
-    cl::Hidden, cl::cat(BoltCategory));
-
-cl::list<std::string> DumpDotFunc(
-    "dump-dot-func", cl::CommaSeparated,
-    cl::desc(
-        "dump function CFGs to graphviz format for specified functions only;"
-        "takes function name patterns (regex supported)"),
-    cl::value_desc("func1,func2,func3,..."), cl::Hidden, cl::cat(BoltCategory));
-
-bool shouldDumpDot(const bolt::BinaryFunction &Function) {
-  // If dump-dot-all is enabled, dump all functions
-  if (DumpDotAll)
-    return !Function.isIgnored();
-
-  // If no specific functions specified in dump-dot-func, don't dump any
-  if (DumpDotFunc.empty())
-    return false;
-
-  if (Function.isIgnored())
-    return false;
-
-  // Check if function matches any of the specified patterns
-  for (const std::string &Name : DumpDotFunc) {
-    if (Function.hasNameRegex(Name)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-static cl::list<std::string>
-ForceFunctionNames("funcs",
-  cl::CommaSeparated,
-  cl::desc("limit optimizations to functions from the list"),
-  cl::value_desc("func1,func2,func3,..."),
-  cl::Hidden,
-  cl::cat(BoltCategory));
-
-static cl::opt<std::string>
-FunctionNamesFile("funcs-file",
-  cl::desc("file with list of functions to optimize"),
-  cl::Hidden,
-  cl::cat(BoltCategory));
-
-static cl::list<std::string> ForceFunctionNamesNR(
-    "funcs-no-regex", cl::CommaSeparated,
-    cl::desc("limit optimizations to functions from the list (non-regex)"),
-    cl::value_desc("func1,func2,func3,..."), cl::Hidden, cl::cat(BoltCategory));
-
-static cl::opt<std::string> FunctionNamesFileNR(
-    "funcs-file-no-regex",
-    cl::desc("file with list of functions to optimize (non-regex)"), cl::Hidden,
-    cl::cat(BoltCategory));
-
-cl::opt<bool>
-KeepTmp("keep-tmp",
-  cl::desc("preserve intermediate .o file"),
-  cl::Hidden,
-  cl::cat(BoltCategory));
-
-static cl::opt<unsigned>
-LiteThresholdPct("lite-threshold-pct",
-  cl::desc("threshold (in percent) for selecting functions to process in lite "
-            "mode. Higher threshold means fewer functions to process. E.g "
-            "threshold of 90 means only top 10 percent of functions with "
-            "profile will be processed."),
-  cl::init(0),
-  cl::ZeroOrMore,
-  cl::Hidden,
-  cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned> LiteThresholdCount(
-    "lite-threshold-count",
-    cl::desc("similar to '-lite-threshold-pct' but specify threshold using "
-             "absolute function call count. I.e. limit processing to functions "
-             "executed at least the specified number of times."),
-    cl::init(0), cl::Hidden, cl::cat(BoltOptCategory));
-
-static cl::opt<unsigned>
-    MaxFunctions("max-funcs",
-                 cl::desc("maximum number of functions to process"), cl::Hidden,
-                 cl::cat(BoltCategory));
-
-static cl::opt<unsigned> MaxDataRelocations(
-    "max-data-relocations",
-    cl::desc("maximum number of data relocations to process"), cl::Hidden,
-    cl::cat(BoltCategory));
-
-cl::opt<bool> PrintAll("print-all",
-                       cl::desc("print functions after each stage"), cl::Hidden,
-                       cl::cat(BoltCategory));
-
-static cl::opt<bool>
-    PrintProfile("print-profile",
-                 cl::desc("print functions after attaching profile"),
-                 cl::Hidden, cl::cat(BoltCategory));
-
-cl::opt<bool> PrintCFG("print-cfg",
-                       cl::desc("print functions after CFG construction"),
-                       cl::Hidden, cl::cat(BoltCategory));
-
-cl::opt<bool> PrintDisasm("print-disasm",
-                          cl::desc("print function after disassembly"),
-                          cl::Hidden, cl::cat(BoltCategory));
-
-static cl::opt<bool>
-    PrintGlobals("print-globals",
-                 cl::desc("print global symbols after disassembly"), cl::Hidden,
-                 cl::cat(BoltCategory));
-
-extern cl::opt<bool> PrintSections;
-
-static cl::opt<bool> PrintLoopInfo("print-loops",
-                                   cl::desc("print loop related information"),
-                                   cl::Hidden, cl::cat(BoltCategory));
-
-static cl::opt<cl::boolOrDefault> RelocationMode(
-    "relocs", cl::desc("use relocations in the binary (default=autodetect)"),
-    cl::cat(BoltCategory));
-
-extern cl::opt<std::string> SaveProfile;
-
-static cl::list<std::string>
-SkipFunctionNames("skip-funcs",
-  cl::CommaSeparated,
-  cl::desc("list of functions to skip"),
-  cl::value_desc("func1,func2,func3,..."),
-  cl::Hidden,
-  cl::cat(BoltCategory));
-
-static cl::opt<std::string>
-SkipFunctionNamesFile("skip-funcs-file",
-  cl::desc("file with list of functions to skip"),
-  cl::Hidden,
-  cl::cat(BoltCategory));
-
-static cl::opt<bool> TrapOldCode(
-    "trap-old-code",
-    cl::desc("insert traps in old function bodies (relocation mode)"),
-    cl::Hidden, cl::cat(BoltCategory));
-
-static cl::opt<std::string> DWPPathName("dwp",
-                                        cl::desc("Path and name to DWP file."),
-                                        cl::Hidden, cl::init(""),
-                                        cl::cat(BoltCategory));
-
-static cl::opt<bool> AccurateDebugRanges(
-    "accurate-debug-ranges",
-    cl::desc("with --update-debug-sections, track DWARF lexical-scope "
-             "boundaries so scope ranges are translated precisely (instead of "
-             "via input-relative block offsets). Disable to trade range "
-             "accuracy for lower memory/time."),
-    cl::init(true), cl::Hidden, cl::cat(BoltCategory));
-
-static cl::opt<bool>
-UseGnuStack("use-gnu-stack",
-  cl::desc("use GNU_STACK program header for new segment (workaround for "
-           "issues with strip/objcopy)"),
-  cl::ZeroOrMore,
-  cl::cat(BoltCategory));
-
-static cl::opt<uint64_t> CustomAllocationVMA(
-    "custom-allocation-vma",
-    cl::desc("use a custom address at which new code will be put, "
-             "bypassing BOLT's logic to detect where to put code"),
-    cl::Hidden, cl::cat(BoltCategory));
-
-static cl::opt<bool>
-SequentialDisassembly("sequential-disassembly",
-  cl::desc("performs disassembly sequentially"),
-  cl::init(false),
-  cl::cat(BoltOptCategory));
-
-static cl::opt<bool> WriteBoltInfoSection(
-    "bolt-info", cl::desc("write bolt info section in the output binary"),
-    cl::init(true), cl::Hidden, cl::cat(BoltOutputCategory));
-
-static cl::list<GadgetKindBitmask> GadgetScannersToRun(
-    "scanners", cl::desc("Which gadget scanners to run"),
-    cl::values(
-        clEnumValN(GS_PTRAUTH_RETURN_TARGETS, "ptrauth-pac-ret",
-                   "Unprotected returns (pac-ret)"),
-        clEnumValN(GS_PTRAUTH_TAIL_CALLS, "ptrauth-tail-calls",
-                   "Tail calls performed with unprotected link register"),
-        clEnumValN(GS_PTRAUTH_BRANCH_AND_CALL_TARGETS, "ptrauth-forward-cf",
-                   "Unprotected calls and branches (forward control-flow)"),
-        clEnumValN(GS_PTRAUTH_SIGN_ORACLES, "ptrauth-sign-oracles",
-                   "Signing of untrusted pointers (signing oracles)"),
-        clEnumValN(GS_PTRAUTH_AUTH_ORACLES, "ptrauth-auth-oracles",
-                   "Authentication oracles"),
-
-        clEnumValN(GS_PTRAUTH_ALL_MASK, "ptrauth-all",
-                   "All Pointer Authentication scanners"),
-        clEnumValN(GS_ALL_MASK, "all", "All implemented scanners")),
-    cl::ZeroOrMore, cl::CommaSeparated, cl::cat(BinaryAnalysisCategory));
+std::vector<std::string> ForceFunctionNames;
+std::string FunctionNamesFile = "";
+std::vector<std::string> ForceFunctionNamesNR;
+std::string FunctionNamesFileNR = "";
+bool KeepTmp = false;
+unsigned LiteThresholdPct = 0;
+unsigned LiteThresholdCount = 0;
+unsigned MaxFunctions = 0;
+bool MaxFunctionsSpecified = false;
+unsigned MaxDataRelocations = 0;
+bool PrintAll = false;
+bool PrintProfile = false;
+bool PrintCFG = false;
+bool PrintDisasm = false;
+bool PrintGlobals = false;
+bool PrintLoopInfo = false;
+int RelocationMode = -1;
+std::vector<std::string> SkipFunctionNames;
+std::string SkipFunctionNamesFile = "";
+bool TrapOldCode = false;
+std::string DWPPathName = "";
+bool UseGnuStack = false;
+uint64_t CustomAllocationVMA = 0;
+bool SequentialDisassembly = false;
+bool WriteBoltInfoSection = true;
+std::vector<GadgetKindBitmask> GadgetScannersToRun;
 
 // Primary targets for hooking runtime library initialization hooking
 // with fallback to next item in case if current item is not available
@@ -330,18 +129,7 @@ enum RuntimeLibInitHookTarget : char {
   RLIH_INIT_ARRAY = 2,  /// Use ELF .init_array entry
 };
 
-cl::opt<RuntimeLibInitHookTarget> RuntimeLibInitHook(
-    "runtime-lib-init-hook",
-    cl::desc("Primary target for hooking runtime library initialization, used "
-             "in fallback order of availabiliy in input binary (entry_point -> "
-             "init -> init_array) (default: entry_point)"),
-    cl::Hidden, cl::init(RLIH_ENTRY_POINT),
-    cl::values(clEnumValN(RLIH_ENTRY_POINT, "entry_point",
-                          "use ELF Header Entry Point"),
-               clEnumValN(RLIH_INIT, "init", "use ELF DT_INIT entry"),
-               clEnumValN(RLIH_INIT_ARRAY, "init_array",
-                          "use ELF .init_array entry")),
-    cl::ZeroOrMore, cl::cat(BoltOptCategory));
+RuntimeLibInitHookTarget RuntimeLibInitHook = RLIH_ENTRY_POINT;
 
 } // namespace opts
 
@@ -390,10 +178,52 @@ MCPlusBuilder *createMCPlusBuilder(const Triple::ArchType Arch,
 } // namespace bolt
 } // namespace llvm
 
+bool bolt::shouldDumpDot(const BinaryFunction &Function) {
+  auto *RWOpts = bolt::bolt_rewrite_opts::getBoltRewriteOpts(
+      Function.getBinaryContext().getOptionsContext());
+  if (!RWOpts) {
+    // Fallback to file-scope statics when no context is available.
+    if (opts::DumpDotAll)
+      return !Function.isIgnored();
+    if (opts::DumpDotFunc.empty())
+      return false;
+    if (Function.isIgnored())
+      return false;
+    for (const std::string &Name : opts::DumpDotFunc) {
+      if (Function.hasNameRegex(Name))
+        return true;
+    }
+    return false;
+  }
+
+  // If dump-dot-all is enabled, dump all functions
+  if (RWOpts->get<&clv2::BOLTRW_DumpDotAll>())
+    return !Function.isIgnored();
+
+  // If no specific functions specified in dump-dot-func, don't dump any
+  const auto &DumpFunc = RWOpts->get<&clv2::BOLTRW_DumpDotFunc>();
+  if (DumpFunc.empty())
+    return false;
+
+  if (Function.isIgnored())
+    return false;
+
+  // Check if function matches any of the specified patterns
+  for (const std::string &Name : DumpFunc) {
+    if (Function.hasNameRegex(Name))
+      return true;
+  }
+
+  return false;
+}
+
 namespace {
 
-bool refersToReorderedSection(ErrorOr<BinarySection &> Section) {
-  return llvm::any_of(opts::ReorderData, [&](const std::string &SectionName) {
+bool refersToReorderedSection(ErrorOr<BinarySection &> Section,
+                              const llvm::clv2::OptionsContext &OptsCtx) {
+  auto *Opts = bolt::bolt_passes_opts::getBoltPassesOpts(OptsCtx);
+  auto ReorderData = Opts->get<&clv2::BOLTPASS_ReorderData>();
+  return llvm::any_of(ReorderData, [&](const std::string &SectionName) {
     return Section && Section->getName() == SectionName;
   });
 }
@@ -403,10 +233,11 @@ bool refersToReorderedSection(ErrorOr<BinarySection &> Section) {
 Expected<std::unique_ptr<RewriteInstance>>
 RewriteInstance::create(ELFObjectFileBase *File, const int Argc,
                         const char *const *Argv, StringRef ToolPath,
-                        raw_ostream &Stdout, raw_ostream &Stderr) {
+                        raw_ostream &Stdout, raw_ostream &Stderr,
+                        clv2::OptionsContext *OptsCtx) {
   Error Err = Error::success();
   auto RI = std::make_unique<RewriteInstance>(File, Argc, Argv, ToolPath,
-                                              Stdout, Stderr, Err);
+                                              Stdout, Stderr, Err, OptsCtx);
   if (Err)
     return std::move(Err);
   return std::move(RI);
@@ -415,7 +246,7 @@ RewriteInstance::create(ELFObjectFileBase *File, const int Argc,
 RewriteInstance::RewriteInstance(ELFObjectFileBase *File, const int Argc,
                                  const char *const *Argv, StringRef ToolPath,
                                  raw_ostream &Stdout, raw_ostream &Stderr,
-                                 Error &Err)
+                                 Error &Err, clv2::OptionsContext *OptsCtx)
     : InputFile(File), Argc(Argc), Argv(Argv), ToolPath(ToolPath),
       SHStrTab(StringTableBuilder::ELF) {
   ErrorAsOutParameter EAO(&Err);
@@ -453,14 +284,15 @@ RewriteInstance::RewriteInstance(ELFObjectFileBase *File, const int Argc,
   }
 
   Relocation::Arch = TheTriple.getArch();
+  auto *EarlyRWOpts = bolt::bolt_rewrite_opts::getBoltRewriteOpts(*OptsCtx);
+  std::string DWPPathName = EarlyRWOpts->get<&clv2::BOLTRW_DWPPathName>();
   auto BCOrErr = BinaryContext::createBinaryContext(
       TheTriple, std::make_shared<orc::SymbolStringPool>(), File->getFileName(),
       Features.get(), IsPIC,
       DWARFContext::create(*File, DWARFContext::ProcessDebugRelocations::Ignore,
-                           nullptr, opts::DWPPathName,
-                           WithColor::defaultErrorHandler,
+                           nullptr, DWPPathName, WithColor::defaultErrorHandler,
                            WithColor::defaultWarningHandler, true),
-      JournalingStreams{Stdout, Stderr});
+      JournalingStreams{Stdout, Stderr}, OptsCtx);
   if (Error E = BCOrErr.takeError()) {
     Err = std::move(E);
     return;
@@ -472,12 +304,12 @@ RewriteInstance::RewriteInstance(ELFObjectFileBase *File, const int Argc,
 
   BAT = std::make_unique<BoltAddressTranslation>();
 
-  if (opts::UpdateDebugSections)
+  if (bolt::bolt_utils_opts::getUpdateDebugSections(*BC))
     DebugInfoRewriter = std::make_unique<DWARFRewriter>(*BC);
 
-  if (opts::Instrument)
+  if (bolt::bolt_utils_opts::getInstrument(*BC))
     BC->setRuntimeLibrary(std::make_unique<InstrumentationRuntimeLibrary>());
-  else if (opts::Hugify)
+  else if (bolt::bolt_rtlibs_opts::getHugify(*BC))
     BC->setRuntimeLibrary(std::make_unique<HugifyRuntimeLibrary>());
 }
 
@@ -488,7 +320,7 @@ Error RewriteInstance::setProfile(StringRef Filename) {
     return errorCodeToError(make_error_code(errc::no_such_file_or_directory));
 
   if (ProfileReader) {
-    if (DataAggregator::checkPerfDataMagic(Filename) &&
+    if (DataAggregator::checkPerfDataMagic(Filename, BC->getOptionsContext()) &&
         // Poor man's RTTI
         ProfileReader->getReaderName() == StringRef("perf data aggregator")) {
       static_cast<DataAggregator *>(ProfileReader.get())
@@ -503,7 +335,7 @@ Error RewriteInstance::setProfile(StringRef Filename) {
   }
 
   // Spawn a profile reader based on file contents.
-  if (DataAggregator::checkPerfDataMagic(Filename))
+  if (DataAggregator::checkPerfDataMagic(Filename, BC->getOptionsContext()))
     ProfileReader = std::make_unique<DataAggregator>(Filename);
   else if (YAMLProfileReader::isYAML(Filename))
     ProfileReader = std::make_unique<YAMLProfileReader>(Filename);
@@ -525,7 +357,7 @@ static bool shouldDisassemble(const BinaryFunction &BF) {
   if (BF.isPseudo())
     return false;
 
-  if (opts::processAllFunctions())
+  if (processAllFunctions(BF.getBinaryContext().getOptionsContext()))
     return true;
 
   return !BF.isIgnored();
@@ -586,14 +418,14 @@ void RewriteInstance::markGnuRelroSections(ELFObjectFile<ELFT> *ELFObjFile) {
     bool ImageContains = checkOffsets<ELFT>(Phdr, *Sec, ImageOverlap);
     bool VMAContains = checkVMA<ELFT>(Phdr, *Sec, VMAOverlap);
     if (ImageOverlap) {
-      if (opts::Verbosity >= 1)
+      if (opts::getVerbosity(*BC) >= 1)
         BC->errs() << "BOLT-WARNING: GNU_RELRO segment has partial file offset "
                    << "overlap with section " << BinarySection->getName()
                    << '\n';
       return;
     }
     if (VMAOverlap) {
-      if (opts::Verbosity >= 1)
+      if (opts::getVerbosity(*BC) >= 1)
         BC->errs() << "BOLT-WARNING: GNU_RELRO segment has partial VMA overlap "
                    << "with section " << BinarySection->getName() << '\n';
       return;
@@ -601,7 +433,7 @@ void RewriteInstance::markGnuRelroSections(ELFObjectFile<ELFT> *ELFObjFile) {
     if (!ImageContains || !VMAContains)
       return;
     BinarySection->setRelro();
-    if (opts::Verbosity >= 1)
+    if (opts::getVerbosity(*BC) >= 1)
       BC->outs() << "BOLT-INFO: marking " << BinarySection->getName()
                  << " as GNU_RELRO\n";
   };
@@ -614,8 +446,10 @@ void RewriteInstance::markGnuRelroSections(ELFObjectFile<ELFT> *ELFObjFile) {
 
 template <typename ELFT>
 Error RewriteInstance::discoverStorage(ELFObjectFile<ELFT> *ELFObjFile) {
+  bool TimeRewrite = bolt::bolt_utils_opts::getTimeRewrite(*BC);
+  bool Instrument = bolt::bolt_utils_opts::getInstrument(*BC);
   NamedRegionTimer T("discoverStorage", "discover storage", TimerGroupName,
-                     TimerGroupDesc, opts::TimeRewrite);
+                     TimerGroupDesc, TimeRewrite);
 
   const ELFFile<ELFT> &Obj = ELFObjFile->getELFFile();
 
@@ -631,8 +465,8 @@ Error RewriteInstance::discoverStorage(ELFObjectFile<ELFT> *ELFObjFile) {
   for (const typename ELFT::Phdr &Phdr : PHs) {
     switch (Phdr.p_type) {
     case ELF::PT_LOAD:
-      BC->FirstAllocAddress = std::min(BC->FirstAllocAddress,
-                                       static_cast<uint64_t>(Phdr.p_vaddr));
+      BC->FirstAllocAddress =
+          std::min(BC->FirstAllocAddress, static_cast<uint64_t>(Phdr.p_vaddr));
       NextAvailableAddress =
           std::max(NextAvailableAddress,
                    static_cast<uint64_t>(Phdr.p_vaddr) + Phdr.p_memsz);
@@ -678,8 +512,10 @@ Error RewriteInstance::discoverStorage(ELFObjectFile<ELFT> *ELFObjFile) {
           SectionContents.data() - InputFile->getData().data();
     }
 
-    if (!opts::HeatmapMode &&
-        !(opts::AggregateOnly && BAT->enabledFor(InputFile)) &&
+    bool AggregateOnly = bolt::bolt_utils_opts::getAggregateOnly(*BC);
+    auto HeatmapMode = static_cast<opts::HeatmapModeKind>(
+        bolt::bolt_utils_opts::getHeatmapMode(*BC));
+    if (!HeatmapMode && !(AggregateOnly && BAT->enabledFor(InputFile)) &&
         (SectionName.starts_with(getOrgSecPrefix()) ||
          SectionName == getBOLTTextSectionName()))
       return createStringError(
@@ -696,10 +532,12 @@ Error RewriteInstance::discoverStorage(ELFObjectFile<ELFT> *ELFObjFile) {
 
   FirstNonAllocatableOffset = NextAvailableOffset;
 
-  if (opts::CustomAllocationVMA) {
+  uint64_t CustomAllocationVMA =
+      bolt::bolt_rewrite_opts::getCustomAllocationVma(*BC);
+  if (CustomAllocationVMA) {
     // If user specified a custom address where we should start writing new
     // data, honor that.
-    NextAvailableAddress = opts::CustomAllocationVMA;
+    NextAvailableAddress = CustomAllocationVMA;
     // Sanity check the user-supplied address and emit warnings if something
     // seems off.
     for (const typename ELFT::Phdr &Phdr : PHs) {
@@ -720,14 +558,16 @@ Error RewriteInstance::discoverStorage(ELFObjectFile<ELFT> *ELFObjFile) {
 
   // Hugify: Additional huge page from left side due to
   // weird ASLR mapping addresses (4KB aligned)
-  if (opts::Hugify && !BC->HasFixedLoadAddress) {
+  bool Hugify = bolt::bolt_rtlibs_opts::getHugify(*BC);
+  if (Hugify && !BC->HasFixedLoadAddress) {
     NextAvailableAddress += BC->PageAlign;
   }
 
   NewTextSegmentAddress = NextAvailableAddress;
   NewTextSegmentOffset = NextAvailableOffset;
 
-  if (!opts::UseGnuStack && !BC->IsLinuxKernel) {
+  bool UseGnuStack = bolt::bolt_rewrite_opts::getUseGnuStack(*BC);
+  if (!UseGnuStack && !BC->IsLinuxKernel) {
     // This is where the black magic happens. Creating PHDR table in a segment
     // other than that containing ELF header is tricky. Some loaders and/or
     // parts of loaders will apply e_phoff from ELF header assuming both are in
@@ -762,7 +602,7 @@ Error RewriteInstance::discoverStorage(ELFObjectFile<ELFT> *ELFObjFile) {
 
     // Reserve two more pheaders to avoid having writeable and executable
     // segment in instrumented binary.
-    if (opts::Instrument)
+    if (Instrument)
       Phnum += 2;
 
     NextAvailableAddress +=
@@ -790,6 +630,9 @@ Error RewriteInstance::discoverStorage(ELFObjectFile<ELFT> *ELFObjFile) {
 Error RewriteInstance::run() {
   assert(BC && "failed to create a binary context");
 
+  bool Instrument = bolt::bolt_utils_opts::getInstrument(*BC);
+  bool EnableBAT = bolt::bolt_utils_opts::getEnableBat(*BC);
+
   BC->outs() << "BOLT-INFO: Target architecture: "
              << Triple::getArchTypeName(
                     (llvm::Triple::ArchType)InputFile->getArch())
@@ -805,7 +648,7 @@ Error RewriteInstance::run() {
   adjustCommandLineOptions();
   discoverFileObjects();
 
-  if (opts::Instrument && !BC->IsStaticExecutable) {
+  if (Instrument && !BC->IsStaticExecutable) {
     if (Error E = discoverRtInitAddress())
       return E;
     if (Error E = discoverRtFiniAddress())
@@ -827,17 +670,17 @@ Error RewriteInstance::run() {
   processProfileData();
 
   // Save input binary metadata if BAT section needs to be emitted
-  if (opts::EnableBAT)
+  if (EnableBAT)
     BAT->saveMetadata(*BC);
 
   postProcessFunctions();
 
   processMetadataPostCFG();
 
-  if (opts::DiffOnly)
+  if (bolt::bolt_utils_opts::getDiffOnly(*BC))
     return Error::success();
 
-  if (opts::BinaryAnalysisMode) {
+  if (bolt::bolt_utils_opts::getBinaryAnalysisMode(*BC)) {
     runBinaryAnalyses();
     return Error::success();
   }
@@ -852,14 +695,15 @@ Error RewriteInstance::run() {
 
   updateMetadata();
 
-  if (opts::Instrument && !BC->IsStaticExecutable) {
+  if (Instrument && !BC->IsStaticExecutable) {
     if (Error E = updateRtInitReloc())
       return E;
     if (Error E = updateRtFiniReloc())
       return E;
   }
 
-  if (opts::OutputFilename == "/dev/null") {
+  std::string OutputFilename = bolt::bolt_utils_opts::getO(*BC);
+  if (OutputFilename == "/dev/null") {
     BC->outs() << "BOLT-INFO: skipping writing final binary to disk\n";
     return Error::success();
   } else if (BC->IsLinuxKernel) {
@@ -872,8 +716,11 @@ Error RewriteInstance::run() {
 }
 
 void RewriteInstance::discoverFileObjects() {
+  bool TimeRewrite = [&]() {
+    return bolt::bolt_utils_opts::getTimeRewrite(*BC);
+  }();
   NamedRegionTimer T("discoverFileObjects", "discover file objects",
-                     TimerGroupName, TimerGroupDesc, opts::TimeRewrite);
+                     TimerGroupName, TimerGroupDesc, TimeRewrite);
 
   // For local symbols we want to keep track of associated FILE symbol name for
   // disambiguation by combined name.
@@ -936,7 +783,7 @@ void RewriteInstance::discoverFileObjects() {
 
     auto SymType = cantFail(S.Symbol.getType());
     // Skip warnings for common benign cases.
-    if (opts::Verbosity < 1 && SymType == SymbolRef::ST_Other)
+    if (opts::getVerbosity(*BC) < 1 && SymType == SymbolRef::ST_Other)
       return false; // E.g. ELF::STT_TLS.
 
     auto SymName = S.Symbol.getName();
@@ -1051,15 +898,18 @@ void RewriteInstance::discoverFileObjects() {
 
     StringRef SymName = cantFail(Symbol.getName(), "cannot get symbol name");
     if (SymbolAddress == 0) {
-      if (opts::Verbosity >= 1 && SymbolType == SymbolRef::ST_Function)
+      if (opts::getVerbosity(*BC) >= 1 && SymbolType == SymbolRef::ST_Function)
         BC->errs() << "BOLT-WARNING: function with 0 address seen\n";
       continue;
     }
 
     // Ignore input hot markers unless in heatmap mode
-    if ((SymName == "__hot_start" || SymName == "__hot_end") &&
-        !opts::HeatmapMode)
-      continue;
+    {
+      auto HMMode = static_cast<opts::HeatmapModeKind>(
+          bolt::bolt_utils_opts::getHeatmapMode(*BC));
+      if ((SymName == "__hot_start" || SymName == "__hot_end") && !HMMode)
+        continue;
+    }
 
     FileSymRefs.emplace(SymbolAddress, Symbol);
 
@@ -1096,7 +946,7 @@ void RewriteInstance::discoverFileObjects() {
       if (const BinaryData *BD = BC->getBinaryDataByName(Name)) {
         if (BD->getSize() == ELFSymbolRef(Symbol).getSize() &&
             BD->getAddress() == SymbolAddress) {
-          if (opts::Verbosity > 1)
+          if (opts::getVerbosity(*BC) > 1)
             BC->errs() << "BOLT-WARNING: ignoring duplicate global symbol "
                        << Name << "\n";
           // Ignore duplicate entry - possibly a bug in the linker
@@ -1147,7 +997,7 @@ void RewriteInstance::discoverFileObjects() {
       // Could be an absolute symbol. Used on RISC-V for __global_pointer$ so we
       // need to record it to handle relocations against it. For other instances
       // of absolute symbols, we record for pretty printing.
-      LLVM_DEBUG(if (opts::Verbosity > 1) {
+      LLVM_DEBUG(if (opts::getVerbosity(*BC) > 1) {
         dbgs() << "BOLT-INFO: absolute sym " << UniqueName << "\n";
       });
       registerName(SymbolSize);
@@ -1196,7 +1046,7 @@ void RewriteInstance::discoverFileObjects() {
         } else if (SymbolAddress == PreviousFunction->getAddress() &&
                    !SymbolSize) {
           LLVM_DEBUG(dbgs() << "BOLT-DEBUG: ignoring symbol as a marker\n");
-        } else if (opts::Verbosity > 1) {
+        } else if (opts::getVerbosity(*BC) > 1) {
           BC->errs() << "BOLT-WARNING: symbol " << UniqueName
                      << " seen in the middle of function " << *PreviousFunction
                      << ". Could be a new entry.\n";
@@ -1214,7 +1064,7 @@ void RewriteInstance::discoverFileObjects() {
     if (PreviousFunction && PreviousFunction->containsAddress(SymbolAddress) &&
         PreviousFunction->getAddress() != SymbolAddress) {
       if (PreviousFunction->isSymbolValidInScope(Symbol, SymbolSize)) {
-        if (opts::Verbosity >= 1)
+        if (opts::getVerbosity(*BC) >= 1)
           BC->outs()
               << "BOLT-INFO: skipping possibly another entry for function "
               << *PreviousFunction << " : " << UniqueName << '\n';
@@ -1292,7 +1142,7 @@ void RewriteInstance::discoverFileObjects() {
       // Duplicate the function name. Make sure everything matches before we add
       // an alternative name.
       if (SymbolSize != BF->getSize()) {
-        if (opts::Verbosity >= 1) {
+        if (opts::getVerbosity(*BC) >= 1) {
           if (SymbolSize && BF->getSize())
             BC->errs() << "BOLT-WARNING: size mismatch for duplicate entries "
                        << *BF << " and " << UniqueName << '\n';
@@ -1372,7 +1222,7 @@ void RewriteInstance::discoverFileObjects() {
       continue;
     }
 
-    if (opts::Verbosity >= 1)
+    if (opts::getVerbosity(*BC) >= 1)
       BC->errs() << "BOLT-WARNING: FDE [0x" << Twine::utohexstr(Address)
                  << ", 0x" << Twine::utohexstr(Address + FDE->getAddressRange())
                  << ") has no corresponding symbol table entry\n";
@@ -1491,11 +1341,14 @@ void RewriteInstance::discoverBOLTReserved() {
 }
 
 Error RewriteInstance::discoverRtInitAddress() {
-  if (BC->HasInterpHeader && opts::RuntimeLibInitHook == opts::RLIH_ENTRY_POINT)
+  auto RuntimeLibInitHook = static_cast<clv2::BoltRuntimeLibInitHookTarget>(
+      bolt::bolt_rewrite_opts::getRuntimeLibInitHook(*BC));
+  if (BC->HasInterpHeader &&
+      RuntimeLibInitHook == clv2::BOLTRW_RLIH_ENTRY_POINT)
     return Error::success();
 
   // Use DT_INIT if it's available.
-  if (BC->InitAddress && opts::RuntimeLibInitHook <= opts::RLIH_INIT) {
+  if (BC->InitAddress && RuntimeLibInitHook <= clv2::BOLTRW_RLIH_INIT) {
     BC->StartFunctionAddress = BC->InitAddress;
     return Error::success();
   }
@@ -1558,8 +1411,12 @@ Error RewriteInstance::discoverRtFiniAddress() {
 
   if (!BC->FiniArrayAddress || !BC->FiniArraySize) {
     // Missing fini hooks are allowed when instrumentation-sleep-time is in use.
-    if (opts::InstrumentationSleepTime > 0)
-      return Error::success();
+    {
+      uint32_t InstrumentationSleepTime =
+          bolt::bolt_passes_opts::getInstrumentationSleepTime(*BC);
+      if (InstrumentationSleepTime > 0)
+        return Error::success();
+    }
     return createStringError(
         std::errc::not_supported,
         "Instrumentation needs either DT_FINI or DT_FINI_ARRAY");
@@ -1595,11 +1452,14 @@ Error RewriteInstance::discoverRtFiniAddress() {
 }
 
 Error RewriteInstance::updateRtInitReloc() {
-  if (BC->HasInterpHeader && opts::RuntimeLibInitHook == opts::RLIH_ENTRY_POINT)
+  auto RuntimeLibInitHook = static_cast<clv2::BoltRuntimeLibInitHookTarget>(
+      bolt::bolt_rewrite_opts::getRuntimeLibInitHook(*BC));
+  if (BC->HasInterpHeader &&
+      RuntimeLibInitHook == clv2::BOLTRW_RLIH_ENTRY_POINT)
     return Error::success();
 
   // Updating DT_INIT is handled by patchELFDynamic.
-  if (BC->InitAddress && opts::RuntimeLibInitHook <= opts::RLIH_INIT)
+  if (BC->InitAddress && RuntimeLibInitHook <= clv2::BOLTRW_RLIH_INIT)
     return Error::success();
 
   const RuntimeLibrary *RT = BC->getRuntimeLibrary();
@@ -1671,8 +1531,12 @@ Error RewriteInstance::updateRtFiniReloc() {
 
   if (!BC->FiniArrayAddress || !BC->FiniArraySize) {
     // Missing fini hooks are allowed when instrumentation-sleep-time is in use.
-    if (opts::InstrumentationSleepTime > 0)
-      return Error::success();
+    {
+      uint32_t InstrumentationSleepTime =
+          bolt::bolt_passes_opts::getInstrumentationSleepTime(*BC);
+      if (InstrumentationSleepTime > 0)
+        return Error::success();
+    }
     return createStringError(std::errc::not_supported,
                              "inconsistent .fini_array state");
   }
@@ -1706,8 +1570,10 @@ Error RewriteInstance::updateRtFiniReloc() {
 }
 
 void RewriteInstance::registerFragments() {
+  auto HeatmapMode = static_cast<opts::HeatmapModeKind>(
+      bolt::bolt_utils_opts::getHeatmapMode(*BC));
   if (!BC->HasSplitFunctions ||
-      opts::HeatmapMode == opts::HeatmapModeKind::HM_Exclusive)
+      HeatmapMode == opts::HeatmapModeKind::HM_Exclusive)
     return;
 
   // Process fragments with ambiguous parents separately as they are typically a
@@ -1844,7 +1710,7 @@ void RewriteInstance::registerFragments() {
       }
     }
 
-registerParent:
+  registerParent:
     // No local parent is found, use global parent function.
     if (!ParentAddress)
       if (BinaryData *ParentBD = BC->getBinaryDataByName(ParentName))
@@ -2333,7 +2199,7 @@ void RewriteInstance::adjustFunctionBoundaries(
     if (!Function.getSize() && Function.isSimple()) {
       // Some assembly functions have their size set to 0, use the max
       // size as their real size.
-      if (opts::Verbosity >= 1)
+      if (opts::getVerbosity(*BC) >= 1)
         BC->outs() << "BOLT-INFO: setting size of function " << Function
                    << " to " << Function.getMaxSize() << " (was 0)\n";
       Function.setSize(Function.getMaxSize());
@@ -2390,8 +2256,17 @@ void RewriteInstance::relocateEHFrameSection() {
 }
 
 Error RewriteInstance::readSpecialSections() {
+  auto *UtilOpts =
+      bolt::bolt_utils_opts::getBoltUtilsOpts(BC->getOptionsContext());
+  auto *RWOpts =
+      bolt::bolt_rewrite_opts::getBoltRewriteOpts(BC->getOptionsContext());
+  bool TimeRewrite = UtilOpts->get<&clv2::BOLT_TimeRewrite>();
+  bool UpdateDebugSections = UtilOpts->get<&clv2::BOLT_UpdateDebugSections>();
+  bool PrintSections = UtilOpts->get<&clv2::BOLT_PrintSections>();
+  auto HeatmapMode = static_cast<opts::HeatmapModeKind>(
+      UtilOpts->get<&clv2::BOLT_HeatmapMode>());
   NamedRegionTimer T("readSpecialSections", "read special sections",
-                     TimerGroupName, TimerGroupDesc, opts::TimeRewrite);
+                     TimerGroupName, TimerGroupDesc, TimeRewrite);
 
   bool HasTextRelocations = false;
   bool HasSymbolTable = false;
@@ -2407,7 +2282,7 @@ Error RewriteInstance::readSpecialSections() {
     // Compressed debug sections currently aren't supported.
     if (isDebugSection(SectionName)) {
       HasDebugInfo = true;
-      if (opts::UpdateDebugSections && isCompressedDebugSection(Section)) {
+      if (UpdateDebugSections && isCompressedDebugSection(Section)) {
         return createStringError(errc::not_supported,
                                  Twine("compressed debug section '") +
                                      SectionName +
@@ -2429,12 +2304,15 @@ Error RewriteInstance::readSpecialSections() {
   // Set IsRelro section attribute based on PT_GNU_RELRO segment.
   markGnuRelroSections();
 
-  if (HasDebugInfo && !opts::UpdateDebugSections && !opts::AggregateOnly) {
+  bool AggregateOnly = UtilOpts->get<&clv2::BOLT_AggregateOnly>();
+  if (HasDebugInfo && !UpdateDebugSections && !AggregateOnly) {
     BC->errs() << "BOLT-WARNING: debug info will be stripped from the binary. "
                   "Use -update-debug-sections to keep it.\n";
   }
 
-  if (opts::LargeCodeModel.getNumOccurrences() == 0 && !BC->UseLargeCodeModel &&
+  bool LargeCodeModelSpecified =
+      UtilOpts->specified<&clv2::BOLT_LargeCodeModel>();
+  if (!LargeCodeModelSpecified && !BC->UseLargeCodeModel &&
       BC->getUniqueSectionByName(".ltext")) {
     BC->outs() << "BOLT-INFO: .ltext detected - enabling large code model\n";
     BC->UseLargeCodeModel = true;
@@ -2453,7 +2331,7 @@ Error RewriteInstance::readSpecialSections() {
           BC->getUniqueSectionByName(BoltAddressTranslation::SECTION_NAME)) {
     BC->HasBATSection = true;
     // Do not read BAT when plotting a heatmap
-    if (opts::HeatmapMode != opts::HeatmapModeKind::HM_Exclusive) {
+    if (HeatmapMode != opts::HeatmapModeKind::HM_Exclusive) {
       if (std::error_code EC = BAT->parse(BC->outs(), BATSec->getContents())) {
         BC->errs() << "BOLT-ERROR: failed to parse BOLT address translation "
                       "table.\n";
@@ -2462,21 +2340,24 @@ Error RewriteInstance::readSpecialSections() {
     }
   }
 
-  if (opts::PrintSections) {
+  if (PrintSections) {
     BC->outs() << "BOLT-INFO: Sections from original binary:\n";
     BC->printSections(BC->outs());
   }
 
-  if (opts::RelocationMode == cl::boolOrDefault::BOU_TRUE &&
-      !HasTextRelocations) {
+  // RelocationMode tri-state: unspecified=autodetect, true=force,
+  // false=disable.
+  bool RelocsSpecified = RWOpts->specified<&clv2::BOLTRW_Relocs>();
+  bool RelocsEnabled = RWOpts->get<&clv2::BOLTRW_Relocs>();
+  if (RelocsSpecified && RelocsEnabled && !HasTextRelocations) {
     BC->errs()
         << "BOLT-ERROR: relocations against code are missing from the input "
            "file. Cannot proceed in relocations mode (-relocs).\n";
     exit(1);
   }
 
-  BC->HasRelocations = HasTextRelocations &&
-                       (opts::RelocationMode != cl::boolOrDefault::BOU_FALSE);
+  BC->HasRelocations =
+      HasTextRelocations && !(RelocsSpecified && !RelocsEnabled);
 
   if (BC->IsLinuxKernel && BC->HasRelocations) {
     BC->outs() << "BOLT-INFO: disabling relocation mode for Linux kernel\n";
@@ -2485,7 +2366,8 @@ Error RewriteInstance::readSpecialSections() {
 
   BC->IsStripped = !HasSymbolTable;
 
-  if (BC->IsStripped && !opts::AllowStripped) {
+  bool AllowStripped = RWOpts->get<&clv2::BOLTRW_AllowStripped>();
+  if (BC->IsStripped && !AllowStripped) {
     BC->errs()
         << "BOLT-ERROR: stripped binaries are not supported. If you know "
            "what you're doing, use --allow-stripped to proceed\n";
@@ -2493,11 +2375,12 @@ Error RewriteInstance::readSpecialSections() {
   }
 
   // Force non-relocation mode for heatmap generation
-  if (opts::HeatmapMode == opts::HeatmapModeKind::HM_Exclusive)
+  if (HeatmapMode == opts::HeatmapModeKind::HM_Exclusive)
     BC->HasRelocations = false;
 
+  bool StrictMode = UtilOpts->get<&clv2::BOLT_StrictMode>();
   if (BC->HasRelocations)
-    BC->outs() << "BOLT-INFO: enabling " << (opts::StrictMode ? "strict " : "")
+    BC->outs() << "BOLT-INFO: enabling " << (StrictMode ? "strict " : "")
                << "relocation mode\n";
 
   // Read EH frame for function boundaries info.
@@ -2513,6 +2396,16 @@ Error RewriteInstance::readSpecialSections() {
 }
 
 void RewriteInstance::adjustCommandLineOptions() {
+  auto *UtilOpts =
+      bolt::bolt_utils_opts::getBoltUtilsOpts(BC->getOptionsContext());
+  auto *RWOpts =
+      bolt::bolt_rewrite_opts::getBoltRewriteOpts(BC->getOptionsContext());
+  bool CompactCodeModel = UtilOpts->get<&clv2::BOLT_CompactCodeModel>();
+  auto SplitStrategy = static_cast<opts::SplitFunctionsStrategy>(
+      UtilOpts->get<&clv2::BOLT_SplitStrategy>());
+  bool Instrument = UtilOpts->get<&clv2::BOLT_Instrument>();
+  unsigned AlignFunctions = UtilOpts->get<&clv2::BOLT_AlignFunctions>();
+
   if (BC->isAArch64() && !BC->HasRelocations)
     BC->errs() << "BOLT-WARNING: non-relocation mode for AArch64 is not fully "
                   "supported\n";
@@ -2543,88 +2436,107 @@ void RewriteInstance::adjustCommandLineOptions() {
            "may take several minutes\n";
   }
 
-  if (opts::SplitEH && !BC->HasRelocations) {
+  if ((UtilOpts->get<&clv2::BOLT_SplitEH>()) && !BC->HasRelocations) {
     BC->errs() << "BOLT-WARNING: disabling -split-eh in non-relocation mode\n";
-    opts::SplitEH = false;
+    if (auto *V = BC->getOptionsContext().getViewPtr<&clv2::BoltUtilsOptsReg>())
+      V->get<&clv2::BOLT_SplitEH>() = false;
   }
 
-  if (BC->isAArch64() && !opts::CompactCodeModel &&
-      opts::SplitStrategy == opts::SplitFunctionsStrategy::CDSplit) {
+  if (BC->isAArch64() && !CompactCodeModel &&
+      SplitStrategy == opts::SplitFunctionsStrategy::CDSplit) {
     BC->errs() << "BOLT-ERROR: CDSplit is not supported with LongJmp. Try with "
                   "'--compact-code-model'\n";
     exit(1);
   }
 
-  if (opts::StrictMode && !BC->HasRelocations) {
+  if ((UtilOpts->get<&clv2::BOLT_StrictMode>()) && !BC->HasRelocations) {
     BC->errs()
         << "BOLT-WARNING: disabling strict mode (-strict) in non-relocation "
            "mode\n";
-    opts::StrictMode = false;
+    if (auto *V = BC->getOptionsContext().getViewPtr<&clv2::BoltUtilsOptsReg>())
+      V->get<&clv2::BOLT_StrictMode>() = false;
   }
 
-  if (BC->HasRelocations && opts::AggregateOnly &&
-      !opts::StrictMode.getNumOccurrences()) {
+  bool StrictModeSpecified = UtilOpts->specified<&clv2::BOLT_StrictMode>();
+  if (BC->HasRelocations && (UtilOpts->get<&clv2::BOLT_AggregateOnly>()) &&
+      !StrictModeSpecified) {
     BC->outs() << "BOLT-INFO: enabling strict relocation mode for aggregation "
                   "purposes\n";
-    opts::StrictMode = true;
+    if (auto *V = BC->getOptionsContext().getViewPtr<&clv2::BoltUtilsOptsReg>())
+      V->get<&clv2::BOLT_StrictMode>() = true;
   }
 
-  if (!BC->HasRelocations &&
-      opts::ReorderFunctions != ReorderFunctions::RT_NONE) {
-    BC->errs() << "BOLT-ERROR: function reordering only works when "
-               << "relocations are enabled\n";
-    exit(1);
+  {
+    auto ReorderFunctionsOpt = static_cast<bolt::ReorderFunctions::ReorderType>(
+        bolt::bolt_passes_opts::getReorderFunctions(*BC));
+    auto ICF = static_cast<IdenticalCodeFolding::ICFLevel>(
+        bolt::bolt_passes_opts::getIcf(*BC));
+
+    if (!BC->HasRelocations &&
+        ReorderFunctionsOpt != ReorderFunctions::RT_NONE) {
+      BC->errs() << "BOLT-ERROR: function reordering only works when "
+                 << "relocations are enabled\n";
+      exit(1);
+    }
+
+    if (!BC->HasRelocations && ICF == IdenticalCodeFolding::ICFLevel::Safe) {
+      BC->errs() << "BOLT-ERROR: binary built without relocations. Safe ICF is "
+                    "not supported\n";
+      exit(1);
+    }
+
+    bool HotTextSpecified = UtilOpts->specified<&clv2::BOLT_HotText>();
+    if (Instrument || (ReorderFunctionsOpt != ReorderFunctions::RT_NONE &&
+                       !HotTextSpecified)) {
+      if (auto *V =
+              BC->getOptionsContext().getViewPtr<&clv2::BoltUtilsOptsReg>())
+        V->get<&clv2::BOLT_HotText>() = true;
+    } else if ((UtilOpts->get<&clv2::BOLT_HotText>()) && !BC->HasRelocations) {
+      BC->errs()
+          << "BOLT-WARNING: hot text is disabled in non-relocation mode\n";
+      if (auto *V =
+              BC->getOptionsContext().getViewPtr<&clv2::BoltUtilsOptsReg>())
+        V->get<&clv2::BOLT_HotText>() = false;
+    }
   }
 
-  if (!BC->HasRelocations &&
-      opts::ICF == IdenticalCodeFolding::ICFLevel::Safe) {
-    BC->errs() << "BOLT-ERROR: binary built without relocations. Safe ICF is "
-                  "not supported\n";
-    exit(1);
-  }
-
-  if (opts::Instrument ||
-      (opts::ReorderFunctions != ReorderFunctions::RT_NONE &&
-       !opts::HotText.getNumOccurrences())) {
-    opts::HotText = true;
-  } else if (opts::HotText && !BC->HasRelocations) {
-    BC->errs() << "BOLT-WARNING: hot text is disabled in non-relocation mode\n";
-    opts::HotText = false;
-  }
-
-  if (opts::Instrument && opts::UseGnuStack) {
+  bool UseGnuStack = RWOpts->get<&clv2::BOLTRW_UseGnuStack>();
+  if (Instrument && UseGnuStack) {
     BC->errs() << "BOLT-ERROR: cannot avoid having writeable and executable "
                   "segment in instrumented binary if program headers will be "
                   "updated in place\n";
     exit(1);
   }
 
-  if (opts::Instrument && opts::RuntimeLibInitHook == opts::RLIH_ENTRY_POINT &&
+  auto RuntimeLibInitHook = static_cast<clv2::BoltRuntimeLibInitHookTarget>(
+      RWOpts->get<&clv2::BOLTRW_RuntimeLibInitHook>());
+  if (Instrument && RuntimeLibInitHook == clv2::BOLTRW_RLIH_ENTRY_POINT &&
       !BC->HasInterpHeader && !BC->IsStaticExecutable) {
     BC->errs()
         << "BOLT-WARNING: adjusted runtime-lib-init-hook to 'init' due to "
            "absence of INTERP header\n";
-    opts::RuntimeLibInitHook = opts::RLIH_INIT;
+    if (auto *V =
+            BC->getOptionsContext().getViewPtr<&clv2::BoltRewriteOptsReg>())
+      V->get<&clv2::BOLTRW_RuntimeLibInitHook>() = clv2::BOLTRW_RLIH_INIT;
   }
 
-  if (opts::HotText && opts::HotTextMoveSections.getNumOccurrences() == 0) {
-    opts::HotTextMoveSections.addValue(".stub");
-    opts::HotTextMoveSections.addValue(".mover");
-    opts::HotTextMoveSections.addValue(".never_hugify");
-  }
+  // HotTextMoveSections default is set by BoltPassesOptions -- no need to set
+  // here
 
-  if (opts::UseOldText && !BC->OldTextSectionAddress) {
+  if ((UtilOpts->get<&clv2::BOLT_UseOldText>()) && !BC->OldTextSectionAddress) {
     BC->errs()
         << "BOLT-WARNING: cannot use old .text as the section was not found"
            "\n";
-    opts::UseOldText = false;
+    if (auto *V = BC->getOptionsContext().getViewPtr<&clv2::BoltUtilsOptsReg>())
+      V->get<&clv2::BOLT_UseOldText>() = false;
   }
-  if (opts::UseOldText && !BC->HasRelocations) {
+  if ((UtilOpts->get<&clv2::BOLT_UseOldText>()) && !BC->HasRelocations) {
     BC->errs() << "BOLT-WARNING: cannot use old .text in non-relocation mode\n";
-    opts::UseOldText = false;
+    if (auto *V = BC->getOptionsContext().getViewPtr<&clv2::BoltUtilsOptsReg>())
+      V->get<&clv2::BOLT_UseOldText>() = false;
   }
 
-  if (opts::MergeTextSections) {
+  if (bolt::bolt_rewrite_opts::getMergeTextSections(*BC)) {
     if (!BC->HasRelocations) {
       BC->errs() << "BOLT-ERROR: --merge-text-sections requires relocation "
                     "mode\n";
@@ -2637,53 +2549,91 @@ void RewriteInstance::adjustCommandLineOptions() {
     }
   }
 
-  if (!opts::AlignText.getNumOccurrences())
-    opts::AlignText = BC->PageAlign;
+  bool AlignTextSpecified = UtilOpts->specified<&clv2::BOLT_AlignText>();
+  if (!AlignTextSpecified) {
+    if (auto *V = BC->getOptionsContext().getViewPtr<&clv2::BoltUtilsOptsReg>())
+      V->get<&clv2::BOLT_AlignText>() = BC->PageAlign;
+  }
 
-  if (opts::AlignText < opts::AlignFunctions)
-    opts::AlignText = (unsigned)opts::AlignFunctions;
+  {
+    unsigned AlignText = UtilOpts->get<&clv2::BOLT_AlignText>();
+    if (AlignText < AlignFunctions) {
+      if (auto *V =
+              BC->getOptionsContext().getViewPtr<&clv2::BoltUtilsOptsReg>())
+        V->get<&clv2::BOLT_AlignText>() = (unsigned)AlignFunctions;
+    }
+  }
 
   // Mirror alignment-related command line options onto BinaryContext so passes
   // and the emitter can read them via BC instead of touching opts::*.
-  BC->AlignText = opts::AlignText;
-  BC->AlignFunctions = opts::AlignFunctions;
-  BC->AlignBlocks = opts::AlignBlocks;
-  BC->AlignBlocksMinSize = opts::AlignBlocksMinSize;
-  BC->AlignBlocksThreshold = opts::AlignBlocksThreshold;
-  BC->AlignFunctionsMaxBytes = opts::AlignFunctionsMaxBytes;
-  BC->BlockAlignment = opts::BlockAlignment;
-  BC->PreserveBlocksAlignment = opts::PreserveBlocksAlignment;
-  BC->UseCompactAligner = opts::UseCompactAligner;
-  BC->X86AlignBranchBoundaryHotOnly = opts::X86AlignBranchBoundaryHotOnly;
-
-  if ((BC->isX86() || BC->isAArch64()) && opts::Lite.getNumOccurrences() == 0 &&
-      !opts::StrictMode && !opts::UseOldText)
-    opts::Lite = true;
-
-  if (opts::Lite && opts::UseOldText) {
-    BC->errs() << "BOLT-WARNING: cannot combine -lite with -use-old-text. "
-                  "Disabling -use-old-text.\n";
-    opts::UseOldText = false;
+  {
+    BC->AlignText = UtilOpts->get<&clv2::BOLT_AlignText>();
+    BC->AlignFunctions = AlignFunctions;
+    BC->AlignBlocks = bolt::bolt_core_opts::getAlignBlocks(*BC);
+    BC->AlignBlocksMinSize = bolt::bolt_passes_opts::getAlignBlocksMinSize(*BC);
+    BC->AlignBlocksThreshold =
+        bolt::bolt_passes_opts::getAlignBlocksThreshold(*BC);
+    BC->AlignFunctionsMaxBytes =
+        bolt::bolt_passes_opts::getAlignFunctionsMaxBytes(*BC);
+    BC->BlockAlignment = bolt::bolt_passes_opts::getBlockAlignment(*BC);
+    BC->PreserveBlocksAlignment =
+        bolt::bolt_core_opts::getPreserveBlocksAlignment(*BC);
+    BC->UseCompactAligner = bolt::bolt_passes_opts::getUseCompactAligner(*BC);
+    BC->X86AlignBranchBoundaryHotOnly =
+        bolt::bolt_core_opts::getX86AlignBranchBoundaryHotOnly(*BC);
   }
 
-  if (opts::Lite && opts::StrictMode) {
+  bool LiteSpecified = UtilOpts->specified<&clv2::BOLT_Lite>();
+  if ((BC->isX86() || BC->isAArch64()) && !LiteSpecified &&
+      !(UtilOpts->get<&clv2::BOLT_StrictMode>()) &&
+      !(UtilOpts->get<&clv2::BOLT_UseOldText>())) {
+    if (auto *V = BC->getOptionsContext().getViewPtr<&clv2::BoltUtilsOptsReg>())
+      V->get<&clv2::BOLT_Lite>() = true;
+  }
+
+  if ((UtilOpts->get<&clv2::BOLT_Lite>()) &&
+      (UtilOpts->get<&clv2::BOLT_UseOldText>())) {
+    BC->errs() << "BOLT-WARNING: cannot combine -lite with -use-old-text. "
+                  "Disabling -use-old-text.\n";
+    if (auto *V = BC->getOptionsContext().getViewPtr<&clv2::BoltUtilsOptsReg>())
+      V->get<&clv2::BOLT_UseOldText>() = false;
+  }
+
+  if ((UtilOpts->get<&clv2::BOLT_Lite>()) &&
+      (UtilOpts->get<&clv2::BOLT_StrictMode>())) {
     BC->errs()
         << "BOLT-ERROR: -strict and -lite cannot be used at the same time\n";
     exit(1);
   }
 
-  if (opts::Lite)
+  if (UtilOpts->get<&clv2::BOLT_Lite>())
     BC->outs() << "BOLT-INFO: enabling lite mode\n";
 
   if (BC->IsLinuxKernel) {
-    if (!opts::KeepNops.getNumOccurrences())
-      opts::KeepNops = true;
+    bool KeepNopsSpecified = RWOpts->specified<&clv2::BOLTRW_KeepNops>();
+    if (!KeepNopsSpecified) {
+      if (auto *V =
+              BC->getOptionsContext().getViewPtr<&clv2::BoltRewriteOptsReg>())
+        V->get<&clv2::BOLTRW_KeepNops>() = true;
+    }
 
     // Linux kernel may resume execution after a trap or x86 HLT instruction.
-    if (!opts::TerminalHLT.getNumOccurrences())
-      opts::TerminalHLT = false;
-    if (!opts::TerminalTrap.getNumOccurrences())
-      opts::TerminalTrap = false;
+    auto *CoreOpts =
+        bolt::bolt_core_opts::getBoltCoreOpts(BC->getOptionsContext());
+    bool TerminalHLTSpecified =
+        CoreOpts->specified<&clv2::BOLTCORE_TerminalHLT>();
+    if (!TerminalHLTSpecified) {
+      if (auto *V =
+              BC->getOptionsContext().getViewPtr<&clv2::BoltCoreOptsReg>())
+        V->get<&clv2::BOLTCORE_TerminalHLT>() = false;
+    }
+    bool TerminalTrapSpecified =
+        CoreOpts->specified<&clv2::BOLTCORE_TerminalTrap>();
+    if (!TerminalTrapSpecified) {
+      if (auto *V =
+              BC->getOptionsContext().getViewPtr<&clv2::BoltCoreOptsReg>())
+        V->get<&clv2::BOLTCORE_TerminalTrap>() = false;
+    }
   }
 }
 
@@ -2986,14 +2936,12 @@ void RewriteInstance::readDynamicRelocations(const SectionRef &Section,
       (void)SymbolAddress;
     }
 
-    LLVM_DEBUG(
-      SmallString<16> TypeName;
-      Rel.getTypeName(TypeName);
-      dbgs() << "BOLT-DEBUG: dynamic relocation at 0x"
-             << Twine::utohexstr(Rel.getOffset()) << " : " << TypeName
-             << " : " << SymbolName << " : " <<  Twine::utohexstr(SymbolAddress)
-             << " : + 0x" << Twine::utohexstr(Addend) << '\n'
-    );
+    LLVM_DEBUG(SmallString<16> TypeName; Rel.getTypeName(TypeName);
+               dbgs() << "BOLT-DEBUG: dynamic relocation at 0x"
+                      << Twine::utohexstr(Rel.getOffset()) << " : " << TypeName
+                      << " : " << SymbolName << " : "
+                      << Twine::utohexstr(SymbolAddress) << " : + 0x"
+                      << Twine::utohexstr(Addend) << '\n');
 
     if (IsJmpRel)
       IsJmpRelocation[RType] = true;
@@ -3169,7 +3117,7 @@ void RewriteInstance::handleRelocation(const SectionRef &RelocatedSection,
 
   // Adjust the relocation type as the linker might have skewed it.
   if (IsX86 && (RType & ELF::R_X86_64_converted_reloc_bit)) {
-    if (opts::Verbosity >= 1)
+    if (opts::getVerbosity(*BC) >= 1)
       dbgs() << "BOLT-WARNING: ignoring R_X86_64_converted_reloc_bit\n";
     RType &= ~ELF::R_X86_64_converted_reloc_bit;
   }
@@ -3246,7 +3194,7 @@ void RewriteInstance::handleRelocation(const SectionRef &RelocatedSection,
                                                /*UseMaxSize*/ true);
     assert(ContainingBF && "cannot find function for address in code");
     if (!IsAArch64 && !ContainingBF->containsAddress(Rel.getOffset())) {
-      if (opts::Verbosity >= 1)
+      if (opts::getVerbosity(*BC) >= 1)
         BC->outs() << formatv(
             "BOLT-INFO: {0} has relocations in padding area\n", *ContainingBF);
       ContainingBF->setSize(ContainingBF->getMaxSize());
@@ -3441,7 +3389,7 @@ void RewriteInstance::handleRelocation(const SectionRef &RelocatedSection,
                                                             Rel.getOffset());
           }
         }
-        if (opts::Verbosity > 1 &&
+        if (opts::getVerbosity(*BC) > 1 &&
             BinarySection(*BC, RelocatedSection).isWritable())
           BC->errs()
               << "BOLT-WARNING: writable reference into the middle of the "
@@ -3535,22 +3483,27 @@ void RewriteInstance::handleRelocation(const SectionRef &RelocatedSection,
     }
   }
 
+  unsigned MaxDataRelocations =
+      bolt::bolt_rewrite_opts::getMaxDataRelocations(*BC);
+  bool ForceToDataRelocations =
+      bolt::bolt_rewrite_opts::getForceDataRelocations(*BC);
+
   auto checkMaxDataRelocations = [&]() {
     ++NumDataRelocations;
-    LLVM_DEBUG(if (opts::MaxDataRelocations &&
-                   NumDataRelocations + 1 == opts::MaxDataRelocations) {
+    LLVM_DEBUG(if (MaxDataRelocations &&
+                   NumDataRelocations + 1 == MaxDataRelocations) {
       dbgs() << "BOLT-DEBUG: processing ending on data relocation "
              << NumDataRelocations << ": ";
       printRelocationInfo(Rel, ReferencedSymbol->getName(), SymbolAddress,
                           Addend, ExtractedValue);
     });
 
-    return (!opts::MaxDataRelocations ||
-            NumDataRelocations < opts::MaxDataRelocations);
+    return (!MaxDataRelocations || NumDataRelocations < MaxDataRelocations);
   };
 
-  if ((ReferencedSection && refersToReorderedSection(ReferencedSection)) ||
-      (opts::ForceToDataRelocations && checkMaxDataRelocations()) ||
+  if ((ReferencedSection &&
+       refersToReorderedSection(ReferencedSection, BC->getOptionsContext())) ||
+      (ForceToDataRelocations && checkMaxDataRelocations()) ||
       // RISC-V has ADD/SUB data-to-data relocations
       BC->isRISCV())
     ForceRelocation = true;
@@ -3582,8 +3535,8 @@ static BinaryFunction *getInitFunctionIfStaticBinary(BinaryContext &BC) {
   return BC.getBinaryFunctionAtAddress(BD->getAddress());
 }
 
-static void populateFunctionNames(cl::opt<std::string> &FunctionNamesFile,
-                                  cl::list<std::string> &FunctionNames) {
+static void populateFunctionNames(const std::string &FunctionNamesFile,
+                                  std::vector<std::string> &FunctionNames) {
   if (FunctionNamesFile.empty())
     return;
   std::ifstream FuncsFile(FunctionNamesFile, std::ios::in);
@@ -3593,32 +3546,60 @@ static void populateFunctionNames(cl::opt<std::string> &FunctionNamesFile,
 }
 
 void RewriteInstance::selectFunctionsToPrint() {
-  populateFunctionNames(opts::PrintOnlyFile, opts::PrintOnly);
+  std::string PrintOnlyFile = bolt::bolt_utils_opts::getPrintOnlyFile(*BC);
+  if (!PrintOnlyFile.empty()) {
+    std::ifstream FuncsFile(PrintOnlyFile, std::ios::in);
+    std::string FuncName;
+    while (std::getline(FuncsFile, FuncName)) {
+      if (auto *V =
+              BC->getOptionsContext().getViewPtr<&clv2::BoltUtilsOptsReg>())
+        V->get<&clv2::BOLT_PrintOnly>().push_back(FuncName);
+    }
+  }
 }
 
 void RewriteInstance::selectFunctionsToProcess() {
-  // Extend the list of functions to process or skip from a file.
-  populateFunctionNames(opts::FunctionNamesFile, opts::ForceFunctionNames);
-  populateFunctionNames(opts::SkipFunctionNamesFile, opts::SkipFunctionNames);
-  populateFunctionNames(opts::FunctionNamesFileNR, opts::ForceFunctionNamesNR);
+  auto *RWOpts =
+      bolt::bolt_rewrite_opts::getBoltRewriteOpts(BC->getOptionsContext());
+  std::string FunctionNamesFile =
+      RWOpts->get<&clv2::BOLTRW_FunctionNamesFile>();
+  std::string FunctionNamesFileNR =
+      RWOpts->get<&clv2::BOLTRW_FunctionNamesFileNR>();
+  std::string SkipFunctionNamesFile =
+      RWOpts->get<&clv2::BOLTRW_SkipFunctionNamesFile>();
+  // Seed from CLI-parsed values, then extend from files.
+  if (RWOpts) {
+    BC->ForceFunctionNames = RWOpts->get<&clv2::BOLTRW_ForceFunctionNames>();
+    BC->ForceFunctionNamesNR =
+        RWOpts->get<&clv2::BOLTRW_ForceFunctionNamesNR>();
+    BC->SkipFunctionNames = RWOpts->get<&clv2::BOLTRW_SkipFunctionNames>();
+  }
+  populateFunctionNames(FunctionNamesFile, BC->ForceFunctionNames);
+  populateFunctionNames(SkipFunctionNamesFile, BC->SkipFunctionNames);
+  populateFunctionNames(FunctionNamesFileNR, BC->ForceFunctionNamesNR);
 
   // Make a set of functions to process to speed up lookups.
   std::unordered_set<std::string> ForceFunctionsNR(
-      opts::ForceFunctionNamesNR.begin(), opts::ForceFunctionNamesNR.end());
+      BC->ForceFunctionNamesNR.begin(), BC->ForceFunctionNamesNR.end());
 
-  if ((!opts::ForceFunctionNames.empty() ||
-       !opts::ForceFunctionNamesNR.empty()) &&
-      !opts::SkipFunctionNames.empty()) {
+  if ((!BC->ForceFunctionNames.empty() || !BC->ForceFunctionNamesNR.empty()) &&
+      !BC->SkipFunctionNames.empty()) {
     BC->errs()
         << "BOLT-ERROR: cannot select functions to process and skip at the "
            "same time. Please use only one type of selection.\n";
     exit(1);
   }
 
+  unsigned LiteThresholdPct = RWOpts->get<&clv2::BOLTRW_LiteThresholdPct>();
+  unsigned LiteThresholdCount = RWOpts->get<&clv2::BOLTRW_LiteThresholdCount>();
   uint64_t LiteThresholdExecCount = 0;
-  if (opts::LiteThresholdPct) {
-    if (opts::LiteThresholdPct > 100)
-      opts::LiteThresholdPct = 100;
+  if (LiteThresholdPct) {
+    if (LiteThresholdPct > 100) {
+      LiteThresholdPct = 100;
+      if (auto *V =
+              BC->getOptionsContext().getViewPtr<&clv2::BoltRewriteOptsReg>())
+        V->get<&clv2::BOLTRW_LiteThresholdPct>() = 100;
+    }
 
     std::vector<const BinaryFunction *> TopFunctions;
     for (auto &BFI : BC->getBinaryFunctions()) {
@@ -3631,22 +3612,27 @@ void RewriteInstance::selectFunctionsToProcess() {
           return A->getKnownExecutionCount() < B->getKnownExecutionCount();
         });
 
-    size_t Index = TopFunctions.size() * opts::LiteThresholdPct / 100;
+    size_t Index = TopFunctions.size() * LiteThresholdPct / 100;
     if (Index)
       --Index;
     LiteThresholdExecCount = TopFunctions[Index]->getKnownExecutionCount();
     BC->outs() << "BOLT-INFO: limiting processing to functions with at least "
                << LiteThresholdExecCount << " invocations\n";
   }
-  LiteThresholdExecCount = std::max(
-      LiteThresholdExecCount, static_cast<uint64_t>(opts::LiteThresholdCount));
+  LiteThresholdExecCount = std::max(LiteThresholdExecCount,
+                                    static_cast<uint64_t>(LiteThresholdCount));
+
+  auto ReorderFunctionsOpt = static_cast<bolt::ReorderFunctions::ReorderType>(
+      bolt::bolt_passes_opts::getReorderFunctions(*BC));
 
   StringSet<> ReorderFunctionsUserSet;
   StringSet<> ReorderFunctionsLTOCommonSet;
-  if (opts::ReorderFunctions == ReorderFunctions::RT_USER) {
+  if (ReorderFunctionsOpt == ReorderFunctions::RT_USER) {
+    const std::string FunctionOrderFile =
+        bolt::bolt_passes_opts::getFunctionOrder(*BC);
     std::vector<std::string> FunctionNames;
-    BC->logBOLTErrorsAndQuitOnFatal(
-        ReorderFunctions::readFunctionOrderFile(FunctionNames));
+    BC->logBOLTErrorsAndQuitOnFatal(ReorderFunctions::readFunctionOrderFile(
+        FunctionOrderFile, FunctionNames));
     for (const std::string &Function : FunctionNames) {
       ReorderFunctionsUserSet.insert(Function);
       if (std::optional<StringRef> LTOCommonName = getLTOCommonName(Function))
@@ -3654,12 +3640,14 @@ void RewriteInstance::selectFunctionsToProcess() {
     }
   }
 
+  unsigned MaxFunctions = RWOpts->get<&clv2::BOLTRW_MaxFunctions>();
+  bool MaxFunctionsSpecified = RWOpts->specified<&clv2::BOLTRW_MaxFunctions>();
+
   uint64_t NumFunctionsToProcess = 0;
   auto mustSkip = [&](const BinaryFunction &Function) {
-    if (opts::MaxFunctions.getNumOccurrences() &&
-        NumFunctionsToProcess >= opts::MaxFunctions)
+    if (MaxFunctionsSpecified && NumFunctionsToProcess >= MaxFunctions)
       return true;
-    for (std::string &Name : opts::SkipFunctionNames)
+    for (std::string &Name : BC->SkipFunctionNames)
       if (Function.hasNameRegex(Name))
         return true;
 
@@ -3676,9 +3664,9 @@ void RewriteInstance::selectFunctionsToProcess() {
       return true;
 
     // If the list is not empty, only process functions from the list.
-    if (!opts::ForceFunctionNames.empty() || !ForceFunctionsNR.empty()) {
+    if (!BC->ForceFunctionNames.empty() || !ForceFunctionsNR.empty()) {
       // Regex check (-funcs and -funcs-file options).
-      for (std::string &Name : opts::ForceFunctionNames)
+      for (std::string &Name : BC->ForceFunctionNames)
         if (Function.hasNameRegex(Name))
           return true;
 
@@ -3690,9 +3678,9 @@ void RewriteInstance::selectFunctionsToProcess() {
       return false;
     }
 
-    if (opts::Lite) {
+    if (bolt::bolt_utils_opts::getLite(*BC)) {
       // Forcibly include functions specified in the -function-order file.
-      if (opts::ReorderFunctions == ReorderFunctions::RT_USER) {
+      if (ReorderFunctionsOpt == ReorderFunctions::RT_USER) {
         for (const StringRef Name : Function.getNames())
           if (ReorderFunctionsUserSet.contains(Name))
             return true;
@@ -3730,15 +3718,14 @@ void RewriteInstance::selectFunctionsToProcess() {
       continue;
 
     if (!shouldProcess(Function)) {
-      if (opts::Verbosity >= 1) {
+      if (opts::getVerbosity(*BC) >= 1) {
         BC->outs() << "BOLT-INFO: skipping processing " << Function
                    << " per user request\n";
       }
       Function.setIgnored();
     } else {
       ++NumFunctionsToProcess;
-      if (opts::MaxFunctions.getNumOccurrences() &&
-          NumFunctionsToProcess == opts::MaxFunctions)
+      if (MaxFunctionsSpecified && NumFunctionsToProcess == MaxFunctions)
         BC->outs() << "BOLT-INFO: processing ending on " << Function << '\n';
     }
   }
@@ -3757,7 +3744,7 @@ void RewriteInstance::selectFunctionsToProcess() {
       continue;
     if (mustSkip(Function)) {
       for (BinaryFunction *Parent : Function.ParentFragments) {
-        if (opts::Verbosity >= 1) {
+        if (opts::getVerbosity(*BC) >= 1) {
           BC->outs() << "BOLT-INFO: skipping processing " << *Parent
                      << " together with fragment function\n";
         }
@@ -3773,34 +3760,38 @@ void RewriteInstance::selectFunctionsToProcess() {
           return Parent->isIgnored();
         });
     if (IgnoredParent) {
-      if (opts::Verbosity >= 1) {
+      if (opts::getVerbosity(*BC) >= 1) {
         BC->outs() << "BOLT-INFO: skipping processing " << Function
                    << " together with parent function\n";
       }
       Function.setIgnored();
     } else {
       ++NumFunctionsToProcess;
-      if (opts::Verbosity >= 1) {
+      if (opts::getVerbosity(*BC) >= 1) {
         BC->outs() << "BOLT-INFO: processing " << Function
                    << " as a sibling of non-ignored function\n";
       }
-      if (opts::MaxFunctions && NumFunctionsToProcess == opts::MaxFunctions)
+      if (MaxFunctions && NumFunctionsToProcess == MaxFunctions)
         BC->outs() << "BOLT-INFO: processing ending on " << Function << '\n';
     }
   }
 }
 
 void RewriteInstance::readDebugInfo() {
+  bool TimeRewrite = bolt::bolt_utils_opts::getTimeRewrite(*BC);
+  bool UpdateDebugSections = bolt::bolt_utils_opts::getUpdateDebugSections(*BC);
   NamedRegionTimer T("readDebugInfo", "read debug info", TimerGroupName,
-                     TimerGroupDesc, opts::TimeRewrite);
-  if (!opts::UpdateDebugSections)
+                     TimerGroupDesc, TimeRewrite);
+  if (!UpdateDebugSections)
     return;
 
   BC->preprocessDebugInfo();
 
-  if (opts::AccurateDebugRanges) {
+  bool AccurateDebugRanges =
+      bolt::bolt_rewrite_opts::getAccurateDebugRanges(*BC);
+  if (AccurateDebugRanges) {
     NamedRegionTimer T("readDebugRanges", "read debug ranges", TimerGroupName,
-                       TimerGroupDesc, opts::TimeRewrite);
+                       TimerGroupDesc, TimeRewrite);
     BC->collectDebugScopeBoundaries();
   }
 
@@ -3811,8 +3802,11 @@ void RewriteInstance::preprocessProfileData() {
   if (!ProfileReader)
     return;
 
+  bool TimeRewrite = [&]() {
+    return bolt::bolt_utils_opts::getTimeRewrite(*BC);
+  }();
   NamedRegionTimer T("preprocessprofile", "pre-process profile data",
-                     TimerGroupName, TimerGroupDesc, opts::TimeRewrite);
+                     TimerGroupName, TimerGroupDesc, TimeRewrite);
 
   BC->outs() << "BOLT-INFO: pre-processing profile using "
              << ProfileReader->getReaderName() << '\n';
@@ -3826,8 +3820,9 @@ void RewriteInstance::preprocessProfileData() {
   if (Error E = ProfileReader->preprocessProfile(*BC))
     report_error("cannot pre-process profile", std::move(E));
 
+  bool AllowStripped = bolt::bolt_rewrite_opts::getAllowStripped(*BC);
   if (!BC->hasSymbolsWithFileName() && ProfileReader->hasLocalsWithFileName() &&
-      !opts::AllowStripped) {
+      !AllowStripped) {
     BC->errs()
         << "BOLT-ERROR: input binary does not have local file symbols "
            "but profile data includes function names with embedded file "
@@ -3854,24 +3849,33 @@ void RewriteInstance::initializeMetadataManager() {
 }
 
 void RewriteInstance::processSectionMetadata() {
+  bool TimeRewrite = [&]() {
+    return bolt::bolt_utils_opts::getTimeRewrite(*BC);
+  }();
   NamedRegionTimer T("processmetadata-section", "process section metadata",
-                     TimerGroupName, TimerGroupDesc, opts::TimeRewrite);
+                     TimerGroupName, TimerGroupDesc, TimeRewrite);
   initializeMetadataManager();
 
   MetadataManager.runSectionInitializers();
 }
 
 void RewriteInstance::processMetadataPreCFG() {
+  bool TimeRewrite = [&]() {
+    return bolt::bolt_utils_opts::getTimeRewrite(*BC);
+  }();
   NamedRegionTimer T("processmetadata-precfg", "process metadata pre-CFG",
-                     TimerGroupName, TimerGroupDesc, opts::TimeRewrite);
+                     TimerGroupName, TimerGroupDesc, TimeRewrite);
   MetadataManager.runInitializersPreCFG();
 
   processProfileDataPreCFG();
 }
 
 void RewriteInstance::processMetadataPostCFG() {
+  bool TimeRewrite = [&]() {
+    return bolt::bolt_utils_opts::getTimeRewrite(*BC);
+  }();
   NamedRegionTimer T("processmetadata-postcfg", "process metadata post-CFG",
-                     TimerGroupName, TimerGroupDesc, opts::TimeRewrite);
+                     TimerGroupName, TimerGroupDesc, TimeRewrite);
   MetadataManager.runInitializersPostCFG();
 }
 
@@ -3879,8 +3883,11 @@ void RewriteInstance::processProfileDataPreCFG() {
   if (!ProfileReader)
     return;
 
+  bool TimeRewrite = [&]() {
+    return bolt::bolt_utils_opts::getTimeRewrite(*BC);
+  }();
   NamedRegionTimer T("processprofile-precfg", "process profile data pre-CFG",
-                     TimerGroupName, TimerGroupDesc, opts::TimeRewrite);
+                     TimerGroupName, TimerGroupDesc, TimeRewrite);
 
   if (Error E = ProfileReader->readProfilePreCFG(*BC))
     report_error("cannot read profile pre-CFG", std::move(E));
@@ -3890,13 +3897,19 @@ void RewriteInstance::processProfileData() {
   if (!ProfileReader)
     return;
 
+  bool TimeRewrite = bolt::bolt_utils_opts::getTimeRewrite(*BC);
+  std::string SaveProfile = bolt::bolt_utils_opts::getW(*BC);
+  auto ProfileFormat = static_cast<opts::ProfileFormatKind>(
+      bolt::bolt_utils_opts::getProfileFormat(*BC));
+  bool PrintProfile = bolt::bolt_rewrite_opts::getPrintProfile(*BC);
+  bool PrintAll = bolt::bolt_rewrite_opts::getPrintAll(*BC);
   NamedRegionTimer T("processprofile", "process profile data", TimerGroupName,
-                     TimerGroupDesc, opts::TimeRewrite);
+                     TimerGroupDesc, TimeRewrite);
 
   if (Error E = ProfileReader->readProfile(*BC))
     report_error("cannot read profile", std::move(E));
 
-  if (opts::PrintProfile || opts::PrintAll) {
+  if (PrintProfile || PrintAll) {
     for (auto &BFI : BC->getBinaryFunctions()) {
       BinaryFunction &Function = BFI.second;
       if (Function.empty())
@@ -3906,21 +3919,22 @@ void RewriteInstance::processProfileData() {
     }
   }
 
-  if (!opts::SaveProfile.empty() && !BAT->enabledFor(InputFile)) {
-    YAMLProfileWriter PW(opts::SaveProfile);
+  if (!SaveProfile.empty() && !BAT->enabledFor(InputFile)) {
+    YAMLProfileWriter PW(SaveProfile);
     PW.writeProfile(*this);
   }
-  if (opts::AggregateOnly &&
-      opts::ProfileFormat == opts::ProfileFormatKind::PF_YAML &&
+  bool AggregateOnly = bolt::bolt_utils_opts::getAggregateOnly(*BC);
+  if (AggregateOnly && ProfileFormat == opts::ProfileFormatKind::PF_YAML &&
       !BAT->enabledFor(InputFile)) {
-    YAMLProfileWriter PW(opts::OutputFilename);
+    std::string OutputFilename = bolt::bolt_utils_opts::getO(*BC);
+    YAMLProfileWriter PW(OutputFilename);
     PW.writeProfile(*this);
   }
 
   // Release memory used by profile reader.
   ProfileReader.reset();
 
-  if (opts::AggregateOnly) {
+  if (AggregateOnly) {
     PrintProgramStats PPS(&*BAT);
     BC->logBOLTErrorsAndQuitOnFatal(PPS.runOnFunctions(*BC));
     TimerGroup::printAll(outs());
@@ -3929,8 +3943,14 @@ void RewriteInstance::processProfileData() {
 }
 
 void RewriteInstance::disassembleFunctions() {
+  bool PrintAll = bolt::bolt_rewrite_opts::getPrintAll(*BC);
+  bool PrintDisasm = bolt::bolt_rewrite_opts::getPrintDisasm(*BC);
+  bool TimeBuild = bolt::bolt_core_opts::getTimeBuild(*BC);
+  bool TimeRewrite = [&]() {
+    return bolt::bolt_utils_opts::getTimeRewrite(*BC);
+  }();
   NamedRegionTimer T("disassembleFunctions", "disassemble functions",
-                     TimerGroupName, TimerGroupDesc, opts::TimeRewrite);
+                     TimerGroupName, TimerGroupDesc, TimeRewrite);
   for (auto &BFI : BC->getBinaryFunctions()) {
     BinaryFunction &Function = BFI.second;
 
@@ -3954,7 +3974,7 @@ void RewriteInstance::disassembleFunctions() {
 
     if (!shouldDisassemble(Function)) {
       NamedRegionTimer T("scan", "scan functions", "buildfuncs",
-                         "Scan Binary Functions", opts::TimeBuild);
+                         "Scan Binary Functions", TimeBuild);
       Function.scanExternalRefs();
       Function.setSimple(false);
       continue;
@@ -3967,14 +3987,14 @@ void RewriteInstance::disassembleFunctions() {
         E.log(BC->errs());
         exit(1);
       }
-      if (opts::processAllFunctions()) {
+      if (processAllFunctions(BC->getOptionsContext())) {
         BC->errs() << BC->generateBugReportMessage(
             "function cannot be properly disassembled. "
             "Unable to continue in relocation mode.",
             Function);
         exit(1);
       }
-      if (opts::Verbosity >= 1)
+      if (opts::getVerbosity(*BC) >= 1)
         BC->outs() << "BOLT-INFO: could not disassemble function " << Function
                    << ". Will ignore.\n";
       // Forcefully ignore the function.
@@ -3985,7 +4005,7 @@ void RewriteInstance::disassembleFunctions() {
     if (DisasmFailed)
       continue;
 
-    if (opts::PrintAll || opts::PrintDisasm)
+    if (PrintAll || PrintDisasm)
       Function.print(BC->outs(), "after disassembly");
   }
 
@@ -4036,7 +4056,9 @@ void RewriteInstance::disassembleFunctions() {
     // Check if fillCFIInfoFor removed any OpNegateRAState CFIs from the
     // function.
     if (Function.containedNegateRAState()) {
-      if (!opts::UpdateBranchProtection) {
+      bool UpdateBranchProtection =
+          bolt::bolt_rewrite_opts::getUpdateBranchProtection(*BC);
+      if (!UpdateBranchProtection) {
         BC->errs()
             << "BOLT-ERROR: --update-branch-protection is set to false, but "
             << Function.getPrintName() << " contains .cfi-negate-ra-state\n";
@@ -4059,8 +4081,12 @@ void RewriteInstance::disassembleFunctions() {
 }
 
 void RewriteInstance::buildFunctionsCFG() {
+  bool PrintAll = bolt::bolt_rewrite_opts::getPrintAll(*BC);
+  bool SequentialDisassembly =
+      bolt::bolt_rewrite_opts::getSequentialDisassembly(*BC);
+  bool TimeBuild = bolt::bolt_core_opts::getTimeBuild(*BC);
   NamedRegionTimer T("buildCFG", "buildCFG", "buildfuncs",
-                     "Build Binary Functions", opts::TimeBuild);
+                     "Build Binary Functions", TimeBuild);
 
   // Create annotation indices to allow lock-free execution
   BC->MIB->getOrCreateAnnotationIndex("JTIndexReg");
@@ -4080,7 +4106,7 @@ void RewriteInstance::buildFunctionsCFG() {
         if (HadErrors)
           return;
 
-        if (opts::PrintAll) {
+        if (PrintAll) {
           auto L = BC->scopeLock();
           BF.print(BC->outs(), "while building cfg");
         }
@@ -4093,12 +4119,17 @@ void RewriteInstance::buildFunctionsCFG() {
   ParallelUtilities::runOnEachFunctionWithUniqueAllocId(
       *BC, ParallelUtilities::SchedulingPolicy::SP_INST_LINEAR, WorkFun,
       SkipPredicate, "disassembleFunctions-buildCFG",
-      /*ForceSequential*/ opts::SequentialDisassembly || opts::PrintAll);
+      /*ForceSequential*/ SequentialDisassembly || PrintAll);
 
   BC->postProcessSymbolTable();
 }
 
 void RewriteInstance::postProcessFunctions() {
+  bool PrintAll = bolt::bolt_rewrite_opts::getPrintAll(*BC);
+  bool PrintCFG = bolt::bolt_rewrite_opts::getPrintCfg(*BC);
+  bool PrintLoopInfo = bolt::bolt_rewrite_opts::getPrintLoops(*BC);
+  bool PrintGlobals = bolt::bolt_rewrite_opts::getPrintGlobals(*BC);
+
   // We mark fragments as non-simple here, not during disassembly,
   // So we can build their CFGs.
   BC->skipMarkedFragments();
@@ -4120,13 +4151,13 @@ void RewriteInstance::postProcessFunctions() {
 
     Function.postProcessCFG();
 
-    if (opts::PrintAll || opts::PrintCFG)
+    if (PrintAll || PrintCFG)
       Function.print(BC->outs(), "after building cfg");
 
-    if (opts::shouldDumpDot(Function))
+    if (shouldDumpDot(Function))
       Function.dumpGraphForPass("00_build-cfg");
 
-    if (opts::PrintLoopInfo) {
+    if (PrintLoopInfo) {
       Function.calculateLoopInfo();
       Function.printLoopInfo(BC->outs());
     }
@@ -4135,21 +4166,27 @@ void RewriteInstance::postProcessFunctions() {
     BC->SumExecutionCount += Function.getKnownExecutionCount();
   }
 
-  if (opts::PrintGlobals) {
+  if (PrintGlobals) {
     BC->outs() << "BOLT-INFO: Global symbols:\n";
     BC->printGlobalSymbols(BC->outs());
   }
 }
 
 void RewriteInstance::runOptimizationPasses() {
+  bool TimeRewrite = [&]() {
+    return bolt::bolt_utils_opts::getTimeRewrite(*BC);
+  }();
   NamedRegionTimer T("runOptimizationPasses", "run optimization passes",
-                     TimerGroupName, TimerGroupDesc, opts::TimeRewrite);
+                     TimerGroupName, TimerGroupDesc, TimeRewrite);
   BC->logBOLTErrorsAndQuitOnFatal(BinaryFunctionPassManager::runAllPasses(*BC));
 }
 
 void RewriteInstance::runBinaryAnalyses() {
+  bool TimeRewrite = [&]() {
+    return bolt::bolt_utils_opts::getTimeRewrite(*BC);
+  }();
   NamedRegionTimer T("runBinaryAnalyses", "run binary analysis passes",
-                     TimerGroupName, TimerGroupDesc, opts::TimeRewrite);
+                     TimerGroupName, TimerGroupDesc, TimeRewrite);
   BinaryFunctionPassManager Manager(*BC);
 
   // Warn about functions for which BOLT could not reconstruct the CFG: binary
@@ -4164,7 +4201,7 @@ void RewriteInstance::runBinaryAnalyses() {
     if (BF.isIgnored() || BF.hasCFG())
       continue;
     ++NoCFGCount;
-    if (opts::Verbosity >= 1)
+    if (opts::getVerbosity(*BC) >= 1)
       BC->errs() << "BOLT-WARNING: no CFG for " << BF
                  << "; binary analyses may be imprecise\n";
   }
@@ -4175,13 +4212,15 @@ void RewriteInstance::runBinaryAnalyses() {
 
   using PtrAuthScanner = PAuthGadgetScanner::Analysis;
 
+  auto GadgetScannersToRun = bolt::bolt_rewrite_opts::getScanners(*BC);
+
   // Accumulate all enabled analyses.
   decltype(~opts::GS_ALL_MASK) EnabledAnalyses = 0;
-  for (auto NamedOptionSubmask : opts::GadgetScannersToRun)
+  for (auto NamedOptionSubmask : GadgetScannersToRun)
     EnabledAnalyses |= NamedOptionSubmask;
 
   // If no command line option was given, act as if "all" was specified.
-  if (opts::GadgetScannersToRun.empty())
+  if (GadgetScannersToRun.empty())
     EnabledAnalyses = opts::GS_ALL_MASK;
 
   const auto PtrAuthAnalyses = static_cast<opts::GadgetKindBitmask>(
@@ -4213,8 +4252,12 @@ void RewriteInstance::preregisterSections() {
 }
 
 void RewriteInstance::emitAndLink() {
+  bool TimeRewrite = bolt::bolt_utils_opts::getTimeRewrite(*BC);
+  bool UpdateDebugSections = bolt::bolt_utils_opts::getUpdateDebugSections(*BC);
+  bool PrintCacheMetrics = bolt::bolt_utils_opts::getPrintCacheMetrics(*BC);
+  bool KeepTmp = bolt::bolt_rewrite_opts::getKeepTmp(*BC);
   NamedRegionTimer T("emitAndLink", "emit and link", TimerGroupName,
-                     TimerGroupDesc, opts::TimeRewrite);
+                     TimerGroupDesc, TimeRewrite);
 
   SmallString<0> ObjectBuffer;
   raw_svector_ostream OS(ObjectBuffer);
@@ -4225,7 +4268,8 @@ void RewriteInstance::emitAndLink() {
   std::unique_ptr<MCStreamer> Streamer = BC->createStreamer(OS);
 
   if (EHFrameSection) {
-    if (opts::UseOldText || opts::StrictMode) {
+    if ((bolt::bolt_utils_opts::getUseOldText(*BC)) ||
+        (bolt::bolt_utils_opts::getStrict(*BC))) {
       // The section is going to be regenerated from scratch.
       // Empty the contents, but keep the section reference.
       EHFrameSection->clearContents();
@@ -4243,7 +4287,7 @@ void RewriteInstance::emitAndLink() {
     exit(1);
   }
 
-  if (opts::KeepTmp) {
+  if (KeepTmp) {
     SmallString<128> OutObjectPath;
     sys::fs::getPotentiallyUniqueTempFileName("output", "o", OutObjectPath);
     std::error_code EC;
@@ -4282,7 +4326,7 @@ void RewriteInstance::emitAndLink() {
   // layout. Only do this for the object created by ourselves.
   updateOutputValues(*Linker);
 
-  if (opts::UpdateDebugSections) {
+  if (UpdateDebugSections) {
     DebugInfoRewriter->updateLineTableOffsets(
         static_cast<MCObjectStreamer &>(*Streamer).getAssembler());
   }
@@ -4319,30 +4363,36 @@ void RewriteInstance::emitAndLink() {
       Function->setColdCodeSectionName(getBOLTTextSectionName());
   }
 
-  if (opts::PrintCacheMetrics) {
+  if (PrintCacheMetrics) {
     BC->outs() << "BOLT-INFO: cache metrics after emitting functions:\n";
     CacheMetrics::printAll(BC->outs(), BC->getAllBinaryFunctions());
   }
 }
 
 void RewriteInstance::finalizeMetadataPreEmit() {
+  bool TimeRewrite = [&]() {
+    return bolt::bolt_utils_opts::getTimeRewrite(*BC);
+  }();
   NamedRegionTimer T("finalizemetadata-preemit", "finalize metadata pre-emit",
-                     TimerGroupName, TimerGroupDesc, opts::TimeRewrite);
+                     TimerGroupName, TimerGroupDesc, TimeRewrite);
   MetadataManager.runFinalizersPreEmit();
 }
 
 void RewriteInstance::updateMetadata() {
+  bool TimeRewrite = bolt::bolt_utils_opts::getTimeRewrite(*BC);
+  bool UpdateDebugSections = bolt::bolt_utils_opts::getUpdateDebugSections(*BC);
+  bool WriteBoltInfoSection = bolt::bolt_rewrite_opts::getBoltInfo(*BC);
   NamedRegionTimer T("updatemetadata-postemit", "update metadata post-emit",
-                     TimerGroupName, TimerGroupDesc, opts::TimeRewrite);
+                     TimerGroupName, TimerGroupDesc, TimeRewrite);
   MetadataManager.runFinalizersAfterEmit();
 
-  if (opts::UpdateDebugSections) {
+  if (UpdateDebugSections) {
     NamedRegionTimer T("updateDebugInfo", "update debug info", TimerGroupName,
-                       TimerGroupDesc, opts::TimeRewrite);
+                       TimerGroupDesc, TimeRewrite);
     DebugInfoRewriter->updateDebugInfo();
   }
 
-  if (opts::WriteBoltInfoSection)
+  if (WriteBoltInfoSection)
     addBoltInfoSection();
 }
 
@@ -4472,6 +4522,8 @@ private:
 } // namespace
 
 std::vector<BinarySection *> RewriteInstance::getCodeSections() {
+  bool HotFunctionsAtEnd = bolt::bolt_utils_opts::getHotFunctionsAtEnd(*BC);
+
   std::vector<BinarySection *> CodeSections;
   for (BinarySection &Section : BC->textSections())
     if (Section.hasValidSectionID())
@@ -4479,8 +4531,8 @@ std::vector<BinarySection *> RewriteInstance::getCodeSections() {
 
   const CodeSectionOrder CompareSections(
       BC->getColdCodeSectionName(), BC->getHotTextMoverSectionName(),
-      BC->getMainCodeSectionName(), BC->getWarmCodeSectionName(), opts::HotText,
-      opts::HotFunctionsAtEnd);
+      BC->getMainCodeSectionName(), BC->getWarmCodeSectionName(),
+      bolt::bolt_utils_opts::getHotText(*BC), HotFunctionsAtEnd);
 
   // Determine the order of sections.
   llvm::stable_sort(CodeSections,
@@ -4518,6 +4570,8 @@ void RewriteInstance::mapCodeSections(BOLTLinker::SectionMapper MapSection) {
     mapCodeSectionsInPlace(MapSection);
     return;
   }
+
+  bool HotFunctionsAtEnd = bolt::bolt_utils_opts::getHotFunctionsAtEnd(*BC);
 
   // Map sections for functions with pre-assigned addresses.
   for (BinaryFunction *InjectedFunction : BC->getInjectedBinaryFunctions()) {
@@ -4559,7 +4613,8 @@ void RewriteInstance::mapCodeSections(BOLTLinker::SectionMapper MapSection) {
 
       // Hugify: Additional huge page from right side due to
       // weird ASLR mapping addresses (4KB aligned)
-      if (opts::Hugify && !BC->HasFixedLoadAddress &&
+      if ((bolt::bolt_rtlibs_opts::getHugify(*BC)) &&
+          !BC->HasFixedLoadAddress &&
           Section->getName() == LastNonColdSectionName)
         Address = alignTo(Address, Section->getAlignment());
     }
@@ -4567,7 +4622,8 @@ void RewriteInstance::mapCodeSections(BOLTLinker::SectionMapper MapSection) {
     // Make sure we allocate enough space for huge pages.
     ErrorOr<BinarySection &> TextSection =
         BC->getUniqueSectionByName(LastNonColdSectionName);
-    if (opts::HotText && TextSection && TextSection->hasValidSectionID()) {
+    if ((bolt::bolt_utils_opts::getHotText(*BC)) && TextSection &&
+        TextSection->hasValidSectionID()) {
       uint64_t HotTextEnd =
           TextSection->getOutputAddress() + TextSection->getOutputSize();
       HotTextEnd = alignTo(HotTextEnd, BC->PageAlign);
@@ -4595,10 +4651,10 @@ void RewriteInstance::mapCodeSections(BOLTLinker::SectionMapper MapSection) {
 
   // Check if we can fit code in the original .text
   bool AllocationDone = false;
-  if (opts::UseOldText) {
+  if (bolt::bolt_utils_opts::getUseOldText(*BC)) {
     uint64_t StartAddress;
     uint64_t EndAddress;
-    if (opts::HotFunctionsAtEnd) {
+    if (HotFunctionsAtEnd) {
       EndAddress = BC->OldTextSectionAddress + BC->OldTextSectionSize;
       StartAddress = allocateBefore(EndAddress);
     } else {
@@ -4621,7 +4677,9 @@ void RewriteInstance::mapCodeSections(BOLTLinker::SectionMapper MapSection) {
                  << CodeSize << " bytes needed, have " << BC->OldTextSectionSize
                  << " bytes available. Rebuilding without --use-old-text may "
                     "produce a smaller binary\n";
-      opts::UseOldText = false;
+      if (auto *V =
+              BC->getOptionsContext().getViewPtr<&clv2::BoltUtilsOptsReg>())
+        V->get<&clv2::BOLT_UseOldText>() = false;
     }
   }
 
@@ -4640,12 +4698,12 @@ void RewriteInstance::mapCodeSections(BOLTLinker::SectionMapper MapSection) {
   }
 
   // Check if we need to insert a padding section for hot text.
-  if (PaddingSize && !opts::UseOldText)
+  if (PaddingSize && !(bolt::bolt_utils_opts::getUseOldText(*BC)))
     BC->outs() << "BOLT-INFO: padding code to 0x"
                << Twine::utohexstr(NextAvailableAddress)
                << " to accommodate hot text\n";
 
-  if (opts::MergeTextSections)
+  if (bolt::bolt_rewrite_opts::getMergeTextSections(*BC))
     mergeCodeSections(CodeSections);
 }
 
@@ -4753,13 +4811,9 @@ void RewriteInstance::mapCodeSectionsInPlace(
     const unsigned Flags = BinarySection::getFlags(/*IsReadOnly=*/true,
                                                    /*IsText=*/true,
                                                    /*IsAllocatable=*/true);
-    BinarySection &Section =
-      BC->registerOrUpdateSection(getBOLTTextSectionName(),
-                                  ELF::SHT_PROGBITS,
-                                  Flags,
-                                  /*Data=*/nullptr,
-                                  NewTextSectionSize,
-                                  16);
+    BinarySection &Section = BC->registerOrUpdateSection(
+        getBOLTTextSectionName(), ELF::SHT_PROGBITS, Flags,
+        /*Data=*/nullptr, NewTextSectionSize, 16);
     Section.setOutputAddress(NewTextSectionStartAddress);
     Section.setOutputFileOffset(
         getFileOffsetForAddress(NewTextSectionStartAddress));
@@ -4769,7 +4823,8 @@ void RewriteInstance::mapCodeSectionsInPlace(
 void RewriteInstance::mapAllocatableSections(
     BOLTLinker::SectionMapper MapSection) {
 
-  if (opts::UseOldText || opts::StrictMode) {
+  if ((bolt::bolt_utils_opts::getUseOldText(*BC)) ||
+      (bolt::bolt_utils_opts::getStrict(*BC))) {
     auto tryRewriteSection = [&](BinarySection &OldSection,
                                  BinarySection &NewSection) {
       if (OldSection.getSize() < NewSection.getOutputSize())
@@ -4844,7 +4899,10 @@ void RewriteInstance::mapAllocatableSections(
         MapSection(Section, Section.getAddress());
       } else {
         uint64_t Alignment = Section.getAlignment();
-        if (opts::Instrument && StartLinkingRuntimeLib) {
+        bool InstrumentOpt = [&]() {
+          return bolt::bolt_utils_opts::getInstrument(*BC);
+        }();
+        if (InstrumentOpt && StartLinkingRuntimeLib) {
           Alignment = BC->RegularPageSize;
           StartLinkingRuntimeLib = false;
         }
@@ -4889,6 +4947,10 @@ void RewriteInstance::updateOutputValues(const BOLTLinker &Linker) {
 }
 
 void RewriteInstance::updateSegmentInfo() {
+  bool Instrument = [&]() {
+    return bolt::bolt_utils_opts::getInstrument(*BC);
+  }();
+
   // NOTE Currently .eh_frame_hdr appends to the last segment, recalculate
   // last segments size based on the NextAvailableAddress variable.
   if (!NewWritableSegmentSize) {
@@ -4906,7 +4968,7 @@ void RewriteInstance::updateSegmentInfo() {
                                BC->PageAlign,
                                true,
                                false};
-    if (!opts::Instrument) {
+    if (!Instrument) {
       BC->NewSegments.push_back(TextSegment);
     } else {
       ErrorOr<BinarySection &> Sec =
@@ -4963,6 +5025,8 @@ void RewriteInstance::patchELFPHDRTable(ELFObjectFile<ELFT> *File) {
   const ELFFile<ELFT> &Obj = File->getELFFile();
   raw_fd_ostream &OS = Out->os();
 
+  bool UseGnuStack = bolt::bolt_rewrite_opts::getUseGnuStack(*BC);
+
   Phnum = Obj.getHeader().e_phnum;
 
   if (BC->NewSegments.empty() && BC->BOLTReserved.empty()) {
@@ -4970,7 +5034,7 @@ void RewriteInstance::patchELFPHDRTable(ELFObjectFile<ELFT> *File) {
     return;
   }
 
-  if (opts::UseGnuStack) {
+  if (UseGnuStack) {
     assert(!PHDRTableAddress && "unexpected address for program header table");
     if (BC->NewSegments.size() > 1) {
       BC->errs() << "BOLT-ERROR: unable to add writable segment\n";
@@ -5043,7 +5107,7 @@ void RewriteInstance::patchELFPHDRTable(ELFObjectFile<ELFT> *File) {
       break;
     }
     case ELF::PT_GNU_STACK:
-      if (opts::UseGnuStack) {
+      if (UseGnuStack) {
         assert(BC->NewSegments.size() == 1 &&
                "Expected exactly one new segment");
         SkippedGnuStack = true;
@@ -5054,7 +5118,7 @@ void RewriteInstance::patchELFPHDRTable(ELFObjectFile<ELFT> *File) {
     Phdrs.push_back(NewPhdr);
   }
 
-  if (opts::UseGnuStack && !SkippedGnuStack) {
+  if (UseGnuStack && !SkippedGnuStack) {
     BC->errs()
         << "BOLT-ERROR: could not find PT_GNU_STACK program header to modify\n";
     exit(1);
@@ -5091,7 +5155,7 @@ uint64_t appendPadding(raw_pwrite_stream &OS, uint64_t Offset,
   return Offset + PaddingSize;
 }
 
-}
+} // namespace
 
 template <typename ELFT>
 void RewriteInstance::rewriteNoteSections(ELFObjectFile<ELFT> *File) {
@@ -5206,12 +5270,9 @@ void RewriteInstance::finalizeSectionStringTable(ELFObjectFile<ELFT> *File) {
   uint8_t *DataCopy = new uint8_t[SHStrTabSize];
   memset(DataCopy, 0, SHStrTabSize);
   SHStrTab.write(DataCopy);
-  BC->registerOrUpdateNoteSection(".shstrtab",
-                                  DataCopy,
-                                  SHStrTabSize,
+  BC->registerOrUpdateNoteSection(".shstrtab", DataCopy, SHStrTabSize,
                                   /*Alignment=*/1,
-                                  /*IsReadOnly=*/true,
-                                  ELF::SHT_STRTAB);
+                                  /*IsReadOnly=*/true, ELF::SHT_STRTAB);
 }
 
 void RewriteInstance::addBoltInfoSection() {
@@ -5258,17 +5319,20 @@ void RewriteInstance::encodeBATSection() {
 template <typename ELFShdrTy>
 bool RewriteInstance::shouldStrip(const ELFShdrTy &Section,
                                   StringRef SectionName) {
+  bool UpdateDebugSections = bolt::bolt_utils_opts::getUpdateDebugSections(*BC);
+  bool RemoveSymtab = bolt::bolt_utils_opts::getRemoveSymtab(*BC);
+
   // Strip non-allocatable relocation sections.
   if (!(Section.sh_flags & ELF::SHF_ALLOC) &&
       (Section.sh_type == ELF::SHT_RELA || Section.sh_type == ELF::SHT_CREL))
     return true;
 
   // Strip debug sections if not updating them.
-  if (isDebugSection(SectionName) && !opts::UpdateDebugSections)
+  if (isDebugSection(SectionName) && !UpdateDebugSections)
     return true;
 
   // Strip symtab section if needed
-  if (opts::RemoveSymtab && Section.sh_type == ELF::SHT_SYMTAB)
+  if (RemoveSymtab && Section.sh_type == ELF::SHT_SYMTAB)
     return true;
 
   return false;
@@ -5317,13 +5381,13 @@ RewriteInstance::getOutputSections(ELFObjectFile<ELFT> *File,
       continue;
 
     if (Section.hasSectionRef() || Section.isAnonymous()) {
-      if (opts::Verbosity)
+      if (opts::getVerbosity(*BC))
         BC->outs() << "BOLT-INFO: not writing section header for section "
                    << Section.getOutputName() << '\n';
       continue;
     }
 
-    if (opts::Verbosity >= 1)
+    if (opts::getVerbosity(*BC) >= 1)
       BC->outs() << "BOLT-INFO: writing section header for "
                  << Section.getOutputName() << '\n';
     ELFShdrTy NewSection;
@@ -5360,7 +5424,7 @@ RewriteInstance::getOutputSections(ELFObjectFile<ELFT> *File,
     // placed in different loadable segments.
     if (PrevSection &&
         PrevSection->sh_offset + PrevSection->sh_size > Section.sh_offset) {
-      if (opts::Verbosity > 1)
+      if (opts::getVerbosity(*BC) > 1)
         BC->outs() << "BOLT-INFO: adjusting size for section "
                    << PrevBinSec->getOutputName() << '\n';
       PrevSection->sh_size = Section.sh_offset - PrevSection->sh_offset;
@@ -5407,7 +5471,7 @@ RewriteInstance::getOutputSections(ELFObjectFile<ELFT> *File,
     if (Section.getOutputFileOffset() <= LastFileOffset)
       continue;
 
-    if (opts::Verbosity >= 1)
+    if (opts::getVerbosity(*BC) >= 1)
       BC->outs() << "BOLT-INFO: writing section header for "
                  << Section.getOutputName() << '\n';
 
@@ -5495,11 +5559,9 @@ void RewriteInstance::patchELFSectionHeaderTable(ELFObjectFile<ELFT> *File) {
   std::vector<uint32_t> NewSectionIndex;
   std::vector<ELFShdrTy> OutputSections =
       getOutputSections(File, NewSectionIndex);
-  LLVM_DEBUG(
-    dbgs() << "BOLT-DEBUG: old to new section index mapping:\n";
-    for (uint64_t I = 0; I < NewSectionIndex.size(); ++I)
-      dbgs() << "  " << I << " -> " << NewSectionIndex[I] << '\n';
-  );
+  LLVM_DEBUG(dbgs() << "BOLT-DEBUG: old to new section index mapping:\n";
+             for (uint64_t I = 0; I < NewSectionIndex.size(); ++I) dbgs()
+             << "  " << I << " -> " << NewSectionIndex[I] << '\n';);
 
   // Align starting address for section header table. There's no architecutal
   // need to align this, it is just for pleasant human readability.
@@ -5518,8 +5580,10 @@ void RewriteInstance::patchELFSectionHeaderTable(ELFObjectFile<ELFT> *File) {
   ELFEhdrTy NewEhdr = Obj.getHeader();
 
   if (BC->HasRelocations) {
+    auto RuntimeLibInitHook = static_cast<clv2::BoltRuntimeLibInitHookTarget>(
+        bolt::bolt_rewrite_opts::getRuntimeLibInitHook(*BC));
     RuntimeLibrary *RtLibrary = BC->getRuntimeLibrary();
-    if (RtLibrary && opts::RuntimeLibInitHook == opts::RLIH_ENTRY_POINT) {
+    if (RtLibrary && RuntimeLibInitHook == clv2::BOLTRW_RLIH_ENTRY_POINT) {
       NewEhdr.e_entry = RtLibrary->getRuntimeStartAddress();
       BC->outs()
           << "BOLT-INFO: runtime library initialization was hooked via ELF "
@@ -5548,6 +5612,8 @@ void RewriteInstance::updateELFSymbolTable(
     StrTabFuncTy AddToStrTab) {
   const ELFFile<ELFT> &Obj = File->getELFFile();
   using ELFSymTy = typename ELFObjectFile<ELFT>::Elf_Sym;
+
+  bool HotData = bolt::bolt_utils_opts::getHotData(*BC);
 
   StringRef StringSection =
       cantFail(Obj.getStringTableForSymtab(SymTabSection));
@@ -5761,7 +5827,7 @@ void RewriteInstance::updateELFSymbolTable(
     };
 
     if (*SymbolName == "__hot_start" || *SymbolName == "__hot_end") {
-      if (opts::HotText) {
+      if (bolt::bolt_utils_opts::getHotText(*BC)) {
         updateSymbolValue(*SymbolName);
         ++NumHotTextSymsUpdated;
       }
@@ -5769,7 +5835,7 @@ void RewriteInstance::updateELFSymbolTable(
     }
 
     if (*SymbolName == "__hot_data_start" || *SymbolName == "__hot_data_end") {
-      if (opts::HotData) {
+      if (HotData) {
         updateSymbolValue(*SymbolName);
         ++NumHotDataSymsUpdated;
       }
@@ -5855,7 +5921,8 @@ void RewriteInstance::updateELFSymbolTable(
             Function->getCodeSection(FF->getFragmentNum())->getIndex();
       } else {
         // Check if the symbol belongs to moved data object and update it.
-        BinaryData *BD = opts::ReorderData.empty()
+        auto ReorderDataLocal = bolt::bolt_passes_opts::getReorderData(*BC);
+        BinaryData *BD = ReorderDataLocal.empty()
                              ? nullptr
                              : BC->getBinaryDataAtAddress(Symbol.st_value);
         if (BD && BD->isMoved() && !BD->isJumpTable()) {
@@ -5972,12 +6039,12 @@ void RewriteInstance::updateELFSymbolTable(
     AddSymbol(Name, getNewValueForSymbol(Name));
   };
 
-  if (opts::HotText && !NumHotTextSymsUpdated) {
+  if ((bolt::bolt_utils_opts::getHotText(*BC)) && !NumHotTextSymsUpdated) {
     AddEmittedSymbol("__hot_start");
     AddEmittedSymbol("__hot_end");
   }
 
-  if (opts::HotData && !NumHotDataSymsUpdated) {
+  if (HotData && !NumHotDataSymsUpdated) {
     AddEmittedSymbol("__hot_data_start");
     AddEmittedSymbol("__hot_data_end");
   }
@@ -6043,8 +6110,11 @@ void RewriteInstance::patchELFSymTabs(ELFObjectFile<ELFT> *File) {
         [](StringRef) -> size_t { return 0; });
   }
 
-  if (opts::RemoveSymtab)
-    return;
+  {
+    bool RemoveSymtab = bolt::bolt_utils_opts::getRemoveSymtab(*BC);
+    if (RemoveSymtab)
+      return;
+  }
 
   // (re)create regular symbol table.
   const ELFShdrTy *SymTabSection = nullptr;
@@ -6070,9 +6140,7 @@ void RewriteInstance::patchELFSymTabs(ELFObjectFile<ELFT> *File) {
   NumLocalSymbols = 0;
   updateELFSymbolTable(
       File,
-      /*IsDynSym=*/false,
-      *SymTabSection,
-      NewSectionIndex,
+      /*IsDynSym=*/false, *SymTabSection, NewSectionIndex,
       [&](size_t Offset, const ELFSymTy &Sym) {
         if (Sym.getBinding() == ELF::STB_LOCAL)
           ++NumLocalSymbols;
@@ -6086,19 +6154,15 @@ void RewriteInstance::patchELFSymTabs(ELFObjectFile<ELFT> *File) {
         return Idx;
       });
 
-  BC->registerOrUpdateNoteSection(SecName,
-                                  copyByteArray(NewContents),
+  BC->registerOrUpdateNoteSection(SecName, copyByteArray(NewContents),
                                   NewContents.size(),
                                   /*Alignment=*/1,
-                                  /*IsReadOnly=*/true,
-                                  ELF::SHT_SYMTAB);
+                                  /*IsReadOnly=*/true, ELF::SHT_SYMTAB);
 
-  BC->registerOrUpdateNoteSection(StrSecName,
-                                  copyByteArray(NewStrTab),
+  BC->registerOrUpdateNoteSection(StrSecName, copyByteArray(NewStrTab),
                                   NewStrTab.size(),
                                   /*Alignment=*/1,
-                                  /*IsReadOnly=*/true,
-                                  ELF::SHT_STRTAB);
+                                  /*IsReadOnly=*/true, ELF::SHT_STRTAB);
 }
 
 template <typename ELFT>
@@ -6194,8 +6258,8 @@ void RewriteInstance::patchELFAllocatableRelrSection(
 }
 
 template <typename ELFT>
-void
-RewriteInstance::patchELFAllocatableRelaSections(ELFObjectFile<ELFT> *File) {
+void RewriteInstance::patchELFAllocatableRelaSections(
+    ELFObjectFile<ELFT> *File) {
   using Elf_Rela = typename ELFT::Rela;
   raw_fd_ostream &OS = Out->os();
   const ELFFile<ELFT> &EF = File->getELFFile();
@@ -6403,9 +6467,11 @@ void RewriteInstance::patchELFDynamic(ELFObjectFile<ELFT> *File) {
               << Twine::utohexstr(Addr) << "\n";
         }
       }
+      auto RuntimeLibInitHook = static_cast<clv2::BoltRuntimeLibInitHookTarget>(
+          bolt::bolt_rewrite_opts::getRuntimeLibInitHook(*BC));
       if (RtLibrary && Dyn.getTag() == ELF::DT_INIT &&
           (!BC->HasInterpHeader ||
-           opts::RuntimeLibInitHook == opts::RLIH_INIT)) {
+           RuntimeLibInitHook == clv2::BOLTRW_RLIH_INIT)) {
         if (auto Addr = RtLibrary->getRuntimeStartAddress()) {
           NewDE.d_un.d_ptr = Addr;
           BC->outs()
@@ -6641,7 +6707,7 @@ void RewriteInstance::rewriteFunctionsInPlace(raw_fd_ostream &OS) {
     ++CountOverwrittenFunctions;
 
     // Overwrite function in the output file.
-    if (opts::Verbosity >= 2)
+    if (opts::getVerbosity(*BC) >= 2)
       BC->outs() << "BOLT: rewriting function \"" << *Function << "\"\n";
 
     safePWrite(OS, reinterpret_cast<char *>(Function->getImageAddress()),
@@ -6661,7 +6727,7 @@ void RewriteInstance::rewriteFunctionsInPlace(raw_fd_ostream &OS) {
       continue;
 
     // Write cold part
-    if (opts::Verbosity >= 2) {
+    if (opts::getVerbosity(*BC) >= 2) {
       BC->outs() << formatv("BOLT: rewriting function \"{0}\" (split parts)\n",
                             *Function);
     }
@@ -6730,9 +6796,13 @@ void RewriteInstance::zeroPaddingForReusedSections(raw_fd_ostream &OS) {
 }
 
 void RewriteInstance::rewriteFile() {
+  bool EnableBAT = bolt::bolt_utils_opts::getEnableBat(*BC);
+  bool PrintSections = bolt::bolt_utils_opts::getPrintSections(*BC);
+  std::string OutputFilename = bolt::bolt_utils_opts::getO(*BC);
+  bool TrapOldCode = bolt::bolt_rewrite_opts::getTrapOldCode(*BC);
+
   std::error_code EC;
-  Out = std::make_unique<ToolOutputFile>(opts::OutputFilename, EC,
-                                         sys::fs::OF_None);
+  Out = std::make_unique<ToolOutputFile>(OutputFilename, EC, sys::fs::OF_None);
   check_error(EC, "cannot create output executable file");
 
   raw_fd_ostream &OS = Out->os();
@@ -6742,7 +6812,7 @@ void RewriteInstance::rewriteFile() {
 
   rewriteFunctionsInPlace(OS);
 
-  if (BC->HasRelocations && opts::TrapOldCode) {
+  if (BC->HasRelocations && TrapOldCode) {
     uint64_t SavedPos = OS.tell();
     // Overwrite function body to make sure we never execute these instructions.
     for (auto &BFI : BC->getBinaryFunctions()) {
@@ -6761,21 +6831,21 @@ void RewriteInstance::rewriteFile() {
   // Write all allocatable sections - reloc-mode text is written here as well
   for (BinarySection &Section : BC->allocatableSections()) {
     if (!Section.isFinalized() || !Section.getOutputData()) {
-      LLVM_DEBUG(if (opts::Verbosity > 1) {
+      LLVM_DEBUG(if (opts::getVerbosity(*BC) > 1) {
         dbgs() << "BOLT-INFO: new section is finalized or !getOutputData, skip "
                << Section.getName() << '\n';
       });
       continue;
     }
     if (Section.isLinkOnly()) {
-      LLVM_DEBUG(if (opts::Verbosity > 1) {
+      LLVM_DEBUG(if (opts::getVerbosity(*BC) > 1) {
         dbgs() << "BOLT-INFO: new section is link only, skip "
                << Section.getName() << '\n';
       });
       continue;
     }
 
-    if (opts::Verbosity >= 1)
+    if (opts::getVerbosity(*BC) >= 1)
       BC->outs() << "BOLT: writing new section " << Section.getName()
                  << "\n data at 0x"
                  << Twine::utohexstr(Section.getAllocAddress()) << "\n of size "
@@ -6797,7 +6867,7 @@ void RewriteInstance::rewriteFile() {
 
   // Add BOLT Addresses Translation maps to allow profile collection to
   // happen in the output binary
-  if (opts::EnableBAT)
+  if (EnableBAT)
     addBATSection();
 
   // Patch program header table.
@@ -6812,13 +6882,13 @@ void RewriteInstance::rewriteFile() {
   // Update symbol tables.
   patchELFSymTabs();
 
-  if (opts::EnableBAT)
+  if (EnableBAT)
     encodeBATSection();
 
   // Copy non-allocatable sections once allocatable part is finished.
   rewriteNoteSections();
 
-  if (opts::UseOldText)
+  if (bolt::bolt_utils_opts::getUseOldText(*BC))
     zeroPaddingForReusedSections(OS);
 
   if (BC->HasRelocations) {
@@ -6833,23 +6903,22 @@ void RewriteInstance::rewriteFile() {
   // Update ELF book-keeping info.
   patchELFSectionHeaderTable();
 
-  if (opts::PrintSections) {
+  if (PrintSections) {
     BC->outs() << "BOLT-INFO: Sections after processing:\n";
     BC->printSections(BC->outs());
   }
 
   if (OS.has_error()) {
-    BC->errs() << "BOLT-ERROR: failed to write output file '"
-               << opts::OutputFilename << "': " << OS.error().message() << "\n";
+    BC->errs() << "BOLT-ERROR: failed to write output file '" << OutputFilename
+               << "': " << OS.error().message() << "\n";
     OS.clear_error();
     exit(1);
   }
 
   Out->keep();
   EC = sys::fs::setPermissions(
-      opts::OutputFilename,
-      static_cast<sys::fs::perms>(sys::fs::perms::all_all &
-                                  ~sys::fs::getUmask()));
+      OutputFilename, static_cast<sys::fs::perms>(sys::fs::perms::all_all &
+                                                  ~sys::fs::getUmask()));
   check_error(EC, "cannot set permissions of output file");
 }
 

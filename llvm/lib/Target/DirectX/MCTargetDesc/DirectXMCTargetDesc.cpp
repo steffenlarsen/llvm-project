@@ -122,8 +122,13 @@ MCAsmBackend *createDXILMCAsmBackend(const Target &T,
 }
 
 static MCSubtargetInfo *
-createDirectXMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
-  return createDirectXMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+createDirectXMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                             const llvm::clv2::OptionsContext &Ctx) {
+  MCSubtargetInfo *STI =
+      createDirectXMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+  if (STI)
+    STI->setOptionsContext(Ctx);
+  return STI;
 }
 
 static MCRegisterInfo *createDirectXMCRegisterInfo(const Triple &Triple) {

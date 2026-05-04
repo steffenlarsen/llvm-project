@@ -20,6 +20,7 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/FunctionLoweringInfo.h"
 #include "llvm/CodeGen/GCMetadata.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
@@ -34,6 +35,7 @@
 #include "llvm/CodeGenTypes/MachineValueType.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/GCStrategy.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
@@ -41,7 +43,8 @@
 #include "llvm/IR/Statepoint.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include <cassert>
@@ -61,17 +64,20 @@ STATISTIC(NumOfStatepoints, "Number of statepoint nodes encountered");
 STATISTIC(StatepointMaxSlotsRequired,
           "Maximum number of stack slots required for a singe statepoint");
 
-static cl::opt<bool> UseRegistersForDeoptValues(
-    "use-registers-for-deopt-values", cl::Hidden, cl::init(false),
-    cl::desc("Allow using registers for non pointer deopt args"));
+static bool getUseRegistersForDeoptValues(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_UseRegistersForDeoptValues>(
+      Ctx);
+}
 
-static cl::opt<bool> UseRegistersForGCPointersInLandingPad(
-    "use-registers-for-gc-values-in-landing-pad", cl::Hidden, cl::init(false),
-    cl::desc("Allow using registers for gc pointer in landing pad"));
+static bool
+getUseRegistersForGcValuesInLandingPad(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::CGPASS_UseRegistersForGcValuesInLandingPad>(Ctx);
+}
 
-static cl::opt<unsigned> MaxRegistersForGCPointers(
-    "max-registers-for-gc-values", cl::Hidden, cl::init(0),
-    cl::desc("Max number of VRegs allowed to pass GC pointer meta args in"));
+static unsigned getMaxRegistersForGcValues(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_MaxRegistersForGcValues>(Ctx);
+}
 
 typedef FunctionLoweringInfo::StatepointRelocationRecord RecordType;
 
@@ -540,12 +546,15 @@ lowerStatepointMetaArgs(SmallVectorImpl<SDValue> &Ops,
     SI.StatepointFlags & (uint64_t)StatepointFlags::DeoptLiveIn;
 
   // Decide which deriver pointers will go on VRegs
-  unsigned MaxVRegPtrs = MaxRegistersForGCPointers.getValue();
+  const Function &F = Builder.DAG.getMachineFunction().getFunction();
+  unsigned MaxVRegPtrs =
+      getMaxRegistersForGcValues(F.getContext().getOptionsContext());
 
   // Pointers used on exceptional path of invoke statepoint.
   // We cannot assing them to VRegs.
   SmallSet<SDValue, 8> LPadPointers;
-  if (!UseRegistersForGCPointersInLandingPad)
+  if (!getUseRegistersForGcValuesInLandingPad(
+          F.getContext().getOptionsContext()))
     if (const auto *StInvoke =
             dyn_cast_or_null<InvokeInst>(SI.StatepointInstr)) {
       LandingPadInst *LPI = StInvoke->getLandingPadInst();
@@ -606,7 +615,8 @@ lowerStatepointMetaArgs(SmallVectorImpl<SDValue> &Ops,
       return true;
     if (isGCValue(V, Builder))
       return !LowerAsVReg.count(Builder.getValue(V));
-    return !(LiveInDeopt || UseRegistersForDeoptValues);
+    return !(LiveInDeopt ||
+             getUseRegistersForDeoptValues(F.getContext().getOptionsContext()));
   };
 
   // Before we actually start lowering (and allocating spill slots for values),

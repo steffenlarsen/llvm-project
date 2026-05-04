@@ -28,7 +28,7 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/CodeGenTypes/MachineValueType.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Printable.h"
@@ -57,12 +57,16 @@ STATISTIC(NumExplicitRegClasses, "Number of explicit register classes");
 STATISTIC(NumSynthesizedRegClasses, "Number of synthesized register classes");
 STATISTIC(NumRegPressureSets, "Number of register pressure sets");
 
-static cl::OptionCategory RegisterInfoCat("Options for -gen-register-info");
+static constexpr clv2::OptionInfo<bool> OI_RegisterInfoDebug{
+    "register-info-debug", "Dump register information to help debugging"};
+static constexpr clv2::OptionsRegistry<&OI_RegisterInfoDebug>
+    RegisterInfoDebugReg;
 
-static cl::opt<bool>
-    RegisterInfoDebug("register-info-debug", cl::init(false),
-                      cl::desc("Dump register information to help debugging"),
-                      cl::cat(RegisterInfoCat));
+static bool RegisterInfoDebug = false;
+static void applyRegisterInfoDebug(
+    const decltype(RegisterInfoDebugReg)::ParsedOptionsT &Opts) {
+  RegisterInfoDebug = Opts.get<&OI_RegisterInfoDebug>();
+}
 
 namespace {
 
@@ -2194,3 +2198,10 @@ void RegisterInfoEmitter::debugDump(raw_ostream &OS) {
 
 static TableGen::Emitter::MultiFileOptClass<RegisterInfoEmitter>
     X("gen-register-info", "Generate registers and register classes info");
+
+#include "RegisterBackendOptions.h"
+#include "llvm/Support/OptionsContext.h"
+
+void registerRegisterInfoEmitterOptions(llvm::clv2::OptionParser &P) {
+  P.add<&RegisterInfoDebugReg, applyRegisterInfoDebug>();
+}

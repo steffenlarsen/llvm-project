@@ -171,7 +171,7 @@ struct GpuMapParallelLoopsPass
   void runOnOperation() override {
     // Parse the mapping policy.
     FailureOr<MappingPolicy> policyOrFailure =
-        getMappingPolicyFromStr(mappingPolicyStr);
+        getMappingPolicyFromStr(*mappingPolicyStr);
     if (failed(policyOrFailure)) {
       getOperation()->emitError() << "Invalid mapping policy specified.";
       return signalPassFailure();

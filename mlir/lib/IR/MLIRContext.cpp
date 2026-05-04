@@ -23,20 +23,21 @@
 #include "mlir/IR/ExtensibleDialect.h"
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/IR/Location.h"
+#include "mlir/IR/MLIROptionsOptInfos.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/Remarks.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Allocator.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/DebugLog.h"
-#include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/Mutex.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/RWMutex.h"
 #include "llvm/Support/ThreadPool.h"
 #include "llvm/Support/raw_ostream.h"
+#include <atomic>
 #include <memory>
 #include <optional>
 
@@ -44,50 +45,31 @@
 
 using namespace mlir;
 using namespace mlir::detail;
+using llvm::clv2::MLIR_DisableThreading;
+using llvm::clv2::MLIR_PrintOpOnDiagnostic;
+using llvm::clv2::MLIR_PrintStackTraceOnDiagnostic;
 
 //===----------------------------------------------------------------------===//
 // MLIRContext CommandLine Options
 //===----------------------------------------------------------------------===//
 
-namespace {
-/// This struct contains command line options that can be used to initialize
-/// various bits of an MLIRContext. This uses a struct wrapper to avoid the need
-/// for global command line options.
-struct MLIRContextOptions {
-  llvm::cl::opt<bool> disableThreading{
-      "mlir-disable-threading",
-      llvm::cl::desc("Disable multi-threading within MLIR, overrides any "
-                     "further call to MLIRContext::enableMultiThreading()")};
+// See the note on asmPrinterOptsRegistered: relaxed is sufficient.
+static std::atomic<bool> clMLIRContextCLOptionsRegistered{false};
 
-  llvm::cl::opt<bool> printOpOnDiagnostic{
-      "mlir-print-op-on-diagnostic",
-      llvm::cl::desc("When a diagnostic is emitted on an operation, also print "
-                     "the operation as an attached note"),
-      llvm::cl::init(true)};
-
-  llvm::cl::opt<bool> printStackTraceOnDiagnostic{
-      "mlir-print-stacktrace-on-diagnostic",
-      llvm::cl::desc("When a diagnostic is emitted, also print the stack trace "
-                     "as an attached note")};
-};
-} // namespace
-
-static llvm::ManagedStatic<MLIRContextOptions> clOptions;
-
-static bool isThreadingGloballyDisabled() {
+static bool isThreadingDisabled(const llvm::clv2::OptionsContext &optsCtx) {
 #if LLVM_ENABLE_THREADS != 0
-  return clOptions.isConstructed() && clOptions->disableThreading;
+  if (!clMLIRContextCLOptionsRegistered.load(std::memory_order_relaxed))
+    return false;
+  if (auto *O = mlir_opts::getMLIROptsReg(optsCtx))
+    return O->get<&MLIR_DisableThreading>();
+  return false;
 #else
   return true;
 #endif
 }
 
-/// Register a set of useful command-line options that can be used to configure
-/// various flags within the MLIRContext. These flags are used when constructing
-/// an MLIR context for initialization.
 void mlir::registerMLIRContextCLOptions() {
-  // Make sure that the options struct has been initialized.
-  *clOptions;
+  clMLIRContextCLOptionsRegistered.store(true, std::memory_order_relaxed);
 }
 
 //===----------------------------------------------------------------------===//
@@ -164,6 +146,10 @@ public:
 
   /// If the current stack trace should be attached when emitting diagnostics.
   bool printStackTraceOnDiagnostic = false;
+
+  /// Per-session options context (not owned).
+  const llvm::clv2::OptionsContext *optsCtx =
+      &llvm::clv2::defaultOptionsContext();
 
   //===--------------------------------------------------------------------===//
   // Other
@@ -301,12 +287,22 @@ MLIRContext::MLIRContext(Threading setting)
     : MLIRContext(DialectRegistry(), setting) {}
 
 MLIRContext::MLIRContext(const DialectRegistry &registry, Threading setting)
+    : MLIRContext(llvm::clv2::defaultOptionsContext(), registry, setting) {}
+
+MLIRContext::MLIRContext(const llvm::clv2::OptionsContext &optsCtx,
+                         Threading setting)
+    : MLIRContext(optsCtx, DialectRegistry(), setting) {}
+
+MLIRContext::MLIRContext(const llvm::clv2::OptionsContext &optsCtx,
+                         const DialectRegistry &registry, Threading setting)
     : impl(new MLIRContextImpl(setting == Threading::ENABLED &&
-                               !isThreadingGloballyDisabled())) {
-  // Initialize values based on the command line flags if they were provided.
-  if (clOptions.isConstructed()) {
-    printOpOnDiagnostic(clOptions->printOpOnDiagnostic);
-    printStackTraceOnDiagnostic(clOptions->printStackTraceOnDiagnostic);
+                               !isThreadingDisabled(optsCtx))) {
+  setOptionsContext(optsCtx);
+  if (clMLIRContextCLOptionsRegistered.load(std::memory_order_relaxed)) {
+    if (auto *O = mlir_opts::getMLIROptsReg(optsCtx)) {
+      printOpOnDiagnostic(O->get<&MLIR_PrintOpOnDiagnostic>());
+      printStackTraceOnDiagnostic(O->get<&MLIR_PrintStackTraceOnDiagnostic>());
+    }
   }
 
   // Pre-populate the registry.
@@ -626,7 +622,7 @@ bool MLIRContext::isMultithreadingEnabled() {
 void MLIRContext::disableMultithreading(bool disable) {
   // This API can be overridden by the global debugging flag
   // --mlir-disable-threading
-  if (isThreadingGloballyDisabled())
+  if (isThreadingDisabled(getOptionsContext()))
     return;
   assert(impl->multiThreadedExecutionContext == 0 &&
          "changing MLIRContext `disable-threading` configuration while "
@@ -693,6 +689,14 @@ void MLIRContext::exitMultiThreadedExecution() {
 #ifndef NDEBUG
   --impl->multiThreadedExecutionContext;
 #endif
+}
+
+void MLIRContext::setOptionsContext(const llvm::clv2::OptionsContext &Ctx) {
+  impl->optsCtx = &Ctx;
+}
+
+const llvm::clv2::OptionsContext &MLIRContext::getOptionsContext() const {
+  return impl->optsCtx ? *impl->optsCtx : llvm::clv2::defaultOptionsContext();
 }
 
 void MLIRContext::beginTransientScope() {

@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- SROA.cpp - Scalar Replacement Of Aggregates ------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -75,7 +77,6 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -119,9 +120,10 @@ STATISTIC(NumVectorized, "Number of vectorized aggregates");
 
 namespace llvm {
 /// Disable running mem2reg during SROA in order to test or debug SROA.
-static cl::opt<bool> SROASkipMem2Reg("sroa-skip-mem2reg", cl::init(false),
-                                     cl::Hidden);
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
+static bool getSROASkipMem2Reg(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SroaSkipMem2Reg>(
+      F.getContext().getOptionsContext(), false);
+}
 } // namespace llvm
 
 namespace {
@@ -259,7 +261,7 @@ private:
   std::pair<bool /*Changed*/, bool /*CFGChanged*/> runOnAlloca(AllocaInst &AI);
   void clobberUse(Use &U);
   bool deleteDeadInstructions(SmallPtrSetImpl<AllocaInst *> &DeletedAllocas);
-  bool promoteAllocas();
+  bool promoteAllocas(Function &F);
 };
 
 } // end anonymous namespace
@@ -1795,9 +1797,9 @@ static void speculateSelectInstLoads(SelectInst &SI, LoadInst &LI,
     FL->setAAMetadata(Tags);
   }
 
-  Value *V = IRB.CreateSelect(SI.getCondition(), TL, FL,
-                              LI.getName() + ".sroa.speculated",
-                              ProfcheckDisableMetadataFixes ? nullptr : &SI);
+  Value *V = IRB.CreateSelect(
+      SI.getCondition(), TL, FL, LI.getName() + ".sroa.speculated",
+      getProfcheckDisableMetadataFixes(SI.getContext()) ? nullptr : &SI);
 
   LLVM_DEBUG(dbgs() << "          speculated to: " << *V << "\n");
   LI.replaceAllUsesWith(V);
@@ -4498,7 +4500,7 @@ private:
       Cond = SI->getCondition();
       True = SI->getTrueValue();
       False = SI->getFalseValue();
-      if (!ProfcheckDisableMetadataFixes)
+      if (!getProfcheckDisableMetadataFixes(SI->getContext()))
         MDFrom = SI;
     } else {
       Cond = Sel->getOperand(0);
@@ -6266,11 +6268,11 @@ bool SROA::deleteDeadInstructions(
 /// This attempts to promote whatever allocas have been identified as viable in
 /// the PromotableAllocas list. If that list is empty, there is nothing to do.
 /// This function returns whether any promotion occurred.
-bool SROA::promoteAllocas() {
+bool SROA::promoteAllocas(Function &F) {
   if (PromotableAllocas.empty())
     return false;
 
-  if (SROASkipMem2Reg) {
+  if (getSROASkipMem2Reg(F)) {
     LLVM_DEBUG(dbgs() << "Not promoting allocas with mem2reg!\n");
   } else {
     LLVM_DEBUG(dbgs() << "Promoting allocas with mem2reg...\n");
@@ -6323,7 +6325,7 @@ std::pair<bool /*Changed*/, bool /*CFGChanged*/> SROA::runSROA(Function &F) {
       }
     }
 
-    Changed |= promoteAllocas();
+    Changed |= promoteAllocas(F);
 
     Worklist = PostPromotionWorklist;
     PostPromotionWorklist.clear();

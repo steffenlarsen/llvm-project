@@ -19,6 +19,7 @@ add_lld_library(lldWasm
   WriterUtils.cpp
 
   LINK_COMPONENTS
+  AllOptions
   ${LLVM_TARGETS_TO_BUILD}
   BinaryFormat
   BitWriter

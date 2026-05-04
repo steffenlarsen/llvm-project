@@ -15,11 +15,16 @@
 #define LLVM_TRANSFORMS_INSTRUMENTATION_LOWERALLOWCHECKPASS_H
 
 #include "llvm/IR/Function.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Compiler.h"
 
 namespace llvm {
+
+namespace clv2 {
+class OptionsContext;
+}
 
 // This pass is responsible for removing optional traps, like llvm.ubsantrap
 // from the hot code.
@@ -34,7 +39,11 @@ public:
       : Opts(std::move(Opts)) {};
   LLVM_ABI PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 
-  LLVM_ABI static bool IsRequested();
+  static bool isRequired() { return true; }
+
+  LLVM_ABI static bool IsRequested(const clv2::OptionsContext &Ctx);
+  LLVM_ABI static bool IsRequested(const Module &M,
+                                   const clv2::OptionsContext &Ctx);
   LLVM_ABI void
   printPipeline(raw_ostream &OS,
                 function_ref<StringRef(StringRef)> MapClassName2PassName);

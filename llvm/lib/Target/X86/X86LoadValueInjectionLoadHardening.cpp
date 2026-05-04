@@ -55,13 +55,15 @@
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/RDFGraph.h"
 #include "llvm/CodeGen/RDFLiveness.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/DOTGraphTraits.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/GraphWriter.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -74,33 +76,30 @@ STATISTIC(NumFunctionsMitigated, "Number of functions for which mitigations "
                                  "were deployed");
 STATISTIC(NumGadgets, "Number of LVI gadgets detected during analysis");
 
-static cl::opt<std::string> OptimizePluginPath(
-    PASS_KEY "-opt-plugin",
-    cl::desc("Specify a plugin to optimize LFENCE insertion"), cl::Hidden);
+static std::string getOptimizePluginPath(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_LVILoadOptPlugin>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> NoConditionalBranches(
-    PASS_KEY "-no-cbranch",
-    cl::desc("Don't treat conditional branches as disclosure gadgets. This "
-             "may improve performance, at the cost of security."),
-    cl::init(false), cl::Hidden);
+static bool getNoConditionalBranches(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_LVILoadNoCBranch>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> EmitDot(
-    PASS_KEY "-dot",
-    cl::desc(
-        "For each function, emit a dot graph depicting potential LVI gadgets"),
-    cl::init(false), cl::Hidden);
+static bool getEmitDot(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_LVILoadDot>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> EmitDotOnly(
-    PASS_KEY "-dot-only",
-    cl::desc("For each function, emit a dot graph depicting potential LVI "
-             "gadgets, and do not insert any fences"),
-    cl::init(false), cl::Hidden);
+static bool getEmitDotOnly(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_LVILoadDotOnly>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> EmitDotVerify(
-    PASS_KEY "-dot-verify",
-    cl::desc("For each function, emit a dot graph to stdout depicting "
-             "potential LVI gadgets, used for testing purposes only"),
-    cl::init(false), cl::Hidden);
+static bool getEmitDotVerify(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_LVILoadDotVerify>(
+      F.getContext().getOptionsContext());
+}
 
 static llvm::sys::DynamicLibrary OptimizeDL;
 typedef int (*OptimizeCutT)(unsigned int *Nodes, unsigned int NodesSize,
@@ -274,12 +273,12 @@ bool X86LoadValueInjectionLoadHardeningImpl::run(
   if (Graph == nullptr)
     return false; // didn't find any gadgets
 
-  if (EmitDotVerify) {
+  if (getEmitDotVerify(MF.getFunction())) {
     writeGadgetGraph(outs(), MF, Graph.get());
     return false;
   }
 
-  if (EmitDot || EmitDotOnly) {
+  if (getEmitDot(MF.getFunction()) || getEmitDotOnly(MF.getFunction())) {
     LLVM_DEBUG(dbgs() << "Emitting gadget graph...\n");
     std::error_code FileError;
     std::string FileName = "lvi.";
@@ -291,16 +290,17 @@ bool X86LoadValueInjectionLoadHardeningImpl::run(
     writeGadgetGraph(FileOut, MF, Graph.get());
     FileOut.close();
     LLVM_DEBUG(dbgs() << "Emitting gadget graph... Done\n");
-    if (EmitDotOnly)
+    if (getEmitDotOnly(MF.getFunction()))
       return false;
   }
 
   int FencesInserted;
-  if (!OptimizePluginPath.empty()) {
+  if (std::string PluginPath = getOptimizePluginPath(MF.getFunction());
+      !PluginPath.empty()) {
     if (!OptimizeDL.isValid()) {
       std::string ErrorMsg;
       OptimizeDL = llvm::sys::DynamicLibrary::getPermanentLibrary(
-          OptimizePluginPath.c_str(), &ErrorMsg);
+          PluginPath.c_str(), &ErrorMsg);
       if (!ErrorMsg.empty())
         report_fatal_error(Twine("Failed to load opt plugin: \"") + ErrorMsg +
                            "\"");
@@ -401,7 +401,7 @@ X86LoadValueInjectionLoadHardeningImpl::getGadgetGraph(
 
             // Check whether this use can transmit (leak) its value.
             if (instrUsesRegToAccessMemory(UseMI, UseMO.getReg()) ||
-                (!NoConditionalBranches &&
+                (!getNoConditionalBranches(MF.getFunction()) &&
                  instrUsesRegToBranch(UseMI, UseMO.getReg()))) {
               Transmitters[Def.Id].push_back(Use.Addr->getOwner(DFG).Id);
               if (UseMI.mayLoad())

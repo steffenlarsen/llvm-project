@@ -15,10 +15,10 @@
 #define MLIR_TOOLS_MLIRTBLGEN_FORMATGEN_H_
 
 #include "mlir/Support/LLVM.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Allocator.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/SMLoc.h"
 #include <vector>
 
@@ -623,7 +623,7 @@ bool isValidLiteral(StringRef value,
                     function_ref<void(Twine)> emitError = nullptr);
 
 /// Whether a failure in parsing the assembly format should be a fatal error.
-extern llvm::cl::opt<bool> formatErrorIsFatal;
+extern bool formatErrorIsFatal;
 
 } // namespace tblgen
 } // namespace mlir

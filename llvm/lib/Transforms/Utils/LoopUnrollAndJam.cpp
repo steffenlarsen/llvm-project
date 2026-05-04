@@ -238,11 +238,13 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
 
   // We use the runtime remainder in cases where we don't know trip multiple
   if (TripMultiple % Count != 0) {
-    if (!UnrollRuntimeLoopRemainder(L, Count, /*AllowExpensiveTripCount*/ false,
-                                    /*UseEpilogRemainder*/ true,
-                                    UnrollRemainder, /*ForgetAllSCEV*/ false,
-                                    LI, SE, DT, AC, TTI, true,
-                                    SCEVCheapExpansionBudget, EpilogueLoop)) {
+    if (!UnrollRuntimeLoopRemainder(
+            L, Count, /*AllowExpensiveTripCount*/ false,
+            /*UseEpilogRemainder*/ true, UnrollRemainder,
+            /*ForgetAllSCEV*/ false, LI, SE, DT, AC, TTI, true,
+            getSCEVCheapExpansionBudget(
+                Header->getParent()->getContext().getOptionsContext()),
+            EpilogueLoop)) {
       LLVM_DEBUG(dbgs() << "Won't unroll-and-jam; remainder loop could not be "
                            "generated when assuming runtime trip count\n");
       return LoopUnrollResult::Unmodified;
@@ -342,7 +344,7 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
   // When a FSDiscriminator is enabled, we don't need to add the multiply
   // factors to the discriminators.
   if (Header->getParent()->shouldEmitDebugInfoForProfiling() &&
-      !EnableFSDiscriminator)
+      !getEnableFSDiscriminator(Header->getContext()))
     for (BasicBlock *BB : L->getBlocks())
       for (Instruction &I : *BB)
         if (!I.isDebugOrPseudoInst())

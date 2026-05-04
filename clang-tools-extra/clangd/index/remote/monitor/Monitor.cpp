@@ -11,7 +11,8 @@
 
 #include "support/Logger.h"
 #include "clang/Basic/Version.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 
 #include <chrono>
@@ -28,10 +29,14 @@ This tool requests monitoring information (uptime, index freshness) from the
 server and prints it to stdout.
 )";
 
-llvm::cl::opt<std::string>
-    ServerAddress("server-address", llvm::cl::Positional,
-                  llvm::cl::desc("Address of the invoked server."),
-                  llvm::cl::Required);
+std::string ServerAddress;
+
+namespace clv2 = llvm::clv2;
+
+inline constexpr clv2::OptionInfo<std::string> ServerAddressOpt{
+    "", "Address of the invoked server.", clv2::Positional{}, clv2::Required};
+
+inline constexpr clv2::OptionsRegistry<&ServerAddressOpt> MonitorReg;
 
 } // namespace
 } // namespace remote
@@ -40,7 +45,14 @@ llvm::cl::opt<std::string>
 
 int main(int argc, char *argv[]) {
   using namespace clang::clangd::remote;
-  llvm::cl::ParseCommandLineOptions(argc, argv, Overview);
+  llvm::clv2::OptionParser P;
+  P.add<&MonitorReg>();
+  llvm::RegisterAllLLVMOptions(P);
+  auto OptsCtx = P.parse(argc, argv, Overview);
+  if (!OptsCtx)
+    return 1;
+  if (const auto *O = OptsCtx->getViewPtr<&MonitorReg>())
+    ServerAddress = O->get<&ServerAddressOpt>();
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
 
   const auto Channel =

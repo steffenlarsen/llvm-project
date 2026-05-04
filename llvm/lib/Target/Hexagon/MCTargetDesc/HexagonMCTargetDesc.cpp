@@ -56,120 +56,126 @@ using namespace llvm;
 
 #define GET_REGINFO_MC_DESC
 #include "HexagonGenRegisterInfo.inc"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 
-cl::opt<bool> llvm::HexagonDisableCompound
-  ("mno-compound",
-   cl::desc("Disable looking for compound instructions for Hexagon"));
+bool llvm::HexagonDisableDuplex = false;
 
-cl::opt<bool> llvm::HexagonDisableDuplex
-  ("mno-pairing",
-   cl::desc("Disable looking for duplex instructions for Hexagon"));
+static bool getMV5(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV5>(Ctx, false);
+}
+static bool getMV55(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV55>(Ctx, false);
+}
+static bool getMV60(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV60>(Ctx, false);
+}
+static bool getMV62(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV62>(Ctx, false);
+}
+static bool getMV65(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV65>(Ctx, false);
+}
+static bool getMV66(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV66>(Ctx, false);
+}
+static bool getMV67(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV67>(Ctx, false);
+}
+static bool getMV67T(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV67T>(Ctx, false);
+}
+static bool getMV68(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV68>(Ctx, false);
+}
+static bool getMV69(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV69>(Ctx, false);
+}
+static bool getMV71(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV71>(Ctx, false);
+}
+static bool getMV71T(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV71T>(Ctx, false);
+}
+static bool getMV73(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV73>(Ctx, false);
+}
+static bool getMV75(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV75>(Ctx, false);
+}
+static bool getMV79(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV79>(Ctx, false);
+}
+static bool getMV81(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MV81>(Ctx, false);
+}
 
-namespace { // These flags are to be deprecated
-cl::opt<bool> MV5("mv5", cl::Hidden, cl::desc("Build for Hexagon V5"),
-                  cl::init(false));
-cl::opt<bool> MV55("mv55", cl::Hidden, cl::desc("Build for Hexagon V55"),
-                   cl::init(false));
-cl::opt<bool> MV60("mv60", cl::Hidden, cl::desc("Build for Hexagon V60"),
-                   cl::init(false));
-cl::opt<bool> MV62("mv62", cl::Hidden, cl::desc("Build for Hexagon V62"),
-                   cl::init(false));
-cl::opt<bool> MV65("mv65", cl::Hidden, cl::desc("Build for Hexagon V65"),
-                   cl::init(false));
-cl::opt<bool> MV66("mv66", cl::Hidden, cl::desc("Build for Hexagon V66"),
-                   cl::init(false));
-cl::opt<bool> MV67("mv67", cl::Hidden, cl::desc("Build for Hexagon V67"),
-                   cl::init(false));
-cl::opt<bool> MV67T("mv67t", cl::Hidden, cl::desc("Build for Hexagon V67T"),
-                    cl::init(false));
-cl::opt<bool> MV68("mv68", cl::Hidden, cl::desc("Build for Hexagon V68"),
-                   cl::init(false));
-cl::opt<bool> MV69("mv69", cl::Hidden, cl::desc("Build for Hexagon V69"),
-                   cl::init(false));
-cl::opt<bool> MV71("mv71", cl::Hidden, cl::desc("Build for Hexagon V71"),
-                   cl::init(false));
-cl::opt<bool> MV71T("mv71t", cl::Hidden, cl::desc("Build for Hexagon V71T"),
-                    cl::init(false));
-cl::opt<bool> MV73("mv73", cl::Hidden, cl::desc("Build for Hexagon V73"),
-                   cl::init(false));
-cl::opt<bool> MV75("mv75", cl::Hidden, cl::desc("Build for Hexagon V75"),
-                   cl::init(false));
-cl::opt<bool> MV79("mv79", cl::Hidden, cl::desc("Build for Hexagon V79"),
-                   cl::init(false));
-cl::opt<bool> MV81("mv81", cl::Hidden, cl::desc("Build for Hexagon V81"),
-                   cl::init(false));
-} // namespace
+static bool getDisableHVX(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_DisableHVX>(Ctx,
+                                                                         false);
+}
+static bool getEnableHvxIeeeFp(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EnableHVXIEEEFP>(
+      Ctx, false);
+}
+static bool getEnableHexagonCabac(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_EnableCabac>(
+      Ctx, false);
+}
+static bool getHexagonDisableDuplex(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_DisableDuplex>(
+      Ctx, llvm::HexagonDisableDuplex);
+}
 
-static cl::opt<Hexagon::ArchEnum> EnableHVX(
-    "mhvx", cl::desc("Enable Hexagon Vector eXtensions"),
-    cl::values(clEnumValN(Hexagon::ArchEnum::V60, "v60", "Build for HVX v60"),
-               clEnumValN(Hexagon::ArchEnum::V62, "v62", "Build for HVX v62"),
-               clEnumValN(Hexagon::ArchEnum::V65, "v65", "Build for HVX v65"),
-               clEnumValN(Hexagon::ArchEnum::V66, "v66", "Build for HVX v66"),
-               clEnumValN(Hexagon::ArchEnum::V67, "v67", "Build for HVX v67"),
-               clEnumValN(Hexagon::ArchEnum::V68, "v68", "Build for HVX v68"),
-               clEnumValN(Hexagon::ArchEnum::V69, "v69", "Build for HVX v69"),
-               clEnumValN(Hexagon::ArchEnum::V71, "v71", "Build for HVX v71"),
-               clEnumValN(Hexagon::ArchEnum::V73, "v73", "Build for HVX v73"),
-               clEnumValN(Hexagon::ArchEnum::V75, "v75", "Build for HVX v75"),
-               clEnumValN(Hexagon::ArchEnum::V79, "v79", "Build for HVX v79"),
-               clEnumValN(Hexagon::ArchEnum::V81, "v81", "Build for HVX v81"),
-               // Sentinel for no value specified.
-               clEnumValN(Hexagon::ArchEnum::Generic, "", "")),
-    // Sentinel for flag not present.
-    cl::init(Hexagon::ArchEnum::NoArch), cl::ValueOptional);
-
-static cl::opt<bool>
-  DisableHVX("mno-hvx", cl::Hidden,
-             cl::desc("Disable Hexagon Vector eXtensions"));
-
-static cl::opt<bool>
-    EnableHvxIeeeFp("mhvx-ieee-fp", cl::Hidden,
-                    cl::desc("Enable HVX IEEE floating point extensions"));
-static cl::opt<bool> EnableHexagonCabac
-  ("mcabac", cl::desc("tbd"), cl::init(false));
+static Hexagon::ArchEnum getEnableHVX(const clv2::OptionsContext &Ctx) {
+  return static_cast<Hexagon::ArchEnum>(
+      clv2::getOptValOr<&clv2::HexagonOptsReg, &clv2::HEX_MHVX>(
+          Ctx, clv2::HexArchEnum::NoArch));
+}
 
 static constexpr StringRef DefaultArch = "hexagonv68";
 
-static StringRef HexagonGetArchVariant() {
-  if (MV5)
+static StringRef HexagonGetArchVariant(const clv2::OptionsContext &Ctx) {
+  if (getMV5(Ctx))
     return "hexagonv5";
-  if (MV55)
+  if (getMV55(Ctx))
     return "hexagonv55";
-  if (MV60)
+  if (getMV60(Ctx))
     return "hexagonv60";
-  if (MV62)
+  if (getMV62(Ctx))
     return "hexagonv62";
-  if (MV65)
+  if (getMV65(Ctx))
     return "hexagonv65";
-  if (MV66)
+  if (getMV66(Ctx))
     return "hexagonv66";
-  if (MV67)
+  if (getMV67(Ctx))
     return "hexagonv67";
-  if (MV67T)
+  if (getMV67T(Ctx))
     return "hexagonv67t";
-  if (MV68)
+  if (getMV68(Ctx))
     return "hexagonv68";
-  if (MV69)
+  if (getMV69(Ctx))
     return "hexagonv69";
-  if (MV71)
+  if (getMV71(Ctx))
     return "hexagonv71";
-  if (MV71T)
+  if (getMV71T(Ctx))
     return "hexagonv71t";
-  if (MV73)
+  if (getMV73(Ctx))
     return "hexagonv73";
-  if (MV75)
+  if (getMV75(Ctx))
     return "hexagonv75";
-  if (MV79)
+  if (getMV79(Ctx))
     return "hexagonv79";
-  if (MV81)
+  if (getMV81(Ctx))
     return "hexagonv81";
 
   return "";
 }
 
-StringRef Hexagon_MC::selectHexagonCPU(StringRef CPU) {
-  StringRef ArchV = HexagonGetArchVariant();
+StringRef Hexagon_MC::selectHexagonCPU(StringRef CPU,
+                                       const clv2::OptionsContext &Ctx) {
+  StringRef ArchV = HexagonGetArchVariant(Ctx);
   if (!ArchV.empty() && !CPU.empty()) {
     // Tiny cores have a "t" suffix that is discarded when creating a secondary
     // non-tiny subtarget.  See: addArchSubtarget
@@ -437,12 +443,13 @@ static MCTargetStreamer *createHexagonNullTargetStreamer(MCStreamer &S) {
 }
 
 namespace {
-std::string selectHexagonFS(StringRef CPU, StringRef FS) {
+std::string selectHexagonFS(StringRef CPU, StringRef FS,
+                            const clv2::OptionsContext &Ctx) {
   SmallVector<StringRef, 3> Result;
   if (!FS.empty())
     Result.push_back(FS);
 
-  switch (EnableHVX) {
+  switch (getEnableHVX(Ctx)) {
   case Hexagon::ArchEnum::V5:
   case Hexagon::ArchEnum::V55:
     break;
@@ -505,9 +512,9 @@ std::string selectHexagonFS(StringRef CPU, StringRef FS) {
     // Sentinel if -mhvx isn't specified
     break;
   }
-  if (EnableHvxIeeeFp)
+  if (getEnableHvxIeeeFp(Ctx))
     Result.push_back("+hvx-ieee-fp");
-  if (EnableHexagonCabac)
+  if (getEnableHexagonCabac(Ctx))
     Result.push_back("+cabac");
 
   return join(Result.begin(), Result.end(), ",");
@@ -519,11 +526,11 @@ static bool isCPUValid(StringRef CPU) {
 }
 
 namespace {
-std::pair<std::string, std::string> selectCPUAndFS(StringRef CPU,
-                                                   StringRef FS) {
+std::pair<std::string, std::string>
+selectCPUAndFS(StringRef CPU, StringRef FS, const clv2::OptionsContext &Ctx) {
   std::pair<std::string, std::string> Result;
-  Result.first = std::string(Hexagon_MC::selectHexagonCPU(CPU));
-  Result.second = selectHexagonFS(Result.first, FS);
+  Result.first = std::string(Hexagon_MC::selectHexagonCPU(CPU, Ctx));
+  Result.second = selectHexagonFS(Result.first, FS, Ctx);
   return Result;
 }
 std::mutex ArchSubtargetMutex;
@@ -617,10 +624,11 @@ FeatureBitset Hexagon_MC::completeHVXFeatures(const FeatureBitset &S) {
   return FB;
 }
 
-MCSubtargetInfo *Hexagon_MC::createHexagonMCSubtargetInfo(const Triple &TT,
-                                                          StringRef CPU,
-                                                          StringRef FS) {
-  std::pair<std::string, std::string> Features = selectCPUAndFS(CPU, FS);
+MCSubtargetInfo *
+Hexagon_MC::createHexagonMCSubtargetInfo(const Triple &TT, StringRef CPU,
+                                         StringRef FS,
+                                         const clv2::OptionsContext &Ctx) {
+  std::pair<std::string, std::string> Features = selectCPUAndFS(CPU, FS, Ctx);
   StringRef CPUName = Features.first;
   StringRef ArchFS = Features.second;
 
@@ -646,7 +654,7 @@ MCSubtargetInfo *Hexagon_MC::createHexagonMCSubtargetInfo(const Triple &TT,
     X->setFeatureBits(Features.set(Hexagon::ExtensionHVXQFloat));
   }
 
-  if (HexagonDisableDuplex) {
+  if (getHexagonDisableDuplex(Ctx)) {
     llvm::FeatureBitset Features = X->getFeatureBits();
     X->setFeatureBits(Features.reset(Hexagon::FeatureDuplex));
   }
@@ -663,6 +671,8 @@ MCSubtargetInfo *Hexagon_MC::createHexagonMCSubtargetInfo(const Triple &TT,
     X->setFeatureBits(Features.set(Hexagon::ExtensionZReg));
   }
 
+  if (X)
+    X->setOptionsContext(Ctx);
   return X;
 }
 
@@ -670,7 +680,8 @@ void Hexagon_MC::addArchSubtarget(MCSubtargetInfo const *STI, StringRef FS) {
   assert(STI != nullptr);
   if (STI->getCPU().contains("t")) {
     auto ArchSTI = createHexagonMCSubtargetInfo(STI->getTargetTriple(),
-                                                STI->getCPU().drop_back(), FS);
+                                                STI->getCPU().drop_back(), FS,
+                                                STI->getOptionsContext());
     std::lock_guard<std::mutex> Lock(ArchSubtargetMutex);
     ArchSubtarget[STI->getCPU()] =
         std::unique_ptr<MCSubtargetInfo const>(ArchSTI);

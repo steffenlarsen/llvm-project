@@ -85,6 +85,14 @@ if (LLVM_LINK_LLVM_DYLIB)
       "set(LLVM_LINK_LLVM_DYLIB ${LLVM_LINK_LLVM_DYLIB})")
 endif()
 
+# llvm_clv2_options_gen is an in-tree build-ordering target for the generated
+# clv2 options headers.  LLVMConfig.cmake.in bakes LLVM_COMMON_DEPENDS into the
+# exported config, and consumers of that config -- the runtimes sub-build, and
+# any out-of-tree project -- have no such target, so add_dependencies() there
+# would fail.  Drop it for this directory scope only; the in-tree targets that
+# need it were configured before we get here.
+list(REMOVE_ITEM LLVM_COMMON_DEPENDS llvm_clv2_options_gen)
+
 # We need to use the full path to the LLVM Exports file to make sure we get the
 # one from the build tree. This is due to our cmake files being split between
 # this source dir and the binary dir in the build tree configuration and the

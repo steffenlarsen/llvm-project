@@ -12,28 +12,28 @@
 
 #include "llvm/CodeGen/RegAllocPriorityAdvisor.h"
 #include "RegAllocGreedy.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/VirtRegMap.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
-static cl::opt<RegAllocPriorityAdvisorProvider::AdvisorMode> Mode(
-    "regalloc-enable-priority-advisor", cl::Hidden,
-    cl::init(RegAllocPriorityAdvisorProvider::AdvisorMode::Default),
-    cl::desc("Enable regalloc advisor mode"),
-    cl::values(
-        clEnumValN(RegAllocPriorityAdvisorProvider::AdvisorMode::Default,
-                   "default", "Default"),
-        clEnumValN(RegAllocPriorityAdvisorProvider::AdvisorMode::Release,
-                   "release", "precompiled"),
-        clEnumValN(RegAllocPriorityAdvisorProvider::AdvisorMode::Development,
-                   "development", "for training"),
-        clEnumValN(
-            RegAllocPriorityAdvisorProvider::AdvisorMode::Dummy, "dummy",
-            "prioritize low virtual register numbers for test and debug")));
+static RegAllocPriorityAdvisorProvider::AdvisorMode Mode =
+    RegAllocPriorityAdvisorProvider::AdvisorMode::Default;
+
+static RegAllocPriorityAdvisorProvider::AdvisorMode
+getPriorityAdvisorMode(const clv2::OptionsContext &Ctx) {
+  return static_cast<RegAllocPriorityAdvisorProvider::AdvisorMode>(
+      clv2::getOptValOr<&clv2::CGPassRegAllocReg,
+                        &clv2::CGPASS_RegallocEnablePriorityAdvisor>(Ctx,
+                                                                     Mode));
+}
 
 char RegAllocPriorityAdvisorAnalysisLegacy::ID = 0;
 INITIALIZE_PASS(RegAllocPriorityAdvisorAnalysisLegacy, "regalloc-priority",
@@ -131,12 +131,66 @@ private:
   }
 };
 
+/// Deferred priority advisor analysis that reads the mode from the Module's
+/// LLVMContext OptionsContext in doInitialization, rather than at
+/// construction time when no context is available.
+class DeferredPriorityAdvisorAnalysisLegacy final
+    : public RegAllocPriorityAdvisorAnalysisLegacy {
+public:
+  using RegAllocPriorityAdvisorAnalysisLegacy::AdvisorMode;
+  DeferredPriorityAdvisorAnalysisLegacy()
+      : RegAllocPriorityAdvisorAnalysisLegacy(AdvisorMode::Default) {}
+
+  static bool classof(const RegAllocPriorityAdvisorAnalysisLegacy *R) {
+    return true;
+  }
+
+private:
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<SlotIndexesWrapperPass>();
+    RegAllocPriorityAdvisorAnalysisLegacy::getAnalysisUsage(AU);
+  }
+
+  bool doInitialization(Module &M) override {
+    auto &Ctx = M.getContext();
+    AdvisorMode Mode = static_cast<AdvisorMode>(
+        static_cast<int>(getPriorityAdvisorMode(Ctx.getOptionsContext())));
+    switch (Mode) {
+    case AdvisorMode::Default:
+      Provider.reset(
+          new DefaultPriorityAdvisorProvider(/*NotAsRequested=*/false, Ctx));
+      break;
+    case AdvisorMode::Dummy:
+      Provider.reset(new DummyPriorityAdvisorProvider());
+      break;
+    case AdvisorMode::Development:
+#if defined(LLVM_HAVE_TFLITE)
+      Provider.reset(createDevelopmentModePriorityAdvisorProvider(Ctx));
+#else
+      Provider.reset(
+          new DefaultPriorityAdvisorProvider(/*NotAsRequested=*/true, Ctx));
+#endif
+      break;
+    case AdvisorMode::Release: {
+      auto *Ret = createReleaseModePriorityAdvisorProvider();
+      if (Ret)
+        Provider.reset(Ret);
+      else
+        Provider.reset(
+            new DefaultPriorityAdvisorProvider(/*NotAsRequested=*/true, Ctx));
+      break;
+    }
+    }
+    return false;
+  }
+};
+
 } // namespace
 
 void RegAllocPriorityAdvisorAnalysis::initializeProvider(LLVMContext &Ctx) {
   if (Provider)
     return;
-  switch (Mode) {
+  switch (getPriorityAdvisorMode(Ctx.getOptionsContext())) {
   case RegAllocPriorityAdvisorProvider::AdvisorMode::Dummy:
     Provider.reset(new DummyPriorityAdvisorProvider());
     return;
@@ -152,9 +206,15 @@ void RegAllocPriorityAdvisorAnalysis::initializeProvider(LLVMContext &Ctx) {
         new DefaultPriorityAdvisorProvider(/*NotAsRequested=*/true, Ctx));
 #endif
     return;
-  case RegAllocPriorityAdvisorProvider::AdvisorMode::Release:
-    Provider.reset(createReleaseModePriorityAdvisorProvider());
+  case RegAllocPriorityAdvisorProvider::AdvisorMode::Release: {
+    auto *Ret = createReleaseModePriorityAdvisorProvider();
+    if (Ret)
+      Provider.reset(Ret);
+    else
+      Provider.reset(
+          new DefaultPriorityAdvisorProvider(/*NotAsRequested=*/true, Ctx));
     return;
+  }
   }
 }
 
@@ -171,26 +231,9 @@ RegAllocPriorityAdvisorAnalysis::run(MachineFunction &MF,
 
 template <>
 Pass *llvm::callDefaultCtor<RegAllocPriorityAdvisorAnalysisLegacy>() {
-  Pass *Ret = nullptr;
-  switch (Mode) {
-  case RegAllocPriorityAdvisorProvider::AdvisorMode::Default:
-    Ret = new DefaultPriorityAdvisorAnalysisLegacy(/*NotAsRequested*/ false);
-    break;
-  case RegAllocPriorityAdvisorProvider::AdvisorMode::Development:
-#if defined(LLVM_HAVE_TFLITE)
-    Ret = createDevelopmentModePriorityAdvisorAnalysis();
-#endif
-    break;
-  case RegAllocPriorityAdvisorProvider::AdvisorMode::Release:
-    Ret = createReleaseModePriorityAdvisorAnalysis();
-    break;
-  case RegAllocPriorityAdvisorProvider::AdvisorMode::Dummy:
-    Ret = new DummyPriorityAdvisorAnalysis();
-    break;
-  }
-  if (Ret)
-    return Ret;
-  return new DefaultPriorityAdvisorAnalysisLegacy(/*NotAsRequested*/ true);
+  // Defer mode selection to doInitialization where the Module's
+  // LLVMContext OptionsContext is available for reading CLI options.
+  return new DeferredPriorityAdvisorAnalysisLegacy();
 }
 
 StringRef RegAllocPriorityAdvisorAnalysisLegacy::getPassName() const {

@@ -538,6 +538,11 @@ set(CLANG_TABLEGEN_EXE "${CLANG_TABLEGEN_EXE}" CACHE INTERNAL "")
 
 add_subdirectory(include)
 
+# The generated clv2 options headers are public; make everything configured
+# below wait for tablegen.  See add_clv2_options_gen_target in TableGen.cmake.
+add_clv2_options_gen_target(clang_clv2_options_gen "${CMAKE_CURRENT_SOURCE_DIR}/include")
+list(APPEND LLVM_COMMON_DEPENDS clang_clv2_options_gen)
+
 # All targets below may depend on all tablegen'd files.
 get_property(CLANG_TABLEGEN_TARGETS GLOBAL PROPERTY CLANG_TABLEGEN_TARGETS)
 add_custom_target(clang-tablegen-targets

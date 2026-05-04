@@ -14,6 +14,7 @@
 #include "clang/Basic/DiagnosticFrontend.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/TargetOptions.h"
+#include "clang/CodeGen/ClangCodeGenOptionsOptInfos.h"
 #include "clang/Frontend/Utils.h"
 #include "clang/Lex/HeaderSearchOptions.h"
 #include "llvm/ADT/StringExtras.h"
@@ -43,17 +44,20 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/OffloadBinary.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/PassesOptionsOptInfos.h"
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Plugins/PassPlugin.h"
 #include "llvm/ProfileData/InstrProfCorrelator.h"
 #include "llvm/Support/BuryPointer.h"
-#include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/IOSandbox.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/ToolOutputFile.h"
@@ -101,38 +105,21 @@
 #include <optional>
 using namespace clang;
 using namespace llvm;
+using namespace llvm::clv2;
 
 #define HANDLE_EXTENSION(Ext)                                                  \
   llvm::PassPluginLibraryInfo get##Ext##PluginInfo();
 #include "llvm/Support/Extension.def"
 
 namespace llvm {
-// Experiment to move sanitizers earlier.
-static cl::opt<bool> ClSanitizeOnOptimizerEarlyEP(
-    "sanitizer-early-opt-ep", cl::Optional,
-    cl::desc("Insert sanitizers on OptimizerEarlyEP."));
-
-// Experiment to mark cold functions as optsize/minsize/optnone.
-// TODO: remove once this is exposed as a proper driver flag.
-static cl::opt<PGOOptions::ColdFuncOpt> ClPGOColdFuncAttr(
-    "pgo-cold-func-opt", cl::init(PGOOptions::ColdFuncOpt::Default), cl::Hidden,
-    cl::desc(
-        "Function attribute to apply to cold functions as determined by PGO"),
-    cl::values(clEnumValN(PGOOptions::ColdFuncOpt::Default, "default",
-                          "Default (no attribute)"),
-               clEnumValN(PGOOptions::ColdFuncOpt::OptSize, "optsize",
-                          "Mark cold functions with optsize."),
-               clEnumValN(PGOOptions::ColdFuncOpt::MinSize, "minsize",
-                          "Mark cold functions with minsize."),
-               clEnumValN(PGOOptions::ColdFuncOpt::OptNone, "optnone",
-                          "Mark cold functions with optnone.")));
-
-LLVM_ABI extern cl::opt<InstrProfCorrelator::ProfCorrelatorKind>
-    ProfileCorrelate;
+LLVM_ABI extern InstrProfCorrelator::ProfCorrelatorKind ProfileCorrelate;
 } // namespace llvm
-namespace clang {
-extern llvm::cl::opt<bool> ClSanitizeGuardChecks;
-}
+
+namespace {
+
+using namespace clv2;
+
+} // namespace
 
 // Path and name of file used for profile generation
 static std::string getProfileGenName(const CodeGenOptions &CodeGenOpts) {
@@ -231,11 +218,15 @@ public:
         TargetTriple(TheModule->getTargetTriple()) {}
 
   ~EmitAssemblyHelper() {
+    if (LLVMOptsCtx)
+      TheModule->getContext().setOptionsContext(
+          llvm::clv2::defaultOptionsContext());
     if (CodeGenOpts.DisableFree)
       BuryPointer(std::move(TM));
   }
 
   std::unique_ptr<TargetMachine> TM;
+  std::unique_ptr<llvm::clv2::OptionsContext> LLVMOptsCtx;
 
   // Emit output using the new pass manager for the optimization pipeline.
   void emitAssembly(BackendAction Action, std::unique_ptr<raw_pwrite_stream> OS,
@@ -581,8 +572,8 @@ getInstrProfOptions(const CodeGenOptions &CodeGenOpts,
   return Options;
 }
 
-static void setCommandLineOpts(const CodeGenOptions &CodeGenOpts,
-                               vfs::FileSystem &VFS) {
+static std::unique_ptr<llvm::clv2::OptionsContext>
+setCommandLineOpts(const CodeGenOptions &CodeGenOpts, vfs::FileSystem &VFS) {
   SmallVector<const char *, 16> BackendArgs;
   BackendArgs.push_back("clang"); // Fake program name.
   if (!CodeGenOpts.DebugPass.empty()) {
@@ -594,18 +585,11 @@ static void setCommandLineOpts(const CodeGenOptions &CodeGenOpts,
     BackendArgs.push_back(CodeGenOpts.LimitFloatPrecision.c_str());
   }
 
-  // Check for the default "clang" invocation that won't set any cl::opt values.
-  // Skip trying to parse the command line invocation to avoid the issues
-  // described below.
   if (BackendArgs.size() == 1)
-    return;
-  BackendArgs.push_back(nullptr);
-  // FIXME: The command line parser below is not thread-safe and shares a global
-  // state, so this call might crash or overwrite the options of another Clang
-  // instance in the same process.
-  llvm::cl::ParseCommandLineOptions(BackendArgs.size() - 1, BackendArgs.data(),
-                                    /*Overview=*/"", /*Errs=*/nullptr,
-                                    /*VFS=*/&VFS);
+    return nullptr;
+  llvm::clv2::OptionParser P;
+  llvm::RegisterAllLLVMOptions(P);
+  return P.parse(BackendArgs.size(), BackendArgs.data());
 }
 
 void EmitAssemblyHelper::CreateTargetMachine(bool MustCreateTM) {
@@ -631,6 +615,8 @@ void EmitAssemblyHelper::CreateTargetMachine(bool MustCreateTM) {
   llvm::TargetOptions Options;
   if (!initTargetOptions(CI, Diags, Options))
     return;
+  Options.OptsCtx = &TheModule->getContext().getOptionsContext();
+  Options.MCOptions.OptsCtx = Options.OptsCtx;
   TM.reset(TheTarget->createTargetMachine(Triple, TargetOpts.CPU, FeaturesStr,
                                           Options, RM, CM, OptLevel));
   if (TM)
@@ -778,7 +764,8 @@ static void addSanitizers(const Triple &TargetTriple,
                                         PB.getVirtualFileSystemPtr()));
     }
   };
-  if (ClSanitizeOnOptimizerEarlyEP) {
+  bool ClSanitizeOnOptimizerEarlyEPVal = false;
+  if (ClSanitizeOnOptimizerEarlyEPVal) {
     PB.registerOptimizerEarlyEPCallback(
         [SanitizersCallback](ModulePassManager &MPM, OptimizationLevel Level,
                              ThinOrFullLTOPhase Phase) {
@@ -797,7 +784,8 @@ static void addSanitizers(const Triple &TargetTriple,
 }
 
 void addLowerAllowCheckPass(const CodeGenOptions &CodeGenOpts,
-                            const LangOptions &LangOpts, PassBuilder &PB) {
+                            const LangOptions &LangOpts, PassBuilder &PB,
+                            const llvm::clv2::OptionsContext &OptsCtx) {
   // SanitizeSkipHotCutoffs: doubles with range [0, 1]
   // Opts.cutoffs: unsigned ints with range [0, 1000000]
   auto ScaledCutoffs = CodeGenOpts.SanitizeSkipHotCutoffs.getAllScaled(1000000);
@@ -811,8 +799,7 @@ void addLowerAllowCheckPass(const CodeGenOptions &CodeGenOpts,
       SanitizerKind::KernelMemory | SanitizerKind::HWAddress |
       SanitizerKind::KernelHWAddress);
 
-  // TODO: remove IsRequested()
-  if (LowerAllowCheckPass::IsRequested() || ScaledCutoffs.has_value() ||
+  if (LowerAllowCheckPass::IsRequested(OptsCtx) || ScaledCutoffs.has_value() ||
       CodeGenOpts.AllowRuntimeCheckSkipHotCutoff.has_value() ||
       LowerAllowSanitize) {
     // We want to call it after inline, which is about OptimizerEarlyEPCallback.
@@ -821,9 +808,7 @@ void addLowerAllowCheckPass(const CodeGenOptions &CodeGenOpts,
             ModulePassManager &MPM, OptimizationLevel Level,
             ThinOrFullLTOPhase Phase) {
           LowerAllowCheckPass::Options Opts;
-          // TODO: after removing IsRequested(), make this unconditional
-          if (ScaledCutoffs.has_value())
-            Opts.cutoffs = ScaledCutoffs.value();
+          Opts.cutoffs = ScaledCutoffs.value_or(std::vector<unsigned int>{});
           Opts.runtime_check = AllowRuntimeCheckSkipHotCutoff;
           MPM.addPass(
               createModuleToFunctionPassAdaptor(LowerAllowCheckPass(Opts)));
@@ -836,11 +821,16 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
     std::unique_ptr<llvm::ToolOutputFile> &ThinLinkOS, BackendConsumer *BC) {
   std::optional<PGOOptions> PGOOpt;
 
+  PGOOptions::ColdFuncOpt ClPGOColdFuncAttrVal =
+      static_cast<PGOOptions::ColdFuncOpt>(
+          clang_codegen_opts::getPgoColdFuncOpt(
+              TheModule->getContext().getOptionsContext()));
+
   if (CodeGenOpts.hasProfileIRInstr())
     // -fprofile-generate.
     PGOOpt = PGOOptions(getProfileGenName(CodeGenOpts), "", "",
                         CodeGenOpts.MemoryProfileUsePath, PGOOptions::IRInstr,
-                        PGOOptions::NoCSAction, ClPGOColdFuncAttr,
+                        PGOOptions::NoCSAction, ClPGOColdFuncAttrVal,
                         CodeGenOpts.DebugInfoForProfiling,
                         /*PseudoProbeForProfiling=*/false,
                         CodeGenOpts.AtomicProfileUpdate);
@@ -851,29 +841,30 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
     PGOOpt = PGOOptions(CodeGenOpts.ProfileInstrumentUsePath, "",
                         CodeGenOpts.ProfileRemappingFile,
                         CodeGenOpts.MemoryProfileUsePath, PGOOptions::IRUse,
-                        CSAction, ClPGOColdFuncAttr,
+                        CSAction, ClPGOColdFuncAttrVal,
                         CodeGenOpts.DebugInfoForProfiling);
   } else if (!CodeGenOpts.SampleProfileFile.empty())
     // -fprofile-sample-use
     PGOOpt = PGOOptions(
         CodeGenOpts.SampleProfileFile, "", CodeGenOpts.ProfileRemappingFile,
         CodeGenOpts.MemoryProfileUsePath, PGOOptions::SampleUse,
-        PGOOptions::NoCSAction, ClPGOColdFuncAttr,
+        PGOOptions::NoCSAction, ClPGOColdFuncAttrVal,
         CodeGenOpts.DebugInfoForProfiling, CodeGenOpts.PseudoProbeForProfiling);
   else if (!CodeGenOpts.MemoryProfileUsePath.empty())
     // -fmemory-profile-use (without any of the above options)
-    PGOOpt = PGOOptions("", "", "", CodeGenOpts.MemoryProfileUsePath,
-                        PGOOptions::NoAction, PGOOptions::NoCSAction,
-                        ClPGOColdFuncAttr, CodeGenOpts.DebugInfoForProfiling);
+    PGOOpt =
+        PGOOptions("", "", "", CodeGenOpts.MemoryProfileUsePath,
+                   PGOOptions::NoAction, PGOOptions::NoCSAction,
+                   ClPGOColdFuncAttrVal, CodeGenOpts.DebugInfoForProfiling);
   else if (CodeGenOpts.PseudoProbeForProfiling)
     // -fpseudo-probe-for-profiling
     PGOOpt = PGOOptions("", "", "", /*MemoryProfile=*/"", PGOOptions::NoAction,
-                        PGOOptions::NoCSAction, ClPGOColdFuncAttr,
+                        PGOOptions::NoCSAction, ClPGOColdFuncAttrVal,
                         CodeGenOpts.DebugInfoForProfiling, true);
   else if (CodeGenOpts.DebugInfoForProfiling)
     // -fdebug-info-for-profiling
     PGOOpt = PGOOptions("", "", "", /*MemoryProfile=*/"", PGOOptions::NoAction,
-                        PGOOptions::NoCSAction, ClPGOColdFuncAttr, true);
+                        PGOOptions::NoCSAction, ClPGOColdFuncAttrVal, true);
 
   // Check to see if we want to generate a CS profile.
   if (CodeGenOpts.hasProfileCSIRInstr()) {
@@ -890,13 +881,13 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
     } else
       PGOOpt = PGOOptions("", getProfileGenName(CodeGenOpts), "",
                           /*MemoryProfile=*/"", PGOOptions::NoAction,
-                          PGOOptions::CSIRInstr, ClPGOColdFuncAttr,
+                          PGOOptions::CSIRInstr, ClPGOColdFuncAttrVal,
                           CodeGenOpts.DebugInfoForProfiling);
   }
   if (TM)
     TM->setPGOOption(PGOOpt);
 
-  PipelineTuningOptions PTO;
+  PipelineTuningOptions PTO(TheModule->getContext().getOptionsContext());
   PTO.LoopUnrolling = CodeGenOpts.UnrollLoops;
   PTO.LoopInterchange = CodeGenOpts.InterchangeLoops;
   PTO.LoopFusion = CodeGenOpts.FuseLoops;
@@ -927,7 +918,8 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
       (CodeGenOpts.DebugPassManager || DebugPassStructure),
       CodeGenOpts.VerifyEach, PrintPassOpts);
   SI.registerCallbacks(PIC, &MAM);
-  PassBuilder PB(TM.get(), PTO, PGOOpt, &PIC, CI.getVirtualFileSystemPtr());
+  PassBuilder PB(TheModule->getContext().getOptionsContext(), TM.get(), PTO,
+                 PGOOpt, &PIC, CI.getVirtualFileSystemPtr());
 
   // Handle the assignment tracking feature options.
   switch (CodeGenOpts.getAssignmentTrackingMode()) {
@@ -1049,8 +1041,12 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
       PB.registerScalarOptimizerLateEPCallback([this](FunctionPassManager &FPM,
                                                       OptimizationLevel Level) {
         BoundsCheckingPass::Options Options;
+        bool ClSanitizeGuardChecksVal = false;
+        if (auto *O = llvm::clv2::getView<&llvm::clv2::ClangCodeGenOptsReg>(
+                TheModule->getContext().getOptionsContext()))
+          ClSanitizeGuardChecksVal = O->get<&CLANGCG_UbsanGuardChecks>();
         if (CodeGenOpts.SanitizeSkipHotCutoffs[SanitizerKind::SO_LocalBounds] ||
-            ClSanitizeGuardChecks) {
+            ClSanitizeGuardChecksVal) {
           static_assert(SanitizerKind::SO_LocalBounds <=
                             std::numeric_limits<
                                 decltype(Options.GuardKind)::value_type>::max(),
@@ -1077,7 +1073,8 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
       // Most sanitizers only run during PreLink stage.
       addSanitizers(TargetTriple, CodeGenOpts, LangOpts, PB);
       addKCFIPass(TargetTriple, LangOpts, PB);
-      addLowerAllowCheckPass(CodeGenOpts, LangOpts, PB);
+      addLowerAllowCheckPass(CodeGenOpts, LangOpts, PB,
+                             TheModule->getContext().getOptionsContext());
 
       PB.registerPipelineStartEPCallback(
           [&](ModulePassManager &MPM, OptimizationLevel Level) {
@@ -1197,7 +1194,11 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
   // This should be done for both clang and flang simultaneously.
   // Print a textual, '-passes=' compatible, representation of pipeline if
   // requested.
-  if (PrintPipelinePasses) {
+  bool DoPrintPipeline = false;
+  if (auto *O = llvm::clv2::getView<&llvm::clv2::PassesOptsReg>(
+          TheModule->getContext().getOptionsContext()))
+    DoPrintPipeline = O->specified<&llvm::clv2::PAS_PrintPipelinePasses>();
+  if (DoPrintPipeline) {
     MPM.printPipeline(outs(), [&PIC](StringRef ClassName) {
       auto PassName = PIC.getPassNameForClassName(ClassName);
       return PassName.empty() ? ClassName : PassName;
@@ -1262,6 +1263,7 @@ void EmitAssemblyHelper::RunCodegenPipelineLegacy(
   // does not work with the codegen pipeline.
   // FIXME: make the new PM work with the codegen pipeline.
   legacy::PassManager CodeGenPasses;
+  CodeGenPasses.setOptionsContext(TheModule->getContext().getOptionsContext());
 
   CodeGenPasses.add(
       createTargetTransformInfoWrapperPass(getTargetIRAnalysis()));
@@ -1285,7 +1287,11 @@ void EmitAssemblyHelper::RunCodegenPipelineLegacy(
   // If -print-pipeline-passes is requested, don't run the legacy pass manager.
   // FIXME: when codegen is switched to use the new pass manager, it should also
   // emit pass names here.
-  if (PrintPipelinePasses) {
+  bool DoPrintPipeline2 = false;
+  if (auto *O = llvm::clv2::getView<&llvm::clv2::PassesOptsReg>(
+          TheModule->getContext().getOptionsContext()))
+    DoPrintPipeline2 = O->specified<&llvm::clv2::PAS_PrintPipelinePasses>();
+  if (DoPrintPipeline2) {
     return;
   }
 
@@ -1301,14 +1307,14 @@ void EmitAssemblyHelper::RunCodegenPipelineNewPM(
   FunctionAnalysisManager FAM;
   CGSCCAnalysisManager CGAM;
   ModuleAnalysisManager MAM;
-  CGPassBuilderOption Opt = getCGPassBuilderOption();
+  CGPassBuilderOption Opt = getCGPassBuilderOption(TM->getOptionsContext());
   Opt.DisableVerify = !CodeGenOpts.VerifyModule;
   MachineModuleInfo MMI(TM.get());
   PassInstrumentationCallbacks PIC;
-  PipelineTuningOptions PTOptions;
+  PipelineTuningOptions PTOptions(TM->getOptionsContext());
   TargetMachine *TMPointer = TM.get();
-  PassBuilder PB(TMPointer, PTOptions, std::nullopt, &PIC,
-                 CI.getVirtualFileSystemPtr());
+  PassBuilder PB(TM->getOptionsContext(), TMPointer, PTOptions, std::nullopt,
+                 &PIC, CI.getVirtualFileSystemPtr());
   PB.registerModuleAnalyses(MAM);
   PB.registerCGSCCAnalyses(CGAM);
   PB.registerFunctionAnalyses(FAM);
@@ -1346,7 +1352,15 @@ void EmitAssemblyHelper::TimeCodegenPasses(
 void EmitAssemblyHelper::emitAssembly(BackendAction Action,
                                       std::unique_ptr<raw_pwrite_stream> OS,
                                       BackendConsumer *BC) {
-  setCommandLineOpts(CodeGenOpts, CI.getVirtualFileSystem());
+  if (auto *MllvmCtx = CI.getLLVMOptionsContext()) {
+    TheModule->getContext().setOptionsContext(*MllvmCtx);
+  } else {
+    LLVMOptsCtx = setCommandLineOpts(CodeGenOpts, CI.getVirtualFileSystem());
+    if (!LLVMOptsCtx)
+      LLVMOptsCtx = std::make_unique<llvm::clv2::OptionsContext>();
+    if (LLVMOptsCtx)
+      TheModule->getContext().setOptionsContext(*LLVMOptsCtx);
+  }
 
   bool RequiresCodeGen = actionRequiresCodeGen(Action);
   CreateTargetMachine(RequiresCodeGen);
@@ -1357,7 +1371,6 @@ void EmitAssemblyHelper::emitAssembly(BackendAction Action,
     TheModule->setDataLayout(TM->createDataLayout());
 
   // Before executing passes, print the final values of the LLVM options.
-  cl::PrintOptionValues();
 
   std::unique_ptr<llvm::ToolOutputFile> ThinLinkOS, DwoOS;
   RunOptimizationPipeline(Action, OS, ThinLinkOS, BC);
@@ -1381,7 +1394,16 @@ runThinLTOBackend(CompilerInstance &CI, ModuleSummaryIndex *CombinedIndex,
       ModuleToDefinedGVSummaries;
   CombinedIndex->collectDefinedGVSummariesPerModule(ModuleToDefinedGVSummaries);
 
-  setCommandLineOpts(CGOpts, CI.getVirtualFileSystem());
+  std::unique_ptr<llvm::clv2::OptionsContext> LLVMOptsCtx;
+  const llvm::clv2::OptionsContext *MllvmCtx2 = CI.getLLVMOptionsContext();
+  if (!MllvmCtx2) {
+    LLVMOptsCtx = setCommandLineOpts(CGOpts, CI.getVirtualFileSystem());
+    if (!LLVMOptsCtx)
+      LLVMOptsCtx = std::make_unique<llvm::clv2::OptionsContext>();
+    MllvmCtx2 = LLVMOptsCtx.get();
+  }
+  if (MllvmCtx2)
+    M->getContext().setOptionsContext(*MllvmCtx2);
 
   // We can simply import the values mentioned in the combined index, since
   // we should only invoke this using the individual indexes written out
@@ -1395,7 +1417,7 @@ runThinLTOBackend(CompilerInstance &CI, ModuleSummaryIndex *CombinedIndex,
     return std::make_unique<CachedFileStream>(std::move(OS),
                                               CGOpts.ObjectFilenameForDebug);
   };
-  lto::Config Conf;
+  lto::Config Conf(M->getContext().getOptionsContext());
   if (CGOpts.SaveTempsFilePrefix != "") {
     if (Error E = Conf.addSaveTemps(CGOpts.SaveTempsFilePrefix + ".",
                                     /* UseInputModulePath */ false)) {

@@ -7,25 +7,34 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/APINotes/APINotesYAMLCompiler.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/WithColor.h"
 
-static llvm::cl::list<std::string> APINotes(llvm::cl::Positional,
-                                            llvm::cl::desc("[<apinotes> ...]"),
-                                            llvm::cl::Required);
+inline constexpr llvm::clv2::ListOptionInfo<std::string> ANApiNotesOpt{
+    "", "[<apinotes> ...]", llvm::clv2::Positional{}, llvm::clv2::OneOrMore};
 
-static llvm::cl::opt<std::string>
-    OutputFileName("o", llvm::cl::desc("output filename"),
-                   llvm::cl::value_desc("filename"), llvm::cl::init("-"));
+inline constexpr llvm::clv2::OptionInfo<std::string> ANOutputOpt{
+    "o", "output filename", llvm::clv2::value_desc("filename"),
+    llvm::clv2::Init{"-"}};
+
+inline constexpr llvm::clv2::OptionsRegistry<&ANApiNotesOpt, &ANOutputOpt>
+    APINotesTestReg;
 
 int main(int argc, const char **argv) {
   const bool DisableCrashReporting = true;
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0], DisableCrashReporting);
-  llvm::cl::ParseCommandLineOptions(argc, argv);
+  llvm::clv2::OptionParser P;
+  P.add<&APINotesTestReg>();
+  auto OptsCtx = P.parse(argc, argv);
+  auto *Opts = OptsCtx->getViewPtr<&APINotesTestReg>();
+
+  std::vector<std::string> APINotes = Opts->get<&ANApiNotesOpt>();
+  std::string OutputFileName = Opts->get<&ANOutputOpt>();
 
   auto Error = [](const llvm::Twine &Msg) {
     llvm::WithColor::error(llvm::errs(), "apinotes-test") << Msg << '\n';

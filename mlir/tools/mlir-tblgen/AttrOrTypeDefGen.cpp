@@ -15,7 +15,6 @@
 #include "mlir/TableGen/Interfaces.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/StringSet.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/TableGen/CodeGenHelpers.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/TableGenBackend.h"
@@ -1319,11 +1318,7 @@ static void emitAttrConstraintDefs(const RecordKeeper &records,
 // AttrDef
 //===----------------------------------------------------------------------===//
 
-static llvm::cl::OptionCategory attrdefGenCat("Options for -gen-attrdef-*");
-static llvm::cl::opt<std::string>
-    attrDialect("attrdefs-dialect",
-                llvm::cl::desc("Generate attributes for this dialect"),
-                llvm::cl::cat(attrdefGenCat), llvm::cl::CommaSeparated);
+std::string attrDialect;
 
 static mlir::GenRegistration
     genAttrDefs("gen-attrdef-defs", "Generate AttrDef definitions",
@@ -1357,11 +1352,7 @@ static mlir::GenRegistration
 // TypeDef
 //===----------------------------------------------------------------------===//
 
-static llvm::cl::OptionCategory typedefGenCat("Options for -gen-typedef-*");
-static llvm::cl::opt<std::string>
-    typeDialect("typedefs-dialect",
-                llvm::cl::desc("Generate types for this dialect"),
-                llvm::cl::cat(typedefGenCat), llvm::cl::CommaSeparated);
+std::string typeDialect;
 
 static mlir::GenRegistration
     genTypeDefs("gen-typedef-defs", "Generate TypeDef definitions",

@@ -42,7 +42,9 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/MemoryTaggingSupport.h"
 #include <cassert>
@@ -52,21 +54,6 @@ using namespace llvm;
 
 #define DEBUG_TYPE "aarch64-stack-tagging"
 
-static cl::opt<bool> ClMergeInit(
-    "stack-tagging-merge-init", cl::Hidden, cl::init(true),
-    cl::desc("merge stack variable initializers with tagging when possible"));
-
-static cl::opt<bool>
-    ClUseStackSafety("stack-tagging-use-stack-safety", cl::Hidden,
-                     cl::init(true),
-                     cl::desc("Use Stack Safety analysis results"));
-
-static cl::opt<unsigned> ClScanLimit("stack-tagging-merge-init-scan-limit",
-                                     cl::init(40), cl::Hidden);
-
-static cl::opt<unsigned>
-    ClMergeInitSizeLimit("stack-tagging-merge-init-size-limit", cl::init(272),
-                         cl::Hidden);
 
 // Mode for selecting how to insert frame record info into the stack ring
 // buffer.
@@ -79,14 +66,50 @@ enum StackTaggingRecordStackHistoryMode {
   instr,
 };
 
-static cl::opt<StackTaggingRecordStackHistoryMode> ClRecordStackHistory(
-    "stack-tagging-record-stack-history",
-    cl::desc("Record stack frames with tagged allocations in a thread-local "
-             "ring buffer"),
-    cl::values(clEnumVal(none, "Do not record stack ring history"),
-               clEnumVal(instr, "Insert instructions into the prologue for "
-                                "storing into the stack ring buffer")),
-    cl::Hidden, cl::init(none));
+using A64RecHistMode = clv2::A64StackTaggingRecordStackHistoryMode;
+
+static unsigned getClScanLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::A64_StackTaggingScanLimit>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getClMergeInitSizeLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::A64_StackTaggingMergeInitSizeLimit>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getClMergeInit(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_StackTaggingMergeInit>(Ctx);
+}
+
+static bool getClMergeInitWasSpecified(const clv2::OptionsContext &Ctx) {
+  return clv2::wasOptSpecified<&clv2::AArch64OptsReg,
+                               &clv2::A64_StackTaggingMergeInit>(Ctx);
+}
+
+static bool getClUseStackSafety(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_StackTaggingUseStackSafety>(Ctx);
+}
+
+static bool getClUseStackSafetyWasSpecified(const clv2::OptionsContext &Ctx) {
+  return clv2::wasOptSpecified<&clv2::AArch64OptsReg,
+                               &clv2::A64_StackTaggingUseStackSafety>(Ctx);
+}
+
+static StackTaggingRecordStackHistoryMode
+getClRecordStackHistory(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::AArch64OptsReg>(
+          F.getContext().getOptionsContext()))
+    return static_cast<StackTaggingRecordStackHistoryMode>(
+        O->get<&clv2::A64_RecordStackHistory>());
+  return none;
+}
+
+static bool getClRecordStackHistoryWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::AArch64OptsReg,
+                               &clv2::A64_RecordStackHistory>(
+      F.getContext().getOptionsContext());
+}
 
 static const Align kTagGranuleSize = Align(16);
 
@@ -293,17 +316,16 @@ public:
 };
 
 class AArch64StackTagging : public FunctionPass {
-  const bool MergeInit;
-  const bool UseStackSafety;
+  bool IsOptNone;
+  bool MergeInit;
+  bool UseStackSafety;
 
 public:
   static char ID; // Pass ID, replacement for typeid
 
-  AArch64StackTagging(bool IsOptNone = false)
-      : FunctionPass(ID),
-        MergeInit(ClMergeInit.getNumOccurrences() ? ClMergeInit : !IsOptNone),
-        UseStackSafety(ClUseStackSafety.getNumOccurrences() ? ClUseStackSafety
-                                                            : !IsOptNone) {}
+  AArch64StackTagging(bool IsOptNone_ = false)
+      : FunctionPass(ID), IsOptNone(IsOptNone_), MergeInit(!IsOptNone_),
+        UseStackSafety(!IsOptNone_) {}
 
   void tagAlloca(AllocaInst *AI, Instruction *InsertBefore, Value *Ptr,
                  uint64_t Size);
@@ -362,7 +384,7 @@ Instruction *AArch64StackTagging::collectInitializers(Instruction *StartInst,
   BasicBlock::iterator BI(StartInst);
 
   unsigned Count = 0;
-  for (; Count < ClScanLimit && !BI->isTerminator(); ++BI) {
+  for (; Count < getClScanLimit(*F) && !BI->isTerminator(); ++BI) {
     ++Count;
 
     if (isNoModRef(AA->getModRefInfo(&*BI, AllocaLoc)))
@@ -424,7 +446,7 @@ void AArch64StackTagging::tagAlloca(AllocaInst *AI, Instruction *InsertBefore,
   bool LittleEndian = AI->getModule()->getTargetTriple().isLittleEndian();
   // Current implementation of initializer merging assumes little endianness.
   if (MergeInit && !F->hasOptNone() && LittleEndian &&
-      Size < ClMergeInitSizeLimit) {
+      Size < getClMergeInitSizeLimit(*F)) {
     LLVM_DEBUG(dbgs() << "collecting initializers for " << *AI
                       << ", size = " << Size << "\n");
     InsertBefore = collectInitializers(InsertBefore, Ptr, Size, IB);
@@ -442,13 +464,12 @@ void AArch64StackTagging::untagAlloca(AllocaInst *AI, Instruction *InsertBefore,
 }
 
 static Value *getSlotPtr(IRBuilder<> &IRB, const Triple &TargetTriple,
-                         bool HasInstrumentedAllocas) {
+                         bool HasInstrumentedAllocas, const Function &F) {
   if (!HasInstrumentedAllocas)
     return nullptr;
 
-  if (ClRecordStackHistory == instr ||
-      (!ClRecordStackHistory.getNumOccurrences() &&
-       TargetTriple.isOSDarwin())) {
+  if (getClRecordStackHistory(F) == instr ||
+      (!getClRecordStackHistoryWasSpecified(F) && TargetTriple.isOSDarwin())) {
     if (TargetTriple.isAndroid() && TargetTriple.isAArch64() &&
         !TargetTriple.isAndroidVersionLT(35))
       return memtag::getAndroidSlotPtr(IRB, -3);
@@ -488,7 +509,7 @@ Instruction *AArch64StackTagging::insertBaseTaggedPointer(
   //
   // Stack history is recorded by default on Darwin.
   if (Value *SlotPtr =
-          getSlotPtr(IRB, TargetTriple, !AllocasToInstrument.empty())) {
+          getSlotPtr(IRB, TargetTriple, !AllocasToInstrument.empty(), *F)) {
     constexpr uint64_t TagMask = 0xFULL << 56;
     auto *IntptrTy = IRB.getIntPtrTy(M.getDataLayout());
     auto *ThreadLong = IRB.CreateLoad(IntptrTy, SlotPtr);
@@ -511,6 +532,15 @@ Instruction *AArch64StackTagging::insertBaseTaggedPointer(
 bool AArch64StackTagging::runOnFunction(Function &Fn) {
   if (!Fn.hasFnAttribute(Attribute::SanitizeMemTag))
     return false;
+
+  // Re-read options with Function context now that it's available.
+  MergeInit = getClMergeInitWasSpecified(Fn.getContext().getOptionsContext())
+                  ? getClMergeInit(Fn.getContext().getOptionsContext())
+                  : !IsOptNone;
+  UseStackSafety =
+      getClUseStackSafetyWasSpecified(Fn.getContext().getOptionsContext())
+          ? getClUseStackSafety(Fn.getContext().getOptionsContext())
+          : !IsOptNone;
 
   if (UseStackSafety)
     SSI = &getAnalysis<StackSafetyGlobalInfoWrapperPass>().getResult();

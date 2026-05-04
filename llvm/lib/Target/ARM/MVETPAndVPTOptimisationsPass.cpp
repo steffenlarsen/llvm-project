@@ -27,23 +27,26 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/RegisterClassInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/ARM/ARMOptionsOptInfos.h"
 #include <cassert>
 
 using namespace llvm;
 
 #define DEBUG_TYPE "arm-mve-vpt-opts"
 
-static cl::opt<bool>
-MergeEndDec("arm-enable-merge-loopenddec", cl::Hidden,
-    cl::desc("Enable merging Loop End and Dec instructions."),
-    cl::init(true));
+static bool getMergeEndDec(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::ARM_MergeEndDec>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-SetLRPredicate("arm-set-lr-predicate", cl::Hidden,
-    cl::desc("Enable setting lr as a predicate in tail predication regions."),
-    cl::init(true));
+static bool getSetLRPredicate(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::ARM_SetLRPredicate>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 class MVETPAndVPTOptimisations : public MachineFunctionPass {
@@ -241,7 +244,8 @@ bool MVETPAndVPTOptimisations::LowerWhileLoopStart(MachineLoop *ML) {
   auto WLSIt = find_if(MRI->use_nodbg_instructions(LR), [](auto &MI) {
     return MI.getOpcode() == ARM::t2WhileLoopStart;
   });
-  if (!MergeEndDec || WLSIt == MRI->use_instr_nodbg_end()) {
+  if (!getMergeEndDec(ML->getHeader()->getParent()->getFunction()) ||
+      WLSIt == MRI->use_instr_nodbg_end()) {
     RevertWhileLoopSetup(LoopStart, TII);
     RevertLoopDec(LoopStart, TII);
     RevertLoopEnd(LoopStart, TII);
@@ -318,7 +322,7 @@ MachineInstr *MVETPAndVPTOptimisations::CheckForLRUseInPredecessors(
 // decrement) around the loop edge, which means we need to be careful that they
 // will be valid to allocate without any spilling.
 bool MVETPAndVPTOptimisations::MergeLoopEnd(MachineLoop *ML) {
-  if (!MergeEndDec)
+  if (!getMergeEndDec(ML->getHeader()->getParent()->getFunction()))
     return false;
 
   LLVM_DEBUG(dbgs() << "MergeLoopEnd on loop " << ML->getHeader()->getName()
@@ -530,7 +534,7 @@ bool MVETPAndVPTOptimisations::ConvertTailPredLoop(MachineLoop *ML,
   MRI->constrainRegClass(CountReg, &ARM::rGPRRegClass);
   LoopStart->eraseFromParent();
 
-  if (SetLRPredicate) {
+  if (getSetLRPredicate(ML->getHeader()->getParent()->getFunction())) {
     // Each instruction in the loop needs to be using LR as the predicate from
     // the Phi as the predicate.
     Register LR = LoopPhi->getOperand(0).getReg();

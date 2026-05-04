@@ -36,6 +36,7 @@ add_mlir_library(MLIRExecutionEngineUtils
   intrinsics_gen
 
   LINK_COMPONENTS
+  AllOptions
   Analysis
   Core
   Coroutines
@@ -75,6 +76,7 @@ add_mlir_library(MLIRExecutionEngine
   intrinsics_gen
 
   LINK_COMPONENTS
+  AllOptions
   Core
   Coroutines
   ExecutionEngine
@@ -137,6 +139,7 @@ add_mlir_library(MLIRJitRunner
   intrinsics_gen
 
   LINK_COMPONENTS
+  AllOptions
   Core
   OrcJIT
   JITLink

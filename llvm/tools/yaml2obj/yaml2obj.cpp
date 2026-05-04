@@ -16,10 +16,12 @@
 #include "llvm/ObjectYAML/yaml2obj.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ObjectYAML/ObjectYAML.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/YAMLTraits.h"
@@ -28,49 +30,52 @@
 #include <system_error>
 
 using namespace llvm;
+using namespace llvm::clv2;
 
-namespace {
-cl::OptionCategory Cat("yaml2obj Options");
+static constexpr OptionCategory Cat{"yaml2obj Options"};
 
-cl::opt<std::string> Input(cl::Positional, cl::desc("<input file>"),
-                           cl::init("-"), cl::cat(Cat));
+static constexpr OptionInfo<std::string> Input{
+    "input", "<input file>", Positional{}, Init{"-"}, cat(Cat)};
 
-static cl::list<std::string>
-    D("D", cl::Prefix,
-      cl::desc("Defined the specified macros to their specified "
-               "definition. The syntax is <macro>=<definition>"),
-      cl::cat(Cat));
+static constexpr ListOptionInfo<std::string> D{
+    "D",
+    "Defined the specified macros to their specified "
+    "definition. The syntax is <macro>=<definition>",
+    PrefixFormat, cat(Cat)};
 
-cl::opt<bool> PreprocessOnly("E", cl::desc("Just print the preprocessed file"),
-                             cl::cat(Cat));
+static constexpr OptionInfo<bool> PreprocessOnly{
+    "E", "Just print the preprocessed file", cat(Cat)};
 
-cl::opt<unsigned>
-    DocNum("docnum", cl::init(1),
-           cl::desc("Read specified document from input (default = 1)"),
-           cl::cat(Cat));
+static constexpr OptionInfo<unsigned> DocNum{
+    "docnum", "Read specified document from input (default = 1)", Init{1u},
+    cat(Cat)};
 
-static cl::opt<uint64_t>
-    MaxSize("max-size", cl::init(10 * 1024 * 1024),
-            cl::desc("Sets the maximum allowed output size (0 means no limit) "
-                     "[ELF and COFF only]"),
-            cl::cat(Cat));
+static constexpr OptionInfo<uint64_t> MaxSize{
+    "max-size",
+    "Sets the maximum allowed output size (0 means no limit) [ELF and COFF "
+    "only]",
+    Init{uint64_t(10 * 1024 * 1024)}, cat(Cat)};
 
-cl::opt<std::string> OutputFilename("o", cl::desc("Output filename"),
-                                    cl::value_desc("filename"), cl::init("-"),
-                                    cl::Prefix, cl::cat(Cat));
-} // namespace
+static constexpr OptionInfo<std::string> OutputFilename{
+    "o",       "Output filename", value_desc("filename"),
+    Init{"-"}, PrefixFormat,      cat(Cat)};
 
-static std::optional<std::string> preprocess(StringRef Buf,
-                                             yaml::ErrorHandler ErrHandler) {
-  DenseMap<StringRef, StringRef> Defines;
-  for (StringRef Define : D) {
+static constexpr OptionsRegistry<&Input, &D, &PreprocessOnly, &DocNum, &MaxSize,
+                                 &OutputFilename>
+    Yaml2ObjToolReg;
+
+static std::optional<std::string>
+preprocess(StringRef Buf, const std::vector<std::string> &Defines,
+           yaml::ErrorHandler ErrHandler) {
+  DenseMap<StringRef, StringRef> DefinesMap;
+  for (StringRef Define : Defines) {
     StringRef Macro, Definition;
     std::tie(Macro, Definition) = Define.split('=');
     if (!Define.count('=') || Macro.empty()) {
       ErrHandler("invalid syntax for -D: " + Define);
       return {};
     }
-    if (!Defines.try_emplace(Macro, Definition).second) {
+    if (!DefinesMap.try_emplace(Macro, Definition).second) {
       ErrHandler("'" + Macro + "'" + " redefined");
       return {};
     }
@@ -88,9 +93,9 @@ static std::optional<std::string> preprocess(StringRef Buf,
 
         // When the -D option is requested, we use the provided value.
         // Otherwise we use a default macro value if present.
-        auto It = Defines.find(Macro);
+        auto It = DefinesMap.find(Macro);
         std::optional<StringRef> Value;
-        if (It != Defines.end())
+        if (It != DefinesMap.end())
           Value = It->second;
         else if (!Default.empty() || MacroExpr.ends_with("="))
           Value = Default;
@@ -112,43 +117,51 @@ static std::optional<std::string> preprocess(StringRef Buf,
 
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
-  cl::HideUnrelatedOptions(Cat);
-  cl::ParseCommandLineOptions(
-      argc, argv, "Create an object file from a YAML description", nullptr,
-      nullptr, nullptr, /*LongOptionsUseDoubleDash=*/true);
+
+  clv2::OptionParser P;
+  P.add<&Yaml2ObjToolReg>();
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&Cat});
+  auto OptsCtx =
+      P.parse(argc, argv, "Create an object file from a YAML description");
+  auto *Opts = OptsCtx->getViewPtr<&Yaml2ObjToolReg>();
 
   constexpr StringRef ProgName = "yaml2obj";
   auto ErrHandler = [&](const Twine &Msg) {
     WithColor::error(errs(), ProgName) << Msg << "\n";
   };
 
+  const std::string &OutFile = Opts->get<&OutputFilename>();
   std::error_code EC;
   std::unique_ptr<ToolOutputFile> Out(
-      new ToolOutputFile(OutputFilename, EC, sys::fs::OF_None));
+      new ToolOutputFile(OutFile, EC, sys::fs::OF_None));
   if (EC) {
-    ErrHandler("failed to open '" + OutputFilename + "': " + EC.message());
+    ErrHandler("failed to open '" + OutFile + "': " + EC.message());
     return 1;
   }
 
+  const std::string &InFile = Opts->get<&Input>();
   ErrorOr<std::unique_ptr<MemoryBuffer>> Buf =
-      MemoryBuffer::getFileOrSTDIN(Input, /*IsText=*/true);
+      MemoryBuffer::getFileOrSTDIN(InFile, /*IsText=*/true);
   if (std::error_code EC = Buf.getError()) {
-    WithColor::error(errs(), ProgName) << Input << ": " << EC.message() << '\n';
+    WithColor::error(errs(), ProgName)
+        << InFile << ": " << EC.message() << '\n';
     return 1;
   }
 
   std::optional<std::string> Buffer =
-      preprocess(Buf.get()->getBuffer(), ErrHandler);
+      preprocess(Buf.get()->getBuffer(), Opts->get<&D>(), ErrHandler);
   if (!Buffer)
     return 1;
 
-  if (PreprocessOnly) {
+  uint64_t MaxSzVal = Opts->get<&MaxSize>();
+  if (Opts->get<&PreprocessOnly>()) {
     Out->os() << Buffer;
   } else {
     yaml::Input YIn(*Buffer);
 
-    if (!convertYAML(YIn, Out->os(), ErrHandler, DocNum,
-                     MaxSize == 0 ? UINT64_MAX : MaxSize))
+    if (!convertYAML(YIn, Out->os(), ErrHandler, Opts->get<&DocNum>(),
+                     MaxSzVal == 0 ? UINT64_MAX : MaxSzVal))
       return 1;
   }
 

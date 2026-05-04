@@ -71,9 +71,9 @@ void ROCDLAttachTarget::runOnOperation() {
   ArrayRef<std::string> libs(linkLibs);
   SmallVector<StringRef> filesToLink(libs);
   auto target = builder.getAttr<ROCDLTargetAttr>(
-      optLevel, triple, chip, features, abiVersion, getFlags(builder),
+      optLevel, *triple, *chip, *features, *abiVersion, getFlags(builder),
       filesToLink.empty() ? nullptr : builder.getStrArrayAttr(filesToLink));
-  llvm::Regex matcher(moduleMatcher);
+  llvm::Regex matcher(*moduleMatcher);
   for (Region &region : getOperation()->getRegions())
     for (Block &block : region.getBlocks())
       for (auto module : block.getOps<gpu::GPUModuleOp>()) {

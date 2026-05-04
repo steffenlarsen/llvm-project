@@ -1,0 +1,19 @@
+//===- M68kOptionsGetters.cpp - clv2 getter definitions -------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+// The single translation unit that defines the generated option getters for
+// the M68k registry.  Every other TU sees only their declarations.
+// See Registry::OutOfLineGetters in llvm/Support/CLV2Options.td for why.
+//
+//===----------------------------------------------------------------------===//
+
+#include "llvm/Target/M68k/M68kOptionsOptInfos.h"
+
+#define CLV2_OPTIONS_GETTER_DEFS
+#include "llvm/Target/M68k/M68kOptionsOptInfos.inc"
+#undef CLV2_OPTIONS_GETTER_DEFS

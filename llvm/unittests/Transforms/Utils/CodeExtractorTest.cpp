@@ -40,7 +40,7 @@ Instruction *getInstByName(Function *F, StringRef Name) {
 }
 
 TEST(CodeExtractor, ExitStub) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M(parseAssemblyString(R"invalid(
     define i32 @foo(i32 %x, i32 %y, i32 %z) {
@@ -65,9 +65,9 @@ TEST(CodeExtractor, ExitStub) {
                                                 Err, Ctx));
 
   Function *Func = M->getFunction("foo");
-  SmallVector<BasicBlock *, 3> Candidates{ getBlockByName(Func, "header"),
-                                           getBlockByName(Func, "body1"),
-                                           getBlockByName(Func, "body2") };
+  SmallVector<BasicBlock *, 3> Candidates{getBlockByName(Func, "header"),
+                                          getBlockByName(Func, "body1"),
+                                          getBlockByName(Func, "body2")};
 
   CodeExtractor CE(Candidates);
   EXPECT_TRUE(CE.isEligible());
@@ -88,7 +88,7 @@ TEST(CodeExtractor, ExitStub) {
 }
 
 TEST(CodeExtractor, InputOutputMonitoring) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M(parseAssemblyString(R"invalid(
     define i32 @foo(i32 %x, i32 %y, i32 %z) {
@@ -146,7 +146,7 @@ TEST(CodeExtractor, InputOutputMonitoring) {
 }
 
 TEST(CodeExtractor, InputOutputReturnMonitoring) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M(parseAssemblyString(R"invalid(
     define i32 @foo(i32 %x, i32 %y, i32 %z) {
@@ -214,7 +214,7 @@ TEST(CodeExtractor, InputOutputReturnMonitoring) {
 }
 
 TEST(CodeExtractor, ExitBlockOrderingPhis) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M(parseAssemblyString(R"invalid(
     define void @foo(i32 %a, i32 %b) {
@@ -241,9 +241,9 @@ TEST(CodeExtractor, ExitBlockOrderingPhis) {
   )invalid",
                                                 Err, Ctx));
   Function *Func = M->getFunction("foo");
-  SmallVector<BasicBlock *, 3> Candidates{ getBlockByName(Func, "test0"),
-                                           getBlockByName(Func, "test1"),
-                                           getBlockByName(Func, "test") };
+  SmallVector<BasicBlock *, 3> Candidates{getBlockByName(Func, "test0"),
+                                          getBlockByName(Func, "test1"),
+                                          getBlockByName(Func, "test")};
 
   CodeExtractor CE(Candidates);
   EXPECT_TRUE(CE.isEligible());
@@ -272,7 +272,7 @@ TEST(CodeExtractor, ExitBlockOrderingPhis) {
 }
 
 TEST(CodeExtractor, ExitBlockOrdering) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M(parseAssemblyString(R"invalid(
     define void @foo(i32 %a, i32 %b) {
@@ -298,9 +298,9 @@ TEST(CodeExtractor, ExitBlockOrdering) {
   )invalid",
                                                 Err, Ctx));
   Function *Func = M->getFunction("foo");
-  SmallVector<BasicBlock *, 3> Candidates{ getBlockByName(Func, "test0"),
-                                           getBlockByName(Func, "test1"),
-                                           getBlockByName(Func, "test") };
+  SmallVector<BasicBlock *, 3> Candidates{getBlockByName(Func, "test0"),
+                                          getBlockByName(Func, "test1"),
+                                          getBlockByName(Func, "test")};
 
   CodeExtractor CE(Candidates);
   EXPECT_TRUE(CE.isEligible());
@@ -329,7 +329,7 @@ TEST(CodeExtractor, ExitBlockOrdering) {
 }
 
 TEST(CodeExtractor, ExitPHIOnePredFromRegion) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M(parseAssemblyString(R"invalid(
     define i32 @foo() {
@@ -353,13 +353,12 @@ TEST(CodeExtractor, ExitPHIOnePredFromRegion) {
       %1 = phi i32 [ 3, %extracted2 ], [ 4, %pred ]
       ret i32 %1
     }
-  )invalid", Err, Ctx));
+  )invalid",
+                                                Err, Ctx));
 
   Function *Func = M->getFunction("foo");
   SmallVector<BasicBlock *, 2> ExtractedBlocks{
-    getBlockByName(Func, "extracted1"),
-    getBlockByName(Func, "extracted2")
-  };
+      getBlockByName(Func, "extracted1"), getBlockByName(Func, "extracted2")};
 
   CodeExtractor CE(ExtractedBlocks);
   EXPECT_TRUE(CE.isEligible());
@@ -372,15 +371,15 @@ TEST(CodeExtractor, ExitPHIOnePredFromRegion) {
   // Ensure that PHIs in exits are not splitted (since that they have only one
   // incoming value from extracted region).
   EXPECT_TRUE(Exit1 &&
-          cast<PHINode>(Exit1->front()).getNumIncomingValues() == 2);
+              cast<PHINode>(Exit1->front()).getNumIncomingValues() == 2);
   EXPECT_TRUE(Exit2 &&
-          cast<PHINode>(Exit2->front()).getNumIncomingValues() == 2);
+              cast<PHINode>(Exit2->front()).getNumIncomingValues() == 2);
   EXPECT_FALSE(verifyFunction(*Outlined));
   EXPECT_FALSE(verifyFunction(*Func));
 }
 
 TEST(CodeExtractor, StoreOutputInvokeResultAfterEHPad) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M(parseAssemblyString(R"invalid(
     declare i8 @hoge()
@@ -419,7 +418,8 @@ TEST(CodeExtractor, StoreOutputInvokeResultAfterEHPad) {
         %ex.2 = phi ptr [ %ex.1, %lpad2 ], [ null, %lpad ]
         unreachable
     }
-  )invalid", Err, Ctx));
+  )invalid",
+                                                Err, Ctx));
 
   if (!M) {
     Err.print("unit", errs());
@@ -430,11 +430,8 @@ TEST(CodeExtractor, StoreOutputInvokeResultAfterEHPad) {
   EXPECT_FALSE(verifyFunction(*Func, &errs()));
 
   SmallVector<BasicBlock *, 2> ExtractedBlocks{
-    getBlockByName(Func, "catch"),
-    getBlockByName(Func, "invoke.cont2"),
-    getBlockByName(Func, "invoke.cont3"),
-    getBlockByName(Func, "lpad2")
-  };
+      getBlockByName(Func, "catch"), getBlockByName(Func, "invoke.cont2"),
+      getBlockByName(Func, "invoke.cont3"), getBlockByName(Func, "lpad2")};
 
   CodeExtractor CE(ExtractedBlocks);
   EXPECT_TRUE(CE.isEligible());
@@ -447,7 +444,7 @@ TEST(CodeExtractor, StoreOutputInvokeResultAfterEHPad) {
 }
 
 TEST(CodeExtractor, StoreOutputInvokeResultInExitStub) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M(parseAssemblyString(R"invalid(
     declare i32 @bar()
@@ -468,8 +465,8 @@ TEST(CodeExtractor, StoreOutputInvokeResultInExitStub) {
                                                 Err, Ctx));
 
   Function *Func = M->getFunction("foo");
-  SmallVector<BasicBlock *, 1> Blocks{ getBlockByName(Func, "entry"),
-                                       getBlockByName(Func, "lpad") };
+  SmallVector<BasicBlock *, 1> Blocks{getBlockByName(Func, "entry"),
+                                      getBlockByName(Func, "lpad")};
 
   CodeExtractor CE(Blocks);
   EXPECT_TRUE(CE.isEligible());
@@ -482,7 +479,7 @@ TEST(CodeExtractor, StoreOutputInvokeResultInExitStub) {
 }
 
 TEST(CodeExtractor, ExtractAndInvalidateAssumptionCache) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M(parseAssemblyString(R"ir(
         target datalayout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128"
@@ -521,7 +518,7 @@ TEST(CodeExtractor, ExtractAndInvalidateAssumptionCache) {
 
   assert(M && "Could not parse module?");
   Function *Func = M->getFunction("test");
-  SmallVector<BasicBlock *, 1> Blocks{ getBlockByName(Func, "if.else") };
+  SmallVector<BasicBlock *, 1> Blocks{getBlockByName(Func, "if.else")};
   AssumptionCache AC(*Func);
   CodeExtractor CE(Blocks, nullptr, false, nullptr, nullptr, &AC);
   EXPECT_TRUE(CE.isEligible());
@@ -535,7 +532,7 @@ TEST(CodeExtractor, ExtractAndInvalidateAssumptionCache) {
 }
 
 TEST(CodeExtractor, RemoveBitcastUsesFromOuterLifetimeMarkers) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M(parseAssemblyString(R"ir(
     target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
@@ -584,7 +581,7 @@ TEST(CodeExtractor, RemoveBitcastUsesFromOuterLifetimeMarkers) {
 }
 
 TEST(CodeExtractor, PartialAggregateArgs) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M(parseAssemblyString(R"ir(
     target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
@@ -644,7 +641,7 @@ TEST(CodeExtractor, PartialAggregateArgs) {
 }
 
 TEST(CodeExtractor, AllocaBlock) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M(parseAssemblyString(R"invalid(
     define i32 @foo(i32 %x, i32 %y, i32 %z) {
@@ -697,7 +694,7 @@ TEST(CodeExtractor, AllocaBlock) {
 /// Regression test to ensure we don't crash trying to set the name of the ptr
 /// argument
 TEST(CodeExtractor, PartialAggregateArgs2) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M(parseAssemblyString(R"ir(
     declare void @usei(i32)
@@ -742,7 +739,7 @@ TEST(CodeExtractor, PartialAggregateArgs2) {
 }
 
 TEST(CodeExtractor, OpenMPAggregateArgs) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M(parseAssemblyString(R"ir(
     target datalayout = "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9"
@@ -803,7 +800,7 @@ TEST(CodeExtractor, OpenMPAggregateArgs) {
 }
 
 TEST(CodeExtractor, ArgsDebugInfo) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M(parseAssemblyString(R"ir(
 

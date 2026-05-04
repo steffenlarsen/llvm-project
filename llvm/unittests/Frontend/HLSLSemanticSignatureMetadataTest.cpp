@@ -22,7 +22,7 @@ namespace {
 
 class HLSLSemanticSignatureMetadataTest : public testing::Test {
 protected:
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   Metadata *getI32(uint32_t Val) {
     return ConstantAsMetadata::get(

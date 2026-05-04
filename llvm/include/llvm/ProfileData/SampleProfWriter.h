@@ -19,6 +19,7 @@
 #include "llvm/ProfileData/SampleProf.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorOr.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdint>
 #include <memory>
@@ -132,6 +133,7 @@ public:
   virtual void setUseCtxSplitLayout() {}
   virtual void setUseMD5ProfileSymbolList() {}
   virtual void setUseMD5IndexedTables() {}
+  virtual void setOptionsContext(const clv2::OptionsContext &) {}
 
   void setFormatVersion(uint64_t V) {
     assert(sampleprof::formatVersionIsSupported(V) &&
@@ -442,12 +444,19 @@ private:
   MapVector<SampleContext, uint32_t> CSNameTable;
 
   ProfileSymbolList *ProfSymList = nullptr;
+
+protected:
+  bool CachedWriteMD5ProfSymList = false;
+  bool CachedWriteEytzingerNameTables = false;
 };
 
 class LLVM_ABI SampleProfileWriterExtBinary
     : public SampleProfileWriterExtBinaryBase {
 public:
   SampleProfileWriterExtBinary(std::unique_ptr<raw_ostream> &OS);
+
+  /// Re-initialize options that depend on OptionsContext.
+  void setOptionsContext(const clv2::OptionsContext &Ctx) override;
 
 private:
   std::error_code writeDefaultLayout(const SampleProfileMap &ProfileMap);

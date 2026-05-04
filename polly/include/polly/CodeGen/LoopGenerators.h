@@ -41,10 +41,6 @@ enum class OMPGeneralSchedulingType {
   Runtime = 37
 };
 
-extern int PollyNumThreads;
-extern OMPGeneralSchedulingType PollyScheduling;
-extern int PollyChunkSize;
-
 /// Create a scalar do/for-style loop.
 ///
 /// @param LowerBound         The starting value of the induction variable.

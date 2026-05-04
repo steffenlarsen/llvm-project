@@ -14,6 +14,8 @@
 #include "llvm/Analysis/LazyValueInfo.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
+#include "llvm/Analysis/AssumeBundleQueries.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/InstructionSimplify.h"
@@ -22,7 +24,6 @@
 #include "llvm/Analysis/ValueLattice.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/AssemblyAnnotationWriter.h"
-#include "llvm/IR/BundleAttributes.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/ConstantRange.h"
 #include "llvm/IR/Constants.h"
@@ -40,6 +41,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/Support/KnownBits.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <optional>
 using namespace llvm;
@@ -60,10 +62,10 @@ INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_END(LazyValueInfoWrapperPass, "lazy-value-info",
                 "Lazy Value Information Analysis", false, true)
 
-static cl::opt<bool> PerPredRanges(
-    "lvi-per-pred-ranges", cl::Hidden, cl::init(false),
-    cl::desc("Enable tracking of ranges for a value in a block for"
-             "each block predecessor (default = false)"));
+static bool getPerPredRanges(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_PerPredRanges>(
+      F.getContext().getOptionsContext());
+}
 
 namespace llvm {
 FunctionPass *createLazyValueInfoPass() {
@@ -157,7 +159,7 @@ class LazyValueInfoCache {
       return Entry;
 
     BlockCache[Number] = std::make_unique<BlockCacheEntry>();
-    if (PerPredRanges)
+    if (getPerPredRanges(*BB->getParent()))
       BlockCache[Number]->PredecessorLatticeElements =
           std::make_optional<PredecessorValueLatticeMap>();
 
@@ -268,7 +270,7 @@ void LazyValueInfoCache::eraseValue(Value *V) {
     Elem->OverDefined.erase(V);
     if (Elem->NonNullPointers)
       Elem->NonNullPointers->erase(V);
-    if (PerPredRanges)
+    if (Elem->PredecessorLatticeElements)
       Elem->PredecessorLatticeElements->erase(V);
   }
 
@@ -286,7 +288,7 @@ void LVIValueHandle::deleted() {
 void LazyValueInfoCache::eraseBlock(BasicBlock *BB) {
   assert(BlockNumberEpoch == BB->getParent()->getBlockNumberEpoch());
   // Clear all when a BB is removed.
-  if (PerPredRanges)
+  if (getPerPredRanges(*BB->getParent()))
     for (auto &Elem : BlockCache)
       if (Elem)
         Elem->PredecessorLatticeElements->clear();
@@ -755,6 +757,9 @@ LazyValueInfoImpl::solveBlockValueNonLocal(Value *Val, BasicBlock *BB) {
   // find a path to function entry.  TODO: We should consider explicitly
   // canonicalizing to make this true rather than relying on this happy
   // accident.
+  // Read once: the predecessor loop below consults this per predecessor.
+  const bool PerPredRanges = getPerPredRanges(*BB->getParent());
+
   std::optional<BBLatticeElementMap> PredLatticeElements;
   if (PerPredRanges)
     PredLatticeElements = std::make_optional<BBLatticeElementMap>();
@@ -796,6 +801,9 @@ LazyValueInfoImpl::solveBlockValuePHINode(PHINode *PN, BasicBlock *BB) {
   // Loop over all of our predecessors, merging what we know from them into
   // result.  See the comment about the chosen traversal order in
   // solveBlockValueNonLocal; the same reasoning applies here.
+  // Read once: the incoming-value loop below consults this per predecessor.
+  const bool PerPredRanges = getPerPredRanges(*BB->getParent());
+
   std::optional<BBLatticeElementMap> PredLatticeElements;
   if (PerPredRanges)
     PredLatticeElements = std::make_optional<BBLatticeElementMap>();
@@ -856,10 +864,27 @@ void LazyValueInfoImpl::intersectAssumeOrGuardBlockValueConstantRange(
       continue;
 
     if (AssumeVH.Index != AssumptionCache::ExprResultIdx) {
-      if (assumeBundleImpliesNonNull(Val, BBI->getFunction(),
-                                     I->getOperandBundleAt(AssumeVH.Index)))
-        BBLV = BBLV.intersect(ValueLatticeElement::getNot(
-            Constant::getNullValue(Val->getType())));
+      if (RetainedKnowledge RK = getKnowledgeFromBundle(
+              *I, I->bundle_op_info_begin()[AssumeVH.Index])) {
+        if (RK.WasOn != Val)
+          continue;
+        switch (RK.AttrKind) {
+        case Attribute::NonNull:
+          BBLV = BBLV.intersect(ValueLatticeElement::getNot(
+              Constant::getNullValue(RK.WasOn->getType())));
+          break;
+
+        case Attribute::Dereferenceable:
+          if (auto *CI = dyn_cast<ConstantInt>(RK.IRArgValue);
+              CI && !CI->isZero())
+            BBLV = BBLV.intersect(ValueLatticeElement::getNot(
+                Constant::getNullValue(RK.WasOn->getType())));
+          break;
+
+        default:
+          break;
+        }
+      }
     } else {
       BBLV = BBLV.intersect(*getValueFromCondition(Val, I->getArgOperand(0),
                                                    /*IsTrueDest*/ true,
@@ -1094,7 +1119,7 @@ LazyValueInfoImpl::solveBlockValueBinaryOpImpl(
   std::optional<ValueLatticeElement> MergedResult =
       ValueLatticeElement::getRange(OpFn(LHSRange, RHSRange));
 
-  if (!PerPredRanges)
+  if (!getPerPredRanges(*BB->getParent()))
     return MergedResult;
 
   std::optional<BBLatticeElementMap> PredLHS =
@@ -1355,7 +1380,6 @@ static ValueLatticeElement getValueFromICmpCtpop(ICmpInst::Predicate Pred,
       ConstantRange::getNonEmpty(std::move(ValMin), ValMax + 1));
 }
 
-/// Get the unsigned range for \p V from a `mul nuw V, V` comparison.
 static std::optional<ConstantRange>
 getRangeForNUWMulSquare(const Value *V, CmpInst::Predicate Pred,
                         const Value *LHS, const Value *RHS) {
@@ -1418,7 +1442,7 @@ std::optional<ValueLatticeElement> LazyValueInfoImpl::getValueFromICmpCondition(
     return getValueFromSimpleICmpCondition(SwappedPred, LHS, Offset, ICI,
                                            UseBlockValue);
 
-  if (match(LHS, m_Ctpop(m_Specific(Val))))
+  if (match(LHS, m_Intrinsic<Intrinsic::ctpop>(m_Specific(Val))))
     return getValueFromICmpCtpop(EdgePred, RHS);
 
   const APInt *Mask, *C;
@@ -2145,10 +2169,6 @@ Constant *LazyValueInfo::getPredicateAt(CmpInst::Predicate Pred, Value *V,
   // return it quickly. But this is only a fastpath, and falling
   // through would still be correct.
   const DataLayout &DL = CxtI->getDataLayout();
-  // NOTE: This check is meant to determine whether a pointer is semantically a
-  // null pointer, not just whether its value equals ConstantPointerNull. If the
-  // semantics of ConstantPointerNull change in the future, this should be
-  // updated to use a semantic check (e.g. isKnownNonNull).
   if (V->getType()->isPointerTy() && C->isNullValue() &&
       isKnownNonZero(V->stripPointerCastsSameRepresentation(), DL)) {
     Type *ResTy = CmpInst::makeCmpResultType(C->getType());

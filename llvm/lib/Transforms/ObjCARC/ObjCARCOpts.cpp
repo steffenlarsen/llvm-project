@@ -58,12 +58,13 @@
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/ObjCARC.h"
+#include "llvm/Transforms/ObjCARC/ObjCARCOptionsOptInfos.h"
 #include <cassert>
 #include <iterator>
 #include <utility>
@@ -73,10 +74,10 @@ using namespace llvm::objcarc;
 
 #define DEBUG_TYPE "objc-arc-opts"
 
-static cl::opt<unsigned> MaxPtrStates("arc-opt-max-ptr-states",
-    cl::Hidden,
-    cl::desc("Maximum number of ptr states the optimizer keeps track of"),
-    cl::init(4095));
+static unsigned getMaxPtrStates(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::ARC_MaxPtrStates>(
+      F.getContext().getOptionsContext());
+}
 
 /// \defgroup ARCUtilities Utility declarations/definitions specific to ARC.
 /// @{
@@ -1434,7 +1435,8 @@ bool ObjCARCOpt::VisitBottomUp(BasicBlock *BB,
 
     // Bail out if the number of pointers being tracked becomes too large so
     // that this pass can complete in a reasonable amount of time.
-    if (MyStates.bottom_up_ptr_list_size() > MaxPtrStates) {
+    if (MyStates.bottom_up_ptr_list_size() >
+        getMaxPtrStates(*BB->getParent())) {
       DisableRetainReleasePairing = true;
       return false;
     }
@@ -1622,7 +1624,7 @@ bool ObjCARCOpt::VisitTopDown(
 
     // Bail out if the number of pointers being tracked becomes too large so
     // that this pass can complete in a reasonable amount of time.
-    if (MyStates.top_down_ptr_list_size() > MaxPtrStates) {
+    if (MyStates.top_down_ptr_list_size() > getMaxPtrStates(*BB->getParent())) {
       DisableRetainReleasePairing = true;
       return false;
     }
@@ -2397,7 +2399,7 @@ ObjCARCOpt::GatherStatistics(Function &F, bool AfterOptimization) {
 #endif
 
 void ObjCARCOpt::init(Function &F) {
-  if (!EnableARCOpts)
+  if (!getEnableARCOpts())
     return;
 
   // Intuitively, objc_retain and others are nocapture, however in practice
@@ -2415,7 +2417,7 @@ void ObjCARCOpt::init(Function &F) {
 }
 
 bool ObjCARCOpt::run(Function &F, AAResults &AA) {
-  if (!EnableARCOpts)
+  if (!getEnableARCOpts())
     return false;
 
   Changed = CFGChanged = false;

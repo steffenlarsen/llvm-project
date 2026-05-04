@@ -1,4 +1,4 @@
-set(LLVM_LINK_COMPONENTS Support)
+set(LLVM_LINK_COMPONENTS Support AllOptions)
 set(LIBS MLIRSupport)
 
 add_tablegen(mlir-src-sharder MLIR_SRC_SHARDER

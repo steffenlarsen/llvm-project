@@ -34,8 +34,9 @@ static bool parseAssemblyInto(MemoryBufferRef F, Module *M,
 
   std::optional<LLVMContext> OptContext;
   return LLParser(F.getBuffer(), SM, Err, M, Index,
-                  M ? M->getContext() : OptContext.emplace(), Slots,
-                  ParserContext)
+                  M ? M->getContext()
+                    : OptContext.emplace(llvm::clv2::defaultOptionsContext()),
+                  Slots, ParserContext)
       .Run(UpgradeDebugInfo, DataLayoutCallback);
 }
 
@@ -159,7 +160,7 @@ static bool parseSummaryIndexAssemblyInto(MemoryBufferRef F,
 
   // The parser holds a reference to a context that is unused when parsing the
   // index, but we need to initialize it.
-  LLVMContext unusedContext;
+  LLVMContext unusedContext(llvm::clv2::defaultOptionsContext());
   return LLParser(F.getBuffer(), SM, Err, nullptr, &Index, unusedContext)
       .Run(true, [](StringRef, StringRef) { return std::nullopt; });
 }

@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/InlineOrder.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/GlobalsModRef.h"
@@ -16,29 +17,21 @@
 #include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "inline-order"
 
 enum class InlinePriorityMode : int { Size, Cost, CostBenefit, ML };
+static InlinePriorityMode UseInlinePriority = InlinePriorityMode::Size;
+static int ModuleInlinerTopPriorityThreshold = 0;
 
-static cl::opt<InlinePriorityMode> UseInlinePriority(
-    "inline-priority-mode", cl::init(InlinePriorityMode::Size), cl::Hidden,
-    cl::desc("Choose the priority mode to use in module inline"),
-    cl::values(clEnumValN(InlinePriorityMode::Size, "size",
-                          "Use callee size priority."),
-               clEnumValN(InlinePriorityMode::Cost, "cost",
-                          "Use inline cost priority."),
-               clEnumValN(InlinePriorityMode::CostBenefit, "cost-benefit",
-                          "Use cost-benefit ratio."),
-               clEnumValN(InlinePriorityMode::ML, "ml", "Use ML.")));
-
-static cl::opt<int> ModuleInlinerTopPriorityThreshold(
-    "module-inliner-top-priority-threshold", cl::Hidden, cl::init(0),
-    cl::desc("The cost threshold for call sites that get inlined without the "
-             "cost-benefit analysis"));
+static int getModuleInlinerTopPriorityThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_ModuleInlinerTopPriorityThreshold>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -113,16 +106,15 @@ public:
   CostBenefitPriority() = default;
   CostBenefitPriority(const CallBase *CB, FunctionAnalysisManager &FAM,
                       const InlineParams &Params) {
+    const Function *Caller = CB->getCaller();
+    TopPriorityThreshold = getModuleInlinerTopPriorityThreshold(*Caller);
     auto IC = getInlineCostWrapper(const_cast<CallBase &>(*CB), FAM, Params);
-    if (IC.isVariable()) {
+    if (IC.isVariable())
       Cost = IC.getCost();
-      StaticBonusApplied = IC.getStaticBonusApplied();
-      CostBenefit = IC.getCostBenefit();
-    } else {
+    else
       Cost = IC.isNever() ? INT_MAX : INT_MIN;
-      StaticBonusApplied = 0;
-      CostBenefit = std::nullopt;
-    }
+    StaticBonusApplied = IC.getStaticBonusApplied();
+    CostBenefit = IC.getCostBenefit();
   }
 
   static bool isMoreDesirable(const CostBenefitPriority &P1,
@@ -143,9 +135,9 @@ public:
     // We add back StaticBonusApplied to determine whether we expect the caller
     // to shrink (even if we don't delete the callee).
     bool P1ReducesCallerSize =
-        P1.Cost + P1.StaticBonusApplied < ModuleInlinerTopPriorityThreshold;
+        P1.Cost + P1.StaticBonusApplied < P1.TopPriorityThreshold;
     bool P2ReducesCallerSize =
-        P2.Cost + P2.StaticBonusApplied < ModuleInlinerTopPriorityThreshold;
+        P2.Cost + P2.StaticBonusApplied < P2.TopPriorityThreshold;
     if (P1ReducesCallerSize || P2ReducesCallerSize) {
       // If one reduces the caller size while the other doesn't, then return
       // true iff P1 reduces the caller size.
@@ -179,6 +171,7 @@ public:
 private:
   int Cost = INT_MAX;
   int StaticBonusApplied = 0;
+  int TopPriorityThreshold = 0;
   std::optional<CostBenefitPair> CostBenefit;
 };
 
@@ -264,6 +257,7 @@ public:
 private:
   SmallVector<CallBase *, 16> Heap;
   std::function<bool(const CallBase *L, const CallBase *R)> isLess;
+  DenseMap<CallBase *, int> InlineHistoryMap;
   DenseMap<const CallBase *, PriorityT> Priorities;
   FunctionAnalysisManager &FAM;
   const InlineParams &Params;

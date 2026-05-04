@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 ///===- SimpleLoopUnswitch.cpp - Hoist loop-invariant control flow ---------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -47,7 +49,6 @@
 #include "llvm/IR/Use.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/GenericDomTree.h"
@@ -83,65 +84,70 @@ STATISTIC(NumInvariantConditionsInjected,
           "Number of invariant conditions injected and unswitched");
 
 namespace llvm {
-static cl::opt<bool> EnableNonTrivialUnswitch(
-    "enable-nontrivial-unswitch", cl::init(false), cl::Hidden,
-    cl::desc("Forcibly enables non-trivial loop unswitching rather than "
-             "following the configuration passed into the pass."));
+static bool getEnableNonTrivialUnswitch(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_EnableNontrivialUnswitch>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<int>
-    UnswitchThreshold("unswitch-threshold", cl::init(50), cl::Hidden,
-                      cl::desc("The cost threshold for unswitching a loop."));
+static int getUnswitchThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_UnswitchThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> EnableUnswitchCostMultiplier(
-    "enable-unswitch-cost-multiplier", cl::init(true), cl::Hidden,
-    cl::desc("Enable unswitch cost multiplier that prohibits exponential "
-             "explosion in nontrivial unswitch."));
-static cl::opt<int> UnswitchSiblingsToplevelDiv(
-    "unswitch-siblings-toplevel-div", cl::init(2), cl::Hidden,
-    cl::desc("Toplevel siblings divisor for cost multiplier."));
-static cl::opt<int> UnswitchParentBlocksDiv(
-    "unswitch-parent-blocks-div", cl::init(8), cl::Hidden,
-    cl::desc("Outer loop size divisor for cost multiplier."));
-static cl::opt<int> UnswitchNumInitialUnscaledCandidates(
-    "unswitch-num-initial-unscaled-candidates", cl::init(8), cl::Hidden,
-    cl::desc("Number of unswitch candidates that are ignored when calculating "
-             "cost multiplier."));
-static cl::opt<bool> UnswitchGuards(
-    "simple-loop-unswitch-guards", cl::init(true), cl::Hidden,
-    cl::desc("If enabled, simple loop unswitching will also consider "
-             "llvm.experimental.guard intrinsics as unswitch candidates."));
-static cl::opt<bool> DropNonTrivialImplicitNullChecks(
-    "simple-loop-unswitch-drop-non-trivial-implicit-null-checks",
-    cl::init(false), cl::Hidden,
-    cl::desc("If enabled, drop make.implicit metadata in unswitched implicit "
-             "null checks to save time analyzing if we can keep it."));
-static cl::opt<unsigned>
-    MSSAThreshold("simple-loop-unswitch-memoryssa-threshold",
-                  cl::desc("Max number of memory uses to explore during "
-                           "partial unswitching analysis"),
-                  cl::init(100), cl::Hidden);
-static cl::opt<bool> FreezeLoopUnswitchCond(
-    "freeze-loop-unswitch-cond", cl::init(true), cl::Hidden,
-    cl::desc("If enabled, the freeze instruction will be added to condition "
-             "of loop unswitch to prevent miscompilation."));
+static bool getEnableUnswitchCostMultiplier(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_EnableUnswitchCostMultiplier>(
+      F.getContext().getOptionsContext());
+}
+static int getUnswitchSiblingsToplevelDiv(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_UnswitchSiblingsToplevelDiv>(
+      F.getContext().getOptionsContext());
+}
+static int getUnswitchParentBlocksDiv(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_UnswitchParentBlocksDiv>(
+      F.getContext().getOptionsContext());
+}
+static int getUnswitchNumInitialUnscaledCandidates(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::SC_UnswitchNumInitialUnscaledCandidates>(
+      F.getContext().getOptionsContext());
+}
+static bool getUnswitchGuards(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_SimpleLoopUnswitchGuards>(
+      F.getContext().getOptionsContext());
+}
+static bool getDropNonTrivialImplicitNullChecks(const Function &F) {
+  return clv2::getOptValOr<
+      &clv2::ScalarOptsReg,
+      &clv2::SC_SimpleLoopUnswitchDropNonTrivialImplicitNullChecks>(
+      F.getContext().getOptionsContext(), false);
+}
+static unsigned getMSSAThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::SC_SimpleLoopUnswitchMemoryssaThreshold>(
+      F.getContext().getOptionsContext());
+}
+static bool getFreezeLoopUnswitchCond(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_FreezeLoopUnswitchCond>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> InjectInvariantConditions(
-    "simple-loop-unswitch-inject-invariant-conditions", cl::Hidden,
-    cl::desc("Whether we should inject new invariants and unswitch them to "
-             "eliminate some existing (non-invariant) conditions."),
-    cl::init(true));
+static bool getInjectInvariantConditions(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::SC_SimpleLoopUnswitchInjectInvariantConditions>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> InjectInvariantConditionHotnesThreshold(
-    "simple-loop-unswitch-inject-invariant-condition-hotness-threshold",
-    cl::Hidden,
-    cl::desc("Only try to inject loop invariant conditions and "
-             "unswitch on them to eliminate branches that are "
-             "not-taken 1/<this option> times or less."),
-    cl::init(16));
+static unsigned getInjectInvariantConditionHotnesThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::SC_SimpleLoopUnswitchInjectInvariantConditionHotnessThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> EstimateProfile("simple-loop-unswitch-estimate-profile",
-                                     cl::Hidden, cl::init(true));
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
+static bool getEstimateProfile(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_SimpleLoopUnswitchEstimateProfile>(
+      F.getContext().getOptionsContext());
+}
 } // namespace llvm
 
 AnalysisKey ShouldRunExtraSimpleLoopUnswitch::Key;
@@ -293,7 +299,8 @@ static void buildPartialUnswitchConditionalBranch(
     const CondBrInst &ComputeProfFrom) {
 
   SmallVector<uint32_t> BranchWeights;
-  bool HasBranchWeights = EstimateProfile && !ProfcheckDisableMetadataFixes &&
+  bool HasBranchWeights = getEstimateProfile(*BB.getParent()) &&
+                          !getProfcheckDisableMetadataFixes(BB.getContext()) &&
                           extractBranchWeights(ComputeProfFrom, BranchWeights);
   // If Direction is true, that means we had a disjunction and that the "true"
   // case exits. The probability of the disjunction of the subset of terms is at
@@ -380,7 +387,7 @@ static void buildPartialInvariantUnswitchConditionalBranch(
   // The expectation is that ToDuplicate[0] is the condition used by the
   // OriginalBranch, case in which we can clone the profile metadata from there.
   auto *ProfData =
-      !ProfcheckDisableMetadataFixes &&
+      !getProfcheckDisableMetadataFixes(BB.getContext()) &&
               ToDuplicate[0] == skipTrivialSelect(OriginalBranch.getCondition())
           ? OriginalBranch.getMetadata(LLVMContext::MD_prof)
           : nullptr;
@@ -693,7 +700,9 @@ static bool unswitchTrivialBranch(Loop &L, CondBrInst &BI, DominatorTree &DT,
     SE->forgetBlockAndLoopDispositions();
   }
 
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU &&
+      getVerifyMemorySSA(
+          L.getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
 
   // Split the preheader, so that we know that there is a safe place to insert
@@ -716,7 +725,9 @@ static bool unswitchTrivialBranch(Loop &L, CondBrInst &BI, DominatorTree &DT,
         SplitBlock(LoopExitBB, LoopExitBB->begin(), &DT, &LI, MSSAU, "");
   }
 
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU &&
+      getVerifyMemorySSA(
+          L.getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
 
   // Actually move the invariant uses into the unswitched position. If possible,
@@ -754,7 +765,8 @@ static bool unswitchTrivialBranch(Loop &L, CondBrInst &BI, DominatorTree &DT,
              " condition!");
     buildPartialUnswitchConditionalBranch(
         *OldPH, Invariants, ExitDirection, *UnswitchedBB, *NewPH,
-        FreezeLoopUnswitchCond, OldPH->getTerminatorOrNull(), nullptr, DT, BI);
+        getFreezeLoopUnswitchCond(*L.getHeader()->getParent()),
+        OldPH->getTerminatorOrNull(), nullptr, DT, BI);
   }
 
   // Update the dominator tree with the added edge.
@@ -782,7 +794,9 @@ static bool unswitchTrivialBranch(Loop &L, CondBrInst &BI, DominatorTree &DT,
     DT.deleteEdge(ParentBB, LoopExitBB);
   }
 
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU &&
+      getVerifyMemorySSA(
+          L.getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
 
   // Rewrite the relevant PHI nodes.
@@ -809,7 +823,9 @@ static bool unswitchTrivialBranch(Loop &L, CondBrInst &BI, DominatorTree &DT,
   if (FullUnswitch)
     hoistLoopToNewParent(L, *NewPH, DT, LI, MSSAU, SE);
 
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU &&
+      getVerifyMemorySSA(
+          L.getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
 
   LLVM_DEBUG(dbgs() << "    done: unswitching trivial branch...\n");
@@ -891,7 +907,9 @@ static bool unswitchTrivialSwitch(Loop &L, SwitchInst &SI, DominatorTree &DT,
 
   LLVM_DEBUG(dbgs() << "    unswitching trivial switch...\n");
 
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU &&
+      getVerifyMemorySSA(
+          L.getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
 
   // We may need to invalidate SCEVs for the outermost loop reached by any of
@@ -1115,7 +1133,8 @@ static bool unswitchTrivialSwitch(Loop &L, SwitchInst &SI, DominatorTree &DT,
 
   if (MSSAU) {
     MSSAU->applyUpdates(DTUpdates, DT, /*UpdateDT=*/true);
-    if (VerifyMemorySSA)
+    if (getVerifyMemorySSA(
+            L.getHeader()->getParent()->getContext().getOptionsContext()))
       MSSAU->getMemorySSA()->verifyMemorySSA();
   } else {
     DT.applyUpdates(DTUpdates);
@@ -1127,7 +1146,9 @@ static bool unswitchTrivialSwitch(Loop &L, SwitchInst &SI, DominatorTree &DT,
   // its correct parent if needed.
   hoistLoopToNewParent(L, *NewPH, DT, LI, MSSAU, SE);
 
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU &&
+      getVerifyMemorySSA(
+          L.getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
 
   ++NumTrivial;
@@ -2249,6 +2270,10 @@ static void unswitchNontrivialInvariants(
   // after it has been deleted.
   std::string LoopName(L.getName());
 
+  // Cache the Function pointer before the loop might be destroyed by
+  // rebuildLoopAfterUnswitch, as L.getHeader() is invalid after destruction.
+  const Function *Fn = L.getHeader()->getParent();
+
   // We can only unswitch switches, conditional branches with an invariant
   // condition, or combining invariant conditions with an instruction or
   // partially invariant instructions.
@@ -2264,7 +2289,9 @@ static void unswitchNontrivialInvariants(
     assert(isa<Instruction>(skipTrivialSelect(BI->getCondition())) &&
            "Partial unswitching requires an instruction as the condition!");
 
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU &&
+      getVerifyMemorySSA(
+          L.getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
 
   // Constant and BBs tracking the cloned and continuing successor. When we are
@@ -2389,7 +2416,7 @@ static void unswitchNontrivialInvariants(
   // Drop metadata if we may break its semantics by moving this instr into the
   // split block.
   if (TI.getMetadata(LLVMContext::MD_make_implicit)) {
-    if (DropNonTrivialImplicitNullChecks)
+    if (getDropNonTrivialImplicitNullChecks(*L.getHeader()->getParent()))
       // Do not spend time trying to understand if we can keep it, just drop it
       // to save compile time.
       TI.setMetadata(LLVMContext::MD_make_implicit, nullptr);
@@ -2532,7 +2559,8 @@ static void unswitchNontrivialInvariants(
     else {
       buildPartialUnswitchConditionalBranch(
           *SplitBB, Invariants, Direction, *ClonedPH, *LoopPH,
-          FreezeLoopUnswitchCond, BI, &AC, DT, *BI);
+          getFreezeLoopUnswitchCond(*L.getHeader()->getParent()), BI, &AC, DT,
+          *BI);
     }
     DTUpdates.push_back({DominatorTree::Insert, SplitBB, ClonedPH});
 
@@ -2569,14 +2597,18 @@ static void unswitchNontrivialInvariants(
   // structure taking these deletions into account.
   deleteDeadBlocksFromLoop(L, ExitBlocks, DT, LI, MSSAU, SE, LoopUpdater);
 
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU &&
+      getVerifyMemorySSA(
+          L.getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
 
   SmallVector<Loop *, 4> HoistedLoops;
   bool IsStillLoop =
       rebuildLoopAfterUnswitch(L, ExitBlocks, LI, HoistedLoops, SE);
 
-  if (MSSAU && VerifyMemorySSA)
+  // Use cached Fn pointer since L may have been destroyed by
+  // rebuildLoopAfterUnswitch.
+  if (MSSAU && getVerifyMemorySSA(Fn->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
 
 #ifdef EXPENSIVE_CHECKS
@@ -2708,7 +2740,7 @@ static void unswitchNontrivialInvariants(
   postUnswitch(L, LoopUpdater, LoopName, IsStillLoop, PartiallyInvariant,
                InjectedCondition, SibLoops);
 
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU && getVerifyMemorySSA(Fn->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
 
   if (BI)
@@ -2797,7 +2829,8 @@ static CondBrInst *turnSelectIntoBranch(SelectInst *SI, DominatorTree &DT,
   SI->replaceAllUsesWith(Phi);
   SI->eraseFromParent();
 
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU &&
+      getVerifyMemorySSA(HeadBB->getParent()->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
 
   ++NumSelects;
@@ -2831,15 +2864,18 @@ static CondBrInst *turnGuardIntoBranch(IntrinsicInst *GI, Loop &L,
   LLVM_DEBUG(dbgs() << "Turning " << *GI << " into a branch.\n");
   BasicBlock *CheckBB = GI->getParent();
 
-  if (MSSAU && VerifyMemorySSA)
-     MSSAU->getMemorySSA()->verifyMemorySSA();
+  if (MSSAU &&
+      getVerifyMemorySSA(
+          L.getHeader()->getParent()->getContext().getOptionsContext()))
+    MSSAU->getMemorySSA()->verifyMemorySSA();
 
   DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Eager);
   // llvm.experimental.guard doesn't have branch weights. We can assume,
   // however, that the deopt path is unlikely.
   Instruction *DeoptBlockTerm = SplitBlockAndInsertIfThen(
       GI->getArgOperand(0), GI, true,
-      !ProfcheckDisableMetadataFixes && EstimateProfile
+      !getProfcheckDisableMetadataFixes(L.getHeader()->getContext()) &&
+              getEstimateProfile(*L.getHeader()->getParent())
           ? MDBuilder(GI->getContext()).createUnlikelyBranchWeights()
           : nullptr,
       &DTU, &LI);
@@ -2862,11 +2898,13 @@ static CondBrInst *turnGuardIntoBranch(IntrinsicInst *GI, Loop &L,
   if (MSSAU) {
     MemoryDef *MD = cast<MemoryDef>(MSSAU->getMemorySSA()->getMemoryAccess(GI));
     MSSAU->moveToPlace(MD, DeoptBlock, MemorySSA::BeforeTerminator);
-    if (VerifyMemorySSA)
+    if (getVerifyMemorySSA(
+            L.getHeader()->getParent()->getContext().getOptionsContext()))
       MSSAU->getMemorySSA()->verifyMemorySSA();
   }
 
-  if (VerifyLoopInfo)
+  if (getVerifyLoopInfo(
+          L.getHeader()->getParent()->getContext().getOptionsContext()))
     LI.verify();
   ++NumGuards;
   return CheckBI;
@@ -2916,8 +2954,10 @@ static int CalculateUnswitchCostMultiplier(
   auto *ParentL = L.getParentLoop();
   int ParentLoopSizeMultiplier = 1;
   if (ParentL)
-    ParentLoopSizeMultiplier =
-        std::max<int>(ParentL->getNumBlocks() / UnswitchParentBlocksDiv, 1);
+    ParentLoopSizeMultiplier = std::max<int>(
+        ParentL->getNumBlocks() /
+            getUnswitchParentBlocksDiv(*L.getHeader()->getParent()),
+        1);
 
   int SiblingsCount =
       (ParentL ? ParentL->getSubLoops().size() : llvm::size(LI));
@@ -2952,23 +2992,27 @@ static int CalculateUnswitchCostMultiplier(
   // and rely more on siblings multiplier (see below) when the number
   // of candidates is small.
   unsigned ClonesPower =
-      std::max(UnswitchedClones - (int)UnswitchNumInitialUnscaledCandidates, 0);
+      std::max(UnswitchedClones - (int)getUnswitchNumInitialUnscaledCandidates(
+                                      *L.getHeader()->getParent()),
+               0);
 
   // Allowing top-level loops to spread a bit more than nested ones.
   int SiblingsMultiplier =
       std::max((ParentL ? SiblingsCount
-                        : SiblingsCount / (int)UnswitchSiblingsToplevelDiv),
+                        : SiblingsCount / (int)getUnswitchSiblingsToplevelDiv(
+                                              *L.getHeader()->getParent())),
                1);
   // Compute the cost multiplier in a way that won't overflow by saturating
   // at an upper bound.
   int CostMultiplier;
-  if (ClonesPower > Log2_32(UnswitchThreshold) ||
-      SiblingsMultiplier > UnswitchThreshold ||
-      ParentLoopSizeMultiplier > UnswitchThreshold)
-    CostMultiplier = UnswitchThreshold;
+  const Function &Fn = *L.getHeader()->getParent();
+  if (ClonesPower > Log2_32(getUnswitchThreshold(Fn)) ||
+      SiblingsMultiplier > getUnswitchThreshold(Fn) ||
+      ParentLoopSizeMultiplier > getUnswitchThreshold(Fn))
+    CostMultiplier = getUnswitchThreshold(Fn);
   else
     CostMultiplier = std::min(SiblingsMultiplier * (1 << ClonesPower),
-                              (int)UnswitchThreshold);
+                              (int)getUnswitchThreshold(Fn));
 
   LLVM_DEBUG(dbgs() << "  Computed multiplier  " << CostMultiplier
                     << " (siblings " << SiblingsMultiplier << " * parent size "
@@ -3004,7 +3048,7 @@ static bool collectUnswitchCandidates(
 
   // Whether or not we should also collect guards in the loop.
   bool CollectGuards = false;
-  if (UnswitchGuards) {
+  if (getUnswitchGuards(*L.getHeader()->getParent())) {
     auto *GuardDecl = Intrinsic::getDeclarationIfExists(
         L.getHeader()->getParent()->getParent(), Intrinsic::experimental_guard);
     if (GuardDecl && !GuardDecl->use_empty())
@@ -3051,7 +3095,8 @@ static bool collectUnswitchCandidates(
          return TerminatorAndInvariants.TI == L.getHeader()->getTerminator();
        })) {
     MemorySSA *MSSA = MSSAU->getMemorySSA();
-    if (auto Info = hasPartialIVCondition(L, MSSAThreshold, *MSSA, AA)) {
+    if (auto Info = hasPartialIVCondition(
+            L, getMSSAThreshold(*L.getHeader()->getParent()), *MSSA, AA)) {
       LLVM_DEBUG(
           dbgs() << "simple-loop-unswitch: Found partially invariant condition "
                  << *Info->InstToDuplicate[0] << "\n");
@@ -3128,7 +3173,7 @@ bool shouldTryInjectBasingOnMetadata(const CondBrInst *BI,
   SmallVector<uint32_t> Weights;
   if (!extractBranchWeights(*BI, Weights))
     return false;
-  unsigned T = InjectInvariantConditionHotnesThreshold;
+  unsigned T = getInjectInvariantConditionHotnesThreshold(*BI->getFunction());
   BranchProbability LikelyTaken(T - 1, T);
 
   assert(Weights.size() == 2 && "Unexpected profile data!");
@@ -3209,10 +3254,11 @@ injectPendingInvariantConditions(NonTrivialUnswitchCandidate Candidate, Loop &L,
   setExplicitlyUnknownBranchWeightsIfProfiled(*InvariantBr, DEBUG_TYPE);
 
   Builder.SetInsertPoint(CheckBlock);
-  Builder.CreateCondBr(
-      TI->getCondition(), TI->getSuccessor(0), TI->getSuccessor(1),
-      !ProfcheckDisableMetadataFixes ? TI->getMetadata(LLVMContext::MD_prof)
-                                     : nullptr);
+  Builder.CreateCondBr(TI->getCondition(), TI->getSuccessor(0),
+                       TI->getSuccessor(1),
+                       !getProfcheckDisableMetadataFixes(TI->getContext())
+                           ? TI->getMetadata(LLVMContext::MD_prof)
+                           : nullptr);
   TI->eraseFromParent();
 
   // Fixup phis.
@@ -3240,7 +3286,9 @@ injectPendingInvariantConditions(NonTrivialUnswitchCandidate Candidate, Loop &L,
 #ifndef NDEBUG
   DT.verify();
   LI.verify();
-  if (MSSAU && VerifyMemorySSA)
+  if (MSSAU &&
+      getVerifyMemorySSA(
+          L.getHeader()->getParent()->getContext().getOptionsContext()))
     MSSAU->getMemorySSA()->verifyMemorySSA();
 #endif
 
@@ -3308,7 +3356,7 @@ static bool collectUnswitchCandidatesWithInjections(
     IVConditionInfo &PartialIVInfo, Instruction *&PartialIVCondBranch, Loop &L,
     const DominatorTree &DT, const LoopInfo &LI, AAResults &AA,
     const MemorySSAUpdater *MSSAU) {
-  if (!InjectInvariantConditions)
+  if (!getInjectInvariantConditions(*L.getHeader()->getParent()))
     return false;
 
   if (!DT.isReachableFromEntry(L.getHeader()))
@@ -3519,11 +3567,13 @@ static NonTrivialUnswitchCandidate findBestNonTrivialUnswitchCandidate(
     InstructionCost CandidateCost = ComputeUnswitchedCost(TI, FullUnswitch);
     // Calculate cost multiplier which is a tool to limit potentially
     // exponential behavior of loop-unswitch.
-    if (EnableUnswitchCostMultiplier) {
+    if (getEnableUnswitchCostMultiplier(*L.getHeader()->getParent())) {
       int CostMultiplier =
           CalculateUnswitchCostMultiplier(TI, L, LI, DT, UnswitchCandidates);
       assert(
-          (CostMultiplier > 0 && CostMultiplier <= UnswitchThreshold) &&
+          (CostMultiplier > 0 &&
+           CostMultiplier <=
+               getUnswitchThreshold(*L.getHeader()->getParent())) &&
           "cost multiplier needs to be in the range of 1..UnswitchThreshold");
       CandidateCost *= CostMultiplier;
       LLVM_DEBUG(dbgs() << "  Computed cost of " << CandidateCost
@@ -3552,7 +3602,7 @@ static NonTrivialUnswitchCandidate findBestNonTrivialUnswitchCandidate(
 static bool shouldInsertFreeze(Loop &L, Instruction &TI, DominatorTree &DT,
                                AssumptionCache &AC) {
   assert(isa<CondBrInst>(TI) || isa<SwitchInst>(TI));
-  if (!FreezeLoopUnswitchCond)
+  if (!getFreezeLoopUnswitchCond(*L.getHeader()->getParent()))
     return false;
 
   ICFLoopSafetyInfo SafetyInfo;
@@ -3599,7 +3649,7 @@ static bool unswitchBestCondition(Loop &L, DominatorTree &DT, LoopInfo &LI,
   assert(Best.TI && "Failed to find loop unswitch candidate");
   assert(Best.Cost && "Failed to compute cost");
 
-  if (*Best.Cost >= UnswitchThreshold) {
+  if (*Best.Cost >= getUnswitchThreshold(*L.getHeader()->getParent())) {
     LLVM_DEBUG(dbgs() << "Cannot unswitch, lowest cost found: " << *Best.Cost
                       << "\n");
     return false;
@@ -3697,8 +3747,8 @@ static bool unswitchLoop(Loop &L, DominatorTree &DT, LoopInfo &LI,
   // transform, we should allow unswitching for non-trivial uniform
   // branches even on targets that have divergence.
   // https://bugs.llvm.org/show_bug.cgi?id=48819
-  bool ContinueWithNonTrivial =
-      EnableNonTrivialUnswitch || (NonTrivial && !TTI.hasBranchDivergence(F));
+  bool ContinueWithNonTrivial = getEnableNonTrivialUnswitch(*F) ||
+                                (NonTrivial && !TTI.hasBranchDivergence(F));
   if (!ContinueWithNonTrivial)
     return false;
 
@@ -3736,14 +3786,14 @@ PreservedAnalyses SimpleLoopUnswitchPass::run(Loop &L, LoopAnalysisManager &AM,
   std::optional<MemorySSAUpdater> MSSAU;
   if (AR.MSSA) {
     MSSAU = MemorySSAUpdater(AR.MSSA);
-    if (VerifyMemorySSA)
+    if (getVerifyMemorySSA(F.getContext().getOptionsContext()))
       AR.MSSA->verifyMemorySSA();
   }
   if (!unswitchLoop(L, AR.DT, AR.LI, AR.AC, AR.AA, AR.TTI, Trivial, NonTrivial,
                     &AR.SE, MSSAU ? &*MSSAU : nullptr, U))
     return PreservedAnalyses::all();
 
-  if (AR.MSSA && VerifyMemorySSA)
+  if (AR.MSSA && getVerifyMemorySSA(F.getContext().getOptionsContext()))
     AR.MSSA->verifyMemorySSA();
 
 #ifdef EXPENSIVE_CHECKS

@@ -14,7 +14,8 @@
 //
 #include <sycl/sycl.hpp>
 
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 
 #include <iostream>
 
@@ -91,14 +92,21 @@ printSelectorChoice(const detail::DeviceSelectorInvocableType &Selector,
   }
 }
 
+static constexpr llvm::clv2::OptionInfo<bool> VerboseOpt{
+    "verbose", "Verbosely prints all the discovered devices"};
+static constexpr llvm::clv2::AliasInfo VerboseShortAlias{"v", "verbose"};
+
+static constexpr llvm::clv2::OptionsRegistry<&VerboseOpt, &VerboseShortAlias>
+    SyclLsReg;
+
 int main(int argc, char **argv) {
-  llvm::cl::opt<bool> Verbose(
-      "verbose", llvm::cl::desc("Verbosely prints all the discovered devices"));
-  llvm::cl::alias VerboseShort("v", llvm::cl::desc("Alias for -verbose"),
-                               llvm::cl::aliasopt(Verbose));
-  llvm::cl::ParseCommandLineOptions(
-      argc, argv,
-      "This program lists all backends and devices discovered by SYCL");
+  llvm::clv2::OptionParser P;
+  P.add<&SyclLsReg>();
+  auto OptsCtx =
+      P.parse(argc, argv,
+              "This program lists all backends and devices discovered by SYCL");
+  auto *Opts = OptsCtx->getViewPtr<&SyclLsReg>();
+  bool Verbose = Opts->get<&VerboseOpt>();
 
   try {
     const auto &Platforms = platform::get_platforms();

@@ -24,17 +24,21 @@
 #include "llvm/CGData/CodeGenData.h"
 #include "llvm/IR/LLVMRemarkStreamer.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/LTO/LTO.h"
+#include "llvm/LTO/LTOOptionsOptInfos.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/ModuleSymbolTable.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/PassesOptionsOptInfos.h"
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/ThreadPool.h"
 #include "llvm/Support/ToolOutputFile.h"
@@ -52,36 +56,29 @@ using namespace lto;
 
 #define DEBUG_TYPE "lto-backend"
 
-enum class LTOBitcodeEmbedding {
-  DoNotEmbed = 0,
-  EmbedOptimized = 1,
-  EmbedPostMergePreOptimized = 2
-};
+using LTOBitcodeEmbedding = clv2::LTOBitcodeEmbedding;
 
-static cl::opt<LTOBitcodeEmbedding> EmbedBitcode(
-    "lto-embed-bitcode", cl::init(LTOBitcodeEmbedding::DoNotEmbed),
-    cl::values(clEnumValN(LTOBitcodeEmbedding::DoNotEmbed, "none",
-                          "Do not embed"),
-               clEnumValN(LTOBitcodeEmbedding::EmbedOptimized, "optimized",
-                          "Embed after all optimization passes"),
-               clEnumValN(LTOBitcodeEmbedding::EmbedPostMergePreOptimized,
-                          "post-merge-pre-opt",
-                          "Embed post merge, but before optimizations")),
-    cl::desc("Embed LLVM bitcode in object files produced by LTO"));
+static LTOBitcodeEmbedding getEmbedBitcode(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::LTO_EmbedBitcode>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> ThinLTOAssumeMerged(
-    "thinlto-assume-merged", cl::init(false),
-    cl::desc("Assume the input has already undergone ThinLTO function "
-             "importing and the other pre-optimization pipeline changes."));
+static bool getThinLTOAssumeMerged(const Module &M) {
+  return clv2::getOptValIfSpecified<&clv2::LTOOptsReg,
+                                    &clv2::LTO_ThinLTOAssumeMerged>(
+      M.getContext().getOptionsContext(), false);
+}
 
-static cl::list<std::string>
-    SaveModulesList("filter-save-modules", cl::value_desc("module names"),
-                    cl::desc("Only save bitcode for module whose name without "
-                             "path matches this for -save-temps options"),
-                    cl::CommaSeparated, cl::Hidden);
+// Overload for contexts without IR Module. Reads from OptionsContext.
+static bool getThinLTOAssumeMerged(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::LTOOptsReg,
+                                    &clv2::LTO_ThinLTOAssumeMerged>(Ctx, false);
+}
 
-namespace llvm {
-extern cl::opt<bool> NoPGOWarnMismatch;
+static std::vector<std::string>
+getSaveModulesList(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::LTO_FilterSaveModules>(
+      Ctx, std::vector<std::string>{});
 }
 
 [[noreturn]] static void reportOpenError(StringRef Path, Twine Msg) {
@@ -108,11 +105,12 @@ Error Config::addSaveTemps(std::string OutputFileName, bool UseInputModulePath,
   auto setHook = [&](std::string PathSuffix, ModuleHookFn &Hook) {
     // Keep track of the hook provided by the linker, which also needs to run.
     ModuleHookFn LinkerHook = Hook;
+    auto ModList = getSaveModulesList(*this->OptsCtx);
     Hook = [=, SaveModNames = llvm::SmallVector<std::string, 1>(
-                   SaveModulesList.begin(), SaveModulesList.end())](
-               unsigned Task, const Module &M) {
-      // If SaveModulesList is not empty, only do save-temps if the module's
-      // filename (without path) matches a name in the list.
+                   ModList.begin(), ModList.end())](unsigned Task,
+                                                    const Module &M) {
+      // If getSaveModulesList() is not empty, only do save-temps if the
+      // module's filename (without path) matches a name in the list.
       if (!SaveModNames.empty() &&
           !llvm::is_contained(
               SaveModNames,
@@ -146,6 +144,9 @@ Error Config::addSaveTemps(std::string OutputFileName, bool UseInputModulePath,
     };
   };
 
+  // Capture the context by pointer, not through `this`: the hook outlives this
+  // Config, which is moved into the LTO object.
+  const clv2::OptionsContext *HookOptsCtx = OptsCtx;
   auto SaveCombinedIndex =
       [=](const ModuleSummaryIndex &Index,
           const DenseSet<GlobalValue::GUID> &GUIDPreservedSymbols) {
@@ -156,7 +157,7 @@ Error Config::addSaveTemps(std::string OutputFileName, bool UseInputModulePath,
         // directly and exit.
         if (EC)
           reportOpenError(Path, EC.message());
-        writeIndexToFile(Index, OS);
+        writeIndexToFile(Index, OS, *HookOptsCtx);
 
         Path = OutputFileName + "index.dot";
         raw_fd_ostream OSDot(Path, EC, sys::fs::OpenFlags::OF_Text);
@@ -240,6 +241,8 @@ createTargetMachine(const Config &Conf, const Target *TheTarget, Module &M) {
     CodeModel = M.getCodeModel();
 
   TargetOptions TargetOpts = Conf.Options;
+  if (!TargetOpts.OptsCtx)
+    TargetOpts.OptsCtx = Conf.OptsCtx;
   if (TargetOpts.MCOptions.ABIName.empty()) {
     TargetOpts.MCOptions.ABIName = M.getTargetABIFromMD();
   }
@@ -277,7 +280,11 @@ static void runNewPMPasses(const Config &Conf, Module &Mod, TargetMachine *TM,
         PGOOptions(Conf.CSIRProfile, "", Conf.ProfileRemapping,
                    /*MemoryProfile=*/"", PGOOptions::IRUse, PGOOptions::CSIRUse,
                    PGOOptions::ColdFuncOpt::Default, Conf.AddFSDiscriminator);
-    NoPGOWarnMismatch = !Conf.PGOWarnMismatch;
+    // On this path the linker's decision overrides -no-pgo-warn-mismatch.  It
+    // rides along in PGOOptions, which is local to this module's pipeline;
+    // writing it into Mod's OptionsContext would race, because every ThinLTO
+    // backend thread's LLVMContext aliases the one context in Conf.
+    PGOOpt->NoPGOWarnMismatch = !Conf.PGOWarnMismatch;
   } else if (Conf.AddFSDiscriminator) {
     PGOOpt = PGOOptions("", "", "", /*MemoryProfile=*/"", PGOOptions::NoAction,
                         PGOOptions::NoCSAction,
@@ -294,7 +301,7 @@ static void runNewPMPasses(const Config &Conf, Module &Mod, TargetMachine *TM,
   StandardInstrumentations SI(Mod.getContext(), Conf.DebugPassManager,
                               Conf.VerifyEach);
   SI.registerCallbacks(PIC, &MAM);
-  PassBuilder PB(TM, Conf.PTO, PGOOpt, &PIC);
+  PassBuilder PB(*Conf.OptsCtx, TM, Conf.PTO, PGOOpt, &PIC, /*FS=*/nullptr);
 
   RegisterPassPlugins(Conf, PB);
 
@@ -375,14 +382,19 @@ static void runNewPMPasses(const Config &Conf, Module &Mod, TargetMachine *TM,
   if (!Conf.DisableVerify)
     MPM.addPass(VerifierPass());
 
-  if (PrintPipelinePasses) {
-    std::string PipelineStr;
-    raw_string_ostream OS(PipelineStr);
-    MPM.printPipeline(OS, [&PIC](StringRef ClassName) {
-      auto PassName = PIC.getPassNameForClassName(ClassName);
-      return PassName.empty() ? ClassName : PassName;
-    });
-    outs() << "pipeline-passes: " << PipelineStr << '\n';
+  {
+    bool DoPrint = false;
+    if (auto *O = clv2::getView<&clv2::PassesOptsReg>(*Conf.OptsCtx))
+      DoPrint = O->specified<&clv2::PAS_PrintPipelinePasses>();
+    if (DoPrint) {
+      std::string PipelineStr;
+      raw_string_ostream OS(PipelineStr);
+      MPM.printPipeline(OS, [&PIC](StringRef ClassName) {
+        auto PassName = PIC.getPassNameForClassName(ClassName);
+        return PassName.empty() ? ClassName : PassName;
+      });
+      outs() << "pipeline-passes: " << PipelineStr << '\n';
+    }
   }
 
   MPM.run(Mod, MAM);
@@ -402,7 +414,7 @@ bool lto::opt(const Config &Conf, TargetMachine *TM, unsigned Task, Module &Mod,
               const std::vector<uint8_t> &CmdArgs,
               ArrayRef<StringRef> BitcodeLibFuncs) {
   llvm::TimeTraceScope timeScope("opt");
-  if (EmbedBitcode == LTOBitcodeEmbedding::EmbedPostMergePreOptimized) {
+  if (getEmbedBitcode(Mod) == LTOBitcodeEmbedding::EmbedPostMergePreOptimized) {
     // FIXME: the motivation for capturing post-merge bitcode and command line
     // is replicating the compilation environment from bitcode, without needing
     // to understand the dependencies (the functions to be imported). This
@@ -441,7 +453,7 @@ static void codegen(const Config &Conf, TargetMachine *TM,
   if (Conf.PreCodeGenModuleHook && !Conf.PreCodeGenModuleHook(Task, Mod))
     return;
 
-  if (EmbedBitcode == LTOBitcodeEmbedding::EmbedOptimized)
+  if (getEmbedBitcode(Mod) == LTOBitcodeEmbedding::EmbedOptimized)
     llvm::embedBitcodeInModule(Mod, llvm::MemoryBufferRef(),
                                /*EmbedBitcode*/ true,
                                /*EmbedCmdline*/ false,
@@ -482,6 +494,7 @@ static void codegen(const Config &Conf, TargetMachine *TM,
   // keep the pointer and may use it until their destruction. See #138194.
   {
     legacy::PassManager CodeGenPasses;
+    CodeGenPasses.setOptionsContext(*Conf.OptsCtx);
     TargetLibraryInfoImpl TLII(Mod.getTargetTriple(), TM->Options.VecLib);
     CodeGenPasses.add(new TargetLibraryInfoWrapperPass(TLII));
     CodeGenPasses.add(new RuntimeLibraryInfoWrapper(
@@ -521,38 +534,36 @@ static void splitCodeGen(const Config &C, TargetMachine *TM,
   unsigned ThreadCount = 0;
   const Target *T = &TM->getTarget();
 
-  const auto HandleModulePartition =
-      [&](std::unique_ptr<Module> MPart) {
-        // We want to clone the module in a new context to multi-thread the
-        // codegen. We do it by serializing partition modules to bitcode
-        // (while still on the main thread, in order to avoid data races) and
-        // spinning up new threads which deserialize the partitions into
-        // separate contexts.
-        // FIXME: Provide a more direct way to do this in LLVM.
-        SmallString<0> BC;
-        raw_svector_ostream BCOS(BC);
-        WriteBitcodeToFile(*MPart, BCOS);
+  const auto HandleModulePartition = [&](std::unique_ptr<Module> MPart) {
+    // We want to clone the module in a new context to multi-thread the
+    // codegen. We do it by serializing partition modules to bitcode
+    // (while still on the main thread, in order to avoid data races) and
+    // spinning up new threads which deserialize the partitions into
+    // separate contexts.
+    // FIXME: Provide a more direct way to do this in LLVM.
+    SmallString<0> BC;
+    raw_svector_ostream BCOS(BC);
+    WriteBitcodeToFile(*MPart, BCOS);
 
-        // Enqueue the task
-        CodegenThreadPool.async(
-            [&](const SmallString<0> &BC, unsigned ThreadId) {
-              LTOLLVMContext Ctx(C);
-              Expected<std::unique_ptr<Module>> MOrErr =
-                  parseBitcodeFile(MemoryBufferRef(BC.str(), "ld-temp.o"), Ctx);
-              if (!MOrErr)
-                report_fatal_error("Failed to read bitcode");
-              std::unique_ptr<Module> MPartInCtx = std::move(MOrErr.get());
+    // Enqueue the task
+    CodegenThreadPool.async(
+        [&](const SmallString<0> &BC, unsigned ThreadId) {
+          LTOLLVMContext Ctx(C);
+          Expected<std::unique_ptr<Module>> MOrErr =
+              parseBitcodeFile(MemoryBufferRef(BC.str(), "ld-temp.o"), Ctx);
+          if (!MOrErr)
+            report_fatal_error("Failed to read bitcode");
+          std::unique_ptr<Module> MPartInCtx = std::move(MOrErr.get());
 
-              std::unique_ptr<TargetMachine> TM =
-                  createTargetMachine(C, T, *MPartInCtx);
+          std::unique_ptr<TargetMachine> TM =
+              createTargetMachine(C, T, *MPartInCtx);
 
-              codegen(C, TM.get(), AddStream, ThreadId, *MPartInCtx,
-                      CombinedIndex);
-            },
-            // Pass BC using std::move to ensure that it get moved rather than
-            // copied into the thread's context.
-            std::move(BC), ThreadCount++);
-      };
+          codegen(C, TM.get(), AddStream, ThreadId, *MPartInCtx, CombinedIndex);
+        },
+        // Pass BC using std::move to ensure that it get moved rather than
+        // copied into the thread's context.
+        std::move(BC), ThreadCount++);
+  };
 
   // Try target-specific module splitting first, then fallback to the default.
   if (!TM->splitModule(Mod, ParallelCodeGenParallelismLevel,
@@ -623,7 +634,7 @@ Error lto::backend(const Config &C, AddStreamFn AddStream,
 static void dropDeadSymbols(Module &Mod, const GVSummaryMapTy &DefinedGlobals,
                             const ModuleSummaryIndex &Index) {
   llvm::TimeTraceScope timeScope("Drop dead symbols");
-  std::vector<GlobalValue*> DeadGVs;
+  std::vector<GlobalValue *> DeadGVs;
 
   for (auto &GV : Mod.global_values()) {
     auto GUID = GV.getGUIDIfAssigned();
@@ -687,27 +698,26 @@ Error lto::thinBackend(const Config &Conf, unsigned Task, AddStreamFn AddStream,
   if (Conf.PreOptModuleHook && !Conf.PreOptModuleHook(Task, Mod))
     return finalizeOptimizationRemarks(std::move(DiagnosticOutputFile));
 
-  auto OptimizeAndCodegen =
-      [&](Module &Mod, TargetMachine *TM,
-          LLVMRemarkFileHandle DiagnosticOutputFile) {
-        // Perform optimization and code generation for ThinLTO.
-        if (!opt(Conf, TM, Task, Mod, /*IsThinLTO=*/true,
-                 /*ExportSummary=*/nullptr, /*ImportSummary=*/&CombinedIndex,
-                 CmdArgs, BitcodeLibFuncs))
-          return finalizeOptimizationRemarks(std::move(DiagnosticOutputFile));
+  auto OptimizeAndCodegen = [&](Module &Mod, TargetMachine *TM,
+                                LLVMRemarkFileHandle DiagnosticOutputFile) {
+    // Perform optimization and code generation for ThinLTO.
+    if (!opt(Conf, TM, Task, Mod, /*IsThinLTO=*/true,
+             /*ExportSummary=*/nullptr, /*ImportSummary=*/&CombinedIndex,
+             CmdArgs, BitcodeLibFuncs))
+      return finalizeOptimizationRemarks(std::move(DiagnosticOutputFile));
 
-        // Save the current module before the first codegen round.
-        // Note that the second codegen round runs only `codegen()` without
-        // running `opt()`. We're not reaching here as it's bailed out earlier
-        // with `CodeGenOnly` which has been set in `SecondRoundThinBackend`.
-        if (IRAddStream)
-          cgdata::saveModuleForTwoRounds(Mod, Task, IRAddStream);
+    // Save the current module before the first codegen round.
+    // Note that the second codegen round runs only `codegen()` without
+    // running `opt()`. We're not reaching here as it's bailed out earlier
+    // with `CodeGenOnly` which has been set in `SecondRoundThinBackend`.
+    if (IRAddStream)
+      cgdata::saveModuleForTwoRounds(Mod, Task, IRAddStream);
 
-        codegen(Conf, TM, AddStream, Task, Mod, CombinedIndex);
-        return finalizeOptimizationRemarks(std::move(DiagnosticOutputFile));
-      };
+    codegen(Conf, TM, AddStream, Task, Mod, CombinedIndex);
+    return finalizeOptimizationRemarks(std::move(DiagnosticOutputFile));
+  };
 
-  if (ThinLTOAssumeMerged)
+  if (getThinLTOAssumeMerged(Mod))
     return OptimizeAndCodegen(Mod, TM.get(), std::move(DiagnosticOutputFile));
 
   // When linking an ELF shared object, dso_local should be dropped. We
@@ -751,7 +761,8 @@ Error lto::thinBackend(const Config &Conf, unsigned Task, AddStreamFn AddStream,
           Twine("Error loading imported file ") + Identifier + " : ",
           MBOrErr.getError()));
 
-    Expected<BitcodeModule> BMOrErr = findThinLTOModule(**MBOrErr);
+    Expected<BitcodeModule> BMOrErr =
+        findThinLTOModule(**MBOrErr, *Conf.OptsCtx);
     if (!BMOrErr)
       return Expected<std::unique_ptr<llvm::Module>>(make_error<StringError>(
           Twine("Error loading imported file ") + Identifier + " : " +
@@ -784,8 +795,9 @@ Error lto::thinBackend(const Config &Conf, unsigned Task, AddStreamFn AddStream,
   return OptimizeAndCodegen(Mod, TM.get(), std::move(DiagnosticOutputFile));
 }
 
-BitcodeModule *lto::findThinLTOModule(MutableArrayRef<BitcodeModule> BMs) {
-  if (ThinLTOAssumeMerged && BMs.size() == 1)
+BitcodeModule *lto::findThinLTOModule(MutableArrayRef<BitcodeModule> BMs,
+                                      const clv2::OptionsContext &OptsCtx) {
+  if (getThinLTOAssumeMerged(OptsCtx) && BMs.size() == 1)
     return BMs.begin();
 
   for (BitcodeModule &BM : BMs) {
@@ -796,14 +808,16 @@ BitcodeModule *lto::findThinLTOModule(MutableArrayRef<BitcodeModule> BMs) {
   return nullptr;
 }
 
-Expected<BitcodeModule> lto::findThinLTOModule(MemoryBufferRef MBRef) {
+Expected<BitcodeModule>
+lto::findThinLTOModule(MemoryBufferRef MBRef,
+                       const clv2::OptionsContext &OptsCtx) {
   Expected<std::vector<BitcodeModule>> BMsOrErr = getBitcodeModuleList(MBRef);
   if (!BMsOrErr)
     return BMsOrErr.takeError();
 
   // The bitcode file may contain multiple modules, we want the one that is
   // marked as being the ThinLTO module.
-  if (const BitcodeModule *Bm = lto::findThinLTOModule(*BMsOrErr))
+  if (const BitcodeModule *Bm = lto::findThinLTOModule(*BMsOrErr, OptsCtx))
     return *Bm;
 
   return make_error<StringError>("Could not find module summary",
@@ -813,7 +827,7 @@ Expected<BitcodeModule> lto::findThinLTOModule(MemoryBufferRef MBRef) {
 bool lto::initImportList(const Module &M,
                          const ModuleSummaryIndex &CombinedIndex,
                          FunctionImporter::ImportMapTy &ImportList) {
-  if (ThinLTOAssumeMerged)
+  if (getThinLTOAssumeMerged(M))
     return true;
   // We can simply import the values mentioned in the combined index, since
   // we should only invoke this using the individual indexes written out

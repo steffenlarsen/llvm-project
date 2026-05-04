@@ -11,20 +11,23 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/PHITransAddr.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
-static cl::opt<bool> EnableAddPhiTranslation(
-    "gvn-add-phi-translation", cl::init(false), cl::Hidden,
-    cl::desc("Enable phi-translation of add instructions"));
+static bool getEnableAddPhiTranslation(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_EnableAddPhiTranslation>(
+      F.getContext().getOptionsContext());
+}
 
 static bool canPHITrans(Instruction *Inst) {
   if (isa<PHINode>(Inst) || isa<GetElementPtrInst>(Inst) || isa<CastInst>(Inst))
@@ -446,7 +449,8 @@ Value *PHITransAddr::insertTranslatedSubExpr(
   }
 
   // Handle add with a constant RHS.
-  if (EnableAddPhiTranslation && Inst->getOpcode() == Instruction::Add &&
+  if (getEnableAddPhiTranslation(*CurBB->getParent()) &&
+      Inst->getOpcode() == Instruction::Add &&
       isa<ConstantInt>(Inst->getOperand(1))) {
 
     // FIXME: This code works, but it is unclear that we actually want to insert

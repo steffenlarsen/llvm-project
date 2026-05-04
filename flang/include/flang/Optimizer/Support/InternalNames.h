@@ -11,6 +11,7 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/OptionsContext.h"
 #include <cstdint>
 
 namespace fir {
@@ -137,8 +138,9 @@ struct NameUniquer {
                                      llvm::StringRef name);
 
   /// Entry point for the PROGRAM (called by the runtime)
-  /// Can be overridden with the `--main-entry-name=<name>` option.
-  static llvm::StringRef doProgramEntry();
+  /// Can be overridden with the `--main-entry-name=<name>` option, which is
+  /// read from \p optsCtx -- pass the one on the MLIRContext in scope.
+  static std::string doProgramEntry(const llvm::clv2::OptionsContext &optsCtx);
 
   /// Decompose `uniquedName` into the parse name, symbol type, and scope info
   static std::pair<NameKind, DeconstructedName>

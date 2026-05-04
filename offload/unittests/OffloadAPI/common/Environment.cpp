@@ -8,7 +8,7 @@
 
 #include "Environment.hpp"
 #include "Fixtures.hpp"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include <OffloadAPI.h>
 #include <cstdlib>
@@ -41,9 +41,13 @@ struct OffloadInitWrapper {
 static OffloadInitWrapper Wrapper{};
 #endif
 
-static cl::opt<std::string>
-    SelectedPlatform("platform", cl::desc("Only test the specified platform"),
-                     cl::value_desc("platform"));
+static std::string SelectedPlatform;
+static unsigned SelectedPlatformCount = 0;
+static constexpr clv2::OptionInfo<std::string> OI_SelectedPlatform{
+    "platform", "Only test the specified platform"};
+static const int SelPlatformInit = ([] {
+  clv2::registerDynamicEntry(clv2::makeEntry<&OI_SelectedPlatform>(SelectedPlatform, SelectedPlatformCount));
+}(), 0);
 
 raw_ostream &operator<<(raw_ostream &Out,
                         const ol_platform_handle_t &Platform) {

@@ -49,9 +49,14 @@ public:
 private:
   /// Seeds and salts the underlying RNG engine.
   ///
+  /// \p Seed is supplied by the caller rather than read from a global so that
+  /// two compilations running concurrently in one process can use different
+  /// values of -rng-seed.  Module::createRNG reads it from the Module's
+  /// LLVMContext.
+  ///
   /// This constructor should not be used directly. Instead use
   /// Module::createRNG to create a new RNG salted with the Module ID.
-  RandomNumberGenerator(StringRef Salt);
+  RandomNumberGenerator(StringRef Salt, uint64_t Seed);
 
   generator_type Generator;
 

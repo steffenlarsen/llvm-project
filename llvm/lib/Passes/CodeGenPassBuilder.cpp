@@ -157,13 +157,10 @@ CodeGenPassBuilder::CodeGenPassBuilder(TargetMachine &TM,
 
   // An explicit RegAlloc choice implies its pipeline: only the fast
   // allocator uses the unoptimized one.
-  if (Opt.OptimizeRegAlloc == cl::boolOrDefault::BOU_UNSET) {
-    bool Optimized = Opt.RegAlloc > RegAllocType::Default
-                         ? Opt.RegAlloc != RegAllocType::Fast
-                         : getOptLevel() != CodeGenOptLevel::None;
-    Opt.OptimizeRegAlloc =
-        Optimized ? cl::boolOrDefault::BOU_TRUE : cl::boolOrDefault::BOU_FALSE;
-  }
+  if (!Opt.OptimizeRegAlloc)
+    Opt.OptimizeRegAlloc = Opt.RegAlloc > RegAllocType::Default
+                               ? Opt.RegAlloc != RegAllocType::Fast
+                               : getOptLevel() != CodeGenOptLevel::None;
 }
 
 // Out-of-line to anchor the vtable in this translation unit.
@@ -229,12 +226,14 @@ void CodeGenPassBuilder::flushFPMsToMPM(PassManagerWrapper &PMW,
 Error CodeGenPassBuilder::buildPipeline(
     ModulePassManager &MPM, ModuleAnalysisManager &MAM, raw_pwrite_stream &Out,
     raw_pwrite_stream *DwoOut, CodeGenFileType FileType, MCContext &Ctx) {
-  auto StartStopInfo = TargetPassConfig::getStartStopInfo(*PIC);
+  auto StartStopInfo =
+      TargetPassConfig::getStartStopInfo(*PIC, TM.getOptionsContext());
   if (!StartStopInfo)
     return StartStopInfo.takeError();
   setStartStopPasses(*StartStopInfo);
 
-  bool PrintAsm = TargetPassConfig::willCompleteCodeGenPipeline();
+  bool PrintAsm =
+      TargetPassConfig::willCompleteCodeGenPipeline(TM.getOptionsContext());
   bool PrintMIR = !PrintAsm && FileType != CodeGenFileType::Null;
 
   PassManagerWrapper PMW(MPM);
@@ -522,18 +521,17 @@ void CodeGenPassBuilder::addISelPrepare(PassManagerWrapper &PMW) {
 
 Error CodeGenPassBuilder::addCoreISelPasses(PassManagerWrapper &PMW) {
   // Enable FastISel with -fast-isel, but allow that to be overridden.
-  TM.setO0WantsFastISel(Opt.EnableFastISelOption !=
-                        cl::boolOrDefault::BOU_FALSE);
+  TM.setO0WantsFastISel(Opt.EnableFastISelOption.value_or(true));
 
   // Determine an instruction selector.
   enum class SelectorType { SelectionDAG, FastISel, GlobalISel };
   SelectorType Selector;
 
-  if (Opt.EnableFastISelOption == cl::boolOrDefault::BOU_TRUE)
+  if (Opt.EnableFastISelOption.value_or(false))
     Selector = SelectorType::FastISel;
-  else if (Opt.EnableGlobalISelOption == cl::boolOrDefault::BOU_TRUE ||
+  else if (Opt.EnableGlobalISelOption.value_or(false) ||
            (TM.Options.EnableGlobalISel &&
-            Opt.EnableGlobalISelOption != cl::boolOrDefault::BOU_FALSE))
+            Opt.EnableGlobalISelOption.value_or(true)))
     Selector = SelectorType::GlobalISel;
   else if (TM.getOptLevel() == CodeGenOptLevel::None && TM.getO0WantsFastISel())
     Selector = SelectorType::FastISel;
@@ -632,7 +630,7 @@ Error CodeGenPassBuilder::addMachinePasses(PassManagerWrapper &PMW) {
 
   // Run register allocation and passes that are tightly coupled with it,
   // including phi elimination and scheduling.
-  if (auto Err = Opt.OptimizeRegAlloc == cl::boolOrDefault::BOU_TRUE
+  if (auto Err = Opt.OptimizeRegAlloc.value_or(false)
                      ? addOptimizedRegAlloc(PMW)
                      : addFastRegAlloc(PMW))
     return Err;

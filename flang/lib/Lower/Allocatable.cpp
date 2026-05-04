@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "flang/Lower/Allocatable.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Evaluate/tools.h"
 #include "flang/Lower/AbstractConverter.h"
 #include "flang/Lower/CUDA.h"
@@ -36,15 +37,7 @@
 #include "flang/Semantics/tools.h"
 #include "flang/Semantics/type.h"
 #include "flang/Support/Fortran-features.h"
-#include "llvm/Support/CommandLine.h"
-
-/// By default fir memory operation fir::AllocMemOp/fir::FreeMemOp are used.
-/// This switch allow forcing the use of runtime and descriptors for everything.
-/// This is mainly intended as a debug switch.
-static llvm::cl::opt<bool> useAllocateRuntime(
-    "use-alloc-runtime",
-    llvm::cl::desc("Lower allocations to fortran runtime calls"),
-    llvm::cl::init(false));
+#include "llvm/Support/OptionsContext.h"
 
 //===----------------------------------------------------------------------===//
 // Error management
@@ -530,10 +523,12 @@ private:
     // The inlined allocation path emits a plain heap allocmem that ignores the
     // allocator index; use the runtime path when we redirected an otherwise
     // plain allocatable to a managed allocator so the index is honored.
-    bool inlineAllocation = !box.isDerived() && !errorManager.hasStatSpec() &&
-                            !alloc.type.IsPolymorphic() &&
-                            !alloc.hasCoarraySpec() && !useAllocateRuntime &&
-                            !box.isPointer() && !implicitManagedBacking;
+    bool inlineAllocation =
+        !box.isDerived() && !errorManager.hasStatSpec() &&
+        !alloc.type.IsPolymorphic() && !alloc.hasCoarraySpec() &&
+        !llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_UseAllocRuntime>(
+            converter.getMLIRContext().getOptionsContext()) &&
+        !box.isPointer() && !implicitManagedBacking;
 
     if (inlineAllocation && !alloc.hasCoarraySpec() &&
         ((isCudaAllocate && isCudaDeviceContext) || !isCudaAllocate)) {
@@ -972,7 +967,9 @@ genDeallocate(fir::FirOpBuilder &builder,
   bool inlineDeallocation =
       !box.isDerived() && !box.isPolymorphic() && !box.hasAssumedRank() &&
       !box.isUnlimitedPolymorphic() && !errorManager.hasStatSpec() &&
-      !useAllocateRuntime && !box.isPointer() && !implicitManagedBacking;
+      !llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_UseAllocRuntime>(
+          converter.getMLIRContext().getOptionsContext()) &&
+      !box.isPointer() && !implicitManagedBacking;
   bool isCoarraySymbol = symbol && Fortran::evaluate::IsCoarray(*symbol);
 
   // Deallocate intrinsic types inline.

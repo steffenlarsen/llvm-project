@@ -73,7 +73,7 @@ TEST(DroppedVariableStatsMIR, BothDeleted) {
   PassInstrumentationCallbacks PIC;
   PassInstrumentation PI(&PIC);
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *MIR =
       R"(
@@ -222,7 +222,7 @@ TEST(DroppedVariableStatsMIR, DbgValLost) {
   PassInstrumentationCallbacks PIC;
   PassInstrumentation PI(&PIC);
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *MIR =
       R"(
@@ -364,7 +364,7 @@ TEST(DroppedVariableStatsMIR, UnrelatedScopes) {
   PassInstrumentationCallbacks PIC;
   PassInstrumentation PI(&PIC);
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *MIR =
       R"(
@@ -507,7 +507,7 @@ TEST(DroppedVariableStatsMIR, ChildScopes) {
   PassInstrumentationCallbacks PIC;
   PassInstrumentation PI(&PIC);
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *MIR =
       R"(
@@ -651,7 +651,7 @@ TEST(DroppedVariableStatsMIR, InlinedAt) {
   PassInstrumentationCallbacks PIC;
   PassInstrumentation PI(&PIC);
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *MIR =
       R"(
@@ -796,7 +796,7 @@ TEST(DroppedVariableStatsMIR, InlinedAtShared) {
   PassInstrumentationCallbacks PIC;
   PassInstrumentation PI(&PIC);
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *MIR =
       R"(
@@ -941,7 +941,7 @@ TEST(DroppedVariableStatsMIR, InlinedAtChild) {
   PassInstrumentationCallbacks PIC;
   PassInstrumentation PI(&PIC);
 
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   const char *MIR =
       R"(

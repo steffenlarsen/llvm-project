@@ -28,7 +28,7 @@
 using namespace llvm;
 
 int main() {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   // Create the "module" or "program" or "translation unit" to hold the
   // function
@@ -36,7 +36,7 @@ int main() {
 
   // Create the main function: first create the type 'int ()'
   FunctionType *FT =
-    FunctionType::get(Type::getInt32Ty(Context), /*not vararg*/false);
+      FunctionType::get(Type::getInt32Ty(Context), /*not vararg*/ false);
 
   // By passing a module as the last parameter to the Function constructor,
   // it automatically gets appended to the Module.
@@ -51,8 +51,8 @@ int main() {
   Value *Three = ConstantInt::get(Type::getInt32Ty(Context), 3);
 
   // Create the add instruction... does not insert...
-  Instruction *Add = BinaryOperator::Create(Instruction::Add, Two, Three,
-                                            "addresult");
+  Instruction *Add =
+      BinaryOperator::Create(Instruction::Add, Two, Three, "addresult");
 
   // explicitly insert it into the basic block...
   Add->insertInto(BB, BB->end());

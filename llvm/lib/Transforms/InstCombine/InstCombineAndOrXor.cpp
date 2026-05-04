@@ -30,7 +30,6 @@ using namespace PatternMatch;
 #define DEBUG_TYPE "instcombine"
 
 namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
 }
 
 /// This is the complement of getICmpCode, which turns an opcode and two
@@ -1312,7 +1311,9 @@ static Value *foldAndOrOfICmpsWithConstEq(ICmpInst *Cmp0, ICmpInst *Cmp1,
   }
   if (IsLogical) {
     Instruction *MDFrom =
-        ProfcheckDisableMetadataFixes && isa<SelectInst>(I) ? nullptr : &I;
+        getProfcheckDisableMetadataFixes(I.getContext()) && isa<SelectInst>(I)
+            ? nullptr
+            : &I;
     return IsAnd ? Builder.CreateLogicalAnd(Cmp0, SubstituteCmp, "", MDFrom)
                  : Builder.CreateLogicalOr(Cmp0, SubstituteCmp, "", MDFrom);
   }
@@ -2445,7 +2446,7 @@ Value *InstCombinerImpl::reassociateBooleanAndOr(Value *LHS, Value *X, Value *Y,
     Folded = RHSIsLogical ? Builder.CreateLogicalOp(Opcode, X, Res)
                           : Builder.CreateBinOp(Opcode, X, Res);
   if (SelectInst *SI = dyn_cast_or_null<SelectInst>(Folded);
-      SI != nullptr && !ProfcheckDisableMetadataFixes)
+      SI != nullptr && !getProfcheckDisableMetadataFixes(I.getContext()))
     // If the bop I was originally a lop, we could recover branch weight
     // information using that lop's weights. However, InstCombine usually
     // replaces the lop with a bop by the time we get here, deleting the branch
@@ -4106,7 +4107,7 @@ Instruction *InstCombinerImpl::FoldOrOfLogicalAnds(Value *Op0, Value *Op1) {
                                m_Not(m_Specific(SelOp0->getTrueValue())));
     if (MayNeedFreeze)
       C = Builder.CreateFreeze(C);
-    if (!ProfcheckDisableMetadataFixes) {
+    if (!getProfcheckDisableMetadataFixes(Op0->getContext())) {
       Value *C2 = nullptr, *A2 = nullptr, *B2 = nullptr;
       if (match(Op0, m_LogicalAnd(m_Specific(C), m_Value(A2))) && SelOp0) {
         return SelectInst::Create(C, A, B, "", nullptr, SelOp0);
@@ -4137,7 +4138,7 @@ Instruction *InstCombinerImpl::FoldOrOfLogicalAnds(Value *Op0, Value *Op1) {
                                m_Not(m_Specific(SelOp1->getTrueValue())));
     if (MayNeedFreeze)
       C = Builder.CreateFreeze(C);
-    if (!ProfcheckDisableMetadataFixes) {
+    if (!getProfcheckDisableMetadataFixes(Op0->getContext())) {
       Value *C2 = nullptr, *A2 = nullptr, *B2 = nullptr;
       if (match(Op0, m_LogicalAnd(m_Not(m_Value(C2)), m_Value(A2))) && SelOp0) {
         SelectInst *NewSI = SelectInst::Create(C, B, A, "", nullptr, SelOp0);
@@ -5117,9 +5118,9 @@ bool InstCombinerImpl::sinkNotIntoLogicalOp(Instruction &I) {
   if (IsBinaryOp) {
     NewLogicOp = Builder.CreateBinOp(NewOpc, Op0, Op1, I.getName() + ".not");
   } else {
-    NewLogicOp =
-        Builder.CreateLogicalOp(NewOpc, Op0, Op1, I.getName() + ".not",
-                                ProfcheckDisableMetadataFixes ? nullptr : &I);
+    NewLogicOp = Builder.CreateLogicalOp(
+        NewOpc, Op0, Op1, I.getName() + ".not",
+        getProfcheckDisableMetadataFixes(I.getContext()) ? nullptr : &I);
     if (SelectInst *SI = dyn_cast<SelectInst>(NewLogicOp))
       SI->swapProfMetadata();
   }
@@ -5200,9 +5201,11 @@ Instruction *InstCombinerImpl::foldNot(BinaryOperator &I) {
   }
   if (match(NotOp, m_OneUse(m_LogicalAnd(m_Not(m_Value(X)), m_Value(Y))))) {
     Value *NotY = Builder.CreateNot(Y, Y->getName() + ".not");
-    SelectInst *SI = SelectInst::Create(
-        X, ConstantInt::getTrue(Ty), NotY, "", nullptr,
-        ProfcheckDisableMetadataFixes ? nullptr : cast<Instruction>(NotOp));
+    SelectInst *SI =
+        SelectInst::Create(X, ConstantInt::getTrue(Ty), NotY, "", nullptr,
+                           getProfcheckDisableMetadataFixes(I.getContext())
+                               ? nullptr
+                               : cast<Instruction>(NotOp));
     SI->swapProfMetadata();
     return SI;
   }
@@ -5215,9 +5218,11 @@ Instruction *InstCombinerImpl::foldNot(BinaryOperator &I) {
   }
   if (match(NotOp, m_OneUse(m_LogicalOr(m_Not(m_Value(X)), m_Value(Y))))) {
     Value *NotY = Builder.CreateNot(Y, Y->getName() + ".not");
-    SelectInst *SI = SelectInst::Create(
-        X, NotY, ConstantInt::getFalse(Ty), "", nullptr,
-        ProfcheckDisableMetadataFixes ? nullptr : cast<Instruction>(NotOp));
+    SelectInst *SI =
+        SelectInst::Create(X, NotY, ConstantInt::getFalse(Ty), "", nullptr,
+                           getProfcheckDisableMetadataFixes(I.getContext())
+                               ? nullptr
+                               : cast<Instruction>(NotOp));
     SI->swapProfMetadata();
     return SI;
   }
@@ -5699,7 +5704,8 @@ Instruction *InstCombinerImpl::visitXor(BinaryOperator &I) {
       if (NeedFreeze)
         A = Builder.CreateFreeze(A);
       Value *NotB = Builder.CreateNot(B);
-      return MDFrom == nullptr || ProfcheckDisableMetadataFixes
+      return MDFrom == nullptr ||
+                     getProfcheckDisableMetadataFixes(I.getContext())
                  ? createSelectInstWithUnknownProfile(A, NotB, C)
                  : SelectInst::Create(A, NotB, C, "", nullptr, MDFrom);
     }

@@ -17,7 +17,6 @@
 #include "llvm/BinaryFormat/Wasm.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInstrDesc.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/DataTypes.h"
 #include <memory>
 

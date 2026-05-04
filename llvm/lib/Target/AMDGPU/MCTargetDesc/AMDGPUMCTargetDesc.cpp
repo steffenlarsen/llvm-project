@@ -75,9 +75,15 @@ MCRegisterInfo *llvm::createGCNMCRegisterInfo(AMDGPUDwarfFlavour DwarfFlavour) {
 }
 
 static MCSubtargetInfo *
-createAMDGPUMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
-  if (TT.getArch() == Triple::r600)
-    return createR600MCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+createAMDGPUMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                            const clv2::OptionsContext &Ctx) {
+  if (TT.getArch() == Triple::r600) {
+    MCSubtargetInfo *STI =
+        createR600MCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+    if (STI)
+      STI->setOptionsContext(Ctx);
+    return STI;
+  }
 
   StringRef ResolvedCPU = CPU;
   if (ResolvedCPU.empty())
@@ -116,6 +122,8 @@ createAMDGPUMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
           STI->hasFeature(AMDGPU::FeatureWavefrontSize32)) &&
          "wavesize features are mutually exclusive");
 
+  if (STI)
+    STI->setOptionsContext(Ctx);
   return STI;
 }
 

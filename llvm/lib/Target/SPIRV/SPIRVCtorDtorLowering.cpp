@@ -23,8 +23,9 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/MD5.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/SPIRV/SPIRVOptionsOptInfos.h"
 #include "llvm/Transforms/IPO/OpenMPOpt.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
@@ -32,15 +33,17 @@ using namespace llvm;
 
 #define DEBUG_TYPE "spirv-lower-ctor-dtor"
 
-static cl::opt<std::string>
-    GlobalStr("spirv-lower-global-ctor-dtor-id",
-              cl::desc("Override unique ID of ctor/dtor globals."),
-              cl::init(""), cl::Hidden);
+static bool CreateKernels = true;
 
-static cl::opt<bool>
-    CreateKernels("spirv-emit-init-fini-kernel",
-                  cl::desc("Emit kernels to call ctor/dtor globals."),
-                  cl::init(true), cl::Hidden);
+static std::string getGlobalStr(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::SPIRV_LowerGlobalCtorDtorId>(
+      M.getContext().getOptionsContext());
+}
+
+static bool getCreateKernels(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::SPIRV_EmitInitFiniKernel>(
+      M.getContext().getOptionsContext());
+}
 
 namespace {
 constexpr int SPIRV_GLOBAL_AS = 1;
@@ -175,8 +178,9 @@ bool createInitOrFiniGlobals(Module &M, GlobalVariable *GV, bool IsCtor) {
     uint64_t Priority = cast<ConstantInt>(CS->getOperand(0))->getSExtValue();
     std::string PriorityStr = "." + std::to_string(Priority);
     // We append a semi-unique hash and the priority to the global name.
-    std::string GlobalID =
-        !GlobalStr.empty() ? GlobalStr : getHash(M.getSourceFileName());
+    std::string GlobalID = !getGlobalStr(M).empty()
+                               ? getGlobalStr(M)
+                               : getHash(M.getSourceFileName());
     std::string NameStr =
         ((IsCtor ? "__init_array_object_" : "__fini_array_object_") +
          F->getName() + "_" + GlobalID + "_" + std::to_string(Priority))
@@ -204,7 +208,7 @@ bool createInitOrFiniKernel(Module &M, StringRef GlobalName, bool IsCtor) {
   if (!createInitOrFiniGlobals(M, GV, IsCtor))
     return false;
 
-  if (!CreateKernels)
+  if (!getCreateKernels(M))
     return true;
 
   Function *InitOrFiniKernel = createInitOrFiniKernelFunction(M, IsCtor);

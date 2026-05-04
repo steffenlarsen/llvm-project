@@ -23,11 +23,14 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/BPF/BPFOptionsOptInfos.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
@@ -35,12 +38,12 @@
 #include <optional>
 using namespace llvm;
 
-cl::opt<bool> DisableMIPeephole("disable-bpf-peephole", cl::Hidden,
-                                cl::desc("Disable machine peepholes for BPF"));
+static constexpr clv2::OptionInfo<bool> OI_DisableBPFPeephole{
+    "disable-bpf-peephole", "Disable machine peepholes for BPF", clv2::Hidden};
+static constexpr clv2::OptionsRegistry<&OI_DisableBPFPeephole>
+    DisableBPFPeepholeReg;
 
-static cl::opt<bool>
-    DisableCheckUnreachable("bpf-disable-trap-unreachable", cl::Hidden,
-                            cl::desc("Disable Trap Unreachable for BPF"));
+bool DisableMIPeephole = false;
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeBPFTarget() {
   // Register the target.
@@ -75,7 +78,8 @@ BPFTargetMachine::BPFTargetMachine(const Target &T, const Triple &TT,
                                getEffectiveCodeModel(CM, CodeModel::Small), OL),
       TLOF(std::make_unique<BPFTargetLoweringObjectFileELF>()),
       Subtarget(TT, std::string(CPU), std::string(FS), *this) {
-  if (!DisableCheckUnreachable) {
+  if (!clv2::getOptValOr<&clv2::BPFOptsReg, &clv2::BPF_DisableTrapUnreachable>(
+          this->getOptionsContext(), false)) {
     this->Options.TrapUnreachable = true;
     this->Options.NoTrapAfterNoreturn = true;
   }
@@ -167,7 +171,7 @@ bool BPFPassConfig::addLegalizeMachineIR() {
 }
 
 bool BPFPassConfig::addRegBankSelect() {
-  addPass(new RegBankSelectLegacy());
+  addPass(new RegBankSelectLegacy(getTM<TargetMachine>().getOptionsContext()));
   return false;
 }
 

@@ -11,6 +11,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "Basic/TableGen.h"
+#include "RegisterBackendOptions.h"
+#include "llvm/Support/SupportOptions.h"
+#include "llvm/Support/SupportOptionsOptInfos.h"
+
+void registerExtraTblgenOptions(llvm::clv2::OptionParser &P) {
+  registerAllLLVMTblgenBackendOptions(P);
+  P.add<&llvm::clv2::SupportOptsReg, llvm::support::applySupportOptions>();
+}
 
 /// Command line parameters are shared between llvm-tblgen and llvm-min-tblgen.
 /// The indirection to tblgen_main exists to ensure that the static variables

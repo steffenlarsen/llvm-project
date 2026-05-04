@@ -75,9 +75,11 @@
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 
 #define DEBUG_TYPE "handle-qfp"
@@ -85,16 +87,20 @@
 using namespace llvm;
 using namespace rdf;
 
-extern cl::opt<QFloatMode> QFloatModeValue;
+static bool getDisablePostRAHandleQFloat(const MachineFunction &MF) {
+  return clv2::getOptValOrDefault<&clv2::HEX_DisablePostRAHandleQFloat>(
+      MF.getFunction().getContext().getOptionsContext());
+}
 
-cl::opt<bool> DisablePostRAHandleQFloat(
-    "disable-handle-qfp", cl::init(false),
-    cl::desc("Disable handling of Qfloat spills/refills after register "
-             "allocation."));
+static bool getEnablePostRAXqfCompliance(const MachineFunction &MF) {
+  return clv2::getOptValOrDefault<&clv2::HEX_EnablePostRAXqfCompliance>(
+      MF.getFunction().getContext().getOptionsContext());
+}
 
-static cl::opt<bool> EnablePostRAXqfCompliance(
-    "enable-postra-xqf-check", cl::init(false),
-    cl::desc("Enable ABI compliance for xqf operands post regalloc."));
+static QFloatMode getQFloatModeValue(const MachineFunction &MF) {
+  return clv2::getOptValOrDefault<&clv2::HEX_QFloatMode>(
+      MF.getFunction().getContext().getOptionsContext());
+}
 
 namespace llvm {
 FunctionPass *createHexagonPostRAHandleQFP();
@@ -1683,13 +1689,14 @@ bool HexagonPostRAHandleQFP::HandleSpills() {
 
 bool HexagonPostRAHandleQFP::runOnMachineFunction(MachineFunction &MF) {
 
-  if (DisablePostRAHandleQFloat)
+  if (getDisablePostRAHandleQFloat(MF))
     return false;
 
+  QFloatMode QFMode = getQFloatModeValue(MF);
   LLVM_DEBUG(
       dbgs() << "\n=== Entering Hexagon Fixup QF spills and refills pass ===\n"
              << "Mode: ";
-      switch (QFloatModeValue) {
+      switch (QFMode) {
         case QFloatMode::StrictIEEE:
           dbgs() << "Strict IEEE";
           break;
@@ -1714,7 +1721,7 @@ bool HexagonPostRAHandleQFP::runOnMachineFunction(MachineFunction &MF) {
 
   // If the mode is legacy, the function may not contain qf instructions
   // check if this pass is required to run for legacy mode.
-  if (QFloatModeValue == QFloatMode::Legacy)
+  if (QFMode == QFloatMode::Legacy)
     if (!HII->hasQFPInstrs(MF))
       return false;
 
@@ -1815,7 +1822,7 @@ bool HexagonPostRAHandleQFP::runOnMachineFunction(MachineFunction &MF) {
   IgnoreInsertConvList.clear();
 
   // Option if enabled, checks for qf use-def mismatches
-  if (EnablePostRAXqfCompliance) {
+  if (getEnablePostRAXqfCompliance(MF)) {
     dbgs() << "\nChecking for ABI compliance for XQF post register \
 allocation for function: "
            << MF.getName() << "\n";

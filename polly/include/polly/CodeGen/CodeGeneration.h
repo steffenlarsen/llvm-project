@@ -24,15 +24,11 @@ enum VectorizerChoice {
   VECTORIZER_NONE,
   VECTORIZER_STRIPMINE,
 };
-extern VectorizerChoice PollyVectorizerChoice;
-
 /// Mark a basic block unreachable.
 ///
 /// Marks the basic block @p Block unreachable by equipping it with an
 /// UnreachableInst.
 void markBlockUnreachable(BasicBlock &Block, PollyIRBuilder &Builder);
-
-extern bool PerfMonitoring;
 
 bool runCodeGeneration(Scop &S, llvm::RegionInfo &RI, IslAstInfo &AI);
 } // namespace polly

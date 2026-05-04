@@ -71,6 +71,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/InstructionSimplify.h"
@@ -110,12 +111,14 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/InterleavedRange.h"
 #include "llvm/Support/KnownBits.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -144,109 +147,111 @@ STATISTIC(NumExitCountsNotComputed,
 STATISTIC(NumBruteForceTripCountsComputed,
           "Number of loops with trip counts computed by force");
 
+// Getter that honours per-function CLI overrides via clv2::getView().
+bool llvm::getVerifySCEV(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::AnalysisOptsReg>(Ctx))
+    if (O->specified<&clv2::AN_VerifySCEV>())
+      return O->get<&clv2::AN_VerifySCEV>();
 #ifdef EXPENSIVE_CHECKS
-bool llvm::VerifySCEV = true;
+  return true;
 #else
-bool llvm::VerifySCEV = false;
+  return false;
 #endif
+}
 
-static cl::opt<unsigned>
-    MaxBruteForceIterations("scalar-evolution-max-iterations", cl::ReallyHidden,
-                            cl::desc("Maximum number of iterations SCEV will "
-                                     "symbolically execute a constant "
-                                     "derived loop"),
-                            cl::init(100));
+// Getters that honour per-function CLI overrides via clv2::getView().
+// Globals with no IR context (static helpers) use clv2::getView() with the
+// OptionsContext directly; globals used from ScalarEvolution member functions
+// take a Function& and extract the context from it.
 
-static cl::opt<bool, true> VerifySCEVOpt(
-    "verify-scev", cl::Hidden, cl::location(VerifySCEV),
-    cl::desc("Verify ScalarEvolution's backedge taken counts (slow)"));
-static cl::opt<bool> VerifySCEVStrict(
-    "verify-scev-strict", cl::Hidden,
-    cl::desc("Enable stricter verification with -verify-scev is passed"));
+static unsigned getMaxBruteForceIterations(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_MaxBruteForceIterations>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> VerifyIR(
-    "scev-verify-ir", cl::Hidden,
-    cl::desc("Verify IR correctness when making sensitive SCEV queries (slow)"),
-    cl::init(false));
+static unsigned getMulOpsInlineThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_MulOpsInlineThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> MulOpsInlineThreshold(
-    "scev-mulops-inline-threshold", cl::Hidden,
-    cl::desc("Threshold for inlining multiplication operands into a SCEV"),
-    cl::init(32));
+static unsigned getAddOpsInlineThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_AddOpsInlineThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> AddOpsInlineThreshold(
-    "scev-addops-inline-threshold", cl::Hidden,
-    cl::desc("Threshold for inlining addition operands into a SCEV"),
-    cl::init(500));
+static unsigned getMaxSCEVCompareDepth(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_MaxSCEVCompareDepth>(Ctx);
+}
 
-static cl::opt<unsigned> MaxSCEVCompareDepth(
-    "scalar-evolution-max-scev-compare-depth", cl::Hidden,
-    cl::desc("Maximum depth of recursive SCEV complexity comparisons"),
-    cl::init(32));
+static unsigned getMaxSCEVOperationsImplicationDepth(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_MaxSCEVOperationsImplicationDepth>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> MaxSCEVOperationsImplicationDepth(
-    "scalar-evolution-max-scev-operations-implication-depth", cl::Hidden,
-    cl::desc("Maximum depth of recursive SCEV operations implication analysis"),
-    cl::init(2));
+static unsigned getMaxValueCompareDepth(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_MaxValueCompareDepth>(Ctx);
+}
 
-static cl::opt<unsigned> MaxValueCompareDepth(
-    "scalar-evolution-max-value-compare-depth", cl::Hidden,
-    cl::desc("Maximum depth of recursive value complexity comparisons"),
-    cl::init(2));
+static unsigned getMaxArithDepth(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_MaxArithDepth>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-    MaxArithDepth("scalar-evolution-max-arith-depth", cl::Hidden,
-                  cl::desc("Maximum depth of recursive arithmetics"),
-                  cl::init(32));
+static unsigned getMaxConstantEvolvingDepth(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_MaxConstantEvolvingDepth>(Ctx);
+}
 
-static cl::opt<unsigned> MaxConstantEvolvingDepth(
-    "scalar-evolution-max-constant-evolving-depth", cl::Hidden,
-    cl::desc("Maximum depth of recursive constant evolving"), cl::init(32));
+static unsigned getMaxCastDepth(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_MaxCastDepth>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-    MaxCastDepth("scalar-evolution-max-cast-depth", cl::Hidden,
-                 cl::desc("Maximum depth of recursive SExt/ZExt/Trunc"),
-                 cl::init(8));
+static unsigned getMaxAddRecSize(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_MaxAddRecSize>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned>
-    MaxAddRecSize("scalar-evolution-max-add-rec-size", cl::Hidden,
-                  cl::desc("Max coefficients in AddRec during evolving"),
-                  cl::init(8));
+static unsigned getHugeExprThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_HugeExprThreshold>(Ctx);
+}
 
-static cl::opt<unsigned>
-    HugeExprThreshold("scalar-evolution-huge-expr-threshold", cl::Hidden,
-                  cl::desc("Size of the expression which is considered huge"),
-                  cl::init(4096));
+static unsigned getMaxLoopGuardCollectionDepth(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_MaxLoopGuardCollectionDepth>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> RangeIterThreshold(
-    "scev-range-iter-threshold", cl::Hidden,
-    cl::desc("Threshold for switching to iteratively computing SCEV ranges"),
-    cl::init(32));
+static bool getUseExpensiveRangeSharpening(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_UseExpensiveRangeSharpening>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<unsigned> MaxLoopGuardCollectionDepth(
-    "scalar-evolution-max-loop-guard-collection-depth", cl::Hidden,
-    cl::desc("Maximum depth for recursive loop guard collection"), cl::init(1));
+// No read sites in this file yet; getter provided for completeness.
+static unsigned getMaxPhiSCCAnalysisSize(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_MaxPhiSCCAnalysisSize>(Ctx);
+}
 
-static cl::opt<bool>
-ClassifyExpressions("scalar-evolution-classify-expressions",
-    cl::Hidden, cl::init(true),
-    cl::desc("When printing analysis, include information on every instruction"));
+static bool getUseContextForNoWrapFlagInference(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_UseContextForNoWrapFlagInference>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> UseExpensiveRangeSharpening(
-    "scalar-evolution-use-expensive-range-sharpening", cl::Hidden,
-    cl::init(false),
-    cl::desc("Use more powerful methods of sharpening expression ranges. May "
-             "be costly in terms of compile time"));
+static bool getVerifySCEVStrict(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValIfSpecified<&clv2::AnalysisOptsReg,
+                                    &clv2::AN_VerifySCEVStrict>(Ctx, false);
+}
 
-static cl::opt<bool>
-    EnableFiniteLoopControl("scalar-evolution-finite-loop", cl::Hidden,
-                            cl::desc("Handle <= and >= in finite loops"),
-                            cl::init(true));
+static bool getVerifyIR(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_VerifyIR>(Ctx);
+}
 
-static cl::opt<bool> UseContextForNoWrapFlagInference(
-    "scalar-evolution-use-context-for-no-wrap-flag-strenghening", cl::Hidden,
-    cl::desc("Infer nuw/nsw flags using context where suitable"),
-    cl::init(true));
+static unsigned getRangeIterThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_RangeIterThreshold>(Ctx);
+}
+
+static bool getEnableFiniteLoopControl(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_EnableFiniteLoopControl>(
+      F.getContext().getOptionsContext());
+}
 
 //===----------------------------------------------------------------------===//
 //                           SCEV class definitions
@@ -577,7 +582,13 @@ void SCEVUnknown::allUsesReplacedWith(Value *New) {
 /// operands in SCEV expressions.
 static int CompareValueComplexity(const LoopInfo *const LI, Value *LV,
                                   Value *RV, unsigned Depth) {
-  if (Depth > MaxValueCompareDepth)
+  const Function *Fn = nullptr;
+  if (auto *I = dyn_cast<Instruction>(LV))
+    Fn = I->getFunction();
+  else if (auto *A = dyn_cast<Argument>(LV))
+    Fn = A->getParent();
+  if (Depth >
+      (Fn ? getMaxValueCompareDepth(Fn->getContext().getOptionsContext()) : 2u))
     return 0;
 
   // Order pointer values after integer values. This helps SCEVExpander form
@@ -656,7 +667,8 @@ static int CompareValueComplexity(const LoopInfo *const LI, Value *LV,
 // not know if they are equivalent for sure.
 static std::optional<int>
 CompareSCEVComplexity(const LoopInfo *const LI, const SCEV *LHS,
-                      const SCEV *RHS, DominatorTree &DT, unsigned Depth = 0) {
+                      const SCEV *RHS, DominatorTree &DT, unsigned Depth = 0,
+                      const Function *Fn = nullptr) {
   // Fast-path: SCEVs are uniqued so we can do a quick equality check.
   if (LHS == RHS)
     return 0;
@@ -666,7 +678,8 @@ CompareSCEVComplexity(const LoopInfo *const LI, const SCEV *LHS,
   if (LType != RType)
     return (int)LType - (int)RType;
 
-  if (Depth > MaxSCEVCompareDepth)
+  if (Depth >
+      (Fn ? getMaxSCEVCompareDepth(Fn->getContext().getOptionsContext()) : 32u))
     return std::nullopt;
 
   // Aside from the getSCEVType() ordering, the particular ordering
@@ -744,7 +757,7 @@ CompareSCEVComplexity(const LoopInfo *const LI, const SCEV *LHS,
 
     for (unsigned i = 0; i != LNumOps; ++i) {
       auto X = CompareSCEVComplexity(LI, LOps[i].getPointer(),
-                                     ROps[i].getPointer(), DT, Depth + 1);
+                                     ROps[i].getPointer(), DT, Depth + 1, Fn);
       if (X != 0)
         return X;
     }
@@ -767,12 +780,12 @@ CompareSCEVComplexity(const LoopInfo *const LI, const SCEV *LHS,
 /// this to depend on where the addresses of various SCEV objects happened to
 /// land in memory.
 static void GroupByComplexity(SmallVectorImpl<SCEVUse> &Ops, LoopInfo *LI,
-                              DominatorTree &DT) {
+                              DominatorTree &DT, const Function *Fn = nullptr) {
   if (Ops.size() < 2) return;  // Noop
 
   // Whether LHS has provably less complexity than RHS.
   auto IsLessComplex = [&](SCEVUse LHS, SCEVUse RHS) {
-    auto Complexity = CompareSCEVComplexity(LI, LHS, RHS, DT);
+    auto Complexity = CompareSCEVComplexity(LI, LHS, RHS, DT, 0, Fn);
     return Complexity && *Complexity < 0;
   };
   if (Ops.size() == 2) {
@@ -810,10 +823,10 @@ static void GroupByComplexity(SmallVectorImpl<SCEVUse> &Ops, LoopInfo *LI,
 }
 
 /// Returns true if \p Ops contains a huge SCEV (the subtree of S contains at
-/// least HugeExprThreshold nodes).
-static bool hasHugeExpression(ArrayRef<SCEVUse> Ops) {
-  return any_of(Ops, [](const SCEV *S) {
-    return S->getExpressionSize() >= HugeExprThreshold;
+/// least \p Threshold nodes).
+static bool hasHugeExpression(ArrayRef<SCEVUse> Ops, unsigned Threshold) {
+  return any_of(Ops, [Threshold](const SCEV *S) {
+    return S->getExpressionSize() >= Threshold;
   });
 }
 
@@ -2395,8 +2408,9 @@ ScalarEvolution::getStrengthenedNoWrapFlagsFromBinOp(
     return std::nullopt;
   }
 
-  const Instruction *CtxI =
-      UseContextForNoWrapFlagInference ? dyn_cast<Instruction>(OBO) : nullptr;
+  const Instruction *CtxI = getUseContextForNoWrapFlagInference(F)
+                                ? dyn_cast<Instruction>(OBO)
+                                : nullptr;
   if (!OBO->hasNoUnsignedWrap() &&
       willNotOverflow(Opcode, /* Signed */ false, LHS, RHS, CtxI)) {
     Flags = ScalarEvolution::setFlags(Flags, SCEV::FlagNUW);
@@ -2537,7 +2551,7 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<SCEVUse> &Ops,
   };
 
   // Limit recursion calls depth.
-  if (Depth > MaxArithDepth || hasHugeExpression(Ops))
+  if (Depth > MaxArithDepth || hasHugeExpression(Ops, HugeExprThreshold))
     return getOrCreateAddExpr(Ops, ComputeFlags(Ops));
 
   if (SCEV *S = findExistingSCEVInCache(scAddExpr, Ops)) {
@@ -2710,8 +2724,8 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<SCEVUse> &Ops,
     // preserved, because they may depend on the original order of operations.
     SCEV::NoWrapFlags CommonFlags = maskFlags(OrigFlags, SCEV::FlagNUW);
     while (const SCEVAddExpr *Add = dyn_cast<SCEVAddExpr>(Ops[Idx])) {
-      if (Ops.size() > AddOpsInlineThreshold ||
-          Add->getNumOperands() > AddOpsInlineThreshold)
+      if (Ops.size() > getAddOpsInlineThreshold(F) ||
+          Add->getNumOperands() > getAddOpsInlineThreshold(F))
         break;
       // If we have an add, expand the add operands onto the end of the operands
       // list.
@@ -3137,7 +3151,7 @@ const SCEV *ScalarEvolution::getMulExpr(SmallVectorImpl<SCEVUse> &Ops,
   };
 
   // Limit recursion calls depth.
-  if (Depth > MaxArithDepth || hasHugeExpression(Ops))
+  if (Depth > MaxArithDepth || hasHugeExpression(Ops, HugeExprThreshold))
     return getOrCreateMulExpr(Ops, ComputeFlags(Ops));
 
   if (SCEV *S = findExistingSCEVInCache(scMulExpr, Ops)) {
@@ -3253,7 +3267,7 @@ const SCEV *ScalarEvolution::getMulExpr(SmallVectorImpl<SCEVUse> &Ops,
   if (Idx < Ops.size()) {
     bool DeletedMul = false;
     while (const SCEVMulExpr *Mul = dyn_cast<SCEVMulExpr>(Ops[Idx])) {
-      if (Ops.size() > MulOpsInlineThreshold)
+      if (Ops.size() > getMulOpsInlineThreshold(F))
         break;
       // If we have an mul, expand the mul operands onto the end of the
       // operands list.
@@ -3355,7 +3369,8 @@ const SCEV *ScalarEvolution::getMulExpr(SmallVectorImpl<SCEVUse> &Ops,
       // Limit max number of arguments to avoid creation of unreasonably big
       // SCEVAddRecs with very complex operands.
       if (AddRec->getNumOperands() + OtherAddRec->getNumOperands() - 1 >
-          MaxAddRecSize || hasHugeExpression({AddRec, OtherAddRec}))
+              getMaxAddRecSize(F) ||
+          hasHugeExpression({AddRec, OtherAddRec}, HugeExprThreshold))
         continue;
 
       bool Overflow = false;
@@ -9459,7 +9474,7 @@ ScalarEvolution::ExitLimit ScalarEvolution::computeExitLimitFromICmp(
   case ICmpInst::ICMP_ULE:
     // Since the loop is finite, an invariant RHS cannot include the boundary
     // value, otherwise it would loop forever.
-    if (!EnableFiniteLoopControl || !ControllingFiniteLoop ||
+    if (!getEnableFiniteLoopControl(F) || !ControllingFiniteLoop ||
         !isLoopInvariant(RHS, L)) {
       // Otherwise, perform the addition in a wider type, to avoid overflow.
       // If the LHS is an addrec with the appropriate nowrap flag, the
@@ -9494,7 +9509,7 @@ ScalarEvolution::ExitLimit ScalarEvolution::computeExitLimitFromICmp(
   case ICmpInst::ICMP_UGE:
     // Since the loop is finite, an invariant RHS cannot include the boundary
     // value, otherwise it would loop forever.
-    if (!EnableFiniteLoopControl || !ControllingFiniteLoop ||
+    if (!getEnableFiniteLoopControl(F) || !ControllingFiniteLoop ||
         !isLoopInvariant(RHS, L))
       break;
     RHS = getAddExpr(getMinusOne(RHS->getType()), RHS);
@@ -9756,7 +9771,8 @@ static PHINode *
 getConstantEvolvingPHIOperands(Instruction *UseInst, const Loop *L,
                                DenseMap<Instruction *, PHINode *> &PHIMap,
                                unsigned Depth) {
-  if (Depth > MaxConstantEvolvingDepth)
+  if (Depth > getMaxConstantEvolvingDepth(
+                  UseInst->getFunction()->getContext().getOptionsContext()))
     return nullptr;
 
   // Otherwise, we can evaluate this instruction if all of its operands are
@@ -9886,7 +9902,7 @@ ScalarEvolution::getConstantEvolutionLoopExitValue(PHINode *PN,
   if (!Inserted)
     return I->second;
 
-  if (BEs.ugt(MaxBruteForceIterations))
+  if (BEs.ugt(getMaxBruteForceIterations(F)))
     return nullptr; // Not going to evaluate it.
 
   Constant *&RetVal = I->second;
@@ -9988,7 +10004,7 @@ const SCEV *ScalarEvolution::computeExitCountExhaustively(const Loop *L,
   // Okay, we find a PHI node that defines the trip count of this loop.  Execute
   // the loop symbolically to determine when the condition gets a value of
   // "ExitWhen".
-  unsigned MaxIterations = MaxBruteForceIterations;   // Limit analysis.
+  unsigned MaxIterations = getMaxBruteForceIterations(F); // Limit analysis.
   const DataLayout &DL = getDataLayout();
   for (unsigned IterationNum = 0; IterationNum != MaxIterations;++IterationNum){
     auto *CondVal = dyn_cast_or_null<ConstantInt>(
@@ -11829,7 +11845,7 @@ bool ScalarEvolution::isLoopBackedgeGuardedByCond(const Loop *L,
   if (!L || !DT.isReachableFromEntry(L->getHeader()))
     return true;
 
-  if (VerifyIR)
+  if (getVerifyIR(F.getContext().getOptionsContext()))
     assert(!verifyFunction(*L->getHeader()->getParent(), &dbgs()) &&
            "This cannot be done on broken IR!");
 
@@ -11924,7 +11940,7 @@ bool ScalarEvolution::isBasicBlockEntryGuardedByCond(const BasicBlock *BB,
   // Do not bother proving facts for unreachable code.
   if (!DT.isReachableFromEntry(BB))
     return true;
-  if (VerifyIR)
+  if (getVerifyIR(F.getContext().getOptionsContext()))
     assert(!verifyFunction(*BB->getParent(), &dbgs()) &&
            "This cannot be done on broken IR!");
 
@@ -12922,7 +12938,7 @@ bool ScalarEvolution::isImpliedViaOperations(CmpPredicate Pred, const SCEV *LHS,
              getTypeSizeInBits(FoundRHS->getType()) &&
          "FoundLHS and FoundRHS have different sizes?");
   // We want to avoid hurting the compile time with analysis of too big trees.
-  if (Depth > MaxSCEVOperationsImplicationDepth)
+  if (Depth > getMaxSCEVOperationsImplicationDepth(F))
     return false;
 
   // We only want to work with GT comparison so far.
@@ -14030,7 +14046,14 @@ ScalarEvolution::SCEVCallbackVH::SCEVCallbackVH(Value *V, ScalarEvolution *se)
 ScalarEvolution::ScalarEvolution(Function &F, TargetLibraryInfo &TLI,
                                  AssumptionCache &AC, DominatorTree &DT,
                                  LoopInfo &LI)
-    : F(F), DL(F.getDataLayout()), TLI(TLI), AC(AC), DT(DT), LI(LI),
+    : F(F), DL(F.getDataLayout()), MaxArithDepth(::getMaxArithDepth(F)),
+      MaxCastDepth(::getMaxCastDepth(F)),
+      HugeExprThreshold(
+          ::getHugeExprThreshold(F.getContext().getOptionsContext())),
+      RangeIterThreshold(
+          ::getRangeIterThreshold(F.getContext().getOptionsContext())),
+      UseExpensiveRangeSharpening(::getUseExpensiveRangeSharpening(F)),
+      TLI(TLI), AC(AC), DT(DT), LI(LI),
       CouldNotCompute(new SCEVCouldNotCompute()), ValuesAtScopes(64),
       LoopDispositions(64), BlockDispositions(64) {
   // To use guards for proving predicates, we need to scan every instruction in
@@ -14049,8 +14072,13 @@ ScalarEvolution::ScalarEvolution(Function &F, TargetLibraryInfo &TLI,
 }
 
 ScalarEvolution::ScalarEvolution(ScalarEvolution &&Arg)
-    : F(Arg.F), DL(Arg.DL), HasGuards(Arg.HasGuards), TLI(Arg.TLI), AC(Arg.AC),
-      DT(Arg.DT), LI(Arg.LI), CouldNotCompute(std::move(Arg.CouldNotCompute)),
+    : F(Arg.F), DL(Arg.DL), HasGuards(Arg.HasGuards),
+      MaxArithDepth(Arg.MaxArithDepth), MaxCastDepth(Arg.MaxCastDepth),
+      HugeExprThreshold(Arg.HugeExprThreshold),
+      RangeIterThreshold(Arg.RangeIterThreshold),
+      UseExpensiveRangeSharpening(Arg.UseExpensiveRangeSharpening),
+      TLI(Arg.TLI), AC(Arg.AC), DT(Arg.DT), LI(Arg.LI),
+      CouldNotCompute(std::move(Arg.CouldNotCompute)),
       ValueExprMap(std::move(Arg.ValueExprMap)),
       PendingLoopPredicates(std::move(Arg.PendingLoopPredicates)),
       PendingMerges(std::move(Arg.PendingMerges)),
@@ -14315,7 +14343,7 @@ static raw_ostream &operator<<(raw_ostream &OS,
 }
 } // namespace llvm
 
-void ScalarEvolution::print(raw_ostream &OS) const {
+void ScalarEvolution::print(raw_ostream &OS, bool ClassifyExpressions) const {
   // ScalarEvolution's implementation of the print method is to print
   // out SCEV values of all instructions that are interesting. Doing
   // this potentially causes it to create new SCEV objects though,
@@ -14784,7 +14812,8 @@ void ScalarEvolution::verify() const {
 
     // Unless VerifySCEVStrict is set, we only compare constant deltas.
     const SCEV *Delta = SE2.getMinusSCEV(Old, New);
-    if (!VerifySCEVStrict && !isa<SCEVConstant>(Delta))
+    if (!getVerifySCEVStrict(F.getContext().getOptionsContext()) &&
+        !isa<SCEVConstant>(Delta))
       return nullptr;
 
     return Delta;
@@ -15074,7 +15103,8 @@ ScalarEvolutionPrinterPass::run(Function &F, FunctionAnalysisManager &AM) {
   // update_analyze_test_checks.py working.
   OS << "Printing analysis 'Scalar Evolution Analysis' for function '"
      << F.getName() << "':\n";
-  AM.getResult<ScalarEvolutionAnalysis>(F).print(OS);
+  AM.getResult<ScalarEvolutionAnalysis>(F).print(OS,
+                                                 Options.ClassifyExpressions);
   return PreservedAnalyses::all();
 }
 
@@ -15107,9 +15137,7 @@ void ScalarEvolutionWrapperPass::print(raw_ostream &OS, const Module *) const {
 }
 
 void ScalarEvolutionWrapperPass::verifyAnalysis() const {
-  if (!VerifySCEV)
-    return;
-
+  // No per-function context available here; always verify (conservative).
   SE->verify();
 }
 
@@ -16163,7 +16191,7 @@ void ScalarEvolution::LoopGuards::collectFromBlock(
   // blocks and try to merge the found conditions to build a new one
   // for the Phi.
   if (Pair.second->hasNPredecessorsOrMore(2) &&
-      Depth < MaxLoopGuardCollectionDepth) {
+      Depth < getMaxLoopGuardCollectionDepth(SE.F)) {
     SmallDenseMap<const BasicBlock *, LoopGuards> IncomingGuards;
     for (auto &Phi : Pair.second->phis())
       collectFromPHI(SE, Guards, Phi, VisitedBlocks, IncomingGuards, Depth);
@@ -16434,3 +16462,18 @@ const SCEV *ScalarEvolution::applyLoopGuards(const SCEV *Expr,
                                              const LoopGuards &Guards) {
   return Guards.rewrite(Expr);
 }
+
+//===----------------------------------------------------------------------===//
+// Runtime option registration for CLI flags.
+//===----------------------------------------------------------------------===//
+
+// The classify-expressions option now lives in ScalarEvolutionPrinterPass
+// options, but register it as a runtime option so the CLI flag is accepted.
+static constexpr clv2::OptionInfo<bool> OI_ScalarEvClassify{
+    "scalar-evolution-classify-expressions",
+    "When printing analysis, include information on every instruction",
+    clv2::Hidden, clv2::Init{true}};
+static constexpr clv2::OptionsRegistry<&OI_ScalarEvClassify>
+    ScalarEvClassifyReg;
+
+static bool ClassifyExpressions = true;

@@ -22,10 +22,12 @@
 #include "clang/Tooling/Refactoring/RefactoringOptions.h"
 #include "clang/Tooling/Refactoring/Rename/RenamingAction.h"
 #include "clang/Tooling/Tooling.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/raw_ostream.h"
+#include <deque>
 #include <optional>
 #include <string>
 
@@ -36,15 +38,43 @@ namespace cl = llvm::cl;
 
 namespace opts {
 
-static cl::OptionCategory CommonRefactorOptions("Refactoring options");
+struct RefactorOptions {
+  bool Verbose = false;
+  bool Inplace = false;
+};
 
-static cl::opt<bool> Verbose("v", cl::desc("Use verbose output"),
-                             cl::cat(cl::getGeneralCategory()),
-                             cl::sub(cl::SubCommand::getAll()));
+static constexpr llvm::clv2::OptionInfo<bool> OI_Verbose{"v",
+                                                         "Use verbose output"};
+static constexpr llvm::clv2::OptionInfo<bool> OI_Inplace{
+    "i", "Inplace edit <file>s"};
+static constexpr llvm::clv2::OptionsRegistry<&OI_Verbose, &OI_Inplace>
+    RefactorOptsReg;
 
-static cl::opt<bool> Inplace("i", cl::desc("Inplace edit <file>s"),
-                             cl::cat(cl::getGeneralCategory()),
-                             cl::sub(cl::SubCommand::getAll()));
+static void
+applyRefactorOpts(const decltype(RefactorOptsReg)::ParsedOptionsT &Parsed,
+                  RefactorOptions &Opts) {
+  Opts.Verbose = Parsed.get<&OI_Verbose>();
+  Opts.Inplace = Parsed.get<&OI_Inplace>();
+}
+
+// clang-refactor's main() delegates the parse to CommonOptionsParser::create(),
+// so the parsed values must be written into a main()-owned struct via a
+// post-parse callback rather than read back directly after P.parse().
+static void configureParser(llvm::clv2::OptionParser &P,
+                            RefactorOptions &Opts) {
+  using ParsedT = decltype(RefactorOptsReg)::ParsedOptionsT;
+  auto *Storage = new ParsedT();
+  decltype(RefactorOptsReg)::applyDefaultsTo(*Storage);
+  std::vector<llvm::clv2::detail::OptionEntry> Entries;
+  std::vector<llvm::clv2::detail::AliasEntry> Aliases;
+  std::vector<llvm::clv2::detail::SubCommandSpec> SubSpecs;
+  decltype(RefactorOptsReg)::staticBuildInto(*Storage, Entries, Aliases,
+                                             SubSpecs);
+  for (auto &E : Entries)
+    P.addDynamicEntry(std::move(E));
+  llvm::clv2::registerDynamicPostParseCallback(
+      [Storage, &Opts]() { applyRefactorOpts(*Storage, Opts); });
+}
 
 } // end namespace opts
 
@@ -170,20 +200,26 @@ SourceSelectionArgument::fromString(StringRef Value) {
 class RefactoringActionCommandLineOptions {
 public:
   void addStringOption(const RefactoringOption &Option,
-                       std::unique_ptr<cl::opt<std::string>> CLOption) {
-    StringOptions[&Option] = std::move(CLOption);
+                       const std::string &Name) {
+    StringOptions[&Option] = Name;
+    StringValues[Name] = "";
   }
 
-  const cl::opt<std::string> &
-  getStringOption(const RefactoringOption &Opt) const {
-    auto It = StringOptions.find(&Opt);
-    return *It->second;
+  const std::string &getStringValue(const RefactoringOption &Opt) const {
+    auto NameIt = StringOptions.find(&Opt);
+    assert(NameIt != StringOptions.end() && "Option not registered");
+    auto ValIt = StringValues.find(NameIt->second);
+    assert(ValIt != StringValues.end() && "Option value not found");
+    return ValIt->second;
+  }
+
+  void setValue(const std::string &Name, std::string Value) {
+    StringValues[Name] = std::move(Value);
   }
 
 private:
-  llvm::DenseMap<const RefactoringOption *,
-                 std::unique_ptr<cl::opt<std::string>>>
-      StringOptions;
+  llvm::DenseMap<const RefactoringOption *, std::string> StringOptions;
+  llvm::StringMap<std::string> StringValues;
 };
 
 /// Passes the command-line option values to the options used by a single
@@ -197,9 +233,9 @@ public:
 
   void visit(const RefactoringOption &Opt,
              std::optional<std::string> &Value) override {
-    const cl::opt<std::string> &CLOpt = Options.getStringOption(Opt);
-    if (!CLOpt.getValue().empty()) {
-      Value = CLOpt.getValue();
+    const std::string &Val = Options.getStringValue(Opt);
+    if (!Val.empty()) {
+      Value = Val;
       return;
     }
     Value = std::nullopt;
@@ -216,72 +252,104 @@ private:
   const RefactoringActionCommandLineOptions &Options;
 };
 
+namespace {
+/// Context for a refactoring option's callback: which options object to write
+/// to, and under which name.  Held in a deque so addresses stay stable — the
+/// parser keeps a pointer to the RuntimeOption inside.
+struct RefactorOptState {
+  RefactoringActionCommandLineOptions *Opts = nullptr;
+  std::string Name;
+  std::optional<llvm::clv2::RuntimeOption<std::string>> Opt;
+};
+} // namespace
+static std::deque<RefactorOptState> RefactorOptStates;
+
+static bool setRefactorOptionValue(void *Ctx, const std::string &V) {
+  auto *S = static_cast<RefactorOptState *>(Ctx);
+  S->Opts->setValue(S->Name, V);
+  return true;
+}
+
 /// Creates the refactoring options used by all the rules in a single
 /// refactoring action.
 class CommandLineRefactoringOptionCreator final
     : public RefactoringOptionVisitor {
 public:
   CommandLineRefactoringOptionCreator(
-      cl::OptionCategory &Category, cl::SubCommand &Subcommand,
+      llvm::clv2::RuntimeSubCommandEntry &Sub,
       RefactoringActionCommandLineOptions &Options)
-      : Category(Category), Subcommand(Subcommand), Options(Options) {}
+      : Sub(Sub), Options(Options) {}
 
   void visit(const RefactoringOption &Opt,
              std::optional<std::string> &) override {
-    if (Visited.insert(&Opt).second)
-      Options.addStringOption(Opt, create<std::string>(Opt));
+    if (Visited.insert(&Opt).second) {
+      if (!OptionNames.insert(Opt.getName()).second)
+        llvm::report_fatal_error("Multiple identical refactoring options "
+                                 "specified for one refactoring action");
+      std::string Name = Opt.getName().str();
+      Options.addStringOption(Opt, Name);
+      // The option name only exists at runtime, so the descriptor is built
+      // here; RuntimeOption is immovable, hence emplace-then-fill.
+      RefactorOptStates.emplace_back();
+      RefactorOptState &St = RefactorOptStates.back();
+      St.Opts = &Options;
+      St.Name = Name;
+      St.Opt.emplace(
+          Name, Opt.getDescription(),
+          llvm::clv2::CtxCallback<std::string>{&setRefactorOptionValue, &St});
+      Sub.Options.push_back(St.Opt->makeEntry());
+    }
   }
 
 private:
-  template <typename T>
-  std::unique_ptr<cl::opt<T>> create(const RefactoringOption &Opt) {
-    if (!OptionNames.insert(Opt.getName()).second)
-      llvm::report_fatal_error("Multiple identical refactoring options "
-                               "specified for one refactoring action");
-    // FIXME: cl::Required can be specified when this option is present
-    // in all rules in an action.
-    return std::make_unique<cl::opt<T>>(
-        Opt.getName(), cl::desc(Opt.getDescription()), cl::Optional,
-        cl::cat(Category), cl::sub(Subcommand));
-  }
-
   llvm::SmallPtrSet<const RefactoringOption *, 8> Visited;
   llvm::StringSet<> OptionNames;
-  cl::OptionCategory &Category;
-  cl::SubCommand &Subcommand;
+  llvm::clv2::RuntimeSubCommandEntry &Sub;
   RefactoringActionCommandLineOptions &Options;
 };
 
+static constexpr llvm::clv2::OptionInfo<std::string> OI_Selection{
+    "selection", "The selected source range in which the refactoring should "
+                 "be initiated (<file>:<line>:<column>-<line>:<column> or "
+                 "<file>:<line>:<column>)"};
+
 /// A subcommand that corresponds to individual refactoring action.
-class RefactoringActionSubcommand : public cl::SubCommand {
+class RefactoringActionSubcommand {
 public:
   RefactoringActionSubcommand(std::unique_ptr<RefactoringAction> Action,
-                              RefactoringActionRules ActionRules,
-                              cl::OptionCategory &Category)
-      : SubCommand(Action->getCommand(), Action->getDescription()),
-        Action(std::move(Action)), ActionRules(std::move(ActionRules)) {
+                              RefactoringActionRules ActionRules)
+      : Action(std::move(Action)), ActionRules(std::move(ActionRules)) {
+
+    llvm::clv2::RuntimeSubCommandEntry Sub;
+    Sub.Name = this->Action->getCommand();
+    Sub.Desc = this->Action->getDescription();
+
     // Check if the selection option is supported.
     for (const auto &Rule : this->ActionRules) {
       if (Rule->hasSelectionRequirement()) {
-        Selection = std::make_unique<cl::opt<std::string>>(
-            "selection",
-            cl::desc(
-                "The selected source range in which the refactoring should "
-                "be initiated (<file>:<line>:<column>-<line>:<column> or "
-                "<file>:<line>:<column>)"),
-            cl::cat(Category), cl::sub(*this));
+        HasSelection = true;
+        Sub.Options.push_back(llvm::clv2::makeEntry<&OI_Selection>(
+            SelectionValue, SelectionCount));
         break;
       }
     }
     // Create the refactoring options.
     for (const auto &Rule : this->ActionRules) {
-      CommandLineRefactoringOptionCreator OptionCreator(Category, *this,
-                                                        Options);
+      CommandLineRefactoringOptionCreator OptionCreator(Sub, Options);
       Rule->visitRefactoringOptions(OptionCreator);
     }
+
+    llvm::clv2::registerRuntimeSubcommand(std::move(Sub));
   }
 
-  ~RefactoringActionSubcommand() { unregisterSubCommand(); }
+  /// Whether this subcommand was the one named on the command line for the
+  /// given parse.  Asks the parse's context rather than a process-wide flag,
+  /// so concurrent parses can select different subcommands.
+  bool isActivated(const llvm::clv2::OptionsContext &Ctx) const {
+    return Ctx.getActiveSubCommand() == getName();
+  }
+
+  StringRef getName() const { return Action->getCommand(); }
 
   const RefactoringActionRules &getActionRules() const { return ActionRules; }
 
@@ -289,8 +357,8 @@ public:
   ///
   /// \returns true on error, false otherwise.
   bool parseSelectionArgument() {
-    if (Selection) {
-      ParsedSelection = SourceSelectionArgument::fromString(*Selection);
+    if (HasSelection && !SelectionValue.empty()) {
+      ParsedSelection = SourceSelectionArgument::fromString(SelectionValue);
       if (!ParsedSelection)
         return true;
     }
@@ -298,7 +366,7 @@ public:
   }
 
   SourceSelectionArgument *getSelection() const {
-    assert(Selection && "selection not supported!");
+    assert(HasSelection && "selection not supported!");
     return ParsedSelection.get();
   }
 
@@ -309,7 +377,9 @@ public:
 private:
   std::unique_ptr<RefactoringAction> Action;
   RefactoringActionRules ActionRules;
-  std::unique_ptr<cl::opt<std::string>> Selection;
+  bool HasSelection = false;
+  std::string SelectionValue;
+  unsigned SelectionCount = 0;
   std::unique_ptr<SourceSelectionArgument> ParsedSelection;
   RefactoringActionCommandLineOptions Options;
 };
@@ -345,8 +415,8 @@ private:
 
 class ClangRefactorTool {
 public:
-  ClangRefactorTool()
-      : SelectedSubcommand(nullptr), MatchingRule(nullptr),
+  ClangRefactorTool(const opts::RefactorOptions &Opts)
+      : Opts(Opts), SelectedSubcommand(nullptr), MatchingRule(nullptr),
         Consumer(new ClangRefactorConsumer(Changes)), HasFailed(false) {
     std::vector<std::unique_ptr<RefactoringAction>> Actions =
         createRefactoringActions();
@@ -365,15 +435,14 @@ public:
     // Create subcommands and command-line options.
     for (auto &Action : Actions) {
       SubCommands.push_back(std::make_unique<RefactoringActionSubcommand>(
-          std::move(Action), Action->createActiveActionRules(),
-          opts::CommonRefactorOptions));
+          std::move(Action), Action->createActiveActionRules()));
     }
   }
 
   // Initializes the selected subcommand and refactoring rule based on the
   // command line options.
-  llvm::Error Init() {
-    auto Subcommand = getSelectedSubcommand();
+  llvm::Error Init(const llvm::clv2::OptionsContext &Ctx) {
+    auto Subcommand = getSelectedSubcommand(Ctx);
     if (!Subcommand)
       return Subcommand.takeError();
     auto Rule = getMatchingRule(**Subcommand);
@@ -407,14 +476,14 @@ public:
     ActiveConsumer->beginTU(AST);
 
     auto InvokeRule = [&](RefactoringResultConsumer &Consumer) {
-      if (opts::Verbose)
+      if (Opts.Verbose)
         logInvocation(*SelectedSubcommand, Context);
       MatchingRule->invoke(*ActiveConsumer, Context);
     };
     if (HasSelection) {
       assert(SelectedSubcommand->getSelection() &&
              "Missing selection argument?");
-      if (opts::Verbose)
+      if (Opts.Verbose)
         SelectedSubcommand->getSelection()->print(llvm::outs());
       if (SelectedSubcommand->getSelection()->forAllRanges(
               Context.getSources(), [&](SourceRange R) {
@@ -500,7 +569,7 @@ public:
         return true;
       }
 
-      if (opts::Inplace) {
+      if (Opts.Inplace) {
         std::error_code EC;
         llvm::raw_fd_ostream OS(File, EC, llvm::sys::fs::OF_TextWithCRLF);
         if (EC) {
@@ -578,11 +647,12 @@ private:
   // subcommands must have a unique names. This allows us to figure out which
   // refactoring action should be invoked by looking at the first subcommand
   // that's enabled by LLVM's command-line parser.
-  llvm::Expected<RefactoringActionSubcommand *> getSelectedSubcommand() {
+  llvm::Expected<RefactoringActionSubcommand *>
+  getSelectedSubcommand(const llvm::clv2::OptionsContext &Ctx) {
     auto It = llvm::find_if(
         SubCommands,
-        [](const std::unique_ptr<RefactoringActionSubcommand> &SubCommand) {
-          return !!(*SubCommand);
+        [&Ctx](const std::unique_ptr<RefactoringActionSubcommand> &SubCommand) {
+          return SubCommand->isActivated(Ctx);
         });
     if (It == SubCommands.end()) {
       std::string Error;
@@ -598,6 +668,7 @@ private:
     return Subcommand;
   }
 
+  const opts::RefactorOptions &Opts;
   std::vector<std::unique_ptr<RefactoringActionSubcommand>> SubCommands;
   RefactoringActionSubcommand *SelectedSubcommand;
   RefactoringActionRule *MatchingRule;
@@ -611,10 +682,31 @@ private:
 int main(int argc, const char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
 
-  ClangRefactorTool RefactorTool;
+  opts::RefactorOptions Opts;
+  ClangRefactorTool RefactorTool(Opts);
 
   auto ExpectedParser = CommonOptionsParser::create(
-      argc, argv, cl::getGeneralCategory(), cl::ZeroOrMore,
+      argc, argv, cl::getGeneralCategory(),
+      [&Opts](llvm::clv2::OptionParser &P) {
+        opts::configureParser(P, Opts);
+        P.showOptions({
+            "cfg-hide-cold-paths",
+            "cfg-hide-deoptimize-paths",
+            "cfg-hide-unreachable-paths",
+            "disable-auto-upgrade-debug-info",
+            "disable-i2p-p2i-opt",
+            "dot-cfg-mssa",
+            "elide-all-zero-branch-weights",
+            "enable-name-compression",
+            "enable-vtable-profile-use",
+            "enable-vtable-value-profiling",
+            "generate-merged-base-profiles",
+            "object-size-offset-visitor-max-visit-instructions",
+            "i",
+            "v",
+        });
+      },
+      cl::ZeroOrMore,
       "Clang-based refactoring tool for C, C++ and Objective-C");
   if (!ExpectedParser) {
     llvm::errs() << llvm::toString(ExpectedParser.takeError());
@@ -622,7 +714,7 @@ int main(int argc, const char **argv) {
   }
   CommonOptionsParser &Options = ExpectedParser.get();
 
-  if (auto Err = RefactorTool.Init()) {
+  if (auto Err = RefactorTool.Init(Options.getOptionsContext())) {
     llvm::errs() << llvm::toString(std::move(Err)) << "\n";
     return 1;
   }

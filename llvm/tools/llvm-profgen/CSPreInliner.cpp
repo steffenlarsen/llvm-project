@@ -7,18 +7,59 @@
 //===----------------------------------------------------------------------===//
 
 #include "CSPreInliner.h"
+#include "Options.h"
 #include "ProfiledBinary.h"
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/DebugInfo/Symbolize/SymbolizableModule.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/IPO/IPOOptionsOptInfos.h"
 #include "llvm/Transforms/IPO/SampleProfile.h"
 #include <cstdint>
 #include <queue>
+
+#include "llvm/Support/CommandLineCompat.h"
 
 #define DEBUG_TYPE "cs-preinliner"
 
 using namespace llvm;
 using namespace sampleprof;
+
+static int getPreInlinerHotCallSiteThreshold(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::IPOOptsReg>(Ctx))
+    if (O->specified<&clv2::IPO_SampleHotCallSiteThreshold>())
+      return O->get<&clv2::IPO_SampleHotCallSiteThreshold>();
+  return 1500;
+}
+
+static int getPreInlinerColdCallSiteThreshold(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::IPOOptsReg>(Ctx))
+    if (O->specified<&clv2::IPO_SampleColdCallSiteThreshold>())
+      return O->get<&clv2::IPO_SampleColdCallSiteThreshold>();
+  return 0;
+}
+
+static int getPreInlinerProfileInlineLimitMax(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::IPOOptsReg>(Ctx))
+    if (O->specified<&clv2::IPO_ProfileInlineLimitMax>())
+      return O->get<&clv2::IPO_ProfileInlineLimitMax>();
+  return 50000;
+}
+
+static int
+getPreInlinerProfileInlineGrowthLimit(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::IPOOptsReg>(Ctx))
+    if (O->specified<&clv2::IPO_ProfileInlineGrowthLimit>())
+      return O->get<&clv2::IPO_ProfileInlineGrowthLimit>();
+  return 12;
+}
+
+static int getPreInlinerProfileInlineLimitMin(const clv2::OptionsContext &Ctx) {
+  if (auto *O = clv2::getView<&clv2::IPOOptsReg>(Ctx))
+    if (O->specified<&clv2::IPO_ProfileInlineLimitMin>())
+      return O->get<&clv2::IPO_ProfileInlineLimitMin>();
+  return 100;
+}
 
 STATISTIC(PreInlNumCSInlined,
           "Number of functions inlined with context sensitive profile");
@@ -35,43 +76,17 @@ STATISTIC(
 // The switches specify inline thresholds used in SampleProfileLoader inlining.
 // TODO: the actual threshold to be tuned here because the size here is based
 // on machine code not LLVM IR.
-namespace llvm {
-cl::opt<bool> EnableCSPreInliner(
-    "csspgo-preinliner", cl::Hidden, cl::init(true),
-    cl::desc("Run a global pre-inliner to merge context profile based on "
-             "estimated global top-down inline decisions"));
-
-cl::opt<bool> UseContextCostForPreInliner(
-    "use-context-cost-for-preinliner", cl::Hidden, cl::init(true),
-    cl::desc("Use context-sensitive byte size cost for preinliner decisions"));
-} // namespace llvm
-
-static cl::opt<bool> SamplePreInlineReplay(
-    "csspgo-replay-preinline", cl::Hidden, cl::init(false),
-    cl::desc(
-        "Replay previous inlining and adjust context profile accordingly"));
-
-static cl::opt<int> CSPreinlMultiplierForPrevInl(
-    "csspgo-preinliner-multiplier-for-previous-inlining", cl::Hidden,
-    cl::init(100),
-    cl::desc(
-        "Multiplier to bump up callsite threshold for previous inlining."));
-
 CSPreInliner::CSPreInliner(SampleContextTracker &Tracker,
-                           ProfiledBinary &Binary, ProfileSummary *Summary)
-    : UseContextCost(UseContextCostForPreInliner),
+                           ProfiledBinary &Binary, ProfileSummary *Summary,
+                           const ProfGenConfig &Config)
+    : UseContextCost(Config.UseContextCostForPreInliner),
       // TODO: Pass in a guid-to-name map in order for
       // ContextTracker.getFuncNameFor to work, if `Profiles` can have md5 codes
       // as their profile context.
-      ContextTracker(Tracker), Binary(Binary), Summary(Summary) {
-  // Set default preinliner hot/cold call site threshold tuned with CSSPGO.
-  // for good performance with reasonable profile size.
-  if (!SampleHotCallSiteThreshold.getNumOccurrences())
-    SampleHotCallSiteThreshold = 1500;
-  if (!SampleColdCallSiteThreshold.getNumOccurrences())
-    SampleColdCallSiteThreshold = 0;
-  if (!ProfileInlineLimitMax.getNumOccurrences())
-    ProfileInlineLimitMax = 50000;
+      ContextTracker(Tracker), Binary(Binary), Summary(Summary),
+      Config(Config) {
+  // Pre-inliner defaults are now baked into the getPreInliner*() helpers above,
+  // so no global mutation is needed.
 }
 
 std::vector<FunctionId> CSPreInliner::buildTopDownOrder() {
@@ -80,7 +95,7 @@ std::vector<FunctionId> CSPreInliner::buildTopDownOrder() {
   // stable top-down order which in turns helps the stablity of the generated
   // profile from run to run.
   uint64_t ColdCountThreshold = ProfileSummaryBuilder::getColdCountThreshold(
-      (Summary->getDetailedSummary()));
+      (Summary->getDetailedSummary()), *Config.OptsCtx);
   ProfiledCallGraph ProfiledCG(ContextTracker, ColdCountThreshold);
 
   // Now that we have a profiled call graph, construct top-down order
@@ -88,7 +103,7 @@ std::vector<FunctionId> CSPreInliner::buildTopDownOrder() {
   scc_iterator<ProfiledCallGraph *> I = scc_begin(&ProfiledCG);
   while (!I.isAtEnd()) {
     auto Range = *I;
-    if (SortProfiledSCC) {
+    if (getSortProfiledSCC(*Config.OptsCtx)) {
       // Sort nodes in one SCC based on callsite hotness.
       scc_member_iterator<ProfiledCallGraph *> SI(*I);
       Range = *SI;
@@ -156,15 +171,16 @@ bool CSPreInliner::shouldInline(ProfiledInlineCandidate &Candidate) {
       Candidate.CalleeSamples->getContext().hasAttribute(ContextWasInlined);
   // If replay inline is requested, simply follow the inline decision of the
   // profiled binary.
-  if (SamplePreInlineReplay)
+  if (Config.SamplePreInlineReplay)
     return WasInlined;
 
-  unsigned int SampleThreshold = SampleColdCallSiteThreshold;
+  unsigned int SampleThreshold =
+      getPreInlinerColdCallSiteThreshold(*Config.OptsCtx);
   uint64_t ColdCountThreshold = ProfileSummaryBuilder::getColdCountThreshold(
-      (Summary->getDetailedSummary()));
+      (Summary->getDetailedSummary()), *Config.OptsCtx);
 
   if (Candidate.CallsiteCount <= ColdCountThreshold)
-    SampleThreshold = SampleColdCallSiteThreshold;
+    SampleThreshold = getPreInlinerColdCallSiteThreshold(*Config.OptsCtx);
   else {
     // Linearly adjust threshold based on normalized hotness, i.e, a value in
     // [0,1]. Use 10% cutoff instead of the max count as the normalization
@@ -182,14 +198,15 @@ bool CSPreInliner::shouldInline(ProfiledInlineCandidate &Candidate) {
     // Add 1 to ensure hot callsites get a non-zero threshold, which could
     // happen when SampleColdCallSiteThreshold is 0. This is when we do not
     // want any inlining for cold callsites.
-    SampleThreshold = SampleHotCallSiteThreshold * NormalizedHotness * 100 +
-                      SampleColdCallSiteThreshold + 1;
+    SampleThreshold = getPreInlinerHotCallSiteThreshold(*Config.OptsCtx) *
+                          NormalizedHotness * 100 +
+                      getPreInlinerColdCallSiteThreshold(*Config.OptsCtx) + 1;
     // Bump up the threshold to favor previous compiler inline decision. The
     // compiler has more insight and knowledge about functions based on their IR
     // and attribures and should be able to make a more reasonable inline
     // decision.
     if (WasInlined)
-      SampleThreshold *= CSPreinlMultiplierForPrevInl;
+      SampleThreshold *= Config.CSPreinlMultiplierForPrevInl;
   }
 
   return (Candidate.SizeCost < SampleThreshold);
@@ -203,9 +220,12 @@ void CSPreInliner::processFunction(const FunctionId Name) {
   unsigned FuncSize =
       getFuncSize(ContextTracker.getContextNodeForProfile(FSamples));
   unsigned FuncFinalSize = FuncSize;
-  unsigned SizeLimit = FuncSize * ProfileInlineGrowthLimit;
-  SizeLimit = std::min(SizeLimit, (unsigned)ProfileInlineLimitMax);
-  SizeLimit = std::max(SizeLimit, (unsigned)ProfileInlineLimitMin);
+  unsigned SizeLimit =
+      FuncSize * getPreInlinerProfileInlineGrowthLimit(*Config.OptsCtx);
+  SizeLimit = std::min(
+      SizeLimit, (unsigned)getPreInlinerProfileInlineLimitMax(*Config.OptsCtx));
+  SizeLimit = std::max(
+      SizeLimit, (unsigned)getPreInlinerProfileInlineLimitMin(*Config.OptsCtx));
 
   LLVM_DEBUG(dbgs() << "Process " << Name
                     << " for context-sensitive pre-inlining (pre-inline size: "
@@ -239,9 +259,11 @@ void CSPreInliner::processFunction(const FunctionId Name) {
   }
 
   if (!CQueue.empty()) {
-    if (SizeLimit == (unsigned)ProfileInlineLimitMax)
+    if (SizeLimit ==
+        (unsigned)getPreInlinerProfileInlineLimitMax(*Config.OptsCtx))
       ++PreInlNumCSInlinedHitMaxLimit;
-    else if (SizeLimit == (unsigned)ProfileInlineLimitMin)
+    else if (SizeLimit ==
+             (unsigned)getPreInlinerProfileInlineLimitMin(*Config.OptsCtx))
       ++PreInlNumCSInlinedHitMinLimit;
     else
       ++PreInlNumCSInlinedHitGrowthLimit;

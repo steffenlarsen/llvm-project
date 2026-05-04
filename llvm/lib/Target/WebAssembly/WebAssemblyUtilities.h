@@ -16,7 +16,7 @@
 #define LLVM_LIB_TARGET_WEBASSEMBLY_UTILS_WEBASSEMBLYUTILITIES_H
 
 #include "llvm/CodeGen/SelectionDAGNodes.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 
 namespace llvm {
 

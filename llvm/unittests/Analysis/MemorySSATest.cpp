@@ -33,7 +33,7 @@ class MemorySSATest : public testing::Test {
 protected:
   // N.B. Many of these members depend on each other (e.g. the Module depends on
   // the Context, etc.). So, order matters here (and in TestAnalyses).
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M;
   IRBuilder<> B;
   DataLayout DL;
@@ -285,10 +285,8 @@ TEST_F(MemorySSATest, SinkLoad) {
 
   LoadInst *LoadInstClone = cast<LoadInst>(LoadInst1->clone());
   LoadInstClone->insertInto(Merge, Merge->begin());
-  MemoryAccess * NewLoadAccess =
-      Updater.createMemoryAccessInBB(LoadInstClone, nullptr,
-                                     LoadInstClone->getParent(),
-                                     MemorySSA::Beginning);
+  MemoryAccess *NewLoadAccess = Updater.createMemoryAccessInBB(
+      LoadInstClone, nullptr, LoadInstClone->getParent(), MemorySSA::Beginning);
   Updater.insertUse(cast<MemoryUse>(NewLoadAccess));
   MSSA.verifyMemorySSA();
   Updater.removeMemoryAccess(MSSA.getMemoryAccess(LoadInst1));
@@ -1786,7 +1784,7 @@ TEST_F(MemorySSATest, TestNoDbgInsts) {
       !9 = !DISubroutineType(types: !2)
       !10 = !DILocation(line: 24, column: 7, scope: !7)
     )",
-    E, C);
+                               E, C);
   ASSERT_TRUE(M);
   F = M->getFunction("test");
   ASSERT_TRUE(F);

@@ -18,7 +18,7 @@
 #include "clang/Tooling/Tooling.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Twine.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/Format.h"
@@ -872,7 +872,6 @@ int clang_scan_deps_main(int argc, char **argv, const llvm::ToolContext &) {
     return 1;
   }
 
-  llvm::cl::PrintOptionValues();
 
   if (!VerbatimArgs) {
     // Expand response files in advance, so that we can "see" all the arguments

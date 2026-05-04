@@ -25,45 +25,58 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/GlobalVariable.h"
-#include "llvm/IR/Instruction.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/TypeFinder.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 
 using namespace llvm;
 
-static cl::opt<std::string> RenameExcludeFunctionPrefixes(
-    "rename-exclude-function-prefixes",
-    cl::desc("Prefixes for functions that don't need to be renamed, separated "
-             "by a comma"),
-    cl::Hidden);
+static const std::string &getRenameExcludeFunctionPrefixes(const Module &M) {
+  if (auto *O = clv2::getView<&clv2::TransformUtilsOptsReg>(
+          M.getContext().getOptionsContext()))
+    if (O->specified<&clv2::TU_RenameExcludeFunctionPrefixes>())
+      return O->get<&clv2::TU_RenameExcludeFunctionPrefixes>();
+  static const std::string Default;
+  return Default;
+}
 
-static cl::opt<std::string> RenameExcludeAliasPrefixes(
-    "rename-exclude-alias-prefixes",
-    cl::desc("Prefixes for aliases that don't need to be renamed, separated "
-             "by a comma"),
-    cl::Hidden);
+static const std::string &getRenameExcludeAliasPrefixes(const Module &M) {
+  if (auto *O = clv2::getView<&clv2::TransformUtilsOptsReg>(
+          M.getContext().getOptionsContext()))
+    if (O->specified<&clv2::TU_RenameExcludeAliasPrefixes>())
+      return O->get<&clv2::TU_RenameExcludeAliasPrefixes>();
+  static const std::string Default;
+  return Default;
+}
 
-static cl::opt<std::string> RenameExcludeGlobalPrefixes(
-    "rename-exclude-global-prefixes",
-    cl::desc(
-        "Prefixes for global values that don't need to be renamed, separated "
-        "by a comma"),
-    cl::Hidden);
+static const std::string &getRenameExcludeGlobalPrefixes(const Module &M) {
+  if (auto *O = clv2::getView<&clv2::TransformUtilsOptsReg>(
+          M.getContext().getOptionsContext()))
+    if (O->specified<&clv2::TU_RenameExcludeGlobalPrefixes>())
+      return O->get<&clv2::TU_RenameExcludeGlobalPrefixes>();
+  static const std::string Default;
+  return Default;
+}
 
-static cl::opt<std::string> RenameExcludeStructPrefixes(
-    "rename-exclude-struct-prefixes",
-    cl::desc("Prefixes for structs that don't need to be renamed, separated "
-             "by a comma"),
-    cl::Hidden);
+static const std::string &getRenameExcludeStructPrefixes(const Module &M) {
+  if (auto *O = clv2::getView<&clv2::TransformUtilsOptsReg>(
+          M.getContext().getOptionsContext()))
+    if (O->specified<&clv2::TU_RenameExcludeStructPrefixes>())
+      return O->get<&clv2::TU_RenameExcludeStructPrefixes>();
+  static const std::string Default;
+  return Default;
+}
 
-static cl::opt<bool>
-    RenameOnlyInst("rename-only-inst", cl::init(false),
-                   cl::desc("only rename the instructions in the function"),
-                   cl::Hidden);
+static bool getRenameOnlyInst(const Module &M) {
+  return clv2::getOptValIfSpecified<&clv2::TransformUtilsOptsReg,
+                                    &clv2::TU_RenameOnlyInst>(
+      M.getContext().getOptionsContext(), false);
+}
 
 static const char *const metaNames[] = {
   // See http://en.wikipedia.org/wiki/Metasyntactic_variable
@@ -143,10 +156,14 @@ void MetaRename(Module &M,
   SmallVector<StringRef, 8> ExcludedGlobalsPrefixes;
   SmallVector<StringRef, 8> ExcludedStructsPrefixes;
   SmallVector<StringRef, 8> ExcludedFuncPrefixes;
-  parseExcludedPrefixes(RenameExcludeAliasPrefixes, ExcludedAliasesPrefixes);
-  parseExcludedPrefixes(RenameExcludeGlobalPrefixes, ExcludedGlobalsPrefixes);
-  parseExcludedPrefixes(RenameExcludeStructPrefixes, ExcludedStructsPrefixes);
-  parseExcludedPrefixes(RenameExcludeFunctionPrefixes, ExcludedFuncPrefixes);
+  parseExcludedPrefixes(getRenameExcludeAliasPrefixes(M),
+                        ExcludedAliasesPrefixes);
+  parseExcludedPrefixes(getRenameExcludeGlobalPrefixes(M),
+                        ExcludedGlobalsPrefixes);
+  parseExcludedPrefixes(getRenameExcludeStructPrefixes(M),
+                        ExcludedStructsPrefixes);
+  parseExcludedPrefixes(getRenameExcludeFunctionPrefixes(M),
+                        ExcludedFuncPrefixes);
 
   auto IsNameExcluded = [](StringRef &Name,
                            SmallVectorImpl<StringRef> &ExcludedPrefixes) {
@@ -163,7 +180,7 @@ void MetaRename(Module &M,
            IsNameExcluded(Name, ExcludedFuncPrefixes);
   };
 
-  if (RenameOnlyInst) {
+  if (getRenameOnlyInst(M)) {
     // Rename all functions
     for (auto &F : M) {
       if (ExcludeLibFuncs(F))

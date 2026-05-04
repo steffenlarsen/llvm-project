@@ -32,6 +32,7 @@
 #include "llvm/CodeGen/Analysis.h"
 #include "llvm/CodeGen/AssignmentTrackingAnalysis.h"
 #include "llvm/CodeGen/CodeGenCommonISel.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/FunctionLoweringInfo.h"
 #include "llvm/CodeGen/GCMetadata.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
@@ -92,11 +93,12 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/InstructionCost.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
@@ -115,25 +117,18 @@ using namespace SwitchCG;
 
 /// LimitFloatPrecision - Generate low-precision inline sequences for
 /// some float libcalls (6, 8 or 12 bits).
-static unsigned LimitFloatPrecision;
 
-static cl::opt<bool>
-    InsertAssertAlign("insert-assert-align", cl::init(true),
-                      cl::desc("Insert the experimental `assertalign` node."),
-                      cl::ReallyHidden);
+static bool getInsertAssertAlign(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_InsertAssertAlign>(Ctx);
+}
 
-static cl::opt<unsigned, true>
-    LimitFPPrecision("limit-float-precision",
-                     cl::desc("Generate low-precision inline sequences "
-                              "for some float libcalls"),
-                     cl::location(LimitFloatPrecision), cl::Hidden,
-                     cl::init(0));
+static unsigned getLimitFloatPrecision(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_LimitFloatPrecision>(Ctx);
+}
 
-static cl::opt<unsigned> SwitchPeelThreshold(
-    "switch-peel-threshold", cl::Hidden, cl::init(66),
-    cl::desc("Set the case probability threshold for peeling the case from a "
-             "switch statement. A value greater than 100 will void this "
-             "optimization"));
+static unsigned getSwitchPeelThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_SwitchPeelThreshold>(Ctx);
+}
 
 // Limit the width of DAG chains. This is important in general to prevent
 // DAG-based analysis from blowing up. For example, alias analysis and
@@ -5547,7 +5542,12 @@ SDValue SelectionDAGBuilder::handleTargetIntrinsicRet(const CallBase &I,
   if (I.getType()->isVoidTy())
     return Result;
 
-  if (MaybeAlign Alignment = I.getRetAlign(); InsertAssertAlign && Alignment) {
+  if (MaybeAlign Alignment = I.getRetAlign();
+      getInsertAssertAlign(DAG.getMachineFunction()
+                               .getFunction()
+                               .getContext()
+                               .getOptionsContext()) &&
+      Alignment) {
     // Insert `assertalign` node if there's an alignment.
     Result = DAG.getAssertAlign(getCurSDLoc(), Result, Alignment.valueOrOne());
   } else if (!isa<VectorType>(I.getType())) {
@@ -5690,7 +5690,10 @@ static SDValue getLimitedPrecisionExp2(SDValue t0, const SDLoc &dl,
                                DAG.getShiftAmountConstant(23, MVT::i32, dl));
 
   SDValue TwoToFractionalPartOfX;
-  if (LimitFloatPrecision <= 6) {
+  if (getLimitFloatPrecision(DAG.getMachineFunction()
+                                 .getFunction()
+                                 .getContext()
+                                 .getOptionsContext()) <= 6) {
     // For floating-point precision of 6:
     //
     //   TwoToFractionalPartOfX =
@@ -5705,7 +5708,10 @@ static SDValue getLimitedPrecisionExp2(SDValue t0, const SDLoc &dl,
     SDValue t4 = DAG.getNode(ISD::FMUL, dl, MVT::f32, t3, X);
     TwoToFractionalPartOfX = DAG.getNode(ISD::FADD, dl, MVT::f32, t4,
                                          getF32Constant(DAG, 0x3f7f5e7e, dl));
-  } else if (LimitFloatPrecision <= 12) {
+  } else if (getLimitFloatPrecision(DAG.getMachineFunction()
+                                        .getFunction()
+                                        .getContext()
+                                        .getOptionsContext()) <= 12) {
     // For floating-point precision of 12:
     //
     //   TwoToFractionalPartOfX =
@@ -5767,7 +5773,14 @@ static SDValue getLimitedPrecisionExp2(SDValue t0, const SDLoc &dl,
 static SDValue expandExp(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
                          const TargetLowering &TLI, SDNodeFlags Flags) {
   if (Op.getValueType() == MVT::f32 &&
-      LimitFloatPrecision > 0 && LimitFloatPrecision <= 18) {
+      getLimitFloatPrecision(DAG.getMachineFunction()
+                                 .getFunction()
+                                 .getContext()
+                                 .getOptionsContext()) > 0 &&
+      getLimitFloatPrecision(DAG.getMachineFunction()
+                                 .getFunction()
+                                 .getContext()
+                                 .getOptionsContext()) <= 18) {
 
     // Put the exponent in the right bit position for later addition to the
     // final result:
@@ -5791,7 +5804,14 @@ static SDValue expandLog(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
   // TODO: What fast-math-flags should be set on the floating-point nodes?
 
   if (Op.getValueType() == MVT::f32 &&
-      LimitFloatPrecision > 0 && LimitFloatPrecision <= 18) {
+      getLimitFloatPrecision(DAG.getMachineFunction()
+                                 .getFunction()
+                                 .getContext()
+                                 .getOptionsContext()) > 0 &&
+      getLimitFloatPrecision(DAG.getMachineFunction()
+                                 .getFunction()
+                                 .getContext()
+                                 .getOptionsContext()) <= 18) {
     SDValue Op1 = DAG.getNode(ISD::BITCAST, dl, MVT::i32, Op);
 
     // Scale the exponent by log(2).
@@ -5805,7 +5825,10 @@ static SDValue expandLog(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
     SDValue X = GetSignificand(DAG, Op1, dl);
 
     SDValue LogOfMantissa;
-    if (LimitFloatPrecision <= 6) {
+    if (getLimitFloatPrecision(DAG.getMachineFunction()
+                                   .getFunction()
+                                   .getContext()
+                                   .getOptionsContext()) <= 6) {
       // For floating-point precision of 6:
       //
       //   LogofMantissa =
@@ -5820,7 +5843,10 @@ static SDValue expandLog(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
       SDValue t2 = DAG.getNode(ISD::FMUL, dl, MVT::f32, t1, X);
       LogOfMantissa = DAG.getNode(ISD::FSUB, dl, MVT::f32, t2,
                                   getF32Constant(DAG, 0x3f949a29, dl));
-    } else if (LimitFloatPrecision <= 12) {
+    } else if (getLimitFloatPrecision(DAG.getMachineFunction()
+                                          .getFunction()
+                                          .getContext()
+                                          .getOptionsContext()) <= 12) {
       // For floating-point precision of 12:
       //
       //   LogOfMantissa =
@@ -5890,7 +5916,14 @@ static SDValue expandLog2(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
   // TODO: What fast-math-flags should be set on the floating-point nodes?
 
   if (Op.getValueType() == MVT::f32 &&
-      LimitFloatPrecision > 0 && LimitFloatPrecision <= 18) {
+      getLimitFloatPrecision(DAG.getMachineFunction()
+                                 .getFunction()
+                                 .getContext()
+                                 .getOptionsContext()) > 0 &&
+      getLimitFloatPrecision(DAG.getMachineFunction()
+                                 .getFunction()
+                                 .getContext()
+                                 .getOptionsContext()) <= 18) {
     SDValue Op1 = DAG.getNode(ISD::BITCAST, dl, MVT::i32, Op);
 
     // Get the exponent.
@@ -5903,7 +5936,10 @@ static SDValue expandLog2(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
     // Different possible minimax approximations of significand in
     // floating-point for various degrees of accuracy over [1,2].
     SDValue Log2ofMantissa;
-    if (LimitFloatPrecision <= 6) {
+    if (getLimitFloatPrecision(DAG.getMachineFunction()
+                                   .getFunction()
+                                   .getContext()
+                                   .getOptionsContext()) <= 6) {
       // For floating-point precision of 6:
       //
       //   Log2ofMantissa = -1.6749035f + (2.0246817f - .34484768f * x) * x;
@@ -5916,7 +5952,10 @@ static SDValue expandLog2(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
       SDValue t2 = DAG.getNode(ISD::FMUL, dl, MVT::f32, t1, X);
       Log2ofMantissa = DAG.getNode(ISD::FSUB, dl, MVT::f32, t2,
                                    getF32Constant(DAG, 0x3fd6633d, dl));
-    } else if (LimitFloatPrecision <= 12) {
+    } else if (getLimitFloatPrecision(DAG.getMachineFunction()
+                                          .getFunction()
+                                          .getContext()
+                                          .getOptionsContext()) <= 12) {
       // For floating-point precision of 12:
       //
       //   Log2ofMantissa =
@@ -5987,7 +6026,14 @@ static SDValue expandLog10(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
   // TODO: What fast-math-flags should be set on the floating-point nodes?
 
   if (Op.getValueType() == MVT::f32 &&
-      LimitFloatPrecision > 0 && LimitFloatPrecision <= 18) {
+      getLimitFloatPrecision(DAG.getMachineFunction()
+                                 .getFunction()
+                                 .getContext()
+                                 .getOptionsContext()) > 0 &&
+      getLimitFloatPrecision(DAG.getMachineFunction()
+                                 .getFunction()
+                                 .getContext()
+                                 .getOptionsContext()) <= 18) {
     SDValue Op1 = DAG.getNode(ISD::BITCAST, dl, MVT::i32, Op);
 
     // Scale the exponent by log10(2) [0.30102999f].
@@ -6000,7 +6046,10 @@ static SDValue expandLog10(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
     SDValue X = GetSignificand(DAG, Op1, dl);
 
     SDValue Log10ofMantissa;
-    if (LimitFloatPrecision <= 6) {
+    if (getLimitFloatPrecision(DAG.getMachineFunction()
+                                   .getFunction()
+                                   .getContext()
+                                   .getOptionsContext()) <= 6) {
       // For floating-point precision of 6:
       //
       //   Log10ofMantissa =
@@ -6015,7 +6064,10 @@ static SDValue expandLog10(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
       SDValue t2 = DAG.getNode(ISD::FMUL, dl, MVT::f32, t1, X);
       Log10ofMantissa = DAG.getNode(ISD::FSUB, dl, MVT::f32, t2,
                                     getF32Constant(DAG, 0x3f011300, dl));
-    } else if (LimitFloatPrecision <= 12) {
+    } else if (getLimitFloatPrecision(DAG.getMachineFunction()
+                                          .getFunction()
+                                          .getContext()
+                                          .getOptionsContext()) <= 12) {
       // For floating-point precision of 12:
       //
       //   Log10ofMantissa =
@@ -6075,7 +6127,14 @@ static SDValue expandLog10(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
 static SDValue expandExp2(const SDLoc &dl, SDValue Op, SelectionDAG &DAG,
                           const TargetLowering &TLI, SDNodeFlags Flags) {
   if (Op.getValueType() == MVT::f32 &&
-      LimitFloatPrecision > 0 && LimitFloatPrecision <= 18)
+      getLimitFloatPrecision(DAG.getMachineFunction()
+                                 .getFunction()
+                                 .getContext()
+                                 .getOptionsContext()) > 0 &&
+      getLimitFloatPrecision(DAG.getMachineFunction()
+                                 .getFunction()
+                                 .getContext()
+                                 .getOptionsContext()) <= 18)
     return getLimitedPrecisionExp2(Op, dl, DAG);
 
   // No special expansion.
@@ -6089,7 +6148,14 @@ static SDValue expandPow(const SDLoc &dl, SDValue LHS, SDValue RHS,
                          SDNodeFlags Flags) {
   bool IsExp10 = false;
   if (LHS.getValueType() == MVT::f32 && RHS.getValueType() == MVT::f32 &&
-      LimitFloatPrecision > 0 && LimitFloatPrecision <= 18) {
+      getLimitFloatPrecision(DAG.getMachineFunction()
+                                 .getFunction()
+                                 .getContext()
+                                 .getOptionsContext()) > 0 &&
+      getLimitFloatPrecision(DAG.getMachineFunction()
+                                 .getFunction()
+                                 .getContext()
+                                 .getOptionsContext()) <= 18) {
     if (ConstantFPSDNode *LHSC = dyn_cast<ConstantFPSDNode>(LHS)) {
       APFloat Ten(10.0f);
       IsExp10 = LHSC->isExactlyValue(Ten);
@@ -12764,12 +12830,21 @@ MachineBasicBlock *SelectionDAGBuilder::peelDominantCaseCluster(
     BranchProbability &PeeledCaseProb) {
   MachineBasicBlock *SwitchMBB = FuncInfo.MBB;
   // Don't perform if there is only one cluster or optimizing for size.
-  if (SwitchPeelThreshold > 100 || !FuncInfo.BPI || Clusters.size() < 2 ||
+  if (getSwitchPeelThreshold(DAG.getMachineFunction()
+                                 .getFunction()
+                                 .getContext()
+                                 .getOptionsContext()) > 100 ||
+      !FuncInfo.BPI || Clusters.size() < 2 ||
       TM.getOptLevel() == CodeGenOptLevel::None ||
       SwitchMBB->getParent()->getFunction().hasMinSize())
     return SwitchMBB;
 
-  BranchProbability TopCaseProb = BranchProbability(SwitchPeelThreshold, 100);
+  BranchProbability TopCaseProb =
+      BranchProbability(getSwitchPeelThreshold(DAG.getMachineFunction()
+                                                   .getFunction()
+                                                   .getContext()
+                                                   .getOptionsContext()),
+                        100);
   unsigned PeeledCaseIndex = 0;
   bool SwitchPeeled = false;
   for (unsigned Index = 0; Index < Clusters.size(); ++Index) {

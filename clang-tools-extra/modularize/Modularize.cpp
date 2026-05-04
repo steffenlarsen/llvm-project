@@ -227,6 +227,7 @@
 #include "Modularize.h"
 #include "ModularizeUtilities.h"
 #include "PreprocessorTracker.h"
+#include "clang-tools-extra/ClangToolsExtraOptionsOptInfos.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/RecursiveASTVisitor.h"
@@ -242,10 +243,12 @@
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/OptTable.h"
 #include "llvm/Option/Option.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include <algorithm>
 #include <iterator>
 #include <map>
@@ -260,74 +263,73 @@ using namespace llvm;
 using namespace llvm::opt;
 using namespace Modularize;
 
-// Option to specify a file name for a list of header files to check.
-static cl::list<std::string>
-    ListFileNames(cl::Positional, cl::value_desc("list"),
-                  cl::desc("<list of one or more header list files>"),
-                  cl::CommaSeparated);
+struct ModularizeOptions {
+  // Option to specify a file name for a list of header files to check.
+  std::vector<std::string> ListFileNames;
 
-// Collect all other arguments, which will be passed to the front end.
-static cl::list<std::string>
-    CC1Arguments(cl::ConsumeAfter,
-                 cl::desc("<arguments to be passed to front end>..."));
+  // Collect all other arguments, which will be passed to the front end.
+  std::vector<std::string> CC1Arguments;
 
-// Option to specify a prefix to be prepended to the header names.
-static cl::opt<std::string> HeaderPrefix(
-    "prefix", cl::init(""),
-    cl::desc(
-        "Prepend header file paths with this prefix."
-        " If not specified,"
-        " the files are considered to be relative to the header list file."));
+  // Option to specify a prefix to be prepended to the header names.
+  std::string HeaderPrefix;
 
-// Option for assistant mode, telling modularize to output a module map
-// based on the headers list, and where to put it.
-static cl::opt<std::string> ModuleMapPath(
-    "module-map-path", cl::init(""),
-    cl::desc("Turn on module map output and specify output path or file name."
-             " If no path is specified and if prefix option is specified,"
-             " use prefix for file path."));
+  // Option for assistant mode, telling modularize to output a module map
+  // based on the headers list, and where to put it.
+  std::string ModuleMapPath;
 
-// Option to specify list of problem files for assistant.
-// This will cause assistant to exclude these files.
-static cl::opt<std::string> ProblemFilesList(
-  "problem-files-list", cl::init(""),
-  cl::desc(
-  "List of files with compilation or modularization problems for"
-    " assistant mode.  This will be excluded."));
+  // Option to specify list of problem files for assistant.
+  // This will cause assistant to exclude these files.
+  std::string ProblemFilesList;
 
-// Option for assistant mode, telling modularize the name of the root module.
-static cl::opt<std::string>
-RootModule("root-module", cl::init(""),
-           cl::desc("Specify the name of the root module."));
+  // Option for assistant mode, telling modularize the name of the root
+  // module.
+  std::string RootModule;
 
-// Option for limiting the #include-inside-extern-or-namespace-block
-// check to only those headers explicitly listed in the header list.
-// This is a work-around for private includes that purposefully get
-// included inside blocks.
-static cl::opt<bool>
-BlockCheckHeaderListOnly("block-check-header-list-only", cl::init(false),
-cl::desc("Only warn if #include directives are inside extern or namespace"
-  " blocks if the included header is in the header list."));
+  // Option for limiting the #include-inside-extern-or-namespace-block
+  // check to only those headers explicitly listed in the header list.
+  // This is a work-around for private includes that purposefully get
+  // included inside blocks.
+  bool BlockCheckHeaderListOnly = false;
 
-// Option for include paths for coverage check.
-static cl::list<std::string>
-    IncludePaths("I", cl::desc("Include path for coverage check."),
-                 cl::value_desc("path"));
+  // Option for include paths for coverage check.
+  std::vector<std::string> IncludePaths;
 
-// Option for disabling the coverage check.
-static cl::opt<bool> NoCoverageCheck("no-coverage-check",
-                                     cl::desc("Don't do the coverage check."));
+  // Option for disabling the coverage check.
+  bool NoCoverageCheck = false;
 
-// Option for just doing the coverage check.
-static cl::opt<bool>
-CoverageCheckOnly("coverage-check-only", cl::init(false),
-cl::desc("Only do the coverage check."));
+  // Option for just doing the coverage check.
+  bool CoverageCheckOnly = false;
 
-// Option for displaying lists of good, bad, and mixed files.
-static cl::opt<bool>
-DisplayFileLists("display-file-lists", cl::init(false),
-cl::desc("Display lists of good files (no compile errors), problem files,"
-  " and a combined list with problem files preceded by a '#'."));
+  // Option for displaying lists of good, bad, and mixed files.
+  bool DisplayFileLists = false;
+};
+
+inline constexpr clv2::OptionsRegistry<
+    &clv2::CTE_MOD_ListFileNames, &clv2::CTE_MOD_CC1Arguments,
+    &clv2::CTE_MOD_Prefix, &clv2::CTE_MOD_ModuleMapPath,
+    &clv2::CTE_MOD_ProblemFilesList, &clv2::CTE_MOD_RootModule,
+    &clv2::CTE_MOD_BlockCheckHeaderListOnly, &clv2::CTE_MOD_IncludePaths,
+    &clv2::CTE_MOD_NoCoverageCheck, &clv2::CTE_MOD_CoverageCheckOnly,
+    &clv2::CTE_MOD_DisplayFileLists>
+    ModOptsReg;
+
+static void applyModOpts(const decltype(ModOptsReg)::ParsedOptionsT &Opts,
+                         ModularizeOptions &ModOpts) {
+  auto &LFN = Opts.get<&clv2::CTE_MOD_ListFileNames>();
+  ModOpts.ListFileNames.assign(LFN.begin(), LFN.end());
+  auto &CC1 = Opts.get<&clv2::CTE_MOD_CC1Arguments>();
+  ModOpts.CC1Arguments.assign(CC1.begin(), CC1.end());
+  ModOpts.HeaderPrefix = Opts.get<&clv2::CTE_MOD_Prefix>();
+  ModOpts.ModuleMapPath = Opts.get<&clv2::CTE_MOD_ModuleMapPath>();
+  ModOpts.ProblemFilesList = Opts.get<&clv2::CTE_MOD_ProblemFilesList>();
+  ModOpts.RootModule = Opts.get<&clv2::CTE_MOD_RootModule>();
+  ModOpts.BlockCheckHeaderListOnly =
+      Opts.get<&clv2::CTE_MOD_BlockCheckHeaderListOnly>();
+  ModOpts.IncludePaths = Opts.get<&clv2::CTE_MOD_IncludePaths>();
+  ModOpts.NoCoverageCheck = Opts.get<&clv2::CTE_MOD_NoCoverageCheck>();
+  ModOpts.CoverageCheckOnly = Opts.get<&clv2::CTE_MOD_CoverageCheckOnly>();
+  ModOpts.DisplayFileLists = Opts.get<&clv2::CTE_MOD_DisplayFileLists>();
+}
 
 // Save the program name for error messages.
 const char *Argv0;
@@ -803,43 +805,81 @@ int main(int Argc, const char **Argv) {
   }
 
   // This causes options to be parsed.
-  cl::ParseCommandLineOptions(Argc, Argv, "modularize.\n");
+  clv2::OptionParser P;
+  ModularizeOptions ModOpts;
+  {
+    using ParsedT = decltype(ModOptsReg)::ParsedOptionsT;
+    auto *Storage = new ParsedT();
+    decltype(ModOptsReg)::applyDefaultsTo(*Storage);
+    std::vector<clv2::detail::OptionEntry> Entries;
+    std::vector<clv2::detail::AliasEntry> Aliases;
+    std::vector<clv2::detail::SubCommandSpec> SubSpecs;
+    decltype(ModOptsReg)::staticBuildInto(*Storage, Entries, Aliases, SubSpecs);
+    for (auto &E : Entries)
+      P.addDynamicEntry(std::move(E));
+    clv2::registerDynamicPostParseCallback(
+        [Storage, &ModOpts]() { applyModOpts(*Storage, ModOpts); });
+  }
+  RegisterCommonLLVMOptionsHidden(P);
+  P.showOptions({
+      "block-check-header-list-only",
+      "cfg-hide-cold-paths",
+      "cfg-hide-deoptimize-paths",
+      "cfg-hide-unreachable-paths",
+      "coverage-check-only",
+      "disable-auto-upgrade-debug-info",
+      "disable-i2p-p2i-opt",
+      "display-file-lists",
+      "dot-cfg-mssa",
+      "elide-all-zero-branch-weights",
+      "enable-name-compression",
+      "enable-vtable-profile-use",
+      "enable-vtable-value-profiling",
+      "generate-merged-base-profiles",
+      "module-map-path",
+      "no-coverage-check",
+      "object-size-offset-visitor-max-visit-instructions",
+      "prefix",
+      "problem-files-list",
+      "root-module",
+      "I",
+  });
+  P.parse(Argc, Argv, "modularize.\n");
 
   // No go if we have no header list file.
-  if (ListFileNames.size() == 0) {
-    cl::PrintHelpMessage();
+  if (ModOpts.ListFileNames.size() == 0) {
+    P.printHelp(llvm::outs(), "modularize.\n", Argv[0]);
     return 1;
   }
 
   std::unique_ptr<ModularizeUtilities> ModUtil;
   int HadErrors = 0;
 
-  ModUtil.reset(
-    ModularizeUtilities::createModularizeUtilities(
-      ListFileNames, HeaderPrefix, ProblemFilesList));
+  ModUtil.reset(ModularizeUtilities::createModularizeUtilities(
+      ModOpts.ListFileNames, ModOpts.HeaderPrefix, ModOpts.ProblemFilesList));
 
   // Get header file names and dependencies.
   if (ModUtil->loadAllHeaderListsAndDependencies())
     HadErrors = 1;
 
   // If we are in assistant mode, output the module map and quit.
-  if (ModuleMapPath.length() != 0) {
-    if (!createModuleMap(ModuleMapPath, ModUtil->HeaderFileNames,
-                         ModUtil->ProblemFileNames,
-                         ModUtil->Dependencies, HeaderPrefix, RootModule))
+  if (ModOpts.ModuleMapPath.length() != 0) {
+    if (!createModuleMap(ModOpts.ModuleMapPath, ModUtil->HeaderFileNames,
+                         ModUtil->ProblemFileNames, ModUtil->Dependencies,
+                         ModOpts.HeaderPrefix, ModOpts.RootModule))
       return 1; // Failed.
     return 0;   // Success - Skip checks in assistant mode.
   }
 
   // If we're doing module maps.
-  if (!NoCoverageCheck && ModUtil->HasModuleMap) {
+  if (!ModOpts.NoCoverageCheck && ModUtil->HasModuleMap) {
     // Do coverage check.
-    if (ModUtil->doCoverageCheck(IncludePaths, CommandLine))
+    if (ModUtil->doCoverageCheck(ModOpts.IncludePaths, CommandLine))
       HadErrors = 1;
   }
 
   // Bail early if only doing the coverage check.
-  if (CoverageCheckOnly)
+  if (ModOpts.CoverageCheckOnly)
     return HadErrors;
 
   // Create the compilation database.
@@ -847,12 +887,11 @@ int main(int Argc, const char **Argv) {
   sys::fs::current_path(PathBuf);
   std::unique_ptr<CompilationDatabase> Compilations;
   Compilations.reset(
-      new FixedCompilationDatabase(Twine(PathBuf), CC1Arguments));
+      new FixedCompilationDatabase(Twine(PathBuf), ModOpts.CC1Arguments));
 
   // Create preprocessor tracker, to watch for macro and conditional problems.
-  std::unique_ptr<PreprocessorTracker> PPTracker(
-    PreprocessorTracker::create(ModUtil->HeaderFileNames,
-                                BlockCheckHeaderListOnly));
+  std::unique_ptr<PreprocessorTracker> PPTracker(PreprocessorTracker::create(
+      ModUtil->HeaderFileNames, ModOpts.BlockCheckHeaderListOnly));
 
   // Coolect entities here.
   EntityMap Entities;
@@ -861,7 +900,7 @@ int main(int Argc, const char **Argv) {
   // during the tool run, if we're collecting the file lists
   // for display, we do a first compile pass on individual
   // files to find which ones don't compile stand-alone.
-  if (DisplayFileLists) {
+  if (ModOpts.DisplayFileLists) {
     // First, make a pass to just get compile errors.
     for (auto &CompileCheckFile : ModUtil->HeaderFileNames) {
       llvm::SmallVector<std::string, 32> CompileCheckFileArray;
@@ -884,7 +923,8 @@ int main(int Argc, const char **Argv) {
 
   // Then we make another pass on the good files to do the rest of the work.
   ClangTool Tool(*Compilations,
-    (DisplayFileLists ? ModUtil->GoodFileNames : ModUtil->HeaderFileNames));
+                 (ModOpts.DisplayFileLists ? ModUtil->GoodFileNames
+                                           : ModUtil->HeaderFileNames));
   Tool.appendArgumentsAdjuster(
     getModularizeArgumentsAdjuster(ModUtil->Dependencies));
   ModularizeFrontendActionFactory Factory(Entities, *PPTracker, HadErrors);
@@ -971,7 +1011,7 @@ int main(int Argc, const char **Argv) {
     }
   }
 
-  if (DisplayFileLists) {
+  if (ModOpts.DisplayFileLists) {
     ModUtil->displayProblemFiles();
     ModUtil->displayGoodFiles();
     ModUtil->displayCombinedFiles();

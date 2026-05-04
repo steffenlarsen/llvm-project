@@ -17,13 +17,14 @@
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Object/SymbolicFile.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/raw_ostream.h"
 #include <assert.h>
 #include <cstdint>
@@ -39,24 +40,29 @@ using namespace bolt;
 
 namespace opts {
 
-static cl::OptionCategory BatDumpCategory("BAT dump options");
+using namespace llvm::clv2;
 
-static cl::OptionCategory *BatDumpCategories[] = {&BatDumpCategory};
+inline constexpr OptionCategory BatDumpCat{"BAT dump options"};
+inline constexpr OptionInfo<std::string> BatInputFile{
+    "", "<executable>", Positional{}, Required, cat(BatDumpCat)};
+inline constexpr OptionInfo<bool> BatDumpAll{"dump-all", "dump all BAT tables",
+                                             Init{false}, cat(BatDumpCat)};
+inline constexpr ListOptionInfo<uint64_t> BatTranslate{
+    "translate", "translate addresses using BAT", ZeroOrMore,
+    value_desc("addr"), cat(BatDumpCat)};
 
-static cl::opt<std::string> InputFilename(cl::Positional,
-                                          cl::desc("<executable>"),
-                                          cl::Required,
-                                          cl::cat(BatDumpCategory));
-
-static cl::list<uint64_t> Translate("translate",
-                                    cl::desc("translate addresses using BAT"),
-                                    cl::value_desc("addr"),
-                                    cl::cat(BatDumpCategory));
-
-static cl::opt<bool> DumpAll("dump-all", cl::desc("dump all BAT tables"),
-                             cl::cat(BatDumpCategory));
+inline constexpr OptionsRegistry<&BatInputFile, &BatDumpAll, &BatTranslate>
+    BatDumpReg;
 
 } // namespace opts
+
+namespace {
+struct BatDumpOptions {
+  std::string InputFilename;
+  std::vector<uint64_t> Translate;
+  bool DumpAll = false;
+};
+} // namespace
 
 static StringRef ToolName;
 
@@ -73,7 +79,8 @@ static void report_error(StringRef Message, Error E) {
   exit(1);
 }
 
-void dumpBATFor(llvm::object::ELFObjectFileBase *InputFile) {
+void dumpBATFor(llvm::object::ELFObjectFileBase *InputFile,
+                const BatDumpOptions &Opts) {
   BoltAddressTranslation BAT;
   if (!BAT.enabledFor(InputFile)) {
     errs() << "error: no BAT table found.\n";
@@ -110,10 +117,10 @@ void dumpBATFor(llvm::object::ELFObjectFileBase *InputFile) {
     exit(1);
   }
 
-  if (opts::DumpAll)
+  if (Opts.DumpAll)
     BAT.dump(outs());
 
-  if (!opts::Translate.empty()) {
+  if (!Opts.Translate.empty()) {
     // Build map of <Address, SymbolName> for InputFile
     std::map<uint64_t, StringRef> FunctionsMap;
     for (const llvm::object::ELFSymbolRef &Symbol : InputFile->symbols()) {
@@ -128,7 +135,7 @@ void dumpBATFor(llvm::object::ELFObjectFileBase *InputFile) {
     }
 
     outs() << "Translating addresses according to parsed BAT tables:\n";
-    for (uint64_t Address : opts::Translate) {
+    for (uint64_t Address : Opts.Translate) {
       auto FI = FunctionsMap.upper_bound(Address);
       if (FI == FunctionsMap.begin()) {
         outs() << "No function symbol found for 0x" << Twine::utohexstr(Address)
@@ -146,23 +153,32 @@ void dumpBATFor(llvm::object::ELFObjectFileBase *InputFile) {
 }
 
 int main(int argc, char **argv) {
-  cl::HideUnrelatedOptions(ArrayRef(opts::BatDumpCategories));
-  cl::ParseCommandLineOptions(argc, argv, "");
+  clv2::OptionParser P;
+  P.add<&opts::BatDumpReg>();
+  RegisterCoreLLVMOptions(P);
+  P.hideUnrelatedOptions({&opts::BatDumpCat});
+  auto OptsCtx = P.parse(argc, argv, "");
+  auto *Opts = OptsCtx->getViewPtr<&opts::BatDumpReg>();
+  BatDumpOptions ToolOpts;
+  ToolOpts.InputFilename = Opts->get<&opts::BatInputFile>();
+  ToolOpts.DumpAll = Opts->get<&opts::BatDumpAll>();
+  auto &TranslateAddrs = Opts->get<&opts::BatTranslate>();
+  ToolOpts.Translate.assign(TranslateAddrs.begin(), TranslateAddrs.end());
 
-  if (!sys::fs::exists(opts::InputFilename))
-    report_error(opts::InputFilename, errc::no_such_file_or_directory);
+  if (!sys::fs::exists(ToolOpts.InputFilename))
+    report_error(ToolOpts.InputFilename, errc::no_such_file_or_directory);
 
   ToolName = argv[0];
   Expected<llvm::object::OwningBinary<llvm::object::Binary>> BinaryOrErr =
-      llvm::object::createBinary(opts::InputFilename);
+      llvm::object::createBinary(ToolOpts.InputFilename);
   if (Error E = BinaryOrErr.takeError())
-    report_error(opts::InputFilename, std::move(E));
+    report_error(ToolOpts.InputFilename, std::move(E));
   llvm::object::Binary &Binary = *BinaryOrErr.get().getBinary();
 
   if (auto *InputFile = dyn_cast<llvm::object::ELFObjectFileBase>(&Binary))
-    dumpBATFor(InputFile);
+    dumpBATFor(InputFile, ToolOpts);
   else
-    report_error(opts::InputFilename,
+    report_error(ToolOpts.InputFilename,
                  llvm::object::object_error::invalid_file_type);
 
   return EXIT_SUCCESS;

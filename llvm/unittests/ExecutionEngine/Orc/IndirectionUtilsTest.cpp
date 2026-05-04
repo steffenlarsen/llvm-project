@@ -16,12 +16,12 @@ using namespace llvm;
 namespace {
 
 TEST(IndirectionUtilsTest, MakeStub) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   ModuleBuilder MB(Context, "x86_64-apple-macosx10.10", "");
   StructType *ArgTy = getDummyStructTy(Context);
   Type *ArgPtrTy = PointerType::getUnqual(Context);
-  FunctionType *FTy = FunctionType::get(
-      Type::getVoidTy(Context), {ArgPtrTy, ArgPtrTy}, false);
+  FunctionType *FTy =
+      FunctionType::get(Type::getVoidTy(Context), {ArgPtrTy, ArgPtrTy}, false);
   Function *F = MB.createFunctionDecl(FTy, "");
   AttributeSet FnAttrs = AttributeSet::get(
       Context, AttrBuilder(Context).addAttribute(Attribute::NoUnwind));
@@ -32,18 +32,22 @@ TEST(IndirectionUtilsTest, MakeStub) {
   };
   F->setAttributes(AttributeList::get(Context, FnAttrs, RetAttrs, ArgAttrs));
 
-  auto ImplPtr = orc::createImplPointer(*F->getType(), *MB.getModule(), "", nullptr);
+  auto ImplPtr =
+      orc::createImplPointer(*F->getType(), *MB.getModule(), "", nullptr);
   orc::makeStub(*F, *ImplPtr);
 
   auto II = F->getEntryBlock().begin();
-  EXPECT_TRUE(isa<LoadInst>(*II)) << "First instruction of stub should be a load.";
+  EXPECT_TRUE(isa<LoadInst>(*II))
+      << "First instruction of stub should be a load.";
   auto *Call = dyn_cast<CallInst>(std::next(II));
-  EXPECT_TRUE(Call != nullptr) << "Second instruction of stub should be a call.";
-  EXPECT_TRUE(Call->isTailCall()) << "Indirect call from stub should be tail call.";
+  EXPECT_TRUE(Call != nullptr)
+      << "Second instruction of stub should be a call.";
+  EXPECT_TRUE(Call->isTailCall())
+      << "Indirect call from stub should be tail call.";
   EXPECT_TRUE(Call->hasStructRetAttr())
-    << "makeStub should propagate sret attr on 1st argument.";
+      << "makeStub should propagate sret attr on 1st argument.";
   EXPECT_TRUE(Call->paramHasAttr(1U, Attribute::ByVal))
-    << "makeStub should propagate byval attr on 2nd argument.";
+      << "makeStub should propagate byval attr on 2nd argument.";
 }
 
-}
+} // namespace

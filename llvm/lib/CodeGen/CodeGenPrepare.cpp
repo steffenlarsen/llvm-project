@@ -36,6 +36,7 @@
 #include "llvm/Analysis/VectorUtils.h"
 #include "llvm/CodeGen/Analysis.h"
 #include "llvm/CodeGen/BasicBlockSectionsProfileReader.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
 #include "llvm/CodeGen/TargetLowering.h"
@@ -60,6 +61,7 @@
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/IROptionsOptInfos.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
@@ -85,10 +87,11 @@
 #include "llvm/Support/BlockFrequency.h"
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
@@ -137,146 +140,128 @@ STATISTIC(NumDbgValueMoved, "Number of debug value instructions moved");
 STATISTIC(NumSelectsExpanded, "Number of selects turned into branches");
 STATISTIC(NumStoreExtractExposed, "Number of store(extractelement) exposed");
 
-static cl::opt<bool> DisableBranchOpts(
-    "disable-cgp-branch-opts", cl::Hidden, cl::init(false),
-    cl::desc("Disable branch optimizations in CodeGenPrepare"));
+static bool getAddrSinkUsingGep(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_AddrSinkUsingGep>(Ctx);
+}
 
-static cl::opt<bool>
-    DisableGCOpts("disable-cgp-gc-opts", cl::Hidden, cl::init(false),
-                  cl::desc("Disable GC optimizations in CodeGenPrepare"));
+static bool getDisableCgpBranchOpts(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableCgpBranchOpts>(Ctx);
+}
 
-static cl::opt<bool>
-    DisableSelectToBranch("disable-cgp-select2branch", cl::Hidden,
-                          cl::init(false),
-                          cl::desc("Disable select to branch conversion."));
+static bool getDisableCgpGcOpts(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableCgpGcOpts>(Ctx);
+}
 
-static cl::opt<bool>
-    AddrSinkUsingGEPs("addr-sink-using-gep", cl::Hidden, cl::init(true),
-                      cl::desc("Address sinking in CGP using GEPs."));
+static bool getDisableCgpSelect2branch(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableCgpSelect2branch>(Ctx);
+}
 
-static cl::opt<bool>
-    EnableAndCmpSinking("enable-andcmp-sinking", cl::Hidden, cl::init(true),
-                        cl::desc("Enable sinking and/cmp into branches."));
+static bool getEnableAndcmpSinking(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_EnableAndcmpSinking>(Ctx);
+}
 
-static cl::opt<bool> DisableStoreExtract(
-    "disable-cgp-store-extract", cl::Hidden, cl::init(false),
-    cl::desc("Disable store(extract) optimizations in CodeGenPrepare"));
+static bool getDisableCgpStoreExtract(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableCgpStoreExtract>(Ctx);
+}
 
-static cl::opt<bool> StressStoreExtract(
-    "stress-cgp-store-extract", cl::Hidden, cl::init(false),
-    cl::desc("Stress test store(extract) optimizations in CodeGenPrepare"));
+static bool getStressCgpStoreExtract(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_StressCgpStoreExtract>(Ctx);
+}
 
-static cl::opt<bool> DisableExtLdPromotion(
-    "disable-cgp-ext-ld-promotion", cl::Hidden, cl::init(false),
-    cl::desc("Disable ext(promotable(ld)) -> promoted(ext(ld)) optimization in "
-             "CodeGenPrepare"));
+static bool getDisableCgpExtLdPromotion(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableCgpExtLdPromotion>(Ctx);
+}
 
-static cl::opt<bool> StressExtLdPromotion(
-    "stress-cgp-ext-ld-promotion", cl::Hidden, cl::init(false),
-    cl::desc("Stress test ext(promotable(ld)) -> promoted(ext(ld)) "
-             "optimization in CodeGenPrepare"));
+static bool getStressCgpExtLdPromotion(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_StressCgpExtLdPromotion>(Ctx);
+}
 
-static cl::opt<bool> DisablePreheaderProtect(
-    "disable-preheader-prot", cl::Hidden, cl::init(false),
-    cl::desc("Disable protection against removing loop preheaders"));
+static bool getDisablePreheaderProt(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisablePreheaderProt>(Ctx);
+}
 
-static cl::opt<bool> ProfileGuidedSectionPrefix(
-    "profile-guided-section-prefix", cl::Hidden, cl::init(true),
-    cl::desc("Use profile info to add section prefix for hot/cold functions"));
+static bool getProfileGuidedSectionPrefix(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ProfileGuidedSectionPrefix>(
+      Ctx);
+}
 
-static cl::opt<bool> ProfileUnknownInSpecialSection(
-    "profile-unknown-in-special-section", cl::Hidden,
-    cl::desc("In profiling mode like sampleFDO, if a function doesn't have "
-             "profile, we cannot tell the function is cold for sure because "
-             "it may be a function newly added without ever being sampled. "
-             "With the flag enabled, compiler can put such profile unknown "
-             "functions into a special section, so runtime system can choose "
-             "to handle it in a different way than .text section, to save "
-             "RAM for example. "));
+static bool getProfileUnknownInSpecialSection(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ProfileUnknownInSpecialSection>(
+      Ctx);
+}
 
-static cl::opt<bool> BBSectionsGuidedSectionPrefix(
-    "bbsections-guided-section-prefix", cl::Hidden, cl::init(true),
-    cl::desc("Use the basic-block-sections profile to determine the text "
-             "section prefix for hot functions. Functions with "
-             "basic-block-sections profile will be placed in `.text.hot` "
-             "regardless of their FDO profile info. Other functions won't be "
-             "impacted, i.e., their prefixes will be decided by FDO/sampleFDO "
-             "profiles."));
+static bool getBbsectionsGuidedSectionPrefix(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_BbsectionsGuidedSectionPrefix>(
+      Ctx);
+}
 
-static cl::opt<uint64_t> FreqRatioToSkipMerge(
-    "cgp-freq-ratio-to-skip-merge", cl::Hidden, cl::init(2),
-    cl::desc("Skip merging empty blocks if (frequency of empty block) / "
-             "(frequency of destination block) is greater than this ratio"));
+static uint64_t getCgpFreqRatioToSkipMerge(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_CgpFreqRatioToSkipMerge>(Ctx);
+}
 
-static cl::opt<bool> ForceSplitStore(
-    "force-split-store", cl::Hidden, cl::init(false),
-    cl::desc("Force store splitting no matter what the target query says."));
+static bool getForceSplitStore(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ForceSplitStore>(Ctx);
+}
 
-static cl::opt<bool> EnableTypePromotionMerge(
-    "cgp-type-promotion-merge", cl::Hidden,
-    cl::desc("Enable merging of redundant sexts when one is dominating"
-             " the other."),
-    cl::init(true));
+static bool getCgpTypePromotionMerge(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_CgpTypePromotionMerge>(Ctx);
+}
 
-static cl::opt<bool> DisableComplexAddrModes(
-    "disable-complex-addr-modes", cl::Hidden, cl::init(false),
-    cl::desc("Disables combining addressing modes with different parts "
-             "in optimizeMemoryInst."));
+static bool getDisableComplexAddrModes(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableComplexAddrModes>(Ctx);
+}
 
-static cl::opt<bool>
-    AddrSinkNewPhis("addr-sink-new-phis", cl::Hidden, cl::init(false),
-                    cl::desc("Allow creation of Phis in Address sinking."));
+static bool getAddrSinkNewPhis(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_AddrSinkNewPhis>(Ctx);
+}
 
-static cl::opt<bool> AddrSinkNewSelects(
-    "addr-sink-new-select", cl::Hidden, cl::init(true),
-    cl::desc("Allow creation of selects in Address sinking."));
+static bool getAddrSinkNewSelect(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_AddrSinkNewSelect>(Ctx);
+}
 
-static cl::opt<bool> AddrSinkCombineBaseReg(
-    "addr-sink-combine-base-reg", cl::Hidden, cl::init(true),
-    cl::desc("Allow combining of BaseReg field in Address sinking."));
+static bool getAddrSinkCombineBaseReg(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_AddrSinkCombineBaseReg>(Ctx);
+}
 
-static cl::opt<bool> AddrSinkCombineBaseGV(
-    "addr-sink-combine-base-gv", cl::Hidden, cl::init(true),
-    cl::desc("Allow combining of BaseGV field in Address sinking."));
+static bool getAddrSinkCombineBaseGv(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_AddrSinkCombineBaseGv>(Ctx);
+}
 
-static cl::opt<bool> AddrSinkCombineBaseOffs(
-    "addr-sink-combine-base-offs", cl::Hidden, cl::init(true),
-    cl::desc("Allow combining of BaseOffs field in Address sinking."));
+static bool getAddrSinkCombineBaseOffs(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_AddrSinkCombineBaseOffs>(Ctx);
+}
 
-static cl::opt<bool> AddrSinkCombineScaledReg(
-    "addr-sink-combine-scaled-reg", cl::Hidden, cl::init(true),
-    cl::desc("Allow combining of ScaledReg field in Address sinking."));
+static bool getAddrSinkCombineScaledReg(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_AddrSinkCombineScaledReg>(Ctx);
+}
 
-static cl::opt<bool>
-    EnableGEPOffsetSplit("cgp-split-large-offset-gep", cl::Hidden,
-                         cl::init(true),
-                         cl::desc("Enable splitting large offset of GEP."));
+static bool getCgpSplitLargeOffsetGep(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_CgpSplitLargeOffsetGep>(Ctx);
+}
 
-static cl::opt<bool> EnableICMP_EQToICMP_ST(
-    "cgp-icmp-eq2icmp-st", cl::Hidden, cl::init(false),
-    cl::desc("Enable ICMP_EQ to ICMP_S(L|G)T conversion."));
+static bool getCgpIcmpEq2icmpSt(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_CgpIcmpEq2icmpSt>(Ctx);
+}
 
-static cl::opt<bool>
-    VerifyBFIUpdates("cgp-verify-bfi-updates", cl::Hidden, cl::init(false),
-                     cl::desc("Enable BFI update verification for "
-                              "CodeGenPrepare."));
+static bool getCgpVerifyBfiUpdates(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_CgpVerifyBfiUpdates>(Ctx);
+}
 
-static cl::opt<bool>
-    OptimizePhiTypes("cgp-optimize-phi-types", cl::Hidden, cl::init(true),
-                     cl::desc("Enable converting phi types in CodeGenPrepare"));
+static bool getCgpOptimizePhiTypes(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_CgpOptimizePhiTypes>(Ctx);
+}
 
-static cl::opt<unsigned>
-    HugeFuncThresholdInCGPP("cgpp-huge-func", cl::init(10000), cl::Hidden,
-                            cl::desc("Least BB number of huge function."));
+static unsigned getCgppHugeFunc(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_CgppHugeFunc>(Ctx);
+}
 
-static cl::opt<unsigned>
-    MaxAddressUsersToScan("cgp-max-address-users-to-scan", cl::init(100),
-                          cl::Hidden,
-                          cl::desc("Max number of address users to look at"));
+static unsigned getCgpMaxAddressUsersToScan(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_CgpMaxAddressUsersToScan>(Ctx);
+}
 
-static cl::opt<bool>
-    DisableDeletePHIs("disable-cgp-delete-phis", cl::Hidden, cl::init(false),
-                      cl::desc("Disable elimination of dead PHI nodes."));
+static bool getDisableCgpDeletePhis(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_DisableCgpDeletePhis>(Ctx);
+}
 
 namespace {
 
@@ -588,10 +573,12 @@ bool CodeGenPrepare::_run(Function &F) {
   OptSize = F.hasOptSize();
   // Use the basic-block-sections profile to promote hot functions to .text.hot
   // if requested.
-  if (BBSectionsGuidedSectionPrefix && BBSectionsProfileReader &&
+  if (getBbsectionsGuidedSectionPrefix(F.getContext().getOptionsContext()) &&
+      BBSectionsProfileReader &&
       BBSectionsProfileReader->isFunctionHot(F.getName())) {
     (void)F.setSectionPrefix("hot");
-  } else if (ProfileGuidedSectionPrefix) {
+  } else if (getProfileGuidedSectionPrefix(
+                 F.getContext().getOptionsContext())) {
     // The hot attribute overwrites profile count based hotness while profile
     // counts based hotness overwrite the cold attribute.
     // This is a conservative behabvior.
@@ -604,8 +591,9 @@ bool CodeGenPrepare::_run(Function &F) {
     else if (PSI->isFunctionColdInCallGraph(&F, *BFI) ||
              F.hasFnAttribute(Attribute::Cold))
       (void)F.setSectionPrefix("unlikely");
-    else if (ProfileUnknownInSpecialSection && PSI->hasPartialSampleProfile() &&
-             PSI->isFunctionHotnessUnknown(F))
+    else if (getProfileUnknownInSpecialSection(
+                 F.getContext().getOptionsContext()) &&
+             PSI->hasPartialSampleProfile() && PSI->isFunctionHotnessUnknown(F))
       (void)F.setSectionPrefix("unknown");
   }
 
@@ -642,7 +630,7 @@ bool CodeGenPrepare::_run(Function &F) {
   if (ResetLI)
     resetLoopInfo();
 
-  if (!DisableBranchOpts)
+  if (!getDisableCgpBranchOpts(F.getContext().getOptionsContext()))
     EverMadeChange |= splitBranchCondition(F);
 
   // Split some critical edges where one of the sources is an indirect branch,
@@ -654,17 +642,23 @@ bool CodeGenPrepare::_run(Function &F) {
     resetLoopInfo();
 
 #ifndef NDEBUG
-  if (VerifyDomInfo)
-    assert(getDT().verify(DominatorTree::VerificationLevel::Fast) &&
-           "Incorrect DominatorTree updates in CGP");
+  {
+    bool DoVerifyDom = false;
+    if (auto *O =
+            clv2::getView<&clv2::IROptsReg>(F.getContext().getOptionsContext()))
+      DoVerifyDom = O->get<&clv2::IR_VerifyDomInfo>();
+    if (DoVerifyDom)
+      assert(getDT().verify(DominatorTree::VerificationLevel::Fast) &&
+             "Incorrect DominatorTree updates in CGP");
+  }
 
-  if (VerifyLoopInfo)
+  if (getVerifyLoopInfo(F.getContext().getOptionsContext()))
     LI->verify();
 #endif
 
   // If we are optimzing huge function, we need to consider the build time.
   // Because the basic algorithm's complex is near O(N!).
-  IsHugeFunc = F.size() > HugeFuncThresholdInCGPP;
+  IsHugeFunc = F.size() > getCgppHugeFunc(F.getContext().getOptionsContext());
 
   bool MadeChange = true;
   bool FuncIterated = false;
@@ -708,7 +702,8 @@ bool CodeGenPrepare::_run(Function &F) {
     // We have iterated all the BB in the (only work for huge) function.
     FuncIterated = IsHugeFunc;
 
-    if (EnableTypePromotionMerge && !ValToSExtendedUses.empty())
+    if (getCgpTypePromotionMerge(F.getContext().getOptionsContext()) &&
+        !ValToSExtendedUses.empty())
       MadeChange |= mergeSExts(F);
     if (!LargeOffsetGEPMap.empty())
       MadeChange |= splitLargeGEPOffsets();
@@ -718,11 +713,17 @@ bool CodeGenPrepare::_run(Function &F) {
       eliminateFallThrough(F);
 
 #ifndef NDEBUG
-    if (VerifyDomInfo)
-      assert(getDT().verify(DominatorTree::VerificationLevel::Fast) &&
-             "Incorrect DominatorTree updates in CGP");
+    {
+      bool DoVerifyDom = false;
+      if (auto *O = clv2::getView<&clv2::IROptsReg>(
+              F.getContext().getOptionsContext()))
+        DoVerifyDom = O->get<&clv2::IR_VerifyDomInfo>();
+      if (DoVerifyDom)
+        assert(getDT().verify(DominatorTree::VerificationLevel::Fast) &&
+               "Incorrect DominatorTree updates in CGP");
+    }
 
-    if (VerifyLoopInfo)
+    if (getVerifyLoopInfo(F.getContext().getOptionsContext()))
       LI->verify();
 #endif
 
@@ -744,7 +745,7 @@ bool CodeGenPrepare::_run(Function &F) {
   // LoopInfo is not needed anymore and ConstantFoldTerminator can break it.
   LI = nullptr;
 
-  if (!DisableBranchOpts) {
+  if (!getDisableCgpBranchOpts(F.getContext().getOptionsContext())) {
     MadeChange = false;
     // Use a set vector to get deterministic iteration order. The order the
     // blocks are removed may affect whether or not PHI nodes in successors
@@ -785,7 +786,7 @@ bool CodeGenPrepare::_run(Function &F) {
     EverMadeChange |= MadeChange;
   }
 
-  if (!DisableGCOpts) {
+  if (!getDisableCgpGcOpts(F.getContext().getOptionsContext())) {
     SmallVector<GCStatepointInst *, 2> Statepoints;
     for (BasicBlock &BB : F)
       for (Instruction &I : BB)
@@ -801,7 +802,7 @@ bool CodeGenPrepare::_run(Function &F) {
   EverMadeChange |= placePseudoProbes(F);
 
 #ifndef NDEBUG
-  if (VerifyBFIUpdates)
+  if (getCgpVerifyBfiUpdates(F.getContext().getOptionsContext()))
     verifyBFIUpdates(F);
 #endif
 
@@ -952,7 +953,7 @@ bool CodeGenPrepare::eliminateMostlyEmptyBlocks(Function &F, bool &ResetLI) {
   // Note that this intentionally skips the entry block.
   for (auto &Block : llvm::drop_begin(F)) {
     // Delete phi nodes that could block deleting other empty blocks.
-    if (!DisableDeletePHIs)
+    if (!getDisableCgpDeletePhis(F.getContext().getOptionsContext()))
       MadeChange |= DeleteDeadPHIs(&Block, TLInfo, nullptr, &KnownNonDeadPHIs);
   }
 
@@ -978,7 +979,9 @@ bool CodeGenPrepare::isMergingEmptyBlockProfitable(BasicBlock *BB,
   // Loop preheaders can be good locations to spill registers. If the
   // preheader is deleted and we create a critical edge, registers may be
   // spilled in the loop body instead.
-  if (!DisablePreheaderProtect && isPreheader &&
+  if (!getDisablePreheaderProt(
+          BB->getParent()->getContext().getOptionsContext()) &&
+      isPreheader &&
       !(BB->getSinglePredecessor() &&
         BB->getSinglePredecessor()->getSingleSuccessor()))
     return false;
@@ -1051,7 +1054,8 @@ bool CodeGenPrepare::isMergingEmptyBlockProfitable(BasicBlock *BB,
         DestBB == findDestBlockOfMergeableEmptyBlock(SameValueBB))
       BBFreq += BFI->getBlockFreq(SameValueBB);
 
-  std::optional<BlockFrequency> Limit = BBFreq.mul(FreqRatioToSkipMerge);
+  std::optional<BlockFrequency> Limit = BBFreq.mul(getCgpFreqRatioToSkipMerge(
+      BB->getParent()->getContext().getOptionsContext()));
   return !Limit || PredFreq <= *Limit;
 }
 
@@ -1971,7 +1975,9 @@ static bool sinkCmpExpression(CmpInst *Cmp, const TargetLowering &TLI,
 /// Return true if any changes are made.
 static bool foldICmpWithDominatingICmp(CmpInst *Cmp,
                                        const TargetLowering &TLI) {
-  if (!EnableICMP_EQToICMP_ST && TLI.isEqualityCmpFoldedWithSignedCmp())
+  if (!getCgpIcmpEq2icmpSt(
+          Cmp->getFunction()->getContext().getOptionsContext()) &&
+      TLI.isEqualityCmpFoldedWithSignedCmp())
     return false;
 
   ICmpInst::Predicate Pred = Cmp->getPredicate();
@@ -3118,7 +3124,8 @@ bool CodeGenPrepare::dupRetToEnableTailCallOpts(BasicBlock *BB,
 
     // Duplicate the return into TailCallBB.
     (void)FoldReturnIntoUncondBranch(RetI, BB, TailCallBB, DTU);
-    assert(!VerifyBFIUpdates ||
+    assert(!getCgpVerifyBfiUpdates(
+               BB->getParent()->getContext().getOptionsContext()) ||
            BFI->getBlockFreq(BB) >= BFI->getBlockFreq(TailCallBB));
     BFI->setBlockFreq(BB,
                       (BFI->getBlockFreq(BB) - BFI->getBlockFreq(TailCallBB)));
@@ -4332,14 +4339,23 @@ private:
     // Second Step, fill new nodes by merged values and simplify if possible.
     FillPlaceholders(Map, TraverseOrder, ST);
 
-    if (!AddrSinkNewSelects && ST.countNewSelectNodes() > 0) {
+    const Function *F = nullptr;
+    if (auto *I = dyn_cast<Instruction>(Original))
+      F = I->getFunction();
+    if (!(F ? getAddrSinkNewSelect(F->getContext().getOptionsContext())
+            : true) &&
+        ST.countNewSelectNodes() > 0) {
       ST.destroyNewNodes(CommonType);
       return nullptr;
     }
 
     // Now we'd like to match New Phi nodes to existed ones.
     unsigned PhiNotMatchedCount = 0;
-    if (!MatchPhiSet(ST, AddrSinkNewPhis, PhiNotMatchedCount)) {
+    if (!MatchPhiSet(
+            ST,
+            (F ? getAddrSinkNewPhis(F->getContext().getOptionsContext())
+               : false),
+            PhiNotMatchedCount)) {
       ST.destroyNewNodes(CommonType);
       return nullptr;
     }
@@ -4532,19 +4548,28 @@ private:
   }
 
   bool addrModeCombiningAllowed() {
-    if (DisableComplexAddrModes)
+    const Function *F = nullptr;
+    if (auto *I = dyn_cast<Instruction>(Original))
+      F = I->getFunction();
+    if (F ? getDisableComplexAddrModes(F->getContext().getOptionsContext())
+          : false)
       return false;
     switch (DifferentField) {
     default:
       return false;
     case ExtAddrMode::BaseRegField:
-      return AddrSinkCombineBaseReg;
+      return F ? getAddrSinkCombineBaseReg(F->getContext().getOptionsContext())
+               : true;
     case ExtAddrMode::BaseGVField:
-      return AddrSinkCombineBaseGV;
+      return F ? getAddrSinkCombineBaseGv(F->getContext().getOptionsContext())
+               : true;
     case ExtAddrMode::BaseOffsField:
-      return AddrSinkCombineBaseOffs;
+      return F ? getAddrSinkCombineBaseOffs(F->getContext().getOptionsContext())
+               : true;
     case ExtAddrMode::ScaledRegField:
-      return AddrSinkCombineScaledReg;
+      return F ? getAddrSinkCombineScaledReg(
+                     F->getContext().getOptionsContext())
+               : true;
     }
   }
 };
@@ -5312,26 +5337,28 @@ bool AddressingModeMatcher::matchOperationAddr(User *AddrInst, unsigned Opcode,
       }
       AddrMode.BaseOffs -= ConstantOffset;
 
-      if (EnableGEPOffsetSplit && isa<GetElementPtrInst>(AddrInst) &&
+      if (getCgpSplitLargeOffsetGep(
+              MemoryInst->getFunction()->getContext().getOptionsContext()) &&
+          isa<GetElementPtrInst>(AddrInst) &&
           TLI.shouldConsiderGEPOffsetSplit() && Depth == 0 &&
           ConstantOffset > 0) {
-          // Record GEPs with non-zero offsets as candidates for splitting in
-          // the event that the offset cannot fit into the r+i addressing mode.
-          // Simple and common case that only one GEP is used in calculating the
-          // address for the memory access.
-          Value *Base = AddrInst->getOperand(0);
-          auto *BaseI = dyn_cast<Instruction>(Base);
-          auto *GEP = cast<GetElementPtrInst>(AddrInst);
-          if (isa<Argument>(Base) || isa<GlobalValue>(Base) ||
-              (BaseI && !isa<CastInst>(BaseI) &&
-               !isa<GetElementPtrInst>(BaseI))) {
-            // Make sure the parent block allows inserting non-PHI instructions
-            // before the terminator.
-            BasicBlock *Parent = BaseI ? BaseI->getParent()
-                                       : &GEP->getFunction()->getEntryBlock();
-            if (!Parent->getTerminator()->isEHPad())
+        // Record GEPs with non-zero offsets as candidates for splitting in
+        // the event that the offset cannot fit into the r+i addressing mode.
+        // Simple and common case that only one GEP is used in calculating the
+        // address for the memory access.
+        Value *Base = AddrInst->getOperand(0);
+        auto *BaseI = dyn_cast<Instruction>(Base);
+        auto *GEP = cast<GetElementPtrInst>(AddrInst);
+        if (isa<Argument>(Base) || isa<GlobalValue>(Base) ||
+            (BaseI && !isa<CastInst>(BaseI) &&
+             !isa<GetElementPtrInst>(BaseI))) {
+          // Make sure the parent block allows inserting non-PHI instructions
+          // before the terminator.
+          BasicBlock *Parent =
+              BaseI ? BaseI->getParent() : &GEP->getFunction()->getEntryBlock();
+          if (!Parent->getTerminator()->isEHPad())
             LargeOffsetGEP = std::make_pair(GEP, ConstantOffset);
-          }
+        }
       }
 
       return false;
@@ -5587,7 +5614,8 @@ static bool FindAllMemoryUses(
   for (Use &U : I->uses()) {
     // Conservatively return true if we're seeing a large number or a deep chain
     // of users. This avoids excessive compilation times in pathological cases.
-    if (SeenInsts++ >= MaxAddressUsersToScan)
+    if (SeenInsts++ >= getCgpMaxAddressUsersToScan(
+                           I->getFunction()->getContext().getOptionsContext()))
       return true;
 
     Instruction *UserI = cast<Instruction>(U.getUser());
@@ -6001,8 +6029,14 @@ bool CodeGenPrepare::optimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
       } else
         SunkAddr = Builder.CreatePointerCast(SunkAddr, Addr->getType());
     }
-  } else if (AddrSinkUsingGEPs || (!AddrSinkUsingGEPs.getNumOccurrences() &&
-                                   SubtargetInfo->addrSinkUsingGEPs())) {
+  } else if (getAddrSinkUsingGep(
+                 MemoryInst->getFunction()->getContext().getOptionsContext()) ||
+             (!clv2::wasOptSpecified<&clv2::CGPassCore1Reg,
+                                     &clv2::CGPASS_AddrSinkUsingGep>(
+                  MemoryInst->getFunction()
+                      ->getContext()
+                      .getOptionsContext()) &&
+              SubtargetInfo->addrSinkUsingGEPs())) {
     // By default, we use the GEP-based method when AA is used later. This
     // prevents new inttoptr/ptrtoint pairs from degrading AA capabilities.
     LLVM_DEBUG(dbgs() << "CGP: SINKING nonlocal addrmode: " << AddrMode
@@ -6690,6 +6724,9 @@ bool CodeGenPrepare::tryToPromoteExts(
 
   // Iterate over all the extensions to try to promote them.
   for (auto *I : Exts) {
+    // Capture the Function before I might become orphaned by promotion.
+    const Function *Fn = I->getFunction();
+
     // Early check if we directly have ext(load).
     if (isa<LoadInst>(I->getOperand(0))) {
       ProfitablyMovedExts.push_back(I);
@@ -6700,7 +6737,8 @@ bool CodeGenPrepare::tryToPromoteExts(
     // this check inside the for loop is to catch the case where an extension
     // is directly fed by a load because in such case the extension can be moved
     // up without any promotion on its operands.
-    if (!TLI->enableExtLdPromotion() || DisableExtLdPromotion)
+    if (!TLI->enableExtLdPromotion() ||
+        getDisableCgpExtLdPromotion(Fn->getContext().getOptionsContext()))
       return false;
 
     // Get the action to perform the promotion.
@@ -6738,7 +6776,7 @@ bool CodeGenPrepare::tryToPromoteExts(
     // conservatively ceiling it to 0.
     TotalCreatedInstsCost =
         std::max((long long)0, (TotalCreatedInstsCost - ExtCost));
-    if (!StressExtLdPromotion &&
+    if (!getStressCgpExtLdPromotion(Fn->getContext().getOptionsContext()) &&
         (TotalCreatedInstsCost > 1 ||
          !isPromotedInstructionLegal(*TLI, *DL, PromotedVal) ||
          (ExtCost == 0 && NewExts.size() > 1))) {
@@ -6759,7 +6797,8 @@ bool CodeGenPrepare::tryToPromoteExts(
       // If we have reached to a load, we need this extra profitability check
       // as it could potentially be merged into an ext(load).
       if (isa<LoadInst>(ExtOperand) &&
-          !(StressExtLdPromotion || NewCreatedInstsCost <= ExtCost ||
+          !(getStressCgpExtLdPromotion(Fn->getContext().getOptionsContext()) ||
+            NewCreatedInstsCost <= ExtCost ||
             (ExtOperand->hasOneUse() || hasSameExtUse(ExtOperand, *TLI))))
         continue;
 
@@ -7122,7 +7161,7 @@ bool CodeGenPrepare::optimizePhiType(
 }
 
 bool CodeGenPrepare::optimizePhiTypes(Function &F) {
-  if (!OptimizePhiTypes)
+  if (!getCgpOptimizePhiTypes(F.getContext().getOptionsContext()))
     return false;
 
   bool Changed = false;
@@ -7607,7 +7646,9 @@ static bool isFormingBranchFromSelectProfitable(const TargetTransformInfo *TTI,
     uint64_t Sum = TrueWeight + FalseWeight;
     if (Sum != 0) {
       auto Probability = BranchProbability::getBranchProbability(Max, Sum);
-      if (Probability > TTI->getPredictableBranchThreshold())
+      if (Probability >
+          TTI->getPredictableBranchThreshold(
+              SI->getFunction()->getContext().getOptionsContext()))
         return true;
     }
   }
@@ -7720,11 +7761,14 @@ bool CodeGenPrepare::optimizeFunnelShift(IntrinsicInst *Fsh) {
 /// If we have a SelectInst that will likely profit from branch prediction,
 /// turn it into a branch.
 bool CodeGenPrepare::optimizeSelectInst(SelectInst *SI) {
-  if (DisableSelectToBranch)
+  if (getDisableCgpSelect2branch(
+          SI->getFunction()->getContext().getOptionsContext()))
     return false;
 
   // If the SelectOptimize pass is enabled, selects have already been optimized.
-  if (!getCGPassBuilderOption().DisableSelectOptimize)
+  if (!getCGPassBuilderOption(
+           SI->getFunction()->getContext().getOptionsContext())
+           .DisableSelectOptimize)
     return false;
 
   // Find all consecutive select instructions that share the same condition.
@@ -8387,7 +8431,8 @@ public:
     int ISDOpcode = TLI.InstructionOpcodeToISD(ToBePromoted->getOpcode());
     if (!ISDOpcode)
       return false;
-    return StressStoreExtract ||
+    return getStressCgpStoreExtract(
+               Transition->getFunction()->getContext().getOptionsContext()) ||
            TLI.isOperationLegalOrCustom(
                ISDOpcode, TLI.getValueType(DL, getTransitionType(), true));
   }
@@ -8419,7 +8464,9 @@ public:
       return false;
 
     // Check cost.
-    if (!StressStoreExtract && !isProfitableToPromote())
+    if (!getStressCgpStoreExtract(
+            Transition->getFunction()->getContext().getOptionsContext()) &&
+        !isProfitableToPromote())
       return false;
 
     // Promote.
@@ -8478,8 +8525,10 @@ void VectorPromoteHelper::promoteImpl(Instruction *ToBePromoted) {
 /// has this feature and this is profitable.
 bool CodeGenPrepare::optimizeExtractElementInst(Instruction *Inst) {
   unsigned CombineCost = std::numeric_limits<unsigned>::max();
-  if (DisableStoreExtract ||
-      (!StressStoreExtract &&
+  if (getDisableCgpStoreExtract(
+          Inst->getFunction()->getContext().getOptionsContext()) ||
+      (!getStressCgpStoreExtract(
+           Inst->getFunction()->getContext().getOptionsContext()) &&
        !TLI->canCombineStoreAndExtract(Inst->getOperand(0)->getType(),
                                        Inst->getOperand(1), CombineCost)))
     return false;
@@ -8616,7 +8665,8 @@ static bool splitMergedValStore(StoreInst &SI, const DataLayout &DL,
                   : EVT::getEVT(LValue->getType());
   EVT HighTy = HBC ? EVT::getEVT(HBC->getOperand(0)->getType())
                    : EVT::getEVT(HValue->getType());
-  if (!ForceSplitStore && !TLI.isMultiStoresCheaperThanBitsMerge(LowTy, HighTy))
+  if (!getForceSplitStore(SI.getFunction()->getContext().getOptionsContext()) &&
+      !TLI.isMultiStoresCheaperThanBitsMerge(LowTy, HighTy))
     return false;
 
   // Start to split store.
@@ -9000,7 +9050,9 @@ bool CodeGenPrepare::optimizeInst(Instruction *I, ModifyDT &ModifiedDT) {
 
   BinaryOperator *BinOp = dyn_cast<BinaryOperator>(I);
 
-  if (BinOp && BinOp->getOpcode() == Instruction::And && EnableAndCmpSinking &&
+  if (BinOp && BinOp->getOpcode() == Instruction::And &&
+      getEnableAndcmpSinking(
+          I->getFunction()->getContext().getOptionsContext()) &&
       sinkAndCmp0Expression(BinOp, *TLI, InsertedInsts))
     return true;
 

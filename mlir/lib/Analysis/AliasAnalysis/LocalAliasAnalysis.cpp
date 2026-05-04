@@ -52,7 +52,8 @@ static void collectUnderlyingAddressValues2(
     Value inputValue, unsigned inputIndex, unsigned maxDepth,
     DenseSet<Value> &visited, SmallVectorImpl<Value> &output) {
   LDBG() << "collectUnderlyingAddressValues2: "
-         << OpWithFlags(branch.getOperation(), OpPrintingFlags().skipRegions());
+         << OpWithFlags(branch.getOperation(),
+                        opPrintingFlags(branch.getOperation()).skipRegions());
   LDBG() << " with initialSuccessor " << initialSuccessor;
   LDBG() << "  inputValue: " << inputValue;
   LDBG() << "  inputIndex: " << inputIndex;
@@ -247,11 +248,11 @@ getAllocEffectFor(Value value,
   if (BlockArgument arg = dyn_cast<BlockArgument>(value)) {
     op = arg.getOwner()->getParentOp();
     LDBG() << "  BlockArgument, parent op: "
-           << OpWithFlags(op, OpPrintingFlags().skipRegions());
+           << OpWithFlags(op, opPrintingFlags(op).skipRegions());
   } else {
     op = cast<OpResult>(value).getOwner();
     LDBG() << "  OpResult, owner op: "
-           << OpWithFlags(op, OpPrintingFlags().skipRegions());
+           << OpWithFlags(op, opPrintingFlags(op).skipRegions());
   }
 
   MemoryEffectOpInterface interface = dyn_cast<MemoryEffectOpInterface>(op);
@@ -276,7 +277,8 @@ getAllocEffectFor(Value value,
     allocScopeOp = op->getParentWithTrait<OpTrait::AutomaticAllocationScope>();
     if (allocScopeOp) {
       LDBG() << "  Automatic allocation scope found: "
-             << OpWithFlags(allocScopeOp, OpPrintingFlags().skipRegions());
+             << OpWithFlags(allocScopeOp,
+                            opPrintingFlags(allocScopeOp).skipRegions());
     } else {
       LDBG() << "  Automatic allocation scope found: null";
     }
@@ -290,7 +292,8 @@ getAllocEffectFor(Value value,
   allocScopeOp = op->getParentOfType<FunctionOpInterface>();
   if (allocScopeOp) {
     LDBG() << "  Function scope found: "
-           << OpWithFlags(allocScopeOp, OpPrintingFlags().skipRegions());
+           << OpWithFlags(allocScopeOp,
+                          opPrintingFlags(allocScopeOp).skipRegions());
   } else {
     LDBG() << "  Function scope found: null";
   }
@@ -404,7 +407,8 @@ AliasResult LocalAliasAnalysis::aliasImpl(Value lhs, Value rhs) {
   // non-effect value is defined above that scope.
   if (lhsAllocScope) {
     LDBG() << "  Checking allocation scope: "
-           << OpWithFlags(lhsAllocScope, OpPrintingFlags().skipRegions());
+           << OpWithFlags(lhsAllocScope,
+                          opPrintingFlags(lhsAllocScope).skipRegions());
     // If the parent operation of rhs is an ancestor of the allocation scope, or
     // if rhs is an entry block argument of the allocation scope we know the two
     // values can't alias.
@@ -479,7 +483,7 @@ AliasResult LocalAliasAnalysis::alias(Value lhs, Value rhs) {
 //===----------------------------------------------------------------------===//
 
 ModRefResult LocalAliasAnalysis::getModRef(Operation *op, Value location) {
-  LDBG() << "getModRef: " << OpWithFlags(op, OpPrintingFlags().skipRegions())
+  LDBG() << "getModRef: " << OpWithFlags(op, opPrintingFlags(op).skipRegions())
          << " on location " << location;
 
   // Check to see if this operation relies on nested side effects.

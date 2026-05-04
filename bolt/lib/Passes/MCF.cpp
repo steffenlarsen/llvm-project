@@ -13,29 +13,22 @@
 #include "bolt/Passes/MCF.h"
 #include "bolt/Core/BinaryFunction.h"
 #include "bolt/Core/ParallelUtilities.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "bolt/Passes/DataflowInfoManager.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include <algorithm>
 #include <vector>
 
-#undef  DEBUG_TYPE
+#undef DEBUG_TYPE
 #define DEBUG_TYPE "mcf"
 
 using namespace llvm;
 using namespace bolt;
-
-namespace opts {
-
-extern cl::OptionCategory BoltOptCategory;
-
-static cl::opt<bool> IterativeGuess(
-    "iterative-guess",
-    cl::desc("in non-LBR mode, guess edge counts using iterative technique"),
-    cl::Hidden, cl::cat(BoltOptCategory));
-} // namespace opts
+using namespace bolt::bolt_passes_opts;
 
 namespace llvm {
 namespace bolt {
@@ -435,19 +428,23 @@ void equalizeBBCounts(DataflowInfoManager &Info, BinaryFunction &BF) {
 }
 
 void EstimateEdgeCounts::runOnFunction(BinaryFunction &BF) {
+  const bool IterativeGuess = getIterativeGuess(BF.getBinaryContext());
+
   EdgeWeightMap PredEdgeWeights;
   EdgeWeightMap SuccEdgeWeights;
-  if (!opts::IterativeGuess) {
+  if (!IterativeGuess) {
     computeEdgeWeights<Inverse<BinaryBasicBlock *>>(BF, PredEdgeWeights);
     computeEdgeWeights<BinaryBasicBlock *>(BF, SuccEdgeWeights);
   }
-  if (opts::EqualizeBBCounts) {
+  bool EqualizeBBCounts =
+      bolt::bolt_utils_opts::getEqualizeBbCounts(BF.getBinaryContext());
+  if (EqualizeBBCounts) {
     LLVM_DEBUG(BF.print(dbgs(), "before equalize BB counts"));
     auto Info = DataflowInfoManager(BF, nullptr, nullptr);
     equalizeBBCounts(Info, BF);
     LLVM_DEBUG(BF.print(dbgs(), "after equalize BB counts"));
   }
-  if (opts::IterativeGuess)
+  if (IterativeGuess)
     guessEdgeByIterativeApproach(BF);
   else
     guessEdgeByRelHotness(BF, /*UseSuccs=*/false, PredEdgeWeights,

@@ -10,15 +10,22 @@
 #define LLVM_ANALYSIS_CTXPROFANALYSIS_H
 
 #include "llvm/ADT/SetVector.h"
+#include "llvm/Analysis/CtxProfPrintMode.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/ProfileData/PGOCtxProfReader.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
 #include <optional>
 
 namespace llvm {
+
+LLVM_ABI std::string getUseCtxProfile(const clv2::OptionsContext &Ctx);
+LLVM_ABI bool getForceIsInSpecializedModule(const clv2::OptionsContext &Ctx);
+LLVM_ABI bool
+getForceIsInSpecializedModuleWasSpecified(const clv2::OptionsContext &Ctx);
 
 class CtxProfAnalysis;
 
@@ -42,6 +49,9 @@ class PGOContextualProfile {
   // True if this module is a post-thinlto module containing just functions
   // participating in one or more contextual profiles.
   bool IsInSpecializedModule = false;
+
+  // Cached from the Module's LLVMContext at construction time.
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
 
   // For the GUIDs in this module, associate metadata about each function which
   // we'll need when we maintain the profiles during IPO transformations.
@@ -113,7 +123,7 @@ public:
 };
 
 class CtxProfAnalysis : public AnalysisInfoMixin<CtxProfAnalysis> {
-  const std::optional<StringRef> Profile;
+  const std::optional<std::string> Profile;
 
 public:
   LLVM_ABI static AnalysisKey Key;
@@ -144,7 +154,9 @@ public:
 class CtxProfAnalysisPrinterPass
     : public RequiredPassInfoMixin<CtxProfAnalysisPrinterPass> {
 public:
-  enum class PrintMode { Everything, YAML };
+  /// Alias; the enum lives in CtxProfPrintMode.h so the options header can
+  /// name it without including this one.  Scoped, so PrintMode::X still works.
+  using PrintMode = CtxProfPrintMode;
   LLVM_ABI explicit CtxProfAnalysisPrinterPass(raw_ostream &OS);
 
   LLVM_ABI PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM);

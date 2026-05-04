@@ -8,6 +8,7 @@ add_llvm_component_library(LLVMFuzzerCLI
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/FuzzMutate
 
   LINK_COMPONENTS
+  AllOptions
   Support
   TargetParser
   )

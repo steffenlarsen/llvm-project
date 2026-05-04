@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "flang/Optimizer/Builder/IntrinsicCall.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Common/static-multimap-view.h"
 #include "flang/Optimizer/Builder/BoxValue.h"
 #include "flang/Optimizer/Builder/CUDAIntrinsicCall.h"
@@ -54,9 +55,9 @@
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cfenv> // temporary -- only used in genIeeeGetOrSetModesOrStatus
 #include <optional>
@@ -897,34 +898,9 @@ static const IntrinsicHandler *findIntrinsicHandler(llvm::StringRef name,
                                                               : nullptr;
 }
 
-/// To make fir output more readable for debug, one can outline all intrinsic
-/// implementation in wrappers (overrides the IntrinsicHandler::outline flag).
-static llvm::cl::opt<bool> outlineAllIntrinsics(
-    "outline-intrinsics",
-    llvm::cl::desc(
-        "Lower all intrinsic procedure implementation in their own functions"),
-    llvm::cl::init(false));
-
 //===----------------------------------------------------------------------===//
 // Math runtime description and matching utility
 //===----------------------------------------------------------------------===//
-
-/// Command line option to modify math runtime behavior used to implement
-/// intrinsics. This option applies both to early and late math-lowering modes.
-enum MathRuntimeVersion { fastVersion, relaxedVersion, preciseVersion };
-llvm::cl::opt<MathRuntimeVersion> mathRuntimeVersion(
-    "math-runtime", llvm::cl::desc("Select math operations' runtime behavior:"),
-    llvm::cl::values(
-        clEnumValN(fastVersion, "fast", "use fast runtime behavior"),
-        clEnumValN(relaxedVersion, "relaxed", "use relaxed runtime behavior"),
-        clEnumValN(preciseVersion, "precise", "use precise runtime behavior")),
-    llvm::cl::init(fastVersion));
-
-static llvm::cl::opt<bool>
-    forceMlirComplex("force-mlir-complex",
-                     llvm::cl::desc("Force using MLIR complex operations "
-                                    "instead of libm complex operations"),
-                     llvm::cl::init(false));
 
 /// Return a string containing the given Fortran intrinsic name
 /// with the type of its arguments specified in funcType
@@ -1102,7 +1078,9 @@ mlir::Value genMathOp(fir::FirOpBuilder &builder, mlir::Location loc,
   //           modes.
   mlir::Value result;
   llvm::StringRef mathLibFuncName = mathOp.runtimeFunc;
-  if (mathRuntimeVersion == preciseVersion &&
+  auto &optsCtx = builder.getContext()->getOptionsContext();
+  if (llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_MathRuntime>(optsCtx) ==
+          llvm::clv2::FlangMathRuntimeVersion::Precise &&
       // Some operations do not have to be lowered as conservative
       // calls, since they do not affect strict FP behavior.
       // For example, purely integer operations like exponentiation
@@ -1137,7 +1115,10 @@ mlir::Value genComplexMathOp(fir::FirOpBuilder &builder, mlir::Location loc,
     // available on the device and we rely on MLIR complex operations to
     // later map to OCML calls.
     bool isAMDGPU = fir::getTargetTriple(builder.getModule()).isAMDGCN();
-    if (!forceMlirComplex && !canUseApprox && !isAMDGPU) {
+    auto &optsCtx = builder.getContext()->getOptionsContext();
+    if (!llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_ForceMlirComplex>(
+            optsCtx) &&
+        !canUseApprox && !isAMDGPU) {
       result = genLibCall(builder, loc, mathOp, mathLibFuncType, args);
       LLVM_DEBUG(result.dump(); llvm::dbgs() << "\n");
       return result;
@@ -2112,7 +2093,11 @@ static std::pair<fir::ExtendedValue, bool> genIntrinsicCallHelper(
     const IntrinsicHandler *handler, std::optional<mlir::Type> resultType,
     llvm::ArrayRef<fir::ExtendedValue> args, IntrinsicLibrary &lib) {
   assert(handler && "must be set");
-  bool outline = handler->outline || outlineAllIntrinsics;
+  auto &optsCtx = lib.builder.getContext()->getOptionsContext();
+  bool outline =
+      handler->outline ||
+      llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_OutlineIntrinsics>(
+          optsCtx);
   fir::FirOpBuilder::FastMathFlagGuard fmfGuard(
       lib.builder,
       fastMathFlagsForIntrinsic(handler->name, lib.builder.getFastMathFlags()));
@@ -2155,9 +2140,13 @@ static std::pair<fir::ExtendedValue, bool> genIntrinsicCallHelper(
 
   IntrinsicLibrary::RuntimeCallGenerator runtimeCallGenerator =
       getRuntimeCallGeneratorHelper(range, soughtFuncType, builder, loc);
-  return {lib.genElementalCall(runtimeCallGenerator, name, *resultType, args,
-                               /*outline=*/outlineAllIntrinsics),
-          lib.resultMustBeFreed};
+  return {
+      lib.genElementalCall(
+          runtimeCallGenerator, name, *resultType, args,
+          /*outline=*/
+          llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_OutlineIntrinsics>(
+              builder.getContext()->getOptionsContext())),
+      lib.resultMustBeFreed};
 }
 
 std::pair<fir::ExtendedValue, bool>

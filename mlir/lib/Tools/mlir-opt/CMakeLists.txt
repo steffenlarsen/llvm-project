@@ -1,8 +1,12 @@
 add_mlir_library(MLIROptLib
+  MlirOptToolOptionsGetters.cpp
   MlirOptMain.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Tools/mlir-opt
+
+  LINK_COMPONENTS
+  AllOptions
 
   LINK_LIBS PUBLIC
   MLIRBytecodeWriter

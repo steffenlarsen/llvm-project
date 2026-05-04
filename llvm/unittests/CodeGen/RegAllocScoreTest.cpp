@@ -24,7 +24,6 @@
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Triple.h"
@@ -32,13 +31,12 @@
 
 using namespace llvm;
 
-namespace llvm {
-LLVM_ABI extern cl::opt<double> CopyWeight;
-LLVM_ABI extern cl::opt<double> LoadWeight;
-LLVM_ABI extern cl::opt<double> StoreWeight;
-LLVM_ABI extern cl::opt<double> CheapRematWeight;
-LLVM_ABI extern cl::opt<double> ExpensiveRematWeight;
-} // namespace llvm
+// Literal defaults matching the Init{} values in CodeGenPassOptionsOptInfos.h.
+static constexpr double CopyWeight = 0.2;
+static constexpr double LoadWeight = 4.0;
+static constexpr double StoreWeight = 1.0;
+static constexpr double CheapRematWeight = 0.2;
+static constexpr double ExpensiveRematWeight = 1.0;
 
 namespace {
 // Include helper functions to ease the manipulation of MachineFunctions.
@@ -114,7 +112,7 @@ MachineInstr *createMockInlineAsm(MachineFunction &MF) {
 }
 
 TEST(RegAllocScoreTest, SkipDebugKillInlineAsm) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module Mod("Module", Ctx);
   auto MF = createMachineFunction(Ctx, Mod);
 
@@ -135,7 +133,7 @@ TEST(RegAllocScoreTest, SkipDebugKillInlineAsm) {
 }
 
 TEST(RegAllocScoreTest, Counts) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Module Mod("Module", Ctx);
   auto MF = createMachineFunction(Ctx, Mod);
 

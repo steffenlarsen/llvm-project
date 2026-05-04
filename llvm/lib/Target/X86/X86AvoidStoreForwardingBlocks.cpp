@@ -49,20 +49,24 @@
 #include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCInstrDesc.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "x86-avoid-sfb"
 
-static cl::opt<bool> DisableX86AvoidStoreForwardBlocks(
-    "x86-disable-avoid-SFB", cl::Hidden,
-    cl::desc("X86: Disable Store Forwarding Blocks fixup."), cl::init(false));
+static unsigned X86AvoidSFBInspectionLimit = 20;
 
-static cl::opt<unsigned> X86AvoidSFBInspectionLimit(
-    "x86-sfb-inspection-limit",
-    cl::desc("X86: Number of instructions backward to "
-             "inspect for store forwarding blocks."),
-    cl::init(20), cl::Hidden);
+static bool getDisableAvoidSFB(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_DisableAvoidSFB>(
+      F.getContext().getOptionsContext());
+}
+
+static unsigned getSFBInspectionLimit(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_SFBInspectionLimit>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -342,7 +346,8 @@ static SmallVector<MachineInstr *, 2>
 findPotentialBlockers(MachineInstr *LoadInst) {
   SmallVector<MachineInstr *, 2> PotentialBlockers;
   unsigned BlockCount = 0;
-  const unsigned InspectionLimit = X86AvoidSFBInspectionLimit;
+  const unsigned InspectionLimit =
+      getSFBInspectionLimit(LoadInst->getMF()->getFunction());
   for (auto PBInst = std::next(MachineBasicBlock::reverse_iterator(LoadInst)),
             E = LoadInst->getParent()->rend();
        PBInst != E; ++PBInst) {
@@ -655,7 +660,7 @@ removeRedundantBlockingStores(DisplacementSizeMap &BlockingStoresDispSizeMap) {
 bool X86AvoidSFBImpl::runOnMachineFunction(MachineFunction &MF) {
   bool Changed = false;
 
-  if (DisableX86AvoidStoreForwardBlocks ||
+  if (getDisableAvoidSFB(MF.getFunction()) ||
       !MF.getSubtarget<X86Subtarget>().is64Bit())
     return false;
 

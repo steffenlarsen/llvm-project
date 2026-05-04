@@ -12,34 +12,24 @@
 
 #include "bolt/Passes/LongJmp.h"
 #include "bolt/Core/ParallelUtilities.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "bolt/Passes/BranchLivenessUtils.h"
 #include "bolt/Passes/RegAnalysis.h"
+#include "bolt/RuntimeLibs/BoltRuntimeLibsOptionsOptInfos.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/MathExtras.h"
 
 #define DEBUG_TYPE "longjmp"
 
 using namespace llvm;
+using namespace bolt::bolt_passes_opts;
+using namespace bolt::bolt_utils_opts;
 
 namespace opts {
-extern cl::OptionCategory BoltCategory;
-extern cl::OptionCategory BoltOptCategory;
-extern cl::opt<bool> UseOldText;
-extern cl::opt<bool> HotFunctionsAtEnd;
-
-static cl::opt<bool> GroupStubs("group-stubs",
-                                cl::desc("share stubs across functions"),
-                                cl::init(true), cl::cat(BoltOptCategory));
-
-static cl::opt<bool>
-    ExperimentalRelaxation("relax-exp",
-                           cl::desc("run experimental relaxation pass"),
-                           cl::init(false), cl::cat(BoltOptCategory));
-
-static cl::opt<bool> RelaxPLT("relax-plt",
-                              cl::desc("indicate PLT proximity to hot text"),
-                              cl::init(true), cl::cat(BoltOptCategory));
+extern unsigned AlignText;
 }
 
 namespace llvm {
@@ -83,8 +73,8 @@ static BinaryBasicBlock *getBBAtHotColdSplitPoint(BinaryFunction &Func) {
 }
 
 static bool mayNeedStub(const BinaryContext &BC, const MCInst &Inst) {
-  if (BC.isAArch64() && BC.MIB->isShortRangeBranch(Inst) &&
-      !opts::CompactCodeModel) {
+  bool CompactCodeModel = bolt_utils_opts::getCompactCodeModel(BC);
+  if (BC.isAArch64() && BC.MIB->isShortRangeBranch(Inst) && !CompactCodeModel) {
     BC.errs() << "BOLT-ERROR: short range branch not supported"
               << " outside compact code model\n";
     BC.printInstruction(BC.errs(), Inst);
@@ -122,16 +112,18 @@ LongJmpPass::createNewStub(BinaryBasicBlock &SourceBB, const MCSymbol *TgtSym,
         std::make_pair(AtAddress, StubBB.get()));
   };
 
+  const bool GroupStubs = getGroupStubs(BC);
+
   Stubs[&Func].insert(StubBB.get());
   StubBits[StubBB.get()] = BC.MIB->getUncondBranchEncodingSize();
   if (IsCold) {
     registerInMap(ColdLocalStubs[&Func]);
-    if (opts::GroupStubs && TgtIsFunc)
+    if (GroupStubs && TgtIsFunc)
       registerInMap(ColdStubGroups);
     ++NumColdStubs;
   } else {
     registerInMap(HotLocalStubs[&Func]);
-    if (opts::GroupStubs && TgtIsFunc)
+    if (GroupStubs && TgtIsFunc)
       registerInMap(HotStubGroups);
     ++NumHotStubs;
   }
@@ -354,10 +346,12 @@ uint64_t
 LongJmpPass::tentativeLayoutRelocMode(const BinaryContext &BC,
                                       BinaryFunctionListType &SortedFunctions,
                                       uint64_t DotAddress) {
+  bool HotFunctionsAtEnd = bolt_utils_opts::getHotFunctionsAtEnd(BC);
+
   // Compute hot cold frontier
   int64_t LastHotIndex = -1u;
   uint32_t CurrentIndex = 0;
-  if (opts::HotFunctionsAtEnd) {
+  if (HotFunctionsAtEnd) {
     for (BinaryFunction *BF : SortedFunctions) {
       if (BF->hasValidIndex()) {
         LastHotIndex = CurrentIndex;
@@ -380,15 +374,13 @@ LongJmpPass::tentativeLayoutRelocMode(const BinaryContext &BC,
   // Hot
   CurrentIndex = 0;
   bool ColdLayoutDone = false;
+  bool Hugify = bolt::bolt_rtlibs_opts::getHugify(BC);
   auto runColdLayout = [&]() {
-    // Mirror the extra hugify alignment inserted by final section allocation
-    // after the last non-cold section. Account for it before assigning cold
-    // fragment addresses so range checks see the hot-to-cold gap.
-    if (opts::Hugify && !BC.HasFixedLoadAddress && !opts::HotFunctionsAtEnd)
+    if (Hugify && !BC.HasFixedLoadAddress && !HotFunctionsAtEnd)
       DotAddress = alignTo(DotAddress, BC.AlignText);
     DotAddress = tentativeLayoutRelocColdPart(BC, SortedFunctions, DotAddress);
     ColdLayoutDone = true;
-    if (opts::HotFunctionsAtEnd)
+    if (HotFunctionsAtEnd)
       DotAddress = alignTo(DotAddress, BC.AlignText);
   };
   for (BinaryFunction *Func : SortedFunctions) {
@@ -449,8 +441,9 @@ void LongJmpPass::tentativeLayout(const BinaryContext &BC,
   }
 
   // Relocation mode
+  bool UseOldText = bolt_utils_opts::getUseOldText(BC);
   uint64_t EstimatedTextSize = 0;
-  if (opts::UseOldText) {
+  if (UseOldText) {
     EstimatedTextSize = tentativeLayoutRelocMode(BC, SortedFunctions, 0);
 
     // Initial padding
@@ -1024,6 +1017,8 @@ bool LongJmpPass::relaxLocalBranches(BinaryFunction &BF,
 }
 
 void LongJmpPass::relaxCalls(BinaryContext &BC) {
+  const bool HotFunctionsAtEnd = bolt_utils_opts::getHotFunctionsAtEnd(BC);
+
   // Operate on a copy of binary functions. We are going to manually insert new
   // thunks and update the list.
   BinaryFunctionListType OutputFunctions = BC.getOutputBinaryFunctions();
@@ -1084,8 +1079,7 @@ void LongJmpPass::relaxCalls(BinaryContext &BC) {
   std::vector<FunctionCluster> Clusters;
   for (size_t Index = 0, NumFuncs = OutputFunctions.size(); Index < NumFuncs;
        ++Index) {
-    const size_t BFIndex =
-        opts::HotFunctionsAtEnd ? NumFuncs - Index - 1 : Index;
+    const size_t BFIndex = HotFunctionsAtEnd ? NumFuncs - Index - 1 : Index;
     BinaryFunction *BF = OutputFunctions[BFIndex];
     if (!BC.shouldEmit(*BF) || BF->isPatch())
       continue;
@@ -1127,7 +1121,7 @@ void LongJmpPass::relaxCalls(BinaryContext &BC) {
     FC.LastFunctionIndex = BFIndex;
   }
 
-  if (opts::HotFunctionsAtEnd) {
+  if (HotFunctionsAtEnd) {
     std::reverse(Clusters.begin(), Clusters.end());
     llvm::for_each(Clusters, [](FunctionCluster &FC) {
       std::swap(FC.LastFunctionIndex, FC.FirstFunctionIndex);
@@ -1148,10 +1142,11 @@ void LongJmpPass::relaxCalls(BinaryContext &BC) {
               << "BOLT-INFO:   " << FC.Size << " estimated bytes\n";
   }
 
-  if (opts::RelaxPLT) {
+  if (getRelaxPlt(BC)) {
     // Populate one of the clusters with PLT functions based on the proximity of
     // the PLT section to avoid unneeded thunk redirection.
-    const size_t PLTClusterNum = opts::UseOldText ? Clusters.size() - 1 : 0;
+    const size_t PLTClusterNum =
+        bolt_utils_opts::getUseOldText(BC) ? Clusters.size() - 1 : 0;
     auto &PLTCluster = Clusters[PLTClusterNum];
     for (BinaryFunction &BF :
          llvm::make_second_range(BC.getBinaryFunctions())) {
@@ -1322,14 +1317,19 @@ void LongJmpPass::relaxCalls(BinaryContext &BC) {
 }
 
 Error LongJmpPass::runOnFunctions(BinaryContext &BC) {
+  bool CompactCodeModel = bolt_utils_opts::getCompactCodeModel(BC);
+  auto SplitStrategy = static_cast<opts::SplitFunctionsStrategy>(
+      bolt_utils_opts::getSplitStrategy(BC));
 
-  assert((opts::CompactCodeModel || opts::ExperimentalRelaxation ||
-          opts::SplitStrategy != opts::SplitFunctionsStrategy::CDSplit) &&
+  const bool ExperimentalRelaxation = getRelaxExp(BC);
+
+  assert((CompactCodeModel || ExperimentalRelaxation ||
+          SplitStrategy != opts::SplitFunctionsStrategy::CDSplit) &&
          "LongJmp cannot work with functions split in more than two fragments");
 
   DenseMap<BinaryFunction *, BranchLivenessInfo> BranchLiveness;
 
-  if (opts::FixBranchesWithLiveness) {
+  if (bolt_utils_opts::getFixBranchesWithLiveness(BC)) {
     SmallVector<BinaryFunction *> Candidates;
     for (auto &It : BC.getBinaryFunctions()) {
       BinaryFunction &BF = It.second;
@@ -1348,7 +1348,7 @@ Error LongJmpPass::runOnFunctions(BinaryContext &BC) {
     return It == BranchLiveness.end() ? nullptr : &It->second;
   };
 
-  if (opts::CompactCodeModel || opts::ExperimentalRelaxation) {
+  if (CompactCodeModel || ExperimentalRelaxation) {
     BC.outs()
         << "BOLT-INFO: relaxing branches for compact code model (<128MB)\n";
 
@@ -1371,7 +1371,7 @@ Error LongJmpPass::runOnFunctions(BinaryContext &BC) {
     if (HasFatal)
       return createFatalBOLTError("branch relaxation failure");
 
-    if (!opts::ExperimentalRelaxation)
+    if (!ExperimentalRelaxation)
       return Error::success();
 
     BC.outs() << "BOLT-INFO: starting experimental relaxation pass\n";

@@ -14,6 +14,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Frontend/CodeGenOptions.h"
 #include "flang/Frontend/TargetOptions.h"
 #include "flang/Lower/Bridge.h"
@@ -51,6 +52,7 @@
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/MLIROptionsOptInfos.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
@@ -59,12 +61,14 @@
 #include "mlir/Transforms/Passes.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/OptimizationLevel.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/ToolOutputFile.h"
@@ -73,259 +77,240 @@
 #include "llvm/TargetParser/Triple.h"
 #include <memory>
 
+using namespace llvm;
+using namespace llvm::clv2;
+
 //===----------------------------------------------------------------------===//
-// Some basic command-line options
+// bbc-local option declarations
 //===----------------------------------------------------------------------===//
 
-static llvm::cl::opt<std::string> inputFilename(llvm::cl::Positional,
-                                                llvm::cl::Required,
-                                                llvm::cl::desc("<input file>"));
+inline constexpr OptionInfo<std::string> BBC_InputFilename{
+    "", "<input file>", Positional{}, Required};
 
-static llvm::cl::opt<std::string>
-    outputFilename("o", llvm::cl::desc("Specify the output filename"),
-                   llvm::cl::value_desc("filename"));
+inline constexpr OptionInfo<std::string> BBC_OutputFilename{
+    "o", "Specify the output filename", value_desc("filename")};
 
-static llvm::cl::list<std::string>
-    includeDirs("I", llvm::cl::desc("include module search paths"));
+inline constexpr ListOptionInfo<std::string> BBC_IncludeDirs{
+    "I", "include module search paths"};
 
-static llvm::cl::alias includeAlias("module-directory",
-                                    llvm::cl::desc("module search directory"),
-                                    llvm::cl::aliasopt(includeDirs));
+inline constexpr AliasInfo BBC_IncludeAlias{"module-directory", "I",
+                                            "module search directory"};
 
-static llvm::cl::list<std::string>
-    intrinsicIncludeDirs("J", llvm::cl::desc("intrinsic module search paths"));
+inline constexpr ListOptionInfo<std::string> BBC_IntrinsicIncludeDirs{
+    "J", "intrinsic module search paths"};
 
-static llvm::cl::list<std::string> implicitUseModules(
-    "implicit-use-module",
-    llvm::cl::desc("implicitly USE the named module for testing"));
+inline constexpr ListOptionInfo<std::string> BBC_ImplicitUseModules{
+    "implicit-use-module", "implicitly USE the named module for testing"};
 
-static llvm::cl::alias
-    intrinsicIncludeAlias("intrinsic-module-directory",
-                          llvm::cl::desc("intrinsic module directory"),
-                          llvm::cl::aliasopt(intrinsicIncludeDirs));
+inline constexpr AliasInfo BBC_IntrinsicIncludeAlias{
+    "intrinsic-module-directory", "J", "intrinsic module directory"};
 
-static llvm::cl::alias
-    intrinsicModulePath("fintrinsic-modules-path",
-                        llvm::cl::desc("intrinsic module search paths"),
-                        llvm::cl::aliasopt(intrinsicIncludeDirs));
+inline constexpr AliasInfo BBC_IntrinsicModulePath{
+    "fintrinsic-modules-path", "J", "intrinsic module search paths"};
 
-static llvm::cl::opt<std::string>
-    moduleDir("module", llvm::cl::desc("module output directory (default .)"),
-              llvm::cl::init("."));
+inline constexpr OptionInfo<std::string> BBC_ModuleDir{
+    "module", "module output directory (default .)", Init{"."}};
 
-static llvm::cl::opt<std::string>
-    moduleSuffix("module-suffix", llvm::cl::desc("module file suffix override"),
-                 llvm::cl::init(".mod"));
+inline constexpr OptionInfo<std::string> BBC_ModuleSuffix{
+    "module-suffix", "module file suffix override", Init{".mod"}};
 
-static llvm::cl::opt<bool>
-    emitFIR("emit-fir",
-            llvm::cl::desc("Dump the FIR created by lowering and exit"),
-            llvm::cl::init(false));
+inline constexpr OptionInfo<bool> BBC_EmitFIR{
+    "emit-fir", "Dump the FIR created by lowering and exit", Init{false}};
 
-static llvm::cl::opt<bool>
-    emitHLFIR("emit-hlfir",
-              llvm::cl::desc("Dump the HLFIR created by lowering and exit"),
-              llvm::cl::init(false));
+inline constexpr OptionInfo<bool> BBC_EmitHLFIR{
+    "emit-hlfir", "Dump the HLFIR created by lowering and exit", Init{false}};
 
-static llvm::cl::opt<bool> warnStdViolation("Mstandard",
-                                            llvm::cl::desc("emit warnings"),
-                                            llvm::cl::init(false));
+inline constexpr OptionInfo<bool> BBC_WarnStdViolation{
+    "Mstandard", "emit warnings", Init{false}};
 
-static llvm::cl::opt<bool> warnIsError("Werror",
-                                       llvm::cl::desc("warnings are errors"),
-                                       llvm::cl::init(false));
+inline constexpr OptionInfo<bool> BBC_WarnIsError{
+    "Werror", "warnings are errors", Init{false}};
 
-static llvm::cl::opt<bool> dumpSymbols("dump-symbols",
-                                       llvm::cl::desc("dump the symbol table"),
-                                       llvm::cl::init(false));
+inline constexpr OptionInfo<bool> BBC_DumpSymbols{
+    "dump-symbols", "dump the symbol table", Init{false}};
 
-static llvm::cl::opt<bool> pftDumpTest(
-    "pft-test",
-    llvm::cl::desc("parse the input, create a PFT, dump it, and exit"),
-    llvm::cl::init(false));
+inline constexpr OptionInfo<bool> BBC_PftDumpTest{
+    "pft-test", "parse the input, create a PFT, dump it, and exit",
+    Init{false}};
 
-static llvm::cl::opt<bool> enableOpenMP("fopenmp",
-                                        llvm::cl::desc("enable openmp"),
-                                        llvm::cl::init(false));
+inline constexpr OptionInfo<bool> BBC_EnableOpenMP{"fopenmp", "enable openmp",
+                                                   Init{false}};
 
-static llvm::cl::opt<bool>
-    enableOpenMPDevice("fopenmp-is-target-device",
-                       llvm::cl::desc("enable openmp device compilation"),
-                       llvm::cl::init(false));
+inline constexpr OptionInfo<bool> BBC_EnableOpenMPDevice{
+    "fopenmp-is-target-device", "enable openmp device compilation",
+    Init{false}};
 
-static llvm::cl::opt<std::string> enableDoConcurrentToOpenMPConversion(
-    "fdo-concurrent-to-openmp",
-    llvm::cl::desc(
-        "Try to map `do concurrent` loops to OpenMP [none|host|device]"),
-    llvm::cl::init("none"));
+inline constexpr OptionInfo<std::string>
+    BBC_EnableDoConcurrentToOpenMPConversion{
+        "fdo-concurrent-to-openmp",
+        "Try to map `do concurrent` loops to OpenMP [none|host|device]",
+        Init{"none"}};
 
-static llvm::cl::opt<bool>
-    enableOpenMPGPU("fopenmp-is-gpu",
-                    llvm::cl::desc("enable openmp GPU target codegen"),
-                    llvm::cl::init(false));
+inline constexpr OptionInfo<bool> BBC_EnableOpenMPGPU{
+    "fopenmp-is-gpu", "enable openmp GPU target codegen", Init{false}};
 
-static llvm::cl::opt<bool> enableOpenMPForceUSM(
-    "fopenmp-force-usm",
-    llvm::cl::desc("force openmp unified shared memory mode"),
-    llvm::cl::init(false));
+inline constexpr OptionInfo<bool> BBC_EnableOpenMPForceUSM{
+    "fopenmp-force-usm", "force openmp unified shared memory mode",
+    Init{false}};
 
-static llvm::cl::list<std::string> targetTriplesOpenMP(
-    "fopenmp-targets",
-    llvm::cl::desc("comma-separated list of OpenMP offloading triples"),
-    llvm::cl::CommaSeparated);
+inline constexpr ListOptionInfo<std::string> BBC_TargetTriplesOpenMP{
+    "fopenmp-targets", "comma-separated list of OpenMP offloading triples",
+    CommaSeparated};
 
-// A simplified subset of the OpenMP RTL Flags from Flang, only the primary
-// positive options are available, no negative options e.g. fopen_assume* vs
-// fno_open_assume*
-static llvm::cl::opt<uint32_t>
-    setOpenMPVersion("fopenmp-version",
-                     llvm::cl::desc("OpenMP standard version"),
-                     llvm::cl::init(31));
+inline constexpr OptionInfo<uint32_t> BBC_SetOpenMPVersion{
+    "fopenmp-version", "OpenMP standard version", Init{31u}};
 
-static llvm::cl::opt<uint32_t> setOpenMPTargetDebug(
+inline constexpr OptionInfo<uint32_t> BBC_SetOpenMPTargetDebug{
     "fopenmp-target-debug",
-    llvm::cl::desc("Enable debugging in the OpenMP offloading device RTL"),
-    llvm::cl::init(0));
+    "Enable debugging in the OpenMP offloading device RTL", Init{0u}};
 
-static llvm::cl::opt<bool> setOpenMPThreadSubscription(
+inline constexpr OptionInfo<bool> BBC_SetOpenMPThreadSubscription{
     "fopenmp-assume-threads-oversubscription",
-    llvm::cl::desc("Assume work-shared loops do not have more "
-                   "iterations than participating threads."),
-    llvm::cl::init(false));
+    "Assume work-shared loops do not have more "
+    "iterations than participating threads.",
+    Init{false}};
 
-static llvm::cl::opt<bool> setOpenMPTeamSubscription(
+inline constexpr OptionInfo<bool> BBC_SetOpenMPTeamSubscription{
     "fopenmp-assume-teams-oversubscription",
-    llvm::cl::desc("Assume distributed loops do not have more iterations than "
-                   "participating teams."),
-    llvm::cl::init(false));
+    "Assume distributed loops do not have more iterations than "
+    "participating teams.",
+    Init{false}};
 
-static llvm::cl::opt<bool> setOpenMPNoThreadState(
+inline constexpr OptionInfo<bool> BBC_SetOpenMPNoThreadState{
     "fopenmp-assume-no-thread-state",
-    llvm::cl::desc(
-        "Assume that no thread in a parallel region will modify an ICV."),
-    llvm::cl::init(false));
+    "Assume that no thread in a parallel region will modify an ICV.",
+    Init{false}};
 
-static llvm::cl::opt<bool> setOpenMPNoNestedParallelism(
+inline constexpr OptionInfo<bool> BBC_SetOpenMPNoNestedParallelism{
     "fopenmp-assume-no-nested-parallelism",
-    llvm::cl::desc("Assume that no thread in a parallel region will encounter "
-                   "a parallel region."),
-    llvm::cl::init(false));
+    "Assume that no thread in a parallel region will encounter "
+    "a parallel region.",
+    Init{false}};
 
-static llvm::cl::opt<bool>
-    setNoGPULib("nogpulib",
-                llvm::cl::desc("Do not link device library for CUDA/HIP device "
-                               "compilation"),
-                llvm::cl::init(false));
+inline constexpr OptionInfo<bool> BBC_SetNoGPULib{
+    "nogpulib", "Do not link device library for CUDA/HIP device compilation",
+    Init{false}};
 
-static llvm::cl::opt<bool> enableOpenACC("fopenacc",
-                                         llvm::cl::desc("enable openacc"),
-                                         llvm::cl::init(false));
+inline constexpr OptionInfo<bool> BBC_EnableOpenACC{
+    "fopenacc", "enable openacc", Init{false}};
 
-static llvm::cl::opt<bool> enableNoPPCNativeVecElemOrder(
+inline constexpr OptionInfo<bool> BBC_EnableNoPPCNativeVecElemOrder{
     "fno-ppc-native-vector-element-order",
-    llvm::cl::desc("no PowerPC native vector element order."),
-    llvm::cl::init(false));
+    "no PowerPC native vector element order.", Init{false}};
 
-static llvm::cl::opt<bool> enableCUDA("fcuda",
-                                      llvm::cl::desc("enable CUDA Fortran"),
-                                      llvm::cl::init(false));
+inline constexpr OptionInfo<bool> BBC_EnableCUDA{"fcuda", "enable CUDA Fortran",
+                                                 Init{false}};
 
-static llvm::cl::opt<bool> enableCUDAInit("fcuda-init",
-                                          llvm::cl::desc("enable CUDA Init"),
-                                          llvm::cl::init(false));
+inline constexpr OptionInfo<bool> BBC_EnableCUDAInit{
+    "fcuda-init", "enable CUDA Init", Init{false}};
 
-static llvm::cl::opt<bool>
-    warnOnAllExtensions("pedantic", llvm::cl::desc("warn on all extensions"),
-                        llvm::cl::init(false));
+inline constexpr OptionInfo<bool> BBC_WarnOnAllExtensions{
+    "pedantic", "warn on all extensions", Init{false}};
 
-static llvm::cl::opt<bool>
-    enableDoConcurrentOffload("fdoconcurrent-offload",
-                              llvm::cl::desc("enable do concurrent offload"),
-                              llvm::cl::init(false));
+inline constexpr OptionInfo<bool> BBC_EnableDoConcurrentOffload{
+    "fdoconcurrent-offload", "enable do concurrent offload", Init{false}};
 
-static llvm::cl::opt<bool>
-    disableCUDAWarpFunction("fcuda-disable-warp-function",
-                            llvm::cl::desc("Disable CUDA Warp Function"),
-                            llvm::cl::init(false));
+inline constexpr OptionInfo<bool> BBC_DisableCUDAWarpFunction{
+    "fcuda-disable-warp-function", "Disable CUDA Warp Function", Init{false}};
 
-static llvm::cl::opt<std::string>
-    enableGPUMode("gpu",
-                  llvm::cl::desc("Enable GPU Mode managed|unified|pinned"),
-                  llvm::cl::init(""));
+inline constexpr OptionInfo<std::string> BBC_EnableGPUMode{
+    "gpu", "Enable GPU Mode managed|unified|pinned", Init{""}};
 
-static llvm::cl::opt<std::string>
-    compilerDirectiveSentinel("sentinel-test",
-                              llvm::cl::desc("Test additional sentinel"),
-                              llvm::cl::init("dir$"));
+inline constexpr OptionInfo<std::string> BBC_CompilerDirectiveSentinel{
+    "sentinel-test", "Test additional sentinel", Init{"dir$"}};
 
-static llvm::cl::opt<bool> fixedForm("ffixed-form",
-                                     llvm::cl::desc("enable fixed form"),
-                                     llvm::cl::init(false));
-static llvm::cl::opt<std::string>
-    targetTripleOverride("target",
-                         llvm::cl::desc("Override host target triple"),
-                         llvm::cl::init(""));
+inline constexpr OptionInfo<bool> BBC_FixedForm{
+    "ffixed-form", "enable fixed form", Init{false}};
 
-static llvm::cl::opt<bool> integerWrapAround(
-    "fwrapv",
-    llvm::cl::desc("Treat signed integer overflow as two's complement"),
-    llvm::cl::init(false));
+inline constexpr OptionInfo<std::string> BBC_TargetTripleOverride{
+    "target", "Override host target triple", Init{""}};
 
-static llvm::cl::opt<bool> initGlobalZero(
+inline constexpr OptionInfo<bool> BBC_IntegerWrapAround{
+    "fwrapv", "Treat signed integer overflow as two's complement", Init{false}};
+
+inline constexpr OptionInfo<bool> BBC_InitGlobalZero{
     "finit-global-zero",
-    llvm::cl::desc("Zero initialize globals without default initialization"),
-    llvm::cl::init(true));
+    "Zero initialize globals without default initialization", Init{true}};
 
-static llvm::cl::opt<bool>
-    reallocateLHS("frealloc-lhs",
-                  llvm::cl::desc("Follow Fortran 2003 rules for (re)allocating "
-                                 "the LHS of the intrinsic assignment"),
-                  llvm::cl::init(true));
+inline constexpr OptionInfo<bool> BBC_ReallocateLHS{
+    "frealloc-lhs",
+    "Follow Fortran 2003 rules for (re)allocating "
+    "the LHS of the intrinsic assignment",
+    Init{true}};
 
-static llvm::cl::opt<bool> stackRepackArrays(
+inline constexpr OptionInfo<bool> BBC_StackRepackArrays{
     "fstack-repack-arrays",
-    llvm::cl::desc("Allocate temporary arrays for -frepack-arrays "
-                   "in stack memory"),
-    llvm::cl::init(false));
+    "Allocate temporary arrays for -frepack-arrays "
+    "in stack memory",
+    Init{false}};
 
-static llvm::cl::opt<bool>
-    repackArrays("frepack-arrays",
-                 llvm::cl::desc("Pack non-contiguous assummed shape arrays "
-                                "into contiguous memory"),
-                 llvm::cl::init(false));
+inline constexpr OptionInfo<bool> BBC_RepackArrays{
+    "frepack-arrays",
+    "Pack non-contiguous assummed shape arrays "
+    "into contiguous memory",
+    Init{false}};
 
-static llvm::cl::opt<bool>
-    repackArraysWhole("frepack-arrays-continuity-whole",
-                      llvm::cl::desc("Repack arrays that are non-contiguous "
-                                     "in any dimension. If set to false, "
-                                     "only the arrays non-contiguous in the "
-                                     "leading dimension will be repacked"),
-                      llvm::cl::init(true));
+inline constexpr OptionInfo<bool> BBC_RepackArraysWhole{
+    "frepack-arrays-continuity-whole",
+    "Repack arrays that are non-contiguous "
+    "in any dimension. If set to false, "
+    "only the arrays non-contiguous in the "
+    "leading dimension will be repacked",
+    Init{true}};
 
-static llvm::cl::opt<std::string> complexRange(
+inline constexpr OptionInfo<std::string> BBC_ComplexRange{
     "complex-range",
-    llvm::cl::desc("Controls the various implementations for complex "
-                   "multiplication and division [full|improved|basic]"),
-    llvm::cl::init(""));
+    "Controls the various implementations for complex "
+    "multiplication and division [full|improved|basic]",
+    Init{""}};
 
-static llvm::cl::opt<Fortran::common::FPMaxminBehavior> fpMaxminBehavior(
-    "ffp-maxmin-behavior",
-    llvm::cl::desc("Control max/min and [max|min][loc|val] lowering "
-                   "[legacy|portable|extremum|extremenum]"),
-    llvm::cl::values(clEnumValN(Fortran::common::FPMaxminBehavior::Legacy,
-                                "legacy", "cmp+select"),
-                     clEnumValN(Fortran::common::FPMaxminBehavior::Portable,
-                                "portable",
-                                "cmp+select and arith.max/minnumf when nnan "
-                                "and nsz fast math flags are enabled"),
-                     clEnumValN(Fortran::common::FPMaxminBehavior::Extremum,
-                                "extremum", "arith.max/minimum"),
-                     clEnumValN(Fortran::common::FPMaxminBehavior::ExtremeNum,
-                                "extremenum", "arith.max/minnum")),
-    llvm::cl::init(Fortran::common::FPMaxminBehavior::Legacy));
+// FPMaxminBehavior enum option
+inline constexpr EnumVal<Fortran::common::FPMaxminBehavior>
+    FPMaxminBehaviorVals[] = {
+        {"legacy", Fortran::common::FPMaxminBehavior::Legacy, "cmp+select"},
+        {"portable", Fortran::common::FPMaxminBehavior::Portable,
+         "cmp+select and arith.max/minnumf when nnan and nsz fast math flags "
+         "are enabled"},
+        {"extremum", Fortran::common::FPMaxminBehavior::Extremum,
+         "arith.max/minimum"},
+        {"extremenum", Fortran::common::FPMaxminBehavior::ExtremeNum,
+         "arith.max/minnum"},
+};
+
+inline constexpr auto BBC_FPMaxminBehavior =
+    makeEnumOption<Fortran::common::FPMaxminBehavior>(
+        "ffp-maxmin-behavior",
+        "Control max/min and [max|min][loc|val] lowering "
+        "[legacy|portable|extremum|extremenum]",
+        FPMaxminBehaviorVals, Init{Fortran::common::FPMaxminBehavior::Legacy});
+
+//===----------------------------------------------------------------------===//
+// Tool registry
+//===----------------------------------------------------------------------===//
+
+inline constexpr OptionsRegistry<
+    &BBC_InputFilename, &BBC_OutputFilename, &BBC_IncludeDirs,
+    &BBC_IncludeAlias, &BBC_IntrinsicIncludeDirs, &BBC_ImplicitUseModules,
+    &BBC_IntrinsicIncludeAlias, &BBC_IntrinsicModulePath, &BBC_ModuleDir,
+    &BBC_ModuleSuffix, &BBC_EmitFIR, &BBC_EmitHLFIR, &BBC_WarnStdViolation,
+    &BBC_WarnIsError, &BBC_DumpSymbols, &BBC_PftDumpTest, &BBC_EnableOpenMP,
+    &BBC_EnableOpenMPDevice, &BBC_EnableDoConcurrentToOpenMPConversion,
+    &BBC_EnableOpenMPGPU, &BBC_EnableOpenMPForceUSM, &BBC_TargetTriplesOpenMP,
+    &BBC_SetOpenMPVersion, &BBC_SetOpenMPTargetDebug,
+    &BBC_SetOpenMPThreadSubscription, &BBC_SetOpenMPTeamSubscription,
+    &BBC_SetOpenMPNoThreadState, &BBC_SetOpenMPNoNestedParallelism,
+    &BBC_SetNoGPULib, &BBC_EnableOpenACC, &BBC_EnableNoPPCNativeVecElemOrder,
+    &BBC_EnableCUDA, &BBC_EnableCUDAInit, &BBC_EnableDoConcurrentOffload,
+    &BBC_WarnOnAllExtensions, &BBC_DisableCUDAWarpFunction, &BBC_EnableGPUMode,
+    &BBC_CompilerDirectiveSentinel, &BBC_FixedForm, &BBC_TargetTripleOverride,
+    &BBC_IntegerWrapAround, &BBC_InitGlobalZero, &BBC_ReallocateLHS,
+    &BBC_StackRepackArrays, &BBC_RepackArrays, &BBC_RepackArraysWhole,
+    &BBC_ComplexRange, &BBC_FPMaxminBehavior>
+    BBCToolReg;
+
+using BBCToolOpts = decltype(BBCToolReg)::ParsedOptionsT;
 
 #define FLANG_EXCLUDE_CODEGEN
-#include "flang/Optimizer/Passes/CommandLineOpts.h"
 #include "flang/Optimizer/Passes/Pipelines.h"
 
 //===----------------------------------------------------------------------===//
@@ -349,7 +334,8 @@ static void registerAllPasses() {
 /// from LLVM IR. Drivers that needs to generate assembly from LLVM IR should
 /// create a target machine according to their specific options.
 static std::unique_ptr<llvm::TargetMachine>
-createTargetMachine(llvm::StringRef targetTriple, std::string &error) {
+createTargetMachine(llvm::StringRef targetTriple, std::string &error,
+                    const llvm::clv2::OptionsContext &optsCtx) {
   std::string triple{targetTriple};
   if (triple.empty())
     triple = llvm::sys::getDefaultTargetTriple();
@@ -359,9 +345,15 @@ createTargetMachine(llvm::StringRef targetTriple, std::string &error) {
       llvm::TargetRegistry::lookupTarget(parsedTriple, error);
   if (!theTarget)
     return nullptr;
+  // Carry the parsed options: TargetMachine's ctor reads through these, and a
+  // default-constructed TargetOptions would silently use an empty context.
+  llvm::TargetOptions targetOptions;
+  targetOptions.OptsCtx = &optsCtx;
+  // MCAsmInfo reads through the nested MC options, so set both (as llc does).
+  targetOptions.MCOptions.OptsCtx = &optsCtx;
   return std::unique_ptr<llvm::TargetMachine>{
       theTarget->createTargetMachine(parsedTriple, /*CPU=*/"",
-                                     /*Features=*/"", llvm::TargetOptions(),
+                                     /*Features=*/"", targetOptions,
                                      /*Reloc::Model=*/std::nullopt)};
 }
 
@@ -369,17 +361,19 @@ createTargetMachine(llvm::StringRef targetTriple, std::string &error) {
 /// of the pass manager, allowing it to be invoked as soon as it's
 /// required without impacting the main pass pipeline that may be invoked
 /// more than once for verification.
-static llvm::LogicalResult runOpenMPPasses(mlir::ModuleOp mlirModule) {
+static llvm::LogicalResult runOpenMPPasses(mlir::ModuleOp mlirModule,
+                                           const OptionsContext &OptsCtx) {
+  const auto *Opts = OptsCtx.getViewPtr<&BBCToolReg>();
   mlir::PassManager pm(mlirModule->getName(),
                        mlir::OpPassManager::Nesting::Implicit);
   using DoConcurrentMappingKind =
       Fortran::frontend::CodeGenOptions::DoConcurrentMappingKind;
 
   fir::OpenMPFIRPassPipelineOpts opts;
-  opts.isTargetDevice = enableOpenMPDevice;
+  opts.isTargetDevice = Opts->get<&BBC_EnableOpenMPDevice>();
   opts.doConcurrentMappingKind =
       llvm::StringSwitch<DoConcurrentMappingKind>(
-          enableDoConcurrentToOpenMPConversion)
+          Opts->get<&BBC_EnableDoConcurrentToOpenMPConversion>())
           .Case("host", DoConcurrentMappingKind::DCMK_Host)
           .Case("device", DoConcurrentMappingKind::DCMK_Device)
           .Default(DoConcurrentMappingKind::DCMK_None);
@@ -402,10 +396,14 @@ static llvm::LogicalResult convertFortranSourceToMLIR(
     const ProgramName &programPrefix,
     Fortran::semantics::SemanticsContext &semanticsContext,
     const mlir::PassPipelineCLParser &passPipeline,
-    const llvm::TargetMachine &targetMachine) {
+    const llvm::TargetMachine &targetMachine, const OptionsContext &OptsCtx) {
+
+  const auto *Opts = OptsCtx.getViewPtr<&BBCToolReg>();
 
   // prep for prescan and parse
   Fortran::parser::Parsing parsing{semanticsContext.allCookedSources()};
+  const std::string &compilerDirectiveSentinel =
+      Opts->get<&BBC_CompilerDirectiveSentinel>();
   if (!compilerDirectiveSentinel.empty()) {
     options.compilerDirectiveSentinels.push_back(compilerDirectiveSentinel);
   }
@@ -436,6 +434,7 @@ static llvm::LogicalResult convertFortranSourceToMLIR(
 
   // run semantics
   auto &parseTree = *parsing.parseTree();
+  const auto &implicitUseModules = Opts->get<&BBC_ImplicitUseModules>();
   std::vector<std::string> implicitUseModuleNames;
   for (const std::string &module : implicitUseModules) {
     bool moduleIsDefinedInInput{false};
@@ -473,16 +472,18 @@ static llvm::LogicalResult convertFortranSourceToMLIR(
                    << "could not find module file for __fortran_type_info\n";
   }
 
+  bool dumpSymbols = Opts->get<&BBC_DumpSymbols>();
   if (dumpSymbols) {
     semantics.DumpSymbols(llvm::outs());
     return mlir::success();
   }
 
+  bool pftDumpTest = Opts->get<&BBC_PftDumpTest>();
   if (pftDumpTest) {
     // Use default lowering options for PFT dump test
     Fortran::lower::LoweringOptions loweringOptions{};
     if (auto ast = Fortran::lower::createPFT(parseTree, semanticsContext,
-                                             loweringOptions)) {
+                                             loweringOptions, OptsCtx)) {
       Fortran::lower::dumpPFT(llvm::outs(), *ast);
       return mlir::success();
     }
@@ -494,12 +495,25 @@ static llvm::LogicalResult convertFortranSourceToMLIR(
   mlir::DialectRegistry registry;
   fir::support::registerNonCodegenDialects(registry);
   fir::support::addFIRExtensions(registry);
-  mlir::MLIRContext ctx(registry);
+  mlir::MLIRContext ctx(OptsCtx, registry);
   fir::support::loadNonCodegenDialects(ctx);
   auto &defKinds = semanticsContext.defaultKinds();
   fir::KindMapping kindMap(
       &ctx, llvm::ArrayRef<fir::KindTy>{fir::fromDefaultKinds(defKinds)});
   std::string targetTriple = targetMachine.getTargetTriple().normalize();
+
+  bool enableNoPPCNativeVecElemOrder =
+      Opts->get<&BBC_EnableNoPPCNativeVecElemOrder>();
+  bool integerWrapAround = Opts->get<&BBC_IntegerWrapAround>();
+  bool initGlobalZero = Opts->get<&BBC_InitGlobalZero>();
+  bool reallocateLHS = Opts->get<&BBC_ReallocateLHS>();
+  bool stackRepackArrays = Opts->get<&BBC_StackRepackArrays>();
+  bool repackArrays = Opts->get<&BBC_RepackArrays>();
+  bool repackArraysWhole = Opts->get<&BBC_RepackArraysWhole>();
+  bool enableCUDA = Opts->get<&BBC_EnableCUDA>();
+  const std::string &complexRange = Opts->get<&BBC_ComplexRange>();
+  auto fpMaxminBehavior = Opts->get<&BBC_FPMaxminBehavior>();
+
   // Use default lowering options for bbc.
   Fortran::lower::LoweringOptions loweringOptions{};
   loweringOptions.setNoPPCNativeVecElemOrder(enableNoPPCNativeVecElemOrder);
@@ -509,12 +523,13 @@ static llvm::LogicalResult convertFortranSourceToMLIR(
   loweringOptions.setStackRepackArrays(stackRepackArrays);
   loweringOptions.setRepackArrays(repackArrays);
   loweringOptions.setRepackArraysWhole(repackArraysWhole);
-  loweringOptions.setSkipExternalRttiDefinition(skipExternalRttiDefinition);
+  loweringOptions.setSkipExternalRttiDefinition(
+      llvm::flang_opts::getSkipExternalRttiDefinition(ctx.getOptionsContext()));
   if (enableCUDA)
     loweringOptions.setCUDARuntimeCheck(true);
   if (complexRange == "improved" || complexRange == "basic")
     loweringOptions.setComplexDivisionToRuntime(false);
-  loweringOptions.setFPMaxminBehavior(fpMaxminBehavior.getValue());
+  loweringOptions.setFPMaxminBehavior(fpMaxminBehavior);
   std::vector<Fortran::lower::EnvironmentDefault> envDefaults = {};
   Fortran::frontend::TargetOptions targetOpts;
   Fortran::frontend::CodeGenOptions cgOpts;
@@ -524,6 +539,22 @@ static llvm::LogicalResult convertFortranSourceToMLIR(
       targetTriple, kindMap, loweringOptions, envDefaults,
       semanticsContext.languageFeatures(), targetMachine, targetOpts, cgOpts);
   mlir::ModuleOp mlirModule = burnside.getModule();
+
+  bool enableOpenMP = Opts->get<&BBC_EnableOpenMP>();
+  bool enableOpenMPDevice = Opts->get<&BBC_EnableOpenMPDevice>();
+  bool enableOpenMPGPU = Opts->get<&BBC_EnableOpenMPGPU>();
+  bool enableOpenMPForceUSM = Opts->get<&BBC_EnableOpenMPForceUSM>();
+  uint32_t setOpenMPVersion = Opts->get<&BBC_SetOpenMPVersion>();
+  uint32_t setOpenMPTargetDebug = Opts->get<&BBC_SetOpenMPTargetDebug>();
+  bool setOpenMPThreadSubscription =
+      Opts->get<&BBC_SetOpenMPThreadSubscription>();
+  bool setOpenMPTeamSubscription = Opts->get<&BBC_SetOpenMPTeamSubscription>();
+  bool setOpenMPNoThreadState = Opts->get<&BBC_SetOpenMPNoThreadState>();
+  bool setOpenMPNoNestedParallelism =
+      Opts->get<&BBC_SetOpenMPNoNestedParallelism>();
+  bool setNoGPULib = Opts->get<&BBC_SetNoGPULib>();
+  const auto &targetTriplesOpenMP = Opts->get<&BBC_TargetTriplesOpenMP>();
+
   if (enableOpenMP) {
     if (enableOpenMPGPU && !enableOpenMPDevice) {
       llvm::errs() << "FATAL: -fopenmp-is-gpu can only be set if "
@@ -550,6 +581,8 @@ static llvm::LogicalResult convertFortranSourceToMLIR(
   }
   burnside.lower(parseTree, semanticsContext);
   std::error_code ec;
+  const std::string &inputFilename = Opts->get<&BBC_InputFilename>();
+  const std::string &outputFilename = Opts->get<&BBC_OutputFilename>();
   std::string outputName = outputFilename;
   if (!outputName.size())
     outputName = llvm::sys::path::stem(inputFilename).str().append(".mlir");
@@ -563,8 +596,11 @@ static llvm::LogicalResult convertFortranSourceToMLIR(
   // ensure that the FIR is correct with respect to OpenMP operations/
   // attributes.
   if (enableOpenMP)
-    if (mlir::failed(runOpenMPPasses(mlirModule)))
+    if (mlir::failed(runOpenMPPasses(mlirModule, OptsCtx)))
       return mlir::failure();
+
+  bool emitFIR = Opts->get<&BBC_EmitFIR>();
+  bool emitHLFIR = Opts->get<&BBC_EmitHLFIR>();
 
   // Otherwise run the default passes.
   mlir::PassManager pm(mlirModule->getName(),
@@ -637,18 +673,47 @@ int main(int argc, char **argv) {
 
   mlir::registerMLIRContextCLOptions();
   mlir::registerAsmPrinterCLOptions();
-  mlir::registerPassManagerCLOptions();
   mlir::PassPipelineCLParser passPipe("", "Compiler passes to run");
-  llvm::cl::ParseCommandLineOptions(argc, argv, "Burnside Bridge Compiler\n");
+
+  // Build the OptionParser with bbc-local, flang library, MLIR, and LLVM
+  // options.
+  clv2::OptionParser P;
+  P.add<&BBCToolReg>();
+  P.add<&FlangOptsReg>();
+  P.add<&clv2::MLIROptsReg>();
+  RegisterCoreLLVMOptions(P);
+  P.enableGlobalDynamicEntries();
+  mlir::registerPassManagerCLOptions(P);
+  passPipe.registerWith(P);
+
+  auto OptsCtx = P.parse(argc, argv, "Burnside Bridge Compiler\n");
+  if (!OptsCtx)
+    return 1;
+
+  const auto *Opts = OptsCtx->getViewPtr<&BBCToolReg>();
+
+  // Disable the ExternalNameConversion pass by default until all the tests have
+  // been updated to pass with it enabled. Override via mutable view.
+  if (auto *FlangOpts = OptsCtx->getViewPtr<&FlangOptsReg>()) {
+    if (!FlangOpts->specified<&FLANG_DisableExternalNameInterop>())
+      FlangOpts->get<&FLANG_DisableExternalNameInterop>() = true;
+  }
 
   ProgramName programPrefix;
   programPrefix = argv[0] + ": "s;
 
+  const auto &includeDirs = Opts->get<&BBC_IncludeDirs>();
+  auto &mutableIncludeDirs =
+      const_cast<std::vector<std::string> &>(includeDirs);
+  const auto &intrinsicIncludeDirs = Opts->get<&BBC_IntrinsicIncludeDirs>();
+  auto &mutableIntrinsicIncludeDirs =
+      const_cast<std::vector<std::string> &>(intrinsicIncludeDirs);
+
   if (includeDirs.size() == 0) {
-    includeDirs.push_back(".");
+    mutableIncludeDirs.push_back(".");
     // Default Fortran modules should be installed in include/flang (a sibling
     // to the bin) directory.
-    intrinsicIncludeDirs.push_back(
+    mutableIntrinsicIncludeDirs.push_back(
         llvm::sys::path::parent_path(
             llvm::sys::path::parent_path(
                 llvm::sys::fs::getMainExecutable(argv[0], nullptr)))
@@ -664,6 +729,34 @@ int main(int argc, char **argv) {
                                       std::string{FLANG_VERSION_MINOR_STRING});
   options.predefinitions.emplace_back(
       "__flang_patchlevel__"s, std::string{FLANG_VERSION_PATCHLEVEL_STRING});
+
+  bool enableOpenMP = Opts->get<&BBC_EnableOpenMP>();
+  bool enableOpenMPDevice = Opts->get<&BBC_EnableOpenMPDevice>();
+  bool enableOpenMPGPU = Opts->get<&BBC_EnableOpenMPGPU>();
+  bool enableOpenMPForceUSM = Opts->get<&BBC_EnableOpenMPForceUSM>();
+  uint32_t setOpenMPVersion = Opts->get<&BBC_SetOpenMPVersion>();
+  uint32_t setOpenMPTargetDebug = Opts->get<&BBC_SetOpenMPTargetDebug>();
+  bool setOpenMPThreadSubscription =
+      Opts->get<&BBC_SetOpenMPThreadSubscription>();
+  bool setOpenMPTeamSubscription = Opts->get<&BBC_SetOpenMPTeamSubscription>();
+  bool setOpenMPNoThreadState = Opts->get<&BBC_SetOpenMPNoThreadState>();
+  bool setOpenMPNoNestedParallelism =
+      Opts->get<&BBC_SetOpenMPNoNestedParallelism>();
+  bool setNoGPULib = Opts->get<&BBC_SetNoGPULib>();
+  const auto &targetTriplesOpenMP = Opts->get<&BBC_TargetTriplesOpenMP>();
+  bool enableOpenACC = Opts->get<&BBC_EnableOpenACC>();
+  bool enableCUDA = Opts->get<&BBC_EnableCUDA>();
+  bool enableCUDAInit = Opts->get<&BBC_EnableCUDAInit>();
+  bool enableDoConcurrentOffload = Opts->get<&BBC_EnableDoConcurrentOffload>();
+  bool disableCUDAWarpFunction = Opts->get<&BBC_DisableCUDAWarpFunction>();
+  const std::string &enableGPUMode = Opts->get<&BBC_EnableGPUMode>();
+  bool fixedForm = Opts->get<&BBC_FixedForm>();
+  const std::string &targetTripleOverride =
+      Opts->get<&BBC_TargetTripleOverride>();
+  const std::string &moduleDir = Opts->get<&BBC_ModuleDir>();
+  const std::string &moduleSuffix = Opts->get<&BBC_ModuleSuffix>();
+  bool warnStdViolation = Opts->get<&BBC_WarnStdViolation>();
+  bool warnIsError = Opts->get<&BBC_WarnIsError>();
 
   Fortran::common::LangOptions langOpts;
   langOpts.NoGPULib = setNoGPULib;
@@ -699,7 +792,7 @@ int main(int argc, char **argv) {
   if (enableCUDAInit) {
     options.features.Enable(Fortran::common::LanguageFeature::CUDAInit);
   }
-  if (warnOnAllExtensions) {
+  if (Opts->get<&BBC_WarnOnAllExtensions>()) {
     options.features.WarnOnAllNonstandard();
     options.features.WarnOnAllUsage();
   }
@@ -730,6 +823,7 @@ int main(int argc, char **argv) {
   Fortran::parser::AllCookedSources allCookedSources(allSources);
   Fortran::semantics::SemanticsContext semanticsContext{
       defaultKinds, options.features, langOpts, allCookedSources};
+  semanticsContext.setOptionsContext(*OptsCtx);
   semanticsContext.set_moduleDirectory(moduleDir)
       .set_moduleFileSuffix(moduleSuffix)
       .set_searchDirectories(includeDirs)
@@ -740,7 +834,7 @@ int main(int argc, char **argv) {
   std::string error;
   // Create host target machine.
   std::unique_ptr<llvm::TargetMachine> targetMachine =
-      createTargetMachine(targetTripleOverride, error);
+      createTargetMachine(targetTripleOverride, error, *OptsCtx);
   if (!targetMachine) {
     llvm::errs() << "failed to create target machine: " << error << "\n";
     return mlir::failed(mlir::failure());
@@ -751,7 +845,7 @@ int main(int argc, char **argv) {
       semanticsContext.targetCharacteristics(), *targetMachine, {},
       compilerVersion, compilerOptions);
 
-  return mlir::failed(
-      convertFortranSourceToMLIR(inputFilename, options, programPrefix,
-                                 semanticsContext, passPipe, *targetMachine));
+  return mlir::failed(convertFortranSourceToMLIR(
+      Opts->get<&BBC_InputFilename>(), options, programPrefix, semanticsContext,
+      passPipe, *targetMachine, *OptsCtx));
 }

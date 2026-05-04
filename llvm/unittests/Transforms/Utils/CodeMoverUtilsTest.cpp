@@ -64,7 +64,7 @@ static Instruction *getInstructionByName(Function &F, StringRef Name) {
 }
 
 TEST(CodeMoverUtils, IsSafeToMoveTest1) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   // void safecall() noexcept willreturn nosync;
   // void unsafecall();
@@ -183,7 +183,7 @@ TEST(CodeMoverUtils, IsSafeToMoveTest1) {
 }
 
 TEST(CodeMoverUtils, IsSafeToMoveTest2) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M =
       parseIR(C, R"(define void @foo(i1 %cond, i32 %op0, i32 %op1) {
@@ -219,7 +219,7 @@ TEST(CodeMoverUtils, IsSafeToMoveTest2) {
 }
 
 TEST(CodeMoverUtils, IsSafeToMoveTest3) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M = parseIR(C, R"(define void @foo(i64 %N) {
                  entry:
@@ -258,7 +258,7 @@ TEST(CodeMoverUtils, IsSafeToMoveTest3) {
 }
 
 TEST(CodeMoverUtils, IsSafeToMoveTest4) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M =
       parseIR(C, R"(define void @foo(i1 %cond, i32 %op0, i32 %op1) {
@@ -311,7 +311,7 @@ TEST(CodeMoverUtils, IsSafeToMoveTest4) {
 }
 
 TEST(CodeMoverUtils, IsSafeToMoveTest5) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M =
       parseIR(C, R"(define void @dependence(ptr noalias %A, ptr noalias %B){
@@ -388,7 +388,7 @@ entry:
 }
 
 TEST(CodeMoverUtils, IsSafeToMoveTest6) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M = parseIR(
       C, R"(define void @dependence(i1 %cond, ptr noalias %A, ptr noalias %B){

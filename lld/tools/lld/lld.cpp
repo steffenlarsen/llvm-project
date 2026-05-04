@@ -31,7 +31,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/CrashRecoveryContext.h"
 #include "llvm/Support/LLVMDriver.h"
 #include "llvm/Support/Path.h"

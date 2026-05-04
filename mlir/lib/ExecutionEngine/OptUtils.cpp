@@ -60,13 +60,15 @@ mlir::makeOptimizingTransformer(unsigned optLevel, unsigned sizeLevel,
     CGSCCAnalysisManager cgam;
     ModuleAnalysisManager mam;
 
-    PipelineTuningOptions tuningOptions;
+    PipelineTuningOptions tuningOptions(
+        /*Ctx=*/llvm::clv2::defaultOptionsContext());
     tuningOptions.LoopUnrolling = true;
     tuningOptions.LoopInterleaving = true;
     tuningOptions.LoopVectorization = true;
     tuningOptions.SLPVectorization = true;
 
-    PassBuilder pb(targetMachine, tuningOptions);
+    PassBuilder pb(llvm::clv2::defaultOptionsContext(), targetMachine,
+                   tuningOptions);
 
     pb.registerModuleAnalyses(mam);
     pb.registerCGSCCAnalyses(cgam);

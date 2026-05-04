@@ -183,18 +183,21 @@ bool DirectXTargetMachine::addPassesToEmitFile(
     PM.add(createDXILPrettyPrinterLegacyPass(Out));
     break;
   case CodeGenFileType::ObjectFile:
-    if (TargetPassConfig::willCompleteCodeGenPipeline()) {
-      PM.add(createDXILEmbedderPass());
+    if (TargetPassConfig::willCompleteCodeGenPipeline(getOptionsContext())) {
+      // Construct the MMI up front so the embedder can record its debug-info
+      // disposition in the same MCContext the DXContainer writer will read.
+      if (!MMIWP)
+        MMIWP = new MachineModuleInfoWrapperPass(this);
+      MCContext &MCtx = MMIWP->getMMI().getContext();
+
+      PM.add(createDXILEmbedderPass(MCtx));
       // We embed the other DXContainer globals after embedding DXIL so that the
       // globals don't pollute the DXIL.
       PM.add(createDXContainerGlobalsPass());
       PM.add(createDXContainerPDBPass());
 
-      if (!MMIWP)
-        MMIWP = new MachineModuleInfoWrapperPass(this);
       PM.add(MMIWP);
-      if (addAsmPrinter(PM, Out, DwoOut, FileType,
-                        MMIWP->getMMI().getContext()))
+      if (addAsmPrinter(PM, Out, DwoOut, FileType, MCtx))
         return true;
     } else
       PM.add(createDXILWriterPass(Out));

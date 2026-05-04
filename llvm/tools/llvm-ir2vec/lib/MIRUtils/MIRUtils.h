@@ -96,7 +96,9 @@ public:
 /// Helper structure to hold MIR context.
 /// CRITICAL: Member declaration order matters for correct destruction.
 struct MIRContext {
-  LLVMContext Context; // Must be first: other members hold references into it
+  LLVMContext Context{
+      llvm::clv2::defaultOptionsContext()}; // Must be first: other members hold
+                                            // references into it
   std::unique_ptr<Module> M;
   std::unique_ptr<MachineModuleInfo> MMI;
   std::unique_ptr<TargetMachine> TM;

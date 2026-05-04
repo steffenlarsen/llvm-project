@@ -34,7 +34,7 @@ static int getListSize(Module &M, StringRef Name) {
 }
 
 TEST(ModuleUtils, AppendToUsedList1) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M = parseIR(
       C, R"(@x = addrspace(4) global [2 x i32] zeroinitializer, align 4)");
@@ -52,7 +52,7 @@ TEST(ModuleUtils, AppendToUsedList1) {
 }
 
 TEST(ModuleUtils, AppendToUsedList2) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M =
       parseIR(C, R"(@x = global [2 x i32] zeroinitializer, align 4)");
@@ -89,7 +89,7 @@ INSTANTIATE_TEST_SUITE_P(
                                 &transformGlobalDtors}));
 
 TEST_P(ModuleUtilsTest, AppendToMissingArray) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M = parseIR(C, "");
 
@@ -112,7 +112,7 @@ TEST_P(ModuleUtilsTest, AppendToMissingArray) {
 }
 
 TEST_P(ModuleUtilsTest, AppendToArray) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M =
       parseIR(C, (R"(@)" + arrayName() +
@@ -132,7 +132,7 @@ TEST_P(ModuleUtilsTest, AppendToArray) {
 }
 
 TEST_P(ModuleUtilsTest, UpdateArray) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<Module> M =
       parseIR(C, (R"(@)" + arrayName() +

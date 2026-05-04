@@ -15,118 +15,164 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/AsmParser/Parser.h"
+#include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ModuleSummaryIndex.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/IR/Verifier.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/SystemUtils.h"
 #include "llvm/Support/ToolOutputFile.h"
+#include "llvm/Support/WithColor.h"
 #include <memory>
 #include <optional>
 using namespace llvm;
+using namespace llvm::clv2;
 
-static cl::OptionCategory AsCat("llvm-as Options");
+static constexpr OptionCategory AsCat{"llvm-as Options"};
 
-static cl::opt<std::string>
-    InputFilename(cl::Positional, cl::desc("<input .ll file>"), cl::init("-"));
+static constexpr OptionInfo<std::string> InputFilename{
+    "input", "<input .ll file>", Positional{}, Init{"-"}, cat(AsCat)};
 
-static cl::opt<std::string> OutputFilename("o",
-                                           cl::desc("Override output filename"),
-                                           cl::value_desc("filename"),
-                                           cl::cat(AsCat));
+static constexpr OptionInfo<std::string> OutputFilename{
+    "o", "Override output filename", value_desc("filename"), cat(AsCat)};
 
-static cl::opt<bool> Force("f", cl::desc("Enable binary output on terminals"),
-                           cl::cat(AsCat));
+static constexpr OptionInfo<bool> Force{
+    "f", "Enable binary output on terminals", cat(AsCat)};
 
-static cl::opt<bool> DisableOutput("disable-output", cl::desc("Disable output"),
-                                   cl::init(false), cl::cat(AsCat));
+static constexpr OptionInfo<bool> DisableOutput{
+    "disable-output", "Disable output", Init{false}, cat(AsCat)};
 
-static cl::opt<bool> EmitModuleHash("module-hash", cl::desc("Emit module hash"),
-                                    cl::init(false), cl::cat(AsCat));
+static constexpr OptionInfo<bool> EmitModuleHash{
+    "module-hash", "Emit module hash", Init{false}, cat(AsCat)};
 
-static cl::opt<bool> DumpAsm("d", cl::desc("Print assembly as parsed"),
-                             cl::Hidden, cl::cat(AsCat));
+static constexpr OptionInfo<bool> DumpAsm{"d", "Print assembly as parsed",
+                                          Hidden, cat(AsCat)};
 
-static cl::opt<bool>
-    DisableVerify("disable-verify", cl::Hidden,
-                  cl::desc("Do not run verifier on input LLVM (dangerous!)"),
-                  cl::cat(AsCat));
+static constexpr OptionInfo<bool> DisableVerify{
+    "disable-verify", "Do not run verifier on input LLVM (dangerous!)", Hidden,
+    cat(AsCat)};
 
-static cl::opt<std::string> ClDataLayout("data-layout",
-                                         cl::desc("data layout string to use"),
-                                         cl::value_desc("layout-string"),
-                                         cl::init(""), cl::cat(AsCat));
+static constexpr OptionInfo<std::string> ClDataLayout{
+    "data-layout", "data layout string to use", value_desc("layout-string"),
+    Init{""}, cat(AsCat)};
 
-static void WriteOutputFile(const Module *M, const ModuleSummaryIndex *Index) {
-  // Infer the output filename if needed.
-  if (OutputFilename.empty()) {
-    if (InputFilename == "-") {
-      OutputFilename = "-";
+static constexpr OptionInfo<unsigned> BitcodeMDIndexThreshold{
+    "bitcode-mdindex-threshold",
+    "Number of metadatas above which we emit an index to enable lazy-loading",
+    Hidden, Init{25u}, cat(AsCat)};
+
+static constexpr OptionInfo<bool> TimePassesOpt{
+    "time-passes", "Time each pass, printing elapsed time for each on exit",
+    Hidden, cat(AsCat)};
+
+static constexpr OptionInfo<bool> TimePassesPerRunOpt{
+    "time-passes-per-run",
+    "Time each pass run, printing elapsed time for each run on exit", Hidden,
+    cat(AsCat)};
+
+static constexpr OptionInfo<bool> AllowIncompleteIROpt{
+    "allow-incomplete-ir",
+    "Allow incomplete IR on a best effort basis (references to unknown "
+    "metadata will be dropped)",
+    Hidden, cat(AsCat)};
+
+// --combined-index-memprof-context comes from BitcodeOptsReg, which
+// RegisterAllLLVMOptions() already adds; llvm-as used to declare a second
+// option with the same name and mirror it into a global.
+
+static constexpr OptionsRegistry<
+    &InputFilename, &OutputFilename, &Force, &DisableOutput, &EmitModuleHash,
+    &DumpAsm, &DisableVerify, &ClDataLayout, &BitcodeMDIndexThreshold,
+    &TimePassesOpt, &TimePassesPerRunOpt, &AllowIncompleteIROpt>
+    AsToolReg;
+
+static void WriteOutputFile(const Module *M, const ModuleSummaryIndex *Index,
+                            const std::string &InFile,
+                            const std::string &OutFile, bool DoForce,
+                            bool DoEmitModuleHash, unsigned DoMDIndexThreshold,
+                            const clv2::OptionsContext &OptsCtx) {
+  std::string FinalOut = OutFile;
+  if (FinalOut.empty()) {
+    if (InFile == "-") {
+      FinalOut = "-";
     } else {
-      StringRef IFN = InputFilename;
-      OutputFilename = (IFN.ends_with(".ll") ? IFN.drop_back(3) : IFN).str();
-      OutputFilename += ".bc";
+      StringRef IFN = InFile;
+      FinalOut = (IFN.ends_with(".ll") ? IFN.drop_back(3) : IFN).str();
+      FinalOut += ".bc";
     }
   }
 
   std::error_code EC;
   std::unique_ptr<ToolOutputFile> Out(
-      new ToolOutputFile(OutputFilename, EC, sys::fs::OF_None));
+      new ToolOutputFile(FinalOut, EC, sys::fs::OF_None));
   if (EC) {
     errs() << EC.message() << '\n';
     exit(1);
   }
 
-  if (Force || !CheckBitcodeOutputToConsole(Out->os())) {
+  if (DoForce || !CheckBitcodeOutputToConsole(Out->os())) {
     const ModuleSummaryIndex *IndexToWrite = nullptr;
-    // Don't attempt to write a summary index unless it contains any entries or
-    // has non-zero flags. The latter is used to assemble dummy index files for
-    // skipping modules by distributed ThinLTO backends. Otherwise we get an empty
-    // summary section.
     if (Index && (Index->begin() != Index->end() || Index->getFlags()))
       IndexToWrite = Index;
     if (!IndexToWrite || (M && (!M->empty() || !M->global_empty())))
-      // If we have a non-empty Module, then we write the Module plus
-      // any non-null Index along with it as a per-module Index.
-      // If both are empty, this will give an empty module block, which is
-      // the expected behavior.
       WriteBitcodeToFile(*M, Out->os(), /* ShouldPreserveUseListOrder */ true,
-                         IndexToWrite, EmitModuleHash);
+                         IndexToWrite, DoEmitModuleHash, nullptr,
+                         DoMDIndexThreshold);
     else
-      // Otherwise, with an empty Module but non-empty Index, we write a
-      // combined index.
-      writeIndexToFile(*IndexToWrite, Out->os());
+      writeIndexToFile(*IndexToWrite, Out->os(), OptsCtx,
+                       /*ModuleToSummaries=*/nullptr,
+                       /*DecSummaries=*/nullptr);
   }
 
-  // Declare success.
   Out->keep();
 }
 
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
-  cl::HideUnrelatedOptions(AsCat);
-  cl::ParseCommandLineOptions(argc, argv, "llvm .ll -> .bc assembler\n");
-  LLVMContext Context;
+  clv2::OptionParser P;
+  P.add<&AsToolReg>();
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&AsCat});
+  // Owned by BitcodeOptsReg rather than AsCat, but llvm-as has always
+  // listed it, so keep it visible.
+  P.showOptions({"combined-index-memprof-context"});
+  auto OptsCtx = P.parse(argc, argv, "llvm .ll -> .bc assembler\n");
+  auto *Opts = OptsCtx->getViewPtr<&AsToolReg>();
 
-  // Parse the file now...
+  if (Opts->get<&TimePassesPerRunOpt>()) {
+    llvm::TimePassesIsEnabled = true;
+    llvm::TimePassesPerRun = true;
+  } else {
+    llvm::TimePassesIsEnabled = Opts->get<&TimePassesOpt>();
+  }
+
+  llvm::setAllowIncompleteIRParsing(Opts->get<&AllowIncompleteIROpt>());
+
+  LLVMContext Context(*OptsCtx);
+
   SMDiagnostic Err;
-  auto SetDataLayout = [](StringRef, StringRef) -> std::optional<std::string> {
-    if (ClDataLayout.empty())
+  auto SetDataLayout = [Opts](StringRef,
+                              StringRef) -> std::optional<std::string> {
+    if (Opts->get<&ClDataLayout>().empty())
       return std::nullopt;
-    return ClDataLayout;
+    return Opts->get<&ClDataLayout>();
   };
   ParsedModuleAndIndex ModuleAndIndex;
-  if (DisableVerify) {
+  if (Opts->get<&DisableVerify>()) {
     ModuleAndIndex = parseAssemblyFileWithIndexNoUpgradeDebugInfo(
-        InputFilename, Err, Context, nullptr, SetDataLayout);
+        Opts->get<&InputFilename>(), Err, Context, nullptr, SetDataLayout);
   } else {
-    ModuleAndIndex = parseAssemblyFileWithIndex(InputFilename, Err, Context,
-                                                nullptr, SetDataLayout);
+    ModuleAndIndex = parseAssemblyFileWithIndex(
+        Opts->get<&InputFilename>(), Err, Context, nullptr, SetDataLayout);
   }
   std::unique_ptr<Module> M = std::move(ModuleAndIndex.Mod);
   if (!M) {
@@ -136,7 +182,7 @@ int main(int argc, char **argv) {
 
   std::unique_ptr<ModuleSummaryIndex> Index = std::move(ModuleAndIndex.Index);
 
-  if (!DisableVerify) {
+  if (!Opts->get<&DisableVerify>()) {
     std::string ErrorStr;
     raw_string_ostream OS(ErrorStr);
     if (verifyModule(*M, &OS)) {
@@ -145,17 +191,19 @@ int main(int argc, char **argv) {
       errs() << OS.str();
       return 1;
     }
-    // TODO: Implement and call summary index verifier.
   }
 
-  if (DumpAsm) {
+  if (Opts->get<&DumpAsm>()) {
     errs() << "Here's the assembly:\n" << *M;
     if (Index.get() && Index->begin() != Index->end())
       Index->print(errs());
   }
 
-  if (!DisableOutput)
-    WriteOutputFile(M.get(), Index.get());
+  if (!Opts->get<&DisableOutput>())
+    WriteOutputFile(M.get(), Index.get(), Opts->get<&InputFilename>(),
+                    Opts->get<&OutputFilename>(), Opts->get<&Force>(),
+                    Opts->get<&EmitModuleHash>(),
+                    Opts->get<&BitcodeMDIndexThreshold>(), *OptsCtx);
 
   return 0;
 }

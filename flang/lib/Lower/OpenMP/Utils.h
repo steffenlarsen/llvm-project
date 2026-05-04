@@ -9,6 +9,7 @@
 #ifndef FORTRAN_LOWER_OPENMPUTILS_H
 #define FORTRAN_LOWER_OPENMPUTILS_H
 
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Lower/OpenMP/Clauses.h"
 #include "flang/Optimizer/Builder/HLFIRTools.h"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
@@ -16,11 +17,9 @@
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Value.h"
 #include "llvm/Frontend/OpenMP/OMPContext.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include <cstdint>
 #include <optional>
-
-extern llvm::cl::opt<bool> treatIndexAsSection;
 
 namespace fir {
 class FirOpBuilder;

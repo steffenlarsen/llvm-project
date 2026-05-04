@@ -15,7 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/DeLICM.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopInfo.h"
 #include "polly/Support/GICHelper.h"
 #include "polly/Support/ISLOStream.h"
@@ -23,6 +23,7 @@
 #include "polly/ZoneAlgo.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/CommandLineV2.h"
 
 #include "polly/Support/PollyDebug.h"
 #define DEBUG_TYPE "polly-delicm"
@@ -32,31 +33,7 @@ using namespace llvm;
 
 namespace {
 
-static cl::opt<bool> PollyPrintDeLICM("polly-print-delicm",
-                                      cl::desc("Polly - Print DeLICM/DePRE"),
-                                      cl::cat(PollyCategory));
 
-cl::opt<int>
-    DelicmMaxOps("polly-delicm-max-ops",
-                 cl::desc("Maximum number of isl operations to invest for "
-                          "lifetime analysis; 0=no limit"),
-                 cl::init(1500000), cl::cat(PollyCategory));
-
-cl::opt<bool> DelicmOverapproximateWrites(
-    "polly-delicm-overapproximate-writes",
-    cl::desc(
-        "Do more PHI writes than necessary in order to avoid partial accesses"),
-    cl::init(false), cl::Hidden, cl::cat(PollyCategory));
-
-cl::opt<bool> DelicmPartialWrites("polly-delicm-partial-writes",
-                                  cl::desc("Allow partial writes"),
-                                  cl::init(true), cl::Hidden,
-                                  cl::cat(PollyCategory));
-
-cl::opt<bool>
-    DelicmComputeKnown("polly-delicm-compute-known",
-                       cl::desc("Compute known content of array elements"),
-                       cl::init(true), cl::Hidden, cl::cat(PollyCategory));
 
 STATISTIC(DeLICMAnalyzed, "Number of successfully analyzed SCoPs");
 STATISTIC(DeLICMOutOfQuota,
@@ -545,13 +522,6 @@ private:
   /// The number of PHIs mapped to some array element.
   int NumberOfMappedPHIScalars = 0;
 
-  /// Shared ISL operations budget guarding the expensive zone analysis
-  /// (computeZone) and the scalar-to-store collapsing (greedyCollapse). It is
-  /// constructed dormant (AutoEnter=false) and armed narrowly around each
-  /// dangerous region via IslQuotaScope, so the same budget covers both
-  /// regions without ever nesting two armed scopes.
-  IslMaxOperationsGuard MaxOpGuard;
-
   /// Determine whether two knowledges are conflicting with each other.
   ///
   /// @see Knowledge::isConflicting
@@ -724,7 +694,11 @@ private:
     // either get filtered out or conflict with itself.
     // { DomainDef[] -> ValInst[] }
     isl::map ValInst;
-    if (DelicmComputeKnown)
+    bool ComputeKnown = true;
+    if (auto *Opts = polly_opts::getPollyOpts(
+            S->getFunction().getContext().getOptionsContext()))
+      ComputeKnown = Opts->get<&llvm::clv2::POLLY_DelicmComputeKnown>();
+    if (ComputeKnown)
       ValInst = makeValInst(V, DefMA->getStatement(),
                             LI->getLoopFor(DefInst->getParent()));
     else
@@ -803,7 +777,11 @@ private:
                        bool IsCertain = true) {
     // When known knowledge is disabled, just return the unknown value. It will
     // either get filtered out or conflict with itself.
-    if (!DelicmComputeKnown)
+    bool ComputeKnown = true;
+    if (auto *Opts = polly_opts::getPollyOpts(
+            S->getFunction().getContext().getOptionsContext()))
+      ComputeKnown = Opts->get<&llvm::clv2::POLLY_DelicmComputeKnown>();
+    if (!ComputeKnown)
       return makeUnknownForDomain(UserStmt);
     return ZoneAlgorithm::makeValInst(Val, UserStmt, Scope, IsCertain);
   }
@@ -897,17 +875,26 @@ private:
     for (auto *MA : S->getPHIIncomings(SAI))
       UniverseWritesDom = UniverseWritesDom.unite(getDomainFor(MA));
 
+    bool OverapproxWrites = false;
+    if (auto *Opts = polly_opts::getPollyOpts(
+            S->getFunction().getContext().getOptionsContext()))
+      OverapproxWrites =
+          Opts->get<&llvm::clv2::POLLY_DelicmOverapproximateWrites>();
+    bool PartialWrites = true;
+    if (auto *Opts = polly_opts::getPollyOpts(
+            S->getFunction().getContext().getOptionsContext()))
+      PartialWrites = Opts->get<&llvm::clv2::POLLY_DelicmPartialWrites>();
+
     auto RelevantWritesTarget = WritesTarget;
-    if (DelicmOverapproximateWrites)
+    if (OverapproxWrites)
       WritesTarget = expandMapping(WritesTarget, UniverseWritesDom);
 
     auto ExpandedWritesDom = WritesTarget.domain();
-    if (!DelicmPartialWrites &&
-        !UniverseWritesDom.is_subset(ExpandedWritesDom)) {
+    if (!PartialWrites && !UniverseWritesDom.is_subset(ExpandedWritesDom)) {
       POLLY_DEBUG(
           dbgs() << "    Reject because did not find PHI write mapping for "
                     "all instances\n");
-      if (DelicmOverapproximateWrites)
+      if (OverapproxWrites)
         POLLY_DEBUG(dbgs() << "      Relevant Mapping:    "
                            << RelevantWritesTarget << '\n');
       POLLY_DEBUG(dbgs() << "      Deduced Mapping:     " << WritesTarget
@@ -1022,6 +1009,13 @@ private:
     assert(TargetStoreMA->isLatestArrayKind());
     assert(TargetStoreMA->isMustWrite());
 
+    // Guard expensive ISL operations with an operations budget.
+    int MaxOpsVal = 1000000;
+    if (auto *Opts = polly_opts::getPollyOpts(
+            S->getFunction().getContext().getOptionsContext()))
+      MaxOpsVal = Opts->get<&llvm::clv2::POLLY_DelicmMaxOps>();
+    IslMaxOperationsGuard MaxOpGuard(IslCtx.get(), MaxOpsVal);
+
     auto TargetStmt = TargetStoreMA->getStatement();
 
     // { DomTarget[] }
@@ -1031,34 +1025,21 @@ private:
     auto TargetAccRel = getAccessRelationFor(TargetStoreMA);
 
     // { Zone[] -> DomTarget[] }
-    // For each point in time, find the next target store instance. This can be
-    // expensive for SCoPs with many modular/quasi-affine constraints, so bound
-    // it with the shared ISL operations budget.
-    isl::map Target;
-    {
-      IslQuotaScope MaxOpScope = MaxOpGuard.enter();
-      Target = computeScalarReachingOverwrite(Schedule, TargetDom, false, true);
+    // For each point in time, find the next target store instance.
+    auto Target =
+        computeScalarReachingOverwrite(Schedule, TargetDom, false, true);
 
-      if (MaxOpScope.hasQuotaExceeded()) {
-        DeLICMOutOfQuota++;
-        assert(
-            isl_ctx_last_error(IslCtx.get()) == isl_error_quota &&
-            "The only reason that these things have not been computed should "
-            "be if the max-operations limit hit");
-        POLLY_DEBUG(
-            dbgs() << "collapseScalarsToStore exceeded max_operations\n");
-        DebugLoc Begin, End;
-        getDebugLocations(getBBPairForRegion(&S->getRegion()), Begin, End);
-        OptimizationRemarkAnalysis R(DEBUG_TYPE, "OutOfQuota", Begin,
-                                     S->getEntry());
-        R << "maximal number of operations exceeded during "
-             "collapseScalarsToStore";
-        S->getFunction().getContext().diagnose(R);
-        return false;
-      }
-
-      if (Target.is_null())
-        return false;
+    if (Target.is_null()) {
+      DeLICMOutOfQuota++;
+      POLLY_DEBUG(dbgs() << "collapseScalarsToStore exceeded max_operations\n");
+      DebugLoc Begin, End;
+      getDebugLocations(getBBPairForRegion(&S->getRegion()), Begin, End);
+      OptimizationRemarkAnalysis R(DEBUG_TYPE, "OutOfQuota", Begin,
+                                   S->getEntry());
+      R << "maximal number of operations exceeded during "
+           "collapseScalarsToStore";
+      S->getFunction().getContext().diagnose(R);
+      return false;
     }
 
     // { Zone[] -> Element[] }
@@ -1220,9 +1201,7 @@ private:
   }
 
 public:
-  DeLICMImpl(Scop *S, LoopInfo *LI)
-      : ZoneAlgorithm("polly-delicm", S, LI),
-        MaxOpGuard(IslCtx.get(), DelicmMaxOps, /*AutoEnter=*/false) {}
+  DeLICMImpl(Scop *S, LoopInfo *LI) : ZoneAlgorithm("polly-delicm", S, LI) {}
 
   /// Calculate the lifetime (definition to last use) of every array element.
   ///
@@ -1235,7 +1214,11 @@ public:
     isl::union_map EltKnown, EltWritten;
 
     {
-      IslQuotaScope MaxOpScope = MaxOpGuard.enter();
+      int MaxOpsVal = 1000000;
+      if (auto *Opts = polly_opts::getPollyOpts(
+              S->getFunction().getContext().getOptionsContext()))
+        MaxOpsVal = Opts->get<&llvm::clv2::POLLY_DelicmMaxOps>();
+      IslMaxOperationsGuard MaxOpGuard(IslCtx.get(), MaxOpsVal);
 
       computeCommon();
 
@@ -1274,7 +1257,6 @@ public:
   /// the first processed element claims it.
   void greedyCollapse() {
     bool Modified = false;
-    bool MaxOpQuotaExceeded = false;
 
     for (auto &Stmt : *S) {
       for (auto *MA : Stmt) {
@@ -1370,13 +1352,7 @@ public:
         POLLY_DEBUG(dbgs() << "Analyzing target access " << MA << "\n");
         if (collapseScalarsToStore(MA))
           Modified = true;
-        else if (MaxOpGuard.hasQuotaExceeded()) {
-          MaxOpQuotaExceeded = true;
-          break;
-        }
       }
-      if (MaxOpQuotaExceeded)
-        break;
     }
 
     if (Modified)
@@ -1455,7 +1431,11 @@ bool polly::runDeLICM(Scop &S) {
   LoopInfo &LI = *S.getLI();
   std::unique_ptr<DeLICMImpl> Impl = runDeLICMImpl(S, LI);
 
-  if (PollyPrintDeLICM) {
+  bool PrintDeLICM = false;
+  if (auto *Opts = polly_opts::getPollyOpts(
+          S.getFunction().getContext().getOptionsContext()))
+    PrintDeLICM = Opts->get<&llvm::clv2::POLLY_PrintDelicm>();
+  if (PrintDeLICM) {
     outs() << "Printing analysis 'Polly - DeLICM/DePRE' for region: '"
            << S.getName() << "' in function '" << S.getFunction().getName()
            << "':\n";

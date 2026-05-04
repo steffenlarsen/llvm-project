@@ -12,6 +12,7 @@
 
 #include "flang/Optimizer/CodeGen/CodeGen.h"
 
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Optimizer/Builder/CUFCommon.h"
 #include "flang/Optimizer/CodeGen/CodeGenOpenMP.h"
 #include "flang/Optimizer/CodeGen/FIROpPatterns.h"
@@ -68,7 +69,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 
 namespace fir {
 #define GEN_PASS_DEF_FIRTOLLVMLOWERING
@@ -76,14 +77,6 @@ namespace fir {
 } // namespace fir
 
 #define DEBUG_TYPE "flang-codegen"
-
-static llvm::cl::opt<bool> useNativeLogicalOps(
-    "fir-logical-native-ops",
-    llvm::cl::desc(
-        "Use bitwise operations on the storage type for logical operations "
-        "instead of normalizing to i1. Requires that all logical values "
-        "are in their canonical representation."),
-    llvm::cl::init(false));
 
 // TODO: This should really be recovered from the specified target.
 static constexpr unsigned defaultAlign = 8;
@@ -1648,7 +1641,8 @@ static mlir::Value genSourceFile(mlir::Location loc, mlir::ModuleOp mod,
   auto ptrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
   if (auto flc = mlir::dyn_cast<mlir::FileLineColLoc>(loc)) {
     auto fn = flc.getFilename().str() + '\0';
-    std::string globalName = fir::factory::uniqueCGIdent("cl", fn);
+    std::string globalName = fir::factory::uniqueCGIdent(
+        "cl", fn, rewriter.getContext()->getOptionsContext());
 
     if (auto g = mod.lookupSymbol<fir::GlobalOp>(globalName)) {
       return mlir::LLVM::AddressOfOp::create(rewriter, loc, ptrTy, g.getName());
@@ -4521,7 +4515,8 @@ struct LogicalAndOpConversion : public fir::FIROpConversion<fir::LogicalAndOp> {
                   mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::Type resTy = convertType(op.getType());
     auto loc = op.getLoc();
-    if (useNativeLogicalOps) {
+    if (llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_FirLogicalNativeOps>(
+            op->getContext()->getOptionsContext())) {
       rewriter.replaceOpWithNewOp<mlir::LLVM::AndOp>(
           op, resTy, adaptor.getLhs(), adaptor.getRhs());
     } else {
@@ -4543,7 +4538,8 @@ struct LogicalOrOpConversion : public fir::FIROpConversion<fir::LogicalOrOp> {
                   mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::Type resTy = convertType(op.getType());
     auto loc = op.getLoc();
-    if (useNativeLogicalOps) {
+    if (llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_FirLogicalNativeOps>(
+            op->getContext()->getOptionsContext())) {
       rewriter.replaceOpWithNewOp<mlir::LLVM::OrOp>(op, resTy, adaptor.getLhs(),
                                                     adaptor.getRhs());
     } else {
@@ -4583,7 +4579,8 @@ struct NeqvOpConversion : public fir::FIROpConversion<fir::NeqvOp> {
                   mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::Type resTy = convertType(op.getType());
     auto loc = op.getLoc();
-    if (useNativeLogicalOps) {
+    if (llvm::clv2::getOptValOrDefault<&llvm::clv2::FLANG_FirLogicalNativeOps>(
+            op->getContext()->getOptionsContext())) {
       rewriter.replaceOpWithNewOp<mlir::LLVM::XOrOp>(
           op, resTy, adaptor.getLhs(), adaptor.getRhs());
     } else {
@@ -4806,22 +4803,22 @@ public:
 
   void runOnOperation() override final {
     auto mod = getModule();
-    if (!forcedTargetTriple.empty())
-      fir::setTargetTriple(mod, forcedTargetTriple);
+    if (!forcedTargetTriple->empty())
+      fir::setTargetTriple(mod, *forcedTargetTriple);
 
-    if (!forcedDataLayout.empty()) {
-      llvm::DataLayout dl(forcedDataLayout);
+    if (!forcedDataLayout->empty()) {
+      llvm::DataLayout dl(*forcedDataLayout);
       fir::support::setMLIRDataLayout(mod, dl);
     }
 
-    if (!forcedTargetCPU.empty())
-      fir::setTargetCPU(mod, forcedTargetCPU);
+    if (!forcedTargetCPU->empty())
+      fir::setTargetCPU(mod, *forcedTargetCPU);
 
-    if (!forcedTuneCPU.empty())
-      fir::setTuneCPU(mod, forcedTuneCPU);
+    if (!forcedTuneCPU->empty())
+      fir::setTuneCPU(mod, *forcedTuneCPU);
 
-    if (!forcedTargetFeatures.empty())
-      fir::setTargetFeatures(mod, forcedTargetFeatures);
+    if (!forcedTargetFeatures->empty())
+      fir::setTargetFeatures(mod, *forcedTargetFeatures);
 
     if (typeDescriptorsRenamedForAssembly)
       options.typeDescriptorsRenamedForAssembly =
@@ -4989,7 +4986,9 @@ struct LLVMIRLoweringPass
   void runOnOperation() override final {
     auto *ctx = getModule().getContext();
     auto optName = getModule().getName();
-    llvm::LLVMContext llvmCtx;
+    // Carry the MLIRContext's options into the LLVM module being translated,
+    // rather than starting from an empty context.
+    llvm::LLVMContext llvmCtx(ctx->getOptionsContext());
     if (auto llvmModule = mlir::translateModuleToLLVMIR(
             getModule(), llvmCtx, optName ? *optName : "FIRModule")) {
       printer(*llvmModule, output);

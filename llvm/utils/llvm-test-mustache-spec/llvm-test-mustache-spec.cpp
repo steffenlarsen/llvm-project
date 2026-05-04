@@ -25,11 +25,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/StringSet.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Mustache.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include <string>
 
@@ -39,14 +40,17 @@ using namespace llvm::mustache;
 
 #define DEBUG_TYPE "llvm-test-mustache-spec"
 
-static cl::OptionCategory Cat("llvm-test-mustache-spec Options");
+inline constexpr clv2::OptionCategory MustacheSpecCat{
+    "llvm-test-mustache-spec Options"};
 
-static cl::list<std::string>
-    InputFiles(cl::Positional, cl::desc("<input files>"), cl::OneOrMore);
+inline constexpr clv2::ListOptionInfo<std::string> InputFilesOpt{
+    "", "<input files>", clv2::Positional{}, clv2::OneOrMore};
 
-static cl::opt<bool> ReportErrors("report-errors",
-                                  cl::desc("Report errors in spec tests"),
-                                  cl::cat(Cat));
+inline constexpr clv2::OptionInfo<bool> ReportErrorsOpt{
+    "report-errors", "Report errors in spec tests", clv2::cat(MustacheSpecCat)};
+
+static constexpr clv2::OptionsRegistry<&InputFilesOpt, &ReportErrorsOpt>
+    MustacheReg;
 
 static ExitOnError ExitOnErr;
 
@@ -144,7 +148,7 @@ struct TestData {
 };
 
 static void reportTestFailure(const TestData &TD, StringRef ActualStr,
-                              bool IsXFail) {
+                              bool IsXFail, bool ReportErrors) {
   LLVM_DEBUG(dbgs() << "Template: " << TD.TemplateStr << "\n");
   if (TD.Partials) {
     LLVM_DEBUG(dbgs() << "Partial: ");
@@ -182,18 +186,18 @@ static bool isTestXFail(StringRef FileName, StringRef TestName) {
 }
 
 static bool evaluateTest(StringRef &InputFile, TestData &TestData,
-                         std::string &ActualStr) {
+                         std::string &ActualStr, bool ReportErrors) {
   bool IsXFail = isTestXFail(InputFile, TestData.Name);
   bool Matches = TestData.ExpectedStr == ActualStr;
   if ((Matches && IsXFail) || (!Matches && !IsXFail)) {
-    reportTestFailure(TestData, ActualStr, IsXFail);
+    reportTestFailure(TestData, ActualStr, IsXFail, ReportErrors);
     return false;
   }
   IsXFail ? NumXFail++ : NumSuccess++;
   return true;
 }
 
-static void runTest(StringRef InputFile) {
+static void runTest(StringRef InputFile, bool ReportErrors) {
   NumXFail = 0;
   NumSuccess = 0;
   outs() << "Running Tests: " << InputFile << "\n";
@@ -221,7 +225,7 @@ static void runTest(StringRef InputFile) {
     std::string ActualStr;
     raw_string_ostream OS(ActualStr);
     T.render(*TestData.Data, OS);
-    evaluateTest(InputFile, TestData, ActualStr);
+    evaluateTest(InputFile, TestData, ActualStr, ReportErrors);
   }
 
   const int NumFailed = Total - NumSuccess - NumXFail;
@@ -235,8 +239,12 @@ static void runTest(StringRef InputFile) {
 
 int main(int argc, char **argv) {
   ExitOnErr.setBanner(std::string(argv[0]) + " error: ");
-  cl::ParseCommandLineOptions(argc, argv);
-  for (const auto &FileName : InputFiles)
-    runTest(FileName);
+  clv2::OptionParser P;
+  P.add<&MustacheReg>();
+  auto OptsCtx = P.parse(argc, argv);
+  auto *Opts = OptsCtx->getViewPtr<&MustacheReg>();
+  bool ReportErrors = Opts->get<&ReportErrorsOpt>();
+  for (const auto &FileName : Opts->get<&InputFilesOpt>())
+    runTest(FileName, ReportErrors);
   return 0;
 }

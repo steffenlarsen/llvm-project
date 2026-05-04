@@ -1914,7 +1914,8 @@ int main(int argc, char *argv[]) {
 
   // Simplify the control flow graph (deleting unreachable
   // blocks, etc).
-  fpm.add(llvm::createCFGSimplificationPass());
+  fpm.add(llvm::createCFGSimplificationPass(
+      module.getContext().getOptionsContext()));
 #endif  // ADD_OPT_PASSES
 
   fpm.doInitialization();

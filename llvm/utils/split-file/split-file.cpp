@@ -14,11 +14,12 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileOutputBuffer.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/LineIterator.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/WithColor.h"
@@ -26,22 +27,32 @@
 #include <system_error>
 
 using namespace llvm;
+using namespace llvm::clv2;
 
-static cl::OptionCategory cat("split-file Options");
+static constexpr OptionCategory SplitFileCat{"split-file Options"};
 
-static cl::opt<std::string> input(cl::Positional, cl::desc("filename"),
-                                  cl::cat(cat));
+static constexpr OptionInfo<std::string> InputOpt{"", "filename", Positional{},
+                                                  cat(SplitFileCat)};
 
-static cl::opt<std::string> output(cl::Positional, cl::desc("directory"),
-                                   cl::value_desc("directory"), cl::cat(cat));
+static constexpr OptionInfo<std::string> OutputOpt{
+    "", "directory", Positional{}, value_desc("directory"), cat(SplitFileCat)};
 
-static cl::opt<bool> leadingLines("leading-lines",
-                                    cl::desc("Preserve line numbers"),
-                                    cl::cat(cat));
+static constexpr OptionInfo<bool> LeadingLinesOpt{
+    "leading-lines", "Preserve line numbers", cat(SplitFileCat)};
 
-static cl::opt<bool> noLeadingLines("no-leading-lines",
-                                    cl::desc("Don't preserve line numbers (default)"),
-                                    cl::cat(cat));
+static constexpr OptionInfo<bool> NoLeadingLinesOpt{
+    "no-leading-lines", "Don't preserve line numbers (default)",
+    cat(SplitFileCat)};
+
+static constexpr OptionsRegistry<&InputOpt, &OutputOpt, &LeadingLinesOpt,
+                                 &NoLeadingLinesOpt>
+    SplitFileReg;
+
+struct SplitFileOptions {
+  std::string Input;
+  std::string Output;
+  bool LeadingLines = false;
+};
 
 static StringRef toolName;
 static int errorCount;
@@ -68,7 +79,8 @@ struct Part {
 };
 } // namespace
 
-static int handle(MemoryBuffer &inputBuf, StringRef input) {
+static int handle(MemoryBuffer &inputBuf, StringRef inputFile,
+                  const SplitFileOptions &Opts) {
   DenseMap<StringRef, Part> partToBegin;
   StringRef lastPart, separator;
   StringRef EOL = inputBuf.getBuffer().detectEOL();
@@ -82,17 +94,18 @@ static int handle(MemoryBuffer &inputBuf, StringRef input) {
     separator = line.substr(0, markerLen);
     const StringRef partName = line.substr(markerLen);
     if (partName.empty()) {
-      error(input, lineNo, "empty part name");
+      error(inputFile, lineNo, "empty part name");
       continue;
     }
     if (isSpace(partName.front()) || isSpace(partName.back())) {
-      error(input, lineNo, "part name cannot have leading or trailing space");
+      error(inputFile, lineNo,
+            "part name cannot have leading or trailing space");
       continue;
     }
 
     auto res = partToBegin.try_emplace(partName);
     if (!res.second) {
-      error(input, lineNo,
+      error(inputFile, lineNo,
             "'" + separator + partName + "' occurs more than once");
       continue;
     }
@@ -103,12 +116,12 @@ static int handle(MemoryBuffer &inputBuf, StringRef input) {
       cur.begin = i->data();
     // If --leading-lines is specified, numEmptyLines is 0. Append newlines so
     // that the extracted part preserves line numbers.
-    cur.leadingLines = leadingLines ? i.line_number() - 1 : 0;
+    cur.leadingLines = Opts.LeadingLines ? i.line_number() - 1 : 0;
 
     lastPart = partName;
   }
   if (lastPart.empty())
-    fatal(input, "no part separator was found");
+    fatal(inputFile, "no part separator was found");
   if (errorCount)
     return 1;
   partToBegin[lastPart].end = inputBuf.getBufferEnd();
@@ -117,15 +130,15 @@ static int handle(MemoryBuffer &inputBuf, StringRef input) {
   SmallString<256> partPath;
   for (auto &keyValue : partToBegin) {
     partPath.clear();
-    sys::path::append(partPath, output, keyValue.first);
+    sys::path::append(partPath, Opts.Output, keyValue.first);
     std::error_code ec =
         sys::fs::create_directories(sys::path::parent_path(partPath));
     if (ec)
-      fatal(input, ec.message());
+      fatal(inputFile, ec.message());
     auto f = std::make_unique<ToolOutputFile>(partPath.str(), ec,
                                               llvm::sys::fs::OF_Text);
     if (!f)
-      fatal(input, ec.message());
+      fatal(inputFile, ec.message());
 
     Part &part = keyValue.second;
     for (int64_t i = 0; i != part.leadingLines; ++i)
@@ -142,38 +155,43 @@ static int handle(MemoryBuffer &inputBuf, StringRef input) {
 
 int main(int argc, const char **argv) {
   toolName = sys::path::stem(argv[0]);
-  cl::HideUnrelatedOptions({&cat});
-  cl::ParseCommandLineOptions(
+  clv2::OptionParser P;
+  P.add<&SplitFileReg>();
+  P.hideUnrelatedOptions({&SplitFileCat});
+  auto OptsCtx = P.parse(
       argc, argv,
-      "Split input into multiple parts separated by regex '^(.|//)--- ' and "
-      "extract the part specified by '^(.|//)--- <part>'\n",
-      nullptr,
-      /*VFS=*/nullptr,
-      /*EnvVar=*/nullptr,
-      /*LongOptionsUseDoubleDash=*/true);
+      "Split input into multiple parts separated by regex '^(.|//)--- ' "
+      "and extract the part specified by '^(.|//)--- <part>'\n");
+  auto *View = OptsCtx->getViewPtr<&SplitFileReg>();
 
-  if (input.empty())
+  SplitFileOptions Opts;
+  Opts.Input = View->get<&InputOpt>();
+  Opts.Output = View->get<&OutputOpt>();
+  Opts.LeadingLines = View->get<&LeadingLinesOpt>();
+
+  if (Opts.Input.empty())
     fatal("", "input filename is not specified");
-  if (output.empty())
+  if (Opts.Output.empty())
     fatal("", "output directory is not specified");
   ErrorOr<std::unique_ptr<MemoryBuffer>> bufferOrErr =
-      MemoryBuffer::getFileOrSTDIN(input, /*IsText=*/true);
+      MemoryBuffer::getFileOrSTDIN(Opts.Input, /*IsText=*/true);
   if (std::error_code ec = bufferOrErr.getError())
-    fatal(input, ec.message());
+    fatal(Opts.Input, ec.message());
 
   // Delete output if it is a file or an empty directory, so that we can create
   // a directory.
   sys::fs::file_status status;
-  if (std::error_code ec = sys::fs::status(output, status))
+  if (std::error_code ec = sys::fs::status(Opts.Output, status))
     if (ec.value() != static_cast<int>(std::errc::no_such_file_or_directory))
-      fatal(output, ec.message());
+      fatal(Opts.Output, ec.message());
   if (status.type() != sys::fs::file_type::file_not_found &&
       status.type() != sys::fs::file_type::directory_file &&
       status.type() != sys::fs::file_type::regular_file)
-    fatal(output, "output cannot be a special file");
-  if (std::error_code ec = sys::fs::remove(output, /*IgnoreNonExisting=*/true))
+    fatal(Opts.Output, "output cannot be a special file");
+  if (std::error_code ec =
+          sys::fs::remove(Opts.Output, /*IgnoreNonExisting=*/true))
     if (ec.value() != static_cast<int>(std::errc::directory_not_empty) &&
         ec.value() != static_cast<int>(std::errc::file_exists))
-      fatal(output, ec.message());
-  return handle(**bufferOrErr, input);
+      fatal(Opts.Output, ec.message());
+  return handle(**bufferOrErr, Opts.Input, Opts);
 }

@@ -17,6 +17,7 @@
 #include "mlir/Dialect/SMT/IR/SMTOps.h"
 #include "mlir/Dialect/SMT/IR/SMTVisitors.h"
 #include "mlir/Support/IndentedOstream.h"
+#include "mlir/Target/MLIRTranslateOptionsOptInfos.h"
 #include "mlir/Target/SMTLIB/Namespace.h"
 #include "mlir/Tools/mlir-translate/Translation.h"
 #include "llvm/ADT/ScopedHashTable.h"
@@ -704,22 +705,15 @@ LogicalResult smt::exportSMTLIB(Operation *module, llvm::raw_ostream &os,
 //===----------------------------------------------------------------------===//
 
 void smt::registerExportSMTLIBTranslation() {
-  static llvm::cl::opt<bool> inlineSingleUseValues(
-      "smtlibexport-inline-single-use-values",
-      llvm::cl::desc("Inline expressions that are used only once rather than "
-                     "generating a let-binding"),
-      llvm::cl::init(false));
-
-  auto getOptions = [] {
-    SMTEmissionOptions opts;
-    opts.inlineSingleUseValues = inlineSingleUseValues;
-    return opts;
-  };
-
   static mlir::TranslateFromMLIRRegistration toSMTLIB(
       "export-smtlib", "export SMT-LIB",
-      [=](Operation *module, raw_ostream &output) {
-        return smt::exportSMTLIB(module, output, getOptions());
+      [](Operation *module, raw_ostream &output) {
+        SMTEmissionOptions opts;
+        if (auto *O = mlir::mlir_translate_opts::getMLIRTranslateOptsReg(
+                module->getContext()->getOptionsContext()))
+          opts.inlineSingleUseValues =
+              O->get<&llvm::clv2::MLIRT_SMTLIBInlineSingleUseValues>();
+        return smt::exportSMTLIB(module, output, opts);
       },
       [](mlir::DialectRegistry &registry) {
         // Register the 'func' and 'HW' dialects to support printing solver

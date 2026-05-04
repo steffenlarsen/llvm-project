@@ -41,7 +41,7 @@ Context::createDefaultPipeline(const PipelineOptions &Opts, SourceMgr &SrcMgr,
   auto PRF = std::make_unique<RegisterFile>(SM, MRI, Opts.RegisterFileSize);
   auto LSU = std::make_unique<LSUnit>(SM, Opts.LoadQueueSize,
                                       Opts.StoreQueueSize, Opts.AssumeNoAlias);
-  auto HWS = std::make_unique<Scheduler>(SM, *LSU);
+  auto HWS = std::make_unique<Scheduler>(SM, *LSU, STI.getOptionsContext());
 
   // Create the pipeline stages.
   auto Fetch = std::make_unique<EntryStage>(SrcMgr);

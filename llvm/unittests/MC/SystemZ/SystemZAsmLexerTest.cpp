@@ -20,6 +20,7 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 
+#include "llvm/Support/OptionsContext.h"
 #include "gtest/gtest.h"
 
 using namespace llvm;
@@ -69,7 +70,9 @@ protected:
     MII.reset(TheTarget->createMCInstrInfo());
     EXPECT_NE(MII, nullptr);
 
-    STI.reset(TheTarget->createMCSubtargetInfo(Triple, "z10", ""));
+    STI.reset(TheTarget->createMCSubtargetInfo(
+        Triple, "z10", "",
+        /*Ctx=*/llvm::clv2::defaultOptionsContext()));
     EXPECT_NE(STI, nullptr);
 
     MAI.reset(TheTarget->createMCAsmInfo(*MRI, Triple, MCOptions));

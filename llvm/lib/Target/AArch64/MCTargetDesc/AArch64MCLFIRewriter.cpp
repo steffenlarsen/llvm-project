@@ -22,14 +22,14 @@
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSubtargetInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
 
 using namespace llvm;
 
-static cl::opt<bool>
-    LFIGuardElim("aarch64-lfi-guard-elim", cl::Hidden,
-                 cl::desc("Enable the LFI guard elimination optimization"),
-                 cl::init(true));
+static bool getLFIGuardElim(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_LFIGuardElim>(Ctx);
+}
 
 namespace llvm::AArch64 {
 struct LFIVariantEntry {
@@ -341,7 +341,8 @@ void AArch64MCLFIRewriter::emitAddMask(MCRegister Dest, MCRegister Src,
                                        const MCSubtargetInfo &STI) {
   // If x28 already holds the guarded value of Src, this guard is redundant and
   // can be skipped.
-  if (LFIGuardElim && Dest == LFIAddrReg && ActiveGuardReg == Src)
+  if (getLFIGuardElim(STI.getOptionsContext()) && Dest == LFIAddrReg &&
+      ActiveGuardReg == Src)
     return;
 
   // add Dest, LFIBaseReg, W(Src), uxtw

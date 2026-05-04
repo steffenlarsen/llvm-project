@@ -27,6 +27,11 @@
 #include "flang/Semantics/semantics.h"
 #include "flang/Semantics/symbol.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
+
+namespace llvm::clv2 {
+class OptionsContext;
+}
 #include "llvm/Support/raw_ostream.h"
 
 namespace Fortran::lower::pft {
@@ -322,9 +327,9 @@ struct Evaluation : EvaluationVariant {
   /// Return the FunctionLikeUnit containing this evaluation (or nullptr).
   FunctionLikeUnit *getOwningProcedure() const;
 
-  bool lowerAsStructured() const;
-  bool lowerAsUnstructured() const;
-  bool forceAsUnstructured() const;
+  bool lowerAsStructured(const llvm::clv2::OptionsContext &optsCtx) const;
+  bool lowerAsUnstructured(const llvm::clv2::OptionsContext &optsCtx) const;
+  bool forceAsUnstructured(const llvm::clv2::OptionsContext &optsCtx) const;
 
   // FIR generation looks primarily at PFT ActionStmt and ConstructStmt leaf
   // nodes. Members such as lexicalSuccessor and block are applicable only
@@ -885,7 +890,8 @@ void visitAllSymbols(const Evaluation &eval,
 /// folded into a self-contained scf.execute_region. \p semaCtx is needed to
 /// determine how many loops a directive applies to.
 bool isWrappableConstruct(const Evaluation &eval,
-                          const semantics::SemanticsContext &semaCtx);
+                          const semantics::SemanticsContext &semaCtx,
+                          const llvm::clv2::OptionsContext &optsCtx);
 
 } // namespace Fortran::lower::pft
 
@@ -903,7 +909,8 @@ class LoweringOptions;
 std::unique_ptr<pft::Program>
 createPFT(const parser::Program &root,
           const Fortran::semantics::SemanticsContext &semanticsContext,
-          const LoweringOptions &loweringOptions);
+          const LoweringOptions &loweringOptions,
+          const llvm::clv2::OptionsContext &optsCtx);
 
 /// Dumper for displaying a PFT.
 void dumpPFT(llvm::raw_ostream &outputStream, const pft::Program &pft);

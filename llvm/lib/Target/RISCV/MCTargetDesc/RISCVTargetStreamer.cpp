@@ -20,20 +20,21 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/Alignment.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormattedStream.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/RISCVAttributes.h"
+#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
 #include "llvm/TargetParser/RISCVISAInfo.h"
 
 using namespace llvm;
 
 // This option controls whether or not we emit ELF attributes for ABI features,
 // like RISC-V atomics or X3 usage.
-static cl::opt<bool> RiscvAbiAttr(
-    "riscv-abi-attributes",
-    cl::desc("Enable emitting RISC-V ELF attributes for ABI features"),
-    cl::Hidden);
+static bool getRiscvAbiAttr(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::RISCVOptsReg, &clv2::RV_AbiAttributes>(Ctx,
+                                                                         false);
+}
 
 RISCVTargetStreamer::RISCVTargetStreamer(MCStreamer &S) : MCTargetStreamer(S) {}
 
@@ -92,7 +93,8 @@ void RISCVTargetStreamer::emitTargetAttributes(const MCSubtargetInfo &STI,
     emitTextAttribute(RISCVAttrs::ARCH, ISAInfo->toString());
   }
 
-  if (RiscvAbiAttr && STI.hasFeature(RISCV::FeatureStdExtA)) {
+  if (getRiscvAbiAttr(getContext().getOptionsContext()) &&
+      STI.hasFeature(RISCV::FeatureStdExtA)) {
     unsigned AtomicABITag;
     if (STI.hasFeature(RISCV::FeatureStdExtZalasr))
       AtomicABITag = static_cast<unsigned>(RISCVAttrs::RISCVAtomicAbiTag::A7);

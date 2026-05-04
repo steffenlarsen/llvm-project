@@ -25,7 +25,8 @@
 #include "llvm/Object/Binary.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/Error.h"
@@ -34,6 +35,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/WithColor.h"
@@ -60,109 +62,167 @@ static void PrintVersion(raw_ostream &OS) {
   OS << clang::getClangToolFullVersion("clang-offload-bundler") << '\n';
 }
 
-int main(int argc, const char **argv) {
-
-  cl::opt<bool> Help("h", cl::desc("Alias for -help"), cl::Hidden);
-
-  // Mark all our options with this category, everything else (except for
-  // -version and -help) will be hidden.
-  cl::OptionCategory
+// Mark all our options with this category, everything else (except for
+// -version and -help) will be hidden.
+inline constexpr clv2::OptionCategory
     ClangOffloadBundlerCategory("clang-offload-bundler options");
-  cl::list<std::string>
-    InputFileNames("input",
-                   cl::desc("Input file."
-                            " Can be specified multiple times "
-                            "for multiple input files."),
-                   cl::cat(ClangOffloadBundlerCategory));
-  cl::list<std::string>
-    InputFileNamesDeprecatedOpt("inputs", cl::CommaSeparated,
-                                cl::desc("[<input file>,...] (deprecated)"),
-                                cl::cat(ClangOffloadBundlerCategory));
-  cl::list<std::string>
-    OutputFileNames("output",
-                    cl::desc("Output file."
-                             " Can be specified multiple times "
-                             "for multiple output files."),
-                    cl::cat(ClangOffloadBundlerCategory));
-  cl::list<std::string>
-    OutputFileNamesDeprecatedOpt("outputs", cl::CommaSeparated,
-                                 cl::desc("[<output file>,...] (deprecated)"),
-                                 cl::cat(ClangOffloadBundlerCategory));
-  cl::list<std::string>
-    TargetNames("targets", cl::CommaSeparated,
-                cl::desc("[<offload kind>-<target triple>,...]"),
-                cl::cat(ClangOffloadBundlerCategory));
-  cl::opt<std::string> FilesType(
-      "type", cl::Required,
-      cl::desc("Type of the files to be bundled/unbundled.\n"
-               "Current supported types are:\n"
-               "  i    - cpp-output\n"
-               "  ii   - c++-cpp-output\n"
-               "  cui  - cuda-cpp-output\n"
-               "  hipi - hip-cpp-output\n"
-               "  d    - dependency\n"
-               "  ll   - llvm\n"
-               "  bc   - llvm-bc\n"
-               "  s    - assembler\n"
-               "  o    - object\n"
-               "  a    - archive of objects\n"
-               "  gch  - precompiled-header\n"
-               "  ast  - clang AST file"),
-      cl::cat(ClangOffloadBundlerCategory));
-  cl::opt<bool>
-    Unbundle("unbundle",
-             cl::desc("Unbundle bundled file into several output files.\n"),
-             cl::init(false), cl::cat(ClangOffloadBundlerCategory));
-  cl::opt<bool>
-    ListBundleIDs("list", cl::desc("List bundle IDs in the bundled file.\n"),
-                  cl::init(false), cl::cat(ClangOffloadBundlerCategory));
-  cl::opt<bool> PrintExternalCommands(
+
+// --- constexpr option descriptors ---
+inline constexpr clv2::OptionInfo<bool> OBHelpOpt{
+    "h", "Alias for -help", clv2::Hidden,
+    clv2::cat(ClangOffloadBundlerCategory)};
+
+inline constexpr clv2::ListOptionInfo<std::string> OBInputOpt{
+    "input",
+    "Input file. Can be specified multiple times "
+    "for multiple input files.",
+    clv2::value_desc("string"), clv2::cat(ClangOffloadBundlerCategory)};
+
+inline constexpr clv2::ListOptionInfo<std::string> OBInputsOpt{
+    "inputs", "[<input file>,...] (deprecated)", clv2::value_desc("string"),
+    clv2::CommaSeparated, clv2::cat(ClangOffloadBundlerCategory)};
+
+inline constexpr clv2::ListOptionInfo<std::string> OBOutputOpt{
+    "output",
+    "Output file. Can be specified multiple times "
+    "for multiple output files.",
+    clv2::value_desc("string"), clv2::cat(ClangOffloadBundlerCategory)};
+
+inline constexpr clv2::ListOptionInfo<std::string> OBOutputsOpt{
+    "outputs", "[<output file>,...] (deprecated)", clv2::value_desc("string"),
+    clv2::CommaSeparated, clv2::cat(ClangOffloadBundlerCategory)};
+
+inline constexpr clv2::ListOptionInfo<std::string> OBTargetsOpt{
+    "targets", "[<offload kind>-<target triple>,...]",
+    clv2::value_desc("string"), clv2::CommaSeparated,
+    clv2::cat(ClangOffloadBundlerCategory)};
+
+inline constexpr clv2::OptionInfo<std::string> OBTypeOpt{
+    "type",
+    "Type of the files to be bundled/unbundled.\n"
+    "Current supported types are:\n"
+    "  i    - cpp-output\n"
+    "  ii   - c++-cpp-output\n"
+    "  cui  - cuda-cpp-output\n"
+    "  hipi - hip-cpp-output\n"
+    "  d    - dependency\n"
+    "  ll   - llvm\n"
+    "  bc   - llvm-bc\n"
+    "  s    - assembler\n"
+    "  o    - object\n"
+    "  a    - archive of objects\n"
+    "  gch  - precompiled-header\n"
+    "  ast  - clang AST file",
+    clv2::Required, clv2::value_desc("string"),
+    clv2::cat(ClangOffloadBundlerCategory)};
+
+inline constexpr clv2::OptionInfo<bool> OBUnbundleOpt{
+    "unbundle", "Unbundle bundled file into several output files.",
+    clv2::cat(ClangOffloadBundlerCategory)};
+
+inline constexpr clv2::OptionInfo<bool> OBListOpt{
+    "list", "List bundle IDs in the bundled file.",
+    clv2::cat(ClangOffloadBundlerCategory)};
+
+inline constexpr clv2::OptionInfo<bool> OBPrintExternalCommandsOpt{
     "###",
-    cl::desc("Print any external commands that are to be executed "
-             "instead of actually executing them - for testing purposes.\n"),
-    cl::init(false), cl::cat(ClangOffloadBundlerCategory));
-  cl::opt<bool>
-    AllowMissingBundles("allow-missing-bundles",
-                        cl::desc("Create empty files if bundles are missing "
-                                 "when unbundling.\n"),
-                        cl::init(false), cl::cat(ClangOffloadBundlerCategory));
-  cl::opt<unsigned>
-    BundleAlignment("bundle-align",
-                    cl::desc("Alignment of bundle for binary files"),
-                    cl::init(1), cl::cat(ClangOffloadBundlerCategory));
-  cl::opt<bool> CheckInputArchive(
-      "check-input-archive",
-      cl::desc("Check if input heterogeneous archive is "
-               "valid in terms of TargetID rules.\n"),
-      cl::init(false), cl::cat(ClangOffloadBundlerCategory));
-  cl::opt<bool> HipOpenmpCompatible(
+    "Print any external commands that are to be executed "
+    "instead of actually executing them - for testing purposes.",
+    clv2::cat(ClangOffloadBundlerCategory)};
+
+inline constexpr clv2::OptionInfo<bool> OBAllowMissingBundlesOpt{
+    "allow-missing-bundles",
+    "Create empty files if bundles are missing "
+    "when unbundling.",
+    clv2::cat(ClangOffloadBundlerCategory)};
+
+inline constexpr clv2::OptionInfo<unsigned> OBBundleAlignOpt{
+    "bundle-align", "Alignment of bundle for binary files", clv2::Init{1u},
+    clv2::value_desc("uint"), clv2::cat(ClangOffloadBundlerCategory)};
+
+inline constexpr clv2::OptionInfo<bool> OBCheckInputArchiveOpt{
+    "check-input-archive",
+    "Check if input heterogeneous archive is "
+    "valid in terms of TargetID rules.",
+    clv2::cat(ClangOffloadBundlerCategory)};
+
+inline constexpr clv2::OptionInfo<bool> OBHipOpenmpCompatibleOpt{
     "hip-openmp-compatible",
-    cl::desc("Treat hip and hipv4 offload kinds as "
-             "compatible with openmp kind, and vice versa.\n"),
-    cl::init(false), cl::cat(ClangOffloadBundlerCategory));
-  cl::opt<bool> Compress("compress",
-                         cl::desc("Compress output file when bundling.\n"),
-                         cl::init(false), cl::cat(ClangOffloadBundlerCategory));
-  cl::opt<bool> Verbose("verbose", cl::desc("Print debug information.\n"),
-                        cl::init(false), cl::cat(ClangOffloadBundlerCategory));
-  cl::opt<int> CompressionLevel(
-      "compression-level", cl::desc("Specify the compression level (integer)"),
-      cl::value_desc("n"), cl::Optional, cl::cat(ClangOffloadBundlerCategory));
+    "Treat hip and hipv4 offload kinds as "
+    "compatible with openmp kind, and vice versa.",
+    clv2::cat(ClangOffloadBundlerCategory)};
+
+inline constexpr clv2::OptionInfo<bool> OBCompressOpt{
+    "compress", "Compress output file when bundling.",
+    clv2::cat(ClangOffloadBundlerCategory)};
+
+inline constexpr clv2::OptionInfo<bool> OBVerboseOpt{
+    "verbose", "Print debug information.",
+    clv2::cat(ClangOffloadBundlerCategory)};
+
+inline constexpr clv2::OptionInfo<int> OBCompressionLevelOpt{
+    "compression-level", "Specify the compression level (integer)",
+    clv2::Init{0}, clv2::value_desc("n"),
+    clv2::cat(ClangOffloadBundlerCategory)};
+
+inline constexpr clv2::OptionsRegistry<
+    &OBHelpOpt, &OBInputOpt, &OBInputsOpt, &OBOutputOpt, &OBOutputsOpt,
+    &OBTargetsOpt, &OBTypeOpt, &OBUnbundleOpt, &OBListOpt,
+    &OBPrintExternalCommandsOpt, &OBAllowMissingBundlesOpt, &OBBundleAlignOpt,
+    &OBCheckInputArchiveOpt, &OBHipOpenmpCompatibleOpt, &OBCompressOpt,
+    &OBVerboseOpt, &OBCompressionLevelOpt>
+    OffloadBundlerReg;
+
+int main(int argc, const char **argv) {
 
   // Process commandline options and report errors
   sys::PrintStackTraceOnErrorSignal(argv[0]);
 
-  cl::HideUnrelatedOptions(ClangOffloadBundlerCategory);
-  cl::SetVersionPrinter(PrintVersion);
-  cl::ParseCommandLineOptions(
-      argc, argv,
+  clv2::OptionParser P;
+  P.add<&OffloadBundlerReg>();
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&ClangOffloadBundlerCategory});
+  static constexpr llvm::StringLiteral Overview =
       "A tool to bundle several input files of the specified type <type> \n"
       "referring to the same source file but different targets into a single \n"
       "one. The resulting file can also be unbundled into different files by \n"
-      "this tool if -unbundle is provided.\n");
+      "this tool if -unbundle is provided.\n";
+  auto OptsCtx = P.parse(argc, argv, Overview,
+                         /*Errs=*/nullptr, /*VersionString=*/{},
+                         /*HelpOS=*/nullptr, PrintVersion);
+  auto *Opts = OptsCtx->getViewPtr<&OffloadBundlerReg>();
+
+  // Extract parsed values.
+  bool Help = Opts->get<&OBHelpOpt>();
+  std::vector<std::string> InputFileNames = Opts->get<&OBInputOpt>();
+  bool InputFileNamesSet = Opts->specified<&OBInputOpt>();
+  std::vector<std::string> InputFileNamesDeprecatedOpt =
+      Opts->get<&OBInputsOpt>();
+  bool InputFileNamesDeprecatedOptSet = Opts->specified<&OBInputsOpt>();
+  std::vector<std::string> OutputFileNames = Opts->get<&OBOutputOpt>();
+  bool OutputFileNamesSet = Opts->specified<&OBOutputOpt>();
+  std::vector<std::string> OutputFileNamesDeprecatedOpt =
+      Opts->get<&OBOutputsOpt>();
+  bool OutputFileNamesDeprecatedOptSet = Opts->specified<&OBOutputsOpt>();
+  std::vector<std::string> TargetNames = Opts->get<&OBTargetsOpt>();
+  bool TargetNamesSet = Opts->specified<&OBTargetsOpt>();
+  std::string FilesType = Opts->get<&OBTypeOpt>();
+  bool Unbundle = Opts->get<&OBUnbundleOpt>();
+  bool ListBundleIDs = Opts->get<&OBListOpt>();
+  bool PrintExternalCommands = Opts->get<&OBPrintExternalCommandsOpt>();
+  bool AllowMissingBundles = Opts->get<&OBAllowMissingBundlesOpt>();
+  unsigned BundleAlignment = Opts->get<&OBBundleAlignOpt>();
+  bool CheckInputArchive = Opts->get<&OBCheckInputArchiveOpt>();
+  bool HipOpenmpCompatible = Opts->get<&OBHipOpenmpCompatibleOpt>();
+  bool Compress = Opts->get<&OBCompressOpt>();
+  bool CompressSet = Opts->specified<&OBCompressOpt>();
+  bool Verbose = Opts->get<&OBVerboseOpt>();
+  bool VerboseSet = Opts->specified<&OBVerboseOpt>();
+  int CompressionLevel = Opts->get<&OBCompressionLevelOpt>();
+  bool CompressionLevelSet = Opts->specified<&OBCompressionLevelOpt>();
 
   if (Help) {
-    cl::PrintHelpMessage();
+    P.printHelp(llvm::outs(), Overview, argv[0]);
     return 0;
   }
 
@@ -177,11 +237,11 @@ int main(int argc, const char **argv) {
   BundlerConfig.FilesType = FilesType;
   BundlerConfig.ObjcopyPath = "";
   // Do not override the default value Compress and Verbose in BundlerConfig.
-  if (Compress.getNumOccurrences() > 0)
+  if (CompressSet)
     BundlerConfig.Compress = Compress;
-  if (Verbose.getNumOccurrences() > 0)
+  if (VerboseSet)
     BundlerConfig.Verbose = Verbose;
-  if (CompressionLevel.getNumOccurrences() > 0)
+  if (CompressionLevelSet)
     BundlerConfig.CompressionLevel = CompressionLevel;
 
   BundlerConfig.TargetNames.assign(TargetNames.begin(), TargetNames.end());
@@ -231,36 +291,34 @@ int main(int argc, const char **argv) {
   else
     BundlerConfig.ObjcopyPath = *Objcopy;
 
-  if (InputFileNames.getNumOccurrences() != 0 &&
-      InputFileNamesDeprecatedOpt.getNumOccurrences() != 0) {
+  if (InputFileNamesSet && InputFileNamesDeprecatedOptSet) {
     return reportError(createStringError(
         errc::invalid_argument,
         "-inputs and -input cannot be used together, use only -input instead"));
   }
 
-  if (InputFileNamesDeprecatedOpt.size()) {
+  if (!InputFileNamesDeprecatedOpt.empty()) {
     warningOS() << "-inputs is deprecated, use -input instead\n";
     // temporary hack to support -inputs
-    std::vector<std::string> &s = InputFileNames;
-    s.insert(s.end(), InputFileNamesDeprecatedOpt.begin(),
-             InputFileNamesDeprecatedOpt.end());
+    InputFileNames.insert(InputFileNames.end(),
+                          InputFileNamesDeprecatedOpt.begin(),
+                          InputFileNamesDeprecatedOpt.end());
   }
   BundlerConfig.InputFileNames.assign(InputFileNames.begin(),
                                       InputFileNames.end());
 
-  if (OutputFileNames.getNumOccurrences() != 0 &&
-      OutputFileNamesDeprecatedOpt.getNumOccurrences() != 0) {
+  if (OutputFileNamesSet && OutputFileNamesDeprecatedOptSet) {
     return reportError(createStringError(errc::invalid_argument,
                                          "-outputs and -output cannot be used "
                                          "together, use only -output instead"));
   }
 
-  if (OutputFileNamesDeprecatedOpt.size()) {
+  if (!OutputFileNamesDeprecatedOpt.empty()) {
     warningOS() << "-outputs is deprecated, use -output instead\n";
     // temporary hack to support -outputs
-    std::vector<std::string> &s = OutputFileNames;
-    s.insert(s.end(), OutputFileNamesDeprecatedOpt.begin(),
-             OutputFileNamesDeprecatedOpt.end());
+    OutputFileNames.insert(OutputFileNames.end(),
+                           OutputFileNamesDeprecatedOpt.begin(),
+                           OutputFileNamesDeprecatedOpt.end());
   }
   BundlerConfig.OutputFileNames.assign(OutputFileNames.begin(),
                                        OutputFileNames.end());
@@ -308,7 +366,7 @@ int main(int argc, const char **argv) {
         createStringError(errc::invalid_argument, "no output file specified!"));
   }
 
-  if (TargetNames.getNumOccurrences() == 0) {
+  if (!TargetNamesSet) {
     return reportError(createStringError(
         errc::invalid_argument,
         "for the --targets option: must be specified at least once!"));

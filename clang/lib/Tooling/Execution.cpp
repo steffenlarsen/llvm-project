@@ -10,6 +10,7 @@
 #include "clang/Support/Compiler.h"
 #include "clang/Tooling/ToolExecutorPluginRegistry.h"
 #include "clang/Tooling/Tooling.h"
+#include "llvm/Support/CommandLineV2.h"
 
 LLVM_INSTANTIATE_REGISTRY_EX(CLANG_ABI_EXPORT,
                              clang::tooling::ToolExecutorPluginRegistry)
@@ -17,9 +18,7 @@ LLVM_INSTANTIATE_REGISTRY_EX(CLANG_ABI_EXPORT,
 namespace clang {
 namespace tooling {
 
-llvm::cl::opt<std::string>
-    ExecutorName("executor", llvm::cl::desc("The name of the executor to use."),
-                 llvm::cl::init("standalone"));
+std::string ExecutorName = "standalone";
 
 void InMemoryToolResults::addResult(StringRef Key, StringRef Value) {
   KVResults.push_back({Strings.save(Key), Strings.save(Value)});
@@ -84,6 +83,35 @@ createExecutorFromCommandLineArgsImpl(int &argc, const char **argv,
       llvm::Twine("Executor \"") + ExecutorName + "\" is not registered.",
       llvm::inconvertibleErrorCode());
 }
+llvm::Expected<std::unique_ptr<ToolExecutor>>
+createExecutorFromCommandLineArgsImpl(
+    int &argc, const char **argv, llvm::cl::OptionCategory &Category,
+    llvm::function_ref<void(llvm::clv2::OptionParser &)> ConfigureParser,
+    const char *Overview) {
+  auto OptionsParser = CommonOptionsParser::create(
+      argc, argv, Category, ConfigureParser, llvm::cl::ZeroOrMore,
+      /*Overview=*/Overview);
+  if (!OptionsParser)
+    return OptionsParser.takeError();
+  for (const auto &TEPlugin : ToolExecutorPluginRegistry::entries()) {
+    if (TEPlugin.getName() != ExecutorName) {
+      continue;
+    }
+    std::unique_ptr<ToolExecutorPlugin> Plugin(TEPlugin.instantiate());
+    llvm::Expected<std::unique_ptr<ToolExecutor>> Executor =
+        Plugin->create(*OptionsParser);
+    if (!Executor) {
+      return llvm::make_error<llvm::StringError>(
+          llvm::Twine("Failed to create '") + TEPlugin.getName() +
+              "': " + llvm::toString(Executor.takeError()) + "\n",
+          llvm::inconvertibleErrorCode());
+    }
+    return std::move(*Executor);
+  }
+  return llvm::make_error<llvm::StringError>(
+      llvm::Twine("Executor \"") + ExecutorName + "\" is not registered.",
+      llvm::inconvertibleErrorCode());
+}
 } // end namespace internal
 
 llvm::Expected<std::unique_ptr<ToolExecutor>>
@@ -92,6 +120,14 @@ createExecutorFromCommandLineArgs(int &argc, const char **argv,
                                   const char *Overview) {
   return internal::createExecutorFromCommandLineArgsImpl(argc, argv, Category,
                                                          Overview);
+}
+
+llvm::Expected<std::unique_ptr<ToolExecutor>> createExecutorFromCommandLineArgs(
+    int &argc, const char **argv, llvm::cl::OptionCategory &Category,
+    llvm::function_ref<void(llvm::clv2::OptionParser &)> ConfigureParser,
+    const char *Overview) {
+  return internal::createExecutorFromCommandLineArgsImpl(
+      argc, argv, Category, ConfigureParser, Overview);
 }
 
 // This anchor is used to force the linker to link in the generated object file

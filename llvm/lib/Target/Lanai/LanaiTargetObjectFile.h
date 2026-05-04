@@ -33,7 +33,8 @@ public:
                                     const TargetMachine &TM) const override;
 
   /// Return true if this constant should be placed into small data section.
-  bool isConstantInSmallSection(const DataLayout &DL, const Constant *CN) const;
+  bool isConstantInSmallSection(const DataLayout &DL, const Constant *CN,
+                                const Module *M) const;
 
   MCSection *getSectionForConstant(const DataLayout &DL, SectionKind Kind,
                                    const Constant *C, Align &Alignment,

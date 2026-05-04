@@ -14,21 +14,18 @@
 
 #include "polly/FlattenSchedule.h"
 #include "polly/FlattenAlgo.h"
-#include "polly/Options.h"
+#include "polly/PollyOptionsOptInfos.h"
 #include "polly/ScopInfo.h"
 #include "polly/Support/ISLOStream.h"
 #include "polly/Support/ISLTools.h"
 #include "polly/Support/PollyDebug.h"
+#include "llvm/Support/CommandLineV2.h"
 #define DEBUG_TYPE "polly-flatten-schedule"
 
 using namespace polly;
 using namespace llvm;
 
 namespace {
-
-static cl::opt<bool> PollyPrintFlattenSchedule("polly-print-flatten-schedule",
-                                               cl::desc("A polly pass"),
-                                               cl::cat(PollyCategory));
 
 /// Print a schedule to @p OS.
 ///
@@ -65,7 +62,9 @@ void polly::runFlattenSchedulePass(Scop &S) {
 
   S.setSchedule(NewSchedule);
 
-  if (PollyPrintFlattenSchedule) {
+  auto *Opts = polly_opts::getPollyOpts(
+      S.getFunction().getContext().getOptionsContext());
+  if (Opts && Opts->get<&llvm::clv2::POLLY_PrintFlattenSchedule>()) {
     outs()
         << "Printing analysis 'Polly - Print flattened schedule' for region: '"
         << S.getRegion().getNameStr() << "' in function '"

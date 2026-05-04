@@ -150,7 +150,8 @@ void RISCV::updateCZceFeatureImplications(MCSubtargetInfo &STI) {
 }
 
 static MCSubtargetInfo *
-createRISCVMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
+createRISCVMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                           const llvm::clv2::OptionsContext &Ctx) {
   if (CPU.empty() || CPU == "generic")
     CPU = TT.isArch64Bit() ? "generic-rv64" : "generic-rv32";
 
@@ -171,6 +172,8 @@ createRISCVMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
 
   RISCV::updateCZceFeatureImplications(*X);
 
+  if (X)
+    X->setOptionsContext(Ctx);
   return X;
 }
 

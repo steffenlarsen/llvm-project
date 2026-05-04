@@ -36,13 +36,14 @@
 #include "llvm/IR/UseListOrder.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/SystemUtils.h"
 #include "llvm/Support/raw_ostream.h"
@@ -50,30 +51,31 @@
 #include <vector>
 
 using namespace llvm;
+using namespace llvm::clv2;
 
 #define DEBUG_TYPE "uselistorder"
 
-static cl::OptionCategory Cat("verify-uselistorder Options");
+static constexpr OptionCategory Cat{"verify-uselistorder Options"};
 
-static cl::opt<std::string> InputFilename(cl::Positional,
-                                          cl::desc("<input bitcode file>"),
-                                          cl::init("-"),
-                                          cl::value_desc("filename"));
+static constexpr OptionInfo<std::string> InputFilename{
+    "input", "<input bitcode file>", Positional{}, Init{"-"}};
 
-static cl::opt<bool> SaveTemps("save-temps", cl::desc("Save temp files"),
-                               cl::cat(Cat));
+static constexpr OptionInfo<bool> SaveTemps{"save-temps", "Save temp files",
+                                            cat(Cat)};
 
-static cl::opt<unsigned>
-    NumShuffles("num-shuffles",
-                cl::desc("Number of times to shuffle and verify use-lists"),
-                cl::init(1), cl::cat(Cat));
+static constexpr OptionInfo<unsigned> NumShuffles{
+    "num-shuffles", "Number of times to shuffle and verify use-lists", Init{1u},
+    cat(Cat)};
+
+static constexpr OptionsRegistry<&InputFilename, &SaveTemps, &NumShuffles>
+    UselistorderToolReg;
 
 namespace {
 
 struct TempFile {
   std::string Filename;
   FileRemover Remover;
-  bool init(const std::string &Ext, bool IsText = false);
+  bool init(const std::string &Ext, bool DoSaveTemps, bool IsText = false);
   bool writeBitcode(const Module &M) const;
   bool writeAssembly(const Module &M) const;
   std::unique_ptr<Module> readBitcode(LLVMContext &Context) const;
@@ -106,7 +108,7 @@ struct ValueMapping {
 
 } // end namespace
 
-bool TempFile::init(const std::string &Ext, bool IsText) {
+bool TempFile::init(const std::string &Ext, bool DoSaveTemps, bool IsText) {
   SmallVector<char, 64> Vector;
   LLVM_DEBUG(dbgs() << " - create-temp-file\n");
   if (auto EC = sys::fs::createTemporaryFile("uselistorder", Ext, Vector,
@@ -118,8 +120,8 @@ bool TempFile::init(const std::string &Ext, bool IsText) {
   assert(!Vector.empty());
 
   Filename.assign(Vector.data(), Vector.data() + Vector.size());
-  Remover.setFile(Filename, !SaveTemps);
-  if (SaveTemps)
+  Remover.setFile(Filename, !DoSaveTemps);
+  if (DoSaveTemps)
     outs() << " - filename = " << Filename << "\n";
   return false;
 }
@@ -315,9 +317,9 @@ static bool matches(const ValueMapping &LM, const ValueMapping &RM) {
   // get serialized.  However, checking if users are constant and calling
   // isConstantUsed() on every one is very expensive.  Instead, just check if
   // the user is mapped.
-  auto skipUnmappedUsers =
-      [&](Value::const_use_iterator &U, Value::const_use_iterator E,
-          const ValueMapping &M) {
+  auto skipUnmappedUsers = [&](Value::const_use_iterator &U,
+                               Value::const_use_iterator E,
+                               const ValueMapping &M) {
     while (U != E && !M.lookup(U->getUser()))
       ++U;
   };
@@ -367,35 +369,41 @@ static void verifyAfterRoundTrip(const Module &M,
     report_fatal_error("use-list order changed");
 }
 
-static void verifyBitcodeUseListOrder(const Module &M) {
+static void verifyBitcodeUseListOrder(const Module &M,
+                                      const clv2::OptionsContext &OptsCtx,
+                                      bool SaveTemps) {
   TempFile F;
-  if (F.init("bc", /*IsText=*/false))
+  if (F.init("bc", SaveTemps))
     report_fatal_error("failed to initialize bitcode file");
 
   if (F.writeBitcode(M))
     report_fatal_error("failed to write bitcode");
 
-  LLVMContext Context;
+  LLVMContext Context(OptsCtx);
   verifyAfterRoundTrip(M, F.readBitcode(Context));
 }
 
-static void verifyAssemblyUseListOrder(const Module &M) {
+static void verifyAssemblyUseListOrder(const Module &M,
+                                       const clv2::OptionsContext &OptsCtx,
+                                       bool SaveTemps) {
   TempFile F;
-  if (F.init("ll", /*IsText=*/true))
+  if (F.init("ll", SaveTemps, /*IsText=*/true))
     report_fatal_error("failed to initialize assembly file");
 
   if (F.writeAssembly(M))
     report_fatal_error("failed to write assembly");
 
-  LLVMContext Context;
+  LLVMContext Context(OptsCtx);
   verifyAfterRoundTrip(M, F.readAssembly(Context));
 }
 
-static void verifyUseListOrder(const Module &M) {
+static void verifyUseListOrder(const Module &M,
+                               const clv2::OptionsContext &OptsCtx,
+                               bool SaveTemps) {
   outs() << "verify bitcode\n";
-  verifyBitcodeUseListOrder(M);
+  verifyBitcodeUseListOrder(M, OptsCtx, SaveTemps);
   outs() << "verify assembly\n";
-  verifyAssemblyUseListOrder(M);
+  verifyAssemblyUseListOrder(M, OptsCtx, SaveTemps);
 }
 
 static void shuffleValueUseLists(Value *V, std::minstd_rand0 &Gen,
@@ -420,8 +428,9 @@ static void shuffleValueUseLists(Value *V, std::minstd_rand0 &Gen,
   LLVM_DEBUG(dbgs() << "V = "; V->dump());
   std::uniform_int_distribution<short> Dist(10, 99);
   SmallDenseMap<const Use *, short, 16> Order;
-  auto compareUses =
-      [&Order](const Use &L, const Use &R) { return Order[&L] < Order[&R]; };
+  auto compareUses = [&Order](const Use &L, const Use &R) {
+    return Order[&L] < Order[&R];
+  };
   do {
     for (const Use &U : V->uses()) {
       auto I = Dist(Gen);
@@ -553,34 +562,41 @@ int main(int argc, char **argv) {
   // Enable debug stream buffering.
   EnableDebugBuffering = true;
 
-  cl::HideUnrelatedOptions(Cat);
-  cl::ParseCommandLineOptions(argc, argv,
-                              "llvm tool to verify use-list order\n");
+  clv2::OptionParser P;
+  P.add<&UselistorderToolReg>();
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&Cat});
+  auto OptsCtx = P.parse(argc, argv, "llvm tool to verify use-list order\n");
+  auto *Opts = OptsCtx->getViewPtr<&UselistorderToolReg>();
 
-  LLVMContext Context;
+  bool DoSaveTemps = Opts->get<&SaveTemps>();
+
+  LLVMContext Context(*OptsCtx);
   SMDiagnostic Err;
 
   // Load the input module...
-  std::unique_ptr<Module> M = parseIRFile(InputFilename, Err, Context);
+  std::unique_ptr<Module> M =
+      parseIRFile(Opts->get<&InputFilename>(), Err, Context);
 
   if (!M) {
     Err.print(argv[0], errs());
     return 1;
   }
   if (verifyModule(*M, &errs())) {
-    errs() << argv[0] << ": " << InputFilename
+    errs() << argv[0] << ": " << Opts->get<&InputFilename>()
            << ": error: input module is broken!\n";
     return 1;
   }
 
   // Verify the use lists now and after reversing them.
   outs() << "*** verify-uselistorder ***\n";
-  verifyUseListOrder(*M);
+  verifyUseListOrder(*M, *OptsCtx, DoSaveTemps);
   outs() << "reverse\n";
   reverseUseLists(*M);
-  verifyUseListOrder(*M);
+  verifyUseListOrder(*M, *OptsCtx, DoSaveTemps);
 
-  for (unsigned I = 0, E = NumShuffles; I != E; ++I) {
+  unsigned NShuffles = Opts->get<&NumShuffles>();
+  for (unsigned I = 0, E = NShuffles; I != E; ++I) {
     outs() << "\n";
 
     // Shuffle with a different (deterministic) seed each time.
@@ -588,10 +604,10 @@ int main(int argc, char **argv) {
     shuffleUseLists(*M, I);
 
     // Verify again before and after reversing.
-    verifyUseListOrder(*M);
+    verifyUseListOrder(*M, *OptsCtx, DoSaveTemps);
     outs() << "reverse\n";
     reverseUseLists(*M);
-    verifyUseListOrder(*M);
+    verifyUseListOrder(*M, *OptsCtx, DoSaveTemps);
   }
 
   return 0;

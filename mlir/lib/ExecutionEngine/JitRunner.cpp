@@ -30,12 +30,14 @@
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/LegacyPassNameParser.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FileUtilities.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/StringSaver.h"
+#include "llvm/Support/SupportOptions.h"
+#include "llvm/Support/SupportOptionsOptInfos.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include <cstdint>
 #include <numeric>
@@ -45,73 +47,55 @@
 #define DEBUG_TYPE "jit-runner"
 
 using namespace mlir;
+using namespace llvm::clv2;
 using llvm::Error;
 
+static constexpr OptionInfo<std::string> jrInputOpt{"", "<input file>",
+                                                    Positional{}, Init{"-"}};
+static constexpr OptionInfo<std::string> jrMainFuncOpt{
+    "e", "The function to be called", value_desc("<function name>"),
+    Init{"main"}};
+static constexpr OptionInfo<std::string> jrMainFuncTypeOpt{
+    "entry-point-result",
+    "Textual description of the function type to be called",
+    value_desc("f32 | i32 | i64 | void"), Init{"f32"}};
+static constexpr OptionCategory jrOptFlagsCat{"opt-like flags"};
+static constexpr OptionCategory jrLinkingCat{"linking options"};
+static constexpr OptionInfo<bool> jrO0Opt{
+    "O0", "Run opt passes and codegen at O0", cat(jrOptFlagsCat)};
+static constexpr OptionInfo<bool> jrO1Opt{
+    "O1", "Run opt passes and codegen at O1", cat(jrOptFlagsCat)};
+static constexpr OptionInfo<bool> jrO2Opt{
+    "O2", "Run opt passes and codegen at O2", cat(jrOptFlagsCat)};
+static constexpr OptionInfo<bool> jrO3Opt{
+    "O3", "Run opt passes and codegen at O3", cat(jrOptFlagsCat)};
+static constexpr OptionInfo<std::string> jrMArchOpt{
+    "march", "Architecture to generate code for (see --version)"};
+static constexpr ListOptionInfo<std::string> jrMAttrsOpt{
+    "mattr", "Target specific attributes (-mattr=help for details)",
+    CommaSeparated, value_desc("a1,+a2,-a3,..."), cat(jrOptFlagsCat)};
+static constexpr ListOptionInfo<std::string> jrSharedLibsOpt{
+    "shared-libs", "Libraries to link dynamically", CommaSeparated,
+    cat(jrLinkingCat)};
+static constexpr OptionInfo<bool> jrDumpObjectFileOpt{
+    "dump-object-file", "Dump JITted-compiled object to file specified with "
+                        "-object-filename (<input file>.o by default)."};
+static constexpr OptionInfo<std::string> jrObjectFilenameOpt{
+    "object-filename", "Dump JITted-compiled object to file <input file>.o"};
+static constexpr OptionInfo<bool> jrHostSupportsJitOpt{
+    "host-supports-jit", "Report host JIT support and exit"};
+static constexpr OptionInfo<bool> jrNoImplicitModuleOpt{
+    "no-implicit-module",
+    "Disable implicit addition of a top-level module op during parsing"};
+
+static constexpr OptionsRegistry<
+    &jrInputOpt, &jrMainFuncOpt, &jrMainFuncTypeOpt, &jrO0Opt, &jrO1Opt,
+    &jrO2Opt, &jrO3Opt, &jrMArchOpt, &jrMAttrsOpt, &jrSharedLibsOpt,
+    &jrDumpObjectFileOpt, &jrObjectFilenameOpt, &jrHostSupportsJitOpt,
+    &jrNoImplicitModuleOpt>
+    JitRunnerReg;
+
 namespace {
-/// This options struct prevents the need for global static initializers, and
-/// is only initialized if the JITRunner is invoked.
-struct Options {
-  llvm::cl::opt<std::string> inputFilename{llvm::cl::Positional,
-                                           llvm::cl::desc("<input file>"),
-                                           llvm::cl::init("-")};
-  llvm::cl::opt<std::string> mainFuncName{
-      "e", llvm::cl::desc("The function to be called"),
-      llvm::cl::value_desc("<function name>"), llvm::cl::init("main")};
-  llvm::cl::opt<std::string> mainFuncType{
-      "entry-point-result",
-      llvm::cl::desc("Textual description of the function type to be called"),
-      llvm::cl::value_desc("f32 | i32 | i64 | void"), llvm::cl::init("f32")};
-
-  llvm::cl::OptionCategory optFlags{"opt-like flags"};
-
-  // CLI variables for -On options.
-  llvm::cl::opt<bool> optO0{"O0",
-                            llvm::cl::desc("Run opt passes and codegen at O0"),
-                            llvm::cl::cat(optFlags)};
-  llvm::cl::opt<bool> optO1{"O1",
-                            llvm::cl::desc("Run opt passes and codegen at O1"),
-                            llvm::cl::cat(optFlags)};
-  llvm::cl::opt<bool> optO2{"O2",
-                            llvm::cl::desc("Run opt passes and codegen at O2"),
-                            llvm::cl::cat(optFlags)};
-  llvm::cl::opt<bool> optO3{"O3",
-                            llvm::cl::desc("Run opt passes and codegen at O3"),
-                            llvm::cl::cat(optFlags)};
-
-  llvm::cl::list<std::string> mAttrs{
-      "mattr", llvm::cl::MiscFlags::CommaSeparated,
-      llvm::cl::desc("Target specific attributes (-mattr=help for details)"),
-      llvm::cl::value_desc("a1,+a2,-a3,..."), llvm::cl::cat(optFlags)};
-
-  llvm::cl::opt<std::string> mArch{
-      "march",
-      llvm::cl::desc("Architecture to generate code for (see --version)")};
-
-  llvm::cl::OptionCategory clOptionsCategory{"linking options"};
-  llvm::cl::list<std::string> clSharedLibs{
-      "shared-libs", llvm::cl::desc("Libraries to link dynamically"),
-      llvm::cl::MiscFlags::CommaSeparated, llvm::cl::cat(clOptionsCategory)};
-
-  /// CLI variables for debugging.
-  llvm::cl::opt<bool> dumpObjectFile{
-      "dump-object-file",
-      llvm::cl::desc("Dump JITted-compiled object to file specified with "
-                     "-object-filename (<input file>.o by default).")};
-
-  llvm::cl::opt<std::string> objectFilename{
-      "object-filename",
-      llvm::cl::desc("Dump JITted-compiled object to file <input file>.o")};
-
-  llvm::cl::opt<bool> hostSupportsJit{"host-supports-jit",
-                                      llvm::cl::desc("Report host JIT support"),
-                                      llvm::cl::Hidden};
-
-  llvm::cl::opt<bool> noImplicitModule{
-      "no-implicit-module",
-      llvm::cl::desc(
-          "Disable implicit addition of a top-level module op during parsing"),
-      llvm::cl::init(false)};
-};
 
 struct CompileAndExecuteConfig {
   /// LLVM module transformer that is passed to ExecutionEngine.
@@ -127,6 +111,19 @@ struct CompileAndExecuteConfig {
   /// runtime.
   llvm::function_ref<llvm::orc::SymbolMap(llvm::orc::MangleAndInterner)>
       runtimeSymbolMap;
+
+  /// Optimisation level selected by -O0/-O1/-O2/-O3, or nullopt if none was
+  /// given.
+  std::optional<unsigned> optLevel;
+
+  /// Libraries to load into the JIT (--shared-libs).
+  llvm::ArrayRef<std::string> sharedLibs;
+
+  /// --dump-object-file, and where to write it (--object-filename).  When the
+  /// filename is empty the input filename plus ".o" is used.
+  bool dumpObjectFile = false;
+  llvm::StringRef objectFilename;
+  llvm::StringRef inputFilename;
 };
 
 } // namespace
@@ -160,15 +157,14 @@ static inline Error makeStringError(const Twine &message) {
                                              llvm::inconvertibleErrorCode());
 }
 
-static std::optional<unsigned> getCommandLineOptLevel(Options &options) {
+static std::optional<unsigned> selectOptLevel(bool o0, bool o1, bool o2,
+                                              bool o3) {
   std::optional<unsigned> optLevel;
-  SmallVector<std::reference_wrapper<llvm::cl::opt<bool>>, 4> optFlags{
-      options.optO0, options.optO1, options.optO2, options.optO3};
+  bool optLevels[] = {o0, o1, o2, o3};
 
   // Determine if there is an optimization flag present.
   for (unsigned j = 0; j < 4; ++j) {
-    auto &flag = optFlags[j].get();
-    if (flag) {
+    if (optLevels[j]) {
       optLevel = j;
       break;
     }
@@ -178,15 +174,15 @@ static std::optional<unsigned> getCommandLineOptLevel(Options &options) {
 
 // JIT-compile the given module and run "entryPoint" with "args" as arguments.
 static Error
-compileAndExecute(Options &options, Operation *module, StringRef entryPoint,
+compileAndExecute(Operation *module, StringRef entryPoint,
                   CompileAndExecuteConfig config, void **args,
                   std::unique_ptr<llvm::TargetMachine> tm = nullptr) {
   std::optional<llvm::CodeGenOptLevel> jitCodeGenOptLevel;
-  if (auto clOptLevel = getCommandLineOptLevel(options))
-    jitCodeGenOptLevel = static_cast<llvm::CodeGenOptLevel>(*clOptLevel);
+  if (config.optLevel)
+    jitCodeGenOptLevel = static_cast<llvm::CodeGenOptLevel>(*config.optLevel);
 
-  SmallVector<StringRef, 4> sharedLibs(options.clSharedLibs.begin(),
-                                       options.clSharedLibs.end());
+  SmallVector<StringRef, 4> sharedLibs(config.sharedLibs.begin(),
+                                       config.sharedLibs.end());
 
   mlir::ExecutionEngineOptions engineOptions;
   engineOptions.llvmModuleBuilder = config.llvmModuleBuilder;
@@ -208,10 +204,10 @@ compileAndExecute(Options &options, Operation *module, StringRef entryPoint,
   if (!expectedFPtr)
     return expectedFPtr.takeError();
 
-  if (options.dumpObjectFile)
-    engine->dumpToObjectFile(options.objectFilename.empty()
-                                 ? options.inputFilename + ".o"
-                                 : options.objectFilename);
+  if (config.dumpObjectFile)
+    engine->dumpToObjectFile(config.objectFilename.empty()
+                                 ? config.inputFilename.str() + ".o"
+                                 : config.objectFilename.str());
 
   void (*fptr)(void **) = *expectedFPtr;
   (*fptr)(args);
@@ -219,9 +215,10 @@ compileAndExecute(Options &options, Operation *module, StringRef entryPoint,
   return Error::success();
 }
 
-static Error compileAndExecuteVoidFunction(
-    Options &options, Operation *module, StringRef entryPoint,
-    CompileAndExecuteConfig config, std::unique_ptr<llvm::TargetMachine> tm) {
+static Error
+compileAndExecuteVoidFunction(Operation *module, StringRef entryPoint,
+                              CompileAndExecuteConfig config,
+                              std::unique_ptr<llvm::TargetMachine> tm) {
   auto mainFunction = dyn_cast_or_null<LLVM::LLVMFuncOp>(
       SymbolTable::lookupSymbolIn(module, entryPoint));
   if (!mainFunction || mainFunction.isExternal())
@@ -238,8 +235,8 @@ static Error compileAndExecuteVoidFunction(
     return makeStringError("expected void function");
 
   void *empty = nullptr;
-  return compileAndExecute(options, module, entryPoint, std::move(config),
-                           &empty, std::move(tm));
+  return compileAndExecute(module, entryPoint, std::move(config), &empty,
+                           std::move(tm));
 }
 
 template <typename Type>
@@ -271,9 +268,10 @@ Error checkCompatibleReturnType<float>(LLVM::LLVMFuncOp mainFunction) {
   return Error::success();
 }
 template <typename Type>
-static Error compileAndExecuteSingleReturnFunction(
-    Options &options, Operation *module, StringRef entryPoint,
-    CompileAndExecuteConfig config, std::unique_ptr<llvm::TargetMachine> tm) {
+static Error
+compileAndExecuteSingleReturnFunction(Operation *module, StringRef entryPoint,
+                                      CompileAndExecuteConfig config,
+                                      std::unique_ptr<llvm::TargetMachine> tm) {
   auto mainFunction = dyn_cast_or_null<LLVM::LLVMFuncOp>(
       SymbolTable::lookupSymbolIn(module, entryPoint));
   if (!mainFunction || mainFunction.isExternal())
@@ -292,9 +290,8 @@ static Error compileAndExecuteSingleReturnFunction(
     void *data;
   } data;
   data.data = &res;
-  if (auto error =
-          compileAndExecute(options, module, entryPoint, std::move(config),
-                            (void **)&data, std::move(tm)))
+  if (auto error = compileAndExecute(module, entryPoint, std::move(config),
+                                     (void **)&data, std::move(tm)))
     return error;
 
   // Intentional printing of the output so we can test.
@@ -309,12 +306,166 @@ int mlir::JitRunnerMain(int argc, char **argv, const DialectRegistry &registry,
                         JitRunnerConfig config) {
   llvm::ExitOnError exitOnErr;
 
-  // Create the options struct containing the command line options for the
-  // runner. This must come before the command line options are parsed.
-  Options options;
-  llvm::cl::ParseCommandLineOptions(argc, argv, "MLIR CPU execution driver\n");
+  llvm::clv2::OptionParser P;
+  P.add<&JitRunnerReg>();
+  if (config.configureParser)
+    config.configureParser(P);
+  llvm::RegisterCommonLLVMOptionsHidden(P);
+  // Auto-generated showOptions for mlir-runner
+  P.showOptions({
+      "e",
+      "abort-on-max-devirt-iterations-reached",
+      "allow-ginsert-as-artifact",
+      "arc-contract-use-objc-claim-rv",
+      "atomic-counter-update-promoted",
+      "atomic-first-counter",
+      "basic-block-section-match-infer",
+      "bounds-checking-single-trap",
+      "cfg-hide-cold-paths",
+      "cfg-hide-deoptimize-paths",
+      "cfg-hide-unreachable-paths",
+      "check-functions-filter",
+      "conditional-counter-update",
+      "cost-kind",
+      "ir2vec-arg-weight",
+      "ir2vec-kind",
+      "ir2vec-opc-weight",
+      "ir2vec-type-weight",
+      "ir2vec-vocab-path",
+      "mir2vec-common-operand-weight",
+      "mir2vec-kind",
+      "mir2vec-opc-weight",
+      "mir2vec-print-all-vocab-entries",
+      "mir2vec-reg-operand-weight",
+      "mir2vec-vocab-path",
+      "ctx-profile-force-is-specialized",
+      "debugify-atoms",
+      "debugify-func-limit",
+      "debugify-level",
+      "debugify-quiet",
+      "devirtualize-speculatively",
+      "disable-auto-upgrade-debug-info",
+      "disable-i2p-p2i-opt",
+      "do-counter-promotion",
+      "dot-cfg-mssa",
+      "dump-object-file",
+      "elide-all-zero-branch-weights",
+      "emit-bb-hash",
+      "enable-cse-in-irtranslator",
+      "enable-cse-in-legalizer",
+      "enable-devirtualize-speculatively",
+      "enable-gvn-hoist",
+      "enable-gvn-memdep",
+      "enable-gvn-memoryssa",
+      "enable-gvn-sink",
+      "enable-jump-table-to-switch",
+      "enable-load-in-loop-pre",
+      "enable-load-pre",
+      "enable-loop-simplifycfg-term-folding",
+      "enable-name-compression",
+      "enable-poison-reuse-guard",
+      "enable-split-backedge-in-load-pre",
+      "enable-split-loopiv-heuristic",
+      "enable-vtable-profile-use",
+      "enable-vtable-value-profiling",
+      "entry-point-result",
+      "expand-variadics-override",
+      "experimental-debug-variable-locations",
+      "force-tail-folding-style",
+      "fs-profile-debug-bw-threshold",
+      "fs-profile-debug-prob-diff-threshold",
+      "generate-merged-base-profiles",
+      "hash-based-counter-split",
+      "hot-cold-split",
+      "hwasan-percentile-cutoff-hot",
+      "hwasan-random-rate",
+      "import-all-index",
+      "instcombine-code-sinking",
+      "instcombine-guard-widening-window",
+      "instcombine-maxarray-size",
+      "instcombine-max-num-phis",
+      "instcombine-max-sink-users",
+      "instcombine-negator-enabled",
+      "instcombine-negator-max-depth",
+      "instrprof-atomic-counter-update-all",
+      "internalize-public-api-file",
+      "internalize-public-api-list",
+      "intrinsic-cost-strategy",
+      "iterative-counter-promotion",
+      "link-nested-modules",
+      "lower-allow-check-percentile-cutoff-hot",
+      "lower-allow-check-random-rate",
+      "march",
+      "matrix-default-layout",
+      "matrix-print-after-transpose-opt",
+      "mattr",
+      "max-counter-promotions",
+      "max-counter-promotions-per-loop",
+      "mir-strip-debugify-only",
+      "misexpect-tolerance",
+      "ms-secure-hotpatch-functions-file",
+      "ms-secure-hotpatch-functions-list",
+      "no-discriminators",
+      "no-implicit-module",
+      "O0",
+      "O1",
+      "O2",
+      "O3",
+      "object-filename",
+      "object-size-offset-visitor-max-visit-instructions",
+      "pgo-block-coverage",
+      "pgo-temporal-instrumentation",
+      "pgo-view-block-coverage-graph",
+      "print-pipeline-passes",
+      "profcheck-annotate-select",
+      "profcheck-default-function-entry-count",
+      "profcheck-default-select-false-weight",
+      "profcheck-default-select-true-weight",
+      "profcheck-weights-for-test",
+      "profile-correlate",
+      "propeller-infer-threshold",
+      "runtime-counter-relocation",
+      "safepoint-ir-verifier-print-only",
+      "sampled-instr-burst-duration",
+      "sampled-instr-period",
+      "sampled-instrumentation",
+      "sample-profile-check-record-coverage",
+      "sample-profile-check-sample-coverage",
+      "sample-profile-max-propagate-iterations",
+      "shared-libs",
+      "skip-ret-exit-block",
+      "speculative-counter-promotion-max-exiting",
+      "speculative-counter-promotion-to-loop",
+      "summary-file",
+      "verify-legalizer-debug-locs",
+      "verify-region-info",
+      "vp-counters-per-site",
+      "vp-static-alloc",
+      "x86-align-branch",
+      "x86-align-branch-boundary",
+      "x86-branches-within-32B-boundaries",
+      "x86-enable-apx-for-relocation",
+      "x86-pad-max-prefix-size",
 
-  if (options.hostSupportsJit) {
+  });
+
+  auto OptsCtx = P.parse(argc, argv, "MLIR CPU execution driver\n");
+  auto *Opts = OptsCtx->getViewPtr<&JitRunnerReg>();
+
+  // Locals, not file-scope state: each of these either stays inside this
+  // function or travels to compileAndExecute on CompileAndExecuteConfig.
+  const std::string inputFilename = Opts->get<&jrInputOpt>();
+  const std::string mainFuncName = Opts->get<&jrMainFuncOpt>();
+  const std::string mainFuncType = Opts->get<&jrMainFuncTypeOpt>();
+  const std::string mArch = Opts->get<&jrMArchOpt>();
+  const std::vector<std::string> mAttrs = Opts->get<&jrMAttrsOpt>();
+  const std::vector<std::string> sharedLibs = Opts->get<&jrSharedLibsOpt>();
+  const std::string objectFilename = Opts->get<&jrObjectFilenameOpt>();
+  const bool dumpObjectFile = Opts->get<&jrDumpObjectFileOpt>();
+  const bool hostSupportsJit = Opts->get<&jrHostSupportsJitOpt>();
+  const bool noImplicitModule = Opts->get<&jrNoImplicitModuleOpt>();
+
+  if (hostSupportsJit) {
     auto j = llvm::orc::LLJITBuilder().create();
     if (j)
       llvm::outs() << "true\n";
@@ -325,20 +476,19 @@ int mlir::JitRunnerMain(int argc, char **argv, const DialectRegistry &registry,
     return 0;
   }
 
-  std::optional<unsigned> optLevel = getCommandLineOptLevel(options);
-  SmallVector<std::reference_wrapper<llvm::cl::opt<bool>>, 4> optFlags{
-      options.optO0, options.optO1, options.optO2, options.optO3};
+  std::optional<unsigned> optLevel =
+      selectOptLevel(Opts->get<&jrO0Opt>(), Opts->get<&jrO1Opt>(),
+                     Opts->get<&jrO2Opt>(), Opts->get<&jrO3Opt>());
 
   MLIRContext context(registry);
 
-  auto m = parseMLIRInput(options.inputFilename, !options.noImplicitModule,
-                          &context);
+  auto m = parseMLIRInput(inputFilename, !noImplicitModule, &context);
   if (!m) {
     llvm::errs() << "could not parse the input IR\n";
     return 1;
   }
 
-  JitRunnerOptions runnerOptions{options.mainFuncName, options.mainFuncType};
+  JitRunnerOptions runnerOptions{mainFuncName, mainFuncType};
   if (config.mlirTransformer)
     if (failed(config.mlirTransformer(m.get(), runnerOptions)))
       return EXIT_FAILURE;
@@ -351,14 +501,14 @@ int mlir::JitRunnerMain(int argc, char **argv, const DialectRegistry &registry,
 
   // Configure TargetMachine builder based on the command line options
   llvm::SubtargetFeatures features;
-  if (!options.mAttrs.empty()) {
-    for (StringRef attr : options.mAttrs)
+  if (!mAttrs.empty()) {
+    for (StringRef attr : mAttrs)
       features.AddFeature(attr);
     tmBuilderOrError->addFeatures(features.getFeatures());
   }
 
-  if (!options.mArch.empty()) {
-    tmBuilderOrError->getTargetTriple().setArchName(options.mArch);
+  if (!mArch.empty()) {
+    tmBuilderOrError->getTargetTriple().setArchName(mArch);
   }
 
   // Build TargetMachine
@@ -382,24 +532,29 @@ int mlir::JitRunnerMain(int argc, char **argv, const DialectRegistry &registry,
   }
   compileAndExecuteConfig.llvmModuleBuilder = config.llvmModuleBuilder;
   compileAndExecuteConfig.runtimeSymbolMap = config.runtimesymbolMap;
+  compileAndExecuteConfig.optLevel = optLevel;
+  compileAndExecuteConfig.sharedLibs = sharedLibs;
+  compileAndExecuteConfig.dumpObjectFile = dumpObjectFile;
+  compileAndExecuteConfig.objectFilename = objectFilename;
+  compileAndExecuteConfig.inputFilename = inputFilename;
 
   // Get the function used to compile and execute the module.
   using CompileAndExecuteFnT =
-      Error (*)(Options &, Operation *, StringRef, CompileAndExecuteConfig,
+      Error (*)(Operation *, StringRef, CompileAndExecuteConfig,
                 std::unique_ptr<llvm::TargetMachine> tm);
   auto compileAndExecuteFn =
-      StringSwitch<CompileAndExecuteFnT>(options.mainFuncType.getValue())
+      StringSwitch<CompileAndExecuteFnT>(mainFuncType)
           .Case("i32", compileAndExecuteSingleReturnFunction<int32_t>)
           .Case("i64", compileAndExecuteSingleReturnFunction<int64_t>)
           .Case("f32", compileAndExecuteSingleReturnFunction<float>)
           .Case("void", compileAndExecuteVoidFunction)
           .Default(nullptr);
 
-  Error error = compileAndExecuteFn
-                    ? compileAndExecuteFn(
-                          options, m.get(), options.mainFuncName.getValue(),
-                          compileAndExecuteConfig, std::move(tmOrError.get()))
-                    : makeStringError("unsupported function type");
+  Error error =
+      compileAndExecuteFn
+          ? compileAndExecuteFn(m.get(), mainFuncName, compileAndExecuteConfig,
+                                std::move(tmOrError.get()))
+          : makeStringError("unsupported function type");
 
   int exitCode = EXIT_SUCCESS;
   llvm::handleAllErrors(std::move(error),

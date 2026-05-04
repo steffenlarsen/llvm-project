@@ -26,16 +26,18 @@
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCSymbolELF.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormattedStream.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Mips/MipsOptionsOptInfos.h"
 
 using namespace llvm;
 
 namespace {
-static cl::opt<bool> RoundSectionSizes(
-    "mips-round-section-sizes", cl::init(false),
-    cl::desc("Round section sizes up to the section alignment"), cl::Hidden);
+static bool getRoundSectionSizes(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::MipsOptsReg, &clv2::MIPS_RoundSectionSizes>(
+      Ctx, false);
+}
 } // end anonymous namespace
 
 static bool isMicroMips(const MCSubtargetInfo *STI) {
@@ -960,7 +962,7 @@ void MipsTargetELFStreamer::finish() {
   DataSection.ensureMinAlignment(Align(16));
   BSSSection.ensureMinAlignment(Align(16));
 
-  if (RoundSectionSizes) {
+  if (getRoundSectionSizes(getContext().getOptionsContext())) {
     // Make sections sizes a multiple of the alignment. This is useful for
     // verifying the output of IAS against the output of other assemblers but
     // it's not necessary to produce a correct object and increases section

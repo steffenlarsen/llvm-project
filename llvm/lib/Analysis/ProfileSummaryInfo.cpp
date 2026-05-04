@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/ProfileSummaryInfo.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Instructions.h"
@@ -19,32 +20,32 @@
 #include "llvm/IR/ProfileSummary.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/ProfileData/ProfileCommon.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/ProfileData/ProfileDataOptionsOptInfos.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
 #include <optional>
 using namespace llvm;
 
 namespace llvm {
 
-static cl::opt<bool> PartialProfile(
-    "partial-profile", cl::Hidden, cl::init(false),
-    cl::desc("Specify the current profile is used as a partial profile."));
+static bool getPartialProfile(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::AN_PartialProfile>(
+      M.getContext().getOptionsContext());
+}
 
-LLVM_ABI cl::opt<bool> ScalePartialSampleProfileWorkingSetSize(
-    "scale-partial-sample-profile-working-set-size", cl::Hidden, cl::init(true),
-    cl::desc(
-        "If true, scale the working set size of the partial sample profile "
-        "by the partial profile ratio to reflect the size of the program "
-        "being compiled."));
+static bool getScalePartialSampleProfileWorkingSetSize(const Module &M) {
+  return clv2::getOptValOrDefault<
+      &clv2::AN_ScalePartialSampleProfileWorkingSetSize>(
+      M.getContext().getOptionsContext());
+}
 
-static cl::opt<double> PartialSampleProfileWorkingSetSizeScaleFactor(
-    "partial-sample-profile-working-set-size-scale-factor", cl::Hidden,
-    cl::init(0.008),
-    cl::desc("The scale factor used to scale the working set size of the "
-             "partial sample profile along with the partial profile ratio. "
-             "This includes the factor of the profile counter per block "
-             "and the factor to scale the working set size to use the same "
-             "shared thresholds as PGO."));
+static double
+getPartialSampleProfileWorkingSetSizeScaleFactor(const Module &M) {
+  return clv2::getOptValOrDefault<
+      &clv2::AN_PartialSampleProfileWorkingSetSizeScaleFactor>(
+      M.getContext().getOptionsContext());
+}
 
 } // end namespace llvm
 
@@ -72,7 +73,7 @@ void ProfileSummaryInfo::refresh(std::unique_ptr<ProfileSummary> &&Other) {
   }
   if (!hasProfileSummary())
     return;
-  computeThresholds();
+  computeThresholds(M->getContext().getOptionsContext());
 }
 
 std::optional<uint64_t>
@@ -118,14 +119,31 @@ bool ProfileSummaryInfo::isFunctionEntryCold(const Function *F) const {
 }
 
 /// Compute the hot and cold thresholds.
-void ProfileSummaryInfo::computeThresholds() {
+void ProfileSummaryInfo::computeThresholds(const clv2::OptionsContext &Ctx) {
+  auto *PDOpts = M ? clv2::getView<&clv2::ProfileDataOptsReg>(
+                         M->getContext().getOptionsContext())
+                   : clv2::getView<&clv2::ProfileDataOptsReg>(Ctx);
+
+  int CutoffHot = 990000;
+  unsigned HugeWSSThreshold = 15000;
+  unsigned LargeWSSThreshold = 12500;
+  if (PDOpts) {
+    CutoffHot = PDOpts->get<&clv2::PD_ProfileSummaryCutoffHot>();
+    HugeWSSThreshold =
+        PDOpts->get<&clv2::PD_ProfileSummaryHugeWorkingSetSizeThreshold>();
+    LargeWSSThreshold =
+        PDOpts->get<&clv2::PD_ProfileSummaryLargeWorkingSetSizeThreshold>();
+  }
+
   auto &DetailedSummary = Summary->getDetailedSummary();
-  auto &HotEntry = ProfileSummaryBuilder::getEntryForPercentile(
-      DetailedSummary, ProfileSummaryCutoffHot);
+  auto &HotEntry =
+      ProfileSummaryBuilder::getEntryForPercentile(DetailedSummary, CutoffHot);
+  const clv2::OptionsContext &OptsCtx =
+      M ? M->getContext().getOptionsContext() : Ctx;
   HotCountThreshold =
-      ProfileSummaryBuilder::getHotCountThreshold(DetailedSummary);
+      ProfileSummaryBuilder::getHotCountThreshold(DetailedSummary, OptsCtx);
   ColdCountThreshold =
-      ProfileSummaryBuilder::getColdCountThreshold(DetailedSummary);
+      ProfileSummaryBuilder::getColdCountThreshold(DetailedSummary, OptsCtx);
   // When the hot and cold thresholds are identical, we would classify
   // a count value as both hot and cold since we are doing an inclusive check
   // (see ::is{Hot|Cold}Count(). To avoid this undesirable overlap, ensure the
@@ -138,22 +156,19 @@ void ProfileSummaryInfo::computeThresholds() {
   }
   assert(ColdCountThreshold < HotCountThreshold &&
          "Cold count threshold should be less than hot count threshold!");
-  if (!hasPartialSampleProfile() || !ScalePartialSampleProfileWorkingSetSize) {
-    HasHugeWorkingSetSize =
-        HotEntry.NumCounts > ProfileSummaryHugeWorkingSetSizeThreshold;
-    HasLargeWorkingSetSize =
-        HotEntry.NumCounts > ProfileSummaryLargeWorkingSetSizeThreshold;
+  if (!hasPartialSampleProfile() ||
+      !getScalePartialSampleProfileWorkingSetSize(*M)) {
+    HasHugeWorkingSetSize = HotEntry.NumCounts > HugeWSSThreshold;
+    HasLargeWorkingSetSize = HotEntry.NumCounts > LargeWSSThreshold;
   } else {
     // Scale the working set size of the partial sample profile to reflect the
     // size of the program being compiled.
     double PartialProfileRatio = Summary->getPartialProfileRatio();
-    uint64_t ScaledHotEntryNumCounts =
-        static_cast<uint64_t>(HotEntry.NumCounts * PartialProfileRatio *
-                              PartialSampleProfileWorkingSetSizeScaleFactor);
-    HasHugeWorkingSetSize =
-        ScaledHotEntryNumCounts > ProfileSummaryHugeWorkingSetSizeThreshold;
-    HasLargeWorkingSetSize =
-        ScaledHotEntryNumCounts > ProfileSummaryLargeWorkingSetSizeThreshold;
+    uint64_t ScaledHotEntryNumCounts = static_cast<uint64_t>(
+        HotEntry.NumCounts * PartialProfileRatio *
+        getPartialSampleProfileWorkingSetSizeScaleFactor(*M));
+    HasHugeWorkingSetSize = ScaledHotEntryNumCounts > HugeWSSThreshold;
+    HasLargeWorkingSetSize = ScaledHotEntryNumCounts > LargeWSSThreshold;
   }
 }
 
@@ -236,7 +251,7 @@ bool ProfileSummaryInfo::isColdCallSite(const CallBase &CB,
 bool ProfileSummaryInfo::hasPartialSampleProfile() const {
   return hasProfileSummary() &&
          Summary->getKind() == ProfileSummary::PSK_Sample &&
-         (PartialProfile || Summary->isPartialProfile());
+         (getPartialProfile(*M) || Summary->isPartialProfile());
 }
 
 INITIALIZE_PASS(ProfileSummaryInfoWrapperPass, "profile-summary-info",

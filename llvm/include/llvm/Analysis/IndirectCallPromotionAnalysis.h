@@ -31,7 +31,8 @@ private:
   // RemainingCount is the TotalCount minus promoted-direct-call count.
   // Return true we should promote this indirect-call target.
   bool isPromotionProfitable(uint64_t Count, uint64_t TotalCount,
-                             uint64_t RemainingCount);
+                             uint64_t RemainingCount,
+                             const Function *F = nullptr);
 
   // Returns the number of profitable candidates to promote for the
   // current ValueDataArray and the given \p Inst.

@@ -1,5 +1,8 @@
 add_llvm_component_library(LLVMBitReader
+  BitcodeOptionsGetters.cpp
+  BitcodeOptionsRegistration.cpp
   BitcodeAnalyzer.cpp
+  BitcodeOptions.cpp
   BitReader.cpp
   BitcodeReader.cpp
   MetadataLoader.cpp

@@ -39,7 +39,8 @@ using namespace llvm::orc;
 ExitOnError ExitOnErr;
 
 ThreadSafeModule createDemoModule() {
-  auto Context = std::make_unique<LLVMContext>();
+  auto Context =
+      std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
   auto M = std::make_unique<Module>("test", *Context);
 
   // Create the add1 function entry and insert this entry into module M.  The

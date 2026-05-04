@@ -22,13 +22,16 @@
 
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/MLIROptionsOptInfos.h"
 #include "mlir/Pass/PassManager.h"
 #include "clang/Basic/DiagnosticFrontend.h"
 #include "clang/Options/Options.h"
+#include "llvm-c/Support.h"
 #include "llvm/Option/OptTable.h"
 #include "llvm/Option/Option.h"
 #include "llvm/Plugins/PassPlugin.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 
 namespace Fortran::frontend {
 
@@ -192,35 +195,40 @@ bool executeCompilerInvocation(CompilerInstance *flang) {
     }
   }
 
-  // Honor -mllvm. This should happen AFTER plugins have been loaded!
-  if (!flang->getFrontendOpts().llvmArgs.empty()) {
-    unsigned numArgs = flang->getFrontendOpts().llvmArgs.size();
-    auto args = std::make_unique<const char *[]>(numArgs + 2);
-    args[0] = "flang (LLVM option parsing)";
+  // Register Flang and MLIR options before any CLI parsing so that
+  // both -mllvm and -mmlir can find them.
+  fir::registerFlangPipelinePasses();
+  llvm::clv2::registerDynamicRegistry<&llvm::clv2::MLIROptsReg>();
 
-    for (unsigned i = 0; i != numArgs; ++i)
-      args[i + 1] = flang->getFrontendOpts().llvmArgs[i].c_str();
+  // Parse -mllvm and -mmlir options. Both paths share the same OptionParser
+  // so all options (LLVM, MLIR, Flang) are available regardless of which
+  // flag the user used.
+  {
+    const auto &llvmArgs = flang->getFrontendOpts().llvmArgs;
+    const auto &mlirArgs = flang->getFrontendOpts().mlirArgs;
 
-    args[numArgs + 1] = nullptr;
-    llvm::cl::ParseCommandLineOptions(numArgs + 1, args.get());
-  }
+    // Always build the context, even with no -mllvm/-mmlir: the frontend
+    // reads options through it (TargetOptions, MCAsmInfo, mangling), and
+    // without one those reads silently see compile-time defaults.
+    {
+      mlir::registerMLIRContextCLOptions();
+      mlir::registerAsmPrinterCLOptions();
 
-  // Honor -mmlir. This should happen AFTER plugins have been loaded!
-  if (!flang->getFrontendOpts().mlirArgs.empty()) {
-    fir::registerFlangPipelinePasses(); // Must be called before
-                                        // mlir::registerPassManagerCLOptions()
-    mlir::registerMLIRContextCLOptions();
-    mlir::registerPassManagerCLOptions();
-    mlir::registerAsmPrinterCLOptions();
-    unsigned numArgs = flang->getFrontendOpts().mlirArgs.size();
-    auto args = std::make_unique<const char *[]>(numArgs + 2);
-    args[0] = "flang (MLIR option parsing)";
+      llvm::SmallVector<const char *, 16> allArgs;
+      allArgs.push_back("flang (option parsing)");
+      for (const auto &a : llvmArgs)
+        allArgs.push_back(a.c_str());
+      for (const auto &a : mlirArgs)
+        allArgs.push_back(a.c_str());
 
-    for (unsigned i = 0; i != numArgs; ++i)
-      args[i + 1] = flang->getFrontendOpts().mlirArgs[i].c_str();
-
-    args[numArgs + 1] = nullptr;
-    llvm::cl::ParseCommandLineOptions(numArgs + 1, args.get());
+      llvm::clv2::OptionParser P;
+      P.add<&llvm::clv2::MLIROptsReg>();
+      P.enableGlobalDynamicEntries();
+      llvm::RegisterAllLLVMOptions(P);
+      mlir::registerPassManagerCLOptions(P);
+      flang->setOptionsContext(
+          P.parse(allArgs.size(), allArgs.data(), llvm::StringRef()));
+    }
   }
 
   // If there were errors in processing arguments, don't do anything else.

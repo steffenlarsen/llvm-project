@@ -32,6 +32,8 @@
 #include <cstdint>
 #endif
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
+#include <cassert>
 #include <string>
 
 namespace llvm {
@@ -97,12 +99,25 @@ const char *to_string(ThinOrFullLTOPhase Phase);
 /// constrained passes described below.
 ///
 class LLVM_ABI Pass {
-  AnalysisResolver *Resolver = nullptr;  // Used to resolve analysis
+  AnalysisResolver *Resolver = nullptr; // Used to resolve analysis
   const void *PassID;
   PassKind Kind;
+  /// Options for this compilation.  Passes are built by the zero-argument
+  /// factory that INITIALIZE_PASS registers, so this cannot be a constructor
+  /// parameter; TargetPassConfig::addPass() installs it before the pass is
+  /// scheduled, which is before getAnalysisUsage() is called.  Reads before
+  /// that see the shared empty default.
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
 
 public:
   explicit Pass(PassKind K, char &pid) : PassID(&pid), Kind(K) {}
+
+  /// Options for this compilation.  Never null.
+  const clv2::OptionsContext &getOptionsContext() const {
+    assert(OptsCtx && "defaulted at construction and never cleared");
+    return *OptsCtx;
+  }
+  void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
   Pass(const Pass &) = delete;
   Pass &operator=(const Pass &) = delete;
   virtual ~Pass();
@@ -119,13 +134,11 @@ public:
   StringRef getPassArgument() const;
 
   /// getPassID - Return the PassID number that corresponds to this pass.
-  AnalysisID getPassID() const {
-    return PassID;
-  }
+  AnalysisID getPassID() const { return PassID; }
 
   /// doInitialization - Virtual method overridden by subclasses to do
   /// any necessary initialization before any pass is run.
-  virtual bool doInitialization(Module &)  { return false; }
+  virtual bool doInitialization(Module &) { return false; }
 
   /// doFinalization - Virtual method overriden by subclasses to do any
   /// necessary clean up after all passes have run.
@@ -148,8 +161,7 @@ public:
 
   /// Each pass is responsible for assigning a pass manager to itself.
   /// PMS is the stack of available pass manager.
-  virtual void assignPassManager(PMStack &,
-                                 PassManagerType) {}
+  virtual void assignPassManager(PMStack &, PassManagerType) {}
 
   /// Check if available pass managers are suitable for this pass or not.
   virtual void preparePassManager(PMStack &);
@@ -208,8 +220,9 @@ public:
   /// the case when the analysis is not available.  This method is often used by
   /// transformation APIs to update analysis results for a pass automatically as
   /// the transform is performed.
-  template<typename AnalysisType> AnalysisType *
-    getAnalysisIfAvailable() const; // Defined in PassAnalysisSupport.h
+  template <typename AnalysisType>
+  AnalysisType *
+  getAnalysisIfAvailable() const; // Defined in PassAnalysisSupport.h
 
   /// mustPreserveAnalysisID - This method serves the same function as
   /// getAnalysisIfAvailable, but works if you just have an AnalysisID.  This
@@ -221,7 +234,7 @@ public:
   /// getAnalysis<AnalysisType>() - This function is used by subclasses to get
   /// to the analysis information that they claim to use by overriding the
   /// getAnalysisUsage function.
-  template<typename AnalysisType>
+  template <typename AnalysisType>
   AnalysisType &getAnalysis() const; // Defined in PassAnalysisSupport.h
 
   template <typename AnalysisType>
@@ -229,7 +242,7 @@ public:
   getAnalysis(Function &F,
               bool *Changed = nullptr); // Defined in PassAnalysisSupport.h
 
-  template<typename AnalysisType>
+  template <typename AnalysisType>
   AnalysisType &getAnalysisID(AnalysisID PI) const;
 
   template <typename AnalysisType>

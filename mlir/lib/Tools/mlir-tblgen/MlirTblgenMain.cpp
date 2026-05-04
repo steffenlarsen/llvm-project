@@ -13,20 +13,31 @@
 #include "mlir/Tools/mlir-tblgen/MlirTblgenMain.h"
 
 #include "mlir/TableGen/GenInfo.h"
-#include "mlir/TableGen/GenNameParser.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Main.h"
 #include "llvm/TableGen/Record.h"
+#include <deque>
 
 using namespace mlir;
 using namespace llvm;
 
-enum DeprecatedAction { None, Warn, Error };
+enum DeprecatedAction { DA_None, DA_Warn, DA_Error };
 
-static DeprecatedAction actionOnDeprecatedValue;
+static constexpr clv2::EnumVal<DeprecatedAction> DeprecatedActionVals[] = {
+    {"none", DA_None, "No action"},
+    {"warn", DA_Warn, "Warn on use"},
+    {"error", DA_Error, "Error on use"},
+};
+static constexpr clv2::OptionInfo<DeprecatedAction> ActionOnDeprecatedOpt{
+    "on-deprecated", "Action to perform on deprecated def",
+    clv2::ValuesRef<DeprecatedAction>(DeprecatedActionVals),
+    clv2::Init{DA_Warn}};
+static constexpr clv2::OptionsRegistry<&ActionOnDeprecatedOpt>
+    DeprecatedOptsReg;
 
 // Returns if there is a use of `deprecatedInit` in `field`.
 static bool findUse(const Init *field, const Init *deprecatedInit,
@@ -89,7 +100,8 @@ static bool findUse(Record &record, const Init *deprecatedInit,
   });
 }
 
-static void warnOfDeprecatedUses(const RecordKeeper &records) {
+static void warnOfDeprecatedUses(const RecordKeeper &records,
+                                 DeprecatedAction actionOnDeprecatedValue) {
   // This performs a direct check for any def marked as deprecated and then
   // finds all uses of deprecated def. Deprecated defs are not expected to be
   // either numerous or long lived.
@@ -115,19 +127,17 @@ static void warnOfDeprecatedUses(const RecordKeeper &records) {
       }
     }
   }
-  if (deprecatedDefsFounds &&
-      actionOnDeprecatedValue == DeprecatedAction::Error)
+  if (deprecatedDefsFounds && actionOnDeprecatedValue == DA_Error)
     PrintFatalNote("Error'ing out due to deprecated defs");
 }
 
-// Generator to invoke.
-static const mlir::GenInfo *generator;
-
 // TableGenMain requires a function pointer so this function is passed in which
 // simply wraps the call to the generator.
-static bool mlirTableGenMain(raw_ostream &os, const RecordKeeper &records) {
-  if (actionOnDeprecatedValue != DeprecatedAction::None)
-    warnOfDeprecatedUses(records);
+static bool mlirTableGenMain(raw_ostream &os, const RecordKeeper &records,
+                             DeprecatedAction actionOnDeprecatedValue,
+                             const GenInfo *generator) {
+  if (actionOnDeprecatedValue != DA_None)
+    warnOfDeprecatedUses(records, actionOnDeprecatedValue);
 
   if (!generator) {
     os << records;
@@ -136,29 +146,74 @@ static bool mlirTableGenMain(raw_ostream &os, const RecordKeeper &records) {
   return generator->invoke(records, os);
 }
 
-int mlir::MlirTblgenMain(int argc, char **argv) {
+/// Ctx identifies the GenInfo this flag selects and where to record it.
+namespace {
+struct GeneratorSelection {
+  const GenInfo *Info;
+  const GenInfo **Selected;
+};
+} // namespace
+
+static bool selectGenerator(void *Ctx, const bool &) {
+  auto *Sel = static_cast<GeneratorSelection *>(Ctx);
+  *Sel->Selected = Sel->Info;
+  return true;
+}
+
+static void registerGeneratorOption(clv2::OptionParser &P,
+                                    const GenInfo *&SelectedGenerator) {
+  ArrayRef<GenInfo> gens = mlir::getRegisteredGenerators();
+  // Sort generators alphabetically for deterministic output.
+  llvm::SmallVector<const GenInfo *> sorted;
+  for (const auto &G : gens)
+    sorted.push_back(&G);
+  llvm::sort(sorted, [](const GenInfo *A, const GenInfo *B) {
+    return A->getGenArgument() < B->getGenArgument();
+  });
+  static std::deque<clv2::RuntimeOption<bool>> Options;
+  static std::deque<GeneratorSelection> Selections;
+  bool First = true;
+  for (const auto *GPtr : sorted) {
+    const auto &G = *GPtr;
+    Selections.push_back(GeneratorSelection{GPtr, &SelectedGenerator});
+    Options.emplace_back(
+        G.getGenArgument(), G.getGenDescription(), clv2::ValueDisallowed,
+        clv2::CtxCallback<bool>{&selectGenerator, &Selections.back()});
+    // Group display has no descriptor spelling, so it is set on the option's
+    // own static info.
+    Options.back().staticInfo().IsEnumGroupMember = true;
+    if (First)
+      Options.back().staticInfo().EnumGroupHeader = "Generator to run";
+    clv2::detail::OptionEntry E = Options.back().makeEntry();
+    P.addDynamicEntry(std::move(E));
+    First = false;
+  }
+}
+
+int mlir::MlirTblgenMain(
+    int argc, char **argv,
+    std::function<void(llvm::clv2::OptionParser &)> ConfigureParser) {
 
   llvm::InitLLVM y(argc, argv);
 
-  llvm::cl::opt<DeprecatedAction, true> actionOnDeprecated(
-      "on-deprecated", llvm::cl::desc("Action to perform on deprecated def"),
-      llvm::cl::values(
-          clEnumValN(DeprecatedAction::None, "none", "No action"),
-          clEnumValN(DeprecatedAction::Warn, "warn", "Warn on use"),
-          clEnumValN(DeprecatedAction::Error, "error", "Error on use")),
-      cl::location(actionOnDeprecatedValue), llvm::cl::init(Warn));
+  clv2::OptionParser P;
+  llvm::registerTableGenMainOptions(P);
+  const GenInfo *SelectedGenerator = nullptr;
+  registerGeneratorOption(P, SelectedGenerator);
+  P.add<&DeprecatedOptsReg>();
+  if (ConfigureParser)
+    ConfigureParser(P);
+  auto OptsCtx = P.parse(argc, argv);
+  auto *DeprecatedOpts = OptsCtx->getViewPtr<&DeprecatedOptsReg>();
+  DeprecatedAction ActionOnDeprecated =
+      DeprecatedOpts->get<&ActionOnDeprecatedOpt>();
 
-  llvm::cl::opt<const mlir::GenInfo *, true, mlir::GenNameParser> generator(
-      "", llvm::cl::desc("Generator to run"), cl::location(::generator));
-
-  cl::ParseCommandLineOptions(argc, argv);
-
-  return TableGenMain(
-      argv[0], [](TableGenOutputFiles &OutFiles, const RecordKeeper &RK) {
-        std::string S;
-        raw_string_ostream OS(S);
-        bool Res = mlirTableGenMain(OS, RK);
-        OutFiles = {S, {}};
-        return Res;
-      });
+  return TableGenMain(argv[0], [&](TableGenOutputFiles &OutFiles,
+                                   const RecordKeeper &RK) {
+    std::string S;
+    raw_string_ostream OS(S);
+    bool Res = mlirTableGenMain(OS, RK, ActionOnDeprecated, SelectedGenerator);
+    OutFiles = {S, {}};
+    return Res;
+  });
 }

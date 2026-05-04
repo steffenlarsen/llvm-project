@@ -3,6 +3,7 @@ if ( LLVM_INCLUDE_UTILS )
 endif()
 
 set(LLVM_LINK_COMPONENTS
+  AllOptions
   CodeGen
   Core
   ExecutionEngine
@@ -28,14 +29,18 @@ set(LLVM_LINK_COMPONENTS
 
 if( LLVM_USE_OPROFILE )
   set(LLVM_LINK_COMPONENTS
+  AllOptions
     ${LLVM_LINK_COMPONENTS}
+  AllOptions
     OProfileJIT
     )
 endif( LLVM_USE_OPROFILE )
 
 if( LLVM_USE_INTEL_JITEVENTS )
   set(LLVM_LINK_COMPONENTS
+  AllOptions
     ${LLVM_LINK_COMPONENTS}
+  AllOptions
     DebugInfoDWARF
     IntelJITEvents
     Object
@@ -44,7 +49,9 @@ endif( LLVM_USE_INTEL_JITEVENTS )
 
 if( LLVM_USE_PERF )
   set(LLVM_LINK_COMPONENTS
+  AllOptions
     ${LLVM_LINK_COMPONENTS}
+  AllOptions
     DebugInfoDWARF
     PerfJITEvents
     Object

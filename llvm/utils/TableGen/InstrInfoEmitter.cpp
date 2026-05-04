@@ -26,6 +26,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
@@ -44,11 +45,26 @@
 
 using namespace llvm;
 
-static cl::OptionCategory InstrInfoEmitterCat("Options for -gen-instr-info");
-static cl::opt<bool> ExpandMIOperandInfo(
+static clv2::OptionCategory InstrInfoEmitterCat("Options for -gen-instr-info");
+
+static bool ExpandMIOperandInfo = true;
+
+static constexpr clv2::OptionInfo<bool> OI_ExpandMIOperandInfo{
     "instr-info-expand-mi-operand-info",
-    cl::desc("Expand operand's MIOperandInfo DAG into suboperands"),
-    cl::cat(InstrInfoEmitterCat), cl::init(true));
+    "Expand operand's MIOperandInfo DAG into suboperands", clv2::Init{true},
+    clv2::cat(InstrInfoEmitterCat)};
+
+static constexpr clv2::OptionsRegistry<&OI_ExpandMIOperandInfo>
+    InstrInfoEmitterReg;
+
+static void applyInstrInfoEmitter(
+    const decltype(InstrInfoEmitterReg)::ParsedOptionsT &Opts) {
+  ExpandMIOperandInfo = Opts.get<&OI_ExpandMIOperandInfo>();
+}
+
+void registerInstrInfoEmitterOptions(clv2::OptionParser &P) {
+  P.add<&InstrInfoEmitterReg, applyInstrInfoEmitter>();
+}
 
 namespace {
 

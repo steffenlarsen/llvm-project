@@ -23,8 +23,7 @@ public:
     OT_ALL = 2   /// Optimize all PLT calls
   };
 
-  explicit PLTCall(const cl::opt<bool> &PrintPass)
-      : BinaryFunctionPass(PrintPass) {}
+  explicit PLTCall(const bool PrintPass) : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "plt-call-optimization"; }
   bool shouldPrint(const BinaryFunction &BF) const override {

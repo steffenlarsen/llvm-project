@@ -24,6 +24,8 @@ tablegen(LLVM WebAssemblyGenPostLegalizeGICombiner.inc -gen-global-isel-combiner
 add_public_tablegen_target(WebAssemblyCommonTableGen)
 
 add_llvm_target(WebAssemblyCodeGen
+  WebAssemblyOptionsGetters.cpp
+  WebAssemblyOptionsRegistration.cpp
   GISel/WebAssemblyCallLowering.cpp
   GISel/WebAssemblyInstructionSelector.cpp
   GISel/WebAssemblyPostLegalizerCombiner.cpp

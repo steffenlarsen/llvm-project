@@ -19,6 +19,12 @@
 #include <functional>
 #include <optional>
 
+namespace llvm {
+namespace clv2 {
+class OptionParser;
+} // namespace clv2
+} // namespace llvm
+
 namespace mlir {
 class AnalysisManager;
 class MLIRContext;
@@ -503,6 +509,10 @@ private:
 /// 'applyPassManagerCLOptions' method below.
 void registerPassManagerCLOptions();
 
+/// Register pass manager options and flush their dynamic entries into the
+/// given OptionParser. Must be called before P.parse().
+void registerPassManagerCLOptions(llvm::clv2::OptionParser &P);
+
 /// Apply any values provided to the pass manager options that were registered
 /// with 'registerPassManagerOptions'.
 LogicalResult applyPassManagerCLOptions(PassManager &pm);
@@ -513,6 +523,31 @@ LogicalResult applyPassManagerCLOptions(PassManager &pm);
 /// to the pass manager.
 void applyDefaultTimingPassManagerCLOptions(PassManager &pm);
 
+} // namespace mlir
+
+//===----------------------------------------------------------------------===//
+// OptionTypeHelper specialization for OpPassManager
+//===----------------------------------------------------------------------===//
+
+#include "mlir/Pass/PassOptions.h"
+
+namespace mlir {
+namespace detail {
+namespace pass_options {
+
+/// Specialization of OptionTypeHelper for OpPassManager, enabling
+/// Option<OpPassManager> and ListOption<OpPassManager> to parse and print
+/// pass pipelines.
+template <>
+struct OptionTypeHelper<mlir::OpPassManager> {
+  static constexpr bool hasCustomHandler = true;
+
+  static bool parse(StringRef str, mlir::OpPassManager &result);
+  static void print(raw_ostream &os, const mlir::OpPassManager &value);
+};
+
+} // namespace pass_options
+} // namespace detail
 } // namespace mlir
 
 #endif // MLIR_PASS_PASSMANAGER_H

@@ -25,6 +25,7 @@
 
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/BasicAliasAnalysis.h"
 #include "llvm/Analysis/CaptureTracking.h"
 #include "llvm/Analysis/GlobalsModRef.h"
@@ -45,7 +46,8 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/OptionsContext.h"
 #include <cassert>
 #include <functional>
 #include <iterator>
@@ -60,14 +62,21 @@ STATISTIC(NumMustAlias, "Number of MustAlias results");
 
 /// Allow disabling BasicAA from the AA results. This is particularly useful
 /// when testing to isolate a single AA implementation.
-static cl::opt<bool> DisableBasicAA("disable-basic-aa", cl::Hidden,
-                                    cl::init(false));
+static bool DisableBasicAA = false;
+
+static bool getDisableBasicAA(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AN_DisableBasicAA>(
+      F.getContext().getOptionsContext());
+}
 
 #ifndef NDEBUG
 /// Print a trace of alias analysis queries and their results.
-static cl::opt<bool> EnableAATrace("aa-trace", cl::Hidden, cl::init(false));
+static bool getEnableAATrace(const LLVMContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::AN_EnableAATrace>(
+      Ctx.getOptionsContext());
+}
 #else
-static const bool EnableAATrace = false;
+static bool getEnableAATrace(const LLVMContext &) { return false; }
 #endif
 
 AAResults::AAResults(const TargetLibraryInfo &TLI) : TLI(TLI) {}
@@ -115,7 +124,11 @@ AliasResult AAResults::alias(const MemoryLocation &LocA,
          "Can only call alias() on pointers");
   AliasResult Result = AliasResult::MayAlias;
 
-  if (EnableAATrace) {
+  // Read once: this runs on every alias query, and both trace points want the
+  // same answer.
+  const bool Trace = getEnableAATrace(LocA.Ptr->getContext());
+
+  if (Trace) {
     for (unsigned I = 0; I < AAQI.Depth; ++I)
       dbgs() << "  ";
     dbgs() << "Start " << *LocA.Ptr << " @ " << LocA.Size << ", "
@@ -130,7 +143,7 @@ AliasResult AAResults::alias(const MemoryLocation &LocA,
   }
   AAQI.Depth--;
 
-  if (EnableAATrace) {
+  if (Trace) {
     for (unsigned I = 0; I < AAQI.Depth; ++I)
       dbgs() << "  ";
     dbgs() << "End " << *LocA.Ptr << " @ " << LocA.Size << ", "
@@ -837,7 +850,7 @@ bool AAResultsWrapperPass::runOnFunction(Function &F) {
   // so that it can trump TBAA results when it proves MustAlias.
   // FIXME: TBAA should have an explicit mode to support this and then we
   // should reconsider the ordering here.
-  if (!DisableBasicAA) {
+  if (!getDisableBasicAA(F)) {
     LLVM_DEBUG(dbgs() << "AAResults register BasicAA\n");
     AAR->addAAResult(getAnalysis<BasicAAWrapperPass>().getResult());
   }

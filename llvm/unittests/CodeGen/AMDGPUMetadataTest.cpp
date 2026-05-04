@@ -63,7 +63,7 @@ protected:
     if (!TM)
       GTEST_SKIP();
 
-    LLVMContext Context;
+    LLVMContext Context{llvm::clv2::defaultOptionsContext()};
     std::unique_ptr<Module> M(new Module("TestModule", Context));
     M->setTargetTriple(TargetTriple);
     M->setDataLayout(TM->createDataLayout());
@@ -80,7 +80,7 @@ protected:
 
   static std::string PalMDString;
 
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<TargetMachine> TM;
   std::unique_ptr<Module> M;
   SmallString<1024> Elf;

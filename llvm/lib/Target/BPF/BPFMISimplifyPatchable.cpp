@@ -36,18 +36,21 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachinePassManager.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/IR/Analysis.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/BPF/BPFOptionsOptInfos.h"
 #include <set>
 
 using namespace llvm;
 
 #define DEBUG_TYPE "bpf-mi-simplify-patchable"
 
-static cl::opt<bool>
-    DisableCOREOptimization("disable-bpf-core-optimization", cl::Hidden,
-                            cl::desc("Disable CORE relocation optimization"));
+static bool getDisableCOREOptimization(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::BPF_DisableCOREOptimization>(
+      F.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -310,7 +313,7 @@ void BPFMISimplifyPatchableImpl::processInst(MachineRegisterInfo *MRI,
     return;
   }
 
-  if (DisableCOREOptimization)
+  if (getDisableCOREOptimization(MF->getFunction()))
     return;
 
   if (Opcode == BPF::ADD_rr) {

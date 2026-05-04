@@ -14,6 +14,7 @@
 #include "llvm/ADT/StableHashing.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/Loads.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MIRFormatter.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
@@ -23,21 +24,21 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/ModuleSlotTracker.h"
 #include "llvm/MC/MCDwarf.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 #include <optional>
 
 using namespace llvm;
 
-static cl::opt<int>
-    PrintRegMaskNumRegs("print-regmask-num-regs",
-                        cl::desc("Number of registers to limit to when "
-                                 "printing regmask operands in IR dumps. "
-                                 "unlimited = -1"),
-                        cl::init(32), cl::Hidden);
+static int getPrintRegmaskNumRegs(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_PrintRegmaskNumRegs>(Ctx);
+}
 
 static const MachineFunction *getMFIfAvailable(const MachineOperand &MO) {
   if (const MachineInstr *MI = MO.getParent())
@@ -1024,14 +1025,21 @@ void MachineOperand::print(raw_ostream &OS, ModuleSlotTracker &MST,
   case MachineOperand::MO_RegisterMask: {
     OS << "<regmask";
     if (TRI) {
+      const Function *RegMaskF = nullptr;
+      if (const MachineFunction *MF = getMFIfAvailable(*this))
+        RegMaskF = &MF->getFunction();
       unsigned NumRegsInMask = 0;
       unsigned NumRegsEmitted = 0;
       for (unsigned i = 0; i < TRI->getNumRegs(); ++i) {
         unsigned MaskWord = i / 32;
         unsigned MaskBit = i % 32;
         if (getRegMask()[MaskWord] & (1 << MaskBit)) {
-          if (PrintRegMaskNumRegs < 0 ||
-              NumRegsEmitted <= static_cast<unsigned>(PrintRegMaskNumRegs)) {
+          int RegmaskNumRegs =
+              RegMaskF ? getPrintRegmaskNumRegs(
+                             RegMaskF->getContext().getOptionsContext())
+                       : 32;
+          if (RegmaskNumRegs < 0 ||
+              NumRegsEmitted <= static_cast<unsigned>(RegmaskNumRegs)) {
             OS << " " << printReg(i, TRI);
             NumRegsEmitted++;
           }

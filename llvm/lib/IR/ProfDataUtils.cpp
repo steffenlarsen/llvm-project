@@ -17,17 +17,14 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/IROptionsOptInfos.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Metadata.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
-
-namespace llvm {
-extern cl::opt<bool> ProfcheckDisableMetadataFixes;
-}
 
 // MD_prof nodes have the following layout
 //
@@ -105,13 +102,16 @@ SmallVector<uint32_t> llvm::fitWeights(ArrayRef<uint64_t> Weights) {
   return Ret;
 }
 
-static cl::opt<bool> ElideAllZeroBranchWeights("elide-all-zero-branch-weights",
+static bool getElideAllZeroBranchWeights(const Function &F) {
+  if (auto *O =
+          clv2::getView<&clv2::IROptsReg>(F.getContext().getOptionsContext()))
+    return O->get<&clv2::IR_ElideAllZeroBranchWeights>();
 #if defined(LLVM_ENABLE_PROFCHECK)
-                                               cl::init(false)
+  return false;
 #else
-                                               cl::init(true)
+  return true;
 #endif
-);
+}
 const char *MDProfLabels::BranchWeights = "branch_weights";
 const char *MDProfLabels::ExpectedBranchWeights = "expected";
 const char *MDProfLabels::ValueProfile = "VP";
@@ -322,7 +322,8 @@ bool llvm::hasExplicitlyUnknownBranchWeights(const Instruction &I) {
 
 void llvm::setBranchWeights(Instruction &I, ArrayRef<uint32_t> Weights,
                             bool IsExpected, bool ElideAllZero) {
-  if ((ElideAllZeroBranchWeights && ElideAllZero) &&
+  if ((I.getFunction() && I.getFunction()->getParent() &&
+       getElideAllZeroBranchWeights(*I.getFunction()) && ElideAllZero) &&
       llvm::all_of(Weights, equal_to(0))) {
     I.setMetadata(LLVMContext::MD_prof, nullptr);
     return;
@@ -406,8 +407,9 @@ void llvm::scaleProfData(Instruction &I, uint64_t S, uint64_t T) {
 }
 
 void llvm::applyProfMetadataIfEnabled(
-    Value *V, llvm::function_ref<void(Instruction *)> setMetadataCallback) {
-  if (!ProfcheckDisableMetadataFixes) {
+    const LLVMContext &Ctx, Value *V,
+    llvm::function_ref<void(Instruction *)> setMetadataCallback) {
+  if (!getProfcheckDisableMetadataFixes(Ctx)) {
     if (Instruction *Inst = dyn_cast<Instruction>(V)) {
       setMetadataCallback(Inst);
     }

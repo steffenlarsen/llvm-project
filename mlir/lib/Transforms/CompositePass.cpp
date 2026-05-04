@@ -35,7 +35,7 @@ struct CompositeFixedPointPass final
     convergenceFailureAction = convergenceFailureActionArg;
     populateFunc(dynamicPM);
 
-    llvm::raw_string_ostream os(pipelineStr);
+    llvm::raw_string_ostream os(*pipelineStr);
     llvm::interleave(
         dynamicPM, [&](mlir::Pass &pass) { pass.printAsTextualPipeline(os); },
         [&]() { os << ","; });
@@ -48,7 +48,7 @@ struct CompositeFixedPointPass final
                                                               errorHandler)))
       return failure();
 
-    if (failed(parsePassPipeline(pipelineStr, dynamicPM)))
+    if (failed(parsePassPipeline(*pipelineStr, dynamicPM)))
       return errorHandler("Failed to parse composite pass pipeline");
 
     return success();
@@ -77,7 +77,7 @@ struct CompositeFixedPointPass final
         return signalPassFailure();
 
       if (currentIter++ >= maxIterVal) {
-        std::string message = ("Composite pass \"" + llvm::Twine(name) +
+        std::string message = ("Composite pass \"" + llvm::Twine(*name) +
                                "\"+ didn't converge in " +
                                llvm::Twine(maxIterVal) + " iterations")
                                   .str();
@@ -103,7 +103,7 @@ struct CompositeFixedPointPass final
   }
 
 protected:
-  llvm::StringRef getName() const override { return name; }
+  llvm::StringRef getName() const override { return *name; }
 
 private:
   OpPassManager dynamicPM;

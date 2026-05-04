@@ -55,12 +55,13 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCSymbol.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/Target/X86/X86OptionsOptInfos.h"
 #include <algorithm>
 #include <bitset>
 #include <cctype>
@@ -69,64 +70,55 @@ using namespace llvm;
 
 #define DEBUG_TYPE "x86-isel"
 
-static cl::opt<int> ExperimentalPrefInnermostLoopAlignment(
-    "x86-experimental-pref-innermost-loop-alignment", cl::init(4),
-    cl::desc(
-        "Sets the preferable loop alignment for experiments (as log2 bytes) "
-        "for innermost loops only. If specified, this option overrides "
-        "alignment set by x86-experimental-pref-loop-alignment."),
-    cl::Hidden);
+static bool ExperimentalPrefInnermostLoopAlignmentWasSpecified = false;
+static int ExperimentalPrefInnermostLoopAlignment = 4;
 
-static cl::opt<int> BrMergingBaseCostThresh(
-    "x86-br-merging-base-cost", cl::init(2),
-    cl::desc(
-        "Sets the cost threshold for when multiple conditionals will be merged "
-        "into one branch versus be split in multiple branches. Merging "
-        "conditionals saves branches at the cost of additional instructions. "
-        "This value sets the instruction cost limit, below which conditionals "
-        "will be merged, and above which conditionals will be split. Set to -1 "
-        "to never merge branches."),
-    cl::Hidden);
+static int BrMergingBaseCostThresh = 2;
 
-static cl::opt<int> BrMergingCcmpBias(
-    "x86-br-merging-ccmp-bias", cl::init(6),
-    cl::desc("Increases 'x86-br-merging-base-cost' in cases that the target "
-             "supports conditional compare instructions."),
-    cl::Hidden);
+static int BrMergingCcmpBias = 6;
 
-static cl::opt<bool>
-    WidenShift("x86-widen-shift", cl::init(true),
-               cl::desc("Replace narrow shifts with wider shifts."),
-               cl::Hidden);
+static bool WidenShift = true;
 
-static cl::opt<int> BrMergingLikelyBias(
-    "x86-br-merging-likely-bias", cl::init(0),
-    cl::desc("Increases 'x86-br-merging-base-cost' in cases that it is likely "
-             "that all conditionals will be executed. For example for merging "
-             "the conditionals (a == b && c > d), if its known that a == b is "
-             "likely, then it is likely that if the conditionals are split "
-             "both sides will be executed, so it may be desirable to increase "
-             "the instruction cost threshold. Set to -1 to never merge likely "
-             "branches."),
-    cl::Hidden);
+static int BrMergingUnlikelyBias = -1;
 
-static cl::opt<int> BrMergingUnlikelyBias(
-    "x86-br-merging-unlikely-bias", cl::init(-1),
-    cl::desc(
-        "Decreases 'x86-br-merging-base-cost' in cases that it is unlikely "
-        "that all conditionals will be executed. For example for merging "
-        "the conditionals (a == b && c > d), if its known that a == b is "
-        "unlikely, then it is unlikely that if the conditionals are split "
-        "both sides will be executed, so it may be desirable to decrease "
-        "the instruction cost threshold. Set to -1 to never merge unlikely "
-        "branches."),
-    cl::Hidden);
+static bool MulConstantOptimization = true;
 
-static cl::opt<bool> MulConstantOptimization(
-    "mul-constant-optimization", cl::init(true),
-    cl::desc("Replace 'mul x, Const' with more effective instructions like "
-             "SHIFT, LEA, etc."),
-    cl::Hidden);
+static int getBrMergingBaseCost(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_BrMergingBaseCost>(
+      F.getContext().getOptionsContext());
+}
+static int getBrMergingCcmpBias(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_BrMergingCcmpBias>(
+      F.getContext().getOptionsContext());
+}
+static bool getWidenShift(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_WidenShift>(
+      F.getContext().getOptionsContext());
+}
+static int getBrMergingLikelyBias(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_BrMergingLikelyBias>(
+      F.getContext().getOptionsContext());
+}
+static int getBrMergingUnlikelyBias(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_BrMergingUnlikelyBias>(
+      F.getContext().getOptionsContext());
+}
+static bool getMulConstantOptimization(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::X86_MulConstantOptimization>(
+      F.getContext().getOptionsContext());
+}
+static int getExperimentalPrefInnermostLoopAlignment(const Function &F) {
+  return clv2::getOptValOrDefault<
+      &clv2::X86_ExperimentalPrefInnermostLoopAlignment>(
+      F.getContext().getOptionsContext());
+}
+static bool
+getExperimentalPrefInnermostLoopAlignmentWasSpecified(const Function &F) {
+  if (auto *O =
+          clv2::getView<&clv2::X86OptsReg>(F.getContext().getOptionsContext()))
+    return O->specified<&clv2::X86_ExperimentalPrefInnermostLoopAlignment>();
+  return ExperimentalPrefInnermostLoopAlignmentWasSpecified;
+}
 
 X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
                                      const X86Subtarget &STI)
@@ -3895,10 +3887,18 @@ X86TargetLowering::getJumpConditionMergingParams(Instruction::BinaryOps Opc,
                                                  const Value *Rhs,
                                                  const Function *) const {
   using namespace llvm::PatternMatch;
-  int BaseCost = BrMergingBaseCostThresh.getValue();
+  const Function *FPtr = nullptr;
+  if (auto *I = dyn_cast<Instruction>(Lhs))
+    FPtr = I->getFunction();
+  else if (auto *I = dyn_cast<Instruction>(Rhs))
+    FPtr = I->getFunction();
+  if (!FPtr)
+    return {2, 0, -1};
+  const Function &F = *FPtr;
+  int BaseCost = getBrMergingBaseCost(F);
   // With CCMP, branches can be merged in a more efficient way.
   if (BaseCost >= 0 && Subtarget.hasCCMP())
-    BaseCost += BrMergingCcmpBias;
+    BaseCost += getBrMergingCcmpBias(F);
   // a == b && a == c is a fast pattern on x86.
   if (BaseCost >= 0 && Opc == Instruction::And &&
       match(Lhs, m_SpecificICmp(ICmpInst::ICMP_EQ, m_Value(), m_Value())) &&
@@ -3914,8 +3914,7 @@ X86TargetLowering::getJumpConditionMergingParams(Instruction::BinaryOps Opc,
       match(Rhs, m_SpecificICmp(ICmpInst::ICMP_EQ, m_Value(), m_Value())))
     return {-1, -1, -1};
 
-  return {BaseCost, BrMergingLikelyBias.getValue(),
-          BrMergingUnlikelyBias.getValue()};
+  return {BaseCost, getBrMergingLikelyBias(F), getBrMergingUnlikelyBias(F)};
 }
 
 bool X86TargetLowering::preferScalarizeSplat(SDNode *N) const {
@@ -31468,7 +31467,8 @@ static SDValue LowerShift(SDValue Op, const X86Subtarget &Subtarget,
     }
     APInt APIntShiftAmt;
     bool IsConstantSplat = X86::isConstantSplat(Amt, APIntShiftAmt);
-    bool Profitable = WidenShift;
+    bool Profitable = getWidenShift(DAG.getMachineFunction().getFunction());
+
     // AVX512BW brings support for vpsllvw.
     if (WideEltSizeInBits * AmtWideElts.size() >= 512 &&
         WideEltSizeInBits < 32 && !Subtarget.hasBWI()) {
@@ -50910,7 +50910,7 @@ static SDValue combineMul(SDNode *N, SelectionDAG &DAG,
 
   // Optimize a single multiply with constant into two operations in order to
   // implement it with two cheaper instructions, e.g. LEA + SHL, LEA + LEA.
-  if (!MulConstantOptimization)
+  if (!getMulConstantOptimization(DAG.getMachineFunction().getFunction()))
     return SDValue();
 
   // An imul is usually smaller than the alternative sequence.
@@ -65195,8 +65195,10 @@ X86TargetLowering::getStackProbeSize(const MachineFunction &MF) const {
 }
 
 Align X86TargetLowering::getPrefLoopAlignment(MachineLoop *ML) const {
-  if (ML && ML->isInnermost() &&
-      ExperimentalPrefInnermostLoopAlignment.getNumOccurrences())
-    return Align(1ULL << ExperimentalPrefInnermostLoopAlignment);
+  if (ML && ML->isInnermost()) {
+    const Function &F = ML->getHeader()->getParent()->getFunction();
+    if (getExperimentalPrefInnermostLoopAlignmentWasSpecified(F))
+      return Align(1ULL << getExperimentalPrefInnermostLoopAlignment(F));
+  }
   return TargetLowering::getPrefLoopAlignment();
 }

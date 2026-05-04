@@ -1,5 +1,6 @@
 add_llvm_component_library(LLVMBPFDesc
   BPFMCTargetDesc.cpp
+  BPFOptions.cpp
   BPFAsmBackend.cpp
   BPFInstPrinter.cpp
   BPFMCCodeEmitter.cpp

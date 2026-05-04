@@ -15,11 +15,13 @@
 #ifndef NDEBUG
 #include "llvm/Analysis/RegionPrinter.h"
 #endif
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/Passes.h"
 #include "llvm/Analysis/RegionInfoImpl.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 
 using namespace llvm;
@@ -28,9 +30,9 @@ using namespace llvm;
 
 namespace llvm {
 
-template class LLVM_TEMPLATE_ABI RegionBase<RegionTraits<Function>>;
-template class LLVM_TEMPLATE_ABI RegionNodeBase<RegionTraits<Function>>;
-template class LLVM_TEMPLATE_ABI RegionInfoBase<RegionTraits<Function>>;
+template class RegionBase<RegionTraits<Function>>;
+template class RegionNodeBase<RegionTraits<Function>>;
+template class RegionInfoBase<RegionTraits<Function>>;
 
 } // end namespace llvm
 
@@ -39,22 +41,7 @@ STATISTIC(numSimpleRegions, "The # of simple regions");
 
 // Always verify if expensive checking is enabled.
 
-static cl::opt<bool,true>
-VerifyRegionInfoX(
-  "verify-region-info",
-  cl::location(RegionInfoBase<RegionTraits<Function>>::VerifyRegionInfo),
-  cl::desc("Verify region info (time consuming)"));
-
-static cl::opt<Region::PrintStyle, true> printStyleX("print-region-style",
-  cl::location(RegionInfo::printStyle),
-  cl::Hidden,
-  cl::desc("style of printing regions"),
-  cl::values(
-    clEnumValN(Region::PrintNone, "none",  "print no details"),
-    clEnumValN(Region::PrintBB, "bb",
-               "print regions in detail with block_iterator"),
-    clEnumValN(Region::PrintRN, "rn",
-               "print regions in detail with element_iterator")));
+// VerifyRegionInfo is defined in RegionInfoImpl.h with its default.
 
 //===----------------------------------------------------------------------===//
 // Region implementation
@@ -194,13 +181,10 @@ RegionInfo RegionInfoAnalysis::run(Function &F, FunctionAnalysisManager &AM) {
   return RI;
 }
 
-RegionInfoPrinterPass::RegionInfoPrinterPass(raw_ostream &OS)
-  : OS(OS) {}
-
 PreservedAnalyses RegionInfoPrinterPass::run(Function &F,
                                              FunctionAnalysisManager &AM) {
   OS << "Region Tree for function: " << F.getName() << "\n";
-  AM.getResult<RegionInfoAnalysis>(F).print(OS);
+  AM.getResult<RegionInfoAnalysis>(F).print(OS, Options.Style);
 
   return PreservedAnalyses::all();
 }
@@ -211,3 +195,20 @@ PreservedAnalyses RegionInfoVerifierPass::run(Function &F,
 
   return PreservedAnalyses::all();
 }
+
+//===----------------------------------------------------------------------===//
+// Runtime option registration for CLI flags.
+//===----------------------------------------------------------------------===//
+
+// --- clv2 OptionInfo descriptors for RegionInfo options ---
+static constexpr clv2::EnumVal<Region::PrintStyle> PrintRegionStyleVals[] = {
+    {"none", Region::PrintNone, "print no details"},
+    {"bb", Region::PrintBB, "print regions in detail with block_iterator"},
+    {"rn", Region::PrintRN, "print regions in detail with element_iterator"},
+};
+static constexpr auto OI_PrintRegionStyle =
+    clv2::makeEnumOption<Region::PrintStyle>(
+        "print-region-style", "style of printing regions", PrintRegionStyleVals,
+        clv2::Init{Region::PrintNone}, clv2::Hidden);
+
+static constexpr clv2::OptionsRegistry<&OI_PrintRegionStyle> RegionInfoOptsReg;

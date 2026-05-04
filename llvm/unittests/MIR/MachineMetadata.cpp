@@ -36,7 +36,7 @@ public:
   MachineMetadataTest() = default;
 
 protected:
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   std::unique_ptr<MIRParser> MIR;
 
@@ -405,12 +405,13 @@ body:             |
       [&](const Function &F) { return MMI.getMachineFunction(F); }, MF);
   // Print that MI with new machine metadata, which slot numbers should be
   // assigned.
-  EXPECT_EQ("%1:gr32 = MOV32rm %0, 1, $noreg, 0, $noreg :: (load (s32) from %ir.p, "
-            "!alias.scope !0, !noalias !3)",
-            print([&](raw_ostream &OS) {
-              MI.print(OS, MST, /*IsStandalone=*/false, /*SkipOpers=*/false,
-                       /*SkipDebugLoc=*/false, /*AddNewLine=*/false);
-            }));
+  EXPECT_EQ(
+      "%1:gr32 = MOV32rm %0, 1, $noreg, 0, $noreg :: (load (s32) from %ir.p, "
+      "!alias.scope !0, !noalias !3)",
+      print([&](raw_ostream &OS) {
+        MI.print(OS, MST, /*IsStandalone=*/false, /*SkipOpers=*/false,
+                 /*SkipDebugLoc=*/false, /*AddNewLine=*/false);
+      }));
 
   std::vector<const MDNode *> Generated{Domain, Scope0, Scope1, Set0, Set1};
   // Examine machine metadata collected. They should match ones

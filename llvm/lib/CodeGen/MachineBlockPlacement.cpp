@@ -33,8 +33,10 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/AnalysisOptionsOptInfos.h"
 #include "llvm/Analysis/BlockFrequencyInfoImpl.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/MBFIWrapper.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
@@ -59,12 +61,15 @@
 #include "llvm/Support/BlockFrequency.h"
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/CodeLayout.h"
+#include "llvm/Transforms/Utils/UtilsOptionsOptInfos.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -86,166 +91,144 @@ STATISTIC(CondBranchTakenFreq,
 STATISTIC(UncondBranchTakenFreq,
           "Potential frequency of taking unconditional branches");
 
-static cl::opt<unsigned> AlignAllBlock(
-    "align-all-blocks",
-    cl::desc("Force the alignment of all blocks in the function in log2 format "
-             "(e.g 4 means align on 16B boundaries)."),
-    cl::init(0), cl::Hidden);
+static unsigned getMaxBytesForAlignment(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_MaxBytesForAlignment>(Ctx);
+}
 
-static cl::opt<unsigned> AlignAllNonFallThruBlocks(
-    "align-all-nofallthru-blocks",
-    cl::desc("Force the alignment of all blocks that have no fall-through "
-             "predecessors (i.e. don't add nops that are executed). In log2 "
-             "format (e.g 4 means align on 16B boundaries)."),
-    cl::init(0), cl::Hidden);
+static unsigned getTailDupPlacementThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_TailDupPlacementThreshold>(Ctx);
+}
 
-static cl::opt<unsigned> MaxBytesForAlignmentOverride(
-    "max-bytes-for-alignment",
-    cl::desc("Forces the maximum bytes allowed to be emitted when padding for "
-             "alignment"),
-    cl::init(0), cl::Hidden);
+static unsigned
+getTailDupPlacementAggressiveThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::CGPASS_TailDupPlacementAggressiveThreshold>(Ctx);
+}
 
-static cl::opt<unsigned> PredecessorLimit(
-    "block-placement-predecessor-limit",
-    cl::desc("For blocks with more predecessors, certain layout optimizations"
-             "will be disabled to prevent quadratic compile time."),
-    cl::init(1000), cl::Hidden);
+static unsigned getAlignAllBlocks(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_AlignAllBlocks>(Ctx);
+}
 
-// FIXME: Find a good default for this flag and remove the flag.
-static cl::opt<unsigned> ExitBlockBias(
-    "block-placement-exit-block-bias",
-    cl::desc("Block frequency percentage a loop exit block needs "
-             "over the original exit to be considered the new exit."),
-    cl::init(0), cl::Hidden);
+static unsigned getAlignAllNofallthruBlocks(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_AlignAllNofallthruBlocks>(Ctx);
+}
 
-// Definition:
-// - Outlining: placement of a basic block outside the chain or hot path.
+static unsigned
+getBlockPlacementPredecessorLimit(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_BlockPlacementPredecessorLimit>(
+      Ctx);
+}
 
-static cl::opt<unsigned> LoopToColdBlockRatio(
-    "loop-to-cold-block-ratio",
-    cl::desc("Outline loop blocks from loop chain if (frequency of loop) / "
-             "(frequency of block) is greater than this ratio"),
-    cl::init(5), cl::Hidden);
+static unsigned
+getBlockPlacementExitBlockBias(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_BlockPlacementExitBlockBias>(
+      Ctx);
+}
 
-static cl::opt<bool>
-    ForceLoopColdBlock("force-loop-cold-block",
-                       cl::desc("Force outlining cold blocks from loops."),
-                       cl::init(false), cl::Hidden);
+static unsigned getLoopToColdBlockRatio(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_LoopToColdBlockRatio>(Ctx);
+}
 
-static cl::opt<bool>
-    PreciseRotationCost("precise-rotation-cost",
-                        cl::desc("Model the cost of loop rotation more "
-                                 "precisely by using profile data."),
-                        cl::init(false), cl::Hidden);
+static bool getForceLoopColdBlock(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ForceLoopColdBlock>(Ctx);
+}
 
-static cl::opt<bool>
-    ForcePreciseRotationCost("force-precise-rotation-cost",
-                             cl::desc("Force the use of precise cost "
-                                      "loop rotation strategy."),
-                             cl::init(false), cl::Hidden);
+static bool getPreciseRotationCost(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_PreciseRotationCost>(Ctx);
+}
 
-static cl::opt<unsigned> MisfetchCost(
-    "misfetch-cost",
-    cl::desc("Cost that models the probabilistic risk of an instruction "
-             "misfetch due to a jump comparing to falling through, whose cost "
-             "is zero."),
-    cl::init(1), cl::Hidden);
+static bool getForcePreciseRotationCost(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ForcePreciseRotationCost>(Ctx);
+}
 
-static cl::opt<unsigned> JumpInstCost("jump-inst-cost",
-                                      cl::desc("Cost of jump instructions."),
-                                      cl::init(1), cl::Hidden);
-static cl::opt<bool>
-    TailDupPlacement("tail-dup-placement",
-                     cl::desc("Perform tail duplication during placement. "
-                              "Creates more fallthrough opportunities in "
-                              "outline branches."),
-                     cl::init(true), cl::Hidden);
+static unsigned getMisfetchCost(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_MisfetchCost>(Ctx);
+}
 
-static cl::opt<bool>
-    BranchFoldPlacement("branch-fold-placement",
-                        cl::desc("Perform branch folding during placement. "
-                                 "Reduces code size."),
-                        cl::init(true), cl::Hidden);
+static unsigned getJumpInstCost(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_JumpInstCost>(Ctx);
+}
 
-// Heuristic for tail duplication.
-static cl::opt<unsigned> TailDupPlacementThreshold(
-    "tail-dup-placement-threshold",
-    cl::desc("Instruction cutoff for tail duplication during layout. "
-             "Tail merging during layout is forced to have a threshold "
-             "that won't conflict."),
-    cl::init(2), cl::Hidden);
+static bool getTailDupPlacement(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_TailDupPlacement>(Ctx);
+}
 
-// Heuristic for aggressive tail duplication.
-static cl::opt<unsigned> TailDupPlacementAggressiveThreshold(
-    "tail-dup-placement-aggressive-threshold",
-    cl::desc("Instruction cutoff for aggressive tail duplication during "
-             "layout. Used at -O3. Tail merging during layout is forced to "
-             "have a threshold that won't conflict."),
-    cl::init(4), cl::Hidden);
+static bool getBranchFoldPlacement(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_BranchFoldPlacement>(Ctx);
+}
 
-// Heuristic for tail duplication.
-static cl::opt<unsigned> TailDupPlacementPenalty(
-    "tail-dup-placement-penalty",
-    cl::desc(
-        "Cost penalty for blocks that can avoid breaking CFG by copying. "
-        "Copying can increase fallthrough, but it also increases icache "
-        "pressure. This parameter controls the penalty to account for that. "
-        "Percent as integer."),
-    cl::init(2), cl::Hidden);
+static unsigned getTailDupPlacementPenalty(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_TailDupPlacementPenalty>(Ctx);
+}
 
-// Heuristic for tail duplication if profile count is used in cost model.
-static cl::opt<unsigned> TailDupProfilePercentThreshold(
-    "tail-dup-profile-percent-threshold",
-    cl::desc("If profile count information is used in tail duplication cost "
-             "model, the gained fall through number from tail duplication "
-             "should be at least this percent of hot count."),
-    cl::init(50), cl::Hidden);
+static unsigned
+getTailDupProfilePercentThreshold(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_TailDupProfilePercentThreshold>(
+      Ctx);
+}
 
-// Heuristic for triangle chains.
-static cl::opt<unsigned> TriangleChainCount(
-    "triangle-chain-count",
-    cl::desc("Number of triangle-shaped-CFG's that need to be in a row for the "
-             "triangle tail duplication heuristic to kick in. 0 to disable."),
-    cl::init(2), cl::Hidden);
+static unsigned getTriangleChainCount(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_TriangleChainCount>(Ctx);
+}
 
-// Use case: When block layout is visualized after MBP pass, the basic blocks
-// are labeled in layout order; meanwhile blocks could be numbered in a
-// different order. It's hard to map between the graph and pass output.
-// With this option on, the basic blocks are renumbered in function layout
-// order. For debugging only.
-static cl::opt<bool> RenumberBlocksBeforeView(
-    "renumber-blocks-before-view",
-    cl::desc(
-        "If true, basic blocks are re-numbered before MBP layout is printed "
-        "into a dot graph. Only used when a function is being printed."),
-    cl::init(false), cl::Hidden);
+static bool getRenumberBlocksBeforeView(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_RenumberBlocksBeforeView>(Ctx);
+}
 
-static cl::opt<unsigned> ExtTspBlockPlacementMaxBlocks(
-    "ext-tsp-block-placement-max-blocks",
-    cl::desc("Maximum number of basic blocks in a function to run ext-TSP "
-             "block placement."),
-    cl::init(UINT_MAX), cl::Hidden);
+static unsigned
+getExtTspBlockPlacementMaxBlocks(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ExtTspBlockPlacementMaxBlocks>(
+      Ctx);
+}
 
-// Apply the ext-tsp algorithm minimizing the size of a binary.
-static cl::opt<bool>
-    ApplyExtTspForSize("apply-ext-tsp-for-size", cl::init(false), cl::Hidden,
-                       cl::desc("Use ext-tsp for size-aware block placement."));
+static bool getApplyExtTspForSize(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ApplyExtTspForSize>(Ctx);
+}
 
-namespace llvm {
-extern cl::opt<bool> EnableExtTspBlockPlacement;
-extern cl::opt<bool> ApplyExtTspWithoutProfile;
-extern cl::opt<unsigned> StaticLikelyProb;
-extern cl::opt<unsigned> ProfileLikelyProb;
+namespace an_opts = llvm::an_opts;
 
-// Internal option used to control BFI display only after MBP pass.
-// Defined in CodeGen/MachineBlockFrequencyInfo.cpp:
-// -view-block-layout-with-bfi=
-extern cl::opt<GVDAGType> ViewBlockLayoutWithBFI;
+static unsigned getStaticLikelyProb(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_StaticLikelyProb>(Ctx);
+}
 
-// Command line option to specify the name of the function for CFG dump
-// Defined in Analysis/BlockFrequencyInfo.cpp:  -view-bfi-func-name=
-extern cl::opt<std::string> ViewBlockFreqFuncName;
-} // namespace llvm
+static unsigned getProfileLikelyProb(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ProfileLikelyProb>(Ctx);
+}
+
+static bool getEnableExtTspBlockPlacement(const Function *F = nullptr) {
+  const tu_opts::ParsedOpts *O = nullptr;
+  if (F)
+    O = clv2::getView<&clv2::TransformUtilsOptsReg>(
+        F->getContext().getOptionsContext());
+  if (O && O->specified<&clv2::TU_EnableExtTspBlockPlacement>())
+    return O->get<&clv2::TU_EnableExtTspBlockPlacement>();
+  return false;
+}
+
+static bool getApplyExtTspWithoutProfile(const Function *F = nullptr) {
+  const tu_opts::ParsedOpts *O = nullptr;
+  if (F)
+    O = clv2::getView<&clv2::TransformUtilsOptsReg>(
+        F->getContext().getOptionsContext());
+  if (O && O->specified<&clv2::TU_ApplyExtTspWithoutProfile>())
+    return O->get<&clv2::TU_ApplyExtTspWithoutProfile>();
+  return true;
+}
+
+// ViewBlockLayoutWithBFI not yet in OptInfos — getter returns static directly.
+static GVDAGType ViewBlockLayoutWithBFI = GVDT_None;
+
+static GVDAGType getViewBlockLayoutWithBFI() { return ViewBlockLayoutWithBFI; }
+
+static std::string getViewBlockFreqFuncName(const Function *F = nullptr) {
+  const an_opts::ParsedOpts *O = nullptr;
+  if (F)
+    O = clv2::getView<&clv2::AnalysisOptsReg>(
+        F->getContext().getOptionsContext());
+  if (O && O->specified<&clv2::AN_ViewBlockFreqFuncName>())
+    return O->get<&clv2::AN_ViewBlockFreqFuncName>();
+  return {};
+}
 
 namespace {
 
@@ -631,7 +614,9 @@ public:
   bool run(MachineFunction &F);
 
   static bool allowTailDupPlacement(MachineFunction &MF) {
-    return TailDupPlacement && !MF.getTarget().requiresStructuredCFG();
+    return getTailDupPlacement(
+               MF.getFunction().getContext().getOptionsContext()) &&
+           !MF.getTarget().requiresStructuredCFG();
   }
 };
 
@@ -665,8 +650,9 @@ public:
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<MachineBranchProbabilityInfoWrapperPass>();
     AU.addRequired<MachineBlockFrequencyInfoWrapperPass>();
-    if (TailDupPlacement)
-      AU.addRequired<MachinePostDominatorTreeWrapperPass>();
+    // Always require PostDomTree; whether it's actually used is decided at
+    // runtime in runOnMachineFunction via allowTailDupPlacement().
+    AU.addRequired<MachinePostDominatorTreeWrapperPass>();
     AU.addRequired<MachineLoopInfoWrapperPass>();
     AU.addRequired<ProfileSummaryInfoWrapperPass>();
     AU.addRequired<TargetPassConfig>();
@@ -855,8 +841,11 @@ bool MachineBlockPlacement::shouldTailDuplicate(MachineBasicBlock *BB) {
 /// the penalty is less than 100%
 /// TODO(iteratee): Use 64-bit fixed point edge frequencies everywhere.
 static bool greaterWithBias(BlockFrequency A, BlockFrequency B,
-                            BlockFrequency EntryFreq) {
-  BranchProbability ThresholdProb(TailDupPlacementPenalty, 100);
+                            BlockFrequency EntryFreq,
+                            const Function *Fn = nullptr) {
+  BranchProbability ThresholdProb(
+      Fn ? getTailDupPlacementPenalty(Fn->getContext().getOptionsContext()) : 2,
+      100);
   BlockFrequency Gain = A - B;
   return (Gain / ThresholdProb) >= EntryFreq;
 }
@@ -907,7 +896,7 @@ bool MachineBlockPlacement::isProfitableToTailDup(
   // If there are no more successors, it is profitable to copy, as it strictly
   // increases fallthrough.
   if (SuccSuccs.size() == 0)
-    return greaterWithBias(P, Qout, EntryFreq);
+    return greaterWithBias(P, Qout, EntryFreq, &this->F->getFunction());
 
   auto BestSuccSucc = BranchProbability::getZero();
   // Find the PDom or the best Succ if no PDom exists.
@@ -963,7 +952,8 @@ bool MachineBlockPlacement::isProfitableToTailDup(
     BlockFrequency QinU = std::min(Qin, F) * UProb;
     BlockFrequency BaseCost = P + V;
     BlockFrequency DupCost = Qout + QinU + std::max(Qin, F) * VProb;
-    return greaterWithBias(BaseCost, DupCost, EntryFreq);
+    return greaterWithBias(BaseCost, DupCost, EntryFreq,
+                           &this->F->getFunction());
   }
   BranchProbability UProb = MBPI->getEdgeProbability(Succ, PDom);
   BranchProbability VProb = AdjustedSuccSumProb - UProb;
@@ -1005,12 +995,12 @@ bool MachineBlockPlacement::isProfitableToTailDup(
     // Cases 3 & 4
     return greaterWithBias(
         (P + V), (Qout + std::max(Qin, F) * VProb + std::min(Qin, F) * UProb),
-        EntryFreq);
+        EntryFreq, &this->F->getFunction());
   // Cases 1 & 2
   return greaterWithBias((P + U),
                          (Qout + std::min(Qin, F) * AdjustedSuccSumProb +
                           std::max(Qin, F) * UProb),
-                         EntryFreq);
+                         EntryFreq, &this->F->getFunction());
 }
 
 /// Check for a trellis layout. \p BB is the upper part of a trellis if its
@@ -1037,7 +1027,9 @@ bool MachineBlockPlacement::isTrellis(
   for (MachineBasicBlock *Succ : ViableSuccs) {
     // Compile-time optimization: runtime is quadratic in the number of
     // predecessors. For such uncommon cases, exit early.
-    if (Succ->pred_size() > PredecessorLimit)
+    if (Succ->pred_size() >
+        getBlockPlacementPredecessorLimit(
+            F->getFunction().getContext().getOptionsContext()))
       return false;
 
     int PredCount = 0;
@@ -1348,7 +1340,8 @@ void MachineBlockPlacement::precomputeTriangleChains() {
     MachineBasicBlock *getKey() const { return Edges.back(); }
   };
 
-  if (TriangleChainCount == 0)
+  if (getTriangleChainCount(
+          F->getFunction().getContext().getOptionsContext()) == 0)
     return;
 
   LLVM_DEBUG(dbgs() << "Pre-computing triangle chains.\n");
@@ -1420,7 +1413,8 @@ void MachineBlockPlacement::precomputeTriangleChains() {
     // Benchmarking has shown that due to branch correlation duplicating 2 or
     // more triangles is profitable, despite the calculations assuming
     // independence.
-    if (Chain.count() < TriangleChainCount)
+    if (Chain.count() < getTriangleChainCount(
+                            F->getFunction().getContext().getOptionsContext()))
       continue;
     MachineBasicBlock *dst = Chain.Edges.back();
     Chain.Edges.pop_back();
@@ -1443,7 +1437,10 @@ void MachineBlockPlacement::precomputeTriangleChains() {
 static BranchProbability
 getLayoutSuccessorProbThreshold(const MachineBasicBlock *BB) {
   if (!BB->getParent()->getFunction().hasProfileData())
-    return BranchProbability(StaticLikelyProb, 100);
+    return BranchProbability(
+        getStaticLikelyProb(
+            BB->getParent()->getFunction().getContext().getOptionsContext()),
+        100);
   if (BB->succ_size() == 2) {
     const MachineBasicBlock *Succ1 = *BB->succ_begin();
     const MachineBasicBlock *Succ2 = *(BB->succ_begin() + 1);
@@ -1462,10 +1459,18 @@ getLayoutSuccessorProbThreshold(const MachineBasicBlock *BB) {
        * This preserves T = 2/3 at ProfileLikelyProb = 50.
        * The result is capped at 1.
        */
-      return BranchProbability(ProfileLikelyProb, 150) * 2;
+      return BranchProbability(getProfileLikelyProb(BB->getParent()
+                                                        ->getFunction()
+                                                        .getContext()
+                                                        .getOptionsContext()),
+                               150) *
+             2;
     }
   }
-  return BranchProbability(ProfileLikelyProb, 100);
+  return BranchProbability(
+      getProfileLikelyProb(
+          BB->getParent()->getFunction().getContext().getOptionsContext()),
+      100);
 }
 
 /// Checks to see if the layout candidate block \p Succ has a better layout
@@ -1488,7 +1493,9 @@ bool MachineBlockPlacement::hasBetterLayoutPredecessor(
 
   // Compile-time optimization: runtime is quadratic in the number of
   // predecessors. For such uncommon cases, exit early.
-  if (Succ->pred_size() > PredecessorLimit)
+  if (Succ->pred_size() >
+      getBlockPlacementPredecessorLimit(
+          F->getFunction().getContext().getOptionsContext()))
     return false;
 
   // There are two basic scenarios here:
@@ -1665,7 +1672,9 @@ MachineBlockPlacement::BlockAndTailDupResult
 MachineBlockPlacement::selectBestSuccessor(const MachineBasicBlock *BB,
                                            const BlockChain &Chain,
                                            const BlockFilterSet *BlockFilter) {
-  const BranchProbability HotProb(StaticLikelyProb, 100);
+  const BranchProbability HotProb(
+      getStaticLikelyProb(F->getFunction().getContext().getOptionsContext()),
+      100);
 
   BlockAndTailDupResult BestSucc = {nullptr, false};
   auto BestProb = BranchProbability::getZero();
@@ -2342,7 +2351,10 @@ MachineBlockPlacement::findBestLoopExit(const MachineLoop &L,
       // incoming order in the absence of better information. The exit must have
       // a frequency higher than the current exit before we consider breaking
       // the layout.
-      BranchProbability Bias(100 - ExitBlockBias, 100);
+      BranchProbability Bias(
+          100 - getBlockPlacementExitBlockBias(
+                    F->getFunction().getContext().getOptionsContext()),
+          100);
       if (!ExitingBB || SuccLoopDepth > BestExitLoopDepth ||
           ExitEdgeFreq > BestExitEdgeFreq ||
           (MBB->isLayoutSuccessor(Succ) &&
@@ -2541,11 +2553,15 @@ void MachineBlockPlacement::rotateLoopWithProfile(
         (!PredChain || Pred == *std::prev(PredChain->end()))) {
       auto EdgeFreq = MBFI->getBlockFreq(Pred) *
                       MBPI->getEdgeProbability(Pred, ChainHeaderBB);
-      auto FallThruCost = ScaleBlockFrequency(EdgeFreq, MisfetchCost);
+      auto FallThruCost = ScaleBlockFrequency(
+          EdgeFreq,
+          getMisfetchCost(F->getFunction().getContext().getOptionsContext()));
       // If the predecessor has only an unconditional jump to the header, we
       // need to consider the cost of this jump.
       if (Pred->succ_size() == 1)
-        FallThruCost += ScaleBlockFrequency(EdgeFreq, JumpInstCost);
+        FallThruCost += ScaleBlockFrequency(
+            EdgeFreq,
+            getJumpInstCost(F->getFunction().getContext().getOptionsContext()));
       HeaderFallThroughCost = std::max(HeaderFallThroughCost, FallThruCost);
     }
   }
@@ -2616,15 +2632,25 @@ void MachineBlockPlacement::rotateLoopWithProfile(
     if (TailBB->isSuccessor(*Iter)) {
       auto TailBBFreq = MBFI->getBlockFreq(TailBB);
       if (TailBB->succ_size() == 1)
-        Cost += ScaleBlockFrequency(TailBBFreq, MisfetchCost + JumpInstCost);
+        Cost += ScaleBlockFrequency(
+            TailBBFreq,
+            getMisfetchCost(F->getFunction().getContext().getOptionsContext()) +
+                getJumpInstCost(
+                    F->getFunction().getContext().getOptionsContext()));
       else if (TailBB->succ_size() == 2) {
         auto TailToHeadProb = MBPI->getEdgeProbability(TailBB, *Iter);
         auto TailToHeadFreq = TailBBFreq * TailToHeadProb;
         auto ColderEdgeFreq = TailToHeadProb > BranchProbability(1, 2)
                                   ? TailBBFreq * TailToHeadProb.getCompl()
                                   : TailToHeadFreq;
-        Cost += ScaleBlockFrequency(TailToHeadFreq, MisfetchCost) +
-                ScaleBlockFrequency(ColderEdgeFreq, JumpInstCost);
+        Cost += ScaleBlockFrequency(
+                    TailToHeadFreq,
+                    getMisfetchCost(
+                        F->getFunction().getContext().getOptionsContext())) +
+                ScaleBlockFrequency(
+                    ColderEdgeFreq,
+                    getJumpInstCost(
+                        F->getFunction().getContext().getOptionsContext()));
       }
     }
 
@@ -2670,7 +2696,9 @@ MachineBlockPlacement::collectLoopBlockSet(const MachineLoop &L) {
   // will be merged into the first outer loop chain for which this block is not
   // cold anymore. This needs precise profile data and we only do this when
   // profile data is available.
-  if (F->getFunction().hasProfileData() || ForceLoopColdBlock) {
+  if (F->getFunction().hasProfileData() ||
+      getForceLoopColdBlock(
+          F->getFunction().getContext().getOptionsContext())) {
     BlockFrequency LoopFreq(0);
     for (auto *LoopPred : L.getHeader()->predecessors())
       if (!L.contains(LoopPred))
@@ -2681,7 +2709,10 @@ MachineBlockPlacement::collectLoopBlockSet(const MachineLoop &L) {
       if (LoopBlockSet.count(LoopBB))
         continue;
       auto Freq = MBFI->getBlockFreq(LoopBB).getFrequency();
-      if (Freq == 0 || LoopFreq.getFrequency() / Freq > LoopToColdBlockRatio)
+      if (Freq == 0 ||
+          LoopFreq.getFrequency() / Freq >
+              getLoopToColdBlockRatio(
+                  F->getFunction().getContext().getOptionsContext()))
         continue;
       BlockChain *Chain = BlockToChain[LoopBB];
       for (MachineBasicBlock *ChainBB : *Chain)
@@ -2719,8 +2750,11 @@ void MachineBlockPlacement::buildLoopChains(const MachineLoop &L) {
   // this loop by modeling costs more precisely which requires the profile data
   // for better layout.
   bool RotateLoopWithProfile =
-      ForcePreciseRotationCost ||
-      (PreciseRotationCost && F->getFunction().hasProfileData());
+      getForcePreciseRotationCost(
+          F->getFunction().getContext().getOptionsContext()) ||
+      (getPreciseRotationCost(
+           F->getFunction().getContext().getOptionsContext()) &&
+       F->getFunction().hasProfileData());
 
   // First check to see if there is an obviously preferable top block for the
   // loop. This will default to the header, but may end up as one of the
@@ -3006,7 +3040,9 @@ void MachineBlockPlacement::alignBlocks() {
   // exclusively on the loop info here so that we can align backedges in
   // unnatural CFGs and backedges that were introduced purely because of the
   // loop rotations done during this layout pass.
-  if (!AlignAllBlock && !AlignAllNonFallThruBlocks) {
+  if (!getAlignAllBlocks(F->getFunction().getContext().getOptionsContext()) &&
+      !getAlignAllNofallthruBlocks(
+          F->getFunction().getContext().getOptionsContext())) {
     if (F->getFunction().hasMinSize() ||
         (F->getFunction().hasOptSize() && !TLI->alignLoopsWithOptSize()))
       return;
@@ -3084,8 +3120,11 @@ void MachineBlockPlacement::alignBlocks() {
     auto DetermineMaxAlignmentPadding = [&]() {
       // Set the maximum bytes allowed to be emitted for alignment.
       unsigned MaxBytes;
-      if (MaxBytesForAlignmentOverride.getNumOccurrences() > 0)
-        MaxBytes = MaxBytesForAlignmentOverride;
+      if (false || clv2::wasOptSpecified<&clv2::CGPassMachine1Reg,
+                                         &clv2::CGPASS_MaxBytesForAlignment>(
+                       F->getFunction().getContext().getOptionsContext()))
+        MaxBytes = getMaxBytesForAlignment(
+            F->getFunction().getContext().getOptionsContext());
       else
         MaxBytes = TLI->getMaxPermittedBytesForAlignment(ChainBB);
       ChainBB->setMaxBytesForAlignment(MaxBytes);
@@ -3113,28 +3152,41 @@ void MachineBlockPlacement::alignBlocks() {
   }
 
   const bool HasMaxBytesOverride =
-      MaxBytesForAlignmentOverride.getNumOccurrences() > 0;
+      false || clv2::wasOptSpecified<&clv2::CGPassMachine1Reg,
+                                     &clv2::CGPASS_MaxBytesForAlignment>(
+                   F->getFunction().getContext().getOptionsContext());
 
-  if (AlignAllBlock)
+  if (getAlignAllBlocks(F->getFunction().getContext().getOptionsContext()))
     // Align all of the blocks in the function to a specific alignment.
     for (MachineBasicBlock &MBB : *F) {
       if (HasMaxBytesOverride)
-        MBB.setAlignment(Align(1ULL << AlignAllBlock),
-                         MaxBytesForAlignmentOverride);
+        MBB.setAlignment(
+            Align(1ULL << getAlignAllBlocks(
+                      F->getFunction().getContext().getOptionsContext())),
+            getMaxBytesForAlignment(
+                F->getFunction().getContext().getOptionsContext()));
       else
-        MBB.setAlignment(Align(1ULL << AlignAllBlock));
+        MBB.setAlignment(
+            Align(1ULL << getAlignAllBlocks(
+                      F->getFunction().getContext().getOptionsContext())));
     }
-  else if (AlignAllNonFallThruBlocks) {
+  else if (getAlignAllNofallthruBlocks(
+               F->getFunction().getContext().getOptionsContext())) {
     // Align all of the blocks that have no fall-through predecessors to a
     // specific alignment.
     for (auto MBI = std::next(F->begin()), MBE = F->end(); MBI != MBE; ++MBI) {
       auto LayoutPred = std::prev(MBI);
       if (!LayoutPred->isSuccessor(&*MBI)) {
         if (HasMaxBytesOverride)
-          MBI->setAlignment(Align(1ULL << AlignAllNonFallThruBlocks),
-                            MaxBytesForAlignmentOverride);
+          MBI->setAlignment(
+              Align(1ULL << getAlignAllNofallthruBlocks(
+                        F->getFunction().getContext().getOptionsContext())),
+              getMaxBytesForAlignment(
+                  F->getFunction().getContext().getOptionsContext()));
         else
-          MBI->setAlignment(Align(1ULL << AlignAllNonFallThruBlocks));
+          MBI->setAlignment(
+              Align(1ULL << getAlignAllNofallthruBlocks(
+                        F->getFunction().getContext().getOptionsContext())));
       }
     }
   }
@@ -3493,8 +3545,11 @@ void MachineBlockPlacement::initTailDupThreshold() {
     uint64_t HotThreshold = PSI->getOrCompHotCountThreshold();
     if (HotThreshold != UINT64_MAX) {
       UseProfileCount = true;
-      DupThreshold =
-          BlockFrequency(HotThreshold * TailDupProfilePercentThreshold / 100);
+      DupThreshold = BlockFrequency(
+          HotThreshold *
+          getTailDupProfilePercentThreshold(
+              F->getFunction().getContext().getOptionsContext()) /
+          100);
     } else {
       // Profile count is not available, we can use block frequency instead.
       BlockFrequency MaxFreq = BlockFrequency(0);
@@ -3504,17 +3559,27 @@ void MachineBlockPlacement::initTailDupThreshold() {
           MaxFreq = Freq;
       }
 
-      BranchProbability ThresholdProb(TailDupPlacementPenalty, 100);
+      BranchProbability ThresholdProb(
+          getTailDupPlacementPenalty(
+              F->getFunction().getContext().getOptionsContext()),
+          100);
       DupThreshold = BlockFrequency(MaxFreq * ThresholdProb);
       UseProfileCount = false;
     }
   }
 
-  TailDupSize = TailDupPlacementThreshold;
+  TailDupSize = getTailDupPlacementThreshold(
+      F->getFunction().getContext().getOptionsContext());
   // If only the aggressive threshold is explicitly set, use it.
-  if (TailDupPlacementAggressiveThreshold.getNumOccurrences() != 0 &&
-      TailDupPlacementThreshold.getNumOccurrences() == 0)
-    TailDupSize = TailDupPlacementAggressiveThreshold;
+  if ((false ||
+       clv2::wasOptSpecified<&clv2::CGPassMachine1Reg,
+                             &clv2::CGPASS_TailDupPlacementAggressiveThreshold>(
+           F->getFunction().getContext().getOptionsContext())) &&
+      !(false || clv2::wasOptSpecified<&clv2::CGPassMachine1Reg,
+                                       &clv2::CGPASS_TailDupPlacementThreshold>(
+                     F->getFunction().getContext().getOptionsContext())))
+    TailDupSize = getTailDupPlacementAggressiveThreshold(
+        F->getFunction().getContext().getOptionsContext());
 
   // For aggressive optimization, we can adjust some thresholds to be less
   // conservative.
@@ -3522,16 +3587,29 @@ void MachineBlockPlacement::initTailDupThreshold() {
     // At O3 we should be more willing to copy blocks for tail duplication. This
     // increases size pressure, so we only do it at O3
     // Do this unless only the regular threshold is explicitly set.
-    if (TailDupPlacementThreshold.getNumOccurrences() == 0 ||
-        TailDupPlacementAggressiveThreshold.getNumOccurrences() != 0)
-      TailDupSize = TailDupPlacementAggressiveThreshold;
+    if (!(false ||
+          clv2::wasOptSpecified<&clv2::CGPassMachine1Reg,
+                                &clv2::CGPASS_TailDupPlacementThreshold>(
+              F->getFunction().getContext().getOptionsContext())) ||
+        false ||
+        clv2::wasOptSpecified<
+            &clv2::CGPassMachine1Reg,
+            &clv2::CGPASS_TailDupPlacementAggressiveThreshold>(
+            F->getFunction().getContext().getOptionsContext()))
+      TailDupSize = getTailDupPlacementAggressiveThreshold(
+          F->getFunction().getContext().getOptionsContext());
   }
 
   // If there's no threshold provided through options, query the target
   // information for a threshold instead.
-  if (TailDupPlacementThreshold.getNumOccurrences() == 0 &&
+  if (!(false || clv2::wasOptSpecified<&clv2::CGPassMachine1Reg,
+                                       &clv2::CGPASS_TailDupPlacementThreshold>(
+                     F->getFunction().getContext().getOptionsContext())) &&
       (OptLevel < CodeGenOptLevel::Aggressive ||
-       TailDupPlacementAggressiveThreshold.getNumOccurrences() == 0))
+       !(false || clv2::wasOptSpecified<
+                      &clv2::CGPassMachine1Reg,
+                      &clv2::CGPASS_TailDupPlacementAggressiveThreshold>(
+                      F->getFunction().getContext().getOptionsContext()))))
     TailDupSize = TII->getTailDuplicateSize(OptLevel);
 }
 
@@ -3599,11 +3677,16 @@ bool MachineBlockPlacement::run(MachineFunction &MF) {
   // disabled for huge functions (exceeding a certain size).
   bool UseExtTspForPerf = false;
   bool UseExtTspForSize = false;
-  if (3 <= MF.size() && MF.size() <= ExtTspBlockPlacementMaxBlocks) {
-    UseExtTspForSize = OptForSize && ApplyExtTspForSize;
-    UseExtTspForPerf =
-        !UseExtTspForSize && EnableExtTspBlockPlacement &&
-        (ApplyExtTspWithoutProfile || MF.getFunction().hasProfileData());
+  if (3 <= MF.size() &&
+      MF.size() <= getExtTspBlockPlacementMaxBlocks(
+                       MF.getFunction().getContext().getOptionsContext())) {
+    UseExtTspForSize =
+        OptForSize && getApplyExtTspForSize(
+                          MF.getFunction().getContext().getOptionsContext());
+    UseExtTspForPerf = !UseExtTspForSize &&
+                       getEnableExtTspBlockPlacement(&MF.getFunction()) &&
+                       (getApplyExtTspWithoutProfile(&MF.getFunction()) ||
+                        MF.getFunction().hasProfileData());
   }
 
   // Apply tail duplication.
@@ -3624,14 +3707,17 @@ bool MachineBlockPlacement::run(MachineFunction &MF) {
   // Changing the layout can create new tail merging opportunities.
   // TailMerge can create jump into if branches that make CFG irreducible for
   // HW that requires structured CFG.
-  const bool EnableTailMerge = !MF.getTarget().requiresStructuredCFG() &&
-                               AllowTailMerge && BranchFoldPlacement &&
-                               MF.size() > 3;
+  const bool EnableTailMerge =
+      !MF.getTarget().requiresStructuredCFG() && AllowTailMerge &&
+      getBranchFoldPlacement(
+          MF.getFunction().getContext().getOptionsContext()) &&
+      MF.size() > 3;
   // No tail merging opportunities if the block number is less than four.
   if (EnableTailMerge) {
     const unsigned TailMergeSize = TailDupSize + 1;
-    BranchFolder BF(/*DefaultEnableTailMerge=*/true, /*CommonHoist=*/false,
-                    *MBFI, *MBPI, PSI, TailMergeSize);
+    BranchFolder BF(
+        /*DefaultEnableTailMerge=*/true, /*CommonHoist=*/false, *MBFI, *MBPI,
+        PSI, MF.getFunction().getContext().getOptionsContext(), TailMergeSize);
 
     if (BF.OptimizeFunction(MF, TII, MF.getSubtarget().getRegisterInfo(), MLI,
                             /*AfterPlacement=*/true)) {
@@ -3667,10 +3753,12 @@ bool MachineBlockPlacement::run(MachineFunction &MF) {
   ChainAllocator.DestroyAll();
 
   // View the function.
-  if (ViewBlockLayoutWithBFI != GVDT_None &&
-      (ViewBlockFreqFuncName.empty() ||
-       F->getFunction().getName() == ViewBlockFreqFuncName)) {
-    if (RenumberBlocksBeforeView)
+  if (getViewBlockLayoutWithBFI() != GVDT_None &&
+      (getViewBlockFreqFuncName(&F->getFunction()).empty() ||
+       F->getFunction().getName() ==
+           getViewBlockFreqFuncName(&F->getFunction()))) {
+    if (getRenumberBlocksBeforeView(
+            F->getFunction().getContext().getOptionsContext()))
       MF.RenumberBlocks();
     MBFI->view("MBP." + MF.getName(), false);
   }
@@ -3750,17 +3838,23 @@ void MachineBlockPlacement::applyExtTsp(bool OptForSize) {
                     << " with profile = " << F->getFunction().hasProfileData()
                     << " (" << F->getName() << ")" << "\n");
 
-  const double OrgScore = calcExtTspScore(BlockSizes, JumpCounts);
+  const double OrgScore =
+      calcExtTspScore(BlockSizes, JumpCounts,
+                      F->getFunction().getContext().getOptionsContext());
   LLVM_DEBUG(dbgs() << format("  original  layout score: %0.2f\n", OrgScore));
 
   // Run the layout algorithm.
-  auto NewOrder = computeExtTspLayout(BlockSizes, BlockCounts, JumpCounts);
+  auto NewOrder =
+      computeExtTspLayout(BlockSizes, BlockCounts, JumpCounts,
+                          F->getFunction().getContext().getOptionsContext());
   std::vector<const MachineBasicBlock *> NewBlockOrder;
   NewBlockOrder.reserve(F->size());
   for (uint64_t Node : NewOrder) {
     NewBlockOrder.push_back(CurrentBlockOrder[Node]);
   }
-  const double OptScore = calcExtTspScore(NewOrder, BlockSizes, JumpCounts);
+  const double OptScore =
+      calcExtTspScore(NewOrder, BlockSizes, JumpCounts,
+                      F->getFunction().getContext().getOptionsContext());
   LLVM_DEBUG(dbgs() << format("  optimized layout score: %0.2f\n", OptScore));
 
   // If the optimization is unsuccessful, fall back to the original block order.
@@ -3911,7 +4005,8 @@ bool MachineBlockPlacementStats::run(MachineFunction &F) {
   if (std::next(F.begin()) == F.end())
     return false;
 
-  if (!isFunctionInPrintList(F.getName()))
+  const LLVMContext &Ctx = F.getFunction().getContext();
+  if (!isFunctionInPrintList(Ctx, F.getName()))
     return false;
 
   for (MachineBasicBlock &MBB : F) {

@@ -20,7 +20,8 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/User.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/LoopPeel.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
 
@@ -28,23 +29,34 @@ using namespace llvm;
 
 #define DEBUG_TYPE "hexagontti"
 
-static cl::opt<bool> HexagonAutoHVX("hexagon-autohvx", cl::init(false),
-    cl::Hidden, cl::desc("Enable loop vectorizer for HVX"));
+static bool EmitLookupTables = true;
 
-cl::opt<bool> HexagonAllowScatterGatherHVX(
-    "hexagon-allow-scatter-gather-hvx", cl::init(false), cl::Hidden,
-    cl::desc("Allow auto-generation of HVX scatter-gather"));
+static bool HexagonMaskedVMem = true;
 
-static cl::opt<bool> EnableV68FloatAutoHVX(
-    "force-hvx-float", cl::Hidden,
-    cl::desc("Enable auto-vectorization of floatint point types on v68."));
+static bool getHexagonAutoHVX(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_AutoHVX>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> EmitLookupTables("hexagon-emit-lookup-tables",
-    cl::init(true), cl::Hidden,
-    cl::desc("Control lookup table emission on Hexagon target"));
+static bool getHexagonAllowScatterGatherHVX(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_AllowScatterGatherHVX>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> HexagonMaskedVMem("hexagon-masked-vmem", cl::init(true),
-    cl::Hidden, cl::desc("Enable masked loads/stores for HVX"));
+static bool getEnableV68FloatAutoHVX(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_EnableV68FloatAutoHVX>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getEmitLookupTables(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_EmitLookupTables>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getHexagonMaskedVMem(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::HEX_MaskedVMem>(
+      F.getContext().getOptionsContext());
+}
 
 // Constant "cost factor" to make floating point operations more expensive
 // in terms of vectorization cost. This isn't the best way, but it should
@@ -52,7 +64,7 @@ static cl::opt<bool> HexagonMaskedVMem("hexagon-masked-vmem", cl::init(true),
 static const unsigned FloatFactor = 4;
 
 bool HexagonTTIImpl::useHVX() const {
-  return ST.useHVXOps() && HexagonAutoHVX;
+  return ST.useHVXOps() && getHexagonAutoHVX(F);
 }
 
 bool HexagonTTIImpl::isHVXVectorType(Type *Ty) const {
@@ -63,7 +75,7 @@ bool HexagonTTIImpl::isHVXVectorType(Type *Ty) const {
     return false;
   if (ST.useHVXV69Ops() || !VecTy->getElementType()->isFloatingPointTy())
     return true;
-  return ST.useHVXV68Ops() && EnableV68FloatAutoHVX;
+  return ST.useHVXV68Ops() && getEnableV68FloatAutoHVX(F);
 }
 
 unsigned HexagonTTIImpl::getTypeNumElements(Type *Ty) const {
@@ -348,7 +360,7 @@ bool HexagonTTIImpl::isLegalMaskedStore(Type *DataType, Align /*Alignment*/,
                                         TTI::MaskKind /*MaskKind*/) const {
   // This function is called from scalarize-masked-mem-intrin, which runs
   // in pre-isel. Use ST directly instead of calling isHVXVectorType.
-  return HexagonMaskedVMem && ST.isTypeForHVX(DataType);
+  return getHexagonMaskedVMem(F) && ST.isTypeForHVX(DataType);
 }
 
 bool HexagonTTIImpl::isLegalMaskedLoad(Type *DataType, Align /*Alignment*/,
@@ -356,13 +368,13 @@ bool HexagonTTIImpl::isLegalMaskedLoad(Type *DataType, Align /*Alignment*/,
                                        TTI::MaskKind /*MaskKind*/) const {
   // This function is called from scalarize-masked-mem-intrin, which runs
   // in pre-isel. Use ST directly instead of calling isHVXVectorType.
-  return HexagonMaskedVMem && ST.isTypeForHVX(DataType);
+  return getHexagonMaskedVMem(F) && ST.isTypeForHVX(DataType);
 }
 
 bool HexagonTTIImpl::isLegalMaskedGather(Type *Ty, Align Alignment) const {
   // For now assume we can not deal with all HVX datatypes.
   if (!Ty->isVectorTy() || !ST.isTypeForHVX(Ty) ||
-      !HexagonAllowScatterGatherHVX)
+      !getHexagonAllowScatterGatherHVX(F))
     return false;
   // This must be in sync with HexagonVectorCombine pass.
   switch (Ty->getScalarSizeInBits()) {
@@ -384,7 +396,7 @@ bool HexagonTTIImpl::isLegalMaskedGather(Type *Ty, Align Alignment) const {
 
 bool HexagonTTIImpl::isLegalMaskedScatter(Type *Ty, Align Alignment) const {
   if (!Ty->isVectorTy() || !ST.isTypeForHVX(Ty) ||
-      !HexagonAllowScatterGatherHVX)
+      !getHexagonAllowScatterGatherHVX(F))
     return false;
   // This must be in sync with HexagonVectorCombine pass.
   switch (Ty->getScalarSizeInBits()) {
@@ -453,5 +465,5 @@ HexagonTTIImpl::getInstructionCost(const User *U,
 }
 
 bool HexagonTTIImpl::shouldBuildLookupTables() const {
-  return EmitLookupTables;
+  return getEmitLookupTables(F);
 }

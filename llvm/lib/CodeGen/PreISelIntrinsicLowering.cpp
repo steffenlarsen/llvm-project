@@ -17,6 +17,7 @@
 #include "llvm/Analysis/ObjCARCUtil.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/ExpandVectorPredication.h"
 #include "llvm/CodeGen/LibcallLoweringInfo.h"
 #include "llvm/CodeGen/Passes.h"
@@ -36,6 +37,8 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Scalar/LowerConstantIntrinsics.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -50,10 +53,10 @@ using namespace llvm;
 /// Threshold to leave statically sized memory intrinsic calls. Calls of known
 /// size larger than this will be expanded by the pass. Calls of unknown or
 /// lower size will be left for expansion in codegen.
-static cl::opt<int64_t> MemIntrinsicExpandSizeThresholdOpt(
-    "mem-intrinsic-expand-size",
-    cl::desc("Set minimum mem intrinsic size to expand in IR"), cl::init(-1),
-    cl::Hidden);
+
+static int64_t getMemIntrinsicExpandSize(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_MemIntrinsicExpandSize>(Ctx);
+}
 
 namespace {
 
@@ -231,9 +234,13 @@ bool PreISelIntrinsicLowering::shouldExpandMemIntrinsicWithSize(
   ConstantInt *CI = dyn_cast<ConstantInt>(Size);
   if (!CI)
     return true;
-  uint64_t Threshold = MemIntrinsicExpandSizeThresholdOpt.getNumOccurrences()
-                           ? MemIntrinsicExpandSizeThresholdOpt
-                           : TTI.getMaxMemIntrinsicInlineSizeThreshold();
+  const clv2::OptionsContext &Ctx = CI->getContext().getOptionsContext();
+  uint64_t Threshold =
+      (false ||
+       clv2::wasOptSpecified<&clv2::CGPassCore2Reg,
+                             &clv2::CGPASS_MemIntrinsicExpandSize>(Ctx))
+          ? getMemIntrinsicExpandSize(Ctx)
+          : TTI.getMaxMemIntrinsicInlineSizeThreshold();
   uint64_t SizeVal = CI->getZExtValue();
 
   // Treat a threshold of 0 as a special case to force expansion of all

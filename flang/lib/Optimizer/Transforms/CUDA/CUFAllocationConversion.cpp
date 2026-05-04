@@ -476,8 +476,8 @@ public:
                            mlir::gpu::GPUDialect>();
     target.addLegalOp<cuf::StreamCastOp>();
     cuf::populateCUFAllocationConversionPatterns(
-        typeConverter, *dl, symtab, patterns, descriptorAllocFunction,
-        descriptorFreeFunction);
+        typeConverter, *dl, symtab, patterns,
+        descriptorAllocFunction.getValue(), descriptorFreeFunction.getValue());
     if (mlir::failed(mlir::applyPartialConversion(getOperation(), target,
                                                   std::move(patterns)))) {
       mlir::emitError(mlir::UnknownLoc::get(ctx),

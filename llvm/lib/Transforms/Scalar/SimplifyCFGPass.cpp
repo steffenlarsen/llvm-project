@@ -1,3 +1,5 @@
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 //===- SimplifyCFGPass.cpp - CFG Simplification Pass ----------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -36,7 +38,6 @@
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -46,43 +47,94 @@ using namespace llvm;
 
 #define DEBUG_TYPE "simplifycfg"
 
-static cl::opt<unsigned> UserBonusInstThreshold(
-    "bonus-inst-threshold", cl::Hidden, cl::init(1),
-    cl::desc("Control the number of bonus instructions (default = 1)"));
+static unsigned getUserBonusInstThreshold(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_BonusInstThreshold>(
+      F.getContext().getOptionsContext());
+}
+static bool isUserBonusInstThresholdSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_BonusInstThreshold>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> UserKeepLoops(
-    "keep-loops", cl::Hidden, cl::init(true),
-    cl::desc("Preserve canonical loop structure (default = true)"));
+static bool getUserKeepLoops(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_KeepLoops>(
+      F.getContext().getOptionsContext());
+}
+static bool isUserKeepLoopsSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg, &clv2::SC_KeepLoops>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> UserSwitchRangeToICmp(
-    "switch-range-to-icmp", cl::Hidden, cl::init(false),
-    cl::desc(
-        "Convert switches into an integer range comparison (default = false)"));
+static bool getUserSwitchRangeToICmp(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SwitchRangeToIcmp>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool isUserSwitchRangeToICmpSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_SwitchRangeToIcmp>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> UserSwitchToLookup(
-    "switch-to-lookup", cl::Hidden, cl::init(false),
-    cl::desc("Convert switches to lookup tables (default = false)"));
+static bool getUserSwitchToLookup(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SwitchToLookup>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool isUserSwitchToLookupSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg, &clv2::SC_SwitchToLookup>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> UserForwardSwitchCond(
-    "forward-switch-cond", cl::Hidden, cl::init(false),
-    cl::desc("Forward switch condition to phi ops (default = false)"));
+static bool getUserForwardSwitchCond(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_ForwardSwitchCond>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool isUserForwardSwitchCondSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_ForwardSwitchCond>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> UserHoistCommonInsts(
-    "hoist-common-insts", cl::Hidden, cl::init(false),
-    cl::desc("hoist common instructions (default = false)"));
+static bool getUserHoistCommonInsts(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_HoistCommonInsts>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool isUserHoistCommonInstsSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_HoistCommonInsts>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> UserHoistLoadsStoresWithCondFaulting(
-    "hoist-loads-stores-with-cond-faulting", cl::Hidden, cl::init(false),
-    cl::desc("Hoist loads/stores if the target supports conditional faulting "
-             "(default = false)"));
+static bool getUserHoistLoadsStoresWithCondFaulting(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_HoistLoadsStoresWithCondFaulting>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool isUserHoistLoadsStoresWithCondFaultingSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_HoistLoadsStoresWithCondFaulting>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> UserSinkCommonInsts(
-    "sink-common-insts", cl::Hidden, cl::init(false),
-    cl::desc("Sink common instructions (default = false)"));
+static bool getUserSinkCommonInsts(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_SinkCommonInsts>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool isUserSinkCommonInstsSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg, &clv2::SC_SinkCommonInsts>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> UserSpeculateUnpredictables(
-    "speculate-unpredictables", cl::Hidden, cl::init(false),
-    cl::desc("Speculate unpredictable branches (default = false)"));
+static bool getUserSpeculateUnpredictables(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg,
+                           &clv2::SC_SpeculateUnpredictables>(
+      F.getContext().getOptionsContext(), false);
+}
+static bool isUserSpeculateUnpredictablesSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::ScalarOptsReg,
+                               &clv2::SC_SpeculateUnpredictables>(
+      F.getContext().getOptionsContext());
+}
 
 STATISTIC(NumSimpl, "Number of blocks simplified");
 
@@ -248,7 +300,7 @@ static bool iterativelySimplifyCFG(Function &F, const TargetTransformInfo &TTI,
     LocalChange = false;
 
     // Loop over all of the basic blocks and remove them if they are unneeded.
-    for (Function::iterator BBIt = F.begin(); BBIt != F.end(); ) {
+    for (Function::iterator BBIt = F.begin(); BBIt != F.end();) {
       BasicBlock &BB = *BBIt++;
       if (DTU) {
         assert(
@@ -280,7 +332,8 @@ static bool simplifyFunctionCFGImpl(Function &F, const TargetTransformInfo &TTI,
   EverChanged |= iterativelySimplifyCFG(F, TTI, DT ? &DTU : nullptr, Options);
 
   // If neither pass changed anything, we're done.
-  if (!EverChanged) return false;
+  if (!EverChanged)
+    return false;
 
   // iterativelySimplifyCFG can (rarely) make some loops dead.  If this happens,
   // removeUnreachableBlocks is needed to nuke them, which means we should
@@ -305,50 +358,45 @@ static bool simplifyFunctionCFGImpl(Function &F, const TargetTransformInfo &TTI,
 static bool simplifyFunctionCFG(Function &F, const TargetTransformInfo &TTI,
                                 DominatorTree *DT,
                                 const SimplifyCFGOptions &Options) {
-  assert((!RequireAndPreserveDomTree ||
-          (DT && DT->verify(DominatorTree::VerificationLevel::Full))) &&
+  assert((!DT || DT->verify(DominatorTree::VerificationLevel::Full)) &&
          "Original domtree is invalid?");
 
   bool Changed = simplifyFunctionCFGImpl(F, TTI, DT, Options);
 
-  assert((!RequireAndPreserveDomTree ||
-          (DT && DT->verify(DominatorTree::VerificationLevel::Full))) &&
+  assert((!DT || DT->verify(DominatorTree::VerificationLevel::Full)) &&
          "Failed to maintain validity of domtree!");
 
   return Changed;
 }
 
 // Command-line settings override compile-time settings.
-static void applyCommandLineOverridesToOptions(SimplifyCFGOptions &Options) {
-  if (UserBonusInstThreshold.getNumOccurrences())
-    Options.BonusInstThreshold = UserBonusInstThreshold;
-  if (UserForwardSwitchCond.getNumOccurrences())
-    Options.ForwardSwitchCondToPhi = UserForwardSwitchCond;
-  if (UserSwitchRangeToICmp.getNumOccurrences())
-    Options.ConvertSwitchRangeToICmp = UserSwitchRangeToICmp;
-  if (UserSwitchToLookup.getNumOccurrences())
-    Options.ConvertSwitchToLookupTable = UserSwitchToLookup;
-  if (UserKeepLoops.getNumOccurrences())
-    Options.NeedCanonicalLoop = UserKeepLoops;
-  if (UserHoistCommonInsts.getNumOccurrences())
-    Options.HoistCommonInsts = UserHoistCommonInsts;
-  if (UserHoistLoadsStoresWithCondFaulting.getNumOccurrences())
+static void applyCommandLineOverridesToOptions(SimplifyCFGOptions &Options,
+                                               const Function &F) {
+  if (isUserBonusInstThresholdSpecified(F))
+    Options.BonusInstThreshold = getUserBonusInstThreshold(F);
+  if (isUserForwardSwitchCondSpecified(F))
+    Options.ForwardSwitchCondToPhi = getUserForwardSwitchCond(F);
+  if (isUserSwitchRangeToICmpSpecified(F))
+    Options.ConvertSwitchRangeToICmp = getUserSwitchRangeToICmp(F);
+  if (isUserSwitchToLookupSpecified(F))
+    Options.ConvertSwitchToLookupTable = getUserSwitchToLookup(F);
+  if (isUserKeepLoopsSpecified(F))
+    Options.NeedCanonicalLoop = getUserKeepLoops(F);
+  if (isUserHoistCommonInstsSpecified(F))
+    Options.HoistCommonInsts = getUserHoistCommonInsts(F);
+  if (isUserHoistLoadsStoresWithCondFaultingSpecified(F))
     Options.HoistLoadsStoresWithCondFaulting =
-        UserHoistLoadsStoresWithCondFaulting;
-  if (UserSinkCommonInsts.getNumOccurrences())
-    Options.SinkCommonInsts = UserSinkCommonInsts;
-  if (UserSpeculateUnpredictables.getNumOccurrences())
-    Options.SpeculateUnpredictables = UserSpeculateUnpredictables;
+        getUserHoistLoadsStoresWithCondFaulting(F);
+  if (isUserSinkCommonInstsSpecified(F))
+    Options.SinkCommonInsts = getUserSinkCommonInsts(F);
+  if (isUserSpeculateUnpredictablesSpecified(F))
+    Options.SpeculateUnpredictables = getUserSpeculateUnpredictables(F);
 }
 
-SimplifyCFGPass::SimplifyCFGPass() {
-  applyCommandLineOverridesToOptions(Options);
-}
+SimplifyCFGPass::SimplifyCFGPass() = default;
 
 SimplifyCFGPass::SimplifyCFGPass(const SimplifyCFGOptions &Opts)
-    : Options(Opts) {
-  applyCommandLineOverridesToOptions(Options);
-}
+    : Options(Opts) {}
 
 void SimplifyCFGPass::printPipeline(
     raw_ostream &OS, function_ref<StringRef(StringRef)> MapClassName2PassName) {
@@ -377,17 +425,18 @@ void SimplifyCFGPass::printPipeline(
 
 PreservedAnalyses SimplifyCFGPass::run(Function &F,
                                        FunctionAnalysisManager &AM) {
+  applyCommandLineOverridesToOptions(Options, F);
   auto &TTI = AM.getResult<TargetIRAnalysis>(F);
   Options.AC = &AM.getResult<AssumptionAnalysis>(F);
   DominatorTree *DT = nullptr;
-  if (RequireAndPreserveDomTree)
+  if (getRequireAndPreserveDomTree(F.getContext().getOptionsContext()))
     DT = &AM.getResult<DominatorTreeAnalysis>(F);
   if (!simplifyFunctionCFG(F, TTI, DT, Options))
     return PreservedAnalyses::all();
   // If we removed some blocks, update block numbers to keep dense numbering.
   F.renumberBlocks();
   PreservedAnalyses PA;
-  if (RequireAndPreserveDomTree) {
+  if (getRequireAndPreserveDomTree(F.getContext().getOptionsContext())) {
     DT->updateBlockNumbers();
     PA.preserve<DominatorTreeAnalysis>();
   }
@@ -400,23 +449,25 @@ struct CFGSimplifyPass : public FunctionPass {
   SimplifyCFGOptions Options;
   std::function<bool(const Function &)> PredicateFtor;
 
-  CFGSimplifyPass(SimplifyCFGOptions Options_ = SimplifyCFGOptions(),
+  CFGSimplifyPass(const clv2::OptionsContext &Ctx,
+                  SimplifyCFGOptions Options_ = SimplifyCFGOptions(),
                   std::function<bool(const Function &)> Ftor = nullptr)
       : FunctionPass(ID), Options(Options_), PredicateFtor(std::move(Ftor)) {
-
+    // Seed the inherited context; the pass manager overrides it with its own
+    // before getAnalysisUsage() runs, when it has one.
+    setOptionsContext(Ctx);
     initializeCFGSimplifyPassPass(*PassRegistry::getPassRegistry());
-
-    // Check for command-line overrides of options for debug/customization.
-    applyCommandLineOverridesToOptions(Options);
   }
 
   bool runOnFunction(Function &F) override {
     if (skipFunction(F) || (PredicateFtor && !PredicateFtor(F)))
       return false;
 
+    // Check for command-line overrides of options for debug/customization.
+    applyCommandLineOverridesToOptions(Options, F);
     Options.AC = &getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
     DominatorTree *DT = nullptr;
-    if (RequireAndPreserveDomTree)
+    if (getRequireAndPreserveDomTree(getOptionsContext()))
       DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
 
     auto &TTI = getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);
@@ -424,15 +475,15 @@ struct CFGSimplifyPass : public FunctionPass {
   }
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<AssumptionCacheTracker>();
-    if (RequireAndPreserveDomTree)
+    if (getRequireAndPreserveDomTree(getOptionsContext()))
       AU.addRequired<DominatorTreeWrapperPass>();
     AU.addRequired<TargetTransformInfoWrapperPass>();
-    if (RequireAndPreserveDomTree)
+    if (getRequireAndPreserveDomTree(getOptionsContext()))
       AU.addPreserved<DominatorTreeWrapperPass>();
     AU.addPreserved<GlobalsAAWrapperPass>();
   }
 };
-}
+} // namespace
 
 char CFGSimplifyPass::ID = 0;
 INITIALIZE_PASS_BEGIN(CFGSimplifyPass, "simplifycfg", "Simplify the CFG", false,
@@ -445,7 +496,8 @@ INITIALIZE_PASS_END(CFGSimplifyPass, "simplifycfg", "Simplify the CFG", false,
 
 // Public interface to the CFGSimplification pass
 FunctionPass *
-llvm::createCFGSimplificationPass(SimplifyCFGOptions Options,
+llvm::createCFGSimplificationPass(const clv2::OptionsContext &Ctx,
+                                  SimplifyCFGOptions Options,
                                   std::function<bool(const Function &)> Ftor) {
-  return new CFGSimplifyPass(Options, std::move(Ftor));
+  return new CFGSimplifyPass(Ctx, Options, std::move(Ftor));
 }

@@ -22,17 +22,20 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/XCore/XCoreOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 #define DEBUG_TYPE "xcore-lower-thread-local"
 
 using namespace llvm;
 
-static cl::opt<unsigned> MaxThreads(
-  "xcore-max-threads", cl::Optional,
-  cl::desc("Maximum number of threads (for emulation thread-local storage)"),
-  cl::Hidden, cl::value_desc("number"), cl::init(8));
+static unsigned MaxThreads = 8;
+
+static unsigned getMaxThreads(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::XCORE_MaxThreads>(
+      M.getContext().getOptionsContext());
+}
 
 namespace {
   /// Lowers thread local variables on the XCore. Each thread local variable is
@@ -58,19 +61,19 @@ ModulePass *llvm::createXCoreLowerThreadLocalPass() {
   return new XCoreLowerThreadLocal();
 }
 
-static ArrayType *createLoweredType(Type *OriginalType) {
-  return ArrayType::get(OriginalType, MaxThreads);
+static ArrayType *createLoweredType(Type *OriginalType, const Module &M) {
+  return ArrayType::get(OriginalType, getMaxThreads(M));
 }
 
-static Constant *
-createLoweredInitializer(ArrayType *NewType, Constant *OriginalInitializer) {
-  SmallVector<Constant *, 8> Elements(MaxThreads);
-  for (unsigned i = 0; i != MaxThreads; ++i) {
+static Constant *createLoweredInitializer(ArrayType *NewType,
+                                          Constant *OriginalInitializer,
+                                          const Module &M) {
+  SmallVector<Constant *, 8> Elements(getMaxThreads(M));
+  for (unsigned i = 0; i != getMaxThreads(M); ++i) {
     Elements[i] = OriginalInitializer;
   }
   return ConstantArray::get(NewType, Elements);
 }
-
 
 static bool replaceConstantExprOp(ConstantExpr *CE, Pass *P) {
   do {
@@ -137,11 +140,11 @@ bool XCoreLowerThreadLocal::lowerGlobal(GlobalVariable *GV) {
     return false;
 
   // Create replacement global.
-  ArrayType *NewType = createLoweredType(GV->getValueType());
+  ArrayType *NewType = createLoweredType(GV->getValueType(), *M);
   Constant *NewInitializer = nullptr;
   if (GV->hasInitializer())
-    NewInitializer = createLoweredInitializer(NewType,
-                                              GV->getInitializer());
+    NewInitializer =
+        createLoweredInitializer(NewType, GV->getInitializer(), *M);
   GlobalVariable *NewGV =
     new GlobalVariable(*M, NewType, GV->isConstant(), GV->getLinkage(),
                        NewInitializer, "", nullptr,

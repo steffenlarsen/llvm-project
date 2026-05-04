@@ -29,7 +29,8 @@ class BlockFrequencyInfoTest : public testing::Test {
 protected:
   std::unique_ptr<BranchProbabilityInfo> BPI;
   std::unique_ptr<CycleInfo> CI;
-  LLVMContext C;
+  std::unique_ptr<LoopInfo> LI;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   BlockFrequencyInfo buildBFI(Function &F) {
     CI.reset(new CycleInfo());

@@ -18,10 +18,9 @@ using namespace llvm;
 namespace {
 
 // Test fixture
-template<typename T>
-class ValueMapTest : public testing::Test {
+template <typename T> class ValueMapTest : public testing::Test {
 protected:
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Constant *ConstantV;
   std::unique_ptr<BitCastInst> BitcastV;
   std::unique_ptr<BinaryOperator> AddV;
@@ -38,13 +37,13 @@ typedef ::testing::Types<Value, Instruction, const Instruction> KeyTypes;
 TYPED_TEST_SUITE(ValueMapTest, KeyTypes, );
 
 TYPED_TEST(ValueMapTest, Null) {
-  ValueMap<TypeParam*, int> VM1;
+  ValueMap<TypeParam *, int> VM1;
   VM1[nullptr] = 7;
   EXPECT_EQ(7, VM1.lookup(nullptr));
 }
 
 TYPED_TEST(ValueMapTest, FollowsValue) {
-  ValueMap<TypeParam*, int> VM;
+  ValueMap<TypeParam *, int> VM;
   VM[this->BitcastV.get()] = 7;
   EXPECT_EQ(7, VM.lookup(this->BitcastV.get()));
   EXPECT_EQ(0u, VM.count(this->AddV.get()));
@@ -58,40 +57,42 @@ TYPED_TEST(ValueMapTest, FollowsValue) {
 }
 
 TYPED_TEST(ValueMapTest, OperationsWork) {
-  ValueMap<TypeParam*, int> VM;
-  ValueMap<TypeParam*, int> VM2(16);  (void)VM2;
-  typename ValueMapConfig<TypeParam*>::ExtraData Data;
-  ValueMap<TypeParam*, int> VM3(Data, 16);  (void)VM3;
+  ValueMap<TypeParam *, int> VM;
+  ValueMap<TypeParam *, int> VM2(16);
+  (void)VM2;
+  typename ValueMapConfig<TypeParam *>::ExtraData Data;
+  ValueMap<TypeParam *, int> VM3(Data, 16);
+  (void)VM3;
   EXPECT_TRUE(VM.empty());
 
   VM[this->BitcastV.get()] = 7;
 
   // Find:
-  typename ValueMap<TypeParam*, int>::iterator I =
-    VM.find(this->BitcastV.get());
+  typename ValueMap<TypeParam *, int>::iterator I =
+      VM.find(this->BitcastV.get());
   ASSERT_TRUE(I != VM.end());
   EXPECT_EQ(this->BitcastV.get(), I->first);
   EXPECT_EQ(7, I->second);
   EXPECT_TRUE(VM.find(this->AddV.get()) == VM.end());
 
   // Const find:
-  const ValueMap<TypeParam*, int> &CVM = VM;
-  typename ValueMap<TypeParam*, int>::const_iterator CI =
-    CVM.find(this->BitcastV.get());
+  const ValueMap<TypeParam *, int> &CVM = VM;
+  typename ValueMap<TypeParam *, int>::const_iterator CI =
+      CVM.find(this->BitcastV.get());
   ASSERT_TRUE(CI != CVM.end());
   EXPECT_EQ(this->BitcastV.get(), CI->first);
   EXPECT_EQ(7, CI->second);
   EXPECT_TRUE(CVM.find(this->AddV.get()) == CVM.end());
 
   // Insert:
-  std::pair<typename ValueMap<TypeParam*, int>::iterator, bool> InsertResult1 =
-    VM.insert(std::make_pair(this->AddV.get(), 3));
+  std::pair<typename ValueMap<TypeParam *, int>::iterator, bool> InsertResult1 =
+      VM.insert(std::make_pair(this->AddV.get(), 3));
   EXPECT_EQ(this->AddV.get(), InsertResult1.first->first);
   EXPECT_EQ(3, InsertResult1.first->second);
   EXPECT_TRUE(InsertResult1.second);
   EXPECT_EQ(1u, VM.count(this->AddV.get()));
-  std::pair<typename ValueMap<TypeParam*, int>::iterator, bool> InsertResult2 =
-    VM.insert(std::make_pair(this->AddV.get(), 5));
+  std::pair<typename ValueMap<TypeParam *, int>::iterator, bool> InsertResult2 =
+      VM.insert(std::make_pair(this->AddV.get(), 5));
   EXPECT_EQ(this->AddV.get(), InsertResult2.first->first);
   EXPECT_EQ(3, InsertResult2.first->second);
   EXPECT_FALSE(InsertResult2.second);
@@ -105,7 +106,7 @@ TYPED_TEST(ValueMapTest, OperationsWork) {
   EXPECT_EQ(0U, VM.size());
 
   // Range insert:
-  SmallVector<std::pair<Instruction*, int>, 2> Elems;
+  SmallVector<std::pair<Instruction *, int>, 2> Elems;
   Elems.push_back(std::make_pair(this->AddV.get(), 1));
   Elems.push_back(std::make_pair(this->BitcastV.get(), 2));
   VM.insert(Elems.begin(), Elems.end());
@@ -113,21 +114,23 @@ TYPED_TEST(ValueMapTest, OperationsWork) {
   EXPECT_EQ(2, VM.lookup(this->BitcastV.get()));
 }
 
-template<typename ExpectedType, typename VarType>
+template <typename ExpectedType, typename VarType>
 void CompileAssertHasType(VarType) {
   static_assert(std::is_same_v<ExpectedType, VarType>, "Not the same type");
 }
 
 TYPED_TEST(ValueMapTest, Iteration) {
-  ValueMap<TypeParam*, int> VM;
+  ValueMap<TypeParam *, int> VM;
   VM[this->BitcastV.get()] = 2;
   VM[this->AddV.get()] = 3;
   size_t size = 0;
-  for (typename ValueMap<TypeParam*, int>::iterator I = VM.begin(), E = VM.end();
+  for (typename ValueMap<TypeParam *, int>::iterator I = VM.begin(),
+                                                     E = VM.end();
        I != E; ++I) {
     ++size;
-    std::pair<TypeParam*, int> value = *I; (void)value;
-    CompileAssertHasType<TypeParam*>(I->first);
+    std::pair<TypeParam *, int> value = *I;
+    (void)value;
+    CompileAssertHasType<TypeParam *>(I->first);
     if (I->second == 2) {
       EXPECT_EQ(this->BitcastV.get(), I->first);
       I->second = 5;
@@ -144,12 +147,14 @@ TYPED_TEST(ValueMapTest, Iteration) {
 
   size = 0;
   // Cast to const ValueMap to avoid a bug in DenseMap's iterators.
-  const ValueMap<TypeParam*, int>& CVM = VM;
-  for (typename ValueMap<TypeParam*, int>::const_iterator I = CVM.begin(),
-         E = CVM.end(); I != E; ++I) {
+  const ValueMap<TypeParam *, int> &CVM = VM;
+  for (typename ValueMap<TypeParam *, int>::const_iterator I = CVM.begin(),
+                                                           E = CVM.end();
+       I != E; ++I) {
     ++size;
-    std::pair<TypeParam*, int> value = *I;  (void)value;
-    CompileAssertHasType<TypeParam*>(I->first);
+    std::pair<TypeParam *, int> value = *I;
+    (void)value;
+    CompileAssertHasType<TypeParam *>(I->first);
     if (I->second == 5) {
       EXPECT_EQ(this->BitcastV.get(), I->first);
     } else if (I->second == 6) {
@@ -163,7 +168,7 @@ TYPED_TEST(ValueMapTest, Iteration) {
 
 TYPED_TEST(ValueMapTest, DefaultCollisionBehavior) {
   // By default, we overwrite the old value with the replaced value.
-  ValueMap<TypeParam*, int> VM;
+  ValueMap<TypeParam *, int> VM;
   VM[this->BitcastV.get()] = 7;
   VM[this->AddV.get()] = 9;
   this->BitcastV->replaceAllUsesWith(this->AddV.get());
@@ -175,7 +180,7 @@ TYPED_TEST(ValueMapTest, ConfiguredCollisionBehavior) {
   // TODO: Implement this when someone needs it.
 }
 
-template<typename KeyT, typename MutexT>
+template <typename KeyT, typename MutexT>
 struct LockMutex : ValueMapConfig<KeyT, MutexT> {
   struct ExtraData {
     MutexT *M;
@@ -197,9 +202,9 @@ struct LockMutex : ValueMapConfig<KeyT, MutexT> {
 TYPED_TEST(ValueMapTest, LocksMutex) {
   std::mutex M;
   bool CalledRAUW = false, CalledDeleted = false;
-  typedef LockMutex<TypeParam*, std::mutex> ConfigType;
+  typedef LockMutex<TypeParam *, std::mutex> ConfigType;
   typename ConfigType::ExtraData Data = {&M, &CalledRAUW, &CalledDeleted};
-  ValueMap<TypeParam*, int, ConfigType> VM(Data);
+  ValueMap<TypeParam *, int, ConfigType> VM(Data);
   VM[this->BitcastV.get()] = 7;
   this->BitcastV->replaceAllUsesWith(this->AddV.get());
   this->AddV.reset();
@@ -208,13 +213,12 @@ TYPED_TEST(ValueMapTest, LocksMutex) {
 }
 #endif
 
-template<typename KeyT>
-struct NoFollow : ValueMapConfig<KeyT> {
+template <typename KeyT> struct NoFollow : ValueMapConfig<KeyT> {
   enum { FollowRAUW = false };
 };
 
 TYPED_TEST(ValueMapTest, NoFollowRAUW) {
-  ValueMap<TypeParam*, int, NoFollow<TypeParam*> > VM;
+  ValueMap<TypeParam *, int, NoFollow<TypeParam *>> VM;
   VM[this->BitcastV.get()] = 7;
   EXPECT_EQ(7, VM.lookup(this->BitcastV.get()));
   EXPECT_EQ(0u, VM.count(this->AddV.get()));
@@ -230,8 +234,7 @@ TYPED_TEST(ValueMapTest, NoFollowRAUW) {
   EXPECT_EQ(0U, VM.size());
 }
 
-template<typename KeyT>
-struct CountOps : ValueMapConfig<KeyT> {
+template <typename KeyT> struct CountOps : ValueMapConfig<KeyT> {
   struct ExtraData {
     int *Deletions;
     int *RAUWs;
@@ -240,15 +243,13 @@ struct CountOps : ValueMapConfig<KeyT> {
   static void onRAUW(const ExtraData &Data, KeyT Old, KeyT New) {
     ++*Data.RAUWs;
   }
-  static void onDelete(const ExtraData &Data, KeyT Old) {
-    ++*Data.Deletions;
-  }
+  static void onDelete(const ExtraData &Data, KeyT Old) { ++*Data.Deletions; }
 };
 
 TYPED_TEST(ValueMapTest, CallsConfig) {
   int Deletions = 0, RAUWs = 0;
-  typename CountOps<TypeParam*>::ExtraData Data = {&Deletions, &RAUWs};
-  ValueMap<TypeParam*, int, CountOps<TypeParam*> > VM(Data);
+  typename CountOps<TypeParam *>::ExtraData Data = {&Deletions, &RAUWs};
+  ValueMap<TypeParam *, int, CountOps<TypeParam *>> VM(Data);
   VM[this->BitcastV.get()] = 7;
   this->BitcastV->replaceAllUsesWith(this->AddV.get());
   EXPECT_EQ(0, Deletions);
@@ -261,24 +262,19 @@ TYPED_TEST(ValueMapTest, CallsConfig) {
   EXPECT_EQ(1, RAUWs);
 }
 
-template<typename KeyT>
-struct ModifyingConfig : ValueMapConfig<KeyT> {
+template <typename KeyT> struct ModifyingConfig : ValueMapConfig<KeyT> {
   // We'll put a pointer here back to the ValueMap this key is in, so
   // that we can modify it (and clobber *this) before the ValueMap
   // tries to do the same modification.  In previous versions of
   // ValueMap, that exploded.
-  typedef ValueMap<KeyT, int, ModifyingConfig<KeyT> > **ExtraData;
+  typedef ValueMap<KeyT, int, ModifyingConfig<KeyT>> **ExtraData;
 
-  static void onRAUW(ExtraData Map, KeyT Old, KeyT New) {
-    (*Map)->erase(Old);
-  }
-  static void onDelete(ExtraData Map, KeyT Old) {
-    (*Map)->erase(Old);
-  }
+  static void onRAUW(ExtraData Map, KeyT Old, KeyT New) { (*Map)->erase(Old); }
+  static void onDelete(ExtraData Map, KeyT Old) { (*Map)->erase(Old); }
 };
 TYPED_TEST(ValueMapTest, SurvivesModificationByConfig) {
-  ValueMap<TypeParam*, int, ModifyingConfig<TypeParam*> > *MapAddress;
-  ValueMap<TypeParam*, int, ModifyingConfig<TypeParam*> > VM(&MapAddress);
+  ValueMap<TypeParam *, int, ModifyingConfig<TypeParam *>> *MapAddress;
+  ValueMap<TypeParam *, int, ModifyingConfig<TypeParam *>> VM(&MapAddress);
   MapAddress = &VM;
   // Now the ModifyingConfig can modify the Map inside a callback.
   VM[this->BitcastV.get()] = 7;

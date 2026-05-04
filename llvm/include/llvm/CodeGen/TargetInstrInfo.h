@@ -1821,9 +1821,9 @@ public:
     return nullptr;
   }
 
-  /// Provide a global flag for disabling the PreRA hazard recognizer that
-  /// targets may choose to honor.
-  bool usePreRAHazardRecognizer() const;
+  /// Provide a flag for disabling the PreRA hazard recognizer that targets may
+  /// choose to honor.
+  LLVM_ABI bool usePreRAHazardRecognizer(const clv2::OptionsContext &Ctx) const;
 
   /// For a comparison instruction, return the source registers
   /// in SrcReg and SrcReg2 if having two register operands, and the value it

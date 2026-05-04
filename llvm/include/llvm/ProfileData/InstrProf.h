@@ -26,7 +26,6 @@
 #include "llvm/IR/ProfileSummary.h"
 #include "llvm/ProfileData/InstrProfData.inc"
 #include "llvm/Support/BalancedPartitioning.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/EndianStream.h"
 #include "llvm/Support/Error.h"
@@ -1419,10 +1418,6 @@ struct Header {
 
 // Create the variable for the profile file name.
 LLVM_ABI void createProfileFileNameVar(Module &M, StringRef InstrProfileOutput);
-
-// Whether to compress function names in profile records, and filenames in
-// code coverage mappings. Used by the Instrumentation library and unit tests.
-LLVM_ABI extern cl::opt<bool> DoInstrProfNameCompression;
 
 } // end namespace llvm
 #endif // LLVM_PROFILEDATA_INSTRPROF_H

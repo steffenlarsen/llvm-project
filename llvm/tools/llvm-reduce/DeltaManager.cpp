@@ -54,25 +54,12 @@
 #include "deltas/RunIRPasses.h"
 #include "deltas/SimplifyInstructions.h"
 #include "deltas/StripDebugInfo.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallSet.h"
-#include "llvm/Support/CommandLine.h"
 
 using namespace llvm;
 
 using SmallStringSet = SmallSet<StringRef, 8>;
-
-extern cl::OptionCategory LLVMReduceOptions;
-static cl::list<std::string>
-    DeltaPasses("delta-passes",
-                cl::desc("Delta passes to run, separated by commas. By "
-                         "default, run all delta passes."),
-                cl::cat(LLVMReduceOptions), cl::CommaSeparated);
-
-static cl::list<std::string>
-    SkipDeltaPasses("skip-delta-passes",
-                    cl::desc("Delta passes to not run, separated by commas. By "
-                             "default, run all delta passes."),
-                    cl::cat(LLVMReduceOptions), cl::CommaSeparated);
 
 // Generate two separate Pass lists: IR_Passes and MIR_Passes
 static const DeltaPass IR_Passes[] = {
@@ -156,7 +143,7 @@ static void collectPassNames(const TestRunner &Tester,
 /// Verify all requested or skipped passes are valid names, and return them in a
 /// set.
 static SmallStringSet handlePassList(const TestRunner &Tester,
-                                     const cl::list<std::string> &PassList) {
+                                     ArrayRef<std::string> PassList) {
   SmallStringSet AllPasses;
   collectPassNames(Tester, AllPasses);
 
@@ -178,17 +165,19 @@ void llvm::runDeltaPasses(TestRunner &Tester, int MaxPassIterations) {
 
   SmallStringSet RunPassSet, SkipPassSet;
 
-  if (!DeltaPasses.empty())
-    RunPassSet = handlePassList(Tester, DeltaPasses);
+  const ReduceConfig &Config = Tester.getConfig();
 
-  if (!SkipDeltaPasses.empty())
-    SkipPassSet = handlePassList(Tester, SkipDeltaPasses);
+  if (!Config.DeltaPassList.empty())
+    RunPassSet = handlePassList(Tester, Config.DeltaPassList);
+
+  if (!Config.SkipDeltaPassList.empty())
+    SkipPassSet = handlePassList(Tester, Config.SkipDeltaPassList);
 
   for (int Iter = 0; Iter < MaxPassIterations; ++Iter) {
-    if (DeltaPasses.empty()) {
+    if (Config.DeltaPassList.empty()) {
       runAllDeltaPasses(Tester, SkipPassSet);
     } else {
-      for (StringRef PassName : DeltaPasses) {
+      for (StringRef PassName : Config.DeltaPassList) {
         if (!SkipPassSet.count(PassName))
           runDeltaPassName(Tester, PassName);
       }

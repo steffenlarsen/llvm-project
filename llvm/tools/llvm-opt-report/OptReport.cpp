@@ -19,7 +19,7 @@
 #include "llvm/Remarks/Remark.h"
 #include "llvm/Remarks/RemarkFormat.h"
 #include "llvm/Remarks/RemarkParser.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem.h"
@@ -29,45 +29,55 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TypeSize.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
 #include <cstdlib>
 #include <map>
 #include <optional>
 #include <set>
 
 using namespace llvm;
+using namespace llvm::clv2;
 
-// Mark all our options with this category, everything else (except for -version
-// and -help) will be hidden.
-static cl::OptionCategory
-    OptReportCategory("llvm-opt-report options");
+static constexpr OptionCategory OptReportCategory{"llvm-opt-report options"};
 
-static cl::opt<std::string>
-  InputFileName(cl::Positional, cl::desc("<input>"), cl::init("-"),
-                cl::cat(OptReportCategory));
+static constexpr OptionInfo<std::string> InputFileNameOpt{
+    "input", "<input>", Positional{}, Init{"-"}, cat(OptReportCategory)};
 
-static cl::opt<std::string>
-  OutputFileName("o", cl::desc("Output file"), cl::init("-"),
-                 cl::cat(OptReportCategory));
+static constexpr OptionInfo<std::string> OutputFileNameOpt{
+    "o", "Output file", Init{"-"}, cat(OptReportCategory)};
 
-static cl::opt<std::string>
-  InputRelDir("r", cl::desc("Root for relative input paths"), cl::init(""),
-              cl::cat(OptReportCategory));
+static constexpr OptionInfo<std::string> InputRelDirOpt{
+    "r", "Root for relative input paths", Init{""}, cat(OptReportCategory)};
 
-static cl::opt<bool>
-  Succinct("s", cl::desc("Don't include vectorization factors, etc."),
-           cl::init(false), cl::cat(OptReportCategory));
+static constexpr OptionInfo<bool> SuccinctOpt{
+    "s", "Don't include vectorization factors, etc.", cat(OptReportCategory)};
 
-static cl::opt<bool>
-  NoDemangle("no-demangle", cl::desc("Don't demangle function names"),
-             cl::init(false), cl::cat(OptReportCategory));
+static constexpr OptionInfo<bool> NoDemangleOpt{
+    "no-demangle", "Don't demangle function names", cat(OptReportCategory)};
 
-static cl::opt<std::string> ParserFormat("format",
-                                         cl::desc("The format of the remarks."),
-                                         cl::init("yaml"),
-                                         cl::cat(OptReportCategory));
+static constexpr OptionInfo<std::string> ParserFormatOpt{
+    "format", "The format of the remarks.", Init{"yaml"},
+    cat(OptReportCategory)};
+
+static constexpr OptionsRegistry<&InputFileNameOpt, &OutputFileNameOpt,
+                                 &InputRelDirOpt, &SuccinctOpt, &NoDemangleOpt,
+                                 &ParserFormatOpt>
+    OptReportToolReg;
+
+// Values populated from parsed options in main() and threaded through to
+// readLocationInfo()/writeReport().
+struct OptReportOptions {
+  std::string InputFileName;
+  std::string OutputFileName;
+  std::string InputRelDir;
+  bool Succinct = false;
+  bool NoDemangle = false;
+  std::string ParserFormat;
+};
 
 namespace {
 // For each location in the source file, the common per-transformation state
@@ -119,7 +129,10 @@ struct OptReportLocationInfo {
     return *this;
   }
 
-  bool operator < (const OptReportLocationInfo &RHS) const {
+  // Ordering used to group locations with equivalent displayed output; when
+  // Succinct is set the fields that aren't displayed in succinct mode must
+  // not affect the ordering.
+  bool lessThan(const OptReportLocationInfo &RHS, bool Succinct) const {
     if (Inlined < RHS.Inlined)
       return true;
     else if (RHS.Inlined < Inlined)
@@ -150,18 +163,39 @@ struct OptReportLocationInfo {
 
 typedef std::map<std::string, std::map<int, std::map<std::string, std::map<int,
           OptReportLocationInfo>>>> LocationInfoTy;
+
+typedef std::map<int, OptReportLocationInfo> ColsInfoTy;
+
+// Comparator for ColsInfoTy used as a map key (grouping locations with
+// equivalent displayed output); threads Succinct through in place of the
+// OptReportLocationInfo::lessThan() parameter.
+struct ColsInfoLess {
+  bool Succinct;
+
+  bool operator()(const ColsInfoTy &LHS, const ColsInfoTy &RHS) const {
+    return std::lexicographical_compare(
+        LHS.begin(), LHS.end(), RHS.begin(), RHS.end(),
+        [this](const ColsInfoTy::value_type &L,
+               const ColsInfoTy::value_type &R) {
+          if (L.first != R.first)
+            return L.first < R.first;
+          return L.second.lessThan(R.second, Succinct);
+        });
+  }
+};
 } // anonymous namespace
 
-static bool readLocationInfo(LocationInfoTy &LocationInfo) {
+static bool readLocationInfo(LocationInfoTy &LocationInfo,
+                             const OptReportOptions &Opts) {
   ErrorOr<std::unique_ptr<MemoryBuffer>> Buf =
-      MemoryBuffer::getFile(InputFileName.c_str());
+      MemoryBuffer::getFile(Opts.InputFileName.c_str());
   if (std::error_code EC = Buf.getError()) {
-    WithColor::error() << "Can't open file " << InputFileName << ": "
+    WithColor::error() << "Can't open file " << Opts.InputFileName << ": "
                        << EC.message() << "\n";
     return false;
   }
 
-  Expected<remarks::Format> Format = remarks::parseFormat(ParserFormat);
+  Expected<remarks::Format> Format = remarks::parseFormat(Opts.ParserFormat);
   if (!Format) {
     handleAllErrors(Format.takeError(), [&](const ErrorInfoBase &PE) {
       PE.log(WithColor::error());
@@ -261,11 +295,13 @@ static bool readLocationInfo(LocationInfoTy &LocationInfo) {
   return true;
 }
 
-static bool writeReport(LocationInfoTy &LocationInfo) {
+static bool writeReport(LocationInfoTy &LocationInfo,
+                        const OptReportOptions &Opts) {
   std::error_code EC;
-  llvm::raw_fd_ostream OS(OutputFileName, EC, llvm::sys::fs::OF_TextWithCRLF);
+  llvm::raw_fd_ostream OS(Opts.OutputFileName, EC,
+                          llvm::sys::fs::OF_TextWithCRLF);
   if (EC) {
-    WithColor::error() << "Can't open file " << OutputFileName << ": "
+    WithColor::error() << "Can't open file " << Opts.OutputFileName << ": "
                        << EC.message() << "\n";
     return false;
   }
@@ -273,8 +309,8 @@ static bool writeReport(LocationInfoTy &LocationInfo) {
   bool FirstFile = true;
   for (auto &FI : LocationInfo) {
     SmallString<128> FileName(FI.first);
-    if (!InputRelDir.empty())
-      sys::path::make_absolute(InputRelDir, FileName);
+    if (!Opts.InputRelDir.empty())
+      sys::path::make_absolute(Opts.InputRelDir, FileName);
 
     const auto &FileInfo = FI.second;
 
@@ -355,7 +391,7 @@ static bool writeReport(LocationInfoTy &LocationInfo) {
               OS << ", ";
 
             bool Printed = false;
-            if (!NoDemangle) {
+            if (!Opts.NoDemangle) {
               if (char *Demangled = itaniumDemangle(FuncName)) {
                 OS << Demangled;
                 Printed = true;
@@ -378,10 +414,11 @@ static bool writeReport(LocationInfoTy &LocationInfo) {
         // do this, we use a '^' character to point to the appropriate column in
         // the source line.
 
-        std::string USpaces(Succinct ? 0 : UCDigits, ' ');
-        std::string VSpaces(Succinct ? 0 : VFDigits + ICDigits + 1, ' ');
+        std::string USpaces(Opts.Succinct ? 0 : UCDigits, ' ');
+        std::string VSpaces(Opts.Succinct ? 0 : VFDigits + ICDigits + 1, ' ');
 
-        auto UStr = [UCDigits](OptReportLocationInfo &LLI) {
+        auto UStr = [UCDigits,
+                     Succinct = Opts.Succinct](OptReportLocationInfo &LLI) {
           std::string R;
           raw_string_ostream RS(R);
 
@@ -393,8 +430,8 @@ static bool writeReport(LocationInfoTy &LocationInfo) {
           return R;
         };
 
-        auto VStr = [VFDigits,
-                     ICDigits](OptReportLocationInfo &LLI) -> std::string {
+        auto VStr = [VFDigits, ICDigits, Succinct = Opts.Succinct](
+                        OptReportLocationInfo &LLI) -> std::string {
           std::string R;
           raw_string_ostream RS(R);
 
@@ -443,8 +480,8 @@ static bool writeReport(LocationInfoTy &LocationInfo) {
       // function contexts together and display each group separately. If
       // they're all the same, then we only display the line once without any
       // additional markings.
-      std::map<std::map<int, OptReportLocationInfo>,
-               std::set<std::string>> UniqueLIs;
+      std::map<ColsInfoTy, std::set<std::string>, ColsInfoLess> UniqueLIs(
+          ColsInfoLess{Opts.Succinct});
 
       OptReportLocationInfo AllLI;
       if (LII != FileInfo.end()) {
@@ -479,16 +516,28 @@ static bool writeReport(LocationInfoTy &LocationInfo) {
 int main(int argc, const char **argv) {
   InitLLVM X(argc, argv);
 
-  cl::HideUnrelatedOptions(OptReportCategory);
-  cl::ParseCommandLineOptions(
-      argc, argv,
-      "A tool to generate an optimization report from YAML optimization"
-      " record files.\n");
+  clv2::OptionParser P;
+  P.add<&OptReportToolReg>();
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&OptReportCategory});
+  auto OptsCtx =
+      P.parse(argc, argv,
+              "A tool to generate an optimization report from YAML optimization"
+              " record files.\n");
+  auto *ParsedOpts = OptsCtx->getViewPtr<&OptReportToolReg>();
+
+  OptReportOptions Opts;
+  Opts.InputFileName = ParsedOpts->get<&InputFileNameOpt>();
+  Opts.OutputFileName = ParsedOpts->get<&OutputFileNameOpt>();
+  Opts.InputRelDir = ParsedOpts->get<&InputRelDirOpt>();
+  Opts.Succinct = ParsedOpts->get<&SuccinctOpt>();
+  Opts.NoDemangle = ParsedOpts->get<&NoDemangleOpt>();
+  Opts.ParserFormat = ParsedOpts->get<&ParserFormatOpt>();
 
   LocationInfoTy LocationInfo;
-  if (!readLocationInfo(LocationInfo))
+  if (!readLocationInfo(LocationInfo, Opts))
     return 1;
-  if (!writeReport(LocationInfo))
+  if (!writeReport(LocationInfo, Opts))
     return 1;
 
   return 0;

@@ -17,11 +17,10 @@
 #include "HexagonSubtarget.h"
 #include "HexagonTargetObjectFile.h"
 #include "llvm/CodeGen/CodeGenTargetMachineImpl.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <optional>
 
 namespace llvm {
-
-enum class QFloatMode { StrictIEEE, IEEE, Lossy, Legacy };
 
 class HexagonTargetMachine : public CodeGenTargetMachineImpl {
   std::unique_ptr<TargetLoweringObjectFile> TLOF;

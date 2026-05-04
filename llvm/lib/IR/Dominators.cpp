@@ -18,14 +18,15 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/IROptionsOptInfos.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/GenericDomTreeConstruction.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cassert>
@@ -37,10 +38,6 @@ class Value;
 } // namespace llvm
 using namespace llvm;
 
-bool llvm::VerifyDomInfo = false;
-static cl::opt<bool, true>
-    VerifyDomInfoX("verify-dom-info", cl::location(VerifyDomInfo), cl::Hidden,
-                   cl::desc("Verify dominator info (time consuming)"));
 
 #ifdef EXPENSIVE_CHECKS
 static constexpr bool ExpensiveChecksEnabled = true;
@@ -380,7 +377,13 @@ bool DominatorTreeWrapperPass::runOnFunction(Function &F) {
 }
 
 void DominatorTreeWrapperPass::verifyAnalysis() const {
-  if (VerifyDomInfo)
+  bool DoVerifyDom = false;
+  if (auto *R = DT.getRoot())
+    if (auto *F = R->getParent())
+      if (auto *O = clv2::getView<&clv2::IROptsReg>(
+              F->getContext().getOptionsContext()))
+        DoVerifyDom = O->get<&clv2::IR_VerifyDomInfo>();
+  if (DoVerifyDom)
     assert(DT.verify(DominatorTree::VerificationLevel::Full));
   else if (ExpensiveChecksEnabled)
     assert(DT.verify(DominatorTree::VerificationLevel::Basic));

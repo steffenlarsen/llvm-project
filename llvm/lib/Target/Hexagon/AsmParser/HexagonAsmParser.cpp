@@ -21,6 +21,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDirectives.h"
@@ -40,16 +41,18 @@
 #include "llvm/MC/MCValue.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/HexagonAttributes.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/SMLoc.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/Hexagon/HexagonOptionsOptInfos.h"
 #include <cassert>
 #include <cctype>
 #include <cstddef>
@@ -62,26 +65,79 @@
 
 using namespace llvm;
 
-static cl::opt<bool> WarnMissingParenthesis(
-    "mwarn-missing-parenthesis",
-    cl::desc("Warn for missing parenthesis around predicate registers"),
-    cl::init(true));
-static cl::opt<bool> ErrorMissingParenthesis(
-    "merror-missing-parenthesis",
-    cl::desc("Error for missing parenthesis around predicate registers"),
-    cl::init(false));
-static cl::opt<bool> WarnSignedMismatch(
-    "mwarn-sign-mismatch",
-    cl::desc("Warn for mismatching a signed and unsigned value"),
-    cl::init(false));
-static cl::opt<bool> WarnNoncontigiousRegister(
-    "mwarn-noncontigious-register",
-    cl::desc("Warn for register names that aren't contigious"), cl::init(true));
-static cl::opt<bool> ErrorNoncontigiousRegister(
-    "merror-noncontigious-register",
-    cl::desc("Error for register names that aren't contigious"),
-    cl::init(false));
-static cl::opt<bool> AddBuildAttributes("hexagon-add-build-attributes");
+static bool getWarnMissingParenthesis(const clv2::OptionsContext &OCtx,
+                                      const Function *F = nullptr) {
+  if (F) {
+    if (auto *O = clv2::getView<&clv2::HexagonOptsReg>(
+            F->getContext().getOptionsContext()))
+      return O->get<&clv2::HEX_WarnMissingParenthesis>();
+  } else {
+    if (auto *O = clv2::getView<&clv2::HexagonOptsReg>(OCtx))
+      return O->get<&clv2::HEX_WarnMissingParenthesis>();
+  }
+  return true;
+}
+static bool getErrorMissingParenthesis(const clv2::OptionsContext &OCtx,
+                                       const Function *F = nullptr) {
+  if (F) {
+    if (auto *O = clv2::getView<&clv2::HexagonOptsReg>(
+            F->getContext().getOptionsContext()))
+      return O->get<&clv2::HEX_ErrorMissingParenthesis>();
+  } else {
+    if (auto *O = clv2::getView<&clv2::HexagonOptsReg>(OCtx))
+      return O->get<&clv2::HEX_ErrorMissingParenthesis>();
+  }
+  return false;
+}
+static bool getWarnSignedMismatch(const clv2::OptionsContext &OCtx,
+                                  const Function *F = nullptr) {
+  if (F) {
+    if (auto *O = clv2::getView<&clv2::HexagonOptsReg>(
+            F->getContext().getOptionsContext()))
+      return O->get<&clv2::HEX_WarnSignedMismatch>();
+  } else {
+    if (auto *O = clv2::getView<&clv2::HexagonOptsReg>(OCtx))
+      return O->get<&clv2::HEX_WarnSignedMismatch>();
+  }
+  return false;
+}
+static bool getWarnNoncontigiousRegister(const clv2::OptionsContext &OCtx,
+                                         const Function *F = nullptr) {
+  if (F) {
+    if (auto *O = clv2::getView<&clv2::HexagonOptsReg>(
+            F->getContext().getOptionsContext()))
+      return O->get<&clv2::HEX_WarnNoncontigiousRegister>();
+  } else {
+    if (auto *O = clv2::getView<&clv2::HexagonOptsReg>(OCtx))
+      return O->get<&clv2::HEX_WarnNoncontigiousRegister>();
+  }
+  return true;
+}
+static bool getErrorNoncontigiousRegister(const clv2::OptionsContext &OCtx,
+                                          const Function *F = nullptr) {
+  if (F) {
+    if (auto *O = clv2::getView<&clv2::HexagonOptsReg>(
+            F->getContext().getOptionsContext()))
+      return O->get<&clv2::HEX_ErrorNoncontigiousRegister>();
+  } else {
+    if (auto *O = clv2::getView<&clv2::HexagonOptsReg>(OCtx))
+      return O->get<&clv2::HEX_ErrorNoncontigiousRegister>();
+  }
+  return false;
+}
+static bool getAddBuildAttributes(const clv2::OptionsContext &OCtx,
+                                  const Function *F = nullptr) {
+  if (F) {
+    if (auto *O = clv2::getView<&clv2::HexagonOptsReg>(
+            F->getContext().getOptionsContext()))
+      return O->get<&clv2::HEX_AddBuildAttributes>();
+  } else {
+    if (auto *O = clv2::getView<&clv2::HexagonOptsReg>(OCtx))
+      return O->get<&clv2::HEX_AddBuildAttributes>();
+  }
+  return false;
+}
+
 namespace {
 
 struct HexagonOperand;
@@ -170,7 +226,7 @@ public:
 
     MCAsmParserExtension::Initialize(_Parser);
 
-    if (AddBuildAttributes)
+    if (getAddBuildAttributes(getContext().getOptionsContext()))
       getTargetStreamer().emitTargetAttributes(*STI);
   }
 
@@ -549,7 +605,7 @@ void HexagonAsmParser::canonicalizeImmediates(MCInst &MCI) {
           MCConstantExpr::create(Value, getContext()), getContext())));
     } else {
       if (I.isExpr() && cast<HexagonMCExpr>(I.getExpr())->signMismatch() &&
-          WarnSignedMismatch)
+          getWarnSignedMismatch(getContext().getOptionsContext()))
         Warning(MCI.getLoc(), "Signed/Unsigned mismatch");
       NewInst.addOperand(I);
     }
@@ -930,7 +986,7 @@ bool HexagonAsmParser::parseOperand(OperandVector &Operands) {
   SMLoc End;
   AsmLexer &Lexer = getLexer();
   if (!parseRegister(Register, Begin, End)) {
-    if (!ErrorMissingParenthesis)
+    if (!getErrorMissingParenthesis(getContext().getOptionsContext()))
       switch (Register.id()) {
       default:
         break;
@@ -939,7 +995,7 @@ bool HexagonAsmParser::parseOperand(OperandVector &Operands) {
       case Hexagon::P2:
       case Hexagon::P3:
         if (previousEqual(Operands, 0, "if")) {
-          if (WarnMissingParenthesis)
+          if (getWarnMissingParenthesis(getContext().getOptionsContext()))
             Warning(Begin, "Missing parenthesis around predicate register");
           static char const *LParen = "(";
           static char const *RParen = ")";
@@ -957,7 +1013,7 @@ bool HexagonAsmParser::parseOperand(OperandVector &Operands) {
         }
         if (previousEqual(Operands, 0, "!") &&
             previousEqual(Operands, 1, "if")) {
-          if (WarnMissingParenthesis)
+          if (getWarnMissingParenthesis(getContext().getOptionsContext()))
             Warning(Begin, "Missing parenthesis around predicate register");
           static char const *LParen = "(";
           static char const *RParen = ")";
@@ -1016,11 +1072,13 @@ bool HexagonAsmParser::tokenIsStartOfStatement(AsmToken::TokenKind Token) {
 
 bool HexagonAsmParser::handleNoncontigiousRegister(bool Contigious,
                                                    SMLoc &Loc) {
-  if (!Contigious && ErrorNoncontigiousRegister) {
+  if (!Contigious &&
+      getErrorNoncontigiousRegister(getContext().getOptionsContext())) {
     Error(Loc, "Register name is not contigious");
     return true;
   }
-  if (!Contigious && WarnNoncontigiousRegister)
+  if (!Contigious &&
+      getWarnNoncontigiousRegister(getContext().getOptionsContext()))
     Warning(Loc, "Register name is not contigious");
   return false;
 }

@@ -9,13 +9,16 @@
 #ifndef LLVM_TOOLS_LLVM_REDUCE_TESTRUNNER_H
 #define LLVM_TOOLS_LLVM_REDUCE_TESTRUNNER_H
 
+#include "ReduceConfig.h"
 #include "ReducerWorkItem.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Target/TargetMachine.h"
+#include <cassert>
 
 namespace llvm {
 
@@ -27,7 +30,8 @@ public:
   TestRunner(StringRef TestName, ArrayRef<std::string> TestArgs,
              std::unique_ptr<ReducerWorkItem> Program,
              std::unique_ptr<TargetMachine> TM, StringRef ToolName,
-             StringRef OutputFilename, bool InputIsBitcode, bool OutputBitcode);
+             StringRef OutputFilename, bool InputIsBitcode, bool OutputBitcode,
+             ReduceConfig Config);
 
   /// Runs the interesting-ness test for the specified file
   /// @returns 0 if test was successful, 1 if otherwise
@@ -39,6 +43,7 @@ public:
   void setProgram(std::unique_ptr<ReducerWorkItem> &&P) {
     assert(P && "Setting null program?");
     Program = std::move(P);
+    Program->Config = &Config;
   }
 
   const TargetMachine *getTargetMachine() const { return TM.get(); }
@@ -51,6 +56,14 @@ public:
     return InputIsBitcode;
   }
 
+  const ReduceConfig &getConfig() const { return Config; }
+
+  const clv2::OptionsContext &getOptionsContext() const {
+    assert(OptsCtx && "OptsCtx is set at construction and never cleared");
+    return *OptsCtx;
+  }
+  void setOptionsContext(const clv2::OptionsContext &Ctx) { OptsCtx = &Ctx; }
+
 private:
   StringRef TestName;
   StringRef ToolName;
@@ -60,6 +73,8 @@ private:
   StringRef OutputFilename;
   const bool InputIsBitcode;
   bool EmitBitcode;
+  ReduceConfig Config;
+  const clv2::OptionsContext *OptsCtx = &clv2::defaultOptionsContext();
 };
 
 } // namespace llvm

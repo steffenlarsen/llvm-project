@@ -28,19 +28,22 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 
 #define DEBUG_TYPE "amdgpu-preload-kernel-arguments"
 
 using namespace llvm;
 
-static cl::opt<unsigned> KernargPreloadCount(
-    "amdgpu-kernarg-preload-count",
-    cl::desc("How many kernel arguments to preload onto SGPRs"), cl::init(0));
+static unsigned getKernargPreloadCount(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_KernargPreloadCount>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool>
-    EnableKernargPreload("amdgpu-kernarg-preload",
-                         cl::desc("Enable preload kernel arguments to SGPRs"),
-                         cl::init(true));
+static bool getEnableKernargPreload(const Module &M) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_EnableKernargPreload>(
+      M.getContext().getOptionsContext());
+}
 
 namespace {
 
@@ -281,7 +284,7 @@ AMDGPUPreloadKernelArgumentsLegacy::AMDGPUPreloadKernelArgumentsLegacy(
     : ModulePass(ID), TM(TM) {}
 
 static bool markKernelArgsAsInreg(Module &M, const TargetMachine &TM) {
-  if (!EnableKernargPreload)
+  if (!getEnableKernargPreload(M))
     return false;
 
   SmallVector<Function *, 4> FunctionsToErase;
@@ -296,7 +299,7 @@ static bool markKernelArgsAsInreg(Module &M, const TargetMachine &TM) {
     uint64_t ExplicitArgOffset = 0;
     const DataLayout &DL = F.getDataLayout();
     const uint64_t BaseOffset = ST.getExplicitKernelArgOffset();
-    unsigned NumPreloadsRequested = KernargPreloadCount;
+    unsigned NumPreloadsRequested = getKernargPreloadCount(F);
     unsigned NumPreloadedExplicitArgs = 0;
     for (Argument &Arg : F.args()) {
       // Avoid incompatible attributes and guard against running this pass

@@ -29,6 +29,9 @@
 namespace llvm {
 
 class ToolOutputFile;
+namespace clv2 {
+class OptionsContext;
+}
 
 namespace bolt {
 
@@ -48,13 +51,14 @@ public:
   // after the object is constructed. Use `create` method instead.
   RewriteInstance(llvm::object::ELFObjectFileBase *File, const int Argc,
                   const char *const *Argv, StringRef ToolPath,
-                  raw_ostream &Stdout, raw_ostream &Stderr, Error &Err);
+                  raw_ostream &Stdout, raw_ostream &Stderr, Error &Err,
+                  clv2::OptionsContext *OptsCtx = nullptr);
 
   static Expected<std::unique_ptr<RewriteInstance>>
   create(llvm::object::ELFObjectFileBase *File, const int Argc,
          const char *const *Argv, StringRef ToolPath,
-         raw_ostream &Stdout = llvm::outs(),
-         raw_ostream &Stderr = llvm::errs());
+         raw_ostream &Stdout = llvm::outs(), raw_ostream &Stderr = llvm::errs(),
+         clv2::OptionsContext *OptsCtx = nullptr);
   ~RewriteInstance();
 
   /// Assign profile from \p Filename to this instance.
@@ -69,6 +73,11 @@ public:
 
   /// Return binary context.
   const BinaryContext &getBinaryContext() const { return *BC; }
+
+  /// Set the OptionsContext for context-aware option reads.
+  void setOptionsContext(clv2::OptionsContext *Ctx) {
+    BC->setOptionsContext(Ctx);
+  }
 
   /// Return total score of all functions for this instance.
   uint64_t getTotalScore() const { return BC->TotalScore; }

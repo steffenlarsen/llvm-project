@@ -31,6 +31,7 @@ class PPCTTIImpl final : public BasicTTIImplBase<PPCTTIImpl> {
 
   const PPCSubtarget *ST;
   const PPCTargetLowering *TLI;
+  const Function *CurFn;
 
   const PPCSubtarget *getST() const { return ST; }
   const PPCTargetLowering *getTLI() const { return TLI; }
@@ -38,7 +39,7 @@ class PPCTTIImpl final : public BasicTTIImplBase<PPCTTIImpl> {
 public:
   explicit PPCTTIImpl(const PPCTargetMachine *TM, const Function &F)
       : BaseT(TM, F.getDataLayout()), ST(TM->getSubtargetImpl(F)),
-        TLI(ST->getTargetLowering()) {}
+        TLI(ST->getTargetLowering()), CurFn(&F) {}
 
   std::optional<Instruction *>
   instCombineIntrinsic(InstCombiner &IC, IntrinsicInst &II) const override;

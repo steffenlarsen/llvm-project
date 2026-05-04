@@ -26,7 +26,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/NoFolder.h"
 #include "llvm/IR/Operator.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/SourceMgr.h"
 #include "gmock/gmock-matchers.h"
@@ -46,16 +46,16 @@ static std::unique_ptr<Module> parseIR(LLVMContext &C, const char *IR) {
 namespace {
 
 TEST(InstructionsTest, ReturnInst) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   // test for PR6589
-  const ReturnInst* r0 = ReturnInst::Create(C);
+  const ReturnInst *r0 = ReturnInst::Create(C);
   EXPECT_EQ(r0->getNumOperands(), 0U);
   EXPECT_EQ(r0->op_begin(), r0->op_end());
 
-  IntegerType* Int1 = IntegerType::get(C, 1);
-  Constant* One = ConstantInt::getTrue(Int1);
-  const ReturnInst* r1 = ReturnInst::Create(C, One);
+  IntegerType *Int1 = IntegerType::get(C, 1);
+  Constant *One = ConstantInt::getTrue(Int1);
+  const ReturnInst *r1 = ReturnInst::Create(C, One);
   EXPECT_EQ(1U, r1->getNumOperands());
   User::const_op_iterator b(r1->op_begin());
   EXPECT_NE(r1->op_end(), b);
@@ -82,7 +82,7 @@ protected:
     F = Function::Create(FTy, Function::ExternalLinkage, "", M.get());
   }
 
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
   SmallVector<Type *, 3> FArgTypes;
   Function *F;
@@ -131,7 +131,7 @@ TEST_F(ModuleWithFunctionTest, InvokeInst) {
 }
 
 TEST(InstructionsTest, UncondBrInst) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   // Make a BasicBlock
   BasicBlock *bb0 = BasicBlock::Create(C);
@@ -154,14 +154,14 @@ TEST(InstructionsTest, UncondBrInst) {
 }
 
 TEST(InstructionsTest, CondBrInst) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   // Make a BasicBlocks
   BasicBlock *bb0 = BasicBlock::Create(C);
   BasicBlock *bb1 = BasicBlock::Create(C);
 
-  IntegerType* Int1 = IntegerType::get(C, 1);
-  Constant* One = ConstantInt::getTrue(Int1);
+  IntegerType *Int1 = IntegerType::get(C, 1);
+  Constant *One = ConstantInt::getTrue(Int1);
 
   CondBrInst *b1 = CondBrInst::Create(One, bb0, bb1);
 
@@ -201,7 +201,7 @@ TEST(InstructionsTest, CondBrInst) {
 }
 
 TEST(InstructionsTest, CastInst) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   Type *Int8Ty = Type::getInt8Ty(C);
   Type *Int16Ty = Type::getInt16Ty(C);
@@ -236,8 +236,8 @@ TEST(InstructionsTest, CastInst) {
   Type *VScaleV2PtrTy = ScalableVectorType::get(PtrTy, 2);
   Type *VScaleV4PtrTy = ScalableVectorType::get(PtrTy, 4);
 
-  const Constant* c8 = Constant::getNullValue(V8x8Ty);
-  const Constant* c64 = Constant::getNullValue(V8x64Ty);
+  const Constant *c8 = Constant::getNullValue(V8x8Ty);
+  const Constant *c64 = Constant::getNullValue(V8x64Ty);
 
   const Constant *v2ptr32 = Constant::getNullValue(V2PtrTy);
 
@@ -385,7 +385,7 @@ TEST(InstructionsTest, CastInst) {
 }
 
 TEST(InstructionsTest, CastCAPI) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   Type *Int8Ty = Type::getInt8Ty(C);
   Type *Int64Ty = Type::getInt64Ty(C);
@@ -443,7 +443,7 @@ TEST(InstructionsTest, CastCAPI) {
 }
 
 TEST(InstructionsTest, VectorGep) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   // Type Definitions
   Type *I32Ty = IntegerType::get(C, 32);
@@ -454,8 +454,8 @@ TEST(InstructionsTest, VectorGep) {
   // and GEPs which use this type.
   ConstantInt *Ci32a = ConstantInt::get(C, APInt(32, 1492));
   ConstantInt *Ci32b = ConstantInt::get(C, APInt(32, 1948));
-  std::vector<Constant*> ConstVa(2, Ci32a);
-  std::vector<Constant*> ConstVb(2, Ci32b);
+  std::vector<Constant *> ConstVa(2, Ci32a);
+  std::vector<Constant *> ConstVb(2, Ci32b);
   Constant *C2xi32a = ConstantVector::get(ConstVa);
   Constant *C2xi32b = ConstantVector::get(ConstVb);
 
@@ -466,7 +466,7 @@ TEST(InstructionsTest, VectorGep) {
   ICmpInst *ICmp1 = new ICmpInst(ICmpInst::ICMP_ULT, PtrVecA, PtrVecB);
   EXPECT_NE(ICmp0, ICmp1); // suppress warning.
 
-  BasicBlock* BB0 = BasicBlock::Create(C);
+  BasicBlock *BB0 = BasicBlock::Create(C);
   // Test InsertAtEnd ICmpInst constructor.
   ICmpInst *ICmp2 = new ICmpInst(BB0, ICmpInst::ICMP_SGE, PtrVecA, PtrVecB);
   EXPECT_NE(ICmp0, ICmp2); // suppress warning.
@@ -542,7 +542,7 @@ TEST(InstructionsTest, VectorGep) {
 }
 
 TEST(InstructionsTest, FPMathOperator) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   IRBuilder<> Builder(Context);
   MDBuilder MDHelper(Context);
   Instruction *I = Builder.CreatePHI(Builder.getDoubleTy(), 0);
@@ -556,7 +556,7 @@ TEST(InstructionsTest, FPMathOperator) {
 }
 
 TEST(InstructionTest, ConstrainedTrans) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M(new Module("MyModule", Context));
   FunctionType *FTy =
       FunctionType::get(Type::getVoidTy(Context),
@@ -610,7 +610,7 @@ TEST(InstructionTest, ConstrainedTrans) {
 }
 
 TEST(InstructionsTest, isEliminableCastPair) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   DataLayout DL1("p1:32:32-p2:64:64:64:32");
 
   Type *Int16Ty = Type::getInt16Ty(C);
@@ -709,16 +709,13 @@ TEST(InstructionsTest, isEliminableCastPair) {
 }
 
 TEST(InstructionsTest, CloneCall) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Type *Int32Ty = Type::getInt32Ty(C);
   Type *ArgTys[] = {Int32Ty, Int32Ty, Int32Ty};
   FunctionType *FnTy = FunctionType::get(Int32Ty, ArgTys, /*isVarArg=*/false);
   Value *Callee = Constant::getNullValue(PointerType::getUnqual(C));
-  Value *Args[] = {
-    ConstantInt::get(Int32Ty, 1),
-    ConstantInt::get(Int32Ty, 2),
-    ConstantInt::get(Int32Ty, 3)
-  };
+  Value *Args[] = {ConstantInt::get(Int32Ty, 1), ConstantInt::get(Int32Ty, 2),
+                   ConstantInt::get(Int32Ty, 3)};
   std::unique_ptr<CallInst> Call(
       CallInst::Create(FnTy, Callee, Args, "result"));
 
@@ -744,7 +741,7 @@ TEST(InstructionsTest, CloneCall) {
 }
 
 TEST(InstructionsTest, AlterCallBundles) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Type *Int32Ty = Type::getInt32Ty(C);
   FunctionType *FnTy = FunctionType::get(Int32Ty, Int32Ty, /*isVarArg=*/false);
   Value *Callee = Constant::getNullValue(PointerType::getUnqual(C));
@@ -771,7 +768,7 @@ TEST(InstructionsTest, AlterCallBundles) {
 }
 
 TEST(InstructionsTest, AlterInvokeBundles) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Type *Int32Ty = Type::getInt32Ty(C);
   FunctionType *FnTy = FunctionType::get(Int32Ty, Int32Ty, /*isVarArg=*/false);
   Value *Callee = Constant::getNullValue(PointerType::getUnqual(C));
@@ -864,14 +861,12 @@ TEST_F(ModuleWithFunctionTest, DropPoisonGeneratingFlags) {
 }
 
 TEST(InstructionsTest, GEPIndices) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   IRBuilder<NoFolder> Builder(Context);
   Type *ElementTy = Builder.getInt8Ty();
   Type *ArrTy = ArrayType::get(ArrayType::get(ElementTy, 64), 64);
-  Value *Indices[] = {
-    Builder.getInt32(0),
-    Builder.getInt32(13),
-    Builder.getInt32(42) };
+  Value *Indices[] = {Builder.getInt32(0), Builder.getInt32(13),
+                      Builder.getInt32(42)};
 
   Value *V = Builder.CreateGEP(
       ArrTy, UndefValue::get(PointerType::getUnqual(Context)), Indices);
@@ -899,7 +894,7 @@ TEST(InstructionsTest, GEPIndices) {
 }
 
 TEST(InstructionsTest, ZeroIndexGEP) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   DataLayout DL;
   Type *PtrTy = PointerType::getUnqual(Context);
   auto *GEP = GetElementPtrInst::Create(Type::getInt8Ty(Context),
@@ -913,7 +908,7 @@ TEST(InstructionsTest, ZeroIndexGEP) {
 }
 
 TEST(InstructionsTest, SwitchInst) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<BasicBlock> BB1, BB2, BB3;
   BB1.reset(BasicBlock::Create(C));
@@ -999,7 +994,7 @@ TEST(InstructionsTest, SwitchInst) {
 }
 
 TEST(InstructionsTest, SwitchInstProfUpdateWrapper) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   std::unique_ptr<BasicBlock> BB1, BB2, BB3;
   BB1.reset(BasicBlock::Create(C));
@@ -1017,7 +1012,7 @@ TEST(InstructionsTest, SwitchInstProfUpdateWrapper) {
   SI->addCase(ConstantInt::get(Int32Ty, 1), BB1.get());
   SI->addCase(ConstantInt::get(Int32Ty, 2), BB2.get());
   SI->setMetadata(LLVMContext::MD_prof,
-                  MDBuilder(C).createBranchWeights({ 9, 1, 22 }));
+                  MDBuilder(C).createBranchWeights({9, 1, 22}));
 
   {
     SwitchInstProfUpdateWrapper SIW(*SI);
@@ -1047,7 +1042,7 @@ TEST(InstructionsTest, CommuteShuffleMask) {
 
 TEST(InstructionsTest, ShuffleMaskQueries) {
   // Create the elements for various constant vectors.
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Type *Int32Ty = Type::getInt32Ty(Ctx);
   Constant *CU = UndefValue::get(Int32Ty);
   Constant *C0 = ConstantInt::get(Int32Ty, 0);
@@ -1202,8 +1197,8 @@ TEST(InstructionsTest, ShuffleMaskQueries) {
   Constant *V1 = ConstantVector::get({C3, C2, C1, C0});
 
   // Identity with undef elts.
-  ShuffleVectorInst *Id1 = new ShuffleVectorInst(V0, V1,
-                                                 ConstantVector::get({C0, C1, CU, CU}));
+  ShuffleVectorInst *Id1 =
+      new ShuffleVectorInst(V0, V1, ConstantVector::get({C0, C1, CU, CU}));
   EXPECT_TRUE(Id1->isIdentity());
   EXPECT_FALSE(Id1->isIdentityWithPadding());
   EXPECT_FALSE(Id1->isIdentityWithExtract());
@@ -1211,8 +1206,8 @@ TEST(InstructionsTest, ShuffleMaskQueries) {
   delete Id1;
 
   // Result has less elements than operands.
-  ShuffleVectorInst *Id2 = new ShuffleVectorInst(V0, V1,
-                                                 ConstantVector::get({C0, C1, C2}));
+  ShuffleVectorInst *Id2 =
+      new ShuffleVectorInst(V0, V1, ConstantVector::get({C0, C1, C2}));
   EXPECT_FALSE(Id2->isIdentity());
   EXPECT_FALSE(Id2->isIdentityWithPadding());
   EXPECT_TRUE(Id2->isIdentityWithExtract());
@@ -1220,17 +1215,18 @@ TEST(InstructionsTest, ShuffleMaskQueries) {
   delete Id2;
 
   // Result has less elements than operands; choose from Op1.
-  ShuffleVectorInst *Id3 = new ShuffleVectorInst(V0, V1,
-                                                 ConstantVector::get({C4, CU, C6}));
+  ShuffleVectorInst *Id3 =
+      new ShuffleVectorInst(V0, V1, ConstantVector::get({C4, CU, C6}));
   EXPECT_FALSE(Id3->isIdentity());
   EXPECT_FALSE(Id3->isIdentityWithPadding());
   EXPECT_TRUE(Id3->isIdentityWithExtract());
   EXPECT_FALSE(Id3->isConcat());
   delete Id3;
 
-  // Result has less elements than operands; choose from Op0 and Op1 is not identity.
-  ShuffleVectorInst *Id4 = new ShuffleVectorInst(V0, V1,
-                                                 ConstantVector::get({C4, C1, C6}));
+  // Result has less elements than operands; choose from Op0 and Op1 is not
+  // identity.
+  ShuffleVectorInst *Id4 =
+      new ShuffleVectorInst(V0, V1, ConstantVector::get({C4, C1, C6}));
   EXPECT_FALSE(Id4->isIdentity());
   EXPECT_FALSE(Id4->isIdentityWithPadding());
   EXPECT_FALSE(Id4->isIdentityWithExtract());
@@ -1238,17 +1234,18 @@ TEST(InstructionsTest, ShuffleMaskQueries) {
   delete Id4;
 
   // Result has more elements than operands, and extra elements are undef.
-  ShuffleVectorInst *Id5 = new ShuffleVectorInst(V0, V1,
-                                                 ConstantVector::get({CU, C1, C2, C3, CU, CU}));
+  ShuffleVectorInst *Id5 = new ShuffleVectorInst(
+      V0, V1, ConstantVector::get({CU, C1, C2, C3, CU, CU}));
   EXPECT_FALSE(Id5->isIdentity());
   EXPECT_TRUE(Id5->isIdentityWithPadding());
   EXPECT_FALSE(Id5->isIdentityWithExtract());
   EXPECT_FALSE(Id5->isConcat());
   delete Id5;
 
-  // Result has more elements than operands, and extra elements are undef; choose from Op1.
-  ShuffleVectorInst *Id6 = new ShuffleVectorInst(V0, V1,
-                                                 ConstantVector::get({C4, C5, C6, CU, CU, CU}));
+  // Result has more elements than operands, and extra elements are undef;
+  // choose from Op1.
+  ShuffleVectorInst *Id6 = new ShuffleVectorInst(
+      V0, V1, ConstantVector::get({C4, C5, C6, CU, CU, CU}));
   EXPECT_FALSE(Id6->isIdentity());
   EXPECT_TRUE(Id6->isIdentityWithPadding());
   EXPECT_FALSE(Id6->isIdentityWithExtract());
@@ -1256,26 +1253,28 @@ TEST(InstructionsTest, ShuffleMaskQueries) {
   delete Id6;
 
   // Result has more elements than operands, but extra elements are not undef.
-  ShuffleVectorInst *Id7 = new ShuffleVectorInst(V0, V1,
-                                                 ConstantVector::get({C0, C1, C2, C3, CU, C1}));
+  ShuffleVectorInst *Id7 = new ShuffleVectorInst(
+      V0, V1, ConstantVector::get({C0, C1, C2, C3, CU, C1}));
   EXPECT_FALSE(Id7->isIdentity());
   EXPECT_FALSE(Id7->isIdentityWithPadding());
   EXPECT_FALSE(Id7->isIdentityWithExtract());
   EXPECT_FALSE(Id7->isConcat());
   delete Id7;
 
-  // Result has more elements than operands; choose from Op0 and Op1 is not identity.
-  ShuffleVectorInst *Id8 = new ShuffleVectorInst(V0, V1,
-                                                 ConstantVector::get({C4, CU, C2, C3, CU, CU}));
+  // Result has more elements than operands; choose from Op0 and Op1 is not
+  // identity.
+  ShuffleVectorInst *Id8 = new ShuffleVectorInst(
+      V0, V1, ConstantVector::get({C4, CU, C2, C3, CU, CU}));
   EXPECT_FALSE(Id8->isIdentity());
   EXPECT_FALSE(Id8->isIdentityWithPadding());
   EXPECT_FALSE(Id8->isIdentityWithExtract());
   EXPECT_FALSE(Id8->isConcat());
   delete Id8;
 
-  // Result has twice as many elements as operands; choose consecutively from Op0 and Op1 is concat.
-  ShuffleVectorInst *Id9 = new ShuffleVectorInst(V0, V1,
-                                                 ConstantVector::get({C0, CU, C2, C3, CU, CU, C6, C7}));
+  // Result has twice as many elements as operands; choose consecutively from
+  // Op0 and Op1 is concat.
+  ShuffleVectorInst *Id9 = new ShuffleVectorInst(
+      V0, V1, ConstantVector::get({C0, CU, C2, C3, CU, CU, C6, C7}));
   EXPECT_FALSE(Id9->isIdentity());
   EXPECT_FALSE(Id9->isIdentityWithPadding());
   EXPECT_FALSE(Id9->isIdentityWithExtract());
@@ -1283,8 +1282,8 @@ TEST(InstructionsTest, ShuffleMaskQueries) {
   delete Id9;
 
   // Result has less than twice as many elements as operands, so not a concat.
-  ShuffleVectorInst *Id10 = new ShuffleVectorInst(V0, V1,
-                                                  ConstantVector::get({C0, CU, C2, C3, CU, CU, C6}));
+  ShuffleVectorInst *Id10 = new ShuffleVectorInst(
+      V0, V1, ConstantVector::get({C0, CU, C2, C3, CU, CU, C6}));
   EXPECT_FALSE(Id10->isIdentity());
   EXPECT_FALSE(Id10->isIdentityWithPadding());
   EXPECT_FALSE(Id10->isIdentityWithExtract());
@@ -1292,8 +1291,8 @@ TEST(InstructionsTest, ShuffleMaskQueries) {
   delete Id10;
 
   // Result has more than twice as many elements as operands, so not a concat.
-  ShuffleVectorInst *Id11 = new ShuffleVectorInst(V0, V1,
-                                                  ConstantVector::get({C0, CU, C2, C3, CU, CU, C6, C7, CU}));
+  ShuffleVectorInst *Id11 = new ShuffleVectorInst(
+      V0, V1, ConstantVector::get({C0, CU, C2, C3, CU, CU, C6, C7, CU}));
   EXPECT_FALSE(Id11->isIdentity());
   EXPECT_FALSE(Id11->isIdentityWithPadding());
   EXPECT_FALSE(Id11->isIdentityWithExtract());
@@ -1301,9 +1300,11 @@ TEST(InstructionsTest, ShuffleMaskQueries) {
   delete Id11;
 
   // If an input is undef, it's not a concat.
-  // TODO: IdentityWithPadding should be true here even though the high mask values are not undef.
-  ShuffleVectorInst *Id12 = new ShuffleVectorInst(V0, ConstantVector::get({CU, CU, CU, CU}),
-                                                  ConstantVector::get({C0, CU, C2, C3, CU, CU, C6, C7}));
+  // TODO: IdentityWithPadding should be true here even though the high mask
+  // values are not undef.
+  ShuffleVectorInst *Id12 = new ShuffleVectorInst(
+      V0, ConstantVector::get({CU, CU, CU, CU}),
+      ConstantVector::get({C0, CU, C2, C3, CU, CU, C6, C7}));
   EXPECT_FALSE(Id12->isIdentity());
   EXPECT_FALSE(Id12->isIdentityWithPadding());
   EXPECT_FALSE(Id12->isIdentityWithExtract());
@@ -1356,7 +1357,7 @@ TEST(InstructionsTest, ShuffleMaskIsReplicationMask) {
       EXPECT_EQ(GuessedVF, VF);
 
       for (int OpVF : seq_inclusive(VF, 2 * VF + 1)) {
-        LLVMContext Ctx;
+        LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
         Type *OpVFTy = FixedVectorType::get(IntegerType::getInt1Ty(Ctx), OpVF);
         Value *Op = ConstantVector::getNullValue(OpVFTy);
         ShuffleVectorInst *SVI = new ShuffleVectorInst(Op, Op, ReplicatedMask);
@@ -1444,7 +1445,7 @@ TEST(InstructionsTest, ShuffleMaskIsReplicationMask_Exhaustive_Correctness) {
 
 TEST(InstructionsTest, GetSplat) {
   // Create the elements for various constant vectors.
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   Type *Int32Ty = Type::getInt32Ty(Ctx);
   Constant *CU = UndefValue::get(Int32Ty);
   Constant *CP = PoisonValue::get(Int32Ty);
@@ -1452,11 +1453,11 @@ TEST(InstructionsTest, GetSplat) {
   Constant *C1 = ConstantInt::get(Int32Ty, 1);
 
   Constant *Splat0 = ConstantVector::get({C0, C0, C0, C0});
-  Constant *Splat1 = ConstantVector::get({C1, C1, C1, C1 ,C1});
+  Constant *Splat1 = ConstantVector::get({C1, C1, C1, C1, C1});
   Constant *Splat0Undef = ConstantVector::get({C0, CU, C0, CU});
   Constant *Splat1Undef = ConstantVector::get({CU, CU, C1, CU});
-  Constant *NotSplat = ConstantVector::get({C1, C1, C0, C1 ,C1});
-  Constant *NotSplatUndef = ConstantVector::get({CU, C1, CU, CU ,C0});
+  Constant *NotSplat = ConstantVector::get({C1, C1, C0, C1, C1});
+  Constant *NotSplatUndef = ConstantVector::get({CU, C1, CU, CU, C0});
   Constant *Splat0Poison = ConstantVector::get({C0, CP, C0, CP});
   Constant *Splat1Poison = ConstantVector::get({CP, CP, C1, CP});
   Constant *NotSplatPoison = ConstantVector::get({CP, C1, CP, CP, C0});
@@ -1496,7 +1497,7 @@ TEST(InstructionsTest, GetSplat) {
 }
 
 TEST(InstructionsTest, SkipDebug) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C,
                                       R"(
       declare void @llvm.dbg.value(metadata, metadata, metadata)
@@ -1537,7 +1538,7 @@ TEST(InstructionsTest, SkipDebug) {
 }
 
 TEST(InstructionsTest, PhiMightNotBeFPMathOperator) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   IRBuilder<> Builder(Context);
   MDBuilder MDHelper(Context);
   Instruction *I = Builder.CreatePHI(Builder.getInt32Ty(), 0);
@@ -1549,7 +1550,7 @@ TEST(InstructionsTest, PhiMightNotBeFPMathOperator) {
 }
 
 TEST(InstructionsTest, FPCallIsFPMathOperator) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   Type *ITy = Type::getInt32Ty(C);
   FunctionType *IFnTy = FunctionType::get(ITy, {});
@@ -1653,7 +1654,7 @@ TEST(InstructionsTest, FPCallIsFPMathOperator) {
 }
 
 TEST(InstructionsTest, FNegInstruction) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Type *FltTy = Type::getFloatTy(Context);
   Constant *One = ConstantFP::get(FltTy, 1.0);
   BinaryOperator *FAdd = BinaryOperator::CreateFAdd(One, One);
@@ -1671,7 +1672,7 @@ TEST(InstructionsTest, FNegInstruction) {
 }
 
 TEST(InstructionsTest, CallBrInstruction) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Context, R"(
 define void @foo() {
 entry:
@@ -1708,7 +1709,7 @@ if.end:
 }
 
 TEST(InstructionsTest, UnaryOperator) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   IRBuilder<> Builder(Context);
   Instruction *I = Builder.CreatePHI(Builder.getDoubleTy(), 0);
   Value *F = Builder.CreateFNeg(I);
@@ -1724,7 +1725,7 @@ TEST(InstructionsTest, UnaryOperator) {
 }
 
 TEST(InstructionsTest, DropLocation) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C,
                                       R"(
       declare void @callee()
@@ -1795,7 +1796,7 @@ TEST(InstructionsTest, DropLocation) {
 }
 
 TEST(InstructionsTest, BranchWeightOverflow) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C,
                                       R"(
       declare void @callee()
@@ -1819,7 +1820,7 @@ TEST(InstructionsTest, BranchWeightOverflow) {
 }
 
 TEST(InstructionsTest, FreezeInst) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(C,
                                       R"(
       define void @foo(i8 %arg) {
@@ -1833,7 +1834,7 @@ TEST(InstructionsTest, FreezeInst) {
 }
 
 TEST(InstructionsTest, AllocaInst) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx, R"(
       %T = type { i64, [3 x i32]}
       define void @f(i32 %n) {
@@ -1877,7 +1878,7 @@ TEST(InstructionsTest, AllocaInst) {
 }
 
 TEST(InstructionsTest, InsertAtBegin) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx, R"(
     define void @f(i32 %a, i32 %b) {
      entry:
@@ -1896,7 +1897,7 @@ TEST(InstructionsTest, InsertAtBegin) {
 }
 
 TEST(InstructionsTest, InsertAtEnd) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M = parseIR(Ctx, R"(
     define void @f(i32 %a, i32 %b) {
      entry:
@@ -1915,7 +1916,7 @@ TEST(InstructionsTest, InsertAtEnd) {
 }
 
 TEST(InstructionsTest, AtomicSyncscope) {
-  LLVMContext Ctx;
+  LLVMContext Ctx{llvm::clv2::defaultOptionsContext()};
 
   Module M("Mod", Ctx);
   FunctionType *FT = FunctionType::get(Type::getVoidTy(Ctx), {}, false);
@@ -1983,7 +1984,7 @@ TEST(InstructionsTest, CmpPredicate) {
 }
 
 TEST(InstructionsTest, StripAndAccumulateConstantOffset) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   DataLayout DL;
   std::unique_ptr<Module> M = parseIR(C, R"(
   define void @foo(ptr %ptr, i64 %offset) {

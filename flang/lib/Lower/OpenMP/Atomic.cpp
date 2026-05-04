@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Atomic.h"
+#include "flang/Common/FlangOptionsOptInfos.h"
 #include "flang/Evaluate/expression.h"
 #include "flang/Evaluate/fold.h"
 #include "flang/Evaluate/tools.h"
@@ -27,15 +28,13 @@
 #include "flang/Support/Fortran.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <optional>
 #include <string>
 #include <type_traits>
 #include <variant>
-
-static llvm::cl::opt<bool> DumpAtomicAnalysis("fdebug-dump-atomic-analysis");
 
 using namespace Fortran;
 
@@ -563,7 +562,9 @@ void Fortran::lower::omp::lowerAtomic(
   lower::StatementContext stmtCtx;
 
   const parser::OpenMPAtomicConstruct::Analysis &analysis = construct.analysis;
-  if (DumpAtomicAnalysis)
+  if (llvm::clv2::getOptValOrDefault<
+          &llvm::clv2::FLANG_DebugDumpAtomicAnalysis>(
+          converter.getMLIRContext().getOptionsContext()))
     dumpAtomicAnalysis(analysis);
 
   const semantics::SomeExpr &atom = *get(analysis.atom);

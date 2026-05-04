@@ -19,14 +19,14 @@
 #include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSubtargetInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AArch64/AArch64OptionsOptInfos.h"
 
 using namespace llvm;
 
-static cl::opt<bool> MarkBTIProperty(
-    "aarch64-mark-bti-property", cl::Hidden,
-    cl::desc("Add .note.gnu.property with BTI to assembly files"),
-    cl::init(false));
+static bool getMarkBTIProperty(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::A64_MarkBTIProperty>(Ctx);
+}
 
 //
 // AArch64TargetStreamer Implementation
@@ -65,7 +65,7 @@ void AArch64TargetStreamer::emitConstantPools() {
 // finish() - write out any non-empty assembler constant pools and
 //   write out note.gnu.properties if need.
 void AArch64TargetStreamer::finish() {
-  if (MarkBTIProperty)
+  if (getMarkBTIProperty(Streamer.getContext().getOptionsContext()))
     emitNoteSection(ELF::GNU_PROPERTY_AARCH64_FEATURE_1_BTI);
 }
 

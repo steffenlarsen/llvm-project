@@ -36,6 +36,7 @@
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/Support/LLVMDriver.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/SourceMgr.h"
@@ -332,8 +333,9 @@ int llvm_ml_main(int Argc, char **Argv, const llvm::ToolContext &) {
 
   MAI->setPreserveAsmComments(InputArgs.hasArg(OPT_preserve_comments));
 
-  std::unique_ptr<MCSubtargetInfo> STI(
-      TheTarget->createMCSubtargetInfo(TheTriple, /*CPU=*/"", /*Features=*/""));
+  std::unique_ptr<MCSubtargetInfo> STI(TheTarget->createMCSubtargetInfo(
+      TheTriple, /*CPU=*/"", /*Features=*/"",
+      /*Ctx=*/llvm::clv2::defaultOptionsContext()));
   if (!STI) {
     WithColor::error(errs(), ProgName) << "unable to create subtarget info\n";
     exit(1);

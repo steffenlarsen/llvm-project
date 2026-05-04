@@ -1407,6 +1407,15 @@ add_subdirectory(utils/TableGen)
 
 add_subdirectory(include)
 
+# Every target configured from here on may include a generated clv2 options
+# header from include/llvm/...; make them all wait for tablegen.  See the
+# comment in include/llvm/CMakeLists.txt for why add_public_tablegen_target()
+# cannot publish this itself.  Placed after add_subdirectory(include) and
+# before lib/, tools/ and the subprojects; lib/Support, lib/TableGen and
+# utils/TableGen are configured above, so this cannot cycle with
+# llvm-min-tblgen.
+list(APPEND LLVM_COMMON_DEPENDS llvm_clv2_options_gen)
+
 add_subdirectory(lib)
 
 if( LLVM_INCLUDE_UTILS )

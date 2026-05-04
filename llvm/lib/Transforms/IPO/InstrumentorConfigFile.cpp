@@ -277,7 +277,7 @@ bool readConfigFromJSON(InstrumentationConfig &IConf, StringRef InputFile,
   return true;
 }
 
-bool readConfigPathsFile(StringRef InputFile, cl::list<std::string> &Configs,
+bool readConfigPathsFile(StringRef InputFile, std::vector<std::string> &Configs,
                          LLVMContext &Ctx, vfs::FileSystem &FS) {
   if (InputFile.empty())
     return true;

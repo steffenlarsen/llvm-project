@@ -28,7 +28,7 @@ struct BranchProbabilityInfoTest : public testing::Test {
   std::unique_ptr<BranchProbabilityInfo> BPI;
   std::unique_ptr<DominatorTree> DT;
   std::unique_ptr<CycleInfo> CI;
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
 
   BranchProbabilityInfo &buildBPI(Function &F) {
     DT.reset(new DominatorTree(F));
@@ -100,7 +100,7 @@ TEST_F(BranchProbabilityInfoTest, SwapProbabilities) {
       ret void
     }
   )";
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Error;
   auto M = parseAssemblyString(Assembly, Error, Context);
   ASSERT_TRUE(M) << "Bad assembly?";

@@ -17,7 +17,7 @@ using namespace llvm;
 namespace {
 
 TEST(DiagnosticInfoTest, DebugMetadataKindsMatchClassof) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M("M", C);
 
   DiagnosticInfoDebugMetadataVersion Version(M, 1);

@@ -21,7 +21,9 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/ScheduleDAG.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/TargetParser/AMDGPUTargetParser.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
+#include "llvm/TargetParser/TargetParser.h"
 
 using namespace llvm;
 
@@ -35,37 +37,21 @@ STATISTIC(NumWMMANopsHoisted,
 STATISTIC(NumWMMAHoistingBailed,
           "Number of WMMA hazards where V_NOP hoisting was not possible");
 
-namespace {
-
-struct MFMAPaddingRatioParser : public cl::parser<unsigned> {
-  MFMAPaddingRatioParser(cl::Option &O) : cl::parser<unsigned>(O) {}
-
-  bool parse(cl::Option &O, StringRef ArgName, StringRef Arg, unsigned &Value) {
-    if (Arg.getAsInteger(0, Value))
-      return O.error("'" + Arg + "' value invalid for uint argument!");
-
-    if (Value > 100)
-      return O.error("'" + Arg + "' value must be in the range [0, 100]!");
-
-    return false;
-  }
-};
-
-} // end anonymous namespace
-
-static cl::opt<unsigned, false, MFMAPaddingRatioParser>
-    MFMAPaddingRatio("amdgpu-mfma-padding-ratio", cl::init(0), cl::Hidden,
-                     cl::desc("Fill a percentage of the latency between "
-                              "neighboring MFMA with s_nops."));
+static unsigned getMFMAPaddingRatio(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_MFMAPaddingRatio>(
+      F.getContext().getOptionsContext());
+}
 
 // This is intended for debugging purposes only.
-static cl::opt<unsigned>
-    NopPadding("amdgpu-snop-padding", cl::init(0), cl::Hidden,
-               cl::desc("Insert a s_nop x before every instruction"));
+static unsigned getNopPadding(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_NopPadding>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> EnableWMMAVnopHoisting(
-    "amdgpu-wmma-vnop-hoisting", cl::init(true), cl::Hidden,
-    cl::desc("Hoist WMMA hazard V_NOPs from loops to preheaders"));
+static bool getEnableWMMAVnopHoisting(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_EnableWMMAVnopHoisting>(
+      F.getContext().getOptionsContext());
+}
 
 //===----------------------------------------------------------------------===//
 // Hazard Recognizer Implementation
@@ -709,7 +695,7 @@ unsigned GCNHazardRecognizer::PreEmitNoops(MachineInstr *MI) {
   unsigned W = PreEmitNoopsCommon(MI);
   fixHazards(MI);
   CurrCycleInstr = nullptr;
-  return std::max(W, NopPadding.getValue());
+  return std::max(W, getNopPadding(MF.getFunction()));
 }
 
 unsigned GCNHazardRecognizer::getHazardWaitStates(MachineInstr *MI) const {
@@ -2787,7 +2773,8 @@ bool GCNHazardRecognizer::fixWMMACoexecutionHazards(MachineInstr *MI) {
   if (WaitStatesNeeded <= 0)
     return false;
 
-  if (EnableWMMAVnopHoisting && tryHoistWMMAVnopsFromLoop(MI, WaitStatesNeeded))
+  if (getEnableWMMAVnopHoisting(MF.getFunction()) &&
+      tryHoistWMMAVnopsFromLoop(MI, WaitStatesNeeded))
     return true;
 
   emitVNops(*MI->getParent(), MI->getIterator(), WaitStatesNeeded);
@@ -2972,7 +2959,7 @@ int GCNHazardRecognizer::checkMAIHazards(MachineInstr *MI) const {
 
 int GCNHazardRecognizer::checkMFMAPadding(MachineInstr *MI) const {
   // Early exit if no padding is requested.
-  if (MFMAPaddingRatio == 0)
+  if (getMFMAPaddingRatio(MF.getFunction()) == 0)
     return 0;
 
   const SIMachineFunctionInfo *MFI = MF.getInfo<SIMachineFunctionInfo>();
@@ -2994,7 +2981,7 @@ int GCNHazardRecognizer::checkMFMAPadding(MachineInstr *MI) const {
       getWaitStatesSince(IsNeighboringMFMA, MaxMFMAPipelineWaitStates);
 
   int NeighborMFMAPaddingNeeded =
-      (NeighborMFMALatency * MFMAPaddingRatio / 100) -
+      (NeighborMFMALatency * getMFMAPaddingRatio(MF.getFunction()) / 100) -
       WaitStatesSinceNeighborMFMA;
 
   return std::max(0, NeighborMFMAPaddingNeeded);

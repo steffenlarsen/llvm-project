@@ -1,4 +1,6 @@
 add_llvm_component_library(LLVMVectorize
+  VectorizeOptionsRegistration.cpp
+  VectorizeOptionsGetters.cpp
   LoadStoreVectorizer.cpp
   LoopIdiomVectorize.cpp
   LoopVectorizationLegality.cpp
@@ -29,6 +31,7 @@ add_llvm_component_library(LLVMVectorize
   SLPVectorizer.cpp
   Vectorize.cpp
   VectorCombine.cpp
+  VectorizeOptions.cpp
   VPlan.cpp
   VPlanAnalysis.cpp
   VPlanConstruction.cpp

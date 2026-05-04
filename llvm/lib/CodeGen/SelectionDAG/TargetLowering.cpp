@@ -13711,7 +13711,8 @@ SDValue TargetLowering::expandPartialReduceMLA(SDNode *N,
 
 /// Given a store node \p StoreNode, return true if it is safe to fold that node
 /// into \p FPNode, which expands to a library call with output pointers.
-static bool canFoldStoreIntoLibCallOutputPointers(StoreSDNode *StoreNode,
+static bool canFoldStoreIntoLibCallOutputPointers(const SelectionDAG &DAG,
+                                                  StoreSDNode *StoreNode,
                                                   SDNode *FPNode) {
   SmallVector<const SDNode *, 8> Worklist;
   SmallVector<const SDNode *, 8> DeferredNodes;
@@ -13722,7 +13723,7 @@ static bool canFoldStoreIntoLibCallOutputPointers(StoreSDNode *StoreNode,
     if (Op.getNode() != FPNode)
       Worklist.push_back(Op.getNode());
 
-  unsigned MaxSteps = SelectionDAG::getHasPredecessorMaxSteps();
+  unsigned MaxSteps = DAG.getHasPredecessorMaxSteps();
   while (!Worklist.empty()) {
     const SDNode *Node = Worklist.pop_back_val();
     auto [_, Inserted] = Visited.insert(Node);
@@ -13796,7 +13797,7 @@ bool TargetLowering::expandMultipleResultFPLibCall(
     // Avoid:
     //  1. Creating cyclic dependencies.
     //  2. Expanding the node to a call within a call sequence.
-    if (!canFoldStoreIntoLibCallOutputPointers(ST, Node))
+    if (!canFoldStoreIntoLibCallOutputPointers(DAG, ST, Node))
       continue;
     ResultStores[ResNo] = ST;
     StoresInChain = ST->getChain();

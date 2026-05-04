@@ -13,20 +13,17 @@
 #include "bolt/Passes/RegAnalysis.h"
 #include "bolt/Core/BinaryFunction.h"
 #include "bolt/Core/CallGraphWalker.h"
+#include "bolt/Passes/BoltPassesOptionsOptInfos.h"
 #include "llvm/MC/MCRegisterInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 
 #define DEBUG_TYPE "ra"
 
 using namespace llvm;
 
 namespace opts {
-extern cl::opt<unsigned> Verbosity;
-extern cl::OptionCategory BoltOptCategory;
 
-cl::opt<bool> AssumeABI("assume-abi",
-                        cl::desc("assume the ABI is never violated"),
-                        cl::cat(BoltOptCategory));
+bool AssumeABI = false;
 }
 
 namespace llvm {
@@ -35,12 +32,18 @@ namespace bolt {
 RegAnalysis::RegAnalysis(BinaryContext &BC,
                          std::map<uint64_t, BinaryFunction> *BFs,
                          BinaryFunctionCallGraph *CG)
-    : BC(BC), CS(opts::AssumeABI ? ConservativeStrategy::CLOBBERS_ABI
-                                 : ConservativeStrategy::CLOBBERS_ALL) {
+    : BC(BC), CS([&]() {
+        auto *Opts =
+            bolt_passes_opts::getBoltPassesOpts(BC.getOptionsContext());
+        const bool AssumeABI =
+            Opts ? Opts->get<&clv2::BOLTPASS_AssumeABI>() : false;
+        return AssumeABI ? ConservativeStrategy::CLOBBERS_ABI
+                         : ConservativeStrategy::CLOBBERS_ALL;
+      }()) {
   if (!CG)
     return;
 
-  CallGraphWalker CGWalker(*CG);
+  CallGraphWalker CGWalker(*CG, BC.getOptionsContext());
 
   CGWalker.registerVisitor([&](BinaryFunction *Func) -> bool {
     BitVector RegsKilled = getFunctionClobberList(Func);
@@ -62,7 +65,7 @@ RegAnalysis::RegAnalysis(BinaryContext &BC,
 
   CGWalker.walk();
 
-  if (opts::Verbosity == 0) {
+  if (opts::getVerbosity(BC) == 0) {
 #ifndef NDEBUG
     if (!DebugFlag || !isCurrentDebugType(DEBUG_TYPE))
       return;

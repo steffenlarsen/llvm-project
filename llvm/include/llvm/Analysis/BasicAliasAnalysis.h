@@ -48,6 +48,12 @@ class BasicAAResult : public AAResultBase {
   /// respect the AAQI.UseDominatorTree option.
   DominatorTree *DT_;
 
+  /// Lazily cached -enable-separate-storage-analysis.  aliasCheck() consulted
+  /// it on every query; reaching it goes through the Function's LLVMContext
+  /// and an OptionsContext lookup, which the optimizer cannot hoist.
+  mutable std::optional<bool> EnableSeparateStorageAnalysisCache;
+  LLVM_ABI bool enableSeparateStorageAnalysis() const;
+
   DominatorTree *getDT(const AAQueryInfo &AAQI) const {
     return AAQI.UseDominatorTree ? DT_ : nullptr;
   }

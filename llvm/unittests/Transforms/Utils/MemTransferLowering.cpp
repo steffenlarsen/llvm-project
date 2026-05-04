@@ -24,6 +24,7 @@
 #include "llvm/Transforms/Utils/LowerMemIntrinsics.h"
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
 
+#include "llvm/Support/OptionsContext.h"
 #include "gtest/gtest-spi.h"
 #include "gtest/gtest.h"
 
@@ -41,13 +42,13 @@ struct ForwardingPass : public OptionalPassInfoMixin<ForwardingPass> {
 };
 
 struct MemTransferLowerTest : public testing::Test {
-  PassBuilder PB;
+  PassBuilder PB{llvm::clv2::defaultOptionsContext()};
   LoopAnalysisManager LAM;
   FunctionAnalysisManager FAM;
   CGSCCAnalysisManager CGAM;
   ModuleAnalysisManager MAM;
   ModulePassManager MPM;
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M;
 
   MemTransferLowerTest() {

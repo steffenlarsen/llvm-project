@@ -1080,7 +1080,9 @@ bool ClauseProcessor::processAffinity(
                                                       mlir::omp::MapBoundsType>(
                     converter, builder, semaCtx, stmtCtx, *object.sym(),
                     object.ref(), clauseLocation, asFortran, bounds,
-                    treatIndexAsSection);
+                    llvm::clv2::getOptValOrDefault<
+                        &llvm::clv2::FLANG_OpenMPTreatIndexAsSection>(
+                        converter.getMLIRContext().getOptionsContext()));
             mlir::Value len =
                 genAffinityLen(builder, clauseLocation, builder.getDataLayout(),
                                hlfir::Entity{info.addr}, bounds);
@@ -1879,7 +1881,9 @@ void ClauseProcessor::processMapObjects(
                                               mlir::omp::MapBoundsType>(
             converter, firOpBuilder, semaCtx, stmtCtx, *object.sym(),
             object.ref(), clauseLocation, asFortran, bounds,
-            treatIndexAsSection);
+            llvm::clv2::getOptValOrDefault<
+                &llvm::clv2::FLANG_OpenMPTreatIndexAsSection>(
+                converter.getMLIRContext().getOptionsContext()));
 
     mlir::Value baseOp = info.rawInput;
     if (object.sym()->owner().IsDerivedType() && !isMotionModifier) {

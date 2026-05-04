@@ -18,9 +18,11 @@
 #include "../ClangTidy.h"
 #include "../ClangTidyForceLinker.h" // IWYU pragma: keep
 #include "../GlobList.h"
+#include "clang-tools-extra/ClangToolsExtraOptionsOptInfos.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "llvm/ADT/StringSet.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/PluginLoader.h" // IWYU pragma: keep
 #include "llvm/Support/Process.h"
@@ -33,17 +35,16 @@
 using namespace clang::tooling;
 using namespace llvm;
 
-static cl::desc desc(StringRef Description) { return {Description.ltrim()}; }
-
 static cl::OptionCategory ClangTidyCategory("clang-tidy options");
+static constexpr clv2::OptionCategory
+    Clv2ClangTidyCategory("clang-tidy options");
 
-static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
-static cl::extrahelp ClangTidyParameterFileHelp(R"(
+static constexpr llvm::StringLiteral ClangTidyParameterFileHelpText{R"(
 Parameters files:
   A large number of options or source files can be passed as parameter files
   by use '@parameter-file' in the command line.
-)");
-static cl::extrahelp ClangTidyHelp(R"(
+)"};
+static constexpr llvm::StringLiteral ClangTidyHelpText{R"(
 Configuration files:
   clang-tidy attempts to read configuration for each source file from a
   .clang-tidy file located in the closest parent directory of the source
@@ -102,270 +103,151 @@ Configuration files:
       some-check.SomeOption: 'some value'
     ...
 
-)");
+)"};
 
 const char DefaultChecks[] = // Enable these checks by default:
     "clang-diagnostic-*";    //   * compiler diagnostics
 
-static cl::opt<std::string> Checks("checks", desc(R"(
-Comma-separated list of globs with optional '-'
-prefix. Globs are processed in order of
-appearance in the list. Globs without '-'
-prefix add checks with matching names to the
-set, globs with the '-' prefix remove checks
-with matching names from the set of enabled
-checks. This option's value is appended to the
-value of the 'Checks' option in .clang-tidy
-file, if any.
-)"),
-                                   cl::init(""), cl::cat(ClangTidyCategory));
+namespace {
+struct ClangTidyToolOptions {
+  std::string Checks;
+  bool ChecksSet = false;
+  std::string WarningsAsErrors;
+  bool WarningsAsErrorsSet = false;
+  std::string HeaderFilter = ".*";
+  bool HeaderFilterSet = false;
+  std::string ExcludeHeaderFilter;
+  bool ExcludeHeaderFilterSet = false;
+  bool SystemHeaders = false;
+  bool SystemHeadersSet = false;
+  std::string LineFilter;
+  bool Fix = false;
+  bool FixErrors = false;
+  bool FixNotes = false;
+  std::string FormatStyle = "none";
+  bool FormatStyleSet = false;
+  bool ListChecks = false;
+  bool ExplainConfig = false;
+  std::string Config;
+  bool ConfigSet = false;
+  std::string ConfigFile;
+  bool ConfigFileSet = false;
+  bool DumpConfig = false;
+  bool EnableCheckProfile = false;
+  std::string StoreCheckProfile;
+  bool AllowEnablingAnalyzerAlphaCheckers = false;
+  bool EnableModuleHeadersParsing = false;
+  std::string ExportFixes;
+  bool Quiet = false;
+  std::string VfsOverlay;
+  bool UseColor = false;
+  bool UseColorSet = false;
+  bool VerifyConfig = false;
+  bool AllowNoChecks = false;
+  bool ExperimentalCustomChecks = false;
+  std::vector<std::string> RemovedArgs;
+  bool RemovedArgsSet = false;
+};
+} // namespace
 
-static cl::opt<std::string> WarningsAsErrors("warnings-as-errors", desc(R"(
-Upgrades warnings to errors. Same format as
-'-checks'.
-This option's value is appended to the value of
-the 'WarningsAsErrors' option in .clang-tidy
-file, if any.
-)"),
-                                             cl::init(""),
-                                             cl::cat(ClangTidyCategory));
+inline constexpr clv2::OptionsRegistry<
+    &clv2::CTE_CT_Checks, &clv2::CTE_CT_WarningsAsErrors,
+    &clv2::CTE_CT_HeaderFilter, &clv2::CTE_CT_ExcludeHeaderFilter,
+    &clv2::CTE_CT_SystemHeaders, &clv2::CTE_CT_LineFilter, &clv2::CTE_CT_Fix,
+    &clv2::CTE_CT_FixErrors, &clv2::CTE_CT_FixNotes, &clv2::CTE_CT_FormatStyle,
+    &clv2::CTE_CT_ListChecks, &clv2::CTE_CT_ExplainConfig, &clv2::CTE_CT_Config,
+    &clv2::CTE_CT_ConfigFile, &clv2::CTE_CT_DumpConfig,
+    &clv2::CTE_CT_EnableCheckProfile, &clv2::CTE_CT_StoreCheckProfile,
+    &clv2::CTE_CT_AllowEnablingAnalyzerAlphaCheckers,
+    &clv2::CTE_CT_EnableModuleHeadersParsing, &clv2::CTE_CT_ExportFixes,
+    &clv2::CTE_CT_Quiet, &clv2::CTE_CT_VfsOverlay, &clv2::CTE_CT_UseColor,
+    &clv2::CTE_CT_VerifyConfig, &clv2::CTE_CT_AllowNoChecks,
+    &clv2::CTE_CT_ExperimentalCustomChecks, &clv2::CTE_CT_RemovedArgs>
+    ToolOptsReg;
 
-static cl::opt<std::string> HeaderFilter("header-filter", desc(R"(
-Regular expression matching the names of the
-headers to output diagnostics from. The default
-value is '.*', i.e. diagnostics from all non-system
-headers are displayed by default. Diagnostics
-from the main file of each translation unit are
-always displayed.
-Can be used together with -line-filter.
-This option overrides the 'HeaderFilterRegex'
-option in .clang-tidy file, if any.
-)"),
-                                         cl::init(".*"),
-                                         cl::cat(ClangTidyCategory));
+static void applyToolOpts(const decltype(ToolOptsReg)::ParsedOptionsT &Parsed,
+                          ClangTidyToolOptions &Opts) {
+  Opts.Checks = Parsed.get<&clv2::CTE_CT_Checks>();
+  Opts.ChecksSet = Parsed.specified<&clv2::CTE_CT_Checks>();
+  Opts.WarningsAsErrors = Parsed.get<&clv2::CTE_CT_WarningsAsErrors>();
+  Opts.WarningsAsErrorsSet = Parsed.specified<&clv2::CTE_CT_WarningsAsErrors>();
+  Opts.HeaderFilter = Parsed.get<&clv2::CTE_CT_HeaderFilter>();
+  Opts.HeaderFilterSet = Parsed.specified<&clv2::CTE_CT_HeaderFilter>();
+  Opts.ExcludeHeaderFilter = Parsed.get<&clv2::CTE_CT_ExcludeHeaderFilter>();
+  Opts.ExcludeHeaderFilterSet =
+      Parsed.specified<&clv2::CTE_CT_ExcludeHeaderFilter>();
+  Opts.SystemHeaders = Parsed.get<&clv2::CTE_CT_SystemHeaders>();
+  Opts.SystemHeadersSet = Parsed.specified<&clv2::CTE_CT_SystemHeaders>();
+  Opts.LineFilter = Parsed.get<&clv2::CTE_CT_LineFilter>();
+  Opts.Fix = Parsed.get<&clv2::CTE_CT_Fix>();
+  Opts.FixErrors = Parsed.get<&clv2::CTE_CT_FixErrors>();
+  Opts.FixNotes = Parsed.get<&clv2::CTE_CT_FixNotes>();
+  Opts.FormatStyle = Parsed.get<&clv2::CTE_CT_FormatStyle>();
+  Opts.FormatStyleSet = Parsed.specified<&clv2::CTE_CT_FormatStyle>();
+  Opts.ListChecks = Parsed.get<&clv2::CTE_CT_ListChecks>();
+  Opts.ExplainConfig = Parsed.get<&clv2::CTE_CT_ExplainConfig>();
+  Opts.Config = Parsed.get<&clv2::CTE_CT_Config>();
+  Opts.ConfigSet = Parsed.specified<&clv2::CTE_CT_Config>();
+  Opts.ConfigFile = Parsed.get<&clv2::CTE_CT_ConfigFile>();
+  Opts.ConfigFileSet = Parsed.specified<&clv2::CTE_CT_ConfigFile>();
+  Opts.DumpConfig = Parsed.get<&clv2::CTE_CT_DumpConfig>();
+  Opts.EnableCheckProfile = Parsed.get<&clv2::CTE_CT_EnableCheckProfile>();
+  Opts.StoreCheckProfile = Parsed.get<&clv2::CTE_CT_StoreCheckProfile>();
+  Opts.AllowEnablingAnalyzerAlphaCheckers =
+      Parsed.get<&clv2::CTE_CT_AllowEnablingAnalyzerAlphaCheckers>();
+  Opts.EnableModuleHeadersParsing =
+      Parsed.get<&clv2::CTE_CT_EnableModuleHeadersParsing>();
+  Opts.ExportFixes = Parsed.get<&clv2::CTE_CT_ExportFixes>();
+  Opts.Quiet = Parsed.get<&clv2::CTE_CT_Quiet>();
+  Opts.VfsOverlay = Parsed.get<&clv2::CTE_CT_VfsOverlay>();
+  Opts.UseColor = Parsed.get<&clv2::CTE_CT_UseColor>();
+  Opts.UseColorSet = Parsed.specified<&clv2::CTE_CT_UseColor>();
+  Opts.VerifyConfig = Parsed.get<&clv2::CTE_CT_VerifyConfig>();
+  Opts.AllowNoChecks = Parsed.get<&clv2::CTE_CT_AllowNoChecks>();
+  Opts.ExperimentalCustomChecks =
+      Parsed.get<&clv2::CTE_CT_ExperimentalCustomChecks>();
+  Opts.RemovedArgs = Parsed.get<&clv2::CTE_CT_RemovedArgs>();
+  Opts.RemovedArgsSet = Parsed.specified<&clv2::CTE_CT_RemovedArgs>();
+}
 
-static cl::opt<std::string> ExcludeHeaderFilter("exclude-header-filter",
-                                                desc(R"(
-Regular expression matching the names of the
-headers to exclude diagnostics from. Diagnostics
-from the main file of each translation unit are
-always displayed.
-Must be used together with --header-filter.
-Can be used together with -line-filter.
-This option overrides the 'ExcludeHeaderFilterRegex'
-option in .clang-tidy file, if any.
-)"),
-                                                cl::init(""),
-                                                cl::cat(ClangTidyCategory));
+// The plugin is loaded as a side effect of parsing; Callback runs once per
+// occurrence, after the value has been stored.
+static void loadTidyPlugin(const std::string &Path) {
+  llvm::PluginLoader PL;
+  PL = Path;
+}
+static constexpr clv2::OptionInfo<std::string> OI_LoadPlugin{
+    "load",
+    "Load the specified plugin",
+    clv2::value_desc("pluginfilename"),
+    clv2::ZeroOrMore,
+    clv2::cat(ClangTidyCategory),
+    clv2::Callback<std::string>{&loadTidyPlugin}};
 
-static cl::opt<bool> SystemHeaders("system-headers", desc(R"(
-Display the errors from system headers.
-This option overrides the 'SystemHeaders' option
-in .clang-tidy file, if any.
-)"),
-                                   cl::init(false), cl::cat(ClangTidyCategory));
-
-static cl::opt<std::string> LineFilter("line-filter", desc(R"(
-List of files and line ranges to output diagnostics from.
-The range is inclusive on both ends. Can be used together
-with -header-filter. The format of the list is a JSON
-array of objects. For example:
-
-  [
-    {"name":"file1.cpp","lines":[[1,3],[5,7]]},
-    {"name":"file2.h"}
-  ]
-
-This will output diagnostics from 'file1.cpp' only for
-the line ranges [1,3] and [5,7], as well as all from the
-entire 'file2.h'.
-)"),
-                                       cl::init(""),
-                                       cl::cat(ClangTidyCategory));
-
-static cl::opt<bool> Fix("fix", desc(R"(
-Apply suggested fixes. Without -fix-errors
-clang-tidy will bail out if any compilation
-errors were found.
-)"),
-                         cl::init(false), cl::cat(ClangTidyCategory));
-
-static cl::opt<bool> FixErrors("fix-errors", desc(R"(
-Apply suggested fixes even if compilation
-errors were found. If compiler errors have
-attached fix-its, clang-tidy will apply them as
-well.
-)"),
-                               cl::init(false), cl::cat(ClangTidyCategory));
-
-static cl::opt<bool> FixNotes("fix-notes", desc(R"(
-If a warning has no fix, but a single fix can
-be found through an associated diagnostic note,
-apply the fix.
-Specifying this flag will implicitly enable the
-'--fix' flag.
-)"),
-                              cl::init(false), cl::cat(ClangTidyCategory));
-
-static cl::opt<std::string> FormatStyle("format-style", desc(R"(
-Style for formatting code around applied fixes:
-  - 'none' (default) turns off formatting
-  - 'file' (literally 'file', not a placeholder)
-    uses .clang-format file in the closest parent
-    directory
-  - '{ <json> }' specifies options inline, e.g.
-    -format-style='{BasedOnStyle: llvm, IndentWidth: 8}'
-  - 'llvm', 'google', 'webkit', 'mozilla'
-See clang-format documentation for the up-to-date
-information about formatting styles and options.
-This option overrides the 'FormatStyle` option in
-.clang-tidy file, if any.
-)"),
-                                        cl::init("none"),
-                                        cl::cat(ClangTidyCategory));
-
-static cl::opt<bool> ListChecks("list-checks", desc(R"(
-List all enabled checks and exit. Use with
--checks=* to list all available checks.
-)"),
-                                cl::init(false), cl::cat(ClangTidyCategory));
-
-static cl::opt<bool> ExplainConfig("explain-config", desc(R"(
-For each enabled check explains, where it is
-enabled, i.e. in clang-tidy binary, command
-line or a specific configuration file.
-)"),
-                                   cl::init(false), cl::cat(ClangTidyCategory));
-
-static cl::opt<std::string> Config("config", desc(R"(
-Specifies a configuration in YAML/JSON format:
-  -config="{Checks: '*',
-            CheckOptions: {x: y}}"
-When the value is empty, clang-tidy will
-attempt to find a file named .clang-tidy for
-each source file in its parent directories.
-)"),
-                                   cl::init(""), cl::cat(ClangTidyCategory));
-
-static cl::opt<std::string> ConfigFile("config-file", desc(R"(
-Specify the path of .clang-tidy or custom config file:
- e.g. --config-file=/some/path/myTidyConfigFile
-This option internally works exactly the same way as
- --config option after reading specified config file.
-Use either --config-file or --config, not both.
-)"),
-                                       cl::init(""),
-                                       cl::cat(ClangTidyCategory));
-
-static cl::opt<bool> DumpConfig("dump-config", desc(R"(
-Dumps configuration in the YAML format to
-stdout. This option can be used along with a
-file name (and '--' if the file is outside of a
-project with configured compilation database).
-The configuration used for this file will be
-printed.
-Use along with -checks=* to include
-configuration of all checks.
-)"),
-                                cl::init(false), cl::cat(ClangTidyCategory));
-
-static cl::opt<bool> EnableCheckProfile("enable-check-profile", desc(R"(
-Enable per-check timing profiles, and print a
-report to stderr.
-)"),
-                                        cl::init(false),
-                                        cl::cat(ClangTidyCategory));
-
-static cl::opt<std::string> StoreCheckProfile("store-check-profile", desc(R"(
-By default reports are printed in tabulated
-format to stderr. When this option is passed,
-these per-TU profiles are instead stored as JSON.
-)"),
-                                              cl::value_desc("prefix"),
-                                              cl::cat(ClangTidyCategory));
-
-/// This option allows enabling the experimental alpha checkers from the static
-/// analyzer. This option is set to false and not visible in help, because it is
-/// highly not recommended for users.
-static cl::opt<bool>
-    AllowEnablingAnalyzerAlphaCheckers("allow-enabling-analyzer-alpha-checkers",
-                                       cl::init(false), cl::Hidden,
-                                       cl::cat(ClangTidyCategory));
-
-static cl::opt<bool> EnableModuleHeadersParsing("enable-module-headers-parsing",
-                                                desc(R"(
-Enables preprocessor-level module header parsing
-for C++20 and above, empowering specific checks
-to detect macro definitions within modules. This
-feature may cause performance and parsing issues
-and is therefore considered experimental.
-)"),
-                                                cl::init(false),
-                                                cl::cat(ClangTidyCategory));
-
-static cl::opt<std::string> ExportFixes("export-fixes", desc(R"(
-YAML file to store suggested fixes in. The
-stored fixes can be applied to the input source
-code with clang-apply-replacements.
-)"),
-                                        cl::value_desc("filename"),
-                                        cl::cat(ClangTidyCategory));
-
-static cl::opt<bool> Quiet("quiet", desc(R"(
-Run clang-tidy in quiet mode. This suppresses
-printing statistics about ignored warnings and
-warnings treated as errors if the respective
-options are specified.
-)"),
-                           cl::init(false), cl::cat(ClangTidyCategory));
-
-static cl::opt<std::string> VfsOverlay("vfsoverlay", desc(R"(
-Overlay the virtual filesystem described by file
-over the real file system.
-)"),
-                                       cl::value_desc("filename"),
-                                       cl::cat(ClangTidyCategory));
-
-static cl::opt<bool> UseColor("use-color", desc(R"(
-Use colors in diagnostics. If not set, colors
-will be used if the terminal connected to
-standard output supports colors.
-This option overrides the 'UseColor' option in
-.clang-tidy file, if any.
-)"),
-                              cl::init(false), cl::cat(ClangTidyCategory));
-
-static cl::opt<bool> VerifyConfig("verify-config", desc(R"(
-Check the config files to ensure each check and
-option is recognized without running any checks.
-)"),
-                                  cl::init(false), cl::cat(ClangTidyCategory));
-
-static cl::opt<bool> AllowNoChecks("allow-no-checks", desc(R"(
-Allow empty enabled checks. This suppresses
-the "no checks enabled" error when disabling
-all of the checks.
-)"),
-                                   cl::init(false), cl::cat(ClangTidyCategory));
-
-static cl::opt<bool> ExperimentalCustomChecks("experimental-custom-checks",
-                                              desc(R"(
-Enable experimental clang-query based
-custom checks.
-see https://clang.llvm.org/extra/clang-tidy/QueryBasedCustomChecks.html.
-)"),
-                                              cl::init(false),
-                                              cl::cat(ClangTidyCategory));
-
-static cl::list<std::string> RemovedArgs("removed-arg", desc(R"(
-List of arguments to remove from the command
-line sent to the compiler. Please note that
-removing arguments might change the semantic
-of the analyzed code, possibly leading to
-compiler errors, false positives or
-false negatives. This option is applied 
-before --extra-arg and --extra-arg-before)"),
-                                         cl::cat(ClangTidyCategory));
+static void configureParser(clv2::OptionParser &P, ClangTidyToolOptions &Opts,
+                            std::string &LoadedPluginPath,
+                            unsigned &LoadPluginCount) {
+  using ParsedT = decltype(ToolOptsReg)::ParsedOptionsT;
+  auto *Storage = new ParsedT();
+  decltype(ToolOptsReg)::applyDefaultsTo(*Storage);
+  std::vector<clv2::detail::OptionEntry> Entries;
+  std::vector<clv2::detail::AliasEntry> Aliases;
+  std::vector<clv2::detail::SubCommandSpec> SubSpecs;
+  decltype(ToolOptsReg)::staticBuildInto(*Storage, Entries, Aliases, SubSpecs);
+  for (auto &E : Entries) {
+    if (!E.Cat)
+      E.Cat = &ClangTidyCategory;
+    P.addDynamicEntry(std::move(E));
+  }
+  clv2::registerDynamicPostParseCallback(
+      [Storage, &Opts]() { applyToolOpts(*Storage, Opts); });
+  std::string FullExtraHelp = clang::tooling::CommonOptionsParser::HelpMessage;
+  FullExtraHelp += ClangTidyParameterFileHelpText;
+  FullExtraHelp += ClangTidyHelpText;
+  P.setExtraHelp(FullExtraHelp);
+  P.addDynamicEntry(
+      clv2::makeEntry<&OI_LoadPlugin>(LoadedPluginPath, LoadPluginCount));
+}
 
 namespace clang::tidy {
 
@@ -398,43 +280,46 @@ static void printStats(const ClangTidyStats &Stats) {
 }
 
 static std::unique_ptr<ClangTidyOptionsProvider>
-createOptionsProvider(llvm::IntrusiveRefCntPtr<vfs::FileSystem> FS) {
+createOptionsProvider(llvm::IntrusiveRefCntPtr<vfs::FileSystem> FS,
+                      const CommonOptionsParser &OptionsParser,
+                      const ClangTidyToolOptions &Opts) {
   ClangTidyGlobalOptions GlobalOptions;
-  if (const std::error_code Err = parseLineFilter(LineFilter, GlobalOptions)) {
+  if (const std::error_code Err =
+          parseLineFilter(Opts.LineFilter, GlobalOptions)) {
     llvm::errs() << "Invalid LineFilter: " << Err.message() << "\n\nUsage:\n";
-    llvm::cl::PrintHelpMessage(/*Hidden=*/false, /*Categorized=*/true);
+    OptionsParser.printHelp(llvm::errs());
     return nullptr;
   }
 
   ClangTidyOptions DefaultOptions;
   DefaultOptions.Checks = DefaultChecks;
   DefaultOptions.WarningsAsErrors = "";
-  DefaultOptions.HeaderFilterRegex = HeaderFilter;
-  DefaultOptions.ExcludeHeaderFilterRegex = ExcludeHeaderFilter;
-  DefaultOptions.SystemHeaders = SystemHeaders;
-  DefaultOptions.FormatStyle = FormatStyle;
+  DefaultOptions.HeaderFilterRegex = Opts.HeaderFilter;
+  DefaultOptions.ExcludeHeaderFilterRegex = Opts.ExcludeHeaderFilter;
+  DefaultOptions.SystemHeaders = Opts.SystemHeaders;
+  DefaultOptions.FormatStyle = Opts.FormatStyle;
   DefaultOptions.User = llvm::sys::Process::GetEnv("USER");
   // USERNAME is used on Windows.
   if (!DefaultOptions.User)
     DefaultOptions.User = llvm::sys::Process::GetEnv("USERNAME");
 
   ClangTidyOptions OverrideOptions;
-  if (Checks.getNumOccurrences() > 0)
-    OverrideOptions.Checks = Checks;
-  if (WarningsAsErrors.getNumOccurrences() > 0)
-    OverrideOptions.WarningsAsErrors = WarningsAsErrors;
-  if (HeaderFilter.getNumOccurrences() > 0)
-    OverrideOptions.HeaderFilterRegex = HeaderFilter;
-  if (ExcludeHeaderFilter.getNumOccurrences() > 0)
-    OverrideOptions.ExcludeHeaderFilterRegex = ExcludeHeaderFilter;
-  if (SystemHeaders.getNumOccurrences() > 0)
-    OverrideOptions.SystemHeaders = SystemHeaders;
-  if (FormatStyle.getNumOccurrences() > 0)
-    OverrideOptions.FormatStyle = FormatStyle;
-  if (UseColor.getNumOccurrences() > 0)
-    OverrideOptions.UseColor = UseColor;
-  if (RemovedArgs.getNumOccurrences() > 0)
-    OverrideOptions.RemovedArgs = RemovedArgs;
+  if (Opts.ChecksSet)
+    OverrideOptions.Checks = Opts.Checks;
+  if (Opts.WarningsAsErrorsSet)
+    OverrideOptions.WarningsAsErrors = Opts.WarningsAsErrors;
+  if (Opts.HeaderFilterSet)
+    OverrideOptions.HeaderFilterRegex = Opts.HeaderFilter;
+  if (Opts.ExcludeHeaderFilterSet)
+    OverrideOptions.ExcludeHeaderFilterRegex = Opts.ExcludeHeaderFilter;
+  if (Opts.SystemHeadersSet)
+    OverrideOptions.SystemHeaders = Opts.SystemHeaders;
+  if (Opts.FormatStyleSet)
+    OverrideOptions.FormatStyle = Opts.FormatStyle;
+  if (Opts.UseColorSet)
+    OverrideOptions.UseColor = Opts.UseColor;
+  if (Opts.RemovedArgsSet)
+    OverrideOptions.RemovedArgs = Opts.RemovedArgs;
 
   const auto LoadConfig =
       [&](StringRef Configuration,
@@ -451,26 +336,26 @@ createOptionsProvider(llvm::IntrusiveRefCntPtr<vfs::FileSystem> FS) {
     return nullptr;
   };
 
-  if (ConfigFile.getNumOccurrences() > 0) {
-    if (Config.getNumOccurrences() > 0) {
+  if (Opts.ConfigFileSet) {
+    if (Opts.ConfigSet) {
       llvm::errs() << "Error: --config-file and --config are "
                       "mutually exclusive. Specify only one.\n";
       return nullptr;
     }
 
     llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> Text =
-        llvm::MemoryBuffer::getFile(ConfigFile);
+        llvm::MemoryBuffer::getFile(Opts.ConfigFile);
     if (const std::error_code EC = Text.getError()) {
-      llvm::errs() << "Error: can't read config-file '" << ConfigFile
+      llvm::errs() << "Error: can't read config-file '" << Opts.ConfigFile
                    << "': " << EC.message() << "\n";
       return nullptr;
     }
 
-    return LoadConfig((*Text)->getBuffer(), ConfigFile);
+    return LoadConfig((*Text)->getBuffer(), Opts.ConfigFile);
   }
 
-  if (Config.getNumOccurrences() > 0)
-    return LoadConfig(Config, "<command-line-config>");
+  if (Opts.ConfigSet)
+    return LoadConfig(Opts.Config, "<command-line-config>");
 
   return std::make_unique<FileOptionsProvider>(
       std::move(GlobalOptions), std::move(DefaultOptions),
@@ -590,13 +475,14 @@ static SmallString<256> makeAbsolute(StringRef Input) {
   return AbsolutePath;
 }
 
-static llvm::IntrusiveRefCntPtr<vfs::OverlayFileSystem> createBaseFS() {
+static llvm::IntrusiveRefCntPtr<vfs::OverlayFileSystem>
+createBaseFS(const ClangTidyToolOptions &Opts) {
   llvm::IntrusiveRefCntPtr<vfs::OverlayFileSystem> BaseFS(
       new vfs::OverlayFileSystem(vfs::getRealFileSystem()));
 
-  if (!VfsOverlay.empty()) {
+  if (!Opts.VfsOverlay.empty()) {
     IntrusiveRefCntPtr<vfs::FileSystem> VfsFromFile =
-        getVfsFromFile(VfsOverlay, *BaseFS);
+        getVfsFromFile(Opts.VfsOverlay, *BaseFS);
     if (!VfsFromFile)
       return nullptr;
     BaseFS->pushOverlay(std::move(VfsFromFile));
@@ -622,29 +508,33 @@ int clangTidyMain(int argc, const char **argv) {
   argc = static_cast<int>(Args.size());
   argv = Args.data();
 
-  // Enable help for -load option, if plugins are enabled.
-  if (cl::Option *LoadOpt = cl::getRegisteredOptions().lookup("load"))
-    LoadOpt->addCategory(ClangTidyCategory);
-
+  ClangTidyToolOptions Opts;
+  std::string LoadedPluginPath;
+  unsigned LoadPluginCount = 0;
   llvm::Expected<CommonOptionsParser> OptionsParser =
-      CommonOptionsParser::create(argc, argv, ClangTidyCategory,
-                                  cl::ZeroOrMore);
+      CommonOptionsParser::create(
+          argc, argv, ClangTidyCategory,
+          [&](clv2::OptionParser &P) {
+            configureParser(P, Opts, LoadedPluginPath, LoadPluginCount);
+          },
+          cl::ZeroOrMore);
   if (!OptionsParser) {
     llvm::WithColor::error() << llvm::toString(OptionsParser.takeError());
     return 1;
   }
 
   const llvm::IntrusiveRefCntPtr<vfs::OverlayFileSystem> BaseFS =
-      createBaseFS();
+      createBaseFS(Opts);
   if (!BaseFS)
     return 1;
 
-  auto OwningOptionsProvider = createOptionsProvider(BaseFS);
+  auto OwningOptionsProvider =
+      createOptionsProvider(BaseFS, *OptionsParser, Opts);
   auto *OptionsProvider = OwningOptionsProvider.get();
   if (!OptionsProvider)
     return 1;
 
-  const SmallString<256> ProfilePrefix = makeAbsolute(StoreCheckProfile);
+  const SmallString<256> ProfilePrefix = makeAbsolute(Opts.StoreCheckProfile);
 
   StringRef FileName("dummy");
   auto PathList = OptionsParser->getSourcePathList();
@@ -655,10 +545,10 @@ int clangTidyMain(int argc, const char **argv) {
   ClangTidyOptions EffectiveOptions = OptionsProvider->getOptions(FilePath);
 
   const std::vector<std::string> EnabledChecks =
-      getCheckNames(EffectiveOptions, AllowEnablingAnalyzerAlphaCheckers,
-                    ExperimentalCustomChecks);
+      getCheckNames(EffectiveOptions, Opts.AllowEnablingAnalyzerAlphaCheckers,
+                    Opts.ExperimentalCustomChecks);
 
-  if (ExplainConfig) {
+  if (Opts.ExplainConfig) {
     // FIXME: Show other ClangTidyOptions' fields, like ExtraArg.
     std::vector<ClangTidyOptionsProvider::OptionsSource> RawOptions =
         OptionsProvider->getRawOptions(FilePath);
@@ -674,8 +564,8 @@ int clangTidyMain(int argc, const char **argv) {
     return 0;
   }
 
-  if (ListChecks) {
-    if (EnabledChecks.empty() && !AllowNoChecks) {
+  if (Opts.ListChecks) {
+    if (EnabledChecks.empty() && !Opts.AllowNoChecks) {
       llvm::errs() << "No checks enabled.\n";
       return 1;
     }
@@ -686,10 +576,10 @@ int clangTidyMain(int argc, const char **argv) {
     return 0;
   }
 
-  if (DumpConfig) {
-    EffectiveOptions.CheckOptions =
-        getCheckOptions(EffectiveOptions, AllowEnablingAnalyzerAlphaCheckers,
-                        ExperimentalCustomChecks);
+  if (Opts.DumpConfig) {
+    EffectiveOptions.CheckOptions = getCheckOptions(
+        EffectiveOptions, Opts.AllowEnablingAnalyzerAlphaCheckers,
+        Opts.ExperimentalCustomChecks);
     ClangTidyOptions OptionsToDump =
         ClangTidyOptions::getDefaults().merge(EffectiveOptions, 0);
     filterCheckOptions(OptionsToDump, EnabledChecks);
@@ -697,11 +587,11 @@ int clangTidyMain(int argc, const char **argv) {
     return 0;
   }
 
-  if (VerifyConfig) {
+  if (Opts.VerifyConfig) {
     const std::vector<ClangTidyOptionsProvider::OptionsSource> RawOptions =
         OptionsProvider->getRawOptions(FileName);
     const ChecksAndOptions Valid = getAllChecksAndOptions(
-        AllowEnablingAnalyzerAlphaCheckers, ExperimentalCustomChecks);
+        Opts.AllowEnablingAnalyzerAlphaCheckers, Opts.ExperimentalCustomChecks);
     bool AnyInvalid = false;
     for (const auto &[Opts, Source] : RawOptions) {
       if (Opts.Checks)
@@ -718,15 +608,15 @@ int clangTidyMain(int argc, const char **argv) {
     return 0;
   }
 
-  if (EnabledChecks.empty() && !AllowNoChecks) {
+  if (EnabledChecks.empty() && !Opts.AllowNoChecks) {
     llvm::errs() << "Error: no checks enabled.\n";
-    llvm::cl::PrintHelpMessage(/*Hidden=*/false, /*Categorized=*/true);
+    OptionsParser->printHelp(llvm::errs());
     return 1;
   }
 
   if (PathList.empty()) {
     llvm::errs() << "Error: no input files specified.\n";
-    llvm::cl::PrintHelpMessage(/*Hidden=*/false, /*Categorized=*/true);
+    OptionsParser->printHelp(llvm::errs());
     return 1;
   }
 
@@ -735,30 +625,31 @@ int clangTidyMain(int argc, const char **argv) {
   llvm::InitializeAllAsmParsers();
 
   ClangTidyContext Context(
-      std::move(OwningOptionsProvider), AllowEnablingAnalyzerAlphaCheckers,
-      EnableModuleHeadersParsing, ExperimentalCustomChecks);
+      std::move(OwningOptionsProvider), Opts.AllowEnablingAnalyzerAlphaCheckers,
+      Opts.EnableModuleHeadersParsing, Opts.ExperimentalCustomChecks);
   std::vector<ClangTidyError> Errors =
       runClangTidy(Context, OptionsParser->getCompilations(), PathList, BaseFS,
-                   FixNotes, EnableCheckProfile, ProfilePrefix, Quiet);
+                   Opts.FixNotes, OptionsParser->getOptionsContext(),
+                   Opts.EnableCheckProfile, ProfilePrefix, Opts.Quiet);
   const bool FoundErrors = llvm::any_of(Errors, [](const ClangTidyError &E) {
     return E.DiagLevel == ClangTidyError::Error;
   });
 
   // --fix-errors and --fix-notes imply --fix.
-  const FixBehaviour Behaviour = FixNotes             ? FB_FixNotes
-                                 : (Fix || FixErrors) ? FB_Fix
-                                                      : FB_NoFix;
+  const FixBehaviour Behaviour = Opts.FixNotes                  ? FB_FixNotes
+                                 : (Opts.Fix || Opts.FixErrors) ? FB_Fix
+                                                                : FB_NoFix;
 
-  const bool DisableFixes = FoundErrors && !FixErrors;
+  const bool DisableFixes = FoundErrors && !Opts.FixErrors;
 
   unsigned WErrorCount = 0;
 
   handleErrors(Errors, Context, DisableFixes ? FB_NoFix : Behaviour,
                WErrorCount, BaseFS);
 
-  if (!ExportFixes.empty() && !Errors.empty()) {
+  if (!Opts.ExportFixes.empty() && !Errors.empty()) {
     std::error_code EC;
-    llvm::raw_fd_ostream OS(ExportFixes, EC, llvm::sys::fs::OF_None);
+    llvm::raw_fd_ostream OS(Opts.ExportFixes, EC, llvm::sys::fs::OF_None);
     if (EC) {
       llvm::errs() << "Error opening output file: " << EC.message() << '\n';
       return 1;
@@ -766,7 +657,7 @@ int clangTidyMain(int argc, const char **argv) {
     exportReplacements(FilePath.str(), Errors, OS);
   }
 
-  if (!Quiet) {
+  if (!Opts.Quiet) {
     printStats(Context.getStats());
     if (DisableFixes && Behaviour != FB_NoFix)
       llvm::errs()
@@ -775,7 +666,7 @@ int clangTidyMain(int argc, const char **argv) {
   }
 
   if (WErrorCount) {
-    if (!Quiet) {
+    if (!Opts.Quiet) {
       const StringRef Plural = WErrorCount == 1 ? "" : "s";
       llvm::errs() << WErrorCount << " warning" << Plural << " treated as error"
                    << Plural << "\n";
@@ -789,9 +680,9 @@ int clangTidyMain(int argc, const char **argv) {
     //   b. when a fix has been applied for all errors
     //   c. some other condition.
     // For now always returning zero when -fix-errors is used.
-    if (FixErrors)
+    if (Opts.FixErrors)
       return 0;
-    if (!Quiet)
+    if (!Opts.Quiet)
       llvm::errs() << "Found compiler error(s).\n";
     return 1;
   }

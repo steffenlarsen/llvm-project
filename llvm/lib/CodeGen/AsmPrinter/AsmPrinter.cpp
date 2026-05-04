@@ -28,6 +28,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Analysis/ConstantFolding.h"
@@ -38,6 +39,7 @@
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/CodeGen/AsmPrinterAnalysis.h"
 #include "llvm/CodeGen/BasicBlockSectionsProfileReader.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/GCMetadata.h"
 #include "llvm/CodeGen/GCMetadataPrinter.h"
 #include "llvm/CodeGen/InsertCodePrefetch.h"
@@ -115,12 +117,13 @@
 #include "llvm/Pass.h"
 #include "llvm/Remarks/RemarkStreamer.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/VCSRevision.h"
 #include "llvm/Support/VirtualFileSystem.h"
@@ -143,63 +146,47 @@ using namespace llvm;
 
 #define DEBUG_TYPE "asm-printer"
 
-// This is a replication of fields of object::PGOAnalysisMap::Features. It
-// should match the order of the fields so that
-// `object::PGOAnalysisMap::Features::decode(PgoAnalysisMapFeatures.getBits())`
-// succeeds.
-enum class PGOMapFeaturesEnum {
-  None,
-  FuncEntryCount,
-  BBFreq,
-  BrProb,
-  PropellerCFG,
-  All,
-};
-static cl::bits<PGOMapFeaturesEnum> PgoAnalysisMapFeatures(
-    "pgo-analysis-map", cl::Hidden, cl::CommaSeparated,
-    cl::values(
-        clEnumValN(PGOMapFeaturesEnum::None, "none", "Disable all options"),
-        clEnumValN(PGOMapFeaturesEnum::FuncEntryCount, "func-entry-count",
-                   "Function Entry Count"),
-        clEnumValN(PGOMapFeaturesEnum::BBFreq, "bb-freq",
-                   "Basic Block Frequency"),
-        clEnumValN(PGOMapFeaturesEnum::BrProb, "br-prob", "Branch Probability"),
-        clEnumValN(PGOMapFeaturesEnum::All, "all", "Enable all options")),
-    cl::desc(
-        "Enable extended information within the SHT_LLVM_BB_ADDR_MAP that is "
-        "extracted from PGO related analysis."));
+using clv2::PGOMapFeaturesEnum;
 
-static cl::opt<bool> PgoAnalysisMapEmitBBSectionsCfg(
-    "pgo-analysis-map-emit-bb-sections-cfg",
-    cl::desc("Enable the post-link cfg information from the basic block "
-             "sections profile in the PGO analysis map"),
-    cl::Hidden, cl::init(false));
+static unsigned getPgoAnalysisMapFeaturesBits(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::CGPassAsmPrintReg,
+                           &clv2::CGPASS_PgoAnalysisMap>(Ctx, 0);
+}
 
-static cl::opt<bool> BBAddrMapSkipEmitBBEntries(
-    "basic-block-address-map-skip-bb-entries",
-    cl::desc("Skip emitting basic block entries in the SHT_LLVM_BB_ADDR_MAP "
-             "section. It's used to save binary size when BB entries are "
-             "unnecessary for some PGOAnalysisMap features."),
-    cl::Hidden, cl::init(false));
+struct PgoAnalysisMapFeaturesAccessor {
+  bool isSet(PGOMapFeaturesEnum E, const clv2::OptionsContext &Ctx) const {
+    return (getPgoAnalysisMapFeaturesBits(Ctx) &
+            (1u << static_cast<unsigned>(E))) != 0;
+  }
+  unsigned getBits(const clv2::OptionsContext &Ctx) const {
+    return getPgoAnalysisMapFeaturesBits(Ctx);
+  }
+} PgoAnalysisMapFeatures;
 
-static cl::opt<bool> EmitJumpTableSizesSection(
-    "emit-jump-table-sizes-section",
-    cl::desc("Emit a section containing jump table addresses and sizes"),
-    cl::Hidden, cl::init(false));
+static bool
+getPgoAnalysisMapEmitBbSectionsCfg(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::CGPASS_PgoAnalysisMapEmitBbSectionsCfg>(Ctx);
+}
 
-// This isn't turned on by default, since several of the scheduling models are
-// not completely accurate, and we don't want to be misleading.
-static cl::opt<bool> PrintLatency(
-    "asm-print-latency",
-    cl::desc("Print instruction latencies as verbose asm comments"), cl::Hidden,
-    cl::init(false));
+static bool
+getBasicBlockAddressMapSkipBbEntries(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::CGPASS_BasicBlockAddressMapSkipBbEntries>(Ctx);
+}
 
-static cl::opt<std::string>
-    StackUsageFile("stack-usage-file",
-                   cl::desc("Output filename for stack usage information"),
-                   cl::value_desc("filename"), cl::Hidden);
+static bool getEmitJumpTableSizesSection(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_EmitJumpTableSizesSection>(Ctx);
+}
 
-extern cl::opt<bool> EmitBBHash;
+static bool getAsmPrintLatency(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_AsmPrintLatency>(Ctx);
+}
+
+static bool getEmitBBHash(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOr<&clv2::CGPassSched2Reg, &clv2::CGPASS_EmitBbHash>(
+      Ctx, false);
+}
 
 STATISTIC(EmittedInsts, "Number of machine instrs printed");
 
@@ -521,7 +508,7 @@ void AsmPrinter::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<GCModuleInfo>();
   AU.addRequired<LazyMachineBlockFrequencyInfoPass>();
   AU.addRequired<MachineBranchProbabilityInfoWrapperPass>();
-  if (EmitBBHash)
+  if (getEmitBBHash(TM.getOptionsContext()))
     AU.addRequired<MachineBlockHashInfo>();
   AU.addUsedIfAvailable<BasicBlockSectionsProfileReaderWrapperPass>();
 }
@@ -1218,7 +1205,7 @@ static void emitComments(const MachineInstr &MI, const MCSubtargetInfo *STI,
   if (MI.getAsmPrinterFlag(MachineInstr::ReloadReuse))
     CommentOS << " Reload Reuse\n";
 
-  if (PrintLatency) {
+  if (getAsmPrintLatency(MF->getFunction().getContext().getOptionsContext())) {
     const TargetInstrInfo *TII = MF->getSubtarget().getInstrInfo();
     const MCSchedModel &SCModel = STI->getSchedModel();
     int Latency = SCModel.computeInstrLatency<MCSubtargetInfo, MCInstrInfo,
@@ -1489,36 +1476,47 @@ getBBAddrMapFeature(const MachineFunction &MF, int NumMBBSectionRanges,
                     bool HasCalls, const CFGProfile *FuncCFGProfile) {
   // Ensure that the user has not passed in additional options while also
   // specifying all or none.
-  if ((PgoAnalysisMapFeatures.isSet(PGOMapFeaturesEnum::None) ||
-       PgoAnalysisMapFeatures.isSet(PGOMapFeaturesEnum::All)) &&
-      popcount(PgoAnalysisMapFeatures.getBits()) != 1) {
+  const auto &OptsCtx = MF.getFunction().getContext().getOptionsContext();
+  if ((PgoAnalysisMapFeatures.isSet(PGOMapFeaturesEnum::None, OptsCtx) ||
+       PgoAnalysisMapFeatures.isSet(PGOMapFeaturesEnum::All, OptsCtx)) &&
+      popcount(PgoAnalysisMapFeatures.getBits(OptsCtx)) != 1) {
     MF.getFunction().getContext().emitError(
         "-pgo-analysis-map can accept only all or none with no additional "
         "values.");
   }
 
-  bool NoFeatures = PgoAnalysisMapFeatures.isSet(PGOMapFeaturesEnum::None);
-  bool AllFeatures = PgoAnalysisMapFeatures.isSet(PGOMapFeaturesEnum::All);
+  bool NoFeatures =
+      PgoAnalysisMapFeatures.isSet(PGOMapFeaturesEnum::None, OptsCtx);
+  bool AllFeatures =
+      PgoAnalysisMapFeatures.isSet(PGOMapFeaturesEnum::All, OptsCtx);
   bool FuncEntryCountEnabled =
-      AllFeatures || (!NoFeatures && PgoAnalysisMapFeatures.isSet(
-                                         PGOMapFeaturesEnum::FuncEntryCount));
+      AllFeatures ||
+      (!NoFeatures && PgoAnalysisMapFeatures.isSet(
+                          PGOMapFeaturesEnum::FuncEntryCount, OptsCtx));
   bool BBFreqEnabled =
-      AllFeatures ||
-      (!NoFeatures && PgoAnalysisMapFeatures.isSet(PGOMapFeaturesEnum::BBFreq));
+      AllFeatures || (!NoFeatures && PgoAnalysisMapFeatures.isSet(
+                                         PGOMapFeaturesEnum::BBFreq, OptsCtx));
   bool BrProbEnabled =
-      AllFeatures ||
-      (!NoFeatures && PgoAnalysisMapFeatures.isSet(PGOMapFeaturesEnum::BrProb));
-  bool PostLinkCfgEnabled = FuncCFGProfile && PgoAnalysisMapEmitBBSectionsCfg;
+      AllFeatures || (!NoFeatures && PgoAnalysisMapFeatures.isSet(
+                                         PGOMapFeaturesEnum::BrProb, OptsCtx));
+  bool PostLinkCfgEnabled =
+      FuncCFGProfile && getPgoAnalysisMapEmitBbSectionsCfg(
+                            MF.getFunction().getContext().getOptionsContext());
 
-  if ((BBFreqEnabled || BrProbEnabled) && BBAddrMapSkipEmitBBEntries) {
+  if ((BBFreqEnabled || BrProbEnabled) &&
+      getBasicBlockAddressMapSkipBbEntries(
+          MF.getFunction().getContext().getOptionsContext())) {
     MF.getFunction().getContext().emitError(
         "BB entries info is required for BBFreq and BrProb features");
   }
   return {FuncEntryCountEnabled, BBFreqEnabled, BrProbEnabled,
           MF.hasBBSections() && NumMBBSectionRanges > 1,
           // Use static_cast to avoid breakage of tests on windows.
-          static_cast<bool>(BBAddrMapSkipEmitBBEntries), HasCalls,
-          static_cast<bool>(EmitBBHash), PostLinkCfgEnabled};
+          getBasicBlockAddressMapSkipBbEntries(
+              MF.getFunction().getContext().getOptionsContext()),
+          HasCalls,
+          getEmitBBHash(MF.getFunction().getContext().getOptionsContext()),
+          PostLinkCfgEnabled};
 }
 
 void AsmPrinter::emitBBAddrMapSection(const MachineFunction &MF) {
@@ -1740,9 +1738,16 @@ void AsmPrinter::emitStackSizeSection(const MachineFunction &MF) {
 }
 
 void AsmPrinter::emitStackUsage(const MachineFunction &MF) {
-  const std::string OutputFilename =
-      !StackUsageFile.empty() ? StackUsageFile
-                              : MF.getTarget().Options.StackUsageFile;
+  // Read the option's slot directly as a StringRef.  This runs for every
+  // function, and -fstack-usage is off in the common case, so materialising a
+  // std::string here would allocate once per function to discover it is empty.
+  StringRef OptFile;
+  if (const auto *V = clv2::getView<&clv2::CGPassAsmPrintReg>(
+          MF.getFunction().getContext().getOptionsContext()))
+    OptFile = V->get<&clv2::CGPASS_StackUsageFile>();
+  StringRef OutputFilename =
+      !OptFile.empty() ? OptFile
+                       : StringRef(MF.getTarget().Options.StackUsageFile);
 
   // OutputFilename empty implies -fstack-usage is not passed.
   if (OutputFilename.empty())
@@ -2542,7 +2547,8 @@ void AsmPrinter::emitFunctionBody() {
   if (HasAnyRealCode) {
     if (MF->getTarget().Options.BBAddrMap)
       emitBBAddrMapSection(*MF);
-    else if (PgoAnalysisMapFeatures.getBits() != 0)
+    else if (PgoAnalysisMapFeatures.getBits(
+                 MF->getFunction().getContext().getOptionsContext()) != 0)
       MF->getContext().reportWarning(
           SMLoc(), "pgo-analysis-map is enabled for function " + MF->getName() +
                        " but it does not have labels");
@@ -2811,14 +2817,15 @@ void AsmPrinter::emitGlobalIFunc(Module &M, const GlobalIFunc &GI) {
 }
 
 void AsmPrinter::emitRemarksSection(remarks::RemarkStreamer &RS) {
-  if (!RS.wantsSection())
+  const auto &OptsCtx = MMI->getModule()->getContext().getOptionsContext();
+  if (!RS.wantsSection(OptsCtx))
     return;
   if (!RS.getFilename())
     return;
 
   MCSection *RemarksSection =
       OutContext.getObjectFileInfo()->getRemarksSection();
-  if (!RemarksSection && RS.needsSection()) {
+  if (!RemarksSection && RS.needsSection(OptsCtx)) {
     OutContext.reportWarning(SMLoc(), "Current object file format does not "
                                       "support remarks sections.");
   }
@@ -3499,7 +3506,8 @@ void AsmPrinter::emitJumpTableImpl(const MachineJumpTableInfo &MJTI,
                          JTBBs.size() * MJTI.getEntrySize(DL), OutContext));
   }
 
-  if (EmitJumpTableSizesSection)
+  if (getEmitJumpTableSizesSection(
+          MF->getFunction().getContext().getOptionsContext()))
     emitJumpTableSizesSection(MJTI, MF->getFunction());
 
   if (!JTInDiffSection)

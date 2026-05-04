@@ -22,11 +22,13 @@
 #include "llvm/IRPrinter/IRPrintingPasses.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Regex.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/SystemUtils.h"
 #include "llvm/Support/ToolOutputFile.h"
@@ -36,136 +38,128 @@
 #include "llvm/Transforms/IPO/GlobalDCE.h"
 #include "llvm/Transforms/IPO/StripDeadPrototypes.h"
 #include "llvm/Transforms/IPO/StripSymbols.h"
+#include "llvm/Transforms/Utils/CodeExtractor.h"
 #include <memory>
 #include <utility>
 
 using namespace llvm;
+using namespace llvm::clv2;
 
-static cl::OptionCategory ExtractCat("llvm-extract Options");
+static constexpr OptionCategory ExtractCat{"llvm-extract Options"};
 
-// InputFilename - The filename to read from.
-static cl::opt<std::string> InputFilename(cl::Positional,
-                                          cl::desc("<input bitcode file>"),
-                                          cl::init("-"),
-                                          cl::value_desc("filename"));
+static constexpr OptionInfo<std::string> InputFilename{
+    "input", "<input bitcode file>", Positional{}, Init{"-"}};
 
-static cl::opt<std::string> OutputFilename("o",
-                                           cl::desc("Specify output filename"),
-                                           cl::value_desc("filename"),
-                                           cl::init("-"), cl::cat(ExtractCat));
+static constexpr OptionInfo<std::string> OutputFilename{
+    "o", "Specify output filename", value_desc("filename"), Init{"-"},
+    cat(ExtractCat)};
 
-static cl::opt<bool> Force("f", cl::desc("Enable binary output on terminals"),
-                           cl::cat(ExtractCat));
+static constexpr OptionInfo<bool> Force{
+    "f", "Enable binary output on terminals", cat(ExtractCat)};
 
-static cl::opt<bool> DeleteFn("delete",
-                              cl::desc("Delete specified Globals from Module"),
-                              cl::cat(ExtractCat));
+static constexpr OptionInfo<bool> DeleteFn{
+    "delete", "Delete specified Globals from Module", cat(ExtractCat)};
 
-static cl::opt<bool> KeepConstInit("keep-const-init",
-                              cl::desc("Keep initializers of constants"),
-                              cl::cat(ExtractCat));
+static constexpr OptionInfo<bool> KeepConstInit{
+    "keep-const-init", "Keep initializers of constants", cat(ExtractCat)};
 
-static cl::opt<bool>
-    Recursive("recursive", cl::desc("Recursively extract all called functions"),
-              cl::cat(ExtractCat));
+static constexpr OptionInfo<bool> Recursive{
+    "recursive", "Recursively extract all called functions", cat(ExtractCat)};
 
-// ExtractFuncs - The functions to extract from the module.
-static cl::list<std::string>
-    ExtractFuncs("func", cl::desc("Specify function to extract"),
-                 cl::value_desc("function"), cl::cat(ExtractCat));
+static constexpr ListOptionInfo<std::string> ExtractFuncs{
+    "func", "Specify function to extract", value_desc("function"),
+    cat(ExtractCat)};
 
-// ExtractRegExpFuncs - The functions, matched via regular expression, to
-// extract from the module.
-static cl::list<std::string>
-    ExtractRegExpFuncs("rfunc",
-                       cl::desc("Specify function(s) to extract using a "
-                                "regular expression"),
-                       cl::value_desc("rfunction"), cl::cat(ExtractCat));
+static constexpr ListOptionInfo<std::string> ExtractRegExpFuncs{
+    "rfunc", "Specify function(s) to extract using a regular expression",
+    value_desc("rfunction"), cat(ExtractCat)};
 
-// ExtractBlocks - The blocks to extract from the module.
-static cl::list<std::string> ExtractBlocks(
+static constexpr ListOptionInfo<std::string> ExtractBlocks{
     "bb",
-    cl::desc(
-        "Specify <function, basic block1[;basic block2...]> pairs to extract.\n"
-        "Each pair will create a function.\n"
-        "If multiple basic blocks are specified in one pair,\n"
-        "the first block in the sequence should dominate the rest.\n"
-        "If an unnamed basic block is to be extracted,\n"
-        "'%' should be added before the basic block variable names.\n"
-        "eg:\n"
-        "  --bb=f:bb1;bb2 will extract one function with both bb1 and bb2;\n"
-        "  --bb=f:bb1 --bb=f:bb2 will extract two functions, one with bb1, one "
-        "with bb2.\n"
-        "  --bb=f:%1 will extract one function with basic block 1;"),
-    cl::value_desc("function:bb1[;bb2...]"), cl::cat(ExtractCat));
+    "Specify <function, basic block1[;basic block2...]> pairs to extract.\n"
+    "Each pair will create a function.\n"
+    "If multiple basic blocks are specified in one pair,\n"
+    "the first block in the sequence should dominate the rest.\n"
+    "If an unnamed basic block is to be extracted,\n"
+    "'%' should be added before the basic block variable names.\n"
+    "eg:\n"
+    "  --bb=f:bb1;bb2 will extract one function with both bb1 and bb2;\n"
+    "  --bb=f:bb1 --bb=f:bb2 will extract two functions, one with bb1, one "
+    "with bb2.\n"
+    "  --bb=f:%1 will extract one function with basic block 1;",
+    value_desc("function:bb1[;bb2...]"), cat(ExtractCat)};
 
-// ExtractAlias - The alias to extract from the module.
-static cl::list<std::string>
-    ExtractAliases("alias", cl::desc("Specify alias to extract"),
-                   cl::value_desc("alias"), cl::cat(ExtractCat));
+static constexpr ListOptionInfo<std::string> ExtractAliases{
+    "alias", "Specify alias to extract", value_desc("alias"), cat(ExtractCat)};
 
-// ExtractRegExpAliases - The aliases, matched via regular expression, to
-// extract from the module.
-static cl::list<std::string>
-    ExtractRegExpAliases("ralias",
-                         cl::desc("Specify alias(es) to extract using a "
-                                  "regular expression"),
-                         cl::value_desc("ralias"), cl::cat(ExtractCat));
+static constexpr ListOptionInfo<std::string> ExtractRegExpAliases{
+    "ralias", "Specify alias(es) to extract using a regular expression",
+    value_desc("ralias"), cat(ExtractCat)};
 
-// ExtractGlobals - The globals to extract from the module.
-static cl::list<std::string>
-    ExtractGlobals("glob", cl::desc("Specify global to extract"),
-                   cl::value_desc("global"), cl::cat(ExtractCat));
+static constexpr ListOptionInfo<std::string> ExtractGlobals{
+    "glob", "Specify global to extract", value_desc("global"), cat(ExtractCat)};
 
-// ExtractRegExpGlobals - The globals, matched via regular expression, to
-// extract from the module...
-static cl::list<std::string>
-    ExtractRegExpGlobals("rglob",
-                         cl::desc("Specify global(s) to extract using a "
-                                  "regular expression"),
-                         cl::value_desc("rglobal"), cl::cat(ExtractCat));
+static constexpr ListOptionInfo<std::string> ExtractRegExpGlobals{
+    "rglob", "Specify global(s) to extract using a regular expression",
+    value_desc("rglobal"), cat(ExtractCat)};
 
-static cl::opt<bool> OutputAssembly("S",
-                                    cl::desc("Write output as LLVM assembly"),
-                                    cl::Hidden, cl::cat(ExtractCat));
+static constexpr OptionInfo<bool> OutputAssembly{
+    "S", "Write output as LLVM assembly", Hidden, cat(ExtractCat)};
+
+// --aggregate-extracted-args comes from TransformUtilsOptsReg, which
+// RegisterAllLLVMOptions() already adds; llvm-extract used to declare a second
+// option with the same name and mirror it into a global.
+
+static constexpr OptionsRegistry<
+    &InputFilename, &OutputFilename, &Force, &DeleteFn, &KeepConstInit,
+    &Recursive, &ExtractFuncs, &ExtractRegExpFuncs, &ExtractBlocks,
+    &ExtractAliases, &ExtractRegExpAliases, &ExtractGlobals,
+    &ExtractRegExpGlobals, &OutputAssembly>
+    ExtractToolReg;
 
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
 
-  LLVMContext Context;
-  cl::HideUnrelatedOptions(ExtractCat);
-  cl::ParseCommandLineOptions(argc, argv, "llvm extractor\n");
+  clv2::OptionParser P;
+  P.add<&ExtractToolReg>();
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&ExtractCat});
+  // Owned by TransformUtilsOptsReg rather than ExtractCat, but llvm-extract
+  // has always listed it, so keep it visible.
+  P.showOptions({"aggregate-extracted-args"});
+  auto OptsCtx = P.parse(argc, argv, "llvm extractor\n");
+  auto *Opts = OptsCtx->getViewPtr<&ExtractToolReg>();
 
-  // Use lazy loading, since we only care about selected global values.
+  LLVMContext Context(*OptsCtx);
+
   SMDiagnostic Err;
-  std::unique_ptr<Module> M = getLazyIRFileModule(InputFilename, Err, Context);
+  std::unique_ptr<Module> M =
+      getLazyIRFileModule(Opts->get<&InputFilename>(), Err, Context);
 
   if (!M) {
     Err.print(argv[0], errs());
     return 1;
   }
 
-  // Use SetVector to avoid duplicates.
   SetVector<GlobalValue *> GVs;
 
-  // Figure out which aliases we should extract.
-  for (size_t i = 0, e = ExtractAliases.size(); i != e; ++i) {
-    GlobalAlias *GA = M->getNamedAlias(ExtractAliases[i]);
+  for (size_t i = 0, e = Opts->get<&ExtractAliases>().size(); i != e; ++i) {
+    GlobalAlias *GA = M->getNamedAlias(Opts->get<&ExtractAliases>()[i]);
     if (!GA) {
       errs() << argv[0] << ": program doesn't contain alias named '"
-             << ExtractAliases[i] << "'!\n";
+             << Opts->get<&ExtractAliases>()[i] << "'!\n";
       return 1;
     }
     GVs.insert(GA);
   }
 
-  // Extract aliases via regular expression matching.
-  for (size_t i = 0, e = ExtractRegExpAliases.size(); i != e; ++i) {
+  for (size_t i = 0, e = Opts->get<&ExtractRegExpAliases>().size(); i != e;
+       ++i) {
     std::string Error;
-    Regex RegEx(ExtractRegExpAliases[i]);
+    Regex RegEx(Opts->get<&ExtractRegExpAliases>()[i]);
     if (!RegEx.isValid(Error)) {
-      errs() << argv[0] << ": '" << ExtractRegExpAliases[i] << "' "
-        "invalid regex: " << Error;
+      errs() << argv[0] << ": '" << Opts->get<&ExtractRegExpAliases>()[i]
+             << "' invalid regex: " << Error;
     }
     bool match = false;
     for (Module::alias_iterator GA = M->alias_begin(), E = M->alias_end();
@@ -177,29 +171,28 @@ int main(int argc, char **argv) {
     }
     if (!match) {
       errs() << argv[0] << ": program doesn't contain global named '"
-             << ExtractRegExpAliases[i] << "'!\n";
+             << Opts->get<&ExtractRegExpAliases>()[i] << "'!\n";
       return 1;
     }
   }
 
-  // Figure out which globals we should extract.
-  for (size_t i = 0, e = ExtractGlobals.size(); i != e; ++i) {
-    GlobalValue *GV = M->getNamedGlobal(ExtractGlobals[i]);
+  for (size_t i = 0, e = Opts->get<&ExtractGlobals>().size(); i != e; ++i) {
+    GlobalValue *GV = M->getNamedGlobal(Opts->get<&ExtractGlobals>()[i]);
     if (!GV) {
       errs() << argv[0] << ": program doesn't contain global named '"
-             << ExtractGlobals[i] << "'!\n";
+             << Opts->get<&ExtractGlobals>()[i] << "'!\n";
       return 1;
     }
     GVs.insert(GV);
   }
 
-  // Extract globals via regular expression matching.
-  for (size_t i = 0, e = ExtractRegExpGlobals.size(); i != e; ++i) {
+  for (size_t i = 0, e = Opts->get<&ExtractRegExpGlobals>().size(); i != e;
+       ++i) {
     std::string Error;
-    Regex RegEx(ExtractRegExpGlobals[i]);
+    Regex RegEx(Opts->get<&ExtractRegExpGlobals>()[i]);
     if (!RegEx.isValid(Error)) {
-      errs() << argv[0] << ": '" << ExtractRegExpGlobals[i] << "' "
-        "invalid regex: " << Error;
+      errs() << argv[0] << ": '" << Opts->get<&ExtractRegExpGlobals>()[i]
+             << "' invalid regex: " << Error;
     }
     bool match = false;
     for (auto &GV : M->globals()) {
@@ -210,33 +203,31 @@ int main(int argc, char **argv) {
     }
     if (!match) {
       errs() << argv[0] << ": program doesn't contain global named '"
-             << ExtractRegExpGlobals[i] << "'!\n";
+             << Opts->get<&ExtractRegExpGlobals>()[i] << "'!\n";
       return 1;
     }
   }
 
-  // Figure out which functions we should extract.
-  for (size_t i = 0, e = ExtractFuncs.size(); i != e; ++i) {
-    GlobalValue *GV = M->getFunction(ExtractFuncs[i]);
+  for (size_t i = 0, e = Opts->get<&ExtractFuncs>().size(); i != e; ++i) {
+    GlobalValue *GV = M->getFunction(Opts->get<&ExtractFuncs>()[i]);
     if (!GV) {
       errs() << argv[0] << ": program doesn't contain function named '"
-             << ExtractFuncs[i] << "'!\n";
+             << Opts->get<&ExtractFuncs>()[i] << "'!\n";
       return 1;
     }
     GVs.insert(GV);
   }
-  // Extract functions via regular expression matching.
-  for (size_t i = 0, e = ExtractRegExpFuncs.size(); i != e; ++i) {
+
+  for (size_t i = 0, e = Opts->get<&ExtractRegExpFuncs>().size(); i != e; ++i) {
     std::string Error;
-    StringRef RegExStr = ExtractRegExpFuncs[i];
+    StringRef RegExStr = Opts->get<&ExtractRegExpFuncs>()[i];
     Regex RegEx(RegExStr);
     if (!RegEx.isValid(Error)) {
-      errs() << argv[0] << ": '" << ExtractRegExpFuncs[i] << "' "
-        "invalid regex: " << Error;
+      errs() << argv[0] << ": '" << Opts->get<&ExtractRegExpFuncs>()[i]
+             << "' invalid regex: " << Error;
     }
     bool match = false;
-    for (Module::iterator F = M->begin(), E = M->end(); F != E;
-         F++) {
+    for (Module::iterator F = M->begin(), E = M->end(); F != E; F++) {
       if (RegEx.match(F->getName())) {
         GVs.insert(&*F);
         match = true;
@@ -244,34 +235,29 @@ int main(int argc, char **argv) {
     }
     if (!match) {
       errs() << argv[0] << ": program doesn't contain global named '"
-             << ExtractRegExpFuncs[i] << "'!\n";
+             << Opts->get<&ExtractRegExpFuncs>()[i] << "'!\n";
       return 1;
     }
   }
 
-  // Figure out which BasicBlocks we should extract.
   SmallVector<std::pair<Function *, SmallVector<StringRef, 16>>, 2> BBMap;
-  for (StringRef StrPair : ExtractBlocks) {
+  for (StringRef StrPair : Opts->get<&ExtractBlocks>()) {
     SmallVector<StringRef, 16> BBNames;
     auto BBInfo = StrPair.split(':');
-    // Get the function.
     Function *F = M->getFunction(BBInfo.first);
     if (!F) {
       errs() << argv[0] << ": program doesn't contain a function named '"
              << BBInfo.first << "'!\n";
       return 1;
     }
-    // Add the function to the materialize list, and store the basic block names
-    // to check after materialization.
     GVs.insert(F);
     BBInfo.second.split(BBNames, ';', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
     BBMap.push_back({F, std::move(BBNames)});
   }
 
-  // Use *argv instead of argv[0] to work around a wrong GCC warning.
   ExitOnError ExitOnErr(std::string(*argv) + ": error reading input: ");
 
-  if (Recursive) {
+  if (Opts->get<&Recursive>()) {
     std::vector<llvm::Function *> Workqueue;
     for (GlobalValue *GV : GVs) {
       if (auto *F = dyn_cast<Function>(GV)) {
@@ -300,12 +286,10 @@ int main(int argc, char **argv) {
 
   auto Materialize = [&](GlobalValue &GV) { ExitOnErr(GV.materialize()); };
 
-  // Materialize requisite global values.
-  if (!DeleteFn) {
+  if (!Opts->get<&DeleteFn>()) {
     for (size_t i = 0, e = GVs.size(); i != e; ++i)
       Materialize(*GVs[i]);
   } else {
-    // Deleting. Materialize every GV that's *not* in GVs.
     SmallPtrSet<GlobalValue *, 8> GVSet(llvm::from_range, GVs);
     for (auto &F : *M) {
       if (!GVSet.count(&F))
@@ -320,7 +304,7 @@ int main(int argc, char **argv) {
     CGSCCAnalysisManager CGAM;
     ModuleAnalysisManager MAM;
 
-    PassBuilder PB;
+    PassBuilder PB(llvm::clv2::defaultOptionsContext());
 
     PB.registerModuleAnalyses(MAM);
     PB.registerCGSCCAnalyses(CGAM);
@@ -329,25 +313,18 @@ int main(int argc, char **argv) {
     PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
     ModulePassManager PM;
-    PM.addPass(ExtractGVPass(Gvs, DeleteFn, KeepConstInit));
+    PM.addPass(ExtractGVPass(Gvs, Opts->get<&DeleteFn>(),
+                             Opts->get<&KeepConstInit>()));
     PM.run(*M, MAM);
 
-    // Now that we have all the GVs we want, mark the module as fully
-    // materialized.
-    // FIXME: should the GVExtractionPass handle this?
     ExitOnErr(M->materializeAll());
   }
 
-  // Extract the specified basic blocks from the module and erase the existing
-  // functions.
-  if (!ExtractBlocks.empty()) {
-    // Figure out which BasicBlocks we should extract.
+  if (!Opts->get<&ExtractBlocks>().empty()) {
     std::vector<std::vector<BasicBlock *>> GroupOfBBs;
     for (auto &P : BBMap) {
       std::vector<BasicBlock *> BBs;
       for (StringRef BBName : P.second) {
-        // The function has been materialized, so add its matching basic blocks
-        // to the block extractor list, or fail if a name is not found.
         auto Res = llvm::find_if(*P.first, [&](const BasicBlock &BB) {
           return BB.getNameOrAsOperand() == BBName;
         });
@@ -367,7 +344,7 @@ int main(int argc, char **argv) {
     CGSCCAnalysisManager CGAM;
     ModuleAnalysisManager MAM;
 
-    PassBuilder PB;
+    PassBuilder PB(llvm::clv2::defaultOptionsContext());
 
     PB.registerModuleAnalyses(MAM);
     PB.registerCGSCCAnalyses(CGAM);
@@ -380,15 +357,12 @@ int main(int argc, char **argv) {
     PM.run(*M, MAM);
   }
 
-  // In addition to deleting all other functions, we also want to spiff it
-  // up a little bit.  Do this now.
-
   LoopAnalysisManager LAM;
   FunctionAnalysisManager FAM;
   CGSCCAnalysisManager CGAM;
   ModuleAnalysisManager MAM;
 
-  PassBuilder PB;
+  PassBuilder PB(llvm::clv2::defaultOptionsContext());
 
   PB.registerModuleAnalyses(MAM);
   PB.registerCGSCCAnalyses(CGAM);
@@ -397,29 +371,28 @@ int main(int argc, char **argv) {
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
   ModulePassManager PM;
-  if (!DeleteFn)
+  if (!Opts->get<&DeleteFn>())
     PM.addPass(GlobalDCEPass());
   PM.addPass(StripDeadDebugInfoPass());
   PM.addPass(StripDeadPrototypesPass());
   PM.addPass(StripDeadCGProfilePass());
 
   std::error_code EC;
-  ToolOutputFile Out(OutputFilename, EC, sys::fs::OF_None);
+  ToolOutputFile Out(Opts->get<&OutputFilename>(), EC, sys::fs::OF_None);
   if (EC) {
     errs() << EC.message() << '\n';
     return 1;
   }
 
-  if (OutputAssembly)
+  if (Opts->get<&OutputAssembly>())
     PM.addPass(
         PrintModulePass(Out.os(), "", /* ShouldPreserveUseListOrder */ false));
-  else if (Force || !CheckBitcodeOutputToConsole(Out.os()))
+  else if (Opts->get<&Force>() || !CheckBitcodeOutputToConsole(Out.os()))
     PM.addPass(
         BitcodeWriterPass(Out.os(), /* ShouldPreserveUseListOrder */ true));
 
   PM.run(*M, MAM);
 
-  // Declare success.
   Out.keep();
 
   return 0;

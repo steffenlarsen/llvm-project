@@ -28,6 +28,8 @@
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/AMDGPU/AMDGPUOptionsOptInfos.h"
 
 using namespace llvm;
 
@@ -49,10 +51,10 @@ static LaneVGPRInsertPt insertPt(MachineBasicBlock *MBB,
   return {MBB, It};
 }
 
-static cl::opt<unsigned> MaxNumVGPRsForWwmAllocation(
-    "amdgpu-num-vgprs-for-wwm-alloc",
-    cl::desc("Max num VGPRs for whole-wave register allocation."),
-    cl::ReallyHidden, cl::init(10));
+static unsigned getMaxNumVGPRsForWwmAllocation(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::AMDGPU_MaxNumVGPRsForWwmAllocation>(
+      F.getContext().getOptionsContext());
+}
 
 class SILowerSGPRSpills {
 private:
@@ -378,6 +380,8 @@ void SILowerSGPRSpills::updateLaneVGPRDomInstr(
 SmallVector<MCRegister>
 SILowerSGPRSpills::determineRegsForWWMAllocation(MachineFunction &MF) {
   SmallVector<MCRegister> WWMRegCandidates;
+  const unsigned MaxNumVGPRsForWwmAllocation =
+      getMaxNumVGPRsForWwmAllocation(MF.getFunction());
   if (!MaxNumVGPRsForWwmAllocation)
     return WWMRegCandidates;
 
@@ -411,7 +415,7 @@ void SILowerSGPRSpills::assignWWMRegs(MachineFunction &MF,
 
   unsigned DesiredPoolSize =
       std::min(static_cast<unsigned>(FuncInfo->getSGPRSpillVGPRs().size()),
-               static_cast<unsigned>(MaxNumVGPRsForWwmAllocation));
+               getMaxNumVGPRsForWwmAllocation(MF.getFunction()));
   unsigned SelectedPoolSize =
       std::min<unsigned>(DesiredPoolSize, WWMRegCandidates.size());
   // WWM register candidates are ordered high-to-low, so take the highest

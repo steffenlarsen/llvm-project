@@ -75,11 +75,16 @@ static MCAsmBackend *createAsmBackend(const Target & /*T*/,
   return createWebAssemblyAsmBackend(STI.getTargetTriple());
 }
 
-static MCSubtargetInfo *createMCSubtargetInfo(const Triple &TT, StringRef CPU,
-                                              StringRef FS) {
+static MCSubtargetInfo *
+createMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                      const llvm::clv2::OptionsContext &Ctx) {
   if (CPU.empty())
     CPU = "generic";
-  return createWebAssemblyMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+  MCSubtargetInfo *STI =
+      createWebAssemblyMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FS);
+  if (STI)
+    STI->setOptionsContext(Ctx);
+  return STI;
 }
 
 static MCTargetStreamer *

@@ -16,14 +16,16 @@
 #include "bolt/Core/BinaryFunction.h"
 #include "bolt/Passes/BinaryPasses.h"
 #include "bolt/Profile/BoltAddressTranslation.h"
+#include "bolt/Profile/BoltProfileOptionsOptInfos.h"
 #include "bolt/Profile/Heatmap.h"
 #include "bolt/Profile/YAMLProfileWriter.h"
+#include "bolt/Utils/BoltUtilsOptionsOptInfos.h"
 #include "bolt/Utils/CommandLineOpts.h"
 #include "bolt/Utils/Utils.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/BinaryFormat/Magic.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Errc.h"
@@ -46,105 +48,77 @@ using namespace bolt;
 
 namespace opts {
 
-static cl::opt<bool>
-    BasicAggregation("basic-events",
-                     cl::desc("aggregate basic events (without brstack info)"),
-                     cl::cat(AggregatorCategory));
+bool BasicAggregation = false;
 
-static cl::alias BasicAggregationAlias("ba",
-                                       cl::desc("Alias for --basic-events"),
-                                       cl::aliasopt(BasicAggregation));
+std::string ITraceAggregation;
 
-static cl::opt<bool> DeprecatedBasicAggregationNl(
-    "nl", cl::desc("Alias for --basic-events (deprecated. Use --ba)"),
-    cl::cat(AggregatorCategory), cl::ReallyHidden,
-    cl::callback([](const bool &Enabled) {
-      errs()
-          << "BOLT-WARNING: '-nl' is deprecated, please use '--ba' instead.\n";
-      BasicAggregation = Enabled;
-    }));
+bool ParseMemProfile = true;
 
-cl::opt<bool> ArmSPE("spe", cl::desc("Enable Arm SPE mode."),
-                     cl::cat(AggregatorCategory));
-
-static cl::opt<std::string> ITraceAggregation(
-    "itrace", cl::desc("Generate brstack info with perf itrace argument"),
-    cl::cat(AggregatorCategory));
-
-static cl::opt<bool>
-FilterMemProfile("filter-mem-profile",
-  cl::desc("if processing a memory profile, filter out stack or heap accesses "
-           "that won't be useful for BOLT to reduce profile file size"),
-  cl::init(true),
-  cl::cat(AggregatorCategory));
-
-static cl::opt<bool> ParseMemProfile(
-    "parse-mem-profile",
-    cl::desc("enable memory profile parsing if it's present in the input data, "
-             "on by default unless `--itrace` is set."),
-    cl::init(true), cl::cat(AggregatorCategory));
-
-static cl::list<unsigned long long>
-    FilterPID("pid",
-              cl::desc("only use samples from process with specified PID(s) "
-                       "(comma-separated)"),
-              cl::CommaSeparated, cl::ZeroOrMore, cl::cat(AggregatorCategory));
-
-static cl::opt<bool> ImputeTraceFallthrough(
-    "impute-trace-fall-through",
-    cl::desc("impute missing fall-throughs for branch-only traces"),
-    cl::Optional, cl::cat(AggregatorCategory));
-
-static cl::opt<bool>
-IgnoreBuildID("ignore-build-id",
-  cl::desc("continue even if build-ids in input binary and perf.data mismatch"),
-  cl::init(false),
-  cl::cat(AggregatorCategory));
-
-static cl::opt<bool> IgnoreInterruptLBR(
-    "ignore-interrupt-lbr",
-    cl::desc("ignore kernel interrupt LBR that happens asynchronously"),
-    cl::init(true), cl::cat(AggregatorCategory));
-
-static cl::opt<unsigned long long>
-MaxSamples("max-samples",
-  cl::init(-1ULL),
-  cl::desc("maximum number of samples to read from LBR profile"),
-  cl::Optional,
-  cl::Hidden,
-  cl::cat(AggregatorCategory));
-
-static cl::opt<unsigned>
-    PerfDataJobs("perfdata-jobs",
-                 cl::desc("number of perf data files to process in parallel, "
-                          "0 = all HW threads (default 4)"),
-                 cl::init(4), cl::cat(AggregatorCategory),
-                 cl::sub(cl::SubCommand::getAll()));
-
-static cl::alias PerfDataJobsAlias("pj", cl::desc("Alias for --perfdata-jobs"),
-                                   cl::aliasopt(PerfDataJobs));
-
-extern cl::opt<opts::ProfileFormatKind> ProfileFormat;
-extern cl::opt<bool> ProfileWritePseudoProbes;
-extern cl::opt<std::string> SaveProfile;
-
-cl::opt<bool> ReadPreAggregated(
-    "pa", cl::desc("skip perf and read data from a pre-aggregated file format"),
-    cl::cat(AggregatorCategory));
-
-cl::alias ReadPerfScript("ps", cl::desc("read pre-parsed perf script output"),
-                         cl::NotHidden, cl::aliasopt(ReadPreAggregated));
-
-static cl::opt<bool>
-TimeAggregator("time-aggr",
-  cl::desc("time BOLT aggregator"),
-  cl::init(false),
-  cl::ZeroOrMore,
-  cl::cat(AggregatorCategory));
+bool IgnoreInterruptLBR = true;
 
 } // namespace opts
 
 namespace {
+
+/// A bucket size and how it was spelled on the command line, so output can
+/// echo "64K" rather than reformatting the value.
+struct HeatmapBlockSize {
+  unsigned Value = 0;
+  std::string Spec;
+};
+using HeatmapBlockSizes = std::vector<HeatmapBlockSize>;
+
+/// Parse a comma-separated list of bucket sizes, each optionally carrying a
+/// K/M/G suffix and each a multiple of the one before it.  Returns false and
+/// diagnoses on malformed input.
+bool parseHeatmapBlockSpec(StringRef Val, HeatmapBlockSizes &Result) {
+  auto parseSuffix = [](StringRef Suffix) -> std::optional<unsigned> {
+    if (Suffix.empty())
+      return 0;
+    if (!Regex{"^[kKmMgG]i?[bB]?$"}.match(Suffix))
+      return std::nullopt;
+    switch (Suffix.front()) {
+    case 'k':
+    case 'K':
+      return 10;
+    case 'm':
+    case 'M':
+      return 20;
+    case 'g':
+    case 'G':
+      return 30;
+    }
+    llvm_unreachable("Unexpected suffix");
+  };
+
+  HeatmapBlockSizes NewVal;
+  SmallVector<StringRef> Sizes;
+  Val.split(Sizes, ',');
+  unsigned PreviousSize = 0;
+  for (StringRef Size : Sizes) {
+    StringRef OrigSize = Size;
+    HeatmapBlockSize &Block = NewVal.emplace_back();
+    Block.Spec = OrigSize.str();
+    unsigned &SizeVal = Block.Value;
+    if (Size.consumeInteger(10, SizeVal)) {
+      errs() << "'" << OrigSize << "' value can't be parsed as an integer\n";
+      return false;
+    }
+    if (std::optional<unsigned> ShiftAmt = parseSuffix(Size)) {
+      SizeVal <<= *ShiftAmt;
+    } else {
+      errs() << "'" << Size << "' value can't be parsed as a suffix\n";
+      return false;
+    }
+    if (SizeVal <= PreviousSize || (PreviousSize && SizeVal % PreviousSize)) {
+      errs() << "'" << OrigSize << "' must be a multiple of previous value\n";
+      return false;
+    }
+    PreviousSize = SizeVal;
+  }
+  Result = std::move(NewVal);
+  return true;
+}
 
 const char TimerGroupName[] = "aggregator";
 const char TimerGroupDesc[] = "Aggregator";
@@ -168,7 +142,7 @@ std::vector<SectionNameAndRange> getTextSections(const BinaryContext *BC) {
              });
   return sections;
 }
-}
+} // namespace
 
 DataAggregator::~DataAggregator() { deleteTempFiles(); }
 
@@ -223,7 +197,7 @@ void deleteTempFile(const std::string &FileName) {
     errs() << "PERF2BOLT: failed to delete temporary file " << FileName
            << " with error " << Errc.message() << "\n";
 }
-}
+} // namespace
 
 ErrorOr<uint64_t> DataAggregator::getFileSize(StringRef File) {
   uint64_t Size;
@@ -253,40 +227,57 @@ void DataAggregator::findPerfExecutable() {
 Error DataAggregator::start() {
   outs() << "PERF2BOLT: Starting data aggregation job for " << Filename << "\n";
 
+  bool ReadPreAggregated = bolt_profile_opts::getPa(*BC);
+  bool ArmSPE = bolt_profile_opts::getSpe(*BC);
+
   // Don't launch perf for pre-aggregated files or when perf input is specified
   // by the user.
-  if (opts::ReadPreAggregated)
+  if (ReadPreAggregated)
     return Error::success();
 
   assert(!PerfPath.empty() && "perf executable must be set before start()");
 
-  if (opts::ArmSPE) {
+  if (ArmSPE) {
     // pid    from_ip      to_ip        flags
     // where flags could be:
     // P/M: whether branch was Predicted or Mispredicted.
     // N: optionally appears when the branch was Not-Taken (ie fall-through)
     // 12345  0x123/0x456/PN/-/-/8/RET/-
-    opts::ITraceAggregation = "bl";
-    opts::ParseMemProfile = true;
-    opts::BasicAggregation = false;
+    if (auto *V =
+            BC->getOptionsContext().getViewPtr<&clv2::BoltProfileOptsReg>())
+      V->get<&clv2::BOLTPROF_ITrace>() = "bl";
+    if (auto *V =
+            BC->getOptionsContext().getViewPtr<&clv2::BoltProfileOptsReg>())
+      V->get<&clv2::BOLTPROF_ParseMemProfile>() = true;
+    if (auto *V =
+            BC->getOptionsContext().getViewPtr<&clv2::BoltProfileOptsReg>()) {
+      V->get<&clv2::BOLTPROF_BasicEvents>() = false;
+      V->get<&clv2::BOLTPROF_BasicEventsAlias>() = false;
+      V->get<&clv2::BOLTPROF_BasicEventsAliasNl>() = false;
+    }
   }
 
   SmallVector<std::tuple<StringRef, PerfProcessInfo *, std::string>, 5> Jobs;
-  if (opts::BasicAggregation) {
+  bool BasicAgg =
+      (bolt_profile_opts::getBasicEvents(*BC) ||
+       bolt_profile_opts::getBa(*BC) || bolt_profile_opts::getNl(*BC));
+  if (BasicAgg) {
     Jobs.emplace_back("events without brstack", &MainEventsPPI,
                       "script -F pid,event,ip");
-  } else if (!opts::ITraceAggregation.empty()) {
-    // Disable parsing memory profile from trace data, unless requested by user.
-    if (!opts::ParseMemProfile.getNumOccurrences())
-      opts::ParseMemProfile = false;
+  } else if (std::string ITraceAgg = bolt_profile_opts::getItrace(*BC);
+             !ITraceAgg.empty()) {
+    // Disable parsing memory profile from trace data.
+    if (auto *V =
+            BC->getOptionsContext().getViewPtr<&clv2::BoltProfileOptsReg>())
+      V->get<&clv2::BOLTPROF_ParseMemProfile>() = false;
     Jobs.emplace_back("branch events with itrace", &MainEventsPPI,
-                      "script -F pid,brstack --itrace=" +
-                          opts::ITraceAggregation);
+                      "script -F pid,brstack --itrace=" + ITraceAgg);
   } else {
     Jobs.emplace_back("branch events", &MainEventsPPI, "script -F pid,brstack");
   }
 
-  if (opts::ParseMemProfile)
+  bool ParseMem = bolt_profile_opts::getParseMemProfile(*BC);
+  if (ParseMem)
     Jobs.emplace_back("mem events", &MemEventsPPI,
                       "script -F pid,event,addr,ip");
 
@@ -306,7 +297,8 @@ Error DataAggregator::start() {
 }
 
 void DataAggregator::abort() {
-  if (opts::ReadPreAggregated)
+  bool ReadPreAggregated = bolt_profile_opts::getPa(*BC);
+  if (ReadPreAggregated)
     return;
 
   std::string Error;
@@ -315,7 +307,8 @@ void DataAggregator::abort() {
   sys::Wait(TaskEventsPPI.PI, 1, &Error);
   sys::Wait(MMapEventsPPI.PI, 1, &Error);
   sys::Wait(MainEventsPPI.PI, 1, &Error);
-  if (opts::ParseMemProfile)
+  bool ParseMem = bolt_profile_opts::getParseMemProfile(*BC);
+  if (ParseMem)
     sys::Wait(MemEventsPPI.PI, 1, &Error);
 
   deleteTempFiles();
@@ -391,12 +384,16 @@ void DataAggregator::processFileBuildID(StringRef FileBuildID) {
             "is not the same recorded by perf when collecting profiling "
             "data, or there were no samples recorded for the binary. "
             "Use -ignore-build-id option to override.\n";
-  if (!opts::IgnoreBuildID)
+  bool IgnoreBuildID = bolt_profile_opts::getIgnoreBuildId(*BC);
+  if (!IgnoreBuildID)
     abort();
 }
 
-bool DataAggregator::checkPerfDataMagic(StringRef FileName) {
-  if (opts::ReadPreAggregated)
+bool DataAggregator::checkPerfDataMagic(
+    StringRef FileName, const llvm::clv2::OptionsContext &OptsCtx) {
+  auto *ProfOpts = bolt_profile_opts::getBoltProfileOpts(OptsCtx);
+  bool ReadPreAggregated = ProfOpts->get<&clv2::BOLTPROF_ReadPreAggregated>();
+  if (ReadPreAggregated)
     return true;
 
   return DataAggregator::checkInputFileMagic(FileName, PerfDataMagicStr);
@@ -542,8 +539,9 @@ std::error_code DataAggregator::parsePerfScriptFileHeader() {
 
 Error DataAggregator::parsePerfScript() {
   outs() << "PERF2BOLT: parsing a textual perf-script events...\n";
+  bool TimeAggregator = bolt_profile_opts::getTimeAggr(*BC);
   NamedRegionTimer T("parsePerfScript", "Parsing perf-script events",
-                     TimerGroupName, TimerGroupDesc, opts::TimeAggregator);
+                     TimerGroupName, TimerGroupDesc, TimeAggregator);
   if (!Filename.empty()) {
     // Load only the file header
     ErrorOr<std::unique_ptr<MemoryBuffer>> MB =
@@ -563,16 +561,18 @@ Error DataAggregator::parsePerfScript() {
 
 Error DataAggregator::generatePerfScriptData() {
   llvm::scope_exit Cleanup([&] { deleteTempFiles(); });
+  const std::string OutputFilename = bolt_utils_opts::getO(*BC);
   std::error_code EC;
-  raw_fd_ostream OutFile(opts::OutputFilename, EC, sys::fs::OpenFlags::OF_None);
+  raw_fd_ostream OutFile(OutputFilename, EC, sys::fs::OpenFlags::OF_None);
   if (EC) {
     errs() << "error opening output file: " << EC.message() << "\n";
     return errorCodeToError(EC);
   }
 
+  bool ParseMem = bolt_profile_opts::getParseMemProfile(*BC);
   SmallVector<PerfProcessInfo *, 5> ProcessInfos = {
       &BuildIDProcessInfo, &MMapEventsPPI, &MainEventsPPI, &TaskEventsPPI};
-  if (opts::ParseMemProfile)
+  if (ParseMem)
     ProcessInfos.push_back(&MemEventsPPI);
 
   // Create a file header as a Table of Contents.
@@ -615,15 +615,15 @@ Error DataAggregator::generatePerfScriptData() {
   OutFile.seek(0);
   OutFile << Header;
   OutFile.close();
-  outs() << "PERF2BOLT: Profile is saved to file " << opts::OutputFilename
-         << "\n";
+  outs() << "PERF2BOLT: Profile is saved to file " << OutputFilename << "\n";
   return Error::success();
 }
 
 Error DataAggregator::filterBinaryMMapInfo() {
-  if (!opts::FilterPID.empty()) {
+  const auto &FilterPID = bolt_profile_opts::getPid(*BC);
+  if (!FilterPID.empty()) {
     std::unordered_map<uint64_t, MMapInfo> FilteredMMapInfo;
-    for (unsigned long long PID : opts::FilterPID) {
+    for (uint64_t PID : FilterPID) {
       auto MMapInfoIter = BinaryMMapInfo.find(PID);
       if (MMapInfoIter != BinaryMMapInfo.end())
         FilteredMMapInfo.insert(*MMapInfoIter);
@@ -632,13 +632,12 @@ Error DataAggregator::filterBinaryMMapInfo() {
       if (errs().has_colors())
         errs().changeColor(raw_ostream::RED);
       errs() << "PERF2BOLT-ERROR: could not find a profile matching ";
-      if (opts::FilterPID.size() == 1) {
-        errs() << "PID \"" << opts::FilterPID[0] << "\"";
+      if (FilterPID.size() == 1) {
+        errs() << "PID \"" << FilterPID[0] << "\"";
       } else {
         errs() << "any requested PID(s) \"";
-        for (size_t I = 0; I < opts::FilterPID.size(); ++I)
-          errs() << opts::FilterPID[I]
-                 << (I == opts::FilterPID.size() - 1 ? "" : ",");
+        for (size_t I = 0; I < FilterPID.size(); ++I)
+          errs() << FilterPID[I] << (I == FilterPID.size() - 1 ? "" : ",");
         errs() << "\"";
       }
       errs() << " for binary \"" << BC->getFilename() << "\".";
@@ -660,7 +659,9 @@ Error DataAggregator::filterBinaryMMapInfo() {
 }
 
 Error DataAggregator::prepareToParse(StringRef Name, PerfProcessInfo &Process) {
-  if (opts::ReadPreAggregated) {
+  bool ReadPreAggregated = bolt_profile_opts::getPa(*BC);
+
+  if (ReadPreAggregated) {
     // No profile, ParsingBuf is set directly in unittests.
     if (Filename.empty())
       return Error::success();
@@ -750,7 +751,9 @@ Error DataAggregator::parsePerfData() {
     // of whether they are due to system calls or due to
     // interrupts. Therefore, we cannot ignore interrupt
     // in Linux kernel mode.
-    opts::IgnoreInterruptLBR = false;
+    if (auto *V =
+            BC->getOptionsContext().getViewPtr<&clv2::BoltProfileOptsReg>())
+      V->get<&clv2::BOLTPROF_IgnoreInterruptLBR>() = false;
   } else {
     Jobs.emplace_back("mmap events", &MMapEventsPPI,
                       &DataAggregator::parseMMapEvents);
@@ -769,7 +772,8 @@ Error DataAggregator::parsePerfData() {
   }
 
   // Special handling for memory events
-  if (opts::ParseMemProfile) {
+  bool ParseMem = bolt_profile_opts::getParseMemProfile(*BC);
+  if (ParseMem) {
     if (Error E = prepareToParse("mem events", MemEventsPPI)) {
       std::string ErrMsg = toString(std::move(E));
       Regex NoData("Samples for '.*' event do not have ADDR attribute set. "
@@ -843,7 +847,7 @@ void DataAggregator::imputeFallThroughs() {
       AggregateCount += Info.TakenCount;
     }
   }
-  if (opts::Verbosity >= 1)
+  if (opts::getVerbosity(*BC) >= 1)
     outs() << "BOLT-INFO: imputed " << InferredTraces << " traces\n";
 }
 
@@ -851,7 +855,8 @@ Error DataAggregator::parseInput() {
   if (Error E = start())
     return E;
 
-  if (!opts::ReadPreAggregated)
+  bool ReadPreAggregated = bolt_profile_opts::getPa(*BC);
+  if (!ReadPreAggregated)
     return parsePerfData();
 
   if (checkInputFileMagic(Filename, PerfTextMagicStr))
@@ -884,7 +889,8 @@ Error DataAggregator::parseAllInputs(BinaryContext &BC) {
   }
 
   ThreadPoolStrategy SavedStrategy = parallel::strategy;
-  parallel::strategy = hardware_concurrency(opts::PerfDataJobs);
+  parallel::strategy =
+      hardware_concurrency(bolt_profile_opts::getPerfdataJobs(BC));
   Error ParseErrors =
       parallelForEachError(Jobs, [](AggregatorJob *Job) -> Error {
         if (Error E = Job->DA->parseInput()) {
@@ -914,16 +920,36 @@ Error DataAggregator::parseAllInputs(BinaryContext &BC) {
 }
 
 Error DataAggregator::preprocessProfile(BinaryContext &BC) {
-  // Turn on heatmap building if requested by --heatmap flag.
-  if (!opts::HeatmapMode && opts::HeatmapOutput.getNumOccurrences())
-    opts::HeatmapMode = opts::HeatmapModeKind::HM_Optional;
-
   this->BC = &BC;
 
-  if (!opts::ReadPreAggregated)
+  auto *UtilOpts =
+      bolt_utils_opts::getBoltUtilsOpts(this->BC->getOptionsContext());
+
+  // Turn on heatmap building if requested by --heatmap flag.
+  bool HeatmapOutputSpec = UtilOpts->specified<&clv2::BOLT_HeatmapOutput>();
+  auto HeatmapMode = static_cast<opts::HeatmapModeKind>(
+      UtilOpts->get<&clv2::BOLT_HeatmapMode>());
+  if (!HeatmapMode && HeatmapOutputSpec) {
+    HeatmapMode = opts::HeatmapModeKind::HM_Optional;
+    if (auto *V =
+            this->BC->getOptionsContext().getViewPtr<&clv2::BoltUtilsOptsReg>())
+      V->get<&clv2::BOLT_HeatmapMode>() = opts::HeatmapModeKind::HM_Optional;
+  }
+
+  bool ReadPreAggregated = bolt_profile_opts::getPa(*this->BC);
+  bool ImputeTraceFallthrough =
+      bolt_profile_opts::getImputeTraceFallThrough(*this->BC);
+
+  if (!ReadPreAggregated)
     findPerfExecutable();
 
-  if (opts::ProfileFormat == opts::ProfileFormatKind::PF_PerfScript) {
+  bool AggregateOnly = UtilOpts->get<&clv2::BOLT_AggregateOnly>();
+  const std::string OutputFilename =
+      UtilOpts->get<&clv2::BOLT_OutputFilename>();
+  opts::ProfileFormatKind ProfileFormat =
+      UtilOpts->get<&clv2::BOLT_ProfileFormat>();
+
+  if (ProfileFormat == opts::ProfileFormatKind::PF_PerfScript) {
     if (Error E = start())
       return E;
     if (Error E = generatePerfScriptData())
@@ -939,19 +965,18 @@ Error DataAggregator::preprocessProfile(BinaryContext &BC) {
   // Sort parsed traces for faster processing.
   llvm::sort(Traces, llvm::less_first());
 
-  if (opts::ImputeTraceFallthrough)
+  if (ImputeTraceFallthrough)
     imputeFallThroughs();
 
-  if (opts::HeatmapMode) {
+  if (HeatmapMode) {
     if (std::error_code EC = printLBRHeatMap())
       return errorCodeToError(EC);
-    if (opts::HeatmapMode == opts::HeatmapModeKind::HM_Exclusive)
+    if (HeatmapMode == opts::HeatmapModeKind::HM_Exclusive)
       exit(0);
   }
 
-  if (opts::AggregateOnly &&
-      opts::ProfileFormat == opts::ProfileFormatKind::PF_PreAgg) {
-    if (std::error_code EC = writePreAggregatedFile(opts::OutputFilename))
+  if (AggregateOnly && ProfileFormat == opts::ProfileFormatKind::PF_PreAgg) {
+    if (std::error_code EC = writePreAggregatedFile(OutputFilename))
       report_error("cannot create output data file", EC);
     exit(0);
   }
@@ -965,19 +990,24 @@ Error DataAggregator::readProfile(BinaryContext &BC) {
   if (Error E = DataReader::readProfile(BC))
     return E;
 
-  if (opts::AggregateOnly) {
-    if (opts::ProfileFormat == opts::ProfileFormatKind::PF_Fdata)
-      if (std::error_code EC = writeFdataFile(opts::OutputFilename))
+  bool AggregateOnly = bolt_utils_opts::getAggregateOnly(BC);
+  const std::string OutputFilename = bolt_utils_opts::getO(BC);
+  opts::ProfileFormatKind ProfileFormat = bolt_utils_opts::getProfileFormat(BC);
+  std::string SaveProfile = bolt_utils_opts::getW(BC);
+
+  if (AggregateOnly) {
+    if (ProfileFormat == opts::ProfileFormatKind::PF_Fdata)
+      if (std::error_code EC = writeFdataFile(OutputFilename))
         report_error("cannot create output data file", EC);
 
     // BAT YAML is handled by DataAggregator since normal YAML output requires
     // CFG which is not available in BAT mode.
     if (usesBAT()) {
-      if (opts::ProfileFormat == opts::ProfileFormatKind::PF_YAML)
-        if (std::error_code EC = writeBATYAML(BC, opts::OutputFilename))
+      if (ProfileFormat == opts::ProfileFormatKind::PF_YAML)
+        if (std::error_code EC = writeBATYAML(BC, OutputFilename))
           report_error("cannot create output data file", EC);
-      if (!opts::SaveProfile.empty())
-        if (std::error_code EC = writeBATYAML(BC, opts::SaveProfile))
+      if (!SaveProfile.empty())
+        if (std::error_code EC = writeBATYAML(BC, SaveProfile))
           report_error("cannot create output data file", EC);
     }
   }
@@ -990,13 +1020,17 @@ bool DataAggregator::mayHaveProfileData(const BinaryFunction &Function) {
 }
 
 void DataAggregator::processProfile(BinaryContext &BC) {
+  bool BasicAgg =
+      (bolt_profile_opts::getBasicEvents(BC) || bolt_profile_opts::getBa(BC) ||
+       bolt_profile_opts::getNl(BC));
+
   // Set for DataReader::readProfile
-  NoLBRMode = opts::BasicAggregation;
+  NoLBRMode = BasicAgg;
 
   // Set for DataReader::recordBranch and evaluateProfileData
   BATMode = usesBAT();
 
-  if (opts::BasicAggregation)
+  if (BasicAgg)
     processBasicEvents();
   else
     processBranchEvents();
@@ -1323,6 +1357,8 @@ DataAggregator::getFallthroughsInTrace(BinaryFunction &BF, const Trace &Trace,
 }
 
 ErrorOr<DataAggregator::LBREntry> DataAggregator::parseLBREntry() {
+  bool ArmSPE = bolt_profile_opts::getSpe(*BC);
+
   /// perf script -F brstack entry format:
   /// FROM/TO/EVENT/INTX/ABORT/CYCLES/TYPE/SPEC
   LBREntry Res;
@@ -1355,11 +1391,10 @@ ErrorOr<DataAggregator::LBREntry> DataAggregator::parseLBREntry() {
   StringRef MispredStr = EventStrRes.get();
   // SPE brstack mispredicted flags might be up to two characters long:
   // 'PN' or 'MN'. Where 'N' optionally appears.
-  bool ValidStrSize = opts::ArmSPE
-                          ? MispredStr.size() >= 1 && MispredStr.size() <= 2
-                          : MispredStr.size() == 1;
+  bool ValidStrSize = ArmSPE ? MispredStr.size() >= 1 && MispredStr.size() <= 2
+                             : MispredStr.size() == 1;
   bool SpeTakenBitErr =
-      (opts::ArmSPE && MispredStr.size() == 2 && MispredStr[1] != 'N');
+      (ArmSPE && MispredStr.size() == 2 && MispredStr[1] != 'N');
   bool PredictionBitErr =
       !ValidStrSize ||
       (MispredStr[0] != 'P' && MispredStr[0] != 'M' && MispredStr[0] != '-');
@@ -1427,9 +1462,7 @@ void DataAggregator::consumeRestOfLine() {
   Line += 1;
 }
 
-bool DataAggregator::checkNewLine() {
-  return ParsingBuf[0] == '\n';
-}
+bool DataAggregator::checkNewLine() { return ParsingBuf[0] == '\n'; }
 
 ErrorOr<DataAggregator::PerfBranchSample> DataAggregator::parseBranchSample() {
   PerfBranchSample Res;
@@ -1745,22 +1778,36 @@ std::error_code DataAggregator::parseAggregatedLBREntry() {
 }
 
 bool DataAggregator::ignoreKernelInterrupt(LBREntry &LBR) const {
-  return opts::IgnoreInterruptLBR &&
+  bool IgnoreInterrupt = bolt_profile_opts::getIgnoreInterruptLbr(*BC);
+  return IgnoreInterrupt &&
          (LBR.From >= KernelBaseAddr || LBR.To >= KernelBaseAddr);
 }
 
 std::error_code DataAggregator::printLBRHeatMap() {
   outs() << "PERF2BOLT: parse branch events...\n";
+  bool TimeAggregator = bolt_profile_opts::getTimeAggr(*BC);
   NamedRegionTimer T("buildHeatmap", "Building heatmap", TimerGroupName,
-                     TimerGroupDesc, opts::TimeAggregator);
+                     TimerGroupDesc, TimeAggregator);
+
+  bool BasicAgg =
+      (bolt_profile_opts::getBasicEvents(*BC) ||
+       bolt_profile_opts::getBa(*BC) || bolt_profile_opts::getNl(*BC));
 
   if (BC->IsLinuxKernel) {
-    opts::HeatmapMaxAddress = 0xffffffffffffffff;
-    opts::HeatmapMinAddress = KernelBaseAddr;
+    if (auto *V =
+            BC->getOptionsContext().getViewPtr<&clv2::BoltUtilsOptsReg>()) {
+      V->get<&clv2::BOLT_HeatmapMaxAddress>() = 0xffffffffffffffff;
+      V->get<&clv2::BOLT_HeatmapMinAddress>() = KernelBaseAddr;
+    }
   }
-  opts::HeatmapBlockSizes &HMBS = opts::HeatmapBlock;
-  Heatmap HM(HMBS[0].Value, opts::HeatmapMinAddress, opts::HeatmapMaxAddress,
-             getTextSections(BC));
+  uint64_t HeatmapMinAddress = bolt_utils_opts::getMinAddress(*BC);
+  uint64_t HeatmapMaxAddress = bolt_utils_opts::getMaxAddress(*BC);
+  const std::string HeatmapOutput = bolt_utils_opts::getHeatmap(*BC);
+  HeatmapBlockSizes HMBS;
+  if (!parseHeatmapBlockSpec(bolt_utils_opts::getBlockSize(*BC), HMBS))
+    exit(1);
+  Heatmap HM(BC->getOptionsContext(), HMBS[0].Value, HeatmapMinAddress,
+             HeatmapMaxAddress, getTextSections(BC));
   auto getSymbolValue = [&](const MCSymbol *Symbol) -> uint64_t {
     if (Symbol)
       if (ErrorOr<uint64_t> SymValue = BC->getSymbolValue(*Symbol))
@@ -1771,7 +1818,7 @@ std::error_code DataAggregator::printLBRHeatMap() {
   HM.HotEnd = getSymbolValue(BC->getHotTextEndSymbol());
 
   if (!NumTotalSamples) {
-    if (opts::BasicAggregation) {
+    if (BasicAgg) {
       errs() << "HEATMAP-ERROR: no basic event samples detected in profile. "
                 "Cannot build heatmap.";
     } else {
@@ -1799,21 +1846,21 @@ std::error_code DataAggregator::printLBRHeatMap() {
     exit(1);
   }
 
-  HM.print(opts::HeatmapOutput);
-  if (opts::HeatmapOutput == "-") {
-    HM.printCDF(opts::HeatmapOutput, HMBS.front().Spec);
-    HM.printSectionHotness(opts::HeatmapOutput);
+  HM.print(HeatmapOutput);
+  if (HeatmapOutput == "-") {
+    HM.printCDF(HeatmapOutput, HMBS.front().Spec);
+    HM.printSectionHotness(HeatmapOutput);
   } else {
-    HM.printCDF(opts::HeatmapOutput + ".csv", HMBS.front().Spec);
-    HM.printSectionHotness(opts::HeatmapOutput + "-section-hotness.csv");
+    HM.printCDF(HeatmapOutput + ".csv", HMBS.front().Spec);
+    HM.printSectionHotness(HeatmapOutput + "-section-hotness.csv");
   }
   // Provide coarse-grained heatmaps if requested via zoom-out scales
   for (const auto &[NewBucketSize, Label] : ArrayRef(HMBS).drop_front()) {
     HM.resizeBucket(NewBucketSize);
-    if (opts::HeatmapOutput == "-")
-      HM.print(opts::HeatmapOutput);
+    if (HeatmapOutput == "-")
+      HM.print(HeatmapOutput);
     else
-      HM.print(formatv("{0}-{1}", opts::HeatmapOutput, NewBucketSize).str());
+      HM.print(formatv("{0}-{1}", HeatmapOutput, NewBucketSize).str());
     // Working set only; the table is emitted once, at the finest granularity.
     HM.printCDF(nulls(), Label);
   }
@@ -1848,7 +1895,9 @@ void DataAggregator::parseLBRSample(const PerfBranchSample &Sample,
   }
   // Record LBR addresses not covered by fallthroughs (bottom-of-stack source
   // and top-of-stack target) as basic samples for heatmap.
-  if (opts::HeatmapMode == opts::HeatmapModeKind::HM_Exclusive &&
+  auto HeatmapMode =
+      static_cast<opts::HeatmapModeKind>(bolt_utils_opts::getHeatmapMode(*BC));
+  if (HeatmapMode == opts::HeatmapModeKind::HM_Exclusive &&
       !Sample.LBR.empty()) {
     ++BasicSamples[Sample.LBR.front().To];
     ++BasicSamples[Sample.LBR.back().From];
@@ -1917,18 +1966,23 @@ void DataAggregator::printBranchStacksDiagnostics(
 }
 
 std::error_code DataAggregator::parseBranchEvents() {
+  bool ArmSPE = bolt_profile_opts::getSpe(*BC);
+  bool TimeAggregator = bolt_profile_opts::getTimeAggr(*BC);
+  uint64_t MaxSamples = clv2::getOptValOrDefault<&clv2::BOLTPROF_MaxSamples>(
+      BC->getOptionsContext());
+
   std::string BranchEventTypeStr =
-      opts::ArmSPE ? "SPE branch events in brstack-format" : "branch events";
+      ArmSPE ? "SPE branch events in brstack-format" : "branch events";
   outs() << "PERF2BOLT: parse " << BranchEventTypeStr << "...\n";
   NamedRegionTimer T("parseBranch", "Parsing branch events", TimerGroupName,
-                     TimerGroupDesc, opts::TimeAggregator);
+                     TimerGroupDesc, TimeAggregator);
 
   uint64_t NumEntries = 0;
   uint64_t NumSamples = 0;
   uint64_t NumSamplesNoLBR = 0;
   bool NeedsSkylakeFix = false;
 
-  while (hasData() && NumTotalSamples < opts::MaxSamples) {
+  while (hasData() && NumTotalSamples < MaxSamples) {
     ++NumTotalSamples;
 
     ErrorOr<PerfBranchSample> SampleRes = parseBranchSample();
@@ -1967,7 +2021,7 @@ std::error_code DataAggregator::parseBranchEvents() {
     if (NumSamples && NumSamplesNoLBR == NumSamples) {
       // Note: we don't know if perf2bolt is being used to parse memory samples
       // at this point. In this case, it is OK to parse zero LBRs.
-      if (!opts::ArmSPE)
+      if (!ArmSPE)
         errs()
             << "PERF2BOLT-WARNING: all recorded samples for this binary lack "
                "brstack. Record profile with perf record -j any or run "
@@ -1991,8 +2045,9 @@ std::error_code DataAggregator::parseBranchEvents() {
 
 void DataAggregator::processBranchEvents() {
   outs() << "PERF2BOLT: processing branch events...\n";
+  bool TimeAggregator = bolt_profile_opts::getTimeAggr(*BC);
   NamedRegionTimer T("processBranch", "Processing branch events",
-                     TimerGroupName, TimerGroupDesc, opts::TimeAggregator);
+                     TimerGroupName, TimerGroupDesc, TimeAggregator);
 
   Returns.emplace(Trace::FT_EXTERNAL_RETURN, true);
   for (const auto &[Trace, Info] : Traces) {
@@ -2010,13 +2065,17 @@ void DataAggregator::processBranchEvents() {
 std::error_code DataAggregator::parseMainEvents() {
   if (Error E = filterBinaryMMapInfo())
     return errorToErrorCode(std::move(E));
-  return opts::BasicAggregation ? parseBasicEvents() : parseBranchEvents();
+  bool BasicAgg =
+      (bolt_profile_opts::getBasicEvents(*BC) ||
+       bolt_profile_opts::getBa(*BC) || bolt_profile_opts::getNl(*BC));
+  return BasicAgg ? parseBasicEvents() : parseBranchEvents();
 }
 
 std::error_code DataAggregator::parseBasicEvents() {
   outs() << "PERF2BOLT: parsing basic events (without brstack)...\n";
+  bool TimeAggregator = bolt_profile_opts::getTimeAggr(*BC);
   NamedRegionTimer T("parseBasic", "Parsing basic events", TimerGroupName,
-                     TimerGroupDesc, opts::TimeAggregator);
+                     TimerGroupDesc, TimeAggregator);
   while (hasData()) {
     ErrorOr<PerfBasicSample> Sample = parseBasicSample();
     if (std::error_code EC = Sample.getError())
@@ -2036,8 +2095,9 @@ std::error_code DataAggregator::parseBasicEvents() {
 
 void DataAggregator::processBasicEvents() {
   outs() << "PERF2BOLT: processing basic events (without brstack)...\n";
+  bool TimeAggregator = bolt_profile_opts::getTimeAggr(*BC);
   NamedRegionTimer T("processBasic", "Processing basic events", TimerGroupName,
-                     TimerGroupDesc, opts::TimeAggregator);
+                     TimerGroupDesc, TimeAggregator);
   uint64_t OutOfRangeSamples = 0;
   for (auto &Sample : BasicSamples) {
     const uint64_t PC = Sample.first;
@@ -2056,8 +2116,9 @@ void DataAggregator::processBasicEvents() {
 
 std::error_code DataAggregator::parseMemEvents() {
   outs() << "PERF2BOLT: parsing memory events...\n";
+  bool TimeAggregator = bolt_profile_opts::getTimeAggr(*BC);
   NamedRegionTimer T("parseMemEvents", "Parsing mem events", TimerGroupName,
-                     TimerGroupDesc, opts::TimeAggregator);
+                     TimerGroupDesc, TimeAggregator);
   while (hasData()) {
     ErrorOr<PerfMemSample> Sample = parseMemSample();
     if (std::error_code EC = Sample.getError())
@@ -2071,8 +2132,10 @@ std::error_code DataAggregator::parseMemEvents() {
 }
 
 void DataAggregator::processMemEvents() {
+  bool FilterMemProfile = bolt_profile_opts::getFilterMemProfile(*BC);
+  bool TimeAggregator = bolt_profile_opts::getTimeAggr(*BC);
   NamedRegionTimer T("ProcessMemEvents", "Processing mem events",
-                     TimerGroupName, TimerGroupDesc, opts::TimeAggregator);
+                     TimerGroupName, TimerGroupDesc, TimeAggregator);
   for (const PerfMemSample &Sample : MemSamples) {
     uint64_t PC = Sample.PC;
     uint64_t Addr = Sample.Addr;
@@ -2095,7 +2158,7 @@ void DataAggregator::processMemEvents() {
     if (BinaryData *BD = BC->getBinaryDataContainingAddress(Addr)) {
       MemName = BD->getName();
       Addr -= BD->getAddress();
-    } else if (opts::FilterMemProfile) {
+    } else if (FilterMemProfile) {
       // Filter out heap/stack accesses
       continue;
     }
@@ -2113,8 +2176,9 @@ void DataAggregator::processMemEvents() {
 
 std::error_code DataAggregator::parsePreAggregatedLBRSamples() {
   outs() << "PERF2BOLT: parsing pre-aggregated profile...\n";
+  bool TimeAggregator = bolt_profile_opts::getTimeAggr(*BC);
   NamedRegionTimer T("parseAggregated", "Parsing aggregated branch events",
-                     TimerGroupName, TimerGroupDesc, opts::TimeAggregator);
+                     TimerGroupName, TimerGroupDesc, TimeAggregator);
   size_t AggregatedLBRs = 0;
   while (hasData()) {
     if (std::error_code EC = parseAggregatedLBREntry())
@@ -2166,7 +2230,7 @@ std::optional<uint64_t> parsePerfTime(const StringRef TimeStr) {
     return std::nullopt;
   return SecTime * 1000000ULL + USecTime;
 }
-}
+} // namespace
 
 std::optional<DataAggregator::ForkInfo> DataAggregator::parseForkEvent() {
   while (checkAndConsumeFS()) {
@@ -2294,8 +2358,9 @@ DataAggregator::parseMMapEvent() {
 
 std::error_code DataAggregator::parseMMapEvents() {
   outs() << "PERF2BOLT: parsing perf-script mmap events output\n";
+  bool TimeAggregator = bolt_profile_opts::getTimeAggr(*BC);
   NamedRegionTimer T("parseMMapEvents", "Parsing mmap events", TimerGroupName,
-                     TimerGroupDesc, opts::TimeAggregator);
+                     TimerGroupDesc, TimeAggregator);
 
   std::multimap<StringRef, MMapInfo> GlobalMMapInfo;
   while (hasData()) {
@@ -2403,8 +2468,9 @@ std::error_code DataAggregator::parseMMapEvents() {
 
 std::error_code DataAggregator::parseTaskEvents() {
   outs() << "PERF2BOLT: parsing perf-script task events output\n";
+  bool TimeAggregator = bolt_profile_opts::getTimeAggr(*BC);
   NamedRegionTimer T("parseTaskEvents", "Parsing task events", TimerGroupName,
-                     TimerGroupDesc, opts::TimeAggregator);
+                     TimerGroupDesc, TimeAggregator);
 
   while (hasData()) {
     if (std::optional<int32_t> CommInfo = parseCommExecEvent()) {
@@ -2561,12 +2627,16 @@ std::error_code DataAggregator::writeFdataFile(StringRef OutputFilename) const {
             << " " << Twine::utohexstr(Loc.Offset) << FieldSeparator;
   };
 
+  bool BasicAgg =
+      (bolt_profile_opts::getBasicEvents(*BC) ||
+       bolt_profile_opts::getBa(*BC) || bolt_profile_opts::getNl(*BC));
+
   uint64_t BranchValues = 0;
   uint64_t MemValues = 0;
 
   if (BAT)
     OutFile << "boltedcollection\n";
-  if (opts::BasicAggregation) {
+  if (BasicAgg) {
     OutFile << "no_lbr";
     for (const StringMapEntry<EmptyStringSetTag> &Entry : EventNames)
       OutFile << " " << Entry.getKey();
@@ -2628,8 +2698,13 @@ std::error_code DataAggregator::writeBATYAML(BinaryContext &BC,
 
   yaml::bolt::BinaryProfile BP;
 
+  bool ProfileWritePseudoProbes =
+      bolt_profile_opts::getProfileWritePseudoProbes(BC);
+  bool BasicAgg =
+      (bolt_profile_opts::getBasicEvents(BC) || bolt_profile_opts::getBa(BC) ||
+       bolt_profile_opts::getNl(BC));
   const MCPseudoProbeDecoder *PseudoProbeDecoder =
-      opts::ProfileWritePseudoProbes ? BC.getPseudoProbeDecoder() : nullptr;
+      ProfileWritePseudoProbes ? BC.getPseudoProbeDecoder() : nullptr;
 
   // Fill out the header info.
   BP.Header.Version = 1;
@@ -2647,8 +2722,8 @@ std::error_code DataAggregator::writeBATYAML(BinaryContext &BC,
   for (const StringMapEntry<EmptyStringSetTag> &EventEntry : EventNames)
     EventNamesOS << LS << EventEntry.first().str();
 
-  BP.Header.Flags = opts::BasicAggregation ? BinaryFunction::PF_BASIC
-                                           : BinaryFunction::PF_BRANCH;
+  BP.Header.Flags =
+      BasicAgg ? BinaryFunction::PF_BASIC : BinaryFunction::PF_BRANCH;
 
   // Add probe inline tree nodes.
   YAMLProfileWriter::InlineTreeDesc InlineTree;
@@ -2656,7 +2731,7 @@ std::error_code DataAggregator::writeBATYAML(BinaryContext &BC,
     std::tie(BP.PseudoProbeDesc, InlineTree) =
         YAMLProfileWriter::convertPseudoProbeDesc(*PseudoProbeDecoder);
 
-  if (!opts::BasicAggregation) {
+  if (!BasicAgg) {
     // Convert profile for functions not covered by BAT
     for (auto &BFI : BC.getBinaryFunctions()) {
       BinaryFunction &Function = BFI.second;
@@ -2730,7 +2805,7 @@ std::error_code DataAggregator::writeBATYAML(BinaryContext &BC,
       // Set entry counts, similar to DataReader::readProfile.
       for (const BranchInfo &BI : Branches.EntryData) {
         if (!BlockMap.isInputBlock(BI.To.Offset)) {
-          if (opts::Verbosity >= 1)
+          if (opts::getVerbosity(BC) >= 1)
             errs() << "BOLT-WARNING: Unexpected EntryData in " << FuncName
                    << " at 0x" << Twine::utohexstr(BI.To.Offset) << '\n';
           continue;

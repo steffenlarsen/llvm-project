@@ -64,6 +64,17 @@ TEST(IntegerInclusiveIntervalUtilsTest, ParseSingleInterval) {
   EXPECT_EQ(Intervals[0].getEnd(), 20);
 }
 
+TEST(IntegerInclusiveIntervalUtilsTest, ParseSingleElementInterval) {
+  // Equal bounds denote a one-element interval; -opt-bisect-limit=1 relies on
+  // "1-1" parsing successfully.
+  auto ER = IntegerInclusiveIntervalUtils::parseIntervals("5-5");
+  ASSERT_THAT_EXPECTED(ER, Succeeded());
+  auto Intervals = std::move(*ER);
+  EXPECT_EQ(Intervals.size(), 1U);
+  EXPECT_EQ(Intervals[0].getBegin(), 5);
+  EXPECT_EQ(Intervals[0].getEnd(), 5);
+}
+
 TEST(IntegerInclusiveIntervalUtilsTest, ParseMultipleIntervals) {
   auto ER = IntegerInclusiveIntervalUtils::parseIntervals("1-5,10,15-20");
   ASSERT_THAT_EXPECTED(ER, Succeeded());

@@ -12,7 +12,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "xray-graph.h"
-#include "xray-registry.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/XRay/InstrumentationMap.h"
 #include "llvm/XRay/Trace.h"
@@ -22,142 +21,20 @@
 using namespace llvm;
 using namespace llvm::xray;
 
-// Setup llvm-xray graph subcommand and its options.
-static cl::SubCommand GraphC("graph", "Generate function-call graph");
-static cl::opt<std::string> GraphInput(cl::Positional,
-                                       cl::desc("<xray log file>"),
-                                       cl::Required, cl::sub(GraphC));
-
-static cl::opt<bool>
-    GraphKeepGoing("keep-going", cl::desc("Keep going on errors encountered"),
-                   cl::sub(GraphC), cl::init(false));
-static cl::alias GraphKeepGoing2("k", cl::aliasopt(GraphKeepGoing),
-                                 cl::desc("Alias for -keep-going"));
-
-static cl::opt<std::string>
-    GraphOutput("output", cl::value_desc("Output file"), cl::init("-"),
-                cl::desc("output file; use '-' for stdout"), cl::sub(GraphC));
-static cl::alias GraphOutput2("o", cl::aliasopt(GraphOutput),
-                              cl::desc("Alias for -output"));
-
-static cl::opt<std::string>
-    GraphInstrMap("instr_map",
-                  cl::desc("binary with the instrumrntation map, or "
-                           "a separate instrumentation map"),
-                  cl::value_desc("binary with xray_instr_map"), cl::sub(GraphC),
-                  cl::init(""));
-static cl::alias GraphInstrMap2("m", cl::aliasopt(GraphInstrMap),
-                                cl::desc("alias for -instr_map"));
-
-static cl::opt<bool> GraphDeduceSiblingCalls(
-    "deduce-sibling-calls",
-    cl::desc("Deduce sibling calls when unrolling function call stacks"),
-    cl::sub(GraphC), cl::init(false));
-static cl::alias
-    GraphDeduceSiblingCalls2("d", cl::aliasopt(GraphDeduceSiblingCalls),
-                             cl::desc("Alias for -deduce-sibling-calls"));
-
-static cl::opt<GraphRenderer::StatType>
-    GraphEdgeLabel("edge-label",
-                   cl::desc("Output graphs with edges labeled with this field"),
-                   cl::value_desc("field"), cl::sub(GraphC),
-                   cl::init(GraphRenderer::StatType::NONE),
-                   cl::values(clEnumValN(GraphRenderer::StatType::NONE, "none",
-                                         "Do not label Edges"),
-                              clEnumValN(GraphRenderer::StatType::COUNT,
-                                         "count", "function call counts"),
-                              clEnumValN(GraphRenderer::StatType::MIN, "min",
-                                         "minimum function durations"),
-                              clEnumValN(GraphRenderer::StatType::MED, "med",
-                                         "median function durations"),
-                              clEnumValN(GraphRenderer::StatType::PCT90, "90p",
-                                         "90th percentile durations"),
-                              clEnumValN(GraphRenderer::StatType::PCT99, "99p",
-                                         "99th percentile durations"),
-                              clEnumValN(GraphRenderer::StatType::MAX, "max",
-                                         "maximum function durations"),
-                              clEnumValN(GraphRenderer::StatType::SUM, "sum",
-                                         "sum of call durations")));
-static cl::alias GraphEdgeLabel2("e", cl::aliasopt(GraphEdgeLabel),
-                                 cl::desc("Alias for -edge-label"));
-
-static cl::opt<GraphRenderer::StatType> GraphVertexLabel(
-    "vertex-label",
-    cl::desc("Output graphs with vertices labeled with this field"),
-    cl::value_desc("field"), cl::sub(GraphC),
-    cl::init(GraphRenderer::StatType::NONE),
-    cl::values(clEnumValN(GraphRenderer::StatType::NONE, "none",
-                          "Do not label Vertices"),
-               clEnumValN(GraphRenderer::StatType::COUNT, "count",
-                          "function call counts"),
-               clEnumValN(GraphRenderer::StatType::MIN, "min",
-                          "minimum function durations"),
-               clEnumValN(GraphRenderer::StatType::MED, "med",
-                          "median function durations"),
-               clEnumValN(GraphRenderer::StatType::PCT90, "90p",
-                          "90th percentile durations"),
-               clEnumValN(GraphRenderer::StatType::PCT99, "99p",
-                          "99th percentile durations"),
-               clEnumValN(GraphRenderer::StatType::MAX, "max",
-                          "maximum function durations"),
-               clEnumValN(GraphRenderer::StatType::SUM, "sum",
-                          "sum of call durations")));
-static cl::alias GraphVertexLabel2("v", cl::aliasopt(GraphVertexLabel),
-                                   cl::desc("Alias for -edge-label"));
-
-static cl::opt<GraphRenderer::StatType> GraphEdgeColorType(
-    "color-edges",
-    cl::desc("Output graphs with edge colors determined by this field"),
-    cl::value_desc("field"), cl::sub(GraphC),
-    cl::init(GraphRenderer::StatType::NONE),
-    cl::values(clEnumValN(GraphRenderer::StatType::NONE, "none",
-                          "Do not color Edges"),
-               clEnumValN(GraphRenderer::StatType::COUNT, "count",
-                          "function call counts"),
-               clEnumValN(GraphRenderer::StatType::MIN, "min",
-                          "minimum function durations"),
-               clEnumValN(GraphRenderer::StatType::MED, "med",
-                          "median function durations"),
-               clEnumValN(GraphRenderer::StatType::PCT90, "90p",
-                          "90th percentile durations"),
-               clEnumValN(GraphRenderer::StatType::PCT99, "99p",
-                          "99th percentile durations"),
-               clEnumValN(GraphRenderer::StatType::MAX, "max",
-                          "maximum function durations"),
-               clEnumValN(GraphRenderer::StatType::SUM, "sum",
-                          "sum of call durations")));
-static cl::alias GraphEdgeColorType2("c", cl::aliasopt(GraphEdgeColorType),
-                                     cl::desc("Alias for -color-edges"));
-
-static cl::opt<GraphRenderer::StatType> GraphVertexColorType(
-    "color-vertices",
-    cl::desc("Output graphs with vertex colors determined by this field"),
-    cl::value_desc("field"), cl::sub(GraphC),
-    cl::init(GraphRenderer::StatType::NONE),
-    cl::values(clEnumValN(GraphRenderer::StatType::NONE, "none",
-                          "Do not color vertices"),
-               clEnumValN(GraphRenderer::StatType::COUNT, "count",
-                          "function call counts"),
-               clEnumValN(GraphRenderer::StatType::MIN, "min",
-                          "minimum function durations"),
-               clEnumValN(GraphRenderer::StatType::MED, "med",
-                          "median function durations"),
-               clEnumValN(GraphRenderer::StatType::PCT90, "90p",
-                          "90th percentile durations"),
-               clEnumValN(GraphRenderer::StatType::PCT99, "99p",
-                          "99th percentile durations"),
-               clEnumValN(GraphRenderer::StatType::MAX, "max",
-                          "maximum function durations"),
-               clEnumValN(GraphRenderer::StatType::SUM, "sum",
-                          "sum of call durations")));
-static cl::alias GraphVertexColorType2("b", cl::aliasopt(GraphVertexColorType),
-                                       cl::desc("Alias for -edge-label"));
+std::string GraphInputVal;
+bool GraphKeepGoingVal;
+std::string GraphOutputVal;
+std::string GraphInstrMapVal;
+bool GraphDeduceSiblingCallsVal;
+GraphRenderer::StatType GraphEdgeLabelVal;
+GraphRenderer::StatType GraphVertexLabelVal;
+GraphRenderer::StatType GraphEdgeColorTypeVal;
+GraphRenderer::StatType GraphVertexColorTypeVal;
 
 template <class T> static T diff(T L, T R) {
   return std::max(L, R) - std::min(L, R);
 }
 
-// Updates the statistics for a GraphRenderer::TimeStat
 static void updateStat(GraphRenderer::TimeStat &S, int64_t L) {
   S.Count++;
   if (S.Min > L || S.Min == 0)
@@ -167,8 +44,6 @@ static void updateStat(GraphRenderer::TimeStat &S, int64_t L) {
   S.Sum += L;
 }
 
-// Labels in a DOT graph must be legal XML strings so it's necessary to escape
-// certain characters.
 static std::string escapeString(StringRef Label) {
   std::string Str;
   Str.reserve(Label.size());
@@ -191,24 +66,6 @@ static std::string escapeString(StringRef Label) {
   return Str;
 }
 
-// Evaluates an XRay record and performs accounting on it.
-//
-// If the record is an ENTER record it pushes the FuncID and TSC onto a
-// structure representing the call stack for that function.
-// If the record is an EXIT record it checks computes computes the ammount of
-// time the function took to complete and then stores that information in an
-// edge of the graph. If there is no matching ENTER record the function tries
-// to recover by assuming that there were EXIT records which were missed, for
-// example caused by tail call elimination and if the option is enabled then
-// then tries to recover from this.
-//
-// This function will also error if the records are out of order, as the trace
-// is expected to be sorted.
-//
-// The graph generated has an immaginary root for functions called by no-one at
-// FuncId 0.
-//
-// FIXME: Refactor this and account subcommand to reduce code duplication.
 Error GraphRenderer::accountRecord(const XRayRecord &Record) {
   using std::make_error_code;
   using std::errc;
@@ -230,8 +87,6 @@ Error GraphRenderer::accountRecord(const XRayRecord &Record) {
   }
   case RecordTypes::EXIT:
   case RecordTypes::TAIL_EXIT: {
-    // FIXME: Refactor this and the account subcommand to reduce code
-    // duplication
     if (ThreadStack.size() == 0 || ThreadStack.back().FuncId != Record.FuncId) {
       if (!DeduceSiblingCalls)
         return make_error<StringError>("No matching ENTRY record",
@@ -241,10 +96,8 @@ Error GraphRenderer::accountRecord(const XRayRecord &Record) {
             return A.FuncId == Record.FuncId;
           });
       if (!FoundParent)
-        return make_error<StringError>(
-            "No matching Entry record in stack",
-            make_error_code(errc::invalid_argument)); // There is no matching
-                                                      // Function for this exit.
+        return make_error<StringError>("No matching Entry record in stack",
+                                       make_error_code(errc::invalid_argument));
       while (ThreadStack.back().FuncId != Record.FuncId) {
         TimestampT D = diff(ThreadStack.back().TSC, Record.TSC);
         VertexIdentifier TopFuncId = ThreadStack.back().FuncId;
@@ -269,7 +122,6 @@ Error GraphRenderer::accountRecord(const XRayRecord &Record) {
   }
   case RecordTypes::CUSTOM_EVENT:
   case RecordTypes::TYPED_EVENT:
-    // TODO: Support custom and typed events in the graph processing?
     break;
   }
 
@@ -326,8 +178,6 @@ void GraphRenderer::calculateVertexStatistics() {
   }
 }
 
-// A Helper function for normalizeStatistics which normalises a single
-// TimeStat element.
 static void normalizeTimeStat(GraphRenderer::TimeStat &S,
                               double CycleFrequency) {
   int64_t OldCount = S.Count;
@@ -335,7 +185,6 @@ static void normalizeTimeStat(GraphRenderer::TimeStat &S,
   S.Count = OldCount;
 }
 
-// Normalises the statistics in the graph for a given TSC frequency.
 void GraphRenderer::normalizeStatistics(double CycleFrequency) {
   for (auto &E : G.edges()) {
     auto &S = E.second.S;
@@ -350,7 +199,6 @@ void GraphRenderer::normalizeStatistics(double CycleFrequency) {
   normalizeTimeStat(G.GraphVertexMax, CycleFrequency);
 }
 
-// Returns a string containing the value of statistic field T
 std::string
 GraphRenderer::TimeStat::getString(GraphRenderer::StatType T) const {
   std::string St;
@@ -373,8 +221,6 @@ GraphRenderer::TimeStat::getString(GraphRenderer::StatType T) const {
   return St;
 }
 
-// Returns the quotient between the property T of this and another TimeStat as
-// a double
 double GraphRenderer::TimeStat::getDouble(StatType T) const {
   double retval = 0;
   double TimeStat::*DoubleStatPtrs[] = {&TimeStat::Min,   &TimeStat::Median,
@@ -396,12 +242,6 @@ double GraphRenderer::TimeStat::getDouble(StatType T) const {
   return retval;
 }
 
-// Outputs a DOT format version of the Graph embedded in the GraphRenderer
-// object on OS. It does this in the expected way by itterating
-// through all edges then vertices and then outputting them and their
-// annotations.
-//
-// FIXME: output more information, better presented.
 void GraphRenderer::exportGraphAsDOT(raw_ostream &OS, StatType ET, StatType EC,
                                      StatType VT, StatType VC) {
   OS << "digraph xray {\n";
@@ -445,12 +285,12 @@ void GraphRenderer::exportGraphAsDOT(raw_ostream &OS, StatType ET, StatType EC,
 
 Expected<GraphRenderer> GraphRenderer::Factory::getGraphRenderer() {
   InstrumentationMap Map;
-  if (!GraphInstrMap.empty()) {
-    auto InstrumentationMapOrError = loadInstrumentationMap(GraphInstrMap);
+  if (!InstrMap.empty()) {
+    auto InstrumentationMapOrError = loadInstrumentationMap(InstrMap);
     if (!InstrumentationMapOrError)
       return joinErrors(
           make_error<StringError>(
-              Twine("Cannot open instrumentation map '") + GraphInstrMap + "'",
+              Twine("Cannot open instrumentation map '") + InstrMap + "'",
               std::make_error_code(std::errc::invalid_argument)),
           InstrumentationMapOrError.takeError());
     Map = std::move(*InstrumentationMapOrError);
@@ -477,7 +317,7 @@ Expected<GraphRenderer> GraphRenderer::Factory::getGraphRenderer() {
                << FuncIdHelper.SymbolOrNumber(Entry.FuncId) << '\n';
     }
 
-    if (!GraphKeepGoing)
+    if (!KeepGoing)
       return joinErrors(make_error<StringError>(
                             "Error encountered generating the call graph.",
                             std::make_error_code(std::errc::invalid_argument)),
@@ -498,26 +338,18 @@ Expected<GraphRenderer> GraphRenderer::Factory::getGraphRenderer() {
   return GR;
 }
 
-// Here we register and implement the llvm-xray graph subcommand.
-// The bulk of this code reads in the options, opens the required files, uses
-// those files to create a context for analysing the xray trace, then there is a
-// short loop which actually analyses the trace, generates the graph and then
-// outputs it as a DOT.
-//
-// FIXME: include additional filtering and annalysis passes to provide more
-// specific useful information.
-static CommandRegistration Unused(&GraphC, []() -> Error {
+Error tryGraph() {
   GraphRenderer::Factory F;
 
-  F.KeepGoing = GraphKeepGoing;
-  F.DeduceSiblingCalls = GraphDeduceSiblingCalls;
-  F.InstrMap = GraphInstrMap;
+  F.KeepGoing = GraphKeepGoingVal;
+  F.DeduceSiblingCalls = GraphDeduceSiblingCallsVal;
+  F.InstrMap = GraphInstrMapVal;
 
-  auto TraceOrErr = loadTraceFile(GraphInput, true);
+  auto TraceOrErr = loadTraceFile(GraphInputVal, true);
 
   if (!TraceOrErr)
     return make_error<StringError>(
-        Twine("Failed loading input file '") + GraphInput + "'",
+        Twine("Failed loading input file '") + GraphInputVal + "'",
         make_error_code(llvm::errc::invalid_argument));
 
   F.Trace = std::move(*TraceOrErr);
@@ -527,12 +359,12 @@ static CommandRegistration Unused(&GraphC, []() -> Error {
   auto &GR = *GROrError;
 
   std::error_code EC;
-  raw_fd_ostream OS(GraphOutput, EC, sys::fs::OpenFlags::OF_TextWithCRLF);
+  raw_fd_ostream OS(GraphOutputVal, EC, sys::fs::OpenFlags::OF_TextWithCRLF);
   if (EC)
     return make_error<StringError>(
-        Twine("Cannot open file '") + GraphOutput + "' for writing.", EC);
+        Twine("Cannot open file '") + GraphOutputVal + "' for writing.", EC);
 
-  GR.exportGraphAsDOT(OS, GraphEdgeLabel, GraphEdgeColorType, GraphVertexLabel,
-                      GraphVertexColorType);
+  GR.exportGraphAsDOT(OS, GraphEdgeLabelVal, GraphEdgeColorTypeVal,
+                      GraphVertexLabelVal, GraphVertexColorTypeVal);
   return Error::success();
-});
+}

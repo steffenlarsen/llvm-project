@@ -363,7 +363,8 @@ LLVM_ABI void ComputeCrossModuleImport(
     function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
         isPrevailing,
     FunctionImporter::ImportListsTy &ImportLists,
-    DenseMap<StringRef, FunctionImporter::ExportSetTy> &ExportLists);
+    DenseMap<StringRef, FunctionImporter::ExportSetTy> &ExportLists,
+    const clv2::OptionsContext &Ctx);
 
 /// PrevailingType enum used as a return type of callback passed
 /// to computeDeadSymbolsAndUpdateIndirectCalls. Yes and No values used when
@@ -386,7 +387,8 @@ LLVM_ABI void updateIndirectCalls(ModuleSummaryIndex &Index);
 LLVM_ABI void computeDeadSymbolsAndUpdateIndirectCalls(
     ModuleSummaryIndex &Index,
     const DenseSet<GlobalValue::GUID> &GUIDPreservedSymbols,
-    function_ref<PrevailingType(GlobalValue::GUID)> isPrevailing);
+    function_ref<PrevailingType(GlobalValue::GUID)> isPrevailing,
+    const clv2::OptionsContext &Ctx);
 
 /// Compute dead symbols and run constant propagation in combined index
 /// after that.
@@ -394,7 +396,7 @@ LLVM_ABI void computeDeadSymbolsWithConstProp(
     ModuleSummaryIndex &Index,
     const DenseSet<GlobalValue::GUID> &GUIDPreservedSymbols,
     function_ref<PrevailingType(GlobalValue::GUID)> isPrevailing,
-    bool ImportEnabled);
+    bool ImportEnabled, const clv2::OptionsContext &Ctx);
 
 /// Converts value \p GV to declaration, or replaces with a declaration if
 /// it is an alias. Returns true if converted, false if replaced.
@@ -418,7 +420,7 @@ LLVM_ABI void gatherImportedSummariesForModule(
     const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
     const FunctionImporter::ImportMapTy &ImportList,
     ModuleToSummariesForIndexTy &ModuleToSummariesForIndex,
-    GVSummaryPtrSet &DecSummaries);
+    GVSummaryPtrSet &DecSummaries, const clv2::OptionsContext &Ctx);
 
 /// Emit into \p OutputFilename the files module \p ModulePath will import from.
 LLVM_ABI Error

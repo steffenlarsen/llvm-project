@@ -26,15 +26,17 @@ namespace memprof {
 
 /// Whether the alloc memeprof metadata will include context size info for all
 /// MIBs.
-LLVM_ABI bool metadataIncludesAllContextSizeInfo();
+LLVM_ABI bool
+metadataIncludesAllContextSizeInfo(const clv2::OptionsContext &Ctx);
 
 /// Whether the alloc memprof metadata may include context size info for some
 /// MIBs (but possibly not all).
-LLVM_ABI bool metadataMayIncludeContextSizeInfo();
+LLVM_ABI bool
+metadataMayIncludeContextSizeInfo(const clv2::OptionsContext &Ctx);
 
 /// Whether we need to record the context size info in the alloc trie used to
 /// build metadata.
-LLVM_ABI bool recordContextSizeInfoForAnalysis();
+LLVM_ABI bool recordContextSizeInfoForAnalysis(const clv2::OptionsContext &Ctx);
 
 /// Build callstack metadata from the provided list of call stack ids. Returns
 /// the resulting metadata node.

@@ -26,9 +26,9 @@ using namespace llvm;
 
 // Set up some test passes.
 namespace llvm {
-void initializeAATestPassPass(PassRegistry&);
-void initializeTestCustomAAWrapperPassPass(PassRegistry&);
-}
+void initializeAATestPassPass(PassRegistry &);
+void initializeTestCustomAAWrapperPassPass(PassRegistry &);
+} // namespace llvm
 
 namespace {
 struct AATestPass : FunctionPass {
@@ -61,7 +61,7 @@ struct AATestPass : FunctionPass {
     return false;
   }
 };
-}
+} // namespace
 
 char AATestPass::ID = 0;
 INITIALIZE_PASS_BEGIN(AATestPass, "aa-test-pas", "Alias Analysis Test Pass",
@@ -90,7 +90,7 @@ struct TestCustomAAResult : AAResultBase {
     return AliasResult::MayAlias;
   }
 };
-}
+} // namespace
 
 namespace {
 /// A wrapper pass for the legacy pass manager to use with the above custom AA
@@ -126,20 +126,20 @@ public:
   TestCustomAAResult &getResult() { return *Result; }
   const TestCustomAAResult &getResult() const { return *Result; }
 };
-}
+} // namespace
 
 char TestCustomAAWrapperPass::ID = 0;
 INITIALIZE_PASS_BEGIN(TestCustomAAWrapperPass, "test-custom-aa",
-                "Test Custom AA Wrapper Pass", false, true)
+                      "Test Custom AA Wrapper Pass", false, true)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_END(TestCustomAAWrapperPass, "test-custom-aa",
-                "Test Custom AA Wrapper Pass", false, true)
+                    "Test Custom AA Wrapper Pass", false, true)
 
 namespace {
 
 class AliasAnalysisTest : public testing::Test {
 protected:
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   Module M;
   TargetLibraryInfoImpl TLII;
   TargetLibraryInfo TLI;
@@ -229,7 +229,7 @@ static Instruction *getInstructionByName(Function &F, StringRef Name) {
 }
 
 TEST_F(AliasAnalysisTest, BatchAAPhiCycles) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(R"(
     define void @f(ptr noalias %a, i1 %c) {
@@ -246,7 +246,8 @@ TEST_F(AliasAnalysisTest, BatchAAPhiCycles) {
       %s2 = select i1 %c, ptr %a2, ptr %a1
       br label %loop
     }
-  )", Err, C);
+  )",
+                                                  Err, C);
 
   Function *F = M->getFunction("f");
   Instruction *Phi = getInstructionByName(*F, "phi");
@@ -277,7 +278,7 @@ TEST_F(AliasAnalysisTest, BatchAAPhiCycles) {
 }
 
 TEST_F(AliasAnalysisTest, BatchAAPhiAssumption) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(R"(
     define void @f(ptr %a.base, ptr %b.base, i1 %c) {
@@ -291,7 +292,8 @@ TEST_F(AliasAnalysisTest, BatchAAPhiAssumption) {
       %b.next = getelementptr i8, ptr %b, i64 1
       br label %loop
     }
-  )", Err, C);
+  )",
+                                                  Err, C);
 
   Function *F = M->getFunction("f");
   Instruction *A = getInstructionByName(*F, "a");
@@ -315,7 +317,7 @@ TEST_F(AliasAnalysisTest, BatchAAPhiAssumption) {
 // Check that two aliased GEPs with non-constant offsets are correctly
 // analyzed and their relative offset can be requested from AA.
 TEST_F(AliasAnalysisTest, PartialAliasOffset) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(R"(
     define void @foo(ptr %arg, i32 %i) {
@@ -350,7 +352,7 @@ TEST_F(AliasAnalysisTest, PartialAliasOffset) {
 // Check that swapping the order of parameters to `AA.alias()` changes offset
 // sign and that the sign is such that FirstLoc + Offset == SecondLoc.
 TEST_F(AliasAnalysisTest, PartialAliasOffsetSign) {
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyString(R"(
     define void @f(ptr %p) {
@@ -382,7 +384,7 @@ TEST_F(AliasAnalysisTest, PartialAliasOffsetSign) {
 }
 class AAPassInfraTest : public testing::Test {
 protected:
-  LLVMContext C;
+  LLVMContext C{llvm::clv2::defaultOptionsContext()};
   SMDiagnostic Err;
   std::unique_ptr<Module> M;
 

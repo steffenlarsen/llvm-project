@@ -23,20 +23,33 @@
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/RISCV/RISCVOptionsOptInfos.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "riscv-isel"
 #define PASS_NAME "RISC-V DAG->DAG Pattern Instruction Selection"
 
-extern cl::opt<uint32_t> PreferredLandingPadLabel;
+static bool getUsePseudoMovImm(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::RV_UsePseudoMovImm>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> UsePseudoMovImm(
-    "riscv-use-rematerializable-movimm", cl::Hidden,
-    cl::desc("Use a rematerializable pseudoinstruction for 2 instruction "
-             "constant materialization"),
-    cl::init(false));
+static bool PreferredLandingPadLabelWasSpecified = false;
+
+static uint32_t getPreferredLandingPadLabel(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::RV_PreferredLandingPadLabel>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getPreferredLandingPadLabelWasSpecified(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::RISCVOptsReg>(
+          F.getContext().getOptionsContext()))
+    return O->specified<&clv2::RV_PreferredLandingPadLabel>();
+  return PreferredLandingPadLabelWasSpecified;
+}
 
 #define GET_DAGISEL_BODY RISCVDAGToDAGISel
 #include "RISCVGenDAGISel.inc"
@@ -214,7 +227,8 @@ static SDValue selectImm(SelectionDAG *CurDAG, const SDLoc &DL, const MVT VT,
   RISCVMatInt::InstSeq Seq = RISCVMatInt::generateInstSeq(Imm, Subtarget);
 
   // Use a rematerializable pseudo instruction for short sequences if enabled.
-  if (Seq.size() == 2 && UsePseudoMovImm)
+  if (Seq.size() == 2 &&
+      getUsePseudoMovImm(CurDAG->getMachineFunction().getFunction()))
     return SDValue(
         CurDAG->getMachineNode(RISCV::PseudoMovImm, DL, VT,
                                CurDAG->getSignedTargetConstant(Imm, DL, VT)),
@@ -3252,12 +3266,14 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     unsigned PseudoOpc = IsIndirect ? RISCV::PseudoCALLIndirectLpadAlign
                                     : RISCV::PseudoCALLLpadAlign;
 
+    const Function &F = CurDAG->getMachineFunction().getFunction();
     uint32_t LpadLabel = 0;
-    if (PreferredLandingPadLabel.getNumOccurrences() > 0) {
-      if (!isUInt<20>(PreferredLandingPadLabel))
+    if (getPreferredLandingPadLabelWasSpecified(F)) {
+      uint32_t Val = getPreferredLandingPadLabel(F);
+      if (!isUInt<20>(Val))
         report_fatal_error("riscv-landing-pad-label=<val>, <val> needs to fit "
                            "in unsigned 20-bits");
-      LpadLabel = PreferredLandingPadLabel;
+      LpadLabel = Val;
     }
 
     // Preserve the argument-register and register-mask operands, between

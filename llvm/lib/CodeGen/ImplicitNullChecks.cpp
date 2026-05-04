@@ -32,6 +32,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/MemoryLocation.h"
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
 #include "llvm/CodeGen/FaultMaps.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -48,27 +49,27 @@
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 #include <cassert>
 #include <cstdint>
 #include <iterator>
 
 using namespace llvm;
 
-static cl::opt<int> PageSize("imp-null-check-page-size",
-                             cl::desc("The page size of the target in bytes"),
-                             cl::init(4096), cl::Hidden);
+static int getImpNullCheckPageSize(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ImpNullCheckPageSize>(Ctx);
+}
 
-static cl::opt<unsigned> MaxInstsToConsider(
-    "imp-null-max-insts-to-consider",
-    cl::desc("The max number of instructions to consider hoisting loads over "
-             "(the algorithm is quadratic over this number)"),
-    cl::Hidden, cl::init(8));
+static unsigned getImpNullMaxInstsToConsider(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<&clv2::CGPASS_ImpNullMaxInstsToConsider>(Ctx);
+}
 
 #define DEBUG_TYPE "implicit-null-checks"
 
@@ -471,7 +472,12 @@ ImplicitNullChecksImpl::isSuitableMemoryOp(const MachineInstr &MI,
 
   // We want the mem access to be issued at a sane offset from PointerReg,
   // so that if PointerReg is null then the access reliably page faults.
-  if (!(-PageSize < Displacement && Displacement < PageSize))
+  if (!(-getImpNullCheckPageSize(
+            MI.getMF()->getFunction().getContext().getOptionsContext()) <
+            Displacement &&
+        Displacement <
+            getImpNullCheckPageSize(
+                MI.getMF()->getFunction().getContext().getOptionsContext())))
     return SR_Unsuitable;
 
   // Finally, check whether the current memory access aliases with previous one.
@@ -684,7 +690,12 @@ bool ImplicitNullChecksImpl::analyzeBlockForNullChecks(
   SmallVector<MachineInstr *, 8> InstsSeenSoFar;
 
   for (auto &MI : *NotNullSucc) {
-    if (!canHandle(&MI) || InstsSeenSoFar.size() >= MaxInstsToConsider)
+    if (!canHandle(&MI) ||
+        InstsSeenSoFar.size() >=
+            getImpNullMaxInstsToConsider(MBB.getParent()
+                                             ->getFunction()
+                                             .getContext()
+                                             .getOptionsContext()))
       return false;
 
     MachineInstr *Dependence;

@@ -15,16 +15,18 @@
 #include "bolt/Profile/ProfileYAMLMapping.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringMap.h"
-#include "llvm/ADT/StringSet.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/PrettyStackTrace.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/ThreadPool.h"
+#include "llvm/Support/thread.h"
 #include <algorithm>
 #include <fstream>
 #include <mutex>
+#include <set>
 #include <unordered_map>
 
 using namespace llvm;
@@ -32,7 +34,9 @@ using namespace llvm::yaml::bolt;
 
 namespace opts {
 
-static cl::OptionCategory MergeFdataCategory("merge-fdata options");
+using namespace llvm::clv2;
+
+inline constexpr OptionCategory MergeFdataCat{"merge-fdata options"};
 
 enum SortType : char {
   ST_NONE,
@@ -40,45 +44,35 @@ enum SortType : char {
   ST_TOTAL_BRANCHES,  /// Sort based on all branches in the function.
 };
 
-static cl::list<std::string>
-InputDataFilenames(
-  cl::Positional,
-  cl::CommaSeparated,
-  cl::desc("<fdata1> [<fdata2>]..."),
-  cl::OneOrMore,
-  cl::cat(MergeFdataCategory));
+inline constexpr EnumVal<SortType> MFSortTypeVals[] = {
+    {"none", ST_NONE, "do not print objects/functions"},
+    {"exec", ST_EXEC_COUNT, "print functions sorted by execution count"},
+    {"branches", ST_TOTAL_BRANCHES,
+     "print functions sorted by total branch count"},
+};
+inline constexpr auto MFPrint = makeEnumOption<SortType>(
+    "print", "print the list of objects with count to stderr", MFSortTypeVals,
+    Init{ST_NONE});
+inline constexpr OptionInfo<bool> MFQuiet{
+    "q", "do not print merged data to stdout", Init{false}, cat(MergeFdataCat)};
+inline constexpr OptionInfo<std::string> MFOutput{
+    "o", "Write output to <file>", value_desc("file"), cat(MergeFdataCat)};
+inline constexpr ListOptionInfo<std::string> MFInputFiles{
+    "",        "<fdata1> [<fdata2>]...", Positional{},
+    OneOrMore, CommaSeparated,           cat(MergeFdataCat)};
 
-static cl::opt<SortType>
-PrintFunctionList("print",
-  cl::desc("print the list of objects with count to stderr"),
-  cl::init(ST_NONE),
-  cl::values(clEnumValN(ST_NONE,
-      "none",
-      "do not print objects/functions"),
-    clEnumValN(ST_EXEC_COUNT,
-      "exec",
-      "print functions sorted by execution count"),
-    clEnumValN(ST_TOTAL_BRANCHES,
-      "branches",
-      "print functions sorted by total branch count")),
-  cl::cat(MergeFdataCategory));
-
-static cl::opt<bool>
-SuppressMergedDataOutput("q",
-  cl::desc("do not print merged data to stdout"),
-  cl::init(false),
-  cl::Optional,
-  cl::cat(MergeFdataCategory));
-
-static cl::opt<std::string>
-OutputFilePath("o",
-  cl::value_desc("file"),
-  cl::desc("Write output to <file>"),
-  cl::cat(MergeFdataCategory));
+inline constexpr OptionsRegistry<&MFPrint, &MFQuiet, &MFOutput, &MFInputFiles>
+    MergeFdataReg;
 
 } // namespace opts
 
 namespace {
+
+struct MergeFdataOptions {
+  opts::SortType PrintFunctionList = opts::ST_NONE;
+  bool SuppressMergedDataOutput = false;
+  std::string OutputFilePath;
+};
 
 static StringRef ToolName;
 
@@ -93,14 +87,14 @@ static void report_error(Twine Message, StringRef CustomError) {
   exit(1);
 }
 
-static raw_fd_ostream &output() {
-  if (opts::OutputFilePath.empty() || opts::OutputFilePath == "-")
+static raw_fd_ostream &output(const std::string &OutputFilePath) {
+  if (OutputFilePath.empty() || OutputFilePath == "-")
     return outs();
   else {
     std::error_code EC;
-    static raw_fd_ostream Output(opts::OutputFilePath, EC);
+    static raw_fd_ostream Output(OutputFilePath, EC);
     if (EC)
-      report_error(opts::OutputFilePath, EC);
+      report_error(OutputFilePath, EC);
     return Output;
   }
 }
@@ -264,12 +258,13 @@ bool isYAML(const StringRef Filename) {
   return false;
 }
 
-void mergeLegacyProfiles(const SmallVectorImpl<std::string> &Filenames) {
+void mergeLegacyProfiles(const SmallVectorImpl<std::string> &Filenames,
+                         const std::string &OutputFilePath) {
   errs() << "Using legacy profile format.\n";
   std::optional<bool> BoltedCollection;
   std::optional<bool> NoLBRCollection;
-  std::mutex BoltedCollectionMutex;
   std::set<std::string> EventNames;
+  std::mutex BoltedCollectionMutex;
   struct CounterTy {
     uint64_t Exec{0};
     uint64_t Mispred{0};
@@ -396,21 +391,21 @@ void mergeLegacyProfiles(const SmallVectorImpl<std::string> &Filenames) {
   }
 
   if (BoltedCollection.value_or(false))
-    output() << "boltedcollection\n";
+    output(OutputFilePath) << "boltedcollection\n";
   if (NoLBRCollection.value_or(false)) {
-    output() << "no_lbr";
+    output(OutputFilePath) << "no_lbr";
     for (StringRef Entry : EventNames)
-      output() << ' ' << Entry;
-    output() << '\n';
+      output(OutputFilePath) << ' ' << Entry;
+    output(OutputFilePath) << '\n';
   }
   for (const auto &[Key, Value] : MergedProfile.Branch) {
-    output() << Key << " ";
+    output(OutputFilePath) << Key << " ";
     if (!NoLBRCollection.value_or(false))
-      output() << Value.Mispred << " ";
-    output() << Value.Exec << "\n";
+      output(OutputFilePath) << Value.Mispred << " ";
+    output(OutputFilePath) << Value.Exec << "\n";
   }
   for (const auto &[Key, Value] : MergedProfile.Memory)
-    output() << Key << ' ' << Value.Exec << '\n';
+    output(OutputFilePath) << Key << ' ' << Value.Exec << '\n';
 
   errs() << "Profile from " << Filenames.size() << " files merged.\n";
 }
@@ -424,16 +419,23 @@ int main(int argc, char **argv) {
 
   llvm_shutdown_obj Y; // Call llvm_shutdown() on exit.
 
-  cl::HideUnrelatedOptions(opts::MergeFdataCategory);
-
-  cl::ParseCommandLineOptions(argc, argv,
-                              "merge multiple fdata into a single file");
+  clv2::OptionParser P;
+  P.add<&opts::MergeFdataReg>();
+  RegisterCoreLLVMOptions(P);
+  auto OptsCtx = P.parse(argc, argv, "merge multiple fdata into a single file");
+  auto *Opts = OptsCtx->getViewPtr<&opts::MergeFdataReg>();
+  MergeFdataOptions ToolOpts;
+  ToolOpts.PrintFunctionList =
+      static_cast<opts::SortType>(Opts->get<&opts::MFPrint>());
+  ToolOpts.SuppressMergedDataOutput = Opts->get<&opts::MFQuiet>();
+  ToolOpts.OutputFilePath = Opts->get<&opts::MFOutput>();
+  auto &InputDataFilenames = Opts->get<&opts::MFInputFiles>();
 
   ToolName = argv[0];
 
   // Recursively expand input directories into input file lists.
   SmallVector<std::string> Inputs;
-  for (std::string &InputDataFilename : opts::InputDataFilenames) {
+  for (const std::string &InputDataFilename : InputDataFilenames) {
     if (!llvm::sys::fs::exists(InputDataFilename))
       report_error(InputDataFilename,
                    std::make_error_code(std::errc::no_such_file_or_directory));
@@ -452,7 +454,7 @@ int main(int argc, char **argv) {
   }
 
   if (!isYAML(Inputs.front())) {
-    mergeLegacyProfiles(Inputs);
+    mergeLegacyProfiles(Inputs, ToolOpts.OutputFilePath);
     return 0;
   }
 
@@ -506,8 +508,8 @@ int main(int argc, char **argv) {
     }
   }
 
-  if (!opts::SuppressMergedDataOutput) {
-    yaml::Output YamlOut(output());
+  if (!ToolOpts.SuppressMergedDataOutput) {
+    yaml::Output YamlOut(output(ToolOpts.OutputFilePath));
 
     BinaryProfile MergedProfile;
     MergedProfile.Header = MergedHeader;
@@ -526,7 +528,7 @@ int main(int argc, char **argv) {
   errs() << "Data for " << MergedBFs.size()
          << " unique objects successfully merged.\n";
 
-  if (opts::PrintFunctionList != opts::ST_NONE) {
+  if (ToolOpts.PrintFunctionList != opts::ST_NONE) {
     // List of function names with execution count.
     std::vector<std::pair<uint64_t, StringRef>> FunctionList(MergedBFs.size());
     using CountFuncType = std::function<std::pair<uint64_t, StringRef>(
@@ -545,14 +547,15 @@ int main(int argc, char **argv) {
           return std::make_pair(BranchCount, StringRef(V.second.Name));
         };
 
-    CountFuncType CountFunc = (opts::PrintFunctionList == opts::ST_EXEC_COUNT)
-                                  ? ExecCountFunc
-                                  : BranchCountFunc;
+    CountFuncType CountFunc =
+        (ToolOpts.PrintFunctionList == opts::ST_EXEC_COUNT) ? ExecCountFunc
+                                                            : BranchCountFunc;
     llvm::transform(MergedBFs, FunctionList.begin(), CountFunc);
     llvm::stable_sort(reverse(FunctionList));
     errs() << "Functions sorted by "
-           << (opts::PrintFunctionList == opts::ST_EXEC_COUNT ? "execution"
-                                                              : "total branch")
+           << (ToolOpts.PrintFunctionList == opts::ST_EXEC_COUNT
+                   ? "execution"
+                   : "total branch")
            << " count:\n";
     for (std::pair<uint64_t, StringRef> &FI : FunctionList)
       errs() << FI.second << " : " << FI.first << '\n';

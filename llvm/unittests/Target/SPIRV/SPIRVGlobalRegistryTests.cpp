@@ -42,7 +42,7 @@ protected:
     TargetOptions Options;
     TM.reset(T->createTargetMachine(TT, "", "", Options, std::nullopt,
                                     std::nullopt));
-    Ctx = std::make_unique<LLVMContext>();
+    Ctx = std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext());
     Mod = std::make_unique<Module>("M", *Ctx);
     Mod->setDataLayout(TM->createDataLayout());
     auto *F = Function::Create(FunctionType::get(Type::getVoidTy(*Ctx), false),
@@ -89,7 +89,7 @@ TEST_F(SPIRVGlobalRegistryTest, PrepareFunctionsClearsStalePointers) {
   GR->addDeducedElementType(F, I32);
   ASSERT_EQ(GR->findDeducedElementType(F), I32);
 
-  LLVMContext Ctx2;
+  LLVMContext Ctx2{llvm::clv2::defaultOptionsContext()};
   Module Mod2("M2", Ctx2);
   Mod2.setDataLayout(TM->createDataLayout());
   Function::Create(FunctionType::get(Type::getVoidTy(Ctx2), false),

@@ -21,7 +21,6 @@
 #include "llvm/CodeGenTypes/LowLevelType.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Support/AtomicOrdering.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include <cassert>
 #include <cstdint>
@@ -30,7 +29,9 @@
 
 namespace llvm {
 
-LLVM_ABI extern cl::opt<bool> DisableGISelLegalityCheck;
+namespace clv2 {
+class OptionsContext;
+} // namespace clv2
 
 class MachineFunction;
 class raw_ostream;
@@ -1325,11 +1326,13 @@ public:
   /// Check if there is no type index which is obviously not handled by the
   /// LegalizeRuleSet in any way at all.
   /// \pre Type indices of the opcode form a dense [0, \p NumTypeIdxs) set.
-  LLVM_ABI bool verifyTypeIdxsCoverage(unsigned NumTypeIdxs) const;
+  LLVM_ABI bool verifyTypeIdxsCoverage(unsigned NumTypeIdxs,
+                                       const clv2::OptionsContext &Ctx) const;
   /// Check if there is no imm index which is obviously not handled by the
   /// LegalizeRuleSet in any way at all.
   /// \pre Type indices of the opcode form a dense [0, \p NumTypeIdxs) set.
-  LLVM_ABI bool verifyImmIdxsCoverage(unsigned NumImmIdxs) const;
+  LLVM_ABI bool verifyImmIdxsCoverage(unsigned NumImmIdxs,
+                                      const clv2::OptionsContext &Ctx) const;
 
   /// Apply the ruleset to the given LegalityQuery.
   LLVM_ABI LegalizeActionStep apply(const LegalityQuery &Query) const;
@@ -1340,11 +1343,12 @@ public:
   virtual ~LegalizerInfo() = default;
 
   unsigned getOpcodeIdxForOpcode(unsigned Opcode) const;
-  unsigned getActionDefinitionsIdx(unsigned Opcode) const;
+  unsigned getActionDefinitionsIdx(unsigned Opcode,
+                                   const clv2::OptionsContext &Ctx) const;
 
   /// Perform simple self-diagnostic and assert if there is anything obviously
   /// wrong with the actions set up.
-  void verify(const MCInstrInfo &MII) const;
+  void verify(const MCInstrInfo &MII, const clv2::OptionsContext &Ctx) const;
 
   /// Get the action definitions for the given opcode. Use this to run a
   /// LegalityQuery through the definitions.

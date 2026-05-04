@@ -35,15 +35,16 @@
 #include "llvm/ExecutionEngine/Orc/Core.h"
 #include "llvm/ExecutionEngine/Orc/ExecutionUtils.h"
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
-#include "llvm/ExecutionEngine/Orc/ThreadSafeModule.h"
 #include "llvm/ExecutionEngine/Orc/TargetProcess/TargetExecutionUtils.h"
+#include "llvm/ExecutionEngine/Orc/ThreadSafeModule.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/ModuleSummaryIndex.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -55,8 +56,10 @@ using namespace llvm;
 using namespace llvm::orc;
 
 // Path of the module summary index file.
-static cl::opt<std::string> IndexFile{cl::desc("<module summary index>"),
-                                      cl::Positional, cl::init("-")};
+static constexpr clv2::OptionInfo<std::string> IndexFileOpt{
+    "", "<module summary index>", clv2::Positional{}, clv2::Init{"-"}};
+
+static constexpr clv2::OptionsRegistry<&IndexFileOpt> ThinLTOReg;
 
 // Describe a fail state that is caused by the given ModuleSummaryIndex
 // providing multiple definitions of the given global value name. It will dump
@@ -184,10 +187,16 @@ int main(int Argc, char *Argv[]) {
   InitializeNativeTarget();
   InitializeNativeTargetAsmPrinter();
 
-  cl::ParseCommandLineOptions(Argc, Argv, "LLJITWithThinLTOSummaries");
+  clv2::OptionParser P;
+  P.add<&ThinLTOReg>();
+  RegisterAllLLVMOptions(P);
+  auto OptsCtx = P.parse(Argc, Argv, "LLJITWithThinLTOSummaries");
+  auto *Opts = OptsCtx->getViewPtr<&ThinLTOReg>();
 
   ExitOnError ExitOnErr;
   ExitOnErr.setBanner(std::string(Argv[0]) + ": ");
+
+  auto IndexFile = std::string(Opts->get<&IndexFileOpt>());
 
   // (1) Read the index file and parse the module summary index.
   std::unique_ptr<MemoryBuffer> SummaryBuffer =
@@ -202,7 +211,8 @@ int main(int Argc, char *Argv[]) {
       ExitOnErr(getMainModulePath(MainFunctionName, *SummaryIndex));
 
   // (3) Parse the main module and create a matching LLJIT.
-  ThreadSafeContext TSCtx(std::make_unique<LLVMContext>());
+  ThreadSafeContext TSCtx(
+      std::make_unique<LLVMContext>(llvm::clv2::defaultOptionsContext()));
   ThreadSafeModule MainModule = ExitOnErr(loadModule(MainModulePath, TSCtx));
 
   auto Builder = LLJITBuilder();

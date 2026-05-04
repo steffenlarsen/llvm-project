@@ -1,4 +1,5 @@
 set(LLVM_LINK_COMPONENTS
+  AllOptions
   Support
   )
 add_clang_executable(clangd-index-server-monitor

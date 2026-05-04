@@ -23,6 +23,9 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/WithColor.h"
 #endif
+#include "llvm/CodeGen/CodeGenPassOptionsOptInfos.h"
+#include "llvm/Support/CommandLineV2.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
@@ -30,10 +33,12 @@ using namespace llvm;
 // Deprecated with ThinLTO. For some modules compiled with ThinLTO, certain
 // pseudo probe descriptors may not be imported, resulting in false positive
 // warning.
-static cl::opt<bool> VerifyGuidExistence(
-    "pseudo-probe-verify-guid-existence-in-desc",
-    cl::desc("Verify whether GUID exists in the .pseudo_probe_desc."),
-    cl::Hidden, cl::init(false));
+static bool
+getPseudoProbeVerifyGuidExistenceInDesc(const clv2::OptionsContext &Ctx) {
+  return clv2::getOptValOrDefault<
+      &clv2::CGPASS_PseudoProbeVerifyGuidExistenceInDesc>(Ctx);
+}
+
 #endif
 
 void PseudoProbeHandler::emitPseudoProbe(uint64_t Guid, uint64_t Index,
@@ -55,7 +60,8 @@ void PseudoProbeHandler::emitPseudoProbe(uint64_t Guid, uint64_t Index,
     if (!CallerGuid)
       CallerGuid = Function::getGUIDAssumingExternalLinkage(Name);
 #ifndef NDEBUG
-    if (VerifyGuidExistence)
+    if (getPseudoProbeVerifyGuidExistenceInDesc(
+            Asm->MF->getFunction().getContext().getOptionsContext()))
       verifyGuidExistenceInDesc(CallerGuid, Name);
 #endif
     uint64_t CallerProbeId = PseudoProbeDwarfDiscriminator::extractProbeIndex(
@@ -66,16 +72,18 @@ void PseudoProbeHandler::emitPseudoProbe(uint64_t Guid, uint64_t Index,
   uint64_t Discriminator = 0;
   // For now only block probes have FS discriminators. See
   // MIRFSDiscriminator.cpp for more details.
-  if (EnableFSDiscriminator && DebugLoc &&
-      (Type == (uint64_t)PseudoProbeType::Block))
+  if (getEnableFSDiscriminator(Asm->MF->getFunction().getContext()) &&
+      DebugLoc && (Type == (uint64_t)PseudoProbeType::Block))
     Discriminator = DebugLoc->getDiscriminator();
-  assert((EnableFSDiscriminator || Discriminator == 0) &&
+  assert((getEnableFSDiscriminator(Asm->MF->getFunction().getContext()) ||
+          Discriminator == 0) &&
          "Discriminator should not be set in non-FSAFDO mode");
   SmallVector<InlineSite, 8> InlineStack(llvm::reverse(ReversedInlineStack));
   Asm->OutStreamer->emitPseudoProbe(Guid, Index, Type, Attr, Discriminator,
                                     InlineStack, Asm->CurrentFnSym);
 #ifndef NDEBUG
-  if (VerifyGuidExistence)
+  if (getPseudoProbeVerifyGuidExistenceInDesc(
+          Asm->MF->getFunction().getContext().getOptionsContext()))
     verifyGuidExistenceInDesc(
         Guid, DebugLoc ? DebugLoc->getSubprogramLinkageName() : "");
 #endif

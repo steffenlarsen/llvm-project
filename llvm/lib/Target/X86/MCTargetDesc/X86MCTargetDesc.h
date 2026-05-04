@@ -14,6 +14,7 @@
 #define LLVM_LIB_TARGET_X86_MCTARGETDESC_X86MCTARGETDESC_H
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/OptionsContext.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -30,6 +31,9 @@ class MCObjectStreamer;
 class MCObjectTargetWriter;
 class MCObjectWriter;
 class MCRegister;
+namespace clv2 {
+class OptionsContext;
+}
 class MCRegisterInfo;
 class MCStreamer;
 class MCSubtargetInfo;
@@ -90,8 +94,9 @@ bool needsAddressSizeOverride(const MCInst &MI, const MCSubtargetInfo &STI,
 
 /// Create a X86 MCSubtargetInfo instance. This is exposed so Asm parser, etc.
 /// do not need to go through TargetRegistry.
-MCSubtargetInfo *createX86MCSubtargetInfo(const Triple &TT, StringRef CPU,
-                                          StringRef FS);
+MCSubtargetInfo *
+createX86MCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                         const llvm::clv2::OptionsContext &Ctx);
 
 void emitInstruction(MCObjectStreamer &, const MCInst &Inst,
                      const MCSubtargetInfo &STI);

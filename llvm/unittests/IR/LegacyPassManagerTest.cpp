@@ -246,7 +246,7 @@ public:
 char OnTheFlyTest::ID = 0;
 
 TEST(PassManager, RunOnce) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module M("test-once", Context);
   struct ModuleNDNM *mNDNM = new ModuleNDNM();
   struct ModuleDNM *mDNM = new ModuleDNM();
@@ -270,7 +270,7 @@ TEST(PassManager, RunOnce) {
 }
 
 TEST(PassManager, ReRun) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module M("test-rerun", Context);
   struct ModuleNDNM *mNDNM = new ModuleNDNM();
   struct ModuleDNM *mDNM = new ModuleDNM();
@@ -297,7 +297,7 @@ TEST(PassManager, ReRun) {
 Module *makeLLVMModule(LLVMContext &Context);
 
 template <typename T> void MemoryTestHelper(int run) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   std::unique_ptr<Module> M(makeLLVMModule(Context));
   T *P = new T();
   legacy::PassManager Passes;
@@ -307,7 +307,7 @@ template <typename T> void MemoryTestHelper(int run) {
 }
 
 template <typename T> void MemoryTestHelper(int run, int N) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module *M = makeLLVMModule(Context);
   T *P = new T();
   legacy::PassManager Passes;
@@ -338,7 +338,7 @@ TEST(PassManager, Memory) {
 }
 
 TEST(PassManager, MemoryOnTheFly) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
   Module *M = makeLLVMModule(Context);
   {
     SCOPED_TRACE("Running OnTheFlyTest");
@@ -377,9 +377,9 @@ struct ModuleOpt : public ModulePass {
 char ModuleOpt::ID = 0;
 
 TEST(PassManager, CustomOptPassGate) {
-  LLVMContext Context0;
-  LLVMContext Context1;
-  LLVMContext Context2;
+  LLVMContext Context0{llvm::clv2::defaultOptionsContext()};
+  LLVMContext Context1{llvm::clv2::defaultOptionsContext()};
+  LLVMContext Context2{llvm::clv2::defaultOptionsContext()};
   CustomOptPassGate SkipOptionalPasses(true);
   CustomOptPassGate RunOptionalPasses(false);
 
@@ -613,7 +613,7 @@ struct CallbackCallsModifierPass : public CGPass {
 };
 
 TEST(PassManager, CallbackCallsModifier0) {
-  LLVMContext Context;
+  LLVMContext Context{llvm::clv2::defaultOptionsContext()};
 
   const char *IR = "define void @foo() {\n"
                    "  call void @broker(ptr @callback0, ptr null)\n"
@@ -647,10 +647,10 @@ TEST(PassManager, CallbackCallsModifier0) {
 } // namespace
 
 INITIALIZE_PASS(ModuleNDM, "mndm", "mndm", false, false)
-INITIALIZE_PASS_BEGIN(CGPass, "cgp","cgp", false, false)
+INITIALIZE_PASS_BEGIN(CGPass, "cgp", "cgp", false, false)
 INITIALIZE_PASS_DEPENDENCY(CallGraphWrapperPass)
-INITIALIZE_PASS_END(CGPass, "cgp","cgp", false, false)
-INITIALIZE_PASS(FPass, "fp","fp", false, false)
-INITIALIZE_PASS_BEGIN(LPass, "lp","lp", false, false)
+INITIALIZE_PASS_END(CGPass, "cgp", "cgp", false, false)
+INITIALIZE_PASS(FPass, "fp", "fp", false, false)
+INITIALIZE_PASS_BEGIN(LPass, "lp", "lp", false, false)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
-INITIALIZE_PASS_END(LPass, "lp","lp", false, false)
+INITIALIZE_PASS_END(LPass, "lp", "lp", false, false)

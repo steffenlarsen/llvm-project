@@ -18,7 +18,6 @@
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Metadata.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include <cstddef>
 #include <type_traits>
@@ -33,7 +32,9 @@ struct MDProfLabels {
   LLVM_ABI static const char *UnknownBranchWeightsMarker;
 };
 
-extern LLVM_ABI cl::opt<bool> ProfcheckDisableMetadataFixes;
+class LLVMContext;
+
+LLVM_ABI bool getProfcheckDisableMetadataFixes(const LLVMContext &Ctx);
 
 /// Profile-based loop metadata that should be accessed only by using
 /// \c llvm::getLoopEstimatedTripCount and \c llvm::setLoopEstimatedTripCount.
@@ -226,10 +227,11 @@ LLVM_ABI bool hasExplicitlyUnknownBranchWeights(const Instruction &I);
 LLVM_ABI void scaleProfData(Instruction &I, uint64_t S, uint64_t T);
 
 // Helper to apply a metadata setting function to an Instruction* if profiling
-// is enabled. If profiling is disabled (ProfcheckDisableMetadataFixes is true)
-// or V is not an Instruction, the callback will not be invoked.
+// is enabled. If profiling is disabled (getProfcheckDisableMetadataFixes(Ctx)
+// is true) or V is not an Instruction, the callback will not be invoked.
 LLVM_ABI void applyProfMetadataIfEnabled(
-    Value *V, llvm::function_ref<void(Instruction *)> setMetadataCallback);
+    const LLVMContext &Ctx, Value *V,
+    llvm::function_ref<void(Instruction *)> setMetadataCallback);
 
 /// Get the branch weights of a branch conditioned on b1 || b2, where b1 and b2
 /// are 2 booleans that are the conditions of 2 branches for which we have the
@@ -241,7 +243,7 @@ template <typename T1, typename T2,
               std::is_arithmetic_v<T1> && std::is_arithmetic_v<T2> &&
               sizeof(T1) <= sizeof(uint64_t) && sizeof(T2) <= sizeof(uint64_t)>>
 inline SmallVector<uint64_t, 2>
-getDisjunctionWeights(const SmallVector<T1, 2> &B1,
+getDisjunctionWeights(const LLVMContext &Ctx, const SmallVector<T1, 2> &B1,
                       const SmallVector<T2, 2> &B2) {
   // For the first conditional branch, the probability the "true" case is taken
   // is p(b1) = B1[0] / (B1[0] + B1[1]). The "false" case's probability is
@@ -262,7 +264,7 @@ getDisjunctionWeights(const SmallVector<T1, 2> &B1,
 
   uint64_t FalseWeight, TrueWeight;
 
-  if (!ProfcheckDisableMetadataFixes) {
+  if (!getProfcheckDisableMetadataFixes(Ctx)) {
     FalseWeight = static_cast<uint64_t>(B1[1]) * B2[1];
     TrueWeight =
         static_cast<uint64_t>(B1[0]) * (static_cast<uint64_t>(B2[0]) + B2[1]) +

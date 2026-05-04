@@ -14,11 +14,13 @@
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Demangle/Demangle.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/Process.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdio>
@@ -27,55 +29,58 @@
 #include <string>
 
 using namespace llvm;
+using namespace llvm::clv2;
 
-static cl::OptionCategory UndNameCategory("UndName Options");
+static constexpr OptionCategory UndNameCategory{"UndName Options"};
 
-static cl::opt<bool> DumpBackReferences("backrefs", cl::Optional,
-                                        cl::desc("dump backreferences"),
-                                        cl::Hidden, cl::init(false),
-                                        cl::cat(UndNameCategory));
-static cl::opt<bool> NoAccessSpecifier("no-access-specifier", cl::Optional,
-                                       cl::desc("skip access specifiers"),
-                                       cl::Hidden, cl::init(false),
-                                       cl::cat(UndNameCategory));
-static cl::opt<bool> NoCallingConvention("no-calling-convention", cl::Optional,
-                                         cl::desc("skip calling convention"),
-                                         cl::Hidden, cl::init(false),
-                                         cl::cat(UndNameCategory));
-static cl::opt<bool> NoReturnType("no-return-type", cl::Optional,
-                                  cl::desc("skip return types"), cl::Hidden,
-                                  cl::init(false), cl::cat(UndNameCategory));
-static cl::opt<bool> NoMemberType("no-member-type", cl::Optional,
-                                  cl::desc("skip member types"), cl::Hidden,
-                                  cl::init(false), cl::cat(UndNameCategory));
-static cl::opt<bool> NoVariableType("no-variable-type", cl::Optional,
-                                    cl::desc("skip variable types"), cl::Hidden,
-                                    cl::init(false), cl::cat(UndNameCategory));
-static cl::opt<std::string> RawFile("raw-file", cl::Optional,
-                                    cl::desc("for fuzzer data"), cl::Hidden,
-                                    cl::cat(UndNameCategory));
-static cl::opt<bool> WarnTrailing("warn-trailing", cl::Optional,
-                                  cl::desc("warn on trailing characters"),
-                                  cl::Hidden, cl::init(false),
-                                  cl::cat(UndNameCategory));
-static cl::list<std::string> Symbols(cl::Positional,
-                                     cl::desc("<input symbols>"),
-                                     cl::cat(UndNameCategory));
+static constexpr OptionInfo<bool> DumpBackReferences{
+    "backrefs", "dump backreferences", Hidden, cat(UndNameCategory)};
+static constexpr OptionInfo<bool> NoAccessSpecifier{
+    "no-access-specifier", "skip access specifiers", Hidden,
+    cat(UndNameCategory)};
+static constexpr OptionInfo<bool> NoCallingConvention{
+    "no-calling-convention", "skip calling convention", Hidden,
+    cat(UndNameCategory)};
+static constexpr OptionInfo<bool> NoReturnType{
+    "no-return-type", "skip return types", Hidden, cat(UndNameCategory)};
+static constexpr OptionInfo<bool> NoMemberType{
+    "no-member-type", "skip member types", Hidden, cat(UndNameCategory)};
+static constexpr OptionInfo<bool> NoVariableType{
+    "no-variable-type", "skip variable types", Hidden, cat(UndNameCategory)};
+static constexpr OptionInfo<std::string> RawFile{"raw-file", "for fuzzer data",
+                                                 Hidden, cat(UndNameCategory)};
+static constexpr OptionInfo<bool> WarnTrailing{"warn-trailing",
+                                               "warn on trailing characters",
+                                               Hidden, cat(UndNameCategory)};
+static constexpr ListOptionInfo<std::string> Symbols{
+    "symbols", "<input symbols>", Positional{}, ZeroOrMore,
+    cat(UndNameCategory)};
 
-static bool msDemangle(const std::string &S) {
+static constexpr OptionsRegistry<&DumpBackReferences, &NoAccessSpecifier,
+                                 &NoCallingConvention, &NoReturnType,
+                                 &NoMemberType, &NoVariableType, &RawFile,
+                                 &WarnTrailing, &Symbols>
+    UndNameToolReg;
+
+struct UndNameOpts {
+  bool DumpBackRefs, NoAccess, NoCallingConv, NoReturn, NoMember, NoVariable;
+  bool WarnTrail;
+};
+
+static bool msDemangle(const std::string &S, const UndNameOpts &O) {
   int Status;
   MSDemangleFlags Flags = MSDF_None;
-  if (DumpBackReferences)
+  if (O.DumpBackRefs)
     Flags = MSDemangleFlags(Flags | MSDF_DumpBackrefs);
-  if (NoAccessSpecifier)
+  if (O.NoAccess)
     Flags = MSDemangleFlags(Flags | MSDF_NoAccessSpecifier);
-  if (NoCallingConvention)
+  if (O.NoCallingConv)
     Flags = MSDemangleFlags(Flags | MSDF_NoCallingConvention);
-  if (NoReturnType)
+  if (O.NoReturn)
     Flags = MSDemangleFlags(Flags | MSDF_NoReturnType);
-  if (NoMemberType)
+  if (O.NoMember)
     Flags = MSDemangleFlags(Flags | MSDF_NoMemberType);
-  if (NoVariableType)
+  if (O.NoVariable)
     Flags = MSDemangleFlags(Flags | MSDF_NoVariableType);
 
   size_t NRead;
@@ -83,7 +88,7 @@ static bool msDemangle(const std::string &S) {
   if (Status == llvm::demangle_success) {
     outs() << ResultBuf << "\n";
     outs().flush();
-    if (WarnTrailing && NRead < S.size())
+    if (O.WarnTrail && NRead < S.size())
       WithColor::warning() << "trailing characters: " << S.c_str() + NRead
                            << "\n";
   } else {
@@ -96,22 +101,34 @@ static bool msDemangle(const std::string &S) {
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
 
-  cl::HideUnrelatedOptions({&UndNameCategory, &getColorCategory()});
-  cl::ParseCommandLineOptions(argc, argv, "llvm-undname\n");
+  clv2::OptionParser P;
+  P.add<&UndNameToolReg>();
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&UndNameCategory, &getColorCategory()});
+  auto OptsCtx = P.parse(argc, argv, "llvm-undname\n");
+  auto *Opts = OptsCtx->getViewPtr<&UndNameToolReg>();
 
-  if (!RawFile.empty()) {
+  UndNameOpts O{
+      Opts->get<&DumpBackReferences>(),  Opts->get<&NoAccessSpecifier>(),
+      Opts->get<&NoCallingConvention>(), Opts->get<&NoReturnType>(),
+      Opts->get<&NoMemberType>(),        Opts->get<&NoVariableType>(),
+      Opts->get<&WarnTrailing>()};
+
+  if (!Opts->get<&RawFile>().empty()) {
     ErrorOr<std::unique_ptr<MemoryBuffer>> FileOrErr =
-        MemoryBuffer::getFileOrSTDIN(RawFile);
+        MemoryBuffer::getFileOrSTDIN(Opts->get<&RawFile>());
     if (std::error_code EC = FileOrErr.getError()) {
-      WithColor::error() << "Could not open input file \'" << RawFile
-                         << "\': " << EC.message() << '\n';
+      WithColor::error() << "Could not open input file \'"
+                         << Opts->get<&RawFile>() << "\': " << EC.message()
+                         << '\n';
       return 1;
     }
-    return msDemangle(std::string(FileOrErr->get()->getBuffer())) ? 0 : 1;
+    return msDemangle(std::string(FileOrErr->get()->getBuffer()), O) ? 0 : 1;
   }
 
   bool Success = true;
-  if (Symbols.empty()) {
+  const auto &SymList = Opts->get<&Symbols>();
+  if (SymList.empty()) {
     while (true) {
       std::string LineStr;
       std::getline(std::cin, LineStr);
@@ -131,15 +148,15 @@ int main(int argc, char **argv) {
         outs() << Line << "\n";
         outs().flush();
       }
-      if (!msDemangle(std::string(Line)))
+      if (!msDemangle(std::string(Line), O))
         Success = false;
       outs() << "\n";
     }
   } else {
-    for (StringRef S : Symbols) {
+    for (StringRef S : SymList) {
       outs() << S << "\n";
       outs().flush();
-      if (!msDemangle(std::string(S)))
+      if (!msDemangle(std::string(S), O))
         Success = false;
       outs() << "\n";
     }

@@ -1,5 +1,6 @@
 add_llvm_component_library(LLVMWebAssemblyDesc
   WebAssemblyAsmBackend.cpp
+  WebAssemblyOptions.cpp
   WebAssemblyInstPrinter.cpp
   WebAssemblyMCAsmInfo.cpp
   WebAssemblyMCCodeEmitter.cpp

@@ -44,9 +44,10 @@
 #include "llvm/IR/Value.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Scalar/ScalarOptionsOptInfos.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <cassert>
 #include <cstddef>
@@ -61,13 +62,17 @@ STATISTIC(NumBranchesRemoved, "Number of branch instructions removed");
 
 // This is a temporary option until we change the interface to this pass based
 // on optimization level.
-static cl::opt<bool> RemoveControlFlowFlag("adce-remove-control-flow",
-                                           cl::init(true), cl::Hidden);
+static bool getRemoveControlFlowFlag(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SC_AdceRemoveControlFlow>(
+      F.getContext().getOptionsContext());
+}
 
 // This option enables removing of may-be-infinite loops which have no other
 // effect.
-static cl::opt<bool> RemoveLoops("adce-remove-loops", cl::init(false),
-                                 cl::Hidden);
+static bool getRemoveLoops(const Function &F) {
+  return clv2::getOptValOr<&clv2::ScalarOptsReg, &clv2::SC_AdceRemoveLoops>(
+      F.getContext().getOptionsContext(), false);
+}
 
 namespace {
 
@@ -200,10 +205,10 @@ void AggressiveDeadCodeElimination::initialize() {
     if (isAlwaysLive(I))
       markLive(&I);
 
-  if (!RemoveControlFlowFlag)
+  if (!getRemoveControlFlowFlag(F))
     return;
 
-  if (!RemoveLoops) {
+  if (!getRemoveLoops(F)) {
     // Mark all terminators that have backedges as live.
     SmallVector<std::pair<const BasicBlock *, const BasicBlock *>> Backedges;
     FindFunctionBackedges(F, Backedges);
@@ -253,7 +258,8 @@ bool AggressiveDeadCodeElimination::isAlwaysLive(Instruction &I) {
   }
   if (!I.isTerminator())
     return false;
-  if (RemoveControlFlowFlag && isa<UncondBrInst, CondBrInst, SwitchInst>(I))
+  if (getRemoveControlFlowFlag(F) &&
+      isa<UncondBrInst, CondBrInst, SwitchInst>(I))
     return false;
   return true;
 }

@@ -47,9 +47,14 @@ static MCRegisterInfo *createARCMCRegisterInfo(const Triple &TT) {
   return X;
 }
 
-static MCSubtargetInfo *createARCMCSubtargetInfo(const Triple &TT,
-                                                 StringRef CPU, StringRef FS) {
-  return createARCMCSubtargetInfoImpl(TT, CPU, /*TuneCPU=*/CPU, FS);
+static MCSubtargetInfo *
+createARCMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS,
+                         const llvm::clv2::OptionsContext &Ctx) {
+  MCSubtargetInfo *STI =
+      createARCMCSubtargetInfoImpl(TT, CPU, /*TuneCPU=*/CPU, FS);
+  if (STI)
+    STI->setOptionsContext(Ctx);
+  return STI;
 }
 
 static MCAsmInfo *createARCMCAsmInfo(const MCRegisterInfo &MRI,

@@ -19,20 +19,19 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/OptionsContext.h"
 
 using namespace llvm;
 
 #define GET_INSTRINFO_CTOR_DTOR
 #include "SparcGenInstrInfo.inc"
+#include "llvm/Target/Sparc/SparcOptionsOptInfos.h"
 
-static cl::opt<unsigned> BPccDisplacementBits(
-    "sparc-bpcc-offset-bits", cl::Hidden, cl::init(19),
-    cl::desc("Restrict range of BPcc/FBPfcc instructions (DEBUG)"));
+static unsigned BPccDisplacementBits = 19;
 
-static cl::opt<unsigned>
-    BPrDisplacementBits("sparc-bpr-offset-bits", cl::Hidden, cl::init(16),
-                        cl::desc("Restrict range of BPr instructions (DEBUG)"));
+static unsigned BPrDisplacementBits = 16;
 
 // Pin the vtable to this file.
 void SparcInstrInfo::anchor() {}
@@ -453,13 +452,17 @@ bool SparcInstrInfo::isBranchOffsetInRange(unsigned BranchOpc,
   case SP::BPFCCANT:
   case SP::FBCOND_V9:
   case SP::FBCONDA_V9:
-    return isIntN(BPccDisplacementBits, Offset >> 2);
+    return isIntN(clv2::getOptValOrDefault<&clv2::SPARC_BPccDisplacementBits>(
+                      Subtarget.getOptionsContext()),
+                  Offset >> 2);
 
   case SP::BPR:
   case SP::BPRA:
   case SP::BPRNT:
   case SP::BPRANT:
-    return isIntN(BPrDisplacementBits, Offset >> 2);
+    return isIntN(clv2::getOptValOrDefault<&clv2::SPARC_BPrDisplacementBits>(
+                      Subtarget.getOptionsContext()),
+                  Offset >> 2);
   }
 
   llvm_unreachable("Unknown branch instruction!");

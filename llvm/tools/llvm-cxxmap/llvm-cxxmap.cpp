@@ -15,45 +15,46 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ProfileData/SymbolRemappingReader.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineV2.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/LineIterator.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Support/RegisterLLVMOptions.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
+using namespace llvm::clv2;
 
-static cl::OptionCategory CXXMapCategory("CXX Map Options");
+static constexpr OptionCategory CXXMapCategory{"CXX Map Options"};
 
-static cl::opt<std::string> OldSymbolFile(cl::Positional, cl::Required,
-                                          cl::desc("<symbol-file>"),
-                                          cl::cat(CXXMapCategory));
-static cl::opt<std::string> NewSymbolFile(cl::Positional, cl::Required,
-                                          cl::desc("<symbol-file>"),
-                                          cl::cat(CXXMapCategory));
-static cl::opt<std::string> RemappingFile("remapping-file", cl::Required,
-                                          cl::desc("Remapping file"),
-                                          cl::cat(CXXMapCategory));
-static cl::alias RemappingFileA("r", cl::aliasopt(RemappingFile),
-                                cl::cat(CXXMapCategory));
-static cl::opt<std::string> OutputFilename("output", cl::value_desc("output"),
-                                           cl::init("-"),
-                                           cl::desc("Output file"),
-                                           cl::cat(CXXMapCategory));
-static cl::alias OutputFilenameA("o", cl::aliasopt(OutputFilename),
-                                 cl::cat(CXXMapCategory));
+static constexpr OptionInfo<std::string> OldSymbolFile{
+    "old-symbols", "<symbol-file>", Positional{}, Required,
+    cat(CXXMapCategory)};
+static constexpr OptionInfo<std::string> NewSymbolFile{
+    "new-symbols", "<symbol-file>", Positional{}, Required,
+    cat(CXXMapCategory)};
+static constexpr OptionInfo<std::string> RemappingFile{
+    "remapping-file", "Remapping file", Required, cat(CXXMapCategory)};
+static constexpr AliasInfo RemappingFileA{"r", "remapping-file"};
+static constexpr OptionInfo<std::string> OutputFilename{
+    "output", "Output file", value_desc("output"), Init{"-"},
+    cat(CXXMapCategory)};
+static constexpr AliasInfo OutputFilenameA{"o", "output"};
 
-static cl::opt<bool> WarnAmbiguous(
-    "Wambiguous",
-    cl::desc("Warn on equivalent symbols in the output symbol list"),
-    cl::cat(CXXMapCategory));
-static cl::opt<bool> WarnIncomplete(
-    "Wincomplete",
-    cl::desc("Warn on input symbols missing from output symbol list"),
-    cl::cat(CXXMapCategory));
+static constexpr OptionInfo<bool> WarnAmbiguous{
+    "Wambiguous", "Warn on equivalent symbols in the output symbol list",
+    cat(CXXMapCategory)};
+static constexpr OptionInfo<bool> WarnIncomplete{
+    "Wincomplete", "Warn on input symbols missing from output symbol list",
+    cat(CXXMapCategory)};
 
+static constexpr OptionsRegistry<
+    &OldSymbolFile, &NewSymbolFile, &RemappingFile, &RemappingFileA,
+    &OutputFilename, &OutputFilenameA, &WarnAmbiguous, &WarnIncomplete>
+    CXXMapToolReg;
 static void warn(Twine Message, Twine Whence = "",
                  std::string Hint = "") {
   WithColor::warning();
@@ -85,19 +86,18 @@ static void exitWithErrorCode(std::error_code EC, StringRef Whence = "") {
   exitWithError(EC.message(), Whence);
 }
 
-static void remapSymbols(MemoryBuffer &OldSymbolFile,
-                         MemoryBuffer &NewSymbolFile,
-                         MemoryBuffer &RemappingFile,
-                         raw_ostream &Out) {
+static void remapSymbols(MemoryBuffer &OldSymBuf, MemoryBuffer &NewSymBuf,
+                         MemoryBuffer &RemapBuf, raw_ostream &Out,
+                         bool DoWarnAmbiguous, bool DoWarnIncomplete) {
   // Load the remapping file and prepare to canonicalize symbols.
   SymbolRemappingReader Reader;
-  if (Error E = Reader.read(RemappingFile))
+  if (Error E = Reader.read(RemapBuf))
     exitWithError(std::move(E));
 
   // Canonicalize the new symbols.
   DenseMap<SymbolRemappingReader::Key, StringRef> MappedNames;
   DenseSet<StringRef> UnparseableSymbols;
-  for (line_iterator LineIt(NewSymbolFile, /*SkipBlanks=*/true, '#');
+  for (line_iterator LineIt(NewSymBuf, /*SkipBlanks=*/true, '#');
        !LineIt.is_at_eof(); ++LineIt) {
     StringRef Symbol = *LineIt;
 
@@ -108,18 +108,17 @@ static void remapSymbols(MemoryBuffer &OldSymbolFile,
     }
 
     auto ItAndIsNew = MappedNames.insert({K, Symbol});
-    if (WarnAmbiguous && !ItAndIsNew.second &&
+    if (DoWarnAmbiguous && !ItAndIsNew.second &&
         ItAndIsNew.first->second != Symbol) {
       warn("symbol " + Symbol + " is equivalent to earlier symbol " +
                ItAndIsNew.first->second,
-           NewSymbolFile.getBufferIdentifier() + ":" +
-               Twine(LineIt.line_number()),
+           NewSymBuf.getBufferIdentifier() + ":" + Twine(LineIt.line_number()),
            "later symbol will not be the target of any remappings");
     }
   }
 
   // Figure out which new symbol each old symbol is equivalent to.
-  for (line_iterator LineIt(OldSymbolFile, /*SkipBlanks=*/true, '#');
+  for (line_iterator LineIt(OldSymBuf, /*SkipBlanks=*/true, '#');
        !LineIt.is_at_eof(); ++LineIt) {
     StringRef Symbol = *LineIt;
 
@@ -127,9 +126,9 @@ static void remapSymbols(MemoryBuffer &OldSymbolFile,
     StringRef NewSymbol = MappedNames.lookup(K);
 
     if (NewSymbol.empty()) {
-      if (WarnIncomplete && !UnparseableSymbols.count(Symbol)) {
+      if (DoWarnIncomplete && !UnparseableSymbols.count(Symbol)) {
         warn("no new symbol matches old symbol " + Symbol,
-             OldSymbolFile.getBufferIdentifier() + ":" +
+             OldSymBuf.getBufferIdentifier() + ":" +
                  Twine(LineIt.line_number()));
       }
       continue;
@@ -142,29 +141,37 @@ static void remapSymbols(MemoryBuffer &OldSymbolFile,
 int main(int argc, const char *argv[]) {
   InitLLVM X(argc, argv);
 
-  cl::HideUnrelatedOptions({&CXXMapCategory, &getColorCategory()});
-  cl::ParseCommandLineOptions(argc, argv, "LLVM C++ mangled name remapper\n");
+  clv2::OptionParser P;
+  P.add<&CXXMapToolReg>();
+  RegisterAllLLVMOptions(P);
+  P.hideUnrelatedOptions({&CXXMapCategory, &getColorCategory()});
+  auto OptsCtx = P.parse(argc, argv, "LLVM C++ mangled name remapper\n");
+  auto *Opts = OptsCtx->getViewPtr<&CXXMapToolReg>();
 
-  auto OldSymbolBufOrError =
-      MemoryBuffer::getFileOrSTDIN(OldSymbolFile, /*IsText=*/true);
+  auto OldSymbolBufOrError = MemoryBuffer::getFileOrSTDIN(
+      Opts->get<&OldSymbolFile>(), /*IsText=*/true);
   if (!OldSymbolBufOrError)
-    exitWithErrorCode(OldSymbolBufOrError.getError(), OldSymbolFile);
+    exitWithErrorCode(OldSymbolBufOrError.getError(),
+                      Opts->get<&OldSymbolFile>());
 
-  auto NewSymbolBufOrError =
-      MemoryBuffer::getFileOrSTDIN(NewSymbolFile, /*IsText=*/true);
+  auto NewSymbolBufOrError = MemoryBuffer::getFileOrSTDIN(
+      Opts->get<&NewSymbolFile>(), /*IsText=*/true);
   if (!NewSymbolBufOrError)
-    exitWithErrorCode(NewSymbolBufOrError.getError(), NewSymbolFile);
+    exitWithErrorCode(NewSymbolBufOrError.getError(),
+                      Opts->get<&NewSymbolFile>());
 
-  auto RemappingBufOrError =
-      MemoryBuffer::getFileOrSTDIN(RemappingFile, /*IsText=*/true);
+  auto RemappingBufOrError = MemoryBuffer::getFileOrSTDIN(
+      Opts->get<&RemappingFile>(), /*IsText=*/true);
   if (!RemappingBufOrError)
-    exitWithErrorCode(RemappingBufOrError.getError(), RemappingFile);
+    exitWithErrorCode(RemappingBufOrError.getError(),
+                      Opts->get<&RemappingFile>());
 
   std::error_code EC;
-  raw_fd_ostream OS(OutputFilename.data(), EC, sys::fs::OF_TextWithCRLF);
+  raw_fd_ostream OS(Opts->get<&OutputFilename>(), EC, sys::fs::OF_TextWithCRLF);
   if (EC)
-    exitWithErrorCode(EC, OutputFilename);
+    exitWithErrorCode(EC, Opts->get<&OutputFilename>());
 
   remapSymbols(*OldSymbolBufOrError.get(), *NewSymbolBufOrError.get(),
-               *RemappingBufOrError.get(), OS);
+               *RemappingBufOrError.get(), OS, Opts->get<&WarnAmbiguous>(),
+               Opts->get<&WarnIncomplete>());
 }

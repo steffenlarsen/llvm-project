@@ -20,9 +20,12 @@
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/OptionsContext.h"
+#include "llvm/Target/SystemZ/SystemZOptionsOptInfos.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Transforms/Scalar.h"
 #include <memory>
@@ -31,15 +34,10 @@
 
 using namespace llvm;
 
-static cl::opt<bool> EnableMachineCombinerPass(
-    "systemz-machine-combiner",
-    cl::desc("Enable the machine combiner pass"),
-    cl::init(true), cl::Hidden);
-
-static cl::opt<bool> GenericSched(
-    "generic-sched", cl::Hidden, cl::init(false),
-    cl::desc("Run the generic pre-ra scheduler instead of the SystemZ "
-             "scheduler."));
+static bool getGenericSched(const Function &F) {
+  return clv2::getOptValOrDefault<&clv2::SZ_GenericSched>(
+      F.getContext().getOptionsContext());
+}
 
 // NOLINTNEXTLINE(readability-identifier-naming)
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void
@@ -173,7 +171,7 @@ ScheduleDAGInstrs *
 SystemZTargetMachine::createMachineScheduler(MachineSchedContext *C) const {
   // Use GenericScheduler if requested on CL or for Z10 which has no sched
   // model.
-  if (GenericSched ||
+  if (getGenericSched(C->MF->getFunction()) ||
       !C->MF->getSubtarget().getSchedModel().hasInstrSchedModel())
     return nullptr;
 
@@ -232,7 +230,9 @@ bool SystemZPassConfig::addInstSelector() {
 bool SystemZPassConfig::addILPOpts() {
   addPass(&EarlyIfConverterLegacyID);
 
-  if (EnableMachineCombinerPass)
+  if (clv2::getOptValOr<&clv2::SystemZOptsReg,
+                        &clv2::SZ_EnableMachineCombinerPass>(
+          TM->getOptionsContext(), true))
     addPass(&MachineCombinerID);
 
   return true;

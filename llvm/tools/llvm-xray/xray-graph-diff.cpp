@@ -17,7 +17,6 @@
 
 #include "xray-graph-diff.h"
 #include "xray-graph.h"
-#include "xray-registry.h"
 
 #include "xray-color-helper.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -27,188 +26,20 @@
 using namespace llvm;
 using namespace xray;
 
-static cl::SubCommand GraphDiff("graph-diff",
-                                "Generate diff of function-call graphs");
-static cl::opt<std::string> GraphDiffInput1(cl::Positional,
-                                            cl::desc("<xray log file 1>"),
-                                            cl::Required, cl::sub(GraphDiff));
-static cl::opt<std::string> GraphDiffInput2(cl::Positional,
-                                            cl::desc("<xray log file 2>"),
-                                            cl::Required, cl::sub(GraphDiff));
-
-static cl::opt<bool>
-    GraphDiffKeepGoing("keep-going",
-                       cl::desc("Keep going on errors encountered"),
-                       cl::sub(GraphDiff), cl::init(false));
-static cl::alias GraphDiffKeepGoingA("k", cl::aliasopt(GraphDiffKeepGoing),
-                                     cl::desc("Alias for -keep-going"));
-static cl::opt<bool>
-    GraphDiffKeepGoing1("keep-going-1",
-                        cl::desc("Keep going on errors encountered in trace 1"),
-                        cl::sub(GraphDiff), cl::init(false));
-static cl::alias GraphDiffKeepGoing1A("k1", cl::aliasopt(GraphDiffKeepGoing1),
-                                      cl::desc("Alias for -keep-going-1"));
-static cl::opt<bool>
-    GraphDiffKeepGoing2("keep-going-2",
-                        cl::desc("Keep going on errors encountered in trace 2"),
-                        cl::sub(GraphDiff), cl::init(false));
-static cl::alias GraphDiffKeepGoing2A("k2", cl::aliasopt(GraphDiffKeepGoing2),
-                                      cl::desc("Alias for -keep-going-2"));
-
-static cl::opt<std::string>
-    GraphDiffInstrMap("instr-map",
-                      cl::desc("binary with the instrumentation map, or "
-                               "a separate instrumentation map for graph"),
-                      cl::value_desc("binary with xray_instr_map or yaml"),
-                      cl::sub(GraphDiff), cl::init(""));
-static cl::alias GraphDiffInstrMapA("m", cl::aliasopt(GraphDiffInstrMap),
-                                    cl::desc("Alias for -instr-map"));
-static cl::opt<std::string>
-    GraphDiffInstrMap1("instr-map-1",
-                       cl::desc("binary with the instrumentation map, or "
-                                "a separate instrumentation map for graph 1"),
-                       cl::value_desc("binary with xray_instr_map or yaml"),
-                       cl::sub(GraphDiff), cl::init(""));
-static cl::alias GraphDiffInstrMap1A("m1", cl::aliasopt(GraphDiffInstrMap1),
-                                     cl::desc("Alias for -instr-map-1"));
-static cl::opt<std::string>
-    GraphDiffInstrMap2("instr-map-2",
-                       cl::desc("binary with the instrumentation map, or "
-                                "a separate instrumentation map for graph 2"),
-                       cl::value_desc("binary with xray_instr_map or yaml"),
-                       cl::sub(GraphDiff), cl::init(""));
-static cl::alias GraphDiffInstrMap2A("m2", cl::aliasopt(GraphDiffInstrMap2),
-                                     cl::desc("Alias for -instr-map-2"));
-
-static cl::opt<bool> GraphDiffDeduceSiblingCalls(
-    "deduce-sibling-calls",
-    cl::desc("Deduce sibling calls when unrolling function call stacks"),
-    cl::sub(GraphDiff), cl::init(false));
-static cl::alias
-    GraphDiffDeduceSiblingCallsA("d", cl::aliasopt(GraphDiffDeduceSiblingCalls),
-                                 cl::desc("Alias for -deduce-sibling-calls"));
-static cl::opt<bool> GraphDiffDeduceSiblingCalls1(
-    "deduce-sibling-calls-1",
-    cl::desc("Deduce sibling calls when unrolling function call stacks"),
-    cl::sub(GraphDiff), cl::init(false));
-static cl::alias GraphDiffDeduceSiblingCalls1A(
-    "d1", cl::aliasopt(GraphDiffDeduceSiblingCalls1),
-    cl::desc("Alias for -deduce-sibling-calls-1"));
-static cl::opt<bool> GraphDiffDeduceSiblingCalls2(
-    "deduce-sibling-calls-2",
-    cl::desc("Deduce sibling calls when unrolling function call stacks"),
-    cl::sub(GraphDiff), cl::init(false));
-static cl::alias GraphDiffDeduceSiblingCalls2A(
-    "d2", cl::aliasopt(GraphDiffDeduceSiblingCalls2),
-    cl::desc("Alias for -deduce-sibling-calls-2"));
-
-static cl::opt<GraphRenderer::StatType> GraphDiffEdgeLabel(
-    "edge-label", cl::desc("Output graphs with edges labeled with this field"),
-    cl::value_desc("field"), cl::sub(GraphDiff),
-    cl::init(GraphRenderer::StatType::NONE),
-    cl::values(clEnumValN(GraphRenderer::StatType::NONE, "none",
-                          "Do not label Edges"),
-               clEnumValN(GraphRenderer::StatType::COUNT, "count",
-                          "function call counts"),
-               clEnumValN(GraphRenderer::StatType::MIN, "min",
-                          "minimum function durations"),
-               clEnumValN(GraphRenderer::StatType::MED, "med",
-                          "median function durations"),
-               clEnumValN(GraphRenderer::StatType::PCT90, "90p",
-                          "90th percentile durations"),
-               clEnumValN(GraphRenderer::StatType::PCT99, "99p",
-                          "99th percentile durations"),
-               clEnumValN(GraphRenderer::StatType::MAX, "max",
-                          "maximum function durations"),
-               clEnumValN(GraphRenderer::StatType::SUM, "sum",
-                          "sum of call durations")));
-static cl::alias GraphDiffEdgeLabelA("e", cl::aliasopt(GraphDiffEdgeLabel),
-                                     cl::desc("Alias for -edge-label"));
-
-static cl::opt<GraphRenderer::StatType> GraphDiffEdgeColor(
-    "edge-color", cl::desc("Output graphs with edges colored by this field"),
-    cl::value_desc("field"), cl::sub(GraphDiff),
-    cl::init(GraphRenderer::StatType::NONE),
-    cl::values(clEnumValN(GraphRenderer::StatType::NONE, "none",
-                          "Do not color Edges"),
-               clEnumValN(GraphRenderer::StatType::COUNT, "count",
-                          "function call counts"),
-               clEnumValN(GraphRenderer::StatType::MIN, "min",
-                          "minimum function durations"),
-               clEnumValN(GraphRenderer::StatType::MED, "med",
-                          "median function durations"),
-               clEnumValN(GraphRenderer::StatType::PCT90, "90p",
-                          "90th percentile durations"),
-               clEnumValN(GraphRenderer::StatType::PCT99, "99p",
-                          "99th percentile durations"),
-               clEnumValN(GraphRenderer::StatType::MAX, "max",
-                          "maximum function durations"),
-               clEnumValN(GraphRenderer::StatType::SUM, "sum",
-                          "sum of call durations")));
-static cl::alias GraphDiffEdgeColorA("c", cl::aliasopt(GraphDiffEdgeColor),
-                                     cl::desc("Alias for -edge-color"));
-
-static cl::opt<GraphRenderer::StatType> GraphDiffVertexLabel(
-    "vertex-label",
-    cl::desc("Output graphs with vertices labeled with this field"),
-    cl::value_desc("field"), cl::sub(GraphDiff),
-    cl::init(GraphRenderer::StatType::NONE),
-    cl::values(clEnumValN(GraphRenderer::StatType::NONE, "none",
-                          "Do not label Vertices"),
-               clEnumValN(GraphRenderer::StatType::COUNT, "count",
-                          "function call counts"),
-               clEnumValN(GraphRenderer::StatType::MIN, "min",
-                          "minimum function durations"),
-               clEnumValN(GraphRenderer::StatType::MED, "med",
-                          "median function durations"),
-               clEnumValN(GraphRenderer::StatType::PCT90, "90p",
-                          "90th percentile durations"),
-               clEnumValN(GraphRenderer::StatType::PCT99, "99p",
-                          "99th percentile durations"),
-               clEnumValN(GraphRenderer::StatType::MAX, "max",
-                          "maximum function durations"),
-               clEnumValN(GraphRenderer::StatType::SUM, "sum",
-                          "sum of call durations")));
-static cl::alias GraphDiffVertexLabelA("v", cl::aliasopt(GraphDiffVertexLabel),
-                                       cl::desc("Alias for -vertex-label"));
-
-static cl::opt<GraphRenderer::StatType> GraphDiffVertexColor(
-    "vertex-color",
-    cl::desc("Output graphs with vertices colored by this field"),
-    cl::value_desc("field"), cl::sub(GraphDiff),
-    cl::init(GraphRenderer::StatType::NONE),
-    cl::values(clEnumValN(GraphRenderer::StatType::NONE, "none",
-                          "Do not color Vertices"),
-               clEnumValN(GraphRenderer::StatType::COUNT, "count",
-                          "function call counts"),
-               clEnumValN(GraphRenderer::StatType::MIN, "min",
-                          "minimum function durations"),
-               clEnumValN(GraphRenderer::StatType::MED, "med",
-                          "median function durations"),
-               clEnumValN(GraphRenderer::StatType::PCT90, "90p",
-                          "90th percentile durations"),
-               clEnumValN(GraphRenderer::StatType::PCT99, "99p",
-                          "99th percentile durations"),
-               clEnumValN(GraphRenderer::StatType::MAX, "max",
-                          "maximum function durations"),
-               clEnumValN(GraphRenderer::StatType::SUM, "sum",
-                          "sum of call durations")));
-static cl::alias GraphDiffVertexColorA("b", cl::aliasopt(GraphDiffVertexColor),
-                                       cl::desc("Alias for -vertex-color"));
-
-static cl::opt<int> GraphDiffVertexLabelTrunc(
-    "vertex-label-trun", cl::desc("What length to truncate vertex labels to "),
-    cl::sub(GraphDiff), cl::init(40));
-static cl::alias
-    GraphDiffVertexLabelTrunc1("t", cl::aliasopt(GraphDiffVertexLabelTrunc),
-                               cl::desc("Alias for -vertex-label-trun"));
-
-static cl::opt<std::string>
-    GraphDiffOutput("output", cl::value_desc("Output file"), cl::init("-"),
-                    cl::desc("output file; use '-' for stdout"),
-                    cl::sub(GraphDiff));
-static cl::alias GraphDiffOutputA("o", cl::aliasopt(GraphDiffOutput),
-                                  cl::desc("Alias for -output"));
+std::string GraphDiffInput1Val;
+std::string GraphDiffInput2Val;
+bool GraphDiffKeepGoing1Val;
+bool GraphDiffKeepGoing2Val;
+std::string GraphDiffInstrMap1Val;
+std::string GraphDiffInstrMap2Val;
+bool GraphDiffDeduceSiblingCalls1Val;
+bool GraphDiffDeduceSiblingCalls2Val;
+GraphRenderer::StatType GraphDiffEdgeLabelVal;
+GraphRenderer::StatType GraphDiffEdgeColorVal;
+GraphRenderer::StatType GraphDiffVertexLabelVal;
+GraphRenderer::StatType GraphDiffVertexColorVal;
+int GraphDiffVertexLabelTruncVal;
+std::string GraphDiffOutputVal;
 
 Expected<GraphDiffRenderer> GraphDiffRenderer::Factory::getGraphDiffRenderer() {
   GraphDiffRenderer R;
@@ -237,8 +68,6 @@ Expected<GraphDiffRenderer> GraphDiffRenderer::Factory::getGraphDiffRenderer() {
   return R;
 }
 
-// Returns the Relative change With respect to LeftStat between LeftStat
-// and RightStat.
 static double statRelDiff(const GraphDiffRenderer::TimeStat &LeftStat,
                           const GraphDiffRenderer::TimeStat &RightStat,
                           GraphDiffRenderer::StatType T) {
@@ -253,9 +82,9 @@ static std::string getColor(const GraphDiffRenderer::GraphT::EdgeValueType &E,
                             GraphDiffRenderer::StatType T) {
   auto &EdgeAttr = E.second;
   if (EdgeAttr.CorrEdgePtr[0] == nullptr)
-    return H.getColorString(2.0); // A number greater than 1.0
+    return H.getColorString(2.0);
   if (EdgeAttr.CorrEdgePtr[1] == nullptr)
-    return H.getColorString(-2.0); // A number less than -1.0
+    return H.getColorString(-2.0);
 
   if (T == GraphDiffRenderer::StatType::NONE)
     return H.getDefaultColorString();
@@ -274,9 +103,9 @@ static std::string getColor(const GraphDiffRenderer::GraphT::VertexValueType &V,
                             GraphDiffRenderer::StatType T) {
   auto &VertexAttr = V.second;
   if (VertexAttr.CorrVertexPtr[0] == nullptr)
-    return H.getColorString(2.0); // A number greater than 1.0
+    return H.getColorString(2.0);
   if (VertexAttr.CorrVertexPtr[1] == nullptr)
-    return H.getColorString(-2.0); // A number less than -1.0
+    return H.getColorString(-2.0);
 
   if (T == GraphDiffRenderer::StatType::NONE)
     return H.getDefaultColorString();
@@ -360,7 +189,6 @@ void GraphDiffRenderer::exportGraphAsDOT(raw_ostream &OS, StatType EdgeLabel,
                                          StatType EdgeColor,
                                          StatType VertexLabel,
                                          StatType VertexColor, int TruncLen) {
-  // Get numbering of vertices for dot output.
   StringMap<int32_t> VertexNo;
 
   int i = 0;
@@ -403,29 +231,13 @@ void GraphDiffRenderer::exportGraphAsDOT(raw_ostream &OS, StatType EdgeLabel,
   OS << "}\n";
 }
 
-template <typename T> static T &ifSpecified(T &A, cl::alias &AA, T &B) {
-  if (A.getPosition() == 0 && AA.getPosition() == 0)
-    return B;
+Error tryGraphDiff() {
+  std::array<GraphRenderer::Factory, 2> Factories{{
+      {GraphDiffKeepGoing1Val, GraphDiffDeduceSiblingCalls1Val, {}, Trace()},
+      {GraphDiffKeepGoing2Val, GraphDiffDeduceSiblingCalls2Val, {}, Trace()},
+  }};
 
-  return A;
-}
-
-static CommandRegistration Unused(&GraphDiff, []() -> Error {
-  std::array<GraphRenderer::Factory, 2> Factories{
-      {{ifSpecified(GraphDiffKeepGoing1, GraphDiffKeepGoing1A,
-                    GraphDiffKeepGoing),
-        ifSpecified(GraphDiffDeduceSiblingCalls1, GraphDiffDeduceSiblingCalls1A,
-                    GraphDiffDeduceSiblingCalls),
-        ifSpecified(GraphDiffInstrMap1, GraphDiffInstrMap1A, GraphDiffInstrMap),
-        Trace()},
-       {ifSpecified(GraphDiffKeepGoing2, GraphDiffKeepGoing2A,
-                    GraphDiffKeepGoing),
-        ifSpecified(GraphDiffDeduceSiblingCalls2, GraphDiffDeduceSiblingCalls2A,
-                    GraphDiffDeduceSiblingCalls),
-        ifSpecified(GraphDiffInstrMap2, GraphDiffInstrMap2A, GraphDiffInstrMap),
-        Trace()}}};
-
-  std::array<std::string, 2> Inputs{{GraphDiffInput1, GraphDiffInput2}};
+  std::array<std::string, 2> Inputs{{GraphDiffInput1Val, GraphDiffInput2Val}};
 
   std::array<GraphRenderer::GraphT, 2> Graphs;
 
@@ -456,14 +268,16 @@ static CommandRegistration Unused(&GraphDiff, []() -> Error {
   auto &GDR = *GDROrErr;
 
   std::error_code EC;
-  raw_fd_ostream OS(GraphDiffOutput, EC, sys::fs::OpenFlags::OF_TextWithCRLF);
+  raw_fd_ostream OS(GraphDiffOutputVal, EC,
+                    sys::fs::OpenFlags::OF_TextWithCRLF);
   if (EC)
-    return make_error<StringError>(
-        Twine("Cannot open file '") + GraphDiffOutput + "' for writing.", EC);
+    return make_error<StringError>(Twine("Cannot open file '") +
+                                       GraphDiffOutputVal + "' for writing.",
+                                   EC);
 
-  GDR.exportGraphAsDOT(OS, GraphDiffEdgeLabel, GraphDiffEdgeColor,
-                       GraphDiffVertexLabel, GraphDiffVertexColor,
-                       GraphDiffVertexLabelTrunc);
+  GDR.exportGraphAsDOT(OS, GraphDiffEdgeLabelVal, GraphDiffEdgeColorVal,
+                       GraphDiffVertexLabelVal, GraphDiffVertexColorVal,
+                       GraphDiffVertexLabelTruncVal);
 
   return Error::success();
-});
+}

@@ -59,11 +59,13 @@
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/CommandLineCompat.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/NVPTXAddrSpace.h"
+#include "llvm/Support/OptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/NVPTX/NVPTXOptionsOptInfos.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include <algorithm>
@@ -81,58 +83,64 @@
 
 using namespace llvm;
 
-static cl::opt<bool> sched4reg(
-    "nvptx-sched4reg",
-    cl::desc("NVPTX Specific: schedule for register pressue"), cl::init(false));
+[[maybe_unused]] static bool getSched4Reg(const Function &F) {
+  return clv2::getOptValOr<&clv2::NVPTXOptsReg, &llvm::clv2::NVPTX_Sched4Reg>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<unsigned> FMAContractLevelOpt(
-    "nvptx-fma-level", cl::Hidden,
-    cl::desc("NVPTX Specific: FMA contraction (0: don't do it"
-             " 1: do it  2: do it aggressively"),
-    cl::init(2));
+[[maybe_unused]] static bool getUseApproxLog2F32(const Function &F) {
+  return clv2::getOptValOr<&clv2::NVPTXOptsReg,
+                           &llvm::clv2::NVPTX_ApproxLog2F32>(
+      F.getContext().getOptionsContext(), false);
+}
 
-static cl::opt<NVPTX::DivPrecisionLevel> UsePrecDivF32(
-    "nvptx-prec-divf32", cl::Hidden,
-    cl::desc(
-        "NVPTX Specific: Override the precision of the lowering for f32 fdiv"),
-    cl::values(
-        clEnumValN(NVPTX::DivPrecisionLevel::Approx, "0", "Use div.approx"),
-        clEnumValN(NVPTX::DivPrecisionLevel::Full, "1", "Use div.full"),
-        clEnumValN(NVPTX::DivPrecisionLevel::IEEE754, "2",
-                   "Use IEEE Compliant F32 div.rnd if available (default)"),
-        clEnumValN(NVPTX::DivPrecisionLevel::IEEE754_NoFTZ, "3",
-                   "Use IEEE Compliant F32 div.rnd if available, no FTZ")),
-    cl::init(NVPTX::DivPrecisionLevel::IEEE754));
+static bool getUsePrecSqrtF32(const Function &F) {
+  return clv2::getOptValOrDefault<&llvm::clv2::NVPTX_PrecSqrtF32>(
+      F.getContext().getOptionsContext());
+}
 
-static cl::opt<bool> UsePrecSqrtF32(
-    "nvptx-prec-sqrtf32", cl::Hidden,
-    cl::desc("NVPTX Specific: 0 use sqrt.approx, 1 use sqrt.rn."),
-    cl::init(true));
+static bool getUsePrecSqrtF32WasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::NVPTXOptsReg,
+                               &llvm::clv2::NVPTX_PrecSqrtF32>(
+      F.getContext().getOptionsContext());
+}
 
-// PTX atom.add.f32 has fixed FTZ behavior that may not match the function's
-// (see shouldExpandAtomicRMWInIR), so we'd normally fall back to a CAS loop
-// when they disagree. This option (enabled by default) allows using atom.add
-// anyway, trading correct denormal handling for the speed of the native
-// instruction.
-static cl::opt<bool> AllowFTZAtomics(
-    "nvptx-allow-ftz-atomics", cl::Hidden,
-    cl::desc("NVPTX Specific: Lower atomicrmw fadd to atom.add even when its "
-             "FTZ behavior does not match the function's denormal mode."),
-    cl::init(true));
+static unsigned getFMAContractLevelOpt(const Function &F) {
+  return clv2::getOptValOrDefault<&llvm::clv2::NVPTX_FMAContractLevel>(
+      F.getContext().getOptionsContext());
+}
 
-/// Whereas CUDA's implementation (see libdevice) uses ex2.approx for exp2(), it
-/// does NOT use lg2.approx for log2, so this is disabled by default.
-static cl::opt<bool> UseApproxLog2F32(
-    "nvptx-approx-log2f32",
-    cl::desc("NVPTX Specific: whether to use lg2.approx for log2"),
-    cl::init(false));
+static bool getFMAContractLevelOptWasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::NVPTXOptsReg,
+                               &llvm::clv2::NVPTX_FMAContractLevel>(
+      F.getContext().getOptionsContext());
+}
+
+static NVPTX::DivPrecisionLevel getUsePrecDivF32(const Function &F) {
+  if (auto *O = clv2::getView<&clv2::NVPTXOptsReg>(
+          F.getContext().getOptionsContext()))
+    return static_cast<NVPTX::DivPrecisionLevel>(
+        O->get<&llvm::clv2::NVPTX_PrecDivF32>());
+  return NVPTX::DivPrecisionLevel::IEEE754;
+}
+
+static bool getUsePrecDivF32WasSpecified(const Function &F) {
+  return clv2::wasOptSpecified<&clv2::NVPTXOptsReg,
+                               &llvm::clv2::NVPTX_PrecDivF32>(
+      F.getContext().getOptionsContext());
+}
+
+static bool getAllowFTZAtomics(const Function &F) {
+  return clv2::getOptValOrDefault<&llvm::clv2::NVPTX_AllowFTZAtomics>(
+      F.getContext().getOptionsContext());
+}
 
 NVPTX::DivPrecisionLevel
 NVPTXTargetLowering::getDivF32Level(const MachineFunction &MF,
                                     const SDNode &N) const {
   // If nvptx-prec-div32=N is used on the command-line, always honor it
-  if (UsePrecDivF32.getNumOccurrences() > 0)
-    return UsePrecDivF32;
+  if (getUsePrecDivF32WasSpecified(MF.getFunction()))
+    return getUsePrecDivF32(MF.getFunction());
 
   const SDNodeFlags Flags = N.getFlags();
   if (Flags.hasApproximateFuncs())
@@ -141,10 +149,12 @@ NVPTXTargetLowering::getDivF32Level(const MachineFunction &MF,
   return NVPTX::DivPrecisionLevel::IEEE754;
 }
 
-bool NVPTXTargetLowering::usePrecSqrtF32(const SDNode *N) const {
+bool NVPTXTargetLowering::usePrecSqrtF32(const MachineFunction &MF,
+                                         const SDNode *N) const {
+  const Function &F = MF.getFunction();
   // If nvptx-prec-sqrtf32 is used on the command-line, always honor it
-  if (UsePrecSqrtF32.getNumOccurrences() > 0)
-    return UsePrecSqrtF32;
+  if (getUsePrecSqrtF32WasSpecified(F))
+    return getUsePrecSqrtF32(F);
 
   if (N) {
     const SDNodeFlags Flags = N->getFlags();
@@ -541,11 +551,12 @@ NVPTXTargetLowering::NVPTXTargetLowering(const NVPTXTargetMachine &TM,
   // possible.
   addBypassSlowDiv(64, 32);
 
-  // By default, use the Source scheduling
-  if (sched4reg)
-    setSchedulingPreference(Sched::RegPressure);
-  else
-    setSchedulingPreference(Sched::Source);
+  // By default, use the Source scheduling.
+  setSchedulingPreference(
+      clv2::getOptValOr<&clv2::NVPTXOptsReg, &clv2::NVPTX_Sched4Reg>(
+          STI.getOptionsContext(), false)
+          ? Sched::RegPressure
+          : Sched::Source);
 
   auto setFP16OperationAction = [&](unsigned Op, MVT VT, LegalizeAction Action,
                                     LegalizeAction NoF16Action) {
@@ -1118,12 +1129,15 @@ NVPTXTargetLowering::NVPTXTargetLowering(const NVPTXTargetMachine &TM,
 
   // FLOG2 supports f32 only
   // f16/bf16 types aren't supported, but they are promoted/expanded to f32.
-  if (UseApproxLog2F32) {
-    setOperationAction(ISD::FLOG2, MVT::f32, Legal);
-    setOperationPromotedToType(ISD::FLOG2, MVT::f16, MVT::f32);
-    setOperationPromotedToType(ISD::FLOG2, MVT::bf16, MVT::f32);
-    setOperationAction(ISD::FLOG2, {MVT::v2f16, MVT::v2bf16, MVT::v2f32},
-                       Expand);
+  {
+    if (clv2::getOptValOr<&clv2::NVPTXOptsReg, &clv2::NVPTX_ApproxLog2F32>(
+            STI.getOptionsContext(), false)) {
+      setOperationAction(ISD::FLOG2, MVT::f32, Legal);
+      setOperationPromotedToType(ISD::FLOG2, MVT::f16, MVT::f32);
+      setOperationPromotedToType(ISD::FLOG2, MVT::bf16, MVT::f32);
+      setOperationAction(ISD::FLOG2, {MVT::v2f16, MVT::v2bf16, MVT::v2f32},
+                         Expand);
+    }
   }
 
   setOperationAction(ISD::ADDRSPACECAST, {MVT::i32, MVT::i64}, Custom);
@@ -1188,7 +1202,8 @@ SDValue NVPTXTargetLowering::getSqrtEstimate(SDValue Operand, SelectionDAG &DAG,
                                              bool &UseOneConst,
                                              bool Reciprocal) const {
   if (!(Enabled == ReciprocalEstimate::Enabled ||
-        (Enabled == ReciprocalEstimate::Unspecified && !usePrecSqrtF32())))
+        (Enabled == ReciprocalEstimate::Unspecified &&
+         !usePrecSqrtF32(DAG.getMachineFunction()))))
     return SDValue();
 
   if (ExtraSteps == ReciprocalEstimate::Unspecified)
@@ -5707,8 +5722,8 @@ NVPTXTargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
 bool NVPTXTargetLowering::allowFMA(MachineFunction &MF,
                                    CodeGenOptLevel OptLevel) const {
   // Always honor command-line argument
-  if (FMAContractLevelOpt.getNumOccurrences() > 0)
-    return FMAContractLevelOpt > 0;
+  if (getFMAContractLevelOptWasSpecified(MF.getFunction()))
+    return getFMAContractLevelOpt(MF.getFunction()) > 0;
 
   // Do not contract if we're not optimizing the code.
   if (OptLevel == CodeGenOptLevel::None)
@@ -7652,10 +7667,11 @@ NVPTXTargetLowering::shouldExpandAtomicRMWInIR(const AtomicRMWInst *AI) const {
     const Function *F = AI->getFunction();
 
     // AllowFTZAtomics forces atom.add regardless of the FTZ mismatch.
+    const bool AllowFTZ = getAllowFTZAtomics(*AI->getFunction());
     if (Ty->isFloatTy()) {
       const bool FTZ = F->getDenormalMode(APFloat::IEEEsingle()).Output ==
                        DenormalMode::PreserveSign;
-      bool UseNative = AllowFTZAtomics;
+      bool UseNative = AllowFTZ;
       switch (AI->getPointerAddressSpace()) {
       case llvm::ADDRESS_SPACE_GLOBAL:
         UseNative |= FTZ;
@@ -7674,7 +7690,7 @@ NVPTXTargetLowering::shouldExpandAtomicRMWInIR(const AtomicRMWInst *AI) const {
       // function that is not in FTZ mode for f16.
       const bool FTZ = F->getDenormalMode(APFloat::IEEEhalf()).Output ==
                        DenormalMode::PreserveSign;
-      if ((!FTZ || AllowFTZAtomics) && STI.hasFeature(NVPTX::SM70) &&
+      if ((!FTZ || AllowFTZ) && STI.hasFeature(NVPTX::SM70) &&
           STI.hasFeature(NVPTX::PTX63))
         return AtomicExpansionKind::None;
     }
