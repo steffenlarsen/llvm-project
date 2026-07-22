@@ -213,6 +213,8 @@ CODEGENOPT(ClangIRNoSpecializeScalarArgs, 1, 0, Benign) ///< Disable GpuSpeciali
 CODEGENOPT(ClangIRNoMultiversionDivisibility, 1, 0, Benign) ///< Disable GpuMultiversionDivisibilityPass in CIR offload pipeline
 CODEGENOPT(ClangIRNoDeadKernelElim, 1, 0, Benign) ///< Disable dead kernel elimination in CIR offload pipeline
 CODEGENOPT(ClangIRNoDeadArgElim, 1, 0, Benign) ///< Disable dead argument elimination in CIR offload pipeline
+CODEGENOPT(ClangIRFuseKernels, 1, 0, Benign) ///< Enable kernel fusion in CIR offload pipeline
+CODEGENOPT(ClangIRExpandKernelLoops, 1, 0, Benign) ///< Enable kernel loop expansion in CIR offload pipeline
 CODEGENOPT(DisableBlockSignatureString, 1, 0, Benign) ///< Set when -fdisable-block-signature-string is enabled.
 CODEGENOPT(HIPSaveKernelArgName, 1, 0, Benign) ///< Set when -fhip-kernel-arg-name is enabled.
 CODEGENOPT(UniqueInternalLinkageNames, 1, 0, Benign) ///< Internal Linkage symbols get unique names.

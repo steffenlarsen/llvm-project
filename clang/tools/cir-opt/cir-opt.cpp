@@ -114,6 +114,12 @@ int main(int argc, char **argv) {
   ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
     return mlir::createOffloadDeadArgEliminationPass();
   });
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createOffloadFuseKernelsPass();
+  });
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createOffloadExpandKernelLoopsPass();
+  });
 
   return mlir::asMainReturnCode(MlirOptMain(
       argc, argv, "Clang IR analysis and optimization tool\n", registry));

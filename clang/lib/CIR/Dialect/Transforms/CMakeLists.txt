@@ -23,6 +23,8 @@ add_clang_library(MLIRCIRTransforms
   OffloadSpecializeSharedMemory.cpp
   OffloadPropagateGridCoverage.cpp
   OffloadDeadArgElimination.cpp
+  OffloadFuseKernels.cpp
+  OffloadExpandKernelLoops.cpp
 
   DEPENDS
   MLIRCIRPassIncGen

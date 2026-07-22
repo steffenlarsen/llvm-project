@@ -3519,6 +3519,16 @@ def clangir_no_dead_arg_elim : Flag<["-"], "clangir-no-dead-arg-elim">,
   HelpText<"ClangIR: Disable dead argument elimination in the offload pipeline">,
   MarshallingInfoFlag<CodeGenOpts<"ClangIRNoDeadArgElim">>;
 
+def clangir_fuse_kernels : Flag<["-"], "clangir-fuse-kernels">,
+  Visibility<[CC1Option]>,
+  HelpText<"ClangIR: Enable kernel fusion in the offload pipeline">,
+  MarshallingInfoFlag<CodeGenOpts<"ClangIRFuseKernels">>;
+
+def clangir_expand_kernel_loops : Flag<["-"], "clangir-expand-kernel-loops">,
+  Visibility<[CC1Option]>,
+  HelpText<"ClangIR: Enable kernel loop expansion in the offload pipeline">,
+  MarshallingInfoFlag<CodeGenOpts<"ClangIRExpandKernelLoops">>;
+
 defm clangir : BoolFOption<"clangir",
   FrontendOpts<"UseClangIRPipeline">, DefaultFalse,
   PosFlag<SetTrue, [], [ClangOption, CC1Option], "Use the ClangIR pipeline to compile">,

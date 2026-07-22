@@ -4598,6 +4598,13 @@ struct ConvertCIROffloadToGPUPass
           [&](cir::OffloadFuncOp fn) { offloadFuncs.push_back(fn); });
 
       for (auto offloadFn : offloadFuncs) {
+        // Skip external declarations — they serve as forwarding symbols for
+        // kernels defined in another module (e.g., fused kernels).
+        // SplitSingleSource resolves them from the defining module.
+        if (offloadFn.isExternal()) {
+          offloadFn.erase();
+          continue;
+        }
         mlir::Location fnLoc = offloadFn.getLoc();
         cir::FuncType cirFTy = offloadFn.getFunctionType();
 
@@ -4633,7 +4640,10 @@ struct ConvertCIROffloadToGPUPass
         }
 
         // Convert cir.return terminators to gpu.return inside the new gpu.func.
+        // Skip for external declarations (empty body → no terminators).
         for (mlir::Block &blk : gpuFn.getBody()) {
+          if (!blk.getTerminator())
+            continue;
           if (auto ret = dyn_cast<cir::ReturnOp>(blk.getTerminator())) {
             mlir::OpBuilder::InsertionGuard rg(builder);
             builder.setInsertionPoint(ret);
@@ -4698,7 +4708,6 @@ struct ConvertCIROffloadToGPUPass
 
     // Step 2: Convert remaining cir.offload.* ops inside gpu.func bodies.
     module.walk([&](mlir::gpu::GPUFuncOp gpuFn) {
-      // Walk in reverse to handle nested ops correctly.
       SmallVector<mlir::Operation *> opsToConvert;
       gpuFn.walk([&](mlir::Operation *op) {
         if (isa<cir::OffloadThreadIdOp, cir::OffloadBlockIdOp,
@@ -5038,6 +5047,7 @@ struct ConvertCIRInGpuModulePass
 
   void runOnOperation() override {
     mlir::gpu::GPUModuleOp gpuModule = getOperation();
+    // Dump fused kernel body before conversion for debugging.
     mlir::DataLayout dl(gpuModule);
     mlir::LLVMTypeConverter converter(&getContext());
     prepareTypeConverter(converter, dl);
@@ -5396,8 +5406,15 @@ struct ConvertCIRInGpuModulePass
       }
     });
 
-    if (failed(applyPartialConversion(gpuModule, target, std::move(patterns))))
+    if (failed(applyPartialConversion(gpuModule, target, std::move(patterns)))) {
       signalPassFailure();
+    } else {
+      unsigned remaining = 0;
+      gpuModule.walk([&](mlir::Operation *op) {
+        if (mlir::isa<cir::CIRDialect>(op->getDialect()))
+          ++remaining;
+      });
+    }
 
     // Attach TBAA metadata to all LoadOp/StoreOp in the gpu.module.
     {
@@ -9080,19 +9097,16 @@ void populateCIRToLLVMPasses(mlir::OpPassManager &pm, bool enableOffloadSplit,
                              bool isDeviceCompilation,
                              unsigned deviceOptLevel,
                              const cir::CIROffloadConfig &offloadConfig) {
+  // Kernel loop expansion must run BEFORE FlattenCFG (inside
+  // populateCIRPreLoweringPasses) because it needs structured cir.for ops.
+  if (enableOffloadSplit) {
+    pm.addPass(
+        mlir::createOffloadExpandKernelLoopsPass(
+            offloadConfig.expandKernelLoops));
+  }
   mlir::populateCIRPreLoweringPasses(pm);
   pm.addPass(mlir::omp::createMarkDeclareTargetPass());
   if (enableOffloadSplit) {
-    // Split unified offload.func / offload.kernel_launch ops into a host
-    // func.func module + a device gpu.module.  This must run after all
-    // CIR-to-CIR passes (which expect cir.func parents) and before the
-    // CIR-to-LLVM pass (which cannot handle offload.* ops).
-    //
-    // Flatten structured CIR control flow (cir.ternary, cir.if, cir.for, …)
-    // before the split so that gpu.func bodies contain only branch-based CFG
-    // ops.  ConvertCIRInGpuModulePass uses applyPartialConversion, which does
-    // not recurse into region-bearing structured ops like cir.ternary.
-    pm.addPass(mlir::createCIRFlattenCFGPass());
     // Single-source optimization passes: these operate on cir.offload.* ops
     // and need cross-visibility between host launch sites and device bodies.
     pm.addPass(mlir::createOffloadTightenLaunchBoundsPass(
@@ -9118,6 +9132,9 @@ void populateCIRToLLVMPasses(mlir::OpPassManager &pm, bool enableOffloadSplit,
     pm.addPass(
         mlir::createOffloadDeadArgEliminationPass(
             offloadConfig.deadArgElimination));
+    pm.addPass(
+        mlir::createOffloadFuseKernelsPass(
+            offloadConfig.fuseKernels));
     // Convert cir.offload.* ops to GPU dialect. Runs after optimization
     // passes (which need single-source visibility) and before SplitSingleSource.
     pm.addPass(createConvertCIROffloadToGPUPass());

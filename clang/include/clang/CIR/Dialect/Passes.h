@@ -58,6 +58,8 @@ std::unique_ptr<Pass> createOffloadMultiversionDivisibilityPass(bool enabled = t
 std::unique_ptr<Pass> createOffloadSpecializeSharedMemoryPass(bool enabled = true, unsigned maxVariants = 1);
 std::unique_ptr<Pass> createOffloadPropagateGridCoveragePass(bool enabled = true);
 std::unique_ptr<Pass> createOffloadDeadArgEliminationPass(bool enabled = true);
+std::unique_ptr<Pass> createOffloadFuseKernelsPass(bool enabled = true);
+std::unique_ptr<Pass> createOffloadExpandKernelLoopsPass(bool enabled = true);
 
 void populateCIRPreLoweringPasses(mlir::OpPassManager &pm);
 

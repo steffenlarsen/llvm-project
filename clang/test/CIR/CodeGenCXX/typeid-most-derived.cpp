@@ -95,7 +95,7 @@ void base_ref(Base &b) { typeid(b); }
 // LLVM:       getelementptr inbounds ptr, ptr
 // LLVM:       ret void
 // CIR-TO-LLVM-LABEL: define {{.*}}void @_Z8base_refR4Base
-// CIR-TO-LLVM:       getelementptr ptr, ptr
+// CIR-TO-LLVM:       getelementptr inbounds ptr, ptr
 // CIR-TO-LLVM:       ret void
 
 // Not most derived
@@ -107,7 +107,7 @@ void base_deref(Base *b) { ForceLoadingVTable(typeid(*b)); }
 // LLVM:       getelementptr inbounds ptr, ptr
 // LLVM:       ret void
 // CIR-TO-LLVM-LABEL: define {{.*}}void @_Z10base_derefP4Base
-// CIR-TO-LLVM:       getelementptr ptr, ptr
+// CIR-TO-LLVM:       getelementptr inbounds ptr, ptr
 // CIR-TO-LLVM:       ret void
 
 // Not most derived
@@ -119,7 +119,7 @@ void nonfinal_ref(NonFinal &d) { typeid(d); }
 // LLVM:       getelementptr inbounds ptr, ptr
 // LLVM:       ret void
 // CIR-TO-LLVM-LABEL: define {{.*}}void @_Z12nonfinal_refR8NonFinal
-// CIR-TO-LLVM:       getelementptr ptr, ptr
+// CIR-TO-LLVM:       getelementptr inbounds ptr, ptr
 // CIR-TO-LLVM:       ret void
 
 // Not most derived
@@ -131,5 +131,5 @@ void nonfinal_deref(NonFinal *d) { ForceLoadingVTable(typeid(*d)); }
 // LLVM:       getelementptr inbounds ptr, ptr
 // LLVM:       ret void
 // CIR-TO-LLVM-LABEL: define {{.*}}void @_Z14nonfinal_derefP8NonFinal
-// CIR-TO-LLVM:       getelementptr ptr, ptr
+// CIR-TO-LLVM:       getelementptr inbounds ptr, ptr
 // CIR-TO-LLVM:       ret void

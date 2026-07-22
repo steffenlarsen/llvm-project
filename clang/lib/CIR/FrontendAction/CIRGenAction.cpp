@@ -260,6 +260,8 @@ public:
       if (CGO.ClangIRNoDeadKernelElim)
         offloadConfig.deadKernelAction = "none";
       offloadConfig.deadArgElimination = !CGO.ClangIRNoDeadArgElim;
+      offloadConfig.fuseKernels = CGO.ClangIRFuseKernels;
+      offloadConfig.expandKernelLoops = CGO.ClangIRExpandKernelLoops;
       const auto &LO = C.getLangOpts();
       offloadConfig.unsafeMathOpt = LO.FastMath || LO.UnsafeFPMath;
       offloadConfig.finiteOnly =
@@ -470,6 +472,8 @@ void CIRGenAction::ExecuteAction() {
     if (CGO.ClangIRNoDeadKernelElim)
       offloadConfig.deadKernelAction = "none";
     offloadConfig.deadArgElimination = !CGO.ClangIRNoDeadArgElim;
+    offloadConfig.fuseKernels = CGO.ClangIRFuseKernels;
+    offloadConfig.expandKernelLoops = CGO.ClangIRExpandKernelLoops;
     offloadConfig.unsafeMathOpt =
         MlirModule->hasAttr("cir.unsafe_fp_math");
     offloadConfig.finiteOnly =

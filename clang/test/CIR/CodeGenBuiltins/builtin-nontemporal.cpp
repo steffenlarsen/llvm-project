@@ -29,11 +29,11 @@ void test_nontemporal_store() {
 // LLVM: store i8 1, ptr @uc, align 1, !nontemporal
 // LLVM: store i8 1, ptr @uc, align 1, !nontemporal
 // LLVM: store i8 1, ptr @sc, align 1, !nontemporal
-// LLVM: store i16 1, ptr @us, align 2, !nontemporal
-// LLVM: store i32 1, ptr @si, align 4, !nontemporal
-// LLVM: store i64 1, ptr @ull, align 8, !nontemporal
-// LLVM: store float 1.0{{.*}}, ptr @f1, align 4, !nontemporal
-// LLVM: store double 1.0{{.*}}, ptr @d1, align 8, !nontemporal
+// LLVM: store i16 1, ptr @us, align 2,{{.*}} !nontemporal
+// LLVM: store i32 1, ptr @si, align 4,{{.*}} !nontemporal
+// LLVM: store i64 1, ptr @ull, align 8,{{.*}} !nontemporal
+// LLVM: store float 1.0{{.*}}, ptr @f1, align 4,{{.*}} !nontemporal
+// LLVM: store double 1.0{{.*}}, ptr @d1, align 8,{{.*}} !nontemporal
 // LLVM: ret void
 
   __builtin_nontemporal_store(true, &uc);
@@ -60,11 +60,11 @@ void test_nontemporal_load() {
 // LLVM-LABEL: define dso_local void @_Z21test_nontemporal_loadv
 // LLVM: load i8, ptr @sc, align 1, !nontemporal
 // LLVM: load i8, ptr @uc, align 1, !nontemporal
-// LLVM: load i16, ptr @ss, align 2, !nontemporal
-// LLVM: load i32, ptr @ui, align 4, !nontemporal
-// LLVM: load i64, ptr @sll, align 8, !nontemporal
-// LLVM: load float, ptr @f2, align 4, !nontemporal
-// LLVM: load double, ptr @d2, align 8, !nontemporal
+// LLVM: load i16, ptr @ss, align 2,{{.*}} !nontemporal
+// LLVM: load i32, ptr @ui, align 4,{{.*}} !nontemporal
+// LLVM: load i64, ptr @sll, align 8,{{.*}} !nontemporal
+// LLVM: load float, ptr @f2, align 4,{{.*}} !nontemporal
+// LLVM: load double, ptr @d2, align 8,{{.*}} !nontemporal
 // LLVM: ret void
 
   uc = __builtin_nontemporal_load(&sc);

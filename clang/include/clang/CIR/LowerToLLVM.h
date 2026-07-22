@@ -40,6 +40,8 @@ struct CIROffloadConfig {
   bool propagateGridCoverage = true;
   bool specializeSharedMemory = true;
   bool deadArgElimination = true;
+  bool fuseKernels = false;
+  bool expandKernelLoops = false;
   std::string deadKernelAction = "split";
 
   // AMDGPU OCML math library control flags.

@@ -1,0 +1,421 @@
+// Tests for CIR offload FuseKernels pass.
+//
+// The pass fuses consecutive kernel launches that operate on disjoint
+// or safely-shared buffers into a single fused kernel launch.
+
+// RUN: cir-opt --cir-offload-fuse-kernels --split-input-file %s 2>/dev/null \
+// RUN:   | FileCheck %s
+
+!u32i = !cir.int<u, 32>
+!pf32 = !cir.ptr<!cir.float>
+
+//===----------------------------------------------------------------------===//
+// Test 1: Two launches with disjoint pointer args → fused (no barrier).
+//===----------------------------------------------------------------------===//
+
+// CHECK: cir.offload.func {{.*}}addOne{{.*}}fused{{.*}}mulTwo
+// CHECK-SAME: %arg0: !cir.ptr<!cir.float>
+// CHECK-SAME: %arg1: !cir.ptr<!cir.float>
+// CHECK-SAME: kernel
+// CHECK-NOT: cir.offload.barrier
+
+// CHECK: cir.offload.kernel_launch {{.*}}fused
+// CHECK-SAME: args(%{{.*}}, %{{.*}} : !cir.ptr<!cir.float>, !cir.ptr<!cir.float>)
+
+module {
+  cir.offload.module @offload_device_module_gfx90a {
+    cir.offload.func @addOne(%arg0: !pf32) kernel {
+      cir.return
+    }
+    cir.offload.func @mulTwo(%arg0: !pf32) kernel {
+      cir.return
+    }
+  }
+  cir.func @host() {
+    %a = cir.alloca "a" align(8) : !cir.ptr<!pf32>
+    %b = cir.alloca "b" align(8) : !cir.ptr<!pf32>
+    %pa = cir.load %a : !cir.ptr<!pf32>, !pf32
+    %pb = cir.load %b : !cir.ptr<!pf32>, !pf32
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    cir.offload.kernel_launch @offload_device_module::@addOne
+        grid(%c1, %c1, %c1 : !u32i) block(%c256, %c1, %c1 : !u32i)
+        args(%pa : !pf32)
+    cir.offload.kernel_launch @offload_device_module::@mulTwo
+        grid(%c1, %c1, %c1 : !u32i) block(%c256, %c1, %c1 : !u32i)
+        args(%pb : !pf32)
+    cir.return
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!pf32 = !cir.ptr<!cir.float>
+
+//===----------------------------------------------------------------------===//
+// Test 2: Shared buffer with per-thread global ID access → fused, no barrier.
+//===----------------------------------------------------------------------===//
+
+// CHECK: cir.offload.func @writeGlobal$fused$readGlobal
+// CHECK-NOT: cir.offload.barrier
+// CHECK: cir.return
+
+// CHECK: cir.offload.kernel_launch {{.*}}writeGlobal{{.*}}fused{{.*}}readGlobal
+
+module {
+  cir.offload.module @offload_device_module_gfx90a {
+    cir.offload.func @writeGlobal(%buf: !pf32) kernel {
+      %tid = cir.offload.thread_id <x> : !u32i
+      %bid = cir.offload.block_id <x> : !u32i
+      %bdim = cir.offload.block_dim <x> : !u32i
+      %t1 = cir.mul %bid, %bdim : !u32i
+      %gid = cir.add %t1, %tid : !u32i
+      %ptr = cir.ptr_stride %buf, %gid : (!pf32, !u32i) -> !pf32
+      %val = cir.const #cir.fp<1.0> : !cir.float
+      cir.store %val, %ptr : !cir.float, !pf32
+      cir.return
+    }
+    cir.offload.func @readGlobal(%buf: !pf32) kernel {
+      %tid = cir.offload.thread_id <x> : !u32i
+      %bid = cir.offload.block_id <x> : !u32i
+      %bdim = cir.offload.block_dim <x> : !u32i
+      %t1 = cir.mul %bid, %bdim : !u32i
+      %gid = cir.add %t1, %tid : !u32i
+      %ptr = cir.ptr_stride %buf, %gid : (!pf32, !u32i) -> !pf32
+      %v = cir.load %ptr : !pf32, !cir.float
+      cir.return
+    }
+  }
+  cir.func @host() {
+    %buf = cir.alloca "buf" align(8) : !cir.ptr<!pf32>
+    %p = cir.load %buf : !cir.ptr<!pf32>, !pf32
+    %c4 = cir.const #cir.int<4> : !u32i
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    cir.offload.kernel_launch @offload_device_module::@writeGlobal
+        grid(%c4, %c1, %c1 : !u32i) block(%c256, %c1, %c1 : !u32i)
+        args(%p : !pf32)
+    cir.offload.kernel_launch @offload_device_module::@readGlobal
+        grid(%c4, %c1, %c1 : !u32i) block(%c256, %c1, %c1 : !u32i)
+        args(%p : !pf32)
+    cir.return
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!pf32 = !cir.ptr<!cir.float>
+
+//===----------------------------------------------------------------------===//
+// Test 3: Shared buffer with per-thread block-local access → fused, no barrier.
+//===----------------------------------------------------------------------===//
+
+// CHECK: cir.offload.func @writeLocal$fused$readLocal
+// CHECK-NOT: cir.offload.barrier
+// CHECK: cir.return
+
+// CHECK: cir.offload.kernel_launch {{.*}}writeLocal{{.*}}fused{{.*}}readLocal
+
+module {
+  cir.offload.module @offload_device_module_gfx90a {
+    cir.offload.func @writeLocal(%buf: !pf32) kernel {
+      %tid = cir.offload.thread_id <x> : !u32i
+      %ptr = cir.ptr_stride %buf, %tid : (!pf32, !u32i) -> !pf32
+      %val = cir.const #cir.fp<2.0> : !cir.float
+      cir.store %val, %ptr : !cir.float, !pf32
+      cir.return
+    }
+    cir.offload.func @readLocal(%buf: !pf32) kernel {
+      %tid = cir.offload.thread_id <x> : !u32i
+      %ptr = cir.ptr_stride %buf, %tid : (!pf32, !u32i) -> !pf32
+      %v = cir.load %ptr : !pf32, !cir.float
+      cir.return
+    }
+  }
+  cir.func @host() {
+    %buf = cir.alloca "buf" align(8) : !cir.ptr<!pf32>
+    %p = cir.load %buf : !cir.ptr<!pf32>, !pf32
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    cir.offload.kernel_launch @offload_device_module::@writeLocal
+        grid(%c1, %c1, %c1 : !u32i) block(%c256, %c1, %c1 : !u32i)
+        args(%p : !pf32)
+    cir.offload.kernel_launch @offload_device_module::@readLocal
+        grid(%c1, %c1, %c1 : !u32i) block(%c256, %c1, %c1 : !u32i)
+        args(%p : !pf32)
+    cir.return
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!pf32 = !cir.ptr<!cir.float>
+
+//===----------------------------------------------------------------------===//
+// Test 4: Shared buffer with different global-ID index → not fused.
+// A writes buf[gid], B reads buf[gid + 1] → cross-thread dependency.
+//===----------------------------------------------------------------------===//
+
+// CHECK-NOT: cir.offload.func {{.*}}writeDiff{{.*}}fused
+// CHECK: cir.offload.kernel_launch @offload_device_module::@writeDiff
+// CHECK: cir.offload.kernel_launch @offload_device_module::@readDiff
+
+module {
+  cir.offload.module @offload_device_module_gfx90a {
+    cir.offload.func @writeDiff(%buf: !pf32) kernel {
+      %tid = cir.offload.thread_id <x> : !u32i
+      %bid = cir.offload.block_id <x> : !u32i
+      %bdim = cir.offload.block_dim <x> : !u32i
+      %t1 = cir.mul %bid, %bdim : !u32i
+      %gid = cir.add %t1, %tid : !u32i
+      %ptr = cir.ptr_stride %buf, %gid : (!pf32, !u32i) -> !pf32
+      %val = cir.const #cir.fp<1.0> : !cir.float
+      cir.store %val, %ptr : !cir.float, !pf32
+      cir.return
+    }
+    cir.offload.func @readDiff(%buf: !pf32) kernel {
+      %tid = cir.offload.thread_id <x> : !u32i
+      %bid = cir.offload.block_id <x> : !u32i
+      %bdim = cir.offload.block_dim <x> : !u32i
+      %t1 = cir.mul %bid, %bdim : !u32i
+      %gid = cir.add %t1, %tid : !u32i
+      %c1 = cir.const #cir.int<1> : !u32i
+      %gid1 = cir.add %gid, %c1 : !u32i
+      %ptr = cir.ptr_stride %buf, %gid1 : (!pf32, !u32i) -> !pf32
+      %v = cir.load %ptr : !pf32, !cir.float
+      cir.return
+    }
+  }
+  cir.func @host() {
+    %buf = cir.alloca "buf" align(8) : !cir.ptr<!pf32>
+    %p = cir.load %buf : !cir.ptr<!pf32>, !pf32
+    %c4 = cir.const #cir.int<4> : !u32i
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    cir.offload.kernel_launch @offload_device_module::@writeDiff
+        grid(%c4, %c1, %c1 : !u32i) block(%c256, %c1, %c1 : !u32i)
+        args(%p : !pf32)
+    cir.offload.kernel_launch @offload_device_module::@readDiff
+        grid(%c4, %c1, %c1 : !u32i) block(%c256, %c1, %c1 : !u32i)
+        args(%p : !pf32)
+    cir.return
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!pf32 = !cir.ptr<!cir.float>
+
+//===----------------------------------------------------------------------===//
+// Test 5: Read-only shared buffer → fused, no barrier.
+//===----------------------------------------------------------------------===//
+
+// CHECK: cir.offload.func @readA$fused$readB
+// CHECK-NOT: cir.offload.barrier
+// CHECK: cir.return
+
+// CHECK: cir.offload.kernel_launch {{.*}}readA{{.*}}fused{{.*}}readB
+
+module {
+  cir.offload.module @offload_device_module_gfx90a {
+    cir.offload.func @readA(%buf: !pf32) kernel {
+      %tid = cir.offload.thread_id <x> : !u32i
+      %ptr = cir.ptr_stride %buf, %tid : (!pf32, !u32i) -> !pf32
+      %v = cir.load %ptr : !pf32, !cir.float
+      cir.return
+    }
+    cir.offload.func @readB(%buf: !pf32) kernel {
+      %tid = cir.offload.thread_id <x> : !u32i
+      %ptr = cir.ptr_stride %buf, %tid : (!pf32, !u32i) -> !pf32
+      %v = cir.load %ptr : !pf32, !cir.float
+      cir.return
+    }
+  }
+  cir.func @host() {
+    %buf = cir.alloca "buf" align(8) : !cir.ptr<!pf32>
+    %p = cir.load %buf : !cir.ptr<!pf32>, !pf32
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    cir.offload.kernel_launch @offload_device_module::@readA
+        grid(%c1, %c1, %c1 : !u32i) block(%c256, %c1, %c1 : !u32i)
+        args(%p : !pf32)
+    cir.offload.kernel_launch @offload_device_module::@readB
+        grid(%c1, %c1, %c1 : !u32i) block(%c256, %c1, %c1 : !u32i)
+        args(%p : !pf32)
+    cir.return
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!pf32 = !cir.ptr<!cir.float>
+
+//===----------------------------------------------------------------------===//
+// Test 6: Shared buffer but grid dims differ → not fused.
+//===----------------------------------------------------------------------===//
+
+// CHECK-NOT: cir.offload.func {{.*}}writeGrid{{.*}}fused
+// CHECK: cir.offload.kernel_launch @offload_device_module::@writeGrid
+// CHECK: cir.offload.kernel_launch @offload_device_module::@readGrid
+
+module {
+  cir.offload.module @offload_device_module_gfx90a {
+    cir.offload.func @writeGrid(%buf: !pf32) kernel {
+      %tid = cir.offload.thread_id <x> : !u32i
+      %ptr = cir.ptr_stride %buf, %tid : (!pf32, !u32i) -> !pf32
+      %val = cir.const #cir.fp<1.0> : !cir.float
+      cir.store %val, %ptr : !cir.float, !pf32
+      cir.return
+    }
+    cir.offload.func @readGrid(%buf: !pf32) kernel {
+      %tid = cir.offload.thread_id <x> : !u32i
+      %ptr = cir.ptr_stride %buf, %tid : (!pf32, !u32i) -> !pf32
+      %v = cir.load %ptr : !pf32, !cir.float
+      cir.return
+    }
+  }
+  cir.func @host() {
+    %buf = cir.alloca "buf" align(8) : !cir.ptr<!pf32>
+    %p = cir.load %buf : !cir.ptr<!pf32>, !pf32
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c2 = cir.const #cir.int<2> : !u32i
+    %c4 = cir.const #cir.int<4> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    cir.offload.kernel_launch @offload_device_module::@writeGrid
+        grid(%c2, %c1, %c1 : !u32i) block(%c256, %c1, %c1 : !u32i)
+        args(%p : !pf32)
+    cir.offload.kernel_launch @offload_device_module::@readGrid
+        grid(%c4, %c1, %c1 : !u32i) block(%c256, %c1, %c1 : !u32i)
+        args(%p : !pf32)
+    cir.return
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!pf32 = !cir.ptr<!cir.float>
+
+//===----------------------------------------------------------------------===//
+// Test 7: Mixed disjoint and shared buffers → fused, shared buf deduplicated.
+//===----------------------------------------------------------------------===//
+
+// CHECK: cir.offload.func @mixedA$fused$mixedB
+// CHECK-NOT: cir.offload.barrier
+// CHECK: cir.return
+
+// Fused launch should have 3 args: shared buf + A's private + B's private.
+// CHECK: cir.offload.kernel_launch {{.*}}mixedA{{.*}}fused{{.*}}mixedB
+// CHECK-SAME: args(%{{.*}}, %{{.*}}, %{{.*}} : !cir.ptr<!cir.float>, !cir.ptr<!cir.float>, !cir.ptr<!cir.float>)
+
+module {
+  cir.offload.module @offload_device_module_gfx90a {
+    cir.offload.func @mixedA(%shared: !pf32, %priv: !pf32) kernel {
+      %tid = cir.offload.thread_id <x> : !u32i
+      %ptr = cir.ptr_stride %shared, %tid : (!pf32, !u32i) -> !pf32
+      %val = cir.const #cir.fp<1.0> : !cir.float
+      cir.store %val, %ptr : !cir.float, !pf32
+      cir.return
+    }
+    cir.offload.func @mixedB(%shared: !pf32, %priv: !pf32) kernel {
+      %tid = cir.offload.thread_id <x> : !u32i
+      %ptr = cir.ptr_stride %shared, %tid : (!pf32, !u32i) -> !pf32
+      %v = cir.load %ptr : !pf32, !cir.float
+      cir.return
+    }
+  }
+  cir.func @host() {
+    %shared_alloca = cir.alloca "shared" align(8) : !cir.ptr<!pf32>
+    %priv1_alloca = cir.alloca "priv1" align(8) : !cir.ptr<!pf32>
+    %priv2_alloca = cir.alloca "priv2" align(8) : !cir.ptr<!pf32>
+    %shared = cir.load %shared_alloca : !cir.ptr<!pf32>, !pf32
+    %priv1 = cir.load %priv1_alloca : !cir.ptr<!pf32>, !pf32
+    %priv2 = cir.load %priv2_alloca : !cir.ptr<!pf32>, !pf32
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c256 = cir.const #cir.int<256> : !u32i
+    cir.offload.kernel_launch @offload_device_module::@mixedA
+        grid(%c1, %c1, %c1 : !u32i) block(%c256, %c1, %c1 : !u32i)
+        args(%shared, %priv1 : !pf32, !pf32)
+    cir.offload.kernel_launch @offload_device_module::@mixedB
+        grid(%c1, %c1, %c1 : !u32i) block(%c256, %c1, %c1 : !u32i)
+        args(%shared, %priv2 : !pf32, !pf32)
+    cir.return
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!pf32 = !cir.ptr<!cir.float>
+
+//===----------------------------------------------------------------------===//
+// Test 8: 2D shared buffer (global ID from X and Y dims) → fused, no barrier.
+// Index: (blockIdx.y * blockDim.y + threadIdx.y) * Lx +
+//        (blockIdx.x * blockDim.x + threadIdx.x)
+//===----------------------------------------------------------------------===//
+
+// CHECK: cir.offload.func @write2D$fused$read2D
+// CHECK-NOT: cir.offload.barrier
+// CHECK: cir.return
+
+// CHECK: cir.offload.kernel_launch {{.*}}write2D{{.*}}fused{{.*}}read2D
+
+module {
+  cir.offload.module @offload_device_module_gfx90a {
+    cir.offload.func @write2D(%buf: !pf32, %Lx: !u32i) kernel {
+      %tidx = cir.offload.thread_id <x> : !u32i
+      %bidx = cir.offload.block_id <x> : !u32i
+      %bdimx = cir.offload.block_dim <x> : !u32i
+      %tidy = cir.offload.thread_id <y> : !u32i
+      %bidy = cir.offload.block_id <y> : !u32i
+      %bdimy = cir.offload.block_dim <y> : !u32i
+      %t0 = cir.mul %bidx, %bdimx : !u32i
+      %ix = cir.add %t0, %tidx : !u32i
+      %t1 = cir.mul %bidy, %bdimy : !u32i
+      %iy = cir.add %t1, %tidy : !u32i
+      %t2 = cir.mul %iy, %Lx : !u32i
+      %gtid = cir.add %t2, %ix : !u32i
+      %ptr = cir.ptr_stride %buf, %gtid : (!pf32, !u32i) -> !pf32
+      %val = cir.const #cir.fp<1.0> : !cir.float
+      cir.store %val, %ptr : !cir.float, !pf32
+      cir.return
+    }
+    cir.offload.func @read2D(%buf: !pf32, %Lx: !u32i) kernel {
+      %tidx = cir.offload.thread_id <x> : !u32i
+      %bidx = cir.offload.block_id <x> : !u32i
+      %bdimx = cir.offload.block_dim <x> : !u32i
+      %tidy = cir.offload.thread_id <y> : !u32i
+      %bidy = cir.offload.block_id <y> : !u32i
+      %bdimy = cir.offload.block_dim <y> : !u32i
+      %t0 = cir.mul %bidx, %bdimx : !u32i
+      %ix = cir.add %t0, %tidx : !u32i
+      %t1 = cir.mul %bidy, %bdimy : !u32i
+      %iy = cir.add %t1, %tidy : !u32i
+      %t2 = cir.mul %iy, %Lx : !u32i
+      %gtid = cir.add %t2, %ix : !u32i
+      %ptr = cir.ptr_stride %buf, %gtid : (!pf32, !u32i) -> !pf32
+      %v = cir.load %ptr : !pf32, !cir.float
+      cir.return
+    }
+  }
+  cir.func @host() {
+    %buf = cir.alloca "buf" align(8) : !cir.ptr<!pf32>
+    %p = cir.load %buf : !cir.ptr<!pf32>, !pf32
+    %lx = cir.const #cir.int<256> : !u32i
+    %c4 = cir.const #cir.int<4> : !u32i
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c16 = cir.const #cir.int<16> : !u32i
+    cir.offload.kernel_launch @offload_device_module::@write2D
+        grid(%c16, %c16, %c1 : !u32i) block(%c16, %c16, %c1 : !u32i)
+        args(%p, %lx : !pf32, !u32i)
+    cir.offload.kernel_launch @offload_device_module::@read2D
+        grid(%c16, %c16, %c1 : !u32i) block(%c16, %c16, %c1 : !u32i)
+        args(%p, %lx : !pf32, !u32i)
+    cir.return
+  }
+}
