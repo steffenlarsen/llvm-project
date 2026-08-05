@@ -516,7 +516,8 @@ mlir::Type CIRGenTypes::convertType(QualType type) {
     llvm_unreachable("NYI");
 #define AMDGPU_TYPE(Name, Id, SingletonId, Width, Align)                       \
   case BuiltinType::Id:                                                        \
-    llvm_unreachable("NYI");
+    resultType = cir::IntType::get(&getMLIRContext(), Width, false);            \
+    break;
 #include "clang/Basic/AMDGPUTypes.def"
 
     default:
