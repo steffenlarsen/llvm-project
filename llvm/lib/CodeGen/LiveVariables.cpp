@@ -263,7 +263,7 @@ void LiveVariables::HandlePhysRegUse(Register Reg, MachineInstr &MI) {
 
   // Remember this use.
   for (MCPhysReg SubReg : TRI->subregs_inclusive(Reg))
-    PhysRegUse[SubReg] = &MI;
+    setPhysRegUse(SubReg, &MI);
 }
 
 /// FindLastRefOrPartRef - Return the last reference or partial reference of
@@ -374,7 +374,7 @@ bool LiveVariables::HandlePhysRegKill(Register Reg, MachineInstr *MI) {
       else {
         LastRefOrPartRef->addRegisterKilled(SubReg, TRI, true);
         for (MCPhysReg SS : TRI->subregs_inclusive(SubReg))
-          PhysRegUse[SS] = LastRefOrPartRef;
+          setPhysRegUse(SS, LastRefOrPartRef);
       }
       for (MCPhysReg SS : TRI->subregs(SubReg))
         PartUses.erase(SS);
@@ -409,7 +409,9 @@ void LiveVariables::HandleRegMask(const MachineOperand &MO, unsigned NumRegs) {
   // Call HandlePhysRegKill() for all live registers clobbered by Mask.
   // Clobbered registers are always dead, sp there is no need to use
   // HandlePhysRegDef().
-  for (unsigned Reg = 1; Reg != NumRegs; ++Reg) {
+  for (unsigned Reg : getSortedTouchedPhysRegs()) {
+    if (Reg == 0)
+      continue;
     // Skip dead regs.
     if (!PhysRegDef[Reg] && !PhysRegUse[Reg])
       continue;
@@ -468,8 +470,8 @@ void LiveVariables::UpdatePhysRegDefs(MachineInstr &MI,
   while (!Defs.empty()) {
     Register Reg = Defs.pop_back_val();
     for (MCPhysReg SubReg : TRI->subregs_inclusive(Reg)) {
-      PhysRegDef[SubReg] = &MI;
-      PhysRegUse[SubReg]  = nullptr;
+      setPhysRegDef(SubReg, &MI);
+      setPhysRegUse(SubReg, nullptr);
     }
   }
 }
@@ -582,9 +584,10 @@ void LiveVariables::runOnBlock(MachineBasicBlock *MBB, unsigned NumRegs) {
     }
   }
 
-  // Loop over PhysRegDef / PhysRegUse, killing any registers that are
-  // available at the end of the basic block.
-  for (unsigned i = 0; i != NumRegs; ++i)
+  // Kill any registers that are still available at the end of the block.
+  // Only registers this block referenced can be live, so walk those rather
+  // than every physical register.
+  for (unsigned i : getSortedTouchedPhysRegs())
     if ((PhysRegDef[i] || PhysRegUse[i]) && !LiveOuts.count(i))
       HandlePhysRegDef(i, nullptr, Defs);
 }
@@ -597,6 +600,9 @@ void LiveVariables::analyze(MachineFunction &mf) {
   const unsigned NumRegs = TRI->getNumSupportedRegs(mf);
   PhysRegDef.assign(NumRegs, nullptr);
   PhysRegUse.assign(NumRegs, nullptr);
+  PhysRegTouchedSet.clear();
+  PhysRegTouchedSet.resize(NumRegs, false);
+  PhysRegTouched.clear();
   PHIVarInfo.resize(MF->getNumBlockIDs());
 
   // FIXME: LiveIntervals will be updated to remove its dependence on
@@ -617,8 +623,7 @@ void LiveVariables::analyze(MachineFunction &mf) {
   for (MachineBasicBlock *MBB : depth_first_ext(Entry, Visited)) {
     runOnBlock(MBB, NumRegs);
 
-    PhysRegDef.assign(NumRegs, nullptr);
-    PhysRegUse.assign(NumRegs, nullptr);
+    clearPhysRegState();
   }
 
   // Convert and transfer the dead / killed information we have gathered into

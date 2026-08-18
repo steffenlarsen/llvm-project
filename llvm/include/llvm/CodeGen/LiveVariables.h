@@ -28,6 +28,8 @@
 #ifndef LLVM_CODEGEN_LIVEVARIABLES_H
 #define LLVM_CODEGEN_LIVEVARIABLES_H
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/IndexedMap.h"
 #include "llvm/ADT/SmallSet.h"
@@ -134,6 +136,51 @@ private:   // Intermediate data structures
   // physical register. This is a purely local property, because all physical
   // register references are presumed dead across basic blocks.
   std::vector<MachineInstr *> PhysRegUse;
+
+  /// Registers with a non-null entry in PhysRegDef or PhysRegUse for the block
+  /// being processed. Sweeping these instead of every physical register keeps
+  /// the per-block work proportional to the registers a block actually
+  /// references, which matters on targets with large register files.
+  BitVector PhysRegTouchedSet;
+  SmallVector<unsigned, 32> PhysRegTouched;
+
+  /// Record that \p Reg now has an entry in PhysRegDef or PhysRegUse.
+  void markPhysRegTouched(unsigned Reg) {
+    if (!PhysRegTouchedSet.test(Reg)) {
+      PhysRegTouchedSet.set(Reg);
+      PhysRegTouched.push_back(Reg);
+    }
+  }
+
+  /// PhysRegDef and PhysRegUse must only be written through these, so that no
+  /// entry can become live without also being recorded as touched.
+  void setPhysRegDef(unsigned Reg, MachineInstr *MI) {
+    PhysRegDef[Reg] = MI;
+    markPhysRegTouched(Reg);
+  }
+
+  void setPhysRegUse(unsigned Reg, MachineInstr *MI) {
+    PhysRegUse[Reg] = MI;
+    markPhysRegTouched(Reg);
+  }
+
+  /// Touched registers in ascending order. Callers iterate in register order
+  /// so that the operands they add to instructions are ordered exactly as a
+  /// full 0..NumRegs sweep would have produced them.
+  ArrayRef<unsigned> getSortedTouchedPhysRegs() {
+    llvm::sort(PhysRegTouched);
+    return PhysRegTouched;
+  }
+
+  /// Clear the per-block state, visiting only the registers actually touched.
+  void clearPhysRegState() {
+    for (unsigned Reg : PhysRegTouched) {
+      PhysRegDef[Reg] = nullptr;
+      PhysRegUse[Reg] = nullptr;
+    }
+    PhysRegTouched.clear();
+    PhysRegTouchedSet.reset();
+  }
 
   std::vector<SmallVector<Register, 4>> PHIVarInfo;
 
