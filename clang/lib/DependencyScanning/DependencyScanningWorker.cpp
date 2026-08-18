@@ -97,7 +97,8 @@ public:
   /// considered stable.
   bool visitInputFileAsRequested(StringRef FilenameAsRequested,
                                  StringRef Filename, bool isSystem,
-                                 bool isOverridden, time_t StoredTime,
+                                 bool isOverridden, off_t /*StoredSize*/,
+                                 time_t StoredTime,
                                  bool isExplicitModule) override {
     if (StableDirs.empty())
       return false;
