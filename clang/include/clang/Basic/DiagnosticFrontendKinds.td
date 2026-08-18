@@ -268,6 +268,12 @@ def warn_module_config_macro_undef : Warning<
   InGroup<ConfigMacros>;
 def note_module_def_undef_here : Note<
   "macro was %select{defined|#undef'd}0 here">;
+def remark_pch_use : Remark<"using precompiled header '%0'">,
+  InGroup<PCHBuild>;
+def remark_pch_build : Remark<"building precompiled header '%0'">,
+  InGroup<PCHBuild>;
+def remark_pch_skip : Remark<"not using a precompiled header: %0">,
+  InGroup<PCHBuild>;
 def remark_module_build : Remark<"building module '%0' as '%1'">,
   ShowInSystemHeader,
   InGroup<ModuleBuild>;

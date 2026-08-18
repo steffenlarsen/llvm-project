@@ -120,6 +120,20 @@ public:
   /// The implicit PCH included at the start of the translation unit, or empty.
   std::string ImplicitPCHInclude;
 
+  /// If true, the implicit PCH is a best-effort optimization: when it is
+  /// missing or not compatible with the current invocation, compile without it
+  /// instead of reporting an error. Used when the driver locates a PCH by
+  /// probing rather than the user requesting one explicitly.
+  bool ImplicitPCHIsOptional = false;
+
+  /// Header to precompile into the optional PCH directory when it holds no
+  /// entry matching this invocation. Empty disables cache population.
+  std::string ImplicitPCHAutoGenerateHeader;
+
+  /// Pruning policy for the implicit PCH cache, in --thinlto-cache-policy
+  /// syntax. Empty selects defaults tuned for PCH-sized entries.
+  std::string ImplicitPCHCachePolicy;
+
   /// Headers that will be converted to chained PCHs in memory.
   std::vector<std::string> ChainedIncludes;
 

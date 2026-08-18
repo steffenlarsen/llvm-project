@@ -24,10 +24,12 @@
 #include "clang/Basic/TokenKinds.h"
 #include "clang/Frontend/ASTUnit.h"
 #include "clang/Frontend/CompilerInstance.h"
+#include "clang/Frontend/FrontendActions.h"
 #include "clang/Frontend/FrontendPluginRegistry.h"
 #include "clang/Frontend/LayoutOverrideSource.h"
 #include "clang/Frontend/MultiplexConsumer.h"
 #include "clang/Frontend/SARIFDiagnosticPrinter.h"
+#include "clang/Frontend/TextDiagnosticBuffer.h"
 #include "clang/Frontend/Utils.h"
 #include "clang/Lex/HeaderSearch.h"
 #include "clang/Lex/LiteralSupport.h"
@@ -44,8 +46,10 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/BuryPointer.h"
+#include "llvm/Support/CachePruning.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/LockFileManager.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
@@ -850,6 +854,201 @@ getInputBufferForModule(CompilerInstance &CI, Module *M) {
       HeaderContents, Module::getModuleInputBufferName());
 }
 
+namespace {
+/// Checks that none of the files a PCH was built from has been modified since.
+///
+/// isAcceptableASTFile compares options only. Input files are validated later,
+/// while the PCH is actually being loaded, and a failure there is the hard
+/// ASTReader error that -fpch-optional exists to avoid -- so for an optional
+/// PCH the check has to happen up front.
+class PCHFreshnessChecker : public ASTReaderListener {
+  FileManager &FileMgr;
+
+public:
+  bool Stale = false;
+
+  explicit PCHFreshnessChecker(FileManager &FileMgr) : FileMgr(FileMgr) {}
+
+  bool needsInputFileVisitation() override { return true; }
+  bool needsSystemInputFileVisitation() override { return true; }
+
+  // The control-block reader reports input files through this overload rather
+  // than visitInputFile, and hands over the modification time recorded when
+  // the PCH was built -- the same value ASTReader compares against while
+  // loading, so this check and that one agree by construction.
+  bool visitInputFileAsRequested(StringRef /*FilenameAsRequested*/,
+                                 StringRef Filename, bool /*isSystem*/,
+                                 bool isOverridden, off_t StoredSize,
+                                 time_t StoredTime,
+                                 bool /*isExplicitModule*/) override {
+    // An overridden file lives in a buffer rather than on disk, so neither
+    // stamp says anything about it.
+    if (Stale || isOverridden)
+      return true;
+    llvm::ErrorOr<llvm::vfs::Status> Status =
+        FileMgr.getVirtualFileSystem().status(Filename);
+    // A vanished input file counts as stale: the PCH cannot be reproduced.
+    if (!Status) {
+      Stale = true;
+      return false;
+    }
+    // Same comparisons ASTReader::getInputFile makes while loading, so this
+    // rejects exactly what the load would have rejected. Size matters
+    // independently of the stamp: time_t has one-second granularity, so an
+    // edit within the same second is invisible to the timestamp alone. A zero
+    // stamp means the PCH was built without timestamp validation.
+    Stale =
+        StoredSize != Status->getSize() ||
+        (StoredTime != 0 &&
+         StoredTime != llvm::sys::toTimeT(Status->getLastModificationTime()));
+    return !Stale;
+  }
+};
+} // namespace
+
+/// Is \p Path a PCH that this exact invocation can load? Checks both that the
+/// options match and that the headers it was built from have not changed since
+/// -- the name of a cache entry hashes the invocation, not the contents of
+/// those headers, so a matching name proves neither on its own.
+static bool isUsablePCH(CompilerInstance &CI, StringRef Path,
+                        StringRef SpecificModuleCachePath) {
+  // Inspect the candidate through a scratch FileManager rather than the
+  // compilation's own. A rejected entry is regenerated in place, and the outer
+  // FileManager caches file sizes: left holding the old entry's size it would
+  // then read the regenerated file short and report it as corrupt. Nothing is
+  // lost by not caching here -- if the entry is accepted, the real load stats
+  // it once more.
+  llvm::IntrusiveRefCntPtr<FileManager> Scratch(
+      new FileManager(CI.getFileSystemOpts(), CI.getVirtualFileSystemPtr()));
+
+  if (!ASTReader::isAcceptableASTFile(
+          Path, *Scratch, CI.getModuleCache(), CI.getPCHContainerReader(),
+          CI.getLangOpts(), CI.getCodeGenOpts(), CI.getTargetOpts(),
+          CI.getPreprocessorOpts(), CI.getHeaderSearchOpts(),
+          SpecificModuleCachePath,
+          /*RequireStrictOptionMatches=*/true))
+    return false;
+
+  PCHFreshnessChecker Checker(*Scratch);
+  if (ASTReader::readASTFileControlBlock(
+          Path, *Scratch, CI.getModuleCache(), CI.getPCHContainerReader(),
+          /*FindModuleFileExtensions=*/false, Checker,
+          /*ValidateDiagnosticOptions=*/false))
+    return false;
+  return !Checker.Stale;
+}
+
+/// Precompile \p HeaderPath into \p OutputPath, reusing \p CI's configuration
+/// so that the result is valid for exactly this invocation. Returns true when a
+/// usable file is in place afterwards.
+///
+/// Failures are deliberately silent: the caller treats the PCH as optional and
+/// simply parses the headers instead. Concurrent compilations may race here;
+/// each writes through a temporary and renames, so the loser of a race is left
+/// with an equivalent file rather than a corrupt one.
+static bool generateImplicitPCH(CompilerInstance &CI, StringRef HeaderPath,
+                                StringRef OutputPath,
+                                StringRef SpecificModuleCachePath) {
+  llvm::vfs::FileSystem &VFS = CI.getVirtualFileSystem();
+  // A file with the right name is not necessarily usable. The name hashes the
+  // invocation, not the contents of the header being precompiled, so editing
+  // that header leaves the hash unchanged and the stale entry in place --
+  // the ordinary edit-rebuild loop for -fpch-auto-generate=. Validating here
+  // keeps the -fpch-optional promise of a graceful skip; trusting the name
+  // instead surfaces a hard ASTReader error from deep in the PCH load.
+  // A failed match falls through and regenerates over the top.
+  if (VFS.exists(OutputPath) &&
+      isUsablePCH(CI, OutputPath, SpecificModuleCachePath))
+    return true;
+  if (!VFS.exists(HeaderPath) || CI.getFrontendOpts().Inputs.empty())
+    return false;
+
+  // Only one process should pay to build any given entry. Whoever loses the
+  // race does not wait: parsing the headers costs less than a second, so
+  // stalling a build job behind someone else's PCH write is a bad trade. The
+  // cache will be warm for the next translation unit either way.
+  llvm::LockFileManager Lock(OutputPath);
+  llvm::Expected<bool> Owned = Lock.tryLock();
+  if (!Owned) {
+    llvm::consumeError(Owned.takeError());
+    return false;
+  }
+  if (!*Owned)
+    return VFS.exists(OutputPath) &&
+           isUsablePCH(CI, OutputPath, SpecificModuleCachePath);
+
+  auto Invocation = std::make_shared<CompilerInvocation>(CI.getInvocation());
+
+  PreprocessorOptions &PPO = Invocation->getPreprocessorOpts();
+  // Break the recursion: the nested compilation must not look for a PCH.
+  PPO.ImplicitPCHInclude.clear();
+  PPO.ImplicitPCHIsOptional = false;
+  PPO.ImplicitPCHAutoGenerateHeader.clear();
+  PPO.ChainedIncludes.clear();
+  // Keep PPO.Includes. The driver force-includes the HIP runtime wrapper, and
+  // the ROCm headers detect it via __CLANG_HIP_RUNTIME_WRAPPER_INCLUDED__ to
+  // pick a different include path; dropping it makes them unbuildable. When
+  // the wrapper is itself the header being precompiled, its include guard
+  // makes the duplicate harmless.
+
+  // Sanitize the nested compilation's diagnostics, as dependency scanning does
+  // for the same reasons: its errors reach the user through remark_pch_skip,
+  // so it must not print a trailing "N errors generated." of its own, and it
+  // must not overwrite the outer compilation's serialized diagnostics file.
+  DiagnosticOptions &NestedDiagOpts = Invocation->getDiagnosticOpts();
+  NestedDiagOpts.ShowCarets = false;
+  NestedDiagOpts.DiagnosticSerializationFile.clear();
+
+  FrontendOptions &FEO = Invocation->getFrontendOpts();
+  FEO.Inputs.assign(
+      1,
+      FrontendInputFile(HeaderPath, CI.getFrontendOpts().Inputs[0].getKind()));
+  FEO.OutputFile = OutputPath.str();
+  FEO.ProgramAction = frontend::GeneratePCH;
+
+  CompilerInstance Nested(std::move(Invocation),
+                          CI.getPCHContainerOperations());
+  Nested.setVirtualFileSystem(CI.getVirtualFileSystemPtr());
+  // Buffer rather than discard: a genuine error in the user's
+  // -fpch-auto-generate= header would otherwise cost them the cache silently,
+  // with no way to find out why. The outer compilation still succeeds by
+  // parsing the headers; only the silence is wrong.
+  auto *NestedDiags = new TextDiagnosticBuffer();
+  Nested.createDiagnostics(NestedDiags, /*ShouldOwnClient=*/true);
+
+  CI.getDiagnostics().Report(diag::remark_pch_build) << OutputPath;
+
+  GeneratePCHAction Action;
+  if (Nested.ExecuteAction(Action) && VFS.exists(OutputPath))
+    return true;
+
+  std::string Reason = ("could not build '" + OutputPath + "'").str();
+  if (NestedDiags->err_begin() != NestedDiags->err_end())
+    Reason += ": " + NestedDiags->err_begin()->second;
+  CI.getDiagnostics().Report(diag::remark_pch_skip) << Reason;
+  return false;
+}
+
+/// Bound the implicit PCH cache. Entries are far larger than module or ThinLTO
+/// ones (8-18 MB) and a fresh one appears for every distinct -D set, -std,
+/// target and clang version, so an absolute size cap matters more than age.
+/// Runs on every probe but is rate-limited by the policy's interval.
+static void pruneImplicitPCHCache(CompilerInstance &CI, StringRef Dir) {
+  llvm::CachePruningPolicy Policy;
+  Policy.Expiration = std::chrono::hours(7 * 24);
+  Policy.MaxSizePercentageOfAvailableSpace = 5;
+  Policy.MaxSizeBytes = 1024ull * 1024 * 1024;
+  StringRef PolicyStr = CI.getPreprocessorOpts().ImplicitPCHCachePolicy;
+  if (!PolicyStr.empty()) {
+    if (llvm::Expected<llvm::CachePruningPolicy> P =
+            llvm::parseCachePruningPolicy(PolicyStr))
+      Policy = *P;
+    else
+      llvm::consumeError(P.takeError());
+  }
+  llvm::consumeError(llvm::pruneCache(Dir, Policy).takeError());
+}
+
 bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
                                      const FrontendInputFile &RealInput) {
   FrontendInputFile Input(RealInput);
@@ -1064,39 +1263,96 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
     PPOpts.ImplicitPCHInclude = PCHIncludePath.str();
     StringRef PCHInclude = PPOpts.ImplicitPCHInclude;
 
+    // A defaulted cache directory will not exist on first use. Create it here,
+    // as the module cache does, so the search below has somewhere to populate.
+    // This deliberately uses the real filesystem rather than the VFS:
+    // llvm::vfs::FileSystem exposes no directory-creation API, and the cache
+    // is an on-disk artifact shared between processes, so it could not live in
+    // an overlay regardless. Failure is harmless: we parse the headers.
+    if (PPOpts.ImplicitPCHIsOptional &&
+        !PPOpts.ImplicitPCHAutoGenerateHeader.empty() &&
+        !CI.getVirtualFileSystem().exists(PCHInclude))
+      llvm::sys::fs::create_directories(PCHInclude);
+
     // If the implicit PCH include is actually a directory, rather than
     // a single file, search for a suitable PCH file in that directory.
     if (auto PCHDir = FileMgr.getOptionalDirectoryRef(PCHInclude)) {
+      if (PPOpts.ImplicitPCHIsOptional &&
+          !PPOpts.ImplicitPCHAutoGenerateHeader.empty())
+        pruneImplicitPCHCache(CI, PCHDir->getName());
       std::error_code EC;
       SmallString<128> DirNative;
       llvm::sys::path::native(PCHDir->getName(), DirNative);
       bool Found = false;
       llvm::vfs::FileSystem &FS = FileMgr.getVirtualFileSystem();
+      std::string ContextHash = CI.getInvocation().computeContextHash();
       std::string SpecificModuleCachePath = createSpecificModuleCachePath(
           CI.getFileManager(), CI.getHeaderSearchOpts().ModuleCachePath,
-          CI.getHeaderSearchOpts().DisableModuleHash,
-          CI.getInvocation().computeContextHash());
+          CI.getHeaderSearchOpts().DisableModuleHash, ContextHash);
+
+      // Entries are written under a name derived from the context hash, so the
+      // one this invocation wants has a computable path. Probe it directly:
+      // scanning the directory costs one full AST validation per candidate,
+      // and with the default 1 GB cap and 8-18 MB entries that is tens of
+      // validations on every translation unit.
+      SmallString<256> DirectEntry(PCHDir->getName());
+      llvm::sys::path::append(DirectEntry, "llvmcache-" + ContextHash + ".pch");
+      if (FS.exists(DirectEntry) &&
+          isUsablePCH(CI, DirectEntry, SpecificModuleCachePath)) {
+        PPOpts.ImplicitPCHInclude = std::string(DirectEntry);
+        CI.getDiagnostics().Report(diag::remark_pch_use) << DirectEntry;
+        Found = true;
+      }
+
+      // Fall back to scanning, so entries populated externally or under an
+      // older naming scheme are still found.
       for (llvm::vfs::directory_iterator Dir = FS.dir_begin(DirNative, EC),
                                          DirEnd;
-           Dir != DirEnd && !EC; Dir.increment(EC)) {
+           !Found && Dir != DirEnd && !EC; Dir.increment(EC)) {
         // Check whether this is an acceptable AST file.
-        if (ASTReader::isAcceptableASTFile(
-                Dir->path(), FileMgr, CI.getModuleCache(),
-                CI.getPCHContainerReader(), CI.getLangOpts(),
-                CI.getCodeGenOpts(), CI.getTargetOpts(),
-                CI.getPreprocessorOpts(), CI.getHeaderSearchOpts(),
-                SpecificModuleCachePath,
-                /*RequireStrictOptionMatches=*/true)) {
+        if (isUsablePCH(CI, Dir->path(), SpecificModuleCachePath)) {
           PPOpts.ImplicitPCHInclude = std::string(Dir->path());
+          CI.getDiagnostics().Report(diag::remark_pch_use) << Dir->path();
           Found = true;
           break;
         }
       }
 
-      if (!Found) {
-        CI.getDiagnostics().Report(diag::err_fe_no_pch_in_dir) << PCHInclude;
-        return false;
+      if (!Found && PPOpts.ImplicitPCHIsOptional &&
+          !PPOpts.ImplicitPCHAutoGenerateHeader.empty()) {
+        // Nothing in the cache matches this invocation. Build an entry for it
+        // so that the rest of this build can use it.
+        if (generateImplicitPCH(CI, PPOpts.ImplicitPCHAutoGenerateHeader,
+                                DirectEntry, SpecificModuleCachePath)) {
+          PPOpts.ImplicitPCHInclude = std::string(DirectEntry);
+          Found = true;
+        }
       }
+
+      if (!Found) {
+        // An optional PCH is a pure optimization: no compatible candidate just
+        // means we parse the headers as usual.
+        if (PPOpts.ImplicitPCHIsOptional) {
+          CI.getDiagnostics().Report(diag::remark_pch_skip)
+              << ("no entry in '" + PCHInclude + "' matches this compilation")
+                     .str();
+          PPOpts.ImplicitPCHInclude.clear();
+        } else {
+          CI.getDiagnostics().Report(diag::err_fe_no_pch_in_dir) << PCHInclude;
+          return false;
+        }
+      }
+    } else if (PPOpts.ImplicitPCHIsOptional &&
+               !isUsablePCH(CI, PCHInclude,
+                            createSpecificModuleCachePath(
+                                CI.getFileManager(),
+                                CI.getHeaderSearchOpts().ModuleCachePath,
+                                CI.getHeaderSearchOpts().DisableModuleHash,
+                                CI.getInvocation().computeContextHash()))) {
+      // Single optional PCH file that is missing or incompatible.
+      CI.getDiagnostics().Report(diag::remark_pch_skip)
+          << ("'" + PCHInclude + "' is missing or does not match").str();
+      PPOpts.ImplicitPCHInclude.clear();
     }
   }
 

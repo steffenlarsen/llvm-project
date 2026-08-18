@@ -622,8 +622,54 @@ void RocmInstallationDetector::AddHIPIncludeArgs(const ArgList &DriverArgs,
     CC1Args.push_back("-idirafter");
     CC1Args.push_back(DriverArgs.MakeArgString(LibHipCxxPath));
   }
-  if (UsesRuntimeWrapper)
+  if (UsesRuntimeWrapper) {
     CC1Args.append({"-include", "__clang_hip_runtime_wrapper.h"});
+    // If a precompiled copy of the runtime wrapper is available, point the
+    // frontend at it. A directory is passed rather than a file: host and
+    // device, and each GPU arch, need different PCHs, and only the frontend
+    // knows enough to pick between them. It validates the candidates and
+    // falls back to parsing the headers when none match, so an absent or
+    // stale directory is harmless.
+    // Mirrors Driver::getDefaultModuleCachePath: an explicit path wins, then
+    // an environment override, then the platform cache directory. If none can
+    // be determined we simply do not cache, which is harmless.
+    // Naming a cache directory is itself an opt-in, so -fhip-pch-dir= enables
+    // the feature on its own. An explicit -fno-hip-pch still wins over it:
+    // it is the escape hatch, and has to work whatever else is on the command
+    // line.
+    SmallString<256> PCHDir;
+    const Arg *DirArg = DriverArgs.getLastArg(options::OPT_fhip_pch_dir_EQ);
+    if (DriverArgs.hasFlag(options::OPT_fhip_pch, options::OPT_fno_hip_pch,
+                           /*Default=*/DirArg != nullptr)) {
+      if (DirArg)
+        PCHDir.assign(DirArg->getValue());
+      else if (std::optional<std::string> Env =
+                   llvm::sys::Process::GetEnv("CLANG_HIP_PCH_CACHE_PATH"))
+        PCHDir.assign(*Env);
+      else if (llvm::sys::path::cache_directory(PCHDir))
+        llvm::sys::path::append(PCHDir, "clang", "HIPPrefixCache");
+    }
+
+    if (!PCHDir.empty()) {
+      // A project can nominate its own prefix header, which is worth far
+      // more than the runtime wrapper alone: it can cover the standard
+      // library and project headers that every translation unit shares.
+      // Doing so asserts that every TU includes it, so it stays opt-in.
+      SmallString<128> Prefix;
+      if (const Arg *H =
+              DriverArgs.getLastArg(options::OPT_fpch_auto_generate_EQ)) {
+        Prefix = H->getValue();
+      } else {
+        Prefix = D.ResourceDir;
+        llvm::sys::path::append(Prefix, "include",
+                                "__clang_hip_runtime_wrapper.h");
+      }
+      CC1Args.append(
+          {"-include-pch", DriverArgs.MakeArgString(PCHDir), "-fpch-optional",
+           DriverArgs.MakeArgString("-fpch-auto-generate=" + Prefix)});
+      DriverArgs.AddLastArg(CC1Args, options::OPT_fpch_cache_policy_EQ);
+    }
+  }
   if (HasHipStdPar)
     HandleHipStdPar();
 }

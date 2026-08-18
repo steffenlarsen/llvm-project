@@ -548,7 +548,8 @@ namespace {
     /// \returns true to continue receiving the next input file, false to stop.
     bool visitInputFileAsRequested(StringRef FilenameAsRequested,
                                    StringRef Filename, bool isSystem,
-                                   bool isOverridden, time_t StoredTime,
+                                   bool isOverridden, off_t /*StoredSize*/,
+                                   time_t StoredTime,
                                    bool isExplicitModule) override {
 
       Out.indent(2) << "Input file: " << FilenameAsRequested;

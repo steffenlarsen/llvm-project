@@ -5429,6 +5429,39 @@ def include_pch : Separate<["-"], "include-pch">, Group<clang_i_Group>,
   Visibility<[ClangOption, CC1Option]>,
   HelpText<"Include precompiled header file">, MetaVarName<"<file>">,
   MarshallingInfoString<PreprocessorOpts<"ImplicitPCHInclude">>;
+// Joined spelling so the option can be carried by -Xarch_device/-Xarch_host,
+// which reject options that take a separate argument. Without this, offload
+// compilations cannot use a per-target PCH.
+def include_pch_EQ : Joined<["-", "--"], "include-pch=">, Group<clang_i_Group>,
+  Visibility<[ClangOption, CC1Option]>,
+  HelpText<"Include precompiled header file">, MetaVarName<"<file>">,
+  Alias<include_pch>;
+def fpch_optional : Flag<["-"], "fpch-optional">,
+  Visibility<[ClangOption, CC1Option]>,
+  HelpText<"Treat an implicit PCH as optional: compile without it if it is "
+           "missing or incompatible, rather than reporting an error">,
+  MarshallingInfoFlag<PreprocessorOpts<"ImplicitPCHIsOptional">>;
+def fpch_auto_generate_EQ : Joined<["-"], "fpch-auto-generate=">,
+  Visibility<[ClangOption, CC1Option]>, MetaVarName<"<header>">,
+  HelpText<"If the optional implicit PCH directory contains no usable entry, "
+           "precompile <header> into it and use the result">,
+  MarshallingInfoString<PreprocessorOpts<"ImplicitPCHAutoGenerateHeader">>;
+def fpch_cache_policy_EQ : Joined<["-"], "fpch-cache-policy=">,
+  Visibility<[ClangOption, CC1Option]>, MetaVarName<"<policy>">,
+  HelpText<"Pruning policy for the implicit PCH cache, in the same syntax as "
+           "--thinlto-cache-policy">,
+  MarshallingInfoString<PreprocessorOpts<"ImplicitPCHCachePolicy">>;
+def fhip_pch : Flag<["-"], "fhip-pch">, Visibility<[ClangOption]>,
+  HelpText<"Cache a precompiled HIP runtime header under the platform cache "
+           "directory (override with CLANG_HIP_PCH_CACHE_PATH or "
+           "-fhip-pch-dir=) and use it when it matches the compilation">;
+def fno_hip_pch : Flag<["-"], "fno-hip-pch">, Visibility<[ClangOption]>,
+  HelpText<"Do not use a cached precompiled HIP runtime header">;
+def fhip_pch_dir_EQ : Joined<["-", "--"], "fhip-pch-dir=">,
+  Visibility<[ClangOption]>, MetaVarName<"<dir>">,
+  HelpText<"Directory searched for a precompiled HIP runtime header. A "
+           "matching PCH is used if one is found; otherwise the headers are "
+           "parsed normally">;
 def relocatable_pch : Flag<["-", "--"], "relocatable-pch">,
   Visibility<[ClangOption, CC1Option]>,
   HelpText<"Whether to build a relocatable precompiled header">,

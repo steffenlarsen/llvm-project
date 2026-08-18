@@ -839,6 +839,7 @@ def MissingFieldInitializers : DiagGroup<"missing-field-initializers",
                                          [MissingDesignatedFieldInitializers]>;
 def ModuleLock : DiagGroup<"module-lock">;
 def ModuleBuild : DiagGroup<"module-build">;
+def PCHBuild : DiagGroup<"pch-build">;
 def ModuleImport : DiagGroup<"module-import">;
 def ModuleValidation : DiagGroup<"module-validation">;
 def ModuleConflict : DiagGroup<"module-conflict">;
