@@ -393,6 +393,29 @@ mlir::Operation *CIRGenNVCUDARuntime::getKernelHandle(cir::FuncOp fn,
   globalOp->setAttr("alignment", builder.getI64IntegerAttr(
                                      cgm.getPointerAlign().getQuantity()));
 
+  // The handle stands in for the kernel, so it has to be linked like it.
+  // A kernel template instantiated in several TUs gives each one a stub with
+  // internal linkage, and a handle left at the default external linkage would
+  // then collide at link time -- which is what ggml's flash-attention template
+  // instances do. Classic CodeGen copies the stub's linkage here for the same
+  // reason.
+  // Derived from the declaration rather than read off `fn`: the stub's own
+  // linkage is not final at this point, so copying it here would just record
+  // the default.
+  cir::GlobalLinkageKind linkage = cgm.getFunctionLinkage(gd);
+  globalOp.setLinkageAttr(
+      cir::GlobalLinkageKindAttr::get(&cgm.getMLIRContext(), linkage));
+
+  // Comdat follows classic CodeGen: a template instantiation whose pattern is
+  // not a definition here is left out of a comdat group, so the group cannot
+  // pull in -- or discard -- a stub whose device kernel this TU did not emit.
+  const auto *fd = cast<FunctionDecl>(gd.getDecl());
+  const FunctionTemplateDecl *ft = fd->getPrimaryTemplate();
+  if ((!ft || ft->isThisDeclarationADefinition()) &&
+      cir::isWeakForLinker(linkage) && cgm.supportsCOMDAT())
+    globalOp.setComdat(true);
+  cgm.setDSOLocal(static_cast<mlir::Operation *>(globalOp));
+
   // Store references
   kernelHandles[fn.getSymName()] = globalOp;
   kernelStubs[globalOp] = fn;
@@ -402,9 +425,13 @@ mlir::Operation *CIRGenNVCUDARuntime::getKernelHandle(cir::FuncOp fn,
 
 void CIRGenNVCUDARuntime::internalizeDeviceSideVar(
     const VarDecl *d, cir::GlobalLinkageKind &linkage) {
+  // For -fno-gpu-rdc, the host-side shadow of an external declaration of a
+  // device-side global becomes an internal definition, so that it cannot
+  // collide with a host global of the same name in another TU. Under
+  // -fgpu-rdc the shadow is reachable from other TUs, so it must stay
+  // external.
   if (cgm.getLangOpts().GPURelocatableDeviceCode)
-    cgm.errorNYI(d->getSourceRange(),
-                 "internalizeDeviceSideVar: GPU Relocatable Device Code (RDC)");
+    return;
 
   // __shared__ variables are odd. Shadows do get created, but
   // they are not registered with the CUDA runtime, so they

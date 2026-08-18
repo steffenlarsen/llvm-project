@@ -348,3 +348,261 @@ module {
 
 // CHECK-LABEL: cir.func @kern_othername(%arg0: !s32i) cc(ptx_kernel)
 // CHECK-NEXT: cir.call @use_othername(%arg0)
+
+// -----
+
+!s32i = !cir.int<s, 32>
+
+// The kernel's address escapes through its handle global, which CIRGen emits
+// for every kernel and which `hipLaunchKernel` can be called with directly. In
+// place folding would then be wrong for a launch this pass cannot see, so the
+// constant goes into a *clone* and only the visible launch is retargeted; the
+// original keeps its parameter.
+module {
+  cir.offload.container {
+    builtin.module @host attributes {cir.offload.kind = #cir.offload_kind<host>} {
+      cir.global constant external @kern_escapes = #cir.global_view<@stub_escapes> : !cir.ptr<!cir.func<(!s32i)>>
+      cir.func internal private @stub_escapes(%arg0: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_escapes">} {
+        %0 = cir.get_global @kern_escapes : !cir.ptr<!cir.ptr<!cir.func<(!s32i)>>>
+        cir.return
+      }
+      cir.func @launch_escapes() {
+        %0 = cir.const #cir.int<7> : !s32i
+        cir.call @stub_escapes(%0) {cu.kernel_name = #cir.cu.kernel_name<"kern_escapes">} : (!s32i) -> ()
+        cir.return
+      }
+    }
+    builtin.module @device_0 attributes {cir.offload.kind = #cir.offload_kind<device>} {
+      cir.func @kern_escapes(%arg0: !s32i) cc(ptx_kernel) {
+        cir.call @use_escapes(%arg0) : (!s32i) -> ()
+        cir.return
+      }
+      cir.func private @use_escapes(!s32i)
+    }
+  }
+}
+
+// The visible launch is retargeted at the clone's stub, and the clone gets its
+// own handle global so registration can resolve it by name.
+// CHECK:      cir.global constant external @kern_escapes.constprop = #cir.global_view<@stub_escapes.constprop>
+// CHECK:      cir.func{{.*}} @stub_escapes.constprop
+// CHECK-SAME:   cu.kernel_name = #cir.cu.kernel_name<"kern_escapes.constprop">
+// CHECK:      cir.call @stub_escapes.constprop
+// CHECK-SAME:   cu.kernel_name = #cir.cu.kernel_name<"kern_escapes.constprop">
+
+// The original still takes the argument; only the clone is specialised.
+// CHECK:      cir.func @kern_escapes(%arg0: !s32i) cc(ptx_kernel)
+// CHECK-NEXT:   cir.call @use_escapes(%arg0)
+// CHECK:      cir.func @kern_escapes.constprop(%arg0: !s32i) cc(ptx_kernel)
+// CHECK-NEXT:   %[[C:.*]] = cir.const #cir.int<7> : !s32i
+// CHECK-NEXT:   cir.call @use_escapes(%[[C]])
+
+// -----
+
+!s32i = !cir.int<s, 32>
+
+// The constant is stated one call frame above the launch. Every caller of the
+// private helper passes 7, so the kernel parameter is fixed at 7.
+module {
+  cir.offload.container {
+    builtin.module @host attributes {cir.offload.kind = #cir.offload_kind<host>} {
+      cir.func internal private @stub_interproc(%arg0: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_interproc">} {
+        cir.return
+      }
+      cir.func internal private @helper_interproc(%arg0: !s32i) {
+        cir.call @stub_interproc(%arg0) {cu.kernel_name = #cir.cu.kernel_name<"kern_interproc">} : (!s32i) -> ()
+        cir.return
+      }
+      cir.func @caller_a_interproc() {
+        %0 = cir.const #cir.int<7> : !s32i
+        cir.call @helper_interproc(%0) : (!s32i) -> ()
+        cir.return
+      }
+      cir.func @caller_b_interproc() {
+        %0 = cir.const #cir.int<7> : !s32i
+        cir.call @helper_interproc(%0) : (!s32i) -> ()
+        cir.return
+      }
+    }
+    builtin.module @device_0 attributes {cir.offload.kind = #cir.offload_kind<device>} {
+      cir.func @kern_interproc(%arg0: !s32i) cc(ptx_kernel) {
+        cir.call @use_interproc(%arg0) : (!s32i) -> ()
+        cir.return
+      }
+      cir.func private @use_interproc(!s32i)
+    }
+  }
+}
+
+// CHECK-LABEL: cir.func @kern_interproc(%arg0: !s32i) cc(ptx_kernel)
+// CHECK-NEXT: %[[C:.*]] = cir.const #cir.int<7> : !s32i
+// CHECK-NEXT: cir.call @use_interproc(%[[C]])
+
+// -----
+
+!s32i = !cir.int<s, 32>
+
+// Same shape, but the callers disagree, so nothing is pinned.
+module {
+  cir.offload.container {
+    builtin.module @host attributes {cir.offload.kind = #cir.offload_kind<host>} {
+      cir.func internal private @stub_disagree(%arg0: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_disagree">} {
+        cir.return
+      }
+      cir.func internal private @helper_disagree(%arg0: !s32i) {
+        cir.call @stub_disagree(%arg0) {cu.kernel_name = #cir.cu.kernel_name<"kern_disagree">} : (!s32i) -> ()
+        cir.return
+      }
+      cir.func @caller_a_disagree() {
+        %0 = cir.const #cir.int<7> : !s32i
+        cir.call @helper_disagree(%0) : (!s32i) -> ()
+        cir.return
+      }
+      cir.func @caller_b_disagree() {
+        %0 = cir.const #cir.int<9> : !s32i
+        cir.call @helper_disagree(%0) : (!s32i) -> ()
+        cir.return
+      }
+    }
+    builtin.module @device_0 attributes {cir.offload.kind = #cir.offload_kind<device>} {
+      cir.func @kern_disagree(%arg0: !s32i) cc(ptx_kernel) {
+        cir.call @use_disagree(%arg0) : (!s32i) -> ()
+        cir.return
+      }
+      cir.func private @use_disagree(!s32i)
+    }
+  }
+}
+
+// CHECK-LABEL: cir.func @kern_disagree(%arg0: !s32i) cc(ptx_kernel)
+// CHECK-NEXT: cir.call @use_disagree(%arg0)
+
+// -----
+
+!s32i = !cir.int<s, 32>
+
+// The helper is externally visible, so the call sites in this module are not
+// all the call sites there are and agreement among them proves nothing.
+module {
+  cir.offload.container {
+    builtin.module @host attributes {cir.offload.kind = #cir.offload_kind<host>} {
+      cir.func internal private @stub_external(%arg0: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_external">} {
+        cir.return
+      }
+      cir.func @helper_external(%arg0: !s32i) {
+        cir.call @stub_external(%arg0) {cu.kernel_name = #cir.cu.kernel_name<"kern_external">} : (!s32i) -> ()
+        cir.return
+      }
+      cir.func @caller_external() {
+        %0 = cir.const #cir.int<7> : !s32i
+        cir.call @helper_external(%0) : (!s32i) -> ()
+        cir.return
+      }
+    }
+    builtin.module @device_0 attributes {cir.offload.kind = #cir.offload_kind<device>} {
+      cir.func @kern_external(%arg0: !s32i) cc(ptx_kernel) {
+        cir.call @use_external(%arg0) : (!s32i) -> ()
+        cir.return
+      }
+      cir.func private @use_external(!s32i)
+    }
+  }
+}
+
+// CHECK-LABEL: cir.func @kern_external(%arg0: !s32i) cc(ptx_kernel)
+// CHECK-NEXT: cir.call @use_external(%arg0)
+
+// -----
+
+!s32i = !cir.int<s, 32>
+
+// A kernel that is *already* a specialization clone. Every launch of such a
+// kernel is visible by construction, which normally licenses rewriting it in
+// place -- but that reasoning covers the whole set of launches, and a split
+// serves only some of them. The constants the $cargs group agrees on must go
+// into a fresh copy, or the other launches would reach a kernel holding
+// arguments they never passed.
+module {
+  cir.offload.container {
+    builtin.module @host attributes {cir.offload.kind = #cir.offload_kind<host>} {
+      cir.global external @kern_split = #cir.global_view<@stub_split> : !cir.ptr<!cir.func<(!s32i)>>
+      cir.func internal private @stub_split(%arg0: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_split">, "cir.offload.specialization_clone"} {
+        %h = cir.get_global @kern_split : !cir.ptr<!cir.ptr<!cir.func<(!s32i)>>>
+        cir.return
+      }
+      cir.func internal private @caller_cargs() attributes {"cir.offload.const_args_clone"} {
+        %0 = cir.const #cir.int<7> : !s32i
+        cir.call @stub_split(%0) {cu.kernel_name = #cir.cu.kernel_name<"kern_split">} : (!s32i) -> ()
+        cir.return
+      }
+      cir.func @caller_runtime(%arg0: !s32i) {
+        cir.call @stub_split(%arg0) {cu.kernel_name = #cir.cu.kernel_name<"kern_split">} : (!s32i) -> ()
+        cir.return
+      }
+    }
+    builtin.module @device_0 attributes {cir.offload.kind = #cir.offload_kind<device>} {
+      cir.func @kern_split(%arg0: !s32i) cc(ptx_kernel) {
+        cir.call @use_split(%arg0) : (!s32i) -> ()
+        cir.return
+      }
+      cir.func private @use_split(!s32i)
+    }
+  }
+}
+
+// Only the $cargs caller is retargeted; the runtime caller keeps the original.
+// CHECK-LABEL: cir.func internal private @caller_cargs()
+// CHECK:         cu.kernel_name = #cir.cu.kernel_name<"kern_split.cargsprop">
+// CHECK-LABEL: cir.func @caller_runtime
+// CHECK:         cu.kernel_name = #cir.cu.kernel_name<"kern_split">
+
+// The kernel the runtime caller still launches keeps its parameter -- it was
+// NOT rewritten in place.
+// CHECK-LABEL: cir.func @kern_split(%arg0: !s32i) cc(ptx_kernel)
+// CHECK-NEXT:    cir.call @use_split(%arg0)
+
+// The fresh copy carries the constant.
+// CHECK-LABEL: cir.func @kern_split.cargsprop(%arg0: !s32i) cc(ptx_kernel)
+// CHECK-NEXT:    %[[C:.*]] = cir.const #cir.int<7> : !s32i
+// CHECK-NEXT:    cir.call @use_split(%[[C]])
+
+// -----
+
+!s32i = !cir.int<s, 32>
+
+// A launch argument that is an expression over constants rather than a literal.
+// ggml computes `ne0203 = ne02*ne03` into a local and hands that to the launch;
+// with both factors pinned by the caller it is a constant, but only if the
+// resolver evaluates the multiply. The integer ops have no folder, so asking
+// them to fold themselves is not enough.
+module {
+  cir.offload.container {
+    builtin.module @host attributes {cir.offload.kind = #cir.offload_kind<host>} {
+      cir.func internal private @stub_prod(%arg0: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_prod">} {
+        %0 = cir.get_global @stub_prod : !cir.ptr<!cir.func<(!s32i)>>
+        cir.return
+      }
+      cir.func @launch_prod() {
+        %a = cir.const #cir.int<3> : !s32i
+        %b = cir.const #cir.int<5> : !s32i
+        %p = cir.mul %a, %b : !s32i
+        %slot = cir.alloca "ne0203" align(4) : !cir.ptr<!s32i>
+        cir.store %p, %slot : !s32i, !cir.ptr<!s32i>
+        %r = cir.load %slot : !cir.ptr<!s32i>, !s32i
+        cir.call @stub_prod(%r) {cu.kernel_name = #cir.cu.kernel_name<"kern_prod">} : (!s32i) -> ()
+        cir.return
+      }
+    }
+    builtin.module @device_0 attributes {cir.offload.kind = #cir.offload_kind<device>} {
+      cir.func @kern_prod(%arg0: !s32i) cc(ptx_kernel) {
+        cir.call @use_prod(%arg0) : (!s32i) -> ()
+        cir.return
+      }
+      cir.func private @use_prod(!s32i)
+    }
+  }
+}
+
+// CHECK-LABEL: cir.func @kern_prod(%arg0: !s32i) cc(ptx_kernel)
+// CHECK-NEXT:    %[[C:.*]] = cir.const #cir.int<15> : !s32i
+// CHECK-NEXT:    cir.call @use_prod(%[[C]])

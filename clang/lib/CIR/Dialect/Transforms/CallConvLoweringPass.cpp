@@ -112,6 +112,11 @@ static bool isSupportedType(mlir::Type ty, const DataLayout &dl) {
   if (auto ptrTy = dyn_cast<cir::PointerType>(ty))
     return !ptrTy.getAddrSpace() ||
            mlir::isa<cir::TargetAddressSpaceAttr>(ptrTy.getAddrSpace());
+  // A vptr is a pointer in the default address space -- that is what it lowers
+  // to -- so it classifies like one. Polymorphic classes reach here through
+  // their vtable-pointer member.
+  if (isa<cir::VPtrType>(ty))
+    return true;
   if (isa<cir::VoidType, cir::BoolType>(ty))
     return true;
   // Every CIR floating-point type carries the semantics the classifier
@@ -137,10 +142,15 @@ static bool isSupportedType(mlir::Type ty, const DataLayout &dl) {
     return isSupportedType(complexTy.getElementType(), dl);
   if (auto arrTy = dyn_cast<cir::ArrayType>(ty))
     return isSupportedType(arrTy.getElementType(), dl);
+  // The classifier implements the vector rules in full: SSE/AVX classification
+  // from the configured AVX ABI level, the coercion of a vector that fits in a
+  // single eightbyte to the scalar filling it, the illegal-vector and
+  // byte-vector paths, and the unnamed-vector-to-memory rule.
+  if (auto vecTy = dyn_cast<cir::VectorType>(ty))
+    return isSupportedType(vecTy.getElementType(), dl);
   if (auto recTy = dyn_cast<cir::RecordType>(ty)) {
-    // An incomplete record has no layout to classify, and a packed one needs
-    // pad-aware eightbyte classification this bridge does not implement.
-    if (!recTy.isComplete() || recTy.getPacked())
+    // An incomplete record has no layout to classify.
+    if (!recTy.isComplete())
       return false;
     if (recTy.isUnion()) {
       // The classifier sizes a union's eightbytes from the union itself, which
@@ -163,13 +173,21 @@ static bool isSupportedType(mlir::Type ty, const DataLayout &dl) {
         if (!llvm::any_of(members, spansRecord))
           return false;
       }
-    } else if (recTy.getPadded()) {
-      // A struct's padding is a member the classifier would have to recognize
-      // as padding rather than data, which is not implemented.
-      return false;
     }
-    return llvm::all_of(recTy.getMembers(),
-                        [&](mlir::Type m) { return isSupportedType(m, dl); });
+
+    // Padding members are described by the record's member kinds, and
+    // mapCIRType drops them and takes each real field's offset from the record
+    // layout, so a padded or packed struct classifies from its data alone.
+    // An all-padding record -- how CIRGen lays out an empty C++ class -- has no
+    // data at all and classifies as Ignore.
+    llvm::ArrayRef<cir::RecordMemberKind> kinds = recTy.getMemberKinds();
+    for (auto [i, m] : llvm::enumerate(recTy.getMembers())) {
+      if (i < kinds.size() && kinds[i] == cir::RecordMemberKind::Pad)
+        continue;
+      if (!isSupportedType(m, dl))
+        return false;
+    }
+    return true;
   }
   return false;
 }
@@ -239,6 +257,13 @@ static const llvm::abi::Type *mapCIRType(mlir::Type type,
                                  llvm::Align(dl.getTypeABIAlignment(type)),
                                  addrSpace);
       })
+      .Case([&](cir::VPtrType) {
+        // Always the default address space; see the VPtrType conversion in the
+        // CIR-to-LLVM type converter.
+        return tb.getPointerType(dl.getTypeSizeInBits(type),
+                                 llvm::Align(dl.getTypeABIAlignment(type)),
+                                 /*AddrSpace=*/0);
+      })
       .Case([&](cir::BoolType) {
         return tb.getIntegerType(dl.getTypeSizeInBits(type),
                                  llvm::Align(dl.getTypeABIAlignment(type)),
@@ -262,6 +287,13 @@ static const llvm::abi::Type *mapCIRType(mlir::Type type,
         return tb.getArrayType(elemAbi, arrTy.getSize(),
                                dl.getTypeSizeInBits(type).getFixedValue());
       })
+      .Case([&](cir::VectorType vecTy) {
+        const llvm::abi::Type *elemAbi =
+            mapCIRType(vecTy.getElementType(), typeMapper, dl, modOp);
+        return tb.getVectorType(elemAbi,
+                                llvm::ElementCount::getFixed(vecTy.getSize()),
+                                llvm::Align(dl.getTypeABIAlignment(type)));
+      })
       .Case([&](cir::RecordType recTy) -> const llvm::abi::Type * {
         llvm::abi::RecordFlags flags = llvm::abi::RecordFlags::None;
         if (recordCanPassInRegs(modOp, recTy))
@@ -283,16 +315,26 @@ static const llvm::abi::Type *mapCIRType(mlir::Type type,
                                  llvm::abi::StructPacking::Default, flags);
         }
 
-        // isSupportedType rejects packed and padded structs, so every field
-        // here sits at its naturally-aligned offset.
-        uint64_t offsetBits = 0;
-        for (mlir::Type fieldTy : recTy.getMembers()) {
+        // Only the data members are described to the classifier. CIRGen models
+        // padding as ordinary members, but SysV classifies an eightbyte from
+        // the data that lands in it -- a pad passed along as a field would look
+        // like data and could turn an Ignore or an SSE eightbyte into INTEGER.
+        // `sizeBits` already spans the padding, so the eightbyte count stays
+        // right without describing it.
+        //
+        // Offsets come from the record layout rather than being accumulated,
+        // which is what makes this correct for a packed record and for padding
+        // that sits between fields rather than only after them. A record whose
+        // members are all padding -- CIRGen's layout for an empty C++ class --
+        // yields no fields at all and classifies as Ignore.
+        llvm::ArrayRef<cir::RecordMemberKind> kinds = recTy.getMemberKinds();
+        for (auto [i, fieldTy] : llvm::enumerate(recTy.getMembers())) {
+          if (i < kinds.size() && kinds[i] == cir::RecordMemberKind::Pad)
+            continue;
           const llvm::abi::Type *mappedField =
               mapCIRType(fieldTy, typeMapper, dl, modOp);
-          offsetBits =
-              llvm::alignTo(offsetBits, dl.getTypeABIAlignment(fieldTy) * 8);
-          fields.push_back(llvm::abi::FieldInfo(mappedField, offsetBits));
-          offsetBits += dl.getTypeSizeInBits(fieldTy).getFixedValue();
+          fields.push_back(llvm::abi::FieldInfo(
+              mappedField, recTy.getElementOffset(dl, i) * 8));
         }
         return tb.getRecordType(
             fields, sizeBits, align, llvm::abi::StructPacking::Default,
@@ -335,9 +377,13 @@ convertABIArgInfo(const llvm::abi::ArgInfo &info, MLIRContext *ctx,
     const llvm::abi::Type *coerceAbi = info.getCoerceToType();
     bool isAggregate = isa_and_present<cir::RecordType, cir::ArrayType>(origTy);
     // For a _Complex the classifier's coerce is only sometimes the natural
-    // type, so it has to be read rather than assumed.
+    // type, so it has to be read rather than assumed. The same holds for a
+    // vector: one that fits in a single eightbyte is coerced to the scalar
+    // filling it -- `i32` at four bytes, `double` at eight -- and dropping
+    // that coercion would pass a four-byte vector in an XMM where the ABI
+    // puts it in a GPR.
     bool comparesAgainstCoerce =
-        coerceAbi && isa_and_present<cir::ComplexType>(origTy);
+        coerceAbi && isa_and_present<cir::ComplexType, cir::VectorType>(origTy);
     bool coerceIsRegisterTuple =
         isa_and_present<llvm::abi::RecordType>(coerceAbi);
     // Compare widths rather than identity: a coerce no wider than the natural
@@ -381,8 +427,9 @@ convertABIArgInfo(const llvm::abi::ArgInfo &info, MLIRContext *ctx,
 /// Where \p fnTy's declared parameters end and its ellipsis arguments begin.
 ///
 /// The only x86_64 rule that reads this boundary sends an unnamed vector wider
-/// than 128 bits to memory, and isSupportedType rejects every vector, so no
-/// input this bridge accepts can observe the difference.
+/// than the AVX ABI level's native size to memory. Vectors do reach the
+/// classifier, so this boundary is live: a cir.func's declared parameters are
+/// exactly its inputs, and everything past them arrived through the ellipsis.
 static llvm::abi::RequiredArgs requiredArgs(cir::FuncType fnTy) {
   if (!fnTy.isVarArg())
     return llvm::abi::RequiredArgs::All;

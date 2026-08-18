@@ -42,6 +42,7 @@ struct CIRToLLVMPipelineOptions
 namespace cir {
 namespace test {
 void registerPrintKernelBindingsPass();
+void registerPrintDeviceIndicesPass();
 } // namespace test
 } // namespace cir
 
@@ -113,10 +114,43 @@ int main(int argc, char **argv) {
   });
 
   ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createOffloadPromoteKernelArgSpacePass();
+  });
+
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createOffloadSpecializeConstantArgsPass();
+  });
+
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createOffloadSpecializeLaunchWrappersPass();
+  });
+
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
     return mlir::createOffloadKernelArgConstantPropagationPass();
   });
 
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createOffloadPropagatePointerFactsPass();
+  });
+
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createOffloadPropagateBlockShapePass();
+  });
+
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createOffloadTightenLaunchBoundsPass();
+  });
+
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createOffloadEliminateCoveredGuardsPass();
+  });
+
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::createOffloadDeadArgEliminationPass();
+  });
+
   cir::test::registerPrintKernelBindingsPass();
+  cir::test::registerPrintDeviceIndicesPass();
 
   mlir::omp::registerOpenMPPasses();
   mlir::registerTransformsPasses();

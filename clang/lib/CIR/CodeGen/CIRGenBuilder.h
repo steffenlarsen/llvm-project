@@ -492,7 +492,13 @@ public:
     if (destType == addr.getElementType())
       return addr;
 
-    auto ptrTy = getPointerTo(destType);
+    // Adjusting to a base subobject does not move it: the result names the
+    // same storage, so it stays in the address space the derived object was
+    // in. Dropping it here would leave the adjustment looking like a move
+    // between spaces, which cannot be lowered as a plain bitcast.
+    auto ptrTy = getPointerTo(
+        destType, mlir::cast<cir::PointerType>(addr.getPointer().getType())
+                      .getAddrSpace());
     auto baseAddr =
         cir::BaseClassAddrOp::create(*this, loc, ptrTy, addr.getPointer(),
                                      mlir::APInt(64, offset), assumeNotNull);
@@ -505,7 +511,11 @@ public:
     if (destType == addr.getElementType())
       return addr;
 
-    cir::PointerType ptrTy = getPointerTo(destType);
+    // As in createBaseClassAddr: the adjustment stays within the object, so
+    // the result keeps the operand's address space.
+    cir::PointerType ptrTy = getPointerTo(
+        destType, mlir::cast<cir::PointerType>(addr.getPointer().getType())
+                      .getAddrSpace());
     auto derivedAddr =
         cir::DerivedClassAddrOp::create(*this, loc, ptrTy, addr.getPointer(),
                                         mlir::APInt(64, offset), assumeNotNull);
@@ -633,7 +643,12 @@ public:
     assert(index < recordTy.getMembers().size() &&
            "member index out of bounds");
     mlir::Type memberTy = recordTy.getMembers()[index];
-    mlir::Type memberPtrTy = getPointerTo(memberTy);
+    // A member lives inside the object, so its address is in the same space.
+    // Dropping it here would make the access look like a move between spaces,
+    // which cannot be lowered as a plain bitcast.
+    mlir::Type memberPtrTy = getPointerTo(
+        memberTy, mlir::cast<cir::PointerType>(base.getBasePointer().getType())
+                      .getAddrSpace());
 
     auto moduleOp =
         getInsertionBlock()->getParentOp()->getParentOfType<mlir::ModuleOp>();

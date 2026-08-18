@@ -75,6 +75,28 @@ mlir::LogicalResult CIRGenFunction::emitCompoundStmtWithoutScope(
          "StmtExprResult");
 
   for (const Stmt *curStmt : s.body()) {
+    // Unreachable statements are not merely wasteful to emit: emitting one
+    // odr-uses everything it calls, so those definitions are emitted too and
+    // outlive the dead code that referenced them.
+    //
+    // Skip only this statement and keep scanning rather than abandoning the
+    // rest of the compound statement, so that a later label is still emitted
+    // -- dropping one would leave its `goto` dangling, and it revives
+    // everything after it. A statement that contains a label is reachable that
+    // way too, so emit it.
+    //
+    // A declaration is emitted even when unreachable: its storage must exist
+    // because later reachable code may still name the variable, as in
+    //   goto skip; int x; skip: x = 3;
+    // which is legal precisely because `x` has no initializer to jump over.
+    // Only the storage though -- emitAutoVarInit drops the initializer, which
+    // is what keeps the block from acquiring uses of values the skipped code
+    // never computed. A nested compound statement is entered for the same
+    // reason, and applies this same test to its own statements.
+    if (atUnreachablePoint() && !isa<DeclStmt>(curStmt) &&
+        !isa<CompoundStmt>(curStmt) && !containsLabel(curStmt))
+      continue;
+
     const bool saveResult = lastValue && exprResult == curStmt;
     if (saveResult) {
       if (emitStmtWithResult(*this, exprResult, slot, lastValue).failed())
@@ -93,14 +115,17 @@ CIRGenFunction::emitAttributedStmt(const AttributedStmt &s) {
   bool noinline = false;
   bool alwaysinline = false;
   const CallExpr *musttail = nullptr;
+  const AtomicAttr *atomicAttr = nullptr;
 
   for (const Attr *attr : s.getAttrs()) {
     switch (attr->getKind()) {
     default:
       break;
+    case attr::Atomic:
+      atomicAttr = cast<AtomicAttr>(attr);
+      break;
     case attr::NoMerge:
     case attr::NoConvergent:
-    case attr::Atomic:
     case attr::AMDGPUAvailableVisible:
     case attr::HLSLControlFlowHint:
       cgm.errorNYI(s.getSourceRange(),
@@ -136,7 +161,40 @@ CIRGenFunction::emitAttributedStmt(const AttributedStmt &s) {
 
   SaveAndRestore save_musttail(mustTailCall, musttail);
 
-  return emitStmt(s.getSubStmt(), /*useCurrentScope=*/true, s.getAttrs());
+  // `[[clang::atomic]]` adjusts the atomic options for the extent of the
+  // statement it is attached to, so they are saved and restored around it.
+  clang::AtomicOptions savedAtomicOpts = cgm.getAtomicOpts();
+  if (atomicAttr) {
+    clang::AtomicOptions opts = savedAtomicOpts;
+    for (auto option : atomicAttr->atomicOptions()) {
+      switch (option) {
+      case AtomicAttr::remote_memory:
+        opts.remote_memory = true;
+        break;
+      case AtomicAttr::no_remote_memory:
+        opts.remote_memory = false;
+        break;
+      case AtomicAttr::fine_grained_memory:
+        opts.fine_grained_memory = true;
+        break;
+      case AtomicAttr::no_fine_grained_memory:
+        opts.fine_grained_memory = false;
+        break;
+      case AtomicAttr::ignore_denormal_mode:
+        opts.ignore_denormal_mode = true;
+        break;
+      case AtomicAttr::no_ignore_denormal_mode:
+        opts.ignore_denormal_mode = false;
+        break;
+      }
+    }
+    cgm.setAtomicOpts(opts);
+  }
+
+  mlir::LogicalResult res =
+      emitStmt(s.getSubStmt(), /*useCurrentScope=*/true, s.getAttrs());
+  cgm.setAtomicOpts(savedAtomicOpts);
+  return res;
 }
 
 mlir::LogicalResult CIRGenFunction::emitCompoundStmt(const CompoundStmt &s,
@@ -206,11 +264,11 @@ mlir::LogicalResult CIRGenFunction::emitStmt(const Stmt *s,
   case Stmt::SwitchStmtClass:
     return emitSwitchStmt(cast<SwitchStmt>(*s));
   case Stmt::ForStmtClass:
-    return emitForStmt(cast<ForStmt>(*s));
+    return emitForStmt(cast<ForStmt>(*s), attr);
   case Stmt::WhileStmtClass:
-    return emitWhileStmt(cast<WhileStmt>(*s));
+    return emitWhileStmt(cast<WhileStmt>(*s), attr);
   case Stmt::DoStmtClass:
-    return emitDoStmt(cast<DoStmt>(*s));
+    return emitDoStmt(cast<DoStmt>(*s), attr);
   case Stmt::CXXTryStmtClass:
     return emitCXXTryStmt(cast<CXXTryStmt>(*s));
   case Stmt::CXXForRangeStmtClass:
@@ -549,6 +607,43 @@ void CIRGenFunction::terminateStructuredRegionBody(mlir::Region &r,
 
 mlir::LogicalResult CIRGenFunction::emitIfStmt(const IfStmt &s) {
   mlir::LogicalResult res = mlir::success();
+
+  // A condition that folds to a compile-time constant selects one arm and makes
+  // the other dead. Emitting the dead arm and deleting it later is not
+  // equivalent to never emitting it: emitting odr-uses everything the arm
+  // calls, so those definitions are emitted too and outlive the dead code that
+  // referenced them. That is how a body guarded off for the current target
+  // still ends up in the module.
+  //
+  // Yields the arm to emit, or nullopt to fall through to a runtime `if`. The
+  // arm itself is null when that arm is absent, as in `if (0) t;`, meaning
+  // there is nothing to emit. A label in the skipped arm leaves it reachable by
+  // a jump, so those are left to the runtime `if`.
+  auto constantArm = [&]() -> std::optional<const Stmt *> {
+    bool condConstant;
+    if (!constantFoldsToBool(s.getCond(), condConstant, /*allowLabels=*/false))
+      return std::nullopt;
+    const Stmt *skipped = condConstant ? s.getElse() : s.getThen();
+    if (skipped && containsLabel(skipped))
+      return std::nullopt;
+    return condConstant ? s.getThen() : s.getElse();
+  };
+
+  // With no init or condition variable to emit first, the selected arm can go
+  // straight into the current block instead of a cir.scope. That matters for a
+  // `return` in the arm: inside a scope region it does not terminate the
+  // enclosing block, so the statements after the `if` would still look
+  // reachable and be emitted.
+  if (!s.isConsteval() && !s.isConstexpr() && !s.getInit() &&
+      !s.getConditionVariable()) {
+    if (std::optional<const Stmt *> executed = constantArm()) {
+      if (!*executed)
+        return res;
+      RunCleanupsScope executedScope(*this);
+      return emitStmt(*executed, /*useCurrentScope=*/true);
+    }
+  }
+
   // The else branch of a consteval if statement is always the only branch
   // that can be runtime evaluated.
   const Stmt *constevalExecuted;
@@ -576,18 +671,25 @@ mlir::LogicalResult CIRGenFunction::emitIfStmt(const IfStmt &s) {
     // If the condition folds to a constant and this is an 'if constexpr',
     // we simplify it early in CIRGen to avoid emitting the full 'if'.
     bool condConstant;
-    if (constantFoldsToBool(s.getCond(), condConstant, s.isConstexpr())) {
-      if (s.isConstexpr()) {
-        // Handle "if constexpr" explicitly here to avoid generating some
-        // ill-formed code since in CIR the "if" is no longer simplified
-        // in this lambda like in Clang but postponed to other MLIR
-        // passes.
-        if (const Stmt *executed = condConstant ? s.getThen() : s.getElse())
-          return emitStmt(executed, /*useCurrentScope=*/true);
-        // There is nothing to execute at runtime.
-        // TODO(cir): there is still an empty cir.scope generated by the caller.
-        return mlir::success();
-      }
+    if (s.isConstexpr() &&
+        constantFoldsToBool(s.getCond(), condConstant, /*allowLabels=*/true)) {
+      // Handle "if constexpr" explicitly here to avoid generating some
+      // ill-formed code since in CIR the "if" is no longer simplified
+      // in this lambda like in Clang but postponed to other MLIR
+      // passes.
+      if (const Stmt *executed = condConstant ? s.getThen() : s.getElse())
+        return emitStmt(executed, /*useCurrentScope=*/true);
+      // There is nothing to execute at runtime.
+      // TODO(cir): there is still an empty cir.scope generated by the caller.
+      return mlir::success();
+    }
+
+    // The init and condition variable are emitted above, so the selected arm
+    // goes inside this scope rather than replacing it.
+    if (std::optional<const Stmt *> executed = constantArm()) {
+      if (*executed)
+        return emitStmt(*executed, /*useCurrentScope=*/true);
+      return mlir::success();
     }
 
     assert(!cir::MissingFeatures::emitCondLikelihoodViaExpectIntrinsic());
@@ -1004,7 +1106,54 @@ CIRGenFunction::emitCXXForRangeStmt(const CXXForRangeStmt &s,
   return mlir::success();
 }
 
-mlir::LogicalResult CIRGenFunction::emitForStmt(const ForStmt &s) {
+/// Build a CIR LoopHintAttr from AST loop attributes (`#pragma unroll` and
+/// friends).  Returns a null attribute when the loop carries no hint, so that
+/// only loops the source actually annotated get one.
+static cir::LoopHintAttr buildLoopHintAttr(mlir::MLIRContext *ctx,
+                                           clang::ASTContext &astCtx,
+                                           ArrayRef<const Attr *> attrs) {
+  cir::LoopUnrollModeAttr unrollMode;
+  std::optional<int64_t> unrollCount;
+
+  for (const Attr *a : attrs) {
+    const auto *hint = dyn_cast<clang::LoopHintAttr>(a);
+    if (!hint)
+      continue;
+    using LH = clang::LoopHintAttr;
+    if (hint->getOption() == LH::Unroll) {
+      switch (hint->getState()) {
+      case LH::Enable:
+        unrollMode =
+            cir::LoopUnrollModeAttr::get(ctx, cir::LoopUnrollMode::Enable);
+        break;
+      case LH::Full:
+        unrollMode =
+            cir::LoopUnrollModeAttr::get(ctx, cir::LoopUnrollMode::Full);
+        break;
+      case LH::Disable:
+        unrollMode =
+            cir::LoopUnrollModeAttr::get(ctx, cir::LoopUnrollMode::Disable);
+        break;
+      default:
+        break;
+      }
+    } else if (hint->getOption() == LH::UnrollCount) {
+      if (const Expr *value = hint->getValue()) {
+        Expr::EvalResult result;
+        if (value->EvaluateAsInt(result, astCtx))
+          unrollCount = result.Val.getInt().getZExtValue();
+      }
+    }
+  }
+
+  if (unrollMode || unrollCount)
+    return cir::LoopHintAttr::get(ctx, unrollMode, unrollCount,
+                                  /*must_progress=*/true);
+  return {};
+}
+
+mlir::LogicalResult CIRGenFunction::emitForStmt(const ForStmt &s,
+                                                ArrayRef<const Attr *> attrs) {
   cir::ForOp forOp;
 
   // TODO: pass in an array of attributes.
@@ -1090,11 +1239,15 @@ mlir::LogicalResult CIRGenFunction::emitForStmt(const ForStmt &s) {
   if (res.failed())
     return res;
 
+  if (auto hint = buildLoopHintAttr(&getMLIRContext(), getContext(), attrs))
+    forOp->setAttr("loop_hint", hint);
+
   terminateStructuredRegionBody(forOp.getBody(), getLoc(s.getEndLoc()));
   return mlir::success();
 }
 
-mlir::LogicalResult CIRGenFunction::emitDoStmt(const DoStmt &s) {
+mlir::LogicalResult CIRGenFunction::emitDoStmt(const DoStmt &s,
+                                               ArrayRef<const Attr *> attrs) {
   cir::DoWhileOp doWhileOp;
 
   // TODO: pass in array of attributes.
@@ -1137,14 +1290,18 @@ mlir::LogicalResult CIRGenFunction::emitDoStmt(const DoStmt &s) {
   if (res.failed())
     return res;
 
+  if (auto hint = buildLoopHintAttr(&getMLIRContext(), getContext(), attrs))
+    doWhileOp->setAttr("loop_hint", hint);
+
   terminateStructuredRegionBody(doWhileOp.getBody(), getLoc(s.getEndLoc()));
   return mlir::success();
 }
 
-mlir::LogicalResult CIRGenFunction::emitWhileStmt(const WhileStmt &s) {
+mlir::LogicalResult
+CIRGenFunction::emitWhileStmt(const WhileStmt &s,
+                              ArrayRef<const Attr *> attrs) {
   cir::WhileOp whileOp;
 
-  // TODO: pass in array of attributes.
   auto whileStmtBuilder = [&]() -> mlir::LogicalResult {
     mlir::LogicalResult loopRes = mlir::success();
     assert(!cir::MissingFeatures::loopInfoStack());
@@ -1209,6 +1366,9 @@ mlir::LogicalResult CIRGenFunction::emitWhileStmt(const WhileStmt &s) {
 
   if (res.failed())
     return res;
+
+  if (auto hint = buildLoopHintAttr(&getMLIRContext(), getContext(), attrs))
+    whileOp->setAttr("loop_hint", hint);
 
   terminateStructuredRegionBody(whileOp.getBody(), getLoc(s.getEndLoc()));
   return mlir::success();

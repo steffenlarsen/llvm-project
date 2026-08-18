@@ -1,0 +1,77 @@
+// A kernel whose address escapes has to be specialised on a clone. CIRGen emits
+// a handle global for every kernel, so that is the normal case rather than the
+// exception, and a pipeline of specialising passes would clone the clone at
+// every step if nothing stopped it. It does not: the second pass recognises the
+// first pass's clone and rewrites it in place.
+
+// RUN: cir-opt %s \
+// RUN:   -pass-pipeline="builtin.module(cir.offload.container(cir-offload-kernel-arg-const-prop,cir-offload-propagate-block-shape))" \
+// RUN:   | FileCheck %s
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+!rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
+
+module {
+  cir.offload.container {
+    builtin.module @host attributes {cir.offload.kind = #cir.offload_kind<host>} {
+      cir.global external @kern = #cir.global_view<@stub> : !cir.ptr<!cir.func<(!s32i)>>
+      cir.func private @__cudaPushCallConfiguration(!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+      cir.func private @dim3_ctor(!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) func_info<#cir.cxx_ctor<!rec_dim3, custom>>
+      cir.func internal private @stub(%arg0: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern">} {
+        %0 = cir.get_global @kern : !cir.ptr<!cir.ptr<!cir.func<(!s32i)>>>
+        cir.return
+      }
+      cir.func @launch() {
+        %grid = cir.alloca "agg.tmp0" align(4) : !cir.ptr<!rec_dim3>
+        %block = cir.alloca "agg.tmp1" align(4) : !cir.ptr<!rec_dim3>
+        %one = cir.const #cir.int<1> : !u32i
+        %c256 = cir.const #cir.int<256> : !u32i
+        cir.call @dim3_ctor(%grid, %one, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+        cir.call @dim3_ctor(%block, %c256, %one, %one) : (!cir.ptr<!rec_dim3>, !u32i, !u32i, !u32i) -> ()
+        %shmem = cir.const #cir.int<0> : !u32i
+        %stream = cir.const #cir.ptr<null> : !cir.ptr<!s32i>
+        %g = cir.load %grid : !cir.ptr<!rec_dim3>, !rec_dim3
+        %b = cir.load %block : !cir.ptr<!rec_dim3>, !rec_dim3
+        %r = cir.call @__cudaPushCallConfiguration(%g, %b, %shmem, %stream) : (!rec_dim3, !rec_dim3, !u32i, !cir.ptr<!s32i>) -> !s32i
+        %c = cir.cast int_to_bool %r : !s32i -> !cir.bool
+        cir.if %c {
+        } else {
+          %v = cir.const #cir.int<9> : !s32i
+          cir.call @stub(%v) {cu.kernel_name = #cir.cu.kernel_name<"kern">} : (!s32i) -> ()
+        }
+        cir.return
+      }
+    }
+    builtin.module @device_0 attributes {cir.offload.kind = #cir.offload_kind<device>} {
+      cir.func private @_ZN24__hip_builtin_blockDim_t7__get_xEv() -> !u32i
+      cir.func private @use32(!u32i)
+      cir.func private @use_s32(!s32i)
+      cir.func @kern(%arg0: !s32i) cc(ptx_kernel) {
+        cir.call @use_s32(%arg0) : (!s32i) -> ()
+        %bx = cir.call @_ZN24__hip_builtin_blockDim_t7__get_xEv() : () -> !u32i
+        cir.call @use32(%bx) : (!u32i) -> ()
+        cir.return
+      }
+    }
+  }
+}
+
+// Exactly one clone: the block shape landed in the constant-propagation clone
+// rather than in a clone of it.
+// CHECK-NOT:   @kern.constprop.blockshape
+// CHECK-NOT:   @stub.constprop.blockshape
+
+// The original serves the launches neither pass could see.
+// CHECK-LABEL: cir.func @kern(%arg0: !s32i) cc(ptx_kernel)
+// CHECK:         cir.call @use_s32(%arg0)
+// CHECK:         %[[BX:.*]] = cir.call @_ZN24__hip_builtin_blockDim_t7__get_xEv
+// CHECK:         cir.call @use32(%[[BX]])
+
+// The one clone carries both specialisations.
+// CHECK-LABEL: cir.func @kern.constprop(%arg0: !s32i) cc(ptx_kernel)
+// CHECK:         %[[ARG:.*]] = cir.const #cir.int<9> : !s32i
+// CHECK:         cir.call @use_s32(%[[ARG]])
+// CHECK-NOT:     cir.call @_ZN24__hip_builtin_blockDim_t7__get_xEv
+// CHECK:         %[[BD:.*]] = cir.const #cir.int<256> : !u32i
+// CHECK:         cir.call @use32(%[[BD]])

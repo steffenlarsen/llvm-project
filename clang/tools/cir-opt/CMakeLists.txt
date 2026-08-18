@@ -22,6 +22,7 @@ endif()
 add_clang_tool(cir-opt
   cir-opt.cpp
   TestKernelBindings.cpp
+  TestDeviceIndices.cpp
 )
 
 if(CLANG_INCLUDE_TESTS)

@@ -5230,7 +5230,9 @@ Driver::BuildOffloadingActions(Compilation &C, llvm::opt::DerivedArgList &Args,
 
     struct CIROffloadDep final {
       const ToolChain *TC = nullptr;
-      BoundArch BoundArch;
+      // Not named `BoundArch`: a member sharing its type's name changes the
+      // meaning of that name inside the class, which GCC rejects.
+      clang::BoundArch Arch;
       Action::OffloadKind Kind = Action::OFK_None;
     };
     SmallVector<CIROffloadDep, 6> Deps;
@@ -5290,15 +5292,15 @@ Driver::BuildOffloadingActions(Compilation &C, llvm::opt::DerivedArgList &Args,
 
     auto *Merge = C.MakeAction<CIRMergeJobAction>(MergeInputs);
     for (const CIROffloadDep &Dep : Deps)
-      Merge->registerDependentActionInfo(Dep.TC, Dep.BoundArch, Dep.Kind);
+      Merge->registerDependentActionInfo(Dep.TC, Dep.Arch, Dep.Kind);
 
     auto *Split = C.MakeAction<CIRSplitJobAction>(Merge);
     for (const CIROffloadDep &Dep : Deps)
-      Split->registerDependentActionInfo(Dep.TC, Dep.BoundArch, Dep.Kind);
+      Split->registerDependentActionInfo(Dep.TC, Dep.Arch, Dep.Kind);
 
     OffloadAction::DeviceDependences DDeps;
     for (const CIROffloadDep &Dep : ArrayRef(Deps).drop_front())
-      DDeps.add(*Split, *Dep.TC, Dep.BoundArch, Dep.Kind);
+      DDeps.add(*Split, *Dep.TC, Dep.Arch, Dep.Kind);
 
     OffloadAction::HostDependence HDep(
         *Split, *C.getSingleOffloadToolChain<Action::OFK_Host>(),

@@ -48,12 +48,15 @@
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/AMDGPUAddrSpace.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/AMDGPUEmitPrintf.h"
 
 using namespace cir;
 using namespace llvm;
@@ -74,6 +77,48 @@ mlir::Type elementTypeIfVector(mlir::Type type) {
           [](auto p) { return p.getElementType(); })
       .Default([](mlir::Type p) { return p; });
 }
+
+/// Convert a CIR LoopHintAttr into the LLVM dialect's LoopAnnotationAttr,
+/// which the LLVM IR exporter turns into `!llvm.loop` metadata.
+static mlir::LLVM::LoopAnnotationAttr convertLoopHint(cir::LoopHintAttr hint,
+                                                      mlir::MLIRContext *ctx) {
+  if (!hint)
+    return {};
+
+  mlir::LLVM::LoopUnrollAttr unrollAttr;
+  if (auto mode = hint.getUnrollMode()) {
+    switch (mode.getValue()) {
+    case cir::LoopUnrollMode::Full:
+      unrollAttr = mlir::LLVM::LoopUnrollAttr::get(
+          ctx, {}, {}, {}, mlir::BoolAttr::get(ctx, true), {}, {}, {});
+      break;
+    case cir::LoopUnrollMode::Disable:
+      unrollAttr = mlir::LLVM::LoopUnrollAttr::get(
+          ctx, mlir::BoolAttr::get(ctx, true), {}, {}, {}, {}, {}, {});
+      break;
+    case cir::LoopUnrollMode::Enable:
+      unrollAttr = mlir::LLVM::LoopUnrollAttr::get(
+          ctx, mlir::BoolAttr::get(ctx, false), {}, {}, {}, {}, {}, {});
+      break;
+    case cir::LoopUnrollMode::None:
+      break;
+    }
+  }
+  // An explicit `#pragma unroll N` count supersedes the mode.
+  if (auto count = hint.getUnrollCount())
+    unrollAttr = mlir::LLVM::LoopUnrollAttr::get(
+        ctx, {},
+        mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32), *count), {}, {},
+        {}, {}, {});
+
+  mlir::BoolAttr mustProgress = hint.getMustProgress()
+                                    ? mlir::BoolAttr::get(ctx, true)
+                                    : mlir::BoolAttr();
+  return mlir::LLVM::LoopAnnotationAttr::get(ctx, {}, {}, {}, unrollAttr, {},
+                                             {}, {}, {}, {}, {}, mustProgress,
+                                             {}, {}, {}, {});
+}
+
 } // namespace
 
 /// In-memory storage width in bits for a _BitInt(N): N rounded up to the type's
@@ -1131,21 +1176,68 @@ getLLVMMemOrder(std::optional<cir::MemOrder> memorder) {
   llvm_unreachable("unknown memory order");
 }
 
-static llvm::StringRef getLLVMSyncScope(cir::SyncScopeKind syncScope) {
+static bool isNVPTXTriple(mlir::Operation *op) {
+  auto moduleOp = op->getParentOfType<mlir::ModuleOp>();
+  if (!moduleOp)
+    return false;
+  if (auto tripleAttr = moduleOp->getAttrOfType<mlir::StringAttr>(
+          cir::CIRDialect::getTripleAttrName())) {
+    llvm::Triple triple(tripleAttr.getValue());
+    return triple.isNVPTX();
+  }
+  return false;
+}
+
+static llvm::StringRef getLLVMSyncScope(cir::SyncScopeKind syncScope,
+                                        bool isNVPTX = false) {
   switch (syncScope) {
   case cir::SyncScopeKind::SingleThread:
     return "singlethread";
-  case cir::SyncScopeKind::Workgroup:
-    return "block";
-  default:
+  case cir::SyncScopeKind::System:
     return "";
+  case cir::SyncScopeKind::Device:
+    return "agent";
+  case cir::SyncScopeKind::Workgroup:
+    // NVPTX uses "block" for workgroup sync scope; AMDGPU uses "workgroup".
+    return isNVPTX ? "block" : "workgroup";
+  case cir::SyncScopeKind::Wavefront:
+    return "wavefront";
+  case cir::SyncScopeKind::Cluster:
+    return "cluster";
+  // A HIP scope names the same thing as the generic scope of the same name;
+  // the kinds are kept apart only to record where the scope came from. The
+  // `-one-as` spellings do *not* belong here: in
+  // AMDGPUTargetCodeGenInfo::getLLVMSyncScopeStr the one-address-space flag is
+  // set only for an OpenCL scope with non-seq_cst ordering, never for HIP.
+  case cir::SyncScopeKind::HIPSingleThread:
+    return "singlethread";
+  case cir::SyncScopeKind::HIPSystem:
+    return "";
+  case cir::SyncScopeKind::HIPAgent:
+    return "agent";
+  case cir::SyncScopeKind::HIPWorkgroup:
+    return isNVPTX ? "block" : "workgroup";
+  case cir::SyncScopeKind::HIPWavefront:
+    return "wavefront";
+  case cir::SyncScopeKind::HIPCluster:
+    return "cluster";
+  case cir::SyncScopeKind::OpenCLWorkGroup:
+    return "workgroup";
+  case cir::SyncScopeKind::OpenCLDevice:
+    return "agent";
+  case cir::SyncScopeKind::OpenCLAllSVMDevices:
+    return "";
+  case cir::SyncScopeKind::OpenCLSubGroup:
+    return "sub_group";
   }
+  llvm_unreachable("unknown sync scope");
 }
 
 static std::optional<llvm::StringRef>
-getLLVMSyncScope(std::optional<cir::SyncScopeKind> syncScope) {
+getLLVMSyncScope(std::optional<cir::SyncScopeKind> syncScope,
+                 bool isNVPTX = false) {
   if (syncScope.has_value())
-    return getLLVMSyncScope(*syncScope);
+    return getLLVMSyncScope(*syncScope, isNVPTX);
   return std::nullopt;
 }
 
@@ -1159,7 +1251,7 @@ mlir::LogicalResult CIRToLLVMAtomicCmpXchgOpLowering::matchAndRewrite(
       rewriter, op.getLoc(), adaptor.getPtr(), expected, desired,
       getLLVMMemOrder(adaptor.getSuccOrder()),
       getLLVMMemOrder(adaptor.getFailOrder()),
-      getLLVMSyncScope(op.getSyncScope()));
+      getLLVMSyncScope(op.getSyncScope(), isNVPTXTriple(op)));
 
   cmpxchg.setAlignment(adaptor.getAlignment());
   cmpxchg.setWeak(adaptor.getWeak());
@@ -1180,7 +1272,8 @@ mlir::LogicalResult CIRToLLVMAtomicXchgOpLowering::matchAndRewrite(
     mlir::ConversionPatternRewriter &rewriter) const {
   assert(!cir::MissingFeatures::atomicSyncScopeID());
   mlir::LLVM::AtomicOrdering llvmOrder = getLLVMMemOrder(adaptor.getMemOrder());
-  llvm::StringRef llvmSyncScope = getLLVMSyncScope(adaptor.getSyncScope());
+  llvm::StringRef llvmSyncScope =
+      getLLVMSyncScope(adaptor.getSyncScope(), isNVPTXTriple(op));
   rewriter.replaceOpWithNewOp<mlir::LLVM::AtomicRMWOp>(
       op, mlir::LLVM::AtomicBinOp::xchg, adaptor.getPtr(), adaptor.getVal(),
       llvmOrder, llvmSyncScope);
@@ -1233,7 +1326,8 @@ mlir::LogicalResult CIRToLLVMAtomicFenceOpLowering::matchAndRewrite(
   mlir::LLVM::AtomicOrdering llvmOrder = getLLVMMemOrder(adaptor.getOrdering());
 
   auto fence = mlir::LLVM::FenceOp::create(rewriter, op.getLoc(), llvmOrder);
-  fence.setSyncscope(getLLVMSyncScope(adaptor.getSyncscope()));
+  fence.setSyncscope(
+      getLLVMSyncScope(adaptor.getSyncscope(), isNVPTXTriple(op)));
 
   rewriter.replaceOp(op, fence);
 
@@ -1376,12 +1470,38 @@ mlir::LogicalResult CIRToLLVMAtomicFetchOpLowering::matchAndRewrite(
   }
 
   mlir::LLVM::AtomicOrdering llvmOrder = getLLVMMemOrder(op.getMemOrder());
-  llvm::StringRef llvmSyncScope = getLLVMSyncScope(op.getSyncScope());
+  llvm::StringRef llvmSyncScope =
+      getLLVMSyncScope(op.getSyncScope(), isNVPTXTriple(op));
   mlir::LLVM::AtomicBinOp llvmBinOp =
       getLLVMAtomicBinOp(op.getBinop(), isInt, isSignedInt);
   auto rmwVal = mlir::LLVM::AtomicRMWOp::create(
       rewriter, op.getLoc(), llvmBinOp, adaptor.getPtr(), adaptor.getVal(),
       llvmOrder, llvmSyncScope);
+
+  // CIRGen decides the metadata for a C++/HIP atomic from the atomic options
+  // in effect, so those markers are simply carried across.
+  for (llvm::StringRef marker :
+       {"cir.amdgpu_no_fine_grained_memory", "cir.amdgpu_no_remote_memory",
+        "cir.amdgpu_ignore_denormal_mode"})
+    if (mlir::Attribute a = op->getAttr(marker))
+      rmwVal->setAttr(marker, a);
+
+  // The AMDGPU raw hardware atomic builtins need metadata for the backend to
+  // select the native instruction; without it a float fadd is expanded into a
+  // cmpxchg loop. LDS atomics are always native, so the metadata is only
+  // needed for the global and flat address spaces.
+  if (op->hasAttr("cir.amdgpu_raw_atomic")) {
+    auto ptrTy =
+        mlir::cast<mlir::LLVM::LLVMPointerType>(adaptor.getPtr().getType());
+    if (ptrTy.getAddressSpace() != llvm::AMDGPUAS::LOCAL_ADDRESS) {
+      mlir::UnitAttr unit = rewriter.getUnitAttr();
+      rmwVal->setAttr("cir.amdgpu_no_fine_grained_memory", unit);
+      // Denormal flushing only matters for a float add.
+      if (llvmBinOp == mlir::LLVM::AtomicBinOp::fadd &&
+          mlir::isa<cir::SingleType>(op.getVal().getType()))
+        rmwVal->setAttr("cir.amdgpu_ignore_denormal_mode", unit);
+    }
+  }
 
   mlir::Value result = rmwVal.getResult();
   if (!op.getFetchFirst()) {
@@ -1516,9 +1636,13 @@ mlir::LogicalResult CIRToLLVMBrCondOpLowering::matchAndRewrite(
 
   mlir::Value i1Condition = adaptor.getCond();
 
-  rewriter.replaceOpWithNewOp<mlir::LLVM::CondBrOp>(
+  auto newOp = rewriter.replaceOpWithNewOp<mlir::LLVM::CondBrOp>(
       brOp, i1Condition, brOp.getDestTrue(), adaptor.getDestOperandsTrue(),
       brOp.getDestFalse(), adaptor.getDestOperandsFalse());
+
+  if (auto hint = brOp->getAttrOfType<cir::LoopHintAttr>("loop_hint"))
+    if (auto ann = convertLoopHint(hint, brOp->getContext()))
+      newOp.setLoopAnnotationAttr(ann);
 
   return mlir::success();
 }
@@ -2268,7 +2392,7 @@ mlir::LogicalResult CIRToLLVMLoadOpLowering::matchAndRewrite(
   assert(!cir::MissingFeatures::lowerModeOptLevel());
 
   std::optional<llvm::StringRef> llvmSyncScope =
-      getLLVMSyncScope(op.getSyncScope());
+      getLLVMSyncScope(op.getSyncScope(), isNVPTXTriple(op));
 
   mlir::LLVM::LoadOp newLoad = mlir::LLVM::LoadOp::create(
       rewriter, op->getLoc(), llvmTy, adaptor.getAddr(), alignment,
@@ -2333,7 +2457,7 @@ mlir::LogicalResult CIRToLLVMStoreOpLowering::matchAndRewrite(
   assert(!cir::MissingFeatures::opLoadStoreTbaa());
 
   std::optional<llvm::StringRef> llvmSyncScope =
-      getLLVMSyncScope(op.getSyncScope());
+      getLLVMSyncScope(op.getSyncScope(), isNVPTXTriple(op));
 
   mlir::LLVM::StoreOp storeOp = mlir::LLVM::StoreOp::create(
       rewriter, op->getLoc(), value, adaptor.getAddr(), alignment,
@@ -4328,8 +4452,13 @@ void ConvertCIRToLLVMPass::runOnOperation() {
 mlir::LogicalResult CIRToLLVMBrOpLowering::matchAndRewrite(
     cir::BrOp op, OpAdaptor adaptor,
     mlir::ConversionPatternRewriter &rewriter) const {
-  rewriter.replaceOpWithNewOp<mlir::LLVM::BrOp>(op, adaptor.getOperands(),
-                                                op.getDest());
+  auto newOp = rewriter.replaceOpWithNewOp<mlir::LLVM::BrOp>(
+      op, adaptor.getOperands(), op.getDest());
+
+  if (auto hint = op->getAttrOfType<cir::LoopHintAttr>("loop_hint"))
+    if (auto ann = convertLoopHint(hint, op->getContext()))
+      newOp.setLoopAnnotationAttr(ann);
+
   return mlir::LogicalResult::success();
 }
 
@@ -5595,6 +5724,42 @@ void populateCIRToLLVMPasses(mlir::OpPassManager &pm, bool enableOpenMP) {
     pm.addPass(mlir::omp::createHostOpFilteringPass());
 }
 
+// Expand calls to the internal `__cir_device_printf` marker CIRGen emits for a
+// device-side printf into the real AMDGPU sequence.
+//
+// CIRGen cannot do this itself: `llvm::emitAMDGPUPrintfCall` builds LLVM IR
+// through an IRBuilder, so the expansion has to wait until the module has been
+// translated. It has to happen here rather than later because the `__ockl_*`
+// calls it generates are what make the device-library linker pull in ockl.
+static void expandAMDGPUDevicePrintf(llvm::Module &module) {
+  llvm::Function *marker = module.getFunction("__cir_device_printf");
+  if (!marker)
+    return;
+
+  // CIR records the requested lowering as a module flag.
+  bool isBuffered = false;
+  if (llvm::Metadata *md = module.getModuleFlag("amdgpu_printf_kind"))
+    if (auto *mdStr = llvm::dyn_cast<llvm::MDString>(md))
+      isBuffered = mdStr->getString() == "buffered";
+
+  llvm::SmallVector<llvm::CallInst *, 8> calls;
+  for (llvm::User *u : marker->users())
+    if (auto *ci = llvm::dyn_cast<llvm::CallInst>(u))
+      calls.push_back(ci);
+
+  for (llvm::CallInst *ci : calls) {
+    llvm::IRBuilder<> irb(ci);
+    llvm::SmallVector<llvm::Value *, 8> args(ci->args());
+    llvm::Value *res = llvm::emitAMDGPUPrintfCall(irb, args, isBuffered);
+    if (res && !ci->use_empty())
+      ci->replaceAllUsesWith(res);
+    ci->eraseFromParent();
+  }
+
+  if (marker->use_empty())
+    marker->eraseFromParent();
+}
+
 std::unique_ptr<llvm::Module>
 lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
                              bool enableOpenMP, StringRef mlirSaveTempsOutFile,
@@ -5621,6 +5786,42 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
       mlirModule->print(out);
   }
 
+  // Apply the fast-math flags the frontend recorded on the module, mirroring
+  // the per-op FMF OGCG emits. CIRGen does not carry them on individual
+  // operations, so they are stamped here, once the FP ops are LLVM-dialect ops
+  // that implement FastmathFlagsInterface.
+  //
+  // `nnan`/`ninf` come from `cir.finite_math_only` alone.
+  // `-funsafe-math-optimizations` sets `cir.unsafe_fp_math` but does *not*
+  // license assuming finiteness -- OGCG emits `reassoc nsz arcp contract afn`
+  // for it, i.e. "fast" minus nnan/ninf. Using the full `fast` flag here would
+  // tell the optimiser no NaN or Inf can occur, miscompiling any kernel that
+  // uses infinities deliberately (ggml's flash attention masks with -inf).
+  {
+    const bool unsafeMath = mlirModule->hasAttr("cir.unsafe_fp_math");
+    const bool finiteMathOnly = mlirModule->hasAttr("cir.finite_math_only");
+    const bool fpContract = mlirModule->hasAttr("cir.fp_contract_fast");
+    if (unsafeMath || finiteMathOnly || fpContract) {
+      auto flags = mlir::LLVM::FastmathFlags::none;
+      if (unsafeMath)
+        flags = flags | mlir::LLVM::FastmathFlags::reassoc |
+                mlir::LLVM::FastmathFlags::nsz |
+                mlir::LLVM::FastmathFlags::arcp |
+                mlir::LLVM::FastmathFlags::contract |
+                mlir::LLVM::FastmathFlags::afn;
+      if (finiteMathOnly)
+        flags = flags | mlir::LLVM::FastmathFlags::nnan |
+                mlir::LLVM::FastmathFlags::ninf;
+      if (fpContract)
+        flags = flags | mlir::LLVM::FastmathFlags::contract;
+      auto fmfAttr = mlir::LLVM::FastmathFlagsAttr::get(mlirCtx, flags);
+      mlirModule->walk([&](mlir::Operation *op) {
+        if (mlir::isa<mlir::LLVM::FastmathFlagsInterface>(op))
+          op->setAttr("fastmathFlags", fmfAttr);
+      });
+    }
+  }
+
   mlir::registerBuiltinDialectTranslation(*mlirCtx);
   mlir::registerLLVMDialectTranslation(*mlirCtx);
   mlir::registerOpenMPDialectTranslation(*mlirCtx);
@@ -5636,6 +5837,8 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
     // FIXME: Handle any errors where they occurs and return a nullptr here.
     report_fatal_error("Lowering from LLVMIR dialect to llvm IR failed!");
   }
+
+  expandAMDGPUDevicePrintf(*llvmModule);
 
   return llvmModule;
 }

@@ -96,20 +96,17 @@ end2:
 }
 // CIR:  cir.func {{.*}} @_Z19severalLabelsInARowi
 // CIR:    cir.goto "end1"
-// CIR:  ^bb[[#BLK1:]]
-// CIR:    cir.goto "end2"
-// CIR:  ^bb[[#BLK2:]]:
+// CIR-NOT: cir.goto "end2"
+// CIR:  ^bb[[#BLK1:]]:
 // CIR:    cir.label "end1"
-// CIR:    cir.br ^bb[[#BLK3:]]
-// CIR:  ^bb[[#BLK3]]:
+// CIR:    cir.br ^bb[[#BLK2:]]
+// CIR:  ^bb[[#BLK2]]:
 // CIR:    cir.label "end2"
 
 // LLVM: define dso_local void @_Z19severalLabelsInARowi
 // LLVM:   br label %[[END1:.*]]
-// LLVM: [[UNRE:.*]]:                                                ; No predecessors!
-// LLVM:   br label %[[END2:.*]]
 // LLVM: [[END1]]:
-// LLVM:   br label %[[END2]]
+// LLVM:   br label %[[END2:.*]]
 // LLVM: [[END2]]:
 // LLVM:   ret
 
@@ -130,14 +127,10 @@ end:
 // CIR:  cir.func {{.*}} @_Z18severalGotosInARowi
 // CIR:    cir.goto "end"
 // CIR:  ^bb[[#BLK1:]]:
-// CIR:    cir.goto "end"
-// CIR:  ^bb[[#BLK2:]]:
 // CIR:    cir.label "end"
 
 // LLVM: define dso_local void @_Z18severalGotosInARowi
 // LLVM:   br label %[[END:.*]]
-// LLVM: [[UNRE:.*]]:                                                ; No predecessors!
-// LLVM:   br label %[[END]]
 // LLVM: [[END]]:
 // LLVM:   ret void
 

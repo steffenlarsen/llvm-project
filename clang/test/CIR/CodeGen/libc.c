@@ -20,13 +20,13 @@
 void *memcpy(void *, const void *, unsigned long);
 void testMemcpy(void *dst, const void *src, unsigned long size) {
   memcpy(dst, src, size);
-  // CHECK: cir.call @memcpy
+  // CHECK: cir.libc.memcpy
 }
 
 void *memmove(void *, const void *, unsigned long);
 void testMemmove(void *src, const void *dst, unsigned long size) {
   memmove(dst, src, size);
-  // CHECK: cir.call @memmove
+  // CHECK: cir.libc.memmove
 }
 
 void *memset(void *, int, unsigned long);

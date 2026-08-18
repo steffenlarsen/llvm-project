@@ -4495,13 +4495,23 @@ class CIR_CallOpBase<string mnemonic, list<Trait> extra_traits = []>
 
     /// Return the callee of this operation
     mlir::CallInterfaceCallable getCallableForCallee() {
-      return (*this)->getAttrOfType<mlir::SymbolRefAttr>("callee");
+      if (auto callee = (*this)->getAttrOfType<mlir::SymbolRefAttr>("callee"))
+        return callee;
+      // An indirect call has no callee symbol; its callee is the first
+      // operand. Returning a null callable here is not benign: MLIR's
+      // call-graph machinery dyn_casts the callable to a Value, which asserts
+      // on null, so any analysis that walks calls -- SCCP's DeadCodeAnalysis,
+      // for one -- crashes on a module containing an indirect call.
+      return getOperand(0);
     }
 
     /// Set the callee for this operation.
     void setCalleeFromCallable(::mlir::CallInterfaceCallable callee) {
-      (*this)->setAttr(getCalleeAttrName(),
-                       mlir::cast<mlir::SymbolRefAttr>(callee));
+      if (auto sym = mlir::dyn_cast<mlir::SymbolRefAttr>(callee)) {
+        (*this)->setAttr(getCalleeAttrName(), sym);
+        return;
+      }
+      setOperand(0, mlir::cast<mlir::Value>(callee));
     }
 
     /// Returns the `cir.func` being called or null if the call is indirect or

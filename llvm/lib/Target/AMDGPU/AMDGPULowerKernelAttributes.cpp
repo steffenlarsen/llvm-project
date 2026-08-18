@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "AMDGPU.h"
+#include "GCNSubtarget.h"
 #include "Utils/AMDGPUBaseInfo.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -26,6 +27,7 @@
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Pass.h"
+#include "llvm/Target/TargetMachine.h"
 
 #define DEBUG_TYPE "amdgpu-lower-kernel-attributes"
 
@@ -504,12 +506,55 @@ PreservedAnalyses
 AMDGPULowerKernelAttributesPass::run(Function &F, FunctionAnalysisManager &AM) {
   bool IsV5OrAbove =
       AMDGPU::getAMDHSACodeObjectVersion(*F.getParent()) >= AMDGPU::AMDHSA_COV5;
+
+  // Narrow the range on the workitem id intrinsics from the flat work group
+  // size.
+  //
+  // makeLIDRangeMetadata computes this correctly, but its only IR-level caller
+  // is AMDGPUCodeGenPrepare, which runs in the codegen pipeline.  Everything in
+  // the middle end therefore reasons with the default 0..1024 even when the
+  // function says "amdgpu-flat-work-group-size"="1,64", losing a bound that is
+  // often 16x tighter.  Doing it here, before the main optimisation pipeline,
+  // is what the long-standing TODO above asks for; it only needed the
+  // subtarget, which the pass now carries a TargetMachine to reach.
+  //
+  // This is independent of the implicit argument work below, so it happens
+  // before the early exit for functions that never touch the base pointer.
+  bool Changed = false;
+  {
+    const GCNSubtarget &ST = TM.getSubtarget<GCNSubtarget>(F);
+
+    // Only worth doing when it actually narrows.  makeLIDRangeMetadata attaches
+    // unconditionally, so without this a function carrying no work group size
+    // would get the default bound stamped onto every id call -- no information
+    // gained, and it perturbs the printed form for anything matching the call.
+    // reqd_work_group_size still narrows per dimension, so it overrides.
+    const bool HasReqdWorkGroupSize = F.getMetadata("reqd_work_group_size");
+    const unsigned MaxFlatWorkGroupSize = ST.getFlatWorkGroupSizes(F).second;
+    if (HasReqdWorkGroupSize ||
+        MaxFlatWorkGroupSize < AMDGPU::IsaInfo::getMaxFlatWorkGroupSize()) {
+      for (Instruction &I : instructions(F)) {
+        auto *CI = dyn_cast<CallInst>(&I);
+        if (!CI)
+          continue;
+        switch (CI->getIntrinsicID()) {
+        case Intrinsic::amdgcn_workitem_id_x:
+        case Intrinsic::amdgcn_workitem_id_y:
+        case Intrinsic::amdgcn_workitem_id_z:
+          Changed |= ST.makeLIDRangeMetadata(CI);
+          break;
+        default:
+          break;
+        }
+      }
+    }
+  }
+
   Function *BasePtr = getBasePtrIntrinsic(*F.getParent(), IsV5OrAbove);
 
   if (!BasePtr) // ImplicitArgPtr/DispatchPtr not used.
-    return PreservedAnalyses::all();
+    return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
 
-  bool Changed = false;
   for (Instruction &I : instructions(F)) {
     if (CallInst *CI = dyn_cast<CallInst>(&I)) {
       if (CI->getCalledFunction() == BasePtr)

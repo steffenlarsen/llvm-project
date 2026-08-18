@@ -484,10 +484,15 @@ public:
 
   cir::GetGlobalOp createGetGlobal(mlir::Location loc, cir::GlobalOp global,
                                    bool threadLocal = false) {
-    assert(!cir::MissingFeatures::addressSpace());
-    return cir::GetGlobalOp::create(*this, loc,
-                                    getPointerTo(global.getSymType()),
-                                    global.getSymNameAttr(), threadLocal);
+    // The pointer has to carry the global's own address space. Handing back a
+    // default-address-space pointer to, say, a __shared__ (LDS) global both
+    // fails verification and would name the wrong memory.
+    cir::PointerType ptrTy =
+        global.getAddrSpace()
+            ? getPointerTo(global.getSymType(), global.getAddrSpaceAttr())
+            : getPointerTo(global.getSymType());
+    return cir::GetGlobalOp::create(*this, loc, ptrTy, global.getSymNameAttr(),
+                                    threadLocal);
   }
 
   cir::GetGlobalOp createGetGlobal(cir::GlobalOp global,
@@ -509,9 +514,23 @@ public:
                            mlir::IntegerAttr align = {},
                            cir::SyncScopeKindAttr scope = {},
                            cir::MemOrderAttr order = {}) {
-    if (mlir::cast<cir::PointerType>(dst.getType()).getPointee() !=
-        val.getType())
-      dst = createPtrBitcast(dst, val.getType());
+    mlir::Type slotTy =
+        mlir::cast<cir::PointerType>(dst.getType()).getPointee();
+    if (slotTy != val.getType()) {
+      auto valPtrTy = mlir::dyn_cast<cir::PointerType>(val.getType());
+      auto slotPtrTy = mlir::dyn_cast<cir::PointerType>(slotTy);
+      if (valPtrTy && slotPtrTy &&
+          valPtrTy.getAddrSpace() != slotPtrTy.getAddrSpace()) {
+        // Convert the value rather than reinterpreting the slot around it. A
+        // pointer into shared or private memory is 32 bits on AMDGPU while a
+        // flat slot is 64, so storing one through a retyped slot writes half a
+        // pointer and leaves the rest undefined -- the reload is then a wild
+        // address. Classic CodeGen addrspacecasts to the slot's space first.
+        val = createBitcast(loc, val, slotPtrTy);
+      } else {
+        dst = createPtrBitcast(dst, val.getType());
+      }
+    }
     return cir::StoreOp::create(*this, loc, val, dst, isVolatile, isNontemporal,
                                 align, scope, order);
   }
@@ -683,11 +702,32 @@ public:
   }
 
   mlir::Value createBitcast(mlir::Value src, mlir::Type newTy) {
-    return createCast(cir::CastKind::bitcast, src, newTy);
+    return createBitcast(src.getLoc(), src, newTy);
   }
 
+  // Reinterpret `src` as `newTy`, bridging a change of address space if the
+  // two disagree on one.
+  //
+  // A pointer cast can cross address spaces even where the source spelled no
+  // conversion: CUDA and HIP are address-space-agnostic at the source level, so
+  // reinterpreting a `__shared__` or `__device__` object through another
+  // pointee type gives an operand in that object's space and a destination type
+  // in the generic one. cir.cast bitcast may not change address space, so the
+  // move is split out into its own cast -- retype first, then change space, so
+  // each cast does one job.
   mlir::Value createBitcast(mlir::Location loc, mlir::Value src,
                             mlir::Type newTy) {
+    auto srcPtrTy = mlir::dyn_cast<cir::PointerType>(src.getType());
+    auto newPtrTy = mlir::dyn_cast<cir::PointerType>(newTy);
+    if (srcPtrTy && newPtrTy &&
+        srcPtrTy.getAddrSpace() != newPtrTy.getAddrSpace()) {
+      mlir::Value retyped = src;
+      if (srcPtrTy.getPointee() != newPtrTy.getPointee())
+        retyped = createCast(loc, cir::CastKind::bitcast, src,
+                             cir::PointerType::get(newPtrTy.getPointee(),
+                                                   srcPtrTy.getAddrSpace()));
+      return createCast(loc, cir::CastKind::address_space, retyped, newTy);
+    }
     return createCast(loc, cir::CastKind::bitcast, src, newTy);
   }
 
