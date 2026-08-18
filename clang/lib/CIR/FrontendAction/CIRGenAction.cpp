@@ -340,6 +340,25 @@ public:
       }
     }
 
+    // Record the fast-math settings on the module so the lowering can apply the
+    // per-op flags OGCG emits. Kept as module attributes rather than applied
+    // here because they have to survive .cir serialisation.
+    {
+      const LangOptions &LO = C.getLangOpts();
+      mlir::Builder b(MlirModule.getContext());
+      if (LO.FastMath || LO.UnsafeFPMath)
+        MlirModule->setAttr("cir.unsafe_fp_math", b.getUnitAttr());
+      // `nnan`/`ninf` come from finiteness alone. -funsafe-math-optimizations
+      // does not license assuming finiteness, and telling the optimiser no
+      // NaN or Inf can occur miscompiles any kernel that uses infinities
+      // deliberately -- ggml's flash attention masks with -inf.
+      if (LO.FastMath || (LO.NoHonorNaNs && LO.NoHonorInfs))
+        MlirModule->setAttr("cir.finite_math_only", b.getUnitAttr());
+      if (LO.getDefaultFPContractMode() == LangOptions::FPM_Fast ||
+          LO.getDefaultFPContractMode() == LangOptions::FPM_FastHonorPragmas)
+        MlirModule->setAttr("cir.fp_contract_fast", b.getUnitAttr());
+    }
+
     switch (Action) {
     case CIRGenAction::OutputType::EmitCIR:
       if (OutputStream && MlirModule) {
@@ -375,6 +394,13 @@ public:
 
       if (linkInModules(CI, CGO, *LLVMModule, LinkModules))
         return;
+
+      // -fembed-offload-object: with the new offload driver the device image
+      // rides in a .llvm.offloading section of the host object, and the
+      // linker wrapper takes it from there. Skipping this leaves an object
+      // that links but carries no device code at all.
+      EmbedObject(LLVMModule.get(), CGO, CI.getVirtualFileSystem(),
+                  CI.getDiagnostics());
 
       BackendAction BEAction = getBackendActionFromOutputType(Action);
       emitBackendOutput(
@@ -490,6 +516,9 @@ void CIRGenAction::ExecuteAction() {
 
   if (linkInModules(CI, CI.getCodeGenOpts(), *LLVMModule, LinkModules))
     return;
+
+  EmbedObject(LLVMModule.get(), CI.getCodeGenOpts(), CI.getVirtualFileSystem(),
+              CI.getDiagnostics());
 
   BackendAction BEAction = getBackendActionFromOutputType(Action);
   emitBackendOutput(CI, CI.getCodeGenOpts(),

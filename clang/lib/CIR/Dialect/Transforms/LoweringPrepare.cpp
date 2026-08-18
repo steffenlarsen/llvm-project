@@ -24,12 +24,14 @@
 #include "clang/CIR/Dialect/IR/CIROpsEnums.h"
 #include "clang/CIR/Dialect/IR/CIRTypes.h"
 #include "clang/CIR/Dialect/Passes.h"
+#include "clang/CIR/Dialect/Transforms/CIRTransformUtils.h"
 #include "clang/CIR/Interfaces/ASTAttrInterfaces.h"
 #include "clang/CIR/MissingFeatures.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MD5.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/VirtualFileSystem.h"
@@ -170,6 +172,11 @@ struct LoweringPreparePass
   /// Build the CUDA module constructor that registers the fat binary
   /// with the CUDA runtime. Delegates to CUDAModuleRegistrationBuilder.
   void buildCUDAModuleCtor();
+
+  /// Split each `__managed__` variable into the runtime-populated pointer the
+  /// program refers to and the `.managed` storage the runtime allocates.
+  /// Mirrors CGNVCUDARuntime::transformManagedVars.
+  void transformManagedVars();
 
   /// Handle static local variable initialization with guard variables.
   void handleStaticLocal(cir::GlobalOp globalOp, cir::LocalInitOp localInitOp);
@@ -1968,9 +1975,21 @@ static void lowerArrayDtorCtorIntoLoop(cir::CIRBaseBuilderTy &builder,
     builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
   }
 
+  // The iteration slot is a local, so it belongs in the target's alloca
+  // address space like any other; AMDGPU rejects an alloca outside
+  // addrspace(5).
+  cir::PointerType idxTy =
+      builder.getPointerTo(eltTy, cir::getAllocaAddrSpace(op));
+  // The slot holds a pointer, so it needs pointer alignment. Hardcoding 1 left
+  // an under-aligned slot whose loads and stores are all naturally aligned --
+  // a shape classic CodeGen never emits, and one that SROA has to reason
+  // around.
+  cir::CIRDataLayout idxDataLayout(op->getParentOfType<mlir::ModuleOp>());
+  mlir::IntegerAttr idxAlign =
+      builder.getAlignmentAttr(idxDataLayout.getABITypeAlign(idxTy));
+
   mlir::Value tmpAddr =
-      builder.createAlloca(loc, /*addr type*/ builder.getPointerTo(eltTy),
-                           "__array_idx", builder.getAlignmentAttr(1));
+      builder.createAlloca(loc, /*addr type*/ idxTy, "__array_idx", idxAlign);
   builder.createStore(loc, start, tmpAddr);
 
   mlir::Block *bodyBlock = &op->getRegion(0).front();
@@ -2430,13 +2449,20 @@ cir::FuncOp CUDAModuleRegistrationBuilder::buildRuntimeFunction(
 /// \endcode
 void CUDAModuleRegistrationBuilder::buildCUDAModuleCtor() {
   bool isHIP = lowerModule->getLangOpts().HIP;
+  bool isRDC = lowerModule->getLangOpts().GPURelocatableDeviceCode;
 
-  if (lowerModule->getLangOpts().GPURelocatableDeviceCode)
-    llvm_unreachable("GPU RDC NYI");
+  // Relocatable device code for NVIDIA registers through
+  // __cudaRegisterLinkedBinary and a module-id section instead of the fat
+  // binary handle below, which is a different construction entirely.
+  if (isRDC && !isHIP) {
+    mlirModule->emitError("NYI: CUDA relocatable device code");
+    return;
+  }
 
   // For CUDA without -fgpu-rdc, it's safe to stop generating ctor
-  // if there's nothing to register.
-  if (cudaKernelMap.empty() && cudaDeviceVars.empty())
+  // if there's nothing to register. Under -fgpu-rdc the ctor still has to
+  // register the fat binary, which other translation units share.
+  if (!isRDC && cudaKernelMap.empty() && cudaDeviceVars.empty())
     return;
 
   // There's no device-side binary, so no need to proceed for CUDA.
@@ -2537,14 +2563,33 @@ void CUDAModuleRegistrationBuilder::buildCUDAModuleCtor() {
                            {magicInit, versionInit, fatbinInit, unusedInit})));
 
   // Create the GPU binary handle global variable.
+  //
+  // There is one HIP fat binary per linked module but a constructor per
+  // translation unit, so under -fgpu-rdc the handle is shared: it becomes an
+  // external definition keyed on the CUID, and whichever constructor runs
+  // first registers the binary. Its name, size and initialization pattern are
+  // part of the HIP ABI. Without -fgpu-rdc it is private to this module.
   std::string gpubinHandleName =
       addUnderscoredPrefix(cudaPrefix, "_gpubin_handle");
+  // Same hash ASTContext::getCUIDHash computes, recomputed here because this
+  // pass is meant to run on serialized CIR without an AST.
+  llvm::StringRef cuid = lowerModule->getLangOpts().CUID;
+  if (isRDC && !cuid.empty())
+    gpubinHandleName +=
+        "_" + llvm::utohexstr(llvm::MD5Hash(cuid), /*LowerCase=*/true);
 
-  GlobalOp gpuBinHandle = GlobalOp::create(
-      builder, loc, gpubinHandleName, voidPtrPtrTy,
-      /*isConstant=*/false, {}, cir::GlobalLinkageKind::InternalLinkage);
-  gpuBinHandle.setInitialValueAttr(builder.getConstNullPtrAttr(voidPtrPtrTy));
-  gpuBinHandle.setPrivate();
+  GlobalOp gpuBinHandle =
+      GlobalOp::create(builder, loc, gpubinHandleName, voidPtrPtrTy,
+                       /*isConstant=*/false, {},
+                       isRDC ? cir::GlobalLinkageKind::ExternalLinkage
+                             : cir::GlobalLinkageKind::InternalLinkage);
+  if (isRDC) {
+    // Hidden so that the copies in different shared libraries are not merged.
+    gpuBinHandle.setGlobalVisibility(cir::VisibilityKind::Hidden);
+  } else {
+    gpuBinHandle.setInitialValueAttr(builder.getConstNullPtrAttr(voidPtrPtrTy));
+    gpuBinHandle.setPrivate();
+  }
 
   // Declare this function:
   //    void **__{cuda|hip}RegisterFatBinary(void *);
@@ -2947,6 +2992,15 @@ void CUDAModuleRegistrationBuilder::buildCUDARegisterVars(cir::CIRBaseBuilderTy 
                      sizeTy, intTy, intTy},
                     voidTy));
 
+  // void __hipRegisterManagedVar(void **, char *, char *, const char *,
+  //                              size_t, unsigned);
+  FuncOp cudaRegisterManagedVar = buildRuntimeFunction(
+      globalBuilder, addUnderscoredPrefix(cudaPrefix, "RegisterManagedVar"),
+      loc,
+      FuncType::get(
+          {voidPtrPtrTy, voidPtrTy, voidPtrTy, voidPtrTy, sizeTy, intTy},
+          voidTy));
+
   auto makeConstantString = [&](llvm::StringRef str) -> GlobalOp {
     auto strType = ArrayType::get(&getContext(), charTy, 1 + str.size());
     auto tmpString = cir::GlobalOp::create(
@@ -2962,23 +3016,53 @@ void CUDAModuleRegistrationBuilder::buildCUDARegisterVars(cir::CIRBaseBuilderTy 
   mlir::Value fatbinHandle = *regGlobalFunc.args_begin();
 
   for (auto &[global, regAttr] : cudaDeviceVars) {
+    // These are unimplemented rather than impossible, so they are diagnosed
+    // rather than asserted: reaching one is a property of the input, and a
+    // compiler crash is the wrong way to report that.
     switch (regAttr.getKind()) {
     case cir::CUDADeviceVarKind::Variable:
       break;
     case cir::CUDADeviceVarKind::Surface:
-      llvm_unreachable("Surface registration NYI");
+      global->emitError("NYI: surface variable registration");
+      return;
     case cir::CUDADeviceVarKind::Texture:
-      llvm_unreachable("Texture registration NYI");
+      global->emitError("NYI: texture variable registration");
+      return;
     }
-
-    if (regAttr.getIsManaged())
-      llvm_unreachable("Managed variable registration NYI");
 
     GlobalOp deviceNameStr = makeConstantString(regAttr.getDeviceSideName());
     mlir::Value deviceName = builder.createBitcast(
         builder.createGetGlobal(deviceNameStr), voidPtrTy);
     mlir::Value hostVar =
         builder.createBitcast(builder.createGetGlobal(global), voidPtrTy);
+
+    // transformManagedVars has already split the variable, so `global` here is
+    // the `.managed` storage and the pointer the program refers to sits beside
+    // it under the original name. The runtime is handed both: it allocates the
+    // storage and writes its address into the pointer.
+    if (regAttr.getIsManaged()) {
+      assert(global.getSymName().ends_with(".managed") &&
+             "managed variable was not split");
+      llvm::StringRef ptrName =
+          global.getSymName().drop_back(llvm::StringRef(".managed").size());
+      auto ptrGlobal =
+          mlir::SymbolTable::lookupNearestSymbolFrom<cir::GlobalOp>(
+              mlirModule, builder.getStringAttr(ptrName));
+      assert(ptrGlobal &&
+             "managed pointer global went missing after the split");
+      mlir::Value managedPtr =
+          builder.createBitcast(builder.createGetGlobal(ptrGlobal), voidPtrTy);
+      llvm::TypeSize managedSize =
+          dataLayout.getTypeAllocSize(global.getSymType());
+      auto varSize = ConstantOp::create(
+          builder, loc, IntAttr::get(sizeTy, managedSize.getFixedValue()));
+      auto align = ConstantOp::create(
+          builder, loc, IntAttr::get(intTy, global.getAlignment().value_or(0)));
+      builder.createCallOp(
+          loc, cudaRegisterManagedVar,
+          {fatbinHandle, managedPtr, hostVar, deviceName, varSize, align});
+      continue;
+    }
 
     auto isExtern = ConstantOp::create(
         builder, loc, IntAttr::get(intTy, regAttr.getIsExtern() ? 1 : 0));
@@ -2991,6 +3075,107 @@ void CUDAModuleRegistrationBuilder::buildCUDARegisterVars(cir::CIRBaseBuilderTy 
     builder.createCallOp(loc, cudaRegisterVar,
                          {fatbinHandle, hostVar, deviceName, deviceName,
                           isExtern, varSize, isConstant, normalized});
+  }
+}
+
+/// A `__managed__` variable is not the storage the program names. The runtime
+/// allocates the storage and writes its address into a separate pointer, so
+/// `@x` becomes that pointer and the storage becomes `@x.managed`; every
+/// reference to `@x` has to load through the pointer.
+///
+/// Mirrors CGNVCUDARuntime::transformManagedVars, and runs in both the host and
+/// the device compilation -- device code refers to the variable through the
+/// same pointer. Only the address space and the registration differ between
+/// them.
+void LoweringPreparePass::transformManagedVars() {
+  mlir::SymbolTable symTab(mlirModule);
+
+  for (auto &[global, regAttr] : cudaDeviceVars) {
+    if (regAttr.getKind() != cir::CUDADeviceVarKind::Variable ||
+        !regAttr.getIsManaged())
+      continue;
+
+    mlir::MLIRContext *ctx = &getContext();
+    std::string name = global.getSymName().str();
+    mlir::Location loc = global.getLoc();
+
+    // Collect the program's references before renaming anything: the op
+    // handles stay valid across the rename, and afterwards there is no way to
+    // tell them apart from the ones this transform creates.
+    llvm::SmallVector<cir::GetGlobalOp> uses;
+    mlirModule->walk([&](cir::GetGlobalOp getGlobal) {
+      if (getGlobal.getName() == name)
+        uses.push_back(getGlobal);
+    });
+
+    // Rename the storage so the original name is free for the pointer.
+    // SymbolTable::setSymbolName renames the symbol but does not rewrite its
+    // uses, so the used-list entry CIRGen emitted has to be redirected
+    // explicitly -- it should keep naming the storage, which is where classic
+    // CodeGen leaves it too.
+    auto managedName = mlir::StringAttr::get(ctx, name + ".managed");
+    if (mlir::failed(mlir::SymbolTable::replaceAllSymbolUses(
+            global, managedName, mlirModule))) {
+      global->emitError("NYI: __managed__ variable with unrewritable uses");
+      return signalPassFailure();
+    }
+    symTab.setSymbolName(global, managedName);
+
+    // The pointer points at the storage, so it carries the storage's address
+    // space, and it is placed alongside it. That is what makes this identical
+    // on host and device bar the registration.
+    cir::PointerType ptrTy =
+        cir::PointerType::get(global.getSymType(), global.getAddrSpaceAttr());
+
+    cir::CIRBaseBuilderTy builder(*ctx);
+    builder.setInsertionPointAfter(global);
+    auto managedPtr =
+        cir::GlobalOp::create(builder, loc, name, ptrTy, /*isConstant=*/false,
+                              global.getAddrSpaceAttr(), global.getLinkage());
+    managedPtr.setVisibility(global.getVisibility());
+    managedPtr.setDsoLocal(global.getDsoLocal());
+    // The runtime writes the address in before anything reads it. Without this
+    // the optimizer is entitled to fold every load of the pointer to the null
+    // it is initialized with.
+    managedPtr->setAttr(cir::CUDAExternallyInitializedAttr::getMnemonic(),
+                        cir::CUDAExternallyInitializedAttr::get(ctx));
+    if (!global.isDeclaration())
+      managedPtr.setInitialValueAttr(cir::ConstPtrAttr::get(
+          ptrTy, mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 64), 0)));
+
+    // Redirect every reference: naming the variable now means loading the
+    // pointer. CIR names a global only through cir.get_global, so unlike LLVM
+    // there are no constant expressions to rewrite.
+    for (cir::GetGlobalOp use : uses) {
+      cir::CIRBaseBuilderTy useBuilder(*ctx);
+      useBuilder.setInsertionPoint(use);
+      mlir::Value ptrAddr =
+          useBuilder.createGetGlobal(use.getLoc(), managedPtr);
+      mlir::Value storage = useBuilder.createLoad(use.getLoc(), ptrAddr);
+      if (storage.getType() != use.getType()) {
+        global->emitError(
+            "NYI: __managed__ variable referenced through a differing type");
+        return signalPassFailure();
+      }
+      use.replaceAllUsesWith(storage);
+      use.erase();
+    }
+
+    // Anything still naming the storage is a use this transform cannot
+    // express -- an address taken in another global's initializer, for one,
+    // which cannot be a compile-time constant when the runtime supplies it.
+    // The used-list is exempt: it only pins the symbol against elimination,
+    // and classic CodeGen keeps the storage there too.
+    if (std::optional<mlir::SymbolTable::UseRange> remaining =
+            global.getSymbolUses(mlirModule)) {
+      for (const mlir::SymbolTable::SymbolUse &use : *remaining) {
+        auto owner = mlir::dyn_cast<cir::GlobalOp>(use.getUser());
+        if (owner && owner.getSection() == "llvm.metadata")
+          continue;
+        global->emitError("NYI: __managed__ variable used outside a function");
+        return signalPassFailure();
+      }
+    }
   }
 }
 
@@ -3128,6 +3313,10 @@ void LoweringPreparePass::runOnOperation() {
 
   buildCXXGlobalInitFunc();
   buildCXXGlobalTlsFunc();
+  // Runs in both compilations, and before the registration below, which needs
+  // the split already done.
+  if (lowerModule->getLangOpts().CUDA)
+    transformManagedVars();
   if (lowerModule->getLangOpts().CUDA && !lowerModule->getLangOpts().CUDAIsDevice)
     buildCUDAModuleCtor();
 

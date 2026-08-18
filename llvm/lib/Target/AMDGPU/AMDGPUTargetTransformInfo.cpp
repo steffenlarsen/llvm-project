@@ -419,6 +419,50 @@ uint64_t GCNTTIImpl::getMaxMemIntrinsicInlineSizeThreshold() const {
   return 1024;
 }
 
+bool GCNTTIImpl::preferMemIntrinsicExpansion(const MemIntrinsic *MI) const {
+  // A copy that stages memory through LDS is better expanded here than left to
+  // SelectionDAG. SelectionDAG expands each intrinsic as its own load->store
+  // chain, so every copy needs a full s_waitcnt vmcnt(0) before its stores can
+  // issue; expanded in IR the loads are independent and hoist together, and the
+  // waits become partial. Kernels that tile global memory into LDS do this many
+  // times over and are usually LDS-limited to too few waves to hide the
+  // difference.
+  //
+  // Only memcpy: expanding a memmove in IR costs an overlap check and a
+  // separate residual loop, which is far worse than what SelectionDAG emits for
+  // a size it knows.
+  const auto *MC = dyn_cast<MemCpyInst>(MI);
+  if (!MC)
+    return false;
+
+  unsigned DestAS = MC->getDestAddressSpace();
+  unsigned SrcAS = MC->getSourceAddressSpace();
+  if (DestAS != AMDGPUAS::LOCAL_ADDRESS && SrcAS != AMDGPUAS::LOCAL_ADDRESS)
+    return false;
+
+  const auto *Length = dyn_cast<ConstantInt>(MC->getLength());
+  if (!Length)
+    return false;
+  uint64_t Size = Length->getZExtValue();
+
+  // getMemcpyLoopResidualLoweringType decomposes greedily at 16, 8, 4, 2 and 1
+  // bytes, so only a whole number of 16-byte accesses comes out uniform.
+  // Anything else leaves a tail of mismatched widths, which is worse than what
+  // SelectionDAG picks for the same bytes.
+  if (!Size || Size % 16 != 0)
+    return false;
+
+  // Stay inside what the target already considers a reasonable unrolled body:
+  // below the loop-lowering width the expansion is straight-line residual
+  // accesses, at or above it we would be forming a loop that the late path
+  // handles just as well.
+  Type *LoopTy = getMemcpyLoopLoweringType(
+      MI->getContext(), MC->getLength(), SrcAS, DestAS,
+      MC->getSourceAlign().valueOrOne(), MC->getDestAlign().valueOrOne(),
+      /*AtomicElementSize=*/std::nullopt);
+  return Size < DL.getTypeStoreSize(LoopTy);
+}
+
 Type *GCNTTIImpl::getMemcpyLoopLoweringType(
     LLVMContext &Context, Value *Length, unsigned SrcAddrSpace,
     unsigned DestAddrSpace, Align SrcAlign, Align DestAlign,

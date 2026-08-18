@@ -65,11 +65,34 @@ public:
       if (mlir::failed(amendRISCVNontemporalDomain(op, instructions, attribute,
                                                    moduleTranslation)))
         return mlir::failure();
+    } else if (attribute.getName() == "cir.amdgpu_no_fine_grained_memory" ||
+               attribute.getName() == "cir.amdgpu_no_remote_memory" ||
+               attribute.getName() == "cir.amdgpu_ignore_denormal_mode") {
+      amendAMDGPUAtomicMetadata(instructions, attribute, moduleTranslation);
     }
     return mlir::success();
   }
 
 private:
+  /// Attach the AMDGPU atomic metadata that lets the backend select a native
+  /// atomic instruction instead of expanding to a cmpxchg loop.
+  void amendAMDGPUAtomicMetadata(
+      llvm::ArrayRef<llvm::Instruction *> instructions,
+      mlir::NamedAttribute attribute,
+      mlir::LLVM::ModuleTranslation &moduleTranslation) const {
+    llvm::StringRef mdName =
+        llvm::StringSwitch<llvm::StringRef>(attribute.getName().strref())
+            .Case("cir.amdgpu_no_fine_grained_memory",
+                  "amdgpu.no.fine.grained.memory")
+            .Case("cir.amdgpu_no_remote_memory", "amdgpu.no.remote.memory")
+            .Case("cir.amdgpu_ignore_denormal_mode",
+                  "amdgpu.ignore.denormal.mode");
+    llvm::MDNode *empty =
+        llvm::MDNode::get(moduleTranslation.getLLVMContext(), {});
+    for (llvm::Instruction *inst : instructions)
+      inst->setMetadata(mdName, empty);
+  }
+
   mlir::LogicalResult amendRISCVNontemporalDomain(
       mlir::Operation *op, llvm::ArrayRef<llvm::Instruction *> instructions,
       mlir::NamedAttribute attribute,

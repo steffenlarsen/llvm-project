@@ -1,0 +1,83 @@
+// RUN: cir-opt %s -cir-call-conv-lowering=target=x86_64 | FileCheck %s
+// RUN: cir-opt %s -cir-call-conv-lowering=target=x86_64 -cir-to-llvm -o - 2>/dev/null \
+// RUN:   | mlir-translate -mlir-to-llvmir --allow-unregistered-dialect \
+// RUN:   | FileCheck %s --check-prefix=LLVM
+
+// Vectors as *source* types. x86_64-vector.cir covers the other direction --
+// vectors appearing as the coercion type the classifier picks for a record --
+// which reaches none of this.
+
+!s16i = !cir.int<s, 16>
+!s32i = !cir.int<s, 32>
+!s64i = !cir.int<s, 64>
+
+module attributes {
+  dlti.dl_spec = #dlti.dl_spec<
+    #dlti.dl_entry<i16, dense<16>: vector<2xi64>>,
+    #dlti.dl_entry<i32, dense<32>: vector<2xi64>>,
+    #dlti.dl_entry<i64, dense<64>: vector<2xi64>>,
+    #dlti.dl_entry<f16, dense<16>: vector<2xi64>>,
+    #dlti.dl_entry<f32, dense<32>: vector<2xi64>>,
+    #dlti.dl_entry<f64, dense<64>: vector<2xi64>>>
+} {
+
+  // A vector narrower than an eightbyte is coerced to the scalar filling it.
+  // Four bytes classify INTEGER, so this must become an integer and not stay a
+  // vector: the integer goes in a GPR where the vector would go in an XMM.
+  cir.func @take_v2h(%arg0: !cir.vector<2 x !cir.f16>) {
+    cir.return
+  }
+
+  // CHECK: cir.func{{.*}} @take_v2h(%arg0: !u32i)
+
+  cir.func @take_v2s(%arg0: !cir.vector<2 x !s16i>) {
+    cir.return
+  }
+
+  // CHECK: cir.func{{.*}} @take_v2s(%arg0: !u32i)
+
+  // A vector filling exactly one eightbyte classifies SSE and is coerced to
+  // double, matching what classic CodeGen emits.
+  cir.func @take_v2i(%arg0: !cir.vector<2 x !s32i>) {
+    cir.return
+  }
+
+  // CHECK: cir.func{{.*}} @take_v2i(%arg0: !cir.double)
+
+  // At two eightbytes the vector is passed as itself.
+  cir.func @take_v4i(%arg0: !cir.vector<4 x !s32i>) {
+    cir.return
+  }
+
+  // CHECK: cir.func{{.*}} @take_v4i(%arg0: !cir.vector<4 x !s32i>)
+
+  cir.func @take_v2l(%arg0: !cir.vector<2 x !s64i>) {
+    cir.return
+  }
+
+  // CHECK: cir.func{{.*}} @take_v2l(%arg0: !cir.vector<2 x !s64i>)
+
+  // Wider than the native size for the default (no-AVX) ABI level, so memory.
+  cir.func @take_v8i(%arg0: !cir.vector<8 x !s32i>) {
+    cir.return
+  }
+
+  // CHECK: cir.func{{.*}} @take_v8i(%arg0: !cir.ptr<!cir.vector<8 x !s32i>>
+  // CHECK-SAME: llvm.byval = !cir.vector<8 x !s32i>
+
+  cir.func @ret_v2i() -> !cir.vector<2 x !s32i> {
+    %0 = cir.alloca "r" align(8) : !cir.ptr<!cir.vector<2 x !s32i>>
+    %1 = cir.load %0 : !cir.ptr<!cir.vector<2 x !s32i>>, !cir.vector<2 x !s32i>
+    cir.return %1 : !cir.vector<2 x !s32i>
+  }
+
+  // CHECK: cir.func{{.*}} @ret_v2i() -> !cir.double
+}
+
+// LLVM: define void @take_v2h(i32 %{{.+}})
+// LLVM: define void @take_v2s(i32 %{{.+}})
+// LLVM: define void @take_v2i(double %{{.+}})
+// LLVM: define void @take_v4i(<4 x i32> %{{.+}})
+// LLVM: define void @take_v2l(<2 x i64> %{{.+}})
+// LLVM: define void @take_v8i(ptr {{.*}}byval(<8 x i32>){{.*}})
+// LLVM: define double @ret_v2i()

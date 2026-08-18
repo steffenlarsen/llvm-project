@@ -1,0 +1,106 @@
+// Tests for the device index recogniser.
+//
+// blockIdx / threadIdx / blockDim / gridDim are ordinary calls in device CIR,
+// not dedicated operations, and they appear either as the C++ accessor the
+// HIP/CUDA headers define or as the ROCm device-library entry point it inlines
+// to. Both spellings must give the same answer.
+
+// The module is printed back verbatim and the mangled accessor names in it
+// would satisfy the CHECK-NOT lines below, so only the pass output is checked.
+
+// RUN: cir-opt %s -split-input-file -o /dev/null \
+// RUN:   -pass-pipeline="builtin.module(test-print-device-indices)" \
+// RUN:   2>&1 | FileCheck %s
+
+!u32i = !cir.int<u, 32>
+!u64i = !cir.int<u, 64>
+
+//===----------------------------------------------------------------------===//
+// 1. The HIP accessors, all four kinds and all three dimensions.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: function hip_accessors
+// CHECK-NEXT:    blockIdx.x
+// CHECK-NEXT:    blockIdx.z
+// CHECK-NEXT:    threadIdx.y
+// CHECK-NEXT:    blockDim.x
+// CHECK-NEXT:    gridDim.z
+
+module {
+  cir.func private @_ZN24__hip_builtin_blockIdx_t7__get_xEv() -> !u32i
+  cir.func private @_ZN24__hip_builtin_blockIdx_t7__get_zEv() -> !u32i
+  cir.func private @_ZN25__hip_builtin_threadIdx_t7__get_yEv() -> !u32i
+  cir.func private @_ZN24__hip_builtin_blockDim_t7__get_xEv() -> !u32i
+  cir.func private @_ZN23__hip_builtin_gridDim_t7__get_zEv() -> !u32i
+
+  cir.func @hip_accessors() {
+    %0 = cir.call @_ZN24__hip_builtin_blockIdx_t7__get_xEv() : () -> !u32i
+    %1 = cir.call @_ZN24__hip_builtin_blockIdx_t7__get_zEv() : () -> !u32i
+    %2 = cir.call @_ZN25__hip_builtin_threadIdx_t7__get_yEv() : () -> !u32i
+    %3 = cir.call @_ZN24__hip_builtin_blockDim_t7__get_xEv() : () -> !u32i
+    %4 = cir.call @_ZN23__hip_builtin_gridDim_t7__get_zEv() : () -> !u32i
+    cir.return
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!u64i = !cir.int<u, 64>
+
+//===----------------------------------------------------------------------===//
+// 2. The device-library entry points the accessors inline to, where the
+//    dimension is a constant argument instead of part of the name.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: function ockl_entry_points
+// CHECK-NEXT:    blockIdx.y
+// CHECK-NEXT:    threadIdx.x
+// CHECK-NEXT:    blockDim.z
+// CHECK-NEXT:    gridDim.x
+
+module {
+  cir.func private @__ockl_get_group_id(!u32i) -> !u64i
+  cir.func private @__ockl_get_local_id(!u32i) -> !u64i
+  cir.func private @__ockl_get_local_size(!u32i) -> !u64i
+  cir.func private @__ockl_get_num_groups(!u32i) -> !u64i
+
+  cir.func @ockl_entry_points() {
+    %c0 = cir.const #cir.int<0> : !u32i
+    %c1 = cir.const #cir.int<1> : !u32i
+    %c2 = cir.const #cir.int<2> : !u32i
+    %0 = cir.call @__ockl_get_group_id(%c1) : (!u32i) -> !u64i
+    %1 = cir.call @__ockl_get_local_id(%c0) : (!u32i) -> !u64i
+    %2 = cir.call @__ockl_get_local_size(%c2) : (!u32i) -> !u64i
+    %3 = cir.call @__ockl_get_num_groups(%c0) : (!u32i) -> !u64i
+    cir.return
+  }
+}
+
+// -----
+
+!u32i = !cir.int<u, 32>
+!u64i = !cir.int<u, 64>
+
+//===----------------------------------------------------------------------===//
+// 3. Things that must NOT match: an unrelated call, and a device-library read
+//    whose dimension is a runtime value. Naming a dimension for the latter
+//    would be a guess, so it reports nothing rather than picking one.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: function negatives
+// CHECK-NOT:     blockIdx
+// CHECK-NOT:     threadIdx
+// CHECK-NOT:     blockDim
+// CHECK-NOT:     gridDim
+
+module {
+  cir.func private @__ockl_get_group_id(!u32i) -> !u64i
+  cir.func private @some_unrelated_helper(!u32i) -> !u64i
+
+  cir.func @negatives(%arg0: !u32i) {
+    %0 = cir.call @some_unrelated_helper(%arg0) : (!u32i) -> !u64i
+    %1 = cir.call @__ockl_get_group_id(%arg0) : (!u32i) -> !u64i
+    cir.return
+  }
+}

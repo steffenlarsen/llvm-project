@@ -332,17 +332,227 @@ def OffloadKernelArgConstantPropagation
     buffer and the registration of the kernel are all left alone, so the
     argument simply becomes unused on the device side.
 
-    The rewrite requires every launch to be visible. That holds when the host
-    stub has internal linkage, so no other TU can call it, and every reference
-    to the stub outside its own body is a direct call: a stub whose address
-    escapes may be called indirectly with arguments this pass cannot see. The
-    stub always references itself, since it passes its own address to
-    `cudaLaunchKernel`.
+    Rewriting the kernel in place requires every launch of it to be visible.
+    That holds when the host stub has internal linkage, so no other TU can call
+    it, and every reference to the stub outside its own body is a direct call:
+    a stub whose address escapes may be called indirectly with arguments this
+    pass cannot see. The stub always references itself, since it passes its own
+    address to `cudaLaunchKernel`. When a launch could be hidden, a clone of the
+    kernel is specialised instead and the visible launches are retargeted at it,
+    leaving the original to serve the rest.
 
     Requires the launch arguments to already be constants at the call site,
     which for anything but a literal means `mem2reg` and `sccp` have run.
   }];
   let constructor = "mlir::createOffloadKernelArgConstantPropagationPass()";
+  let dependentDialects = ["cir::CIRDialect"];
+}
+
+def OffloadSpecializeLaunchWrappers
+    : Pass<"cir-offload-specialize-launch-wrappers", "cir::OffloadContainerOp"> {
+  let summary = "Clone kernel-launch wrappers per constant kernel argument";
+  let description = [{
+    Runs over a `cir.offload.container`. A helper that takes the kernel as a
+    parameter and launches it -- the `launch(kernel, grid, block, args...)`
+    idiom -- launches through an indirect `cir.call`, which carries no
+    `cu.kernel_name` and so is invisible to every other offload pass.
+
+    This clones such a helper once per kernel its callers pass, pins the kernel
+    parameter in the clone, and rewrites the indirect launch into the direct,
+    tagged call a source-level `<<<>>>` produces. The launch is then an
+    ordinary binding-table entry that the specialising passes can act on.
+
+    Runs before the passes that consume launch sites, and iterates: pinning an
+    outer wrapper's parameter is what exposes an inner one.
+
+    Call sites that do not pass a recognisable kernel keep calling the
+    original, which is left untouched.
+  }];
+  let constructor = "mlir::createOffloadSpecializeLaunchWrappersPass()";
+  let dependentDialects = ["cir::CIRDialect"];
+}
+
+def OffloadSpecializeConstantArgs
+    : Pass<"cir-offload-specialize-constant-args", "cir::OffloadContainerOp"> {
+  let summary = "Clone launch helpers per constant scalar argument";
+  let description = [{
+    Runs over a `cir.offload.container`. Launch arguments are often literals one
+    call frame above the launch: a thin entry point forwards 1 for the higher
+    dimensions into a general helper that does the launch, so at the launch site
+    the extent is a block argument and looks like a runtime value.
+
+    This clones such a helper once per distinct set of integer constants its
+    callers pass, pins them in the clone, and retargets those callers. The
+    literals then sit at the launch site, where kernel-argument constant
+    propagation can bake them into the kernel. Only parameters that actually
+    reach a launch are pinned.
+
+    No guard is needed: the values are compile-time constants, so the retargeted
+    callers are exactly the ones a clone is valid for, and any caller that does
+    not pass constants keeps the original. A helper all of whose callers moved
+    to clones is erased, so that its abandoned launch site cannot defeat the
+    unanimity rule downstream.
+
+    Runs before the passes that consume launch sites.
+  }];
+  let constructor = "mlir::createOffloadSpecializeConstantArgsPass()";
+  let dependentDialects = ["cir::CIRDialect"];
+}
+
+def OffloadPromoteKernelArgSpace
+    : Pass<"cir-offload-promote-kernel-arg-space", "cir::OffloadContainerOp"> {
+  let summary = "State AMDGPU kernel pointer arguments as global";
+  let description = [{
+    Runs over a `cir.offload.container`. A HIP kernel's pointer arguments always
+    point to global memory, so the ABI states them in the global address space --
+    OGCG does this in `AMDGPUABIInfo::classifyKernelArgumentType`. Without it a
+    parameter reaches the backend as a generic pointer and accesses through it
+    are `flat_` rather than `global_` wherever InferAddressSpaces cannot recover
+    the space.
+
+    Restates the parameter type on AMDGPU kernels and casts straight back to
+    generic at the top of the entry block, so the body is unchanged and only the
+    signature carries the fact. Parameters that already have an address space are
+    left alone.
+
+    Runs last, on the device module only. Doing the same coercion in CIRGen
+    leaves `cir.copy` with a global-space destination pointing at a stack slot,
+    which is then silently dropped.
+  }];
+  let constructor = "mlir::createOffloadPromoteKernelArgSpacePass()";
+  let dependentDialects = ["cir::CIRDialect"];
+}
+
+def OffloadPropagatePointerFacts
+    : Pass<"cir-offload-propagate-pointer-facts", "cir::OffloadContainerOp"> {
+  let summary = "State pointer alignment, noalias and access mode on kernel arguments";
+  let description = [{
+    Runs over a `cir.offload.container`. A kernel's pointer parameters carry no
+    information about how they are aligned, whether they can overlap, or how the
+    kernel reaches memory through them -- but the host knows, because it
+    allocated the buffers and wrote the launch.
+
+    Traces each pointer launch argument back to the allocation it came from and,
+    when every visible launch agrees, states on the kernel parameter:
+
+      * `llvm.align`, since every HIP allocator returns 256-byte aligned memory;
+      * `llvm.noalias`, when the parameter comes from a different allocation
+        than every other pointer parameter at every launch;
+      * `llvm.readonly` / `llvm.writeonly`, from how the kernel body uses it.
+
+    These are real LLVM parameter attributes: alias analysis, the vectoriser and
+    load/store widening all consume them.
+
+    Applies to the kernel in place when every launch is visible, on a
+    specialised clone otherwise.
+  }];
+  let constructor = "mlir::createOffloadPropagatePointerFactsPass()";
+  let dependentDialects = ["cir::CIRDialect"];
+}
+
+def OffloadPropagateBlockShape
+    : Pass<"cir-offload-propagate-block-shape", "cir::OffloadContainerOp"> {
+  let summary = "Propagate the launch block shape into device kernels";
+  let description = [{
+    Runs over a `cir.offload.container`. When every launch of a kernel uses the
+    same constant block dimension, reads of `blockDim` for that dimension
+    inside the device kernel are replaced by the constant.
+
+    A `blockDim` read is a call here rather than an operation, and is matched
+    both as the accessor the HIP/CUDA headers define and as the device-library
+    entry point it inlines to, so the pass gives the same answer on either side
+    of inlining.
+
+    Turning `blockDim.x` into a literal is what lets the rest of the pipeline
+    fold the index arithmetic built on top of it, which is where the payoff
+    is; the load itself is cheap.
+
+    Soundness follows the same rule as constant argument propagation: in place
+    when every launch is visible, on a specialised clone otherwise.
+  }];
+  let constructor = "mlir::createOffloadPropagateBlockShapePass()";
+  let dependentDialects = ["cir::CIRDialect"];
+}
+
+def OffloadTightenLaunchBounds
+    : Pass<"cir-offload-tighten-launch-bounds", "cir::OffloadContainerOp"> {
+  let summary = "Narrow a kernel's promised maximum block size";
+  let description = [{
+    Runs over a `cir.offload.container`. When every launch of a kernel uses a
+    constant block shape, the `cir.amdgpu-flat-work-group-size` maximum on the
+    device kernel is lowered to the largest block any of those launches
+    produces.
+
+    The attribute is a promise to the backend about how many threads a block
+    can hold, and a smaller promise lets it give each thread more registers.
+    CIRGen sets the maximum to `--gpu-max-threads-per-block` (1024 by default)
+    for any kernel without `__launch_bounds__`, which is usually far above what
+    the program actually launches.
+
+    The bound has to cover every launch that reaches the kernel, so a single
+    launch with an unresolved block dimension suppresses the whole kernel
+    rather than yielding a bound derived from the readable launches. The
+    minimum is left as CIRGen set it, since that half of the attribute is the
+    user's statement rather than this pass's.
+
+    Only AMDGPU kernels carry the attribute; kernels for other targets are
+    left alone.
+
+    Soundness follows the same rule as constant argument propagation: in place
+    when every launch is visible, on a specialised clone otherwise.
+  }];
+  let constructor = "mlir::createOffloadTightenLaunchBoundsPass()";
+  let dependentDialects = ["cir::CIRDialect"];
+}
+
+def OffloadEliminateCoveredGuards
+    : Pass<"cir-offload-eliminate-covered-guards", "cir::OffloadContainerOp"> {
+  let summary = "Prove tail guards dead when the launch covers the range exactly";
+  let description = [{
+    Runs over a `cir.offload.container`. A kernel that covers `n` elements in
+    blocks of `d` is launched with `gridDim = ceil(n/d)` and carries tail
+    guards -- `if (index >= n) return;` -- for the final, partially populated
+    block. When `n % d == 0` that block is full and every such guard is dead.
+
+    The fact needed is `d*blockIdx.x + rest < n`, which relates two runtime
+    unknowns. LLVM's value analyses are per-value interval domains and cannot
+    use it, so the proof is done here and the comparison folded outright rather
+    than described to the backend with an assume.
+
+    A clone is specialised with the guards folded away and the launches are
+    dispatched to it behind a runtime `n % d == 0`, so the copy is only entered
+    where its premise holds and the original keeps serving every other case.
+
+    When the index arithmetic is evaluated in fewer bits than the comparison,
+    the dispatch also requires `n` to be small enough that the narrow product
+    cannot wrap, since the proof assumes it does not.
+  }];
+  let constructor = "mlir::createOffloadEliminateCoveredGuardsPass()";
+  let dependentDialects = ["cir::CIRDialect"];
+}
+
+def OffloadDeadArgElimination
+    : Pass<"cir-offload-dead-arg-elimination", "cir::OffloadContainerOp"> {
+  let summary = "Drop kernel arguments the device never reads";
+  let description = [{
+    Runs over a `cir.offload.container`. An argument no device kernel reads is
+    removed from the kernel signature, from the host stub, and from every call
+    to that stub, so it stops occupying a kernarg slot and stops being stored.
+
+    Constant propagation is what usually makes an argument dead, so this is
+    worth running after it.
+
+    The host stub builds the buffer the runtime copies into the kernarg
+    segment, and the runtime packs it densely in the device kernel's parameter
+    order. Removing an entry therefore means renumbering the ones after it.
+    Getting that wrong passes wrong values rather than missing an optimisation,
+    so the stub is matched against the exact shape CIRGen emits and left alone
+    when it does not fit.
+
+    Soundness follows the same rule as constant argument propagation: in place
+    when every launch is visible, on a specialised clone otherwise.
+  }];
+  let constructor = "mlir::createOffloadDeadArgEliminationPass()";
   let dependentDialects = ["cir::CIRDialect"];
 }
 

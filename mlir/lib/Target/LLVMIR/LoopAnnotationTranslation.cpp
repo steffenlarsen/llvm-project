@@ -285,16 +285,16 @@ LoopAnnotationTranslation::translateLoopAnnotation(LoopAnnotationAttr attr,
   if (!attr)
     return nullptr;
 
-  llvm::MDNode *loopMD = lookupLoopMetadata(attr);
+  llvm::MDNode *loopMD = lookupLoopMetadata(attr, op);
   if (loopMD)
     return loopMD;
 
   loopMD =
       LoopAnnotationConversion(attr, op, *this, this->llvmModule.getContext())
           .convert();
-  // Store a map from this Attribute to the LLVM metadata in case we
-  // encounter it again.
-  mapLoopMetadata(attr, loopMD);
+  // Store a map from this operation to the LLVM metadata in case we encounter
+  // it again.
+  mapLoopMetadata(attr, op, loopMD);
   return loopMD;
 }
 

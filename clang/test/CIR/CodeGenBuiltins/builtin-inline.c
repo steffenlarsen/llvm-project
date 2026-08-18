@@ -68,7 +68,7 @@ void *test_shadowed_memmove(void *a, const void *b, size_t c) {
 // CIR-NOT: @memmove.inline
 
 // CIR-LABEL: @test_shadowed_memmove(
-// CIR: cir.call @memmove(
+// CIR: cir.libc.memmove
 // CIR-NOT: @memmove.inline
 // CIR: }
 
@@ -78,7 +78,7 @@ void *test_shadowed_memmove(void *a, const void *b, size_t c) {
 // LLVM-LABEL: @test_shadowed_memmove(
 // TODO - this deviation from OGCG is expected until we implement the nobuiltin
 // attribute. See CIRGenFunction::emitDirectCallee
-// LLVM: call ptr @memmove(
+// LLVM: call void @llvm.memmove.p0.p0.i64(
 // LLVM-NOT: @memmove.inline
 // LLVM: }
 

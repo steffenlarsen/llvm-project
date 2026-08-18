@@ -1,0 +1,190 @@
+// RUN: cir-opt %s -split-input-file \
+// RUN:   -pass-pipeline="builtin.module(cir.offload.container(cir-offload-specialize-constant-args))" \
+// RUN:   | FileCheck %s
+
+!s32i = !cir.int<s, 32>
+
+// The helper's second parameter reaches the launch and every caller passes 1
+// for it, so the helper is cloned with it pinned and the callers retargeted.
+// All callers moved, so the original is erased -- otherwise its launch site
+// would still pass a runtime value.
+module {
+  cir.offload.container {
+    builtin.module @host attributes {cir.offload.kind = #cir.offload_kind<host>} {
+      cir.func internal private @stub_one(%arg0: !s32i, %arg1: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_one">} {
+        cir.return
+      }
+      cir.func internal private @helper_one(%arg0: !s32i, %arg1: !s32i) {
+        cir.call @stub_one(%arg0, %arg1) {cu.kernel_name = #cir.cu.kernel_name<"kern_one">} : (!s32i, !s32i) -> ()
+        cir.return
+      }
+      cir.func @caller_one(%arg0: !s32i) {
+        %0 = cir.const #cir.int<1> : !s32i
+        cir.call @helper_one(%arg0, %0) : (!s32i, !s32i) -> ()
+        cir.return
+      }
+    }
+    builtin.module @device_0 attributes {cir.offload.kind = #cir.offload_kind<device>} {
+      cir.func @kern_one(%arg0: !s32i, %arg1: !s32i) cc(ptx_kernel) {
+        cir.return
+      }
+    }
+  }
+}
+
+// CHECK-LABEL: cir.func internal private @helper_one.cargs._1v1
+// CHECK:         %[[C:.*]] = cir.const #cir.int<1> : !s32i
+// CHECK:         cir.call @stub_one(%arg0, %[[C]])
+// CHECK-LABEL: cir.func @caller_one
+// CHECK:         cir.call @helper_one.cargs._1v1
+// CHECK-NOT:   cir.func internal private @helper_one(
+
+// -----
+
+!s32i = !cir.int<s, 32>
+
+// Two callers disagreeing: one clone each, and the original still goes.
+module {
+  cir.offload.container {
+    builtin.module @host attributes {cir.offload.kind = #cir.offload_kind<host>} {
+      cir.func internal private @stub_two(%arg0: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_two">} {
+        cir.return
+      }
+      cir.func internal private @helper_two(%arg0: !s32i) {
+        cir.call @stub_two(%arg0) {cu.kernel_name = #cir.cu.kernel_name<"kern_two">} : (!s32i) -> ()
+        cir.return
+      }
+      cir.func @caller_a_two() {
+        %0 = cir.const #cir.int<3> : !s32i
+        cir.call @helper_two(%0) : (!s32i) -> ()
+        cir.return
+      }
+      cir.func @caller_b_two() {
+        %0 = cir.const #cir.int<5> : !s32i
+        cir.call @helper_two(%0) : (!s32i) -> ()
+        cir.return
+      }
+    }
+    builtin.module @device_0 attributes {cir.offload.kind = #cir.offload_kind<device>} {
+      cir.func @kern_two(%arg0: !s32i) cc(ptx_kernel) {
+        cir.return
+      }
+    }
+  }
+}
+
+// CHECK-LABEL: cir.func internal private @helper_two.cargs._0v3
+// CHECK:         %[[C3:.*]] = cir.const #cir.int<3> : !s32i
+// CHECK:         cir.call @stub_two(%[[C3]])
+// CHECK-LABEL: cir.func internal private @helper_two.cargs._0v5
+// CHECK:         %[[C5:.*]] = cir.const #cir.int<5> : !s32i
+// CHECK:         cir.call @stub_two(%[[C5]])
+// CHECK-NOT:   cir.func internal private @helper_two(
+
+// -----
+
+!s32i = !cir.int<s, 32>
+
+// One caller passes a runtime value, so the original must survive for it and
+// only the constant caller is retargeted.
+module {
+  cir.offload.container {
+    builtin.module @host attributes {cir.offload.kind = #cir.offload_kind<host>} {
+      cir.func internal private @stub_mix(%arg0: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_mix">} {
+        cir.return
+      }
+      cir.func internal private @helper_mix(%arg0: !s32i) {
+        cir.call @stub_mix(%arg0) {cu.kernel_name = #cir.cu.kernel_name<"kern_mix">} : (!s32i) -> ()
+        cir.return
+      }
+      cir.func @caller_const_mix() {
+        %0 = cir.const #cir.int<9> : !s32i
+        cir.call @helper_mix(%0) : (!s32i) -> ()
+        cir.return
+      }
+      cir.func @caller_runtime_mix(%arg0: !s32i) {
+        cir.call @helper_mix(%arg0) : (!s32i) -> ()
+        cir.return
+      }
+    }
+    builtin.module @device_0 attributes {cir.offload.kind = #cir.offload_kind<device>} {
+      cir.func @kern_mix(%arg0: !s32i) cc(ptx_kernel) {
+        cir.return
+      }
+    }
+  }
+}
+
+// CHECK-LABEL: cir.func internal private @helper_mix(%arg0: !s32i)
+// CHECK:         cir.call @stub_mix(%arg0)
+// CHECK-LABEL: cir.func internal private @helper_mix.cargs._0v9
+// CHECK:         %[[C9:.*]] = cir.const #cir.int<9> : !s32i
+// CHECK:         cir.call @stub_mix(%[[C9]])
+// CHECK-LABEL: cir.func @caller_const_mix
+// CHECK:         cir.call @helper_mix.cargs._0v9
+// CHECK-LABEL: cir.func @caller_runtime_mix
+// CHECK:         cir.call @helper_mix(%arg0)
+
+// -----
+
+!s32i = !cir.int<s, 32>
+
+// A constant parameter that never reaches a launch is not worth a clone.
+module {
+  cir.offload.container {
+    builtin.module @host attributes {cir.offload.kind = #cir.offload_kind<host>} {
+      cir.func internal private @stub_un(%arg0: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_un">} {
+        cir.return
+      }
+      cir.func private @sink_un(!s32i)
+      cir.func internal private @helper_un(%arg0: !s32i, %arg1: !s32i) {
+        cir.call @stub_un(%arg0) {cu.kernel_name = #cir.cu.kernel_name<"kern_un">} : (!s32i) -> ()
+        cir.call @sink_un(%arg1) : (!s32i) -> ()
+        cir.return
+      }
+      cir.func @caller_un(%arg0: !s32i) {
+        %0 = cir.const #cir.int<4> : !s32i
+        cir.call @helper_un(%arg0, %0) : (!s32i, !s32i) -> ()
+        cir.return
+      }
+    }
+    builtin.module @device_0 attributes {cir.offload.kind = #cir.offload_kind<device>} {
+      cir.func @kern_un(%arg0: !s32i) cc(ptx_kernel) {
+        cir.return
+      }
+    }
+  }
+}
+
+// CHECK-LABEL: cir.func internal private @helper_un(%arg0: !s32i, %arg1: !s32i)
+// CHECK-NOT:   cargs
+
+// -----
+
+!s32i = !cir.int<s, 32>
+
+// A stub is the launch, not a helper: pinning its parameters is the job of
+// kernel-argument constant propagation, so it is left alone.
+module {
+  cir.offload.container {
+    builtin.module @host attributes {cir.offload.kind = #cir.offload_kind<host>} {
+      cir.func internal private @stub_only(%arg0: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_only">} {
+        cir.call @stub_only(%arg0) {cu.kernel_name = #cir.cu.kernel_name<"kern_only">} : (!s32i) -> ()
+        cir.return
+      }
+      cir.func @caller_only() {
+        %0 = cir.const #cir.int<2> : !s32i
+        cir.call @stub_only(%0) {cu.kernel_name = #cir.cu.kernel_name<"kern_only">} : (!s32i) -> ()
+        cir.return
+      }
+    }
+    builtin.module @device_0 attributes {cir.offload.kind = #cir.offload_kind<device>} {
+      cir.func @kern_only(%arg0: !s32i) cc(ptx_kernel) {
+        cir.return
+      }
+    }
+  }
+}
+
+// CHECK-LABEL: cir.func internal private @stub_only(%arg0: !s32i)
+// CHECK-NOT:   cargs

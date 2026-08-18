@@ -46,6 +46,18 @@
 // MULTI: "{{.*}}clang-linker-wrapper{{(\.exe)?}}"{{.*}} "--emit-fatbin-only"{{.*}} "-o" "[[MULTI_FATBIN:[^"]+\.hipfb]]"
 // MULTI: "-cc1"{{.*}} "-emit-obj"{{.*}} "-fcuda-include-gpubinary" "[[MULTI_FATBIN]]"{{.*}} "-x" "cir" "[[MULTI_HOST_SPLIT]]"
 
+// -Xclangir-offload-merge forwards its argument verbatim to the tool, so an
+// offload pass can be turned off to attribute what it is worth without editing
+// the driver. Both jobs run the same binary, so both get the argument.
+// RUN: %clang -### -target x86_64-unknown-linux-gnu -x hip -fclangir \
+// RUN:   --offload-arch=gfx90a -nogpuinc -nogpulib --clangir-offload-merge \
+// RUN:   -Xclangir-offload-merge --no-offload-opts \
+// RUN:   -Xclangir-offload-merge --no-module-opts -c %s 2>&1 \
+// RUN: | FileCheck %s --check-prefix=PASSTHRU
+
+// PASSTHRU: "{{.*}}cir-offload-merge{{(\.exe)?}}" "-combine" "-targets={{[^"]*}}" "--no-offload-opts" "--no-module-opts" "-output=
+// PASSTHRU: "{{.*}}cir-offload-merge{{(\.exe)?}}" "-split" "-targets={{[^"]*}}" "--no-offload-opts" "--no-module-opts" "-input=
+
 // Without --clangir-offload-merge the normal pipeline runs: no merge/split.
 // RUN: %clang -### -target x86_64-unknown-linux-gnu -x hip -fclangir \
 // RUN:   --offload-arch=gfx90a -nogpuinc -nogpulib \

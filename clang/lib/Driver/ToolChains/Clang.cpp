@@ -9531,6 +9531,17 @@ static void addOffloadTargetsArg(
   CmdArgs.push_back(TCArgs.MakeArgString(Triples));
 }
 
+/// Forward each -Xclangir-offload-merge <arg> to cir-offload-merge. Both the
+/// combine and split jobs run the same tool, so the argument goes to whichever
+/// is being constructed rather than to a particular phase.
+static void addCIROffloadMergeArgs(const llvm::opt::ArgList &TCArgs,
+                                   ArgStringList &CmdArgs) {
+  for (const Arg *A : TCArgs.filtered(options::OPT_Xclangir_offload_merge)) {
+    CmdArgs.push_back(TCArgs.MakeArgString(A->getValue()));
+    A->claim();
+  }
+}
+
 void OffloadBundler::ConstructJob(Compilation &C, const JobAction &JA,
                                   const InputInfo &Output,
                                   const InputInfoList &Inputs,
@@ -9686,6 +9697,7 @@ void CIROffloadMerge::ConstructJob(Compilation &C, const JobAction &JA,
   ArgStringList CmdArgs;
   CmdArgs.push_back("-combine");
   addOffloadTargetsArg(TCArgs, CmdArgs, DepInfo);
+  addCIROffloadMergeArgs(TCArgs, CmdArgs);
 
   CmdArgs.push_back(
       TCArgs.MakeArgString(Twine("-output=") + Output.getFilename()));
@@ -9716,6 +9728,7 @@ void CIROffloadMerge::ConstructJobMultipleOutputs(
   ArgStringList CmdArgs;
   CmdArgs.push_back("-split");
   addOffloadTargetsArg(TCArgs, CmdArgs, DepInfo);
+  addCIROffloadMergeArgs(TCArgs, CmdArgs);
 
   CmdArgs.push_back(
       TCArgs.MakeArgString(Twine("-input=") + Inputs.front().getFilename()));

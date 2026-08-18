@@ -419,6 +419,11 @@ static mlir::TypedAttr lowerInitialValue(const LowerModule *lowerModule,
     if (auto zeroVal = mlir::dyn_cast_if_present<cir::ZeroAttr>(initVal))
       return cir::ZeroAttr::get(loweredArrTy);
 
+    // An uninitialized array -- a __shared__ (LDS) array, for one, which the
+    // target cannot give an initializer -- carries no element values to lower.
+    if (mlir::isa_and_present<cir::UndefAttr>(initVal))
+      return cir::UndefAttr::get(loweredArrTy);
+
     auto arrayVal = mlir::cast<cir::ConstArrayAttr>(initVal);
 
     // String-literal arrays store their bytes as a StringAttr in `elts`. The
@@ -497,6 +502,15 @@ static mlir::TypedAttr lowerInitialValue(const LowerModule *lowerModule,
       assert(convertedTy == ptrTy && "BlockAddrInfo type should not change");
       return blockAddr;
     }
+
+    // An uninitialized pointer -- a `__shared__` (LDS) pointer, for one, which
+    // the target cannot give an initializer -- carries no value to lower, the
+    // same as the array and record cases above.
+    if (mlir::isa_and_present<cir::UndefAttr>(initVal))
+      return cir::UndefAttr::get(convertedTy);
+
+    if (mlir::isa_and_present<cir::PoisonAttr>(initVal))
+      return cir::PoisonAttr::get(convertedTy);
 
     auto constPtr = mlir::cast_if_present<cir::ConstPtrAttr>(initVal);
     if (!constPtr)

@@ -1,0 +1,44 @@
+// RUN: cir-opt %s -cir-call-conv-lowering=target=x86_64 | FileCheck %s
+// RUN: cir-opt %s -cir-call-conv-lowering=target=x86_64 -cir-to-llvm -o - 2>/dev/null \
+// RUN:   | mlir-translate -mlir-to-llvmir --allow-unregistered-dialect \
+// RUN:   | FileCheck %s --check-prefix=LLVM
+
+// A vptr lowers to a pointer in the default address space, so it classifies
+// INTEGER like any other pointer. Polymorphic classes reach the classifier
+// through their vtable-pointer member.
+
+!s32i = !cir.int<s, 32>
+!rec_Poly = !cir.struct<"Poly" {data !cir.vptr, data !cir.ptr<!s32i>}>
+!rec_VOnly = !cir.struct<"VOnly" {data !cir.vptr}>
+
+module attributes {
+  dlti.dl_spec = #dlti.dl_spec<
+    #dlti.dl_entry<i32, dense<32>: vector<2xi64>>,
+    #dlti.dl_entry<i64, dense<64>: vector<2xi64>>>
+} {
+
+  cir.func @take_vptr(%arg0: !cir.vptr) {
+    cir.return
+  }
+
+  // CHECK: cir.func{{.*}} @take_vptr(%arg0: !cir.vptr)
+
+  // vptr + pointer is two INTEGER eightbytes, so the record is unpacked into
+  // two register arguments rather than passed in memory.
+  cir.func @take_poly(%arg0: !rec_Poly) {
+    cir.return
+  }
+
+  // CHECK: cir.func{{.*}} @take_poly(%arg0: !cir.ptr<!void>, %arg1: !cir.ptr<!void>)
+
+  // A class with only the vptr is a single eightbyte.
+  cir.func @take_vonly(%arg0: !rec_VOnly) {
+    cir.return
+  }
+
+  // CHECK: cir.func{{.*}} @take_vonly(%arg0: !cir.ptr<!void>)
+}
+
+// LLVM: define void @take_vptr(ptr %{{.+}})
+// LLVM: define void @take_poly(ptr %{{.+}}, ptr %{{.+}})
+// LLVM: define void @take_vonly(ptr %{{.+}})

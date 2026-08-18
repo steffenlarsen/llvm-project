@@ -331,7 +331,8 @@ bool PreISelIntrinsicLowering::expandMemIntrinsicUses(
       auto *Memcpy = cast<MemCpyInst>(Inst);
       Function *ParentFunc = Memcpy->getFunction();
       const TargetTransformInfo &TTI = LookupTTI(*ParentFunc);
-      if (shouldExpandMemIntrinsicWithSize(Memcpy->getLength(), TTI)) {
+      if (shouldExpandMemIntrinsicWithSize(Memcpy->getLength(), TTI) ||
+          TTI.preferMemIntrinsicExpansion(Memcpy)) {
         if (UseMemIntrinsicLibFunc &&
             canEmitMemcpy(ModuleLibcalls, TM, ParentFunc))
           break;
@@ -363,7 +364,8 @@ bool PreISelIntrinsicLowering::expandMemIntrinsicUses(
       auto *Memmove = cast<MemMoveInst>(Inst);
       Function *ParentFunc = Memmove->getFunction();
       const TargetTransformInfo &TTI = LookupTTI(*ParentFunc);
-      if (shouldExpandMemIntrinsicWithSize(Memmove->getLength(), TTI)) {
+      if (shouldExpandMemIntrinsicWithSize(Memmove->getLength(), TTI) ||
+          TTI.preferMemIntrinsicExpansion(Memmove)) {
         if (UseMemIntrinsicLibFunc &&
             canEmitLibcall(ModuleLibcalls, TM, ParentFunc, RTLIB::MEMMOVE))
           break;
@@ -380,7 +382,8 @@ bool PreISelIntrinsicLowering::expandMemIntrinsicUses(
       auto *Memset = cast<MemSetInst>(Inst);
       Function *ParentFunc = Memset->getFunction();
       const TargetTransformInfo &TTI = LookupTTI(*ParentFunc);
-      if (shouldExpandMemIntrinsicWithSize(Memset->getLength(), TTI)) {
+      if (shouldExpandMemIntrinsicWithSize(Memset->getLength(), TTI) ||
+          TTI.preferMemIntrinsicExpansion(Memset)) {
         if (UseMemIntrinsicLibFunc &&
             canEmitLibcall(ModuleLibcalls, TM, ParentFunc, RTLIB::MEMSET))
           break;

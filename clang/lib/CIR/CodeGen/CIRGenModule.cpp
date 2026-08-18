@@ -83,7 +83,8 @@ CIRGenModule::CIRGenModule(mlir::MLIRContext &mlirContext,
                            const clang::CodeGenOptions &cgo,
                            DiagnosticsEngine &diags)
     : builder(mlirContext, *this), astContext(astContext),
-      langOpts(astContext.getLangOpts()), codeGenOpts(cgo),
+      langOpts(astContext.getLangOpts()), atomicOpts(astContext.getLangOpts()),
+      codeGenOpts(cgo),
       theModule{mlir::ModuleOp::create(mlir::UnknownLoc::get(&mlirContext))},
       diags(diags), target(astContext.getTargetInfo()),
       abi(createCXXABI(*this)), genTypes(*this), vtables(*this) {
@@ -1286,7 +1287,23 @@ CIRGenModule::getOrCreateCIRGlobal(StringRef mangledName, mlir::Type ty,
       errorNYI(d->getSourceRange(),
                "getOrCreateCIRGlobal: OpenMP target global variable");
 
-    gv.setAlignmentAttr(getSize(astContext.getDeclAlign(d)));
+    CharUnits alignment = astContext.getDeclAlign(d);
+
+    // `extern __shared__ T x[]` is dynamically sized: the launch supplies the
+    // extent, so the declaration carries only the element type's alignment --
+    // 4 for `half2`. That understates what the block actually gets. The
+    // declared alignment here is not a promise about some external allocator;
+    // it is a request the backend honours when it lays LDS out, at
+    // `alignTo(Offset, getAlign(DL, DynamicVariable))` in
+    // AMDGPULowerModuleLDSPass. Asking for less than the widest single LDS
+    // access simply throws away access width: in ggml's MMA flash attention
+    // the stores to `extern __shared__ half2 tile_Q[]` split into
+    // `ds_write2_b32` pairs where 8-byte alignment yields one `ds_write2_b64`.
+    if (langOpts.CUDAIsDevice && d->hasAttr<CUDASharedAttr>() &&
+        d->getType()->isIncompleteArrayType())
+      alignment = std::max(alignment, CharUnits::fromQuantity(16));
+
+    gv.setAlignmentAttr(getSize(alignment));
 
     setLinkageForGV(gv, d);
 
@@ -2710,10 +2727,14 @@ static std::string getMangledNameImpl(CIRGenModule &cgm, GlobalDecl gd,
                    "getMangledName: multi-version functions");
     }
   }
-  if (cgm.getLangOpts().GPURelocatableDeviceCode) {
-    cgm.errorNYI(nd->getSourceRange(),
-                 "getMangledName: GPU relocatable device code");
-  }
+  // Relocatable device code needs a unique name only for a static file-scope
+  // declaration that has to be externalized: with -fgpu-rdc those become
+  // visible across translation units, so two of them from different TUs would
+  // otherwise collide. Everything else mangles as usual.
+  if (cgm.getASTContext().shouldExternalize(nd) &&
+      cgm.getLangOpts().GPURelocatableDeviceCode &&
+      cgm.getLangOpts().CUDAIsDevice)
+    cgm.printPostfixForExternalizedDecl(out, nd);
 
   return std::string(out.str());
 }

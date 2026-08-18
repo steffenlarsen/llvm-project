@@ -2544,6 +2544,12 @@ mlir::Value ScalarExprEmitter::VisitInitListExpr(InitListExpr *e) {
       elements.push_back(Visit(init));
     }
 
+    // If a single init element has the same vector type as the result
+    // (e.g., initializing an ext_vector from another ext_vector of the same
+    // type), just return it directly -- no VecCreateOp needed.
+    if (elements.size() == 1 && elements[0].getType() == vectorType)
+      return elements[0];
+
     // Zero-initialize any remaining values.
     if (numInitElements < vectorType.getSize()) {
       const mlir::Value zeroValue = cgf.getBuilder().getNullValue(

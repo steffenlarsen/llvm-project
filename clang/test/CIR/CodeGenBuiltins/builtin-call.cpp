@@ -268,14 +268,12 @@ void unreachable2() {
 
 // CIR-LABEL: @_Z12unreachable2v
 // CIR:         cir.unreachable
-// CIR-NEXT:  ^{{.+}}:
-// CIR-NEXT:    cir.call @_Z2f1v() : () -> ()
+// CIR-NOT:     cir.call @_Z2f1v
 // CIR:       }
 
 // LLVM-LABEL: @_Z12unreachable2v
 // LLVM:         unreachable
-// LLVM:       {{.+}}:
-// LLVM-NEXT:    call void @_Z2f1v()
+// LLVM-NOT:     call void @_Z2f1v()
 // LLVM:       }
 
 // OGCG-LABEL: @_Z12unreachable2v
@@ -304,15 +302,13 @@ void trap2() {
 
 // CIR-LABEL: @_Z5trap2v
 // CIR:         cir.trap
-// CIR-NEXT:  ^{{.+}}:
-// CIR-NEXT:    cir.call @_Z2f1v() : () -> ()
+// CIR-NOT:     cir.call @_Z2f1v
 // CIR:       }
 
 // LLVM-LABEL: @_Z5trap2v
 // LLVM:         call void @llvm.trap()
 // LLVM-NEXT:    unreachable
-// LLVM:       {{.+}}:
-// LLVM-NEXT:    call void @_Z2f1v()
+// LLVM-NOT:     call void @_Z2f1v()
 // LLVM:       }
 
 // OGCG-LABEL: define{{.*}} void @_Z5trap2v

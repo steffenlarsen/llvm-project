@@ -150,6 +150,7 @@ public:
                                     unsigned AddrSpace) const override;
 
   uint64_t getMaxMemIntrinsicInlineSizeThreshold() const override;
+  bool preferMemIntrinsicExpansion(const MemIntrinsic *MI) const override;
   Type *getMemcpyLoopLoweringType(
       LLVMContext &Context, Value *Length, unsigned SrcAddrSpace,
       unsigned DestAddrSpace, Align SrcAlign, Align DestAlign,

@@ -49,10 +49,8 @@ void try_catch_with_empty_catch_all() {
 // CIR: cir.scope {
 // CIR:   cir.try {
 // CIR:     cir.return
+// CIR-NOT:  cir.inc
 // CIR:   ^bb1:  // no predecessors
-// CIR:     %[[TMP_A:.*]] = cir.load{{.*}} %[[A_ADDR]] : !cir.ptr<!s32i>, !s32i
-// CIR:     %[[RESULT:.*]] = cir.inc nsw %[[TMP_A]] : !s32i
-// CIR:     cir.store{{.*}} %[[RESULT]], %[[A_ADDR]] : !s32i, !cir.ptr<!s32i>
 // CIR:     cir.yield
 // CIR:   }
 // CIR: }
@@ -65,9 +63,7 @@ void try_catch_with_empty_catch_all() {
 // LLVM: [[BB_3]]:
 // LLVM:   ret void
 // LLVM: [[BB_4:.*]]:
-// LLVM:   %[[TMP_A:.*]] = load i32, ptr %[[A_ADDR]], align 4
-// LLVM:   %[[RESULT:.*]] = add nsw i32 %[[TMP_A]], 1
-// LLVM:   store i32 %[[RESULT]], ptr %[[A_ADDR]], align 4
+// LLVM-NOT: add nsw
 // LLVM:   br label %[[BB_7:.*]]
 // LLVM: [[BB_7]]:
 // LLVM:   br label %[[BB_8:.*]]

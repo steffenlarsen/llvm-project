@@ -184,6 +184,21 @@ bool CIRGenFunction::containsLabel(const Stmt *s, bool ignoreCaseStmts) {
                      });
 }
 
+bool CIRGenFunction::atUnreachablePoint() {
+  mlir::Block *block = builder.getInsertionBlock();
+  // The entry block is always reached, and a block that something branches to
+  // may still run. Anything else was opened to hold the code after a
+  // terminator and nothing will ever jump to it.
+  if (!block || block->isEntryBlock() || !block->hasNoPredecessors())
+    return false;
+
+  // Except a label, which is a jump target even with no predecessor edge yet:
+  // cir.goto is not resolved into one until the CFG is flattened, much later.
+  // So ask the label itself.
+  return llvm::none_of(
+      *block, [](mlir::Operation &op) { return isa<cir::LabelOp>(op); });
+}
+
 /// If the specified expression does not fold to a constant, or if it does but
 /// contains a label, return false.  If it constant folds return true and set
 /// the boolean result in Result.

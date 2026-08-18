@@ -116,6 +116,10 @@ public:
 
   virtual uint64_t getMaxMemIntrinsicInlineSizeThreshold() const { return 64; }
 
+  virtual bool preferMemIntrinsicExpansion(const MemIntrinsic *MI) const {
+    return false;
+  }
+
   // Although this default value is arbitrary, it is not random. It is assumed
   // that a condition that evaluates the same way by a higher percentage than
   // this is best represented as control flow. Therefore, the default value N

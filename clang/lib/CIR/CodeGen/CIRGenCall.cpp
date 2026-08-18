@@ -429,8 +429,26 @@ void CIRGenModule::constructAttributeList(
       }
     }
 
-    // TODO(cir): Quite a few CUDA and OpenCL attributes are added here, like
-    // uniform-work-group-size.
+    // A CUDA/HIP launch always covers the grid with whole work groups, so
+    // `blockDim` is exactly the size that was requested. Stating that lets
+    // AMDGPULowerKernelAttributes fold every `blockDim` read; without it each
+    // one becomes a runtime pick between the implicit-args `group_size_x` and
+    // `remainder_x` fields, loaded through *vector* memory and followed by a
+    // full `s_waitcnt vmcnt(0)`. OGCG states it (CGCall.cpp,
+    // OffloadUniformBlock, on by default for HIP), which is why ggml kernels
+    // there have no such fixup and ours had one in every kernel that reads
+    // blockDim.
+    //
+    // The empty value is deliberate: LLVM tests for this attribute by presence
+    // (`hasFnAttribute`), and the CIR->LLVM translation forwards a `cir.`-named
+    // StringAttr as `addFnAttr(name, value)`.
+    // On the definition only: LLVM reads this off the function, so putting it
+    // on call sites as well would just be noise in the IR.
+    if (langOpts.OffloadUniformBlock && !attrOnCallSite)
+      attrs.set("cir.uniform-work-group-size",
+                mlir::StringAttr::get(&getMLIRContext(), ""));
+
+    // TODO(cir): Quite a few other CUDA and OpenCL attributes are added here.
 
     if (langOpts.CUDA && !langOpts.CUDAIsDevice &&
         targetDecl->hasAttr<CUDAGlobalAttr>()) {

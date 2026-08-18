@@ -86,12 +86,16 @@ Address CIRGenFunction::emitAddrOfFieldStorage(Address base,
   // For unions, all fields map to index 0, so we use the field's declared type
   // directly instead of looking up the member type from the layout.
   mlir::Type fieldType = convertType(field->getType());
-  auto fieldPtr = cir::PointerType::get(fieldType);
+  // As in createGetMember: the field is part of the object, so its address
+  // stays in the object's address space.
+  mlir::ptr::MemorySpaceAttrInterface addrSpace =
+      mlir::cast<cir::PointerType>(base.getPointer().getType()).getAddrSpace();
+  auto fieldPtr = cir::PointerType::get(fieldType, addrSpace);
   bool needsBitcast = false;
 
   if (!rec->isUnion() && field->isPotentiallyOverlapping()) {
     mlir::Type memberType = layout.getCIRType().getMembers()[idx];
-    fieldPtr = cir::PointerType::get(memberType);
+    fieldPtr = cir::PointerType::get(memberType, addrSpace);
     needsBitcast = true;
   }
 
@@ -944,8 +948,34 @@ static LValue emitFunctionDeclLValue(CIRGenFunction &cgf, const Expr *e,
 
   mlir::Type fnTy = funcOp.getFunctionType();
   mlir::Type ptrTy = cir::PointerType::get(fnTy);
-  mlir::Value addr = cir::GetGlobalOp::create(cgf.getBuilder(), loc, ptrTy,
-                                              funcOp.getSymName());
+
+  // Taking the address of a `__global__` function on the host yields the kernel
+  // *handle*, not the stub. The handle is the symbol handed to
+  // `__hipRegisterFunction`, so it is the only pointer the runtime can resolve
+  // back to a device kernel; handing out the stub makes every launch-by-pointer
+  // API fail with `invalid device function`. Classic CodeGen substitutes the
+  // handle in `GetAddrOfFunction`, which CIR's equivalent cannot do because it
+  // returns a FuncOp and the handle is a GlobalOp -- so it happens here.
+  //
+  // The handle holds the stub's address, so a launch through such a pointer has
+  // to load it back out; emitCUDAKernelCallExpr does that. A *direct*
+  // `kernel<<<>>>` is unaffected: emitDirectCallee maps handle back to stub.
+  mlir::Value addr;
+  cir::GlobalOp handle;
+  if (cgf.getLangOpts().CUDA && !cgf.getLangOpts().CUDAIsDevice &&
+      fd->hasAttr<CUDAGlobalAttr>())
+    handle = mlir::dyn_cast_or_null<cir::GlobalOp>(
+        cgf.cgm.getCUDARuntime().getKernelHandle(funcOp, gd));
+
+  if (handle) {
+    mlir::Value handleAddr = cir::GetGlobalOp::create(
+        cgf.getBuilder(), loc, cir::PointerType::get(handle.getSymType()),
+        handle.getSymName());
+    addr = cgf.getBuilder().createBitcast(loc, handleAddr, ptrTy);
+  } else {
+    addr = cir::GetGlobalOp::create(cgf.getBuilder(), loc, ptrTy,
+                                    funcOp.getSymName());
+  }
 
   if (funcOp.getFunctionType() != cgf.convertType(fd->getType())) {
     fnTy = cgf.convertType(fd->getType());
@@ -2707,6 +2737,14 @@ mlir::Value CIRGenFunction::emitAlloca(StringRef name, mlir::Type ty,
   // the lowering pass instead.
   cir::PointerType localVarPtrTy =
       builder.getPointerTo(ty, getCIRAllocaAddressSpace());
+  // The overloads that take no alignment pass a zero CharUnits, which would
+  // otherwise reach the backend as `align 1` even for a pointer temporary --
+  // an under-aligned slot whose loads and stores are all naturally aligned.
+  // Classic CodeGen never emits those; fall back to the type's ABI alignment,
+  // which is what CreateDefaultAlignTempAlloca does for the same situation.
+  if (alignment.isZero())
+    alignment =
+        CharUnits::fromQuantity(cgm.getDataLayout().getABITypeAlign(ty));
   mlir::IntegerAttr alignIntAttr = cgm.getSize(alignment);
 
   mlir::Value addr;

@@ -57,6 +57,20 @@ getX86ABICompatInfo(const clang::ASTContext &astContext) {
   return abiCompat;
 }
 
+/// The AVX ABI level decides how wide a vector may be and still be passed in
+/// registers rather than memory, so it has to match what the classic path
+/// derives in CodeGenModule::getLLVMABITargetInfo. x86_64's getABI() already
+/// reports the enabled feature level.
+static llvm::abi::X86AVXABILevel
+getX86AvxAbiLevel(const clang::ASTContext &astContext) {
+  llvm::StringRef abi = astContext.getTargetInfo().getABI();
+  if (abi == "avx512")
+    return llvm::abi::X86AVXABILevel::AVX512;
+  if (abi == "avx")
+    return llvm::abi::X86AVXABILevel::AVX;
+  return llvm::abi::X86AVXABILevel::None;
+}
+
 mlir::LogicalResult
 runCIRToCIRPasses(mlir::ModuleOp theModule, mlir::MLIRContext &mlirContext,
                   clang::ASTContext &astContext, cir::LowerModule &lowerModule,
@@ -104,7 +118,7 @@ runCIRToCIRPasses(mlir::ModuleOp theModule, mlir::MLIRContext &mlirContext,
         getCallConvTarget(astContext.getTargetInfo().getTriple());
     if (target != CallConvTarget::None)
       pm.addPass(mlir::createCallConvLoweringPass(
-          target, llvm::abi::X86AVXABILevel::None,
+          target, getX86AvxAbiLevel(astContext),
           getX86ABICompatInfo(astContext)));
   }
 

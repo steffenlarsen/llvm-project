@@ -35,8 +35,31 @@ RValue CIRGenCUDARuntime::emitCUDAKernelCallExpr(CIRGenFunction &cgf,
       [&](mlir::OpBuilder &b, mlir::Location l) { cir::YieldOp::create(b, l); },
       loc,
       [&](mlir::OpBuilder &b, mlir::Location l) {
-        CIRGenCallee callee = cgf.emitCallee(expr->getCallee());
-        cgf.emitCall(expr->getCallee()->getType(), callee, expr, retValue);
+        const Expr *calleeExpr = expr->getCallee();
+        CIRGenCallee callee;
+
+        // A launch through a function pointer receives the kernel *handle*,
+        // since that is what taking a kernel's address yields on the host. The
+        // stub to call is stored in the handle, so load it back out -- which is
+        // what classic CodeGen emits for the same construct. A direct
+        // `kernel<<<>>>` needs none of this: emitDirectCallee has already
+        // resolved the handle to the stub.
+        if (!expr->getDirectCallee() && cgm.getLangOpts().HIP &&
+            !cgm.getLangOpts().CUDAIsDevice) {
+          mlir::Value handle = cgf.emitScalarExpr(calleeExpr);
+          auto fnPtrTy = mlir::cast<cir::PointerType>(handle.getType());
+          mlir::Value slot = builder.createBitcast(
+              loc, handle, cir::PointerType::get(fnPtrTy));
+          mlir::Value stub = cir::LoadOp::create(builder, loc, fnPtrTy, slot);
+          QualType fnType = calleeExpr->getType()->getPointeeType();
+          CIRGenCalleeInfo calleeInfo(fnType->getAs<FunctionProtoType>(),
+                                      GlobalDecl());
+          callee = CIRGenCallee(calleeInfo, stub.getDefiningOp());
+        } else {
+          callee = cgf.emitCallee(calleeExpr);
+        }
+
+        cgf.emitCall(calleeExpr->getType(), callee, expr, retValue);
         cir::YieldOp::create(b, l);
       },
       loc);

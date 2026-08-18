@@ -3493,6 +3493,10 @@ defm clangir : BoolFOption<"clangir",
 def clangir_offload_merge : Flag<["--"], "clangir-offload-merge">,
   Visibility<[ClangOption]>,
   HelpText<"Merge serialized ClangIR host/device offload modules before backend compilation.">;
+def Xclangir_offload_merge : Separate<["-"], "Xclangir-offload-merge">,
+  Visibility<[ClangOption]>,
+  HelpText<"Pass <arg> to the ClangIR offload merge step, e.g. -Xclangir-offload-merge --no-offload-opts">,
+  MetaVarName<"<arg>">;
 def emit_cir : Flag<["-"], "emit-cir">, Visibility<[ClangOption, CC1Option]>,
   Group<Action_Group>, HelpText<"Build ASTs and then lower to ClangIR">;
 /// ClangIR-specific options - END
