@@ -37,6 +37,7 @@
 #include <cstddef>
 #include <iterator>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -584,6 +585,29 @@ public:
 
   template<typename T> bool hasAttr() const {
     return hasAttrs() && hasSpecificAttr<T>(getAttrs());
+  }
+
+  template <typename... Ts> std::tuple<Ts *...> findAttrs() const {
+    if (!hasAttrs())
+      return {};
+    auto FillSlot = [](auto *&Slot, Attr *A) constexpr {
+      using AttrType = std::remove_reference_t<decltype(*Slot)>;
+      if (isa<AttrType>(A))
+        Slot = cast<AttrType>(A);
+    };
+    std::tuple<Ts *...> Found{};
+    for (Attr *A : getAttrs())
+      (FillSlot(std::get<Ts *>(Found), A), ...);
+    return Found;
+  }
+
+  template <typename... Ts> bool hasAnyAttr() const {
+    return llvm::any_of(getAttrs(),
+                        [](const Attr *A) { return (isa<Ts>(A) || ...); });
+  }
+
+  template <typename... Ts> bool hasAllAttr() const {
+    return std::apply([](Ts *...A) { return (... && A); }, findAttrs<Ts...>());
   }
 
   /// getMaxAlignment - return the maximum alignment specified by attributes

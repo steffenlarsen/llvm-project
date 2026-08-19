@@ -285,8 +285,7 @@ static bool CheckStmtInlineAttr(Sema &SemaRef, const Stmt *OrigSt,
     // relationship between the two lists of call expressions.
     if (!CanSuppressDiag || !(*std::get<0>(Tup))->getCalleeDecl()) {
       const Decl *Callee = (*std::get<1>(Tup))->getCalleeDecl();
-      if (Callee &&
-          (Callee->hasAttr<OtherAttr>() || Callee->hasAttr<FlattenAttr>())) {
+      if (Callee && Callee->hasAnyAttr<OtherAttr, FlattenAttr>()) {
         SemaRef.Diag(CurSt->getBeginLoc(),
                      diag::warn_function_stmt_attribute_precedence)
             << A << (Callee->hasAttr<OtherAttr>() ? DiagIdx : 1);

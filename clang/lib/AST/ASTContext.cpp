@@ -7712,10 +7712,12 @@ static bool isSameQualifier(const NestedNameSpecifier X,
 static bool hasSameCudaAttrs(const FunctionDecl *A, const FunctionDecl *B) {
   if (!A->getASTContext().getLangOpts().CUDA)
     return true; // Target attributes are overloadable in CUDA compilation only.
-  if (A->hasAttr<CUDADeviceAttr>() != B->hasAttr<CUDADeviceAttr>())
+  auto [ADevice, AHost] = A->findAttrs<CUDADeviceAttr, CUDAHostAttr>();
+  auto [BDevice, BHost] = B->findAttrs<CUDADeviceAttr, CUDAHostAttr>();
+  if ((ADevice != nullptr) != (BDevice != nullptr))
     return false;
-  if (A->hasAttr<CUDADeviceAttr>() && B->hasAttr<CUDADeviceAttr>())
-    return A->hasAttr<CUDAHostAttr>() == B->hasAttr<CUDAHostAttr>();
+  if (ADevice && BDevice)
+    return (AHost != nullptr) == (BHost != nullptr);
   return true; // unattributed and __host__ functions are the same.
 }
 
@@ -13142,10 +13144,10 @@ static GVALinkage basicGVALinkageForFunction(const ASTContext &Context,
   if (!FD->isInlined())
     return External;
 
+  auto [DLLExport, GNUInline] = FD->findAttrs<DLLExportAttr, GNUInlineAttr>();
   if ((!Context.getLangOpts().CPlusPlus &&
-       !Context.getTargetInfo().getCXXABI().isMicrosoft() &&
-       !FD->hasAttr<DLLExportAttr>()) ||
-      FD->hasAttr<GNUInlineAttr>()) {
+       !Context.getTargetInfo().getCXXABI().isMicrosoft() && !DLLExport) ||
+      GNUInline) {
     // FIXME: This doesn't match gcc's behavior for dllexport inline functions.
 
     // GNU or C99 inline semantics. Determine whether this symbol should be
@@ -13380,11 +13382,11 @@ bool ASTContext::DeclMustBeEmitted(const Decl *D) {
   // other entities are emitted only if they are used by a function
   // defined with one of those attributes.
   if (LangOpts.SYCLIsDevice)
-    return isa<FunctionDecl>(D) && (D->hasAttr<SYCLKernelEntryPointAttr>() ||
-                                    D->hasAttr<SYCLExternalAttr>());
+    return isa<FunctionDecl>(D) &&
+           D->hasAnyAttr<SYCLKernelEntryPointAttr, SYCLExternalAttr>();
 
   // Aliases and used decls are required.
-  if (D->hasAttr<AliasAttr>() || D->hasAttr<UsedAttr>())
+  if (D->hasAnyAttr<AliasAttr, UsedAttr>())
     return true;
 
   if (const auto *FD = dyn_cast<FunctionDecl>(D)) {
@@ -13393,7 +13395,7 @@ bool ASTContext::DeclMustBeEmitted(const Decl *D) {
       return FD->doesDeclarationForceExternallyVisibleDefinition();
 
     // Constructors and destructors are required.
-    if (FD->hasAttr<ConstructorAttr>() || FD->hasAttr<DestructorAttr>())
+    if (FD->hasAnyAttr<ConstructorAttr, DestructorAttr>())
       return true;
 
     // The key function for a class is required.  This rule only comes
@@ -13977,8 +13979,7 @@ bool
 ASTContext::ObjCMethodsAreEqual(const ObjCMethodDecl *MethodDecl,
                                 const ObjCMethodDecl *MethodImpl) {
   // No point trying to match an unavailable/deprecated mothod.
-  if (MethodDecl->hasAttr<UnavailableAttr>()
-      || MethodDecl->hasAttr<DeprecatedAttr>())
+  if (MethodDecl->hasAnyAttr<UnavailableAttr, DeprecatedAttr>())
     return false;
   if (MethodDecl->getObjCDeclQualifier() !=
       MethodImpl->getObjCDeclQualifier())
@@ -15541,23 +15542,22 @@ bool ASTContext::mayExternalize(const Decl *D) const {
   bool IsInternalVar =
       isa<VarDecl>(D) &&
       basicGVALinkageForVariable(*this, cast<VarDecl>(D)) == GVA_Internal;
-  bool IsExplicitDeviceVar = (D->hasAttr<CUDADeviceAttr>() &&
-                              !D->getAttr<CUDADeviceAttr>()->isImplicit()) ||
-                             (D->hasAttr<CUDAConstantAttr>() &&
-                              !D->getAttr<CUDAConstantAttr>()->isImplicit());
+  auto [Device, Constant, Managed, Global] =
+      D->findAttrs<CUDADeviceAttr, CUDAConstantAttr, HIPManagedAttr,
+                   CUDAGlobalAttr>();
+  bool IsExplicitDeviceVar = (Device && !Device->isImplicit()) ||
+                             (Constant && !Constant->isImplicit());
   // CUDA/HIP: managed variables need to be externalized since it is
   // a declaration in IR, therefore cannot have internal linkage. Kernels in
   // anonymous name space needs to be externalized to avoid duplicate symbols.
-  return (IsInternalVar &&
-          (D->hasAttr<HIPManagedAttr>() || IsExplicitDeviceVar)) ||
-         (D->hasAttr<CUDAGlobalAttr>() &&
-          basicGVALinkageForFunction(*this, cast<FunctionDecl>(D)) ==
-              GVA_Internal);
+  return (IsInternalVar && (Managed || IsExplicitDeviceVar)) ||
+         (Global && basicGVALinkageForFunction(*this, cast<FunctionDecl>(D)) ==
+                        GVA_Internal);
 }
 
 bool ASTContext::shouldExternalize(const Decl *D) const {
   return mayExternalize(D) &&
-         (D->hasAttr<HIPManagedAttr>() || D->hasAttr<CUDAGlobalAttr>() ||
+         (D->hasAnyAttr<HIPManagedAttr, CUDAGlobalAttr>() ||
           CUDADeviceVarODRUsedByHost.count(cast<VarDecl>(D)));
 }
 

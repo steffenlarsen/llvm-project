@@ -2386,7 +2386,8 @@ static const CXXMethodDecl *computeKeyFunction(ASTContext &Context,
           continue;
       } else {
         // In host mode ignore __device__-only methods.
-        if (!MD->hasAttr<CUDAHostAttr>() && MD->hasAttr<CUDADeviceAttr>())
+        auto [Host, Device] = MD->findAttrs<CUDAHostAttr, CUDADeviceAttr>();
+        if (!Host && Device)
           continue;
       }
     }

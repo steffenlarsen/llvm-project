@@ -2045,8 +2045,7 @@ static bool ShouldDiagnoseUnusedDecl(const LangOptions &LangOpts,
   if (D->isPlaceholderVar(LangOpts))
     return false;
 
-  if (D->hasAttr<UnusedAttr>() || D->hasAttr<ObjCPreciseLifetimeAttr>() ||
-      D->hasAttr<CleanupAttr>())
+  if (D->hasAnyAttr<UnusedAttr, ObjCPreciseLifetimeAttr, CleanupAttr>())
     return false;
 
   if (isa<LabelDecl>(D))
@@ -7283,7 +7282,8 @@ static void checkLifetimeBoundAttr(Sema &S, NamedDecl &ND) {
 }
 
 static void checkModularFormatAttr(Sema &S, NamedDecl &ND) {
-  if (ND.hasAttr<ModularFormatAttr>() && !ND.hasAttr<FormatAttr>())
+  auto [Modular, Format] = ND.findAttrs<ModularFormatAttr, FormatAttr>();
+  if (Modular && !Format)
     S.Diag(ND.getLocation(), diag::err_modular_format_attribute_no_format);
 }
 
@@ -7488,8 +7488,8 @@ static bool isIncompleteDeclExternC(Sema &S, const T *D) {
       return false;
 
     // So do CUDA's host/device attributes.
-    if (S.getLangOpts().CUDA && (D->template hasAttr<CUDADeviceAttr>() ||
-                                 D->template hasAttr<CUDAHostAttr>()))
+    if (S.getLangOpts().CUDA &&
+        D->template hasAnyAttr<CUDADeviceAttr, CUDAHostAttr>())
       return false;
   }
   return D->isExternC();
@@ -8336,8 +8336,7 @@ NamedDecl *Sema::ActOnVariableDeclarator(
     // CUDA B.2.5: "__shared__ and __constant__ variables have implied static
     // storage [duration]."
     if (SC == SC_None && S->getFnParent() != nullptr &&
-        (NewVD->hasAttr<CUDASharedAttr>() ||
-         NewVD->hasAttr<CUDAConstantAttr>())) {
+        NewVD->hasAnyAttr<CUDASharedAttr, CUDAConstantAttr>()) {
       NewVD->setStorageClass(SC_Static);
     }
   }
@@ -9141,8 +9140,7 @@ void Sema::CheckVariableDeclarationType(VarDecl *NewVD) {
   // zero sized static arrays are not allowed in HIP device functions
   if (getLangOpts().HIP && LangOpts.CUDAIsDevice) {
     if (FunctionDecl *FD = getCurFunctionDecl();
-        FD &&
-        (FD->hasAttr<CUDADeviceAttr>() || FD->hasAttr<CUDAGlobalAttr>())) {
+        FD && FD->hasAnyAttr<CUDADeviceAttr, CUDAGlobalAttr>()) {
       if (const ConstantArrayType *ArrayT =
               getASTContext().getAsConstantArrayType(T);
           ArrayT && ArrayT->isZeroSize()) {
@@ -9152,8 +9150,7 @@ void Sema::CheckVariableDeclarationType(VarDecl *NewVD) {
   }
 
   bool isVM = T->isVariablyModifiedType();
-  if (isVM || NewVD->hasAttr<CleanupAttr>() ||
-      NewVD->hasAttr<BlocksAttr>())
+  if (isVM || NewVD->hasAnyAttr<CleanupAttr, BlocksAttr>())
     setFunctionHasBranchProtectedScope();
 
   if ((isVM && NewVD->hasLinkage()) ||
@@ -11376,14 +11373,18 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
 
   // Diagnose availability attributes. Availability cannot be used on functions
   // that are run during load/unload.
-  if (const auto *attr = NewFD->getAttr<AvailabilityAttr>()) {
-    if (NewFD->hasAttr<ConstructorAttr>()) {
-      Diag(attr->getLocation(), diag::warn_availability_on_static_initializer)
+  auto [AvailAttr, CtorAttr, DtorAttr] =
+      NewFD->findAttrs<AvailabilityAttr, ConstructorAttr, DestructorAttr>();
+  if (AvailAttr) {
+    if (CtorAttr) {
+      Diag(AvailAttr->getLocation(),
+           diag::warn_availability_on_static_initializer)
           << 1;
       NewFD->dropAttr<AvailabilityAttr>();
     }
-    if (NewFD->hasAttr<DestructorAttr>()) {
-      Diag(attr->getLocation(), diag::warn_availability_on_static_initializer)
+    if (DtorAttr) {
+      Diag(AvailAttr->getLocation(),
+           diag::warn_availability_on_static_initializer)
           << 2;
       NewFD->dropAttr<AvailabilityAttr>();
     }
@@ -13984,14 +13985,14 @@ bool Sema::GloballyUniqueObjectMightBeAccidentallyDuplicated(
   // 2. On windows, it has no import/export annotation, and neither does the
   // class which directly contains it.
   if (Context.getTargetInfo().shouldDLLImportComdatSymbols()) {
-    if (Target->hasAttr<DLLExportAttr>() || Target->hasAttr<DLLImportAttr>())
+    if (Target->hasAnyAttr<DLLExportAttr, DLLImportAttr>())
       return false;
 
     // If the variable isn't directly annotated, check to see if it's a member
     // of an annotated class.
     const CXXRecordDecl *Ctx =
         dyn_cast<CXXRecordDecl>(Target->getDeclContext());
-    if (Ctx && (Ctx->hasAttr<DLLExportAttr>() || Ctx->hasAttr<DLLImportAttr>()))
+    if (Ctx && Ctx->hasAnyAttr<DLLExportAttr, DLLImportAttr>())
       return false;
 
   } else if (Lnk.getVisibility() != HiddenVisibility) {
@@ -14188,7 +14189,7 @@ void Sema::AddInitializerToDecl(Decl *RealDecl, Expr *Init, bool DirectInit) {
       VDecl->getFormalLinkage() == Linkage::External && !VDecl->isInline() &&
       !VDecl->isTemplated() && !isa<VarTemplateSpecializationDecl>(VDecl) &&
       !VDecl->getInstantiatedFromStaticDataMember() &&
-      !(VDecl->hasAttr<SelectAnyAttr>() || VDecl->hasAttr<WeakAttr>())) {
+      !VDecl->hasAnyAttr<SelectAnyAttr, WeakAttr>()) {
     Diag(VDecl->getLocation(), diag::err_extern_def_in_header_unit);
     VDecl->setInvalidDecl();
   }
@@ -15401,9 +15402,9 @@ void Sema::CheckStaticLocalForDllExport(VarDecl *VD) {
   auto *FD = dyn_cast_or_null<FunctionDecl>(VD->getParentFunctionOrMethod());
 
   // Find outermost function when VD is in lambda function.
-  while (FD && !getDLLAttr(FD) &&
-         !FD->hasAttr<DLLExportStaticLocalAttr>() &&
-         !FD->hasAttr<DLLImportStaticLocalAttr>()) {
+  while (
+      FD && !getDLLAttr(FD) &&
+      !FD->hasAnyAttr<DLLExportStaticLocalAttr, DLLImportStaticLocalAttr>()) {
     FD = dyn_cast_or_null<FunctionDecl>(FD->getParentFunctionOrMethod());
   }
 
@@ -16617,7 +16618,7 @@ Decl *Sema::ActOnStartOfFunctionDef(Scope *FnBodyScope, Decl *D,
       BodyKind != FnBodyKind::Delete && BodyKind != FnBodyKind::Default &&
       FD->getFormalLinkage() == Linkage::External && !FD->isTemplated() &&
       !FD->isTemplateInstantiation() &&
-      !(FD->hasAttr<SelectAnyAttr>() || FD->hasAttr<WeakAttr>())) {
+      !FD->hasAnyAttr<SelectAnyAttr, WeakAttr>()) {
     assert(FD->isThisDeclarationADefinition());
     Diag(FD->getLocation(), diag::err_extern_def_in_header_unit);
     FD->setInvalidDecl();
@@ -17670,7 +17671,7 @@ void Sema::AddKnownFunctionAttributes(FunctionDecl *FD) {
     if (Context.BuiltinInfo.isConst(BuiltinID) && !FD->hasAttr<ConstAttr>())
       FD->addAttr(ConstAttr::CreateImplicit(Context, FD->getLocation()));
     if (getLangOpts().CUDA && Context.BuiltinInfo.isTSBuiltin(BuiltinID) &&
-        !FD->hasAttr<CUDADeviceAttr>() && !FD->hasAttr<CUDAHostAttr>()) {
+        !FD->hasAnyAttr<CUDADeviceAttr, CUDAHostAttr>()) {
       // Add the appropriate attribute, depending on the CUDA compilation mode
       // and which target the builtin belongs to. For example, during host
       // compilation, aux builtins are __device__, while the rest are __host__.
@@ -20466,14 +20467,15 @@ void Sema::ActOnFields(Scope *S, SourceLocation RecLoc, Decl *EnclosingDecl,
     // Maybe randomize the record's decls. We automatically randomize a record
     // of function pointers, unless it has the "no_randomize_layout" attribute.
     if (!getLangOpts().CPlusPlus && !getLangOpts().RandstructSeed.empty() &&
-        !Record->isRandomized() && !Record->isUnion() &&
-        (Record->hasAttr<RandomizeLayoutAttr>() ||
-         (!Record->hasAttr<NoRandomizeLayoutAttr>() &&
-          EntirelyFunctionPointers(Record)))) {
-      SmallVector<Decl *, 32> NewDeclOrdering;
-      if (randstruct::randomizeStructureLayout(Context, Record,
-                                               NewDeclOrdering))
-        Record->reorderDecls(NewDeclOrdering);
+        !Record->isRandomized() && !Record->isUnion()) {
+      auto [Randomize, NoRandomize] =
+          Record->findAttrs<RandomizeLayoutAttr, NoRandomizeLayoutAttr>();
+      if (Randomize || (!NoRandomize && EntirelyFunctionPointers(Record))) {
+        SmallVector<Decl *, 32> NewDeclOrdering;
+        if (randstruct::randomizeStructureLayout(Context, Record,
+                                                 NewDeclOrdering))
+          Record->reorderDecls(NewDeclOrdering);
+      }
     }
 
     // We may have deferred checking for a deleted destructor. Check now.
@@ -21426,9 +21428,9 @@ Sema::FunctionEmissionStatus Sema::getEmissionStatus(const FunctionDecl *FD,
   if (FD->isDependentContext())
     return FunctionEmissionStatus::TemplateDiscarded;
 
-  if (LangOpts.SYCLIsDevice && (FD->hasAttr<SYCLKernelAttr>() ||
-                                FD->hasAttr<SYCLKernelEntryPointAttr>() ||
-                                FD->hasAttr<SYCLExternalAttr>()))
+  if (LangOpts.SYCLIsDevice &&
+      FD->hasAnyAttr<SYCLKernelAttr, SYCLKernelEntryPointAttr,
+                     SYCLExternalAttr>())
     return FunctionEmissionStatus::Emitted;
 
   // Check whether this function is an externally visible definition.

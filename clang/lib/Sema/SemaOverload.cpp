@@ -13488,8 +13488,8 @@ bool OverloadCandidateSet::shouldDeferDiags(Sema &S, ArrayRef<Expr *> Args,
           return (Cand.Viable == false &&
                   Cand.FailureKind == ovl_fail_bad_target) ||
                  (Cand.Function &&
-                  Cand.Function->template hasAttr<CUDAHostAttr>() &&
-                  Cand.Function->template hasAttr<CUDADeviceAttr>());
+                  Cand.Function
+                      ->template hasAllAttr<CUDAHostAttr, CUDADeviceAttr>());
         });
     DeferHint = !WrongSidedCands.empty();
   }
@@ -13584,8 +13584,7 @@ bool OverloadCandidateSet::shouldDeferTemplateArgumentDeduction(
     // Overloading based on __host__ and __device__ attributes takes
     // higher priority, HD functions may favor template candidates even when a
     // non-template candidate would be a perfect match.
-    if (Caller && Caller->hasAttr<CUDAHostAttr>() &&
-        Caller->hasAttr<CUDADeviceAttr>())
+    if (Caller && Caller->hasAllAttr<CUDAHostAttr, CUDADeviceAttr>())
       return false;
   }
 

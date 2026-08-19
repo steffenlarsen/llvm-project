@@ -422,8 +422,8 @@ static bool hasDirectVisibilityAttribute(const NamedDecl *D,
   if (computation.IgnoreAllVisibility)
     return false;
 
-  return (computation.isTypeVisibility() && D->hasAttr<TypeVisibilityAttr>()) ||
-         D->hasAttr<VisibilityAttr>();
+  auto [TypeVis, Vis] = D->findAttrs<TypeVisibilityAttr, VisibilityAttr>();
+  return (computation.isTypeVisibility() && TypeVis) || Vis;
 }
 
 /// Should we consider visibility associated with the template
@@ -2149,17 +2149,19 @@ void VarDecl::setStorageClass(StorageClass SC) {
 
 VarDecl::TLSKind VarDecl::getTLSKind() const {
   switch (VarDeclBits.TSCSpec) {
-  case TSCS_unspecified:
-    if (!hasAttr<ThreadAttr>() &&
+  case TSCS_unspecified: {
+    auto [Thread, OMPThreadPrivate] =
+        findAttrs<ThreadAttr, OMPThreadPrivateDeclAttr>();
+    if (!Thread &&
         !(getASTContext().getLangOpts().OpenMPUseTLS &&
-          getASTContext().getTargetInfo().isTLSSupported() &&
-          hasAttr<OMPThreadPrivateDeclAttr>()))
+          getASTContext().getTargetInfo().isTLSSupported() && OMPThreadPrivate))
       return TLS_None;
     return ((getASTContext().getLangOpts().isCompatibleWithMSVC(
                 LangOptions::MSVC2015)) ||
-            hasAttr<OMPThreadPrivateDeclAttr>())
+            OMPThreadPrivate)
                ? TLS_Dynamic
                : TLS_Static;
+  }
   case TSCS___thread: // Fall through.
   case TSCS__Thread_local:
     return TLS_Static;
@@ -3693,8 +3695,7 @@ bool FunctionDecl::isGlobal() const {
 }
 
 bool FunctionDecl::isNoReturn() const {
-  if (hasAttr<NoReturnAttr>() || hasAttr<CXX11NoReturnAttr>() ||
-      hasAttr<C11NoReturnAttr>())
+  if (hasAnyAttr<NoReturnAttr, CXX11NoReturnAttr, C11NoReturnAttr>())
     return true;
 
   if (auto *FnTy = getType()->getAs<FunctionType>())
@@ -3752,8 +3753,7 @@ bool FunctionDecl::isCPUSpecificMultiVersion() const {
 }
 
 bool FunctionDecl::isTargetMultiVersion() const {
-  return isMultiVersion() &&
-         (hasAttr<TargetAttr>() || hasAttr<TargetVersionAttr>());
+  return isMultiVersion() && hasAnyAttr<TargetAttr, TargetVersionAttr>();
 }
 
 bool FunctionDecl::isTargetMultiVersionDefault() const {
@@ -3806,12 +3806,15 @@ FunctionDecl *FunctionDecl::getCanonicalDecl() { return getFirstDecl(); }
 unsigned FunctionDecl::getBuiltinID(bool ConsiderWrapperFunctions) const {
   unsigned BuiltinID = 0;
 
-  if (const auto *ABAA = getAttr<ArmBuiltinAliasAttr>()) {
+  auto [ABAA, BAA, BA, OA] = findAttrs<ArmBuiltinAliasAttr, BuiltinAliasAttr,
+                                       BuiltinAttr, OverloadableAttr>();
+
+  if (ABAA) {
     BuiltinID = ABAA->getBuiltinName()->getBuiltinID();
-  } else if (const auto *BAA = getAttr<BuiltinAliasAttr>()) {
+  } else if (BAA) {
     BuiltinID = BAA->getBuiltinName()->getBuiltinID();
-  } else if (const auto *A = getAttr<BuiltinAttr>()) {
-    BuiltinID = A->getID();
+  } else if (BA) {
+    BuiltinID = BA->getID();
   }
 
   if (!BuiltinID)
@@ -3819,8 +3822,7 @@ unsigned FunctionDecl::getBuiltinID(bool ConsiderWrapperFunctions) const {
 
   // If the function is marked "overloadable", it has a different mangled name
   // and is not the C library function.
-  if (!ConsiderWrapperFunctions && hasAttr<OverloadableAttr>() &&
-      (!hasAttr<ArmBuiltinAliasAttr>() && !hasAttr<BuiltinAliasAttr>()))
+  if (!ConsiderWrapperFunctions && OA && !ABAA && !BAA)
     return 0;
 
   if (getASTContext().getLangOpts().CPlusPlus &&
@@ -3847,10 +3849,12 @@ unsigned FunctionDecl::getBuiltinID(bool ConsiderWrapperFunctions) const {
 
   // CUDA does not have device-side standard library. printf and malloc are the
   // only special cases that are supported by device-side runtime.
-  if (Context.getLangOpts().CUDA && hasAttr<CUDADeviceAttr>() &&
-      !hasAttr<CUDAHostAttr>() &&
-      !(BuiltinID == Builtin::BIprintf || BuiltinID == Builtin::BImalloc))
-    return 0;
+  if (Context.getLangOpts().CUDA) {
+    auto [CUDADevice, CUDAHost] = findAttrs<CUDADeviceAttr, CUDAHostAttr>();
+    if (CUDADevice && !CUDAHost &&
+        !(BuiltinID == Builtin::BIprintf || BuiltinID == Builtin::BImalloc))
+      return 0;
+  }
 
   // As AMDGCN implementation of OpenMP does not have a device-side standard
   // library, none of the predefined library functions except printf and malloc
@@ -4559,8 +4563,8 @@ bool FunctionDecl::isImplicitHDExplicitInstantiation() const {
   auto HasImplicitAttr = [this](const Attr *A) {
     return A ? A->isImplicit() : isImplicit();
   };
-  if (!HasImplicitAttr(getAttr<CUDAHostAttr>()) ||
-      !HasImplicitAttr(getAttr<CUDADeviceAttr>()))
+  auto [Host, Device] = findAttrs<CUDAHostAttr, CUDADeviceAttr>();
+  if (!HasImplicitAttr(Host) || !HasImplicitAttr(Device))
     return false;
   auto IsExplicitInstTSK = [](TemplateSpecializationKind TSK) {
     return TSK == TSK_ExplicitInstantiationDeclaration ||
@@ -5644,8 +5648,7 @@ void ValueDecl::anchor() {}
 
 bool ValueDecl::isWeak() const {
   auto *MostRecent = getMostRecentDecl();
-  return MostRecent->hasAttr<WeakAttr>() ||
-         MostRecent->hasAttr<WeakRefAttr>() || isWeakImported();
+  return MostRecent->hasAnyAttr<WeakAttr, WeakRefAttr>() || isWeakImported();
 }
 
 bool ValueDecl::isInitCapture() const {
@@ -5707,8 +5710,8 @@ FunctionDecl *FunctionDecl::CreateDeserialized(ASTContext &C, GlobalDeclID ID) {
 }
 
 bool FunctionDecl::isReferenceableKernel() const {
-  return hasAttr<CUDAGlobalAttr>() ||
-         DeviceKernelAttr::isOpenCLSpelling(getAttr<DeviceKernelAttr>());
+  auto [Global, Kernel] = findAttrs<CUDAGlobalAttr, DeviceKernelAttr>();
+  return Global || DeviceKernelAttr::isOpenCLSpelling(Kernel);
 }
 
 BlockDecl *BlockDecl::Create(ASTContext &C, DeclContext *DC, SourceLocation L) {

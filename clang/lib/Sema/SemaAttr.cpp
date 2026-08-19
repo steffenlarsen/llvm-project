@@ -102,7 +102,7 @@ void Sema::AddMsStructLayoutForRecord(RecordDecl *RD) {
 template <typename Attribute>
 static void addGslOwnerPointerAttributeIfNotExisting(ASTContext &Context,
                                                      CXXRecordDecl *Record) {
-  if (Record->hasAttr<OwnerAttr>() || Record->hasAttr<PointerAttr>())
+  if (Record->hasAnyAttr<OwnerAttr, PointerAttr>())
     return;
 
   for (Decl *Redecl : Record->redecls())
@@ -206,7 +206,7 @@ void Sema::inferGslOwnerPointerAttribute(CXXRecordDecl *Record) {
 
   // Handle classes that directly appear in std namespace.
   if (Record->isInStdNamespace()) {
-    if (Record->hasAttr<OwnerAttr>() || Record->hasAttr<PointerAttr>())
+    if (Record->hasAnyAttr<OwnerAttr, PointerAttr>())
       return;
 
     if (StdOwners.count(Record->getName()))
@@ -1348,7 +1348,7 @@ void Sema::ModifyFnAttributesMSPragmaOptimize(FunctionDecl *FD) {
 void Sema::AddOptnoneAttributeIfNoConflicts(FunctionDecl *FD,
                                             SourceLocation Loc) {
   // Don't add a conflicting attribute. No diagnostic is needed.
-  if (FD->hasAttr<MinSizeAttr>() || FD->hasAttr<AlwaysInlineAttr>())
+  if (FD->hasAnyAttr<MinSizeAttr, AlwaysInlineAttr>())
     return;
 
   // Add attributes only if required. Optnone requires noinline as well, but if

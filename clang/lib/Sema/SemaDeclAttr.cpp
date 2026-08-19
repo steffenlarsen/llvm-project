@@ -8523,9 +8523,10 @@ ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D, const ParsedAttr &AL,
 
 static bool isKernelDecl(Decl *D) {
   const FunctionType *FnTy = D->getFunctionType();
-  return D->hasAttr<DeviceKernelAttr>() ||
+  auto [Kernel, Global] = D->findAttrs<DeviceKernelAttr, CUDAGlobalAttr>();
+  return Kernel ||
          (FnTy && FnTy->getCallConv() == CallingConv::CC_DeviceKernel) ||
-         D->hasAttr<CUDAGlobalAttr>();
+         Global;
 }
 
 static void checkAMDGPUReqdWorkGroupSize(Sema &S, Decl *D) {
@@ -8575,7 +8576,8 @@ void Sema::ProcessDeclAttributeList(
   // GCC accepts
   // static int a9 __attribute__((weakref));
   // but that looks really pointless. We reject it.
-  if (D->hasAttr<WeakRefAttr>() && !D->hasAttr<AliasAttr>()) {
+  auto [WeakRef, Alias] = D->findAttrs<WeakRefAttr, AliasAttr>();
+  if (WeakRef && !Alias) {
     Diag(AttrList.begin()->getLoc(), diag::err_attribute_weakref_without_alias)
         << cast<NamedDecl>(D);
     D->dropAttr<WeakRefAttr>();
@@ -8586,9 +8588,10 @@ void Sema::ProcessDeclAttributeList(
   // good to have a way to specify "these attributes must appear as a group",
   // for these. Additionally, it would be good to have a way to specify "these
   // attribute must never appear as a group" for attributes like cold and hot.
-  if (!(D->hasAttr<DeviceKernelAttr>() ||
-        (D->hasAttr<CUDAGlobalAttr>() &&
-         Context.getTargetInfo().getTriple().isSPIRV()))) {
+  auto [KernelAttr, GlobalAttr] =
+      D->findAttrs<DeviceKernelAttr, CUDAGlobalAttr>();
+  if (!(KernelAttr ||
+        (GlobalAttr && Context.getTargetInfo().getTriple().isSPIRV()))) {
     // These attributes cannot be applied to a non-kernel function.
     if (const auto *A = D->getAttr<ReqdWorkGroupSizeAttr>()) {
       // FIXME: This emits a different error message than
@@ -8652,11 +8655,12 @@ void Sema::ProcessDeclAttributeList(
     }
 
   // Do not permit 'constructor' or 'destructor' attributes on __device__ code.
-  if (getLangOpts().CUDAIsDevice && D->hasAttr<CUDADeviceAttr>() &&
-      (D->hasAttr<ConstructorAttr>() || D->hasAttr<DestructorAttr>()) &&
+  auto [DeviceAttr, CtorAttr, DtorAttr] =
+      D->findAttrs<CUDADeviceAttr, ConstructorAttr, DestructorAttr>();
+  if (getLangOpts().CUDAIsDevice && DeviceAttr && (CtorAttr || DtorAttr) &&
       !getLangOpts().GPUAllowDeviceInit) {
     Diag(D->getLocation(), diag::err_cuda_ctor_dtor_attrs)
-        << (D->hasAttr<ConstructorAttr>() ? "constructors" : "destructors");
+        << (CtorAttr ? "constructors" : "destructors");
     D->setInvalidDecl();
   }
 

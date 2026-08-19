@@ -2314,18 +2314,18 @@ static bool CheckLValueConstantExpression(EvalInfo &Info, SourceLocation Loc,
           !Var->isStaticLocal())
         return false;
 
-      // Address of a managed variable is never a constant expression.
-      if (Info.getLangOpts().CUDA && Var->hasAttr<HIPManagedAttr>())
-        return false;
-
-      // In CUDA/HIP device compilation, only device side variables have
-      // constant addresses.
-      if (Info.getLangOpts().CUDA && Info.getLangOpts().CUDAIsDevice &&
-          Info.Ctx.CUDAConstantEvalCtx.NoWrongSidedVars) {
-        if ((!Var->hasAttr<CUDADeviceAttr>() &&
-             !Var->hasAttr<CUDAConstantAttr>() &&
-             !Var->getType()->isCUDADeviceBuiltinSurfaceType() &&
-             !Var->getType()->isCUDADeviceBuiltinTextureType()))
+      if (Info.getLangOpts().CUDA) {
+        auto [Device, Constant, Managed] =
+            Var->findAttrs<CUDADeviceAttr, CUDAConstantAttr, HIPManagedAttr>();
+        // Address of a managed variable is never a constant expression.
+        if (Managed)
+          return false;
+        // In CUDA/HIP device compilation, only device side variables have
+        // constant addresses.
+        if (!Device && !Constant && Info.getLangOpts().CUDAIsDevice &&
+            Info.Ctx.CUDAConstantEvalCtx.NoWrongSidedVars &&
+            !Var->getType()->isCUDADeviceBuiltinSurfaceType() &&
+            !Var->getType()->isCUDADeviceBuiltinTextureType())
           return false;
       }
     }

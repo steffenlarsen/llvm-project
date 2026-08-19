@@ -654,9 +654,7 @@ void Sema::checkDeprecatedCommand(const BlockCommandComment *Command) {
   if (!D)
     return;
 
-  if (D->hasAttr<DeprecatedAttr>() ||
-      D->hasAttr<AvailabilityAttr>() ||
-      D->hasAttr<UnavailableAttr>())
+  if (D->hasAnyAttr<DeprecatedAttr, AvailabilityAttr, UnavailableAttr>())
     return;
 
   Diag(Command->getLocation(), diag::warn_doc_deprecated_not_sync)

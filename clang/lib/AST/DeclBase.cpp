@@ -634,19 +634,16 @@ ExternalSourceSymbolAttr *Decl::getExternalSourceSymbolAttr() const {
   return nullptr;
 }
 
-bool Decl::hasDefiningAttr() const {
-  return hasAttr<AliasAttr>() || hasAttr<IFuncAttr>() ||
-         hasAttr<LoaderUninitializedAttr>();
-}
+bool Decl::hasDefiningAttr() const { return getDefiningAttr() != nullptr; }
 
 const Attr *Decl::getDefiningAttr() const {
-  if (auto *AA = getAttr<AliasAttr>())
+  auto [AA, IFA, NZA] =
+      findAttrs<AliasAttr, IFuncAttr, LoaderUninitializedAttr>();
+  if (AA)
     return AA;
-  if (auto *IFA = getAttr<IFuncAttr>())
+  if (IFA)
     return IFA;
-  if (auto *NZA = getAttr<LoaderUninitializedAttr>())
-    return NZA;
-  return nullptr;
+  return NZA;
 }
 
 static StringRef getRealizedPlatform(const AvailabilityAttr *A,
@@ -1079,17 +1076,38 @@ const AttrVec &Decl::getAttrs() const {
   return getASTContext().getDeclAttrs(this);
 }
 
-Decl *Decl::castFromDeclContext (const DeclContext *D) {
-  Decl::Kind DK = D->getDeclKind();
-  switch (DK) {
+namespace {
+/// Byte distance from a DeclContext subobject to the enclosing Decl subobject.
+/// Both are non-virtual bases, so this is a constant per concrete class. The
+/// storage is never constructed or read; only the base adjustments are used.
+template <typename T> ptrdiff_t declContextToDeclOffset() {
+  alignas(T) static char Storage[sizeof(T)];
+  auto *P = reinterpret_cast<T *>(Storage);
+  return reinterpret_cast<char *>(static_cast<Decl *>(P)) -
+         reinterpret_cast<char *>(static_cast<DeclContext *>(P));
+}
+
+/// castFromDeclContext runs ~2e9 times in a large build and its DeclKind
+/// switch is one of the top branch-misprediction sources in clang. The
+/// adjustment is a constant per kind, so index a table instead of branching.
+struct DeclContextOffsetTable {
+  ptrdiff_t Offsets[Decl::Kind::lastDecl + 1] = {};
+
+  DeclContextOffsetTable() {
 #define DECL(NAME, BASE)
 #define DECL_CONTEXT(NAME)                                                     \
-  case Decl::NAME:                                                             \
-    return static_cast<NAME##Decl *>(const_cast<DeclContext *>(D));
+  Offsets[Decl::NAME] = declContextToDeclOffset<NAME##Decl>();
 #include "clang/AST/DeclNodes.inc"
-  default:
-    llvm_unreachable("a decl that inherits DeclContext isn't handled");
   }
+};
+
+const DeclContextOffsetTable DeclContextOffsets;
+} // namespace
+
+Decl *Decl::castFromDeclContext(const DeclContext *D) {
+  return reinterpret_cast<Decl *>(
+      reinterpret_cast<char *>(const_cast<DeclContext *>(D)) +
+      DeclContextOffsets.Offsets[D->getDeclKind()]);
 }
 
 DeclContext *Decl::castToDeclContext(const Decl *D) {

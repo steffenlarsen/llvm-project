@@ -998,7 +998,7 @@ void Sema::getUndefinedButUsed(
     if (isa<CXXDeductionGuideDecl>(ND))
       continue;
 
-    if (ND->hasAttr<DLLImportAttr>() || ND->hasAttr<DLLExportAttr>()) {
+    if (ND->hasAnyAttr<DLLImportAttr, DLLExportAttr>()) {
       // An exported function will always be emitted when defined, so even if
       // the function is inline, it doesn't have to be emitted in this TU. An
       // imported function implies that it has been exported somewhere else.

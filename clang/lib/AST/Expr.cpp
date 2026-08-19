@@ -2826,8 +2826,7 @@ bool Expr::isUnusedResultAWarning(const Expr *&WarnE, SourceLocation &Loc,
     // Note: If new cases are added here, DiagnoseUnusedExprResult should be
     // updated to match for QoI.
     const Decl *FD = CE->getCalleeDecl();
-    bool PureOrConst =
-        FD && (FD->hasAttr<PureAttr>() || FD->hasAttr<ConstAttr>());
+    bool PureOrConst = FD && FD->hasAnyAttr<PureAttr, ConstAttr>();
     if (CE->hasUnusedResultAttr(Ctx) || PureOrConst) {
       WarnE = this;
       Loc = getBeginLoc();
@@ -3807,7 +3806,7 @@ bool Expr::HasSideEffects(const ASTContext &Ctx,
     // to pure/const functions that definitely don't.
     // If the call itself is considered side-effect free, check the operands.
     const Decl *FD = cast<CallExpr>(this)->getCalleeDecl();
-    bool IsPure = FD && (FD->hasAttr<ConstAttr>() || FD->hasAttr<PureAttr>());
+    bool IsPure = FD && FD->hasAnyAttr<ConstAttr, PureAttr>();
     if (IsPure || !IncludePossibleEffects)
       break;
     return true;

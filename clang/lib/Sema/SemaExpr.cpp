@@ -7159,8 +7159,8 @@ ExprResult Sema::BuildResolvedCallExpr(Expr *Fn, NamedDecl *NDecl,
   // no_caller_saved_registers since there is no efficient way to
   // save and restore the non-GPR state.
   if (auto *Caller = getCurFunctionDecl()) {
-    if (Caller->hasAttr<AnyX86InterruptAttr>() ||
-        Caller->hasAttr<AnyX86NoCallerSavedRegistersAttr>()) {
+    if (Caller->hasAnyAttr<AnyX86InterruptAttr,
+                           AnyX86NoCallerSavedRegistersAttr>()) {
       const TargetInfo &TI = Context.getTargetInfo();
       bool HasNonGPRRegisters =
           TI.hasFeature("sse") || TI.hasFeature("x87") || TI.hasFeature("mmx");
@@ -19325,6 +19325,8 @@ MarkVarDeclODRUsed(ValueDecl *V, SourceLocation Loc, Sema &SemaRef,
     auto *FD = dyn_cast_or_null<FunctionDecl>(SemaRef.CurContext);
     auto VarTarget = SemaRef.CUDA().IdentifyTarget(Var);
     auto UserTarget = SemaRef.CUDA().IdentifyTarget(FD);
+    auto [DeviceAttr, SharedAttr] =
+        Var->findAttrs<CUDADeviceAttr, CUDASharedAttr>();
     if (VarTarget == SemaCUDA::CVT_Host &&
         (UserTarget == CUDAFunctionTarget::Device ||
          UserTarget == CUDAFunctionTarget::HostDevice ||
@@ -19346,10 +19348,9 @@ MarkVarDeclODRUsed(ValueDecl *V, SourceLocation Loc, Sema &SemaRef,
                 // an explicit CUDADeviceAttr to distinguish them from plain
                 // const variables (no __device__), which also get CVT_Both but
                 // only have an implicit CUDADeviceAttr.
-                (VarTarget == SemaCUDA::CVT_Both &&
-                 Var->hasAttr<CUDADeviceAttr>() &&
-                 !Var->getAttr<CUDADeviceAttr>()->isImplicit())) &&
-               !Var->hasAttr<CUDASharedAttr>() &&
+                (VarTarget == SemaCUDA::CVT_Both && DeviceAttr &&
+                 !DeviceAttr->isImplicit())) &&
+               !SharedAttr &&
                (UserTarget == CUDAFunctionTarget::Host ||
                 UserTarget == CUDAFunctionTarget::HostDevice)) {
       // Record a CUDA/HIP device side variable if it is ODR-used

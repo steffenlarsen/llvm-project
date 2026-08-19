@@ -1448,8 +1448,7 @@ void SemaObjC::AddCFAuditedAttribute(Decl *D) {
     return;
 
   // Don't add a redundant or conflicting attribute.
-  if (D->hasAttr<CFAuditedTransferAttr>() ||
-      D->hasAttr<CFUnknownTransferAttr>())
+  if (D->hasAnyAttr<CFAuditedTransferAttr, CFUnknownTransferAttr>())
     return;
 
   AttributeCommonInfo Info(IdLoc.getIdentifierInfo(),

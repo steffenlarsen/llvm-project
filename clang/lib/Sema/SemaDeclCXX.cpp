@@ -3296,7 +3296,7 @@ void Sema::CheckOverrideControl(NamedDecl *D) {
     return;
 
   // We only care about "override" and "final" declarations.
-  if (!D->hasAttr<OverrideAttr>() && !D->hasAttr<FinalAttr>())
+  if (!D->hasAnyAttr<OverrideAttr, FinalAttr>())
     return;
 
   CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(D);

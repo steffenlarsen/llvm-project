@@ -274,9 +274,8 @@ bool SemaObjC::CheckARCMethodDecl(ObjCMethodDecl *method) {
   case OMF_copy:
   case OMF_mutableCopy:
   case OMF_new:
-    if (method->hasAttr<NSReturnsRetainedAttr>() ||
-        method->hasAttr<NSReturnsNotRetainedAttr>() ||
-        method->hasAttr<NSReturnsAutoreleasedAttr>())
+    if (method->hasAnyAttr<NSReturnsRetainedAttr, NSReturnsNotRetainedAttr,
+                           NSReturnsAutoreleasedAttr>())
       return false;
     break;
   }
@@ -2653,8 +2652,7 @@ void SemaObjC::WarnExactTypedMethods(ObjCMethodDecl *ImpMethodDecl,
     return;
   // don't issue warning when primary class's method is
   // deprecated/unavailable.
-  if (MethodDecl->hasAttr<UnavailableAttr>() ||
-      MethodDecl->hasAttr<DeprecatedAttr>())
+  if (MethodDecl->hasAnyAttr<UnavailableAttr, DeprecatedAttr>())
     return;
 
   bool match = CheckMethodOverrideReturn(SemaRef, ImpMethodDecl, MethodDecl,
@@ -3280,11 +3278,13 @@ bool SemaObjC::MatchTwoMethodDeclarations(const ObjCMethodDecl *left,
   if (left->isDirectMethod() != right->isDirectMethod())
     return false;
 
+  auto [LeftRetained, LeftConsumesSelf] =
+      left->findAttrs<NSReturnsRetainedAttr, NSConsumesSelfAttr>();
+  auto [RightRetained, RightConsumesSelf] =
+      right->findAttrs<NSReturnsRetainedAttr, NSConsumesSelfAttr>();
   if (getLangOpts().ObjCAutoRefCount &&
-      (left->hasAttr<NSReturnsRetainedAttr>()
-         != right->hasAttr<NSReturnsRetainedAttr>() ||
-       left->hasAttr<NSConsumesSelfAttr>()
-         != right->hasAttr<NSConsumesSelfAttr>()))
+      ((LeftRetained != nullptr) != (RightRetained != nullptr) ||
+       (LeftConsumesSelf != nullptr) != (RightConsumesSelf != nullptr)))
     return false;
 
   ObjCMethodDecl::param_const_iterator
@@ -4204,8 +4204,9 @@ Decl *SemaObjC::ActOnAtEnd(Scope *S, SourceRange AtEnd,
       }
     }
 
-    if (IntfDecl->hasAttr<ObjCClassStubAttr>() &&
-        !IntfDecl->hasAttr<ObjCSubclassingRestrictedAttr>())
+    auto [ClassStub, SubclassingRestricted] =
+        IntfDecl->findAttrs<ObjCClassStubAttr, ObjCSubclassingRestrictedAttr>();
+    if (ClassStub && !SubclassingRestricted)
       Diag(IntfDecl->getLocation(), diag::err_class_stub_subclassing_mismatch);
   }
   DiagnoseVariableSizedIvars(SemaRef, OCD);

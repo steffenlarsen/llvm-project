@@ -1006,7 +1006,7 @@ void Sema::InstantiateAttrs(const MultiLevelTemplateArgumentList &TemplateArgs,
     // Existing DLL attribute on the instantiation takes precedence.
     if (TmplAttr->getKind() == attr::DLLExport ||
         TmplAttr->getKind() == attr::DLLImport) {
-      if (New->hasAttr<DLLExportAttr>() || New->hasAttr<DLLImportAttr>()) {
+      if (New->hasAnyAttr<DLLExportAttr, DLLImportAttr>()) {
         continue;
       }
     }

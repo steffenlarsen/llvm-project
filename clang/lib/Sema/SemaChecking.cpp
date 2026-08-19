@@ -4073,8 +4073,8 @@ Sema::CheckBuiltinFunctionCall(FunctionDecl *FDecl, unsigned BuiltinID,
       auto *D = DRE->getDecl();
       if (!isa<FunctionDecl>(D) && !isa<VarDecl>(D))
         return false;
-      return D->hasAttr<CUDAGlobalAttr>() || D->hasAttr<CUDADeviceAttr>() ||
-             D->hasAttr<CUDAConstantAttr>() || D->hasAttr<HIPManagedAttr>();
+      return D->hasAnyAttr<CUDAGlobalAttr, CUDADeviceAttr, CUDAConstantAttr,
+                           HIPManagedAttr>();
     };
     if (!Check(TheCall)) {
       Diag(TheCall->getBeginLoc(),
