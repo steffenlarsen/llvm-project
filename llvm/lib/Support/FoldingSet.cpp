@@ -258,10 +258,13 @@ void FoldingSetBase::GrowBucketCount(unsigned NewBucketCount,
   free(OldBuckets);
 }
 
-/// GrowHashTable - Double the size of the hash table and rehash everything.
+/// GrowHashTable - Grow the hash table and rehash everything.
 ///
+/// GrowBucketCount has to re-profile and re-hash every node it moves, so the
+/// total rehashing work over a table's lifetime is ~N/(GrowthFactor - 1).
+/// Growing by 4x instead of 2x cuts that from ~N to ~N/3.
 void FoldingSetBase::GrowHashTable(const FoldingSetInfo &Info) {
-  GrowBucketCount(NumBuckets * 2, Info);
+  GrowBucketCount(NumBuckets * 4, Info);
 }
 
 void FoldingSetBase::reserve(unsigned EltCount, const FoldingSetInfo &Info) {
