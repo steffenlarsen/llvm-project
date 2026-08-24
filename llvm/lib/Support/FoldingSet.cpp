@@ -169,6 +169,29 @@ static void **GetBucketFor(unsigned Hash, void **Buckets, unsigned NumBuckets) {
   return Buckets + BucketNum;
 }
 
+/// The InsertPos token returned by FindNodeOrInsertPos carries the ID's hash
+/// rather than a bucket pointer: the bucket is recoverable from the hash, and a
+/// hash cannot be invalidated by a nested operation on the same set, whereas a
+/// bucket pointer dangles if that operation grows the table.
+///
+/// The token holds 31 bits of hash plus a low tag bit, so that it fits a 32-bit
+/// uintptr_t and is never null. Discarding bit 31 cannot change a bucket
+/// assignment: GetBucketFor consumes only the low Log2(NumBuckets) bits, and
+/// NumBuckets is a power of two no larger than 2^31.
+static constexpr unsigned InsertPosHashBits = 31;
+
+/// The truncation held by both the InsertPos token and Node::CachedHash.
+static unsigned maskHash(unsigned Hash) {
+  return Hash & ((1u << InsertPosHashBits) - 1);
+}
+
+static void *encodeInsertPos(unsigned Hash) {
+  return reinterpret_cast<void *>((uintptr_t(maskHash(Hash)) << 1) | 1);
+}
+static unsigned decodeInsertPos(void *InsertPos) {
+  return static_cast<unsigned>(reinterpret_cast<uintptr_t>(InsertPos) >> 1);
+}
+
 /// AllocateBuckets - Allocated initialized bucket memory.
 static void **AllocateBuckets(unsigned NumBuckets) {
   void **Buckets = static_cast<void**>(safe_calloc(NumBuckets + 1,
@@ -236,8 +259,7 @@ void FoldingSetBase::GrowBucketCount(unsigned NewBucketCount,
   NumBuckets = NewBucketCount;
   NumNodes = 0;
 
-  // Walk the old buckets, rehashing nodes into their new place.
-  FoldingSetNodeID TempID;
+  // Walk the old buckets, re-bucketing nodes into their new place.
   for (unsigned i = 0; i != OldNumBuckets; ++i) {
     void *Probe = OldBuckets[i];
     if (!Probe) continue;
@@ -246,12 +268,9 @@ void FoldingSetBase::GrowBucketCount(unsigned NewBucketCount,
       Probe = NodeInBucket->getNextInBucket();
       NodeInBucket->SetNextInBucket(nullptr);
 
-      // Insert the node into the new bucket, after recomputing the hash.
-      InsertNode(NodeInBucket,
-                 GetBucketFor(Info.ComputeNodeHash(this, NodeInBucket, TempID),
-                              Buckets, NumBuckets),
+      // Reuse the hash recorded when the node was inserted.
+      InsertNode(NodeInBucket, encodeInsertPos(NodeInBucket->getCachedHash()),
                  Info);
-      TempID.clear();
     }
   }
 
@@ -261,7 +280,7 @@ void FoldingSetBase::GrowBucketCount(unsigned NewBucketCount,
 /// GrowHashTable - Double the size of the hash table and rehash everything.
 ///
 void FoldingSetBase::GrowHashTable(const FoldingSetInfo &Info) {
-  GrowBucketCount(NumBuckets * 2, Info);
+  GrowBucketCount(NumBuckets * 4, Info);
 }
 
 void FoldingSetBase::reserve(unsigned EltCount, const FoldingSetInfo &Info) {
@@ -284,17 +303,28 @@ FoldingSetBase::Node *FoldingSetBase::FindNodeOrInsertPos(
 
   InsertPos = nullptr;
 
+  // Reject on the cached hash before calling NodeEquals, which is an indirect
+  // call that for most node types re-profiles the entire node. This is the
+  // same trick FoldingSetTrait<SDVTListNode> hand-rolls, available to every
+  // set now that the hash is recorded at insertion.
+  unsigned MaskedIDHash = maskHash(IDHash);
+
   FoldingSetNodeID TempID;
   while (Node *NodeInBucket = GetNextPtr(Probe)) {
-    if (Info.NodeEquals(this, NodeInBucket, ID, IDHash, TempID))
+    if (NodeInBucket->getCachedHash() != MaskedIDHash) {
+      assert(!Info.NodeEquals(this, NodeInBucket, ID, IDHash, TempID) &&
+             "Stale cached hash: a node's profile must not change while the "
+             "node is in the FoldingSet");
+    } else if (Info.NodeEquals(this, NodeInBucket, ID, IDHash, TempID)) {
       return NodeInBucket;
+    }
     TempID.clear();
 
     Probe = NodeInBucket->getNextInBucket();
   }
 
-  // Didn't find the node, return null with the bucket as the InsertPos.
-  InsertPos = Bucket;
+  // Didn't find the node; hand back the hash so InsertNode can record it.
+  InsertPos = encodeInsertPos(IDHash);
   return nullptr;
 }
 
@@ -304,18 +334,16 @@ FoldingSetBase::Node *FoldingSetBase::FindNodeOrInsertPos(
 void FoldingSetBase::InsertNode(Node *N, void *InsertPos,
                                 const FoldingSetInfo &Info) {
   assert(!N->getNextInBucket());
+  unsigned Hash = decodeInsertPos(InsertPos);
+  N->setCachedHash(Hash);
+
   // Do we need to grow the hashtable?
-  if (NumNodes+1 > capacity()) {
+  if (NumNodes + 1 > capacity())
     GrowHashTable(Info);
-    FoldingSetNodeID TempID;
-    InsertPos = GetBucketFor(Info.ComputeNodeHash(this, N, TempID), Buckets,
-                             NumBuckets);
-  }
 
   ++NumNodes;
 
-  /// The insert position is actually a bucket pointer.
-  void **Bucket = static_cast<void**>(InsertPos);
+  void **Bucket = GetBucketFor(Hash, Buckets, NumBuckets);
 
   void *Next = *Bucket;
 

@@ -3390,7 +3390,7 @@ public:
 };
 
 /// PointerType - C99 6.7.5.1 - Pointer Declarators.
-class PointerType : public Type, public llvm::FoldingSetNode {
+class PointerType : public Type {
   friend class ASTContext; // ASTContext creates these.
 
   QualType PointeeType;
@@ -3404,14 +3404,6 @@ public:
 
   bool isSugared() const { return false; }
   QualType desugar() const { return QualType(this, 0); }
-
-  void Profile(llvm::FoldingSetNodeID &ID) {
-    Profile(ID, getPointeeType());
-  }
-
-  static void Profile(llvm::FoldingSetNodeID &ID, QualType Pointee) {
-    ID.AddPointer(Pointee.getAsOpaquePtr());
-  }
 
   static bool classof(const Type *T) { return T->getTypeClass() == Pointer; }
 };
@@ -3669,7 +3661,7 @@ public:
 };
 
 /// Base for LValueReferenceType and RValueReferenceType
-class ReferenceType : public Type, public llvm::FoldingSetNode {
+class ReferenceType : public Type {
   QualType PointeeType;
 
 protected:
@@ -3693,17 +3685,6 @@ public:
     while (T->isInnerRef())
       T = T->PointeeType->castAs<ReferenceType>();
     return T->PointeeType;
-  }
-
-  void Profile(llvm::FoldingSetNodeID &ID) {
-    Profile(ID, PointeeType, isSpelledAsLValue());
-  }
-
-  static void Profile(llvm::FoldingSetNodeID &ID,
-                      QualType Referencee,
-                      bool SpelledAsLValue) {
-    ID.AddPointer(Referencee.getAsOpaquePtr());
-    ID.AddBoolean(SpelledAsLValue);
   }
 
   static bool classof(const Type *T) {

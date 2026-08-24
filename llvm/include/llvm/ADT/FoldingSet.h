@@ -315,12 +315,18 @@ public:
     // NextInFoldingSetBucket - next link in the bucket list.
     void *NextInFoldingSetBucket = nullptr;
 
+    // CachedHash - this node's hash, recorded by InsertNode, so that
+    // GrowBucketCount can re-bucket it without re-profiling and re-hashing.
+    unsigned CachedHash = 0;
+
   public:
     Node() = default;
 
     // Accessors
     void *getNextInBucket() const { return NextInFoldingSetBucket; }
     void SetNextInBucket(void *N) { NextInFoldingSetBucket = N; }
+    unsigned getCachedHash() const { return CachedHash; }
+    void setCachedHash(unsigned H) { CachedHash = H; }
   };
 
   /// Remove all nodes from the folding set.
@@ -335,9 +341,9 @@ public:
   /// Returns the number of nodes permitted in the folding set
   /// before a rebucket operation is performed.
   unsigned capacity() {
-    // We allow a load factor of up to 2.0,
-    // so that means our capacity is NumBuckets * 2
-    return NumBuckets * 2;
+    // We allow a load factor of up to 1.0,
+    // so that means our capacity is NumBuckets
+    return NumBuckets;
   }
 
 protected:

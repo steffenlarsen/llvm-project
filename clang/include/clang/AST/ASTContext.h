@@ -226,11 +226,74 @@ class ASTContext : public RefCountedBase<ASTContext> {
   mutable SmallVector<Type *, 0> Types;
   mutable llvm::FoldingSet<ExtQuals> ExtQualNodes;
   mutable llvm::FoldingSet<ComplexType> ComplexTypes;
-  mutable llvm::FoldingSet<PointerType> PointerTypes{GeneralTypesLog2InitSize};
+  /// Uniquing info for PointerTypes. A PointerType is identified by its
+  /// pointee alone, so the set stores the nodes themselves and is probed with a
+  /// QualType. A DenseSet rather than a FoldingSet: the key is one pointer, so
+  /// building a FoldingSetNodeID and hashing it with xxh3 costs more than the
+  /// lookup, and PointerType need not carry a FoldingSetNode link.
+  struct PointerTypeInfo {
+    static unsigned getHashValue(QualType Pointee) {
+      return llvm::DenseMapInfo<const void *>::getHashValue(
+          Pointee.getAsOpaquePtr());
+    }
+    static unsigned getHashValue(const PointerType *T) {
+      return getHashValue(T->getPointeeType());
+    }
+    static bool isEqual(QualType Pointee, const PointerType *T) {
+      return Pointee == T->getPointeeType();
+    }
+    static bool isEqual(const PointerType *LHS, const PointerType *RHS) {
+      return LHS == RHS;
+    }
+  };
+  mutable llvm::DenseSet<PointerType *, PointerTypeInfo> PointerTypes;
   mutable llvm::FoldingSet<AdjustedType> AdjustedTypes;
   mutable llvm::FoldingSet<BlockPointerType> BlockPointerTypes;
-  mutable llvm::FoldingSet<LValueReferenceType> LValueReferenceTypes;
-  mutable llvm::FoldingSet<RValueReferenceType> RValueReferenceTypes;
+  /// An LValueReferenceType is identified by its written pointee plus the
+  /// spelled-as-lvalue flag; an RValueReferenceType by its pointee alone (it
+  /// is always profiled with the flag false). Same rationale as
+  /// PointerTypeInfo.
+  struct LValueReferenceTypeInfo {
+    using Key = std::pair<QualType, bool>;
+    static unsigned getHashValue(Key K) {
+      return llvm::detail::combineHashValue(
+          llvm::DenseMapInfo<const void *>::getHashValue(
+              K.first.getAsOpaquePtr()),
+          K.second);
+    }
+    static unsigned getHashValue(const LValueReferenceType *T) {
+      return getHashValue({T->getPointeeTypeAsWritten(),
+                           T->isSpelledAsLValue()});
+    }
+    static bool isEqual(Key K, const LValueReferenceType *T) {
+      return K.first == T->getPointeeTypeAsWritten() &&
+             K.second == T->isSpelledAsLValue();
+    }
+    static bool isEqual(const LValueReferenceType *LHS,
+                        const LValueReferenceType *RHS) {
+      return LHS == RHS;
+    }
+  };
+  mutable llvm::DenseSet<LValueReferenceType *, LValueReferenceTypeInfo>
+      LValueReferenceTypes;
+  struct RValueReferenceTypeInfo {
+    static unsigned getHashValue(QualType Pointee) {
+      return llvm::DenseMapInfo<const void *>::getHashValue(
+          Pointee.getAsOpaquePtr());
+    }
+    static unsigned getHashValue(const RValueReferenceType *T) {
+      return getHashValue(T->getPointeeTypeAsWritten());
+    }
+    static bool isEqual(QualType Pointee, const RValueReferenceType *T) {
+      return Pointee == T->getPointeeTypeAsWritten();
+    }
+    static bool isEqual(const RValueReferenceType *LHS,
+                        const RValueReferenceType *RHS) {
+      return LHS == RHS;
+    }
+  };
+  mutable llvm::DenseSet<RValueReferenceType *, RValueReferenceTypeInfo>
+      RValueReferenceTypes;
   mutable llvm::FoldingSet<MemberPointerType> MemberPointerTypes;
   mutable llvm::ContextualFoldingSet<ConstantArrayType, ASTContext &>
       ConstantArrayTypes;

@@ -795,10 +795,8 @@ ASTContext::getCanonicalTemplateTemplateParmDecl(
                                     CanonParams, SourceLocation(),
                                     /*RequiresClause=*/nullptr));
 
-  // Get the new insert position for the node we care about.
-  Canonical = CanonTemplateTemplateParms.FindNodeOrInsertPos(ID, InsertPos);
-  assert(!Canonical && "Shouldn't be in the map!");
-  (void)Canonical;
+  assert(!CanonTemplateTemplateParms.FindNodeOrInsertPos(ID, InsertPos) &&
+         "Shouldn't be in the map!");
 
   // Create the canonical template template parameter entry.
   Canonical = new (*this) CanonicalTemplateTemplateParm(CanonTTP);
@@ -3972,9 +3970,8 @@ QualType ASTContext::getComplexType(QualType T) const {
   if (!T.isCanonical()) {
     Canonical = getComplexType(getCanonicalType(T));
 
-    // Get the new insert position for the node we care about.
-    ComplexType *NewIP = ComplexTypes.FindNodeOrInsertPos(ID, InsertPos);
-    assert(!NewIP && "Shouldn't be in the map!"); (void)NewIP;
+    assert(!ComplexTypes.FindNodeOrInsertPos(ID, InsertPos) &&
+           "Shouldn't be in the map!");
   }
   auto *New = new (*this, alignof(ComplexType)) ComplexType(T, Canonical);
   Types.push_back(New);
@@ -3987,26 +3984,20 @@ QualType ASTContext::getComplexType(QualType T) const {
 QualType ASTContext::getPointerType(QualType T) const {
   // Unique pointers, to guarantee there is only one pointer of a particular
   // structure.
-  llvm::FoldingSetNodeID ID;
-  PointerType::Profile(ID, T);
-
-  void *InsertPos = nullptr;
-  if (PointerType *PT = PointerTypes.FindNodeOrInsertPos(ID, InsertPos))
-    return QualType(PT, 0);
+  if (auto It = PointerTypes.find_as(T); It != PointerTypes.end())
+    return QualType(*It, 0);
 
   // If the pointee type isn't canonical, this won't be a canonical type either,
-  // so fill in the canonical type field.
+  // so fill in the canonical type field. This can insert into PointerTypes, so
+  // it must happen before the node is created and inserted.
   QualType Canonical;
-  if (!T.isCanonical()) {
+  if (!T.isCanonical())
     Canonical = getPointerType(getCanonicalType(T));
 
-    // Get the new insert position for the node we care about.
-    PointerType *NewIP = PointerTypes.FindNodeOrInsertPos(ID, InsertPos);
-    assert(!NewIP && "Shouldn't be in the map!"); (void)NewIP;
-  }
   auto *New = new (*this, alignof(PointerType)) PointerType(T, Canonical);
   Types.push_back(New);
-  PointerTypes.InsertNode(New, InsertPos);
+  [[maybe_unused]] bool Inserted = PointerTypes.insert_as(New, T).second;
+  assert(Inserted && "Shouldn't be in the map!");
   return QualType(New, 0);
 }
 
@@ -4020,9 +4011,8 @@ QualType ASTContext::getAdjustedType(QualType Orig, QualType New) const {
 
   QualType Canonical = getCanonicalType(New);
 
-  // Get the new insert position for the node we care about.
-  AT = AdjustedTypes.FindNodeOrInsertPos(ID, InsertPos);
-  assert(!AT && "Shouldn't be in the map!");
+  assert(!AdjustedTypes.FindNodeOrInsertPos(ID, InsertPos) &&
+         "Shouldn't be in the map!");
 
   AT = new (*this, alignof(AdjustedType))
       AdjustedType(Type::Adjusted, Orig, New, Canonical);
@@ -4041,9 +4031,8 @@ QualType ASTContext::getDecayedType(QualType Orig, QualType Decayed) const {
 
   QualType Canonical = getCanonicalType(Decayed);
 
-  // Get the new insert position for the node we care about.
-  AT = AdjustedTypes.FindNodeOrInsertPos(ID, InsertPos);
-  assert(!AT && "Shouldn't be in the map!");
+  assert(!AdjustedTypes.FindNodeOrInsertPos(ID, InsertPos) &&
+         "Shouldn't be in the map!");
 
   AT = new (*this, alignof(DecayedType)) DecayedType(Orig, Decayed, Canonical);
   Types.push_back(AT);
@@ -4094,9 +4083,8 @@ QualType ASTContext::getArrayParameterType(QualType Ty) const {
   if (!DTy.isCanonical()) {
     Canonical = getArrayParameterType(getCanonicalType(Ty));
 
-    // Get the new insert position for the node we care about.
-    AT = ArrayParameterTypes.FindNodeOrInsertPos(ID, InsertPos);
-    assert(!AT && "Shouldn't be in the map!");
+    assert(!ArrayParameterTypes.FindNodeOrInsertPos(ID, InsertPos) &&
+           "Shouldn't be in the map!");
   }
 
   AT = new (*this, alignof(ArrayParameterType))
@@ -4126,10 +4114,8 @@ QualType ASTContext::getBlockPointerType(QualType T) const {
   if (!T.isCanonical()) {
     Canonical = getBlockPointerType(getCanonicalType(T));
 
-    // Get the new insert position for the node we care about.
-    BlockPointerType *NewIP =
-      BlockPointerTypes.FindNodeOrInsertPos(ID, InsertPos);
-    assert(!NewIP && "Shouldn't be in the map!"); (void)NewIP;
+    assert(!BlockPointerTypes.FindNodeOrInsertPos(ID, InsertPos) &&
+           "Shouldn't be in the map!");
   }
   auto *New =
       new (*this, alignof(BlockPointerType)) BlockPointerType(T, Canonical);
@@ -4148,33 +4134,28 @@ ASTContext::getLValueReferenceType(QualType T, bool SpelledAsLValue) const {
 
   // Unique pointers, to guarantee there is only one pointer of a particular
   // structure.
-  llvm::FoldingSetNodeID ID;
-  ReferenceType::Profile(ID, T, SpelledAsLValue);
-
-  void *InsertPos = nullptr;
-  if (LValueReferenceType *RT =
-        LValueReferenceTypes.FindNodeOrInsertPos(ID, InsertPos))
-    return QualType(RT, 0);
+  LValueReferenceTypeInfo::Key Key(T, SpelledAsLValue);
+  if (auto It = LValueReferenceTypes.find_as(Key);
+      It != LValueReferenceTypes.end())
+    return QualType(*It, 0);
 
   const auto *InnerRef = T->getAs<ReferenceType>();
 
   // If the referencee type isn't canonical, this won't be a canonical type
-  // either, so fill in the canonical type field.
+  // either, so fill in the canonical type field. This can insert into
+  // LValueReferenceTypes, so it must happen before the node is created.
   QualType Canonical;
   if (!SpelledAsLValue || InnerRef || !T.isCanonical()) {
     QualType PointeeType = (InnerRef ? InnerRef->getPointeeType() : T);
     Canonical = getLValueReferenceType(getCanonicalType(PointeeType));
-
-    // Get the new insert position for the node we care about.
-    LValueReferenceType *NewIP =
-      LValueReferenceTypes.FindNodeOrInsertPos(ID, InsertPos);
-    assert(!NewIP && "Shouldn't be in the map!"); (void)NewIP;
   }
 
   auto *New = new (*this, alignof(LValueReferenceType))
       LValueReferenceType(T, Canonical, SpelledAsLValue);
   Types.push_back(New);
-  LValueReferenceTypes.InsertNode(New, InsertPos);
+  [[maybe_unused]] bool Inserted =
+      LValueReferenceTypes.insert_as(New, Key).second;
+  assert(Inserted && "Shouldn't be in the map!");
 
   return QualType(New, 0);
 }
@@ -4188,33 +4169,26 @@ QualType ASTContext::getRValueReferenceType(QualType T) const {
 
   // Unique pointers, to guarantee there is only one pointer of a particular
   // structure.
-  llvm::FoldingSetNodeID ID;
-  ReferenceType::Profile(ID, T, false);
-
-  void *InsertPos = nullptr;
-  if (RValueReferenceType *RT =
-        RValueReferenceTypes.FindNodeOrInsertPos(ID, InsertPos))
-    return QualType(RT, 0);
+  if (auto It = RValueReferenceTypes.find_as(T);
+      It != RValueReferenceTypes.end())
+    return QualType(*It, 0);
 
   const auto *InnerRef = T->getAs<ReferenceType>();
 
   // If the referencee type isn't canonical, this won't be a canonical type
-  // either, so fill in the canonical type field.
+  // either, so fill in the canonical type field. This can insert into
+  // RValueReferenceTypes, so it must happen before the node is created.
   QualType Canonical;
   if (InnerRef || !T.isCanonical()) {
     QualType PointeeType = (InnerRef ? InnerRef->getPointeeType() : T);
     Canonical = getRValueReferenceType(getCanonicalType(PointeeType));
-
-    // Get the new insert position for the node we care about.
-    RValueReferenceType *NewIP =
-      RValueReferenceTypes.FindNodeOrInsertPos(ID, InsertPos);
-    assert(!NewIP && "Shouldn't be in the map!"); (void)NewIP;
   }
 
   auto *New = new (*this, alignof(RValueReferenceType))
       RValueReferenceType(T, Canonical);
   Types.push_back(New);
-  RValueReferenceTypes.InsertNode(New, InsertPos);
+  [[maybe_unused]] bool Inserted = RValueReferenceTypes.insert_as(New, T).second;
+  assert(Inserted && "Shouldn't be in the map!");
   return QualType(New, 0);
 }
 
@@ -4251,10 +4225,8 @@ QualType ASTContext::getMemberPointerType(QualType T,
     Canonical =
         getMemberPointerType(getCanonicalType(T), CanonicalQualifier, Cls);
     assert(!cast<MemberPointerType>(Canonical)->isSugared());
-    // Get the new insert position for the node we care about.
-    [[maybe_unused]] MemberPointerType *NewIP =
-        MemberPointerTypes.FindNodeOrInsertPos(ID, InsertPos);
-    assert(!NewIP && "Shouldn't be in the map!");
+    assert(!MemberPointerTypes.FindNodeOrInsertPos(ID, InsertPos) &&
+           "Shouldn't be in the map!");
   }
   auto *New = new (*this, alignof(MemberPointerType))
       MemberPointerType(T, Qualifier, Canonical);
@@ -4303,10 +4275,8 @@ QualType ASTContext::getConstantArrayType(QualType EltTy,
                                  ASM, IndexTypeQuals);
     Canon = getQualifiedType(Canon, canonSplit.Quals);
 
-    // Get the new insert position for the node we care about.
-    ConstantArrayType *NewIP =
-      ConstantArrayTypes.FindNodeOrInsertPos(ID, InsertPos);
-    assert(!NewIP && "Shouldn't be in the map!"); (void)NewIP;
+    assert(!ConstantArrayTypes.FindNodeOrInsertPos(ID, InsertPos) &&
+           "Shouldn't be in the map!");
   }
 
   auto *New = ConstantArrayType::Create(*this, EltTy, Canon, ArySize, SizeExpr,
@@ -4570,10 +4540,8 @@ QualType ASTContext::getIncompleteArrayType(QualType elementType,
                                    ASM, elementTypeQuals);
     canon = getQualifiedType(canon, canonSplit.Quals);
 
-    // Get the new insert position for the node we care about.
-    IncompleteArrayType *existing =
-      IncompleteArrayTypes.FindNodeOrInsertPos(ID, insertPos);
-    assert(!existing && "Shouldn't be in the map!"); (void) existing;
+    assert(!IncompleteArrayTypes.FindNodeOrInsertPos(ID, insertPos) &&
+           "Shouldn't be in the map!");
   }
 
   auto *newType = new (*this, alignof(IncompleteArrayType))
@@ -4737,9 +4705,8 @@ QualType ASTContext::getVectorType(QualType vecType, unsigned NumElts,
   if (!vecType.isCanonical()) {
     Canonical = getVectorType(getCanonicalType(vecType), NumElts, VecKind);
 
-    // Get the new insert position for the node we care about.
-    VectorType *NewIP = VectorTypes.FindNodeOrInsertPos(ID, InsertPos);
-    assert(!NewIP && "Shouldn't be in the map!"); (void)NewIP;
+    assert(!VectorTypes.FindNodeOrInsertPos(ID, InsertPos) &&
+           "Shouldn't be in the map!");
   }
   auto *New = new (*this, alignof(VectorType))
       VectorType(vecType, NumElts, Canonical, VecKind);
@@ -4809,9 +4776,8 @@ QualType ASTContext::getExtVectorType(QualType vecType,
   if (!vecType.isCanonical()) {
     Canonical = getExtVectorType(getCanonicalType(vecType), NumElts);
 
-    // Get the new insert position for the node we care about.
-    VectorType *NewIP = VectorTypes.FindNodeOrInsertPos(ID, InsertPos);
-    assert(!NewIP && "Shouldn't be in the map!"); (void)NewIP;
+    assert(!VectorTypes.FindNodeOrInsertPos(ID, InsertPos) &&
+           "Shouldn't be in the map!");
   }
   auto *New = new (*this, alignof(ExtVectorType))
       ExtVectorType(vecType, NumElts, Canonical);
@@ -4881,9 +4847,8 @@ QualType ASTContext::getConstantMatrixType(QualType ElementTy, unsigned NumRows,
     Canonical =
         getConstantMatrixType(getCanonicalType(ElementTy), NumRows, NumColumns);
 
-    ConstantMatrixType *NewIP = MatrixTypes.FindNodeOrInsertPos(ID, InsertPos);
-    assert(!NewIP && "Matrix type shouldn't already exist in the map");
-    (void)NewIP;
+    assert(!MatrixTypes.FindNodeOrInsertPos(ID, InsertPos) &&
+           "Matrix type shouldn't already exist in the map");
   }
 
   auto *New = new (*this, alignof(ConstantMatrixType))
@@ -5001,10 +4966,8 @@ ASTContext::getFunctionNoProtoType(QualType ResultTy,
     Canonical =
       getFunctionNoProtoType(getCanonicalFunctionResultType(ResultTy), Info);
 
-    // Get the new insert position for the node we care about.
-    FunctionNoProtoType *NewIP =
-      FunctionNoProtoTypes.FindNodeOrInsertPos(ID, InsertPos);
-    assert(!NewIP && "Shouldn't be in the map!"); (void)NewIP;
+    assert(!FunctionNoProtoTypes.FindNodeOrInsertPos(ID, InsertPos) &&
+           "Shouldn't be in the map!");
   }
 
   auto *New = new (*this, alignof(FunctionNoProtoType))
@@ -5175,10 +5138,8 @@ QualType ASTContext::getFunctionTypeInternal(
     Canonical =
         getFunctionTypeInternal(CanResultTy, CanonicalArgs, CanonicalEPI, true);
 
-    // Get the new insert position for the node we care about.
-    FunctionProtoType *NewIP =
-      FunctionProtoTypes.FindNodeOrInsertPos(ID, InsertPos);
-    assert(!NewIP && "Shouldn't be in the map!"); (void)NewIP;
+    assert(!FunctionProtoTypes.FindNodeOrInsertPos(ID, InsertPos) &&
+           "Shouldn't be in the map!");
   }
 
   // Compute the needed size to hold this FunctionProtoType and the
@@ -5224,10 +5185,8 @@ QualType ASTContext::getPipeType(QualType T, bool ReadOnly) const {
   if (!T.isCanonical()) {
     Canonical = getPipeType(getCanonicalType(T), ReadOnly);
 
-    // Get the new insert position for the node we care about.
-    PipeType *NewIP = PipeTypes.FindNodeOrInsertPos(ID, InsertPos);
-    assert(!NewIP && "Shouldn't be in the map!");
-    (void)NewIP;
+    assert(!PipeTypes.FindNodeOrInsertPos(ID, InsertPos) &&
+           "Shouldn't be in the map!");
   }
   auto *New = new (*this, alignof(PipeType)) PipeType(T, Canonical, ReadOnly);
   Types.push_back(New);
@@ -7030,9 +6989,8 @@ QualType ASTContext::getAtomicType(QualType T) const {
   if (!T.isCanonical()) {
     Canonical = getAtomicType(getCanonicalType(T));
 
-    // Get the new insert position for the node we care about.
-    AtomicType *NewIP = AtomicTypes.FindNodeOrInsertPos(ID, InsertPos);
-    assert(!NewIP && "Shouldn't be in the map!"); (void)NewIP;
+    assert(!AtomicTypes.FindNodeOrInsertPos(ID, InsertPos) &&
+           "Shouldn't be in the map!");
   }
   auto *New = new (*this, alignof(AtomicType)) AtomicType(T, Canonical);
   Types.push_back(New);
