@@ -901,9 +901,12 @@ void llvm::CloneAndPruneIntoFromInst(Function *NewFunc, const Function *OldFunc,
   // replaced by empty metadata. This would signal later cleanup passes to
   // remove the debug records, potentially causing incorrect locations.
   Function::iterator Begin = cast<BasicBlock>(VMap[StartingBB])->getIterator();
+  ValueMapper DbgMapper(VMap,
+                        ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges,
+                        TypeMapper, Materializer);
   for (BasicBlock &BB : make_range(Begin, NewFunc->end())) {
     for (Instruction &I : BB) {
-      Mapper.remapDbgRecordRange(I.getModule(), I.getDbgRecordRange());
+      DbgMapper.remapDbgRecordRange(I.getModule(), I.getDbgRecordRange());
     }
   }
 

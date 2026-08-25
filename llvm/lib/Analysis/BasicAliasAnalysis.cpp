@@ -563,7 +563,7 @@ struct BasicAAResult::DecomposedGEP {
   // Total constant offset from base.
   APInt Offset;
   // Scaled variable (non-constant) indices.
-  SmallVector<VariableGEPIndex, 4> VarIndices;
+  SmallVector<VariableGEPIndex, 8> VarIndices;
   // Nowrap flags common to all GEP operations involved in expression.
   GEPNoWrapFlags NWFlags = GEPNoWrapFlags::all();
 
