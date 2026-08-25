@@ -66,6 +66,19 @@ static StringRef knownBundleName(unsigned BundleTagID) {
   llvm_unreachable("covered switch");
 }
 
+LLVMContext::DecompositionCacheBase::~DecompositionCacheBase() = default;
+
+LLVMContext::DecompositionCacheBase &LLVMContext::getOrCreateDecompositionCache(
+    function_ref<std::unique_ptr<DecompositionCacheBase>()> Create) {
+  if (!pImpl->DecompositionCache)
+    pImpl->DecompositionCache = Create();
+  return *pImpl->DecompositionCache;
+}
+
+const uint64_t &LLVMContext::getValueCacheEpoch() const {
+  return pImpl->ValueCacheEpoch;
+}
+
 LLVMContext::LLVMContext() : pImpl(new LLVMContextImpl(*this)) {
   // Create the fixed metadata kinds. This is done in the same order as the
   // MD_* enum values so that they correspond.

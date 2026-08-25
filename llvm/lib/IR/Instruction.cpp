@@ -378,6 +378,7 @@ bool Instruction::isOnlyUserOfAnyOperand() {
 }
 
 void Instruction::setHasNoUnsignedWrap(bool b) {
+  bumpValueCacheEpoch(this);
   if (auto *Inst = dyn_cast<OverflowingBinaryOperator>(this))
     Inst->setHasNoUnsignedWrap(b);
   else
@@ -385,6 +386,7 @@ void Instruction::setHasNoUnsignedWrap(bool b) {
 }
 
 void Instruction::setHasNoSignedWrap(bool b) {
+  bumpValueCacheEpoch(this);
   if (auto *Inst = dyn_cast<OverflowingBinaryOperator>(this))
     Inst->setHasNoSignedWrap(b);
   else
@@ -392,10 +394,12 @@ void Instruction::setHasNoSignedWrap(bool b) {
 }
 
 void Instruction::setIsExact(bool b) {
+  bumpValueCacheEpoch(this);
   cast<PossiblyExactOperator>(this)->setIsExact(b);
 }
 
 void Instruction::setNonNeg(bool b) {
+  bumpValueCacheEpoch(this);
   assert(isa<PossiblyNonNegInst>(this) && "Must be zext/uitofp");
   SubclassOptionalData = (SubclassOptionalData & ~PossiblyNonNegInst::NonNeg) |
                          (b * PossiblyNonNegInst::NonNeg);
@@ -425,6 +429,7 @@ bool Instruction::hasPoisonGeneratingFlags() const {
 }
 
 void Instruction::dropPoisonGeneratingFlags() {
+  bumpValueCacheEpoch(this);
   switch (getOpcode()) {
   case Instruction::Add:
   case Instruction::Sub:
@@ -713,6 +718,7 @@ void Instruction::copyFastMathFlags(const Instruction *I) {
 }
 
 void Instruction::copyIRFlags(const Value *V, bool IncludeWrapFlags) {
+  bumpValueCacheEpoch(this);
   // Copy the wrapping flags.
   if (IncludeWrapFlags && isa<OverflowingBinaryOperator>(this)) {
     if (auto *OB = dyn_cast<OverflowingBinaryOperator>(V)) {
@@ -757,6 +763,7 @@ void Instruction::copyIRFlags(const Value *V, bool IncludeWrapFlags) {
 }
 
 void Instruction::andIRFlags(const Value *V) {
+  bumpValueCacheEpoch(this);
   if (auto *OB = dyn_cast<OverflowingBinaryOperator>(V)) {
     if (isa<OverflowingBinaryOperator>(this)) {
       setHasNoSignedWrap(hasNoSignedWrap() && OB->hasNoSignedWrap());

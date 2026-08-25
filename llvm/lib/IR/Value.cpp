@@ -74,7 +74,12 @@ Value::Value(Type *ty, unsigned scid)
                 "Value too big");
 }
 
+void llvm::bumpValueCacheEpoch(const Value *V) {
+  ++V->getContext().pImpl->ValueCacheEpoch;
+}
+
 Value::~Value() {
+  ++getContext().pImpl->ValueCacheEpoch;
   // Notify all ValueHandles (if present) that this value is going away.
   if (HasValueHandle)
     ValueHandleBase::ValueIsDeleted(this);

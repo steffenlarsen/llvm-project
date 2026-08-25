@@ -1586,6 +1586,12 @@ public:
 
   DenseMap<const Value *, ValueName *> ValueNames;
 
+  /// Backing store for LLVMContext::getValueCacheEpoch().
+  uint64_t ValueCacheEpoch = 1;
+
+  /// Backing store for LLVMContext::getOrCreateDecompositionCache().
+  std::unique_ptr<LLVMContext::DecompositionCacheBase> DecompositionCache;
+
   DenseMap<unsigned, std::unique_ptr<ConstantInt>> IntZeroConstants;
   DenseMap<unsigned, std::unique_ptr<ConstantInt>> IntOneConstants;
   DenseMap<APInt, std::unique_ptr<ConstantInt>> IntConstants;

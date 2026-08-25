@@ -59,6 +59,10 @@ using ValueName = StringMapEntry<Value *>;
 //                                 Value Class
 //===----------------------------------------------------------------------===//
 
+/// Bump the owning context's IR-mutation epoch. Out of line so that Value.h
+/// does not have to see the definition of LLVMContext.
+LLVM_ABI void bumpValueCacheEpoch(const Value *V);
+
 /// LLVM Value Representation
 ///
 /// This is a very important LLVM class. It is the base class of all values
@@ -872,6 +876,11 @@ inline raw_ostream &operator<<(raw_ostream &OS, const Value &V) {
 }
 
 void Use::set(Value *V) {
+  // Only an overwrite of an existing operand can invalidate a cached view of
+  // the IR; the initial write when an instruction is built cannot, because the
+  // instruction did not exist when anything was cached.
+  if (Val)
+    bumpValueCacheEpoch(Val);
   removeFromList();
   Val = V;
   if (V)

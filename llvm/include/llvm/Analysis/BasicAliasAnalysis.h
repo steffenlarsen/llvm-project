@@ -108,6 +108,7 @@ public:
 
 private:
   struct DecomposedGEP;
+  struct DecompositionCache;
 
   /// Tracks instructions visited by pointsToConstantMemory.
   SmallPtrSet<const Value *, 16> Visited;

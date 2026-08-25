@@ -44,6 +44,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/Type.h"
@@ -1097,6 +1098,60 @@ ModRefInfo BasicAAResult::getModRefInfo(const CallBase *Call1,
 /// We know that V1 is a GEP, but we don't know anything about V2.
 /// UnderlyingV1 is getUnderlyingObject(GEP1), UnderlyingV2 is the same for
 /// V2.
+/// Caches GEP decompositions for the duration of a single AA query.
+///
+/// aliasGEP decomposes both of its operands on every query, so a pointer
+/// compared against N partners is decomposed N times; on a HIP build that is
+/// ~132 M decompositions, of which a small direct-mapped cache serves about
+/// half. Entries carry the query they belong to and the IR-mutation epoch they
+/// were computed under, so they are self-invalidating and never need clearing.
+///
+/// One instance per LLVMContext, not per BasicAAResult: peak live
+/// BasicAAResults measured at 406, so a per-result cache would cost tens of
+/// megabytes, whereas per-context matches the granularity of the IR it
+/// describes -- and of the mutation epoch that guards it.
+struct BasicAAResult::DecompositionCache final
+    : LLVMContext::DecompositionCacheBase {
+  explicit DecompositionCache(const uint64_t &Epoch) : CurrentEpoch(Epoch) {}
+
+  /// All BasicAAResults for a module share one cache, created on the first GEP
+  /// alias query.
+  static DecompositionCache &get(LLVMContext &Ctx) {
+    return static_cast<DecompositionCache &>(
+        Ctx.getOrCreateDecompositionCache([&Ctx] {
+          return std::make_unique<DecompositionCache>(Ctx.getValueCacheEpoch());
+        }));
+  }
+
+  /// Decomposition of \p V, recomputing it only if the IR has changed since
+  /// it was cached. Entries survive across alias queries: everything the
+  /// decomposition reads is covered by the context's mutation epoch, which is
+  /// bumped by operand writes, value destruction and poison-flag changes.
+  const DecomposedGEP &decompose(const Value *V, const DataLayout &DL,
+                                 AssumptionCache *AC, DominatorTree *DT) {
+    Entry &E = Entries[(reinterpret_cast<uintptr_t>(V) >> 4) & (Size - 1)];
+    if (E.V != V || E.Epoch != CurrentEpoch) {
+      E.Epoch = CurrentEpoch;
+      E.V = V;
+      E.D = DecomposeGEPExpression(V, DL, AC, DT);
+    }
+    return E.D;
+  }
+
+private:
+  static constexpr unsigned Size = 512;
+  struct Entry {
+    uint64_t Epoch = 0;
+    const Value *V = nullptr;
+    DecomposedGEP D;
+  };
+
+  /// The context's mutation counter, read directly rather than through a
+  /// call. Outlives this cache: both are owned by the same context.
+  const uint64_t &CurrentEpoch;
+  Entry Entries[Size];
+};
+
 AliasResult BasicAAResult::aliasGEP(
     const GEPOperator *GEP1, LocationSize V1Size,
     const Value *V2, LocationSize V2Size,
@@ -1127,8 +1182,10 @@ AliasResult BasicAAResult::aliasGEP(
   }
 
   DominatorTree *DT = getDT(AAQI);
-  DecomposedGEP DecompGEP1 = DecomposeGEPExpression(GEP1, DL, &AC, DT);
-  DecomposedGEP DecompGEP2 = DecomposeGEPExpression(V2, DL, &AC, DT);
+  // Copies: the code below mutates both decompositions.
+  DecompositionCache &Cache = DecompositionCache::get(F.getContext());
+  DecomposedGEP DecompGEP1 = Cache.decompose(GEP1, DL, &AC, DT);
+  DecomposedGEP DecompGEP2 = Cache.decompose(V2, DL, &AC, DT);
 
   // Bail if we were not able to decompose anything.
   if (DecompGEP1.Base == GEP1 && DecompGEP2.Base == V2)

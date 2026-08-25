@@ -15,6 +15,7 @@
 #define LLVM_IR_LLVMCONTEXT_H
 
 #include "llvm-c/Types.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/IR/DiagnosticHandler.h"
 #include "llvm/Support/CBindingWrapping.h"
 #include "llvm/Support/Compiler.h"
@@ -68,6 +69,42 @@ enum {
 class LLVMContext {
 public:
   LLVMContextImpl *const pImpl;
+
+  /// Base class for BasicAA's GEP decomposition cache, which needs one
+  /// instance per context rather than one per BasicAAResult. Only the base
+  /// lives here: the concrete type is defined in BasicAliasAnalysis.cpp and is
+  /// not visible to IR, which is why the destructor must be virtual.
+  ///
+  /// This is deliberately *not* a general facility. There is a single slot per
+  /// context and no key, so a second user would silently take the slot from
+  /// the first. Anything else wanting context-lifetime storage should add its
+  /// own member rather than reusing this one.
+  struct DecompositionCacheBase {
+    LLVM_ABI virtual ~DecompositionCacheBase();
+  };
+
+  /// Return the context's GEP decomposition cache, calling \p Create to build
+  /// it on first use.
+  LLVM_ABI DecompositionCacheBase &getOrCreateDecompositionCache(
+      function_ref<std::unique_ptr<DecompositionCacheBase>()> Create);
+
+  /// A counter that lets a cache keyed on raw \c Value pointers invalidate
+  /// itself in O(1) instead of tracking every pointer it references: an entry
+  /// stays valid only while this is unchanged.
+  ///
+  /// It is bumped by exactly three things, which together cover what a Value
+  /// computes: overwriting an existing operand, destroying a Value (so a
+  /// recycled address cannot alias a stale entry), and changing a
+  /// poison-generating flag. It deliberately does *not* track every mutation —
+  /// creating an instruction, moving one, or editing metadata, attributes or
+  /// linkage all leave it alone. A cache that depends on any of those needs
+  /// its own invalidation.
+  ///
+  /// Returned by reference so a cache can read it without a call. Not atomic:
+  /// a context is owned by one thread at a time, which is the same granularity
+  /// at which the IR itself may be mutated.
+  LLVM_ABI const uint64_t &getValueCacheEpoch() const;
+
   LLVM_ABI LLVMContext();
   LLVMContext(const LLVMContext &) = delete;
   LLVMContext &operator=(const LLVMContext &) = delete;

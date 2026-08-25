@@ -1662,6 +1662,7 @@ bool GetElementPtrInst::hasAllConstantIndices() const {
 }
 
 void GetElementPtrInst::setNoWrapFlags(GEPNoWrapFlags NW) {
+  bumpValueCacheEpoch(this);
   SubclassOptionalData = NW.getRaw();
 }
 
