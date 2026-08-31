@@ -40,7 +40,7 @@ operator<<(const SemaBase::SemaDiagnosticBuilder &Diag,
   if (Diag.ImmediateDiag)
     PD.Emit(*Diag.ImmediateDiag);
   else if (Diag.PartialDiagId)
-    Diag.S.DeviceDeferredDiags[Diag.Fn][*Diag.PartialDiagId].second = PD;
+    Diag.getDeviceDeferredDiags()[Diag.Fn][*Diag.PartialDiagId].second = PD;
   return Diag;
 }
 
@@ -49,13 +49,13 @@ void SemaBase::SemaDiagnosticBuilder::AddFixItHint(
   if (ImmediateDiag)
     ImmediateDiag->AddFixItHint(Hint);
   else if (PartialDiagId)
-    S.DeviceDeferredDiags[Fn][*PartialDiagId].second.AddFixItHint(Hint);
+    getDeviceDeferredDiags()[Fn][*PartialDiagId].second.AddFixItHint(Hint);
 }
 
 llvm::DenseMap<CanonicalDeclPtr<const FunctionDecl>,
                std::vector<PartialDiagnosticAt>> &
 SemaBase::SemaDiagnosticBuilder::getDeviceDeferredDiags() const {
-  return S.DeviceDeferredDiags;
+  return ForDevices ? S.AuxDeviceDeferredDiags : S.DeviceDeferredDiags;
 }
 
 Sema::SemaDiagnosticBuilder SemaBase::Diag(SourceLocation Loc,

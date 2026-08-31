@@ -2028,6 +2028,17 @@ struct PragmaAssumeNonNullHandler : public PragmaHandler {
     }
 
     PP.setPragmaAssumeNonNullLoc(NewLoc);
+
+    // Lexing ends before parsing starts, so the parse sets the region again
+    // where it reaches the pragma.
+    if (PP.deferSemaPragmas()) {
+      auto Toks = std::make_unique<Token[]>(1);
+      Toks[0] = Token::createAnnotation(
+          tok::annot_pragma_assume_nonnull, SourceRange(Loc, Tok.getLocation()),
+          reinterpret_cast<void *>(uintptr_t(IsBegin)));
+      PP.EnterTokenStream(std::move(Toks), 1, /*DisableMacroExpansion=*/true,
+                          /*IsReinject=*/false);
+    }
   }
 };
 

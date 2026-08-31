@@ -23,6 +23,7 @@
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/DependenceFlags.h"
 #include "clang/AST/Expr.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/NestedNameSpecifier.h"
 #include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/TemplateBase.h"
@@ -4592,6 +4593,11 @@ TagType::TagType(TypeClass TC, ElaboratedTypeKeyword Keyword,
     getTrailingQualifier() = Qualifier;
   TagTypeBits.OwnsTag = !!OwnsTag;
   TagTypeBits.IsInjected = ISInjected;
+  TagTypeBits.IsTargetFamily = false;
+}
+
+TagDecl *TagType::getTargetFamilyDecl() const {
+  return decl->getASTContext().getMultiTarget().getTargetFamilyDecl(decl);
 }
 
 void *TagType::getTrailingPointer() const {

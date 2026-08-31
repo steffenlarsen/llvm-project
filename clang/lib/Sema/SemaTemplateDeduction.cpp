@@ -23,6 +23,7 @@
 #include "clang/AST/DynamicRecursiveASTVisitor.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/NestedNameSpecifier.h"
 #include "clang/AST/TemplateBase.h"
 #include "clang/AST/TemplateName.h"
@@ -41,6 +42,7 @@
 #include "clang/Sema/EnterExpressionEvaluationContext.h"
 #include "clang/Sema/Ownership.h"
 #include "clang/Sema/Sema.h"
+#include "clang/Sema/SemaMultiTarget.h"
 #include "clang/Sema/Template.h"
 #include "clang/Sema/TemplateDeduction.h"
 #include "llvm/ADT/APInt.h"
@@ -3964,6 +3966,25 @@ TemplateDeductionResult Sema::FinishTemplateArgumentDeduction(
   if (Inst.isInvalid())
     return TemplateDeductionResult::InstantiationDepth;
 
+  // Made for a call from device-only code, a lambda of host code is the
+  // device's.
+  std::optional<llvm::SaveAndRestore<unsigned>> DeviceCallerTarget;
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      Context.isMultiTargetCompile()) {
+    unsigned DeviceCaller = 0;
+    if (const FunctionDecl *Caller = getCurFunctionDecl(/*AllowLambda=*/false);
+        Caller && (Caller->hasAttr<CUDAGlobalAttr>() ||
+                   (Caller->hasAttr<CUDADeviceAttr>() &&
+                    !Caller->hasAttr<CUDAHostAttr>())))
+      for (unsigned Target : {MultiTarget().getInstantiationTarget(),
+                              Context.getCurrentTargetVariant()})
+        if (Context.isDeviceVariant(Target)) {
+          DeviceCaller = Target;
+          break;
+        }
+    DeviceCallerTarget.emplace(Context.getMultiTarget().DeviceCallerTarget,
+                               DeviceCaller);
+  }
   ContextRAII SavedContext(*this, FunctionTemplate->getTemplatedDecl());
 
   // C++ [temp.deduct.type]p2:
@@ -3987,6 +4008,10 @@ TemplateDeductionResult Sema::FinishTemplateArgumentDeduction(
 
   // Substitute the deduced template arguments into the function template
   // declaration to produce the function template specialization.
+  llvm::SaveAndRestore<const FunctionTemplateDecl *> DeducingTemplate(
+      MultiTarget().DeducingTemplate, FunctionTemplate);
+  llvm::SaveAndRestore DeducingNumExplicit(MultiTarget().DeducingNumExplicit,
+                                           NumExplicitlySpecified);
   DeclContext *Owner = FunctionTemplate->getDeclContext();
   if (FunctionTemplate->getFriendObjectKind())
     Owner = FunctionTemplate->getLexicalDeclContext();
@@ -4992,6 +5017,16 @@ TemplateDeductionResult Sema::DeduceTemplateArguments(
     FunctionType = SubstAutoTypeDependent(FunctionType);
     HasDeducedReturnType = true;
   }
+
+  // The function type was written for the target the code naming the
+  // template is analysed for, but the specialization is for its own.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      !ArgFunctionType.isNull())
+    ArgFunctionType = MultiTarget().getWrittenTypeForTarget(
+        ArgFunctionType,
+        Context.getMultiTarget().computeTargetInstantiationKey(
+            FunctionTemplate),
+        Info.getLocation());
 
   if (!ArgFunctionType.isNull() && !FunctionType.isNull()) {
     unsigned TDF =

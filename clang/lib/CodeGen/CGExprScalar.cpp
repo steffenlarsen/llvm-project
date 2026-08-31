@@ -25,11 +25,13 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/DeclObjC.h"
+#include "clang/AST/DeclTemplate.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/MatrixUtils.h"
 #include "clang/AST/ParentMapContext.h"
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/StmtVisitor.h"
+#include "clang/AST/TargetDependence.h"
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/DiagnosticTrap.h"
 #include "clang/Basic/TargetInfo.h"
@@ -2150,7 +2152,11 @@ Value *ScalarExprEmitter::VisitMemberExpr(MemberExpr *E) {
   if (CodeGenFunction::ConstantEmission Constant = CGF.tryEmitAsConstant(E)) {
     CGF.EmitIgnoredExpr(E->getBase());
     return CGF.emitScalarConstant(Constant, E);
-  } else {
+  } else if (!(LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+               clang::containsTargetDivergentCallee(E))) {
+    // The AST constant evaluator resolves to the single callee Sema chose,
+    // not the copy this target emits under the same name. Skip it when a
+    // target-divergent callee is reachable from E.
     Expr::EvalResult Result;
     if (E->EvaluateAsInt(Result, CGF.getContext(), Expr::SE_AllowSideEffects)) {
       llvm::APSInt Value = Result.Val.getInt();

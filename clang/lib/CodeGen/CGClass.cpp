@@ -21,6 +21,7 @@
 #include "clang/AST/CXXInheritance.h"
 #include "clang/AST/CharUnits.h"
 #include "clang/AST/DeclTemplate.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/Basic/CodeGenOptions.h"
@@ -798,6 +799,10 @@ void CodeGenFunction::EmitConstructorBody(FunctionArgList &Args) {
   const FunctionDecl *Definition = nullptr;
   Stmt *Body = Ctor->getBody(Definition);
   assert(Definition == Ctor && "emitting wrong constructor body");
+  // A constructor can have a body per target, with the same initializers.
+  if (getContext().hasMultiTarget())
+    Body = getContext().getMultiTarget().getBodyForTarget(
+        Ctor, CGM.getTargetVariant());
 
   // Enter the function-try-block before the constructor prologue if
   // applicable.
@@ -1424,7 +1429,10 @@ void CodeGenFunction::EmitDestructorBody(FunctionArgList &Args) {
     return;
   }
 
-  Stmt *Body = Dtor->getBody();
+  Stmt *Body = getContext().hasMultiTarget()
+                   ? getContext().getMultiTarget().getBodyForTarget(
+                         Dtor, CGM.getTargetVariant())
+                   : Dtor->getBody();
   if (Body) {
     incrementProfileCounter(Body);
     maybeCreateMCDCCondBitmap();

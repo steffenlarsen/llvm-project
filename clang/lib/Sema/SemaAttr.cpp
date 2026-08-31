@@ -19,6 +19,7 @@
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Sema/Lookup.h"
+#include "clang/Sema/SemaMultiTarget.h"
 #include <optional>
 using namespace clang;
 
@@ -458,7 +459,17 @@ void Sema::ActOnPragmaClangSection(SourceLocation PragmaLoc,
       llvm_unreachable("invalid clang section kind");
   }
 
+  // Each target the parse is for sees the change.
+  auto NoteChange = [&](bool Valid) {
+    if (Context.isMultiTargetCompile())
+      MultiTarget().notePragmaChange(
+          {static_cast<unsigned>(SecKind),
+           {},
+           {Valid, Valid ? SecName.str() : std::string(), PragmaLoc}});
+  };
+
   if (Action == PragmaClangSectionAction::Clear) {
+    NoteChange(false);
     CSec->Valid = false;
     return;
   }
@@ -466,6 +477,7 @@ void Sema::ActOnPragmaClangSection(SourceLocation PragmaLoc,
   if (llvm::Error E = isValidSectionSpecifier(SecName)) {
     Diag(PragmaLoc, diag::err_pragma_section_invalid_for_target)
         << toString(std::move(E));
+    NoteChange(false);
     CSec->Valid = false;
     return;
   }
@@ -473,6 +485,7 @@ void Sema::ActOnPragmaClangSection(SourceLocation PragmaLoc,
   if (UnifySection(SecName, SectionFlags, PragmaLoc))
     return;
 
+  NoteChange(true);
   CSec->Valid = true;
   CSec->SectionName = std::string(SecName);
   CSec->PragmaLocation = PragmaLoc;
@@ -665,6 +678,10 @@ void Sema::ActOnPragmaMSComment(SourceLocation CommentLoc,
   auto *PCD = PragmaCommentDecl::Create(
       Context, Context.getTranslationUnitDecl(), CommentLoc, Kind, Arg);
   Context.getTranslationUnitDecl()->addDecl(PCD);
+  // A pragma in one target's alternative is that target's. The consumer sees
+  // the declaration before the parser would tag it.
+  if (unsigned V = Context.getDeclTagVariant())
+    PCD->setTargetVariant(V);
   Consumer.HandleTopLevelDecl(DeclGroupRef(PCD));
 }
 
@@ -673,6 +690,9 @@ void Sema::ActOnPragmaDetectMismatch(SourceLocation Loc, StringRef Name,
   auto *PDMD = PragmaDetectMismatchDecl::Create(
       Context, Context.getTranslationUnitDecl(), Loc, Name, Value);
   Context.getTranslationUnitDecl()->addDecl(PDMD);
+  // As for a #pragma comment.
+  if (unsigned V = Context.getDeclTagVariant())
+    PDMD->setTargetVariant(V);
   Consumer.HandleTopLevelDecl(DeclGroupRef(PDMD));
 }
 
@@ -1290,10 +1310,11 @@ void Sema::DiagnoseUnterminatedPragmaAttribute() {
 }
 
 void Sema::ActOnPragmaOptimize(bool On, SourceLocation PragmaLoc) {
-  if(On)
-    OptimizeOffPragmaLocation = SourceLocation();
-  else
-    OptimizeOffPragmaLocation = PragmaLoc;
+  SourceLocation Off = On ? SourceLocation() : PragmaLoc;
+  if (Context.isMultiTargetCompile())
+    MultiTarget().notePragmaChange(
+        {SemaMultiTarget::PragmaStateChange::OptimizePart, Off, {}, {}});
+  OptimizeOffPragmaLocation = Off;
 }
 
 void Sema::ActOnPragmaMSOptimize(SourceLocation Loc, bool IsOn) {
@@ -1318,6 +1339,8 @@ void Sema::ActOnPragmaMSFunction(
 void Sema::AddRangeBasedOptnone(FunctionDecl *FD) {
   // In the future, check other pragmas if they're implemented (e.g. pragma
   // optimize 0 will probably map to this functionality too).
+  if (LLVM_UNLIKELY(Context.isMultiTargetCompile()))
+    MultiTarget().usePragmaState();
   if(OptimizeOffPragmaLocation.isValid())
     AddOptnoneAttributeIfNoConflicts(FD, OptimizeOffPragmaLocation);
 }

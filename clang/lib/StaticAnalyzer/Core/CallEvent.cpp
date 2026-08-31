@@ -22,6 +22,7 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/ParentMap.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/Type.h"
@@ -576,6 +577,13 @@ RuntimeDefinition AnyFunctionCall::getRuntimeDefinition() const {
   const FunctionDecl *FD = getDecl();
   if (!FD)
     return {};
+
+  // A multi-target compilation's code can call another target's copy. The
+  // analysed target runs its own.
+  if (LLVM_UNLIKELY(FD->getTargetVariant()) && !FD->isCopyFor(1))
+    if (const auto *Own = dyn_cast_or_null<FunctionDecl>(
+            FD->getASTContext().getMultiTarget().getCopyFor(FD, 1)))
+      FD = Own;
 
   // Note that the AnalysisDeclContext will have the FunctionDecl with
   // the definition (if one exists).

@@ -11,22 +11,29 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Parse/Parser.h"
+#include "TargetAlternationReconciler.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTLambda.h"
 #include "clang/AST/DeclTemplate.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/Basic/DiagnosticParse.h"
+#include "clang/Basic/MultiTargetDebugOptions.h"
 #include "clang/Basic/StackExhaustionHandler.h"
 #include "clang/Basic/TokenKinds.h"
 #include "clang/Lex/ModuleLoader.h"
 #include "clang/Lex/Preprocessor.h"
+#include "clang/Lex/TokenStreamMerge.h"
 #include "clang/Parse/RAIIObjectsForParser.h"
 #include "clang/Sema/DeclSpec.h"
 #include "clang/Sema/EnterExpressionEvaluationContext.h"
 #include "clang/Sema/ParsedTemplate.h"
 #include "clang/Sema/Scope.h"
 #include "clang/Sema/SemaCodeCompletion.h"
+#include "clang/Sema/SemaMultiTarget.h"
 #include "llvm/ADT/STLForwardCompat.h"
+#include "llvm/ADT/ScopeExit.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/TimeProfiler.h"
 using namespace clang;
@@ -69,6 +76,13 @@ bool Parser::isTokenSEHExcept() {
   return false;
 }
 
+static llvm::cl::opt<bool> ParseIdenticalAlternativesOnce(
+    "parse-identical-alternatives-once", llvm::cl::Hidden,
+    llvm::cl::init(true),
+    llvm::cl::desc("Parse an alternative whose tokens are the same as an "
+                   "earlier one's once for both targets, unless what parsing "
+                   "it consumed differs between them"));
+
 Parser::Parser(Preprocessor &pp, Sema &actions, bool skipFunctionBodies)
     : PP(pp),
       PreferredType(&actions.getASTContext(), pp.isCodeCompletionEnabled()),
@@ -77,6 +91,12 @@ Parser::Parser(Preprocessor &pp, Sema &actions, bool skipFunctionBodies)
       ParsingGenericAssociationType(false), InMessageExpression(false),
       ParsingInObjCContainer(false), TemplateParameterDepth(0) {
   SkipFunctionBodies = pp.isCodeCompletionEnabled() || skipFunctionBodies;
+  // Sharing is decided by the inputs a multi-target compilation records.
+  ShareIdenticalAlternatives =
+      ParseIdenticalAlternativesOnce &&
+      Actions.getASTContext().isMultiTargetCompile();
+  if (ShareIdenticalAlternatives)
+    Actions.getASTContext().getMultiTarget().RecordGroupInputs = true;
   Tok = Token::createEof();
   Actions.CurScope = nullptr;
   NumCachedScopes = 0;
@@ -622,6 +642,363 @@ bool Parser::ParseFirstTopLevelDecl(DeclGroupPtrTy &Result,
   return NoTopLevelDecls;
 }
 
+
+unsigned Parser::findSharedTargetAlternative() const {
+  unsigned Same = TargetAlternativeSameAs;
+  if (!ShareIdenticalAlternatives || !Same)
+    return 0;
+  // The host's alternative is analysed as host code, which a device's is not,
+  // whatever their tokens.
+  for (unsigned K = 2, E = std::min<size_t>(TargetAlternative,
+                                            ParsedAlternatives.size());
+       K < E; ++K) {
+    const ParsedAlternative &Alt = ParsedAlternatives[K];
+    if (Alt.Parsed && !Alt.StandIn && (K == Same || Alt.SameAs == Same) &&
+        !Actions.getASTContext().getMultiTarget().separatesTargets(
+            Alt.Inputs, K, TargetAlternative))
+      return K;
+  }
+  return 0;
+}
+
+void Parser::HandleTargetAlternationMarker() {
+  ASTContext &Ctx = Actions.getASTContext();
+  // Consuming the marker lexes the token after it, which belongs to the
+  // alternative the marker starts, or to what follows the region. A pragma
+  // there waits until that target is in scope.
+  bool ApplyQueued = !std::exchange(QueueDeferredSemaPragmas, true);
+  llvm::scope_exit ApplyQueuedPragmas([&] {
+    if (!ApplyQueued)
+      return;
+    QueueDeferredSemaPragmas = false;
+    for (const Token &T : std::exchange(QueuedDeferredSemaPragmas, {}))
+      applyDeferredSemaPragma(T);
+  });
+  bool LeavingReparseAlternate =
+      TargetAlternative && Actions.MultiTarget().InTargetFallbackReparse;
+  // Finish the alternative being left.
+  if (TargetAlternative && TargetAlternative < ParsedAlternatives.size() &&
+      ParsedAlternatives[TargetAlternative].Parsed) {
+    ParsedAlternative &Done = ParsedAlternatives[TargetAlternative];
+    Done.Inputs = Ctx.getMultiTarget().refineTargetPartition(
+        Done.Inputs, std::exchange(Actions.MultiTarget().GroupInputs, 0));
+    Done.TagsEnd = Ctx.getMultiTarget().TargetTagLog.size();
+    Done.PragmasEnd = Actions.MultiTarget().getPragmaChangeLogSize();
+    for (const ParsedAlternative::Unit &U : Done.Units)
+      Done.Inputs =
+          Ctx.getMultiTarget().refineTargetPartition(Done.Inputs, U.Inputs);
+  }
+  switch (Tok.getKind()) {
+  case tok::annot_target_alt_begin:
+    TargetAlternative = 1;
+    TargetAlternativeSameAs = 0;
+    ParsedAlternatives.clear();
+    Ctx.getMultiTarget().TargetTagLog.clear();
+    ++TargetRegion;
+    break;
+  case tok::annot_target_alt_sep: {
+    uintptr_t V = reinterpret_cast<uintptr_t>(Tok.getAnnotationValue());
+    Actions.MultiTarget().InTargetFallbackReparse =
+        (V & FallbackReparseBit) != 0;
+    TargetAlternative = (V & TargetAltIndexMask) + 1;
+    TargetAlternativeSameAs = V >> TargetAltSameAsShift;
+    // A re-parse's alternates are bracketed one by one, the first device's
+    // first.
+    if (Actions.MultiTarget().InTargetFallbackReparse &&
+        TargetAlternative == 2) {
+      ParsedAlternatives.clear();
+      Ctx.getMultiTarget().TargetTagLog.clear();
+    }
+    break;
+  }
+  default:
+    TargetAlternative = 0;
+    TargetAlternativeSameAs = 0;
+    Actions.MultiTarget().InTargetFallbackReparse = false;
+    break;
+  }
+  ConsumeAnnotationToken();
+  if (LeavingReparseAlternate)
+    noteReparseAlternateEnd(/*Skipped=*/false);
+
+  // Verifying, an alternative is parsed all the same and compared with the one
+  // that stands for it.
+  unsigned Shared = findSharedTargetAlternative();
+  if (Shared && !multitarget::VerifyIdenticalAlternatives) {
+    // Skip this alternative's tokens, up to the marker ending it.
+    unsigned Depth = 0;
+    while (Tok.isNot(tok::eof)) {
+      if (Tok.is(tok::annot_target_alt_begin)) {
+        ++Depth;
+      } else if (Tok.isOneOf(tok::annot_target_alt_sep,
+                             tok::annot_target_alt_end)) {
+        if (!Depth)
+          break;
+        if (Tok.is(tok::annot_target_alt_end))
+          --Depth;
+      }
+      ConsumeAnyToken();
+    }
+    // What the earlier alternative made for its targets is this one's too.
+    ParsedAlternative &Same = ParsedAlternatives[Shared];
+    for (size_t I = Same.TagsBegin; I != Same.TagsEnd; ++I) {
+      const Decl *D = Ctx.getMultiTarget().TargetTagLog[I];
+      if (D->getTargetVariant() != Shared ||
+          D->isCopyFor(TargetAlternative))
+        continue;
+      TargetSet Targets = D->getTargetSet();
+      Targets.insert(TargetAlternative);
+      const_cast<Decl *>(D)->setTargetSet(Targets);
+    }
+    // So are the pragmas it changed for its target, rather than the skipped
+    // alternative's own.
+    QueuedDeferredSemaPragmas.clear();
+    Actions.MultiTarget().replayPragmaChanges(
+        Same.PragmasBegin, Same.PragmasEnd, TargetAlternative);
+    bool Reparse = Actions.MultiTarget().InTargetFallbackReparse;
+    TargetAlternative = 0;
+    TargetAlternativeSameAs = 0;
+    HandleTargetAlternationMarker();
+    if (Reparse)
+      noteReparseAlternateEnd(/*Skipped=*/true);
+    return;
+  }
+
+  // A re-parse for the host is the host's view of device-only code.
+  Actions.MultiTarget().setHostViewReparse(
+      Actions.MultiTarget().InTargetFallbackReparse && TargetAlternative == 1);
+
+  // Reset before entering. The scopes are siblings, not nested, and the RAII
+  // object restores what it saved on construction.
+  TargetAlternativeScope.reset();
+  Actions.MultiTarget().InTargetAlternativeRegion = TargetAlternative != 0;
+  if (TargetAlternative)
+    TargetAlternativeScope = std::make_unique<ASTContext::TargetScope>(
+        Actions.getASTContext(), TargetAlternative);
+
+  // Start recording what this alternative consumes and tags.
+  Ctx.getMultiTarget().LogTargetTags =
+      ShareIdenticalAlternatives && TargetAlternative;
+  if (Ctx.getMultiTarget().LogTargetTags) {
+    if (ParsedAlternatives.size() <= TargetAlternative)
+      ParsedAlternatives.resize(TargetAlternative + 1);
+    ParsedAlternative &Now = ParsedAlternatives[TargetAlternative];
+    Now = ParsedAlternative();
+    Now.Parsed = true;
+    Now.SameAs = TargetAlternativeSameAs;
+    Now.StandIn = Shared;
+    Now.TagsBegin = Ctx.getMultiTarget().TargetTagLog.size();
+    Now.PragmasBegin = Actions.MultiTarget().getPragmaChangeLogSize();
+    Actions.MultiTarget().GroupInputs = 0;
+    TargetAlternativeContext = Actions.CurContext;
+  }
+}
+
+bool Parser::startsDeviceOnlyDeclaration() {
+  bool Device = false, Host = false;
+  unsigned Depth = 0;
+  // Template parameter lists are skipped, as their defaults may hold the
+  // tokens that otherwise end the scan.
+  auto SkipAngles = [&](unsigned &N) {
+    int Angles = 0;
+    unsigned Parens = 0;
+    for (;; ++N) {
+      const Token &T = GetLookAheadToken(N);
+      if (T.isOneOf(tok::eof, tok::semi) || T.isAnnotation())
+        return false;
+      if (T.isOneOf(tok::l_paren, tok::l_square, tok::l_brace))
+        ++Parens;
+      else if (T.isOneOf(tok::r_paren, tok::r_square, tok::r_brace)) {
+        if (!Parens)
+          return false;
+        --Parens;
+      } else if (!Parens && T.is(tok::less))
+        ++Angles;
+      else if (!Parens && T.isOneOf(tok::greater, tok::greatergreater)) {
+        Angles -= T.is(tok::greater) ? 1 : 2;
+        if (Angles <= 0)
+          return true;
+      }
+    }
+  };
+  for (unsigned N = 0;; ++N) {
+    const Token &T = GetLookAheadToken(N);
+    if (T.isOneOf(tok::eof, tok::kw_namespace) || T.isAnnotation())
+      break;
+    if (!Depth && T.isOneOf(tok::semi, tok::l_brace, tok::equal))
+      break;
+    if (T.is(tok::kw_template) && GetLookAheadToken(N + 1).is(tok::less)) {
+      if (!SkipAngles(++N))
+        break;
+      continue;
+    }
+    if (T.is(tok::kw___attribute)) {
+      // The names in __attribute__((name(args), name)).
+      unsigned Parens = 0;
+      bool AtName = false;
+      for (++N;; ++N) {
+        const Token &A = GetLookAheadToken(N);
+        if (A.isOneOf(tok::eof, tok::semi) || A.isAnnotation())
+          return false;
+        if (A.is(tok::l_paren)) {
+          AtName = ++Parens == 2;
+        } else if (A.is(tok::r_paren)) {
+          if (--Parens == 0)
+            break;
+        } else if (Parens == 2 && A.is(tok::comma)) {
+          AtName = true;
+        } else if (AtName) {
+          AtName = false;
+          if (const IdentifierInfo *II = A.getIdentifierInfo()) {
+            StringRef Name = II->getName();
+            Device |= Name == "device" || Name == "__device__" ||
+                      Name == "global" || Name == "__global__";
+            Host |= Name == "host" || Name == "__host__";
+          }
+        }
+      }
+      continue;
+    }
+    if (T.isOneOf(tok::l_paren, tok::l_square, tok::l_brace))
+      ++Depth;
+    else if (T.isOneOf(tok::r_paren, tok::r_square, tok::r_brace)) {
+      if (!Depth)
+        break;
+      --Depth;
+    }
+  }
+  return Device && !Host;
+}
+
+void Parser::leadWithDevice(DeviceLead &Lead) {
+  ASTContext &Ctx = Actions.getASTContext();
+  // Device code is the devices' only. Its first parse gives a device's
+  // answers, and the host's view of it is the host's re-parse.
+  if (!Ctx.InFirstParse || Ctx.getHostVariant() != 1 ||
+      getLangOpts().CUDAIsDevice ||
+      Ctx.getCurrentTargetVariant() != Ctx.getHostVariant() ||
+      !Actions.CodeSynthesisContexts.empty() || !startsDeviceOnlyDeclaration())
+    return;
+  // Analysed as the device's own code, as a device's re-parse of it is.
+  Lead.Scope.emplace(Ctx, Ctx.getCanonicalDeviceVariant(),
+                     ASTContext::TargetScope::FirstParse);
+  Lead.Region.emplace(Actions.MultiTarget().InTargetAlternativeRegion, true);
+  Lead.Reparse.emplace(Actions.MultiTarget().InTargetFallbackReparse, true);
+}
+
+void Parser::MarkTargetAlternative(DeclGroupPtrTy &Group) {
+  if (!TargetAlternative)
+    return;
+  ClaimForTargetVariant(Group, TargetAlternative,
+                        Actions.MultiTarget().InTargetFallbackReparse);
+  // A declaration made directly in the alternative ends one of its units.
+  ASTContext &Ctx = Actions.getASTContext();
+  if (Ctx.getMultiTarget().LogTargetTags && Group && !Group.get().isNull() &&
+      TargetAlternative < ParsedAlternatives.size() &&
+      (*Group.get().begin())->getLexicalDeclContext() ==
+          TargetAlternativeContext)
+    ParsedAlternatives[TargetAlternative].Units.push_back(
+        {std::exchange(Actions.MultiTarget().GroupInputs, 0),
+         Ctx.getMultiTarget().TargetTagLog.size()});
+}
+
+/// Notes \p D, just claimed for some targets, if it explicitly specializes
+/// a template or a member of a class specialization.
+static void noteTargetExplicitSpecialization(Decl *D) {
+  ASTContext &Ctx = D->getASTContext();
+  if (auto *Spec = dyn_cast<ClassTemplateSpecializationDecl>(D);
+      Spec && !isa<ClassTemplatePartialSpecializationDecl>(Spec) &&
+      Spec->isExplicitSpecialization()) {
+    Ctx.getMultiTarget().noteTargetExplicitSpecialization(
+        Spec->getSpecializedTemplate(), Spec, Spec);
+    return;
+  }
+  TemplateSpecializationKind Kind = TSK_Undeclared;
+  if (const auto *FD = dyn_cast<FunctionDecl>(D))
+    Kind = FD->getTemplateSpecializationKind();
+  else if (const auto *VD = dyn_cast<VarDecl>(D))
+    Kind = VD->getTemplateSpecializationKind();
+  else if (const auto *RD = dyn_cast<CXXRecordDecl>(D))
+    Kind = RD->getTemplateSpecializationKind();
+  if (Kind != TSK_ExplicitSpecialization)
+    return;
+  if (auto *FD = dyn_cast<FunctionDecl>(D))
+    if (FunctionTemplateDecl *FTD = FD->getPrimaryTemplate()) {
+      Ctx.getMultiTarget().noteTargetExplicitSpecialization(FTD, FD, FD);
+      return;
+    }
+  if (auto *Owner = dyn_cast<ClassTemplateSpecializationDecl>(
+          D->getDeclContext());
+      Owner && !isa<ClassTemplatePartialSpecializationDecl>(Owner) &&
+      !Owner->isExplicitSpecialization())
+    Ctx.getMultiTarget().noteTargetExplicitSpecialization(
+        Owner->getSpecializedTemplate(), Owner, D);
+}
+
+void Parser::ClaimForTargetVariant(DeclGroupPtrTy &Group, unsigned Variant,
+                                   bool IsReparseOrigin,
+                                   std::optional<TargetSet> Targets) {
+  if (!Variant || !Group)
+    return;
+  const unsigned TargetAlternative = Variant;
+  std::function<void(Decl *)> Mark = [&](Decl *D) {
+    if (!D)
+      return;
+    if (D->getTargetVariant() && !isa<NamespaceDecl>(D) &&
+        !isa<LinkageSpecDecl>(D))
+      return;
+    // A namespace or a linkage specification is a container, not an entity. It
+    // is not target-specific just because a divergent region opens inside it,
+    // and tagging it would hide everything in it from every other target. Its
+    // contents are still visited.
+    if (!isa<NamespaceDecl>(D) && !isa<LinkageSpecDecl>(D)) {
+      if (LLVM_UNLIKELY(!multitarget::TraceTaggedDecl.empty()))
+        if (auto *ND = dyn_cast<NamedDecl>(D))
+          if (StringRef(ND->getNameAsString())
+                  .contains(multitarget::TraceTaggedDecl))
+            llvm::errs() << "tag v" << TargetAlternative << " "
+                         << ND->getDeclKindName() << " "
+                         << ND->getNameAsString() << " @ "
+                         << ND->getLocation().printToString(
+                                Actions.getSourceManager())
+                         << "\n";
+      if (Targets)
+        D->setTargetSet(*Targets);
+      else
+        D->setTargetVariant(TargetAlternative);
+      D->setTargetVariantIsReparseOrigin(IsReparseOrigin);
+      if (auto *FD = dyn_cast<FunctionDecl>(D); FD && IsReparseOrigin)
+        Actions.MultiTarget().inheritTargetDefaultArguments(FD);
+      // A re-parse gives every target its own copy.
+      if (!IsReparseOrigin)
+        noteTargetExplicitSpecialization(D);
+      // Re-parsed copies all replay one declaration's tokens.
+      if (!Actions.getASTContext().getMultiTarget().JoinAuditPath.empty())
+        Actions.getASTContext().getMultiTarget().noteTokenClass(
+            D, IsReparseOrigin           ? MultiTargetContext::ReparseTokenClass
+               : TargetAlternativeSameAs ? TargetAlternativeSameAs
+                                         : TargetAlternative);
+    }
+    // A TemplateDecl is not a DeclContext, the templated declaration it wraps
+    // is. Recursing only through DeclContext would leave every member of a
+    // class or function template unmarked and visible to the wrong target.
+    if (auto *TD = dyn_cast<TemplateDecl>(D)) {
+      Mark(TD->getTemplatedDecl());
+      // Template parameters live in the parameter list, not the templated
+      // declaration's DeclContext, so recursion never reaches them and they
+      // stay visible to every target.
+      if (TemplateParameterList *TPL = TD->getTemplateParameters())
+        for (NamedDecl *P : *TPL)
+          Mark(P);
+    }
+    if (auto *DC = dyn_cast<DeclContext>(D))
+      for (Decl *Sub : DC->decls())
+        Mark(Sub);
+  };
+  for (Decl *D : Group.get())
+    Mark(D);
+}
+
 bool Parser::ParseTopLevelDecl(DeclGroupPtrTy &Result,
                                Sema::ModuleImportState &ImportState) {
   DestroyTemplateIdAnnotationsRAIIObj CleanupRAII(*this);
@@ -630,6 +1007,12 @@ bool Parser::ParseTopLevelDecl(DeclGroupPtrTy &Result,
   switch (Tok.getKind()) {
   case tok::annot_pragma_unused:
     HandlePragmaUnused();
+    return false;
+
+  case tok::annot_target_alt_begin:
+  case tok::annot_target_alt_sep:
+  case tok::annot_target_alt_end:
+    HandleTargetAlternationMarker();
     return false;
 
   case tok::kw_export:
@@ -708,17 +1091,24 @@ bool Parser::ParseTopLevelDecl(DeclGroupPtrTy &Result,
     break;
   }
 
-  ParsedAttributes DeclAttrs(AttrFactory);
-  ParsedAttributes DeclSpecAttrs(AttrFactory);
-  // GNU attributes are applied to the declaration specification while the
-  // standard attributes are applied to the declaration.  We parse the two
-  // attribute sets into different containters so we can apply them during
-  // the regular parsing process.
-  while (MaybeParseCXX11Attributes(DeclAttrs) ||
-         MaybeParseGNUAttributes(DeclSpecAttrs))
-    ;
+  {
+    DeviceLead Lead;
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+      leadWithDevice(Lead);
+    ParsedAttributes DeclAttrs(AttrFactory);
+    ParsedAttributes DeclSpecAttrs(AttrFactory);
+    // GNU attributes are applied to the declaration specification while the
+    // standard attributes are applied to the declaration.  We parse the two
+    // attribute sets into different containters so we can apply them during
+    // the regular parsing process.
+    while (MaybeParseCXX11Attributes(DeclAttrs) ||
+           MaybeParseGNUAttributes(DeclSpecAttrs))
+      ;
 
-  Result = ParseExternalDeclaration(DeclAttrs, DeclSpecAttrs);
+    Result = ParseExternalDeclaration(DeclAttrs, DeclSpecAttrs);
+    DeclLedByDevice = Lead.Scope.has_value();
+  }
+  MarkTargetAlternative(Result);
   // An empty Result might mean a line with ';' or some parsing error, ignore
   // it.
   if (Result) {
@@ -740,6 +1130,19 @@ Parser::DeclGroupPtrTy
 Parser::ParseExternalDeclaration(ParsedAttributes &Attrs,
                                  ParsedAttributes &DeclSpecAttrs,
                                  ParsingDeclSpec *DS) {
+  DeclGroupPtrTy Result =
+      ParseExternalDeclarationImpl(Attrs, DeclSpecAttrs, DS);
+  // Every external declaration passes through here, including those in a
+  // namespace or linkage-specification body, which is where most of a HIP
+  // compilation's divergence lives.
+  MarkTargetAlternative(Result);
+  return Result;
+}
+
+Parser::DeclGroupPtrTy
+Parser::ParseExternalDeclarationImpl(ParsedAttributes &Attrs,
+                                     ParsedAttributes &DeclSpecAttrs,
+                                     ParsingDeclSpec *DS) {
   DestroyTemplateIdAnnotationsRAIIObj CleanupRAII(*this);
   ParenBraceBracketBalancer BalancerRAIIObj(*this);
 
@@ -750,8 +1153,18 @@ Parser::ParseExternalDeclaration(ParsedAttributes &Attrs,
 
   Decl *SingleDecl = nullptr;
   switch (Tok.getKind()) {
+  case tok::annot_target_alt_begin:
+  case tok::annot_target_alt_sep:
+  case tok::annot_target_alt_end:
+    // Also reachable from a namespace or linkage-specification body, where the
+    // splice may resume between member declarations.
+    HandleTargetAlternationMarker();
+    return nullptr;
   case tok::annot_pragma_vis:
     HandlePragmaVisibility();
+    return nullptr;
+  case tok::annot_pragma_force_cuda_host_device:
+    HandlePragmaForceCUDAHostDevice();
     return nullptr;
   case tok::annot_pragma_pack:
     HandlePragmaPack();

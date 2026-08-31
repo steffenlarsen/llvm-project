@@ -23,6 +23,7 @@
 #include "clang/Sema/Scope.h"
 #include "clang/Sema/SemaCUDA.h"
 #include "clang/Sema/SemaCodeCompletion.h"
+#include "clang/Sema/SemaMultiTarget.h"
 #include "clang/Sema/SemaRISCV.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -723,6 +724,66 @@ void Parser::HandlePragmaVisibility() {
     static_cast<IdentifierInfo *>(Tok.getAnnotationValue());
   SourceLocation VisLoc = ConsumeAnnotationToken();
   Actions.ActOnPragmaVisibility(VisType, VisLoc);
+}
+
+void Parser::HandlePragmaForceCUDAHostDevice() {
+  assert(Tok.is(tok::annot_pragma_force_cuda_host_device));
+  bool Begin = Tok.getAnnotationValue() != nullptr;
+  SourceLocation Loc = ConsumeAnnotationToken();
+  if (Begin)
+    Actions.CUDA().PushForceHostDevice();
+  else if (!Actions.CUDA().PopForceHostDevice())
+    Diag(Loc, diag::err_pragma_cannot_end_force_cuda_host_device);
+}
+
+void Parser::onDeferredSemaPragma(const Token &T) {
+  if (QueueDeferredSemaPragmas)
+    QueuedDeferredSemaPragmas.push_back(T);
+  else
+    applyDeferredSemaPragma(T);
+}
+
+void Parser::applyDeferredSemaPragma(const Token &T) {
+  SourceLocation Loc = T.getLocation();
+  switch (T.getKind()) {
+  case tok::annot_pragma_optimize:
+    Actions.ActOnPragmaOptimize(T.getAnnotationValue() != nullptr, Loc);
+    return;
+  case tok::annot_pragma_clang_section:
+    for (const PragmaClangSectionInfo::Clause &C :
+         static_cast<const PragmaClangSectionInfo *>(T.getAnnotationValue())
+             ->Clauses)
+      Actions.ActOnPragmaClangSection(
+          C.Loc,
+          C.Name.empty() ? PragmaClangSectionAction::Clear
+                         : PragmaClangSectionAction::Set,
+          static_cast<PragmaClangSectionKind>(C.Kind), C.Name);
+    return;
+  case tok::annot_pragma_comment: {
+    const auto *Info =
+        static_cast<const PragmaCommentInfo *>(T.getAnnotationValue());
+    Actions.ActOnPragmaMSComment(
+        Loc, static_cast<PragmaMSCommentKind>(Info->Kind), Info->Arg);
+    return;
+  }
+  case tok::annot_pragma_detect_mismatch: {
+    const auto *Info =
+        static_cast<const PragmaDetectMismatchInfo *>(T.getAnnotationValue());
+    Actions.ActOnPragmaDetectMismatch(Loc, Info->Name, Info->Value);
+    return;
+  }
+  case tok::annot_pragma_assume_nonnull: {
+    SourceLocation Begin = T.getAnnotationValue() ? Loc : SourceLocation();
+    SemaMultiTarget::PragmaStateChange Change;
+    Change.Part = SemaMultiTarget::PragmaStateChange::AssumeNonNullPart;
+    Change.AssumeNonNull = Begin;
+    Actions.MultiTarget().notePragmaChange(Change);
+    PP.setPragmaAssumeNonNullLoc(Begin);
+    return;
+  }
+  default:
+    llvm_unreachable("not a pragma deferred to the parser");
+  }
 }
 
 void Parser::HandlePragmaPack() {
@@ -1692,6 +1753,19 @@ struct PragmaAttributeInfo {
 
 } // end anonymous namespace
 
+int clang::getPragmaAttributeScopeDelta(const Token &T) {
+  assert(T.is(tok::annot_pragma_attribute));
+  auto *Info = static_cast<PragmaAttributeInfo *>(T.getAnnotationValue());
+  switch (Info->Action) {
+  case PragmaAttributeInfo::Push:
+    return 1;
+  case PragmaAttributeInfo::Pop:
+    return -1;
+  default:
+    return 0; // An attribute is one-shot, not a scope edge.
+  }
+}
+
 static StringRef getIdentifier(const Token &Tok) {
   if (Tok.is(tok::identifier))
     return Tok.getIdentifierInfo()->getName();
@@ -2370,6 +2444,17 @@ void PragmaMSStructHandler::HandlePragma(Preprocessor &PP,
                       /*IsReinject=*/false);
 }
 
+/// Enters an annotation for a pragma that acts on Sema, for the parser to
+/// apply where it reaches it rather than where it is lexed.
+static void enterSemaPragmaAnnotation(Preprocessor &PP, tok::TokenKind Kind,
+                                      SourceLocation Loc, SourceLocation EndLoc,
+                                      void *Value) {
+  auto Toks = std::make_unique<Token[]>(1);
+  Toks[0] = Token::createAnnotation(Kind, SourceRange(Loc, EndLoc), Value);
+  PP.EnterTokenStream(std::move(Toks), 1, /*DisableMacroExpansion=*/true,
+                      /*IsReinject=*/false);
+}
+
 // #pragma clang section bss="abc" data="" rodata="def" text="" relro=""
 void PragmaClangSectionHandler::HandlePragma(Preprocessor &PP,
                                              PragmaIntroducer Introducer,
@@ -2377,6 +2462,18 @@ void PragmaClangSectionHandler::HandlePragma(Preprocessor &PP,
 
   Token Tok;
   auto SecKind = PragmaClangSectionKind::Invalid;
+
+  // Deferred, the clauses read before any error are applied all the same.
+  SmallVector<PragmaClangSectionInfo::Clause, 2> Deferred;
+  llvm::scope_exit EnterDeferred([&] {
+    if (Deferred.empty())
+      return;
+    auto *Info = new (PP.getPreprocessorAllocator()) PragmaClangSectionInfo;
+    Info->Clauses = ArrayRef(Deferred).copy(PP.getPreprocessorAllocator());
+    enterSemaPragmaAnnotation(PP, tok::annot_pragma_clang_section,
+                              FirstToken.getLocation(), Tok.getLocation(),
+                              Info);
+  });
 
   PP.Lex(Tok); // eat 'section'
   while (Tok.isNot(tok::eod)) {
@@ -2413,6 +2510,12 @@ void PragmaClangSectionHandler::HandlePragma(Preprocessor &PP,
     if (!PP.LexStringLiteral(Tok, SecName, "pragma clang section", false))
       return;
 
+    if (PP.deferSemaPragmas()) {
+      Deferred.push_back(
+          {static_cast<unsigned>(SecKind), PragmaLocation,
+           StringRef(SecName).copy(PP.getPreprocessorAllocator())});
+      continue;
+    }
     Actions.ActOnPragmaClangSection(PragmaLocation,
                                     (SecName.size()
                                          ? PragmaClangSectionAction::Set
@@ -3215,6 +3318,14 @@ void PragmaDetectMismatchHandler::HandlePragma(Preprocessor &PP,
     PP.getPPCallbacks()->PragmaDetectMismatch(DetectMismatchLoc, NameString,
                                               ValueString);
 
+  if (PP.deferSemaPragmas()) {
+    auto *Info = new (PP.getPreprocessorAllocator()) PragmaDetectMismatchInfo{
+        StringRef(NameString).copy(PP.getPreprocessorAllocator()),
+        StringRef(ValueString).copy(PP.getPreprocessorAllocator())};
+    enterSemaPragmaAnnotation(PP, tok::annot_pragma_detect_mismatch,
+                              DetectMismatchLoc, Tok.getLocation(), Info);
+    return;
+  }
   Actions.ActOnPragmaDetectMismatch(DetectMismatchLoc, NameString, ValueString);
 }
 
@@ -3321,6 +3432,14 @@ void PragmaCommentHandler::HandlePragma(Preprocessor &PP,
   if (PP.getPPCallbacks())
     PP.getPPCallbacks()->PragmaComment(CommentLoc, II, ArgumentString);
 
+  if (PP.deferSemaPragmas()) {
+    auto *Info = new (PP.getPreprocessorAllocator()) PragmaCommentInfo{
+        static_cast<unsigned>(Kind),
+        StringRef(ArgumentString).copy(PP.getPreprocessorAllocator())};
+    enterSemaPragmaAnnotation(PP, tok::annot_pragma_comment, CommentLoc,
+                              Tok.getLocation(), Info);
+    return;
+  }
   Actions.ActOnPragmaMSComment(CommentLoc, Kind, ArgumentString);
 }
 
@@ -3359,6 +3478,12 @@ void PragmaOptimizeHandler::HandlePragma(Preprocessor &PP,
     return;
   }
 
+  if (PP.deferSemaPragmas()) {
+    enterSemaPragmaAnnotation(PP, tok::annot_pragma_optimize,
+                              FirstToken.getLocation(), Tok.getLocation(),
+                              reinterpret_cast<void *>(uintptr_t(IsOn)));
+    return;
+  }
   Actions.ActOnPragmaOptimize(IsOn, FirstToken.getLocation());
 }
 
@@ -3975,16 +4100,27 @@ void PragmaForceCUDAHostDeviceHandler::HandlePragma(
     return;
   }
 
-  if (Info->isStr("begin"))
-    Actions.CUDA().PushForceHostDevice();
-  else if (!Actions.CUDA().PopForceHostDevice())
-    PP.Diag(FirstTok.getLocation(),
-            diag::err_pragma_cannot_end_force_cuda_host_device);
+  bool Begin = Info->isStr("begin");
+  SourceLocation EndLoc = Tok.getLocation();
 
   PP.Lex(Tok);
-  if (!Tok.is(tok::eod))
+  if (!Tok.is(tok::eod)) {
     PP.Diag(FirstTok.getLocation(),
             diag::warn_pragma_force_cuda_host_device_bad_arg);
+    return;
+  }
+
+  // Deliberately not calling into Sema here. The pragma applies to whatever is
+  // declared between begin and end, so its effect belongs at the position the
+  // parser reaches, not the position the lexer does.
+  auto Toks = std::make_unique<Token[]>(1);
+  Toks[0].startToken();
+  Toks[0].setKind(tok::annot_pragma_force_cuda_host_device);
+  Toks[0].setLocation(FirstTok.getLocation());
+  Toks[0].setAnnotationEndLoc(EndLoc);
+  Toks[0].setAnnotationValue(reinterpret_cast<void *>(Begin ? 1 : 0));
+  PP.EnterTokenStream(std::move(Toks), 1, /*DisableMacroExpansion=*/true,
+                      /*IsReinject=*/false);
 }
 
 /// Handle the #pragma clang attribute directive.

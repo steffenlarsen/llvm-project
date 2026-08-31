@@ -4340,7 +4340,7 @@ Sema::CheckBuiltinFunctionCall(FunctionDecl *FDecl, unsigned BuiltinID,
   // of the arch we are compiling for.
   if (Context.BuiltinInfo.isTSBuiltin(BuiltinID)) {
     if (Context.BuiltinInfo.isAuxBuiltinID(BuiltinID)) {
-      assert(Context.getAuxTargetInfo() &&
+      assert(Context.BuiltinInfo.getAuxTarget() &&
              "Aux Target Builtin, but not an aux target?");
 
       // Host target builtins cannot be lowered for a SYCL device. Defer the
@@ -4352,7 +4352,7 @@ Sema::CheckBuiltinFunctionCall(FunctionDecl *FDecl, unsigned BuiltinID,
             << TheCall->getSourceRange();
 
       if (CheckTSBuiltinFunctionCall(
-              *Context.getAuxTargetInfo(),
+              *Context.BuiltinInfo.getAuxTarget(),
               Context.BuiltinInfo.getAuxBuiltinID(BuiltinID), TheCall))
         return ExprError();
     } else {
@@ -15749,8 +15749,9 @@ bool Sema::CheckParmsForFunctionDef(ArrayRef<ParmVarDecl *> Parameters,
     // shall not be a (possibly cv-qualified) class type that is incomplete
     // or abstract within the function body unless the function is deleted.
     if (!Param->isInvalidDecl() &&
-        (RequireCompleteType(Param->getLocation(), Param->getType(),
-                             diag::err_typecheck_decl_incomplete_type) ||
+        (RequireCompleteTypeForDeclaration(
+             Param->getLocation(), Param->getType(),
+             diag::err_typecheck_decl_incomplete_type) ||
          RequireNonAbstractType(Param->getBeginLoc(), Param->getOriginalType(),
                                 diag::err_abstract_type_in_decl,
                                 AbstractParamType))) {

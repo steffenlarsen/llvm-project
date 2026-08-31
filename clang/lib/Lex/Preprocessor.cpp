@@ -1102,6 +1102,15 @@ void Preprocessor::Lex(Token &Result) {
     if (OnToken)
       OnToken(Result);
   }
+
+  if (LLVM_UNLIKELY(OnDeferredSemaPragma) &&
+      Result.isOneOf(tok::annot_pragma_optimize,
+                     tok::annot_pragma_clang_section, tok::annot_pragma_comment,
+                     tok::annot_pragma_detect_mismatch,
+                     tok::annot_pragma_assume_nonnull)) {
+    OnDeferredSemaPragma(Result);
+    Lex(Result);
+  }
 }
 
 void Preprocessor::LexTokensUntilEOF(std::vector<Token> *Tokens) {

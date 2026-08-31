@@ -395,6 +395,31 @@ struct PragmaLoopHintInfo {
   Token Option;
   ArrayRef<Token> Toks;
 };
+
+/// The clauses of a \#pragma clang section, for the parser to apply.
+struct PragmaClangSectionInfo {
+  struct Clause {
+    /// A PragmaClangSectionKind.
+    unsigned Kind;
+    SourceLocation Loc;
+    /// Empty to clear the section.
+    StringRef Name;
+  };
+  ArrayRef<Clause> Clauses;
+};
+
+/// A \#pragma comment, for the parser to apply.
+struct PragmaCommentInfo {
+  /// A PragmaMSCommentKind.
+  unsigned Kind;
+  StringRef Arg;
+};
+
+/// A \#pragma detect_mismatch, for the parser to apply.
+struct PragmaDetectMismatchInfo {
+  StringRef Name;
+  StringRef Value;
+};
 } // end namespace clang
 
 #endif // LLVM_CLANG_LEX_TOKEN_H

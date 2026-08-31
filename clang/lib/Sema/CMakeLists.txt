@@ -65,6 +65,9 @@ add_clang_library(clangSema
   SemaInit.cpp
   SemaLambda.cpp
   SemaLookup.cpp
+  SemaLookupTarget.cpp
+  SemaMultiTarget.cpp
+  SemaMultiTargetInstantiate.cpp
   SemaLoongArch.cpp
   SemaM68k.cpp
   SemaMIPS.cpp
@@ -91,6 +94,7 @@ add_clang_library(clangSema
   SemaSYCL.cpp
   SemaSwift.cpp
   SemaSystemZ.cpp
+  SemaTargetInputs.cpp
   SemaTemplate.cpp
   SemaTemplateDeduction.cpp
   SemaTemplateDeductionGuide.cpp

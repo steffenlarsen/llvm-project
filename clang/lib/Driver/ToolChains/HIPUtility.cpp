@@ -55,6 +55,9 @@ void HIP::constructHIPFatbinCommand(Compilation &C, const JobAction &JA,
     OffloadKind = OffloadKind + "v4";
   for (const auto &II : Inputs) {
     const auto *A = II.getAction();
+    // The host's bitcode a fatbin is made from carries the device code itself.
+    if (!A->getOffloadingToolChain())
+      continue;
     const llvm::Triple &InputTriple = A->getOffloadingToolChain()->getTriple();
 
     BoundArch BA = A->getOffloadingArch();

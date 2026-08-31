@@ -20,6 +20,7 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/Type.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticOptions.h"
@@ -36,6 +37,7 @@
 #include "clang/Sema/SemaCUDA.h"
 #include "clang/Sema/SemaHLSL.h"
 #include "clang/Sema/SemaInternal.h"
+#include "clang/Sema/SemaMultiTarget.h"
 #include "clang/Sema/SemaObjC.h"
 #include "clang/Sema/SemaProxy.h"
 #include "clang/Sema/Template.h"
@@ -46,6 +48,7 @@
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/SaveAndRestore.h"
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -1183,6 +1186,8 @@ void OverloadCandidateSet::clear(CandidateSetKind CSK) {
   DeferredCandidatesCount = 0;
   HasDeferredTemplateConstructors = false;
   ResolutionByPerfectCandidateIsDisabled = false;
+  BuildsSideAlternative = false;
+  UseLoc = SourceLocation();
 }
 
 namespace {
@@ -8372,24 +8377,45 @@ static void AddTemplateOverloadCandidateImmediately(
                              FunctionTemplate->getTemplateDepth());
   FunctionDecl *Specialization = nullptr;
   ConversionSequenceList Conversions;
-  if (TemplateDeductionResult Result = S.DeduceTemplateArguments(
-          FunctionTemplate, ExplicitTemplateArgs, Args, Specialization, Info,
-          PartialOverloading, AggregateCandidateDeduction,
-          /*PartialOrdering=*/false,
-          /*ObjectType=*/QualType(),
-          /*ObjectClassification=*/Expr::Classification(),
-          CandidateSet.getKind() ==
-              OverloadCandidateSet::CSK_AddressOfOverloadSet,
-          [&](ArrayRef<QualType> ParamTypes,
-              bool OnlyInitializeNonUserDefinedConversions) {
-            return S.CheckNonDependentConversions(
-                FunctionTemplate, ParamTypes, Args, CandidateSet, Conversions,
-                Sema::CheckNonDependentConversionsFlag(
-                    SuppressUserConversions,
-                    OnlyInitializeNonUserDefinedConversions),
-                nullptr, QualType(), {}, PO);
-          });
-      Result != TemplateDeductionResult::Success) {
+  auto Deduce = [&](TemplateDeductionInfo &Info) {
+    return S.DeduceTemplateArguments(
+        FunctionTemplate, ExplicitTemplateArgs, Args, Specialization, Info,
+        PartialOverloading, AggregateCandidateDeduction,
+        /*PartialOrdering=*/false,
+        /*ObjectType=*/QualType(),
+        /*ObjectClassification=*/Expr::Classification(),
+        CandidateSet.getKind() ==
+            OverloadCandidateSet::CSK_AddressOfOverloadSet,
+        [&](ArrayRef<QualType> ParamTypes,
+            bool OnlyInitializeNonUserDefinedConversions) {
+          return S.CheckNonDependentConversions(
+              FunctionTemplate, ParamTypes, Args, CandidateSet, Conversions,
+              Sema::CheckNonDependentConversionsFlag(
+                  SuppressUserConversions,
+                  OnlyInitializeNonUserDefinedConversions),
+              nullptr, QualType(), {}, PO);
+        });
+  };
+  TemplateDeductionResult Result = Deduce(Info);
+  // A kernel's specialization is made for the devices. Where its signature
+  // names a class that differs between targets, host code launching it passes
+  // the host's class, so it calls the host's specialization instead, which
+  // instantiates the devices' own. With the class given explicitly, the
+  // argument fails to convert instead.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      (Result == TemplateDeductionResult::DeducedMismatch ||
+       Result == TemplateDeductionResult::DeducedMismatchNested ||
+       Result == TemplateDeductionResult::NonDependentConversionFailure) &&
+      FunctionTemplate->getTemplatedDecl()->hasAttr<CUDAGlobalAttr>() &&
+      S.Context.isMultiTargetCompile() && S.Context.getHostVariant() &&
+      !S.Context.isDeviceVariant(S.MultiTarget().getInstantiationTarget())) {
+    MultiTargetContext::HostKernelKeyRAII HostKeyed(S.Context);
+    TemplateDeductionInfo HostInfo(CandidateSet.getLocation(),
+                                   FunctionTemplate->getTemplateDepth());
+    if (Deduce(HostInfo) == TemplateDeductionResult::Success)
+      Result = TemplateDeductionResult::Success;
+  }
+  if (Result != TemplateDeductionResult::Success) {
     OverloadCandidate &Candidate =
         CandidateSet.addCandidate(Conversions.size(), Conversions);
     Candidate.FoundDecl = FoundDecl;
@@ -11174,11 +11200,13 @@ bool clang::isBetterOverloadCandidate(
       // they may incur other diagnostics to be deferred. We should make all
       // host/device related diagnostics deferrable and remove special handling
       // of implicit HD functions.
-      auto EmitThreshold =
-          (S.getLangOpts().CUDAIsDevice && IsCallerImplicitHD &&
-           (IsCand1ImplicitHD || IsCand2ImplicitHD))
-              ? SemaCUDA::CFP_Never
-              : SemaCUDA::CFP_WrongSide;
+      if (IsCallerImplicitHD)
+        S.MultiTarget().recordCUDAModeRead(
+            'C', "implicit host/device overload threshold");
+      auto EmitThreshold = (S.CUDA().isDeviceSide() && IsCallerImplicitHD &&
+                            (IsCand1ImplicitHD || IsCand2ImplicitHD))
+                               ? SemaCUDA::CFP_Never
+                               : SemaCUDA::CFP_WrongSide;
       auto Cand1Emittable = P1 > EmitThreshold;
       auto Cand2Emittable = P2 > EmitThreshold;
       if (Cand1Emittable && !Cand2Emittable)
@@ -11819,6 +11847,73 @@ OverloadingResult OverloadCandidateSet::BestViableFunctionImpl(
     return OR_Ambiguous;
 
   OverloadingResult R = ResultForBestCandidate(Best);
+
+  // A host device caller's pick above can depend on the side it is analysed
+  // for, which an analysis standing for the host and the devices fixes to one
+  // side. Resolve what the other side would pick too. Where it differs, the
+  // caller means something different to each side, a target input that has it
+  // analysed per side, unless the difference is handled:
+  //  - both picks are one symbol, which each side defines for itself;
+  //  - the call is built a second time for the other side, see
+  //    FinishOverloadedCallExpr.
+  if (R == OR_Success && S.getLangOpts().CUDA &&
+      S.getASTContext().hasMultiTarget() && Best->Function &&
+      !S.MultiTarget().BuildingCUDAAlternateCall) {
+    if (FunctionDecl *Caller = S.getCurFunctionDecl(/*AllowLambda=*/true)) {
+      auto CallerTgt = S.CUDA().IdentifyTarget(Caller);
+      if (CallerTgt == CUDAFunctionTarget::HostDevice) {
+        llvm::SmallVector<OverloadCandidate *, 16> AltCandidates;
+        AltCandidates.reserve(this->Candidates.size());
+        std::transform(this->Candidates.begin(), this->Candidates.end(),
+                       std::back_inserter(AltCandidates),
+                       [](OverloadCandidate &Cand) { return &Cand; });
+        OverloadCandidate *AltBest = nullptr;
+        bool AltAmbiguous = false;
+        {
+          SemaCUDA::SideScope Flip(S.CUDA(), !S.CUDA().isDeviceSide());
+          CudaExcludeWrongSideCandidates(S, AltCandidates);
+          for (auto *Cand : AltCandidates) {
+            if (Cand->Viable &&
+                (!AltBest ||
+                 isBetterOverloadCandidate(S, *Cand, *AltBest, Loc, Kind)))
+              AltBest = Cand;
+          }
+          // As above, the other side's pick must be better than every other.
+          if (AltBest)
+            for (auto *Cand : AltCandidates)
+              if (Cand != AltBest && Cand->Viable &&
+                  !isBetterOverloadCandidate(S, *AltBest, *Cand, Loc, Kind)) {
+                AltAmbiguous = true;
+                break;
+              }
+        }
+        if (AltBest && AltBest->Function &&
+            (AltAmbiguous || AltBest->Function != Best->Function)) {
+          TargetPartition Sides =
+              S.Context.getMultiTarget().reconcileTargetPartition(
+                  0, MultiTargetContext::TDK_Side);
+          std::string What = Best->Function->getQualifiedNameAsString();
+          S.MultiTarget().noteSideDivergentCall(Caller, Best->Function,
+                                                getUseLocation());
+          // A deleted or unavailable pick is the other side's own analysis's
+          // to diagnose.
+          bool AltUsable =
+              !AltAmbiguous && !AltBest->Function->isDeleted() &&
+              AltBest->Function->getAvailability() != AR_Unavailable;
+          if (AltUsable && buildsSideAlternative())
+            S.MultiTarget().PendingCUDAAmbientDependentPick =
+                SemaMultiTarget::CUDAAmbientDependentPick{
+                    Best->Function, AltBest->Function, AltBest->FoundDecl};
+          else if (AltUsable &&
+                   SemaCUDA::isSameSymbol(S.Context, Best->Function,
+                                          AltBest->Function))
+            S.MultiTarget().recordTargetInput('R', Sides, What);
+          else
+            S.MultiTarget().recordTargetInput('C', Sides, What);
+        }
+      }
+    }
+  }
 
   if (!EquivalentCands.empty())
     S.diagnoseEquivalentInternalLinkageDeclarations(Loc, Best->Function,
@@ -13944,6 +14039,20 @@ public:
         } else
           EliminateAllExceptMostSpecializedTemplate();
       }
+
+      // The other side may pick a different function, also after the
+      // eliminations past its CUDA preferences.
+      if (Matches.size() == 1 && S.getLangOpts().CUDA)
+        S.CUDA().noteOtherSidePick(
+            S.getCurFunctionDecl(/*AllowLambda=*/true), Matches[0].second,
+            {SourceExpr->getExprLoc(), OvlExpr->getNameLoc()},
+            [&]() -> const FunctionDecl * {
+              AddressOfFunctionResolver Other(S, SourceExpr, TargetType,
+                                              /*Complain=*/false);
+              return Other.getNumMatches() == 1
+                         ? Other.getMatchingFunctionDecl()
+                         : nullptr;
+            });
     }
   }
 
@@ -14438,6 +14547,15 @@ Sema::resolveAddressOfSingleOverloadCandidate(Expr *E, DeclAccessPair &Pair) {
         return nullptr;
     }
     Pair = DAP;
+    // Which candidate is preferred depends on the CUDA side analysed for.
+    if (getLangOpts().CUDA)
+      CUDA().noteOtherSidePick(
+          getCurFunctionDecl(/*AllowLambda=*/true), Result,
+          {E->getExprLoc(), OverloadExpr::find(E).Expression->getNameLoc()},
+          [&]() -> const FunctionDecl * {
+            DeclAccessPair OtherPair;
+            return resolveAddressOfSingleOverloadCandidate(E, OtherPair);
+          });
   }
   return Result;
 }
@@ -15120,10 +15238,102 @@ static ExprResult FinishOverloadedCallExpr(Sema &SemaRef, Scope *S, Expr *Fn,
         SemaRef.FixOverloadedFunctionReference(Fn, (*Best)->FoundDecl, FDecl);
     if (Res.isInvalid())
       return ExprError();
-    return SemaRef.BuildResolvedCallExpr(
+    ExprResult Result = SemaRef.BuildResolvedCallExpr(
         Res.get(), FDecl, LParenLoc, Args, RParenLoc, ExecConfig,
         /*IsExecConfig=*/false,
         static_cast<CallExpr::ADLCallKind>((*Best)->IsADLCandidate));
+    if (Result.isInvalid())
+      return Result;
+
+    // Take the pending ambient-dependent pick, if any. The opposite ambient's
+    // candidate may have an unrelated signature (e.g. `int max(int,int)` vs
+    // `float max(float,float)`), so it needs a whole second CallExpr that
+    // converts the same raw Args independently, not just an alternate callee
+    // grafted onto this call's arguments. The pair is keyed by the primary
+    // CallExpr so code generation can substitute the whole node for the
+    // target variant it is compiling. The primary ambient may be host or
+    // device.
+    std::optional<SemaMultiTarget::CUDAAmbientDependentPick> Pick;
+    if (SemaRef.MultiTarget().PendingCUDAAmbientDependentPick &&
+        SemaRef.MultiTarget().PendingCUDAAmbientDependentPick->Primary ==
+            FDecl) {
+      Pick = *SemaRef.MultiTarget().PendingCUDAAmbientDependentPick;
+      SemaRef.MultiTarget().PendingCUDAAmbientDependentPick.reset();
+    }
+    auto *PrimaryCE = dyn_cast<CallExpr>(Result.get());
+    if (!PrimaryCE || !SemaRef.getLangOpts().CUDA ||
+        !SemaRef.Context.hasMultiTarget() ||
+        SemaRef.MultiTarget().BuildingCUDAAlternateCall)
+      return Result;
+    bool PrimaryIsDevice = SemaRef.CUDA().isDeviceSide();
+    // An argument that is itself such a call has the other side's call, and
+    // possibly another type, there. The other side's call is then resolved
+    // anew from those arguments (e.g. `max(max(x, y), z)`, where the host
+    // picks max(int, int) twice and the device max(float, float) twice).
+    SmallVector<Expr *, 8> AltArgs(Args.begin(), Args.end());
+    bool AltArgsDiffer = false;
+    for (Expr *&Arg : AltArgs)
+      if (const auto *ArgCE = dyn_cast<CallExpr>(Arg->IgnoreParens()))
+        if (const auto *Dual =
+                SemaRef.Context.getMultiTarget().getCUDADualSideCall(ArgCE)) {
+          Arg = const_cast<CallExpr *>(PrimaryIsDevice ? Dual->HostCall
+                                                       : Dual->DeviceCall);
+          AltArgsDiffer = true;
+        }
+    if (!Pick && !AltArgsDiffer)
+      return Result;
+    ExprResult AltCall;
+    unsigned ErrorsBefore = SemaRef.getDiagnostics().getNumErrors();
+    {
+      SemaCUDA::SideScope Flip(SemaRef.CUDA(), !PrimaryIsDevice);
+      if (AltArgsDiffer) {
+        llvm::SaveAndRestore Guard(
+            SemaRef.MultiTarget().BuildingCUDAAlternateCall, true);
+        Sema::TentativeAnalysisScope Trap(SemaRef);
+        AltCall = SemaRef.BuildOverloadedCallExpr(
+            S, Fn, ULE, LParenLoc, AltArgs, RParenLoc, ExecConfig,
+            /*AllowTypoCorrection=*/false);
+      } else {
+        // The call's type is the callee's return type, which a deduced one
+        // only has once its definition is instantiated.
+        auto *Alternate = const_cast<FunctionDecl *>(Pick->Alternate);
+        bool Undeduced = SemaRef.getLangOpts().CPlusPlus14 &&
+                         Alternate->getReturnType()->isUndeducedType() &&
+                         SemaRef.DeduceReturnType(Alternate, ULE->getNameLoc());
+        ExprResult AltFn = Undeduced ? ExprError()
+                                     : SemaRef.FixOverloadedFunctionReference(
+                                           Fn, Pick->AlternateFound, Alternate);
+        if (!AltFn.isInvalid())
+          AltCall = SemaRef.BuildResolvedCallExpr(
+              AltFn.get(), Alternate, LParenLoc, Args, RParenLoc, ExecConfig,
+              /*IsExecConfig=*/false,
+              static_cast<CallExpr::ADLCallKind>((*Best)->IsADLCandidate));
+      }
+    }
+    auto *AltCE = AltCall.isInvalid()
+                      ? nullptr
+                      : dyn_cast_if_present<CallExpr>(AltCall.get());
+    if (AltCE)
+      SemaRef.Context.getMultiTarget().setCUDADualSideCall(
+          PrimaryCE,
+          /*HostCall=*/PrimaryIsDevice ? AltCE : PrimaryCE,
+          /*DeviceCall=*/PrimaryIsDevice ? PrimaryCE : AltCE);
+    // Swapping in the other side's call keeps the code around it, which was
+    // built for this call's type. Where the other side's call has another
+    // type, or none could be built, the caller means something different to
+    // each side and is analysed for each. Not where building it was diagnosed
+    // already, which analysing it again would only repeat.
+    bool AltDiagnosed = SemaRef.getDiagnostics().getNumErrors() != ErrorsBefore;
+    bool SameCallType =
+        AltCE && AltCE->getValueKind() == PrimaryCE->getValueKind() &&
+        SemaRef.Context.hasSameType(AltCE->getType(), PrimaryCE->getType());
+    if (AltCE || !AltDiagnosed)
+      SemaRef.MultiTarget().recordTargetInput(
+          SameCallType ? 'R' : 'C',
+          SemaRef.Context.getMultiTarget().reconcileTargetPartition(
+              0, MultiTargetContext::TDK_Side),
+          FDecl->getQualifiedNameAsString());
+    return Result;
   }
 
   case OR_No_Viable_Function: {
@@ -15233,6 +15443,8 @@ ExprResult Sema::BuildOverloadedCallExpr(Scope *S, Expr *Fn,
                             : OverloadCandidateSet::CSK_Normal;
 
   OverloadCandidateSet CandidateSet(Fn->getExprLoc(), CSK);
+  CandidateSet.setBuildsSideAlternative();
+  CandidateSet.setUseLocation(ULE->getNameLoc());
   ExprResult result;
 
   if (buildOverloadedCallSet(S, Fn, ULE, Args, LParenLoc, &CandidateSet,
@@ -17305,6 +17517,7 @@ Sema::BuildForRangeBeginEndCall(SourceLocation Loc,
       return FRS_DiagnosticIssued;
     UnresolvedLookupExpr *Fn = cast<UnresolvedLookupExpr>(FnR.get());
 
+    CandidateSet->setBuildsSideAlternative();
     bool CandidateSetError = buildOverloadedCallSet(S, Fn, Fn, Range, Loc,
                                                     CandidateSet, CallExpr);
     if (CandidateSet->empty() || CandidateSetError) {

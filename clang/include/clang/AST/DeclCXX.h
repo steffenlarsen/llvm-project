@@ -546,11 +546,20 @@ public:
     return const_cast<CXXRecordDecl*>(this)->getMostRecentDecl();
   }
 
-  CXXRecordDecl *getDefinition() const {
+  // Always inlined as the target check would otherwise keep GCC from inlining
+  // it early, which costs every caller.
+  LLVM_ATTRIBUTE_ALWAYS_INLINE CXXRecordDecl *getDefinition() const {
     // We only need an update if we don't already know which
     // declaration is the definition.
     auto *DD = DefinitionData ? DefinitionData : dataPtr();
-    return DD ? DD->Definition : nullptr;
+    CXXRecordDecl *Def = DD ? DD->Definition : nullptr;
+    // DefinitionData->Definition is shared across the whole redecl chain, so
+    // it can only name one redecl even when a definition is target-tagged
+    // and diverges per architecture. Resolve to the current target's
+    // definition in that case.
+    if (Def && LLVM_UNLIKELY(Def->hasTargetVariantEntry()))
+      return Def->getDefinitionForCurrentTarget();
+    return Def;
   }
 
   CXXRecordDecl *getDefinitionOrSelf() const {
@@ -558,6 +567,15 @@ public:
       return Def;
     return const_cast<CXXRecordDecl *>(this);
   }
+
+  /// Returns the redecl in this chain that is a complete definition tagged
+  /// for the target currently being analysed, or this decl if none matches.
+  CXXRecordDecl *getDefinitionForCurrentTarget() const;
+
+  /// As above, but for an explicit target variant rather than the ambient
+  /// one, for callers that know their own target directly. \p Variant == 0
+  /// means the primary target (1).
+  CXXRecordDecl *getDefinitionForTargetVariant(unsigned Variant) const;
 
   bool hasDefinition() const { return DefinitionData || dataPtr(); }
 

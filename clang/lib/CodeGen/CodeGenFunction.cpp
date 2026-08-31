@@ -28,6 +28,7 @@
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/IgnoreExpr.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtObjC.h"
 #include "clang/Basic/Builtins.h"
@@ -1567,7 +1568,10 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
     if (SpecDecl->hasBody(SpecDecl))
       Loc = SpecDecl->getLocation();
 
-  Stmt *Body = FD->getBody();
+  Stmt *Body = getContext().hasMultiTarget()
+                   ? getContext().getMultiTarget().getBodyForTarget(
+                         FD, CGM.getTargetVariant())
+                   : FD->getBody();
 
   if (Body) {
     // Coroutines always emit lifetime markers.

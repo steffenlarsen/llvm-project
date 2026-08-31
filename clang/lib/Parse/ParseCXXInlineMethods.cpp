@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/AST/DeclTemplate.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/Basic/DiagnosticParse.h"
 #include "clang/Basic/DiagnosticSema.h"
 #include "clang/Parse/Parser.h"
@@ -19,7 +20,9 @@
 #include "clang/Sema/EnterExpressionEvaluationContext.h"
 #include "clang/Sema/Lookup.h"
 #include "clang/Sema/Scope.h"
+#include "clang/Sema/SemaMultiTarget.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/Support/SaveAndRestore.h"
 
 using namespace clang;
 
@@ -565,6 +568,63 @@ void Parser::ParseLexedMethodDefs(ParsingClass &Class) {
 }
 
 void Parser::ParseLexedMethodDef(LexedMethod &LM) {
+  ASTContext &Ctx = Actions.getASTContext();
+  // A copy merged into another before its body was parsed keeps the body of
+  // its own targets, as the body of the copy it was merged into.
+  if (Ctx.isMultiTargetCompile())
+    if (std::optional<MultiTargetContext::PendingTargetBody> Pending =
+            Ctx.getMultiTarget().takePendingTargetBody(LM.D)) {
+      const FunctionDecl *Survivor = Pending->Survivor->getAsFunction();
+      if (!Survivor)
+        return;
+      for (Token &T : LM.Toks)
+        if (T.is(tok::eof) && T.getEofData() == LM.D)
+          T.setEofData(Pending->Survivor);
+      LM.D = Pending->Survivor;
+      ASTContext::TargetScope Scope(Ctx, Pending->Variant);
+      llvm::SaveAndRestore InRegion(
+          Actions.MultiTarget().InTargetAlternativeRegion, true);
+      llvm::SaveAndRestore InPart(Actions.MultiTarget().TargetBodyPart,
+                                  Pending->Targets);
+      llvm::SaveAndRestore<const FunctionDecl *> Function(
+          Actions.MultiTarget().TargetBodyFunction, Survivor);
+      ParseLexedMethodBody(LM);
+      return;
+    }
+  // A function other copies were merged into keeps the body of its own arm,
+  // which is parsed for that arm's target, as the copy it was.
+  std::optional<ASTContext::TargetScope> OwnArm;
+  std::optional<llvm::SaveAndRestore<bool>> InOwnArm;
+  if (unsigned Own = Ctx.isMultiTargetCompile()
+                         ? Ctx.getMultiTarget().getMergedBodyOwnVariant(LM.D)
+                         : 0) {
+    OwnArm.emplace(Ctx, Own);
+    InOwnArm.emplace(Actions.MultiTarget().InTargetAlternativeRegion, true);
+  }
+  // A body may have to be parsed again for some of its targets.
+  if (Actions.getASTContext().isMultiTargetCompile() &&
+      !Actions.MultiTarget().TargetBodyFunction) {
+    CachedTokens Toks = LM.Toks;
+    ParseLexedMethodBody(LM);
+    ParseLexedMethodDefForTargets(LM, Toks);
+    return;
+  }
+  ParseLexedMethodBody(LM);
+}
+
+void Parser::ParseLexedMethodBody(LexedMethod &LM) {
+  // A member declared in one target's alternative is parsed for that target,
+  // as it would have been where it was declared.
+  ASTContext &Ctx = Actions.getASTContext();
+  std::optional<ASTContext::TargetScope> InAlternative;
+  std::optional<llvm::SaveAndRestore<bool>> AlternativeRegion;
+  if (LM.D && LM.D->getTargetVariant() && !LM.D->isRedundantTargetVariant() &&
+      !Ctx.getDeclTagVariant()) {
+    InAlternative.emplace(Ctx, LM.D->getTargetVariant());
+    AlternativeRegion.emplace(Actions.MultiTarget().InTargetAlternativeRegion,
+                              true);
+  }
+
   // If this is a member template, introduce the template parameter scope.
   ReenterTemplateScopeRAII InFunctionTemplateScope(*this, LM.D);
 
@@ -613,6 +673,61 @@ void Parser::ParseLexedMethodDef(LexedMethod &LM) {
          "current template being instantiated!");
 
   ParseFunctionBody(LM.D, FnScope);
+}
+
+void Parser::ParseLexedMethodDefForTargets(LexedMethod &LM,
+                                           const CachedTokens &Toks) {
+  FunctionDecl *FD = LM.D ? LM.D->getAsFunction() : nullptr;
+  // Only the host compiles a host function, which the devices analyse again
+  // only where they analyse host code themselves. A template's parts are the
+  // patterns of its specializations' parts.
+  if (!FD || !FD->hasBody() || FD->isInvalidDecl() ||
+      isa<CXXConstructorDecl, CXXDestructorDecl>(FD) ||
+      (!FD->hasAttr<CUDADeviceAttr>() && !FD->hasAttr<CUDAGlobalAttr>() &&
+       !Actions.MultiTarget().reanalysesHostCode()))
+    return;
+  ASTContext &Ctx = Actions.getASTContext();
+  TargetPartition Split = Actions.MultiTarget().getBodyTargetSplit(FD);
+  if (!Split)
+    return;
+  unsigned Own;
+  {
+    Sema::ContextRAII InFunction(Actions, FD);
+    Own = Actions.MultiTarget().getInstantiationTarget();
+  }
+  TargetSet Done = Ctx.getMultiTarget().getTargetClass(Split, Own);
+  // A template's body, analysed once with no target's scope, can bind some
+  // names as the host's and others as a device's. Every device gets a part.
+  if (FD->isTemplated() && Ctx.getHostVariant())
+    Done = TargetSet::single(Ctx.getHostVariant());
+  // Targets with a body of their own from a copy merged into this one.
+  Done = Done | Ctx.getMultiTarget().getMergedBodyTargets(LM.D);
+  // A member of one target's copy of a class is that copy's targets' only.
+  const Decl *Copy = FD->getTargetVariant()
+                         ? FD
+                         : cast<Decl>(FD->getDeclContext()->getRedeclContext());
+  // What the body parsed so far had the devices report is the devices' no
+  // longer once they get a body of their own, whose parse reports for them.
+  unsigned Device = Ctx.getCanonicalDeviceVariant();
+  if (Device && !Done.contains(Device) &&
+      (!Copy->getTargetVariant() || Copy->isCopyFor(Device)))
+    Actions.AuxDeviceDeferredDiags.erase(FD);
+  for (unsigned V : Ctx.getTargetVariants()) {
+    if (Done.contains(V) || (Copy->getTargetVariant() && !Copy->isCopyFor(V)))
+      continue;
+    TargetSet Part = Ctx.getMultiTarget().getTargetClass(Split, V);
+    Done = Done | Part;
+    // Device code is analysed for a device.
+    TargetSet Devices = Ctx.getDevices(Part);
+    ASTContext::TargetScope Scope(Ctx, Devices.empty() ? V : Devices.first());
+    llvm::SaveAndRestore Fallback(Actions.MultiTarget().InTargetFallbackReparse,
+                                  true);
+    llvm::SaveAndRestore InPart(Actions.MultiTarget().TargetBodyPart, Part);
+    llvm::SaveAndRestore<const FunctionDecl *> Function(
+        Actions.MultiTarget().TargetBodyFunction, FD);
+    LM.Toks = Toks;
+    ParseLexedMethodBody(LM);
+  }
 }
 
 void Parser::ParseLexedMemberInitializers(ParsingClass &Class) {

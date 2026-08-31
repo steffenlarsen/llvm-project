@@ -20,6 +20,7 @@
 #include "clang/AST/CommentVisitor.h"
 #include "clang/AST/DeclVisitor.h"
 #include "clang/AST/LocInfoType.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/AST/TemplateArgumentVisitor.h"
 #include "clang/AST/Type.h"
@@ -567,8 +568,14 @@ public:
       for (const auto *I : C->inits())
         Visit(I);
 
-    if (D->doesThisDeclarationHaveABody())
+    if (D->doesThisDeclarationHaveABody()) {
       Visit(D->getBody());
+      if (const ASTContext &Ctx = D->getASTContext(); Ctx.hasMultiTarget())
+        for (const auto &[Targets, Body] :
+             Ctx.getMultiTarget().getTargetBodies(D))
+          Visit(Body,
+                "targets=" + Ctx.getMultiTarget().describeTargets(Targets));
+    }
   }
 
   void VisitFieldDecl(const FieldDecl *D) {

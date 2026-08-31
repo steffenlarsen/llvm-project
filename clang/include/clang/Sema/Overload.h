@@ -1293,6 +1293,14 @@ class Sema;
     // Address space of the object being constructed.
     LangAS DestAS = LangAS::Default;
 
+    /// Whether the call resolved from this set is built a second time for the
+    /// other CUDA side, where the two sides pick different functions.
+    bool BuildsSideAlternative = false;
+
+    /// Where a use of the picked function is checked, if not at Loc, as for
+    /// a qualified name.
+    SourceLocation UseLoc;
+
     /// If we have space, allocates from inline storage. Otherwise, allocates
     /// from the slab allocator.
     /// FIXME: It would probably be nice to have a SmallBumpPtrAllocator
@@ -1498,6 +1506,14 @@ class Sema;
              "object");
       DestAS = AS;
     }
+
+    bool buildsSideAlternative() const { return BuildsSideAlternative; }
+    void setBuildsSideAlternative() { BuildsSideAlternative = true; }
+
+    SourceLocation getUseLocation() const {
+      return UseLoc.isValid() ? UseLoc : Loc;
+    }
+    void setUseLocation(SourceLocation L) { UseLoc = L; }
 
   private:
     OverloadingResult ResultForBestCandidate(const iterator &Best);

@@ -479,9 +479,51 @@ public:
   /// Add a declaration to these results with the given access.
   /// Does not test the acceptance criteria.
   void addDecl(NamedDecl *D, AccessSpecifier AS) {
+    // A declaration belonging to another target is not a result here.
+    // Filtering at admission keeps the redeclaration machinery from ever
+    // seeing it, so parsing one target's alternative after another's
+    // produces a fresh declaration rather than a redefinition.
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && !isTargetVisible(D)) {
+      addTargetVisibleSubstitute(D);
+      return;
+    }
     Decls.addDecl(D, AS);
     ResultKind = LookupResultKind::Found;
   }
+
+  /// Adds \p D, skipping only the ambient-dependent half of the
+  /// target-visibility filter. A decl from an already-resolved overload set
+  /// was filtered once, correctly, against the ambient target active when its
+  /// candidates were assembled at parse time. A deferred instantiation can
+  /// run under a different ambient that has nothing to do with which
+  /// candidate was correct for that reference, so re-deriving visibility
+  /// from the ambient would silently drop the sole surviving candidate. A
+  /// decl tagged TargetVariantRedundant is never a valid result regardless
+  /// of ambient, so that half of the filter still applies, substituting the
+  /// copy it was folded into.
+  ///
+  /// A shared template's candidates were frozen under the primary target, so
+  /// when it is instantiated for another target, a candidate that stayed
+  /// per-target is replaced by that target's own copy where one exists.
+  void addDeclIgnoringTargetVisibility(NamedDecl *D) {
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+      D = getCopyIgnoringTargetVisibility(D);
+      if (!D)
+        return;
+    }
+    Decls.addDecl(D, D->getAccess());
+    ResultKind = LookupResultKind::Found;
+  }
+
+  /// Whether \p D belongs to the target currently being analysed. Declarations
+  /// marked 0 belong to every target, which is all of them outside a
+  /// multi-target compilation.
+  ///
+  /// \p SoleCandidate must only be true when the caller guarantees \p D is
+  /// the only member of its frozen candidate set for this reference. It
+  /// relaxes a last-resort fallback that is otherwise unsafe whenever
+  /// another, differently-tagged sibling could be live in the same set.
+  bool isTargetVisible(const NamedDecl *D, bool SoleCandidate = false) const;
 
   /// Add all the declarations from another set of lookup
   /// results.
@@ -760,6 +802,13 @@ public:
   }
 
 private:
+  /// Adds what stands for \p D, a declaration of another target, if anything.
+  void addTargetVisibleSubstitute(NamedDecl *D);
+
+  /// The copy of \p D a lookup ignoring target visibility adds, or null if
+  /// none.
+  NamedDecl *getCopyIgnoringTargetVisibility(NamedDecl *D) const;
+
   void diagnoseAccess() {
     if (!isAmbiguous() && isClassLookup() &&
         getSema().getLangOpts().AccessControl)

@@ -35,6 +35,10 @@ public:
   /// If given, the name of the target CPU to generate code for.
   std::string CPU;
 
+  /// The CPU, or the triple of a target without one, to name the target in
+  /// diagnostics.
+  llvm::StringRef getDisplayName() const { return CPU.empty() ? Triple : CPU; }
+
   /// If given, the name of the target CPU to tune code for.
   std::string TuneCPU;
 

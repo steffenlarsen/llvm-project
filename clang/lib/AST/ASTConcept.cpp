@@ -82,11 +82,14 @@ ASTConstraintSatisfaction *ASTConstraintSatisfaction::Rebuild(
 void ConstraintSatisfaction::Profile(llvm::FoldingSetNodeID &ID,
                                      const ASTContext &C,
                                      const NamedDecl *ConstraintOwner,
-                                     ArrayRef<TemplateArgument> TemplateArgs) {
+                                     ArrayRef<TemplateArgument> TemplateArgs,
+                                     unsigned TargetVariant) {
   ID.AddPointer(ConstraintOwner);
   ID.AddInteger(TemplateArgs.size());
   for (auto &Arg : TemplateArgs)
     Arg.Profile(ID, C);
+  if (TargetVariant)
+    ID.AddInteger(TargetVariant);
 }
 
 ConceptReference *

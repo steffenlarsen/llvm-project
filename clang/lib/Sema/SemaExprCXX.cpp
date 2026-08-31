@@ -1990,6 +1990,13 @@ static UsualDeallocFnInfo resolveDeallocationOverload(
       BestFns->push_back(Info);
   }
 
+  // Which function is preferred depends on the CUDA side analysed for.
+  if (S.getLangOpts().CUDA && Best && (!BestFns || BestFns->size() <= 1))
+    S.CUDA().noteOtherSidePick(
+        S.getCurFunctionDecl(/*AllowLambda=*/true), Best.FD, Loc,
+        [&]() -> const FunctionDecl * {
+          return resolveDeallocationOverload(S, R, IDP, Loc).FD;
+        });
   return Best;
 }
 
@@ -3347,9 +3354,21 @@ foundCandidate:
         Matches.push_back(std::make_pair(D.getPair(), Fn));
     }
 
-    if (getLangOpts().CUDA)
-      CUDA().EraseUnwantedMatches(getCurFunctionDecl(/*AllowLambda=*/true),
-                                  Matches);
+    if (getLangOpts().CUDA) {
+      const FunctionDecl *Caller = getCurFunctionDecl(/*AllowLambda=*/true);
+      // The other side may keep a different function.
+      SmallVector<std::pair<DeclAccessPair, FunctionDecl *>, 2> All;
+      if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+        All.assign(Matches.begin(), Matches.end());
+      CUDA().EraseUnwantedMatches(Caller, Matches);
+      if (Matches.size() == 1 && All.size() > 1)
+        CUDA().noteOtherSidePick(Caller, Matches.front().second, StartLoc,
+                                 [&]() -> const FunctionDecl * {
+                                   CUDA().EraseUnwantedMatches(Caller, All);
+                                   return All.size() == 1 ? All.front().second
+                                                          : nullptr;
+                                 });
+    }
     if (Matches.empty() && isTypeAwareAllocation(Result.IAP.PassTypeIdentity)) {
       DiagnoseMissingTypeAwareCleanupOperator(isPlacementNew);
       return std::nullopt;

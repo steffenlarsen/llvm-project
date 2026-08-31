@@ -5984,6 +5984,15 @@ bool Sema::CheckCallingConvAttr(const ParsedAttr &Attrs, CallingConv &CC,
     }
     auto *HostTI = LangOpts.CUDAIsDevice ? Aux : &TI;
     auto *DeviceTI = LangOpts.CUDAIsDevice ? &TI : Aux;
+    // A multi-target compilation can have a device's target in scope, also
+    // while it analyses for the host.
+    if (LLVM_UNLIKELY(Context.isMultiTargetCompile()))
+      if (unsigned Host = Context.getHostVariant()) {
+        HostTI = Context.getTargetForVariant(Host);
+        DeviceTI = &TI != HostTI ? &TI
+                                 : Context.getTargetForVariant(
+                                       Context.getCanonicalDeviceVariant());
+      }
     if (CheckHost && HostTI)
       A = HostTI->checkCallingConvention(CC);
     if (A == TargetInfo::CCCR_OK && CheckDevice && DeviceTI)
@@ -6132,6 +6141,14 @@ static Expr *makeLaunchBoundsArgExpr(Sema &S, Expr *E,
   assert(!ValArg.isInvalid() &&
          "Unexpected PerformCopyInitialization() failure.");
 
+  // Code generation evaluates the argument again, for whichever target it
+  // generates code for, but its value is that of the target the declaration
+  // was formed for.
+  if (S.Context.isMultiTargetCompile()) {
+    llvm::APSInt Value = I->extOrTrunc(S.Context.getIntWidth(S.Context.IntTy));
+    Value.setIsSigned(true);
+    return ConstantExpr::Create(S.Context, ValArg.get(), APValue(Value));
+  }
   return ValArg.getAs<Expr>();
 }
 

@@ -1,4 +1,5 @@
 #include "clang/AST/JSONNodeDumper.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/Type.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/Specifiers.h"
@@ -143,6 +144,17 @@ void JSONNodeDumper::Visit(const Decl *D) {
 
   addPreviousDeclaration(D);
   InnerDeclVisitor::Visit(D);
+
+  if (!Ctx.hasMultiTarget())
+    return;
+  const MultiTargetContext &MT = Ctx.getMultiTarget();
+  if (D->isRedundantTargetVariant())
+    JOS.attribute("redundant", true);
+  else if (D->getTargetVariant())
+    JOS.attribute("targets",
+                  llvm::json::Array(MT.getTargetNames(D->getTargetSet())));
+  if (unsigned Key = MT.getSpecializationKey(D))
+    JOS.attribute("targetKey", MT.getTargetName(Key));
 }
 
 void JSONNodeDumper::Visit(const comments::Comment *C,
@@ -383,6 +395,10 @@ llvm::json::Object JSONNodeDumper::createBareDeclRef(const Decl *D) {
     Ret["name"] = ND->getDeclName().getAsString();
   if (const auto *VD = dyn_cast<ValueDecl>(D))
     Ret["type"] = createQualType(VD->getType());
+  if (Ctx.hasMultiTarget() && D->getTargetVariant() &&
+      !D->isRedundantTargetVariant())
+    Ret["targets"] = llvm::json::Array(
+        Ctx.getMultiTarget().getTargetNames(D->getTargetSet()));
   return Ret;
 }
 
@@ -1001,6 +1017,18 @@ void JSONNodeDumper::VisitFunctionDecl(const FunctionDecl *FD) {
   if (const auto *Instance = FD->getTemplateInstantiationPattern())
     JOS.attribute("TemplateInstantiationPattern",
                   createPointerRepresentation(Instance));
+
+  // The bodies made for some targets follow the body in "inner", in this
+  // order.
+  if (Ctx.hasMultiTarget() && FD->doesThisDeclarationHaveABody())
+    if (auto Bodies = Ctx.getMultiTarget().getTargetBodies(FD);
+        !Bodies.empty()) {
+      llvm::json::Array Targets;
+      for (const auto &[Set, Body] : Bodies)
+        Targets.push_back(
+            llvm::json::Array(Ctx.getMultiTarget().getTargetNames(Set)));
+      JOS.attribute("targetBodies", std::move(Targets));
+    }
 }
 
 void JSONNodeDumper::VisitEnumDecl(const EnumDecl *ED) {
@@ -1520,6 +1548,13 @@ void JSONNodeDumper::VisitImplicitCastExpr(const ImplicitCastExpr *ICE) {
 
 void JSONNodeDumper::VisitCallExpr(const CallExpr *CE) {
   attributeOnlyIfTrue("adl", CE->usesADL());
+  if (Ctx.hasMultiTarget())
+    if (const auto *Dual = Ctx.getMultiTarget().getCUDADualSideCall(CE)) {
+      JOS.attribute("hostSideCallee",
+                    createBareDeclRef(Dual->HostCall->getCalleeDecl()));
+      JOS.attribute("deviceSideCallee",
+                    createBareDeclRef(Dual->DeviceCall->getCalleeDecl()));
+    }
 }
 
 void JSONNodeDumper::VisitUnaryExprOrTypeTraitExpr(

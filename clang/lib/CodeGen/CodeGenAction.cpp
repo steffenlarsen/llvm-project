@@ -40,6 +40,7 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/LTO/LTOBackend.h"
+#include "llvm/Object/OffloadBinary.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/LibraryOptionsContext.h"
 #include "llvm/Support/ManagedStatic.h"
@@ -92,8 +93,9 @@ BackendConsumer::BackendConsumer(CompilerInstance &CI, BackendAction Action,
     : CI(CI), Diags(CI.getDiagnostics()), CodeGenOpts(CI.getCodeGenOpts()),
       TargetOpts(CI.getTargetOpts()), LangOpts(CI.getLangOpts()),
       AsmOutStream(std::move(OS)), FS(VFS), Action(Action),
-      Gen(CreateLLVMCodeGen(CI, InFile, C, CoverageInfo)),
-      LinkModules(std::move(LinkModules)), DiagConsumer(Diags, CodeGenOpts) {
+      Gen(CreateLLVMCodeGen(CI, InFile, C, CoverageInfo)), InFile(InFile),
+      CoverageInfo(CoverageInfo), LinkModules(std::move(LinkModules)),
+      DiagConsumer(Diags, CodeGenOpts) {
   DiagConsumer.setCurLinkModule(CurLinkModule);
   TimerIsEnabled = CodeGenOpts.TimePasses;
   {
@@ -118,7 +120,10 @@ CodeGenerator* BackendConsumer::getCodeGenerator() {
 }
 
 void BackendConsumer::HandleCXXStaticMemberVarInstantiation(VarDecl *VD) {
+  PrimaryCodeGenScope Primary(*this);
   Gen->HandleCXXStaticMemberVarInstantiation(VD);
+  dispatchToAuxGens(
+      [&](CodeGenerator &G) { G.HandleCXXStaticMemberVarInstantiation(VD); });
 }
 
 void BackendConsumer::Initialize(ASTContext &Ctx) {
@@ -130,13 +135,27 @@ void BackendConsumer::Initialize(ASTContext &Ctx) {
   if (TimerIsEnabled)
     LLVMIRGeneration.startTimer();
 
-  Gen->Initialize(Ctx);
+  bool HasAuxGens = !CI.getMultiTargetAuxInvocations().empty();
+  {
+    // A CodeGenModule captures the current target variant once, at
+    // construction. Gen is variant 1, the target this cc1 invocation is for.
+    // Without an aux CodeGenModule there is nothing to distinguish it from, and
+    // the ambient variant already means the same thing.
+    std::optional<ASTContext::TargetScope> PrimaryScope;
+    if (HasAuxGens)
+      PrimaryScope.emplace(Ctx, 1);
+    Gen->Initialize(Ctx);
+  }
+
+  if (HasAuxGens)
+    initializeAuxGens(Ctx);
 
   if (TimerIsEnabled)
     LLVMIRGeneration.stopTimer();
 }
 
 bool BackendConsumer::HandleTopLevelDecl(DeclGroupRef D) {
+  PrimaryCodeGenScope Primary(*this);
   PrettyStackTraceDecl CrashInfo(*D.begin(), SourceLocation(),
                                  Context->getSourceManager(),
                                  "LLVM IR generation of declaration");
@@ -146,6 +165,7 @@ bool BackendConsumer::HandleTopLevelDecl(DeclGroupRef D) {
     CI.getFrontendTimer().yieldTo(LLVMIRGeneration);
 
   Gen->HandleTopLevelDecl(D);
+  dispatchToAuxGens([&](CodeGenerator &G) { G.HandleTopLevelDecl(D); });
 
   if (TimerIsEnabled && !--LLVMIRGenerationRefCount)
     LLVMIRGeneration.yieldTo(CI.getFrontendTimer());
@@ -154,6 +174,7 @@ bool BackendConsumer::HandleTopLevelDecl(DeclGroupRef D) {
 }
 
 void BackendConsumer::HandleInlineFunctionDefinition(FunctionDecl *D) {
+  PrimaryCodeGenScope Primary(*this);
   PrettyStackTraceDecl CrashInfo(D, SourceLocation(),
                                  Context->getSourceManager(),
                                  "LLVM IR generation of inline function");
@@ -161,6 +182,8 @@ void BackendConsumer::HandleInlineFunctionDefinition(FunctionDecl *D) {
     CI.getFrontendTimer().yieldTo(LLVMIRGeneration);
 
   Gen->HandleInlineFunctionDefinition(D);
+  dispatchToAuxGens(
+      [&](CodeGenerator &G) { G.HandleInlineFunctionDefinition(D); });
 
   if (TimerIsEnabled)
     LLVMIRGeneration.yieldTo(CI.getFrontendTimer());
@@ -170,7 +193,6 @@ void BackendConsumer::HandleInterestingDecl(DeclGroupRef D) {
   HandleTopLevelDecl(D);
 }
 
-// Links each entry in LinkModules into our module. Returns true on error.
 bool BackendConsumer::LinkInModules(llvm::Module *M) {
   // Builtin bitcode is internalized into the module that links it, so each
   // PTU of an incremental session needs its own copy. Plain bitcode files are
@@ -179,23 +201,64 @@ bool BackendConsumer::LinkInModules(llvm::Module *M) {
       loadLinkModules(CI, M->getContext(), LinkModules,
                       /*OnlyInternalized=*/true))
     return true;
+  return LinkInModules(M, LinkModules);
+}
 
-  return linkInModules(*M, LinkModules, CodeGenOpts, LangOpts, TargetOpts,
-                       DiagConsumer);
+// Links each entry in ModulesToLink into M, clearing it. Returns true on
+// error.
+bool BackendConsumer::LinkInModules(
+    llvm::Module *M, SmallVectorImpl<LinkModule> &ModulesToLink) {
+  return LinkInModules(M, ModulesToLink, CodeGenOpts, TargetOpts);
+}
+
+bool BackendConsumer::LinkInModules(llvm::Module *M,
+                                    SmallVectorImpl<LinkModule> &ModulesToLink,
+                                    const CodeGenOptions &MergeCodeGenOpts,
+                                    const TargetOptions &MergeTargetOpts) {
+  return linkInModules(*M, ModulesToLink, MergeCodeGenOpts, LangOpts,
+                       MergeTargetOpts, DiagConsumer);
 }
 
 void BackendConsumer::HandleTranslationUnit(ASTContext &C) {
+  PrimaryCodeGenScope Primary(*this);
+  // The host module embeds the package of the devices' bitcode
+  // (-fembed-offload-object), so the package must exist before the host's IR
+  // is generated, not merely before the host's backend runs. Without
+  // -multi-target-package-offload the usual order applies.
+  bool ReorderForPackaging = reorderForPackaging();
+
   {
     llvm::TimeTraceScope TimeScope("Frontend");
     PrettyStackTraceString CrashInfo("Per-file LLVM IR generation");
     if (TimerIsEnabled && !LLVMIRGenerationRefCount++)
       CI.getFrontendTimer().yieldTo(LLVMIRGeneration);
 
-    Gen->HandleTranslationUnit(C);
+    if (!ReorderForPackaging)
+      Gen->HandleTranslationUnit(C);
+    // Each aux entry's Module is an independent in-memory llvm::Module for its
+    // target. Linking it, embedding bitcode into it and running the backend
+    // on it is separate output-file plumbing.
+    dispatchToAuxGens([&](CodeGenerator &G) { G.HandleTranslationUnit(C); });
 
     if (TimerIsEnabled && !--LLVMIRGenerationRefCount)
       LLVMIRGeneration.yieldTo(CI.getFrontendTimer());
   }
+
+  finishAuxGens();
+
+  if (ReorderForPackaging) {
+    // The host's IR is generated after the aux targets are packaged, so
+    // embedding the offload package finds the packaged file.
+    llvm::TimeTraceScope TimeScope("Frontend");
+    PrettyStackTraceString CrashInfo("Per-file LLVM IR generation");
+    if (TimerIsEnabled && !LLVMIRGenerationRefCount++)
+      CI.getFrontendTimer().yieldTo(LLVMIRGeneration);
+    Gen->HandleTranslationUnit(C);
+    if (TimerIsEnabled && !--LLVMIRGenerationRefCount)
+      LLVMIRGeneration.yieldTo(CI.getFrontendTimer());
+  }
+
+  dumpModulesForDiff();
 
   // Silently ignore if we weren't initialized for some reason.
   if (!getModule())
@@ -271,30 +334,45 @@ void BackendConsumer::HandleTranslationUnit(ASTContext &C) {
 }
 
 void BackendConsumer::HandleTagDeclDefinition(TagDecl *D) {
+  PrimaryCodeGenScope Primary(*this);
   PrettyStackTraceDecl CrashInfo(D, SourceLocation(),
                                  Context->getSourceManager(),
                                  "LLVM IR generation of declaration");
   Gen->HandleTagDeclDefinition(D);
+  dispatchToAuxGens([&](CodeGenerator &G) { G.HandleTagDeclDefinition(D); });
 }
 
 void BackendConsumer::HandleTagDeclRequiredDefinition(const TagDecl *D) {
+  PrimaryCodeGenScope Primary(*this);
   Gen->HandleTagDeclRequiredDefinition(D);
+  dispatchToAuxGens(
+      [&](CodeGenerator &G) { G.HandleTagDeclRequiredDefinition(D); });
 }
 
 void BackendConsumer::CompleteTentativeDefinition(VarDecl *D) {
+  PrimaryCodeGenScope Primary(*this);
   Gen->CompleteTentativeDefinition(D);
+  dispatchToAuxGens(
+      [&](CodeGenerator &G) { G.CompleteTentativeDefinition(D); });
 }
 
 void BackendConsumer::CompleteExternalDeclaration(DeclaratorDecl *D) {
+  PrimaryCodeGenScope Primary(*this);
   Gen->CompleteExternalDeclaration(D);
+  dispatchToAuxGens(
+      [&](CodeGenerator &G) { G.CompleteExternalDeclaration(D); });
 }
 
 void BackendConsumer::AssignInheritanceModel(CXXRecordDecl *RD) {
+  PrimaryCodeGenScope Primary(*this);
   Gen->AssignInheritanceModel(RD);
+  dispatchToAuxGens([&](CodeGenerator &G) { G.AssignInheritanceModel(RD); });
 }
 
 void BackendConsumer::HandleVTable(CXXRecordDecl *RD) {
+  PrimaryCodeGenScope Primary(*this);
   Gen->HandleVTable(RD);
+  dispatchToAuxGens([&](CodeGenerator &G) { G.HandleVTable(RD); });
 }
 
 void BackendConsumer::anchor() { }
@@ -522,6 +600,40 @@ CodeGenAction::loadModule(MemoryBufferRef MBRef) {
   return {};
 }
 
+/// Defines the HIP fatbin that a host module generated before it existed
+/// declares, from \p Path.
+static void embedHIPFatbin(llvm::Module &M, StringRef Path,
+                           llvm::vfs::FileSystem &VFS,
+                           DiagnosticsEngine &Diags) {
+  llvm::GlobalVariable *Fatbin = nullptr;
+  for (llvm::GlobalVariable &GV : M.globals())
+    if (GV.isDeclaration() && (GV.getSection() == ".hip_fatbin" ||
+                               GV.getSection() == "__HIP,__hip_fatbin")) {
+      Fatbin = &GV;
+      break;
+    }
+  if (!Fatbin)
+    return;
+  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> BufferOrErr =
+      VFS.getBufferForFile(Path, /*FileSize=*/-1,
+                           /*RequiresNullTerminator=*/false);
+  if (!BufferOrErr) {
+    Diags.Report(diag::err_cannot_open_file)
+        << Path << BufferOrErr.getError().message();
+    return;
+  }
+  llvm::Constant *Value = llvm::ConstantDataArray::getString(
+      M.getContext(), (*BufferOrErr)->getBuffer(), /*AddNull=*/false);
+  auto *Definition = new llvm::GlobalVariable(
+      M, Value->getType(), /*isConstant=*/true,
+      llvm::GlobalValue::PrivateLinkage, Value, "", Fatbin);
+  Definition->setSection(Fatbin->getSection());
+  // A code object's alignment, as the host compile gives the fatbin.
+  Definition->setAlignment(llvm::Align(4096));
+  Fatbin->replaceAllUsesWith(Definition);
+  Fatbin->eraseFromParent();
+}
+
 void CodeGenAction::ExecuteAction() {
   if (getCurrentFileKind().getLanguage() != Language::LLVM_IR) {
     this->ASTFrontendAction::ExecuteAction();
@@ -575,6 +687,9 @@ void CodeGenAction::ExecuteAction() {
 
   EmbedObject(TheModule.get(), CodeGenOpts, CI.getVirtualFileSystem(),
               Diagnostics);
+  if (!CodeGenOpts.OffloadBinaryToEmbedFile.empty())
+    embedHIPFatbin(*TheModule, CodeGenOpts.OffloadBinaryToEmbedFile,
+                   CI.getVirtualFileSystem(), Diagnostics);
   EmbedBitcode(TheModule.get(), CodeGenOpts, *MainFile);
 
   LLVMContext &Ctx = TheModule->getContext();

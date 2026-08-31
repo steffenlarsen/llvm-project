@@ -26,7 +26,9 @@
 #include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -100,6 +102,32 @@ public:
   ///    return ExprError();
   ///  // Otherwise, continue parsing as normal.
   SemaDiagnosticBuilder DiagIfDeviceCode(SourceLocation Loc, unsigned DiagID);
+
+  /// Whether code analysed now is analysed for devices too, by a host-primary
+  /// multi-target compilation outside the host's own code and view.
+  /// Whether the code being analysed is analysed for the devices, alongside
+  /// the host or as a device's own, where a device leads its first parse.
+  bool isAnalysedForDevices() const;
+  bool isAnalysedForAuxDevices() const;
+
+  /// Whether calls are resolved and checked as a device compilation would.
+  /// A host-primary multi-target compilation takes this from the target the
+  /// code is analysed for, as LangOptions::CUDAIsDevice stays false for it.
+  bool isDeviceSide() const;
+
+  /// Resolves and checks calls as the device side would if \p DeviceSide,
+  /// else as the host would, for its lifetime. This finds what the side not
+  /// analysed for picks.
+  class SideScope {
+    SemaCUDA &CUDA;
+    LangOptions &LangOpts;
+    std::optional<bool> SavedOverride;
+    bool SavedCUDAIsDevice;
+
+  public:
+    SideScope(SemaCUDA &CUDA, bool DeviceSide);
+    ~SideScope();
+  };
 
   /// Creates a SemaDiagnosticBuilder that emits the diagnostic if the current
   /// context is "used as host code".
@@ -242,6 +270,21 @@ public:
       llvm::SmallVectorImpl<std::pair<DeclAccessPair, FunctionDecl *>>
           &Matches);
 
+  /// Where \p Caller, analysed for the host and the devices at once, calls
+  /// \p Pick, checked at \p Locs, which the side analysed for decided:
+  /// resolves the call for the other side too with \p ResolveOtherSide. A
+  /// different pick is a target input, and no wrong-side call for the other
+  /// side.
+  void noteOtherSidePick(
+      const FunctionDecl *Caller, const FunctionDecl *Pick,
+      ArrayRef<SourceLocation> Locs,
+      llvm::function_ref<const FunctionDecl *()> ResolveOtherSide);
+
+  /// Whether \p A and \p B, overloads for different sides, are one symbol,
+  /// which each side defines for itself.
+  static bool isSameSymbol(ASTContext &Ctx, const FunctionDecl *A,
+                           const FunctionDecl *B);
+
   /// Given a implicit special member, infer its CUDA target from the
   /// calls it needs to make to underlying base/field special members.
   /// \param ClassDecl the class for which the member is being created.
@@ -298,6 +341,9 @@ public:
 
 private:
   unsigned ForceHostDeviceDepth = 0;
+
+  /// The side a SideScope resolves calls for, if one is active.
+  std::optional<bool> SideOverride;
 
   /// Whether the current context is the initializer of a device variable.
   bool isDeviceVarInit() const;

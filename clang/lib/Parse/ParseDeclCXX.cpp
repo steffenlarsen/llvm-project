@@ -29,6 +29,7 @@
 #include "clang/Sema/Scope.h"
 #include "clang/Sema/SemaCodeCompletion.h"
 #include "clang/Sema/SemaHLSL.h"
+#include "clang/Sema/SemaMultiTarget.h"
 #include "llvm/Support/TimeProfiler.h"
 #include <optional>
 
@@ -226,11 +227,21 @@ void Parser::ParseInnerNamespace(const InnerNamespaceInfoList &InnerNSs,
   if (index == InnerNSs.size()) {
     while (!tryParseMisplacedModuleImport() && Tok.isNot(tok::r_brace) &&
            Tok.isNot(tok::eof)) {
-      ParsedAttributes DeclAttrs(AttrFactory);
-      MaybeParseCXX11Attributes(DeclAttrs);
-      ParsedAttributes EmptyDeclSpecAttrs(AttrFactory);
-      ParseExternalDeclaration(DeclAttrs, EmptyDeclSpecAttrs);
+      DeclGroupPtrTy ADecl;
+      {
+        DeviceLead Lead;
+        if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+          leadWithDevice(Lead);
+        ParsedAttributes DeclAttrs(AttrFactory);
+        MaybeParseCXX11Attributes(DeclAttrs);
+        ParsedAttributes EmptyDeclSpecAttrs(AttrFactory);
+        ADecl = ParseExternalDeclaration(DeclAttrs, EmptyDeclSpecAttrs);
+        DeclLedByDevice = Lead.Scope.has_value();
+      }
+      if (!ObserveForTargetReconciliation(ADecl))
+        return;
     }
+    FinishTargetAlternationReconciliation();
 
     // The caller is what called check -- we are simply calling
     // the close for it.
@@ -374,18 +385,28 @@ Decl *Parser::ParseLinkage(ParsingDeclSpec &DS, DeclaratorContext Context) {
         break;
       [[fallthrough]];
     default:
-      ParsedAttributes DeclAttrs(AttrFactory);
-      ParsedAttributes DeclSpecAttrs(AttrFactory);
-      while (MaybeParseCXX11Attributes(DeclAttrs) ||
-             MaybeParseGNUAttributes(DeclSpecAttrs))
-        ;
-      ParseExternalDeclaration(DeclAttrs, DeclSpecAttrs);
+      DeclGroupPtrTy ADecl;
+      {
+        DeviceLead Lead;
+        if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+          leadWithDevice(Lead);
+        ParsedAttributes DeclAttrs(AttrFactory);
+        ParsedAttributes DeclSpecAttrs(AttrFactory);
+        while (MaybeParseCXX11Attributes(DeclAttrs) ||
+               MaybeParseGNUAttributes(DeclSpecAttrs))
+          ;
+        ADecl = ParseExternalDeclaration(DeclAttrs, DeclSpecAttrs);
+        DeclLedByDevice = Lead.Scope.has_value();
+      }
+      if (!ObserveForTargetReconciliation(ADecl))
+        break;
       continue;
     }
 
     break;
   }
 
+  FinishTargetAlternationReconciliation();
   T.consumeClose();
   return LinkageSpec ? Actions.ActOnFinishLinkageSpecification(
                            getCurScope(), LinkageSpec, T.getCloseLocation())
@@ -875,6 +896,9 @@ Decl *Parser::ParseAliasDeclarationAfterDeclarator(
         << FixItHint::CreateRemoval(SourceRange(D.EllipsisLoc));
 
   Decl *DeclFromDeclSpec = nullptr;
+  llvm::SaveAndRestore Pattern(Actions.MultiTarget().InAliasTemplatePattern,
+                               TemplateInfo.Kind !=
+                                   ParsedTemplateKind::NonTemplate);
   TypeResult TypeAlias =
       ParseTypeName(nullptr,
                     TemplateInfo.Kind != ParsedTemplateKind::NonTemplate ? DeclaratorContext::AliasTemplate
@@ -3457,12 +3481,23 @@ Parser::DeclGroupPtrTy Parser::ParseCXXClassMemberDeclarationWithPragmas(
     ParseMicrosoftIfExistsClassDeclaration(TagType, AccessAttrs, AS);
     return nullptr;
 
+  case tok::annot_target_alt_begin:
+  case tok::annot_target_alt_sep:
+  case tok::annot_target_alt_end:
+    // A widening/reparse splice can resume between two class members, just
+    // as it can between two namespace members.
+    HandleTargetAlternationMarker();
+    return nullptr;
+
   case tok::semi:
     // Check for extraneous top-level semicolon.
     ConsumeExtraSemi(ExtraSemiKind::InsideStruct, TagType);
     return nullptr;
 
     // Handle pragmas that can appear as member declarations.
+  case tok::annot_pragma_force_cuda_host_device:
+    HandlePragmaForceCUDAHostDevice();
+    return nullptr;
   case tok::annot_pragma_vis:
     HandlePragmaVisibility();
     return nullptr;
@@ -3753,10 +3788,16 @@ void Parser::ParseCXXMemberSpecification(SourceLocation RecordLoc,
     while (!tryParseMisplacedModuleImport() && Tok.isNot(tok::r_brace) &&
            Tok.isNot(tok::eof)) {
       // Each iteration of this loop reads one member-declaration.
-      ParseCXXClassMemberDeclarationWithPragmas(
+      DeclGroupPtrTy Result = ParseCXXClassMemberDeclarationWithPragmas(
           CurAS, AccessAttrs, static_cast<DeclSpec::TST>(TagType), TagDecl);
+      MarkTargetAlternative(Result);
+      if (!ObserveForTargetReconciliation(Result)) {
+        MaybeDestroyTemplateIds();
+        return;
+      }
       MaybeDestroyTemplateIds();
     }
+    FinishTargetAlternationReconciliation();
     T.consumeClose();
   } else {
     SkipUntil(tok::r_brace);
@@ -5068,6 +5109,14 @@ void Parser::ParseMicrosoftIfExistsClassDeclaration(
       continue;
     }
 
+    if (Tok.isOneOf(tok::annot_target_alt_begin, tok::annot_target_alt_sep,
+                    tok::annot_target_alt_end)) {
+      // A widening/reparse splice can resume between two class members here
+      // too.
+      HandleTargetAlternationMarker();
+      continue;
+    }
+
     AccessSpecifier AS = getAccessSpecifierIfPresent();
     if (AS != AS_none) {
       // Current token is a C++ access specifier.
@@ -5085,8 +5134,13 @@ void Parser::ParseMicrosoftIfExistsClassDeclaration(
 
     ParsedTemplateInfo TemplateInfo;
     // Parse all the comma separated declarators.
-    ParseCXXClassMemberDeclaration(CurAS, AccessAttrs, TemplateInfo);
+    DeclGroupPtrTy Result =
+        ParseCXXClassMemberDeclaration(CurAS, AccessAttrs, TemplateInfo);
+    MarkTargetAlternative(Result);
+    if (!ObserveForTargetReconciliation(Result))
+      return;
   }
 
+  FinishTargetAlternationReconciliation();
   Braces.consumeClose();
 }

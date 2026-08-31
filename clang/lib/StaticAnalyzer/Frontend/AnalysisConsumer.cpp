@@ -684,6 +684,11 @@ AnalysisConsumer::getModeForDecl(const Decl *D, AnalysisMode Mode) const {
     return AM_None;
   }
 
+  // A multi-target compilation's AST also holds the copies made for its other
+  // targets, which the analysed target's own compilation never sees.
+  if (D->getTargetVariant() && !D->isCopyFor(1))
+    return AM_None;
+
   // Unless -analyze-all is specified, treat decls differently depending on
   // where they came from:
   // - Main source file: run both path-sensitive and non-path-sensitive checks.

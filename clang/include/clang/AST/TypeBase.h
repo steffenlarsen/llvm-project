@@ -2121,6 +2121,11 @@ protected:
     /// Whether the TagType was created from an injected name.
     LLVM_PREFERRED_TYPE(bool)
     unsigned IsInjected : 1;
+
+    /// Whether the tag is one of a family of declarations, one per target of
+    /// a multi-target compilation, that are one type.
+    LLVM_PREFERRED_TYPE(bool)
+    unsigned IsTargetFamily : 1;
   };
 
   class VectorTypeBitfields {
@@ -6560,10 +6565,24 @@ protected:
           NestedNameSpecifier Qualifier, const TagDecl *TD, bool OwnsTag,
           bool IsInjected, const Type *CanonicalType);
 
+  TagDecl *getTargetFamilyDecl() const;
+
 public:
-  TagDecl *getDecl() const { return decl; }
+  /// The declaration of the tag. For one of a family of declarations, one per
+  /// target, that of the target being analysed or emitted.
+  TagDecl *getDecl() const {
+    return LLVM_UNLIKELY(TagTypeBits.IsTargetFamily) ? getTargetFamilyDecl()
+                                                     : decl;
+  }
+  /// The declaration the type was formed from.
+  TagDecl *getDeclAsWritten() const { return decl; }
   [[deprecated("Use getDecl instead")]] TagDecl *getOriginalDecl() const {
     return decl;
+  }
+
+  /// Marks the tag as one of a family of declarations, one per target.
+  void setTargetFamily() const {
+    const_cast<TagType *>(this)->TagTypeBits.IsTargetFamily = true;
   }
 
   NestedNameSpecifier getQualifier() const;
@@ -6605,7 +6624,7 @@ struct TagTypeFoldingSetPlaceholder : public llvm::FoldingSetNode {
 
   void Profile(llvm::FoldingSetNodeID &ID) const {
     const TagType *T = getTagType();
-    Profile(ID, T->getKeyword(), T->getQualifier(), T->getDecl(),
+    Profile(ID, T->getKeyword(), T->getQualifier(), T->getDeclAsWritten(),
             T->isTagOwned(), T->isInjected());
   }
 

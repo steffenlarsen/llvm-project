@@ -183,6 +183,11 @@ class Preprocessor {
   friend class VariadicMacroScopeGuard;
 
   llvm::unique_function<void(const clang::Token &)> OnToken;
+
+  /// Applies a pragma that acts on Sema, deferred to an annotation token, when
+  /// a stream being parsed reaches it, as lexing the pragma would have. Lex
+  /// then returns the token after it.
+  llvm::unique_function<void(const clang::Token &)> OnDeferredSemaPragma;
   /// Functor for getting the dependency preprocessor directives of a file.
   ///
   /// These are directives derived from a special form of lexing where the
@@ -747,6 +752,10 @@ private:
 
   /// Preprocess every token regardless of LexLevel.
   bool PreprocessToken = false;
+
+  /// Whether pragmas that act on Sema enter annotation tokens instead, for
+  /// the parser to apply where it reaches them.
+  bool DeferSemaPragmas = false;
 
   /// The maximum number of (LexLevel 0) tokens before issuing a -Wmax-tokens
   /// warning, or zero for unlimited.
@@ -1403,12 +1412,28 @@ public:
   void setTokenWatcher(llvm::unique_function<void(const clang::Token &)> F) {
     OnToken = std::move(F);
   }
+  bool hasTokenWatcher() const { return static_cast<bool>(OnToken); }
+  /// Removes the token watcher and returns it, for a caller to chain it.
+  llvm::unique_function<void(const clang::Token &)> takeTokenWatcher() {
+    return std::move(OnToken);
+  }
+
+  void setDeferSemaPragmas(bool Defer) { DeferSemaPragmas = Defer; }
+  void setDeferredSemaPragmaHandler(
+      llvm::unique_function<void(const clang::Token &)> F) {
+    OnDeferredSemaPragma = std::move(F);
+  }
+  bool deferSemaPragmas() const { return DeferSemaPragmas; }
 
   void setDependencyDirectivesGetter(DependencyDirectivesGetter &Get) {
     GetDependencyDirectives = &Get;
   }
 
   void setPreprocessToken(bool Preprocess) { PreprocessToken = Preprocess; }
+  bool getPreprocessToken() const { return PreprocessToken; }
+  /// Whether the token a token watcher is given was lexed for another Lex
+  /// call, e.g. by a pragma handler, rather than for the client.
+  bool isLexingNestedToken() const { return LexLevel != 0; }
 
   bool isMacroDefined(StringRef Id) {
     return isMacroDefined(&Identifiers.get(Id));
@@ -1625,6 +1650,9 @@ public:
   void RemovePragmaHandler(PragmaHandler *Handler) {
     RemovePragmaHandler(StringRef(), Handler);
   }
+
+  /// The pragma handlers, as the namespace pragmas are looked up in.
+  const PragmaNamespace &getPragmaHandlers() const { return *PragmaHandlers; }
 
   /// Install empty handlers for all pragmas (making them ignored).
   void IgnorePragmas();
