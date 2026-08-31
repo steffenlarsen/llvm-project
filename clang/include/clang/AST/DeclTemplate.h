@@ -35,6 +35,7 @@
 #include "llvm/ADT/iterator.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/TrailingObjects.h"
 #include <cassert>
@@ -45,6 +46,15 @@
 #include <utility>
 
 namespace clang {
+
+/// PROTOTYPE: see DeclTemplate.cpp. Lets same-named declarations coexist as
+/// per-target variants instead of conflicting. Declared here (an AST-layer
+/// header), not in Sema.h, because FunctionTemplateSpecializationInfo::Profile
+/// and ClassTemplate(Partial)SpecializationDecl::Profile (both in
+/// DeclTemplate.cpp) consult it directly: it decides whether their FoldingSet
+/// identity folds in the target variant, which clangAST cannot depend on
+/// clangSema to answer.
+LLVM_ABI extern llvm::cl::opt<bool> AllowTargetVariantDecls;
 
 enum BuiltinTemplateKind : int;
 class ClassTemplateDecl;
@@ -597,16 +607,17 @@ public:
   }
 
   void Profile(llvm::FoldingSetNodeID &ID) {
-    Profile(ID, TemplateArguments->asArray(), getFunction()->getASTContext());
+    Profile(ID, TemplateArguments->asArray(), getTemplate(),
+            getFunction()->getASTContext());
   }
 
+  // PROTOTYPE (Stage 4): Template is the owning function template; see
+  // FunctionTemplateDecl::hasTargetTaggedParameterType for why its identity
+  // only sometimes needs to become target-aware. Defined out-of-line
+  // (DeclTemplate.cpp) because it consults clang::AllowTargetVariantDecls.
   static void
   Profile(llvm::FoldingSetNodeID &ID, ArrayRef<TemplateArgument> TemplateArgs,
-          const ASTContext &Context) {
-    ID.AddInteger(TemplateArgs.size());
-    for (const TemplateArgument &TemplateArg : TemplateArgs)
-      TemplateArg.Profile(ID, Context);
-  }
+          const FunctionTemplateDecl *Template, const ASTContext &Context);
 };
 
 /// Provides information a specialization of a member of a class
@@ -772,8 +783,16 @@ protected:
 
   void loadLazySpecializationsImpl(bool OnlyPartial = false) const;
 
+  // PROTOTYPE (Stage 4): the second parameter is untyped because
+  // EntryType::Profile's extra profiling argument varies by EntryType (a
+  // TemplateParameterList* for partial specializations, a ClassTemplateDecl*
+  // for the target-aware full-specialization identity below) and this
+  // external-source query never actually uses it -- only Args. Kept
+  // non-template (rather than a variadic template) so this stays callable
+  // from other translation units (e.g. ASTReader.cpp), which can't see a
+  // template defined in DeclTemplate.cpp.
   bool loadLazySpecializationsImpl(ArrayRef<TemplateArgument> Args,
-                                   TemplateParameterList *TPL = nullptr) const;
+                                   const void *Extra = nullptr) const;
 
   template <class EntryType, typename... ProfileArguments>
   typename SpecEntryTraits<EntryType>::DeclType *
@@ -1033,6 +1052,16 @@ public:
   /// otherwise return the insertion point.
   FunctionDecl *findSpecialization(ArrayRef<TemplateArgument> Args,
                                    llvm::FoldingSetInsertToken &InsertToken);
+
+  /// PROTOTYPE (Stage 4): true if this function template's own declared
+  /// parameter or return type names a class template that itself
+  /// hasTargetTaggedPartialSpecialization() (e.g. load_generic's
+  /// tile<I, J, T, dl>& parameter). An implicit specialization of this
+  /// function template only needs a target-aware identity (see
+  /// FunctionTemplateSpecializationInfo::Profile) when this is true --
+  /// leaving it false for the overwhelming majority of ordinary function
+  /// templates keeps them from being instantiated once per target.
+  bool hasTargetTaggedParameterType() const;
 
   FunctionTemplateDecl *getCanonicalDecl() override {
     return cast<FunctionTemplateDecl>(
@@ -2089,16 +2118,18 @@ public:
   SourceRange getSourceRange() const override LLVM_READONLY;
 
   void Profile(llvm::FoldingSetNodeID &ID) const {
-    Profile(ID, TemplateArgs->asArray(), getASTContext());
+    Profile(ID, TemplateArgs->asArray(), getSpecializedTemplate(),
+            getASTContext());
   }
 
+  // PROTOTYPE (Stage 4): Template is the owning class template; see
+  // ClassTemplateDecl::hasTargetTaggedPartialSpecialization for why its
+  // identity only sometimes needs to become target-aware. Defined
+  // out-of-line (DeclTemplate.cpp) because it consults
+  // clang::AllowTargetVariantDecls.
   static void
   Profile(llvm::FoldingSetNodeID &ID, ArrayRef<TemplateArgument> TemplateArgs,
-          const ASTContext &Context) {
-    ID.AddInteger(TemplateArgs.size());
-    for (const TemplateArgument &TemplateArg : TemplateArgs)
-      TemplateArg.Profile(ID, Context);
-  }
+          const ClassTemplateDecl *Template, const ASTContext &Context);
 
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
 
@@ -2398,6 +2429,15 @@ public:
   /// Retrieve the partial specializations as an ordered list.
   void getPartialSpecializations(
       SmallVectorImpl<ClassTemplatePartialSpecializationDecl *> &PS) const;
+
+  /// PROTOTYPE (Stage 4): true if any partial specialization of this
+  /// template is target-tagged (see
+  /// ClassTemplatePartialSpecializationDecl::Profile). Implicit
+  /// instantiations of this template only need a target-aware identity
+  /// (see ClassTemplateSpecializationDecl::Profile) when this is true --
+  /// leaving it false for the overwhelming majority of ordinary templates
+  /// keeps them from being instantiated once per target.
+  bool hasTargetTaggedPartialSpecialization() const;
 
   /// Find a class template partial specialization with the given
   /// type T.

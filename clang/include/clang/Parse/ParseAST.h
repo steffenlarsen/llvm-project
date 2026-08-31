@@ -15,7 +15,10 @@
 
 #include "clang/Basic/LangOptions.h"
 
+#include "llvm/ADT/ArrayRef.h"
+
 namespace clang {
+  struct TargetRecording;
   class Preprocessor;
   class ASTConsumer;
   class ASTContext;
@@ -43,8 +46,14 @@ namespace clang {
 
   /// Parse the main file known to the preprocessor, producing an
   /// abstract syntax tree.
+  ///
+  /// \param AuxRecordings PROTOTYPE (Stage 3.4): token streams recorded for
+  /// the other targets of a multi-target compilation. When present, the primary
+  /// preprocessor is drained, the streams are aligned and spliced, and the
+  /// parser runs off the merged stream instead of the lexer.
   void ParseAST(Sema &S, bool PrintStats = false,
-                bool SkipFunctionBodies = false);
+                bool SkipFunctionBodies = false,
+                ArrayRef<TargetRecording> AuxRecordings = {});
 
 }  // end namespace clang
 

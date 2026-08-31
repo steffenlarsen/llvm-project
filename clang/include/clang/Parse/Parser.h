@@ -29,6 +29,7 @@
 #include <stack>
 
 namespace clang {
+
 class PragmaHandler;
 class Scope;
 class BalancedDelimiterTracker;
@@ -1000,6 +1001,9 @@ private:
   DeclGroupPtrTy ParseExternalDeclaration(ParsedAttributes &DeclAttrs,
                                           ParsedAttributes &DeclSpecAttrs,
                                           ParsingDeclSpec *DS = nullptr);
+  DeclGroupPtrTy ParseExternalDeclarationImpl(
+      ParsedAttributes &Attr, ParsedAttributes &DeclSpecAttrs,
+      ParsingDeclSpec *DS = nullptr);
 
   /// Determine whether the current token, if it occurs after a
   /// declarator, continues a declaration or declaration list.
@@ -7164,6 +7168,56 @@ private:
   /// Handle the annotation token produced for
   /// #pragma GCC visibility...
   void HandlePragmaVisibility();
+
+  /// PROTOTYPE (Stage 4.2): the alternative of a multi-target region currently
+  /// being parsed, 1-based, or 0 outside any region. Regions are widened to
+  /// whole top-level declarations before parsing, so a marker only ever appears
+  /// where an external declaration could start.
+  unsigned TargetAlternative = 0;
+  std::unique_ptr<ASTContext::TargetScope> TargetAlternativeScope;
+
+  /// Consume an annot_target_alt_{begin,sep,end} and move to the alternative it
+  /// introduces, entering that target's scope so the declarations parsed next
+  /// are analysed for it.
+  void HandleTargetAlternationMarker();
+
+public:
+  /// PROTOTYPE (Stage 4.2): discard the primed look-ahead and take the next
+  /// token from the stream just entered.
+  ///
+  /// Parser::Initialize primes one token from the lexer. A merged multi-target
+  /// stream already contains that token -- and may open with an alternation
+  /// marker before it -- so the primed one has to be dropped rather than kept.
+  void ResetLookaheadFromStream() { ConsumeAnyToken(); }
+
+private:
+
+  /// Record which target a declaration group was parsed for. Recursive: a
+  /// member or a local declared inside a divergent region belongs to the same
+  /// target as the declaration containing it, and the fingerprint comparison
+  /// looks at all of them.
+  void MarkTargetAlternative(DeclGroupPtrTy &Group);
+
+public:
+  /// Claim a declaration group for target \p Variant.
+  ///
+  /// Used when a shared declaration turns out to reference a target-specific
+  /// entity: it has to stop belonging to every target before the others get
+  /// their own copy, or lookup during the re-parse finds it and merges into it.
+  LLVM_ABI void ClaimForTargetVariant(DeclGroupPtrTy &Group, unsigned Variant);
+
+  /// Set in an annot_target_alt_sep's value to mark a re-parse of an
+  /// already-parsed shared declaration rather than an arm of an alternative.
+  static constexpr uintptr_t FallbackReparseBit = uintptr_t(1) << 16;
+
+  /// Whether the parser is inside a multi-target alternative right now.
+  bool inTargetAlternative() const { return TargetAlternative != 0; }
+
+private:
+
+  /// Handle the annotation token produced for
+  /// #pragma clang force_cuda_host_device.
+  void HandlePragmaForceCUDAHostDevice();
 
   /// Handle the annotation token produced for
   /// #pragma pack...

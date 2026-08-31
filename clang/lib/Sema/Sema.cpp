@@ -17,6 +17,7 @@
 #include "clang/AST/ASTDiagnostic.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
+#include "clang/AST/DeclFingerprint.h"
 #include "clang/AST/DeclFriend.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/Expr.h"
@@ -72,6 +73,7 @@
 #include "clang/Sema/TemplateDeduction.h"
 #include "clang/Sema/TypoCorrection.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -79,7 +81,44 @@
 #include <optional>
 
 using namespace clang;
+
+// PROTOTYPE (multi-target Sema investigation): instantiate *both* arms of an
+// `if constexpr` in a template, instead of only the selected one. In a
+// combined host+device frontend the condition can evaluate differently per
+// target, so the AST has to retain both. This flag forces that unconditionally
+// so we can find out what downstream breaks.
+llvm::cl::opt<unsigned> clang::ProbeTargetVariant(
+    "probe-target-variant", llvm::cl::Hidden, llvm::cl::init(1),
+    llvm::cl::desc("Prototype: which target variant name lookup selects"));
+
+llvm::cl::opt<bool> clang::ReparseFallbackLookup(
+    "reparse-fallback-lookup", llvm::cl::Hidden, llvm::cl::init(true),
+    llvm::cl::desc("Prototype: during a re-parse, let a reference fall back to "
+                   "the primary target's declaration"));
+
+llvm::cl::opt<bool> clang::MergeEquivalentVariants(
+    "merge-equivalent-variants", llvm::cl::Hidden, llvm::cl::init(false),
+    llvm::cl::desc("Prototype: un-claim target-tagged declarations whose "
+                   "targets agree, before instantiation"));
+
+llvm::cl::opt<bool> clang::CountDivergentUses(
+    "count-divergent-uses", llvm::cl::Hidden, llvm::cl::init(false),
+    llvm::cl::desc("Prototype: count declarations in shared code that "
+                   "reference a target-specific entity"));
+
+llvm::cl::opt<unsigned> clang::InstantiateInVariant(
+    "instantiate-in-variant", llvm::cl::Hidden, llvm::cl::init(0),
+    llvm::cl::desc("Prototype: instantiate templates in this target variant "
+                   "rather than the one the declaration carries"));
+
+llvm::cl::opt<bool> clang::KeepBothConstexprIfBranches(
+    "keep-both-constexpr-if-branches", llvm::cl::Hidden, llvm::cl::init(false),
+    llvm::cl::desc("Prototype: instantiate both arms of if constexpr"));
 using namespace sema;
+
+bool Sema::isMacroDefinedAtLoc(SourceLocation Loc, StringRef Name) const {
+  return (bool)PP.getMacroDefinitionAtLoc(&Context.Idents.get(Name), Loc);
+}
 
 SourceLocation Sema::getLocForEndOfToken(SourceLocation Loc, unsigned Offset) {
   return Lexer::getLocForEndOfToken(Loc, Offset, SourceMgr, LangOpts);
@@ -1280,6 +1319,17 @@ void Sema::ActOnEndOfTranslationUnitFragment(TUFragmentKind Kind) {
         Func->setInstantiationIsPending(true);
     PendingInstantiations.insert(PendingInstantiations.begin(),
                                  Pending.begin(), Pending.end());
+  }
+
+  // Before instantiation, not after: an instantiation inherits its pattern's
+  // target, so a template that is still claimed takes every specialization of
+  // it with it.
+  if (LLVM_UNLIKELY(clang::MergeEquivalentVariants) &&
+      LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+    unsigned N = mergeEquivalentVariants(getASTContext());
+    if (LLVM_UNLIKELY(clang::CountDivergentUses))
+      llvm::errs() << "merged equivalent variants: " << N
+                   << " declarations un-claimed\n";
   }
 
   {

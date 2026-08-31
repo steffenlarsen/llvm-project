@@ -38,6 +38,10 @@
 
 using namespace clang;
 
+llvm::cl::opt<bool> clang::AllowTargetVariantDecls(
+    "allow-target-variant-decls", llvm::cl::Hidden, llvm::cl::init(false),
+    llvm::cl::desc("Prototype: let same-named declarations coexist per target"));
+
 //===----------------------------------------------------------------------===//
 // TemplateParameterList Implementation
 //===----------------------------------------------------------------------===//
@@ -364,7 +368,8 @@ void RedeclarableTemplateDecl::loadLazySpecializationsImpl(
 }
 
 bool RedeclarableTemplateDecl::loadLazySpecializationsImpl(
-    ArrayRef<TemplateArgument> Args, TemplateParameterList *TPL) const {
+    ArrayRef<TemplateArgument> Args, const void *Extra) const {
+  (void)Extra;
   auto *ExternalSource = getASTContext().getExternalSource();
   if (!ExternalSource)
     return false;
@@ -476,7 +481,33 @@ FunctionTemplateDecl::getSpecializations() const {
 FunctionDecl *FunctionTemplateDecl::findSpecialization(
     ArrayRef<TemplateArgument> Args, llvm::FoldingSetInsertToken &InsertToken) {
   auto *Common = getCommonPtr();
-  return findSpecializationImpl(Common->Specializations, InsertToken, Args);
+  // PROTOTYPE (Stage 4): pass `this` through to
+  // FunctionTemplateSpecializationInfo::Profile so implicit instantiations
+  // can be given a target-aware identity; see the comment there.
+  return findSpecializationImpl(Common->Specializations, InsertToken, Args,
+                                this);
+}
+
+bool FunctionTemplateDecl::hasTargetTaggedParameterType() const {
+  auto NamesTargetTaggedTemplate = [](QualType T) {
+    T = T.getNonReferenceType().getUnqualifiedType();
+    if (const auto *Ptr = T->getAs<PointerType>())
+      T = Ptr->getPointeeType().getUnqualifiedType();
+    const auto *TST = T->getAs<TemplateSpecializationType>();
+    if (!TST)
+      return false;
+    const auto *TD =
+        dyn_cast_or_null<ClassTemplateDecl>(TST->getTemplateName().getAsTemplateDecl());
+    return TD && TD->hasTargetTaggedPartialSpecialization();
+  };
+
+  const FunctionDecl *FD = getTemplatedDecl();
+  if (NamesTargetTaggedTemplate(FD->getReturnType()))
+    return true;
+  for (const ParmVarDecl *Param : FD->parameters())
+    if (NamesTargetTaggedTemplate(Param->getType()))
+      return true;
+  return false;
 }
 
 void FunctionTemplateDecl::addSpecialization(
@@ -485,6 +516,35 @@ void FunctionTemplateDecl::addSpecialization(
   auto *Common = getCommonPtr();
   addSpecializationImpl<FunctionTemplateDecl>(Common->Specializations, Info,
                                               InsertToken);
+}
+
+void FunctionTemplateSpecializationInfo::Profile(
+    llvm::FoldingSetNodeID &ID, ArrayRef<TemplateArgument> TemplateArgs,
+    const FunctionTemplateDecl *Template, const ASTContext &Context) {
+  ID.AddInteger(TemplateArgs.size());
+  for (const TemplateArgument &TemplateArg : TemplateArgs)
+    TemplateArg.Profile(ID, Context);
+  // PROTOTYPE (Stage 4): mirrors ClassTemplateSpecializationDecl::Profile
+  // above. An implicit specialization like load_generic<8, 8, int,
+  // I_MAJOR> is normally the same entity no matter which target is
+  // compiling it -- but load_generic's parameter type tile<I, J, T, dl>&
+  // names a class template with a target-tagged partial specialization, so
+  // the *type* of that parameter is itself target-specific (see
+  // ClassTemplateSpecializationDecl::Profile). Without folding the target
+  // into this specialization's identity too, the first target to call
+  // load_generic<8, 8, int, I_MAJOR> permanently caches a FunctionDecl
+  // whose parameter type is keyed to that target's tile instantiation, and
+  // every other target's later call reuses that same stale specialization,
+  // producing a deduction mismatch against its own, differently-keyed
+  // argument type. Folding the target in here, but only for function
+  // templates whose signature actually depends on a target-tagged
+  // template, gives each target its own specialization without
+  // instantiating every function template call twice.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && Template &&
+      Template->hasTargetTaggedParameterType()) {
+    unsigned V = Context.getCurrentTargetVariant();
+    ID.AddInteger(V ? V : 1);
+  }
 }
 
 void FunctionTemplateDecl::mergePrevDecl(FunctionTemplateDecl *Prev) {
@@ -571,15 +631,84 @@ ClassTemplateDecl::newCommon(ASTContext &C) const {
 ClassTemplateSpecializationDecl *ClassTemplateDecl::findSpecialization(
     ArrayRef<TemplateArgument> Args, llvm::FoldingSetInsertToken &InsertToken) {
   auto *Common = getCommonPtr();
-  return findSpecializationImpl(Common->Specializations, InsertToken, Args);
+  // PROTOTYPE (Stage 4): pass `this` through to
+  // ClassTemplateSpecializationDecl::Profile so implicit instantiations can
+  // be given a target-aware identity; see the comment there.
+  return findSpecializationImpl(Common->Specializations, InsertToken, Args,
+                                this);
 }
 
 void ClassTemplateDecl::AddSpecialization(
     ClassTemplateSpecializationDecl *D,
     llvm::FoldingSetInsertToken InsertToken) {
   auto *Common = getCommonPtr();
-  addSpecializationImpl<ClassTemplateDecl>(Common->Specializations, D,
-                                           InsertToken);
+  // PROTOTYPE (Stage 4): inlined rather than routed through the shared
+  // addSpecializationImpl<Derived, EntryType> used by FunctionTemplateDecl
+  // and VarTemplateDecl, so the debug re-verification below can call this
+  // class's own findSpecialization (which already knows how to fold `this`
+  // into the Profile) instead of needing SpecEntryTraits extended with a
+  // generic way to recover the owning template from an Entry -- that would
+  // have forced the same extra parameter, and matching Profile arity, onto
+  // FunctionTemplateSpecializationInfo and VarTemplateSpecializationDecl too.
+  if (InsertToken) {
+#ifndef NDEBUG
+    ArrayRef<TemplateArgument> Args = D->getTemplateArgs().asArray();
+    // Due to hash collisions, it can happen that we load another template
+    // specialization with the same hash. This is fine, as long as the next
+    // call to findSpecialization does not find a matching Decl for the
+    // template arguments.
+    loadLazySpecializationsImpl(Args);
+    llvm::FoldingSetInsertToken CorrectToken;
+    assert(!findSpecialization(Args, CorrectToken) &&
+           InsertToken == CorrectToken &&
+           "given incorrect InsertToken for specialization");
+#endif
+    Common->Specializations.insert(D, InsertToken);
+  } else {
+    ClassTemplateSpecializationDecl *Existing =
+        Common->Specializations.getOrInsert(D);
+    (void)Existing;
+    assert(Existing->isCanonicalDecl() && "non-canonical specialization?");
+  }
+
+  if (ASTMutationListener *L = getASTMutationListener())
+    L->AddedCXXTemplateSpecialization(this, D);
+}
+
+bool ClassTemplateDecl::hasTargetTaggedPartialSpecialization() const {
+  for (const ClassTemplatePartialSpecializationDecl &P :
+       getPartialSpecializations())
+    if (P.getTargetVariant())
+      return true;
+  return false;
+}
+
+void ClassTemplateSpecializationDecl::Profile(
+    llvm::FoldingSetNodeID &ID, ArrayRef<TemplateArgument> TemplateArgs,
+    const ClassTemplateDecl *Template, const ASTContext &Context) {
+  ID.AddInteger(TemplateArgs.size());
+  for (const TemplateArgument &TemplateArg : TemplateArgs)
+    TemplateArg.Profile(ID, Context);
+  // PROTOTYPE (Stage 4): an implicit instantiation like tile<16, 8, int> is
+  // normally the same entity no matter which target is compiling it --
+  // giving it a separate identity per target unconditionally would mean
+  // instantiating every class template specialization twice, defeating the
+  // point of parsing once. But when the template has a target-tagged partial
+  // specialization (mma.cuh's tile<I_, J_, T, DATA_LAYOUT_I_MAJOR>), the
+  // instantiation's *body* is target-specific: InstantiateClassImpl builds it
+  // once, from whichever target's pattern
+  // getPatternForClassTemplateSpecialization happens to pick first, and
+  // tags the result -- but tagging an already-shared Decl doesn't give the
+  // other target a body of its own, so that target's later member
+  // references fail to resolve (e.g. "no member named 'I'"). Folding the
+  // target into the identity here, but only for templates that actually
+  // diverge, gives each target its own instantiation without duplicating
+  // the common case.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && Template &&
+      Template->hasTargetTaggedPartialSpecialization()) {
+    unsigned V = Context.getCurrentTargetVariant();
+    ID.AddInteger(V ? V : 1);
+  }
 }
 
 ClassTemplatePartialSpecializationDecl *
@@ -597,6 +726,20 @@ void ClassTemplatePartialSpecializationDecl::Profile(
   for (const TemplateArgument &TemplateArg : TemplateArgs)
     TemplateArg.Profile(ID, Context);
   TPL->Profile(ID, Context);
+  // PROTOTYPE (Stage 4): unlike a full/implicit specialization, a partial
+  // specialization is always written out by hand, so two of them sharing an
+  // argument pattern but belonging to different targets are not duplicates of
+  // one entity to be reconciled later -- they are the divergence itself (see
+  // mma.cuh's tile<I_, J_, T, DATA_LAYOUT_I_MAJOR>, which has a target-#if
+  // inside the class body). Folding them into one FoldingSet slot by argument
+  // pattern alone makes the second one parsed look like a redefinition of the
+  // first. Mixing the target into the profile lets both coexist; shared code
+  // (current == 0) resolves to the primary target's, matching how ordinary
+  // name lookup falls back for shared code (isVisibleForTarget).
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+    unsigned V = Context.getCurrentTargetVariant();
+    ID.AddInteger(V ? V : 1);
+  }
 }
 
 void ClassTemplateDecl::AddPartialSpecialization(

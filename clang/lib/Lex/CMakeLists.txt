@@ -7,6 +7,8 @@ set(LLVM_LINK_COMPONENTS
 
 add_clang_library(clangLex
   DependencyDirectivesScanner.cpp
+  ConditionalRegionRecorder.cpp
+  TokenStreamMerge.cpp
   HeaderMap.cpp
   HeaderSearch.cpp
   InitHeaderSearch.cpp

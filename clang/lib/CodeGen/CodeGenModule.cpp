@@ -8033,6 +8033,20 @@ void CodeGenModule::EmitDeclContext(const DeclContext *DC) {
 
 /// EmitTopLevelDecl - Emit code for a single top level declaration.
 void CodeGenModule::EmitTopLevelDecl(Decl *D) {
+  // A combined multi-target frontend produces two copies of any genuinely
+  // divergent declaration, tagged with which target alternative parsed it
+  // (see Decl::getTargetVariant()). Variant 1 (primary) is always this
+  // compilation's own real target; anything else -- an aux-target recording
+  // (>= 2) or a decl the merge pass proved redundant (TargetVariantRedundant)
+  // -- exists only so the shared parse succeeds and must never reach
+  // emission. Without this, a tagged decl's mangled name (which carries no
+  // target information) can collide with its sibling's in CodeGen's
+  // name-keyed deferred-emission tables, silently substituting the wrong
+  // body under the right symbol name even though every AST-level reference
+  // still points at the correct copy.
+  if (D->getTargetVariant() > 1)
+    return;
+
   // Ignore dependent declarations.
   if (D->isTemplated())
     return;

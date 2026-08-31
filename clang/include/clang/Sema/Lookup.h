@@ -479,9 +479,46 @@ public:
   /// Add a declaration to these results with the given access.
   /// Does not test the acceptance criteria.
   void addDecl(NamedDecl *D, AccessSpecifier AS) {
+    // PROTOTYPE (Stage 4.2b-iv): a declaration belonging to another target is
+    // not a result here. Filtering at the point results are admitted means the
+    // redeclaration machinery never sees it, so parsing one target's
+    // alternative after another's is a fresh declaration rather than a
+    // redefinition -- which is what it is.
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && !isTargetVisible(D))
+      return;
     Decls.addDecl(D, AS);
     ResultKind = LookupResultKind::Found;
   }
+
+  /// Like addDecl, but skips only the ambient-dependent half of the
+  /// target-visibility filter. Used solely to repopulate a LookupResult from
+  /// an already-resolved OverloadExpr's decl set at template-instantiation
+  /// time (see TreeTransform::TransformOverloadExprDecls): each decl there
+  /// was already filtered once, correctly, against the ambient target active
+  /// when the original UnresolvedLookupExpr's candidates were assembled at
+  /// parse time. A deferred instantiation can later run under a different
+  /// ambient (e.g. a device-only callee first referenced from a host-side
+  /// kernel-launch call site) that has nothing to do with which candidate
+  /// was correct for that reference -- re-deriving visibility from the
+  /// ambient at drain time would silently drop the sole surviving (and
+  /// correct) candidate instead of leaving the decision as it was already
+  /// made. But a decl tagged TargetVariantRedundant is never a valid result
+  /// at all, regardless of ambient (see mergeEquivalentVariants /
+  /// isVisibleForTarget) -- that half of the filter is not ambient-dependent
+  /// and must still apply, or a redundant duplicate that was correctly
+  /// hidden reappears as a spurious second overload candidate.
+  void addDeclIgnoringTargetVisibility(NamedDecl *D) {
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+        D->getTargetVariant() == Decl::TargetVariantRedundant)
+      return;
+    Decls.addDecl(D, D->getAccess());
+    ResultKind = LookupResultKind::Found;
+  }
+
+  /// Whether \p D belongs to the target currently being analysed. Declarations
+  /// marked 0 belong to every target, which is all of them outside a
+  /// multi-target compilation.
+  bool isTargetVisible(const NamedDecl *D) const;
 
   /// Add all the declarations from another set of lookup
   /// results.

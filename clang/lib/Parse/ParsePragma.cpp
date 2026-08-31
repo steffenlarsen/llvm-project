@@ -733,6 +733,16 @@ void Parser::HandlePragmaVisibility() {
   Actions.ActOnPragmaVisibility(VisType, VisLoc);
 }
 
+void Parser::HandlePragmaForceCUDAHostDevice() {
+  assert(Tok.is(tok::annot_pragma_force_cuda_host_device));
+  bool Begin = Tok.getAnnotationValue() != nullptr;
+  SourceLocation Loc = ConsumeAnnotationToken();
+  if (Begin)
+    Actions.CUDA().PushForceHostDevice();
+  else if (!Actions.CUDA().PopForceHostDevice())
+    Diag(Loc, diag::err_pragma_cannot_end_force_cuda_host_device);
+}
+
 void Parser::HandlePragmaPack() {
   assert(Tok.is(tok::annot_pragma_pack));
   Sema::PragmaPackInfo *Info =
@@ -4035,16 +4045,27 @@ void PragmaForceCUDAHostDeviceHandler::HandlePragma(
     return;
   }
 
-  if (Info->isStr("begin"))
-    Actions.CUDA().PushForceHostDevice();
-  else if (!Actions.CUDA().PopForceHostDevice())
-    PP.Diag(FirstTok.getLocation(),
-            diag::err_pragma_cannot_end_force_cuda_host_device);
+  bool Begin = Info->isStr("begin");
+  SourceLocation EndLoc = Tok.getLocation();
 
   PP.Lex(Tok);
-  if (!Tok.is(tok::eod))
+  if (!Tok.is(tok::eod)) {
     PP.Diag(FirstTok.getLocation(),
             diag::warn_pragma_force_cuda_host_device_bad_arg);
+    return;
+  }
+
+  // Deliberately not calling into Sema here. The pragma applies to whatever is
+  // declared between begin and end, so its effect belongs at the position the
+  // parser reaches, not the position the lexer does.
+  auto Toks = std::make_unique<Token[]>(1);
+  Toks[0].startToken();
+  Toks[0].setKind(tok::annot_pragma_force_cuda_host_device);
+  Toks[0].setLocation(FirstTok.getLocation());
+  Toks[0].setAnnotationEndLoc(EndLoc);
+  Toks[0].setAnnotationValue(reinterpret_cast<void *>(Begin ? 1 : 0));
+  PP.EnterTokenStream(std::move(Toks), 1, /*DisableMacroExpansion=*/true,
+                      /*IsReinject=*/false);
 }
 
 /// Handle the #pragma clang attribute directive.

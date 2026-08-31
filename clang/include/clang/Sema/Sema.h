@@ -70,6 +70,7 @@
 #include "clang/Sema/Weak.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/ADT/BitmaskEnum.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -113,6 +114,28 @@ struct InlineAsmIdentifierInfo;
 } // namespace llvm
 
 namespace clang {
+
+/// PROTOTYPE: see Sema.cpp. Forces both arms of an `if constexpr` to be
+/// instantiated, as a combined multi-target frontend would need.
+LLVM_ABI extern llvm::cl::opt<bool> KeepBothConstexprIfBranches;
+
+/// PROTOTYPE: stands in for the ambient target scope until Stage 3 supplies it.
+LLVM_ABI extern llvm::cl::opt<unsigned> ProbeTargetVariant;
+
+/// PROTOTYPE (Stage 1.6): forces every template instantiation into one target
+/// variant, so the instantiation boundary can be shown to be load-bearing.
+/// 0 means "use the variant the declaration carries", which is the default and
+/// what a real multi-target compilation will do.
+LLVM_ABI extern llvm::cl::opt<unsigned> InstantiateInVariant;
+
+/// PROTOTYPE (Stage 4.2b-v): count the declarations in shared code that
+/// reference a target-specific entity. Those are the ones divergence would have
+/// to propagate to.
+LLVM_ABI extern llvm::cl::opt<bool> CountDivergentUses;
+
+/// PROTOTYPE (Stage 4.2b-v): reference fallback during a re-parse.
+LLVM_ABI extern llvm::cl::opt<bool> ReparseFallbackLookup;
+LLVM_ABI extern llvm::cl::opt<bool> MergeEquivalentVariants;
 class ADLResult;
 class APValue;
 struct ASTConstraintSatisfaction;
@@ -1006,7 +1029,40 @@ public:
   bool findMacroSpelling(SourceLocation &loc, StringRef name);
 
   /// Calls \c Lexer::getLocForEndOfToken()
+  /// PROTOTYPE (Stage 4.2b-v): declarations in shared code that referenced a
+  /// target-specific entity, and so would have to be parsed per target.
+  llvm::DenseSet<const NamedDecl *> DivergentUsers;
+
+  /// PROTOTYPE (Stage 4.2b-v): set while re-parsing a shared declaration for
+  /// another target, where a reference falls back to the primary target's
+  /// declaration. Ordinary parsing must not: a LookupResult can be built under
+  /// one ambient target and resolved under another.
+  bool InTargetFallbackReparse = false;
+
+  /// PROTOTYPE (Stage 4.2b-v): set when a lookup in shared code reaches a
+  /// target-specific entity. The parser clears it before each top-level
+  /// declaration and re-parses that declaration per target if it is set after.
+  bool TouchedDivergentEntity = false;
+
+  /// PROTOTYPE (Stage 4): the same per-target visibility rule LookupResult
+  /// applies to ordinary name lookup (see LookupResult::isTargetVisible),
+  /// exposed for callers that collect candidate Decls outside of
+  /// LookupResult -- e.g. class template partial specialization matching,
+  /// which enumerates ClassTemplateDecl::getPartialSpecializations()
+  /// directly and would otherwise see every target's partial specialization
+  /// as an equally-good, and therefore ambiguous, match.
+  bool isDeclVisibleForCurrentTarget(const NamedDecl *D,
+                                     bool ForRedecl = false,
+                                     bool AllowFallback = true);
+
   SourceLocation getLocForEndOfToken(SourceLocation Loc, unsigned Offset = 0);
+
+  /// Whether \p Name is defined as a macro at \p Loc.
+  ///
+  /// Prefer this to Preprocessor::isMacroDefined in Sema: the latter answers
+  /// for wherever the preprocessor has reached, which is only the same thing
+  /// while parsing and lexing run in lockstep.
+  LLVM_ABI bool isMacroDefinedAtLoc(SourceLocation Loc, StringRef Name) const;
 
   /// Calls \c Lexer::findNextToken() to find the next token, and if the
   /// locations of both ends of the token can be resolved it return that
@@ -14115,6 +14171,34 @@ public:
   /// enclosing function, so that they can reference function-local
   /// types, static variables, enumerators, etc.
   std::deque<PendingImplicitInstantiation> PendingLocalImplicitInstantiations;
+
+  /// The ambient target variant a pending instantiation was queued under,
+  /// captured at the point it was first referenced (ODR-used) and lost to
+  /// deferral otherwise: by the time PerformPendingInstantiations drains the
+  /// queue at the end of the translation unit, the ambient variant is always
+  /// 0, regardless of which target actually reached the callee first.
+  ///
+  /// For a __device__/__global__ callee this is forced to 1 regardless of the
+  /// caller's ambient, so that its body is instantiated (and its own nested
+  /// callees resolved) under the true device TargetInfo -- see the capture
+  /// sites in SemaExpr.cpp. That forcing is right for compiling the body, but
+  /// wrong for deciding provenance: see PendingInstantiationProvenanceVariant.
+  llvm::DenseMap<const ValueDecl *, unsigned> PendingInstantiationTargetVariant;
+
+  /// Like PendingInstantiationTargetVariant, but never forced to 1 for a
+  /// __device__/__global__ callee: this is the caller's actual ambient at the
+  /// point of first reference, unconditionally. A reparse-duplicated function
+  /// template (see mmq.cu's mul_mat_q_case) produces a second copy of its
+  /// definition tagged variant 2; calls made from inside that copy's body
+  /// queue their callees (e.g. mul_mat_q, a __global__ kernel) with the same
+  /// provenance, even though those callees' own bodies must still compile
+  /// under the true device TargetInfo (variant 1). Stamping the resulting
+  /// Decl's TargetVariant from this map, rather than from the (possibly
+  /// forced-to-1) TargetInfo-scope ambient, is what lets CodeGen's existing
+  /// TargetVariant>1 skip filter recognize the callee as attributable to the
+  /// redundant copy and suppress it, without affecting how its body is
+  /// compiled.
+  llvm::DenseMap<const ValueDecl *, unsigned> PendingInstantiationProvenanceVariant;
 
   class LocalEagerInstantiationScope {
   public:

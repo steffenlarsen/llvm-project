@@ -493,11 +493,11 @@ void Sema::DiagnoseSentinelCalls(const NamedDecl *D, SourceLocation Loc,
   // variadic arguments form a list of object pointers.
   SourceLocation MissingNilLoc = getLocForEndOfToken(SentinelExpr->getEndLoc());
   std::string NullValue;
-  if (CalleeKind == CK_Method && PP.isMacroDefined("nil"))
+  if (CalleeKind == CK_Method && isMacroDefinedAtLoc(MissingNilLoc, "nil"))
     NullValue = "nil";
   else if (getLangOpts().CPlusPlus11)
     NullValue = "nullptr";
-  else if (PP.isMacroDefined("NULL"))
+  else if (isMacroDefinedAtLoc(MissingNilLoc, "NULL"))
     NullValue = "NULL";
   else
     NullValue = "(void*) 0";
@@ -12910,7 +12910,8 @@ static QualType checkArithmeticOrEnumeralCompare(Sema &S, ExprResult &LHS,
 void Sema::CheckPtrComparisonWithNullChar(ExprResult &E, ExprResult &NullE) {
   if (!NullE.get()->getType()->isAnyPointerType())
     return;
-  int NullValue = PP.isMacroDefined("NULL") ? 0 : 1;
+  int NullValue =
+      isMacroDefinedAtLoc(NullE.get()->getExprLoc(), "NULL") ? 0 : 1;
   if (!E.get()->getType()->isAnyPointerType() &&
       E.get()->isNullPointerConstant(Context,
                                      Expr::NPC_ValueDependentIsNotNull) ==
@@ -13705,7 +13706,7 @@ static void diagnoseXorMisusedAsPow(Sema &S, const ExprResult &XorLHS,
     return;
 
   bool SuggestXor =
-      S.getLangOpts().CPlusPlus || S.getPreprocessor().isMacroDefined("xor");
+      S.getLangOpts().CPlusPlus || S.isMacroDefinedAtLoc(Loc, "xor");
   const llvm::APInt XorValue = LeftSideValue ^ RightSideValue;
   int64_t RightSideIntValue = RightSideValue.getSExtValue();
   if (LeftSideValue == 2 && RightSideIntValue >= 0) {
@@ -19195,6 +19196,25 @@ void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func,
             InstantiateFunctionDefinition(PointOfInstantiation, Func);
           else {
             Func->setInstantiationIsPending(true);
+            if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+              // A device-only callee (__global__ or __device__-only) must
+              // always be instantiated under the device ambient, regardless
+              // of which ambient was active at its first reference: e.g. a
+              // __global__ kernel is referenced from a host-side <<<...>>>
+              // launch, but its body (and everything it transitively calls)
+              // is unconditionally device code.
+              CUDAFunctionTarget FT = CUDA().IdentifyTarget(Func);
+              unsigned Ambient = (FT == CUDAFunctionTarget::Device ||
+                                   FT == CUDAFunctionTarget::Global)
+                                      ? 1
+                                      : Context.getCurrentTargetVariant();
+              if (Ambient)
+                PendingInstantiationTargetVariant[Func] = Ambient;
+              // Provenance is the caller's real ambient, never forced: see
+              // the comment on PendingInstantiationProvenanceVariant.
+              if (unsigned Provenance = Context.getCurrentTargetVariant())
+                PendingInstantiationProvenanceVariant[Func] = Provenance;
+            }
             PendingInstantiations.push_back(
                 std::make_pair(Func, PointOfInstantiation));
             if (llvm::isTimeTraceVerbose()) {
@@ -20784,6 +20804,21 @@ static void DoMarkVarDeclReferenced(
         else if (auto *ME = dyn_cast_or_null<MemberExpr>(E))
           ME->setMemberDecl(ME->getMemberDecl());
       } else if (FirstInstantiation) {
+        if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+          // See the analogous function-side comment above: a device-only
+          // variable must always be instantiated under the device ambient
+          // regardless of where it was first referenced from.
+          unsigned Ambient =
+              SemaRef.CUDA().IdentifyTarget(Var) == SemaCUDA::CVT_Device
+                  ? 1
+                  : SemaRef.Context.getCurrentTargetVariant();
+          if (Ambient)
+            SemaRef.PendingInstantiationTargetVariant[Var] = Ambient;
+          // Provenance is the caller's real ambient, never forced: see the
+          // comment on PendingInstantiationProvenanceVariant.
+          if (unsigned Provenance = SemaRef.Context.getCurrentTargetVariant())
+            SemaRef.PendingInstantiationProvenanceVariant[Var] = Provenance;
+        }
         SemaRef.PendingInstantiations
             .push_back(std::make_pair(Var, PointOfInstantiation));
       } else {

@@ -610,6 +610,93 @@ bool Parser::ParseFirstTopLevelDecl(DeclGroupPtrTy &Result,
   return NoTopLevelDecls;
 }
 
+
+void Parser::HandleTargetAlternationMarker() {
+  switch (Tok.getKind()) {
+  case tok::annot_target_alt_begin:
+    TargetAlternative = 1;
+    break;
+  case tok::annot_target_alt_sep: {
+    uintptr_t V = reinterpret_cast<uintptr_t>(Tok.getAnnotationValue());
+    Actions.InTargetFallbackReparse = (V & FallbackReparseBit) != 0;
+    TargetAlternative = (V & ~FallbackReparseBit) + 1;
+    break;
+  }
+  default:
+    TargetAlternative = 0;
+    Actions.InTargetFallbackReparse = false;
+    break;
+  }
+  ConsumeAnnotationToken();
+
+  // Reset before entering: the scopes are siblings, not nested, and the RAII
+  // object restores what it saved on construction.
+  TargetAlternativeScope.reset();
+  if (TargetAlternative)
+    TargetAlternativeScope = std::make_unique<ASTContext::TargetScope>(
+        Actions.getASTContext(), TargetAlternative);
+}
+
+void Parser::MarkTargetAlternative(DeclGroupPtrTy &Group) {
+  if (!TargetAlternative)
+    return;
+  ClaimForTargetVariant(Group, TargetAlternative);
+}
+
+static llvm::cl::opt<std::string> TraceTaggedDecl(
+    "trace-tagged-decl", llvm::cl::Hidden,
+    llvm::cl::desc("Prototype: report every declaration whose name contains "
+                   "this string as it is claimed for a target"));
+
+void Parser::ClaimForTargetVariant(DeclGroupPtrTy &Group, unsigned Variant) {
+  if (!Variant || !Group)
+    return;
+  const unsigned TargetAlternative = Variant;
+  std::function<void(Decl *)> Mark = [&](Decl *D) {
+    if (!D)
+      return;
+    if (D->getTargetVariant() && !isa<NamespaceDecl>(D) &&
+        !isa<LinkageSpecDecl>(D))
+      return;
+    // A namespace or a linkage specification is a container, not an entity: it
+    // is not target-specific just because a divergent region happened to open
+    // inside it. Tagging `namespace std` makes the whole standard library
+    // invisible to every other target -- 232 "use of undeclared identifier
+    // 'std'" on one translation unit, and everything inside it unreachable
+    // after that. Its contents are still visited.
+    if (!isa<NamespaceDecl>(D) && !isa<LinkageSpecDecl>(D)) {
+      if (LLVM_UNLIKELY(!TraceTaggedDecl.empty()))
+        if (auto *ND = dyn_cast<NamedDecl>(D))
+          if (StringRef(ND->getNameAsString()).contains(TraceTaggedDecl))
+            llvm::errs() << "tag v" << TargetAlternative << " "
+                         << ND->getDeclKindName() << " " << ND->getNameAsString()
+                         << " @ "
+                         << ND->getLocation().printToString(
+                                Actions.getSourceManager())
+                         << "\n";
+      D->setTargetVariant(TargetAlternative);
+    }
+    // A TemplateDecl is not a DeclContext -- the templated declaration it wraps
+    // is -- so recursing only through DeclContext leaves every member of a
+    // class or function template unmarked. That is what left 134 unmarked
+    // std::numeric_limits members visible to the wrong target.
+    if (auto *TD = dyn_cast<TemplateDecl>(D)) {
+      Mark(TD->getTemplatedDecl());
+      // Template parameters live in the parameter list, not the templated
+      // declaration's DeclContext, so recursion never reaches them and they
+      // stay visible to every target.
+      if (TemplateParameterList *TPL = TD->getTemplateParameters())
+        for (NamedDecl *P : *TPL)
+          Mark(P);
+    }
+    if (auto *DC = dyn_cast<DeclContext>(D))
+      for (Decl *Sub : DC->decls())
+        Mark(Sub);
+  };
+  for (Decl *D : Group.get())
+    Mark(D);
+}
+
 bool Parser::ParseTopLevelDecl(DeclGroupPtrTy &Result,
                                Sema::ModuleImportState &ImportState) {
   DestroyTemplateIdAnnotationsRAIIObj CleanupRAII(*this);
@@ -618,6 +705,12 @@ bool Parser::ParseTopLevelDecl(DeclGroupPtrTy &Result,
   switch (Tok.getKind()) {
   case tok::annot_pragma_unused:
     HandlePragmaUnused();
+    return false;
+
+  case tok::annot_target_alt_begin:
+  case tok::annot_target_alt_sep:
+  case tok::annot_target_alt_end:
+    HandleTargetAlternationMarker();
     return false;
 
   case tok::kw_export:
@@ -708,6 +801,7 @@ bool Parser::ParseTopLevelDecl(DeclGroupPtrTy &Result,
     ;
 
   Result = ParseExternalDeclaration(DeclAttrs, DeclSpecAttrs);
+  MarkTargetAlternative(Result);
   // An empty Result might mean a line with ';' or some parsing error, ignore
   // it.
   if (Result) {
@@ -729,6 +823,18 @@ Parser::DeclGroupPtrTy
 Parser::ParseExternalDeclaration(ParsedAttributes &Attrs,
                                  ParsedAttributes &DeclSpecAttrs,
                                  ParsingDeclSpec *DS) {
+  DeclGroupPtrTy Result = ParseExternalDeclarationImpl(Attrs, DeclSpecAttrs, DS);
+  // Every external declaration passes through here, including those in a
+  // namespace or linkage-specification body -- which is where most of a HIP
+  // compilation's divergence lives. Marking only at top level missed them.
+  MarkTargetAlternative(Result);
+  return Result;
+}
+
+Parser::DeclGroupPtrTy
+Parser::ParseExternalDeclarationImpl(ParsedAttributes &Attrs,
+                                 ParsedAttributes &DeclSpecAttrs,
+                                 ParsingDeclSpec *DS) {
   DestroyTemplateIdAnnotationsRAIIObj CleanupRAII(*this);
   ParenBraceBracketBalancer BalancerRAIIObj(*this);
 
@@ -739,8 +845,18 @@ Parser::ParseExternalDeclaration(ParsedAttributes &Attrs,
 
   Decl *SingleDecl = nullptr;
   switch (Tok.getKind()) {
+  case tok::annot_target_alt_begin:
+  case tok::annot_target_alt_sep:
+  case tok::annot_target_alt_end:
+    // Also reachable from a namespace or linkage-specification body, where the
+    // splice may resume between member declarations.
+    HandleTargetAlternationMarker();
+    return nullptr;
   case tok::annot_pragma_vis:
     HandlePragmaVisibility();
+    return nullptr;
+  case tok::annot_pragma_force_cuda_host_device:
+    HandlePragmaForceCUDAHostDevice();
     return nullptr;
   case tok::annot_pragma_pack:
     HandlePragmaPack();

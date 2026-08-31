@@ -485,7 +485,117 @@ static bool canHideTag(const NamedDecl *D) {
 }
 
 /// Resolves the result kind of this lookup.
+
+/// Whether \p D belongs to the target currently being analysed.
+///
+/// Shared by ordinary name lookup and by argument-dependent lookup, which
+/// builds its candidate set directly and so does not pass through
+/// LookupResult at all -- leaving another target's declarations as overload
+/// candidates: 94 "call is ambiguous" with both candidates on the same line.
+static bool isVisibleForTarget(Sema &S, const NamedDecl *D, bool ForRedecl,
+                               bool AllowFallback,
+                               bool SuppressDivergenceFlagForTags = false,
+                               bool PreferPrimaryForRecordReferences = false) {
+  unsigned V = D->getTargetVariant();
+  if (!V)
+    return true;
+  if (V == Decl::TargetVariantRedundant)
+    return false;
+
+  // A bare (non-redeclaration) reference to a target-tagged struct/class
+  // always means the primary target's copy, regardless of which
+  // alternative is currently being parsed -- see
+  // ggml_cuda_mmq_get_config's RDNA2/CDNA dispatch (mmq.cuh:253-276): the
+  // struct's own divergent axis (data layout) is unrelated to the
+  // dispatcher's (chip family), so a caller spliced for the *aux* target
+  // must still agree with every genuinely-shared helper it calls about
+  // which struct identity "the type" means. Scoped to RecordDecl, not the
+  // broader TagDecl: unscoped enums (e.g. std::float_denorm_style,
+  // __hip_saturation_t) inject their enumerators into the *enclosing*
+  // scope, so an enumerator reference is looked up independently of this
+  // type reference and still (correctly) follows ambient/Current -- forcing
+  // the enum type itself to v1 regardless would decouple it from its own
+  // enumerators and break types that were resolving correctly. A
+  // struct/class has no equivalent hazard: member lookup (a constructor, a
+  // method) is always scoped to whichever RecordDecl copy the type name
+  // already resolved to. Must be exclusive (not just a fallback alongside
+  // the exact-match check below) -- resolveKind() flags two simultaneously
+  // visible TagDecls of the same name as an ambiguous reference, so both v1
+  // and v2 must never be visible at once for this kind of reference.
+  if (PreferPrimaryForRecordReferences && !ForRedecl && isa<RecordDecl>(D))
+    return V == 1;
+
+  unsigned Current = S.getASTContext().getCurrentTargetVariant();
+  if (!Current) {
+    // Shared code reaching for a target-specific entity is what decides whether
+    // divergence has to propagate. Count declarations, not lookups.
+    //
+    // A bare reference to a target-tagged *type* is exempted: once a
+    // specific class copy is picked here, its own divergent members (if any)
+    // are reached later through member lookup scoped to that one copy, which
+    // can't see the other copy's members and needs no flag of its own. A
+    // referencing declaration that never touches the diverging members
+    // behaves identically regardless of which copy it resolves to, so it
+    // does not need a per-target copy merely for naming the type --
+    // `ggml_cuda_mmq_get_config_blackwell` referencing the (in this respect
+    // interchangeable) constructor of `ggml_cuda_mmq_config` was getting a
+    // needless second copy this way, which then disagreed with its still-
+    // singular callee `ggml_cuda_mmq_get_config_ampere` about which copy's
+    // identity to return.
+    if (!SuppressDivergenceFlagForTags || !isa<TagDecl>(D)) {
+      S.TouchedDivergentEntity = true;
+      if (LLVM_UNLIKELY(clang::CountDivergentUses)) {
+        const DeclContext *DC = S.CurContext;
+        while (DC && !isa<NamedDecl>(DC))
+          DC = DC->getParent();
+        S.DivergentUsers.insert(DC ? cast<NamedDecl>(DC) : nullptr);
+      }
+    }
+    Current = 1;
+  }
+  if (V == Current)
+    return true;
+
+  // A *reference* during a re-parse falls back to the primary target's
+  // declaration: most tagged declarations carry a target only for having been
+  // parsed inside a divergent region, and code re-analysed for another target
+  // still has to name them. A *redeclaration* must not, or the declaration
+  // being built merges into the other target's.
+  return AllowFallback && V == 1 && clang::ReparseFallbackLookup &&
+         S.InTargetFallbackReparse && !ForRedecl;
+}
+
+bool LookupResult::isTargetVisible(const NamedDecl *D) const {
+  return isVisibleForTarget(getSema(), D, isForRedeclaration(),
+                            /*AllowFallback=*/true,
+                            /*SuppressDivergenceFlagForTags=*/true,
+                            /*PreferPrimaryForRecordReferences=*/true);
+}
+
+bool Sema::isDeclVisibleForCurrentTarget(const NamedDecl *D, bool ForRedecl,
+                                         bool AllowFallback) {
+  return isVisibleForTarget(*this, D, ForRedecl, AllowFallback);
+}
+
 void LookupResult::resolveKind() {
+
+  // Where a declaration belonging to the target being analysed is present, the
+  // primary's is only its fallback. Confined to a re-parse for the same reason
+  // the fallback is.
+  bool HasExactTargetMatch = false;
+  unsigned CurrentTargetForLookup = 0;
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      getSema().InTargetFallbackReparse) {
+    CurrentTargetForLookup = getSema().getASTContext().getCurrentTargetVariant();
+    if (!CurrentTargetForLookup)
+      CurrentTargetForLookup = 1;
+    for (const NamedDecl *D : Decls)
+      if (D->getTargetVariant() == CurrentTargetForLookup) {
+        HasExactTargetMatch = true;
+        break;
+      }
+  }
+
   unsigned N = Decls.size();
 
   // Fast case: no possible ambiguity.
@@ -525,6 +635,19 @@ void LookupResult::resolveKind() {
   for (unsigned I = 0; I < N; I++) {
     const NamedDecl *D = Decls[I]->getUnderlyingDecl();
     D = cast<NamedDecl>(D->getCanonicalDecl());
+
+    // PROTOTYPE (Stage 4.1c): a declaration tagged with a target variant only
+    // exists for that target. Drop the ones belonging to other targets before
+    // the ambiguity checks below, the same way equivalent internal-linkage
+    // declarations are dropped. Variant 0 means "every target" and is what all
+    // declarations carry today, so this is inert unless the feature is on.
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+        (!isTargetVisible(Decls[I]) ||
+         (HasExactTargetMatch && Decls[I]->getTargetVariant() &&
+          Decls[I]->getTargetVariant() != CurrentTargetForLookup))) {
+      RemovedDecls.set(I);
+      continue;
+    }
 
     // Ignore an invalid declaration unless it's the only one left.
     // Also ignore HLSLBufferDecl which not have name conflict with other Decls.
@@ -3997,7 +4120,10 @@ void Sema::ArgumentDependentLookup(DeclarationName Name, SourceLocation Loc,
       }
 
       // FIXME: Preserve D as the FoundDecl.
-      if (Visible)
+      if (Visible && (!LLVM_UNLIKELY(clang::AllowTargetVariantDecls) ||
+                      isVisibleForTarget(*this, Underlying,
+                                         /*ForRedecl=*/false,
+                                         /*AllowFallback=*/false)))
         Result.insert(Underlying);
     }
   }

@@ -3486,6 +3486,9 @@ Parser::DeclGroupPtrTy Parser::ParseCXXClassMemberDeclarationWithPragmas(
     return nullptr;
 
     // Handle pragmas that can appear as member declarations.
+  case tok::annot_pragma_force_cuda_host_device:
+    HandlePragmaForceCUDAHostDevice();
+    return nullptr;
   case tok::annot_pragma_vis:
     HandlePragmaVisibility();
     return nullptr;

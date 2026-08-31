@@ -2515,6 +2515,34 @@ NamedDecl *Sema::LazilyCreateBuiltin(IdentifierInfo *II, unsigned ID,
 static void
 filterNonConflictingPreviousTypedefDecls(Sema &S, const TypedefNameDecl *Decl,
                                          LookupResult &Previous) {
+  // PROTOTYPE (Stage 4): a merged multi-target token stream can declare the
+  // same name differently per target. Such declarations are not redeclarations
+  // of each other -- they are variants -- so filter the other targets' ones out
+  // of the redeclaration check, exactly as the modules case below does for
+  // hidden declarations. Here the variant is assigned automatically so the
+  // mechanism can be exercised before Stage 3 exists to supply it.
+  if (clang::AllowTargetVariantDecls && !Previous.empty()) {
+    LookupResult::Filter F = Previous.makeFilter();
+    unsigned MaxSeen = 0;
+    while (F.hasNext()) {
+      NamedDecl *Old = F.next();
+      auto *OldTD = dyn_cast<TypedefNameDecl>(Old);
+      if (!OldTD) continue;
+      if (S.Context.hasSameType(OldTD->getUnderlyingType(),
+                                Decl->getUnderlyingType()))
+        continue;
+      // Variant 0 means "applies to every target". The first alternative of a
+      // divergent region is therefore variant 1, not 0.
+      if (OldTD->getTargetVariant() == 0)
+        const_cast<TypedefNameDecl *>(OldTD)->setTargetVariant(1);
+      MaxSeen = std::max(MaxSeen, OldTD->getTargetVariant());
+      F.erase();
+    }
+    F.done();
+    if (MaxSeen)
+      const_cast<TypedefNameDecl *>(Decl)->setTargetVariant(MaxSeen + 1);
+  }
+
   // This is only interesting when modules are enabled.
   if (!S.getLangOpts().Modules && !S.getLangOpts().ModulesLocalVisibility)
     return;

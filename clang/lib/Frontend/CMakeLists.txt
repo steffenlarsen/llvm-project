@@ -12,6 +12,7 @@ set(LLVM_LINK_COMPONENTS
 
 add_clang_library(clangFrontend
   ASTConsumers.cpp
+  MultiTargetRecording.cpp
   ASTMerge.cpp
   ASTUnit.cpp
   ChainedDiagnosticConsumer.cpp

@@ -5985,6 +5985,41 @@ void Sema::InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
     return;
   }
 
+  // PROTOTYPE (Stage 1.6): an instantiation is performed for a particular
+  // target. A declaration marked "applies to every target" keeps the ambient
+  // one, which is every declaration outside a multi-target compilation.
+  std::optional<ASTContext::TargetScope> InstantiationTarget;
+  if (LLVM_UNLIKELY(Context.hasTargetDivergence()))
+    InstantiationTarget.emplace(Context, clang::InstantiateInVariant
+                                         ? clang::InstantiateInVariant.getValue()
+                                         : Function->getTargetVariant());
+
+  // An entity instantiated while analysing one target belongs to that target.
+  // Instantiations are created by Sema, not parsed, so the parser's marking
+  // never sees them -- which left implicitly instantiated specialisations
+  // visible to every target.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      !Function->getTargetVariant()) {
+    // Prefer the pattern's target over the ambient one. Pending instantiations
+    // are performed at the end of the translation unit, long outside any
+    // alternative, so the ambient variant there is 0 -- "every target" -- and
+    // both arms' instantiations become visible to both.
+    unsigned V = Context.getCurrentTargetVariant();
+    // Prefer recorded provenance over ambient: for a __device__/__global__
+    // callee, ambient here may have been forced to 1 (see the capture site
+    // in SemaExpr.cpp) so its body compiles under the correct device
+    // TargetInfo, but the tag stamped on the Decl still needs to reflect
+    // which reparse copy actually queued it, or CodeGen's TargetVariant>1
+    // filter can never recognize a redundant instantiation as such.
+    auto PIt = PendingInstantiationProvenanceVariant.find(Function);
+    if (PIt != PendingInstantiationProvenanceVariant.end())
+      V = PIt->second;
+    if (const Decl *P = Function->getTemplateInstantiationPattern())
+      if (unsigned PV = P->getTargetVariant())
+        V = PV;
+    Function->setTargetVariant(V);
+  }
+
   llvm::TimeTraceScope TimeScope("InstantiateFunction", [&]() {
     llvm::TimeTraceMetadata M;
     llvm::raw_string_ostream OS(M.Detail);
@@ -6759,6 +6794,35 @@ void Sema::InstantiateVariableDefinition(SourceLocation PointOfInstantiation,
     Def->setTemplateSpecializationKind(Var->getTemplateSpecializationKind(),
                                        PointOfInstantiation);
     return;
+  }
+
+  // PROTOTYPE (Stage 1.6): an instantiation is performed for a particular
+  // target. A declaration marked "applies to every target" keeps the ambient
+  // one, which is every declaration outside a multi-target compilation.
+  std::optional<ASTContext::TargetScope> InstantiationTarget;
+  if (LLVM_UNLIKELY(Context.hasTargetDivergence()))
+    InstantiationTarget.emplace(Context, clang::InstantiateInVariant
+                                         ? clang::InstantiateInVariant.getValue()
+                                         : Var->getTargetVariant());
+
+  // An entity instantiated while analysing one target belongs to that target.
+  // Instantiations are created by Sema, not parsed, so the parser's marking
+  // never sees them -- which left implicitly instantiated specialisations
+  // visible to every target.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      !Var->getTargetVariant()) {
+    // As for functions and classes: a pending instantiation is performed at the
+    // end of the translation unit, where the ambient variant is 0.
+    unsigned V = Context.getCurrentTargetVariant();
+    // See the analogous comment in InstantiateFunctionDefinition: prefer
+    // recorded provenance over the (possibly forced) ambient.
+    auto PIt = PendingInstantiationProvenanceVariant.find(Var);
+    if (PIt != PendingInstantiationProvenanceVariant.end())
+      V = PIt->second;
+    if (const Decl *P = Var->getTemplateInstantiationPattern())
+      if (unsigned PV = P->getTargetVariant())
+        V = PV;
+    Var->setTargetVariant(V);
   }
 
   NonSFINAEContext _(*this);
@@ -7552,6 +7616,25 @@ void Sema::PerformPendingInstantiations(bool LocalOnly, bool AtEndOfTU) {
       Inst = PendingLocalImplicitInstantiations.front();
       PendingLocalImplicitInstantiations.pop_front();
       LocalInstantiation = true;
+    }
+
+    // Restore the ambient target variant this instantiation was queued
+    // under (PendingInstantiationTargetVariant). This alone once broke
+    // address-of-overloaded-function-template deduction for ggml-cuda-mmq's
+    // load-tiles helpers -- restoring ambient made a __device__/__global__
+    // callee's own TargetInfo wrong for deduction purposes. Fixed by
+    // decoupling the two: PendingInstantiationTargetVariant here still
+    // decides which TargetInfo a callee's body is compiled under, while
+    // PendingInstantiationProvenanceVariant (see its declaration in Sema.h)
+    // separately decides the TargetVariant tag CodeGen filters on. See
+    // mmq-cu-function-template-reparse-duplication memory for the full
+    // history.
+    std::optional<ASTContext::TargetScope> DeferredInstantiationTarget;
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+      auto It = PendingInstantiationTargetVariant.find(Inst.first);
+      if (It != PendingInstantiationTargetVariant.end()) {
+        DeferredInstantiationTarget.emplace(Context, It->second);
+      }
     }
 
     // Instantiate function definitions
