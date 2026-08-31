@@ -1573,11 +1573,11 @@ static void InitializePGOProfileMacros(const CodeGenOptions &CodeGenOpts,
 
 /// InitializePreprocessor - Initialize the preprocessor getting it and the
 /// environment ready to process a single file.
-void clang::InitializePreprocessor(Preprocessor &PP,
-                                   const PreprocessorOptions &InitOpts,
-                                   const PCHContainerReader &PCHContainerRdr,
-                                   const FrontendOptions &FEOpts,
-                                   const CodeGenOptions &CodeGenOpts) {
+void clang::InitializePreprocessor(
+    Preprocessor &PP, const PreprocessorOptions &InitOpts,
+    const PCHContainerReader &PCHContainerRdr, const FrontendOptions &FEOpts,
+    const CodeGenOptions &CodeGenOpts,
+    ArrayRef<IntrusiveRefCntPtr<TargetInfo>> MultiTargetAuxTargets) {
   const LangOptions &LangOpts = PP.getLangOpts();
   std::string PredefineBuffer;
   PredefineBuffer.reserve(4080);
@@ -1598,6 +1598,15 @@ void clang::InitializePreprocessor(Preprocessor &PP,
     // macros. This is not the right way to handle this.
     if ((LangOpts.CUDA || LangOpts.isTargetDevice()) && PP.getAuxTargetInfo())
       InitializePredefinedMacros(*PP.getAuxTargetInfo(), LangOpts, FEOpts,
+                                 PP.getPreprocessorOpts(), CodeGenOpts,
+                                 Builder);
+
+    // See the doc comment on the MultiTargetAuxTargets parameter: with
+    // exactly one -multi-target-codegen aux device target, its own
+    // arch-identity macros are unambiguous and safe to predefine here.
+    if ((LangOpts.CUDA || LangOpts.isTargetDevice()) &&
+        MultiTargetAuxTargets.size() == 1)
+      InitializePredefinedMacros(*MultiTargetAuxTargets[0], LangOpts, FEOpts,
                                  PP.getPreprocessorOpts(), CodeGenOpts,
                                  Builder);
 

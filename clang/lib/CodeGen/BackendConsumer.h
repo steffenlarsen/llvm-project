@@ -9,10 +9,12 @@
 #ifndef LLVM_CLANG_LIB_CODEGEN_BACKENDCONSUMER_H
 #define LLVM_CLANG_LIB_CODEGEN_BACKENDCONSUMER_H
 
+#include "clang/Basic/Visibility.h"
 #include "clang/CodeGen/BackendUtil.h"
 #include "clang/CodeGen/CodeGenAction.h"
 #include "clang/CodeGen/ModuleLinker.h"
 
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/Support/Timer.h"
 
@@ -24,6 +26,7 @@ namespace clang {
 class ASTContext;
 class CodeGenAction;
 class CoverageSourceInfo;
+class TargetInfo;
 
 class BackendConsumer : public ASTConsumer {
   virtual void anchor();
@@ -45,6 +48,66 @@ class BackendConsumer : public ASTConsumer {
 
   std::unique_ptr<CodeGenerator> Gen;
 
+public:
+  /// One entry per configured aux (device-arch) target. Each entry drives
+  /// its own second CodeGenModule pipeline off the same shared AST as Gen,
+  /// selecting its own Decl::TargetVariant. Only produces an in-memory
+  /// llvm::Module: unlike Gen, no entry's module is linked, embedded, or run
+  /// through the backend here.
+  struct AuxGenEntry {
+    /// This entry's Decl::TargetVariant (2..N+1).
+    unsigned Variant;
+    std::unique_ptr<CodeGenerator> Gen;
+    /// Populated from -multi-target-aux-output=<variant>:<path>; null
+    /// unless that flag configures this variant, in which case this
+    /// entry's module is produced and discarded rather than written out.
+    std::unique_ptr<raw_pwrite_stream> AsmOutStream;
+    std::string OutputPath;
+    const TargetInfo *TI = nullptr;
+    std::string CPU;
+    /// This entry's own -mlink-builtin-bitcode-equivalent modules, from
+    /// -multi-target-aux-link-bitcode=<variant>:<path>, rather than the
+    /// shared CodeGenOpts.LinkBitcodeFiles every other CodeGenModule in
+    /// this process draws from: each arch links its own arch-specific set
+    /// (e.g. oclc_isa_version_942.bc vs _900.bc).
+    SmallVector<LinkModule, 4> LinkModules;
+    /// This entry's own backend action. Hardcoded to bitcode-only: every
+    /// device-arch cc1 job in the real HIP pipeline only emits
+    /// -emit-llvm-bc; per-arch ISA codegen happens downstream in
+    /// clang-linker-wrapper, out of this entry's own tail.
+    BackendAction Action = Backend_EmitBC;
+    /// Whether this entry's target is a device (GPU) target, computed from
+    /// TI's triple rather than inherited from the primary compile's
+    /// LangOptions::CUDAIsDevice: an aux entry is not always "the other
+    /// side" of the primary (two device-arch aux entries alongside a
+    /// device primary are both devices).
+    bool IsDevice = false;
+    /// This entry's own values for the driver-decided, triple-dependent
+    /// LangOptions/CodeGenOptions flags, computed per target rather than
+    /// inherited from the primary compile's CompilerInvocation. Mirrors
+    /// the defaults AMDGPUToolChain::addClangTargetOptions applies for
+    /// this target; only HIP/AMDGPU is modeled, no other toolchain.
+    bool ConvergentFunctions = false;
+    Visibility ValueVisibilityMode = DefaultVisibility;
+    Visibility TypeVisibilityMode = DefaultVisibility;
+    bool SetVisibilityForExternDecls = false;
+    bool LTOUnit = false;
+    /// Mirrors AMDGPUToolChain::IsMathErrnoDefault() (always false) for a
+    /// device entry, vs. the host toolchain's default (true) otherwise.
+    /// Without this override, EmitBuiltinExpr's
+    /// shouldGenerateFPMathIntrinsic() reads the one process-wide
+    /// LangOptions::MathErrno (host-ambient, true), which disables
+    /// intrinsic-lowering for math builtins like sqrt on the device entry
+    /// too and falls back to an unresolved call to the named library
+    /// function.
+    bool MathErrno = true;
+  };
+
+private:
+  SmallVector<AuxGenEntry, 4> AuxGens;
+  std::string InFile;
+  CoverageSourceInfo *CoverageInfo;
+
   SmallVector<LinkModule, 4> LinkModules;
 
   // A map from mangled names to their function's source location, used for
@@ -62,6 +125,12 @@ class BackendConsumer : public ASTConsumer {
   // This is here so that the diagnostic printer knows the module a diagnostic
   // refers to.
   llvm::Module *CurLinkModule = nullptr;
+
+  /// Run \p Fn against every entry in AuxGens, each under its own target
+  /// scope. A no-op if AuxGens is empty (-multi-target-codegen off, or no
+  /// aux targets configured), so ordinary single-target builds pay one
+  /// predicted-not-taken loop check and nothing else.
+  void dispatchToAuxGens(llvm::function_ref<void(CodeGenerator &)> Fn);
 
 public:
   BackendConsumer(CompilerInstance &CI, BackendAction Action,
@@ -89,8 +158,27 @@ public:
   void AssignInheritanceModel(CXXRecordDecl *RD) override;
   void HandleVTable(CXXRecordDecl *RD) override;
 
-  // Links each entry in LinkModules into our module.  Returns true on error.
+  // Links this consumer's own LinkModules (set at construction from
+  // -mlink-builtin-bitcode/-mlink-bitcode-file) into \p M. Returns true on
+  // error.
   bool LinkInModules(llvm::Module *M);
+
+  // Links each entry in \p ModulesToLink into \p M, clearing it. Returns
+  // true on error. Defaults to this consumer's own (host-bound) TargetOpts
+  // for PropagateAttrs merging; aux entries must pass their own TargetOpts
+  // explicitly (see the 3-arg overload) so a linked-in bitcode library's
+  // functions (e.g. ROCm's ockl.bc) get that entry's own target-cpu/
+  // target-features stamped on them, not the host's.
+  bool LinkInModules(llvm::Module *M,
+                     SmallVectorImpl<LinkModule> &ModulesToLink);
+  bool LinkInModules(llvm::Module *M,
+                     SmallVectorImpl<LinkModule> &ModulesToLink,
+                     const TargetOptions &MergeTargetOpts);
+
+  // Run exactly one AuxGenEntry's own backend tail (link its own
+  // bitcode-file set, embed-bitcode no-op, emit its own bitcode output).
+  // A no-op if this entry has no configured output.
+  void runAuxBackendTail(AuxGenEntry &Entry);
 
   /// Get the best possible source location to represent a diagnostic that
   /// may have associated debug info.

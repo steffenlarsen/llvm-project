@@ -15,36 +15,43 @@
 
 #include "clang/Basic/LangOptions.h"
 
+#include "llvm/ADT/ArrayRef.h"
+
 namespace clang {
-  class Preprocessor;
-  class ASTConsumer;
-  class ASTContext;
-  class CodeCompleteConsumer;
-  class Sema;
+struct TargetRecording;
+class Preprocessor;
+class ASTConsumer;
+class ASTContext;
+class CodeCompleteConsumer;
+class Sema;
 
-  /// Parse the entire file specified, notifying the ASTConsumer as
-  /// the file is parsed.
-  ///
-  /// This operation inserts the parsed decls into the translation
-  /// unit held by Ctx.
-  ///
-  /// \param PrintStats Whether to print LLVM statistics related to parsing.
-  /// \param TUKind The kind of translation unit being parsed.
-  /// \param CompletionConsumer If given, an object to consume code completion
-  /// results.
-  /// \param SkipFunctionBodies Whether to skip parsing of function bodies.
-  /// This option can be used, for example, to speed up searches for
-  /// declarations/definitions when indexing.
-  void ParseAST(Preprocessor &pp, ASTConsumer *C,
-                ASTContext &Ctx, bool PrintStats = false,
-                TranslationUnitKind TUKind = TU_Complete,
-                CodeCompleteConsumer *CompletionConsumer = nullptr,
-                bool SkipFunctionBodies = false);
+/// Parse the entire file specified, notifying the ASTConsumer as
+/// the file is parsed.
+///
+/// This operation inserts the parsed decls into the translation
+/// unit held by Ctx.
+///
+/// \param PrintStats Whether to print LLVM statistics related to parsing.
+/// \param TUKind The kind of translation unit being parsed.
+/// \param CompletionConsumer If given, an object to consume code completion
+/// results.
+/// \param SkipFunctionBodies Whether to skip parsing of function bodies.
+/// This option can be used, for example, to speed up searches for
+/// declarations/definitions when indexing.
+void ParseAST(Preprocessor &pp, ASTConsumer *C, ASTContext &Ctx,
+              bool PrintStats = false, TranslationUnitKind TUKind = TU_Complete,
+              CodeCompleteConsumer *CompletionConsumer = nullptr,
+              bool SkipFunctionBodies = false);
 
-  /// Parse the main file known to the preprocessor, producing an
-  /// abstract syntax tree.
-  void ParseAST(Sema &S, bool PrintStats = false,
-                bool SkipFunctionBodies = false);
+/// Parse the main file known to the preprocessor, producing an
+/// abstract syntax tree.
+///
+/// \param AuxRecordings token streams recorded for the other targets of a
+/// multi-target compilation. When present, the primary preprocessor is
+/// drained, the streams are aligned and spliced, and the parser runs off the
+/// merged stream instead of the lexer.
+void ParseAST(Sema &S, bool PrintStats = false, bool SkipFunctionBodies = false,
+              ArrayRef<TargetRecording> AuxRecordings = {});
 
 }  // end namespace clang
 

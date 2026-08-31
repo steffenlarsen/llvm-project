@@ -30,13 +30,21 @@
 #include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 #include <cassert>
+#include <cstdlib>
 #include <optional>
 #include <utility>
 
 using namespace clang;
+
+llvm::cl::opt<bool> clang::AllowTargetVariantDecls(
+    "allow-target-variant-decls", llvm::cl::Hidden, llvm::cl::init(false),
+    llvm::cl::desc(
+        "Prototype: let same-named declarations coexist per target"));
 
 //===----------------------------------------------------------------------===//
 // TemplateParameterList Implementation
@@ -364,7 +372,8 @@ void RedeclarableTemplateDecl::loadLazySpecializationsImpl(
 }
 
 bool RedeclarableTemplateDecl::loadLazySpecializationsImpl(
-    ArrayRef<TemplateArgument> Args, TemplateParameterList *TPL) const {
+    ArrayRef<TemplateArgument> Args, const void *Extra) const {
+  (void)Extra;
   auto *ExternalSource = getASTContext().getExternalSource();
   if (!ExternalSource)
     return false;
@@ -476,7 +485,169 @@ FunctionTemplateDecl::getSpecializations() const {
 FunctionDecl *FunctionTemplateDecl::findSpecialization(
     ArrayRef<TemplateArgument> Args, llvm::FoldingSetInsertToken &InsertToken) {
   auto *Common = getCommonPtr();
-  return findSpecializationImpl(Common->Specializations, InsertToken, Args);
+  // Pass `this` through to FunctionTemplateSpecializationInfo::Profile so
+  // implicit instantiations can be given a target-aware identity; see the
+  // comment there.
+  return findSpecializationImpl(Common->Specializations, InsertToken, Args,
+                                this);
+}
+
+bool FunctionTemplateDecl::hasTargetTaggedParameterType() const {
+  auto NamesTargetTaggedTemplate = [](QualType T) {
+    T = T.getNonReferenceType().getUnqualifiedType();
+    if (const auto *Ptr = T->getAs<PointerType>())
+      T = Ptr->getPointeeType().getUnqualifiedType();
+    const auto *TST = T->getAs<TemplateSpecializationType>();
+    if (!TST)
+      return false;
+    const auto *TD = dyn_cast_or_null<ClassTemplateDecl>(
+        TST->getTemplateName().getAsTemplateDecl());
+    return TD && TD->hasTargetTaggedPartialSpecialization();
+  };
+
+  const FunctionDecl *FD = getTemplatedDecl();
+  if (NamesTargetTaggedTemplate(FD->getReturnType()))
+    return true;
+  for (const ParmVarDecl *Param : FD->parameters())
+    if (NamesTargetTaggedTemplate(Param->getType()))
+      return true;
+  return false;
+}
+
+bool FunctionTemplateDecl::hasTargetTaggedRedeclaration() const {
+  // A redecl marked TargetVariantRedundant was already judged interchangeable
+  // with the primary by mergeEquivalentVariants and merged away -- it must
+  // not count as evidence of divergence.
+  //
+  // Counting how many tagged redecls are *currently* visible in the chain is
+  // not a safe signal here: for a widened `#if`-divergent template (e.g.
+  // ggml_cuda_mma::mma), the other targets' redecls are produced later, on
+  // demand, by InstantiateDivergentCalleesInBody, so how many are visible at
+  // any given call depends on when in the compile it's queried, which would
+  // make FunctionTemplateSpecializationInfo::Profile see a different answer
+  // for different specializations of the same template. What's stable
+  // regardless of timing is *how* each tagged redecl was created:
+  // Decl::isTargetVariantReparseOrigin() records, at tagging time, whether a
+  // redecl came from -reparse-divergent-users re-parsing a *shared*
+  // declaration's own tokens under a different target's ambient --
+  // which only happens when a template is swept into the reparse net by
+  // referencing something divergent (e.g. mul_mat_f_cuda, which launches an
+  // arch-divergent kernel but has no arch-divergent code of its own) --
+  // versus genuine #if/#elif widening, which only ever tags a copy when the
+  // source text itself diverges by target. A reparse-origin tag proves
+  // nothing about divergence; any other kind of tag does. Folding target
+  // into a merely swept-in template's specialization identity anyway would
+  // give every aux-target reparse of a caller its own spurious,
+  // un-suppressed copy of what should be one specialization.
+  for (const RedeclarableTemplateDecl *RD : redecls()) {
+    if (!RD->getTargetVariant() || RD->isRedundantTargetVariant())
+      continue;
+    if (!RD->isTargetVariantReparseOrigin())
+      return true;
+  }
+  return false;
+}
+
+bool FunctionTemplateDecl::hasTargetTaggedBodyReference() const {
+  return containsTargetDivergentCallee(getTemplatedDecl()->getBody());
+}
+
+bool clang::hasTargetWidenedSiblingDecl(const FunctionDecl *FD) {
+  for (const NamedDecl *ND : FD->getDeclContext()->lookup(FD->getDeclName())) {
+    const auto *RD = dyn_cast<FunctionDecl>(ND);
+    if (!RD || RD == FD)
+      continue;
+    if (!RD->getTargetVariant() || RD->isRedundantTargetVariant())
+      continue;
+    if (!RD->isTargetVariantReparseOrigin())
+      return true;
+  }
+  return false;
+}
+
+bool clang::isTargetDivergentCallee(const ValueDecl *D) {
+  const auto *FD = dyn_cast_or_null<FunctionDecl>(D);
+  if (!FD)
+    return false;
+  if (FunctionTemplateDecl *FTD = FD->getPrimaryTemplate())
+    return FTD->hasTargetTaggedRedeclaration();
+  // See FunctionTemplateDecl::hasTargetTaggedRedeclaration()'s comment above
+  // for why a reparse-origin tag doesn't count as divergence evidence. FD's
+  // own tag alone is not a reliable signal either: a caller can resolve to
+  // the canonical, tag-0 "claimed primary" copy of a widened plain function
+  // even though genuine #if/#elif widening has produced other, real
+  // (non-reparse-origin) tagged siblings for other targets. Those siblings
+  // are registered by name in the enclosing DeclContext even when FD's own
+  // redecls() chain doesn't include them, so query that directly.
+  if (hasTargetWidenedSiblingDecl(FD))
+    return true;
+  // FD's own text is never #if-widened, so the sibling-lookup check above
+  // can't see any divergence -- but FD may be a thin, non-divergent wrapper
+  // around a genuinely divergent callee one level down (e.g.
+  // ggml_cuda_fattn_mma_get_nbatch_fa's body just returns
+  // ggml_cuda_fattn_mma_get_config(...).nbatch_fa, and it's get_config whose
+  // body is #if-gated). Recursing into FD's own body via
+  // containsTargetDivergentCallee gives this check transitivity for free,
+  // since that function already calls back into isTargetDivergentCallee for
+  // every DeclRefExpr/MemberExpr it finds. Guard against infinite recursion
+  // for (mutually) recursive functions with a thread-local in-progress set.
+  static thread_local llvm::SmallPtrSet<const FunctionDecl *, 8> InProgress;
+  const FunctionDecl *Definition = FD->getDefinition();
+  if (Definition && Definition->hasBody() &&
+      InProgress.insert(Definition).second) {
+    bool R = containsTargetDivergentCallee(Definition->getBody());
+    InProgress.erase(Definition);
+    if (R)
+      return true;
+  }
+  return false;
+}
+
+/// Shared by isTargetDivergentValueMemberAccess and
+/// isTargetDivergentMemberFunctionAccess: true if \p DC is a
+/// ClassTemplateSpecializationDecl whose specialized template forks its
+/// FoldingSet identity per target -- the same disjunction
+/// ClassTemplateSpecializationDecl::Profile itself uses, so this neither
+/// over- nor under-triggers relative to what Profile can actually fork.
+static bool isOwnedByTargetForkedSpecialization(const DeclContext *DC) {
+  const auto *CTSD = dyn_cast_or_null<ClassTemplateSpecializationDecl>(DC);
+  if (!CTSD)
+    return false;
+  const ClassTemplateDecl *Template = CTSD->getSpecializedTemplate();
+  return Template && (Template->hasTargetTaggedPartialSpecialization() ||
+                      Template->hasTargetTaggedValueMember() ||
+                      Template->hasTargetTaggedPrimaryTemplate());
+}
+
+bool clang::isTargetDivergentValueMemberAccess(const ValueDecl *D) {
+  const auto *VD = dyn_cast_or_null<VarDecl>(D);
+  return VD && isOwnedByTargetForkedSpecialization(VD->getDeclContext());
+}
+
+bool clang::isTargetDivergentMemberFunctionAccess(const ValueDecl *D) {
+  const auto *MD = dyn_cast_or_null<CXXMethodDecl>(D);
+  return MD && isOwnedByTargetForkedSpecialization(MD->getDeclContext());
+}
+
+const TypeAliasDecl *
+clang::getTargetDivergentAliasQualifier(NestedNameSpecifier NNS) {
+  if (NNS.getKind() != NestedNameSpecifier::Kind::Type)
+    return nullptr;
+  const Type *T = NNS.getAsType();
+  const auto *TT = dyn_cast<TypedefType>(T);
+  if (!TT)
+    return nullptr;
+  const auto *TAD = dyn_cast<TypeAliasDecl>(TT->getDecl());
+  if (!TAD)
+    return nullptr;
+  const auto *Owner =
+      dyn_cast_or_null<ClassTemplateSpecializationDecl>(TAD->getDeclContext());
+  if (!Owner)
+    return nullptr;
+  const ClassTemplateDecl *Template = Owner->getSpecializedTemplate();
+  if (!Template || !Template->hasTargetTaggedPrimaryTemplate())
+    return nullptr;
+  return TAD;
 }
 
 void FunctionTemplateDecl::addSpecialization(
@@ -485,6 +656,52 @@ void FunctionTemplateDecl::addSpecialization(
   auto *Common = getCommonPtr();
   addSpecializationImpl<FunctionTemplateDecl>(Common->Specializations, Info,
                                               InsertToken);
+}
+
+void FunctionTemplateSpecializationInfo::Profile(
+    llvm::FoldingSetNodeID &ID, ArrayRef<TemplateArgument> TemplateArgs,
+    const FunctionTemplateDecl *Template, const ASTContext &Context) {
+  ID.AddInteger(TemplateArgs.size());
+  for (const TemplateArgument &TemplateArg : TemplateArgs)
+    TemplateArg.Profile(ID, Context);
+  // Mirrors ClassTemplateSpecializationDecl::Profile below. An implicit
+  // specialization like load_generic<8, 8, int, I_MAJOR> is normally the
+  // same entity no matter which target compiles it, so folding target in
+  // unconditionally would instantiate every function template call once per
+  // target instead of once overall. This folds target in only when one of
+  // three conditions holds:
+  //
+  // hasTargetTaggedParameterType(): the signature names a class template
+  // with a target-tagged partial specialization (e.g. load_generic's
+  // tile<I, J, T, dl>& parameter), so the *type* of that parameter is
+  // itself target-specific. Without this, the first target to call
+  // load_generic<8, 8, int, I_MAJOR> permanently caches a FunctionDecl keyed
+  // to that target's tile instantiation, and every other target's call
+  // deduction-mismatches against its own, differently-keyed argument type.
+  //
+  // hasTargetTaggedRedeclaration(): the *body* (not signature) is gated by
+  // raw target-CPU macros (e.g. ggml_cuda_mma::mma's
+  // `#if defined(CDNA4)...#elif defined(CDNA2)...`). Widening/reparse
+  // already produced N correctly-tagged redeclarations, but mergePrevDecl
+  // unifies their Common::Specializations FoldingSet, so without this the
+  // first target to instantiate mma<10, 0> permanently caches that target's
+  // compiled body and every other target's call reuses it verbatim.
+  //
+  // hasTargetTaggedBodyReference(): the template's own text is never
+  // `#if`-widened (so neither case above fires), but its body directly
+  // calls a target-divergent plain function (e.g. process_tile<N> calling
+  // ggml_cuda_get_physical_warp_size) to initialize a local variable. A
+  // `#if`-widened caller of such a template has
+  // Context.getCurrentTargetVariant() genuinely vary across its per-target
+  // calls, so without this the first of those calls permanently caches its
+  // resolution of the local variable for every other target's caller too.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && Template &&
+      (Template->hasTargetTaggedParameterType() ||
+       Template->hasTargetTaggedRedeclaration() ||
+       Template->hasTargetTaggedBodyReference())) {
+    unsigned V = Context.getCurrentTargetVariant();
+    ID.AddInteger(V ? V : 1);
+  }
 }
 
 void FunctionTemplateDecl::mergePrevDecl(FunctionTemplateDecl *Prev) {
@@ -571,15 +788,158 @@ ClassTemplateDecl::newCommon(ASTContext &C) const {
 ClassTemplateSpecializationDecl *ClassTemplateDecl::findSpecialization(
     ArrayRef<TemplateArgument> Args, llvm::FoldingSetInsertToken &InsertToken) {
   auto *Common = getCommonPtr();
-  return findSpecializationImpl(Common->Specializations, InsertToken, Args);
+  // Pass `this` through to ClassTemplateSpecializationDecl::Profile so
+  // implicit instantiations can be given a target-aware identity; see the
+  // comment there.
+  return findSpecializationImpl(Common->Specializations, InsertToken, Args,
+                                this);
 }
 
 void ClassTemplateDecl::AddSpecialization(
     ClassTemplateSpecializationDecl *D,
     llvm::FoldingSetInsertToken InsertToken) {
   auto *Common = getCommonPtr();
-  addSpecializationImpl<ClassTemplateDecl>(Common->Specializations, D,
-                                           InsertToken);
+  // Inlined rather than routed through the shared
+  // addSpecializationImpl<Derived, EntryType> used by FunctionTemplateDecl
+  // and VarTemplateDecl, so the debug re-verification below can call this
+  // class's own findSpecialization (which already knows how to fold `this`
+  // into the Profile) instead of needing SpecEntryTraits extended with a
+  // generic way to recover the owning template from an Entry -- that would
+  // have forced the same extra parameter, and matching Profile arity, onto
+  // FunctionTemplateSpecializationInfo and VarTemplateSpecializationDecl too.
+  if (InsertToken) {
+#ifndef NDEBUG
+    ArrayRef<TemplateArgument> Args = D->getTemplateArgs().asArray();
+    // Due to hash collisions, it can happen that we load another template
+    // specialization with the same hash. This is fine, as long as the next
+    // call to findSpecialization does not find a matching Decl for the
+    // template arguments.
+    loadLazySpecializationsImpl(Args);
+    llvm::FoldingSetInsertToken CorrectToken;
+    assert(!findSpecialization(Args, CorrectToken) &&
+           InsertToken == CorrectToken &&
+           "given incorrect InsertToken for specialization");
+#endif
+    Common->Specializations.insert(D, InsertToken);
+  } else {
+    ClassTemplateSpecializationDecl *Existing =
+        Common->Specializations.getOrInsert(D);
+    (void)Existing;
+    assert(Existing->isCanonicalDecl() && "non-canonical specialization?");
+  }
+
+  if (ASTMutationListener *L = getASTMutationListener())
+    L->AddedCXXTemplateSpecialization(this, D);
+}
+
+bool ClassTemplateDecl::hasTargetTaggedPartialSpecialization() const {
+  for (const ClassTemplatePartialSpecializationDecl &P :
+       getPartialSpecializations())
+    if (P.getTargetVariant())
+      return true;
+  return false;
+}
+
+bool ClassTemplateDecl::hasTargetTaggedPrimaryTemplate() const {
+  for (const RedeclarableTemplateDecl *R : redecls())
+    if (R->getTargetVariant())
+      return true;
+  return false;
+}
+
+/// Walks a statement/expression tree looking for a DeclRefExpr/MemberExpr
+/// callee reference that clang::isTargetDivergentCallee flags -- e.g. the
+/// call to ggml_cuda_get_physical_warp_size() inside tile<...>::ne's
+/// initializer, or inside process_tile<N>'s local `lane_count` initializer.
+/// A hand-rolled Stmt::children() walk is used instead of a
+/// RecursiveASTVisitor since both callers only need a cheap existence check
+/// over a small tree; Stmt::children() already exposes a DeclStmt's VarDecl
+/// initializers as children, so this reaches local-variable initializers
+/// too without any special-casing.
+bool clang::containsTargetDivergentCallee(const Stmt *S) {
+  if (!S)
+    return false;
+  if (const auto *DRE = dyn_cast<DeclRefExpr>(S)) {
+    if (isTargetDivergentCallee(DRE->getDecl()))
+      return true;
+  } else if (const auto *ME = dyn_cast<MemberExpr>(S)) {
+    if (isTargetDivergentCallee(ME->getMemberDecl()))
+      return true;
+  }
+  for (const Stmt *Child : S->children())
+    if (containsTargetDivergentCallee(Child))
+      return true;
+  return false;
+}
+
+static bool recordHasTargetTaggedValueMember(const CXXRecordDecl *RD) {
+  for (const Decl *D : RD->decls()) {
+    const auto *VD = dyn_cast<VarDecl>(D);
+    if (VD && containsTargetDivergentCallee(VD->getInit()))
+      return true;
+  }
+  return false;
+}
+
+bool ClassTemplateDecl::hasTargetTaggedValueMember() const {
+  // The primary template's own body is often empty (e.g. ggml_cuda_mma::tile
+  // has no members at all on its primary -- every real member lives in a
+  // partial specialization), so this must also check each partial
+  // specialization's members, not just getTemplatedDecl()'s.
+  if (recordHasTargetTaggedValueMember(getTemplatedDecl()))
+    return true;
+  SmallVector<ClassTemplatePartialSpecializationDecl *, 4> PS;
+  getPartialSpecializations(PS);
+  for (const ClassTemplatePartialSpecializationDecl *P : PS)
+    if (recordHasTargetTaggedValueMember(P))
+      return true;
+  return false;
+}
+
+void ClassTemplateSpecializationDecl::Profile(
+    llvm::FoldingSetNodeID &ID, ArrayRef<TemplateArgument> TemplateArgs,
+    const ClassTemplateDecl *Template, const ASTContext &Context) {
+  ID.AddInteger(TemplateArgs.size());
+  for (const TemplateArgument &TemplateArg : TemplateArgs)
+    TemplateArg.Profile(ID, Context);
+  // An implicit instantiation like tile<16, 8, int> is normally the same
+  // entity no matter which target compiles it, so folding target into the
+  // identity unconditionally would instantiate every specialization once per
+  // target instead of once overall. This folds target in only when one of
+  // three conditions holds:
+  //
+  // hasTargetTaggedPartialSpecialization(): the template has a target-tagged
+  // partial specialization (e.g. mma.cuh's tile<I_, J_, T,
+  // DATA_LAYOUT_I_MAJOR>), so the instantiation's *body* is target-specific
+  // -- InstantiateClassImpl builds it once, from whichever target's pattern
+  // getPatternForClassTemplateSpecialization picks first, and tagging an
+  // already-shared Decl doesn't give the other target a body of its own, so
+  // that target's later member references fail to resolve (e.g. "no member
+  // named 'I'").
+  //
+  // hasTargetTaggedValueMember(): the template has no target-tagged partial
+  // specialization, but a static data member's initializer calls a plain
+  // function whose *body* is gated by raw target-CPU macros (e.g.
+  // ggml_cuda_mma::tile<I_, J_, half2, DATA_LAYOUT_I_MAJOR_SCRAMBLED>::ne
+  // calling ggml_cuda_get_physical_warp_size). The member's value -- and
+  // therefore the array bound of the dependent member `x` -- would
+  // otherwise be baked in permanently by whichever target instantiates this
+  // specialization first.
+  //
+  // hasTargetTaggedPrimaryTemplate(): the primary class template's entire
+  // body -- not just a partial specialization or a single member -- is
+  // redeclared once per #if/#elif/#else arm (e.g. mma_tile_sizes<DV, ncols>
+  // in fattn-mma-f16.cuh). An instantiation that matches none of its (also
+  // widened) partial specializations falls back to the primary template, and
+  // without this it would get the same untargeted identity no matter which
+  // arm's redecl happened to be current when first instantiated.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && Template &&
+      (Template->hasTargetTaggedPartialSpecialization() ||
+       Template->hasTargetTaggedValueMember() ||
+       Template->hasTargetTaggedPrimaryTemplate())) {
+    unsigned V = Context.getCurrentTargetVariant();
+    ID.AddInteger(V ? V : 1);
+  }
 }
 
 ClassTemplatePartialSpecializationDecl *
@@ -597,6 +957,20 @@ void ClassTemplatePartialSpecializationDecl::Profile(
   for (const TemplateArgument &TemplateArg : TemplateArgs)
     TemplateArg.Profile(ID, Context);
   TPL->Profile(ID, Context);
+  // Unlike a full/implicit specialization, a partial specialization is
+  // always written out by hand, so two of them sharing an argument pattern
+  // but belonging to different targets are not duplicates of one entity --
+  // they are the divergence itself (e.g. mma.cuh's tile<I_, J_, T,
+  // DATA_LAYOUT_I_MAJOR>, which has a target-#if inside the class body).
+  // Folding them into one FoldingSet slot by argument pattern alone makes
+  // the second one parsed look like a redefinition of the first. Mixing the
+  // target into the profile lets both coexist; shared code (current == 0)
+  // resolves to the primary target's, matching how ordinary name lookup
+  // falls back for shared code (isVisibleForTarget).
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+    unsigned V = Context.getCurrentTargetVariant();
+    ID.AddInteger(V ? V : 1);
+  }
 }
 
 void ClassTemplateDecl::AddPartialSpecialization(

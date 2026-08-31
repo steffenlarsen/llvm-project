@@ -1977,6 +1977,71 @@ CodeGenFunction::tryEmitAsConstant(const DeclRefExpr *RefExpr) {
   }
   if (CEK == CEK_None) return ConstantEmission();
 
+  // RefExpr may be a shared (target variant 0) caller's reference to a
+  // per-target-forked static data member (e.g. ggml_cuda_mma::tile<>::ne).
+  // Reparse-merge (mergeReparseAlternative, DeclFingerprint.cpp) collapses
+  // several textually-identical reparse alternates into one surviving body,
+  // permanently binding RefExpr to whichever fork's VarDecl survived. If
+  // mergeReparseAlternative recorded a sibling VarDecl for this Expr under
+  // the CodeGenModule's own target variant, evaluate *that* VarDecl's
+  // initializer directly instead of RefExpr's own (wrong) resolution.
+  if (const VarDecl *Repl = getContext().getTargetVariantValueDecl(
+          RefExpr, CGM.getTargetVariant())) {
+    if (const Expr *ReplInit = Repl->getAnyInitializer()) {
+      Expr::EvalResult ReplResult;
+      if (ReplInit->EvaluateAsRValue(ReplResult, getContext()) &&
+          !ReplResult.HasSideEffects) {
+        llvm::Constant *C = ConstantEmitter(*this).emitAbstract(
+            RefExpr->getLocation(), ReplResult.Val,
+            RefExpr->getType().getUnqualifiedType());
+        return ConstantEmission::forValue(C);
+      }
+    }
+  }
+
+  // Unlike the case just above, RefExpr's caller here is ordinary code that
+  // was never itself reparsed per target (its own text has no #if), so
+  // there is no discarded reparse alternate to recover a sibling VarDecl*
+  // from. Instead the divergence lives one level up, on Value's own owning
+  // class: an explicit specialization whose body genuinely differs per
+  // target (e.g. `template <> struct traits<int> { ... #if
+  // defined(__gfx942__) ... #else ... #endif };`) is widened into several
+  // complete, distinctly target-tagged CXXRecordDecl redecls (see
+  // CXXRecordDecl::getDefinitionForTargetVariant), and Sema's one shared
+  // lookup permanently binds RefExpr to whichever redecl's member resolved
+  // first -- correct for that one target, wrong for every other. If Value's
+  // owning class is target-tagged and doesn't match the target CodeGen is
+  // currently emitting for, look up the same-named member on the redecl that
+  // does, and evaluate that member's initializer instead.
+  if (const auto *VD = dyn_cast<VarDecl>(Value)) {
+    if (const auto *Owner =
+            dyn_cast_or_null<CXXRecordDecl>(VD->getDeclContext())) {
+      if (LLVM_UNLIKELY(Owner->getTargetVariant()) &&
+          Owner->getTargetVariant() != CGM.getTargetVariant()) {
+        const CXXRecordDecl *Sibling =
+            Owner->getDefinitionForTargetVariant(CGM.getTargetVariant());
+        if (Sibling != Owner) {
+          for (const Decl *D : Sibling->decls()) {
+            const auto *SiblingVD = dyn_cast<VarDecl>(D);
+            if (!SiblingVD || SiblingVD->getDeclName() != VD->getDeclName())
+              continue;
+            if (const Expr *SiblingInit = SiblingVD->getAnyInitializer()) {
+              Expr::EvalResult SiblingResult;
+              if (SiblingInit->EvaluateAsRValue(SiblingResult, getContext()) &&
+                  !SiblingResult.HasSideEffects) {
+                llvm::Constant *C = ConstantEmitter(*this).emitAbstract(
+                    RefExpr->getLocation(), SiblingResult.Val,
+                    RefExpr->getType().getUnqualifiedType());
+                return ConstantEmission::forValue(C);
+              }
+            }
+            break;
+          }
+        }
+      }
+    }
+  }
+
   Expr::EvalResult result;
   bool resultIsReference;
   QualType resultType;
@@ -2059,6 +2124,25 @@ static DeclRefExpr *tryToConvertMemberExprToDeclRefExpr(CodeGenFunction &CGF,
 
 CodeGenFunction::ConstantEmission
 CodeGenFunction::tryEmitAsConstant(const MemberExpr *ME) {
+  // Mirrors the DeclRefExpr overload's block above, but keyed directly on
+  // ME itself. tryToConvertMemberExprToDeclRefExpr below builds a *freshly
+  // synthesized* DeclRefExpr, whose address can never match the original ME
+  // used as the ASTContext::TargetVariantDeclRedirects table key -- so a
+  // real `t.ne`/`obj->ne` access would silently miss the per-target answer
+  // without this direct check.
+  if (const VarDecl *Repl =
+          getContext().getTargetVariantValueDecl(ME, CGM.getTargetVariant())) {
+    if (const Expr *ReplInit = Repl->getAnyInitializer()) {
+      Expr::EvalResult ReplResult;
+      if (ReplInit->EvaluateAsRValue(ReplResult, getContext()) &&
+          !ReplResult.HasSideEffects) {
+        llvm::Constant *C = ConstantEmitter(*this).emitAbstract(
+            ME->getExprLoc(), ReplResult.Val,
+            ME->getType().getUnqualifiedType());
+        return ConstantEmission::forValue(C);
+      }
+    }
+  }
   if (DeclRefExpr *DRE = tryToConvertMemberExprToDeclRefExpr(*this, ME))
     return tryEmitAsConstant(DRE);
   return ConstantEmission();
@@ -3791,8 +3875,20 @@ LValue CodeGenFunction::EmitDeclRefLValue(const DeclRefExpr *E) {
     return LV;
   }
 
-  if (const auto *FD = dyn_cast<FunctionDecl>(ND))
+  if (const auto *FD = dyn_cast<FunctionDecl>(ND)) {
+    // Mirrors EmitCallee's TargetVariantDeclRedirects consumption for a
+    // non-call reference to a body-divergent function template -- e.g. a
+    // __global__ kernel template whose address is taken (not called) by a
+    // shared host launcher, such as `fattn_kernel = flash_attn_ext_f16<...>;`.
+    // Sema pre-instantiated one specialization per real target for exactly
+    // this Expr (see Sema::InstantiateDivergentCalleesInBody); EmitCallee
+    // already consumes this table for call expressions, this covers plain
+    // references too.
+    if (const FunctionDecl *Repl =
+            getContext().getTargetVariantCallee(E, CGM.getTargetVariant()))
+      FD = Repl;
     return EmitFunctionDeclLValue(*this, E, FD);
+  }
 
   // FIXME: While we're emitting a binding from an enclosing scope, all other
   // DeclRefExprs we see should be implicitly treated as if they also refer to
@@ -5631,8 +5727,15 @@ LValue CodeGenFunction::EmitMemberExpr(const MemberExpr *E) {
     return LV;
   }
 
-  if (const auto *FD = dyn_cast<FunctionDecl>(ND))
+  if (const auto *FD = dyn_cast<FunctionDecl>(ND)) {
+    // See the identical comment in EmitDeclRefLValue -- symmetric handling
+    // for a member-function reference, mirroring EmitCallee's own
+    // DeclRefExpr/MemberExpr symmetry.
+    if (const FunctionDecl *Repl =
+            getContext().getTargetVariantCallee(E, CGM.getTargetVariant()))
+      FD = Repl;
     return EmitFunctionDeclLValue(*this, E, FD);
+  }
 
   llvm_unreachable("Unhandled member declaration!");
 }
@@ -6657,10 +6760,33 @@ CGCallee CodeGenFunction::EmitCallee(const Expr *E) {
   // Resolve direct calls.
   } else if (auto DRE = dyn_cast<DeclRefExpr>(E)) {
     if (auto FD = dyn_cast<FunctionDecl>(DRE->getDecl())) {
+      // This call's callee may have been resolved by an HD-context CUDA/HIP
+      // overload pick that depended on the ambient CUDAIsDevice value
+      // Sema's single shared pass happened to have -- see
+      // ASTContext::CUDAAmbiguousCallees. Re-pick per this CodeGenModule's
+      // own (already-correct, per-target-variant) ambient before emitting.
+      if (const auto *Dual = getContext().getCUDADualSideCallee(DRE))
+        FD = const_cast<FunctionDecl *>(
+            getLangOpts().CUDAIsDevice ? Dual->DeviceDecl : Dual->HostDecl);
+      // This callee may itself be a body-divergent function template (e.g.
+      // ggml_cuda_mma::mma, whose overloads are gated by raw target-CPU
+      // macros) referenced from a *shared* caller -- Sema pre-instantiated
+      // one specialization per real target for exactly this Expr and
+      // recorded them in ASTContext::TargetVariantDeclRedirects; consume
+      // that passively here.
+      if (const FunctionDecl *Repl =
+              getContext().getTargetVariantCallee(DRE, CGM.getTargetVariant()))
+        FD = const_cast<FunctionDecl *>(Repl);
       return EmitDirectCallee(*this, getGlobalDeclForDirectCall(FD));
     }
   } else if (auto ME = dyn_cast<MemberExpr>(E)) {
     if (auto FD = dyn_cast<FunctionDecl>(ME->getMemberDecl())) {
+      if (const auto *Dual = getContext().getCUDADualSideCallee(ME))
+        FD = const_cast<FunctionDecl *>(
+            getLangOpts().CUDAIsDevice ? Dual->DeviceDecl : Dual->HostDecl);
+      if (const FunctionDecl *Repl =
+              getContext().getTargetVariantCallee(ME, CGM.getTargetVariant()))
+        FD = const_cast<FunctionDecl *>(Repl);
       EmitIgnoredExpr(ME->getBase());
       return EmitDirectCallee(*this, FD);
     }

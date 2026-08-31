@@ -854,6 +854,13 @@ Expr *SemaAMDGPU::ExpandAMDGPUPredicateBuiltIn(Expr *E) {
     P = Builtin::evaluateRequiredTargetFeatures(RF, CF);
   }
 
+  // This answer is specific to the current ambient target. In shared code
+  // being elaborated for the primary target only, that answer may not hold
+  // for every other target a combined multi-target frontend is compiling
+  // for, so this declaration needs re-parsing once per target.
+  if (!Ctx.getCurrentTargetVariant())
+    SemaRef.TouchedAmbientTargetBuiltin = true;
+
   return *ExpandedPredicates.insert(SemaRef.BuildBoolLiteral(Loc, P).get())
               .first;
 }

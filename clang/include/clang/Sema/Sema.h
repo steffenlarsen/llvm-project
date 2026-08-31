@@ -90,6 +90,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/Support/Allocator.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -113,6 +114,26 @@ struct InlineAsmIdentifierInfo;
 } // namespace llvm
 
 namespace clang {
+
+/// Forces both arms of an `if constexpr` to be instantiated, as a combined
+/// multi-target frontend requires.
+LLVM_ABI extern llvm::cl::opt<bool> KeepBothConstexprIfBranches;
+
+/// The ambient target scope name lookup selects.
+LLVM_ABI extern llvm::cl::opt<unsigned> ProbeTargetVariant;
+
+/// Forces every template instantiation into one target variant. 0 means
+/// "use the variant the declaration carries", which is the default.
+LLVM_ABI extern llvm::cl::opt<unsigned> InstantiateInVariant;
+
+/// Counts the declarations in shared code that reference a target-specific
+/// entity -- the ones divergence would have to propagate to.
+LLVM_ABI extern llvm::cl::opt<bool> CountDivergentUses;
+
+/// Whether a reference during a re-parse falls back to another target's
+/// declaration.
+LLVM_ABI extern llvm::cl::opt<bool> ReparseFallbackLookup;
+LLVM_ABI extern llvm::cl::opt<bool> MergeEquivalentVariants;
 class ADLResult;
 class APValue;
 struct ASTConstraintSatisfaction;
@@ -1006,7 +1027,56 @@ public:
   bool findMacroSpelling(SourceLocation &loc, StringRef name);
 
   /// Calls \c Lexer::getLocForEndOfToken()
+  /// Declarations in shared code that referenced a target-specific entity,
+  /// and so need to be parsed once per target.
+  llvm::DenseSet<const NamedDecl *> DivergentUsers;
+
+  /// Set while re-parsing a shared declaration for another target, where a
+  /// reference falls back to the primary target's declaration. Ordinary
+  /// parsing must not: a LookupResult can be built under one ambient target
+  /// and resolved under another.
+  bool InTargetFallbackReparse = false;
+
+  /// Set when a lookup in shared code reaches a target-specific entity. The
+  /// parser clears this before each top-level declaration and re-parses
+  /// that declaration per target if it is set afterward.
+  bool TouchedDivergentEntity = false;
+
+  /// Set when shared code evaluates an ambient-target predicate builtin
+  /// (e.g. __builtin_amdgcn_processor_is), which answers differently per
+  /// target but touches no target-specific entity a lookup could flag.
+  /// Drives the same per-target re-parse as TouchedDivergentEntity.
+  bool TouchedAmbientTargetBuiltin = false;
+
+  /// Set by Parser::HandleTargetAlternationMarker while an
+  /// annot_target_alt_begin/sep/end-delimited alternative's own tokens are
+  /// being parsed. Lets isVisibleForTarget's host-primary device-context
+  /// fallback distinguish "Current == 1 because we are inside alternative
+  /// 1's own pushed TargetScope" (a V == 1 declaration here is a deliberate
+  /// match, e.g. a local union's fields declared in that same alternative)
+  /// from "Current == 1 only because nothing more specific ever set it"
+  /// (ordinary shared code, where the fallback must still redirect Current
+  /// onto a real device variant) -- both look identical as a bare
+  /// Current == 1 comparison.
+  bool InTargetAlternativeRegion = false;
+
+  /// The same per-target visibility rule LookupResult applies to ordinary
+  /// name lookup (see LookupResult::isTargetVisible), exposed for callers
+  /// that collect candidate Decls directly -- e.g. class template partial
+  /// specialization matching, which enumerates
+  /// ClassTemplateDecl::getPartialSpecializations() and would otherwise see
+  /// every target's partial specialization as an equally-good match.
+  bool isDeclVisibleForCurrentTarget(const NamedDecl *D, bool ForRedecl = false,
+                                     bool AllowFallback = true);
+
   SourceLocation getLocForEndOfToken(SourceLocation Loc, unsigned Offset = 0);
+
+  /// Whether \p Name is defined as a macro at \p Loc.
+  ///
+  /// Prefer this to Preprocessor::isMacroDefined in Sema: the latter answers
+  /// for wherever the preprocessor has reached, which is only the same thing
+  /// while parsing and lexing run in lockstep.
+  LLVM_ABI bool isMacroDefinedAtLoc(SourceLocation Loc, StringRef Name) const;
 
   /// Calls \c Lexer::findNextToken() to find the next token, and if the
   /// locations of both ends of the token can be resolved it return that
@@ -9237,6 +9307,14 @@ public:
   /// lambda body.
   ExprResult BuildLambdaExpr(SourceLocation StartLoc, SourceLocation EndLoc);
 
+  /// Grant a rebuilt lambda's call operator the same implicit CUDA
+  /// device/host attributes ActOnStartOfLambdaDefinition grants an
+  /// ordinarily-parsed lambda's call operator via SemaCUDA::SetLambdaAttrs.
+  /// A thin, out-of-line wrapper so callers (e.g. TreeTransform.h, which is
+  /// included by many translation units that don't otherwise see SemaCUDA's
+  /// complete type) don't need to call through CUDA() directly.
+  void SetLambdaAttrsForCUDA(CXXMethodDecl *Method);
+
   /// Get the return type to use for a lambda's conversion function(s) to
   /// function pointer type, given the type of the call operator.
   QualType
@@ -14116,6 +14194,51 @@ public:
   /// types, static variables, enumerators, etc.
   std::deque<PendingImplicitInstantiation> PendingLocalImplicitInstantiations;
 
+  /// The ambient target variant a pending instantiation was queued under,
+  /// captured at the point it was first referenced (ODR-used) and lost to
+  /// deferral otherwise: by the time PerformPendingInstantiations drains the
+  /// queue at the end of the translation unit, the ambient variant is always
+  /// 0, regardless of which target actually reached the callee first.
+  ///
+  /// For a __device__/__global__ callee this is forced to 1 regardless of the
+  /// caller's ambient, so that its body is instantiated (and its own nested
+  /// callees resolved) under the true device TargetInfo -- see the capture
+  /// sites in SemaExpr.cpp. That forcing is right for compiling the body, but
+  /// wrong for deciding provenance: see PendingInstantiationProvenanceVariant.
+  llvm::DenseMap<const ValueDecl *, unsigned> PendingInstantiationTargetVariant;
+
+  /// Like PendingInstantiationTargetVariant, but never forced to 1 for a
+  /// __device__/__global__ callee: this is the caller's actual ambient at the
+  /// point of first reference, unconditionally. A reparse-duplicated function
+  /// template (see mmq.cu's mul_mat_q_case) produces a second copy of its
+  /// definition tagged variant 2; calls made from inside that copy's body
+  /// queue their callees (e.g. mul_mat_q, a __global__ kernel) with the same
+  /// provenance, even though those callees' own bodies must still compile
+  /// under the true device TargetInfo (variant 1). Stamping the resulting
+  /// Decl's TargetVariant from this map, rather than from the (possibly
+  /// forced-to-1) TargetInfo-scope ambient, is what lets CodeGen's existing
+  /// TargetVariant>1 skip filter recognize the callee as attributable to the
+  /// redundant copy and suppress it, without affecting how its body is
+  /// compiled.
+  llvm::DenseMap<const ValueDecl *, unsigned>
+      PendingInstantiationProvenanceVariant;
+
+  /// Set by OverloadCandidateSet::BestViableFunctionImpl immediately after
+  /// picking Best, when the pick depended on the ambient CUDAIsDevice value
+  /// (an HD-context caller resolving a same-signature host/device overload
+  /// pair via SemaCUDA::IdentifyPreference's rule (d)). Drained by the one
+  /// caller-side function that builds the concrete DeclRefExpr/MemberExpr for
+  /// this pick (FinishOverloadedCallExpr's OR_Success case in
+  /// SemaOverload.cpp) and associates it with that node via
+  /// ASTContext::setCUDADualSideCallee. If no drainer runs before the next
+  /// overload resolution (e.g. a member call), it is simply overwritten or
+  /// left unused -- inert by default, never a correctness hazard.
+  struct CUDAAmbientDependentPick {
+    const FunctionDecl *Primary;
+    const FunctionDecl *Alternate;
+  };
+  std::optional<CUDAAmbientDependentPick> PendingCUDAAmbientDependentPick;
+
   class LocalEagerInstantiationScope {
   public:
     LocalEagerInstantiationScope(Sema &S, bool AtEndOfTU)
@@ -14276,11 +14399,17 @@ public:
   ///
   /// Usually this should not be used, and template argument deduction should be
   /// used in its place.
+  ///
+  /// \param PatternSource if non-null, substitute this redeclaration's
+  /// templated pattern instead of \p FTD's own -- used to force
+  /// re-instantiation from a specific target-tagged redeclaration's body when
+  /// a shared caller's body references a per-target body-divergent callee.
   FunctionDecl *InstantiateFunctionDeclaration(
       FunctionTemplateDecl *FTD, const TemplateArgumentList *Args,
       SourceLocation Loc,
       CodeSynthesisContext::SynthesisKind CSC =
-          CodeSynthesisContext::ExplicitTemplateArgumentSubstitution);
+          CodeSynthesisContext::ExplicitTemplateArgumentSubstitution,
+      FunctionTemplateDecl *PatternSource = nullptr);
 
   /// Instantiate the definition of the given function from its
   /// template.
@@ -14304,6 +14433,39 @@ public:
                                      bool Recursive = false,
                                      bool DefinitionRequired = false,
                                      bool AtEndOfTU = false);
+
+  /// \p Specialization is a just-instantiated, shared (target variant 0)
+  /// function template
+  /// specialization whose body may reference a callee that is itself a
+  /// function template with a body-divergent redeclaration chain (see
+  /// FunctionTemplateDecl::hasTargetTaggedRedeclaration()) -- e.g. a shared
+  /// mul_mat_q<...> calling ggml_cuda_mma::mma<...>, whose overloads are
+  /// gated by raw target-CPU macros. Because a shared specialization is
+  /// Sema-instantiated exactly once, its call to such a callee would
+  /// otherwise permanently bake in whichever target's ambient happened to
+  /// resolve it first. This eagerly re-instantiates the callee once per real
+  /// target variant, each from that target's own tagged redeclaration, and
+  /// records the result in ASTContext::TargetVariantDeclRedirects for
+  /// CodeGenFunction::EmitCallee to consume passively. No-op unless
+  /// ASTContext::hasTargetDivergence() and \p Specialization is itself
+  /// shared.
+  void InstantiateDivergentCalleesInBody(FunctionDecl *Specialization);
+
+  /// The CUDALaunchBoundsAttr analogue of InstantiateDivergentCalleesInBody
+  /// above. An attribute argument (e.g.
+  /// __launch_bounds__(get_mmvq_mmid_max_batch_for_device<type>() *
+  /// ggml_cuda_get_physical_warp_size(), 1)) is substituted once, at
+  /// declaration-instantiation time -- strictly before this specialization's
+  /// body is ever substituted -- so InstantiateDivergentCalleesInBody's own
+  /// body-walking mechanism never sees it. For each real target variant,
+  /// re-evaluates any target-divergent callee reference found in the
+  /// attribute's argument expressions and records the resulting constant in
+  /// ASTContext::TargetVariantConstantValues for
+  /// AMDGPUTargetCodeGenInfo::setFunctionDeclAttributes to consume
+  /// passively. No-op unless ASTContext::hasTargetDivergence() and
+  /// \p Specialization is itself shared.
+  void InstantiateDivergentCalleesInAttrs(FunctionDecl *Specialization);
+
   VarTemplateSpecializationDecl *BuildVarTemplateInstantiation(
       VarTemplateDecl *VarTemplate, VarDecl *FromVar,
       const TemplateArgumentList *PartialSpecArgs,

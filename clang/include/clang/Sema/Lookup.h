@@ -36,6 +36,14 @@ namespace clang {
 
 class CXXBasePaths;
 
+/// Retry a member-name lookup scoped to one specific widened RecordDecl copy
+/// against that class's sibling widened copies, for the case where the only
+/// candidate found was hidden by mergeWidenedAlternatives's cross-target
+/// field merge (DeclFingerprint.cpp's markRedundantTree/unclaimTree). See its
+/// definition in SemaLookup.cpp for the full explanation. Returns the live
+/// (non-TargetVariantRedundant) sibling member, or null if none is found.
+NamedDecl *findLiveFieldInSiblingRecord(const FieldDecl *D);
+
 enum class LookupResultKind {
   /// No entity found met the criteria.
   NotFound = 0,
@@ -479,9 +487,96 @@ public:
   /// Add a declaration to these results with the given access.
   /// Does not test the acceptance criteria.
   void addDecl(NamedDecl *D, AccessSpecifier AS) {
+    // A declaration belonging to another target is not a result here.
+    // Filtering at admission keeps the redeclaration machinery from ever
+    // seeing it, so parsing one target's alternative after another's
+    // produces a fresh declaration rather than a redefinition.
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && !isTargetVisible(D)) {
+      // Ordinary lookup exposes only the most recently pushed declaration
+      // for a name, not the whole chain. If that one belongs to another
+      // target, walk back for an earlier declaration (the shared
+      // declaration every target's copy redeclares, or the copy for
+      // whichever target this reference actually belongs to) that is
+      // still a legitimate substitute.
+      for (Decl *Prev = D->getPreviousDecl(); Prev;
+           Prev = Prev->getPreviousDecl()) {
+        auto *PrevND = dyn_cast<NamedDecl>(Prev);
+        if (PrevND && isTargetVisible(PrevND)) {
+          Decls.addDecl(PrevND, PrevND->getAccess());
+          ResultKind = LookupResultKind::Found;
+          return;
+        }
+      }
+      // A non-overloadable entity (a class, class template, typedef, ...)
+      // reparsed for another target can go through this same filter before
+      // it is linked as a redeclaration of the original, so getPreviousDecl
+      // above finds nothing. At most one such entity can share this name in
+      // scope, so any other-target sibling in the DeclContext's lookup
+      // table is the right substitute. Functions are excluded because
+      // distinct overloads can legitimately share a name.
+      if (!D->isFunctionOrFunctionTemplate()) {
+        for (NamedDecl *Sibling :
+             D->getDeclContext()->lookup(D->getDeclName())) {
+          if (Sibling != D && isTargetVisible(Sibling)) {
+            Decls.addDecl(Sibling, Sibling->getAccess());
+            ResultKind = LookupResultKind::Found;
+            return;
+          }
+        }
+      }
+      // A field whose own copy was hidden by mergeWidenedAlternatives's
+      // cross-target field merge has no earlier redecl and no same-name
+      // sibling in its own DeclContext (both searches above look inside D's
+      // own RecordDecl, not sibling RecordDecls of the same class) -- its
+      // live copy lives on a different widened copy of the enclosing class.
+      // Retry there. Scoped to FieldDecl+TargetVariantRedundant
+      // specifically: field lookup is always scoped to one already-resolved
+      // RecordDecl, so there is no sibling-candidate-set ambiguity risk to
+      // guard against here.
+      if (const auto *FD = dyn_cast<FieldDecl>(D)) {
+        if (FD->getTargetVariant() == Decl::TargetVariantRedundant) {
+          if (NamedDecl *Live = findLiveFieldInSiblingRecord(FD)) {
+            Decls.addDecl(Live, Live->getAccess());
+            ResultKind = LookupResultKind::Found;
+            return;
+          }
+        }
+      }
+      return;
+    }
     Decls.addDecl(D, AS);
     ResultKind = LookupResultKind::Found;
   }
+
+  /// Like addDecl, but skips only the ambient-dependent half of the
+  /// target-visibility filter. Used to repopulate a LookupResult from an
+  /// already-resolved OverloadExpr's decl set at template-instantiation
+  /// time: each decl there was already filtered once, correctly, against
+  /// the ambient target active when the original UnresolvedLookupExpr's
+  /// candidates were assembled at parse time. A deferred instantiation can
+  /// run under a different ambient that has nothing to do with which
+  /// candidate was correct for that reference, so re-deriving visibility
+  /// from the ambient here would silently drop the sole surviving
+  /// candidate. A decl tagged TargetVariantRedundant is never a valid
+  /// result regardless of ambient, though, so that half of the filter
+  /// still applies.
+  void addDeclIgnoringTargetVisibility(NamedDecl *D) {
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+        D->getTargetVariant() == Decl::TargetVariantRedundant)
+      return;
+    Decls.addDecl(D, D->getAccess());
+    ResultKind = LookupResultKind::Found;
+  }
+
+  /// Whether \p D belongs to the target currently being analysed. Declarations
+  /// marked 0 belong to every target, which is all of them outside a
+  /// multi-target compilation.
+  ///
+  /// \p SoleCandidate must only be true when the caller guarantees \p D is
+  /// the only member of its frozen candidate set for this reference: it
+  /// relaxes a last-resort fallback that is otherwise unsafe whenever
+  /// another, differently-tagged sibling could be live in the same set.
+  bool isTargetVisible(const NamedDecl *D, bool SoleCandidate = false) const;
 
   /// Add all the declarations from another set of lookup
   /// results.

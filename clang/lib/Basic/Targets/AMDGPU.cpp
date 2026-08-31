@@ -293,7 +293,11 @@ void AMDGPUTargetInfo::getTargetDefines(const LangOptions &Opts,
   Builder.defineMacro("__AMDGCN_CUMODE__", Twine(CUMode));
 
   // Legacy HIP host code relies on these default attributes to be defined.
-  bool IsHIPHost = Opts.HIP && !Opts.CUDAIsDevice;
+  // A -multi-target-codegen aux device target is exempt: it represents a
+  // real device CodeGen fork even though the shared LangOptions reflects a
+  // host-primary compile, so it still wants its own arch-identity macros.
+  bool IsHIPHost = Opts.HIP && !Opts.CUDAIsDevice &&
+                   !getTargetOpts().IsMultiTargetAuxDeviceTarget;
   if (GPUKind == llvm::AMDGPU::GK_NONE && !IsHIPHost)
     return;
 
@@ -305,7 +309,8 @@ void AMDGPUTargetInfo::getTargetDefines(const LangOptions &Opts,
   // e.g. gfx10-1-generic -> gfx10_1_generic
   llvm::replace(CanonName, '-', '_');
 
-  Builder.defineMacro(Twine("__") + Twine(CanonName) + Twine("__"));
+  if (!IsHIPHost)
+    Builder.defineMacro(Twine("__") + Twine(CanonName) + Twine("__"));
   // Emit macros for gfx family e.g. gfx906 -> __GFX9__, gfx1030 -> __GFX10___
   if (getTriple().isAMDGCN() && !IsHIPHost) {
     assert(StringRef(CanonName).starts_with("gfx") &&

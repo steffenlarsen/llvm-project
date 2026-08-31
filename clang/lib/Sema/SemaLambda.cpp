@@ -1628,6 +1628,10 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
       ExpressionEvaluationContext::PotentiallyEvaluated, LSI->CallOperator);
 }
 
+void Sema::SetLambdaAttrsForCUDA(CXXMethodDecl *Method) {
+  CUDA().SetLambdaAttrs(Method);
+}
+
 void Sema::ActOnLambdaError(SourceLocation StartLoc, Scope *CurScope,
                             bool IsInstantiation) {
   LambdaScopeInfo *LSI = cast<LambdaScopeInfo>(FunctionScopes.back());

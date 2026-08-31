@@ -13,8 +13,10 @@
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTMutationListener.h"
+#include "clang/AST/DeclFingerprint.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/DependentDiagnostic.h"
+#include "clang/AST/DynamicRecursiveASTVisitor.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/PrettyDeclStackTrace.h"
@@ -5856,10 +5858,450 @@ bool TemplateDeclInstantiator::SubstDefaultedFunction(FunctionDecl *New,
   return false;
 }
 
+namespace {
+/// Finds direct references, within a just-instantiated function body, to a
+/// target-divergent callee or member -- one whose eventual answer differs
+/// per real target even though the enclosing function is only ever
+/// Sema-instantiated once (a *shared* caller). Four independent shapes are
+/// detected, tagged by DivergentReferenceKind and dispatched by
+/// Sema::InstantiateDivergentCalleesInBody to one resolver each, since each
+/// shape needs a structurally different re-resolution/re-instantiation
+/// recipe:
+///  - Callee (isTargetDivergentCallee): either (a) a FunctionTemplateDecl
+///    with a body-divergent redeclaration chain (see
+///    FunctionTemplateDecl::hasTargetTaggedRedeclaration()), e.g.
+///    ggml_cuda_mma::mma, whose overloads are gated by raw target-CPU macros
+///    rather than by template arguments, or (b) a plain (non-template)
+///    FunctionDecl that is itself one of the per-target reparse copies
+///    produced by widening, e.g. ggml_cuda_ue4m3_to_fp32.
+///  - ValueMember (isTargetDivergentValueMemberAccess): a reference to a
+///    static data member of a class template specialization whose
+///    FoldingSet identity is target-forked, e.g. tile_like<16,16,int>::ne.
+///  - AliasMember (getTargetDivergentAliasQualifier): a value reached
+///    through a target-tagged-primary-template type alias qualifier, e.g.
+///    T_B_KQ::I where T_B_KQ = typename mma_tile_sizes<DV,ncols>::T_B_KQ --
+///    distinct from ValueMember because here the class directly declaring
+///    the value is itself an ordinary, untagged class (e.g. tile<>); the
+///    divergence is hidden one hop earlier, in which concrete type the
+///    alias qualifier names.
+///  - MemberCallee (isTargetDivergentMemberFunctionAccess): a call through
+///    an already-resolved MemberExpr/DeclRefExpr naming a CXXMethodDecl
+///    declared directly on a target-forked class template specialization,
+///    e.g. ggml_cuda_mma::tile<16,16,float,...>::get_i() -- not caught by
+///    Callee above, since isTargetDivergentCallee's sibling search only
+///    looks inside the callee's own DeclContext, but each real target's
+///    fork of the owning specialization is a physically separate
+///    DeclContext.
+/// The four predicates are checked independently (not else-chained), so a
+/// single Expr* can in principle appear tagged with more than one kind.
+enum class DivergentReferenceKind {
+  Callee,
+  ValueMember,
+  AliasMember,
+  MemberCallee,
+};
+
+class DivergentCalleeVisitor : public DynamicRecursiveASTVisitor {
+public:
+  SmallVector<std::pair<Expr *, DivergentReferenceKind>, 8> Found;
+
+  void checkDecl(Expr *E, const ValueDecl *D, NestedNameSpecifier Qualifier) {
+    if (isTargetDivergentCallee(D))
+      Found.emplace_back(E, DivergentReferenceKind::Callee);
+    if (isTargetDivergentValueMemberAccess(D))
+      Found.emplace_back(E, DivergentReferenceKind::ValueMember);
+    if (getTargetDivergentAliasQualifier(Qualifier))
+      Found.emplace_back(E, DivergentReferenceKind::AliasMember);
+    if (isTargetDivergentMemberFunctionAccess(D))
+      Found.emplace_back(E, DivergentReferenceKind::MemberCallee);
+  }
+
+  bool VisitDeclRefExpr(DeclRefExpr *E) override {
+    checkDecl(E, E->getDecl(), E->getQualifier());
+    return true;
+  }
+
+  bool VisitMemberExpr(MemberExpr *E) override {
+    checkDecl(E, E->getMemberDecl(), E->getQualifier());
+    return true;
+  }
+};
+
+/// Shared by resolveDivergentValueMember/resolveDivergentMemberCallee/
+/// resolveDivergentAliasMember below: find or create the per-real-target
+/// fork of a class template specialization (its FoldingSet identity is
+/// target-forked once the ambient TargetScope for V is pushed -- see
+/// ClassTemplateSpecializationDecl::Profile), and force it to instantiate
+/// if it hasn't been already. Mirrors the find-or-create idiom
+/// Sema::CheckTemplateIdType itself uses for a specialization's very first
+/// instantiation.
+static ClassTemplateSpecializationDecl *getOrCreateTargetForkedSpecialization(
+    Sema &S, ClassTemplateDecl *CTD, ArrayRef<TemplateArgument> Args,
+    bool HasStrictPackMatch, SourceLocation Loc) {
+  ASTContext &Context = S.Context;
+  llvm::FoldingSetInsertToken InsertToken;
+  ClassTemplateSpecializationDecl *NewSpec =
+      CTD->findSpecialization(Args, InsertToken);
+  if (!NewSpec) {
+    NewSpec = ClassTemplateSpecializationDecl::Create(
+        Context, CTD->getTemplatedDecl()->getTagKind(), CTD->getDeclContext(),
+        CTD->getTemplatedDecl()->getBeginLoc(), CTD->getLocation(), CTD, Args,
+        HasStrictPackMatch, nullptr);
+    CTD->AddSpecialization(NewSpec, InsertToken);
+    if (CTD->isOutOfLine())
+      NewSpec->setLexicalDeclContext(CTD->getLexicalDeclContext());
+  }
+  if (NewSpec->getSpecializationKind() == TSK_Undeclared)
+    S.InstantiateClassTemplateSpecialization(
+        Loc, NewSpec, TSK_ImplicitInstantiation, /*Complain=*/true,
+        NewSpec->hasStrictPackMatch());
+  return NewSpec;
+}
+
+/// E names a target-divergent callee (DivergentReferenceKind::Callee). Two
+/// structurally distinct sub-cases, split by whether the callee is a
+/// function template specialization or a plain (non-template) FunctionDecl.
+static void resolveDivergentCallee(Sema &S, Expr *E,
+                                    unsigned FirstDeviceVariant) {
+  ASTContext &Context = S.Context;
+  const ValueDecl *CalleeDecl = isa<MemberExpr>(E)
+                                    ? cast<MemberExpr>(E)->getMemberDecl()
+                                    : cast<DeclRefExpr>(E)->getDecl();
+  const auto *Callee = cast<FunctionDecl>(CalleeDecl);
+  FunctionTemplateDecl *CalleeTemplate = Callee->getPrimaryTemplate();
+  const TemplateArgumentList *Args = Callee->getTemplateSpecializationArgs();
+
+  if (CalleeTemplate && Args) {
+    for (unsigned V = FirstDeviceVariant; V <= 1 + Context.getNumAuxTargets();
+         ++V) {
+      const TargetInfo *TI = Context.getTargetForVariant(V);
+      if (!TI)
+        continue;
+
+      ASTContext::TargetScope Scope(Context, *TI, V);
+
+      // CalleeTemplate->redecls() does not enumerate the other targets'
+      // widened copies: each arm produced by widening is parsed under its
+      // own TargetScope, and template redeclaration-merging does not chain
+      // them into one Redeclarable chain. An ordinary lookup performed
+      // while the target ambient is active does resolve to the right
+      // widened copy -- isVisibleForTarget filters *reference* lookups by
+      // ambient correctly, but not *redeclaration* lookups, which is what
+      // redecls() depends on -- so re-run that lookup under this target's
+      // pushed scope instead of walking the chain.
+      FunctionTemplateDecl *PatternSource = CalleeTemplate;
+      LookupResult Result(S, CalleeTemplate->getDeclName(),
+                           Callee->getLocation(), Sema::LookupOrdinaryName);
+      S.LookupQualifiedName(Result, CalleeTemplate->getDeclContext());
+      for (NamedDecl *ND : Result) {
+        if (auto *FTD =
+                dyn_cast<FunctionTemplateDecl>(ND->getUnderlyingDecl())) {
+          if (FTD->getTargetVariant() == V) {
+            PatternSource = FTD;
+            break;
+          }
+        }
+      }
+
+      FunctionDecl *NewSpec = S.InstantiateFunctionDeclaration(
+          CalleeTemplate, Args, Callee->getLocation(),
+          Sema::CodeSynthesisContext::ExplicitTemplateArgumentSubstitution,
+          PatternSource);
+      if (!NewSpec)
+        continue;
+      // Stamp the target explicitly rather than trusting
+      // InstantiateFunctionDefinition's ambient-tagging fallback below:
+      // that fallback deliberately distrusts an ambient forced by an
+      // enclosing *shared* (variant-0) instantiation, which is exactly
+      // Specialization here -- but this specific callee really is meant
+      // for variant V.
+      if (!NewSpec->getTargetVariant())
+        NewSpec->setTargetVariant(V);
+
+      S.InstantiateFunctionDefinition(Callee->getLocation(), NewSpec,
+                                       /*Recursive=*/true);
+      Context.setTargetVariantCallee(E, V, NewSpec);
+    }
+    return;
+  }
+
+  // Plain (non-template) callee: isDivergentCallee already established that
+  // some redecl in Callee's chain is genuinely target-tagged, but Callee
+  // itself (the specific FunctionDecl this DeclRefExpr/MemberExpr names)
+  // may well be the canonical, tag-0 "claimed primary" copy rather than one
+  // of the tagged siblings, so its own getTargetVariant() cannot be used to
+  // skip this callee. Unlike the template case there is no pattern to
+  // re-substitute: every real target's copy was already fully parsed and
+  // defined by widening. redecls() does not chain the sibling copies here
+  // either, so use the same lookup-under-TargetScope technique as the
+  // template path above, recording the found sibling directly instead of
+  // instantiating one.
+  for (unsigned V = FirstDeviceVariant; V <= 1 + Context.getNumAuxTargets();
+       ++V) {
+    const TargetInfo *TI = Context.getTargetForVariant(V);
+    if (!TI)
+      continue;
+
+    ASTContext::TargetScope Scope(Context, *TI, V);
+
+    LookupResult Result(S, Callee->getDeclName(), Callee->getLocation(),
+                         Sema::LookupOrdinaryName);
+    S.LookupQualifiedName(
+        Result, const_cast<DeclContext *>(Callee->getDeclContext()));
+    for (NamedDecl *ND : Result) {
+      auto *FD = dyn_cast<FunctionDecl>(ND->getUnderlyingDecl());
+      if (FD && FD->getTargetVariant() == V &&
+          ASTContext::hasSameType(FD->getType(), Callee->getType())) {
+        Context.setTargetVariantCallee(E, V, FD);
+        break;
+      }
+    }
+  }
+}
+
+/// E is a reference (not call) to a static data member of a class template
+/// specialization whose identity is target-forked
+/// (DivergentReferenceKind::ValueMember), e.g. tile_like<16,16,int>::ne.
+/// Unlike the callee case above, there is no already-parsed per-target
+/// sibling Decl to look up; a new instantiation must be forced under each
+/// target's pushed ambient.
+static void resolveDivergentValueMember(Sema &S, Expr *E,
+                                         unsigned FirstDeviceVariant) {
+  ASTContext &Context = S.Context;
+  const ValueDecl *MemberDecl = isa<MemberExpr>(E)
+                                    ? cast<MemberExpr>(E)->getMemberDecl()
+                                    : cast<DeclRefExpr>(E)->getDecl();
+  const auto *VD = cast<VarDecl>(MemberDecl);
+  const auto *Owner =
+      cast<ClassTemplateSpecializationDecl>(VD->getDeclContext());
+  ClassTemplateDecl *CTD = Owner->getSpecializedTemplate();
+  ArrayRef<TemplateArgument> Args = Owner->getTemplateArgs().asArray();
+
+  for (unsigned V = FirstDeviceVariant; V <= 1 + Context.getNumAuxTargets();
+       ++V) {
+    const TargetInfo *TI = Context.getTargetForVariant(V);
+    if (!TI)
+      continue;
+
+    ASTContext::TargetScope Scope(Context, *TI, V);
+
+    ClassTemplateSpecializationDecl *NewSpec =
+        getOrCreateTargetForkedSpecialization(
+            S, CTD, Args, Owner->hasStrictPackMatch(), VD->getLocation());
+
+    LookupResult Result(S, VD->getDeclName(), VD->getLocation(),
+                         Sema::LookupOrdinaryName);
+    S.LookupQualifiedName(Result, NewSpec);
+    for (NamedDecl *ND : Result) {
+      if (auto *NewVD = dyn_cast<VarDecl>(ND->getUnderlyingDecl())) {
+        // getOrCreateTargetForkedSpecialization above completes the class
+        // shell but, like an ordinary reference, defers each static data
+        // member's own initializer (and its 'inline' propagation, see
+        // InstantiateVariableInitializer) until something odr-uses it --
+        // force that now, the same way SemaExpr.cpp's use-triggered path
+        // would for a real reference.
+        if (!NewVD->hasInit())
+          S.InstantiateVariableDefinition(VD->getLocation(), NewVD,
+                                          /*Recursive=*/true);
+        Context.setTargetVariantValueDecl(E, V, NewVD);
+        break;
+      }
+    }
+  }
+}
+
+/// A call through an already-resolved MemberExpr/DeclRefExpr naming a
+/// CXXMethodDecl declared directly on a target-forked class template
+/// specialization (DivergentReferenceKind::MemberCallee), e.g.
+/// ggml_cuda_mma::tile<16,16,float,...>::get_i() -- not caught by
+/// resolveDivergentCallee, since isTargetDivergentCallee's sibling search
+/// only looks inside the callee's own DeclContext, but each real target's
+/// fork of the owning specialization is a physically separate DeclContext,
+/// so a sibling method in a different fork is never found that way. Mirrors
+/// resolveDivergentValueMember's idiom (find-or-create the per-target fork,
+/// force it to instantiate) instead of a sibling lookup, then looks up the
+/// method by name+signature inside the fork and records it via the same
+/// Context.setTargetVariantCallee table resolveDivergentCallee already
+/// populates -- CodeGen's consultation of that table needs no change.
+static void resolveDivergentMemberCallee(Sema &S, Expr *E,
+                                          unsigned FirstDeviceVariant) {
+  ASTContext &Context = S.Context;
+  const ValueDecl *MemberDecl = isa<MemberExpr>(E)
+                                    ? cast<MemberExpr>(E)->getMemberDecl()
+                                    : cast<DeclRefExpr>(E)->getDecl();
+  const auto *MD = cast<CXXMethodDecl>(MemberDecl);
+  const auto *Owner =
+      cast<ClassTemplateSpecializationDecl>(MD->getDeclContext());
+  ClassTemplateDecl *CTD = Owner->getSpecializedTemplate();
+  ArrayRef<TemplateArgument> Args = Owner->getTemplateArgs().asArray();
+
+  for (unsigned V = FirstDeviceVariant; V <= 1 + Context.getNumAuxTargets();
+       ++V) {
+    const TargetInfo *TI = Context.getTargetForVariant(V);
+    if (!TI)
+      continue;
+
+    ASTContext::TargetScope Scope(Context, *TI, V);
+
+    ClassTemplateSpecializationDecl *NewSpec =
+        getOrCreateTargetForkedSpecialization(
+            S, CTD, Args, Owner->hasStrictPackMatch(), MD->getLocation());
+
+    LookupResult Result(S, MD->getDeclName(), MD->getLocation(),
+                         Sema::LookupOrdinaryName);
+    S.LookupQualifiedName(Result, NewSpec);
+    for (NamedDecl *ND : Result) {
+      auto *NewMD = dyn_cast<CXXMethodDecl>(ND->getUnderlyingDecl());
+      if (!NewMD || !ASTContext::hasSameType(NewMD->getType(), MD->getType()))
+        continue;
+      if (!NewMD->hasBody())
+        S.InstantiateFunctionDefinition(MD->getLocation(), NewMD,
+                                         /*Recursive=*/true);
+      Context.setTargetVariantCallee(E, V, NewMD);
+      break;
+    }
+  }
+}
+
+/// A value reached through a target-tagged-primary-template type alias
+/// qualifier (DivergentReferenceKind::AliasMember), e.g. T_B_KQ::I where
+/// T_B_KQ = typename mma_tile_sizes<DV,ncols>::T_B_KQ. I's own owner (e.g.
+/// tile<16,8,__half2>) is an ordinary, untagged class -- the divergence is
+/// hidden one hop earlier, in which concrete type the alias itself names
+/// per real target. Re-resolves that alias fresh under each real target's
+/// ambient (mirroring resolveDivergentValueMember's find-or-create/
+/// instantiate idiom, applied to the alias's owning specialization instead
+/// of the value's), then redoes the trailing member lookup against
+/// whatever concrete type comes out, and records the result via the same
+/// Context.setTargetVariantValueDecl table -- CodeGen's consultation of
+/// that table (CodeGenFunction::tryEmitAsConstant) needs no change, since
+/// the end result is still just an Expr*-keyed per-variant VarDecl*.
+static void resolveDivergentAliasMember(Sema &S, Expr *E,
+                                        unsigned FirstDeviceVariant) {
+  ASTContext &Context = S.Context;
+  const TypeAliasDecl *Alias = getTargetDivergentAliasQualifier(
+      isa<MemberExpr>(E) ? cast<MemberExpr>(E)->getQualifier()
+                         : cast<DeclRefExpr>(E)->getQualifier());
+  if (!Alias)
+    return;
+  const ValueDecl *MemberDecl = isa<MemberExpr>(E)
+                                    ? cast<MemberExpr>(E)->getMemberDecl()
+                                    : cast<DeclRefExpr>(E)->getDecl();
+  const auto *AliasOwner =
+      cast<ClassTemplateSpecializationDecl>(Alias->getDeclContext());
+  ClassTemplateDecl *AliasCTD = AliasOwner->getSpecializedTemplate();
+  ArrayRef<TemplateArgument> AliasArgs =
+      AliasOwner->getTemplateArgs().asArray();
+
+  for (unsigned V = FirstDeviceVariant; V <= 1 + Context.getNumAuxTargets();
+       ++V) {
+    const TargetInfo *TI = Context.getTargetForVariant(V);
+    if (!TI)
+      continue;
+
+    ASTContext::TargetScope Scope(Context, *TI, V);
+
+    ClassTemplateSpecializationDecl *NewAliasSpec =
+        getOrCreateTargetForkedSpecialization(
+            S, AliasCTD, AliasArgs, AliasOwner->hasStrictPackMatch(),
+            Alias->getLocation());
+
+    LookupResult AliasResult(S, Alias->getDeclName(), Alias->getLocation(),
+                              Sema::LookupOrdinaryName);
+    S.LookupQualifiedName(AliasResult, NewAliasSpec);
+    const TypeAliasDecl *NewAlias = nullptr;
+    for (NamedDecl *ND : AliasResult) {
+      if (auto *TAD = dyn_cast<TypeAliasDecl>(ND->getUnderlyingDecl())) {
+        NewAlias = TAD;
+        break;
+      }
+    }
+    if (!NewAlias)
+      continue;
+
+    QualType AliasedTy = NewAlias->getUnderlyingType();
+    S.RequireCompleteType(MemberDecl->getLocation(), AliasedTy,
+                          diag::err_incomplete_type);
+    CXXRecordDecl *AliasedRD = AliasedTy->getAsCXXRecordDecl();
+    if (!AliasedRD)
+      continue;
+
+    LookupResult Result(S, MemberDecl->getDeclName(),
+                         MemberDecl->getLocation(), Sema::LookupOrdinaryName);
+    S.LookupQualifiedName(Result, AliasedRD);
+    for (NamedDecl *ND : Result) {
+      if (auto *NewVD = dyn_cast<VarDecl>(ND->getUnderlyingDecl())) {
+        if (!NewVD->hasInit())
+          S.InstantiateVariableDefinition(MemberDecl->getLocation(), NewVD,
+                                          /*Recursive=*/true);
+        Context.setTargetVariantValueDecl(E, V, NewVD);
+        break;
+      }
+    }
+  }
+}
+} // namespace
+
+void Sema::InstantiateDivergentCalleesInBody(FunctionDecl *Specialization) {
+  // Mirrors every other multi-target check in this mechanism (e.g.
+  // FunctionTemplateSpecializationInfo::Profile,
+  // SemaTemplateInstantiateDecl.cpp's ambient-tagging block above): gate on
+  // whether target-variant tagging is active at all, not on
+  // ASTContext::hasTargetDivergence(), which tracks an unrelated concept
+  // (type layout differing between targets) and is false for compilations
+  // like this one where nothing's size/alignment differs.
+  if (!LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    return;
+  // A caller that is itself target-tagged already gets a per-target
+  // specialization via FunctionTemplateSpecializationInfo::Profile folding
+  // in Context.getCurrentTargetVariant() (see hasTargetTaggedRedeclaration()
+  // there) -- this mechanism is only needed for a *shared* caller, whose one
+  // Sema-time instantiation would otherwise permanently bake in whichever
+  // target's ambient happened to resolve a divergent callee first.
+  if (Specialization->getTargetVariant() != 0)
+    return;
+  Stmt *Body = Specialization->getBody();
+  if (!Body)
+    return;
+
+  DivergentCalleeVisitor Visitor;
+  Visitor.TraverseStmt(Body);
+  if (Visitor.Found.empty())
+    return;
+
+  // This mechanism only concerns device-side divergence (the only real
+  // trigger, ggml_cuda_mma::mma, is device-only): in a device-mode Sema
+  // pass every configured target variant (1..N+1) is itself a device arch,
+  // but in a host-primary combined pass variant 1 is the host and must not
+  // have a __device__-only callee's body substituted under its TargetInfo
+  // (LangOptions::CUDAIsDevice is fixed for the whole Sema pass and is not
+  // toggled by ASTContext::TargetScope, so doing so would instantiate
+  // device-only code under host semantics).
+  unsigned FirstDeviceVariant = getLangOpts().CUDAIsDevice ? 1 : 2;
+
+  for (auto &Entry : Visitor.Found) {
+    switch (Entry.second) {
+    case DivergentReferenceKind::Callee:
+      resolveDivergentCallee(*this, Entry.first, FirstDeviceVariant);
+      break;
+    case DivergentReferenceKind::ValueMember:
+      resolveDivergentValueMember(*this, Entry.first, FirstDeviceVariant);
+      break;
+    case DivergentReferenceKind::MemberCallee:
+      resolveDivergentMemberCallee(*this, Entry.first, FirstDeviceVariant);
+      break;
+    case DivergentReferenceKind::AliasMember:
+      resolveDivergentAliasMember(*this, Entry.first, FirstDeviceVariant);
+      break;
+    }
+  }
+}
+
 FunctionDecl *Sema::InstantiateFunctionDeclaration(
     FunctionTemplateDecl *FTD, const TemplateArgumentList *Args,
-    SourceLocation Loc, CodeSynthesisContext::SynthesisKind CSC) {
-  FunctionDecl *FD = FTD->getTemplatedDecl();
+    SourceLocation Loc, CodeSynthesisContext::SynthesisKind CSC,
+    FunctionTemplateDecl *PatternSource) {
+  FunctionDecl *FD = (PatternSource ? PatternSource : FTD)->getTemplatedDecl();
 
   InstantiatingTemplate Inst(*this, Loc, FTD, Args->asArray(), CSC);
   if (Inst.isInvalid())
@@ -5870,6 +6312,34 @@ FunctionDecl *Sema::InstantiateFunctionDeclaration(
                                        /*Final=*/false);
 
   return cast_or_null<FunctionDecl>(SubstDecl(FD, FD->getParent(), MArgs));
+}
+
+/// A specialization of a redundant-tagged FunctionTemplateDecl/
+/// VarTemplateDecl can still mint brand-new specializations after the
+/// redundant tag was applied -- e.g. a still-live reparse-origin caller
+/// performing its own deduction at end-of-TU drain time.
+/// hideRedundantSpecializations (DeclFingerprint.cpp) only reconciles
+/// specializations that already exist in the redundant template's FoldingSet
+/// at the single point mergeEquivalentVariants runs; it cannot catch ones
+/// minted afterward. This closes that gap lazily, at the point each new
+/// specialization would otherwise be tagged with a real (colliding) target:
+/// if the surviving, non-redundant sibling template already has an
+/// equivalent specialization for these (fully-resolved, concrete) template
+/// arguments, this specialization is itself just as redundant and must not
+/// be given a real target tag.
+template <typename TemplateDeclT>
+static bool
+hasEquivalentSpecializationInSurvivingSibling(TemplateDeclT *TD,
+                                              ArrayRef<TemplateArgument> Args) {
+  for (NamedDecl *ND : TD->getDeclContext()->lookup(TD->getDeclName())) {
+    auto *Sibling = dyn_cast<TemplateDeclT>(ND->getUnderlyingDecl());
+    if (!Sibling || Sibling == TD || Sibling->isRedundantTargetVariant())
+      continue;
+    llvm::FoldingSetInsertToken InsertToken;
+    if (Sibling->findSpecialization(Args, InsertToken))
+      return true;
+  }
+  return false;
 }
 
 void Sema::InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
@@ -5983,6 +6453,133 @@ void Sema::InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
     LateParsedInstantiations.push_back(
         std::make_pair(Function, PointOfInstantiation));
     return;
+  }
+
+  // An entity instantiated while analysing one target belongs to that target.
+  // Instantiations are created by Sema, not parsed, so the parser's marking
+  // never sees them, and an implicitly instantiated specialization must be
+  // tagged explicitly or it is otherwise visible to every target.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      !Function->getTargetVariant()) {
+    // Pending instantiations run at the end of the translation unit, outside
+    // any target scope, so the ambient variant there is 0 ("every target"),
+    // which would make both arms' instantiations visible to both.
+    unsigned V = Context.getCurrentTargetVariant();
+    // Prefer recorded provenance over ambient: for a __device__/__global__
+    // callee, ambient here may have been forced to 1 (see the capture site
+    // in SemaExpr.cpp) so its body compiles under the correct device
+    // TargetInfo, but the tag stamped on the Decl still needs to reflect
+    // which reparse copy actually queued it, or CodeGen's TargetVariant>1
+    // filter can never recognize a redundant instantiation as such.
+    auto PIt = PendingInstantiationProvenanceVariant.find(Function);
+    if (PIt != PendingInstantiationProvenanceVariant.end()) {
+      V = PIt->second;
+    } else {
+      // No deferred-instantiation provenance was recorded, which means this
+      // instantiation never went through the PendingInstantiations queue at
+      // all -- the constexpr eager-instantiation path (see the
+      // Func->isConstexpr() branch in SemaExpr.cpp) instantiates immediately
+      // and never populates PendingInstantiationProvenanceVariant. The
+      // ambient we just read may still be one an *enclosing* device-only
+      // instantiation forced onto us solely so its own body compiles under
+      // the right TargetInfo (its own PendingInstantiationTargetVariant) --
+      // that forcing is not evidence this function is itself
+      // target-exclusive. Fall back to the same "is my innermost enclosing
+      // template instantiation itself shared" check the deferred path's
+      // queuing code uses, so a constexpr helper called from shared code
+      // isn't wrongly hidden from every non-canonical device target.
+      for (const CodeSynthesisContext &SC :
+           llvm::reverse(CodeSynthesisContexts)) {
+        if (SC.Kind != CodeSynthesisContext::TemplateInstantiation)
+          continue;
+        if (const auto *EnclosingFn =
+                dyn_cast_or_null<FunctionDecl>(SC.Entity)) {
+          if (EnclosingFn->getTargetVariant() == 0)
+            V = 0;
+        }
+        break;
+      }
+    }
+    // A pattern tagged TargetVariantRedundant is a marked-duplicate, not a
+    // real target identity -- inheriting it would hide this instantiation
+    // from lookup for every target, not just the duplicate's own.
+    if (const Decl *P = Function->getTemplateInstantiationPattern()) {
+      if (unsigned PV = P->getTargetVariant()) {
+        if (!P->isRedundantTargetVariant())
+          V = PV;
+        else if (FunctionTemplateDecl *FTD = Function->getPrimaryTemplate())
+          if (const auto *TAL = Function->getTemplateSpecializationArgs())
+            if (hasEquivalentSpecializationInSurvivingSibling(FTD,
+                                                              TAL->asArray()))
+              V = Decl::TargetVariantRedundant;
+      } else {
+        // The pattern is genuinely untagged (never parsed inside a widened
+        // #if region), so this instantiation can never legitimately be
+        // target-exclusive -- whatever the ambient/provenance/enclosing-
+        // context heuristics above guessed does not apply. Without this,
+        // an ordinary shared helper (e.g. std::initializer_list<T>::end(),
+        // no #if anywhere near it) that happens to be first instantiated
+        // while some *other*, genuinely tagged instantiation is active gets
+        // permanently and wrongly stamped with that ambient, hiding it from
+        // every other real target's lookup afterward.
+        V = 0;
+      }
+    }
+    Function->setTargetVariant(V);
+  }
+
+  // Instantiate under a particular target's TargetScope. A declaration
+  // marked "applies to every target" keeps the ambient one, which is every
+  // declaration outside a multi-target compilation. Must come after the
+  // tagging block above so it reads Function's just-stamped TargetVariant,
+  // not the pre-stamp default of 0.
+  std::optional<ASTContext::TargetScope> InstantiationTarget;
+  if (LLVM_UNLIKELY(Context.hasTargetDivergence()))
+    InstantiationTarget.emplace(Context,
+                                clang::InstantiateInVariant
+                                    ? clang::InstantiateInVariant.getValue()
+                                    : Function->getTargetVariant());
+
+  // The tagging block above may have just stamped Function with a specific
+  // real target (V, e.g. one particular reparse-copy's tag) that differs
+  // from whatever is currently ambient. For a *deferred* instantiation,
+  // PerformPendingInstantiations already pushed a TargetScope before calling
+  // here (DeferredInstantiationTarget), but that scope's variant is a fixed
+  // "canonical device variant" recorded at enqueue time in
+  // PendingInstantiationTargetVariant (see MarkFunctionReferenced) -- chosen
+  // only so *some* device TargetInfo is active, not to match which specific
+  // reparse-copy's pattern this instantiation actually needs. The TargetScope
+  // above doesn't help either: it is gated on hasTargetDivergence(), a
+  // narrower type-layout-divergence flag that is false whenever every real
+  // target shares the same basic type layout (e.g. same-arch-family AMDGPU
+  // targets), so it never fires here even though the specialization is still
+  // genuinely target-specific by tag.
+  //
+  // Only do this when Function's stamp (V, above) came from its own
+  // template *pattern* genuinely being one of several distinct,
+  // per-target-tagged reparse copies (e.g. process_tile: the #if/#elif/#else
+  // arms are independent FunctionDecl patterns, each with its own real tag) --
+  // NOT when the stamp was merely inherited via
+  // PendingInstantiationProvenanceVariant or the enclosing-CodeSynthesisContext
+  // fallback from whichever caller happened to reach an otherwise-shared,
+  // single-pattern function first (e.g. a class-template method like
+  // pool<T>::alloc, or a function template like run<Arch> -- both have exactly
+  // one, untagged pattern, referenced from multiple differently-tagged
+  // callers). Forcing ambient in that second case would be wrong: the
+  // caller's own tagging-block computation is fine (it lands on the caller's
+  // ambient only when *no one else needs it under a different ambient yet*),
+  // but forcing this function's *own body's* ambient to the caller's specific
+  // tag has no bearing on whether this function itself is shared -- only a
+  // genuinely per-target *pattern* justifies narrowing ambient for body
+  // substitution.
+  std::optional<ASTContext::TargetScope> BodyInstantiationTarget;
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+    unsigned FnTV = Function->getTargetVariant();
+    const Decl *Pat = Function->getTemplateInstantiationPattern();
+    bool PatternIsTargetTagged =
+        Pat && Pat->getTargetVariant() && !Pat->isRedundantTargetVariant();
+    if (FnTV && FnTV != Decl::TargetVariantRedundant && PatternIsTargetTagged)
+      BodyInstantiationTarget.emplace(Context, FnTV);
   }
 
   llvm::TimeTraceScope TimeScope("InstantiateFunction", [&]() {
@@ -6308,6 +6905,9 @@ void Sema::InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
     if (auto *Listener = getASTMutationListener())
       Listener->FunctionDefinitionInstantiated(Function);
 
+    InstantiateDivergentCalleesInBody(Function);
+    InstantiateDivergentCalleesInAttrs(Function);
+
     savedContext.pop();
   }
 
@@ -6543,6 +7143,627 @@ void Sema::BuildVariableInstantiation(
     DiagnoseUnusedDecl(NewVar);
 }
 
+namespace {
+/// Synthesizes a per-target clone of a plain (non-template) wrapper
+/// FunctionDecl whose own text was never #if-widened but whose body calls
+/// something that genuinely is -- see
+/// hasTargetWidenedSiblingDecl()/isTargetDivergentCallee() in DeclTemplate.h,
+/// and ggml_cuda_fattn_mma_get_nbatch_fa for the motivating real-corpus
+/// example (`return ggml_cuda_fattn_mma_get_config(...).nbatch_fa;`, where
+/// it's get_config, one level down, that's #if-gated). Declared here,
+/// forward of DivergentValueCalleeRewriter, because that class's
+/// TransformDecl() calls it; defined below the class, since building a
+/// clone's body needs the rewriter itself.
+static FunctionDecl *
+getOrCreateTargetVariantWrapperClone(Sema &S, FunctionDecl *FD, unsigned V);
+
+/// Rewrites a callee reference inside a just-substituted variable
+/// initializer (e.g. ggml_cuda_mma::tile<...>::ne's call to
+/// ggml_cuda_get_physical_warp_size(), or fattn-mma-f16.cuh's `constexpr int
+/// warp_size = ggml_cuda_get_physical_warp_size();` local variable) to the
+/// sibling whose target variant matches the current ambient.
+///
+/// This same rewriter also rebuilds a whole wrapper function's *body* (not
+/// just a variable initializer) when synthesizing a per-target clone --
+/// constructed with \p Var == nullptr for that case, so the
+/// ambient-preference logic below that reads the enclosing variable's own
+/// DeclContext tag is skipped and the live ambient (already pushed to the
+/// target being cloned for, by the caller) is used directly.
+///
+/// SubstStmt/TreeTransform does not deep-copy a subexpression that contains
+/// no dependent construct: a non-dependent call like `get_lane_count()` is
+/// returned as the *same* Expr* across every specialization that substitutes
+/// it, so mutating a found DeclRefExpr/MemberExpr in place would corrupt
+/// every other specialization sharing that node. Building this on
+/// TreeTransform instead gets correct per-specialization cloning for free:
+/// TreeTransform's generic Transform*Expr methods only rebuild a node (via
+/// RebuildXXX) when one of its children actually changed, and otherwise
+/// return the original pointer unchanged -- so overriding just
+/// TransformDecl() to retarget the divergent callee causes exactly the
+/// ancestor chain from the retargeted leaf up to the top-level initializer
+/// to be freshly, independently allocated for this specialization, while
+/// every untouched sibling subexpression -- and any specialization whose
+/// initializer doesn't reference a divergent callee at all -- is returned
+/// unchanged, with no allocation and no risk of aliasing another
+/// specialization's node.
+class DivergentValueCalleeRewriter
+    : public TreeTransform<DivergentValueCalleeRewriter> {
+  using BaseTransform = TreeTransform<DivergentValueCalleeRewriter>;
+  VarDecl *Var;
+
+  // The transient Sema/ASTContext ambient (Context.getCurrentTargetVariant())
+  // reflects whichever #if-widened region happened to be active when this
+  // particular substitution ran -- for a local variable inside a function
+  // template's body (or a static data member of a class template
+  // specialization), that substitution can happen well after the ambient
+  // that originally selected *this* specialization has been superseded by a
+  // sibling specialization's own substitution, leaving the ambient stuck
+  // on some other target. The enclosing specialization's own TargetVariant
+  // tag, by contrast, is already reliably set (by the FoldingSet fork that
+  // created this exact specialization) to the one real target it belongs
+  // to -- prefer it whenever it's set, and fall back to the ambient only
+  // for a shared (tag-0) enclosing declaration, where no better answer
+  // exists. When Var is null (rewriting a wrapper clone's whole body),
+  // there is no enclosing variable to prefer -- the live ambient, already
+  // pushed to the target being cloned for, is used as-is.
+  unsigned currentTargetVariantForRewrite() const {
+    unsigned V = SemaRef.getASTContext().getCurrentTargetVariant();
+    if (Var) {
+      if (unsigned EnclosingTV =
+              cast<Decl>(Var->getDeclContext())->getTargetVariant())
+        V = EnclosingTV;
+    }
+    return V;
+  }
+
+  FunctionDecl *findSiblingForCurrentTarget(const FunctionDecl *Callee) {
+    unsigned V = currentTargetVariantForRewrite();
+    // Name lookup filters candidates by the *current* ambient
+    // (isVisibleForTarget), so simply computing the right V above is not
+    // enough if the ambient itself is stale (e.g. still the primary target
+    // while substituting a later-target specialization's local variable).
+    // Restore lookup-visibility to V's perspective for the duration of this
+    // query, without touching which target is actually being compiled.
+    ASTContext::TargetScope Scope(SemaRef.getASTContext(), V,
+                                  ASTContext::TargetScope::VariantOnly);
+
+    // Function-template specialization callee (e.g.
+    // get_batch_for_device<TYPE_A>()): ordinary lookup for its name resolves
+    // to sibling FunctionTemplateDecls, not FunctionDecls, so the
+    // plain-FunctionDecl search below never matches and this would otherwise
+    // silently fall through to hasTargetWidenedSiblingDecl's wrapper-clone
+    // path -- which just clones Callee's own (wrong-arch) body verbatim,
+    // since the #if that picks the return value was already resolved once at
+    // parse time. Mirror InstantiateDivergentCalleesInBody's own
+    // template-callee handling instead.
+    if (FunctionTemplateDecl *CalleeTemplate = Callee->getPrimaryTemplate()) {
+      if (const TemplateArgumentList *Args =
+              Callee->getTemplateSpecializationArgs()) {
+        FunctionTemplateDecl *PatternSource = CalleeTemplate;
+        LookupResult TemplResult(SemaRef, CalleeTemplate->getDeclName(),
+                                 Callee->getLocation(),
+                                 Sema::LookupOrdinaryName);
+        SemaRef.LookupQualifiedName(TemplResult,
+                                    CalleeTemplate->getDeclContext());
+        for (NamedDecl *ND : TemplResult) {
+          if (auto *FTD =
+                  dyn_cast<FunctionTemplateDecl>(ND->getUnderlyingDecl())) {
+            if (FTD->getTargetVariant() == V) {
+              PatternSource = FTD;
+              break;
+            }
+          }
+        }
+        FunctionDecl *NewSpec = SemaRef.InstantiateFunctionDeclaration(
+            CalleeTemplate, Args, Callee->getLocation(),
+            Sema::CodeSynthesisContext::ExplicitTemplateArgumentSubstitution,
+            PatternSource);
+        if (NewSpec) {
+          if (!NewSpec->getTargetVariant())
+            NewSpec->setTargetVariant(V);
+          SemaRef.InstantiateFunctionDefinition(Callee->getLocation(), NewSpec,
+                                                /*Recursive=*/true);
+          return NewSpec;
+        }
+      }
+    }
+
+    LookupResult Result(SemaRef, Callee->getDeclName(), Callee->getLocation(),
+                        Sema::LookupOrdinaryName);
+    SemaRef.LookupQualifiedName(
+        Result, const_cast<DeclContext *>(Callee->getDeclContext()));
+    for (NamedDecl *ND : Result) {
+      auto *FD = dyn_cast<FunctionDecl>(ND->getUnderlyingDecl());
+      if (FD && FD->getTargetVariant() == V &&
+          ASTContext::hasSameType(FD->getType(), Callee->getType()))
+        return FD;
+    }
+    return nullptr;
+  }
+
+  // The following three helpers are single-target mirrors of
+  // resolveDivergentValueMember/resolveDivergentMemberCallee/
+  // resolveDivergentAliasMember (the InstantiateDivergentCalleesInBody
+  // switch's per-real-target-loop resolvers, above in this file) -- reusing
+  // their exact find-or-create-fork/LookupQualifiedName/force-instantiate
+  // idiom, but for the one target currentTargetVariantForRewrite() names,
+  // returning the substitute Decl* directly instead of looping over every
+  // real target and stashing into an Expr*-keyed ASTContext table. This lets
+  // DivergentValueCalleeRewriter (used by InstantiateDivergentCalleesInAttrs,
+  // rewriteDivergentCalleesInVariableInitializer, and
+  // getOrCreateTargetVariantWrapperClone) correctly redirect all four
+  // DivergentReferenceKinds through TransformDecl below, not just Callee.
+
+  Decl *resolveValueMemberForCurrentTarget(const VarDecl *VD) {
+    unsigned V = currentTargetVariantForRewrite();
+    ASTContext::TargetScope Scope(SemaRef.getASTContext(), V,
+                                  ASTContext::TargetScope::VariantOnly);
+    const auto *Owner =
+        cast<ClassTemplateSpecializationDecl>(VD->getDeclContext());
+    ClassTemplateDecl *CTD = Owner->getSpecializedTemplate();
+    ClassTemplateSpecializationDecl *NewSpec =
+        getOrCreateTargetForkedSpecialization(
+            SemaRef, CTD, Owner->getTemplateArgs().asArray(),
+            Owner->hasStrictPackMatch(), VD->getLocation());
+    LookupResult Result(SemaRef, VD->getDeclName(), VD->getLocation(),
+                        Sema::LookupOrdinaryName);
+    SemaRef.LookupQualifiedName(Result, NewSpec);
+    for (NamedDecl *ND : Result) {
+      if (auto *NewVD = dyn_cast<VarDecl>(ND->getUnderlyingDecl())) {
+        if (!NewVD->hasInit())
+          SemaRef.InstantiateVariableDefinition(VD->getLocation(), NewVD,
+                                                /*Recursive=*/true);
+        return NewVD;
+      }
+    }
+    return nullptr;
+  }
+
+  Decl *resolveMemberCalleeForCurrentTarget(const CXXMethodDecl *MD) {
+    unsigned V = currentTargetVariantForRewrite();
+    ASTContext::TargetScope Scope(SemaRef.getASTContext(), V,
+                                  ASTContext::TargetScope::VariantOnly);
+    const auto *Owner =
+        cast<ClassTemplateSpecializationDecl>(MD->getDeclContext());
+    ClassTemplateDecl *CTD = Owner->getSpecializedTemplate();
+    ClassTemplateSpecializationDecl *NewSpec =
+        getOrCreateTargetForkedSpecialization(
+            SemaRef, CTD, Owner->getTemplateArgs().asArray(),
+            Owner->hasStrictPackMatch(), MD->getLocation());
+    LookupResult Result(SemaRef, MD->getDeclName(), MD->getLocation(),
+                        Sema::LookupOrdinaryName);
+    SemaRef.LookupQualifiedName(Result, NewSpec);
+    for (NamedDecl *ND : Result) {
+      auto *NewMD = dyn_cast<CXXMethodDecl>(ND->getUnderlyingDecl());
+      if (!NewMD || !ASTContext::hasSameType(NewMD->getType(), MD->getType()))
+        continue;
+      if (!NewMD->hasBody())
+        SemaRef.InstantiateFunctionDefinition(MD->getLocation(), NewMD,
+                                              /*Recursive=*/true);
+      return NewMD;
+    }
+    return nullptr;
+  }
+
+  Decl *resolveAliasMemberForCurrentTarget(const ValueDecl *MemberDecl,
+                                           const TypeAliasDecl *Alias) {
+    unsigned V = currentTargetVariantForRewrite();
+    ASTContext::TargetScope Scope(SemaRef.getASTContext(), V,
+                                  ASTContext::TargetScope::VariantOnly);
+    const auto *AliasOwner =
+        cast<ClassTemplateSpecializationDecl>(Alias->getDeclContext());
+    ClassTemplateDecl *AliasCTD = AliasOwner->getSpecializedTemplate();
+    ClassTemplateSpecializationDecl *NewAliasSpec =
+        getOrCreateTargetForkedSpecialization(
+            SemaRef, AliasCTD, AliasOwner->getTemplateArgs().asArray(),
+            AliasOwner->hasStrictPackMatch(), Alias->getLocation());
+
+    // Without this, S.CurContext stays whatever the caller left it as, so
+    // isNestedInGenuinelyScopedSpecialization's upward walk (SemaLookup.cpp)
+    // never finds NewAliasSpec on the chain during the lookups below, and
+    // isVisibleForTarget falls back to admitting only the primary (V==1)
+    // copy of any target-tagged struct named along the way (e.g.
+    // nested_helper_like) regardless of which real target V actually is --
+    // mirrors the ContextRAII precedent in
+    // getOrCreateTargetVariantWrapperClone below, which exists for the same
+    // reason on a different Decl kind.
+    Sema::ContextRAII SavedContext(SemaRef, NewAliasSpec);
+
+    LookupResult AliasResult(SemaRef, Alias->getDeclName(),
+                             Alias->getLocation(), Sema::LookupOrdinaryName);
+    SemaRef.LookupQualifiedName(AliasResult, NewAliasSpec);
+    const TypeAliasDecl *NewAlias = nullptr;
+    for (NamedDecl *ND : AliasResult) {
+      if (auto *TAD = dyn_cast<TypeAliasDecl>(ND->getUnderlyingDecl())) {
+        NewAlias = TAD;
+        break;
+      }
+    }
+    if (!NewAlias)
+      return nullptr;
+
+    // NewAlias's underlying type is instantiated via ordinary template
+    // substitution, which short-circuits for non-dependent types (no
+    // template parameter is involved in naming AliasedRD) and therefore
+    // reuses the exact same QualType the alias's pattern was given when
+    // its owning class template's redecl was first Sema'd -- permanently
+    // frozen to whichever real target's ambient was active at that time,
+    // regardless of which target-tagged fork of the owning specialization
+    // this alias was looked up from. Recover the target-correct redecl by
+    // re-resolving the aliased record's name under the ambient already
+    // pushed above, the same way ordinary/qualified lookup elsewhere
+    // filters target-tagged sibling redecls.
+    QualType AliasedTy = NewAlias->getUnderlyingType();
+    CXXRecordDecl *FrozenRD = AliasedTy->getAsCXXRecordDecl();
+    if (!FrozenRD)
+      return nullptr;
+    CXXRecordDecl *AliasedRD = FrozenRD;
+    if (DeclContext *RDContext = FrozenRD->getDeclContext()) {
+      LookupResult TypeResult(SemaRef, FrozenRD->getDeclName(),
+                              Alias->getLocation(), Sema::LookupTagName);
+      SemaRef.LookupQualifiedName(TypeResult, RDContext);
+      for (NamedDecl *ND : TypeResult) {
+        if (auto *RD = dyn_cast<CXXRecordDecl>(ND->getUnderlyingDecl())) {
+          AliasedRD = RD;
+          break;
+        }
+      }
+    }
+    SemaRef.RequireCompleteType(MemberDecl->getLocation(),
+                                SemaRef.getASTContext().getCanonicalTagType(AliasedRD),
+                                diag::err_incomplete_type);
+
+    LookupResult Result(SemaRef, MemberDecl->getDeclName(),
+                        MemberDecl->getLocation(), Sema::LookupOrdinaryName);
+    SemaRef.LookupQualifiedName(Result, AliasedRD);
+    for (NamedDecl *ND : Result) {
+      if (auto *NewVD = dyn_cast<VarDecl>(ND->getUnderlyingDecl())) {
+        if (!NewVD->hasInit())
+          SemaRef.InstantiateVariableDefinition(MemberDecl->getLocation(),
+                                                NewVD, /*Recursive=*/true);
+        return NewVD;
+      }
+    }
+    return nullptr;
+  }
+
+  // Stashes the qualifier of the DeclRefExpr/MemberExpr currently being
+  // transformed, so that TransformDecl below -- which only receives the bare
+  // Decl*, not the enclosing Expr* -- can still recover it to check for a
+  // target-divergent alias-member access (DivergentReferenceKind::AliasMember,
+  // e.g. T_B_KQ::I), mirroring how InstantiateDivergentCalleesInBody's visitor
+  // reads E->getQualifier() directly. Always overwritten from a real
+  // getQualifier() call before being read (see TransformDeclRefExpr/
+  // TransformMemberExpr below), so its otherwise-ambiguous default-constructed
+  // state is never actually consulted.
+  NestedNameSpecifier CurrentQualifierForTransformDecl;
+
+public:
+  /// \p Var is the variable whose initializer is being rewritten, or nullptr
+  /// when rewriting a synthesized wrapper clone's whole body, in which case
+  /// findSiblingForCurrentTarget() uses the live ambient directly rather
+  /// than an enclosing variable's own DeclContext tag.
+  explicit DivergentValueCalleeRewriter(Sema &SemaRef, VarDecl *Var)
+      : BaseTransform(SemaRef), Var(Var) {}
+
+  /// Registers \p Old -> \p New so that TransformDecl() (via the base
+  /// TreeTransform's TransformedLocalDecls map) redirects any reference to
+  /// \p Old found while transforming a body to \p New instead. Used by
+  /// getOrCreateTargetVariantWrapperClone to redirect references to a
+  /// synthesized clone's own freshly-cloned parameters,
+  /// which would otherwise still point at the original wrapper's
+  /// ParmVarDecls (whose DeclContext remains the original FunctionDecl).
+  void addTransformedLocalDecl(Decl *Old, Decl *New) {
+    TransformedLocalDecls[Old] = New;
+  }
+
+  // Every DeclRefExpr/MemberExpr callee reference (the two leaf shapes this
+  // rewrite needs to handle) is transformed via TransformDecl() on the
+  // referenced ValueDecl -- see TreeTransform::TransformDeclRefExpr/
+  // TransformMemberExpr. Overriding just this one seam, instead of the
+  // per-expression-kind Transform*Expr methods, means the rewrite fires
+  // wherever a divergent callee is actually referenced in the initializer
+  // (a bare call, an operand of an arithmetic expression, etc.) without
+  // hand-rolling a clone for every AST node kind that chain could pass
+  // through.
+  /// TransformDeclStmt (TreeTransform.h) routes every local declaration
+  /// through TransformDefinition, whose base implementation just forwards to
+  /// TransformDecl() -- which, for anything that isn't a target-divergent
+  /// callee, falls through to the base TreeTransform::TransformDecl(), which
+  /// in turn returns the *same* Decl* unchanged unless it's already present
+  /// in TransformedLocalDecls. Parameters are pre-registered into that map by
+  /// getOrCreateTargetVariantWrapperClone before the transform starts, so
+  /// they're redirected correctly; an ordinary local variable declared with a
+  /// DeclStmt inside a whole-body clone (Var == nullptr) is not, so it would
+  /// otherwise stay DeclContext'd to the original FunctionDecl instead of the
+  /// new clone. Sema::tryCaptureVariable's fast path (`VarDC == DC`,
+  /// SemaExpr.cpp) then fails for every later DeclRefExpr to such a local (DC
+  /// is the clone, VarDC is the original), and the full capture-walk that
+  /// follows has no FunctionScopeInfo for the clone to find, producing
+  /// err_reference_to_local_in_enclosing_context. Clone each local VarDecl
+  /// into the clone's own DeclContext here, mirroring the parameter-cloning
+  /// loop above, and register it the same way so later references pick up
+  /// the clone via TransformedLocalDecls.
+  ///
+  /// Also fires in Var-mode (rewriting a variable initializer's divergent
+  /// references, not a whole wrapper-clone body) whenever that initializer
+  /// contains a nested LambdaExpr: TransformLambdaExpr pushes
+  /// SemaRef.CurContext to the lambda's freshly synthesized call operator
+  /// before transforming its body, so a local declared inside that lambda
+  /// needs cloning into the new call operator exactly the same way a
+  /// whole-body-clone's locals do. The condition below is the real invariant
+  /// either mode needs: clone exactly when the original DeclContext no
+  /// longer matches where we're rebuilding into. In whole-body-clone mode
+  /// CurContext is always the new clone/call-operator before any local is
+  /// reached, so this is equivalent to the old unconditional `!Var` gate for
+  /// that mode. In Var-mode with no nested lambda, no DeclStmt is ever
+  /// reached (TransformDefinition isn't invoked), so nothing changes there.
+  Decl *TransformDefinition(SourceLocation Loc, Decl *D) {
+    if (auto *OldVD = dyn_cast<VarDecl>(D);
+        OldVD && !isa<ParmVarDecl>(OldVD) &&
+        OldVD->getDeclContext()->isFunctionOrMethod() &&
+        OldVD->getDeclContext() != SemaRef.CurContext) {
+      VarDecl *NewVD = VarDecl::Create(
+          SemaRef.Context, SemaRef.CurContext, OldVD->getInnerLocStart(),
+          OldVD->getLocation(), OldVD->getIdentifier(), OldVD->getType(),
+          OldVD->getTypeSourceInfo(), OldVD->getStorageClass());
+      addTransformedLocalDecl(OldVD, NewVD);
+      if (Expr *OldInit = OldVD->getInit()) {
+        ExprResult NewInit = getDerived().TransformExpr(OldInit);
+        if (NewInit.isInvalid())
+          return nullptr;
+        NewVD->setInit(NewInit.get());
+      }
+      NewVD->setInitStyle(OldVD->getInitStyle());
+      return NewVD;
+    }
+    return BaseTransform::TransformDefinition(Loc, D);
+  }
+
+  // TreeTransform's TransformDeclRefExpr/TransformMemberExpr are the only two
+  // callers that know E's qualifier; TransformDecl below only receives the
+  // bare Decl*. Stash it here so the AliasMember branch (which needs the
+  // qualifier, not just the resolved member Decl) can recover it, mirroring
+  // how DivergentCalleeVisitor reads E->getQualifier() directly. Delegates
+  // wholesale to the base implementation -- this exists purely to observe E
+  // in passing, not to change how either expression is rebuilt.
+  ExprResult TransformDeclRefExpr(DeclRefExpr *E) {
+    llvm::SaveAndRestore SaveQualifier(CurrentQualifierForTransformDecl,
+                                       E->getQualifier());
+    return BaseTransform::TransformDeclRefExpr(E);
+  }
+
+  ExprResult TransformMemberExpr(MemberExpr *E) {
+    llvm::SaveAndRestore SaveQualifier(CurrentQualifierForTransformDecl,
+                                       E->getQualifier());
+    return BaseTransform::TransformMemberExpr(E);
+  }
+
+  Decl *TransformDecl(SourceLocation Loc, Decl *D) {
+    auto *VD = dyn_cast_or_null<ValueDecl>(D);
+    if (isTargetDivergentCallee(VD)) {
+      auto *Callee = cast<FunctionDecl>(D);
+      if (FunctionDecl *Sibling = findSiblingForCurrentTarget(Callee))
+        return Sibling;
+      // No already-#if-widened sibling exists to redirect to -- Callee's own
+      // text was never widened, only something transitively reachable from
+      // its body was (see isTargetDivergentCallee's recursive fallback,
+      // DeclTemplate.cpp). Synthesize a per-target clone instead of giving
+      // up, so e.g. ggml_cuda_fattn_mma_get_nbatch_fa's call to the real
+      // get_config overload is retargeted too.
+      if (!hasTargetWidenedSiblingDecl(Callee)) {
+        if (FunctionDecl *Clone = getOrCreateTargetVariantWrapperClone(
+                SemaRef, Callee, currentTargetVariantForRewrite()))
+          return Clone;
+      }
+      return BaseTransform::TransformDecl(Loc, D);
+    }
+    if (isTargetDivergentValueMemberAccess(VD)) {
+      if (Decl *Resolved =
+              resolveValueMemberForCurrentTarget(cast<VarDecl>(VD)))
+        return Resolved;
+    }
+    if (isTargetDivergentMemberFunctionAccess(VD)) {
+      if (Decl *Resolved =
+              resolveMemberCalleeForCurrentTarget(cast<CXXMethodDecl>(VD)))
+        return Resolved;
+    }
+    // VD is required here, unlike a bare null check being redundant: this
+    // TransformDecl override is also reached with D == the TypeAliasDecl
+    // itself (not a ValueDecl) while TreeTransform::TransformTypedefType
+    // recurses into the qualifier's own TypedefType (e.g. transforming
+    // "sizes_like2<192>::nested" as part of "sizes_like2<192>::nested::val"'s
+    // qualifier) -- at that call CurrentQualifierForTransformDecl is still
+    // the outer DeclRefExpr/MemberExpr's stashed qualifier, so
+    // getTargetDivergentAliasQualifier can spuriously match even though D
+    // isn't the trailing member access this branch is meant to redirect.
+    if (VD) {
+      if (const TypeAliasDecl *Alias = getTargetDivergentAliasQualifier(
+              CurrentQualifierForTransformDecl)) {
+        if (Decl *Resolved = resolveAliasMemberForCurrentTarget(VD, Alias))
+          return Resolved;
+      }
+    }
+    return BaseTransform::TransformDecl(Loc, D);
+  }
+};
+
+/// See the forward declaration above DivergentValueCalleeRewriter for why
+/// this exists: \p FD's own text was never #if-widened, so no existing
+/// widened sibling can be redirected to the way findSiblingForCurrentTarget
+/// does for an ordinary divergent callee -- one has to be built. Cached in
+/// ASTContext::TargetVariantWrapperClones (keyed by (FD, V), not by a call
+/// site Expr*, since the same wrapper can be called from many sites but only
+/// needs one clone per real target).
+static FunctionDecl *
+getOrCreateTargetVariantWrapperClone(Sema &S, FunctionDecl *FD, unsigned V) {
+  ASTContext &Context = S.getASTContext();
+  if (FunctionDecl *Cached = Context.getTargetVariantWrapperClone(FD, V))
+    return Cached;
+  FunctionDecl *Definition = FD->getDefinition();
+  if (!Definition || !Definition->hasBody())
+    return nullptr;
+
+  FunctionDecl *NewFD = FunctionDecl::Create(
+      Context, FD->getDeclContext(), FD->getLocation(), FD->getNameInfo(),
+      FD->getType(), FD->getTypeSourceInfo(), FD->getStorageClass(),
+      FD->UsesFPIntrin(), FD->isInlineSpecified(), FD->hasWrittenPrototype(),
+      FD->getConstexprKind(), FD->getTrailingRequiresClause());
+  for (const Attr *A : FD->getAttrs())
+    NewFD->addAttr(A->clone(Context));
+  NewFD->setTargetVariant(V);
+
+  // Cache before rewriting the body: a wrapper clone's body can itself call
+  // another (mutually recursive) wrapper needing its own clone, and this
+  // guards against infinite recursion the same way
+  // InstantiateDivergentCalleesInBody does for its own per-target
+  // re-instantiations.
+  Context.setTargetVariantWrapperClone(FD, V, NewFD);
+
+  // Clone each parameter rather than reusing Definition's ParmVarDecls
+  // as-is: a reused ParmVarDecl's DeclContext still points at the original
+  // FunctionDecl, so a constant-evaluated call to NewFD would see parameter
+  // references "declared in" FD, not NewFD. The Rewriter below is told about
+  // each Old->New pair (via TreeTransform's own TransformedLocalDecls map)
+  // so every DeclRefExpr to an old parameter inside the transformed body is
+  // redirected to the matching clone.
+  DivergentValueCalleeRewriter Rewriter(S, /*Var=*/nullptr);
+  SmallVector<ParmVarDecl *, 8> NewParams;
+  NewParams.reserve(Definition->getNumParams());
+  for (ParmVarDecl *OldParam : Definition->parameters()) {
+    ParmVarDecl *NewParam = ParmVarDecl::Create(
+        Context, NewFD, OldParam->getInnerLocStart(), OldParam->getLocation(),
+        OldParam->getIdentifier(), OldParam->getType(),
+        OldParam->getTypeSourceInfo(), OldParam->getStorageClass(),
+        /*DefArg=*/nullptr);
+    NewParam->setScopeInfo(OldParam->getFunctionScopeDepth(),
+                           OldParam->getFunctionScopeIndex());
+    NewParams.push_back(NewParam);
+    Rewriter.addTransformedLocalDecl(OldParam, NewParam);
+  }
+  NewFD->setParams(NewParams);
+
+  // VariantOnly: only lookup-visibility filtering needs to see V here, not a
+  // full TargetInfo swap -- rewriting an already-parsed body is pure name
+  // lookup and TreeTransform-driven rebuilding, no macro re-evaluation.
+  ASTContext::TargetScope Scope(Context, V,
+                                ASTContext::TargetScope::VariantOnly);
+  // Without this, S.CurContext remains whatever the caller left it as (e.g.
+  // the instantiation that triggered this clone), so DeclRefExprs to NewFD's
+  // own cloned parameters get diagnosed as referring to a variable "declared
+  // in enclosing function" by Sema::tryCaptureVariable's DeclContext check,
+  // and the resulting invalid body falls back to Definition's original body
+  // (whose parameters have no bindings in NewFD's constant-eval call frame).
+  Sema::ContextRAII SavedContext(S, NewFD);
+  // TransformCompoundStmt below needs a live Sema::FunctionScopeInfo
+  // (Sema::PushCompoundScope calls getCurFunction(), which is null on an
+  // empty stack). The InstantiateFunctionDefinition call site always has one
+  // (ActOnStartOfFunctionDef pushes it, and even after it's popped some
+  // enclosing caller's scope is normally still underneath), but a caller
+  // reached after its own function's scope has already been popped -- e.g.
+  // InstantiateDivergentCalleesInAttrs, called from
+  // Sema::ActOnFinishFunctionBody for a plain, top-level function with no
+  // enclosing caller -- can hit this with Sema::FunctionScopes completely
+  // empty. Push and pop a scope here, scoped to just this synthesis, so this
+  // helper doesn't depend on what its caller left on the stack.
+  S.PushFunctionScope();
+  Sema::FunctionScopeRAII NewFDScope(S);
+  StmtResult NewBody = Rewriter.TransformStmt(Definition->getBody());
+  NewFD->setBody(NewBody.isInvalid() ? Definition->getBody() : NewBody.get());
+  return NewFD;
+}
+} // namespace
+
+/// See DivergentValueCalleeRewriter above. Only two shapes of variable can hit
+/// this: a static data member of a class template specialization (detected
+/// by ClassTemplateDecl::hasTargetTaggedValueMember()), or a local variable
+/// inside a function template's body (detected by
+/// FunctionTemplateDecl::hasTargetTaggedRedeclaration(), which also covers
+/// the case where the enclosing function itself directly calls a
+/// target-divergent plain callee). Both are gated on the enclosing
+/// specialization actually getting forked into one distinct copy per real
+/// target before this ever runs -- ordinary namespace-scope or parameter
+/// variables never need this walk, so it is skipped for the overwhelming
+/// majority of variable instantiations. Returns the (possibly newly
+/// allocated) initializer to use in place of InitExpr; returns InitExpr
+/// itself, unchanged, whenever no divergent callee is found anywhere in it.
+static Expr *rewriteDivergentCalleesInVariableInitializer(Sema &S, VarDecl *Var,
+                                                          Expr *InitExpr) {
+  if (!LLVM_UNLIKELY(clang::AllowTargetVariantDecls) || !InitExpr ||
+      (!Var->isStaticDataMember() && !Var->isLocalVarDecl()))
+    return InitExpr;
+  // Cheap, read-only pre-check before running the mutating TreeTransform
+  // below: DivergentValueCalleeRewriter rebuilds every AST node it
+  // descends into (including any nested LambdaExpr, via TreeTransform's
+  // generic LambdaExpr handling), which is only safe/necessary when this
+  // initializer actually references a divergent callee somewhere. Without
+  // this guard, an ordinary local variable whose initializer merely
+  // contains an unrelated lambda literal (ubiquitous in real HIP dispatch
+  // code) gets that lambda spuriously rebuilt outside of a real
+  // instantiation context, corrupting its captures.
+  DivergentCalleeVisitor Precheck;
+  Precheck.TraverseStmt(InitExpr);
+  if (Precheck.Found.empty())
+    return InitExpr;
+  DivergentValueCalleeRewriter Rewriter(S, Var);
+  ExprResult Result = Rewriter.TransformExpr(InitExpr);
+  if (Result.isInvalid())
+    return InitExpr;
+  return Result.get();
+}
+
+/// See the declaration in Sema.h. A CUDALaunchBoundsAttr's argument
+/// expressions are substituted exactly once, at declaration-instantiation
+/// time -- strictly before this specialization's body is ever substituted,
+/// so InstantiateDivergentCalleesInBody's own body-walking mechanism never
+/// sees them. Reuses that same mechanism's DivergentCalleeVisitor and
+/// DivergentValueCalleeRewriter (in its existing Var=nullptr, bare-Expr*
+/// mode, exactly as rewriteDivergentCalleesInVariableInitializer above uses
+/// it) to compute, for each real target variant, the constant this
+/// expression should have evaluated to under that target's ambient, and
+/// stashes each result in ASTContext::TargetVariantConstantValues for
+/// AMDGPUTargetCodeGenInfo::setFunctionDeclAttributes to consult passively.
+void Sema::InstantiateDivergentCalleesInAttrs(FunctionDecl *Specialization) {
+  if (!LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    return;
+  if (Specialization->getTargetVariant() != 0)
+    return;
+
+  unsigned FirstDeviceVariant = getLangOpts().CUDAIsDevice ? 1 : 2;
+
+  for (auto *LaunchBounds :
+       Specialization->specific_attrs<CUDALaunchBoundsAttr>()) {
+    Expr *Args[] = {LaunchBounds->getMaxThreads(), LaunchBounds->getMinBlocks(),
+                    LaunchBounds->getMaxBlocks()};
+    for (Expr *AttrExpr : Args) {
+      if (!AttrExpr)
+        continue;
+
+      DivergentCalleeVisitor Visitor;
+      Visitor.TraverseStmt(AttrExpr);
+      if (Visitor.Found.empty())
+        continue;
+
+      for (unsigned V = FirstDeviceVariant; V <= 1 + Context.getNumAuxTargets();
+           ++V) {
+        const TargetInfo *TI = Context.getTargetForVariant(V);
+        if (!TI)
+          continue;
+
+        ASTContext::TargetScope Scope(Context, *TI, V);
+
+        DivergentValueCalleeRewriter Rewriter(*this, /*Var=*/nullptr);
+        ExprResult Result = Rewriter.TransformExpr(AttrExpr);
+        if (Result.isInvalid())
+          continue;
+
+        llvm::APSInt Value = Result.get()->EvaluateKnownConstInt(Context);
+        Context.setTargetVariantConstantValue(AttrExpr, V, Value);
+      }
+    }
+  }
+}
+
 void Sema::InstantiateVariableInitializer(
     VarDecl *Var, VarDecl *OldVar,
     const MultiLevelTemplateArgumentList &TemplateArgs) {
@@ -6579,6 +7800,9 @@ void Sema::InstantiateVariableInitializer(
 
     if (!Init.isInvalid()) {
       Expr *InitExpr = Init.get();
+
+      InitExpr =
+          rewriteDivergentCalleesInVariableInitializer(*this, Var, InitExpr);
 
       if (Var->hasAttr<DLLImportAttr>() &&
           (!InitExpr || !InitExpr->isConstantInitializer(getASTContext()))) {
@@ -6759,6 +7983,47 @@ void Sema::InstantiateVariableDefinition(SourceLocation PointOfInstantiation,
     Def->setTemplateSpecializationKind(Var->getTemplateSpecializationKind(),
                                        PointOfInstantiation);
     return;
+  }
+
+  // Instantiate under a particular target's TargetScope. A declaration
+  // marked "applies to every target" keeps the ambient one, which is every
+  // declaration outside a multi-target compilation.
+  std::optional<ASTContext::TargetScope> InstantiationTarget;
+  if (LLVM_UNLIKELY(Context.hasTargetDivergence()))
+    InstantiationTarget.emplace(Context,
+                                clang::InstantiateInVariant
+                                    ? clang::InstantiateInVariant.getValue()
+                                    : Var->getTargetVariant());
+
+  // An entity instantiated while analysing one target belongs to that target.
+  // Instantiations are created by Sema, not parsed, so the parser's marking
+  // never sees them, and an implicitly instantiated specialization must be
+  // tagged explicitly or it is otherwise visible to every target.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      !Var->getTargetVariant()) {
+    // As for functions and classes: a pending instantiation is performed at the
+    // end of the translation unit, where the ambient variant is 0.
+    unsigned V = Context.getCurrentTargetVariant();
+    // See the analogous comment in InstantiateFunctionDefinition: prefer
+    // recorded provenance over the (possibly forced) ambient.
+    auto PIt = PendingInstantiationProvenanceVariant.find(Var);
+    if (PIt != PendingInstantiationProvenanceVariant.end())
+      V = PIt->second;
+    // A pattern tagged TargetVariantRedundant is a marked-duplicate, not a
+    // real target identity -- inheriting it would hide this instantiation
+    // from lookup for every target, not just the duplicate's own.
+    if (const Decl *P = Var->getTemplateInstantiationPattern()) {
+      if (unsigned PV = P->getTargetVariant()) {
+        if (!P->isRedundantTargetVariant())
+          V = PV;
+        else if (auto *VTSD = dyn_cast<VarTemplateSpecializationDecl>(Var))
+          if (VarTemplateDecl *VTD = VTSD->getSpecializedTemplate())
+            if (hasEquivalentSpecializationInSurvivingSibling(
+                    VTD, VTSD->getTemplateArgs().asArray()))
+              V = Decl::TargetVariantRedundant;
+      }
+    }
+    Var->setTargetVariant(V);
   }
 
   NonSFINAEContext _(*this);
@@ -7552,6 +8817,22 @@ void Sema::PerformPendingInstantiations(bool LocalOnly, bool AtEndOfTU) {
       Inst = PendingLocalImplicitInstantiations.front();
       PendingLocalImplicitInstantiations.pop_front();
       LocalInstantiation = true;
+    }
+
+    // Restore the ambient target variant this instantiation was queued
+    // under (PendingInstantiationTargetVariant): it controls which
+    // TargetInfo the body is compiled under. This is kept separate from
+    // PendingInstantiationProvenanceVariant (see its declaration in Sema.h),
+    // which separately decides the TargetVariant tag CodeGen filters on --
+    // conflating the two breaks address-of-overloaded-function-template
+    // deduction for a __device__/__global__ callee, which needs its own
+    // correct TargetInfo independent of that tag.
+    std::optional<ASTContext::TargetScope> DeferredInstantiationTarget;
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+      auto It = PendingInstantiationTargetVariant.find(Inst.first);
+      if (It != PendingInstantiationTargetVariant.end()) {
+        DeferredInstantiationTarget.emplace(Context, It->second);
+      }
     }
 
     // Instantiate function definitions

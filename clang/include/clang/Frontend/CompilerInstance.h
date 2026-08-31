@@ -23,6 +23,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/BuryPointer.h"
 #include "llvm/Support/FileSystem.h"
@@ -99,6 +100,18 @@ class CompilerInstance : public ModuleLoader {
 
   /// Auxiliary Target info.
   IntrusiveRefCntPtr<TargetInfo> AuxTarget;
+
+  /// Backing storage for each entry in \c MultiTargetAuxTargets below --
+  /// TargetInfo::TargetOpts is a raw, non-owning pointer (see TargetInfo.h),
+  /// so whatever TargetOptions built each aux TargetInfo must outlive it,
+  /// exactly like \c AuxTargetOpts does for \c AuxTarget above.
+  llvm::SmallVector<std::unique_ptr<TargetOptions>, 4> MultiTargetAuxTargetOpts;
+
+  /// N aux (device-arch) targets, independent of the single \c AuxTarget
+  /// above (which still serves the CUDA/OpenMP/SYCL "other side" path).
+  /// Populated only when \c -multi-target-aux-target is passed (repeatable);
+  /// empty otherwise.
+  llvm::SmallVector<IntrusiveRefCntPtr<TargetInfo>, 4> MultiTargetAuxTargets;
 
   /// The file manager.
   IntrusiveRefCntPtr<FileManager> FileMgr;
@@ -426,6 +439,13 @@ public:
 
   /// Replace the current AuxTarget.
   void setAuxTarget(TargetInfo *Value);
+
+  /// The N aux (device-arch) targets configured via repeatable
+  /// -multi-target-aux-target flags; empty unless that flag was used.
+  llvm::ArrayRef<IntrusiveRefCntPtr<TargetInfo>>
+  getMultiTargetAuxTargets() const {
+    return MultiTargetAuxTargets;
+  }
 
   // Create Target and AuxTarget based on current options
   bool createTarget();

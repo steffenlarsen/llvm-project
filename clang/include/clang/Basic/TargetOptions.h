@@ -71,6 +71,14 @@ public:
   /// If given, enables support for __int128_t and __uint128_t types.
   bool ForceEnableInt128 = false;
 
+  /// True for a TargetInfo built for one of -multi-target-codegen's aux
+  /// device targets (CompilerInstance::MultiTargetAuxTargets), as opposed to
+  /// the legacy single CUDA/HIP aux-target slot. Unlike that legacy slot,
+  /// this target's own predefined macros (e.g. AMDGPU's __gfx90a__) are
+  /// wanted even when the shared LangOptions says the primary compile is
+  /// host-side, since this TargetInfo represents a real device CodeGen fork.
+  bool IsMultiTargetAuxDeviceTarget = false;
+
   /// \brief Code object version for AMDGPU.
   llvm::CodeObjectVersionKind CodeObjectVersion =
       llvm::CodeObjectVersionKind::COV_None;

@@ -2515,6 +2515,35 @@ NamedDecl *Sema::LazilyCreateBuiltin(IdentifierInfo *II, unsigned ID,
 static void
 filterNonConflictingPreviousTypedefDecls(Sema &S, const TypedefNameDecl *Decl,
                                          LookupResult &Previous) {
+  // A merged multi-target token stream can declare the same name
+  // differently per target. Such declarations are not redeclarations of
+  // each other -- they are variants -- so filter the other targets' ones
+  // out of the redeclaration check, exactly as the modules case below does
+  // for hidden declarations. The variant number is assigned automatically,
+  // in order of appearance.
+  if (clang::AllowTargetVariantDecls && !Previous.empty()) {
+    LookupResult::Filter F = Previous.makeFilter();
+    unsigned MaxSeen = 0;
+    while (F.hasNext()) {
+      NamedDecl *Old = F.next();
+      auto *OldTD = dyn_cast<TypedefNameDecl>(Old);
+      if (!OldTD)
+        continue;
+      if (S.Context.hasSameType(OldTD->getUnderlyingType(),
+                                Decl->getUnderlyingType()))
+        continue;
+      // Variant 0 means "applies to every target". The first alternative of a
+      // divergent region is therefore variant 1, not 0.
+      if (OldTD->getTargetVariant() == 0)
+        const_cast<TypedefNameDecl *>(OldTD)->setTargetVariant(1);
+      MaxSeen = std::max(MaxSeen, OldTD->getTargetVariant());
+      F.erase();
+    }
+    F.done();
+    if (MaxSeen)
+      const_cast<TypedefNameDecl *>(Decl)->setTargetVariant(MaxSeen + 1);
+  }
+
   // This is only interesting when modules are enabled.
   if (!S.getLangOpts().Modules && !S.getLangOpts().ModulesLocalVisibility)
     return;
@@ -4767,7 +4796,15 @@ void Sema::MergeVarDecl(VarDecl *New, LookupResult &Previous) {
   //   A member shall not be declared twice in the member-specification [...]
   //
   // Here, we need only consider static data members.
-  if (Old->isStaticDataMember() && !New->isOutOfLine()) {
+  //
+  // Re-parsing the class body for another target alternative legitimately
+  // re-declares the same static data member once per alternative -- New is
+  // meant to merge into Old below (via setPreviousDecl), exactly like an
+  // ordinary namespace-scope variable's redeclaration already does across
+  // targets, so this is not the source-level double-declaration the rule
+  // forbids.
+  if (Old->isStaticDataMember() && !New->isOutOfLine() &&
+      !InTargetFallbackReparse) {
     Diag(New->getLocation(), diag::err_duplicate_member)
       << New->getIdentifier();
     Diag(Old->getLocation(), diag::note_previous_declaration);
@@ -5068,6 +5105,17 @@ bool Sema::checkVarDeclRedefinition(VarDecl *Old, VarDecl *New) {
     makeMergedDefinitionVisible(Old);
     return false;
   } else {
+    // A definition tagged for one target variant and a second definition
+    // now being parsed under a different variant are not really a
+    // redefinition -- see the identical guard and its longer rationale in
+    // CheckForFunctionRedefinition, which this mirrors for VarDecls (e.g.
+    // out-of-line static data member definitions).
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+        Old->getTargetVariant() != Context.getCurrentTargetVariant() &&
+        (Old->getTargetVariant() != 0 ||
+         Context.getCurrentTargetVariant() != 0))
+      return false;
+
     Diag(New->getLocation(), diag::err_redefinition) << New;
     notePreviousDefinition(Old, New->getLocation());
     New->setInvalidDecl();
@@ -11056,6 +11104,23 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
     if (FunctionTemplate) {
       FunctionTemplateDecl *PrevTemplate =
                                      FunctionTemplate->getPreviousDecl();
+      // A previous template declaration already reconciled down to
+      // variant 0 (shared) by an earlier merge, reached again when a later
+      // target alternative re-parses the identical declaration, is not
+      // really a distinct prior declaration to merge default template
+      // arguments against -- it's the same source text, replayed.
+      // CheckTemplateParameterList has no target-variant concept and would
+      // otherwise flag the re-parsed copy's own (identical) default
+      // template argument as illegally redefining it. Treat such a
+      // PrevTemplate as if it doesn't exist for this merge, exactly like a
+      // fresh declaration; mirrors the analogous guards in
+      // MergeCXXFunctionDecl and CheckForFunctionRedefinition.
+      if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && PrevTemplate &&
+          PrevTemplate->getTargetVariant() !=
+              Context.getCurrentTargetVariant() &&
+          (PrevTemplate->getTargetVariant() != 0 ||
+           Context.getCurrentTargetVariant() != 0))
+        PrevTemplate = nullptr;
       CheckTemplateParameterList(FunctionTemplate->getTemplateParameters(),
                        PrevTemplate ? PrevTemplate->getTemplateParameters()
                                     : nullptr,
@@ -16330,6 +16395,31 @@ Sema::CheckForFunctionRedefinition(FunctionDecl *FD,
   if (canRedefineFunction(Definition, getLangOpts()))
     return;
 
+  // A definition tagged for one target variant and a second definition now
+  // being parsed under a different variant are not really a redefinition
+  // -- each target gets its own body for what the shared declaration only
+  // forward-declared. Ordinary redefinition checking has no target-variant
+  // concept; Lookup.h's addDecl deliberately falls back to a
+  // target-visible ancestor so the second definition still links into the
+  // same redeclaration chain as the first (rather than heading a new,
+  // disconnected one), so this check must tell the two cases apart itself.
+  // FD itself isn't tagged yet at this point in parsing --
+  // ClaimForTargetVariant only runs once the whole top-level declaration
+  // has been parsed -- so use the ambient variant the parser is currently
+  // re-parsing under instead.
+  //
+  // A definition already reconciled down to variant 0 (shared) by an
+  // earlier merge is the same situation one step further along: that merge
+  // only reconciles decls at the end of each arm and can't prevent this
+  // live, mid-parse diagnostic, so this check needs to recognize the case
+  // itself too. Ambient 0 (no target alternative in flight) keeps
+  // ordinary, non-widened redefinition checking untouched.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      Definition->getTargetVariant() != Context.getCurrentTargetVariant() &&
+      (Definition->getTargetVariant() != 0 ||
+       Context.getCurrentTargetVariant() != 0))
+    return;
+
   // Don't emit an error when this is redefinition of a typo-corrected
   // definition.
   if (TypoCorrectedFunctionDefinitions.count(Definition))
@@ -17341,6 +17431,19 @@ Decl *Sema::ActOnFinishFunctionBody(Decl *dcl, Stmt *Body, bool IsInstantiation,
     if (ES == Sema::FunctionEmissionStatus::Emitted ||
         ES == Sema::FunctionEmissionStatus::Unknown)
       DeclsToCheckForDeferredDiags.insert(FD);
+  }
+
+  // A plain (non-template) function's body is only ever finished once, right
+  // here -- unlike a template specialization, it never goes through
+  // InstantiateFunctionDefinition, so it would otherwise never get the
+  // divergent-callee scan that mechanism performs for instantiated bodies
+  // (see InstantiateDivergentCalleesInBody's call site in
+  // SemaTemplateInstantiateDecl.cpp). Exclude a function template's own
+  // pattern (getDescribedFunctionTemplate() non-null): its instantiations are
+  // handled individually when each is instantiated instead.
+  if (FD && !IsInstantiation && !FD->getDescribedFunctionTemplate()) {
+    InstantiateDivergentCalleesInBody(FD);
+    InstantiateDivergentCalleesInAttrs(FD);
   }
 
   if (FD && !FD->isDeleted())
@@ -18840,7 +18943,21 @@ Sema::ActOnTag(Scope *S, unsigned TagSpec, TagUseKind TUK, SourceLocation KWLoc,
                   // Carry on and handle it like a normal definition. We'll
                   // skip starting the definition later.
 
-                } else if (!IsExplicitSpecializationAfterInstantiation) {
+                } else if (!IsExplicitSpecializationAfterInstantiation &&
+                           // A definition tagged for one target variant and
+                           // a second definition now being parsed under a
+                           // different variant are not really a
+                           // redefinition -- each target gets its own body
+                           // for what the shared declaration only
+                           // forward-declared. See the identical guard and
+                           // its longer rationale in
+                           // CheckForFunctionRedefinition, which this
+                           // mirrors for tags/records.
+                           !(LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+                             Def->getTargetVariant() !=
+                                 Context.getCurrentTargetVariant() &&
+                             (Def->getTargetVariant() != 0 ||
+                              Context.getCurrentTargetVariant() != 0))) {
                   // A redeclaration in function prototype scope in C isn't
                   // visible elsewhere, so merely issue a warning.
                   if (!getLangOpts().CPlusPlus &&
@@ -20914,12 +21031,22 @@ Decl *Sema::ActOnEnumConstant(Scope *S, Decl *theEnumDecl, Decl *lastEnumConst,
     assert((getLangOpts().CPlusPlus || !isa<TagDecl>(PrevDecl)) &&
            "Received TagDecl when not in C++!");
     if (!isa<TagDecl>(PrevDecl) && isDeclInScope(PrevDecl, CurContext, S)) {
-      if (isa<EnumConstantDecl>(PrevDecl))
-        Diag(IdLoc, diag::err_redefinition_of_enumerator) << Id;
-      else
-        Diag(IdLoc, diag::err_redefinition) << Id;
-      notePreviousDefinition(PrevDecl, IdLoc);
-      return nullptr;
+      // A definition tagged for one target variant and a second definition
+      // now being parsed under a different variant are not really a
+      // redefinition -- see the identical guard and its longer rationale in
+      // CheckForFunctionRedefinition, which this mirrors for
+      // EnumConstantDecls.
+      if (!(LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+            PrevDecl->getTargetVariant() != Context.getCurrentTargetVariant() &&
+            (PrevDecl->getTargetVariant() != 0 ||
+             Context.getCurrentTargetVariant() != 0))) {
+        if (isa<EnumConstantDecl>(PrevDecl))
+          Diag(IdLoc, diag::err_redefinition_of_enumerator) << Id;
+        else
+          Diag(IdLoc, diag::err_redefinition) << Id;
+        notePreviousDefinition(PrevDecl, IdLoc);
+        return nullptr;
+      }
     }
   }
 

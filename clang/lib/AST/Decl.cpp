@@ -2569,7 +2569,13 @@ VarDecl::evaluateValueImpl(SmallVectorImpl<PartialDiagnosticAt> *Notes,
   // We only produce notes indicating why an initializer is non-constant the
   // first time it is evaluated. FIXME: The notes won't always be emitted the
   // first time we try evaluation, so might not be produced at all.
-  if (Eval->WasEvaluated)
+  // A cached value belongs to the target it was computed for; variant 0
+  // means no target scope was active. Checking that first lets the common
+  // case short-circuit before getASTContext(), whose DeclContext walk to
+  // the translation unit would cost more than the check saves.
+  if (Eval->WasEvaluated &&
+      (Eval->EvaluatedForVariant == 0 ||
+       Eval->EvaluatedForVariant == getASTContext().getCurrentTargetVariant()))
     return Eval->Evaluated.isAbsent() ? nullptr : &Eval->Evaluated;
 
   if (Eval->IsEvaluating) {
@@ -2608,12 +2614,17 @@ VarDecl::evaluateValueImpl(SmallVectorImpl<PartialDiagnosticAt> *Notes,
       for (auto &Info : MSWarning)
         getASTContext().getDiagnostics().Report(Info.first,
                                                 Info.second.getDiagID());
-    if (Eval->Evaluated.needsCleanup())
+    // Register the address once only: re-evaluating for another target
+    // overwrites the APValue in place rather than creating a new one.
+    if (Eval->Evaluated.needsCleanup() && !Eval->DestructionRegistered) {
       Ctx.addDestruction(&Eval->Evaluated);
+      Eval->DestructionRegistered = true;
+    }
   }
 
   Eval->IsEvaluating = false;
   Eval->WasEvaluated = true;
+  Eval->EvaluatedForVariant = Ctx.getCurrentTargetVariant();
 
   return Result ? &Eval->Evaluated : nullptr;
 }

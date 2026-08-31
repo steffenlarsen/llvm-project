@@ -2177,7 +2177,15 @@ DeclResult Sema::CheckClassTemplate(
             makeMergedDefinitionVisible(Hidden);
             makeMergedDefinitionVisible(Tmpl);
           }
-        } else {
+        } else if (!(LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+                     // A definition tagged for one target variant and a
+                     // second definition parsed under a different variant
+                     // are not a redefinition; mirrors the guard in
+                     // CheckForFunctionRedefinition (SemaDecl.cpp).
+                     Def->getTargetVariant() !=
+                         Context.getCurrentTargetVariant() &&
+                     (Def->getTargetVariant() != 0 ||
+                      Context.getCurrentTargetVariant() != 0))) {
           Diag(NameLoc, diag::err_redefinition) << Name;
           Diag(Def->getLocation(), diag::note_previous_definition);
           // FIXME: Would it make sense to try to "forget" the previous
@@ -9086,7 +9094,19 @@ DeclResult Sema::ActOnClassTemplateSpecialization(
       SkipBody->Previous = Def;
       if (!HiddenDefVisible && Hidden)
         makeMergedDefinitionVisible(Hidden);
-    } else if (Def) {
+    } else if (Def &&
+               // A definition tagged for one target variant and a second
+               // definition parsed under a different variant are not a
+               // redefinition; each target gets its own body for what the
+               // shared declaration only forward-declared. findSpecialization
+               // is keyed by template arguments, not by target, so it hands
+               // back the first target's definition regardless of which
+               // target is currently being parsed. Mirrors the guard in
+               // CheckForFunctionRedefinition.
+               !(LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+                 Def->getTargetVariant() != Context.getCurrentTargetVariant() &&
+                 (Def->getTargetVariant() != 0 ||
+                  Context.getCurrentTargetVariant() != 0))) {
       SourceRange Range(TemplateNameLoc, RAngleLoc);
       Diag(TemplateNameLoc, diag::err_redefinition) << Specialization << Range;
       Diag(Def->getLocation(), diag::note_previous_definition);

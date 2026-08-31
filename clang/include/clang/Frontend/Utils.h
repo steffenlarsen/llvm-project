@@ -44,13 +44,23 @@ class Preprocessor;
 class PreprocessorOptions;
 class PreprocessorOutputOptions;
 class CodeGenOptions;
+class TargetInfo;
 
 /// InitializePreprocessor - Initialize the preprocessor getting it and the
 /// environment ready to process a single file.
-void InitializePreprocessor(Preprocessor &PP, const PreprocessorOptions &PPOpts,
-                            const PCHContainerReader &PCHContainerRdr,
-                            const FrontendOptions &FEOpts,
-                            const CodeGenOptions &CodeGenOpts);
+///
+/// \param MultiTargetAuxTargets CompilerInstance::getMultiTargetAuxTargets()
+/// -- the -multi-target-codegen aux device targets, if any. Only predefined
+/// when there is exactly one: with two or more, injecting every target's own
+/// arch-identity macros (e.g. AMDGPU's __gfx90a__ and __gfx1100__ together)
+/// into the single shared token stream would make architecture-conditional
+/// code (e.g. an "#if defined(gfx90a-only-macro) #elif defined(other-arch)"
+/// chain) resolve the same, wrong way for every aux target.
+void InitializePreprocessor(
+    Preprocessor &PP, const PreprocessorOptions &PPOpts,
+    const PCHContainerReader &PCHContainerRdr, const FrontendOptions &FEOpts,
+    const CodeGenOptions &CodeGenOpts,
+    ArrayRef<IntrusiveRefCntPtr<TargetInfo>> MultiTargetAuxTargets = {});
 
 /// DoPrintPreprocessedInput - Implement -E mode.
 void DoPrintPreprocessedInput(Preprocessor &PP, raw_ostream *OS,
