@@ -5130,6 +5130,19 @@ Driver::BuildOffloadingActions(Compilation &C, llvm::opt::DerivedArgList &Args,
   bool UsesLLVMOffloading = Args.hasArg(
       options::OPT_foffload_via_llvm, options::OPT_fno_offload_via_llvm, false);
 
+  bool IntegratedHipDeviceCodegen =
+      Args.hasArg(options::OPT_fintegrated_hip_device_codegen);
+  if (IntegratedHipDeviceCodegen) {
+    if (offloadDeviceOnly())
+      C.getDriver().Diag(diag::err_opt_not_valid_with_opt)
+          << "-fintegrated-hip-device-codegen"
+          << "--offload-device-only";
+    if (UsesLLVMOffloading)
+      C.getDriver().Diag(diag::err_opt_not_valid_with_opt)
+          << "-fintegrated-hip-device-codegen"
+          << "--offload-via-llvm";
+  }
+
   ActionList OffloadActions;
   OffloadAction::DeviceDependences DDeps;
 
@@ -5304,6 +5317,20 @@ Driver::BuildOffloadingActions(Compilation &C, llvm::opt::DerivedArgList &Args,
         HIPAsmBundleDeviceOut->push_back(OA);
       return HostAction;
     }
+    if (IntegratedHipDeviceCodegen) {
+      // Clang::ConstructJob reconstructs (ToolChain, BoundArch) per arch and
+      // emits -mllvm -multi-target-* flags directly into the host cc1 job,
+      // so there is no per-arch dependence Action to attach here. Stamp
+      // HostAction as OFK_HIP via the raw-bitmask HostDependence overload
+      // (Action.h:339-342): falling through to the shared tail below would
+      // derive HostOffloadKinds from an empty DeviceDependences
+      // (Action.cpp:196-202), zeroing it and disabling every IsHIP-gated
+      // branch in Clang::ConstructJob for this job, including this one.
+      OffloadAction::HostDependence HDep(
+          *HostAction, *C.getSingleOffloadToolChain<Action::OFK_Host>(),
+          /*BA=*/{}, static_cast<unsigned>(Action::OFK_HIP));
+      return C.MakeAction<OffloadAction>(HDep);
+    }
     // Package all the offloading actions into a single output that can be
     // embedded in the host and linked.
     Action *PackagerAction =
@@ -5319,6 +5346,14 @@ Driver::BuildOffloadingActions(Compilation &C, llvm::opt::DerivedArgList &Args,
              *C.getOffloadToolChains<Action::OFK_HIP>().first->second,
              /*BA=*/{}, Action::OFK_HIP);
   } else {
+    if (IntegratedHipDeviceCodegen && C.isOffloadingHostKind(Action::OFK_HIP)) {
+      // As for non-RDC above: the host cc1 job packages its own per-arch
+      // bitcode and embeds the package itself.
+      OffloadAction::HostDependence HDep(
+          *HostAction, *C.getSingleOffloadToolChain<Action::OFK_Host>(),
+          /*BA=*/{}, static_cast<unsigned>(Action::OFK_HIP));
+      return C.MakeAction<OffloadAction>(HDep);
+    }
     // Package all the offloading actions into a single output that can be
     // embedded in the host and linked.
     Action *PackagerAction =

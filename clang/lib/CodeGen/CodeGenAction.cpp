@@ -16,6 +16,7 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclGroup.h"
+#include "clang/AST/DeclTemplate.h"
 #include "clang/Basic/DiagnosticFrontend.h"
 #include "clang/Basic/FileManager.h"
 #include "clang/Basic/LangStandard.h"
@@ -28,8 +29,10 @@
 #include "clang/Frontend/MultiplexConsumer.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Serialization/ASTWriter.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/CodeGen/MachineOptimizationRemarkEmitter.h"
 #include "llvm/Demangle/Demangle.h"
@@ -45,10 +48,16 @@
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/LTO/LTOBackend.h"
 #include "llvm/Linker/Linker.h"
+#include "llvm/Object/OffloadBinary.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/Error.h"
+#include "llvm/Support/FileOutputBuffer.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Mutex.h"
+#include "llvm/Support/Path.h"
+#include "llvm/Support/Program.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/Timer.h"
@@ -114,6 +123,172 @@ static void reportOptRecordError(Error E, DiagnosticsEngine &Diags,
       });
 }
 
+/// Drives a second CodeGenModule for the aux target variant
+/// (Decl::TargetVariant 2) from the same shared AST as the primary, instead
+/// of a separate cc1 invocation. Off by default; when off BackendConsumer
+/// behaves exactly as it does today.
+static llvm::cl::opt<bool> MultiTargetCodeGen(
+    "multi-target-codegen", llvm::cl::Hidden, llvm::cl::init(false),
+    llvm::cl::desc("Prototype: drive a second CodeGenModule for the aux "
+                   "target variant from the shared AST"));
+
+/// Writes each pre-backend CodeGenModule's IR (primary and, if
+/// -multi-target-codegen produced one, aux) to
+/// <dir>/<input-stem>.{primary,aux}.ll, for comparison against separately
+/// invoked single-target compiles of the same TU. A debug/verification aid
+/// only; the dumped IR is pre-link, pre-EmbedBitcode, pre-backend.
+static llvm::cl::opt<std::string> MultiTargetCodeGenDumpDir(
+    "multi-target-codegen-dump-dir", llvm::cl::Hidden, llvm::cl::init(""),
+    llvm::cl::desc("Prototype: write each CodeGenModule's pre-backend IR "
+                   "under this directory for comparison against separate "
+                   "single-target compiles"));
+
+/// Gives one AuxGenEntry a real output file, repeatable -- one flag per aux
+/// variant that should produce (rather than produce-and-discard) a `.bc`
+/// file. Format: <variant>:<path>. Placed here rather than in
+/// CompilerInstance.cpp since this file is what consumes it.
+static llvm::cl::list<std::string> MultiTargetAuxOutputSpecs(
+    "multi-target-aux-output", llvm::cl::Hidden,
+    llvm::cl::desc("Prototype: this aux variant's own bitcode output path, "
+                   "repeatable. Format: <variant>:<path>"));
+
+static llvm::DenseMap<unsigned, std::string> parseMultiTargetAuxOutputSpecs() {
+  llvm::DenseMap<unsigned, std::string> Paths;
+  for (StringRef Entry : MultiTargetAuxOutputSpecs) {
+    StringRef VariantStr, Path;
+    std::tie(VariantStr, Path) = Entry.split(':');
+    unsigned Variant;
+    if (VariantStr.getAsInteger(10, Variant) || Path.empty())
+      continue; // Malformed input is silently skipped.
+    Paths[Variant] = Path.str();
+  }
+  return Paths;
+}
+
+/// Packages every configured aux entry's own bitcode output (via
+/// runAuxBackendTail) into a real .hipfb at this path, once every
+/// runAuxBackendTail call has completed. Off by default; when off, no
+/// packaging happens and no subprocess is launched.
+static llvm::cl::opt<std::string> MultiTargetPackageFatbin(
+    "multi-target-package-fatbin", llvm::cl::Hidden, llvm::cl::init(""),
+    llvm::cl::desc("Prototype: package every configured aux entry's own "
+                   "bitcode output into a real .hipfb at this path"));
+
+/// The -fgpu-rdc counterpart of -multi-target-package-fatbin: package every
+/// configured aux entry's bitcode at this path without linking it, for the
+/// host to embed (-fembed-offload-object) and the final link to link across
+/// translation units.
+static llvm::cl::opt<std::string> MultiTargetPackageOffload(
+    "multi-target-package-offload", llvm::cl::Hidden, llvm::cl::init(""),
+    llvm::cl::desc("Prototype: package every configured aux entry's own "
+                   "bitcode output, unlinked, into an offload binary at this "
+                   "path"));
+
+/// Mirrors the real pipeline's own LinkerWrapper::ConstructJob (Clang.cpp),
+/// which only forwards "--device-compiler=--rocm-path=<path>" when the user
+/// explicitly passed --rocm-path= on the driver command line. Empty (the
+/// common case, relying on clang-linker-wrapper's own ROCm auto-detection)
+/// unless the driver-side emitIntegratedHipDeviceCodegenFlags saw that arg.
+static llvm::cl::opt<std::string> MultiTargetRocmPath(
+    "multi-target-rocm-path", llvm::cl::Hidden, llvm::cl::init(""),
+    llvm::cl::desc("Prototype: forwarded to clang-linker-wrapper as "
+                   "--device-compiler=--rocm-path=<path>, only when the "
+                   "driver saw an explicit --rocm-path="));
+
+static void dumpModuleForDiff(StringRef Dir, StringRef InFile, StringRef Suffix,
+                              llvm::Module *M) {
+  llvm::SmallString<256> Path(Dir);
+  llvm::sys::path::append(Path, (llvm::sys::path::stem(InFile) + Suffix));
+  std::error_code EC;
+  llvm::raw_fd_ostream OS(Path, EC, llvm::sys::fs::OF_Text);
+  if (EC)
+    return;
+  M->print(OS, nullptr);
+}
+
+namespace {
+enum LangOptionField : unsigned {
+#define LANGOPT(Name, Bits, Default, Compatibility, Description) LOF_##Name,
+#include "clang/Basic/LangOptions.def"
+};
+} // namespace
+
+static unsigned getLangOpt(const LangOptions &LangOpts, unsigned Field) {
+  switch (Field) {
+#define LANGOPT(Name, Bits, Default, Compatibility, Description)               \
+  case LOF_##Name:                                                             \
+    return LangOpts.Name;
+#define ENUM_LANGOPT(Name, Type, Bits, Default, Compatibility, Description)    \
+  case LOF_##Name:                                                             \
+    return static_cast<unsigned>(LangOpts.get##Name());
+#include "clang/Basic/LangOptions.def"
+  }
+  llvm_unreachable("unknown LangOptions field");
+}
+
+static void setLangOpt(LangOptions &LangOpts, unsigned Field, unsigned Value) {
+  switch (Field) {
+#define LANGOPT(Name, Bits, Default, Compatibility, Description)               \
+  case LOF_##Name:                                                             \
+    LangOpts.Name = Value;                                                     \
+    return;
+#define ENUM_LANGOPT(Name, Type, Bits, Default, Compatibility, Description)    \
+  case LOF_##Name:                                                             \
+    LangOpts.set##Name(static_cast<LangOptions::Type>(Value));                 \
+    return;
+#include "clang/Basic/LangOptions.def"
+  }
+  llvm_unreachable("unknown LangOptions field");
+}
+
+/// The fields that may differ per target and that \p Aux sets differently
+/// from \p Primary.
+static void
+diffPerTargetLangOpts(const LangOptions &Primary, const LangOptions &Aux,
+                      SmallVectorImpl<BackendConsumer::AuxGenEntry::LangOptValue>
+                          &Diffs) {
+#define LANGOPT(Name, Bits, Default, Compatibility, Description)               \
+  if (getLangOpt(Primary, LOF_##Name) != getLangOpt(Aux, LOF_##Name) &&        \
+      CompilerInstance::langOptMayDifferPerTarget(#Name))                      \
+    Diffs.push_back({LOF_##Name, getLangOpt(Aux, LOF_##Name)});
+#include "clang/Basic/LangOptions.def"
+}
+
+namespace {
+/// Scopes one dispatch into the aux CodeGenModule to its own target.
+/// ASTContext::TargetScope alone is not enough: a plain sizeof(T) in a
+/// function body is resolved by CodeGen against whichever target is ambient
+/// when CodeGen runs, not the target in scope when the containing template
+/// was instantiated -- so each dispatch needs its own live scope, not just
+/// one entered at construction. The LangOptions CodeGen reads (CUDAIsDevice
+/// among them) are the single set the shared AST was built with, and
+/// TargetScope deliberately leaves them alone (see its own header comment),
+/// so the entry's per-target values are swapped in too. The swap lasts only
+/// for the duration of one call into the aux CodeGenModule, not the whole
+/// AST walk.
+class MultiTargetCodeGenScope {
+  ASTContext::TargetScope TS;
+  LangOptions &LangOpts;
+  const BackendConsumer::AuxGenEntry &Entry;
+  SmallVector<unsigned, 8> Saved;
+
+public:
+  MultiTargetCodeGenScope(ASTContext &Ctx, LangOptions &LangOpts,
+                          const BackendConsumer::AuxGenEntry &Entry)
+      : TS(Ctx, *Entry.TI, Entry.Variant), LangOpts(LangOpts), Entry(Entry) {
+    for (const auto &Diff : Entry.LangOptDiffs) {
+      Saved.push_back(getLangOpt(LangOpts, Diff.Field));
+      setLangOpt(LangOpts, Diff.Field, Diff.Value);
+    }
+  }
+  ~MultiTargetCodeGenScope() {
+    for (unsigned I = Saved.size(); I--;)
+      setLangOpt(LangOpts, Entry.LangOptDiffs[I].Field, Saved[I]);
+  }
+  MultiTargetCodeGenScope(const MultiTargetCodeGenScope &) = delete;
+};
+} // namespace
+
 BackendConsumer::BackendConsumer(CompilerInstance &CI, BackendAction Action,
                                  IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS,
                                  LLVMContext &C,
@@ -125,8 +300,9 @@ BackendConsumer::BackendConsumer(CompilerInstance &CI, BackendAction Action,
     : CI(CI), Diags(CI.getDiagnostics()), CodeGenOpts(CI.getCodeGenOpts()),
       TargetOpts(CI.getTargetOpts()), LangOpts(CI.getLangOpts()),
       AsmOutStream(std::move(OS)), FS(VFS), Action(Action),
-      Gen(CreateLLVMCodeGen(CI, InFile, C, CoverageInfo)),
-      LinkModules(std::move(LinkModules)), CurLinkModule(CurLinkModule) {
+      Gen(CreateLLVMCodeGen(CI, InFile, C, CoverageInfo)), InFile(InFile),
+      CoverageInfo(CoverageInfo), LinkModules(std::move(LinkModules)),
+      CurLinkModule(CurLinkModule) {
   TimerIsEnabled = CodeGenOpts.TimePasses;
   {
     llvm::sys::SmartScopedLock<true> Lock(*TimePassesMutex);
@@ -151,6 +327,16 @@ CodeGenerator* BackendConsumer::getCodeGenerator() {
 
 void BackendConsumer::HandleCXXStaticMemberVarInstantiation(VarDecl *VD) {
   Gen->HandleCXXStaticMemberVarInstantiation(VD);
+  dispatchToAuxGens(
+      [&](CodeGenerator &G) { G.HandleCXXStaticMemberVarInstantiation(VD); });
+}
+
+void BackendConsumer::dispatchToAuxGens(
+    llvm::function_ref<void(CodeGenerator &)> Fn) {
+  for (AuxGenEntry &Entry : AuxGens) {
+    MultiTargetCodeGenScope Scope(*Context, CI.getLangOpts(), Entry);
+    Fn(*Entry.Gen);
+  }
 }
 
 void BackendConsumer::Initialize(ASTContext &Ctx) {
@@ -161,7 +347,80 @@ void BackendConsumer::Initialize(ASTContext &Ctx) {
   if (TimerIsEnabled)
     LLVMIRGeneration.startTimer();
 
-  Gen->Initialize(Ctx);
+  // Ctx's aux-target list is the -multi-target-aux-invocation targets when
+  // there are any, and otherwise the implicit "other side of
+  // CUDA/OpenMP/SYCL" aux target populated from -aux-triple.
+  unsigned NumAuxTargets = Ctx.getNumAuxTargets();
+  ArrayRef<std::shared_ptr<CompilerInvocation>> AuxInvocations =
+      CI.getMultiTargetAuxInvocations();
+  bool HasAuxGens = MultiTargetCodeGen && !AuxInvocations.empty();
+  {
+    // CodeGenModule captures Context.getCurrentTargetVariant() once, at
+    // construction (see CodeGenModule's TargetVariant field), and never
+    // again. Gen is variant 1 -- the target this cc1 invocation was actually
+    // invoked for -- but without any aux CodeGenModule there is nothing to
+    // distinguish it from, so ambient (ordinary compiles never touch
+    // CurrentTargetVariant at all) already means the same thing. Scope this
+    // when at least one aux CodeGenModule actually exists (HasAuxGens), and
+    // also whenever -allow-target-variant-decls is active alongside at least
+    // one aux target: that flag lets a Decl be tagged TargetVariant=1 (the
+    // primary) without ever being merged back to 0 -- e.g. a reparse
+    // alternate pair that Sema deliberately leaves unmerged -- and even a
+    // single, no-aux-CodeGenModule CGM must still recognize itself as
+    // variant 1 to emit that Decl. Neither condition fires for an ordinary
+    // single-target compile (NumAuxTargets == 0) or for ordinary CUDA/HIP
+    // two-pass compiles that only populate the implicit -aux-triple aux
+    // target, since -allow-target-variant-decls is never set for those.
+    std::optional<ASTContext::TargetScope> PrimaryScope;
+    if (HasAuxGens || (NumAuxTargets > 0 && clang::AllowTargetVariantDecls))
+      PrimaryScope.emplace(Ctx, 1);
+    Gen->Initialize(Ctx);
+  }
+
+  if (HasAuxGens) {
+    llvm::DenseMap<unsigned, std::string> AuxOutputPaths =
+        parseMultiTargetAuxOutputSpecs();
+    assert(AuxInvocations.size() == NumAuxTargets &&
+           "createTarget pairs aux invocations with aux targets");
+    for (unsigned I = 0; I != NumAuxTargets; ++I) {
+      AuxGenEntry Entry;
+      Entry.Variant = 2 + I;
+      Entry.TI = Ctx.getTargetForVariant(Entry.Variant);
+      Entry.CPU = Entry.TI->getTargetOpts().CPU;
+      Entry.Invocation = AuxInvocations[I];
+      diffPerTargetLangOpts(CI.getLangOpts(), Entry.Invocation->getLangOpts(),
+                            Entry.LangOptDiffs);
+      Entry.Gen = CreateLLVMCodeGen(
+          CI.getDiagnostics(), InFile, CI.getVirtualFileSystemPtr(),
+          Entry.Invocation->getHeaderSearchOpts(),
+          Entry.Invocation->getPreprocessorOpts(),
+          Entry.Invocation->getCodeGenOpts(), Gen->GetModule()->getContext(),
+          CoverageInfo);
+      // Only entries a -multi-target-aux-output flag actually configures get
+      // a real output file; every other entry stays produced-and-discarded.
+      auto OutputIt = AuxOutputPaths.find(Entry.Variant);
+      if (OutputIt != AuxOutputPaths.end()) {
+        Entry.OutputPath = OutputIt->second;
+        // UseTemporary=false: with atomic-write (UseTemporary=true), the
+        // real bytes only land at OutputPath once CompilerInstance's own
+        // OutputFiles list is drained via clearOutputFiles(), which happens
+        // at EndSourceFile -- well after HandleTranslationUnit (and
+        // packageAuxOutputs, which reads this file back) returns. This
+        // entry's own bitcode is an internal artifact, not a user-facing
+        // "-o" output needing atomic-replace robustness, so writing it
+        // directly is correct.
+        Entry.AsmOutStream =
+            CI.createOutputFile(Entry.OutputPath, /*Binary=*/true,
+                                /*RemoveFileOnSignal=*/true,
+                                /*UseTemporary=*/false);
+      }
+      loadLinkModules(CI, Gen->GetModule()->getContext(),
+                      Entry.Invocation->getCodeGenOpts().LinkBitcodeFiles,
+                      Entry.LinkModules);
+      AuxGens.push_back(std::move(Entry));
+    }
+    dispatchToAuxGens([&](CodeGenerator &G) { G.Initialize(Ctx); });
+  }
 
   if (TimerIsEnabled)
     LLVMIRGeneration.stopTimer();
@@ -177,6 +436,7 @@ bool BackendConsumer::HandleTopLevelDecl(DeclGroupRef D) {
     CI.getFrontendTimer().yieldTo(LLVMIRGeneration);
 
   Gen->HandleTopLevelDecl(D);
+  dispatchToAuxGens([&](CodeGenerator &G) { G.HandleTopLevelDecl(D); });
 
   if (TimerIsEnabled && !--LLVMIRGenerationRefCount)
     LLVMIRGeneration.yieldTo(CI.getFrontendTimer());
@@ -192,6 +452,8 @@ void BackendConsumer::HandleInlineFunctionDefinition(FunctionDecl *D) {
     CI.getFrontendTimer().yieldTo(LLVMIRGeneration);
 
   Gen->HandleInlineFunctionDefinition(D);
+  dispatchToAuxGens(
+      [&](CodeGenerator &G) { G.HandleInlineFunctionDefinition(D); });
 
   if (TimerIsEnabled)
     LLVMIRGeneration.yieldTo(CI.getFrontendTimer());
@@ -201,9 +463,22 @@ void BackendConsumer::HandleInterestingDecl(DeclGroupRef D) {
   HandleTopLevelDecl(D);
 }
 
-// Links each entry in LinkModules into our module. Returns true on error.
 bool BackendConsumer::LinkInModules(llvm::Module *M) {
-  for (auto &LM : LinkModules) {
+  return LinkInModules(M, LinkModules);
+}
+
+// Links each entry in ModulesToLink into M, clearing it. Returns true on
+// error.
+bool BackendConsumer::LinkInModules(
+    llvm::Module *M, SmallVectorImpl<LinkModule> &ModulesToLink) {
+  return LinkInModules(M, ModulesToLink, CodeGenOpts, TargetOpts);
+}
+
+bool BackendConsumer::LinkInModules(llvm::Module *M,
+                                    SmallVectorImpl<LinkModule> &ModulesToLink,
+                                    const CodeGenOptions &MergeCodeGenOpts,
+                                    const TargetOptions &MergeTargetOpts) {
+  for (auto &LM : ModulesToLink) {
     assert(LM.Module && "LinkModule does not actually have a module");
 
     if (LM.PropagateAttrs)
@@ -213,7 +488,7 @@ bool BackendConsumer::LinkInModules(llvm::Module *M) {
         if (F.isIntrinsic())
           continue;
         CodeGen::mergeDefaultFunctionDefinitionAttributes(
-          F, CodeGenOpts, LangOpts, TargetOpts, LM.Internalize);
+            F, MergeCodeGenOpts, LangOpts, MergeTargetOpts, LM.Internalize);
       }
 
     CurLinkModule = LM.Module.get();
@@ -234,21 +509,273 @@ bool BackendConsumer::LinkInModules(llvm::Module *M) {
       return true;
   }
 
-  LinkModules.clear();
+  ModulesToLink.clear();
   return false; // success
 }
 
+// Runs exactly one AuxGenEntry's own backend tail (link its own
+// bitcode-file set, embed-bitcode no-op, emit its own bitcode output),
+// mirroring HandleTranslationUnit's primary tail below. Does not touch call
+// order relative to Gen. A no-op if this entry has no configured output
+// (-multi-target-aux-output didn't name its variant); every other entry
+// stays produced-and-discarded.
+void BackendConsumer::runAuxBackendTail(AuxGenEntry &Entry) {
+  if (!Entry.AsmOutStream)
+    return;
+
+  llvm::Module *M = Entry.Gen->GetModule();
+  if (!M)
+    return;
+
+  MultiTargetCodeGenScope Scope(*Context, CI.getLangOpts(), Entry);
+  CodeGenOptions &AuxCodeGenOpts = Entry.Invocation->getCodeGenOpts();
+
+  // Pass this entry's own options, not the host's -- otherwise
+  // mergeDefaultFunctionDefinitionAttributes stamps the host's
+  // "target-cpu"="x86-64"/features and its denormal/frame-pointer defaults
+  // onto every function in this entry's linked-in bitcode libraries (e.g.
+  // ROCm's ockl.bc) that lacks its own, silently downgrading them to a
+  // generic AMDGPU subtarget and causing ISel failures on real GPU-only
+  // instructions.
+  if (LinkInModules(M, Entry.LinkModules, AuxCodeGenOpts,
+                    Entry.TI->getTargetOpts()))
+    return;
+
+  EmbedBitcode(M, AuxCodeGenOpts, llvm::MemoryBufferRef());
+
+  // Entry.TI->getTargetOpts() overrides CI's own (host-set) TargetOptions --
+  // without this, CreateTargetMachine builds this aux entry's TargetMachine
+  // using the host's CPU/Features (e.g. "x86-64"/"+cmov") against this
+  // entry's own AMDGPU triple, silently falling back to a generic subtarget.
+  // No BackendConsumer: its LinkInModulesPass would link the primary's
+  // modules, and this entry's were linked above.
+  emitBackendOutput(CI, AuxCodeGenOpts, Entry.TI->getDataLayoutString(), M,
+                    Entry.Action, FS, std::move(Entry.AsmOutStream),
+                    /*BC=*/nullptr, &Entry.TI->getTargetOpts());
+}
+
+// Locates a sibling tool binary (clang-linker-wrapper, clang-offload-bundler)
+// installed alongside this process's own binary. Mirrors
+// clang-linker-wrapper's own getExecutableDir()
+// (ClangLinkerWrapper.cpp) -- cc1 has no persisted argv0
+// (CompilerInvocation::CreateFromArgs's Argv0 parameter is transient), so
+// this resolves via /proc/self/exe on Linux, the same pattern
+// clang/lib/Interpreter/Interpreter.cpp already uses for the same reason.
+static std::string locateSiblingTool(StringRef ToolName) {
+  void *Ptr = reinterpret_cast<void *>(&locateSiblingTool);
+  std::string ExePath = llvm::sys::fs::getMainExecutable(nullptr, Ptr);
+  llvm::SmallString<256> Path(llvm::sys::path::parent_path(ExePath));
+  llvm::sys::path::append(Path, ToolName);
+  return std::string(Path);
+}
+
+// Mirrors llvm-offload-binary.cpp's own writeFile() helper.
+static llvm::Error writeFile(StringRef Filename, StringRef Data) {
+  llvm::Expected<std::unique_ptr<llvm::FileOutputBuffer>> OutputOrErr =
+      llvm::FileOutputBuffer::create(Filename, Data.size());
+  if (!OutputOrErr)
+    return OutputOrErr.takeError();
+  std::unique_ptr<llvm::FileOutputBuffer> Output = std::move(*OutputOrErr);
+  llvm::copy(Data, Output->getBufferStart());
+  return Output->commit();
+}
+
+// Packages every configured aux entry's own on-disk .bc (runAuxBackendTail's
+// output) into a single offload-binary container at OutputPath, via the
+// same llvm::object::OffloadBinary::write library call clang-linker-wrapper
+// itself already makes in-process (ClangLinkerWrapper.cpp). Entries with no
+// configured output (Entry.OutputPath.empty()) are skipped, mirroring
+// runAuxBackendTail's own gating. Returns true on error, reported via Diags.
+static bool
+packageAuxOutputs(DiagnosticsEngine &Diags,
+                  llvm::ArrayRef<BackendConsumer::AuxGenEntry> AuxGens,
+                  StringRef OutputPath) {
+  llvm::SmallVector<llvm::object::OffloadBinary::OffloadingImage, 4> Images;
+  for (const BackendConsumer::AuxGenEntry &Entry : AuxGens) {
+    if (Entry.OutputPath.empty())
+      continue;
+    llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> BufferOrErr =
+        llvm::MemoryBuffer::getFile(Entry.OutputPath);
+    if (!BufferOrErr) {
+      Diags.Report(diag::err_cannot_open_file)
+          << Entry.OutputPath << BufferOrErr.getError().message();
+      return true;
+    }
+    llvm::object::OffloadBinary::OffloadingImage Image;
+    Image.TheImageKind = llvm::object::ImageKind::IMG_Bitcode;
+    Image.TheOffloadKind = llvm::object::OffloadKind::OFK_HIP;
+    Image.StringData["triple"] = Entry.TI->getTriple().getTriple();
+    Image.StringData["arch"] = Entry.CPU;
+    Image.Image = std::move(*BufferOrErr);
+    Images.push_back(std::move(Image));
+  }
+
+  llvm::SmallString<0> Packaged = llvm::object::OffloadBinary::write(Images);
+  if (llvm::Error E = writeFile(OutputPath, Packaged)) {
+    Diags.Report(diag::err_cannot_open_file)
+        << OutputPath << llvm::toString(std::move(E));
+    return true;
+  }
+  return false;
+}
+
+// Runs clang-linker-wrapper --emit-fatbin-only over the just-packaged
+// offload-binary container, producing a real .hipfb at OutputHipfbPath.
+// Kept as a subprocess call rather than an in-process library call:
+// LinkerWrapper::ConstructJob (Clang.cpp) forwards a large, allowlisted
+// CUDA/OpenMP/HIP/SYCL option set, and the tool itself shells out again to
+// a per-arch clang+lld LTO backend -- reimplementing either is out of
+// scope. Scope here is non-RDC HIP-only, so the argv below is deliberately
+// narrow, not a general re-derivation of ConstructJob. Returns true on
+// error, reported via Diags.
+static bool
+runLinkerWrapperFatbinOnly(DiagnosticsEngine &Diags,
+                           llvm::ArrayRef<BackendConsumer::AuxGenEntry> AuxGens,
+                           StringRef PackagedInput, StringRef OutputHipfbPath,
+                           bool HIPStdPar) {
+  std::string WrapperPath = locateSiblingTool("clang-linker-wrapper");
+  std::string BundlerPath = locateSiblingTool("clang-offload-bundler");
+
+  std::vector<std::string> Arches;
+  for (const BackendConsumer::AuxGenEntry &Entry : AuxGens)
+    if (!Entry.OutputPath.empty())
+      Arches.push_back(Entry.CPU);
+
+  std::string ShouldExtract = "--should-extract=" + llvm::join(Arches, ",");
+  std::string LinkerPathArg = "--linker-path=" + BundlerPath;
+
+  std::string RocmPathArg;
+  SmallVector<StringRef, 8> Argv{
+      WrapperPath,
+      ShouldExtract,
+      "--device-compiler=amdgpu-amd-amdhsa=-flto=full",
+  };
+  // The device link selects accelerator code (and drops the rest) only when
+  // told; ConstructJob forwards --hipstdpar likewise.
+  if (HIPStdPar)
+    Argv.push_back("--device-compiler=amdgpu-amd-amdhsa=--hipstdpar");
+  if (!MultiTargetRocmPath.empty()) {
+    RocmPathArg = "--device-compiler=--rocm-path=" + MultiTargetRocmPath;
+    Argv.push_back(RocmPathArg);
+  }
+  Argv.append({LinkerPathArg, "--emit-fatbin-only", "-o", OutputHipfbPath,
+               PackagedInput});
+
+  std::string ErrMsg;
+  bool ExecutionFailed = false;
+  int Result = llvm::sys::ExecuteAndWait(
+      WrapperPath, Argv, /*Env=*/std::nullopt, /*Redirects=*/{},
+      /*SecondsToWait=*/0, /*MemoryLimit=*/0, &ErrMsg, &ExecutionFailed);
+
+  if (ExecutionFailed) {
+    Diags.Report(diag::err_drv_command_failure) << ErrMsg;
+    return true;
+  }
+  if (Result != 0) {
+    Diags.Report(diag::err_drv_command_failed) << WrapperPath << Result;
+    return true;
+  }
+  return false;
+}
+
 void BackendConsumer::HandleTranslationUnit(ASTContext &C) {
+  // When packaging a real fatbin, CGNVCUDARuntime::makeModuleCtorFunction
+  // (called from CodeGenModule::Release(), itself called from
+  // Gen->HandleTranslationUnit(C) below) reads
+  // CodeGenOpts.OffloadBinaryToEmbedFile off disk -- so the fatbin must
+  // exist before Gen (host) dispatches, not merely before Gen's own backend
+  // tail. Gated behind the -multi-target-package-fatbin flag: every path
+  // that doesn't pass it takes the textually-unchanged branch below. The same
+  // holds for -multi-target-package-offload, whose package Release() embeds.
+  bool ReorderForPackaging =
+      !MultiTargetPackageFatbin.empty() || !MultiTargetPackageOffload.empty();
+
   {
     llvm::TimeTraceScope TimeScope("Frontend");
     PrettyStackTraceString CrashInfo("Per-file LLVM IR generation");
     if (TimerIsEnabled && !LLVMIRGenerationRefCount++)
       CI.getFrontendTimer().yieldTo(LLVMIRGeneration);
 
-    Gen->HandleTranslationUnit(C);
+    if (!ReorderForPackaging)
+      Gen->HandleTranslationUnit(C);
+    // Each AuxGens entry's Module is now a second, independently correct
+    // in-memory llvm::Module for that aux target. Linking it, embedding
+    // bitcode into it, and running it through the LLVM backend (everything
+    // below this block) is separate output-file plumbing, not part of
+    // producing the Module itself.
+    dispatchToAuxGens([&](CodeGenerator &G) { G.HandleTranslationUnit(C); });
 
     if (TimerIsEnabled && !--LLVMIRGenerationRefCount)
       LLVMIRGeneration.yieldTo(CI.getFrontendTimer());
+  }
+
+  // Run each configured aux entry's own backend tail, producing its own
+  // real bitcode output. Runs after Gen's own full tail below when
+  // !ReorderForPackaging (no reordering); when ReorderForPackaging, runs
+  // before Gen has dispatched at all -- see below.
+  for (AuxGenEntry &Entry : AuxGens)
+    runAuxBackendTail(Entry);
+
+  // Package every configured aux entry's own bitcode into a real .hipfb (or,
+  // with -fgpu-rdc, unlinked for the host to embed), once every
+  // runAuxBackendTail call above has completed. Off by default.
+  if (!MultiTargetPackageOffload.empty())
+    packageAuxOutputs(Diags, AuxGens, MultiTargetPackageOffload);
+  else if (ReorderForPackaging) {
+    llvm::SmallString<256> PackagedPath;
+    std::error_code EC = llvm::sys::fs::createTemporaryFile(
+        "multi-target-package", "bin", PackagedPath);
+    if (EC) {
+      Diags.Report(diag::err_cannot_open_file)
+          << "multi-target-package" << EC.message();
+    } else {
+      // Wire the packaged fatbin into the host CodeGenModule's own
+      // CodeGenOpts, read back by makeModuleCtorFunction below. On any
+      // packaging failure, leave this unset -- a diagnostic was already
+      // reported by the failing call, and
+      // CGNVCUDARuntime::makeModuleCtorFunction's HIP branch already
+      // degrades gracefully to an external __hip_fatbin declaration when
+      // this field is empty, so the compile still completes rather than
+      // crashing.
+      if (!packageAuxOutputs(Diags, AuxGens, PackagedPath) &&
+          !runLinkerWrapperFatbinOnly(Diags, AuxGens, PackagedPath,
+                                      MultiTargetPackageFatbin,
+                                      CI.getLangOpts().HIPStdPar))
+        CI.getCodeGenOpts().OffloadBinaryToEmbedFile =
+            std::string(MultiTargetPackageFatbin);
+      llvm::sys::fs::remove(PackagedPath);
+    }
+  }
+
+  if (ReorderForPackaging) {
+    // Gen (host) dispatches only now, after the aux tail + packaging above,
+    // so makeModuleCtorFunction's Release()-time read of
+    // CodeGenOpts.OffloadBinaryToEmbedFile (or, with -fgpu-rdc, its
+    // EmbedObject of the offload package) sees the real, just-packaged file
+    // instead of running before it exists.
+    llvm::TimeTraceScope TimeScope("Frontend");
+    PrettyStackTraceString CrashInfo("Per-file LLVM IR generation");
+    if (TimerIsEnabled && !LLVMIRGenerationRefCount++)
+      CI.getFrontendTimer().yieldTo(LLVMIRGeneration);
+    Gen->HandleTranslationUnit(C);
+    if (TimerIsEnabled && !--LLVMIRGenerationRefCount)
+      LLVMIRGeneration.yieldTo(CI.getFrontendTimer());
+  }
+
+  if (!MultiTargetCodeGenDumpDir.empty()) {
+    // A plain HIP `-c` compile drives two separate cc1 jobs (device, then
+    // host), each with its own primary/aux pair; tag filenames by this job's
+    // own primary triple so the two jobs' dumps don't collide.
+    if (llvm::Module *M = Gen->GetModule()) {
+      std::string JobTag = ("." + M->getTargetTriple().str());
+      dumpModuleForDiff(MultiTargetCodeGenDumpDir, InFile,
+                        JobTag + ".primary.ll", M);
+      for (AuxGenEntry &Entry : AuxGens)
+        if (llvm::Module *AuxM = Entry.Gen->GetModule())
+          dumpModuleForDiff(
+              MultiTargetCodeGenDumpDir, InFile,
+              JobTag + ".aux" + std::to_string(Entry.Variant) + ".ll", AuxM);
+    }
   }
 
   // Silently ignore if we weren't initialized for some reason.
@@ -332,26 +859,35 @@ void BackendConsumer::HandleTagDeclDefinition(TagDecl *D) {
                                  Context->getSourceManager(),
                                  "LLVM IR generation of declaration");
   Gen->HandleTagDeclDefinition(D);
+  dispatchToAuxGens([&](CodeGenerator &G) { G.HandleTagDeclDefinition(D); });
 }
 
 void BackendConsumer::HandleTagDeclRequiredDefinition(const TagDecl *D) {
   Gen->HandleTagDeclRequiredDefinition(D);
+  dispatchToAuxGens(
+      [&](CodeGenerator &G) { G.HandleTagDeclRequiredDefinition(D); });
 }
 
 void BackendConsumer::CompleteTentativeDefinition(VarDecl *D) {
   Gen->CompleteTentativeDefinition(D);
+  dispatchToAuxGens(
+      [&](CodeGenerator &G) { G.CompleteTentativeDefinition(D); });
 }
 
 void BackendConsumer::CompleteExternalDeclaration(DeclaratorDecl *D) {
   Gen->CompleteExternalDeclaration(D);
+  dispatchToAuxGens(
+      [&](CodeGenerator &G) { G.CompleteExternalDeclaration(D); });
 }
 
 void BackendConsumer::AssignInheritanceModel(CXXRecordDecl *RD) {
   Gen->AssignInheritanceModel(RD);
+  dispatchToAuxGens([&](CodeGenerator &G) { G.AssignInheritanceModel(RD); });
 }
 
 void BackendConsumer::HandleVTable(CXXRecordDecl *RD) {
   Gen->HandleVTable(RD);
+  dispatchToAuxGens([&](CodeGenerator &G) { G.HandleVTable(RD); });
 }
 
 void BackendConsumer::anchor() { }

@@ -2177,7 +2177,15 @@ DeclResult Sema::CheckClassTemplate(
             makeMergedDefinitionVisible(Hidden);
             makeMergedDefinitionVisible(Tmpl);
           }
-        } else {
+        } else if (!(LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+                     // A definition tagged for one target variant and a
+                     // second definition parsed under a different variant
+                     // are not a redefinition; mirrors the guard in
+                     // CheckForFunctionRedefinition (SemaDecl.cpp).
+                     Def->getTargetVariant() !=
+                         Context.getCurrentTargetVariant() &&
+                     (Def->getTargetVariant() != 0 ||
+                      Context.getCurrentTargetVariant() != 0))) {
           Diag(NameLoc, diag::err_redefinition) << Name;
           Diag(Def->getLocation(), diag::note_previous_definition);
           // FIXME: Would it make sense to try to "forget" the previous
@@ -8954,6 +8962,9 @@ DeclResult Sema::ActOnClassTemplateSpecialization(
 
   llvm::FoldingSetInsertToken InsertToken;
   ClassTemplateSpecializationDecl *PrevDecl = nullptr;
+  std::optional<ASTContext::TargetKeySuppressionRAII> Unkeyed;
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    Unkeyed.emplace(Context);
 
   if (isPartialSpecialization)
     PrevDecl = ClassTemplate->findPartialSpecialization(
@@ -8987,7 +8998,9 @@ DeclResult Sema::ActOnClassTemplateSpecialization(
 
     if (!PrevDecl)
       ClassTemplate->AddSpecialization(Specialization, InsertToken);
+    Unkeyed.reset();
   } else {
+    Unkeyed.reset();
     CanQualType CanonType = CanQualType::CreateUnsafe(
         Context.getCanonicalTemplateSpecializationType(
             ElaboratedTypeKeyword::None,
@@ -9086,7 +9099,19 @@ DeclResult Sema::ActOnClassTemplateSpecialization(
       SkipBody->Previous = Def;
       if (!HiddenDefVisible && Hidden)
         makeMergedDefinitionVisible(Hidden);
-    } else if (Def) {
+    } else if (Def &&
+               // A definition tagged for one target variant and a second
+               // definition parsed under a different variant are not a
+               // redefinition; each target gets its own body for what the
+               // shared declaration only forward-declared. findSpecialization
+               // is keyed by template arguments, not by target, so it hands
+               // back the first target's definition regardless of which
+               // target is currently being parsed. Mirrors the guard in
+               // CheckForFunctionRedefinition.
+               !(LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+                 Def->getTargetVariant() != Context.getCurrentTargetVariant() &&
+                 (Def->getTargetVariant() != 0 ||
+                  Context.getCurrentTargetVariant() != 0))) {
       SourceRange Range(TemplateNameLoc, RAngleLoc);
       Diag(TemplateNameLoc, diag::err_redefinition) << Specialization << Range;
       Diag(Def->getLocation(), diag::note_previous_definition);
@@ -9390,6 +9415,23 @@ DiagLocForExplicitInstantiation(NamedDecl *D,
   return PrevDiagLoc;
 }
 
+/// Whether \p Loc lies in the same declaration as \p Begin, which it
+/// follows: the source text between them does not end a declaration.
+static bool isSameDirective(const SourceManager &SM, SourceLocation Begin,
+                            SourceLocation Loc) {
+  Begin = SM.getExpansionLoc(Begin);
+  Loc = SM.getExpansionLoc(Loc);
+  FileIDAndOffset B = SM.getDecomposedLoc(Begin);
+  FileIDAndOffset L = SM.getDecomposedLoc(Loc);
+  if (B.first != L.first || B.second > L.second)
+    return false;
+  bool Invalid = false;
+  StringRef Buffer = SM.getBufferData(B.first, &Invalid);
+  if (Invalid)
+    return false;
+  return !Buffer.slice(B.second, L.second).contains(';');
+}
+
 bool
 Sema::CheckSpecializationInstantiationRedecl(SourceLocation NewLoc,
                                              TemplateSpecializationKind NewTSK,
@@ -9540,6 +9582,16 @@ Sema::CheckSpecializationInstantiationRedecl(SourceLocation NewLoc,
       //     - an explicit instantiation definition shall appear at most once
       //       in a program,
 
+      // Each target's copy of a widened region replays the same directive:
+      // the previous instantiation began earlier in this very directive.
+      // Replaying it adds nothing, not even another declaration node.
+      if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+          PrevPointOfInstantiation.isValid() &&
+          isSameDirective(SourceMgr, PrevPointOfInstantiation, NewLoc)) {
+        HasNoEffect = true;
+        return true;
+      }
+
       // MSVCCompat: MSVC silently ignores duplicate explicit instantiations.
       Diag(NewLoc, (getLangOpts().MSVCCompat)
                        ? diag::ext_explicit_instantiation_duplicate
@@ -9609,6 +9661,10 @@ bool Sema::CheckDependentFunctionTemplateSpecialization(
 bool Sema::CheckFunctionTemplateSpecialization(
     FunctionDecl *FD, TemplateArgumentListInfo *ExplicitTemplateArgs,
     LookupResult &Previous, bool QualifiedFriend) {
+  std::optional<ASTContext::TargetKeySuppressionRAII> Unkeyed;
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    Unkeyed.emplace(Context);
+
   // The set of function template specializations that could match this
   // explicit function template specialization.
   UnresolvedSet<8> Candidates;

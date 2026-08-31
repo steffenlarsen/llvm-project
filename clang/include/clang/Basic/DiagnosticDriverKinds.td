@@ -139,6 +139,9 @@ def err_drv_bad_offload_arch_combo : Error<
   "invalid offload arch combinations: '%0' and '%1' (for a specific processor, "
   "a feature should either exist in all offload archs, or not exist in any "
   "offload archs)">;
+def err_drv_integrated_hip_device_codegen_mllvm_conflict : Error<
+  "'-mllvm %0' conflicts with '-mllvm %1' for offload arch '%2'; "
+  "'-fintegrated-hip-device-codegen' requires one value for all targets">;
 def err_drv_unsupported_option_for_offload_arch_req_feature : Error<
   "'%0' option for offload arch '%1' is not currently supported "
   "there. Use it with an offload arch containing '%2' instead">;

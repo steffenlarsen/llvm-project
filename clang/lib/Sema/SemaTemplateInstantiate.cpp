@@ -15,6 +15,7 @@
 #include "clang/AST/ASTLambda.h"
 #include "clang/AST/ASTMutationListener.h"
 #include "clang/AST/DeclBase.h"
+#include "clang/AST/DeclFingerprint.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/DynamicRecursiveASTVisitor.h"
 #include "clang/AST/Expr.h"
@@ -839,6 +840,8 @@ bool Sema::pushCodeSynthesisContext(CodeSynthesisContext Ctx) {
     }
   }
 
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    Ctx.InstantiationTarget = getInstantiationTarget();
   CodeSynthesisContexts.push_back(Ctx);
 
   // Check to see if we're low on stack space. We can't do anything about this
@@ -1591,6 +1594,7 @@ namespace {
     ExprResult TransformPredefinedExpr(PredefinedExpr *E);
     ExprResult TransformDeclRefExpr(DeclRefExpr *E);
     ExprResult TransformCXXDefaultArgExpr(CXXDefaultArgExpr *E);
+    ExprResult TransformCallExpr(CallExpr *E);
 
     ExprResult TransformTemplateParmRefExpr(DeclRefExpr *E,
                                             NonTypeTemplateParmDecl *D);
@@ -1992,6 +1996,11 @@ Decl *TemplateInstantiator::TransformDecl(SourceLocation Loc, Decl *D) {
     return cast<Decl *>(
         *SemaRef.CurrentInstantiationScope->findInstantiationOf(D));
   }
+
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    if (NamedDecl *Copy =
+            SemaRef.getInstantiationTargetCopy(cast<NamedDecl>(D)))
+      return Copy;
 
   return SemaRef.FindInstantiatedDecl(Loc, cast<NamedDecl>(D), TemplateArgs);
 }
@@ -2442,6 +2451,41 @@ TemplateInstantiator::TransformFunctionParmPackRefExpr(DeclRefExpr *E,
                                E->getExprLoc());
 }
 
+/// A call whose overload resolution depended on the CUDA/HIP side was
+/// resolved for both sides (see ASTContext::CUDAAmbiguousCalls). Rebuilding
+/// an already-resolved call does not resolve it again, so the other side's
+/// call is instantiated alongside, under that side's ambient as it was built.
+ExprResult TemplateInstantiator::TransformCallExpr(CallExpr *E) {
+  ExprResult Result = inherited::TransformCallExpr(E);
+  if (!getSema().getLangOpts().CUDA)
+    return Result;
+  const ASTContext::CUDADualSideCall *Dual =
+      SemaRef.Context.getCUDADualSideCall(E);
+  if (!Dual || Result.isInvalid() || Result.get() == E)
+    return Result;
+  auto *NewCE = dyn_cast<CallExpr>(Result.get());
+  if (!NewCE)
+    return Result;
+
+  bool PrimaryIsDevice = getSema().getLangOpts().CUDAIsDevice;
+  const CallExpr *Alt = PrimaryIsDevice ? Dual->HostCall : Dual->DeviceCall;
+  if (Alt == E)
+    return Result;
+  ExprResult NewAlt;
+  {
+    auto &LangOpts = const_cast<LangOptions &>(getSema().getLangOpts());
+    LangOpts.CUDAIsDevice = !PrimaryIsDevice;
+    NewAlt = inherited::TransformCallExpr(const_cast<CallExpr *>(Alt));
+    LangOpts.CUDAIsDevice = PrimaryIsDevice;
+  }
+  if (auto *NewAltCE =
+          NewAlt.isInvalid() ? nullptr : dyn_cast<CallExpr>(NewAlt.get()))
+    SemaRef.Context.setCUDADualSideCall(
+        NewCE, /*HostCall=*/PrimaryIsDevice ? NewAltCE : NewCE,
+        /*DeviceCall=*/PrimaryIsDevice ? NewCE : NewAltCE);
+  return Result;
+}
+
 ExprResult
 TemplateInstantiator::TransformDeclRefExpr(DeclRefExpr *E) {
   NamedDecl *D = E->getDecl();
@@ -2469,7 +2513,16 @@ TemplateInstantiator::TransformDeclRefExpr(DeclRefExpr *E) {
       return TransformFunctionParmPackRefExpr(E, PD);
     }
 
-  return inherited::TransformDeclRefExpr(E);
+  ExprResult Result = inherited::TransformDeclRefExpr(E);
+  // A target-divergent constant is dependent only until instantiated; see
+  // Sema::BuildDeclRefExpr.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && Result.get() == E &&
+      E->isValueDependent() && SemaRef.Context.isHostPrimaryMultiTarget() &&
+      SemaRef.Context.isTargetDivergentSource(E->getDecl()))
+    return RebuildDeclRefExpr(E->getQualifierLoc(), E->getDecl(),
+                              E->getNameInfo(), E->getFoundDecl(),
+                              /*TemplateArgs=*/nullptr);
+  return Result;
 }
 
 ExprResult TemplateInstantiator::TransformCXXDefaultArgExpr(
@@ -2610,6 +2663,13 @@ TemplateInstantiator::TransformTemplateTypeParmType(TypeLocBuilder &TLB,
 
     assert(Arg.getKind() == TemplateArgument::Type &&
            "Template argument kind mismatch");
+
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+      QualType Adjusted = SemaRef.getTypeForInstantiationTarget(
+          Arg.getAsType(), TL.getNameLoc());
+      if (Adjusted != Arg.getAsType())
+        Arg = TemplateArgument(Adjusted);
+    }
 
     return BuildSubstTemplateTypeParmType(TLB, SuppressObjCLifetime, Final,
                                           AssociatedDecl, T->getIndex(),
@@ -3569,6 +3629,53 @@ bool Sema::InstantiateClass(SourceLocation PointOfInstantiation,
                               TemplateArgs, TSK, Complain);
 }
 
+/// A specialization of a redundant-tagged ClassTemplateDecl can still be
+/// minted after the redundant tag was applied, e.g. by a caller still
+/// performing deduction at end-of-TU. The reconciliation in
+/// DeclFingerprint.cpp only covers specializations already in the redundant
+/// template's FoldingSet when mergeEquivalentVariants runs, so this closes
+/// the gap lazily: before tagging a new specialization with a real target,
+/// check whether the surviving, non-redundant sibling template already has
+/// an equivalent specialization for these template arguments; if so, this
+/// specialization is redundant too.
+template <typename TemplateDeclT>
+static bool
+hasEquivalentSpecializationInSurvivingSibling(TemplateDeclT *TD,
+                                              ArrayRef<TemplateArgument> Args) {
+  for (NamedDecl *ND : TD->getDeclContext()->lookup(TD->getDeclName())) {
+    auto *Sibling = dyn_cast<TemplateDeclT>(ND->getUnderlyingDecl());
+    if (!Sibling || Sibling == TD || Sibling->isRedundantTargetVariant())
+      continue;
+    llvm::FoldingSetInsertToken InsertToken;
+    if (Sibling->findSpecialization(Args, InsertToken))
+      return true;
+  }
+  return false;
+}
+
+/// A member can be duplicated as two distinct children of the same Pattern
+/// (e.g. two "ne" VarDecls at the same location, one TargetVariant=0 and one
+/// TargetVariantRedundant); InstantiateClassImpl's member loop must skip the
+/// redundant one there, since the live twin is also a child of Pattern and
+/// gets instantiated on its own iteration. Whole-class-body widening across
+/// arms is different: the redundant tag and the live twin end up on separate
+/// ClassTemplatePartialSpecializationDecls, linked only via the shared
+/// ClassTemplateDecl's partial-specialization list rather than
+/// Decl::redecls(), so Pattern's own copy of the member is never duplicated
+/// within Pattern and there is nothing to skip.
+static bool hasLiveDuplicateInPattern(CXXRecordDecl *Pattern,
+                                      NamedDecl *Member) {
+  DeclarationName Name = Member->getDeclName();
+  if (!Name)
+    return false;
+  for (Decl *D : Pattern->decls())
+    if (D != Member)
+      if (auto *ND = dyn_cast<NamedDecl>(D))
+        if (ND->getDeclName() == Name && !ND->isRedundantTargetVariant())
+          return true;
+  return false;
+}
+
 bool Sema::InstantiateClassImpl(
     SourceLocation PointOfInstantiation, CXXRecordDecl *Instantiation,
     CXXRecordDecl *Pattern, const MultiLevelTemplateArgumentList &TemplateArgs,
@@ -3580,6 +3687,54 @@ bool Sema::InstantiateClassImpl(
                                 Instantiation->getInstantiatedFromMemberClass(),
                                      Pattern, PatternDef, TSK, Complain))
     return true;
+
+  // An instantiation is performed for a particular target; a declaration
+  // marked "applies to every target" keeps that (the default outside a
+  // multi-target compilation).
+  std::optional<ASTContext::TargetScope> InstantiationTarget;
+  if (LLVM_UNLIKELY(Context.hasTargetDivergence()))
+    InstantiationTarget.emplace(Context,
+                                clang::InstantiateInVariant
+                                    ? clang::InstantiateInVariant.getValue()
+                                    : Instantiation->getTargetVariant());
+
+  // See the analogous comment in InstantiateFunctionDefinition.
+  unsigned TargetKey =
+      LLVM_UNLIKELY(clang::AllowTargetVariantDecls)
+          ? Context.getEffectiveTargetInstantiationKey(Instantiation)
+          : 0;
+  if (TargetKey && !Instantiation->getTargetVariant() &&
+      TargetKey != Context.getCanonicalDeviceVariant())
+    Instantiation->setTargetVariant(TargetKey);
+
+  // An entity instantiated while analysing one target belongs to that target.
+  // Instantiations are created by Sema, not parsed, so the parser's marking
+  // never sees them and this must be set explicitly, or the instantiation
+  // stays visible to every target.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && !TargetKey &&
+      !Instantiation->getTargetVariant()) {
+    // Prefer the pattern's target over the ambient one. Pending instantiations
+    // are performed at the end of the translation unit, long outside any
+    // alternative, so the ambient variant there is 0 -- "every target" -- and
+    // both arms' instantiations become visible to both.
+    unsigned V = Context.getCurrentTargetVariant();
+    // A pattern tagged TargetVariantRedundant is a marked-duplicate, not a
+    // real target identity -- inheriting it would hide this instantiation
+    // from lookup for every target, not just the duplicate's own.
+    if (const Decl *P = Pattern) {
+      if (unsigned PV = P->getTargetVariant()) {
+        if (!P->isRedundantTargetVariant())
+          V = PV;
+        else if (auto *CTSD =
+                     dyn_cast<ClassTemplateSpecializationDecl>(Instantiation))
+          if (ClassTemplateDecl *CTD = CTSD->getSpecializedTemplate())
+            if (hasEquivalentSpecializationInSurvivingSibling(
+                    CTD, CTSD->getTemplateArgs().asArray()))
+              V = Decl::TargetVariantRedundant;
+      }
+    }
+    Instantiation->setTargetVariant(V);
+  }
 
   llvm::TimeTraceScope TimeScope("InstantiateClass", [&]() {
     llvm::TimeTraceMetadata M;
@@ -3669,6 +3824,21 @@ bool Sema::InstantiateClassImpl(
     // introduced in namespace scope.
     if (Member->getDeclContext() != Pattern)
       continue;
+
+    // Skip declarations marked as a redundant duplicate of a sibling already
+    // present in the pattern (e.g. two "ne" VarDecls at the same location,
+    // one TargetVariant=0 and one TargetVariantRedundant): instantiating the
+    // redundant copy too would create a second, colliding member in the
+    // specialization's DeclContext. If no such live duplicate is present in
+    // the pattern itself (see hasLiveDuplicateInPattern), Pattern's own copy
+    // is its only physical declaration of this member, merely tagged
+    // redundant because a *different* arm's counterpart was chosen as the
+    // merge survivor, so instantiate it normally rather than dropping it.
+    if (Member->isRedundantTargetVariant()) {
+      auto *MemberND = dyn_cast<NamedDecl>(Member);
+      if (MemberND && hasLiveDuplicateInPattern(Pattern, MemberND))
+        continue;
+    }
 
     // BlockDecls can appear in a default-member-initializer. They must be the
     // child of a BlockExpr, so we only know how to instantiate them from there.
@@ -3970,6 +4140,17 @@ bool Sema::usesPartialOrExplicitSpecialization(
   SmallVector<ClassTemplatePartialSpecializationDecl *, 4> PartialSpecs;
   ClassTemplateDecl *CTD = ClassTemplateSpec->getSpecializedTemplate();
   CTD->getPartialSpecializations(PartialSpecs);
+  // Under -allow-target-variant-decls, distinct targets' partial
+  // specializations of the same template arguments are separate Decls (see
+  // ClassTemplatePartialSpecializationDecl::Profile) rather than one
+  // redefining the other. Matching must still only see the one for the
+  // target actually being compiled, or two textually-identical-looking
+  // candidates make every match ambiguous.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    llvm::erase_if(PartialSpecs,
+                   [&](ClassTemplatePartialSpecializationDecl *P) {
+                     return !isDeclVisibleForCurrentTarget(P);
+                   });
   for (ClassTemplatePartialSpecializationDecl *CTPSD : PartialSpecs) {
     // C++ [temp.spec.partial.member]p2:
     //   If the primary member template is explicitly specialized for a given
@@ -4024,6 +4205,43 @@ static ActionResult<CXXRecordDecl *> getPatternForClassTemplateSpecialization(
     SmallVector<MatchResult, 4> Matched, ExtraMatched;
     SmallVector<ClassTemplatePartialSpecializationDecl *, 4> PartialSpecs;
     Template->getPartialSpecializations(PartialSpecs);
+    // See the comment in usesPartialOrExplicitSpecialization above -- filter
+    // to the specialization visible to the target actually being compiled
+    // before doing partial ordering, or two targets' specializations of the
+    // same arguments look ambiguously matched.
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+      // isDeclVisibleForCurrentTarget's AllowFallback rule admits a
+      // primary-target (V==1) declaration whenever nothing else claims to be
+      // visible, on the assumption that no exact-target copy exists at all.
+      // That assumption doesn't hold here: when a genuine exact-target
+      // partial specialization is also present in PartialSpecs (e.g. two
+      // widened arms of the same `#if`/`#else`-divergent partial
+      // specialization, one tagged for each target), the fallback rule lets
+      // both through, and partial ordering can't tell apart two otherwise
+      // identical patterns -- reported as "ambiguous partial specializations"
+      // even though exactly one is the right match for the current target.
+      // Mirrors LookupResult::resolveKind()'s HasExactTargetMatch refinement,
+      // which applies the same "exact match wins over fallback" rule for
+      // ordinary name lookup.
+      unsigned CurrentTargetForLookup = 0;
+      bool HasExactTargetMatch = false;
+      if (S.InTargetFallbackReparse) {
+        CurrentTargetForLookup = S.Context.getCurrentTargetVariant();
+        if (!CurrentTargetForLookup)
+          CurrentTargetForLookup = 1;
+        for (ClassTemplatePartialSpecializationDecl *P : PartialSpecs)
+          if (P->getTargetVariant() == CurrentTargetForLookup) {
+            HasExactTargetMatch = true;
+            break;
+          }
+      }
+      llvm::erase_if(PartialSpecs,
+                     [&](ClassTemplatePartialSpecializationDecl *P) {
+                       return !S.isDeclVisibleForCurrentTarget(P) ||
+                              (HasExactTargetMatch && P->getTargetVariant() &&
+                               P->getTargetVariant() != CurrentTargetForLookup);
+                     });
+    }
     TemplateSpecCandidateSet FailedCandidates(PointOfInstantiation);
     for (ClassTemplatePartialSpecializationDecl *Partial : PartialSpecs) {
       // C++ [temp.spec.partial.member]p2:
@@ -4150,7 +4368,59 @@ static ActionResult<CXXRecordDecl *> getPatternForClassTemplateSpecialization(
 
       Template = Template->getInstantiatedFromMemberTemplate();
     }
-    Pattern = Template->getTemplatedDecl();
+    CXXRecordDecl *Best = Template->getTemplatedDecl();
+    // When the primary template's own redeclarations are target-tagged (no
+    // partial spec matched -- see
+    // ClassTemplateDecl::hasTargetTaggedPrimaryTemplate), pick the redecl
+    // visible to the ambient target being compiled, mirroring the
+    // partial-spec filtering above. Prefer an exact tag match over one
+    // admitted only by isVisibleForTarget's AllowFallback rule: otherwise an
+    // ambiguous/wrong arm can be admitted when a genuine exact match exists
+    // among the redecls. Falls back to Template->getTemplatedDecl()
+    // unconditionally when the predicate is false or nothing matches.
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+        Template->hasTargetTaggedPrimaryTemplate()) {
+      unsigned CurrentTargetForLookup = S.Context.getCurrentTargetVariant();
+      if (!CurrentTargetForLookup)
+        CurrentTargetForLookup = 1;
+      ClassTemplateDecl *ExactMatch = nullptr, *FallbackMatch = nullptr;
+      // Widened alternatives of the same primary template are not
+      // necessarily linked into one redeclaration chain: Template->redecls()
+      // only reports the one arm the parser happened to enter first. The
+      // DeclContext's lookup table is what actually holds every widened
+      // copy together.
+      for (const NamedDecl *ND :
+           Template->getDeclContext()->lookup(Template->getDeclName())) {
+        auto *RD =
+            const_cast<ClassTemplateDecl *>(dyn_cast<ClassTemplateDecl>(ND));
+        if (!RD)
+          continue;
+        if (RD->getTargetVariant() == CurrentTargetForLookup) {
+          ExactMatch = RD;
+          break;
+        }
+        if (!FallbackMatch &&
+            S.isDeclVisibleForCurrentTarget(RD->getTemplatedDecl()))
+          FallbackMatch = RD;
+      }
+      if (ClassTemplateDecl *Chosen = ExactMatch ? ExactMatch : FallbackMatch)
+        Best = Chosen->getTemplatedDecl();
+    }
+    Pattern = Best;
+  }
+
+  // If the chosen pattern is itself tagged for a real target variant (one
+  // arm of a widened #if/#elif partial spec), stash that variant on the
+  // resulting specialization. A nested lookup performed while instantiating
+  // this specialization's own members (e.g. a static-data-member initializer
+  // referencing a second target-tagged specialization) has no enclosing
+  // FunctionDecl to fall back on -- isVisibleForTarget's ambient fallback
+  // consults this table instead. See
+  // ASTContext::TargetVariantForSpecialization.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+    if (unsigned PatternVariant = Pattern->getTargetVariant())
+      S.getASTContext().setTargetVariantForSpecialization(ClassTemplateSpec,
+                                                          PatternVariant);
   }
 
   return Pattern;
@@ -4175,6 +4445,13 @@ bool Sema::InstantiateClassTemplateSpecialization(
   bool HadAvaibilityWarning =
       ShouldDiagnoseAvailabilityOfDecl(ClassTemplateSpec, nullptr, nullptr)
           .first != AR_Available;
+
+  // See ASTContext::SpecializationKeyVariant.
+  std::optional<ASTContext::TargetScope> KeyTarget;
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    if (unsigned V = Context.getSpecializationKeyVariant(ClassTemplateSpec))
+      if (V != std::max(Context.getCurrentTargetVariant(), 1u))
+        KeyTarget.emplace(Context, V);
 
   ActionResult<CXXRecordDecl *> Pattern =
       getPatternForClassTemplateSpecialization(*this, PointOfInstantiation,

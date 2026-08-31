@@ -35,6 +35,7 @@ add_clang_unittest(ASTTests
   SourceLocationTest.cpp
   StmtPrinterTest.cpp
   StructuralEquivalenceTest.cpp
+  TargetDivergenceTest.cpp
   SubobjectVisitorTest.cpp
   TemplateNameTest.cpp
   TypePrinterTest.cpp

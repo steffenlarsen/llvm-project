@@ -196,6 +196,10 @@ RValue CodeGenFunction::EmitCXXMemberCallExpr(const CXXMemberCallExpr *CE,
 
   const MemberExpr *ME = cast<MemberExpr>(callee);
   const CXXMethodDecl *MD = cast<CXXMethodDecl>(ME->getMemberDecl());
+  // See EmitCallee's MemberExpr case.
+  if (const FunctionDecl *Repl =
+          getContext().getTargetVariantCallee(ME, CGM.getTargetVariant()))
+    MD = cast<CXXMethodDecl>(Repl);
 
   if (MD->isStatic()) {
     // The method is static, emit it as we would a regular call.
@@ -613,6 +617,10 @@ void CodeGenFunction::EmitCXXConstructExpr(const CXXConstructExpr *E,
                                            AggValueSlot Dest) {
   assert(!Dest.isIgnored() && "Must have a destination!");
   const CXXConstructorDecl *CD = E->getConstructor();
+  // See EmitCallee's MemberExpr case.
+  if (const FunctionDecl *Repl =
+          getContext().getTargetVariantCallee(E, CGM.getTargetVariant()))
+    CD = cast<CXXConstructorDecl>(Repl);
 
   // If we require zero initialization before (or instead of) calling the
   // constructor, as can be the case with a non-user-provided default

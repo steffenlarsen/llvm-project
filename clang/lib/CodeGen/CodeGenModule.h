@@ -21,6 +21,7 @@
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclOpenMP.h"
+#include "clang/AST/DeclTemplate.h"
 #include "clang/AST/GlobalDecl.h"
 #include "clang/AST/Mangle.h"
 #include "clang/Basic/ABI.h"
@@ -365,6 +366,12 @@ private:
   llvm::Module &TheModule;
   DiagnosticsEngine &Diags;
   const TargetInfo &Target;
+
+  /// The Decl::TargetVariant this CodeGenModule emits for, captured from
+  /// the ASTContext's ambient variant at construction. See
+  /// shouldEmitForTargetVariant().
+  const unsigned TargetVariant;
+
   std::unique_ptr<CGCXXABI> ABI;
   llvm::LLVMContext &VMContext;
   std::string ModuleNameHash;
@@ -913,6 +920,10 @@ public:
     return TheModule.getDataLayout();
   }
   const TargetInfo &getTarget() const { return Target; }
+
+  /// The Decl::TargetVariant this CodeGenModule emits for. See
+  /// TargetVariant / shouldEmitForTargetVariant().
+  unsigned getTargetVariant() const { return TargetVariant; }
   const llvm::Triple &getTriple() const { return Target.getTriple(); }
   bool supportsCOMDAT() const;
   void maybeSetTrivialComdat(const Decl &D, llvm::GlobalObject &GO);
@@ -2184,6 +2195,35 @@ private:
   /// \return the function that registers the binary with the runtime, or null
   /// if the binary could not be read.
   llvm::Function *embedSYCLDeviceBinary();
+
+  /// Whether \p D belongs to the target this CodeGenModule is emitting for.
+  /// A combined multi-target frontend runs one CodeGenModule per
+  /// Decl::TargetVariant over the same shared AST; without this check a
+  /// decl tagged for another target (or one a merge pass proved redundant)
+  /// would reach emission here too, colliding by mangled name with its
+  /// sibling in this module's deferred-emission tables.
+  bool shouldEmitForTargetVariant(const Decl *D) const {
+    if (D->isRedundantTargetVariant())
+      return false;
+    // See ASTContext::computeTargetInstantiationKey.
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+      if (unsigned Key = Context.getEffectiveTargetInstantiationKey(D))
+        return Key == TargetVariant ||
+               (Key == Context.getCanonicalDeviceVariant() &&
+                !Context.isTargetInstanceReplaced(D, TargetVariant));
+    unsigned DV = D->getTargetVariant();
+    if (DV != 0 && DV != TargetVariant)
+      return false;
+    // A specialization a redundant copy instantiated with a class of its own
+    // (e.g. a lambda's closure) mangles the same as the one the kept copy
+    // instantiated, and must not take its place.
+    return !LLVM_UNLIKELY(clang::AllowTargetVariantDecls) ||
+           !isInstantiatedOverRedundantClass(D);
+  }
+
+  /// Whether \p D is a specialization, or a member of one, whose template
+  /// arguments name a class merged away as TargetVariantRedundant.
+  bool isInstantiatedOverRedundantClass(const Decl *D) const;
 
   /// Determine whether the definition must be emitted; if this returns \c
   /// false, the definition can be emitted lazily if it's used.
