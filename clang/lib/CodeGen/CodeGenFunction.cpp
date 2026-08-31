@@ -1549,7 +1549,7 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
     if (SpecDecl->hasBody(SpecDecl))
       Loc = SpecDecl->getLocation();
 
-  Stmt *Body = FD->getBody();
+  Stmt *Body = getContext().getBodyForTarget(FD, CGM.getTargetVariant());
 
   if (Body) {
     // Coroutines always emit lifetime markers.

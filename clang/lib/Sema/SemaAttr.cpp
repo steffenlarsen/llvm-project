@@ -1290,6 +1290,10 @@ void Sema::DiagnoseUnterminatedPragmaAttribute() {
 }
 
 void Sema::ActOnPragmaOptimize(bool On, SourceLocation PragmaLoc) {
+  if (Context.isMultiTargetCompile()) {
+    OptimizePragmas.push_back({PragmaLoc, On});
+    return;
+  }
   if(On)
     OptimizeOffPragmaLocation = SourceLocation();
   else
@@ -1318,6 +1322,16 @@ void Sema::ActOnPragmaMSFunction(
 void Sema::AddRangeBasedOptnone(FunctionDecl *FD) {
   // In the future, check other pragmas if they're implemented (e.g. pragma
   // optimize 0 will probably map to this functionality too).
+  if (!OptimizePragmas.empty()) {
+    const SourceManager &SM = getSourceManager();
+    for (auto [Loc, On] : llvm::reverse(OptimizePragmas))
+      if (SM.isBeforeInTranslationUnit(Loc, FD->getLocation())) {
+        if (!On)
+          AddOptnoneAttributeIfNoConflicts(FD, Loc);
+        break;
+      }
+    return;
+  }
   if(OptimizeOffPragmaLocation.isValid())
     AddOptnoneAttributeIfNoConflicts(FD, OptimizeOffPragmaLocation);
 }

@@ -2320,6 +2320,10 @@ static bool CheckLValueConstantExpression(EvalInfo &Info, SourceLocation Loc,
 
       // In CUDA/HIP device compilation, only device side variables have
       // constant addresses.
+      if (Info.getLangOpts().CUDA)
+        Info.Ctx.auditTargetInput(
+            'C',
+            Info.Ctx.reconcileTargetPartition(0, ASTContext::TDK_Side), Var);
       if (Info.getLangOpts().CUDA && Info.getLangOpts().CUDAIsDevice &&
           Info.Ctx.CUDAConstantEvalCtx.NoWrongSidedVars) {
         if ((!Var->hasAttr<CUDADeviceAttr>() &&
@@ -3495,6 +3499,11 @@ static bool evaluateVarDeclInit(EvalInfo &Info, const Expr *E,
 
   if (E->isValueDependent())
     return false;
+
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    if (const VarDecl *Own = Info.Ctx.getTargetVariableForEvaluation(
+            VD, Info.InConstantContext))
+      VD = Own;
 
   // Dig out the initializer, and use the declaration which it's attached to.
   // FIXME: We should eventually check whether the variable has a reachable
@@ -9078,6 +9087,15 @@ public:
 
     const FunctionDecl *Definition = nullptr;
     Stmt *Body = FD->getBody(Definition);
+    if (const FunctionDecl *Own = Info.Ctx.getTargetDefinitionForEvaluation(
+            FD, Definition, Info.InConstantContext)) {
+      Definition = Own;
+      Body = Own->getBody();
+    }
+    if (Definition)
+      if (Stmt *Own = Info.Ctx.getTargetBodyForEvaluation(
+              Definition, Info.InConstantContext))
+        Body = Own;
     SourceLocation Loc = E->getExprLoc();
 
     // Treat the object argument as `this` when evaluating defaulted
@@ -10513,7 +10531,7 @@ unsigned ConvertBuiltinIDToX86BuiltinID(const ASTContext &Ctx,
   // back to its canonical value.
   const TargetInfo *OwningTarget;
   if (Ctx.BuiltinInfo.isAuxBuiltinID(BuiltinOp)) {
-    OwningTarget = Ctx.getAuxTargetInfo();
+    OwningTarget = Ctx.BuiltinInfo.getAuxTarget();
     BuiltinOp = Ctx.BuiltinInfo.getAuxBuiltinID(BuiltinOp);
   } else {
     OwningTarget = &Ctx.getTargetInfo();
@@ -11737,6 +11755,11 @@ bool RecordExprEvaluator::VisitCXXConstructExpr(const CXXConstructExpr *E,
 
   const FunctionDecl *Definition = nullptr;
   auto Body = FD->getBody(Definition);
+  if (const FunctionDecl *Own = Info.Ctx.getTargetDefinitionForEvaluation(
+          FD, Definition, Info.InConstantContext)) {
+    Definition = Own;
+    Body = Own->getBody();
+  }
 
   if (!CheckConstexprFunction(Info, E->getExprLoc(), FD, Definition, Body))
     return false;

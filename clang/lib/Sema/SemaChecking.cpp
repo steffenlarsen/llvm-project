@@ -4194,11 +4194,11 @@ Sema::CheckBuiltinFunctionCall(FunctionDecl *FDecl, unsigned BuiltinID,
   // of the arch we are compiling for.
   if (Context.BuiltinInfo.isTSBuiltin(BuiltinID)) {
     if (Context.BuiltinInfo.isAuxBuiltinID(BuiltinID)) {
-      assert(Context.getAuxTargetInfo() &&
+      assert(Context.BuiltinInfo.getAuxTarget() &&
              "Aux Target Builtin, but not an aux target?");
 
       if (CheckTSBuiltinFunctionCall(
-              *Context.getAuxTargetInfo(),
+              *Context.BuiltinInfo.getAuxTarget(),
               Context.BuiltinInfo.getAuxBuiltinID(BuiltinID), TheCall))
         return ExprError();
     } else {

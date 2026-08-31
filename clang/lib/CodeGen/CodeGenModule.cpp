@@ -522,9 +522,9 @@ CodeGenModule::CodeGenModule(ASTContext &C,
                              CoverageSourceInfo *CoverageInfo)
     : Context(C), LangOpts(C.getLangOpts()), FS(FS), HeaderSearchOpts(HSO),
       PreprocessorOpts(PPO), CodeGenOpts(CGO), TheModule(M), Diags(diags),
-      Target(C.getTargetInfo()), ABI(createCXXABI(*this)),
-      VMContext(M.getContext()), VTables(*this), StackHandler(diags),
-      SanitizerMD(new SanitizerMetadata(*this)),
+      Target(C.getTargetInfo()), TargetVariant(C.getCurrentTargetVariant()),
+      ABI(createCXXABI(*this)), VMContext(M.getContext()), VTables(*this),
+      StackHandler(diags), SanitizerMD(new SanitizerMetadata(*this)),
       AtomicOpts(Target.getAtomicOpts()) {
 
   AbiMapper = std::make_unique<QualTypeMapper>(C, M.getDataLayout(), AbiAlloc);
@@ -2228,6 +2228,7 @@ void CodeGenModule::setGlobalVisibility(llvm::GlobalValue *GV,
     else if (const auto *VD = dyn_cast<VarDecl>(D))
       NeedsProtected = VD->hasAttr<CUDADeviceAttr>() ||
                        VD->hasAttr<CUDAConstantAttr>() ||
+                       Context.isImplicitAuxDeviceConstant(VD) ||
                        VD->getType()->isCUDADeviceBuiltinSurfaceType() ||
                        VD->getType()->isCUDADeviceBuiltinTextureType();
     if (NeedsProtected) {
@@ -4115,6 +4116,13 @@ void CodeGenModule::EmitDeferred() {
   CurDeclsToEmit.swap(DeferredDeclsToEmit);
 
   for (GlobalDecl &D : CurDeclsToEmit) {
+    // A copy merged away after code named it stands for the copy it was
+    // merged into.
+    if (D.getDecl()->isRedundantTargetVariant())
+      if (const Decl *Survivor =
+              getContext().getTargetMergeSurvivor(D.getDecl()))
+        D = D.getWithDecl(Survivor);
+
     // Functions declared with the sycl_kernel_entry_point attribute are
     // emitted normally during host compilation. During device compilation,
     // a SYCL kernel caller offload entry point function is generated and
@@ -4432,6 +4440,183 @@ CodeGenModule::isFunctionBlockedFromProfileInstr(llvm::Function *Fn,
   return ProfileList::Allow;
 }
 
+/// Whether a class is not this target's: merged away as redundant, or another
+/// target's copy of a class whose layout differs between targets.
+namespace {
+struct OtherTargetsClass {
+  const ASTContext &Ctx;
+  unsigned Variant;
+  bool hasOwnCopy(const NamedDecl *D) const {
+    SmallVector<const NamedDecl *, 4> Copies;
+    Ctx.getTargetCopies(D, Copies);
+    return llvm::any_of(Copies, [&](const NamedDecl *Copy) {
+      return Copy->getTargetVariant() && !Copy->isRedundantTargetVariant() &&
+             Copy->isCopyFor(Variant);
+    });
+  }
+  bool names(QualType T) const {
+    const auto *RD = T.getNonReferenceType()
+                         ->getPointeeOrArrayElementType()
+                         ->getAsCXXRecordDecl();
+    if (!RD)
+      return false;
+    if (RD->isRedundantTargetVariant())
+      return true;
+    if (RD->getTargetVariant() && !RD->isCopyFor(Variant) &&
+        Ctx.hasTargetDivergentLayout(RD))
+      return true;
+    // A local class, e.g. a lambda's closure, of a specialization made for
+    // another target.
+    if (const FunctionDecl *Parent = RD->isLocalClass())
+      if (!Ctx.getTargetInstantiationTargets(Parent).contains(Variant))
+        return true;
+    // So does a specialization of another target's copy of a class template
+    // that declares something else than this target's own copy, and a class
+    // nested in one.
+    for (const DeclContext *DC = RD; isa<CXXRecordDecl>(DC);
+         DC = DC->getParent()) {
+      const auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(DC);
+      if (!CTSD)
+        continue;
+      const ClassTemplateDecl *CTD = CTSD->getSpecializedTemplate();
+      if (CTD->getTargetVariant() && !CTD->isRedundantTargetVariant() &&
+          !CTD->isCopyFor(Variant) &&
+          (Ctx.hasTargetDivergentLayout(CTD) ||
+           (hasOwnCopy(CTD) &&
+            Ctx.separatesTargets(Ctx.getClassTemplateShapePartition(CTD),
+                                 CTD->getTargetSet().first(), Variant))))
+        return true;
+      if (inArgs(CTSD->getTemplateArgs().asArray()))
+        return true;
+    }
+    return false;
+  }
+  bool inArgs(ArrayRef<TemplateArgument> Args) const {
+    for (const TemplateArgument &Arg : Args) {
+      if (Arg.getKind() == TemplateArgument::Pack) {
+        if (inArgs(Arg.pack_elements()))
+          return true;
+      } else if (Arg.getKind() == TemplateArgument::Type &&
+                 names(Arg.getAsType())) {
+        return true;
+      }
+    }
+    return false;
+  }
+};
+} // namespace
+
+bool CodeGenModule::isReplacedByTargetExplicitSpecialization(
+    const Decl *D) const {
+  const Decl *Spec = nullptr, *Template = nullptr;
+  ArrayRef<TemplateArgument> Args;
+  if (const auto *FD = dyn_cast<FunctionDecl>(D);
+      FD && FD->getPrimaryTemplate()) {
+    Spec = FD;
+    Template = FD->getPrimaryTemplate();
+    Args = FD->getTemplateSpecializationArgs()->asArray();
+  } else if (const auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(
+                 isa<ClassTemplateSpecializationDecl>(D)
+                     ? D
+                     : cast<Decl>(D->getDeclContext()));
+             CTSD && !isa<ClassTemplatePartialSpecializationDecl>(CTSD)) {
+    Spec = CTSD;
+    Template = CTSD->getSpecializedTemplate();
+    Args = CTSD->getTemplateArgs().asArray();
+  }
+  if (!Spec || !Context.hasTargetExplicitSpecializations(Template))
+    return false;
+  auto Same = [&](const Decl *Other) {
+    return Other && Other->getCanonicalDecl() == Spec->getCanonicalDecl();
+  };
+  if (const Decl *Own =
+          Context.getTargetExplicitSpecialization(Template, Args, TargetVariant))
+    return !Same(Own);
+  for (unsigned V = 1, E = 1 + Context.getNumAuxTargets(); V <= E; ++V)
+    if (Same(Context.getTargetExplicitSpecialization(Template, Args, V)))
+      return true;
+  return false;
+}
+
+bool CodeGenModule::isMemberOfOtherTargetsKeyedSpecialization(
+    const Decl *D) const {
+  const auto *MD = dyn_cast<CXXMethodDecl>(D);
+  const auto *CTSD =
+      MD ? dyn_cast<ClassTemplateSpecializationDecl>(MD->getDeclContext())
+         : nullptr;
+  if (!CTSD)
+    return false;
+  unsigned Key = Context.getSpecializationKeyVariant(CTSD);
+  ClassTemplateDecl *CTD = CTSD->getSpecializedTemplate();
+  const FunctionDecl *Pattern = MD->getInstantiatedFromMemberFunction();
+  if (!Key || Key == TargetVariant || !Pattern ||
+      !CTD->hasTargetKeyedSpecializations())
+    return false;
+  llvm::FoldingSetNodeID Args;
+  for (const TemplateArgument &Arg : CTSD->getTemplateArgs().asArray())
+    Arg.Profile(Args, Context);
+  for (const ClassTemplateSpecializationDecl *Own : CTD->specializations()) {
+    if (Own == CTSD || Context.getSpecializationKeyVariant(Own) != TargetVariant)
+      continue;
+    llvm::FoldingSetNodeID OwnArgs;
+    for (const TemplateArgument &Arg : Own->getTemplateArgs().asArray())
+      Arg.Profile(OwnArgs, Context);
+    if (OwnArgs != Args)
+      continue;
+    for (const CXXMethodDecl *Member : Own->methods())
+      if (Member->getInstantiatedFromMemberFunction() == Pattern &&
+          Member->isUsed(/*CheckUsedAttr=*/false))
+        return true;
+  }
+  return false;
+}
+
+bool CodeGenModule::isMemberOfOtherTargetsCopy(const Decl *D) const {
+  const auto *VD = dyn_cast<VarDecl>(D);
+  const auto *RD = VD ? dyn_cast<CXXRecordDecl>(VD->getDeclContext()) : nullptr;
+  if (!RD)
+    return false;
+  const auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(RD);
+  const NamedDecl *Copy = RD;
+  if (CTSD && CTSD->getSpecializedTemplate()->getTargetVariant())
+    Copy = CTSD->getSpecializedTemplate();
+  if (!Copy->getTargetVariant() || Copy->isRedundantTargetVariant() ||
+      Copy->isCopyFor(TargetVariant))
+    return false;
+  SmallVector<const NamedDecl *, 4> Copies;
+  Context.getTargetCopies(Copy, Copies);
+  for (const NamedDecl *Own : Copies) {
+    if (!Own->getTargetVariant() || Own->isRedundantTargetVariant() ||
+        !Own->isCopyFor(TargetVariant))
+      continue;
+    const DeclContext *OwnRecord = dyn_cast<CXXRecordDecl>(Own);
+    if (const auto *OwnCTD = dyn_cast<ClassTemplateDecl>(Own)) {
+      llvm::FoldingSetInsertToken InsertToken;
+      OwnRecord = const_cast<ClassTemplateDecl *>(OwnCTD)->findSpecialization(
+          CTSD->getTemplateArgs().asArray(), InsertToken);
+    }
+    if (!OwnRecord)
+      continue;
+    for (const NamedDecl *Member : OwnRecord->lookup(VD->getDeclName()))
+      if (Member->isUsed(/*CheckUsedAttr=*/false))
+        return true;
+  }
+  return false;
+}
+
+bool CodeGenModule::isInstantiatedOverRedundantClass(const Decl *D) const {
+  OtherTargetsClass Other{Context, TargetVariant};
+  if (const auto *FD = dyn_cast<FunctionDecl>(D))
+    if (const TemplateArgumentList *Args = FD->getTemplateSpecializationArgs())
+      if (Other.inArgs(Args->asArray()))
+        return true;
+  for (const DeclContext *DC = D->getDeclContext(); DC; DC = DC->getParent())
+    if (const auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(DC))
+      if (Other.inArgs(CTSD->getTemplateArgs().asArray()))
+        return true;
+  return false;
+}
+
 bool CodeGenModule::MustBeEmitted(const ValueDecl *Global) {
   // Never defer when EmitAllDecls is specified.
   if (LangOpts.EmitAllDecls)
@@ -4697,11 +4882,13 @@ bool CodeGenModule::shouldEmitCUDAGlobalVar(const VarDecl *Global) const {
          Global->hasAttr<CUDAConstantAttr>() ||
          Global->hasAttr<CUDASharedAttr>() ||
          Global->getType()->isCUDADeviceBuiltinSurfaceType() ||
-         Global->getType()->isCUDADeviceBuiltinTextureType();
+         Global->getType()->isCUDADeviceBuiltinTextureType() ||
+         getContext().isImplicitAuxDeviceConstant(Global);
 }
 
 void CodeGenModule::EmitGlobal(GlobalDecl GD) {
   const auto *Global = cast<ValueDecl>(GD.getDecl());
+
 
   // Weak references don't produce any output by themselves.
   if (Global->hasAttr<WeakRefAttr>())
@@ -5057,6 +5244,17 @@ void CodeGenModule::EmitMultiVersionFunctionDefinition(GlobalDecl GD,
 
 void CodeGenModule::EmitGlobalDefinition(GlobalDecl GD, llvm::GlobalValue *GV) {
   const auto *D = cast<ValueDecl>(GD.getDecl());
+
+  // EmitTopLevelDecl already gates on shouldEmitForTargetVariant() before
+  // EmitGlobal, which is why ordinary widened (non-template) top-level
+  // functions are already routed to the right AuxGen. But an implicit
+  // template specialization is never reached via EmitTopLevelDecl -- it's
+  // discovered only by reference from a caller being code-generated, queued
+  // via addDeferredDeclToEmit, and drained straight into this function.
+  // Without this check, a deferred reference from the wrong AuxGen could
+  // still slip this one's body into another target's module.
+  if (!shouldEmitForTargetVariant(D))
+    return;
 
   PrettyStackTraceDecl CrashInfo(const_cast<ValueDecl *>(D), D->getLocation(),
                                  Context.getSourceManager(),
@@ -5583,6 +5781,13 @@ llvm::Constant *CodeGenModule::GetOrCreateLLVMFunction(
     StringRef MangledName, llvm::Type *Ty, GlobalDecl GD, bool ForVTable,
     bool DontDefer, bool IsThunk, llvm::AttributeList ExtraAttrs,
     ForDefinition_t IsForDefinition) {
+  // A copy merged away after code named it stands for the copy it was merged
+  // into, which mangles the same.
+  if (const Decl *Survivor =
+          GD.getDecl() && GD.getDecl()->isRedundantTargetVariant()
+              ? getContext().getTargetMergeSurvivor(GD.getDecl())
+              : nullptr)
+    GD = GD.getWithDecl(Survivor);
   const Decl *D = GD.getDecl();
 
   std::string NameWithoutMultiVersionMangling;
@@ -5659,10 +5864,67 @@ llvm::Constant *CodeGenModule::GetOrCreateLLVMFunction(
           (GD.getCanonicalDecl().getDecl() !=
            OtherGD.getCanonicalDecl().getDecl()) &&
           DiagnosedConflictingDefinitions.insert(GD).second) {
-        getDiags().Report(D->getLocation(), diag::err_duplicate_mangled_name)
-            << MangledName;
-        getDiags().Report(OtherGD.getDecl()->getLocation(),
-                          diag::note_previous_definition);
+        // mergeEquivalentVariants only runs once the whole reparsed tree
+        // exists, so it can unify two target-variant copies of a class it
+        // reparsed (e.g. bin_bcast_cuda) too late to
+        // stop a caller that already bound a template argument to whichever
+        // copy was visible at its own parse time. That can produce two
+        // implicit instantiations of the same function template that
+        // mangle identically -- which is exactly how this collision is
+        // detected in the first place -- so it isn't a real ODR conflict;
+        // keep whichever definition arrived first instead of diagnosing it.
+        const auto *FD = dyn_cast<FunctionDecl>(D);
+        const auto *OtherFD = dyn_cast_or_null<FunctionDecl>(OtherGD.getDecl());
+        // Each target's copy of a template re-parsed per target instantiates
+        // the same way for that target as the template it was copied from.
+        const FunctionTemplateDecl *FTD =
+            FD ? FD->getPrimaryTemplate() : nullptr;
+        const FunctionTemplateDecl *OtherFTD =
+            OtherFD ? OtherFD->getPrimaryTemplate() : nullptr;
+        // So does a copy merged into another, which it was equivalent to.
+        auto Merged = [&](const FunctionTemplateDecl *T) -> const Decl * {
+          const Decl *Survivor = Context.getTargetMergeSurvivor(T);
+          return Survivor ? Survivor : T;
+        };
+        bool SameTemplateInstantiation =
+            FTD && OtherFTD &&
+            (Merged(FTD) == Merged(OtherFTD) ||
+             (FTD->getLocation() == OtherFTD->getLocation() &&
+              (FTD->isTargetVariantReparseOrigin() ||
+               OtherFTD->isTargetVariantReparseOrigin())));
+        // A plain (non-template) declaration swept into the per-target
+        // re-parse hits this same collision even though
+        // neither side is a template specialization:
+        // HandleTopLevelDecl broadcasts the reparse origin's initial,
+        // still-untagged (shared) pass into every aux target's module before
+        // ParseAST.cpp's merge hook ever runs to reconcile it, and each
+        // alternate -- already tagged for its own target before it is ever
+        // returned to that hook -- independently reaches the same mangled
+        // name in its matching aux module. Both sides re-parse the identical
+        // token range, so they share the exact same SourceLocation;
+        // requiring one side to be the reparse's own marked origin
+        // (isTargetVariantReparseOrigin()) rules out an unrelated same-
+        // location coincidence.
+        bool SameReparseAlternate =
+            FD && OtherFD && FD->getLocation() == OtherFD->getLocation() &&
+            (FD->isTargetVariantReparseOrigin() ||
+             OtherFD->isTargetVariantReparseOrigin());
+        // A specialization of each target's copy of a class template, made
+        // for this target, instantiates its members from this target's
+        // pattern.
+        const FunctionDecl *Pattern =
+            FD ? FD->getTemplateInstantiationPattern() : nullptr;
+        bool SamePattern =
+            Pattern && OtherFD &&
+            Pattern == OtherFD->getTemplateInstantiationPattern();
+        if (!(LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+              (SameTemplateInstantiation || SameReparseAlternate ||
+               SamePattern))) {
+          getDiags().Report(D->getLocation(), diag::err_duplicate_mangled_name)
+              << MangledName;
+          getDiags().Report(OtherGD.getDecl()->getLocation(),
+                            diag::note_previous_definition);
+        }
       }
     }
 
@@ -5748,7 +6010,27 @@ llvm::Constant *CodeGenModule::GetOrCreateLLVMFunction(
       // Move the potentially referenced deferred decl to the
       // DeferredDeclsToEmit list, and remove it from DeferredDecls (since we
       // don't need it anymore).
-      addDeferredDeclToEmit(DDI->second);
+      //
+      // The recorded decl can be stale: it may have been entered here from an
+      // earlier top-level walk, before clang::mergeEquivalentVariants ran.
+      // That pass reconciles equivalent per-target redeclarations in place --
+      // reverting the surviving (canonical) one to TargetVariant 0 and
+      // marking the other TargetVariantRedundant -- without updating this
+      // map. If the recorded decl has since become redundant, prefer the
+      // copy it was merged into, which stands for this module's target, and
+      // otherwise the fresh GD this call was actually made with, which
+      // callers reach via up-to-date AST references and so is never itself
+      // redundant; using the stale, now-redundant decl would cause its
+      // definition to be silently skipped by shouldEmitForTargetVariant,
+      // leaving this mangled name undefined.
+      GlobalDecl DeferredGD = DDI->second;
+      if (const Decl *DeferredDecl = DeferredGD.getDecl();
+          DeferredDecl && DeferredDecl->isRedundantTargetVariant()) {
+        const Decl *Survivor =
+            getContext().getTargetMergeSurvivor(DeferredDecl);
+        DeferredGD = Survivor ? DeferredGD.getWithDecl(Survivor) : GD;
+      }
+      addDeferredDeclToEmit(DeferredGD);
       DeferredDecls.erase(DDI);
 
       // Otherwise, there are cases we have to worry about where we're
@@ -5967,6 +6249,9 @@ llvm::Constant *
 CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName, llvm::Type *Ty,
                                      LangAS AddrSpace, const VarDecl *D,
                                      ForDefinition_t IsForDefinition) {
+  if (D && D->isRedundantTargetVariant())
+    if (const Decl *Survivor = getContext().getTargetMergeSurvivor(D))
+      D = cast<VarDecl>(Survivor);
   // Lookup the entry, lazily creating it if necessary.
   llvm::GlobalValue *Entry = GetGlobalValue(MangledName);
   unsigned TargetAS = getContext().getTargetAddressSpace(AddrSpace);
@@ -6260,6 +6545,9 @@ CodeGenModule::CreateRuntimeVariable(llvm::Type *Ty,
 void CodeGenModule::EmitTentativeDefinition(const VarDecl *D) {
   assert(!D->getInit() && "Cannot emit definite definitions here!");
 
+  if (!shouldEmitForTargetVariant(D))
+    return;
+
   StringRef MangledName = getMangledName(D);
   llvm::GlobalValue *GV = GetGlobalValue(MangledName);
 
@@ -6290,6 +6578,9 @@ static GlobalDecl getBaseVariantGlobalDecl(const NamedDecl *D) {
 }
 
 void CodeGenModule::EmitExternalDeclaration(const DeclaratorDecl *D) {
+  if (!shouldEmitForTargetVariant(D))
+    return;
+
   CGDebugInfo *DI = getModuleDebugInfo();
   if (!DI || !getCodeGenOpts().hasReducedDebugInfo())
     return;
@@ -6339,7 +6630,8 @@ LangAS CodeGenModule::GetGlobalVarAddressSpace(const VarDecl *D) {
       if (D->getType()->isAMDGPUNamedBarrierTypeOrWrapper())
         return LangAS::amdgpu_barrier;
 
-      if (D->hasAttr<CUDAConstantAttr>())
+      if (D->hasAttr<CUDAConstantAttr>() ||
+          getContext().isImplicitAuxDeviceConstant(D))
         return LangAS::cuda_constant;
       if (D->hasAttr<CUDASharedAttr>())
         return LangAS::cuda_shared;
@@ -7068,6 +7360,22 @@ void CodeGenModule::HandleCXXStaticMemberVarInstantiation(VarDecl *VD) {
 void CodeGenModule::EmitGlobalFunctionDefinition(GlobalDecl GD,
                                                  llvm::GlobalValue *GV) {
   const auto *D = cast<FunctionDecl>(GD.getDecl());
+
+  // Device code instantiated for this target although it might not compile
+  // for it, which it did not.
+  if (ArrayRef<PartialDiagnosticAt> Failed =
+          getContext().getFailedTargetInstantiation(D, TargetVariant);
+      !Failed.empty()) {
+    // The same code can be instantiated more than once for this target, e.g.
+    // shared and as its own copy, each reporting the same.
+    if (ReportedFailedInstantiations
+            .insert({Failed.front().first.getRawEncoding(),
+                     Failed.front().second.getDiagID()})
+            .second)
+      for (const PartialDiagnosticAt &PD : Failed)
+        PD.second.Emit(getDiags().Report(PD.first, PD.second.getDiagID()));
+    return;
+  }
 
   // Compute the function info and LLVM type.
   const CGFunctionInfo &FI = getTypes().arrangeGlobalDeclaration(GD);
@@ -8033,6 +8341,17 @@ void CodeGenModule::EmitDeclContext(const DeclContext *DC) {
 
 /// EmitTopLevelDecl - Emit code for a single top level declaration.
 void CodeGenModule::EmitTopLevelDecl(Decl *D) {
+  // A combined multi-target frontend produces two copies of any genuinely
+  // divergent declaration, tagged with which target alternative parsed it
+  // (see Decl::getTargetVariant()). Without this check, a decl tagged for a
+  // target other than this CodeGenModule's own can reach emission here, and
+  // its mangled name (which carries no target information) can collide with
+  // its sibling's in CodeGen's name-keyed deferred-emission tables, silently
+  // substituting the wrong body under the right symbol name even though
+  // every AST-level reference still points at the correct copy.
+  if (!shouldEmitForTargetVariant(D))
+    return;
+
   // Ignore dependent declarations.
   if (D->isTemplated())
     return;

@@ -20,6 +20,7 @@
 #include "clang/Sema/Ownership.h"
 #include "clang/Sema/Scope.h"
 #include "clang/Sema/ScopeInfo.h"
+#include "clang/Sema/SemaCUDA.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSet.h"
@@ -266,6 +267,28 @@ ExprResult Sema::ActOnGCCAsmStmtString(Expr *Expr, bool ForAsmLabel) {
   return Res;
 }
 
+/// The targets other than the one analysed for that compile \p FD in a
+/// compilation for several, where each would reject its asm right away.
+static SmallVector<const TargetInfo *, 4>
+otherTargetsCompiling(Sema &S, const FunctionDecl *FD) {
+  SmallVector<const TargetInfo *, 4> Targets;
+  ASTContext &Ctx = S.getASTContext();
+  if (!FD || !Ctx.isMultiTargetCompile() || Ctx.getCurrentTargetVariant())
+    return Targets;
+  CUDAFunctionTarget Side = S.CUDA().IdentifyTarget(FD);
+  bool ForDevice =
+      Side == CUDAFunctionTarget::Device || Side == CUDAFunctionTarget::Global;
+  if (!ForDevice && Side != CUDAFunctionTarget::Host)
+    return Targets;
+  for (unsigned V = 1, E = 1 + Ctx.getNumAuxTargets(); V <= E; ++V) {
+    const TargetInfo *TI = Ctx.getTargetForVariant(V);
+    if (TI != &Ctx.getTargetInfo() && Ctx.isDeviceVariant(V) == ForDevice &&
+        (!FD->getTargetVariant() || FD->isCopyFor(V)))
+      Targets.push_back(TI);
+  }
+  return Targets;
+}
+
 StmtResult Sema::ActOnGCCAsmStmt(SourceLocation AsmLoc, bool IsSimple,
                                  bool IsVolatile, unsigned NumOutputs,
                                  unsigned NumInputs, IdentifierInfo **Names,
@@ -280,6 +303,10 @@ StmtResult Sema::ActOnGCCAsmStmt(SourceLocation AsmLoc, bool IsSimple,
   FunctionDecl *FD = dyn_cast<FunctionDecl>(getCurLexicalContext());
   llvm::StringMap<bool> FeatureMap;
   Context.getFunctionFeatureMap(FeatureMap, FD);
+  SmallVector<const TargetInfo *, 4> OtherTargets =
+      otherTargetsCompiling(*this, FD);
+  SmallVector<SmallVector<TargetInfo::ConstraintInfo, 4>, 4> OtherOutputInfos(
+      OtherTargets.size());
 
   auto CreateGCCAsmStmt = [&] {
     return new (Context)
@@ -319,6 +346,15 @@ StmtResult Sema::ActOnGCCAsmStmt(SourceLocation AsmLoc, bool IsSimple,
                  diag::err_asm_invalid_output_constraint)
           << Info.getConstraintStr();
       return CreateGCCAsmStmt();
+    }
+    for (auto [Other, Infos] : llvm::zip(OtherTargets, OtherOutputInfos)) {
+      TargetInfo::ConstraintInfo OtherInfo(ConstraintStr, OutputName);
+      if (!Other->validateOutputConstraint(OtherInfo)) {
+        Diag(Constraint->getBeginLoc(), diag::err_asm_invalid_output_constraint)
+            << OtherInfo.getConstraintStr();
+        return CreateGCCAsmStmt();
+      }
+      Infos.push_back(OtherInfo);
     }
 
     ExprResult ER = CheckPlaceholderExpr(Exprs[i]);
@@ -415,6 +451,14 @@ StmtResult Sema::ActOnGCCAsmStmt(SourceLocation AsmLoc, bool IsSimple,
                  diag::err_asm_invalid_input_constraint)
           << Info.getConstraintStr();
       return CreateGCCAsmStmt();
+    }
+    for (auto [Other, Infos] : llvm::zip(OtherTargets, OtherOutputInfos)) {
+      TargetInfo::ConstraintInfo OtherInfo(ConstraintStr, InputName);
+      if (!Other->validateInputConstraint(Infos, OtherInfo)) {
+        Diag(Constraint->getBeginLoc(), diag::err_asm_invalid_input_constraint)
+            << OtherInfo.getConstraintStr();
+        return CreateGCCAsmStmt();
+      }
     }
 
     ExprResult ER = CheckPlaceholderExpr(Exprs[i]);
@@ -521,10 +565,17 @@ StmtResult Sema::ActOnGCCAsmStmt(SourceLocation AsmLoc, bool IsSimple,
       return CreateGCCAsmStmt();
     }
 
-    if (!Context.getTargetInfo().isValidClobber(Clobber)) {
-      targetDiag(ClobberExpr->getBeginLoc(),
-                 diag::err_asm_unknown_register_name)
-          << Clobber;
+    bool OtherRejects = llvm::any_of(OtherTargets, [&](const TargetInfo *TI) {
+      return !TI->isValidClobber(Clobber);
+    });
+    if (OtherRejects || !Context.getTargetInfo().isValidClobber(Clobber)) {
+      if (OtherRejects)
+        Diag(ClobberExpr->getBeginLoc(), diag::err_asm_unknown_register_name)
+            << Clobber;
+      else
+        targetDiag(ClobberExpr->getBeginLoc(),
+                   diag::err_asm_unknown_register_name)
+            << Clobber;
       return new (Context) GCCAsmStmt(
           Context, AsmLoc, IsSimple, IsVolatile, NumOutputs, NumInputs, Names,
           constraints.data(), Exprs.data(), asmString, NumClobbers,

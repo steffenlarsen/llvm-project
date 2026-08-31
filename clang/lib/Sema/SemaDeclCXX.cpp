@@ -475,6 +475,34 @@ static bool functionDeclHasDefaultArgument(const FunctionDecl *FD) {
   });
 }
 
+void Sema::inheritTargetDefaultArguments(FunctionDecl *FD) {
+  unsigned Variant = FD->getTargetVariant();
+  for (FunctionDecl *Prev = FD->getPreviousDecl(); Prev;
+       Prev = Prev->getPreviousDecl()) {
+    if ((Prev->getTargetVariant() && !Prev->isCopyFor(Variant)) ||
+        Prev->getLocation() == FD->getLocation())
+      continue;
+    if (FD->getFriendObjectKind() != Decl::FOK_None &&
+        FD->getLexicalDeclContext()->isDependentContext())
+      return;
+    for (unsigned I = 0, N = Prev->getNumParams(); I != N; ++I) {
+      ParmVarDecl *OldParam = Prev->getParamDecl(I);
+      ParmVarDecl *NewParam = FD->getParamDecl(I);
+      if (!OldParam->hasDefaultArg() || NewParam->hasDefaultArg())
+        continue;
+      NewParam->setHasInheritedDefaultArg();
+      if (OldParam->hasUnparsedDefaultArg())
+        NewParam->setUnparsedDefaultArg();
+      else if (OldParam->hasUninstantiatedDefaultArg())
+        NewParam->setUninstantiatedDefaultArg(
+            OldParam->getUninstantiatedDefaultArg());
+      else
+        NewParam->setDefaultArg(OldParam->getInit());
+    }
+    return;
+  }
+}
+
 bool Sema::MergeCXXFunctionDecl(FunctionDecl *New, FunctionDecl *Old,
                                 Scope *S) {
   bool Invalid = false;
@@ -497,6 +525,26 @@ bool Sema::MergeCXXFunctionDecl(FunctionDecl *New, FunctionDecl *Old,
     // Ignore hidden declarations.
     if (!LookupResult::isVisible(*this, PrevForDefaultArgs))
       continue;
+
+    // A previous declaration already reconciled down to variant 0 (shared),
+    // reached again when a later target alternative re-parses the identical
+    // declaration, is not really a distinct prior declaration for the
+    // purpose of merging default arguments -- it's the same source text,
+    // replayed. Ordinary default-argument merging has no target-variant
+    // concept and would otherwise flag the re-parsed copy's own (identical)
+    // default argument as illegally redefining it. Skip it here exactly like
+    // a hidden declaration; mirrors the analogous guard in
+    // CheckForFunctionRedefinition below. Another declaration the target
+    // has is one it inherits from, as when its definition is parsed again.
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+      unsigned Current = Context.getCurrentTargetVariant();
+      unsigned Prev = PrevForDefaultArgs->getTargetVariant();
+      bool Inherits = Current &&
+                      (!Prev || PrevForDefaultArgs->isCopyFor(Current)) &&
+                      PrevForDefaultArgs->getLocation() != New->getLocation();
+      if (Prev != Current && !Inherits)
+        continue;
+    }
 
     if (S && !isDeclInScope(PrevForDefaultArgs, ScopeDC, S) &&
         !New->isCXXClassMember()) {
@@ -14747,6 +14795,11 @@ void Sema::ActOnFinishCXXMemberDecls() {
 
 void Sema::ActOnFinishCXXNonNestedClass() {
   referenceDLLExportedClassMethods();
+
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+    Context.recheckTargetDependence();
+    keySpecializationsMadeTooEarly();
+  }
 
   if (!DelayedDllExportMemberFunctions.empty()) {
     SmallVector<CXXMethodDecl*, 4> WorkList;

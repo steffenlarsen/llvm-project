@@ -90,6 +90,7 @@ add_clang_library(clangSema
   SemaSYCL.cpp
   SemaSwift.cpp
   SemaSystemZ.cpp
+  SemaTargetAudit.cpp
   SemaTemplate.cpp
   SemaTemplateDeduction.cpp
   SemaTemplateDeductionGuide.cpp

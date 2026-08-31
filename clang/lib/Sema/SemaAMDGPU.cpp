@@ -28,6 +28,7 @@
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/TargetParser/AMDGPUTargetParser.h"
 #include <cstdint>
+#include <functional>
 #include <utility>
 
 namespace clang {
@@ -587,6 +588,18 @@ bool SemaAMDGPU::checkMovDPPFunctionCall(CallExpr *TheCall, unsigned NumArgs,
   return true;
 }
 
+/// \p E, holding the value it has for the target the declaration is formed
+/// for. Code generation evaluates it again, for whichever target it generates
+/// code for.
+static Expr *withTargetValue(ASTContext &Context, Expr *E) {
+  if (!E || !Context.isMultiTargetCompile() || E->isValueDependent() ||
+      isa<ConstantExpr>(E))
+    return E;
+  if (std::optional<llvm::APSInt> Value = E->getIntegerConstantExpr(Context))
+    return ConstantExpr::Create(Context, E, APValue(*Value));
+  return E;
+}
+
 static bool
 checkAMDGPUFlatWorkGroupSizeArguments(Sema &S, Expr *MinExpr, Expr *MaxExpr,
                                       const AMDGPUFlatWorkGroupSizeAttr &Attr) {
@@ -625,8 +638,9 @@ SemaAMDGPU::CreateAMDGPUFlatWorkGroupSizeAttr(const AttributeCommonInfo &CI,
 
   if (checkAMDGPUFlatWorkGroupSizeArguments(SemaRef, MinExpr, MaxExpr, TmpAttr))
     return nullptr;
-  return ::new (Context)
-      AMDGPUFlatWorkGroupSizeAttr(Context, CI, MinExpr, MaxExpr);
+  return ::new (Context) AMDGPUFlatWorkGroupSizeAttr(
+      Context, CI, withTargetValue(Context, MinExpr),
+      withTargetValue(Context, MaxExpr));
 }
 
 void SemaAMDGPU::addAMDGPUFlatWorkGroupSizeAttr(Decl *D,
@@ -687,7 +701,9 @@ SemaAMDGPU::CreateAMDGPUWavesPerEUAttr(const AttributeCommonInfo &CI,
   if (checkAMDGPUWavesPerEUArguments(SemaRef, MinExpr, MaxExpr, TmpAttr))
     return nullptr;
 
-  return ::new (Context) AMDGPUWavesPerEUAttr(Context, CI, MinExpr, MaxExpr);
+  return ::new (Context)
+      AMDGPUWavesPerEUAttr(Context, CI, withTargetValue(Context, MinExpr),
+                           withTargetValue(Context, MaxExpr));
 }
 
 void SemaAMDGPU::addAMDGPUWavesPerEUAttr(Decl *D, const AttributeCommonInfo &CI,
@@ -774,8 +790,9 @@ AMDGPUMaxNumWorkGroupsAttr *SemaAMDGPU::CreateAMDGPUMaxNumWorkGroupsAttr(
                                            TmpAttr))
     return nullptr;
 
-  return ::new (Context)
-      AMDGPUMaxNumWorkGroupsAttr(Context, CI, XExpr, YExpr, ZExpr);
+  return ::new (Context) AMDGPUMaxNumWorkGroupsAttr(
+      Context, CI, withTargetValue(Context, XExpr),
+      withTargetValue(Context, YExpr), withTargetValue(Context, ZExpr));
 }
 
 void SemaAMDGPU::addAMDGPUMaxNumWorkGroupsAttr(Decl *D,
@@ -805,6 +822,8 @@ Expr *SemaAMDGPU::ExpandAMDGPUPredicateBuiltIn(Expr *E) {
                 .first;
 
   bool P = false;
+  // The answer for the ambient target.
+  std::function<bool()> Answer;
   unsigned BI = CE->getBuiltinCallee();
   if (Ctx.BuiltinInfo.isAuxBuiltinID(BI))
     BI = Ctx.BuiltinInfo.getAuxBuiltinID(BI);
@@ -832,7 +851,8 @@ Expr *SemaAMDGPU::ExpandAMDGPUPredicateBuiltIn(Expr *E) {
       return *ExpandedPredicates.insert(CE).first;
     }
 
-    P = TI.isProcessorName(N);
+    Answer = [&Ctx, N] { return Ctx.getTargetInfo().isProcessorName(N); };
+    P = Answer();
   } else {
     Expr *Arg = CE->getArg(0);
     if (!Arg || Arg->getType() != Ctx.BuiltinFnTy) {
@@ -848,11 +868,31 @@ Expr *SemaAMDGPU::ExpandAMDGPUPredicateBuiltIn(Expr *E) {
     auto *FD = cast<FunctionDecl>(Arg->getReferencedDeclOfCallee());
 
     StringRef RF = Ctx.BuiltinInfo.getRequiredFeatures(FD->getBuiltinID());
-    llvm::StringMap<bool> CF;
-    Ctx.getFunctionFeatureMap(CF, FD);
-
-    P = Builtin::evaluateRequiredTargetFeatures(RF, CF);
+    Answer = [&Ctx, FD, RF] {
+      llvm::StringMap<bool> CF;
+      Ctx.getFunctionFeatureMap(CF, FD);
+      return Builtin::evaluateRequiredTargetFeatures(RF, CF);
+    };
+    P = Answer();
   }
+
+  // Code parsed once for several targets stands for them only if they all
+  // answer alike.
+  if (SemaRef.TargetAuditor && Ctx.RecordGroupInputs)
+    if (ASTContext::TargetPartition Answers =
+            Ctx.partitionTargetsByAnswer([&](unsigned V) -> llvm::hash_code {
+              ASTContext::TargetScope Scope(Ctx, V);
+              return llvm::hash_value(Answer());
+            }))
+      SemaRef.auditTargetInput('T', /*Targets=*/0, "AMDGPU predicate",
+                               /*Owner=*/nullptr, Answers);
+
+  // This answer is specific to the current ambient target. In shared code
+  // being elaborated for the primary target only, that answer may not hold
+  // for every other target a combined multi-target frontend is compiling
+  // for, so this declaration needs re-parsing once per target.
+  if (!Ctx.getCurrentTargetVariant())
+    SemaRef.TouchedAmbientTargetBuiltin = true;
 
   return *ExpandedPredicates.insert(SemaRef.BuildBoolLiteral(Loc, P).get())
               .first;

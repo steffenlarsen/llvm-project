@@ -18,6 +18,7 @@
 #include "clang/Sema/EnterExpressionEvaluationContext.h"
 #include "clang/Sema/Scope.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/Support/SaveAndRestore.h"
 
 using namespace clang;
 
@@ -579,6 +580,29 @@ void Parser::ParseLexedMethodDefs(ParsingClass &Class) {
 }
 
 void Parser::ParseLexedMethodDef(LexedMethod &LM) {
+  // A body may have to be parsed again for some of its targets.
+  if (Actions.getASTContext().isMultiTargetCompile() &&
+      !Actions.TargetBodyFunction) {
+    CachedTokens Toks = LM.Toks;
+    ParseLexedMethodBody(LM);
+    ParseLexedMethodDefForTargets(LM, Toks);
+    return;
+  }
+  ParseLexedMethodBody(LM);
+}
+
+void Parser::ParseLexedMethodBody(LexedMethod &LM) {
+  // A member declared in one target's alternative is parsed for that target,
+  // as it would have been where it was declared.
+  ASTContext &Ctx = Actions.getASTContext();
+  std::optional<ASTContext::TargetScope> InAlternative;
+  std::optional<llvm::SaveAndRestore<bool>> AlternativeRegion;
+  if (LM.D && LM.D->getTargetVariant() && !LM.D->isRedundantTargetVariant() &&
+      !Ctx.getCurrentTargetVariant()) {
+    InAlternative.emplace(Ctx, LM.D->getTargetVariant());
+    AlternativeRegion.emplace(Actions.InTargetAlternativeRegion, true);
+  }
+
   // If this is a member template, introduce the template parameter scope.
   ReenterTemplateScopeRAII InFunctionTemplateScope(*this, LM.D);
 
@@ -647,6 +671,50 @@ void Parser::ParseLexedMethodDef(LexedMethod &LM) {
          "current template being instantiated!");
 
   ParseFunctionStatementBody(LM.D, FnScope);
+}
+
+void Parser::ParseLexedMethodDefForTargets(LexedMethod &LM,
+                                           const CachedTokens &Toks) {
+  FunctionDecl *FD = LM.D ? LM.D->getAsFunction() : nullptr;
+  // Only the host compiles a host function. A template's parts are the
+  // patterns of its specializations' parts.
+  if (!FD || !FD->hasBody() || FD->isInvalidDecl() ||
+      isa<CXXConstructorDecl, CXXDestructorDecl>(FD) ||
+      (!FD->hasAttr<CUDADeviceAttr>() && !FD->hasAttr<CUDAGlobalAttr>()))
+    return;
+  ASTContext &Ctx = Actions.getASTContext();
+  ASTContext::TargetPartition Split = Actions.getBodyTargetSplit(FD);
+  if (!Split)
+    return;
+  unsigned Own;
+  {
+    Sema::ContextRAII InFunction(Actions, FD);
+    Own = Actions.getInstantiationTarget();
+  }
+  TargetSet Done = Ctx.getTargetClass(Split, Own);
+  // A template's body, analysed once with no target's scope, can bind some
+  // names as the host's and others as a device's. Every device gets a part.
+  if (FD->isTemplated() && Ctx.getHostVariant())
+    Done = TargetSet::single(Ctx.getHostVariant());
+  // A member of one target's copy of a class is that copy's targets' only.
+  const Decl *Copy = FD->getTargetVariant()
+                         ? FD
+                         : cast<Decl>(FD->getDeclContext()->getRedeclContext());
+  for (unsigned V = 1, E = 1 + Ctx.getNumAuxTargets(); V <= E; ++V) {
+    if (Done.contains(V) || (Copy->getTargetVariant() && !Copy->isCopyFor(V)))
+      continue;
+    TargetSet Part = Ctx.getTargetClass(Split, V);
+    Done = Done | Part;
+    // Device code is analysed for a device.
+    TargetSet Devices = Ctx.getDevices(Part);
+    ASTContext::TargetScope Scope(Ctx, Devices.empty() ? V : Devices.first());
+    llvm::SaveAndRestore Fallback(Actions.InTargetFallbackReparse, true);
+    llvm::SaveAndRestore InPart(Actions.TargetBodyPart, Part);
+    llvm::SaveAndRestore<const FunctionDecl *> Function(
+        Actions.TargetBodyFunction, FD);
+    LM.Toks = Toks;
+    ParseLexedMethodBody(LM);
+  }
 }
 
 void Parser::ParseLexedMemberInitializers(ParsingClass &Class) {

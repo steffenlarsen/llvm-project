@@ -21,6 +21,7 @@
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclOpenMP.h"
+#include "clang/AST/DeclTemplate.h"
 #include "clang/AST/GlobalDecl.h"
 #include "clang/AST/Mangle.h"
 #include "clang/Basic/ABI.h"
@@ -365,6 +366,12 @@ private:
   llvm::Module &TheModule;
   DiagnosticsEngine &Diags;
   const TargetInfo &Target;
+
+  /// The Decl::TargetVariant this CodeGenModule emits for, captured from
+  /// the ASTContext's ambient variant at construction. See
+  /// shouldEmitForTargetVariant().
+  const unsigned TargetVariant;
+
   std::unique_ptr<CGCXXABI> ABI;
   llvm::LLVMContext &VMContext;
   std::string ModuleNameHash;
@@ -913,6 +920,10 @@ public:
     return TheModule.getDataLayout();
   }
   const TargetInfo &getTarget() const { return Target; }
+
+  /// The Decl::TargetVariant this CodeGenModule emits for. See
+  /// TargetVariant / shouldEmitForTargetVariant().
+  unsigned getTargetVariant() const { return TargetVariant; }
   const llvm::Triple &getTriple() const { return Target.getTriple(); }
   bool supportsCOMDAT() const;
   void maybeSetTrivialComdat(const Decl &D, llvm::GlobalObject &GO);
@@ -2184,6 +2195,103 @@ private:
   /// \return the function that registers the binary with the runtime, or null
   /// if the binary could not be read.
   llvm::Function *embedSYCLDeviceBinary();
+
+  /// The first diagnostic, by location and ID, of each instantiation this
+  /// target was asked to emit that did not compile for it.
+  llvm::DenseSet<std::pair<unsigned, unsigned>> ReportedFailedInstantiations;
+
+  /// Whether \p D belongs to the target this CodeGenModule is emitting for.
+  /// A combined multi-target frontend runs one CodeGenModule per
+  /// Decl::TargetVariant over the same shared AST; without this check a
+  /// decl tagged for another target (or one a merge pass proved redundant)
+  /// would reach emission here too, colliding by mangled name with its
+  /// sibling in this module's deferred-emission tables.
+  bool shouldEmitForTargetVariant(const Decl *D) const {
+    if (D->isRedundantTargetVariant())
+      return false;
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+        isMemberOfOtherTargetsCopy(D))
+      return false;
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+        isSpecializationOfOtherDeviceCopy(D))
+      return false;
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+        isReplacedByTargetExplicitSpecialization(D))
+      return false;
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+        isMemberOfOtherTargetsKeyedSpecialization(D))
+      return false;
+    // See ASTContext::computeTargetInstantiationKey. One keyed by the
+    // canonical device stands for this target unless it names another
+    // target's class, e.g. a closure of a specialization this target has
+    // its own of.
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+        Context.getEffectiveTargetInstantiationKey(D))
+      return Context.getTargetInstantiationTargets(D).contains(TargetVariant) &&
+             !isInstantiatedOverRedundantClass(D);
+    if (D->getTargetVariant() && !D->isCopyFor(TargetVariant))
+      return false;
+    // A specialization a redundant copy instantiated with a class of its own
+    // (e.g. a lambda's closure) mangles the same as the one the kept copy
+    // instantiated, and must not take its place.
+    return !LLVM_UNLIKELY(clang::AllowTargetVariantDecls) ||
+           !isInstantiatedOverRedundantClass(D);
+  }
+
+  /// Whether \p D is a specialization, or a member of one, whose template
+  /// arguments name a class merged away as TargetVariantRedundant, or another
+  /// target's copy of a class whose layout differs between targets.
+  bool isInstantiatedOverRedundantClass(const Decl *D) const;
+
+  /// Whether \p D is a static data member of another target's copy of a
+  /// class, or of a specialization of one of a class template, where this
+  /// target uses its own copy's.
+  bool isMemberOfOtherTargetsCopy(const Decl *D) const;
+
+  /// Whether \p D is a specialization, or a member of one, where this target
+  /// uses another one of the same arguments because only some targets declare
+  /// an explicit specialization for them.
+  bool isReplacedByTargetExplicitSpecialization(const Decl *D) const;
+
+  /// Whether \p D is a member function of a class specialization keyed by
+  /// another target whose specialization keyed by this one uses the same
+  /// member, which mangles alike and is this target's.
+  bool isMemberOfOtherTargetsKeyedSpecialization(const Decl *D) const;
+
+  /// Whether \p D is a specialization of another device target's copy of a
+  /// function template, which stands for no other target.
+  bool isSpecializationOfOtherDeviceCopy(const Decl *D) const {
+    const auto *FD = dyn_cast<FunctionDecl>(D);
+    if (!FD)
+      return false;
+    // A member instantiated from a copy of a class template is that copy's
+    // code, whichever copy's specialization it is a member of.
+    const Decl *Copy = FD->getPrimaryTemplate();
+    if (Copy && cast<FunctionTemplateDecl>(Copy)->isChainedTargetCopy() &&
+        !Context.getEffectiveTargetInstantiationKey(FD))
+      return false;
+    if (!Copy || !Copy->getTargetVariant())
+      if (const FunctionDecl *Pattern = FD->getTemplateInstantiationPattern())
+        if (const auto *Class = dyn_cast<CXXRecordDecl>(Pattern->getDeclContext());
+            Class && Class->getTargetVariant())
+          Copy = Class->getDescribedClassTemplate()
+                     ? static_cast<const Decl *>(
+                           Class->getDescribedClassTemplate())
+                     : Class;
+    if (!Copy || !Copy->getTargetVariant() ||
+        Copy->isRedundantTargetVariant() || Copy->isCopyFor(TargetVariant))
+      return false;
+    if (Context.isCopyForDevice(Copy))
+      return true;
+    // The host's copy's specializations are the host's where this target has
+    // a copy of its own; see Sema::instantiateTargetCopySpecializations.
+    SmallVector<const NamedDecl *, 4> Copies;
+    Context.getTargetCopies(cast<NamedDecl>(Copy), Copies);
+    return Context.isDeviceVariant(TargetVariant) &&
+           llvm::any_of(Copies, [&](const NamedDecl *Other) {
+             return Other->isCopyFor(TargetVariant);
+           });
+  }
 
   /// Determine whether the definition must be emitted; if this returns \c
   /// false, the definition can be emitted lazily if it's used.

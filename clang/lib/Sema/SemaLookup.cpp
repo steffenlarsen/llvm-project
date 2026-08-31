@@ -33,6 +33,7 @@
 #include "clang/Sema/Scope.h"
 #include "clang/Sema/ScopeInfo.h"
 #include "clang/Sema/Sema.h"
+#include "clang/Sema/SemaCUDA.h"
 #include "clang/Sema/SemaInternal.h"
 #include "clang/Sema/SemaRISCV.h"
 #include "clang/Sema/TemplateDeduction.h"
@@ -61,12 +62,14 @@ namespace {
   class UnqualUsingEntry {
     const DeclContext *Nominated;
     const DeclContext *CommonAncestor;
+    const UsingDirectiveDecl *TargetDirective;
 
   public:
     UnqualUsingEntry(const DeclContext *Nominated,
-                     const DeclContext *CommonAncestor)
-      : Nominated(Nominated), CommonAncestor(CommonAncestor) {
-    }
+                     const DeclContext *CommonAncestor,
+                     const UsingDirectiveDecl *TargetDirective)
+        : Nominated(Nominated), CommonAncestor(CommonAncestor),
+          TargetDirective(TargetDirective) {}
 
     const DeclContext *getCommonAncestor() const {
       return CommonAncestor;
@@ -74,6 +77,12 @@ namespace {
 
     const DeclContext *getNominatedNamespace() const {
       return Nominated;
+    }
+
+    /// The using-directive only some targets have that nominates the
+    /// namespace, directly or through others, if any.
+    const UsingDirectiveDecl *getTargetDirective() const {
+      return TargetDirective;
     }
 
     // Sort by the pointer value of the common ancestor.
@@ -101,6 +110,16 @@ namespace {
 
     ListTy list;
     llvm::SmallPtrSet<DeclContext*, 8> visited;
+    // Namespaces reached through a using-directive only some targets have,
+    // which other targets' directives may nominate too.
+    llvm::SmallDenseSet<std::pair<DeclContext *, const UsingDirectiveDecl *>, 4>
+        visitedForTargets;
+
+    bool firstVisit(DeclContext *NS, const UsingDirectiveDecl *By) {
+      if (!By)
+        return visited.insert(NS).second;
+      return !visited.count(NS) && visitedForTargets.insert({NS, By}).second;
+    }
 
   public:
     UnqualUsingDirectiveSet(Sema &SemaRef) : SemaRef(SemaRef) {}
@@ -122,7 +141,7 @@ namespace {
           visit(Ctx, Ctx);
         } else if (!Ctx || Ctx->isFunctionOrMethod()) {
           for (auto *I : S->using_directives())
-            if (SemaRef.isVisible(I))
+            if (SemaRef.isVisible(I) && !I->isRedundantTargetVariant())
               visit(I, InnermostFileDC);
         }
       }
@@ -147,31 +166,38 @@ namespace {
     // were declared in the effective DC.
     void visit(UsingDirectiveDecl *UD, DeclContext *EffectiveDC) {
       DeclContext *NS = UD->getNominatedNamespace();
-      if (!visited.insert(NS).second)
+      const UsingDirectiveDecl *By = UD->getTargetVariant() ? UD : nullptr;
+      if (!firstVisit(NS, By))
         return;
 
-      addUsingDirective(UD, EffectiveDC);
-      addUsingDirectives(NS, EffectiveDC);
+      addUsingDirective(UD, EffectiveDC, By);
+      addUsingDirectives(NS, EffectiveDC, By);
     }
 
     // Adds all the using directives in a context (and those nominated
     // by its using directives, transitively) as if they appeared in
     // the given effective context.
-    void addUsingDirectives(DeclContext *DC, DeclContext *EffectiveDC) {
-      SmallVector<DeclContext*, 4> queue;
+    void addUsingDirectives(DeclContext *DC, DeclContext *EffectiveDC,
+                            const UsingDirectiveDecl *By = nullptr) {
+      SmallVector<std::pair<DeclContext *, const UsingDirectiveDecl *>, 4>
+          queue;
       while (true) {
         for (auto *UD : DC->using_directives()) {
           DeclContext *NS = UD->getNominatedNamespace();
-          if (SemaRef.isVisible(UD) && visited.insert(NS).second) {
-            addUsingDirective(UD, EffectiveDC);
-            queue.push_back(NS);
+          const UsingDirectiveDecl *Via = By                       ? By
+                                          : UD->getTargetVariant() ? UD
+                                                                   : nullptr;
+          if (SemaRef.isVisible(UD) && !UD->isRedundantTargetVariant() &&
+              firstVisit(NS, Via)) {
+            addUsingDirective(UD, EffectiveDC, Via);
+            queue.push_back({NS, Via});
           }
         }
 
         if (queue.empty())
           return;
 
-        DC = queue.pop_back_val();
+        std::tie(DC, By) = queue.pop_back_val();
       }
     }
 
@@ -182,7 +208,8 @@ namespace {
     //   contains using-directives, the effect is as if the
     //   using-directives from the second namespace also appeared in
     //   the first.
-    void addUsingDirective(UsingDirectiveDecl *UD, DeclContext *EffectiveDC) {
+    void addUsingDirective(UsingDirectiveDecl *UD, DeclContext *EffectiveDC,
+                           const UsingDirectiveDecl *By) {
       // Find the common ancestor between the effective context and
       // the nominated namespace.
       DeclContext *Common = UD->getNominatedNamespace();
@@ -190,7 +217,7 @@ namespace {
         Common = Common->getParent();
       Common = Common->getPrimaryContext();
 
-      list.push_back(UnqualUsingEntry(UD->getNominatedNamespace(), Common));
+      list.push_back(UnqualUsingEntry(UD->getNominatedNamespace(), Common, By));
     }
 
     void done() { llvm::stable_sort(list, UnqualUsingEntry::Comparator()); }
@@ -484,8 +511,775 @@ static bool canHideTag(const NamedDecl *D) {
          isa<UnresolvedUsingValueDecl>(D);
 }
 
+/// Whether the current lookup context is genuinely nested inside \p RD's own
+/// family of widened copies (RD itself, or one of its `#if`/`#elif`/`#else`
+/// siblings -- same name, same enclosing scope, found the same way
+/// isVisibleForTarget's other sibling searches do, since widened copies of a
+/// plain RecordDecl are not linked into one Decl::redecls() chain).
+///
+/// This distinguishes a *self-referential* reference (something declared
+/// inside one specific widened copy of RD referring back to RD itself, e.g.
+/// an implicitly-synthesized special member's own class-name use) from an
+/// *arm's-length* reference (ordinary code elsewhere that merely happens to
+/// be elaborated while some unrelated ASTContext::TargetScope is pushed, e.g.
+/// because the referencing function itself was ambient-forced onto a real
+/// device target for a different reason). Only the former needs the
+/// currently-pushed target's own copy; the latter must see one single,
+/// consistent copy like every other ordinary reference to RD, or a plain
+/// widened struct's nominal identity varies by incidental ambient state
+/// instead of staying fixed (this was the ggml_cuda_mmq_config regression:
+/// an unrelated __host__ function's parameter/return type and local-variable
+/// declarations resolved to different tagged copies of the same struct
+/// depending on whatever ambient happened to be active at each reference).
+static bool isSelfReferentialRecordReference(const RecordDecl *RD,
+                                             const DeclContext *CurContext) {
+  for (const DeclContext *DC = CurContext; DC; DC = DC->getParent()) {
+    const auto *EnclosingRD = dyn_cast<RecordDecl>(DC);
+    if (!EnclosingRD)
+      continue;
+    if (EnclosingRD == RD ||
+        (EnclosingRD->getDeclName() == RD->getDeclName() &&
+         EnclosingRD->getDeclContext()->Equals(RD->getDeclContext())))
+      return true;
+  }
+  return false;
+}
+
+/// Whether the current lookup context is nested inside a class template
+/// specialization that was itself instantiated, under a genuinely-pushed
+/// ASTContext::TargetScope(RawCurrent), by one of the Sema-side per-target
+/// instantiation loops -- e.g. resolving `sizes_like2<192>::nested` (a type
+/// alias) re-instantiates a fresh `sizes_like2<192>` specialization tagged for
+/// that target via getPatternForClassTemplateSpecialization's existing
+/// ASTContext::TargetVariantForSpecialization stash (the same stash the
+/// Current-computation fallback below already consults for a different
+/// purpose). A bare reference to an unrelated widened struct (e.g.
+/// nested_helper_like, reached while resolving that alias's own body) found
+/// while nested inside such a specialization is exactly as legitimately
+/// target-scoped as a self-referential one: both are genuinely inside a
+/// pushed-for-RawCurrent context, not ordinary code that merely happens to
+/// run under some incidentally-pushed scope.
+static bool
+isNestedInGenuinelyScopedSpecialization(Sema &S, const DeclContext *CurContext,
+                                        unsigned RawCurrent) {
+  for (const DeclContext *DC = CurContext; DC; DC = DC->getParent()) {
+    if (const auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(DC)) {
+      unsigned SpecVariant =
+          S.getASTContext().getTargetVariantForSpecialization(CTSD);
+      if (SpecVariant)
+        return SpecVariant == RawCurrent;
+    }
+  }
+  return false;
+}
+
 /// Resolves the result kind of this lookup.
+
+/// A using-declaration re-parsed for each target adds a shadow of each
+/// target's copy of what it names, but the shadows themselves stay untagged:
+/// each belongs to the target of the copy it stands for.
+static const NamedDecl *getTargetVariantCarrier(const NamedDecl *D) {
+  if (const auto *Shadow = dyn_cast<UsingShadowDecl>(D))
+    if (!Shadow->getTargetVariant()) {
+      // A shadow is its using-declaration's, which can be one target's.
+      if (const BaseUsingDecl *Introducer = Shadow->getIntroducer();
+          Introducer && Introducer->getTargetVariant())
+        return Introducer;
+      return Shadow->getTargetDecl();
+    }
+  return D;
+}
+
+/// Whether \p D is a variable whose type is, or is an array of or a pointer
+/// or reference to, a class whose layout differs between targets.
+static bool hasTargetDivergentLayoutType(ASTContext &Ctx, const NamedDecl *D) {
+  const auto *VD = dyn_cast<ValueDecl>(D);
+  if (!VD || isa<FunctionDecl>(VD))
+    return false;
+  QualType T = VD->getType();
+  while (true) {
+    T = T.getNonReferenceType();
+    if (const ArrayType *AT = Ctx.getAsArrayType(T))
+      T = AT->getElementType();
+    else if (const auto *PT = T->getAs<PointerType>())
+      T = PT->getPointeeType();
+    else
+      break;
+  }
+  const RecordDecl *RD = T->getAsRecordDecl();
+  return RD && Ctx.hasTargetDivergentLayout(RD);
+}
+
+/// Whether what is being analysed is evaluated while it is, e.g. a template
+/// argument or the initializer of a constexpr variable.
+static bool isEvaluatedNow(Sema &S) {
+  if (S.isConstantEvaluatedContext())
+    return true;
+  const auto &Record = S.currentEvaluationContext();
+  const auto *VD = dyn_cast_or_null<VarDecl>(Record.ManglingContextDecl);
+  return Record.ExprContext ==
+             Sema::ExpressionEvaluationContextRecord::EK_VariableInit &&
+         VD && VD->isConstexpr();
+}
+
+/// Whether \p D belongs to the target currently being analysed.
+///
+/// Shared by ordinary name lookup and by argument-dependent lookup, which
+/// builds its candidate set directly and so does not pass through
+/// LookupResult at all.
+/// Whether \p D, a class member, was instantiated from a member that is not
+/// one target's copy.
+static bool isInstantiatedFromSharedMember(const NamedDecl *D) {
+  const Decl *Pattern = nullptr;
+  if (const auto *VD = dyn_cast<VarDecl>(D))
+    Pattern = VD->getInstantiatedFromStaticDataMember();
+  else if (const auto *FD = dyn_cast<FunctionDecl>(D))
+    Pattern = FD->getInstantiatedFromMemberFunction();
+  else if (const auto *FTD = dyn_cast<FunctionTemplateDecl>(D))
+    Pattern = FTD->getInstantiatedFromMemberTemplate();
+  return Pattern && !Pattern->getTargetVariant();
+}
+
+/// Which targets' declarations of \p FD give its parameters the same default
+/// arguments. A definition taking a declaration's place in lookup leaves it
+/// in its redeclaration chain only.
+static ASTContext::TargetPartition
+defaultArgumentPartition(ASTContext &Ctx, const FunctionDecl *FD) {
+  SmallVector<const NamedDecl *, 4> Copies;
+  Ctx.getTargetCopies(FD, Copies);
+  for (const NamedDecl *ND :
+       FD->getDeclContext()->getRedeclContext()->lookup(FD->getDeclName()))
+    if (const auto *Other = dyn_cast<FunctionDecl>(ND);
+        Other && Ctx.hasSameType(Other->getType(), FD->getType()))
+      Copies.push_back(Other);
+  llvm::SmallPtrSet<const FunctionDecl *, 8> Seen;
+  SmallVector<const FunctionDecl *, 8> Writers;
+  for (const NamedDecl *Copy : Copies)
+    if (const FunctionDecl *Function = Copy->getAsFunction())
+      for (const FunctionDecl *Redecl : Function->redecls())
+        if (!Redecl->isRedundantTargetVariant() && Seen.insert(Redecl).second &&
+            llvm::any_of(Redecl->parameters(), [](const ParmVarDecl *P) {
+              return P->hasDefaultArg() && !P->hasInheritedDefaultArg() &&
+                     !P->hasUnparsedDefaultArg() &&
+                     !P->hasUninstantiatedDefaultArg();
+            }))
+          Writers.push_back(Redecl);
+  if (llvm::none_of(
+          Writers, [](const FunctionDecl *W) { return W->getTargetVariant(); }))
+    return 0;
+  PrintingPolicy Policy = Ctx.getPrintingPolicy();
+  return Ctx.partitionTargetsByAnswer([&](unsigned V) {
+    std::string Defaults;
+    llvm::raw_string_ostream OS(Defaults);
+    for (unsigned I = 0, N = FD->getNumParams(); I != N; ++I) {
+      OS << ',';
+      for (const FunctionDecl *W : Writers) {
+        const ParmVarDecl *P = W->getParamDecl(I);
+        if ((!W->getTargetVariant() || W->isCopyFor(V)) && P->hasDefaultArg() &&
+            !P->hasInheritedDefaultArg() && !P->hasUnparsedDefaultArg() &&
+            !P->hasUninstantiatedDefaultArg())
+          P->getDefaultArg()->printPretty(OS, nullptr, Policy);
+      }
+    }
+    return llvm::hash_value(Defaults);
+  });
+}
+
+static bool isVisibleForTarget(Sema &S, const NamedDecl *D, bool ForRedecl,
+                               bool AllowFallback,
+                               bool SuppressDivergenceFlagForTags = false,
+                               bool PreferPrimaryForRecordReferences = false,
+                               bool SoleCandidate = false) {
+  // What a specialization's using-declaration introduces is what its
+  // template's copy for the target names.
+  if (LLVM_UNLIKELY(S.TargetAuditor) && !ForRedecl)
+    if (const auto *Shadow = dyn_cast<UsingShadowDecl>(D))
+      if (const BaseUsingDecl *Introducer = Shadow->getIntroducer();
+          Introducer &&
+          isa<ClassTemplateSpecializationDecl>(Introducer->getDeclContext()))
+        S.auditTargetLookup(Introducer, isEvaluatedNow(S));
+  D = getTargetVariantCarrier(D);
+  if (LLVM_UNLIKELY(S.TargetAuditor) && !ForRedecl)
+    S.auditTargetLookup(D, isEvaluatedNow(S));
+  // A redeclaration of a function the targets declare with different default
+  // arguments inherits each target's own.
+  if (LLVM_UNLIKELY(S.TargetAuditor) && ForRedecl && D->getTargetVariant() &&
+      isa<FunctionDecl>(D))
+    if (ASTContext::TargetPartition Defaults =
+            defaultArgumentPartition(S.getASTContext(), cast<FunctionDecl>(D)))
+      S.auditTargetInput('L', Defaults, D->getQualifiedNameAsString());
+  unsigned V = D->getTargetVariant();
+  if (!V) {
+    return true;
+  }
+  if (V == Decl::TargetVariantRedundant) {
+    // A class merged away as redundant takes its members with it, yet code
+    // that still names the class (e.g. a lambda in a redundant copy of a
+    // function, passed to a template) looks its members up within it.
+    if (!ForRedecl)
+      if (const auto *RD = dyn_cast<CXXRecordDecl>(D->getDeclContext()))
+        return RD->isRedundantTargetVariant();
+    return false;
+  }
+
+  // A member of one target's copy of a class is found by looking into that
+  // copy, which was chosen already; so is a member of a specialization
+  // instantiated while some target was ambient from a member every target
+  // shares, which the specialization has no other copy of.
+  if (!ForRedecl && isa<ValueDecl, FunctionTemplateDecl>(D))
+    if (const auto *Parent = dyn_cast<RecordDecl>(D->getDeclContext()))
+      if (Parent->getTargetSet() == D->getTargetSet() ||
+          isInstantiatedFromSharedMember(D))
+        return true;
+
+  // A bare (non-redeclaration) reference to a target-tagged struct/class
+  // always means the primary target's copy, regardless of which
+  // alternative is currently being parsed: the struct's own divergent axis
+  // (e.g. data layout) is independent of why the referencing code was
+  // spliced for another target, so every caller must agree on which copy
+  // "the type" names. What the copies declare differently stays each
+  // target's own. Shared code consuming it is split per target, and a static
+  // member read in a constant expression is read from the copy for the target
+  // the code is compiled for. Scoped to RecordDecl, not TagDecl: unscoped enums
+  // inject their enumerators into the enclosing scope, so an enumerator
+  // reference is looked up independently and must still follow
+  // ambient/Current; forcing the enum type itself to v1 would decouple it
+  // from its own enumerators. Must be exclusive rather than a fallback,
+  // since resolveKind() treats two simultaneously visible TagDecls of the
+  // same name as ambiguous.
+  //
+  // Excludes the injected-class-name: that reference is found via member
+  // lookup already scoped to one specific RecordDecl copy, so it must
+  // follow Current like any other member. Otherwise an out-of-line
+  // template member definition for a non-primary target can't find its own
+  // class's name.
+  if (PreferPrimaryForRecordReferences && !ForRedecl && isa<RecordDecl>(D) &&
+      !(isa<CXXRecordDecl>(D) &&
+        cast<CXXRecordDecl>(D)->isInjectedClassName())) {
+    // A member class instantiated from an untagged pattern, or from one
+    // merged away, was tagged only with whichever target happened to be
+    // ambient when it was completed; its enclosing specialization holds no
+    // sibling copy of it.
+    if (const auto *CXXRD = dyn_cast<CXXRecordDecl>(D))
+      if (const CXXRecordDecl *MemberPattern =
+              CXXRD->getInstantiatedFromMemberClass())
+        if (!MemberPattern->getTargetVariant() ||
+            MemberPattern->isRedundantTargetVariant())
+          return true;
+    // A class nested in a widened class copy, referenced from inside that
+    // exact copy (e.g. `using T = S;` in the device copy's body), was found
+    // in that copy's own member scope and is tagged to match it; no sibling
+    // copy of it is reachable from there, so pinning it to V==1 only makes
+    // the name undeclared. While the copy's own body is still being parsed
+    // the enclosing class is not tagged yet, but its alternative's variant
+    // is the one currently pushed.
+    unsigned RawCurrent = S.getASTContext().getCurrentTargetVariant();
+    if (const auto *ParentRD = dyn_cast<RecordDecl>(D->getDeclContext())) {
+      unsigned ParentV = ParentRD->getTargetVariant();
+      if (!ParentV && S.InTargetAlternativeRegion)
+        ParentV = RawCurrent;
+      if (ParentV == V && ParentRD->Encloses(S.CurContext))
+        return true;
+    }
+    // A reference from inside a genuinely, deliberately target-scoped
+    // context (an ASTContext::TargetScope actually pushed for one specific
+    // real target -- either the parser's own #if/#elif arm region, or a
+    // Sema-side per-target redirect loop reinstantiating a shared caller's
+    // divergent reference) must see that exact target's own copy, not the
+    // primary's, PROVIDED the reference is genuinely self-referential (see
+    // isSelfReferentialRecordReference): the whole point of such a scope is
+    // to answer "what does this look like for target V" for code that is
+    // itself part of D's own family, and forcing V==1 there defeats it (this
+    // was the "nested::val always resolves to the primary's value inside
+    // every arm" bug). An arm's-length reference -- ordinary code elsewhere
+    // that merely happens to run under some incidentally-pushed scope --
+    // must still fall back to the unconditional primary pin, or a plain
+    // widened struct's nominal identity varies by incidental ambient state
+    // (the ggml_cuda_mmq_config regression). Also fall back when no scope is
+    // pushed at all (RawCurrent==0, genuinely shared code with no per-target
+    // answer expected) -- that is exactly the shape the <limits>/ROCm-enum
+    // regression (see the fix's own history above) needed a single, stable,
+    // reparse-order-independent answer for. Still exclusive either way: at
+    // most one candidate can have V==RawCurrent (RawCurrent is one scalar) or
+    // V==1 (only the primary has that tag).
+    bool SelfRef = RawCurrent && isSelfReferentialRecordReference(
+                                     cast<RecordDecl>(D), S.CurContext);
+    bool ScopedViaSpecialization =
+        RawCurrent && !SelfRef &&
+        isNestedInGenuinelyScopedSpecialization(S, S.CurContext, RawCurrent);
+    if (SelfRef || ScopedViaSpecialization)
+      return D->isCopyFor(RawCurrent);
+    // Where code is analysed for one target, a class whose layout, or what it
+    // declares (e.g. a member initializer), differs between targets is that
+    // target's.
+    ASTContext &Ctx = S.getASTContext();
+    const auto *RD = cast<RecordDecl>(D);
+    bool Divergent = Ctx.hasTargetDivergentLayout(RD);
+    if (!Divergent) {
+      ASTContext::TargetPartition Shape = Ctx.getRecordShapePartition(RD);
+      Divergent = RawCurrent ? Ctx.separatesTargets(Shape, RawCurrent, 1)
+                             : Shape != 0;
+    }
+    if (Divergent && RawCurrent &&
+        (S.InTargetAlternativeRegion || S.InTargetFallbackReparse))
+      return D->isCopyFor(RawCurrent);
+    return D->isCopyFor(1);
+  }
+
+  // Otherwise code outside the template's own copies names one copy, the
+  // host's if there is one, as it does a class: specializations of it made
+  // for a target instantiate that target's definition, and host and device
+  // code agree on what the specializations are.
+  if (const auto *CTD = dyn_cast<ClassTemplateDecl>(D);
+      CTD && !ForRedecl && !CTD->isTargetVariantReparseOrigin() &&
+      (!S.InTargetAlternativeRegion || S.InTargetFallbackReparse) &&
+      !S.getASTContext().hasTargetDivergentLayout(CTD) &&
+      !CTD->getTemplatedDecl()->Encloses(S.CurContext)) {
+    SmallVector<const NamedDecl *, 4> Copies;
+    S.getASTContext().getTargetCopies(CTD, Copies);
+    if (llvm::any_of(Copies,
+                     [](const NamedDecl *Copy) { return Copy->isCopyFor(1); }))
+      return D->isCopyFor(1);
+  }
+
+  unsigned Current = S.getASTContext().getCurrentTargetVariant();
+  if (!Current) {
+    // Shared code reaching for a target-specific entity is what decides
+    // whether divergence has to propagate. Count declarations, not lookups.
+    //
+    // A bare reference to a target-tagged *type* (or class template) is
+    // exempted: once a specific class copy is picked here, its own divergent
+    // members (if any) are reached later through member lookup scoped to
+    // that copy, which needs no flag of its own. A referencing declaration
+    // that never touches the diverging members behaves identically
+    // regardless of which copy it resolves to, so it doesn't need a
+    // per-target copy merely for naming the type.
+    if (!SuppressDivergenceFlagForTags || !isa<TagDecl, ClassTemplateDecl>(D)) {
+      S.TouchedDivergentEntity = true;
+      if (!ForRedecl && !S.TouchedArchDivergentFunction &&
+          S.getASTContext().isArchDivergentFunction(D))
+        S.TouchedArchDivergentFunction = true;
+      // A constant that differs between the targets can be folded into a
+      // type or a template argument while this code is analysed, and so can
+      // the layout of a variable's type, which the host evaluates differently.
+      ASTContext &Ctx = S.getASTContext();
+      if (Ctx.isTargetDivergentSource(D)) {
+        const FunctionDecl *FD = S.getCurFunctionDecl(/*AllowLambda=*/true);
+        if (FD && isEvaluatedNow(S) &&
+            Ctx.getTargetDependence(D) != ASTContext::TDK_None)
+          S.noteHostViewDependentUse(FD);
+      } else if (hasTargetDivergentLayoutType(Ctx, D)) {
+        if (const FunctionDecl *FD = S.getCurFunctionDecl(/*AllowLambda=*/true))
+          S.noteHostViewDependentUse(FD);
+      }
+    }
+    Current = 1;
+  }
+  // Under host-primary ambient, TargetVariant 1 names the host, not a
+  // device arch (see ASTContext::getTargetForVariant). A lookup performed
+  // while substituting a device-only construct's body must not be forced
+  // onto the host's own view.
+  //
+  // This must fire whenever Current is exactly the default primary value 1
+  // in host-primary shape, not only when ambient started out unset above:
+  // ParseAST pushes a TU-wide ASTContext::TargetScope(Context, 1) for the
+  // entire primary parse, so a device-only function's body instantiation
+  // already has Current == 1 from that outer scope. Without this redirect,
+  // a lookup like ggml_cuda_mma::tile<>::ne (tagged only for real device
+  // variants, never host) fails before the per-target reparse pass produces
+  // a working copy. Device-primary compiles (CUDAIsDevice) are excluded:
+  // there, variant 1 already names a real device arch.
+  //
+  // Also skipped when S.InTargetAlternativeRegion is set (genuinely inside
+  // one widened #if/#elif/#else alternative's own pushed TargetScope, which
+  // can itself be numbered 1), D's tag already equals Current == 1, and D
+  // is a FieldDecl: a field declared inside that same alternative (e.g. a
+  // local union's fields) is tagged to match, so this is already a correct
+  // exact match, not a case needing redirection. Field lookup is scoped to
+  // one already-resolved RecordDecl copy, so this cannot make a sibling
+  // field from a different arm's copy of the same union simultaneously
+  // visible.
+  //
+  // Deliberately restricted to FieldDecl: isVisibleForTarget is called once
+  // per candidate in a multi-candidate lookup (overload resolution,
+  // partial-spec arm matching), and Current is recomputed independently for
+  // each call. Exempting a broader class of D whose V happens to equal 1
+  // would let it stay visible under Current == 1 while a different
+  // candidate in the same set (V == 2, say) still takes the unconditional
+  // redirect below, making both simultaneously visible. A FieldDecl's
+  // owning RecordDecl is fixed before this function runs, so there is no
+  // sibling-candidate set for the exemption to destabilize.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && Current == 1 &&
+      !(S.InTargetAlternativeRegion && D->isCopyFor(Current) &&
+        isa<FieldDecl>(D)) &&
+      !S.getLangOpts().CUDAIsDevice) {
+    bool FoundExactContext = false;
+    // Most direct: the enclosing function itself may carry its own
+    // TargetVariant tag, one specific widened #if/#elif/#else arm's redecl.
+    // A lookup inside its body for another member of the same class redecl
+    // must agree with this exact tag, not get redirected to a sibling
+    // redecl's copy by the canonical-device heuristic below, which is
+    // blind to which specific redecl the reference is inside.
+    if (const FunctionDecl *CurFD = S.getCurFunctionDecl()) {
+      // A function template specialization's own FunctionDecl never carries
+      // the tag -- only its template-instantiation pattern does -- so a
+      // lookup inside a genuinely-tagged reparse copy's body would
+      // otherwise fall through to the canonical-device fallback below and
+      // get redirected onto a different real target.
+      unsigned FDVariant = CurFD->getTargetVariant();
+      bool FromPattern = false;
+      if (!FDVariant) {
+        if (const FunctionDecl *Pattern =
+                CurFD->getTemplateInstantiationPattern()) {
+          FDVariant = Pattern->getTargetVariant();
+          FromPattern = true;
+        }
+      }
+      if (FDVariant) {
+        Current = FDVariant;
+        FoundExactContext = true;
+      }
+    }
+    // Next: CurContext nested inside a class template specialization that
+    // was itself instantiated from a target-tagged pattern -- covers
+    // member-initializer contexts with no enclosing FunctionDecl at all,
+    // and member functions whose own FunctionDecl isn't separately tagged
+    // even though the enclosing specialization is.
+    if (!FoundExactContext) {
+      for (const DeclContext *DC = S.CurContext; DC; DC = DC->getParent()) {
+        if (const auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(DC)) {
+          if (unsigned SpecVariant =
+                  S.getASTContext().getTargetVariantForSpecialization(CTSD)) {
+            Current = SpecVariant;
+            FoundExactContext = true;
+            break;
+          }
+        }
+      }
+    }
+    // Where code analysed for every target is the host's view, an
+    // instantiation keyed for one device target is analysed for that target.
+    if (!FoundExactContext)
+      for (const Sema::CodeSynthesisContext &SC :
+           llvm::reverse(S.CodeSynthesisContexts)) {
+        if (SC.Kind != Sema::CodeSynthesisContext::TemplateInstantiation ||
+            !SC.Entity)
+          continue;
+        if (unsigned Key =
+                S.getASTContext().getEffectiveTargetInstantiationKey(SC.Entity);
+            Key >= 2) {
+          Current = Key;
+          FoundExactContext = true;
+        }
+        break;
+      }
+    // Last resort: neither the enclosing function nor an enclosing
+    // specialization carries a direct tag -- an ordinary call from
+    // untagged/shared device code into a separately target-tagged
+    // construct. Force onto a real device target so lookup succeeds;
+    // post-hoc per-target redirect mechanisms correct the value/callee seen
+    // by every other real target afterward.
+    //
+    // Skipped when D itself has an untagged ("shared", visible under any
+    // ambient) sibling redeclaration: that sibling is already an
+    // unambiguous, correct host-ambient answer on its own. Forcing Current
+    // onto one specific real device variant here wouldn't help such a
+    // reference and would instead make that variant's override
+    // simultaneously visible next to the always-visible shared redecl,
+    // turning a single unambiguous candidate into two.
+    // Not in the host's own #if arm: that is the host's view of the code.
+    // Device-only code is the devices' even where code analysed for every
+    // target is the host's view: the host never compiles it.
+    if (!FoundExactContext &&
+        !(S.InTargetAlternativeRegion && !S.InTargetFallbackReparse)) {
+      if (const FunctionDecl *CurFD = S.getCurFunctionDecl()) {
+        CUDAFunctionTarget FT = S.CUDA().IdentifyTarget(CurFD);
+        if (FT == CUDAFunctionTarget::Device ||
+            FT == CUDAFunctionTarget::Global) {
+          bool HasUntaggedSibling = false;
+          if (const auto *FD = dyn_cast<FunctionDecl>(D)) {
+            // Widened alternatives of the same declaration are not
+            // necessarily linked into one redeclaration chain, so the
+            // DeclContext's lookup table is what actually holds every
+            // widened copy together.
+            for (const NamedDecl *Sibling :
+                 FD->getDeclContext()->lookup(FD->getDeclName())) {
+              const auto *SiblingFD = dyn_cast<FunctionDecl>(Sibling);
+              if (SiblingFD && !SiblingFD->getTargetVariant() &&
+                  S.Context.hasSameType(SiblingFD->getType(), FD->getType())) {
+                HasUntaggedSibling = true;
+                break;
+              }
+            }
+          } else if (const auto *FTD = dyn_cast<FunctionTemplateDecl>(D)) {
+            // Same as above, for a function *template*'s widened
+            // alternatives: a plain dyn_cast<FunctionDecl> above misses this
+            // decl kind entirely.
+            for (const NamedDecl *Sibling :
+                 FTD->getDeclContext()->lookup(FTD->getDeclName())) {
+              const auto *SiblingFTD = dyn_cast<FunctionTemplateDecl>(Sibling);
+              if (SiblingFTD && !SiblingFTD->getTargetVariant() &&
+                  S.Context.hasSameType(
+                      SiblingFTD->getTemplatedDecl()->getType(),
+                      FTD->getTemplatedDecl()->getType())) {
+                HasUntaggedSibling = true;
+                break;
+              }
+            }
+          }
+          // Only escalate onto a real device variant when D doesn't already
+          // match Current, and only when the caller guarantees D is the
+          // sole member of its frozen candidate set (SoleCandidate):
+          // escalating an already-matching candidate can hurt when a
+          // differently-tagged sibling is simultaneously live in that set,
+          // since that sibling's own call independently escalates Current
+          // for itself and becomes visible too, producing two candidates
+          // instead of one. Restricting the exemption to
+          // LookupResult::resolveKind()'s N==1 fast path keeps it safe:
+          // there, by construction, no other sibling can be in the same
+          // frozen set. This matters for a lone frozen candidate with no
+          // untagged sibling and no other sibling in its own set:
+          // escalating Current away from 1 unconditionally would reject
+          // the sole candidate outright with nothing else to accept
+          // instead, even when V == 1 already matched.
+          //
+          // While a widened alternative is parsed (e.g. a kernel whose
+          // __launch_bounds__ diverges, calling a helper whose body does
+          // too), the device's copy of the primary's own function may not be
+          // parsed yet; until it is, the primary's copy stands in for it.
+          unsigned Device = S.getASTContext().getCanonicalDeviceVariant();
+          bool StandsIn =
+              S.InTargetAlternativeRegion && D->isCopyFor(Current) &&
+              isa<FunctionDecl, FunctionTemplateDecl>(D) &&
+              !findTargetVariantSibling(const_cast<NamedDecl *>(D), Device);
+          // Where code analysed for every target is the host's view, only a
+          // copy that differs in its body alone: one differing in its
+          // signature makes the code using it analysed per target instead.
+          bool SignatureDiffers = false;
+          if (const FunctionDecl *Callee = D->getAsFunction()) {
+            SmallVector<const NamedDecl *, 4> Copies;
+            S.getASTContext().getTargetCopies(D, Copies);
+            SignatureDiffers = llvm::any_of(Copies, [&](const NamedDecl *C) {
+              const FunctionDecl *CopyFD = C->getAsFunction();
+              return CopyFD && !S.getASTContext().hasSameType(
+                                   CopyFD->getType(), Callee->getType());
+            });
+          }
+          if (!HasUntaggedSibling &&
+              (!SoleCandidate || !D->isCopyFor(Current)) && !StandsIn &&
+              !SignatureDiffers) {
+            Current = Device;
+          }
+        }
+      }
+    }
+  }
+  if (D->isCopyFor(Current))
+    return true;
+
+  // A member of a class whose own type reference is forced to the primary
+  // target above must accept that class's own primary-tagged members too:
+  // once the type name resolves to the primary's copy, member lookup
+  // inside it still names that copy's members, tagged to match their
+  // enclosing class (v1), not whichever target is currently ambient.
+  // Otherwise a divergent caller compiled for a non-primary target that
+  // reaches into a primary-preferred class's members sees them as
+  // belonging to "some other target" and fails lookup entirely.
+  if (PreferPrimaryForRecordReferences && !ForRedecl && D->isCopyFor(1)) {
+    if (const auto *RD = dyn_cast<RecordDecl>(D->getDeclContext()))
+      if (RD->getTargetVariant())
+        return true;
+  }
+
+  // A *reference* during a re-parse falls back to the primary target's
+  // declaration: most tagged declarations carry a target only for having been
+  // parsed inside a divergent region, and code re-analysed for another target
+  // still has to name them. A *redeclaration* must not, or the declaration
+  // being built merges into the other target's. Nor must a reference to a
+  // function that other device architectures have copies of but this one
+  // does not: its preprocessing left the function out.
+  return AllowFallback && D->isCopyFor(1) && S.InTargetFallbackReparse &&
+         !ForRedecl &&
+         !(Current >= 2 && S.getASTContext().isArchDivergentFunction(D));
+}
+
+/// When member lookup scoped to one specific widened RecordDecl copy finds
+/// only a TargetVariantRedundant field (its own copy of the member was
+/// superseded by a different sibling copy's during
+/// mergeWidenedAlternatives's cross-target field merge, DeclFingerprint.cpp's
+/// markRedundantTree/unclaimTree), retry the same member name against the
+/// class's sibling redecls -- other #if/#elif/#else widened copies of the
+/// same class, found via a DeclContext::lookup() walk of the enclosing scope
+/// for the record's own name, since widened copies of a plain (non-template)
+/// declaration are not linked into one Decl::redecls() chain (confirmed for
+/// FunctionDecl siblings by the unsafeAtomicAdd regression above; the same is
+/// true for RecordDecl siblings) -- to find the sibling whose own copy of the
+/// member is the live, unclaimed one. Copies that define a class declared
+/// before them are chained to that declaration instead, and the lookup table
+/// holds only the most recent of them.
+NamedDecl *clang::findLiveFieldInSiblingRecord(const FieldDecl *D) {
+  const RecordDecl *RD = D->getParent();
+  auto FindIn = [&](const NamedDecl *Sibling) -> NamedDecl * {
+    const auto *SiblingRD = dyn_cast<RecordDecl>(Sibling);
+    if (!SiblingRD || SiblingRD == RD || !SiblingRD->isCompleteDefinition())
+      return nullptr;
+    // Not lookup(): that searches the definition for the current target,
+    // which for chained copies is the one D was found in.
+    for (Decl *Member : SiblingRD->decls())
+      if (auto *ND = dyn_cast<NamedDecl>(Member);
+          ND && ND->getDeclName() == D->getDeclName() &&
+          ND->getTargetVariant() != Decl::TargetVariantRedundant)
+        return ND;
+    return nullptr;
+  };
+  for (NamedDecl *Sibling : RD->getDeclContext()->lookup(RD->getDeclName()))
+    if (NamedDecl *Live = FindIn(Sibling))
+      return Live;
+  for (const TagDecl *Redecl : RD->redecls())
+    if (NamedDecl *Live = FindIn(Redecl))
+      return Live;
+  return nullptr;
+}
+
+/// A widened function or function template that mergeWidenedAlternatives (or
+/// a reparse merge) folded into another target's matching copy is
+/// TargetVariantRedundant, while the copy it was folded into became shared.
+/// A reference frozen before that merge -- e.g. an unresolved call inside
+/// another widened template's body -- still names the redundant copy; find
+/// the shared one that replaced it.
+///
+/// Only a sibling that is the same entity -- the same canonical signature --
+/// is substituted: a signature naming one arm's copy of a widened class
+/// template matches another arm's only structurally, and substituting it
+/// would mix the two arms' types. The exception is a copy of the same
+/// declaration (see findTargetVariantSibling), whose signature names its own
+/// arm's copy of a class template folded along with it (e.g. rocThrust's
+/// make_partition returning simple_partition<T>).
+///
+/// Copies that redeclare a shared forward declaration are chained instead,
+/// and the lookup table keeps only the most recent of them, which may itself
+/// be redundant; the shared copy is then found in the redeclaration chain,
+/// preferring the definition over the forward declaration.
+NamedDecl *clang::findLiveFunctionSibling(NamedDecl *D) {
+  if (!D->isFunctionOrFunctionTemplate())
+    return nullptr;
+  ASTContext &Ctx = D->getASTContext();
+  for (NamedDecl *Sibling : D->getDeclContext()->lookup(D->getDeclName())) {
+    if (Sibling == D || Sibling->getTargetVariant() != 0 ||
+        Sibling->getKind() != D->getKind())
+      continue;
+    if (Sibling->getLocation() == D->getLocation() ||
+        Ctx.isSameEntity(D, Sibling))
+      return Sibling;
+  }
+  NamedDecl *Shared = nullptr;
+  for (Decl *Redecl : D->redecls()) {
+    if (Redecl == D || Redecl->getTargetVariant() != 0)
+      continue;
+    const auto *FD = Redecl->getAsFunction();
+    if (FD && FD->isThisDeclarationADefinition())
+      return cast<NamedDecl>(Redecl);
+    if (!Shared)
+      Shared = cast<NamedDecl>(Redecl);
+  }
+  return Shared;
+}
+
+/// Every target's copy of a declaration forked by widening or by the
+/// per-target re-parse replays the same tokens, so the copies share a
+/// location.
+NamedDecl *clang::findTargetVariantSibling(NamedDecl *D, unsigned Variant) {
+  for (NamedDecl *Sibling : D->getDeclContext()->lookup(D->getDeclName()))
+    if (Sibling->isCopyFor(Variant) && Sibling->getKind() == D->getKind() &&
+        Sibling->getLocation() == D->getLocation())
+      return Sibling;
+  return nullptr;
+}
+
+/// Widened copies of a function (template) that redeclare one shared
+/// declaration form a single redeclaration chain, and a DeclContext's lookup
+/// table keeps only the most recent of them, which may belong to another
+/// target. Copies that redeclare nothing are unchained siblings sharing one
+/// location instead, and a candidate set frozen while parsing one target's
+/// copy of a caller names only that target's copy of the callee; the caller
+/// may then be merged and instantiated for every target. Either way, find the
+/// copy that \p IsVisible accepts instead. The shared declaration is visible
+/// to every target but is not this target's definition, so it is only the
+/// last resort.
+static NamedDecl *
+findTargetVisibleRedecl(NamedDecl *D,
+                        llvm::function_ref<bool(const NamedDecl *)> IsVisible) {
+  // A using-declaration names the entity, whichever of its copies lookup
+  // found when it was declared.
+  if (auto *Shadow = dyn_cast<UsingShadowDecl>(D)) {
+    NamedDecl *Target = Shadow->getTargetDecl();
+    if (Target->getDeclContext()->isRecord())
+      return nullptr;
+    return IsVisible(Target) ? Target
+                             : findTargetVisibleRedecl(Target, IsVisible);
+  }
+  if (!isa<FunctionDecl, FunctionTemplateDecl>(D))
+    return nullptr;
+  NamedDecl *Shared = nullptr;
+  auto Accept = [&](NamedDecl *ND) {
+    if (ND == D || !IsVisible(ND))
+      return false;
+    if (ND->getTargetVariant())
+      return true;
+    if (!Shared)
+      Shared = ND;
+    return false;
+  };
+  for (Decl *Redecl : D->redecls())
+    if (Accept(cast<NamedDecl>(Redecl)))
+      return cast<NamedDecl>(Redecl);
+  // Copies from different #if arms are declared at different locations.
+  SmallVector<const NamedDecl *, 4> Copies;
+  D->getASTContext().getTargetCopies(D, Copies);
+  for (const NamedDecl *Copy : Copies)
+    if (Accept(const_cast<NamedDecl *>(Copy)))
+      return const_cast<NamedDecl *>(Copy);
+  return Shared;
+}
+
+bool LookupResult::isTargetVisible(const NamedDecl *D,
+                                   bool SoleCandidate) const {
+  return isVisibleForTarget(getSema(), D, isForRedeclaration(),
+                            /*AllowFallback=*/true,
+                            /*SuppressDivergenceFlagForTags=*/true,
+                            /*PreferPrimaryForRecordReferences=*/true,
+                            SoleCandidate);
+}
+
+bool Sema::isDeclVisibleForCurrentTarget(const NamedDecl *D, bool ForRedecl,
+                                         bool AllowFallback) {
+  return isVisibleForTarget(*this, D, ForRedecl, AllowFallback);
+}
+
 void LookupResult::resolveKind() {
+
+  // Where a declaration belonging to the target being analysed is present, the
+  // primary's is only its fallback. Confined to a re-parse for the same reason
+  // the fallback is.
+  bool HasExactTargetMatch = false;
+  unsigned CurrentTargetForLookup = 0;
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      getSema().InTargetFallbackReparse) {
+    CurrentTargetForLookup =
+        getSema().getASTContext().getCurrentTargetVariant();
+    if (!CurrentTargetForLookup)
+      CurrentTargetForLookup = 1;
+    // The function being re-parsed is only tagged once it is complete, but a
+    // recursive call inside it already names this target's copy.
+    const FunctionDecl *CurFD = getSema().getCurFunctionDecl();
+    for (const NamedDecl *D : Decls)
+      if (getTargetVariantCarrier(D)->isCopyFor(CurrentTargetForLookup) ||
+          (CurFD && D->getAsFunction() == CurFD)) {
+        HasExactTargetMatch = true;
+        break;
+      }
+  }
+
   unsigned N = Decls.size();
 
   // Fast case: no possible ambiguity.
@@ -498,6 +1292,36 @@ void LookupResult::resolveKind() {
   // If there's a single decl, we need to examine it to decide what
   // kind of lookup this is.
   if (N == 1) {
+    // The N>1 loop below drops any decl that isn't visible for the current
+    // target before treating the result as unambiguous; a lone decl needs
+    // the same check. For a dependent call, ordinary lookup's candidate set
+    // is frozen once, at the point the enclosing template is originally
+    // parsed, and replayed at every instantiation -- if that parse-time
+    // ambient differs from the one a later instantiation is running under,
+    // the sole frozen candidate can be tagged for a different target than
+    // the one now compiling. Dropping it here yields ordinary lookup's "not
+    // found for this target" outcome, the same as if it had been one of
+    // several frozen decls instead of the only one.
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+        !isTargetVisible(*Decls.begin(), /*SoleCandidate=*/true)) {
+      const auto *FD =
+          dyn_cast<FieldDecl>((*Decls.begin())->getUnderlyingDecl());
+      NamedDecl *Live =
+          (FD && FD->getTargetVariant() == Decl::TargetVariantRedundant)
+              ? findLiveFieldInSiblingRecord(FD)
+              : findTargetVisibleRedecl(
+                    *Decls.begin(), [this](const NamedDecl *ND) {
+                      return isTargetVisible(ND, /*SoleCandidate=*/true);
+                    });
+      if (!Live) {
+        Decls.clear();
+        ResultKind = LookupResultKind::NotFound;
+        return;
+      }
+      Decls.clear();
+      addDecl(Live);
+    }
+
     const NamedDecl *D = (*Decls.begin())->getUnderlyingDecl();
     if (isa<FunctionTemplateDecl>(D))
       ResultKind = LookupResultKind::FoundOverloaded;
@@ -525,6 +1349,37 @@ void LookupResult::resolveKind() {
   for (unsigned I = 0; I < N; I++) {
     const NamedDecl *D = Decls[I]->getUnderlyingDecl();
     D = cast<NamedDecl>(D->getCanonicalDecl());
+
+    // A declaration tagged with a target variant only exists for that
+    // target. Drop the ones belonging to other targets before the
+    // ambiguity checks below, the same way equivalent internal-linkage
+    // declarations are dropped. Variant 0 means "every target".
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+      bool TargetVisible = isTargetVisible(Decls[I]);
+      if (!TargetVisible) {
+        if (NamedDecl *Redecl = findTargetVisibleRedecl(
+                Decls[I], [this](const NamedDecl *ND) {
+                  return isTargetVisible(ND);
+                })) {
+          Decls[I].setDecl(Redecl);
+          D = cast<NamedDecl>(Redecl->getCanonicalDecl());
+          TargetVisible = true;
+        }
+      }
+      const Decl *Tagged = getTargetVariantCarrier(Decls[I]);
+      // A shared forward declaration of a class names the class of the target
+      // that defined it through that declaration.
+      if (!Tagged->getTargetVariant())
+        if (const auto *TD = dyn_cast<TagDecl>(Decls[I]->getUnderlyingDecl()))
+          if (const TagDecl *Def = TD->getDefinition())
+            Tagged = Def;
+      if (!TargetVisible ||
+          (HasExactTargetMatch && Tagged->getTargetVariant() &&
+           !Tagged->isCopyFor(CurrentTargetForLookup))) {
+        RemovedDecls.set(I);
+        continue;
+      }
+    }
 
     // Ignore an invalid declaration unless it's the only one left.
     // Also ignore HLSLBufferDecl which not have name conflict with other Decls.
@@ -1137,8 +1992,8 @@ static bool LookupDirect(Sema &S, LookupResult &R, const DeclContext *DC) {
 
   // Perform lookup into this declaration context.
   DeclContext::lookup_result DR = DC->lookup(R.getLookupName());
-  for (NamedDecl *D : DR) {
-    if ((D = R.getAcceptableDecl(D))) {
+  for (NamedDecl *OrigD : DR) {
+    if (NamedDecl *D = R.getAcceptableDecl(OrigD)) {
       R.addDecl(D);
       Found = true;
     }
@@ -1226,6 +2081,17 @@ static bool LookupDirect(Sema &S, LookupResult &R, const DeclContext *DC) {
   return Found;
 }
 
+/// Whether lookup for \p Name searches \p NS, which \p By, a using-directive
+/// only some targets have, nominates directly or through others. Where \p NS
+/// declares the name, which targets have the directive matters.
+static bool searchesNominatedNamespace(Sema &S, const UsingDirectiveDecl *By,
+                                       const DeclContext *NS,
+                                       DeclarationName Name) {
+  return !By || NS->lookup(Name).empty() ||
+         S.isDeclVisibleForCurrentTarget(By, /*ForRedecl=*/false,
+                                         /*AllowFallback=*/false);
+}
+
 // Performs C++ unqualified lookup into the given file context.
 static bool CppNamespaceLookup(Sema &S, LookupResult &R, ASTContext &Context,
                                const DeclContext *NS,
@@ -1239,7 +2105,10 @@ static bool CppNamespaceLookup(Sema &S, LookupResult &R, ASTContext &Context,
   // Perform direct name lookup into the namespaces nominated by the
   // using directives whose common ancestor is this namespace.
   for (const UnqualUsingEntry &UUE : UDirs.getNamespacesFor(NS))
-    if (LookupDirect(S, R, UUE.getNominatedNamespace()))
+    if (searchesNominatedNamespace(S, UUE.getTargetDirective(),
+                                   UUE.getNominatedNamespace(),
+                                   R.getLookupName()) &&
+        LookupDirect(S, R, UUE.getNominatedNamespace()))
       Found = true;
 
   R.resolveKind();
@@ -1471,7 +2340,8 @@ bool Sema::CppLookupName(LookupResult &R, Scope *S) {
 
   // Stop if we ran out of scopes.
   // FIXME:  This really, really shouldn't be happening.
-  if (!S) return false;
+  if (!S)
+    return false;
 
   // If we are looking for members, no need to look into global/namespace scope.
   if (NameKind == LookupMemberName)
@@ -2358,18 +3228,26 @@ static bool LookupQualifiedNameInUsingDirectives(Sema &S, LookupResult &R,
 
   // We have not yet looked into these namespaces, much less added
   // their "using-children" to the queue.
-  SmallVector<NamespaceDecl*, 8> Queue;
+  SmallVector<std::pair<NamespaceDecl *, const UsingDirectiveDecl *>, 8> Queue;
 
   // We have at least added all these contexts to the queue.
   llvm::SmallPtrSet<DeclContext*, 8> Visited;
   Visited.insert(StartDC);
+  llvm::SmallDenseSet<std::pair<DeclContext *, const UsingDirectiveDecl *>, 4>
+      VisitedForTargets;
+  auto FirstVisit = [&](DeclContext *NS, const UsingDirectiveDecl *By) {
+    if (!By)
+      return Visited.insert(NS).second;
+    return !Visited.count(NS) && VisitedForTargets.insert({NS, By}).second;
+  };
 
   // We have already looked into the initial namespace; seed the queue
   // with its using-children.
   for (auto *I : StartDC->using_directives()) {
     NamespaceDecl *ND = I->getNominatedNamespace()->getFirstDecl();
-    if (S.isVisible(I) && Visited.insert(ND).second)
-      Queue.push_back(ND);
+    const UsingDirectiveDecl *By = I->getTargetVariant() ? I : nullptr;
+    if (S.isVisible(I) && !I->isRedundantTargetVariant() && FirstVisit(ND, By))
+      Queue.push_back({ND, By});
   }
 
   // The easiest way to implement the restriction in [namespace.qual]p5
@@ -2383,7 +3261,9 @@ static bool LookupQualifiedNameInUsingDirectives(Sema &S, LookupResult &R,
 
   bool Found = false;
   while (!Queue.empty()) {
-    NamespaceDecl *ND = Queue.pop_back_val();
+    auto [ND, By] = Queue.pop_back_val();
+    if (!searchesNominatedNamespace(S, By, ND, R.getLookupName()))
+      continue;
 
     // We go through some convolutions here to avoid copying results
     // between LookupResults.
@@ -2416,8 +3296,12 @@ static bool LookupQualifiedNameInUsingDirectives(Sema &S, LookupResult &R,
 
     for (auto *I : ND->using_directives()) {
       NamespaceDecl *Nom = I->getNominatedNamespace();
-      if (S.isVisible(I) && Visited.insert(Nom).second)
-        Queue.push_back(Nom);
+      const UsingDirectiveDecl *Via = By                      ? By
+                                      : I->getTargetVariant() ? I
+                                                              : nullptr;
+      if (S.isVisible(I) && !I->isRedundantTargetVariant() &&
+          FirstVisit(Nom, Via))
+        Queue.push_back({Nom, Via});
     }
   }
 
@@ -3997,7 +4881,21 @@ void Sema::ArgumentDependentLookup(DeclarationName Name, SourceLocation Loc,
       }
 
       // FIXME: Preserve D as the FoundDecl.
-      if (Visible)
+      bool TargetOK = !LLVM_UNLIKELY(clang::AllowTargetVariantDecls) ||
+                      isVisibleForTarget(*this, Underlying,
+                                         /*ForRedecl=*/false,
+                                         /*AllowFallback=*/false);
+      if (!TargetOK) {
+        if (NamedDecl *Redecl = findTargetVisibleRedecl(
+                Underlying, [this](const NamedDecl *ND) {
+                  return isVisibleForTarget(*this, ND, /*ForRedecl=*/false,
+                                            /*AllowFallback=*/false);
+                })) {
+          Underlying = Redecl;
+          TargetOK = true;
+        }
+      }
+      if (Visible && TargetOK)
         Result.insert(Underlying);
     }
   }

@@ -1495,6 +1495,12 @@ public:
     return DeclRefExprBits.RefersToEnclosingVariableOrCapture;
   }
 
+  /// Defers evaluating the reference to instantiation, which is performed per
+  /// target where the referenced constant differs between targets.
+  void setTargetValueDependent() {
+    setDependence(getDependence() | ExprDependence::ValueInstantiation);
+  }
+
   bool isImmediateEscalating() const {
     return DeclRefExprBits.IsImmediateEscalating;
   }

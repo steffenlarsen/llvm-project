@@ -4612,6 +4612,15 @@ void Driver::BuildActions(Compilation &C, DerivedArgList &Args,
       continue;
     }
 
+    // Preprocessed input is compiled for the host alone (see
+    // BuildOffloadingActions), which an integrated HIP compilation would
+    // otherwise make look like it compiled for every target.
+    if (InputType == types::TY_PP_HIP && UseNewOffloadingDriver &&
+        C.isOffloadingHostKind(Action::OFK_HIP) && !offloadHostOnly() &&
+        Args.hasArg(options::OPT_fintegrated_hip_device_codegen))
+      Diag(diag::warn_drv_integrated_hip_device_codegen_preprocessed_input)
+          << InputArg->getValue();
+
     std::string CUID;
     if (CUIDOpts.isEnabled() && types::isSrcFile(InputType)) {
       CUID = CUIDOpts.getCUID(InputArg->getValue(), Args);
@@ -5130,6 +5139,24 @@ Driver::BuildOffloadingActions(Compilation &C, llvm::opt::DerivedArgList &Args,
   bool UsesLLVMOffloading = Args.hasArg(
       options::OPT_foffload_via_llvm, options::OPT_fno_offload_via_llvm, false);
 
+  bool IntegratedHipDeviceCodegen =
+      Args.hasArg(options::OPT_fintegrated_hip_device_codegen);
+  if (IntegratedHipDeviceCodegen) {
+    if (offloadDeviceOnly())
+      C.getDriver().Diag(diag::err_opt_not_valid_with_opt)
+          << "-fintegrated-hip-device-codegen"
+          << "--offload-device-only";
+    if (UsesLLVMOffloading)
+      C.getDriver().Diag(diag::err_opt_not_valid_with_opt)
+          << "-fintegrated-hip-device-codegen"
+          << "--offload-via-llvm";
+    // Every target is preprocessed by the compilation itself.
+    if (Args.hasArg(options::OPT_no_integrated_cpp))
+      C.getDriver().Diag(diag::err_opt_not_valid_with_opt)
+          << "-fintegrated-hip-device-codegen"
+          << "-no-integrated-cpp";
+  }
+
   ActionList OffloadActions;
   OffloadAction::DeviceDependences DDeps;
 
@@ -5304,6 +5331,20 @@ Driver::BuildOffloadingActions(Compilation &C, llvm::opt::DerivedArgList &Args,
         HIPAsmBundleDeviceOut->push_back(OA);
       return HostAction;
     }
+    if (IntegratedHipDeviceCodegen) {
+      // Clang::ConstructJob reconstructs (ToolChain, BoundArch) per arch and
+      // emits -mllvm -multi-target-* flags directly into the host cc1 job,
+      // so there is no per-arch dependence Action to attach here. Stamp
+      // HostAction as OFK_HIP via the raw-bitmask HostDependence overload
+      // (Action.h:339-342): falling through to the shared tail below would
+      // derive HostOffloadKinds from an empty DeviceDependences
+      // (Action.cpp:196-202), zeroing it and disabling every IsHIP-gated
+      // branch in Clang::ConstructJob for this job, including this one.
+      OffloadAction::HostDependence HDep(
+          *HostAction, *C.getSingleOffloadToolChain<Action::OFK_Host>(),
+          /*BA=*/{}, static_cast<unsigned>(Action::OFK_HIP));
+      return C.MakeAction<OffloadAction>(HDep);
+    }
     // Package all the offloading actions into a single output that can be
     // embedded in the host and linked.
     Action *PackagerAction =
@@ -5319,6 +5360,14 @@ Driver::BuildOffloadingActions(Compilation &C, llvm::opt::DerivedArgList &Args,
              *C.getOffloadToolChains<Action::OFK_HIP>().first->second,
              /*BA=*/{}, Action::OFK_HIP);
   } else {
+    if (IntegratedHipDeviceCodegen && C.isOffloadingHostKind(Action::OFK_HIP)) {
+      // As for non-RDC above: the host cc1 job packages its own per-arch
+      // bitcode and embeds the package itself.
+      OffloadAction::HostDependence HDep(
+          *HostAction, *C.getSingleOffloadToolChain<Action::OFK_Host>(),
+          /*BA=*/{}, static_cast<unsigned>(Action::OFK_HIP));
+      return C.MakeAction<OffloadAction>(HDep);
+    }
     // Package all the offloading actions into a single output that can be
     // embedded in the host and linked.
     Action *PackagerAction =
@@ -5874,8 +5923,18 @@ class ToolSelector final {
   /// Return true if a preprocessor action can be collapsed.
   bool canCollapsePreprocessorAction() const {
     return !C.getArgs().hasArg(options::OPT_no_integrated_cpp) &&
-           !C.getArgs().hasArg(options::OPT_traditional_cpp) && !SaveTemps &&
+           !C.getArgs().hasArg(options::OPT_traditional_cpp) &&
+           (!SaveTemps || savesOwnPreprocessedOutput()) &&
            !C.getArgs().hasArg(options::OPT_rewrite_objc);
+  }
+
+  /// An integrated HIP compilation preprocesses its source once for each of
+  /// its targets, and saves what each produced itself (see Clang.cpp's
+  /// emitIntegratedHipPreprocessedOutputs).
+  bool savesOwnPreprocessedOutput() const {
+    return C.getArgs().hasArg(options::OPT_fintegrated_hip_device_codegen) &&
+           isa<CompileJobAction>(BaseAction) &&
+           BaseAction->isHostOffloading(Action::OFK_HIP);
   }
 
   /// Struct that relates an action with the offload actions that would be

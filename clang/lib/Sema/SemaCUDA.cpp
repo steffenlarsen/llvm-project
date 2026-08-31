@@ -60,6 +60,8 @@ ExprResult SemaCUDA::ActOnExecConfigExpr(Scope *S, SourceLocation LLLLoc,
     IsDeviceKernelCall = true;
     break;
   case CUDAFunctionTarget::HostDevice:
+    if (LLVM_UNLIKELY(SemaRef.TargetAuditor))
+      SemaRef.auditCUDAModeRead('C', "kernel call from host/device code");
     if (getLangOpts().CUDAIsDevice) {
       IsDeviceKernelCall = true;
       if (FunctionDecl *Caller =
@@ -913,14 +915,21 @@ void SemaCUDA::maybeAddHostDeviceAttrs(FunctionDecl *NewD,
 void SemaCUDA::MaybeAddConstantAttr(VarDecl *VD) {
   // Do not promote dependent variables since the cotr/dtor/initializer are
   // not determined. Do it after instantiation.
-  if (getLangOpts().CUDAIsDevice && !VD->hasAttr<CUDAConstantAttr>() &&
-      !VD->hasAttr<CUDASharedAttr>() &&
+  bool ForAuxDevice = LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+                      getLangOpts().CUDA && !getLangOpts().CUDAIsDevice;
+  if ((getLangOpts().CUDAIsDevice || ForAuxDevice) &&
+      !VD->hasAttr<CUDAConstantAttr>() && !VD->hasAttr<CUDASharedAttr>() &&
       (VD->isFileVarDecl() || VD->isStaticDataMember()) &&
       !IsDependentVar(VD) &&
       ((VD->isConstexpr() || VD->getType().isConstQualified()) &&
        HasAllowedCUDADeviceStaticInitializer(*this, VD,
                                              CICK_DeviceOrConstant))) {
-    VD->addAttr(CUDAConstantAttr::CreateImplicit(getASTContext()));
+    // A host-primary multi-target Sema serves the host too; see
+    // ASTContext::ImplicitAuxDeviceConstants.
+    if (ForAuxDevice)
+      getASTContext().setImplicitAuxDeviceConstant(VD);
+    else
+      VD->addAttr(CUDAConstantAttr::CreateImplicit(getASTContext()));
   }
 }
 
@@ -940,6 +949,8 @@ SemaBase::SemaDiagnosticBuilder SemaCUDA::DiagIfDeviceCode(SourceLocation Loc,
       // An HD function counts as host code if we're compiling for host, and
       // device code if we're compiling for device.  Defer any errors in device
       // mode until the function is known-emitted.
+      if (LLVM_UNLIKELY(SemaRef.TargetAuditor))
+        SemaRef.auditCUDAModeRead('D', "device diagnostic deferral");
       if (!getLangOpts().CUDAIsDevice)
         return SemaDiagnosticBuilder::K_Nop;
       if (SemaRef.IsLastErrorImmediate &&
@@ -973,6 +984,8 @@ Sema::SemaDiagnosticBuilder SemaCUDA::DiagIfHostCode(SourceLocation Loc,
       // An HD function counts as host code if we're compiling for host, and
       // device code if we're compiling for device.  Defer any errors in device
       // mode until the function is known-emitted.
+      if (LLVM_UNLIKELY(SemaRef.TargetAuditor))
+        SemaRef.auditCUDAModeRead('D', "host diagnostic deferral");
       if (getLangOpts().CUDAIsDevice)
         return SemaDiagnosticBuilder::K_Nop;
       if (SemaRef.IsLastErrorImmediate &&

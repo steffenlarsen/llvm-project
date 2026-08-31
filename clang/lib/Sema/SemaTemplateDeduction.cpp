@@ -18,6 +18,7 @@
 #include "clang/AST/DeclAccessPair.h"
 #include "clang/AST/DeclBase.h"
 #include "clang/AST/DeclCXX.h"
+#include "clang/AST/DeclFingerprint.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/DeclarationName.h"
 #include "clang/AST/DynamicRecursiveASTVisitor.h"
@@ -4973,6 +4974,14 @@ TemplateDeductionResult Sema::DeduceTemplateArguments(
     FunctionType = SubstAutoTypeDependent(FunctionType);
     HasDeducedReturnType = true;
   }
+
+  // The function type was written for the target the code naming the
+  // template is analysed for, but the specialization is for its own.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      !ArgFunctionType.isNull())
+    ArgFunctionType = getWrittenTypeForTarget(
+        ArgFunctionType, Context.computeTargetInstantiationKey(FunctionTemplate),
+        Info.getLocation());
 
   if (!ArgFunctionType.isNull() && !FunctionType.isNull()) {
     unsigned TDF =

@@ -179,6 +179,7 @@ namespace {
     }
 
     void HandleCXXStaticMemberVarInstantiation(VarDecl *VD) override {
+      ASTContext::TargetAuditSuspension NoAudit(*Ctx);
       if (Diags.hasErrorOccurred())
         return;
 
@@ -186,6 +187,7 @@ namespace {
     }
 
     bool HandleTopLevelDecl(DeclGroupRef DG) override {
+      ASTContext::TargetAuditSuspension NoAudit(*Ctx);
       // Ignore interesting decls from the AST reader after IRGen is finished.
       if (IRGenFinished)
         return true; // We can't CodeGen more but pass to other consumers.
@@ -217,6 +219,7 @@ namespace {
     }
 
     void HandleInlineFunctionDefinition(FunctionDecl *D) override {
+      ASTContext::TargetAuditSuspension NoAudit(*Ctx);
       if (Diags.hasUnrecoverableErrorOccurred())
         return;
 
@@ -245,6 +248,7 @@ namespace {
     /// client hack on the type, which can occur at any point in the file
     /// (because these can be defined in declspecs).
     void HandleTagDeclDefinition(TagDecl *D) override {
+      ASTContext::TargetAuditSuspension NoAudit(*Ctx);
       if (Diags.hasUnrecoverableErrorOccurred())
         return;
 
@@ -297,6 +301,7 @@ namespace {
     }
 
     void HandleTagDeclRequiredDefinition(const TagDecl *D) override {
+      ASTContext::TargetAuditSuspension NoAudit(*Ctx);
       if (Diags.hasUnrecoverableErrorOccurred())
         return;
 
@@ -310,6 +315,7 @@ namespace {
     }
 
     void HandleTranslationUnit(ASTContext &Ctx) override {
+      ASTContext::TargetAuditSuspension NoAudit(Ctx);
       // Release the Builder when there is no error.
       if (!Diags.hasUnrecoverableErrorOccurred() && Builder)
         Builder->Release();
@@ -326,6 +332,7 @@ namespace {
     }
 
     void AssignInheritanceModel(CXXRecordDecl *RD) override {
+      ASTContext::TargetAuditSuspension NoAudit(*Ctx);
       if (Diags.hasUnrecoverableErrorOccurred())
         return;
 
@@ -333,6 +340,7 @@ namespace {
     }
 
     void CompleteTentativeDefinition(VarDecl *D) override {
+      ASTContext::TargetAuditSuspension NoAudit(*Ctx);
       if (Diags.hasUnrecoverableErrorOccurred())
         return;
 
@@ -340,10 +348,12 @@ namespace {
     }
 
     void CompleteExternalDeclaration(DeclaratorDecl *D) override {
+      ASTContext::TargetAuditSuspension NoAudit(*Ctx);
       Builder->EmitExternalDeclaration(D);
     }
 
     void HandleVTable(CXXRecordDecl *RD) override {
+      ASTContext::TargetAuditSuspension NoAudit(*Ctx);
       if (Diags.hasUnrecoverableErrorOccurred())
         return;
 
