@@ -595,6 +595,8 @@ private:
           PreviousDetailsSize(PreviousDetailsSize
                                   ? *PreviousDetailsSize
                                   : Checker.Satisfaction.Details.size()) {
+      // Constraints can evaluate differently for each target, e.g. sizeof.
+      ID.AddInteger(Checker.S.Context.getTargetInfoVariant());
       H.VisitConstraint(Constraint);
     }
 
@@ -1332,8 +1334,11 @@ bool Sema::CheckConstraintSatisfaction(
   if (TopLevelConceptId)
     Owner = TopLevelConceptId->getNamedConcept().getAsTemplateDecl();
 
+  // Constraints can evaluate differently for each target, e.g. sizeof.
+  unsigned TargetVariant = Context.getTargetInfoVariant();
   llvm::FoldingSetNodeID ID;
-  ConstraintSatisfaction::Profile(ID, Context, Owner, FlattenedArgs);
+  ConstraintSatisfaction::Profile(ID, Context, Owner, FlattenedArgs,
+                                  TargetVariant);
   llvm::FoldingSetInsertToken Token;
   if (auto *Cached = SatisfactionCache.lookup(ID, Token)) {
     OutSatisfaction = *Cached;
@@ -1341,7 +1346,8 @@ bool Sema::CheckConstraintSatisfaction(
   }
 
   auto Satisfaction =
-      std::make_unique<ConstraintSatisfaction>(Owner, FlattenedArgs);
+      std::make_unique<ConstraintSatisfaction>(Owner, FlattenedArgs,
+                                               TargetVariant);
   if (::CheckConstraintSatisfaction(
           *this, Template, AssociatedConstraints, TemplateArgsLists,
           TemplateIDRange, *Satisfaction, ConvertedExpr, TopLevelConceptId)) {

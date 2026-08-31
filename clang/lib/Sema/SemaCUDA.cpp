@@ -16,6 +16,7 @@
 #include "clang/AST/DynamicRecursiveASTVisitor.h"
 #include "clang/AST/EvaluatedExprVisitor.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/Basic/Cuda.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Lex/Preprocessor.h"
@@ -23,6 +24,7 @@
 #include "clang/Sema/Overload.h"
 #include "clang/Sema/ScopeInfo.h"
 #include "clang/Sema/Sema.h"
+#include "clang/Sema/SemaMultiTarget.h"
 #include "clang/Sema/Template.h"
 #include "llvm/ADT/SmallVector.h"
 #include <optional>
@@ -61,6 +63,8 @@ ExprResult SemaCUDA::ActOnExecConfigExpr(Scope *S, SourceLocation LLLLoc,
     IsDeviceKernelCall = true;
     break;
   case CUDAFunctionTarget::HostDevice:
+    SemaRef.MultiTarget().recordCUDAModeRead(
+        'C', "kernel call from host/device code");
     if (getLangOpts().CUDAIsDevice) {
       IsDeviceKernelCall = true;
       FunctionDecl *Caller = SemaRef.getCurFunctionDecl(/*AllowLambda=*/true);
@@ -940,15 +944,30 @@ void SemaCUDA::maybeAddHostDeviceAttrs(FunctionDecl *NewD,
 void SemaCUDA::MaybeAddConstantAttr(VarDecl *VD) {
   // Do not promote dependent variables since the cotr/dtor/initializer are
   // not determined. Do it after instantiation.
-  if (getLangOpts().CUDAIsDevice && !VD->hasAttr<CUDAConstantAttr>() &&
-      !VD->hasAttr<CUDASharedAttr>() &&
+  bool ForAuxDevice = LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+                      getLangOpts().CUDA && !getLangOpts().CUDAIsDevice;
+  if ((getLangOpts().CUDAIsDevice || ForAuxDevice) &&
+      !VD->hasAttr<CUDAConstantAttr>() && !VD->hasAttr<CUDASharedAttr>() &&
       (VD->isFileVarDecl() || VD->isStaticDataMember()) &&
       !IsDependentVar(VD) &&
       ((VD->isConstexpr() || VD->getType().isConstQualified()) &&
        HasAllowedCUDADeviceStaticInitializer(*this, VD,
                                              CICK_DeviceOrConstant))) {
-    VD->addAttr(CUDAConstantAttr::CreateImplicit(getASTContext()));
+    // A host-primary multi-target Sema serves the host too; see
+    // MultiTargetContext::ImplicitAuxDeviceConstants.
+    if (ForAuxDevice)
+      getASTContext().getMultiTarget().setImplicitAuxDeviceConstant(VD);
+    else
+      VD->addAttr(CUDAConstantAttr::CreateImplicit(getASTContext()));
   }
+}
+
+bool SemaCUDA::isAnalysedForAuxDevices() const {
+  const ASTContext &Ctx = getASTContext();
+  return LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+         !getLangOpts().CUDAIsDevice && Ctx.getNumAuxTargets() &&
+         Ctx.getCurrentTargetVariant() != Ctx.getHostVariant() &&
+         !Ctx.getMultiTarget().isHostViewOfDeviceCode();
 }
 
 SemaBase::SemaDiagnosticBuilder SemaCUDA::DiagIfDeviceCode(SourceLocation Loc,
@@ -967,8 +986,12 @@ SemaBase::SemaDiagnosticBuilder SemaCUDA::DiagIfDeviceCode(SourceLocation Loc,
       // An HD function counts as host code if we're compiling for host, and
       // device code if we're compiling for device.  Defer any errors in device
       // mode until the function is known-emitted.
+      SemaRef.MultiTarget().recordCUDAModeRead('D',
+                                               "device diagnostic deferral");
       if (!getLangOpts().CUDAIsDevice)
-        return SemaDiagnosticBuilder::K_Nop;
+        return isAnalysedForAuxDevices()
+                   ? SemaDiagnosticBuilder::K_DeferredForDevices
+                   : SemaDiagnosticBuilder::K_Nop;
       if (SemaRef.IsLastErrorImmediate &&
           getDiagnostics().getDiagnosticIDs()->isNote(DiagID))
         return SemaDiagnosticBuilder::K_Immediate;
@@ -1000,6 +1023,7 @@ Sema::SemaDiagnosticBuilder SemaCUDA::DiagIfHostCode(SourceLocation Loc,
       // An HD function counts as host code if we're compiling for host, and
       // device code if we're compiling for device.  Defer any errors in device
       // mode until the function is known-emitted.
+      SemaRef.MultiTarget().recordCUDAModeRead('D', "host diagnostic deferral");
       if (getLangOpts().CUDAIsDevice)
         return SemaDiagnosticBuilder::K_Nop;
       if (SemaRef.IsLastErrorImmediate &&
@@ -1130,10 +1154,9 @@ bool SemaCUDA::CheckCall(SourceLocation Loc, FunctionDecl *Callee) {
                             Sema::FunctionEmissionStatus::Emitted;
   bool CallerIsImplicitHDExplicitInst =
       isImplicitHDExplicitInstantiation(Caller);
-  SemaDiagnosticBuilder::Kind DiagKind = [this, Caller, Callee,
-                                          CallerKnownEmitted,
-                                          CallerIsImplicitHDExplicitInst] {
-    switch (IdentifyPreference(Caller, Callee)) {
+  CUDAFunctionPreference Preference = IdentifyPreference(Caller, Callee);
+  SemaDiagnosticBuilder::Kind DiagKind = [&] {
+    switch (Preference) {
     case CFP_Never:
     case CFP_WrongSide:
       assert(Caller && "Never/wrongSide calls require a non-null caller");
@@ -1147,6 +1170,37 @@ bool SemaCUDA::CheckCall(SourceLocation Loc, FunctionDecl *Callee) {
       return SemaDiagnosticBuilder::K_Nop;
     }
   }();
+
+  // A host device function calling a host function is a wrong-side call for
+  // the devices, which a host-primary multi-target compilation analyses it
+  // for too, unless the devices have a function of that name, which their
+  // overload resolution may pick instead.
+  auto HasDeviceOverload = [&] {
+    for (const NamedDecl *ND :
+         Callee->getDeclContext()->getRedeclContext()->lookup(
+             Callee->getDeclName()))
+      if (const FunctionDecl *FD = ND->getUnderlyingDecl()->getAsFunction();
+          FD && IdentifyTarget(FD) != CUDAFunctionTarget::Host)
+        return true;
+    return false;
+  };
+  // Compiling for the host, a host device caller's call to a host function is
+  // the only same-side one that is not to a kernel.
+  if (Preference == CFP_SameSide && !getLangOpts().CUDAIsDevice &&
+      !getLangOpts().HIPStdPar && isAnalysedForAuxDevices() &&
+      IdentifyTarget(Callee) == CUDAFunctionTarget::Host &&
+      !HasDeviceOverload() &&
+      LocsWithCUDACallDiags.insert({Caller, Loc}).second) {
+    SemaDiagnosticBuilder(SemaDiagnosticBuilder::K_DeferredForDevices, Loc,
+                          diag::err_ref_bad_target, Caller, SemaRef)
+        << IdentifyTarget(Callee) << /*function*/ 0 << Callee
+        << IdentifyTarget(Caller);
+    if (!Callee->getBuiltinID())
+      SemaDiagnosticBuilder(SemaDiagnosticBuilder::K_DeferredForDevices,
+                            Callee->getLocation(), diag::note_previous_decl,
+                            Caller, SemaRef)
+          << Callee;
+  }
 
   bool IsDeviceKernelCall = Callee == getASTContext().getcudaLaunchDeviceDecl();
   bool CallerHD = Caller && Caller->hasAttr<CUDAHostAttr>() &&

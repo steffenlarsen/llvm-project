@@ -25,6 +25,7 @@
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/MangleNumberingContext.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/NonTrivialTypeVisitor.h"
 #include "clang/AST/Randstruct.h"
 #include "clang/AST/StmtCXX.h"
@@ -51,6 +52,7 @@
 #include "clang/Sema/SemaCUDA.h"
 #include "clang/Sema/SemaHLSL.h"
 #include "clang/Sema/SemaInternal.h"
+#include "clang/Sema/SemaMultiTarget.h"
 #include "clang/Sema/SemaObjC.h"
 #include "clang/Sema/SemaOpenACC.h"
 #include "clang/Sema/SemaOpenMP.h"
@@ -2538,6 +2540,35 @@ NamedDecl *Sema::LazilyCreateBuiltin(IdentifierInfo *II, unsigned ID,
 static void
 filterNonConflictingPreviousTypedefDecls(Sema &S, const TypedefNameDecl *Decl,
                                          LookupResult &Previous) {
+  // A merged multi-target token stream can declare the same name
+  // differently per target. Such declarations are not redeclarations of
+  // each other -- they are variants -- so filter the other targets' ones
+  // out of the redeclaration check, exactly as the modules case below does
+  // for hidden declarations. The variant number is assigned automatically,
+  // in order of appearance.
+  if (clang::AllowTargetVariantDecls && !Previous.empty()) {
+    LookupResult::Filter F = Previous.makeFilter();
+    unsigned MaxSeen = 0;
+    while (F.hasNext()) {
+      NamedDecl *Old = F.next();
+      auto *OldTD = dyn_cast<TypedefNameDecl>(Old);
+      if (!OldTD)
+        continue;
+      if (S.Context.hasSameType(OldTD->getUnderlyingType(),
+                                Decl->getUnderlyingType()))
+        continue;
+      // Variant 0 means "applies to every target". The first alternative of a
+      // divergent region is therefore variant 1, not 0.
+      if (OldTD->getTargetVariant() == 0)
+        const_cast<TypedefNameDecl *>(OldTD)->setTargetVariant(1);
+      MaxSeen = std::max(MaxSeen, OldTD->getTargetVariant());
+      F.erase();
+    }
+    F.done();
+    if (MaxSeen)
+      const_cast<TypedefNameDecl *>(Decl)->setTargetVariant(MaxSeen + 1);
+  }
+
   // This is only interesting when modules are enabled.
   if (!S.getLangOpts().Modules && !S.getLangOpts().ModulesLocalVisibility)
     return;
@@ -4793,7 +4824,15 @@ void Sema::MergeVarDecl(VarDecl *New, LookupResult &Previous) {
   //   A member shall not be declared twice in the member-specification [...]
   //
   // Here, we need only consider static data members.
-  if (Old->isStaticDataMember() && !New->isOutOfLine()) {
+  //
+  // Re-parsing the class body for another target alternative legitimately
+  // re-declares the same static data member once per alternative -- New is
+  // meant to merge into Old below (via setPreviousDecl), exactly like an
+  // ordinary namespace-scope variable's redeclaration already does across
+  // targets, so this is not the source-level double-declaration the rule
+  // forbids.
+  if (Old->isStaticDataMember() && !New->isOutOfLine() &&
+      !MultiTarget().InTargetFallbackReparse) {
     Diag(New->getLocation(), diag::err_duplicate_member)
       << New->getIdentifier();
     Diag(Old->getLocation(), diag::note_previous_declaration);
@@ -5101,6 +5140,17 @@ bool Sema::checkVarDeclRedefinition(VarDecl *Old, VarDecl *New) {
     makeMergedDefinitionVisible(Old);
     return false;
   } else {
+    // A definition tagged for one target variant and a second definition
+    // now being parsed under a different variant are not really a
+    // redefinition -- see the identical guard and its longer rationale in
+    // CheckForFunctionRedefinition, which this mirrors for VarDecls (e.g.
+    // out-of-line static data member definitions).
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+        Old->getTargetVariant() != Context.getCurrentTargetVariant() &&
+        (Old->getTargetVariant() != 0 ||
+         Context.getCurrentTargetVariant() != 0))
+      return false;
+
     Diag(New->getLocation(), diag::err_redefinition) << New;
     notePreviousDefinition(Old, New->getLocation());
     New->setInvalidDecl();
@@ -9220,13 +9270,20 @@ void Sema::CheckVariableDeclarationType(VarDecl *NewVD) {
   }
 
   // zero sized static arrays are not allowed in HIP device functions
-  if (getLangOpts().HIP && LangOpts.CUDAIsDevice) {
+  if (getLangOpts().HIP &&
+      (LangOpts.CUDAIsDevice || MultiTarget().TargetInputs)) {
     if (FunctionDecl *FD = getCurFunctionDecl();
         FD &&
         (FD->hasAttr<CUDADeviceAttr>() || FD->hasAttr<CUDAGlobalAttr>())) {
       if (const ConstantArrayType *ArrayT =
               getASTContext().getAsConstantArrayType(T);
-          ArrayT && ArrayT->isZeroSize()) {
+          ArrayT && ArrayT->isZeroSize() &&
+          LLVM_UNLIKELY(MultiTarget().TargetInputs))
+        MultiTarget().recordCUDAModeRead('D',
+                                         "zero-sized array in device function");
+      if (const ConstantArrayType *ArrayT =
+              getASTContext().getAsConstantArrayType(T);
+          LangOpts.CUDAIsDevice && ArrayT && ArrayT->isZeroSize()) {
         Diag(NewVD->getLocation(), diag::err_typecheck_zero_array_size) << 2;
       }
     }
@@ -11135,6 +11192,23 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
     if (FunctionTemplate) {
       FunctionTemplateDecl *PrevTemplate =
                                      FunctionTemplate->getPreviousDecl();
+      // A previous template declaration already reconciled down to
+      // variant 0 (shared) by an earlier merge, reached again when a later
+      // target alternative re-parses the identical declaration, is not
+      // really a distinct prior declaration to merge default template
+      // arguments against -- it's the same source text, replayed.
+      // CheckTemplateParameterList has no target-variant concept and would
+      // otherwise flag the re-parsed copy's own (identical) default
+      // template argument as illegally redefining it. Treat such a
+      // PrevTemplate as if it doesn't exist for this merge, exactly like a
+      // fresh declaration; mirrors the analogous guards in
+      // MergeCXXFunctionDecl and CheckForFunctionRedefinition.
+      if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && PrevTemplate &&
+          PrevTemplate->getTargetVariant() !=
+              Context.getCurrentTargetVariant() &&
+          (PrevTemplate->getTargetVariant() != 0 ||
+           Context.getCurrentTargetVariant() != 0))
+        PrevTemplate = nullptr;
       CheckTemplateParameterList(FunctionTemplate->getTemplateParameters(),
                        PrevTemplate ? PrevTemplate->getTemplateParameters()
                                     : nullptr,
@@ -14232,8 +14306,9 @@ void Sema::AddInitializerToDecl(Decl *RealDecl, Expr *Init, bool DirectInit) {
     QualType BaseDeclType = VDecl->getType();
     if (const ArrayType *Array = Context.getAsIncompleteArrayType(BaseDeclType))
       BaseDeclType = Array->getElementType();
-    if (RequireCompleteType(VDecl->getLocation(), BaseDeclType,
-                            diag::err_typecheck_decl_incomplete_type)) {
+    if (RequireCompleteTypeForDeclaration(
+            VDecl->getLocation(), BaseDeclType,
+            diag::err_typecheck_decl_incomplete_type)) {
       RealDecl->setInvalidDecl();
       return;
     }
@@ -14827,8 +14902,9 @@ void Sema::ActOnUninitializedDecl(Decl *RealDecl) {
       // object shall be complete.
       if (!Type->isDependentType() && Var->isLocalVarDecl() &&
           !Var->hasLinkage() && !Var->isInvalidDecl() &&
-          RequireCompleteType(Var->getLocation(), Type,
-                              diag::err_typecheck_decl_incomplete_type))
+          RequireCompleteTypeForDeclaration(
+              Var->getLocation(), Type,
+              diag::err_typecheck_decl_incomplete_type))
         Var->setInvalidDecl();
 
       // Make sure that the type is not abstract.
@@ -14919,9 +14995,9 @@ void Sema::ActOnUninitializedDecl(Decl *RealDecl) {
       return;
 
     if (!Var->hasAttr<AliasAttr>()) {
-      if (RequireCompleteType(Var->getLocation(),
-                              Context.getBaseElementType(Type),
-                              diag::err_typecheck_decl_incomplete_type)) {
+      if (RequireCompleteTypeForDeclaration(
+              Var->getLocation(), Context.getBaseElementType(Type),
+              diag::err_typecheck_decl_incomplete_type)) {
         Var->setInvalidDecl();
         return;
       }
@@ -16414,6 +16490,31 @@ Sema::CheckForFunctionRedefinition(FunctionDecl *FD,
   if (canRedefineFunction(Definition, getLangOpts()))
     return;
 
+  // A definition tagged for one target variant and a second definition now
+  // being parsed under a different variant are not really a redefinition
+  // -- each target gets its own body for what the shared declaration only
+  // forward-declared. Ordinary redefinition checking has no target-variant
+  // concept; Lookup.h's addDecl deliberately falls back to a
+  // target-visible ancestor so the second definition still links into the
+  // same redeclaration chain as the first (rather than heading a new,
+  // disconnected one), so this check must tell the two cases apart itself.
+  // FD itself isn't tagged yet at this point in parsing --
+  // ClaimForTargetVariant only runs once the whole top-level declaration
+  // has been parsed -- so use the ambient variant the parser is currently
+  // re-parsing under instead.
+  //
+  // A definition already reconciled down to variant 0 (shared) by an
+  // earlier merge is the same situation one step further along: that merge
+  // only reconciles decls at the end of each arm and can't prevent this
+  // live, mid-parse diagnostic, so this check needs to recognize the case
+  // itself too. Ambient 0 (no target alternative in flight) keeps
+  // ordinary, non-widened redefinition checking untouched.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      Definition->getTargetVariant() != Context.getCurrentTargetVariant() &&
+      (Definition->getTargetVariant() != 0 ||
+       Context.getCurrentTargetVariant() != 0))
+    return;
+
   // Don't emit an error when this is redefinition of a typo-corrected
   // definition.
   if (TypoCorrectedFunctionDefinitions.count(Definition))
@@ -16577,7 +16678,8 @@ Decl *Sema::ActOnStartOfFunctionDef(Scope *FnBodyScope, Decl *D,
   // See if this is a redefinition. If 'will have body' (or similar) is already
   // set, then these checks were already performed when it was set.
   if (!FD->willHaveBody() && !FD->isLateTemplateParsed() &&
-      !FD->isThisDeclarationInstantiatedFromAFriendDefinition()) {
+      !FD->isThisDeclarationInstantiatedFromAFriendDefinition() &&
+      FD != MultiTarget().TargetBodyFunction) {
     CheckForFunctionRedefinition(FD, nullptr, SkipBody);
 
     // If we're skipping the body, we're done. Don't enter the scope.
@@ -16638,8 +16740,8 @@ Decl *Sema::ActOnStartOfFunctionDef(Scope *FnBodyScope, Decl *D,
   QualType ResultType = FD->getReturnType();
   if (!ResultType->isDependentType() && !ResultType->isVoidType() &&
       !FD->isInvalidDecl() && BodyKind != FnBodyKind::Delete &&
-      (RequireCompleteType(FD->getLocation(), ResultType,
-                           diag::err_func_def_incomplete_result) ||
+      (RequireCompleteTypeForDeclaration(FD->getLocation(), ResultType,
+                                         diag::err_func_def_incomplete_result) ||
        RequireNonAbstractType(FD->getLocation(), FD->getReturnType(),
                               diag::err_abstract_type_in_decl,
                               AbstractReturnType)))
@@ -16654,8 +16756,8 @@ Decl *Sema::ActOnStartOfFunctionDef(Scope *FnBodyScope, Decl *D,
                              /*CheckParameterNames=*/true);
 
   // Add non-parameter declarations already in the function to the current
-  // scope.
-  if (FnBodyScope) {
+  // scope. Those of a body parsed for other targets are not this body's.
+  if (FnBodyScope && FD != MultiTarget().TargetBodyFunction) {
     for (Decl *NPD : FD->decls()) {
       auto *NonParmDecl = dyn_cast<NamedDecl>(NPD);
       if (!NonParmDecl)
@@ -16684,7 +16786,9 @@ Decl *Sema::ActOnStartOfFunctionDef(Scope *FnBodyScope, Decl *D,
     if (Param->getIdentifier() && FnBodyScope) {
       CheckShadow(FnBodyScope, Param);
 
-      PushOnScopeChains(Param, FnBodyScope);
+      PushOnScopeChains(Param, FnBodyScope,
+                        /*AddToContext=*/FD !=
+                            MultiTarget().TargetBodyFunction);
     }
   }
 
@@ -17017,9 +17121,17 @@ Decl *Sema::ActOnFinishFunctionBody(Decl *dcl, Stmt *Body, bool IsInstantiation,
       // the same storage; don't overwrite the latter if the former is null
       // (the body is initialised to null anyway, so even if the latter isn't
       // present, this would still be a no-op).
-      if (Body)
+      bool Part = FD == MultiTarget().TargetBodyFunction;
+      if (Body && Part)
+        Context.getMultiTarget().addTargetBody(FD, MultiTarget().TargetBodyPart,
+                                               Body);
+      else if (Body)
         FD->setBody(Body);
       FD->setWillHaveBody(false);
+      if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && Body && !Part) {
+        Context.getMultiTarget().noteTargetDependenceDefinition(FD);
+        MultiTarget().keySpecializationsMadeTooEarly();
+      }
 
       if (getLangOpts().CPlusPlus14) {
         if (!FD->isInvalidDecl() && Body && !FD->isDependentContext() &&
@@ -17425,10 +17537,24 @@ Decl *Sema::ActOnFinishFunctionBody(Decl *dcl, Stmt *Body, bool IsInstantiation,
              (LangOpts.OpenMP && !LangOpts.OpenMPSimd) ||
              (LangOpts.OpenMP && !LangOpts.OMPTargetTriples.empty()))) {
     auto ES = getEmissionStatus(FD);
+    // A host-primary multi-target compilation emits device functions too.
+    if (ES == Sema::FunctionEmissionStatus::CUDADiscarded && LangOpts.CUDA &&
+        CUDA().isAnalysedForAuxDevices()) {
+      llvm::SaveAndRestore AsDevice(DeviceEmissionRules, true);
+      ES = getEmissionStatus(FD);
+    }
     if (ES == Sema::FunctionEmissionStatus::Emitted ||
         ES == Sema::FunctionEmissionStatus::Unknown)
       DeclsToCheckForDeferredDiags.insert(FD);
   }
+
+  // A plain function's body is finished once, here, and measured as an
+  // instantiation's is.
+  if (LLVM_UNLIKELY(MultiTarget().measuresTargetParts()) && FD &&
+      !IsInstantiation && !FD->getDescribedFunctionTemplate() &&
+      !MultiTarget().InTargetAlternativeRegion &&
+      FD != MultiTarget().TargetBodyFunction)
+    MultiTarget().measureTargetParts(FD);
 
   if (FD && !FD->isDeleted())
     checkTypeSupport(FD->getType(), FD->getLocation(), FD);
@@ -17702,6 +17828,10 @@ void Sema::AddKnownFunctionAttributes(FunctionDecl *FD) {
         Context.BuiltinInfo.isConstWithoutErrnoAndExceptions(BuiltinID);
     bool ConstWithoutExceptions =
         Context.BuiltinInfo.isConstWithoutExceptions(BuiltinID);
+    if (LLVM_UNLIKELY(MultiTarget().TargetInputs) &&
+        !FD->hasAttr<ConstAttr>() && ConstWithoutErrnoAndExceptions &&
+        NoExceptions)
+      MultiTarget().recordLangOptRead("MathErrno", FD);
     if (!FD->hasAttr<ConstAttr>() &&
         (ConstWithoutErrnoAndExceptions || ConstWithoutExceptions) &&
         (!ConstWithoutErrnoAndExceptions ||
@@ -17722,6 +17852,13 @@ void Sema::AddKnownFunctionAttributes(FunctionDecl *FD) {
       case Builtin::BIfma:
       case Builtin::BIfmaf:
       case Builtin::BIfmal:
+        MultiTarget().recordTargetQuery(
+            "fma without errno",
+            [](const TargetInfo &TI) {
+              return TI.getTriple().isGNUEnvironment() ||
+                     TI.getTriple().isOSMSVCRT();
+            },
+            FD);
         FD->addAttr(ConstAttr::CreateImplicit(Context, FD->getLocation()));
         break;
       default:
@@ -17763,6 +17900,8 @@ void Sema::AddKnownFunctionAttributes(FunctionDecl *FD) {
       // Add the appropriate attribute, depending on the CUDA compilation mode
       // and which target the builtin belongs to. For example, during host
       // compilation, aux builtins are __device__, while the rest are __host__.
+      MultiTarget().recordCUDAModeRead('C', "builtin host/device attribute",
+                                       FD);
       if (getLangOpts().CUDAIsDevice !=
           Context.BuiltinInfo.isAuxBuiltinID(BuiltinID))
         FD->addAttr(CUDADeviceAttr::CreateImplicit(Context, FD->getLocation()));
@@ -18928,7 +19067,32 @@ Sema::ActOnTag(Scope *S, unsigned TagSpec, TagUseKind TUK, SourceLocation KWLoc,
                   // Carry on and handle it like a normal definition. We'll
                   // skip starting the definition later.
 
-                } else if (!IsExplicitSpecializationAfterInstantiation) {
+                } else if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+                           Def->getTargetVariant() &&
+                           Context.getCurrentTargetVariant() &&
+                           Def->getTargetVariant() !=
+                               Context.getCurrentTargetVariant()) {
+                  // Another target's definition of a class a shared
+                  // declaration forward-declared, reached through that
+                  // declaration: the class of this target's own, as without
+                  // the forward declaration. Joining the chain would give
+                  // every target's definition one type and so one layout.
+                  Previous.clear();
+                } else if (!IsExplicitSpecializationAfterInstantiation &&
+                           // A definition tagged for one target variant and
+                           // a second definition now being parsed under a
+                           // different variant are not really a
+                           // redefinition -- each target gets its own body
+                           // for what the shared declaration only
+                           // forward-declared. See the identical guard and
+                           // its longer rationale in
+                           // CheckForFunctionRedefinition, which this
+                           // mirrors for tags/records.
+                           !(LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+                             Def->getTargetVariant() !=
+                                 Context.getCurrentTargetVariant() &&
+                             (Def->getTargetVariant() != 0 ||
+                              Context.getCurrentTargetVariant() != 0))) {
                   // A redeclaration in function prototype scope in C isn't
                   // visible elsewhere, so merely issue a warning.
                   if (!getLangOpts().CPlusPlus &&
@@ -19396,6 +19560,9 @@ void Sema::ActOnTagFinishDefinition(Scope *S, Decl *TagD,
     if (RecordDecl *RD = dyn_cast<RecordDecl>(Tag))
       RD->completeDefinition();
   }
+
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    Context.getMultiTarget().noteTargetDependenceDefinition(Tag);
 
   if (auto *RD = dyn_cast<CXXRecordDecl>(Tag)) {
     FieldCollector->FinishClass();
@@ -21013,12 +21180,22 @@ Decl *Sema::ActOnEnumConstant(Scope *S, Decl *theEnumDecl, Decl *lastEnumConst,
     assert((getLangOpts().CPlusPlus || !isa<TagDecl>(PrevDecl)) &&
            "Received TagDecl when not in C++!");
     if (!isa<TagDecl>(PrevDecl) && isDeclInScope(PrevDecl, CurContext, S)) {
-      if (isa<EnumConstantDecl>(PrevDecl))
-        Diag(IdLoc, diag::err_redefinition_of_enumerator) << Id;
-      else
-        Diag(IdLoc, diag::err_redefinition) << Id;
-      notePreviousDefinition(PrevDecl, IdLoc);
-      return nullptr;
+      // A definition tagged for one target variant and a second definition
+      // now being parsed under a different variant are not really a
+      // redefinition -- see the identical guard and its longer rationale in
+      // CheckForFunctionRedefinition, which this mirrors for
+      // EnumConstantDecls.
+      if (!(LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+            PrevDecl->getTargetVariant() != Context.getCurrentTargetVariant() &&
+            (PrevDecl->getTargetVariant() != 0 ||
+             Context.getCurrentTargetVariant() != 0))) {
+        if (isa<EnumConstantDecl>(PrevDecl))
+          Diag(IdLoc, diag::err_redefinition_of_enumerator) << Id;
+        else
+          Diag(IdLoc, diag::err_redefinition) << Id;
+        notePreviousDefinition(PrevDecl, IdLoc);
+        return nullptr;
+      }
     }
   }
 
@@ -21619,9 +21796,10 @@ Sema::FunctionEmissionStatus Sema::getEmissionStatus(const FunctionDecl *FD,
     // (Technically, we do emit a host-side stub for global functions, but this
     // doesn't count for our purposes here.)
     CUDAFunctionTarget T = CUDA().IdentifyTarget(FD);
-    if (LangOpts.CUDAIsDevice && T == CUDAFunctionTarget::Host)
+    bool ForDevice = LangOpts.CUDAIsDevice || DeviceEmissionRules;
+    if (ForDevice && T == CUDAFunctionTarget::Host)
       return FunctionEmissionStatus::CUDADiscarded;
-    if (!LangOpts.CUDAIsDevice &&
+    if (!ForDevice &&
         (T == CUDAFunctionTarget::Device || T == CUDAFunctionTarget::Global))
       return FunctionEmissionStatus::CUDADiscarded;
 
@@ -21643,7 +21821,7 @@ bool Sema::shouldIgnoreInHostDeviceCheck(FunctionDecl *Callee) {
   // call to the kernel from the callgraph. This ensures that, when compiling
   // for host, only HD functions actually called from the host get marked as
   // known-emitted.
-  return LangOpts.CUDA && !LangOpts.CUDAIsDevice &&
+  return LangOpts.CUDA && !LangOpts.CUDAIsDevice && !DeviceEmissionRules &&
          CUDA().IdentifyTarget(Callee) == CUDAFunctionTarget::Global;
 }
 

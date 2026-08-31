@@ -164,6 +164,7 @@ class SemaAVR;
 class SemaBPF;
 class SemaCodeCompletion;
 class SemaCUDA;
+class SemaMultiTarget;
 class SemaDirectX;
 class SemaHLSL;
 class SemaHexagon;
@@ -1007,6 +1008,13 @@ public:
   /// Calls \c Lexer::getLocForEndOfToken()
   SourceLocation getLocForEndOfToken(SourceLocation Loc, unsigned Offset = 0);
 
+  /// Whether \p Name is defined as a macro at \p Loc.
+  ///
+  /// Prefer this to Preprocessor::isMacroDefined in Sema: the latter answers
+  /// for wherever the preprocessor has reached, which is only the same thing
+  /// while parsing and lexing run in lockstep.
+  LLVM_ABI bool isMacroDefinedAtLoc(SourceLocation Loc, StringRef Name) const;
+
   /// Calls \c Lexer::findNextToken() to find the next token, and if the
   /// locations of both ends of the token can be resolved it return that
   /// range; Otherwise it returns an invalid SourceRange.
@@ -1467,6 +1475,14 @@ public:
   /// OpenMP, and SYCL.
   SemaDiagnosticBuilder::DeferredDiagnosticsType DeviceDeferredDiags;
 
+  /// The deferred diagnostics a host-primary multi-target compilation finds
+  /// in host device functions for the devices. They are emitted for those a
+  /// device compilation would emit.
+  SemaDiagnosticBuilder::DeferredDiagnosticsType AuxDeviceDeferredDiags;
+
+  /// While set, getEmissionStatus answers as a device compilation would.
+  bool DeviceEmissionRules = false;
+
   /// CurContext - This is the current declaration context of parsing.
   DeclContext *CurContext;
 
@@ -1533,6 +1549,15 @@ public:
   SemaMSP430 &MSP430() {
     assert(MSP430Ptr);
     return *MSP430Ptr;
+  }
+
+  SemaMultiTarget &MultiTarget() {
+    assert(MultiTargetPtr);
+    return *MultiTargetPtr;
+  }
+  const SemaMultiTarget &MultiTarget() const {
+    assert(MultiTargetPtr);
+    return *MultiTargetPtr;
   }
 
   SemaNVPTX &NVPTX() {
@@ -1614,6 +1639,7 @@ protected:
   friend class ASTReader;
   friend class ASTDeclReader;
   friend class ASTWriter;
+  friend class SemaMultiTarget;
 
 private:
   std::optional<std::unique_ptr<DarwinSDKInfo>> CachedDarwinSDKInfo;
@@ -1650,6 +1676,7 @@ private:
   std::unique_ptr<SemaM68k> M68kPtr;
   std::unique_ptr<SemaMIPS> MIPSPtr;
   std::unique_ptr<SemaMSP430> MSP430Ptr;
+  std::unique_ptr<SemaMultiTarget> MultiTargetPtr;
   std::unique_ptr<SemaNVPTX> NVPTXPtr;
   std::unique_ptr<SemaObjC> ObjCPtr;
   std::unique_ptr<SemaOpenACC> OpenACCPtr;
@@ -2173,6 +2200,11 @@ public:
   /// directive if such a directive has not been closed by an "on" yet. If
   /// optimizations are currently "on", this is set to an invalid location.
   SourceLocation OptimizeOffPragmaLocation;
+
+  /// In a compilation for several targets, every "#pragma clang optimize",
+  /// on (true) or off, in source order. The source is preprocessed before it
+  /// is parsed, so the state a function sees is found by its location.
+  SmallVector<std::pair<SourceLocation, bool>, 0> OptimizePragmas;
 
   /// Get the location for the currently active "\#pragma clang optimize
   /// off". If this location is invalid, then the state of the pragma is "on".
@@ -13476,6 +13508,10 @@ public:
     /// Whether we're substituting into the parameter mapping of a constraint.
     bool InParameterMappingSubstitution;
 
+    /// The target the code that started this synthesis is compiled for (see
+    /// getInstantiationTarget), or 0 outside a multi-target compilation.
+    unsigned InstantiationTarget = 0;
+
     /// The point of instantiation or synthesis within the source code.
     SourceLocation PointOfInstantiation;
 
@@ -14259,6 +14295,32 @@ public:
   /// types, static variables, enumerators, etc.
   std::deque<PendingImplicitInstantiation> PendingLocalImplicitInstantiations;
 
+  /// See RequireCompleteTypeForDeclaration.
+  bool CompletingForDeclaration = false;
+
+  /// Set by OverloadCandidateSet::BestViableFunctionImpl immediately after
+  /// picking Best, when the pick depended on the ambient CUDAIsDevice value
+  /// (an HD-context caller resolving a host/device overload pair via
+  /// SemaCUDA::IdentifyPreference's rule (d); the two candidates need not
+  /// share a signature). Drained by the one caller-side function that
+  /// builds the concrete CallExpr for this pick (FinishOverloadedCallExpr's
+  /// OR_Success case in SemaOverload.cpp), which builds a second, fully
+  /// independently argument-converted CallExpr for Alternate and associates
+  /// the pair with the primary CallExpr via ASTContext::setCUDADualSideCall.
+  /// If no drainer runs before the next overload resolution (e.g. a member
+  /// call), it is simply overwritten or left unused -- inert by default,
+  /// never a correctness hazard.
+  struct CUDAAmbientDependentPick {
+    const FunctionDecl *Primary;
+    const FunctionDecl *Alternate;
+    DeclAccessPair AlternateFound;
+  };
+  std::optional<CUDAAmbientDependentPick> PendingCUDAAmbientDependentPick;
+
+  /// Set while the other side's call of such a pair is resolved anew; that
+  /// resolution must not start a pair of its own.
+  bool BuildingCUDAAlternateCall = false;
+
   class LocalEagerInstantiationScope {
   public:
     LocalEagerInstantiationScope(Sema &S, bool AtEndOfTU)
@@ -14419,11 +14481,17 @@ public:
   ///
   /// Usually this should not be used, and template argument deduction should be
   /// used in its place.
+  ///
+  /// \param PatternSource if non-null, substitute this redeclaration's
+  /// templated pattern instead of \p FTD's own -- used to force
+  /// re-instantiation from a specific target-tagged redeclaration's body when
+  /// a shared caller's body references a per-target body-divergent callee.
   FunctionDecl *InstantiateFunctionDeclaration(
       FunctionTemplateDecl *FTD, const TemplateArgumentList *Args,
       SourceLocation Loc,
       CodeSynthesisContext::SynthesisKind CSC =
-          CodeSynthesisContext::ExplicitTemplateArgumentSubstitution);
+          CodeSynthesisContext::ExplicitTemplateArgumentSubstitution,
+      FunctionTemplateDecl *PatternSource = nullptr);
 
   /// Instantiate the definition of the given function from its
   /// template.
@@ -14447,6 +14515,7 @@ public:
                                      bool Recursive = false,
                                      bool DefinitionRequired = false,
                                      bool AtEndOfTU = false);
+
   VarTemplateSpecializationDecl *BuildVarTemplateInstantiation(
       VarTemplateDecl *VarTemplate, VarDecl *FromVar,
       const TemplateArgumentList *PartialSpecArgs,
@@ -15783,6 +15852,15 @@ public:
                            const Ts &...Args) {
     BoundTypeDiagnoser<Ts...> Diagnoser(DiagID, Args...);
     return RequireCompleteType(Loc, T, Diagnoser);
+  }
+
+  /// Like RequireCompleteType, for a declaration or call naming \p T, which
+  /// uses no builtin type's layout itself.
+  template <typename... Ts>
+  bool RequireCompleteTypeForDeclaration(SourceLocation Loc, QualType T,
+                                         unsigned DiagID, const Ts &...Args) {
+    llvm::SaveAndRestore ForDeclaration(CompletingForDeclaration, true);
+    return RequireCompleteType(Loc, T, DiagID, Args...);
   }
 
   /// Determine whether a declaration is visible to name lookup.

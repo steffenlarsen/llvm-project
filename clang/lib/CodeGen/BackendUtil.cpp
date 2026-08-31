@@ -163,6 +163,9 @@ class EmitAssemblyHelper {
   DiagnosticsEngine &Diags;
   const CodeGenOptions &CodeGenOpts;
   const clang::TargetOptions &TargetOpts;
+  /// The CodeGenOptions initTargetOptions reads: CI's, unless M is for
+  /// another target, in which case they are CodeGenOpts.
+  const CodeGenOptions &TargetCodeGenOpts;
   const LangOptions &LangOpts;
   llvm::Module *TheModule;
   IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS;
@@ -226,12 +229,18 @@ class EmitAssemblyHelper {
   }
 
 public:
+  // TOpts, when non-null, overrides CI.getTargetOpts() -- needed when M was
+  // generated for a target other than CI's own primary target (e.g. a
+  // multi-target-codegen aux entry's device module). CGOpts are then that
+  // target's own too, and also replace CI's in the llvm::TargetOptions.
   EmitAssemblyHelper(CompilerInstance &CI, CodeGenOptions &CGOpts,
                      llvm::Module *M,
-                     IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS)
+                     IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS,
+                     const clang::TargetOptions *TOpts = nullptr)
       : CI(CI), Diags(CI.getDiagnostics()), CodeGenOpts(CGOpts),
-        TargetOpts(CI.getTargetOpts()), LangOpts(CI.getLangOpts()),
-        TheModule(M), VFS(std::move(VFS)),
+        TargetOpts(TOpts ? *TOpts : CI.getTargetOpts()),
+        TargetCodeGenOpts(TOpts ? CGOpts : CI.getCodeGenOpts()),
+        LangOpts(CI.getLangOpts()), TheModule(M), VFS(std::move(VFS)),
         TargetTriple(TheModule->getTargetTriple()) {}
 
   ~EmitAssemblyHelper() {
@@ -384,9 +393,9 @@ static std::string flattenClangCommandLine(ArrayRef<std::string> Args,
 
 static bool initTargetOptions(const CompilerInstance &CI,
                               DiagnosticsEngine &Diags,
-                              llvm::TargetOptions &Options) {
-  const auto &CodeGenOpts = CI.getCodeGenOpts();
-  const auto &TargetOpts = CI.getTargetOpts();
+                              llvm::TargetOptions &Options,
+                              const CodeGenOptions &CodeGenOpts,
+                              const clang::TargetOptions &TargetOpts) {
   const auto &LangOpts = CI.getLangOpts();
   const auto &HSOpts = CI.getHeaderSearchOpts();
 
@@ -598,7 +607,7 @@ void EmitAssemblyHelper::CreateTargetMachine(bool MustCreateTM) {
   CodeGenOptLevel OptLevel = *OptLevelOrNone;
 
   llvm::TargetOptions Options;
-  if (!initTargetOptions(CI, Diags, Options))
+  if (!initTargetOptions(CI, Diags, Options, TargetCodeGenOpts, TargetOpts))
     return;
   Options.MCOptions.LibraryOptions =
       &TheModule->getContext().getLibraryOptions();
@@ -1376,7 +1385,7 @@ runThinLTOBackend(CompilerInstance &CI, ModuleSummaryIndex *CombinedIndex,
   assert(OptLevelOrNone && "Invalid optimization level!");
   Conf.CGOptLevel = *OptLevelOrNone;
   Conf.OptLevel = CGOpts.OptimizationLevel;
-  initTargetOptions(CI, Diags, Conf.Options);
+  initTargetOptions(CI, Diags, Conf.Options, CGOpts, TOpts);
   Conf.SampleProfile = std::move(SampleProfile);
   const cl::LibraryOptionsContext &LibraryOptions =
       M->getContext().getLibraryOptions();
@@ -1542,7 +1551,8 @@ void clang::emitBackendOutput(CompilerInstance &CI, CodeGenOptions &CGOpts,
                               llvm::Module *M, BackendAction Action,
                               IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS,
                               std::unique_ptr<raw_pwrite_stream> OS,
-                              BackendConsumer *BC) {
+                              BackendConsumer *BC,
+                              const clang::TargetOptions *TOpts) {
   llvm::TimeTraceScope TimeScope("Backend");
   DiagnosticsEngine &Diags = CI.getDiagnostics();
 
@@ -1610,7 +1620,7 @@ void clang::emitBackendOutput(CompilerInstance &CI, CodeGenOptions &CGOpts,
   if (EnableDynamicDebugging)
     createAndEmbedModuleForDynamicDebugging(CI, CGOpts, M, VFS, BC);
 
-  EmitAssemblyHelper AsmHelper(CI, CGOpts, M, VFS);
+  EmitAssemblyHelper AsmHelper(CI, CGOpts, M, VFS, TOpts);
   AsmHelper.emitAssembly(Action, std::move(OS), BC);
 
   // Verify the module's DataLayout against the one the target computes for the

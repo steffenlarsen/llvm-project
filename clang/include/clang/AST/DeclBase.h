@@ -18,6 +18,7 @@
 #include "clang/AST/DeclID.h"
 #include "clang/AST/DeclarationName.h"
 #include "clang/AST/SelectorLocationsKind.h"
+#include "clang/AST/TargetSet.h"
 #include "clang/Basic/IdentifierTable.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/LangOptions.h"
@@ -350,12 +351,15 @@ protected:
   LLVM_PREFERRED_TYPE(Linkage)
   mutable unsigned CacheValidAndLinkage : 3;
 
-  /// The attributes attached to this declaration, or null if it has none.
+  /// The attributes attached to this declaration, or null if it has none, and
+  /// whether MultiTargetContext::DeclTargetVariantStorage may hold an entry for
+  /// this declaration. Nearly none do, so most queries never reach the table.
+  /// The flag shares the pointer so that Decl does not grow.
   ///
   /// This pointer is the sole record of whether the declaration has
   /// attributes, so it must be cleared whenever the vector becomes empty.
   /// Owned by the ASTContext that allocated it.
-  AttrVec *Attrs = nullptr;
+  llvm::PointerIntPair<AttrVec *, 1, bool> AttrsAndHasTargetVariantEntry;
 
   /// Allocate memory for a deserialized declaration.
   ///
@@ -524,7 +528,71 @@ public:
     return AccessSpecifier(Access);
   }
 
-  bool hasAttrs() const { return Attrs != nullptr; }
+  /// The target this declaration belongs to. 0 means it applies to every
+  /// target, which is the case for all declarations today.
+  /// Backed by an ASTContext-side side table
+  /// (MultiTargetContext::DeclTargetVariantStorage) instead of a Decl-object
+  /// bitfield, to avoid growing Decl's layout.
+  unsigned getTargetVariant() const LLVM_READONLY {
+    return hasTargetVariantEntry() ? getStoredTargetVariant() : 0;
+  }
+  void setTargetVariant(unsigned V);
+
+  /// A re-parse produced this declaration for one target and it turned out to
+  /// match the one it was made from, which has been reverted to every target.
+  /// This copy belongs to no target at all. Variants below it name targets:
+  /// 1 the primary, 2..TargetVariantRedundant-1 the aux targets.
+  static constexpr unsigned TargetVariantRedundant = 63;
+  bool isRedundantTargetVariant() const {
+    return getTargetVariant() == TargetVariantRedundant;
+  }
+  static_assert(TargetVariantRedundant == TargetSet::MaxVariant + 1);
+
+  /// The targets this declaration belongs to: every target if it is shared,
+  /// none if it is redundant.
+  TargetSet getTargetSet() const {
+    return hasTargetVariantEntry() ? getStoredTargetSet() : TargetSet::all();
+  }
+
+  /// Make this the copy for \p Targets; its TargetVariant becomes the first of
+  /// them.
+  void setTargetSet(TargetSet Targets);
+
+  /// Whether this is a copy of a declaration made for some targets, among
+  /// them \p Variant (a shared declaration is no copy).
+  bool isCopyFor(unsigned Variant) const {
+    return getTargetVariant() && getTargetSet().contains(Variant);
+  }
+
+private:
+  TargetSet getStoredTargetSet() const LLVM_READONLY;
+
+public:
+  /// Whether this declaration's TargetVariant tag came from the per-target
+  /// re-parse of a shared declaration's tokens under a different target's
+  /// ambient, rather than from genuine #if/#elif widening. Unlike widening, a reparse-origin tag says nothing about
+  /// whether the content actually differs by target, so callers that need
+  /// to know that must check this flag rather than counting tagged redecls
+  /// (see FunctionTemplateDecl::hasTargetTaggedRedeclaration()).
+  /// Backed by the same ASTContext-side side table as getTargetVariant().
+  bool isTargetVariantReparseOrigin() const LLVM_READONLY {
+    return hasTargetVariantEntry() && getStoredTargetVariantIsReparseOrigin();
+  }
+  void setTargetVariantIsReparseOrigin(bool V);
+
+private:
+  bool hasTargetVariantEntry() const {
+    return AttrsAndHasTargetVariantEntry.getInt();
+  }
+  // Defined out of line (DeclBase.cpp) since they need ASTContext.h.
+  unsigned getStoredTargetVariant() const LLVM_READONLY;
+  bool getStoredTargetVariantIsReparseOrigin() const LLVM_READONLY;
+
+public:
+
+  bool hasAttrs() const {
+    return AttrsAndHasTargetVariantEntry.getPointer() != nullptr;
+  }
 
   void setAttrs(const AttrVec& Attrs) {
     return setAttrsImpl(Attrs, getASTContext());
@@ -553,6 +621,7 @@ public:
   }
 
   template <typename... Ts> void dropAttrs() {
+    AttrVec *Attrs = AttrsAndHasTargetVariantEntry.getPointer();
     if (!Attrs)
       return;
 

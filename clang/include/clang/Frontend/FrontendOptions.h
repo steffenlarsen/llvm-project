@@ -539,6 +539,22 @@ public:
   /// Auxiliary target features for CUDA/HIP compilation.
   std::optional<std::vector<std::string>> AuxTargetFeatures;
 
+  /// The cc1 arguments of each multi-target aux target, one GNU-quoted string
+  /// per target, in aux-target order.
+  std::vector<std::string> MultiTargetAuxInvocations;
+
+  /// Where each multi-target aux target's bitcode is written, and the target
+  /// ID it is packaged as, as <variant>:<value>.
+  std::vector<std::string> MultiTargetAuxOutputs;
+  std::vector<std::string> MultiTargetAuxTargetIDs;
+
+  /// The offload binary the multi-target aux targets' bitcode is packaged
+  /// into, unlinked, if any.
+  std::string MultiTargetPackageOffload;
+
+  /// Where each target's preprocessed source is printed, as <variant>:<path>.
+  std::vector<std::string> MultiTargetPreprocessedOutputs;
+
   /// Filename to write statistics to.
   std::string StatsFile;
 

@@ -1029,10 +1029,18 @@ void Clang::AddPreprocessingOptions(Compilation &C, const JobAction &JA,
     }
   }
 
+  // A precompiled header holds one target's AST, but every target of an
+  // integrated HIP compilation shares one AST, so include the header as
+  // written instead.
+  bool IsIntegratedHIP =
+      Args.hasArg(options::OPT_fintegrated_hip_device_codegen) &&
+      (JA.isHostOffloading(Action::OFK_HIP) ||
+       JA.isDeviceOffloading(Action::OFK_HIP));
+
   bool RenderedImplicitInclude = false;
   for (const Arg *A : Args.filtered(options::OPT_clang_i_Group)) {
     if (A->getOption().matches(options::OPT_include) &&
-        D.getProbePrecompiled()) {
+        D.getProbePrecompiled() && !IsIntegratedHIP) {
       // Handling of gcc-style gch precompiled headers.
       bool IsFirstImplicitInclude = !RenderedImplicitInclude;
       RenderedImplicitInclude = true;
@@ -5255,6 +5263,228 @@ static void ProcessVSRuntimeLibrary(const ToolChain &TC, const ArgList &Args,
     CmdArgs.push_back("--dependent-lib=softintrin");
 }
 
+// Renders Args as one string that cl::TokenizeGNUCommandLine splits back into
+// the same argument vector.
+static std::string flattenGNUCommandLine(ArrayRef<const char *> Args) {
+  std::string Result;
+  llvm::raw_string_ostream OS(Result);
+  llvm::ListSeparator LS(" ");
+  for (StringRef Arg : Args) {
+    OS << LS;
+    if (!Arg.empty() && Arg.find_first_of(" \t\r\n'\"\\") == StringRef::npos)
+      OS << Arg;
+    else
+      llvm::sys::printArg(OS, Arg, /*Quote=*/true);
+  }
+  return Result;
+}
+
+// Builds, without scheduling, the device cc1 job BA would have run without
+// -fintegrated-hip-device-codegen, and returns its arguments minus "-cc1" and
+// the job-specific "-o <output>" and "<input>" of its
+// "-o <output> -x <type> <input>" tail. Appends the job's -mllvm values to
+// LLVMArgs.
+static std::string buildIntegratedHipDeviceInvocation(
+    Compilation &C, const JobAction &HostJA, const InputInfo &HostInput,
+    const ToolChain *DeviceTC, BoundArch BA, const ArgList &DeviceArgs,
+    const char *Output, SmallVectorImpl<const char *> &LLVMArgs) {
+  const Action *Source = &HostJA;
+  while (Source->getKind() != Action::InputClass)
+    Source = Source->getInputs()[0];
+  const auto *HostSource = cast<InputAction>(Source);
+
+  auto *DeviceSource = C.MakeAction<InputAction>(
+      HostSource->getInputArg(), HostSource->getType(), HostSource->getId());
+  types::ID OutputType =
+      DeviceTC->getLTOMode(C.getArgs(), Action::OFK_HIP) != LTOK_None
+          ? types::TY_LTO_BC
+          : types::TY_LLVM_BC;
+  auto *DeviceJA = C.MakeAction<BackendJobAction>(DeviceSource, OutputType);
+  DeviceJA->propagateDeviceOffloadInfo(Action::OFK_HIP, BA, DeviceTC);
+
+  InputInfo DeviceInput = HostInput;
+  DeviceInput.setAction(DeviceSource);
+
+  JobList::list_type OtherJobs = C.getJobs().takeJobs();
+  {
+    RegisterEffectiveTriple TripleRAII(
+        *DeviceTC, llvm::Triple(DeviceTC->ComputeEffectiveClangTriple(
+                       DeviceArgs, BA, DeviceInput.getType())));
+    DeviceTC->SelectTool(*DeviceJA)->ConstructJob(
+        C, *DeviceJA, InputInfo(DeviceJA, Output, HostInput.getBaseInput()),
+        {DeviceInput}, DeviceArgs, /*LinkingOutput=*/nullptr);
+  }
+  JobList::list_type DeviceJobs = C.getJobs().takeJobs();
+  for (std::unique_ptr<Command> &Job : OtherJobs)
+    C.getJobs().addJob(std::move(Job));
+  assert(DeviceJobs.size() == 1 && "expected exactly one device cc1 job");
+
+  ArrayRef<const char *> DeviceArgv = DeviceJobs.front()->getArguments();
+  assert(!DeviceArgv.empty() && StringRef(DeviceArgv.front()) == "-cc1");
+  size_t OutputFlag = DeviceArgv.size() - 1;
+  while (OutputFlag > 0 && !(StringRef(DeviceArgv[OutputFlag - 1]) == "-o" &&
+                             StringRef(DeviceArgv[OutputFlag]) == Output))
+    --OutputFlag;
+  assert(OutputFlag > 0 && "device cc1 job has no -o");
+  assert(OutputFlag + 4 == DeviceArgv.size() &&
+         StringRef(DeviceArgv[OutputFlag + 1]) == "-x" &&
+         "device cc1 job has no '-x <type> <input>' tail");
+  for (size_t I = 1; I + 1 < OutputFlag; ++I)
+    if (StringRef(DeviceArgv[I]) == "-mllvm")
+      LLVMArgs.push_back(DeviceArgv[++I]);
+  SmallVector<const char *, 128> AuxArgv(DeviceArgv.slice(1, OutputFlag - 2));
+  llvm::append_range(AuxArgv, DeviceArgv.slice(OutputFlag + 1, 2));
+  return flattenGNUCommandLine(AuxArgv);
+}
+
+// With -save-temps, names the file each target's preprocessed source is saved
+// to, as the regular pipeline's preprocessing job for that target would have:
+// the compilation preprocesses for every target itself (see
+// ToolSelector::savesOwnPreprocessedOutput) and prints what it recorded.
+static void emitIntegratedHipPreprocessedOutputs(
+    const Driver &D, Compilation &C, const JobAction &HostJA,
+    const InputInfo &HostInput, const ArgList &Args, const ToolChain *DeviceTC,
+    ArrayRef<BoundArch> Archs, ArgStringList &CmdArgs) {
+  const Action *Source = &HostJA;
+  while (Source->getKind() != Action::InputClass)
+    Source = Source->getInputs()[0];
+  Action *SourceCopy = C.MakeAction<InputAction>(
+      cast<InputAction>(Source)->getInputArg(), Source->getType(),
+      cast<InputAction>(Source)->getId());
+
+  auto Emit = [&](unsigned Variant, const char *Path) {
+    CmdArgs.push_back(Args.MakeArgString(
+        "-multi-target-preprocessed-output=" + Twine(Variant) + ":" + Path));
+  };
+
+  auto *HostPP =
+      C.MakeAction<PreprocessJobAction>(SourceCopy, types::TY_PP_HIP);
+  const ToolChain *HostTC = C.getSingleOffloadToolChain<Action::OFK_Host>();
+  Emit(1, D.GetNamedOutputPath(
+              C, *HostPP, HostInput.getBaseInput(), BoundArch(),
+              /*AtTopLevel=*/false, /*MultipleArchs=*/false,
+              Action::GetOffloadingFileNamePrefix(
+                  Action::OFK_Host, HostTC->getEffectiveTriple().str(),
+                  /*CreatePrefixForHost=*/true)));
+
+  for (auto [Index, BA] : llvm::enumerate(Archs)) {
+    auto *DevicePP =
+        C.MakeAction<PreprocessJobAction>(SourceCopy, types::TY_PP_HIP);
+    DevicePP->propagateDeviceOffloadInfo(Action::OFK_HIP, BA, DeviceTC);
+    const ArgList &DeviceArgs =
+        C.getArgsForToolChain(DeviceTC, BA, Action::OFK_HIP);
+    llvm::Triple DeviceTriple(DeviceTC->ComputeEffectiveClangTriple(
+        DeviceArgs, BA, SourceCopy->getType()));
+    Emit(2 + Index,
+         D.GetNamedOutputPath(C, *DevicePP, HostInput.getBaseInput(), BA,
+                              /*AtTopLevel=*/false, /*MultipleArchs=*/true,
+                              Action::GetOffloadingFileNamePrefix(
+                                  Action::OFK_HIP, DeviceTriple.str())));
+  }
+}
+
+// Emits the cc1 options MultiTargetCodeGen.cpp's multi-target machinery
+// consumes to build each HIP device arch's bitcode and package it, unlinked,
+// into this host cc1 job's module as an offload object. The device link makes
+// the fatbin from it, or, with -fgpu-rdc, the final link links it across
+// translation units, as the device jobs' outputs are.
+//
+// Variant numbering matches BackendConsumer::Initialize's `Entry.Variant =
+// 2 + I` in argv order, so archs must be emitted in Driver::getOffloadArchs's
+// already-sorted order, with each arch's -aux-output= paired to the same
+// index as its -multi-target-aux-invocation= -- a mismatch would silently swap
+// which CPU's bitcode lands in which fatbin slot rather than crash.
+/// The file a -fintegrated-hip-device-codegen compilation packages the
+/// devices' bitcode in for the device link, named after its own \p Bitcode.
+static const char *integratedHipPackage(const ArgList &Args,
+                                        StringRef Bitcode) {
+  return Args.MakeArgString(Bitcode + ".offload");
+}
+
+static void emitIntegratedHipDeviceCodegenFlags(const Driver &D, Compilation &C,
+                                                const JobAction &JA,
+                                                const InputInfo &Input,
+                                                const InputInfo &Output,
+                                                const ArgList &Args,
+                                                bool IsRDCMode,
+                                                ArgStringList &CmdArgs) {
+  auto HIPToolChains = C.getOffloadToolChains(Action::OFK_HIP);
+  if (HIPToolChains.first == HIPToolChains.second)
+    return;
+  const ToolChain *DeviceTC = HIPToolChains.first->second;
+
+  llvm::SmallVector<BoundArch> Archs =
+      D.getOffloadArchs(C, C.getArgs(), Action::OFK_HIP, *DeviceTC);
+  if (Archs.empty())
+    return;
+
+  llvm::StringMap<StringRef> LLVMArgs;
+  for (size_t I = 0; I + 1 < CmdArgs.size(); ++I)
+    if (StringRef(CmdArgs[I]) == "-mllvm") {
+      StringRef Value = CmdArgs[++I];
+      LLVMArgs.try_emplace(Value.ltrim('-').split('=').first, Value);
+    }
+
+  for (auto [Index, BA] : llvm::enumerate(Archs)) {
+    const unsigned Variant = 2 + Index;
+
+    const ArgList &DeviceArgs =
+        C.getArgsForToolChain(DeviceTC, BA, Action::OFK_HIP);
+    const char *AuxBC = D.CreateTempFile(C, "multi-target-aux", "bc",
+                                         /*MultipleArchs=*/true, BA.ArchName);
+    CmdArgs.push_back(Args.MakeArgString(
+        "-multi-target-aux-output=" + Twine(Variant) + ":" + AuxBC));
+    // The device code is packaged under its target ID, as the offload
+    // packager does, which decides its target features.
+    CmdArgs.push_back(Args.MakeArgString("-multi-target-aux-target-id=" +
+                                         Twine(Variant) + ":" + BA.ArchName));
+
+    SmallVector<const char *> DeviceLLVMArgs;
+    CmdArgs.push_back(Args.MakeArgString(
+        "-multi-target-aux-invocation=" +
+        buildIntegratedHipDeviceInvocation(C, JA, Input, DeviceTC, BA,
+                                           DeviceArgs, AuxBC, DeviceLLVMArgs)));
+
+    // cl::opt values are process-wide, so each device job's -mllvm options
+    // have to be this job's too, with one value across all targets; the aux
+    // invocation merely restates them.
+    for (const char *Value : DeviceLLVMArgs) {
+      StringRef Name = StringRef(Value).ltrim('-').split('=').first;
+      auto [It, Inserted] = LLVMArgs.try_emplace(Name, Value);
+      if (Inserted) {
+        CmdArgs.push_back("-mllvm");
+        CmdArgs.push_back(Value);
+      } else if (It->second.ltrim('-') != StringRef(Value).ltrim('-')) {
+        D.Diag(diag::err_drv_integrated_hip_device_codegen_mllvm_conflict)
+            << It->second << Value << BA.ArchName;
+      }
+    }
+  }
+
+  if (D.isSaveTempsEnabled() && isa<CompileJobAction>(JA) &&
+      Input.getType() != types::TY_PP_HIP)
+    emitIntegratedHipPreprocessedOutputs(D, C, JA, Input, Args, DeviceTC, Archs,
+                                         CmdArgs);
+
+  // The device link makes the fatbin from the package, which the host's
+  // bitcode need not carry.
+  if (!IsRDCMode) {
+    if (!Output.isFilename())
+      return;
+    const char *Package = integratedHipPackage(Args, Output.getFilename());
+    if (!D.isSaveTempsEnabled())
+      C.addTempFile(Package);
+    CmdArgs.push_back(
+        Args.MakeArgString("-multi-target-package-offload=" + Twine(Package)));
+    return;
+  }
+  const char *Package = D.CreateTempFile(C, "multi-target-package", "out");
+  CmdArgs.push_back(
+      Args.MakeArgString("-multi-target-package-offload=" + Twine(Package)));
+  CmdArgs.push_back(
+      Args.MakeArgString("-fembed-offload-object=" + Twine(Package)));
+}
+
 void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                          const InputInfo &Output, const InputInfoList &Inputs,
                          const ArgList &Args, const char *LinkingOutput) const {
@@ -8369,8 +8599,14 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // FIXME: -fembed-bitcode -save-temps will save optimized bitcode instead of
   // pristine IR generated by the frontend. Ideally, a new compile action should
   // be added so both IR can be captured.
+  // So does a HIP host compilation that makes the devices' code itself, whose
+  // backend runs once the device link has made the fatbin.
+  bool IntegratedHIPHostCompile =
+      IsHIP && !IsHIPDevice && !IsRDCMode && !UsesLLVMOffloading &&
+      Args.hasArg(options::OPT_fintegrated_hip_device_codegen) &&
+      JA.getType() == types::TY_LLVM_BC;
   if ((C.getDriver().isSaveTempsEnabled() ||
-       JA.isHostOffloading(Action::OFK_OpenMP)) &&
+       JA.isHostOffloading(Action::OFK_OpenMP) || IntegratedHIPHostCompile) &&
       !(C.getDriver().embedBitcodeInObject() && !IsUsingLTO) &&
       isa<CompileJobAction>(JA))
     CmdArgs.push_back("-disable-llvm-passes");
@@ -8405,8 +8641,21 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   }
 
   // Host-side offloading compilation receives all device-side outputs. Include
-  // them in the host compilation depending on the target.
-  if (!HostOffloadingInputs.empty()) {
+  // them in the host compilation depending on the target. The host backend of
+  // such a compilation is given the fatbin made from its offload object as any
+  // host compilation is.
+  if (IsHIP && !IsHIPDevice && !UsesLLVMOffloading &&
+      Args.hasArg(options::OPT_fintegrated_hip_device_codegen) &&
+      !types::isLLVMIR(Input.getType())) {
+    assert(HostOffloadingInputs.empty() &&
+           "-fintegrated-hip-device-codegen must not receive device "
+           "offloading inputs");
+    // Preprocessed for the host alone: compiled for it alone, as without
+    // -fintegrated-hip-device-codegen (the driver warned).
+    if (Input.getType() != types::TY_PP_HIP)
+      emitIntegratedHipDeviceCodegenFlags(D, C, JA, Input, Output, Args,
+                                          IsRDCMode, CmdArgs);
+  } else if (!HostOffloadingInputs.empty()) {
     bool UseOffloadIncludeBinary =
         (IsCuda || IsHIP) &&
         (!IsRDCMode || Args.hasArg(options::OPT_cuda_emit_nvcc_abi)) &&
@@ -9800,11 +10049,14 @@ static bool requiresUBSanRT(unsigned ID) {
   }
 }
 
-void LinkerWrapper::ConstructJob(Compilation &C, const JobAction &JA,
-                                 const InputInfo &Output,
-                                 const InputInfoList &Inputs,
-                                 const ArgList &Args,
-                                 const char *LinkingOutput) const {
+/// Renders the options in \p TC's arguments for offload kind \p Kind that
+/// clang-linker-wrapper forwards to the device compilation (\p CompilerArgs)
+/// and to the device link (\p LinkerArgs).
+static void renderDeviceLinkArgs(Compilation &C, const ArgList &Args,
+                                 const ToolChain &TC, Action::OffloadKind Kind,
+                                 bool SuppressVerbose,
+                                 ArgStringList &CompilerArgs,
+                                 ArgStringList &LinkerArgs) {
   using namespace options;
 
   // A list of permitted options that will be forwarded to the embedded device
@@ -9866,41 +10118,62 @@ void LinkerWrapper::ConstructJob(Compilation &C, const JobAction &JA,
       OPT_hipstdpar,
       OPT_fenable_spirv_size_optimization};
   const llvm::DenseSet<unsigned> LinkerOptions{OPT_mllvm, OPT_Zlinker_input};
-  // Suppress verbose output for HIP non-RDC fat binaries because it confuses
-  // CMake implicit linker argument parsing.
-  bool SuppressHIPNoRDCVerbose =
-      JA.getType() == types::TY_HIP_FATBIN &&
-      !Args.hasFlag(options::OPT_fgpu_rdc, options::OPT_fno_gpu_rdc, false);
-  auto ToolChainHasRT = [&](const ToolChain &TC, StringRef Name) {
+  auto ToolChainHasRT = [&](StringRef Name) {
     return TC.getVFS().exists(
         TC.getCompilerRT(Args, Name, ToolChain::FT_Static));
   };
-  auto ShouldForwardForToolChain = [&](Arg *A, const ToolChain &TC) {
+  auto ShouldForwardForToolChain = [&](Arg *A) {
     unsigned ID = A->getOption().getID();
     // Don't forward profiling arguments if the toolchain doesn't support it.
     // Without this check using it on the host would result in linker errors.
     // Coverage mapping flags require -fprofile-instr-generate, so drop them
     // together to avoid a device cc1 diagnostic.
-    if (requiresProfileRT(ID) && !ToolChainHasRT(TC, "profile"))
+    if (requiresProfileRT(ID) && !ToolChainHasRT("profile"))
       return false;
     // Don't forward sanitizer arguments if the toolchain doesn't support it.
     // Without this check using it on the host would result in linker errors.
-    if (requiresUBSanRT(ID) && !ToolChainHasRT(TC, "ubsan_minimal") &&
-        !ToolChainHasRT(TC, "ubsan_standalone"))
+    if (requiresUBSanRT(ID) && !ToolChainHasRT("ubsan_minimal") &&
+        !ToolChainHasRT("ubsan_standalone"))
       return false;
     // Don't forward -mllvm to toolchains that don't support LLVM.
     return TC.HasNativeLLVMSupport() || ID != OPT_mllvm;
   };
-  auto ShouldForward = [&](const llvm::DenseSet<unsigned> &Set, Arg *A,
-                           const ToolChain &TC) {
-    if (A->getOption().matches(OPT_v) && SuppressHIPNoRDCVerbose)
+  auto ShouldForward = [&](const llvm::DenseSet<unsigned> &Set, Arg *A) {
+    if (A->getOption().matches(OPT_v) && SuppressVerbose)
       return false;
     return (Set.contains(A->getOption().getID()) ||
             (A->getOption().getGroup().isValid() &&
              Set.contains(A->getOption().getGroup().getID()))) &&
-           ShouldForwardForToolChain(A, TC);
+           ShouldForwardForToolChain(A);
   };
 
+  // We do not use a bound architecture here so options passed only to a
+  // specific architecture via -Xarch_<cpu> will not be forwarded.
+  for (Arg *A : C.getArgsForToolChain(&TC, /*BA=*/{}, Kind)) {
+    if (A->getOption().matches(OPT_Zlinker_input))
+      LinkerArgs.emplace_back(A->getValue());
+    else if (ShouldForward(CompilerOptions, A)) {
+      A->claim();
+      A->render(Args, CompilerArgs);
+    } else if (ShouldForward(LinkerOptions, A)) {
+      A->claim();
+      A->render(Args, LinkerArgs);
+    }
+  }
+}
+
+void LinkerWrapper::ConstructJob(Compilation &C, const JobAction &JA,
+                                 const InputInfo &Output,
+                                 const InputInfoList &Inputs,
+                                 const ArgList &Args,
+                                 const char *LinkingOutput) const {
+  using namespace options;
+
+  // Suppress verbose output for HIP non-RDC fat binaries because it confuses
+  // CMake implicit linker argument parsing.
+  bool SuppressHIPNoRDCVerbose =
+      JA.getType() == types::TY_HIP_FATBIN &&
+      !Args.hasFlag(options::OPT_fgpu_rdc, options::OPT_fno_gpu_rdc, false);
   ArgStringList CmdArgs;
   for (Action::OffloadKind Kind : {Action::OFK_Cuda, Action::OFK_OpenMP,
                                    Action::OFK_HIP, Action::OFK_SYCL}) {
@@ -9908,23 +10181,12 @@ void LinkerWrapper::ConstructJob(Compilation &C, const JobAction &JA,
     for (auto &I : llvm::make_range(TCRange)) {
       const ToolChain *TC = I.second;
 
-      // We do not use a bound architecture here so options passed only to a
-      // specific architecture via -Xarch_<cpu> will not be forwarded.
       ArgStringList CompilerArgs;
       ArgStringList LinkerArgs;
+      renderDeviceLinkArgs(C, Args, *TC, Kind, SuppressHIPNoRDCVerbose,
+                           CompilerArgs, LinkerArgs);
       const DerivedArgList &ToolChainArgs =
           C.getArgsForToolChain(TC, /*BA=*/{}, Kind);
-      for (Arg *A : ToolChainArgs) {
-        if (A->getOption().matches(OPT_Zlinker_input))
-          LinkerArgs.emplace_back(A->getValue());
-        else if (ShouldForward(CompilerOptions, A, *TC)) {
-          A->claim();
-          A->render(Args, CompilerArgs);
-        } else if (ShouldForward(LinkerOptions, A, *TC)) {
-          A->claim();
-          A->render(Args, LinkerArgs);
-        }
-      }
 
       // If the user explicitly requested it via `--offload-arch` we should
       // extract it from any static libraries if present.
@@ -10107,8 +10369,14 @@ void LinkerWrapper::ConstructJob(Compilation &C, const JobAction &JA,
   if (JA.getType() != types::TY_Image) {
     CmdArgs.push_back("--emit-fatbin-only");
     CmdArgs.append({"-o", Output.getFilename()});
+    // A host compilation that made the devices' code packaged it beside its
+    // bitcode.
     for (auto Input : Inputs)
-      CmdArgs.push_back(Input.getFilename());
+      CmdArgs.push_back(
+          Input.getType() == types::TY_LLVM_BC &&
+                  Args.hasArg(options::OPT_fintegrated_hip_device_codegen)
+              ? integratedHipPackage(Args, Input.getFilename())
+              : Input.getFilename());
   } else {
     for (const char *LinkArg : LinkCommand->getArguments())
       CmdArgs.push_back(LinkArg);

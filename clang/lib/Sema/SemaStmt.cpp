@@ -4634,8 +4634,15 @@ void Sema::DiagnoseExceptionUse(SourceLocation Loc, bool IsTry) {
     return;
   }
 
-  if (!getLangOpts().CXXExceptions && !getSourceManager().isInSystemHeader(Loc))
+  if (!getLangOpts().CXXExceptions &&
+      !getSourceManager().isInSystemHeader(Loc)) {
     targetDiag(Loc, diag::err_exceptions_disabled) << IsTry;
+    // The devices a host compilation also analyses reject it as their own
+    // compilations would.
+    if (getLangOpts().CUDA && !getLangOpts().CUDAIsDevice &&
+        CUDA().isAnalysedForAuxDevices())
+      CUDA().DiagIfDeviceCode(Loc, diag::err_exceptions_disabled) << IsTry;
+  }
 }
 
 StmtResult Sema::ActOnSEHTryBlock(bool IsCXXTry, SourceLocation TryLoc,

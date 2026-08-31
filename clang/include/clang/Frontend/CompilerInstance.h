@@ -23,6 +23,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/BuryPointer.h"
 #include "llvm/Support/FileSystem.h"
@@ -100,6 +101,26 @@ class CompilerInstance : public ModuleLoader {
 
   /// Auxiliary Target info.
   IntrusiveRefCntPtr<TargetInfo> AuxTarget;
+
+  /// N aux (device-arch) targets, independent of the single \c AuxTarget
+  /// above (which still serves the CUDA/OpenMP/SYCL "other side" path). Entry
+  /// I is built from \c MultiTargetAuxInvocations[I]'s TargetOptions; empty
+  /// unless \c -multi-target-aux-invocation is passed.
+  llvm::SmallVector<IntrusiveRefCntPtr<TargetInfo>, 4> MultiTargetAuxTargets;
+
+  /// One invocation per \c -multi-target-aux-invocation, in aux-target order.
+  llvm::SmallVector<std::shared_ptr<CompilerInvocation>, 4>
+      MultiTargetAuxInvocations;
+
+  /// In a CUDA or HIP compilation for several targets, each target's name by
+  /// variant, and whether a warning or error was raised while analysing for
+  /// it.
+  llvm::SmallVector<std::string, 4> MultiTargetNames;
+  llvm::SmallVector<bool, 4> MultiTargetDiagnosed;
+
+  /// What clang::AllowTargetVariantDecls was before this compilation, for
+  /// several targets, enabled it.
+  std::optional<bool> PrevAllowTargetVariantDecls;
 
   /// The file manager.
   IntrusiveRefCntPtr<FileManager> FileMgr;
@@ -446,6 +467,23 @@ public:
   /// Replace the current AuxTarget.
   void setAuxTarget(TargetInfo *Value);
 
+  /// The N aux (device-arch) targets, one per -multi-target-aux-invocation.
+  llvm::ArrayRef<IntrusiveRefCntPtr<TargetInfo>>
+  getMultiTargetAuxTargets() const {
+    return MultiTargetAuxTargets;
+  }
+
+  /// The aux target invocations parsed from -multi-target-aux-invocation.
+  llvm::ArrayRef<std::shared_ptr<CompilerInvocation>>
+  getMultiTargetAuxInvocations() const {
+    return MultiTargetAuxInvocations;
+  }
+
+  /// Whether LangOptions field \p Name may differ between the primary target
+  /// and a multi-target aux target. The AST is shared, so a field that shapes
+  /// it takes the primary's value for every target.
+  static bool langOptMayDifferPerTarget(StringRef Name);
+
   // Create Target and AuxTarget based on current options
   bool createTarget();
 
@@ -774,6 +812,10 @@ public:
 
   /// Create the AST context.
   void createASTContext();
+
+  /// Ends this compilation's enabling of target-tagged declarations, so a
+  /// later compilation in the same process is not affected.
+  void endMultiTargetCompile();
 
   /// Create an external AST source to read a PCH file and attach it to the AST
   /// context.

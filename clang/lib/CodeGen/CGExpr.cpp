@@ -32,6 +32,7 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/InferAlloc.h"
 #include "clang/AST/MatrixUtils.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/NSAPI.h"
 #include "clang/AST/ParentMapContext.h"
 #include "clang/AST/StmtVisitor.h"
@@ -1970,6 +1971,74 @@ CodeGenFunction::tryEmitAsConstant(const DeclRefExpr *RefExpr) {
   }
   if (CEK == CodeGenUtils::CEK_None)
     return ConstantEmission();
+
+  // Value's owning class can differ per target: an explicit specialization
+  // whose body genuinely differs per
+  // target (e.g. `template <> struct traits<int> { ... #if
+  // defined(__gfx942__) ... #else ... #endif };`) is widened into several
+  // complete, distinctly target-tagged CXXRecordDecl redecls (see
+  // CXXRecordDecl::getDefinitionForTargetVariant), and Sema's one shared
+  // lookup permanently binds RefExpr to whichever redecl's member resolved
+  // first -- correct for that one target, wrong for every other. If Value's
+  // owning class is target-tagged and doesn't match the target CodeGen is
+  // currently emitting for, look up the same-named member on the redecl that
+  // does, and evaluate that member's initializer instead.
+  if (const auto *VD = dyn_cast<VarDecl>(Value)) {
+    if (const auto *Owner =
+            dyn_cast_or_null<CXXRecordDecl>(VD->getDeclContext())) {
+      if (LLVM_UNLIKELY(Owner->getTargetVariant()) &&
+          !Owner->isCopyFor(CGM.getTargetVariant())) {
+        const CXXRecordDecl *Sibling =
+            Owner->getDefinitionForTargetVariant(CGM.getTargetVariant());
+        if (Sibling != Owner) {
+          for (const Decl *D : Sibling->decls()) {
+            const auto *SiblingVD = dyn_cast<VarDecl>(D);
+            if (!SiblingVD || SiblingVD->getDeclName() != VD->getDeclName())
+              continue;
+            if (const Expr *SiblingInit = SiblingVD->getAnyInitializer()) {
+              Expr::EvalResult SiblingResult;
+              if (SiblingInit->EvaluateAsRValue(SiblingResult, getContext()) &&
+                  !SiblingResult.HasSideEffects) {
+                llvm::Constant *C = ConstantEmitter(*this).emitAbstract(
+                    RefExpr->getLocation(), SiblingResult.Val,
+                    RefExpr->getType().getUnqualifiedType());
+                return ConstantEmission::forValue(C);
+              }
+            }
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Code compiled once for every target can name another target's copy of a
+  // constant whose definition differs between them, e.g. one defined in each
+  // arm of an #if on the architecture; each target evaluates its own copy.
+  if (LLVM_UNLIKELY(Value->getTargetVariant()) &&
+      CEK != CodeGenUtils::CEK_AsReferenceOnly &&
+      !Value->isCopyFor(CGM.getTargetVariant()) &&
+      getContext().getMultiTarget().isTargetDivergentSource(Value)) {
+    SmallVector<const NamedDecl *, 4> Copies;
+    getContext().getMultiTarget().getTargetCopies(Value, Copies);
+    for (const NamedDecl *Copy : Copies) {
+      if (!Copy->isCopyFor(CGM.getTargetVariant()))
+        continue;
+      Expr::EvalResult CopyResult;
+      if (const auto *ECD = dyn_cast<EnumConstantDecl>(Copy))
+        CopyResult.Val = APValue(ECD->getInitVal());
+      else if (const Expr *CopyInit =
+                   cast<VarDecl>(Copy)->getAnyInitializer();
+               !CopyInit ||
+               !CopyInit->EvaluateAsRValue(CopyResult, getContext()) ||
+               CopyResult.HasSideEffects)
+        break;
+      llvm::Constant *C = ConstantEmitter(*this).emitAbstract(
+          RefExpr->getLocation(), CopyResult.Val,
+          RefExpr->getType().getUnqualifiedType());
+      return ConstantEmission::forValue(C);
+    }
+  }
 
   Expr::EvalResult result;
   bool resultIsReference;
@@ -6640,6 +6709,20 @@ RValue CodeGenFunction::EmitRValueForField(LValue LV,
 RValue CodeGenFunction::EmitCallExpr(const CallExpr *E,
                                      ReturnValueSlot ReturnValue,
                                      llvm::CallBase **CallOrInvoke) {
+  // This call may have been resolved by an HD-context CUDA/HIP overload
+  // pick that depended on the ambient CUDAIsDevice value Sema's single
+  // shared pass happened to have -- see ASTContext::CUDAAmbiguousCalls.
+  // Substitute the whole, independently argument-converted CallExpr for
+  // this CodeGenModule's own (already-correct, per-target-variant) ambient
+  // before emitting, since the two sides may disagree on argument
+  // conversions and static type, not just on which FunctionDecl to call.
+  if (const auto *Dual = getContext().getCUDADualSideCall(E)) {
+    const CallExpr *Sub =
+        getLangOpts().CUDAIsDevice ? Dual->DeviceCall : Dual->HostCall;
+    if (Sub != E)
+      return EmitCallExpr(Sub, ReturnValue, CallOrInvoke);
+  }
+
   llvm::CallBase *CallOrInvokeStorage;
   if (!CallOrInvoke) {
     CallOrInvoke = &CallOrInvokeStorage;

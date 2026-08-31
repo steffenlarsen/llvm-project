@@ -37,11 +37,13 @@
 #include "clang/AST/ExternalASTSource.h"
 #include "clang/AST/Mangle.h"
 #include "clang/AST/MangleNumberingContext.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/NestedNameSpecifier.h"
 #include "clang/AST/ParentMapContext.h"
 #include "clang/AST/RawCommentList.h"
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/Stmt.h"
+#include "clang/AST/TargetDivergence.h"
 #include "clang/AST/TemplateBase.h"
 #include "clang/AST/TemplateName.h"
 #include "clang/AST/Type.h"
@@ -84,6 +86,7 @@
 #include "llvm/Frontend/OpenMP/OMPIRBuilder.h"
 #include "llvm/Support/Capacity.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MD5.h"
@@ -946,6 +949,10 @@ ASTContext::ASTContext(LangOptions &LOpts, SourceManager &SM,
       DeclarationNames(*this), Comments(SM),
       CommentCommandTraits(BumpAlloc, LOpts.CommentOpts),
       CompCategories(this_()), LastSDM(nullptr, 0) {
+  // Code guarded only by the process-wide flag can reach any context, e.g.
+  // one made to record a target's tokens.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    MultiTarget = std::make_unique<MultiTargetContext>(*this);
   addTranslationUnitDecl();
 }
 
@@ -953,6 +960,10 @@ void ASTContext::cleanup() {
   // Release the DenseMaps associated with DeclContext objects.
   // FIXME: Is this the ideal solution?
   ReleaseDeclContextMaps();
+
+  // Their storage comes from DiagAllocator.
+  if (MultiTarget)
+    MultiTarget->FailedTargetInstantiations.clear();
 
   // Call all of the deallocation functions on all of their targets.
   for (auto &Pair : Deallocations)
@@ -979,6 +990,14 @@ void ASTContext::cleanup() {
   }
   ASTRecordLayouts.clear();
 
+  // Divergent layouts are allocated the same way and need the same teardown.
+  for (auto I = DivergentRecordLayouts.begin(),
+            E = DivergentRecordLayouts.end();
+       I != E;)
+    if (auto *R = const_cast<ASTRecordLayout *>((I++)->second))
+      R->Destroy(*this);
+  DivergentRecordLayouts.clear();
+
   CtorClosureDefaultArgs.clear();
 
   for (const auto &Value : ModuleInitializers)
@@ -988,6 +1007,13 @@ void ASTContext::cleanup() {
   TUDecl = nullptr;
   XRayFilter.reset();
   NoSanitizeL.reset();
+}
+
+void ASTContext::setMultiTargetCompile() {
+  MultiTargetCompile = true;
+  MultiTargetPrimaryIsDevice = LangOpts.CUDAIsDevice;
+  if (!MultiTarget)
+    MultiTarget = std::make_unique<MultiTargetContext>(*this);
 }
 
 ASTContext::~ASTContext() { cleanup(); }
@@ -1264,14 +1290,44 @@ void ASTContext::InitBuiltinType(CanQualType &R, BuiltinType::Kind K) {
   Types.push_back(Ty);
 }
 
+/// Enables multi-target mode when an aux target is configured. Kept
+/// file-local rather than declared in ASTContext.h, which is included almost
+/// everywhere and should not grow a CommandLine.h dependency.
+static llvm::cl::opt<bool> MultiTargetScopes(
+    "multi-target-scopes", llvm::cl::Hidden, llvm::cl::init(false),
+    llvm::cl::desc("Prototype: key target-dependent caches by target where "
+                   "an aux target is configured, also in a single-target "
+                   "compile"));
+
 void ASTContext::InitBuiltinTypes(const TargetInfo &Target,
                                   const TargetInfo *AuxTarget) {
+  SmallVector<const TargetInfo *, 1> AuxTargets;
+  if (AuxTarget)
+    AuxTargets.push_back(AuxTarget);
+  InitBuiltinTypes(Target, AuxTargets);
+}
+
+void ASTContext::InitBuiltinTypes(const TargetInfo &Target,
+                                  ArrayRef<const TargetInfo *> AuxTargets) {
   assert((!this->Target || this->Target == &Target) &&
          "Incorrect target reinitialization");
   assert(VoidTy.isNull() && "Context reinitialized?");
 
   this->Target = &Target;
-  this->AuxTarget = AuxTarget;
+  this->AuxTargets.assign(AuxTargets.begin(), AuxTargets.end());
+  this->PrimaryTarget = &Target;
+
+  // The only way into multi-target mode: all targets are known here and
+  // nothing has been parsed yet, which is what TargetDivergence needs. A
+  // compilation for several targets keys what they lay out differently by
+  // target.
+  TargetScopesEnabled = MultiTargetScopes;
+  if ((MultiTargetScopes || MultiTargetCompile) && !AuxTargets.empty()) {
+    SmallVector<const TargetInfo *, 5> Ts;
+    Ts.push_back(&Target);
+    Ts.append(AuxTargets.begin(), AuxTargets.end());
+    setTargetDivergence(std::make_unique<TargetDivergence>(Ts));
+  }
 
   ABI.reset(createCXXABI(Target));
   AddrSpaceMapMangling = isAddrSpaceMapManglingEnabled(Target, LangOpts);
@@ -1445,7 +1501,9 @@ void ASTContext::InitBuiltinTypes(const TargetInfo &Target,
   }
 
   if (Target.hasAArch64ACLETypes() ||
-      (AuxTarget && AuxTarget->hasAArch64ACLETypes())) {
+      llvm::any_of(AuxTargets, [](const TargetInfo *T) {
+        return T->hasAArch64ACLETypes();
+      })) {
 #define SVE_TYPE(Name, Id, SingletonId)                                        \
   InitBuiltinType(SingletonId, BuiltinType::Id);
 #include "clang/Basic/AArch64ACLETypes.def"
@@ -1472,14 +1530,18 @@ void ASTContext::InitBuiltinTypes(const TargetInfo &Target,
 #include "clang/Basic/WebAssemblyReferenceTypes.def"
   }
 
-  if (Target.hasAMDGPUTypes() || (AuxTarget && (AuxTarget->hasAMDGPUTypes()))) {
+  if (Target.hasAMDGPUTypes() ||
+      llvm::any_of(AuxTargets,
+                   [](const TargetInfo *T) { return T->hasAMDGPUTypes(); })) {
 #define AMDGPU_TYPE(Name, Id, SingletonId, Width, Align)                       \
   InitBuiltinType(SingletonId, BuiltinType::Id);
 #include "clang/Basic/AMDGPUTypes.def"
   }
 
   if (Target.getTriple().isSPIRV() ||
-      (AuxTarget && AuxTarget->getTriple().isSPIRV())) {
+      llvm::any_of(AuxTargets, [](const TargetInfo *T) {
+        return T->getTriple().isSPIRV();
+      })) {
 #define SPIRV_TYPE(Name, Id, SingletonId)                                      \
   InitBuiltinType(SingletonId, BuiltinType::Id);
 #include "clang/Basic/SPIRVTypes.def"
@@ -1824,11 +1886,11 @@ const llvm::fltSemantics &ASTContext::getFloatTypeSemantics(QualType T) const {
     return Target->getIbm128Format();
   case BuiltinType::LongDouble:
     if (getLangOpts().OpenMP && getLangOpts().OpenMPIsTargetDevice)
-      return AuxTarget->getLongDoubleFormat();
+      return getAuxTargetInfo()->getLongDoubleFormat();
     return Target->getLongDoubleFormat();
   case BuiltinType::Float128:
     if (getLangOpts().OpenMP && getLangOpts().OpenMPIsTargetDevice)
-      return AuxTarget->getFloat128Format();
+      return getAuxTargetInfo()->getFloat128Format();
     return Target->getFloat128Format();
   }
 }
@@ -2064,7 +2126,75 @@ unsigned ASTContext::getTypeAlignIfKnown(QualType T,
   return 0;
 }
 
+void ASTContext::setTargetDivergence(std::unique_ptr<TargetDivergence> D) {
+  Divergence = std::move(D);
+  HasTargetDivergence = Divergence && Divergence->any();
+}
+
+/// A target-dependent answer was demanded with no target in scope, in a
+/// compilation where targets are known to disagree about it. There is no
+/// correct value to return: answering for whichever target happened to run
+/// last is how a combined frontend silently miscompiles. Fail instead, and
+/// name the entity so the missing TargetScope can be found.
+[[noreturn]] static void reportMissingTargetScope(StringRef Kind,
+                                                  StringRef Name) {
+  llvm::report_fatal_error(Twine("no target in scope while computing the ") +
+                           Kind + " of '" + Name +
+                           "', whose value differs between the targets of this "
+                           "compilation");
+}
+
+/// Cold path: more than one target is configured and something differs. Types
+/// that cannot differ still share the single cache; only the provably
+/// divergent ones get an entry per target.
+TypeInfo ASTContext::getTypeInfoForVariant(const Type *T) const {
+  if (!Divergence->isLayoutDivergent(QualType(T, 0))) {
+    TypeInfoMap::iterator I = MemoizedTypeInfo.find(T);
+    if (I != MemoizedTypeInfo.end())
+      return I->second;
+    TypeInfo TI = getTypeInfoImpl(T);
+    MemoizedTypeInfo[T] = TI;
+    return TI;
+  }
+  if (CurrentTargetVariant == 0 && TargetScopesEnabled)
+    reportMissingTargetScope("layout", QualType(T, 0).getAsString());
+  auto Key = std::make_pair(T, getLayoutVariant());
+  auto I = DivergentTypeInfo.find(Key);
+  if (I != DivergentTypeInfo.end())
+    return I->second;
+  TypeInfo TI = getTypeInfoImpl(T);
+  DivergentTypeInfo[Key] = TI;
+  return TI;
+}
+
+/// A record whose layout cannot differ between targets keeps one shared entry;
+/// only provably divergent ones are stored per target.
+const ASTRecordLayout *
+ASTContext::lookupRecordLayoutForVariant(const RecordDecl *D) const {
+  if (!Divergence->isLayoutDivergent(D))
+    return ASTRecordLayouts.lookup(D);
+  if (CurrentTargetVariant == 0 && TargetScopesEnabled)
+    reportMissingTargetScope("layout", D->getNameAsString());
+  return DivergentRecordLayouts.lookup({D, getLayoutVariant()});
+}
+
+void ASTContext::storeRecordLayoutForVariant(const RecordDecl *D,
+                                             const ASTRecordLayout *L) const {
+  if (!Divergence->isLayoutDivergent(D)) {
+    ASTRecordLayouts[D] = L;
+    return;
+  }
+  if (CurrentTargetVariant == 0 && TargetScopesEnabled)
+    reportMissingTargetScope("layout", D->getNameAsString());
+  DivergentRecordLayouts[{D, getLayoutVariant()}] = L;
+}
+
 TypeInfo ASTContext::getTypeInfo(const Type *T) const {
+  // Ordinary single-target compilation reaches none of the multi-target logic:
+  // this is the one added instruction, and it is never taken.
+  if (LLVM_UNLIKELY(HasTargetDivergence))
+    return getTypeInfoForVariant(T);
+
   TypeInfoMap::iterator I = MemoizedTypeInfo.find(T);
   if (I != MemoizedTypeInfo.end())
     return I->second;
@@ -2286,9 +2416,9 @@ TypeInfo ASTContext::getTypeInfoImpl(const Type *T) const {
       } else if ((getLangOpts().SYCLIsDevice ||
                   (getLangOpts().OpenMP &&
                    getLangOpts().OpenMPIsTargetDevice)) &&
-                 AuxTarget->hasBFloat16Type()) {
-        Width = AuxTarget->getBFloat16Width();
-        Align = AuxTarget->getBFloat16Align();
+                 getAuxTargetInfo()->hasBFloat16Type()) {
+        Width = getAuxTargetInfo()->getBFloat16Width();
+        Align = getAuxTargetInfo()->getBFloat16Align();
       }
       break;
     case BuiltinType::Float16:
@@ -2300,8 +2430,8 @@ TypeInfo ASTContext::getTypeInfoImpl(const Type *T) const {
       } else {
         assert(getLangOpts().OpenMP && getLangOpts().OpenMPIsTargetDevice &&
                "Expected OpenMP device compilation.");
-        Width = AuxTarget->getHalfWidth();
-        Align = AuxTarget->getHalfAlign();
+        Width = getAuxTargetInfo()->getHalfWidth();
+        Align = getAuxTargetInfo()->getHalfAlign();
       }
       break;
     case BuiltinType::Float:
@@ -2318,10 +2448,12 @@ TypeInfo ASTContext::getTypeInfoImpl(const Type *T) const {
       break;
     case BuiltinType::LongDouble:
       if (getLangOpts().OpenMP && getLangOpts().OpenMPIsTargetDevice &&
-          (Target->getLongDoubleWidth() != AuxTarget->getLongDoubleWidth() ||
-           Target->getLongDoubleAlign() != AuxTarget->getLongDoubleAlign())) {
-        Width = AuxTarget->getLongDoubleWidth();
-        Align = AuxTarget->getLongDoubleAlign();
+          (Target->getLongDoubleWidth() !=
+               getAuxTargetInfo()->getLongDoubleWidth() ||
+           Target->getLongDoubleAlign() !=
+               getAuxTargetInfo()->getLongDoubleAlign())) {
+        Width = getAuxTargetInfo()->getLongDoubleWidth();
+        Align = getAuxTargetInfo()->getLongDoubleAlign();
       } else {
         Width = Target->getLongDoubleWidth();
         Align = Target->getLongDoubleAlign();
@@ -2339,8 +2471,8 @@ TypeInfo ASTContext::getTypeInfoImpl(const Type *T) const {
       } else {
         assert(getLangOpts().OpenMP && getLangOpts().OpenMPIsTargetDevice &&
                "Expected OpenMP device compilation.");
-        Width = AuxTarget->getFloat128Width();
-        Align = AuxTarget->getFloat128Align();
+        Width = getAuxTargetInfo()->getFloat128Width();
+        Align = getAuxTargetInfo()->getFloat128Align();
       }
       break;
     case BuiltinType::NullPtr:
@@ -13499,7 +13631,8 @@ bool ASTContext::shouldEmitCUDADecl(const ValueDecl *D) const {
     return !LangOpts.CUDAIsDevice || VD->hasAttr<CUDADeviceAttr>() ||
            VD->hasAttr<CUDAConstantAttr>() || VD->hasAttr<CUDASharedAttr>() ||
            VD->getType()->isCUDADeviceBuiltinSurfaceType() ||
-           VD->getType()->isCUDADeviceBuiltinTextureType();
+           VD->getType()->isCUDADeviceBuiltinTextureType() ||
+           (MultiTarget && MultiTarget->isImplicitAuxDeviceConstant(VD));
   }
 
   const auto *FD = cast<FunctionDecl>(D);
@@ -13658,6 +13791,8 @@ CXXABI::~CXXABI() = default;
 
 size_t ASTContext::getSideTableAllocatedMemory() const {
   return ASTRecordLayouts.getMemorySize() +
+         DivergentRecordLayouts.getMemorySize() +
+         DivergentTypeInfo.getMemorySize() +
          llvm::capacity_in_bytes(ObjCLayouts) +
          llvm::capacity_in_bytes(KeyFunctions) +
          llvm::capacity_in_bytes(ObjCImpls) +
@@ -13875,6 +14010,12 @@ ASTContext::getManglingNumberContext(const DeclContext *DC) {
   if (!MCtx)
     MCtx = createMangleNumberingContext();
   return *MCtx;
+}
+
+std::unique_ptr<MangleNumberingContext>
+ASTContext::exchangeManglingNumberContext(
+    const DeclContext *DC, std::unique_ptr<MangleNumberingContext> MCtx) {
+  return std::exchange(MangleNumberingContexts[DC], std::move(MCtx));
 }
 
 MangleNumberingContext &

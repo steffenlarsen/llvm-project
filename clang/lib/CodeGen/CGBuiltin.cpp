@@ -145,10 +145,11 @@ Value *CodeGenFunction::EmitTargetBuiltinExpr(unsigned BuiltinID,
                                               const CallExpr *E,
                                               ReturnValueSlot ReturnValue) {
   if (getContext().BuiltinInfo.isAuxBuiltinID(BuiltinID)) {
-    assert(getContext().getAuxTargetInfo() && "Missing aux target info");
+    const TargetInfo *AuxTarget = getContext().BuiltinInfo.getAuxTarget();
+    assert(AuxTarget && "Missing aux target info");
     return EmitTargetArchBuiltinExpr(
         this, getContext().BuiltinInfo.getAuxBuiltinID(BuiltinID), E,
-        ReturnValue, getContext().getAuxTargetInfo()->getTriple().getArch());
+        ReturnValue, AuxTarget->getTriple().getArch());
   }
 
   return EmitTargetArchBuiltinExpr(this, BuiltinID, E, ReturnValue,

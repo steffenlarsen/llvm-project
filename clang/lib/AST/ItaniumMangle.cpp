@@ -26,6 +26,7 @@
 #include "clang/AST/ExprConcepts.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/Mangle.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/Basic/ABI.h"
 #include "clang/Basic/DiagnosticAST.h"
@@ -229,6 +230,11 @@ class CXXNameMangler {
   /// Also it is required to avoid infinite recursion in some cases.
   bool DisableDerivedAbiTags = false;
 
+  /// Whether a kernel's name is being mangled. The host registers a kernel by
+  /// one name for every device architecture, so a constant that differs
+  /// between them stays an expression there; see mangleTemplateArgExpr.
+  bool InKernelName = false;
+
   /// The "structor" is the top-level declaration being mangled, if
   /// that's not a template specialization; otherwise it's the pattern
   /// for that specialization.
@@ -417,7 +423,8 @@ public:
         NullOut(false), Structor(nullptr), AbiTagsRoot(AbiTags) {}
   CXXNameMangler(CXXNameMangler &Outer, raw_ostream &Out_)
       : Context(Outer.Context), Out(Out_),
-        NormalizeIntegers(Outer.NormalizeIntegers), Structor(Outer.Structor),
+        NormalizeIntegers(Outer.NormalizeIntegers),
+        InKernelName(Outer.InKernelName), Structor(Outer.Structor),
         StructorType(Outer.StructorType), SeqID(Outer.SeqID),
         FunctionTypeDepth(Outer.FunctionTypeDepth), AbiTagsRoot(AbiTags),
         Substitutions(Outer.Substitutions),
@@ -468,6 +475,9 @@ private:
 
   void addSubstitution(const NamedDecl *ND) {
     ND = cast<NamedDecl>(ND->getCanonicalDecl());
+    if (const auto *RD = dyn_cast<CXXRecordDecl>(ND);
+        RD && getASTContext().hasMultiTarget())
+      ND = getASTContext().getMultiTarget().getManglingEquivalent(RD);
 
     addSubstitution(reinterpret_cast<uintptr_t>(ND));
   }
@@ -828,6 +838,7 @@ void CXXNameMangler::mangle(GlobalDecl GD) {
   //                ::= <data name>
   //                ::= <special-name>
   Out << "_Z";
+  InKernelName = GD.getDecl()->hasAttr<CUDAGlobalAttr>();
   if (isa<FunctionDecl>(GD.getDecl()))
     mangleFunctionEncoding(GD);
   else if (isa<VarDecl, FieldDecl, MSGuidDecl, TemplateParamObjectDecl,
@@ -6584,7 +6595,47 @@ void CXXNameMangler::mangleTemplateArg(TemplateArgument A, bool NeedExactType) {
   }
 }
 
+/// The value of \p E, a reference to a constant that differs between the
+/// targets of a multi-target compilation, for the target being compiled for.
+/// A template's signature keeps such a reference unevaluated, but each
+/// target's own compilation evaluates it.
+static std::optional<llvm::APSInt> getTargetValue(ASTContext &Ctx,
+                                                  const Expr *E) {
+  if (!Ctx.hasMultiTarget() || E->isTypeDependent() ||
+      !E->getType()->isIntegralOrEnumerationType())
+    return std::nullopt;
+  const auto *DRE = dyn_cast<DeclRefExpr>(E->IgnoreParenImpCasts());
+  if (!DRE || !Ctx.getMultiTarget().isTargetDivergentSource(DRE->getDecl()))
+    return std::nullopt;
+  unsigned Target = Ctx.getCurrentTargetVariant();
+  if (!Target)
+    Target = 1;
+  const NamedDecl *Copy =
+      Ctx.getMultiTarget().getCopyFor(DRE->getDecl(), Target);
+  llvm::APSInt Value;
+  if (const auto *ECD = dyn_cast_or_null<EnumConstantDecl>(Copy)) {
+    Value = ECD->getInitVal();
+  } else if (const auto *VD = dyn_cast_or_null<VarDecl>(Copy)) {
+    const APValue *V = VD->evaluateValue();
+    if (!V || !V->isInt())
+      return std::nullopt;
+    Value = V->getInt();
+  } else {
+    return std::nullopt;
+  }
+  QualType T = E->getType();
+  Value = Value.extOrTrunc(Ctx.getIntWidth(T));
+  Value.setIsSigned(T->isSignedIntegerOrEnumerationType());
+  return Value;
+}
+
 void CXXNameMangler::mangleTemplateArgExpr(const Expr *E) {
+  if (!InKernelName)
+    if (std::optional<llvm::APSInt> Value =
+            getTargetValue(Context.getASTContext(), E)) {
+      mangleIntegerLiteral(E->getType().getUnqualifiedType(), *Value);
+      return;
+    }
   if (!isCompatibleWith(LangOptions::ClangABI::Ver11)) {
     mangleExpression(E, UnknownArity, /*AsTemplateArg=*/true);
     return;
@@ -7207,6 +7258,9 @@ bool CXXNameMangler::mangleSubstitution(const NamedDecl *ND) {
     return true;
 
   ND = cast<NamedDecl>(ND->getCanonicalDecl());
+  if (const auto *RD = dyn_cast<CXXRecordDecl>(ND);
+      RD && getASTContext().hasMultiTarget())
+    ND = getASTContext().getMultiTarget().getManglingEquivalent(RD);
   return mangleSubstitution(reinterpret_cast<uintptr_t>(ND));
 }
 
@@ -7223,6 +7277,8 @@ bool CXXNameMangler::mangleSubstitution(QualType T) {
       return mangleSubstitution(RD);
   }
 
+  if (getASTContext().hasMultiTarget())
+    T = getASTContext().getMultiTarget().getManglingEquivalent(T);
   uintptr_t TypePtr = reinterpret_cast<uintptr_t>(T.getAsOpaquePtr());
 
   return mangleSubstitution(TypePtr);
@@ -7395,6 +7451,8 @@ void CXXNameMangler::addSubstitution(QualType T) {
     }
   }
 
+  if (getASTContext().hasMultiTarget())
+    T = getASTContext().getMultiTarget().getManglingEquivalent(T);
   uintptr_t TypePtr = reinterpret_cast<uintptr_t>(T.getAsOpaquePtr());
   addSubstitution(TypePtr);
 }

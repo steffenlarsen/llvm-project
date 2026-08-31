@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "SemaLookupTarget.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/CXXInheritance.h"
 #include "clang/AST/Decl.h"
@@ -33,7 +34,9 @@
 #include "clang/Sema/Scope.h"
 #include "clang/Sema/ScopeInfo.h"
 #include "clang/Sema/Sema.h"
+#include "clang/Sema/SemaCUDA.h"
 #include "clang/Sema/SemaInternal.h"
+#include "clang/Sema/SemaMultiTarget.h"
 #include "clang/Sema/SemaRISCV.h"
 #include "clang/Sema/TemplateDeduction.h"
 #include "clang/Sema/TypoCorrection.h"
@@ -55,18 +58,21 @@
 #include "OpenCLBuiltins.inc"
 
 using namespace clang;
+using namespace clang::multitarget;
 using namespace sema;
 
 namespace {
   class UnqualUsingEntry {
     const DeclContext *Nominated;
     const DeclContext *CommonAncestor;
+    const UsingDirectiveDecl *TargetDirective;
 
   public:
     UnqualUsingEntry(const DeclContext *Nominated,
-                     const DeclContext *CommonAncestor)
-      : Nominated(Nominated), CommonAncestor(CommonAncestor) {
-    }
+                     const DeclContext *CommonAncestor,
+                     const UsingDirectiveDecl *TargetDirective)
+        : Nominated(Nominated), CommonAncestor(CommonAncestor),
+          TargetDirective(TargetDirective) {}
 
     const DeclContext *getCommonAncestor() const {
       return CommonAncestor;
@@ -74,6 +80,12 @@ namespace {
 
     const DeclContext *getNominatedNamespace() const {
       return Nominated;
+    }
+
+    /// The using-directive only some targets have that nominates the
+    /// namespace, directly or through others, if any.
+    const UsingDirectiveDecl *getTargetDirective() const {
+      return TargetDirective;
     }
 
     // Sort by the pointer value of the common ancestor.
@@ -101,6 +113,16 @@ namespace {
 
     ListTy list;
     llvm::SmallPtrSet<DeclContext*, 8> visited;
+    // Namespaces reached through a using-directive only some targets have,
+    // which other targets' directives may nominate too.
+    llvm::SmallDenseSet<std::pair<DeclContext *, const UsingDirectiveDecl *>, 4>
+        visitedForTargets;
+
+    bool firstVisit(DeclContext *NS, const UsingDirectiveDecl *By) {
+      if (!By)
+        return visited.insert(NS).second;
+      return !visited.count(NS) && visitedForTargets.insert({NS, By}).second;
+    }
 
   public:
     UnqualUsingDirectiveSet(Sema &SemaRef) : SemaRef(SemaRef) {}
@@ -122,7 +144,7 @@ namespace {
           visit(Ctx, Ctx);
         } else if (!Ctx || Ctx->isFunctionOrMethod()) {
           for (auto *I : S->using_directives())
-            if (SemaRef.isVisible(I))
+            if (SemaRef.isVisible(I) && !I->isRedundantTargetVariant())
               visit(I, InnermostFileDC);
         }
       }
@@ -147,31 +169,38 @@ namespace {
     // were declared in the effective DC.
     void visit(UsingDirectiveDecl *UD, DeclContext *EffectiveDC) {
       DeclContext *NS = UD->getNominatedNamespace();
-      if (!visited.insert(NS).second)
+      const UsingDirectiveDecl *By = UD->getTargetVariant() ? UD : nullptr;
+      if (!firstVisit(NS, By))
         return;
 
-      addUsingDirective(UD, EffectiveDC);
-      addUsingDirectives(NS, EffectiveDC);
+      addUsingDirective(UD, EffectiveDC, By);
+      addUsingDirectives(NS, EffectiveDC, By);
     }
 
     // Adds all the using directives in a context (and those nominated
     // by its using directives, transitively) as if they appeared in
     // the given effective context.
-    void addUsingDirectives(DeclContext *DC, DeclContext *EffectiveDC) {
-      SmallVector<DeclContext*, 4> queue;
+    void addUsingDirectives(DeclContext *DC, DeclContext *EffectiveDC,
+                            const UsingDirectiveDecl *By = nullptr) {
+      SmallVector<std::pair<DeclContext *, const UsingDirectiveDecl *>, 4>
+          queue;
       while (true) {
         for (auto *UD : DC->using_directives()) {
           DeclContext *NS = UD->getNominatedNamespace();
-          if (SemaRef.isVisible(UD) && visited.insert(NS).second) {
-            addUsingDirective(UD, EffectiveDC);
-            queue.push_back(NS);
+          const UsingDirectiveDecl *Via = By                       ? By
+                                          : UD->getTargetVariant() ? UD
+                                                                   : nullptr;
+          if (SemaRef.isVisible(UD) && !UD->isRedundantTargetVariant() &&
+              firstVisit(NS, Via)) {
+            addUsingDirective(UD, EffectiveDC, Via);
+            queue.push_back({NS, Via});
           }
         }
 
         if (queue.empty())
           return;
 
-        DC = queue.pop_back_val();
+        std::tie(DC, By) = queue.pop_back_val();
       }
     }
 
@@ -182,7 +211,8 @@ namespace {
     //   contains using-directives, the effect is as if the
     //   using-directives from the second namespace also appeared in
     //   the first.
-    void addUsingDirective(UsingDirectiveDecl *UD, DeclContext *EffectiveDC) {
+    void addUsingDirective(UsingDirectiveDecl *UD, DeclContext *EffectiveDC,
+                           const UsingDirectiveDecl *By) {
       // Find the common ancestor between the effective context and
       // the nominated namespace.
       DeclContext *Common = UD->getNominatedNamespace();
@@ -190,7 +220,7 @@ namespace {
         Common = Common->getParent();
       Common = Common->getPrimaryContext();
 
-      list.push_back(UnqualUsingEntry(UD->getNominatedNamespace(), Common));
+      list.push_back(UnqualUsingEntry(UD->getNominatedNamespace(), Common, By));
     }
 
     void done() { llvm::stable_sort(list, UnqualUsingEntry::Comparator()); }
@@ -484,8 +514,39 @@ static bool canHideTag(const NamedDecl *D) {
          isa<UnresolvedUsingValueDecl>(D);
 }
 
-/// Resolves the result kind of this lookup.
+
 void LookupResult::resolveKind() {
+
+  // Where a declaration belonging to the target being analysed is present, the
+  // primary's is only its fallback. Confined to a re-parse for the same reason
+  // the fallback is.
+  bool HasExactTargetMatch = false;
+  unsigned CurrentTargetForLookup = 0;
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      getSema().MultiTarget().InTargetFallbackReparse) {
+    CurrentTargetForLookup =
+        getSema().getASTContext().getCurrentTargetVariant();
+    if (!CurrentTargetForLookup)
+      CurrentTargetForLookup = 1;
+    // The function being re-parsed is only tagged once it is complete, but a
+    // recursive call inside it already names this target's copy. So does a
+    // later declarator of the group being re-parsed name an earlier one.
+    const FunctionDecl *CurFD = getSema().getCurFunctionDecl();
+    auto InThisReparse = [&](const NamedDecl *D) {
+      return !D->getTargetVariant() &&
+             llvm::any_of(Decls, [&](const NamedDecl *Origin) {
+               return Origin->isTargetVariantReparseOrigin() &&
+                      Origin->getLocation() == D->getLocation();
+             });
+    };
+    for (const NamedDecl *D : Decls)
+      if (getTargetVariantCarrier(D)->isCopyFor(CurrentTargetForLookup) ||
+          (CurFD && D->getAsFunction() == CurFD) || InThisReparse(D)) {
+        HasExactTargetMatch = true;
+        break;
+      }
+  }
+
   unsigned N = Decls.size();
 
   // Fast case: no possible ambiguity.
@@ -498,6 +559,36 @@ void LookupResult::resolveKind() {
   // If there's a single decl, we need to examine it to decide what
   // kind of lookup this is.
   if (N == 1) {
+    // The N>1 loop below drops any decl that isn't visible for the current
+    // target before treating the result as unambiguous; a lone decl needs
+    // the same check. For a dependent call, ordinary lookup's candidate set
+    // is frozen once, at the point the enclosing template is originally
+    // parsed, and replayed at every instantiation -- if that parse-time
+    // ambient differs from the one a later instantiation is running under,
+    // the sole frozen candidate can be tagged for a different target than
+    // the one now compiling. Dropping it here yields ordinary lookup's "not
+    // found for this target" outcome, the same as if it had been one of
+    // several frozen decls instead of the only one.
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+        !isTargetVisible(*Decls.begin(), /*SoleCandidate=*/true)) {
+      const auto *FD =
+          dyn_cast<FieldDecl>((*Decls.begin())->getUnderlyingDecl());
+      NamedDecl *Live =
+          (FD && FD->getTargetVariant() == Decl::TargetVariantRedundant)
+              ? findLiveFieldInSiblingRecord(FD)
+              : findTargetVisibleRedecl(
+                    *Decls.begin(), [this](const NamedDecl *ND) {
+                      return isTargetVisible(ND, /*SoleCandidate=*/true);
+                    });
+      if (!Live) {
+        Decls.clear();
+        ResultKind = LookupResultKind::NotFound;
+        return;
+      }
+      Decls.clear();
+      addDecl(Live);
+    }
+
     const NamedDecl *D = (*Decls.begin())->getUnderlyingDecl();
     if (isa<FunctionTemplateDecl>(D))
       ResultKind = LookupResultKind::FoundOverloaded;
@@ -525,6 +616,37 @@ void LookupResult::resolveKind() {
   for (unsigned I = 0; I < N; I++) {
     const NamedDecl *D = Decls[I]->getUnderlyingDecl();
     D = cast<NamedDecl>(D->getCanonicalDecl());
+
+    // A declaration tagged with a target variant only exists for that
+    // target. Drop the ones belonging to other targets before the
+    // ambiguity checks below, the same way equivalent internal-linkage
+    // declarations are dropped. Variant 0 means "every target".
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+      bool TargetVisible = isTargetVisible(Decls[I]);
+      if (!TargetVisible) {
+        if (NamedDecl *Redecl = findTargetVisibleRedecl(
+                Decls[I], [this](const NamedDecl *ND) {
+                  return isTargetVisible(ND);
+                })) {
+          Decls[I].setDecl(Redecl);
+          D = cast<NamedDecl>(Redecl->getCanonicalDecl());
+          TargetVisible = true;
+        }
+      }
+      const Decl *Tagged = getTargetVariantCarrier(Decls[I]);
+      // A shared forward declaration of a class names the class of the target
+      // that defined it through that declaration.
+      if (!Tagged->getTargetVariant())
+        if (const auto *TD = dyn_cast<TagDecl>(Decls[I]->getUnderlyingDecl()))
+          if (const TagDecl *Def = TD->getDefinition())
+            Tagged = Def;
+      if (!TargetVisible ||
+          (HasExactTargetMatch && Tagged->getTargetVariant() &&
+           !Tagged->isCopyFor(CurrentTargetForLookup))) {
+        RemovedDecls.set(I);
+        continue;
+      }
+    }
 
     // Ignore an invalid declaration unless it's the only one left.
     // Also ignore HLSLBufferDecl which not have name conflict with other Decls.
@@ -639,6 +761,12 @@ void LookupResult::resolveKind() {
   for (int I = RemovedDecls.find_last(); I >= 0; I = RemovedDecls.find_prev(I))
     Decls[I] = Decls[--N];
   Decls.truncate(N);
+
+  // Dropping other targets' declarations can leave none.
+  if (N == 0) {
+    ResultKind = LookupResultKind::NotFound;
+    return;
+  }
 
   if ((HasNonFunction && (HasFunction || HasUnresolved)) ||
       (HideTags && HasTag && (HasFunction || HasNonFunction || HasUnresolved)))
@@ -1137,8 +1265,8 @@ static bool LookupDirect(Sema &S, LookupResult &R, const DeclContext *DC) {
 
   // Perform lookup into this declaration context.
   DeclContext::lookup_result DR = DC->lookup(R.getLookupName());
-  for (NamedDecl *D : DR) {
-    if ((D = R.getAcceptableDecl(D))) {
+  for (NamedDecl *OrigD : DR) {
+    if (NamedDecl *D = R.getAcceptableDecl(OrigD)) {
       R.addDecl(D);
       Found = true;
     }
@@ -1226,6 +1354,17 @@ static bool LookupDirect(Sema &S, LookupResult &R, const DeclContext *DC) {
   return Found;
 }
 
+/// Whether lookup for \p Name searches \p NS, which \p By, a using-directive
+/// only some targets have, nominates directly or through others. Where \p NS
+/// declares the name, which targets have the directive matters.
+static bool searchesNominatedNamespace(Sema &S, const UsingDirectiveDecl *By,
+                                       const DeclContext *NS,
+                                       DeclarationName Name) {
+  return !By || NS->lookup(Name).empty() ||
+         S.MultiTarget().isDeclVisibleForCurrentTarget(By, /*ForRedecl=*/false,
+                                                       /*AllowFallback=*/false);
+}
+
 // Performs C++ unqualified lookup into the given file context.
 static bool CppNamespaceLookup(Sema &S, LookupResult &R, ASTContext &Context,
                                const DeclContext *NS,
@@ -1239,7 +1378,10 @@ static bool CppNamespaceLookup(Sema &S, LookupResult &R, ASTContext &Context,
   // Perform direct name lookup into the namespaces nominated by the
   // using directives whose common ancestor is this namespace.
   for (const UnqualUsingEntry &UUE : UDirs.getNamespacesFor(NS))
-    if (LookupDirect(S, R, UUE.getNominatedNamespace()))
+    if (searchesNominatedNamespace(S, UUE.getTargetDirective(),
+                                   UUE.getNominatedNamespace(),
+                                   R.getLookupName()) &&
+        LookupDirect(S, R, UUE.getNominatedNamespace()))
       Found = true;
 
   R.resolveKind();
@@ -1471,7 +1613,8 @@ bool Sema::CppLookupName(LookupResult &R, Scope *S) {
 
   // Stop if we ran out of scopes.
   // FIXME:  This really, really shouldn't be happening.
-  if (!S) return false;
+  if (!S)
+    return false;
 
   // If we are looking for members, no need to look into global/namespace scope.
   if (NameKind == LookupMemberName)
@@ -2358,18 +2501,26 @@ static bool LookupQualifiedNameInUsingDirectives(Sema &S, LookupResult &R,
 
   // We have not yet looked into these namespaces, much less added
   // their "using-children" to the queue.
-  SmallVector<NamespaceDecl*, 8> Queue;
+  SmallVector<std::pair<NamespaceDecl *, const UsingDirectiveDecl *>, 8> Queue;
 
   // We have at least added all these contexts to the queue.
   llvm::SmallPtrSet<DeclContext*, 8> Visited;
   Visited.insert(StartDC);
+  llvm::SmallDenseSet<std::pair<DeclContext *, const UsingDirectiveDecl *>, 4>
+      VisitedForTargets;
+  auto FirstVisit = [&](DeclContext *NS, const UsingDirectiveDecl *By) {
+    if (!By)
+      return Visited.insert(NS).second;
+    return !Visited.count(NS) && VisitedForTargets.insert({NS, By}).second;
+  };
 
   // We have already looked into the initial namespace; seed the queue
   // with its using-children.
   for (auto *I : StartDC->using_directives()) {
     NamespaceDecl *ND = I->getNominatedNamespace()->getFirstDecl();
-    if (S.isVisible(I) && Visited.insert(ND).second)
-      Queue.push_back(ND);
+    const UsingDirectiveDecl *By = I->getTargetVariant() ? I : nullptr;
+    if (S.isVisible(I) && !I->isRedundantTargetVariant() && FirstVisit(ND, By))
+      Queue.push_back({ND, By});
   }
 
   // The easiest way to implement the restriction in [namespace.qual]p5
@@ -2383,7 +2534,9 @@ static bool LookupQualifiedNameInUsingDirectives(Sema &S, LookupResult &R,
 
   bool Found = false;
   while (!Queue.empty()) {
-    NamespaceDecl *ND = Queue.pop_back_val();
+    auto [ND, By] = Queue.pop_back_val();
+    if (!searchesNominatedNamespace(S, By, ND, R.getLookupName()))
+      continue;
 
     // We go through some convolutions here to avoid copying results
     // between LookupResults.
@@ -2416,8 +2569,12 @@ static bool LookupQualifiedNameInUsingDirectives(Sema &S, LookupResult &R,
 
     for (auto *I : ND->using_directives()) {
       NamespaceDecl *Nom = I->getNominatedNamespace();
-      if (S.isVisible(I) && Visited.insert(Nom).second)
-        Queue.push_back(Nom);
+      const UsingDirectiveDecl *Via = By                      ? By
+                                      : I->getTargetVariant() ? I
+                                                              : nullptr;
+      if (S.isVisible(I) && !I->isRedundantTargetVariant() &&
+          FirstVisit(Nom, Via))
+        Queue.push_back({Nom, Via});
     }
   }
 
@@ -3937,6 +4094,7 @@ void Sema::ArgumentDependentLookup(DeclarationName Name, SourceLocation Loc,
       // it's ordinarily visible or declared as a friend in an associated
       // class.
       bool Visible = false;
+      bool FriendOfAssociated = false;
       for (D = D->getMostRecentDecl(); D;
            D = cast_or_null<NamedDecl>(D->getPreviousDecl())) {
         if (D->getIdentifierNamespace() & Decl::IDNS_Ordinary) {
@@ -3993,13 +4151,31 @@ void Sema::ArgumentDependentLookup(DeclarationName Name, SourceLocation Loc,
           // the friend declaration should be considered.
           if (AssociatedClasses.count(RD) && isReachable(D)) {
             Visible = true;
+            FriendOfAssociated = D == Underlying;
             break;
           }
         }
       }
 
       // FIXME: Preserve D as the FoundDecl.
-      if (Visible)
+      // A friend declared last in an associated class is the one of the class
+      // copy the arguments name.
+      bool TargetOK = !LLVM_UNLIKELY(clang::AllowTargetVariantDecls) ||
+                      FriendOfAssociated ||
+                      isVisibleForTarget(*this, Underlying,
+                                         /*ForRedecl=*/false,
+                                         /*AllowFallback=*/false);
+      if (!TargetOK) {
+        if (NamedDecl *Redecl = findTargetVisibleRedecl(
+                Underlying, [this](const NamedDecl *ND) {
+                  return isVisibleForTarget(*this, ND, /*ForRedecl=*/false,
+                                            /*AllowFallback=*/false);
+                })) {
+          Underlying = Redecl;
+          TargetOK = true;
+        }
+      }
+      if (Visible && TargetOK)
         Result.insert(Underlying);
     }
   }

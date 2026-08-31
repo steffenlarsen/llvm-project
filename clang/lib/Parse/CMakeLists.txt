@@ -27,6 +27,7 @@ add_clang_library(clangParse
   Parser.cpp
   ParseOpenACC.cpp
   ParseReflect.cpp
+  TargetAlternationReconciler.cpp
 
   LINK_LIBS
   clangAST

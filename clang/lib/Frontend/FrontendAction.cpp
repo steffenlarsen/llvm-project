@@ -26,6 +26,7 @@
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendPluginRegistry.h"
 #include "clang/Frontend/LayoutOverrideSource.h"
+#include "clang/Frontend/MultiTargetRecording.h"
 #include "clang/Frontend/MultiplexConsumer.h"
 #include "clang/Frontend/SARIFDiagnosticPrinter.h"
 #include "clang/Frontend/Utils.h"
@@ -44,6 +45,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/BuryPointer.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
@@ -1059,6 +1061,26 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
     return true;
   }
 
+  // A precompiled header holds one target's AST, but every target of a
+  // multi-target compilation shares one AST.
+  if (!CI.getMultiTargetAuxInvocations().empty()) {
+    StringRef PCH = CI.getPreprocessorOpts().ImplicitPCHInclude;
+    for (const std::shared_ptr<CompilerInvocation> &Aux :
+         CI.getMultiTargetAuxInvocations())
+      if (PCH.empty())
+        PCH = Aux->getPreprocessorOpts().ImplicitPCHInclude;
+    if (!PCH.empty()) {
+      CI.getDiagnostics().Report(diag::err_fe_multi_target_pch) << PCH;
+      return false;
+    }
+    // Nor can one target's preprocessed source stand in for every target's.
+    if (RealInput.isPreprocessed()) {
+      CI.getDiagnostics().Report(diag::err_fe_multi_target_preprocessed_input)
+          << RealInput.getFile();
+      return false;
+    }
+  }
+
   if (!CI.getPreprocessorOpts().ImplicitPCHInclude.empty()) {
     FileManager &FileMgr = CI.getFileManager();
     PreprocessorOptions &PPOpts = CI.getPreprocessorOpts();
@@ -1374,6 +1396,7 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
 
 llvm::Error FrontendAction::Execute() {
   CompilerInstance &CI = getCompilerInstance();
+
   ExecuteAction();
 
   // If we are supposed to rebuild the global module index, do so now unless
@@ -1461,6 +1484,7 @@ void FrontendAction::EndSourceFile() {
   setCompilerInstance(nullptr);
   setCurrentInput(FrontendInputFile());
   CI.getLangOpts().setCompilingModule(LangOptions::CMK_None);
+  CI.endMultiTargetCompile();
 }
 
 bool FrontendAction::shouldEraseOutputFiles() {
@@ -1494,8 +1518,33 @@ void ASTFrontendAction::ExecuteAction() {
   if (!CI.hasSema())
     CI.createSema(getTranslationUnitKind(), CompletionConsumer);
 
+  // The recording passes are themselves FrontendActions, so this must not
+  // re-enter. They own the buffers their tokens point into and so must outlive
+  // the parse.
+  MultiTargetRecordings Recs;
+  static bool Recording = false;
+  std::unique_ptr<llvm::raw_ostream> PreprocessedOS;
+  std::optional<PreprocessedOutputPrinter> Printer;
+  // A compilation for several targets preprocesses once per target, splices
+  // the streams and parses the result.
+  if (!CI.getMultiTargetAuxInvocations().empty() && !Recording) {
+    Recording = true;
+    Recs = recordTargetStreams(CI);
+    Recording = false;
+    // Each target's stream is printed as it is recorded; this target's is
+    // recorded while ParseAST drains it.
+    if ((PreprocessedOS = openMultiTargetPreprocessedOutput(CI, 1)))
+      Printer.emplace(CI.getPreprocessor(), *PreprocessedOS);
+  }
+
   ParseAST(CI.getSema(), CI.getFrontendOpts().ShowStats,
-           CI.getFrontendOpts().SkipFunctionBodies);
+           CI.getFrontendOpts().SkipFunctionBodies, Recs.Targets,
+           [&](const Token &Tok) {
+             if (Printer)
+               Printer->printToken(Tok);
+           });
+  if (Printer)
+    Printer->finish();
 }
 
 void PluginASTAction::anchor() { }

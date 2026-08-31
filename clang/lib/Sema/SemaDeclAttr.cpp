@@ -6132,6 +6132,14 @@ static Expr *makeLaunchBoundsArgExpr(Sema &S, Expr *E,
   assert(!ValArg.isInvalid() &&
          "Unexpected PerformCopyInitialization() failure.");
 
+  // Code generation evaluates the argument again, for whichever target it
+  // generates code for, but its value is that of the target the declaration
+  // was formed for.
+  if (S.Context.isMultiTargetCompile()) {
+    llvm::APSInt Value = I->extOrTrunc(S.Context.getIntWidth(S.Context.IntTy));
+    Value.setIsSigned(true);
+    return ConstantExpr::Create(S.Context, ValArg.get(), APValue(Value));
+  }
   return ValArg.getAs<Expr>();
 }
 

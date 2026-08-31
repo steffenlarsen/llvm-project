@@ -26,6 +26,7 @@
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/DependentDiagnostic.h"
 #include "clang/AST/ExternalASTSource.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/Type.h"
 #include "clang/Basic/IdentifierTable.h"
@@ -561,6 +562,42 @@ ASTMutationListener *Decl::getASTMutationListener() const {
   return getASTContext().getASTMutationListener();
 }
 
+/// TargetVariant/TargetVariantIsReparseOrigin storage, backed by an
+/// ASTContext-side side table instead of a Decl-object bitfield. Defined
+/// out of line for the same reason getLangOpts() is: avoids depending on
+/// ASTContext.h from DeclBase.h.
+unsigned Decl::getStoredTargetVariant() const {
+  return getASTContext().getMultiTarget().getDeclTargetVariant(this);
+}
+
+void Decl::setTargetVariant(unsigned V) {
+  AttrsAndHasTargetVariantEntry.setInt(true);
+  getASTContext().getMultiTarget().setDeclTargetVariant(this, V);
+}
+
+TargetSet Decl::getStoredTargetSet() const {
+  return getASTContext().getMultiTarget().getDeclTargetSet(this);
+}
+
+void Decl::setTargetSet(TargetSet Targets) {
+  if (Targets.isSingle()) {
+    setTargetVariant(Targets.first());
+    return;
+  }
+  AttrsAndHasTargetVariantEntry.setInt(true);
+  getASTContext().getMultiTarget().setDeclTargetSet(this, Targets);
+}
+
+bool Decl::getStoredTargetVariantIsReparseOrigin() const {
+  return getASTContext().getMultiTarget().getDeclTargetVariantIsReparseOrigin(
+      this);
+}
+
+void Decl::setTargetVariantIsReparseOrigin(bool V) {
+  AttrsAndHasTargetVariantEntry.setInt(true);
+  getASTContext().getMultiTarget().setDeclTargetVariantIsReparseOrigin(this, V);
+}
+
 unsigned Decl::getMaxAlignment() const {
   if (!hasAttrs())
     return 0;
@@ -1035,20 +1072,22 @@ unsigned Decl::getIdentifierNamespaceForKind(Kind DeclKind) {
 }
 
 void Decl::setAttrsImpl(const AttrVec &attrs, ASTContext &Ctx) {
-  assert(!Attrs && "Decl already contains attrs.");
+  assert(!hasAttrs() && "Decl already contains attrs.");
 
-  Attrs = Ctx.allocateAttrVec();
+  AttrVec *Attrs = Ctx.allocateAttrVec();
   *Attrs = attrs;
+  AttrsAndHasTargetVariantEntry.setPointer(Attrs);
 }
 
 void Decl::dropAttrs() {
+  AttrVec *Attrs = AttrsAndHasTargetVariantEntry.getPointer();
   if (!Attrs)
     return;
 
   // The vector itself belongs to the ASTContext's allocator and is destroyed
   // when the context dies; only the pointer is dropped here.
   Attrs->clear();
-  Attrs = nullptr;
+  AttrsAndHasTargetVariantEntry.setPointer(nullptr);
 }
 
 void Decl::addAttr(Attr *A) {
@@ -1075,8 +1114,8 @@ void Decl::addAttr(Attr *A) {
 }
 
 const AttrVec &Decl::getAttrs() const {
-  assert(Attrs && "No attrs to get!");
-  return *Attrs;
+  assert(hasAttrs() && "No attrs to get!");
+  return *AttrsAndHasTargetVariantEntry.getPointer();
 }
 
 Decl *Decl::castFromDeclContext (const DeclContext *D) {

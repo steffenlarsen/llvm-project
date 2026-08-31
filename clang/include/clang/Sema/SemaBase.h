@@ -122,7 +122,10 @@ public:
       /// Create a deferred diagnostic, which is emitted only if the function
       /// it's attached to is codegen'ed.  Also emit a call stack as with
       /// K_ImmediateWithCallStack.
-      K_Deferred
+      K_Deferred,
+      /// As K_Deferred, for the devices a host-primary multi-target
+      /// compilation also analyses the function for.
+      K_DeferredForDevices
     };
 
     SemaDiagnosticBuilder(Kind K, SourceLocation Loc, unsigned DiagID,
@@ -202,6 +205,7 @@ public:
     unsigned DiagID;
     const FunctionDecl *Fn;
     bool ShowCallStack;
+    bool ForDevices = false;
 
     // Invariant: At most one of these Optionals has a value.
     // FIXME: Switch these to a Variant once that exists.

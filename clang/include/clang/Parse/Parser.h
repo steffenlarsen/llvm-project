@@ -29,6 +29,7 @@
 #include <stack>
 
 namespace clang {
+
 class PragmaHandler;
 class Scope;
 class BalancedDelimiterTracker;
@@ -47,10 +48,17 @@ class PoisonSEHIdentifiersRAIIObject;
 class OMPClause;
 class OpenACCClause;
 class ObjCTypeParamList;
+class TargetAlternationReconciler;
 struct OMPTraitProperty;
 struct OMPTraitSelector;
 struct OMPTraitSet;
 class OMPTraitInfo;
+
+/// Whether an `annot_pragma_attribute` token pushes (+1) or pops (-1) an
+/// attribute scope, or neither (0). Exposed for callers outside Parse (the
+/// multi-target token merge, see TokenStreamMerge.h's PragmaScopeClassifier)
+/// that only need this, not the full attribute set the token carries.
+LLVM_ABI int getPragmaAttributeScopeDelta(const Token &T);
 
 enum class AnnotatedNameKind {
   /// Annotation has failed and emitted an error.
@@ -1009,6 +1017,9 @@ private:
   DeclGroupPtrTy ParseExternalDeclaration(ParsedAttributes &DeclAttrs,
                                           ParsedAttributes &DeclSpecAttrs,
                                           ParsingDeclSpec *DS = nullptr);
+  DeclGroupPtrTy ParseExternalDeclarationImpl(ParsedAttributes &Attr,
+                                              ParsedAttributes &DeclSpecAttrs,
+                                              ParsingDeclSpec *DS = nullptr);
 
   /// Determine whether the current token, if it occurs after a
   /// declarator, continues a declaration or declaration list.
@@ -1410,6 +1421,10 @@ private:
   /// were collected during its parsing and parse them all.
   void ParseLexedMethodDefs(ParsingClass &Class);
   void ParseLexedMethodDef(LexedMethod &LM);
+  void ParseLexedMethodBody(LexedMethod &LM);
+  /// Parses the body of \p LM, from \p Toks, once more for each part of the
+  /// targets that what it consumed tells apart.
+  void ParseLexedMethodDefForTargets(LexedMethod &LM, const CachedTokens &Toks);
 
   /// ParseLexedMemberInitializers - We finished parsing the member
   /// specification of a top (non-nested) C++ class. Now go over the stack of
@@ -7215,6 +7230,153 @@ private:
   /// Handle the annotation token produced for
   /// #pragma GCC visibility...
   void HandlePragmaVisibility();
+
+  /// The alternative of a multi-target region currently being parsed,
+  /// 1-based, or 0 outside any region. Regions are widened to whole
+  /// top-level declarations before parsing, so a marker only ever appears
+  /// where an external declaration could start.
+  unsigned TargetAlternative = 0;
+  /// The first alternative of the current divergent region whose tokens are
+  /// the same as TargetAlternative's, if another.
+  unsigned TargetAlternativeSameAs = 0;
+  std::unique_ptr<ASTContext::TargetScope> TargetAlternativeScope;
+  /// Per alternative of the current divergent region, indexed by alternative:
+  /// what parsing it consumed, and which declarations it tagged (a window of
+  /// MultiTargetContext::TargetTagLog).
+  struct ParsedAlternative {
+    bool Parsed = false;
+    /// The first alternative with the same tokens, if another.
+    unsigned SameAs = 0;
+    /// With -verify-identical-alternatives, the earlier alternative that would
+    /// have stood for this one.
+    unsigned StandIn = 0;
+    TargetPartition Inputs = 0;
+    size_t TagsBegin = 0, TagsEnd = 0;
+    /// The declarations the alternative consists of, in order. Each consumed
+    /// its own inputs and tagged its own window of
+    /// MultiTargetContext::TargetTagLog.
+    struct Unit {
+      TargetPartition Inputs = 0;
+      size_t TagsEnd = 0;
+    };
+    SmallVector<Unit, 4> Units;
+  };
+  SmallVector<ParsedAlternative, 8> ParsedAlternatives;
+  /// Where the alternative being parsed started. Its declarations are the
+  /// ones declared directly in it.
+  const DeclContext *TargetAlternativeContext = nullptr;
+  /// Whether an alternative is left to an earlier one with the same tokens
+  /// when the inputs its parse consumed allow it.
+  bool ShareIdenticalAlternatives = false;
+  /// Counts the divergent regions entered.
+  unsigned TargetRegion = 0;
+
+  /// Consume an annot_target_alt_{begin,sep,end} and move to the alternative it
+  /// introduces, entering that target's scope so the declarations parsed next
+  /// are analysed for it. An alternative whose tokens are the same as an
+  /// earlier parsed one's is not parsed again unless what parsing that one
+  /// consumed differs between their targets: the earlier one stands for both.
+  void HandleTargetAlternationMarker();
+  /// The earlier alternative with the same tokens that can stand for the one
+  /// being entered, or 0.
+  unsigned findSharedTargetAlternative() const;
+  /// A re-parse's alternate ended, or was \p Skipped, left to an earlier one.
+  void noteReparseAlternateEnd(bool Skipped);
+
+public:
+  /// Whether an alternative can stand for others with the same tokens, which
+  /// then only learn they are its targets once the region is parsed.
+  bool parsesIdenticalAlternativesOnce() const {
+    return ShareIdenticalAlternatives;
+  }
+  /// Which divergent region the parser is in, or last was.
+  unsigned getTargetRegion() const { return TargetRegion; }
+  /// With -verify-identical-alternatives, the earlier alternative of the
+  /// current region or re-parse that would have stood for \p Alternative.
+  unsigned getTargetAlternativeStandIn(unsigned Alternative) const {
+    return Alternative < ParsedAlternatives.size()
+               ? ParsedAlternatives[Alternative].StandIn
+               : 0;
+  }
+
+private:
+
+public:
+  /// Discard the primed look-ahead and take the next token from the stream
+  /// just entered.
+  ///
+  /// Parser::Initialize primes one token from the lexer. A merged multi-target
+  /// stream already contains that token -- and may open with an alternation
+  /// marker before it -- so the primed one has to be dropped rather than kept.
+  void ResetLookaheadFromStream() { ConsumeAnyToken(); }
+
+private:
+  /// Record which target a declaration group was parsed for. Recursive: a
+  /// member or a local declared inside a divergent region belongs to the same
+  /// target as the declaration containing it, and the fingerprint comparison
+  /// looks at all of them.
+  void MarkTargetAlternative(DeclGroupPtrTy &Group);
+
+public:
+  /// Claim a declaration group for target \p Variant.
+  ///
+  /// Used when a shared declaration turns out to reference a target-specific
+  /// entity: it has to stop belonging to every target before the others get
+  /// their own copy, or lookup during the re-parse finds it and merges into it.
+  ///
+  /// \p IsReparseOrigin marks the tag as coming from the per-target re-parse
+  /// of a shared declaration's own tokens under a different ambient,
+  /// rather than from genuine #if/#elif widening -- see
+  /// Decl::isTargetVariantReparseOrigin().
+  LLVM_ABI void ClaimForTargetVariant(DeclGroupPtrTy &Group, unsigned Variant,
+                                      bool IsReparseOrigin = false);
+
+  /// Set in an annot_target_alt_sep's value to mark a re-parse of an
+  /// already-parsed shared declaration rather than an arm of an alternative.
+  static constexpr uintptr_t FallbackReparseBit = uintptr_t(1) << 16;
+
+  /// Whether the parser is inside a multi-target alternative right now.
+  bool inTargetAlternative() const { return TargetAlternative != 0; }
+
+  /// The 1-based alternative currently being parsed, or 0 outside any
+  /// multi-target region. Used by ParseAST.cpp's main loop to know which
+  /// variant a just-returned declaration group belongs to -- both for a
+  /// reparse alternate and for a genuine #if/#elif-widened alternative.
+  unsigned getTargetAlternative() const { return TargetAlternative; }
+
+
+  /// Create the single, TU-wide widening/reparse reconciler that
+  /// ParseAST()'s own loop and every nested declaration-sequence loop
+  /// (namespace bodies, extern "C" blocks, class bodies) feed into. Must be
+  /// called once, by ParseAST(), before any of those loops run.
+  void InitializeTargetAlternationReconciler(
+      Sema &S, ASTConsumer *Consumer, ArrayRef<Token> MergedStream,
+      const llvm::DenseMap<unsigned, unsigned> &LocIndex,
+      const std::vector<bool> &Boundaries, bool Reparse);
+
+  /// Feed a just-parsed declaration group through the shared reconciler.
+  /// \p NotifyConsumer must be true only for the outer ParseAST() loop --
+  /// nested loops must never call Consumer->HandleTopLevelDecl themselves,
+  /// since the declarations they parse are emitted as part of their
+  /// enclosing declaration (namespace, linkage-spec, or record) once that
+  /// reaches the outer loop. Returns false if the consumer asked to stop.
+  bool ObserveForTargetReconciliation(DeclGroupPtrTy &ADecl,
+                                      bool NotifyConsumer = false);
+
+  /// Flush any reconciliation left pending when a declaration-sequence loop
+  /// ends (a no-op if nothing is pending). Returns false if the consumer
+  /// asked to stop. \p FinalFlush is true only for ParseAST()'s own final
+  /// call, once the whole TU has been parsed; it additionally reports the
+  /// accumulated reparse-candidate statistics, which must only be printed
+  /// once, not once per nested loop.
+  bool FinishTargetAlternationReconciliation(bool FinalFlush = false);
+
+private:
+  std::unique_ptr<TargetAlternationReconciler> ActiveReconciler;
+
+  /// Handle the annotation token produced for
+  /// #pragma clang force_cuda_host_device.
+  void HandlePragmaForceCUDAHostDevice();
 
   /// Handle the annotation token produced for
   /// #pragma pack...

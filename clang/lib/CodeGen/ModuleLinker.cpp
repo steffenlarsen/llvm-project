@@ -22,13 +22,24 @@ using namespace clang;
 bool clang::loadLinkModules(CompilerInstance &CI, llvm::LLVMContext &Ctx,
                             llvm::SmallVectorImpl<LinkModule> &LinkModules,
                             bool OnlyInternalized) {
+  ArrayRef<CodeGenOptions::BitcodeFileToLink> All =
+      CI.getCodeGenOpts().LinkBitcodeFiles;
+  if (!OnlyInternalized)
+    return loadLinkModules(CI, Ctx, All, LinkModules);
+  SmallVector<CodeGenOptions::BitcodeFileToLink, 4> Internalized;
+  llvm::copy_if(All, std::back_inserter(Internalized),
+                [](const auto &F) { return F.Internalize; });
+  return loadLinkModules(CI, Ctx, Internalized, LinkModules);
+}
+
+bool clang::loadLinkModules(
+    CompilerInstance &CI, llvm::LLVMContext &Ctx,
+    llvm::ArrayRef<CodeGenOptions::BitcodeFileToLink> Files,
+    llvm::SmallVectorImpl<LinkModule> &LinkModules) {
   if (!LinkModules.empty())
     return false;
 
-  for (const CodeGenOptions::BitcodeFileToLink &F :
-       CI.getCodeGenOpts().LinkBitcodeFiles) {
-    if (OnlyInternalized && !F.Internalize)
-      continue;
+  for (const CodeGenOptions::BitcodeFileToLink &F : Files) {
     auto BCBuf = CI.getFileManager().getBufferForFile(F.Filename);
     if (!BCBuf) {
       CI.getDiagnostics().Report(diag::err_cannot_open_file)

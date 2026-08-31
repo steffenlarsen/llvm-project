@@ -163,6 +163,30 @@ def err_fe_invalid_source_date_epoch : Error<
 def err_fe_unable_to_load_basic_block_sections_file : Error<
     "unable to load basic block sections function list: '%0'">;
 
+def err_fe_invalid_multi_target_aux_invocation : Error<
+    "invalid multi-target aux invocation '%0': %1">;
+def err_fe_multi_target_too_many_targets : Error<
+    "cannot compile for more than %0 targets at once (%1 requested)">;
+def err_fe_multi_target_aux_llvm_arg_missing : Error<
+    "'-mllvm %0' of aux target '%1' must also be passed to the primary target">;
+def err_fe_multi_target_pch : Error<
+    "precompiled header '%0' cannot be used when compiling for multiple targets "
+    "at once; include the header it was built from instead">;
+def err_fe_multi_target_recording_failed : Error<
+    "cannot compile for multiple targets at once: preprocessing for '%0' "
+    "failed">;
+def err_fe_multi_target_preprocessed_input : Error<
+    "preprocessed input '%0' cannot be compiled for multiple targets at once; "
+    "it was preprocessed for one target">;
+def err_fe_multi_target_lang_opt_mismatch : Error<
+    "language option '%0' differs between the primary target and aux target "
+    "'%1'; the targets cannot be compiled together">;
+def err_fe_multi_target_kept_shared : Error<
+    "cannot compile for multiple targets at once: this declaration means "
+    "something else for '%0' and cannot be parsed again for it">;
+def note_fe_multi_target_kept_shared_use : Note<
+    "needed by the code generated for this declaration">;
+
 def warn_fe_serialized_diag_merge_failure : Warning<
     "unable to merge a subprocess's serialized diagnostics">,
     InGroup<SerializedDiagnostics>;

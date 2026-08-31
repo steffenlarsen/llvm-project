@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemaAPINotesInternal.h"
+#include "TargetInputRecorder.h"
 #include "UsedDeclVisitor.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTDiagnostic.h"
@@ -21,8 +22,10 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/PrettyDeclStackTrace.h"
 #include "clang/AST/StmtCXX.h"
+#include "clang/AST/TargetCopyMerge.h"
 #include "clang/AST/TypeOrdering.h"
 #include "clang/Basic/DarwinSDKInfo.h"
 #include "clang/Basic/DiagnosticOptions.h"
@@ -55,6 +58,7 @@
 #include "clang/Sema/SemaM68k.h"
 #include "clang/Sema/SemaMIPS.h"
 #include "clang/Sema/SemaMSP430.h"
+#include "clang/Sema/SemaMultiTarget.h"
 #include "clang/Sema/SemaNVPTX.h"
 #include "clang/Sema/SemaObjC.h"
 #include "clang/Sema/SemaOpenACC.h"
@@ -75,11 +79,18 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/TimeProfiler.h"
 #include <optional>
 
 using namespace clang;
+
 using namespace sema;
+
+bool Sema::isMacroDefinedAtLoc(SourceLocation Loc, StringRef Name) const {
+  return (bool)PP.getMacroDefinitionAtLoc(&Context.Idents.get(Name), Loc);
+}
 
 SourceLocation Sema::getLocForEndOfToken(SourceLocation Loc, unsigned Offset) {
   return Lexer::getLocForEndOfToken(Loc, Offset, SourceMgr, LangOpts);
@@ -298,6 +309,7 @@ Sema::Sema(Preprocessor &pp, ASTContext &ctxt, ASTConsumer &consumer,
       M68kPtr(std::make_unique<SemaM68k>(*this)),
       MIPSPtr(std::make_unique<SemaMIPS>(*this)),
       MSP430Ptr(std::make_unique<SemaMSP430>(*this)),
+      MultiTargetPtr(std::make_unique<SemaMultiTarget>(*this)),
       NVPTXPtr(std::make_unique<SemaNVPTX>(*this)),
       ObjCPtr(std::make_unique<SemaObjC>(*this)),
       OpenACCPtr(std::make_unique<SemaOpenACC>(*this)),
@@ -375,6 +387,23 @@ void Sema::addImplicitTypedef(StringRef Name, QualType T) {
 }
 
 void Sema::Initialize() {
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    Context.getMultiTarget().setInstantiationTargetHook(
+        [](void *S) {
+          return static_cast<const Sema *>(S)
+              ->MultiTarget()
+              .getInstantiationTarget();
+        },
+        this);
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    Context.getMultiTarget().setTargetSpecializationMemberHook(
+        [](void *S, const FunctionDecl *FD, unsigned Target) {
+          return static_cast<Sema *>(S)
+              ->MultiTarget()
+              .getTargetSpecializationMember(FD, Target);
+        });
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    MultiTarget().initTargetInputs();
   // Create BuiltinVaListDecl *before* ExternalSemaSource::InitializeSema(this)
   // because during initialization ASTReader can emit globals that require
   // name mangling. And the name mangling uses BuiltinVaListDecl.
@@ -610,6 +639,8 @@ void Sema::Initialize() {
 Sema::~Sema() {
   assert(InstantiatingSpecializations.empty() &&
          "failed to clean up an InstantiatingTemplate?");
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    Context.getMultiTarget().setInstantiationTargetHook(nullptr, nullptr);
 
   if (VisContext) FreeVisContext();
 
@@ -1283,10 +1314,19 @@ void Sema::ActOnEndOfTranslationUnitFragment(TUFragmentKind Kind) {
                                  Pending.begin(), Pending.end());
   }
 
+  // Before instantiation, not after: an instantiation inherits its pattern's
+  // target, so a template that is still claimed takes every specialization of
+  // it with it.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    mergeEquivalentVariants(getASTContext());
+
   {
     llvm::TimeTraceScope TimeScope("PerformPendingInstantiations");
     PerformPendingInstantiations();
   }
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      Context.isMultiTargetCompile())
+    MultiTarget().instantiateTargetCopySpecializations();
 
   emitDeferredDiags();
 
@@ -1752,6 +1792,10 @@ void Sema::ActOnEndOfTranslationUnit() {
     TUScope = nullptr;
 
   checkExposure(Context.getTranslationUnitDecl());
+
+  if (LLVM_UNLIKELY(MultiTarget().TargetInputs) &&
+      !MultiTarget().TargetInputs->Path.empty())
+    MultiTarget().writeTargetInputReport();
 }
 
 
@@ -1888,6 +1932,19 @@ void Sema::EmitDiagnostic(unsigned DiagID, const DiagnosticBuilder &DB) {
       Diags.setLastDiagnosticIgnored(true);
       return;
     }
+  }
+
+  if (SemaMultiTarget::TargetDiagnosticCapture *Capture =
+          MultiTarget().CurrentTargetDiagnosticCapture) {
+    DiagnosticsEngine::Level Level =
+        Diags.getDiagnosticLevel(DiagInfo.getID(), DiagInfo.getLocation());
+    if (Level == DiagnosticsEngine::Ignored)
+      return;
+    Capture->ErrorOccurred |= Level >= DiagnosticsEngine::Error;
+    Capture->Diags.emplace_back(
+        DiagInfo.getLocation(),
+        PartialDiagnostic(DiagInfo, Context.getDiagAllocator()));
+    return;
   }
 
   // Copy the diagnostic printing policy over the ASTContext printing policy.
@@ -2089,6 +2146,16 @@ public:
     if ((!ShouldEmitRootNode && !S.getLangOpts().OpenMP && !Caller) ||
         S.shouldIgnoreInHostDeviceCheck(FD) || InUsePath.count(FD))
       return;
+    // A host-primary multi-target Sema emits the host itself; a copy tagged
+    // for a device target is only ever emitted by that target's CodeGen. Its
+    // pass for the devices skips the host's own copies.
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+        !S.getLangOpts().CUDAIsDevice && FD->getTargetVariant() &&
+        !FD->isRedundantTargetVariant() &&
+        (S.DeviceEmissionRules
+             ? S.Context.getDevices(FD->getTargetSet()).empty()
+             : !FD->isCopyFor(1)))
+      return;
     // Finalize analysis of OpenMP-specific constructs.
     if (Caller && S.LangOpts.OpenMP && UsePath.size() == 1 &&
         (ShouldEmitRootNode || InOMPDeviceContext))
@@ -2110,9 +2177,17 @@ public:
     InUsePath.insert(FD);
     UsePath.push_back(FD);
     const FunctionDecl *Definition = nullptr;
-    auto *Body = FD->getBody(Definition);
-    if (Body)
+    if (Stmt *Body = FD->getBody(Definition)) {
+      // A body instantiated per target: the host's, which this Sema emits, or
+      // the devices'.
+      if (unsigned Host = S.Context.getHostVariant();
+          LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && Host)
+        Body = S.Context.getMultiTarget().getBodyForTarget(
+            Definition, S.DeviceEmissionRules
+                            ? S.Context.getCanonicalDeviceVariant()
+                            : Host);
       this->Visit(Body);
+    }
 
     if (auto *Ctor = dyn_cast_or_null<CXXConstructorDecl>(Definition)) {
       for (auto *Init : Ctor->inits())
@@ -2192,9 +2267,26 @@ void Sema::emitDeferredDiags() {
     }
   };
 
+  // What a host-primary multi-target compilation found for the devices is
+  // emitted for the functions a device compilation emits.
+  auto EmitForDevices = [&] {
+    if (AuxDeviceDeferredDiags.empty() || DeclsToCheckForDeferredDiags.empty())
+      return;
+    std::swap(DeviceDeferredDiags, AuxDeviceDeferredDiags);
+    {
+      llvm::SaveAndRestore AsDevice(DeviceEmissionRules, true);
+      DeferredDiagnosticsEmitter DDE(*this);
+      for (auto *D : DeclsToCheckForDeferredDiags)
+        DDE.checkRecordedDecl(D);
+      DDE.emitCollectedDiags();
+    }
+    std::swap(DeviceDeferredDiags, AuxDeviceDeferredDiags);
+  };
+
   if ((DeviceDeferredDiags.empty() && !LangOpts.OpenMP) ||
       DeclsToCheckForDeferredDiags.empty()) {
     ClassifyImplicitHDExplicitInst();
+    EmitForDevices();
     return;
   }
 
@@ -2203,6 +2295,7 @@ void Sema::emitDeferredDiags() {
     DDE.checkRecordedDecl(D);
   ClassifyImplicitHDExplicitInst();
   DDE.emitCollectedDiags();
+  EmitForDevices();
 }
 
 // In CUDA, there are some constructs which may appear in semantically-valid
@@ -2234,7 +2327,9 @@ Sema::SemaDiagnosticBuilder::SemaDiagnosticBuilder(Kind K, SourceLocation Loc,
                                                    const FunctionDecl *Fn,
                                                    Sema &S)
     : S(S), Loc(Loc), DiagID(DiagID), Fn(Fn),
-      ShowCallStack(K == K_ImmediateWithCallStack || K == K_Deferred) {
+      ShowCallStack(K == K_ImmediateWithCallStack || K == K_Deferred ||
+                    K == K_DeferredForDevices),
+      ForDevices(K == K_DeferredForDevices) {
   switch (K) {
   case K_Nop:
     break;
@@ -2244,8 +2339,9 @@ Sema::SemaDiagnosticBuilder::SemaDiagnosticBuilder(Kind K, SourceLocation Loc,
         ImmediateDiagBuilder(S.Diags.Report(Loc, DiagID), S, DiagID));
     break;
   case K_Deferred:
+  case K_DeferredForDevices:
     assert(Fn && "Must have a function to attach the deferred diag to.");
-    auto &Diags = S.DeviceDeferredDiags[Fn];
+    auto &Diags = getDeviceDeferredDiags()[Fn];
     PartialDiagId.emplace(Diags.size());
     Diags.emplace_back(Loc, S.PDiag(DiagID));
     break;
@@ -2254,8 +2350,8 @@ Sema::SemaDiagnosticBuilder::SemaDiagnosticBuilder(Kind K, SourceLocation Loc,
 
 Sema::SemaDiagnosticBuilder::SemaDiagnosticBuilder(SemaDiagnosticBuilder &&D)
     : S(D.S), Loc(D.Loc), DiagID(D.DiagID), Fn(D.Fn),
-      ShowCallStack(D.ShowCallStack), ImmediateDiag(D.ImmediateDiag),
-      PartialDiagId(D.PartialDiagId) {
+      ShowCallStack(D.ShowCallStack), ForDevices(D.ForDevices),
+      ImmediateDiag(D.ImmediateDiag), PartialDiagId(D.PartialDiagId) {
   // Clean the previous diagnostics.
   D.ShowCallStack = false;
   D.ImmediateDiag.reset();

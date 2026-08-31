@@ -23,6 +23,7 @@
 #include "clang/AST/EvaluatedExprVisitor.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/AST/TypeLoc.h"
@@ -44,6 +45,7 @@
 #include "clang/Sema/ScopeInfo.h"
 #include "clang/Sema/SemaCUDA.h"
 #include "clang/Sema/SemaInternal.h"
+#include "clang/Sema/SemaMultiTarget.h"
 #include "clang/Sema/SemaObjC.h"
 #include "clang/Sema/SemaOpenMP.h"
 #include "clang/Sema/SemaProxy.h"
@@ -300,8 +302,9 @@ void Sema::ImplicitExceptionSpecification::CalledStmt(Stmt *S) {
 
 ExprResult Sema::ConvertParamDefaultArgument(ParmVarDecl *Param, Expr *Arg,
                                              SourceLocation EqualLoc) {
-  if (RequireCompleteType(Param->getLocation(), Param->getType(),
-                          diag::err_typecheck_decl_incomplete_type))
+  if (RequireCompleteTypeForDeclaration(
+          Param->getLocation(), Param->getType(),
+          diag::err_typecheck_decl_incomplete_type))
     return true;
 
   // C++ [dcl.fct.default]p5
@@ -476,6 +479,34 @@ static bool functionDeclHasDefaultArgument(const FunctionDecl *FD) {
   });
 }
 
+void SemaMultiTarget::inheritTargetDefaultArguments(FunctionDecl *FD) {
+  unsigned Variant = FD->getTargetVariant();
+  for (FunctionDecl *Prev = FD->getPreviousDecl(); Prev;
+       Prev = Prev->getPreviousDecl()) {
+    if ((Prev->getTargetVariant() && !Prev->isCopyFor(Variant)) ||
+        Prev->getLocation() == FD->getLocation())
+      continue;
+    if (FD->getFriendObjectKind() != Decl::FOK_None &&
+        FD->getLexicalDeclContext()->isDependentContext())
+      return;
+    for (unsigned I = 0, N = Prev->getNumParams(); I != N; ++I) {
+      ParmVarDecl *OldParam = Prev->getParamDecl(I);
+      ParmVarDecl *NewParam = FD->getParamDecl(I);
+      if (!OldParam->hasDefaultArg() || NewParam->hasDefaultArg())
+        continue;
+      NewParam->setHasInheritedDefaultArg();
+      if (OldParam->hasUnparsedDefaultArg())
+        NewParam->setUnparsedDefaultArg();
+      else if (OldParam->hasUninstantiatedDefaultArg())
+        NewParam->setUninstantiatedDefaultArg(
+            OldParam->getUninstantiatedDefaultArg());
+      else
+        NewParam->setDefaultArg(OldParam->getInit());
+    }
+    return;
+  }
+}
+
 bool Sema::MergeCXXFunctionDecl(FunctionDecl *New, FunctionDecl *Old,
                                 Scope *S) {
   bool Invalid = false;
@@ -498,6 +529,26 @@ bool Sema::MergeCXXFunctionDecl(FunctionDecl *New, FunctionDecl *Old,
     // Ignore hidden declarations.
     if (!LookupResult::isVisible(*this, PrevForDefaultArgs))
       continue;
+
+    // A previous declaration already reconciled down to variant 0 (shared),
+    // reached again when a later target alternative re-parses the identical
+    // declaration, is not really a distinct prior declaration for the
+    // purpose of merging default arguments -- it's the same source text,
+    // replayed. Ordinary default-argument merging has no target-variant
+    // concept and would otherwise flag the re-parsed copy's own (identical)
+    // default argument as illegally redefining it. Skip it here exactly like
+    // a hidden declaration; mirrors the analogous guard in
+    // CheckForFunctionRedefinition below. Another declaration the target
+    // has is one it inherits from, as when its definition is parsed again.
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+      unsigned Current = Context.getCurrentTargetVariant();
+      unsigned Prev = PrevForDefaultArgs->getTargetVariant();
+      bool Inherits = Current &&
+                      (!Prev || PrevForDefaultArgs->isCopyFor(Current)) &&
+                      PrevForDefaultArgs->getLocation() != New->getLocation();
+      if (Prev != Current && !Inherits)
+        continue;
+    }
 
     if (S && !isDeclInScope(PrevForDefaultArgs, ScopeDC, S) &&
         !New->isCXXClassMember()) {
@@ -14772,6 +14823,11 @@ void Sema::ActOnFinishCXXMemberDecls() {
 void Sema::ActOnFinishCXXNonNestedClass() {
   referenceDLLExportedClassMethods();
 
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+    Context.getMultiTarget().recheckTargetDependence();
+    MultiTarget().keySpecializationsMadeTooEarly();
+  }
+
   if (!DelayedDllExportMemberFunctions.empty()) {
     SmallVector<CXXMethodDecl*, 4> WorkList;
     std::swap(DelayedDllExportMemberFunctions, WorkList);
@@ -18169,6 +18225,31 @@ Decl *Sema::BuildStaticAssertDeclaration(SourceLocation StaticAssertLoc,
       }
       Failed = true;
     }
+
+    // Each device's compilation analyses host functions too, where a
+    // host-primary multi-target compilation analyses them for the host only.
+    if (!Failed && !InTemplateDefinition && getLangOpts().CUDA &&
+        CUDA().isAnalysedForAuxDevices())
+      if (const FunctionDecl *FD = getCurFunctionDecl(/*AllowLambda=*/true);
+          FD && CUDA().IdentifyTarget(FD) == CUDAFunctionTarget::Host)
+        for (unsigned V : Context.getDeviceVariants()) {
+          ASTContext::TargetScope Scope(Context, V);
+          Expr::EvalResult Result;
+          if (!AssertExpr->EvaluateAsInt(Result, Context) ||
+              Result.Val.getInt().getBoolValue())
+            continue;
+          std::string Str;
+          bool HasMessage =
+              AssertMessage &&
+              (EvaluateAsString(AssertMessage, Str, Context,
+                                StringEvaluationContext::StaticAssert,
+                                /*ErrorOnInvalidMessage=*/false) ||
+               !Str.empty());
+          Diag(AssertExpr->getBeginLoc(), diag::err_static_assert_failed)
+              << !HasMessage << Str << AssertExpr->getSourceRange();
+          Failed = true;
+          break;
+        }
   } else {
     ExprResult FullAssertExpr = ActOnFinishFullExpr(AssertExpr, StaticAssertLoc,
                                                     /*DiscardedValue*/false,

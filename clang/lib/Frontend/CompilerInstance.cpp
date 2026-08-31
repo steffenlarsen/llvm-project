@@ -10,6 +10,7 @@
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
+#include "clang/AST/DeclTemplate.h"
 #include "clang/Basic/AtomicLineLogger.h"
 #include "clang/Basic/CharInfo.h"
 #include "clang/Basic/Diagnostic.h"
@@ -29,6 +30,7 @@
 #include "clang/Frontend/LogDiagnosticPrinter.h"
 #include "clang/Frontend/SARIFDiagnosticPrinter.h"
 #include "clang/Frontend/SerializedDiagnosticPrinter.h"
+#include "clang/Frontend/TextDiagnosticBuffer.h"
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Frontend/Utils.h"
 #include "clang/Frontend/VerifyDiagnosticConsumer.h"
@@ -36,9 +38,12 @@
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Lex/TextEncoding.h"
+#include "clang/Lex/TokenStreamMerge.h"
 #include "clang/Sema/CodeCompleteConsumer.h"
 #include "clang/Sema/ParsedAttr.h"
 #include "clang/Sema/Sema.h"
+#include "clang/Sema/SemaCUDA.h"
+#include "clang/Sema/SemaMultiTarget.h"
 #include "clang/Serialization/ASTReader.h"
 #include "clang/Serialization/GlobalModuleIndex.h"
 #include "clang/Serialization/InMemoryModuleCache.h"
@@ -49,10 +54,13 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Support/AdvisoryLock.h"
 #include "llvm/Support/BuryPointer.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/CrashRecoveryContext.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/FileSystem.h"
@@ -60,6 +68,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/SmallVectorMemoryBuffer.h"
+#include "llvm/Support/StringSaver.h"
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/Timer.h"
@@ -115,7 +124,104 @@ void CompilerInstance::setVerboseOutputStream(std::unique_ptr<raw_ostream> Value
 void CompilerInstance::setTarget(TargetInfo *Value) { Target = Value; }
 void CompilerInstance::setAuxTarget(TargetInfo *Value) { AuxTarget = Value; }
 
+bool CompilerInstance::langOptMayDifferPerTarget(StringRef Name) {
+  return llvm::StringSwitch<bool>(Name)
+      // Host vs. device is what multi-target compilation is.
+      .Case("CUDAIsDevice", true)
+      // Only read by CodeGen.
+      .Cases({"ConvergentFunctions", "SetVisibilityForExternDecls",
+              "HalfNoSemanticInterposition"},
+             true)
+      // Linkage computation reads these too, but only CodeGen consumes the
+      // result.
+      .Cases({"ValueVisibilityMode", "TypeVisibilityMode"}, true)
+      // Only read by the preprocessor and CodeGen, which run per target.
+      .Cases({"PIE", "ThreadsafeStatics"}, true)
+      // Sema also marks implicit library builtins const from it; the shared
+      // AST gets the primary's value.
+      .Case("MathErrno", true)
+      .Default(false);
+}
+
+/// Parses each -multi-target-aux-invocation into \p Invocations, warns about
+/// each AST-shaping LangOptions field it sets differently from \p Primary, and
+/// diagnoses each -mllvm option \p Primary lacks.
+static bool parseMultiTargetAuxInvocations(
+    DiagnosticsEngine &Diags, const CompilerInvocation &Primary,
+    SmallVectorImpl<std::shared_ptr<CompilerInvocation>> &Invocations) {
+  size_t NumTargets =
+      1 + Primary.getFrontendOpts().MultiTargetAuxInvocations.size();
+  if (NumTargets > MaxTargetRecordings) {
+    Diags.Report(diag::err_fe_multi_target_too_many_targets)
+        << MaxTargetRecordings << NumTargets;
+    return false;
+  }
+  unsigned ErrorsBefore = Diags.getNumErrors();
+  for (const std::string &Args :
+       Primary.getFrontendOpts().MultiTargetAuxInvocations) {
+    llvm::BumpPtrAllocator Alloc;
+    llvm::StringSaver Saver(Alloc);
+    SmallVector<const char *, 128> Argv;
+    llvm::cl::TokenizeGNUCommandLine(Args, Saver, Argv);
+
+    TextDiagnosticBuffer ParseDiags;
+    DiagnosticOptions ParseDiagOpts;
+    DiagnosticsEngine ParseEngine(DiagnosticIDs::create(), ParseDiagOpts,
+                                  &ParseDiags, /*ShouldOwnClient=*/false);
+    auto Aux = std::make_shared<CompilerInvocation>();
+    if (!CompilerInvocation::CreateFromArgs(*Aux, Argv, ParseEngine)) {
+      Diags.Report(diag::err_fe_invalid_multi_target_aux_invocation)
+          << Args
+          << (ParseDiags.err_begin() != ParseDiags.err_end()
+                  ? ParseDiags.err_begin()->second
+                  : std::string());
+      return false;
+    }
+
+    const LangOptions &PrimaryLO = Primary.getLangOpts();
+    const LangOptions &AuxLO = Aux->getLangOpts();
+    StringRef AuxName = Aux->getTargetOpts().getDisplayName();
+    auto Check = [&](StringRef Name, bool Differs) {
+      if (Differs && !CompilerInstance::langOptMayDifferPerTarget(Name))
+        Diags.Report(diag::err_fe_multi_target_lang_opt_mismatch)
+            << Name << AuxName;
+    };
+#define LANGOPT(Name, Bits, Default, Compatibility, Description)               \
+  Check(#Name, PrimaryLO.Name != AuxLO.Name);
+#define ENUM_LANGOPT(Name, Type, Bits, Default, Compatibility, Description)    \
+  Check(#Name, PrimaryLO.get##Name() != AuxLO.get##Name());
+#include "clang/Basic/LangOptions.def"
+
+    // cl::opt values are process-wide: only the primary's -mllvm options take
+    // effect, for every target.
+    bool LLVMArgMissing = false;
+    for (const std::string &Arg : Aux->getFrontendOpts().LLVMArgs) {
+      if (llvm::none_of(
+              Primary.getFrontendOpts().LLVMArgs, [&](StringRef PrimaryArg) {
+                return PrimaryArg.ltrim('-') == StringRef(Arg).ltrim('-');
+              })) {
+        Diags.Report(diag::err_fe_multi_target_aux_llvm_arg_missing)
+            << Arg << AuxName;
+        LLVMArgMissing = true;
+      }
+    }
+    if (LLVMArgMissing)
+      return false;
+
+    Invocations.push_back(std::move(Aux));
+  }
+  // A language option mismatch is an error unless downgraded; the targets'
+  // CodeGen is not prepared for the primary's value.
+  return Diags.getNumErrors() == ErrorsBefore;
+}
+
 bool CompilerInstance::createTarget() {
+  MultiTargetAuxInvocations.clear();
+  MultiTargetAuxTargets.clear();
+  if (!parseMultiTargetAuxInvocations(getDiagnostics(), getInvocation(),
+                                      MultiTargetAuxInvocations))
+    return false;
+
   // Create the target instance.
   setTarget(TargetInfo::CreateTargetInfo(getDiagnostics(),
                                          getInvocation().getTargetOpts()));
@@ -141,6 +247,15 @@ bool CompilerInstance::createTarget() {
       TO->FeaturesAsWritten = *getFrontendOpts().AuxTargetFeatures;
     TO->HostTriple = getTarget().getTriple().str();
     setAuxTarget(TargetInfo::CreateTargetInfo(getDiagnostics(), *TO));
+  }
+
+  for (const std::shared_ptr<CompilerInvocation> &Invocation :
+       MultiTargetAuxInvocations) {
+    IntrusiveRefCntPtr<TargetInfo> TI(TargetInfo::CreateTargetInfo(
+        getDiagnostics(), Invocation->getTargetOpts()));
+    if (!TI)
+      return false;
+    MultiTargetAuxTargets.push_back(TI);
   }
 
   if (!getTarget().hasStrictFP() && !getLangOpts().ExpStrictFP) {
@@ -169,6 +284,21 @@ bool CompilerInstance::createTarget() {
 
   if (auto *Aux = getAuxTarget())
     getTarget().setAuxTarget(Aux);
+
+  // TargetInfo::setAuxTarget/copyAuxTarget only patches the callee (here,
+  // each new aux target) from the argument -- it is not symmetric. The call
+  // above patches the primary from the single AuxTarget, which only covers
+  // subclass overrides that live on the primary (e.g.
+  // AMDGPUTargetInfo::setAuxTarget's large-array alignment boost when the
+  // primary is the device). Patch each new aux target from the primary too,
+  // so overrides that live on the aux side are picked up as well.
+  const TargetInfo *HostTarget =
+      getLangOpts().CUDAIsDevice ? getAuxTarget() : &getTarget();
+  for (auto [TI, Invocation] :
+       llvm::zip_equal(MultiTargetAuxTargets, MultiTargetAuxInvocations)) {
+    TI->adjust(getDiagnostics(), Invocation->getLangOpts(), HostTarget);
+    TI->setAuxTarget(&getTarget());
+  }
 
   return true;
 }
@@ -576,12 +706,128 @@ void CompilerInstance::createPreprocessor(TranslationUnitKind TUKind) {
 
 // ASTContext
 
+namespace {
+/// Passes diagnostics on to \p Inner, noting for each warning and error which
+/// targets of a compilation for several it was raised while analysing for.
+class DiagnosedTargetsRecorder : public DiagnosticConsumer {
+  std::unique_ptr<DiagnosticConsumer> OwnedInner;
+  DiagnosticConsumer *Inner;
+  CompilerInstance &CI;
+  SmallVectorImpl<bool> &Diagnosed;
+
+public:
+  DiagnosedTargetsRecorder(DiagnosticConsumer *Inner,
+                           std::unique_ptr<DiagnosticConsumer> OwnedInner,
+                           CompilerInstance &CI,
+                           SmallVectorImpl<bool> &Diagnosed)
+      : OwnedInner(std::move(OwnedInner)), Inner(Inner), CI(CI),
+        Diagnosed(Diagnosed) {
+    syncCounts();
+  }
+
+  void BeginSourceFile(const LangOptions &LO,
+                       const Preprocessor *PP) override {
+    Inner->BeginSourceFile(LO, PP);
+  }
+  void EndSourceFile() override {
+    Inner->EndSourceFile();
+    syncCounts();
+  }
+  void clear() override {
+    Inner->clear();
+    syncCounts();
+  }
+  bool IncludeInDiagnosticCounts() const override {
+    return Inner->IncludeInDiagnosticCounts();
+  }
+
+  void HandleDiagnostic(DiagnosticsEngine::Level Level,
+                        const Diagnostic &Info) override {
+    Inner->HandleDiagnostic(Level, Info);
+    syncCounts();
+    if (Level >= DiagnosticsEngine::Warning && CI.hasASTContext())
+      noteTargets();
+  }
+
+private:
+  // The inner consumer decides what counts, e.g. -verify only what was not
+  // expected.
+  void syncCounts() {
+    NumWarnings = Inner->getNumWarnings();
+    NumErrors = Inner->getNumErrors();
+  }
+
+  void noteTargets() {
+    ASTContext &Ctx = CI.getASTContext();
+    if (unsigned Current = Ctx.getCurrentTargetVariant()) {
+      if (Current <= Diagnosed.size())
+        Diagnosed[Current - 1] = true;
+      return;
+    }
+    // Code analysed once for every target it is compiled for.
+    const FunctionDecl *FD =
+        CI.hasSema() && CI.getSema().CurContext
+            ? CI.getSema().getCurFunctionDecl(/*AllowLambda=*/true)
+            : nullptr;
+    CUDAFunctionTarget Side = FD ? CI.getSema().CUDA().IdentifyTarget(FD)
+                                 : CUDAFunctionTarget::HostDevice;
+    bool ForHost = Side == CUDAFunctionTarget::Host;
+    bool ForDevice = Side == CUDAFunctionTarget::Device ||
+                     Side == CUDAFunctionTarget::Global;
+    for (unsigned V = 1; V <= Diagnosed.size(); ++V) {
+      if (FD && FD->getTargetVariant() && !FD->isCopyFor(V))
+        continue;
+      bool Device = Ctx.isDeviceVariant(V);
+      if ((!ForHost && !ForDevice) || (ForDevice && Device) ||
+          (ForHost && !Device))
+        Diagnosed[V - 1] = true;
+    }
+  }
+};
+} // namespace
+
+void CompilerInstance::endMultiTargetCompile() {
+  if (PrevAllowTargetVariantDecls)
+    clang::AllowTargetVariantDecls = *PrevAllowTargetVariantDecls;
+  PrevAllowTargetVariantDecls.reset();
+}
+
 void CompilerInstance::createASTContext() {
   Preprocessor &PP = getPreprocessor();
   auto Context = llvm::makeIntrusiveRefCnt<ASTContext>(
       getLangOpts(), PP.getSourceManager(), PP.getIdentifierTable(),
       PP.getSelectorTable(), PP.getBuiltinInfo(), PP.TUKind);
-  Context->InitBuiltinTypes(getTarget(), getAuxTarget());
+  // Route through the array-form overload only when N-aux-targets are
+  // configured; otherwise use the single-aux-target call unchanged.
+  if (!getMultiTargetAuxTargets().empty()) {
+    SmallVector<const TargetInfo *, 4> AuxTargets;
+    for (const IntrusiveRefCntPtr<TargetInfo> &TI : getMultiTargetAuxTargets())
+      AuxTargets.push_back(TI.get());
+    Context->setMultiTargetCompile();
+    if (!PrevAllowTargetVariantDecls)
+      PrevAllowTargetVariantDecls = clang::AllowTargetVariantDecls;
+    clang::AllowTargetVariantDecls = true;
+    Context->InitBuiltinTypes(getTarget(), AuxTargets);
+    if (getLangOpts().CUDA && MultiTargetNames.empty()) {
+      for (unsigned V = 1, E = 1 + AuxTargets.size(); V <= E; ++V) {
+        const TargetInfo &TI = V == 1 ? getTarget() : *AuxTargets[V - 2];
+        StringRef CPU = TI.getTargetOpts().CPU;
+        MultiTargetNames.push_back(
+            !Context->isDeviceVariant(V) ? "host"
+            : CPU.empty()                ? TI.getTriple().str()
+                                         : CPU.str());
+      }
+      MultiTargetDiagnosed.assign(MultiTargetNames.size(), false);
+      DiagnosticsEngine &Diags = getDiagnostics();
+      DiagnosticConsumer *Client = Diags.getClient();
+      std::unique_ptr<DiagnosticConsumer> Owned = Diags.takeClient();
+      Diags.setClient(new DiagnosedTargetsRecorder(Client, std::move(Owned),
+                                                   *this, MultiTargetDiagnosed),
+                      /*ShouldOwnClient=*/true);
+    }
+  } else {
+    Context->InitBuiltinTypes(getTarget(), getAuxTarget());
+  }
   setASTContext(std::move(Context));
 }
 
@@ -772,6 +1018,28 @@ void CompilerInstance::createSema(TranslationUnitKind TUKind,
                                   CodeCompleteConsumer *CompletionConsumer) {
   TheSema.reset(new Sema(getPreprocessor(), getASTContext(), getASTConsumer(),
                          TUKind, CompletionConsumer));
+
+  // Variant 2, the first aux target, is the canonical device.
+  if (!MultiTargetAuxInvocations.empty()) {
+    SmallVector<const LangOptions *, 4> ByVariant = {&getLangOpts()};
+    for (const auto &Aux : MultiTargetAuxInvocations)
+      ByVariant.push_back(&Aux->getLangOpts());
+    auto Note = [&](StringRef Name,
+                    llvm::function_ref<uint64_t(const LangOptions &)> Value) {
+      SmallVector<uint64_t, 4> Values;
+      for (const LangOptions *Opts : ByVariant)
+        Values.push_back(Value(*Opts));
+      if (!llvm::all_equal(Values))
+        TheSema->MultiTarget().TargetLangOptDivergence[Name] =
+            std::move(Values);
+    };
+#define LANGOPT(Name, Bits, Default, Compatibility, Description)               \
+  Note(#Name, [](const LangOptions &Opts) { return uint64_t(Opts.Name); });
+#define ENUM_LANGOPT(Name, Type, Bits, Default, Compatibility, Description)    \
+  Note(#Name,                                                                  \
+       [](const LangOptions &Opts) { return uint64_t(Opts.get##Name()); });
+#include "clang/Basic/LangOptions.def"
+  }
 
   // Set up API notes.
   TheSema->APINotes.setSwiftVersion(getAPINotesOpts().SwiftVersion);
@@ -1091,7 +1359,15 @@ void CompilerInstance::printDiagnosticStats() {
     OS << NumErrors << " error" << (NumErrors == 1 ? "" : "s");
   if (NumWarnings || NumErrors) {
     OS << " generated";
-    if (getLangOpts().CUDA) {
+    if (getLangOpts().CUDA && llvm::is_contained(MultiTargetDiagnosed, true)) {
+      // Every target a diagnostic was raised for, once each.
+      SmallVector<StringRef, 4> Names;
+      for (auto [Name, Diagnosed] :
+           llvm::zip(MultiTargetNames, MultiTargetDiagnosed))
+        if (Diagnosed && !llvm::is_contained(Names, Name))
+          Names.push_back(Name);
+      OS << " when compiling for " << llvm::join(Names, ", ");
+    } else if (getLangOpts().CUDA) {
       if (!getLangOpts().CUDAIsDevice) {
         OS << " when compiling for host";
       } else {

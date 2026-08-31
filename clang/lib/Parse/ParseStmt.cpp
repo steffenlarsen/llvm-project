@@ -385,6 +385,12 @@ Retry:
     SemiError = "__leave";
     break;
 
+  case tok::annot_pragma_force_cuda_host_device:
+    ProhibitAttributes(CXX11Attrs);
+    ProhibitAttributes(GNUAttrs);
+    HandlePragmaForceCUDAHostDevice();
+    return StmtEmpty();
+
   case tok::annot_pragma_vis:
     ProhibitAttributes(CXX11Attrs);
     ProhibitAttributes(GNUAttrs);
@@ -1018,6 +1024,9 @@ void Parser::ParseCompoundStatementLeadingPragmas() {
   bool checkForPragmas = true;
   while (checkForPragmas) {
     switch (Tok.getKind()) {
+    case tok::annot_pragma_force_cuda_host_device:
+      HandlePragmaForceCUDAHostDevice();
+      break;
     case tok::annot_pragma_vis:
       HandlePragmaVisibility();
       break;

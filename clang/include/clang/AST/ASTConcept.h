@@ -49,14 +49,19 @@ class ConstraintSatisfaction : public llvm::FoldingSetNode {
   // constrained entity or a concept).
   const NamedDecl *ConstraintOwner = nullptr;
   llvm::SmallVector<TemplateArgument, 4> TemplateArgs;
+  // In a compilation for several targets, the target whose evaluation this
+  // is (ASTContext::getTargetInfoVariant). 0 otherwise.
+  unsigned TargetVariant = 0;
 
 public:
 
   ConstraintSatisfaction() = default;
 
   ConstraintSatisfaction(const NamedDecl *ConstraintOwner,
-                         ArrayRef<TemplateArgument> TemplateArgs)
-      : ConstraintOwner(ConstraintOwner), TemplateArgs(TemplateArgs) {}
+                         ArrayRef<TemplateArgument> TemplateArgs,
+                         unsigned TargetVariant = 0)
+      : ConstraintOwner(ConstraintOwner), TemplateArgs(TemplateArgs),
+        TargetVariant(TargetVariant) {}
 
   bool IsSatisfied = false;
   bool ContainsErrors = false;
@@ -67,12 +72,13 @@ public:
   llvm::SmallVector<UnsatisfiedConstraintRecord, 4> Details;
 
   void Profile(llvm::FoldingSetNodeID &ID, const ASTContext &C) {
-    Profile(ID, C, ConstraintOwner, TemplateArgs);
+    Profile(ID, C, ConstraintOwner, TemplateArgs, TargetVariant);
   }
 
   static void Profile(llvm::FoldingSetNodeID &ID, const ASTContext &C,
                       const NamedDecl *ConstraintOwner,
-                      ArrayRef<TemplateArgument> TemplateArgs);
+                      ArrayRef<TemplateArgument> TemplateArgs,
+                      unsigned TargetVariant = 0);
 
   bool HasSubstitutionFailure() {
     for (const auto &Detail : Details)
