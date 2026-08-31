@@ -46,10 +46,19 @@
 
 namespace clang {
 
+/// Lets same-named declarations coexist as per-target variants instead of
+/// conflicting. Set once a compilation for several targets at once
+/// (-multi-target-aux-invocation) creates its ASTContext. Declared in the AST
+/// layer rather than in Sema because template specialization identity
+/// consults it directly to decide whether to fold in the target variant, and
+/// clangAST cannot depend on clangSema.
+LLVM_ABI extern bool AllowTargetVariantDecls;
+
 enum BuiltinTemplateKind : int;
 class ClassTemplateDecl;
 class ClassTemplatePartialSpecializationDecl;
 class Expr;
+class Stmt;
 class FunctionTemplateDecl;
 class IdentifierInfo;
 class NonTypeTemplateParmDecl;
@@ -597,16 +606,34 @@ public:
   }
 
   void Profile(llvm::FoldingSetNodeID &ID) {
-    Profile(ID, TemplateArguments->asArray(), getFunction()->getASTContext());
+    Profile(ID, TemplateArguments->asArray(), getTemplate(),
+            getFunction()->getASTContext(), getFunction());
   }
 
-  static void
-  Profile(llvm::FoldingSetNodeID &ID, ArrayRef<TemplateArgument> TemplateArgs,
-          const ASTContext &Context) {
+  // Template is the owning function template, whose identity only sometimes
+  // needs to become target-aware. Spec is the specialization being profiled,
+  // whose stored target key is used instead of the current one. Key, if
+  // non-zero, is used instead of either.
+  static void Profile(llvm::FoldingSetNodeID &ID,
+                      ArrayRef<TemplateArgument> TemplateArgs,
+                      const FunctionTemplateDecl *Template,
+                      const ASTContext &Context,
+                      const FunctionDecl *Spec = nullptr, unsigned Key = 0) {
     ID.AddInteger(TemplateArgs.size());
     for (const TemplateArgument &TemplateArg : TemplateArgs)
       TemplateArg.Profile(ID, Context);
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && Template)
+      profileTargetKey(ID, TemplateArgs, Template, Context, Spec, Key);
   }
+
+private:
+  static void profileTargetKey(llvm::FoldingSetNodeID &ID,
+                               ArrayRef<TemplateArgument> TemplateArgs,
+                               const FunctionTemplateDecl *Template,
+                               const ASTContext &Context,
+                               const FunctionDecl *Spec, unsigned Key);
+
+public:
 };
 
 /// Provides information a specialization of a member of a class
@@ -772,8 +799,14 @@ protected:
 
   void loadLazySpecializationsImpl(bool OnlyPartial = false) const;
 
+  // The second parameter is untyped because the extra profiling argument
+  // varies by EntryType, a TemplateParameterList* for partial specializations
+  // or a ClassTemplateDecl* for a target-aware full-specialization identity.
+  // This external-source query only uses Args. It is not a template so that
+  // other translation units can call it, since they cannot see a template
+  // defined in DeclTemplate.cpp.
   bool loadLazySpecializationsImpl(ArrayRef<TemplateArgument> Args,
-                                   TemplateParameterList *TPL = nullptr) const;
+                                   const void *Extra = nullptr) const;
 
   template <class EntryType, typename... ProfileArguments>
   typename SpecEntryTraits<EntryType>::DeclType *
@@ -1032,6 +1065,74 @@ public:
   /// otherwise return the insertion point.
   FunctionDecl *findSpecialization(ArrayRef<TemplateArgument> Args,
                                    llvm::FoldingSetInsertToken &InsertToken);
+
+  /// The specialization with the provided arguments created for target key
+  /// \p Key, if any.
+  FunctionDecl *findSpecializationForTargetKey(ArrayRef<TemplateArgument> Args,
+                                               unsigned Key);
+
+  /// True if this function template's own declared parameter or return type
+  /// names a class template with a target-tagged partial specialization. An
+  /// implicit specialization of this function template only needs a
+  /// target-aware identity when this is true. Leaving it false for most
+  /// function templates keeps them from being instantiated once per target.
+  bool hasTargetTaggedParameterType() const;
+
+  /// True if this function template's redeclaration chain gives evidence
+  /// that its body, not its signature, diverges by target.
+  ///
+  /// A template widened because its source text differs per target, e.g.
+  /// overloads in the arms of an `#if` on the architecture, has a
+  /// target-tagged redeclaration only because of that. Such a tag is real
+  /// evidence of divergence. Without this check, every target's call to the
+  /// same specialization would reuse whichever target's body was instantiated
+  /// first.
+  ///
+  /// A template can also get a target-tagged redeclaration merely by using
+  /// divergent code, e.g. by launching a kernel whose body differs per
+  /// target, without its own body differing between targets. The per-target
+  /// re-parse parses the same tokens again for another target and tags the
+  /// identical result. Keying such a template's specializations by target
+  /// would give each of its callers' re-parses a spurious copy of what should
+  /// be one specialization. Counting or comparing tagged redecls cannot tell
+  /// this apart from genuine divergence, because other targets' copies can be
+  /// created later on demand, so the count depends on when this is queried.
+  /// Instead this relies on a flag recorded when each redecl is tagged, which
+  /// is set only for tagging by the re-parse and does not depend on timing.
+  bool hasTargetTaggedRedeclaration() const;
+
+  /// Whether this is one target's re-parsed copy of a template declared once
+  /// for every target. Its specializations are the declaration's, which
+  /// instantiate each target's own definition. A template whose source
+  /// differs per target has specializations keyed by target instead.
+  bool isChainedTargetCopy() const {
+    return getTargetVariant() && !isRedundantTargetVariant() &&
+           !getCanonicalDecl()->getTargetVariant() &&
+           !hasTargetTaggedRedeclaration();
+  }
+
+  /// True if this function template's own pattern body, a single piece of
+  /// source text never widened by `#if`, directly references a
+  /// target-divergent plain callee, e.g. a constant initialized by calling a
+  /// function whose result differs per target.
+  ///
+  /// This is not about the template's own text diverging, which its
+  /// redeclaration chain shows. It is about a reference inside an unwidened
+  /// body to something else that diverges, the function template
+  /// counterpart of a class template's divergent static data member
+  /// initializer. Without this, a caller that is itself forked per target
+  /// would still have every one of its per-target copies resolve the call to
+  /// the same cached specialization, whichever target reached it first. That
+  /// target's answer would be baked into every other target's caller.
+  bool hasTargetTaggedBodyReference() const;
+
+  /// True if the identity of this template's specializations includes the
+  /// current target variant.
+  bool hasTargetKeyedSpecializations() const;
+
+  /// Re-insert every specialization under its current Profile, for when
+  /// keying by target stops holding.
+  void rehashSpecializations();
 
   FunctionTemplateDecl *getCanonicalDecl() override {
     return cast<FunctionTemplateDecl>(
@@ -2088,17 +2189,36 @@ public:
   SourceRange getSourceRange() const override LLVM_READONLY;
 
   void Profile(llvm::FoldingSetNodeID &ID) const {
-    Profile(ID, TemplateArgs->asArray(), getASTContext());
+    Profile(ID, TemplateArgs->asArray(), getSpecializedTemplate(),
+            getASTContext(), this);
   }
 
-  static void
-  Profile(llvm::FoldingSetNodeID &ID, ArrayRef<TemplateArgument> TemplateArgs,
-          const ASTContext &Context) {
+  // Template is the owning class template, whose identity only sometimes
+  // needs to become target-aware. Spec is the specialization being profiled,
+  // whose stored target key is used instead of the current one. Key, if
+  // non-zero, is used instead of either.
+  static void Profile(llvm::FoldingSetNodeID &ID,
+                      ArrayRef<TemplateArgument> TemplateArgs,
+                      const ClassTemplateDecl *Template,
+                      const ASTContext &Context,
+                      const ClassTemplateSpecializationDecl *Spec = nullptr,
+                      unsigned Key = 0) {
     ID.AddInteger(TemplateArgs.size());
     for (const TemplateArgument &TemplateArg : TemplateArgs)
       TemplateArg.Profile(ID, Context);
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && Template)
+      profileTargetKey(ID, TemplateArgs, Template, Context, Spec, Key);
   }
 
+private:
+  static void profileTargetKey(llvm::FoldingSetNodeID &ID,
+                               ArrayRef<TemplateArgument> TemplateArgs,
+                               const ClassTemplateDecl *Template,
+                               const ASTContext &Context,
+                               const ClassTemplateSpecializationDecl *Spec,
+                               unsigned Key);
+
+public:
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
 
   static bool classofKind(Kind K) {
@@ -2343,6 +2463,11 @@ public:
   findSpecialization(ArrayRef<TemplateArgument> Args,
                      llvm::FoldingSetInsertToken &InsertToken);
 
+  /// The specialization with the provided arguments created for target key
+  /// \p Key, if any.
+  ClassTemplateSpecializationDecl *
+  findSpecializationForTargetKey(ArrayRef<TemplateArgument> Args, unsigned Key);
+
   /// Insert the specified specialization knowing that it is not already
   /// in. InsertToken must be obtained from findSpecialization.
   void AddSpecialization(ClassTemplateSpecializationDecl *D,
@@ -2397,6 +2522,44 @@ public:
   /// Retrieve the partial specializations as an ordered list.
   void getPartialSpecializations(
       SmallVectorImpl<ClassTemplatePartialSpecializationDecl *> &PS) const;
+
+  /// True if any partial specialization of this template is target-tagged.
+  /// Implicit instantiations of this template only need a target-aware
+  /// identity when this is true. Leaving it false for most templates keeps
+  /// them from being instantiated once per target.
+  bool hasTargetTaggedPartialSpecialization() const;
+
+  /// True if this template's own primary body declares a static data member
+  /// whose initializer calls a target-divergent callee, a plain function
+  /// whose body differs per target. There is only one untagged declaration of
+  /// the member, because the divergence is hidden inside the called function
+  /// rather than in this template's text. Implicit instantiations of this
+  /// template still need a target-aware identity when this is true.
+  bool hasTargetTaggedValueMember() const;
+
+  /// True if this template's own primary-template redeclarations are
+  /// target-tagged, e.g. a template whose entire body is redeclared once per
+  /// #if/#elif/#else arm with non-interchangeable members. Implicit
+  /// instantiations that resolve to the primary template, with no partial
+  /// specialization matched, only need a target-aware identity when this is
+  /// true.
+  bool hasTargetTaggedPrimaryTemplate() const;
+
+  /// Whether specializations are keyed by target only because of a static
+  /// member's value, with the template's declarations shared by every target.
+  bool hasTargetKeyedValuesOnly() const {
+    return !hasTargetTaggedPrimaryTemplate() &&
+           !hasTargetTaggedPartialSpecialization();
+  }
+
+  /// True if the identity of this template's specializations includes the
+  /// current target variant.
+  bool hasTargetKeyedSpecializations() const;
+
+  /// Re-insert every specialization under its current Profile. Needed once
+  /// keying by target stops holding, because the specializations inserted
+  /// before then sit in buckets their Profile no longer hashes to.
+  void rehashSpecializations();
 
   /// Find a class template partial specialization with the given
   /// type T.

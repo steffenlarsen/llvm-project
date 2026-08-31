@@ -16,6 +16,7 @@
 #include "clang/AST/DeclOpenMP.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/LocInfoType.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/NestedNameSpecifier.h"
 #include "clang/AST/Type.h"
 #include "clang/AST/TypeLocVisitor.h"
@@ -263,6 +264,23 @@ void TextNodeDumper::Visit(TypeLoc TL) {
   TypeLocVisitor<TextNodeDumper>::Visit(TL);
 }
 
+/// The targets \p D belongs to, and with \p WithKey the target a keyed
+/// specialization was made for, in a compilation for several targets.
+static void dumpTargets(raw_ostream &OS, const Decl *D, bool WithKey) {
+  const ASTContext &Ctx = D->getASTContext();
+  if (!Ctx.hasMultiTarget())
+    return;
+  const MultiTargetContext &MT = Ctx.getMultiTarget();
+  if (D->isRedundantTargetVariant())
+    OS << " redundant";
+  else if (D->getTargetVariant())
+    OS << " targets=" << MT.describeTargets(D->getTargetSet());
+  if (!WithKey)
+    return;
+  if (unsigned Key = MT.getSpecializationKey(D))
+    OS << " target-key=" << MT.getTargetName(Key);
+}
+
 void TextNodeDumper::Visit(const Decl *D) {
   if (!D) {
     ColorScope Color(OS, ShowColors, ASTDumpColor::Null);
@@ -336,6 +354,7 @@ void TextNodeDumper::Visit(const Decl *D) {
   }
 
   ConstDeclVisitor<TextNodeDumper>::Visit(D);
+  dumpTargets(OS, D, /*WithKey=*/true);
 }
 
 void TextNodeDumper::Visit(const CXXCtorInitializer *Init) {
@@ -1044,6 +1063,7 @@ void TextNodeDumper::dumpBareDeclRef(const Decl *D) {
 
   if (const ValueDecl *VD = dyn_cast<ValueDecl>(D))
     dumpType(VD->getType());
+  dumpTargets(OS, D, /*WithKey=*/false);
 }
 
 void TextNodeDumper::dumpName(const NamedDecl *ND) {
@@ -1641,6 +1661,14 @@ void TextNodeDumper::VisitCallExpr(const CallExpr *Node) {
     OS << " adl";
   if (Node->hasStoredFPFeatures())
     printFPOptions(Node->getFPFeatures());
+  if (Context && Context->hasMultiTarget())
+    if (const auto *Dual =
+            Context->getMultiTarget().getCUDADualSideCall(Node)) {
+      OS << " host-side=";
+      dumpBareDeclRef(Dual->HostCall->getCalleeDecl());
+      OS << " device-side=";
+      dumpBareDeclRef(Dual->DeviceCall->getCalleeDecl());
+    }
 }
 
 void TextNodeDumper::VisitCXXOperatorCallExpr(const CXXOperatorCallExpr *Node) {

@@ -17,6 +17,7 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/Expr.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/TargetInfo.h"
@@ -179,6 +180,7 @@ namespace {
     }
 
     void HandleCXXStaticMemberVarInstantiation(VarDecl *VD) override {
+      MultiTargetContext::TargetInputSuspension NoAudit(*Ctx);
       if (Diags.hasErrorOccurred())
         return;
 
@@ -186,6 +188,7 @@ namespace {
     }
 
     bool HandleTopLevelDecl(DeclGroupRef DG) override {
+      MultiTargetContext::TargetInputSuspension NoAudit(*Ctx);
       // Ignore interesting decls from the AST reader after IRGen is finished.
       if (IRGenFinished)
         return true; // We can't CodeGen more but pass to other consumers.
@@ -217,6 +220,7 @@ namespace {
     }
 
     void HandleInlineFunctionDefinition(FunctionDecl *D) override {
+      MultiTargetContext::TargetInputSuspension NoAudit(*Ctx);
       if (Diags.hasUnrecoverableErrorOccurred())
         return;
 
@@ -245,6 +249,7 @@ namespace {
     /// client hack on the type, which can occur at any point in the file
     /// (because these can be defined in declspecs).
     void HandleTagDeclDefinition(TagDecl *D) override {
+      MultiTargetContext::TargetInputSuspension NoAudit(*Ctx);
       if (Diags.hasUnrecoverableErrorOccurred())
         return;
 
@@ -297,6 +302,7 @@ namespace {
     }
 
     void HandleTagDeclRequiredDefinition(const TagDecl *D) override {
+      MultiTargetContext::TargetInputSuspension NoAudit(*Ctx);
       if (Diags.hasUnrecoverableErrorOccurred())
         return;
 
@@ -310,6 +316,7 @@ namespace {
     }
 
     void HandleTranslationUnit(ASTContext &Ctx) override {
+      MultiTargetContext::TargetInputSuspension NoAudit(Ctx);
       // Release the Builder when there is no error.
       if (!Diags.hasUnrecoverableErrorOccurred() && Builder)
         Builder->Release();
@@ -326,6 +333,7 @@ namespace {
     }
 
     void AssignInheritanceModel(CXXRecordDecl *RD) override {
+      MultiTargetContext::TargetInputSuspension NoAudit(*Ctx);
       if (Diags.hasUnrecoverableErrorOccurred())
         return;
 
@@ -333,6 +341,7 @@ namespace {
     }
 
     void CompleteTentativeDefinition(VarDecl *D) override {
+      MultiTargetContext::TargetInputSuspension NoAudit(*Ctx);
       if (Diags.hasUnrecoverableErrorOccurred())
         return;
 
@@ -340,10 +349,12 @@ namespace {
     }
 
     void CompleteExternalDeclaration(DeclaratorDecl *D) override {
+      MultiTargetContext::TargetInputSuspension NoAudit(*Ctx);
       Builder->EmitExternalDeclaration(D);
     }
 
     void HandleVTable(CXXRecordDecl *RD) override {
+      MultiTargetContext::TargetInputSuspension NoAudit(*Ctx);
       if (Diags.hasUnrecoverableErrorOccurred())
         return;
 

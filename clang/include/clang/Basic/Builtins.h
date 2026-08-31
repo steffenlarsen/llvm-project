@@ -243,12 +243,17 @@ class Context {
   unsigned NumTargetBuiltins = 0;
   unsigned NumAuxTargetBuiltins = 0;
 
+  const TargetInfo *AuxTarget = nullptr;
+
 public:
   Context();
 
   /// Perform target-specific initialization
   /// \param AuxTarget Target info to incorporate builtins from. May be nullptr.
   void InitializeTarget(const TargetInfo &Target, const TargetInfo *AuxTarget);
+
+  /// The target the auxiliary builtins belong to, or null.
+  const TargetInfo *getAuxTarget() const { return AuxTarget; }
 
   /// Mark the identifiers for all the builtins with their
   /// appropriate builtin ID # and mark any non-portable builtin identifiers as

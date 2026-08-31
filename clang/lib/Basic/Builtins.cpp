@@ -129,6 +129,7 @@ void Builtin::Context::InitializeTarget(const TargetInfo &Target,
   TargetShards = Target.getTargetBuiltins();
   for (const auto &Shard : TargetShards)
     NumTargetBuiltins += Shard.Infos.size();
+  this->AuxTarget = AuxTarget;
   if (AuxTarget) {
     AuxTargetShards = AuxTarget->getTargetBuiltins();
     for (const auto &Shard : AuxTargetShards)

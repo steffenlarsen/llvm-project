@@ -13,12 +13,15 @@
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTMutationListener.h"
+#include "clang/AST/Attr.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclarationName.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExternalASTSource.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/ODRHash.h"
+#include "clang/AST/TargetDependence.h"
 #include "clang/AST/TemplateBase.h"
 #include "clang/AST/TemplateName.h"
 #include "clang/AST/Type.h"
@@ -30,13 +33,18 @@
 #include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 #include <cassert>
+#include <cstdlib>
 #include <optional>
 #include <utility>
 
 using namespace clang;
+
+bool clang::AllowTargetVariantDecls = false;
 
 //===----------------------------------------------------------------------===//
 // TemplateParameterList Implementation
@@ -364,7 +372,8 @@ void RedeclarableTemplateDecl::loadLazySpecializationsImpl(
 }
 
 bool RedeclarableTemplateDecl::loadLazySpecializationsImpl(
-    ArrayRef<TemplateArgument> Args, TemplateParameterList *TPL) const {
+    ArrayRef<TemplateArgument> Args, const void *Extra) const {
+  (void)Extra;
   auto *ExternalSource = getASTContext().getExternalSource();
   if (!ExternalSource)
     return false;
@@ -416,8 +425,10 @@ void RedeclarableTemplateDecl::addSpecializationImpl(
     // call to findSpecializationImpl does not find a matching Decl for the
     // template arguments.
     loadLazySpecializationsImpl(Args);
+    llvm::FoldingSetNodeID ID;
+    Entry->Profile(ID);
     llvm::FoldingSetInsertToken CorrectToken;
-    assert(!findSpecializationImpl(Specializations, CorrectToken, Args) &&
+    assert(!Specializations.lookup(ID, CorrectToken) &&
            InsertToken == CorrectToken &&
            "given incorrect InsertToken for specialization");
 #endif
@@ -473,18 +484,396 @@ FunctionTemplateDecl::getSpecializations() const {
   return getCommonPtr()->Specializations;
 }
 
+static unsigned
+keyedFunctionSpecializationVariant(const ASTContext &Context,
+                                   const FunctionTemplateDecl *Template);
+
+/// Records which targets declare an explicit specialization of \p Template
+/// for \p Args, which decides what the code naming it means.
+static void
+recordTargetExplicitSpecializations(const ASTContext &Ctx, const Decl *Template,
+                                    ArrayRef<TemplateArgument> Args) {
+  if (llvm::any_of(Args,
+                   [](const TemplateArgument &A) { return A.isDependent(); }))
+    return;
+  if (TargetPartition Targets =
+          Ctx.getMultiTarget().partitionTargetsBy([&](unsigned A, unsigned B) {
+            return Ctx.getMultiTarget().getTargetExplicitSpecialization(
+                       Template, Args, A) ==
+                   Ctx.getMultiTarget().getTargetExplicitSpecialization(
+                       Template, Args, B);
+          }))
+    Ctx.getMultiTarget().recordTargetInput('L', Targets, Template);
+}
+
 FunctionDecl *FunctionTemplateDecl::findSpecialization(
     ArrayRef<TemplateArgument> Args, llvm::FoldingSetInsertToken &InsertToken) {
   auto *Common = getCommonPtr();
-  return findSpecializationImpl(Common->Specializations, InsertToken, Args);
+  ASTContext &Ctx = getASTContext();
+  // A specialization keyed by target is that target's, so the lookup is a
+  // target input.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      Ctx.getMultiTarget().RecordGroupInputs &&
+      llvm::none_of(
+          Args, [](const TemplateArgument &A) { return A.isDependent(); })) {
+    MultiTargetContext::TargetDependenceKind Keyed =
+        MultiTargetContext::TDK_None;
+    if (hasTargetKeyedSpecializations())
+      Keyed = MultiTargetContext::TDK_Arch;
+    else if (Ctx.getMultiTarget().computeTargetInstantiationKey(this, Args))
+      Keyed =
+          Ctx.getMultiTarget().getSpecializationTargetDependence(this, Args);
+    if (Keyed)
+      Ctx.getMultiTarget().recordTargetInput(
+          'K', Ctx.getMultiTarget().reconcileTargetPartition(0, Keyed), this);
+  }
+  // An explicit specialization only some targets declare is theirs.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      Ctx.getMultiTarget().hasTargetExplicitSpecializations(this)) {
+    recordTargetExplicitSpecializations(Ctx, this, Args);
+    if (Decl *Spec = Ctx.getMultiTarget().getTargetExplicitSpecialization(
+            this, Args, keyedFunctionSpecializationVariant(Ctx, this)))
+      return cast<FunctionDecl>(Spec)->getMostRecentDecl();
+  }
+  // An explicit specialization is every target's.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      getASTContext().getMultiTarget().computeTargetInstantiationKey(this,
+                                                                     Args) &&
+      !hasTargetKeyedSpecializations())
+    if (FunctionDecl *Unkeyed = findSpecializationForTargetKey(
+            Args, MultiTargetContext::UnkeyedTarget))
+      return Unkeyed->getMostRecentDecl();
+  // Pass `this` through so implicit instantiations can be given a
+  // target-aware identity.
+  return findSpecializationImpl(Common->Specializations, InsertToken, Args,
+                                this);
+}
+
+bool FunctionTemplateDecl::hasTargetTaggedParameterType() const {
+  auto NamesTargetTaggedTemplate = [](QualType T) {
+    T = T.getNonReferenceType().getUnqualifiedType();
+    if (const auto *Ptr = T->getAs<PointerType>())
+      T = Ptr->getPointeeType().getUnqualifiedType();
+    const auto *TST = T->getAs<TemplateSpecializationType>();
+    if (!TST)
+      return false;
+    const auto *TD = dyn_cast_or_null<ClassTemplateDecl>(
+        TST->getTemplateName().getAsTemplateDecl());
+    return TD && TD->hasTargetTaggedPartialSpecialization();
+  };
+
+  const FunctionDecl *FD = getTemplatedDecl();
+  if (NamesTargetTaggedTemplate(FD->getReturnType()))
+    return true;
+  for (const ParmVarDecl *Param : FD->parameters())
+    if (NamesTargetTaggedTemplate(Param->getType()))
+      return true;
+  return false;
+}
+
+bool FunctionTemplateDecl::hasTargetTaggedRedeclaration() const {
+  // A redecl marked TargetVariantRedundant was judged interchangeable with
+  // the primary and merged away, so it is no evidence of divergence.
+  //
+  // How many tagged redecls are visible in the chain is not a stable signal.
+  // For a widened `#if`-divergent template the other targets' redecls are
+  // produced later, on demand, so the count depends on when it is queried,
+  // and specializations of the same template would get different identities.
+  // How each tagged redecl was created is stable. A reparse-origin redecl
+  // comes from re-parsing a shared declaration's own tokens for another
+  // target, which happens when a template merely references something
+  // divergent, e.g. launches a kernel that diverges by architecture. #if or
+  // #elif widening tags a copy only when the source text itself diverges by
+  // target. A reparse-origin tag proves nothing about divergence, and any
+  // other kind of tag does. Folding the target into a merely re-parsed
+  // template's specialization identity would give every aux-target re-parse
+  // of a caller its own spurious copy of what should be one specialization.
+  for (const RedeclarableTemplateDecl *RD : redecls()) {
+    if (!RD->getTargetVariant() || RD->isRedundantTargetVariant())
+      continue;
+    if (!RD->isTargetVariantReparseOrigin())
+      return true;
+  }
+  return false;
+}
+
+bool FunctionTemplateDecl::hasTargetTaggedBodyReference() const {
+  return containsTargetDivergentCallee(getTemplatedDecl()->getBody());
+}
+
+static bool getArgsForTargetKey(const ASTContext &Ctx,
+                                ArrayRef<TemplateArgument> Args, unsigned Key,
+                                SmallVectorImpl<TemplateArgument> &Out,
+                                unsigned Depth);
+
+/// The class \p RD stands for in code keyed by \p Key, with each
+/// specialization keyed by target it is or is a member of replaced by its
+/// sibling keyed \p Key. Null if one does not exist.
+static const CXXRecordDecl *getRecordForTargetKey(const ASTContext &Ctx,
+                                                  const CXXRecordDecl *RD,
+                                                  unsigned Key,
+                                                  unsigned Depth) {
+  if (Depth > 8)
+    return nullptr;
+  if (const auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(RD)) {
+    ClassTemplateDecl *CTD = CTSD->getSpecializedTemplate();
+    if (CTD->hasTargetKeyedSpecializations())
+      return nullptr;
+    SmallVector<TemplateArgument, 4> Args;
+    unsigned Have = Ctx.getMultiTarget().getTargetInstantiationKey(
+        CTSD->getCanonicalDecl());
+    bool Changed = getArgsForTargetKey(Ctx, CTSD->getTemplateArgs().asArray(),
+                                       Key, Args, Depth + 1);
+    if (Args.empty() && CTSD->getTemplateArgs().size())
+      return nullptr;
+    if (!Changed && (!Have || Have == Key))
+      return RD;
+    return CTD->findSpecializationForTargetKey(
+        Args, Have ? Key : MultiTargetContext::UnkeyedTarget);
+  }
+  const auto *Parent = dyn_cast<CXXRecordDecl>(RD->getDeclContext());
+  if (!Parent)
+    return RD;
+  const CXXRecordDecl *Mapped = getRecordForTargetKey(Ctx, Parent, Key, Depth);
+  if (Mapped == Parent || !Mapped)
+    return Mapped ? RD : nullptr;
+  for (const NamedDecl *ND : Mapped->lookup(RD->getDeclName()))
+    if (const auto *Member = dyn_cast<CXXRecordDecl>(ND);
+        Member && Member->getLocation() == RD->getLocation())
+      return Member;
+  return nullptr;
+}
+
+/// \p Args with each class in them replaced by the class it stands for in code
+/// keyed by \p Key, into \p Out, which is left empty if a class has none.
+/// Returns whether any was replaced.
+static bool getArgsForTargetKey(const ASTContext &Ctx,
+                                ArrayRef<TemplateArgument> Args, unsigned Key,
+                                SmallVectorImpl<TemplateArgument> &Out,
+                                unsigned Depth) {
+  bool Changed = false;
+  for (const TemplateArgument &Arg : Args) {
+    if (Arg.getKind() == TemplateArgument::Pack) {
+      SmallVector<TemplateArgument, 4> Elements;
+      bool ElementsChanged =
+          getArgsForTargetKey(Ctx, Arg.pack_elements(), Key, Elements, Depth);
+      if (Elements.empty() && !Arg.pack_elements().empty()) {
+        Out.clear();
+        return false;
+      }
+      Out.push_back(ElementsChanged
+                        ? TemplateArgument::CreatePackCopy(
+                              const_cast<ASTContext &>(Ctx), Elements)
+                        : Arg);
+      Changed |= ElementsChanged;
+      continue;
+    }
+    const CXXRecordDecl *RD = Arg.getKind() == TemplateArgument::Type
+                                  ? Arg.getAsType()->getAsCXXRecordDecl()
+                                  : nullptr;
+    if (!RD || !Arg.getAsType()->isRecordType()) {
+      Out.push_back(Arg);
+      continue;
+    }
+    const CXXRecordDecl *Mapped = getRecordForTargetKey(Ctx, RD, Key, Depth);
+    if (!Mapped) {
+      Out.clear();
+      return false;
+    }
+    if (Mapped == RD) {
+      Out.push_back(Arg);
+      continue;
+    }
+    Out.push_back(TemplateArgument(Ctx.getQualifiedType(
+        Ctx.getCanonicalTagType(Mapped),
+        Arg.getAsType().getCanonicalType().getQualifiers())));
+    Changed = true;
+  }
+  return Changed;
+}
+
+/// The specialization of \p Template keyed \p Key whose arguments name, for
+/// that key, the classes \p Args name.
+template <typename TemplateDeclT>
+static auto *
+findSiblingForTargetKey(const ASTContext &Ctx, TemplateDeclT *Template,
+                        ArrayRef<TemplateArgument> Args, unsigned Key) {
+  if (auto *Sibling = Template->findSpecializationForTargetKey(Args, Key))
+    return Sibling;
+  SmallVector<TemplateArgument, 4> Mapped;
+  return getArgsForTargetKey(Ctx, Args, Key, Mapped, 0)
+             ? Template->findSpecializationForTargetKey(Mapped, Key)
+             : nullptr;
+}
+
+/// A specialization keyed by the canonical device target stands in for every
+/// target without one of its own. Record on it each target that has one, whose
+/// specialization can name its own classes where the canonical device's names
+/// the canonical device's.
+template <typename TemplateDeclT, typename SpecDeclT>
+static void recordTargetInstanceReplacements(ASTContext &Ctx,
+                                             TemplateDeclT *Template,
+                                             SpecDeclT *Spec,
+                                             ArrayRef<TemplateArgument> Args,
+                                             unsigned Key) {
+  unsigned Canonical = Ctx.getCanonicalDeviceVariant();
+  if (Key != Canonical) {
+    if (auto *Shared = findSiblingForTargetKey(Ctx, Template, Args, Canonical))
+      Ctx.getMultiTarget().markTargetInstanceReplaced(Shared, Key);
+    return;
+  }
+  for (unsigned V : Ctx.getTargetVariants())
+    if (V != Canonical && findSiblingForTargetKey(Ctx, Template, Args, V))
+      Ctx.getMultiTarget().markTargetInstanceReplaced(Spec, V);
+}
+
+/// The target a specialization of \p Template, a function template whose
+/// specializations are keyed by target, is requested for now is keyed by.
+static unsigned
+keyedFunctionSpecializationVariant(const ASTContext &Context,
+                                   const FunctionTemplateDecl *Template) {
+  unsigned V = Context.getCurrentTargetVariant();
+  if (!V)
+    V = 1;
+  // Device code parsed under the primary's ambient target reaches a device
+  // target's copy of the template through the canonical-device visibility
+  // fallback, and instantiates that copy's body. Once a shared forward
+  // declaration chains the copies they share one set of specializations, so
+  // key the result by the copy's own target rather than the primary's, whose
+  // own specialization it would otherwise become.
+  if (V == 1 && Template->getTargetVariant() && !Template->isCopyFor(1) &&
+      !Template->isRedundantTargetVariant())
+    V = Template->getTargetVariant();
+  return Context.getMultiTarget().getSpecializationTarget(Template, V);
 }
 
 void FunctionTemplateDecl::addSpecialization(
     FunctionTemplateSpecializationInfo *Info,
     llvm::FoldingSetInsertToken InsertToken) {
   auto *Common = getCommonPtr();
+  ASTContext &Ctx = getASTContext();
+  unsigned Key = 0;
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      !hasTargetKeyedSpecializations()) {
+    // The instantiator may have keyed the declaration before creating it.
+    Key = Ctx.getMultiTarget().getTargetInstantiationKey(Info->getFunction());
+    if (!Key && (Key = Ctx.getMultiTarget().computeTargetInstantiationKey(
+                     this, Info->TemplateArguments->asArray())))
+      Ctx.getMultiTarget().setTargetInstantiationKey(Info->getFunction(), Key);
+    if (!Key && !Info->isExplicitSpecialization())
+      Ctx.getMultiTarget().noteUnkeyedSpecialization(this);
+  }
   addSpecializationImpl<FunctionTemplateDecl>(Common->Specializations, Info,
                                               InsertToken);
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && getTargetVariant() &&
+      !isRedundantTargetVariant() && !getTargetSet().isSingle()) {
+    if (hasTargetKeyedSpecializations())
+      Ctx.getMultiTarget().setSpecializationTargets(
+          Info->getFunction(),
+          TargetSet::single(keyedFunctionSpecializationVariant(Ctx, this)));
+    else if (Key)
+      Ctx.getMultiTarget().setSpecializationTargets(
+          Info->getFunction(),
+          Ctx.getMultiTarget().getInstantiationKeyTargets(this, Key));
+  }
+  // A specialization of one target's copy of a function template stands for
+  // that target only. So does one of a member template of one target's copy
+  // of a class.
+  const auto *Owner = dyn_cast<CXXRecordDecl>(getDeclContext());
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && getTargetVariant() &&
+      !isRedundantTargetVariant() &&
+      (!Owner || (Owner->getTargetVariant() && !Owner->isDependentContext() &&
+                  !isa<ClassTemplateSpecializationDecl>(Owner))) &&
+      Ctx.isMultiTargetCompile() && !isChainedTargetCopy())
+    Ctx.getMultiTarget().noteTargetCopySpecialization(Info->getFunction());
+  // The host's view of device code stands in for nothing the host compiles.
+  const FunctionDecl *FD = getTemplatedDecl();
+  if (Key && Key == Ctx.getHostVariant() &&
+      Ctx.getMultiTarget().isHostViewOfDeviceCode() &&
+      (FD->hasAttr<CUDAGlobalAttr>() ||
+       (FD->hasAttr<CUDADeviceAttr>() && !FD->hasAttr<CUDAHostAttr>())))
+    return;
+  if (Key)
+    recordTargetInstanceReplacements(Ctx, this, Info->getFunction(),
+                                     Info->TemplateArguments->asArray(), Key);
+}
+
+FunctionDecl *FunctionTemplateDecl::findSpecializationForTargetKey(
+    ArrayRef<TemplateArgument> Args, unsigned Key) {
+  if (Decl *Spec =
+          getASTContext().getMultiTarget().getTargetExplicitSpecialization(
+              this, Args, Key))
+    return cast<FunctionDecl>(Spec);
+  llvm::FoldingSetNodeID ID;
+  FunctionTemplateSpecializationInfo::Profile(ID, Args, this, getASTContext(),
+                                              nullptr, Key);
+  llvm::FoldingSetInsertToken InsertToken;
+  FunctionTemplateSpecializationInfo *Entry =
+      getCommonPtr()->Specializations.lookup(ID, InsertToken);
+  return Entry ? Entry->getFunction() : nullptr;
+}
+
+void FunctionTemplateSpecializationInfo::profileTargetKey(
+    llvm::FoldingSetNodeID &ID, ArrayRef<TemplateArgument> TemplateArgs,
+    const FunctionTemplateDecl *Template, const ASTContext &Context,
+    const FunctionDecl *Spec, unsigned Key) {
+  // An implicit specialization is normally the same entity no matter which
+  // target compiles it, so folding the target in unconditionally would
+  // instantiate every function template call once per target instead of
+  // once overall. The target is folded in only in three cases.
+  //
+  // The signature names a class template with a target-tagged partial
+  // specialization, so the parameter's type is itself target-specific.
+  // Otherwise the first target to call the specialization caches a
+  // FunctionDecl for its own class instantiation, and every other target's
+  // call fails deduction against its own, differently keyed argument type.
+  //
+  // The body, not the signature, is gated by target-CPU macros. Widening
+  // produced correctly tagged redeclarations, but they share one set of
+  // specializations, so otherwise the first target to instantiate the
+  // template caches its compiled body and every other target reuses it.
+  //
+  // The template's own text is not widened, but its body calls a
+  // target-divergent function to initialize a local variable. A widened
+  // caller instantiates it under a different target for each of its copies,
+  // so otherwise the first of those calls caches its resolution of the local
+  // variable for every other target's caller too.
+  if (Template->hasTargetKeyedSpecializations()) {
+    ID.AddInteger(keyedFunctionSpecializationVariant(Context, Template));
+  } else {
+    if (!Key)
+      Key = Spec ? Context.getMultiTarget().getTargetInstantiationKey(Spec)
+                 : Context.getMultiTarget().computeTargetInstantiationKey(
+                       Template, TemplateArgs);
+    if (Key && Key != MultiTargetContext::UnkeyedTarget)
+      ID.AddInteger(Key);
+  }
+}
+
+bool FunctionTemplateDecl::hasTargetKeyedSpecializations() const {
+  if (hasTargetTaggedParameterType() || hasTargetTaggedRedeclaration() ||
+      getASTContext().getMultiTarget().hasTargetExplicitSpecializations(this))
+    return true;
+  // A body reference keyed by the context instead does not need the ambient
+  // target.
+  return hasTargetTaggedBodyReference() &&
+         !getASTContext().getMultiTarget().hasTargetInstantiationKeys(this);
+}
+
+/// Of two specializations that now share a key, the first is kept.
+template <typename EntryType>
+static void rehashSpecializationsImpl(
+    llvm::FoldingSetVector<EntryType> &Specializations) {
+  SmallVector<EntryType *, 8> Entries;
+  for (EntryType &Entry : Specializations)
+    Entries.push_back(&Entry);
+  Specializations.clear();
+  for (EntryType *Entry : Entries)
+    Specializations.getOrInsert(Entry);
+}
+
+void FunctionTemplateDecl::rehashSpecializations() {
+  rehashSpecializationsImpl(getSpecializations());
 }
 
 void FunctionTemplateDecl::mergePrevDecl(FunctionTemplateDecl *Prev) {
@@ -568,18 +957,227 @@ ClassTemplateDecl::newCommon(ASTContext &C) const {
   return CommonPtr;
 }
 
+static unsigned keyedSpecializationVariant(const ASTContext &Context);
+
 ClassTemplateSpecializationDecl *ClassTemplateDecl::findSpecialization(
     ArrayRef<TemplateArgument> Args, llvm::FoldingSetInsertToken &InsertToken) {
   auto *Common = getCommonPtr();
-  return findSpecializationImpl(Common->Specializations, InsertToken, Args);
+  ASTContext &Ctx = getASTContext();
+  // A specialization keyed by target is that target's, so the lookup is a
+  // target input.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      Ctx.getMultiTarget().RecordGroupInputs &&
+      llvm::none_of(Args,
+                    [](const TemplateArgument &A) { return A.isDependent(); }))
+    if (MultiTargetContext::TargetDependenceKind Keyed =
+            hasTargetKeyedSpecializations()
+                ? MultiTargetContext::TDK_Arch
+                : Ctx.getMultiTarget().getTargetDependence(this))
+      Ctx.getMultiTarget().recordTargetInput(
+          'K', Ctx.getMultiTarget().reconcileTargetPartition(0, Keyed), this);
+  // An explicit specialization only some targets declare is theirs.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      Ctx.getMultiTarget().hasTargetExplicitSpecializations(this)) {
+    recordTargetExplicitSpecializations(Ctx, this, Args);
+    if (Decl *Spec = Ctx.getMultiTarget().getTargetExplicitSpecialization(
+            this, Args, keyedSpecializationVariant(Ctx)))
+      return cast<ClassTemplateSpecializationDecl>(Spec)->getMostRecentDecl();
+  }
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      Ctx.getMultiTarget().computeTargetInstantiationKey(this) &&
+      !hasTargetKeyedSpecializations())
+    if (ClassTemplateSpecializationDecl *Unkeyed =
+            findSpecializationForTargetKey(Args,
+                                           MultiTargetContext::UnkeyedTarget))
+      return Unkeyed->getMostRecentDecl();
+  // Pass `this` through so implicit instantiations can be given a
+  // target-aware identity.
+  return findSpecializationImpl(Common->Specializations, InsertToken, Args,
+                                this);
+}
+
+/// The target a specialization of a template with target-keyed
+/// specializations is made for. This is the ambient one, except that a host
+/// function analysed for a device is still host code.
+static unsigned keyedSpecializationVariant(const ASTContext &Context) {
+  unsigned V = Context.getCurrentTargetVariant();
+  return V > 1 && Context.getMultiTarget().getInstantiationTarget() != 1 ? V
+                                                                         : 1;
+}
+
+ClassTemplateSpecializationDecl *
+ClassTemplateDecl::findSpecializationForTargetKey(
+    ArrayRef<TemplateArgument> Args, unsigned Key) {
+  if (Decl *Spec =
+          getASTContext().getMultiTarget().getTargetExplicitSpecialization(
+              this, Args, Key))
+    return cast<ClassTemplateSpecializationDecl>(Spec);
+  llvm::FoldingSetNodeID ID;
+  ClassTemplateSpecializationDecl::Profile(ID, Args, this, getASTContext(),
+                                           nullptr, Key);
+  llvm::FoldingSetInsertToken InsertToken;
+  return getCommonPtr()->Specializations.lookup(ID, InsertToken);
 }
 
 void ClassTemplateDecl::AddSpecialization(
     ClassTemplateSpecializationDecl *D,
     llvm::FoldingSetInsertToken InsertToken) {
   auto *Common = getCommonPtr();
-  addSpecializationImpl<ClassTemplateDecl>(Common->Specializations, D,
-                                           InsertToken);
+  unsigned Key = 0;
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+    if (hasTargetKeyedSpecializations()) {
+      getASTContext().getMultiTarget().setSpecializationKeyVariant(
+          D, keyedSpecializationVariant(getASTContext()));
+    } else if ((Key = getASTContext()
+                          .getMultiTarget()
+                          .computeTargetInstantiationKey(this))) {
+      getASTContext().getMultiTarget().setTargetInstantiationKey(D, Key);
+      getASTContext().getMultiTarget().setSpecializationKeyVariant(D, Key);
+      if (getTargetVariant() && !isRedundantTargetVariant() &&
+          !getTargetSet().isSingle())
+        getASTContext().getMultiTarget().setSpecializationTargets(
+            D, getASTContext().getMultiTarget().getInstantiationKeyTargets(
+                   this, Key));
+    } else {
+      getASTContext().getMultiTarget().noteUnkeyedSpecialization(this);
+    }
+  }
+  // Inserted here rather than through the shared helper, so the debug check
+  // below can look the specialization up with this template folded into its
+  // profile. The shared helper cannot recover the owning template from an
+  // entry.
+  if (InsertToken) {
+#ifndef NDEBUG
+    ArrayRef<TemplateArgument> Args = D->getTemplateArgs().asArray();
+    // Due to hash collisions, it can happen that we load another template
+    // specialization with the same hash. This is fine, as long as the next
+    // call to findSpecialization does not find a matching Decl for the
+    // template arguments.
+    loadLazySpecializationsImpl(Args);
+    llvm::FoldingSetInsertToken CorrectToken;
+    assert(!findSpecialization(Args, CorrectToken) &&
+           InsertToken == CorrectToken &&
+           "given incorrect InsertToken for specialization");
+#endif
+    Common->Specializations.insert(D, InsertToken);
+  } else {
+    ClassTemplateSpecializationDecl *Existing =
+        Common->Specializations.getOrInsert(D);
+    (void)Existing;
+    assert(Existing->isCanonicalDecl() && "non-canonical specialization?");
+  }
+
+  if (Key)
+    recordTargetInstanceReplacements(getASTContext(), this, D,
+                                     D->getTemplateArgs().asArray(), Key);
+
+  if (ASTMutationListener *L = getASTMutationListener())
+    L->AddedCXXTemplateSpecialization(this, D);
+}
+
+bool ClassTemplateDecl::hasTargetTaggedPartialSpecialization() const {
+  for (const ClassTemplatePartialSpecializationDecl &P :
+       getPartialSpecializations())
+    if (P.getTargetVariant())
+      return true;
+  return false;
+}
+
+bool ClassTemplateDecl::hasTargetTaggedPrimaryTemplate() const {
+  for (const RedeclarableTemplateDecl *R : redecls())
+    if (R->getTargetVariant())
+      return true;
+  return false;
+}
+
+static bool recordHasTargetTaggedValueMember(const CXXRecordDecl *RD) {
+  for (const Decl *D : RD->decls()) {
+    const auto *VD = dyn_cast<VarDecl>(D);
+    if (VD && containsTargetDivergentCallee(VD->getInit()))
+      return true;
+    // So does a member typedef device architectures have different copies
+    // of. The host's view of one the devices share is the host's anyway.
+    if (const auto *TND = dyn_cast<TypedefNameDecl>(D);
+        TND && TND->getTargetVariant() && !TND->isRedundantTargetVariant()) {
+      const ASTContext &Ctx = TND->getASTContext();
+      SmallVector<const NamedDecl *, 4> Copies;
+      Ctx.getMultiTarget().getTargetCopies(TND, Copies);
+      std::optional<QualType> Seen;
+      for (unsigned V : Ctx.getDeviceVariants()) {
+        QualType Type;
+        for (const NamedDecl *Copy : Copies)
+          if (Copy->isCopyFor(V))
+            if (const auto *CopyTND = dyn_cast<TypedefNameDecl>(Copy))
+              Type = Ctx.getCanonicalType(CopyTND->getUnderlyingType());
+        if (Seen && *Seen != Type)
+          return true;
+        Seen = Type;
+      }
+    }
+  }
+  return false;
+}
+
+bool ClassTemplateDecl::hasTargetTaggedValueMember() const {
+  // The primary template's own body is often empty, with every member in a
+  // partial specialization, so also check each partial specialization's
+  // members.
+  if (recordHasTargetTaggedValueMember(getTemplatedDecl()))
+    return true;
+  SmallVector<ClassTemplatePartialSpecializationDecl *, 4> PS;
+  getPartialSpecializations(PS);
+  for (const ClassTemplatePartialSpecializationDecl *P : PS)
+    if (recordHasTargetTaggedValueMember(P))
+      return true;
+  return false;
+}
+
+void ClassTemplateSpecializationDecl::profileTargetKey(
+    llvm::FoldingSetNodeID &ID, ArrayRef<TemplateArgument> TemplateArgs,
+    const ClassTemplateDecl *Template, const ASTContext &Context,
+    const ClassTemplateSpecializationDecl *Spec, unsigned Key) {
+  // An implicit instantiation is normally the same entity no matter which
+  // target compiles it, so folding the target into its identity
+  // unconditionally would instantiate every specialization once per target
+  // instead of once overall. The target is folded in only in three cases.
+  //
+  // The template has a target-tagged partial specialization, so the
+  // instantiation's body is target-specific. The class is instantiated once,
+  // from whichever target's pattern is picked first, and tagging an already
+  // shared Decl does not give another target a body of its own, so that
+  // target's later member references fail to resolve.
+  //
+  // A static data member's initializer calls a function whose body is gated
+  // by target-CPU macros. The member's value, and so any array bound that
+  // depends on it, would otherwise be fixed by whichever target instantiates
+  // the specialization first.
+  //
+  // The primary template's entire body is redeclared once per #if/#elif/#else
+  // arm. An instantiation that matches none of its widened partial
+  // specializations falls back to the primary template, and would otherwise
+  // get the same untargeted identity no matter which arm's redecl was current
+  // when it was first instantiated.
+  if (Template->hasTargetKeyedSpecializations()) {
+    ID.AddInteger(keyedSpecializationVariant(Context));
+  } else {
+    if (!Key)
+      Key = Spec ? Context.getMultiTarget().getTargetInstantiationKey(Spec)
+                 : Context.getMultiTarget().computeTargetInstantiationKey(
+                       Template);
+    if (Key && Key != MultiTargetContext::UnkeyedTarget)
+      ID.AddInteger(Key);
+  }
+}
+
+bool ClassTemplateDecl::hasTargetKeyedSpecializations() const {
+  return hasTargetTaggedPartialSpecialization() ||
+         hasTargetTaggedValueMember() || hasTargetTaggedPrimaryTemplate() ||
+         getASTContext().getMultiTarget().hasTargetExplicitSpecializations(
+             this);
+}
+
+void ClassTemplateDecl::rehashSpecializations() {
+  rehashSpecializationsImpl(getSpecializations());
 }
 
 ClassTemplatePartialSpecializationDecl *
@@ -597,6 +1195,18 @@ void ClassTemplatePartialSpecializationDecl::Profile(
   for (const TemplateArgument &TemplateArg : TemplateArgs)
     TemplateArg.Profile(ID, Context);
   TPL->Profile(ID, Context);
+  // Unlike a full or implicit specialization, a partial specialization is
+  // always written out by hand, so two of them sharing an argument pattern
+  // but belonging to different targets are not duplicates of one entity.
+  // They are the divergence itself, e.g. one with a target #if inside its
+  // class body. Keyed by argument pattern alone, the second one parsed would
+  // look like a redefinition of the first. Mixing the target into the profile
+  // lets both coexist. Shared code (current == 0) resolves to the primary
+  // target's, as ordinary name lookup does for shared code.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+    unsigned V = Context.getCurrentTargetVariant();
+    ID.AddInteger(V ? V : 1);
+  }
 }
 
 void ClassTemplateDecl::AddPartialSpecialization(

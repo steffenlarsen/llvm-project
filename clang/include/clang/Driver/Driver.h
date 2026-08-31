@@ -444,6 +444,13 @@ public:
   bool offloadHostOnly() const { return Offload == OffloadHost; }
   bool offloadDeviceOnly() const { return Offload == OffloadDevice; }
 
+  /// Whether a HIP host compilation generates the devices' code itself. A
+  /// compilation for the host or the devices alone has nothing to share.
+  bool integratesHipDeviceCodegen(const llvm::opt::ArgList &Args) const {
+    return Offload == OffloadHostDevice &&
+           Args.hasArg(options::OPT_fintegrated_hip_device_codegen);
+  }
+
   void setFlangF128MathLibrary(std::string name) {
     FlangF128MathLibrary = std::move(name);
   }

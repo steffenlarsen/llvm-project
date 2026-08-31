@@ -47,6 +47,7 @@
 #include "clang/AST/CurrentSourceLocExprScope.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/InferAlloc.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/OSLog.h"
 #include "clang/AST/OptionalDiagnostic.h"
 #include "clang/AST/RecordLayout.h"
@@ -2382,6 +2383,12 @@ static bool CheckLValueConstantExpression(EvalInfo &Info, SourceLocation Loc,
 
       // In CUDA/HIP device compilation, only device side variables have
       // constant addresses.
+      if (Info.getLangOpts().CUDA && Info.Ctx.hasMultiTarget())
+        Info.Ctx.getMultiTarget().recordTargetInput(
+            'C',
+            Info.Ctx.getMultiTarget().reconcileTargetPartition(
+                0, MultiTargetContext::TDK_Side),
+            Var);
       if (Info.getLangOpts().CUDA && Info.getLangOpts().CUDAIsDevice &&
           Info.Ctx.CUDAConstantEvalCtx.NoWrongSidedVars) {
         if ((!Var->hasAttr<CUDADeviceAttr>() &&
@@ -2819,9 +2826,32 @@ static bool checkFloatingPointResultForConstantFolding(EvalInfo &Info,
   return true;
 }
 
+/// A value converted to \p DestType while Sema evaluates is in the format of
+/// the target the code is analysed for, which can differ between targets.
+static void recordFloatFormat(const EvalInfo &Info, QualType DestType) {
+  const ASTContext &Ctx = Info.Ctx;
+  if (LLVM_LIKELY(!Ctx.hasMultiTarget()) ||
+      !Ctx.getMultiTarget().isRecordingTargetInputs() ||
+      !Info.InConstantContext)
+    return;
+  const auto *BT = DestType->getAs<BuiltinType>();
+  if (!BT || (BT->getKind() != BuiltinType::LongDouble &&
+              BT->getKind() != BuiltinType::Float128))
+    return;
+  if (TargetPartition Formats =
+          Ctx.getMultiTarget().partitionTargetsByAnswer([&](unsigned V) {
+            const TargetInfo &TI = *Ctx.getTargetForVariant(V);
+            return llvm::hash_value(BT->getKind() == BuiltinType::LongDouble
+                                        ? &TI.getLongDoubleFormat()
+                                        : &TI.getFloat128Format());
+          }))
+    Ctx.getMultiTarget().recordTargetInput('T', Formats, nullptr);
+}
+
 static bool HandleFloatToFloatCast(EvalInfo &Info, const Expr *E,
                                    QualType SrcType, QualType DestType,
                                    APFloat &Result) {
+  recordFloatFormat(Info, DestType);
   assert((isa<CastExpr>(E) || isa<CompoundAssignOperator>(E) ||
           isa<ConvertVectorExpr>(E)) &&
          "HandleFloatToFloatCast has been checked with only CastExpr, "
@@ -2852,6 +2882,7 @@ static bool HandleIntToFloatCast(EvalInfo &Info, const Expr *E,
                                  const FPOptions FPO,
                                  QualType SrcType, const APSInt &Value,
                                  QualType DestType, APFloat &Result) {
+  recordFloatFormat(Info, DestType);
   Result = APFloat(Info.Ctx.getFloatTypeSemantics(DestType), 1);
   llvm::RoundingMode RM = getActiveRoundingMode(Info, E);
   APFloat::opStatus St = Result.convertFromAPInt(Value, Value.isSigned(), RM);
@@ -3563,6 +3594,12 @@ static bool evaluateVarDeclInit(EvalInfo &Info, const Expr *E,
 
   if (E->isValueDependent())
     return false;
+
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    if (const VarDecl *Own =
+            Info.Ctx.getMultiTarget().getTargetVariableForEvaluation(
+                VD, Info.InConstantContext))
+      VD = Own;
 
   // Dig out the initializer, and use the declaration which it's attached to.
   // FIXME: We should eventually check whether the variable has a reachable
@@ -5088,7 +5125,20 @@ handleLValueToRValueConversion(EvalInfo &Info, const Expr *Conv, QualType Type,
   }
 
   CompleteObject Obj = findCompleteObject(Info, Conv, AK, LVal, Type);
-  return Obj && extractSubobject(Info, Conv, Obj, LVal.Designator, RVal, AK);
+  if (!Obj || !extractSubobject(Info, Conv, Obj, LVal.Designator, RVal, AK))
+    return false;
+  // An object evaluated for another target, e.g. a template parameter object
+  // shared by every target, holds that target's format of a floating type
+  // whose format differs between the targets.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && RVal.isFloat() &&
+      Type->isRealFloatingType())
+    if (const llvm::fltSemantics &Sem = Info.Ctx.getFloatTypeSemantics(Type);
+        &RVal.getFloat().getSemantics() != &Sem) {
+      bool LosesInfo;
+      RVal.getFloat().convert(Sem, llvm::APFloat::rmNearestTiesToEven,
+                              &LosesInfo);
+    }
+  return true;
 }
 
 static bool hlslElementwiseCastHelper(EvalInfo &Info, const Expr *E,
@@ -9208,6 +9258,17 @@ public:
 
     const FunctionDecl *Definition = nullptr;
     Stmt *Body = FD->getBody(Definition);
+    if (Definition && Info.Ctx.hasMultiTarget()) {
+      MultiTargetContext &MT = Info.Ctx.getMultiTarget();
+      if (const FunctionDecl *Own = MT.getTargetDefinitionForEvaluation(
+              FD, Definition, Info.InConstantContext)) {
+        Definition = Own;
+        Body = Own->getBody();
+      }
+      if (Stmt *Own =
+              MT.getTargetBodyForEvaluation(Definition, Info.InConstantContext))
+        Body = Own;
+    }
 
     // Treat the object argument as `this` when evaluating defaulted
     // special menmber functions
@@ -10642,7 +10703,7 @@ unsigned ConvertBuiltinIDToX86BuiltinID(const ASTContext &Ctx,
   // back to its canonical value.
   const TargetInfo *OwningTarget;
   if (Ctx.BuiltinInfo.isAuxBuiltinID(BuiltinOp)) {
-    OwningTarget = Ctx.getAuxTargetInfo();
+    OwningTarget = Ctx.BuiltinInfo.getAuxTarget();
     BuiltinOp = Ctx.BuiltinInfo.getAuxBuiltinID(BuiltinOp);
   } else {
     OwningTarget = &Ctx.getTargetInfo();
@@ -11944,6 +12005,13 @@ bool RecordExprEvaluator::VisitCXXConstructExpr(const CXXConstructExpr *E,
 
   const FunctionDecl *Definition = nullptr;
   auto Body = FD->getBody(Definition);
+  if (Definition && Info.Ctx.hasMultiTarget())
+    if (const FunctionDecl *Own =
+            Info.Ctx.getMultiTarget().getTargetDefinitionForEvaluation(
+                FD, Definition, Info.InConstantContext)) {
+      Definition = Own;
+      Body = Own->getBody();
+    }
 
   if (!CheckConstexprFunction(Info, E->getExprLoc(), FD, Definition, Body))
     return false;

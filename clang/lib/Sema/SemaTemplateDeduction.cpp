@@ -23,6 +23,7 @@
 #include "clang/AST/DynamicRecursiveASTVisitor.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/NestedNameSpecifier.h"
 #include "clang/AST/TemplateBase.h"
 #include "clang/AST/TemplateName.h"
@@ -41,6 +42,7 @@
 #include "clang/Sema/EnterExpressionEvaluationContext.h"
 #include "clang/Sema/Ownership.h"
 #include "clang/Sema/Sema.h"
+#include "clang/Sema/SemaMultiTarget.h"
 #include "clang/Sema/Template.h"
 #include "clang/Sema/TemplateDeduction.h"
 #include "llvm/ADT/APInt.h"
@@ -4992,6 +4994,16 @@ TemplateDeductionResult Sema::DeduceTemplateArguments(
     FunctionType = SubstAutoTypeDependent(FunctionType);
     HasDeducedReturnType = true;
   }
+
+  // The function type was written for the target the code naming the
+  // template is analysed for, but the specialization is for its own.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      !ArgFunctionType.isNull())
+    ArgFunctionType = MultiTarget().getWrittenTypeForTarget(
+        ArgFunctionType,
+        Context.getMultiTarget().computeTargetInstantiationKey(
+            FunctionTemplate),
+        Info.getLocation());
 
   if (!ArgFunctionType.isNull() && !FunctionType.isNull()) {
     unsigned TDF =

@@ -1310,6 +1310,11 @@ def offload_host_device : Flag<["--"], "offload-host-device">,
 def gpu_use_aux_triple_only : Flag<["--"], "gpu-use-aux-triple-only">,
   InternalDriverOpt, HelpText<"Prepare '-aux-triple' only without populating "
                               "'-aux-target-cpu' and '-aux-target-feature'.">;
+def fintegrated_hip_device_codegen : Flag<["-"], "fintegrated-hip-device-codegen">,
+  InternalDriverOpt,
+  HelpText<"Prototype: collapse HIP non-RDC device codegen into the host cc1 process "
+           "instead of spawning separate device cc1/clang-offload-packager/"
+           "clang-linker-wrapper jobs.">;
 def offload_arch_tool_EQ : Joined<["--"], "offload-arch-tool=">,
   HelpText<"Tool used for detecting offloading architectures in the system.">;
 def amdgpu_arch_tool_EQ : Joined<["--"], "amdgpu-arch-tool=">,
@@ -8645,6 +8650,31 @@ def aux_target_feature : Separate<["-"], "aux-target-feature">,
 def aux_triple : Separate<["-"], "aux-triple">,
   HelpText<"Auxiliary target triple.">,
   MarshallingInfoString<FrontendOpts<"AuxTriple">>;
+def multi_target_aux_invocation_EQ : Joined<["-"], "multi-target-aux-invocation=">,
+  MetaVarName<"<cc1 args>">,
+  HelpText<"Prototype: the cc1 arguments of one multi-target aux target, as a "
+           "single GNU-quoted string. Repeatable, in aux-target order.">,
+  MarshallingInfoStringVector<FrontendOpts<"MultiTargetAuxInvocations">>;
+def multi_target_aux_output_EQ : Joined<["-"], "multi-target-aux-output=">,
+  MetaVarName<"<variant>:<path>">,
+  HelpText<"Prototype: write a multi-target aux target's bitcode to <path>. "
+           "Repeatable.">,
+  MarshallingInfoStringVector<FrontendOpts<"MultiTargetAuxOutputs">>;
+def multi_target_aux_target_id_EQ : Joined<["-"], "multi-target-aux-target-id=">,
+  MetaVarName<"<variant>:<target-id>">,
+  HelpText<"Prototype: the target ID a multi-target aux target is packaged "
+           "as, its CPU by default. Repeatable.">,
+  MarshallingInfoStringVector<FrontendOpts<"MultiTargetAuxTargetIDs">>;
+def multi_target_package_offload_EQ : Joined<["-"], "multi-target-package-offload=">,
+  MetaVarName<"<path>">,
+  HelpText<"Prototype: package the multi-target aux targets' bitcode, "
+           "unlinked, into an offload binary at <path>">,
+  MarshallingInfoString<FrontendOpts<"MultiTargetPackageOffload">>;
+def multi_target_preprocessed_output_EQ : Joined<["-"], "multi-target-preprocessed-output=">,
+  MetaVarName<"<variant>:<path>">,
+  HelpText<"Prototype: print a target's preprocessed source to <path>, as -E "
+           "does. Variant 1 is the primary target. Repeatable.">,
+  MarshallingInfoStringVector<FrontendOpts<"MultiTargetPreprocessedOutputs">>;
 def code_completion_at : Separate<["-"], "code-completion-at">,
   MetaVarName<"<file>:<line>:<column>">,
   HelpText<"Dump code-completion information at a location">;

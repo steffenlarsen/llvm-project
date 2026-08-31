@@ -1864,6 +1864,9 @@ def CudaUnknownVersion: DiagGroup<"unknown-cuda-version">;
 // ignored by CUDA.
 def HIPOnly : DiagGroup<"hip-only">;
 
+// Warnings about -fintegrated-hip-device-codegen.
+def IntegratedHIPDeviceCodegen : DiagGroup<"integrated-hip-device-codegen">;
+
 // Warning about mixed HIP and OpenMP compilation / target offloading.
 def HIPOpenMPOffloading: DiagGroup<"hip-omp-target-directives">;
 

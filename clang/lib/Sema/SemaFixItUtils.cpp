@@ -163,11 +163,6 @@ bool ConversionFixItGenerator::tryToFixConversion(const Expr *FullExpr,
   return false;
 }
 
-static bool isMacroDefined(const Sema &S, SourceLocation Loc, StringRef Name) {
-  return (bool)S.PP.getMacroDefinitionAtLoc(&S.getASTContext().Idents.get(Name),
-                                            Loc);
-}
-
 static std::string getScalarZeroExpressionForType(
     const Type &T, SourceLocation Loc, const Sema &S) {
   assert(T.isScalarType() && "use scalar types only");
@@ -176,17 +171,17 @@ static std::string getScalarZeroExpressionForType(
   if (T.isEnumeralType())
     return std::string();
   if ((T.isObjCObjectPointerType() || T.isBlockPointerType()) &&
-      isMacroDefined(S, Loc, "nil"))
+      S.isMacroDefinedAtLoc(Loc, "nil"))
     return "nil";
   if (T.isRealFloatingType())
     return "0.0";
   if (T.isBooleanType() &&
-      (S.LangOpts.CPlusPlus || isMacroDefined(S, Loc, "false")))
+      (S.LangOpts.CPlusPlus || S.isMacroDefinedAtLoc(Loc, "false")))
     return "false";
   if (T.isPointerType() || T.isMemberPointerType()) {
     if (S.LangOpts.CPlusPlus11)
       return "nullptr";
-    if (isMacroDefined(S, Loc, "NULL"))
+    if (S.isMacroDefinedAtLoc(Loc, "NULL"))
       return "NULL";
   }
   if (T.isCharType())
