@@ -523,6 +523,34 @@ public:
     return AccessSpecifier(Access);
   }
 
+  /// The target this declaration belongs to. 0 means it applies to every
+  /// target, which is the case for all declarations today.
+  /// Backed by an ASTContext-side side table
+  /// (ASTContext::DeclTargetVariantStorage) instead of a Decl-object
+  /// bitfield, to avoid growing Decl's layout. Defined out of line
+  /// (DeclBase.cpp) since it needs ASTContext.h.
+  unsigned getTargetVariant() const LLVM_READONLY;
+  void setTargetVariant(unsigned V);
+
+  /// A re-parse produced this declaration for one target and it turned out to
+  /// match the one it was made from, which has been reverted to every target.
+  /// This copy belongs to no target at all.
+  static constexpr unsigned TargetVariantRedundant = 7;
+  bool isRedundantTargetVariant() const {
+    return getTargetVariant() == TargetVariantRedundant;
+  }
+
+  /// Whether this declaration's TargetVariant tag came from
+  /// -reparse-divergent-users re-parsing a shared declaration's tokens
+  /// under a different target's ambient, rather than from genuine #if/#elif
+  /// widening. Unlike widening, a reparse-origin tag says nothing about
+  /// whether the content actually differs by target, so callers that need
+  /// to know that must check this flag rather than counting tagged redecls
+  /// (see FunctionTemplateDecl::hasTargetTaggedRedeclaration()).
+  /// Backed by the same ASTContext-side side table as getTargetVariant().
+  bool isTargetVariantReparseOrigin() const LLVM_READONLY;
+  void setTargetVariantIsReparseOrigin(bool V);
+
   bool hasAttrs() const { return HasAttrs; }
 
   void setAttrs(const AttrVec& Attrs) {

@@ -561,6 +561,26 @@ ASTMutationListener *Decl::getASTMutationListener() const {
   return getASTContext().getASTMutationListener();
 }
 
+/// TargetVariant/TargetVariantIsReparseOrigin storage, backed by an
+/// ASTContext-side side table instead of a Decl-object bitfield. Defined
+/// out of line for the same reason getLangOpts() is: avoids depending on
+/// ASTContext.h from DeclBase.h.
+unsigned Decl::getTargetVariant() const {
+  return getASTContext().getDeclTargetVariant(this);
+}
+
+void Decl::setTargetVariant(unsigned V) {
+  getASTContext().setDeclTargetVariant(this, V);
+}
+
+bool Decl::isTargetVariantReparseOrigin() const {
+  return getASTContext().getDeclTargetVariantIsReparseOrigin(this);
+}
+
+void Decl::setTargetVariantIsReparseOrigin(bool V) {
+  getASTContext().setDeclTargetVariantIsReparseOrigin(this, V);
+}
+
 unsigned Decl::getMaxAlignment() const {
   if (!hasAttrs())
     return 0;

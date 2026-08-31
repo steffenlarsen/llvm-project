@@ -170,6 +170,7 @@ def UnsupportedFPOpt : DiagGroup<"unsupported-floating-point-opt">;
 def UnsupportedCB : DiagGroup<"unsupported-cb">;
 def UnsupportedGPOpt : DiagGroup<"unsupported-gpopt">;
 def UnsupportedTargetOpt : DiagGroup<"unsupported-target-opt">;
+def MultiTargetOptionMismatch : DiagGroup<"multi-target-option-mismatch">;
 def RISCVBEExperimental : DiagGroup<"riscv-be-experimental">;
 def NonLiteralNullConversion : DiagGroup<"non-literal-null-conversion">;
 def NullConversion : DiagGroup<"null-conversion">;

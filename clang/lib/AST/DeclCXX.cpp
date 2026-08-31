@@ -181,6 +181,34 @@ static bool hasRepeatedBaseClass(const CXXRecordDecl *StartRD) {
   return false;
 }
 
+CXXRecordDecl *
+CXXRecordDecl::getDefinitionForTargetVariant(unsigned Variant) const {
+  if (!Variant)
+    Variant = 1;
+  if (getTargetVariant() == Variant)
+    return const_cast<CXXRecordDecl *>(this);
+  // Once mergeWidenedAlternatives folds equivalent per-target copies of an
+  // explicit specialization together, the survivor is shared and the others
+  // are redundant, yet DefinitionData->Definition still names whichever copy
+  // was defined last.
+  CXXRecordDecl *Shared = nullptr;
+  for (auto *Redecl : redecls()) {
+    auto *RD = cast<CXXRecordDecl>(Redecl);
+    if (!RD->isCompleteDefinition())
+      continue;
+    if (RD->getTargetVariant() == Variant)
+      return RD;
+    if (!RD->getTargetVariant())
+      Shared = RD;
+  }
+  return Shared ? Shared : const_cast<CXXRecordDecl *>(this);
+}
+
+CXXRecordDecl *CXXRecordDecl::getDefinitionForCurrentTarget() const {
+  return getDefinitionForTargetVariant(
+      getASTContext().getCurrentTargetVariant());
+}
+
 void
 CXXRecordDecl::setBases(CXXBaseSpecifier const * const *Bases,
                         unsigned NumBases) {

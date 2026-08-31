@@ -5189,6 +5189,193 @@ static void ProcessVSRuntimeLibrary(const ToolChain &TC, const ArgList &Args,
     CmdArgs.push_back("--dependent-lib=softintrin");
 }
 
+// Renders Args as one string that cl::TokenizeGNUCommandLine splits back into
+// the same argument vector.
+static std::string flattenGNUCommandLine(ArrayRef<const char *> Args) {
+  std::string Result;
+  llvm::raw_string_ostream OS(Result);
+  llvm::ListSeparator LS(" ");
+  for (StringRef Arg : Args) {
+    OS << LS;
+    if (!Arg.empty() && Arg.find_first_of(" \t\r\n'\"\\") == StringRef::npos)
+      OS << Arg;
+    else
+      llvm::sys::printArg(OS, Arg, /*Quote=*/true);
+  }
+  return Result;
+}
+
+// Builds, without scheduling, the device cc1 job BA would have run without
+// -fintegrated-hip-device-codegen, and returns its arguments minus "-cc1" and
+// the job-specific "-o <output>" and "<input>" of its
+// "-o <output> -x <type> <input>" tail. Appends the job's -mllvm values to
+// LLVMArgs.
+static std::string buildIntegratedHipDeviceInvocation(
+    Compilation &C, const JobAction &HostJA, const InputInfo &HostInput,
+    const ToolChain *DeviceTC, BoundArch BA, const ArgList &DeviceArgs,
+    const char *Output, SmallVectorImpl<const char *> &LLVMArgs) {
+  const Action *Source = &HostJA;
+  while (Source->getKind() != Action::InputClass)
+    Source = Source->getInputs()[0];
+  const auto *HostSource = cast<InputAction>(Source);
+
+  auto *DeviceSource = C.MakeAction<InputAction>(
+      HostSource->getInputArg(), HostSource->getType(), HostSource->getId());
+  types::ID OutputType =
+      DeviceTC->getLTOMode(C.getArgs(), Action::OFK_HIP) != LTOK_None
+          ? types::TY_LTO_BC
+          : types::TY_LLVM_BC;
+  auto *DeviceJA = C.MakeAction<BackendJobAction>(DeviceSource, OutputType);
+  DeviceJA->propagateDeviceOffloadInfo(Action::OFK_HIP, BA, DeviceTC);
+
+  InputInfo DeviceInput = HostInput;
+  DeviceInput.setAction(DeviceSource);
+
+  JobList::list_type OtherJobs = C.getJobs().takeJobs();
+  {
+    RegisterEffectiveTriple TripleRAII(
+        *DeviceTC, llvm::Triple(DeviceTC->ComputeEffectiveClangTriple(
+                       DeviceArgs, BA, DeviceInput.getType())));
+    DeviceTC->SelectTool(*DeviceJA)->ConstructJob(
+        C, *DeviceJA, InputInfo(DeviceJA, Output, HostInput.getBaseInput()),
+        {DeviceInput}, DeviceArgs, /*LinkingOutput=*/nullptr);
+  }
+  JobList::list_type DeviceJobs = C.getJobs().takeJobs();
+  for (std::unique_ptr<Command> &Job : OtherJobs)
+    C.getJobs().addJob(std::move(Job));
+  assert(DeviceJobs.size() == 1 && "expected exactly one device cc1 job");
+
+  ArrayRef<const char *> DeviceArgv = DeviceJobs.front()->getArguments();
+  assert(!DeviceArgv.empty() && StringRef(DeviceArgv.front()) == "-cc1");
+  size_t OutputFlag = DeviceArgv.size() - 1;
+  while (OutputFlag > 0 && !(StringRef(DeviceArgv[OutputFlag - 1]) == "-o" &&
+                             StringRef(DeviceArgv[OutputFlag]) == Output))
+    --OutputFlag;
+  assert(OutputFlag > 0 && "device cc1 job has no -o");
+  assert(OutputFlag + 4 == DeviceArgv.size() &&
+         StringRef(DeviceArgv[OutputFlag + 1]) == "-x" &&
+         "device cc1 job has no '-x <type> <input>' tail");
+  for (size_t I = 1; I + 1 < OutputFlag; ++I)
+    if (StringRef(DeviceArgv[I]) == "-mllvm")
+      LLVMArgs.push_back(DeviceArgv[++I]);
+  SmallVector<const char *, 128> AuxArgv(DeviceArgv.slice(1, OutputFlag - 2));
+  llvm::append_range(AuxArgv, DeviceArgv.slice(OutputFlag + 1, 2));
+  return flattenGNUCommandLine(AuxArgv);
+}
+
+// Emits the -mllvm flags CodeGenAction.cpp's multi-target machinery consumes
+// to build each HIP device arch's bitcode, package them into one fatbin, and
+// embed it into this host cc1 job's module. With -fgpu-rdc the bitcode is
+// packaged unlinked and embedded as an offload object instead, for the final
+// link to link across translation units, as the device jobs' outputs are.
+//
+// Variant numbering matches BackendConsumer::Initialize's `Entry.Variant =
+// 2 + I` in argv order, so archs must be emitted in Driver::getOffloadArchs's
+// already-sorted order, with each arch's -aux-output= paired to the same
+// index as its -multi-target-aux-invocation= -- a mismatch would silently swap
+// which CPU's bitcode lands in which fatbin slot rather than crash.
+static void emitIntegratedHipDeviceCodegenFlags(const Driver &D, Compilation &C,
+                                                const JobAction &JA,
+                                                const InputInfo &Input,
+                                                const ArgList &Args,
+                                                bool IsRDCMode,
+                                                ArgStringList &CmdArgs) {
+  auto HIPToolChains = C.getOffloadToolChains(Action::OFK_HIP);
+  if (HIPToolChains.first == HIPToolChains.second)
+    return;
+  const ToolChain *DeviceTC = HIPToolChains.first->second;
+
+  llvm::SmallVector<BoundArch> Archs =
+      D.getOffloadArchs(C, C.getArgs(), Action::OFK_HIP, *DeviceTC);
+  if (Archs.empty())
+    return;
+
+  // BackendConsumer::Initialize (CodeGenAction.cpp) only builds AuxGens
+  // entries when this flag is set -- -multi-target-aux-invocation= alone only
+  // affects ASTContext's target list, not whether a second CodeGenModule
+  // gets driven from it.
+  CmdArgs.push_back("-mllvm");
+  CmdArgs.push_back("-multi-target-codegen");
+
+  // -multi-target-codegen alone only drives per-target CodeGen; it does not
+  // enable the Parser/Sema-side reconciliation pipeline that lets host and
+  // device copies of the same declaration (e.g. a header textually included
+  // once directly and once transitively) coexist instead of being reported
+  // as hard redefinitions. These flags are arch-count-independent, so they
+  // are emitted once here rather than per-arch below.
+  for (const char *Flag :
+       {"-multi-target-record", "-parse-all-target-alternatives",
+        "-widen-target-alternatives", "-allow-target-variant-decls",
+        "-reparse-divergent-users", "-merge-equivalent-variants"}) {
+    CmdArgs.push_back("-mllvm");
+    CmdArgs.push_back(Flag);
+  }
+
+  llvm::StringMap<StringRef> LLVMArgs;
+  for (size_t I = 0; I + 1 < CmdArgs.size(); ++I)
+    if (StringRef(CmdArgs[I]) == "-mllvm") {
+      StringRef Value = CmdArgs[++I];
+      LLVMArgs.try_emplace(Value.ltrim('-').split('=').first, Value);
+    }
+
+  for (auto [Index, BA] : llvm::enumerate(Archs)) {
+    const unsigned Variant = 2 + Index;
+
+    const ArgList &DeviceArgs =
+        C.getArgsForToolChain(DeviceTC, BA, Action::OFK_HIP);
+    const char *AuxBC = D.CreateTempFile(C, "multi-target-aux", "bc",
+                                         /*MultipleArchs=*/true, BA.ArchName);
+    CmdArgs.push_back("-mllvm");
+    CmdArgs.push_back(Args.MakeArgString(
+        "-multi-target-aux-output=" + Twine(Variant) + ":" + AuxBC));
+
+    SmallVector<const char *> DeviceLLVMArgs;
+    CmdArgs.push_back(Args.MakeArgString(
+        "-multi-target-aux-invocation=" +
+        buildIntegratedHipDeviceInvocation(C, JA, Input, DeviceTC, BA,
+                                           DeviceArgs, AuxBC, DeviceLLVMArgs)));
+
+    // cl::opt values are process-wide, so each device job's -mllvm options
+    // have to be this job's too, with one value across all targets; the aux
+    // invocation merely restates them.
+    for (const char *Value : DeviceLLVMArgs) {
+      StringRef Name = StringRef(Value).ltrim('-').split('=').first;
+      auto [It, Inserted] = LLVMArgs.try_emplace(Name, Value);
+      if (Inserted) {
+        CmdArgs.push_back("-mllvm");
+        CmdArgs.push_back(Value);
+      } else if (It->second.ltrim('-') != StringRef(Value).ltrim('-')) {
+        D.Diag(diag::err_drv_integrated_hip_device_codegen_mllvm_conflict)
+            << It->second << Value << BA.ArchName;
+      }
+    }
+  }
+
+  if (IsRDCMode) {
+    const char *Package = D.CreateTempFile(C, "multi-target-package", "out");
+    CmdArgs.push_back("-mllvm");
+    CmdArgs.push_back(
+        Args.MakeArgString("-multi-target-package-offload=" + Twine(Package)));
+    CmdArgs.push_back(
+        Args.MakeArgString("-fembed-offload-object=" + Twine(Package)));
+    return;
+  }
+
+  const char *Hipfb = D.CreateTempFile(C, "multi-target-package", "hipfb");
+  CmdArgs.push_back("-mllvm");
+  CmdArgs.push_back(
+      Args.MakeArgString("-multi-target-package-fatbin=" + Twine(Hipfb)));
+
+  // Mirrors LinkerWrapper::ConstructJob's own --rocm-path forwarding below:
+  // only present when the user passed an explicit --rocm-path=, otherwise
+  // clang-linker-wrapper's own ROCm auto-detection is used unmodified.
+  if (Arg *A = Args.getLastArg(options::OPT_rocm_path_EQ)) {
+    CmdArgs.push_back("-mllvm");
+    CmdArgs.push_back(
+        Args.MakeArgString(Twine("-multi-target-rocm-path=") + A->getValue()));
+  }
+}
+
 void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                          const InputInfo &Output, const InputInfoList &Inputs,
                          const ArgList &Args, const char *LinkingOutput) const {
@@ -5307,10 +5494,41 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       if (OffloadToolChains.first == OffloadToolChains.second)
         continue;
 
-      const llvm::Triple &DeviceAuxTriple =
-          OffloadToolChains.first->second->getTriple();
+      const ToolChain *DeviceTC = OffloadToolChains.first->second;
+      const llvm::Triple &DeviceAuxTriple = DeviceTC->getTriple();
       CmdArgs.push_back("-aux-triple");
       CmdArgs.push_back(Args.MakeArgStringRef(DeviceAuxTriple.str()));
+
+      // Mirror the device-side job's `-aux-target-cpu`/`-aux-target-feature`
+      // below (search for "gpu-use-aux-triple-only"): without this, the
+      // host-side job's aux TargetInfo (used e.g. to record the device's
+      // token stream for multi-target recording) defaults to a generic
+      // version of the device with no target-id feature macros defined,
+      // which resolves target-macro conditionals differently than the real
+      // device compilation would.
+      if (!Args.getLastArg(options::OPT_gpu_use_aux_triple_only)) {
+        // An empty BoundArch never gets `--offload-arch` translated into
+        // `-mcpu`/target-id feature flags (see AMDGPUToolChain::TranslateArgs,
+        // which only does that translation when a bound arch is supplied) --
+        // so bind explicitly to the first requested offload arch. Only one
+        // aux target is handled here.
+        const ArgList &UnboundDeviceArgs = C.getArgsForToolChain(
+            DeviceTC, /*BoundArch=*/{}, static_cast<Action::OffloadKind>(I));
+        std::vector<std::string> OffloadArchs =
+            UnboundDeviceArgs.getAllArgValues(options::OPT_offload_arch_EQ);
+        BoundArch BA = OffloadArchs.empty() ? BoundArch()
+                                            : BoundArch(OffloadArchs.front());
+        const ArgList &DeviceArgs = C.getArgsForToolChain(
+            DeviceTC, BA, static_cast<Action::OffloadKind>(I));
+        std::string DeviceCPU =
+            getCPUName(D, DeviceArgs, DeviceAuxTriple, /*FromAs*/ false);
+        if (!DeviceCPU.empty()) {
+          CmdArgs.push_back("-aux-target-cpu");
+          CmdArgs.push_back(Args.MakeArgString(DeviceCPU));
+        }
+        getTargetFeatures(D, DeviceAuxTriple, DeviceArgs, CmdArgs,
+                          /*ForAS*/ false, /*IsAux*/ true);
+      }
       break;
     }
   }
@@ -8341,7 +8559,14 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // Host-side offloading compilation receives all device-side outputs. Include
   // them in the host compilation depending on the target. If the host inputs
   // are not empty we use the new-driver scheme, otherwise use the old scheme.
-  if ((IsCuda || IsHIP) && !UsesLLVMOffloading && CudaDeviceInput) {
+  if (IsHIP && !IsHIPDevice && !UsesLLVMOffloading &&
+      Args.hasArg(options::OPT_fintegrated_hip_device_codegen)) {
+    assert(HostOffloadingInputs.empty() && !CudaDeviceInput &&
+           "-fintegrated-hip-device-codegen must not receive device "
+           "offloading inputs");
+    emitIntegratedHipDeviceCodegenFlags(D, C, JA, Input, Args, IsRDCMode,
+                                        CmdArgs);
+  } else if ((IsCuda || IsHIP) && !UsesLLVMOffloading && CudaDeviceInput) {
     CmdArgs.push_back("-foffload-include-binary");
     CmdArgs.push_back(CudaDeviceInput->getFilename());
   } else if (!HostOffloadingInputs.empty()) {

@@ -493,11 +493,11 @@ void Sema::DiagnoseSentinelCalls(const NamedDecl *D, SourceLocation Loc,
   // variadic arguments form a list of object pointers.
   SourceLocation MissingNilLoc = getLocForEndOfToken(SentinelExpr->getEndLoc());
   std::string NullValue;
-  if (CalleeKind == CK_Method && PP.isMacroDefined("nil"))
+  if (CalleeKind == CK_Method && isMacroDefinedAtLoc(MissingNilLoc, "nil"))
     NullValue = "nil";
   else if (getLangOpts().CPlusPlus11)
     NullValue = "nullptr";
-  else if (PP.isMacroDefined("NULL"))
+  else if (isMacroDefinedAtLoc(MissingNilLoc, "NULL"))
     NullValue = "NULL";
   else
     NullValue = "(void*) 0";
@@ -2787,8 +2787,8 @@ bool Sema::DiagnoseEmptyLookup(Scope *S, CXXScopeSpec &SS, LookupResult &R,
   // Emit a special diagnostic for failed member lookups.
   // FIXME: computing the declaration context might fail here (?)
   if (!SS.isEmpty()) {
-    Diag(R.getNameLoc(), diag::err_no_member)
-        << Name << computeDeclContext(SS, false) << NameRange;
+    DeclContext *DC = computeDeclContext(SS, false);
+    Diag(R.getNameLoc(), diag::err_no_member) << Name << DC << NameRange;
     return true;
   }
 
@@ -12910,7 +12910,8 @@ static QualType checkArithmeticOrEnumeralCompare(Sema &S, ExprResult &LHS,
 void Sema::CheckPtrComparisonWithNullChar(ExprResult &E, ExprResult &NullE) {
   if (!NullE.get()->getType()->isAnyPointerType())
     return;
-  int NullValue = PP.isMacroDefined("NULL") ? 0 : 1;
+  int NullValue =
+      isMacroDefinedAtLoc(NullE.get()->getExprLoc(), "NULL") ? 0 : 1;
   if (!E.get()->getType()->isAnyPointerType() &&
       E.get()->isNullPointerConstant(Context,
                                      Expr::NPC_ValueDependentIsNotNull) ==
@@ -13705,7 +13706,7 @@ static void diagnoseXorMisusedAsPow(Sema &S, const ExprResult &XorLHS,
     return;
 
   bool SuggestXor =
-      S.getLangOpts().CPlusPlus || S.getPreprocessor().isMacroDefined("xor");
+      S.getLangOpts().CPlusPlus || S.isMacroDefinedAtLoc(Loc, "xor");
   const llvm::APInt XorValue = LeftSideValue ^ RightSideValue;
   int64_t RightSideIntValue = RightSideValue.getSExtValue();
   if (LeftSideValue == 2 && RightSideIntValue >= 0) {
@@ -19195,6 +19196,69 @@ void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func,
             InstantiateFunctionDefinition(PointOfInstantiation, Func);
           else {
             Func->setInstantiationIsPending(true);
+            if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+              // A device-only callee (__global__ or __device__-only) must
+              // always be instantiated under the device ambient, regardless
+              // of which ambient was active at its first reference: e.g. a
+              // __global__ kernel is referenced from a host-side <<<...>>>
+              // launch, but its body (and everything it transitively calls)
+              // is unconditionally device code.
+              CUDAFunctionTarget FT = CUDA().IdentifyTarget(Func);
+              // Which variant actually names "the device target" depends on
+              // this process's own role: a device-primary process (its own
+              // variant 1 is the device target) forces ambient onto itself;
+              // a host-primary process must instead force ambient onto its
+              // aux (device) target. getLangOpts().CUDAIsDevice reflects the
+              // whole process's fixed compilation mode and, unlike
+              // Context.getCurrentTargetVariant(), is never toggled by a
+              // TargetScope, so it reliably answers that question here.
+              unsigned Ambient =
+                  (FT == CUDAFunctionTarget::Device ||
+                   FT == CUDAFunctionTarget::Global)
+                      ? (getLangOpts().CUDAIsDevice
+                             ? 1
+                             : Context.getCanonicalDeviceVariant())
+                      : Context.getCurrentTargetVariant();
+              if (Ambient)
+                PendingInstantiationTargetVariant[Func] = Ambient;
+              // Provenance is the caller's real ambient, never forced: see
+              // the comment on PendingInstantiationProvenanceVariant. Recorded
+              // unconditionally, including when the ambient is 0 (shared) --
+              // that is the common case for a __global__ kernel referenced
+              // from ordinary shared code, and it is exactly the value that
+              // must override the forced-to-1 ambient this instantiation is
+              // replayed under later.
+              //
+              // If this reference occurs while substituting the body of a
+              // function template instantiation,
+              // Context.getCurrentTargetVariant() reflects that enclosing
+              // instantiation's own forced-device ambient (see the
+              // InstantiationTarget scope in InstantiateFunctionDefinition),
+              // not a genuine per-target restriction on the caller -- using
+              // it as-is would wrongly tag an ordinary shared helper as
+              // belonging only to the canonical device variant, hiding it
+              // from every other aux target's AuxGen. Only downgrade toward
+              // 0 (shared) when the enclosing instantiation's own tag says
+              // it's non-divergent -- never adopt a non-zero enclosing tag
+              // outright: an enclosing caller can be genuinely
+              // target-exclusive while still calling a callee that is
+              // itself shared and reachable from many other,
+              // differently-tagged callers too. Adopting the caller's
+              // exclusive tag would wrongly hide that shared callee from
+              // every other target that also needs it.
+              unsigned Provenance = Context.getCurrentTargetVariant();
+              for (const CodeSynthesisContext &SC :
+                   llvm::reverse(CodeSynthesisContexts)) {
+                if (SC.Kind != CodeSynthesisContext::TemplateInstantiation)
+                  continue;
+                if (const auto *EnclosingFn =
+                        dyn_cast_or_null<FunctionDecl>(SC.Entity))
+                  if (EnclosingFn->getTargetVariant() == 0)
+                    Provenance = 0;
+                break;
+              }
+              PendingInstantiationProvenanceVariant[Func] = Provenance;
+            }
             PendingInstantiations.push_back(
                 std::make_pair(Func, PointOfInstantiation));
             if (llvm::isTimeTraceVerbose()) {
@@ -20784,6 +20848,43 @@ static void DoMarkVarDeclReferenced(
         else if (auto *ME = dyn_cast_or_null<MemberExpr>(E))
           ME->setMemberDecl(ME->getMemberDecl());
       } else if (FirstInstantiation) {
+        if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+          // See the analogous function-side comment above: a device-only
+          // variable must always be instantiated under the device ambient
+          // regardless of where it was first referenced from. Which variant
+          // is "the device target" depends on this process's own role --
+          // see the CUDAIsDevice comment on the function-side site above.
+          unsigned Ambient =
+              SemaRef.CUDA().IdentifyTarget(Var) == SemaCUDA::CVT_Device
+                  ? (SemaRef.getLangOpts().CUDAIsDevice
+                         ? 1
+                         : SemaRef.Context.getCanonicalDeviceVariant())
+                  : SemaRef.Context.getCurrentTargetVariant();
+          if (Ambient)
+            SemaRef.PendingInstantiationTargetVariant[Var] = Ambient;
+          // Provenance is the caller's real ambient, never forced: see the
+          // comment on PendingInstantiationProvenanceVariant. Recorded
+          // unconditionally -- see the analogous function-side comment above,
+          // including the enclosing-instantiation lookup that avoids
+          // mistaking a callee's forced-device body ambient for a genuine
+          // per-target restriction on the reference. As on the function
+          // side, only downgrade toward 0 (shared); a non-zero enclosing
+          // tag can be a genuinely-exclusive caller that still reaches a
+          // shared, memoized callee needed by other, differently-tagged
+          // callers too, so it must never be adopted outright.
+          unsigned Provenance = SemaRef.Context.getCurrentTargetVariant();
+          for (const Sema::CodeSynthesisContext &SC :
+               llvm::reverse(SemaRef.CodeSynthesisContexts)) {
+            if (SC.Kind != Sema::CodeSynthesisContext::TemplateInstantiation)
+              continue;
+            if (const auto *EnclosingFn =
+                    dyn_cast_or_null<FunctionDecl>(SC.Entity))
+              if (EnclosingFn->getTargetVariant() == 0)
+                Provenance = 0;
+            break;
+          }
+          SemaRef.PendingInstantiationProvenanceVariant[Var] = Provenance;
+        }
         SemaRef.PendingInstantiations
             .push_back(std::make_pair(Var, PointOfInstantiation));
       } else {

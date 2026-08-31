@@ -498,6 +498,22 @@ bool Sema::MergeCXXFunctionDecl(FunctionDecl *New, FunctionDecl *Old,
     if (!LookupResult::isVisible(*this, PrevForDefaultArgs))
       continue;
 
+    // A previous declaration already reconciled down to variant 0 (shared),
+    // reached again when a later target alternative re-parses the identical
+    // declaration, is not really a distinct prior declaration for the
+    // purpose of merging default arguments -- it's the same source text,
+    // replayed. Ordinary default-argument merging has no target-variant
+    // concept and would otherwise flag the re-parsed copy's own (identical)
+    // default argument as illegally redefining it. Skip it here exactly like
+    // a hidden declaration; mirrors the analogous guard in
+    // CheckForFunctionRedefinition below.
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+        PrevForDefaultArgs->getTargetVariant() !=
+            Context.getCurrentTargetVariant() &&
+        (PrevForDefaultArgs->getTargetVariant() != 0 ||
+         Context.getCurrentTargetVariant() != 0))
+      continue;
+
     if (S && !isDeclInScope(PrevForDefaultArgs, ScopeDC, S) &&
         !New->isCXXClassMember()) {
       // Ignore default arguments of old decl if they are not in

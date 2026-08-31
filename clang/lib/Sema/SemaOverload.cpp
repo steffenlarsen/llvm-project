@@ -44,6 +44,7 @@
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/SaveAndRestore.h"
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -10705,6 +10706,22 @@ Sema::AddArgumentDependentLookupCandidates(DeclarationName Name,
   // FIXME: Pass in the explicit template arguments?
   ArgumentDependentLookup(Name, Loc, Args, Fns);
 
+  // ArgumentDependentLookup gathers candidates directly from each
+  // associated namespace's lookup table, bypassing
+  // LookupResult::resolveKind()'s per-target filtering entirely, so a
+  // reparse copy belonging to a different target than the one currently
+  // being compiled would otherwise be added as an equally-good, and
+  // therefore ambiguous, overload candidate. Drop those here, the same way
+  // resolveKind() already does for ordinary lookup's own candidate set.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+    SmallVector<NamedDecl *, 4> TargetInvisible;
+    for (NamedDecl *D : Fns)
+      if (!isDeclVisibleForCurrentTarget(D))
+        TargetInvisible.push_back(D);
+    for (NamedDecl *D : TargetInvisible)
+      Fns.erase(D);
+  }
+
   ArrayRef<Expr *> ReversedArgs;
 
   // Erase all of the candidates we already knew about.
@@ -11606,6 +11623,29 @@ void OverloadCandidateSet::CudaExcludeWrongSideCandidates(
   llvm::erase_if(Candidates, IsWrongSideCandidate);
 }
 
+namespace {
+/// Temporarily flips LangOptions::CUDAIsDevice so an HD-context caller's CUDA
+/// overload preference (SemaCUDA::IdentifyPreference rule (d), which is
+/// ambient-dependent) can be re-evaluated under the opposite ambient, to
+/// discover what BestViableFunctionImpl's pick would have been for the
+/// target variant this single shared Sema pass isn't primary for. Sema's
+/// LangOpts reference is only const to prevent accidental mutation
+/// elsewhere, not because the underlying object is truly immutable (see the
+/// same const_cast<LangOptions&> precedent in SemaModule.cpp).
+class SemaCUDAAmbientFlip {
+  LangOptions &LangOpts;
+  bool SavedCUDAIsDevice;
+
+public:
+  explicit SemaCUDAAmbientFlip(Sema &S)
+      : LangOpts(const_cast<LangOptions &>(S.getLangOpts())),
+        SavedCUDAIsDevice(LangOpts.CUDAIsDevice) {
+    LangOpts.CUDAIsDevice = !SavedCUDAIsDevice;
+  }
+  ~SemaCUDAAmbientFlip() { LangOpts.CUDAIsDevice = SavedCUDAIsDevice; }
+};
+} // namespace
+
 /// Computes the best viable function (C++ 13.3.3)
 /// within an overload candidate set.
 ///
@@ -11701,6 +11741,44 @@ OverloadingResult OverloadCandidateSet::BestViableFunctionImpl(
     return OR_Ambiguous;
 
   OverloadingResult R = ResultForBestCandidate(Best);
+
+  // An HD-context caller's pick above may have depended on the ambient
+  // CUDAIsDevice value (SemaCUDA::IdentifyPreference's rule (d), reached via
+  // CudaExcludeWrongSideCandidates/isBetterOverloadCandidate). The single
+  // shared Sema pass fixes that ambient to one primary target for the whole
+  // compile, so the pick above is only correct for whichever target-variant
+  // CodeGen later matches that ambient. Detect this case and additionally
+  // resolve what the opposite ambient would have picked, so CGExpr.cpp's
+  // EmitCallee can later choose per target-variant. Covers ordinary
+  // (non-member) calls only; member/operator/address-of paths are not
+  // handled.
+  if (R == OR_Success && S.getLangOpts().CUDA && Best->Function &&
+      !S.BuildingCUDAAlternateCall) {
+    if (FunctionDecl *Caller = S.getCurFunctionDecl(/*AllowLambda=*/true)) {
+      auto CallerTgt = S.CUDA().IdentifyTarget(Caller);
+      if (CallerTgt == CUDAFunctionTarget::HostDevice) {
+        llvm::SmallVector<OverloadCandidate *, 16> AltCandidates;
+        AltCandidates.reserve(this->Candidates.size());
+        std::transform(this->Candidates.begin(), this->Candidates.end(),
+                       std::back_inserter(AltCandidates),
+                       [](OverloadCandidate &Cand) { return &Cand; });
+        OverloadCandidate *AltBest = nullptr;
+        {
+          SemaCUDAAmbientFlip Flip(S);
+          CudaExcludeWrongSideCandidates(S, AltCandidates);
+          for (auto *Cand : AltCandidates) {
+            if (Cand->Viable &&
+                (!AltBest ||
+                 isBetterOverloadCandidate(S, *Cand, *AltBest, Loc, Kind)))
+              AltBest = Cand;
+          }
+        }
+        if (AltBest && AltBest->Function && AltBest->Function != Best->Function)
+          S.PendingCUDAAmbientDependentPick = Sema::CUDAAmbientDependentPick{
+              Best->Function, AltBest->Function, AltBest->FoundDecl};
+      }
+    }
+  }
 
   if (!EquivalentCands.empty())
     S.diagnoseEquivalentInternalLinkageDeclarations(Loc, Best->Function,
@@ -14981,10 +15059,78 @@ static ExprResult FinishOverloadedCallExpr(Sema &SemaRef, Scope *S, Expr *Fn,
         SemaRef.FixOverloadedFunctionReference(Fn, (*Best)->FoundDecl, FDecl);
     if (Res.isInvalid())
       return ExprError();
-    return SemaRef.BuildResolvedCallExpr(
+    ExprResult Result = SemaRef.BuildResolvedCallExpr(
         Res.get(), FDecl, LParenLoc, Args, RParenLoc, ExecConfig,
         /*IsExecConfig=*/false,
         static_cast<CallExpr::ADLCallKind>((*Best)->IsADLCandidate));
+    if (Result.isInvalid())
+      return Result;
+
+    // Drain BestViableFunctionImpl's ambient-dependent pick (if any). The
+    // opposite ambient's candidate may have an unrelated signature (e.g.
+    // `int max(int,int)` vs `float max(float,float)`), so a correct fix
+    // needs a whole second CallExpr -- its own FixOverloadedFunctionReference
+    // and BuildResolvedCallExpr, independently argument-converting the same
+    // raw Args -- not just an alternate callee FunctionDecl* grafted onto
+    // this call's (already wrongly-converted) arguments. Stash the pair
+    // keyed by the primary CallExpr so CodeGenFunction::EmitCallExpr can
+    // substitute the whole node for whichever target variant it is
+    // compiling. Works whether this compile's primary ambient is host or
+    // device.
+    std::optional<Sema::CUDAAmbientDependentPick> Pick;
+    if (SemaRef.PendingCUDAAmbientDependentPick &&
+        SemaRef.PendingCUDAAmbientDependentPick->Primary == FDecl) {
+      Pick = *SemaRef.PendingCUDAAmbientDependentPick;
+      SemaRef.PendingCUDAAmbientDependentPick.reset();
+    }
+    auto *PrimaryCE = dyn_cast<CallExpr>(Result.get());
+    if (!PrimaryCE || !SemaRef.getLangOpts().CUDA ||
+        SemaRef.BuildingCUDAAlternateCall)
+      return Result;
+    bool PrimaryIsDevice = SemaRef.getLangOpts().CUDAIsDevice;
+    // An argument that is itself such a call has the other side's call, and
+    // possibly another type, there; the other side's call is then resolved
+    // anew from those arguments (e.g. `max(max(x, y), z)`, where the host
+    // picks max(int, int) twice and the device max(float, float) twice).
+    SmallVector<Expr *, 8> AltArgs(Args.begin(), Args.end());
+    bool AltArgsDiffer = false;
+    for (Expr *&Arg : AltArgs)
+      if (const auto *ArgCE = dyn_cast<CallExpr>(Arg->IgnoreParens()))
+        if (const auto *Dual = SemaRef.Context.getCUDADualSideCall(ArgCE)) {
+          Arg = const_cast<CallExpr *>(PrimaryIsDevice ? Dual->HostCall
+                                                       : Dual->DeviceCall);
+          AltArgsDiffer = true;
+        }
+    if (!Pick && !AltArgsDiffer)
+      return Result;
+    ExprResult AltCall;
+    {
+      SemaCUDAAmbientFlip Flip(SemaRef);
+      if (AltArgsDiffer) {
+        llvm::SaveAndRestore Guard(SemaRef.BuildingCUDAAlternateCall, true);
+        Sema::TentativeAnalysisScope Trap(SemaRef);
+        AltCall = SemaRef.BuildOverloadedCallExpr(
+            S, Fn, ULE, LParenLoc, AltArgs, RParenLoc, ExecConfig,
+            /*AllowTypoCorrection=*/false);
+      } else {
+        ExprResult AltFn = SemaRef.FixOverloadedFunctionReference(
+            Fn, Pick->AlternateFound,
+            const_cast<FunctionDecl *>(Pick->Alternate));
+        if (!AltFn.isInvalid())
+          AltCall = SemaRef.BuildResolvedCallExpr(
+              AltFn.get(), const_cast<FunctionDecl *>(Pick->Alternate),
+              LParenLoc, Args, RParenLoc, ExecConfig,
+              /*IsExecConfig=*/false,
+              static_cast<CallExpr::ADLCallKind>((*Best)->IsADLCandidate));
+      }
+    }
+    if (auto *AltCE =
+            AltCall.isInvalid() ? nullptr : dyn_cast<CallExpr>(AltCall.get()))
+      SemaRef.Context.setCUDADualSideCall(
+          PrimaryCE,
+          /*HostCall=*/PrimaryIsDevice ? AltCE : PrimaryCE,
+          /*DeviceCall=*/PrimaryIsDevice ? PrimaryCE : AltCE);
+    return Result;
   }
 
   case OR_No_Viable_Function: {
