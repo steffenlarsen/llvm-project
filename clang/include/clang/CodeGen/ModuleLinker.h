@@ -9,6 +9,8 @@
 #ifndef LLVM_CLANG_CODEGEN_MODULELINKER_H
 #define LLVM_CLANG_CODEGEN_MODULELINKER_H
 
+#include "clang/Basic/CodeGenOptions.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include <memory>
 
@@ -19,7 +21,6 @@ class Module;
 } // namespace llvm
 
 namespace clang {
-class CodeGenOptions;
 class CompilerInstance;
 class LangOptions;
 class TargetOptions;
@@ -32,6 +33,13 @@ struct LinkModule {
   bool Internalize;
   unsigned LinkFlags;
 };
+
+/// Load every bitcode file in \p Files into \p LinkModules. Returns true on
+/// error (diagnostic already reported). Appends to \p LinkModules; does not
+/// clear it.
+bool loadLinkModules(CompilerInstance &CI, llvm::LLVMContext &Ctx,
+                     llvm::ArrayRef<CodeGenOptions::BitcodeFileToLink> Files,
+                     llvm::SmallVectorImpl<LinkModule> &LinkModules);
 
 /// Load every bitcode file listed in CodeGenOpts.LinkBitcodeFiles into
 /// \p LinkModules. Returns true on error (diagnostic already reported).

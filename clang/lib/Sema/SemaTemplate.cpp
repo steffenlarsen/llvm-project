@@ -2161,6 +2161,12 @@ DeclResult Sema::CheckClassTemplate(
     // Check for redefinition of this class template.
     if (TUK == TagUseKind::Definition) {
       if (TagDecl *Def = PrevRecordDecl->getDefinition()) {
+        if (::getenv("DEBUG_CTREDEF"))
+          llvm::errs() << "DEBUG_CTREDEF: Name=" << Name->getName()
+                       << " Def=" << (const void *)Def
+                       << " Def->TV=" << Def->getTargetVariant()
+                       << " CurrentTV=" << Context.getCurrentTargetVariant()
+                       << "\n";
         // If we have a prior definition that is not visible, treat this as
         // simply making that previous definition visible.
         NamedDecl *Hidden = nullptr;
@@ -2177,7 +2183,18 @@ DeclResult Sema::CheckClassTemplate(
             makeMergedDefinitionVisible(Hidden);
             makeMergedDefinitionVisible(Tmpl);
           }
-        } else {
+        } else if (!(LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+                     // PROTOTYPE (Stage 5): a definition tagged for one
+                     // target variant and a second definition now being
+                     // parsed under a *different* variant are not really a
+                     // redefinition -- see the identical guard and its
+                     // longer rationale in CheckForFunctionRedefinition
+                     // (SemaDecl.cpp), which this mirrors for class
+                     // templates.
+                     Def->getTargetVariant() !=
+                         Context.getCurrentTargetVariant() &&
+                     (Def->getTargetVariant() != 0 ||
+                      Context.getCurrentTargetVariant() != 0))) {
           Diag(NameLoc, diag::err_redefinition) << Name;
           Diag(Def->getLocation(), diag::note_previous_definition);
           // FIXME: Would it make sense to try to "forget" the previous
@@ -9086,7 +9103,22 @@ DeclResult Sema::ActOnClassTemplateSpecialization(
       SkipBody->Previous = Def;
       if (!HiddenDefVisible && Hidden)
         makeMergedDefinitionVisible(Hidden);
-    } else if (Def) {
+    } else if (Def &&
+               // PROTOTYPE (Stage 5): a definition tagged for one target
+               // variant and a second definition now being parsed under a
+               // *different* variant are not really a redefinition -- each
+               // target gets its own body for what the shared declaration
+               // only forward-declared. findSpecialization is keyed by
+               // template arguments, not by target, so it hands back the
+               // first target's already-complete definition here regardless
+               // of which target is currently being parsed. See the
+               // identical guard and its longer rationale in
+               // CheckForFunctionRedefinition, which this mirrors for class
+               // template specializations.
+               !(LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+                 Def->getTargetVariant() != Context.getCurrentTargetVariant() &&
+                 (Def->getTargetVariant() != 0 ||
+                  Context.getCurrentTargetVariant() != 0))) {
       SourceRange Range(TemplateNameLoc, RAngleLoc);
       Diag(TemplateNameLoc, diag::err_redefinition) << Specialization << Range;
       Diag(Def->getLocation(), diag::note_previous_definition);

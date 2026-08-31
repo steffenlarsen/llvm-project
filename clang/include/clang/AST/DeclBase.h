@@ -523,6 +523,41 @@ public:
     return AccessSpecifier(Access);
   }
 
+  /// PROTOTYPE (Stage 4): the target this declaration belongs to. 0 means it
+  /// applies to every target, which is the case for all declarations today.
+  /// EXPERIMENT: backed by an ASTContext-side side table
+  /// (ASTContext::DeclTargetVariantStorage) instead of a Decl-object
+  /// bitfield, to avoid growing Decl's own layout for this prototype.
+  /// Defined out of line (DeclBase.cpp) since it needs ASTContext.h.
+  unsigned getTargetVariant() const LLVM_READONLY;
+  void setTargetVariant(unsigned V);
+
+  /// A re-parse produced this declaration for one target and it turned out to
+  /// match the one it was made from, which has been reverted to every target.
+  /// This copy belongs to no target at all.
+  static constexpr unsigned TargetVariantRedundant = 7;
+  bool isRedundantTargetVariant() const {
+    return getTargetVariant() == TargetVariantRedundant;
+  }
+
+  /// PROTOTYPE (Stage 4): whether this declaration's TargetVariant tag came
+  /// from Design 1 (-reparse-divergent-users) re-parsing a *shared*
+  /// declaration's own tokens under a different target's ambient, rather
+  /// than from genuine #if/#elif widening producing a target-specific body.
+  /// A reparse-origin tag says nothing about whether this declaration's
+  /// content actually differs by target -- unlike widening, which only ever
+  /// produces a tagged copy when the source text itself diverges -- so
+  /// callers that need to know "is this genuinely divergent, or just swept
+  /// into the reparse net by referencing something divergent" must check
+  /// this rather than merely counting tagged redecls (see
+  /// FunctionTemplateDecl::hasTargetTaggedRedeclaration(), which needs a
+  /// signal that doesn't depend on how many of a chain's tagged redecls
+  /// happen to exist yet at query time).
+  /// EXPERIMENT: backed by the same ASTContext-side side table as
+  /// getTargetVariant()/setTargetVariant(); see there.
+  bool isTargetVariantReparseOrigin() const LLVM_READONLY;
+  void setTargetVariantIsReparseOrigin(bool V);
+
   bool hasAttrs() const { return HasAttrs; }
 
   void setAttrs(const AttrVec& Attrs) {

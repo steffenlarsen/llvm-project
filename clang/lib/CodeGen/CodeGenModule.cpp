@@ -522,9 +522,9 @@ CodeGenModule::CodeGenModule(ASTContext &C,
                              CoverageSourceInfo *CoverageInfo)
     : Context(C), LangOpts(C.getLangOpts()), FS(FS), HeaderSearchOpts(HSO),
       PreprocessorOpts(PPO), CodeGenOpts(CGO), TheModule(M), Diags(diags),
-      Target(C.getTargetInfo()), ABI(createCXXABI(*this)),
-      VMContext(M.getContext()), VTables(*this), StackHandler(diags),
-      SanitizerMD(new SanitizerMetadata(*this)),
+      Target(C.getTargetInfo()), TargetVariant(C.getCurrentTargetVariant()),
+      ABI(createCXXABI(*this)), VMContext(M.getContext()), VTables(*this),
+      StackHandler(diags), SanitizerMD(new SanitizerMetadata(*this)),
       AtomicOpts(Target.getAtomicOpts()) {
 
   AbiMapper = std::make_unique<QualTypeMapper>(C, M.getDataLayout(), AbiAlloc);
@@ -5058,6 +5058,21 @@ void CodeGenModule::EmitMultiVersionFunctionDefinition(GlobalDecl GD,
 void CodeGenModule::EmitGlobalDefinition(GlobalDecl GD, llvm::GlobalValue *GV) {
   const auto *D = cast<ValueDecl>(GD.getDecl());
 
+  // PROTOTYPE (Stage 4): EmitTopLevelDecl already gates on
+  // shouldEmitForTargetVariant() before EmitGlobal, which is why ordinary
+  // widened (non-template) top-level functions are already routed to the
+  // right AuxGen. But an implicit template specialization is never reached
+  // via EmitTopLevelDecl -- it's discovered only by reference from a caller
+  // being code-generated, queued via addDeferredDeclToEmit, and drained
+  // straight into this function. Without this check, once two distinct,
+  // correctly-tagged specializations exist for a target-divergent template
+  // (see FunctionTemplateSpecializationInfo::Profile's
+  // hasTargetTaggedRedeclaration() fold), a deferred reference from the
+  // wrong AuxGen could still slip this one's body into another target's
+  // module.
+  if (!shouldEmitForTargetVariant(D))
+    return;
+
   PrettyStackTraceDecl CrashInfo(const_cast<ValueDecl *>(D), D->getLocation(),
                                  Context.getSourceManager(),
                                  "Generating code for declaration");
@@ -5659,10 +5674,44 @@ llvm::Constant *CodeGenModule::GetOrCreateLLVMFunction(
           (GD.getCanonicalDecl().getDecl() !=
            OtherGD.getCanonicalDecl().getDecl()) &&
           DiagnosedConflictingDefinitions.insert(GD).second) {
-        getDiags().Report(D->getLocation(), diag::err_duplicate_mangled_name)
-            << MangledName;
-        getDiags().Report(OtherGD.getDecl()->getLocation(),
-                          diag::note_previous_definition);
+        // PROTOTYPE (Stage 5): mergeEquivalentVariants only runs once the
+        // whole reparsed tree exists, so it can unify two target-variant
+        // copies of a class it reparsed (e.g. bin_bcast_cuda) too late to
+        // stop a caller that already bound a template argument to whichever
+        // copy was visible at its own parse time. That can produce two
+        // implicit instantiations of the same function template that
+        // mangle identically -- which is exactly how this collision is
+        // detected in the first place -- so it isn't a real ODR conflict;
+        // keep whichever definition arrived first instead of diagnosing it.
+        const auto *FD = dyn_cast<FunctionDecl>(D);
+        const auto *OtherFD = dyn_cast_or_null<FunctionDecl>(OtherGD.getDecl());
+        bool SameTemplateInstantiation =
+            FD && OtherFD && FD->getPrimaryTemplate() &&
+            FD->getPrimaryTemplate() == OtherFD->getPrimaryTemplate();
+        // PROTOTYPE (Stage 5): a plain (non-template) declaration swept into
+        // Design 1's reparse net (-reparse-divergent-users) hits this same
+        // collision even though neither side is a template specialization:
+        // HandleTopLevelDecl broadcasts the reparse origin's initial,
+        // still-untagged (shared) pass into every aux target's module before
+        // ParseAST.cpp's merge hook ever runs to reconcile it, and each
+        // alternate -- already tagged for its own target before it is ever
+        // returned to that hook -- independently reaches the same mangled
+        // name in its matching aux module. Both sides re-parse the identical
+        // token range, so they share the exact same SourceLocation;
+        // requiring one side to be the reparse's own marked origin
+        // (isTargetVariantReparseOrigin()) rules out an unrelated same-
+        // location coincidence.
+        bool SameReparseAlternate =
+            FD && OtherFD && FD->getLocation() == OtherFD->getLocation() &&
+            (FD->isTargetVariantReparseOrigin() ||
+             OtherFD->isTargetVariantReparseOrigin());
+        if (!(LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+              (SameTemplateInstantiation || SameReparseAlternate))) {
+          getDiags().Report(D->getLocation(), diag::err_duplicate_mangled_name)
+              << MangledName;
+          getDiags().Report(OtherGD.getDecl()->getLocation(),
+                            diag::note_previous_definition);
+        }
       }
     }
 
@@ -5748,7 +5797,23 @@ llvm::Constant *CodeGenModule::GetOrCreateLLVMFunction(
       // Move the potentially referenced deferred decl to the
       // DeferredDeclsToEmit list, and remove it from DeferredDecls (since we
       // don't need it anymore).
-      addDeferredDeclToEmit(DDI->second);
+      //
+      // The recorded decl can be stale: it may have been entered here from an
+      // earlier top-level walk, before clang::mergeEquivalentVariants ran.
+      // That pass reconciles equivalent per-target redeclarations in place --
+      // reverting the surviving (canonical) one to TargetVariant 0 and
+      // marking the other TargetVariantRedundant -- without updating this
+      // map. If the recorded decl has since become redundant, prefer the
+      // fresh GD this call was actually made with, which callers reach via
+      // up-to-date AST references and so is never itself redundant; using
+      // the stale, now-redundant decl would cause its definition to be
+      // silently skipped by shouldEmitForTargetVariant, leaving this mangled
+      // name undefined.
+      GlobalDecl DeferredGD = DDI->second;
+      if (const Decl *DeferredDecl = DeferredGD.getDecl();
+          DeferredDecl && DeferredDecl->isRedundantTargetVariant())
+        DeferredGD = GD;
+      addDeferredDeclToEmit(DeferredGD);
       DeferredDecls.erase(DDI);
 
       // Otherwise, there are cases we have to worry about where we're
@@ -6260,6 +6325,9 @@ CodeGenModule::CreateRuntimeVariable(llvm::Type *Ty,
 void CodeGenModule::EmitTentativeDefinition(const VarDecl *D) {
   assert(!D->getInit() && "Cannot emit definite definitions here!");
 
+  if (!shouldEmitForTargetVariant(D))
+    return;
+
   StringRef MangledName = getMangledName(D);
   llvm::GlobalValue *GV = GetGlobalValue(MangledName);
 
@@ -6290,6 +6358,9 @@ static GlobalDecl getBaseVariantGlobalDecl(const NamedDecl *D) {
 }
 
 void CodeGenModule::EmitExternalDeclaration(const DeclaratorDecl *D) {
+  if (!shouldEmitForTargetVariant(D))
+    return;
+
   CGDebugInfo *DI = getModuleDebugInfo();
   if (!DI || !getCodeGenOpts().hasReducedDebugInfo())
     return;
@@ -8033,6 +8104,17 @@ void CodeGenModule::EmitDeclContext(const DeclContext *DC) {
 
 /// EmitTopLevelDecl - Emit code for a single top level declaration.
 void CodeGenModule::EmitTopLevelDecl(Decl *D) {
+  // A combined multi-target frontend produces two copies of any genuinely
+  // divergent declaration, tagged with which target alternative parsed it
+  // (see Decl::getTargetVariant()). Without this check, a decl tagged for a
+  // target other than this CodeGenModule's own can reach emission here, and
+  // its mangled name (which carries no target information) can collide with
+  // its sibling's in CodeGen's name-keyed deferred-emission tables, silently
+  // substituting the wrong body under the right symbol name even though
+  // every AST-level reference still points at the correct copy.
+  if (!shouldEmitForTargetVariant(D))
+    return;
+
   // Ignore dependent declarations.
   if (D->isTemplated())
     return;

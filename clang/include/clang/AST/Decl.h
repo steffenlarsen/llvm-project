@@ -919,6 +919,19 @@ struct EvaluatedStmt {
   LLVM_PREFERRED_TYPE(bool)
   unsigned CheckedForSideEffects : 1;
 
+  /// PROTOTYPE (Stage 1.4): which target the cached value was computed for.
+  /// A constexpr initializer can evaluate differently per target (it may use
+  /// sizeof of a divergent type), so a value cached for one target must not be
+  /// handed to another. 0 is "the only target", which is every compilation
+  /// today, so this is inert unless multi-target is active.
+  unsigned EvaluatedForVariant : 3;
+
+  /// Whether Evaluated's address has been handed to ASTContext::addDestruction.
+  /// Re-evaluating for another target overwrites the APValue in place, and it
+  /// must not be registered twice.
+  LLVM_PREFERRED_TYPE(bool)
+  unsigned DestructionRegistered : 1;
+
   LazyDeclStmtPtr Value;
   APValue Evaluated;
 
@@ -926,7 +939,8 @@ struct EvaluatedStmt {
       : WasEvaluated(false), IsEvaluating(false),
         HasConstantInitialization(false), HasConstantDestruction(false),
         HasICEInit(false), CheckedForICEInit(false), HasSideEffects(false),
-        CheckedForSideEffects(false) {}
+        CheckedForSideEffects(false), EvaluatedForVariant(0),
+        DestructionRegistered(false) {}
 };
 
 /// Represents a variable declaration or definition.

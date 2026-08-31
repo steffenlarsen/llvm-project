@@ -549,7 +549,19 @@ public:
     // We only need an update if we don't already know which
     // declaration is the definition.
     auto *DD = DefinitionData ? DefinitionData : dataPtr();
-    return DD ? DD->Definition : nullptr;
+    CXXRecordDecl *Def = DD ? DD->Definition : nullptr;
+    // DefinitionData->Definition is shared across the whole redecl chain and
+    // is overwritten, chain-wide, every time *any* member of the chain calls
+    // startDefinition() -- fine under ordinary C++, where at most one redecl
+    // is ever complete at a time, but multi-target widening can legitimately
+    // leave more than one complete (one body per target, e.g. an explicit
+    // specialization whose definition genuinely diverges per architecture).
+    // Only bother resolving which one belongs to the target currently being
+    // analysed once this decl's own tagging makes that ambiguous; untagged
+    // decls (i.e. every other translation unit) take the branch above only.
+    if (Def && LLVM_UNLIKELY(Def->getTargetVariant()))
+      Def = Def->getDefinitionForCurrentTarget();
+    return Def;
   }
 
   CXXRecordDecl *getDefinitionOrSelf() const {
@@ -557,6 +569,21 @@ public:
       return Def;
     return const_cast<CXXRecordDecl *>(this);
   }
+
+  /// Given that this decl is (or was) DefinitionData's cached Definition
+  /// pointer and is target-tagged, return whichever redecl in this chain is
+  /// both a complete definition and tagged for the target currently being
+  /// analysed -- falling back to this decl unchanged if no such redecl
+  /// exists (e.g. this target never diverged this particular body).
+  CXXRecordDecl *getDefinitionForCurrentTarget() const;
+
+  /// As above, but for an explicitly given target variant rather than the
+  /// ambient ASTContext::getCurrentTargetVariant() -- used by CodeGen, which
+  /// knows which target it is emitting for directly (CodeGenModule's own
+  /// TargetVariant) and has no reason to go through Sema's ambient state.
+  /// \p Variant == 0 is treated as the primary target (1), mirroring
+  /// getDefinitionForCurrentTarget's convention.
+  CXXRecordDecl *getDefinitionForTargetVariant(unsigned Variant) const;
 
   bool hasDefinition() const { return DefinitionData || dataPtr(); }
 

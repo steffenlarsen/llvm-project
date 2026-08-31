@@ -357,12 +357,27 @@ void AMDGPUTargetCodeGenInfo::setFunctionDeclAttributes(
   unsigned LBMaxThreads = 0;
   unsigned LBMinWaves = 0;
   if (LaunchBounds) {
-    LBMaxThreads = LaunchBounds->getMaxThreads()
-                       ->EvaluateKnownConstInt(M.getContext())
-                       .getExtValue();
+    // PROTOTYPE (Stage 5, Phase 5, mmvq.cu launch_bounds fix Part 2): a
+    // shared caller's launch_bounds argument may reference a target-
+    // divergent callee whose value was corrected per real target variant by
+    // Sema::InstantiateDivergentCalleesInAttrs (see
+    // ASTContext::TargetVariantConstantValues); consult that table before
+    // falling back to evaluating the (possibly frozen-to-the-wrong-target)
+    // expression directly.
+    const Expr *MaxThreads = LaunchBounds->getMaxThreads();
+    if (const llvm::APSInt *V = M.getContext().getTargetVariantConstantValue(
+            MaxThreads, M.getTargetVariant()))
+      LBMaxThreads = V->getExtValue();
+    else
+      LBMaxThreads =
+          MaxThreads->EvaluateKnownConstInt(M.getContext()).getExtValue();
     if (const Expr *MinBlocks = LaunchBounds->getMinBlocks()) {
-      LBMinWaves =
-          MinBlocks->EvaluateKnownConstInt(M.getContext()).getExtValue();
+      if (const llvm::APSInt *V = M.getContext().getTargetVariantConstantValue(
+              MinBlocks, M.getTargetVariant()))
+        LBMinWaves = V->getExtValue();
+      else
+        LBMinWaves =
+            MinBlocks->EvaluateKnownConstInt(M.getContext()).getExtValue();
     }
   }
 

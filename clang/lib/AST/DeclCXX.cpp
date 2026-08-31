@@ -181,6 +181,25 @@ static bool hasRepeatedBaseClass(const CXXRecordDecl *StartRD) {
   return false;
 }
 
+CXXRecordDecl *
+CXXRecordDecl::getDefinitionForTargetVariant(unsigned Variant) const {
+  if (!Variant)
+    Variant = 1;
+  if (getTargetVariant() == Variant)
+    return const_cast<CXXRecordDecl *>(this);
+  for (auto *Redecl : redecls()) {
+    auto *RD = cast<CXXRecordDecl>(Redecl);
+    if (RD->isCompleteDefinition() && RD->getTargetVariant() == Variant)
+      return RD;
+  }
+  return const_cast<CXXRecordDecl *>(this);
+}
+
+CXXRecordDecl *CXXRecordDecl::getDefinitionForCurrentTarget() const {
+  return getDefinitionForTargetVariant(
+      getASTContext().getCurrentTargetVariant());
+}
+
 void
 CXXRecordDecl::setBases(CXXBaseSpecifier const * const *Bases,
                         unsigned NumBases) {

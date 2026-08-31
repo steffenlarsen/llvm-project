@@ -222,12 +222,16 @@ class EmitAssemblyHelper {
   }
 
 public:
+  // TOpts, when non-null, overrides CI.getTargetOpts() -- needed when M was
+  // generated for a target other than CI's own primary target (e.g. a
+  // multi-target-codegen aux entry's device module).
   EmitAssemblyHelper(CompilerInstance &CI, CodeGenOptions &CGOpts,
                      llvm::Module *M,
-                     IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS)
+                     IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS,
+                     const clang::TargetOptions *TOpts = nullptr)
       : CI(CI), Diags(CI.getDiagnostics()), CodeGenOpts(CGOpts),
-        TargetOpts(CI.getTargetOpts()), LangOpts(CI.getLangOpts()),
-        TheModule(M), VFS(std::move(VFS)),
+        TargetOpts(TOpts ? *TOpts : CI.getTargetOpts()),
+        LangOpts(CI.getLangOpts()), TheModule(M), VFS(std::move(VFS)),
         TargetTriple(TheModule->getTargetTriple()) {}
 
   ~EmitAssemblyHelper() {
@@ -380,9 +384,9 @@ static std::string flattenClangCommandLine(ArrayRef<std::string> Args,
 
 static bool initTargetOptions(const CompilerInstance &CI,
                               DiagnosticsEngine &Diags,
-                              llvm::TargetOptions &Options) {
+                              llvm::TargetOptions &Options,
+                              const clang::TargetOptions &TargetOpts) {
   const auto &CodeGenOpts = CI.getCodeGenOpts();
-  const auto &TargetOpts = CI.getTargetOpts();
   const auto &LangOpts = CI.getLangOpts();
   const auto &HSOpts = CI.getHeaderSearchOpts();
   switch (LangOpts.getThreadModel()) {
@@ -629,7 +633,7 @@ void EmitAssemblyHelper::CreateTargetMachine(bool MustCreateTM) {
   CodeGenOptLevel OptLevel = *OptLevelOrNone;
 
   llvm::TargetOptions Options;
-  if (!initTargetOptions(CI, Diags, Options))
+  if (!initTargetOptions(CI, Diags, Options, TargetOpts))
     return;
   TM.reset(TheTarget->createTargetMachine(Triple, TargetOpts.CPU, FeaturesStr,
                                           Options, RM, CM, OptLevel));
@@ -1414,7 +1418,7 @@ runThinLTOBackend(CompilerInstance &CI, ModuleSummaryIndex *CombinedIndex,
   assert(OptLevelOrNone && "Invalid optimization level!");
   Conf.CGOptLevel = *OptLevelOrNone;
   Conf.OptLevel = CGOpts.OptimizationLevel;
-  initTargetOptions(CI, Diags, Conf.Options);
+  initTargetOptions(CI, Diags, Conf.Options, TOpts);
   Conf.SampleProfile = std::move(SampleProfile);
   Conf.PTO.LoopUnrolling = CGOpts.UnrollLoops;
   Conf.PTO.LoopInterchange = CGOpts.InterchangeLoops;
@@ -1577,7 +1581,8 @@ void clang::emitBackendOutput(CompilerInstance &CI, CodeGenOptions &CGOpts,
                               BackendAction Action,
                               IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS,
                               std::unique_ptr<raw_pwrite_stream> OS,
-                              BackendConsumer *BC) {
+                              BackendConsumer *BC,
+                              const clang::TargetOptions *TOpts) {
   llvm::TimeTraceScope TimeScope("Backend");
   DiagnosticsEngine &Diags = CI.getDiagnostics();
 
@@ -1645,7 +1650,7 @@ void clang::emitBackendOutput(CompilerInstance &CI, CodeGenOptions &CGOpts,
   if (EnableDynamicDebugging)
     createAndEmbedModuleForDynamicDebugging(CI, CGOpts, M, VFS, BC);
 
-  EmitAssemblyHelper AsmHelper(CI, CGOpts, M, VFS);
+  EmitAssemblyHelper AsmHelper(CI, CGOpts, M, VFS, TOpts);
   AsmHelper.emitAssembly(Action, std::move(OS), BC);
 
   // Verify clang's TargetInfo DataLayout against the LLVM TargetMachine's

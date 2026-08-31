@@ -33,6 +33,7 @@
 #include "clang/Sema/Scope.h"
 #include "clang/Sema/ScopeInfo.h"
 #include "clang/Sema/Sema.h"
+#include "clang/Sema/SemaCUDA.h"
 #include "clang/Sema/SemaInternal.h"
 #include "clang/Sema/SemaRISCV.h"
 #include "clang/Sema/TemplateDeduction.h"
@@ -485,7 +486,355 @@ static bool canHideTag(const NamedDecl *D) {
 }
 
 /// Resolves the result kind of this lookup.
+
+/// Whether \p D belongs to the target currently being analysed.
+///
+/// Shared by ordinary name lookup and by argument-dependent lookup, which
+/// builds its candidate set directly and so does not pass through
+/// LookupResult at all -- leaving another target's declarations as overload
+/// candidates: 94 "call is ambiguous" with both candidates on the same line.
+static bool isVisibleForTarget(Sema &S, const NamedDecl *D, bool ForRedecl,
+                               bool AllowFallback,
+                               bool SuppressDivergenceFlagForTags = false,
+                               bool PreferPrimaryForRecordReferences = false,
+                               bool SoleCandidate = false) {
+  unsigned V = D->getTargetVariant();
+  if (!V) {
+    return true;
+  }
+  if (V == Decl::TargetVariantRedundant)
+    return false;
+
+  // A bare (non-redeclaration) reference to a target-tagged struct/class
+  // always means the primary target's copy, regardless of which
+  // alternative is currently being parsed -- see
+  // ggml_cuda_mmq_get_config's RDNA2/CDNA dispatch (mmq.cuh:253-276): the
+  // struct's own divergent axis (data layout) is unrelated to the
+  // dispatcher's (chip family), so a caller spliced for the *aux* target
+  // must still agree with every genuinely-shared helper it calls about
+  // which struct identity "the type" means. Scoped to RecordDecl, not the
+  // broader TagDecl: unscoped enums (e.g. std::float_denorm_style,
+  // __hip_saturation_t) inject their enumerators into the *enclosing*
+  // scope, so an enumerator reference is looked up independently of this
+  // type reference and still (correctly) follows ambient/Current -- forcing
+  // the enum type itself to v1 regardless would decouple it from its own
+  // enumerators and break types that were resolving correctly. A
+  // struct/class has no equivalent hazard: member lookup (a constructor, a
+  // method) is always scoped to whichever RecordDecl copy the type name
+  // already resolved to. Must be exclusive (not just a fallback alongside
+  // the exact-match check below) -- resolveKind() flags two simultaneously
+  // visible TagDecls of the same name as an ambiguous reference, so both v1
+  // and v2 must never be visible at once for this kind of reference.
+  //
+  // Excludes the injected-class-name: that reference isn't ambient code
+  // deciding "which copy of the type do I mean" -- it's found via member
+  // lookup already scoped to one specific, already-reentered RecordDecl
+  // copy (e.g. re-parsing an out-of-line member's declarator inside
+  // std::complex<T>::operator=), so it must agree with Current like any
+  // other member, not get forced to v1 (which lives in an unrelated
+  // RecordDecl object whose own injected name isn't reachable from here).
+  // Otherwise an out-of-line template member definition for any non-
+  // primary target fails to find its own class's name at all: "no
+  // template named 'complex'" for every libstdc++ <complex> instantiation.
+  if (PreferPrimaryForRecordReferences && !ForRedecl && isa<RecordDecl>(D) &&
+      !(isa<CXXRecordDecl>(D) && cast<CXXRecordDecl>(D)->isInjectedClassName()))
+    return V == 1;
+
+  unsigned Current = S.getASTContext().getCurrentTargetVariant();
+  if (!Current) {
+    // Shared code reaching for a target-specific entity is what decides whether
+    // divergence has to propagate. Count declarations, not lookups.
+    //
+    // A bare reference to a target-tagged *type* is exempted: once a
+    // specific class copy is picked here, its own divergent members (if any)
+    // are reached later through member lookup scoped to that one copy, which
+    // can't see the other copy's members and needs no flag of its own. A
+    // referencing declaration that never touches the diverging members
+    // behaves identically regardless of which copy it resolves to, so it
+    // does not need a per-target copy merely for naming the type --
+    // `ggml_cuda_mmq_get_config_blackwell` referencing the (in this respect
+    // interchangeable) constructor of `ggml_cuda_mmq_config` was getting a
+    // needless second copy this way, which then disagreed with its still-
+    // singular callee `ggml_cuda_mmq_get_config_ampere` about which copy's
+    // identity to return.
+    if (!SuppressDivergenceFlagForTags || !isa<TagDecl>(D)) {
+      S.TouchedDivergentEntity = true;
+      if (LLVM_UNLIKELY(clang::CountDivergentUses)) {
+        const DeclContext *DC = S.CurContext;
+        while (DC && !isa<NamedDecl>(DC))
+          DC = DC->getParent();
+        S.DivergentUsers.insert(DC ? cast<NamedDecl>(DC) : nullptr);
+      }
+    }
+    Current = 1;
+  }
+  // Under host-primary ambient (the real driver's combined -cc1 shape),
+  // TargetVariant 1 names the host, not a device arch (see
+  // ASTContext::getTargetForVariant). A lookup performed while substituting
+  // a device-only construct's body must not be forced onto the host's own
+  // view -- mirrors the Ambient computation already used for deferred
+  // device-only instantiations in SemaExpr.cpp's MarkFunctionReferenced,
+  // extended here to the (non-deferred) lookup path that neither that
+  // function nor PerformPendingInstantiations ever reaches, e.g. an ordinary
+  // call to a target-tagged non-template function, or partial-spec arm
+  // deduction for a class template.
+  //
+  // This must fire whenever Current is (still) exactly the default primary
+  // value 1 in host-primary shape -- not only when ambient started out unset
+  // above. ParseAST pushes a TU-wide ASTContext::TargetScope(Context, 1) for
+  // the *entire* primary parse, so a device-only function's original body
+  // instantiation already has Current == 1 from that outer scope, and the
+  // `if (!Current)` branch above never even runs for it: without this,
+  // isVisibleForTarget hard-fails a lookup like ggml_cuda_mma::tile<>::ne
+  // (tagged only for real device variants, never for host) before
+  // -reparse-divergent-users' later per-real-target pass (which starts at
+  // variant 2, deliberately skipping 1/host) gets a chance to produce a
+  // working copy -- see host-primary-partial-spec-pattern-selection-bug.
+  // Device-primary compiles (CUDAIsDevice) are excluded: there, variant 1
+  // already names a real device arch by construction, and this redirect
+  // would be both unnecessary and wrong.
+  //
+  // Also skipped when both S.InTargetAlternativeRegion is set (we are
+  // currently, genuinely, inside one widened #if/#elif/#else alternative's
+  // own pushed TargetScope -- the first alternative isn't special-cased and
+  // can itself be numbered 1), D's own tag already equals that Current==1,
+  // and D is a FieldDecl: a field declared inside that same alternative's own
+  // body (e.g. a local union's fields) is tagged to match, so V == Current ==
+  // 1 here is already a correct, exact match, not a case needing redirection
+  // onto some other real device variant. Field/member lookup is naturally
+  // scoped to one already-resolved RecordDecl copy (via the
+  // PreferPrimaryForRecordReferences check above, or ordinary type
+  // resolution), so exempting it here cannot make a *sibling* field from a
+  // different arm's parallel copy of the same union simultaneously visible --
+  // there is no such sibling in this DeclContext to begin with.
+  //
+  // Deliberately restricted to FieldDecl, not any D whose tag happens to
+  // equal Current: isVisibleForTarget is called once per *candidate* in a
+  // multi-candidate lookup (overload resolution, partial-spec arm matching),
+  // and Current is recomputed independently for each such call. Exempting a
+  // broader class of D (e.g. any FunctionDecl or ClassTemplateSpecialization)
+  // whose V happens to equal 1 would let it stay visible under Current == 1
+  // while a *different* candidate in the very same overload/partial-spec set
+  // (V == 2, say) still takes the unconditional tier-3 redirect below,
+  // forcing Current to 2 for *that* call and making it visible too --
+  // confirmed empirically as a real regression across the actual ggml-cuda
+  // corpus ("ambiguous partial specializations of tile<32, 8, __half2>" in
+  // mma.cuh; "call to 'ggml_cuda_get_physical_warp_size' is ambiguous" in
+  // mmq-load-tiles.cuh) when this guard was first tried unrestricted. A
+  // FieldDecl's owning RecordDecl is fixed before this function ever runs, so
+  // there is no sibling-candidate set for the exemption to destabilize.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && Current == 1 &&
+      !(S.InTargetAlternativeRegion && V == Current && isa<FieldDecl>(D)) &&
+      !S.getLangOpts().CUDAIsDevice) {
+    bool FoundExactContext = false;
+    // Most direct: the enclosing function itself may carry its own
+    // TargetVariant tag directly -- one specific widened #if/#elif/#else
+    // arm's redecl, e.g. ggml_cuda_mmq_config::rows_per_warp()'s host-tagged
+    // copy. A lookup inside its body for another member of the *same* class
+    // redecl (e.g. its own class's `J`) must agree with this exact tag, not
+    // get redirected to a sibling (device-tagged) redecl's copy by the
+    // canonical-device heuristic below, which is blind to which specific
+    // redecl the reference is actually inside.
+    if (const FunctionDecl *CurFD = S.getCurFunctionDecl()) {
+      // A function template specialization's own FunctionDecl never carries
+      // the tag itself -- only its template-instantiation pattern does (see
+      // InstantiateFunctionDefinition's tagging block) -- so a lookup inside
+      // a genuinely-tagged reparse copy's body (e.g. flash_attn_tile's V=1
+      // pattern, ambient already correctly forced to 1 by
+      // BodyInstantiationTarget) would otherwise fall through to the
+      // canonical-device fallback below and get clobbered back onto a
+      // different real target, exactly undoing that forcing.
+      unsigned FDVariant = CurFD->getTargetVariant();
+      bool FromPattern = false;
+      if (!FDVariant) {
+        if (const FunctionDecl *Pattern =
+                CurFD->getTemplateInstantiationPattern()) {
+          FDVariant = Pattern->getTargetVariant();
+          FromPattern = true;
+        }
+      }
+      if (FDVariant) {
+        Current = FDVariant;
+        FoundExactContext = true;
+      }
+    }
+    // Next: CurContext nested inside a class template specialization that
+    // was itself instantiated from a target-tagged pattern (see
+    // getPatternForClassTemplateSpecialization) -- covers member-initializer
+    // contexts with no enclosing FunctionDecl at all (e.g.
+    // ggml_cuda_mma::tile<>'s AMD_MFMA arm reading a second tile<>
+    // specialization's own `ne`), and member functions whose own FunctionDecl
+    // isn't itself separately tagged even though the enclosing specialization
+    // is (e.g. tile<>'s `supported()`/`get_i()` inside its `#else`
+    // (host-tagged) arm, referencing the enclosing class's own `I`/`J`).
+    if (!FoundExactContext) {
+      for (const DeclContext *DC = S.CurContext; DC; DC = DC->getParent()) {
+        if (const auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(DC)) {
+          if (unsigned SpecVariant =
+                  S.getASTContext().getTargetVariantForSpecialization(CTSD)) {
+            Current = SpecVariant;
+            FoundExactContext = true;
+            break;
+          }
+        }
+      }
+    }
+    // Last resort: neither the enclosing function nor an enclosing
+    // specialization carries a direct tag -- an ordinary call from
+    // untagged/shared device code into a separately target-tagged construct
+    // (ggml_cuda_mma::tile<>::ne referenced from mmq-vec-dot.cuh's dispatch
+    // functions). Force onto a real device target so its lookup succeeds;
+    // Increment 3/6/7's post-hoc per-target redirect mechanisms correct the
+    // value/callee seen by every *other* real target afterward.
+    //
+    // Skipped when D itself has an untagged ("shared", visible under any
+    // ambient) sibling redeclaration: that sibling is already an
+    // unambiguous, correct host-ambient answer on its own (e.g. ROCm's
+    // unsafeAtomicAdd(float*,float), whose safe-atomics body is shared by
+    // host and every non-gfx90a target and left untagged, alongside a
+    // second, separately gfx90a-tagged fast-path override). Forcing Current
+    // onto one specific real device variant here wouldn't help such a
+    // reference -- it already resolves fine -- and would instead make that
+    // one real target's override simultaneously visible next to the
+    // always-visible shared redecl, turning a single unambiguous candidate
+    // into two ("call ... is ambiguous").
+    if (!FoundExactContext) {
+      if (const FunctionDecl *CurFD = S.getCurFunctionDecl()) {
+        CUDAFunctionTarget FT = S.CUDA().IdentifyTarget(CurFD);
+        if (FT == CUDAFunctionTarget::Device ||
+            FT == CUDAFunctionTarget::Global) {
+          bool HasUntaggedSibling = false;
+          if (const auto *FD = dyn_cast<FunctionDecl>(D)) {
+            // Widened alternatives of the same declaration are not
+            // necessarily linked into one redeclaration chain (confirmed
+            // empirically: unsafeAtomicAdd's untagged and gfx90a-tagged
+            // copies are two unconnected FunctionDecl objects, each its own
+            // one-element redecl chain) -- the DeclContext's lookup table is
+            // what actually holds every widened copy together, since that is
+            // where the ambiguous-overload diagnostic itself finds both.
+            for (const NamedDecl *Sibling :
+                 FD->getDeclContext()->lookup(FD->getDeclName())) {
+              const auto *SiblingFD = dyn_cast<FunctionDecl>(Sibling);
+              if (SiblingFD && !SiblingFD->getTargetVariant() &&
+                  S.Context.hasSameType(SiblingFD->getType(), FD->getType())) {
+                HasUntaggedSibling = true;
+                break;
+              }
+            }
+          } else if (const auto *FTD = dyn_cast<FunctionTemplateDecl>(D)) {
+            // Same as above, for a function *template*'s widened
+            // alternatives (e.g. get_mmvq_mmid_max_batch_for_device's
+            // RDNA/CDNA/GCN/... arms) -- a plain dyn_cast<FunctionDecl> above
+            // silently misses this decl kind entirely, which used to leave
+            // HasUntaggedSibling permanently false for it regardless of
+            // whether an untagged sibling genuinely exists.
+            for (const NamedDecl *Sibling :
+                 FTD->getDeclContext()->lookup(FTD->getDeclName())) {
+              const auto *SiblingFTD = dyn_cast<FunctionTemplateDecl>(Sibling);
+              if (SiblingFTD && !SiblingFTD->getTargetVariant() &&
+                  S.Context.hasSameType(
+                      SiblingFTD->getTemplatedDecl()->getType(),
+                      FTD->getTemplatedDecl()->getType())) {
+                HasUntaggedSibling = true;
+                break;
+              }
+            }
+          }
+          // Only escalate onto a real device variant when D doesn't already
+          // match the (still-default, pre-escalation) Current, and only for
+          // a caller that has told us D is the *sole* member of its frozen
+          // candidate set (SoleCandidate): escalating an already-matching
+          // candidate can only ever hurt when some other, differently-tagged
+          // sibling is simultaneously live in that same set, since that
+          // sibling's own call to this function independently escalates
+          // Current for itself and becomes visible too -- two candidates
+          // where before there was one (confirmed empirically: ROCm's
+          // unsafeAtomicAdd has two genuinely-tagged, untagged-sibling-free
+          // redecls (V=1 and V=2) simultaneously frozen in one call's Decls;
+          // an unconditional version of this exemption admitted both).
+          // Restricting the exemption to LookupResult::resolveKind()'s N==1
+          // fast path (the only caller that passes SoleCandidate=true) keeps
+          // it safe: there, by construction, no other sibling can be in the
+          // same frozen set. Matters for a lone frozen candidate with no
+          // untagged sibling AND no other sibling in its own frozen set: e.g.
+          // get_mmvq_mmid_max_batch_for_device's three genuinely-tagged
+          // FunctionTemplateDecl arms (V=1/2/3, no untagged fallback at all)
+          // -- ordinary lookup's frozen candidate set for a given call site
+          // holds exactly one of the three (whichever arm was live in the
+          // source text at the original, primary parse), and unconditionally
+          // escalating Current away from 1 rejects it outright with nothing
+          // else in the set to accept instead ("neither visible ... nor
+          // found by ADL"), even when V == 1 already matched.
+          if (!HasUntaggedSibling && (!SoleCandidate || V != Current))
+            Current = S.getASTContext().getCanonicalDeviceVariant();
+        }
+      }
+    }
+  }
+  if (V == Current)
+    return true;
+
+  // A member of a class whose own type reference is forced to the primary
+  // target above must accept that class's own primary-tagged members too:
+  // once the type name resolved to the primary's copy, ordinary member
+  // lookup inside it (a field in an implicit copy constructor, a method
+  // call) still names that same copy's members, which are tagged to match
+  // their enclosing class (v1), not whichever target is currently ambient.
+  // Without this, a divergent caller compiled for a non-primary target that
+  // reaches into an (otherwise shared) primary-preferred class's members
+  // sees them as belonging to "some other target" and fails lookup entirely
+  // -- e.g. a fp8-conversion struct with a divergent method body: the
+  // struct's own primary copy is correctly selected by the rule above, but
+  // its non-divergent `__x` field then reports "no member named '__x'".
+  if (PreferPrimaryForRecordReferences && !ForRedecl && V == 1) {
+    if (const auto *RD = dyn_cast<RecordDecl>(D->getDeclContext()))
+      if (RD->getTargetVariant())
+        return true;
+  }
+
+  // A *reference* during a re-parse falls back to the primary target's
+  // declaration: most tagged declarations carry a target only for having been
+  // parsed inside a divergent region, and code re-analysed for another target
+  // still has to name them. A *redeclaration* must not, or the declaration
+  // being built merges into the other target's.
+  return AllowFallback && V == 1 && clang::ReparseFallbackLookup &&
+         S.InTargetFallbackReparse && !ForRedecl;
+}
+
+bool LookupResult::isTargetVisible(const NamedDecl *D,
+                                   bool SoleCandidate) const {
+  return isVisibleForTarget(getSema(), D, isForRedeclaration(),
+                            /*AllowFallback=*/true,
+                            /*SuppressDivergenceFlagForTags=*/true,
+                            /*PreferPrimaryForRecordReferences=*/true,
+                            SoleCandidate);
+}
+
+bool Sema::isDeclVisibleForCurrentTarget(const NamedDecl *D, bool ForRedecl,
+                                         bool AllowFallback) {
+  return isVisibleForTarget(*this, D, ForRedecl, AllowFallback);
+}
+
 void LookupResult::resolveKind() {
+
+  // Where a declaration belonging to the target being analysed is present, the
+  // primary's is only its fallback. Confined to a re-parse for the same reason
+  // the fallback is.
+  bool HasExactTargetMatch = false;
+  unsigned CurrentTargetForLookup = 0;
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      getSema().InTargetFallbackReparse) {
+    CurrentTargetForLookup =
+        getSema().getASTContext().getCurrentTargetVariant();
+    if (!CurrentTargetForLookup)
+      CurrentTargetForLookup = 1;
+    for (const NamedDecl *D : Decls)
+      if (D->getTargetVariant() == CurrentTargetForLookup) {
+        HasExactTargetMatch = true;
+        break;
+      }
+  }
+
   unsigned N = Decls.size();
 
   // Fast case: no possible ambiguity.
@@ -498,6 +847,29 @@ void LookupResult::resolveKind() {
   // If there's a single decl, we need to examine it to decide what
   // kind of lookup this is.
   if (N == 1) {
+    // PROTOTYPE (Stage 4.1c companion): the N>1 loop below drops any decl
+    // that isn't visible for the current target before treating the result
+    // as unambiguous; a lone decl skipped that check entirely. For a
+    // dependent call, ordinary lookup's candidate set is frozen once, at
+    // the point the enclosing template is originally parsed
+    // (TransformUnresolvedLookupExpr replays the same frozen Decls at every
+    // instantiation) -- if that parse-time ambient differed from the one a
+    // later instantiation replay is running under, the sole frozen
+    // candidate can be tagged for a different target than the one now
+    // compiling. Left unfiltered, a stale wrong-target decl stood
+    // unconditionally alongside a correctly-filtered ADL candidate for the
+    // same call, producing two simultaneously viable candidates ("call to
+    // 'flash_attn_tile_iter' is ambiguous"). Dropping it here instead
+    // yields ordinary lookup's "not found for this target" outcome, the
+    // same way it would if this had been one of several frozen decls
+    // instead of the only one.
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+        !isTargetVisible(*Decls.begin(), /*SoleCandidate=*/true)) {
+      Decls.clear();
+      ResultKind = LookupResultKind::NotFound;
+      return;
+    }
+
     const NamedDecl *D = (*Decls.begin())->getUnderlyingDecl();
     if (isa<FunctionTemplateDecl>(D))
       ResultKind = LookupResultKind::FoundOverloaded;
@@ -525,6 +897,19 @@ void LookupResult::resolveKind() {
   for (unsigned I = 0; I < N; I++) {
     const NamedDecl *D = Decls[I]->getUnderlyingDecl();
     D = cast<NamedDecl>(D->getCanonicalDecl());
+
+    // PROTOTYPE (Stage 4.1c): a declaration tagged with a target variant only
+    // exists for that target. Drop the ones belonging to other targets before
+    // the ambiguity checks below, the same way equivalent internal-linkage
+    // declarations are dropped. Variant 0 means "every target" and is what all
+    // declarations carry today, so this is inert unless the feature is on.
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+        (!isTargetVisible(Decls[I]) ||
+         (HasExactTargetMatch && Decls[I]->getTargetVariant() &&
+          Decls[I]->getTargetVariant() != CurrentTargetForLookup))) {
+      RemovedDecls.set(I);
+      continue;
+    }
 
     // Ignore an invalid declaration unless it's the only one left.
     // Also ignore HLSLBufferDecl which not have name conflict with other Decls.
@@ -1137,8 +1522,8 @@ static bool LookupDirect(Sema &S, LookupResult &R, const DeclContext *DC) {
 
   // Perform lookup into this declaration context.
   DeclContext::lookup_result DR = DC->lookup(R.getLookupName());
-  for (NamedDecl *D : DR) {
-    if ((D = R.getAcceptableDecl(D))) {
+  for (NamedDecl *OrigD : DR) {
+    if (NamedDecl *D = R.getAcceptableDecl(OrigD)) {
       R.addDecl(D);
       Found = true;
     }
@@ -1471,7 +1856,8 @@ bool Sema::CppLookupName(LookupResult &R, Scope *S) {
 
   // Stop if we ran out of scopes.
   // FIXME:  This really, really shouldn't be happening.
-  if (!S) return false;
+  if (!S)
+    return false;
 
   // If we are looking for members, no need to look into global/namespace scope.
   if (NameKind == LookupMemberName)
@@ -3997,7 +4383,19 @@ void Sema::ArgumentDependentLookup(DeclarationName Name, SourceLocation Loc,
       }
 
       // FIXME: Preserve D as the FoundDecl.
-      if (Visible)
+      bool TargetOK = !LLVM_UNLIKELY(clang::AllowTargetVariantDecls) ||
+                      isVisibleForTarget(*this, Underlying,
+                                         /*ForRedecl=*/false,
+                                         /*AllowFallback=*/false);
+      if (LLVM_UNLIKELY(::getenv("DEBUG_ADL3")) && Name.isIdentifier() &&
+          Name.getAsIdentifierInfo()->getName() == "flash_attn_tile_iter") {
+        llvm::errs() << "DEBUG_ADL3 candidate D=" << (const void *)Underlying
+                     << " tag=" << Underlying->getTargetVariant()
+                     << " Visible=" << Visible << " TargetOK=" << TargetOK
+                     << " ambient=" << getASTContext().getCurrentTargetVariant()
+                     << "\n";
+      }
+      if (Visible && TargetOK)
         Result.insert(Underlying);
     }
   }

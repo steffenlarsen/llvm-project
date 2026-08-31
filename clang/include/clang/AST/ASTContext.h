@@ -83,6 +83,7 @@ template <> struct DenseMapInfo<ScalableVecTyKey> {
 } // namespace llvm
 
 namespace clang {
+class TargetDivergence;
 
 class APValue;
 class ASTMutationListener;
@@ -97,6 +98,7 @@ class CXXABI;
 class CXXConstructorDecl;
 class CXXMethodDecl;
 class CXXRecordDecl;
+class ClassTemplateSpecializationDecl;
 class DiagnosticsEngine;
 class DynTypedNodeList;
 class Expr;
@@ -531,6 +533,123 @@ class ASTContext : public RefCountedBase<ASTContext> {
   /// wasting space in the Decl class.
   llvm::DenseMap<const Decl*, AttrVec*> DeclAttrs;
 
+public:
+  /// The two FunctionDecls a CUDA/HIP overload resolution would have picked
+  /// under CUDAIsDevice == false and == true, respectively, for a call whose
+  /// actual pick depended on the ambient CUDAIsDevice value at the time Sema
+  /// resolved it (an HD-context caller resolving a same-signature host/device
+  /// overload pair via SemaCUDA::IdentifyPreference's ambient-dependent rule
+  /// (d)). Keyed by the concrete callee Expr* the AST ends up with, so that
+  /// CodeGenFunction::EmitCallee can pick the correct side for whichever
+  /// target variant it is currently compiling, rather than being stuck with
+  /// whichever side Sema's single shared pass happened to resolve. Populated
+  /// by OverloadCandidateSet::BestViableFunctionImpl / FinishOverloadedCallExpr
+  /// in SemaOverload.cpp; see Stage 8 in the combined-frontend plan.
+  struct CUDADualSideCallee {
+    const FunctionDecl *HostDecl;
+    const FunctionDecl *DeviceDecl;
+  };
+
+private:
+  llvm::DenseMap<const Expr *, CUDADualSideCallee> CUDAAmbiguousCallees;
+
+  /// PROTOTYPE (Stage 5, Phase 5 Increment 3): per-target re-instantiations
+  /// of a callee referenced from a *shared* (target variant 0) caller whose
+  /// body is itself target-divergent (e.g. ggml_cuda_mma::mma's raw
+  /// target-CPU-macro-gated overloads). A shared caller's own template
+  /// specialization is only ever Sema-instantiated once, so its call to such
+  /// a callee would otherwise permanently bake in whichever target's ambient
+  /// happened to resolve it first. Populated by
+  /// Sema::InstantiateDivergentCalleesInBody right after a shared
+  /// specialization's body is substituted, keyed by the callee Expr* in that
+  /// body, with one FunctionDecl* per real target variant (1 primary, 2..N+1
+  /// aux). Consumed passively by CodeGenFunction::EmitCallee, mirroring
+  /// CUDAAmbiguousCallees/getCUDADualSideCallee's shape generalized to N-ary.
+  llvm::DenseMap<const Expr *, llvm::SmallDenseMap<unsigned, FunctionDecl *, 4>>
+      TargetVariantCallees;
+
+  /// PROTOTYPE (Stage 5, Phase 5 Increment 6): a shared (target variant 0)
+  /// caller's DeclRefExpr referencing a per-target-forked static data member
+  /// (e.g. ggml_cuda_mma::tile<>::ne, see
+  /// ClassTemplateDecl::hasTargetTaggedValueMember()) that got permanently
+  /// bound, at parse time, to one specific fork's VarDecl* when Design 1's
+  /// reparse-merge (mergeReparseAlternative, DeclFingerprint.cpp) collapsed
+  /// several textually-identical reparse alternates of the caller into one
+  /// surviving body. isInterchangeable's structural-equivalence check never
+  /// inspects a DeclRefExpr's resolved Decl* identity, so it judges the
+  /// alternates interchangeable and discards all but one -- discarding, along
+  /// with it, the correctly-forked references the other alternates held.
+  /// Populated by mergeReparseAlternative right before it hides the
+  /// now-redundant alternate, keyed by the surviving DeclRefExpr* with one
+  /// VarDecl* per real target variant (1 primary, 2..N+1 aux) recovered from
+  /// the alternate about to be discarded. Consumed passively by
+  /// CodeGenFunction::tryEmitAsConstant, mirroring TargetVariantCallees'
+  /// shape.
+  llvm::DenseMap<const Expr *, llvm::SmallDenseMap<unsigned, VarDecl *, 4>>
+      TargetVariantValueDecls;
+
+  /// PROTOTYPE (Stage 5, Phase 5 Increment 8): a per-target clone of a plain
+  /// (non-template) wrapper FunctionDecl whose own text is never #if-widened
+  /// but whose body calls something that genuinely is (e.g.
+  /// ggml_cuda_fattn_mma_get_nbatch_fa, whose body is just `return
+  /// ggml_cuda_fattn_mma_get_config(...).nbatch_fa;`, and it's get_config
+  /// that's #if-gated -- see hasTargetWidenedSiblingDecl()/
+  /// isTargetDivergentCallee() in DeclTemplate.h). Unlike TargetVariantCallees
+  /// (Increment 3), which redirects a *reference* to an already-existing
+  /// widened sibling, this wrapper has no such sibling to redirect to, so one
+  /// is synthesized on demand. Keyed by (original FunctionDecl*, Variant)
+  /// rather than by callee Expr*, since the same wrapper can be referenced
+  /// from many call sites but only needs one clone per target variant.
+  /// Populated and consumed by getOrCreateTargetVariantWrapperClone
+  /// (SemaTemplateInstantiateDecl.cpp).
+  llvm::DenseMap<std::pair<const FunctionDecl *, unsigned>, FunctionDecl *>
+      TargetVariantWrapperClones;
+
+  /// PROTOTYPE (Stage 5, Phase 5, mmvq.cu launch_bounds fix Part 2): a shared
+  /// (target variant 0) caller's CUDALaunchBoundsAttr argument expression
+  /// (e.g. get_mmvq_mmid_max_batch_for_device<type>() *
+  /// ggml_cuda_get_physical_warp_size(), see mmvq.cu's mul_mat_vec_q_moe)
+  /// that references one or more target-divergent callees. Attribute
+  /// arguments are substituted once, at declaration-instantiation time,
+  /// strictly before InstantiateDivergentCalleesInBody's body-walking
+  /// mechanism (Increment 3 above) ever runs -- and CodeGen evaluates this
+  /// same Expr* directly via EvaluateKnownConstInt, with no table to consult
+  /// otherwise. Populated by Sema::InstantiateDivergentCalleesInAttrs, keyed
+  /// by the original (unrewritten) attribute argument Expr*, with one
+  /// evaluated constant per real target variant (1 primary, 2..N+1 aux).
+  /// Consumed passively by AMDGPUTargetCodeGenInfo::setFunctionDeclAttributes.
+  llvm::DenseMap<const Expr *, llvm::SmallDenseMap<unsigned, llvm::APSInt, 4>>
+      TargetVariantConstantValues;
+
+  /// PROTOTYPE (Stage 5, Phase 5): records, for a class template
+  /// specialization instantiated from a target-tagged partial-specialization
+  /// pattern (see ClassTemplateDecl::hasTargetTaggedPartialSpecialization()),
+  /// which real target variant that pattern was tagged for. A nested lookup
+  /// performed while instantiating one of this specialization's own members
+  /// (e.g. a static-data-member initializer referencing a second target-tagged
+  /// specialization, as in ggml_cuda_mma::tile<>'s `ne`) has no enclosing
+  /// FunctionDecl to consult -- CurContext is the specialization itself, a
+  /// RecordDecl -- so isVisibleForTarget's ambient fallback walks CurContext
+  /// looking for an entry here instead of defaulting to the host variant.
+  /// Populated by getPatternForClassTemplateSpecialization
+  /// (SemaTemplateInstantiate.cpp) once it picks a target-tagged pattern.
+  llvm::DenseMap<const ClassTemplateSpecializationDecl *, unsigned>
+      TargetVariantForSpecialization;
+
+  /// EXPERIMENT (measuring the cost of moving Decl::TargetVariant /
+  /// TargetVariantIsReparseOrigin off Decl's own bitfields and into an
+  /// ASTContext-side table, so the prototype's tagging mechanism never has to
+  /// touch Decl's layout at all). Packs both bits into one byte per tagged
+  /// Decl: bits 0-2 are TargetVariant, bit 3 is TargetVariantIsReparseOrigin.
+  /// Only ever populated for a Decl this prototype has actually tagged (the
+  /// overwhelming majority of Decls, in an ordinary or even a multi-target
+  /// compile, are never inserted here at all -- ordinary compiles insert
+  /// zero entries since tagging only happens behind
+  /// AllowTargetVariantDecls). See Decl::getTargetVariant() et al.
+  /// (DeclBase.cpp) for the accessors that replace the old inline bitfield
+  /// reads/writes with a lookup/insert here.
+  llvm::DenseMap<const Decl *, uint8_t> DeclTargetVariantStorage;
+
   /// A mapping from non-redeclarable declarations in modules that were
   /// merged with other declarations to the canonical declaration that they were
   /// merged into.
@@ -816,7 +935,70 @@ private:
   mutable bool AnyFunctionEffects = false;
 
   const TargetInfo *Target = nullptr;
-  const TargetInfo *AuxTarget = nullptr;
+
+  /// PROTOTYPE (Stage 7): aux targets, indexed by `Variant - 2` (variant 2 is
+  /// AuxTargets[0], variant 3 is AuxTargets[1], etc). Was a single
+  /// `const TargetInfo *` through Stage 1-5, when only one aux target (the
+  /// "other side" of a host/device pair) was ever configured; generalized
+  /// here to support N device archs. `getAuxTargetInfo()` keeps returning
+  /// element 0 for every pre-Stage-7 caller that only ever knew about one.
+  llvm::SmallVector<const TargetInfo *, 4> AuxTargets;
+
+  /// PROTOTYPE (Stage 1.6): the real target variant 1 names, captured once in
+  /// InitBuiltinTypes before any TargetScope can run. `Target` is mutated by
+  /// TargetScope for the duration of a nested scope, so once a variant-2
+  /// (aux) scope is active, `Target` itself no longer answers "what is
+  /// variant 1" -- it answers "what is ambient right now", which may be 2.
+  /// getTargetForVariant(1) must return the former, not the latter, or
+  /// re-entering variant 1 from inside a variant-2 scope is a no-op that
+  /// silently leaves the aux target's TargetInfo in effect.
+  const TargetInfo *PrimaryTarget = nullptr;
+
+  /// PROTOTYPE (Stage 1): which target the frontend is currently reasoning
+  /// about. 0 means "the only target", which is every compilation today.
+  unsigned CurrentTargetVariant = 0;
+
+  /// PROTOTYPE (Stage 1): set only when more than one target is configured
+  /// *and* something actually differs between them. Guards every multi-target
+  /// path so ordinary single-target compilation executes exactly the code it
+  /// does today, plus one predicted-not-taken branch.
+  bool HasTargetDivergence = false;
+
+  /// What differs between the configured targets; null unless multi-target.
+  std::unique_ptr<TargetDivergence> Divergence;
+
+  /// Type layouts for targets other than variant 0. Only ever populated for
+  /// types TargetDivergence proves can differ, which is a handful: measured on
+  /// x86_64 vs gfx90a, exactly one primitive type diverges.
+  mutable llvm::DenseMap<std::pair<const Type *, unsigned>, struct TypeInfo>
+      DivergentTypeInfo;
+
+  /// Record layouts for targets other than variant 0, on the same terms.
+  mutable llvm::DenseMap<std::pair<const RecordDecl *, unsigned>,
+                         const ASTRecordLayout *>
+      DivergentRecordLayouts;
+
+  /// Cache accessors for record layouts. Single-target compilation takes the
+  /// first branch and behaves exactly as before.
+  const ASTRecordLayout *lookupRecordLayout(const RecordDecl *D) const {
+    if (LLVM_LIKELY(!HasTargetDivergence))
+      return ASTRecordLayouts.lookup(D);
+    return lookupRecordLayoutForVariant(D);
+  }
+  void storeRecordLayout(const RecordDecl *D, const ASTRecordLayout *L) const {
+    if (LLVM_LIKELY(!HasTargetDivergence)) {
+      ASTRecordLayouts[D] = L;
+      return;
+    }
+    storeRecordLayoutForVariant(D, L);
+  }
+  const ASTRecordLayout *
+  lookupRecordLayoutForVariant(const RecordDecl *D) const;
+  void storeRecordLayoutForVariant(const RecordDecl *D,
+                                   const ASTRecordLayout *L) const;
+
+  /// Cold path of getTypeInfo, out of line so the hot path stays as it is.
+  TypeInfo getTypeInfoForVariant(const Type *T) const;
   clang::PrintingPolicy PrintingPolicy;
   mutable std::unique_ptr<interp::Context> InterpContext;
   std::unique_ptr<ParentMapContext> ParentMapCtx;
@@ -945,7 +1127,136 @@ public:
   }
 
   const TargetInfo &getTargetInfo() const { return *Target; }
-  const TargetInfo *getAuxTargetInfo() const { return AuxTarget; }
+
+  /// PROTOTYPE (Stage 1): the target variant currently in scope. Declarations
+  /// carry a matching index (Decl::getTargetVariant); 0 means "applies to
+  /// every target". Single-target compilation never leaves 0.
+  unsigned getCurrentTargetVariant() const { return CurrentTargetVariant; }
+
+  /// PROTOTYPE (Stage 1): install the divergence analysis for a multi-target
+  /// compilation. Until this is called nothing multi-target is reachable.
+  LLVM_ABI void setTargetDivergence(std::unique_ptr<TargetDivergence> D);
+  const TargetDivergence *getTargetDivergence() const {
+    return Divergence.get();
+  }
+
+  /// Whether the configured targets are known to disagree about something.
+  /// False for every ordinary compilation, and the guard callers use to keep
+  /// multi-target work off the shared path.
+  bool hasTargetDivergence() const { return HasTargetDivergence; }
+
+  /// PROTOTYPE (Stage 1.6, generalized Stage 7): the TargetInfo a variant
+  /// index names. 1 is the target being compiled for; 2..N+1 are the N aux
+  /// (device-arch) targets; 0 means "no target in scope" and has none.
+  const TargetInfo *getTargetForVariant(unsigned Variant) const {
+    if (Variant == 1)
+      return PrimaryTarget;
+    if (Variant >= 2 && Variant - 2 < AuxTargets.size())
+      return AuxTargets[Variant - 2];
+    return nullptr;
+  }
+
+  /// PROTOTYPE (Stage 7): how many aux (device-arch) targets are configured,
+  /// i.e. how many of variants 2..N+1 are valid. Callers that need to
+  /// construct one thing per aux target (e.g. BackendConsumer's AuxGens
+  /// vector) iterate `2 .. 2 + getNumAuxTargets()` and resolve each via
+  /// getTargetForVariant, rather than reaching for a separate, possibly
+  /// out-of-sync count (e.g. CompilerInstance::getMultiTargetAuxTargets(),
+  /// which only ever holds the newer N>1 flag's targets, not the older
+  /// single implicit "other side of CUDA/OpenMP/SYCL" aux that also lands
+  /// in this same AuxTargets list).
+  unsigned getNumAuxTargets() const { return AuxTargets.size(); }
+
+  /// PROTOTYPE (Stage 7): a representative "device-like" variant to force a
+  /// deferred device-only instantiation's *lookup* ambient onto, independent
+  /// of which physical role (primary or aux) actually owns the device
+  /// target in this compilation. Callers that need "device vs host" for
+  /// name-lookup purposes only (never a specific one of several device
+  /// archs) should use this instead of a bare literal, since which variant
+  /// index names the device target is a per-compilation choice, not always
+  /// 1 (e.g. once the host is always primary, the device target lives at
+  /// variant 2, not 1).
+  unsigned getCanonicalDeviceVariant() const { return 2; }
+
+  /// PROTOTYPE (Stage 1): scopes the target that target-dependent queries
+  /// answer for. A combined multi-target frontend switches between targets
+  /// while walking one AST; everything downstream of getTargetInfo() then
+  /// answers for the target in scope rather than a fixed one.
+  ///
+  /// Entered only in multi-target mode, so single-target compilation is
+  /// bit-for-bit unaffected.
+  class TargetScope {
+    ASTContext &Ctx;
+    const TargetInfo *SavedTarget;
+    unsigned SavedVariant;
+
+  public:
+    TargetScope(ASTContext &Ctx, const TargetInfo &T, unsigned Variant)
+        : Ctx(Ctx), SavedTarget(Ctx.Target),
+          SavedVariant(Ctx.CurrentTargetVariant) {
+      Ctx.Target = &T;
+      Ctx.CurrentTargetVariant = Variant;
+    }
+
+    /// Enter the scope of \p Variant. A variant that names no target -- 0, or
+    /// an aux variant with no aux target configured -- leaves the ambient
+    /// target alone, which is what a declaration marked "applies to every
+    /// target" wants.
+    ///
+    /// Note this does *not* swap `LangOptions::CUDAIsDevice`. Doing so was
+    /// tried: it looked necessary, because that flag decides what counts as a
+    /// constant expression and parsing the host alternative with it set rejects
+    /// every `constexpr` initialised from a `__device__` function. It fixed
+    /// nothing -- those errors were downstream of a redefinition, and
+    /// variant-filtered name lookup is what actually resolves them -- and it
+    /// broke per-target instantiation, which needs the compilation's own
+    /// device-ness to decide what to emit.
+    TargetScope(ASTContext &Ctx, unsigned Variant)
+        : Ctx(Ctx), SavedTarget(Ctx.Target),
+          SavedVariant(Ctx.CurrentTargetVariant) {
+      if (const TargetInfo *T = Ctx.getTargetForVariant(Variant)) {
+        Ctx.Target = T;
+        Ctx.CurrentTargetVariant = Variant;
+      }
+    }
+
+    /// Tag selecting the variant-only overload below.
+    struct VariantOnlyTag {};
+    static constexpr VariantOnlyTag VariantOnly{};
+
+    /// Like the two-argument constructor above, but leaves getTargetInfo()
+    /// answering for whatever target the compilation is actually emitting --
+    /// only Decl::getTargetVariant()-based visibility filtering sees
+    /// \p Variant. A deferred instantiation queued while ambient was
+    /// \p Variant can need that ambient restored purely so nested name
+    /// lookup resolves against the same overload set it would have at the
+    /// point of reference; swapping the TargetInfo along with it is a
+    /// different, stronger claim -- that the entity itself belongs to that
+    /// target -- which does not follow: a plain (unattributed, or
+    /// __host__ __device__) template can be *referenced* from within
+    /// variant-2-tagged code while its own body still needs to be evaluated
+    /// against whichever target is actually being compiled (e.g. a
+    /// constexpr that calls a __device__-only intrinsic must keep resolving
+    /// that intrinsic's value for the real target, not the aux one, even
+    /// while ambient is restored to 2 for lookup purposes).
+    TargetScope(ASTContext &Ctx, unsigned Variant, VariantOnlyTag)
+        : Ctx(Ctx), SavedTarget(Ctx.Target),
+          SavedVariant(Ctx.CurrentTargetVariant) {
+      Ctx.CurrentTargetVariant = Variant;
+    }
+    ~TargetScope() {
+      Ctx.Target = SavedTarget;
+      Ctx.CurrentTargetVariant = SavedVariant;
+    }
+    TargetScope(const TargetScope &) = delete;
+    TargetScope &operator=(const TargetScope &) = delete;
+  };
+  /// Back-compat accessor for every caller that only ever knew about one aux
+  /// target (everything before Stage 7): the first configured aux target, or
+  /// null if none.
+  const TargetInfo *getAuxTargetInfo() const {
+    return AuxTargets.empty() ? nullptr : AuxTargets[0];
+  }
 
   const QualType GetHigherPrecisionFPType(QualType ElementType) const {
     const auto *CurrentBT = cast<BuiltinType>(ElementType);
@@ -1173,6 +1484,139 @@ public:
 
   /// Erase the attributes corresponding to the given declaration.
   void eraseDeclAttrs(const Decl *D);
+
+  /// Record that \p CalleeExpr's resolution was ambient-dependent: an
+  /// HD-context caller's overload pick would differ between
+  /// CUDAIsDevice == false and == true. See CUDAAmbiguousCallees.
+  void setCUDADualSideCallee(const Expr *CalleeExpr,
+                             const FunctionDecl *HostDecl,
+                             const FunctionDecl *DeviceDecl) {
+    CUDAAmbiguousCallees[CalleeExpr] = {HostDecl, DeviceDecl};
+  }
+
+  /// Look up \p CalleeExpr's ambient-dependent dual-side resolution, if any.
+  /// Returns null for the overwhelming common case (no ambiguity recorded).
+  const CUDADualSideCallee *
+  getCUDADualSideCallee(const Expr *CalleeExpr) const {
+    auto It = CUDAAmbiguousCallees.find(CalleeExpr);
+    return It == CUDAAmbiguousCallees.end() ? nullptr : &It->second;
+  }
+
+  /// Record \p CalleeExpr's per-target re-instantiation for target variant
+  /// \p Variant. See TargetVariantCallees.
+  void setTargetVariantCallee(const Expr *CalleeExpr, unsigned Variant,
+                              FunctionDecl *FD) {
+    TargetVariantCallees[CalleeExpr][Variant] = FD;
+  }
+
+  /// Look up \p CalleeExpr's re-instantiation for target variant \p Variant,
+  /// if any. Returns null for the overwhelming common case (no divergent
+  /// callee recorded for this Expr/variant).
+  const FunctionDecl *getTargetVariantCallee(const Expr *CalleeExpr,
+                                             unsigned Variant) const {
+    auto It = TargetVariantCallees.find(CalleeExpr);
+    if (It == TargetVariantCallees.end())
+      return nullptr;
+    auto VIt = It->second.find(Variant);
+    return VIt == It->second.end() ? nullptr : VIt->second;
+  }
+
+  /// Record \p RefExpr's sibling VarDecl for target variant \p Variant. See
+  /// TargetVariantValueDecls.
+  void setTargetVariantValueDecl(const Expr *RefExpr, unsigned Variant,
+                                 VarDecl *VD) {
+    TargetVariantValueDecls[RefExpr][Variant] = VD;
+  }
+
+  /// Look up \p RefExpr's sibling VarDecl for target variant \p Variant, if
+  /// any. Returns null for the overwhelming common case (no divergent value
+  /// member recorded for this Expr/variant).
+  const VarDecl *getTargetVariantValueDecl(const Expr *RefExpr,
+                                           unsigned Variant) const {
+    auto It = TargetVariantValueDecls.find(RefExpr);
+    if (It == TargetVariantValueDecls.end())
+      return nullptr;
+    auto VIt = It->second.find(Variant);
+    return VIt == It->second.end() ? nullptr : VIt->second;
+  }
+
+  /// Record \p Value as \p AttrExpr's evaluated constant for target variant
+  /// \p Variant. See TargetVariantConstantValues.
+  void setTargetVariantConstantValue(const Expr *AttrExpr, unsigned Variant,
+                                     const llvm::APSInt &Value) {
+    TargetVariantConstantValues[AttrExpr][Variant] = Value;
+  }
+
+  /// Look up \p AttrExpr's evaluated constant for target variant \p Variant,
+  /// if any. Returns null for the overwhelming common case (no divergent
+  /// callee recorded for this attribute argument/variant).
+  const llvm::APSInt *getTargetVariantConstantValue(const Expr *AttrExpr,
+                                                    unsigned Variant) const {
+    auto It = TargetVariantConstantValues.find(AttrExpr);
+    if (It == TargetVariantConstantValues.end())
+      return nullptr;
+    auto VIt = It->second.find(Variant);
+    return VIt == It->second.end() ? nullptr : &VIt->second;
+  }
+
+  /// Record \p Clone as \p FD's synthesized clone for target variant
+  /// \p Variant. See TargetVariantWrapperClones.
+  void setTargetVariantWrapperClone(const FunctionDecl *FD, unsigned Variant,
+                                    FunctionDecl *Clone) {
+    TargetVariantWrapperClones[{FD, Variant}] = Clone;
+  }
+
+  /// Look up \p FD's synthesized clone for target variant \p Variant, if any.
+  /// Returns null for the overwhelming common case (no clone recorded for
+  /// this FunctionDecl/variant).
+  FunctionDecl *getTargetVariantWrapperClone(const FunctionDecl *FD,
+                                             unsigned Variant) const {
+    auto It = TargetVariantWrapperClones.find({FD, Variant});
+    return It == TargetVariantWrapperClones.end() ? nullptr : It->second;
+  }
+
+  /// Record that \p CTSD was instantiated from a pattern tagged for target
+  /// variant \p Variant. See TargetVariantForSpecialization. A no-op if
+  /// \p Variant is 0 (untagged pattern -- nothing to record).
+  void
+  setTargetVariantForSpecialization(const ClassTemplateSpecializationDecl *CTSD,
+                                    unsigned Variant) {
+    if (Variant)
+      TargetVariantForSpecialization[CTSD] = Variant;
+  }
+
+  /// Look up which target variant \p CTSD's pattern was tagged for, if any.
+  /// Returns 0 for the overwhelming common case (untagged, ordinary
+  /// specialization).
+  unsigned getTargetVariantForSpecialization(
+      const ClassTemplateSpecializationDecl *CTSD) const {
+    auto It = TargetVariantForSpecialization.find(CTSD);
+    return It == TargetVariantForSpecialization.end() ? 0 : It->second;
+  }
+
+  /// EXPERIMENT: get/set \p D's TargetVariant (bits 0-2) and
+  /// TargetVariantIsReparseOrigin (bit 3), backed by DeclTargetVariantStorage
+  /// instead of a Decl-object bitfield. See Decl::getTargetVariant() et al.
+  /// (DeclBase.cpp), the only callers of these.
+  unsigned getDeclTargetVariant(const Decl *D) const {
+    auto It = DeclTargetVariantStorage.find(D);
+    return It == DeclTargetVariantStorage.end() ? 0 : (It->second & 0x7);
+  }
+  void setDeclTargetVariant(const Decl *D, unsigned V) {
+    uint8_t &Byte = DeclTargetVariantStorage[D];
+    Byte = (Byte & ~0x7) | (V & 0x7);
+  }
+  bool getDeclTargetVariantIsReparseOrigin(const Decl *D) const {
+    auto It = DeclTargetVariantStorage.find(D);
+    return It != DeclTargetVariantStorage.end() && (It->second & 0x8);
+  }
+  void setDeclTargetVariantIsReparseOrigin(const Decl *D, bool V) {
+    uint8_t &Byte = DeclTargetVariantStorage[D];
+    if (V)
+      Byte |= 0x8;
+    else
+      Byte &= ~0x8;
+  }
 
   ArrayRef<CXXDefaultArgExpr *>
   getCtorClosureDefaultArgs(const CXXConstructorDecl *CD);
@@ -3783,6 +4227,12 @@ public:
   /// \param Target The target
   void InitBuiltinTypes(const TargetInfo &Target,
                         const TargetInfo *AuxTarget = nullptr);
+
+  /// PROTOTYPE (Stage 7): like the overload above, but takes every aux
+  /// (device-arch) target at once instead of at most one. The scalar
+  /// overload above delegates to this one with a 0-or-1-element array.
+  void InitBuiltinTypes(const TargetInfo &Target,
+                        ArrayRef<const TargetInfo *> AuxTargets);
 
 private:
   void InitBuiltinType(CanQualType &R, BuiltinType::Kind K);

@@ -769,6 +769,14 @@ PRAGMA_ANNOTATION(pragma_unused)
 // handles them.
 PRAGMA_ANNOTATION(pragma_vis)
 
+// Annotation for #pragma clang force_cuda_host_device.
+//
+// The effect is Sema state that applies to the declarations *between* the begin
+// and end, so it has to be applied where the parser reaches it. Applying it
+// from the pragma handler works only while lexing and parsing run in lockstep,
+// which a combined multi-target frontend does not.
+PRAGMA_ANNOTATION(pragma_force_cuda_host_device)
+
 // Annotation for #pragma pack...
 // The lexer produces these so that they only take effect when the parser
 // handles them.
@@ -912,6 +920,21 @@ ANNOTATION(repl_input_end)
 
 // Annotation for #embed
 ANNOTATION(embed)
+
+// Annotations bracketing a target-divergent region of a merged multi-target
+// token stream. A combined frontend preprocesses once per target and splices
+// the results; where the targets disagree the merged stream carries every
+// target's tokens in turn, and the parser selects the one it is compiling for.
+//
+//   annot_target_alt_begin <target 0 tokens>
+//   annot_target_alt_sep   <target 1 tokens>
+//   ...
+//   annot_target_alt_end
+//
+// The begin annotation's value is the number of alternatives that follow.
+ANNOTATION(target_alt_begin)
+ANNOTATION(target_alt_sep)
+ANNOTATION(target_alt_end)
 
 #include "clang/Basic/BuiltinTraits.inc"
 

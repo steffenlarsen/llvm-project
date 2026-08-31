@@ -1144,8 +1144,13 @@ static QualType ConvertDeclSpecToType(TypeProcessingState &state) {
     break;
   }
   case DeclSpec::TST_int128:
+    // Under a multi-target TargetScope (see ASTContext::TargetScope),
+    // getTargetInfo() can answer for the aux target while isTargetDevice()
+    // still answers for the real compile action -- variant 2 is always the
+    // "other side" of a host/device split, so treat it the same way.
     if (!S.Context.getTargetInfo().hasInt128Type() &&
-        !(S.getLangOpts().isTargetDevice()))
+        !(S.getLangOpts().isTargetDevice()) &&
+        S.Context.getCurrentTargetVariant() != 2)
       S.Diag(DS.getTypeSpecTypeLoc(), diag::err_type_unsupported)
         << "__int128";
     if (DS.getTypeSpecSign() == TypeSpecifierSign::Unsigned)
@@ -1189,8 +1194,12 @@ static QualType ConvertDeclSpecToType(TypeProcessingState &state) {
     }
     break;
   case DeclSpec::TST_float128:
+    // See the TST_int128 case above: variant 2 is the aux/other-side target
+    // under a multi-target TargetScope, so it suppresses this the same way
+    // isTargetDevice() does for an ordinary single-target device compile.
     if (!S.Context.getTargetInfo().hasFloat128Type() &&
-        !S.getLangOpts().isTargetDevice())
+        !S.getLangOpts().isTargetDevice() &&
+        S.Context.getCurrentTargetVariant() != 2)
       S.Diag(DS.getTypeSpecTypeLoc(), diag::err_type_unsupported)
         << "__float128";
     Result = Context.Float128Ty;
