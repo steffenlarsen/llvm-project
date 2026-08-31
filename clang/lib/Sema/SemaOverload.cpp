@@ -20,6 +20,7 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/Type.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticOptions.h"
@@ -36,6 +37,7 @@
 #include "clang/Sema/SemaCUDA.h"
 #include "clang/Sema/SemaHLSL.h"
 #include "clang/Sema/SemaInternal.h"
+#include "clang/Sema/SemaMultiTarget.h"
 #include "clang/Sema/SemaObjC.h"
 #include "clang/Sema/SemaProxy.h"
 #include "clang/Sema/Template.h"
@@ -46,6 +48,7 @@
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/SaveAndRestore.h"
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -8372,24 +8375,45 @@ static void AddTemplateOverloadCandidateImmediately(
                              FunctionTemplate->getTemplateDepth());
   FunctionDecl *Specialization = nullptr;
   ConversionSequenceList Conversions;
-  if (TemplateDeductionResult Result = S.DeduceTemplateArguments(
-          FunctionTemplate, ExplicitTemplateArgs, Args, Specialization, Info,
-          PartialOverloading, AggregateCandidateDeduction,
-          /*PartialOrdering=*/false,
-          /*ObjectType=*/QualType(),
-          /*ObjectClassification=*/Expr::Classification(),
-          CandidateSet.getKind() ==
-              OverloadCandidateSet::CSK_AddressOfOverloadSet,
-          [&](ArrayRef<QualType> ParamTypes,
-              bool OnlyInitializeNonUserDefinedConversions) {
-            return S.CheckNonDependentConversions(
-                FunctionTemplate, ParamTypes, Args, CandidateSet, Conversions,
-                Sema::CheckNonDependentConversionsFlag(
-                    SuppressUserConversions,
-                    OnlyInitializeNonUserDefinedConversions),
-                nullptr, QualType(), {}, PO);
-          });
-      Result != TemplateDeductionResult::Success) {
+  auto Deduce = [&](TemplateDeductionInfo &Info) {
+    return S.DeduceTemplateArguments(
+        FunctionTemplate, ExplicitTemplateArgs, Args, Specialization, Info,
+        PartialOverloading, AggregateCandidateDeduction,
+        /*PartialOrdering=*/false,
+        /*ObjectType=*/QualType(),
+        /*ObjectClassification=*/Expr::Classification(),
+        CandidateSet.getKind() ==
+            OverloadCandidateSet::CSK_AddressOfOverloadSet,
+        [&](ArrayRef<QualType> ParamTypes,
+            bool OnlyInitializeNonUserDefinedConversions) {
+          return S.CheckNonDependentConversions(
+              FunctionTemplate, ParamTypes, Args, CandidateSet, Conversions,
+              Sema::CheckNonDependentConversionsFlag(
+                  SuppressUserConversions,
+                  OnlyInitializeNonUserDefinedConversions),
+              nullptr, QualType(), {}, PO);
+        });
+  };
+  TemplateDeductionResult Result = Deduce(Info);
+  // A kernel's specialization is made for the devices. Where its signature
+  // names a class that differs between targets, host code launching it passes
+  // the host's class, so it calls the host's specialization instead, which
+  // instantiates the devices' own. With the class given explicitly, the
+  // argument fails to convert instead.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      (Result == TemplateDeductionResult::DeducedMismatch ||
+       Result == TemplateDeductionResult::DeducedMismatchNested ||
+       Result == TemplateDeductionResult::NonDependentConversionFailure) &&
+      FunctionTemplate->getTemplatedDecl()->hasAttr<CUDAGlobalAttr>() &&
+      S.Context.isMultiTargetCompile() && S.Context.getHostVariant() &&
+      !S.Context.isDeviceVariant(S.MultiTarget().getInstantiationTarget())) {
+    MultiTargetContext::HostKernelKeyRAII HostKeyed(S.Context);
+    TemplateDeductionInfo HostInfo(CandidateSet.getLocation(),
+                                   FunctionTemplate->getTemplateDepth());
+    if (Deduce(HostInfo) == TemplateDeductionResult::Success)
+      Result = TemplateDeductionResult::Success;
+  }
+  if (Result != TemplateDeductionResult::Success) {
     OverloadCandidate &Candidate =
         CandidateSet.addCandidate(Conversions.size(), Conversions);
     Candidate.FoundDecl = FoundDecl;
@@ -11174,6 +11198,9 @@ bool clang::isBetterOverloadCandidate(
       // they may incur other diagnostics to be deferred. We should make all
       // host/device related diagnostics deferrable and remove special handling
       // of implicit HD functions.
+      if (IsCallerImplicitHD)
+        S.MultiTarget().recordCUDAModeRead(
+            'C', "implicit host/device overload threshold");
       auto EmitThreshold =
           (S.getLangOpts().CUDAIsDevice && IsCallerImplicitHD &&
            (IsCand1ImplicitHD || IsCand2ImplicitHD))
@@ -11724,6 +11751,27 @@ void OverloadCandidateSet::CudaExcludeWrongSideCandidates(
   llvm::erase_if(Candidates, IsWrongSideCandidate);
 }
 
+namespace {
+/// Temporarily flips LangOptions::CUDAIsDevice so an HD-context caller's CUDA
+/// overload preference, which depends on the ambient side, can be evaluated
+/// again under the opposite side. This finds the pick for the target the
+/// shared Sema pass is not primary for. Sema's LangOpts reference is only
+/// const to prevent accidental mutation, not because the underlying object is
+/// immutable.
+class SemaCUDAAmbientFlip {
+  LangOptions &LangOpts;
+  bool SavedCUDAIsDevice;
+
+public:
+  explicit SemaCUDAAmbientFlip(Sema &S)
+      : LangOpts(const_cast<LangOptions &>(S.getLangOpts())),
+        SavedCUDAIsDevice(LangOpts.CUDAIsDevice) {
+    LangOpts.CUDAIsDevice = !SavedCUDAIsDevice;
+  }
+  ~SemaCUDAAmbientFlip() { LangOpts.CUDAIsDevice = SavedCUDAIsDevice; }
+};
+} // namespace
+
 /// Computes the best viable function (C++ 13.3.3)
 /// within an overload candidate set.
 ///
@@ -11819,6 +11867,51 @@ OverloadingResult OverloadCandidateSet::BestViableFunctionImpl(
     return OR_Ambiguous;
 
   OverloadingResult R = ResultForBestCandidate(Best);
+
+  // An HD-context caller's pick above may depend on the ambient CUDAIsDevice
+  // value. The single shared Sema pass fixes that ambient to one primary
+  // target for the whole compile, so the pick is only correct for the
+  // targets on that side. Also resolve what the opposite ambient would pick,
+  // so code generation can choose per target variant. This covers ordinary
+  // (non-member) calls only. Member, operator and address-of paths are not
+  // handled.
+  if (R == OR_Success && S.getLangOpts().CUDA &&
+      S.getASTContext().hasMultiTarget() && Best->Function &&
+      !S.MultiTarget().BuildingCUDAAlternateCall) {
+    if (FunctionDecl *Caller = S.getCurFunctionDecl(/*AllowLambda=*/true)) {
+      auto CallerTgt = S.CUDA().IdentifyTarget(Caller);
+      if (CallerTgt == CUDAFunctionTarget::HostDevice) {
+        llvm::SmallVector<OverloadCandidate *, 16> AltCandidates;
+        AltCandidates.reserve(this->Candidates.size());
+        std::transform(this->Candidates.begin(), this->Candidates.end(),
+                       std::back_inserter(AltCandidates),
+                       [](OverloadCandidate &Cand) { return &Cand; });
+        OverloadCandidate *AltBest = nullptr;
+        {
+          SemaCUDAAmbientFlip Flip(S);
+          CudaExcludeWrongSideCandidates(S, AltCandidates);
+          for (auto *Cand : AltCandidates) {
+            if (Cand->Viable &&
+                (!AltBest ||
+                 isBetterOverloadCandidate(S, *Cand, *AltBest, Loc, Kind)))
+              AltBest = Cand;
+          }
+        }
+        if (AltBest && AltBest->Function &&
+            AltBest->Function != Best->Function) {
+          S.MultiTarget().PendingCUDAAmbientDependentPick =
+              SemaMultiTarget::CUDAAmbientDependentPick{
+                  Best->Function, AltBest->Function, AltBest->FoundDecl};
+          if (LLVM_UNLIKELY(S.MultiTarget().TargetInputs))
+            S.MultiTarget().recordTargetInput(
+                'R',
+                S.Context.getMultiTarget().reconcileTargetPartition(
+                    0, MultiTargetContext::TDK_Side),
+                Best->Function->getQualifiedNameAsString());
+        }
+      }
+    }
+  }
 
   if (!EquivalentCands.empty())
     S.diagnoseEquivalentInternalLinkageDeclarations(Loc, Best->Function,
@@ -15120,10 +15213,79 @@ static ExprResult FinishOverloadedCallExpr(Sema &SemaRef, Scope *S, Expr *Fn,
         SemaRef.FixOverloadedFunctionReference(Fn, (*Best)->FoundDecl, FDecl);
     if (Res.isInvalid())
       return ExprError();
-    return SemaRef.BuildResolvedCallExpr(
+    ExprResult Result = SemaRef.BuildResolvedCallExpr(
         Res.get(), FDecl, LParenLoc, Args, RParenLoc, ExecConfig,
         /*IsExecConfig=*/false,
         static_cast<CallExpr::ADLCallKind>((*Best)->IsADLCandidate));
+    if (Result.isInvalid())
+      return Result;
+
+    // Take the pending ambient-dependent pick, if any. The opposite ambient's
+    // candidate may have an unrelated signature (e.g. `int max(int,int)` vs
+    // `float max(float,float)`), so it needs a whole second CallExpr that
+    // converts the same raw Args independently, not just an alternate callee
+    // grafted onto this call's arguments. The pair is keyed by the primary
+    // CallExpr so code generation can substitute the whole node for the
+    // target variant it is compiling. The primary ambient may be host or
+    // device.
+    std::optional<SemaMultiTarget::CUDAAmbientDependentPick> Pick;
+    if (SemaRef.MultiTarget().PendingCUDAAmbientDependentPick &&
+        SemaRef.MultiTarget().PendingCUDAAmbientDependentPick->Primary ==
+            FDecl) {
+      Pick = *SemaRef.MultiTarget().PendingCUDAAmbientDependentPick;
+      SemaRef.MultiTarget().PendingCUDAAmbientDependentPick.reset();
+    }
+    auto *PrimaryCE = dyn_cast<CallExpr>(Result.get());
+    if (!PrimaryCE || !SemaRef.getLangOpts().CUDA ||
+        !SemaRef.Context.hasMultiTarget() ||
+        SemaRef.MultiTarget().BuildingCUDAAlternateCall)
+      return Result;
+    bool PrimaryIsDevice = SemaRef.getLangOpts().CUDAIsDevice;
+    // An argument that is itself such a call has the other side's call, and
+    // possibly another type, there. The other side's call is then resolved
+    // anew from those arguments (e.g. `max(max(x, y), z)`, where the host
+    // picks max(int, int) twice and the device max(float, float) twice).
+    SmallVector<Expr *, 8> AltArgs(Args.begin(), Args.end());
+    bool AltArgsDiffer = false;
+    for (Expr *&Arg : AltArgs)
+      if (const auto *ArgCE = dyn_cast<CallExpr>(Arg->IgnoreParens()))
+        if (const auto *Dual =
+                SemaRef.Context.getMultiTarget().getCUDADualSideCall(ArgCE)) {
+          Arg = const_cast<CallExpr *>(PrimaryIsDevice ? Dual->HostCall
+                                                       : Dual->DeviceCall);
+          AltArgsDiffer = true;
+        }
+    if (!Pick && !AltArgsDiffer)
+      return Result;
+    ExprResult AltCall;
+    {
+      SemaCUDAAmbientFlip Flip(SemaRef);
+      if (AltArgsDiffer) {
+        llvm::SaveAndRestore Guard(
+            SemaRef.MultiTarget().BuildingCUDAAlternateCall, true);
+        Sema::TentativeAnalysisScope Trap(SemaRef);
+        AltCall = SemaRef.BuildOverloadedCallExpr(
+            S, Fn, ULE, LParenLoc, AltArgs, RParenLoc, ExecConfig,
+            /*AllowTypoCorrection=*/false);
+      } else {
+        ExprResult AltFn = SemaRef.FixOverloadedFunctionReference(
+            Fn, Pick->AlternateFound,
+            const_cast<FunctionDecl *>(Pick->Alternate));
+        if (!AltFn.isInvalid())
+          AltCall = SemaRef.BuildResolvedCallExpr(
+              AltFn.get(), const_cast<FunctionDecl *>(Pick->Alternate),
+              LParenLoc, Args, RParenLoc, ExecConfig,
+              /*IsExecConfig=*/false,
+              static_cast<CallExpr::ADLCallKind>((*Best)->IsADLCandidate));
+      }
+    }
+    if (auto *AltCE =
+            AltCall.isInvalid() ? nullptr : dyn_cast<CallExpr>(AltCall.get()))
+      SemaRef.Context.getMultiTarget().setCUDADualSideCall(
+          PrimaryCE,
+          /*HostCall=*/PrimaryIsDevice ? AltCE : PrimaryCE,
+          /*DeviceCall=*/PrimaryIsDevice ? PrimaryCE : AltCE);
+    return Result;
   }
 
   case OR_No_Viable_Function: {

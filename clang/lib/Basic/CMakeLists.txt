@@ -74,6 +74,7 @@ add_clang_library(clangBasic
   LangOptions.cpp
   LangStandards.cpp
   MakeSupport.cpp
+  MultiTargetDebugOptions.cpp
   Module.cpp
   ObjCRuntime.cpp
   OffloadArch.cpp

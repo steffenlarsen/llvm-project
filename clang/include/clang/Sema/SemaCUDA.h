@@ -101,6 +101,10 @@ public:
   ///  // Otherwise, continue parsing as normal.
   SemaDiagnosticBuilder DiagIfDeviceCode(SourceLocation Loc, unsigned DiagID);
 
+  /// Whether code analysed now is analysed for devices too, by a host-primary
+  /// multi-target compilation outside the host's own code and view.
+  bool isAnalysedForAuxDevices() const;
+
   /// Creates a SemaDiagnosticBuilder that emits the diagnostic if the current
   /// context is "used as host code".
   ///

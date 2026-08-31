@@ -39,6 +39,7 @@
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/PointerUnion.h"
+#include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -83,6 +84,7 @@ template <> struct DenseMapInfo<ScalableVecTyKey> {
 } // namespace llvm
 
 namespace clang {
+class TargetDivergence;
 
 class APValue;
 class ASTMutationListener;
@@ -97,6 +99,7 @@ class CXXABI;
 class CXXConstructorDecl;
 class CXXMethodDecl;
 class CXXRecordDecl;
+class ClassTemplateSpecializationDecl;
 class DiagnosticsEngine;
 class DynTypedNodeList;
 class Expr;
@@ -107,6 +110,7 @@ class IdentifierTable;
 class LangOptions;
 class MangleContext;
 class MangleNumberingContext;
+class MultiTargetContext;
 class MemberSpecializationInfo;
 class Module;
 struct MSGuidDeclParts;
@@ -243,6 +247,7 @@ struct QualTypeBoolInfo {
 /// Holds long-lived AST nodes (such as types and decls) that can be
 /// referred to throughout the semantic analysis of a file.
 class ASTContext : public RefCountedBase<ASTContext> {
+  friend class MultiTargetContext;
   friend class NestedNameSpecifier;
 
   mutable SmallVector<Type *, 0> Types;
@@ -840,7 +845,78 @@ private:
   mutable bool AnyFunctionEffects = false;
 
   const TargetInfo *Target = nullptr;
-  const TargetInfo *AuxTarget = nullptr;
+
+  /// Aux targets, indexed by `Variant - 2`. Code that needs a single aux
+  /// target uses the first.
+  llvm::SmallVector<const TargetInfo *, 4> AuxTargets;
+
+  /// The state of a compilation for several targets at once.
+  std::unique_ptr<MultiTargetContext> MultiTarget;
+
+  /// The target variant 1 names, captured before any TargetScope can run.
+  /// A TargetScope replaces `Target` while it lives, so inside an aux scope
+  /// `Target` names the ambient target rather than variant 1's. Re-entering
+  /// variant 1 from inside an aux scope must use this one, or it would leave
+  /// the aux target in effect.
+  const TargetInfo *PrimaryTarget = nullptr;
+
+  /// Set where the aux targets are the compilation's other targets, as
+  /// opposed to the other side of a single-target CUDA compile.
+  bool MultiTargetCompile = false;
+  /// The primary's language mode, fixed for the whole compilation.
+  bool MultiTargetPrimaryIsDevice = false;
+
+  /// Which target the frontend is currently reasoning about. 0 means "the
+  /// only target", which is every single-target compilation.
+  unsigned CurrentTargetVariant = 0;
+
+  /// Set only when more than one target is configured *and* something
+  /// actually differs between them. Guards every multi-target path so
+  /// ordinary single-target compilation only pays for one
+  /// predicted-not-taken branch.
+  bool HasTargetDivergence = false;
+  /// Whether instantiation and the translation unit enter target scopes of
+  /// their own (-multi-target-scopes). Without them, code analysed with no
+  /// target in scope is the primary's.
+  bool TargetScopesEnabled = false;
+  unsigned getLayoutVariant() const {
+    return CurrentTargetVariant ? CurrentTargetVariant : 1;
+  }
+
+  /// What differs between the configured targets. Null unless multi-target.
+  std::unique_ptr<TargetDivergence> Divergence;
+
+  /// Type layouts for targets other than variant 0. Only ever populated for
+  /// the few types TargetDivergence proves can differ.
+  mutable llvm::DenseMap<std::pair<const Type *, unsigned>, struct TypeInfo>
+      DivergentTypeInfo;
+
+  /// Record layouts for targets other than variant 0, on the same terms.
+  mutable llvm::DenseMap<std::pair<const RecordDecl *, unsigned>,
+                         const ASTRecordLayout *>
+      DivergentRecordLayouts;
+
+  /// Cache accessors for record layouts. The common single-target case takes
+  /// the fast branch below.
+  const ASTRecordLayout *lookupRecordLayout(const RecordDecl *D) const {
+    if (LLVM_LIKELY(!HasTargetDivergence))
+      return ASTRecordLayouts.lookup(D);
+    return lookupRecordLayoutForVariant(D);
+  }
+  void storeRecordLayout(const RecordDecl *D, const ASTRecordLayout *L) const {
+    if (LLVM_LIKELY(!HasTargetDivergence)) {
+      ASTRecordLayouts[D] = L;
+      return;
+    }
+    storeRecordLayoutForVariant(D, L);
+  }
+  const ASTRecordLayout *
+  lookupRecordLayoutForVariant(const RecordDecl *D) const;
+  void storeRecordLayoutForVariant(const RecordDecl *D,
+                                   const ASTRecordLayout *L) const;
+
+  /// The multi-target type info path, out of line to keep the hot path fast.
+  TypeInfo getTypeInfoForVariant(const Type *T) const;
   clang::PrintingPolicy PrintingPolicy;
   mutable std::unique_ptr<interp::Context> InterpContext;
   std::unique_ptr<ParentMapContext> ParentMapCtx;
@@ -969,7 +1045,185 @@ public:
   }
 
   const TargetInfo &getTargetInfo() const { return *Target; }
-  const TargetInfo *getAuxTargetInfo() const { return AuxTarget; }
+
+  /// The target variant currently in scope. Declarations carry a matching
+  /// index, and 0 means "applies to every target".
+  /// Single-target compilation never leaves 0.
+  unsigned getCurrentTargetVariant() const { return CurrentTargetVariant; }
+
+  /// The variant of the target in scope for target queries, or 0 in a
+  /// compilation for one target. Unlike the current variant, this is the
+  /// primary's where no target is in scope, and a scope that sets only the
+  /// variant leaves it alone.
+  unsigned getTargetInfoVariant() const {
+    if (!MultiTargetCompile)
+      return 0;
+    if (Target == PrimaryTarget)
+      return 1;
+    for (unsigned I = 0, E = AuxTargets.size(); I != E; ++I)
+      if (AuxTargets[I] == Target)
+        return I + 2;
+    return 0;
+  }
+
+  /// Install the divergence analysis for a multi-target compilation. Until
+  /// this is called nothing multi-target is reachable.
+  LLVM_ABI void setTargetDivergence(std::unique_ptr<TargetDivergence> D);
+  const TargetDivergence *getTargetDivergence() const {
+    return Divergence.get();
+  }
+
+  /// Whether the configured targets are known to disagree about something,
+  /// with target scopes enabled. False for every ordinary compilation, and
+  /// the guard callers use to keep multi-target work off the shared path.
+  bool hasTargetDivergence() const {
+    return HasTargetDivergence && TargetScopesEnabled;
+  }
+
+  /// The TargetInfo a variant index names. 1 is the target being compiled
+  /// for, and 2..N+1 are the N aux (device-arch) targets. 0 means "no target
+  /// in scope" and has none.
+  const TargetInfo *getTargetForVariant(unsigned Variant) const {
+    if (Variant == 1)
+      return PrimaryTarget;
+    if (Variant >= 2 && Variant - 2 < AuxTargets.size())
+      return AuxTargets[Variant - 2];
+    return nullptr;
+  }
+
+  /// How many aux (device-arch) targets are configured, i.e. how many of
+  /// variants 2..N+1 are valid. This includes the implicit aux target of the
+  /// other side of a CUDA, OpenMP or SYCL compile, so code that needs one
+  /// thing per aux target counts them with this rather than with the list of
+  /// targets the compilation was configured with.
+  unsigned getNumAuxTargets() const { return AuxTargets.size(); }
+
+  /// Every target variant, i.e. the primary's, 1, and each aux target's.
+  llvm::iota_range<unsigned> getTargetVariants() const {
+    return llvm::seq_inclusive(1u, 1 + getNumAuxTargets());
+  }
+  /// Every device target's variant.
+  auto getDeviceVariants() const {
+    return llvm::make_filter_range(
+        getTargetVariants(), [this](unsigned V) { return isDeviceVariant(V); });
+  }
+
+  /// A representative "device-like" variant to force a deferred device-only
+  /// instantiation's *lookup* ambient onto, independent of which physical
+  /// role (primary or aux) owns the device target in this compilation.
+  /// Callers that need "device vs host" for name-lookup purposes only (never
+  /// a specific device arch) should use this instead of a bare literal, since
+  /// which variant index names the device target is a per-compilation
+  /// choice.
+  unsigned getCanonicalDeviceVariant() const {
+    return MultiTargetCompile && MultiTargetPrimaryIsDevice ? 1 : 2;
+  }
+
+  /// Mark the aux targets as the compilation's other targets. The current
+  /// language options are the primary's.
+  LLVM_ABI void setMultiTargetCompile();
+
+  /// The state of a compilation for several targets at once. Every context
+  /// made while one runs in the process has one.
+  MultiTargetContext &getMultiTarget() const {
+    assert(MultiTarget && "not a compilation for several targets");
+    return *MultiTarget;
+  }
+  bool hasMultiTarget() const { return MultiTarget != nullptr; }
+
+  /// The host's variant in a compilation for several targets, or 0 if none
+  /// of its targets is the host.
+  unsigned getHostVariant() const {
+    return MultiTargetCompile && !MultiTargetPrimaryIsDevice ? 1 : 0;
+  }
+  bool isDeviceVariant(unsigned Variant) const {
+    return Variant && Variant != getHostVariant();
+  }
+  /// The targets of \p Targets that are devices.
+  TargetSet getDevices(TargetSet Targets) const {
+    return Targets.without(getHostVariant());
+  }
+  /// The target code for \p Targets is analysed for. Device code is analysed
+  /// for a device, so a device if there is one.
+  unsigned getAnalysisTarget(TargetSet Targets) const {
+    TargetSet Devices = getDevices(Targets);
+    return Devices.empty() ? Targets.first() : Devices.first();
+  }
+  unsigned getNumDeviceTargets() const {
+    return 1 + getNumAuxTargets() - (getHostVariant() ? 1 : 0);
+  }
+  /// Whether \p D is a copy for some device target.
+  bool isCopyForDevice(const Decl *D) const;
+
+  /// Scopes the target that target-dependent queries answer for. A combined
+  /// multi-target frontend switches between targets while walking one AST,
+  /// and target-dependent queries answer for the target in scope rather than
+  /// a fixed one.
+  ///
+  /// Entered only in multi-target mode, so single-target compilation is
+  /// bit-for-bit unaffected.
+  class TargetScope {
+    ASTContext &Ctx;
+    const TargetInfo *SavedTarget;
+    unsigned SavedVariant;
+
+  public:
+    TargetScope(ASTContext &Ctx, const TargetInfo &T, unsigned Variant)
+        : Ctx(Ctx), SavedTarget(Ctx.Target),
+          SavedVariant(Ctx.CurrentTargetVariant) {
+      Ctx.Target = &T;
+      Ctx.CurrentTargetVariant = Variant;
+    }
+
+    /// Enter the scope of \p Variant. A variant that names no target, 0 or
+    /// an aux variant with no aux target configured, leaves the ambient
+    /// target alone, which is what a declaration marked "applies to every
+    /// target" wants.
+    ///
+    /// This deliberately does not swap `LangOptions::CUDAIsDevice`. That flag
+    /// decides what counts as a constant expression, and per-target
+    /// instantiation needs the compilation's own device-ness to decide what
+    /// to emit regardless of which variant's names are currently in scope.
+    TargetScope(ASTContext &Ctx, unsigned Variant)
+        : Ctx(Ctx), SavedTarget(Ctx.Target),
+          SavedVariant(Ctx.CurrentTargetVariant) {
+      if (const TargetInfo *T = Ctx.getTargetForVariant(Variant)) {
+        Ctx.Target = T;
+        Ctx.CurrentTargetVariant = Variant;
+      }
+    }
+
+    /// Tag selecting the variant-only overload below.
+    struct VariantOnlyTag {};
+    static constexpr VariantOnlyTag VariantOnly{};
+
+    /// Like the two-argument constructor above, but leaves the TargetInfo
+    /// answering for whatever target the compilation is actually emitting.
+    /// Only visibility filtering by target variant sees \p Variant. A deferred
+    /// instantiation queued while the ambient variant was \p Variant needs it
+    /// restored so nested name lookup resolves against the same overload set
+    /// it would have at the point of reference. Swapping the TargetInfo too
+    /// would claim that the entity itself belongs to that target, which does
+    /// not follow. E.g. a plain template can be referenced from code tagged
+    /// with variant 2 while its own body must still be evaluated against
+    /// whichever target is actually being compiled.
+    TargetScope(ASTContext &Ctx, unsigned Variant, VariantOnlyTag)
+        : Ctx(Ctx), SavedTarget(Ctx.Target),
+          SavedVariant(Ctx.CurrentTargetVariant) {
+      Ctx.CurrentTargetVariant = Variant;
+    }
+    ~TargetScope() {
+      Ctx.Target = SavedTarget;
+      Ctx.CurrentTargetVariant = SavedVariant;
+    }
+    TargetScope(const TargetScope &) = delete;
+    TargetScope &operator=(const TargetScope &) = delete;
+  };
+  /// The first configured aux target, or null if none, for code that only
+  /// needs a single aux target.
+  const TargetInfo *getAuxTargetInfo() const {
+    return AuxTargets.empty() ? nullptr : AuxTargets[0];
+  }
 
   const QualType GetHigherPrecisionFPType(QualType ElementType) const {
     const auto *CurrentBT = cast<BuiltinType>(ElementType);
@@ -1195,6 +1449,9 @@ public:
   /// Allocate an empty attribute vector with the lifetime of this context.
   AttrVec *allocateAttrVec();
 
+  /// Whether this compiles for several targets from one AST, in the primary's
+  /// language mode. Device code generation of a host-primary compile is not.
+  LLVM_ABI bool isMultiTargetCompile() const;
   ArrayRef<CXXDefaultArgExpr *>
   getCtorClosureDefaultArgs(const CXXConstructorDecl *CD);
   void setCtorClosureDefaultArgs(const CXXConstructorDecl *CD,
@@ -3711,6 +3968,11 @@ public:
   /// Retrieve the context for computing mangling numbers in the given
   /// DeclContext.
   MangleNumberingContext &getManglingNumberContext(const DeclContext *DC);
+  /// Replaces the context for computing mangling numbers in \p DC with
+  /// \p MCtx, a fresh one if null, and returns the one it had.
+  std::unique_ptr<MangleNumberingContext>
+  exchangeManglingNumberContext(const DeclContext *DC,
+                                std::unique_ptr<MangleNumberingContext> MCtx);
   enum NeedExtraManglingDecl_t { NeedExtraManglingDecl };
   MangleNumberingContext &getManglingNumberContext(NeedExtraManglingDecl_t,
                                                    const Decl *D);
@@ -3830,6 +4092,11 @@ public:
   /// \param Target The target
   void InitBuiltinTypes(const TargetInfo &Target,
                         const TargetInfo *AuxTarget = nullptr);
+
+  /// Like the overload above, but takes every aux (device-arch) target at
+  /// once instead of at most one.
+  void InitBuiltinTypes(const TargetInfo &Target,
+                        ArrayRef<const TargetInfo *> AuxTargets);
 
 private:
   void InitBuiltinType(CanQualType &R, BuiltinType::Kind K);

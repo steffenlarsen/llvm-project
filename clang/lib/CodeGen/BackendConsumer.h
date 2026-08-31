@@ -14,12 +14,15 @@
 #include "clang/CodeGen/ModuleLinker.h"
 #include "clang/CodeGenUtils/BackendDiagnosticHandler.h"
 
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/Support/Timer.h"
 
 namespace clang {
 class ASTContext;
 class CodeGenAction;
+class CompilerInvocation;
 class CoverageSourceInfo;
+class TargetInfo;
 
 class BackendConsumer : public ASTConsumer {
   virtual void anchor();
@@ -41,12 +44,97 @@ class BackendConsumer : public ASTConsumer {
 
   std::unique_ptr<CodeGenerator> Gen;
 
+public:
+  /// One entry per configured aux (device-arch) target. Each entry drives
+  /// its own CodeGenModule over the same shared AST as Gen, selecting its own
+  /// Decl::TargetVariant. An entry with an output links its own bitcode
+  /// libraries and runs its own backend.
+  struct AuxGenEntry {
+    /// This entry's Decl::TargetVariant (2..N+1).
+    unsigned Variant;
+    std::unique_ptr<CodeGenerator> Gen;
+    /// Set from -multi-target-aux-output=<variant>:<path>. Null unless that
+    /// flag configures this variant, and without it this entry's module is
+    /// produced and discarded rather than written out.
+    std::unique_ptr<raw_pwrite_stream> AsmOutStream;
+    std::string OutputPath;
+    const TargetInfo *TI = nullptr;
+    /// What the entry is packaged as, its processor and target features.
+    std::string TargetID;
+    /// This entry's own -mlink-builtin-bitcode modules, from Invocation's
+    /// LinkBitcodeFiles rather than the primary's, as each arch links its own
+    /// arch-specific set.
+    SmallVector<LinkModule, 4> LinkModules;
+    /// This entry's own backend action, always bitcode. A device-arch cc1
+    /// job in the HIP pipeline only emits bitcode, and per-arch ISA is
+    /// generated later by clang-linker-wrapper.
+    BackendAction Action = Backend_EmitBC;
+    /// This entry's own options, from -multi-target-aux-invocation, or
+    /// synthesized from the primary's when there is none. Gen reads its
+    /// CodeGenOptions, HeaderSearchOptions and PreprocessorOptions directly.
+    std::shared_ptr<CompilerInvocation> Invocation;
+    /// The LangOptions fields, by LangOptionField, that may differ per target
+    /// and that Invocation sets differently from the primary. CodeGenModule
+    /// reads the ASTContext's shared LangOptions, so these are swapped in
+    /// around every call into Gen.
+    struct LangOptValue {
+      unsigned Field;
+      unsigned Value;
+    };
+    SmallVector<LangOptValue, 8> LangOptDiffs;
+  };
+
+private:
+  SmallVector<AuxGenEntry, 4> AuxGens;
+  std::string InFile;
+  CoverageSourceInfo *CoverageInfo;
+
   SmallVector<LinkModule, 4> LinkModules;
 
   // Translates LLVM backend diagnostics into clang diagnostics; shared with
   // CIR so that both LLVM-emitting pipelines report backend diagnostics
   // through the same mechanism.
   BackendDiagnosticConsumer DiagConsumer;
+
+  /// Marks the primary target's code generation for as long as it lives, so
+  /// what it diagnoses is reported for that target.
+  class PrimaryCodeGenScope {
+    bool *Generating = nullptr;
+    bool Saved = false;
+    void enter(ASTContext &Ctx);
+
+  public:
+    explicit PrimaryCodeGenScope(BackendConsumer &BC) {
+      if (LLVM_UNLIKELY(!BC.AuxGens.empty()) && BC.Context)
+        enter(*BC.Context);
+    }
+    ~PrimaryCodeGenScope() {
+      if (Generating)
+        *Generating = Saved;
+    }
+  };
+
+  /// Run \p Fn against every entry in AuxGens, each under its own target
+  /// scope.
+  void dispatchToAuxGens(llvm::function_ref<void(CodeGenerator &)> Fn) {
+    if (LLVM_UNLIKELY(!AuxGens.empty()))
+      dispatchToAuxGensImpl(Fn);
+  }
+  void dispatchToAuxGensImpl(llvm::function_ref<void(CodeGenerator &)> Fn);
+
+  /// Creates a CodeGenModule for each aux target, from its own invocation.
+  void initializeAuxGens(ASTContext &Ctx);
+
+  /// Runs each aux target's backend and packages their bitcode.
+  void finishAuxGens();
+
+  /// Whether the host generates code only after the aux targets' package
+  /// exists, which it embeds.
+  bool reorderForPackaging() const;
+
+  /// Writes each CodeGenModule's IR for comparison against separate
+  /// single-target compiles, if asked to.
+  void dumpModulesForDiff();
 
 public:
   BackendConsumer(CompilerInstance &CI, BackendAction Action,
@@ -74,11 +162,31 @@ public:
   void AssignInheritanceModel(CXXRecordDecl *RD) override;
   void HandleVTable(CXXRecordDecl *RD) override;
 
-  // Links each entry in LinkModules into our module.  Returns true on error.
+  // Links this consumer's own LinkModules (set at construction from
+  // -mlink-builtin-bitcode/-mlink-bitcode-file) into \p M. Returns true on
+  // error.
   bool LinkInModules(llvm::Module *M);
   /// Create an llvm::DiagnosticHandler that routes LLVM backend diagnostics
   /// through this consumer's clang diagnostics.
   std::unique_ptr<llvm::DiagnosticHandler> createDiagnosticHandler();
+
+  // Links each entry in \p ModulesToLink into \p M, clearing it. Returns
+  // true on error. Attributes are propagated from this consumer's own
+  // (host-bound) CodeGenOpts and TargetOpts unless others are passed. Aux
+  // entries pass their own, so a linked-in bitcode library's functions get
+  // that entry's own target-cpu, target-features and function defaults
+  // rather than the host's.
+  bool LinkInModules(llvm::Module *M,
+                     SmallVectorImpl<LinkModule> &ModulesToLink);
+  bool LinkInModules(llvm::Module *M,
+                     SmallVectorImpl<LinkModule> &ModulesToLink,
+                     const CodeGenOptions &MergeCodeGenOpts,
+                     const TargetOptions &MergeTargetOpts);
+
+  // Run exactly one AuxGenEntry's own backend tail (link its own
+  // bitcode-file set, embed-bitcode no-op, emit its own bitcode output).
+  // A no-op if this entry has no configured output.
+  void runAuxBackendTail(AuxGenEntry &Entry);
 };
 
 } // namespace clang

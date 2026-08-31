@@ -9,15 +9,22 @@
 //
 //===----------------------------------------------------------------------===/
 
+#include "SemaLookupTarget.h"
+#include "SemaMultiTargetInstantiate.h"
 #include "TreeTransform.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTMutationListener.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/DependentDiagnostic.h"
+#include "clang/AST/DynamicRecursiveASTVisitor.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/MangleNumberingContext.h"
+#include "clang/AST/MultiTargetContext.h"
 #include "clang/AST/PrettyDeclStackTrace.h"
+#include "clang/AST/TargetCopyMerge.h"
+#include "clang/AST/TargetDependence.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/TargetInfo.h"
@@ -28,6 +35,7 @@
 #include "clang/Sema/SemaAMDGPU.h"
 #include "clang/Sema/SemaCUDA.h"
 #include "clang/Sema/SemaHLSL.h"
+#include "clang/Sema/SemaMultiTarget.h"
 #include "clang/Sema/SemaObjC.h"
 #include "clang/Sema/SemaOpenMP.h"
 #include "clang/Sema/SemaSwift.h"
@@ -37,6 +45,7 @@
 #include <optional>
 
 using namespace clang;
+using namespace clang::multitarget;
 
 static bool isDeclWithinFunction(const Decl *D) {
   const DeclContext *DC = D->getDeclContext();
@@ -2954,6 +2963,24 @@ static QualType adjustFunctionTypeForInstantiation(ASTContext &Context,
                                  NewFunc->getParamTypes(), NewEPI);
 }
 
+/// The target key a new specialization of \p FTD gets, entering that target for
+/// the rest of its declaration, whose attributes and signature belong to it
+/// too.
+static unsigned
+enterSpecializationTargetKey(Sema &S, FunctionTemplateDecl *FTD,
+                             ArrayRef<TemplateArgument> Args,
+                             std::optional<ASTContext::TargetScope> &Scope) {
+  if (!LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    return 0;
+  unsigned Key =
+      S.Context.getMultiTarget().computeTargetInstantiationKey(FTD, Args);
+  if (!Key || FTD->hasTargetKeyedSpecializations())
+    return 0;
+  if (Key != std::max(S.Context.getCurrentTargetVariant(), 1u))
+    Scope.emplace(S.Context, Key);
+  return Key;
+}
+
 /// Normal class members are of more specific types and therefore
 /// don't make it here.  This function serves three purposes:
 ///   1) instantiating function templates
@@ -2995,6 +3022,13 @@ Decl *TemplateDeclInstantiator::VisitFunctionDecl(
     if (SpecFunc)
       return SpecFunc;
   }
+
+  std::optional<ASTContext::TargetScope> KeyTarget;
+  unsigned TargetKey =
+      FunctionTemplate && !TemplateParams
+          ? enterSpecializationTargetKey(SemaRef, FunctionTemplate,
+                                         TemplateArgs.getInnermost(), KeyTarget)
+          : 0;
 
   bool MergeWithParentScope = (TemplateParams != nullptr) ||
     Owner->isFunctionOrMethod() ||
@@ -3157,10 +3191,16 @@ Decl *TemplateDeclInstantiator::VisitFunctionDecl(
                  Sema::CodeSynthesisContext::BuildingDeductionGuides) {
     // Record this function template specialization.
     ArrayRef<TemplateArgument> Innermost = TemplateArgs.getInnermost();
+    if (TargetKey)
+      SemaRef.Context.getMultiTarget().setTargetInstantiationKey(Function,
+                                                                 TargetKey);
     Function->setFunctionTemplateSpecialization(
         FunctionTemplate,
         TemplateArgumentList::CreateCopy(SemaRef.Context, Innermost),
         /*InsertToken=*/{});
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+      SemaRef.MultiTarget().SpecializationDeclVariant[Function] =
+          std::max(SemaRef.Context.getCurrentTargetVariant(), 1u);
   } else if (isFriend && D->isThisDeclarationADefinition()) {
     // Do not connect the friend to the template unless it's actually a
     // definition. We don't want non-template functions to be marked as being
@@ -3368,6 +3408,13 @@ Decl *TemplateDeclInstantiator::VisitCXXMethodDecl(
       return SpecFunc;
   }
 
+  std::optional<ASTContext::TargetScope> KeyTarget;
+  unsigned TargetKey =
+      FunctionTemplate && !TemplateParams
+          ? enterSpecializationTargetKey(SemaRef, FunctionTemplate,
+                                         TemplateArgs.getInnermost(), KeyTarget)
+          : 0;
+
   bool isFriend;
   if (FunctionTemplate)
     isFriend = (FunctionTemplate->getFriendObjectKind() != Decl::FOK_None);
@@ -3565,10 +3612,16 @@ Decl *TemplateDeclInstantiator::VisitCXXMethodDecl(
   } else if (FunctionTemplate) {
     // Record this function template specialization.
     ArrayRef<TemplateArgument> Innermost = TemplateArgs.getInnermost();
+    if (TargetKey)
+      SemaRef.Context.getMultiTarget().setTargetInstantiationKey(Method,
+                                                                 TargetKey);
     Method->setFunctionTemplateSpecialization(
         FunctionTemplate,
         TemplateArgumentList::CreateCopy(SemaRef.Context, Innermost),
         /*InsertToken=*/{});
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+      SemaRef.MultiTarget().SpecializationDeclVariant[Method] =
+          std::max(SemaRef.Context.getCurrentTargetVariant(), 1u);
   } else if (!isFriend) {
     // Record that this is an instantiation of a member function.
     Method->setInstantiationOfMemberFunction(D, TSK_ImplicitInstantiation);
@@ -5864,20 +5917,31 @@ bool TemplateDeclInstantiator::SubstDefaultedFunction(FunctionDecl *New,
   return false;
 }
 
-FunctionDecl *Sema::InstantiateFunctionDeclaration(
-    FunctionTemplateDecl *FTD, const TemplateArgumentList *Args,
-    SourceLocation Loc, CodeSynthesisContext::SynthesisKind CSC) {
-  FunctionDecl *FD = FTD->getTemplatedDecl();
-
-  InstantiatingTemplate Inst(*this, Loc, FTD, Args->asArray(), CSC);
-  if (Inst.isInvalid())
-    return nullptr;
-
-  ContextRAII SavedContext(*this, FD);
-  MultiLevelTemplateArgumentList MArgs(FTD, Args->asArray(),
-                                       /*Final=*/false);
-
-  return cast_or_null<FunctionDecl>(SubstDecl(FD, FD->getParent(), MArgs));
+/// A redundant-tagged FunctionTemplateDecl or VarTemplateDecl can still gain
+/// new specializations after it was tagged, e.g. from a re-parsed caller
+/// deducing at the end of the translation unit. Merging equivalent variants
+/// reconciles only the specializations that exist when it runs. This covers
+/// later ones lazily, at the point each would be tagged with a real, colliding
+/// target. If the surviving, non-redundant sibling template already has an
+/// equivalent specialization for these concrete template arguments, this
+/// specialization is just as redundant and must not get a real target tag.
+template <typename TemplateDeclT>
+static bool
+hasEquivalentSpecializationInSurvivingSibling(TemplateDeclT *TD,
+                                              ArrayRef<TemplateArgument> Args) {
+  for (NamedDecl *ND : TD->getDeclContext()->lookup(TD->getDeclName())) {
+    auto *Sibling = dyn_cast<TemplateDeclT>(ND->getUnderlyingDecl());
+    if (!Sibling || Sibling == TD || Sibling->isRedundantTargetVariant())
+      continue;
+    // An overload of the same name is not a copy.
+    if (isa<FunctionTemplateDecl>(TD) &&
+        Sibling->getLocation() != TD->getLocation())
+      continue;
+    llvm::FoldingSetInsertToken InsertToken;
+    if (Sibling->findSpecialization(Args, InsertToken))
+      return true;
+  }
+  return false;
 }
 
 void Sema::InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
@@ -5924,11 +5988,48 @@ void Sema::InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
   // Find the function body that we'll be substituting.
   const FunctionDecl *PatternDecl = Function->getTemplateInstantiationPattern();
   assert(PatternDecl && "instantiating a non-template");
-
-  const FunctionDecl *PatternDef = PatternDecl->getDefinition();
+  // A template declared once and defined per target is instantiated from the
+  // definition of the target this is for, and from the others' for theirs.
+  bool PerTargetDefinitions = false;
+  const FunctionDecl *PatternDef = nullptr;
+  unsigned PatternTarget = 0;
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+    PatternDecl = getTargetPattern(*this, Function, PatternDecl);
+    if (Context.isMultiTargetCompile()) {
+      const FunctionDecl *Any = PatternDecl->getDefinition();
+      unsigned Target;
+      {
+        ContextRAII InFunction(*this, Function);
+        Target = MultiTarget().getInstantiationTarget();
+      }
+      PatternTarget = Target;
+      PatternDef = getDefinitionForTarget(PatternDecl, Target);
+      if (const FunctionTemplateDecl *FTD =
+              PatternDecl->getDescribedFunctionTemplate())
+        PerTargetDefinitions = llvm::any_of(
+            FTD->redecls(), [&](const RedeclarableTemplateDecl *R) {
+              const FunctionDecl *Def =
+                  cast<FunctionTemplateDecl>(R)->getTemplatedDecl();
+              return Def->doesThisDeclarationHaveABody() && Def != PatternDef &&
+                     R->getTargetVariant() && !R->isRedundantTargetVariant();
+            });
+      if (!PatternDef)
+        PatternDef = Any;
+      // So does a definition whose body was parsed again for some targets.
+      if (PatternDef &&
+          !Context.getMultiTarget().getTargetBodies(PatternDef).empty())
+        PerTargetDefinitions = true;
+    }
+  }
+  if (!PatternDef)
+    PatternDef = PatternDecl->getDefinition();
   Stmt *Pattern = nullptr;
   if (PatternDef) {
     Pattern = PatternDef->getBody(PatternDef);
+    if (PatternTarget && PerTargetDefinitions)
+      if (Stmt *TargetBody = Context.getMultiTarget().getBodyForTarget(
+              PatternDef, PatternTarget))
+        Pattern = TargetBody;
     PatternDecl = PatternDef;
     if (PatternDef->willHaveBody())
       PatternDef = nullptr;
@@ -5991,6 +6092,199 @@ void Sema::InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
     LateParsedInstantiations.push_back(
         std::make_pair(Function, PointOfInstantiation));
     return;
+  }
+
+  // A specialization keyed by target belongs to that target, except that the
+  // canonical device's stands in for every target without one.
+  unsigned TargetKey =
+      LLVM_UNLIKELY(clang::AllowTargetVariantDecls)
+          ? Context.getMultiTarget().getEffectiveTargetInstantiationKey(
+                Function->getCanonicalDecl())
+          : 0;
+  if (TargetKey && !Function->getTargetVariant()) {
+    if (std::optional<TargetSet> Recorded =
+            Context.getMultiTarget().getRecordedSpecializationTargets(Function))
+      Function->setTargetSet(*Recorded);
+    else if (TargetKey != Context.getCanonicalDeviceVariant())
+      // A member of a class specialization standing for several targets is
+      // theirs.
+      Function->setTargetSet(
+          Context.getMultiTarget().getMemberInstantiationTargets(Function,
+                                                                 TargetKey));
+  }
+
+  // An entity instantiated while analysing one target belongs to that target.
+  // Instantiations are created by Sema, not parsed, so the parser's marking
+  // never sees them, and an implicitly instantiated specialization must be
+  // tagged explicitly or it is otherwise visible to every target.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && !TargetKey &&
+      !Function->getTargetVariant()) {
+    // Pending instantiations run at the end of the translation unit, outside
+    // any target scope, so the ambient variant there is 0 ("every target"),
+    // which would make both arms' instantiations visible to both.
+    unsigned V = Context.getCurrentTargetVariant();
+    // Prefer recorded provenance over the ambient variant. For a __device__
+    // or __global__ callee the ambient may have been forced to 1 so its body
+    // compiles under the correct device TargetInfo, but the tag still needs
+    // to reflect which re-parsed copy queued it. Otherwise code generation
+    // cannot recognize a redundant instantiation as such.
+    auto PIt =
+        MultiTarget().PendingInstantiationProvenanceVariant.find(Function);
+    if (PIt != MultiTarget().PendingInstantiationProvenanceVariant.end()) {
+      V = PIt->second;
+    } else {
+      // Without recorded provenance the instantiation was never queued, as
+      // for a constexpr function instantiated eagerly. The ambient variant
+      // may still be one an enclosing device-only instantiation forced only
+      // so its own body compiles under the right TargetInfo, which is no
+      // evidence that this function is itself target-exclusive. Treat it as
+      // shared when its innermost enclosing template instantiation is shared,
+      // as for a queued instantiation, so a constexpr helper called from
+      // shared code is not hidden from every non-canonical device target.
+      for (const CodeSynthesisContext &SC :
+           llvm::reverse(CodeSynthesisContexts)) {
+        if (SC.Kind != CodeSynthesisContext::TemplateInstantiation)
+          continue;
+        if (const auto *EnclosingFn =
+                dyn_cast_or_null<FunctionDecl>(SC.Entity)) {
+          if (EnclosingFn->getTargetVariant() == 0)
+            V = 0;
+        }
+        break;
+      }
+    }
+    // A pattern tagged TargetVariantRedundant is a marked duplicate, not a
+    // real target identity. Inheriting it would hide this instantiation from
+    // lookup for every target, not just the duplicate's own.
+    const Decl *TaggedPattern = nullptr;
+    const FunctionTemplateDecl *PatternTemplate =
+        Function->getPrimaryTemplate();
+    if (PatternTemplate && PatternTemplate->isChainedTargetCopy()) {
+      V = 0;
+    } else if (const Decl *P = Function->getTemplateInstantiationPattern()) {
+      if (unsigned PV = P->getTargetVariant()) {
+        if (!P->isRedundantTargetVariant()) {
+          V = PV;
+          TaggedPattern = P;
+        } else if (FunctionTemplateDecl *FTD = Function->getPrimaryTemplate();
+                   FTD && Function->getTemplateSpecializationArgs() &&
+                   hasEquivalentSpecializationInSurvivingSibling(
+                       FTD,
+                       Function->getTemplateSpecializationArgs()->asArray())) {
+          V = Decl::TargetVariantRedundant;
+        } else if (const Decl *Class = getTaggedEnclosingClass(Function)) {
+          TaggedPattern = Class;
+        }
+      } else {
+        // An untagged pattern was never parsed inside a widened #if region,
+        // so its instantiation is never target-exclusive, whatever the
+        // ambient variant, provenance or enclosing context suggests.
+        // Otherwise an ordinary shared helper first instantiated while a
+        // tagged instantiation is active would be stamped with that variant
+        // and hidden from every other target's lookup.
+        V = 0;
+      }
+    }
+    if (TaggedPattern)
+      Function->setTargetSet(
+          Context.getMultiTarget().narrowToSpecializationTargets(
+              Function, TaggedPattern->getTargetSet()));
+    else
+      Function->setTargetVariant(V);
+  }
+
+  // Stamped for targets other than the one its definition was chosen for, it
+  // is instantiated from theirs.
+  if (PerTargetDefinitions && Function->getTargetVariant() &&
+      !Function->isRedundantTargetVariant() &&
+      !Function->isCopyFor(PatternTarget)) {
+    unsigned Target = Context.getAnalysisTarget(Function->getTargetSet());
+    if (const FunctionDecl *Def = getDefinitionForTarget(PatternDecl, Target))
+      if (Stmt *Body = Context.getMultiTarget().getBodyForTarget(Def, Target)) {
+        PatternDecl = Def;
+        Pattern = Body;
+      }
+  }
+
+  // Instantiate under a particular target's TargetScope. A declaration
+  // marked "applies to every target" keeps the ambient one, which is every
+  // declaration outside a multi-target compilation. This reads the
+  // TargetVariant stamped above, not the default of 0.
+  std::optional<ASTContext::TargetScope> InstantiationTarget;
+  if (LLVM_UNLIKELY(Context.hasTargetDivergence()))
+    InstantiationTarget.emplace(Context, Function->getTargetVariant());
+
+  // The tagging above may have stamped Function with a specific target that
+  // differs from the ambient one. A deferred instantiation runs under the
+  // canonical device variant recorded when it was queued, chosen only so some
+  // device TargetInfo is active, not to match the re-parsed copy whose
+  // pattern it needs. The TargetScope above does not help either. It requires
+  // type-layout divergence, which is absent whenever every target shares the
+  // same basic type layout, even though the specialization is
+  // target-specific by tag.
+  //
+  // Narrow the body's ambient target only when the stamp comes from the
+  // template pattern itself being one of several per-target copies, e.g.
+  // #if/#elif/#else arms that are independent patterns each with its own tag.
+  // A stamp inherited from recorded provenance or an enclosing instantiation
+  // reflects only whichever caller first reached a shared, single-pattern
+  // function, which has no bearing on whether that function is shared.
+  std::optional<ASTContext::TargetScope> BodyInstantiationTarget;
+  if (TargetKey) {
+    BodyInstantiationTarget.emplace(Context, TargetKey);
+  } else if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+    unsigned FnTV = Function->getTargetVariant();
+    const Decl *Pat = Function->getTemplateInstantiationPattern();
+    bool PatternIsTargetTagged =
+        Pat && Pat->getTargetVariant() && !Pat->isRedundantTargetVariant();
+    if (FnTV && FnTV != Decl::TargetVariantRedundant && PatternIsTargetTagged)
+      BodyInstantiationTarget.emplace(Context, FnTV);
+    // A shared host-callable specialization's body is instantiated under the
+    // target its declaration was, whichever target later needs the body.
+    // Device-only functions are compiled under a device target regardless.
+    else if (!FnTV) {
+      auto It = MultiTarget().SpecializationDeclVariant.find(Function);
+      if (It != MultiTarget().SpecializationDeclVariant.end() &&
+          It->second != std::max(Context.getCurrentTargetVariant(), 1u)) {
+        CUDAFunctionTarget FT = CUDA().IdentifyTarget(Function);
+        if (FT != CUDAFunctionTarget::Device &&
+            FT != CUDAFunctionTarget::Global)
+          BodyInstantiationTarget.emplace(Context, It->second);
+      }
+    }
+  }
+
+  // Device code keyed by the host is the host's view of it. Any other device
+  // code is compiled for a device, including a shared specialization the
+  // host's view of its caller needs first.
+  std::optional<MultiTargetContext::HostViewRAII> HostViewScope;
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      Context.isMultiTargetCompile() && Context.getHostVariant()) {
+    CUDAFunctionTarget FT = CUDA().IdentifyTarget(Function);
+    if (FT == CUDAFunctionTarget::Device || FT == CUDAFunctionTarget::Global) {
+      const Decl *Owner = nullptr;
+      unsigned Host = Context.getHostVariant();
+      // A copy the host shares with devices is compiled for those devices.
+      TargetSet Devices = Context.getDevices(Function->getTargetSet());
+      bool SharedWithHost = !TargetKey && Function->isCopyFor(Host);
+      // So is a shared specialization the host's view names with the host's
+      // classes, which no device names.
+      bool HostView = getDeviceViewOwner(Context, Function, Owner) == Host ||
+                      (SharedWithHost && Devices.empty()) ||
+                      (Context.getMultiTarget().isHostViewOfDeviceCode() &&
+                       !TargetKey && namesHostKeyedClass(Context, Function));
+      if (!HostView && SharedWithHost) {
+        BodyInstantiationTarget.reset();
+        BodyInstantiationTarget.emplace(Context, Devices.first());
+      } else if (!HostView &&
+                 Context.getMultiTarget().isHostViewOfDeviceCode() &&
+                 !BodyInstantiationTarget) {
+        BodyInstantiationTarget.emplace(Context,
+                                        Context.getCanonicalDeviceVariant());
+      }
+      if (HostView != Context.getMultiTarget().isHostViewOfDeviceCode())
+        HostViewScope.emplace(Context, HostView);
+    }
   }
 
   llvm::TimeTraceScope TimeScope("InstantiateFunction", [&]() {
@@ -6278,6 +6572,8 @@ void Sema::InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
       return;
 
     StmtResult Body;
+    unsigned View = 0;
+    SmallVector<PartialDiagnosticAt, 2> ViewDiags;
     if (PatternDecl->hasSkippedBody()) {
       ActOnSkippedFunctionBody(Function);
       Body = nullptr;
@@ -6297,14 +6593,36 @@ void Sema::InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
       }
 
       // Instantiate the function body.
-      Body = SubstStmt(Pattern, TemplateArgs);
+      SemaMultiTarget::TargetDiagnosticCapture Capture;
+      bool Tentative = isTentativeTargetInstantiation(*this, Function);
+      if (Tentative)
+        View = MultiTarget().getInstantiationTarget();
+      {
+        llvm::SaveAndRestore Capturing(
+            MultiTarget().CurrentTargetDiagnosticCapture,
+            Tentative ? &Capture
+                      : MultiTarget().CurrentTargetDiagnosticCapture);
+        Body = SubstStmt(Pattern, TemplateArgs);
+      }
+      if (Capture.ErrorOccurred)
+        ViewDiags = std::move(Capture.Diags);
+      else
+        for (const PartialDiagnosticAt &PD : Capture.Diags)
+          Diag(PD.first, PD.second);
 
-      if (Body.isInvalid())
+      if (Body.isInvalid() && ViewDiags.empty())
         Function->setInvalidDecl();
     }
     // FIXME: finishing the function body while in an expression evaluation
     // context seems wrong. Investigate more.
     ActOnFinishFunctionBody(Function, Body.get(), /*IsInstantiation=*/true);
+
+    if (!ViewDiags.empty())
+      MultiTarget().instantiateForOtherViews(Function, View, ViewDiags, DC,
+                                             Innermost);
+    else if (PerTargetDefinitions)
+      MultiTarget().instantiateForOtherDefinitions(Function, PatternDecl,
+                                                   Pattern, DC, Innermost);
 
     inferLifetimeBoundAttribute(Function);
 
@@ -6315,6 +6633,11 @@ void Sema::InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
 
     if (auto *Listener = getASTMutationListener())
       Listener->FunctionDefinitionInstantiated(Function);
+
+    if (LLVM_UNLIKELY(MultiTarget().measuresTargetParts()))
+      MultiTarget().measureTargetParts(Function);
+    if (Context.isMultiTargetCompile())
+      MultiTarget().instantiateTargetParts(Function);
 
     savedContext.pop();
   }
@@ -6333,7 +6656,17 @@ void Sema::InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
       return Context.isUnevaluated() || Context.isImmediateFunctionContext();
     });
   }();
-  if (!ShouldSkipCG) {
+  // The host launches the devices' instantiation of a kernel.
+  bool HostViewOnly = MultiTarget().HostViewTwins.count(Function);
+  ShouldSkipCG |= HostViewOnly && Function->hasAttr<CUDAGlobalAttr>();
+  // An explicit instantiation definition is emitted as soon as the consumer
+  // sees it, so the other targets' copies have to exist by then for it to
+  // stand only for the targets without one.
+  bool OtherTargets = TargetKey == Context.getCanonicalDeviceVariant();
+  bool NotifyAfterOtherTargets =
+      OtherTargets && Function->getTemplateSpecializationKind() ==
+                          TSK_ExplicitInstantiationDefinition;
+  if (!ShouldSkipCG && !NotifyAfterOtherTargets) {
     DeclGroupRef DG(Function);
     Consumer.HandleTopLevelDecl(DG);
   }
@@ -6342,6 +6675,36 @@ void Sema::InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
   // instantiation within this scope.
   LocalInstantiations.perform();
   Scope.Exit();
+  GlobalInstantiations.perform();
+
+  if ((OtherTargets || (TargetKey && TargetKey == Context.getHostVariant())) &&
+      !HostViewOnly)
+    MultiTarget().instantiateForOtherDeviceTargets(PointOfInstantiation,
+                                                   Function);
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && !TargetKey &&
+      !HostViewOnly && Context.isMultiTargetCompile() &&
+      Function->hasAttr<CUDAGlobalAttr>())
+    MultiTarget().instantiateKernelForClassCopies(PointOfInstantiation,
+                                                  Function);
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && !HostViewOnly &&
+      Context.isMultiTargetCompile())
+    MultiTarget().instantiateMemberForClassCopies(PointOfInstantiation,
+                                                  Function);
+  if (const FunctionTemplateDecl *FTD = Function->getPrimaryTemplate();
+      LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && FTD && !HostViewOnly &&
+      Function->hasAttr<CUDAGlobalAttr>() && FTD->getTargetVariant() &&
+      !FTD->isRedundantTargetVariant() && !FTD->isChainedTargetCopy() &&
+      Context.isMultiTargetCompile())
+    MultiTarget().instantiateTargetCopySpecialization(Function, /*Now=*/true);
+  if (!ShouldSkipCG && NotifyAfterOtherTargets) {
+    DeclGroupRef DG(Function);
+    Consumer.HandleTopLevelDecl(DG);
+  }
+  if (MultiTarget().HostViewRoots.erase(Function->getCanonicalDecl())) {
+    Inst.Clear();
+    MultiTarget().instantiateHostView(PointOfInstantiation, Function);
+  }
+  // What the other targets' instantiations left pending, e.g. after an error.
   GlobalInstantiations.perform();
 }
 
@@ -6772,6 +7135,80 @@ void Sema::InstantiateVariableDefinition(SourceLocation PointOfInstantiation,
                                        PointOfInstantiation);
     return;
   }
+
+  // Instantiate under a particular target's TargetScope. A declaration
+  // marked "applies to every target" keeps the ambient one, which is every
+  // declaration outside a multi-target compilation.
+  std::optional<ASTContext::TargetScope> InstantiationTarget;
+  if (LLVM_UNLIKELY(Context.hasTargetDivergence()))
+    InstantiationTarget.emplace(Context, Var->getTargetVariant());
+
+  // A specialization keyed by target belongs to that target, except that the
+  // canonical device's stands in for every target without one.
+  unsigned TargetKey =
+      LLVM_UNLIKELY(clang::AllowTargetVariantDecls)
+          ? Context.getMultiTarget().getEffectiveTargetInstantiationKey(Var)
+          : 0;
+  if (TargetKey && !Var->getTargetVariant()) {
+    if (std::optional<TargetSet> Recorded =
+            Context.getMultiTarget().getRecordedSpecializationTargets(Var))
+      Var->setTargetSet(*Recorded);
+    else if (TargetKey != Context.getCanonicalDeviceVariant())
+      Var->setTargetVariant(TargetKey);
+  }
+
+  // An entity instantiated while analysing one target belongs to that target.
+  // Instantiations are created by Sema, not parsed, so the parser's marking
+  // never sees them, and an implicitly instantiated specialization must be
+  // tagged explicitly or it is otherwise visible to every target.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && !TargetKey &&
+      !Var->getTargetVariant()) {
+    // A pending instantiation is performed at the end of the translation
+    // unit, where the ambient variant is 0.
+    unsigned V = Context.getCurrentTargetVariant();
+    // Prefer recorded provenance over the possibly forced ambient variant.
+    auto PIt = MultiTarget().PendingInstantiationProvenanceVariant.find(Var);
+    if (PIt != MultiTarget().PendingInstantiationProvenanceVariant.end())
+      V = PIt->second;
+    // A pattern tagged TargetVariantRedundant is a marked duplicate, not a
+    // real target identity. Inheriting it would hide this instantiation from
+    // lookup for every target, not just the duplicate's own.
+    const Decl *TaggedPattern = nullptr;
+    if (const Decl *P = Var->getTemplateInstantiationPattern()) {
+      if (unsigned PV = P->getTargetVariant()) {
+        if (!P->isRedundantTargetVariant()) {
+          V = PV;
+          TaggedPattern = P;
+        } else if (auto *VTSD = dyn_cast<VarTemplateSpecializationDecl>(Var);
+                   VTSD && VTSD->getSpecializedTemplate() &&
+                   hasEquivalentSpecializationInSurvivingSibling(
+                       VTSD->getSpecializedTemplate(),
+                       VTSD->getTemplateArgs().asArray())) {
+          V = Decl::TargetVariantRedundant;
+        } else if (const Decl *Class = getTaggedEnclosingClass(Var)) {
+          TaggedPattern = Class;
+        }
+      } else if (!isTargetDivergentValueMemberAccess(Var)) {
+        // An untagged pattern cannot make its instantiation target-exclusive,
+        // whichever target was ambient when it was first needed. A static data
+        // member of a class specialization forked per target is that fork's
+        // own, though.
+        V = 0;
+      }
+    }
+    if (TaggedPattern)
+      Var->setTargetSet(Context.getMultiTarget().narrowToSpecializationTargets(
+          Var, TaggedPattern->getTargetSet()));
+    else if (V && V != Decl::TargetVariantRedundant)
+      Var->setTargetSet(
+          Context.getMultiTarget().getMemberInstantiationTargets(Var, V));
+    else
+      Var->setTargetVariant(V);
+  }
+
+  std::optional<ASTContext::TargetScope> KeyTarget;
+  if (TargetKey)
+    KeyTarget.emplace(Context, TargetKey);
 
   NonSFINAEContext _(*this);
   InstantiatingTemplate Inst(*this, PointOfInstantiation, Var);
@@ -7232,9 +7669,51 @@ static bool isDependentContextAtLevel(DeclContext *DC, unsigned Level) {
   return cast<Decl>(DC)->getTemplateDepth() > Level;
 }
 
+/// A non-dependent call in a template body is resolved when the template is
+/// parsed. A widened arm's template parsed before the function templates it
+/// calls were folded into another arm's copies still names the
+/// TargetVariantRedundant copies. Their signatures name their own arm's copy
+/// of a class template folded along with them, while the calls in their
+/// bodies resolve to the shared copies at instantiation, so the two arms'
+/// types meet in one expression. Redirect such a reference to the shared
+/// function template, and a specialization of it to the shared template's
+/// specialization for the same arguments.
+static NamedDecl *findLiveFunctionTemplateReference(Sema &S,
+                                                    SourceLocation Loc,
+                                                    NamedDecl *D) {
+  if (auto *FTD = dyn_cast<FunctionTemplateDecl>(D)) {
+    if (FTD->isRedundantTargetVariant())
+      if (NamedDecl *Live = findLiveFunctionSibling(FTD))
+        return Live;
+    return D;
+  }
+  auto *FD = dyn_cast<FunctionDecl>(D);
+  if (!FD)
+    return D;
+  FunctionTemplateDecl *FTD = FD->getPrimaryTemplate();
+  if (!FTD || !FTD->isRedundantTargetVariant())
+    return D;
+  auto *Live =
+      dyn_cast_or_null<FunctionTemplateDecl>(findLiveFunctionSibling(FTD));
+  if (!Live)
+    return D;
+  if (FunctionDecl *Spec = S.InstantiateFunctionDeclaration(
+          Live, FD->getTemplateSpecializationArgs(), Loc))
+    return Spec;
+  return D;
+}
+
 NamedDecl *Sema::FindInstantiatedDecl(SourceLocation Loc, NamedDecl *D,
                           const MultiLevelTemplateArgumentList &TemplateArgs,
                           bool FindingInstantiatedContext) {
+  // A member typedef each target has its own copy of is the copy of the
+  // target the instantiation is made for.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      isa<TypedefNameDecl>(D) && isa<CXXRecordDecl>(D->getDeclContext()))
+    if (unsigned Target = Context.getMultiTarget().getInstantiationTarget())
+      if (const NamedDecl *Copy = getCopyForTarget(Context, D, Target))
+        D = const_cast<NamedDecl *>(Copy);
+
   DeclContext *ParentDC = D->getDeclContext();
   // Determine whether our parent context depends on any of the template
   // arguments we're currently substituting.
@@ -7365,6 +7844,25 @@ NamedDecl *Sema::FindInstantiatedDecl(SourceLocation Loc, NamedDecl *D,
           ClassTemplateDecl *SpecTemplate = InstSpec->getSpecializedTemplate();
           if (ClassTemplate && isInstantiationOf(ClassTemplate, SpecTemplate))
             return InstRecord;
+          // Each widened arm of a class template is its own
+          // ClassTemplateDecl, and a specialization of one arm may have been
+          // instantiated from another arm's pattern. Only the arm's
+          // definition need carry its tag. The canonical declaration may be a
+          // forward declaration that was folded into another arm's.
+          if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && ClassTemplate &&
+              ClassTemplate->getDeclName() == SpecTemplate->getDeclName() &&
+              ClassTemplate->getDeclContext()->getRedeclContext()->Equals(
+                  SpecTemplate->getDeclContext()->getRedeclContext())) {
+            unsigned SpecVariant =
+                Context.getMultiTarget().getTargetVariantForSpecialization(
+                    InstSpec);
+            if (SpecVariant &&
+                llvm::any_of(ClassTemplate->redecls(),
+                             [&](const RedeclarableTemplateDecl *R) {
+                               return R->isCopyFor(SpecVariant);
+                             }))
+              return InstRecord;
+          }
         }
 
         // Check whether we're in the process of instantiating a member class.
@@ -7452,8 +7950,11 @@ NamedDecl *Sema::FindInstantiatedDecl(SourceLocation Loc, NamedDecl *D,
         return FD;
   }
 
-  if (!ParentDependsOnArgs)
+  if (!ParentDependsOnArgs) {
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+      return findLiveFunctionTemplateReference(*this, Loc, D);
     return D;
+  }
 
   ParentDC = FindInstantiatedContext(Loc, ParentDC, TemplateArgs);
   if (!ParentDC)
@@ -7479,6 +7980,17 @@ NamedDecl *Sema::FindInstantiatedDecl(SourceLocation Loc, NamedDecl *D,
       }
     }
 
+    // A member re-parsed per target is the copy for the target this is
+    // instantiated for, whichever copy the template's definition named.
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+        D->getTargetVariant() && !D->isRedundantTargetVariant())
+      if (unsigned Target = MultiTarget().getInstantiationTarget();
+          !D->isCopyFor(Target)) {
+        if (const NamedDecl *Copy =
+                Context.getMultiTarget().getCopyFor(D, Target))
+          D = const_cast<NamedDecl *>(Copy);
+      }
+
     NamedDecl *Result = nullptr;
     // FIXME: If the name is a dependent name, this lookup won't necessarily
     // find it. Does that ever matter?
@@ -7492,6 +8004,26 @@ NamedDecl *Sema::FindInstantiatedDecl(SourceLocation Loc, NamedDecl *D,
       DeclContext::lookup_result Found = ParentDC->lookup(Name);
 
       Result = findInstantiationOf(Context, D, Found.begin(), Found.end());
+      // A typedef is matched by name, and each copy of one is instantiated
+      // as the member for that copy's targets, or untagged for all of them.
+      if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && Result &&
+          isa<TypedefNameDecl>(D) && D->getTargetVariant() &&
+          !D->isRedundantTargetVariant()) {
+        unsigned Target = D->getTargetVariant();
+        NamedDecl *Match = nullptr;
+        for (NamedDecl *Other : Found) {
+          if (!isInstantiationOf(Context, D, Other))
+            continue;
+          if (Other->isCopyFor(Target)) {
+            Match = Other;
+            break;
+          }
+          if (!Other->getTargetVariant() && !Match)
+            Match = Other;
+        }
+        if (Match)
+          Result = Match;
+      }
     } else {
       // Since we don't have a name for the entity we're looking for,
       // our only option is to walk through all of the declarations to
@@ -7564,6 +8096,31 @@ void Sema::PerformPendingInstantiations(bool LocalOnly, bool AtEndOfTU) {
       Inst = PendingLocalImplicitInstantiations.front();
       PendingLocalImplicitInstantiations.pop_front();
       LocalInstantiation = true;
+    }
+
+    // Restore the ambient target variant this instantiation was queued
+    // under, which controls the TargetInfo the body is compiled under. It is
+    // kept separate from the provenance variant, which decides the
+    // TargetVariant tag code generation filters on. Deducing the address of
+    // an overloaded function template for a __device__ or __global__ callee
+    // needs the correct TargetInfo independent of that tag.
+    std::optional<ASTContext::TargetScope> DeferredInstantiationTarget;
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+      auto It =
+          MultiTarget().PendingInstantiationTargetVariant.find(Inst.first);
+      // Where code analysed for every target is the host's view, a host
+      // function shared by every target is the host's, wherever it was used.
+      const auto *HostFn = dyn_cast<FunctionDecl>(Inst.first);
+      if (HostFn &&
+          (!Context.isMultiTargetCompile() || !Context.getHostVariant() ||
+           CUDA().IdentifyTarget(HostFn) != CUDAFunctionTarget::Host ||
+           Context.getMultiTarget().getEffectiveTargetInstantiationKey(HostFn)))
+        HostFn = nullptr;
+      if (HostFn)
+        DeferredInstantiationTarget.emplace(Context, 0);
+      else if (It != MultiTarget().PendingInstantiationTargetVariant.end()) {
+        DeferredInstantiationTarget.emplace(Context, It->second);
+      }
     }
 
     // Instantiate function definitions

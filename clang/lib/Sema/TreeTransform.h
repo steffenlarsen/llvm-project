@@ -15581,9 +15581,9 @@ bool TreeTransform<Derived>::TransformOverloadExprDecls(OverloadExpr *Old,
     for (auto *D : Decls) {
       if (auto *UD = dyn_cast<UsingDecl>(D)) {
         for (auto *SD : UD->shadows())
-          R.addDecl(SD);
+          R.addDeclIgnoringTargetVisibility(SD);
       } else {
-        R.addDecl(D);
+        R.addDeclIgnoringTargetVisibility(D);
       }
     }
 

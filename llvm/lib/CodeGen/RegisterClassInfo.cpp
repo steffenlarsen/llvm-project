@@ -51,6 +51,7 @@ void RegisterClassInfo::runOnMachineFunction(const MachineFunction &mf,
     Reverse = Rev;
     TRI = STI.getRegisterInfo();
     RegClass.reset(new RCInfo[TRI->getNumRegClasses()]);
+    PSetLimits.reset(new unsigned[TRI->getNumRegPressureSets()]);
     Update = true;
   }
 
@@ -110,13 +111,13 @@ void RegisterClassInfo::runOnMachineFunction(const MachineFunction &mf,
     Reserved = RR;
   }
 
+  // Pressure set limits come from a target hook that can depend on the
+  // function, e.g. on its occupancy, so none carries over from the last one.
+  std::fill_n(PSetLimits.get(), TRI->getNumRegPressureSets(), 0);
+
   // Invalidate cached information from previous function.
-  if (Update) {
-    unsigned NumPSets = TRI->getNumRegPressureSets();
-    PSetLimits.reset(new unsigned[NumPSets]);
-    std::fill(&PSetLimits[0], &PSetLimits[NumPSets], 0);
+  if (Update)
     ++Tag;
-  }
 }
 
 void RegisterClassInfo::updateReservedRegs(const BitVector &ReservedInput) {

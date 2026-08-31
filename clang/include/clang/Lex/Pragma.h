@@ -15,6 +15,7 @@
 
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/SourceLocation.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include <string>
@@ -116,6 +117,13 @@ public:
   void RemovePragmaHandler(PragmaHandler *Handler);
 
   bool IsEmpty() const { return Handlers.empty(); }
+
+  /// Calls \p Fn on each handler in this namespace, not descending into the
+  /// namespaces among them.
+  void forEachHandler(llvm::function_ref<void(PragmaHandler &)> Fn) const {
+    for (const auto &Entry : Handlers)
+      Fn(*Entry.getValue());
+  }
 
   void HandlePragma(Preprocessor &PP, PragmaIntroducer Introducer,
                     Token &Tok) override;
