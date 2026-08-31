@@ -16,12 +16,14 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/Frontend/PreprocessorOutputOptions.h"
 #include "clang/Frontend/Utils.h"
+#include "clang/Lex/Lexer.h"
 #include "clang/Lex/MacroInfo.h"
 #include "clang/Lex/PPCallbacks.h"
 #include "clang/Lex/Pragma.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Lex/TokenConcatenation.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -103,6 +105,10 @@ private:
   raw_ostream *OrigOS;
   std::unique_ptr<llvm::raw_null_ostream> NullOS;
   unsigned NumToksToSkip;
+
+  /// See reproducePragmas.
+  bool ReproducePragmas = false;
+  llvm::SmallPtrSet<const PragmaHandler *, 32> PreprocessorPragmas;
 
   Token PrevTok;
   Token PrevPrevTok;
@@ -186,6 +192,22 @@ public:
   void PragmaAssumeNonNullEnd(SourceLocation Loc) override;
   void PragmaSetPPState(SourceLocation Loc, IdentifierInfo *MacroName,
                         std::uint64_t Value) override;
+  void PragmaDirective(SourceLocation Loc,
+                       PragmaIntroducerKind Introducer) override;
+
+  /// Print the pragmas that handlers added to the preprocessor from now on
+  /// handle, as -E does for every pragma the preprocessor does not handle
+  /// itself (see DoPrintPreprocessedInput). For a preprocessor that is not
+  /// printing, but compiling: a Parser handles many pragmas itself, often
+  /// without leaving a trace in the token stream.
+  void reproducePragmas();
+
+  /// Print nothing more, for a preprocessor that outlives the stream.
+  void stopPrinting() {
+    if (!NullOS)
+      NullOS = std::make_unique<llvm::raw_null_ostream>();
+    OS = OrigOS = NullOS.get();
+  }
 
   /// Insert whitespace before emitting the next token.
   ///
@@ -781,6 +803,105 @@ void PrintPPOutputPPCallbacks::PragmaSetPPState(SourceLocation Loc,
   setEmittedDirectiveOnThisLine();
 }
 
+static void
+collectPragmaHandlers(const PragmaNamespace &NS,
+                      llvm::SmallPtrSetImpl<const PragmaHandler *> &Out) {
+  NS.forEachHandler([&](PragmaHandler &H) {
+    Out.insert(&H);
+    if (const PragmaNamespace *Nested = H.getIfNamespace())
+      collectPragmaHandlers(*Nested, Out);
+  });
+}
+
+void PrintPPOutputPPCallbacks::reproducePragmas() {
+  ReproducePragmas = true;
+  // The preprocessor's own handlers run under -E too, and the callbacks above
+  // print what they print there.
+  collectPragmaHandlers(PP.getPragmaHandlers(), PreprocessorPragmas);
+}
+
+void PrintPPOutputPPCallbacks::PragmaDirective(
+    SourceLocation Loc, PragmaIntroducerKind Introducer) {
+  if (!ReproducePragmas)
+    return;
+
+  // Nothing has read the pragma yet: read it as written. A #pragma is read
+  // from its line; a _Pragma from the buffer its string was destringized into,
+  // which the preprocessor's current lexer is about to lex. A __pragma's tokens
+  // are already in a token stream and cannot be read this way.
+  SmallVector<Token, 16> Toks;
+  auto ReadFrom = [&](FileID FID, const char *Start, const char *End,
+                      bool StopAtNewLine) {
+    Lexer Raw(SM.getLocForStartOfFile(FID), PP.getLangOpts(),
+              SM.getBufferData(FID).begin(), Start, End);
+    Token Tok;
+    while (true) {
+      Raw.LexFromRawLexer(Tok);
+      if (Tok.is(tok::eof) ||
+          (StopAtNewLine && Tok.isAtStartOfLine() && !Toks.empty()))
+        break;
+      if (Tok.is(tok::raw_identifier))
+        PP.LookUpIdentifierInfo(Tok);
+      Toks.push_back(Tok);
+    }
+  };
+  if (Introducer == PIK_HashPragma) {
+    FileID FID = SM.getFileID(Loc);
+    ReadFrom(FID, SM.getCharacterData(Loc), SM.getBufferData(FID).end(),
+             /*StopAtNewLine=*/true);
+    // Drop the '#' and 'pragma' themselves.
+    if (Toks.size() < 2)
+      return;
+    Toks.erase(Toks.begin(), Toks.begin() + 2);
+  } else if (Introducer == PIK__Pragma) {
+    auto *L = static_cast<Lexer *>(PP.getCurrentLexer());
+    if (!L)
+      return;
+    ReadFrom(L->getFileID(), L->getBufferLocation(), L->getBuffer().end(),
+             /*StopAtNewLine=*/false);
+  } else {
+    return;
+  }
+
+  // Look the pragma up the way PragmaNamespace::HandlePragma does.
+  auto Name = [&](size_t I) {
+    return I < Toks.size() && Toks[I].getIdentifierInfo()
+               ? Toks[I].getIdentifierInfo()->getName()
+               : StringRef();
+  };
+  PragmaHandler *Handler =
+      PP.getPragmaHandlers().FindHandler(Name(0), /*IgnoreNull=*/false);
+  if (Handler)
+    if (PragmaNamespace *NS = Handler->getIfNamespace())
+      Handler = NS->FindHandler(Name(1), /*IgnoreNull=*/false);
+  if (Handler && PreprocessorPragmas.contains(Handler))
+    return;
+
+  // Print it as UnknownPragmaHandler does under -E: "#pragma" and the tokens,
+  // on the line of the first token after the namespace -E has such a handler
+  // in, if any. A _Pragma's tokens are in the scratch buffer, so its own line
+  // is the line of the _Pragma.
+  SourceLocation LineLoc = Loc;
+  if (Introducer == PIK_HashPragma && !Toks.empty()) {
+    StringRef NS = Name(0);
+    bool InNamespace =
+        Toks.size() > 1 && (NS == "GCC" || NS == "clang" || NS == "omp");
+    LineLoc = Toks[InNamespace ? 1 : 0].getLocation();
+  }
+  MoveToLine(LineLoc, /*RequireStartOfLine=*/true);
+  *OS << "#pragma";
+  setEmittedTokensOnThisLine();
+  bool IsFirst = true;
+  for (const Token &Tok : Toks) {
+    HandleWhitespaceBeforeTok(Tok, /*RequireSpace=*/IsFirst,
+                              /*RequireSameLine=*/true);
+    IsFirst = false;
+    *OS << PP.getSpelling(Tok);
+    setEmittedTokensOnThisLine();
+  }
+  setEmittedDirectiveOnThisLine();
+}
+
 void PrintPPOutputPPCallbacks::HandleWhitespaceBeforeTok(const Token &Tok,
                                                          bool RequireSpace,
                                                          bool RequireSameLine) {
@@ -918,174 +1039,193 @@ struct UnknownPragmaHandler : public PragmaHandler {
 };
 } // end anonymous namespace
 
+namespace {
+/// What printing a token leaves for printing the next one.
+struct TokenPrintState {
+  bool DropComments;
+  bool IsStartOfLine = false;
+  bool IsCXXModuleDirective = false;
+};
+
+enum class TokenPrinted {
+  /// The token was not printed.
+  Skipped,
+  /// The token was printed; more may follow.
+  Printed,
+  /// The token was the last one.
+  Last,
+};
+} // namespace
+
+static TokenPrinted printPreprocessedToken(Preprocessor &PP, const Token &Tok,
+                                           PrintPPOutputPPCallbacks *Callbacks,
+                                           TokenPrintState &State) {
+  char Buffer[256];
+  // Two lines joined with line continuation ('\' as last character on the
+  // line) must be emitted as one line even though Tok.getLine() returns two
+  // different values. In this situation Tok.isAtStartOfLine() is false even
+  // though it may be the first token on the lexical line. When
+  // dropping/skipping a token that is at the start of a line, propagate the
+  // start-of-line-ness to the next token to not append it to the previous
+  // line.
+  State.IsStartOfLine = State.IsStartOfLine || Tok.isAtStartOfLine();
+
+  Callbacks->HandleWhitespaceBeforeTok(
+      Tok, /*RequireSpace=*/false,
+      /*RequireSameLine=*/!State.IsStartOfLine);
+
+  if (State.DropComments && Tok.is(tok::comment)) {
+    // Skip comments. Normally the preprocessor does not generate
+    // tok::comment nodes at all when not keeping comments, but under
+    // -traditional-cpp the lexer keeps /all/ whitespace, including comments.
+    return TokenPrinted::Skipped;
+  } else if (Tok.is(tok::annot_repl_input_end)) {
+    // Fall through to exit the loop.
+  } else if (Tok.is(tok::eod)) {
+    // Don't print end of directive tokens, since they are typically newlines
+    // that mess up our line tracking. These come from unknown pre-processor
+    // directives or hash-prefixed comments in standalone assembly files.
+    // FIXME: The token on the next line after #include should have
+    // Tok.isAtStartOfLine() set.
+    State.IsStartOfLine = true;
+    return TokenPrinted::Skipped;
+  } else if (Tok.is(tok::annot_module_include)) {
+    // PrintPPOutputPPCallbacks::InclusionDirective handles producing
+    // appropriate output here. Ignore this token entirely.
+    State.IsStartOfLine = true;
+    return TokenPrinted::Skipped;
+  } else if (Tok.is(tok::annot_module_begin)) {
+    // FIXME: We retrieve this token after the FileChanged callback, and
+    // retrieve the module_end token before the FileChanged callback, so
+    // we render this within the file and render the module end outside the
+    // file, but this is backwards from the token locations: the module_begin
+    // token is at the include location (outside the file) and the module_end
+    // token is at the EOF location (within the file).
+    Callbacks->BeginModule(
+        reinterpret_cast<Module *>(Tok.getAnnotationValue()));
+    State.IsStartOfLine = true;
+    return TokenPrinted::Skipped;
+  } else if (Tok.is(tok::annot_module_end)) {
+    Callbacks->EndModule(reinterpret_cast<Module *>(Tok.getAnnotationValue()));
+    State.IsStartOfLine = true;
+    return TokenPrinted::Skipped;
+  } else if (Tok.is(tok::annot_header_unit)) {
+    // This is a header-name that has been (effectively) converted into a
+    // module-name, print them inside quote.
+    // FIXME: The module name could contain non-identifier module name
+    // components and OS specific file paths components. We don't have a good
+    // way to round-trip those.
+    Module *M = reinterpret_cast<Module *>(Tok.getAnnotationValue());
+    std::string Name = M->getFullModuleName();
+    *Callbacks->OS << '"';
+    Callbacks->OS->write_escaped(Name);
+    *Callbacks->OS << '"';
+  } else if (Tok.is(tok::annot_embed)) {
+    // Manually explode the binary data out to a stream of comma-delimited
+    // integer values. If the user passed -dE, that is handled by the
+    // EmbedDirective() callback. We should only get here if the user did not
+    // pass -dE.
+    assert(Callbacks->expandEmbedContents() &&
+           "did not expect an embed annotation");
+    auto *Data =
+        reinterpret_cast<EmbedAnnotationData *>(Tok.getAnnotationValue());
+
+    // Loop over the contents and print them as a comma-delimited list of
+    // values.
+    bool PrintComma = false;
+    for (unsigned char Byte : Data->BinaryData.bytes()) {
+      if (PrintComma)
+        *Callbacks->OS << ", ";
+      *Callbacks->OS << static_cast<int>(Byte);
+      PrintComma = true;
+    }
+  } else if (Tok.is(tok::annot_module_name)) {
+    auto *NameLoc = static_cast<ModuleNameLoc *>(Tok.getAnnotationValue());
+    *Callbacks->OS << NameLoc->str();
+  } else if (Tok.isAnnotation()) {
+    // Ignore annotation tokens created by pragmas - the pragmas themselves
+    // will be reproduced in the preprocessed output.
+    return TokenPrinted::Skipped;
+  } else if (PP.getLangOpts().CPlusPlusModules && Tok.is(tok::kw_import) &&
+             !Callbacks->GetPrevToken().is(tok::at)) {
+    assert(!State.IsCXXModuleDirective &&
+           "Is an import directive being printed?");
+    State.IsCXXModuleDirective = true;
+    State.IsStartOfLine = false;
+    *Callbacks->OS << tok::getPPKeywordSpelling(tok::pp___preprocessed_import);
+    return TokenPrinted::Skipped;
+  } else if (PP.getLangOpts().CPlusPlusModules && Tok.is(tok::kw_module)) {
+    assert(!State.IsCXXModuleDirective &&
+           "Is an module directive being printed?");
+    State.IsCXXModuleDirective = true;
+    State.IsStartOfLine = false;
+    *Callbacks->OS << tok::getPPKeywordSpelling(tok::pp___preprocessed_module);
+    return TokenPrinted::Skipped;
+  } else if (PP.getLangOpts().CPlusPlusModules && State.IsCXXModuleDirective &&
+             Tok.is(tok::semi)) {
+    State.IsCXXModuleDirective = false;
+    State.IsStartOfLine = true;
+    *Callbacks->OS << ';';
+    Callbacks->setEmittedTokensOnThisLine();
+    return TokenPrinted::Skipped;
+  } else if (IdentifierInfo *II = Tok.getIdentifierInfo()) {
+    *Callbacks->OS << II->getName();
+  } else if (Tok.isLiteral() && !Tok.needsCleaning() && Tok.getLiteralData()) {
+    Callbacks->OS->write(Tok.getLiteralData(), Tok.getLength());
+  } else if (Tok.getLength() < std::size(Buffer)) {
+    const char *TokPtr = Buffer;
+    unsigned Len = PP.getSpelling(Tok, TokPtr);
+    Callbacks->OS->write(TokPtr, Len);
+
+    // Tokens that can contain embedded newlines need to adjust our current
+    // line number.
+    // FIXME: The token may end with a newline in which case
+    // setEmittedDirectiveOnThisLine/setEmittedTokensOnThisLine afterwards is
+    // wrong.
+    if (Tok.getKind() == tok::comment || Tok.getKind() == tok::unknown)
+      Callbacks->HandleNewlinesInToken(TokPtr, Len);
+    if (Tok.is(tok::comment) && Len >= 2 && TokPtr[0] == '/' &&
+        TokPtr[1] == '/') {
+      // It's a line comment;
+      // Ensure that we don't concatenate anything behind it.
+      Callbacks->setEmittedDirectiveOnThisLine();
+    }
+  } else {
+    std::string S = PP.getSpelling(Tok);
+    Callbacks->OS->write(S.data(), S.size());
+
+    // Tokens that can contain embedded newlines need to adjust our current
+    // line number.
+    if (Tok.getKind() == tok::comment || Tok.getKind() == tok::unknown)
+      Callbacks->HandleNewlinesInToken(S.data(), S.size());
+    if (Tok.is(tok::comment) && S.size() >= 2 && S[0] == '/' && S[1] == '/') {
+      // It's a line comment;
+      // Ensure that we don't concatenate anything behind it.
+      Callbacks->setEmittedDirectiveOnThisLine();
+    }
+  }
+  Callbacks->setEmittedTokensOnThisLine();
+  State.IsStartOfLine = false;
+
+  if (Tok.is(tok::eof) || Tok.is(tok::annot_repl_input_end))
+    return TokenPrinted::Last;
+  return TokenPrinted::Printed;
+}
 
 static void PrintPreprocessedTokens(Preprocessor &PP, Token &Tok,
                                     PrintPPOutputPPCallbacks *Callbacks) {
-  bool DropComments = PP.getLangOpts().TraditionalCPP &&
-                      !PP.getCommentRetentionState();
-
-  bool IsStartOfLine = false;
-  bool IsCXXModuleDirective = false;
-  char Buffer[256];
+  TokenPrintState State{PP.getLangOpts().TraditionalCPP &&
+                        !PP.getCommentRetentionState()};
   while (true) {
-    // Two lines joined with line continuation ('\' as last character on the
-    // line) must be emitted as one line even though Tok.getLine() returns two
-    // different values. In this situation Tok.isAtStartOfLine() is false even
-    // though it may be the first token on the lexical line. When
-    // dropping/skipping a token that is at the start of a line, propagate the
-    // start-of-line-ness to the next token to not append it to the previous
-    // line.
-    IsStartOfLine = IsStartOfLine || Tok.isAtStartOfLine();
-
-    Callbacks->HandleWhitespaceBeforeTok(Tok, /*RequireSpace=*/false,
-                                         /*RequireSameLine=*/!IsStartOfLine);
-
-    if (DropComments && Tok.is(tok::comment)) {
-      // Skip comments. Normally the preprocessor does not generate
-      // tok::comment nodes at all when not keeping comments, but under
-      // -traditional-cpp the lexer keeps /all/ whitespace, including comments.
+    switch (printPreprocessedToken(PP, Tok, Callbacks, State)) {
+    case TokenPrinted::Skipped:
       PP.Lex(Tok);
       continue;
-    } else if (Tok.is(tok::annot_repl_input_end)) {
-      // Fall through to exit the loop.
-    } else if (Tok.is(tok::eod)) {
-      // Don't print end of directive tokens, since they are typically newlines
-      // that mess up our line tracking. These come from unknown pre-processor
-      // directives or hash-prefixed comments in standalone assembly files.
-      PP.Lex(Tok);
-      // FIXME: The token on the next line after #include should have
-      // Tok.isAtStartOfLine() set.
-      IsStartOfLine = true;
-      continue;
-    } else if (Tok.is(tok::annot_module_include)) {
-      // PrintPPOutputPPCallbacks::InclusionDirective handles producing
-      // appropriate output here. Ignore this token entirely.
-      PP.Lex(Tok);
-      IsStartOfLine = true;
-      continue;
-    } else if (Tok.is(tok::annot_module_begin)) {
-      // FIXME: We retrieve this token after the FileChanged callback, and
-      // retrieve the module_end token before the FileChanged callback, so
-      // we render this within the file and render the module end outside the
-      // file, but this is backwards from the token locations: the module_begin
-      // token is at the include location (outside the file) and the module_end
-      // token is at the EOF location (within the file).
-      Callbacks->BeginModule(
-          reinterpret_cast<Module *>(Tok.getAnnotationValue()));
-      PP.Lex(Tok);
-      IsStartOfLine = true;
-      continue;
-    } else if (Tok.is(tok::annot_module_end)) {
-      Callbacks->EndModule(
-          reinterpret_cast<Module *>(Tok.getAnnotationValue()));
-      PP.Lex(Tok);
-      IsStartOfLine = true;
-      continue;
-    } else if (Tok.is(tok::annot_header_unit)) {
-      // This is a header-name that has been (effectively) converted into a
-      // module-name, print them inside quote.
-      // FIXME: The module name could contain non-identifier module name
-      // components and OS specific file paths components. We don't have a good
-      // way to round-trip those.
-      Module *M = reinterpret_cast<Module *>(Tok.getAnnotationValue());
-      std::string Name = M->getFullModuleName();
-      *Callbacks->OS << '"';
-      Callbacks->OS->write_escaped(Name);
-      *Callbacks->OS << '"';
-    } else if (Tok.is(tok::annot_embed)) {
-      // Manually explode the binary data out to a stream of comma-delimited
-      // integer values. If the user passed -dE, that is handled by the
-      // EmbedDirective() callback. We should only get here if the user did not
-      // pass -dE.
-      assert(Callbacks->expandEmbedContents() &&
-             "did not expect an embed annotation");
-      auto *Data =
-          reinterpret_cast<EmbedAnnotationData *>(Tok.getAnnotationValue());
-
-      // Loop over the contents and print them as a comma-delimited list of
-      // values.
-      bool PrintComma = false;
-      for (unsigned char Byte : Data->BinaryData.bytes()) {
-        if (PrintComma)
-          *Callbacks->OS << ", ";
-        *Callbacks->OS << static_cast<int>(Byte);
-        PrintComma = true;
-      }
-    } else if (Tok.is(tok::annot_module_name)) {
-      auto *NameLoc = static_cast<ModuleNameLoc *>(Tok.getAnnotationValue());
-      *Callbacks->OS << NameLoc->str();
-    } else if (Tok.isAnnotation()) {
-      // Ignore annotation tokens created by pragmas - the pragmas themselves
-      // will be reproduced in the preprocessed output.
-      PP.Lex(Tok);
-      continue;
-    } else if (PP.getLangOpts().CPlusPlusModules && Tok.is(tok::kw_import) &&
-               !Callbacks->GetPrevToken().is(tok::at)) {
-      assert(!IsCXXModuleDirective && "Is an import directive being printed?");
-      IsCXXModuleDirective = true;
-      IsStartOfLine = false;
-      *Callbacks->OS << tok::getPPKeywordSpelling(
-          tok::pp___preprocessed_import);
-      PP.Lex(Tok);
-      continue;
-    } else if (PP.getLangOpts().CPlusPlusModules && Tok.is(tok::kw_module)) {
-      assert(!IsCXXModuleDirective && "Is an module directive being printed?");
-      IsCXXModuleDirective = true;
-      IsStartOfLine = false;
-      *Callbacks->OS << tok::getPPKeywordSpelling(
-          tok::pp___preprocessed_module);
-      PP.Lex(Tok);
-      continue;
-    } else if (PP.getLangOpts().CPlusPlusModules && IsCXXModuleDirective &&
-               Tok.is(tok::semi)) {
-      IsCXXModuleDirective = false;
-      IsStartOfLine = true;
-      *Callbacks->OS << ';';
-      Callbacks->setEmittedTokensOnThisLine();
-      PP.Lex(Tok);
-      continue;
-    } else if (IdentifierInfo *II = Tok.getIdentifierInfo()) {
-      *Callbacks->OS << II->getName();
-    } else if (Tok.isLiteral() && !Tok.needsCleaning() &&
-               Tok.getLiteralData()) {
-      Callbacks->OS->write(Tok.getLiteralData(), Tok.getLength());
-    } else if (Tok.getLength() < std::size(Buffer)) {
-      const char *TokPtr = Buffer;
-      unsigned Len = PP.getSpelling(Tok, TokPtr);
-      Callbacks->OS->write(TokPtr, Len);
-
-      // Tokens that can contain embedded newlines need to adjust our current
-      // line number.
-      // FIXME: The token may end with a newline in which case
-      // setEmittedDirectiveOnThisLine/setEmittedTokensOnThisLine afterwards is
-      // wrong.
-      if (Tok.getKind() == tok::comment || Tok.getKind() == tok::unknown)
-        Callbacks->HandleNewlinesInToken(TokPtr, Len);
-      if (Tok.is(tok::comment) && Len >= 2 && TokPtr[0] == '/' &&
-          TokPtr[1] == '/') {
-        // It's a line comment;
-        // Ensure that we don't concatenate anything behind it.
-        Callbacks->setEmittedDirectiveOnThisLine();
-      }
-    } else {
-      std::string S = PP.getSpelling(Tok);
-      Callbacks->OS->write(S.data(), S.size());
-
-      // Tokens that can contain embedded newlines need to adjust our current
-      // line number.
-      if (Tok.getKind() == tok::comment || Tok.getKind() == tok::unknown)
-        Callbacks->HandleNewlinesInToken(S.data(), S.size());
-      if (Tok.is(tok::comment) && S.size() >= 2 && S[0] == '/' && S[1] == '/') {
-        // It's a line comment;
-        // Ensure that we don't concatenate anything behind it.
-        Callbacks->setEmittedDirectiveOnThisLine();
-      }
-    }
-    Callbacks->setEmittedTokensOnThisLine();
-    IsStartOfLine = false;
-
-    if (Tok.is(tok::eof) || Tok.is(tok::annot_repl_input_end))
+    case TokenPrinted::Last:
+      return;
+    case TokenPrinted::Printed:
       break;
+    }
 
     PP.Lex(Tok);
     // If lexing that token causes us to need to skip future tokens, do so now.
@@ -1214,4 +1354,83 @@ void clang::DoPrintPreprocessedInput(Preprocessor &PP, raw_ostream *OS,
   PP.RemovePragmaHandler("GCC", GCCHandler.get());
   PP.RemovePragmaHandler("clang", ClangHandler.get());
   PP.RemovePragmaHandler("omp", OpenMPHandler.get());
+}
+
+class PreprocessedOutputPrinter::Impl {
+public:
+  Preprocessor &PP;
+  /// Owned by PP.
+  PrintPPOutputPPCallbacks *Callbacks;
+  TokenPrintState State{/*DropComments=*/false};
+  /// -E does not print what the predefines buffer produces; see
+  /// DoPrintPreprocessedInput.
+  bool InPredefines = true;
+  /// Inside the tokens an OpenMP or OpenACC pragma handler put back into the
+  /// stream, which the pragma printed as written already covers.
+  bool InPragmaTokens = false;
+  /// The next token is the identifier #pragma unused put back after its
+  /// annotation.
+  bool SkipNext = false;
+  bool Done = false;
+
+  Impl(Preprocessor &PP, raw_ostream &OS) : PP(PP) {
+    PreprocessorOutputOptions Opts;
+    Callbacks = new PrintPPOutputPPCallbacks(
+        PP, &OS, !Opts.ShowLineMarkers, Opts.ShowMacros,
+        Opts.ShowIncludeDirectives, Opts.ShowEmbedDirectives,
+        Opts.UseLineDirectives, Opts.MinimizeWhitespace, Opts.DirectivesOnly,
+        Opts.KeepSystemIncludes);
+    Callbacks->reproducePragmas();
+    PP.addPPCallbacks(std::unique_ptr<PPCallbacks>(Callbacks));
+  }
+
+  void print(const Token &Tok) {
+    if (Done)
+      return;
+    if (InPredefines) {
+      if (Tok.isNot(tok::eof) && Tok.getLocation().isFileID()) {
+        PresumedLoc PLoc =
+            PP.getSourceManager().getPresumedLoc(Tok.getLocation());
+        if (PLoc.isValid() && !strcmp(PLoc.getFilename(), "<built-in>"))
+          return;
+      }
+      InPredefines = false;
+    }
+    if (InPragmaTokens) {
+      InPragmaTokens = Tok.isNoneOf(tok::annot_pragma_openmp_end,
+                                    tok::annot_pragma_openacc_end);
+      return;
+    }
+    if (SkipNext) {
+      SkipNext = false;
+      return;
+    }
+    if (Tok.isOneOf(tok::annot_pragma_openmp, tok::annot_pragma_openacc)) {
+      InPragmaTokens = true;
+      return;
+    }
+    SkipNext = Tok.is(tok::annot_pragma_unused);
+    if (printPreprocessedToken(PP, Tok, Callbacks, State) == TokenPrinted::Last)
+      Done = true;
+  }
+};
+
+PreprocessedOutputPrinter::PreprocessedOutputPrinter(Preprocessor &PP,
+                                                     raw_ostream &OS)
+    : OS(OS), I(std::make_unique<Impl>(PP, OS)) {}
+
+PreprocessedOutputPrinter::~PreprocessedOutputPrinter() { finish(); }
+
+void PreprocessedOutputPrinter::printToken(const Token &Tok) { I->print(Tok); }
+
+void PreprocessedOutputPrinter::finish() {
+  if (Finished)
+    return;
+  Finished = true;
+  OS << '\n';
+  OS.flush();
+  // The preprocessor keeps the callbacks; they must not write to a stream
+  // that may be gone.
+  I->Callbacks->stopPrinting();
+  I->Done = true;
 }

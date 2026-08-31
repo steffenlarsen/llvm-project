@@ -532,6 +532,10 @@ public:
   /// Auxiliary target features for CUDA/HIP compilation.
   std::optional<std::vector<std::string>> AuxTargetFeatures;
 
+  /// The cc1 arguments of each multi-target aux target, one GNU-quoted string
+  /// per target, in aux-target order.
+  std::vector<std::string> MultiTargetAuxInvocations;
+
   /// Filename to write statistics to.
   std::string StatsFile;
 

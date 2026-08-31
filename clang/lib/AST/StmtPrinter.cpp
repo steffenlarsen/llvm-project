@@ -1375,7 +1375,11 @@ void StmtPrinter::VisitDeclRefExpr(DeclRefExpr *Node) {
   bool CleanUglifiedParameter = Policy.CleanUglifiedParameters &&
                                 isa<ParmVarDecl, NonTypeTemplateParmDecl>(VD);
 
-  if (Policy.FullyQualifiedName && !ForceAnonymous && !CleanUglifiedParameter) {
+  // A template parameter is named only within its template; qualifying it
+  // with the template's arguments, which can name the parameter itself,
+  // never terminates for a partial specialization.
+  if (Policy.FullyQualifiedName && !ForceAnonymous && !CleanUglifiedParameter &&
+      !isa<NonTypeTemplateParmDecl>(VD)) {
     VD->printQualifiedName(OS, Policy);
   } else {
     Node->getQualifier().print(OS, Policy);

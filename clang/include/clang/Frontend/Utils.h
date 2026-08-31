@@ -44,6 +44,7 @@ class Preprocessor;
 class PreprocessorOptions;
 class PreprocessorOutputOptions;
 class CodeGenOptions;
+class Token;
 
 /// InitializePreprocessor - Initialize the preprocessor getting it and the
 /// environment ready to process a single file.
@@ -55,6 +56,29 @@ void InitializePreprocessor(Preprocessor &PP, const PreprocessorOptions &PPOpts,
 /// DoPrintPreprocessedInput - Implement -E mode.
 void DoPrintPreprocessedInput(Preprocessor &PP, raw_ostream *OS,
                               const PreprocessorOutputOptions &Opts);
+
+/// Prints what a preprocessor produces as -E does, while something else -- a
+/// compilation -- drives it.
+///
+/// Create it before the main file is entered and before a Parser adds its
+/// pragma handlers, give it every token the preprocessor lexes, and finish it
+/// (or destroy it) while the preprocessor still exists.
+class PreprocessedOutputPrinter {
+public:
+  PreprocessedOutputPrinter(Preprocessor &PP, raw_ostream &OS);
+  ~PreprocessedOutputPrinter();
+
+  void printToken(const Token &Tok);
+
+  /// Ends the output; what the preprocessor produces later is not printed.
+  void finish();
+
+private:
+  class Impl;
+  raw_ostream &OS;
+  std::unique_ptr<Impl> I;
+  bool Finished = false;
+};
 
 /// An interface for collecting the dependencies of a compilation. Users should
 /// use \c attachToPreprocessor and \c attachToASTReader to get all of the

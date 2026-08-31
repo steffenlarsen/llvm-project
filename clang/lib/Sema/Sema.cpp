@@ -17,6 +17,7 @@
 #include "clang/AST/ASTDiagnostic.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
+#include "clang/AST/DeclFingerprint.h"
 #include "clang/AST/DeclFriend.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/Expr.h"
@@ -75,11 +76,48 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/TimeProfiler.h"
 #include <optional>
 
 using namespace clang;
+
+// In a combined host+device frontend, an `if constexpr` condition in a
+// template can evaluate differently per target, so the AST needs to retain
+// both arms rather than only the selected one.
+llvm::cl::opt<unsigned> clang::ProbeTargetVariant(
+    "probe-target-variant", llvm::cl::Hidden, llvm::cl::init(1),
+    llvm::cl::desc("Prototype: which target variant name lookup selects"));
+
+llvm::cl::opt<bool> clang::ReparseFallbackLookup(
+    "reparse-fallback-lookup", llvm::cl::Hidden, llvm::cl::init(true),
+    llvm::cl::desc("Prototype: during a re-parse, let a reference fall back to "
+                   "the primary target's declaration"));
+
+llvm::cl::opt<bool> clang::MergeEquivalentVariants(
+    "merge-equivalent-variants", llvm::cl::Hidden, llvm::cl::init(false),
+    llvm::cl::desc("Prototype: un-claim target-tagged declarations whose "
+                   "targets agree, before instantiation"));
+
+llvm::cl::opt<bool> clang::CountDivergentUses(
+    "count-divergent-uses", llvm::cl::Hidden, llvm::cl::init(false),
+    llvm::cl::desc("Prototype: count declarations in shared code that "
+                   "reference a target-specific entity"));
+
+llvm::cl::opt<unsigned> clang::InstantiateInVariant(
+    "instantiate-in-variant", llvm::cl::Hidden, llvm::cl::init(0),
+    llvm::cl::desc("Prototype: instantiate templates in this target variant "
+                   "rather than the one the declaration carries"));
+
+llvm::cl::opt<bool> clang::KeepBothConstexprIfBranches(
+    "keep-both-constexpr-if-branches", llvm::cl::Hidden, llvm::cl::init(false),
+    llvm::cl::desc("Prototype: instantiate both arms of if constexpr"));
 using namespace sema;
+
+bool Sema::isMacroDefinedAtLoc(SourceLocation Loc, StringRef Name) const {
+  return (bool)PP.getMacroDefinitionAtLoc(&Context.Idents.get(Name), Loc);
+}
 
 SourceLocation Sema::getLocForEndOfToken(SourceLocation Loc, unsigned Offset) {
   return Lexer::getLocForEndOfToken(Loc, Offset, SourceMgr, LangOpts);
@@ -373,7 +411,357 @@ void Sema::addImplicitTypedef(StringRef Name, QualType T) {
     PushOnScopeChains(Context.buildImplicitTypedef(T, Name), TUScope);
 }
 
+unsigned Sema::getInstantiationTarget() const {
+  if (ForcedInstantiationTarget)
+    return ForcedInstantiationTarget;
+  unsigned Ambient = Context.getCurrentTargetVariant();
+  for (const DeclContext *DC = CurContext; DC; DC = DC->getParent()) {
+    const auto *D = cast<Decl>(DC);
+    if (unsigned Key = Context.getTargetInstantiationKey(D))
+      return Key;
+    const auto *FD = dyn_cast<FunctionDecl>(D);
+    if (!FD)
+      continue;
+    // A host function is host code, even where it is analysed for a device
+    // for the sake of a lambda in it.
+    if (!isLambdaCallOperator(FD) && !FD->hasAttr<CUDADeviceAttr>() &&
+        !FD->hasAttr<CUDAGlobalAttr>())
+      return 1;
+    unsigned V = FD->getTargetVariant();
+    if (V && !FD->isRedundantTargetVariant())
+      return V;
+    // See ASTContext::HostKernelKeyRAII.
+    if (FD->hasAttr<CUDAGlobalAttr>()
+            ? !Context.areKernelsKeyedForHost()
+            : FD->hasAttr<CUDADeviceAttr>() && !FD->hasAttr<CUDAHostAttr>())
+      return Ambient > 1 ? Ambient : Context.getCanonicalDeviceVariant();
+    // A lambda is compiled for whatever its enclosing function is.
+    if (!isLambdaCallOperator(FD))
+      break;
+  }
+  if (Ambient > 1)
+    return Ambient;
+  if (!CodeSynthesisContexts.empty() &&
+      CodeSynthesisContexts.back().InstantiationTarget)
+    return CodeSynthesisContexts.back().InstantiationTarget;
+  return std::max(Ambient, 1u);
+}
+
+/// Whether \p D is one target's copy of a class or class template whose
+/// layout differs between targets, or a field of one.
+static bool isTargetDivergentLayoutEntity(const ASTContext &Ctx,
+                                          const NamedDecl *D) {
+  if (isa<RecordDecl, ClassTemplateDecl>(D))
+    return Ctx.hasTargetDivergentLayout(D);
+  return isa<FieldDecl>(D) &&
+         Ctx.hasTargetDivergentLayout(cast<RecordDecl>(D->getDeclContext()));
+}
+
+bool Sema::namesTargetDivergentLayout(QualType T) const {
+  if (T.isNull() || !Context.isHostPrimaryMultiTarget())
+    return false;
+  T = T.getCanonicalType().getNonReferenceType();
+  while (true) {
+    if (const ArrayType *AT = Context.getAsArrayType(T))
+      T = AT->getElementType();
+    else if (const auto *PT = T->getAs<PointerType>())
+      T = PT->getPointeeType();
+    else
+      break;
+  }
+  const RecordDecl *RD = T->getAsRecordDecl();
+  if (!RD)
+    return false;
+  if (RD->getTargetVariant())
+    return Context.hasTargetDivergentLayout(RD);
+  const auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(RD);
+  return CTSD && CTSD->getSpecializedTemplate()->getTargetVariant() &&
+         Context.hasTargetDivergentLayout(CTSD->getSpecializedTemplate());
+}
+
+const FunctionDecl *Sema::getTargetSpecializationMember(const FunctionDecl *FD,
+                                                        unsigned Target) {
+  const auto *Old =
+      dyn_cast<ClassTemplateSpecializationDecl>(FD->getDeclContext());
+  if (!Old)
+    return nullptr;
+  ClassTemplateDecl *CTD = Old->getSpecializedTemplate();
+  ArrayRef<TemplateArgument> Args = Old->getTemplateArgs().asArray();
+  SourceLocation Loc = FD->getLocation();
+  ASTContext::TargetScope Scope(Context, Target);
+  // Once the translation unit is analysed, only what exists can be used.
+  bool Analysing = CurScope != nullptr;
+  ClassTemplateSpecializationDecl *New = nullptr;
+  if (Analysing) {
+    TemplateArgumentListInfo ArgInfo(Loc, Loc);
+    for (const TemplateArgument &Arg : Args)
+      ArgInfo.addArgument(getTrivialTemplateArgumentLoc(Arg, QualType(), Loc));
+    QualType NewType = CheckTemplateIdType(
+        ElaboratedTypeKeyword::None, TemplateName(CTD), Loc, ArgInfo,
+        /*Scope=*/nullptr, /*ForNestedNameSpecifier=*/false);
+    if (NewType.isNull() || RequireCompleteType(Loc, NewType, 0))
+      return nullptr;
+    New = dyn_cast<ClassTemplateSpecializationDecl>(NewType->getAsRecordDecl());
+  } else {
+    llvm::FoldingSetInsertToken InsertToken;
+    New = CTD->findSpecialization(Args, InsertToken);
+  }
+  if (!New || New == Old || !New->isCompleteDefinition())
+    return nullptr;
+  // Each target's copy of the template replays the same tokens.
+  for (Decl *Member : New->decls()) {
+    auto *MemberFD = dyn_cast<FunctionDecl>(Member);
+    if (!MemberFD || MemberFD->getKind() != FD->getKind() ||
+        MemberFD->getLocation() != FD->getLocation() ||
+        MemberFD->getNameAsString() != FD->getNameAsString())
+      continue;
+    const FunctionDecl *Def = nullptr;
+    if (!MemberFD->isDefined(Def) && Analysing && MemberFD->isConstexpr())
+      InstantiateFunctionDefinition(Loc, MemberFD);
+    return MemberFD->isDefined(Def) ? Def : nullptr;
+  }
+  return nullptr;
+}
+
+NamedDecl *Sema::getInstantiationTargetCopy(NamedDecl *D) {
+  if (!Context.isHostPrimaryMultiTarget() ||
+      D->getDeclContext()->isDependentContext() ||
+      !(Context.isTargetDivergentSource(D) ||
+        isTargetDivergentLayoutEntity(Context, D)))
+    return nullptr;
+  unsigned Target = getInstantiationTarget();
+  if (D->getTargetVariant() == Target)
+    return nullptr;
+  SmallVector<const NamedDecl *, 4> Copies;
+  Context.getTargetCopies(D, Copies);
+  for (const NamedDecl *Copy : Copies)
+    if (Copy->getTargetVariant() == Target)
+      return const_cast<NamedDecl *>(Copy);
+  return nullptr;
+}
+
+void Sema::noteTargetDependentUse(bool OutsideFunctions, bool HostDeviceOnly) {
+  if (InTargetFallbackReparse || InTargetAlternativeRegion)
+    return;
+  // The function being parsed. Substituting into a template named there, e.g.
+  // its default arguments, can leave its context, but is part of analysing it;
+  // instantiating another definition is not.
+  const FunctionDecl *FD = nullptr;
+  if (CurScope)
+    if (Scope *Fn = CurScope->getFnParent())
+      FD = dyn_cast_or_null<FunctionDecl>(Fn->getEntity());
+  if (!FD)
+    FD = getCurFunctionDecl(/*AllowLambda=*/true);
+  if (FD ? FD->isDependentContext() || FD->getTargetVariant() ||
+               FD->isTemplateInstantiation() ||
+               CUDA().IdentifyTarget(FD) == CUDAFunctionTarget::Host ||
+               (HostDeviceOnly &&
+                CUDA().IdentifyTarget(FD) != CUDAFunctionTarget::HostDevice)
+         : !OutsideFunctions || HostDeviceOnly || inTemplateInstantiation() ||
+               !CurContext->isFileContext())
+    return;
+  TouchedTargetDependentMeaning = true;
+}
+
+bool Sema::isAnalysedAsHostWould() const {
+  for (const DeclContext *DC = CurContext; DC; DC = DC->getParent()) {
+    const auto *D = cast<Decl>(DC);
+    if (unsigned Key = Context.getTargetInstantiationKey(D))
+      return Key == 1;
+    if (const auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(D))
+      if (unsigned V = Context.getSpecializationKeyVariant(CTSD))
+        return V == 1;
+    const auto *FD = dyn_cast<FunctionDecl>(D);
+    if (!FD)
+      continue;
+    if (HostViewDependentFunctions.count(FD->getCanonicalDecl()))
+      return false;
+    if (unsigned V = FD->getTargetVariant();
+        V && !FD->isRedundantTargetVariant())
+      return V == 1;
+    if (isLambdaCallOperator(FD))
+      continue;
+    if (FD->isTemplateInstantiation())
+      return HostViewTrustedShared.count(FD->getCanonicalDecl());
+    return true;
+  }
+  return true;
+}
+
+void Sema::noteHostViewDependentUse(const FunctionDecl *FD) {
+  CUDAFunctionTarget FT = CUDA().IdentifyTarget(FD);
+  if (FT == CUDAFunctionTarget::Device || FT == CUDAFunctionTarget::Global)
+    HostViewDependentFunctions.insert(FD->getCanonicalDecl());
+}
+
+bool Sema::inTemplateHeader() const {
+  const Scope *TemplateParams =
+      CurScope ? CurScope->getTemplateParamParent() : nullptr;
+  return TemplateParams && !TemplateParams->decl_empty();
+}
+
+QualType Sema::getTypeForInstantiationTarget(QualType T, SourceLocation Loc) {
+  if (T.isNull() || !Context.isHostPrimaryMultiTarget())
+    return T;
+  if (const auto *PT = T->getAs<PointerType>()) {
+    QualType Pointee = getTypeForInstantiationTarget(PT->getPointeeType(), Loc);
+    if (Pointee == PT->getPointeeType())
+      return T;
+    return Context.getQualifiedType(Context.getPointerType(Pointee),
+                                    T.getLocalQualifiers());
+  }
+  if (const auto *RT = T->getAs<ReferenceType>()) {
+    QualType Pointee =
+        getTypeForInstantiationTarget(RT->getPointeeTypeAsWritten(), Loc);
+    if (Pointee == RT->getPointeeTypeAsWritten())
+      return T;
+    return isa<LValueReferenceType>(RT)
+               ? Context.getLValueReferenceType(Pointee)
+               : Context.getRValueReferenceType(Pointee);
+  }
+  const auto *CTSD = dyn_cast_or_null<ClassTemplateSpecializationDecl>(
+      T->getAsCXXRecordDecl());
+  if (!CTSD)
+    return T;
+  ClassTemplateDecl *CTD = CTSD->getSpecializedTemplate();
+  ArrayRef<TemplateArgument> Args = CTSD->getTemplateArgs().asArray();
+  QualType Result;
+  if (unsigned Key =
+          Context.getTargetInstantiationKey(CTSD->getCanonicalDecl())) {
+    unsigned TargetKey = Context.computeTargetInstantiationKey(CTD);
+    if (!TargetKey || TargetKey == Key)
+      return T;
+    if (ClassTemplateSpecializationDecl *Sibling =
+            CTD->findSpecializationForTargetKey(Args, TargetKey))
+      Result = Context.getCanonicalTagType(Sibling);
+  } else {
+    // Keyed by the ambient target instead (see
+    // ClassTemplateSpecializationDecl::Profile): an architecture instantiated
+    // apart from the canonical device (instantiateForOtherDeviceTargets)
+    // uses its own.
+    unsigned Ambient = Context.getCurrentTargetVariant();
+    unsigned Have = Context.getSpecializationKeyVariant(CTSD);
+    if (!Have || Have == Ambient ||
+        Ambient <= Context.getCanonicalDeviceVariant() ||
+        !CTD->hasTargetKeyedSpecializations())
+      return T;
+    // A template forked per target names this target's copy.
+    if (auto *Sibling = dyn_cast_or_null<ClassTemplateDecl>(
+            findTargetVariantSibling(CTD, Ambient)))
+      CTD = Sibling;
+  }
+  if (Result.isNull()) {
+    TemplateArgumentListInfo ArgInfo(Loc, Loc);
+    for (const TemplateArgument &Arg : Args) {
+      if (Arg.getKind() != TemplateArgument::Pack) {
+        ArgInfo.addArgument(
+            getTrivialTemplateArgumentLoc(Arg, QualType(), Loc));
+        continue;
+      }
+      for (const TemplateArgument &Element : Arg.pack_elements())
+        ArgInfo.addArgument(
+            getTrivialTemplateArgumentLoc(Element, QualType(), Loc));
+    }
+    Result = CheckTemplateIdType(ElaboratedTypeKeyword::None, TemplateName(CTD),
+                                 Loc, ArgInfo, /*Scope=*/nullptr,
+                                 /*ForNestedNameSpecifier=*/false);
+    if (Result.isNull())
+      return T;
+  }
+  return Context.getQualifiedType(Result, T.getQualifiers());
+}
+
+QualType Sema::getWrittenTypeForTarget(QualType T, unsigned Target,
+                                       SourceLocation Loc) {
+  if (T.isNull() || !Target || T->isDependentType() ||
+      !Context.isHostPrimaryMultiTarget())
+    return T;
+  if (const auto *FPT = T->getAs<FunctionProtoType>()) {
+    QualType Result = getWrittenTypeForTarget(FPT->getReturnType(), Target, Loc);
+    bool Changed = Result != FPT->getReturnType();
+    SmallVector<QualType, 4> Params;
+    for (QualType Param : FPT->getParamTypes()) {
+      Params.push_back(getWrittenTypeForTarget(Param, Target, Loc));
+      Changed |= Params.back() != Param;
+    }
+    if (!Changed)
+      return T;
+    return Context.getFunctionType(Result, Params, FPT->getExtProtoInfo());
+  }
+  if (const auto *PT = T->getAs<PointerType>()) {
+    QualType Pointee =
+        getWrittenTypeForTarget(PT->getPointeeType(), Target, Loc);
+    if (Pointee == PT->getPointeeType())
+      return T;
+    return Context.getQualifiedType(Context.getPointerType(Pointee),
+                                    T.getLocalQualifiers());
+  }
+  if (const auto *RT = T->getAs<ReferenceType>()) {
+    QualType Pointee =
+        getWrittenTypeForTarget(RT->getPointeeTypeAsWritten(), Target, Loc);
+    if (Pointee == RT->getPointeeTypeAsWritten())
+      return T;
+    return isa<LValueReferenceType>(RT)
+               ? Context.getLValueReferenceType(Pointee)
+               : Context.getRValueReferenceType(Pointee);
+  }
+  const auto *TST = T->getAs<TemplateSpecializationType>();
+  const auto *CTSD = dyn_cast_or_null<ClassTemplateSpecializationDecl>(
+      T->getAsCXXRecordDecl());
+  if (!TST || !CTSD)
+    return T;
+  // A type argument, e.g. M<int> in Box<M<int>>, can be one itself.
+  SmallVector<TemplateArgument, 4> Args;
+  bool ArgsChanged = false;
+  for (const TemplateArgument &Arg : TST->template_arguments()) {
+    Args.push_back(Arg);
+    if (Arg.getKind() != TemplateArgument::Type)
+      continue;
+    QualType ArgType = getWrittenTypeForTarget(Arg.getAsType(), Target, Loc);
+    if (ArgType != Arg.getAsType()) {
+      Args.back() = TemplateArgument(ArgType);
+      ArgsChanged = true;
+    }
+  }
+  unsigned Have = Context.getTargetInstantiationKey(CTSD->getCanonicalDecl());
+  if (!Have && !ArgsChanged)
+    return T;
+  llvm::SaveAndRestore Forced(ForcedInstantiationTarget, Target);
+  ClassTemplateDecl *CTD = CTSD->getSpecializedTemplate();
+  unsigned Want = Have ? Context.computeTargetInstantiationKey(CTD) : 0;
+  if (!ArgsChanged && (!Want || Want == Have))
+    return T;
+  std::optional<ASTContext::TargetScope> Scope;
+  if (Want)
+    Scope.emplace(Context, Want);
+  TemplateArgumentListInfo ArgInfo(Loc, Loc);
+  for (const TemplateArgument &Arg : Args)
+    ArgInfo.addArgument(getTrivialTemplateArgumentLoc(Arg, QualType(), Loc));
+  QualType Result = CheckTemplateIdType(
+      ElaboratedTypeKeyword::None, TemplateName(CTD), Loc, ArgInfo,
+      /*Scope=*/nullptr, /*ForNestedNameSpecifier=*/false);
+  if (Result.isNull())
+    return T;
+  return Context.getQualifiedType(Result, T.getQualifiers());
+}
+
 void Sema::Initialize() {
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    Context.setInstantiationTargetHook(
+        [](void *S) {
+          return static_cast<const Sema *>(S)->getInstantiationTarget();
+        },
+        [](void *S, bool HostDeviceOnly) {
+          static_cast<Sema *>(S)->noteTargetDependentUse(
+              /*OutsideFunctions=*/false, HostDeviceOnly);
+        },
+        this);
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    Context.setTargetSpecializationMemberHook(
+        [](void *S, const FunctionDecl *FD, unsigned Target) {
+          return static_cast<Sema *>(S)->getTargetSpecializationMember(FD,
+                                                                       Target);
+        });
   // Create BuiltinVaListDecl *before* ExternalSemaSource::InitializeSema(this)
   // because during initialization ASTReader can emit globals that require
   // name mangling. And the name mangling uses BuiltinVaListDecl.
@@ -609,6 +997,8 @@ void Sema::Initialize() {
 Sema::~Sema() {
   assert(InstantiatingSpecializations.empty() &&
          "failed to clean up an InstantiatingTemplate?");
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    Context.setInstantiationTargetHook(nullptr, nullptr, nullptr);
 
   if (VisContext) FreeVisContext();
 
@@ -1280,6 +1670,17 @@ void Sema::ActOnEndOfTranslationUnitFragment(TUFragmentKind Kind) {
         Func->setInstantiationIsPending(true);
     PendingInstantiations.insert(PendingInstantiations.begin(),
                                  Pending.begin(), Pending.end());
+  }
+
+  // Before instantiation, not after: an instantiation inherits its pattern's
+  // target, so a template that is still claimed takes every specialization of
+  // it with it.
+  if (LLVM_UNLIKELY(clang::MergeEquivalentVariants) &&
+      LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+    unsigned N = mergeEquivalentVariants(getASTContext());
+    if (LLVM_UNLIKELY(clang::CountDivergentUses))
+      llvm::errs() << "merged equivalent variants: " << N
+                   << " declarations un-claimed\n";
   }
 
   {
@@ -2073,6 +2474,11 @@ public:
     FunctionDecl *Caller = UsePath.empty() ? nullptr : UsePath.back();
     if ((!ShouldEmitRootNode && !S.getLangOpts().OpenMP && !Caller) ||
         S.shouldIgnoreInHostDeviceCheck(FD) || InUsePath.count(FD))
+      return;
+    // A host-primary multi-target Sema emits the host itself; a copy tagged
+    // for a device target is only ever emitted by that target's CodeGen.
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+        !S.getLangOpts().CUDAIsDevice && FD->getTargetVariant() > 1)
       return;
     // Finalize analysis of OpenMP-specific constructs.
     if (Caller && S.LangOpts.OpenMP && UsePath.size() == 1 &&

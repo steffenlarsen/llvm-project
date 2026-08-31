@@ -1626,6 +1626,9 @@ public:
     RemovePragmaHandler(StringRef(), Handler);
   }
 
+  /// The pragma handlers, as the namespace pragmas are looked up in.
+  const PragmaNamespace &getPragmaHandlers() const { return *PragmaHandlers; }
+
   /// Install empty handlers for all pragmas (making them ignored).
   void IgnorePragmas();
 

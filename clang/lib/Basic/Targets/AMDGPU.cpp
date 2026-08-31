@@ -305,7 +305,8 @@ void AMDGPUTargetInfo::getTargetDefines(const LangOptions &Opts,
   // e.g. gfx10-1-generic -> gfx10_1_generic
   llvm::replace(CanonName, '-', '_');
 
-  Builder.defineMacro(Twine("__") + Twine(CanonName) + Twine("__"));
+  if (!IsHIPHost)
+    Builder.defineMacro(Twine("__") + Twine(CanonName) + Twine("__"));
   // Emit macros for gfx family e.g. gfx906 -> __GFX9__, gfx1030 -> __GFX10___
   if (getTriple().isAMDGCN() && !IsHIPHost) {
     assert(StringRef(CanonName).starts_with("gfx") &&

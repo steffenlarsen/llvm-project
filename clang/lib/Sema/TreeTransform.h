@@ -8544,6 +8544,12 @@ TreeTransform<Derived>::TransformIfStmt(IfStmt *S) {
   if (S->isConstexpr())
     ConstexprConditionValue = Cond.getKnownValue();
 
+  // A multi-target frontend cannot resolve the condition here, because it
+  // may differ per target. Leaving the value unset makes the code below
+  // instantiate both arms and keep them in the AST.
+  if (KeepBothConstexprIfBranches && S->isConstexpr())
+    ConstexprConditionValue = std::nullopt;
+
   // Transform the "then" branch.
   StmtResult Then;
   if (!ConstexprConditionValue || *ConstexprConditionValue) {
@@ -15516,9 +15522,9 @@ bool TreeTransform<Derived>::TransformOverloadExprDecls(OverloadExpr *Old,
     for (auto *D : Decls) {
       if (auto *UD = dyn_cast<UsingDecl>(D)) {
         for (auto *SD : UD->shadows())
-          R.addDecl(SD);
+          R.addDeclIgnoringTargetVisibility(SD);
       } else {
-        R.addDecl(D);
+        R.addDeclIgnoringTargetVisibility(D);
       }
     }
 
@@ -16320,6 +16326,19 @@ TreeTransform<Derived>::TransformLambdaExpr(LambdaExpr *E) {
 
   CXXMethodDecl *NewCallOperator =
       getSema().CreateLambdaCallOperator(E->getIntroducerRange(), Class);
+
+  // ActOnStartOfLambdaDefinition grants every ordinarily-parsed lambda's call
+  // operator implicit CUDADeviceAttr/CUDAHostAttr via SetLambdaAttrs, but this
+  // rebuild path never calls that function -- without this, a lambda rebuilt
+  // here (e.g. DivergentValueCalleeRewriter's Var-mode rewrite of a lambda
+  // found inside a variable's initializer) is classified as a plain Host
+  // function, so a device caller can never call it. Routed through the
+  // Sema-level SetLambdaAttrsForCUDA wrapper (rather than calling
+  // getSema().CUDA() directly) since SemaCUDA is only forward-declared here
+  // -- this header is included by translation units that never otherwise see
+  // its complete type.
+  if (getSema().getLangOpts().CUDA)
+    getSema().SetLambdaAttrsForCUDA(NewCallOperator);
 
   // Enter the scope of the lambda.
   getSema().buildLambdaScope(LSI, NewCallOperator, E->getIntroducerRange(),

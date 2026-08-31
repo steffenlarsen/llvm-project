@@ -29,6 +29,7 @@
 #include "clang/Frontend/LogDiagnosticPrinter.h"
 #include "clang/Frontend/SARIFDiagnosticPrinter.h"
 #include "clang/Frontend/SerializedDiagnosticPrinter.h"
+#include "clang/Frontend/TextDiagnosticBuffer.h"
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Frontend/Utils.h"
 #include "clang/Frontend/VerifyDiagnosticConsumer.h"
@@ -49,10 +50,13 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Support/AdvisoryLock.h"
 #include "llvm/Support/BuryPointer.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/CrashRecoveryContext.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/FileSystem.h"
@@ -60,6 +64,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/SmallVectorMemoryBuffer.h"
+#include "llvm/Support/StringSaver.h"
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/Timer.h"
@@ -115,7 +120,96 @@ void CompilerInstance::setVerboseOutputStream(std::unique_ptr<raw_ostream> Value
 void CompilerInstance::setTarget(TargetInfo *Value) { Target = Value; }
 void CompilerInstance::setAuxTarget(TargetInfo *Value) { AuxTarget = Value; }
 
+bool CompilerInstance::langOptMayDifferPerTarget(StringRef Name) {
+  return llvm::StringSwitch<bool>(Name)
+      // Host vs. device is what multi-target compilation is.
+      .Case("CUDAIsDevice", true)
+      // Only read by CodeGen.
+      .Cases({"ConvergentFunctions", "SetVisibilityForExternDecls",
+              "HalfNoSemanticInterposition"},
+             true)
+      // Linkage computation reads these too, but only CodeGen consumes the
+      // result.
+      .Cases({"ValueVisibilityMode", "TypeVisibilityMode"}, true)
+      // Only read by the preprocessor and CodeGen, which run per target.
+      .Cases({"PIE", "ThreadsafeStatics"}, true)
+      // Sema also marks implicit library builtins const from it; the shared
+      // AST gets the primary's value.
+      .Case("MathErrno", true)
+      .Default(false);
+}
+
+/// Parses each -multi-target-aux-invocation into \p Invocations, warns about
+/// each AST-shaping LangOptions field it sets differently from \p Primary, and
+/// diagnoses each -mllvm option \p Primary lacks.
+static bool parseMultiTargetAuxInvocations(
+    DiagnosticsEngine &Diags, const CompilerInvocation &Primary,
+    SmallVectorImpl<std::shared_ptr<CompilerInvocation>> &Invocations) {
+  for (const std::string &Args :
+       Primary.getFrontendOpts().MultiTargetAuxInvocations) {
+    llvm::BumpPtrAllocator Alloc;
+    llvm::StringSaver Saver(Alloc);
+    SmallVector<const char *, 128> Argv;
+    llvm::cl::TokenizeGNUCommandLine(Args, Saver, Argv);
+
+    TextDiagnosticBuffer ParseDiags;
+    DiagnosticOptions ParseDiagOpts;
+    DiagnosticsEngine ParseEngine(DiagnosticIDs::create(), ParseDiagOpts,
+                                  &ParseDiags, /*ShouldOwnClient=*/false);
+    auto Aux = std::make_shared<CompilerInvocation>();
+    if (!CompilerInvocation::CreateFromArgs(*Aux, Argv, ParseEngine)) {
+      Diags.Report(diag::err_fe_invalid_multi_target_aux_invocation)
+          << Args
+          << (ParseDiags.err_begin() != ParseDiags.err_end()
+                  ? ParseDiags.err_begin()->second
+                  : std::string());
+      return false;
+    }
+
+    const LangOptions &PrimaryLO = Primary.getLangOpts();
+    const LangOptions &AuxLO = Aux->getLangOpts();
+    StringRef AuxName = Aux->getTargetOpts().CPU.empty()
+                            ? StringRef(Aux->getTargetOpts().Triple)
+                            : StringRef(Aux->getTargetOpts().CPU);
+    auto Check = [&](StringRef Name, bool Differs) {
+      if (Differs && !CompilerInstance::langOptMayDifferPerTarget(Name))
+        Diags.Report(diag::warn_fe_multi_target_lang_opt_mismatch)
+            << Name << AuxName;
+    };
+#define LANGOPT(Name, Bits, Default, Compatibility, Description)               \
+  Check(#Name, PrimaryLO.Name != AuxLO.Name);
+#define ENUM_LANGOPT(Name, Type, Bits, Default, Compatibility, Description)    \
+  Check(#Name, PrimaryLO.get##Name() != AuxLO.get##Name());
+#include "clang/Basic/LangOptions.def"
+
+    // cl::opt values are process-wide: only the primary's -mllvm options take
+    // effect, for every target.
+    bool LLVMArgMissing = false;
+    for (const std::string &Arg : Aux->getFrontendOpts().LLVMArgs) {
+      if (llvm::none_of(
+              Primary.getFrontendOpts().LLVMArgs, [&](StringRef PrimaryArg) {
+                return PrimaryArg.ltrim('-') == StringRef(Arg).ltrim('-');
+              })) {
+        Diags.Report(diag::err_fe_multi_target_aux_llvm_arg_missing)
+            << Arg << AuxName;
+        LLVMArgMissing = true;
+      }
+    }
+    if (LLVMArgMissing)
+      return false;
+
+    Invocations.push_back(std::move(Aux));
+  }
+  return true;
+}
+
 bool CompilerInstance::createTarget() {
+  MultiTargetAuxInvocations.clear();
+  MultiTargetAuxTargets.clear();
+  if (!parseMultiTargetAuxInvocations(getDiagnostics(), getInvocation(),
+                                      MultiTargetAuxInvocations))
+    return false;
+
   // Create the target instance.
   setTarget(TargetInfo::CreateTargetInfo(getDiagnostics(),
                                          getInvocation().getTargetOpts()));
@@ -141,6 +235,15 @@ bool CompilerInstance::createTarget() {
       TO->FeaturesAsWritten = *getFrontendOpts().AuxTargetFeatures;
     TO->HostTriple = getTarget().getTriple().str();
     setAuxTarget(TargetInfo::CreateTargetInfo(getDiagnostics(), *TO));
+  }
+
+  for (const std::shared_ptr<CompilerInvocation> &Invocation :
+       MultiTargetAuxInvocations) {
+    IntrusiveRefCntPtr<TargetInfo> TI(TargetInfo::CreateTargetInfo(
+        getDiagnostics(), Invocation->getTargetOpts()));
+    if (!TI)
+      return false;
+    MultiTargetAuxTargets.push_back(TI);
   }
 
   if (!getTarget().hasStrictFP() && !getLangOpts().ExpStrictFP) {
@@ -169,6 +272,21 @@ bool CompilerInstance::createTarget() {
 
   if (auto *Aux = getAuxTarget())
     getTarget().setAuxTarget(Aux);
+
+  // TargetInfo::setAuxTarget/copyAuxTarget only patches the callee (here,
+  // each new aux target) from the argument -- it is not symmetric. The call
+  // above patches the primary from the single AuxTarget, which only covers
+  // subclass overrides that live on the primary (e.g.
+  // AMDGPUTargetInfo::setAuxTarget's large-array alignment boost when the
+  // primary is the device). Patch each new aux target from the primary too,
+  // so overrides that live on the aux side are picked up as well.
+  const TargetInfo *HostTarget =
+      getLangOpts().CUDAIsDevice ? getAuxTarget() : &getTarget();
+  for (auto [TI, Invocation] :
+       llvm::zip_equal(MultiTargetAuxTargets, MultiTargetAuxInvocations)) {
+    TI->adjust(getDiagnostics(), Invocation->getLangOpts(), HostTarget);
+    TI->setAuxTarget(&getTarget());
+  }
 
   return true;
 }
@@ -581,7 +699,16 @@ void CompilerInstance::createASTContext() {
   auto Context = llvm::makeIntrusiveRefCnt<ASTContext>(
       getLangOpts(), PP.getSourceManager(), PP.getIdentifierTable(),
       PP.getSelectorTable(), PP.getBuiltinInfo(), PP.TUKind);
-  Context->InitBuiltinTypes(getTarget(), getAuxTarget());
+  // Route through the array-form overload only when N-aux-targets are
+  // configured; otherwise use the single-aux-target call unchanged.
+  if (!getMultiTargetAuxTargets().empty()) {
+    SmallVector<const TargetInfo *, 4> AuxTargets;
+    for (const IntrusiveRefCntPtr<TargetInfo> &TI : getMultiTargetAuxTargets())
+      AuxTargets.push_back(TI.get());
+    Context->InitBuiltinTypes(getTarget(), AuxTargets);
+  } else {
+    Context->InitBuiltinTypes(getTarget(), getAuxTarget());
+  }
   setASTContext(std::move(Context));
 }
 

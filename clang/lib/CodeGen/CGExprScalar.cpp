@@ -25,6 +25,7 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/DeclObjC.h"
+#include "clang/AST/DeclTemplate.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/MatrixUtils.h"
 #include "clang/AST/ParentMapContext.h"
@@ -2145,7 +2146,14 @@ Value *ScalarExprEmitter::VisitMemberExpr(MemberExpr *E) {
   if (CodeGenFunction::ConstantEmission Constant = CGF.tryEmitAsConstant(E)) {
     CGF.EmitIgnoredExpr(E->getBase());
     return CGF.emitScalarConstant(Constant, E);
-  } else {
+  } else if (!(LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+               clang::containsTargetDivergentCallee(E))) {
+    // Expr::EvaluateAsInt is the general AST constant evaluator: it resolves
+    // straight through to whatever the (single, Sema-chosen) callee/decl was
+    // and has no notion of the per-target redirect tables that CodeGen's
+    // multi-target emission otherwise consults, so it must be skipped in
+    // favor of the normal load-of-lvalue path below whenever a target-
+    // divergent callee is reachable from E.
     Expr::EvalResult Result;
     if (E->EvaluateAsInt(Result, CGF.getContext(), Expr::SE_AllowSideEffects)) {
       llvm::APSInt Value = Result.Val.getInt();

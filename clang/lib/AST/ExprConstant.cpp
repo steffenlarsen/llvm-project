@@ -9078,6 +9078,11 @@ public:
 
     const FunctionDecl *Definition = nullptr;
     Stmt *Body = FD->getBody(Definition);
+    if (const FunctionDecl *Own = Info.Ctx.getTargetDefinitionForEvaluation(
+            FD, Definition, Info.InConstantContext)) {
+      Definition = Own;
+      Body = Own->getBody();
+    }
     SourceLocation Loc = E->getExprLoc();
 
     // Treat the object argument as `this` when evaluating defaulted
@@ -11737,6 +11742,11 @@ bool RecordExprEvaluator::VisitCXXConstructExpr(const CXXConstructExpr *E,
 
   const FunctionDecl *Definition = nullptr;
   auto Body = FD->getBody(Definition);
+  if (const FunctionDecl *Own = Info.Ctx.getTargetDefinitionForEvaluation(
+          FD, Definition, Info.InConstantContext)) {
+    Definition = Own;
+    Body = Own->getBody();
+  }
 
   if (!CheckConstexprFunction(Info, E->getExprLoc(), FD, Definition, Body))
     return false;

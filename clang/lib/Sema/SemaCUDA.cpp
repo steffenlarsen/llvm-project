@@ -913,14 +913,21 @@ void SemaCUDA::maybeAddHostDeviceAttrs(FunctionDecl *NewD,
 void SemaCUDA::MaybeAddConstantAttr(VarDecl *VD) {
   // Do not promote dependent variables since the cotr/dtor/initializer are
   // not determined. Do it after instantiation.
-  if (getLangOpts().CUDAIsDevice && !VD->hasAttr<CUDAConstantAttr>() &&
-      !VD->hasAttr<CUDASharedAttr>() &&
+  bool ForAuxDevice = LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+                      getLangOpts().CUDA && !getLangOpts().CUDAIsDevice;
+  if ((getLangOpts().CUDAIsDevice || ForAuxDevice) &&
+      !VD->hasAttr<CUDAConstantAttr>() && !VD->hasAttr<CUDASharedAttr>() &&
       (VD->isFileVarDecl() || VD->isStaticDataMember()) &&
       !IsDependentVar(VD) &&
       ((VD->isConstexpr() || VD->getType().isConstQualified()) &&
        HasAllowedCUDADeviceStaticInitializer(*this, VD,
                                              CICK_DeviceOrConstant))) {
-    VD->addAttr(CUDAConstantAttr::CreateImplicit(getASTContext()));
+    // A host-primary multi-target Sema serves the host too; see
+    // ASTContext::ImplicitAuxDeviceConstants.
+    if (ForAuxDevice)
+      getASTContext().setImplicitAuxDeviceConstant(VD);
+    else
+      VD->addAttr(CUDAConstantAttr::CreateImplicit(getASTContext()));
   }
 }
 

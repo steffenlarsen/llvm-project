@@ -15,6 +15,7 @@
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclFriend.h"
 #include "clang/AST/DeclObjC.h"
+#include "clang/AST/DeclTemplate.h"
 #include "clang/AST/DependentDiagnostic.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/Basic/Specifiers.h"
@@ -598,11 +599,64 @@ static bool MightInstantiateTo(ASTContext &Ctx, FunctionTemplateDecl *Context,
                             Friend->getTemplatedDecl());
 }
 
+static bool isTargetVariantCopy(const CXXRecordDecl *A,
+                                const CXXRecordDecl *B);
+
+/// Template arguments that agree once widened copies of one class count as
+/// one.
+static bool sameArgsModuloCopies(ArrayRef<TemplateArgument> A,
+                                 ArrayRef<TemplateArgument> B) {
+  if (A.size() != B.size())
+    return false;
+  for (unsigned I = 0, E = A.size(); I != E; ++I) {
+    if (A[I].structurallyEquals(B[I]))
+      continue;
+    if (A[I].getKind() != TemplateArgument::Type ||
+        B[I].getKind() != TemplateArgument::Type)
+      return false;
+    const auto *RA = A[I].getAsType()->getAsCXXRecordDecl();
+    const auto *RB = B[I].getAsType()->getAsCXXRecordDecl();
+    if (!RA || !RB || !isTargetVariantCopy(RA, RB))
+      return false;
+  }
+  return true;
+}
+
+/// Every target's copy of a widened class, or a specialization of every
+/// target's copy of a widened class template, replays the same tokens: a
+/// friend naming one copy befriends the others too, which a merge may since
+/// have made the live one.
+static bool isTargetVariantCopy(const CXXRecordDecl *A,
+                                const CXXRecordDecl *B) {
+  if (declaresSameEntity(A, B))
+    return true;
+  if (A->getDeclName() != B->getDeclName() ||
+      !A->getDeclContext()->getRedeclContext()->Equals(
+          B->getDeclContext()->getRedeclContext()))
+    return false;
+  const auto *SA = dyn_cast<ClassTemplateSpecializationDecl>(A);
+  const auto *SB = dyn_cast<ClassTemplateSpecializationDecl>(B);
+  if (!SA || !SB)
+    return !SA && !SB && A->getLocation() == B->getLocation() &&
+           (A->getTargetVariant() || B->getTargetVariant());
+  const ClassTemplateDecl *TA = SA->getSpecializedTemplate();
+  const ClassTemplateDecl *TB = SB->getSpecializedTemplate();
+  return TA->getLocation() == TB->getLocation() &&
+         (TA->getTargetVariant() || TB->getTargetVariant()) &&
+         sameArgsModuloCopies(SA->getTemplateArgs().asArray(),
+                              SB->getTemplateArgs().asArray());
+}
+
 static AccessResult MatchesFriend(Sema &S,
                                   const EffectiveContext &EC,
                                   const CXXRecordDecl *Friend) {
   if (EC.includesClass(Friend))
     return AR_accessible;
+
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    for (const CXXRecordDecl *Context : EC.Records)
+      if (isTargetVariantCopy(Context, Friend))
+        return AR_accessible;
 
   if (EC.isDependent()) {
     for (const CXXRecordDecl *Context : EC.Records) {

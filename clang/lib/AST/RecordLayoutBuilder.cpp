@@ -3442,7 +3442,7 @@ ASTContext::getASTRecordLayout(const RecordDecl *D) const {
   // Look up this layout, if already laid out, return what we have.
   // Note that we can't save a reference to the entry because this function
   // is recursive.
-  const ASTRecordLayout *Entry = ASTRecordLayouts[D];
+  const ASTRecordLayout *Entry = lookupRecordLayout(D);
   if (Entry) return *Entry;
 
   const ASTRecordLayout *NewEntry = nullptr;
@@ -3509,7 +3509,7 @@ ASTContext::getASTRecordLayout(const RecordDecl *D) const {
     }
   }
 
-  ASTRecordLayouts[D] = NewEntry;
+  storeRecordLayout(D, NewEntry);
 
   // Cap at the target's size_t width (up to 60 bits) so oversized layouts on
   // narrow targets are diagnosed instead of overflowing size_t in codegen.

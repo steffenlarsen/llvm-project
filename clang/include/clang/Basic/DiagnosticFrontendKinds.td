@@ -158,6 +158,24 @@ def err_fe_invalid_source_date_epoch : Error<
 def err_fe_unable_to_load_basic_block_sections_file : Error<
     "unable to load basic block sections function list: '%0'">;
 
+def err_fe_invalid_multi_target_aux_invocation : Error<
+    "invalid multi-target aux invocation '%0': %1">;
+def err_fe_multi_target_aux_llvm_arg_missing : Error<
+    "'-mllvm %0' of aux target '%1' must also be passed to the primary target">;
+def err_fe_multi_target_pch : Error<
+    "precompiled header '%0' cannot be used when compiling for multiple targets "
+    "at once; include the header it was built from instead">;
+def err_fe_multi_target_recording_failed : Error<
+    "cannot compile for multiple targets at once: preprocessing for '%0' "
+    "failed">;
+def err_fe_multi_target_preprocessed_input : Error<
+    "preprocessed input '%0' cannot be compiled for multiple targets at once; "
+    "it was preprocessed for one target">;
+def warn_fe_multi_target_lang_opt_mismatch : Warning<
+    "language option '%0' differs between the primary target and aux target "
+    "'%1'; the shared AST uses the primary target's value">,
+    InGroup<MultiTargetOptionMismatch>, DefaultError;
+
 def warn_fe_serialized_diag_merge_failure : Warning<
     "unable to merge a subprocess's serialized diagnostics">,
     InGroup<SerializedDiagnostics>;

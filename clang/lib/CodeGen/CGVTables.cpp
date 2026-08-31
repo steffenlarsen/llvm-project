@@ -1229,6 +1229,8 @@ bool CodeGenModule::mayVTableBeDuplicated(
 /// functions).  For weak vtables, CodeGen tracks when they are needed and
 /// emits them as-needed.
 void CodeGenModule::EmitVTable(CXXRecordDecl *theClass) {
+  if (!shouldEmitForTargetVariant(theClass))
+    return;
   VTables.GenerateClassData(theClass);
   EmittedVTables.insert(theClass);
 }
