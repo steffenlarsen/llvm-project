@@ -365,6 +365,12 @@ private:
   llvm::Module &TheModule;
   DiagnosticsEngine &Diags;
   const TargetInfo &Target;
+
+  /// PROTOTYPE (Stage 5): the Decl::TargetVariant this CodeGenModule emits
+  /// for, captured from the ASTContext's ambient variant at construction.
+  /// See shouldEmitForTargetVariant().
+  const unsigned TargetVariant;
+
   std::unique_ptr<CGCXXABI> ABI;
   llvm::LLVMContext &VMContext;
   std::string ModuleNameHash;
@@ -913,6 +919,10 @@ public:
     return TheModule.getDataLayout();
   }
   const TargetInfo &getTarget() const { return Target; }
+
+  /// PROTOTYPE (Stage 5): the Decl::TargetVariant this CodeGenModule emits
+  /// for. See TargetVariant / shouldEmitForTargetVariant().
+  unsigned getTargetVariant() const { return TargetVariant; }
   const llvm::Triple &getTriple() const { return Target.getTriple(); }
   bool supportsCOMDAT() const;
   void maybeSetTrivialComdat(const Decl &D, llvm::GlobalObject &GO);
@@ -2184,6 +2194,19 @@ private:
   /// \return the function that registers the binary with the runtime, or null
   /// if the binary could not be read.
   llvm::Function *embedSYCLDeviceBinary();
+
+  /// PROTOTYPE (Stage 5): whether \p D belongs to the target this
+  /// CodeGenModule is emitting for. A combined multi-target frontend runs one
+  /// CodeGenModule per Decl::TargetVariant over the same shared AST; without
+  /// this check a decl tagged for another target (or one a merge pass proved
+  /// redundant) would reach emission here too, colliding by mangled name with
+  /// its sibling in this module's deferred-emission tables.
+  bool shouldEmitForTargetVariant(const Decl *D) const {
+    if (D->isRedundantTargetVariant())
+      return false;
+    unsigned DV = D->getTargetVariant();
+    return DV == 0 || DV == TargetVariant;
+  }
 
   /// Determine whether the definition must be emitted; if this returns \c
   /// false, the definition can be emitted lazily if it's used.

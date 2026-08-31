@@ -2515,6 +2515,34 @@ NamedDecl *Sema::LazilyCreateBuiltin(IdentifierInfo *II, unsigned ID,
 static void
 filterNonConflictingPreviousTypedefDecls(Sema &S, const TypedefNameDecl *Decl,
                                          LookupResult &Previous) {
+  // PROTOTYPE (Stage 4): a merged multi-target token stream can declare the
+  // same name differently per target. Such declarations are not redeclarations
+  // of each other -- they are variants -- so filter the other targets' ones out
+  // of the redeclaration check, exactly as the modules case below does for
+  // hidden declarations. Here the variant is assigned automatically so the
+  // mechanism can be exercised before Stage 3 exists to supply it.
+  if (clang::AllowTargetVariantDecls && !Previous.empty()) {
+    LookupResult::Filter F = Previous.makeFilter();
+    unsigned MaxSeen = 0;
+    while (F.hasNext()) {
+      NamedDecl *Old = F.next();
+      auto *OldTD = dyn_cast<TypedefNameDecl>(Old);
+      if (!OldTD) continue;
+      if (S.Context.hasSameType(OldTD->getUnderlyingType(),
+                                Decl->getUnderlyingType()))
+        continue;
+      // Variant 0 means "applies to every target". The first alternative of a
+      // divergent region is therefore variant 1, not 0.
+      if (OldTD->getTargetVariant() == 0)
+        const_cast<TypedefNameDecl *>(OldTD)->setTargetVariant(1);
+      MaxSeen = std::max(MaxSeen, OldTD->getTargetVariant());
+      F.erase();
+    }
+    F.done();
+    if (MaxSeen)
+      const_cast<TypedefNameDecl *>(Decl)->setTargetVariant(MaxSeen + 1);
+  }
+
   // This is only interesting when modules are enabled.
   if (!S.getLangOpts().Modules && !S.getLangOpts().ModulesLocalVisibility)
     return;
@@ -16328,6 +16356,22 @@ Sema::CheckForFunctionRedefinition(FunctionDecl *FD,
   }
 
   if (canRedefineFunction(Definition, getLangOpts()))
+    return;
+
+  // PROTOTYPE (Stage 5): a definition tagged for one target variant and a
+  // second definition now being parsed under a *different* variant are not
+  // really a redefinition -- each target gets its own body for what the
+  // shared declaration only forward-declared. Ordinary redefinition checking
+  // has no target-variant concept; Lookup.h's addDecl deliberately falls back
+  // to a target-visible ancestor so the second definition still links into
+  // the same redeclaration chain as the first (rather than heading a new,
+  // disconnected one), so this check must tell the two cases apart itself.
+  // FD itself isn't tagged yet at this point in parsing -- ClaimForTargetVariant
+  // only runs once the whole top-level declaration has been parsed -- so use
+  // the ambient variant the parser is currently re-parsing under instead.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      Definition->getTargetVariant() != 0 &&
+      Definition->getTargetVariant() != Context.getCurrentTargetVariant())
     return;
 
   // Don't emit an error when this is redefinition of a typo-corrected

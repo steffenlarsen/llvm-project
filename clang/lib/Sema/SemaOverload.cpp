@@ -11606,6 +11606,32 @@ void OverloadCandidateSet::CudaExcludeWrongSideCandidates(
   llvm::erase_if(Candidates, IsWrongSideCandidate);
 }
 
+namespace {
+/// PROTOTYPE (Stage 8): temporarily flips LangOptions::CUDAIsDevice so an
+/// HD-context caller's CUDA overload preference (SemaCUDA::IdentifyPreference
+/// rule (d), which is ambient-dependent) can be re-evaluated under the
+/// opposite ambient, to discover what BestViableFunctionImpl's pick would
+/// have been for the target variant this single shared Sema pass isn't
+/// primary for. Mirrors CodeGenAction.cpp's MultiTargetCodeGenScope swap in
+/// spirit, but scoped to Sema's own (const-ref) LangOptions rather than a
+/// CodeGenModule's; see the existing const_cast<LangOptions&> precedent in
+/// SemaModule.cpp for why this is safe here (Sema's LangOpts reference is
+/// only const to prevent accidental mutation elsewhere, not because the
+/// underlying object is truly immutable).
+class SemaCUDAAmbientFlip {
+  LangOptions &LangOpts;
+  bool SavedCUDAIsDevice;
+
+public:
+  explicit SemaCUDAAmbientFlip(Sema &S)
+      : LangOpts(const_cast<LangOptions &>(S.getLangOpts())),
+        SavedCUDAIsDevice(LangOpts.CUDAIsDevice) {
+    LangOpts.CUDAIsDevice = !SavedCUDAIsDevice;
+  }
+  ~SemaCUDAAmbientFlip() { LangOpts.CUDAIsDevice = SavedCUDAIsDevice; }
+};
+} // namespace
+
 /// Computes the best viable function (C++ 13.3.3)
 /// within an overload candidate set.
 ///
@@ -11701,6 +11727,44 @@ OverloadingResult OverloadCandidateSet::BestViableFunctionImpl(
     return OR_Ambiguous;
 
   OverloadingResult R = ResultForBestCandidate(Best);
+
+  // PROTOTYPE (Stage 8): an HD-context caller's pick above may have depended
+  // on the ambient CUDAIsDevice value (SemaCUDA::IdentifyPreference's rule
+  // (d), reached via CudaExcludeWrongSideCandidates/isBetterOverloadCandidate)
+  // -- this project's single shared Sema pass fixes that ambient to one
+  // primary target for the whole compile, so the pick above is only correct
+  // for whichever target-variant CodeGen later matches that ambient. Detect
+  // this case and additionally resolve what the opposite ambient would have
+  // picked, so CGExpr.cpp's EmitCallee can later choose per target-variant.
+  // Scope: ordinary (non-member) calls only -- see Stage 8's plan notes for
+  // why member/operator/address-of paths aren't covered by this slice.
+  if (R == OR_Success && S.getLangOpts().CUDA && Best->Function) {
+    if (FunctionDecl *Caller = S.getCurFunctionDecl(/*AllowLambda=*/true)) {
+      if (S.CUDA().IdentifyTarget(Caller) == CUDAFunctionTarget::HostDevice) {
+        llvm::SmallVector<OverloadCandidate *, 16> AltCandidates;
+        AltCandidates.reserve(this->Candidates.size());
+        std::transform(this->Candidates.begin(), this->Candidates.end(),
+                       std::back_inserter(AltCandidates),
+                       [](OverloadCandidate &Cand) { return &Cand; });
+        OverloadCandidate *AltBest = nullptr;
+        {
+          SemaCUDAAmbientFlip Flip(S);
+          CudaExcludeWrongSideCandidates(S, AltCandidates);
+          for (auto *Cand : AltCandidates) {
+            if (Cand->Viable &&
+                (!AltBest || isBetterOverloadCandidate(S, *Cand, *AltBest,
+                                                        Loc, Kind)))
+              AltBest = Cand;
+          }
+        }
+        if (AltBest && AltBest->Function &&
+            AltBest->Function != Best->Function)
+          S.PendingCUDAAmbientDependentPick =
+              Sema::CUDAAmbientDependentPick{Best->Function,
+                                              AltBest->Function};
+      }
+    }
+  }
 
   if (!EquivalentCands.empty())
     S.diagnoseEquivalentInternalLinkageDeclarations(Loc, Best->Function,
@@ -14981,6 +15045,21 @@ static ExprResult FinishOverloadedCallExpr(Sema &SemaRef, Scope *S, Expr *Fn,
         SemaRef.FixOverloadedFunctionReference(Fn, (*Best)->FoundDecl, FDecl);
     if (Res.isInvalid())
       return ExprError();
+    // PROTOTYPE (Stage 8): drain BestViableFunctionImpl's ambient-dependent
+    // pick (if any) into ASTContext's per-Expr side-table, keyed by the
+    // concrete callee expression this call ends up with -- the same node
+    // CodeGenFunction::EmitCallee will later see. Symmetric by construction:
+    // works whether this compile's primary ambient is host or device.
+    if (SemaRef.PendingCUDAAmbientDependentPick &&
+        SemaRef.PendingCUDAAmbientDependentPick->Primary == FDecl) {
+      bool PrimaryIsDevice = SemaRef.getLangOpts().CUDAIsDevice;
+      auto &Pick = *SemaRef.PendingCUDAAmbientDependentPick;
+      SemaRef.Context.setCUDADualSideCallee(
+          Res.get(),
+          /*HostDecl=*/PrimaryIsDevice ? Pick.Alternate : FDecl,
+          /*DeviceDecl=*/PrimaryIsDevice ? FDecl : Pick.Alternate);
+      SemaRef.PendingCUDAAmbientDependentPick.reset();
+    }
     return SemaRef.BuildResolvedCallExpr(
         Res.get(), FDecl, LParenLoc, Args, RParenLoc, ExecConfig,
         /*IsExecConfig=*/false,

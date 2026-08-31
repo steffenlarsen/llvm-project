@@ -3581,6 +3581,32 @@ bool Sema::InstantiateClassImpl(
                                      Pattern, PatternDef, TSK, Complain))
     return true;
 
+  // PROTOTYPE (Stage 1.6): an instantiation is performed for a particular
+  // target. A declaration marked "applies to every target" keeps the ambient
+  // one, which is every declaration outside a multi-target compilation.
+  std::optional<ASTContext::TargetScope> InstantiationTarget;
+  if (LLVM_UNLIKELY(Context.hasTargetDivergence()))
+    InstantiationTarget.emplace(Context, clang::InstantiateInVariant
+                                         ? clang::InstantiateInVariant.getValue()
+                                         : Instantiation->getTargetVariant());
+
+  // An entity instantiated while analysing one target belongs to that target.
+  // Instantiations are created by Sema, not parsed, so the parser's marking
+  // never sees them -- which left implicitly instantiated specialisations
+  // visible to every target.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      !Instantiation->getTargetVariant()) {
+    // Prefer the pattern's target over the ambient one. Pending instantiations
+    // are performed at the end of the translation unit, long outside any
+    // alternative, so the ambient variant there is 0 -- "every target" -- and
+    // both arms' instantiations become visible to both.
+    unsigned V = Context.getCurrentTargetVariant();
+    if (const Decl *P = Pattern)
+      if (unsigned PV = P->getTargetVariant())
+        V = PV;
+    Instantiation->setTargetVariant(V);
+  }
+
   llvm::TimeTraceScope TimeScope("InstantiateClass", [&]() {
     llvm::TimeTraceMetadata M;
     llvm::raw_string_ostream OS(M.Detail);
@@ -3970,6 +3996,16 @@ bool Sema::usesPartialOrExplicitSpecialization(
   SmallVector<ClassTemplatePartialSpecializationDecl *, 4> PartialSpecs;
   ClassTemplateDecl *CTD = ClassTemplateSpec->getSpecializedTemplate();
   CTD->getPartialSpecializations(PartialSpecs);
+  // PROTOTYPE (Stage 4): under -allow-target-variant-decls, distinct targets'
+  // partial specializations of the same template arguments are separate
+  // Decls (see ClassTemplatePartialSpecializationDecl::Profile) rather than
+  // one redefining the other. Matching must still only see the one for the
+  // target actually being compiled, or two textually-identical-looking
+  // candidates make every match ambiguous.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    llvm::erase_if(PartialSpecs, [&](ClassTemplatePartialSpecializationDecl *P) {
+      return !isDeclVisibleForCurrentTarget(P);
+    });
   for (ClassTemplatePartialSpecializationDecl *CTPSD : PartialSpecs) {
     // C++ [temp.spec.partial.member]p2:
     //   If the primary member template is explicitly specialized for a given
@@ -4024,6 +4060,15 @@ static ActionResult<CXXRecordDecl *> getPatternForClassTemplateSpecialization(
     SmallVector<MatchResult, 4> Matched, ExtraMatched;
     SmallVector<ClassTemplatePartialSpecializationDecl *, 4> PartialSpecs;
     Template->getPartialSpecializations(PartialSpecs);
+    // PROTOTYPE (Stage 4): see the comment in usesPartialOrExplicitSpecialization
+    // above -- filter to the specialization visible to the target actually
+    // being compiled before doing partial ordering, or two targets'
+    // specializations of the same arguments look ambiguously matched.
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+      llvm::erase_if(PartialSpecs,
+                     [&](ClassTemplatePartialSpecializationDecl *P) {
+                       return !S.isDeclVisibleForCurrentTarget(P);
+                     });
     TemplateSpecCandidateSet FailedCandidates(PointOfInstantiation);
     for (ClassTemplatePartialSpecializationDecl *Partial : PartialSpecs) {
       // C++ [temp.spec.partial.member]p2:

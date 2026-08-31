@@ -355,6 +355,11 @@ protected:
   LLVM_PREFERRED_TYPE(Linkage)
   mutable unsigned CacheValidAndLinkage : 3;
 
+  /// PROTOTYPE (Stage 4): which target this declaration belongs to, when a
+  /// merged multi-target token stream declared the same name differently per
+  /// target. 0 means "all targets", which is every declaration today.
+  unsigned TargetVariant : 3;
+
   /// Allocate memory for a deserialized declaration.
   ///
   /// This routine must be used to allocate memory for any declaration that is
@@ -403,7 +408,8 @@ protected:
         Implicit(false), Used(false), Referenced(false),
         TopLevelDeclInObjCContainer(false), Access(AS_none), FromASTFile(0),
         IdentifierNamespace(getIdentifierNamespaceForKind(DK)),
-        CacheValidAndLinkage(llvm::to_underlying(Linkage::Invalid)) {
+        CacheValidAndLinkage(llvm::to_underlying(Linkage::Invalid)),
+        TargetVariant(0) {
     if (StatisticsEnabled) add(DK);
   }
 
@@ -412,7 +418,8 @@ protected:
         Used(false), Referenced(false), TopLevelDeclInObjCContainer(false),
         Access(AS_none), FromASTFile(0),
         IdentifierNamespace(getIdentifierNamespaceForKind(DK)),
-        CacheValidAndLinkage(llvm::to_underlying(Linkage::Invalid)) {
+        CacheValidAndLinkage(llvm::to_underlying(Linkage::Invalid)),
+        TargetVariant(0) {
     if (StatisticsEnabled) add(DK);
   }
 
@@ -521,6 +528,19 @@ public:
   /// it may not yet have been properly set.
   AccessSpecifier getAccessUnsafe() const {
     return AccessSpecifier(Access);
+  }
+
+  /// PROTOTYPE (Stage 4): the target this declaration belongs to. 0 means it
+  /// applies to every target, which is the case for all declarations today.
+  unsigned getTargetVariant() const { return TargetVariant; }
+  void setTargetVariant(unsigned V) { TargetVariant = V; }
+
+  /// A re-parse produced this declaration for one target and it turned out to
+  /// match the one it was made from, which has been reverted to every target.
+  /// This copy belongs to no target at all.
+  static constexpr unsigned TargetVariantRedundant = 7;
+  bool isRedundantTargetVariant() const {
+    return TargetVariant == TargetVariantRedundant;
   }
 
   bool hasAttrs() const { return HasAttrs; }

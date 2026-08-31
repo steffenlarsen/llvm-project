@@ -5189,6 +5189,106 @@ static void ProcessVSRuntimeLibrary(const ToolChain &TC, const ArgList &Args,
     CmdArgs.push_back("--dependent-lib=softintrin");
 }
 
+// Emit the -mllvm flags CodeGenAction.cpp's multi-target machinery consumes
+// to build every HIP device arch's bitcode, package all of them into one
+// fatbin, and embed that fatbin into this (host) cc1 job's own module -- the
+// N-arch slice of the "-fintegrated-hip-device-codegen" non-RDC Action-graph
+// collapse. Variant numbering matches BackendConsumer::Initialize's
+// `Entry.Variant = 2 + I` in argv order, so archs are emitted in a single,
+// fixed, deterministic order (Driver::getOffloadArchs's own, already-sorted
+// order) with each arch's -aux-output= paired with that same index --
+// getting this pairing wrong would silently swap which CPU's bitcode lands
+// in which fatbin slot, not crash.
+static void emitIntegratedHipDeviceCodegenFlags(const Driver &D,
+                                                Compilation &C,
+                                                const ArgList &Args,
+                                                ArgStringList &CmdArgs) {
+  auto HIPToolChains = C.getOffloadToolChains(Action::OFK_HIP);
+  if (HIPToolChains.first == HIPToolChains.second)
+    return;
+  const ToolChain *DeviceTC = HIPToolChains.first->second;
+
+  llvm::SmallVector<BoundArch> Archs =
+      D.getOffloadArchs(C, C.getArgs(), Action::OFK_HIP, *DeviceTC);
+  if (Archs.empty())
+    return;
+
+  // BackendConsumer::Initialize (CodeGenAction.cpp) only builds any AuxGens
+  // entries at all when this flag is also set -- -multi-target-aux-target=
+  // alone only affects ASTContext's target list, not whether a second
+  // CodeGenModule gets driven from it.
+  CmdArgs.push_back("-mllvm");
+  CmdArgs.push_back("-multi-target-codegen");
+
+  for (auto [Index, BA] : llvm::enumerate(Archs)) {
+    const unsigned Variant = 2 + Index;
+
+    const ArgList &DeviceArgs =
+        C.getArgsForToolChain(DeviceTC, BA, Action::OFK_HIP);
+    std::string CPU =
+        getCPUName(D, DeviceArgs, DeviceTC->getTriple(), /*FromAs=*/false);
+
+    // Extract sign-prefixed feature strings (e.g. "+xnack") the same way
+    // OffloadPackager::ConstructJob does above: call getTargetFeatures with
+    // IsAux=false into a scratch buffer, then drop the "-target-feature"
+    // marker entries it interleaves in. IsAux=false is required here (not
+    // IsAux=true, unlike the aux-triple block below) because the marker the
+    // filter strips is "-target-feature"; the IsAux=true form emits
+    // "-aux-target-feature" instead, which the same starts_with("-target")
+    // filter would not catch.
+    ArgStringList RawFeatureArgs;
+    getTargetFeatures(D, DeviceTC->getTriple(), DeviceArgs, RawFeatureArgs,
+                      /*ForAS=*/false, /*IsAux=*/false);
+    SmallVector<StringRef> Features;
+    llvm::copy_if(RawFeatureArgs, std::back_inserter(Features),
+                  [](StringRef Arg) { return !Arg.starts_with("-target"); });
+
+    CmdArgs.push_back("-mllvm");
+    CmdArgs.push_back(Args.MakeArgString("-multi-target-aux-target=" +
+                                         Twine(Variant) + ":" + CPU + ":" +
+                                         llvm::join(Features, ",")));
+
+    const char *AuxBC = D.CreateTempFile(C, "multi-target-aux", "bc",
+                                         /*MultipleArchs=*/true, BA.ArchName);
+    CmdArgs.push_back("-mllvm");
+    CmdArgs.push_back(Args.MakeArgString("-multi-target-aux-output=" +
+                                         Twine(Variant) + ":" + AuxBC));
+
+    // Same device-lib set a real, separately scheduled cc1 job for this arch
+    // would get from AMDGPUToolChain::addClangTargetOptions's own
+    // getDeviceLibs call -- reuse the identical (ToolChain, DeviceArgs, BA)
+    // triple so the resolved set (ocml/ockl/oclc_*/ABI-version/instrument/
+    // sanitizer libs) matches exactly. ShouldInternalize is per-file (the
+    // ASan device runtime is added with ShouldInternalize=false, see
+    // RocmInstallationDetector::getCommonBitcodeLibs's AddSanBCLibs); encode
+    // it in the flag rather than assuming true, so CodeGenAction.cpp's
+    // consumer picks -mlink-builtin-bitcode vs -mlink-bitcode-file semantics
+    // per file, not uniformly.
+    for (const ToolChain::BitCodeLibraryInfo &BCLib :
+        DeviceTC->getDeviceLibs(DeviceArgs, BA, Action::OFK_HIP)) {
+      CmdArgs.push_back("-mllvm");
+      CmdArgs.push_back(Args.MakeArgString(
+          "-multi-target-aux-link-bitcode=" + Twine(Variant) + ":" +
+          Twine(static_cast<unsigned>(BCLib.ShouldInternalize)) + ":" +
+          BCLib.Path));
+    }
+  }
+
+  const char *Hipfb = D.CreateTempFile(C, "multi-target-package", "hipfb");
+  CmdArgs.push_back("-mllvm");
+  CmdArgs.push_back(
+      Args.MakeArgString("-multi-target-package-fatbin=" + Twine(Hipfb)));
+
+  // Mirrors LinkerWrapper::ConstructJob's own --rocm-path forwarding below:
+  // only present when the user passed an explicit --rocm-path=, otherwise
+  // clang-linker-wrapper's own ROCm auto-detection is used unmodified.
+  if (Arg *A = Args.getLastArg(options::OPT_rocm_path_EQ)) {
+    CmdArgs.push_back("-mllvm");
+    CmdArgs.push_back(
+        Args.MakeArgString(Twine("-multi-target-rocm-path=") + A->getValue()));
+  }
+}
+
 void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                          const InputInfo &Output, const InputInfoList &Inputs,
                          const ArgList &Args, const char *LinkingOutput) const {
@@ -5307,10 +5407,41 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       if (OffloadToolChains.first == OffloadToolChains.second)
         continue;
 
-      const llvm::Triple &DeviceAuxTriple =
-          OffloadToolChains.first->second->getTriple();
+      const ToolChain *DeviceTC = OffloadToolChains.first->second;
+      const llvm::Triple &DeviceAuxTriple = DeviceTC->getTriple();
       CmdArgs.push_back("-aux-triple");
       CmdArgs.push_back(Args.MakeArgStringRef(DeviceAuxTriple.str()));
+
+      // Mirror the device-side job's `-aux-target-cpu`/`-aux-target-feature`
+      // below (search for "gpu-use-aux-triple-only"): without this, a
+      // host-side job's aux TargetInfo (used e.g. to record the device's
+      // token stream for multi-target recording) defaults to a generic
+      // version of the device with no target-id feature macros defined,
+      // which resolves target-macro conditionals differently than the real
+      // device compilation would.
+      if (!Args.getLastArg(options::OPT_gpu_use_aux_triple_only)) {
+        // An empty BoundArch never gets `--offload-arch` translated into
+        // `-mcpu`/target-id feature flags (see AMDGPUToolChain::TranslateArgs,
+        // which only does that translation when a bound arch is supplied) --
+        // so bind explicitly to the first requested offload arch, matching
+        // this prototype's existing single-aux-target simplification.
+        const ArgList &UnboundDeviceArgs = C.getArgsForToolChain(
+            DeviceTC, /*BoundArch=*/{}, static_cast<Action::OffloadKind>(I));
+        std::vector<std::string> OffloadArchs =
+            UnboundDeviceArgs.getAllArgValues(options::OPT_offload_arch_EQ);
+        BoundArch BA =
+            OffloadArchs.empty() ? BoundArch() : BoundArch(OffloadArchs.front());
+        const ArgList &DeviceArgs = C.getArgsForToolChain(
+            DeviceTC, BA, static_cast<Action::OffloadKind>(I));
+        std::string DeviceCPU =
+            getCPUName(D, DeviceArgs, DeviceAuxTriple, /*FromAs*/ false);
+        if (!DeviceCPU.empty()) {
+          CmdArgs.push_back("-aux-target-cpu");
+          CmdArgs.push_back(Args.MakeArgString(DeviceCPU));
+        }
+        getTargetFeatures(D, DeviceAuxTriple, DeviceArgs, CmdArgs,
+                           /*ForAS*/ false, /*IsAux*/ true);
+      }
       break;
     }
   }
@@ -8341,7 +8472,13 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // Host-side offloading compilation receives all device-side outputs. Include
   // them in the host compilation depending on the target. If the host inputs
   // are not empty we use the new-driver scheme, otherwise use the old scheme.
-  if ((IsCuda || IsHIP) && !UsesLLVMOffloading && CudaDeviceInput) {
+  if (IsHIP && !UsesLLVMOffloading && !IsRDCMode &&
+      Args.hasArg(options::OPT_fintegrated_hip_device_codegen)) {
+    assert(HostOffloadingInputs.empty() && !CudaDeviceInput &&
+           "-fintegrated-hip-device-codegen must not receive device "
+           "offloading inputs");
+    emitIntegratedHipDeviceCodegenFlags(D, C, Args, CmdArgs);
+  } else if ((IsCuda || IsHIP) && !UsesLLVMOffloading && CudaDeviceInput) {
     CmdArgs.push_back("-foffload-include-binary");
     CmdArgs.push_back(CudaDeviceInput->getFilename());
   } else if (!HostOffloadingInputs.empty()) {

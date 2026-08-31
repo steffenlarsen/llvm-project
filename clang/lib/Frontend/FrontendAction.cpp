@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Frontend/FrontendAction.h"
+#include "clang/Frontend/MultiTargetRecording.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
@@ -44,6 +45,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/BuryPointer.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
@@ -1364,8 +1366,16 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
   return true;
 }
 
+/// PROTOTYPE (Stage 3.4): preprocess once per target, splice the streams and
+/// parse the result. Off by default; when off nothing extra runs.
+static llvm::cl::opt<bool> MultiTargetRecord(
+    "multi-target-record", llvm::cl::Hidden, llvm::cl::init(false),
+    llvm::cl::desc("Prototype: preprocess once per target and parse the merged "
+                   "token stream"));
+
 llvm::Error FrontendAction::Execute() {
   CompilerInstance &CI = getCompilerInstance();
+
   ExecuteAction();
 
   // If we are supposed to rebuild the global module index, do so now unless
@@ -1486,8 +1496,19 @@ void ASTFrontendAction::ExecuteAction() {
   if (!CI.hasSema())
     CI.createSema(getTranslationUnitKind(), CompletionConsumer);
 
+  // The recording passes are themselves FrontendActions, so this must not
+  // re-enter. They own the buffers their tokens point into and so must outlive
+  // the parse.
+  MultiTargetRecordings Recs;
+  static bool Recording = false;
+  if (LLVM_UNLIKELY(MultiTargetRecord) && !Recording) {
+    Recording = true;
+    Recs = recordTargetStreams(CI);
+    Recording = false;
+  }
+
   ParseAST(CI.getSema(), CI.getFrontendOpts().ShowStats,
-           CI.getFrontendOpts().SkipFunctionBodies);
+           CI.getFrontendOpts().SkipFunctionBodies, Recs.Targets);
 }
 
 void PluginASTAction::anchor() { }

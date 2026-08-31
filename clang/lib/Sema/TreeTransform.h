@@ -8544,6 +8544,12 @@ TreeTransform<Derived>::TransformIfStmt(IfStmt *S) {
   if (S->isConstexpr())
     ConstexprConditionValue = Cond.getKnownValue();
 
+  // PROTOTYPE: a combined multi-target frontend cannot resolve the condition
+  // here, because it may differ per target. Leaving the value unset makes the
+  // code below instantiate both arms and keep them in the AST.
+  if (KeepBothConstexprIfBranches && S->isConstexpr())
+    ConstexprConditionValue = std::nullopt;
+
   // Transform the "then" branch.
   StmtResult Then;
   if (!ConstexprConditionValue || *ConstexprConditionValue) {
@@ -15516,9 +15522,9 @@ bool TreeTransform<Derived>::TransformOverloadExprDecls(OverloadExpr *Old,
     for (auto *D : Decls) {
       if (auto *UD = dyn_cast<UsingDecl>(D)) {
         for (auto *SD : UD->shadows())
-          R.addDecl(SD);
+          R.addDeclIgnoringTargetVisibility(SD);
       } else {
-        R.addDecl(D);
+        R.addDeclIgnoringTargetVisibility(D);
       }
     }
 

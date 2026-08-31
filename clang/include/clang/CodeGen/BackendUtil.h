@@ -28,6 +28,7 @@ namespace clang {
 class CompilerInstance;
 class DiagnosticsEngine;
 class CodeGenOptions;
+class TargetOptions;
 class BackendConsumer;
 
 enum BackendAction {
@@ -39,11 +40,15 @@ enum BackendAction {
   Backend_EmitObj       ///< Emit native object files
 };
 
+// TOpts, when non-null, overrides CI.getTargetOpts() for this call only --
+// needed when M was generated for a target other than CI's own primary
+// target (e.g. a multi-target-codegen aux entry's device module).
 void emitBackendOutput(CompilerInstance &CI, CodeGenOptions &CGOpts,
                        StringRef TDesc, llvm::Module *M, BackendAction Action,
                        llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS,
                        std::unique_ptr<raw_pwrite_stream> OS,
-                       BackendConsumer *BC = nullptr);
+                       BackendConsumer *BC = nullptr,
+                       const TargetOptions *TOpts = nullptr);
 
 void EmbedBitcode(llvm::Module *M, const CodeGenOptions &CGOpts,
                   llvm::MemoryBufferRef Buf);

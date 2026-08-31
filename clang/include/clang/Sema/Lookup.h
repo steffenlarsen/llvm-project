@@ -479,9 +479,92 @@ public:
   /// Add a declaration to these results with the given access.
   /// Does not test the acceptance criteria.
   void addDecl(NamedDecl *D, AccessSpecifier AS) {
+    // PROTOTYPE (Stage 4.2b-iv): a declaration belonging to another target is
+    // not a result here. Filtering at the point results are admitted means the
+    // redeclaration machinery never sees it, so parsing one target's
+    // alternative after another's is a fresh declaration rather than a
+    // redefinition -- which is what it is.
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) && !isTargetVisible(D)) {
+      // Ordinary lookup -- for a redeclaration *and* for a plain reference --
+      // offers just the most recently pushed declaration for a given name,
+      // not its whole chain: identical-signature redeclarations share one
+      // slot, and a reference to a name that was already reparsed by the
+      // time it's used sees only the reparsed alternative. When that one
+      // belongs to another target, an earlier declaration further back in
+      // the chain (the shared prototype every target's copy still
+      // redeclares, or the copy for whichever target this reference/
+      // redeclaration actually belongs to) is still a legitimate substitute
+      // and must not be dropped along with it -- or a redeclaration heads a
+      // brand new, disconnected chain instead of merging into the existing
+      // one, and a reference to an already-reparsed callee resolves to
+      // nothing at all (see get_rows_cuda: `ggml_cuda_op_get_rows`,
+      // untagged/ambient, calls it after its own reparse has already made
+      // the aux-target copy the most recent scope-chain entry).
+      for (Decl *Prev = D->getPreviousDecl(); Prev;
+           Prev = Prev->getPreviousDecl()) {
+        auto *PrevND = dyn_cast<NamedDecl>(Prev);
+        if (PrevND && isTargetVisible(PrevND)) {
+          Decls.addDecl(PrevND, PrevND->getAccess());
+          ResultKind = LookupResultKind::Found;
+          return;
+        }
+      }
+      // A non-overloadable entity (a class, class template, typedef, ...)
+      // can be reparsed for another target before its own redeclaration
+      // lookup ever gets a chance to see the original: that lookup runs
+      // through this same single-candidate path and rejects the original
+      // for belonging to a different target, so the reparse creates a
+      // brand new, disconnected declaration instead of linking as a
+      // redeclaration of it -- getPreviousDecl() above then has nothing to
+      // walk. Since at most one such entity can share this name in this
+      // scope, any other-target sibling found directly in the DeclContext's
+      // lookup table is unambiguously the right substitute. Functions are
+      // excluded: several genuinely different overloads can share a name,
+      // so picking an arbitrary one here could substitute the wrong decl.
+      if (!D->isFunctionOrFunctionTemplate()) {
+        for (NamedDecl *Sibling : D->getDeclContext()->lookup(D->getDeclName())) {
+          if (Sibling != D && isTargetVisible(Sibling)) {
+            Decls.addDecl(Sibling, Sibling->getAccess());
+            ResultKind = LookupResultKind::Found;
+            return;
+          }
+        }
+      }
+      return;
+    }
     Decls.addDecl(D, AS);
     ResultKind = LookupResultKind::Found;
   }
+
+  /// Like addDecl, but skips only the ambient-dependent half of the
+  /// target-visibility filter. Used solely to repopulate a LookupResult from
+  /// an already-resolved OverloadExpr's decl set at template-instantiation
+  /// time (see TreeTransform::TransformOverloadExprDecls): each decl there
+  /// was already filtered once, correctly, against the ambient target active
+  /// when the original UnresolvedLookupExpr's candidates were assembled at
+  /// parse time. A deferred instantiation can later run under a different
+  /// ambient (e.g. a device-only callee first referenced from a host-side
+  /// kernel-launch call site) that has nothing to do with which candidate
+  /// was correct for that reference -- re-deriving visibility from the
+  /// ambient at drain time would silently drop the sole surviving (and
+  /// correct) candidate instead of leaving the decision as it was already
+  /// made. But a decl tagged TargetVariantRedundant is never a valid result
+  /// at all, regardless of ambient (see mergeEquivalentVariants /
+  /// isVisibleForTarget) -- that half of the filter is not ambient-dependent
+  /// and must still apply, or a redundant duplicate that was correctly
+  /// hidden reappears as a spurious second overload candidate.
+  void addDeclIgnoringTargetVisibility(NamedDecl *D) {
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+        D->getTargetVariant() == Decl::TargetVariantRedundant)
+      return;
+    Decls.addDecl(D, D->getAccess());
+    ResultKind = LookupResultKind::Found;
+  }
+
+  /// Whether \p D belongs to the target currently being analysed. Declarations
+  /// marked 0 belong to every target, which is all of them outside a
+  /// multi-target compilation.
+  bool isTargetVisible(const NamedDecl *D) const;
 
   /// Add all the declarations from another set of lookup
   /// results.

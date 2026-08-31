@@ -6657,10 +6657,35 @@ CGCallee CodeGenFunction::EmitCallee(const Expr *E) {
   // Resolve direct calls.
   } else if (auto DRE = dyn_cast<DeclRefExpr>(E)) {
     if (auto FD = dyn_cast<FunctionDecl>(DRE->getDecl())) {
+      // PROTOTYPE (Stage 8): this call's callee may have been resolved by an
+      // HD-context CUDA/HIP overload pick that depended on the ambient
+      // CUDAIsDevice value Sema's single shared pass happened to have -- see
+      // ASTContext::CUDAAmbiguousCallees. Re-pick per this CodeGenModule's
+      // own (already-correct, per-target-variant) ambient before emitting.
+      if (const auto *Dual = getContext().getCUDADualSideCallee(DRE))
+        FD = const_cast<FunctionDecl *>(getLangOpts().CUDAIsDevice
+                                             ? Dual->DeviceDecl
+                                             : Dual->HostDecl);
+      // PROTOTYPE (Stage 5, Phase 5 Increment 3): this callee may itself be
+      // a body-divergent function template (e.g. ggml_cuda_mma::mma, whose
+      // overloads are gated by raw target-CPU macros) referenced from a
+      // *shared* caller -- Sema pre-instantiated one specialization per real
+      // target for exactly this Expr and recorded them in
+      // ASTContext::TargetVariantCallees; consume that passively here.
+      if (const FunctionDecl *Repl =
+              getContext().getTargetVariantCallee(DRE, CGM.getTargetVariant()))
+        FD = const_cast<FunctionDecl *>(Repl);
       return EmitDirectCallee(*this, getGlobalDeclForDirectCall(FD));
     }
   } else if (auto ME = dyn_cast<MemberExpr>(E)) {
     if (auto FD = dyn_cast<FunctionDecl>(ME->getMemberDecl())) {
+      if (const auto *Dual = getContext().getCUDADualSideCallee(ME))
+        FD = const_cast<FunctionDecl *>(getLangOpts().CUDAIsDevice
+                                             ? Dual->DeviceDecl
+                                             : Dual->HostDecl);
+      if (const FunctionDecl *Repl =
+              getContext().getTargetVariantCallee(ME, CGM.getTargetVariant()))
+        FD = const_cast<FunctionDecl *>(Repl);
       EmitIgnoredExpr(ME->getBase());
       return EmitDirectCallee(*this, FD);
     }

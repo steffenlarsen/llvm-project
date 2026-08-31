@@ -17,11 +17,18 @@ using namespace clang;
 
 bool clang::loadLinkModules(CompilerInstance &CI, llvm::LLVMContext &Ctx,
                             llvm::SmallVectorImpl<LinkModule> &LinkModules) {
+  return loadLinkModules(CI, Ctx, CI.getCodeGenOpts().LinkBitcodeFiles,
+                         LinkModules);
+}
+
+bool clang::loadLinkModules(
+    CompilerInstance &CI, llvm::LLVMContext &Ctx,
+    llvm::ArrayRef<CodeGenOptions::BitcodeFileToLink> Files,
+    llvm::SmallVectorImpl<LinkModule> &LinkModules) {
   if (!LinkModules.empty())
     return false;
 
-  for (const CodeGenOptions::BitcodeFileToLink &F :
-       CI.getCodeGenOpts().LinkBitcodeFiles) {
+  for (const CodeGenOptions::BitcodeFileToLink &F : Files) {
     auto BCBuf = CI.getFileManager().getBufferForFile(F.Filename);
     if (!BCBuf) {
       CI.getDiagnostics().Report(diag::err_cannot_open_file)

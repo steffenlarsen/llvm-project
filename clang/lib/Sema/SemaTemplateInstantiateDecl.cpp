@@ -15,6 +15,7 @@
 #include "clang/AST/ASTMutationListener.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/DependentDiagnostic.h"
+#include "clang/AST/DynamicRecursiveASTVisitor.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/PrettyDeclStackTrace.h"
@@ -5856,10 +5857,153 @@ bool TemplateDeclInstantiator::SubstDefaultedFunction(FunctionDecl *New,
   return false;
 }
 
+namespace {
+/// PROTOTYPE (Stage 5, Phase 5 Increment 3): finds direct references, within
+/// a just-instantiated function body, to a callee whose FunctionTemplateDecl
+/// has a body-divergent redeclaration chain (see
+/// FunctionTemplateDecl::hasTargetTaggedRedeclaration()) -- e.g.
+/// ggml_cuda_mma::mma, whose overloads are gated by raw target-CPU macros
+/// rather than by template arguments. Adapted from the Increment 2
+/// predicate of the same shape (which correctly detected this pattern but
+/// fed a FoldingSet fold that couldn't act on it); the difference here is
+/// this visitor records the matching Expr* itself, for
+/// Sema::InstantiateDivergentCalleesInBody to re-instantiate per real
+/// target.
+class DivergentCalleeVisitor : public DynamicRecursiveASTVisitor {
+  static bool isDivergentCallee(const ValueDecl *D) {
+    const auto *FD = dyn_cast_or_null<FunctionDecl>(D);
+    if (!FD)
+      return false;
+    FunctionTemplateDecl *FTD = FD->getPrimaryTemplate();
+    return FTD && FTD->hasTargetTaggedRedeclaration();
+  }
+
+public:
+  SmallVector<Expr *, 4> Found;
+
+  bool VisitDeclRefExpr(DeclRefExpr *E) override {
+    if (isDivergentCallee(E->getDecl()))
+      Found.push_back(E);
+    return true;
+  }
+
+  bool VisitMemberExpr(MemberExpr *E) override {
+    if (isDivergentCallee(E->getMemberDecl()))
+      Found.push_back(E);
+    return true;
+  }
+};
+} // namespace
+
+void Sema::InstantiateDivergentCalleesInBody(FunctionDecl *Specialization) {
+  // Mirrors every other multi-target check in this mechanism (e.g.
+  // FunctionTemplateSpecializationInfo::Profile,
+  // SemaTemplateInstantiateDecl.cpp's ambient-tagging block above): gate on
+  // whether target-variant tagging is active at all, not on
+  // ASTContext::hasTargetDivergence(), which tracks an unrelated concept
+  // (type layout differing between targets) and is false for compilations
+  // like this one where nothing's size/alignment differs.
+  if (!LLVM_UNLIKELY(clang::AllowTargetVariantDecls))
+    return;
+  // A caller that is itself target-tagged already gets a per-target
+  // specialization via FunctionTemplateSpecializationInfo::Profile folding
+  // in Context.getCurrentTargetVariant() (see hasTargetTaggedRedeclaration()
+  // there) -- this mechanism is only needed for a *shared* caller, whose one
+  // Sema-time instantiation would otherwise permanently bake in whichever
+  // target's ambient happened to resolve a divergent callee first.
+  if (Specialization->getTargetVariant() != 0)
+    return;
+  Stmt *Body = Specialization->getBody();
+  if (!Body)
+    return;
+
+  DivergentCalleeVisitor Visitor;
+  Visitor.TraverseStmt(Body);
+  if (Visitor.Found.empty())
+    return;
+
+  // This mechanism only concerns device-side divergence (the only real
+  // trigger, ggml_cuda_mma::mma, is device-only): in a device-mode Sema
+  // pass every configured target variant (1..N+1) is itself a device arch,
+  // but in a host-primary combined pass variant 1 is the host and must not
+  // have a __device__-only callee's body substituted under its TargetInfo
+  // (LangOptions::CUDAIsDevice is fixed for the whole Sema pass and is not
+  // toggled by ASTContext::TargetScope, so doing so would instantiate
+  // device-only code under host semantics).
+  unsigned FirstDeviceVariant = getLangOpts().CUDAIsDevice ? 1 : 2;
+
+  for (Expr *E : Visitor.Found) {
+    const ValueDecl *CalleeDecl = isa<MemberExpr>(E)
+                                      ? cast<MemberExpr>(E)->getMemberDecl()
+                                      : cast<DeclRefExpr>(E)->getDecl();
+    const auto *Callee = cast<FunctionDecl>(CalleeDecl);
+    FunctionTemplateDecl *CalleeTemplate = Callee->getPrimaryTemplate();
+    const TemplateArgumentList *Args = Callee->getTemplateSpecializationArgs();
+    if (!CalleeTemplate || !Args)
+      continue;
+
+    for (unsigned V = FirstDeviceVariant; V <= 1 + Context.getNumAuxTargets();
+         ++V) {
+      const TargetInfo *TI = Context.getTargetForVariant(V);
+      if (!TI)
+        continue;
+
+      ASTContext::TargetScope Scope(Context, *TI, V);
+
+      // CalleeTemplate->redecls() cannot be trusted to enumerate the other
+      // targets' widened copies: each arm produced by widening is parsed
+      // separately under its own TargetScope, and ordinary template
+      // redeclaration-merging does not chain them into one Redeclarable
+      // chain (confirmed empirically -- -dump-decl-fingerprints=0 shows N
+      // distinct, unmerged FunctionTemplateDecl objects at the same source
+      // location, not one chain of N). What *does* correctly resolve to the
+      // right widened copy is an ordinary lookup performed while the target
+      // ambient is active -- exactly what a genuinely target-tagged caller's
+      // own reference already relies on (isVisibleForTarget filters
+      // *reference* lookups by ambient correctly; it only refuses to do so
+      // for *redeclaration* lookups, which is what redecls() effectively
+      // depends on here). So re-run the same kind of lookup under this
+      // target's pushed scope instead of walking the (unreliable) chain.
+      FunctionTemplateDecl *PatternSource = CalleeTemplate;
+      LookupResult Result(*this, CalleeTemplate->getDeclName(),
+                           Callee->getLocation(), LookupOrdinaryName);
+      LookupQualifiedName(Result, CalleeTemplate->getDeclContext());
+      for (NamedDecl *ND : Result) {
+        if (auto *FTD =
+                dyn_cast<FunctionTemplateDecl>(ND->getUnderlyingDecl())) {
+          if (FTD->getTargetVariant() == V) {
+            PatternSource = FTD;
+            break;
+          }
+        }
+      }
+
+      FunctionDecl *NewSpec = InstantiateFunctionDeclaration(
+          CalleeTemplate, Args, Callee->getLocation(),
+          CodeSynthesisContext::ExplicitTemplateArgumentSubstitution,
+          PatternSource);
+      if (!NewSpec)
+        continue;
+      // Stamp the target explicitly rather than trusting
+      // InstantiateFunctionDefinition's ambient-tagging fallback below: that
+      // fallback deliberately distrusts an ambient forced by an enclosing
+      // *shared* (variant-0) instantiation, which is exactly Specialization
+      // here -- but this specific callee really is meant for variant V.
+      if (!NewSpec->getTargetVariant())
+        NewSpec->setTargetVariant(V);
+
+      InstantiateFunctionDefinition(Callee->getLocation(), NewSpec,
+                                    /*Recursive=*/true);
+      Context.setTargetVariantCallee(E, V, NewSpec);
+    }
+  }
+}
+
 FunctionDecl *Sema::InstantiateFunctionDeclaration(
     FunctionTemplateDecl *FTD, const TemplateArgumentList *Args,
-    SourceLocation Loc, CodeSynthesisContext::SynthesisKind CSC) {
-  FunctionDecl *FD = FTD->getTemplatedDecl();
+    SourceLocation Loc, CodeSynthesisContext::SynthesisKind CSC,
+    FunctionTemplateDecl *PatternSource) {
+  FunctionDecl *FD = (PatternSource ? PatternSource : FTD)->getTemplatedDecl();
 
   InstantiatingTemplate Inst(*this, Loc, FTD, Args->asArray(), CSC);
   if (Inst.isInvalid())
@@ -5983,6 +6127,66 @@ void Sema::InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
     LateParsedInstantiations.push_back(
         std::make_pair(Function, PointOfInstantiation));
     return;
+  }
+
+  // PROTOTYPE (Stage 1.6): an instantiation is performed for a particular
+  // target. A declaration marked "applies to every target" keeps the ambient
+  // one, which is every declaration outside a multi-target compilation.
+  std::optional<ASTContext::TargetScope> InstantiationTarget;
+  if (LLVM_UNLIKELY(Context.hasTargetDivergence()))
+    InstantiationTarget.emplace(Context, clang::InstantiateInVariant
+                                         ? clang::InstantiateInVariant.getValue()
+                                         : Function->getTargetVariant());
+
+  // An entity instantiated while analysing one target belongs to that target.
+  // Instantiations are created by Sema, not parsed, so the parser's marking
+  // never sees them -- which left implicitly instantiated specialisations
+  // visible to every target.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      !Function->getTargetVariant()) {
+    // Prefer the pattern's target over the ambient one. Pending instantiations
+    // are performed at the end of the translation unit, long outside any
+    // alternative, so the ambient variant there is 0 -- "every target" -- and
+    // both arms' instantiations become visible to both.
+    unsigned V = Context.getCurrentTargetVariant();
+    // Prefer recorded provenance over ambient: for a __device__/__global__
+    // callee, ambient here may have been forced to 1 (see the capture site
+    // in SemaExpr.cpp) so its body compiles under the correct device
+    // TargetInfo, but the tag stamped on the Decl still needs to reflect
+    // which reparse copy actually queued it, or CodeGen's TargetVariant>1
+    // filter can never recognize a redundant instantiation as such.
+    auto PIt = PendingInstantiationProvenanceVariant.find(Function);
+    if (PIt != PendingInstantiationProvenanceVariant.end()) {
+      V = PIt->second;
+    } else {
+      // No deferred-instantiation provenance was recorded, which means this
+      // instantiation never went through the PendingInstantiations queue at
+      // all -- the constexpr eager-instantiation path (see the
+      // Func->isConstexpr() branch in SemaExpr.cpp) instantiates immediately
+      // and never populates PendingInstantiationProvenanceVariant. The
+      // ambient we just read may still be one an *enclosing* device-only
+      // instantiation forced onto us solely so its own body compiles under
+      // the right TargetInfo (its own PendingInstantiationTargetVariant) --
+      // that forcing is not evidence this function is itself
+      // target-exclusive. Fall back to the same "is my innermost enclosing
+      // template instantiation itself shared" check the deferred path's
+      // queuing code uses, so a constexpr helper called from shared code
+      // isn't wrongly hidden from every non-canonical device target.
+      for (const CodeSynthesisContext &SC :
+           llvm::reverse(CodeSynthesisContexts)) {
+        if (SC.Kind != CodeSynthesisContext::TemplateInstantiation)
+          continue;
+        if (const auto *EnclosingFn =
+                dyn_cast_or_null<FunctionDecl>(SC.Entity))
+          if (EnclosingFn->getTargetVariant() == 0)
+            V = 0;
+        break;
+      }
+    }
+    if (const Decl *P = Function->getTemplateInstantiationPattern())
+      if (unsigned PV = P->getTargetVariant())
+        V = PV;
+    Function->setTargetVariant(V);
   }
 
   llvm::TimeTraceScope TimeScope("InstantiateFunction", [&]() {
@@ -6307,6 +6511,8 @@ void Sema::InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
 
     if (auto *Listener = getASTMutationListener())
       Listener->FunctionDefinitionInstantiated(Function);
+
+    InstantiateDivergentCalleesInBody(Function);
 
     savedContext.pop();
   }
@@ -6759,6 +6965,35 @@ void Sema::InstantiateVariableDefinition(SourceLocation PointOfInstantiation,
     Def->setTemplateSpecializationKind(Var->getTemplateSpecializationKind(),
                                        PointOfInstantiation);
     return;
+  }
+
+  // PROTOTYPE (Stage 1.6): an instantiation is performed for a particular
+  // target. A declaration marked "applies to every target" keeps the ambient
+  // one, which is every declaration outside a multi-target compilation.
+  std::optional<ASTContext::TargetScope> InstantiationTarget;
+  if (LLVM_UNLIKELY(Context.hasTargetDivergence()))
+    InstantiationTarget.emplace(Context, clang::InstantiateInVariant
+                                         ? clang::InstantiateInVariant.getValue()
+                                         : Var->getTargetVariant());
+
+  // An entity instantiated while analysing one target belongs to that target.
+  // Instantiations are created by Sema, not parsed, so the parser's marking
+  // never sees them -- which left implicitly instantiated specialisations
+  // visible to every target.
+  if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls) &&
+      !Var->getTargetVariant()) {
+    // As for functions and classes: a pending instantiation is performed at the
+    // end of the translation unit, where the ambient variant is 0.
+    unsigned V = Context.getCurrentTargetVariant();
+    // See the analogous comment in InstantiateFunctionDefinition: prefer
+    // recorded provenance over the (possibly forced) ambient.
+    auto PIt = PendingInstantiationProvenanceVariant.find(Var);
+    if (PIt != PendingInstantiationProvenanceVariant.end())
+      V = PIt->second;
+    if (const Decl *P = Var->getTemplateInstantiationPattern())
+      if (unsigned PV = P->getTargetVariant())
+        V = PV;
+    Var->setTargetVariant(V);
   }
 
   NonSFINAEContext _(*this);
@@ -7552,6 +7787,25 @@ void Sema::PerformPendingInstantiations(bool LocalOnly, bool AtEndOfTU) {
       Inst = PendingLocalImplicitInstantiations.front();
       PendingLocalImplicitInstantiations.pop_front();
       LocalInstantiation = true;
+    }
+
+    // Restore the ambient target variant this instantiation was queued
+    // under (PendingInstantiationTargetVariant). This alone once broke
+    // address-of-overloaded-function-template deduction for ggml-cuda-mmq's
+    // load-tiles helpers -- restoring ambient made a __device__/__global__
+    // callee's own TargetInfo wrong for deduction purposes. Fixed by
+    // decoupling the two: PendingInstantiationTargetVariant here still
+    // decides which TargetInfo a callee's body is compiled under, while
+    // PendingInstantiationProvenanceVariant (see its declaration in Sema.h)
+    // separately decides the TargetVariant tag CodeGen filters on. See
+    // mmq-cu-function-template-reparse-duplication memory for the full
+    // history.
+    std::optional<ASTContext::TargetScope> DeferredInstantiationTarget;
+    if (LLVM_UNLIKELY(clang::AllowTargetVariantDecls)) {
+      auto It = PendingInstantiationTargetVariant.find(Inst.first);
+      if (It != PendingInstantiationTargetVariant.end()) {
+        DeferredInstantiationTarget.emplace(Context, It->second);
+      }
     }
 
     // Instantiate function definitions

@@ -11,6 +11,7 @@ add_clang_unittest(LexTests
   PPConditionalDirectiveRecordTest.cpp
   PPDependencyDirectivesTest.cpp
   PPMemoryAllocationsTest.cpp
+  TokenStreamMergeTest.cpp
   CLANG_LIBS
   clangAST
   clangBasic

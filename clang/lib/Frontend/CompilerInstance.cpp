@@ -53,6 +53,7 @@
 #include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Support/AdvisoryLock.h"
 #include "llvm/Support/BuryPointer.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/CrashRecoveryContext.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/FileSystem.h"
@@ -115,6 +116,55 @@ void CompilerInstance::setVerboseOutputStream(std::unique_ptr<raw_ostream> Value
 void CompilerInstance::setTarget(TargetInfo *Value) { Target = Value; }
 void CompilerInstance::setAuxTarget(TargetInfo *Value) { AuxTarget = Value; }
 
+namespace {
+/// PROTOTYPE (Stage 7): one parsed "<variant>:<cpu>:<feat1>,<feat2>,..."
+/// entry from -multi-target-aux-target below.
+struct MultiTargetAuxTargetSpec {
+  unsigned Variant;
+  std::string CPU;
+  std::vector<std::string> Features;
+};
+} // namespace
+
+/// PROTOTYPE (Stage 7): configures one aux (device-arch) TargetInfo,
+/// repeatable -- one flag per device arch. Kept file-local, hidden, and
+/// -mllvm-only, matching every other prototype flag introduced by this
+/// project (e.g. ASTContext.cpp's MultiTargetScopes, ParseAST.cpp's
+/// tu-target-variant) rather than routed through Options.td/
+/// CompilerInvocation.cpp's marshalling, which is reserved for real,
+/// user-facing cc1 flags. A repeatable single flag (rather than plain
+/// repeated -aux-target-cpu/-aux-target-feature) avoids the ordering
+/// ambiguity of associating which repeated -aux-target-feature belongs to
+/// which -aux-target-cpu once there is more than one aux target. Scoped to
+/// the same-triple case: every entry shares getTarget()'s triple, since
+/// only -mcpu/features vary across AMDGPU multi-arch; mixed-vendor
+/// multi-target is an explicit non-goal.
+static llvm::cl::list<std::string> MultiTargetAuxTargetSpecs(
+    "multi-target-aux-target", llvm::cl::Hidden,
+    llvm::cl::desc("Prototype: configure one aux (device-arch) TargetInfo, "
+                   "repeatable. Format: <variant>:<cpu>:<feat1>,<feat2>,..."));
+
+static std::vector<MultiTargetAuxTargetSpec> parseMultiTargetAuxTargetSpecs() {
+  std::vector<MultiTargetAuxTargetSpec> Specs;
+  for (StringRef Entry : MultiTargetAuxTargetSpecs) {
+    StringRef VariantStr, CPU, FeaturesStr, Rest;
+    std::tie(VariantStr, Rest) = Entry.split(':');
+    std::tie(CPU, FeaturesStr) = Rest.split(':');
+    MultiTargetAuxTargetSpec Spec;
+    if (VariantStr.getAsInteger(10, Spec.Variant))
+      continue; // Malformed -- prototype, not hardened against bad input.
+    Spec.CPU = CPU.str();
+    if (!FeaturesStr.empty()) {
+      SmallVector<StringRef, 4> Feats;
+      FeaturesStr.split(Feats, ',');
+      for (StringRef F : Feats)
+        Spec.Features.push_back(F.str());
+    }
+    Specs.push_back(std::move(Spec));
+  }
+  return Specs;
+}
+
 bool CompilerInstance::createTarget() {
   // Create the target instance.
   setTarget(TargetInfo::CreateTargetInfo(getDiagnostics(),
@@ -143,6 +193,56 @@ bool CompilerInstance::createTarget() {
     setAuxTarget(TargetInfo::CreateTargetInfo(getDiagnostics(), *TO));
   }
 
+  // PROTOTYPE (Stage 7): N aux (device-arch) targets, independent of the
+  // single AuxTarget slot above (which stays exactly as-is for the existing
+  // CUDA/OpenMP/SYCL "other side" path). A no-op unless
+  // -multi-target-aux-target was actually passed. Every new entry shares the
+  // AMDGPU side's triple, whichever of the primary/aux slots that is: in a
+  // device-primary job (e.g. --cuda-device-only) getTarget() is itself
+  // AMDGPU; in a host-primary job (the common case) the primary is the host
+  // and the AMDGPU triple instead lives on getAuxTarget(), populated by the
+  // -aux-triple handling just above. That triple can carry an AMDGPU
+  // generation subarch (e.g. "amdgpu9.00-amd-amdhsa" for -target-cpu gfx900
+  // -- llvm::Triple's real, upstream generic-ISA-family encoding, confirmed
+  // via a live -### dry-run), which pins TargetInfo::CreateTargetInfo's valid
+  // CPU list to that one generation. Each new aux entry names its own CPU
+  // (of possibly a different generation), so strip the subarch back to the
+  // bare "amdgpu-amd-amdhsa" family triple before constructing it -- sharing
+  // vendor/OS/environment with the AMDGPU side, per the flag's own doc
+  // comment above, but not a specific generation.
+  const llvm::Triple *AMDGPUSideTriple = nullptr;
+  if (getTarget().getTriple().isAMDGPU())
+    AMDGPUSideTriple = &getTarget().getTriple();
+  else if (getAuxTarget() && getAuxTarget()->getTriple().isAMDGPU())
+    AMDGPUSideTriple = &getAuxTarget()->getTriple();
+  if (AMDGPUSideTriple) {
+    llvm::Triple AuxDeviceTriple(*AMDGPUSideTriple);
+    AuxDeviceTriple.setArch(AuxDeviceTriple.getArch(), llvm::Triple::NoSubArch);
+    for (const MultiTargetAuxTargetSpec &Spec :
+         parseMultiTargetAuxTargetSpecs()) {
+      // Owned by MultiTargetAuxTargetOpts, not this loop --
+      // TargetInfo::TargetOpts is a non-owning raw pointer into whatever
+      // built it (see TargetInfo.h), so a loop-local TargetOptions would
+      // dangle the moment this iteration ends, corrupting every constructed
+      // aux TargetInfo's reported options.
+      auto &TO = MultiTargetAuxTargetOpts.emplace_back(
+          std::make_unique<TargetOptions>());
+      TO->Triple = AuxDeviceTriple.str();
+      TO->CPU = Spec.CPU;
+      TO->FeaturesAsWritten = Spec.Features;
+      TO->HostTriple = getFrontendOpts().AuxTriple.empty()
+                           ? getTarget().getTriple().str()
+                           : getFrontendOpts().AuxTriple;
+      IntrusiveRefCntPtr<TargetInfo> TI(
+          TargetInfo::CreateTargetInfo(getDiagnostics(), *TO));
+      if (!TI) {
+        MultiTargetAuxTargetOpts.pop_back();
+        continue;
+      }
+      MultiTargetAuxTargets.push_back(TI);
+    }
+  }
+
   if (!getTarget().hasStrictFP() && !getLangOpts().ExpStrictFP) {
     if (getLangOpts().RoundingMath) {
       getDiagnostics().Report(diag::warn_fe_backend_unsupported_fp_rounding);
@@ -169,6 +269,20 @@ bool CompilerInstance::createTarget() {
 
   if (auto *Aux = getAuxTarget())
     getTarget().setAuxTarget(Aux);
+
+  // PROTOTYPE (Stage 7): TargetInfo::setAuxTarget/copyAuxTarget only ever
+  // patches the callee (here, each new aux target) from the argument; it is
+  // not a live pointer. The call above patches the primary from the single
+  // legacy aux, one-directionally -- fine when the primary is the one that
+  // needs a copied field (e.g. AMDGPUTargetInfo::setAuxTarget's large-array
+  // alignment boost, primary=device today), but wrong once host is always
+  // primary (a future step here) and the interesting subclass override
+  // sits on the aux side instead. Make it symmetric: also patch each new
+  // aux target from the primary. See memory
+  // auxgen-targetinfo-copyauxtarget-one-directional.md for the concrete
+  // align-1-vs-align-16 bug this closes.
+  for (auto &TI : MultiTargetAuxTargets)
+    TI->setAuxTarget(&getTarget());
 
   return true;
 }
@@ -581,7 +695,17 @@ void CompilerInstance::createASTContext() {
   auto Context = llvm::makeIntrusiveRefCnt<ASTContext>(
       getLangOpts(), PP.getSourceManager(), PP.getIdentifierTable(),
       PP.getSelectorTable(), PP.getBuiltinInfo(), PP.TUKind);
-  Context->InitBuiltinTypes(getTarget(), getAuxTarget());
+  // PROTOTYPE (Stage 7): route through the array-form overload only when
+  // the new N-aux-target flag was actually used; otherwise this is exactly
+  // today's call, unchanged.
+  if (!getMultiTargetAuxTargets().empty()) {
+    SmallVector<const TargetInfo *, 4> AuxTargets;
+    for (const IntrusiveRefCntPtr<TargetInfo> &TI : getMultiTargetAuxTargets())
+      AuxTargets.push_back(TI.get());
+    Context->InitBuiltinTypes(getTarget(), AuxTargets);
+  } else {
+    Context->InitBuiltinTypes(getTarget(), getAuxTarget());
+  }
   setASTContext(std::move(Context));
 }
 

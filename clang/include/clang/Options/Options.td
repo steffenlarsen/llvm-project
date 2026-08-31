@@ -1308,6 +1308,11 @@ def offload_host_device : Flag<["--"], "offload-host-device">,
 def gpu_use_aux_triple_only : Flag<["--"], "gpu-use-aux-triple-only">,
   InternalDriverOpt, HelpText<"Prepare '-aux-triple' only without populating "
                               "'-aux-target-cpu' and '-aux-target-feature'.">;
+def fintegrated_hip_device_codegen : Flag<["-"], "fintegrated-hip-device-codegen">,
+  InternalDriverOpt,
+  HelpText<"Prototype: collapse HIP non-RDC device codegen into the host cc1 process "
+           "instead of spawning separate device cc1/clang-offload-packager/"
+           "clang-linker-wrapper jobs.">;
 def offload_arch_tool_EQ : Joined<["--"], "offload-arch-tool=">,
   HelpText<"Tool used for detecting offloading architectures in the system.">;
 def amdgpu_arch_tool_EQ : Joined<["--"], "amdgpu-arch-tool=">,

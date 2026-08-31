@@ -48,6 +48,7 @@ add_clang_library(clangAST
   DeclarationName.cpp
   DeclBase.cpp
   DeclCXX.cpp
+  DeclFingerprint.cpp
   DeclFriend.cpp
   DeclGroup.cpp
   DeclObjC.cpp
@@ -131,6 +132,7 @@ add_clang_library(clangAST
   TemplateBase.cpp
   TemplateName.cpp
   TextNodeDumper.cpp
+  TargetDivergence.cpp
   Type.cpp
   TypeLoc.cpp
   TypePrinter.cpp
