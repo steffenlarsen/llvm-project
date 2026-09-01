@@ -1131,21 +1131,68 @@ getLLVMMemOrder(std::optional<cir::MemOrder> memorder) {
   llvm_unreachable("unknown memory order");
 }
 
-static llvm::StringRef getLLVMSyncScope(cir::SyncScopeKind syncScope) {
+static bool isNVPTXTriple(mlir::Operation *op) {
+  auto moduleOp = op->getParentOfType<mlir::ModuleOp>();
+  if (!moduleOp)
+    return false;
+  if (auto tripleAttr = moduleOp->getAttrOfType<mlir::StringAttr>(
+          cir::CIRDialect::getTripleAttrName())) {
+    llvm::Triple triple(tripleAttr.getValue());
+    return triple.isNVPTX();
+  }
+  return false;
+}
+
+static llvm::StringRef getLLVMSyncScope(cir::SyncScopeKind syncScope,
+                                        bool isNVPTX = false) {
   switch (syncScope) {
   case cir::SyncScopeKind::SingleThread:
     return "singlethread";
-  case cir::SyncScopeKind::Workgroup:
-    return "block";
-  default:
+  case cir::SyncScopeKind::System:
     return "";
+  case cir::SyncScopeKind::Device:
+    return "agent";
+  case cir::SyncScopeKind::Workgroup:
+    // NVPTX uses "block" for workgroup sync scope; AMDGPU uses "workgroup".
+    return isNVPTX ? "block" : "workgroup";
+  case cir::SyncScopeKind::Wavefront:
+    return "wavefront";
+  case cir::SyncScopeKind::Cluster:
+    return "cluster";
+  // A HIP scope names the same thing as the generic scope of the same name;
+  // the kinds are kept apart only to record where the scope came from. The
+  // `-one-as` spellings do *not* belong here: in
+  // AMDGPUTargetCodeGenInfo::getLLVMSyncScopeStr the one-address-space flag is
+  // set only for an OpenCL scope with non-seq_cst ordering, never for HIP.
+  case cir::SyncScopeKind::HIPSingleThread:
+    return "singlethread";
+  case cir::SyncScopeKind::HIPSystem:
+    return "";
+  case cir::SyncScopeKind::HIPAgent:
+    return "agent";
+  case cir::SyncScopeKind::HIPWorkgroup:
+    return isNVPTX ? "block" : "workgroup";
+  case cir::SyncScopeKind::HIPWavefront:
+    return "wavefront";
+  case cir::SyncScopeKind::HIPCluster:
+    return "cluster";
+  case cir::SyncScopeKind::OpenCLWorkGroup:
+    return "workgroup";
+  case cir::SyncScopeKind::OpenCLDevice:
+    return "agent";
+  case cir::SyncScopeKind::OpenCLAllSVMDevices:
+    return "";
+  case cir::SyncScopeKind::OpenCLSubGroup:
+    return "sub_group";
   }
+  llvm_unreachable("unknown sync scope");
 }
 
 static std::optional<llvm::StringRef>
-getLLVMSyncScope(std::optional<cir::SyncScopeKind> syncScope) {
+getLLVMSyncScope(std::optional<cir::SyncScopeKind> syncScope,
+                 bool isNVPTX = false) {
   if (syncScope.has_value())
-    return getLLVMSyncScope(*syncScope);
+    return getLLVMSyncScope(*syncScope, isNVPTX);
   return std::nullopt;
 }
 
@@ -1159,7 +1206,7 @@ mlir::LogicalResult CIRToLLVMAtomicCmpXchgOpLowering::matchAndRewrite(
       rewriter, op.getLoc(), adaptor.getPtr(), expected, desired,
       getLLVMMemOrder(adaptor.getSuccOrder()),
       getLLVMMemOrder(adaptor.getFailOrder()),
-      getLLVMSyncScope(op.getSyncScope()));
+      getLLVMSyncScope(op.getSyncScope(), isNVPTXTriple(op)));
 
   cmpxchg.setAlignment(adaptor.getAlignment());
   cmpxchg.setWeak(adaptor.getWeak());
@@ -1180,7 +1227,8 @@ mlir::LogicalResult CIRToLLVMAtomicXchgOpLowering::matchAndRewrite(
     mlir::ConversionPatternRewriter &rewriter) const {
   assert(!cir::MissingFeatures::atomicSyncScopeID());
   mlir::LLVM::AtomicOrdering llvmOrder = getLLVMMemOrder(adaptor.getMemOrder());
-  llvm::StringRef llvmSyncScope = getLLVMSyncScope(adaptor.getSyncScope());
+  llvm::StringRef llvmSyncScope =
+      getLLVMSyncScope(adaptor.getSyncScope(), isNVPTXTriple(op));
   rewriter.replaceOpWithNewOp<mlir::LLVM::AtomicRMWOp>(
       op, mlir::LLVM::AtomicBinOp::xchg, adaptor.getPtr(), adaptor.getVal(),
       llvmOrder, llvmSyncScope);
@@ -1233,7 +1281,8 @@ mlir::LogicalResult CIRToLLVMAtomicFenceOpLowering::matchAndRewrite(
   mlir::LLVM::AtomicOrdering llvmOrder = getLLVMMemOrder(adaptor.getOrdering());
 
   auto fence = mlir::LLVM::FenceOp::create(rewriter, op.getLoc(), llvmOrder);
-  fence.setSyncscope(getLLVMSyncScope(adaptor.getSyncscope()));
+  fence.setSyncscope(
+      getLLVMSyncScope(adaptor.getSyncscope(), isNVPTXTriple(op)));
 
   rewriter.replaceOp(op, fence);
 
@@ -1376,7 +1425,8 @@ mlir::LogicalResult CIRToLLVMAtomicFetchOpLowering::matchAndRewrite(
   }
 
   mlir::LLVM::AtomicOrdering llvmOrder = getLLVMMemOrder(op.getMemOrder());
-  llvm::StringRef llvmSyncScope = getLLVMSyncScope(op.getSyncScope());
+  llvm::StringRef llvmSyncScope =
+      getLLVMSyncScope(op.getSyncScope(), isNVPTXTriple(op));
   mlir::LLVM::AtomicBinOp llvmBinOp =
       getLLVMAtomicBinOp(op.getBinop(), isInt, isSignedInt);
   auto rmwVal = mlir::LLVM::AtomicRMWOp::create(
@@ -2268,7 +2318,7 @@ mlir::LogicalResult CIRToLLVMLoadOpLowering::matchAndRewrite(
   assert(!cir::MissingFeatures::lowerModeOptLevel());
 
   std::optional<llvm::StringRef> llvmSyncScope =
-      getLLVMSyncScope(op.getSyncScope());
+      getLLVMSyncScope(op.getSyncScope(), isNVPTXTriple(op));
 
   mlir::LLVM::LoadOp newLoad = mlir::LLVM::LoadOp::create(
       rewriter, op->getLoc(), llvmTy, adaptor.getAddr(), alignment,
@@ -2333,7 +2383,7 @@ mlir::LogicalResult CIRToLLVMStoreOpLowering::matchAndRewrite(
   assert(!cir::MissingFeatures::opLoadStoreTbaa());
 
   std::optional<llvm::StringRef> llvmSyncScope =
-      getLLVMSyncScope(op.getSyncScope());
+      getLLVMSyncScope(op.getSyncScope(), isNVPTXTriple(op));
 
   mlir::LLVM::StoreOp storeOp = mlir::LLVM::StoreOp::create(
       rewriter, op->getLoc(), value, adaptor.getAddr(), alignment,
