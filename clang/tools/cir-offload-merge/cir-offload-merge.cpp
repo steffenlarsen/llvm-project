@@ -100,6 +100,11 @@ llvm::cl::opt<bool> EnableCirSpecializeLaunchWrappers(
     llvm::cl::desc(
         "Enable kernel-launch wrapper specialization (experimental)"),
     llvm::cl::cat(CIROffloadMergeCategory));
+llvm::cl::opt<bool> EnableCirPropagatePointerFacts(
+    "enable-cir-propagate-pointer-facts",
+    llvm::cl::desc("Enable pointer alignment, noalias and access-mode facts "
+                   "on kernel arguments"),
+    llvm::cl::cat(CIROffloadMergeCategory));
 llvm::cl::opt<bool> DisableCirPropKernelArgs(
     "disable-cir-prop-kernel-args",
     llvm::cl::desc("Disable constant kernel-argument propagation"),
@@ -375,6 +380,8 @@ int runOffloadOptPasses(mlir::ModuleOp module) {
     pm.addPass(mlir::createOffloadPropagateBlockShapePass());
   if (!DisableCirInferLaunchBounds)
     pm.addPass(mlir::createOffloadLaunchBoundsPropagationPass());
+  if (EnableCirPropagatePointerFacts)
+    pm.addPass(mlir::createOffloadPropagatePointerFactsPass());
 
   if (mlir::failed(pm.run(module)))
     return reportError("offload-container passes failed");
