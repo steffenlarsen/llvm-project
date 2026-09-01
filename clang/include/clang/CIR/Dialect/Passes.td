@@ -508,5 +508,29 @@ def OffloadEliminateCoveredGuards
   let dependentDialects = ["cir::CIRDialect"];
 }
 
+def OffloadDeadArgElimination
+    : Pass<"cir-offload-dead-arg-elimination", "cir::OffloadContainerOp"> {
+  let summary = "Drop kernel arguments the device never reads";
+  let description = [{
+    Runs over a `cir.offload.container`. An argument no device kernel reads is
+    removed from the kernel signature, from the host stub, and from every call
+    to that stub, so it stops occupying a kernarg slot and stops being stored.
+
+    Constant propagation is what usually makes an argument dead, so this is
+    worth running after it.
+
+    The host stub builds the buffer the runtime copies into the kernarg
+    segment, and the runtime packs it densely in the device kernel's parameter
+    order. Removing an entry therefore means renumbering the ones after it.
+    Getting that wrong passes wrong values rather than missing an optimisation,
+    so the stub is matched against the exact shape CIRGen emits and left alone
+    when it does not fit.
+
+    Soundness follows the same rule as constant argument propagation: in place
+    when every launch is visible, on a specialised clone otherwise.
+  }];
+  let constructor = "mlir::createOffloadDeadArgEliminationPass()";
+  let dependentDialects = ["cir::CIRDialect"];
+}
 
 #endif // CLANG_CIR_DIALECT_PASSES_TD

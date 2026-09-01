@@ -10,6 +10,7 @@ add_clang_library(MLIRCIROffloadOpt
   PropagatePointerFacts.cpp
   TightenLaunchBounds.cpp
   EliminateCoveredGuards.cpp
+  DeadArgElimination.cpp
 
   DEPENDS
   MLIRCIROpsIncGen

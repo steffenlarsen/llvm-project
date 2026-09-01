@@ -131,6 +131,10 @@ llvm::cl::opt<bool>
                           llvm::cl::desc("Disable launch bounds tightening"),
                           llvm::cl::init(false),
                           llvm::cl::cat(CIROffloadMergeCategory));
+llvm::cl::opt<bool> NoDeadArgElimination(
+    "no-dead-arg-elimination",
+    llvm::cl::desc("Disable dead kernel argument elimination"),
+    llvm::cl::init(false), llvm::cl::cat(CIROffloadMergeCategory));
 llvm::cl::opt<bool>
     NoDeadKernelElimination("no-dead-kernel-elimination",
                             llvm::cl::desc("Disable dead kernel elimination"),
@@ -419,6 +423,8 @@ int runOffloadOptPasses(mlir::ModuleOp module) {
     // facts on the kernel that actually runs.
     if (PropagatePointerFacts)
       containerPM.addPass(mlir::createOffloadPropagatePointerFactsPass());
+    if (!NoDeadArgElimination)
+      containerPM.addPass(mlir::createOffloadDeadArgEliminationPass());
     if (!NoDeadKernelElimination)
       containerPM.addPass(mlir::createOffloadDeadKernelEliminationPass());
   }
