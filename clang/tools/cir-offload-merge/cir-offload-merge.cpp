@@ -59,6 +59,18 @@ llvm::cl::opt<bool> Combine("combine", llvm::cl::desc("Combine CIR inputs"),
 llvm::cl::opt<bool> Split("split", llvm::cl::desc("Split combined CIR input"),
                           llvm::cl::cat(CIROffloadMergeCategory));
 
+// Each optimization runs by default; these turn one off so its effect can be
+// isolated, which is the only way to attribute a codegen or performance
+// difference to a single pass.
+llvm::cl::opt<bool> DisableCIROffloadOpts(
+    "disable-cir-offload-opts",
+    llvm::cl::desc("Disable every container-level offload optimization"),
+    llvm::cl::cat(CIROffloadMergeCategory));
+
+llvm::cl::opt<bool> NoCirDeadArgElimination(
+    "disable-cir-dead-arg-elimination",
+    llvm::cl::desc("Disable dead kernel argument elimination"),
+    llvm::cl::cat(CIROffloadMergeCategory));
 llvm::cl::opt<bool> DisableCirInferLaunchBounds(
     "disable-cir-infer-launch-bounds",
     llvm::cl::desc("Disable launch-bound inference from host launch sites"),
@@ -336,11 +348,16 @@ int runOffloadOptPasses(mlir::ModuleOp module) {
   modulePM.addPass(mlir::createMem2Reg());
   modulePM.addPass(mlir::createSCCPPass());
 
-  containerPM.addPass(mlir::createOffloadDeadKernelEliminationPass());
-  if (!DisableCirPropKernelArgs)
-    containerPM.addPass(mlir::createOffloadKernelArgConstantPropagationPass());
-  if (!DisableCirInferLaunchBounds)
-    containerPM.addPass(mlir::createOffloadLaunchBoundsPropagationPass());
+  if (!NoOffloadOpts) {
+    containerPM.addPass(mlir::createOffloadDeadKernelEliminationPass());
+    if (!DisableCirPropKernelArgs)
+      containerPM.addPass(
+          mlir::createOffloadKernelArgConstantPropagationPass());
+    if (!DisableCirInferLaunchBounds)
+      containerPM.addPass(mlir::createOffloadLaunchBoundsPropagationPass());
+    if (!DisableCirDeadArgElimination)
+      containerPM.addPass(mlir::createOffloadDeadArgEliminationPass());
+  }
 
   if (mlir::failed(pm.run(module)))
     return reportError("offload-container passes failed");

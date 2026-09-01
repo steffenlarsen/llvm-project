@@ -1,0 +1,318 @@
+// Tests for the offload DeadArgElimination pass.
+//
+// An argument no device kernel reads is dropped from the kernel, from the host
+// stub that builds the argument buffer, and from every call to the stub. The
+// buffer the runtime copies into the kernarg segment has to stay densely packed
+// in the surviving order, so the entries after a removed one are renumbered.
+
+// RUN: cir-opt %s -split-input-file \
+// RUN:   -pass-pipeline="builtin.module(cir.offload.container(cir-offload-dead-arg-elimination))" \
+// RUN:   | FileCheck %s
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+!void_ptr = !cir.ptr<!cir.void>
+!rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
+
+// The scalar is spilled but never read, so it goes. It is the last entry, so
+// nothing needs renumbering.
+module {
+  cir.offload.container {
+    builtin.module @host attributes {cir.offload.kind = #cir.offload_kind<host>} {
+      cir.global external @kern_tail = #cir.global_view<@stub_tail> : !cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>
+      cir.func private @hipLaunchKernel(!void_ptr, !cir.ptr<!cir.ptr<!cir.void>>) -> !s32i
+      cir.func internal private @stub_tail(%arg0: !cir.ptr<!s32i>, %arg1: !s32i) attributes {cir.offload.specialization_clone, cu.kernel_name = #cir.cu.kernel_name<"kern_tail">} {
+        %i0 = cir.const #cir.int<0> : !u32i
+        %i1 = cir.const #cir.int<1> : !u32i
+        %s0 = cir.alloca "out" align(8) : !cir.ptr<!cir.ptr<!s32i>>
+        %s1 = cir.alloca "n" align(4) : !cir.ptr<!s32i>
+        cir.store %arg0, %s0 : !cir.ptr<!s32i>, !cir.ptr<!cir.ptr<!s32i>>
+        cir.store %arg1, %s1 : !s32i, !cir.ptr<!s32i>
+        %buf = cir.alloca "kernel_args" align(16) : !cir.ptr<!cir.array<!cir.ptr<!cir.void> x 2>>
+        %base = cir.cast array_to_ptrdecay %buf : !cir.ptr<!cir.array<!cir.ptr<!cir.void> x 2>> -> !cir.ptr<!cir.ptr<!cir.void>>
+        %e0 = cir.ptr_stride %base, %i0 : (!cir.ptr<!cir.ptr<!cir.void>>, !u32i) -> !cir.ptr<!cir.ptr<!cir.void>>
+        %c0 = cir.cast bitcast %s0 : !cir.ptr<!cir.ptr<!s32i>> -> !void_ptr
+        cir.store %c0, %e0 : !void_ptr, !cir.ptr<!cir.ptr<!cir.void>>
+        %e1 = cir.ptr_stride %base, %i1 : (!cir.ptr<!cir.ptr<!cir.void>>, !u32i) -> !cir.ptr<!cir.ptr<!cir.void>>
+        %c1 = cir.cast bitcast %s1 : !cir.ptr<!s32i> -> !void_ptr
+        cir.store %c1, %e1 : !void_ptr, !cir.ptr<!cir.ptr<!cir.void>>
+        %h = cir.get_global @kern_tail : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>>
+        %hv = cir.cast bitcast %h : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>> -> !void_ptr
+        %r = cir.call @hipLaunchKernel(%hv, %base) : (!void_ptr, !cir.ptr<!cir.ptr<!cir.void>>) -> !s32i
+        cir.return
+      }
+      cir.func @launch_tail(%p: !cir.ptr<!s32i>, %n: !s32i) {
+        cir.call @stub_tail(%p, %n) {cu.kernel_name = #cir.cu.kernel_name<"kern_tail">} : (!cir.ptr<!s32i>, !s32i) -> ()
+        cir.return
+      }
+    }
+    builtin.module @device_0 attributes {cir.offload.kind = #cir.offload_kind<device>} {
+      cir.func private @use(!cir.ptr<!s32i>)
+      cir.func @kern_tail(%arg0: !cir.ptr<!s32i>, %arg1: !s32i) cc(ptx_kernel) {
+        %sp = cir.alloca "n" align(4) : !cir.ptr<!s32i>
+        cir.store %arg1, %sp : !s32i, !cir.ptr<!s32i>
+        cir.call @use(%arg0) : (!cir.ptr<!s32i>) -> ()
+        cir.return
+      }
+    }
+  }
+}
+
+
+// The copy carries one parameter and one buffer entry; the original is intact.
+// CHECK-LABEL: cir.func internal private @stub_tail(%arg0: !cir.ptr<!s32i>)
+// CHECK-NOT:    @stub_tail.dae
+// CHECK:         %[[BASE:.*]] = cir.cast array_to_ptrdecay
+// CHECK:         cir.ptr_stride %[[BASE]]
+// CHECK-NOT:     cir.ptr_stride %[[BASE]]
+// CHECK-LABEL: cir.func @launch_tail
+// CHECK:         cir.call @stub_tail(%arg0)
+// CHECK-LABEL: cir.func @kern_tail(%arg0: !cir.ptr<!s32i>) cc(ptx_kernel)
+
+// -----
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+!void_ptr = !cir.ptr<!cir.void>
+!rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
+
+// The dead argument is the first one, so the surviving entry has to move from
+// index 1 to index 0. Leaving it at 1 would hand the runtime a hole and shift
+// every value the kernel reads.
+module {
+  cir.offload.container {
+    builtin.module @host attributes {cir.offload.kind = #cir.offload_kind<host>} {
+      cir.global external @kern_head = #cir.global_view<@stub_head> : !cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>
+      cir.func private @hipLaunchKernel(!void_ptr, !cir.ptr<!cir.ptr<!cir.void>>) -> !s32i
+      cir.func internal private @stub_head(%arg0: !cir.ptr<!s32i>, %arg1: !s32i) attributes {cir.offload.specialization_clone, cu.kernel_name = #cir.cu.kernel_name<"kern_head">} {
+        %i0 = cir.const #cir.int<0> : !u32i
+        %i1 = cir.const #cir.int<1> : !u32i
+        %s0 = cir.alloca "out" align(8) : !cir.ptr<!cir.ptr<!s32i>>
+        %s1 = cir.alloca "n" align(4) : !cir.ptr<!s32i>
+        cir.store %arg0, %s0 : !cir.ptr<!s32i>, !cir.ptr<!cir.ptr<!s32i>>
+        cir.store %arg1, %s1 : !s32i, !cir.ptr<!s32i>
+        %buf = cir.alloca "kernel_args" align(16) : !cir.ptr<!cir.array<!cir.ptr<!cir.void> x 2>>
+        %base = cir.cast array_to_ptrdecay %buf : !cir.ptr<!cir.array<!cir.ptr<!cir.void> x 2>> -> !cir.ptr<!cir.ptr<!cir.void>>
+        %e0 = cir.ptr_stride %base, %i0 : (!cir.ptr<!cir.ptr<!cir.void>>, !u32i) -> !cir.ptr<!cir.ptr<!cir.void>>
+        %c0 = cir.cast bitcast %s0 : !cir.ptr<!cir.ptr<!s32i>> -> !void_ptr
+        cir.store %c0, %e0 : !void_ptr, !cir.ptr<!cir.ptr<!cir.void>>
+        %e1 = cir.ptr_stride %base, %i1 : (!cir.ptr<!cir.ptr<!cir.void>>, !u32i) -> !cir.ptr<!cir.ptr<!cir.void>>
+        %c1 = cir.cast bitcast %s1 : !cir.ptr<!s32i> -> !void_ptr
+        cir.store %c1, %e1 : !void_ptr, !cir.ptr<!cir.ptr<!cir.void>>
+        %h = cir.get_global @kern_head : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>>
+        %hv = cir.cast bitcast %h : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>> -> !void_ptr
+        %r = cir.call @hipLaunchKernel(%hv, %base) : (!void_ptr, !cir.ptr<!cir.ptr<!cir.void>>) -> !s32i
+        cir.return
+      }
+      cir.func @launch_head(%p: !cir.ptr<!s32i>, %n: !s32i) {
+        cir.call @stub_head(%p, %n) {cu.kernel_name = #cir.cu.kernel_name<"kern_head">} : (!cir.ptr<!s32i>, !s32i) -> ()
+        cir.return
+      }
+    }
+    builtin.module @device_0 attributes {cir.offload.kind = #cir.offload_kind<device>} {
+      cir.func private @use(!cir.ptr<!s32i>)
+      cir.func @kern_head(%arg0: !cir.ptr<!s32i>, %arg1: !s32i) cc(ptx_kernel) {
+        %sp = cir.alloca "out" align(8) : !cir.ptr<!cir.ptr<!s32i>>
+        cir.store %arg0, %sp : !cir.ptr<!s32i>, !cir.ptr<!cir.ptr<!s32i>>
+        %d = cir.alloca "d" align(4) : !cir.ptr<!s32i>
+        cir.store %arg1, %d : !s32i, !cir.ptr<!s32i>
+        %v = cir.load %d : !cir.ptr<!s32i>, !s32i
+        cir.return
+      }
+    }
+  }
+}
+
+
+// CHECK-LABEL: cir.func internal private @stub_head(%arg0: !s32i)
+// CHECK:         %[[BASE:.*]] = cir.cast array_to_ptrdecay
+// CHECK:         %[[Z:.*]] = cir.const #cir.int<0> : !u32i
+// CHECK:         cir.ptr_stride %[[BASE]], %[[Z]]
+// The handle's type has to shrink with the stub it points at.
+// CHECK:         cir.get_global @kern_head : !cir.ptr<!cir.ptr<!cir.func<(!s32i)>>>
+// CHECK-LABEL: cir.func @launch_head
+// CHECK:         cir.call @stub_head(%arg1)
+// CHECK-LABEL: cir.func @kern_head(%arg0: !s32i) cc(ptx_kernel)
+
+// -----
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+!void_ptr = !cir.ptr<!cir.void>
+!rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
+
+// Both arguments are read, so nothing changes.
+module {
+  cir.offload.container {
+    builtin.module @host attributes {cir.offload.kind = #cir.offload_kind<host>} {
+      cir.global external @kern_live = #cir.global_view<@stub_live> : !cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>
+      cir.func private @hipLaunchKernel(!void_ptr, !cir.ptr<!cir.ptr<!cir.void>>) -> !s32i
+      cir.func internal private @stub_live(%arg0: !cir.ptr<!s32i>, %arg1: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_live">} {
+        %i0 = cir.const #cir.int<0> : !u32i
+        %i1 = cir.const #cir.int<1> : !u32i
+        %s0 = cir.alloca "out" align(8) : !cir.ptr<!cir.ptr<!s32i>>
+        %s1 = cir.alloca "n" align(4) : !cir.ptr<!s32i>
+        cir.store %arg0, %s0 : !cir.ptr<!s32i>, !cir.ptr<!cir.ptr<!s32i>>
+        cir.store %arg1, %s1 : !s32i, !cir.ptr<!s32i>
+        %buf = cir.alloca "kernel_args" align(16) : !cir.ptr<!cir.array<!cir.ptr<!cir.void> x 2>>
+        %base = cir.cast array_to_ptrdecay %buf : !cir.ptr<!cir.array<!cir.ptr<!cir.void> x 2>> -> !cir.ptr<!cir.ptr<!cir.void>>
+        %e0 = cir.ptr_stride %base, %i0 : (!cir.ptr<!cir.ptr<!cir.void>>, !u32i) -> !cir.ptr<!cir.ptr<!cir.void>>
+        %c0 = cir.cast bitcast %s0 : !cir.ptr<!cir.ptr<!s32i>> -> !void_ptr
+        cir.store %c0, %e0 : !void_ptr, !cir.ptr<!cir.ptr<!cir.void>>
+        %e1 = cir.ptr_stride %base, %i1 : (!cir.ptr<!cir.ptr<!cir.void>>, !u32i) -> !cir.ptr<!cir.ptr<!cir.void>>
+        %c1 = cir.cast bitcast %s1 : !cir.ptr<!s32i> -> !void_ptr
+        cir.store %c1, %e1 : !void_ptr, !cir.ptr<!cir.ptr<!cir.void>>
+        %h = cir.get_global @kern_live : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>>
+        %hv = cir.cast bitcast %h : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>> -> !void_ptr
+        %r = cir.call @hipLaunchKernel(%hv, %base) : (!void_ptr, !cir.ptr<!cir.ptr<!cir.void>>) -> !s32i
+        cir.return
+      }
+      cir.func @launch_live(%p: !cir.ptr<!s32i>, %n: !s32i) {
+        cir.call @stub_live(%p, %n) {cu.kernel_name = #cir.cu.kernel_name<"kern_live">} : (!cir.ptr<!s32i>, !s32i) -> ()
+        cir.return
+      }
+    }
+    builtin.module @device_0 attributes {cir.offload.kind = #cir.offload_kind<device>} {
+      cir.func private @use(!cir.ptr<!s32i>)
+      cir.func @kern_live(%arg0: !cir.ptr<!s32i>, %arg1: !s32i) cc(ptx_kernel) {
+        %d = cir.alloca "d" align(4) : !cir.ptr<!s32i>
+        cir.store %arg1, %d : !s32i, !cir.ptr<!s32i>
+        %v = cir.load %d : !cir.ptr<!s32i>, !s32i
+        cir.call @use(%arg0) : (!cir.ptr<!s32i>) -> ()
+        cir.return
+      }
+    }
+  }
+}
+
+
+// CHECK-LABEL: cir.func internal private @stub_live(%arg0: !cir.ptr<!s32i>, %arg1: !s32i)
+// CHECK-NOT:   @stub_live.dae
+// CHECK-LABEL: cir.func @kern_live(%arg0: !cir.ptr<!s32i>, %arg1: !s32i) cc(ptx_kernel)
+
+// -----
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+!void_ptr = !cir.ptr<!cir.void>
+!rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
+
+// The stub does not build its argument buffer in the shape CIRGen emits -- here
+// the two entries are swapped relative to the parameters. The pass declines
+// rather than renumbering a layout it does not understand.
+module {
+  cir.offload.container {
+    builtin.module @host attributes {cir.offload.kind = #cir.offload_kind<host>} {
+      cir.global external @kern_odd = #cir.global_view<@stub_odd> : !cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>
+      cir.func private @hipLaunchKernel(!void_ptr, !cir.ptr<!cir.ptr<!cir.void>>) -> !s32i
+      cir.func internal private @stub_odd(%arg0: !cir.ptr<!s32i>, %arg1: !s32i) attributes {cu.kernel_name = #cir.cu.kernel_name<"kern_odd">} {
+        %i0 = cir.const #cir.int<0> : !u32i
+        %i1 = cir.const #cir.int<1> : !u32i
+        %s0 = cir.alloca "out" align(8) : !cir.ptr<!cir.ptr<!s32i>>
+        %s1 = cir.alloca "n" align(4) : !cir.ptr<!s32i>
+        cir.store %arg0, %s0 : !cir.ptr<!s32i>, !cir.ptr<!cir.ptr<!s32i>>
+        cir.store %arg1, %s1 : !s32i, !cir.ptr<!s32i>
+        %buf = cir.alloca "kernel_args" align(16) : !cir.ptr<!cir.array<!cir.ptr<!cir.void> x 2>>
+        %base = cir.cast array_to_ptrdecay %buf : !cir.ptr<!cir.array<!cir.ptr<!cir.void> x 2>> -> !cir.ptr<!cir.ptr<!cir.void>>
+        %e0 = cir.ptr_stride %base, %i0 : (!cir.ptr<!cir.ptr<!cir.void>>, !u32i) -> !cir.ptr<!cir.ptr<!cir.void>>
+        %c0 = cir.cast bitcast %s1 : !cir.ptr<!s32i> -> !void_ptr
+        cir.store %c0, %e0 : !void_ptr, !cir.ptr<!cir.ptr<!cir.void>>
+        %e1 = cir.ptr_stride %base, %i1 : (!cir.ptr<!cir.ptr<!cir.void>>, !u32i) -> !cir.ptr<!cir.ptr<!cir.void>>
+        %c1 = cir.cast bitcast %s0 : !cir.ptr<!cir.ptr<!s32i>> -> !void_ptr
+        cir.store %c1, %e1 : !void_ptr, !cir.ptr<!cir.ptr<!cir.void>>
+        %h = cir.get_global @kern_odd : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>>
+        %hv = cir.cast bitcast %h : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!s32i>, !s32i)>>> -> !void_ptr
+        %r = cir.call @hipLaunchKernel(%hv, %base) : (!void_ptr, !cir.ptr<!cir.ptr<!cir.void>>) -> !s32i
+        cir.return
+      }
+      cir.func @launch_odd(%p: !cir.ptr<!s32i>, %n: !s32i) {
+        cir.call @stub_odd(%p, %n) {cu.kernel_name = #cir.cu.kernel_name<"kern_odd">} : (!cir.ptr<!s32i>, !s32i) -> ()
+        cir.return
+      }
+    }
+    builtin.module @device_0 attributes {cir.offload.kind = #cir.offload_kind<device>} {
+      cir.func private @use(!cir.ptr<!s32i>)
+      cir.func @kern_odd(%arg0: !cir.ptr<!s32i>, %arg1: !s32i) cc(ptx_kernel) {
+        cir.call @use(%arg0) : (!cir.ptr<!s32i>) -> ()
+        cir.return
+      }
+    }
+  }
+}
+
+
+// Declined outright: no copy is made for a stub that cannot be rewritten.
+// CHECK-LABEL: cir.func internal private @stub_odd(%arg0: !cir.ptr<!s32i>, %arg1: !s32i)
+// CHECK-NOT:   @stub_odd.dae
+// CHECK-LABEL: cir.func @kern_odd(%arg0: !cir.ptr<!s32i>, %arg1: !s32i) cc(ptx_kernel)
+
+// -----
+
+!s32i = !cir.int<s, 32>
+!u32i = !cir.int<u, 32>
+!void_ptr = !cir.ptr<!cir.void>
+!rec_dim3 = !cir.struct<"dim3" {data !u32i, data !u32i, data !u32i}>
+
+// A parameter the ABI passes indirectly reaches the stub as a pointer to the
+// caller's copy and is read out before being spilled, rather than stored to its
+// slot directly. The buffer matcher has to accept that shape: declining the
+// stub over it takes the pass off every other parameter too, and ggml threads
+// such an aggregate through kernels that do have dead arguments.
+module {
+  cir.offload.container {
+    builtin.module @host attributes {cir.offload.kind = #cir.offload_kind<host>} {
+      cir.global external @kern_ind = #cir.global_view<@stub_ind> : !cir.ptr<!cir.func<(!cir.ptr<!rec_dim3>, !cir.ptr<!s32i>, !s32i)>>
+      cir.func private @hipLaunchKernel(!void_ptr, !cir.ptr<!cir.ptr<!cir.void>>) -> !s32i
+      cir.func internal private @stub_ind(%arg0: !cir.ptr<!rec_dim3>, %arg1: !cir.ptr<!s32i>, %arg2: !s32i) attributes {cir.offload.specialization_clone, cu.kernel_name = #cir.cu.kernel_name<"kern_ind">} {
+        %i0 = cir.const #cir.int<0> : !u32i
+        %i1 = cir.const #cir.int<1> : !u32i
+        %i2 = cir.const #cir.int<2> : !u32i
+        %s0 = cir.alloca "dims" align(4) : !cir.ptr<!rec_dim3>
+        %s1 = cir.alloca "out" align(8) : !cir.ptr<!cir.ptr<!s32i>>
+        %s2 = cir.alloca "n" align(4) : !cir.ptr<!s32i>
+        %ld = cir.load %arg0 : !cir.ptr<!rec_dim3>, !rec_dim3
+        cir.store %ld, %s0 : !rec_dim3, !cir.ptr<!rec_dim3>
+        cir.store %arg1, %s1 : !cir.ptr<!s32i>, !cir.ptr<!cir.ptr<!s32i>>
+        cir.store %arg2, %s2 : !s32i, !cir.ptr<!s32i>
+        %buf = cir.alloca "kernel_args" align(16) : !cir.ptr<!cir.array<!cir.ptr<!cir.void> x 3>>
+        %base = cir.cast array_to_ptrdecay %buf : !cir.ptr<!cir.array<!cir.ptr<!cir.void> x 3>> -> !cir.ptr<!cir.ptr<!cir.void>>
+        %e0 = cir.ptr_stride %base, %i0 : (!cir.ptr<!cir.ptr<!cir.void>>, !u32i) -> !cir.ptr<!cir.ptr<!cir.void>>
+        %c0 = cir.cast bitcast %s0 : !cir.ptr<!rec_dim3> -> !void_ptr
+        cir.store %c0, %e0 : !void_ptr, !cir.ptr<!cir.ptr<!cir.void>>
+        %e1 = cir.ptr_stride %base, %i1 : (!cir.ptr<!cir.ptr<!cir.void>>, !u32i) -> !cir.ptr<!cir.ptr<!cir.void>>
+        %c1 = cir.cast bitcast %s1 : !cir.ptr<!cir.ptr<!s32i>> -> !void_ptr
+        cir.store %c1, %e1 : !void_ptr, !cir.ptr<!cir.ptr<!cir.void>>
+        %e2 = cir.ptr_stride %base, %i2 : (!cir.ptr<!cir.ptr<!cir.void>>, !u32i) -> !cir.ptr<!cir.ptr<!cir.void>>
+        %c2 = cir.cast bitcast %s2 : !cir.ptr<!s32i> -> !void_ptr
+        cir.store %c2, %e2 : !void_ptr, !cir.ptr<!cir.ptr<!cir.void>>
+        %h = cir.get_global @kern_ind : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!rec_dim3>, !cir.ptr<!s32i>, !s32i)>>>
+        %hv = cir.cast bitcast %h : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!rec_dim3>, !cir.ptr<!s32i>, !s32i)>>> -> !void_ptr
+        %r = cir.call @hipLaunchKernel(%hv, %base) : (!void_ptr, !cir.ptr<!cir.ptr<!cir.void>>) -> !s32i
+        cir.return
+      }
+      cir.func @launch_ind(%d: !cir.ptr<!rec_dim3>, %p: !cir.ptr<!s32i>, %n: !s32i) {
+        cir.call @stub_ind(%d, %p, %n) {cu.kernel_name = #cir.cu.kernel_name<"kern_ind">} : (!cir.ptr<!rec_dim3>, !cir.ptr<!s32i>, !s32i) -> ()
+        cir.return
+      }
+    }
+    builtin.module @device_0 attributes {cir.offload.kind = #cir.offload_kind<device>} {
+      cir.func private @use(!cir.ptr<!s32i>)
+      cir.func private @use_dim3(!rec_dim3)
+      cir.func @kern_ind(%arg0: !rec_dim3, %arg1: !cir.ptr<!s32i>, %arg2: !s32i) cc(ptx_kernel) {
+        %sp = cir.alloca "n" align(4) : !cir.ptr<!s32i>
+        cir.store %arg2, %sp : !s32i, !cir.ptr<!s32i>
+        cir.call @use_dim3(%arg0) : (!rec_dim3) -> ()
+        cir.call @use(%arg1) : (!cir.ptr<!s32i>) -> ()
+        cir.return
+      }
+    }
+  }
+}
+
+// The indirectly-passed aggregate stays; only the dead scalar goes, and the
+// load that reads it out of the caller's copy is kept with it.
+// CHECK-LABEL: cir.func internal private @stub_ind(%arg0: !cir.ptr<!rec_dim3>, %arg1: !cir.ptr<!s32i>)
+// CHECK:         cir.load %arg0
+// CHECK-LABEL: cir.func @launch_ind
+// CHECK:         cir.call @stub_ind(%arg0, %arg1)
+// CHECK-LABEL: cir.func @kern_ind(%arg0: !rec_dim3, %arg1: !cir.ptr<!s32i>) cc(ptx_kernel)
