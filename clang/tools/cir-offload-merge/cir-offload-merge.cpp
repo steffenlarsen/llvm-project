@@ -109,6 +109,10 @@ llvm::cl::opt<bool> DisableCirDeadArgElimination(
     "disable-cir-dead-arg-elimination",
     llvm::cl::desc("Disable dead kernel-argument elimination"),
     llvm::cl::cat(CIROffloadMergeCategory));
+llvm::cl::opt<bool> DisableCirPromoteKernelArgSpace(
+    "disable-cir-promote-kernel-arg-space",
+    llvm::cl::desc("Disable stating AMDGPU kernel pointer arguments as global"),
+    llvm::cl::cat(CIROffloadMergeCategory));
 llvm::cl::opt<bool> DisableCirPropKernelArgs(
     "disable-cir-prop-kernel-args",
     llvm::cl::desc("Disable constant kernel-argument propagation"),
@@ -388,6 +392,8 @@ int runOffloadOptPasses(mlir::ModuleOp module) {
     pm.addPass(mlir::createOffloadPropagatePointerFactsPass());
   if (!DisableCirDeadArgElimination)
     pm.addPass(mlir::createOffloadDeadArgEliminationPass());
+  if (!DisableCirPromoteKernelArgSpace)
+    pm.addPass(mlir::createOffloadPromoteKernelArgSpacePass());
 
   if (mlir::failed(pm.run(module)))
     return reportError("offload-container passes failed");

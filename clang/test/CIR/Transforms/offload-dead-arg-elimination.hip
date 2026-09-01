@@ -37,9 +37,9 @@ __global__ void k(int *out, int unused) { use(out); }
 // CHECK:         cir.call @_Z16__device_stub__kPii.{{[a-z]+}}(%{{[a-z0-9]+}}) {cu.kernel_name
 
 // The original keeps its full signature, for launches this TU cannot see.
-// CHECK:      cir.func{{.*}} @_Z1kPii(%arg0: !cir.ptr<!s32i>{{.*}}, %arg1: !s32i
+// CHECK:      cir.func{{.*}} @_Z1kPii(%arg0: !cir.ptr<!s32i, target_address_space(1)>{{.*}}, %arg1: !s32i
 // CHECK-SAME:   ) cc(amdgpu_kernel)
-// CHECK:      cir.func{{.*}} @_Z1kPii.{{[a-z]+}}(%arg0: !cir.ptr<!s32i>
+// CHECK:      cir.func{{.*}} @_Z1kPii.{{[a-z]+}}(%arg0: !cir.ptr<!s32i, target_address_space(1)>
 // CHECK-SAME:   ) cc(amdgpu_kernel)
 
 // `unused` is a runtime value, so constant propagation has nothing to say
