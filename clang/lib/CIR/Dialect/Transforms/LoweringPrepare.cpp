@@ -24,12 +24,14 @@
 #include "clang/CIR/Dialect/IR/CIROpsEnums.h"
 #include "clang/CIR/Dialect/IR/CIRTypes.h"
 #include "clang/CIR/Dialect/Passes.h"
+#include "clang/CIR/Dialect/Transforms/CIRTransformUtils.h"
 #include "clang/CIR/Interfaces/ASTAttrInterfaces.h"
 #include "clang/CIR/MissingFeatures.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MD5.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/VirtualFileSystem.h"
@@ -1968,9 +1970,21 @@ static void lowerArrayDtorCtorIntoLoop(cir::CIRBaseBuilderTy &builder,
     builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
   }
 
+  // The iteration slot is a local, so it belongs in the target's alloca
+  // address space like any other; AMDGPU rejects an alloca outside
+  // addrspace(5).
+  cir::PointerType idxTy =
+      builder.getPointerTo(eltTy, cir::getAllocaAddrSpace(op));
+  // The slot holds a pointer, so it needs pointer alignment. Hardcoding 1 left
+  // an under-aligned slot whose loads and stores are all naturally aligned --
+  // a shape classic CodeGen never emits, and one that SROA has to reason
+  // around.
+  cir::CIRDataLayout idxDataLayout(op->getParentOfType<mlir::ModuleOp>());
+  mlir::IntegerAttr idxAlign =
+      builder.getAlignmentAttr(idxDataLayout.getABITypeAlign(idxTy));
+
   mlir::Value tmpAddr =
-      builder.createAlloca(loc, /*addr type*/ builder.getPointerTo(eltTy),
-                           "__array_idx", builder.getAlignmentAttr(1));
+      builder.createAlloca(loc, /*addr type*/ idxTy, "__array_idx", idxAlign);
   builder.createStore(loc, start, tmpAddr);
 
   mlir::Block *bodyBlock = &op->getRegion(0).front();
