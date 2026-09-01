@@ -1948,6 +1948,34 @@ RValue CIRGenFunction::emitBuiltinExpr(const GlobalDecl &gd, unsigned builtinID,
   }
   case Builtin::BImemcpy:
   case Builtin::BI__builtin_memcpy:
+  case Builtin::BImemmove:
+  case Builtin::BI__builtin_memmove: {
+    // Emit the copy as an operation rather than letting it fall through to a
+    // library call. A call to `memcpy` is fine on a host that links libc, but
+    // device code has no libc: on AMDGPU the reference survives to the device
+    // link and fails as an undefined symbol. The operation lowers to the LLVM
+    // intrinsic, which every target expands for itself.
+    mlir::Location loc = getLoc(e->getSourceRange());
+    mlir::Value dst = emitScalarExpr(e->getArg(0));
+    mlir::Value src = emitScalarExpr(e->getArg(1));
+    mlir::Value len = emitScalarExpr(e->getArg(2));
+
+    // The operation copies between void pointers and requires both to have the
+    // same type, address space included.
+    cir::PointerType voidPtrTy = builder.getVoidPtrTy(
+        mlir::cast<cir::PointerType>(dst.getType()).getAddrSpace());
+    mlir::Value dstVoid = builder.createBitcast(loc, dst, voidPtrTy);
+    mlir::Value srcVoid = builder.createBitcast(loc, src, voidPtrTy);
+
+    if (builtinID == Builtin::BImemmove ||
+        builtinID == Builtin::BI__builtin_memmove)
+      builder.createMemMove(loc, dstVoid, srcVoid, len);
+    else
+      builder.createMemCpy(loc, dstVoid, srcVoid, len);
+
+    // Both return their destination operand.
+    return RValue::get(dst);
+  }
   case Builtin::BImempcpy:
   case Builtin::BI__builtin_mempcpy:
   case Builtin::BI__builtin_memcpy_inline:
@@ -1955,8 +1983,6 @@ RValue CIRGenFunction::emitBuiltinExpr(const GlobalDecl &gd, unsigned builtinID,
   case Builtin::BI__builtin_objc_memmove_collectable:
   case Builtin::BI__builtin___memmove_chk:
   case Builtin::BI__builtin_trivially_relocate:
-  case Builtin::BImemmove:
-  case Builtin::BI__builtin_memmove:
   case Builtin::BImemset:
   case Builtin::BI__builtin_memset:
   case Builtin::BI__builtin_memset_inline:
