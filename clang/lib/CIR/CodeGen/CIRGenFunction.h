@@ -671,6 +671,12 @@ public:
   /// that we can just remove the code.
   bool containsLabel(const clang::Stmt *s, bool ignoreCaseStmts = false);
 
+  /// Return true if code emitted now could never run. `return`, `break` and
+  /// friends terminate their block and open a fresh one for whatever follows;
+  /// nothing ever branches to it. This stands in for clang's cleared insertion
+  /// point, which CIR has no equivalent of.
+  bool atUnreachablePoint();
+
   Address emitExtVectorElementLValue(LValue lv, mlir::Location loc);
 
   class ConstantEmission {
